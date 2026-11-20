@@ -15,9 +15,6 @@ import subprocess
 import sys
 import time
 
-if os.name == "nt":
-    sys.exit("native Windows is unsupported; run leased test targets from WSL")
-
 import fcntl
 
 command = sys.argv[1:]
@@ -29,7 +26,6 @@ if info.st_uid != os.getuid() or info.st_mode & 0o077:
     sys.exit(f"lease directory {directory} must be owned by the current user and grant no permissions to group or other users")
 path = os.path.join(directory, lease)
 fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
-os.set_inheritable(fd, True)
 fcntl.flock(fd, fcntl.LOCK_EX)
 os.environ["TEST_SERVICE_LEASE"] = lease
 process_group = None
@@ -59,14 +55,12 @@ with open(path, "r+") as lock:
     fcntl.flock(lock, fcntl.LOCK_EX)
     process_group = None
     cleanup = ["docker", "compose", "-p", lease, "-f", "docker-compose.test.yml", "-f", "docker-compose.test-lease.yml", "down", "-v", "--remove-orphans"]
-    cleanup_vars = {
-        "TEST_SERVICE_LEASE": lease,
-        "TEST_PG_PUBLISH": "127.0.0.1::5432",
-        "TEST_CH_HTTP_PUBLISH": "127.0.0.1::8123",
-        "TEST_CH_NATIVE_PUBLISH": "127.0.0.1::9000",
-    }
-    cleanup_env = os.environ.copy()
-    cleanup_env.update(cleanup_vars)
+    cleanup_env = dict(
+        os.environ,
+        TEST_PG_PUBLISH="127.0.0.1::5432",
+        TEST_CH_HTTP_PUBLISH="127.0.0.1::8123",
+        TEST_CH_NATIVE_PUBLISH="127.0.0.1::9000",
+    )
     failed = subprocess.call(cleanup, env=cleanup_env, start_new_session=True) != 0
     # Testcontainers started outside Compose carry the same lease label.
     listing = ["docker", "ps", "-aq", "--filter", f"label=test-service.lease={lease}"]
