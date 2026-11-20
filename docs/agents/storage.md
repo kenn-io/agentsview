@@ -22,7 +22,7 @@ host git/GitHub lookups.
 The archive writer and its serving reader pool cache up to 64 prepared SQL
 statements per connection. This avoids compiling repeated import, project
 attribution, session, and transcript queries. The cache stays in memory and
-closes with its connection. The serving pool retains at most four connections.
+closes with its connection. The serving pool retains at most eight connections.
 Cold read-only opens and standalone schema probes use their existing uncached
 connections.
 

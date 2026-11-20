@@ -65,14 +65,3 @@ func BenchmarkSearchCommonContentAndTitleWord(b *testing.B) {
 		require.Len(b, page.Results, 25)
 	}
 }
-
-func BenchmarkSearchCommonContentWordRecent(b *testing.B) {
-	d := seedSearchRankBenchmark(b)
-	f := SearchFilter{Query: "handler", Limit: 25, DateFrom: "2026-04-24"}
-	b.ReportAllocs()
-	for b.Loop() {
-		page, err := d.Search(b.Context(), f)
-		require.NoError(b, err)
-		require.Len(b, page.Results, 25)
-	}
-}
