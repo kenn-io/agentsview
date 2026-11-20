@@ -215,6 +215,28 @@ func TestPGSavedActivityReportMissingHistoryMarker(t *testing.T) {
 	requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, q, true))
 }
 
+func TestPGActivityReportWithoutHistoryCheckpoint(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, _ := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	_, err := syncer.pg.ExecContext(t.Context(), `DELETE FROM sync_metadata WHERE key='usage_history_checkpoint:' || (SELECT value FROM sync_metadata WHERE key='usage_change_revision')`)
+	require.NoError(t, err)
+	directory := t.TempDir()
+	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	want := pgKeptBuild(t, store, f, q, true)
+	require.Len(t, want.Sessions, 1)
+	requirePGKeptEqual(t, want, pgKeptBuild(t, store, f, q, false))
+	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
+	require.NoError(t, err)
+	require.Empty(t, files)
+	require.NoError(t, store.Close())
+	restarted := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+	t.Cleanup(func() { require.NoError(t, restarted.Close()) })
+	requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, q, true))
+}
+
 func TestPGSavedActivityReportNewYorkRestart(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	local, syncer, _ := newUsageJournalFixture(t)
@@ -273,6 +295,42 @@ func TestPGActivityReportToolResultChanges(t *testing.T) {
 		require.Greater(t, after, before)
 		require.Equal(t, change.ids, ids)
 		pgKeptBuild(t, store, f, q, true)
+	}
+}
+
+func TestPGSavedActivityReportTerminalResultChanges(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, _ := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-13")
+	pgKeptSession(t, local, "b", "project-b", "2026-07-14")
+	pgKeptPush(t, syncer, false)
+	directory := t.TempDir()
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+	require.Empty(t, pgKeptBuild(t, store, f, q, true).Sessions)
+	require.NoError(t, store.Close())
+	for _, change := range []struct {
+		statement string
+		wantID    string
+		wantRead  bool
+	}{
+		{`INSERT INTO tool_result_events (session_id, tool_call_message_ordinal, source, status, content, timestamp) VALUES ('b', 1, 'tool_execution', 'completed', '', '2026-07-14 10:10:00+00')`, "", false},
+		{`INSERT INTO tool_result_events (session_id, tool_call_message_ordinal, source, status, content, timestamp) VALUES ('a', 1, 'tool_execution', 'completed', '', '2026-06-14 10:10:00+00')`, "a", true},
+		{`UPDATE tool_result_events SET status='running' WHERE session_id='a'`, "", true},
+		{`UPDATE tool_result_events SET status='completed' WHERE session_id='a'`, "a", true},
+		{`DELETE FROM tool_result_events WHERE session_id='a'`, "", true},
+	} {
+		_, err := syncer.pg.ExecContext(t.Context(), change.statement)
+		require.NoError(t, err)
+		store = openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+		got := pgKeptBuild(t, store, f, q, change.wantRead)
+		if change.wantID == "" {
+			require.Empty(t, got.Sessions)
+		} else {
+			require.Len(t, got.Sessions, 1)
+			require.Equal(t, change.wantID, got.Sessions[0].SessionID)
+		}
+		require.NoError(t, store.Close())
 	}
 }
 
