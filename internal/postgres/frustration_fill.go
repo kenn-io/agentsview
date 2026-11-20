@@ -92,9 +92,7 @@ func (s *Store) joinFrustrationFill(ctx context.Context, ids []string, completed
 func (s *Store) fillFrustrationCounts(ctx context.Context, ids []string, column string) error {
 	state := &s.runtimeState().frustrationFill
 	state.mu.Lock()
-	if state.pending == nil {
-		state.pending = make(map[string]*frustrationChunk, len(ids))
-	}
+	state.pending = make(map[string]*frustrationChunk, len(ids))
 	state.chunks = nil
 	for ids := range slices.Chunk(ids, maxPGVars) {
 		chunk := &frustrationChunk{ids: ids, done: make(chan struct{})}
@@ -119,13 +117,8 @@ func (s *Store) fillFrustrationCounts(ctx context.Context, ids []string, column 
 		}
 		cancel()
 		state.release(chunk)
-		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			if firstErr == nil {
-				firstErr = err
-			}
+		if err != nil && firstErr == nil {
+			firstErr = err
 		}
 	}
 	return firstErr
