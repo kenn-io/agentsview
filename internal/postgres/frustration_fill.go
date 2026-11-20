@@ -47,17 +47,6 @@ func (s *Store) keptSignals(ctx context.Context, f db.AnalyticsFilter) (db.Signa
 	return result, err
 }
 
-// sharedFillWait reports whether a shared load needs counts a fill still owns.
-func (s *Store) sharedFillWait(ctx context.Context, ids []string) bool {
-	if ctx.Value(sharedLoadKey{}) == nil {
-		return false
-	}
-	state := &s.runtimeState().frustrationFill
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	return slices.ContainsFunc(ids, func(id string) bool { return state.pending[id] != nil })
-}
-
 // completedCount is the number of finished chunks.
 func (state *frustrationFillState) completedCount() uint64 {
 	state.mu.Lock()
@@ -78,7 +67,7 @@ func (state *frustrationFillState) release(chunk *frustrationChunk) {
 }
 
 // joinFrustrationFill waits only for chunks fully covered by the request.
-func (s *Store) joinFrustrationFill(ctx context.Context, ids []string, completed uint64) bool {
+func (s *Store) joinFrustrationFill(ctx context.Context, ids []string, completed uint64) (bool, error) {
 	state := &s.runtimeState().frustrationFill
 	state.mu.Lock()
 	wanted := make(map[*frustrationChunk]int)
@@ -87,7 +76,7 @@ func (s *Store) joinFrustrationFill(ctx context.Context, ids []string, completed
 		if !ok {
 			if state.completed != completed {
 				state.mu.Unlock()
-				return true
+				return true, nil
 			}
 			continue
 		}
@@ -105,7 +94,10 @@ func (s *Store) joinFrustrationFill(ctx context.Context, ids []string, completed
 	}
 	state.mu.Unlock()
 	if len(waits) == 0 {
-		return false
+		return false, nil
+	}
+	if ctx.Value(sharedLoadKey{}) != nil {
+		return false, errSharedFillWait
 	}
 	budget := frustrationJoinWait
 	if deadline, ok := ctx.Deadline(); ok {
@@ -116,11 +108,11 @@ func (s *Store) joinFrustrationFill(ctx context.Context, ids []string, completed
 	for _, wait := range waits {
 		select {
 		case <-waitCtx.Done():
-			return true
+			return true, nil
 		case <-wait:
 		}
 	}
-	return true
+	return true, nil
 }
 
 func (s *Store) fillFrustrationCounts(ctx context.Context, ids []string, column string) error {

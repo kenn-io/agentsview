@@ -421,7 +421,9 @@ func TestFrustrationFillJoinsCoveredRequests(t *testing.T) {
 		}
 		require.NoError(t, tx.Rollback())
 		require.NoError(t, <-fillDone)
-		require.True(t, store.joinFrustrationFill(f.ctx, []string{"one", "two"}, completed))
+		joined, err := store.joinFrustrationFill(f.ctx, []string{"one", "two"}, completed)
+		require.NoError(t, err)
+		require.True(t, joined)
 		require.NoError(t, <-coveredDone)
 		for _, row := range coveredRows {
 			if row.ID == "one" {
@@ -673,4 +675,44 @@ func TestFrustrationSignalsShortDeadlineJoinsEarlierFlight(t *testing.T) {
 	result, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
 	require.NoError(t, err)
 	require.Equal(t, 2, result.QualityHealth.Totals.FrustrationMarkerCount)
+}
+
+type signalRowsCounter struct {
+	storeExecutor
+	reads atomic.Int32
+}
+
+func (c *signalRowsCounter) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	if strings.Contains(query, "health_score, health_grade, outcome") {
+		c.reads.Add(1)
+	}
+	return c.storeExecutor.QueryContext(ctx, query, args...)
+}
+
+func TestFrustrationSignalsPartialChunkUsesSharedLoad(t *testing.T) {
+	f := newFrustrationFixture(t, "agentsview")
+	store := f.open(t)
+	_, err := f.pg.ExecContext(f.ctx, `UPDATE sessions SET project='other' WHERE id='two'`)
+	require.NoError(t, err)
+	_, err = f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts(session_id,session_version,rules_version,marker_count) VALUES ('two','stale',0,0)`)
+	require.NoError(t, err)
+	gate, err := f.pg.BeginTx(f.ctx, nil)
+	require.NoError(t, err)
+	_, err = gate.ExecContext(f.ctx, `SELECT 1 FROM session_frustration_counts WHERE session_id='two' FOR UPDATE`)
+	require.NoError(t, err)
+	counter := &signalRowsCounter{storeExecutor: store.pg}
+	store.pg = counter
+	stop := store.StartFrustrationFill(f.ctx)
+	defer func() { gate.Rollback(); stop() }()
+	state := &store.runtimeState().frustrationFill
+	require.Eventually(t, func() bool {
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		return state.pending["one"] != nil && state.pending["two"] != nil
+	}, 10*time.Second, 10*time.Millisecond)
+	require.NotEmpty(t, store.keptAnalyticsVersion(f.ctx, "signals|{}"))
+	result, err := store.GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{Project: "sample"})
+	require.NoError(t, err)
+	require.Equal(t, 1, result.QualityHealth.Totals.FrustrationMarkerCount)
+	require.EqualValues(t, 1, counter.reads.Load())
 }

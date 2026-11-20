@@ -2894,11 +2894,14 @@ func (s *Store) populateFrustrationMarkers(
 		}
 		completed := s.runtimeState().frustrationFill.completedCount()
 		ids = load(ids)
-		if s.sharedFillWait(ctx, ids) {
-			return errSharedFillWait
-		}
-		if len(ids) > 0 && s.joinFrustrationFill(ctx, ids, completed) {
-			ids = load(ids)
+		if len(ids) > 0 {
+			joined, err := s.joinFrustrationFill(ctx, ids, completed)
+			if err != nil {
+				return err
+			}
+			if joined {
+				ids = load(ids)
+			}
 		}
 		if len(ids) == 0 {
 			return nil
