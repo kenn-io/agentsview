@@ -38,8 +38,6 @@ func (t *toolset) clock() time.Time {
 const defaultSearchWindowDays = 30
 const searchTimeLimit = 30 * time.Second
 
-var errSearchTimeout = errors.New("search timed out after 30 seconds")
-
 func (t *toolset) defaultDateFrom(from, to, sessionID string) (string, string) {
 	if from != "" || to != "" || sessionID != "" {
 		return from, ""
@@ -164,14 +162,9 @@ type searchSessionsOut struct {
 
 func (t *toolset) searchSessions(
 	ctx context.Context, _ *mcp.CallToolRequest, in searchSessionsIn,
-) (_ *mcp.CallToolResult, out searchSessionsOut, resultErr error) {
-	ctx, cancel := context.WithTimeoutCause(ctx, searchTimeLimit, errSearchTimeout)
+) (*mcp.CallToolResult, searchSessionsOut, error) {
+	ctx, cancel := context.WithTimeout(ctx, searchTimeLimit)
 	defer cancel()
-	defer func() {
-		if errors.Is(context.Cause(ctx), errSearchTimeout) {
-			out, resultErr = searchSessionsOut{}, errSearchTimeout
-		}
-	}()
 	if in.SessionID != "" {
 		detail, err := t.resolveSession(ctx, in.SessionID)
 		if err != nil {
@@ -209,7 +202,7 @@ func (t *toolset) searchSessions(
 	}
 	now := t.clock()
 	activity := make(map[string]string)
-	out = searchSessionsOut{Results: make([]sessionHit, 0, len(res.Results)), Note: note, DateFrom: dateFrom}
+	out := searchSessionsOut{Results: make([]sessionHit, 0, len(res.Results)), Note: note, DateFrom: dateFrom}
 	for _, r := range res.Results {
 		if !in.IncludeActive {
 			act := r.SessionEndedAt
@@ -942,14 +935,9 @@ func validateSearchDates(from, to string) error {
 
 func (t *toolset) searchContent(
 	ctx context.Context, _ *mcp.CallToolRequest, in searchContentIn,
-) (_ *mcp.CallToolResult, out searchContentOut, resultErr error) {
-	ctx, cancel := context.WithTimeoutCause(ctx, searchTimeLimit, errSearchTimeout)
+) (*mcp.CallToolResult, searchContentOut, error) {
+	ctx, cancel := context.WithTimeout(ctx, searchTimeLimit)
 	defer cancel()
-	defer func() {
-		if errors.Is(context.Cause(ctx), errSearchTimeout) {
-			out, resultErr = searchContentOut{}, errSearchTimeout
-		}
-	}()
 	if in.Cursor < 0 {
 		return nil, searchContentOut{}, errors.New("cursor must not be negative")
 	}
@@ -1033,7 +1021,7 @@ func (t *toolset) searchContent(
 		return nil, searchContentOut{}, err
 	}
 	legacy := cutoff != "" && !res.ActiveFilterApplied
-	out = searchContentOut{
+	out := searchContentOut{
 		Matches:        make([]contentMatch, 0, len(res.Matches)),
 		DateFrom:       dateFrom,
 		ActivityCutoff: cutoff,
