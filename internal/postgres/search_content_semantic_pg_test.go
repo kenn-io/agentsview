@@ -214,6 +214,21 @@ func TestPGSemanticSearchProjectFilter(t *testing.T) {
 	}
 }
 
+func TestPGSemanticSessionDateEligibility(t *testing.T) {
+	store, _, _ := setupSemanticSearch(t)
+	ids := []string{"S1", "S2"}
+	for _, tc := range []struct {
+		date string
+		want bool
+	}{{"2026-05-01", true}, {"2026-05-02", false}} {
+		allowed, err := store.semanticAllowedSessionIDsPG(t.Context(), db.ContentSearchFilter{Project: "alpha", Date: tc.date}, ids)
+		require.NoError(t, err)
+		require.Contains(t, allowed, "S1")
+		assert.Equal(t, tc.want, allowed["S1"].DateAllowed)
+		assert.NotContains(t, allowed, "S2")
+	}
+}
+
 // TestPGSemanticSearchScope pins Scope: "top" drops subordinate units and
 // "subordinate" keeps only them, applied before the penalty and the limit.
 func TestPGSemanticSearchScope(t *testing.T) {
