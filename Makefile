@@ -449,9 +449,13 @@ postgres-up:
 	docker compose -f docker-compose.test.yml up -d --wait
 
 # Run opt-in PostgreSQL usage benchmarks against the pinned PG16 service.
+# Indirection keeps make -n from executing the service wrapper.
+.PHONY: bench-pg-usage-run test-postgres-run test-clickhouse-run
+TEST_SERVICE_MAKE = $(MAKE)
 bench-pg-usage: pricing-snapshot
-	docker compose -f docker-compose.test.yml up -d --wait postgres
-	TEST_PG_URL="postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable" \
+	./scripts/test-lease.sh ./scripts/test-service-compose.sh postgres 5432 $(TEST_SERVICE_MAKE) bench-pg-usage-run
+
+bench-pg-usage-run:
 	CGO_ENABLED=1 go test -tags "fts5,pgtest" ./internal/postgres \
 		-run '^$$' -bench 'BenchmarkPGUsage(Read|Refresh)' -benchmem -count=5
 
@@ -460,15 +464,13 @@ postgres-down:
 	docker compose -f docker-compose.test.yml down
 
 # Run PostgreSQL integration tests (starts postgres automatically)
-test-postgres: pricing-snapshot ensure-embed-dir postgres-up
-	@echo "Waiting for postgres to be ready..."
-	@sleep 2
-	TEST_PG_URL="postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable" \
+test-postgres: pricing-snapshot
+	./scripts/test-lease.sh ./scripts/test-service-compose.sh postgres 5432 $(TEST_SERVICE_MAKE) test-postgres-run
+
+test-postgres-run: ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./cmd/agentsview \
 		-run 'TestRawSync.*CleanUploads|TestPGServeKataHubConnection|TestRawSyncBackfill|TestRawProjectionDialogueRolloutRequeuesCompletedProductionVersion|TestHostedRuntimeHealthRequiresStatusToken|TestReplicaRecipeQueryWithoutConfig|TestReplicaServeWatchPublication' -count=1
-	TEST_PG_URL="postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable" \
 	CGO_ENABLED=1 go test -p 1 -tags "fts5,pgtest" -v ./internal/postgres/... ./internal/activity/... -count=1 -timeout=20m
-	TEST_PG_URL="postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable" \
 	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./internal/service -run '^TestPlanUsageCountsParity$$' -count=1
 
 # PostgreSQL integration tests for CI (postgres already running as service)
@@ -507,13 +509,12 @@ clickhouse-down:
 	docker compose -f docker-compose.test.yml down clickhouse
 
 # Run ClickHouse integration tests (starts clickhouse automatically)
-test-clickhouse: pricing-snapshot ensure-embed-dir clickhouse-up
-	@echo "Waiting for clickhouse to be ready..."
-	@sleep 2
-	TEST_CLICKHOUSE_URL="clickhouse://localhost:19000/default" \
-		CGO_ENABLED=1 go test -tags "fts5,chtest" -v ./internal/clickhouse/... ./internal/activity/... -count=1 -timeout=20m
-	TEST_CLICKHOUSE_URL="clickhouse://localhost:19000/default" \
-		CGO_ENABLED=1 go test -tags "fts5,chtest" -v ./internal/service -run '^TestPlanUsageCountsParity$$' -count=1
+test-clickhouse: pricing-snapshot
+	./scripts/test-lease.sh ./scripts/test-service-compose.sh clickhouse 9000 $(TEST_SERVICE_MAKE) test-clickhouse-run
+
+test-clickhouse-run: ensure-embed-dir
+	CGO_ENABLED=1 go test -tags "fts5,chtest" -v ./internal/clickhouse/... ./internal/activity/... -count=1 -timeout=20m
+	CGO_ENABLED=1 go test -tags "fts5,chtest" -v ./internal/service -run '^TestPlanUsageCountsParity$$' -count=1
 
 # The usage lane moves these reporting tests to the other integration job.
 # The rest lane runs every test outside these prefixes.

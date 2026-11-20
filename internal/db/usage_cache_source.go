@@ -72,6 +72,7 @@ type UsageCacheReader struct {
 	warmRunning    string        // timezone of the running warm pass
 	warmBusy       bool          // a warm pass is running
 	warmIdle       chan struct{} // closed while no warm pass runs
+	warmFailed     chan struct{} // closed after the first failed pass
 	warmCtx        context.Context
 	warmCancel     context.CancelFunc
 	warmRetryDelay time.Duration
@@ -281,6 +282,22 @@ func (reader *UsageCacheReader) WaitWarm(ctx context.Context) error {
 	}
 }
 
+// WaitWarmAttempt waits for the warm queue to drain or a pass to fail.
+// Failed work remains queued for the warm worker to retry.
+func (reader *UsageCacheReader) WaitWarmAttempt(ctx context.Context) error {
+	reader.warmMu.Lock()
+	idle, failed := reader.warmIdle, reader.warmFailed
+	reader.warmMu.Unlock()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-idle:
+		return nil
+	case <-failed:
+		return nil
+	}
+}
+
 func (reader *UsageCacheReader) GetDailyUsage(ctx context.Context, filter UsageFilter) (DailyUsageResult, error) {
 	if reader.DeferRead(filter) {
 		return DailyUsageResult{}, ErrUsageCacheWarming
@@ -429,6 +446,7 @@ func (reader *UsageCacheReader) startWarmLocked() {
 	}
 	idle := make(chan struct{})
 	reader.warmIdle = idle
+	reader.warmFailed = make(chan struct{})
 	go reader.runWarm(idle)
 }
 
@@ -476,6 +494,19 @@ func (reader *UsageCacheReader) flushWarmRequests(parent context.Context) {
 	}
 }
 
+func (reader *UsageCacheReader) markWarmFailure(err error) {
+	if err == nil || reader.warmCtx.Err() != nil {
+		return
+	}
+	reader.warmMu.Lock()
+	defer reader.warmMu.Unlock()
+	select {
+	case <-reader.warmFailed:
+	default:
+		close(reader.warmFailed)
+	}
+}
+
 // runWarm reads the whole history of each queued timezone. That read fills
 // every changed session, rebuilds stale rollups, and records journal
 // coverage for the zone, so later reads of any window refresh only the
@@ -495,6 +526,7 @@ func (reader *UsageCacheReader) runWarm(idle chan struct{}) {
 				err = reader.warmUnready(ctx)
 			}
 			cancel()
+			reader.markWarmFailure(err)
 			if err != nil && !errors.Is(err, ErrUsageSourceUnavailable) && reader.warmCtx.Err() == nil {
 				reader.Logger().Printf("discovering usage cache timezones: %v", err)
 				reader.warmMu.Lock()
@@ -528,6 +560,7 @@ func (reader *UsageCacheReader) runWarm(idle chan struct{}) {
 		if err == nil {
 			err = reader.LoadReadiness(ctx)
 		}
+		reader.markWarmFailure(err)
 		reader.flushWarmRequests(reader.warmCtx)
 		if reader.markUnavailable(err) {
 			continue

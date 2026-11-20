@@ -83,15 +83,7 @@ func (s *testServer) start(tb testing.TB, urlEnv string, modify func(*dockercont
 	}
 	ctx, cancel := context.WithTimeout(tb.Context(), 3*time.Minute)
 	defer cancel()
-	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		Image:              Image,
-		ExposedPorts:       []string{"9000/tcp", "8123/tcp"},
-		Env:                map[string]string{"CLICKHOUSE_SKIP_USER_SETUP": "1"},
-		HostConfigModifier: modify,
-		WaitingFor: wait.ForHTTP("/ping").WithPort("8123/tcp").
-			WithStartupTimeout(2 * time.Minute),
-		Started: true,
-	})
+	c, err := testcontainers.GenericContainer(ctx, containerRequest(modify))
 	if err != nil {
 		tb.Skipf("clickhouse container unavailable: %v", err)
 	}
@@ -102,6 +94,22 @@ func (s *testServer) start(tb testing.TB, urlEnv string, modify func(*dockercont
 	s.container = c
 	s.url = fmt.Sprintf("clickhouse://default:@%s:%s/default", host, port.Port())
 	return s.url
+}
+
+func containerRequest(modify func(*dockercontainer.HostConfig)) testcontainers.GenericContainerRequest {
+	req := testcontainers.GenericContainerRequest{
+		Image:              Image,
+		ExposedPorts:       []string{"9000/tcp", "8123/tcp"},
+		Env:                map[string]string{"CLICKHOUSE_SKIP_USER_SETUP": "1"},
+		HostConfigModifier: modify,
+		WaitingFor: wait.ForHTTP("/ping").WithPort("8123/tcp").
+			WithStartupTimeout(2 * time.Minute),
+		Started: true,
+	}
+	if lease := os.Getenv("TEST_SERVICE_LEASE"); lease != "" {
+		req.Labels = map[string]string{"test-service.lease": lease}
+	}
+	return req
 }
 
 // Terminate stops the shared containers. Call it from TestMain after m.Run.

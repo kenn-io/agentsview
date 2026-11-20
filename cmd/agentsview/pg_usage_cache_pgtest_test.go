@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
@@ -18,7 +19,7 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 )
 
-func TestPGServeStartsUsageCacheWarm(t *testing.T) {
+func TestPGServeStartsCacheWarmAndFrustrationFill(t *testing.T) {
 	pgURL := os.Getenv("TEST_PG_URL")
 	if pgURL == "" {
 		t.Skip("TEST_PG_URL must point to a dedicated test database")
@@ -32,7 +33,8 @@ func TestPGServeStartsUsageCacheWarm(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	require.NoError(t, syncer.EnsureSchema(ctx))
-	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "session", Project: "project", Machine: "test-machine", Agent: "codex"}))
+	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "session", Project: "project", Machine: "test-machine", Agent: "codex", MessageCount: 1}))
+	require.NoError(t, local.InsertMessages(ctx, []db.Message{{SessionID: "session", Ordinal: 0, Role: "user", Content: "hello"}}))
 	result, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	require.Empty(t, result.Errors)
@@ -59,4 +61,9 @@ func TestPGServeStartsUsageCacheWarm(t *testing.T) {
 	var ready int
 	require.NoError(t, cache.QueryRowContext(ctx, `SELECT COUNT(*) FROM usage_rollup_timezones WHERE change_revision IS NOT NULL`).Scan(&ready))
 	require.Equal(t, 1, ready)
+	require.Eventually(t, func() bool {
+		var exists bool
+		err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM session_frustration_counts WHERE session_id = 'session')`).Scan(&exists)
+		return err == nil && exists
+	}, 20*time.Second, 50*time.Millisecond)
 }

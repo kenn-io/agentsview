@@ -48,6 +48,7 @@ type storeRuntime struct {
 	activityKept       kept.Memo[pgActivityKept]
 	activityInputs     kept.Memo[pgActivityInputs]
 	frustrationMarkers db.FrustrationMarkerMemo
+	frustrationFill    frustrationFillState
 
 	cursorMu     sync.RWMutex
 	cursorSecret []byte

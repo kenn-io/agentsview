@@ -13,7 +13,9 @@ only; `TriggerNow` bypasses cooldown.
 
 Pricing refresh and conversation tombstone pruning use the scheduler. Periodic
 session sync, vector embedding, and recall extraction still own their timing;
-migrating them is separate work.
+migrating them is separate work. PostgreSQL serve fills stale Dashboard
+frustration counts at launch after Usage warm-up when the store can write
+the count table.
 
 ## Memory and Work Bounds
 
