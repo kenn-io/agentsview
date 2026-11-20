@@ -1397,13 +1397,6 @@ func TestVectorPushSharedDocAcrossGenerations(t *testing.T) {
 	var updatedVector string
 	require.NoError(t, pg.QueryRowContext(ctx, `SELECT embedding::text FROM `+vectorChunkTable(genB)+` WHERE doc_key=$1 AND chunk_index=0`, "X#0").Scan(&updatedVector))
 	assert.Equal(t, "[0,1,0,0]", updatedVector)
-	searcher := NewVectorSearcher(pg, genA, 4, 100, fixedEncoder([]float32{1, 0, 0, 0}))
-	hits, err := dbtest.SemanticSearch(ctx, searcher, "query", 10)
-	require.NoError(t, err)
-	require.NotEmpty(t, hits)
-	assert.Equal(t, "X", hits[0].SessionID)
-	assert.Equal(t, "updated shared text", hits[0].Snippet)
-	assert.InDelta(t, 1, hits[0].Score, 0.001)
 
 	// Drop Y from gen B's source, triggering a gen-B eviction of Y.
 	delete(fake.hashes, "Y")

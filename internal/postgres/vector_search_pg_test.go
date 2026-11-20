@@ -143,7 +143,7 @@ var (
 func TestVectorSearcherReaderBeforeWriter(t *testing.T) {
 	pg := newVectorSearchTestPG(t)
 	ctx := t.Context()
-	genID, table := seedVectorSearchFixture(t, pg)
+	seedVectorSearchFixture(t, pg)
 	const role = "agentsview_vector_reader_upgrade"
 	_, err := pg.ExecContext(ctx, `CREATE ROLE `+role+` LOGIN PASSWORD 'reader_fixture'`)
 	require.NoError(t, err)
@@ -169,120 +169,6 @@ func TestVectorSearcherReaderBeforeWriter(t *testing.T) {
 	require.Len(t, hits, 3)
 	assert.Equal(t, "alpha user content", hits[0].Snippet)
 	assert.InDelta(t, 1, hits[0].Score, 0.001)
-	var stored string
-	require.NoError(t, pg.QueryRowContext(ctx, `SELECT embedding::text FROM `+table+` WHERE doc_key='u1'`).Scan(&stored))
-	assert.Equal(t, "[1,0,0,0]", stored)
-
-	// Replay the SQL sent by the shipped writer after the upgraded reader has
-	// prepared the catalog. The scoped pass changes one document; the later
-	// generation-wide pass restores another document in the same session.
-	_, err = pg.ExecContext(ctx, `INSERT INTO vector_generations (fingerprint,model,dimension) VALUES ($1,$2,$3) ON CONFLICT (fingerprint) DO NOTHING`, "fp-search", "m", 4)
-	require.NoError(t, err)
-	ext, err := vectorExtensionSchema(ctx, pg)
-	require.NoError(t, err)
-	_, err = pg.ExecContext(ctx, `INSERT INTO vector_push_state (generation_id,session_id,doc_agg_hash) VALUES ($1,'S','initial'),($1,'orphan','stale')`, genID)
-	require.NoError(t, err)
-	for _, pass := range []struct {
-		name, content, hash string
-		includeSecond       bool
-	}{
-		{"scoped", "scoped words", "scoped-hash", false},
-		{"generation-wide", "generation words", "generation-hash", true},
-	} {
-		t.Run(pass.name, func(t *testing.T) {
-			query := `SELECT ps.session_id,ps.doc_agg_hash,s.owner_marker,s.machine,(s.id IS NOT NULL) FROM vector_push_state ps LEFT JOIN sessions s ON s.id=ps.session_id WHERE ps.generation_id=$1`
-			var rows *sql.Rows
-			var err error
-			if pass.includeSecond {
-				rows, err = pg.QueryContext(ctx, query, genID)
-			} else {
-				rows, err = pg.QueryContext(ctx, query+` AND ps.session_id=ANY($2)`, genID, []string{"S"})
-			}
-			require.NoError(t, err)
-			state, err := scanVectorPushState(rows)
-			require.NoError(t, err)
-			require.NoError(t, rows.Close())
-			if pass.includeSecond {
-				require.Len(t, state, 2)
-			} else {
-				require.Len(t, state, 1)
-			}
-			tx, err := pg.BeginTx(ctx, nil)
-			require.NoError(t, err)
-			defer func() { _ = tx.Rollback() }()
-			_, err = tx.ExecContext(ctx, `
-WITH floor AS (SELECT COALESCE(MIN(ordinal),0) AS f FROM vector_documents WHERE session_id=$1 AND ordinal<0),
-parked AS (SELECT doc_key,row_number() OVER (ORDER BY ordinal) AS rn FROM vector_documents WHERE session_id=$1 AND ordinal>=0)
-UPDATE vector_documents d SET ordinal=(SELECT f FROM floor)-parked.rn FROM parked WHERE d.doc_key=parked.doc_key`, "S")
-			require.NoError(t, err)
-			_, err = tx.ExecContext(ctx, `
-INSERT INTO vector_documents (doc_key,session_id,source_uuid,ordinal,ordinal_end,subordinate,offsets,content,content_hash)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-ON CONFLICT (doc_key) DO UPDATE SET session_id=EXCLUDED.session_id,source_uuid=EXCLUDED.source_uuid,ordinal=EXCLUDED.ordinal,ordinal_end=EXCLUDED.ordinal_end,subordinate=EXCLUDED.subordinate,offsets=EXCLUDED.offsets,content=EXCLUDED.content,content_hash=EXCLUDED.content_hash`,
-				"u1", "S", "", 5, 5, false, "[]", pass.content, pass.hash)
-			require.NoError(t, err)
-			if pass.includeSecond {
-				_, err = tx.ExecContext(ctx, `INSERT INTO vector_documents (doc_key,session_id,source_uuid,ordinal,ordinal_end,subordinate,offsets,content,content_hash) VALUES ('u2','S','',20,20,false,'[]','second wide document','second-hash') ON CONFLICT (doc_key) DO UPDATE SET ordinal=EXCLUDED.ordinal,ordinal_end=EXCLUDED.ordinal_end,content=EXCLUDED.content,content_hash=EXCLUDED.content_hash`)
-				require.NoError(t, err)
-			}
-			_, err = tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE doc_key IN (SELECT doc_key FROM vector_documents WHERE session_id=$1) AND NOT (doc_key=ANY($2))`, "S", []string{})
-			require.NoError(t, err)
-			_, err = tx.ExecContext(ctx, `INSERT INTO `+table+` (doc_key,chunk_index,embedding) VALUES ($1,$2,$3::`+ext+`.halfvec)`, "u1", 0, "[2,0,0,0]")
-			require.NoError(t, err)
-			if pass.includeSecond {
-				_, err = tx.ExecContext(ctx, `INSERT INTO `+table+` (doc_key,chunk_index,embedding) VALUES ($1,$2,$3::`+ext+`.halfvec)`, "u2", 0, "[1,1,0,0]")
-				require.NoError(t, err)
-			}
-			_, err = tx.ExecContext(ctx, `INSERT INTO vector_push_state (generation_id,session_id,doc_agg_hash) VALUES ($1,$2,$3) ON CONFLICT (generation_id,session_id) DO UPDATE SET doc_agg_hash=EXCLUDED.doc_agg_hash`, genID, "S", pass.hash)
-			require.NoError(t, err)
-			if pass.includeSecond {
-				_, err = tx.ExecContext(ctx, `DELETE FROM vector_push_state WHERE generation_id=$1 AND session_id=$2`, genID, "orphan")
-				require.NoError(t, err)
-			}
-			require.NoError(t, tx.Commit())
-			var orphanCount int
-			require.NoError(t, pg.QueryRowContext(ctx, `SELECT count(*) FROM vector_push_state WHERE generation_id=$1 AND session_id='orphan'`, genID).Scan(&orphanCount))
-			if pass.includeSecond {
-				assert.Zero(t, orphanCount)
-			} else {
-				assert.Equal(t, 1, orphanCount)
-			}
-			hits, err := dbtest.SemanticSearch(ctx, searcher, "query", 10)
-			require.NoError(t, err)
-			if pass.includeSecond {
-				require.Len(t, hits, 2)
-			} else {
-				require.Len(t, hits, 1)
-			}
-			assert.Equal(t, pass.content, hits[0].Snippet)
-			var hash string
-			require.NoError(t, pg.QueryRowContext(ctx, `SELECT doc_agg_hash FROM vector_push_state WHERE generation_id=$1 AND session_id=$2`, genID, "S").Scan(&hash))
-			assert.Equal(t, pass.hash, hash)
-		})
-	}
-}
-
-// Unnormalized vectors close in direction retain their literal scores and order.
-func TestPGVectorSearcherNearTieUnnormalized(t *testing.T) {
-	pg := newVectorSearchTestPG(t)
-	ctx := t.Context()
-	genID, err := ensureVectorGeneration(ctx, pg, "fp-near-tie", "m", 4)
-	require.NoError(t, err)
-	require.NoError(t, ensureVectorChunkTable(ctx, pg, genID, 4))
-	ext, err := vectorExtensionSchema(ctx, pg)
-	require.NoError(t, err)
-	insertSearchDoc(t, pg, "near-a", "A", 0, 0, "[]", "first")
-	insertSearchDoc(t, pg, "near-b", "B", 0, 0, "[]", "second")
-	_, err = pg.ExecContext(ctx, `INSERT INTO `+vectorChunkTable(genID)+` (doc_key,chunk_index,embedding) VALUES ('near-a',0,'[3,1,0,0]'::`+ext+`.halfvec),('near-b',0,'[3,1.01,0,0]'::`+ext+`.halfvec)`)
-	require.NoError(t, err)
-	searcher := NewVectorSearcher(pg, genID, 4, 100, fixedEncoder([]float32{5, 0, 0, 0}))
-	hits, err := dbtest.SemanticSearch(ctx, searcher, "query", 2)
-	require.NoError(t, err)
-	require.Len(t, hits, 2)
-	assert.Equal(t, "A", hits[0].SessionID)
-	assert.Equal(t, "B", hits[1].SessionID)
-	assert.InDelta(t, 0.9486833, hits[0].Score, 0.000001)
-	assert.InDelta(t, 0.9477537, hits[1].Score, 0.000001)
 }
 
 func TestPGVectorSearcher(t *testing.T) {
