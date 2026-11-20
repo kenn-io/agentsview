@@ -10,7 +10,6 @@ import (
 	"math"
 	"reflect"
 	"slices"
-	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -81,7 +80,6 @@ func (s *Store) refreshActivityReport(selection, version, identity string, previ
 		s.saveActivityReport(selection, version, entry)
 	}
 	s.runtimeState().activityKept.Put(selection, version, []pgActivityKept{entry})
-	s.activityReports.Sweep(time.Now())
 }
 
 func (s *Store) activityReportRestricted(ctx context.Context) bool {
@@ -178,7 +176,11 @@ func (s *Store) validateKeptActivityReport(ctx context.Context, selection, versi
 		// Do not advance the memo until the live journal still matches it.
 		if len(entries) > 0 && entry.revision != entries[0].revision && entries[0].checkpoint != "" {
 			if tx != nil {
-				through, changes, current, previous, checkErr := s.loadUsageChangesWithHistory(ctx, entries[0].revision)
+				through, changes, checkErr := s.LoadUsageChanges(ctx, entries[0].revision)
+				var current, previous string
+				if checkErr == nil && through != 0 {
+					current, previous, checkErr = usageHistoryCheckpoints(ctx, s.pg, through, entries[0].revision)
+				}
 				if checkErr == nil && through == revision && current == checkpoint && previous == entries[0].checkpoint && slices.Equal(changes, snapshotChanges) {
 					s.runtimeState().activityKept.Put(selection, version, []pgActivityKept{entry})
 				}
@@ -195,28 +197,20 @@ func (s *Store) keptActivityReport(ctx context.Context, entries []pgActivityKept
 	if len(entries) > 0 {
 		after = entries[0].revision
 	}
-	through, changed, current, previous, err := s.loadUsageChangesWithHistory(ctx, after)
+	through, changed, err := s.LoadUsageChanges(ctx, after)
 	*snapshotChanges = changed
-	if isInsufficientPrivilege(err) || isUndefinedTable(err) {
-		return pgActivityKept{}, 0, "", false, nil
-	}
 	if err != nil || through == 0 || len(entries) == 0 {
-		return pgActivityKept{}, through, current, false, err
+		return pgActivityKept{}, through, "", false, err
 	}
 	entry := entries[0]
+	current, previous, err := usageHistoryCheckpoints(ctx, s.pg, through, after)
+	if err != nil {
+		return pgActivityKept{}, through, "", false, err
+	}
 	if entry.checkpoint != "" && entry.checkpoint != previous {
 		return pgActivityKept{}, through, current, false, nil
 	}
 	if through == entry.revision {
-		if entry.checkpoint != "" {
-			var token string
-			if err := s.pg.QueryRowContext(ctx, `SELECT COALESCE((SELECT value FROM sync_metadata WHERE key='usage_history_token'), '')`).Scan(&token); err != nil {
-				return pgActivityKept{}, through, current, false, err
-			}
-			if token != entry.checkpoint {
-				return pgActivityKept{}, through, current, false, nil
-			}
-		}
 		return entry, through, current, true, nil
 	}
 	if through < entry.revision {
@@ -260,30 +254,4 @@ func (s *Store) keptActivityReport(ctx context.Context, entries []pgActivityKept
 	entry.revision = through
 	entry.checkpoint = current
 	return entry, through, current, true, nil
-}
-
-func (s *Store) loadUsageChangesWithHistory(ctx context.Context, afterRevision int64) (int64, []string, string, string, error) {
-	rows, err := s.pg.QueryContext(ctx, `SELECT r.revision, c.session_id,
- COALESCE((SELECT value FROM sync_metadata WHERE key='usage_history_checkpoint:' || r.revision::text), ''),
- COALESCE((SELECT value FROM sync_metadata WHERE key='usage_history_checkpoint:' || $2::bigint::text), '')
- FROM (SELECT `+supportedUsageChangeRevisionSQL+` AS revision) r
- LEFT JOIN usage_session_changes c ON r.revision > 0 AND c.revision > $2 AND c.revision <= r.revision AND c.session_id <> ''
- ORDER BY c.revision, c.session_id`, strconv.Itoa(usageChangeJournalVersionPG), afterRevision)
-	if err != nil {
-		return 0, nil, "", "", err
-	}
-	defer rows.Close()
-	var revision int64
-	var current, previous string
-	var ids []string
-	for rows.Next() {
-		var id sql.NullString
-		if err := rows.Scan(&revision, &id, &current, &previous); err != nil {
-			return 0, nil, "", "", err
-		}
-		if id.Valid {
-			ids = append(ids, id.String)
-		}
-	}
-	return revision, ids, current, previous, rows.Err()
 }

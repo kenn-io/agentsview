@@ -90,10 +90,7 @@ func (s *Store) DB() *sql.DB {
 
 // Close closes the underlying database connection.
 func (s *Store) Close() error {
-	if s.activitySweepCancel != nil {
-		s.activitySweepCancel()
-		<-s.activitySweepDone
-	}
+	s.activityReports.Close()
 	if pool := s.DB(); pool != nil {
 		s.saveActivityInputs()
 		var cacheErr error

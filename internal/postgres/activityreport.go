@@ -174,9 +174,6 @@ func (s *Store) BuildActivityReportArtifacts(
 		if version != "" {
 			selection = kept.Selection(f, q)
 			eligible = s.activityReportEligible(q)
-			if eligible {
-				version += "|finished"
-			}
 			memo := &s.runtimeState().activityKept
 			entries, ok := memo.Get(selection, version)
 			if eligible && !ok {

@@ -45,8 +45,7 @@ func (s *Store) ConfigureUsageCache(ctx context.Context, directory, targetURL, s
 	if err := s.activityReports.Open("postgres-activity-reports", strings.ReplaceAll(fingerprint, ":", "-"), 128<<20, 128<<20); err != nil {
 		log.Printf("opening activity reports cache: %v", err)
 	} else {
-		s.activityReports.Sweep(time.Now())
-		s.startActivityReportSweep()
+		s.activityReports.StartSweep(ctx)
 	}
 	if column != "xmin" {
 		return nil
@@ -63,30 +62,6 @@ func (s *Store) ConfigureUsageCache(ctx context.Context, directory, targetURL, s
 	reader.DeferWork()
 	s.usageCache = reader
 	return nil
-}
-
-func (s *Store) startActivityReportSweep() {
-	if s.activitySweepCancel != nil {
-		s.activitySweepCancel()
-		<-s.activitySweepDone
-	}
-	// The sweep belongs to the store and stops when the store closes.
-	ctx, cancel := context.WithCancel(context.Background())
-	s.activitySweepCancel = cancel
-	s.activitySweepDone = make(chan struct{})
-	go func() {
-		defer close(s.activitySweepDone)
-		ticker := time.NewTicker(24 * time.Hour)
-		defer ticker.Stop()
-		for {
-			select {
-			case now := <-ticker.C:
-				s.activityReports.Sweep(now)
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
 }
 
 // WarmUsageCache queues launch-time fills for unready zones.

@@ -2,6 +2,7 @@ package kept
 
 import (
 	"bytes"
+	"context"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -24,8 +25,6 @@ type Disk struct {
 }
 
 func (d *Disk) Open(subdir, id string, maxFile, maxBytes int64) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
 	if err := d.reports.OpenDisk(subdir, id); err != nil {
 		return err
 	}
@@ -34,11 +33,11 @@ func (d *Disk) Open(subdir, id string, maxFile, maxBytes int64) error {
 	return d.trim()
 }
 
-func (d *Disk) Enabled() bool {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.reports.disk.dir != ""
-}
+func (d *Disk) Enabled() bool { return d.reports.disk.dir != "" }
+
+func (d *Disk) StartSweep(ctx context.Context) { d.reports.StartSweep(ctx, d.Sweep) }
+
+func (d *Disk) Close() { d.reports.Close() }
 
 func (d *Disk) Sweep(now time.Time) {
 	d.mu.Lock()

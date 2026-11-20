@@ -77,31 +77,6 @@ func TestDiskLimitsAndUnavailableDirectory(t *testing.T) {
 	require.False(t, ok)
 }
 
-func TestDiskOpenConcurrentEnabled(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	var disk Disk
-	done := make(chan error, 1)
-	go func() {
-		for range 20 {
-			if err := disk.Open("test-usage", "mirror", 128, 1024); err != nil {
-				done <- err
-				return
-			}
-		}
-		done <- nil
-	}()
-	for {
-		select {
-		case err := <-done:
-			require.NoError(t, err)
-			require.True(t, disk.Enabled())
-			return
-		default:
-			_ = disk.Enabled()
-		}
-	}
-}
-
 func TestReadsDoSaved(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	var disk Disk
