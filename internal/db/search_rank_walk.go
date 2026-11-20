@@ -18,6 +18,9 @@ const searchRankWalkMaxSessions = 4096
 // hands the page to the query that ranks every match.
 const searchRankWalkRowsPerSession = 64
 
+// Small dated pages can need more than 128 rows to finish a modest tie.
+const searchRankWalkDateMinRows = 256
+
 // searchBestMatch is a session's best message match: the lowest rank, then
 // the lowest ordinal, then the lowest FTS rowid.
 type searchBestMatch struct {
@@ -54,7 +57,7 @@ type searchRankWalk struct {
 // session only as the walk pulls it. The walk returns nil when it reaches
 // more sessions than the page query can bind or reads too many matches.
 func walkSearchRanks(
-	ctx context.Context, q messageRowsQuerier, table, innerWhereSQL string, ftsArgs []any, need int,
+	ctx context.Context, q messageRowsQuerier, table, innerWhereSQL string, ftsArgs []any, need int, dateBounded bool,
 ) (*searchRankWalk, error) {
 	if need > searchRankWalkMaxSessions {
 		return nil, nil
@@ -74,6 +77,9 @@ func walkSearchRanks(
 	index := make(map[string]int, need)
 	var boundary float64
 	maxRows := need * searchRankWalkRowsPerSession
+	if dateBounded {
+		maxRows = max(maxRows, searchRankWalkDateMinRows)
+	}
 	for read := 0; rows.Next(); read++ {
 		if read == maxRows {
 			return nil, nil
