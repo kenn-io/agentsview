@@ -219,7 +219,8 @@ To run it from the CLI:
 
 1. Preview the changes with `--dry-run`.
 1. Stop the daemon.
-1. Run `agentsview db strip --images` without `--dry-run` to apply the cleanup.
+1. Run the same command without `--dry-run` to apply the cleanup. Keep any
+   `--project` or `--before` filters you used in the preview.
 1. Start the daemon again.
 
 The **Settings** control runs through the daemon and does not need that
