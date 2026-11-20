@@ -215,7 +215,22 @@ func TestPGSemanticSearchProjectFilter(t *testing.T) {
 }
 
 func TestPGSemanticSessionDateEligibility(t *testing.T) {
-	store, _, _ := setupSemanticSearch(t)
+	pg, err := Open(t.Context(), testPGURL(t), "public", true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, pg.Close()) })
+	// The date predicate can fall back to message timestamps for open sessions.
+	_, err = pg.ExecContext(t.Context(), `
+		CREATE TABLE sessions (id text PRIMARY KEY, project text, message_count int,
+			deleted_at timestamptz, started_at timestamptz, ended_at timestamptz,
+			created_at timestamptz, user_message_count int, is_automated boolean,
+			relationship_type text, parent_session_id text);
+		CREATE TABLE messages (session_id text, timestamp timestamptz);
+		INSERT INTO sessions (id, project, message_count, started_at, ended_at,
+			user_message_count, is_automated, relationship_type, parent_session_id)
+		VALUES ('S1', 'alpha', 2, '2026-05-01T10:00:00Z', '2026-05-01T10:30:00Z', 2, false, '', ''),
+			('S2', 'beta', 2, '2026-05-01T10:00:00Z', '2026-05-01T10:30:00Z', 2, false, '', '')`)
+	require.NoError(t, err)
+	store := &Store{pg: pg}
 	ids := []string{"S1", "S2"}
 	for _, tc := range []struct {
 		date string
