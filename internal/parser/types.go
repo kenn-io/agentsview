@@ -26,6 +26,7 @@ const (
 	AgentCopilot        AgentType = "copilot"
 	AgentGemini         AgentType = "gemini"
 	AgentGeminiApps     AgentType = "gemini-apps"
+	AgentGrokWeb        AgentType = "grok-web"
 	AgentMiMoCode       AgentType = "mimocode"
 	AgentOpenCode       AgentType = "opencode"
 	AgentOpenCodeReview AgentType = "opencodereview"
@@ -65,6 +66,7 @@ const (
 	AgentHermes         AgentType = "hermes"
 	AgentAugureDesktop  AgentType = "augure-desktop"
 	AgentGrok           AgentType = "grok"
+	AgentFactory        AgentType = "factory"
 	AgentGoose          AgentType = "goose"
 	AgentWorkBuddy      AgentType = "workbuddy"
 	AgentCodeBuddy      AgentType = "codebuddy"
@@ -793,6 +795,12 @@ var Registry = []AgentDef{
 		FileBased:   false,
 	},
 	{
+		Type:        AgentGrokWeb,
+		DisplayName: "Grok Web",
+		IDPrefix:    "grok-web:",
+		FileBased:   false,
+	},
+	{
 		Type:        AgentKiro,
 		DisplayName: "Kiro",
 		EnvVar:      "KIRO_SESSIONS_DIR",
@@ -872,6 +880,18 @@ var Registry = []AgentDef{
 		DefaultDirs: []string{".grok/sessions"},
 		IDPrefix:    "grok:",
 		FileBased:   true,
+	},
+	{
+		Type:        AgentFactory,
+		DisplayName: "Factory Droid",
+		EnvVar:      "FACTORY_DIR",
+		ConfigKey:   "factory_dirs",
+		DefaultDirs: []string{".factory/sessions"},
+		IDPrefix:    "factory:",
+		FileBased:   true,
+		Usage: UsageCapabilities{
+			NoPerMessageTokenData: true,
+		},
 	},
 	{
 		Type:              AgentGoose,

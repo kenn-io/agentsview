@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-09
+last_edited: 2026-11-17
 title: CLI Reference
 description: All AgentsView commands, flags, and environment variables
 ---
@@ -124,7 +124,7 @@ launch paths.
 | `stats`                                    | `report stats`                                                     |
 | `activity report`                          | `report activity`                                                  |
 | `usage daily` / `usage statusline`         | `report usage daily` / `report usage statusline`                   |
-| `pg ...` / `duckdb ...` / `clickhouse ...` | `replica pg ...` / `replica duckdb ...` / `replica clickhouse ...` |
+| `pg ...` / `clickhouse ...`                | `replica pg ...` / `replica clickhouse ...`                        |
 | `embeddings ...`                           | `index embeddings ...`                                             |
 | `classifier ...` (recovery only)           | `index classifier ...` (recovery only)                             |
 | `parse-diff`                               | `archive diff`                                                     |
@@ -405,9 +405,10 @@ configuration. Seed import and restore generate fresh local authentication and l
 Previously retained raw files are preserved without redaction and may contain
 credentials. Seeded and restored databases are permanently archive-only: foreground starts,
 background starts and restarts do not scan the receiving machine. Ordinary sync,
-source transfers over HTTP or SSH, ChatGPT, Claude.ai and Gemini Apps imports, artifact exchange,
-mirror publication and raw-sync watch are refused. Browsing, curation, archive
-import, verification, extraction, backup and explicit reparse remain available. Use a separate data directory to collect new
+source transfers over HTTP or SSH, ChatGPT, Claude.ai, Gemini Apps and Grok web
+imports and Sync, artifact exchange, mirror publication and raw-sync watch are
+refused. Browsing, curation, archive import, verification, extraction, backup and
+explicit reparse remain available. Use a separate data directory to collect new
 local sessions; no runtime flag or config setting disables archive-only mode.
 
 Startup resync keeps archive-only sessions and their acceptance records without
@@ -593,7 +594,8 @@ for a one-off unauthenticated non-loopback bind; a persistent non-loopback
 These commands manage only the writable SQLite daemon for the current data
 directory, including a foreground `serve` process or a daemon auto-started by a
 CLI command. `daemon stop` stops the web UI and background sync together. They
-ignore read-only `agentsview replica pg serve` and `agentsview replica duckdb serve` processes.
+ignore read-only `agentsview replica pg serve` and
+`agentsview replica clickhouse serve` processes.
 If only read-only servers are running, `daemon status` reports that no daemon is
 running, and `daemon stop` and `daemon restart` leave those servers alive.
 
@@ -765,7 +767,7 @@ line. If the server cannot return the status, or fails while answering,
 `serve status` prints one line saying why, even when the source is not
 configured. Read-only servers, and older servers without this status, add no
 lines. `serve stop` retains its broad lifecycle scope: it gracefully terminates
-confirmed writable SQLite and read-only PostgreSQL or DuckDB server processes
+confirmed writable SQLite and read-only PostgreSQL or ClickHouse server processes
 for the data directory and cleans up their runtime records.
 
 `serve restart` is intentionally narrower and config-driven. It restarts only
@@ -819,7 +821,7 @@ starting a daemon or changing configuration.
 Commands that need fresh data or need to write auto-start the detached daemon
 when no compatible daemon is running. That includes local `sync`,
 `session sync`, `token-use`, normal `usage` refresh paths,
-`pg push`/`pg push --watch`, `duckdb push`, and `clickhouse push`. If a writable
+`pg push`/`pg push --watch`, and `clickhouse push`. If a writable
 daemon is known to own the archive but is not reachable, these commands refuse
 instead of writing directly.
 
@@ -1237,7 +1239,9 @@ matching `{dataDir}/assets` directory as well as the copied database content.
 Run `db compact` separately to measure SQLite file-space reclamation after
 migration. Back up the `{dataDir}/assets` directory together with the archive.
 
-The raw `agentsview session export` command still streams provider source bytes.
+The raw `agentsview session export` command streams provider source, with
+detected secrets masked unless you pass `--reveal`, and keeps inline image
+payloads.
 See [image storage](/docs/data/#ingest-time-image-offload) for export and
 remote-backend limits.
 
@@ -1774,38 +1778,6 @@ agentsview replica pg vectors drop <id> [flags]
 
 ______________________________________________________________________
 
-<a id="agentsview-duckdb"></a>
-
-### `agentsview replica duckdb`
-
-Mirror the local SQLite archive into DuckDB and serve from it, locally or over
-the Quack remote protocol. Release builds leave DuckDB out; build from source
-with `make install DUCKDB=1` to use these commands. See
-[DuckDB Mirror](/docs/duckdb/) for full documentation.
-
-```bash
-agentsview replica duckdb push          # mirror SQLite into sessions.duckdb
-agentsview replica duckdb status        # show mirror sync status
-agentsview replica duckdb serve         # read-only web UI from the mirror
-agentsview replica duckdb quack serve   # expose the mirror over Quack
-```
-
-`duckdb push` accepts the same `--full` / `--projects` / `--exclude-projects` /
-`--all-projects` / `--watch` / `--debounce` / `--interval` flags as `pg push`.
-`duckdb push` always writes the local mirror file at `[duckdb].path`; it never
-targets a remote Quack endpoint. If `[duckdb].url` or `AGENTSVIEW_DUCKDB_URL` is
-configured, push fails immediately with an error to unset it and serve the
-mirror remotely with `duckdb quack serve` instead. `duckdb status` and
-`duckdb serve` do target the remote Quack endpoint when `[duckdb].url` or
-`AGENTSVIEW_DUCKDB_URL` is set, and the local mirror file otherwise. When
-`[duckdb].path` or `AGENTSVIEW_DUCKDB_PATH` is set, `duckdb quack serve` exposes
-that same mirror by default unless `--path` overrides it. `duckdb serve` accepts
-the same serve flags as `pg serve`. The DuckDB backend is unavailable on Windows
-ARM64 (the upstream bindings ship no prebuilt library for that platform); all
-other commands work normally there.
-
-______________________________________________________________________
-
 <a id="agentsview-clickhouse"></a>
 
 ### `agentsview replica clickhouse`
@@ -2012,15 +1984,16 @@ ______________________________________________________________________
 
 ### `agentsview source chrome setup`
 
-Install the native host and unpacked extension for Claude.ai Sync through Google
-Chrome. The command prints the extension folder. AgentsView opens its Chrome
-connection only after setup, so restart AgentsView if it is already running.
-Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**,
-and select that folder. Keep Chrome open during Sync. Registration is per OS
-user; the last setup wins. The first connected Chrome profile is used. Rerun
-setup and reload the extension when the executable path or data directory
-changes. After an upgrade mismatch, restart AgentsView if you upgraded it, rerun
-setup, reload the extension at `chrome://extensions`, then Sync again.
+Install the native host and unpacked extension to sync Claude.ai, ChatGPT,
+Gemini Apps, and Grok web chats through Google Chrome. The command prints the
+extension folder. AgentsView opens its Chrome connection only after setup, so
+restart AgentsView if it is already running. Open `chrome://extensions`, enable
+**Developer mode**, choose **Load unpacked**, and select that folder. Keep
+Chrome open during Sync. Registration is per OS user; the last setup wins. The
+first connected Chrome profile is used. Rerun setup and reload the extension
+when the executable path or data directory changes. After an upgrade mismatch,
+restart AgentsView if you upgraded it, rerun setup, reload the extension at
+`chrome://extensions`, then Sync again.
 
 See
 [Sync Claude.ai chats](https://agentsview.io/docs/chat-import/#sync-claudeai-chats)
@@ -2032,22 +2005,25 @@ ______________________________________________________________________
 
 ### `agentsview source import`
 
-Import Claude.ai, ChatGPT, or Gemini Apps conversations into the local database.
-See [Chat Import](/docs/chat-import/) for full documentation.
+Import Claude.ai, ChatGPT, Gemini Apps, or Grok web conversations into the local
+database. See [Chat Import](/docs/chat-import/) for full documentation.
 
 ```bash
 agentsview source import --type <type> <path>
+agentsview source import --type <type> --sync
 ```
 
-| Flag        | Default | Description                                                                                           |
-| ----------- | ------- | ----------------------------------------------------------------------------------------------------- |
-| `--type`    |         | Import type: `claude-ai`, `chatgpt`, or `gemini-apps` (required)                                      |
-| `--replace` |         | Session ID to replace when the default import refuses it; repeatable (claude-ai, chatgpt)             |
-| `--sync`    | `false` | Sync Claude.ai through Chrome; requires a running server and Chrome host, with no path or `--replace` |
+| Flag        | Default | Description                                                                                                                              |
+| ----------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `--type`    |         | Import type: `claude-ai`, `chatgpt`, or `gemini-apps`; with `--sync`, also `grok-web` (required)                                         |
+| `--replace` |         | Session ID to replace when the default import refuses it; repeatable (claude-ai, chatgpt)                                                |
+| `--sync`    | `false` | Sync Claude.ai, ChatGPT, Gemini Apps, or Grok web through Chrome; requires a running server and Chrome host, with no path or `--replace` |
 
 Set up the
 [Chrome host](https://agentsview.io/docs/commands/#agentsview-chrome-setup) once
-and keep Chrome open for `agentsview source import --type claude-ai --sync`.
+and keep Chrome open for `agentsview source import --type <type> --sync`, where
+`<type>` is `claude-ai`, `chatgpt`, `gemini-apps`, or `grok-web`. AgentsView
+imports Grok web chats only through Sync, so `grok-web` needs `--sync`.
 
 The path can be a `.zip` file, a `conversations.json` file (Claude.ai only), a
 Gemini Apps `MyActivity.html` file, or a directory containing the extracted
@@ -2060,6 +2036,7 @@ agentsview source import --type claude-ai ~/Downloads/claude.zip
 agentsview source import --type chatgpt ~/Downloads/chatgpt.zip
 agentsview source import --type claude-ai ./conversations.json
 agentsview source import --type gemini-apps ~/Downloads/takeout.zip
+agentsview source import --type grok-web --sync
 agentsview source import --type chatgpt --replace 'chatgpt:<conversation-id>' ~/Downloads/chatgpt.zip
 ```
 
@@ -2123,7 +2100,7 @@ agentsview export sessions --all --format ndjson --project agentsview
 The JSON top level has `schema_version`, `archive_id`, `database_id`, `cursor`,
 `pricing`, `projects`, and `sessions`. NDJSON writes the same metadata as the
 first line, then one session row per following line. Current builds emit
-`schema_version: 6`; see [Session Export](/docs/session-export/#versioning) for
+`schema_version: 7`; see [Session Export](/docs/session-export/#versioning) for
 the v1 and transitional 0.38 release history. The default and maximum page size
 is `db.MaxSessionLimit`, currently 500.
 
@@ -2225,6 +2202,7 @@ agentsview session search <pattern>      # content search across sessions
 agentsview session diagnose <id> --format json  # archived usage and diagnostic evidence
 agentsview session usage <id>            # token usage and cost estimate
 agentsview session usage <id> --own-only # exclude subagent transcripts
+agentsview session usage <id> --wait     # wait up to 30 seconds after daemon discovery
 agentsview session usage-batch <id>...   # ordered usage results for several sessions
 agentsview session label <id> k=v ...    # add or remove labels
 agentsview session parent <id> <parent>  # record the launching session
@@ -2237,7 +2215,8 @@ labels are reported separately with their session ID and ordinal.
 
 `agentsview session commits <id>` lists transcript and Git trailer commits
 linked to a session. The `SOURCE` column distinguishes `transcript` from
-`commit message`. JSON keeps `source: "trailer"` for commit message links. Use
+`commit message`. JSON keeps `source: "trailer"` for commit message links.
+[`agentsview git-hook`](#agentsview-git-hook) adds those trailers. Use
 `--format json` for structured output. The table shows the session, exact message ordinal,
 call time, source, recorded SHA, branch, subject, and user turn, shortened to
 100 terminal columns. Transcript links use the last real prompt before the
@@ -2282,7 +2261,7 @@ include flags for matches beyond the individual class hints. Failed diagnostic
 searches add no hint.
 
 `session search` supports substring (default), `--regex`, `--fts`, `--semantic`,
-and `--hybrid` modes. On SQLite, PostgreSQL, DuckDB, and ClickHouse, a default search of several words lists matches
+and `--hybrid` modes. On SQLite, PostgreSQL, and ClickHouse, a default search of several words lists matches
 of the exact text first, from every selected source. Messages holding every
 word follow, then messages holding fewer of the words; `matched_words` in JSON
 counts them, excluding unquoted stop words. Regular word forms match, so
@@ -2466,10 +2445,12 @@ ______________________________________________________________________
 Install the conversation search skill and focused MCP profile for installed Claude Code and Codex clients:
 
 ```bash
-agentsview agent setup [--agent claude|codex] [--check] [--force]
+agentsview agent setup [--agent claude|codex]... [--check] [--force] [--print] [--format json]
 ```
 
-Setup refuses to replace a different `agentsview` MCP entry without `--force` and preserves other entries. Pass `--force` to replace the entry and overwrite edited skill files. The memory profile supports `AGENTSVIEW_MEMORY_SERVER`, `AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, and `AGENTSVIEW_MEMORY_PG`.
+Setup refuses to replace a different `agentsview` MCP entry without `--force` and preserves other entries. Pass `--force` to replace the entry and overwrite edited skill files. `--check` changes nothing, and `--print` shows the MCP commands to run by hand.
+
+Setup registers `agentsview mcp --profile memory` with no server flags. For a remote archive, set `AGENTSVIEW_MEMORY_SERVER` or `AGENTSVIEW_MEMORY_PG` where the agent starts the MCP server, and point the skill at the same server with [`agentsview skills install --server`](#agentsview-skills).
 
 ______________________________________________________________________
 
@@ -2566,9 +2547,9 @@ hub on the next replica push, including a project-filtered push. An explicit
 append. Events appear in digests only when Friction review is enabled on the
 archive that builds them.
 
-`POST /api/v1/diagnostics` accepts `id`, `source`, `message`, and an optional
-RFC 3339 `occurred_at`. It requires an authenticated server or a localhost
-request. Reusing an ID with different content returns HTTP 409.
+`POST /api/v1/diagnostics` accepts a required UUID `id`, `source`, `message`,
+and an optional RFC 3339 `occurred_at`. It requires an authenticated server or
+a localhost request. Reusing an ID with different content returns HTTP 409.
 
 ______________________________________________________________________
 
@@ -2844,6 +2825,7 @@ agentsview help
 | `DEEPSEEK_TUI_SESSIONS_DIR`           | `~/.codewhale/sessions` and `~/.deepseek/sessions`                              | DeepSeek TUI sessions directory                                                                                 |
 | `DEEPSEEK_HARNESS_SESSIONS_DIR`       | `~/.dsh/sessions`                                                               | DeepSeek Harness sessions directory                                                                             |
 | `DSH_HOME`                            | unset                                                                           | DeepSeek Harness home that re-roots the default `sessions/` discovery path                                      |
+| `FACTORY_DIR`                         | `~/.factory/sessions`                                                           | Factory Droid sessions directory                                                                                |
 | `FORGE_DIR`                           | `~/.forge`                                                                      | Forge directory (contains `.forge.db`)                                                                          |
 | `FREEBUFF_CONFIG_DIR`                 | unset                                                                           | Freebuff config home that re-roots the default `projects/` discovery path                                       |
 | `GEMINI_DIR`                          | `~/.gemini`                                                                     | Gemini CLI directory                                                                                            |
@@ -2917,10 +2899,6 @@ agentsview help
 | `AGENTSVIEW_EMBEDDINGS_API_KEY`       |                                                                                 | Inline API key for `AGENTSVIEW_EMBEDDINGS_ENDPOINT`; cannot be combined with the file form                      |
 | `AGENTSVIEW_EMBEDDINGS_API_KEY_FILE`  |                                                                                 | API key file for `AGENTSVIEW_EMBEDDINGS_ENDPOINT`                                                               |
 | `AGENTSVIEW_EMBEDDINGS_BATCH_SIZE`    | `32`                                                                            | Positive number of inputs per embeddings request when adopting a published PostgreSQL recipe                    |
-| `AGENTSVIEW_DUCKDB_PATH`              | `~/.agentsview/sessions.duckdb`                                                 | DuckDB mirror file path                                                                                         |
-| `AGENTSVIEW_DUCKDB_URL`               |                                                                                 | Remote Quack endpoint URL for `duckdb status` and `duckdb serve` (read side only)                               |
-| `AGENTSVIEW_DUCKDB_TOKEN`             |                                                                                 | Quack authentication token                                                                                      |
-| `AGENTSVIEW_DUCKDB_MACHINE`           |                                                                                 | Machine name for DuckDB push                                                                                    |
 | `AGENTSVIEW_CLICKHOUSE_URL`           |                                                                                 | ClickHouse connection URL for the default target                                                                |
 | `AGENTSVIEW_CLICKHOUSE_DATABASE`      | `agentsview`                                                                    | ClickHouse database name for the default target                                                                 |
 | `AGENTSVIEW_CLICKHOUSE_MACHINE`       |                                                                                 | Machine name for ClickHouse push                                                                                |
@@ -2929,8 +2907,6 @@ agentsview help
 | `AGENTSVIEW_ARCHIVE_CONTENT`          | `full`                                                                          | Archive storage policy when `config.toml` sets none: `full`, `transcripts`, or `usage`                          |
 | `AGENTSVIEW_NO_DAEMON`                |                                                                                 | Set to `1`, `true`, `yes`, or `on` to disable CLI daemon auto-start                                             |
 | `AGENTSVIEW_DAEMON_IDLE_TIMEOUT`      | `20m`                                                                           | Override idle self-shutdown duration for automatically started and `serve --background` daemons                 |
-| `AGENTSVIEW_TELEMETRY_ENABLED`        |                                                                                 | Set to `0` to disable [anonymous daemon telemetry](/docs/configuration/#anonymous-daemon-telemetry)             |
-| `DO_NOT_TRACK`                        |                                                                                 | Set to `1` to disable telemetry                                                                                 |
 
 Environment variables override the built-in defaults. Set them in your shell
 profile or pass them inline:
@@ -2945,7 +2921,8 @@ AgentsView can index text in retained tool-result images with a local GLM-OCR
 service. Enable it in the [configuration](configuration.md#image-text) and
 restart the daemon.
 
-The endpoint must be loopback. It defaults to
+The endpoint must be an `http://` URL on a loopback host, with an explicit port
+and the path `/glmocr/parse`. It defaults to
 `http://127.0.0.1:30004/glmocr/parse` and must serve the
 [Docbank v0.17.0 deployment](https://github.com/kenn-io/docbank/tree/v0.17.0/deploy/glmocr),
 which requires an NVIDIA GB10 host. AgentsView reads PNG, JPEG, and WebP images
@@ -2958,8 +2935,8 @@ the web palette or with, for example,
 `agentsview session search 'invoice 42' --in tool_result`. Substring and regex
 `tool_result` searches include image text; other `--in` sources and in-session
 find search only text shown in the transcript. Each new extraction is sent on
-the next incremental push to PostgreSQL, DuckDB, and ClickHouse, so `pg serve`
-and the other mirrors return the same matches. Removing the last retained copy of an image removes its extracted text.
-Disabling image text and restarting clears extracted text and removes mirror
+the next incremental push to PostgreSQL and ClickHouse, so `pg serve` and
+`clickhouse serve` return the same matches. Removing the last retained copy of an image removes its extracted text.
+Disabling image text and restarting clears extracted text and removes replica
 matches on the next push. Session and artifact exports carry image references or
 placeholders rather than extracted text.

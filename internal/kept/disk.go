@@ -2,6 +2,7 @@ package kept
 
 import (
 	"bytes"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -90,12 +91,13 @@ func (d activityReportDisk) touch(selection string) error {
 	return os.Chtimes(d.path(selection), now, now)
 }
 
-func (d activityReportDisk) save(selection, key string, payload []byte, maxFile int64) error {
+func (d activityReportDisk) save(selection, key string, payload []byte, maxFile int64) (bool, error) {
 	data := append(d.header(key), payload...)
 	if maxFile > 0 && int64(len(data)) > maxFile {
-		return nil
+		return false, nil
 	}
-	return writeFileAtomic(d.path(selection), data)
+	err := writeFileAtomic(d.path(selection), data)
+	return err == nil, err
 }
 
 func (d activityReportDisk) keep(selection, version string, maxFile int64, encode func() ([]byte, error)) (bool, error) {
@@ -107,7 +109,8 @@ func (d activityReportDisk) keep(selection, version string, maxFile int64, encod
 	if err != nil {
 		return false, err
 	}
-	return true, d.save(selection, version, body, maxFile)
+	_, err = d.save(selection, version, body, maxFile)
+	return true, err
 }
 
 // Keep touches an in-memory selection and restores it if its file was removed.
@@ -122,16 +125,19 @@ func (d *Disk) Keep(selection, version string, encode func() ([]byte, error)) {
 	}
 }
 
-func (d *Disk) Put(selection, version string, payload []byte) {
+// Put reports whether the file was written within the per-file limit.
+func (d *Disk) Put(selection, version string, payload []byte) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	disk := d.reports.disk
 	if disk.dir == "" {
-		return
+		return false
 	}
-	if disk.save(selection, version, payload, d.maxFile) == nil {
+	if saved, _ := disk.save(selection, version, payload, d.maxFile); saved {
 		_ = d.trim()
+		return true
 	}
+	return false
 }
 
 func (d *Disk) trim() error {
@@ -171,4 +177,25 @@ func (d *Disk) trim() error {
 		total -= f.size
 	}
 	return nil
+}
+
+// LoadJSON returns a saved value or loads and saves it for this version.
+func LoadJSON[T any](d *Disk, selection, version string, current func() bool, load func() (T, error)) (T, bool, error) {
+	if data, ok := d.Get(selection, version); ok {
+		var value T
+		if json.Unmarshal(data, &value) == nil {
+			return value, current == nil || current(), nil
+		}
+	}
+	value, err := load()
+	if err != nil {
+		return value, false, err
+	}
+	retain := current == nil || current()
+	if retain && d.Enabled() {
+		if data, encodeErr := json.Marshal(value, json.FormatNilSliceAsNull(true)); encodeErr == nil {
+			d.Put(selection, version, data)
+		}
+	}
+	return value, retain, nil
 }

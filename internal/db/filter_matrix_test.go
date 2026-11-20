@@ -20,7 +20,6 @@ type filterMatrixDialect struct {
 var filterMatrixDialects = []filterMatrixDialect{
 	{"sqlite", SQLiteQueryDialect(), "1", "0", "COALESCE(NULLIF(s.ended_at, ''), NULLIF(s.started_at, ''), s.created_at) >= ?", "m.id = tc.message_id", `tc.file_path LIKE ? ESCAPE '\'`},
 	{"postgres", PostgresQueryDialect(), "TRUE", "FALSE", "COALESCE(s.ended_at, s.started_at, s.created_at) >= ?::timestamptz", "m.session_id = tc.session_id AND m.ordinal = tc.message_ordinal", `tc.file_path ILIKE ? ESCAPE E'\\'`},
-	{"duckdb", DuckDBQueryDialect(), "TRUE", "FALSE", "COALESCE(s.ended_at, s.started_at, s.created_at) >= CAST(? AS TIMESTAMP)", "m.session_id = tc.session_id AND m.id = tc.message_id", `tc.file_path ILIKE ? ESCAPE '\'`},
 	{"clickhouse", ClickHouseQueryDialect(), "true", "false", "COALESCE(s.ended_at, s.started_at, s.created_at) >= parseDateTime64BestEffort(?, 6, 'UTC')", "m.session_id = tc.session_id AND m.ordinal = tc.message_ordinal", "tc.file_path ILIKE ?"},
 }
 
@@ -148,8 +147,6 @@ func TestFilterMatrixTermination(t *testing.T) {
 			switch d.name {
 			case "sqlite":
 				activity = "CAST(strftime('%s', COALESCE(NULLIF(s.ended_at, ''), NULLIF(s.started_at, ''), s.created_at)) AS INTEGER)"
-			case "duckdb":
-				ph = "CAST(? AS TIMESTAMP)"
 			case "clickhouse":
 				ph = "parseDateTime64BestEffort(?, 6, 'UTC')"
 			}

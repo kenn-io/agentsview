@@ -34,7 +34,7 @@ var (
 
 // activityReportRangeBoundsUTC returns the exact [start, end) UTC bounds
 // of the resolved range `q` as RFC3339 strings. ClickHouse compares parsed
-// instants, so the zone suffix stays, matching DuckDB and PostgreSQL.
+// instants, so the zone suffix stays, matching PostgreSQL.
 func activityReportRangeBoundsUTC(q activity.Query) (string, string) {
 	return q.RangeStart.UTC().Format(time.RFC3339Nano),
 		q.RangeEnd.UTC().Format(time.RFC3339Nano)
@@ -42,7 +42,7 @@ func activityReportRangeBoundsUTC(q activity.Query) (string, string) {
 
 // GetActivityReport assembles a concurrency- and usage-oriented report
 // for the resolved range `q`, reading from the ClickHouse store. It mirrors
-// the SQLite, PostgreSQL, and DuckDB backends: sessions and activity come
+// the SQLite and PostgreSQL backends: sessions and activity come
 // from the filtered candidate set. Usage loads candidate rows plus only the
 // cross-session Claude peers needed for complete-snapshot selection.
 //

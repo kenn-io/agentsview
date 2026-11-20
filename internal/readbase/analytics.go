@@ -36,7 +36,7 @@ type AnalyticsBackend interface {
 	// order; a backend may sort anyway.
 	TrendsSQL(f, sessionFilter db.AnalyticsFilter, ordered bool) (string, []any)
 	FormatTime(any) string
-	// DuckDB binds captured IDs; ClickHouse reselects by filter to stay under its statement size cap.
+	// ClickHouse reselects by filter to stay under its statement size cap.
 	Autonomy(ctx context.Context, ids []string, f db.AnalyticsFilter) (map[string]int, error)
 	// VelocitySessions returns each selected session's velocity contribution
 	// over its messages without Claude hooks.
@@ -50,11 +50,11 @@ type AnalyticsBackend interface {
 	// ToolCountsSQL selects tool call counts for the sessions in idSet, a
 	// relation from VisitSessionIDSets.
 	ToolCountsSQL(idSet string, args []any) (string, []any)
-	// Session metadata supplies ClickHouse cache versions; DuckDB uses only rows.
+	// Session metadata supplies ClickHouse cache versions.
 	PopulateFrustrationMarkers(ctx context.Context, rows []db.SignalRow, sessions []AnalyticsSession) error
 }
 
-// Analytics owns DuckDB and ClickHouse report orchestration.
+// Analytics owns ClickHouse report orchestration.
 type Analytics struct {
 	backend AnalyticsBackend
 	name    string
@@ -99,7 +99,7 @@ type AnalyticsSession struct {
 	DuplicatePromptCount        int
 	NoCodeContextCount          int
 	RunawayToolLoopCount        int
-	PushVersion                 uint64 // ClickHouse cache version; zero for DuckDB.
+	PushVersion                 uint64 // ClickHouse cache version.
 	// FrustrationMarkers is the count push stored on the
 	// session; nil when the backend has none and must count them.
 	FrustrationMarkers *int

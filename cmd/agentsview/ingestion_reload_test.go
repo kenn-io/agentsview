@@ -302,6 +302,44 @@ func TestCatchUpPollsLiveActivity(t *testing.T) {
 	assert.Equal(t, int64(2), polls.Load(), "a wake after an idle pause polls too")
 }
 
+func TestReadHoldsLiveIntervalSoLaterReadsSkipCatchUp(t *testing.T) {
+	f := newIngestionLifecycleFixture(t)
+	cfg := f.cfg
+	cfg.SyncInterval, cfg.BackgroundSyncInterval = time.Second, time.Hour
+	f.ingestion.cfg.Store(&cfg)
+	var polls atomic.Int64
+	f.ingestion.mu.Lock()
+	f.ingestion.readHold = 2 * time.Second
+	f.ingestion.live = &liveActivity{
+		stop:    func() {},
+		pollNow: func(context.Context) { polls.Add(1) },
+	}
+	f.ingestion.mu.Unlock()
+	f.ingestion.OpenWatcherDispatch()
+	override := f.ingestion.SyncIntervalOverride()
+	require.Zero(t, override.Value(), "nothing holds the live interval before a read")
+
+	require.True(t, f.ingestion.EnsureFresh(t.Context()))
+	f.ingestion.applying.Wait()
+	require.Equal(t, int64(1), polls.Load(), "the first read catches up on the changes the background interval held")
+	assert.Equal(t, agentsync.LiveInterval, override.Value(), "the read holds the live interval")
+
+	// Without the hold, a read this long after the last catch-up would start
+	// another one.
+	f.ingestion.mu.Lock()
+	f.ingestion.lastCatchup = time.Now().Add(-time.Hour)
+	f.ingestion.mu.Unlock()
+	require.True(t, f.ingestion.EnsureFresh(t.Context()))
+	f.ingestion.applying.Wait()
+	assert.Equal(t, int64(1), polls.Load(), "a read during the hold leaves syncing to the live watcher")
+
+	require.Eventually(t, func() bool { return override.Value() == 0 }, 20*time.Second, 50*time.Millisecond,
+		"the hold lapses once reads stop")
+	require.True(t, f.ingestion.EnsureFresh(t.Context()))
+	f.ingestion.applying.Wait()
+	assert.Equal(t, int64(2), polls.Load(), "the first read after the hold lapses catches up again")
+}
+
 func TestIdleWakeRunsPeriodicPassSkippedDuringPause(t *testing.T) {
 	f := newIngestionLifecycleFixture(t)
 	var passes atomic.Int64

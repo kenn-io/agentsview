@@ -33,7 +33,6 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/server"
@@ -164,7 +163,7 @@ func setupWithServerOptsAndDBTemplate(
 
 	// Prepend so caller-provided srvOpts can still override.
 	srvOpts = append([]server.Option{server.WithBroadcaster(broadcaster)}, srvOpts...)
-	srvOpts = append(srvOpts, server.WithReplicas(postgres.Backend{}, clickhouse.Backend{}), server.WithMirror(duckdb.Mirror{}))
+	srvOpts = append(srvOpts, server.WithReplicas(postgres.Backend{}, clickhouse.Backend{}))
 	srv := server.New(cfg, database, engine, srvOpts...)
 
 	return &testEnv{
@@ -278,7 +277,7 @@ func setupNoSyncMode(t *testing.T) *testEnv {
 	srv := server.New(
 		cfg, database, nil,
 		server.WithBroadcaster(broadcaster),
-		server.WithReplicas(postgres.Backend{}, clickhouse.Backend{}), server.WithMirror(duckdb.Mirror{}),
+		server.WithReplicas(postgres.Backend{}, clickhouse.Backend{}),
 	)
 
 	return &testEnv{
@@ -2778,74 +2777,6 @@ func TestPGPushLocalNoSyncDaemonReachesConfigValidation(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "pg push: url not configured")
 }
 
-func TestDuckDBPushLocalNoSyncDaemonWritesConfiguredPath(t *testing.T) {
-	t.Parallel()
-	if duckdb.RequireDriver() != nil {
-		t.Skip("this build does not link DuckDB; run with -tags duckdb")
-	}
-
-	te := setupNoSyncMode(t)
-	// The daemon writes only its own resolved mirror path (the server-side
-	// path guard rejects any other request path), which defaults to
-	// sessions.duckdb in the data dir; the request carries non-path config
-	// like the machine name.
-	target := filepath.Join(te.dataDir, "sessions.duckdb")
-	body, err := json.Marshal(struct {
-		Full   bool                `json:"full"`
-		DuckDB config.DuckDBConfig `json:"duckdb"`
-	}{
-		Full: true,
-		DuckDB: config.DuckDBConfig{
-			MachineName: "workstation",
-		},
-	})
-	require.NoError(t, err)
-
-	w := te.post(t, "/api/v1/push/duckdb", string(body))
-
-	assertStatus(t, w, http.StatusOK)
-	assert.FileExists(t, target)
-}
-
-// TestDuckDBPushStreamsSSEDoneEvent pins the push route's SSE mode: a client
-// that accepts text/event-stream (the CLI's daemon-delegated push) gets an
-// event stream ending in a done event carrying the push result, instead of a
-// single JSON body after a silent wait.
-func TestDuckDBPushStreamsSSEDoneEvent(t *testing.T) {
-	t.Parallel()
-	if duckdb.RequireDriver() != nil {
-		t.Skip("this build does not link DuckDB; run with -tags duckdb")
-	}
-
-	te := setupNoSyncMode(t)
-	// As above, the daemon-side path guard pins writes to the server's own
-	// resolved mirror path (DataDir/sessions.duckdb by default).
-	target := filepath.Join(te.dataDir, "sessions.duckdb")
-	body, err := json.Marshal(struct {
-		Full   bool                `json:"full"`
-		DuckDB config.DuckDBConfig `json:"duckdb"`
-	}{
-		Full: true,
-		DuckDB: config.DuckDBConfig{
-			MachineName: "workstation",
-		},
-	})
-	require.NoError(t, err)
-
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/push/duckdb",
-		strings.NewReader(string(body)))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Origin", "http://127.0.0.1:0")
-	req.Header.Set("Accept", "text/event-stream")
-	w := httptest.NewRecorder()
-	te.handler.ServeHTTP(w, req)
-
-	assertStatus(t, w, http.StatusOK)
-	assert.Contains(t, w.Header().Get("Content-Type"), "text/event-stream")
-	assert.Contains(t, w.Body.String(), "event: done")
-	assert.FileExists(t, target)
-}
-
 func TestCORSPreflightRejectsBadOrigin(t *testing.T) {
 	te := setupHostOnly(t)
 
@@ -3413,7 +3344,7 @@ func TestPingReportsStalledSyncWithoutLosingDaemonIdentity(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 	te := &testEnv{
-		srv: server.New(cfg, database, engine, server.WithReplicas(postgres.Backend{}, clickhouse.Backend{}), server.WithMirror(duckdb.Mirror{})), db: database, engine: engine,
+		srv: server.New(cfg, database, engine, server.WithReplicas(postgres.Backend{}, clickhouse.Backend{})), db: database, engine: engine,
 		dataDir: dir,
 	}
 	te.handler = wrapTestHandler(cfg, te.srv.Handler())

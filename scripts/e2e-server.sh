@@ -6,9 +6,7 @@ TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
 DB_PATH="$TMPDIR/sessions.db"
-DUCKDB_PATH="$TMPDIR/sessions.duckdb"
 EMPTY_DIR="$TMPDIR/empty"
-BACKEND="${AGENTSVIEW_E2E_BACKEND:-sqlite}"
 raw_e2e_port="${AGENTSVIEW_E2E_PORT-}"
 if [[ -z "$raw_e2e_port" ]]; then
   E2E_PORT=8090
@@ -56,14 +54,10 @@ else
     echo "Building test fixture..."
     restore_pricing_snapshot
     FIXTURE="$TMPDIR/testfixture"
-    CGO_ENABLED=1 go build -tags fts5,duckdb \
+    CGO_ENABLED=1 go build -tags fts5 \
       -o "$FIXTURE" "$ROOT/cmd/testfixture"
 fi
-fixture_args=(-out "$DB_PATH")
-if [ "$BACKEND" = "duckdb" ]; then
-  fixture_args+=(-duckdb-out "$DUCKDB_PATH")
-fi
-"$FIXTURE" "${fixture_args[@]}"
+"$FIXTURE" -out "$DB_PATH"
 
 if [ -n "$SERVER" ] && [ -f "$SERVER" ] && [ -x "$SERVER" ]; then
     echo "Using pre-built server: $SERVER"
@@ -79,7 +73,7 @@ else
     printf '%s\n' \
       'keep embed dir for generated frontend assets' \
       > "$ROOT/internal/web/dist/.keep"
-    CGO_ENABLED=1 go build -tags fts5,duckdb \
+    CGO_ENABLED=1 go build -tags fts5 \
       -o "$SERVER" "$ROOT/cmd/agentsview"
 fi
 
@@ -104,49 +98,33 @@ if [ "${#agent_env[@]}" -le "$min_agent_dirs" ]; then
   exit 1
 fi
 
-case "$BACKEND" in
-  sqlite)
-    # Optional second server that requires a bearer token, so specs can drive
-    # the authenticated API and event streams. It gets its own data dir and a
-    # copy of the fixture archive. Playwright stops the whole process group.
-    if [[ -n "${AGENTSVIEW_E2E_AUTH_PORT-}" ]]; then
-      if [[ ! "$AGENTSVIEW_E2E_AUTH_PORT" =~ ^[1-9][0-9]{0,4}$ ]] ||
-        (( AGENTSVIEW_E2E_AUTH_PORT > 65535 )); then
-        printf 'AGENTSVIEW_E2E_AUTH_PORT must be an integer from 1 to 65535 (got %q)\n' \
-          "$AGENTSVIEW_E2E_AUTH_PORT" >&2
-        exit 1
-      fi
-      : "${AGENTSVIEW_E2E_AUTH_TOKEN:?AGENTSVIEW_E2E_AUTH_PORT needs AGENTSVIEW_E2E_AUTH_TOKEN}"
-      AUTH_DIR="$TMPDIR/auth"
-      mkdir -p "$AUTH_DIR"
-      cp "$DB_PATH" "$AUTH_DIR/sessions.db"
-      echo "Starting authenticated sqlite e2e server on :$AGENTSVIEW_E2E_AUTH_PORT..."
-      env "${agent_env[@]}" \
-        AGENTSVIEW_DATA_DIR="$AUTH_DIR" \
-        AGENTSVIEW_AUTH_TOKEN="$AGENTSVIEW_E2E_AUTH_TOKEN" \
-        "$SERVER" serve \
-        --port "$AGENTSVIEW_E2E_AUTH_PORT" \
-        --no-browser \
-        --require-auth \
-        --events-coalesce-interval 0 &
-      # Playwright waits only for the main port. Specs that use this server
-      # wait for it themselves, so it does not delay the main server.
-    fi
-    echo "Starting sqlite e2e server on :$E2E_PORT..."
-    exec env "${agent_env[@]}" "$SERVER" serve \
-      --port "$E2E_PORT" \
-      --no-browser
-    ;;
-  duckdb)
-    echo "Starting duckdb e2e server on :$E2E_PORT..."
-    exec env "${agent_env[@]}" \
-      AGENTSVIEW_DUCKDB_PATH="$DUCKDB_PATH" \
-      "$SERVER" duckdb serve \
-      --port "$E2E_PORT" \
-      --no-browser
-    ;;
-  *)
-    echo "unsupported AGENTSVIEW_E2E_BACKEND=$BACKEND" >&2
+# Optional second server that requires a bearer token, so specs can drive
+# the authenticated API and event streams. It gets its own data dir and a
+# copy of the fixture archive. Playwright stops the whole process group.
+if [[ -n "${AGENTSVIEW_E2E_AUTH_PORT-}" ]]; then
+  if [[ ! "$AGENTSVIEW_E2E_AUTH_PORT" =~ ^[1-9][0-9]{0,4}$ ]] ||
+    (( AGENTSVIEW_E2E_AUTH_PORT > 65535 )); then
+    printf 'AGENTSVIEW_E2E_AUTH_PORT must be an integer from 1 to 65535 (got %q)\n' \
+      "$AGENTSVIEW_E2E_AUTH_PORT" >&2
     exit 1
-    ;;
-esac
+  fi
+  : "${AGENTSVIEW_E2E_AUTH_TOKEN:?AGENTSVIEW_E2E_AUTH_PORT needs AGENTSVIEW_E2E_AUTH_TOKEN}"
+  AUTH_DIR="$TMPDIR/auth"
+  mkdir -p "$AUTH_DIR"
+  cp "$DB_PATH" "$AUTH_DIR/sessions.db"
+  echo "Starting authenticated sqlite e2e server on :$AGENTSVIEW_E2E_AUTH_PORT..."
+  env "${agent_env[@]}" \
+    AGENTSVIEW_DATA_DIR="$AUTH_DIR" \
+    AGENTSVIEW_AUTH_TOKEN="$AGENTSVIEW_E2E_AUTH_TOKEN" \
+    "$SERVER" serve \
+    --port "$AGENTSVIEW_E2E_AUTH_PORT" \
+    --no-browser \
+    --require-auth \
+    --events-coalesce-interval 0 &
+  # Playwright waits only for the main port. Specs that use this server
+  # wait for it themselves, so it does not delay the main server.
+fi
+echo "Starting sqlite e2e server on :$E2E_PORT..."
+exec env "${agent_env[@]}" "$SERVER" serve \
+  --port "$E2E_PORT" \
+  --no-browser

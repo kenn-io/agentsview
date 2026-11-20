@@ -236,6 +236,13 @@ func checkHostedInventory(ctx context.Context, q hostedQuerier, schema string) e
 	for _, t := range hostedTables {
 		expected[t.Name] = true
 	}
+	chunks, err := hostedVectorTables(ctx, q, schema)
+	if err != nil {
+		return err
+	}
+	for _, table := range chunks {
+		expected[table.Name] = true
+	}
 	rows, err := q.QueryContext(ctx, `SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relkind IN ('r','p','v','m','f')`, schema)
 	if err != nil {
 		return err
@@ -267,7 +274,11 @@ func checkHostedCatalog(ctx context.Context, q hostedQuerier, schema, tenant str
 	if err := checkHostedInventory(ctx, q, schema); err != nil {
 		return err
 	}
-	for _, table := range hostedTables {
+	chunks, err := hostedVectorTables(ctx, q, schema)
+	if err != nil {
+		return err
+	}
+	for _, table := range append(append([]HostedTable(nil), hostedTables...), chunks...) {
 		var good bool
 		err := q.QueryRowContext(ctx, `SELECT c.relkind='r' AND c.relrowsecurity AND c.relforcerowsecurity
    AND EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attname='tenant_id' AND a.attnotnull AND a.atttypid='text'::regtype)

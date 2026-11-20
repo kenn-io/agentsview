@@ -29,7 +29,8 @@ const defaultKimiWorkModel = "daimon-kimi-code"
 func newKimiWorkProviderFactory(def AgentDef) ProviderFactory {
 	return NewSourceSetFactory(
 		def,
-		kimiProviderCapabilities(),
+		// Kimi's title companions do not apply to Kimi Work sessions.
+		withPollMetadataScan(kimiProviderCapabilities()),
 		func(cfg ProviderConfig) SourceSet {
 			return newKimiWorkSourceSet(cfg.Roots)
 		},

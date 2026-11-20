@@ -462,5 +462,5 @@ func piProviderCapabilities(agent AgentType) Capabilities {
 	if agent == AgentPrimeAgent {
 		caps.Source.ForceReplaceOnParse = CapabilitySupported
 	}
-	return caps
+	return withPollMetadataScan(caps)
 }

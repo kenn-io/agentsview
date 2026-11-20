@@ -708,7 +708,7 @@ func TestStoreGetSessionUsagePricedModel(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("0.01134"), got.Cost)
 	// cost_usd is a deprecated compatibility alias for
 	// cost.microdollars/1e6; PostgreSQL must report the same value as
-	// SQLite and DuckDB for the same cost (see db.CostUSDFromCost).
+	// SQLite and ClickHouse for the same cost (see db.CostUSDFromCost).
 	require.NotNil(t, got.CostUSD)
 	assert.InDelta(t, 0.01134, *got.CostUSD, 1e-9)
 	assert.Equal(t, []string{"priced-model"}, got.Models)

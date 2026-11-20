@@ -128,17 +128,3 @@ func TestPushResultDurationWireFormat(t *testing.T) {
 	require.Error(t, json.Unmarshal([]byte(`{"Duration":"2s"}`), &bad),
 		"a string duration is not the wire format")
 }
-
-func TestMirrorPushResultDurationWireFormat(t *testing.T) {
-	encoded, err := json.Marshal(MirrorPushResult{SessionsPushed: 4, Duration: 250 * time.Millisecond})
-	require.NoError(t, err)
-	assert.Contains(t, string(encoded), `"Duration":250000000`)
-
-	var decoded MirrorPushResult
-	require.NoError(t, json.Unmarshal(
-		[]byte(`{"SessionsPushed":4,"Duration":750000000,"ArchiveRebuilt":true}`), &decoded,
-	))
-	assert.Equal(t, 4, decoded.SessionsPushed)
-	assert.Equal(t, 750*time.Millisecond, decoded.Duration)
-	assert.True(t, decoded.ArchiveRebuilt)
-}

@@ -46,7 +46,7 @@ time. Each `serve` process loads configuration with `config.LoadReadOnly()`,
 resolves its own allowed targets fresh, authorizes the request against them,
 streams a zstd-compressed response, and exits; it never opens or creates
 `sessions.db` (one exception below), never creates the data directory, and
-never starts a daemon, watcher, or telemetry.
+never starts a daemon or watcher.
 
 `serve` refuses with a `forbidden` error when an existing local database is
 archive-only, the same check the HTTP remote-sync routes make, so a seeded or

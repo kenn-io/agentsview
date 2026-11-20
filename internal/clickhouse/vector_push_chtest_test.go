@@ -445,7 +445,7 @@ func TestVectorEvictionReadsOnlyTheSessionsKeyRanges(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, map[string]uint64{evicted: 1}, bounds)
 
-	_, err = conn.ExecContext(t.Context(), `SYSTEM FLUSH LOGS`)
+	_, err = conn.ExecContext(t.Context(), `SYSTEM FLUSH LOGS query_log`)
 	require.NoError(t, err)
 	var read uint64
 	require.NoError(t, conn.QueryRowContext(t.Context(), `

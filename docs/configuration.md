@@ -21,9 +21,6 @@ AgentsView stores all persistent data under a single directory, defaulting to
 ├── usage-cache-v6-<id>.db # Disposable usage-aggregate cache
 ├── usage-postgres/  # Disposable PostgreSQL usage caches
 ├── telemetry-install-id # Application installation ID
-├── telemetry-daemon-active.lock  # Serializes daily daemon reports
-├── telemetry-setup-finished.lock # Serializes the one-time setup report
-├── telemetry-screen-views.lock   # Serializes screen view claims
 ├── config.toml      # Configuration file
 ├── config.toml.lock # Serializes concurrent config writers
 ├── db.write.lock    # Per-data-dir SQLite write-owner lock
@@ -51,9 +48,14 @@ for images stored outside SQLite, `config.toml` for settings, and
 `telemetry-install-id` for installation identity. Keep the database and assets
 together when restoring or moving the archive.
 
-Trends keeps per-session counts under `$CACHE_DIRECTORY/sqlite-trends`, or
+Term trends keep per-session counts under `$CACHE_DIRECTORY/sqlite-trends`, or
 `agentsview/sqlite-trends` in the user cache directory, up to 256 MiB per
-archive. They are safe to delete; the next Trends visit counts messages again.
+archive. They are safe to delete; the next term-trends request counts messages again.
+Search pages can also contain session snippets. They are stored in
+`sqlite-trends`, `postgres-trends`, or `clickhouse-usage` under
+`$CACHE_DIRECTORY`, or under `agentsview/` in the user cache directory.
+After a session is deleted, its snippets can remain until the same search
+overwrites the page or the cache is trimmed.
 
 SQLite needs a writable temp directory for session writes and large sorts.
 AgentsView uses the system temp directory: `TMP` or `TEMP` on Windows, and
@@ -169,8 +171,7 @@ you save a changed policy, select **Restart now** in the notice to apply it.
 
 Local sessions use a random installation ID saved in `telemetry-install-id` in
 this data directory. AgentsView reuses an existing ID from that file or creates
-one, even when telemetry is disabled. PostHog consumes the same ID. Read-only
-commands leave the file unchanged.
+one. Read-only commands leave the file unchanged.
 
 The ID identifies an installation, not physical hardware. It survives updates,
 binary replacements, restarts, and network or hostname changes. A fresh data
@@ -182,7 +183,7 @@ does not automatically take ownership of the old one's sessions.
 The display label defaults to the current hostname. Set `local_machine_name` in
 `config.toml` for a fixed label, then run `agentsview daemon restart`. Any
 non-empty label is allowed, including `local`. Changing the label leaves session
-keys unchanged; PostgreSQL and DuckDB receive the label on the next push.
+keys unchanged; PostgreSQL receives the label on the next push.
 Creating the identity does not rewrite `config.toml` or its comments. A missing
 cursor secret is still generated and saved.
 
@@ -217,10 +218,9 @@ with the old machine keys you own. Keys that belong to other installations need
 no action.
 
 PostgreSQL publishes the migrated sessions and metadata on the next incremental
-push. DuckDB rebuilds its mirror once when the default machine key changes. The
-SQLite archive stays intact. If two installations publish the same old hostname
-alias to PostgreSQL, the latest push determines its filter target. Use
-installation IDs to select machines unambiguously in a shared mirror.
+push. The SQLite archive stays intact. If two installations publish the same old
+hostname alias to PostgreSQL, the latest push determines its filter target. Use
+installation IDs to select machines unambiguously in a shared database.
 
 ## Config File
 
@@ -274,10 +274,15 @@ interval. Three things bring changes in sooner:
   visible.
 - An open [change stream](/docs/conversation-export/#follow-changes-live) syncs
   up to once a second.
-- Any other archive request, such as a CLI or MCP read, first syncs the files
-  that changed since the last sync, and checks sessions that are still being
-  written. Such requests start a sync at most once per `sync_interval` and
-  share the two-second wait budget described below.
+- Any other archive request, such as a CLI or MCP read, keeps syncing at
+  `sync_interval` for two minutes after it, as an open web UI does. The first
+  request after a quiet stretch also syncs the files that changed since the
+  last sync, and checks sessions that are still being written, before it
+  answers. It waits up to two seconds for that, sharing the wait budget
+  described below. Later requests within those two minutes start no sync of
+  their own and can miss up to `sync_interval` of changes. They answer at
+  once, unless the first request's sync is still running, in which case they
+  share its remaining wait.
 
 A session watch stream keeps its own session current without changing the
 interval for the rest. Polling of live agent activity and of roots that cannot
@@ -330,14 +335,14 @@ Set it to `"0"` to keep syncing while idle. Restart the server after changing it
 | `zoom_level`                        | Default interface zoom for clients without a local preference: `67`, `75`, `80`, `90`, `100`, `110`, `120`, `125`, `130`, `150`, `175`, or `200`. Defaults to `100` when omitted. Restart the daemon after manual edits                                                                                                                                                                                                                                                          |
 | `disabled_agents`                   | Session providers to exclude from local filesystem scanning — see [Disabling Session Providers](#disabling-session-providers)                                                                                                                                                                                                                                                                                                                                                    |
 | `[proxy]`                           | Managed proxy configuration table — see [Remote Access](/docs/remote-access/)                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `disable_update_check`              | Disable the automatic update check (see [Privacy](#privacy-and-telemetry))                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `disable_update_check`              | Disable the automatic update check (see [Privacy](#privacy-and-telemetry))                                                                                                                                                                                                                                                                                                                                                                                         |
 | `scan_protected_paths`              | Allow Git discovery inside macOS privacy-protected folders and volumes under `/Volumes`, accepting one consent prompt per location — see [macOS Protected Folders](#macos-protected-folders)                                                                                                                                                                                                                                                                                     |
 | `[pg]`                              | PostgreSQL sync configuration — see [PostgreSQL Sync](/docs/pg-sync/)                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `[duckdb]`                          | DuckDB mirror configuration — see [DuckDB Mirror](/docs/duckdb/)                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `[clickhouse]`                      | ClickHouse sync configuration — see [ClickHouse Sync](/docs/clickhouse-sync/)                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `[vector]`                          | Opt-in semantic-search index; model settings live in `[vector.embeddings]`, named endpoints in `[vector.embeddings.servers.<name>]`, embedding schedule in `[vector.embed]` — see [Semantic Search](/docs/semantic-search/#enabling-vector) for every key                                                                                                                                                                                                                        |
 | `[recall.extract]`                  | Opt-in model-backed recall extraction; named endpoints in `[recall.extract.servers.<name>]`, prompt selection in `[recall.extract.prompts]`, request overrides in `[recall.extract.request]` — see [Recall](/docs/recall/#automatic-extraction)                                                                                                                                                                                                                                  |
 | `[integrations.docbank]` | Optional lookup of transcript image digests in Docbank; see [Find transcript images in Docbank](/docs/configuration/#find-transcript-images-in-docbank) |
+| `[image_text]` | Opt-in search of text inside tool-result images; see [Image text](/docs/configuration/#image-text) |
 | `[insights]`                        | Optional generated-insights endpoint and model, plus `default_agent`, the agent CLI new reports start with; local loopback HTTP is allowed, remote plaintext requires `allow_http = true`, and endpoint failures do not retry through a CLI — see [Recall](/docs/recall/#current-surface)                                                                                                                                                                                        |
 | `[friction]`                        | Opt-in Friction Log review; set `enabled = true` to review changed sessions in the background after each sync — see [Friction Log](#friction-log)                                                                                                                                                                                                                                                                                                                                |
 | `[kata]`                            | Optional Kata issue-tracker connection; off by default; HTTPS needs `token_env` or `token_file` — see [Kata](/docs/kata/)                                         |
@@ -397,7 +402,6 @@ of `config.toml` and out of whatever starts the process. Each secret has a
 | `[insights]` API key                       | `api_key_env`          | `api_key_file`              |
 | `[vector.embeddings.servers.<name>]` key   | `api_key_env`          | `api_key_file`              |
 | `[recall.extract.servers.<name>]` key      | `api_key_env`          | `api_key_file`              |
-| `[duckdb]` Quack token                     | `token`                | `token_file`                |
 | Cursor Admin API key (top level)           | `cursor_admin_api_key` | `cursor_admin_api_key_file` |
 
 ```toml
@@ -414,8 +418,8 @@ token_file = "~/.config/agentsview/kata-token"
   An empty or blank file, a file over 64 KiB, or a file containing a NUL byte
   is an error.
 - The file must be private. On macOS and Linux, a file you own needs mode
-  `0600` or `0400`, and no directory on its path may be writable by group or
-  others. A umask of `002` creates group-writable directories, so check the
+  `0600` or `0400`, and every directory on its path must belong to you or root
+  and not be writable by group or others. A umask of `002` creates group-writable directories, so check the
   parent directory too. Files owned by root, such as systemd credentials and
   Kubernetes secret mounts, work when only root can write them. On Windows,
   only your user may have access to the file.
@@ -434,13 +438,9 @@ When AgentsView reads the file:
   load reads its file when the command starts using that server. An unusable
   file then stops that work with an error; it never falls back to an
   anonymous request.
-- `[duckdb] token_file` is read only when a command authenticates to Quack,
-  such as `duckdb quack serve` or `duckdb status` with a `url`. Local mirror
-  work never reads it, and `duckdb quack serve --token` takes precedence over
-  it. `cursor_admin_api_key_file` is read when `source cursor sync-usage`
-  runs.
-- `AGENTSVIEW_DUCKDB_TOKEN` and `AGENTSVIEW_CURSOR_ADMIN_API_KEY` replace the
-  config-file values, so the file is not read while they are set.
+- `cursor_admin_api_key_file` is read when `source cursor sync-usage` runs.
+- `AGENTSVIEW_CURSOR_ADMIN_API_KEY` replaces the config-file value, so the file
+  is not read while it is set.
 
 The `AGENTSVIEW_*_FILE` variables of a
 [container deployment](#container-deployment) follow their own rules, described
@@ -489,9 +489,8 @@ subcommand such as `pg push --watch` or `mcp` runs as given.
 Precedence, highest first: command flags, deployment variables, `config.toml`,
 built-in defaults. A host set through `AGENTSVIEW_HOST` counts as persistent
 configuration, so a non-loopback value without authentication stops `serve`;
-only the `--host` flag allows a one-off unauthenticated bind. `pg serve` and
-`duckdb serve` ignore network settings in `config.toml` but apply these
-variables.
+only the `--host` flag allows a one-off unauthenticated bind. `pg serve` ignores
+network settings in `config.toml` but applies these variables.
 
 These rules fail closed:
 
@@ -699,6 +698,7 @@ keeps its default directories.
 | Cursor IDE            | (platform-specific, see below)                                                                                                                                   | Shared VS Code-style `globalStorage/state.vscdb` database, one session per Composer                                                                           |
 | DeepSeek TUI          | `~/.codewhale/sessions/` and `~/.deepseek/sessions/`                                                                                                             | JSON per session                                                                                                                                              |
 | DeepSeek Harness      | `~/.dsh/sessions/` (or `$DSH_HOME/sessions/`)                                                                                                                    | Plain or multi-frame zstd JSONL per session                                                                                                                   |
+| Factory Droid         | `~/.factory/sessions/`                                                                                                                                           | JSONL per session plus a `<id>.settings.json` token-usage sidecar                                                                                             |
 | Forge                 | `~/.forge/`                                                                                                                                                      | SQLite database (`.forge.db`)                                                                                                                                 |
 | Gemini CLI            | `~/.gemini/`                                                                                                                                                     | JSONL in `tmp/` subdirectory                                                                                                                                  |
 | Goose                 | (platform-specific, see below)                                                                                                                                   | SQLite `sessions.db` with transcripts, tool activity, relationships, usage, and recorded costs                                                                |
@@ -1008,7 +1008,7 @@ data directory on macOS, Linux, and Windows; set `CURSOR_IDE_DIR` or
 `agents.cursor-ide.dirs` to override it. This database also contains
 authentication and extension state, so Cursor IDE is deliberately excluded from
 remote source-file sync. Parsed sessions still stay in the local archive and can
-be shared through the normal PostgreSQL or DuckDB paths.
+be shared through the normal PostgreSQL or ClickHouse paths.
 
 **Claude Cowork default directories** follow Claude Desktop's Electron user-data
 location:
@@ -1270,6 +1270,7 @@ export CORTEX_DIR=~/custom/cortex
 export CURSOR_PROJECTS_DIR=~/custom/cursor
 export DEEPSEEK_TUI_SESSIONS_DIR=~/custom/deepseek/sessions
 export DEEPSEEK_HARNESS_SESSIONS_DIR=~/custom/deepseek-harness/sessions
+export FACTORY_DIR=~/custom/factory/sessions
 export FORGE_DIR=~/custom/forge
 export GEMINI_DIR=~/custom/gemini
 export GOOSE_PATH_ROOT=~/custom/goose
@@ -1673,18 +1674,25 @@ local filesystem ingestion for both Codebuff and Freebuff.
 
 The setting applies only to local filesystem discovery, targeted local file
 sync, file watching, and scheduled polling. It does not affect HTTP remote
-imports, and it does not restrict HTTP, PostgreSQL, DuckDB, or archive exports.
+imports, and it does not restrict HTTP, PostgreSQL, ClickHouse, or archive
+exports.
 `RemoteSyncExcluded` is the separate provider capability that keeps unsafe
 source trees out of remote exports.
 
 A change saved on the Settings page applies to the running daemon right away:
 file watching and polling switch to the new provider set. Sessions already on
 disk for a newly enabled provider arrive with the next sync. The daemon reads
-edits made directly to `config.toml` at its next start. Restart any separate
-`pg push --watch`, `clickhouse push --watch`, or `duckdb push --watch` process
-after changing the setting. Previously archived sessions from a disabled
-provider remain available and exportable, including during archive rebuilds.
-The setting does not disable that provider as a Recall execution backend.
+edits made directly to `config.toml` at its next start. Previously archived
+sessions from a disabled provider remain available and exportable, including
+when the archive is rebuilt. The setting does not disable that provider as a
+Recall execution backend.
+
+Daemon-backed `pg push --watch` and `clickhouse push --watch` processes follow
+committed archive changes from the daemon. Only the daemon discovers and watches
+source roots, so provider changes do not require restarting these push watchers.
+Startup, lifecycle, periodic catch-up and shutdown pushes still sync sources
+through the archive owner. If a push watcher owns the archive without a daemon,
+restart that process after changing this setting.
 
 ### Multiple Directories
 
@@ -1781,8 +1789,9 @@ metadata paths remain separate from the shared transcript root.
 
 The Session Providers section of the Settings page edits the same lists. Adding
 or removing a home there updates `homes` in that provider's `[agents.<id>]`
-table in `config.toml`. Like the provider enable toggles, the change takes
-effect after the AgentsView daemon and any separate push-watch process restart.
+table in `config.toml`. Provider-home changes take effect after the AgentsView
+daemon restarts. A push watcher that owns the archive without a daemon must
+also restart.
 
 ![Codex alternate homes in Session Providers settings](/docs/assets/generated/screenshots/settings-agent-homes.png)
 
@@ -2116,8 +2125,8 @@ mixing incompatible token streams. Pinyin expansion is disabled in the derived
 index because ASCII-only queries continue to use the Porter index.
 
 CJK full-text search is specific to SQLite message search, including the HTTP,
-CLI, and MCP search paths. PostgreSQL/CockroachDB and DuckDB do not load this
-SQLite extension and keep their existing search behavior. Substring and
+CLI, and MCP search paths. PostgreSQL/CockroachDB and ClickHouse do not load
+this SQLite extension and keep their existing search behavior. Substring and
 regular-expression searches are unchanged. Session search result snippets
 highlight the segmented matches; highlighting inside an opened transcript uses
 the original query and may miss separated Chinese words.
@@ -2210,7 +2219,7 @@ change session ownership.
 A daemon started with `--no-sync` still handles manual `agentsview source sync` and
 `agentsview source sync --full`; automatic ingestion stays disabled.
 
-Pushes to PostgreSQL, ClickHouse, and DuckDB also read pending attached history
+Pushes to PostgreSQL and ClickHouse also read pending attached history
 after successful local sync, including on a `--no-sync` daemon. A push watch
 that owns the local archive reads attachments at startup and on each periodic
 sync. Its `--full` option reparses available attachments.
@@ -2282,7 +2291,7 @@ after 60 seconds and need a retry.
   two machines hold the same history. Exact-ID ownership conflicts are refused.
 - Attachments belong in an ordinary installation, not an archive-only one. The
   receiving machine's own identity and aliases cannot be attached as foreign
-  history. Credentials and telemetry identity are never adopted from the source.
+  history. Credentials and installation identity are never adopted from the source.
 - Both storage forms use the same source identities, content policies and
   parser. Directory sources can discover additional accepted sources on a later
   pass; changing an already accepted source remains a conflict. Concurrent
@@ -2632,6 +2641,19 @@ Roots that fall back to polling are picked up by:
 - a 2-minute fallback sync loop that runs whenever any roots are unwatched
     (it reconciles the affected scopes)
 
+For Claude Code, Codex, and providers that keep each session in its own file, a
+fallback pass first compares each root's session files with the previous pass by
+size, modification time, change time, and file identity. Those providers are
+Amp, Codex Cloud, DeepSeek TUI, Direct API, gptme, iFlow, Kimi Work, Kiro IDE,
+Muse Code, OhMyPi, OMO, Open Code Review, Pi, Prime Agent, Qwen Code, QwenPaw,
+StepCode, Tau, WorkBuddy, and Zencoder. It syncs only the files that changed,
+the same way it syncs a native file event. The pass reconciles the whole root
+instead the first time it polls the root, when a file has disappeared, when more
+than 1,024 files changed, and when it cannot compare a file, such as a symlinked
+project folder or an unreadable folder. A disappeared file is always left to
+that reconciliation, which checks whether the folder is available before it
+marks a session's source missing.
+
 After a fallback pass finishes, the loop waits 2 minutes or as long as that pass
 took, whichever is longer, so polling uses at most about half of wall-clock
 time. A pass reconciles one provider at a time, and watcher syncs that are
@@ -2692,7 +2714,9 @@ curl http://127.0.0.1:8080/api/v1/sync/status
 ```
 
 The JSON response includes `startup_pending`, `archive_stale`, and, starting
-with daemon API 15, `sync_pending` alongside sync progress.
+with daemon API 15, `sync_pending` alongside sync progress. See the
+[session usage contract](/docs/session-api/#agentsview-session-usage) for how
+`session usage --wait` uses these states.
 
 ## Privacy and Telemetry
 
@@ -2708,16 +2732,12 @@ Optional features that send data externally when you enable them:
   PostgreSQL database you configure.
 - [ClickHouse sync](/docs/clickhouse-sync/) (`clickhouse push`) sends session
   data to a ClickHouse database you configure.
-- The [DuckDB mirror](/docs/duckdb/) writes a local DuckDB file by default; data
-    only leaves the machine if you expose the mirror over a remote Quack
-    endpoint.
 - [Generated insights](/docs/recall/#current-surface) sends scoped session
     content to the configured endpoint when `[insights]` sets `endpoint` and
     `model`, or to the selected agent CLI when neither is set.
 - [Publish to Gist](/docs/usage/#publish-to-gist) uploads a session to GitHub.
 
-The automatic outbound requests are update checks, pricing refreshes, and
-anonymous telemetry:
+The automatic outbound requests include update checks and pricing refreshes:
 
 - **CLI and web UI** — when the web UI loads, the server requests
     `github.com/kenn-io/agentsview/releases/latest` to find the newest release
@@ -2728,162 +2748,16 @@ anonymous telemetry:
 - **Pricing** — the server downloads public model-pricing catalogs from GitHub
     and OpenRouter at startup and daily; see
     [Pricing Source](/docs/token-usage/#pricing-source).
-- **Anonymous daemon telemetry** — see below.
 
-### Anonymous Daemon Telemetry
+### Usage Reporting
 
-As of 0.33.0, the server sends an anonymous `daemon_active` liveness ping on
-each UTC day it runs. Restarts and other servers sharing the data directory do
-not send another ping that day. When telemetry is disabled, the server skips
-hourly telemetry wake-ups. The web UI also reports an anonymous
-`app_opened` event on load or focus for each selected server and UTC day;
-reloads and focus don't repeat it that day. These claims live in browser local
-storage. The server sends it to PostHog with the same fields and opt-out as the
-ping. The browser never contacts PostHog.
-Two tabs whose initial checks overlap can each send `app_opened`, such as when
-a browser restores several tabs together.
-After a disabled receipt, the browser stops sending reports and tracking visits.
-It checks again on its first load or focus on a later UTC day. Re-enabling
-telemetry takes effect after that check.
-An unauthorized check (HTTP 401) or exhausted retries also stop visit tracking
-and discard its accumulated duration. Tracking starts fresh when a later check
-enables reporting. Outcomes that occur while reporting is unavailable are
-dropped. A fresh page retries after authentication; otherwise, the next UTC
-day's load or focus starts a new check.
-HTTP 401 makes reporting unavailable immediately. Server errors (HTTP 5xx) and
-network failures retry up to five times with increasing delays before reporting
-becomes unavailable. Other HTTP errors settle without retries and don't grant
-permission to report.
-Each browser telemetry request has a 10-second deadline, including reading its
-receipt.
-The browser retains each daily claim's 35 most recently accepted UTC dates.
-Rolling the clock back to an evicted date can count it again.
+AgentsView can send general, anonymous usage telemetry. Usage telemetry is off
+unless you have opted in or set `TELEMETRY_ENABLED=1`. Development builds never
+send it.
 
-The server sends `setup_finished` once per installation when the archive first
-has a session in the default session list. Sessions need messages to count;
-automated sessions and trash are excluded. Child sessions count when their
-parent is missing and the list shows them as roots. It checks at startup, after
-session changes, and every hour. After a failed attempt it waits for the hourly
-check before trying again. The `telemetry-setup-finished` file beside the
-installation identity records the claim across restarts and servers sharing the
-data directory. Captures, seeds, backups, and restores preserve the claim with
-the installation identity when the snapshot contains it. Restoring a snapshot
-from before the claim can queue `setup_finished` again for the same installation
-ID. Ordinary imports keep the receiving installation's claim. The event carries
-no session details and follows the same telemetry opt-out. Existing installs
-with such a session send it on their first start after upgrading.
-
-The claim records that the event entered the telemetry queue, not that PostHog
-received it. Delivery is best effort: if the server stops or the network fails
-before the queue flushes, the event is lost and is not sent again. Only the
-server sends `setup_finished`; the web UI's telemetry route rejects that event.
-
-The web UI reports `visit_ended` with `surface: web` and a `duration_bucket`
-of `under_1m`, `1_to_5m`, `5_to_30m`, or `over_30m`. These mean below 1 minute,
-1 to below 5 minutes, 5 to below 30 minutes, and 30 minutes or more. Visible
-time adds up across tab switches and includes idle visible time; hidden time
-adds nothing. Closing or reloading the page, or leaving it hidden for 30
-minutes, ends a visit. Switching servers discards the old visit and starts a
-new tracker immediately for the selected server in the same tab. Each visit
-can send one event, with no daily limit.
-While permission is pending, the browser holds visit events and other outcomes
-in page memory for the selected server, up to 64 events total. Additional
-events are dropped. An enabled receipt releases the held events; a disabled
-receipt discards them. A visit ending after UTC midnight also waits in page
-memory while that day's check is pending. Closing the page before an enabled
-receipt can lose those events.
-Delivery is best effort: a visit can be lost if the browser crashes, quits, or
-discards the tab before the event is sent. Long-lived tabs are the most exposed
-to this, so `over_30m` can undercount.
-
-The web UI also reports `screen_viewed` with `surface: web`. The server counts
-each screen once per installation per UTC day, across tabs and server restarts.
-The browser also deduplicates screen reports per selected server and local
-storage, so separate browsers can check the same installation independently.
-The server stores versioned JSON claims in `telemetry-screen-views` beside the
-installation identity. For each installation and screen, it retains the 35 most
-recently accepted UTC dates. A clock rollback to an evicted date can count that
-screen again. When telemetry is enabled, the server checks the file
-once in the background after it starts serving; a web UI report that arrives
-first waits for that check. The check moves older plain-text claims, malformed
-claims, or claims from a newer format to a unique
-`telemetry-screen-views.unreadable-*` file and logs the move. Earlier copies
-stay intact. Valid plain-text counts carry over for the current installation. If
-the check fails, the server logs the error and continues forwarding reports. It
-tries the check only once per process; restarting the server starts a fresh
-attempt. Forwarded reports can replace malformed or plain-text claims with a
-fresh file, losing their counts. Reports return 500 while the file cannot be
-read or written, or uses a newer format. When counts cannot carry over, kit
-starts a fresh file, which can count each screen one more time that day.
-Requests must use `application/json` with exactly one JSON value; a missing or
-unknown `screen` returns 400. The server reserves each claim before enqueueing
-its event. If reservation storage fails, the request returns 500 without
-enqueueing; a later visit retries.
-
-The web UI reports five core actions the same way. Each carries one property,
-and the server drops any value outside its fixed list. A search counts once per
-mode used during each command palette open. Typing pauses, sorting, and retries
-in the same mode do not add events. An insight counts once it finishes
-generating; opening a cached insight does not count.
-
-Downloads and Gist publishes count export attempts, including attempts that
-fail. Markdown links count after the link is copied successfully.
-
-| Event               | Property     | Allowed values                                                                                                                    |
-| ------------------- | ------------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| `search_run`        | `query_type` | `text`, `semantic`, `hybrid`                                                                                                      |
-| `session_viewed`    | `agent`      | the session's agent type                                                                                                          |
-| `export_run`        | `format`     | `html`, `insight_html`, `friction_markdown`, `csv`, `markdown_link`, `gist`, `insight_gist`                                       |
-| `insight_generated` | `kind`       | `daily_activity`, `agent_analysis`, or a generated-insight template name                                                          |
-| `analytics_viewed`  | `page`       | `usage`, `activity`, `trends`, `quality`                                                                                          |
-| `screen_viewed`     | `screen`     | `sessions`, `usage`, `activity`, `trends`, `recall`, `quality`, `pinned`, `trash`, `recent-edits`, `friction`, `data`, `settings` |
-
-Feature outcomes use fixed categories; unknown strings become `other`.
-
-| Event          | Property | Allowed values                                                                            | Count unit                                                                                                                                                                                                                                                                                                                                              |
-| -------------- | -------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `search_empty` | none     | none                                                                                      | Each command palette open that closes on an accepted empty result, so typing through empty prefixes counts once at most. Compare with `search_run`, which also counts per open. Opens that close on results, a blank query, a pending search, or a failure send nothing.                                                                                                                                                                                                            |
-| `error_shown`  | `kind`   | `search`, `session`, `insight`, `analytics`, `export`, `other`                            | Each appearance of a core-action error in search, session views, generated insights including their supporting tool sequences, or exports. Analytics counts each independently requested panel on Usage, Activity, Trends, and Quality. Continuous display counts once; hiding and showing the error counts again.                                                                                |
-| `sync_failed`  | `reason` | `request`, `sign_in_required`, `browser_extension`, `already_running`, `other` | Each failed foreground attempt after its terminal result, without `error_shown`. `request` covers uncoded request or processing failures; unsupported explicit codes use `other`. Completed Claude.ai imports with item errors send nothing. Cancellation, polling, and read-only refreshes send nothing. |
-
-Each accepted failed search counts once, including a semantic search that
-shows setup guidance. Internal setup probes and build retries add no events.
-
-Hidden failures, cached warnings, the Sessions dashboard, settings, data
-management, pins, stars, and in-session find send no outcomes. Query and error
-text, paths, and identifiers stay out of outcome properties.
-
-Every event contains only:
-
-- app version and git commit
-- the distribution that built the binary, such as `homebrew` for Homebrew or
-  `kenn` for official downloads; empty for source builds
-- operating system and CPU architecture
-- the application-owned installation ID stored in
-  `~/.agentsview/telemetry-install-id`
-- whole hours since that ID was created
-- for the five UI actions, the one listed value above
-- for feature outcomes, the listed kind or reason
-- for screen views, the listed screen name and `surface: web`
-- for visits, the duration bucket and `surface: web`, without exact times
-
-It contains no session data, prompts, project names, file paths, account
-information, or hostname, and the events are sent with person-profile processing
-and GeoIP lookup disabled. The ping runs in the background and never blocks
-startup or operation.
-
-A build sends telemetry only when it has the PostHog project key and a release
-version such as `0.33.0`. Release builds and the `make` build targets set the key
-at link time. Plain `go build` and `go test` binaries have no key and send
-nothing. Telemetry also stays off in CI. Disable it with an environment
-variable, then restart the server:
-
-```bash
-export AGENTSVIEW_TELEMETRY_ENABLED=0  # or DO_NOT_TRACK=1
-```
-
-This disables outbound telemetry, not the installation identity used for local
-session attribution.
+Any of these turns it off, even after you opted in:
+`AGENTSVIEW_TELEMETRY_ENABLED=0`, `TELEMETRY_ENABLED=0`, `DO_NOT_TRACK=1`, or
+setting `CI` to any value. Restart the server after changing them.
 
 ### Disabling Update Checks
 
@@ -2971,7 +2845,7 @@ Results refresh when the session reopens and when its transcript changes, at
 most every 15 seconds while matches are already shown. Successful Docbank
 answers are reused for one minute. No migration or resync is required.
 
-### Image text
+## Image text
 
 Enable image text extraction when a local GLM-OCR service is available:
 
@@ -2983,8 +2857,9 @@ enabled = true
 
 Restart the daemon after changing this setting. Images removed by the `drop`
 storage policy cannot be indexed. Disabling image text clears extracted text;
-enabling it again extracts images anew. The endpoint must use a loopback
-address. Image text requires an `archive_content` setting that keeps tool
+enabling it again extracts images anew. The endpoint must be an `http://` URL
+on a loopback host, with an explicit port and the path `/glmocr/parse`. Image
+text requires an `archive_content` setting that keeps tool
 results; otherwise it stays off and a warning is logged. See
 [search text in images](commands.md#search-text-in-images) for supported images
 and search modes.

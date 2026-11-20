@@ -474,7 +474,7 @@ func (e *longLivedCompatibilityError) Unwrap() error { return e.cause }
 func (e *longLivedCompatibilityError) Error() string {
 	return fmt.Sprintf("%v\n\nThis long-running client cannot use the running daemon and will not replace it. "+
 		"Restart this command with the current agentsview binary (`mcp`, `pg push --watch`, "+
-		"`duckdb push --watch`, or the installed push service). If the daemon still needs "+
+		"`clickhouse push --watch`, or the installed push service). If the daemon still needs "+
 		"replacement, run `agentsview daemon restart` from that install", e.cause)
 }
 

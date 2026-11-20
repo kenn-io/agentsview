@@ -1989,7 +1989,9 @@ describe("App telemetry", () => {
     sessions.sessions = [];
   });
 
-  it("reports one session_viewed per visit once the session hydrates", async () => {
+  it("reports one session_viewed per visit and completes the checklist when the session hydrates", async () => {
+    const { gettingStarted } = await import("./lib/stores/gettingStarted.svelte.js");
+    gettingStarted.done = new Set();
     setup();
     sessions.sessions = [hydratedSession("session-1", "codex")];
     router.route = "sessions";
@@ -1999,6 +2001,7 @@ describe("App telemetry", () => {
 
     await open("session-1");
     await vi.waitFor(() => expect(postedFor("session_viewed")).toEqual([{ agent: "codex" }]));
+    expect(gettingStarted.done.has("session")).toBe(true);
 
     sessions.sessions = [hydratedSession("session-1", "codex", { message_count: 3 })];
     await flushEffects();

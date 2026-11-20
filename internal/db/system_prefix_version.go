@@ -8,8 +8,8 @@ import (
 	"strings"
 )
 
-// SystemPrefixRulesVersion changes when DuckDB classifier inputs or
-// representative classifications change. Mirrors use it to refresh verdicts.
+// SystemPrefixRulesVersion changes when the SQL classifier's inputs or
+// representative classifications change. ClickHouse keys cached verdicts on it.
 func SystemPrefixRulesVersion() string {
 	parts := []string{
 		"system-reminder-open:" + strconv.Quote(systemReminderOpenTag),
@@ -41,7 +41,7 @@ func SystemPrefixRulesVersion() string {
 		for _, role := range []string{"user", "assistant"} {
 			parts = append(parts, fmt.Sprintf(
 				"probe:%q:%q:%t", content, role,
-				IsDuckDBSystemPrefixed(content, role),
+				sqlSystemPrefixed(content, role),
 			))
 		}
 	}

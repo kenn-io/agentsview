@@ -1124,19 +1124,30 @@ func migrateAccountUsageCountersPG(ctx context.Context, db pgProjectIdentityExec
 func EnsureSchema(
 	ctx context.Context, db *sql.DB, schema string,
 ) error {
+	_, err := ensureSchemaPG(ctx, db, schema)
+	return err
+}
+
+// ensureSchemaPG is EnsureSchema that also reports whether every optional
+// setup step succeeded. A step that failed, for example for lack of a
+// privilege, may succeed on a later push.
+func ensureSchemaPG(
+	ctx context.Context, db *sql.DB, schema string,
+) (optional bool, err error) {
 	start := time.Now()
+	optional = true
 	quoted, err := quoteIdentifier(schema)
 	if err != nil {
-		return fmt.Errorf("invalid schema name: %w", err)
+		return false, fmt.Errorf("invalid schema name: %w", err)
 	}
 	if err := CheckDataVersionCompat(ctx, db); err != nil {
-		return err
+		return false, err
 	}
 	step := time.Now()
 	if _, err := db.ExecContext(ctx,
 		"CREATE SCHEMA IF NOT EXISTS "+quoted,
 	); err != nil {
-		return fmt.Errorf("creating pg schema: %w", err)
+		return false, fmt.Errorf("creating pg schema: %w", err)
 	}
 	log.Printf(
 		"pg schema: create schema step completed in %s",
@@ -1144,17 +1155,17 @@ func EnsureSchema(
 	)
 	step = time.Now()
 	if _, err := db.ExecContext(ctx, coreDDL); err != nil {
-		return fmt.Errorf("creating pg tables: %w", err)
+		return false, fmt.Errorf("creating pg tables: %w", err)
 	}
-	ensureFrustrationCountsPG(ctx, db)
+	optional = ensureFrustrationCountsPG(ctx, db) && optional
 	if _, err := db.ExecContext(ctx, frictionDDL); err != nil {
-		return fmt.Errorf("creating pg friction tables: %w", err)
+		return false, fmt.Errorf("creating pg friction tables: %w", err)
 	}
 	if _, err := db.ExecContext(ctx, frictionReviewDDL); err != nil {
-		return fmt.Errorf("creating pg friction review tables: %w", err)
+		return false, fmt.Errorf("creating pg friction review tables: %w", err)
 	}
 	if err := ensureRawIngestSchemaPG(ctx, db); err != nil {
-		return err
+		return false, err
 	}
 	log.Printf(
 		"pg schema: core DDL step completed in %s",
@@ -1170,26 +1181,26 @@ func EnsureSchema(
 		"model_pricing_bands",
 	)
 	if err != nil {
-		return err
+		return false, err
 	}
 	log.Printf(
 		"pg schema: loaded existing columns in %s",
 		time.Since(step).Round(time.Millisecond),
 	)
 	if err := migrateMoneyColumnsPG(ctx, db, existingColumns); err != nil {
-		return err
+		return false, err
 	}
 	if err := migrateAccountUsageCountersPG(ctx, db); err != nil {
-		return err
+		return false, err
 	}
 	if err := migratePricingLayoutPG(ctx, db); err != nil {
-		return err
+		return false, err
 	}
 	step = time.Now()
 	tokenCoverageColumnsAdded := false
 	addedColumns, err := ensureColumns(ctx, db, existingColumns, alters)
 	if err != nil {
-		return err
+		return false, err
 	}
 	for _, column := range addedColumns {
 		switch column {
@@ -1205,12 +1216,12 @@ func EnsureSchema(
 		len(addedColumns),
 	)
 	if err := repairLegacySourceMissingDeletionPG(ctx, db); err != nil {
-		return err
+		return false, err
 	}
 	step = time.Now()
 	remoteScrubbed, err := scrubProjectIdentityGitRemoteCredentialsPG(ctx, db)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if remoteScrubbed {
 		log.Printf(
@@ -1229,12 +1240,12 @@ func EnsureSchema(
 		`CREATE INDEX IF NOT EXISTS idx_sessions_termination_status
 		 ON sessions(termination_status)`,
 	); err != nil {
-		return fmt.Errorf(
+		return false, fmt.Errorf(
 			"creating idx_sessions_termination_status: %w", err,
 		)
 	}
 	if err := dedupeStoredDialoguePG(ctx, db); err != nil {
-		return err
+		return false, err
 	}
 	log.Printf(
 		"pg schema: dialogue deduplication step completed in %s",
@@ -1242,10 +1253,10 @@ func EnsureSchema(
 	)
 	step = time.Now()
 	if err := createMissingPreparationIndexesPG(ctx, db); err != nil {
-		return err
+		return false, err
 	}
 	if err := createPartialIndexesPG(ctx, db); err != nil {
-		return err
+		return false, err
 	}
 	log.Printf(
 		"pg schema: partial indexes step completed in %s",
@@ -1254,7 +1265,7 @@ func EnsureSchema(
 	step = time.Now()
 	filled, err := fillMessageUsageCountersPG(ctx, db)
 	if err != nil {
-		return err
+		return false, err
 	}
 	log.Printf(
 		"pg schema: message usage counter backfill completed in %s"+
@@ -1263,7 +1274,7 @@ func EnsureSchema(
 	)
 	step = time.Now()
 	if err := backfillIsAutomatedPG(ctx, db); err != nil {
-		return err
+		return false, err
 	}
 	log.Printf(
 		"pg schema: automated-session backfill step completed in %s",
@@ -1271,6 +1282,7 @@ func EnsureSchema(
 	)
 	step = time.Now()
 	if err := createContentSearchIndexesPG(ctx, db); err != nil {
+		optional = false
 		log.Printf("pg schema: content search indexes unavailable, search will scan: %v", err)
 	}
 	log.Printf(
@@ -1278,6 +1290,7 @@ func EnsureSchema(
 		time.Since(step).Round(time.Millisecond),
 	)
 	if _, err := ensureVectorBaseSchemaPG(ctx, db); err != nil {
+		optional = false
 		log.Printf("pg schema: vector schema setup failed: %v", err)
 	}
 	step = time.Now()
@@ -1285,10 +1298,10 @@ func EnsureSchema(
 		ctx, db, tokenCoverageColumnsAdded,
 	)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !runRepair {
-		ensureUsageChangeJournalPG(ctx, db)
+		optional = ensureUsageChangeJournalPG(ctx, db) && optional
 		log.Printf(
 			"pg schema: token coverage repair check completed"+
 				" in %s (repair skipped)",
@@ -1298,7 +1311,7 @@ func EnsureSchema(
 			"pg schema: EnsureSchema completed in %s",
 			time.Since(start).Round(time.Millisecond),
 		)
-		return nil
+		return optional, nil
 	}
 	log.Printf(
 		"pg schema: token coverage repair check completed"+
@@ -1307,7 +1320,7 @@ func EnsureSchema(
 	)
 	step = time.Now()
 	if err := backfillTokenCoverageFlags(ctx, db); err != nil {
-		return err
+		return false, err
 	}
 	log.Printf(
 		"pg schema: token coverage backfill step completed in %s",
@@ -1315,9 +1328,9 @@ func EnsureSchema(
 	)
 	step = time.Now()
 	if err := markTokenCoverageRepairDone(ctx, db); err != nil {
-		return err
+		return false, err
 	}
-	ensureUsageChangeJournalPG(ctx, db)
+	optional = ensureUsageChangeJournalPG(ctx, db) && optional
 	log.Printf(
 		"pg schema: token coverage repair marker stored in %s",
 		time.Since(step).Round(time.Millisecond),
@@ -1326,7 +1339,7 @@ func EnsureSchema(
 		"pg schema: EnsureSchema completed in %s",
 		time.Since(start).Round(time.Millisecond),
 	)
-	return nil
+	return optional, nil
 }
 
 var preparationIndexesPG = []struct{ name, ddl string }{

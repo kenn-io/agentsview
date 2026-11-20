@@ -11,7 +11,7 @@ COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 
 COPY frontend/ ./
-COPY internal/importer/claude_ai_requests.txt /src/internal/importer/claude_ai_requests.txt
+COPY internal/importer/browser_requests/ /src/internal/importer/browser_requests/
 RUN npm run build
 
 FROM golang:1.27.4-bookworm AS build
@@ -44,13 +44,11 @@ ARG TARGETARCH
 ARG VERSION=dev
 ARG COMMIT=unknown
 ARG BUILD_DATE=
-# Pass --build-arg GO_TAGS=fts5,duckdb to include the DuckDB mirror.
-ARG GO_TAGS=fts5
 
 RUN go run ./internal/pricing/cmd/litellm-snapshot -restore
 
 RUN CGO_ENABLED=1 GOOS=$TARGETOS GOARCH=$TARGETARCH \
-    go build -tags "${GO_TAGS}" -trimpath -buildvcs=false \
+    go build -tags fts5 -trimpath -buildvcs=false \
       -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.buildDate=${BUILD_DATE}" \
       -o /out/agentsview ./cmd/agentsview
 

@@ -15,13 +15,42 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/kept"
+	"go.kenn.io/agentsview/internal/money"
 )
+
+func openPGActivityInputStore(t *testing.T, target, schema, directory string) *Store {
+	t.Helper()
+	store, err := NewStore(t.Context(), target, schema, true)
+	require.NoError(t, err)
+	require.NoError(t, store.ConfigureUsageCache(t.Context(), directory, target, schema))
+	return store
+}
 
 type activityInputReadCounter struct {
 	storeExecutor
 	mu                          sync.Mutex
 	transcriptReads, usageReads [][]string
 	cancel                      context.CancelFunc
+}
+
+type activityIdentityError struct {
+	storeExecutor
+	queries int
+	denied  bool
+}
+
+func (c *activityIdentityError) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	if strings.Contains(query, "pg_control_system()") {
+		c.queries++
+		if c.denied {
+			return c.storeExecutor.QueryRowContext(ctx, "SELECT activity_identity_denied()")
+		}
+		if c.queries == 1 {
+			return c.storeExecutor.QueryRowContext(ctx, "SELECT 1 / 0")
+		}
+	}
+	return c.storeExecutor.QueryRowContext(ctx, query, args...)
 }
 
 func (c *activityInputReadCounter) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
@@ -349,4 +378,151 @@ func TestPGActivityReportInputTranscriptAndCounts(t *testing.T) {
 	changed := pgKeptBuild(t, store, f, q, true)
 	assert.Equal(t, 2, changed.Report.Buckets[0].UserMessages)
 	assert.Equal(t, 2, changed.Report.Buckets[0].AssistantMessages)
+}
+
+func TestPGActivityReportInputIdentity(t *testing.T) {
+	local, syncer, _ := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	target := testPGURL(t)
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	q.Partial, q.EffectiveEnd = true, q.RangeEnd.Add(-time.Hour)
+	for _, mode := range []string{"retry", "denied", "mismatch"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv("CACHE_DIRECTORY", t.TempDir())
+			directory := t.TempDir()
+			first := openPGActivityInputStore(t, target, syncer.schema, directory)
+			query := q
+			switch mode {
+			case "retry":
+				failOnce := &activityIdentityError{storeExecutor: first.pg}
+				first.pg = failOnce
+				pgKeptBuild(t, first, f, query, true)
+				query.EffectiveEnd = query.EffectiveEnd.Add(time.Nanosecond)
+				want := pgKeptBuild(t, first, f, query, true)
+				require.NoError(t, first.Close())
+				restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
+				defer restarted.Close()
+				reads := &activityInputReadCounter{storeExecutor: restarted.pg}
+				restarted.pg = reads
+				requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, query, true))
+				assert.Empty(t, reads.transcriptReads)
+				assert.Empty(t, reads.usageReads)
+				assert.GreaterOrEqual(t, failOnce.queries, 2)
+			case "denied":
+				defer first.Close()
+				_, err := first.pg.ExecContext(t.Context(), `CREATE FUNCTION activity_identity_denied() RETURNS text LANGUAGE plpgsql AS $$
+BEGIN RAISE EXCEPTION 'permission denied' USING ERRCODE = '42501'; END $$`)
+				require.NoError(t, err)
+				denied := &activityIdentityError{storeExecutor: first.pg, denied: true}
+				first.pg = denied
+				assert.Equal(t, 500, pgKeptBuild(t, first, f, query, true).Report.Totals.OutputTokens)
+				for range 2 {
+					query.EffectiveEnd = query.EffectiveEnd.Add(time.Nanosecond)
+					assert.Equal(t, 500, pgKeptBuild(t, first, f, query, true).Report.Totals.OutputTokens)
+				}
+				assert.Equal(t, 1, denied.queries)
+			case "mismatch":
+				want := pgKeptBuild(t, first, f, query, true)
+				slots := first.runtimeState().activityInputs.Snapshot()
+				require.Len(t, slots, 1)
+				slot, version := slots[0].Slot, pgActivityDiskVersion+slots[0].Version
+				require.NoError(t, first.Close())
+				data, ok := first.activityDisk.Get(slot, version)
+				require.True(t, ok)
+				rows, ok := kept.DecodeRows[kept.Part[pgActivityDiskPart]](data)
+				require.True(t, ok)
+				rows[0].Value.Identity = "different-system"
+				data, err := kept.EncodeRows(rows, 256<<20, func(kept.Part[pgActivityDiskPart]) int64 { return 0 })
+				require.NoError(t, err)
+				first.activityDisk.Put(slot, version, data)
+				restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
+				defer restarted.Close()
+				reads := &activityInputReadCounter{storeExecutor: restarted.pg}
+				restarted.pg = reads
+				requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, query, true))
+				require.NotEmpty(t, reads.transcriptReads)
+				require.NotEmpty(t, reads.usageReads)
+			}
+		})
+	}
+}
+
+func TestPGActivityReportInputRestartPeerAndSessions(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, _ := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptSession(t, local, "peer", "project-b", "2026-06-14")
+	pgKeptSession(t, local, "deleted", "project-a", "2026-06-14")
+	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "a", []db.Message{{SessionID: "a", Ordinal: 0, Role: "assistant", Content: "partial", Timestamp: "2026-06-14T10:00:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":5}`), ClaudeMessageID: "shared", ClaudeRequestID: "request"}}))
+	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "peer", []db.Message{{SessionID: "peer", Ordinal: 0, Role: "assistant", Content: "complete", Timestamp: "2026-06-14T10:01:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":631}`), ClaudeMessageID: "shared", ClaudeRequestID: "request"}}))
+	pgKeptPush(t, syncer, false)
+	target, directory := testPGURL(t), t.TempDir()
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC", Project: "project-a"}
+	q.Partial, q.EffectiveEnd = true, q.RangeStart.Add(10*time.Hour+time.Minute)
+	first := openPGActivityInputStore(t, target, syncer.schema, directory)
+	pgKeptBuild(t, first, db.AnalyticsFilter{Timezone: "UTC", Project: "project-b"}, q, true)
+	before := pgKeptBuild(t, first, f, q, true)
+	assert.Equal(t, 5, before.Report.Totals.OutputTokens)
+	require.NoError(t, first.Close())
+	q.EffectiveEnd = q.EffectiveEnd.Add(time.Nanosecond)
+	require.NoError(t, local.DeleteSession(t.Context(), "deleted"))
+	require.NoError(t, local.DeleteSession(t.Context(), "peer"))
+	pgKeptSession(t, local, "added", "project-a", "2026-06-14")
+	pgKeptSession(t, local, "new-peer", "project-b", "2026-06-14")
+	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "new-peer", []db.Message{{SessionID: "new-peer", Ordinal: 0, Role: "assistant", Content: "complete", Timestamp: "2026-06-14T10:01:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":700}`), ClaudeMessageID: "shared", ClaudeRequestID: "request"}}))
+	pgKeptPush(t, syncer, true)
+	restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
+	defer restarted.Close()
+	counter := &activityInputReadCounter{storeExecutor: restarted.pg}
+	restarted.pg = counter
+	got := pgKeptBuild(t, restarted, f, q, true)
+	assert.Equal(t, 1200, got.Report.Totals.OutputTokens)
+	fresh, err := NewStore(t.Context(), target, syncer.schema, true)
+	require.NoError(t, err)
+	defer fresh.Close()
+	requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), got)
+	require.Len(t, counter.transcriptReads, 1)
+	assert.ElementsMatch(t, []string{"a", "added"}, counter.transcriptReads[0])
+	require.Len(t, counter.usageReads, 1)
+	assert.ElementsMatch(t, []string{"a", "added", "deleted", "new-peer", "peer"}, counter.usageReads[0])
+}
+
+func TestPGActivityReportInputRestartPriceInvalidation(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, _ := newUsageJournalFixture(t)
+	for _, id := range []string{"a", "b"} {
+		pgKeptSession(t, local, id, "project-a", "2026-06-14")
+	}
+	pgKeptPush(t, syncer, false)
+	target, directory := testPGURL(t), t.TempDir()
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	q.Partial, q.EffectiveEnd = true, q.RangeStart.Add(10*time.Hour+2*time.Minute)
+	first := openPGActivityInputStore(t, target, syncer.schema, directory)
+	rates := map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}}
+	first.SetCustomPricing(rates)
+	before := pgKeptBuild(t, first, f, q, true)
+	slots := first.runtimeState().activityInputs.Snapshot()
+	require.Len(t, slots, 1)
+	require.NoError(t, first.Close())
+	restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
+	defer restarted.Close()
+	loaded, ok := restarted.loadActivityInputs(slots[0].Slot, slots[0].Version, slots[0].Rows[0].identity)
+	require.True(t, ok)
+	require.NotNil(t, loaded.priced)
+	reads := &activityInputReadCounter{storeExecutor: restarted.pg}
+	restarted.pg = reads
+	fresh, err := NewStore(t.Context(), target, syncer.schema, true)
+	require.NoError(t, err)
+	defer fresh.Close()
+	changedRates := map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 40_000_000}}
+	restarted.SetCustomPricing(changedRates)
+	fresh.SetCustomPricing(changedRates)
+	got := pgKeptBuild(t, restarted, f, q, true)
+	requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), got)
+	assert.Equal(t, 1000, before.Report.Totals.OutputTokens)
+	assert.Equal(t, money.MustParseDollars("0.02"), before.Report.Totals.Cost)
+	assert.Equal(t, money.MustParseDollars("0.04"), got.Report.Totals.Cost)
+	assert.Empty(t, reads.transcriptReads)
+	assert.Empty(t, reads.usageReads)
 }

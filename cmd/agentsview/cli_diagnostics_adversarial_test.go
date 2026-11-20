@@ -139,7 +139,6 @@ func TestCLIRecoveryGroupedCommandAdvice(t *testing.T) {
 		reject string
 	}{
 		{name: "postgres", path: []string{"replica", "pg", "push"}, want: "AGENTSVIEW_PG_URL"},
-		{name: "duckdb", path: []string{"replica", "duckdb", "status"}, want: "AGENTSVIEW_DUCKDB_PATH"},
 		{name: "clickhouse", path: []string{"replica", "clickhouse", "status"}, want: "AGENTSVIEW_CLICKHOUSE_URL"},
 		{name: "raw sync", path: []string{"source", "raw", "status"}, want: "AGENTSVIEW_RAW_SYNC_URL"},
 		{name: "raw cleanup", path: []string{"source", "raw", "clean-uploads"}, want: "AGENTSVIEW_PG_URL", reject: "AGENTSVIEW_RAW_SYNC_URL"},

@@ -55,16 +55,7 @@ describe("parsePath", () => {
   });
 
   it("parses page routes", () => {
-    for (const route of [
-      "usage",
-      "trends",
-      "recall",
-      "quality",
-      "friction",
-      "pinned",
-      "trash",
-      "settings",
-    ]) {
+    for (const route of ["usage", "recall", "quality", "friction", "pinned", "trash", "settings"]) {
       setURL(`/${route}`);
       const result = parsePath();
       expect(result.route).toBe(route);
@@ -93,6 +84,13 @@ describe("parsePath", () => {
 
   it("falls back to default for unknown routes", () => {
     setURL("/unknown");
+    const result = parsePath();
+    expect(result.route).toBe("sessions");
+    expect(result.sessionId).toBeNull();
+  });
+
+  it("falls back from the removed trends route", () => {
+    setURL("/trends");
     const result = parsePath();
     expect(result.route).toBe("sessions");
     expect(result.sessionId).toBeNull();
@@ -402,12 +400,12 @@ describe("RouterStore", () => {
     expect(replaceSpy).toHaveBeenCalledOnce();
   });
 
-  it("navigate updates URL to /trends", () => {
+  it("navigate updates URL to /recall", () => {
     setURL("/");
     store = new RouterStore();
-    store.navigate("trends");
-    expect(window.location.pathname).toBe("/trends");
-    expect(store.route).toBe("trends");
+    store.navigate("recall");
+    expect(window.location.pathname).toBe("/recall");
+    expect(store.route).toBe("recall");
   });
 
   it("navigate returns false on same URL (no-op)", () => {

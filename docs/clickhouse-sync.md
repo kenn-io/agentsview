@@ -9,8 +9,7 @@ AgentsView stores sessions locally in SQLite.
 Keep the copy current with `push --watch` or `clickhouse service`.
 
 Each machine pushes its own sessions. SQLite stays the archive. ClickHouse is a
-remote copy, the same operator story as [PostgreSQL sync](/docs/pg-sync/), not a
-disposable local file like [DuckDB](/docs/duckdb/).
+remote copy with the same operator story as [PostgreSQL sync](/docs/pg-sync/).
 
 The UI includes the session browser, search, analytics, usage, activity, recent
 edits, and project inventory. Rename, trash, insights, stars, and pins stay on
@@ -235,7 +234,10 @@ agentsview replica clickhouse push --watch --interval 5m
 The watcher performs one initial local sync plus ClickHouse push, then pushes
 again after session-directory changes settle for the debounce window. The
 interval acts as a floor: even if filesystem events are missed, the next
-interval push catches up.
+interval push catches up. A push that starts from file changes and finds no new
+local changes skips session work; it can still bring search vectors up to date.
+Model prices, machine labels, and removal of mirror sessions the archive no
+longer holds then wait for the next push that runs, at most one interval later.
 
 Operational details:
 
@@ -584,9 +586,11 @@ in the same cache directory. Each selection can use up to 128 MiB, with a
 pricing change, new binary, or deletion of the cache directory. If the cache is
 unavailable, Usage reads the mirror instead.
 
-Trends keeps per-session counts in the same cache. The first visit builds them,
-and after a push it recounts only changed sessions. Hour, model, Local timezone,
-and time-dependent selections still read the mirror directly.
+Term-trend reads, through the `get_term_trends` MCP tool or
+`GET /api/v1/trends/terms`, keep per-session counts in the same cache. The first
+read builds them, and after a push it recounts only changed sessions. Hour,
+model, Local timezone, and time-dependent selections still read the mirror
+directly.
 
 When `require_auth` is enabled, a bearer token is generated if needed and
 printed on startup. Pass it via `Authorization: Bearer <token>` on API requests.

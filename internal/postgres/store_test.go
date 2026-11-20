@@ -1424,7 +1424,7 @@ func TestStoreAnalyticsTopSessionsDurationExcludesReversedTimestamps(t *testing.
 	// A reversed session (ended_at < started_at) still accumulates
 	// positive message-gap active duration, so without an eligibility
 	// guard it would rank into the duration list ordered by active
-	// duration. PostgreSQL must reject it, matching SQLite and DuckDB.
+	// duration. PostgreSQL must reject it, matching SQLite.
 	// (Empty-string timestamps are not representable in timestamptz
 	// columns, so only the reversed case applies on this backend.)
 	_, err = store.DB().ExecContext(t.Context(), `

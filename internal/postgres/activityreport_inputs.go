@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"math"
@@ -25,7 +26,9 @@ import (
 // retain the revision captured before their reads so concurrent writes remain
 // visible to the next visit.
 type pgActivityInputs struct {
-	revision int64
+	revision            int64
+	identity            string
+	identityUnavailable bool
 	// sessions holds each session's activity, derived at gapCap.
 	sessions   map[string]pgActivitySession
 	gapCap     float64
@@ -99,7 +102,7 @@ func pgCompactActivityUsage(r pgDailyUsageScanRow, handle func(string) unique.Ha
 }
 
 func pgActivityInputBytes(e pgActivityInputs) int64 {
-	size := int64(unsafe.Sizeof(e))
+	size := int64(unsafe.Sizeof(e)) + int64(len(e.identity))
 	size += pgActivityPricedBytes(e.priced)
 	shared := map[unique.Handle[string]]struct{}{}
 	for id, session := range e.sessions {
@@ -142,19 +145,41 @@ func pgActivityPricedBytes(priced *pgActivityPriced) int64 {
 }
 
 func (s *Store) activityReportInputs(ctx context.Context, version, lower, upper string) (*pgActivityInputs, error) {
-	previous, ok := s.runtimeState().activityInputs.Get(lower+"|"+upper, version)
+	slot := lower + "|" + upper
+	previousRows, ok := s.runtimeState().activityInputs.Get(slot, version)
+	var previous pgActivityInputs
+	if len(previousRows) > 0 {
+		previous = previousRows[0]
+	} else {
+		ok = false
+	}
+	identity := ""
+	identityUnavailable := ok && previous.identityUnavailable
+	if (!ok || previous.identity == "") && !identityUnavailable && s.activityDisk.Enabled() {
+		var err error
+		identity, err = s.activitySourceIdentity(ctx, "")
+		identityUnavailable = errors.Is(err, db.ErrUsageSourceUnavailable)
+		if !ok && identity != "" {
+			if loaded, found := s.loadActivityInputs(slot, version, identity); found {
+				previous, ok = loaded, true
+			}
+		}
+	}
 	after := int64(math.MaxInt64)
 	if ok {
-		after = previous[0].revision
+		after = previous.revision
 	}
 	revision, changed, err := s.LoadUsageChanges(ctx, after)
 	if err != nil || revision == 0 {
 		s.runtimeState().activityInputs.DeleteSlots(func(slot string) bool { return slot == lower+"|"+upper })
 		return nil, err
 	}
-	next := &pgActivityInputs{revision: revision, sessions: map[string]pgActivitySession{}, changed: changed}
-	if ok && revision >= after && len(changed) <= max(64, len(previous[0].candidates)/4) {
-		old := previous[0]
+	next := &pgActivityInputs{revision: revision, identity: identity, identityUnavailable: identityUnavailable, sessions: map[string]pgActivitySession{}, changed: changed}
+	if ok && previous.identity != "" {
+		next.identity = previous.identity
+	}
+	if ok && revision >= after && len(changed) <= max(64, len(previous.candidates)/4) {
+		old := previous
 		dirty := make(map[string]bool, len(changed))
 		for _, id := range changed {
 			dirty[id] = true

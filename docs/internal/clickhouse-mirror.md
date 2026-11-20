@@ -13,13 +13,12 @@ clickhouse serve <- HTTP API / UI ----+
 
 Operator steps, config keys, and commands live in
 [ClickHouse Sync](../clickhouse-sync.md). Agent rules live in
-[storage](../agents/storage.md#clickhouse-mirror).
+[storage](../agents/storage.md#clickhouse-replica).
 
 ## Problem
 
-PostgreSQL already had configure, push, watch or OS service, then serve. DuckDB
-is a local file you rebuild and swap, not a remote database. ClickHouse needed
-the PostgreSQL operator path with SQL that MergeTree can run.
+PostgreSQL already had configure, push, watch or OS service, then serve.
+ClickHouse needed the PostgreSQL operator path with SQL that MergeTree can run.
 
 ## Behavior
 
@@ -57,14 +56,14 @@ trigger another write. The marker is set after a clean full push.
 
 ## Decisions
 
-**Write model from DuckDB, operator model from PostgreSQL.** Whole-session
-replace gated by a fingerprint on the session row, cursor in the mirror. Not
-DuckDB's rebuild-and-swap file, and not PostgreSQL's local watermark plus remote
-reset blob. A missing row reads back as an empty fingerprint, so a reset mirror
-repairs on the next push.
+**Whole-session writes, operator model from PostgreSQL.** Each push replaces
+whole sessions, gated by a fingerprint on the session row, and keeps its cursor
+in the mirror. PostgreSQL's local watermark plus remote reset blob was rejected
+for ClickHouse. A missing row reads back as an empty fingerprint, so a reset
+mirror repairs on the next push.
 
 **Driver `github.com/ClickHouse/clickhouse-go/v2` through `database/sql`.**
-Stores stay in the same `Query`/`Scan` shape as DuckDB and PostgreSQL. Every
+Stores stay in the same `Query`/`Scan` shape as PostgreSQL. Every
 connection sets `final=1` so `ReplacingMergeTree` collapses duplicates without
 `FINAL` in SQL. Activity reads that return many rows are the exception: serve
 reads the pairing inputs and the Activity usage sums on a second pool that uses
@@ -180,8 +179,8 @@ earlier process may have stopped before its vector phase. A resumed run skips
 the whole-mirror usage repricing that the run's first process already did.
 Pushes send sessions newest activity first (`ended_at`, then `started_at`, then
 `created_at`). A Codex revert page goes right after its thread's session, which
-mirrors read to decide whether the page is trashed. PostgreSQL pushes and DuckDB
-rebuilds use the same order.
+mirrors read to decide whether the page is trashed. PostgreSQL pushes use the
+same order.
 
 **Pushes rewrite only what differs.** Each session row stores four fingerprints.
 `agentsview_push_fingerprint` hashes the session fields and all of its content.
@@ -286,6 +285,44 @@ checks use `rows_version` as the upper bound. A
 routine push that only appends writes too few messages to trigger
 [compaction](#compaction-after-a-large-rewrite).
 
+**A kept message's usage stays in the mirror's snapshot.** Each push writes
+one `usage_session_snapshots` row per published session, and that row holds the
+usage of every message the session has. Sending it whole made the snapshot most
+of what a push uploaded after appends: on a copy of a real archive, it was
+nearly 90% of the bytes a push of a few changed sessions sent. When a push keeps
+a session's stored message rows, or all of its content in a row-only write, it
+sends the snapshot's session fields, its usage events, and the usage of the
+messages after the last kept ordinal in an external table. One `INSERT ...
+SELECT` per batch builds each complete row on the server from the session's
+current snapshot, under `FINAL`, keeping that snapshot's usage messages at or
+below the last kept ordinal.
+
+The server uses a stored snapshot only when it records the message rows
+fingerprint the plan kept. A snapshot copies the session row it was written
+with, and the push builds both from one payload, so that fingerprint vouches
+for the snapshot's usage messages as it does for the message rows: every field
+of a usage message is also a field of the message row it hashes. A change to
+the usage message tuple must keep it within `messageRow`. The push then reads
+which carried sessions got a row at its version and sends the whole row for
+the rest, such as a session whose current snapshot came from an interrupted
+push. Readers still see one complete snapshot per session, so nothing reads
+the table differently.
+
+Four pushes of successive copies of a real archive (47,517 sessions), each
+sent to a mirror with and without this change, uploaded:
+
+| Push | Sessions written | Without | With | Reduction |
+| --- | --- | --- | --- | --- |
+| 1 | 118: 18 appended, 33 row-only, 67 whole | 11.05 MB | 7.18 MB | 1.5x |
+| 2 | 4 appended | 904 KB | 140 KB | 6.5x |
+| 3 | none | 36.8 KB | 36.7 KB | 1.0x |
+| 4 | 15: 2 appended, 13 row-only | 1.61 MB | 172 KB | 9.3x |
+| Total | | 13.60 MB | 7.53 MB | 1.8x |
+
+The first push followed half an hour of archive changes, so new sessions,
+which go whole either way, dominate it. Both mirrors ended up identical row for
+row, including every usage table, and returned the same Usage page results.
+
 Each full-push reason gets its own scope:
 
 - Rebuilt archive, local deletion journal reset, push scope change, and a
@@ -316,8 +353,8 @@ reads, and a pushing client from before appends
 restores the terminal event view that matches events at exactly
 `content_version`. Upgrade serve and every pushing client together.
 
-**Shared filter builder, ClickHouse dialect.** Existing SQLite, PostgreSQL, and
-DuckDB SQL stay byte-identical. ClickHouse uses `UNION ALL` in recursive CTEs,
+**Shared filter builder, ClickHouse dialect.** Existing SQLite and PostgreSQL
+SQL stay byte-identical. ClickHouse uses `UNION ALL` in recursive CTEs,
 `IN (SELECT)` instead of correlated `EXISTS`,
 `parent_session_id IS NULL OR NOT IN (SELECT id FROM sessions)` for orphans
 (`NULL NOT IN (...)` is unknown and would hide NULL-parent rows), `ILIKE` with
@@ -340,9 +377,55 @@ daemon owns the archive, push posts to `/api/v1/push/clickhouse`. The OS service
 kind changes the unit label, command, and log file so it can sit beside the
 PostgreSQL watcher.
 
+**A watch push for files that changed nothing writes nothing.** A watch wakes
+for every file event under a watched root, including files that hold no
+session data, such as an agent's own SQLite logs or lock files. Before this
+rule each such event ran a whole push: about 56 statements, three
+`sync_metadata` inserts, and several scans of `sessions` and the price tables,
+about once a minute on an idle machine. A push a watcher change triggers now
+sets `PushOptions.SkipIfUnchanged`: the local watch for its change pushes, and
+the daemon for a push request that carries a watch batch. Such a push reads this
+archive's `sync_metadata` keys and the local archive, and when nothing requires
+a full push and no session, deletion, project identity, worktree mapping, star,
+pin, or Cursor usage row changed since the last clean push, it runs only the
+vector phase and returns (`unchangedSinceLastPush`). A scoped vector phase with
+no changed sessions does nothing, and a usage-only archive skips it. A
+generation-wide vector phase with a vector source can write, so it first checks
+that a newer AgentsView has not written the mirror, as a push with changes does.
+
+The skipped push would also refresh machine labels, model and usage prices, and
+retained commit links, prune rows the archive no longer owns, check for session
+rows in an older format, refresh prepared usage and the usage rollup, and clear
+a usage-only archive's vectors. None of these depends on this archive's
+sessions changing. They run on the next push without the option, such as the
+watch's startup and interval pushes, so they lag by at most the watch interval.
+
+**The schema step runs once per process for each mirror.** The daemon builds a
+new pusher for every push request, so the pusher's own memo of the schema step
+never outlived one push. `Sync.EnsureSchema` now records, per server URL and
+database, the mirror's state after it prepares the tables (`ensuredSchemas`). A
+later pusher in the same process reads the state again and skips the schema step
+while it matches. The state covers:
+
+- each table's name and `create_table_query`, so a dropped table or a column,
+  index, projection, comment, or view query that differs runs the step again
+- the server's `serverUUID()` and start time, so a restart or another server
+  runs the table exchange probe again
+- the stored table exchange probe, which a restore can replace
+
+A prepared usage refresh replaces `prepared_usage` with an identical table and
+keeps the state; its temporary `.tmp.` table is left out. A state that cannot be
+read counts as changed. A failed push, one that ends with session errors, or one
+whose state no longer matches the record, such as after a table was dropped
+during the push, forgets the record, so the next push runs the step. Session
+errors can come from tables that changed during the push. While leftover tables
+of an interrupted usage snapshot rebuild exist, the step records nothing, so
+each push runs it until one finishes the rebuild once those tables are an hour
+old.
+
 ## Rejected alternatives
 
-- Pasting PostgreSQL or DuckDB SQL. Correlated `EXISTS`, `date_trunc`, and
+- Pasting PostgreSQL SQL. Correlated `EXISTS`, `date_trunc`, and
   `UNION` without ALL fail or return wrong rows on 25.8.
 - Plain `MergeTree` with delete-then-insert. A crash between the two leaves a
   session with no content and a matching fingerprint, so the next push skips
@@ -1083,8 +1166,8 @@ when it is a marker, without its text. Over such text ClickHouse's RE2 and Go's
 `IsFrustrationMarker` step by step with the same pattern and thresholds, which
 `internal/signals` exports. Any other prompt, including invalid UTF-8, comes
 back with its text and Go judges it. The set is `signals.PlainPromptSymbols`,
-which DuckDB shares (see `internal/duckdb/README.md`), and a unit test checks
-every symbol in it against Go's Unicode tables. ClickHouse tests compare the counts with
+which PostgreSQL shares, and a unit test checks every symbol in it against Go's
+Unicode tables. ClickHouse tests compare the counts with
 `IsFrustrationMarker` on edge cases and on a random corpus, and require that
 only prompts outside the set come back with text.
 
@@ -1115,13 +1198,13 @@ peaks near 290 MiB, with the same per-session counts.
   those words, so on the production mirror such a filter dropped almost none of
   the 4.25 GiB of prompt text.
 
-SQLite keeps its scan in Go, which skips system rows in SQL. DuckDB and
-PostgreSQL judge plain prompts in SQL as well; see
+SQLite keeps its scan in Go, which skips system rows in SQL. PostgreSQL judges
+plain prompts in SQL as well; see
 [PostgreSQL frustration marker reads](../agents/storage.md#postgresql-frustration-marker-reads).
 
 **Go judges each prompt in a few passes.** SQLite sends prompts from sessions
-without a current stored count to `IsFrustrationMarker`. PostgreSQL, DuckDB,
-and ClickHouse send the prompts they cannot judge in SQL. SQLite stores each
+without a current stored count to `IsFrustrationMarker`. PostgreSQL and
+ClickHouse send the prompts they cannot judge in SQL. SQLite stores each
 count with its transcript key, so later visits after a restart reuse unchanged
 counts. The first visit after upgrading counts each session once. Full resync
 keeps matching counts for unchanged reparsed sessions and copied sessions

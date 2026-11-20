@@ -64,18 +64,6 @@ func replicaPushOperation(name string) (daemonPushOperation, error) {
 	return operation, nil
 }
 
-func mirrorPushOperation(
-	ctx context.Context, api *apiclient.Client, body *apiclient.DaemonPushRequest,
-) (*http.Response, []byte, *runtime.Stream[[]byte], error) {
-	response, err := api.PostAPIV1PushDuckdbStreamWithResponse(
-		ctx, &apiclient.PostAPIV1PushDuckdbRequestOptions{Body: body},
-	)
-	if response == nil {
-		return nil, nil, nil, err
-	}
-	return response.HTTPResponse, response.Body, response.Stream200, nil
-}
-
 func startupSyncOperation(
 	ctx context.Context, api *apiclient.Client, _ *apiclient.DaemonPushRequest,
 ) (*http.Response, []byte, *runtime.Stream[[]byte], error) {
@@ -105,7 +93,6 @@ func postDaemonPush[T, P any](
 ) (T, error) {
 	var zero T
 	body = daemonPushRequestForCapabilities(tr, body)
-	fallbackAttempted := false
 	for {
 		api, err := apiclient.NewHTTPClient(tr.URL, authToken, &http.Client{Timeout: 0})
 		if err != nil {
@@ -118,11 +105,14 @@ func postDaemonPush[T, P any](
 		if resp.StatusCode != http.StatusOK {
 			msg := payload
 			_ = resp.Body.Close()
-			if !fallbackAttempted && body.WatchBatch != nil &&
-				daemonRejectsWatchScope(resp.StatusCode, msg) {
+			if body.WatchBatch != nil &&
+				daemonRejectsPushFields(resp.StatusCode, msg, "watch_batch", "watch_recovery") {
 				body.WatchBatch = nil
 				body.WatchRecovery = nil
-				fallbackAttempted = true
+				continue
+			}
+			if body.NoSourceSync != nil && daemonRejectsPushFields(resp.StatusCode, msg, "no_source_sync") {
+				body.NoSourceSync = nil
 				continue
 			}
 			return zero, daemonPushError(
@@ -151,29 +141,37 @@ func daemonPushRequestForCapabilities(
 		body.WatchBatch = nil
 		body.WatchRecovery = nil
 	}
+	if tr.Runtime != nil && tr.Runtime.API > 0 && tr.Runtime.API < server.ArchiveWatchPushAPIVersion {
+		body.NoSourceSync = nil
+	}
 	return body
 }
 
-func daemonRejectsWatchScope(status int, body []byte) bool {
+func daemonRejectsPushFields(status int, body []byte, fields ...string) bool {
 	if status != http.StatusBadRequest && status != http.StatusUnprocessableEntity {
 		return false
 	}
 	message := strings.ToLower(string(body))
-	if !strings.Contains(message, "watch_batch") &&
-		!strings.Contains(message, "watch_recovery") {
-		return false
-	}
-	return strings.Contains(message, "unexpected") ||
+	unknown := strings.Contains(message, "unexpected") ||
 		strings.Contains(message, "unknown") ||
 		strings.Contains(message, "additional") ||
 		strings.Contains(message, "not allowed")
+	if !unknown {
+		return false
+	}
+	for _, field := range fields {
+		if strings.Contains(message, field) {
+			return true
+		}
+	}
+	return false
 }
 
 // consumeDaemonPushEvents applies daemon progress and terminal events decoded
 // by the generated client's stream. A stream that ends without a done or
 // error event counts as a push that never started, so a watch keeps its
 // --full request, unless the daemon reported that its sync rebuilt the
-// archive: every mirror pushes in full after that.
+// archive: every replica pushes in full after that.
 func consumeDaemonPushEvents[T, P any](stream *runtime.Stream[[]byte], onProgress func(P)) (T, error) {
 	var result, zero T
 	var done, rebuilt bool

@@ -120,6 +120,13 @@ func (s *Sync) PushWithOptions(
 	if completed {
 		err = completedErr.err
 	}
+	if err != nil && !completed && !errors.Is(err, db.ErrDiagnosticConflict) {
+		// The failure may come from a schema changed under this process,
+		// so the next push runs the schema step again.
+		s.schemaMu.Lock()
+		s.forgetEnsuredSchemaLocked()
+		s.schemaMu.Unlock()
+	}
 	switch {
 	case err == nil || errors.Is(err, db.ErrDiagnosticConflict) || completed:
 		err = errors.Join(err, s.replaceRetainedCommitLinks(ctx))
@@ -417,7 +424,7 @@ func (s *Sync) pushWithOptions(
 		// may have been dropped since schemaDone was set.
 		// Clear the memo so EnsureSchema re-runs.
 		s.schemaMu.Lock()
-		s.schemaDone = false
+		s.forgetEnsuredSchemaLocked()
 		s.schemaMu.Unlock()
 		if err := s.normalizeSyncTimestamps(
 			ctx,
@@ -454,7 +461,7 @@ func (s *Sync) pushWithOptions(
 				legacyMarkerMachines = nil
 			}
 			s.schemaMu.Lock()
-			s.schemaDone = false
+			s.forgetEnsuredSchemaLocked()
 			s.schemaMu.Unlock()
 			if err := s.normalizeSyncTimestamps(
 				ctx,
@@ -541,7 +548,7 @@ func (s *Sync) pushWithOptions(
 		log.Printf("pgsync: diagnostic events: %v", diagnosticErr)
 	}
 	// Candidate selection shares ListSessionsForMirrorWindow with the
-	// DuckDB mirror push: sync_marker >= lastPush, inclusive below and
+	// ClickHouse push: sync_marker >= lastPush, inclusive below and
 	// deliberately unbounded above. An upper bound at cutoff would let a
 	// clock-skewed future file_mtime push a session's marker past now and
 	// mask its later real changes until wall time caught up. The inclusive
@@ -578,6 +585,16 @@ func (s *Sync) pushWithOptions(
 	for _, id := range reconciledScopeMoveIDs {
 		delete(priorFingerprints, id)
 	}
+	// Carry forward only the fingerprints of sessions in this push's
+	// window. The next window starts at this push's cutoff, which is never
+	// before lastPush, so a fingerprint for a session outside this window
+	// is never compared again. Without this, every push rewrote one
+	// fingerprint per session in the archive. Dropping a fingerprint can
+	// only cost a redundant push, never a skipped one.
+	maps.DeleteFunc(priorFingerprints, func(id, _ string) bool {
+		_, inWindow := sessionByID[id]
+		return !inWindow
+	})
 
 	if err := purgePGExcludedPushSessions(
 		ctx, s.pg, sessionByID, markerID, s.machine, legacyMarkerMachines,

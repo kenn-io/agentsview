@@ -207,22 +207,6 @@ var frustrationPhraseByFirstByte, frustrationPhrasePairs = func() (index [256][]
 	return index, pairs
 }()
 
-// CountFrustrationMarkers counts user prompts that indicate the
-// session is going badly. This is an analytics marker, not a
-// standalone prompt-quality penalty.
-func CountFrustrationMarkers(msgs []HeuristicMessage) int {
-	count := 0
-	for _, m := range msgs {
-		if m.IsSystem || m.SourceSubtype == "tool_result" || m.Role != "user" {
-			continue
-		}
-		if IsFrustrationMarker(m.Content) {
-			count++
-		}
-	}
-	return count
-}
-
 type promptInfo struct {
 	Content                     string
 	Normalized                  string

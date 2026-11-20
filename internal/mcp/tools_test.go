@@ -1297,7 +1297,7 @@ func TestServer_EndToEnd(t *testing.T) {
 		ToolSearchSessions, ToolQueryRecall, ToolListRecall, ToolListSessions, ToolGetSessionOverview,
 		ToolGetMessages, ToolGetCompactionSummaries, ToolGetMemoryStatus, ToolSearchContent, ToolGetUsageSummary, ToolGetSessionUsage,
 		ToolGetToolCalls, ToolGetRecentEdits, ToolGetChildSessions, ToolCompareUsage,
-		ToolGetActivityReport, ToolGetToolUsage, ToolGetQualitySignals, ToolSearchDocs,
+		ToolGetActivityReport, ToolGetToolUsage, ToolGetQualitySignals, ToolGetTermTrends, ToolSearchDocs,
 		ToolGetFrictionDigest, ToolListFrictionPatterns,
 	}, names)
 
@@ -1322,11 +1322,16 @@ func TestServer_SearchContentIncludeOneShot(t *testing.T) {
 	var requests []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query()
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/v1/sessions" {
+			assert.Equal(t, "one-shot", query.Get("ids"))
+			_, _ = w.Write([]byte(`{"sessions":[{"id":"one-shot","agent":"pi","user_message_count":1}]}`))
+			return
+		}
 		requests = append(requests, r.URL.RawQuery)
 		assert.Equal(t, "/api/v1/search/content", r.URL.Path)
 		assert.Equal(t, "substring", query.Get("mode"))
 		assert.Equal(t, "pi", query.Get("agent"))
-		w.Header().Set("Content-Type", "application/json")
 		if query.Get("include_one_shot") == "true" {
 			_, _ = w.Write([]byte(`{"matches":[{"session_id":"one-shot","agent":"pi","location":"message","role":"user","ordinal":0,"timestamp":"2024-06-15T10:00:00Z","snippet":"wire one-shot marker","ordinal_range":[0,0]}]}`))
 			return

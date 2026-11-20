@@ -22,6 +22,12 @@ const ingestionWaitBudget = 2 * time.Second
 // readFlushMinGap is the shortest time between syncs started for readers.
 const readFlushMinGap = time.Second
 
+// readLiveHold is how long an archive read keeps the watcher at its live
+// interval, as an open web UI does. A burst of reads then finds changes
+// synced in the background and skips the catch-up wait; only the first read
+// after a quiet stretch waits.
+const readLiveHold = 2 * time.Minute
+
 // collectionPaused is the gap that keeps background polling from running.
 const collectionPaused = time.Duration(math.MaxInt64)
 
@@ -76,6 +82,12 @@ type daemonIngestion struct {
 	catchupDeadline time.Time
 	lastCatchup     time.Time
 	liveEnabled     bool
+	// readHold is how long a read keeps the live interval held. The hold
+	// lasts until readHoldUntil; readHoldTimer releases it after that.
+	readHold        time.Duration
+	readHoldUntil   time.Time
+	readHoldTimer   *time.Timer
+	readHoldRelease func()
 }
 
 // ingestionWatchers is one generation of change detection for a fixed
@@ -110,6 +122,7 @@ func newDaemonIngestion(
 		database:    database,
 		idleTracker: idleTracker,
 		load:        load,
+		readHold:    readLiveHold,
 	}
 	d.cfg.Store(&cfg)
 	d.watchers = d.startWatchers(cfg)
@@ -247,7 +260,9 @@ func (d *daemonIngestion) Suspend() {
 
 // EnsureFresh brings the archive up to date for a reader. It ends an idle
 // pause, and while the background interval is holding changes back it syncs
-// them first. Readers share one catch-up and its wait deadline.
+// them first. Readers share one catch-up and its wait deadline. Each read
+// also holds the live interval for readHold, so the watcher syncs later
+// changes in the background and the reads that follow do not wait.
 func (d *daemonIngestion) EnsureFresh(ctx context.Context) bool {
 	finish, ok := d.idleTracker.BeginWork()
 	if !ok {
@@ -260,18 +275,21 @@ func (d *daemonIngestion) EnsureFresh(ctx context.Context) bool {
 		return false
 	}
 	done, started := d.catchup, false
-	if done == nil {
-		if !d.pending && !d.readFlushDueLocked() {
-			d.mu.Unlock()
-			finish()
-			return true
-		}
+	// The flush check comes before the hold, which would otherwise hide the
+	// changes the background interval held back.
+	if done == nil && (d.pending || d.readFlushDueLocked()) {
 		done, started = d.registerCatchupLocked(), true
 		d.applying.Go(func() {
 			defer finish()
 			_ = d.catchUp(d.ctx, false, false) // catchUp logs its own failure
 			d.finishCatchup(done)
 		})
+	}
+	d.extendReadHoldLocked()
+	if done == nil {
+		d.mu.Unlock()
+		finish()
+		return true
 	}
 	deadline := d.catchupDeadline
 	d.mu.Unlock()
@@ -302,6 +320,40 @@ func (d *daemonIngestion) readFlushDueLocked() bool {
 		return false
 	}
 	return time.Since(d.lastCatchup) >= max(cfg.SyncInterval, readFlushMinGap)
+}
+
+// extendReadHoldLocked holds the live interval until readHold from now.
+func (d *daemonIngestion) extendReadHoldLocked() {
+	d.readHoldUntil = time.Now().Add(d.readHold)
+	if d.readHoldTimer != nil {
+		return
+	}
+	d.readHoldRelease = d.syncInterval.Hold(agentsync.LiveInterval)
+	d.readHoldTimer = time.AfterFunc(d.readHold, d.expireReadHold)
+}
+
+// expireReadHold releases the read hold once no read has extended it for
+// readHold. A read that extended it re-arms the timer for the remainder.
+func (d *daemonIngestion) expireReadHold() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.readHoldTimer == nil {
+		return
+	}
+	if left := time.Until(d.readHoldUntil); left > 0 {
+		d.readHoldTimer.Reset(left)
+		return
+	}
+	d.releaseReadHoldLocked()
+}
+
+func (d *daemonIngestion) releaseReadHoldLocked() {
+	if d.readHoldTimer == nil {
+		return
+	}
+	d.readHoldTimer.Stop()
+	d.readHoldRelease()
+	d.readHoldTimer, d.readHoldRelease = nil, nil
 }
 
 // endPauseLocked reopens watcher delivery after an idle pause. Delivery stays
@@ -473,6 +525,7 @@ func (d *daemonIngestion) Reload(context.Context) (config.Config, error) {
 func (d *daemonIngestion) Stop() {
 	d.mu.Lock()
 	d.stopped = true
+	d.releaseReadHoldLocked()
 	d.mu.Unlock()
 	d.applying.Wait()
 	d.mu.Lock()

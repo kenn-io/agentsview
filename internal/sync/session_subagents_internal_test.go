@@ -81,6 +81,12 @@ func TestTrySessionRefreshRefusesContentionAtEachStage(t *testing.T) {
 
 				err := engine.TrySyncSessionWithSubagentsContext(t.Context(), "parent")
 				require.ErrorIs(t, err, ErrSyncInProgress)
+				if stage == "parent" {
+					require.ErrorIs(t, err, ErrSessionRefreshNotStarted)
+					assert.NotContains(t, err.Error(), "\n")
+				} else {
+					require.NotErrorIs(t, err, ErrSessionRefreshNotStarted)
+				}
 				release <- struct{}{}
 				require.NoError(t, <-done)
 			})

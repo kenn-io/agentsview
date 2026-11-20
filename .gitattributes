@@ -15,7 +15,6 @@
 *.db binary
 *.sqlite binary
 *.sqlite3 binary
-*.duckdb binary
 *.wasm binary
 *.ttf binary
 *.otf binary

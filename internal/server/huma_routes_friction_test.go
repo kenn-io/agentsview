@@ -4,7 +4,6 @@ import (
 	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,14 +11,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/friction/review"
 	"go.kenn.io/agentsview/internal/server"
-	"go.kenn.io/agentsview/internal/storage"
 )
 
 // Wire mirrors used only to decode responses in tests.
@@ -372,35 +368,4 @@ func TestVersionReportsFrictionReadsOnArchive(t *testing.T) {
 	w := te.get(t, "/api/v1/version")
 	assertStatus(t, w, http.StatusOK)
 	assert.True(t, decode[server.VersionInfo](t, w).FrictionReadable)
-}
-
-func TestFrictionRoutesOnMirrorWithoutFrictionTables(t *testing.T) {
-	if duckdb.RequireDriver() != nil {
-		t.Skip("this build does not link DuckDB; run with -tags duckdb")
-	}
-	te := setup(t)
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	dbtest.SeedMirrorPricing(t, te.db)
-	_, err := duckdb.Push(t.Context(), path, te.db, "installation-a", storage.MirrorPushOptions{}, true, nil)
-	require.NoError(t, err)
-	store, err := duckdb.NewStore(t.Context(), path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	cfg := config.Config{Host: "127.0.0.1"}
-	te.handler = wrapTestHandler(cfg, server.New(cfg, store, nil).Handler())
-	w := te.get(t, "/api/v1/version")
-	assertStatus(t, w, http.StatusOK)
-	assert.False(t, decode[server.VersionInfo](t, w).FrictionReadable)
-	for _, path := range []string{
-		"/api/v1/friction/digests",
-		"/api/v1/friction/digests/2026-09-14",
-		"/api/v1/friction/findings",
-		"/api/v1/friction/patterns",
-	} {
-		t.Run(path, func(t *testing.T) {
-			w := te.get(t, path)
-			assertStatus(t, w, http.StatusNotImplemented)
-			assertBodyContains(t, w, "not available from this backend")
-		})
-	}
 }

@@ -268,6 +268,20 @@ func TestIsHostUnavailable(t *testing.T) {
 	}
 }
 
+// A remote whose daemon is not listening refuses the connection. Each
+// platform reports that with its own socket error; Windows uses a WSA code.
+func TestIsHostUnavailableWhenRemoteRefusesConnection(t *testing.T) {
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := listener.Addr().String()
+	require.NoError(t, listener.Close())
+
+	_, err = (HTTPSource{URL: "http://" + addr}).Targets(t.Context())
+	require.Error(t, err)
+	assert.True(t, IsHostUnavailable(err))
+	assert.Contains(t, FailureSummary(err), "connection refused")
+}
+
 func TestIsHostUnavailableWhenHTTPServerClosesBeforeHeaders(t *testing.T) {
 	serverResult := make(chan error, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(

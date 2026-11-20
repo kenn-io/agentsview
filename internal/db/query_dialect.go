@@ -366,65 +366,6 @@ func clickhouseCastCursor(ph string, kind valueKind) string {
 	}
 }
 
-// DuckDBQueryDialect returns DuckDB-oriented SQL fragments for renderer tests
-// and future backend use. It does not couple to internal/duckdb.
-func DuckDBQueryDialect() QueryDialect {
-	return QueryDialect{
-		name:             "duckdb",
-		position:         func(haystack, needle string) string { return "position(" + needle + " in " + haystack + ")" },
-		placeholderStyle: placeholderQuestion,
-		trueLiteral:      "TRUE",
-		falseLiteral:     "FALSE",
-		dateStartExpr: func(q func(string) string) string {
-			return "COALESCE(" + q("started_at") + ", " +
-				q("created_at") + ")"
-		},
-		dateEndExpr: func(q func(string) string) string {
-			return "COALESCE(" + q("ended_at") +
-				", (SELECT MAX(m.timestamp) FROM messages m" +
-				" WHERE m.session_id = " + outerSessionID(q) +
-				" AND m.timestamp IS NOT NULL), " + q("started_at") +
-				", " + q("created_at") + ")"
-		},
-		dateParam: func(ph string) string {
-			return "CAST(" + ph + " AS TIMESTAMP)"
-		},
-		activityParam:      func(ph string) string { return "CAST(" + ph + " AS TIMESTAMP)" },
-		cursorActivityExpr: "COALESCE(ended_at, started_at, created_at)",
-		cursorParam: func(ph string) string {
-			return "CAST(" + ph + " AS TIMESTAMP)"
-		},
-		castCursor:             duckCastCursor,
-		terminationExpr:        "COALESCE(ended_at, started_at, created_at)",
-		terminationKind:        timestampCast,
-		caseInsensitiveLike:    "ILIKE",
-		caseInsensitiveLikeEsc: `ESCAPE '\'`,
-		regexPredicate: func(col, ph string) string {
-			return "regexp_matches(" + col + ", " + ph + ")"
-		},
-		sidebarChildRelationships:   []string{"subagent", "fork"},
-		canonicalChildRelationships: []string{"subagent", "fork", "continuation"},
-		nullsLast:                   true,
-		labelPredicate: func(q func(string) string, ph string) string {
-			return "list_contains(" + q("labels") + ", " + ph + ")"
-		},
-		prLinkPredicate: func(col, repoPh, numPh, hostPh string) string {
-			cond := "true"
-			if repoPh != "" {
-				cond += " AND lower(pl->>'repository') = " + repoPh
-			}
-			if numPh != "" {
-				cond += " AND CAST(pl->>'number' AS BIGINT) = " + numPh
-			}
-			if hostPh != "" {
-				cond += " AND lower(pl->>'host') = " + hostPh
-			}
-			return "len(list_filter(json_extract(NULLIF(" + col +
-				", ''), '$[*]'), lambda pl: " + cond + ")) > 0"
-		},
-	}
-}
-
 func (d QueryDialect) placeholder(n int) string {
 	if d.placeholderStyle == placeholderDollar {
 		return fmt.Sprintf("$%d", n)
@@ -561,19 +502,6 @@ func pgCastCursor(ph string, kind valueKind) string {
 		return ph + "::bigint"
 	case kindReal:
 		return ph + "::double precision"
-	default:
-		return ph
-	}
-}
-
-func duckCastCursor(ph string, kind valueKind) string {
-	switch kind {
-	case kindTimestamp:
-		return "CAST(" + ph + " AS TIMESTAMP)"
-	case kindInt:
-		return "CAST(" + ph + " AS BIGINT)"
-	case kindReal:
-		return "CAST(" + ph + " AS DOUBLE)"
 	default:
 		return ph
 	}
@@ -1099,7 +1027,7 @@ func (b *QueryBuilder) ExcludeActiveSincePredicate(cutoff time.Time) string {
 
 func excludeActiveSincePredicate(cutoff time.Time, b *QueryBuilder, q func(string) string) string {
 	activity := b.activityExpr(q(""))
-	if b.dialect.name == "sqlite" || b.dialect.name == "duckdb" {
+	if b.dialect.name == "sqlite" {
 		activity = b.dialect.dateParam(activity)
 	}
 	param := b.dialect.dateParam(b.Add(cutoff.UTC().Format(time.RFC3339Nano)))
@@ -1379,4 +1307,17 @@ func sessionIDsPredicate(f SessionFilter, b *QueryBuilder, col string) string {
 		}
 	}
 	return "(" + strings.Join(parts, " OR ") + ")"
+}
+
+// IsCanonicalChildRelationship reports whether rel places a session under its
+// parent in a session tree. Every dialect shares this set.
+func IsCanonicalChildRelationship(rel string) bool {
+	return slices.Contains(SQLiteQueryDialect().canonicalChildRelationships, rel)
+}
+
+// IsSidebarChildRelationship reports whether rel hides a session from flat
+// session lists and searches unless children are included. Every dialect
+// shares this set.
+func IsSidebarChildRelationship(rel string) bool {
+	return slices.Contains(SQLiteQueryDialect().sidebarChildRelationships, rel)
 }

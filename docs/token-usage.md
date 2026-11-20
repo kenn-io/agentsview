@@ -36,8 +36,8 @@ coding yesterday?" — across multiple coding agents from one archive.
     Studio Copilot**, **Mistral Vibe**, **gptme**, **Amp**, **Junie CLI**, **OMO**,
     **StepCode**, and **Direct API** usage files. Coverage also includes **Cline
     CLI**, **Tencent CodeBuddy CN**, **Augure Code**, **Open Interpreter**,
-    **Augure Desktop 3 beta**, **Charm Crush**, **fx**, and **Muse Code**, and
-    reads **DeepSeek Harness** formats through version 3.
+    **Augure Desktop 3 beta**, **Charm Crush**, **fx**, **Muse Code**, and
+    **Factory Droid**, and reads **DeepSeek Harness** formats through version 3.
 
     Command Code forks count only usage produced after the fork.
 
@@ -51,6 +51,19 @@ Crush contributes recorded session totals and cost, with no per-message token or
 cache breakdown. Its aggregate usage is attributed to the most recent assistant
 model, so it does not provide a model-by-model account of a session that
 switched models.
+
+Factory Droid records one running token total per session, with no per-message
+breakdown, in the `<id>.settings.json` file beside each transcript. AgentsView
+reports it as one usage entry dated at the session's last activity and prices
+it from the pricing catalog; Factory credits are not used. Subagent totals are
+added to the session that started them and priced as that session's model,
+since Droid does not record which model a subagent used. A subagent session
+that has its own transcript shows its messages but no usage, because its parent
+already counts it. Factory sessions report total output tokens but no peak
+context size, since Droid does not record per-request usage. A
+bring-your-own-key model is recorded under its Droid name, such as
+`custom:my-model-0`, which the catalog cannot price until you map it with
+`price_as` in [custom model pricing](#custom-model-pricing).
 
 gptme messages use provider-reported billed costs when available, including a
 reported zero. Messages with estimated costs still use catalog pricing.
@@ -147,8 +160,8 @@ stores the returned rows in the local archive, and deduplicates rows by a stable
 event fingerprint. It is safe to rerun the same window after new events arrive.
 
 Imported admin rows are folded into the Usage dashboard,
-`agentsview report usage daily`, DuckDB mirrors, and PostgreSQL after the usual
-push/sync path. They appear as `agent = cursor`; because Cursor Admin events are
+`agentsview report usage daily`, and PostgreSQL after the usual push/sync path.
+They appear as `agent = cursor`; because Cursor Admin events are
 account-level billing rows rather than session transcripts, project, machine,
 session-count, and top-session filters do not apply to those rows. Model and
 date filters do apply.
@@ -544,8 +557,9 @@ it with a report that includes subagents, which is the default. Expect it to
 run slightly above AgentsView's figure in short sessions, where the title call
 is a larger share of the work.
 
-Costs that an agent or provider reports as billed keep their existing
-treatment: the reported cost is the price.
+Agents whose cost AgentsView already used as the price, such as Junie, gptme,
+Codebuff, Hermes, Goose, and Crush, keep that treatment: their reported cost is
+the price.
 
 A usage record that carries a cost but names no model is counted under the
 `<unknown>` model, the same label Cursor account imports use. Its cost and
@@ -860,12 +874,13 @@ present locally; threads that exist only as stubs have nothing to read.
 Tools that call model APIs directly, with no coding agent in between, can
 record their token usage as **Direct API** sessions. The tool writes one
 body-free JSONL file per session: never prompts, documents, or replies. Each
-line is one JSON object, and each line's `parentId` is the `id` of the line
-before it:
+line is one JSON object. After the header, each line's `parentId` is the `id`
+of the line before it, and the first line after the header has a null
+`parentId`:
 
 1. Header, with a UUID4 `id`, an ISO `timestamp`, and the absolute `cwd`:
    `{"type":"session","version":3,"id":<uuid4>,"timestamp":<iso>,"cwd":<cwd>}`
-2. Name, with an 8-hex `id` and a null `parentId`:
+2. Optional name, with an 8-hex `id`:
    `{"type":"session_info","id":<8 hex>,"parentId":null,"timestamp":<iso>,"name":<name>}`
 3. One line per model call, with an 8-hex `id` and `timestamp` in epoch
    milliseconds inside `message`:
@@ -875,9 +890,9 @@ before it:
 tokens, so `totalTokens` is `input + output + cacheRead`. AgentsView prices the
 tokens from the catalog.
 
-Files go in `~/.agentsview/direct-api/` by default. Set `DIRECT_API_DIR`, or
-`direct_api_dirs` in the [config file](configuration.md), to read another
-directory.
+Files go in `~/.agentsview/direct-api/` by default. To read another directory,
+set `DIRECT_API_DIR`, or `dirs` under `[agents.direct-api]` in the
+[config file](configuration.md#multiple-directories).
 
 ## Reporting Model
 
@@ -900,8 +915,9 @@ workflow also:
   second index to keep fresh.
 - **Reads committed archive data** — daily reports can run while the daemon
   imports new source changes. Run `agentsview source sync` first when those changes
-  must be included. Session usage and statusline finish any pending startup
-  ingestion before querying, including when they reuse an existing daemon.
+  must be included. Statusline finishes pending startup ingestion before querying.
+  Session usage attempts a targeted refresh by default and may return saved totals
+  while startup is pending.
 
 <a id="agentsview-usage-daily"></a>
 
@@ -1224,8 +1240,8 @@ removed. Absolute paths, raw remotes, and credentials do not cross the export
 boundary. Remote-backed catalog identities omit machine-local `root_key`;
 session rows retain their own complete root, worktree, and checkout facts.
 
-SQLite catalog keys are archive-scoped. Shared PostgreSQL and DuckDB dashboard
-responses may aggregate archives, so their catalog keys are response-scoped and
+SQLite catalog keys are archive-scoped. Shared PostgreSQL and ClickHouse
+dashboard responses may aggregate archives, so their catalog keys are response-scoped and
 must not be persisted as durable selectors. The canonical `identity.key`, not
 the display label or catalog key, represents project continuity.
 
@@ -1335,8 +1351,14 @@ daemon's file watcher handles later source changes.
 During a full parser rebuild, statusline skips startup ingestion and reads the
 retained archive with a stale warning.
 
-`session usage` and its `token-use` alias refresh known sessions without
-waiting for startup ingestion. Combined totals include archived descendants.
+`session usage` and its `token-use` alias attempt to refresh known sessions
+without waiting by default. Pass `session usage --wait` to wait for startup or
+a rebuild before refreshing; known sessions can refresh during catch-up.
+Missing sessions are looked up until the wait expires. A confirmed missing ID
+returns exit 2 when status is clear; an incomplete lookup, pending work, or
+unavailable status returns a retry error.
+`--own-only --wait` can start deferred ingestion, then reads its own archived
+usage. Combined totals include archived descendants.
 See the [session usage contract](/docs/session-api/#agentsview-session-usage)
 for refresh behavior, missing-session exit codes, and the `refresh_incomplete`
 JSON field.

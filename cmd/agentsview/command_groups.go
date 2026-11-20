@@ -32,7 +32,6 @@ func commandMoves() []commandMove {
 		{"activity", "report activity", newActivityReportCommand, "agentsview report activity --preset week"},
 		{"usage", "report usage", newReportUsageCommand, "agentsview report usage daily --no-sync"},
 		{"pg", "replica pg", newPGCommand, "agentsview replica pg status"},
-		{"duckdb", "replica duckdb", newDuckDBCommand, "agentsview replica duckdb status"},
 		{"clickhouse", "replica clickhouse", newClickHouseCommand, "agentsview replica clickhouse status"},
 		{"embeddings", "index embeddings", newEmbeddingsCommand, "agentsview index embeddings list"},
 		{"classifier", "index classifier", newClassifierCommand, "agentsview index classifier rebuild"},
@@ -70,9 +69,9 @@ func groupCommands(root *cobra.Command) {
 				"action's --help for its time window, filters, and output formats.", groupUsage,
 			"agentsview report stats --json\nagentsview report activity --preset week\nagentsview report usage daily --no-sync"),
 		newCommandDomain("replica", "Sync and serve database replicas",
-			"Choose pg, duckdb, or clickhouse, then an action such as push, status,\n"+
-				"or serve. Configure a backend before pushing or serving its replica.", groupData,
-			"agentsview replica pg --help\nagentsview replica duckdb status"),
+			"Choose pg or clickhouse, then an action such as push, status, or serve.\n"+
+				"Configure a backend before pushing or serving its replica.", groupData,
+			"agentsview replica pg --help\nagentsview replica clickhouse status"),
 		newCommandDomain("index", "Build and manage derived search indexes",
 			"Manage semantic embedding generations. Indexes are derived from the\n"+
 				"archive; building or activating one may update local derived data.", groupData,

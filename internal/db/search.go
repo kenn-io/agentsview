@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/kit/search/lexical"
 )
 
@@ -72,7 +73,9 @@ func goalContextPrefixed(content, role string, attrMatch func(string) bool) bool
 	return false
 }
 
-func duckDBGoalContextPrefixed(content, role string) bool {
+// sqlGoalContextPrefixed is the goal-tag rule the SQL classifiers apply: the
+// open tag must contain source="goal" followed by whitespace, ">", or "/>".
+func sqlGoalContextPrefixed(content, role string) bool {
 	return goalContextPrefixed(content, role, func(openTag string) bool {
 		openTag = goalContextWhitespace.Replace(openTag + ">")
 		return strings.Contains(openTag, goalContextSourceAttrSQLPrefix+" ") ||
@@ -86,7 +89,6 @@ type systemPrefixSQLDialect int
 const (
 	systemPrefixSQLite systemPrefixSQLDialect = iota
 	systemPrefixPostgres
-	systemPrefixDuckDB
 )
 
 // SystemPrefixSQL returns a SQL clause that excludes user messages
@@ -112,11 +114,6 @@ func PostgresSystemPrefixSQLWithoutGuard(contentCol, roleCol string) string {
 	return systemPrefixSQL(contentCol, roleCol, systemPrefixPostgres, false)
 }
 
-// DuckDBSystemPrefixSQL is the DuckDB form of SystemPrefixSQL.
-func DuckDBSystemPrefixSQL(contentCol, roleCol string) string {
-	return systemPrefixSQL(contentCol, roleCol, systemPrefixDuckDB, false)
-}
-
 func systemPrefixSQL(
 	contentCol, roleCol string, dialect systemPrefixSQLDialect, firstCharGuard bool,
 ) string {
@@ -124,7 +121,7 @@ func systemPrefixSQL(
 	// JS .trim(), and the parser's isSystem helpers: ASCII whitespace,
 	// BOM (U+FEFF), and Unicode
 	// spaces (U+0085, U+00A0, U+1680, U+2000–U+200A, U+2028,
-	// U+2029, U+202F, U+205F, U+3000). SQLite, PostgreSQL, and DuckDB
+	// U+2029, U+202F, U+205F, U+3000). SQLite and PostgreSQL
 	// handle multi-byte UTF-8 characters in the trim set correctly.
 	trimmed := systemPrefixSQLTrimmed(contentCol)
 	parts := make([]string, 0, len(SystemMsgPrefixes)+1)
@@ -306,9 +303,10 @@ func IsSystemPrefixed(content, role string) bool {
 	return systemPrefixed(content, role, IsGoalContextPrefixed)
 }
 
-// IsDuckDBSystemPrefixed preserves the DuckDB search filter's goal-tag rules.
-func IsDuckDBSystemPrefixed(content, role string) bool {
-	return systemPrefixed(content, role, duckDBGoalContextPrefixed)
+// sqlSystemPrefixed is IsSystemPrefixed with the SQL classifiers' goal-tag
+// rule. SystemPrefixRulesVersion fingerprints it.
+func sqlSystemPrefixed(content, role string) bool {
+	return systemPrefixed(content, role, sqlGoalContextPrefixed)
 }
 
 func systemPrefixed(content, role string, goal func(string, string) bool) bool {
@@ -434,21 +432,38 @@ func (db *DB) Search(
 		return db.search(ctx, f, cjk)
 	}
 	key := fmt.Sprintf("%s|%t", f.Slot(), cjk)
-	id, err := db.GetDatabaseID(ctx)
-	if err != nil {
+	version := db.searchVersion(ctx, cjk)
+	if version == "" {
 		return db.search(ctx, f, cjk)
 	}
-	revision, err := db.UsageChangeRevision(ctx)
-	if err != nil {
-		return db.search(ctx, f, cjk)
-	}
-	searchRevision, err := db.archiveJournalRevision(ctx, archiveMetadataSearchChangeRevisionKey, "search change")
-	if err != nil {
-		return db.search(ctx, f, cjk)
-	}
-	return db.searchKept.Do(ctx, key, fmt.Sprintf("%s|%d|%d", id, revision, searchRevision), func(ctx context.Context) (SearchPage, error) {
-		return db.search(ctx, f, cjk)
+	db.trendsPartsDisk()
+	return db.searchKept.DoChecked(ctx, key, version, func(ctx context.Context) (SearchPage, bool, error) {
+		return kept.LoadJSON(&db.trendsDisk, "search|"+key, version, func() bool {
+			return db.searchVersion(ctx, cjk) == version
+		}, func() (SearchPage, error) {
+			if db.afterSearchRead != nil {
+				db.afterSearchRead()
+			}
+			return db.search(ctx, f, cjk)
+		})
 	})
+}
+
+func (db *DB) searchVersion(ctx context.Context, cjk bool) string {
+	var id, token string
+	err := db.getReader().QueryRowContext(ctx, `SELECT
+		(SELECT value FROM archive_metadata WHERE key = ?),
+		(SELECT value FROM archive_metadata WHERE key = 'search_history_token')`,
+		archiveMetadataDatabaseIDKey,
+	).Scan(&id, &token)
+	if err != nil || strings.TrimSpace(id) == "" || token == "" {
+		return ""
+	}
+	fingerprint := ""
+	if cjk {
+		fingerprint = simpleFTSRuntimeConfig.fingerprint
+	}
+	return fmt.Sprintf("%s|%s|%s", id, token, fingerprint)
 }
 
 func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage, error) {
@@ -472,8 +487,7 @@ func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage,
 		matchPosSQL = "0"
 	}
 
-	// innerWhere is used in the ROW_NUMBER inner subquery and the NOT IN
-	// subquery for the name branch.
+	// innerWhere selects the message matches used by both search branches.
 	matchSQL := "messages_fts.rendered MATCH ?"
 	if hasFTSColumnFilter(f.Query) {
 		matchSQL = "messages_fts MATCH ?"
@@ -537,15 +551,13 @@ func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage,
 		}
 	}
 
-	var args []any
-	withSQL := "WITH "
-	bestSQL := `SELECT session_id, best_rowid, best_ordinal, best_rank, best_query
+	args := ftsArgs
+	withSQL := `WITH best_rows AS MATERIALIZED (SELECT session_id, best_rowid, best_ordinal, best_rank
 				FROM (
 					SELECT m2.session_id,
 						messages_fts.rowid AS best_rowid,
 						m2.ordinal AS best_ordinal,
 						rank AS best_rank,
-						? AS best_query,
 						ROW_NUMBER() OVER (
 							PARTITION BY m2.session_id
 							ORDER BY rank ASC, m2.ordinal ASC,
@@ -556,21 +568,14 @@ func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage,
 					JOIN sessions s2 ON m2.session_id = s2.id
 					WHERE ` + innerWhereSQL + `
 				)
-				WHERE rn = 1`
-	ftsSessionsSQL := `SELECT m2.session_id
-					FROM messages_fts
-					JOIN messages m2 ON messages_fts.rowid = m2.id
-					JOIN sessions s2 ON m2.session_id = s2.id
-					WHERE ` + innerWhereSQL
-	bestArgs := append([]any{plainQuery}, ftsArgs...)
-	ftsSessionsArgs := ftsArgs
+				WHERE rn = 1), `
+	bestSQL := "SELECT session_id, best_rowid, best_ordinal, best_rank, ? AS best_query FROM best_rows"
+	bestArgs := []any{plainQuery}
+	ftsSessionsSQL := "SELECT session_id FROM best_rows"
+	var ftsSessionsArgs []any
 	includeNames := true
 	if walk != nil {
 		withSQL, args = walk.bestRowsSQL()
-		bestSQL = "SELECT session_id, best_rowid, best_ordinal, best_rank, ? AS best_query FROM best_rows"
-		bestArgs = []any{plainQuery}
-		ftsSessionsSQL = "SELECT session_id FROM best_rows"
-		ftsSessionsArgs = nil
 		// Name rows rank after every message and image match.
 		includeNames = walk.complete
 	}

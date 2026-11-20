@@ -1,7 +1,7 @@
 package db
 
-// Dashboard input columns are shared by the archive, PostgreSQL journal, and
-// DuckDB content digests. Message join keys differ between the backends.
+// Dashboard input columns are shared by the archive and the PostgreSQL
+// journal. Message join keys differ between the backends.
 var (
 	DashboardSessionInputs         = []string{"id", "message_count", "relationship_type", "deleted_at", "machine", "project", "git_branch", "agent", "user_message_count", "is_automated", "started_at", "ended_at", "created_at", "termination_status"}
 	DashboardToolsSessionInputs    = []string{"id", "quality_signal_version"}

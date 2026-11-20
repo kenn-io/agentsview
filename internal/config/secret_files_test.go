@@ -119,23 +119,6 @@ func TestSecretFileSettingsLoadFromConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "duckdb token",
-			config: func(path string) map[string]any {
-				return map[string]any{"duckdb": map[string]any{
-					"url":        "quack://duck.example.test",
-					"token_file": path,
-				}}
-			},
-			secret: func(t *testing.T, cfg Config) string {
-				t.Helper()
-				duck, err := cfg.ResolveDuckDB()
-				require.NoError(t, err)
-				token, err := duck.ResolveToken()
-				require.NoError(t, err)
-				return token
-			},
-		},
-		{
 			name: "cursor admin api key",
 			config: func(path string) map[string]any {
 				return map[string]any{"cursor_admin_api_key_file": path}
@@ -285,13 +268,6 @@ func TestSecretFileSettingsRejectTwoSources(t *testing.T) {
 			wantErr: "[recall.extract.servers.remote] set only one of api_key_env and api_key_file",
 		},
 		{
-			name: "duckdb token",
-			config: map[string]any{"duckdb": map[string]any{
-				"token": "inline", "token_file": "/run/secrets/key",
-			}},
-			wantErr: "[duckdb] set only one of token and token_file",
-		},
-		{
 			name: "cursor admin api key",
 			config: map[string]any{
 				"cursor_admin_api_key": "inline", "cursor_admin_api_key_file": "/run/secrets/key",
@@ -315,20 +291,6 @@ func TestSecretFileSettingsRejectTwoSources(t *testing.T) {
 }
 
 func TestSecretFileEnvironmentOverridesReplaceFiles(t *testing.T) {
-	t.Run("AGENTSVIEW_DUCKDB_TOKEN", func(t *testing.T) {
-		f := newConfigFixture(t)
-		t.Setenv("AGENTSVIEW_DUCKDB_TOKEN", "env-token")
-		f.WriteTOML(t, map[string]any{"duckdb": map[string]any{
-			"token_file": filepath.Join(f.Dir, "absent"),
-		}})
-		cfg := f.LoadMinimal(t)
-		duck, err := cfg.ResolveDuckDB()
-		require.NoError(t, err)
-		token, err := duck.ResolveToken()
-		require.NoError(t, err)
-		assert.Equal(t, "env-token", token)
-	})
-
 	t.Run("AGENTSVIEW_CURSOR_ADMIN_API_KEY", func(t *testing.T) {
 		f := newConfigFixture(t)
 		t.Setenv("AGENTSVIEW_CURSOR_ADMIN_API_KEY", "env-key")
@@ -339,16 +301,5 @@ func TestSecretFileEnvironmentOverridesReplaceFiles(t *testing.T) {
 		key, err := cfg.ResolveCursorAdminAPIKey()
 		require.NoError(t, err)
 		assert.Equal(t, "env-key", key)
-	})
-
-	t.Run("unreadable duckdb token_file fails only when the token is used", func(t *testing.T) {
-		f := newConfigFixture(t)
-		path := filepath.Join(f.Dir, "absent")
-		f.WriteTOML(t, map[string]any{"duckdb": map[string]any{"token_file": path}})
-		cfg := f.LoadMinimal(t)
-		duck, err := cfg.ResolveDuckDB()
-		require.NoError(t, err, "local mirror work needs no token")
-		_, err = duck.ResolveToken()
-		requireErrorContains(t, err, "[duckdb] token_file", path)
 	})
 }

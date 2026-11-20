@@ -743,8 +743,8 @@ not an error. The response is `{"session_id", "labels", "session_found"}`.
   as it knows the ID; the labels appear when sync imports the session.
   `session_found: false` reports that case, which also exposes a mistyped ID.
 - Labels are stored apart from the transcript, so a reparse or full resync never
-  changes them. PostgreSQL, DuckDB, and ClickHouse receive them on push and
-  serve the `label` filter, but labels are written only through the local
+  changes them. PostgreSQL and ClickHouse receive them on push and serve the
+  `label` filter, but labels are written only through the local
   archive. Read-only daemons return HTTP 501.
 - See [Filtering by label or pull request](#filtering-by-label-or-pull-request)
   for which sessions the filters return.
@@ -859,14 +859,14 @@ The content-search response includes `active_filter_applied`, which is true when
 `exclude_active_since` was applied before pagination. All current stores support
 this filter. Older servers may omit the field.
 
-On SQLite, PostgreSQL, DuckDB, and ClickHouse, the `messages` source searches dialogue from
+On SQLite, PostgreSQL, and ClickHouse, the `messages` source searches dialogue from
 structured text blocks in Pi, OMP, OMO, Prime Agent, StepCode, iFlow, Claude Code,
 Cowork, iCodeMate CLI, Qoder, Cursor JSONL, Amp, OpenClaude, OpenClaw, QClaw, Devin,
 and OpenHands.
 Those projections exclude rendered tool calls and reasoning from snippets,
 while preserving literal marker text in dialogue. These parsers store reasoning
 blocks in `thinking_text`, including Cursor JSONL and OpenHands. Substring and
-regex searches on SQLite, PostgreSQL, DuckDB, and ClickHouse include `thinking` by default;
+regex searches on SQLite, PostgreSQL, and ClickHouse include `thinking` by default;
 use `--in messages` for dialogue alone or `--in thinking` for reasoning alone.
 FTS searches messages only. Terms, semantic, and hybrid reject `thinking` as a
 source. Semantic search continues to embed full message text; hybrid's keyword
@@ -884,8 +884,7 @@ rendered text in `rendered` and `COALESCE(dialogue_text, content)` in `content`.
 Ordinary session search matches `rendered` unless the query names an FTS column;
 FTS content search and hybrid's keyword search match `content`. Session-search
 ordering may shift.
-DuckDB mirrors rebuild on their next push to fill dialogue. The first ClickHouse
-push after upgrading is a full push to fill dialogue.
+The first ClickHouse push after upgrading is a full push to fill dialogue.
 
 PostgreSQL schema setup adds the dialogue column and builds trigram indexes on
 dialogue and reasoning beside the existing `content` index. The dialogue index
@@ -917,7 +916,7 @@ child sessions from the one-shot exclusion.
 | `--hybrid`            | `mode=hybrid`          | Semantic + FTS reciprocal rank fusion; messages-only — see [Semantic Search](/docs/semantic-search/)                                                                              |
 | `--scope`             | `scope`                | `top`, `all`, or `subordinate`; CLI: semantic/hybrid only, default `all`. HTTP: substring/regex/terms/semantic/hybrid; explicit scope supersedes `include_children`                                                                     |
 | `--context`           | `context`              | int — N messages of context before/after each match (max 10)                                                                                                                      |
-| `--in`                | `in`                   | Comma-separated: `messages,thinking,tool_input,tool_result` (default all); `thinking` requires SQLite, PostgreSQL, DuckDB, or ClickHouse substring/regex                                                                                                                  |
+| `--in`                | `in`                   | Comma-separated: `messages,thinking,tool_input,tool_result` (default all); `thinking` requires SQLite, PostgreSQL, or ClickHouse substring/regex                                                                                                                          |
 | `--exclude-system`    | `exclude_system`       | Drop system messages from the scan                                                                                                                                                |
 | `--reveal`            | `reveal`               | Show full secret values (localhost-only; warning to stderr)                                                                                                                       |
 | `--project`           | `project`              | string                                                                                                                                                                            |
@@ -946,7 +945,7 @@ substring (the default) and regex modes also walk `tool_calls.input_json`,
 (`--cursor` is rejected) — see [Semantic Search](/docs/semantic-search/) for
 setup, scoring, and limitations.
 
-On SQLite, PostgreSQL, DuckDB, and ClickHouse, a default search of several words that includes `messages` returns
+On SQLite, PostgreSQL, and ClickHouse, a default search of several words that includes `messages` returns
 exact text matches first, then messages ordered by how many query words they
 hold, with that count in `matched_words`. Unquoted stop words do not count.
 Regular word forms count, and a quoted phrase inside the query requires its
@@ -1091,7 +1090,7 @@ request.
   returns from the rollup branch first, so `subagents` has no effect.
 
 ```bash
-agentsview session usage <id> [--format json] [--own-only] [--no-sync]
+agentsview session usage <id> [--format json] [--own-only] [--no-sync] [--wait]
 ```
 
 ```json
@@ -1166,6 +1165,7 @@ agentsview session usage <id> [--format json] [--own-only] [--no-sync]
 | `session_total`         | Present when the agent recorded a total for the whole session (Claude Code `cost-state`). `source`, `subagent_scope` (`included`, `excluded`, or omitted when unknown), `cost`, `incomplete` when the agent could not price every model, and per-model `models` token counts and costs. It overlaps the usage rows, so it is never part of `cost` or the token totals; compare it with a result that includes subagents when `subagent_scope` is `included`. The human output shows it as an `Agent total:` line |
 | `server_running`        | `true` when the report came from an already-running daemon                                                                                                                                                                                       |
 | `refresh_incomplete`   | Present as `true` when a requested source refresh was refused or failed; the result still contains archived totals                                                                                                                                 |
+| `wait_incomplete`      | Present as `true` when an archive-only wait failed; the result contains saved totals |
 | `rollup_cost`           | REST only, with `rollup=true`; integer microdollar object present only when `has_rollup_cost` is true, carrying the complete cost across the root and explicit subagent descendants                                                              |
 | `has_rollup_cost`       | REST only, with `rollup=true`; true only when at least one contributing row exists and every contributing row is priced                                                                                                                          |
 | `rollup_subagent_count` | REST only, with `rollup=true`; count of reachable explicit subagent descendants, including those without usage rows                                                                                                                              |
@@ -1217,11 +1217,12 @@ Output:        15230
 Peak ctx:      84000
 Subagents:     2 (included)
 Cost:          ~$2.41 (claude-opus-4-7)
+Agent total:   $2.38 for the session, including subagents
 ```
 
-The `Subagents` line appears only when the figures cover subagent transcripts,
-so a session without them (or a `--own-only` run) prints the same five lines it
-always has.
+The `Subagents` line appears only when the figures cover subagent transcripts.
+`Agent cost` and `Agent total` appear when the agent recorded its own figures;
+see [Costs the Agent Records Itself](/docs/token-usage/#costs-the-agent-records-itself).
 
 When refresh is incomplete, human output adds `Usage refresh is incomplete. Saved totals may be out of date.`.
 
@@ -1310,29 +1311,53 @@ did before. A Codex Cloud session with plan usage figures but no captured tokens
 exits `0`. A sub-agent chat counted under its root, or a session whose plan
 usage has not been reported, exits `3`.
 
-Combined usage refreshes a known session and nearby Claude subagent transcripts
-without waiting for startup ingestion. The CLI requests this with
+By default, combined usage attempts to refresh a known session and nearby
+Claude subagent transcripts without waiting for startup ingestion. The CLI requests this with
 `usage_refresh: true`, `id`, and `subagents: true` on
 `POST /api/v1/sessions/sync`. If refresh is refused or fails, the command
 returns archived totals with a warning; JSON sets `refresh_incomplete: true`.
 A missing daemon ID returns a retry error while `GET /api/v1/sync/status`
 reports `startup_pending`, `archive_stale`, or `sync_pending`. Once all three
-are clear, it returns exit 2. Scheduled ingestion owns retries.
+are clear, it returns exit 2 without `--wait`. Pass `--wait` to give HTTP lookup, ingestion,
+and refresh a shared 30-second budget after daemon discovery. When startup is
+deferred, combined usage requests it once and keeps observing status if that
+request fails; it does not start an archive rebuild. A known session may refresh
+while catch-up is pending once startup and rebuild are clear. A missing ID is
+looked up repeatedly after startup and rebuild clear, including during catch-up.
+At the deadline, a confirmed absent ID returns exit 2 if status is clear; an
+incomplete lookup, pending work, or unavailable status returns a retry error.
+Only a confirmed parent lock refusal permits a refresh retry. If waiting fails or expires, the
+command reads available saved totals and reports that the wait did not finish.
+An ID that is still absent while work remains pending returns a retry error.
 
 Daemon API 15 adds `sync_pending`, which stays true while ingestion catches up
 after an idle period. Older local clients must upgrade to interpret it. The
 field and catch-up warning clear when the pass finishes or fails, and failures
-are logged. Archive responses carry `X-Agentsview-Archive-Stale: true` while
-catch-up is incomplete. A required parser rebuild uses the stale header
-independently.
+are logged. Archive responses carry `X-Agentsview-Archive-Stale: true` when
+a catch-up of changes held back by the background sync interval or an idle
+pause did not finish within the read's wait. A read within two minutes of
+another archive read starts no catch-up. The watcher keeps syncing at
+`sync_interval` during that time, so the read can miss up to that interval of
+changes. If an earlier read's catch-up is still running, the read shares its
+remaining wait and is marked stale when that wait runs out. Otherwise it
+answers at once and is not marked stale. A required parser rebuild uses the
+stale header independently.
 
-HTTP `--own-only` and `--no-sync` read only the archive and return exit 2 for
-missing IDs. Direct mode still refreshes the named transcript. Combined HTTP
+HTTP `--own-only` reads usage from the archive and, with `--wait`, can start
+deferred ingestion. HTTP `--no-sync` reads the archive and never starts source
+sync. If the wait fails, the command
+warns and JSON sets `wait_incomplete: true` without marking a refresh. Direct
+and PostgreSQL reads do not wait for a daemon. HTTP archive-only waits require
+daemon API 15; waits that refresh require API 26. Upgrade or restart an older
+server, and upgrade the client for a newer server API. Direct mode still
+refreshes the named transcript. Combined HTTP
 refresh requires daemon API 12; upgrade or restart older servers, or use
 `--no-sync`. Archived combined reads require API 6. `POST /api/v1/sessions/sync`
 returns HTTP 409 for a stale local archive for every caller, including
 `session sync`. A usage refresh also returns HTTP 409 while startup ingestion
-is incomplete or another sync holds the engine. When startup ingestion is
+is incomplete or another sync holds the engine. Only a refusal before the parent
+refresh acquired its lock carries the code `session_refresh_not_started`; other
+conflicts do not authorize a refresh retry. When startup ingestion is
 deferred, its automatic fallback starts after a 30-second grace period.
 
 Pass `--no-sync` to read archived usage without refreshing source transcripts.
@@ -1609,7 +1634,7 @@ against `pg serve`, with the same masking and `--reveal` constraints.
 
 ### Ingest-time image offload
 
-The normalized Markdown endpoint `/api/v1/sessions/{id}/md` carries stored tool-result content, including `agentsview_image` placeholders and `image_ref` asset references. The HTML export keeps its existing contract. A serving host needs the matching `{dataDir}/assets` directory. PostgreSQL and CockroachDB retain the reference text but cannot resolve local assets. The raw `agentsview session export` command streams provider source bytes and retains their original inline payloads.
+The normalized Markdown endpoint `/api/v1/sessions/{id}/md` carries stored tool-result content, including `agentsview_image` placeholders and `image_ref` asset references. The HTML export keeps its existing contract. A serving host needs the matching `{dataDir}/assets` directory. PostgreSQL and CockroachDB retain the reference text but cannot resolve local assets. The raw `agentsview session export` command streams provider source with detected secrets masked unless you pass `--reveal`, and keeps the original inline image payloads.
 
 ## Commit lookups
 
@@ -1618,7 +1643,7 @@ session. `POST /api/v1/commits/sessions` accepts `{"shas": ["abc1234"]}` and
 returns `{"commits": [{"sha": "abc1234", "links": [...]}]}` in request order.
 Send 1 to 200 hexadecimal SHAs or prefixes of 7 to 64 characters. Queries ignore
 case. Unknown SHAs have empty `links`. Invalid SHAs or array lengths return
-HTTP 400. PostgreSQL, DuckDB, and ClickHouse replicas answer transcript and
+HTTP 400. PostgreSQL and ClickHouse replicas answer transcript and
 trailer link lookups after a push with a version that stores commit links.
 Hosted PostgreSQL returns HTTP 501.
 
@@ -1670,6 +1695,8 @@ transcript links; `"usage"` archives keep neither.
 
 ### Git trailer links
 
+Run `agentsview git-hook install` in a repository to add these lines to new
+commits; see [`agentsview git-hook`](/docs/commands/#agentsview-git-hook).
 Commits containing `Agent-Session: <agent>:<session-id>` lines appear with
 `source: "trailer"`, a full SHA, Git's author time, and a repository path.
 Claude IDs omit the `claude:` prefix in the archive; other agents use their

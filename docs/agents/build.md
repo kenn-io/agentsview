@@ -7,6 +7,39 @@ or frontend dependencies. Use the `Makefile` as the command reference.
 
 Update the CI path filters when adding a reader of files in another lane.
 
+## Merge queue checks
+
+Every PR runs the full CI suite before it can join the merge queue, and every
+push to `main` runs it again. A merge group therefore runs only the checks that
+two PRs, each green on its own, are likely to break together:
+
+- `lint` (golangci-lint with the Huma API contract check, and NilAway)
+- `frontend` (formatting, type checks, design-system checks, unit tests)
+- `Docs and scripts`
+- the Linux `test` suites: Sync, Other packages (including the SQLite schema and
+  data-version tests in `internal/db` and `internal/parser`), and Eval ingest
+- `e2e (chromium)`
+
+Two PRs that bump a version to the same number make the same edit, so Git merges
+them without a conflict. For the SQLite data version, the merge group catches
+this: `TestParsedOutputMatchesDataVersion` fails when one version has two bump
+records, and two `dataVersionScopes` entries for one version do not compile.
+
+Merge groups skip `test-extended` (Windows, macOS, the x86-64-v2 startup check,
+and the simulator), the isolated Windows suites, the race detector, the
+PostgreSQL, CockroachDB, and ClickHouse integration suites, WebKit e2e, Node 26
+frontend tests, desktop unit tests, and the released-command check. PostgreSQL
+and ClickHouse schema changes therefore rely on the integration suites that run
+on every PR and on `main`. A break that only a skipped suite catches surfaces in
+`main` CI after the merge.
+
+When you add a job, decide which group it belongs to. A job skips merge groups
+when its `if` includes `github.event_name != 'merge_group'`. A matrix cannot
+drop an `include` entry by event, so split queue entries into their own job (as
+`test` and `test-extended` share steps through a YAML anchor), or list the
+matrix values in an expression (as `e2e` does). Branch protection requires
+`CI gate`, not individual CI jobs, so these changes need no ruleset update.
+
 ## CI runner policy
 
 CI jobs use standard GitHub-hosted runners, including fork pull requests,
@@ -48,22 +81,12 @@ ancestor permissions satisfy their checks.
 
 - Build with `CGO_ENABLED=1`; the SQLite driver requires CGO.
 - Use the `fts5` build tag for full-text search.
-- The `duckdb` build tag links the DuckDB mirror driver. Builds without it,
-  including every release artifact, get the stub in
-  `internal/duckdb/driver_unavailable.go`. DuckDB 2.0's prebuilt libraries
-  require x86-64-v3 and run code from a package `init`, so linking them made
-  every agentsview start crash on older x86-64 CPUs. Build targets add the tag
-  only with `DUCKDB=1`. Tests, vet, lint, and the e2e server link DuckDB so
-  they cover the mirror, and CI also runs `internal/duckdb` without the tag.
-  CI also starts that build under QEMU on a Nehalem CPU model (x86-64-v2), so
-  code that needs a newer CPU at startup fails CI. Tag DuckDB-only test files
-  `duckdb`; a test elsewhere that needs the driver skips when
-  `duckdb.RequireDriver()` returns an error.
-- The Makefile's `LDFLAGS` set the PostHog project key with
-  `-X go.kenn.io/kit/telemetry/posthog.projectKey`. Builds without it send no
-  telemetry, so keep it out of test and e2e builds.
-- `DISTRIBUTION` sets `main.distribution` and
-  `go.kenn.io/kit/telemetry/posthog.distribution` to who ships the binary.
+- Release builds must start on x86-64-v2 CPUs. CI builds the `fts5` binary and
+  starts it under QEMU on a Nehalem CPU model (x86-64-v2), so a dependency
+  that needs a newer CPU at startup fails CI. Check a new cgo or prebuilt
+  native library against that baseline before adding it.
+- Keep the Makefile's release-only link settings out of test and e2e builds.
+- `DISTRIBUTION` identifies who ships the binary.
   Official direct downloads use `kenn` and keep self-updating, like builds
   with no value. Any other value names a package manager: those builds refuse
   `agentsview update` installs and point users at the package manager.

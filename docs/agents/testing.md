@@ -39,6 +39,10 @@ Read this file before adding or changing tests.
   keeps a `tzdata_test.go` that imports `time/tzdata`. Trimmed test binaries
   cannot read the zone database in `GOROOT`, and Windows has no system copy.
 
+For ClickHouse read tests that need the standard populated mirror, use
+`newClonedReadStore(t)`. Choose the fixture for each test using the
+[ClickHouse storage guide](storage.md#clickhouse-test-fixtures).
+
 ### Timing budgets
 
 The kit `deadlinetest` analyzer, run by `kennlint` in `make lint` and
@@ -57,7 +61,7 @@ what holds the wait.
 
 The check sees only the `fts5` test files each lint run compiles: Linux and
 Windows in full, and on macOS only the packages the macOS job lints. Tests
-behind `pgtest`, `chtest`, `duckdbtest`, or `s3test` go unchecked. It skips
+behind `pgtest`, `chtest`, or `s3test` go unchecked. It skips
 short positive `Never` windows, which cannot fail.
 
 ## Frontend and End-to-End Tests

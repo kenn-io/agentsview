@@ -341,11 +341,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	idleTracker := newDaemonIdleTracker(cfg, func() { requestRestart(nil) })
 
 	telemetryReporter := telemetry.NewReporterOrDisabled(telemetryOptions(cfg))
-	defer func() {
-		if err := telemetryReporter.Close(); err != nil {
-			log.Printf("close telemetry: %v", err)
-		}
-	}()
+	defer func() { _ = telemetryReporter.Close() }()
 
 	broadcaster := server.NewBroadcaster(cfg.EventsCoalesceInterval)
 
@@ -1654,9 +1650,7 @@ func telemetryCaptureHandler(cfg config.Config, enabled bool, next http.Handler)
 	startMigration = stdsync.OnceFunc(func() {
 		go func() {
 			defer close(migrated)
-			if err := cfg.MigrateTelemetryScreenClaims(); err != nil {
-				log.Printf("telemetry screen claims unavailable: %v", err)
-			}
+			_ = cfg.MigrateTelemetryScreenClaims()
 		}()
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1690,9 +1684,7 @@ func runDailyTelemetryPings(ctx context.Context, interval time.Duration, cfg con
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		if err := cfg.ClaimDaemonActive(time.Now(), send); err != nil && ctx.Err() == nil {
-			log.Printf("capture telemetry event: %v", err)
-		}
+		_ = cfg.ClaimDaemonActive(time.Now(), send)
 		select {
 		case <-ctx.Done():
 			return
@@ -1912,14 +1904,14 @@ func daemonRestartUpgradeHint() string {
 // staleClientUpgradeHint is the counterpart of daemonRestartUpgradeHint for
 // the direction where the daemon has already been upgraded and the process
 // running this command is the one left behind, typically a `pg push
-// --watch` or `duckdb push --watch` started before the upgrade.
+// --watch` started before the upgrade.
 func staleClientUpgradeHint() string {
 	return "The running daemon is newer than this agentsview binary, so " +
 		"this command cannot use it until both run the same version. " +
 		"Restarting the daemon will not help. Upgrade this agentsview " +
 		"install and rerun the command. If this command is a " +
 		"long-running background process started before the upgrade " +
-		"(`pg push --watch`, `duckdb push --watch`, or a service " +
+		"(`pg push --watch`, `clickhouse push --watch`, or a service " +
 		"installed with `agentsview replica pg service`), restart it so it " +
 		"picks up the current binary."
 }

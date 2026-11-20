@@ -110,11 +110,11 @@ session and prompt behind a line of code.
 ## 09. Extend beyond one machine
 
 Push each machine's archive to PostgreSQL for a merged team view, use ClickHouse
-for a remote dashboard, mirror into DuckDB for analytical queries, read source
-files through the filesystem or S3, or keep original files in hosted storage.
-Hosted raw sync can also parse uploaded sources directly into PostgreSQL without
-a local SQLite archive or a separate push. [PostgreSQL sync](/docs/pg-sync/) ·
-[ClickHouse sync](/docs/clickhouse-sync/) · [DuckDB mirror](/docs/duckdb/) ·
+for a remote dashboard, read source files through the filesystem or S3, or keep
+original files in hosted storage. Hosted raw sync can also parse uploaded
+sources directly into PostgreSQL without a local SQLite archive or a separate
+push. [PostgreSQL sync](/docs/pg-sync/) ·
+[ClickHouse sync](/docs/clickhouse-sync/) ·
 [Hosted raw sync](/docs/hosted-raw-sync/).
 
 SSH sync fetches sessions from remote Linux and macOS hosts without a manually

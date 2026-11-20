@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cenkalti/backoff/v7"
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
@@ -27,6 +28,12 @@ import (
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/servicehttp"
+	"go.kenn.io/agentsview/internal/sync"
+)
+
+var (
+	sessionUsageWaitTimeout  = startupWaitTimeout
+	sessionUsagePollInterval = time.Second
 )
 
 var sessionUsageHTTPClient = &http.Client{Timeout: 30 * time.Second}
@@ -40,8 +47,8 @@ func newSessionUsageCommand() *cobra.Command {
 			"Claude subagent transcripts beside the named session. " +
 			"--own-only reports the named transcript's usage.\n\n" +
 			"Missing daemon IDs return a retry error while startup ingestion or an archive rebuild is pending; " +
-			"otherwise they return exit 2. " +
-			"--no-sync and HTTP --own-only read only the archive; missing IDs return exit 2. " +
+			"otherwise they return exit 2. --wait retries missing IDs for up to 30 seconds after daemon discovery; at the deadline, a confirmed absence with clear status returns exit 2, and an incomplete check returns a retry error. Known sessions can refresh during catch-up. Direct and --pg reads do not wait. " +
+			"HTTP --own-only reads archived usage and can start deferred ingestion with --wait. --no-sync never starts source sync. " +
 			"If refresh is refused or fails, the command shows archived usage with a warning; " +
 			"JSON sets refresh_incomplete. Direct mode keeps its targeted source lookup.\n\n" +
 			"Exit 0 means token data, cost, or plan figures are present. " +
@@ -54,6 +61,7 @@ func newSessionUsageCommand() *cobra.Command {
 			return runSessionUsage(cmd, args[0], outputFormat(cmd))
 		},
 	}
+	cmd.Flags().Bool("wait", false, "Wait up to 30 seconds for ingestion and refresh")
 	cmd.Flags().Bool("no-sync", false,
 		"Use archived usage without synchronizing source transcripts")
 	cmd.Flags().Bool("own-only", false,
@@ -136,8 +144,9 @@ func resolveSessionUsageBackend(cmd *cobra.Command, noSync bool) (*sessionUsageB
 	}
 
 	ownOnly, _ := cmd.Flags().GetBool("own-only")
+	wait, _ := cmd.Flags().GetBool("wait")
 	query := sessionUsageQuery{
-		OwnOnly: ownOnly, NoSync: noSync,
+		OwnOnly: ownOnly, NoSync: noSync, Wait: wait,
 	}
 
 	remote, _ := cmd.Flags().GetString("server")
@@ -149,7 +158,23 @@ func resolveSessionUsageBackend(cmd *cobra.Command, noSync bool) (*sessionUsageB
 		if err != nil {
 			return nil, err
 		}
-		if !query.OwnOnly {
+		if query.Wait {
+			capabilities, err := servicehttp.ProbeHTTPServerCapabilities(ctx, remote, token)
+			if err != nil {
+				return nil, err
+			}
+			if capabilities.APIVersion > server.APIVersion {
+				return nil, fmt.Errorf("server API version %d is newer than this client supports; upgrade the client", capabilities.APIVersion)
+			}
+			minimum := server.UsageWaitAPIVersion
+			if query.OwnOnly || query.NoSync {
+				minimum = server.SyncPendingAPIVersion
+			}
+			if capabilities.APIVersion < minimum {
+				return nil, fmt.Errorf("server API version %d does not support --wait; upgrade or restart the server", capabilities.APIVersion)
+			}
+		}
+		if !query.OwnOnly && !query.Wait {
 			if err := requireRemoteSubagentUsageSupport(
 				ctx, remote, token, !query.NoSync,
 			); err != nil {
@@ -262,50 +287,53 @@ func httpSessionUsageData(
 	}
 	sessionID := query.SessionID
 	backend := servicehttp.NewHTTPBackend(baseURL, token, false, "")
-	resolvedID, err := resolveServiceSessionID(ctx, backend, sessionID)
-	if err != nil {
-		if !errors.Is(err, errSessionNotFound) {
-			return nil, tokenUseExitErr, err
+	waitCtx := ctx
+	if query.Wait {
+		var cancel context.CancelFunc
+		waitCtx, cancel = context.WithTimeout(ctx, sessionUsageWaitTimeout)
+		defer cancel()
+	}
+	resolvedID, err := resolveServiceSessionID(waitCtx, backend, sessionID)
+	missing := errors.Is(err, errSessionNotFound)
+	if err != nil && !missing && !query.Wait && waitCtx.Err() == nil {
+		return nil, tokenUseExitErr, err
+	}
+	refresh := !query.OwnOnly && !query.NoSync
+	if missing && !query.Wait && !refresh {
+		return nil, tokenUseExitNotFound, nil
+	}
+	var waitErr error
+	if query.Wait || missing {
+		resolvedID, waitErr = waitSessionUsageReady(waitCtx, baseURL, token, backend, sessionID, resolvedID, query.Wait, !query.NoSync, refresh)
+		if ctx.Err() != nil {
+			return nil, tokenUseExitErr, ctx.Err()
 		}
-		if query.OwnOnly || query.NoSync {
+		if errors.Is(waitErr, errSessionNotFound) {
 			return nil, tokenUseExitNotFound, nil
 		}
-		startupPending, archiveStale, syncPending, statusErr := httpSessionSyncStatus(
-			ctx, baseURL, token,
-		)
-		if statusErr != nil {
-			return nil, tokenUseExitErr, fmt.Errorf(
-				"checking sync status: %w", statusErr,
-			)
+		if !query.Wait && waitErr != nil {
+			return nil, tokenUseExitErr, waitErr
 		}
-		if startupPending || archiveStale || syncPending {
-			return nil, tokenUseExitErr, errors.New(
-				"session usage is not ready; wait for syncing or rebuilding " +
-					"to finish, then retry",
-			)
-		}
-		// Startup or rebuild work can finish after the first lookup but before
-		// the status request. Resolve once more before declaring the ID absent.
-		resolvedID, err = resolveServiceSessionID(ctx, backend, sessionID)
-		if err != nil {
-			if !errors.Is(err, errSessionNotFound) {
-				return nil, tokenUseExitErr, err
-			}
-			return nil, tokenUseExitNotFound, nil
+		if waitErr != nil && resolvedID == "" {
+			return nil, tokenUseExitErr, fmt.Errorf("waiting for session usage: %w; wait for syncing or rebuilding to finish, then retry", waitErr)
 		}
 	}
 	refreshIncomplete := false
-	if !query.OwnOnly && !query.NoSync {
-		_, syncErr := backend.Sync(ctx, service.SyncInput{
-			ID: resolvedID, Subagents: true, UsageRefresh: true,
-		})
-		if syncErr != nil {
-			if !errors.Is(syncErr, db.ErrReadOnly) {
-				refreshIncomplete = true
-				fmt.Fprintf(os.Stderr,
-					"warning: couldn't refresh usage; saved totals may be out of date: %v\n", syncErr)
-			}
+	if refresh {
+		syncErr := waitErr
+		if syncErr == nil {
+			syncErr = refreshSessionUsage(waitCtx, backend, resolvedID, query.Wait)
 		}
+		if ctx.Err() != nil {
+			return nil, tokenUseExitErr, ctx.Err()
+		}
+		if syncErr != nil && !errors.Is(syncErr, db.ErrReadOnly) {
+			refreshIncomplete = true
+			fmt.Fprintf(os.Stderr, "warning: couldn't refresh usage; saved totals may be out of date: %v\n", syncErr)
+		}
+	}
+	if waitErr != nil && !refresh {
+		fmt.Fprintf(os.Stderr, "warning: waiting for ingestion did not finish; saved totals may be out of date: %v\n", waitErr)
 	}
 	// The shared HTTP backend requests the full breakdown and the same
 	// subagent scope as the direct store paths, so --server and local
@@ -327,9 +355,103 @@ func httpSessionUsageData(
 	}
 	out := &sessionUsageOutput{
 		SessionUsageReport: *usage,
-		ServerRunning:      true, RefreshIncomplete: refreshIncomplete,
+		ServerRunning:      true, RefreshIncomplete: refreshIncomplete, WaitIncomplete: waitErr != nil && !refresh,
 	}
 	return out, usageExitCode(out), nil
+}
+
+func sessionUsageRetryError(wait bool, err error) error {
+	if !wait {
+		return backoff.Permanent(err)
+	}
+	return err
+}
+
+func waitSessionUsageReady(ctx context.Context, baseURL, token string, backend service.SessionService, sessionID, resolvedID string, wait, allowSync, refresh bool) (string, error) {
+	started := false
+	var startErr error
+	startupCtx, cancelStartup := context.WithCancel(ctx)
+	result := make(chan error, 1)
+	defer func() {
+		cancelStartup()
+		if started && result != nil {
+			<-result
+		}
+	}()
+	collectStart := func() {
+		select {
+		case err := <-result:
+			result = nil
+			if err != nil {
+				startErr = fmt.Errorf("starting ingestion: %w", err)
+			}
+		default:
+		}
+	}
+	id, err := backoff.Retry(ctx, func() (string, error) {
+		collectStart()
+		startup, stale, pending, statusErr := httpSessionSyncStatus(ctx, baseURL, token)
+		if statusErr != nil {
+			return resolvedID, sessionUsageRetryError(wait, fmt.Errorf("checking sync status: %w", statusErr))
+		}
+		if !wait && (startup || stale || pending) {
+			return resolvedID, backoff.Permanent(errors.New("session usage is not ready; wait for syncing or rebuilding to finish, then retry"))
+		}
+		if !startup && !stale && resolvedID == "" {
+			found, lookupErr := resolveServiceSessionID(ctx, backend, sessionID)
+			if lookupErr == nil {
+				resolvedID = found
+			} else if !errors.Is(lookupErr, errSessionNotFound) {
+				return resolvedID, sessionUsageRetryError(wait, lookupErr)
+			} else if !pending {
+				if !wait {
+					return resolvedID, backoff.Permanent(errSessionNotFound)
+				}
+				return resolvedID, errSessionNotFound
+			}
+		}
+		if resolvedID != "" && !startup && !stale && (!pending || refresh) {
+			return resolvedID, nil
+		}
+		if startup && !stale && allowSync && !started {
+			started = true
+			// Startup may become ready before the sync finishes draining sources.
+			go func() {
+				_, err := postDaemonPush[sync.SyncStats, sync.Progress](startupCtx, transport{URL: baseURL}, token, startupSyncOperation, apiclient.DaemonPushRequest{}, nil)
+				result <- err
+			}()
+		}
+		return resolvedID, errors.New("session usage is not ready")
+	}, backoff.WithBackOff(backoff.NewConstantBackOff(sessionUsagePollInterval)), backoff.WithMaxTries(0), backoff.WithMaxElapsedTime(0))
+	if err == nil {
+		return id, nil
+	}
+	collectStart()
+	err = backoff.AsRetryError(err).LastErr
+	if errors.Is(err, errSessionNotFound) {
+		return id, err
+	}
+	if ctx.Err() != nil {
+		err = errors.Join(ctx.Err(), err)
+	}
+	return id, errors.Join(err, startErr)
+}
+
+func refreshSessionUsage(ctx context.Context, backend service.SessionService, id string, wait bool) error {
+	_, err := backoff.Retry(ctx, func() (struct{}, error) {
+		_, err := backend.Sync(ctx, service.SyncInput{ID: id, Subagents: true, UsageRefresh: true})
+		if err == nil {
+			return struct{}{}, nil
+		}
+		if !wait || !errors.Is(err, sync.ErrSessionRefreshNotStarted) {
+			return struct{}{}, backoff.Permanent(err)
+		}
+		return struct{}{}, err
+	}, backoff.WithBackOff(backoff.NewConstantBackOff(sessionUsagePollInterval)), backoff.WithMaxTries(0), backoff.WithMaxElapsedTime(0))
+	if err == nil {
+		return nil
+	}
+	return backoff.AsRetryError(err).LastErr
 }
 
 func httpSessionSyncStatus(

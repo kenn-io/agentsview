@@ -38,7 +38,7 @@ func TestActivitySourceProbeCachePreservesFreshness(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, want, got)
 	}
-	_, err := conn.ExecContext(ctx, `SYSTEM FLUSH LOGS`)
+	_, err := conn.ExecContext(ctx, `SYSTEM FLUSH LOGS query_log`)
 	require.NoError(t, err)
 	var cold, warm uint64
 	require.NoError(t, conn.QueryRowContext(ctx, `SELECT sumIf(read_rows,query_id='probe-cold'),sumIf(read_rows,query_id='probe-warm') FROM system.query_log WHERE current_database=currentDatabase() AND type='QueryFinish' AND is_initial_query=1`).Scan(&cold, &warm))

@@ -76,7 +76,7 @@ type GenAIPricingDigest struct {
 
 // ParseGenAIPricingSum reads the SHA-256 a database computed over a stored
 // GenAI Prices document. Databases return it as 32 raw bytes (PostgreSQL) or
-// as 64 hex digits in either case (ClickHouse, DuckDB, CockroachDB).
+// as 64 hex digits in either case (ClickHouse, CockroachDB).
 func ParseGenAIPricingSum(dbSum []byte) ([sha256.Size]byte, error) {
 	var sum [sha256.Size]byte
 	switch len(dbSum) {

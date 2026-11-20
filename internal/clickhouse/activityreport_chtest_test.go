@@ -64,7 +64,7 @@ func TestActivityReportParentlessAutomatedWorker(t *testing.T) {
 
 func TestStoreActivityReportAndRecentEdits(t *testing.T) {
 	t.Parallel()
-	store, _, _ := newPushedStore(t)
+	store := newClonedReadStore(t)
 	ctx := t.Context()
 	fixedNow := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
 	q, err := activity.ResolveQuery(activity.QueryInput{

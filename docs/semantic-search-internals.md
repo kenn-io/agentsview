@@ -514,10 +514,10 @@ backend-neutral seam, `UnitBoundsQuerier`, with two batched methods:
 `NearestUserBoundaries` (the nearest exclusive embeddable-user boundaries around
 each probe) and `RunExtents` (the first/last member ordinals of the anchor's
 same-sidechain run within an exclusive interval). `internal/db`,
-`internal/postgres`, and `internal/duckdb` each implement the seam with their
-own dialect SQL; `internal/db` never references the other stores, and co-located
-parity and reducer-parity tests in each package pin identical observable output
-across backends.
+`internal/postgres`, and `internal/clickhouse` each implement the seam with
+their own dialect SQL; `internal/db` never references the other stores, and
+co-located parity and reducer-parity tests in each package pin identical
+observable output across backends.
 
 - **Shared resolvers, SQL-only backends.** `ResolveUserBoundaries` and
   `ResolveRunExtents` own the orchestration — probe dedup, chunking at the

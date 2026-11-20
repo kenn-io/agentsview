@@ -93,7 +93,7 @@ func (s *Store) GetPlanUsageSessionCounts(
 	if deferred || version == standbyUsageMarker || (version == "" && s.runtimeState().usageIdentityDenied.Load()) {
 		raw := f
 		raw.ModelAliases = nil
-		tally, handled, err := snapshotRetained(ctx, s, slot, &s.runtimeState().planUsage, &s.runtimeState().standbyPlan, func(ctx context.Context, view *Store) (*db.PlanUsageCountSummary, error) {
+		tally, handled, err := snapshotRetained(ctx, s, slot, &s.runtimeState().planUsage, &s.runtimeState().standbyPlan, func(ctx context.Context, view *Store, _ string) (*db.PlanUsageCountSummary, error) {
 			return view.readPlanUsageSessionCounts(ctx, raw)
 		})
 		if handled {

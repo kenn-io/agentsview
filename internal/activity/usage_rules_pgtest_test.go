@@ -178,7 +178,7 @@ func TestActivityReportUsageRulesAcrossBackends(t *testing.T) {
 	type reporter interface {
 		GetActivityReport(ctx context.Context, f db.AnalyticsFilter, q activity.Query) (activity.Report, error)
 	}
-	backends := map[string]reporter{"sqlite": local, "duckdb": pushParityDuckDB(t, ctx, local, sessions)}
+	backends := map[string]reporter{"sqlite": local}
 	if os.Getenv("TEST_PG_URL") != "" {
 		backends["postgres"] = pushParityPostgres(t, ctx, local, sessions)
 	}

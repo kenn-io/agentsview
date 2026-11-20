@@ -1,7 +1,7 @@
 // Package activity aggregates a resolved time range of agent activity into a
 // concurrency- and usage-oriented report. It operates on in-memory input
 // streams supplied by a storage backend, so the same aggregation runs
-// identically across SQLite, PostgreSQL, and DuckDB. Export contract types are
+// identically across SQLite, PostgreSQL, and ClickHouse. Export contract types are
 // referenced only for optional report metadata.
 package activity
 
@@ -1060,7 +1060,7 @@ func buildSessionsTableFromDedupedUsage(
 	// float addition is not associative, so the unspecified per-backend row
 	// order (no activityReportSessions query imposes ORDER BY) would otherwise
 	// yield 1-ULP-different breakdown costs across SQLite, PostgreSQL, and
-	// DuckDB for identical data.
+	// ClickHouse for identical data.
 	sort.Slice(sessions, func(i, j int) bool {
 		return sessions[i].SessionID < sessions[j].SessionID
 	})

@@ -210,3 +210,66 @@ func BenchmarkSearchContentTermsCommonWord(b *testing.B) {
 		require.Len(b, page.Matches, 50)
 	}
 }
+
+// BenchmarkSearchContentWordsInScope ranks a three-word search inside one of
+// 20 projects. Across 4,000 sessions of 12 messages of about 4 KB, three in
+// four messages hold one or two of the words. One session in five outside the
+// chosen project holds a message with all three, so the archive has many
+// all-words matches, the project has none, and word counts decide its page.
+func BenchmarkSearchContentWordsInScope(b *testing.B) {
+	d := testDB(b)
+	if !d.HasFTS(b.Context()) {
+		b.Skip("fts5 not available")
+	}
+	for _, stmt := range []string{
+		`WITH RECURSIVE n(i) AS (VALUES(0) UNION ALL SELECT i + 1 FROM n WHERE i < 3999)
+		INSERT INTO sessions(id, project, agent, started_at, ended_at, created_at,
+			message_count, user_message_count)
+		SELECT printf('words-%04d', i), 'project-' || (i % 20), 'claude',
+			strftime('%Y-%m-%dT%H:%M:%SZ', '2026-01-01T00:00:00Z', printf('+%d minutes', i * 60)),
+			strftime('%Y-%m-%dT%H:%M:%SZ', '2026-01-01T00:30:00Z', printf('+%d minutes', i * 60)),
+			strftime('%Y-%m-%dT%H:%M:%SZ', '2026-01-01T00:00:00Z', printf('+%d minutes', i * 60)),
+			12, 6
+		FROM n`,
+		`WITH RECURSIVE n(i) AS (VALUES(0) UNION ALL SELECT i + 1 FROM n WHERE i < 11)
+		INSERT INTO messages(session_id, ordinal, role, content, content_length, timestamp)
+		SELECT s.id, n.i,
+			CASE WHEN n.i % 2 = 0 THEN 'user' ELSE 'assistant' END,
+			CASE
+				WHEN n.i = 3 AND CAST(substr(s.id, 7) AS INTEGER) % 5 = 1
+					THEN 'the invoice ledger needed rounding fixes'
+				WHEN n.i % 4 = 0 THEN 'checked the invoice totals against the export'
+				WHEN n.i % 4 = 1 THEN 'rounding drift showed up in the ledger again'
+				WHEN n.i % 4 = 2 THEN 'the ledger export finished'
+				ELSE 'turn text about something else'
+			END || printf(' %.*c', 4000, 'x'),
+			4040,
+			strftime('%Y-%m-%dT%H:%M:%SZ', s.started_at, printf('+%d seconds', n.i * 30))
+		FROM sessions s CROSS JOIN n`,
+		`ANALYZE`,
+	} {
+		_, err := d.getWriter().Exec(b.Context(), stmt)
+		require.NoError(b, err)
+	}
+	for _, tc := range []struct {
+		mode    string
+		sources []string
+	}{
+		{"substring", []string{"messages"}},
+		{"fts", []string{"messages"}},
+		{"hybrid", nil},
+	} {
+		b.Run(tc.mode, func(b *testing.B) {
+			f := ContentSearchFilter{
+				Pattern: "invoice rounding ledger", Mode: tc.mode, Sources: tc.sources,
+				Project: "project-0", Limit: 20, KeywordOnly: tc.mode == "hybrid",
+			}
+			b.ReportAllocs()
+			for b.Loop() {
+				page, err := d.SearchContent(b.Context(), f)
+				require.NoError(b, err)
+				require.Len(b, page.Matches, 20)
+			}
+		})
+	}
+}

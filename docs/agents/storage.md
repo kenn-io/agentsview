@@ -1,7 +1,7 @@
 # Storage Rules
 
-Read this file before changing SQLite, PostgreSQL, CockroachDB, DuckDB,
-ClickHouse, archive resync, or storage queries.
+Read this file before changing SQLite, PostgreSQL, CockroachDB, ClickHouse,
+archive resync, or storage queries.
 
 ## SQLite Archive
 
@@ -365,12 +365,11 @@ content still contains the thinking.
   because the indexed text does not change.
 - Hosted `raw_message_dialogue` stores an empty `dialogue_text` with
   `is_content` set, and payload loads restore it from the payload's content.
-- PostgreSQL, ClickHouse, and DuckDB mirrors keep no marker. PostgreSQL and
-  ClickHouse rewrite existing copies once from schema setup, guarded by the
-  `dialogue_dedupe_v1` and `agentsview_dialogue_deduplicated` metadata keys.
-  The ClickHouse mutation must write `''` beneath the NULL; an UPDATE to plain
-  NULL keeps the old string under the null mask. DuckDB schema version 24
-  rebuilds the mirror.
+- PostgreSQL and ClickHouse replicas keep no marker. They rewrite existing
+  copies once from schema setup, guarded by the `dialogue_dedupe_v1` and
+  `agentsview_dialogue_deduplicated` metadata keys. The ClickHouse mutation
+  must write `''` beneath the NULL; an UPDATE to plain NULL keeps the old string
+  under the null mask.
 
 Data version 146 reparses providers with dialogue classification in place,
 including the shared Codex parser. Retained sources that cannot be reparsed keep
@@ -527,13 +526,13 @@ identical after sanitization and preserve whitespace and blocked-result rules.
 An older session missing this metadata is reparsed from its source before a late
 result is applied. Its first rewrite can advance the transcript revision;
 subsequent equal parses remain no-ops. These fields are excluded from exports
-and mirror fingerprints.
+and replica fingerprints.
 
 Large Codex imports use a disposable scratch SQLite database for result
 payloads. Publication attaches it to the archive writer and commits content,
 checkpoint, and enabled derived state together. Cancellation aborts publication;
 cleanup detaches with a context that survives cancellation. Scratch storage is
-not an archive or a mirror and is removed after the import.
+not an archive or a replica and is removed after the import.
 
 Tool-result image retention uses the canonical `config.ToolResultImages` policy
 on writable SQLite handles. The zero value keeps content. Drop mode projects a
@@ -671,14 +670,13 @@ eviction never changes it, and the browser's own cache policy is separate.
 
 Adding a remote database means implementing Go interfaces, not copying the
 PostgreSQL command, config, push, and serve code. `internal/storage` names the
-three roles and holds the contract; `internal/backendcontract` asserts every
+two roles and holds the contract; `internal/backendcontract` asserts every
 backend at compile time, so a missing method fails `go build`.
 
 | Role    | Today                  | Contract                                   |
 | ------- | ---------------------- | ------------------------------------------ |
 | Archive | SQLite `*db.DB`        | `db.Store`; the only writable ingest store |
 | Replica | PostgreSQL, ClickHouse | `db.Store` plus `storage.Replica`          |
-| Mirror  | DuckDB                 | `db.Store` plus `storage.Mirror`           |
 
 `internal/db` owns shared result processing: `NormalizeSessionLimit` and
 `BuildSessionPage` for pagination, `BuildHeatmapResponse` for daily levels,
@@ -690,8 +688,7 @@ scanning.
 A replica is a remote database the archive pushes into and that serves the web
 UI read-only. A replica may keep its push cursor in the archive sync state
 (PostgreSQL) or in its own metadata (ClickHouse); the contract does not care. A
-mirror is a disposable local derived file. A new remote SQL backend is a
-replica. Do not model it on DuckDB, and do not add a fourth role.
+new remote SQL backend is a replica. Do not add a third role.
 
 Common pure storage helpers live in `internal/db`; every backend calls that
 owner. `BuildAnalyticsWhere`, `BuildUsageSourceFilter`,
@@ -712,12 +709,12 @@ their backend.
    progress as `storage.PushProgress`; a backend without a vector phase sets
    `Vectors.Skipped`. Route catalog reads through `readbase.NewCatalog` with
    an adapter implementing every `readbase.CatalogBackend` method; route
-   DuckDB- or ClickHouse-style analytics through `readbase.NewAnalytics`.
-   Route mirror session and transcript reads through `readbase.NewSessions`,
-   with every `readbase.SessionsBackend` SQL method explicitly forwarding to
-   shared `readbase.SessionQueries` builders or supplying specialized SQL.
-   Embed `readbase.MirrorStubs` in mirror stores; PostgreSQL uses
-   `readbase.ReadOnlyStubs`. Keep typed loaders in the backend.
+   ClickHouse-style analytics through `readbase.NewAnalytics`. Route
+   ClickHouse-style session and transcript reads through
+   `readbase.NewSessions`, with every `readbase.SessionsBackend` SQL method
+   explicitly forwarding to shared `readbase.SessionQueries` builders or
+   supplying specialized SQL. ClickHouse embeds `readbase.MirrorStubs`;
+   PostgreSQL uses `readbase.ReadOnlyStubs`. Keep typed loaders in the backend.
 1. Add the config section and its resolvers in `internal/config` the way
    `[pg]`/`[pg.NAME]` and `[clickhouse]` work: a struct, `Resolve<Name>`,
    `Resolve<Name>Target`, and `<Name>TargetNames`. `Backend.Targets` and
@@ -770,7 +767,7 @@ two implementations; `internal/backendcontract` asserts both.
 
 What a new backend does not touch: `internal/server` HTTP handlers,
 `archive_write_backend.go`, `replica.go`, `replica_watch.go`,
-`replica_vector_search.go`, or the PostgreSQL and DuckDB packages. `pg serve`
+`replica_vector_search.go`, or the PostgreSQL package. `pg serve`
 extras (raw-upload ingestion) live in `cmd/agentsview/pg.go` behind the optional
 `replicaServeExtras` interface; a backend with no extras implements nothing.
 
@@ -800,56 +797,56 @@ aggregate catalogs that ignore unknown observations cannot supply that evidence.
 Keep identity-only corrections in the reporting digest. The wire contract is in
 [reporting exports](../reporting-export.md#project-identity-evidence).
 
-- Keep observable behavior and query shape aligned between SQLite and
-  PostgreSQL/CockroachDB, DuckDB and ClickHouse. Match queries, indexes,
-  aggregations, filters and ordering unless a documented SQL, storage layout
-  or disposable mirror constraint requires a difference.
+- Keep observable behavior and query shape aligned between SQLite,
+  PostgreSQL/CockroachDB, and ClickHouse. Match queries, indexes, aggregations,
+  filters and ordering unless a documented SQL or storage layout constraint
+  requires a difference.
 - Do not fix correctness in only one backend unless the user limits the task to
   that backend. If implementations must differ, explain why and preserve the
   same behavior. Performance work follows
   [Optimizations apply to every backend](#optimizations-apply-to-every-backend).
-- PostgreSQL, DuckDB and ClickHouse share catalog orchestration in
+- PostgreSQL and ClickHouse share catalog orchestration in
   `internal/readbase.Catalog`. Shared query builders own SQL that differs only
   in syntax. Each backend explicitly supplies every required SQL operation and
   its typed timestamp, observation and snapshot loaders.
-- DuckDB and ClickHouse share report orchestration in
-  `internal/readbase.Analytics`. Backends supply every required SQL operation
-  and retain typed loaders and caches.
-- DuckDB and ClickHouse share session and transcript reads in
+- ClickHouse builds its reports on the orchestration in
+  `internal/readbase.Analytics`. The backend supplies every required SQL
+  operation and retains typed loaders and caches.
+- ClickHouse builds its session and transcript reads on
   `internal/readbase.Sessions`, with required backend SQL and typed scanners.
   `readbase.ReadOnlyStubs` owns unsupported archive writes; `MirrorStubs` adds
-  mirror curation and insight stubs. `HostedStore` keeps explicit forwards.
+  curation and insight stubs. `HostedStore` keeps explicit forwards.
 - Published `hostedRead` operations keep physical queries, alias/link/pin
   hydration and cursors in one read-only repeatable-read transaction. Borrowed
   views share runtime locks and configuration, never pool ownership. Their
   pricing loads run synchronously on that transaction and stay view-local;
   detached pricing singleflight belongs only to owning stores. Source probes
   retain their separate live revision fence.
-- All four backends share activity report assembly and session usage selection
+- All three backends share activity report assembly and session usage selection
   in `internal/activity`. Explicit inputs supply usage, candidate streams,
   message counts and project maps; SQL, pricing, caches and read lifetimes
   stay in each backend. Daily usage query strategies and aggregation loops
   remain per backend.
-- DuckDB and ClickHouse Activity reports select, price, and sum usage in SQL,
-  with `sumActivityUsage` in `internal/duckdb` and `readActivityUsageSums` in
-  `internal/clickhouse`. Go resolves each model to its rates over the range as
-  a schedule of segments; SQL picks a row's segment and pricing band and does
-  the integer cost math. Both backends share the schedule and the assembly of
-  the summed groups in `internal/readbase/activityusage.go`. DuckDB keeps
-  usage totals for ranges that include today in memory. A push, pricing
-  change, or restart clears those totals. Finished reports also use memory,
-  which restart clears. Eligible past-day reports can be saved to disk and
-  reused after restart. DuckDB also derives session runs in SQL with
-  `activitySessionRuns`. The SQLite and PostgreSQL reports keep the Go rules
-  in `internal/activity`, because the SQL was slower for them on a one-year
-  archive of 30,000 sessions:
+- ClickHouse Activity reports select, price, and sum usage in SQL with
+  `readActivityUsageSums` in `internal/clickhouse`. Go resolves each model to
+  its rates over the range as a schedule of segments; SQL picks a row's segment
+  and pricing band and does the integer cost math. The schedule and the
+  assembly of the summed groups live in `internal/readbase/activityusage.go`.
+  The SQLite and PostgreSQL reports keep the Go rules in `internal/activity`,
+  because the SQL was slower for them on a one-year archive of 30,000
+  sessions:
     - SQLite: the usage step took 6.2 s in SQL and 0.99 s in Go, 6.3x slower. One
       sort of the 600,000 usage rows already takes 1.1 s, and the rules need
       several. The runs SQL took 11.1 s against 1.9 s for the Go pairing, 5.8x
-      slower, even with an inexact stand-in for DuckDB's
+      slower, even with an inexact stand-in for
       `last_value(... IGNORE NULLS)`, which SQLite lacks.
     - PostgreSQL: the usage selection alone took 1.86 s at best, against about 1 s
       for the whole Go usage step, at least 1.9x slower.
+
+PostgreSQL saves current-range inputs at graceful close, with 256 MiB per file
+and total, and refreshes changed sessions after restart. On a cache hit, reports
+clip saved session runs to their date range without pairing those sessions
+again.
 
 ### Harness-recorded costs
 
@@ -865,11 +862,10 @@ reported cost wins.
 - Decide in Go, after the catalog lookup, through `db.ReportedCostForPricing`.
   SQL cannot see the catalog, so SQL that zeroes billable tokens or sums
   explicit costs must treat recorded rows as unpriced and carry the figure in
-  a separate `recorded_cost_microdollars` column (DuckDB and ClickHouse do
-  this).
+  a separate `recorded_cost_microdollars` column (ClickHouse does this).
 - Message rows select no cost in SQL. SQLite and PostgreSQL scanners fill it
-  from the token JSON with `db.MessageRecordedCost`; DuckDB and ClickHouse
-  extract it in SQL. ClickHouse stores it in
+  from the token JSON with `db.MessageRecordedCost`; ClickHouse extracts it in
+  SQL and stores it in
   `usage_messages.usage_recorded_cost` and the snapshot `usage_recorded_costs`
   array.
 - A cost-only row whose recorded figure loses contributes nothing: no breakdown
@@ -899,14 +895,28 @@ rows, so no usage, cost, or rollup query reads it. Session usage loads it as
 ### Optimizations apply to every backend
 
 Apply every database optimization and every Go-side backend optimization to each
-backend it applies to: SQLite, PostgreSQL, CockroachDB, DuckDB, and ClickHouse,
-plus any code they share.
+backend it applies to: SQLite, PostgreSQL, CockroachDB, and ClickHouse, plus
+any code they share.
 
 A change that optimizes one, two, or three of these backends while the
 optimization applies to the others is incomplete. When a backend cannot take the
 optimization, because the engine lacks the feature or the slow path does not
 exist there, the change names that backend and the reason in its commit message
 and pull request description.
+
+### Search pages
+
+Search keeps exact pages on disk for SQLite archives and native PostgreSQL and
+ClickHouse mirrors. It reuses a page when its filters, paging, search rules,
+and searchable data match. Searchable writes invalidate old pages. PostgreSQL
+keeps each session's best match in memory and a companion file; page visits keep
+that file active for cache cleanup. The file is capped at 128 MiB within a
+shared 256 MiB cache budget. PostgreSQL refreshes changed matches when the
+journal proves the retained history. A missing, oversized, or evicted file, or
+a missing checkpoint or one 128 or more revisions old, requires a full search.
+ClickHouse merges that leave rows unchanged keep pages valid. Deleted snippets
+can remain in old cache files until the same search overwrites them or the cache
+is trimmed. Read-only SQLite and hosted or borrowed PostgreSQL views read directly.
 
 ### Usage cache divergence
 
@@ -1171,19 +1181,15 @@ active, stale, or unclean termination status bypass this cache.
 
 SQLite and native PostgreSQL track the inputs to Tools, Velocity, and Signals
 with separate change tokens. A score-only edit refreshes Signals while Tools
-and Velocity remain reusable. DuckDB uses content digests for saved results
-and recomputes them when its mirror handle changes. SQLite, native PostgreSQL,
-and DuckDB save these results per selection and timezone; hosted PostgreSQL
-reads them fresh. The entries share
-the existing 256 MiB Trends disk budget. PostgreSQL also retains finished
+and Velocity remain reusable. SQLite and native PostgreSQL save these results
+per selection and timezone; hosted PostgreSQL reads them fresh. The entries
+share the existing 256 MiB Trends disk budget. PostgreSQL also retains finished
 Signals in memory. Active-since selections are not saved.
 
 SQLite invalidates Trends with its usage and analytics revisions. PostgreSQL
 uses its session journal, hosted PostgreSQL uses its tenant identity,
-selection, and corpus revisions, DuckDB uses its mirror stamp, and ClickHouse
-uses session and message row identities.
-Remote DuckDB through Quack reads Trends fresh because it has no reliable
-freshness token. Read-only archives and reports filtered by active, stale, or
+selection, and corpus revisions, and ClickHouse uses session and message row
+identities. Read-only archives and reports filtered by active, stale, or
 unclean termination status bypass this cache.
 
 PostgreSQL keeps ongoing Activity reports' per-session activity and raw usage
@@ -1207,18 +1213,6 @@ unavailable or regressed revisions rebuild the inputs. Large change sets use a
 full read, and inputs above the budget aren't retained. Hosted stores and
 transaction views use their existing reads.
 
-DuckDB keeps each session's runs and counted message times in memory per session
-and gap cap, within a 128 MiB budget, at the session's
-`agentsview_push_fingerprint`. A push changes that fingerprint whenever a
-session's messages or tool events change, so entries survive mirror replacements
-and a refresh derives only changed sessions. A session without a fingerprint is
-derived on every report. DuckDB derives the runs over all time in one SQL query,
-`activitySessionRuns`, which pairs, caps, and trims the candidates and returns
-each run's pieces, and clips them at the report's effective end. On the same
-scratch data, deriving every session took 2.4 s instead of 4.8 s (2.0x), the
-kept runs took 74 MiB, and a refresh with ten changed sessions spent 189 ms
-instead of 315 ms on runs (1.7x), 216 ms sweeping, and 46 ms counting messages.
-
 ### PostgreSQL push preparation indexes
 
 `idx_sessions_data_version`, `idx_sessions_parentless_workers`, and
@@ -1228,6 +1222,24 @@ queries. `idx_sessions_id_tail` serves
 missing indexes automatically. Each first build scans `sessions` and blocks
 writes until installation commits. Restricted publishers keep writing before
 owner installation, using the existing queries until the indexes are available.
+
+### PostgreSQL schema step reuse
+
+A push starts with a schema step that checks every table, column, and index the
+push needs and runs data repairs. One `Sync` runs it once and remembers that in
+`schemaDone`. The daemon builds a new `Sync` for every push request, so
+`ensuredSchemas` also records, per push target, a summary of the target schema
+after the step: relations with their columns or index definitions, constraints,
+triggers, functions, extensions, and their object IDs. A later `Sync` in the
+same process reads the summary, and while it matches, skips the schema probes
+and DDL. It still runs the data version check (`CheckDataVersionCompat`),
+because another machine can push rows in a newer format without changing the
+schema. It also still runs the data repairs (`runSchemaDataRepairsPG`), because
+pushes since the step can leave rows they fix, such as sessions awaiting the
+automation audit. A full push, a missing push marker, or a failed push forgets
+the record, so the next push runs the whole step. A step whose optional setup
+fails, such as an index the role lacks privilege to create, records nothing,
+so the next push retries it.
 
 ### Raw session ID lookups
 
@@ -1245,8 +1257,6 @@ backend filters on that tail before it checks the exact suffix forms:
   candidate subquery reads with `final = 0` because FINAL widens each matching
   granule to every overlapping key range in other parts. The outer read
   applies FINAL by primary key.
-- DuckDB scans. It does not use an expression index for this filter, and a
-  columnar scan of the disposable mirror's IDs takes a few milliseconds.
 
 `internal/dbtest` `AssertRawSuffix` checks the same cases on every backend.
 
@@ -1270,7 +1280,7 @@ when the text is blank or does not parse. Range reads seek it through
 `idx_usage_events_occurred_us`. Text that does not parse keeps the padded text
 range through the partial index `idx_usage_events_occurred_unparsed`, so a
 report still places it on the day its date prefix names. `occurred_at` stays the
-record that exports, fingerprints, and mirror pushes read. The writable open
+record that exports, fingerprints, and replica pushes read. The writable open
 that adds the column fills it in the same transaction. The usage change and
 conversation usage triggers watch only the recorded columns, so the fill
 publishes nothing. Data version 180 requires no reparse; it keeps older binaries
@@ -1301,8 +1311,8 @@ Copies made in SQL, such as the orphan copy during resync, fill them with the
 functions, which compute the same values.
 
 An archive written before these columns existed gains them on its next writable
-open, which fills them for every message in the same transaction. PostgreSQL and
-DuckDB store the same counters at push.
+open, which fills them for every message in the same transaction. PostgreSQL
+stores the same counters at push.
 
 ### Sidebar tree index
 
@@ -1377,6 +1387,19 @@ sessions keep the scan. A capped count of the listed IDs makes that choice; it
 stops as soon as the share is passed. Tool input and tool result branches are
 not indexed.
 
+Because the tool branches read every row of every session they cover,
+substring, word, and regex search read the scope's sessions in batches, newest
+first in the result order, and stop after the batch that fills the page and
+its next-page row. The first batch holds sessions totaling 16,384 messages and
+each later batch doubles that. Results sort by session recency, then session
+ID, then position, so a session's rows never split across batches and the
+batches together return the same rows in the same order as one query. A walk
+that reaches the last session counts every exact match, which word search
+needs to offset its ranked results. The message and thinking branches test the
+batch's session list before `LIKE`, because SQLite checks conditions in the
+order written and the index candidates otherwise load bodies from sessions
+outside the batch.
+
 Terms search uses `message_trigram_fts` under the same share rule per term. When
 the index lists any term, the query starts from the messages it lists for the
 first such term. It finds each message's exchange from the nearest eligible user
@@ -1410,7 +1433,7 @@ Token usage, Claude message/request identities, and source UUID participate in
 transcript revision equality. Finalizing a streamed message can therefore bump
 `transcript_revision` and `local_modified_at`, invalidate secret-scan freshness,
 mark the session updated for read-progress/UI purposes, and enqueue the normal
-artifact, recall, PostgreSQL, and DuckDB refreshes. Full resync reconciliation
+artifact, recall, and PostgreSQL refreshes. Full resync reconciliation
 must compare the same fields so incremental and resync paths agree. A no-op
 message replacement preserves existing secret findings; changed transcript
 content clears them for a fresh scan.
@@ -1454,8 +1477,8 @@ summaries that differ from their event, calls with no content-bearing event, and
 blocked categories store exactly what the parser produced. Load tool calls
 through the message loaders, which refill the summary once events are attached;
 a query that selects the column directly must apply the same fallback, and
-PostgreSQL and DuckDB apply the same write rule so their tool-call fingerprints
-match SQLite. Anyone reading the archive or a mirror by hand sees the empty
+PostgreSQL applies the same write rule so its tool-call fingerprints match
+SQLite. Anyone reading the archive or a replica by hand sees the empty
 column and must join the events table to recover the text.
 
 ### PostgreSQL frustration marker reads
@@ -1527,42 +1550,6 @@ on hand-labeled edge cases and on a seeded random corpus, and checks which
 prompts come back with text. Run it against CockroachDB as well when changing
 the SQL.
 
-## DuckDB Mirror
-
-- Treat DuckDB as a disposable read mirror of SQLite, never as a system of
-  record. Deleting the mirror must lose nothing.
-- Do not add in-place mirror migrations. A schema or source-data version change
-  must bump `internal/duckdb.SchemaVersion`, rebuild a fresh file, validate
-  it, and swap it atomically. Do not add `ALTER` migrations, version-bridging
-  reads, or compatibility shims for old mirrors.
-- Store every DuckDB push cursor and version in the mirror's `sync_metadata`.
-  Never store DuckDB sync state in SQLite.
-- Store frustration-marker counts at push and rebuild when the counting rules
-  change.
-- Read message token counters from the `messages.usage_*` columns, which push
-  fills with `usagefacts.ParseTokenUsage`, the parser SQLite reads with. Do
-  not extract them from `token_usage` in read SQL. Schema version 29 rebuilds
-  the mirror to fill them. The harness-recorded cost is still read from the
-  JSON.
-- Replace whole sessions during incremental updates and gate them with
-  per-session fingerprints. Do not add per-table, per-column, or diff-based
-  updates.
-- When readers hold the mirror, catch up and swap a reusable standby using its
-  own cursors. Bootstrap it from the main file and WAL, retry while it is
-  held, and discard it after a full rebuild.
-- Usage summary, Top sessions, and usage session counts read the usage rollup
-  that a push builds; see
-  [Usage rollup](../../internal/duckdb/README.md#usage-rollup). A read must
-  return what it returns without the rollup. A change to how usage rows are
-  deduplicated, dated, or priced must keep both copies of the rules in step, and
-  a change to what a build stores must bump the rollup format as that section
-  describes. Test fixtures that edit a pushed mirror by hand must drop the
-  rollup, because those edits leave push fingerprints unchanged.
-- Keep Quack read-only. `duckdb push` writes the local mirror; it never writes
-  to a remote DuckDB service.
-- Replace a file only after identifying it as an agentsview DuckDB mirror. Fail
-  closed for unknown files.
-
 ## ClickHouse Replica
 
 ClickHouse is a replica in the `storage.Replica` sense: the archive pushes into
@@ -1588,10 +1575,20 @@ own metadata, which is why the docs below call the database a mirror.
   session that only grew keeps the rows of its stored messages, or of all but
   the last when only the last changed, and limits that delete, in the tables
   listed in `messageOrdinalColumn`, to ordinals after the last kept one. A change to how a push renders a row in those tables must
-  change `messageRowsFingerprints` with it, or appends will keep stale rows. See
+  change `messageRowsFingerprints` with it, or appends will keep stale rows.
+  A push also takes a kept message's usage from the mirror's snapshot
+  (`insertCarriedSnapshots`), so every field of the snapshot's usage message
+  tuple must be a field of `messageRow`. See
   [appends](../internal/clickhouse-mirror.md#pushes-rewrite-only-what-differs).
   Store every ClickHouse push cursor and version in the mirror's
   `sync_metadata`. Never store ClickHouse sync state in SQLite.
+- A watch push for changed files (`PushOptions.SkipIfUnchanged`) writes nothing
+  when the archive holds no change for the mirror, and `Sync.EnsureSchema`
+  skips the schema step while the mirror's tables, server, and stored exchange
+  probe match what this process last prepared. When a push starts writing
+  something new, add the local change it writes to `unchangedSinceLastPush`,
+  or a watch never pushes it before the interval push. See
+  [ClickHouse push and serve](../internal/clickhouse-mirror.md#decisions).
 - A push that rewrote at least `compactionShare` of the live messages runs
   `OPTIMIZE TABLE ... FINAL` on `compactionTables` (`compactAfterRewrite`).
   Add every new table a session push rewrites to that list. Compaction
@@ -1647,13 +1644,13 @@ own metadata, which is why the docs below call the database a mirror.
   exactly what the scan it replaces counts; change a definition only with a
   version bump, which makes each archive's next push a full push that
   republishes the session rows below that version. SQLite and PostgreSQL still
-  scan. DuckDB stores frustration marker counts at push time. See
+  scan. See
   [Dashboard facts](../internal/clickhouse-mirror.md#dashboard-facts).
 - Activity report queries receive the selected session IDs as the
   `activity_candidate_ids` external table on the request context. Do not
   rebuild candidate discovery inside later queries, and never materialize a
   recursive CTE.
-- Design ClickHouse SQL for MergeTree. Do not paste PostgreSQL or DuckDB queries
+- Design ClickHouse SQL for MergeTree. Do not paste PostgreSQL queries
   unchanged. Orphan filters must treat `parent_session_id IS NULL` as an
   orphan (`NULL NOT IN (...)` is unknown).
 - clickhouse-go inlines every bound argument into the statement text, and the
@@ -1676,9 +1673,24 @@ own metadata, which is why the docs below call the database a mirror.
   with 3.5x the memory while adding 24% to storage, 3x to insert time, and 5x
   to merge time. Before adding an index, measure the real query with
   `EXPLAIN indexes = 1` under `final = 1`, on more than one part.
-- Tests use the `chtest` build tag. Run `make test-clickhouse` against a
-  dedicated test server (`TEST_CLICKHOUSE_URL` or the compose service). Do not
-  point those tests at a live mirror.
+
+### ClickHouse test fixtures
+
+Run `make test-clickhouse` to use the compose service. When running tagged Go
+tests directly, set `TEST_CLICKHOUSE_URL` to reuse a dedicated test server.
+These tests use the `chtest` build tag. Never point them at a live mirror.
+
+- For reads against the standard populated mirror, use `newClonedReadStore(t)`.
+  The first caller pushes the fixture once. Each caller gets its own database
+  and store. ClickHouse hard-links the template's MergeTree data parts with
+  `CREATE TABLE ... CLONE AS`. Each test drops its clone at cleanup, and the
+  test binary drops the template at exit.
+- The clone contains the populated tables, including derived rows. Use
+  `newPushedStore(t)` for tests that need the SQLite archive, a pusher, or
+  working materialized views. This includes tests that insert source rows and
+  expect a view to update its target.
+- Use `chtest.FreshDatabase(t)` for tests of an empty mirror, schema creation,
+  or the first push.
 
 ## PostgreSQL Integration Tests
 
@@ -1782,7 +1794,7 @@ cached text during the next pass. Disabling image text and restarting removes
 cached text and mirror matches; re-enabling extracts it again. Usage-only
 archives do not store image text.
 
-Successful text is published to PostgreSQL, DuckDB, and ClickHouse as
+Successful text is published to PostgreSQL and ClickHouse as
 session-owned `image_text` rows keyed by the tool call or result event, image
 index, and processor, with the image hash, provider, model, and revision. A new
 extraction advances the session's `sync_marker`, so the next incremental push

@@ -115,5 +115,5 @@ func tauProviderCapabilities() Capabilities {
 		},
 	}
 	caps.Source.ForceReplaceOnParse = CapabilitySupported
-	return caps
+	return withPollMetadataScan(caps)
 }

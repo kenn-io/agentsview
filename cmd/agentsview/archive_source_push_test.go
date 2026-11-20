@@ -21,7 +21,6 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/server"
@@ -92,20 +91,9 @@ func (r archiveSourcePushReplica) NewPusher(_ context.Context, _ storage.Replica
 	return r.probe, nil
 }
 
-type archiveSourcePushMirror struct {
-	duckdb.Mirror
-	probe *archiveSourcePushProbe
-}
-
-func (m archiveSourcePushMirror) Push(ctx context.Context, _ config.DuckDBConfig, database *db.DB, _ storage.MirrorPushOptions, full bool, _ func(storage.MirrorPushProgress)) (storage.MirrorPushResult, error) {
-	m.probe.database = database
-	_, err := m.probe.PushWithOptions(ctx, storage.PushOptions{Full: full}, nil)
-	return storage.MirrorPushResult{}, err
-}
-
 func TestArchiveSourceDaemonPushDrainsBeforeCopy(t *testing.T) {
 	source := archiveSourceCommandFixture(t)
-	for _, name := range []string{"pg", "clickhouse", "duckdb"} {
+	for _, name := range []string{"pg", "clickhouse"} {
 		for _, mode := range []string{"on-demand", "shared", "full-runner"} {
 			for _, offline := range []bool{false, true} {
 				t.Run(name+"/"+mode+"/offline="+strconv.FormatBool(offline), func(t *testing.T) {
@@ -137,7 +125,6 @@ func TestArchiveSourceDaemonPushDrainsBeforeCopy(t *testing.T) {
 							archiveSourcePushReplica{Replica: postgres.Backend{}, probe: probe},
 							archiveSourcePushReplica{Replica: clickhouse.Backend{}, probe: probe},
 						),
-						server.WithMirror(archiveSourcePushMirror{probe: probe}),
 					}
 					var engine *syncpkg.Engine
 					if !cfg.NoSync {
@@ -181,7 +168,7 @@ func TestArchiveSourceDaemonPushDrainsBeforeCopy(t *testing.T) {
 
 func TestArchiveSourceDirectPushWithOfflineAttachment(t *testing.T) {
 	source := archiveSourceCommandFixture(t)
-	for _, name := range []string{"pg", "clickhouse", "duckdb"} {
+	for _, name := range []string{"pg", "clickhouse"} {
 		for _, mode := range []struct {
 			name       string
 			full       bool
@@ -234,18 +221,11 @@ func TestArchiveSourceDirectPushWithOfflineAttachment(t *testing.T) {
 					appCfg: cfg, database: database,
 					ensurePricing: func(context.Context, *db.DB) error { return nil },
 				}
-				if name == "duckdb" {
-					original := mirrorBackend
-					mirrorBackend = archiveSourcePushMirror{probe: probe}
-					t.Cleanup(func() { mirrorBackend = original })
-					_, err = backend.DuckDBPush(t.Context(), config.DuckDBConfig{Path: filepath.Join(t.TempDir(), "mirror.duckdb")}, DuckDBPushConfig{Full: mode.full}, nil, nil)
-				} else {
-					var replica storage.Replica = postgres.Backend{}
-					if name == "clickhouse" {
-						replica = clickhouse.Backend{}
-					}
-					_, err = backend.ReplicaPush(t.Context(), archiveSourcePushReplica{Replica: replica, probe: probe}, storage.ConfiguredReplica{}, ReplicaPushConfig{Full: mode.full}, nil, nil)
+				var replica storage.Replica = postgres.Backend{}
+				if name == "clickhouse" {
+					replica = clickhouse.Backend{}
 				}
+				_, err = backend.ReplicaPush(t.Context(), archiveSourcePushReplica{Replica: replica, probe: probe}, storage.ConfiguredReplica{}, ReplicaPushConfig{Full: mode.full}, nil, nil)
 				if mode.localError {
 					require.ErrorContains(t, err, "local sync processing incomplete")
 					assert.Empty(t, probe.seen, "local sync failures must stop the destination push")
@@ -266,53 +246,41 @@ func TestArchiveSourceDirectPushWithOfflineAttachment(t *testing.T) {
 
 func TestArchiveSourceDirectPushWatchStartup(t *testing.T) {
 	source := archiveSourceCommandFixture(t)
-	for _, mirror := range []bool{false, true} {
-		for _, full := range []bool{false, true} {
-			t.Run("mirror="+strconv.FormatBool(mirror)+"/full="+strconv.FormatBool(full), func(t *testing.T) {
-				backend := testLocalArchiveWriteBackend(t)
-				backend.appCfg.ArchiveSources = []config.ArchiveSource{source}
-				if full {
-					_, _, err := runLocalSyncResult(t.Context(), backend.appCfg, backend.database, false)
-					require.NoError(t, err)
-					require.NoError(t, backend.database.Update(t.Context(), func(tx *sql.Tx) error {
-						_, err := tx.ExecContext(t.Context(), `UPDATE messages SET content = 'stale parser output' WHERE session_id = ?`, attachedPushSession)
-						return err
-					}))
-				}
-				probe := &archiveSourcePushProbe{database: backend.database, seen: make(chan []db.Message, 4)}
-				hooks := newPushWatchOwnerHarness().hooks()
-				hooks.startupSync = nil
-				hooks.startWatcher = nil
-				hooks.newReplicaPusher = func(*syncpkg.Engine) *replicaPusher {
-					return &replicaPusher{session: archivepush.ReplicaSession{
-						Connect: func(context.Context) (storage.Pusher, error) { return probe, nil },
-					}}
-				}
-				hooks.newDuckDBPusher = func(*syncpkg.Engine) *duckDBPusher {
-					return &duckDBPusher{mirrorPush: func(ctx context.Context, _ bool) (storage.MirrorPushResult, error) {
-						_, err := probe.PushWithOptions(ctx, storage.PushOptions{}, nil)
-						return storage.MirrorPushResult{}, err
-					}}
-				}
-				backend.watchHooks = hooks
-				ctx, cancel := context.WithCancel(t.Context())
-				done := make(chan error, 1)
-				go func() {
-					if mirror {
-						done <- backend.DuckDBPushWatch(ctx, config.DuckDBConfig{}, DuckDBPushConfig{Full: full}, nil, nil, time.Hour, time.Hour)
-					} else {
-						done <- backend.ReplicaPushWatch(ctx, pgReplica{}, storage.ConfiguredReplica{}, ReplicaPushConfig{Full: full}, nil, nil, time.Hour, time.Hour)
-					}
-				}()
-				t.Cleanup(func() {
-					cancel()
-					require.NoError(t, receiveArchiveTest(t, done))
-				})
-				messages := receiveArchiveTest(t, probe.seen)
-				require.Len(t, messages, 1, "watch startup must import attached history before pushing")
-				assert.Equal(t, "archived message", messages[0].Content, "--full must reparse available attached sources")
+	for _, full := range []bool{false, true} {
+		t.Run("full="+strconv.FormatBool(full), func(t *testing.T) {
+			backend := testLocalArchiveWriteBackend(t)
+			backend.appCfg.ArchiveSources = []config.ArchiveSource{source}
+			if full {
+				_, _, err := runLocalSyncResult(t.Context(), backend.appCfg, backend.database, false)
+				require.NoError(t, err)
+				require.NoError(t, backend.database.Update(t.Context(), func(tx *sql.Tx) error {
+					_, err := tx.ExecContext(t.Context(), `UPDATE messages SET content = 'stale parser output' WHERE session_id = ?`, attachedPushSession)
+					return err
+				}))
+			}
+			probe := &archiveSourcePushProbe{database: backend.database, seen: make(chan []db.Message, 4)}
+			hooks := newPushWatchOwnerHarness().hooks()
+			hooks.startupSync = nil
+			hooks.startWatcher = nil
+			hooks.newReplicaPusher = func(*syncpkg.Engine) *replicaPusher {
+				return &replicaPusher{session: archivepush.ReplicaSession{
+					Connect: func(context.Context) (storage.Pusher, error) { return probe, nil },
+				}}
+			}
+			backend.watchHooks = hooks
+			ctx, cancel := context.WithCancel(t.Context())
+			done := make(chan error, 1)
+			go func() {
+				done <- backend.ReplicaPushWatch(ctx, pgReplica{}, storage.ConfiguredReplica{}, ReplicaPushConfig{Full: full}, nil, nil, time.Hour, time.Hour)
+			}()
+			t.Cleanup(func() {
+				cancel()
+				require.NoError(t, receiveArchiveTest(t, done))
 			})
-		}
+			messages := receiveArchiveTest(t, probe.seen)
+			require.Len(t, messages, 1, "watch startup must import attached history before pushing")
+			assert.Equal(t, "archived message", messages[0].Content, "--full must reparse available attached sources")
+		})
 	}
 }
 

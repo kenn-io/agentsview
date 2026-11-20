@@ -8,8 +8,11 @@ import (
 
 const FrameLimit = 64 << 20
 
-// Version covers message encoding and supported request shapes; bump both peers together.
-const Version = 1
+// Version covers message encoding and supported request shapes; bump both
+// peers together. A new request field, or a new or changed path shape for a
+// platform an older extension already knows, needs a bump. A new platform does
+// not: an extension that does not know it replies unsupported.
+const Version = 2
 
 var ErrCompatibility = errors.New("Restart AgentsView if you upgraded it, run agentsview source chrome setup, reload the extension at chrome://extensions, then Sync again.") //nolint:staticcheck // Recovery instructions appear directly in the UI.
 

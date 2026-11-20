@@ -401,6 +401,7 @@ var providerFuzzExempt = map[AgentType]string{
 	AgentClaudeAI:   "import-only: archives are parsed by internal/importer",
 	AgentChatGPT:    "import-only: archives are parsed by internal/importer",
 	AgentGeminiApps: "import-only: archives are parsed by internal/importer",
+	AgentGrokWeb:    "import-only: only Chrome Sync reads it, through internal/importer",
 }
 
 // TestProviderFuzzTargetsCoverRegistry fails when a provider has no

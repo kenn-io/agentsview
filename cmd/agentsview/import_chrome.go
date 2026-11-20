@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/apiclient"
@@ -12,7 +13,8 @@ import (
 	"go.kenn.io/agentsview/internal/importer"
 )
 
-func syncClaudeAIChrome(ctx context.Context) error {
+// syncChrome runs platform's Sync in the server through the Chrome extension.
+func syncChrome(ctx context.Context, platform importer.BrowserPlatform) error {
 	cfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	if err != nil {
 		return err
@@ -22,7 +24,7 @@ func syncClaudeAIChrome(ctx context.Context) error {
 		return err
 	}
 	if transport.Mode != transportHTTP {
-		return errors.New("claude.ai Sync requires a running server")
+		return fmt.Errorf("%s Sync requires a running server", platform.Label)
 	}
 	httpTransport := http.DefaultTransport.(*http.Transport).Clone()
 	httpTransport.ResponseHeaderTimeout = 30 * time.Second
@@ -32,7 +34,10 @@ func syncClaudeAIChrome(ctx context.Context) error {
 		return err
 	}
 	browser := apiclient.Chrome
-	response, err := api.PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx, &apiclient.PostAPIV1ImportClaudeAiSyncRequestOptions{Query: &apiclient.PostAPIV1ImportClaudeAiSyncQuery{Browser: &browser}})
+	response, err := api.PostAPIV1ImportPlatformSyncStreamWithResponse(ctx, &apiclient.PostAPIV1ImportPlatformSyncRequestOptions{
+		PathParams: &apiclient.PostAPIV1ImportPlatformSyncPath{Platform: string(platform.Agent)},
+		Query:      &apiclient.PostAPIV1ImportPlatformSyncQuery{Browser: &browser},
+	})
 	if err != nil && (response == nil || response.StatusCode == http.StatusOK) {
 		return err
 	}
@@ -48,7 +53,7 @@ func syncClaudeAIChrome(ctx context.Context) error {
 	return nil
 }
 
-func readChromeSync(response *apiclient.PostAPIV1ImportClaudeAiSyncResp) (importer.ImportStats, error) {
+func readChromeSync(response *apiclient.PostAPIV1ImportPlatformSyncResp) (importer.ImportStats, error) {
 	if response.StatusCode != http.StatusOK {
 		return importer.ImportStats{}, errors.New(daemonErrorMessage(response.StatusCode, response.Body))
 	}
@@ -60,4 +65,13 @@ func readChromeSync(response *apiclient.PostAPIV1ImportClaudeAiSyncResp) (import
 		return stats, err
 	}
 	return result, nil
+}
+
+// browserSyncNames lists the --type values --sync accepts.
+func browserSyncNames() string {
+	var names []string
+	for _, platform := range importer.BrowserPlatforms() {
+		names = append(names, string(platform.Agent))
+	}
+	return strings.Join(names, ", ")
 }

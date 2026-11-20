@@ -1002,22 +1002,13 @@ func (db *DB) scanEmbeddableUnits(
 	}
 	defer rows.Close()
 
-	red := &unitReducer{fn: fn, maxRunRunes: maxRunRunes}
-	maxEnded, err = reduceUnitRows(rows, red)
-	if err != nil {
-		return "", err
-	}
-	if err := red.finish(); err != nil {
-		return "", err
-	}
-	return maxEnded, nil
+	return ReduceEmbeddableUnitRows(rows, maxRunRunes, fn)
 }
 
-// reduceUnitRows scans every row of an open ScanEmbeddableUnits query into
-// red, tracking the chronologically latest sessions.ended_at seen across
-// them. It does not flush red's final open run -- callers must call
-// red.finish() once scanning completes.
-func reduceUnitRows(rows *sql.Rows, red *unitReducer) (maxEnded string, err error) {
+// ReduceEmbeddableUnitRows reduces ordered message rows into embedding units.
+// Rows must have the same columns and order as the SQLite unit scan.
+func ReduceEmbeddableUnitRows(rows *sql.Rows, maxRunRunes int, fn func(EmbeddableUnit) error) (maxEnded string, err error) {
+	red := &unitReducer{fn: fn, maxRunRunes: maxRunRunes}
 	for rows.Next() {
 		var row unitRow
 		var relationshipType string
@@ -1039,6 +1030,9 @@ func reduceUnitRows(rows *sql.Rows, red *unitReducer) (maxEnded string, err erro
 	}
 	if err := rows.Err(); err != nil {
 		return "", fmt.Errorf("iterating embeddable units: %w", err)
+	}
+	if err := red.finish(); err != nil {
+		return "", err
 	}
 	return maxEnded, nil
 }
@@ -4433,7 +4427,7 @@ func resolveToolResultEvents(msgs []Message) []toolResultEventRow {
 //
 // token_usage is "TEXT NOT NULL DEFAULT ”", so nearly every row holds "".
 // Returning a NON-NIL, ZERO-LENGTH jsontext.Value for those rows is what
-// made every duckdb serve transcript blank: a zero-length value is not
+// made every transcript from a read-only replica server blank: a zero-length value is not
 // valid JSON, omitempty does not skip it, and jsontext.Value defers parsing
 // to marshal time, so the failure surfaced only when the API encoded the
 // response. internal/server installs no recover(), so it became an
@@ -4452,9 +4446,8 @@ func resolveToolResultEvents(msgs []Message) []toolResultEventRow {
 // Clearing only the unusable metadata keeps the rest of the message intact.
 //
 // Exported because every backend that serves messages needs the identical
-// guard and must not drift: pg serve and duckdb serve reach the same
-// response encoder. See internal/postgres/messages.go and
-// internal/duckdb/messages.go.
+// guard and must not drift: replica servers reach the same response
+// encoder. See internal/postgres/messages.go.
 func DecodeStoredTokenUsage(raw string) jsontext.Value {
 	if raw == "" {
 		return nil

@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-12
+last_edited: 2026-11-17
 ---
 
 # Session Format Source Inventory
@@ -234,8 +234,7 @@ evidence; they do not establish whether a tool helped the task.
   sources in place. The upgrade preserves session and public message
   identities, pins, notes, names, stars, and retained rows whose sources are
   gone; archive-only archives retain their pending state without source sync.
-  DuckDB rebuilds the mirror when its source data version changes. The
-  messages API and DuckDB preserve the existing system/source fields and body.
+  The messages API preserves the existing system/source fields and body.
   PostgreSQL preserves source identity, the system flag, and dialogue
   projection fields. ClickHouse runtime behavior remains unverified.
 
@@ -602,11 +601,8 @@ fixtures retain this field; missing identities remain source-local.
   generic deduplication rules. These accounting semantics are exposed by
   usage, activity, and session-summary schema version 5 and reporting schema
   version 2; reporting version 1 retains its frozen first-seen, token-only
-  semantics. Reverified 2026-08-06 that DuckDB records a web-search-only flat
-  fee as computed pricing provenance, so combining it with a provider-reported
-  cost is labeled `mixed` like the SQLite archive. Reverified 2026-08-22 that
-  activity buckets carry the selected Claude input-token snapshots identically
-  across SQLite, PostgreSQL, and DuckDB.
+  semantics. Reverified 2026-08-22 that activity buckets carry the selected
+  Claude input-token snapshots identically across SQLite and PostgreSQL.
 
 - **Agentsview:** `internal/parser/claude.go` and
   `internal/parser/claude_provider.go`; local observations and fixtures are
@@ -1324,6 +1320,22 @@ fixtures retain this field; missing identities remain source-local.
   structural `source.subagent` marker and a top-level `parent_thread_id`; that
   pair defines the parent edge. `thread_source` is a legacy fallback, and
   `session_id` identifies the root or tree rather than the parent.
+
+- **Home directory files (observed 2026-11-15, codex-cli 0.167.0):** Besides
+  the transcript roots, `session_index.jsonl`, and `history.jsonl`, a local
+  Codex home held Codex's own SQLite databases with their `-wal` and `-shm`
+  files (`logs_2.sqlite`, `state_5.sqlite`, `goals_1.sqlite`,
+  `memories_1.sqlite`, `queue_1.sqlite`), lock files such as
+  `session_index.jsonl.lock` and `auth.json.lock`, `installation_id`,
+  configuration, caches, and tool directories. Watching the directory showed
+  the log, state, and memory databases, lock files, and `installation_id`
+  changing constantly with no session activity. Agentsview watches the home
+  directory without recursion only for the title index, so its Codex provider
+  classifies every other direct child as non-data, except a transcript root.
+  `history.jsonl` is non-data for the watch because the live-activity poller
+  reads it on its own schedule.
+  Observational evidence from one installation, not a pinned-source
+  guarantee.
 
 - **Launch classification (reverified 2026-10-08):**
   `session_meta.payload.originator=codex_exec` is durable producer evidence of
@@ -2048,6 +2060,143 @@ fixtures retain this field; missing identities remain source-local.
 - **Agentsview:** `internal/parser/gemini_apps_takeout.go` and
   `internal/importer/gemini_apps.go`; the CLI-only import path does not affect
   Gemini CLI discovery or parsing.
+- **Chrome Sync format:** gemini.google.com answers batchexecute POSTs to
+  `/_/BardChatUi/data/batchexecute` with a `)]}'` prefix, length lines, and
+  chunks whose `["wrb.fr", <rpc>, "<payload JSON>", ...]` entry carries the
+  result. `MaZiqc` lists chats: payload `[_, cursor, [entry...]]`, entry `[0]`
+  is the `c_` chat ID, `[1]` the title, and `[5]` the `[seconds, nanos]`
+  update time. `hNvQHb` returns `[turns, cursor, ...]` with turns newest
+  first; turn `[0]` is `[chat, response]`, `[2][0][0]` the prompt, `[3][0]`
+  the reply drafts (`[id, [text, ...], ...]`), `[3][3]` the shown draft's ID,
+  and the last `[seconds, nanos]` child the turn time. Turn `[1]` names the
+  previous turn, not this one. Cursors are base64 text with `+` and `/`. A
+  `wrb.fr` entry with a null payload is Gemini refusing the call; Sync counts
+  that chat as failed without counting it toward the two-failures stop
+  (`TestSyncGeminiRefusedConversationsDoNotEndRound`).
+- **Chrome Sync evidence:** `no-public-source`. A read-only probe of a signed-in
+  web app (build `boq_gemini-web-uiserver_20261020.01_p0`) on 2026-10-21
+  checked the RPC IDs `MaZiqc` and `hNvQHb`, every position above, list and
+  turn paging with real cursors, and that the list update time equals the
+  newest turn time. Sanitized captures with the real array layout are
+  `internal/importer/testdata/gemini_web/`, exercised by
+  `TestSyncGeminiCapturedPages` and `TestGeminiRPCPayload`. Gemini publishes
+  no schema; RPC names and positions can change with any web app build.
+- **Chrome Sync requests:** `internal/importer/browser_requests/gemini-apps.txt`
+  names the two RPCs with `chat` and `cursor` parameters. The server never
+  sends a request body. `frontend/chrome-extension/gemini_fetch.js` builds each
+  RPC's `f.req` argument from those parameters inside the page, adds the
+  page's `SNlM0e` request token, and posts through `pageFetch`. The token never
+  leaves the page. Signed-out pages have no token, which reads as HTTP 401.
+- **Pending replies:** A newest turn with no reply text, including a turn with
+  only an attachment, is written but its freshness is not recorded, so the next
+  Sync fetches it again. This applies only while the chat's list update time
+  is within 24 hours of the current time
+  (`TestSyncGeminiRefetchesReplyInProgress`,
+  `TestSyncGeminiRefetchesAttachmentOnlyTurn`,
+  `TestSyncGeminiPendingWindow`).
+- **Identities and history:** User rows carry the turn's response ID and reply
+  rows the shown draft ID as source identities. Appends and completed replies
+  keep message IDs and pins (`TestSyncGeminiKeepsPinsInPlace`). Another draft,
+  a regenerated reply, or a shorter chat replaces the chat and keeps the
+  previous version in Trash, also when the stored text is equal
+  (`TestSyncGeminiIncrementalAndHistory`, `TestSyncGeminiDraftSwitchKeepsHistory`,
+  `TestSyncGeminiSameTextDraftSwitchKeepsPins`). Under usage-only storage, a
+  chat with fewer messages than stored also keeps a Trash copy when its stored
+  replies still match as a prefix
+  (`TestSyncGeminiUsageArchiveShorterChatKeepsTrashedCopy`).
+- **Chrome Sync evidence limits:** The account probed had no pinned chats, so
+  whether pinned chats appear in the default list is unchecked. Attachments,
+  images, and Canvas content are not imported. Takeout and Sync sessions use
+  different IDs and are not deduplicated. Whether the list update time moves
+  when a reply completes is unverified; the 24-hour pending bound keeps a
+  reply that never completes from being fetched forever. The live probe
+  predates the 2026-11-17 move onto the shared Sync runner; the move was
+  verified with synthetic tests and the sanitized captures only.
+- **Chrome Sync code:** `internal/parser/gemini_apps_web.go`,
+  `internal/importer/gemini_apps_sync.go`, and
+  `frontend/chrome-extension/gemini_fetch.js`.
+
+## Grok Web (`grok-web`)
+
+- **Format:** grok.com REST JSON read by Chrome Sync.
+  `GET /rest/app-chat/conversations?pageSize=100` lists chats newest first as
+  `{conversations, nextPageToken}`; later pages add `&pageToken=<uuid>`, an
+  empty token is rejected with HTTP 400, and the last page omits
+  `nextPageToken`. Entries carry `conversationId` (UUID), `title`, and RFC
+  3339 `createTime` and `modifyTime`.
+  `GET /rest/app-chat/conversations/{id}/responses` returns
+  `{responses, inflightResponses}` with every branch in one body. Each
+  response has `responseId`, `parentResponseId` (absent on the root), `sender`
+  (`human`, `assistant`, `ASSISTANT`, or `model`), Markdown `message`,
+  `createTime`, `model`, and `partial`. A failed regeneration is an assistant
+  response with an empty `message`.
+- **Evidence:** `no-public-source`.
+- **Upstream:** xAI publishes no schema for the grok.com web API; public
+  references were searched 2026-10-21. A read-only probe of a signed-in web
+  app checked 2026-10-21 listed 79 chats (23 with branches, up to 74 responses
+  and 287 KB in one unpaged `/responses` body) and compared two branched chats
+  with the rendered page: every rendered response lay on the path from the
+  newest non-empty leaf, and its older siblings were not shown. Earlier turns
+  were not rendered by the virtualized page, so the rule is inferred for them.
+  No reply was in progress during the probe, and signed-out responses were not
+  observed. Sanitized captures with the real keys and branch structure are
+  `internal/importer/testdata/grok_web/`, exercised by
+  `TestSyncGrokCapturedPages`. `responses-branched.json` keeps the captured
+  branch points but was trimmed on 2026-11-17: two linear prompt-and-reply
+  pairs were cut, so the next prompt now follows the reply before them, and
+  each array keeps its first entry.
+- **Usage and cost:** responses name a `model` but expose no token, credit, or
+  monetary-cost fields.
+- **Agentsview:** `internal/parser/grok_web.go` and
+  `internal/importer/grok_web_sync.go`. The `grok-web` type is import-only and
+  does not affect Grok Build discovery or parsing.
+- **Chrome Sync requests:** `internal/importer/browser_requests/grok-web.txt`
+  names the first list page, a later list page by `pageToken`, and one chat's
+  `/responses`. The extension's `grok-web` entry in
+  `frontend/chrome-extension/platforms.js` pins chat IDs and page tokens to
+  UUIDs and adds `Accept: application/json` to plain cookie GETs through
+  `pageFetch`.
+- **Shown branch:** Sync stores the path from the root to the newest response
+  with text that has no descendant with text. Failed regenerations are empty,
+  so they never end the shown branch (`TestParseGrokWebConversation`,
+  `TestSyncGrokCapturedPages`).
+- **Pending replies:** A chat with an entry in `inflightResponses`, a
+  `partial` response that ends the shown branch, or an empty `partial` reply
+  directly below the end of the shown branch is written but its freshness is
+  not recorded, so the next Sync fetches it again. A chat with an empty
+  `partial` reply below an earlier response of the shown branch is pending
+  too while that reply is newer than the end of the shown branch, because that
+  is how a regeneration looks while Grok writes it. An older one is a failed
+  regeneration the chat has moved past, and one below a branch no longer shown
+  does not count. A `partial` response with later turns below it on the shown
+  branch is finished history and does not count either. The capture holds a
+  failed regeneration that stayed `partial` with no text, so a regeneration
+  that fails as the newest response is refetched until the bound below. This
+  applies only while the chat's list `modifyTime` is within 24 hours of the
+  current time. A missing or unreadable `modifyTime` counts as within that
+  window and gives freshness no list marker, so a finished chat with one is
+  fetched once (`TestGrokWebPending`, `TestSyncGrokRefetchesReplyInProgress`,
+  `TestSyncGrokRefetchesRegeneration`, `TestSyncGrokPendingWindow`,
+  `TestSyncGrokUnreadableListTime`).
+- **Sign-in:** HTTP 401 and 403 both read as an expired sign-in and end Sync
+  (`TestSyncGrokStops`).
+- **Identities and history:** Each message carries its `responseId` as the
+  source identity. Appends and completed replies keep message IDs and pins
+  (`TestSyncGrokIncrementalAndHistory`, `TestSyncGrokCompletionFillsModel`).
+  A changed shown branch replaces the chat and keeps the previous version in
+  Trash, also when the new branch repeats the stored text.
+- **Chrome Sync evidence limits:** The branch rule was checked on two chats.
+  Earlier turns were not rendered by the virtualized page, so the rule is
+  inferred for them. No reply was in progress and no signed-out response was
+  observed during the probe, so the pending rule follows the `partial` and
+  `inflightResponses` field names and the sign-in rule follows the HTTP status
+  codes. `/responses` was not seen to page: the largest body held 74 responses
+  and 287 KB. Whether `modifyTime` moves when a reply completes is unverified;
+  the 24-hour pending bound keeps a reply that never completes from being
+  fetched forever. Reasoning steps, attachments, images, search results, and
+  workspaces are not imported. The live probe predates the 2026-11-17 move onto
+  the shared Sync runner; the move was verified with synthetic tests and the
+  sanitized captures only.
 
 ## Grok Build (`grok`)
 
@@ -2897,9 +3046,8 @@ schemas keep their existing ordering behavior.
   Structured text blocks retain literal markers separately from reasoning and
   tool calls. Unpaired observations retain their stored-content `message`
   search behavior and add no tool call. The `thinking` source on SQLite,
-  PostgreSQL, DuckDB, and ClickHouse searches reasoning with substring or
-  regex mode; source-less sessions and v4 imports retain their stored-content
-  fallback.
+  PostgreSQL, and ClickHouse searches reasoning with substring or regex mode;
+  source-less sessions and v4 imports retain their stored-content fallback.
 - **Format:** A CLI conversation directory containing `base_state.json` and one
   JSON file per event under `events/`; Agentsview also fingerprints optional
   legacy `TASKS.json` files.
@@ -4167,11 +4315,15 @@ schemas keep their existing ordering behavior.
 - **Usage and cost:** The export contains conversation content and timestamps,
   not authoritative token, cache, reasoning, credit, or USD accounting.
 - **Agentsview:** `internal/parser/claude_ai.go` parses exports;
-  `internal/importer/claude_ai_sync.go` imports browser-fetched chats.
+  `internal/importer/claude_ai_sync.go` imports browser-fetched chats through
+  the shared runner in `internal/importer/browser_sync.go`.
 - **Browser sync:** The browser reads organizations, paginated conversation
   summaries, and selected conversation trees from Claude.ai's private API.
   Request shapes are shared by Go, Rust, and the Chrome extension in
-  `internal/importer/claude_ai_requests.txt`. Lists use `data` and `has_more`
+  `internal/importer/browser_requests/claude-ai.txt`;
+  `internal/importer/testdata/browser_paths/claude-ai.txt` lists the exact
+  paths Go builds, and the extension tests accept each one. Lists use `data`
+  and `has_more`
   and include active, archived, and starred chats. Details select
   `current_leaf_message_uuid` and follow string `parent_message_uuid` links to
   the root sentinel `00000000-0000-4000-8000-000000000000`. Message text comes
@@ -4183,26 +4335,40 @@ schemas keep their existing ordering behavior.
   messaging sends replies through a private Unix socket to the server; Chrome
   Sync's HTTP stream contains only progress, done, and error events. Setup
   pins the extension's public-key-derived ID. Native frames are capped at 64
-  MiB; oversized serialized replies become status 413. Both peers require
-  protocol revision 1 in each message, covering encoding and request shapes.
+  MiB; oversized serialized replies become status 413. Protocol revision 2
+  covers encoding and request shapes. The server requires revision 2 on every
+  reply; the extension does not check the request revision and stamps each
+  reply with its own.
+  Revision 2 (2026-11-17) adds a `platform` field to each request. An
+  extension that does not know the platform replies `unsupported: true`; the
+  server fails only that request with the update message and keeps the
+  connection, checked by `TestChromeHostUnsupportedPlatformReply`. A revision
+  1 extension still answers with revision 1, so the server disconnects and
+  asks for the same update.
   `TestChromeHostLocalOnly` refuses remote-auth, bind-all, and forwarded
   requests before Chrome fetches. `TestChromeHostIncompatibleReply` checks
   mismatched replies during organization, list, and detail fetches before
   status or body consumption without imports. Sync cancels on compatibility
-  errors and returns `claude_ai_chrome_host_update_required`. Recovery is to
+  errors and returns `chrome_host_update_required`. Recovery is to
   restart AgentsView if upgraded, rerun setup, reload the extension, then
   Sync. `TestClaudeAIChromeStatus` verifies live connection status through the
   local-only GET route. Registration is per OS user; the last setup wins.
   `TestChromeHostKeepsLiveConnection` checks that a second profile is rejected
   and subsequent fetches still reach the first profile. Reverified 2026-10-11
-  against the Unix socket test. The worker test `refuses before touching tabs`
-  checks absent and unknown request revisions before tab access or fetch.
+  against the Unix socket test. The worker tests refuse unknown platforms with
+  `unsupported` and disallowed paths with an error before touching tabs, and
+  stamp every reply with the worker's own revision whatever revision the
+  request carried.
   `TestChromeSyncResults` checks the generated CLI operation with a base path,
   Origin, bearer token, partial summaries, and pre-stream error messages,
-  including `claude_ai_chrome_host_required` and `claude_ai_sync_running`.
+  including `chrome_host_required` and `chrome_sync_running`. These codes and
+  `browser_sync_auth_required` replaced the `claude_ai_` codes on 2026-11-17;
+  `claude_ai_config_invalid` is unchanged.
 - **Freshness:** Sync stores an FNV-64a hash of the list's `updated_at`, visible
   leaf, stored message count, transcript revision, title, and end time in
-  `provider_freshness`, keyed by `claude-ai` and session ID. Resync and
+  `provider_freshness`, keyed by `claude-ai` and session ID.
+  `TestClaudeAIFreshnessGolden` pins the hash bytes, so moving Claude.ai onto
+  the shared runner on 2026-11-17 did not invalidate stored hashes. Resync and
   `ResetAllMtimes` clear it. The hash includes a selected-branch-counts marker
   to refresh older cached counts once. A zip re-import that changes stored
   text, count, or title triggers a detail fetch. Title-only repairs count as
@@ -4230,8 +4396,9 @@ schemas keep their existing ordering behavior.
   [Sync Claude.ai chats](https://agentsview.io/docs/chat-import/#sync-claudeai-chats)
   for failure handling. Organization responses must decode to an array; null
   and other shapes fail. Organization and list failures, cancellation, and an
-  empty page with `has_more: true` stop Sync. Null and root-sentinel list
-  leaves skip detail fetches; absent or malformed leaves count as errors.
+  empty page with `has_more: true` stop Sync. Null, absent, and
+  root-sentinel list leaves skip detail fetches; malformed leaves count as
+  errors.
 - **Observed 2026-10-07:** Authenticated Team and personal account checks found
   `current_leaf_message_uuid` on list items and byte-identical list and detail
   `updated_at` values with microseconds. Branch switches changed the leaf
@@ -4248,6 +4415,10 @@ schemas keep their existing ordering behavior.
   like zip import on main, stores text and thinking blocks only. Signed-out
   organization, list, and detail requests returned HTTP 403 with
   `error.details.error_code` equal to `account_session_invalid`.
+- **Observed 2026-11-13:** A contributor's live Sync runs found about five
+  list items per run with no `current_leaf_message_uuid` field at all. They
+  have no message tree to fetch, so Sync skips them like a null leaf. No
+  fixture captures them; the list-leaf test covers the absent case.
 - **Evidence limits:** Existing selected-path and Sync fixtures cover these
   shapes. Multiple chat organizations, web-search blocks, unanswered final
   prompts, and tree fields in official exports still need live verification.
@@ -4384,6 +4555,79 @@ schemas keep their existing ordering behavior.
   data.
 - **Agentsview:** `internal/parser/chatgpt.go`; graph ancestry is flattened for
   display and the importer does not claim billing completeness.
+- **Chrome Sync:** `internal/importer/chatgpt_sync.go`, with request shapes in
+  `internal/importer/browser_requests/chatgpt.txt` and
+  `frontend/chrome-extension/chatgpt_fetch.js`. The contributor reports live
+  use of the private session, conversation list, and detail endpoints in
+  [agentsview#2226](https://github.com/kenn-io/agentsview/issues/2226),
+  checked 2026-10-17. The page fetches `/api/auth/session` for a short-lived
+  access token and sends it as a bearer header; the token never leaves the
+  page. Sync uses the export conversation parser. List timestamps accept ISO
+  strings or Unix seconds; detail timestamps use Unix seconds.
+- **Timestamps:** One supplied signed-in capture had a detail timestamp 0.68 s
+  after the list timestamp. Sync records freshness only when the two differ by
+  at most 5 s in either direction; a larger difference leaves the chat to be
+  fetched again on the next run, even if neither copy changed. Checked by
+  `TestSyncChatGPTEquivalentTimestampsSkipSecondDetail` (2026-10-18). ChatGPT
+  has no signal for a reply still being written, so a chat synced mid-reply
+  keeps that reply until the list timestamp moves.
+- **Lists:** The
+  [txcript ChatGPT format notes](https://github.com/skillsynchq/txcript/blob/main/docs/formats/chatgpt.md),
+  checked 2026-10-17, document separate active (`is_archived=false`) and
+  archived (`is_archived=true`) lists. Sync pages both lists every run, checked
+  by `TestSyncChatGPTPagesActiveAndArchivedLists`.
+- **Detail format:** The
+  [conversation export format notes](https://github.com/ThierryAbalea/chatgpt-conversation-export/blob/main/docs/format.md),
+  checked 2026-10-17, describe a newer flat `messages` array with `page_info`
+  pagination. Sync does not parse it. A detail without a `mapping` object or
+  without both `conversation_id` and `id` counts as one failed chat toward the
+  two-failures stop, and the run then reports that AgentsView needs an update
+  (`TestSyncChatGPTUnsupportedFormatCountsTowardDetailStop`,
+  `TestSyncChatGPTSingleUnsupportedDetail`). A detail that parses to no
+  messages records freshness and is not fetched again until the list timestamp
+  changes (`TestSyncChatGPTEmptyConversationFreshness`, 2026-11-17). Before
+  2026-11-17 such chats were fetched on every run.
+- **Identities and history:** The parser stores each user message's ChatGPT ID
+  and parent ID as source identities, for ZIP imports and Sync alike. Assistant
+  rows merge several nodes and carry no source identity, so a regenerated reply
+  with identical text keeps pins matched by role, text, and occurrence rank. Sync fills
+  missing identities and models in place; ZIP re-imports do not
+  (`TestImportChatGPTReimportLegacyRows`). A turn whose stored and incoming IDs
+  differ is an edit. Appends, completed tool results, and extended text keep
+  message IDs and pins. Edits, regenerations, and shorter chats replace the
+  chat and keep the previous version in Trash under full, transcripts, and
+  usage storage (`TestSyncChatGPTAppendFreshnessAndBranchChanges`,
+  `TestSyncChatGPTReplacesShorterBranchAndPreservesLostPins`,
+  `TestSyncChatGPTBackfillsLegacyIdentityBeforeReplacingEditedTurn`,
+  `TestSyncChatGPTUsageArchiveShorterBranchKeepsTrashedCopy`). Since
+  2026-11-17, a usage-only chat whose stored rows still match as a prefix but
+  that has fewer messages also keeps a Trash copy
+  (`TestSyncChatGPTUsageArchiveShorterCompatiblePrefixKeepsTrashedCopy`).
+  Stored models stay when a later reply makes the parser infer another model
+  (`TestSyncChatGPTArchiveUpdatesAppendedTurns`,
+  `TestSyncChatGPTUpdatesRetainedModelAndCachesFreshness`,
+  `TestSyncChatGPTUsageArchiveFillsModelWithUnchangedTimestamp`).
+- **Images and start time:** Browser details carry no asset identity, so images
+  show as `[image unavailable]`. Sync keeps a ZIP-imported upload on a user turn
+  whose position, role, timestamp, sanitized surrounding text, and saved IDs
+  (when present) match (`TestSyncChatGPTZipImageReconciliation`). Generated
+  images become placeholders even when unchanged, so the first Sync of a chat
+  with a ZIP-imported generated image replaces it and keeps the original in
+  Trash. When detail
+  `create_time` is null or absent, Sync keeps the stored start time or uses
+  the first dated message (`TestSyncChatGPTMissingCreateTime`).
+- **ChatGPT Sync errors:** Before streaming, `chrome_host_required` reports a
+  disconnected host and `chrome_sync_running` an active Chrome Sync. Stream
+  errors use `browser_sync_auth_required` for an HTTP 401 and
+  `chrome_host_update_required` for an incompatible extension. HTTP 429 that
+  outlasts five tries, or a `Retry-After` over 60 s, ends the run
+  (`TestSyncChatGPTLongRetryAfterKeepsEarlierWrites`).
+- **Evidence limits:** The 5 s skew comes from one capture. Whether the list
+  timestamp moves when a reply finishes is unverified. Project chats, Business
+  workspaces, and the flat detail format are unverified. The live checks above
+  predate the 2026-11-17 move onto the shared Sync runner; the move was
+  verified with synthetic tests only. A live run on the moved code is still
+  needed.
 
 ## Kiro CLI (`kiro`)
 
@@ -4648,6 +4892,52 @@ schemas keep their existing ordering behavior.
   session moved between two configured roots: syncing its former root, even
   after removing the old profile, preserves the complete archived session as
   source-present. This includes profiles named `sessions` or `state.db`.
+
+## Factory Droid (`factory`)
+
+- **Format:** One `<uuid>.jsonl` transcript per session under
+  `~/.factory/sessions/<cwd-slug>/` (the working directory with `/` replaced
+  by `-`), plus a `<uuid>.settings.json` sidecar. The transcript opens with a
+  `session_start` record (`id`, `title`, `cwd`, `owner`, and, for a session
+  started by another session's tool call, `callingSessionId` and
+  `callingToolUseId`) followed by `message` records whose `message.content`
+  uses Anthropic-shaped blocks (`text`, `thinking`, `tool_use`, `tool_result`,
+  `image`); `todo_state`, `agent_turn_outcome`, `compaction_state`, and
+  `session_end` records carry no transcript content. Assistant messages carry
+  `modelId` and `reasoningEffort`.
+- **Visibility:** User records with `visibility: "llm_only"` are Droid-injected
+  `<system-reminder>` context. `visibility: "user_only"` marks three things:
+  hook runs (`hookEventName` with empty `content`), UI notices such as
+  provider errors and MCP status (user text), and nested Script tool calls
+  (assistant `tool_use` and user `tool_result` pairs). A prompt with pasted
+  images carries `image` blocks and an "Attached image local file paths"
+  `<system-reminder>` text block ahead of the typed text.
+- **Evidence:** `no-public-source`.
+- **Upstream:** The [Factory documentation](https://docs.factory.ai) was checked
+  2026-09-02; the Droid CLI is closed source and no persistence schema is
+  published. The format above is recorded from local observation of
+  `version: 2` transcripts, rechecked 2026-11-16 against current Droid output;
+  see kenn-io/agentsview#1358.
+- **Usage and cost:** The transcript carries no per-message usage. The
+  `settings.json` sidecar keeps session-cumulative `tokenUsage`
+  (`inputTokens`, `outputTokens`, `cacheCreationTokens`, `cacheReadTokens`,
+  `thinkingTokens`) plus a proprietary `factoryCredits` figure that Agentsview
+  does not use, the session `model`, and the provider in `providerLock`
+  (earlier releases wrote `apiProviderLock`). `inclusiveTokenUsage` equals
+  `tokenUsage` plus every entry in `childInclusiveTokenUsageBySessionId`,
+  which holds the totals of subagent sessions this session started. Most
+  subagents leave no transcript; a persisted one sits beside its parent with a
+  `session_start.callingSessionId` link and matching totals in its own
+  sidecar. Agentsview emits one aggregate usage event from `tokenUsage`, plus
+  one event per child, priced as the parent's model because the sidecar does
+  not record the child's model. A session with `callingSessionId` emits no
+  usage, so each child is counted once, on its parent, whether or not its
+  transcript exists. All Factory events use the `session` source because they
+  are cumulative totals, so per-request token bounds do not apply and peak
+  context stays unknown. Bring-your-own-key models are recorded as
+  `custom:<name>-<index>` and stay unpriced without a custom pricing entry.
+- **Agentsview:** `internal/parser/factory.go` and
+  `internal/parser/factory_provider.go`.
 
 ## Forge (`forge`)
 

@@ -430,7 +430,7 @@ type Session struct {
 	// Claude full parser fell back to linear processing for this file
 	// (nil = unknown/legacy or non-Claude). Linearity is monotonic
 	// across appends, so the incremental parser skips fork detection
-	// for linear-bound transcripts. Not mirrored to PG/DuckDB.
+	// for linear-bound transcripts. Not pushed to replicas.
 	ClaudeLinearParse *bool `json:"-"`
 	// LastWriteIncremental is SQLite-only sync bookkeeping (like
 	// NextOrdinal): true when the last write to this row went through
@@ -438,7 +438,7 @@ type Session struct {
 	// of a full re-normalization (upsertSessionArgs, which always resets
 	// it to false). It is consumed only by parse-diff to classify benign
 	// incremental-vs-full skew and is json:"-" so it never leaks through
-	// the HTTP session API. Deliberately not mirrored to PG/DuckDB: their
+	// the HTTP session API. Deliberately not pushed to replicas: their
 	// push column lists omit the whole sync-bookkeeping cluster.
 	LastWriteIncremental bool    `json:"-"`
 	FileInode            *int64  `json:"file_inode,omitempty"`
@@ -1256,7 +1256,7 @@ func (db *DB) GetSessionFull(
 		return s, err
 	}
 	// Expose the visible name (user rename, else agent session name)
-	// like the PG and DuckDB GetSessionFull and the sqlite base reads.
+	// like the replica GetSessionFull and the sqlite base reads.
 	// The coalesce happens post-scan because sessionFullCols is shared
 	// with ListSessionsModifiedBetween, whose push consumers must see
 	// display_name and session_name unmerged.
@@ -2113,7 +2113,7 @@ func (db *DB) LinkSubagentSessionsContext(ctx context.Context) (int, error) {
 	}
 
 	// local_modified_at is bumped so the sync_marker trigger fires and
-	// push targets (PostgreSQL and the DuckDB mirror) re-select the linked
+	// push targets (PostgreSQL and ClickHouse) re-select the linked
 	// session: parent_session_id and relationship_type are mirrored
 	// columns, but neither is a sync_marker signal, so linking an older
 	// session after a mirror's cutoff would otherwise never re-push it

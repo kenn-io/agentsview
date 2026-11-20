@@ -94,7 +94,7 @@ const microdollarsPerAICredit = 10_000
 // AICreditsFromCost converts a USD cost into AI credits when the
 // agent's cost is denominated in AI credits, and returns 0 otherwise.
 // It is the single home of the credit conversion shared by the SQLite,
-// PostgreSQL, and DuckDB usage paths; a per-agent credit rate would
+// PostgreSQL, and ClickHouse usage paths; a per-agent credit rate would
 // slot in here rather than at each accumulation site.
 func AICreditsFromCost(agent string, cost money.Money) float64 {
 	if cost.Microdollars == 0 || !parser.AgentNameUsesAICredits(agent) {
@@ -110,7 +110,7 @@ const microdollarsPerDollar = 1_000_000.0
 // CostUSDFromCost renders cost as float64 dollars for the deprecated
 // SessionUsage.CostUSD compatibility field, or nil when hasCost is
 // false. It is the single place that performs the microdollars-to-
-// dollars conversion, so the SQLite, PostgreSQL, and DuckDB session
+// dollars conversion, so the SQLite, PostgreSQL, and ClickHouse session
 // usage paths and the subagent rollup combiner all report an
 // identical value for the same cost.
 func CostUSDFromCost(hasCost bool, cost money.Money) *float64 {

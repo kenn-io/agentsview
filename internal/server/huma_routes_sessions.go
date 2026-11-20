@@ -142,7 +142,7 @@ func parseSessionIDs(raw string) ([]string, error) {
 		service.SessionIDsRequireCSVEncoding(records[0]) {
 		members = records[0]
 	}
-	if len(members) > 100 {
+	if len(members) > service.MaxListSessionIDs {
 		return nil, apiError(http.StatusBadRequest, "ids must contain 1 to 100 non-empty session IDs")
 	}
 	ids := make([]string, 0, len(members))
@@ -1201,6 +1201,11 @@ func (s *Server) humaRestoreSession(ctx context.Context,
 	}
 	if n == 0 {
 		return nil, apiError(http.StatusNotFound, "session not found or not in trash")
+	}
+	if s.engine != nil {
+		// Restoring changes no source file, so fallback polling must reconcile
+		// to read a transcript that changed while the session was in the trash.
+		s.engine.ForgetPollScans()
 	}
 	if s.broadcaster != nil {
 		s.broadcaster.Emit("sessions")

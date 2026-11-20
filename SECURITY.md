@@ -65,7 +65,6 @@ risk via documented flags and config.
 | Browser → HTTP server          | Host-header allowlist + CORS + CSP + X-Frame-Options enforced       | DNS-rebinding, framing, and cross-origin defenses.                     |
 | agentsview → PostgreSQL (push) | TLS required for non-loopback hosts                                 | Plaintext rejected unless `allow_insecure = true` is set explicitly.   |
 | agentsview → ClickHouse (push) | TLS required for non-loopback hosts                                 | Plaintext or unverified TLS rejected unless `allow_insecure = true`.   |
-| agentsview → PostHog telemetry | One-way outbound, opt-out                                           | Anonymous usage events. Disable with `AGENTSVIEW_TELEMETRY_ENABLED=0`. |
 | agentsview → update endpoint   | One-way outbound, opt-out                                           | Disable with `--no-update-check`.                                      |
 | agentsview → pricing catalogs  | One-way outbound, automatic                                         | Public JSON from GitHub and OpenRouter; no session data sent.          |
 | agentsview → model endpoints   | Opt-in; sends transcript content                                    | Generated insights, recall extraction, and embeddings.                 |
@@ -85,14 +84,17 @@ risk via documented flags and config.
   permanent-delete path. Permanent delete removes rows from the primary tables
   and the FTS5 index; it does not promise erasure of SQLite pages, the WAL,
   on-disk backups, OS file caches, or any external copy that was made via
-  `pg push` or HTTP remote sync.
+  `pg push` or HTTP remote sync. Search cache directories can contain snippets
+  from deleted sessions until the same search overwrites them or the cache is
+  trimmed. See [Configuration](docs/configuration.md#data-directory) for their
+  locations.
 
 ## Data in transit
 
 Session data stays on your machine unless you turn on a feature that sends it. A
 few requests run automatically, and none of them carries session data. This
-section lists every outbound channel: what it sends, when, and how to turn it
-off.
+section describes outbound channels, what they send, when they run, and how to
+turn them off.
 
 ### Local server
 
@@ -110,24 +112,7 @@ These run without any configuration. None of them sends session content,
 prompts, project names, file paths, or hostnames. Each one reveals your IP
 address to the host it contacts.
 
-- **Anonymous telemetry.** Release builds send usage events to PostHog's US
-  endpoint, `us.i.posthog.com`. The server sends `daemon_active` at most once
-  per installation per UTC day while it runs, and `setup_finished` once per
-  installation when the archive first shows a session. The web UI reports a
-  fixed set of events through the server: app opens, visit-length buckets,
-  screen and analytics page views, the agent type of a viewed session, and
-  which kind of search, export, insight, error, or sync failure occurred. The
-  browser never contacts PostHog, and the server drops any property value
-  outside each event's fixed list. Every event carries the random installation
-  ID stored in `telemetry-install-id` in the data directory, the app version,
-  git commit, distribution channel, operating system, CPU architecture, and
-  whole hours since installation. Person profiles and GeoIP lookup are turned
-  off. Builds without a release version or the PostHog project key send
-  nothing, and so does any process with `CI` set. To turn telemetry off, set
-  `AGENTSVIEW_TELEMETRY_ENABLED=0`, `TELEMETRY_ENABLED=0`, or
-  `DO_NOT_TRACK=1`, then restart the server. See
-  [Anonymous Daemon Telemetry](docs/configuration.md#anonymous-daemon-telemetry)
-  for each event and its allowed values.
+- **Usage reporting.** Anonymous telemetry, sent only after consent.
 - **Update check.** When the web UI loads in a browser, the server requests
   `github.com/kenn-io/agentsview/releases/latest` and reads the release tag
   from the redirect. It caches the answer for one hour, or 15 minutes for
@@ -165,15 +150,6 @@ Each of these is off until you configure or run it.
   `allow_insecure = true`. `skip_verify=true` is also rejected on a
   non-loopback host without `allow_insecure`. See
   [ClickHouse sync](docs/clickhouse-sync.md).
-- **DuckDB Quack.** The DuckDB mirror is a local file.
-  `agentsview replica duckdb quack serve` exposes it to DuckDB clients that
-  hold its token. It binds to loopback by default; binding beyond loopback
-  requires `--allow-insecure`, because Quack speaks plain HTTP. On the client
-  side, setting `[duckdb].url` or `AGENTSVIEW_DUCKDB_URL` makes
-  `duckdb status` and `duckdb serve` send the token and SQL queries to that
-  Quack endpoint. A non-loopback client host also requires `allow_insecure`.
-  Remove the URL to stop these requests. See
-  [Quack Remote Access](docs/duckdb.md#quack-remote-access).
 - **HTTP remote sync.** agentsview pulls session archives from configured remote
   daemons using a per-host bearer token. Archive endpoints require that token
   even when the remote daemon's other API routes do not require
@@ -215,14 +191,19 @@ Each of these is off until you configure or run it.
   `cursor_admin_api_key`, optional user filters, and a date range to
   `api.cursor.com`. It runs only when you invoke it. See
   [Cursor Admin Usage Events](docs/token-usage.md#cursor-admin-usage-events).
-- **Claude.ai sync.** When you click **Sync**, your Claude.ai chats are fetched
-  with a signed-in Claude.ai session. With Chrome, the extension you install
-  with `agentsview source chrome setup` makes the requests using Chrome's
-  session and passes the chats to agentsview over a local socket. The desktop
-  build instead makes the requests from its own sign-in window, which keeps a
-  separate Claude.ai session. The agentsview server never contacts Claude.ai,
-  and credentials stay in Chrome or the sign-in window. See
-  [Sync Claude.ai chats](docs/chat-import.md#sync-claudeai-chats).
+- **Chrome Sync.** When you click **Sync** or run
+  `agentsview source import --sync`, your chats are fetched from `claude.ai`,
+  `chatgpt.com`, `gemini.google.com`, or `grok.com` with the session you are
+  signed in to there. With Chrome, the extension you install with
+  `agentsview source chrome setup` makes the requests using Chrome's session
+  and passes the chats to agentsview over a local socket. For Claude.ai only,
+  the desktop build can instead make the requests from its own sign-in window,
+  which keeps a separate Claude.ai session. The agentsview server never
+  contacts these sites, and credentials stay in Chrome or the sign-in window.
+  See [Sync Claude.ai chats](docs/chat-import.md#sync-claudeai-chats),
+  [Sync ChatGPT chats](docs/chat-import.md#sync-chatgpt-chats),
+  [Sync Gemini Apps chats](docs/chat-import.md#sync-gemini-apps-chats), and
+  [Sync Grok web chats](docs/chat-import.md#sync-grok-web-chats).
 - **Generated insights.** When `[insights]` sets `endpoint` and `model`,
   agentsview sends transcript-derived content to that OpenAI-compatible
   endpoint. Remote endpoints must use HTTPS unless `allow_http = true`. With
@@ -251,7 +232,9 @@ Each of these is off until you configure or run it.
 - **Docbank.** With `[integrations.docbank]` configured, agentsview sends the
   SHA-256 digests of transcript images to your Docbank server to find where it
   stores them. Only digests leave the machine. The URL must use HTTPS, or HTTP
-  on loopback. See
+  on loopback, unless `allow_http = true`. That setting allows plain HTTP to
+  any host and exposes the API key and digests on the network, so use it only
+  on a network you trust. See
   [Find transcript images in Docbank](docs/configuration.md#find-transcript-images-in-docbank).
 - **Publish to Gist.** Publishing a session or insight uploads its HTML export
   to GitHub as a public or secret gist. The server uses the token saved in
@@ -352,7 +335,7 @@ its own proposal.
    an additional confirmation (e.g., a `--yes-really` flag) on first use,
    given that it disables the only protection against plaintext PG egress?
 1. **Deletion guarantees.** Should "permanent delete" grow into a stronger
-   erasure path (VACUUM, WAL checkpoint + truncate, mirror propagation to
+   erasure path (VACUUM, WAL checkpoint + truncate, replica propagation to
    PG/HTTP targets), or should the docs simply make the current limits
    clearer?
 1. **Secret detection scope.** Should the detector expand (more patterns,

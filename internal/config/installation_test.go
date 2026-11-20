@@ -34,9 +34,6 @@ func TestInstallationIdentityIsIndependentOfTelemetryAndDisplayName(t *testing.T
 		pg, err := cfg.ResolvePG()
 		require.NoError(t, err)
 		assert.Equal(t, id, pg.MachineName)
-		duck, err := cfg.ResolveDuckDB()
-		require.NoError(t, err)
-		assert.Equal(t, id, duck.MachineName)
 	}
 	writeConfig(t, dir, map[string]any{"cursor_secret": "existing-secret"})
 	cfg, err := LoadMinimal()

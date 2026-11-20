@@ -42,6 +42,7 @@ const (
 	ToolGetActivityReport    = "get_activity_report"
 	ToolGetToolUsage         = "get_tool_usage"
 	ToolGetQualitySignals    = "get_quality_signals"
+	ToolGetTermTrends        = "get_term_trends"
 	ToolSearchDocs           = "search_docs"
 	ToolGetFrictionDigest    = "get_friction_digest"
 	ToolListFrictionPatterns = "list_friction_patterns"
@@ -224,7 +225,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 			"Use terms when every literal term must occur within one " +
 			"user/assistant exchange, or fully quoted substring text or regex for exact error messages, identifiers, and code fragments. " +
 			"Use concepts with two to five semantic ideas to keep only sessions with evidence for every idea. " +
-			"The default mode remains substring. On SQLite, PostgreSQL, DuckDB, and ClickHouse, a substring search of several words lists exact text first, " +
+			"The default mode remains substring. On SQLite, PostgreSQL, and ClickHouse, a substring search of several words lists exact text first, " +
 			"then messages holding every word, then those holding more of the words, and reports matched_words. Scope defaults to all, including child sessions and sidechain messages; " +
 			"top excludes them and subordinate returns only them. Child sessions bypass the one-shot exclusion. " +
 			"The response reports effective_scope and exclusions.children. Set context to include N messages of " +
@@ -308,6 +309,16 @@ func newServer(opts ServeOptions) *mcp.Server {
 				"also get example sessions for one signal.",
 			Annotations: readOnly,
 		}, t.qualitySignals)
+
+		mcp.AddTool(s, &mcp.Tool{
+			Name: ToolGetTermTrends,
+			Description: "Legacy term-frequency counts over time, kept for agent harnesses that used the " +
+				"removed Trends page. Counts case-insensitive matches of each term in user and assistant " +
+				"messages, by day, week (default), or month, with each bucket's message count for computing " +
+				"rates. Up to 12 terms; join variants with | to count them as one series, e.g. " +
+				"\"load bearing | load-bearing\". Use the search tools to find prior work.",
+			Annotations: readOnly,
+		}, t.termTrends)
 
 		mcp.AddTool(s, &mcp.Tool{
 			Name: ToolSearchDocs,

@@ -76,7 +76,14 @@ type VersionInfo struct {
 // Bump it when a client-visible contract cannot be decoded safely by an older
 // CLI or daemon.
 const (
-	APIVersion = 23
+	APIVersion = 27
+	// SyncPendingAPIVersion reports catch-up in sync status.
+	SyncPendingAPIVersion = 15
+	// UsageWaitAPIVersion supports bounded usage waits and safe refresh retries.
+	UsageWaitAPIVersion = 26
+	// ArchiveWatchPushAPIVersion accepts archive-notification pushes without
+	// another source scan.
+	ArchiveWatchPushAPIVersion = 27
 	// KataAPIVersion is the first daemon API that serves /api/v1/kata/status.
 	KataAPIVersion = 14
 	// FrictionAPIVersion is the first daemon API that serves
@@ -210,7 +217,6 @@ type Server struct {
 	// replicas and mirror are the push backends registered by the
 	// composition root; each gets a daemon push route.
 	replicas []storage.Replica
-	mirror   storage.Mirror
 
 	// localSyncRunner, when set, backs the foreground local-sync HTTP handler
 	// with the worker-backed pass instead of running SyncThenRun in process.
@@ -815,7 +821,7 @@ func (s *Server) humaConfig() huma.Config {
 		"application/json": jsonFormat,
 		"json":             jsonFormat,
 	}
-	cfg.Info.Description = "HTTP API for browsing, searching, syncing, and managing local agent sessions. Responses carry X-Agentsview-Archive-Stale: true while a required archive rebuild or idle catch-up is incomplete; GET /api/v1/sync/status reports its state."
+	cfg.Info.Description = "HTTP API for browsing, searching, syncing, and managing local agent sessions. Responses carry X-Agentsview-Archive-Stale: true while a required archive rebuild is incomplete, or when a catch-up of changes held back by the background sync interval or an idle pause did not finish within the read's wait. A read within two minutes of another read starts no catch-up, because the watcher keeps syncing at sync_interval; it shares the remaining wait of a catch-up already running and is otherwise not marked. GET /api/v1/sync/status reports its state."
 	cfg.OpenAPIPath = "/api/openapi"
 	cfg.DocsPath = ""
 	cfg.SchemasPath = ""

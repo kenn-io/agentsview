@@ -81,7 +81,7 @@ one process. Choose `serve` for a foreground process or `daemon start` for a
 background process. Running `serve` when a compatible daemon is already running
 reports its URL and exits with an error (status 1) in the foreground.
 `daemon stop` and `serve stop` both stop that writable server, including sync;
-`serve stop` also stops read-only mirror servers for the same data directory.
+`serve stop` also stops read-only replica servers for the same data directory.
 
 For custom directories, additional agent homes, and supported S3 sources, see
 [Session discovery](https://agentsview.io/docs/configuration/#session-discovery).
@@ -91,7 +91,7 @@ The same guide explains how to choose
 The desktop app and ordinary session CLI commands share a detached local daemon
 and start one when needed. Dedicated diagnostics such as
 `db adopt-machine --list` and `doctor sync` read the archive without starting
-it. Commands such as `sync`, `usage`, `token-use`, `pg push`, `duckdb push`, and
+it. Commands such as `sync`, `usage`, `token-use`, `pg push`, and
 `clickhouse push` auto-start the daemon when needed. Daily usage reports read
 saved archive data; run `agentsview source sync` first to include new source
 changes. The server remains running after these commands exit and also serves
@@ -164,9 +164,8 @@ The container runs as root, so prefer a named volume for `/data` over a host
 bind mount; if you do bind-mount, pre-create the directory with the desired
 ownership to avoid root-owned files in your home directory.
 
-The examples publish the UI on loopback only (`127.0.0.1`). Every request needs
-the bearer token, including the DuckDB and Quack examples below, which bind the
-container's wildcard host. Publish the port beyond localhost only intentionally.
+The examples publish the UI on loopback only (`127.0.0.1`), and every request
+needs the bearer token. Publish the port beyond localhost only intentionally.
 
 Important: a containerized agentsview instance can only discover agent sessions
 from directories you explicitly mount into the container. If you do not mount an
@@ -181,53 +180,6 @@ docker run --rm -p 127.0.0.1:8080:8080 \
   -e AGENTSVIEW_PG_URL='postgres://user:password@postgres.example.com:5432/agentsview?sslmode=require' \
   ghcr.io/kenn-io/agentsview:latest
 ```
-
-Example DuckDB mirror startup. The published image leaves out DuckDB, so build
-an image with it first (see
-[DuckDB Mirror and Quack](#duckdb-mirror-and-quack)):
-
-```bash
-docker build --build-arg GO_TAGS=fts5,duckdb -t agentsview-duckdb .
-
-# Populate /data/sessions.duckdb from the mounted SQLite archive.
-docker run --rm \
-  -v agentsview-data:/data \
-  -v "$HOME/.claude/projects:/agents/claude:ro" \
-  -e CLAUDE_PROJECTS_DIR=/agents/claude \
-  agentsview-duckdb duckdb push --full
-
-# Serve the populated mirror read-only.
-docker run --rm -p 127.0.0.1:8080:8080 \
-  -v agentsview-data:/data \
-  agentsview-duckdb duckdb serve
-```
-
-Example Quack startup:
-
-```bash
-# Expose the local DuckDB mirror over Quack from the host/container.
-QUACK_TOKEN="$(openssl rand -base64 32)"
-docker run --rm -p 127.0.0.1:9494:9494 \
-  -v agentsview-data:/data \
-  agentsview-duckdb \
-  duckdb quack serve \
-    --bind quack:0.0.0.0:9494 \
-    --token "$QUACK_TOKEN" \
-    --allow-insecure
-
-# Serve the web UI from a remote Quack endpoint.
-# The client url uses the native quack:HOST:PORT form; the Quack extension
-# does not accept quack:http:// or quack:https:// urls. A non-loopback host
-# needs --allow-insecure.
-docker run --rm -p 127.0.0.1:8080:8080 \
-  -e AGENTSVIEW_DUCKDB_URL='quack:duckdb.example.com:9494' \
-  -e AGENTSVIEW_DUCKDB_TOKEN="$QUACK_TOKEN" \
-  agentsview-duckdb duckdb serve --allow-insecure
-```
-
-Keep Quack on loopback or behind TLS. Plain HTTP Quack on a non-loopback bind
-requires `--allow-insecure` and should only be used behind a trusted tunnel or
-reverse proxy.
 
 ## Token Usage and Cost Tracking
 
@@ -413,6 +365,7 @@ local Amp thread JSON files.
 | Cursor                | `~/.cursor/projects/`                                                                                                                                                                                                                                |
 | DeepSeek TUI          | `~/.codewhale/sessions/`, `~/.deepseek/sessions/`                                                                                                                                                                                                    |
 | DeepSeek Harness      | `~/.dsh/sessions/` (or `$DSH_HOME/sessions/`)                                                                                                                                                                                                        |
+| Factory Droid         | `~/.factory/sessions/`                                                                                                                                                                                                                               |
 | Forge                 | `~/.forge/`                                                                                                                                                                                                                                          |
 | Gemini CLI            | `~/.gemini/`                                                                                                                                                                                                                                         |
 | Goose                 | `~/.local/share/goose/sessions/` (macOS and Linux), `%APPDATA%\\Block\\goose\\data\\sessions\\` (Windows)                                                                                                                                            |
@@ -608,7 +561,7 @@ RooCode-derived VS Code extension that wrote per-task JSON under
 
 Local imports use a persisted installation ID, so updates and network changes do
 not split sessions across machine identities. `telemetry-install-id` stores the
-ID independently of telemetry. The display label defaults to the current
+ID. The display label defaults to the current
 hostname; set `local_machine_name` in `config.toml` for a fixed label after a
 daemon restart. Upgrades adopt historical local sessions when the archive has
 saved ownership. Older archives keep historical keys until you select the local
@@ -790,87 +743,13 @@ use the effective default target. Non-loopback URLs require verified TLS unless
 See [ClickHouse docs](https://agentsview.io/docs/clickhouse-sync/) for setup and
 configuration.
 
-## DuckDB Mirror and Quack
-
-DuckDB support is a mirror backend, not a replacement for the local SQLite
-archive. `agentsview serve` still performs primary ingestion into SQLite. Use
-DuckDB when you want a portable analytics file, read-only local serving from a
-mirror, or remote read access through DuckDB's Quack protocol.
-
-Release builds leave out DuckDB. To use the mirror, build from source with
-`make install DUCKDB=1`; see
-[Build with DuckDB](https://agentsview.io/docs/duckdb/#build-with-duckdb).
-
-```bash
-agentsview replica duckdb push          # mirror SQLite into DuckDB
-agentsview replica duckdb status        # show mirror sync status
-agentsview replica duckdb serve         # serve web UI from DuckDB (read-only)
-agentsview replica duckdb quack serve   # expose the local DuckDB file over Quack
-```
-
-`agentsview replica duckdb serve` reads `[duckdb].path` or
-`AGENTSVIEW_DUCKDB_PATH`. To serve from a remote Quack endpoint, set
-`AGENTSVIEW_DUCKDB_URL` and `AGENTSVIEW_DUCKDB_TOKEN` instead. Quack is still a
-new DuckDB protocol, so agentsview keeps conservative defaults: local Quack
-serving binds to loopback, requires a token, and rejects non-loopback plain HTTP
-unless `--allow-insecure` is explicit. For remote use, prefer a TLS URL or put
-Quack behind an authenticated tunnel/proxy.
-
-Backend modes:
-
-- SQLite: primary local archive, file sync, FTS5 search, and writable UI.
-- PostgreSQL: optional shared team backend; push from SQLite, serve read-only.
-- ClickHouse: optional remote backend; push from SQLite, serve read-only.
-- DuckDB: optional mirror file or Quack endpoint; push from SQLite, serve
-  read-only.
-
-Troubleshooting:
-
-- If DuckDB commands report that the build does not include DuckDB, rebuild with
-  `make install DUCKDB=1`.
-- If `duckdb push` fails to open the mirror, confirm that
-  `AGENTSVIEW_DUCKDB_PATH` points to a writable file location.
-- If Quack commands fail with extension errors, update the agentsview binary so
-  the embedded DuckDB runtime includes the Quack extension.
-- If a remote attach fails, check the token, the `quack:` URL, TLS/proxy
-  termination, and whether the server was intentionally started with
-  `--allow-insecure` for plain non-loopback binds.
-- DuckDB search currently uses substring/regex fallback behavior. SQLite FTS5
-  remains the indexed search path for primary local serving.
-
 ## Privacy
-
-agentsview sends limited anonymous telemetry to PostHog: a `daemon_active` ping
-at most once per UTC day while the server runs. The browser checks with
-`app_opened` once a day; reloads and focus don't repeat it that day, and a
-disabled reply stops reports and visit tracking. See the
-[telemetry configuration](docs/configuration.md#anonymous-daemon-telemetry) for
-scope and delivery limits. The server also sends `setup_finished` once per
-installation when the archive first has a session in the default session list,
-including orphaned sessions and excluding automated sessions and trash. Existing
-installs with such a session send it on their first start after upgrading. The
-web UI sends `visit_ended` with `surface: web` and visible visit duration in
-fixed buckets: `under_1m`, `1_to_5m`, `5_to_30m`, or `over_30m`. The web UI also
-reports searches (search mode), session views (the session's agent type), screen
-views (screen name, once per installation per UTC day on the server), exports
-(format), generated insights (insight kind), and analytics page views (page
-name), each with one value from a fixed list in the server that drops anything
-else. All events use a stable random install ID as the event `DistinctId`.
-[Feature outcomes](docs/configuration.md#anonymous-daemon-telemetry) also count
-empty searches, visible errors, and failed sync attempts. The events include
-`application=agentsview`, app version, commit, distribution (such as `homebrew`;
-empty for source builds), OS, and CPU architecture, with
-`$process_person_profile=false` and `$geoip_disable=true`. It does not include
-session, project, prompt, file path, account, or machine identity. Disable
-telemetry with `AGENTSVIEW_TELEMETRY_ENABLED=0`, `TELEMETRY_ENABLED=0`, or
-`DO_NOT_TRACK=1`. A build sends telemetry only when it has the PostHog project
-key and a release version such as `0.33.0`. Release builds and the `make` build
-targets set the key at link time. Plain `go build` and `go test` binaries have
-no key and send nothing. Telemetry also stays off in CI.
 
 All session data stays on your machine. The server binds to `127.0.0.1` by
 default. The update check is optional and can be disabled with
 `--no-update-check`.
+
+See [Usage Reporting](docs/configuration.md#usage-reporting) for telemetry.
 
 ## Documentation
 
@@ -891,25 +770,25 @@ Requires Go 1.27.4+ (CGO), Node.js 24.22.1+.
 ```bash
 make dev            # Go server (dev mode)
 make frontend-dev   # Vite+ dev server (run alongside make dev)
-make build          # build binary with embedded frontend (DUCKDB=1 adds DuckDB)
+make build          # build binary with embedded frontend
 make install        # install to ~/.local/bin
 ```
 
 ```bash
 make test           # Go tests (CGO_ENABLED=1 -tags "fts5")
-make bench-backends # compare SQLite, DuckDB, and PostgreSQL store reads
+make bench-backends # compare SQLite and PostgreSQL store reads
 make lint           # golangci-lint + NilAway
 make nilaway        # NilAway through custom golangci-lint
 make e2e            # Playwright E2E tests
 ```
 
 `make bench-backends` requires Docker. It starts a PostgreSQL container with
-testcontainers, mirrors the same SQLite fixture into DuckDB and PostgreSQL, and
-benchmarks the shared `db.Store` read queries for relative comparison. The
-default fixture is 1,000 sessions and 64,000 messages; use
-`BENCH_BACKENDS_SESSIONS` and `BENCH_BACKENDS_MESSAGES_PER_SESSION` to scale it.
-When the Docker CLI uses a non-default socket, export `DOCKER_HOST` for that
-socket before running the benchmark.
+testcontainers, mirrors the same SQLite fixture into PostgreSQL, and benchmarks
+the shared `db.Store` read queries for relative comparison. The default fixture
+is 1,000 sessions and 64,000 messages; use `BENCH_BACKENDS_SESSIONS` and
+`BENCH_BACKENDS_MESSAGES_PER_SESSION` to scale it. When the Docker CLI uses a
+non-default socket, export `DOCKER_HOST` for that socket before running the
+benchmark.
 
 Pre-commit and pre-push hooks via [prek](https://github.com/j178/prek): run
 `make lint-tools` and `make install-hooks` after cloning (requires `prek` 0.5.7

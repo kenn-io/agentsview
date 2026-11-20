@@ -7,6 +7,7 @@ AgentsView can index user and assistant message content into a local vector
 store and search it by meaning instead of exact terms, alongside the existing
 substring/regex/FTS5 content search. This is an opt-in feature backed by Ollama,
 Kit's shared local server, or a configured OpenAI-compatible API.
+For uploaded sessions, see [hosted raw sync setup](/docs/hosted-raw-sync/).
 
 For the architecture behind this page — storage layout, generations,
 concurrency, and the search path — see
@@ -15,11 +16,9 @@ concurrency, and the search path — see
 !!! note "Backends"
 
     Semantic and hybrid search run on the local SQLite archive, on
-    [PostgreSQL](#postgresql) via pgvector, and on [ClickHouse](#clickhouse). The
-    [DuckDB mirror](/docs/duckdb/) has no vector backend. CLI and MCP hybrid
-    searches return keyword matches with a note when search by meaning is
-    unavailable. On DuckDB, semantic and ordinary HTTP/UI hybrid requests return the
-    "not available" error described below.
+    [PostgreSQL](#postgresql) via pgvector, and on [ClickHouse](#clickhouse).
+    CLI and MCP hybrid searches return keyword matches with a note when search
+    by meaning is unavailable.
 
 ## Enabling `[vector]`
 
@@ -29,11 +28,20 @@ the required download through that button, shows download and indexing progress,
 and starts semantic search without a restart. Full-text search remains available
 during indexing.
 
-For CLI setup, run `agentsview index embeddings build`. AgentsView uses a
+For CLI setup, run `agentsview index embeddings build` with a writable daemon
+running. AgentsView uses a
 running Ollama server with Nomic or Kit's shared local server. If the local
 server needs files, the CLI asks before downloading them. Search and automatic
 builds reuse installed files; they direct you to the CLI when a download needs
 approval. Declining stops the download and build.
+
+### Turned on in another app
+
+Turning on built-in search by meaning in any app that uses Kit turns it on for
+all of them. When the model files are installed, AgentsView starts indexing at
+its next launch without changing `config.toml`. To keep it off, set
+`[vector] enabled = false`. A custom model or server, or a PostgreSQL or
+ClickHouse target that receives vectors, also keeps it off.
 
 The default recipe is `nomic-embed-text`, 768 dimensions, 4,000 input
 characters, 2,048 context tokens, `search_query: ` for queries, and
@@ -997,7 +1005,7 @@ of `ordinal_range` to read the whole stretch.
 
 On a local SQLite daemon, Turn on in Settings → Embeddings or the search palette
 enables semantic search, installs missing shared server files, and starts
-indexing. Replica and DuckDB servers have no local setup control.
+indexing. Replica servers have no local setup control.
 
 `GET /api/v1/embeddings/status` includes `setup` when browser setup is
 available. `POST /api/v1/embeddings/setup` accepts `approved_bytes`, the
@@ -1017,7 +1025,6 @@ below.
 | Situation                                                                                                       | Message                                                                                                                                                               |
 | --------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `[vector]` not enabled                                                                                          | `vector search is not enabled: run 'agentsview index embeddings build' or turn it on in Settings → Embeddings → Turn on` (from `agentsview index embeddings ...`)     |
-| DuckDB backend                                                                                                  | `semantic search not available: semantic search is not supported by the DuckDB backend`                                                                               |
 | No `VectorSearcher` wired (index never built, or a PG or ClickHouse replica with no matching pushed generation) | `semantic search not available: run 'agentsview index embeddings build' or turn it on in Settings → Embeddings → Turn on`                                             |
 | Only a building generation exists                                                                               | same message, plus `: index is building: N% complete`                                                                                                                 |
 | Active generation's fingerprint no longer matches config (model, dimension, or chunking changed)                | same message, plus `: index is stale (embedding config changed): run 'agentsview index embeddings build --full-rebuild'`                                              |
@@ -1045,9 +1052,7 @@ The `--pg` read path and `agentsview replica pg serve` support semantic and
 hybrid search backed by [pgvector](https://github.com/pgvector/pgvector), so a
 shared PostgreSQL deployment answers `--semantic`/`--hybrid` the same way a
 local SQLite index does. [ClickHouse](#clickhouse) does the same with its own
-tables. The DuckDB mirror has no vector backend. Its CLI and MCP hybrid requests
-return keyword matches with an unavailable note; semantic and ordinary HTTP/UI
-hybrid requests return the "not available" error (HTTP 501).
+tables.
 
 ### Pushing embeddings
 
@@ -1227,10 +1232,6 @@ no ClickHouse counterpart yet.
   the message that reaches `4 × max_input_chars` runes. An append re-embeds
   only the trailing piece, bounded by that cap plus one message; earlier
   pieces keep their vectors.
-- **DuckDB mirror has no vector backend.** Semantic and ordinary HTTP/UI hybrid
-  requests return the "not available" error (HTTP 501) described above.
-  CLI/MCP hybrid requests return keyword matches with a note. PostgreSQL is
-  supported through pgvector — see [PostgreSQL](#postgresql).
 - **The index embeds message `content` verbatim.** Like `--fts`, it only draws
   from the `messages` source, so raw tool_input/tool_result rows are never
   candidates. System messages are handled more strictly, though: `--fts` still
@@ -1251,7 +1252,8 @@ context may help, when stuck, and before guessing about something learned
 previously. The skill starts with the registered `search_content` MCP tool,
 reads the top sources with `get_messages`, follows continuation, and
 distinguishes snippets and summaries from messages read in detail. The runtime
-supplies the client-specific MCP tool prefix.
+supplies the client-specific MCP tool prefix. To also register the MCP server,
+see [Choose an installation route](/docs/mcp/#choose-an-installation-route).
 
 Claude Code also receives an `agentsview-search-conversations` agent that runs
 the bounded search and returns Summary / Sources / For Follow-Up. Its `tools`

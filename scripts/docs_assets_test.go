@@ -581,7 +581,6 @@ var builtDocsRoutes = func() []string {
 		"filesystem-sync",
 		"pg-sync",
 		"hosted-raw-sync",
-		"duckdb",
 		"clickhouse-sync",
 	}
 	routes := []string{"/", "/guide/", "/docs/"}
@@ -798,7 +797,6 @@ func writeGeneratedAssets(t *testing.T, dir, content string) {
 		"screenshots/tool-usage.png",
 		"screenshots/top-sessions.png",
 		"screenshots/top-skills.png",
-		"screenshots/trends.png",
 		"screenshots/usage-attribution.png",
 		"screenshots/usage-cache-efficiency.png",
 		"screenshots/usage-cost-trend.png",

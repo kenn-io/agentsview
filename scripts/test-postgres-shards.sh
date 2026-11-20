@@ -3,7 +3,7 @@ set -euo pipefail
 
 suite=$1 package=$2 shards=$3 excluded=$4 timeout=$5
 : "${TEST_PG_URL:?TEST_PG_URL must point to a dedicated test database}"
-: "${TEST_TAGS:?TEST_TAGS must list the Go build tags, such as fts5,duckdb}"
+: "${TEST_TAGS:?TEST_TAGS must list the Go build tags, such as fts5}"
 tags=$TEST_TAGS,pgtest
 [[ "$shards" =~ ^[1-9][0-9]*$ ]] || { echo 'shard count must be positive' >&2; exit 1; }
 work=$(mktemp -d)

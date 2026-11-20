@@ -1,6 +1,7 @@
 package servicehttp
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/service"
+	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 func TestWatchFiltersSessionReady(t *testing.T) {
@@ -349,4 +351,37 @@ func TestSearchContentForwardsConceptsAndSemanticIntent(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.True(t, res.CandidateTruncated)
+}
+
+func TestSyncClassifiesOnlyNeverStartedConflict(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		status    int
+		body      string
+		wantRetry bool
+	}{
+		{name: "parent lock refused", status: 409, body: `{"code":"session_refresh_not_started","error":"session refresh did not start: sync already in progress"}`, wantRetry: true},
+		{name: "other conflict", status: 409, body: `{"error":"busy"}`},
+		{name: "server error", status: 500, body: `{"code":"session_refresh_not_started"}`},
+		{name: "interrupted response", status: 200, body: `{"id":`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, "/api/v1/sessions/sync", r.URL.Path)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = fmt.Fprint(w, tc.body)
+			}))
+			t.Cleanup(ts.Close)
+			_, err := NewHTTPBackend(ts.URL, "", false, "").Sync(t.Context(), service.SyncInput{ID: "session-a", Subagents: true, UsageRefresh: true})
+			require.Error(t, err)
+			assert.Equal(t, tc.wantRetry, errors.Is(err, syncpkg.ErrSessionRefreshNotStarted))
+			if tc.wantRetry {
+				assert.Equal(t, "POST /api/v1/sessions/sync: HTTP 409: "+tc.body, err.Error())
+				statusErr, ok := errors.AsType[*httpStatusError](err)
+				require.True(t, ok)
+				assert.Equal(t, http.StatusConflict, statusErr.statusCode)
+			}
+		})
+	}
 }

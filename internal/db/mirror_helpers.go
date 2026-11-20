@@ -46,8 +46,8 @@ func ValueOrNever(v string) string {
 }
 
 // ActivityReportInstantBoundsUTC formats the report range as RFC 3339 UTC
-// instants. It keeps the zone suffix because PostgreSQL and DuckDB compare
-// parsed instants.
+// instants. It keeps the zone suffix because PostgreSQL compares parsed
+// instants.
 func ActivityReportInstantBoundsUTC(q activity.Query) (string, string) {
 	return q.RangeStart.UTC().Format(time.RFC3339),
 		q.RangeEnd.UTC().Format(time.RFC3339)

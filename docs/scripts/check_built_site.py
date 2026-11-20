@@ -44,7 +44,6 @@ DOCS_PAGES = [
     "filesystem-sync",
     "pg-sync",
     "hosted-raw-sync",
-    "duckdb",
     "clickhouse-sync",
 ]
 

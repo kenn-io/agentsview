@@ -154,7 +154,7 @@ func TestUsageSnapshotWithoutSessionFingerprintIsRemoved(t *testing.T) {
 			require.NoError(t, err)
 			// Model a crash after the complete row lands but before its
 			// sessions fingerprint is published.
-			require.NoError(t, s.insertUsageSessionSnapshots(ctx, []sessionPayload{payload}, nil, newPushVersion()))
+			require.NoError(t, s.insertUsageSessionSnapshots(ctx, []sessionPayload{payload}, nil, nil, newPushVersion()))
 			var result storage.PushResult
 			if mode == "full" {
 				err = s.deleteSessionsMissingLocally(ctx, nil, &result)

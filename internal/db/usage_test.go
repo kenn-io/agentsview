@@ -5264,7 +5264,7 @@ func TestAICreditsFromCost(t *testing.T) {
 // TestCostUSDFromCost pins the deprecated cost_usd compatibility
 // conversion (see SessionUsage.CostUSD): present and equal to
 // microdollars/1e6 exactly when hasCost is true, nil otherwise. Every
-// backend (SQLite, PostgreSQL, DuckDB) and the subagent combiner call
+// backend (SQLite, PostgreSQL, ClickHouse) and the subagent combiner call
 // this single function, so this is the one place the arithmetic is
 // pinned.
 func TestCostUSDFromCost(t *testing.T) {

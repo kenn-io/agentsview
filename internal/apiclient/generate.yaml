@@ -13,6 +13,7 @@ filter:
       - get-startup-probe
       - post-api-v1-daemon-persist
       - get-api-v1-version
+      - get-api-v1-events
       - get-api-v1-memory-status
       - get-api-v1-machines
       - get-api-v1-sessions-id
@@ -29,6 +30,7 @@ filter:
       - get-api-v1-analytics-tools
       - get-api-v1-analytics-signals
       - get-api-v1-analytics-signal-sessions
+      - get-api-v1-trends-terms
       - post-api-v1-sessions-sync
       - get-api-v1-sessions-id-watch
       - get-api-v1-session-stats
@@ -59,11 +61,10 @@ filter:
       - get-api-v1-usage-summary-stream
       - post-api-v1-sync
       - get-api-v1-sync-status
-      - post-api-v1-import-claude-ai-sync
+      - post-api-v1-import-platform-sync
       - post-api-v1-resync
       - post-api-v1-sync-remotes
       - post-api-v1-push-pg
-      - post-api-v1-push-duckdb
       - post-api-v1-push-clickhouse
       - post-api-v1-remote-sync-manifest
       - post-api-v1-remote-sync-archive

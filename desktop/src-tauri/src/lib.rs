@@ -4607,11 +4607,11 @@ async fn claude_auth_fetch(
 }
 
 fn claude_fetch_script(url: &str, request_id_json: &str) -> String {
-    let reader = include_str!("../../../frontend/chrome-extension/claude_fetch.js");
+    let reader = include_str!("../../../frontend/chrome-extension/page_fetch.js");
     format!(
         r#"(async () => {{
         {reader}
-        const result = await claudeFetch({url});
+        const result = await pageFetch({url});
         await window.__TAURI__.core.invoke("claude_auth_fetch_result", {{ payload: {{ requestId: {request_id_json}, ...result }} }});
     }})()"#
     )
@@ -4621,7 +4621,7 @@ fn validate_claude_fetch_path(path: &str) -> Result<(), String> {
     const ORGANIZATIONS_REQUEST: usize = 0;
     const CONVERSATIONS_REQUEST: usize = 1;
     const CONVERSATION_REQUEST: usize = 2;
-    let shapes: Vec<_> = include_str!("../../../internal/importer/claude_ai_requests.txt").lines().collect();
+    let shapes: Vec<_> = include_str!("../../../internal/importer/browser_requests/claude-ai.txt").lines().collect();
     if path == shapes[ORGANIZATIONS_REQUEST] {
         return Ok(());
     }
@@ -7813,7 +7813,7 @@ mod claude_sync_tests {
         let list = format!("{base}/chat_conversations_v2?limit=50&offset=0");
         let detail = format!("{base}/chat_conversations/22222222-2222-4222-8222-222222222222?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true");
         assert!(super::validate_claude_fetch_path(&list).is_ok(), "{list}");
-        for template in include_str!("../../../internal/importer/claude_ai_requests.txt").lines() {
+        for template in include_str!("../../../internal/importer/browser_requests/claude-ai.txt").lines() {
             let path = template
                 .replace("{organization}", "11111111-1111-4111-8111-111111111111")
                 .replace("{conversation}", "22222222-2222-4222-8222-222222222222")

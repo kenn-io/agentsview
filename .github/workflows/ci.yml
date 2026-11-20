@@ -49,11 +49,12 @@ jobs:
               - '!{*.md,docs/*.md,docs/agents/**/*.md,docs/internal/**/*.md,docs/website/**/*.md,desktop/**}'
             node:
               - '!{cmd/**,internal/!(web)/**,testdata/**,plugins/**,support/**,*.go,*.md,docs/*.md,docs/agents/**/*.md,docs/internal/**/*.md,docs/website/**/*.md,desktop/**}'
-              - 'internal/importer/claude_ai_requests.txt'
+              - 'internal/importer/browser_requests/**'
+              - 'internal/importer/testdata/browser_paths/**'
             desktop:
               - '!{cmd/**,internal/!(web)/**,testdata/**,plugins/**,support/**,*.go,*.md,docs/*.md,docs/agents/**/*.md,docs/internal/**/*.md,docs/website/**/*.md,frontend/**}'
-              - 'frontend/chrome-extension/claude_fetch.js'
-              - 'internal/importer/claude_ai_requests.txt'
+              - 'frontend/chrome-extension/page_fetch.js'
+              - 'internal/importer/browser_requests/claude-ai.txt'
             release-commands:
               - 'README.md'
               - 'scripts/install.sh'
@@ -64,7 +65,7 @@ jobs:
 
   release-commands:
     needs: changes
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups), 'release-commands')) }}
+    if: ${{ github.event_name != 'merge_group' && !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups), 'release-commands')) }}
     uses: ./.github/workflows/release-commands.yml
 
   lint:
@@ -219,7 +220,7 @@ jobs:
 
   frontend-node-26:
     needs: changes
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups), 'node')) }}
+    if: ${{ github.event_name != 'merge_group' && !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups), 'node')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 11
     steps:
@@ -301,13 +302,16 @@ jobs:
           bash scripts/macos-watcher-tests_test.sh
           bash desktop/scripts/test-repair-appimage-diricon.sh
 
+  # Merge groups run these Linux suites. test-extended shares their steps and
+  # holds the suites merge groups skip; see
+  # docs/agents/build.md#merge-queue-checks.
   test:
     needs: changes
     if: *go-lane
-    name: Go ${{ matrix.testSet == 'lint' && 'Lint' || 'Test' }} (${{ matrix.name }})
+    name: &go-test-name Go ${{ matrix.testSet == 'lint' && 'Lint' || 'Test' }} (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout }}
-    env:
+    env: &go-test-env
       DOWNLOAD_RETRY: kit-retry 3 5
       MSYS2_PACKAGES: mingw-w64-x86_64-gcc ${{ matrix.testSet == 'lint' && 'make' || '' }}
     strategy:
@@ -320,17 +324,6 @@ jobs:
             suite: linux-sync
             timeout: 29
           - os: ubuntu-latest
-            name: ubuntu-latest, DuckDB
-            package: ./internal/duckdb
-            suite: linux-duckdb
-            timeout: 28
-          # The simulator compares wall times and needs the runner to itself.
-          - os: ubuntu-latest
-            name: ubuntu-latest, Simulator
-            package: ./cmd/perfsim
-            suite: linux-perfsim
-            timeout: 20
-          - os: ubuntu-latest
             name: ubuntu-latest, Other packages
             testSet: other
             suite: linux-other
@@ -341,19 +334,7 @@ jobs:
             # Fixed by the Makefile's test-evalingest target.
             suite: evalingest
             timeout: 16
-          - os: windows-latest
-            name: windows-latest
-            suite: windows
-            timeout: 34
-          - os: windows-latest
-            name: windows-latest
-            testSet: lint
-            timeout: 21
-          - os: macos-latest
-            name: macos-latest
-            suite: macos
-            timeout: 29
-    steps:
+    steps: &go-test-steps
       - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
@@ -410,25 +391,20 @@ jobs:
 
       - name: Run Go tests (Linux, single package)
         if: runner.os == 'Linux' && matrix.package != ''
-        run: go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "${{ matrix.package }}" -- -tags "fts5,duckdb" -count=1 -timeout=20m
-        env:
-          CGO_ENABLED: "1"
-
-      # Release builds leave out the DuckDB driver; check the stub they get.
-      - name: Run DuckDB tests without the duckdb tag (Linux)
-        if: matrix.suite == 'linux-duckdb'
-        run: go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}-default.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-default-reruns.txt --packages "./internal/duckdb ./internal/server ./cmd/agentsview" -- -tags "fts5" -run 'DuckDBUnavailable|WithoutDriver' -count=1 -timeout=5m
+        run: go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "${{ matrix.package }}" -- -tags "fts5" -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
       # Start the release-style build on a CPU without AVX2, BMI2, or FMA, so
       # code that needs x86-64-v3 at startup fails here before it ships.
       - name: Start the default build on an x86-64-v2 CPU (Linux)
-        if: matrix.suite == 'linux-duckdb'
+        if: matrix.testSet == 'startup'
         timeout-minutes: 15
         run: |
           kit-retry 3 5 sudo apt-get update
           kit-retry 3 5 sudo apt-get install -y --no-install-recommends qemu-user
+          # The container build below runs with GOPROXY=off.
+          kit-retry 3 5 go mod download
           # The runner installs Ubuntu's amd64v3 package builds. Its C
           # toolchain marks every cgo binary it links as needing x86-64-v3,
           # and its loader and libc need x86-64-v3 themselves. Build in, and
@@ -476,13 +452,13 @@ jobs:
           done
           kill "$pid"
 
-      # Sync and DuckDB run in separate normal Linux jobs.
+      # Sync runs in a separate normal Linux job.
       - name: Run other Go tests (Linux)
         if: runner.os == 'Linux' && matrix.testSet == 'other'
         shell: bash
         run: |
-          packages="$(go list -tags fts5 ./... | grep -vE '/(cmd/perfsim|internal/(duckdb|sync))$')"
-          go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "$packages" -- -tags "fts5,duckdb" -count=1 -timeout=20m
+          packages="$(go list -tags fts5 ./... | grep -vE '/(cmd/perfsim|internal/sync)$')"
+          go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "$packages" -- -tags "fts5" -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
@@ -501,12 +477,11 @@ jobs:
             'go.kenn.io/agentsview/cmd/perfsim'
             'go.kenn.io/agentsview/internal/capture'
             'go.kenn.io/agentsview/internal/db'
-            'go.kenn.io/agentsview/internal/duckdb'
             'go.kenn.io/agentsview/internal/parser'
             'go.kenn.io/agentsview/internal/sync'
           )
           $packages = $packages | Where-Object { $_ -notin $isolatedPackages }
-          go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages ($packages -join ' ') -- -tags "fts5,duckdb" -count=1 -timeout=20m
+          go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages ($packages -join ' ') -- -tags "fts5" -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
@@ -568,7 +543,7 @@ jobs:
 
       - name: Run archive, CLI, signing, and volume identity tests (macOS)
         if: runner.os == 'macOS'
-        run: go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "./internal/db ./internal/rawcapture ./internal/requestsign ./cmd/agentsview ./internal/volumeid" -- -tags "fts5,duckdb" -count=1 -timeout=10m
+        run: go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "./internal/db ./internal/rawcapture ./internal/requestsign ./cmd/agentsview ./internal/volumeid" -- -tags "fts5" -count=1 -timeout=10m
         env:
           CGO_ENABLED: "1"
 
@@ -648,10 +623,47 @@ jobs:
         continue-on-error: true
         uses: $/.github/actions/go-cache-save
 
+  # Platform and specialized suites. Every PR and push to main runs them;
+  # merge groups skip them.
+  test-extended:
+    needs: changes
+    if: &go-lane-outside-queue ${{ github.event_name != 'merge_group' && !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups), 'go')) }}
+    name: *go-test-name
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.timeout }}
+    env: *go-test-env
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: ubuntu-latest, x86-64-v2 startup
+            testSet: startup
+            timeout: 20
+          # The simulator compares wall times and needs the runner to itself.
+          - os: ubuntu-latest
+            name: ubuntu-latest, Simulator
+            package: ./cmd/perfsim
+            suite: linux-perfsim
+            timeout: 20
+          - os: windows-latest
+            name: windows-latest
+            suite: windows
+            timeout: 34
+          - os: windows-latest
+            name: windows-latest
+            testSet: lint
+            timeout: 21
+          - os: macos-latest
+            name: macos-latest
+            suite: macos
+            timeout: 29
+    steps: *go-test-steps
+
   # Isolated Windows suites share setup; each matrix entry gets its own runner.
   test-isolated-packages-windows:
     needs: changes
-    if: *go-lane
+    if: *go-lane-outside-queue
     name: Go Test (windows-latest, ${{ matrix.name }})
     runs-on: windows-latest
     timeout-minutes: 30
@@ -748,7 +760,7 @@ jobs:
       - name: Run ${{ matrix.name }} tests
         shell: pwsh
         run: |
-          go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "${{ matrix.package }}" -- -tags "fts5,duckdb" -run '${{ matrix.run || '.' }}' -skip '${{ matrix.skip || '^$' }}' -count=1 -timeout=20m
+          go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "${{ matrix.package }}" -- -tags "fts5" -run '${{ matrix.run || '.' }}' -skip '${{ matrix.skip || '^$' }}' -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
@@ -862,79 +874,11 @@ jobs:
           $summary | Write-Output
           $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
-  # Keep the derived-mirror suite concurrent with the main Windows package set.
-  test-duckdb-windows:
-    needs: changes
-    if: *go-lane
-    name: Go Test (windows-latest, DuckDB)
-    runs-on: windows-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Prepare Windows Go paths
-        uses: $/.github/actions/windows-go-paths
-
-      - uses: actions/setup-go@v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: false
-
-      - name: Restore Go caches
-        uses: $/.github/actions/go-cache-restore
-        with:
-          group: test-${{ runner.os }}-${{ runner.arch }}
-
-      - name: Setup MinGW
-        id: setup_mingw
-        continue-on-error: true
-        uses: msys2/setup-msys2@v2.33.0
-        with:
-          msystem: MINGW64
-          update: false
-          install: mingw-w64-x86_64-gcc
-          path-type: inherit
-
-      - name: Setup MinGW (retry on transient failure)
-        if: steps.setup_mingw.outcome == 'failure'
-        uses: msys2/setup-msys2@v2.33.0
-        with:
-          release: false
-          msystem: MINGW64
-          update: false
-          install: mingw-w64-x86_64-gcc
-          path-type: inherit
-
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.53.2
-
-      - name: Restore pricing snapshot
-        shell: bash
-        run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
-
-      - name: Run DuckDB tests
-        run: go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/windows-duckdb.json --rerun-fails=2 --rerun-fails-report gotestsum/windows-duckdb-reruns.txt --packages "./internal/duckdb" -- -tags "fts5,duckdb" -count=1 -timeout=20m
-        env:
-          CGO_ENABLED: "1"
-
-      - name: Upload gotestsum windows-duckdb results
-        if: always()
-        uses: actions/upload-artifact@v7.0.2
-        with:
-          name: gotestsum-windows-duckdb-attempt-${{ github.run_attempt }}
-          path: gotestsum/windows-duckdb.json
-          retention-days: 14
-          if-no-files-found: ignore
-
-      - *print-slowest-tests
-
   test-race:
     env:
       DOWNLOAD_RETRY: kit-retry 3 5
     needs: changes
-    if: *go-lane
+    if: *go-lane-outside-queue
     name: Go Test (race detector, ${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 35
@@ -1003,20 +947,20 @@ jobs:
         run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       # Keep exclusions aligned with the explicit race matrix packages.
-      # DuckDB runs without -race in its Linux shard. Limit package fan-out
-      # because highly parallel race runs can exhaust deadlines.
+      # Limit package fan-out because highly parallel race runs can exhaust
+      # deadlines.
       - name: Run Go tests (race detector)
         if: matrix.testSet == 'other'
         shell: bash
         run: |
-          packages="$(go list ./... | grep -vE '/(cmd/(agentsview|perfsim)|internal/(db|server|duckdb|sync))$')"
-          go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "$packages" -- -p 4 -tags "fts5,duckdb" -race -count=1 -timeout=20m
+          packages="$(go list ./... | grep -vE '/(cmd/(agentsview|perfsim)|internal/(db|server|sync))$')"
+          go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "$packages" -- -p 4 -tags "fts5" -race -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
       - name: Run ${{ matrix.name }} tests (race detector)
         if: matrix.package != ''
-        run: go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "${{ matrix.package }}" -- -tags "fts5,duckdb" -race -run '${{ matrix.run || '.' }}' -skip '${{ matrix.skip || '^$' }}' -count=1 -timeout=20m
+        run: go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "${{ matrix.package }}" -- -tags "fts5" -race -run '${{ matrix.run || '.' }}' -skip '${{ matrix.skip || '^$' }}' -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
@@ -1036,7 +980,7 @@ jobs:
         if: matrix.testSet == 'other' && github.event_name == 'push' && github.ref == 'refs/heads/main' && env.GO_CACHE_HIT != 'true'
         run: |
           mkdir -p "$RUNNER_TEMP/race-test-binaries"
-          go test -p 4 -tags "fts5,duckdb" -race -c -o "$RUNNER_TEMP/race-test-binaries/" ./cmd/agentsview ./internal/db ./internal/server
+          go test -p 4 -tags "fts5" -race -c -o "$RUNNER_TEMP/race-test-binaries/" ./cmd/agentsview ./internal/db ./internal/server
         env:
           CGO_ENABLED: "1"
 
@@ -1047,7 +991,7 @@ jobs:
   # Owns Windows Rust test coverage for PR and main-push desktop artifacts.
   desktop-windows-unit:
     needs: changes
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups), 'desktop')) }}
+    if: ${{ github.event_name != 'merge_group' && !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups), 'desktop')) }}
     name: Desktop Unit Tests (Windows)
     runs-on: windows-latest
     timeout-minutes: 10
@@ -1086,7 +1030,7 @@ jobs:
     env:
       DOWNLOAD_RETRY: kit-retry 3 5
     needs: changes
-    if: *go-lane
+    if: *go-lane-outside-queue
     name: Integration (${{ matrix.name }})
     runs-on: ubuntu-latest
     timeout-minutes: 32
@@ -1278,18 +1222,16 @@ jobs:
     if: *frontend-lane
     name: e2e (${{ matrix.browser }})
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ matrix.timeout }}
+    timeout-minutes: ${{ matrix.browser == 'chromium' && 42 || 24 }}
     env:
       PW_TEST_CONNECT_WS_ENDPOINT: ws://127.0.0.1:3000/
       DOWNLOAD_RETRY: kit-retry 3 5
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - browser: chromium
-            timeout: 42
-          - browser: webkit
-            timeout: 24
+        # Merge groups run Chromium only. `include` cannot drop an entry, so
+        # the browser list is an expression and the timeout follows it.
+        browser: ${{ fromJSON(github.event_name == 'merge_group' && '["chromium"]' || '["chromium", "webkit"]') }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -1340,9 +1282,9 @@ jobs:
 
       - name: Pre-build Go binaries
         run: |
-          CGO_ENABLED=1 go build -tags fts5,duckdb \
+          CGO_ENABLED=1 go build -tags fts5 \
             -o /tmp/testfixture ./cmd/testfixture
-          CGO_ENABLED=1 go build -tags fts5,duckdb \
+          CGO_ENABLED=1 go build -tags fts5 \
             -o /tmp/agentsview ./cmd/agentsview
         env:
           CGO_ENABLED: "1"
@@ -1419,24 +1361,6 @@ jobs:
         with:
           name: playwright-e2e-${{ matrix.browser }}-attempt-${{ github.run_attempt }}
           path: frontend/test-results/playwright/e2e-${{ matrix.browser }}.json
-          retention-days: 14
-          if-no-files-found: ignore
-
-      - name: Run DuckDB E2E tests
-        if: matrix.browser == 'chromium'
-        run: make e2e-duckdb
-        env:
-          E2E_PREBUILT_FIXTURE: /tmp/testfixture
-          E2E_PREBUILT_SERVER: /tmp/agentsview
-          PLAYWRIGHT_JSON_OUTPUT_FILE: test-results/playwright/e2e-duckdb.json
-          PROJECT_MAPPING_WORKSPACE_E2E_ENABLED: "true"
-
-      - name: Upload Playwright DuckDB E2E report
-        if: always() && matrix.browser == 'chromium'
-        uses: actions/upload-artifact@v7.0.2
-        with:
-          name: playwright-e2e-duckdb-attempt-${{ github.run_attempt }}
-          path: frontend/test-results/playwright/e2e-duckdb.json
           retention-days: 14
           if-no-files-found: ignore
 
