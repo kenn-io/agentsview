@@ -71,9 +71,16 @@ with lock:
         same_file = os.stat(path).st_ino == os.fstat(lock.fileno()).st_ino
     except FileNotFoundError:
         same_file = False
-    if same_file and subprocess.call(["docker", "compose", "-p", lease, "-f", "docker-compose.test.yml", "-f", "docker-compose.test-lease.yml", "down", "-v", "--remove-orphans"]) != 0:
-        print("cleanup failed; scheduled cleanup will retry", file=sys.stderr)
-        if status == 0:
-            status = 1
+    if same_file:
+        if subprocess.call(["docker", "compose", "-p", lease, "-f", "docker-compose.test.yml", "-f", "docker-compose.test-lease.yml", "down", "-v", "--remove-orphans"]) != 0:
+            print("cleanup failed; scheduled cleanup will retry", file=sys.stderr)
+            if status == 0:
+                status = 1
+        else:
+            try:
+                if os.stat(path).st_ino == os.fstat(lock.fileno()).st_ino:
+                    os.unlink(path)
+            except FileNotFoundError:
+                pass
 sys.exit(status)
 PY

@@ -90,7 +90,7 @@ set -e
 first=
 [[ $status == 7 ]]
 grep -qE -- "-p $(cat "$CHECK_LEASE") .* down -v --remove-orphans" "$DOCKER_LOG"
-probe
+[[ ! -e "$lease" ]]
 unset READY RELEASE EXITED MAIN
 
 # A successful command reports cleanup failure; a failed command keeps its status.
@@ -103,7 +103,32 @@ for command_status in 0 7; do
     if [[ $command_status == 0 ]]; then [[ $status == 1 ]]; else [[ $status == 7 ]]; fi
     grep -q 'cleanup failed; scheduled cleanup will retry' "$tmp/cleanup-error"
     grep -q ' down ' "$DOCKER_LOG"
+    [[ -f "$HOME/.local/state/test-service-leases/$(cat "$CHECK_LEASE")" ]]
 done
+
+# A killed supervisor leaves the lease for the scheduled cleaner.
+find "$tmp/ready" "$tmp/release" "$tmp/exited" -delete
+export READY="$tmp/ready" RELEASE="$tmp/release" EXITED="$tmp/exited"
+: > "$DOCKER_LOG"
+(cd "$root" && exec ./scripts/test-lease.sh ./scripts/test-service-compose.sh postgres 5432 sh -c 'touch "$READY"; while [ ! -f "$RELEASE" ]; do sleep .1; done; touch "$EXITED"') &
+first=$!
+for _ in {1..100}; do [[ -f "$READY" ]] && break; sleep .1; done
+[[ -f "$READY" ]]
+lease="$HOME/.local/state/test-service-leases/$(cat "$CHECK_LEASE")"
+ps -p "$first" -o args= | grep -q 'python3 - '
+kill -KILL "$first"
+wait "$first" 2>/dev/null || true
+first=
+[[ -f "$lease" ]]
+if probe; then echo 'lease released while test still runs' >&2; exit 1; fi
+touch "$RELEASE"
+for _ in {1..100}; do [[ -f "$EXITED" ]] && break; sleep .1; done
+[[ -f "$EXITED" ]]
+[[ -f "$lease" ]]
+for _ in {1..100}; do if probe; then break; fi; sleep .1; done
+probe
+if grep -q ' down ' "$DOCKER_LOG"; then echo 'killed supervisor ran cleanup' >&2; exit 1; fi
+unset READY RELEASE EXITED
 
 # Termination during startup and while the command runs cleans up the project.
 export READY="$tmp/ready"
@@ -165,6 +190,7 @@ for target in test-postgres bench-pg-usage test-clickhouse; do
     grep -qE -- "-p $project .* -f docker-compose.test-lease.yml up -d --wait $service" "$DOCKER_LOG"
     grep -qE -- "-p $project .* port $service $port" "$DOCKER_LOG"
     grep -qE -- "-p $project .* down -v --remove-orphans" "$DOCKER_LOG"
+    [[ ! -e "$HOME/.local/state/test-service-leases/$project" ]]
     grep -Fxq 'publish 127.0.0.1::5432 127.0.0.1::8123 127.0.0.1::9000' "$DOCKER_LOG"
 done
 
