@@ -51,17 +51,17 @@ type Panel =
 type FetchResult = "ok" | "error" | "aborted";
 // Execution order of a full refresh; the step breakdown follows it.
 const PANEL_ORDER = [
+  "velocity",
+  "tools",
+  "signals",
   "summary",
   "activity",
   "heatmap",
   "projects",
   "hourOfWeek",
   "sessionShape",
-  "velocity",
-  "tools",
   "skills",
   "topSessions",
-  "signals",
 ] as const satisfies readonly Panel[];
 
 class AnalyticsStore {
@@ -616,17 +616,17 @@ class AnalyticsStore {
     const fetchVersion = ++this.fetchAllVersion;
     this.rollDates();
     const results = await Promise.all([
+      this.fetchVelocity(),
+      this.fetchTools(),
+      this.fetchSignals(),
       this.fetchSummary(),
       this.fetchActivity(),
       this.fetchHeatmap(),
       this.fetchProjects(),
       this.fetchHourOfWeek(),
       this.fetchSessionShape(),
-      this.fetchVelocity(),
-      this.fetchTools(),
       this.fetchSkills(),
       this.fetchTopSessions(),
-      this.fetchSignals(),
     ]);
     if (fetchVersion === this.fetchAllVersion && results.every((result) => result === "ok")) {
       this.markRefreshComplete(startedAt);
