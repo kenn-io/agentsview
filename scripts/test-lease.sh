@@ -32,7 +32,6 @@ fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
 os.set_inheritable(fd, True)
 fcntl.flock(fd, fcntl.LOCK_EX)
 os.environ["TEST_SERVICE_LEASE"] = lease
-child = None
 process_group = None
 received = None
 
@@ -52,7 +51,6 @@ process_group = child.pid
 if received is not None:
     forward(received, None)
 status = child.wait()
-child = None
 if status < 0:
     status = 128 - status
 os.close(fd)
@@ -61,12 +59,7 @@ try:
 except FileNotFoundError:
     sys.exit(128 + received if received is not None else status)
 with lock:
-    while True:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            break
-        except BlockingIOError:
-            time.sleep(0.1)
+    fcntl.flock(lock, fcntl.LOCK_EX)
     process_group = None
     try:
         same_file = os.stat(path).st_ino == os.fstat(lock.fileno()).st_ino
