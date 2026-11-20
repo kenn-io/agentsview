@@ -101,7 +101,8 @@ for command_status in 0 7; do
     status=$?
     set -e
     if [[ $command_status == 0 ]]; then [[ $status == 1 ]]; else [[ $status == 7 ]]; fi
-    grep -q 'cleanup failed; scheduled cleanup will retry' "$tmp/cleanup-error"
+    project=$(cat "$CHECK_LEASE")
+    grep -Fxq "cleanup failed; run from the repository root: TEST_SERVICE_LEASE=$project docker compose -p $project -f docker-compose.test.yml -f docker-compose.test-lease.yml down -v --remove-orphans" "$tmp/cleanup-error"
     grep -q ' down ' "$DOCKER_LOG"
     [[ -f "$HOME/.local/state/test-service-leases/$(cat "$CHECK_LEASE")" ]]
 done

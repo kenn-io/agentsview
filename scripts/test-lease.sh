@@ -11,6 +11,7 @@ fi
 exec python3 - "$@" <<'PY'
 import fcntl
 import os
+import shlex
 import signal
 import subprocess
 import sys
@@ -72,8 +73,9 @@ with lock:
     except FileNotFoundError:
         same_file = False
     if same_file:
-        if subprocess.call(["docker", "compose", "-p", lease, "-f", "docker-compose.test.yml", "-f", "docker-compose.test-lease.yml", "down", "-v", "--remove-orphans"]) != 0:
-            print("cleanup failed; scheduled cleanup will retry", file=sys.stderr)
+        cleanup = ["docker", "compose", "-p", lease, "-f", "docker-compose.test.yml", "-f", "docker-compose.test-lease.yml", "down", "-v", "--remove-orphans"]
+        if subprocess.call(cleanup) != 0:
+            print(f"cleanup failed; run from the repository root: TEST_SERVICE_LEASE={lease} {shlex.join(cleanup)}", file=sys.stderr)
             if status == 0:
                 status = 1
         else:
