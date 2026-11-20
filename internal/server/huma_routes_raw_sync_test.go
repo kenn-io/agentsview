@@ -1,10 +1,12 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -644,6 +646,88 @@ func TestRawSyncMissingObjectErrorDoesNotLeakBackendDetail(t *testing.T) {
 	assert.Equal(t, http.StatusConflict, recorder.Code)
 	assert.Contains(t, recorder.Body.String(), `"code":"missing_object"`)
 	assert.NotContains(t, recorder.Body.String(), digest)
+}
+
+// Not parallel: it swaps the process-wide log writer.
+func TestRawSyncUnexpectedCustodyErrorIsLoggedButNotReturned(t *testing.T) {
+	var logs bytes.Buffer
+	original := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(original) })
+
+	cause := "resolving effective user: user: unknown userid 1000"
+	auth := &rawSyncAuthStub{
+		authenticateToken: func(
+			context.Context,
+			string,
+			rawsync.DeviceTokenScope,
+		) (rawsync.AuthIdentity, error) {
+			return rawsync.AuthIdentity{TenantID: "tenant-a", DeviceID: "dev-a"}, nil
+		},
+	}
+	custody := &rawSyncCustodyStub{
+		missingObjects: func(
+			context.Context,
+			rawsync.AuthIdentity,
+			parser.AgentType,
+			[]rawsync.ObjectRef,
+		) ([]rawsync.ObjectRef, error) {
+			return nil, errors.New(cause)
+		},
+	}
+	srv := newRawSyncHTTPTestServer(t, auth, custody)
+	body, err := json.Marshal(map[string]any{
+		"provider": parser.AgentCodex,
+		"objects": []rawsync.ObjectRef{
+			{SHA256: strings.Repeat("1", 64), Length: 10},
+		},
+	})
+	require.NoError(t, err)
+
+	recorder := serveRawSyncJSON(
+		t, srv, http.MethodPost, "/api/v1/raw-sync/objects/missing",
+		string(body), "avdt_negotiate", "",
+	)
+
+	assert.Equal(t, http.StatusInternalServerError, recorder.Code)
+	assert.NotContains(t, recorder.Body.String(), cause)
+	assert.Contains(t, logs.String(), "raw sync request failed: "+cause)
+}
+
+// Not parallel: it swaps the process-wide log writer.
+func TestRawSyncUnexpectedAuthErrorIsLoggedButNotReturned(t *testing.T) {
+	var logs bytes.Buffer
+	original := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(original) })
+
+	cause := "authenticating raw sync access token: connection refused"
+	auth := &rawSyncAuthStub{
+		authenticateToken: func(
+			context.Context,
+			string,
+			rawsync.DeviceTokenScope,
+		) (rawsync.AuthIdentity, error) {
+			return rawsync.AuthIdentity{}, errors.New(cause)
+		},
+	}
+	srv := newRawSyncHTTPTestServer(t, auth, &rawSyncCustodyStub{})
+	body, err := json.Marshal(map[string]any{
+		"provider": parser.AgentCodex,
+		"objects": []rawsync.ObjectRef{
+			{SHA256: strings.Repeat("1", 64), Length: 10},
+		},
+	})
+	require.NoError(t, err)
+
+	recorder := serveRawSyncJSON(
+		t, srv, http.MethodPost, "/api/v1/raw-sync/objects/missing",
+		string(body), "avdt_negotiate", "",
+	)
+
+	assert.Equal(t, http.StatusInternalServerError, recorder.Code)
+	assert.NotContains(t, recorder.Body.String(), cause)
+	assert.Contains(t, logs.String(), "raw sync authentication failed: "+cause)
 }
 
 func TestRawSyncCustodyDeadlineReturnsGatewayTimeout(t *testing.T) {

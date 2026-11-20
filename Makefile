@@ -516,10 +516,22 @@ test-clickhouse-run: ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5,chtest" -v ./internal/clickhouse/... ./internal/activity/... -count=1 -timeout=20m
 	CGO_ENABLED=1 go test -tags "fts5,chtest" -v ./internal/service -run '^TestPlanUsageCountsParity$$' -count=1
 
+# The usage lane moves these reporting tests to the other integration job.
+# The rest lane runs every test outside these prefixes.
+CLICKHOUSE_LANE ?=
+CLICKHOUSE_USAGE_TESTS := ^(TestPreparedUsage|TestUsageRollup|TestDailyUsage|TestUsagePairwise|TestUsageReadersSkipPairwiseEvidence|TestUsageSnapshotRanking)
+ifeq ($(CLICKHOUSE_LANE),usage)
+CLICKHOUSE_TEST_FILTER = -run '$(CLICKHOUSE_USAGE_TESTS)'
+else ifeq ($(CLICKHOUSE_LANE),rest)
+CLICKHOUSE_TEST_FILTER = -skip '$(CLICKHOUSE_USAGE_TESTS)'
+endif
+
 # ClickHouse integration tests for CI (clickhouse already running as service)
 test-clickhouse-ci: pricing-snapshot ensure-embed-dir
-	CGO_ENABLED=1 $(call gotestsum,clickhouse,./internal/clickhouse/... ./internal/activity/...) -tags "fts5,chtest" -count=1 -timeout=20m
+	CGO_ENABLED=1 $(call gotestsum,clickhouse,./internal/clickhouse/... ./internal/activity/...) -tags "fts5,chtest" $(CLICKHOUSE_TEST_FILTER) -count=1 -timeout=20m
+ifneq ($(CLICKHOUSE_LANE),usage)
 	CGO_ENABLED=1 $(call gotestsum,clickhouse-service,./internal/service) -tags "fts5,chtest" -run '^TestPlanUsageCountsParity$$' -count=1
+endif
 
 # S3 discovery integration tests. testcontainers starts and tears down a
 # rustfs (S3-compatible) container automatically, so only a working Docker

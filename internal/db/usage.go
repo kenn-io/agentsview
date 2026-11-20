@@ -297,11 +297,16 @@ func (f UsageFilter) Location() *time.Location {
 // usageLocalLocation resolves the process-local zone once. Tests replace it.
 var usageLocalLocation = sync.OnceValue(timeutil.LocalLocation)
 
-// LoadLocationOr resolves a timezone name once per process and returns
-// fallback for an empty or unknown name.
+// LoadLocationOr caches named timezones and returns fallback for an empty or
+// unknown name. Local follows the current process timezone.
 func LoadLocationOr(name string, fallback *time.Location) *time.Location {
 	if name == "" {
 		return fallback
+	}
+	if name == "Local" {
+		// Tests can replace time.Local between report requests, so a cached
+		// pointer could keep using the previous timezone's date boundaries.
+		return time.Local //nolint:forbidigo // Preserve time.LoadLocation("Local") semantics without caching a mutable global.
 	}
 	if cached, ok := usageLocationCache.Load(name); ok {
 		return cached.(*time.Location)

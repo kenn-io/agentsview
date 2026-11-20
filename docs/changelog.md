@@ -111,7 +111,8 @@ The latest release is
   tool. See [Recall](/docs/recall/#current-surface).
 
 - `agentsview agent setup` installs the AgentsView skills and registers the MCP
-  server for Claude Code and Codex in one step. See
+  server for Claude Code and Codex in one step. Use `--mcp=false` to leave an
+  existing MCP entry alone while installing or checking skills. See
   [`agentsview agent setup`](/docs/commands/#agentsview-agent-setup).
 
 - Claude Code users can install AgentsView Memory from the repository's plugin
@@ -295,6 +296,13 @@ The latest release is
   `--write-timeout`. Cancelling still stops the search.
 
 **Bug fixes**
+
+- The container image now accepts hosted raw-sync uploads when it runs as a
+  non-root uid with no passwd entry, such as a Kubernetes pod with `runAsUser`.
+  Before, every upload failed and the client kept retrying it as pending. The
+  image now sets `DOCBANK_LOCK_DIR=/data/docbank-locks`. The server also logs
+  the cause of any unexpected raw-sync failure. See
+  [Hosted Raw Sync](/docs/hosted-raw-sync/#provision-a-hosted-instance).
 
 - `agentsview source cursor sync-usage` no longer aborts when Cursor rate-limits
   it. Cursor allows 60 requests per minute per team, so a sync that needed more

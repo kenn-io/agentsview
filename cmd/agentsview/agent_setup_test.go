@@ -2,8 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/BurntSushi/toml"
@@ -140,6 +143,57 @@ func TestAgentSetupUpdatesOrProtectsSkillChanges(t *testing.T) {
 	}
 }
 
+func TestAgentSetupSkillRepairPreservesOtherAgent(t *testing.T) {
+	for _, withMCP := range []bool{true, false} {
+		t.Run(fmt.Sprintf("mcp=%t", withMCP), func(t *testing.T) {
+			home := t.TempDir()
+			setDoctorMemoryTestEnvironment(t, home)
+			fakeAgent(t, "claude", "")
+			fakeAgent(t, "codex", "")
+			codexConfig := filepath.Join(home, ".codex", "config.toml")
+			original := "[mcp_servers.agentsview]\ncommand = 'custom-codex'\nargs = ['serve']\n"
+			require.NoError(t, os.MkdirAll(filepath.Dir(codexConfig), 0o700))
+			require.NoError(t, os.WriteFile(codexConfig, []byte(original), 0o600))
+			out, err := executeCommand(newRootCommand(), "skills", "install", "--harness", "claude")
+			require.NoError(t, err, out)
+			skill := filepath.Join(skills.TargetDir(skills.HarnessClaude, home), skillFileName)
+			data, err := os.ReadFile(skill)
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(skill, append(data, []byte("\ncustom edit\n")...), 0o600))
+
+			args := []string{"agent", "setup", "--agent", "claude", "--check", "--json"}
+			if !withMCP {
+				args = append(args, "--mcp=false")
+			}
+			out, err = executeCommand(newRootCommand(), args...)
+			require.Error(t, err)
+			var report struct {
+				Rows []struct {
+					Piece    string `json:"piece"`
+					NextStep string `json:"next_step"`
+				} `json:"rows"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(out), &report), out)
+			require.NotEmpty(t, report.Rows)
+			require.Equal(t, "skill", report.Rows[0].Piece)
+			repair := strings.Fields(report.Rows[0].NextStep)
+			require.NotEmpty(t, repair)
+			require.Equal(t, "agentsview", repair[0])
+			if !withMCP {
+				require.Contains(t, repair, "--mcp=false")
+			}
+			out, err = executeCommand(newRootCommand(), repair[1:]...)
+			require.NoError(t, err, out)
+			data, err = os.ReadFile(skill)
+			require.NoError(t, err)
+			require.Equal(t, freshClaudeSkill(t).Content, string(data))
+			data, err = os.ReadFile(codexConfig)
+			require.NoError(t, err)
+			require.Equal(t, original, string(data))
+		})
+	}
+}
+
 func TestAgentSetupUsesSkillRemoteEnvironment(t *testing.T) {
 	for _, tc := range []struct {
 		name, server, tokenFile, want string
@@ -209,4 +263,159 @@ func TestSkillsInstallMCPPointer(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAgentSetupWithoutMCP(t *testing.T) {
+	for _, tc := range []struct{ agent, config, content string }{
+		{"claude", ".claude.json", `{"mcpServers":{"agentsview":{"command":"custom","args":["serve"],"env":{"DATA":"fixture"},"disabled":true}}}`},
+		{"codex", ".codex/config.toml", "[mcp_servers.agentsview]\ncommand = 'custom'\nargs = ['serve']\nenabled = false\n"},
+	} {
+		t.Run(tc.agent, func(t *testing.T) {
+			home := t.TempDir()
+			setDoctorMemoryTestEnvironment(t, home)
+			path := filepath.Join(home, tc.config)
+			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+			require.NoError(t, os.WriteFile(path, []byte(tc.content), 0o600))
+			out, err := executeCommand(newRootCommand(), "agent", "setup", "--agent", tc.agent, "--mcp=false")
+			require.NoError(t, err, out)
+			out, err = executeCommand(newRootCommand(), "agent", "setup", "--agent", tc.agent, "--mcp=false", "--check", "--json")
+			require.NoError(t, err, out)
+			var report struct {
+				Rows []struct {
+					Piece string `json:"piece"`
+					State string `json:"state"`
+				} `json:"rows"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(out), &report))
+			require.Len(t, report.Rows, 1)
+			require.Equal(t, "skill", report.Rows[0].Piece)
+			require.Equal(t, "ok", report.Rows[0].State)
+			got, err := os.ReadFile(path)
+			require.NoError(t, err)
+			require.Equal(t, tc.content, string(got))
+		})
+	}
+}
+
+func TestAgentSetupWithoutMCPWriteErrorAfterRefusal(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("requires unprivileged Unix file permissions")
+	}
+	home := t.TempDir()
+	setDoctorMemoryTestEnvironment(t, home)
+	out, err := executeCommand(newRootCommand(), "agent", "setup", "--agent", "claude", "--mcp=false")
+	require.NoError(t, err, out)
+	dir := skills.TargetDir(skills.HarnessClaude, home)
+	skill := filepath.Join(dir, skillFileName)
+	data, err := os.ReadFile(skill)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(skill, append(data, []byte("\ncustom edit\n")...), 0o600))
+	license := filepath.Join(dir, "LICENSE")
+	data, err = os.ReadFile(license)
+	require.NoError(t, err)
+	protected := filepath.Join(home, "protected-license")
+	require.NoError(t, os.WriteFile(protected, data, 0o400))
+	require.NoError(t, os.Remove(license))
+	require.NoError(t, os.Symlink(protected, license))
+	out, err = executeCommand(newRootCommand(), "agent", "setup", "--agent", "claude", "--mcp=false", "--json")
+	require.Error(t, err)
+	var report struct {
+		Rows []struct {
+			Reason   string `json:"reason"`
+			NextStep string `json:"next_step"`
+		} `json:"rows"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &report), out)
+	require.Len(t, report.Rows, 1)
+	require.Contains(t, report.Rows[0].Reason, "skills: write "+license)
+	require.NotContains(t, report.Rows[0].NextStep, "--force")
+}
+
+func TestAgentSetupWithoutMCPFormatJSON(t *testing.T) {
+	home := t.TempDir()
+	setDoctorMemoryTestEnvironment(t, home)
+	path := filepath.Join(home, ".claude.json")
+	original := `{"mcpServers":{"agentsview":{"command":"custom"}}}`
+	require.NoError(t, os.WriteFile(path, []byte(original), 0o600))
+	out, err := executeCommand(newRootCommand(), "agent", "setup", "--agent", "claude", "--mcp=false", "--check", "--format", "json")
+	require.Error(t, err)
+	var report struct {
+		Rows []struct {
+			Agent    string `json:"agent"`
+			Piece    string `json:"piece"`
+			NextStep string `json:"next_step"`
+		} `json:"rows"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &report), out)
+	require.Len(t, report.Rows, 1)
+	require.Equal(t, "claude", report.Rows[0].Agent)
+	require.Equal(t, "skill", report.Rows[0].Piece)
+	require.Equal(t, "agentsview agent setup --mcp=false --agent claude", report.Rows[0].NextStep)
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, original, string(data))
+}
+
+func TestSkillsInstallRefusalMessage(t *testing.T) {
+	home := t.TempDir()
+	setDoctorMemoryTestEnvironment(t, home)
+	path := filepath.Join(skills.TargetDir(skills.HarnessClaude, home), skillFileName)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, []byte("custom skill"), 0o600))
+	_, err := executeCommand(newRootCommand(), "skills", "install", "--harness", "claude")
+	require.EqualError(t, err, "skills install: 1 target(s) refused; rerun with --force to overwrite")
+}
+
+func TestAgentSetupWithoutMCPRejectsPrint(t *testing.T) {
+	out, err := executeCommand(newRootCommand(), "agent", "setup", "--mcp=false", "--print")
+	require.EqualError(t, err, "--print requires MCP setup; remove --mcp=false")
+	require.Empty(t, out)
+}
+
+func TestAgentSetupWithoutMCPTwoAgentsPartialFailure(t *testing.T) {
+	home := t.TempDir()
+	setDoctorMemoryTestEnvironment(t, home)
+	claudeConfig := filepath.Join(home, ".claude.json")
+	codexConfig := filepath.Join(home, ".codex", "config.toml")
+	claudeEntry := `{"mcpServers":{"agentsview":{"command":"custom-claude"}}}`
+	codexEntry := "[mcp_servers.agentsview]\ncommand = 'custom-codex'\n"
+	require.NoError(t, os.MkdirAll(filepath.Dir(codexConfig), 0o700))
+	require.NoError(t, os.WriteFile(claudeConfig, []byte(claudeEntry), 0o600))
+	require.NoError(t, os.WriteFile(codexConfig, []byte(codexEntry), 0o600))
+	out, err := executeCommand(newRootCommand(), "agent", "setup", "--agent", "claude", "--mcp=false")
+	require.NoError(t, err, out)
+	skill := filepath.Join(skills.TargetDir(skills.HarnessClaude, home), skillFileName)
+	data, err := os.ReadFile(skill)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(skill, append(data, []byte("\ncustom edit\n")...), 0o600))
+	out, err = executeCommand(newRootCommand(), "agent", "setup", "--agent", "claude", "--agent", "codex", "--mcp=false", "--json")
+	require.Error(t, err)
+	var report struct {
+		Rows []struct {
+			Agent    string `json:"agent"`
+			State    string `json:"state"`
+			Reason   string `json:"reason"`
+			NextStep string `json:"next_step"`
+		} `json:"rows"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &report), out)
+	require.Len(t, report.Rows, 2)
+	require.Equal(t, "claude", report.Rows[0].Agent)
+	require.Equal(t, "failed", report.Rows[0].State)
+	require.Equal(t, "skill files were edited", report.Rows[0].Reason)
+	require.Equal(t, "agentsview agent setup --mcp=false --agent claude --force", report.Rows[0].NextStep)
+	args := strings.Fields(report.Rows[0].NextStep)
+	require.Equal(t, "agentsview", args[0])
+	out, err = executeCommand(newRootCommand(), args[1:]...)
+	require.NoError(t, err, out)
+	require.Equal(t, "codex", report.Rows[1].Agent)
+	require.Equal(t, "ok", report.Rows[1].State)
+	_, err = os.Stat(filepath.Join(skills.TargetDir(skills.HarnessAgents, home), skillFileName))
+	require.NoError(t, err)
+	data, err = os.ReadFile(claudeConfig)
+	require.NoError(t, err)
+	require.Equal(t, claudeEntry, string(data))
+	data, err = os.ReadFile(codexConfig)
+	require.NoError(t, err)
+	require.Equal(t, codexEntry, string(data))
 }

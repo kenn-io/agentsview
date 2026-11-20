@@ -2445,10 +2445,10 @@ ______________________________________________________________________
 Install the conversation search skill and focused MCP profile for installed Claude Code and Codex clients:
 
 ```bash
-agentsview agent setup [--agent claude|codex]... [--check] [--force] [--print] [--format json]
+agentsview agent setup [--agent claude|codex]... [--check] [--force] [--mcp=false] [--print] [--format json]
 ```
 
-Setup refuses to replace a different `agentsview` MCP entry without `--force` and preserves other entries. Pass `--force` to replace the entry and overwrite edited skill files. `--check` changes nothing, and `--print` shows the MCP commands to run by hand.
+Setup refuses to replace a different `agentsview` MCP entry without `--force` and preserves other entries. Pass `--force` to replace the entry and overwrite edited skill files. `--check` changes nothing, and `--print` shows the MCP commands to run by hand. Use `--mcp=false` to install or check the skill without inspecting or changing the MCP entry.
 
 Setup registers `agentsview mcp --profile memory` with no server flags. For a remote archive, set `AGENTSVIEW_MEMORY_SERVER` or `AGENTSVIEW_MEMORY_PG` where the agent starts the MCP server, and point the skill at the same server with [`agentsview skills install --server`](#agentsview-skills).
 

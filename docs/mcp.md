@@ -177,7 +177,9 @@ client. The startup diagnostic reports a standalone skill beside the plugin. The
 plugin's server and a standalone `agentsview` entry are separate connections, so
 running both connects two servers. `agentsview agent setup` refuses to replace a
 different `agentsview` MCP entry without `--force` and preserves other entries.
-`--force` also overwrites edited skills.
+`--force` also overwrites edited skills. Use `--mcp=false` with `agent setup`
+to install or check skills without reading or changing the MCP entry. The
+`--print` option requires MCP setup.
 
 ### Memory everywhere, full tools in some projects
 

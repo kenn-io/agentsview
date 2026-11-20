@@ -34,6 +34,36 @@ func heldLoopbackPort(t *testing.T) (net.Listener, int) {
 	return listener, port
 }
 
+// heldLoopbackPortWithFallback reserves two ports within the server's
+// 100-port search range. Port 0 guarantees only one available port; its
+// neighbours can all be unavailable on a shared CI runner.
+func heldLoopbackPortWithFallback(t *testing.T) (net.Listener, int, net.Listener) {
+	t.Helper()
+	var held net.Listener
+	var heldPort int
+	// Start above the privileged port range so the fixture needs no elevated rights.
+	for port := 1024; port <= 65535; port++ {
+		listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+		if err != nil {
+			continue
+		}
+		if held != nil {
+			if port-heldPort < 100 {
+				t.Cleanup(func() { _ = held.Close() })
+				t.Cleanup(func() { _ = listener.Close() })
+				return held, heldPort, listener
+			}
+			require.NoError(t, held.Close())
+		}
+		held, heldPort = listener, port
+	}
+	if held != nil {
+		require.NoError(t, held.Close())
+	}
+	require.FailNow(t, "could not reserve two loopback ports within the server's search range")
+	return nil, 0, nil
+}
+
 func TestPrepareServeRuntimeConfigExplicitPortCollision(t *testing.T) {
 	listener, port := heldLoopbackPort(t)
 	defer listener.Close()
@@ -74,7 +104,8 @@ func TestPrepareServeRuntimeConfigPortPolicy(t *testing.T) {
 			name: "implicit collision keeps fallback and rewrites public URL",
 			fn: func(t *testing.T) (config.Config, serveRuntimeOptions, func()) {
 				t.Helper()
-				listener, port := heldLoopbackPort(t)
+				listener, port, fallback := heldLoopbackPortWithFallback(t)
+				require.NoError(t, fallback.Close())
 				publicURL := fmt.Sprintf(
 					"https://viewer.example.test:%d", port,
 				)
@@ -157,8 +188,8 @@ func TestPrepareServeRuntimeConfigPortPolicy(t *testing.T) {
 }
 
 func TestPrepareRunServeRuntimeConfigRestartPreservesConfiguredURLRewrite(t *testing.T) {
-	listener, runtimePort := heldLoopbackPort(t)
-	defer listener.Close()
+	_, runtimePort, fallback := heldLoopbackPortWithFallback(t)
+	require.NoError(t, fallback.Close())
 	configuredPort := runtimePort - 1
 	publicURL := fmt.Sprintf("https://viewer.example.test:%d", configuredPort)
 
@@ -169,7 +200,7 @@ func TestPrepareRunServeRuntimeConfigRestartPreservesConfiguredURLRewrite(t *tes
 		PublicOrigins: []string{publicURL},
 	}, runtimePort, nil)
 	require.NoError(t, err)
-	defer rtOpts.Listener.Close()
+	t.Cleanup(func() { _ = rtOpts.Listener.Close() })
 	assert.Equal(t, got.Port, rtOpts.Listener.Addr().(*net.TCPAddr).Port,
 		"serve must keep the port it reports")
 	assert.NotEqual(t, runtimePort, got.Port)
@@ -180,6 +211,9 @@ func TestPrepareRunServeRuntimeConfigRestartPreservesConfiguredURLRewrite(t *tes
 	), got.PublicURL)
 	assert.Equal(t, []string{got.PublicURL}, got.PublicOrigins)
 	assert.Equal(t, got.PublicURL, strings.TrimRight(browserURL(got), "/"))
+
+	// Release the chosen fallback so the subtest can use it too.
+	require.NoError(t, rtOpts.Listener.Close())
 
 	t.Run("explicit zero with a preferred port", func(t *testing.T) {
 		url := "https://viewer.example.test:0"

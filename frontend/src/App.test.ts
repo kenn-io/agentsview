@@ -1933,6 +1933,55 @@ describe("App telemetry", () => {
     );
   }
 
+  it("updates the tab title as the screen changes", async () => {
+    setup();
+    router.route = "activity";
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    expect(document.title).toBe("Activity · AgentsView");
+    router.navigate("usage");
+    await flushEffects();
+    expect(document.title).toBe("Usage · AgentsView");
+    router.navigateToSession("hostA~abc");
+    await flushEffects();
+    expect(document.title).toContain("Session (");
+  });
+
+  it("keeps the session tab title while loading, loaded, and missing", async () => {
+    setup();
+    const originalSessions = sessions.sessions;
+    const originalNotFound = sessions.activeSessionNotFound;
+    try {
+      sessions.sessions = [];
+      sessions.activeSessionNotFound = false;
+      component = mount(App, { target: document.body });
+      await flushEffects();
+      router.navigateToSession("hostA~abc");
+      await flushEffects();
+      expect(sessions.activeSession).toBeUndefined();
+      expect(document.title).toBe("Session (8e9ac634) · AgentsView");
+
+      sessions.sessions = [
+        hydratedSession("hostA~abc", "codex", {
+          display_name: "Private title",
+          first_message: "Private prompt",
+        }),
+      ];
+      await flushEffects();
+      expect(sessions.activeSession?.display_name).toBe("Private title");
+      expect(document.title).toBe("Session (8e9ac634) · AgentsView");
+
+      sessions.sessions = [];
+      sessions.activeSessionNotFound = true;
+      await flushEffects();
+      expect(sessions.activeSessionNotFound).toBe(true);
+      expect(document.title).toBe("Session (8e9ac634) · AgentsView");
+    } finally {
+      sessions.sessions = originalSessions;
+      sessions.activeSessionNotFound = originalNotFound;
+    }
+  });
+
   function postedFor(event: string) {
     return posted.filter((p) => p.event === event).map((p) => p.properties);
   }
