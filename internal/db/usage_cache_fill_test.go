@@ -34,6 +34,59 @@ func TestBulkReadEntryPointsWaitInLane(t *testing.T) {
 	t.Run("one reader connection", func(t *testing.T) { testBulkReadEntryPoints(t, false) })
 }
 
+func TestContentSearchReaderAdmission(t *testing.T) {
+	database := testDB(t)
+	insertSession(t, database, "search-session", "project")
+	insertMessages(t, database, userMsg("search-session", 0, "needle phrase"))
+	for _, tc := range []struct{ mode, pattern string }{
+		{"substring", "needle"}, {"regex", "needle"}, {"terms", "needle"},
+		{"fts", "needle"}, {"fts", "needle phrase"},
+		{"hybrid", "needle"}, {"hybrid", "needle phrase"},
+	} {
+		t.Run(tc.mode+"/"+tc.pattern, func(t *testing.T) {
+			f := ContentSearchFilter{Mode: tc.mode, Pattern: tc.pattern, KeywordOnly: true, IncludeOneShot: true}
+			var bulkReleases []func()
+			for range bulkReadSlots {
+				release, err := database.acquireBulkRead(t.Context())
+				require.NoError(t, err)
+				bulkReleases = append(bulkReleases, release)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			page, err := database.SearchContent(ctx, f)
+			cancel()
+			for _, release := range bulkReleases {
+				release()
+			}
+			require.NoError(t, err)
+			require.Len(t, page.Matches, 1)
+			assert.Equal(t, "search-session", page.Matches[0].SessionID)
+
+			var searchReleases []func()
+			for range bulkSearchSlots {
+				release, err := database.acquireBulkSearch(t.Context())
+				require.NoError(t, err)
+				searchReleases = append(searchReleases, release)
+			}
+			defer func() {
+				for _, release := range searchReleases {
+					release()
+				}
+			}()
+			ctx, cancel = context.WithTimeout(t.Context(), 100*time.Millisecond)
+			_, err = database.SearchContent(ctx, f)
+			cancel()
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			f.SessionID = "search-session"
+			ctx, cancel = context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			page, err = database.SearchContent(ctx, f)
+			require.NoError(t, err)
+			require.Len(t, page.Matches, 1)
+			assert.Equal(t, "search-session", page.Matches[0].SessionID)
+		})
+	}
+}
+
 func testBulkReadEntryPoints(t *testing.T, blocked bool) {
 	t.Helper()
 	database := usageCandidateFixture(t)
@@ -126,18 +179,6 @@ func testBulkReadEntryPoints(t *testing.T, blocked bool) {
 		}, nil, false},
 		{"session stats", func(ctx context.Context) error {
 			_, err := database.GetSessionStats(ctx, StatsFilter{Since: "2026-08-01", Until: "2026-08-21", Timezone: "UTC"})
-			return err
-		}, nil, false},
-		{"archive regex search", func(ctx context.Context) error {
-			_, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: `[a-z]+ call`, Mode: "regex"})
-			return err
-		}, nil, false},
-		{"prefixed regex search", func(ctx context.Context) error {
-			_, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: "skill", Mode: "regex"})
-			return err
-		}, nil, false},
-		{"terms search", func(ctx context.Context) error {
-			_, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: "question", Mode: "terms", IncludeOneShot: true})
 			return err
 		}, nil, false},
 		{"embeddable units", func(ctx context.Context) error {

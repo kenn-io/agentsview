@@ -352,6 +352,13 @@ func hasSource(f ContentSearchFilter, name string) bool {
 	return slices.Contains(f.Sources, name)
 }
 
+func (db *DB) acquireContentSearch(ctx context.Context, f ContentSearchFilter) (func(), error) {
+	if f.SessionID != "" {
+		return func() {}, nil
+	}
+	return db.acquireBulkSearch(ctx)
+}
+
 // searchContentSubstring builds a UNION ALL across the selected sources
 // with a case-insensitive LIKE, scoped to qualifying sessions, ordered by
 // recency then ordinal, fetching Limit+1 rows for cursor detection. A query
@@ -362,13 +369,11 @@ func (db *DB) searchContentSubstring(
 	ctx context.Context, f ContentSearchFilter,
 ) (ContentSearchPage, error) {
 	f, q, words := routeContentWords(f)
-	if f.SessionID == "" {
-		release, err := db.acquireBulkSearch(ctx)
-		if err != nil {
-			return ContentSearchPage{}, err
-		}
-		defer release()
+	release, err := db.acquireContentSearch(ctx, f)
+	if err != nil {
+		return ContentSearchPage{}, err
 	}
+	defer release()
 	if words && db.HasFTS(ctx) {
 		return db.searchContentWordsOrSubstring(ctx, f, q)
 	}
@@ -632,13 +637,11 @@ func (db *DB) searchContentTerms(
 	if len(terms) == 0 {
 		return ContentSearchPage{}, nil
 	}
-	if f.SessionID == "" {
-		release, err := db.acquireBulkRead(ctx)
-		if err != nil {
-			return ContentSearchPage{}, err
-		}
-		defer release()
+	release, err := db.acquireContentSearch(ctx, f)
+	if err != nil {
+		return ContentSearchPage{}, err
 	}
+	defer release()
 	return searchWithTermsIndex(ctx, db, f, terms,
 		func(indexed map[string]string) (ContentSearchPage, error) {
 			return db.termsSearchPage(ctx, f, terms, indexed)
@@ -715,13 +718,11 @@ func (db *DB) searchContentRegex(
 	if err != nil {
 		return ContentSearchPage{}, searchInputErrorf("search: invalid regex: %v", err)
 	}
-	if f.SessionID == "" {
-		release, err := db.acquireBulkRead(ctx)
-		if err != nil {
-			return ContentSearchPage{}, err
-		}
-		defer release()
+	release, err := db.acquireContentSearch(ctx, f)
+	if err != nil {
+		return ContentSearchPage{}, err
 	}
+	defer release()
 
 	lit := LiteralPrefix(f.Pattern)
 	out, err := searchWithSubstringCandidates(ctx, db, f, lit,
@@ -1109,6 +1110,11 @@ var errFTSUnavailable = errors.New("search: full-text search is unavailable")
 func (db *DB) searchContentFTS(
 	ctx context.Context, f ContentSearchFilter,
 ) (ContentSearchPage, error) {
+	release, err := db.acquireContentSearch(ctx, f)
+	if err != nil {
+		return ContentSearchPage{}, err
+	}
+	defer release()
 	// Guard FTS availability up front: a missing messages_fts table would
 	// otherwise raise a generic SQLITE_ERROR that classifyFTSError would misread
 	// as invalid user input (400). With FTS present, the only SQLITE_ERROR the
@@ -1862,6 +1868,11 @@ func (db *DB) hybridFTSLeg(
 func (db *DB) hybridWordHits(
 	ctx context.Context, f ContentSearchFilter, q contentWords, limit int,
 ) ([]hybridDisplay, error) {
+	release, err := db.acquireContentSearch(ctx, f)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	snapshot, err := db.BeginMessageSnapshot(ctx)
 	if err != nil {
 		return nil, err
@@ -1893,6 +1904,11 @@ func (db *DB) hybridWordHits(
 func (db *DB) fetchHybridFTSBatch(
 	ctx context.Context, f ContentSearchFilter, k, offset int,
 ) ([]hybridDisplay, error) {
+	release, err := db.acquireContentSearch(ctx, f)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	ftsQuery, err := db.prepareMessageFTSQuery(ctx, f.Pattern)
 	if err != nil {
 		return nil, err
