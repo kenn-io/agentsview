@@ -337,6 +337,35 @@ func encodeSegment(msgs []db.Message) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// Limit range overhead and fall back to literal dialogue for fragmented text.
+const maxDialogueRanges = 4096
+
+func dialogueContentRanges(content, dialogue string) [][2]int {
+	var ranges [][2]int
+	pos := 0
+	for i := range len(dialogue) {
+		start := pos
+		if pos >= len(content) || content[pos] != dialogue[i] {
+			offset := strings.IndexByte(content[pos:], dialogue[i])
+			if offset < 0 {
+				return nil
+			}
+			start += offset
+		}
+		pos = start + 1
+		if len(ranges) > 0 && ranges[len(ranges)-1][1] == start {
+			ranges[len(ranges)-1][1] = pos
+		} else {
+			// A range needs at most 45 JSON bytes with 64-bit offsets.
+			if len(ranges) >= maxDialogueRanges || (len(ranges)+1)*45 >= len(dialogue) {
+				return nil
+			}
+			ranges = append(ranges, [2]int{start, pos})
+		}
+	}
+	return ranges
+}
+
 func segmentMessageFromDB(msg db.Message) segmentMessage {
 	record := segmentMessage{
 		Ordinal:           msg.Ordinal,
@@ -372,15 +401,7 @@ func segmentMessageFromDB(msg db.Message) segmentMessage {
 		record.DialogueIsContent = true
 	}
 	if msg.DialogueText != nil && *msg.DialogueText != "" && !record.DialogueIsContent {
-		if start := strings.Index(msg.Content, *msg.DialogueText); start >= 0 {
-			record.DialogueRanges = [][2]int{{start, start + len(*msg.DialogueText)}}
-		} else if msg.ThinkingText != "" {
-			separator := "\n[Thinking]\n" + msg.ThinkingText + "\n[/Thinking]\n"
-			before, after, found := strings.Cut(msg.Content, separator)
-			if found && before+"\n"+after == *msg.DialogueText {
-				record.DialogueRanges = [][2]int{{0, len(before)}, {len(before) + len(separator), len(msg.Content)}}
-			}
-		}
+		record.DialogueRanges = dialogueContentRanges(msg.Content, *msg.DialogueText)
 		if len(record.DialogueRanges) > 0 {
 			record.DialogueText = nil
 		}

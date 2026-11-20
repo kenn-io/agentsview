@@ -184,17 +184,19 @@ func decodePreflightedSegment(preflight segmentPreflight) ([]db.Message, error) 
 			return nil, fmt.Errorf("decoding message segment: %w", err)
 		}
 		if len(record.DialogueRanges) > 0 {
-			if record.Version < messageSegmentFormatVersion || len(record.DialogueRanges) > 2 || record.DialogueText != nil || record.DialogueIsContent {
+			if record.Version < messageSegmentFormatVersion || len(record.DialogueRanges) > maxDialogueRanges || record.DialogueText != nil || record.DialogueIsContent {
 				return nil, errors.New("invalid dialogue ranges")
 			}
-			parts := make([]string, 0, len(record.DialogueRanges))
+			var text strings.Builder
+			end := 0
 			for _, bounds := range record.DialogueRanges {
-				if bounds[0] < 0 || bounds[1] < bounds[0] || bounds[1] > len(record.Content) {
+				if bounds[0] < end || bounds[1] < bounds[0] || bounds[1] > len(record.Content) {
 					return nil, errors.New("invalid dialogue range bounds")
 				}
-				parts = append(parts, record.Content[bounds[0]:bounds[1]])
+				text.WriteString(record.Content[bounds[0]:bounds[1]])
+				end = bounds[1]
 			}
-			dialogue := strings.Join(parts, "\n")
+			dialogue := text.String()
 			if !utf8.ValidString(dialogue) {
 				return nil, errors.New("invalid dialogue range text")
 			}

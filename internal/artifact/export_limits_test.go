@@ -652,20 +652,22 @@ func TestExportMixedClaudeDialogueWithinLimit(t *testing.T) {
 	ctx := t.Context()
 	database := testExportDB(t)
 	store := newTestArtifactStore(t)
-	seedSession(t, database, "sess-1", "alpha", func(s *db.Session) { s.UserMessageCount = 2 })
+	seedSession(t, database, "sess-1", "alpha", func(s *db.Session) { s.MessageCount, s.UserMessageCount = 3, 3 })
 	first := strings.Repeat("review ", 80)
-	second := strings.Repeat("changes ", 70)
-	dialogue := first + "\n" + second
-	blocks := gjson.Parse(fmt.Sprintf(`[{"type":"text","text":%q},{"type":"thinking","thinking":"consider"},{"type":"text","text":%q}]`, first, second))
+	second := strings.Repeat("changes 🌿 ", 70)
+	third := strings.Repeat("finish ", 70)
+	dialogue := first + "\n" + second + "\n" + third
+	blocks := gjson.Parse(fmt.Sprintf(`[{"type":"text","text":%q},{"type":"thinking","thinking":"consider"},{"type":"text","text":%q},{"type":"thinking","thinking":"reflect"},{"type":"text","text":%q}]`, first, second, third))
 	content, thinking, parsedDialogue, hasThinking, _, _, _ := parser.ExtractTextContent(ctx, blocks)
 	require.Equal(t, dialogue, parsedDialogue)
-	require.Equal(t, first+"\n[Thinking]\nconsider\n[/Thinking]\n"+second, content)
+	require.Equal(t, first+"\n[Thinking]\nconsider\n[/Thinking]\n"+second+"\n[Thinking]\nreflect\n[/Thinking]\n"+third, content)
 	require.NoError(t, database.ReplaceSessionMessages(ctx, "sess-1", []db.Message{
 		{SessionID: "sess-1", Ordinal: 0, Role: "user", Content: content, ThinkingText: thinking, DialogueText: &parsedDialogue, HasThinking: hasThinking},
 		{SessionID: "sess-1", Ordinal: 1, Role: "user", Content: "[Thinking]\nprivate\n[/Thinking]", ThinkingText: "private", DialogueText: new(""), HasThinking: true},
+		{SessionID: "sess-1", Ordinal: 2, Role: "user", Content: "display text with context", DialogueText: new("unexpected prompt")},
 	}))
 	limits := productionArtifactLimits()
-	limits.sessionDecodedBytes = 1800
+	limits.sessionDecodedBytes = 3000
 	result, err := exportToStoreWithLimits(ctx, database, store, ExportOptions{Origin: contractOrigin, Full: true}, limits)
 	require.NoError(t, err)
 	require.Equal(t, 1, result.ExportedSessions)
@@ -686,9 +688,24 @@ func TestExportMixedClaudeDialogueWithinLimit(t *testing.T) {
 	require.Equal(t, 1, imported.Sessions, "%+v", imported)
 	got, err := destination.GetAllMessages(ctx, contractOrigin+"~sess-1")
 	require.NoError(t, err)
-	require.Len(t, got, 2)
+	require.Len(t, got, 3)
 	assert.Equal(t, content, got[0].Content)
 	assert.Equal(t, &dialogue, got[0].DialogueText)
 	assert.Equal(t, "[Thinking]\nprivate\n[/Thinking]", got[1].Content)
 	assert.Equal(t, new(""), got[1].DialogueText)
+	assert.Equal(t, "display text with context", got[2].Content)
+	assert.Equal(t, new("unexpected prompt"), got[2].DialogueText)
+}
+
+func TestDecodeSegmentRejectsInvalidDialogueRanges(t *testing.T) {
+	for name, tc := range map[string]struct{ ranges, errorText string }{
+		"out of bounds": {`[[0,4]]`, "invalid dialogue range bounds"},
+		"overlapping":   {`[[0,2],[1,3]]`, "invalid dialogue range bounds"},
+		"split rune":    {`[[1,2]]`, "invalid dialogue range text"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := decodeSegment([]byte(`{"v":5,"ordinal":0,"role":"user","content":"éx","dialogue_ranges":` + tc.ranges + `}` + "\n"))
+			require.ErrorContains(t, err, tc.errorText)
+		})
+	}
 }

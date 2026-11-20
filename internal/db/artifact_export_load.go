@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 )
 
 // ErrArtifactExportLimit identifies a deterministic session-shape violation
@@ -34,15 +35,14 @@ type ArtifactExportData struct {
 	PlanUsage   *SessionPlanUsage // nil when the session has none
 }
 
+// Dialogue no longer than content may be encoded as ranges. Excluding it here
+// bounds loaded message bytes to twice this limit; the encoded export is still
+// checked against the exact limit before publication.
 const artifactMessageRawBytesSQL = `
 	length(CAST(role AS BLOB)) +
 	length(CAST(content AS BLOB)) +
 	length(CAST(CASE WHEN role = 'user' AND dialogue_text <> content
-		AND instr(CAST(content AS BLOB), CAST(dialogue_text AS BLOB)) = 0
-		AND NOT (thinking_text <> '' AND
-			instr(content, char(10) || '[Thinking]' || char(10) || thinking_text || char(10) || '[/Thinking]' || char(10)) > 0 AND
-			substr(content, 1, instr(content, char(10) || '[Thinking]' || char(10) || thinking_text || char(10) || '[/Thinking]' || char(10)) - 1) || char(10) ||
-			substr(content, instr(content, char(10) || '[Thinking]' || char(10) || thinking_text || char(10) || '[/Thinking]' || char(10)) + length(char(10) || '[Thinking]' || char(10) || thinking_text || char(10) || '[/Thinking]' || char(10))) = dialogue_text)
+		AND length(CAST(dialogue_text AS BLOB)) > length(CAST(content AS BLOB))
 		THEN dialogue_text ELSE '' END AS BLOB)) +
 	length(CAST(thinking_text AS BLOB)) +
 	length(CAST(COALESCE(timestamp, '') AS BLOB)) +
@@ -405,13 +405,34 @@ func preflightArtifactExportTx(
 	return preflightArtifactUsageTx(ctx, tx, sessionID, limits)
 }
 
+func artifactDialogueIsSubsequence(content, dialogue string) bool {
+	pos := 0
+	for i := range len(dialogue) {
+		if pos >= len(content) || content[pos] != dialogue[i] {
+			offset := strings.IndexByte(content[pos:], dialogue[i])
+			if offset < 0 {
+				return false
+			}
+			pos += offset
+		}
+		pos++
+	}
+	return true
+}
+
 func preflightArtifactMessagesTx(
 	ctx context.Context, tx *sql.Tx, sessionID string, limits ArtifactExportLoadLimits,
 ) (int64, error) {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id, ordinal, `+artifactMessageRawBytesSQL+`
+		SELECT id, ordinal, `+artifactMessageRawBytesSQL+`,
+		CASE WHEN role = 'user' AND dialogue_text <> content
+			AND length(CAST(dialogue_text AS BLOB)) <= length(CAST(content AS BLOB))
+			AND length(CAST(content AS BLOB)) <= ? THEN content END,
+		CASE WHEN role = 'user' AND dialogue_text <> content
+			AND length(CAST(dialogue_text AS BLOB)) <= length(CAST(content AS BLOB))
+			AND length(CAST(content AS BLOB)) <= ? THEN dialogue_text END
 		FROM messages WHERE session_id = ? LIMIT ?`,
-		sessionID, limits.Messages+1,
+		limits.MessageBytes, limits.MessageBytes, sessionID, limits.Messages+1,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("preflighting artifact messages: %w", err)
@@ -423,7 +444,8 @@ func preflightArtifactMessagesTx(
 		var id int64
 		var ordinal int
 		var rawBytes int64
-		if err := rows.Scan(&id, &ordinal, &rawBytes); err != nil {
+		var content, dialogue sql.NullString
+		if err := rows.Scan(&id, &ordinal, &rawBytes, &content, &dialogue); err != nil {
 			_ = rows.Close()
 			return 0, fmt.Errorf("scanning artifact message preflight: %w", err)
 		}
@@ -432,6 +454,9 @@ func preflightArtifactMessagesTx(
 			return 0, closeArtifactPreflightAtLimit(rows, artifactExportLimitf(
 				"session %s message count exceeds %d", sessionID, limits.Messages,
 			))
+		}
+		if dialogue.Valid && !artifactDialogueIsSubsequence(content.String, dialogue.String) {
+			rawBytes += int64(len(dialogue.String))
 		}
 		var exceeded bool
 		totalBytes, exceeded = addArtifactExportBytes(
