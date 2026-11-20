@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	usageCacheMaxOpenConns = 8
+	usageCacheMaxOpenConns = 4
 
 	// Version 5 rebuilds version 4 facts and rollups so Posit Assistant
 	// sidecar events use request-scoped pricing semantics.
