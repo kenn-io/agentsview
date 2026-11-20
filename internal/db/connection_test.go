@@ -227,6 +227,53 @@ func testSearchWaitsForBulkRead(t *testing.T, pattern, mode string) {
 	}
 }
 
+type blockingEmbeddingSearcher struct {
+	fakeVectorSearcher
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingEmbeddingSearcher) PrepareSemanticSearch(ctx context.Context, _ string) (VectorSearchPage, int, error) {
+	close(s.started)
+	select {
+	case <-s.release:
+		return func(context.Context, int) ([]VectorHit, bool, error) { return nil, true, nil }, 0, nil
+	case <-ctx.Done():
+		return nil, 0, ctx.Err()
+	}
+}
+
+func TestHybridEmbeddingLeavesBulkReaderAvailable(t *testing.T) {
+	database := testDB(t)
+	seedSearchSession(t, database, "summary", "project", [][2]string{{"user", "searchable text"}})
+	for range bulkReadSlots - 1 {
+		release, err := database.acquireBulkRead(t.Context())
+		require.NoError(t, err)
+		defer release()
+	}
+	searcher := &blockingEmbeddingSearcher{started: make(chan struct{}), release: make(chan struct{})}
+	database.SetVectorSearcher(searcher)
+	done := make(chan error, 1)
+	go func() {
+		_, err := database.SearchContent(t.Context(), ContentSearchFilter{Pattern: "searchable", Mode: "hybrid"})
+		done <- err
+	}()
+	defer func() {
+		close(searcher.release)
+		assert.NoError(t, <-done)
+	}()
+	select {
+	case <-searcher.started:
+	case <-time.After(10 * time.Second):
+		require.FailNow(t, "embedding did not start")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	page, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: "searchable", Mode: "fts"})
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+}
+
 func TestAcquireBulkReadHonorsContext(t *testing.T) {
 	database := &DB{}
 	ctx, cancel := context.WithCancel(t.Context())

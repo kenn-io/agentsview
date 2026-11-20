@@ -1741,14 +1741,6 @@ func (db *DB) searchContentHybrid(
 		return ContentSearchPage{}, errFTSUnavailable
 	}
 
-	if f.SessionID == "" {
-		release, err := db.acquireBulkRead(ctx)
-		if err != nil {
-			return ContentSearchPage{}, err
-		}
-		defer release()
-	}
-
 	k := max(f.Limit*4, SemanticOverfetchMin)
 	var vecLeg hybridLeg
 	var err error
@@ -1757,6 +1749,13 @@ func (db *DB) searchContentHybrid(
 		if err != nil {
 			return ContentSearchPage{}, err
 		}
+	}
+	if f.SessionID == "" {
+		release, err := db.acquireBulkRead(ctx)
+		if err != nil {
+			return ContentSearchPage{}, err
+		}
+		defer release()
 	}
 	ftsLeg, err := db.hybridFTSLeg(ctx, f, searcher, k)
 	if err != nil {
@@ -1780,7 +1779,18 @@ func (db *DB) hybridVectorLeg(
 	ctx context.Context, f ContentSearchFilter, searcher VectorSearcher, k int,
 ) (hybridLeg, error) {
 	leg := hybridLeg{display: make(map[string]hybridDisplay)}
-	hits, err := SelectSurvivingVectorHits(ctx, f, searcher, k, db.semanticAllowedSessionIDs)
+	allowedSessions := db.semanticAllowedSessionIDs
+	if f.SessionID == "" {
+		allowedSessions = func(ctx context.Context, f ContentSearchFilter, ids []string) (map[string]bool, error) {
+			release, err := db.acquireBulkRead(ctx)
+			if err != nil {
+				return nil, err
+			}
+			defer release()
+			return db.semanticAllowedSessionIDs(ctx, f, ids)
+		}
+	}
+	hits, err := SelectSurvivingVectorHits(ctx, f, searcher, k, allowedSessions)
 	if err != nil {
 		return hybridLeg{}, err
 	}
