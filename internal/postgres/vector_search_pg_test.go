@@ -6,7 +6,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"net/url"
 	"strings"
 	"testing"
@@ -76,11 +75,9 @@ VALUES ($1, $2, '', $3, $4, FALSE, $5, $6, 'h')`,
 
 func insertSearchChunk(
 	t *testing.T, pg *sql.DB, table, halfvecType, docKey string,
-	chunkIndex int, emb []float32,
+	chunkIndex int, literal string,
 ) {
 	t.Helper()
-	literal := fmt.Sprint(emb)
-	literal = strings.ReplaceAll(literal, " ", ",")
 	_, err := pg.ExecContext(t.Context(),
 		`INSERT INTO `+table+` (doc_key, chunk_index, embedding)
 		 VALUES ($1, $2, $3::`+halfvecType+`)`,
@@ -117,12 +114,12 @@ func seedVectorSearchFixture(t *testing.T, pg *sql.DB) (genID int64, table strin
 	insertSearchDoc(t, pg, "gone", "S", 30, 30, "[]", "vanished")
 	insertSearchDoc(t, pg, "tomb", "S", -1, -1, "[]", "parked tombstone")
 
-	insertSearchChunk(t, pg, table, halfvec, "u1", 0, []float32{1, 0, 0, 0})
-	insertSearchChunk(t, pg, table, halfvec, "r1", 0, []float32{0, 0, 1, 0})
-	insertSearchChunk(t, pg, table, halfvec, "r1", 1, []float32{1, 0.2, 0, 0})
-	insertSearchChunk(t, pg, table, halfvec, "u2", 0, []float32{0, 1, 0, 0})
-	insertSearchChunk(t, pg, table, halfvec, "gone", 0, []float32{0.9, 0.4359, 0, 0})
-	insertSearchChunk(t, pg, table, halfvec, "tomb", 0, []float32{0.95, 0.3122, 0, 0})
+	insertSearchChunk(t, pg, table, halfvec, "u1", 0, "[1,0,0,0]")
+	insertSearchChunk(t, pg, table, halfvec, "r1", 0, "[0,0,1,0]")
+	insertSearchChunk(t, pg, table, halfvec, "r1", 1, "[1,0.2,0,0]")
+	insertSearchChunk(t, pg, table, halfvec, "u2", 0, "[0,1,0,0]")
+	insertSearchChunk(t, pg, table, halfvec, "gone", 0, "[0.9,0.4359,0,0]")
+	insertSearchChunk(t, pg, table, halfvec, "tomb", 0, "[0.95,0.3122,0,0]")
 
 	// gone's chunk stays; its document row disappears between KNN and hydrate.
 	_, err = pg.ExecContext(t.Context(), `DELETE FROM vector_documents WHERE doc_key = 'gone'`)
@@ -328,9 +325,9 @@ func TestPGVectorSearcherExactK(t *testing.T) {
 	// [1,0,0,0]); "outside" is next-best at rank 3, beyond k=2.
 	insertSearchDoc(t, pg, "multi", "S", 1, 1, "[]", "multi doc content")
 	insertSearchDoc(t, pg, "outside", "S", 2, 2, "[]", "outside doc content")
-	insertSearchChunk(t, pg, table, halfvec, "multi", 0, []float32{1, 0, 0, 0})
-	insertSearchChunk(t, pg, table, halfvec, "multi", 1, []float32{1, 0.1, 0, 0})
-	insertSearchChunk(t, pg, table, halfvec, "outside", 0, []float32{0, 1, 0, 0})
+	insertSearchChunk(t, pg, table, halfvec, "multi", 0, "[1,0,0,0]")
+	insertSearchChunk(t, pg, table, halfvec, "multi", 1, "[1,0.1,0,0]")
+	insertSearchChunk(t, pg, table, halfvec, "outside", 0, "[0,1,0,0]")
 
 	searcher := NewVectorSearcher(
 		pg, genID, 4, searchMaxInputChars, fixedEncoder([]float32{1, 0, 0, 0}))
