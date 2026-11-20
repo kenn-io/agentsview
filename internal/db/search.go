@@ -534,8 +534,7 @@ func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage,
 
 	// Relevance pages come from a walk over the matches in rank order when
 	// it can stop early; see walkSearchRanks. Recency pages rank every match
-	// inside the query, and so do project and date filters: most matches
-	// fall outside them, so the walk would read nearly all of them.
+	// inside the query, as do project and upper-date filters.
 	// The walk and the page query share one snapshot: a sync that edits a
 	// walked message between them would leave its snippet NULL.
 	tx, err := db.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
@@ -544,7 +543,7 @@ func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage,
 	}
 	defer func() { _ = tx.Rollback() }()
 	var walk *searchRankWalk
-	if f.Sort != "recency" && f.Project == "" && f.DateFrom == "" && f.DateTo == "" {
+	if f.Sort != "recency" && f.Project == "" && f.DateTo == "" {
 		walk, err = walkSearchRanks(ctx, tx, ftsQuery.table, innerWhereSQL, ftsArgs, f.Cursor+f.Limit+1)
 		if err != nil {
 			return SearchPage{}, err
