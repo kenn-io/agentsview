@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -395,9 +396,12 @@ func TestSearchDateFiltersRequireSupportedServer(t *testing.T) {
 				}
 				name := fmt.Sprintf("api%d/known=%t/from=%s/to=%s", version, known, bounds.from, bounds.to)
 				t.Run(name, func(t *testing.T) {
+					var mu sync.Mutex
 					var paths []string
 					srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						mu.Lock()
 						paths = append(paths, r.URL.Path)
+						mu.Unlock()
 						w.Header().Set("Content-Type", "application/json")
 						if r.URL.Path == "/api/v1/version" {
 							_, _ = fmt.Fprintf(w, `{"api_version":%d}`, version)
@@ -414,6 +418,8 @@ func TestSearchDateFiltersRequireSupportedServer(t *testing.T) {
 						backend = NewHTTPBackendForServer(srv.URL, "", HTTPServerCapabilities{APIVersion: version})
 					}
 					result, err := backend.Search(t.Context(), service.SearchRequest{Query: "needle", DateFrom: bounds.from, DateTo: bounds.to})
+					mu.Lock()
+					defer mu.Unlock()
 					bounded := bounds.from != "" || bounds.to != ""
 					if bounded && version == 8 {
 						require.ErrorContains(t, err, "restart or upgrade the server")
@@ -435,11 +441,12 @@ func TestSearchDateFiltersRequireSupportedServer(t *testing.T) {
 }
 
 func TestSearchDateFiltersProbeChangedServer(t *testing.T) {
-	version := 8
+	var version atomic.Int32
+	version.Store(8)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/api/v1/version" {
-			_, _ = fmt.Fprintf(w, `{"api_version":%d}`, version)
+			_, _ = fmt.Fprintf(w, `{"api_version":%d}`, version.Load())
 			return
 		}
 		_, _ = w.Write([]byte(`{"results":[],"next":0}`))
@@ -449,10 +456,10 @@ func TestSearchDateFiltersProbeChangedServer(t *testing.T) {
 	req := service.SearchRequest{Query: "needle", DateFrom: "2024-05-16"}
 	_, err := backend.Search(t.Context(), req)
 	require.ErrorContains(t, err, "restart or upgrade the server")
-	version = 9
+	version.Store(9)
 	_, err = backend.Search(t.Context(), req)
 	require.NoError(t, err)
-	version = 8
+	version.Store(8)
 	_, err = backend.Search(t.Context(), req)
 	require.ErrorContains(t, err, "restart or upgrade the server")
 }
