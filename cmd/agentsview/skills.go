@@ -168,7 +168,7 @@ func runSkillsInstall(
 	}
 
 	if len(refused) > 0 {
-		return skillInstallRefusal(len(refused))
+		return skillInstallRefusalError(len(refused))
 	}
 	if local {
 		cfg, err := config.LoadReadOnlyFor(config.ScopeVector)
@@ -179,10 +179,10 @@ func runSkillsInstall(
 	return nil
 }
 
-// skillInstallRefusal distinguishes edited files from an interrupted write.
-type skillInstallRefusal int
+// skillInstallRefusalError distinguishes edited files from an interrupted write.
+type skillInstallRefusalError int
 
-func (n skillInstallRefusal) Error() string {
+func (n skillInstallRefusalError) Error() string {
 	return fmt.Sprintf("skills install: %d target(s) refused; rerun with --force to overwrite", n)
 }
 

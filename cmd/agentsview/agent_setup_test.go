@@ -350,7 +350,7 @@ func TestAgentSetupWithoutMCPTwoAgentsPartialFailure(t *testing.T) {
 	require.Len(t, report.Rows, 2)
 	require.Equal(t, "claude", report.Rows[0].Agent)
 	require.Equal(t, "failed", report.Rows[0].State)
-	require.Equal(t, "Skill files were edited", report.Rows[0].Reason)
+	require.Equal(t, "skill files were edited", report.Rows[0].Reason)
 	require.Equal(t, "agentsview agent setup --mcp=false --agent claude --force", report.Rows[0].NextStep)
 	args := strings.Fields(report.Rows[0].NextStep)
 	require.Equal(t, "agentsview", args[0])
