@@ -6,21 +6,23 @@ description: All AgentsView commands, flags, and environment variables
 
 ## Start from help
 
-`agentsview --help` includes a numbered workflow for
-syncing sources, finding sessions, reading transcripts, and checking usage.
-It explains session IDs, backend selection, output streams, exit codes, and
-environment variables. Run `agentsview source list --json` for the provider
-catalog, built-in source locations, and environment override names. It does not
-resolve configured directory arrays. Run `agentsview openapi` for the API schema.
+Run `agentsview --help` to see a numbered workflow for syncing sources, finding
+sessions, reading transcripts, and checking usage. The help text also covers
+session IDs, backend selection, output streams, exit codes, and environment
+variables. For the provider catalog, built-in source locations, and environment
+override names, run `agentsview source list --json`. That output does not
+resolve configured directory arrays. To print the API schema, run
+`agentsview openapi`.
 
-Use `agentsview session --help` for common backend and output flags. Core
-commands include examples and describe their limits.
+For common backend and output flags, run `agentsview session --help`. Core
+commands also include examples and note their limits.
 
 ## Recover from CLI errors
 
-Failed commands print `fatal: <message>` followed by
-`hint: <next step>` on stderr. The hint names CLI commands, flags, or settings.
-Unknown commands and flags point to the relevant command's `--help`.
+When a command fails, it writes `fatal: <message>` followed by
+`hint: <next step>` to stderr. The hint names the CLI commands, flags, or
+settings to check, and unknown commands or flags point you to the relevant
+command's `--help`.
 
 Commands that accept `--json` or `--format json` write one JSON diagnostic line
 to stderr instead:
@@ -29,27 +31,26 @@ to stderr instead:
 {"error":"usage","message":"unknown flag: --bogus","hint":"run `agentsview session list --help` for flags and examples"}
 ```
 
-The `error` value identifies the category: `usage`, `validation`, `unavailable`,
-`authentication`, `forbidden`, `conflict`, `not_found`, or the general `error`.
-A true `--json` takes precedence over `--format`; repeated flags use their final
-valid values. Rejections on fixed-stream commands also honor the requested
-JSON error format. Existing warnings can precede the diagnostic on stderr. Success
-reports, transcript streams, and API response formats keep their existing
-formats on stdout.
+The `error` field names the error category: `usage`, `validation`,
+`unavailable`, `authentication`, `forbidden`, `conflict`, `not_found`, or the
+general `error`. When you pass `--json` as true, it takes precedence over
+`--format`, and repeated flags use their final valid values. Rejections on
+fixed-stream commands also honor the requested JSON error format. Existing
+warnings can appear before the diagnostic on stderr, while success reports,
+transcript streams, and API responses keep their existing formats on stdout.
 
 If a session is missing, copy a canonical ID from
-`agentsview session list --json`. For a new session, run
-`agentsview source sync` on the archive host. If autostart is disabled with
-`AGENTSVIEW_NO_DAEMON=1`, run
-`agentsview daemon start` before retrying a daemon read. An explicit remote
-`--server` needs that host's URL and token, supplied through
-`--server-token-file` or `AGENTSVIEW_SERVER_TOKEN`.
+`agentsview session list --json`. To pick up a new session, run
+`agentsview source sync` on the archive host. If you disable autostart with
+`AGENTSVIEW_NO_DAEMON=1`, run `agentsview daemon start` before retrying a
+daemon read. When you pass an explicit remote `--server`, supply that host's
+URL and token with `--server-token-file` or `AGENTSVIEW_SERVER_TOKEN`.
 
 ### Exit codes
 
 Existing command-specific outcomes take precedence over the general error
-classes. Read the process status separately from stdout: a usage report can
-be present with exit 3.
+classes. Check the process exit status separately from stdout, because a usage
+report can still be present with exit 3.
 
 | Code | Meaning |
 | --- | --- |
@@ -64,52 +65,54 @@ be present with exit 3.
 | 69 | A daemon, server, or semantic search index is unavailable. |
 | 70 | `capture report` failed. |
 
-`capture run` preserves the captured command's exit status. `session usage`
-keeps exit 3 silent after writing its normal report. `session usage-batch`
-keeps per-session exit codes in its result document and succeeds when the batch
-itself completes. Export cursor/revision errors retain their existing flat
-JSON documents on stderr. Hidden worker and browser-host protocols keep their
-existing diagnostics. `parse-diff --fail-on-change` retains its normal report
-and exit 1 when changes or parse failures are found. Remote sync failures keep
-their per-host summary and add recovery advice.
+`capture run` passes through the captured command's exit status, and
+`session usage` stays silent on exit 3 after writing its normal report.
+`session usage-batch` records per-session exit codes inside its result document
+and succeeds when the batch itself completes. Export cursor and revision errors
+keep their existing flat JSON documents on stderr, and hidden worker and
+browser-host protocols keep their existing diagnostics.
+`parse-diff --fail-on-change` writes its normal report and exits 1 when it
+finds changes or parse failures. Remote sync failures keep their per-host
+summary and add recovery advice.
 
 ## Commands
 
 ### Find a command by task
 
-Describe a task to get up to five matching commands:
+Describe what you want to do to get up to five matching commands:
 
 ```bash
 agentsview cli search "show token cost for a conversation"
 agentsview cli search list supported providers --limit 3 --json
 ```
 
-Search reads the command tree locally. It needs no configuration, database,
-daemon, network connection, or credentials. Results use current command paths;
-hidden legacy commands, help-only groups, browser setup, and interactive
-service installation are omitted. Eligible actions inside groups remain
+Search inspects the command tree locally and needs no configuration, database,
+daemon, network connection, or credentials. Results use current command paths
+and leave out hidden legacy commands, help-only groups, browser setup, and
+interactive service installation, while eligible actions inside groups remain
 searchable.
 
-`--limit` accepts 1–20 (default 5). `--json` and `--format json` return
+`--limit` accepts 1 to 20, with a default of 5. Pass `--json` or `--format json`
+to get
 `{"query":"...","results":[{"command":"...","summary":"...","usage":"..."}]}`.
-An unmatched task succeeds with an empty `results` array. Text output includes
-a command help hint for flags and examples. Run `agentsview cli` for help.
+If no command matches, the search succeeds with an empty `results` array. Text
+output includes a command help hint for flags and examples. For help with this
+group, run `agentsview cli`.
 
-Root help lists command domains. Run `agentsview source --help`, for example,
-to find the actions in that domain, then `agentsview source sync --help` for
-flags. These command paths follow `main`; older releases use the legacy names
-below.
+Root help lists command domains. For example, run `agentsview source --help` to
+list the actions in that domain, then `agentsview source sync --help` to inspect
+its flags. These command paths follow `main`; older releases use the legacy
+names below.
 
 ### Command migration
 
 Related actions now share a noun. Existing command names continue to work for
-at least one release. They are hidden from root help and completion, and an
-invoked legacy action prints its replacement on stderr. `agentsview sync` is
-the exception: it stays a supported shortcut for `source sync`, appears in root
-help, and prints no deprecation notice. Flags, arguments,
-stdout documents, exit codes, HTTP routes, and MCP tools keep their behavior.
-Daemon, SSH sync, browser host, and parser child protocols keep their existing
-launch paths.
+at least one release, though they are hidden from root help and completion and
+print their replacement on stderr when you run them. `agentsview sync` is the
+exception: it stays a supported shortcut for `source sync`, appears in root
+help, and prints no deprecation notice. Flags, arguments, stdout documents,
+exit codes, HTTP routes, and MCP tools keep their behavior, and daemon, SSH
+sync, browser host, and parser child protocols keep their existing launch paths.
 
 | Legacy command                             | Preferred command                                                  |
 | ------------------------------------------ | ------------------------------------------------------------------ |
@@ -133,44 +136,48 @@ launch paths.
 Keep using `agentsview usage grok <csv>` to import xAI billing files. Its
 deprecation notice names `report usage grok`, which does not exist in 0.47.0.
 
-`session prune` operates on the local archive. It rejects the session group's
-inherited `--server`, `--server-token-file`, `--pg`, `--json`, and `--format`
-flags before accessing storage. Use `--dry-run` to inspect the selection.
+`session prune` operates on the local archive only and rejects the session
+group's inherited `--server`, `--server-token-file`, `--pg`, `--json`, and
+`--format` flags before accessing storage. Pass `--dry-run` to preview what it
+would delete.
 
 ### `agentsview git-hook`
 
-Add the current agent session to commits in a repository:
+Tag commits in a repository with the current agent session:
 
 ```sh
 agentsview git-hook install
 ```
 
-The `prepare-commit-msg` and `commit-msg` hooks work together. The first records
-the message Git prepared; the second adds `Agent-Session:
-<agent>:<session-id>` to commits made without an editor, including `-m`, `-F`,
-`-C`, `--amend --no-edit`, and `merge --no-edit`. An unchanged commit template
-stays untouched so Git can reject it. A conflicted cherry-pick finished with
-`--no-edit` or `--continue` also carries the current session. Editor commits
-keep their original messages. Git doesn't run `commit-msg` for
-`git revert --no-edit` or rebase picks, so they get no new trailer. Rebase picks
-keep their existing trailers. Amending from a different session adds a second
+The `prepare-commit-msg` and `commit-msg` hooks work as a pair.
+`prepare-commit-msg` records the message Git prepares, and `commit-msg` adds
+`Agent-Session: <agent>:<session-id>` to commits made without an editor,
+including `-m`, `-F`, `-C`, `--amend --no-edit`, and `merge --no-edit`. If you
+leave a commit template unchanged, the hook leaves it alone so Git can reject
+it. A conflicted cherry-pick finished with `--no-edit` or `--continue` also
+carries the current session, while editor commits keep their original messages.
+Git doesn't run `commit-msg` for `git revert --no-edit` or rebase picks, so
+those get no new trailer, though rebase picks keep their existing trailers. If
+you amend a commit from a different session, the hook adds a second
 `Agent-Session` line.
 
-The hook skips messages containing only blank lines, Git comments, or signoffs.
-Git still rejects empty messages. A comment-only message such as `-m '#123 fix'`
-can still commit when Git retains comments, but gets no trailer. Git doesn't
-tell hooks whether `-s` added a signoff, so when a commit template already ends
-with your own signoff and another hook changes that line, the commit gets no
-trailer. With `core.commentChar=auto`, Git picks its comment character per
-commit and doesn't tell hooks which. The hook then treats lines starting with
-any of `#;@!$%^&|:` as possible comments, so a message made only of such lines
-gets no trailer, and commits that start from a commit template get none either.
+The hook skips messages that contain only blank lines, Git comments, or
+signoffs, and Git still rejects empty messages. A comment-only message such as
+`-m '#123 fix'` can still commit when Git retains comments, but it gets no
+trailer. Git doesn't tell hooks whether `-s` added a signoff, so when a commit
+template already ends with your own signoff and another hook changes that line,
+the commit gets no trailer. When you set `core.commentChar=auto`, Git picks its
+comment character per commit without telling hooks which one it chose. In that
+case, the hook treats lines starting with any of `#;@!$%^&|:` as possible
+comments, so a message made only of those lines gets no trailer, and commits
+that start from a commit template get none either.
 
-AgentsView must be on `PATH`. A missing or failing binary, or a missing,
-invalid, or ambiguous session, leaves the commit message unchanged.
+Make sure `agentsview` is on your `PATH`. If the binary is missing or fails, or
+if the session is missing, invalid, or ambiguous, the hook leaves your commit
+message unchanged.
 
-Discovery reads the session variable each supported harness sets for the
-commands its agent runs:
+Discovery reads the session environment variable that each supported harness
+sets for commands its agent runs:
 
 | Agent | Variable |
 | --- | --- |
@@ -185,24 +192,23 @@ commands its agent runs:
 | Hermes | `HERMES_SESSION_ID` |
 
 Claude and Codex IDs must be UUIDs. Commits from unlisted harnesses get no
-trailer unless you set the override pair. When an agent runs inside another
-agent's shell, such as Pi started from Claude Code, both variables are set. The
-hook then leaves the message unchanged and prints a warning. Set both
-`AGENTSVIEW_SESSION_AGENT` and `AGENTSVIEW_SESSION_ID` to resolve this
-ambiguity or override discovery.
-Override agent names accept lowercase letters, digits, and hyphens, up to 32
-characters, starting with a letter or digit. IDs for agents other than Claude
-and Codex accept letters, digits, dots, underscores, and hyphens, up to 128
-characters, starting with a letter or digit.
+trailer unless you set the override pair. If an agent runs inside another
+agent's shell, such as Pi started from Claude Code, both variables are set, and
+the hook leaves the message unchanged and prints a warning. To resolve that
+ambiguity or override discovery, set both `AGENTSVIEW_SESSION_AGENT` and
+`AGENTSVIEW_SESSION_ID`. Override agent names accept lowercase letters, digits,
+and hyphens, up to 32 characters, starting with a letter or digit. IDs for
+agents other than Claude and Codex accept letters, digits, dots, underscores,
+and hyphens, up to 128 characters, starting with a letter or digit.
 
-Installation writes both hooks into the directory Git uses. Rerunning it
-succeeds without changing byte-identical hooks. A `core.hooksPath` setting,
-including a global one, makes installation apply to every repository sharing
-that path. The two hooks only work as a pair. When either one already exists
-with other content, installation writes nothing and prints the steps for both:
-the line to add to each existing hook, and the file to create for a missing
-one. Put the `prepare-commit-msg` line right after the hook's first line, so it
-saves the template before your hook edits it:
+Installation writes both hooks into the directory Git uses, and rerunning it
+succeeds without changing byte-identical hooks. If you have `core.hooksPath`
+set, including globally, installation applies to every repository sharing that
+path. The two hooks only work as a pair. When either file already exists with
+other content, installation writes nothing and prints the steps for both: the
+line to add to each existing hook, and the file to create for a missing one.
+Put the `prepare-commit-msg` line right after the hook's first line so it saves
+the template before your hook edits it:
 
 ```sh
 if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer-prepare "$@" || :; fi
@@ -217,29 +223,29 @@ agentsview_status=$?; if command -v agentsview >/dev/null 2>&1; then agentsview 
 ```
 
 To remove the hooks, delete the installed `prepare-commit-msg` and `commit-msg`
-files. For shared hooks, remove the added lines.
+files. For shared hooks, remove the lines you added.
 
 ### `agentsview archive`
 
-Available in 0.46.0 and later, these commands retain captures from several
-machines, recover their original files, and reparse Claude and Codex sessions
-after the original directories are gone.
-`capture` can snapshot live SQLite databases. Regular files must stay unchanged
-while copied; a changing transcript aborts the capture. Stop source writers for
-the final retirement capture. Stop the destination daemon before import,
-reparse, backup or extraction. Those archive writes refuse to run while another
-process owns the database.
+Available in 0.46.0 and later, these commands let you retain captures from
+several machines, recover their original files, and reparse Claude and Codex
+sessions after the original directories are gone. `capture` can snapshot live
+SQLite databases, but regular files must stay unchanged while copied because a
+changing transcript aborts the capture. Stop source writers before taking a
+final retirement capture, and stop the destination daemon before running
+import, reparse, backup, or extraction, as those archive writes refuse to run
+while another process owns the database.
 
-Use an isolated data directory for the receiving archive. Seed it from the
-capture of the installation being retired, as shown below. Older or alternate
-databases remain supplemental files; these commands do not merge databases.
-After a rehearsal, assemble the final archive in a new directory from final
-captures. Later imports retain changed versions for recovery, but do not update
-already accepted browsable sessions or deletion policy. Ongoing collection and
-source advancement are outside this workflow.
+Set up an isolated data directory for the receiving archive and seed it from
+the capture of the installation you are retiring, as shown below. Older or
+alternate databases stay as supplemental files; these commands do not merge
+databases. After a rehearsal, assemble the final archive in a new directory
+from final captures. Later imports retain changed versions for recovery, but
+they do not update already accepted browsable sessions or deletion policy.
+Ongoing collection and source advancement are outside this workflow.
 
-Create a capture on the source machine. Select roots explicitly; `files` retains
-supplemental trees without parsing them:
+Create a capture on the source machine by selecting roots explicitly. The
+`files` root retains supplemental trees without parsing them:
 
 ```bash
 agentsview archive capture /media/backup/source-capture \
@@ -249,46 +255,48 @@ agentsview archive capture /media/backup/source-capture \
 ```
 
 The standard Claude `projects` and Codex `sessions`/`archived_sessions` roots
-include their parent directory to retain companion files. Only the selected
-session directory is parsed. Selecting a provider home includes its existing
-conventional session directories. No other home-directory scanning occurs. Capture also records other spellings
-of each root that the captured database uses, such as a path through a
-symlink, after checking that they resolve to the same directory. Reparse then
-recognizes those seeded sessions after the originals are gone.
+include their parent directory to keep companion files, though only the
+selected session directory is parsed. Selecting a provider home includes its
+existing conventional session directories, and no other home-directory scanning
+happens. Capture also records other spellings of each root that the captured
+database uses, such as a path through a symlink, after checking that they
+resolve to the same directory. That lets reparse recognize those seeded
+sessions after the originals are gone.
 
-Capture reads the installation ID without creating one in the source. It reuses
+Capture reads the installation ID without creating one in the source and reuses
 known raw-sync root IDs. When it generates identities, the JSON report lists
 them under `new_identities`; pass `--identity-from PREVIOUS/capture.json` on
-subsequent captures to reuse them. A previous descriptor from another
-installation, or conflicting checkpoint identities, causes an error.
-The descriptor alone is sufficient for identity reuse; the older captured files
-are not read. If the source AgentsView data directory moved, identity reuse
-preserves its original application-root binding and records its current
-location separately. Import still requires the complete capture directory.
+later captures to reuse them. Passing a previous descriptor from another
+installation or conflicting checkpoint identities causes an error. The
+descriptor alone is enough for identity reuse, without reading the older
+captured files. If the source AgentsView data directory moved, identity reuse
+keeps its original application-root binding and records its current location
+separately. Import still requires the complete capture directory.
 
-Regular files are streamed and checked. SQLite databases use online backups,
-including committed WAL contents. Symlinks, special files and recognized
-credential/settings files are omitted and listed. Original application config
-is replaced by allowlisted recovery settings. This does not redact transcripts
-or database content. Exclusions include `.git-credentials` and Claude's `ide/`
-runtime metadata. An ordinary artifact vault currently prevents capture;
-its stopped-owner copying support is still required.
+Capture streams and checks regular files and uses online backups for SQLite
+databases, including committed WAL contents. It omits and lists symlinks,
+special files, and recognized credential or settings files, and replaces the
+original application config with allowlisted recovery settings. This does not
+redact transcripts or database content. Exclusions include `.git-credentials`
+and Claude's `ide/` runtime metadata. An ordinary artifact vault currently
+prevents capture because its stopped-owner copying support is still required.
 If the source already contains a raw archive, use `archive backup` to preserve
-its vault as well as its database; `capture` refuses that input.
+both its vault and its database, since `capture` refuses that input.
 
-`--writers-stopped` records your attestation that source writers were stopped;
-it does not stop them. A rolling capture is not a final retirement cutoff.
-The destination must be new and outside the selected inputs. Failed captures
-are not published. The completed directory contains `capture.json`, a hashed
-inventory and root-relative files; move the directory as a whole. Import
-rejects any file the inventory does not list. On macOS, copy with `rsync -a`
-or `COPYFILE_DISABLE=1 tar`, because plain `tar` adds `._*` metadata files.
+Passing `--writers-stopped` records your attestation that source writers were
+stopped; it does not stop them for you. A rolling capture is not a final
+retirement cutoff. The destination must be new and outside the selected inputs,
+and failed captures are not published. The completed directory contains
+`capture.json`, a hashed inventory, and root-relative files; move the directory
+as a whole. Import rejects any file not listed in the inventory. On macOS, copy
+with `rsync -a` or `COPYFILE_DISABLE=1 tar`, because plain `tar` adds `._*`
+metadata files.
 
 Import verifies the generated descriptor and every file before accepting
-sources. Handwritten import specifications are no longer accepted. The capture
-and import reports include counts from the captured database. Missing or
-unsupported preflight data, artifact origins/imports or qualified session IDs
-block assembly pending identity integration.
+sources, and handwritten import specifications are no longer accepted. Both the
+capture and import reports include counts from the captured database. Missing
+or unsupported preflight data, artifact origins or imports, or qualified
+session IDs block assembly pending identity integration.
 
 To preserve existing history and curation, create the archive with `--seed`:
 
@@ -297,42 +305,43 @@ AGENTSVIEW_DATA_DIR=/new/archive agentsview archive import --seed \
   --spec /media/backup/source-capture/capture.json
 ```
 
-The target must not exist and must be outside the capture. Seed import preserves
-the captured database, installation identity and assets, including session and
-message IDs, stars, pins, names, trash and permanent exclusions. It also retains
-the raw files. It checks the assembled archive before publishing the directory;
-a failed assembly leaves no partial destination. Allow space for the database,
-retained raw files and a temporary database copy if a rebuild is needed.
+The target directory must not exist and must lie outside the capture. Seed
+import preserves the captured database, installation identity, and assets,
+including session and message IDs, stars, pins, names, trash, and permanent
+exclusions, while also retaining the raw files. It checks the assembled archive
+before publishing the directory, so a failed assembly leaves no partial
+destination. Leave enough disk space for the database, retained raw files, and
+a temporary database copy in case a rebuild is needed.
 
-Seed import enables archive-only mode before any rebuild or startup. It does
-not reparse sources or adopt historical machine names. The report's
-`unowned_machines` lists unresolved machine keys with session and worktree-rule
-counts; use `db adopt-machine` only for keys you explicitly own. An existing raw
-archive in the seed is refused; use its `archive backup` recovery point instead.
-Empty and `local` machine labels already denote the seed's own installation and
-are recognized during reparse. Other named machines still require proven
-ownership.
+Seed import enables archive-only mode before any rebuild or startup, and it
+does not reparse sources or adopt historical machine names. The report's
+`unowned_machines` field lists unresolved machine keys along with session and
+worktree-rule counts; run `db adopt-machine` only for keys you explicitly own.
+Seed import refuses an existing raw archive, so use its `archive backup`
+recovery point instead. Empty and `local` machine labels already denote the
+seed's own installation and are recognized during reparse, whereas other named
+machines still require proven ownership.
 
-Add another machine's capture with `archive import --spec OTHER/capture.json`,
-then explicitly reparse its accepted sources. A hard import failure can leave
-retained raw objects and already accepted sources in the target. Retrying the
-same capture is safe and reuses that evidence. Sessions remain attributed to the
-source installation even if the archive moves or a display label changes.
-These commands require an archive-only destination created by seed import or
-restore. They refuse an everyday database instead of converting it.
-Foreign session IDs include that installation ID; equal native IDs or paths on
-different machines remain separate observations. The seed keeps its existing
-session IDs. Unrelated identity collisions stop the reparse without publishing
-its scratch database.
+To add another machine's capture, run `archive import --spec OTHER/capture.json`
+and then explicitly reparse its accepted sources. A hard import failure can
+leave retained raw objects and already accepted sources in the target, and
+retrying the same capture is safe and reuses that evidence. Sessions stay
+attributed to the source installation even if the archive moves or a display
+label changes. These commands require an archive-only destination created by
+seed import or restore, and they refuse an everyday database instead of
+converting it. Foreign session IDs include that installation ID, so equal
+native IDs or paths on different machines stay separate observations, while the
+seed keeps its existing session IDs. Unrelated identity collisions stop the
+reparse without publishing its scratch database.
 
-Foreign stars, pins, names and project rules are retained in the captured
-database but are not merged. Source trash and permanent deletions suppress
-publication of those sessions; their original files remain recoverable. Reparse
-reports the intentional skips as `suppressed`. Deletion evidence with unresolved
-machine ownership blocks regular import; adopt only proven ownership on the
-source and recapture. The first import freezes its deletion policy. A later
-capture with changed deletion state retains the new files as evidence and
-reports a conflict; it does not change the accepted projection.
+Foreign stars, pins, names, and project rules stay in the captured database and
+are not merged. Source trash and permanent deletions suppress publication of
+those sessions, though their original files remain recoverable, and reparse
+reports those intentional skips as `suppressed`. Deletion evidence with
+unresolved machine ownership blocks regular import; adopt only proven ownership
+on the source and recapture. The first import freezes its deletion policy. A
+later capture with changed deletion state retains the new files as evidence and
+reports a conflict without changing the accepted projection.
 
 ```bash
 export AGENTSVIEW_DATA_DIR=/new/archive
@@ -348,71 +357,76 @@ AGENTSVIEW_DATA_DIR=/restored/archive agentsview archive reparse --all
 AGENTSVIEW_DATA_DIR=/restored/archive agentsview archive extract /new/capture --capture CAPTURE_ID
 ```
 
-Restore and extract require new destinations. Backup creates a repository or adds
-a snapshot to an existing one. Backup and restore reject overlapping source and
-destination directories. `extract --capture ID` recovers that capture's exact
-files, including supplemental files and versions that conflicted on import. It
-recreates `capture.json`, `inventory.json` and `roots/` under the original
-configured root IDs. The result passes the same complete-file verification as
-the original capture and can be imported using `--spec /new/capture/capture.json`.
-Extraction does not change accepted sources or browsable history.
+Both `restore` and `extract` require new destination directories. `backup`
+creates a repository or adds a snapshot to an existing one, and both `backup`
+and `restore` reject overlapping source and destination directories. Run
+`extract --capture ID` to recover that capture's exact files, including
+supplemental files and versions that conflicted on import. It recreates
+`capture.json`, `inventory.json`, and `roots/` under the original configured
+root IDs. The output passes the same complete-file verification as the original
+capture and can be imported with `--spec /new/capture/capture.json`. Extraction
+does not change accepted sources or browsable history.
 
 Without `--capture`, extraction writes all retained native files under their
-archive root IDs. These IDs distinguish installations and providers. If any
-path has different retained versions, this mode fails before creating output or
+archive root IDs, which distinguish installations and providers. If any path
+has different retained versions, this mode fails before creating output or
 reading content. Repeated captures normally have different database and report
-files, so use `--capture` to choose a complete version. Failed extraction removes
-its partial output.
+files, so pass `--capture` to choose one complete version. A failed extraction
+removes its partial output.
 
 Import reports retained files and bytes separately from accepted provider
-sources. Files outside Claude and Codex capture plans remain supplemental. A
-conflicting source is retained as evidence and reported as a coverage gap; it
-never replaces the accepted source automatically. An import with gaps exits
-unsuccessfully after printing its report. No files are pruned automatically.
+sources, and files outside Claude and Codex capture plans remain supplemental.
+When a source conflicts, import keeps it as evidence and reports a coverage gap
+without replacing the accepted source automatically. An import with gaps prints
+its report and exits with an error. No files are pruned automatically.
 
-`reparse --manifest ID` selects specific accepted sources; repeat the flag or
-supply comma-separated IDs. `--all` must be explicit. Reparse applies the
-receiving archive's `result_content_blocked_categories`. Reparsing clones SQLite
-once for the batch and uses the normal sync engine, including its large-Codex
-streaming path. It installs the replacement only after all selected sources
-succeed. Failed work leaves the previous browsable archive in place and records
-an error. Session ownership conflicts are reported without merging identities.
-Allow scratch space for the full database, its WAL, and materialized source
-files. `--scratch-bytes` limits each materialized source to 16 GiB by default;
-it does not cap total scratch usage.
+Pass `reparse --manifest ID` to select specific accepted sources; you can
+repeat the flag or pass comma-separated IDs. `--all` must be explicit. Reparse
+applies the receiving archive's `result_content_blocked_categories`, clones
+SQLite once for the batch, and runs the normal sync engine, including its
+large-Codex streaming path. It installs the replacement only after every
+selected source succeeds. If anything fails, reparse leaves the previous
+browsable archive in place and records an error. Session ownership conflicts
+are reported without merging identities. Leave scratch space for the full
+database, its WAL, and materialized source files. By default, `--scratch-bytes`
+limits each materialized source to 16 GiB, though it does not cap total scratch
+usage.
 
-`verify` reads every retained object and accepted manifest. Backup verifies that
-closure, holds the writer and raw-vault locks, and creates a consistent SQLite
-snapshot through Docbank's portable backup API. It retains assets, installation
-identity, content/image retention policy and the original machine label. An
-existing ordinary artifact vault is currently rejected because its stopped-owner
-capture is not implemented; it is never silently omitted.
+`verify` reads every retained object and accepted manifest. `backup` checks
+that closure, holds the writer and raw-vault locks, and creates a consistent
+SQLite snapshot with Docbank's portable backup API. It keeps assets,
+installation identity, content and image retention policy, and the original
+machine label. An existing ordinary artifact vault is currently rejected
+because its stopped-owner capture is not implemented; it is never silently
+omitted.
 
-Keep the backup report's repository ID, snapshot ID, application build and minimum
-reader version. Restore and repository verification require `--snapshot ID` even
-when the repository contains only one snapshot. Application extras over 64 MiB
-require Kit reader version 6; older binaries cannot use any part of that
-repository after it contains such a snapshot.
+Record the backup report's repository ID, snapshot ID, application build, and
+minimum reader version. Both `restore` and repository verification require
+`--snapshot ID` even when the repository holds only one snapshot. Application
+extras over 64 MiB require Kit reader version 6, so older binaries cannot use
+any part of a repository once it contains such a snapshot.
 
-Restore stages the selected snapshot and checks SQLite integrity, every
-accepted source object, and referenced message/tool images before publishing a
-new directory. Missing or corrupt referenced images also prevent backup. An older database is
-rebuilt from its stored sessions with all live providers disabled. Allow space
-for the restored data and temporary complete copies of large extras.
+`restore` stages the selected snapshot and checks SQLite integrity, every
+accepted source object, and referenced message and tool images before
+publishing a new directory. Missing or corrupt referenced images also prevent
+`backup`. An older database is rebuilt from its stored sessions with all live
+providers disabled. Leave disk space for the restored data and temporary
+complete copies of large extras.
 
 Original runtime configuration and connection credentials are not copied from
-configuration. Seed import and restore generate fresh local authentication and loopback settings.
-Previously retained raw files are preserved without redaction and may contain
-credentials. Seeded and restored databases are permanently archive-only: foreground starts,
-background starts and restarts do not scan the receiving machine. Ordinary sync,
-source transfers over HTTP or SSH, ChatGPT, Claude.ai, Gemini Apps and Grok web
-imports and Sync, artifact exchange, mirror publication and raw-sync watch are
-refused. Browsing, curation, archive import, verification, extraction, backup and
-explicit reparse remain available. Use a separate data directory to collect new
-local sessions; no runtime flag or config setting disables archive-only mode.
+configuration; seed import and restore generate fresh local authentication and
+loopback settings. Previously retained raw files stay unredacted and may
+contain credentials. Seeded and restored databases are permanently
+archive-only: foreground starts, background starts, and restarts do not scan
+the receiving machine. Ordinary sync, source transfers over HTTP or SSH,
+ChatGPT, Claude.ai, Gemini Apps, and Grok web imports and Sync, artifact
+exchange, mirror publication, and raw-sync watch are all refused. Browsing,
+curation, archive import, verification, extraction, backup, and explicit
+reparse stay available. To collect new local sessions, use a separate data
+directory; no runtime flag or config setting disables archive-only mode.
 
 Startup resync keeps archive-only sessions and their acceptance records without
-opening the raw vault. Reparsing them always requires an explicit command.
+opening the raw vault, and reparsing them always requires an explicit command.
 Continuous capture, cross-device merging, team permissions, cloud storage, and
 online backup are outside this first implementation.
 
@@ -420,8 +434,8 @@ ______________________________________________________________________
 
 ### `agentsview capture`
 
-Capture and export the usage of one exact non-interactive automation run without
-starting the daemon, server, web interface, or watchers:
+Capture and export the usage of one exact non-interactive automation run
+without starting the daemon, server, web interface, or watchers:
 
 ```bash
 agentsview capture run \
@@ -437,9 +451,9 @@ agentsview capture report \
 ```
 
 `capture run` supports direct `claude -p` and `codex exec --json` producer
-adapters. It leaves child standard input, output, error, and exit outcome
-intact. The result always uses a separate file; recovery-only `capture report`
-may use `--result -` for standard output. See
+adapters, leaving the child process's standard input, output, error, and exit
+outcome intact. The result always goes to a separate file, while recovery-only
+`capture report` can use `--result -` to write to standard output. See
 [One-shot CI capture](/docs/one-shot-capture/) for the result contract, retry
 behavior, failure codes, and a complete GitHub Actions job.
 
@@ -462,10 +476,10 @@ agentsview source raw server-status
 ```
 
 `raw-sync watch` runs an initial bounded audit, watches for filesystem changes,
-and retries interrupted uploads from its durable local checkpoint. The device
-credential is accepted only through `AGENTSVIEW_RAW_SYNC_CREDENTIAL`, never as a
-command-line flag. `--server` and `--device-id` override their corresponding
-environment variables.
+and retries interrupted uploads from its durable local checkpoint. Pass the
+device credential only through `AGENTSVIEW_RAW_SYNC_CREDENTIAL`, never as a
+command-line flag. You can override the server URL and device ID environment
+variables with `--server` and `--device-id`.
 
 | Flag                    | Default     | Description                           |
 | ----------------------- | ----------- | ------------------------------------- |
@@ -476,42 +490,43 @@ environment variables.
 | `--interval`            | `15m`       | Watch only, bounded audit interval    |
 | `--audit-limit`         | `128`       | Watch only, max source work per audit |
 
-`raw-sync status` reads the checkpoint without creating one and prints path-free
-JSON containing capture, queue, retry, failure, and coverage state. S3 roots are
-not captured. `raw-sync server-status` reads hosted status with the `status`
-token scope and prints the server fields plus `pipeline_depth` and
-`last_parse_latency_seconds`. The latency describes the most recently completed
-current head, not the age of pending work. Its credential is read only from
-`AGENTSVIEW_RAW_SYNC_CREDENTIAL`. A server HTTP 404 is an error; use
-`raw-sync status` to read local state. A deployment operator must provision the
-device ID and credential; there is no public enrollment command yet. See
-[Hosted Raw Sync](/docs/hosted-raw-sync/) for the current boundary.
+`raw-sync status` reads the checkpoint without creating one and prints
+path-free JSON with capture, queue, retry, failure, and coverage state. Raw
+sync does not capture S3 roots. `raw-sync server-status` reads hosted status
+with the `status` token scope and prints the server fields along with
+`pipeline_depth` and `last_parse_latency_seconds`. That latency measures the
+most recently completed current head, not the age of pending work. It reads its
+credential only from `AGENTSVIEW_RAW_SYNC_CREDENTIAL`. A server HTTP 404 is an
+error; to read local state, run `raw-sync status`. A deployment operator must
+provision the device ID and credential, because there is no public enrollment
+command yet. See [Hosted Raw Sync](/docs/hosted-raw-sync/) for the current
+boundary.
 
-`raw-sync clean-uploads` runs one server-side cleanup pass for the PostgreSQL
-upload sessions and private spool used by `agentsview replica pg serve`:
+Run `raw-sync clean-uploads` to execute one server-side cleanup pass for the
+PostgreSQL upload sessions and private spool used by
+`agentsview replica pg serve`:
 
 ```bash
 agentsview source raw clean-uploads
 ```
 
-The command uses the effective PostgreSQL target and AgentsView data directory
-from the current configuration. It can run while `pg serve` is stopped. Each
-pass uses the existing bound of up to 128 rows per SQL batch and 128 spool
-entries per directory scan. The command starts a fresh spool cursor on every
-invocation and inspects at most the first 128 entries in that scan window.
-Repeating the command can revisit the same preserved entries, so spool entries
+This command uses the effective PostgreSQL target and AgentsView data directory
+from your current configuration, and you can run it while `pg serve` is
+stopped. Each pass uses the existing limit of up to 128 rows per SQL batch and
+128 spool entries per directory scan. Because the command starts a fresh spool
+cursor on every run and inspects at most the first 128 entries in that scan
+window, repeating it can revisit the same preserved entries. Spool entries
 beyond that window require the long-running server, which keeps its cursor
-between the existing startup pass and its 15-minute cleanup passes. The
-command prints `Raw upload cleanup pass completed.` only after the pass
-succeeds. The PostgreSQL target must have the provisioned raw-sync schema and
-its write privileges. The command checks that capability before creating the
-upload spool.
+between its startup pass and its 15-minute cleanup passes. The command prints
+`Raw upload cleanup pass completed.` only after the pass succeeds. Your
+PostgreSQL target must have the provisioned raw-sync schema and write
+privileges, which the command checks before creating the upload spool.
 
 ______________________________________________________________________
 
 ### `agentsview why`
 
-Find recorded sessions and prompts behind a commit or file lines:
+Find the recorded sessions and prompts behind a commit or specific file lines:
 
 ```bash
 agentsview why internal/db/messages.go:120-140
@@ -519,33 +534,33 @@ agentsview why --commit 1a2b3c4
 agentsview why main.go --format json
 ```
 
-Use `path:N` for one line, `path:N-M` for an inclusive range, or `path` for the
-whole file. Line numbers start at 1. The file is blamed in its own Git
-repository, including when you run the command from another directory.
-Whitespace changes count, and uncommitted lines appear as a separate count. A
-file name ending in `:digits` is interpreted as a line range and can't be blamed
-by that name.
+Pass `path:N` for a single line, `path:N-M` for an inclusive range, or `path`
+for the whole file. Line numbers start at 1. AgentsView blames the file in its
+own Git repository, even when you run the command from another directory.
+Whitespace changes count, and uncommitted lines show up as a separate count. A
+file name ending in `:digits` is treated as a line range and can't be blamed by
+that name.
 
-`--commit` accepts a SHA or prefix and works outside a checkout. Ambiguous
-prefixes return all recorded candidates. Add `--format json` or `--json` for
-scripts. Each commit keeps its own session links and the prompt before each
+`--commit` accepts a SHA or prefix and works outside a checkout; ambiguous
+prefixes return every recorded candidate. For scripts, add `--format json` or
+`--json`. Each commit keeps its own session links and the prompt before each
 commit call, even when one session made several commits.
 
-The command calls no model. Run `agentsview source sync`
-first if you need newer records. A transcript link identifies the session that
-ran the commit; it doesn't prove who wrote each line. Deleted or trashed sessions
-appear as missing records without a prompt.
+This command does not call a model. If you need newer records, run
+`agentsview source sync` first. A transcript link identifies the session that
+ran the commit, not who wrote each line. Deleted or trashed sessions appear as
+missing records without a prompt.
 
 ______________________________________________________________________
 
 ### `agentsview daemon`
 
-Manage the writable SQLite server. The daemon provides the web UI, API, session
-sync, and file watchers in one process. `daemon start` launches the same server
-as `serve --background`, using saved configuration and without opening a
-browser. It does not require a separate `serve` command. Unlike
+Manage the writable SQLite server, which runs the web UI, API, session sync,
+and file watchers in a single process. `daemon start` launches the same server
+as `serve --background`, using your saved configuration and without opening a
+browser. You do not need a separate `serve` command. Unlike
 `serve --background`, which exits after `daemon_idle_timeout` when idle,
-`daemon start` stays running until `daemon stop`.
+`daemon start` stays running until you run `daemon stop`.
 
 ```bash
 agentsview daemon start
@@ -561,85 +576,88 @@ agentsview daemon stop
 | `restart` | Stop and restart the writable daemon; start it if it is already stopped    |
 | `stop`    | Stop the writable daemon, or report that it is already stopped             |
 
-Settings offers **Restart now** on writable detached daemons and foreground
-servers. It preserves launch options and can interrupt sync. It reloads the
-configuration within the existing process, keeping its process ID, foreground
-attachment, and loaded executable. Use the external restart or update workflow
-to apply a newly installed binary.
-The settings page reloads after an identified replacement answers and returns to
-the selected panel. Read-only servers cannot restart from Settings.
-Authentication changes take effect immediately.
+On writable detached daemons and foreground servers, **Settings** includes a
+**Restart now** button. It keeps your launch options, can interrupt an active
+sync, and reloads configuration inside the same process without changing its
+process ID, foreground attachment, or loaded executable. To pick up a newly
+installed binary, use the external restart or update workflow instead. After
+the identified replacement answers, the settings page reloads and returns to the panel you
+had open. Read-only servers cannot restart from **Settings**, and
+authentication changes take effect right away.
 
-An explicit `--require-auth` flag takes precedence until authentication is saved
-in Settings. Later Settings restarts use the latest saved value, including
-subsequent file edits. A fresh CLI start or restart uses normal deployment and
-flag precedence.
+An explicit `--require-auth` flag takes precedence until you save
+authentication in **Settings**. Later restarts from **Settings** use the latest
+saved value, including later edits to the config file, while a fresh CLI start
+or restart uses normal deployment and flag precedence.
 
-If the page cannot reconnect within 30 seconds, **Check connection** polls for
-another 30 seconds. To find the server address, run `agentsview serve status`
-on the server machine and open the
-address it prints. If the server stopped or never restarted, restart it the way
-you originally started it. An automatically selected port may change when the
-old port is occupied. An explicitly selected port must be available.
+If the page cannot reconnect within 30 seconds, click **Check connection** to
+poll for another 30 seconds. To find the server address, run
+`agentsview serve status` on the server machine and open the address it prints.
+If the server stopped or never came back up, start it the same way you started
+it originally. An automatically chosen port can change if the old port is busy,
+while an explicitly chosen port must be free.
 
-`daemon start` and `daemon restart` load the normal effective configuration from
-`config.toml` and supported environment variables. They accept no serve-specific
-flags: persistent daemon settings belong in configuration. `--no-sync` is
-runtime-only and is not a `config.toml` setting. Use
-`agentsview serve --background --no-sync` when a one-off detached server must
-disable sync. Similarly, use `agentsview serve --background --host <address>`
-for a one-off unauthenticated non-loopback bind; a persistent non-loopback
-`host` in `config.toml` requires `require_auth = true`.
+`daemon start` and `daemon restart` load the effective configuration from
+`config.toml` and supported environment variables. They take no serve-specific
+flags because persistent daemon settings belong in configuration. `--no-sync`
+is runtime-only and is not a `config.toml` setting. For a one-off detached
+server with sync disabled, run `agentsview serve --background --no-sync`. In
+the same way, run `agentsview serve --background --host <address>` for a
+one-off unauthenticated non-loopback bind; a persistent non-loopback `host` in
+`config.toml` requires `require_auth = true`.
 
 These commands manage only the writable SQLite daemon for the current data
 directory, including a foreground `serve` process or a daemon auto-started by a
-CLI command. `daemon stop` stops the web UI and background sync together. They
-ignore read-only `agentsview replica pg serve` and
-`agentsview replica clickhouse serve` processes.
-If only read-only servers are running, `daemon status` reports that no daemon is
-running, and `daemon stop` and `daemon restart` leave those servers alive.
+CLI command. `daemon stop` stops the web UI and background sync together. The
+`daemon` commands ignore read-only `agentsview replica pg serve` and
+`agentsview replica clickhouse serve` processes. If only read-only servers are
+running, `daemon status` reports that no daemon is running, and `daemon stop`
+and `daemon restart` leave those servers running.
 
-Status distinguishes running, starting, and stopped states. `daemon start`
-returns after its initial readiness wait if a long migration or sync is still
-running; the child continues in the background. `daemon restart` stays attached
-and prints phase, detail, and elapsed-time updates until the replacement daemon
-is ready. Canceling that wait with `Ctrl+C` leaves the child running. Use
-`agentsview daemon status` and inspect the reported `serve.log` when startup is
-slow. If startup state remains stuck, follow the error's guidance to verify the
-owning process before terminating it manually and retrying.
+`daemon status` distinguishes running, starting, and stopped states.
+`daemon start` returns after its initial readiness wait even if a long
+migration or sync is still running, leaving the child process to finish in the
+background. `daemon restart` stays attached and prints phase, detail, and
+elapsed-time updates until the replacement daemon is ready; pressing `Ctrl+C`
+cancels the wait without stopping the child. When startup feels slow, run
+`agentsview daemon status` and check the `serve.log` path it reports. If
+startup stays stuck, follow the error message to verify the owning process
+before stopping it manually and retrying.
 
-Startup reports database opening, schema and index updates, and column
-migrations before that work begins. These steps appear in the terminal and
-`serve.log`, which also records their elapsed times. An upgrade that requires a
-full resync is announced as soon as the database version or schema check detects
-it. Session counters begin after database preparation finishes.
+During startup, the daemon reports database opening, schema and index updates,
+and column migrations before each step begins. Those messages appear in your
+terminal and in `serve.log`, which also records elapsed times. If an upgrade
+needs a full resync, the daemon announces it as soon as the database version or
+schema check detects it, and session counters start once database preparation
+finishes.
 
 ______________________________________________________________________
 
 ### `agentsview serve`
 
-Start the HTTP server with embedded web UI, session sync, and file watchers in
-the foreground. It remains attached to the terminal until you press `Ctrl+C`,
-unless `--background` is specified. This is the same writable server managed by
-`agentsview daemon`; the web UI and sync do not have separate lifecycles.
+Start the HTTP server with the embedded web UI, session sync, and file watchers
+in the foreground. Unless you pass `--background`, the server stays attached to
+your terminal until you press `Ctrl+C`. This is the same writable server that
+`agentsview daemon` manages; the web UI and sync share one lifecycle.
 
 `serve` reuses or replaces an existing local writable daemon according to the
-[replacement rules below](#background-mode). Read-only replica servers are left
-running. When reusing a server, `serve` reports its URL and exits with status 1
-so systemd's `Restart=on-failure` retries; `--background` exits with status 0.
-Open that URL to use the web UI. Stopping the server with either `daemon stop`
-or `serve stop` also stops its sync and file watchers. `--no-sync` disables
-automatic sync in that process; it does not create a separate sync daemon.
-When an upgrade needs a full archive rebuild, `--no-sync` skips it at startup
-and says so. Until the rebuild runs, sessions that need the new parsers are
-missing. Click **Sync** in the web UI or run `agentsview source sync` to rebuild.
+[replacement rules below](#background-mode), and leaves read-only replica
+servers alone. When `serve` reuses a running server, it prints the URL and
+exits with status 1 so systemd's `Restart=on-failure` retries, while
+`--background` exits with status 0. Open that URL to use the web UI. Stopping
+the server with either `daemon stop` or `serve stop` also stops its sync and
+file watchers. Passing `--no-sync` disables automatic sync in that process
+without creating a separate sync daemon. If an upgrade needs a full archive
+rebuild, `--no-sync` skips it at startup and prints a notice. Until that
+rebuild runs, sessions that require the new parsers stay missing; click
+**Sync** in the web UI or run `agentsview source sync` to rebuild.
 
 ```bash
 agentsview serve [flags]
 ```
 
-As of 0.23.0, starting the server requires the explicit `serve` subcommand.
-Running plain `agentsview` shows help instead of starting the web UI.
+Starting with 0.23.0, you must pass the `serve` subcommand to start the server.
+Running plain `agentsview` prints help instead of launching the web UI.
 
 | Flag                | Default            | Description                                              |
 | ------------------- | ------------------ | -------------------------------------------------------- |
@@ -662,23 +680,22 @@ Running plain `agentsview` shows help instead of starting the web UI.
 | `--tls-key`         |                    | TLS key path                                             |
 | `--allowed-subnet`  |                    | Client CIDR allowlist (repeatable/comma-separated)       |
 
-The server auto-discovers an available port if the default `8080` or a port set
-in `config.toml` is busy. An explicit nonzero `--port` exits when that port is
-occupied. Use `--port 0` to select any available port. For a supervised daemon
-that must keep a fixed port, pass `--port` in its launch command.
+If the default port `8080` or a port set in `config.toml` is busy, the server
+automatically picks an available port. An explicit nonzero `--port` exits if
+that port is occupied, while `--port 0` selects any free port. If you run a
+supervised daemon that needs a fixed port, pass `--port` in its launch command.
 
-When replacing a running daemon, an occupied fixed positive port is rejected
-before the daemon stops. The daemon's existing host and port can be reused,
+When you replace a running daemon, an occupied fixed positive port is rejected
+before the old daemon stops. You can reuse the daemon's existing host and port,
 including narrowing a wildcard bind to loopback. To widen a bind on the same
 explicit port, stop the daemon first with `agentsview daemon stop`.
 
-Settings restart tries to reuse an automatically selected address so the page
-can reconnect, with fallback if the address is occupied. `agentsview update`
-preserves the original `--port` choice recorded by the running daemon,
-including `0`. Without an explicit port, restart tries the
-previous listening port and retains automatic fallback. See
-[Remote Access](/docs/remote-access/) for details on the remote access and proxy
-flags.
+A restart from **Settings** tries to reuse an automatically selected address so
+the page can reconnect, falling back to another port if that address is busy.
+`agentsview update` keeps the original `--port` choice recorded by the running
+daemon, including `0`. Without an explicit port, a restart tries the previous
+listening port and keeps automatic fallback. For details on remote access and
+proxy flags, see [Remote Access](/docs/remote-access/).
 
 **Examples:**
 
@@ -694,55 +711,55 @@ agentsview serve --base-path /agentsview --public-url https://example.com
 
 On startup, the server:
 
-1. Loads or creates `~/.agentsview/sessions.db`
-1. Runs initial sync across all discovered session directories
-1. Starts the file watcher (500ms event batching; while nobody is watching the
-    archive, watcher sync starts remain at least ten minutes apart by default; see
-    [`background_sync_interval`](/docs/configuration/#config-file))
-1. Starts periodic sync (every 15 minutes)
-1. Serves the Svelte SPA and REST API
+1. Loads or creates `~/.agentsview/sessions.db`.
+1. Runs initial sync across all discovered session directories.
+1. Starts the file watcher with 500ms event batching. While nobody is watching
+   the archive, watcher sync starts stay at least ten minutes apart by default;
+   see [`background_sync_interval`](/docs/configuration/#config-file).
+1. Starts periodic sync every 15 minutes.
+1. Serves the Svelte SPA and REST API.
 
-During a full parser or archive-only preservation rebuild, the daemon serves the
-retained archive with stale
-warnings. Archive writes return HTTP 503 with `Retry-After`; the CLI reports the
-server's message and exits. Scoped upgrades and schema repairs finish before the
-daemon listens.
+During a full parser or archive-only preservation rebuild, the daemon serves
+the retained archive with stale warnings. Archive writes return HTTP 503 with
+`Retry-After`, and the CLI prints the server's message and exits. Scoped
+upgrades and schema repairs finish before the daemon starts listening.
 
-CLI commands print one stale warning to stderr. The dashboard, MCP, and the
-`X-Agentsview-Archive-Stale` HTTP header also report stale results.
+CLI commands write one stale warning to stderr, and the dashboard, MCP, and the
+`X-Agentsview-Archive-Stale` HTTP header also flag stale results.
 
-The server shuts down cleanly on `Ctrl+C`, flushing the database and stopping
-file watchers.
+Press `Ctrl+C` for a clean shutdown that flushes the database and stops file
+watchers.
 
-On current `main`, watcher batches link subagent relationships only for affected
-sessions. Unchanged polls skip archive-wide linking unless a failed or canceled
-batch left unfinished links. Poll logs identify the provider roots being checked
-and report how long the pass took.
+On current `main`, watcher batches link subagent relationships only for
+affected sessions, and unchanged polls skip archive-wide linking unless a
+failed or canceled batch left unfinished links. Poll logs name the provider
+roots checked and report how long each pass took.
 
 During polling, changes to working-directory metadata refresh clients without
 triggering global parent linking. Worker processes return link repairs and
 unfinished linking to the daemon, so clients see repaired links and later polls
-retry failed linking even when an unrelated source cannot be processed.
-Workers confirm their link state separately from source errors, so completed
-repairs clear obsolete retries even when another source fails. Installed
-rebuilds also clear completed retries. Audit workers receive pending links from
-the daemon even when sources are unchanged. Missing or invalid worker results
-keep the retry pending. Startup transfers pending links before
-reconciling the worker-to-watcher gap. Repairs queued in the archive run even
-when discovery finds no source files. Repairs committed to the live archive
-refresh clients even if sync is canceled. Full resync aborts before replacing
-the archive if relinking copied sessions fails; discarded replacements do not
-report their repairs and preserve pending retries for the live archive.
+retry failed linking even when an unrelated source fails to process. Because
+workers confirm their link state separately from source errors, completed
+repairs clear obsolete retries even when another source fails, and installed
+rebuilds clear completed retries as well. Audit workers receive pending links
+from the daemon even when sources have not changed, while missing or invalid
+worker results keep the retry pending. Startup transfers pending links before
+reconciling the worker-to-watcher gap, and repairs queued in the archive run
+even when discovery finds no source files. Repairs committed to the live
+archive refresh clients even if sync is canceled. If relinking copied
+sessions fails during a full resync, the resync aborts before replacing the
+archive; discarded replacements do not report their repairs and leave pending
+retries intact for the live archive.
 
-Unchanged broken or missing source files are skipped through the failure cache
+Unchanged broken or missing source files are skipped using the failure cache
 described in [Sync Behavior](configuration.md#sync-behavior). Grok
 companion-file events use normal content-fingerprint checks, so repeated
-companion removal events do not clear a cached missing-summary failure. Actual
-companion edits still trigger sync.
+companion removal events do not clear a cached missing-summary failure, while
+actual companion edits still trigger sync.
 
 #### Background Mode
 
-The existing `serve` background and lifecycle forms remain available:
+You can still use the `serve` background and lifecycle subcommands:
 
 ```bash
 agentsview serve --background
@@ -751,92 +768,92 @@ agentsview serve restart
 agentsview serve stop
 ```
 
-The parent command starts a detached `agentsview serve` process and waits for it
-to publish its runtime record. The five-second readiness window measures startup
-inactivity, so continuing startup progress can keep the parent waiting longer.
-It then prints the URL, PID, and log path. Background server output is written
-to `~/.agentsview/serve.log`. `serve status` reports the preferred managed
-process, URL, version, uptime, and read-only mode when available. For a writable
-server, `serve status` also asks for the
-[Codex Cloud](/docs/configuration/#codex-cloud) source's status. When the
-source is configured, it prints a status line for each ChatGPT account or Codex
-home, each followed by its live tokens and plan usage lines when they have
-something to report. When the source is off or its settings are wrong, it
-prints one status line for the whole source, followed by a "Live tokens: off."
-line. If the server cannot return the status, or fails while answering,
-`serve status` prints one line saying why, even when the source is not
-configured. Read-only servers, and older servers without this status, add no
-lines. `serve stop` retains its broad lifecycle scope: it gracefully terminates
-confirmed writable SQLite and read-only PostgreSQL or ClickHouse server processes
-for the data directory and cleans up their runtime records.
+The parent command starts a detached `agentsview serve` process and waits for
+it to publish its runtime record. Its five-second readiness window tracks
+startup inactivity, so active startup progress can keep the parent waiting
+longer. Once ready, it prints the URL, PID, and log path, with background
+output written to `~/.agentsview/serve.log`. `serve status` shows the preferred
+managed process, URL, version, uptime, and read-only mode when available. For a
+writable server, `serve status` also queries the
+[Codex Cloud](/docs/configuration/#codex-cloud) source status. When that source
+is configured, it prints a status line for each ChatGPT account or Codex home,
+followed by its live tokens and plan usage lines whenever they have something
+to report. When the source is off or misconfigured, it prints one status line
+for the whole source and a "Live tokens: off." line. If the server cannot
+return the status or fails while answering, `serve status` prints one line
+explaining why, even if the source is not configured. Read-only servers and
+older servers without this status add no extra lines. `serve stop` keeps its
+broad scope: it gracefully stops confirmed writable SQLite and read-only
+PostgreSQL or ClickHouse server processes for the data directory and cleans up
+their runtime records.
 
-`serve restart` is intentionally narrower and config-driven. It restarts only
-the writable SQLite daemon, leaves read-only servers alive, and starts the
-writable daemon if it was stopped. It accepts no serve flags and uses the same
-effective configuration as `daemon restart`. It is not equivalent to the broader
+`serve restart` is narrower and config-driven. It restarts only the writable
+SQLite daemon, leaves read-only servers running, and starts the writable daemon
+if it was stopped. It takes no serve flags and uses the same effective
+configuration as `daemon restart`. It is not equivalent to the broader
 `serve stop` followed by a foreground `serve` start.
 
 `serve` and ordinary CLI commands automatically replace an older release daemon
-with a newer release. An older release reuses a compatible newer daemon; it does
-not downgrade it. When either binary is a development build, a different version
-string triggers replacement. Repeated dirty builds from the same commit can have
-the same version string and require `agentsview daemon restart`. Two different
-development installations sharing a data directory can replace each other when
-invoked; use separate data directories to keep them independent.
+with a newer release, while an older release reuses a compatible newer daemon
+instead of downgrading it. When either binary is a development build, any
+different version string triggers replacement. Repeated dirty builds from the
+same commit can share a version string and require `agentsview daemon restart`.
+If two development installations share a data directory, they can replace each
+other when invoked; use separate data directories to keep them independent.
 
-Long-running clients (`mcp` and push commands with `--watch`, including
-installed push services) start a missing daemon and reconnect after daemon
-restarts, but never replace a running daemon. They keep using it while its API
-and data versions are compatible. If incompatible, they report the conflict and
-ask you to restart the client with the current binary.
+Long-running clients, including `mcp` and push commands with `--watch` as well
+as installed push services, start a missing daemon and reconnect after daemon
+restarts, but never replace a running daemon. They keep using it as long as its
+API and data versions stay compatible. If they are incompatible, the client
+reports the conflict and asks you to restart it with the current binary.
 
-Use `serve --replace` or `agentsview daemon restart` for intentional
-replacement, including release downgrades. Automatic replacement preserves the
-daemon's launch options. All replacement paths check archive compatibility
-before stopping the daemon: an older binary cannot replace a daemon whose SQLite
-data version it cannot open. `serve status` reports incompatible live daemons
-with their daemon and binary versions plus `daemon restart` or `daemon stop`
-guidance.
+To replace a daemon on purpose, including for a release downgrade, run
+`serve --replace` or `agentsview daemon restart`. Automatic replacement keeps
+the daemon's launch options. Every replacement path checks archive
+compatibility before stopping the daemon, so an older binary cannot replace a
+daemon whose SQLite data version it cannot open. When a live daemon is
+incompatible, `serve status` prints both the daemon and binary versions along
+with `daemon restart` or `daemon stop` guidance.
 
 Background servers also act as the shared local daemon for the desktop app and
-CLI. The daemon owns local SQLite writes for its data directory, so common write
-and freshness-sensitive commands proxy to it instead of opening the archive as a
-second writer. An automatically started daemon self-exits after the idle timeout
-when no external request or daemon-owned job is active. Periodic sync and
-file-watcher work prevent exit while they run, but do not keep the daemon alive
-forever by themselves.
+CLI. Because the daemon owns local SQLite writes for its data directory, common
+write and freshness-sensitive commands proxy to it instead of opening the
+archive as a second writer. An automatically started daemon exits after the
+idle timeout once no external request or daemon-owned job is active. Periodic
+sync and file-watcher work delay exit while they run, but do not keep the
+daemon alive indefinitely by themselves.
 
-`sync_idle_after = "10m"` pauses local collection while idle; `"0"` disables the
-pause. `background_sync_interval = "10m"` spaces out syncs while nobody is
-watching the archive; `"0s"` syncs at `sync_interval` all the time.
+`sync_idle_after = "10m"` pauses local collection while idle, and `"0"`
+disables that pause. `background_sync_interval = "10m"` spaces out syncs while
+nobody is watching the archive, and `"0s"` syncs at `sync_interval` all the
+time.
 
 #### CLI daemon behavior
 
 Ordinary session commands, including `session list`, `session get`, and
-`session messages`, require a compatible local daemon and start one when needed.
-Use `db adopt-machine --list` to inspect historical machine keys or
-`doctor sync` for diagnostics. These dedicated commands read the archive without
-starting a daemon or changing configuration.
+`session messages`, need a compatible local daemon and start one when needed.
+To inspect historical machine keys or run diagnostics without starting a daemon
+or changing configuration, use `db adopt-machine --list` or `doctor sync`.
 
-Commands that need fresh data or need to write auto-start the detached daemon
-when no compatible daemon is running. That includes local `sync`,
+Commands that need fresh data or write to the archive auto-start the detached
+daemon when no compatible daemon is running. That covers local `sync`,
 `session sync`, `token-use`, normal `usage` refresh paths,
-`pg push`/`pg push --watch`, and `clickhouse push`. If a writable
-daemon is known to own the archive but is not reachable, these commands refuse
-instead of writing directly.
+`pg push`/`pg push --watch`, and `clickhouse push`. If a writable daemon is
+known to own the archive but cannot be reached, these commands refuse instead
+of writing directly.
 
-With `--no-start-daemon`, `pg push --watch` and `clickhouse push --watch` require
-an existing writable daemon.
+When you pass `--no-start-daemon`, `pg push --watch` and
+`clickhouse push --watch` require an existing writable daemon.
 
-Set `AGENTSVIEW_NO_DAEMON=1` to disable daemon auto-start. Commands that require
-the daemon refuse while it is disabled. Direct write commands acquire the local
-write-owner lock before opening SQLite. If another process owns that lock, the
-command refuses. If `agentsview daemon status` shows a daemon, run
+To disable daemon auto-start, set `AGENTSVIEW_NO_DAEMON=1`. Commands that
+require the daemon refuse to run while it is disabled. Direct write commands
+acquire the local write-owner lock before opening SQLite and refuse if another
+process holds that lock. If `agentsview daemon status` shows a daemon, run
 `agentsview daemon stop`; otherwise find the agentsview process holding the
-lock file, then wait for it to finish or stop it. Auto-start (MCP and CLI
-commands that start a server on their own) reports the holder in the same way
-instead of launching a server that could not open the archive. `daemon start`
-and `serve --background` report the child's failure as before.
+lock file and wait for it to finish or stop it. Auto-start for MCP and CLI
+commands that start a server on their own reports the lock holder the same way
+instead of launching a server that could not open the archive, while
+`daemon start` and `serve --background` report the child's failure as before.
 
 ______________________________________________________________________
 
@@ -844,38 +861,40 @@ ______________________________________________________________________
 
 ### `agentsview source sync`
 
-Refresh the local archive. For local sync, the CLI uses the running daemon or
-starts a detached daemon so SQLite writes stay owned by one process. That daemon
-also serves the web UI and remains running after the CLI exits, until stopped or
-its idle timeout expires. The command prints the server URL and how to stop it.
+Refresh the local archive. For a local sync, the CLI talks to the running
+daemon or starts a detached one so SQLite writes stay owned by a single
+process. That daemon also serves the web UI and keeps running after the CLI
+exits until you stop it or its idle timeout expires. The command prints the
+server URL and how to stop it.
 
-When the daemon is already running, an incremental sync applies only the changes
-its file watchers collected, including changes that failed earlier and wait for
-a retry, and it retries unfinished archive imports. It does not rescan every
-session source, so it stays quick on a large archive. The daemon runs a full
-discovery pass instead before its startup sync finishes, when it was started
-with `--no-sync`, when the archive needs a rebuild, and after a Settings change
+When the daemon is already running, an incremental sync applies only the
+changes its file watchers collected, including earlier failures waiting for a
+retry, and retries unfinished archive imports. Because it skips rescanning
+every session source, it stays quick on large archives. The daemon runs a full
+discovery pass instead before its startup sync finishes, when started with
+`--no-sync`, when the archive needs a rebuild, and after a **Settings** change
 to session sources until a full pass completes. Roots that no watcher covers
-keep the daemon's polling schedule. Pass `--rescan` to rescan every source now.
+follow the daemon's polling schedule. To rescan every source now, pass
+`--rescan`.
 
-An incremental local-only sync through the default daemon waits when another
-sync or maintenance pass owns it, then runs its requested pass. It prints
-waiting status; `Ctrl+C` cancels the wait without stopping the existing work.
-This waiting message applies when no remote hosts are configured. Full resync,
-syncs that include remote hosts, and servers started with `--no-sync` also wait
-for exclusive access, but do not show this message. If the wait persists,
-inspect `agentsview daemon status` and `serve.log`. A daemon launched for this
+An incremental local-only sync through the default daemon waits if another sync
+or maintenance pass is active, then runs its pass. It prints a waiting status,
+and pressing `Ctrl+C` cancels your wait without stopping the active work. You
+see that waiting message when no remote hosts are configured. Full resyncs,
+syncs with remote hosts, and servers started with `--no-sync` also wait for
+exclusive access, though without printing that message. If the wait drags on,
+check `agentsview daemon status` and `serve.log`. A daemon launched for this
 local sync skips its redundant startup sync.
 
-For a one-shot offline sync, stop the writable daemon first, then run:
+To run a one-shot offline sync, stop the writable daemon first, then run:
 
 ```bash
 agentsview daemon stop
 AGENTSVIEW_NO_DAEMON=1 agentsview source sync
 ```
 
-The environment variable disables daemon auto-start. It does not stop an
-existing daemon or bypass its write-owner lock. The offline command acquires
+Setting `AGENTSVIEW_NO_DAEMON=1` disables daemon auto-start without stopping an
+existing daemon or bypassing its write-owner lock. The offline command acquires
 that lock, syncs directly, and exits without leaving a server running.
 
 ```bash
@@ -899,34 +918,35 @@ agentsview source sync --target /path/to/shared-folder
 agentsview source sync --host devbox1
 ```
 
-After a discovery pass, a summary of session counts is printed to stdout. A sync
-that applied only the collected changes says so instead. With `--target`,
-AgentsView then performs one bounded normalized-artifact exchange. See
-[Artifact Folder Sync](/docs/artifact-sync/) for the trust model, first-use
-requirements, and exclusions. `--target` cannot be combined with `--host`.
+After a discovery pass, AgentsView prints a summary of session counts to
+stdout, while a sync that applied only collected changes says so instead. If
+you pass `--target`, AgentsView also runs one bounded normalized-artifact
+exchange; see [Artifact Folder Sync](/docs/artifact-sync/) for the trust model,
+first-use requirements, and exclusions. You cannot combine `--target` with
+`--host`.
 
-When `--host` is set, AgentsView syncs only the matching configured
-`[[remote_hosts]]` entry and fails fast on error. This also applies to offline
-sync with `AGENTSVIEW_NO_DAEMON=1`: the local command contacts the configured
-remote directly. Unknown host names are rejected; ad hoc remotes are not
+When you pass `--host`, AgentsView syncs only the matching `[[remote_hosts]]`
+entry from your config and fails fast on error. That works in offline mode with
+`AGENTSVIEW_NO_DAEMON=1` too, where the local command contacts the configured
+remote directly. Unknown host names are rejected, and ad hoc remotes are not
 supported. `--host` runs an entry with `transport = "ssh"` the same way as an
 HTTP entry; see [SSH Remote Sync](/docs/remote-access/#ssh-remote-sync).
 
-Local sync can also read configured Claude, Codex, and Cursor roots from
-S3-compatible object storage. Add `s3://` entries to `agents.claude.dirs`,
+Local sync can also read Claude, Codex, and Cursor roots from S3-compatible
+object storage. Add `s3://` entries to `agents.claude.dirs`,
 `agents.codex.dirs`, or `agents.cursor.dirs` in `~/.agentsview/config.toml`,
-then run `agentsview source sync` normally. Object storage is treated as a read-only
-session source, using object size and `LastModified` metadata to skip unchanged
-sessions and downloading only objects that need
-parsing. See
+then run `agentsview source sync` as usual. AgentsView treats object storage as
+a read-only source, using object size and `LastModified` metadata to skip
+unchanged sessions and downloading only objects that need parsing. See
 [Configuration — S3-Compatible Session Sources](/docs/configuration/#s3-compatible-session-sources).
 
 #### Configured Remote Hosts
 
-Declare remote hosts in `~/.agentsview/config.toml` so a single bare
-`agentsview source sync` covers a whole fleet. An entry uses `transport = "http"` (the
-default) to reach a remote daemon, or `transport = "ssh"` to reach a machine
-over `ssh` with no AgentsView running there:
+Declare remote hosts in `~/.agentsview/config.toml` so a bare
+`agentsview source sync` syncs an entire fleet at once. Each entry uses
+`transport = "http"` by default to talk to a remote daemon, or
+`transport = "ssh"` to pull from a machine over `ssh` without running
+AgentsView there:
 
 ```toml
 [[remote_hosts]]
@@ -941,52 +961,52 @@ transport = "ssh"
 destination = "user@devbox.example.com" # optional; defaults to host
 ```
 
-With hosts configured, `agentsview source sync` (no `--host`) includes local sources
-and configured hosts, HTTP and SSH, in one coordinated sync. During a full or
-automatic data-version rebuild, AgentsView prepares every remote mirror,
-bulk-ingests the local and remote sources into one temporary database with FTS
-updates suspended, rebuilds FTS once, and atomically swaps the completed
-archive into place.
+Once hosts are configured, running `agentsview source sync` without `--host`
+pulls local sources and all configured HTTP and SSH hosts in one coordinated
+sync. During a full or automatic data-version rebuild, AgentsView prepares
+every remote mirror, bulk-ingests local and remote sources into a temporary
+database with FTS updates suspended, rebuilds FTS once, and atomically swaps
+the finished archive into place.
 
-`--full` reparses every discovered local and remote session, but it does not
-force unchanged manifest-capable files to transfer again. Directory-scoped and
-verbatim curated content still use delta transfer. Windsurf's sanitized curated
-export remains a separate full-archive transfer on every sync. HTTP collectors
-and spokes must use the same remote-sync protocol version; incompatible peers
-fail before exchanging targets or archive data. A configured HTTP host that is
-offline, cannot resolve through DNS, is unreachable, or times out is skipped; an
-SSH host is skipped when `ssh` reports one of the network errors listed under
-[Offline Hosts](/docs/remote-access/#offline-hosts). Local sources and reachable
-hosts still join the combined rebuild. Archived sessions from skipped hosts are
-preserved. Other remote preparation or contributor failures abort the combined
-rebuild without replacing the active archive. The command exits non-zero for
-any failure other than an unavailable configured host. See
-[Incremental Sync](/docs/remote-access/#incremental-sync).
+Passing `--full` reparses every discovered local and remote session, though it
+does not re-transfer unchanged manifest-capable files. Directory-scoped and
+verbatim curated content still use delta transfer, while Windsurf's sanitized
+curated export transfers as a separate full archive on every sync. HTTP
+collectors and spokes must share the same remote-sync protocol version;
+incompatible peers fail before exchanging targets or archive data. AgentsView
+skips a configured HTTP host if it is offline, cannot resolve through DNS, is
+unreachable, or times out, and skips an SSH host when `ssh` reports one of the
+network errors listed under [Offline Hosts](/docs/remote-access/#offline-hosts).
+Local sources and reachable hosts still join the combined rebuild, and archived
+sessions from skipped hosts stay intact. Any other remote preparation or
+contributor failure aborts the combined rebuild without replacing the active
+archive. The command exits non-zero for every failure except an unavailable
+configured host. See [Incremental Sync](/docs/remote-access/#incremental-sync).
 
-HTTP remote sync requires a reachable remote daemon, preferably over a private
+HTTP remote sync needs a reachable remote daemon, preferably over a private
 network such as Tailscale, and remote archive endpoints always require bearer
-auth. Every host requires a `url` and a `token` matching the remote daemon's
-`auth_token`; do not reuse the collector daemon's own token for untrusted remote
-endpoints. Ad hoc HTTP remotes are not supported. Hosts must be unique within
-the list, since remote sessions are namespaced by host.
+auth. Each host needs a `url` and a `token` matching the remote daemon's
+`auth_token`; do not reuse the collector daemon's own token for untrusted
+remote endpoints. Ad hoc HTTP remotes are not supported. Because remote
+sessions are namespaced by host, host names must be unique in the list.
 
-During HTTP remote sync, the collector prints durable phase lines for resolving
-remote roots, fetching and comparing the manifest, transferring and extracting
-changed files, planning pending paths, processing affected sources, rebuilding
-FTS, and swapping the database. Pending paths can outnumber processed sources:
-deletions participate in recovery and cache invalidation but usually do not
-produce an import source. Provider fallback is identified explicitly, and its
-discovered sources determine the processing denominator.
+During an HTTP remote sync, the collector prints durable phase lines for
+resolving remote roots, fetching and comparing the manifest, transferring and
+extracting changed files, planning pending paths, processing affected sources,
+rebuilding FTS, and swapping the database. Pending paths can outnumber
+processed sources because deletions participate in recovery and cache
+invalidation without usually producing an import source. Provider fallback is
+named explicitly, and its discovered sources set the processing denominator.
 
 The final per-host line reports changed sessions, ordinary unchanged skips, and
 error-suppressed pending entries. A retained-journal line means recovery work
-will be replayed; cancellation, processing failure, cache-persistence failure,
-retirement failure, and a rebuild awaiting its database swap remain distinct.
-Individual source paths are omitted from normal output. Archive downloads also
-show live compressed-byte progress when the remote daemon provides a
-`Content-Length` header. These phases come from the collector; a spoke upgrade
-is needed only for manifest-delta transfer. If an upgraded binary does not show
-them, restart the local collector daemon.
+will be replayed. The output reports cancellation, processing failure,
+cache-persistence failure, retirement failure, and a rebuild awaiting its
+database swap as distinct outcomes. Normal output omits individual source
+paths. Archive downloads show live compressed-byte progress whenever the remote
+daemon sends a `Content-Length` header. These phases come from the collector,
+and you need a spoke upgrade only for manifest-delta transfer. If an upgraded
+binary does not show them, restart the local collector daemon.
 
 ______________________________________________________________________
 
@@ -994,7 +1014,8 @@ ______________________________________________________________________
 
 ### `agentsview session prune`
 
-Delete sessions matching one or more filters. At least one filter is required.
+Delete sessions that match one or more filters. You must supply at least one
+filter.
 
 ```bash
 agentsview session prune [flags]
@@ -1004,20 +1025,20 @@ agentsview session prune [flags]
 | ----------------- | ------- | --------------------------------------------------- |
 | `--agent`         |         | Exact agent name, including matching trash          |
 | `--project`       |         | Sessions whose project contains this substring      |
-| `--max-messages`  | `-1`    | Sessions with at most N messages                    |
+| `--max-messages`  | `-1`    | Sessions with at most N user messages               |
 | `--before`        |         | Sessions that ended before this date (`YYYY-MM-DD`) |
 | `--first-message` |         | Sessions whose first message starts with this text  |
 | `--dry-run`       | `false` | Show what would be pruned without deleting          |
 | `--yes`           | `false` | Skip confirmation prompt                            |
 
-Filters combine with AND. One prune removes matching parents and descendants.
-A descendant that fails any filter keeps all its ancestors. Without `--agent`,
-prune skips trash, so a trashed descendant keeps its ancestors. With `--agent`,
-prune includes matching sessions in trash. The summary shows how many matches
-are in trash.
+Filters combine with AND, and a single prune removes matching parents along
+with their descendants. Any descendant that fails a filter keeps all of its
+ancestors. Without `--agent`, prune skips trash, so a trashed descendant keeps
+its ancestors; with `--agent`, prune includes matching sessions in trash and
+shows in the summary how many matches came from trash.
 
-Prune keeps deleted sessions out of later syncs. To keep new sessions from
-that agent out of the archive, add it to
+Prune keeps deleted sessions out of later syncs. To stop new sessions from that
+agent from entering the archive, add it to
 [`disabled_agents`](/docs/configuration/#disabling-session-providers).
 
 **Examples:**
@@ -1039,18 +1060,19 @@ agentsview session prune --first-message "test" --yes
 agentsview session prune --project "old-project" --max-messages 5 --before 2025-06-01
 ```
 
-Prune deletes each matching session's source file, except the shared
-`state.db` of apps such as Hermes and Augure Desktop, which stays in place. The
-summary reports sessions deleted, disk space reclaimed, and how many source
-files stay in place. Use `--dry-run` first to preview the matches.
+Prune deletes each matching session's source file, except the shared `state.db`
+used by apps such as Hermes and Augure Desktop, which stays in place. The
+summary reports how many sessions were deleted, how much disk space was
+reclaimed, and how many source files stayed in place. Run with `--dry-run`
+first to preview the matches.
 
 ______________________________________________________________________
 
 ### `agentsview db adopt-machine`
 
-Assign historical local machine keys to this installation. Use this when an
-upgrade could not establish which archived sessions are local, or to adopt
-additional old hostnames you own. Inspect the archive first, then stop the
+Assign historical local machine keys to this installation. Run this when an
+upgrade could not determine which archived sessions are local, or when you want
+to adopt older hostnames you own. Inspect the archive first, then stop the
 daemon:
 
 ```bash
@@ -1060,29 +1082,31 @@ agentsview db adopt-machine host-a.example host-b.example
 agentsview daemon start
 ```
 
-Use `--list` alone to print machine keys with session and worktree-rule counts.
-It does not start a daemon, write configuration, or adopt sessions.
+Run `--list` on its own to print machine keys along with session and
+worktree-rule counts. It does not start a daemon, write configuration, or adopt
+sessions.
 
-Select only keys whose sessions belong to this installation. The command moves
+Choose only keys whose sessions belong to this installation. The command moves
 their sessions, worktree rules, and project and source metadata to the current
-installation ID. Session IDs, messages, stars, pins, and other curation stay
-intact. Old named keys remain aliases for filters and URLs. Conflicting worktree
-rules stop the command so you can reconcile them before retrying.
+installation ID while keeping session IDs, messages, stars, pins, and other
+curation intact. Old named keys remain aliases for filters and URLs. If
+worktree rules conflict, the command stops so you can reconcile them before
+retrying.
 
-Keys that belong to other installations need no action. Legacy `local` rows
+You do not need to touch keys from other installations. Legacy `local` rows
 always belong to this archive and are assigned to its installation ID at
 startup.
 
-The command records ownership in the archive; changing `local_machine_name` only
-changes a display label. See
-[Upgrading Historical Machine Keys](/docs/configuration/#upgrading-historical-machine-keys)
-for automatic adoption and mirror updates.
+This command records ownership in the archive, whereas changing
+`local_machine_name` only changes a display label. For automatic adoption and
+mirror updates, see
+[Upgrading Historical Machine Keys](/docs/configuration/#upgrading-historical-machine-keys).
 
 ______________________________________________________________________
 
 ### `agentsview db repair-projects`
 
-Available in 0.47.0 and later. Preview corrections for temporary
+Available in 0.47.0 and later, this command previews corrections for temporary
 worktree project names using repository URLs already saved in the archive:
 
 ```bash
@@ -1091,11 +1115,12 @@ agentsview db repair-projects --project sample_feature --format json
 agentsview db repair-projects --project sample_feature --apply
 ```
 
-The default is read-only. `--project` selects an exact current project label;
-omit it to examine all projects. `--apply` requires exclusive archive access, so
-stop the daemon or desktop app first. JSON output includes each repository, old
-and new project names, reason, session count, and the number of sessions left
-unresolved because checkout names conflict. See
+By default, the command is read-only. Pass `--project` with an exact current
+project label, or omit it to inspect every project. Because `--apply` needs
+exclusive archive access, stop the daemon or desktop app before running it.
+JSON output lists each repository, old and new project names, reason, session
+count, and the number of sessions left unresolved because checkout names
+conflict. See
 [repair worktree project names](/docs/data/#repair-worktree-project-names) for
 the naming rules and preservation guarantees.
 
@@ -1105,20 +1130,19 @@ ______________________________________________________________________
 
 Reclaim unused space in the local SQLite archive. The command writes and checks
 a compacted database before replacing the original, and truncates the
-write-ahead log (WAL). It preserves stored sessions and does not change what
-future imports retain.
+write-ahead log, or WAL. Your stored sessions stay intact, and future imports
+keep the same retention behavior.
 
-Compaction first removes deleted-message records from the conversation export
-index, except records of messages with a native source ID, which stay so a
-returning message keeps its export ID. The daemon also removes the same records
-on its own once they are a week or two old, but only compaction shrinks the
-database file. Change-stream and
-conversation-export readers keep these records only so they can learn about a
-deletion. A reader whose position predates a removed record restarts: the change
-stream sends `reset`, and `export conversations changes` returns
-`reconciliation_required`. Readers that have already read past every removed
-record continue unchanged. The `--dry-run` estimate does not include the space
-these records free.
+Before shrinking the file, compaction removes deleted-message records from the
+conversation export index, except records for messages with a native source ID,
+which stay so a returning message keeps its export ID. The daemon removes those
+same records on its own once they are a week or two old, though only compaction
+shrinks the database file. Change-stream and conversation-export readers keep
+these records only so they can learn about deletions. A reader whose position
+predates a removed record restarts: the change stream sends `reset`, and
+`export conversations changes` returns `reconciliation_required`. Readers that
+have already moved past every removed record continue unchanged. The
+`--dry-run` estimate does not count the space these records free.
 
 ```bash
 agentsview db compact [flags]
@@ -1132,20 +1156,22 @@ agentsview db compact [flags]
 | `--yes`         | `false` | Skip the confirmation prompt                     |
 | `--format`      | `human` | Use `json` for machine-readable output           |
 
-JSON mode writes only the final result to stdout and requires `--yes`; prompts
-and human progress messages are written to stderr. When a writable daemon owns
-the archive, `--staging-dir` is not accepted because the daemon chooses its own
-staging location and the compact endpoint is restricted to localhost. The
-command probes for an existing daemon and never starts one: maintenance must not
-trigger a daemon's startup sync. When no daemon owns the archive, the command
-takes the direct write lock and compacts in process.
+In JSON mode, the command writes only the final result to stdout, requires
+`--yes`, and sends prompts and human progress messages to stderr. When a
+writable daemon owns the archive, `--staging-dir` is rejected because the
+daemon chooses its own staging directory and the compact endpoint is restricted
+to localhost. The command checks for an existing daemon and never starts one,
+because maintenance must not trigger a daemon's startup sync. If no daemon owns
+the archive, the command acquires the direct write lock and compacts in
+process.
 
-On a shared filesystem, peak additional space includes the original backup, the
+On a shared filesystem, peak extra space covers the original backup, the
 compacted candidate, a second candidate copy beside the live database, and a
-safety margin. With separate filesystems, staging needs the backup plus one
-candidate and the database filesystem needs the installation copy. The live
-source remains present until the final rename and is never credited as free
-space. For a large archive, use a separate volume with enough capacity:
+safety margin. On separate filesystems, staging needs room for the backup plus
+one candidate, while the database filesystem needs room for the installation
+copy. The live source stays in place until the final rename, and it is never
+counted as free space. For a large archive, stage on a separate volume with
+enough capacity:
 
 ```bash
 agentsview db compact --dry-run
@@ -1156,37 +1182,38 @@ agentsview db compact \
 agentsview daemon start
 ```
 
-When a writable daemon is running, the command sends the request to that daemon.
-Direct file access is refused while another daemon owns the archive. Reads
-continue during the staged build, while writes are refused with a retryable
-archive-maintenance error until the verified replacement is committed;
+If a writable daemon is running, the command sends the compact request to that
+daemon, and direct file access is refused while another daemon owns the
+archive. Reads continue during the staged build, while writes return a
+retryable archive-maintenance error until the verified replacement commits;
 connections pause only for the final swap. Compactions are serialized per
-archive: a compaction requested while a sync, resync, or another compaction is
-running fails immediately with a conflict instead of queueing.
+archive, so requesting a compaction during a sync, resync, or another
+compaction fails right away with a conflict instead of queueing.
 
-If a compaction is interrupted or fails partway, the archive stays safe: a
-recovery manifest (`compact-recovery.json` beside the database) records the
-operation, and the next writable start finishes or rolls back the replacement
-before the archive opens. Until then the daemon may keep refusing writes and the
-error names the manifest; restarting the daemon resolves it. Once a compaction
-has committed, recovery only cleans up leftover staging files and never replaces
-the archive, so sessions ingested after a compaction are never at risk. Do not
-delete the manifest or the database files by hand.
+If compaction fails or is interrupted partway through, the archive stays safe.
+A recovery manifest named `compact-recovery.json` beside the database records
+the operation, and the next writable start finishes or rolls back the
+replacement before opening the archive. Until that happens, the daemon can keep
+refusing writes with an error naming the manifest; restarting the daemon
+resolves it. Once a compaction commits, recovery only cleans up leftover
+staging files and never replaces the archive, so sessions ingested afterward
+stay safe. Do not delete the manifest or database files by hand.
 
 ______________________________________________________________________
 
 ### `agentsview db strip --images`
 
 Replace supported inline images and offloaded image references in stored tool
-results with text descriptions. The command requires `--images` and asks for
-confirmation. It never changes provider source files or standalone image files.
-Run `db compact` separately when you need measured SQLite file-space
-reclamation. Changed sessions are automatically rescanned for secrets so
-detections reflect the remaining content.
+results with text descriptions. You must pass `--images` and confirm the
+prompt. Provider source files and standalone image files stay untouched. To
+measure reclaimed SQLite file space, run `db compact` separately. Changed
+sessions are automatically rescanned for secrets so detections match the
+remaining content.
 
-Preview with `--dry-run`. Before applying changes, run `agentsview daemon stop`.
-The CLI writes directly to the archive and refuses while a writable daemon owns
-it. It does not start a daemon. Restart the daemon after the command finishes.
+Preview the selection with `--dry-run`, then stop the daemon with
+`agentsview daemon stop` before applying changes. The CLI writes directly to
+the archive, refuses to run while a writable daemon owns it, and does not start
+a daemon. Start the daemon again once the command finishes.
 
 ```bash
 agentsview db strip --images [flags]
@@ -1201,70 +1228,70 @@ agentsview db strip --images [flags]
 | `--yes`     | `false` | Skip confirmation                                                                                                    |
 | `--format`  | `human` | Use `json` for machine-readable output                                                                               |
 
-JSON apply requires `--yes`. Preview and a declined confirmation leave the
-archive unchanged. Reported stored-content bytes and decoded image bytes are
-content measurements, not reclaimed disk space.
+Applying in JSON mode requires `--yes`. Both `--dry-run` and a declined
+confirmation leave the archive unchanged. The reported stored-content bytes and
+decoded image bytes measure content size, not reclaimed disk space.
 
 ______________________________________________________________________
 
 ### `agentsview db migrate --images`
 
-Move retained inline tool-result image payloads from currently stored archive
-rows into the asset store at `{dataDir}/assets`. Each payload is written as a
-content-addressed file named `<sha256hex><ext>`. Before the row changes, an
-existing object must have the expected byte count and SHA-256 digest. A missing
-or corrupt object is replaced while the source bytes remain available. The
-inline `input_image` block is replaced with an `agentsview_image` placeholder
-whose `image_ref` field holds the `asset://` reference. The
-`GET /api/v1/assets/{filename}` route and `renderMarkdown` resolve these
+Move retained inline tool-result image payloads from currently stored archive rows into
+the asset store at `{dataDir}/assets`. AgentsView writes each payload as a
+content-addressed file named `<sha256hex><ext>`. Before updating a row, it
+verifies that any existing object matches the expected byte count and SHA-256
+digest, replacing a missing or corrupt object while the source bytes are still
+available. It then replaces the inline `input_image` block with an
+`agentsview_image` placeholder whose `image_ref` field points to the `asset://`
+reference. `GET /api/v1/assets/{filename}` and `renderMarkdown` resolve those
 references from the local assets directory.
 
-The image appears in formatted tool output alongside text and other supported
-inline or offloaded images. Raw mode shows the stored text, including the
-markdown reference, as it always has, and so does a result that still holds an
-unmigrated image block, such as an SVG or an `image/bmp` payload beside a
-migrated PNG. Under `require_auth` the asset route rejects the browser's image
-request, because an `img` element sends no `Authorization` header. Chat-imported
-images already carry that limit.
+Migrated images display in formatted tool output alongside text and other
+supported inline or offloaded images. Raw mode still shows the stored text,
+including the markdown reference, as does any result that keeps an unmigrated
+image block, such as an SVG or an `image/bmp` payload next to a migrated PNG.
+When `require_auth` is enabled, the asset route rejects browser image requests
+because an `img` element sends no `Authorization` header, the same limit that
+chat-imported images already have.
 
-Migration updates images already in the archive. Set
-`tool_result_images = "offload"` and restart the daemon to store future
-supported images in the same asset directory. With `keep`, a later reparse or
-full resync can restore inline images from provider source files. With `drop`,
-ingestion and full resync replace images with text descriptions.
-`db strip --images` also removes offloaded references from selected results.
-Neither operation deletes asset files. The migration command requires `--images`
-and never changes provider source files. A separate serving host needs the
-matching `{dataDir}/assets` directory as well as the copied database content.
-Run `db compact` separately to measure SQLite file-space reclamation after
-migration. Back up the `{dataDir}/assets` directory together with the archive.
+Migration updates images already in the archive. To store future supported
+images in the same asset directory, set `tool_result_images = "offload"` and
+restart the daemon. With `keep`, a later reparse or full resync can restore
+inline images from provider source files; with `drop`, ingestion and full
+resync replace images with text descriptions. `db strip --images` also removes
+offloaded references from selected results, though neither operation deletes
+asset files. You must pass `--images`, and the command never modifies provider
+source files. A separate serving host needs the matching `{dataDir}/assets`
+directory along with the copied database. Run `db compact` separately to
+measure SQLite file-space reclamation after migration, and back up
+`{dataDir}/assets` together with the archive.
 
-The raw `agentsview session export` command streams provider source, with
+The raw `agentsview session export` command streams provider source with
 detected secrets masked unless you pass `--reveal`, and keeps inline image
-payloads.
-See [image storage](/docs/data/#ingest-time-image-offload) for export and
-remote-backend limits.
+payloads. For export and remote-backend limits, see
+[image storage](/docs/data/#ingest-time-image-offload).
 
-If a session transaction fails after writing assets, its rows remain unchanged
-but complete, unreferenced asset files remain on disk. Retrying the migration
-reuses matching files; there is no automatic cleanup of unreferenced assets.
-Both `db migrate --images` and `db strip --images` report the sessions that
-committed before a later failure.
+If a session transaction fails after writing assets, its rows stay unchanged
+while complete, unreferenced asset files remain on disk. Retrying migration
+reuses matching files, and there is no automatic cleanup of unreferenced
+assets. Both `db migrate --images` and `db strip --images` report the sessions
+that committed before a later failure.
 
 JPEG assets now use `.jpg` filenames, including `.jpeg` files copied from chat
-imports. Existing `asset://<hash>.jpeg` references still resolve, but
-re-importing an export with those files can create a second copy under `.jpg`.
+imports. Existing `asset://<hash>.jpeg` references still resolve, though
+re-importing an export with those files can write a second copy under `.jpg`.
 
-Only the four passive image media types are migrated: `image/png`, `image/jpeg`,
-`image/webp`, `image/gif`. Every other payload stays inline, including SVG,
-which the serving route refuses as active content, and near-misses such as the
-non-canonical `image/jpg` spelling. `db strip --images` is broader and replaces
-any `image/*` payload with a placeholder, so the two commands do not select the
-same rows.
+Migration moves only the four passive image media types: `image/png`,
+`image/jpeg`, `image/webp`, and `image/gif`. Every other payload stays inline,
+including SVG, which the serving route rejects as active content, and
+near-misses such as the non-canonical `image/jpg` spelling. `db strip --images`
+is broader and replaces any `image/*` payload with a placeholder, so the two
+commands do not select the same rows.
 
-Preview with `--dry-run`. Before applying changes, run `agentsview daemon stop`.
-The CLI writes directly to the archive and refuses while a writable daemon owns
-it. It does not start a daemon. Restart the daemon after the command finishes.
+Preview with `--dry-run`, then run `agentsview daemon stop` before applying
+changes. The CLI writes directly to the archive, refuses while a writable
+daemon owns it, and does not start a daemon. Restart the daemon after the
+command finishes.
 
 ```bash
 agentsview db migrate --images --dry-run
@@ -1282,16 +1309,17 @@ agentsview daemon start
 | `--yes`     | `false` | Skip confirmation                                                                                                    |
 | `--format`  | `human` | Use `json` for machine-readable output                                                                               |
 
-JSON apply requires `--yes`. Preview and a declined confirmation leave the
-archive and assets directory unchanged. Reported stored-content bytes and
-decoded image bytes are content measurements, not reclaimed disk space.
+Applying in JSON mode requires `--yes`. Both `--dry-run` and a declined
+confirmation leave the archive and assets directory unchanged. The reported
+stored-content bytes and decoded image bytes measure content size, not
+reclaimed disk space.
 
 ______________________________________________________________________
 
 ### `agentsview version`
 
-Print the version, git commit, and build date. Use `--json` for a stable,
-machine-readable response that does not require a running daemon, configuration,
+Print the version, git commit, and build date. Pass `--json` for a stable,
+machine-readable response that works without a running daemon, configuration,
 or database.
 
 ```bash
@@ -1335,10 +1363,10 @@ ______________________________________________________________________
 
 ### `agentsview source list`
 
-List every agent AgentsView can read, where it looks for each agent's
-sessions, and which session details each agent's parser extracts. Pass one or
-more agent types to show only those agents. The command does not need a running
-daemon, configuration, or database.
+List every agent AgentsView can read, where it looks for each agent's sessions,
+and which session details each parser extracts. Pass one or more agent types to
+filter the output. This command works without a running daemon, configuration,
+or database.
 
 ```bash
 agentsview source list
@@ -1353,12 +1381,12 @@ codex (Codex)
   reads: first_message, session_name, cwd, git_branch, relationships, subagents, thinking, tool_calls, tool_results, tool_result_events, per_message_token_usage, termination_status, model
 ```
 
-The `sessions` line shows the default locations relative to your home
-directory. The `override` line names the environment variable that replaces
-them. Import-only agents show `imported with agentsview source import` instead.
+The `sessions` line lists default locations relative to your home directory,
+and `override` names the environment variable that replaces them. Import-only
+agents show `imported with agentsview source import` instead.
 
-The JSON contract has `schema_version` (currently `1`) and an `agents` array.
-Each agent has these fields:
+The JSON contract includes `schema_version`, currently `1`, and an `agents`
+array. Each agent has these fields:
 
 | Field           | Type    | Meaning                                                                           |
 | --------------- | ------- | --------------------------------------------------------------------------------- |
@@ -1380,28 +1408,28 @@ ______________________________________________________________________
 
 ### `agentsview report usage daily`
 
-Report token usage and estimated cost aggregated by local-time day, scoped to
-the last 30 days by default. See [Token Usage & Costs](/docs/token-usage/) for a
-full write-up on reporting behavior and agent coverage.
+Report token usage and estimated cost grouped by local-time day, covering the
+last 30 days by default. For full reporting behavior and agent coverage, see
+[Token Usage & Costs](/docs/token-usage/).
 
-The report reads committed archive data. If it starts the daemon, session sync
-runs in the background; run `agentsview source sync` first when new source changes must
-be included. An older archive that requires reparsing is upgraded before the
-daemon starts serving, with startup progress shown in the terminal. A cold usage
-cache prepares the sessions needed for the report without waiting for the full
-archive backfill. Slow reports print the current preparation phase and elapsed
-time to stderr, including with `--json`. Usage preparation is not subject to the
-server's normal write timeout. Press Ctrl+C to stop waiting; shared cache work
-can continue in the daemon.
+This report reads committed archive data. If it starts the daemon, session sync
+runs in the background; to include fresh source changes right away, run
+`agentsview source sync` first. When an older archive needs reparsing, the
+daemon upgrades it before serving and prints startup progress in your terminal.
+A cold usage cache prepares only the sessions needed for the report instead of
+waiting for the full archive backfill. Slow reports write the current
+preparation phase and elapsed time to stderr, even with `--json`, and usage
+preparation is exempt from the server's normal write timeout. Press `Ctrl+C` to
+stop waiting; shared cache work can continue in the daemon.
 
-Restart older daemons after upgrading so they provide the usage progress
+After upgrading, restart older daemons so they expose the usage progress
 endpoint. `usage statusline` still waits for initial sync, including when it
-reuses a daemon started by daily usage.
-Statusline limits the complete wait and report request to 30 seconds.
+reuses a daemon started by daily usage, and caps the combined wait and report
+request at 30 seconds.
 
 Offline reads require an archive at the current data version. If an upgrade
-requires a resync, run `agentsview daemon restart` and let the resync finish
-before retrying the offline command.
+needs a resync, run `agentsview daemon restart` and wait for the resync to
+finish before retrying the offline command.
 
 ```bash
 agentsview report usage daily [flags]
@@ -1475,7 +1503,7 @@ $ agentsview report usage statusline --json
 ```
 
 See [Token Usage & Costs](/docs/token-usage/#agentsview-usage-statusline) for
-integration examples (Starship, tmux).
+Starship and tmux integration examples.
 
 ______________________________________________________________________
 
@@ -1484,7 +1512,7 @@ ______________________________________________________________________
 ### `agentsview source cursor sync-usage`
 
 Fetch Cursor Admin API usage events and store them in the local archive so they
-contribute to the Usage dashboard and daily reports.
+appear in the Usage dashboard and daily reports.
 
 ```bash
 agentsview source cursor sync-usage [flags]
@@ -1499,16 +1527,16 @@ agentsview source cursor sync-usage [flags]
 | `--email`     | config        | Filter by Cursor team member email   |
 | `--user-id`   | config        | Filter by Cursor team member user ID |
 
-Cursor allows 60 requests per minute to this API for each team, shared by every
-tool that uses the team's admin keys. The command starts requests, retries
-included, at least one second apart. When Cursor answers with
+Cursor allows 60 requests per minute to this API per team, shared across every
+tool using the team's admin keys. The command spaces requests, including
+retries, at least one second apart. If Cursor responds with
 `429 Too Many Requests` or a server error, the command waits and requests the
-same page again, up to 5 attempts per page. It waits as long as Cursor's
-`Retry-After` header asks, up to 60 seconds, or backs off from about 2 seconds
-when the header is absent. Each wait is reported on stderr. Any other error,
-such as a rejected key, stops the run at once. Nothing is stored unless every
-page is fetched, so a larger `--page-size`, which needs fewer requests, makes a
-long sync less likely to fail.
+same page again, up to 5 total attempts per page. It honors Cursor's
+`Retry-After` header up to 60 seconds, or backs off starting around 2 seconds
+when that header is missing, and prints each wait to stderr. Any other error,
+such as a rejected key, stops the run immediately. Nothing is stored unless
+every page is fetched, so a larger `--page-size`, which needs fewer requests,
+makes a long sync less likely to fail.
 
 **Examples:**
 
@@ -1518,8 +1546,8 @@ agentsview source cursor sync-usage --since 2026-05-01 --until 2026-05-31
 agentsview source cursor sync-usage --all --email you@example.com
 ```
 
-See [Cursor Admin Usage Events](/docs/token-usage/#cursor-admin-usage-events)
-for setup and reporting behavior.
+For setup and reporting behavior, see
+[Cursor Admin Usage Events](/docs/token-usage/#cursor-admin-usage-events).
 
 ______________________________________________________________________
 
@@ -1527,8 +1555,8 @@ ______________________________________________________________________
 
 ### `agentsview report activity`
 
-Report active time, concurrency, cost, token, breakdown, and session rows for a
-resolved date range. The command uses the same report model as the web UI's
+Report active time, concurrency, cost, tokens, breakdowns, and session rows for
+a resolved date range, using the same report model as the web UI's
 [Activity](/docs/activity/) page.
 
 ```bash
@@ -1562,9 +1590,9 @@ agentsview report activity --preset custom \
   --bucket 15m
 ```
 
-The human output prints totals, peak concurrency, top project/model/ agent
-breakdowns, and top sessions. JSON output includes the dense bucket timeline and
-session rows used by the web UI.
+Human output prints totals, peak concurrency, top project, model, and agent
+breakdowns, and top sessions. JSON output includes the dense bucket timeline
+and session rows used by the web UI.
 
 ______________________________________________________________________
 
@@ -1572,11 +1600,11 @@ ______________________________________________________________________
 
 !!! note "Deprecated"
 
-    As of 0.30.0, `agentsview token-use` is a deprecated alias for
-    [`agentsview session usage`](/docs/session-api/#agentsview-session-usage). Both
-    commands accept the same `<session-id>` argument. `token-use` always emits the
-    same JSON shape that `session usage --format json` emits (now extended with a
-    cost estimate). New scripts should use `agentsview session usage`.
+    Starting with 0.30.0, `agentsview token-use` is a deprecated alias for
+    [`agentsview session usage`](/docs/session-api/#agentsview-session-usage).
+    Both commands take the same `<session-id>` argument, and `token-use` always
+    emits the same JSON shape as `session usage --format json`, now extended
+    with a cost estimate. Use `agentsview session usage` in new scripts.
 
 Print machine-readable token usage data and a cost estimate for a single
 session.
@@ -1587,16 +1615,17 @@ agentsview token-use <session-id>
 
 Session ID format depends on the agent. For example, Claude root sessions
 usually use UUIDs like `550e8400-e29b-41d4-a716-446655440000`, Claude subagents
-use IDs like `agent-a86574e`, and some other agents use prefixes such as
-`codex:my-session-id`. Raw session IDs emitted by the underlying agent are also
-accepted when AgentsView can resolve them back to the canonical stored session.
+use IDs like `agent-a86574e`, and some other agents add prefixes such as
+`codex:my-session-id`. You can also pass raw session IDs emitted by the
+underlying agent when AgentsView can resolve them to the canonical stored
+session.
 
-The command uses a compatible local daemon, starting one if needed. It follows
-the same refresh and missing-session behavior as
+This command talks to a compatible local daemon, starting one if needed, and
+follows the same refresh and missing-session behavior as
 [`agentsview session usage`](/docs/session-api/#agentsview-session-usage).
 
-Totals include archived subagent spend. `token-use` has no opt-out; use
-`agentsview session usage <id> --own-only` for own-session numbers.
+Totals include archived subagent spend, and `token-use` has no opt-out. For
+own-session numbers only, run `agentsview session usage <id> --own-only`.
 
 **Example:**
 
@@ -1620,12 +1649,12 @@ agentsview token-use 550e8400-e29b-41d4-a716-446655440000
 }
 ```
 
-`cost_usd` is a deprecated compatibility alias for `cost.microdollars / 1e6` and
-will be removed in a future release; new consumers should read
-`cost.microdollars` directly.
+`cost_usd` is a deprecated compatibility alias for `cost.microdollars / 1e6`
+and is scheduled for removal in a future release. Read `cost.microdollars`
+directly in new scripts.
 
-See [`agentsview session usage`](/docs/session-api/#agentsview-session-usage)
-for the full field reference and exit-code contract.
+For the full field reference and exit-code contract, see
+[`agentsview session usage`](/docs/session-api/#agentsview-session-usage).
 
 ______________________________________________________________________
 
@@ -1633,8 +1662,8 @@ ______________________________________________________________________
 
 ### `agentsview replica pg push`
 
-Sync sessions from local SQLite to PostgreSQL. See
-[PostgreSQL Sync](/docs/pg-sync/) for full documentation.
+Sync sessions from local SQLite to PostgreSQL. For full documentation, see
+[PostgreSQL Sync](/docs/pg-sync/).
 
 ```bash
 agentsview replica pg push [target] [flags]
@@ -1654,16 +1683,16 @@ agentsview replica pg push [target] [flags]
 | `--debounce`         | `30s`   | Coalesce window after a change before pushing (`--watch` only)                                                     |
 | `--interval`         | `15m`   | Periodic floor push interval (`--watch` only)                                                                      |
 
-See [PostgreSQL Sync — Project Filtering](/docs/pg-sync/#project-filtering) for
-details on how filtering interacts with the push watermark.
+For details on how project filtering interacts with the push watermark, see
+[PostgreSQL Sync — Project Filtering](/docs/pg-sync/#project-filtering).
 
-`--embed` pushes sessions first, then builds and pushes embeddings in the same
-push, using `[vector]` or a recipe published to PostgreSQL. `--full --embed`
-repairs vector rows too. Watch mode builds in the background after each sync
-that commits changes and pushes built vectors
-on the next interval. It never starts a daemon and refuses to run while one owns
-the archive. It cannot be combined with
-`--no-vectors`, `--all`, or a target with `push_vectors = false`. See
+Passing `--embed` pushes sessions first, then builds and pushes embeddings in
+the same run using `[vector]` or a recipe published to PostgreSQL. Adding
+`--full --embed` repairs vector rows as well. In watch mode, it builds in the
+background after each sync that commits changes and pushes the built vectors on
+the next interval. `--embed` never starts a daemon, refuses to run while a
+daemon owns the archive, and cannot be combined with `--no-vectors`, `--all`,
+or a target with `push_vectors = false`. See
 [Build and push embeddings in a container](/docs/pg-sync/#build-and-push-embeddings-in-a-container).
 
 ______________________________________________________________________
@@ -1694,8 +1723,8 @@ ______________________________________________________________________
 
 Start a read-only session web UI backed by PostgreSQL. On a writable PostgreSQL
 schema, the same server also registers the
-[hosted raw-sync control plane](/docs/hosted-raw-sync/#http-control-plane). See
-[PostgreSQL Sync](/docs/pg-sync/) for full server documentation.
+[hosted raw-sync control plane](/docs/hosted-raw-sync/#http-control-plane). For
+full server documentation, see [PostgreSQL Sync](/docs/pg-sync/).
 
 ```bash
 agentsview replica pg serve [flags]
@@ -1705,15 +1734,15 @@ agentsview replica pg serve [flags]
 agentsview replica pg serve --push-watch
 ```
 
-Use `--push-watch` to ingest mounted sessions and publish them in the same
+Pass `--push-watch` to ingest mounted sessions and publish them in the same
 process; see
-[PostgreSQL Sync](https://agentsview.io/docs/pg-sync/#agentsview-pg-serve) for setup
-and shutdown.
+[PostgreSQL Sync](https://agentsview.io/docs/pg-sync/#agentsview-pg-serve) for
+setup and shutdown details.
 
-Accepts the same serve flags (`--host`, `--port`, `--proxy`, etc.) plus
-PostgreSQL configuration from `config.toml`. When the host's `[vector]` config
-matches a generation pushed to PostgreSQL, semantic and hybrid search are served
-from pgvector — see
+This command accepts the same serve flags, such as `--host`, `--port`, and
+`--proxy`, plus PostgreSQL configuration from `config.toml`. When the host's
+`[vector]` config matches a generation pushed to PostgreSQL, semantic and
+hybrid search run on pgvector. See
 [Semantic Search — PostgreSQL](/docs/semantic-search/#postgresql).
 
 ______________________________________________________________________
@@ -1723,16 +1752,15 @@ ______________________________________________________________________
 ### `agentsview replica pg service`
 
 Install and manage the PostgreSQL auto-push service, which runs
-`agentsview replica pg push --watch` in the background. Supported service managers are
-launchd on macOS and `systemd --user` on Linux. See
-[PostgreSQL Sync — `agentsview replica pg service`](/docs/pg-sync/#agentsview-pg-service)
-for setup notes.
+`agentsview replica pg push --watch` in the background using launchd on macOS
+or `systemd --user` on Linux. For setup notes, see
+[PostgreSQL Sync — `agentsview replica pg service`](/docs/pg-sync/#agentsview-pg-service).
 
-Use `service install --no-start-daemon` with your own collector. The push
-service exits if no writable daemon is running, and the service manager restarts
-it until the collector answers. Reinstalling restarts the service with the new
-arguments. The default installation still starts a missing daemon. Reinstalling
-without `--no-start-daemon` restores daemon autostart.
+If you run your own collector, install with `service install --no-start-daemon`.
+The push service then exits when no writable daemon is running, and the service
+manager restarts it until the collector responds. Reinstalling restarts the
+service with the new arguments. The default installation still starts a missing
+daemon, and reinstalling without `--no-start-daemon` restores daemon autostart.
 
 ```bash
 agentsview replica pg service install
@@ -1782,8 +1810,8 @@ ______________________________________________________________________
 
 ### `agentsview replica clickhouse`
 
-Push the local SQLite archive into ClickHouse and serve the read-only web UI
-from it. See [ClickHouse Sync](/docs/clickhouse-sync/) for full documentation.
+Push the local SQLite archive to ClickHouse and serve the read-only web UI from
+it. For full documentation, see [ClickHouse Sync](/docs/clickhouse-sync/).
 
 ```bash
 agentsview replica clickhouse push [target] [flags]
@@ -1792,15 +1820,16 @@ agentsview replica clickhouse serve [flags]
 agentsview replica clickhouse service install
 ```
 
-`clickhouse push` accepts the same `--full` / `--projects` /
+`clickhouse push` accepts the same `--full` / `--no-vectors` / `--projects` /
 `--exclude-projects` / `--all-projects` / `--all` / `--watch` / `--debounce` /
-`--interval` flags as `pg push`, except there is no `--no-vectors` flag.
-ClickHouse has no vector phase. `--all --watch` is rejected.
+`--interval` flags as `pg push` and includes a semantic-search vector phase.
+The only `pg push` flag `clickhouse push` lacks is `--embed`, and
+`--all --watch` is rejected.
 
 `clickhouse serve` accepts the same serve flags as `pg serve`.
 `clickhouse service` installs `clickhouse push --watch` as a launchd or systemd
-user unit and writes `clickhouse-watch.log`. Use
-`clickhouse service install --no-start-daemon` with your own collector.
+user unit and writes `clickhouse-watch.log`. If you run your own collector,
+install with `clickhouse service install --no-start-daemon`.
 
 ______________________________________________________________________
 
@@ -1855,8 +1884,8 @@ agentsview session health 550e8400-e29b-41d4-a716-446655440000
 agentsview session health agent-a86574e --json
 ```
 
-Without a session ID, the command lists recent sessions with grade and outcome
-columns. With a session ID, it prints the detailed signal counts for that
+Without a session ID, the command lists recent sessions with their grade and
+outcome columns. Pass a session ID to print the detailed signal counts for that
 session.
 
 ______________________________________________________________________
@@ -1865,8 +1894,8 @@ ______________________________________________________________________
 
 ### `agentsview report stats`
 
-Experimental window-scoped workspace analytics across sessions and git activity.
-See [Stats](/docs/stats/) for the full write-up.
+View experimental, window-scoped workspace analytics across sessions and git
+activity. For the full write-up, see [Stats](/docs/stats/).
 
 ```bash
 agentsview report stats [flags]
@@ -1891,21 +1920,20 @@ agentsview report stats --format json --since 2026-04-01 --until 2026-04-15
 agentsview report stats --agent claude --include-project agentsview
 ```
 
-The command is experimental. The exact human output may change, and the JSON
-output should be treated as a moving surface even though it currently carries
-`schema_version: 1`.
+This command is experimental: the exact human output can change, and the JSON
+format is not stable yet even though it currently carries `schema_version: 1`.
 
 ______________________________________________________________________
 
 ### `agentsview doctor sync`
 
-Collect read-only diagnostics for startup sync decisions. This command does not
-create or migrate config files; it loads the current config read-only, inspects
-the SQLite archive, checks configured agent roots, and prints recent
-sync-related `debug.log` lines.
+Collect read-only diagnostics for startup sync decisions without creating or
+migrating config files. The command loads your current config read-only,
+inspects the SQLite archive, checks configured agent roots, and prints recent
+sync-related lines from `debug.log`.
 
-If startup has rotated the log, inspect `debug.log.1` in the data directory for
-the previous tail.
+If startup rotated the log, check `debug.log.1` in your data directory for the
+previous tail.
 
 ```bash
 agentsview doctor sync
@@ -1957,26 +1985,25 @@ agentsview archive diff --agent codex --fail-on-change
 agentsview archive diff --json > parser-report.json
 ```
 
-`parse-diff` is intended for parser development and release QA. Run it against a
-quiescent, freshly synced archive for the clearest signal. Import-only sources
-are skipped because there is no source file to re-parse. Provider-backed stores
-with authoritative local sources, including Warp, Forge, Piebald, and Devin, are
-covered alongside normal file-backed agents.
+`parse-diff` is built for parser development and release QA. Run it against a
+quiet, freshly synced archive for the cleanest signal. It skips import-only
+sources because there is no source file to re-parse, and covers provider-backed
+stores with authoritative local sources, including Warp, Forge, Piebald, and
+Devin, alongside normal file-backed agents.
 
-The report distinguishes parser drift from comparison-basis skew:
+The report separates parser drift from comparison-basis skew:
 
-- `raced` means the source changed while `parse-diff` was running. It is
-    reported for review but does not fail `--fail-on-change`.
-- `incremental_skew` means the stored row was last written by an
-    incremental-append sync, so a fresh full re-parse can legitimately differ on
-    append-path metadata. It is also reported but excluded from
-    `--fail-on-change`.
+- `raced` means the source changed while `parse-diff` was running. It appears
+  in the report for review, but does not fail `--fail-on-change`.
+- `incremental_skew` means an incremental-append sync last wrote the stored row, so
+  a fresh full re-parse can legitimately differ on append-path metadata. It
+  also appears in the report without failing `--fail-on-change`.
 - `pending_resync` means the stored data version is behind the running binary;
-    sync reparses available stale sources, rebuilding the archive when required.
+  sync reparses available stale sources and rebuilds the archive when needed.
 
-If the report includes `incremental_skew`, run a full resync before treating the
+If the report shows `incremental_skew`, run a full resync before treating the
 archive as a clean parser-drift baseline. A full resync rewrites those rows
-through the normalization path and restores strict `parse-diff` scrutiny.
+through the normalization path so `parse-diff` can check them strictly.
 
 ______________________________________________________________________
 
@@ -1984,20 +2011,23 @@ ______________________________________________________________________
 
 ### `agentsview source chrome setup`
 
-Install the native host and unpacked extension to sync Claude.ai, ChatGPT,
-Gemini Apps, and Grok web chats through Google Chrome. The command prints the
-extension folder. AgentsView opens its Chrome connection only after setup, so
-restart AgentsView if it is already running. Open `chrome://extensions`, enable
-**Developer mode**, choose **Load unpacked**, and select that folder. Keep
-Chrome open during Sync. Registration is per OS user; the last setup wins. The
-first connected Chrome profile is used. Rerun setup and reload the extension
-when the executable path or data directory changes. After an upgrade mismatch,
-restart AgentsView if you upgraded it, rerun setup, reload the extension at
-`chrome://extensions`, then Sync again.
+Install the native host and unpacked extension so you can sync Claude.ai,
+ChatGPT, Gemini Apps, and Grok web chats through Google Chrome. The command
+prints the extension folder path. Because AgentsView opens its Chrome
+connection only after setup, restart AgentsView if it is already running.
 
-See
-[Sync Claude.ai chats](https://agentsview.io/docs/chat-import/#sync-claudeai-chats)
-for connection and removal instructions.
+1. Open `chrome://extensions` in Google Chrome.
+1. Enable **Developer mode**.
+1. Click **Load unpacked** and select the printed extension folder.
+
+Keep Chrome open during Sync. Registration is per OS user, the last setup wins,
+and AgentsView uses the first connected Chrome profile. If your executable path
+or data directory changes, rerun setup and reload the extension. After an
+upgrade mismatch, restart AgentsView if you upgraded it, rerun setup, reload
+the extension at `chrome://extensions`, and run Sync again.
+
+For connection and removal steps, see
+[Sync Claude.ai chats](https://agentsview.io/docs/chat-import/#sync-claudeai-chats).
 
 ______________________________________________________________________
 
@@ -2005,8 +2035,8 @@ ______________________________________________________________________
 
 ### `agentsview source import`
 
-Import Claude.ai, ChatGPT, Gemini Apps, or Grok web conversations into the local
-database. See [Chat Import](/docs/chat-import/) for full documentation.
+Import Claude.ai, ChatGPT, Gemini Apps, or Grok web conversations into your
+local database. For full documentation, see [Chat Import](/docs/chat-import/).
 
 ```bash
 agentsview source import --type <type> <path>
@@ -2020,14 +2050,15 @@ agentsview source import --type <type> --sync
 | `--sync`    | `false` | Sync Claude.ai, ChatGPT, Gemini Apps, or Grok web through Chrome; requires a running server and Chrome host, with no path or `--replace` |
 
 Set up the
-[Chrome host](https://agentsview.io/docs/commands/#agentsview-chrome-setup) once
-and keep Chrome open for `agentsview source import --type <type> --sync`, where
-`<type>` is `claude-ai`, `chatgpt`, `gemini-apps`, or `grok-web`. AgentsView
-imports Grok web chats only through Sync, so `grok-web` needs `--sync`.
+[Chrome host](https://agentsview.io/docs/commands/#agentsview-chrome-setup)
+once and keep Chrome open when running
+`agentsview source import --type <type> --sync`, where `<type>` is `claude-ai`,
+`chatgpt`, `gemini-apps`, or `grok-web`. Because AgentsView imports Grok web
+chats only through Sync, `grok-web` requires `--sync`.
 
-The path can be a `.zip` file, a `conversations.json` file (Claude.ai only), a
-Gemini Apps `MyActivity.html` file, or a directory containing the extracted
-export.
+The `<path>` argument can be a `.zip` file, a Claude.ai `conversations.json`
+file, a Gemini Apps `MyActivity.html` file, or a directory containing the
+extracted export.
 
 **Examples:**
 
@@ -2079,15 +2110,16 @@ agentsview export sessions [flags]
 | `--min-tool-failures` |         | Minimum tool-failure signal count                         |
 | `--has-secret`        | `false` | Only sessions with detected secret leaks                  |
 
-With `--wait`, export starts or discovers the local daemon and waits for project
-identity evidence to finish. Progress goes to standard error. Cancel the command
-to stop waiting. A failed backfill or unavailable daemon reports recovery
-commands. Archive-only databases cannot run the backfill; finish it on the
-writable source and restore an archive containing the evidence.
+When you pass `--wait`, export starts or finds the local daemon, waits for
+project identity evidence to finish, and writes progress to standard error.
+Cancel the command to stop waiting. If the backfill fails or the daemon is
+unavailable, the error includes recovery commands. Archive-only databases
+cannot run the backfill; finish it on the writable source and restore an
+archive that already contains the evidence.
 
-By default, one-shot and automated sessions are excluded, so token and cost
-totals can be lower than the full archive unless the corresponding include flags
-are used.
+Because one-shot and automated sessions are excluded by default, token and cost
+totals can be lower than the full archive unless you pass the corresponding
+include flags.
 
 **Examples:**
 
@@ -2097,22 +2129,23 @@ agentsview export sessions --format ndjson --limit 100
 agentsview export sessions --all --format ndjson --project agentsview
 ```
 
-The JSON top level has `schema_version`, `archive_id`, `database_id`, `cursor`,
-`pricing`, `projects`, and `sessions`. NDJSON writes the same metadata as the
-first line, then one session row per following line. Current builds emit
-`schema_version: 7`; see [Session Export](/docs/session-export/#versioning) for
-the v1 and transitional 0.38 release history. The default and maximum page size
-is `db.MaxSessionLimit`, currently 500.
+The JSON top level includes `schema_version`, `archive_id`, `database_id`,
+`cursor`, `pricing`, `projects`, and `sessions`. NDJSON writes that same
+metadata on the first line, followed by one session row per line. Current
+builds emit `schema_version: 7`; for the v1 and transitional 0.38 release
+history, see [Session Export](/docs/session-export/#versioning). Both the
+default and maximum page size are `db.MaxSessionLimit`, currently 500.
 
-For performance diagnosis, `export sessions`, `export hour`, `export day`, and
+To profile performance, `export sessions`, `export hour`, `export day`, and
 `export digest` accept `--cpuprofile <file>`, `--memprofile <file>`, and
-`--trace <file>`. These write profiling data to files and keep the export on
+`--trace <file>`, writing profiling data to files while keeping the export on
 stdout.
 
-When `--cursor` is present, only `--format`, `--json`, `--limit`, `--wait`, and
-the profiling flags may be combined with it. With a cursor, `--wait` suppresses
-progress to keep stderr machine-readable. Cursor reset errors write structured
-JSON to stderr, leave stdout empty, and exit with code 4:
+When you pass `--cursor`, you can combine it only with `--format`, `--json`,
+`--limit`, `--wait`, and the profiling flags. With a cursor, `--wait`
+suppresses progress output so stderr stays machine-readable. Cursor reset
+errors write structured JSON to stderr, leave stdout empty, and exit with
+code 4:
 
 ```json
 {"error":"cursor_reset","message":"session export cursor is no longer valid; restart the export","database_id":"..."}
@@ -2123,9 +2156,9 @@ ______________________________________________________________________
 ### `agentsview export conversations`
 
 List conversation changes without message text, then fetch selected visible
-user/assistant messages in bounded chunks. See
-[Conversation Export](/docs/conversation-export/) for identity, content,
-checkpoint and coverage rules.
+user and assistant messages in bounded chunks. For identity, content,
+checkpoint, and coverage rules, see
+[Conversation Export](/docs/conversation-export/).
 
 ```bash
 agentsview export conversations changes
@@ -2135,22 +2168,22 @@ agentsview export conversations message SESSION_ID MESSAGE_ID \
   --database-id DATABASE_ID --revision REVISION
 ```
 
-These commands read the local archive and do not send content to another system.
-`--tool-summaries` adds each session's tool call totals and skills to the
-listing; see
+These commands read the local archive and do not send content to another
+system. Pass `--tool-summaries` to include each session's tool call totals and
+skills in the listing; see
 [Session tool summaries](/docs/conversation-export/#session-tool-summaries).
-`message` masks detected secrets by default and marks such bodies with
+`message` masks detected secrets by default and marks redacted bodies with
 `redacted: true`; pass `--reveal` to return the stored text unchanged. Existing
-session summary and activity exports remain content-free.
+session summary and activity exports stay content-free.
 
 ______________________________________________________________________
 
 ### `agentsview export hour|day|digest|range`
 
 Export hourly activity and usage, complete days, or digests that identify
-changed hours from the local SQLite archive. A digest is a checksum of the
-exported content. See [Reporting Export](/docs/reporting-export/) for the JSON
-fields, version rules, and correction workflow.
+changed hours from your local SQLite archive. A digest is a checksum of the
+exported content. For JSON fields, version rules, and the correction workflow,
+see [Reporting Export](/docs/reporting-export/).
 
 ```bash
 agentsview export range
@@ -2161,30 +2194,31 @@ agentsview export day --schema-version 5 --by-machine 2026-07-28
 agentsview export digest --from 2026-06-28 --to 2026-07-27
 ```
 
-Hour and date keys must be exact, zero-padded UTC values. Open and future hours
-are rejected. The current UTC date contains only closed hours and has no day
-digest. Digest ranges include both dates and are limited to 31 days.
+Hour and date keys must be exact, zero-padded UTC values, and open or future
+hours are rejected. The current UTC date includes only closed hours and has no
+day digest. Digest ranges include both endpoints and can span at most 31 days.
 
-Version 3 is the default. Use `--schema-version 5` to group activity and usage
-by project, agent, model, and activity category together. Version 5 keeps
-repositories that share a project name separate. It also accepts repeatable
-`--project-key` filters and a `--bucket` duration, such as `1m`, `5m`, or `15m`.
-The duration must be a positive whole-minute divisor of one hour. Version 3
-rejects both options. Versions 1, 2, and 4 are no longer available.
+Version 3 is the default. Pass `--schema-version 5` to group activity and usage
+by project, agent, model, and activity category together while keeping
+repositories that share a project name separate. Version 5 also accepts
+repeatable `--project-key` filters and a `--bucket` duration such as `1m`,
+`5m`, or `15m`, which must be a positive whole-minute divisor of one hour;
+version 3 rejects both options. Versions 1, 2, and 4 are no longer available.
 Validate your chosen `schema_version` and content digest before accepting a
-document. Refresh saved digests when changing versions.
+document, and refresh saved digests whenever you change versions.
 
 ______________________________________________________________________
 
 ### `agentsview session`
 
-Machine filters accept exact IDs, aliases, comma-separated ID/alias lists, or a
-unique whole display label. A valid 32-hex installation ID takes precedence even
-without stored sessions. Unknown or ambiguous names return an error with choices.
+Access session data programmatically from scripts, automation agents, and CI
+jobs. For full documentation, including stability guarantees, transport
+auto-detection, and every subcommand, see [Session API](/docs/session-api/).
 
-Programmatic access to session data for scripts, automation agents, and CI jobs.
-See [Session API](/docs/session-api/) for full documentation, including
-stability guarantees, transport auto-detection, and every subcommand.
+Machine filters accept exact IDs, aliases, comma-separated ID or alias lists,
+or a unique whole display label. A valid 32-hex installation ID takes
+precedence even when it has no stored sessions, while unknown or ambiguous
+names return an error with choices.
 
 ```bash
 agentsview session get <id>              # metadata + signals
@@ -2208,116 +2242,123 @@ agentsview session label <id> k=v ...    # add or remove labels
 agentsview session parent <id> <parent>  # record the launching session
 ```
 
-For `session compactions`, `--limit` counts sessions per page, not response
-bytes; `--limit 0` uses the default of 20. Resume `--cursor` with the same
-`--active-since`, even when a page has no summaries. Ambiguous older Evener
-labels are reported separately with their session ID and ordinal.
+In `session compactions`, `--limit` counts sessions per page rather than
+response bytes, and `--limit 0` uses the default of 20. Keep the same
+`--active-since` when resuming with `--cursor`, even if a page has no
+summaries. Ambiguous older Evener labels appear separately with their session
+ID and ordinal.
 
 `agentsview session commits <id>` lists transcript and Git trailer commits
-linked to a session. The `SOURCE` column distinguishes `transcript` from
-`commit message`. JSON keeps `source: "trailer"` for commit message links.
-[`agentsview git-hook`](#agentsview-git-hook) adds those trailers. Use
-`--format json` for structured output. The table shows the session, exact message ordinal,
-call time, source, recorded SHA, branch, subject, and user turn, shortened to
-100 terminal columns. Transcript links use the last real prompt before the
-commit call. Trailer links use the last real prompt at or before Git's author
-time and mark the turn as estimated. They require a session message within the
-five minutes before that time; an idle session has no suggested turn. The prompt
-can be older than five minutes when later messages keep the session active.
-Trashed or permanently deleted sessions carry `missing: true` and omit the turn. See
-[commit lookups](https://agentsview.io/docs/session-api/#commit-lookups) for
-retention and lookup limits. Transcript links require stored Git summaries with SHAs of 7
-to 64 characters. Quiet commits have no transcript link. Links include Codex
-poll results paired with the original call. Calls spanning repositories use the
-first directory; the last `cd` before the first commit invocation adjusts it.
-Archives retaining only transcripts keep trailer links; usage-only archives have
-no links. Hosted PostgreSQL returns HTTP 501. Sessions permanently deleted
-before this release have no transcript links. JSON output keeps `call_index`.
-Code-mode scripts with exactly one tool call and a fixed command literal can
-link commits, including output without a process ID. Command literals containing
-`${` have no links. A single-call `write_stdin` script can poll an earlier
-commit execution. Scripts with several tool calls cannot start new commit links;
-their polls need output process IDs matching an earlier commit call.
+linked to a session. The `SOURCE` column separates `transcript` from
+`commit message`, while JSON keeps `source: "trailer"` for commit message
+links added by [`agentsview git-hook`](#agentsview-git-hook). Pass
+`--format json` for structured output. The table prints the session, exact
+message ordinal, call time, source, recorded SHA, branch, subject, and user
+turn, shortened to 100 terminal columns. Transcript links use the last real
+prompt before the commit call, whereas trailer links use the last real prompt
+at or before Git's author time and mark the turn as estimated. Trailer links
+require a session message within the five minutes before that time, so an idle
+session gets no suggested turn; the prompt itself can be older than five
+minutes if later messages keep the session active. Trashed or permanently
+deleted sessions include `missing: true` and omit the turn. For retention and
+lookup limits, see
+[commit lookups](https://agentsview.io/docs/session-api/#commit-lookups).
+Transcript links require stored Git summaries with SHAs of 7 to 64 characters;
+quiet commits get no transcript link. Links also include Codex poll results
+paired with the original call. Calls that span repositories use the first
+directory, adjusted by the last `cd` before the first commit invocation.
+Archives that retain only transcripts keep trailer links, while usage-only
+archives have no links. Hosted PostgreSQL returns HTTP 501, and sessions
+permanently deleted before this release have no transcript links. JSON output
+keeps `call_index`. Code-mode scripts with exactly one tool call and a fixed command
+literal can link commits, including output without a process ID, though command
+literals containing `${` get no links. A single-call `write_stdin` script can
+poll an earlier commit execution, while scripts with multiple tool calls cannot
+start new commit links and need output process IDs matching an earlier commit
+call to poll.
 
-`session list --label k=v` and `--pr owner/repo#123` filter by
+Pass `session list --label k=v` and `--pr owner/repo#123` to filter by
 [labels](/docs/session-api/#agentsview-session-label) and
 [pull request links](/docs/session-api/#pull-request-links).
 
-`session usage` includes archived subagent spend in the parent total. See the
-[session usage contract](/docs/session-api/#agentsview-session-usage) for
+`session usage` includes archived subagent spend in the parent total. For
 refresh behavior, missing-session exit codes, and the `refresh_incomplete`
-JSON field.
+JSON field, see the
+[session usage contract](/docs/session-api/#agentsview-session-usage).
 
-An empty first page of `session search` keeps `(no matches)` on stdout and prints
-measured hints on stderr when one-shot, automated, or child sessions contain
-matches. Each hint
-includes a command that preserves your filters and enables the required include
-flags. JSON adds `hints` entries with `code`, `message`, and a full `next` command.
-Counts use a bounded search and say `more than N` when more matches exist, or
-`at least N` for semantic and hybrid searches or when filtering or candidate
-limits prevent an exact count.
-`excluded_combined` gives a retry with the remaining
-include flags for matches beyond the individual class hints. Failed diagnostic
+When the first page of `session search` is empty, it keeps `(no matches)` on
+stdout and writes measured hints to stderr if one-shot, automated, or child
+sessions have matches. Each hint gives you a command that preserves your
+filters and adds the required include flags, and JSON adds `hints` entries
+with `code`, `message`, and a full `next` command. Counts come from a bounded
+search and say `more than N` when additional matches exist, or `at least N`
+for semantic and hybrid searches or when filtering or candidate limits prevent
+an exact count. `excluded_combined` gives a retry with the remaining include
+flags for matches beyond the individual class hints, and failed diagnostic
 searches add no hint.
 
-`session search` supports substring (default), `--regex`, `--fts`, `--semantic`,
-and `--hybrid` modes. On SQLite, PostgreSQL, and ClickHouse, a default search of several words lists matches
-of the exact text first, from every selected source. Messages holding every
-word follow, then messages holding fewer of the words; `matched_words` in JSON
-counts them, excluding unquoted stop words. Regular word forms match, so
-`invoice` also finds `invoices`.
-A single word, a fully quoted query such as `'"rounding of invoices"'`, and a
-search whose `--in` leaves out `messages` match the exact text only. A quoted
-phrase inside a longer query requires its words together and in order. `--fts`
-and hybrid's keyword matches rank messages by words the same way; hybrid
-keyword matches report their word count. An `--fts` query made only of
-quoted phrases, or one that uses FTS5 operators after a leading quote, such as
-`'"fix" OR "missing"'`, keeps its FTS5 meaning. Repeatable `--exclude-session <id>` drops matches from
-those sessions before `--limit`. Hybrid returns keyword matches with a note
-while the embedding index is unavailable. Semantic and hybrid
-results can be scoped with `--scope top|all|subordinate` (default `all`) to include or exclude sidechain and subagent content — see
+`session search` supports substring by default along with `--regex`, `--fts`,
+`--semantic`, and `--hybrid` modes. On SQLite, PostgreSQL, and ClickHouse, a
+default multi-word search puts exact-text matches first from every selected
+source, followed by messages containing every word, then messages containing
+fewer words; `matched_words` in JSON counts those words, excluding unquoted
+stop words. Regular word forms match, so `invoice` also finds `invoices`. A
+single word, a fully quoted query such as `'"rounding of invoices"'`, or a
+search whose `--in` leaves out `messages` matches exact text only, and a
+quoted phrase inside a longer query requires its words together and in order.
+`--fts` and hybrid's keyword matches rank messages by words the same way, and
+hybrid keyword matches report their word count. An `--fts` query made only of
+quoted phrases, or one that uses FTS5 operators after a leading quote such as
+`'"fix" OR "missing"'`, keeps its FTS5 meaning. Pass repeatable
+`--exclude-session <id>` to drop matches from those sessions before `--limit`.
+While the embedding index is unavailable, hybrid returns keyword matches with
+a note. You can scope semantic and hybrid results with
+`--scope top|all|subordinate`, defaulting to `all`, to include or exclude
+sidechain and subagent content; see
 [Semantic Search](/docs/semantic-search/#scoping-results-scope). HTTP and MCP
-also accept `scope` for substring and regex searches. CLI lexical searches use
-`--include-children` instead. The human-readable table includes an `AGE` column derived from each match's
-timestamp, so recent evidence is visible without opening the session. Matches
-without a usable timestamp show `—`.
+also accept `scope` for substring and regex searches, whereas CLI lexical
+searches use `--include-children`. The human-readable table includes an `AGE`
+column built from each match's timestamp so you can spot recent evidence
+without opening the session, and matches without a usable timestamp show `—`.
 
-Structured response commands accept `--format json`; `--json` is a short alias
-for that scripting mode. `session export` and `session watch` are the
-exceptions: they stream raw bytes and NDJSON respectively, so they reject
-`--format`/`--json`. Use `--server <url>` to target an explicit running daemon,
+Structured response commands accept `--format json` or its short alias
+`--json`. `session export` and `session watch` are the exceptions because they
+stream raw bytes and NDJSON respectively, so they reject `--format` and
+`--json`. Pass `--server <url>` to query an explicit running daemon, supply
 `AGENTSVIEW_SERVER_TOKEN` or `--server-token-file <path>` when that daemon
-requires auth, or `--pg` to read from configured PostgreSQL.
+requires auth, or pass `--pg` to read from configured PostgreSQL.
 
-`agentsview session list` excludes one-shot, automated, and child sessions by
-default. When that hides matching sessions on the first page, it reports the
-counts and the corresponding `--include-one-shot`, `--include-automated`, or
-`--include-children` flags on stderr, including when the list has visible results.
-Child counts include sessions hidden by several defaults; the notice lists
-every remaining include flag to use together. Child counts use one bounded page;
-a positive count from a partial page says `at least N`. Stdout, including
-`--format json`, keeps its existing shape for pipelines.
+`agentsview session list` hides one-shot, automated, and child sessions by
+default. Whenever that hides matching sessions on the first page, it prints
+the counts and the corresponding `--include-one-shot`, `--include-automated`,
+or `--include-children` flags to stderr, even when the list already has
+visible results. Child counts include sessions hidden by multiple defaults,
+and the notice lists every remaining include flag to combine. Because child
+counts use one bounded page, a positive count from a partial page says
+`at least N`. Stdout, including `--format json`, keeps its existing shape for
+pipelines.
 
-An older daemon can return sessions without exclusion counts. The CLI lists
-those sessions and omits the exclusion notice. Cursor pages and lists with all
-three `--include-*` flags also omit the notice.
+If an older daemon returns sessions without exclusion counts, the CLI lists
+those sessions without printing an exclusion notice. Cursor pages and lists
+with all three `--include-*` flags also omit the notice.
 
-`AGENTSVIEW_PG_URL`, a legacy `[pg].url`, or the effective default target from
-`default_pg` plus `[pg.NAME]` are sync configuration only; they do not change
-the default read path. Read commands use local SQLite unless `--pg` is supplied,
-in which case they fail fast if no connection URL is available. Mutating
-commands such as `session sync` and local-only raw source export continue to use
-the local archive.
+`AGENTSVIEW_PG_URL`, a legacy `[pg].url`, and the effective default target
+from `default_pg` plus `[pg.NAME]` configure sync only and do not change the
+default read path. Read commands use local SQLite unless you pass `--pg`, in
+which case they fail fast if no connection URL is configured. Mutating
+commands such as `session sync` and local-only raw source export still use the
+local archive.
 
-Use [`agentsview session health`](#agentsview-health) for a human-first signal view and
-[Session API](/docs/session-api/) for the full programmatic contract, including
-daemon-first transport behavior and markdown export details.
+For a human-first signal view, run
+[`agentsview session health`](#agentsview-health); for the full programmatic
+contract, including daemon-first transport behavior and markdown export
+details, see [Session API](/docs/session-api/).
 
-`agentsview session list` renders a resume-oriented human table by default,
-including a recently-active marker, session ID, age, agent, project, branch,
-message count, title, and working directory. Pass `--resume` or its `--active`
-alias to show sessions active in the last 15 minutes; combine either flag with
-`--active-since <RFC3339>` to choose a wider or narrower window.
+By default, `agentsview session list` prints a resume-oriented table showing a
+recently-active marker, session ID, age, agent, project, branch, message
+count, title, and working directory. Pass `--resume` or `--active` to filter
+to sessions active in the last 15 minutes, and combine either flag with
+`--active-since <RFC3339>` to pick a wider or narrower window.
 
 ______________________________________________________________________
 
@@ -2325,9 +2366,10 @@ ______________________________________________________________________
 
 ### `agentsview index embeddings`
 
-Manage the local semantic search embedding index. `build` turns search on when
-needed. The other commands require it to be enabled. See
-[Semantic Search](/docs/semantic-search/) for configuration and search details.
+Manage the local semantic search embedding index. Running `build` turns search
+on when needed, while the other subcommands require it to be enabled. For
+configuration and search details, see
+[Semantic Search](/docs/semantic-search/).
 
 ```bash
 agentsview index embeddings build           # build or refresh the index
@@ -2340,10 +2382,10 @@ ______________________________________________________________________
 
 ### `agentsview recall`
 
-Inspect the experimental durable-knowledge layer over the local session archive.
-Recall is active research and its corpus may require rebuilding as the schema,
-scoring, and trust policy evolve. See [Recall (Experimental)](/docs/recall/) for
-its current guarantees and limitations.
+Inspect the experimental durable-knowledge layer over your local session
+archive. Recall is active research, and you may need to rebuild its corpus as
+the schema, scoring, and trust policy change. For current guarantees and
+limitations, see [Recall (Experimental)](/docs/recall/).
 
 ```bash
 agentsview recall list [--updated-since <timestamp>] [--created-since <timestamp>] [--cursor <cursor>]
@@ -2360,43 +2402,43 @@ agentsview recall extract preview --session <id>
 agentsview recall import <accepted-recall.jsonl> --dry-run
 ```
 
-`--updated-since` and `--created-since` take RFC3339 timestamps and include
-the boundary. A bounded list returns the oldest change first and includes
-archived entries. Pass the returned `next_cursor` to `--cursor` for the next
-page. If Recall changes during the walk, restart from the first page with the
-same original time bound(s). See [Recall](/docs/recall/) for following changes over
+`--updated-since` and `--created-since` accept inclusive RFC3339 timestamps. A
+bounded list returns the oldest change first and includes archived entries;
+pass the returned `next_cursor` to `--cursor` for the next page. If Recall
+changes while you walk pages, restart from the first page with the same
+original time bounds. See [Recall](/docs/recall/) for following changes over
 time.
 
-Model-backed extraction requires an enabled `[recall.extract]` config section —
-see [Recall](/docs/recall/#automatic-extraction). `preview` replaces the earlier
-`extract --session <id> --dry-run` form, which still works as a fallback. The
-extraction subcommands operate on the local archive only and refuse `--server`;
-while a daemon owns the archive, it runs extraction passes itself and manual
-`run`/`activate`/`retire` are refused.
+Model-backed extraction requires an enabled `[recall.extract]` config section;
+see [Recall](/docs/recall/#automatic-extraction). `preview` replaces the
+earlier `extract --session <id> --dry-run` form, which still works as a
+fallback. Extraction subcommands work on the local archive only and reject
+`--server`. While a daemon owns the archive, it runs extraction passes itself
+and refuses manual `run`, `activate`, and `retire`.
 
-Use an isolated `AGENTSVIEW_DATA_DIR` for Recall population experiments. Import
-with `--dry-run` first; a write requires `--yes`, and a remote write also
-requires `--allow-remote-import`. Import against the default production
-directory is refused unless `--allow-production-import` is supplied explicitly.
-These flags do not bypass Recall's trust or evidence checks.
+Use an isolated `AGENTSVIEW_DATA_DIR` for Recall population experiments. Test
+imports with `--dry-run` first; writing requires `--yes`, and a remote write
+also requires `--allow-remote-import`. Importing into the default production
+directory is refused unless you pass `--allow-production-import` explicitly.
+None of these flags bypass Recall's trust or evidence checks.
 
-When `--server <url>` targets an explicit daemon, provide remote credentials
-with `AGENTSVIEW_SERVER_TOKEN` or `--server-token-file <path>`. Recall never
-sends the local daemon token from `config.toml` to an explicitly supplied
-server.
+When you target an explicit daemon with `--server <url>`, pass remote
+credentials with `AGENTSVIEW_SERVER_TOKEN` or `--server-token-file <path>`.
+Recall never sends the local daemon token from `config.toml` to an explicitly
+supplied server.
 
 ______________________________________________________________________
 
 ### `agentsview kata status`
 
-Shows whether the configured Kata instance is reachable, compatible (API
-schema 0.21.0 or newer), authenticated, and has the configured project. With a
-running daemon it reports the daemon's view. When no daemon owns the data
-directory, it probes from the local config without starting one. An
-unreachable owner returns an error. `--format json` prints the status
-object; `--json` is an alias. `--format human` selects the default text output.
-`--server URL` asks an explicit AgentsView daemon; use
-`AGENTSVIEW_SERVER_TOKEN` or `--server-token-file PATH` for its credential. See
+Check whether the configured Kata instance is reachable, compatible with API
+schema 0.21.0 or newer, authenticated, and has the configured project. When a
+daemon is running, the command reports the daemon's view; when no daemon owns
+the data directory, it probes from local config without starting one. An
+unreachable owner returns an error. Pass `--format json` or `--json` for the
+status object, or `--format human` for the default text output. To query an
+explicit AgentsView daemon, pass `--server URL` along with
+`AGENTSVIEW_SERVER_TOKEN` or `--server-token-file PATH`. See
 [Kata](/docs/kata/).
 
 ______________________________________________________________________
@@ -2414,49 +2456,57 @@ agentsview insight generate --type daily_activity --date-from <date> \
 agentsview insight generate --type tool_effectiveness --session-id <id>
 ```
 
-`insight list` accepts `--type`, `--project`, `--date-from`, and `--date-to`.
-`insight get` prints one saved insight. Use `--format json` or `--json` for the
-API envelope and complete stored rows. Human output prints a table for list and
-the saved Markdown content for get.
+`insight list` accepts `--type`, `--project`, `--date-from`, and `--date-to`,
+and `insight get` prints a single saved insight. Pass `--format json` or
+`--json` for the API envelope and full stored rows; human output prints a
+table for `list` and the saved Markdown content for `get`.
 
 `insight generate` accepts `--type`, `--date-from`, `--date-to`, `--project`,
-`--prompt`, `--session-id`, `--agent`, `--automated-scope`, and `--timezone`.
-The type defaults to `daily_activity`. The server validates fields, selects the
-configured agent or endpoint, and decides whether the selected backend can save
-the result. Local commands discover or start the configured daemon; an explicit
-`--server <url>` targets an already running server.
+`--prompt`, `--session-id`, `--agent`, `--automated-scope`, and `--timezone`,
+with `--type` defaulting to `daily_activity`. The server validates fields,
+picks the configured agent or endpoint, and decides whether the selected
+backend can save the result. Local commands find or start the configured
+daemon, while an explicit `--server <url>` targets an already running server.
 
-Use `tool_effectiveness` with `--session-id` to assess one session's tool calls.
-The saved report marks conclusions as helped, did not help, or unclear and
-cites the calls behind them. See
-[Tool effectiveness reports](/docs/recall/#tool-effectiveness-reports) for the
-input limits and what is sent to the configured model.
+Run `tool_effectiveness` with `--session-id` to evaluate one session's tool
+calls. The saved report labels conclusions as helped, did not help, or unclear
+and cites the calls behind them. For input limits and what gets sent to the
+configured model, see
+[Tool effectiveness reports](/docs/recall/#tool-effectiveness-reports).
 
-Generation status and log events go to stderr. The saved insight is the only
-result written to stdout, which keeps JSON output usable in scripts. For an
-explicit server, provide its bearer token with `AGENTSVIEW_SERVER_TOKEN` or
-`--server-token-file <path>`. The local daemon token from `config.toml` is never
-sent to an explicitly supplied server.
+Generation status and log events go to stderr so only the saved insight writes
+to stdout, keeping JSON output clean for scripts. For an explicit server,
+supply its bearer token with `AGENTSVIEW_SERVER_TOKEN` or
+`--server-token-file <path>`; the local daemon token from `config.toml` is
+never sent to an explicitly supplied server.
 
 ______________________________________________________________________
 
 ### `agentsview agent setup`
 
-Install the conversation search skill and focused MCP profile for installed Claude Code and Codex clients:
+Install the conversation search skill and focused MCP profile for installed
+Claude Code and Codex clients:
 
 ```bash
 agentsview agent setup [--agent claude|codex]... [--check] [--force] [--mcp=false] [--print] [--format json]
 ```
 
-Setup refuses to replace a different `agentsview` MCP entry without `--force` and preserves other entries. Pass `--force` to replace the entry and overwrite edited skill files. `--check` changes nothing, and `--print` shows the MCP commands to run by hand. Use `--mcp=false` to install or check the skill without inspecting or changing the MCP entry.
+Setup refuses to replace a different `agentsview` MCP entry unless you pass
+`--force`, and leaves other entries intact. Pass `--force` to replace the
+entry and overwrite edited skill files. `--check` makes no changes, `--print`
+shows the MCP commands to run by hand, and `--mcp=false` installs or checks
+the skill without inspecting or changing the MCP entry.
 
-Setup registers `agentsview mcp --profile memory` with no server flags. For a remote archive, set `AGENTSVIEW_MEMORY_SERVER` or `AGENTSVIEW_MEMORY_PG` where the agent starts the MCP server, and point the skill at the same server with [`agentsview skills install --server`](#agentsview-skills).
+Setup registers `agentsview mcp --profile memory` without server flags. To use
+a remote archive, set `AGENTSVIEW_MEMORY_SERVER` or `AGENTSVIEW_MEMORY_PG`
+where the agent starts the MCP server, and point the skill at the same server
+with [`agentsview skills install --server`](#agentsview-skills).
 
 ______________________________________________________________________
 
 ### `agentsview doctor memory`
 
-Inspect the selected conversation-memory target and the local client package:
+Inspect the selected conversation-memory target and local client package:
 
 ```bash
 agentsview doctor memory
@@ -2465,22 +2515,28 @@ agentsview doctor memory --pg
 agentsview doctor memory --plugin-root <path> --format json
 ```
 
-The target section uses the same readiness provider as MCP
-`get_memory_status` and search-result coverage. It reports the authenticated
-archive identity, backend, read-only mode, lexical availability, semantic
-generation coverage, source telemetry, and server version when available. An
-older remote server reports `unknown` with reason `unsupported`; authentication
-and transport failures remain command errors instead of looking like an empty
+The target section uses the same readiness provider as MCP `get_memory_status`
+and search-result coverage. It reports the authenticated archive identity,
+backend, read-only mode, lexical availability, semantic generation coverage,
+source telemetry, and server version when available. An older remote server
+reports `unknown` with reason `unsupported`, while authentication and
+transport failures stay command errors instead of looking like an empty
 archive.
 
-By default the client section checks installed Claude Code and Codex integrations. It checks the native package's recall skill, focused MCP
-configuration, and SessionStart hook when `--plugin-root`, `PLUGIN_ROOT`, or
-`CLAUDE_PLUGIN_ROOT` identifies the package. It also detects standalone
-AgentsView skills and reports when their baked target differs from the selected
-archive. Human and JSON output omit plugin paths, server URLs, and token values.
+By default, the client section checks installed Claude Code and Codex
+integrations. When `--plugin-root`, `PLUGIN_ROOT`, or `CLAUDE_PLUGIN_ROOT`
+identifies a native package, it checks that package's recall skill, focused
+MCP configuration, and SessionStart hook. It also detects standalone
+AgentsView skills and warns when their baked target differs from the selected
+archive. Both human and JSON output omit plugin paths, server URLs, and token
+values.
 
-Local diagnostics open the archive read-only. The client check may start the configured client and MCP process; it calls no data tools and does not start the local archive daemon, sync transcripts, or rebuild vectors. Codex may create its own runtime state. The diagnostic does not probe an embedding provider or modify client configuration. `--server`, `--pg`, and
-the `AGENTSVIEW_MEMORY_SERVER`, `AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, and
+Local diagnostics open the archive read-only. The client check can start the
+configured client and MCP process, though it calls no data tools and does not
+start the local archive daemon, sync transcripts, or rebuild vectors. Codex
+can create its own runtime state. The diagnostic does not probe an embedding
+provider or modify client configuration. `--server`, `--pg`, and the
+`AGENTSVIEW_MEMORY_SERVER`, `AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, and
 `AGENTSVIEW_MEMORY_PG` environment variables select the same read target used
 by `agentsview mcp --profile memory`.
 
@@ -2500,63 +2556,63 @@ agentsview memory session-start --mode hosted-reader --pg [--target <pg-name>]
 agentsview memory session-start --hook [--plugin-root <path>]
 ```
 
-The default `local` mode ensures the writable local daemon is available, then
-asks it to run a coalesced background reconciliation. `hosted-contributor`
-notifies the already running PostgreSQL push watcher for the selected target;
-that owner keeps its existing debounce, credentials, embedding work, and push
-cadence. It does not start another writer. `hosted-reader` checks an explicit
-authenticated daemon or configured PostgreSQL read target without starting a
-local archive or claiming to refresh hosted data.
+The default `local` mode makes sure the writable local daemon is available,
+then asks it to run a coalesced background reconciliation.
+`hosted-contributor` notifies the already running PostgreSQL push watcher for
+the selected target without starting another writer; that owner keeps its
+existing debounce, credentials, embedding work, and push cadence.
+`hosted-reader` checks an explicit authenticated daemon or configured
+PostgreSQL read target without starting a local archive or claiming to refresh
+hosted data.
 
-Every mode returns within 1.9 seconds and does not wait for archive-scale work.
-Set `AGENTSVIEW_DISABLE_AUTO_SYNC=1` to skip only this automatic request;
-explicit sync commands and searches remain available. A contributor owner
-started by an older binary must be restarted once so it can advertise the
-lifecycle wake endpoint. The contributor wake is available on macOS and Linux;
-Windows contributors continue on the watcher's normal event and interval
-cadence.
+Every mode returns within 1.9 seconds and does not wait for archive-scale
+work. To skip only this automatic request while keeping explicit sync commands
+and searches working, set `AGENTSVIEW_DISABLE_AUTO_SYNC=1`. Restart a
+contributor owner started by an older binary once so it advertises the
+lifecycle wake endpoint. Contributor wake works on macOS and Linux, while
+Windows contributors stay on the watcher's normal event and interval cadence.
 
 Native packages can configure these flags with `AGENTSVIEW_MEMORY_MODE`,
 `AGENTSVIEW_MEMORY_TARGET`, `AGENTSVIEW_MEMORY_SERVER`,
-`AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, and `AGENTSVIEW_MEMORY_PG`. Explicit
-target flags override the package environment as a group. `--hook` reports a
-failure to stderr and exits successfully so startup problems do not prevent the
-agent session from opening. `--plugin-root` also diagnoses standalone skill
-copies that would be loaded alongside the native package; it never changes
-those files.
+`AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, and `AGENTSVIEW_MEMORY_PG`, and
+explicit target flags override the package environment as a group. Passing
+`--hook` writes any failure to stderr and exits cleanly so startup issues do
+not block an agent session from opening. `--plugin-root` also checks for
+standalone skill copies that would load alongside the native package without
+modifying those files.
 
 ______________________________________________________________________
 
 ### `agentsview diagnostics append`
 
-Record a failure outside an agent session for the Friction Log:
+Record a failure that happened outside an agent session for the Friction Log:
 
 ```bash
 agentsview diagnostics append --source worker --message "launch failed" [--at RFC3339] [--id UUID] [--server URL] [--json]
 ```
 
-The occurrence time defaults to now. Supply `--at` to place a delayed report
-on the day it happened; it can be at most five minutes in the future. The
-zero timestamp `0001-01-01T00:00:00Z` is not accepted. The
-source is limited to 64 characters and the message to 500. The command prints
-its event ID and occurrence time; reuse both with the same source and message
-to retry without counting the event twice. When supplying `--id` without `--at`,
-reusing the ID and content also returns the original event. A local append reaches a PostgreSQL
-hub on the next replica push, including a project-filtered push. An explicit
-`--server` writes to that daemon instead. Read-only servers and `--pg` cannot
-append. Events appear in digests only when Friction review is enabled on the
-archive that builds them.
+The occurrence time defaults to now. Pass `--at` to record a delayed report on
+the day it happened, up to five minutes in the future; the zero timestamp
+`0001-01-01T00:00:00Z` is rejected. Source names can be up to 64 characters and
+messages up to 500. The command prints the event ID and occurrence time, and
+you can reuse both with the same source and message to retry without double
+counting. If you pass `--id` without `--at`, reusing the ID and content also
+returns the original event. Local appends reach a PostgreSQL hub on the next
+replica push, including a project-filtered push, while an explicit `--server`
+writes to that daemon instead. Read-only servers and `--pg` cannot append.
+Events show up in digests only when Friction review is enabled on the archive
+that builds them.
 
-`POST /api/v1/diagnostics` accepts a required UUID `id`, `source`, `message`,
+`POST /api/v1/diagnostics` takes a required UUID `id`, `source`, `message`,
 and an optional RFC 3339 `occurred_at`. It requires an authenticated server or
-a localhost request. Reusing an ID with different content returns HTTP 409.
+a localhost request, and reusing an ID with different content returns HTTP 409.
 
 ______________________________________________________________________
 
 ### `agentsview friction`
 
-Build and read the [Friction Log](/docs/configuration/#friction-log). Review
-must be enabled with `[friction] enabled = true`.
+Build and read the [Friction Log](/docs/configuration/#friction-log). To use
+it, enable review with `[friction] enabled = true`.
 
 ```bash
 agentsview friction run [--date YYYY-MM-DD] [--rebuild] [--dry-run] [--format human|json | --json]
@@ -2569,35 +2625,36 @@ agentsview friction unlink <fingerprint>
 ```
 
 - `friction run` without flags builds every complete local day that has no
-  digest yet. `--date` builds one day, `--rebuild` rebuilds an existing day
-  while keeping the sessions it already covered, and `--dry-run` computes
-  without writing. It prints one summary line per day, or the summary JSON
-  with `--json`.
-- `friction digest` prints the latest digest as Markdown unless `--date` or a
-  range is given. `--format json` prints the stored summary JSON.
-- `friction findings` lists stored findings. `friction patterns` ranks
+  digest yet. Pass `--date` to build one day, `--rebuild` to rebuild an
+  existing day while keeping the sessions it already covered, and `--dry-run`
+  to compute without writing. It prints one summary line per day, or the
+  summary JSON with `--json`.
+- `friction digest` prints the latest digest as Markdown unless you pass
+  `--date` or a range; pass `--format json` to print the stored summary JSON.
+- `friction findings` lists stored findings, while `friction patterns` ranks
   recurring patterns by occurrences and shows each pattern's Kata issue.
   `--kind` accepts `correction`, `error`, `workaround`, `deferral`, `pattern`,
   `frustration`, and `interruption`.
-- `friction file` files a pattern to [Kata](/docs/kata/), or links the issue
-  Kata already holds for it. `friction link` and `friction unlink` set or
+- `friction file` files a pattern to [Kata](/docs/kata/) or links the issue
+  Kata already holds for it, and `friction link` and `friction unlink` set or
   remove a pattern's issue by hand. Only the AgentsView hub files.
 
-Read commands use the running daemon (starting one when needed), an explicit
-`--server <url>`, or `--pg` for the configured PostgreSQL hub. Provide a
-`--server` token with `AGENTSVIEW_SERVER_TOKEN` or `--server-token-file <path>`.
-`friction run`, `friction file`, `friction link`, and `friction unlink` use the
-daemon when one is running and otherwise write the local archive directly.
+Read commands use the running daemon, starting one when needed, or an explicit
+`--server <url>` or `--pg` for the configured PostgreSQL hub. Supply a
+`--server` token with `AGENTSVIEW_SERVER_TOKEN` or
+`--server-token-file <path>`. `friction run`, `friction file`, `friction link`,
+and `friction unlink` use the daemon when one is running and write the local
+archive directly otherwise.
 
 ______________________________________________________________________
 
 ### `agentsview mcp`
 
-Run a read-only Model Context Protocol server for assistant clients that can
-call MCP tools. The server exposes session search, listing, overview, message
+Run a read-only Model Context Protocol server for assistant clients that can call
+MCP tools. The server exposes session search, listing, overview, message
 retrieval, content search, and usage-summary tools over the same service layer
-used by the CLI and HTTP API. See [MCP Server](/docs/mcp/) for setup examples
-and operational guidance.
+as the CLI and HTTP API. For setup examples and operational guidance, see
+[MCP Server](/docs/mcp/).
 
 ```bash
 agentsview mcp
@@ -2608,39 +2665,39 @@ agentsview mcp status --json
 agentsview mcp calls --since 7d
 ```
 
-`agentsview mcp status --json` lists local HTTP MCP listeners without starting
-one; stdio connections do not appear. See
-[listener discovery](/docs/mcp/#discover-running-http-listeners) for endpoint
-fields and token-file paths.
+Run `agentsview mcp status --json` to list local HTTP MCP listeners without
+starting one; stdio connections do not appear. For endpoint fields and
+token-file paths, see
+[listener discovery](/docs/mcp/#discover-running-http-listeners).
 
 `agentsview mcp calls` summarizes local call outcomes over inclusive UTC dates,
 including empty and truncated result shares and rejected argument names.
 See [call outcomes](/docs/mcp/#review-call-outcomes) for the recorded fields.
 
-By default, `agentsview mcp` speaks stdio, which is the expected transport for
-local MCP clients such as Claude Desktop, Claude Code, and Codex.
-`--http <addr>` serves StreamableHTTP instead. Bare ports and `:PORT` values
-bind to `127.0.0.1`; non-loopback binds require `--http-allow-insecure` plus a
-configured bearer token.
+By default, `agentsview mcp` uses stdio, the standard transport for local MCP
+clients such as Claude Desktop, Claude Code, and Codex. Pass `--http <addr>`
+to serve StreamableHTTP instead. Bare ports and `:PORT` values bind to
+`127.0.0.1`, while non-loopback binds require `--http-allow-insecure` along
+with a configured bearer token.
 
 Local MCP mode reads through the AgentsView daemon, starts it when needed, and
-reuses the connection between tool calls. The MCP server does not open the local
-SQLite archive directly. See
-[daemon-backed reads](/docs/mcp/#daemon-backed-reads) for when it finds the
-daemon again.
+reuses the connection across tool calls without opening the local SQLite
+archive directly. See [daemon-backed reads](/docs/mcp/#daemon-backed-reads)
+for when it rediscovers the daemon.
 
-Use `--profile memory` when the client should discover only the
-`get_memory_status`, `search_content`, `get_messages`, and `get_compaction_summaries` conversation-memory
-tools. `get_memory_status` reports archive, lexical, semantic, vector coverage,
-and source-telemetry readiness without running a search probe. The default
-`full` profile preserves the complete MCP tool surface. Profile selection works
-with both stdio and StreamableHTTP and does not change backend selection.
+Pass `--profile memory` when you want the client to see only the
+`get_memory_status`, `search_content`, `get_messages`, and
+`get_compaction_summaries` conversation-memory tools. `get_memory_status`
+reports archive, lexical, semantic, vector coverage, and source-telemetry
+readiness without running a search probe. The default `full` profile keeps the
+complete MCP tool set. Profile selection works with both stdio and
+StreamableHTTP and does not change backend selection.
 
-Use `--server <url>` to point at an explicit running daemon. When the daemon
-requires auth, provide `AGENTSVIEW_SERVER_TOKEN` or
-`--server-token-file <path>`. Use `--pg` to read from configured PostgreSQL
-directly, or run [`agentsview replica pg serve`](/docs/pg-sync/#agentsview-pg-serve) and
-pass its URL with `--server`.
+To point at an explicit running daemon, pass `--server <url>`, and provide
+`AGENTSVIEW_SERVER_TOKEN` or `--server-token-file <path>` when that daemon
+requires auth. Pass `--pg` to read from configured PostgreSQL directly, or run
+[`agentsview replica pg serve`](/docs/pg-sync/#agentsview-pg-serve) and pass
+its URL with `--server`.
 
 | Flag                         | Default | Description                                         |
 | ---------------------------- | ------- | --------------------------------------------------- |
@@ -2655,24 +2712,24 @@ ______________________________________________________________________
 
 ### `agentsview secrets`
 
-Scan for and list detected secret leaks across sessions, with matches redacted
-by default. See [Secret Scanning](/docs/session-api/#secret-scanning) for the
-full detector set, storage shape, and HTTP API.
+Scan sessions for secret leaks and list stored findings, with matches redacted
+by default. For the full detector set, storage shape, and HTTP API, see
+[Secret Scanning](/docs/session-api/#secret-scanning).
 
 ```bash
 agentsview secrets scan [flags]   # scan sessions for leaks
 agentsview secrets list [flags]   # list stored findings
 ```
 
-`secrets scan` walks the archive, applies the full ruleset (definite + candidate
-tiers), and writes new findings to the `secret_findings` table. Pass
-`--backfill` to scan only sessions that haven't yet been scanned at the current
-ruleset version — the inline scan that runs during sync only stamps
-definite-tier findings, so `--backfill` is how you pick up the heuristic
-candidates without re-scanning the whole archive.
+`secrets scan` walks the archive, runs both definite and candidate rules, and
+writes new findings to the `secret_findings` table. Pass `--backfill` to scan
+only sessions that have not yet been scanned at the current ruleset version.
+Because the inline scan during sync records only definite-tier findings,
+`--backfill` lets you collect heuristic candidates without rescanning the
+whole archive.
 
-`secrets list` returns redacted findings by default. Pass `--reveal` to print
-the raw values — this only works against a localhost-bound daemon and emits a
+`secrets list` returns redacted findings by default. To print raw values, pass
+`--reveal`; this works only against a localhost-bound daemon and writes a
 warning to stderr.
 
 | Flag           | Used by | Description                                                       |
@@ -2695,12 +2752,11 @@ ______________________________________________________________________
 ### `agentsview skills`
 
 Install or list the bundled recall artifacts that teach coding-agent harnesses
-to consult AgentsView conversation history. Claude Code receives the
+to search AgentsView conversation history. Claude Code gets the
 `agentsview-finding-history` skill and the `agentsview-search-conversations`
-agent. Codex and other `.agents/skills` readers receive the skill with the same
-direct MCP workflow as its fallback. See
-[Semantic Search](/docs/semantic-search/#skills-for-coding-agents) for the
-workflow and upgrade guidance.
+agent, while Codex and other `.agents/skills` readers get the skill with the
+same direct MCP workflow as its fallback. For the workflow and upgrade notes,
+see [Semantic Search](/docs/semantic-search/#skills-for-coding-agents).
 
 ```bash
 agentsview skills install [--harness claude|agents] [--project] [--force]
@@ -2709,44 +2765,49 @@ agentsview skills list [--project] [--format json]
     [--server URL] [--server-token-file PATH]
 ```
 
-`install` renders the package for each `--harness` (default both). Skills land
-under `~/.claude/skills/agentsview-finding-history/` and/or
-`~/.agents/skills/agentsview-finding-history/`, with `SKILL.md` and a `LICENSE`
-sidecar in each directory. Claude's search agent lands at
-`~/.claude/agents/agentsview-search-conversations.md`. That agent allowlists
-only `mcp__agentsview__search_content` and `mcp__agentsview__get_messages`, so
-the Claude MCP server entry must be named `agentsview`. `--project` uses the
-equivalent paths at the current git root. Each artifact has its own generated
-hash: install updates safe generated files, refuses hand-edited or foreign files
-unless `--force` is passed, continues processing the other artifacts, and exits
-non-zero if anything was refused. `list` reports HARNESS, ARTIFACT, LEVEL, STATE
-(`missing`, `current`, `stale`, `modified`, `foreign`), and PATH for every
-artifact. When local semantic search is off, a successful install shows how to
-turn it on.
+`install` renders the package for each `--harness`, defaulting to both. Skills
+are written to `~/.claude/skills/agentsview-finding-history/`,
+`~/.agents/skills/agentsview-finding-history/`, or both, each with `SKILL.md`
+and a `LICENSE` sidecar, and Claude's search agent is written to
+`~/.claude/agents/agentsview-search-conversations.md`. Because that agent
+allowlists only `mcp__agentsview__search_content` and
+`mcp__agentsview__get_messages`, name your Claude MCP server entry
+`agentsview`. Pass `--project` to use the equivalent paths at the current git
+root. Each artifact carries its own generated hash: `install` updates safe
+generated files, refuses hand-edited or foreign files unless you pass
+`--force`, continues through the remaining artifacts, and exits non-zero if
+anything was refused. `list` prints HARNESS, ARTIFACT, LEVEL, STATE (`missing`,
+`current`, `stale`, `modified`, or `foreign`), and PATH for every artifact.
+When local semantic search is off, a successful install prints how to turn it
+on.
 
-`--server` / `--server-token-file` (or `AGENTSVIEW_SKILLS_SERVER` /
-`AGENTSVIEW_SKILLS_SERVER_TOKEN_FILE`) bake those flags into every example
-command so a remote-daemon install does not teach the local SQLite default.
-Values are shell-quoted, so a token path with a space stays one argument.
+Passing `--server` and `--server-token-file`, or setting
+`AGENTSVIEW_SKILLS_SERVER` and `AGENTSVIEW_SKILLS_SERVER_TOKEN_FILE`, bakes
+those flags into every example command so a remote-daemon install does not
+teach the local SQLite default. Values are shell-quoted, so a token path with
+spaces stays a single argument.
 
-Precedence is explicit flags, then whatever the installed skill already bakes,
-then the environment. An installed skill therefore decides even when it bakes no
-remote, so exporting `AGENTSVIEW_SKILLS_SERVER` never marks an existing package
-stale in `list`; the variables only seed a package whose skill is not installed
-yet. The endpoint-neutral Claude agent never contains server flags. Pass
-`--server ""` to un-bake a remote and return the skill to local SQLite.
+Precedence runs from explicit flags, to whatever the installed skill already
+bakes, to the environment. Because an installed skill wins even when it bakes
+no remote, exporting `AGENTSVIEW_SKILLS_SERVER` never marks an existing
+package stale in `list`; those variables only seed a skill that is not
+installed yet. The endpoint-neutral Claude agent never includes server flags.
+To remove a baked remote and return the skill to local SQLite, pass
+`--server ""`.
 
-These variables are skills-only and named apart from `AGENTSVIEW_SERVER_TOKEN`
-on purpose: they do not change the CLI's default read path, and `session search`
-still needs `--server` unless the baked examples supply it.
+These variables apply only to skills and are kept separate from
+`AGENTSVIEW_SERVER_TOKEN` on purpose: they do not change the CLI's default
+read path, so `session search` still needs `--server` unless the baked
+examples supply it.
 
 ______________________________________________________________________
 
 ### `agentsview completion`
 
 Generate a completion script for Bash, Fish, PowerShell, or Zsh. The command
-writes the script to standard output; it does not modify shell startup files.
-Pass `--no-descriptions` after the shell name to omit command descriptions.
+writes the script to standard output without touching your shell startup
+files. To omit command descriptions, pass `--no-descriptions` after the shell
+name.
 
 Load completion for the current shell session:
 
@@ -2922,26 +2983,27 @@ AGENTSVIEW_DATA_DIR=/tmp/av-test agentsview serve
 
 ### Search text in images
 
-AgentsView can index text in retained tool-result images with a local GLM-OCR
-service. Enable it in the [configuration](configuration.md#image-text) and
+AgentsView can index text inside retained tool-result images using a local
+GLM-OCR service. Enable it in [configuration](configuration.md#image-text) and
 restart the daemon.
 
-The endpoint must be an `http://` URL on a loopback host, with an explicit port
+The endpoint must be an `http://` URL on a loopback host with an explicit port
 and the path `/glmocr/parse`. It defaults to
 `http://127.0.0.1:30004/glmocr/parse` and must serve the
 [Docbank v0.17.0 deployment](https://github.com/kenn-io/docbank/tree/v0.17.0/deploy/glmocr),
-which requires an NVIDIA GB10 host. AgentsView reads PNG, JPEG, and WebP images
-up to 64 MiB stored inline or in the asset directory. Larger images are skipped
-and logged. Indexing starts with the daemon and
-continues in the background, so searches can initially return partial results.
-AgentsView checks for new images every minute. Missing or damaged assets and
-failed extractions retry with backoff. Images in other formats are skipped. Search in
-the web palette or with, for example,
+which requires an NVIDIA GB10 host. AgentsView reads PNG, JPEG, and WebP
+images up to 64 MiB stored inline or in the asset directory. It skips and logs
+larger images, and it skips images in other formats. Indexing starts with the
+daemon and continues in the background, so searches can return partial results
+at first. AgentsView checks for new images every minute and retries missing or
+damaged assets and failed extractions with backoff. You can search image text
+from the web palette or the CLI, for example with
 `agentsview session search 'invoice 42' --in tool_result`. Substring and regex
-`tool_result` searches include image text; other `--in` sources and in-session
-find search only text shown in the transcript. Each new extraction is sent on
-the next incremental push to PostgreSQL and ClickHouse, so `pg serve` and
-`clickhouse serve` return the same matches. Removing the last retained copy of an image removes its extracted text.
-Disabling image text and restarting clears extracted text and removes replica
-matches on the next push. Session and artifact exports carry image references or
-placeholders rather than extracted text.
+`tool_result` searches include image text, while other `--in` sources and
+in-session find search only text shown in the transcript. Each new extraction
+goes out on the next incremental push to PostgreSQL and ClickHouse, so
+`pg serve` and `clickhouse serve` return the same matches. Removing the last
+retained copy of an image deletes its extracted text, and disabling image text
+and restarting clears extracted text and removes replica matches on the next
+push. Session and artifact exports carry image references or placeholders
+instead of extracted text.
