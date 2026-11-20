@@ -109,6 +109,19 @@ func TestSearchRankWalkMatchesFullRanking(t *testing.T) {
 			require.Less(t, rankingWindows, fullWindows, "search must avoid the full-ranking CTE")
 		}
 	}
+	for _, from := range []string{"2026-05-11", "2027-01-01"} {
+		filter = SearchFilter{Query: "handler", Limit: 1, DateFrom: from, Project: "proj"}
+		rankReads, rankingWindows = 0, 0
+		full, err := d.Search(ctx, filter)
+		require.NoError(t, err)
+		fullWindows := rankingWindows
+		rankReads, rankingWindows = 0, 0
+		filter.Project = ""
+		page, err := d.Search(ctx, filter)
+		require.NoError(t, err)
+		assert.Equal(t, full, page)
+		require.GreaterOrEqual(t, rankingWindows, fullWindows, "sparse window %s must rank eligible matches directly", from)
+	}
 	conn, err = d.getReader().Conn(ctx)
 	require.NoError(t, err)
 	require.NoError(t, conn.Raw(func(raw any) error {
