@@ -287,13 +287,16 @@ func TestRestoreSnapshotFileConcurrentRuns(t *testing.T) {
 	out := filepath.Join(repo, "out", "snapshot.json.gz")
 	expected := sha256FileForTest(t, source)
 	const runs = 8
+	start := make(chan struct{})
 	var wait sync.WaitGroup
 	errs := make(chan error, runs)
 	for range runs {
 		wait.Go(func() {
+			<-start
 			errs <- restoreSnapshotFile(t.Context(), out, ref, "litellm_snapshot.json.gz", expected, "unused-snapshot-branch", "")
 		})
 	}
+	close(start)
 	wait.Wait()
 	close(errs)
 	for err := range errs {

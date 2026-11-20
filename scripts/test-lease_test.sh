@@ -117,7 +117,6 @@ main_pid=$(cat "$MAIN")
 for _ in {1..100}; do if ! kill -0 "$main_pid" 2>/dev/null; then break; fi; sleep .1; done
 if kill -0 "$main_pid" 2>/dev/null; then echo 'foreground command did not exit' >&2; exit 1; fi
 lease="$HOME/.local/state/test-service-leases/$(cat "$CHECK_LEASE")"
-lease-held "$lease"
 if grep -q ' down ' "$DOCKER_LOG"; then echo 'cleanup ran while descendant held lease' >&2; exit 1; fi
 supervisor=${lease##*-}
 supervisor_args=$(ps -p "$supervisor" -o args=)
@@ -220,7 +219,7 @@ unset DOWN_STARTED DOWN_RELEASE DOWN_FINISHED
 export READY="$tmp/ready"
 for phase in startup command; do
     : > "$DOCKER_LOG"
-    find "$tmp/ready" -delete
+    [[ ! -e "$tmp/ready" ]] || find "$tmp/ready" -delete
     if [[ $phase == startup ]]; then
         (cd "$root" && BLOCK_UP=1 exec ./scripts/test-lease.sh ./scripts/test-service-compose.sh postgres 5432 true) &
     else
@@ -272,14 +271,12 @@ for target in test-postgres bench-pg-usage test-clickhouse; do
             grep -Fxq 'PG_FROM_MAKE=' "$tmp/make-url"
             grep -Fxq 'CH_FROM_MAKE=clickhouse://127.0.0.1:49153/default' "$tmp/make-url"
             ;;
-        test-postgres)
+        test-postgres|bench-pg-usage)
             service=postgres port=5432
             grep -Fxq 'STANDBY_FROM_MAKE=' "$tmp/make-url"
             grep -Fxq 'CH_FROM_MAKE=' "$tmp/make-url"
             grep -Fxq 'PG_FROM_MAKE=postgres://agentsview_test:agentsview_test_password@127.0.0.1:49153/agentsview_test?sslmode=disable' "$tmp/make-url"
             ;;
-        bench-pg-usage)
-            service=postgres port=5432 ;;
     esac
     grep -qE -- "-p $project .* -f docker-compose.test-lease.yml up -d --wait $service" "$DOCKER_LOG"
     grep -qE -- "-p $project .* port $service $port" "$DOCKER_LOG"

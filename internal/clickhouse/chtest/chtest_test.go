@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNoExchangeServerCarriesLease(t *testing.T) {
+func TestContainerRequestCarriesLease(t *testing.T) {
 	t.Setenv("TEST_SERVICE_LEASE", "agentsview-test-123")
 
 	req := containerRequest(nil)
