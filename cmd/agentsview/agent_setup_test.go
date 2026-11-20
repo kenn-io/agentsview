@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -300,4 +301,32 @@ func TestAgentSetupWithoutMCPRepairHintsKeepCustomEntry(t *testing.T) {
 			require.Equal(t, tc.content, string(got))
 		})
 	}
+}
+
+func TestAgentSetupWithoutMCPReportsWriteErrorAndRepair(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("proc fixture")
+	}
+	home := filepath.Join(t.TempDir(), "agentsview agent setup")
+	require.NoError(t, os.MkdirAll(home, 0o700))
+	setDoctorMemoryTestEnvironment(t, home)
+	fakeAgent(t, "claude", "")
+	skill := filepath.Join(skills.TargetDir(skills.HarnessClaude, home), skillFileName)
+	require.NoError(t, os.MkdirAll(filepath.Dir(skill), 0o700))
+	require.NoError(t, os.Symlink("/proc/version", skill))
+	out, err := executeCommand(newRootCommand(), "agent", "setup", "--agent", "claude", "--mcp=false", "--force", "--json")
+	require.Error(t, err)
+	var report struct {
+		Rows []struct {
+			Reason   string `json:"reason"`
+			NextStep string `json:"next_step"`
+		} `json:"rows"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &report), out)
+	require.Len(t, report.Rows, 1)
+	require.Contains(t, report.Rows[0].Reason, "skills: write "+skill)
+	require.Equal(t, "agentsview agent setup --mcp=false --agent claude --force", report.Rows[0].NextStep)
+	human, err := executeCommand(newRootCommand(), "agent", "setup", "--agent", "claude", "--mcp=false", "--force")
+	require.Error(t, err)
+	require.Contains(t, human, "skills: write "+skill)
 }
