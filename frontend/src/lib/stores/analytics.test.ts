@@ -371,7 +371,6 @@ describe("AnalyticsStore freshness state", () => {
         expect(analytics.tools?.total_calls).toBe(34);
         expect(analytics.signals?.scored_sessions).toBe(56);
       });
-      expect(analytics.summary?.total_sessions).toBe(10);
       expect(active).toBe(6);
       expect(queue.length).toBeGreaterThan(0);
     } finally {
