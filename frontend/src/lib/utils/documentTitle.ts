@@ -2,6 +2,7 @@ import { m } from "../i18n/index.js";
 import type { Route } from "../stores/router.svelte.js";
 import type { Session } from "../api/types/core.js";
 import { sessionLabel } from "./messages.js";
+import { sessionDisplayId } from "./sessionDisplayId.js";
 
 export function documentTitle({
   route,
@@ -20,17 +21,20 @@ export function documentTitle({
   if (needsAuth && route !== "settings") {
     label = m.app_auth_title();
   } else if (route === "sessions" && sessionId) {
+    const separator = sessionId.indexOf("~");
+    const rawId = separator >= 0 ? sessionId.slice(separator + 1) : sessionId;
+    const displayId = `${separator >= 0 ? `${sessionId.slice(0, separator)}:` : ""}${sessionDisplayId(rawId).slice(0, 8)}`;
     if (sessionNotFound) {
-      label = `${m.message_list_session_not_found()} (${sessionId})`;
+      label = `${m.message_list_session_not_found()} (${displayId})`;
     } else if (session) {
       const name = sessionLabel(session.display_name?.trim(), session.first_message, "")
         .text.replace(/\s+/g, " ")
         .trim();
       const project = session.project.trim();
-      label = name ? `${name} (${sessionId})` : project ? `${project} (${sessionId})` : sessionId;
+      label = name ? `${name} (${displayId})` : project ? `${project} (${displayId})` : displayId;
       if (name && project) label += ` · ${project}`;
     } else {
-      label = sessionId;
+      label = displayId;
     }
   } else {
     const labels: Record<Route, () => string> = {

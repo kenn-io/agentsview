@@ -115,12 +115,13 @@
   } from "./lib/stores/sessionRouteParams.js";
 
   let globalAuthToken: string = $state("");
+  let sessionMatchesRoute = $derived(sessions.activeSessionId === router.sessionId);
   let title = $derived(documentTitle({
     route: router.route,
     needsAuth: settings.needsAuth,
     sessionId: router.sessionId,
-    session: sessions.activeSessionId === router.sessionId ? sessions.activeSession : undefined,
-    sessionNotFound: sessions.activeSessionId === router.sessionId && sessions.activeSessionNotFound,
+    session: sessionMatchesRoute ? sessions.activeSession : undefined,
+    sessionNotFound: sessionMatchesRoute && sessions.activeSessionNotFound,
   }));
   function handleGlobalAuth() {
     const token = globalAuthToken.trim();

@@ -36,26 +36,24 @@ describe("documentTitle", () => {
       sessionId: "source-a~codex:12345678abcdef",
       session,
     };
-    expect(documentTitle(input)).toBe(
-      "Fix login (source-a~codex:12345678abcdef) · project-a · AgentsView",
-    );
+    expect(documentTitle(input)).toBe("Fix login (source-a:12345678) · project-a · AgentsView");
     expect(documentTitle({ ...input, session: { ...session, display_name: undefined } })).toBe(
-      "First prompt (source-a~codex:12345678abcdef) · project-a · AgentsView",
+      "First prompt (source-a:12345678) · project-a · AgentsView",
     );
     expect(
       documentTitle({
         ...input,
         session: { ...session, display_name: undefined, first_message: null },
       }),
-    ).toBe("project-a (source-a~codex:12345678abcdef) · AgentsView");
+    ).toBe("project-a (source-a:12345678) · AgentsView");
     expect(
       documentTitle({
         ...input,
         session: { ...session, display_name: " ", first_message: null, project: " " },
       }),
-    ).toBe("source-a~codex:12345678abcdef · AgentsView");
+    ).toBe("source-a:12345678 · AgentsView");
     expect(documentTitle({ ...input, session: { ...session, project: "" } })).toBe(
-      "Fix login (source-a~codex:12345678abcdef) · AgentsView",
+      "Fix login (source-a:12345678) · AgentsView",
     );
     expect(
       documentTitle({
@@ -67,7 +65,7 @@ describe("documentTitle", () => {
             "<teammate-message>You are a teammate on a team. Work together. Task #2: Fix the login flow 3. Report back</teammate-message>",
         },
       }),
-    ).toBe("Fix the login flow (source-a~codex:12345678abcdef) · project-a · AgentsView");
+    ).toBe("Fix the login flow (source-a:12345678) · project-a · AgentsView");
   });
 
   it.each([
@@ -76,30 +74,14 @@ describe("documentTitle", () => {
       "source-b~codex:12345678abcdef",
       [
         [
-          "Fix login (source-a~codex:12345678abcdef) · project-a · AgentsView",
-          "source-a~codex:12345678abcdef · AgentsView",
-          "Session not found (source-a~codex:12345678abcdef) · AgentsView",
+          "Fix login (source-a:12345678) · project-a · AgentsView",
+          "source-a:12345678 · AgentsView",
+          "Session not found (source-a:12345678) · AgentsView",
         ],
         [
-          "Fix login (source-b~codex:12345678abcdef) · project-a · AgentsView",
-          "source-b~codex:12345678abcdef · AgentsView",
-          "Session not found (source-b~codex:12345678abcdef) · AgentsView",
-        ],
-      ],
-    ],
-    [
-      "codex:12345678aaaa",
-      "codex:12345678bbbb",
-      [
-        [
-          "Fix login (codex:12345678aaaa) · project-a · AgentsView",
-          "codex:12345678aaaa · AgentsView",
-          "Session not found (codex:12345678aaaa) · AgentsView",
-        ],
-        [
-          "Fix login (codex:12345678bbbb) · project-a · AgentsView",
-          "codex:12345678bbbb · AgentsView",
-          "Session not found (codex:12345678bbbb) · AgentsView",
+          "Fix login (source-b:12345678) · project-a · AgentsView",
+          "source-b:12345678 · AgentsView",
+          "Session not found (source-b:12345678) · AgentsView",
         ],
       ],
     ],
@@ -129,5 +111,12 @@ describe("documentTitle", () => {
     expect(documentTitle({ ...base, route: "settings", needsAuth: true })).toBe(
       "Settings · AgentsView",
     );
+  });
+
+  it.each([
+    ["codex:12345678abcdef", "12345678 · AgentsView"],
+    ["source-a~12345678abcdef", "source-a:12345678 · AgentsView"],
+  ])("shows the breadcrumb ID for %s while loading", (sessionId, expected) => {
+    expect(documentTitle({ ...base, route: "sessions", sessionId })).toBe(expected);
   });
 });

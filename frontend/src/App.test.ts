@@ -1949,10 +1949,10 @@ describe("App telemetry", () => {
     expect(document.title).toBe("Usage · AgentsView");
     router.navigateToSession("session-1");
     await flushEffects();
-    expect(document.title).toBe("Fix login (session-1) · proj-a · AgentsView");
+    expect(document.title).toBe("Fix login (session-) · proj-a · AgentsView");
     sessions.sessions = [hydratedSession("session-1", "codex", { display_name: "Renamed" })];
     await flushEffects();
-    expect(document.title).toBe("Renamed (session-1) · proj-a · AgentsView");
+    expect(document.title).toBe("Renamed (session-) · proj-a · AgentsView");
     sessions.sessions = [];
   });
 
@@ -1987,7 +1987,8 @@ describe("App telemetry", () => {
       for (const [index, id] of ids.entries()) {
         router.navigateToSession(id);
         await flushEffects();
-        expect(document.title).toBe(`${id} · AgentsView`);
+        const displayId = index === 0 ? "source-a:12345678" : "source-b:12345678";
+        expect(document.title).toBe(`${displayId} · AgentsView`);
         const loading = document.title;
         responses[index]!.resolve(
           state === "loaded"
@@ -1999,8 +2000,8 @@ describe("App telemetry", () => {
         );
         const expected =
           state === "loaded"
-            ? `Fix login (${id}) · proj-a · AgentsView`
-            : `Session not found (${id}) · AgentsView`;
+            ? `Fix login (${displayId}) · proj-a · AgentsView`
+            : `Session not found (${displayId}) · AgentsView`;
         await vi.waitFor(() => expect(document.title).toBe(expected));
         titles.push([loading, document.title]);
       }
