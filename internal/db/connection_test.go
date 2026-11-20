@@ -136,9 +136,24 @@ func TestQuickReadKeepsAReaderWhileAnalyticsFillThePool(t *testing.T) {
 }
 
 func TestSearchWaitsForBulkReadAndLeavesReaderForQuickRead(t *testing.T) {
+	for _, tc := range []struct {
+		name, pattern string
+		content       bool
+	}{
+		{"sessions", "searchable", false},
+		{"content words", "searchable text", true},
+		{"content boolean", `"searchable" OR "missing"`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testSearchWaitsForBulkRead(t, tc.pattern, tc.content)
+		})
+	}
+}
+
+func testSearchWaitsForBulkRead(t *testing.T, pattern string, content bool) {
+	t.Helper()
 	database := testDB(t)
-	insertSession(t, database, "summary", "project")
-	insertMessages(t, database, userMsg("summary", 0, "searchable text"))
+	seedSearchSession(t, database, "summary", "project", [][2]string{{"user", "searchable text"}})
 
 	releases := make([]func(), 0, bulkReadSlots)
 	connections := make([]*sql.Conn, 0, bulkReadSlots)
@@ -160,13 +175,26 @@ func TestSearchWaitsForBulkReadAndLeavesReaderForQuickRead(t *testing.T) {
 	}
 
 	type searchResult struct {
-		page SearchPage
-		err  error
+		ids []string
+		err error
 	}
 	result := make(chan searchResult, 1)
 	go func() {
-		page, err := database.Search(t.Context(), SearchFilter{Query: "searchable"})
-		result <- searchResult{page, err}
+		if content {
+			page, err := database.SearchContent(t.Context(), ContentSearchFilter{Pattern: pattern, Mode: "fts"})
+			var ids []string
+			for _, match := range page.Matches {
+				ids = append(ids, match.SessionID)
+			}
+			result <- searchResult{ids, err}
+			return
+		}
+		page, err := database.Search(t.Context(), SearchFilter{Query: pattern})
+		var ids []string
+		for _, match := range page.Results {
+			ids = append(ids, match.SessionID)
+		}
+		result <- searchResult{ids, err}
 	}()
 	select {
 	case got := <-result:
@@ -178,6 +206,9 @@ func TestSearchWaitsForBulkReadAndLeavesReaderForQuickRead(t *testing.T) {
 	session, err := database.GetSession(quickCtx, "summary")
 	require.NoError(t, err)
 	require.NotNil(t, session)
+	page, err := database.SearchContent(quickCtx, ContentSearchFilter{SessionID: "summary", Pattern: pattern, Mode: "fts"})
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
 
 	require.NoError(t, connections[0].Close())
 	connections = connections[1:]
@@ -186,8 +217,7 @@ func TestSearchWaitsForBulkReadAndLeavesReaderForQuickRead(t *testing.T) {
 	select {
 	case got := <-result:
 		require.NoError(t, got.err)
-		require.Len(t, got.page.Results, 1)
-		assert.Equal(t, "summary", got.page.Results[0].SessionID)
+		assert.Equal(t, []string{"summary"}, got.ids)
 	case <-time.After(2 * time.Second):
 		require.FailNow(t, "search did not resume after a bulk slot was released")
 	}
