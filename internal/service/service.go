@@ -438,6 +438,10 @@ type SessionList struct {
 // and pull request filters; older daemons ignore them.
 const SessionAnnotationsAPIVersion = 11
 
+// SessionSearchDateAPIVersion is the first daemon API guaranteed to apply
+// session search date filters; some version 8 daemons ignore them.
+const SessionSearchDateAPIVersion = 9
+
 // RecallTimeBoundsAPIVersion is the first daemon API that filters Recall
 // lists by updated_since and created_since; older daemons ignore them.
 const RecallTimeBoundsAPIVersion = 21
