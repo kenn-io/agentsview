@@ -1678,9 +1678,10 @@ own metadata, which is why the docs below call the database a mirror.
 
 Run `make test-clickhouse` to start a disposable compose service. Its container
 carries a `test-service.lease` label, and the tests hold an exclusive lock on
-`~/.local/state/test-service-leases/<id>` until the last descendant exits. A
-separate reaper removes labeled containers when the lock is free or missing.
-Manual services have no lease label. Use
+`~/.local/state/test-service-leases/<id>` until the last descendant exits. The
+test command then removes its Compose project. A scheduled cleaner can remove
+projects left by killed runs after their lock is released. Manual services have
+no lease label. Use
 `make clickhouse-up` and `make clickhouse-down` to manage a separate standing
 service. When running tagged Go tests directly, set `TEST_CLICKHOUSE_URL` to
 reuse a dedicated test server.
