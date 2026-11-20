@@ -221,9 +221,11 @@ create its own runtime state.
 `YYYY-MM-DD` format, just like `list_sessions` and `search_content`. Dates
 include sessions whose activity overlaps the requested days in UTC. Either bound
 can be omitted. When both bounds and `session_id` are omitted, the search starts
-30 days before the current UTC date. The response note gives the start date; pass
-that `date_from` on later pages to keep the window stable across UTC midnight,
-or pass an earlier date to search further back. Malformed dates and ranges where
+30 days before the current UTC date. The response returns the effective start
+date in `date_from` and a note explaining the default. Pass `date_from` with
+`next_cursor` on later pages to keep the window stable across UTC midnight, or
+pass an earlier date to search further back. A positive cursor requires
+`date_from` when neither date bound is provided. Malformed dates and ranges where
 `date_from` is after `date_to` return an error. Remote session searches with
 date bounds require a server with API version 9 or later; upgrade the server
 if it reports an older version.
@@ -297,10 +299,14 @@ require `include_one_shot: true`. Semantic mode needs the opt-in
 error without it. Exact `session_id`, `git_branch`, `project`, `agent`,
 `date_from`, and `date_to` filters apply before the final limit. When both date
 bounds and `session_id` are omitted, the search starts 30 days before the current
-UTC date. The response note gives the start date; repeat it as `date_from` on
-later pages to keep the window stable across UTC midnight, or pass an earlier
-date to search further back. Limits default to 10 and go up to 50; a value
+UTC date. The response returns the effective start date in `date_from` and a
+note explaining the default. Pass `date_from` with `next_cursor` on later pages
+to keep the window stable across UTC midnight, or pass an earlier date to search
+further back. A positive cursor requires `date_from` when neither date bound nor
+`session_id` is provided. Limits default to 10 and go up to 50; a value
 outside that range falls back to the default.
+
+Both search tools stop after 30 seconds and return a timeout error.
 
 To find one past session that covered several ideas, pass `concepts` instead of
 `pattern`: two to five distinct natural-language strings. The mode defaults to
@@ -338,8 +344,8 @@ pass `next_cursor` as the numeric `cursor` and echo the returned RFC3339
 fixed across pages of an unchanged archive, including on older servers. A
 positive cursor without the cutoff returns a restart error when that exclusion
 applies. Restart without a cursor to obtain both fields. `include_active: true`
-or an explicit `current_session_id` allows numeric-only continuation. Archive
-edits retain the existing offset-pagination behavior.
+or an explicit `current_session_id` removes the need to pass `activity_cutoff`.
+Archive edits retain the existing offset-pagination behavior.
 
 `exclusions.children` reports whether child sessions were excluded, including in
 empty results. It is true for `scope: top` and FTS searches without an exact
