@@ -31,8 +31,19 @@ with open(sys.argv[1]) as f:
     except BlockingIOError: sys.exit(0)
 sys.exit(1)
 PROBE
-    printf '%s\n' "$TEST_SERVICE_LEASE" > "$CHECK_LEASE" ;;
+    printf '%s\n' "$TEST_SERVICE_LEASE" > "$CHECK_LEASE"
+    if [ "${BLOCK_UP:-}" = 1 ]; then touch "$READY"; while :; do sleep .1; done; fi ;;
   *' port '*) echo 127.0.0.1:49153 ;;
+  *' down '*)
+    [ "$2" = -p ] && [ "$3" = "$TEST_SERVICE_LEASE" ] || exit 1
+    python3 - "$HOME/.local/state/test-service-leases/$TEST_SERVICE_LEASE" <<'PROBE' || exit 1
+import fcntl, sys
+with open(sys.argv[1]) as f:
+    try: fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError: sys.exit(0)
+sys.exit(1)
+PROBE
+    exit "${DOWN_STATUS:-0}" ;;
 esac
 DOCKER
 chmod +x "$tmp/bin/docker"
@@ -56,27 +67,66 @@ with open(sys.argv[1]) as f:
 PY
 }
 
-# A descendant retains the lease after the main process exits.
-export READY="$tmp/ready" RELEASE="$tmp/release" EXITED="$tmp/exited" CHECK_LEASE="$tmp/project"
+# Cleanup waits for a descendant to release the lease.
+export READY="$tmp/ready" RELEASE="$tmp/release" EXITED="$tmp/exited" MAIN="$tmp/main" CHECK_LEASE="$tmp/project"
 : > "$DOCKER_LOG"
-(cd "$root" && ./scripts/test-lease.sh ./scripts/test-service-compose.sh postgres 5432 sh -c 'sh -c '\''touch "$READY"; while [ ! -f "$RELEASE" ]; do sleep 0.1; done; touch "$EXITED"'\'' >/dev/null 2>&1 & while [ ! -f "$READY" ]; do sleep 0.1; done; exit 7') &
+(cd "$root" && ./scripts/test-lease.sh ./scripts/test-service-compose.sh postgres 5432 sh -c 'echo $$ > "$MAIN"; sh -c '\''touch "$READY"; while [ ! -f "$RELEASE" ]; do sleep 0.1; done; touch "$EXITED"'\'' >/dev/null 2>&1 & while [ ! -f "$READY" ]; do sleep 0.1; done; exit 7') &
 first=$!
 for _ in {1..100}; do [[ -f "$READY" ]] && break; sleep .1; done
 [[ -f "$READY" ]]
+main_pid=$(cat "$MAIN")
+for _ in {1..100}; do if ! kill -0 "$main_pid" 2>/dev/null; then break; fi; sleep .1; done
+if kill -0 "$main_pid" 2>/dev/null; then echo 'foreground command did not exit' >&2; exit 1; fi
 lease="$HOME/.local/state/test-service-leases/$(cat "$CHECK_LEASE")"
+if probe; then echo 'lease released while descendant still runs' >&2; exit 1; fi
+if grep -q ' down ' "$DOCKER_LOG"; then echo 'cleanup ran while descendant held lease' >&2; exit 1; fi
+touch "$RELEASE"
+for _ in {1..100}; do [[ -f "$EXITED" ]] && break; sleep .1; done
+[[ -f "$EXITED" ]]
 set +e
 wait "$first"
 status=$?
 set -e
 first=
 [[ $status == 7 ]]
-if probe; then echo 'lease released while descendant still runs' >&2; exit 1; fi
-touch "$RELEASE"
-for _ in {1..100}; do [[ -f "$EXITED" ]] && break; sleep .1; done
-[[ -f "$EXITED" ]]
-for _ in {1..100}; do if probe; then break; fi; sleep .1; done
+grep -qE -- "-p $(cat "$CHECK_LEASE") .* down -v --remove-orphans" "$DOCKER_LOG"
 probe
-unset READY RELEASE EXITED
+unset READY RELEASE EXITED MAIN
+
+# A successful command reports cleanup failure; a failed command keeps its status.
+for command_status in 0 7; do
+    : > "$DOCKER_LOG"
+    set +e
+    (cd "$root" && DOWN_STATUS=1 ./scripts/test-lease.sh ./scripts/test-service-compose.sh postgres 5432 sh -c "exit $command_status") > "$tmp/cleanup-error" 2>&1
+    status=$?
+    set -e
+    if [[ $command_status == 0 ]]; then [[ $status == 1 ]]; else [[ $status == 7 ]]; fi
+    grep -q 'cleanup failed; scheduled cleanup will retry' "$tmp/cleanup-error"
+    grep -q ' down ' "$DOCKER_LOG"
+done
+
+# Termination during startup and while the command runs cleans up the project.
+export READY="$tmp/ready"
+for phase in startup command; do
+    : > "$DOCKER_LOG"
+    find "$tmp/ready" -delete
+    if [[ $phase == startup ]]; then
+        (cd "$root" && BLOCK_UP=1 exec ./scripts/test-lease.sh ./scripts/test-service-compose.sh postgres 5432 true) &
+    else
+        (cd "$root" && exec ./scripts/test-lease.sh ./scripts/test-service-compose.sh postgres 5432 sh -c 'touch "$READY"; exec sleep 30') &
+    fi
+    first=$!
+    for _ in {1..100}; do [[ -f "$READY" ]] && break; sleep .1; done
+    [[ -f "$READY" ]]
+    kill -TERM "$first"
+    set +e
+    wait "$first"
+    status=$?
+    set -e
+    first=
+    [[ $status == 143 ]]
+    grep -qE -- "-p $(cat "$CHECK_LEASE") .* down -v --remove-orphans" "$DOCKER_LOG"
+done
 
 # Dry runs do not start services or create leases.
 : > "$DOCKER_LOG"
@@ -114,6 +164,7 @@ for target in test-postgres bench-pg-usage test-clickhouse; do
     esac
     grep -qE -- "-p $project .* -f docker-compose.test-lease.yml up -d --wait $service" "$DOCKER_LOG"
     grep -qE -- "-p $project .* port $service $port" "$DOCKER_LOG"
+    grep -qE -- "-p $project .* down -v --remove-orphans" "$DOCKER_LOG"
     grep -Fxq 'publish 127.0.0.1::5432 127.0.0.1::8123 127.0.0.1::9000' "$DOCKER_LOG"
 done
 
