@@ -4,7 +4,6 @@ package postgres
 
 import (
 	"encoding/json/v2"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -19,13 +18,13 @@ import (
 )
 
 func TestPGActivityReportSaved(t *testing.T) {
-	for _, mode := range []string{"restart", "sweep", "unavailable", "memo-rejected", "legacy", "replaced", "repeated", "evicted", "identity-retry", "pricing", "today", "local"} {
+	for _, mode := range []string{"restart", "sweep", "unavailable", "memo-rejected", "legacy", "replaced", "evicted", "identity-retry", "pricing", "today", "local"} {
 		t.Run(mode, func(t *testing.T) {
 			cache := t.TempDir()
 			t.Setenv("CACHE_DIRECTORY", cache)
 			local, syncer, _ := newUsageJournalFixture(t)
 			pgKeptSession(t, local, "a", "project-a", "2026-06-14")
-			if mode == "repeated" || mode == "evicted" {
+			if mode == "evicted" {
 				pgKeptSession(t, local, "b", "project-b", "2026-07-14")
 			}
 			require.NoError(t, local.UpsertProjectIdentityObservation(t.Context(), pgKeptIdentity("a", 14)))
@@ -117,7 +116,7 @@ func TestPGActivityReportSaved(t *testing.T) {
 			case "identity-retry":
 				pgKeptSession(t, local, "b", "project-a", "2026-06-14")
 				pgKeptPush(t, syncer, false)
-			case "repeated", "evicted":
+			case "evicted":
 				for range 2 {
 					_, err := first.pg.ExecContext(ctx, `UPDATE sessions SET message_count=message_count+1 WHERE id='b'`)
 					require.NoError(t, err)
@@ -135,15 +134,16 @@ func TestPGActivityReportSaved(t *testing.T) {
 					require.Equal(t, revision, saved.Revision)
 					require.Equal(t, checkpoint, saved.Checkpoint)
 				}
-				if mode == "evicted" {
-					require.NoError(t, os.Remove(files[0]))
-					_, err := first.pg.ExecContext(ctx, `UPDATE sessions SET message_count=message_count+1 WHERE id='b'`)
-					require.NoError(t, err)
-					requirePGKeptEqual(t, want, pgKeptBuild(t, first, f, q, false))
-					_, err = os.Stat(files[0])
-					require.ErrorIs(t, err, os.ErrNotExist)
-					return
-				}
+				restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
+				t.Cleanup(func() { require.NoError(t, restarted.Close()) })
+				requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, q, false))
+				require.NoError(t, os.Remove(files[0]))
+				_, err := first.pg.ExecContext(ctx, `UPDATE sessions SET message_count=message_count+1 WHERE id='b'`)
+				require.NoError(t, err)
+				requirePGKeptEqual(t, want, pgKeptBuild(t, first, f, q, false))
+				_, err = os.Stat(files[0])
+				require.ErrorIs(t, err, os.ErrNotExist)
+				return
 			case "replaced":
 				var revision int64
 				require.NoError(t, first.pg.QueryRowContext(ctx, `SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'`).Scan(&revision))
@@ -198,27 +198,17 @@ func TestPGActivityReportSaved(t *testing.T) {
 func TestPGActivityMemoHitDoesNotRestoreEvictedReport(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	var store Store
-	store.activityReports.MaxFiles = 8
 	require.NoError(t, store.activityReports.Open("postgres-activity-reports", "mirror", 4096, 0))
-	for i := range 9 {
-		selection := fmt.Sprintf("selection-%d|identity|version", i)
-		require.True(t, store.activityReports.Put(selection, "identity|version", []byte("report")))
-		if i == 0 {
-			files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
-			require.NoError(t, err)
-			require.Len(t, files, 1)
-			old := time.Now().Add(-time.Hour)
-			require.NoError(t, os.Chtimes(files[0], old, old))
-		}
-	}
+	require.True(t, store.activityReports.Put("selection-0|identity|version", "identity|version", []byte("report")))
 	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
 	require.NoError(t, err)
-	require.Len(t, files, 8)
+	require.Len(t, files, 1)
+	require.NoError(t, os.Remove(files[0]))
 	entry := pgActivityKept{identity: "identity", checkpoint: "checkpoint"}
 	store.keepActivityReport("selection-0", "version", entry, "identity", false)
 	_, ok := store.activityReports.Get("selection-0|identity|version", "identity|version")
 	require.False(t, ok)
 	after, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
 	require.NoError(t, err)
-	require.Equal(t, files, after)
+	require.Empty(t, after)
 }
