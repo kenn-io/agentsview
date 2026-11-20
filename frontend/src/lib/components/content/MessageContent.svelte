@@ -3,6 +3,7 @@
 import type { DbMessage as Message } from "../../api/generated/index.js";
   import type { DbCallTiming as CallTiming, DbTurnTiming as TurnTiming } from "../../api/generated/index.js";
   import { parseContent, enrichSegments } from "../../utils/content-parser.js";
+  import { isSkillInvocationMessage } from "../../utils/messages.js";
   import { formatTimestamp, formatTokenUsage } from "../../utils/format.js";
   import { formatDuration } from "../../utils/duration.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
@@ -77,13 +78,18 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     if (sessionAncestryMatches(s, all, (ancestor) => (sessions.view(ancestor).first_message ?? "").includes("<teammate-message"))) return "teammate";
     return "user";
   });
+  // A skill expansion is stored on role "user" but nobody typed it, so it
+  // drops the user label, icon, and colors.
+  let isSkillInvocation = $derived(isSkillInvocationMessage(message));
   let roleLabel = $derived.by(() => {
+    if (isSkillInvocation) return m.message_content_role_skill();
     if (!isUser) return m.message_content_role_assistant();
     if (isSubagentContext || sessionKind === "subagent") return m.message_content_role_agent();
     if (sessionKind === "teammate" || hasInlineTeammateMessage) return m.message_content_role_teammate();
     return m.message_content_role_user();
   });
   let roleIcon = $derived.by(() => {
+    if (isSkillInvocation) return "S";
     if (!isUser) return "A";
     if (isSubagentContext || sessionKind === "subagent") return "S";
     if (sessionKind === "teammate" || hasInlineTeammateMessage) return "T";
@@ -113,14 +119,14 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
       : m.message_content_code_collapsed();
   }
 
-  let showText = $derived(ui.isBlockVisible(isUser ? "user" : "assistant"));
-  let accentColor = $derived(isUser ? "var(--role-user-accent)" : "var(--role-assistant-accent)");
-  let accentForeground = $derived(isUser ? "var(--role-user-accent-foreground)" : "var(--role-assistant-accent-foreground)");
-  let roleInk = $derived(isUser ? "var(--role-user-ink)" : "var(--role-assistant-ink)");
-  let roleBg = $derived(isUser ? "var(--user-bg)" : "var(--assistant-bg)");
+  let showText = $derived(ui.isBlockVisible(isSkillInvocation ? "system" : isUser ? "user" : "assistant"));
+  let accentColor = $derived(isSkillInvocation ? "var(--accent-teal)" : isUser ? "var(--role-user-accent)" : "var(--role-assistant-accent)");
+  let accentForeground = $derived(isSkillInvocation ? "var(--accent-teal-foreground)" : isUser ? "var(--role-user-accent-foreground)" : "var(--role-assistant-accent-foreground)");
+  let roleInk = $derived(isSkillInvocation ? "var(--accent-teal-ink)" : isUser ? "var(--role-user-ink)" : "var(--role-assistant-ink)");
+  let roleBg = $derived(isUser && !isSkillInvocation ? "var(--user-bg)" : "var(--assistant-bg)");
   // Every layout draws the role rail at full strength, so the user/assistant
   // distinction reads the same in Default, Compact, Stream, and Skim.
-  let railColor = $derived(isUser ? "var(--role-user-accent)" : "var(--role-assistant-accent)");
+  let railColor = $derived(isSkillInvocation ? "var(--accent-teal)" : isUser ? "var(--role-user-accent)" : "var(--role-assistant-accent)");
   let pinned = $derived(pins.isPinned(message.id));
   let pinFeedback = $state("");
   let pinFailed = $state(false);
@@ -212,7 +218,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   }
 </script>
 
-<div class="message" class:is-user={isUser} class:compact style:border-left-color={railColor} style:background={roleBg}>
+<div class="message" class:is-user={isUser && !isSkillInvocation} class:compact style:border-left-color={railColor} style:background={roleBg}>
   <div class="message-header">
     <span class="role-icon" style:background={accentColor} style:color={accentForeground}>{roleIcon}</span>
     <span class="role-label" style:color={roleInk}>{roleLabel}</span>

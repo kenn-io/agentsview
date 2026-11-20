@@ -1,7 +1,11 @@
 import type { DbMessage as Message, DbToolCall as ToolCall } from "../api/generated/index.js";
 import type { BlockType } from "../stores/ui.svelte.js";
 import { LRUCache } from "./cache.js";
-import { isHookSuccessMessage, isSystemBoundaryMessage } from "./messages.js";
+import {
+  isHookSuccessMessage,
+  isSkillInvocationMessage,
+  isSystemBoundaryMessage,
+} from "./messages.js";
 
 export type SegmentType = "text" | "thinking" | "tool" | "code" | "skill";
 
@@ -541,6 +545,9 @@ export function hasVisibleSegments(msg: Message, isVisible: (type: BlockType) =>
   // the body here would let an unrelated toggle hide the card, and would tie
   // every boundary card to the "user" role it carries for analytics.
   if (isSystemBoundaryMessage(msg)) return isVisible("system");
+  // A skill expansion is a system row, so the system toggle owns it rather
+  // than the user toggle its role would otherwise select.
+  const skillInvocation = isSkillInvocationMessage(msg);
   const role: "user" | "assistant" = msg.role === "user" ? "user" : "assistant";
   const segs = enrichSegments(
     parseContent(msg.content, msg.has_tool_use, msg.id, msg.content_length),
@@ -548,10 +555,10 @@ export function hasVisibleSegments(msg: Message, isVisible: (type: BlockType) =>
   );
   // Empty messages (e.g. initial assistant streaming state) should
   // remain visible when their role is not filtered out.
-  if (segs.length === 0) return isVisible(role);
+  if (segs.length === 0) return isVisible(skillInvocation ? "system" : role);
   return segs.some((s) => {
     if (s.type === "text") return isVisible(role);
-    if (s.type === "skill") return isVisible(role);
+    if (s.type === "skill") return isVisible(skillInvocation ? "system" : role);
     return isVisible(s.type);
   });
 }

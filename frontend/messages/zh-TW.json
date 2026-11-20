@@ -281,6 +281,7 @@
   "message_content_role_agent": "Agent",
   "message_content_role_teammate": "隊友",
   "message_content_role_user": "使用者",
+  "message_content_role_skill": "Skill",
   "message_content_copy_message": "複製訊息",
   "message_content_copied_message": "訊息已複製",
   "message_content_copied": "已複製！",

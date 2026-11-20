@@ -973,6 +973,20 @@ describe("hasVisibleSegments", () => {
     expect(hasVisibleSegments(m, noUser)).toBe(true);
   });
 
+  it("skill invocation row answers to the system filter, not its user role", () => {
+    const m = makeMsg({
+      role: "user",
+      content: "[Skill: review]\nReferences are relative to /skills/review.\n[/Skill]",
+      is_system: true,
+      source_subtype: "skill_invocation",
+    });
+    const noSystem = visibilityFrom(new Set(["user", "assistant", "thinking", "tool", "code"]));
+    const noUser = visibilityFrom(new Set(["assistant", "thinking", "tool", "code", "system"]));
+
+    expect(hasVisibleSegments(m, noSystem)).toBe(false);
+    expect(hasVisibleSegments(m, noUser)).toBe(true);
+  });
+
   it("boundary card ignores the filters its body would parse into", () => {
     const body = "```sh\nexit 2\n```";
     const noCode = visibilityFrom(new Set(["user", "assistant", "thinking", "tool", "system"]));

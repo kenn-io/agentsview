@@ -1126,6 +1126,61 @@ describe("MessageList follow cancellation", () => {
     expect(document.querySelector(".system-boundary")).toBeNull();
   });
 
+  it("shows a skill invocation row as a collapsed skill block with its own label", async () => {
+    messages.messages = [
+      {
+        ...makeMessage(0),
+        role: "user",
+        content: "[Skill: review]\nReferences are relative to /skills/review.\n[/Skill]",
+        is_system: true,
+        source_type: "system",
+        source_subtype: "skill_invocation",
+      },
+      { ...makeMessage(1), role: "user", content: "check the diff" },
+    ];
+    messages.messageCount = 2;
+    setVirtualRows(2);
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    const rows = document.querySelectorAll(".message");
+    expect(rows).toHaveLength(2);
+    const skillRow = rows[0]!;
+    expect(skillRow.querySelector(".skill-label")?.textContent?.trim()).toBe("Skill: review");
+    expect(skillRow.querySelector(".skill-header")?.getAttribute("aria-expanded")).toBe("false");
+    expect(skillRow.querySelector(".skill-content")).toBeNull();
+    expect(skillRow.querySelector(".role-label")?.textContent?.trim()).toBe("Skill");
+    expect(skillRow.classList.contains("is-user")).toBe(false);
+    expect(document.querySelector(".system-boundary")).toBeNull();
+    expect(rows[1]!.querySelector(".role-label")?.textContent?.trim()).toBe("User");
+
+    ui.setBlockVisible("system", false);
+    await tick();
+    expect(document.querySelectorAll(".message")).toHaveLength(1);
+  });
+
+  it("keeps hiding system rows with an unknown subtype", async () => {
+    messages.messages = [
+      {
+        ...makeMessage(0),
+        role: "user",
+        content: "internal bookkeeping",
+        is_system: true,
+        source_subtype: "mystery_subtype",
+      },
+      makeMessage(1),
+    ];
+    messages.messageCount = 2;
+    setVirtualRows(2);
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    expect(document.body.textContent).not.toContain("internal bookkeeping");
+    expect(document.querySelector(".skill-block")).toBeNull();
+  });
+
   it("keeps a code-only message visible as a collapsed placeholder when Code is filtered", async () => {
     const content = ["```latex", "\\subsection{Deployment Considerations}", "```"].join("\n");
     messages.messages = [

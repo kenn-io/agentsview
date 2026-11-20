@@ -287,6 +287,7 @@
   "message_content_role_agent": "エージェント",
   "message_content_role_teammate": "チームメイト",
   "message_content_role_user": "ユーザー",
+  "message_content_role_skill": "スキル",
   "message_content_copy_message": "メッセージをコピーする",
   "message_content_copied_message": "コピーされたメッセージ",
   "message_content_copied": "コピーしました！",
