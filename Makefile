@@ -378,13 +378,6 @@ test-api-version: pricing-snapshot ensure-embed-dir
 test-short: pricing-snapshot ensure-embed-dir
 	go test $(GO_TEST_P_FLAG) -tags "fts5" ./... -short
 
-.PHONY: test-litellm-snapshot test-service-lease
-test-litellm-snapshot:
-	go test ./internal/pricing/cmd/litellm-snapshot -run '^TestRestoreSnapshotFile' -count=1
-
-test-service-lease:
-	bash scripts/test-lease_test.sh
-
 # CI test runner. Prints a compact log, writes go test JSON events to
 # gotestsum/<suite>.json for the CI flake monitor, and reruns failed tests up
 # to twice, recording the reruns in gotestsum/<suite>-reruns.txt.

@@ -8,13 +8,8 @@ if ! command -v python3 >/dev/null 2>&1; then
     echo 'python3 is required; use postgres-up or clickhouse-up for a manual service' >&2
     exit 2
 fi
-if [ -z "${HOME:-}" ]; then
-    echo 'HOME must be set to create a test service lease' >&2
-    exit 2
-fi
 exec python3 - "$@" <<'PY'
 import os
-import shlex
 import signal
 import subprocess
 import sys
@@ -88,8 +83,7 @@ with lock:
         cleanup_env = os.environ.copy()
         cleanup_env.update(cleanup_vars)
         if subprocess.call(cleanup, env=cleanup_env, start_new_session=True) != 0:
-            assignments = " ".join(f"{key}={shlex.quote(value)}" for key, value in cleanup_vars.items())
-            print(f"cleanup failed; run from the repository root: {assignments} {shlex.join(cleanup)}", file=sys.stderr)
+            print(f"cleanup failed; Compose project {lease} may still be running", file=sys.stderr)
             if status == 0:
                 status = 1
         else:

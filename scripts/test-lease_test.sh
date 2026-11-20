@@ -28,11 +28,9 @@ case " $* " in
     [ "$2" = -p ] && [ "$3" = "$TEST_SERVICE_LEASE" ] || exit 1
     case " $* " in
       *' up -d --wait postgres '*)
-        [ "${TEST_PG_PUBLISH-}" = 127.0.0.1::5432 ] && [ -z "${TEST_CH_HTTP_PUBLISH-}" ] && [ -z "${TEST_CH_NATIVE_PUBLISH-}" ] || exit 1
-        printf 'publish postgres %s\n' "$TEST_PG_PUBLISH" >> "$DOCKER_LOG" ;;
+        [ "${TEST_PG_PUBLISH-}" = 127.0.0.1::5432 ] && [ -z "${TEST_CH_HTTP_PUBLISH-}" ] && [ -z "${TEST_CH_NATIVE_PUBLISH-}" ] || exit 1 ;;
       *' up -d --wait clickhouse '*)
-        [ -z "${TEST_PG_PUBLISH-}" ] && [ "${TEST_CH_HTTP_PUBLISH-}" = 127.0.0.1::8123 ] && [ "${TEST_CH_NATIVE_PUBLISH-}" = 127.0.0.1::9000 ] || exit 1
-        printf 'publish clickhouse %s %s\n' "$TEST_CH_HTTP_PUBLISH" "$TEST_CH_NATIVE_PUBLISH" >> "$DOCKER_LOG" ;;
+        [ -z "${TEST_PG_PUBLISH-}" ] && [ "${TEST_CH_HTTP_PUBLISH-}" = 127.0.0.1::8123 ] && [ "${TEST_CH_NATIVE_PUBLISH-}" = 127.0.0.1::9000 ] || exit 1 ;;
     esac
     lease-held "$HOME/.local/state/test-service-leases/$TEST_SERVICE_LEASE" || exit 1
     printf '%s\n' "$TEST_SERVICE_LEASE" > "$CHECK_LEASE"
@@ -111,7 +109,7 @@ touch "$EXITED"
 CHILD
 chmod +x "$DESCENDANT"
 : > "$DOCKER_LOG"
-(cd "$root" && ./scripts/test-lease.sh ./scripts/test-service-compose.sh postgres 5432 sh -c 'echo $$ > "$MAIN"; "$DESCENDANT" >/dev/null 2>&1 & while [ ! -f "$READY" ]; do sleep 0.1; done; exit 7') &
+(cd "$root" && TEST_PG_PUBLISH=invalid TEST_CH_HTTP_PUBLISH=invalid TEST_CH_NATIVE_PUBLISH=invalid ./scripts/test-lease.sh ./scripts/test-service-compose.sh postgres 5432 sh -c 'echo $$ > "$MAIN"; "$DESCENDANT" >/dev/null 2>&1 & while [ ! -f "$READY" ]; do sleep 0.1; done; exit 7') &
 first=$!
 for _ in {1..100}; do [[ -f "$READY" ]] && break; sleep .1; done
 [[ -f "$READY" ]]
@@ -149,12 +147,12 @@ unset READY RELEASE EXITED MAIN SHUTDOWN_RELEASE SHUTDOWN_STARTED SHUTDOWN_PID S
 for command_status in 0 7; do
     : > "$DOCKER_LOG"
     set +e
-    (cd "$root" && TEST_PG_PUBLISH=invalid TEST_CH_HTTP_PUBLISH=invalid TEST_CH_NATIVE_PUBLISH=invalid DOWN_STATUS=1 ./scripts/test-lease.sh ./scripts/test-service-compose.sh postgres 5432 sh -c "exit $command_status") > "$tmp/cleanup-error" 2>&1
+    (cd "$root" && DOWN_STATUS=1 ./scripts/test-lease.sh ./scripts/test-service-compose.sh postgres 5432 sh -c "exit $command_status") > "$tmp/cleanup-error" 2>&1
     status=$?
     set -e
     if [[ $command_status == 0 ]]; then [[ $status == 1 ]]; else [[ $status == 7 ]]; fi
     project=$(cat "$CHECK_LEASE")
-    grep -Fxq "cleanup failed; run from the repository root: TEST_SERVICE_LEASE=$project TEST_PG_PUBLISH=127.0.0.1::5432 TEST_CH_HTTP_PUBLISH=127.0.0.1::8123 TEST_CH_NATIVE_PUBLISH=127.0.0.1::9000 docker compose -p $project -f docker-compose.test.yml -f docker-compose.test-lease.yml down -v --remove-orphans" "$tmp/cleanup-error"
+    grep -Fxq "cleanup failed; Compose project $project may still be running" "$tmp/cleanup-error"
     grep -q ' down ' "$DOCKER_LOG"
     [[ -f "$HOME/.local/state/test-service-leases/$(cat "$CHECK_LEASE")" ]]
 done
@@ -239,6 +237,8 @@ for phase in startup command; do
     first=
     [[ $status == 143 ]]
     grep -qE -- "-p $(cat "$CHECK_LEASE") .* down -v --remove-orphans" "$DOCKER_LOG"
+    lease="$HOME/.local/state/test-service-leases/$(cat "$CHECK_LEASE")"
+    [[ ! -e "$lease" ]]
 done
 
 # Dry runs do not start services.
@@ -271,16 +271,15 @@ for target in test-postgres bench-pg-usage test-clickhouse; do
             grep -Fxq 'STANDBY_FROM_MAKE=' "$tmp/make-url"
             grep -Fxq 'PG_FROM_MAKE=' "$tmp/make-url"
             grep -Fxq 'CH_FROM_MAKE=clickhouse://127.0.0.1:49153/default' "$tmp/make-url"
-            grep -Fxq 'publish clickhouse 127.0.0.1::8123 127.0.0.1::9000' "$DOCKER_LOG" ;;
+            ;;
         test-postgres)
             service=postgres port=5432
             grep -Fxq 'STANDBY_FROM_MAKE=' "$tmp/make-url"
             grep -Fxq 'CH_FROM_MAKE=' "$tmp/make-url"
             grep -Fxq 'PG_FROM_MAKE=postgres://agentsview_test:agentsview_test_password@127.0.0.1:49153/agentsview_test?sslmode=disable' "$tmp/make-url"
-            grep -Fxq 'publish postgres 127.0.0.1::5432' "$DOCKER_LOG" ;;
+            ;;
         bench-pg-usage)
-            service=postgres port=5432
-            grep -Fxq 'publish postgres 127.0.0.1::5432' "$DOCKER_LOG" ;;
+            service=postgres port=5432 ;;
     esac
     grep -qE -- "-p $project .* -f docker-compose.test-lease.yml up -d --wait $service" "$DOCKER_LOG"
     grep -qE -- "-p $project .* port $service $port" "$DOCKER_LOG"
@@ -296,13 +295,6 @@ status=$?
 set -e
 [[ $status == 2 && ! -s "$DOCKER_LOG" ]]
 grep -q 'python3 is required' "$tmp/no-python.out"
-
-set +e
-HOME= "$root/scripts/test-lease.sh" true >"$tmp/home-error" 2>&1
-status=$?
-set -e
-[[ $status == 2 && ! -s "$DOCKER_LOG" ]]
-grep -q 'HOME must be set' "$tmp/home-error"
 
 # A loose lease directory is rejected before Docker starts.
 chmod 755 "$HOME/.local/state/test-service-leases"
