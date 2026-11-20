@@ -754,3 +754,20 @@ func TestFrustrationFillShortDeadlineSharedSignals(t *testing.T) {
 		require.Equal(t, 1, row.FrustrationMarkerCount)
 	}
 }
+
+func TestFrustrationFillIncludesSessionsWithoutDates(t *testing.T) {
+	f := newFrustrationFixture(t, "agentsview")
+	_, err := f.pg.ExecContext(f.ctx, `UPDATE sessions SET started_at=NULL, created_at=NULL WHERE id='one'`)
+	require.NoError(t, err)
+	store := f.open(t)
+	dash, rest, err := store.staleFrustrationSessions(f.ctx, f.versionColumn)
+	require.NoError(t, err)
+	require.NotContains(t, dash, "one")
+	require.Contains(t, rest, "one")
+	stop := store.StartFrustrationFill(f.ctx)
+	defer stop()
+	require.Eventually(t, func() bool {
+		var count int
+		return f.pg.QueryRowContext(f.ctx, `SELECT count(*) FROM session_frustration_counts WHERE marker_count=1`).Scan(&count) == nil && count == 2
+	}, 20*time.Second, 50*time.Millisecond)
+}
