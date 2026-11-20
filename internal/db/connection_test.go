@@ -135,6 +135,64 @@ func TestQuickReadKeepsAReaderWhileAnalyticsFillThePool(t *testing.T) {
 	assert.EqualValues(t, 1, probe.SessionCount)
 }
 
+func TestSearchWaitsForBulkReadAndLeavesReaderForQuickRead(t *testing.T) {
+	database := testDB(t)
+	insertSession(t, database, "summary", "project")
+	insertMessages(t, database, userMsg("summary", 0, "searchable text"))
+
+	releases := make([]func(), 0, bulkReadSlots)
+	connections := make([]*sql.Conn, 0, bulkReadSlots)
+	t.Cleanup(func() {
+		for _, conn := range connections {
+			assert.NoError(t, conn.Close())
+		}
+		for _, release := range releases {
+			release()
+		}
+	})
+	for range bulkReadSlots {
+		release, err := database.acquireBulkRead(t.Context())
+		require.NoError(t, err)
+		releases = append(releases, release)
+		conn, err := database.rawReader().Conn(t.Context())
+		require.NoError(t, err)
+		connections = append(connections, conn)
+	}
+
+	type searchResult struct {
+		page SearchPage
+		err  error
+	}
+	result := make(chan searchResult, 1)
+	go func() {
+		page, err := database.Search(t.Context(), SearchFilter{Query: "searchable"})
+		result <- searchResult{page, err}
+	}()
+	select {
+	case got := <-result:
+		t.Fatalf("search returned while bulk slots were occupied: %v", got.err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	quickCtx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	session, err := database.GetSession(quickCtx, "summary")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+
+	require.NoError(t, connections[0].Close())
+	connections = connections[1:]
+	releases[0]()
+	releases = releases[1:]
+	select {
+	case got := <-result:
+		require.NoError(t, got.err)
+		require.Len(t, got.page.Results, 1)
+		assert.Equal(t, "summary", got.page.Results[0].SessionID)
+	case <-time.After(2 * time.Second):
+		t.Fatal("search did not resume after a bulk slot was released")
+	}
+}
+
 func TestAcquireBulkReadHonorsContext(t *testing.T) {
 	database := &DB{}
 	ctx, cancel := context.WithCancel(t.Context())
