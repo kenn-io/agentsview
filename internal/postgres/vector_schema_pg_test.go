@@ -246,11 +246,8 @@ func TestEnsureSchemaFastPathCreatesVectorTables(t *testing.T) {
 	assert.True(t, tableExistsPG(t, pg, "vector_push_state"))
 }
 
-// TestVectorHalfvecGate pins the availability gate's two observable shapes:
-// on a server with halfvec available the gate reports available (empty reason)
-// and the halfvec probe returns the type plus a version; on a server without
-// pgvector the gate degrades to a reason instead of an error, which is what
-// keeps an old or missing extension from hard-failing `pg push`.
+// TestVectorHalfvecGate checks that supported extensions need no upgrade and
+// that missing or unsupported versions disable vector writes and search.
 func TestVectorHalfvecGate(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGURL(t)
@@ -286,6 +283,15 @@ func TestVectorHalfvecGate(t *testing.T) {
 		return
 	}
 	assert.NotEmpty(t, unavailable)
+	var pushResult storage.VectorPushResult
+	skipped, err := (&Sync{pg: pg}).prepareVectorBaseSchema(ctx, &pushResult)
+	require.NoError(t, err)
+	assert.True(t, skipped)
+	assert.True(t, pushResult.Skipped)
+	assert.Equal(t, unavailable, pushResult.SkippedReason)
+	if version != "" {
+		assert.Contains(t, pushResult.SkippedReason, version)
+	}
 	store, err := NewStore(ctx, pgURL, vectorSchemaTestSchema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
