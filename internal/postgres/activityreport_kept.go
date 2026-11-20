@@ -139,16 +139,6 @@ func (s *Store) activityKeptVersion(ctx context.Context, pricingDigest string) (
 	if err != nil {
 		return "", fmt.Errorf("reading kept activity version: %w", err)
 	}
-	var tracking bool
-	if err := s.pg.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM sync_metadata WHERE key='activity_tool_result_tracking' AND value='1')`).Scan(&tracking); err != nil {
-		if isUndefinedTable(err) || isInsufficientPrivilege(err) {
-			return "", nil
-		}
-		return "", err
-	}
-	if !tracking {
-		return "", nil
-	}
 	return fmt.Sprintf("%d|%s|%s", oid, pricingDigest, pricing.ConfiguredAliasesDigest()), nil
 }
 

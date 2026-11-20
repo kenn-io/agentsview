@@ -20,44 +20,6 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-func TestPGSavedActivityReportToolResultChange(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	local, syncer, _ := newUsageJournalFixture(t)
-	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
-	pgKeptPush(t, syncer, false)
-	target, directory := testPGURL(t), t.TempDir()
-	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
-	store := openPGActivityInputStore(t, target, syncer.schema, directory)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	pgKeptBuild(t, store, f, q, true)
-	_, err := syncer.pg.ExecContext(t.Context(), `INSERT INTO tool_result_events
-		(session_id, tool_call_message_ordinal, call_index, tool_use_id, source, status, content, timestamp, event_index)
-		VALUES ('a', 1, 0, 'call', 'tool_execution', 'completed', '', '2026-06-14T11:00:00Z', 0)`)
-	require.NoError(t, err)
-	got := pgKeptBuild(t, store, f, q, true)
-	restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
-	t.Cleanup(func() { require.NoError(t, restarted.Close()) })
-	requirePGKeptEqual(t, got, pgKeptBuild(t, restarted, f, q, true))
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	fresh := openPGActivityInputStore(t, target, syncer.schema, directory)
-	t.Cleanup(func() { require.NoError(t, fresh.Close()) })
-	requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), got)
-	for _, query := range []string{
-		`UPDATE tool_result_events SET timestamp='2026-06-14T12:00:00Z', status='error' WHERE session_id='a'`,
-		`DELETE FROM tool_result_events WHERE session_id='a'`,
-	} {
-		_, err := syncer.pg.ExecContext(t.Context(), query)
-		require.NoError(t, err)
-		got = pgKeptBuild(t, store, f, q, true)
-		requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), got)
-	}
-	_, err = syncer.pg.ExecContext(t.Context(), `DELETE FROM sync_metadata WHERE key='activity_tool_result_tracking'; DROP FUNCTION mark_activity_tool_result_events() CASCADE`)
-	require.NoError(t, err)
-	pgKeptBuild(t, store, f, q, true)
-	require.True(t, ensureUsageChangeJournalPG(t.Context(), syncer.pg))
-	pgKeptBuild(t, store, f, q, true)
-}
-
 func TestPGSavedActivityReportRespectsChangedRowPolicy(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	local, syncer, _ := newUsageJournalFixture(t)

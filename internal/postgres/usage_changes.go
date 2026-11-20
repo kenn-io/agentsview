@@ -87,10 +87,9 @@ var dropUsageChangeJournalSQL = func() string {
 	ddl.WriteString(`DROP TABLE IF EXISTS usage_session_changes;
  DROP FUNCTION IF EXISTS stamp_usage_change();
  DROP FUNCTION IF EXISTS checkpoint_usage_history() CASCADE;
- DROP FUNCTION IF EXISTS mark_activity_tool_result_events() CASCADE;
  DO $cleanup$ BEGIN
  IF to_regclass('sync_metadata') IS NOT NULL THEN
-     DELETE FROM sync_metadata WHERE key LIKE 'usage_history_checkpoint:%' OR key IN ('usage_change_revision', 'usage_change_journal_lock', 'usage_change_journal_version', 'usage_account_revision', 'usage_history_token', 'activity_tool_result_tracking', 'dashboard_common', 'dashboard_tools', 'dashboard_velocity', 'dashboard_signals', 'dashboard_scope');
+     DELETE FROM sync_metadata WHERE key LIKE 'usage_history_checkpoint:%' OR key IN ('usage_change_revision', 'usage_change_journal_lock', 'usage_change_journal_version', 'usage_account_revision', 'usage_history_token', 'dashboard_common', 'dashboard_tools', 'dashboard_velocity', 'dashboard_signals', 'dashboard_scope');
  END IF;
  END $cleanup$;`)
 	for _, table := range usageChangeTablesPG {
@@ -141,47 +140,8 @@ func ensureUsageChangeJournalPG(ctx context.Context, pg *sql.DB) (ok bool) {
 	if err != nil {
 		return
 	}
-	err = installActivityToolResultTrackingPG(ctx, tx)
-	if err != nil {
-		return
-	}
 	err = tx.Commit()
 	return
-}
-
-func installActivityToolResultTrackingPG(ctx context.Context, tx *sql.Tx) error {
-	var version string
-	var installed bool
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT value FROM sync_metadata WHERE key='usage_change_journal_version'), ''), EXISTS (SELECT 1 FROM sync_metadata WHERE key='activity_tool_result_tracking' AND value='1')`).Scan(&version, &installed); err != nil || installed {
-		return err
-	}
-	if version != strconv.Itoa(usageChangeJournalVersionPG) {
-		return nil
-	}
-	if _, err := tx.ExecContext(ctx, `LOCK TABLE tool_result_events, usage_session_changes IN SHARE ROW EXCLUSIVE MODE`); err != nil {
-		return err
-	}
-	var schema string
-	if err := tx.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {
-		return err
-	}
-	quoted, err := quoteIdentifier(schema)
-	if err != nil {
-		return err
-	}
-	var ddl strings.Builder
-	fmt.Fprintf(&ddl, `CREATE OR REPLACE FUNCTION mark_activity_tool_result_events() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
- SET search_path = pg_catalog, %s, pg_temp AS $journal$%s$journal$;
- REVOKE ALL ON FUNCTION mark_activity_tool_result_events() FROM PUBLIC;`, quoted, fmt.Sprintf(markUsageChangeFunctionBodyPG, `"session_id"`, "true", "*"))
-	for _, trigger := range []struct{ event, referencing string }{
-		{"INSERT", "NEW TABLE AS new_rows"}, {"UPDATE", "OLD TABLE AS old_rows NEW TABLE AS new_rows"}, {"DELETE", "OLD TABLE AS old_rows"},
-	} {
-		fmt.Fprintf(&ddl, "CREATE TRIGGER trg_activity_tool_result_%s AFTER %s ON tool_result_events REFERENCING %s FOR EACH STATEMENT EXECUTE FUNCTION mark_activity_tool_result_events();\n", strings.ToLower(trigger.event), trigger.event, trigger.referencing)
-	}
-	ddl.WriteString(`UPDATE sync_metadata SET value=pg_catalog.gen_random_uuid()::text WHERE key='usage_history_token';
- INSERT INTO sync_metadata(key,value) VALUES('activity_tool_result_tracking','1');`)
-	_, err = tx.ExecContext(ctx, ddl.String())
-	return err
 }
 
 func installUsageAccountRevisionPG(ctx context.Context, tx *sql.Tx) error {
