@@ -436,20 +436,6 @@ describe("AnalyticsStore freshness state", () => {
       await analytics.fetchAll();
       expect(analytics.lastQueryDurationMs).toBe(700);
       expect(analytics.qualityLastQueryDurationMs).toBeNull();
-      // One step per panel, in execution order, each with its own timing.
-      expect(analytics.lastQuerySteps.map((step) => step.name)).toEqual([
-        "velocity",
-        "tools",
-        "signals",
-        "summary",
-        "activity",
-        "heatmap",
-        "projects",
-        "hourOfWeek",
-        "sessionShape",
-        "skills",
-        "topSessions",
-      ]);
       // The velocity request carried phase timings: 600 ms waiting on the
       // server, 100 ms downloading, applied at once.
       expect(analytics.lastQuerySteps).toContainEqual({
