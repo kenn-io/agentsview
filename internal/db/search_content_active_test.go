@@ -237,6 +237,34 @@ func TestSearchContentActivityCandidateExpansion(t *testing.T) {
 	}
 }
 
+func TestSearchContentDateCandidateExpansion(t *testing.T) {
+	d := testDB(t)
+	messages := make([]Message, 200)
+	for i := range messages {
+		messages[i] = Message{Ordinal: i, Role: "user", Content: "needle"}
+	}
+	seedUnitSession(t, d, "old", func(s *Session) { s.Project = "project-a" }, messages)
+	seedSearchSession(t, d, "recent", "project-a", [][2]string{{"user", "needle"}})
+	_, err := d.getWriter().Exec(t.Context(), "UPDATE sessions SET ended_at = CASE id WHEN 'old' THEN '2024-01-01T00:00:00Z' ELSE '2024-06-15T00:00:00Z' END")
+	require.NoError(t, err)
+	for _, mode := range []string{"semantic", "hybrid"} {
+		t.Run(mode, func(t *testing.T) {
+			hits := make([]VectorHit, 200, 201)
+			for i := range hits {
+				hits[i] = VectorHit{SessionID: "old", Ordinal: i, OrdinalStart: i, OrdinalEnd: i}
+			}
+			hits = append(hits, VectorHit{SessionID: "recent", Ordinal: 0})
+			searcher := &activityVectorSearcher{hits: hits}
+			d.SetVectorSearcher(searcher)
+			page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "absent keyword", Mode: mode, Limit: 1, DateFrom: "2024-06-01"})
+			require.NoError(t, err)
+			require.Len(t, page.Matches, 1)
+			assert.Equal(t, "recent", page.Matches[0].SessionID)
+			assert.Equal(t, []int{200, 400}, searcher.limits)
+		})
+	}
+}
+
 func TestSelectSurvivingVectorHitsErrors(t *testing.T) {
 	failure := errors.New("search failed")
 	for _, tc := range []struct {
