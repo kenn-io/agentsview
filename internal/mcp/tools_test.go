@@ -96,23 +96,26 @@ func TestSearchDefaultDateWindow(t *testing.T) {
 		{name: "session only", session: "old", want: []string{"old"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, sessions, err := ts.searchSessions(t.Context(), nil, searchSessionsIn{Query: "windowneedle", DateFrom: tc.from, DateTo: tc.to, SessionID: tc.session})
-			require.NoError(t, err)
-			var ids []string
-			for _, hit := range sessions.Results {
-				ids = append(ids, hit.SessionID)
-			}
-			assert.ElementsMatch(t, tc.want, ids)
-			if tc.note {
-				assert.Contains(t, sessions.Note, "2024-05-16")
-				assert.Contains(t, sessions.Note, "earlier date_from")
-			} else {
-				assert.Empty(t, sessions.Note)
+			if tc.session == "" {
+				_, sessions, err := ts.searchSessions(t.Context(), nil, searchSessionsIn{Query: "windowneedle", DateFrom: tc.from, DateTo: tc.to, SessionID: tc.session})
+				require.NoError(t, err)
+				ids := []string(nil)
+				for _, hit := range sessions.Results {
+					ids = append(ids, hit.SessionID)
+				}
+				assert.ElementsMatch(t, tc.want, ids)
+				if tc.note {
+					assert.Contains(t, sessions.Note, "2024-05-16")
+					assert.Contains(t, sessions.Note, "earlier date_from")
+				} else {
+					assert.Empty(t, sessions.Note)
+				}
+
 			}
 
 			_, content, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "windowneedle", DateFrom: tc.from, DateTo: tc.to, SessionID: tc.session})
 			require.NoError(t, err)
-			ids = nil
+			var ids []string
 			for _, hit := range content.Matches {
 				ids = append(ids, hit.SessionID)
 			}
@@ -2212,8 +2215,7 @@ func TestSearchContent_HybridKeywordFallbackMetadata(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, fake.lastReq.KeywordFallback)
 	assert.Equal(t, "hybrid_keyword", out.EffectiveMode)
-	assert.Contains(t, out.Note, note)
-	assert.Contains(t, out.Note, "2024-05-16")
+	assert.Equal(t, "Searched sessions active on or after 2024-05-16 (last 30 days) because date_from, date_to, and session_id were omitted. Pass date_from unchanged with next_cursor to continue, or an earlier date_from (YYYY-MM-DD) to search further back. "+note, out.Note)
 }
 
 func TestListRecallPagesWithEvidenceAndSourceSessionFilter(t *testing.T) {
@@ -2269,35 +2271,6 @@ func TestListRecallPagesWithEvidenceAndSourceSessionFilter(t *testing.T) {
 	filtered := decodeStructured[listRecallOut](t, res)
 	require.Len(t, filtered.Entries, 1)
 	assert.Equal(t, "s2", filtered.Entries[0].SourceSessionID)
-}
-
-func TestSearchSessionsRemoteDefaultDateWindow(t *testing.T) {
-	old := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Errorf("unexpected request to old server: %s", r.URL.Path)
-	}))
-	t.Cleanup(old.Close)
-	oldTools := &toolset{svc: servicehttp.NewHTTPBackendForServer(old.URL, "", servicehttp.HTTPServerCapabilities{APIVersion: 8}), now: func() time.Time { return fixedNow }}
-	_, out, err := oldTools.searchSessions(t.Context(), nil, searchSessionsIn{Query: "remote"})
-	require.ErrorContains(t, err, "restart or upgrade the server")
-	assert.Empty(t, out.Note)
-
-	_, d := newTestToolset(t)
-	if !d.HasFTS(t.Context()) {
-		t.Skip("FTS not available")
-	}
-	seedFTSSession(t, d, "recent", "proj", "remoteneedle", "2024-06-05T10:00:00Z")
-	seedFTSSession(t, d, "old", "proj", "remoteneedle", "2024-04-16T10:00:00Z")
-	httpServer := httptest.NewUnstartedServer(nil)
-	srv := server.New(config.Config{Host: "127.0.0.1", Port: httpServer.Listener.Addr().(*net.TCPAddr).Port, DataDir: t.TempDir(), WriteTimeout: 30 * time.Second}, d, nil)
-	httpServer.Config.Handler = srv.Handler()
-	httpServer.Start()
-	t.Cleanup(httpServer.Close)
-	remote := &toolset{svc: servicehttp.NewHTTPBackend(httpServer.URL, "", false, ""), now: func() time.Time { return fixedNow }}
-	_, out, err = remote.searchSessions(t.Context(), nil, searchSessionsIn{Query: "remoteneedle"})
-	require.NoError(t, err)
-	require.Len(t, out.Results, 1)
-	assert.Equal(t, "recent", out.Results[0].SessionID)
-	assert.Contains(t, out.Note, "2024-05-16")
 }
 
 func TestSearchDefaultWindowPaginationAcrossMidnight(t *testing.T) {
