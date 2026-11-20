@@ -158,7 +158,7 @@ func TestSubstringSearchesAndAnalyticsCanReadTogether(t *testing.T) {
 		connections = append(connections, conn)
 		var once sync.Once
 		require.NoError(t, conn.Raw(func(raw any) error {
-			raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(func(op int, _, _, _ string) int {
+			raw.(*diagnosticReaderConn).SQLiteConn.RegisterAuthorizer(func(op int, _, _, _ string) int {
 				if op == sqlite3.SQLITE_READ {
 					once.Do(func() {
 						started <- struct{}{}
