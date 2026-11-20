@@ -819,7 +819,7 @@ func (b *httpBackend) Search(
 		q.DateTo = &runtime.Date{Time: parsedDateTo}
 	}
 	if req.DateFrom != "" || req.DateTo != "" {
-		if err := b.requireAPIVersion(ctx, 9, "session-search date filters"); err != nil {
+		if err := b.requireAPIVersion(ctx, service.SessionSearchDateAPIVersion, "session-search date filters"); err != nil {
 			return nil, err
 		}
 	}
