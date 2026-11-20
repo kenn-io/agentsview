@@ -2604,10 +2604,6 @@ func (s *Store) GetAnalyticsTopSessions(
 func (s *Store) GetAnalyticsSignals(
 	ctx context.Context, f db.AnalyticsFilter,
 ) (db.SignalsAnalyticsResponse, error) {
-	// Shared loads have their own deadline, so short requests must load directly.
-	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < 2*frustrationJoinWait {
-		return s.loadAnalyticsSignals(ctx, f)
-	}
 	return keptAnalytics(ctx, s, "signals", f, s.loadAnalyticsSignals)
 }
 
@@ -2913,7 +2909,6 @@ func (s *Store) populateFrustrationMarkers(
 		memo.Store(generation, id, version, counts[id])
 	}
 	if s.DB() != nil && !s.hostedRelations {
-		s.runtimeState().frustrationFill.removePending(scannedVersions)
 		if err := s.storeFrustrationCountsForRead(ctx, scannedVersions, counts, versionColumn); err != nil && !isUndefinedTable(err) && !IsReadOnlyError(err) {
 			log.Printf("storing frustration counts: %v", err)
 		}

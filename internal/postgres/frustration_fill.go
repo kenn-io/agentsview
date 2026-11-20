@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"log"
-	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -16,18 +15,8 @@ const frustrationJoinWait = 5 * time.Second
 
 type frustrationChunk struct {
 	ids      []string
-	versions map[string]string
 	done     chan struct{}
 	complete bool
-}
-
-func (state *frustrationFillState) removePending(versions map[string]string) {
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	maps.DeleteFunc(versions, func(id, version string) bool {
-		chunk := state.pending[id]
-		return chunk != nil && chunk.versions[id] == version
-	})
 }
 
 type frustrationFillState struct {
@@ -47,17 +36,8 @@ func (state *frustrationFillState) release(chunk *frustrationChunk) {
 		delete(state.pending, id)
 	}
 	chunk.ids = nil
-	chunk.versions = nil
 	chunk.complete = true
 	close(chunk.done)
-}
-
-// frustrationJoinTimeout caps the join at half the caller's remaining time.
-func frustrationJoinTimeout(ctx context.Context) time.Duration {
-	if deadline, ok := ctx.Deadline(); ok {
-		return min(frustrationJoinWait, time.Until(deadline)/2)
-	}
-	return frustrationJoinWait
 }
 
 // joinFrustrationFill waits only for chunks fully covered by the request.
@@ -94,8 +74,7 @@ func (s *Store) joinFrustrationFill(ctx context.Context, ids []string) bool {
 		}
 	}
 	state.mu.Unlock()
-	// Leave the rest of the request's time for its own scan.
-	waitCtx, cancel := context.WithTimeout(ctx, frustrationJoinTimeout(ctx))
+	waitCtx, cancel := context.WithTimeout(ctx, frustrationJoinWait)
 	defer cancel()
 	for _, wait := range waits {
 		select {
@@ -133,9 +112,6 @@ func (s *Store) fillFrustrationCounts(ctx context.Context, ids []string, column 
 		chunkCtx, cancel := context.WithTimeout(ctx, frustrationFillChunkTimeout)
 		counts, versions, err := s.scanFrustrationCounts(chunkCtx, chunk.ids, column)
 		if err == nil {
-			state.mu.Lock()
-			chunk.versions = versions
-			state.mu.Unlock()
 			err = s.storeFrustrationCounts(chunkCtx, versions, counts, column)
 		}
 		cancel()

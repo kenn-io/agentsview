@@ -74,14 +74,12 @@ func (s *Store) storeFrustrationCounts(ctx context.Context, versions map[string]
 		tokens = append(tokens, version)
 		values = append(values, int32(counts[id]))
 	}
-	// A blocked write must not replace a count saved after its snapshot.
 	_, err := s.DB().ExecContext(ctx, `INSERT INTO session_frustration_counts (session_id, session_version, rules_version, marker_count)
         SELECT t.id, t.version, $4, t.count FROM unnest($1::text[], $2::text[], $3::integer[]) AS t(id, version, count)
         JOIN sessions s ON s.id = t.id AND `+frustrationSessionVersion("s."+versionColumn)+` = t.version
         ORDER BY t.id
         ON CONFLICT (session_id) DO UPDATE SET session_version = EXCLUDED.session_version, rules_version = EXCLUDED.rules_version, marker_count = EXCLUDED.marker_count
-        WHERE session_frustration_counts.rules_version <= EXCLUDED.rules_version
-          AND session_frustration_counts.session_version IS NOT DISTINCT FROM (SELECT prior.session_version FROM session_frustration_counts prior WHERE prior.session_id = EXCLUDED.session_id)`, ids, tokens, values, frustrationMarkerRulesVersion)
+        WHERE session_frustration_counts.rules_version <= EXCLUDED.rules_version`, ids, tokens, values, frustrationMarkerRulesVersion)
 	if err != nil {
 		return fmt.Errorf("writing frustration counts: %w", err)
 	}
@@ -141,6 +139,6 @@ func (s *Store) staleFrustrationSessions(ctx context.Context, versionColumn stri
 
 func (s *Store) canFillFrustrationCounts(ctx context.Context) (bool, error) {
 	var writable bool
-	err := s.pg.QueryRowContext(ctx, `SELECT COALESCE(NOT pg_is_in_recovery() AND has_table_privilege(to_regclass('session_frustration_counts'), 'SELECT') AND has_table_privilege(to_regclass('session_frustration_counts'), 'INSERT') AND has_table_privilege(to_regclass('session_frustration_counts'), 'UPDATE'), false)`).Scan(&writable)
+	err := s.pg.QueryRowContext(ctx, `SELECT COALESCE(NOT pg_is_in_recovery() AND current_setting('transaction_read_only') = 'off' AND has_table_privilege(to_regclass('session_frustration_counts'), 'SELECT') AND has_table_privilege(to_regclass('session_frustration_counts'), 'INSERT') AND has_table_privilege(to_regclass('session_frustration_counts'), 'UPDATE'), false)`).Scan(&writable)
 	return writable, err
 }
