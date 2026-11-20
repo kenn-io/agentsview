@@ -1676,8 +1676,15 @@ own metadata, which is why the docs below call the database a mirror.
 
 ### ClickHouse test fixtures
 
-Run `make test-clickhouse` to use the compose service. When running tagged Go
-tests directly, set `TEST_CLICKHOUSE_URL` to reuse a dedicated test server.
+Run `make test-clickhouse` to start a disposable compose service. Its container
+carries a `test-service.lease` label, and the tests hold an exclusive lock on
+`~/.local/state/test-service-leases/<id>` until the last descendant exits. The
+test command then removes its Compose project. A scheduled cleaner can remove
+projects left by killed runs after their lock is released. Manual services have
+no lease label. Use
+`make clickhouse-up` and `make clickhouse-down` to manage a separate standing
+service. When running tagged Go tests directly, set `TEST_CLICKHOUSE_URL` to
+reuse a dedicated test server.
 These tests use the `chtest` build tag. Never point them at a live mirror.
 
 - For reads against the standard populated mirror, use `newClonedReadStore(t)`.
@@ -1766,9 +1773,13 @@ Because each test owns a database, the tests run in parallel:
   (`start-single-node --store=type=mem,size=4GiB`). Schema setup takes about
   10 s per test there, against 86 s on a disk store.
 
-Use `make test-postgres` to start the test container and run the suite. It
-leaves the container running. If you started that container, use
-`make postgres-down` when it is no longer needed.
+Use `make test-postgres` to start a disposable container and run the suite.
+The same lease applies to PostgreSQL.
+Use `make postgres-up` and `make postgres-down` to manage a separate standing
+test container.
+The leased PostgreSQL, ClickHouse, and usage benchmark targets use Unix file
+locks and process groups. On native Windows, run them from WSL with the checkout
+in WSL's Linux filesystem.
 
 To use an existing dedicated instance, run:
 

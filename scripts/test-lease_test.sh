@@ -1,0 +1,391 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root=$(cd "$(dirname "$0")/.." && pwd)
+tmp=$(mktemp -d)
+first=
+cleanup() {
+    touch "$tmp/release"
+    touch "$tmp/down-release"
+    [[ -z "$first" ]] || wait "$first" 2>/dev/null || true
+    if [[ -f "$tmp/ready" ]]; then
+        for _ in {1..100}; do [[ -f "$tmp/exited" ]] && break; sleep .1; done
+    fi
+    find "$tmp" -depth -delete
+}
+trap cleanup EXIT
+docker_bin=$(command -v docker)
+python_bin=$(command -v python3)
+if command -v mise >/dev/null 2>&1 && [[ "$python_bin" == */mise/shims/* ]]; then python_bin=$(mise which python3); fi
+export HOME="$tmp/home"
+mkdir -p "$HOME" "$tmp/bin"
+cat > "$tmp/bin/docker" <<'DOCKER'
+#!/bin/sh
+printf '%s\n' "$*" >> "$DOCKER_LOG"
+case " $* " in
+  *' ps -aq '*) [ "$*" = "ps -aq --filter label=test-service.lease=$TEST_SERVICE_LEASE" ] || exit 1; [ "${LEFTOVER:-0}" = 0 ] || echo container-1 ;;
+  *' rm -f -v '*) [ "$*" = 'rm -f -v container-1' ] || exit 1; [ "${REMOVE_STATUS:-0}" = 0 ] || exit "$REMOVE_STATUS"; touch "$REMOVED" ;;
+  *' up '*)
+    [ "$2" = -p ] && [ "$3" = "$TEST_SERVICE_LEASE" ] || exit 1
+    case " $* " in
+      *' up -d --wait postgres '*)
+        [ "${TEST_PG_PUBLISH-}" = 127.0.0.1::5432 ] && [ -z "${TEST_CH_HTTP_PUBLISH-}" ] && [ -z "${TEST_CH_NATIVE_PUBLISH-}" ] || exit 1 ;;
+      *' up -d --wait clickhouse '*)
+        [ -z "${TEST_PG_PUBLISH-}" ] && [ "${TEST_CH_HTTP_PUBLISH-}" = 127.0.0.1::8123 ] && [ "${TEST_CH_NATIVE_PUBLISH-}" = 127.0.0.1::9000 ] || exit 1 ;;
+    esac
+    lease-held "$HOME/.local/state/test-service-leases/$TEST_SERVICE_LEASE" || exit 1
+    printf '%s\n' "$TEST_SERVICE_LEASE" > "$CHECK_LEASE"
+    if [ "${BLOCK_UP:-}" = 1 ]; then touch "$READY"; while :; do sleep .1; done; fi ;;
+  *' port postgres 5432 '*) echo 127.0.0.1:49153 ;;
+  *' port clickhouse 9000 '*) echo 127.0.0.1:49153 ;;
+  *' port '*) exit 1 ;;
+  *' down '*)
+    [ "$2" = -p ] && [ "$3" = "$TEST_SERVICE_LEASE" ] || exit 1
+    [ "$TEST_PG_PUBLISH" = 127.0.0.1::5432 ] && [ "$TEST_CH_HTTP_PUBLISH" = 127.0.0.1::8123 ] && [ "$TEST_CH_NATIVE_PUBLISH" = 127.0.0.1::9000 ] || exit 1
+    if [ "${BLOCK_DOWN:-0}" = 1 ]; then
+        touch "$DOWN_STARTED"
+        while [ ! -f "$DOWN_RELEASE" ]; do sleep .1; done
+        touch "$DOWN_FINISHED"
+    fi
+    exit "${DOWN_STATUS:-0}" ;;
+esac
+DOCKER
+cat > "$tmp/bin/lease-held" <<'HELD'
+#!/usr/bin/env python3
+import fcntl, sys
+with open(sys.argv[1]) as f:
+    try: fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError: sys.exit(0)
+sys.exit(1)
+HELD
+chmod +x "$tmp/bin/docker" "$tmp/bin/lease-held"
+ln -s "$python_bin" "$tmp/bin/python3"
+export PATH="$tmp/bin:$PATH" DOCKER_LOG="$tmp/docker.log"
+export REMOVED="$tmp/removed"
+
+# Leased services bind to dynamic loopback ports; manually started services keep fixed ports.
+(cd "$root" && TEST_SERVICE_LEASE=agentsview-test-123 TEST_PG_PUBLISH=127.0.0.1::5432 TEST_CH_HTTP_PUBLISH=127.0.0.1::8123 TEST_CH_NATIVE_PUBLISH=127.0.0.1::9000 "$docker_bin" compose -p agentsview-test-123 -f docker-compose.test.yml -f docker-compose.test-lease.yml config --format json) > "$tmp/leased-compose.json"
+python3 - "$tmp/leased-compose.json" <<'PY'
+import json, sys
+with open(sys.argv[1]) as compose:
+    services = json.load(compose)["services"]
+for name in ("postgres", "clickhouse"):
+    assert services[name]["labels"]["test-service.lease"] == "agentsview-test-123"
+expected = {"postgres": {5432}, "clickhouse": {8123, 9000}}
+for name, targets in expected.items():
+    ports = services[name]["ports"]
+    assert {port["target"] for port in ports} == targets
+    for port in ports:
+        assert port["host_ip"] == "127.0.0.1"
+        assert port.get("published") in (None, "")
+PY
+(cd "$root" && TEST_PG_PUBLISH= TEST_CH_HTTP_PUBLISH= TEST_CH_NATIVE_PUBLISH= "$docker_bin" compose -f docker-compose.test.yml config --format json) > "$tmp/manual-compose.json"
+python3 - "$tmp/manual-compose.json" <<'PY'
+import json, sys
+with open(sys.argv[1]) as compose:
+    services = json.load(compose)["services"]
+expected = {"postgres": {(5432, "5433")}, "clickhouse": {(8123, "18123"), (9000, "19000")}}
+for name, ports in expected.items():
+    actual = {(port["target"], str(port["published"])) for port in services[name]["ports"]}
+    assert actual == ports, (name, actual)
+PY
+
+# Cleanup waits for a descendant to release the lease.
+export READY="$tmp/ready" RELEASE="$tmp/release" EXITED="$tmp/exited" MAIN="$tmp/main" CHECK_LEASE="$tmp/project" DESCENDANT="$tmp/descendant"
+cat > "$DESCENDANT" <<'CHILD'
+#!/bin/sh
+touch "$READY"
+while [ ! -f "$RELEASE" ]; do sleep 0.1; done
+touch "$EXITED"
+CHILD
+chmod +x "$DESCENDANT"
+: > "$DOCKER_LOG"
+(cd "$root" && TEST_PG_PUBLISH=invalid TEST_CH_HTTP_PUBLISH=invalid TEST_CH_NATIVE_PUBLISH=invalid ./scripts/test-lease.sh ./scripts/test-service-compose.sh postgres 5432 sh -c 'echo $$ > "$MAIN"; "$DESCENDANT" >/dev/null 2>&1 & while [ ! -f "$READY" ]; do sleep 0.1; done; exit 7') &
+first=$!
+for _ in {1..100}; do [[ -f "$READY" ]] && break; sleep .1; done
+[[ -f "$READY" ]]
+main_pid=$(cat "$MAIN")
+for _ in {1..100}; do if ! kill -0 "$main_pid" 2>/dev/null; then break; fi; sleep .1; done
+if kill -0 "$main_pid" 2>/dev/null; then echo 'foreground command did not exit' >&2; exit 1; fi
+lease="$HOME/.local/state/test-service-leases/$(cat "$CHECK_LEASE")"
+supervisor=${lease##*-}
+kill -0 "$supervisor"
+if grep -q ' down ' "$DOCKER_LOG"; then echo 'cleanup ran while descendant held lease' >&2; exit 1; fi
+touch "$RELEASE"
+for _ in {1..100}; do [[ -f "$EXITED" ]] && break; sleep .1; done
+[[ -f "$EXITED" ]]
+set +e
+wait "$first"
+status=$?
+set -e
+first=
+[[ $status == 7 ]]
+grep -qE -- "-p $(cat "$CHECK_LEASE") .* down -v --remove-orphans" "$DOCKER_LOG"
+[[ ! -e "$lease" ]]
+unset READY RELEASE EXITED MAIN
+
+# The cleaner can acquire and remove the lease before cleanup takes its lock.
+mkdir "$tmp/handoff"
+cat > "$tmp/handoff/sitecustomize.py" <<'PY'
+import fcntl
+import os
+import sys
+
+def trace(frame, event, arg):
+    if event == "line" and frame.f_code.co_filename == "<stdin>" and "lock" in frame.f_globals:
+        try:
+            os.fstat(frame.f_globals["fd"])
+            return trace
+        except OSError:
+            pass
+        sys.settrace(None)
+        with open(frame.f_globals["path"], "r+") as cleaner:
+            fcntl.flock(cleaner, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            os.unlink(cleaner.name)
+        open(os.environ["HANDOFF_DONE"], "w").close()
+        return None
+    return trace
+
+sys.settrace(trace)
+PY
+set +e
+(cd "$root" && HANDOFF_DONE="$tmp/handoff-done" PYTHONPATH="$tmp/handoff" ./scripts/test-lease.sh sh -c 'exit 7') > "$tmp/handoff-output" 2>&1
+status=$?
+set -e
+[[ $status == 7 ]]
+[[ -f "$tmp/handoff-done" ]]
+[[ ! -s "$tmp/handoff-output" ]]
+
+# Cleanup reports failures and removes labelled containers.
+for case_name in down-failure-command-ok down-failure-command-fails sidecar-failure sidecar-success; do
+    command_status=0 DOWN_STATUS=0 LEFTOVER=0 REMOVE_STATUS=0
+    case "$case_name" in
+        down-failure-command-ok) DOWN_STATUS=1 ;;
+        down-failure-command-fails) DOWN_STATUS=1 command_status=7 ;;
+        sidecar-failure) LEFTOVER=1 REMOVE_STATUS=1 ;;
+        sidecar-success) LEFTOVER=1 ;;
+    esac
+    : > "$DOCKER_LOG"
+    set +e
+    (cd "$root" && DOWN_STATUS=$DOWN_STATUS LEFTOVER=$LEFTOVER REMOVE_STATUS=$REMOVE_STATUS ./scripts/test-lease.sh ./scripts/test-service-compose.sh postgres 5432 sh -c "exit $command_status") > "$tmp/cleanup-error" 2>&1
+    status=$?
+    set -e
+    project=$(cat "$CHECK_LEASE")
+    grep -q ' down ' "$DOCKER_LOG"
+    if [[ $case_name == sidecar-success ]]; then
+        [[ $status == 0 && -f "$REMOVED" && ! -e "$HOME/.local/state/test-service-leases/$project" ]]
+    else
+        if [[ $command_status == 0 ]]; then [[ $status == 1 ]]; else [[ $status == 7 ]]; fi
+        grep -Fxq "cleanup failed; Compose project $project may still be running" "$tmp/cleanup-error"
+        [[ -f "$HOME/.local/state/test-service-leases/$project" ]]
+    fi
+done
+
+# Cancellation during cleanup, startup, and signal forwarding.
+export STATUS_FILE="$tmp/cancellation-status"
+for cancellation in cleanup startup signal-once; do
+    : > "$DOCKER_LOG"
+    case "$cancellation" in
+    cleanup)
+export DOWN_STARTED="$tmp/down-started" DOWN_RELEASE="$tmp/down-release" DOWN_FINISHED="$tmp/down-finished"
+BLOCK_DOWN=1 python3 - "$root" <<'PY'
+import fcntl
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import time
+
+root = Path(sys.argv[1])
+env = os.environ.copy()
+process = subprocess.Popen(
+    ["./scripts/test-lease.sh", "./scripts/test-service-compose.sh", "postgres", "5432", "true"],
+    cwd=root,
+    env=env,
+    start_new_session=True,
+)
+started = Path(env["DOWN_STARTED"])
+release = Path(env["DOWN_RELEASE"])
+finished = Path(env["DOWN_FINISHED"])
+try:
+    deadline = time.monotonic() + 10
+    while not started.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert started.exists(), "cleanup did not start"
+    lease = Path(env["HOME"]) / ".local/state/test-service-leases" / Path(env["CHECK_LEASE"]).read_text().strip()
+    with lease.open("r+") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            pass
+        else:
+            raise AssertionError("cleanup did not hold the lease")
+    os.killpg(process.pid, signal.SIGTERM)
+    time.sleep(0.2)
+    assert process.poll() is None, "cleanup exited before it was released"
+    assert not finished.exists(), "cleanup ignored the release gate"
+    release.touch()
+    Path(env["STATUS_FILE"]).write_text(str(process.wait(timeout=10)))
+    assert finished.exists(), "Compose did not finish cleanup"
+finally:
+    release.touch()
+    if process.poll() is None:
+        process.terminate()
+        process.wait(timeout=10)
+PY
+unset DOWN_STARTED DOWN_RELEASE DOWN_FINISHED
+    ;;
+    startup)
+export READY="$tmp/startup-ready"
+(cd "$root" && BLOCK_UP=1 exec ./scripts/test-lease.sh ./scripts/test-service-compose.sh postgres 5432 true) &
+first=$!
+for _ in {1..100}; do [[ -f "$READY" ]] && break; sleep .1; done
+[[ -f "$READY" ]]
+kill -TERM "$first"
+set +e
+wait "$first"
+status=$?
+set -e
+first=
+    ;;
+    signal-once)
+mkdir "$tmp/trace"
+cat > "$tmp/trace/sitecustomize.py" <<'PY'
+import os
+from pathlib import Path
+import signal
+import sys
+import time
+
+def trace(frame, event, arg):
+    if event != "line" or frame.f_globals.get("process_group") is None or "received" not in frame.f_globals:
+        return trace
+    sys.settrace(None)
+    deadline = time.monotonic() + 10
+    while not Path(os.environ["SIGNAL_READY"]).exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    if not Path(os.environ["SIGNAL_READY"]).exists():
+        raise RuntimeError("child did not start")
+    os.kill(os.getpid(), signal.SIGTERM)
+    while not Path(os.environ["SIGNAL_HELPER_STARTED"]).exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    if not Path(os.environ["SIGNAL_HELPER_STARTED"]).exists():
+        raise RuntimeError("shutdown helper did not start")
+    return None
+
+sys.settrace(trace)
+PY
+cat > "$tmp/signal-child" <<'CHILD'
+#!/bin/sh
+trap 'touch "$SIGNAL_RECEIVED"; exec "$SIGNAL_HELPER"' TERM
+touch "$SIGNAL_READY"
+while :; do sleep .1; done
+CHILD
+cat > "$tmp/signal-helper" <<'HELPER'
+#!/bin/sh
+touch "$SIGNAL_HELPER_STARTED"
+while [ ! -f "$SIGNAL_RELEASE" ]; do sleep .1; done
+touch "$SIGNAL_FINISHED"
+HELPER
+chmod +x "$tmp/signal-child" "$tmp/signal-helper"
+export SIGNAL_READY="$tmp/signal-ready" SIGNAL_RECEIVED="$tmp/signal-received" SIGNAL_RELEASE="$tmp/signal-release" SIGNAL_FINISHED="$tmp/signal-finished" SIGNAL_HELPER="$tmp/signal-helper" SIGNAL_HELPER_STARTED="$tmp/signal-helper-started"
+python3 - "$root" "$tmp" <<'PY'
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+root, tmp = map(Path, sys.argv[1:])
+env = os.environ.copy()
+env["PYTHONPATH"] = str(tmp / "trace")
+process = subprocess.Popen([str(root / "scripts/test-lease.sh"), str(tmp / "signal-child")], cwd=root, env=env)
+try:
+    deadline = time.monotonic() + 10
+    while not Path(env["SIGNAL_RECEIVED"]).exists() and process.poll() is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert Path(env["SIGNAL_RECEIVED"]).exists(), "child did not receive SIGTERM"
+    time.sleep(1)
+    assert process.poll() is None, "shutdown helper received SIGTERM twice"
+    Path(env["SIGNAL_RELEASE"]).touch()
+    Path(env["STATUS_FILE"]).write_text(str(process.wait(timeout=10)))
+    assert Path(env["SIGNAL_FINISHED"]).exists(), "shutdown helper did not finish"
+finally:
+    Path(env["SIGNAL_RELEASE"]).touch()
+    if process.poll() is None:
+        process.terminate()
+        process.wait(timeout=10)
+PY
+    ;;
+    esac
+    if [[ $cancellation != startup ]]; then status=$(cat "$STATUS_FILE"); fi
+    [[ $status == 143 ]]
+    project=$(sed -n 's/.*-p \([^ ]*\) .* down -v --remove-orphans/\1/p' "$DOCKER_LOG")
+    [[ -n $project && ! -e "$HOME/.local/state/test-service-leases/$project" ]]
+done
+
+# Dry runs do not start services.
+: > "$DOCKER_LOG"
+# Makefile reads Go environment values during parsing, even for `make -n`.
+# Keep those lookups from downloading a toolchain into the temporary HOME.
+cat > "$tmp/bin/go" <<'GO'
+#!/bin/sh
+[ "${1:-}" = env ] || { echo "unexpected go command: $*" >&2; exit 1; }
+GO
+chmod +x "$tmp/bin/go"
+(cd "$root" && make -n test-postgres test-clickhouse bench-pg-usage) > /dev/null
+[[ ! -s "$DOCKER_LOG" ]]
+
+# Each target passes the new lease and service address to nested Make.
+cat > "$tmp/inspect.mk" <<'MAKE'
+$(if $(filter 1,$(MAKELEVEL)),$(info LEASE_FROM_MAKE=$(TEST_SERVICE_LEASE))$(info PG_FROM_MAKE=$(TEST_PG_URL))$(info CH_FROM_MAKE=$(TEST_CLICKHOUSE_URL))$(info STANDBY_FROM_MAKE=$(TEST_PG_STANDBY_URL)))
+MAKE
+for target in test-postgres bench-pg-usage test-clickhouse; do
+    : > "$DOCKER_LOG"
+    (cd "$root" && MAKELEVEL=0 MAKEFILES="$tmp/inspect.mk" make -o pricing-snapshot "$target" TEST_SERVICE_LEASE=old TEST_PG_URL=old-pg TEST_CLICKHOUSE_URL=old-ch TEST_PG_STANDBY_URL=old-standby MAKE='make -n') > "$tmp/make-url"
+    project=$(cat "$CHECK_LEASE")
+    [[ "$project" != old ]]
+    grep -Fxq "LEASE_FROM_MAKE=$project" "$tmp/make-url"
+    case "$target" in
+        test-clickhouse)
+            service=clickhouse
+            grep -Fq 'go test -tags "fts5,chtest" -v ./internal/clickhouse/...' "$tmp/make-url"
+            grep -Fxq 'STANDBY_FROM_MAKE=' "$tmp/make-url"
+            grep -Fxq 'PG_FROM_MAKE=' "$tmp/make-url"
+            grep -Fxq 'CH_FROM_MAKE=clickhouse://127.0.0.1:49153/default' "$tmp/make-url"
+            ;;
+        test-postgres|bench-pg-usage)
+            service=postgres
+            if [[ $target == bench-pg-usage ]]; then
+                grep -Fq -- "-bench 'BenchmarkPGUsage(Read|Refresh)'" "$tmp/make-url"
+            else
+                grep -Fq 'go test -p 1 -tags "fts5,pgtest" -v ./internal/postgres/...' "$tmp/make-url"
+            fi
+            grep -Fxq 'STANDBY_FROM_MAKE=' "$tmp/make-url"
+            grep -Fxq 'CH_FROM_MAKE=' "$tmp/make-url"
+            grep -Fxq 'PG_FROM_MAKE=postgres://agentsview_test:agentsview_test_password@127.0.0.1:49153/agentsview_test?sslmode=disable' "$tmp/make-url"
+            ;;
+    esac
+    grep -qE -- "-p $project .* -f docker-compose.test-lease.yml up -d --wait $service" "$DOCKER_LOG"
+done
+
+# Missing prerequisites stop before Docker starts.
+mkdir "$tmp/no-python"
+ln -s "$tmp/bin/docker" "$tmp/no-python/docker"
+: > "$DOCKER_LOG"
+set +e
+PATH="$tmp/no-python" /bin/sh "$root/scripts/test-lease.sh" docker info >"$tmp/no-python.out" 2>&1
+status=$?
+set -e
+[[ $status == 2 && ! -s "$DOCKER_LOG" ]]
+grep -q 'python3 is required' "$tmp/no-python.out"
+
+# A loose lease directory is rejected before Docker starts.
+chmod 755 "$HOME/.local/state/test-service-leases"
+: > "$DOCKER_LOG"
+set +e
+"$root/scripts/test-lease.sh" docker info >"$tmp/mode-error" 2>&1
+status=$?
+set -e
+[[ $status != 0 && ! -s "$DOCKER_LOG" ]]
+grep -Fq "lease directory $HOME/.local/state/test-service-leases must be owned by the current user and grant no permissions to group or other users" "$tmp/mode-error"
