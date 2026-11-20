@@ -219,7 +219,7 @@ func (t *toolset) searchSessions(
 	if len(out.Results) == 0 && out.ExcludedActive > 0 {
 		out.Hints = []service.ContentSearchHint{{
 			Code:      "excluded_active",
-			Message:   fmt.Sprintf("Sessions active in the last 10 minutes excluded from this page: %d", out.ExcludedActive),
+			Message:   fmt.Sprintf("Sessions active in the last 10 minutes hidden from this page: %d. Retry this request with include_active: true to see them.", out.ExcludedActive),
 			RetryWith: map[string]any{"include_active": true},
 		}}
 	}

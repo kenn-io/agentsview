@@ -245,7 +245,9 @@ this exclusion before the result limit so older matches fill the page. It
 reports the guard in `exclusions.recent_active`. Older servers retain the guard
 after pagination and report dropped matches in `excluded_active`, so their pages
 can still be short or empty with a `next_cursor`. Set `include_active: true`
-when you need that recent work. For recall from a known conversation, pass its
+when you need that recent work. An empty `search_sessions` page with excluded
+active matches includes a `hints` entry with `retry_with: {"include_active": true}`.
+For recall from a known conversation, pass its
 full ID as `current_session_id`; `search_content` then excludes only that
 session before applying the result limit and does not hide other recent work.
 

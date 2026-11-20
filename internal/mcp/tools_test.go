@@ -384,7 +384,7 @@ func TestSearchSessions_EmptyActiveHint(t *testing.T) {
 	assert.Empty(t, out.Results)
 	assert.Equal(t, 2, out.ExcludedActive)
 	assert.Equal(t, []service.ContentSearchHint{{
-		Code: "excluded_active", Message: "Sessions active in the last 10 minutes excluded from this page: 2",
+		Code: "excluded_active", Message: "Sessions active in the last 10 minutes hidden from this page: 2. Retry this request with include_active: true to see them.",
 		RetryWith: map[string]any{"include_active": true},
 	}}, out.Hints)
 
@@ -401,7 +401,7 @@ func TestSearchSessions_EmptyActiveHint(t *testing.T) {
 	assert.Empty(t, page.Results)
 	require.NotNil(t, page.NextCursor)
 	require.Len(t, page.Hints, 1)
-	assert.Equal(t, "Sessions active in the last 10 minutes excluded from this page: 1", page.Hints[0].Message)
+	assert.Equal(t, "Sessions active in the last 10 minutes hidden from this page: 1. Retry this request with include_active: true to see them.", page.Hints[0].Message)
 }
 
 func mustSearch(t *testing.T, ts *toolset, in searchSessionsIn) searchSessionsOut {
