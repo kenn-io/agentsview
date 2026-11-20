@@ -143,7 +143,6 @@ func (s *Store) activityKeptVersion(ctx context.Context, pricingDigest string) (
 }
 
 func (s *Store) validateKeptActivityReport(ctx context.Context, selection, version string, entries []pgActivityKept, f db.AnalyticsFilter, rangeStart, rangeEnd, lower, upper string) (kept.Report, int64, string, bool, error) {
-	hadEntry := len(entries) > 0
 	reader := s
 	var tx *sql.Tx
 	if s.readTx == nil {
@@ -175,7 +174,7 @@ func (s *Store) validateKeptActivityReport(ctx context.Context, selection, versi
 	if hit {
 		// A restore can replace the history while validation holds its snapshot.
 		// Do not advance the memo until the live journal still matches it.
-		if hadEntry && entry.revision != entries[0].revision && entries[0].checkpoint != "" {
+		if len(entries) > 0 && entry.revision != entries[0].revision && entries[0].checkpoint != "" {
 			if tx != nil {
 				through, changes, current, previous, checkErr := s.loadUsageChangesWithHistory(ctx, entries[0].revision)
 				if checkErr == nil && through == revision && current == checkpoint && previous == entries[0].checkpoint && slices.Equal(changes, snapshotChanges) {
