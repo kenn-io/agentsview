@@ -49,9 +49,9 @@ type RecallExtractConfig struct {
 	// extracted, so sessions that resume shortly after ending settle
 	// first. Default "30m".
 	QuietPeriod string `toml:"quiet_period" json:"quiet_period"`
-	// BackstopInterval is a parseable duration string for the daemon's
-	// periodic catch-up scan. Default "1h"; a negative duration disables
-	// it (event-driven passes still run).
+	// BackstopInterval is how often the daemon's periodic catch-up scan
+	// runs, read via ParseBackstopInterval. Default "1h"; "off" disables it
+	// (event-driven passes still run).
 	BackstopInterval string `toml:"backstop_interval" json:"backstop_interval"`
 	// FailureBackoff is how long a failed session waits before being
 	// retried. Default "1h".
@@ -256,15 +256,10 @@ func (c RecallExtractConfig) Validate() error {
 			"[recall.extract] quiet_period must not be negative, got %q",
 			c.QuietPeriod)
 	}
-	backstop, err := time.ParseDuration(c.BackstopInterval)
-	if err != nil {
+	if _, err := ParseBackstopInterval(c.BackstopInterval); err != nil {
 		return fmt.Errorf(
 			"[recall.extract] invalid backstop_interval %q: %w",
 			c.BackstopInterval, err)
-	}
-	if backstop == 0 {
-		return errors.New("[recall.extract] backstop_interval must not be zero; " +
-			"use a negative value to disable or omit for the 1h default")
 	}
 	backoff, err := time.ParseDuration(c.FailureBackoff)
 	if err != nil {

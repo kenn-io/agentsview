@@ -39,11 +39,11 @@ filters `updated_since` by `updated_at` and `created_since` by `created_at`.
 When both are set, an entry must meet both bounds.
 
 Time-bounded lists include only entries that still exist; they don't report
-deletions. Consumers that mirror Recall should periodically reconcile their
-copy against a complete listing and remove entries that are no longer present.
+deletions. Consumers that mirror Recall should periodically reconcile their copy
+against a complete listing and remove entries that are no longer present.
 
-A bounded list returns the oldest change first and includes archived entries
-as well as accepted ones, unless you set a status filter. `trusted_only` still
+A bounded list returns the oldest change first and includes archived entries as
+well as accepted ones, unless you set a status filter. `trusted_only` still
 selects accepted entries. Without a bound, lists show accepted entries, newest
 first. Each entry's `source_run_id` names the extraction generation it came
 from.
@@ -68,8 +68,8 @@ changes:
    entry or evidence write can interrupt a walk, even outside its filters.
 
 An archive from before Recall tracked changes can return a bounded result that
-fits on one page. If more entries match, narrow the bounds or filters to fit
-one page.
+fits on one page. If more entries match, narrow the bounds or filters to fit one
+page.
 
 The top-level **Recall** page has two tabs:
 
@@ -120,9 +120,9 @@ and retention behavior. API keys come from the environment variable or private
 file you name and are sent only as a bearer header; the key itself is not stored
 in `config.toml`. Canned insight cache keys include the effective backend,
 model, and a safe endpoint identity, so changing `[insights]` after restarting
-the server selects a separate cached report. Changes to credentials or
-transport opt-ins do not change that identity; use force refresh when those
-changes should regenerate a report under the same endpoint and model.
+the server selects a separate cached report. Changes to credentials or transport
+opt-ins do not change that identity; use force refresh when those changes should
+regenerate a report under the same endpoint and model.
 
 Generated insights can also be listed, fetched, and generated from the CLI with
 `agentsview insight`; see the [CLI reference](/docs/commands/).
@@ -290,7 +290,8 @@ remain outside trusted Recall until promoted.
 
 On battery, scheduled model passes wait and resume within about a minute of AC
 power, or at the next daemon start if it exited while waiting. Retraction of
-entries from trashed, automated, or secret-bearing sessions continues on battery.
+entries from trashed, automated, or secret-bearing sessions continues on
+battery.
 
 ```toml
 [recall.extract]
@@ -319,10 +320,10 @@ timeout = "120s"
 Optional keys: `deployment` (labels which serving instance produced the corpus),
 `server` (selects among multiple named servers), `quiet_period` (default `"30m"`
 — how long a session must have been ended before extraction),
-`backstop_interval` (default `"1h"`), `failure_backoff` (default `"1h"`),
-`max_window_chars` (default 50000), `max_tokens`, `candidate_findings`
-(`"block"` default, or `"allow"` — see below), per-server `api_key_env` or
-`api_key_file` (see
+`backstop_interval` (default `"1h"`; `"off"` disables the periodic scan),
+`failure_backoff` (default `"1h"`), `max_window_chars` (default 50000),
+`max_tokens`, `candidate_findings` (`"block"` default, or `"allow"` — see
+below), per-server `api_key_env` or `api_key_file` (see
 [Read secrets from files](/docs/configuration/#read-secrets-from-files)),
 per-server `concurrency` (default 1 — see below), a `[recall.extract.prompts]`
 table (`profile`, `dir`), and a `[recall.extract.request]` table (`temperature`,

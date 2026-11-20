@@ -764,7 +764,7 @@ func setupVectorServing(
 		return vectorServing{}, err
 	}
 
-	backstop, err := time.ParseDuration(cfg.Vector.Embed.BackstopInterval)
+	backstop, err := config.ParseBackstopInterval(cfg.Vector.Embed.BackstopInterval)
 	if err != nil {
 		recallIX.Close()
 		ix.Close()
