@@ -32,6 +32,14 @@ const THINKING_LEGACY_RE = /\[Thinking\]\n?([\s\S]*?)(?=\n\[|\n\n|$)/g;
  */
 const SKILL_RE = /\[Skill: (.+?)\]\n?([\s\S]*?)\n?\[\/Skill\]/g;
 
+/**
+ * Harness-injected skills: <skill name="x" ...extra>body</skill>.
+ * The name is always double-quoted; other attributes are ignored.
+ * Not line-anchored: user text may follow </skill> directly.
+ */
+const SKILL_XML_RE =
+  /<skill\s+name="([^"]*)"[^>]*>\n?([\s\S]*?)\n?<\/skill>/g;
+
 const TOOL_NAMES =
   "Tool|Read|Write|Edit|Patch|Bash|Glob|Grep|Other|TaskCreate|TaskUpdate|TaskGet|TaskList|Task|Agent|Skill|" +
   "SendMessage|Question|Todo List|Entering Plan Mode|" +
@@ -288,7 +296,10 @@ function extractMatches(text: string, parseTools = true): Match[] {
   }
 
   // Skill blocks
-  for (const m of text.matchAll(SKILL_RE)) {
+  for (const m of [
+    ...text.matchAll(SKILL_RE),
+    ...text.matchAll(SKILL_XML_RE),
+  ]) {
     const start = m.index!;
     const end = start + m[0].length;
     if (insideInlineCode(start, codeSpans)) continue;

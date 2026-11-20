@@ -1230,3 +1230,31 @@ describe("Codex Cloud tool markers", () => {
     expect(parseContent(content, true).filter((segment) => segment.type !== "tool")).toEqual([]);
   });
 });
+
+describe("parseContent - XML skill injection", () => {
+  it("parses a multiline skill with name", () => {
+    const segs = parseContent('<skill name="route-work">\n# Title\n\nbody\n</skill>');
+    expect(segs).toEqual([
+      { type: "skill", label: "route-work", content: "# Title\n\nbody" },
+    ]);
+  });
+
+  it("keeps user text appended directly after the closing tag", () => {
+    const segs = parseContent('<skill name="a">\nbody\n</skill> please do it');
+    expect(segs.map((s) => s.type)).toEqual(["skill", "text"]);
+    expect(segs[1]!.content).toBe(" please do it".trimEnd());
+  });
+
+  it("keeps text before the opening tag and ignores extra attributes", () => {
+    const segs = parseContent(
+      'hi <skill name="a" location="/x/SKILL.md">body</skill>',
+    );
+    expect(segs.map((s) => s.type)).toEqual(["text", "skill"]);
+    expect(segs[1]).toMatchObject({ label: "a", content: "body" });
+  });
+
+  it("does not match inside inline code", () => {
+    const segs = parseContent('use `<skill name="a">x</skill>` syntax');
+    expect(segs.every((s) => s.type === "text")).toBe(true);
+  });
+});
