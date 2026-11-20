@@ -427,7 +427,7 @@ const activityMessageSliceSessions = 4096
 
 // activityMessageSlices caps the message reads one pairing runs at once.
 // The terminal read and the report's usage read run beside them on the
-// pool of 5 connections, which leaves one for other requests.
+// smaller supported pool of 5 connections, leaving one for other requests.
 const activityMessageSlices = 2
 
 // readActivityMessagePairs pairs the messages of the sessions in ids, one

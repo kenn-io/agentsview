@@ -132,6 +132,8 @@ func (Backend) OpenServeStore(
 		_ = store.Close()
 		return nil, err
 	}
+	store.DB().SetMaxOpenConns(15)
+	store.DB().SetMaxIdleConns(15)
 	return store, nil
 }
 
