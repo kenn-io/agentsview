@@ -1,35 +1,24 @@
 import { m } from "../i18n/index.js";
 import type { Route } from "../stores/router.svelte.js";
-import { agentLabel } from "./agents.js";
 
 export function documentTitle({
   route,
   needsAuth,
   sessionId,
-  sessionNotFound,
 }: {
   route: Route;
   needsAuth: boolean;
   sessionId: string | null;
-  sessionNotFound: boolean;
 }): string {
   let label: string;
   if (needsAuth && route !== "settings") {
     label = m.app_auth_title();
   } else if (route === "sessions" && sessionId) {
-    const separator = sessionId.indexOf("~");
-    const rawId = separator >= 0 ? sessionId.slice(separator + 1) : sessionId;
-    const providerSeparator = rawId.indexOf(":");
-    const provider = providerSeparator >= 0 ? rawId.slice(0, providerSeparator) : "claude";
-    const id = providerSeparator >= 0 ? rawId.slice(providerSeparator + 1) : rawId;
-    const source = separator >= 0 ? sessionId.slice(0, separator) : "";
-    const shortSource = source.length > 8 ? `${source.slice(0, 7)}…` : source;
-    label = [
-      m.nav_sessions(),
-      `${shortSource ? `${shortSource}:` : ""}${id.slice(-6)}`,
-      agentLabel(provider),
-      ...(sessionNotFound ? [m.message_list_session_not_found()] : []),
-    ].join(" · ");
+    let hash = 0x811c9dc5;
+    for (const byte of new TextEncoder().encode(sessionId)) {
+      hash = Math.imul(hash ^ byte, 0x01000193) >>> 0;
+    }
+    label = `${m.activity_session()} (${hash.toString(16).padStart(8, "0")})`;
   } else {
     const labels: Record<Route, () => string> = {
       sessions: m.nav_sessions,

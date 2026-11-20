@@ -98,9 +98,6 @@ afterEach(() => {
   router.sessionId = null;
   router.isRootPath = false;
   sessions.activeSessionId = null;
-  sessions.activeSessionNotFound = false;
-  sessions.sessions = [];
-  sessions.details.clear();
   sessions.archiveEmpty = false;
   sessions.filters.date = "";
   sessions.filters.dateFrom = "";
@@ -1947,52 +1944,18 @@ describe("App telemetry", () => {
     expect(document.title).toBe("Usage · AgentsView");
   });
 
-  it.each(["loaded", "not found"] as const)(
-    "tab title shows an imported session when %s",
-    async (state) => {
-      setup();
-      vi.mocked(sessions.navigateToSession).mockRestore();
-      const id = "source-a~codex:12345678abcdef";
-      const response = Promise.withResolvers<Response>();
-      vi.stubGlobal(
-        "fetch",
-        vi.fn((input: RequestInfo | URL) => {
-          const url = requestUrl(input);
-          if (url.endsWith(`/api/v1/sessions/${encodeURIComponent(id)}`)) return response.promise;
-          return Promise.resolve(
-            new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
-          );
-        }),
-      );
-      component = mount(App, { target: document.body });
-      await flushEffects();
-      router.navigateToSession(id);
-      await flushEffects();
-      expect(document.title).toBe("Sessions · source-a:abcdef · Codex · AgentsView");
-      response.resolve(
-        state === "loaded"
-          ? new Response(
-              JSON.stringify(
-                hydratedSession(id, "codex", {
-                  display_name: "Private title",
-                  first_message: "Private prompt",
-                  project: "Private project",
-                }),
-              ),
-              { status: 200, headers: { "Content-Type": "application/json" } },
-            )
-          : new Response("not found", { status: 404 }),
-      );
-      const expected =
-        state === "loaded"
-          ? "Sessions · source-a:abcdef · Codex · AgentsView"
-          : "Sessions · source-a:abcdef · Codex · Session not found · AgentsView";
-      if (state === "loaded") {
-        await vi.waitFor(() => expect(sessions.activeSession?.display_name).toBe("Private title"));
-      }
-      await vi.waitFor(() => expect(document.title).toBe(expected));
-    },
-  );
+  it("updates the tab title when navigating between sessions", async () => {
+    setup();
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    router.navigateToSession("hostA~abc");
+    await flushEffects();
+    expect(document.title).toBe("Session (8e9ac634) · AgentsView");
+    expect(document.title).not.toContain("hostA");
+    router.navigateToSession("hostB~abc");
+    await flushEffects();
+    expect(document.title).toBe("Session (4376abb5) · AgentsView");
+  });
 
   function postedFor(event: string) {
     return posted.filter((p) => p.event === event).map((p) => p.properties);

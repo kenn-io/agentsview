@@ -14,7 +14,7 @@
   import { agentInk as getAgentInk, agentLabel, entrypointBadge } from "../../utils/agents.js";
   import {
     normalizeMessagePreview,
-    sessionLabel,
+    previewMessage,
   } from "../../utils/messages.js";
   import {
     ChevronDownIcon,
@@ -120,7 +120,38 @@
       ?? false,
   );
 
-  let displayLabel = $derived(sessionLabel(session.display_name, sessions.view(session).first_message, session.project));
+  /**
+   * Clean display name: for teammate sessions, extract the unique task
+   * description (e.g. "Task #2: Align ROADMAP.md...") instead of the
+   * repetitive "You are a teammate on..." boilerplate.
+   */
+  let displayLabel = $derived.by((): { text: string; isShell: boolean } => {
+    const name = session.display_name ?? null;
+    if (name) {
+      return { text: name, isShell: false };
+    }
+    let msg = sessions.view(session).first_message ?? "";
+    if (msg.includes("<teammate-message")) {
+      msg = msg
+        .replace(/<teammate-message[^>]*>/g, "")
+        .replace(/<\/teammate-message>/g, "")
+        .trim();
+      // Extract "Task #N: description" from the boilerplate.
+      const taskMatch = msg.match(/Task\s*#?\d+[:\s]+(.+?)(?:\s+\d+\.|$)/s);
+      if (taskMatch) {
+        return { text: taskMatch[1]!.trim(), isShell: false };
+      }
+      // Fallback: skip the "You are a teammate on ..." boilerplate.
+      const afterTeam = msg.match(/team[."]\s*[^.]*?[.]\s+(.+)/s)
+        ?? msg.match(/You are a teammate[^.]*\.\s+(.+)/s);
+      if (afterTeam) {
+        return { text: afterTeam[1]!.trim(), isShell: false };
+      }
+    }
+    const p = previewMessage(msg);
+    if (p.text) return { text: p.text, isShell: p.isShell };
+    return { text: session.project, isShell: false };
+  });
 
   const userMessageCount = $derived(session.user_message_count ?? 0);
   let fullTime = $derived(formatTimestamp(session.ended_at ?? session.started_at, true));

@@ -1,81 +1,32 @@
 import { describe, expect, it } from "vite-plus/test";
 import { documentTitle } from "./documentTitle.js";
 
-const base = { needsAuth: false, sessionId: null, sessionNotFound: false };
+const base = { route: "sessions" as const, needsAuth: false };
 
 describe("documentTitle", () => {
+  it.each([
+    ["a", "Session (e40c292c) · AgentsView"],
+    ["foobar", "Session (bf9cf968) · AgentsView"],
+    ["é", "Session (1e9de8c1) · AgentsView"],
+    ["hostA~abc", "Session (8e9ac634) · AgentsView"],
+    ["hostB~abc", "Session (4376abb5) · AgentsView"],
+    ["abc", "Session (1a47e90b) · AgentsView"],
+    ["codebuff:project-a:2026-01-01T00:00:00.000Z", "Session (11ff51a8) · AgentsView"],
+    ["codebuff:project-a:2026-01-02T00:00:00.000Z", "Session (b0f40315) · AgentsView"],
+  ])("fingerprints the complete route session ID %s", (sessionId, expected) => {
+    expect(documentTitle({ ...base, sessionId })).toBe(expected);
+    expect(documentTitle({ ...base, sessionId })).toBe(expected);
+  });
+
   it("names the sign-in screen while leaving settings accessible", () => {
-    expect(documentTitle({ ...base, route: "activity", needsAuth: true })).toBe(
+    expect(documentTitle({ route: "activity", needsAuth: true, sessionId: null })).toBe(
       "Authentication required · AgentsView",
     );
-    expect(documentTitle({ ...base, route: "settings", needsAuth: true })).toBe(
+    expect(documentTitle({ route: "settings", needsAuth: true, sessionId: null })).toBe(
       "Settings · AgentsView",
     );
-  });
-
-  it.each([
-    ["codex:01900000-0000-7000-8000-000000000001", "Sessions · 000001 · Codex · AgentsView"],
-    ["codex:01900000-0000-7000-8000-000000000002", "Sessions · 000002 · Codex · AgentsView"],
-    [
-      "codex:01900000-0000-7000-8000-000000000001_11111111-1111-4111-8111-111111111111",
-      "Sessions · 111111 · Codex · AgentsView",
-    ],
-    [
-      "codex:01900000-0000-7000-8000-000000000001_22222222-2222-4222-8222-222222222222",
-      "Sessions · 222222 · Codex · AgentsView",
-    ],
-    [
-      "kimi:workspace:01900000-0000-7000-8000-000000000001",
-      "Sessions · 000001 · Kimi · AgentsView",
-    ],
-    [
-      "kimi:workspace:01900000-0000-7000-8000-000000000002",
-      "Sessions · 000002 · Kimi · AgentsView",
-    ],
-    [
-      "source-a~codex:01900000-0000-7000-8000-000000000001",
-      "Sessions · source-a:000001 · Codex · AgentsView",
-    ],
-    [
-      "source-b~codex:01900000-0000-7000-8000-000000000001",
-      "Sessions · source-b:000001 · Codex · AgentsView",
-    ],
-    [
-      "source-long~codex:01900000-0000-7000-8000-000000000001",
-      "Sessions · source-…:000001 · Codex · AgentsView",
-    ],
-    ["01900000-0000-7000-8000-000000000001", "Sessions · 000001 · Claude · AgentsView"],
-  ])("identifies %s", (sessionId, expected) => {
-    expect(documentTitle({ ...base, route: "sessions", sessionId })).toBe(expected);
-  });
-
-  it("keeps the route identity when a session is missing", () => {
-    expect(
-      documentTitle({
-        ...base,
-        route: "sessions",
-        sessionId: "source-a~codex:12345678abcdef",
-        sessionNotFound: true,
-      }),
-    ).toBe("Sessions · source-a:abcdef · Codex · Session not found · AgentsView");
-  });
-
-  it.each([
-    [
-      "codex:01900000-0000-7000-8000-000000000001",
-      "Sessions · 000001 · Codex · Session not found · AgentsView",
-    ],
-    [
-      "codex:01900000-0000-7000-8000-000000000001_11111111-1111-4111-8111-111111111111",
-      "Sessions · 111111 · Codex · Session not found · AgentsView",
-    ],
-    [
-      "codex:01900000-0000-7000-8000-000000000001_22222222-2222-4222-8222-222222222222",
-      "Sessions · 222222 · Codex · Session not found · AgentsView",
-    ],
-  ])("identifies missing session %s", (sessionId, expected) => {
-    expect(documentTitle({ ...base, route: "sessions", sessionId, sessionNotFound: true })).toBe(
-      expected,
+    expect(documentTitle({ route: "activity", needsAuth: false, sessionId: null })).toBe(
+      "Activity · AgentsView",
     );
   });
 });
