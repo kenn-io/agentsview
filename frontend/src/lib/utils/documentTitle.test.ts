@@ -1,9 +1,27 @@
 import { describe, expect, it } from "vite-plus/test";
+import type { Route } from "../stores/router.svelte.js";
 import { documentTitle } from "./documentTitle.js";
 
 const base = { route: "sessions" as const, needsAuth: false };
 
 describe("documentTitle", () => {
+  it.each<[Route, string]>([
+    ["sessions", "Sessions · AgentsView"],
+    ["usage", "Usage · AgentsView"],
+    ["token-usage", "Usage · AgentsView"],
+    ["activity", "Activity · AgentsView"],
+    ["recall", "Recall · AgentsView"],
+    ["quality", "Quality · AgentsView"],
+    ["friction", "Friction Log · AgentsView"],
+    ["pinned", "Pinned · AgentsView"],
+    ["trash", "Trash · AgentsView"],
+    ["recent-edits", "Recent Edits · AgentsView"],
+    ["data", "Data · AgentsView"],
+    ["settings", "Settings · AgentsView"],
+  ])("names the %s route", (route, expected) => {
+    expect(documentTitle({ route, needsAuth: false, sessionId: null })).toBe(expected);
+  });
+
   it.each([
     ["foobar", "Session (bf9cf968) · AgentsView"],
     ["é", "Session (1e9de8c1) · AgentsView"],
