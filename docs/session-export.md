@@ -3,13 +3,14 @@ title: Session Export
 description: Content-free session summary exports for scripting and analytics
 ---
 
-Export session metadata and token and cost totals without transcript text. Use
-`agentsview export sessions` for reporting scripts that need pricing and project
-identity. JSON produces one document; NDJSON writes one JSON object per line.
+Run `agentsview export sessions` when your reporting scripts need session
+metadata, token and cost totals, pricing, and project identity without
+transcript text. You can export one JSON document or NDJSON with one JSON object
+per line.
 
-Labels and launcher parent links belong to the local archive and are excluded
-from artifact export and import. Transcript parents and spawn edges remain
-part of the artifact.
+Artifact export and import exclude labels and launcher parent links, which
+belong to the local archive. Transcript parents and spawn edges stay part of the
+artifact.
 
 ## Commands
 
@@ -18,12 +19,12 @@ agentsview export sessions --format json
 agentsview export sessions --format ndjson
 ```
 
-The command reads the local SQLite archive directly. It does not require a
-running daemon and does not stream source transcript files.
+The command reads your local SQLite archive directly. You do not need a running
+daemon, and the command does not stream source transcript files.
 
-## Output Shapes
+## Output shapes
 
-JSON output is one document:
+With `--format json`, the command writes one document:
 
 ```json
 {
@@ -152,260 +153,279 @@ JSON output is one document:
 }
 ```
 
-NDJSON output writes a metadata object as the first line, then writes session
-rows on subsequent lines. The metadata line has `"type": "meta"`; session rows
-do not add a `type` discriminator.
+With `--format ndjson`, the first line is a metadata object with
+`"type": "meta"`, and each later line is a session row without a `type` field.
 
 ```json
 {"type":"meta","schema_version":7,"archive_id":"00000000-0000-4000-8000-000000000002","database_id":"00000000-0000-4000-8000-000000000001","cursor":{"next":"..."},"pricing":{},"projects":{}}
 {"id":"path-current","agent":"claude","model_usage":{"models":["fixture-model-reported"],"input_tokens":300,"output_tokens":60,"cost":{"microdollars":12500},"has_cost":true}}
 ```
 
-These snippets are abbreviated illustrations. Complete checked JSON and NDJSON
-outputs live in `testdata/golden/session_export_v7.json` and
+These examples are abbreviated. For complete checked outputs, see
+`testdata/golden/session_export_v7.json` and
 `testdata/golden/session_export_v7.ndjson`.
 
 ### Codex Cloud usage
 
-A Codex Cloud session can have no token figures at all, so its `model_usage` can
-be `null`. It also adds two fields, `plan_usage` and `capture_coverage`:
+A Codex Cloud session can have no token figures at all, so `model_usage` can be
+`null`. Codex Cloud sessions can also include `plan_usage` and
+`capture_coverage`:
 
-- `model_usage` is `null` when AgentsView has no token counts for the chat. It
-  never listened in while the chat ran, or it listened in but received no
-  token update. The chat's usage is unknown, not zero: do not count it as zero
-  tokens or zero cost. OpenAI's plan usage report covers it instead. Sessions
-  from other agents that recorded no usage still export zeros.
-- `plan_usage` holds OpenAI's newest plan usage report for the chat, the outcome
-  of a later check, or both. Its fields are listed in the
-  [`plan_usage` fields](/docs/session-api/#agentsview-session-usage). An
-  object with only an outcome, such as `account_unavailable`, has no figures.
-  `plan_usage` is omitted when AgentsView has stored neither.
-- `capture_coverage` has `last_capture_at`, when AgentsView last received a
-  token update for the chat, and `uncaptured_turns`, the number of finished
-  turns live capture did not fully see. It is omitted when AgentsView never
-  listened in on the chat.
+- `model_usage` is `null` when AgentsView has no token counts for the chat,
+  either when it never listened in while the chat ran or when it listened in but
+  received no token update. Treat that usage as unknown rather than zero tokens
+  or zero cost, and rely on OpenAI's plan usage report instead. Sessions from
+  other agents that recorded no usage still export zeros.
+- `plan_usage` contains OpenAI's newest plan usage report for the chat, the
+  outcome of a later check, or both. See the
+  [`plan_usage` fields](/docs/session-api/#agentsview-session-usage) for the
+  full list of fields. An object with only an outcome, such as
+  `account_unavailable`, has no figures. When AgentsView has stored neither, it
+  omits `plan_usage`.
+- `capture_coverage` reports `last_capture_at`, the time AgentsView last
+  received a token update for the chat, and `uncaptured_turns`, the count of
+  finished turns that live capture did not fully see. When AgentsView never
+  listened in on the chat, it omits `capture_coverage`.
 
 ### Archive and database identity
 
-`archive_id` identifies the logical archive and survives full resync. Within
-that archive, `(archive_id, session.id)` identifies a session across rebuilt
-database generations. `database_id` identifies the physical database generation
-and changes on full resync; pagination cursors remain tied to that generation.
-Both IDs come from the same read snapshot as the exported rows, including empty
-results and the NDJSON metadata line. Missing archive identity is an error, not
-a reason for the read-only export to create an identity.
+Every export includes two identifiers from the same read snapshot as the
+exported rows, even in empty results and on the NDJSON metadata line:
 
-A changed database ID under the same archive ID means that the archive was
-rebuilt, not that every session is new. Restart pagination and reconcile the new
-snapshot. Neither ID is an ordered revision, and a cursor is not a durable
-change-feed checkpoint. These IDs do not establish which of two delayed exports
-is newer or turn absence from a filtered page into a deletion signal. Copied
-archives retain their logical identity; applications that ingest independent
-copies must define their source scope rather than assume the ID identifies a
-device or a single writer.
+- `archive_id` identifies the logical archive and stays the same across a full
+  resync. Together, `(archive_id, session.id)` identify a session across rebuilt
+  database generations.
+- `database_id` identifies the physical database generation and changes on a
+  full resync. Pagination cursors stay tied to that generation.
+
+If the archive identity is missing, the read-only export returns an error rather
+than creating one.
+
+If `database_id` changes while `archive_id` stays the same, the archive was
+rebuilt rather than filled with brand-new sessions. Restart pagination and
+reconcile the new snapshot. Neither ID acts as an ordered revision, and a cursor
+is not a durable change-feed checkpoint. These IDs do not tell you which of two
+delayed exports is newer, and they do not turn absence from a filtered page into
+a deletion signal. Copied archives keep their logical identity. If your
+application ingests independent copies, define your own source scope instead of
+assuming `archive_id` identifies a single device or writer.
 
 ### Revision evidence
 
-Schema v6 adds two fields to each session row, in JSON and NDJSON:
+In both JSON and NDJSON, schema v6 adds two fields to each session row:
 
-- `transcript_revision` is the archive's per-session counter, exported as a
-  decimal string to preserve integer precision. Compare it numerically, not
-  lexicographically. Within one archive's writer lineage, an identical
-  transcript retains its counter through full resync; a changed transcript
-  advances the previous counter once. The comparison includes persisted
-  messages, tool calls, tool-result events, and message token usage. It does
-  not export any of that content.
+- `transcript_revision` is the archive's per-session counter, formatted as a
+  decimal string to keep full integer precision. Compare it numerically rather
+  than lexicographically. Within one archive's writer lineage, an unchanged
+  transcript keeps its counter across a full resync, while a changed transcript
+  increments the previous counter once. That comparison checks persisted
+  messages, tool calls, tool-result events, and message token usage, without
+  exporting any of that content.
 - `local_modified_at` is the stored local modification timestamp, or `null` when
-  unavailable. It is not session activity time or measured working time.
-  Transcript and standalone usage-event writes can update it while
-  `last_activity_at` stays unchanged. It is a wall-clock signal: equal values,
-  clock changes, and rebuilds prevent treating it as a monotonic revision.
-  Labels and launcher parent links update only the mirror sync marker.
+  it is unavailable. It is neither session activity time nor measured working
+  time. Transcript writes and standalone usage-event writes can update it while
+  `last_activity_at` stays the same. It is a wall-clock signal, and equal
+  values, clock shifts, and rebuilds prevent treating it as a monotonic
+  revision. Labels and launcher parent links update only the mirror sync marker.
 
-For a materialized session receipt, retain a tuple of independent version
-evidence: **transcript revision, project identity (or a digest of the complete
-exported `project` reference), and pricing timestamp plus digest**. Also retain
-`local_modified_at` for local metadata and standalone usage-event changes.
-Project evidence can change without a transcript edit. Pricing evidence remains
-page-level: `pricing.latest_row_updated_at` is the latest timestamp among the
-effective pricing rows, and `pricing.digest` identifies their contents. An edit
-to another pricing row need not advance that maximum, and removing the newest
-row can lower it. Keep the digest even when timestamps match or are unavailable.
+When you store a materialized session receipt, keep a tuple of independent
+version evidence: **transcript revision, project identity (or a digest of the
+complete exported `project` reference), and pricing timestamp plus digest**.
+Keep `local_modified_at` as well to track local metadata and standalone
+usage-event changes. Project evidence can change without a transcript edit.
+Pricing evidence stays at the page level, where `pricing.latest_row_updated_at`
+is the latest timestamp among the effective pricing rows and `pricing.digest`
+identifies their contents. Editing another pricing row might not raise that
+maximum, and removing the newest row can lower it. Keep `pricing.digest` even
+when timestamps match or are unavailable.
 
-This is not a lexicographically ordered receipt version. A larger transcript
-counter orders transcript changes, not concurrent project or pricing changes;
-equal counters do not prove equal usage totals. Standalone `usage_events` and
-session metadata are outside transcript equality. Digests establish equality,
-not chronology. Do not use the transcript counter alone to reject or accept an
-entire receipt, or compare counters from independently modified archive copies.
+Do not treat this tuple as a lexicographically ordered receipt version. A larger
+transcript counter orders transcript changes, not concurrent project or pricing
+changes, and equal counters do not prove equal usage totals. Standalone
+`usage_events` and session metadata sit outside transcript equality, and digests
+check equality rather than chronology. Do not accept or reject a full receipt
+from `transcript_revision` alone, and do not compare counters across
+independently modified archive copies.
 
-All fields are read with their session rows in the existing read transaction;
-`--all` uses one transaction for all pages. Ordinary cursor pages remain
-separate read transactions with the existing activity-based cursor checks, not a
-revision-pinned historical snapshot. This addition does not change cursor
-semantics or add a modified-since filter, durable checkpoint, or tombstones. A
-future incremental export must cover every export-affecting writer, project and
-pricing changes, cutoff ties, and journal resets before it can promise complete
-change discovery. `--active-since` filters activity time and does not discover
-all corrections to old sessions.
+The command reads all of these fields with their session rows in the existing
+read transaction, and `--all` uses one transaction across all pages. Ordinary
+cursor pages still run in separate read transactions with the existing
+activity-based cursor checks rather than a revision-pinned historical snapshot.
+These fields do not change cursor semantics or add a modified-since filter,
+durable checkpoint, or tombstones. A future incremental export must account for
+every export-affecting writer, project and pricing changes, cutoff ties, and
+journal resets before it can promise complete change discovery. `--active-since`
+filters by activity time and does not catch every correction to older sessions.
 
-## Content Boundary
+## Content boundary
 
-Session summary export omits transcript text, first-message text, thinking text,
-tool input, tool output, and raw transcript bytes. It may include metadata that
-came from sessions, such as sanitized project labels, branch names, model names,
-token totals, and cost totals. It does not emit raw working-directory paths.
-Because no message text leaves the archive, this export has no secret masking or
-`--reveal` flag. Exports that return message text, such as
+Session summary exports leave out transcript text, first-message text, thinking
+text, tool input, tool output, and raw transcript bytes. They can include
+session metadata such as sanitized project labels, branch names, model names,
+token totals, and cost totals, and they never emit raw working-directory paths.
+Because no message text leaves the archive, this command has no secret masking
+and no `--reveal` flag. Exports that return message text, such as
 [conversation export](conversation-export.md#secrets-are-masked-by-default),
 mask detected secrets by default.
 
-## Project Evidence
+## Project evidence
 
-Each session row carries the project identity snapshot captured for that
-session. `resolution` is `resolved`, `unknown`, or `ambiguous`; `identity`
-appears only for resolved projects. `display_label` is presentation metadata and
-is empty when no safe label is available. It is never used as an identity
-fallback.
+Each session row includes the project identity snapshot captured for that
+session. `resolution` is `resolved`, `unknown`, or `ambiguous`, and `identity`
+appears only when `resolution` is `resolved`. `display_label` is presentation
+metadata and stays empty when no safe label is available. AgentsView never falls
+back to `display_label` as an identity.
 
-The nested `worktree.relationship` value is `main_worktree`, `linked_worktree`,
-`not_a_worktree`, or `unknown`. `checkout.state` is `branch`, `detached`, or
-`unknown`. A detached checkout can still belong to a main or linked worktree, so
-consumers should treat checkout state and worktree relationship as independent
-facts.
+The nested `worktree.relationship` field is `main_worktree`, `linked_worktree`,
+`not_a_worktree`, or `unknown`, while `checkout.state` is `branch`, `detached`,
+or `unknown`. A detached checkout can still belong to a main or linked worktree,
+so treat checkout state and worktree relationship as independent facts.
 
-Remote-backed identities remain stable across checkout directory renames,
+Remote-backed identities stay stable across checkout directory renames,
 worktrees, branches, and machines. Machine-root identities are archive-scoped
 and intentionally do not provide cross-machine continuity. Historical sessions
-without captured evidence remain unknown rather than inferring identity from a
+with no captured evidence stay `unknown` instead of guessing an identity from a
 directory basename.
 
-The report-level `projects` catalog uses the same identities, but remote-backed
-catalog entries omit the session-specific `root_key`. See
-[Project Identity](/docs/token-usage/#project-identity) for key prefixes,
-normalization, shared-store scope, and privacy guarantees.
+The report-level `projects` catalog uses the same identities, except that
+remote-backed catalog entries omit the session-specific `root_key`. For key
+prefixes, normalization, shared-store scope, and privacy guarantees, see
+[Project Identity](/docs/token-usage/#project-identity).
 
-## Filters And Limits
+## Filters and limits
 
-`--limit` defaults to `db.MaxSessionLimit`, currently 500. The maximum accepted
-value is also `db.MaxSessionLimit`, currently 500.
+`--limit` defaults to `db.MaxSessionLimit`, currently 500, which is also the
+maximum accepted value.
 
-By default, export returns non-deleted root sessions, excludes one-shot
-sessions, and excludes automated sessions. Use `--include-one-shot`,
-`--include-automated`, and `--include-children` to widen that default. Default
+By default, the export returns non-deleted root sessions and leaves out one-shot
+and automated sessions. To widen that set, pass any combination of
+`--include-one-shot`, `--include-automated`, and `--include-children`. Default
 exclusions can undercount token and cost totals when excluded sessions carry
 usage.
 
-When `--all --format json` is used, the command emits one JSON document with all
-eligible sessions and an empty `cursor.next`. When `--all --format ndjson` is
-used, the command emits one metadata line with an empty `cursor.next`, then all
-eligible session rows. It does not concatenate multiple JSON documents.
+With `--all --format json`, the command writes one JSON document containing all
+eligible sessions and an empty `cursor.next`. With `--all --format ndjson`, it
+writes one metadata line with an empty `cursor.next`, followed by all eligible
+session rows. It never concatenates multiple JSON documents.
 
-## Cursor Contract
+## Cursor contract
 
-Pagination uses keyset cursors over a stable watermark. The first page mints a
-watermark equal to the maximum eligible `last_activity_at` at cursor creation.
-Later pages include only sessions whose `last_activity_at` is at or below that
-watermark. The order is `last_activity_at DESC, id ASC`.
+Pagination uses keyset cursors pinned to a stable watermark. On the first page,
+the command sets the watermark to the highest eligible `last_activity_at` at the
+time it creates the cursor. Later pages include only sessions with
+`last_activity_at` at or below that watermark, ordered by
+`last_activity_at DESC, id ASC`.
 
-Sessions inserted after the first page with activity newer than the watermark
-are excluded until a fresh export starts. The cursor also records a digest of
-the full watermarked set and the already-emitted keyset prefix. If a later
-request sees that rows have moved into or out of either digest, including an
-unemitted row whose activity moved above the watermark, the command returns the
-cursor-reset error so the caller can restart from a fresh first page. Rows
-inserted mid-pagination under the watermark reset the cursor rather than being
-quietly mixed into the in-flight run.
+Any session inserted after the first page with activity newer than the watermark
+stays out of the run until you start a fresh export. The cursor also stores a
+digest of the full watermarked set and the keyset prefix you have already read.
+If a later request sees that rows moved into or out of either digest, including
+an unemitted row whose activity moved above the watermark, the command returns a
+cursor-reset error so you can restart from a fresh first page. Rows inserted
+under the watermark mid-pagination also trigger a reset instead of slipping into
+the in-flight run.
 
-Every page reads its session rows, usage, pricing, project snapshots, worktree
-observations, and archive metadata from one SQLite read transaction. Cursor
-fingerprints cover membership and order across separate manual requests, not
-every evidence field for that multi-request run. An evidence-only update between
-manual requests does not force a reset; each returned page is nevertheless
-internally snapshot-consistent. `--all` holds one read transaction across every
-internal page, so the combined artifact has one pricing, identity, and usage
+Each page reads its session rows, usage, pricing, project snapshots, worktree
+observations, and archive metadata inside a single SQLite read transaction.
+Cursor fingerprints track membership and order across separate manual requests,
+not every evidence field across the whole run. An evidence-only update between
+manual requests does not trigger a reset, and each page you receive is still internally
+snapshot-consistent. `--all` keeps one read transaction open across every
+internal page, so the combined artifact shares one pricing, identity, and usage
 snapshot.
 
-Because `--all` is explicitly unbounded, that read snapshot can delay WAL
-checkpoint reclamation while concurrent sync writes continue. Cancellation
-aborts the active queries and rolls back the transaction. Use ordinary bounded
-pages for latency-sensitive polling; reserve `--all` for complete offline
-artifacts.
+Because `--all` is explicitly unbounded, holding that read snapshot can delay
+WAL checkpoint reclamation while concurrent sync writes continue. Canceling the
+command aborts active queries and rolls back the transaction. For
+latency-sensitive polling, use ordinary bounded pages, and reserve `--all` for
+complete offline artifacts.
 
-The cursor embeds the archive `database_id`, filter parameters, ordering,
+Each cursor embeds the archive `database_id`, filter parameters, ordering,
 watermark, last keyset position, snapshot digest, prefix digest, and limit.
-Passing `--cursor` with any query-affecting flag is an error. Only `--format`,
-`--json`, `--limit`, and `--wait` may be used with `--cursor`; filters such as
-`--project`, `--exclude-project`, `--machine`, `--git-branch`, `--agent`, date
-filters, `--active-since`, message-count filters, `--include-one-shot`,
-`--include-automated`, `--include-children`, `--outcome`, `--health-grade`,
-`--min-tool-failures`, `--has-secret`, and `--all` may not.
+Combining `--cursor` with any query-affecting flag is an error. You can pair
+`--cursor` only with `--format`, `--json`, `--limit`, and `--wait`. You cannot
+pair it with `--project`, `--exclude-project`, `--machine`, `--git-branch`,
+`--agent`, date filters, `--active-since`, message-count filters,
+`--include-one-shot`, `--include-automated`, `--include-children`, `--outcome`,
+`--health-grade`, `--min-tool-failures`, `--has-secret`, or `--all`.
 
-If a cursor belongs to another archive or otherwise requires reset, stdout is
-empty, stderr contains one JSON object, and the process exits with code 4:
+If a cursor belongs to another archive or requires a reset for any other reason,
+stdout stays empty, stderr receives one JSON object, and the command exits with
+code 4:
 
 ```json
 {"error":"cursor_reset","message":"session export cursor is no longer valid; restart the export","database_id":"00000000-0000-4000-8000-000000000001"}
 ```
 
-Other usage and validation errors use the normal CLI error path and exit code 1.
+Other usage and validation errors follow the standard CLI error path and exit
+with code 1.
 
-## Daemonless Schema Eligibility
+## Daemonless schema eligibility
 
-The command normally keeps the archive read-only. If read-only open reports a
-typed missing-schema error for `archive_metadata`,
+The command normally keeps the archive read-only. If opening read-only returns a
+typed missing-schema error for `archive_metadata`, `background_migrations`,
 `project_identity_observations`, or `session_project_identity_snapshots`, the
-command may create a missing one of those tables, or add an explicitly supported
-column to an existing observation table, in one transaction and then reopen
-read-only. Existing metadata or snapshot tables with missing columns are not
-eligible. It does not initialize unrelated tables, run data repairs, or
-reclassify sessions. Other missing core schema still requires the normal
-writable daemon migration or full resync.
+command can create a missing one of those tables, or add an explicitly supported
+column to an existing `project_identity_observations` or
+`session_project_identity_snapshots` table, in one transaction before reopening
+read-only. An existing table with any other missing column is not eligible. The
+command does not initialize unrelated tables, run data repairs, or reclassify
+sessions. Any other missing core schema still requires the normal writable
+daemon migration or a full resync.
 
 When an older archive lacks per-session identity snapshots, the writable daemon
-reconstructs them in a resumable background migration. This reconstruction is
-best-effort: it combines stored session metadata with the repository and Git
+reconstructs them in a resumable background migration. That reconstruction is
+best-effort. It combines stored session metadata with the repository and Git
 configuration visible when the migration runs, so a repository that moved or
 changed remotes may not reproduce its original checkout context. Existing stored
-snapshots remain authoritative. `agentsview export status` reports pending,
-running, failed, and completed state; a failure includes its cause and recovery
-commands, including when the daemon could not save the failure. Run
-`agentsview export sessions --wait` to start the local daemon if needed and wait
-for this work before exporting.
+snapshots remain authoritative. To check migration progress, run
+`agentsview export status`, which reports pending, running, failed, and
+completed states. When a migration fails, the status output includes its cause
+and recovery commands, even if the daemon could not save the failure. To start
+the local daemon if needed and wait for this work before exporting, run
+`agentsview export sessions --wait`.
 
 ## Versioning
 
-`agentsview export sessions --format json|ndjson` is its own versioned surface.
-Its v1 shape shipped in 0.37.1. Releases 0.38.0 and 0.38.1 introduced the
-current privacy-bounded project, repository, worktree, and checkout evidence
-shape but mistakenly continued to report version 1. Current builds report
-version 7. Version 2 corrected the project-evidence marker, version 3 introduced
-exact microdollar money objects, and version 4 adds explicit
-reported-to-priced-model resolutions with complete request-pricing bands and
-application counts. Version 5 selects complete Claude snapshots before generic
-deduplication across pagination and session filters, retains earliest-session
-attribution, and includes the maximum observed web-search count in pricing.
-Version 6 applies provider-specific billing identity to computed usage and
-preserves reported cost rows and custom pricing overrides. Costs from v5 and v6
-must not be compared as the same billing semantics. Publishing `archive_id` is
-an additive v6 extension: existing session IDs, database IDs, usage, pricing,
-ordering, and cursor semantics are unchanged. Version 7 lets `model_usage` be
-`null` for a Codex Cloud session whose token counts are unknown; a v6 consumer
-that expects an object there must be updated. The two transitional releases must
-not be treated as v1-compatible. There is no flag to request an earlier output
-version. Additive fields do not require a bump, but row semantic changes, field
-type changes, sort order changes, cursor semantics changes, required-field
-meaning changes, field removal, pricing digest canonicalization changes, project
-key derivation changes, remote normalization changes, path fallback
-normalization changes, and new closed-enum values require a bump.
+`agentsview export sessions --format json|ndjson` has its own schema version.
+Current builds report version 7, and there is no flag to request an earlier
+output version.
 
-Consumers should require the expected `schema_version` and ignore unknown
+- **Version 1.** Shipped in 0.37.1. Releases 0.38.0 and 0.38.1 introduced the
+  current privacy-bounded project, repository, worktree, and checkout evidence
+  shape but mistakenly continued to report version 1. Do not treat those two
+  transitional releases as v1-compatible.
+- **Version 2.** Corrected the project-evidence marker.
+- **Version 3.** Introduced exact microdollar money objects.
+- **Version 4.** Added explicit reported-to-priced-model resolutions with
+  complete request-pricing bands and application counts.
+- **Version 5.** Selected complete Claude snapshots before generic deduplication
+  across pagination and session filters, kept earliest-session attribution, and
+  included the maximum observed web-search count in pricing.
+- **Version 6.** Applied provider-specific billing identity to computed usage
+  and preserved reported cost rows and custom pricing overrides. Do not compare
+  v5 and v6 costs as the same billing semantics. Publishing `archive_id` is an
+  additive v6 extension that leaves existing session IDs, database IDs, usage,
+  pricing, ordering, and cursor semantics unchanged.
+- **Version 7.** Allows `model_usage` to be `null` for a Codex Cloud session
+  whose token counts are unknown. Update any v6 consumer that expects an object
+  there.
+
+Additive fields do not require a version bump. A bump is required for row
+semantic changes, field type changes, sort order changes, cursor semantics
+changes, required-field meaning changes, field removal, pricing digest
+canonicalization changes, project key derivation changes, remote normalization
+changes, path fallback normalization changes, and new closed-enum values.
+
+Have your consumer require the `schema_version` it expects and ignore unknown
 additive fields.
 
-Closed enums established in version 2 and unchanged in version 7 include project
-`resolution` (`resolved`, `unknown`, `ambiguous`), session `classification`
-(`interactive`, `automated`), and `cost_source` (`computed`, `reported`,
-`mixed`).
+These closed enums were established in version 2 and remain unchanged in
+version 7:
+
+- Project `resolution`: `resolved`, `unknown`, `ambiguous`
+- Session `classification`: `interactive`, `automated`
+- `cost_source`: `computed`, `reported`, `mixed`
 
 See [Token Usage & Costs](/docs/token-usage/#pricing-provenance) for the shared
 pricing provenance contract and
