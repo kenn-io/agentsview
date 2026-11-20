@@ -471,6 +471,11 @@ func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage,
 	if err != nil {
 		return SearchPage{}, err
 	}
+	release, err := db.acquireBulkSearch(ctx)
+	if err != nil {
+		return SearchPage{}, err
+	}
+	defer release()
 	f.Query = ftsQuery.match
 
 	// ORDER BY for the outer query. FTS5 ranks are negative (lower = better),

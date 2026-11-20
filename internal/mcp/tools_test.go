@@ -2133,6 +2133,9 @@ func TestSearchSessions_DateRange(t *testing.T) {
 					if out.NextCursor == nil {
 						break
 					}
+					if out.DateFrom != "" {
+						args["date_from"] = out.DateFrom
+					}
 					args["cursor"] = *out.NextCursor
 				}
 				assert.ElementsMatch(t, tc.want, ids, "query %s", query)
