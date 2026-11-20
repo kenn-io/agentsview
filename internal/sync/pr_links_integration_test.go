@@ -126,8 +126,7 @@ func TestIncrementalStructuredLinkAlsoInPrompt(t *testing.T) {
 
 func TestParseDiffDetectsPRLinkChanges(t *testing.T) {
 	for _, tc := range []struct{ name, update string }{
-		{"cleared", `UPDATE sessions SET pr_links='' WHERE id='changed-pr'`},
-		{"missing structured record", `UPDATE sessions SET structured_pr_links='' WHERE id='changed-pr'`},
+		{"cleared", `UPDATE sessions SET pr_links='', structured_pr_links='' WHERE id='changed-pr'`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env := setupTestEnv(t)

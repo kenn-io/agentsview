@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -231,7 +232,7 @@ func TestPromptPRLinks(t *testing.T) {
 	}
 }
 
-func TestMergePRLinksDeduplicatesIdentity(t *testing.T) {
+func TestCombinePRLinksDeduplicatesIdentity(t *testing.T) {
 	first, ok := NewPRLink("https://github.com/Owner/Repo/pull/007", "Owner/Repo", 7)
 	require.True(t, ok)
 	duplicate, ok := NewPRLink("http://GITHUB.COM/owner/repo/pull/7", "owner/repo", 7)
@@ -239,5 +240,32 @@ func TestMergePRLinksDeduplicatesIdentity(t *testing.T) {
 	otherHost := PRLink{URL: "https://forge.example/owner/repo/pull/7", Host: "forge.example", Repository: "owner/repo", Number: 7}
 	otherRepo := PRLink{URL: "https://github.com/owner/other/pull/7", Host: "github.com", Repository: "owner/other", Number: 7}
 	otherNumber := PRLink{URL: "https://github.com/owner/repo/pull/8", Host: "github.com", Repository: "owner/repo", Number: 8}
-	assert.Equal(t, []PRLink{first, otherHost, otherRepo, otherNumber}, MergePRLinks([]PRLink{first}, []PRLink{duplicate, otherHost, otherRepo, otherNumber}))
+	assert.Equal(t, []PRLink{first, otherHost, otherRepo, otherNumber}, CombinePRLinks([]PRLink{first}, []PRLink{duplicate, otherHost, otherRepo, otherNumber}))
+}
+
+func TestRecordedPRLinksPreserveDistinctURLs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "links.jsonl")
+	content := claudeProviderFixture("Review") + `
+{"type":"pr-link","prUrl":"https://github.com/o/r/pull/7","prRepository":"o/r","prNumber":7}
+{"type":"pr-link","prUrl":"http://github.com/o/r/pull/7","prRepository":"o/r","prNumber":7}
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	results, _, err := claudeParseWithExclusions(t.Context(), path, "project", "local")
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	links := results[0].Session.PRLinks
+	require.Len(t, links, 2)
+	assert.Len(t, CombinePRLinks(links), 1)
+}
+
+func TestPromptPRLinksLongTokenAndCancellation(t *testing.T) {
+	text := strings.Repeat("https://", 100000) + " https://github.com/o/r/pull/1"
+	links, err := PromptPRLinksContext(t.Context(), text)
+	require.NoError(t, err)
+	require.Len(t, links, 1)
+	assert.Equal(t, "https://github.com/o/r/pull/1", links[0].URL)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = PromptPRLinksContext(ctx, text)
+	require.ErrorIs(t, err, context.Canceled)
 }

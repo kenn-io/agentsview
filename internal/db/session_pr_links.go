@@ -179,6 +179,16 @@ func (db *DB) GetSessionPRLinkURLs(
 
 // PromptPRLinks finds links in retained user dialogue.
 func PromptPRLinks(messages []Message) []PRLink {
+	links, _ := promptPRLinks(nil, messages)
+	return links
+}
+
+// PromptPRLinksContext allows hosted projection to stop when its deadline expires.
+func PromptPRLinksContext(ctx context.Context, messages []Message) ([]PRLink, error) {
+	return promptPRLinks(ctx, messages)
+}
+
+func promptPRLinks(ctx context.Context, messages []Message) ([]PRLink, error) {
 	var lists [][]PRLink
 	for _, msg := range messages {
 		if msg.Role != "user" || msg.IsSystem || msg.IsCompactBoundary || msg.SourceSubtype == parser.SourceSubtypeToolResult || IsSystemPrefixed(msg.Content, msg.Role) {
@@ -192,9 +202,18 @@ func PromptPRLinks(messages []Message) []PRLink {
 		if strings.HasPrefix(trimmed, "<bash-stdout>") || strings.HasPrefix(trimmed, "<bash-stderr>") {
 			continue
 		}
-		lists = append(lists, parser.PromptPRLinks(withoutSystemReminders(content)))
+		content = withoutSystemReminders(content)
+		if ctx == nil {
+			lists = append(lists, parser.PromptPRLinks(content))
+		} else {
+			links, err := parser.PromptPRLinksContext(ctx, content)
+			if err != nil {
+				return nil, err
+			}
+			lists = append(lists, links)
+		}
 	}
-	return parser.MergePRLinks(lists...)
+	return parser.CombinePRLinks(lists...), nil
 }
 
 func withoutSystemReminders(text string) string {
@@ -256,7 +275,7 @@ func refreshSessionPromptPRLinksTx(tx transactionQueries, id string) error {
 	if err != nil {
 		return err
 	}
-	return writeSessionPromptPRLinksTx(tx, id, stored, parser.MergePRLinks(DecodePRLinks(structured), PromptPRLinks(messages)))
+	return writeSessionPromptPRLinksTx(tx, id, stored, parser.CombinePRLinks(DecodePRLinks(structured), PromptPRLinks(messages)))
 }
 
 func appendSessionPromptPRLinksTx(tx transactionQueries, id string, messages []Message) error {
@@ -268,7 +287,7 @@ func appendSessionPromptPRLinksTx(tx transactionQueries, id string, messages []M
 	if err := tx.QueryRow(`SELECT pr_links FROM sessions WHERE id=?`, id).Scan(&stored); err != nil {
 		return err
 	}
-	return writeSessionPromptPRLinksTx(tx, id, stored, parser.MergePRLinks(DecodePRLinks(stored), derived))
+	return writeSessionPromptPRLinksTx(tx, id, stored, parser.CombinePRLinks(DecodePRLinks(stored), derived))
 }
 
 // GetSessionStructuredPRLinks returns parser-recorded links without prompt links.

@@ -58,17 +58,8 @@ func (e *Engine) compareStoredSession(
 	if err != nil {
 		return nil, err
 	}
-	structured, err := e.db.GetSessionStructuredPRLinks(ctx, stored.ID)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("parse-diff: structured PR links for %s: %w", stored.ID, err)
-	}
-	storedFields := *stored
-	storedFields.PRLinks = structured
-	diffs := compareSessionFields(&storedFields, prepared)
-	combined := parser.MergePRLinks(prepared.PRLinks, db.PromptPRLinks(msgs))
-	if db.EncodePRLinks(stored.PRLinks) != db.EncodePRLinks(combined) {
-		diffs = append(diffs, FieldDiff{Field: FieldPRLinks, Stored: db.EncodePRLinks(stored.PRLinks), Parsed: db.EncodePRLinks(combined)})
-	}
+	prepared.PRLinks = parser.CombinePRLinks(prepared.PRLinks, db.PromptPRLinks(msgs))
+	diffs := compareSessionFields(stored, prepared)
 
 	// Tier 1: three exact ordered fingerprints over the stored
 	// messages. The token fingerprint covers per-message model and
@@ -305,6 +296,9 @@ func appendSessionMetadataDiffs(
 	diffs = appendScalarSessionDiff(
 		diffs, FieldGitBranch, agent, stored.GitBranch, prepared.GitBranch,
 	)
+	// Pull request links are never incremental-append history: an appended
+	// record that would change them forces a full parse, so any difference
+	// is real drift.
 	if sv, pv := db.EncodePRLinks(stored.PRLinks), db.EncodePRLinks(prepared.PRLinks); sv != pv {
 		diffs = append(diffs, FieldDiff{
 			Field:  FieldPRLinks,

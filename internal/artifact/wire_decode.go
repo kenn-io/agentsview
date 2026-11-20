@@ -377,6 +377,9 @@ func (m segmentMessage) dbMessage() db.Message {
 		IsCompactBoundary: m.IsCompactBoundary,
 		PromptSource:      m.PromptSource,
 	}
+	if m.DialogueIsContent {
+		msg.DialogueText = &msg.Content
+	}
 	if len(m.ToolCalls) > 0 {
 		msg.ToolCalls = make([]db.ToolCall, len(m.ToolCalls))
 		for i, call := range m.ToolCalls {

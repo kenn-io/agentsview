@@ -37,7 +37,7 @@ type ArtifactExportData struct {
 const artifactMessageRawBytesSQL = `
 	length(CAST(role AS BLOB)) +
 	length(CAST(content AS BLOB)) +
-	length(CAST(CASE WHEN role = 'user' THEN COALESCE(dialogue_text, '') ELSE '' END AS BLOB)) +
+	length(CAST(CASE WHEN role = 'user' AND dialogue_text <> content THEN dialogue_text ELSE '' END AS BLOB)) +
 	length(CAST(thinking_text AS BLOB)) +
 	length(CAST(COALESCE(timestamp, '') AS BLOB)) +
 	length(CAST(model AS BLOB)) +
@@ -114,7 +114,8 @@ func (db *DB) LoadArtifactExportData(
 		WHERE session_id = ?
 		ORDER BY ordinal ASC
 		LIMIT ?`, `id, session_id, ordinal, role, content, thinking_text,
-		CASE WHEN role = 'user' THEN dialogue_text ELSE NULL END, 0, `+selectMessageMetadataCols), sessionID, limits.Messages+1)
+		CASE WHEN role = 'user' THEN dialogue_text ELSE NULL END,
+		CASE WHEN role = 'user' THEN dialogue_is_content ELSE 0 END, `+selectMessageMetadataCols), sessionID, limits.Messages+1)
 	if err != nil {
 		return ArtifactExportData{}, fmt.Errorf("loading artifact export messages: %w", err)
 	}

@@ -1,12 +1,13 @@
 package parser
 
 import (
+	"context"
 	"net/url"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // PRLink is a pull or merge request associated with a session. The shape
@@ -38,10 +39,18 @@ func NewPRLink(
 	if repository == "" || number <= 0 {
 		return PRLink{}, false
 	}
-	urlRepository, rawNumber, remainder, _, routeFound := prLinkRoute(strings.TrimRight(u.Path, "/"))
+	path := strings.TrimRight(u.Path, "/")
+	var urlRepository, rawNumber string
+	var routeFound bool
+	for _, separator := range []string{"/pull/", "/pulls/", "/-/merge_requests/"} {
+		if prefix, suffix, found := strings.CutLast(path, separator); found && (!routeFound || len(prefix) > len(urlRepository)) {
+			urlRepository, rawNumber = prefix, suffix
+			routeFound = true
+		}
+	}
 	if routeFound {
 		urlNumber, err := strconv.Atoi(rawNumber)
-		if err != nil || remainder != "" || urlNumber != number || !strings.EqualFold(strings.TrimPrefix(urlRepository, "/"), repository) {
+		if err != nil || urlNumber != number || !strings.EqualFold(strings.TrimPrefix(urlRepository, "/"), repository) {
 			return PRLink{}, false
 		}
 	}
@@ -56,42 +65,21 @@ func NewPRLink(
 	}, true
 }
 
-// prLinkRoute chooses the last recognized route, including when a repository
-// path itself contains a route-shaped segment.
-func prLinkRoute(path string) (repository, number, remainder, routePath string, found bool) {
-	for _, separator := range []string{"/pull/", "/pulls/", "/-/merge_requests/"} {
-		prefix, suffix, ok := strings.CutLast(path, separator)
-		if !ok || (found && len(prefix) <= len(repository)) {
-			continue
-		}
-		repository, found = prefix, true
-		number, remainder, _ = strings.Cut(suffix, "/")
-		routePath = prefix + separator + number
-	}
-	return
-}
-
-// prLinkCollector deduplicates links by PR identity, keeping first-appearance
+// prLinkCollector deduplicates links by URL, keeping first-appearance
 // order.
 type prLinkCollector struct {
 	links []PRLink
-	seen  map[prLinkIdentity]struct{}
-}
-
-type prLinkIdentity struct {
-	host, repository string
-	number           int
+	seen  map[string]struct{}
 }
 
 func (c *prLinkCollector) add(link PRLink) {
-	key := prLinkIdentity{strings.ToLower(link.Host), strings.ToLower(link.Repository), link.Number}
-	if _, ok := c.seen[key]; ok {
+	if _, ok := c.seen[link.URL]; ok {
 		return
 	}
 	if c.seen == nil {
-		c.seen = make(map[prLinkIdentity]struct{})
+		c.seen = make(map[string]struct{})
 	}
-	c.seen[key] = struct{}{}
+	c.seen[link.URL] = struct{}{}
 	c.links = append(c.links, link)
 }
 
@@ -102,8 +90,8 @@ func (c *prLinkCollector) result() []PRLink {
 	return c.links
 }
 
-// MergePRLinks combines link lists with the collector's deduplication.
-func MergePRLinks(lists ...[]PRLink) []PRLink {
+// mergePRLinks combines link lists with the collector's deduplication.
+func mergePRLinks(lists ...[]PRLink) []PRLink {
 	var c prLinkCollector
 	for _, list := range lists {
 		for _, link := range list {
@@ -113,81 +101,121 @@ func MergePRLinks(lists ...[]PRLink) []PRLink {
 	return c.result()
 }
 
-var (
-	promptURL      = regexp.MustCompile(`(?i)https?://[^\s<>"'()\[\]]+`)
-	promptURLStart = regexp.MustCompile(`(?i)https?://`)
-)
+// CombinePRLinks combines links to the same pull request for display and search.
+func CombinePRLinks(lists ...[]PRLink) []PRLink {
+	seen := make(map[prLinkIdentity]struct{})
+	var result []PRLink
+	for _, list := range lists {
+		for _, link := range list {
+			key := prLinkIdentity{strings.ToLower(link.Host), strings.ToLower(link.Repository), link.Number}
+			if _, ok := seen[key]; !ok {
+				seen[key] = struct{}{}
+				result = append(result, link)
+			}
+		}
+	}
+	return result
+}
+
+type prLinkIdentity struct {
+	host, repository string
+	number           int
+}
 
 // PromptPRLinks extracts pull and merge request URLs from text.
 func PromptPRLinks(text string) []PRLink {
+	links, _ := promptPRLinks(nil, text)
+	return links
+}
+
+// PromptPRLinksContext permits callers holding locks to interrupt scanning.
+func PromptPRLinksContext(ctx context.Context, text string) ([]PRLink, error) {
+	return promptPRLinks(ctx, text)
+}
+
+func promptPRLinks(ctx context.Context, text string) ([]PRLink, error) {
 	var links prLinkCollector
-	starts := standalonePromptURLStarts(text)
-	for i, start := range starts {
-		end := len(text)
-		if i+1 < len(starts) {
-			end = starts[i+1]
-		}
-		part := text[start:end]
-		candidate := promptURLToken(part)
-		if i+1 < len(starts) && len(candidate) == len(part) {
-			candidate = strings.TrimRightFunc(candidate, func(r rune) bool {
-				return unicode.IsPunct(r) || unicode.IsSymbol(r)
-			})
-		}
-		candidate = strings.TrimRightFunc(candidate, func(r rune) bool {
-			return strings.ContainsRune(".,;:!?]`*_", r) || r > unicode.MaxASCII && unicode.IsPunct(r)
-		})
-		u, err := url.Parse(candidate)
-		if err != nil {
-			continue
-		}
-		repository, num, routePath, found := promptPRRoute(u.Path)
-		if !found || strings.Trim(num, "0123456789") != "" {
-			continue
-		}
-		n, err := strconv.Atoi(num)
-		if err != nil {
-			continue
-		}
-		u.Path = routePath
-		u.RawPath, u.RawQuery, u.Fragment = "", "", ""
-		if link, ok := NewPRLink(u.String(), repository, n); ok {
-			links.add(link)
-		}
-	}
-	return links.result()
-}
-
-// promptURLToken returns the URL that starts text, ending at the first
-// character a URL cannot contain or at any Unicode whitespace.
-func promptURLToken(text string) string {
-	token := promptURL.FindString(text)
-	if n := strings.IndexFunc(token, unicode.IsSpace); n >= 0 {
-		token = token[:n]
-	}
-	return token
-}
-
-// standalonePromptURLStarts returns the offsets of URLs that do not start
-// inside another URL. A URL inside an earlier URL's query or fragment, or
-// directly after a "/" or "=" in its path, is part of that URL. Any other
-// URL glued to the previous one, such as "pull/1https://" or
-// "pull/1,https://", starts a new link.
-func standalonePromptURLStarts(text string) []int {
-	var starts []int
-	enclosingStart, enclosingEnd := 0, 0
-	for _, match := range promptURLStart.FindAllStringIndex(text, -1) {
-		start := match[0]
-		if start < enclosingEnd {
-			enclosing := text[enclosingStart:start]
-			if strings.ContainsAny(enclosing, "?#") || strings.HasSuffix(enclosing, "/") || strings.HasSuffix(enclosing, "=") {
-				continue
+	for pos := 0; pos < len(text); {
+		if ctx != nil {
+			if err := ctx.Err(); err != nil {
+				return nil, err
 			}
 		}
-		starts = append(starts, start)
-		enclosingStart, enclosingEnd = start, start+len(promptURLToken(text[start:]))
+		start := pos
+		checkAt := pos + 4096
+		for pos < len(text) {
+			r, n := utf8.DecodeRuneInString(text[pos:])
+			if unicode.IsSpace(r) || strings.ContainsRune("<>\"'()[]", r) {
+				break
+			}
+			pos += n
+			if pos >= checkAt && ctx != nil {
+				checkAt = pos + 4096
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+			}
+		}
+		token := text[start:pos]
+		var starts []int
+		query := false
+		for i := 0; i < len(token); i++ {
+			if i&4095 == 0 && ctx != nil {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+			}
+			if token[i] == '?' || token[i] == '#' {
+				query = true
+			}
+			if (len(token)-i >= 7 && strings.EqualFold(token[i:i+7], "http://")) || (len(token)-i >= 8 && strings.EqualFold(token[i:i+8], "https://")) {
+				if len(starts) == 0 || (!query && token[i-1] != '/' && token[i-1] != '=') {
+					starts = append(starts, i)
+					query = false
+				}
+			}
+		}
+		for i, start := range starts {
+			if i&255 == 0 && ctx != nil {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+			}
+			end := len(token)
+			if i+1 < len(starts) {
+				end = starts[i+1]
+			}
+			candidate := token[start:end]
+			if i+1 < len(starts) {
+				candidate = strings.TrimRightFunc(candidate, func(r rune) bool { return unicode.IsPunct(r) || unicode.IsSymbol(r) })
+			}
+			candidate = strings.TrimRightFunc(candidate, func(r rune) bool {
+				return strings.ContainsRune(".,;:!?]`*_", r) || r > unicode.MaxASCII && unicode.IsPunct(r)
+			})
+			u, err := url.Parse(candidate)
+			if err != nil {
+				continue
+			}
+			repository, num, routePath, found := promptPRRoute(u.Path)
+			if !found || strings.Trim(num, "0123456789") != "" {
+				continue
+			}
+			n, err := strconv.Atoi(num)
+			if err != nil {
+				continue
+			}
+			u.Path = routePath
+			u.RawPath, u.RawQuery, u.Fragment = "", "", ""
+			if link, ok := NewPRLink(u.String(), repository, n); ok {
+				links.add(link)
+			}
+		}
+		if pos < len(text) {
+			_, n := utf8.DecodeRuneInString(text[pos:])
+			pos += n
+		}
 	}
-	return starts
+	return CombinePRLinks(links.result()), nil
 }
 
 // promptPRRoute finds the pull or merge request route in a prompt URL path.

@@ -241,7 +241,7 @@ func (p *claudeProvider) joinClaudeSubagentContinuations(
 		joined.Session.SessionKind = firstNonEmptyJSONLString(joined.Session.SessionKind, meta.SessionKind)
 		joined.Session.Cwd = firstNonEmptyJSONLString(joined.Session.Cwd, meta.Cwd)
 		joined.Session.GitBranch = firstNonEmptyJSONLString(joined.Session.GitBranch, meta.GitBranch)
-		joined.Session.PRLinks = MergePRLinks(joined.Session.PRLinks, meta.PRLinks)
+		joined.Session.PRLinks = mergePRLinks(joined.Session.PRLinks, meta.PRLinks)
 		if meta.claudeRenameSeen {
 			joined.Session.SessionName = meta.SessionName
 			joined.Session.claudeRenameSeen = true

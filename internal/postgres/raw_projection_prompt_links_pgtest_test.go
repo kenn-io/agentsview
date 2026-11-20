@@ -3,6 +3,8 @@
 package postgres
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -146,27 +148,37 @@ func TestRawProjectionFencesAndBackfillsTombstonedCapture(t *testing.T) {
 }
 
 func TestRawProjectionRefreshesLinksWhenDialogueChanges(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "-home-user-project")
+	require.NoError(t, os.MkdirAll(project, 0o700))
+	path := filepath.Join(project, "portable.jsonl")
+	input := `{"type":"user","sessionId":"portable","uuid":"u1","timestamp":"2026-01-01T00:00:00Z","message":{"role":"user","content":[{"type":"text","text":"Review https://github.com/o/r/pull/1"},{"type":"thinking","thinking":"https://github.com/o/r/pull/2"}]}}` + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(input), 0o600))
+	provider, ok := parser.NewProvider(parser.AgentClaude, parser.ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	parsed, err := provider.Parse(t.Context(), parser.ParseRequest{Source: sources[0]})
+	require.NoError(t, err)
+	require.Len(t, parsed.Results, 1)
+	result := &parsed.Results[0].Result
+	require.Len(t, result.Messages, 1)
+	require.Contains(t, result.Messages[0].Content, "pull/2")
+	require.NotContains(t, *result.Messages[0].DialogueText, "pull/2")
+	result.Session.ID = "claude:portable"
+	outcome := rawderive.ParsedManifest{Outcome: parsed}
 	f := newProjectionFixture(t)
-	m, _ := f.accept(t, "device-a", "initial", "")
-	outcome := projectionOutcome("Review https://github.com/o/r/pull/1")
-	result := &outcome.Outcome.Results[0].Result
-	result.Messages = append(result.Messages, parser.ParsedMessage{Ordinal: 2, Role: parser.RoleUser, Content: "Also https://github.com/o/r/pull/2"})
-	for i, msg := range result.Messages {
-		if msg.Role == parser.RoleUser {
-			result.Messages[i].DialogueText = new(msg.Content)
-		}
-	}
+	m, _ := f.accept(t, "device-a", "initial", "", parser.AgentClaude)
+	dialogue := result.Messages[0].DialogueText
+	result.Messages[0].DialogueText = nil
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
-	resolved, err := f.sink.Resolve(t.Context(), "codex:portable")
+	resolved, err := f.sink.Resolve(t.Context(), "claude:portable")
 	require.NoError(t, err)
 	var links string
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&links))
-	require.Equal(t, []db.PRLink{
-		{URL: "https://github.com/o/r/pull/1", Host: "github.com", Repository: "o/r", Number: 1},
-		{URL: "https://github.com/o/r/pull/2", Host: "github.com", Repository: "o/r", Number: 2},
-	}, db.DecodePRLinks(links))
-	// A newer parser keeps the message but no longer counts it as dialogue.
-	result.Messages[2].DialogueText = new("")
+	require.Len(t, db.DecodePRLinks(links), 2)
+	result.Messages[0].DialogueText = dialogue
 	_, err = f.sink.SelectSourceGeneration(t.Context(), m, "parser-2")
 	require.NoError(t, err)
 	leases, err := f.jobs.ClaimRawParseJobs(t.Context(), "upgrade-worker", 1, time.Minute)

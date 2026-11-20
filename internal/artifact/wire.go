@@ -224,6 +224,7 @@ type segmentMessage struct {
 	Role              string            `json:"role"`
 	Content           string            `json:"content"`
 	DialogueText      *string           `json:"dialogue_text,omitzero"`
+	DialogueIsContent bool              `json:"dialogue_is_content,omitzero"`
 	ThinkingText      string            `json:"thinking_text,omitempty"`
 	Timestamp         string            `json:"timestamp,omitempty"`
 	HasThinking       bool              `json:"has_thinking,omitzero"`
@@ -364,6 +365,10 @@ func segmentMessageFromDB(msg db.Message) segmentMessage {
 		SourceParentUUID:  msg.SourceParentUUID,
 		IsSidechain:       msg.IsSidechain,
 		IsCompactBoundary: msg.IsCompactBoundary,
+	}
+	if msg.DialogueText != nil && *msg.DialogueText == msg.Content {
+		record.DialogueText = nil
+		record.DialogueIsContent = true
 	}
 	if len(msg.ToolCalls) > 0 {
 		record.ToolCalls = make([]segmentToolCall, len(msg.ToolCalls))
