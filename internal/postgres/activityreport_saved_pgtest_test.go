@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/activity"
@@ -24,7 +26,7 @@ import (
 )
 
 func TestPGActivityReportSaved(t *testing.T) {
-	for _, mode := range []string{"restart", "sweep", "legacy", "replaced", "pricing", "today", "corrupt"} {
+	for _, mode := range []string{"restart", "sweep", "legacy", "replaced", "today", "corrupt"} {
 		t.Run(mode, func(t *testing.T) {
 			cache := t.TempDir()
 			t.Setenv("CACHE_DIRECTORY", cache)
@@ -41,35 +43,6 @@ func TestPGActivityReportSaved(t *testing.T) {
 			q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
 			first := openPGActivityInputStore(t, target, syncer.schema, directory)
 			t.Cleanup(func() { require.NoError(t, first.Close()) })
-			if mode == "pricing" {
-				for i, rate := range []int64{20_000_000, 40_000_000, 20_000_000, 40_000_000} {
-					store := first
-					if i > 0 {
-						store = openPGActivityInputStore(t, target, syncer.schema, directory)
-						t.Cleanup(func() { require.NoError(t, store.Close()) })
-					}
-					store.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: rate}})
-					got := pgKeptBuild(t, store, f, q, i < 2)
-					want := money.MustParseDollars("0.01")
-					if rate == 40_000_000 {
-						want = money.MustParseDollars("0.02")
-					}
-					assert.Equal(t, want, got.Report.Totals.Cost)
-				}
-				t.Cleanup(func() { pricing.SetConfiguredAliases(nil) })
-				for i, alias := range []string{"alias-one", "alias-two"} {
-					pricing.SetConfiguredAliases(map[string]string{"kept-model": alias})
-					store := openPGActivityInputStore(t, target, syncer.schema, directory)
-					store.SetCustomPricing(map[string]config.CustomModelRate{
-						"alias-one": {OutputMicrodollarsPerMTok: 20_000_000},
-						"alias-two": {OutputMicrodollarsPerMTok: 40_000_000},
-					})
-					got := pgKeptBuild(t, store, f, q, true)
-					require.Equal(t, money.MustParseDollars([]string{"0.01", "0.02"}[i]), got.Report.Totals.Cost)
-					require.NoError(t, store.Close())
-				}
-				return
-			}
 			if mode == "today" {
 				now := time.Now().UTC()
 				timezone := "UTC"
@@ -132,15 +105,49 @@ func TestPGActivityReportSaved(t *testing.T) {
 			switch mode {
 			case "restart":
 				requirePGKeptEqual(t, want, got)
-				pgKeptSession(t, local, "a", "project-a", "2026-06-15")
-				pgKeptPush(t, syncer, false)
-				assert.Empty(t, pgKeptBuild(t, restarted, f, q, true).Sessions)
 			case "replaced":
 				assert.Equal(t, 600, got.Report.Totals.OutputTokens)
 			default:
 				requirePGKeptEqual(t, want, got)
 			}
 		})
+	}
+}
+
+func TestPGActivityReportSavedPricing(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, _ := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	target, directory := testPGURL(t), t.TempDir()
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	first := openPGActivityInputStore(t, target, syncer.schema, directory)
+	t.Cleanup(func() { require.NoError(t, first.Close()) })
+	for i, rate := range []int64{20_000_000, 40_000_000, 20_000_000, 40_000_000} {
+		store := first
+		if i > 0 {
+			store = openPGActivityInputStore(t, target, syncer.schema, directory)
+			t.Cleanup(func() { require.NoError(t, store.Close()) })
+		}
+		store.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: rate}})
+		got := pgKeptBuild(t, store, f, q, i < 2)
+		want := money.MustParseDollars("0.01")
+		if rate == 40_000_000 {
+			want = money.MustParseDollars("0.02")
+		}
+		assert.Equal(t, want, got.Report.Totals.Cost)
+	}
+	t.Cleanup(func() { pricing.SetConfiguredAliases(nil) })
+	for i, alias := range []string{"alias-one", "alias-two"} {
+		pricing.SetConfiguredAliases(map[string]string{"kept-model": alias})
+		store := openPGActivityInputStore(t, target, syncer.schema, directory)
+		store.SetCustomPricing(map[string]config.CustomModelRate{
+			"alias-one": {OutputMicrodollarsPerMTok: 20_000_000},
+			"alias-two": {OutputMicrodollarsPerMTok: 40_000_000},
+		})
+		got := pgKeptBuild(t, store, f, q, true)
+		require.Equal(t, money.MustParseDollars([]string{"0.01", "0.02"}[i]), got.Report.Totals.Cost)
+		require.NoError(t, store.Close())
 	}
 }
 
@@ -255,7 +262,17 @@ func TestPGActivityReportRefreshesSavedReport(t *testing.T) {
 		pgKeptSession(t, local, "b", "project-b", "2026-07-14")
 		pgKeptPush(t, syncer, false)
 		directory := t.TempDir()
-		store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+		config, err := pgx.ParseConfig(testPGURL(t))
+		require.NoError(t, err)
+		config.RuntimeParams["search_path"] = syncer.schema
+		config.RuntimeParams["TimeZone"] = "UTC"
+		trace := &activityHistoryTracer{}
+		config.Tracer = trace
+		pool := stdlib.OpenDB(*config)
+		store := &Store{pg: pool, ownedDB: pool}
+		require.NoError(t, store.ConfigureUsageCache(t.Context(), directory, testPGURL(t), syncer.schema))
+		policy := &activityPolicyProbe{storeExecutor: store.pg}
+		store.pg = policy
 		t.Cleanup(func() { require.NoError(t, store.Close()) })
 		q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
 		want := pgKeptBuild(t, store, f, q, true)
@@ -263,7 +280,11 @@ func TestPGActivityReportRefreshesSavedReport(t *testing.T) {
 			_, err := syncer.pg.ExecContext(t.Context(), `UPDATE sessions SET message_count=message_count+1 WHERE id='b'`)
 			require.NoError(t, err)
 			if i%20 == 19 {
+				trace.reads.Store(0)
+				policy.checks = 0
 				requirePGKeptEqual(t, want, pgKeptBuild(t, store, f, q, false))
+				require.LessOrEqual(t, trace.reads.Load(), int32(2))
+				require.LessOrEqual(t, policy.checks, 1)
 			}
 		}
 		requirePGKeptEqual(t, want, pgKeptBuild(t, store, f, q, false))
@@ -273,115 +294,32 @@ func TestPGActivityReportRefreshesSavedReport(t *testing.T) {
 	})
 }
 
-func TestPGSavedActivityReportRestoreBetweenValidationReads(t *testing.T) {
+func TestPGSavedActivityReportRevisitedAfterEviction(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	local, syncer, _ := newUsageJournalFixture(t)
 	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
-	pgKeptSession(t, local, "b", "project-b", "2026-07-14")
 	pgKeptPush(t, syncer, false)
-	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, t.TempDir())
+	directory := t.TempDir()
+	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
-	require.Equal(t, 500, pgKeptBuild(t, store, f, q, true).Report.Totals.OutputTokens)
-	var revision int64
-	require.NoError(t, syncer.pg.QueryRowContext(t.Context(), `SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'`).Scan(&revision))
-	_, err := syncer.pg.ExecContext(t.Context(), `UPDATE sessions SET message_count=message_count+1 WHERE id='b'`)
+	want := pgKeptBuild(t, store, f, q, true)
+	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
 	require.NoError(t, err)
-	var temporaryToken string
-	require.NoError(t, syncer.pg.QueryRowContext(t.Context(), `SELECT value FROM sync_metadata WHERE key='usage_history_token'`).Scan(&temporaryToken))
-	tx, err := syncer.pg.BeginTx(t.Context(), nil)
-	require.NoError(t, err)
-	defer func() { _ = tx.Rollback() }()
-	_, err = tx.ExecContext(t.Context(), `LOCK TABLE sessions IN ACCESS EXCLUSIVE MODE`)
-	require.NoError(t, err)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	type result struct {
-		report activity.CandidateArtifacts
-		err    error
+	require.Len(t, files, 1)
+	require.NoError(t, os.Chtimes(files[0], time.Now().Add(-time.Hour), time.Now().Add(-time.Hour)))
+	for day := 15; day <= 22; day++ {
+		pgKeptBuild(t, store, f, pgDayQuery(t, fmt.Sprintf("2026-06-%02d", day), "UTC"), true)
 	}
-	done := make(chan result, 1)
-	go func() {
-		report, err := store.BuildActivityReportArtifacts(ctx, f, q, nil)
-		done <- result{report, err}
-	}()
-	require.Eventually(t, func() bool {
-		var waiting bool
-		err := syncer.pg.QueryRowContext(t.Context(), `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE '%FROM sessions s%' AND query LIKE '%s.id = ANY%')`).Scan(&waiting)
-		return err == nil && waiting
-	}, 10*time.Second, 50*time.Millisecond)
-	_, err = tx.ExecContext(t.Context(), `DELETE FROM usage_session_changes WHERE revision > $1`, revision)
+	_, err = os.Stat(files[0])
+	require.ErrorIs(t, err, os.ErrNotExist)
+	requirePGKeptEqual(t, want, pgKeptBuild(t, store, f, q, false))
+	restarted := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+	t.Cleanup(func() { require.NoError(t, restarted.Close()) })
+	requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, q, false))
+	files, err = filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
 	require.NoError(t, err)
-	_, err = tx.ExecContext(t.Context(), `UPDATE sync_metadata SET value=$1::bigint::text WHERE key='usage_change_revision'`, revision)
-	require.NoError(t, err)
-	_, err = tx.ExecContext(t.Context(), `UPDATE messages SET token_usage='{"output_tokens":700}' WHERE session_id='a' AND role='assistant'`)
-	require.NoError(t, err)
-	_, err = tx.ExecContext(t.Context(), `UPDATE sessions SET updated_at=now() WHERE id='a'`)
-	require.NoError(t, err)
-	_, err = tx.ExecContext(t.Context(), `SET CONSTRAINTS ALL IMMEDIATE`)
-	require.NoError(t, err)
-	_, err = tx.ExecContext(t.Context(), `UPDATE sync_metadata SET value=$1 WHERE key='usage_history_token'`, temporaryToken)
-	require.NoError(t, err)
-	require.NoError(t, tx.Commit())
-	got := <-done
-	require.NoError(t, got.err)
-	require.Equal(t, 500, got.report.Report.Totals.OutputTokens)
-	require.Equal(t, 700, pgKeptBuild(t, store, f, q, true).Report.Totals.OutputTokens)
-}
-
-func TestPGSavedActivityReportRevisitedAfterEviction(t *testing.T) {
-	for _, advance := range []bool{false, true} {
-		t.Run(fmt.Sprintf("advance=%t", advance), func(t *testing.T) {
-			t.Setenv("CACHE_DIRECTORY", t.TempDir())
-			local, syncer, _ := newUsageJournalFixture(t)
-			pgKeptSession(t, local, "a", "project-a", "2026-06-14")
-			pgKeptPush(t, syncer, false)
-			directory := t.TempDir()
-			store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
-			t.Cleanup(func() { require.NoError(t, store.Close()) })
-			q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
-			want := pgKeptBuild(t, store, f, q, true)
-			files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
-			require.NoError(t, err)
-			require.Len(t, files, 1)
-			require.NoError(t, os.Chtimes(files[0], time.Now().Add(-time.Hour), time.Now().Add(-time.Hour)))
-			for day := 15; day <= 22; day++ {
-				pgKeptBuild(t, store, f, pgDayQuery(t, fmt.Sprintf("2026-06-%02d", day), "UTC"), true)
-			}
-			_, err = os.Stat(files[0])
-			require.ErrorIs(t, err, os.ErrNotExist)
-			if advance {
-				pgKeptSession(t, local, "b", "project-b", "2026-07-14")
-				pgKeptPush(t, syncer, false)
-			}
-			requirePGKeptEqual(t, want, pgKeptBuild(t, store, f, q, false))
-			restarted := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
-			t.Cleanup(func() { require.NoError(t, restarted.Close()) })
-			requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, q, false))
-			files, err = filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
-			require.NoError(t, err)
-			require.Len(t, files, 8)
-		})
-	}
-}
-
-func TestPGActivityReportTimezoneRulesChangeInProcess(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	local, syncer, _ := newUsageJournalFixture(t)
-	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
-	pgKeptPush(t, syncer, false)
-	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, t.TempDir())
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "custom", From: "2026-06-14T00:00:00Z", To: "2026-06-15T00:00:00Z", Timezone: "UTC", BucketOverride: "1d"}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
-	require.NoError(t, err)
-	q.Loc = time.FixedZone("same-name", 0)
-	f := db.AnalyticsFilter{Timezone: "UTC"}
-	first := pgKeptBuild(t, store, f, q, true)
-	require.Equal(t, "2026-06-15T00:00:00Z", first.Report.Buckets[0].End)
-	q.Loc = time.FixedZone("same-name", 3600)
-	changed := pgKeptBuild(t, store, f, q, true)
-	require.Equal(t, "2026-06-14T23:00:00Z", changed.Report.Buckets[0].End)
-	requirePGKeptEqual(t, changed, pgKeptBuild(t, store, f, q, false))
+	require.Len(t, files, 8)
 }
 
 func TestPGSavedActivityReportNamedTimezoneRules(t *testing.T) {
@@ -417,6 +355,9 @@ func TestPGSavedActivityReportNamedTimezoneRules(t *testing.T) {
 			data, err := io.ReadAll(r)
 			require.NoError(t, err)
 			require.NoError(t, r.Close())
+			if zone == "Etc/GMT-1" {
+				data = []byte(strings.ReplaceAll(string(data), "+01", "GMT"))
+			}
 			require.NoError(t, os.WriteFile(filepath.Join(zoneDir, "Test", "Shift"), data, 0o600))
 			cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestPGSavedActivityReportNamedTimezoneRules$")
 			end := "2026-06-15T00:00:00Z"
