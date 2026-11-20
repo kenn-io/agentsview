@@ -170,7 +170,7 @@ func TestSearchWaitsForBulkReadAndLeavesReaderForQuickRead(t *testing.T) {
 	}()
 	select {
 	case got := <-result:
-		t.Fatalf("search returned while bulk slots were occupied: %v", got.err)
+		require.FailNow(t, "search returned while bulk slots were occupied", "%v", got.err)
 	case <-time.After(100 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; occupied bulk slots keep the search waiting
 	}
 	quickCtx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
@@ -189,7 +189,7 @@ func TestSearchWaitsForBulkReadAndLeavesReaderForQuickRead(t *testing.T) {
 		require.Len(t, got.page.Results, 1)
 		assert.Equal(t, "summary", got.page.Results[0].SessionID)
 	case <-time.After(2 * time.Second):
-		t.Fatal("search did not resume after a bulk slot was released")
+		require.FailNow(t, "search did not resume after a bulk slot was released")
 	}
 }
 
