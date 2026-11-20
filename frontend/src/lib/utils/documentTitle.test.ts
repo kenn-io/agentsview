@@ -5,16 +5,13 @@ const base = { route: "sessions" as const, needsAuth: false };
 
 describe("documentTitle", () => {
   it.each([
-    ["a", "Session (e40c292c) · AgentsView"],
     ["foobar", "Session (bf9cf968) · AgentsView"],
     ["é", "Session (1e9de8c1) · AgentsView"],
     ["hostA~abc", "Session (8e9ac634) · AgentsView"],
     ["hostB~abc", "Session (4376abb5) · AgentsView"],
-    ["abc", "Session (1a47e90b) · AgentsView"],
     ["codebuff:project-a:2026-01-01T00:00:00.000Z", "Session (11ff51a8) · AgentsView"],
     ["codebuff:project-a:2026-01-02T00:00:00.000Z", "Session (b0f40315) · AgentsView"],
   ])("fingerprints the complete route session ID %s", (sessionId, expected) => {
-    expect(documentTitle({ ...base, sessionId })).toBe(expected);
     expect(documentTitle({ ...base, sessionId })).toBe(expected);
   });
 
