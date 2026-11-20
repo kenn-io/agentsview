@@ -34,11 +34,12 @@ fcntl.flock(fd, fcntl.LOCK_EX)
 os.environ["TEST_SERVICE_LEASE"] = lease
 process_group = None
 received = None
+pending = False
 
 def forward(signum, frame):
-    global received
-    received = signum
-    if process_group is not None:
+    global received, pending
+    received, pending = signum, process_group is None
+    if not pending:
         try:
             os.killpg(process_group, signum)
         except ProcessLookupError:
@@ -48,7 +49,7 @@ for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
     signal.signal(sig, forward)
 child = subprocess.Popen(command, pass_fds=(fd,), start_new_session=True)
 process_group = child.pid
-if received is not None:
+if pending:
     forward(received, None)
 status = child.wait()
 if status < 0:
