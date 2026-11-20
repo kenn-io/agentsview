@@ -185,8 +185,18 @@ func TestSearchRankWalkMatchesFullRanking(t *testing.T) {
 	full, _, _ = observe(filter)
 	assert.Equal(t, full, page)
 
+	seed("cap-lower", "untitled", "terminustie "+strings.Repeat("filler ", 100))
+	filter.Cursor = 0
+	full, _, fullWindows = observe(filter)
+	filter.Project = ""
+	page, rankReads, rankingWindows = observe(filter)
+	assert.Equal(t, full, page)
+	require.GreaterOrEqual(t, rankReads, 2, "search must prepare the rank walk")
+	require.Less(t, rankingWindows, fullWindows, "a worse match must end the 257-row tie without full ranking")
+
 	seed("cap-257", "untitled", "terminustie")
 	filter.Cursor = 0
+	filter.Project = "proj"
 	full, _, fullWindows = observe(filter)
 	filter.Project = ""
 	page, _, rankingWindows = observe(filter)
