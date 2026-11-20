@@ -52,7 +52,7 @@ func TestPGSavedActivityReportRespectsChangedRowPolicy(t *testing.T) {
 	allowedStore := openPGActivityInputStore(t, target, syncer.schema, directory)
 	allowed := pgKeptBuild(t, allowedStore, f, q, true)
 	require.Len(t, allowed.Sessions, 1)
-	requirePGKeptEqual(t, allowed, pgKeptBuild(t, allowedStore, f, q, false))
+	requirePGKeptEqual(t, allowed, pgKeptBuild(t, allowedStore, f, q, true))
 	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
 	require.NoError(t, err)
 	require.Empty(t, files)
@@ -61,6 +61,12 @@ func TestPGSavedActivityReportRespectsChangedRowPolicy(t *testing.T) {
 	require.NoError(t, err)
 	first := openPGActivityInputStore(t, target, syncer.schema, directory)
 	require.Len(t, pgKeptBuild(t, first, f, q, true).Sessions, 1)
+	_, err = syncer.pg.ExecContext(ctx, `ALTER TABLE sessions ENABLE ROW LEVEL SECURITY; ALTER POLICY activity_reader ON sessions USING (false)`)
+	require.NoError(t, err)
+	require.Empty(t, pgKeptBuild(t, first, f, q, true).Sessions)
+	_, err = syncer.pg.ExecContext(ctx, `ALTER TABLE sessions DISABLE ROW LEVEL SECURITY`)
+	require.NoError(t, err)
+	require.Len(t, pgKeptBuild(t, first, f, q, false).Sessions, 1)
 	require.NoError(t, first.Close())
 	files, err = filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
 	require.NoError(t, err)
@@ -100,6 +106,37 @@ type activityFilenodeProbe struct {
 type activityPolicyProbe struct {
 	storeExecutor
 	checks int
+}
+
+type activityIdentityProbe struct {
+	storeExecutor
+	deny bool
+}
+
+func (p *activityIdentityProbe) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	if p.deny && strings.Contains(query, "pg_control_system()") {
+		return p.storeExecutor.QueryRowContext(ctx, "SELECT 1 WHERE false")
+	}
+	return p.storeExecutor.QueryRowContext(ctx, query, args...)
+}
+
+func TestPGActivityReportIdentityRecovers(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, _ := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	directory := t.TempDir()
+	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	probe := &activityIdentityProbe{storeExecutor: store.pg, deny: true}
+	store.pg = probe
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	want := pgKeptBuild(t, store, f, q, true)
+	probe.deny = false
+	requirePGKeptEqual(t, want, pgKeptBuild(t, store, f, q, false))
+	restarted := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+	t.Cleanup(func() { require.NoError(t, restarted.Close()) })
+	requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, q, false))
 }
 
 func (p *activityPolicyProbe) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {

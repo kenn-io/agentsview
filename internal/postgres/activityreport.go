@@ -148,6 +148,7 @@ func (s *Store) BuildActivityReportArtifacts(
 	}
 
 	var selection, version, identity, files string
+	var eligible bool
 	var revision int64
 	var checkpoint string
 	if !q.Partial && !s.hostedRelations && !db.TerminationUsesTime(f.Termination) {
@@ -164,7 +165,7 @@ func (s *Store) BuildActivityReportArtifacts(
 			if files != "" {
 				version += "|" + files
 				if q.Loc != nil {
-					version += "|" + db.TrendsTimezoneKey(db.AnalyticsFilter{Timezone: q.Timezone})
+					version += "|" + activityTimezoneKey(q)
 				}
 			} else {
 				version = ""
@@ -172,41 +173,35 @@ func (s *Store) BuildActivityReportArtifacts(
 		}
 		if version != "" {
 			selection = kept.Selection(f, q)
-			diskLoaded := false
+			eligible = s.activityReportEligible(q)
+			if eligible {
+				version += "|finished"
+			}
 			memo := &s.runtimeState().activityKept
-			if _, ok := memo.Get(selection, version); !ok {
-				if !s.activityReportRestricted(ctx) {
-					identity = s.activityReportIdentity(ctx, q)
-				}
+			entries, ok := memo.Get(selection, version)
+			if eligible && !ok {
+				identity = s.activityReportIdentity(ctx)
 				if identity != "" {
 					if entry, found := s.loadActivityReport(selection, version, identity); found {
-						token, _, checkErr := usageHistoryCheckpoints(ctx, s.pg, entry.revision, entry.revision)
-						if checkErr == nil && token != "" && token == entry.checkpoint {
-							memo.Put(selection, version, []pgActivityKept{entry})
-							diskLoaded = true
-						}
+						entries = []pgActivityKept{entry}
 					}
 				}
 			}
 			var previousRevision int64
-			if entries, ok := memo.Get(selection, version); ok {
+			if len(entries) > 0 {
 				previousRevision = entries[0].revision
 			}
-			report, rev, currentCheckpoint, hit, checkErr := s.validateKeptActivityReport(ctx, selection, version, f, rangeStartUTC, rangeEndUTC, lowerBound, upperBound)
+			report, rev, currentCheckpoint, hit, checkErr := s.validateKeptActivityReport(ctx, selection, version, entries, eligible, f, rangeStartUTC, rangeEndUTC, lowerBound, upperBound)
 			if checkErr != nil {
 				return activity.CandidateArtifacts{}, checkErr
 			}
 			revision = rev
-			restricted := (diskLoaded || hit) && s.activityReportRestricted(ctx)
-			if diskLoaded && restricted {
-				memo.DeleteSlots(func(slot string) bool { return slot == selection })
-				selection = ""
-			} else if hit {
+			if hit {
 				currentFiles, fileErr := s.activityTableIdentity(ctx)
 				if fileErr == nil && currentFiles == files {
-					if !restricted {
+					if eligible {
 						if identity == "" {
-							identity = s.activityReportIdentity(ctx, q)
+							identity = s.activityReportIdentity(ctx)
 						}
 						s.refreshActivityReport(selection, version, identity, previousRevision, rev, currentCheckpoint)
 					}
@@ -313,10 +308,10 @@ func (s *Store) BuildActivityReportArtifacts(
 		}
 		through, _, checkErr := s.LoadUsageChanges(ctx, revision)
 		current, _, tokenErr := usageHistoryCheckpoints(ctx, s.pg, revision, revision)
-		if checkErr == nil && tokenErr == nil && through == revision && current == checkpoint {
+		if checkErr == nil && tokenErr == nil && through == revision && current == checkpoint && (!eligible || !s.activityReportRestricted(ctx)) {
 			memo := &s.runtimeState().activityKept
 			memo.Put(selection, version, []pgActivityKept{entry})
-			if identity != "" && checkpoint != "" && !s.activityReportRestricted(ctx) {
+			if identity != "" && checkpoint != "" {
 				if _, ok := memo.Get(selection, version); ok {
 					s.saveActivityReport(selection, version, entry)
 				}

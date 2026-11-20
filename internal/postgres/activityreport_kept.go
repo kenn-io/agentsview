@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json/v2"
 	"fmt"
@@ -70,12 +71,15 @@ func (s *Store) refreshActivityReport(selection, version, identity string, previ
 		return
 	}
 	entry := entries[0]
+	stale := entry.identity != identity
+	entry.identity = identity
 	key := selection + "|" + identity + "|" + version
-	if entry.revision == previousRevision {
+	if !stale && entry.revision == previousRevision {
 		s.activityReports.Keep(key, identity+"|"+version, entry.encode)
 	} else {
 		s.saveActivityReport(selection, version, entry)
 	}
+	s.runtimeState().activityKept.Put(selection, version, []pgActivityKept{entry})
 	s.activityReports.Sweep(time.Now())
 }
 
@@ -85,16 +89,35 @@ func (s *Store) activityReportRestricted(ctx context.Context) bool {
 	return err != nil || restricted
 }
 
-func (s *Store) activityReportIdentity(ctx context.Context, q activity.Query) string {
+func (s *Store) activityReportEligible(q activity.Query) bool {
 	if q.Loc == nil || !s.activityReports.Enabled() {
-		return ""
+		return false
 	}
 	local := time.Now().In(q.Loc)
 	if q.RangeEnd.After(time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, q.Loc)) {
-		return ""
+		return false
 	}
+	return true
+}
+
+func (s *Store) activityReportIdentity(ctx context.Context) string {
 	identity, _ := s.activitySourceIdentity(ctx, "")
 	return identity
+}
+
+func activityTimezoneKey(q activity.Query) string {
+	h := sha256.New()
+	for cursor := q.RangeStart; cursor.Before(q.RangeEnd); {
+		local := cursor.In(q.Loc)
+		name, offset := local.Zone()
+		_, end := local.ZoneBounds()
+		fmt.Fprintf(h, "%s|%d|%d|", name, offset, end.Unix())
+		if end.IsZero() || !end.After(cursor) {
+			break
+		}
+		cursor = end
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
 func (s *Store) activityTableIdentity(ctx context.Context) (string, error) {
@@ -121,8 +144,8 @@ func (s *Store) activityKeptVersion(ctx context.Context, pricingDigest string) (
 	return fmt.Sprintf("%d|%s|%s", oid, pricingDigest, pricing.ConfiguredAliasesDigest()), nil
 }
 
-func (s *Store) validateKeptActivityReport(ctx context.Context, selection, version string, f db.AnalyticsFilter, rangeStart, rangeEnd, lower, upper string) (kept.Report, int64, string, bool, error) {
-	entries, hadEntry := s.runtimeState().activityKept.Get(selection, version)
+func (s *Store) validateKeptActivityReport(ctx context.Context, selection, version string, entries []pgActivityKept, eligible bool, f db.AnalyticsFilter, rangeStart, rangeEnd, lower, upper string) (kept.Report, int64, string, bool, error) {
+	hadEntry := len(entries) > 0
 	reader := s
 	var tx *sql.Tx
 	if s.readTx == nil {
@@ -147,6 +170,10 @@ func (s *Store) validateKeptActivityReport(ctx context.Context, selection, versi
 			return kept.Report{}, 0, "", false, err
 		}
 	}
+	if eligible && s.activityReportRestricted(ctx) {
+		s.runtimeState().activityKept.DeleteSlots(func(slot string) bool { return slot == selection })
+		return kept.Report{}, revision, checkpoint, false, nil
+	}
 	if hit {
 		// A restore can replace the history while validation holds its snapshot.
 		// Do not advance the memo until the live journal still matches it.
@@ -157,7 +184,7 @@ func (s *Store) validateKeptActivityReport(ctx context.Context, selection, versi
 					s.runtimeState().activityKept.Put(selection, version, []pgActivityKept{entry})
 				}
 			}
-		} else if !hadEntry || entry.revision != entries[0].revision || entry.checkpoint != entries[0].checkpoint || entry.identity != entries[0].identity {
+		} else {
 			s.runtimeState().activityKept.Put(selection, version, []pgActivityKept{entry})
 		}
 	}

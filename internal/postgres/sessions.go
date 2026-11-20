@@ -24,21 +24,23 @@ import (
 // queries.
 type Store struct {
 	readbase.ReadOnlyStubs
-	hostedRelations bool
-	cockroach       bool
-	serverEncoding  string
-	pg              storeExecutor
-	ownedDB         *sql.DB
-	readTx          *sql.Tx
-	pricingSnapshot *pricingSnapshot
-	usageCache      *db.UsageCacheReader
-	activityDisk    kept.Disk
-	activityReports kept.Disk
-	trendsDisk      kept.Disk
-	trendsIdentity  string
-	trendsVersion   string
-	runtimeOnce     sync.Once
-	runtime         *storeRuntime
+	hostedRelations     bool
+	cockroach           bool
+	serverEncoding      string
+	pg                  storeExecutor
+	ownedDB             *sql.DB
+	readTx              *sql.Tx
+	pricingSnapshot     *pricingSnapshot
+	usageCache          *db.UsageCacheReader
+	activityDisk        kept.Disk
+	activityReports     kept.Disk
+	activitySweepCancel context.CancelFunc
+	activitySweepDone   chan struct{}
+	trendsDisk          kept.Disk
+	trendsIdentity      string
+	trendsVersion       string
+	runtimeOnce         sync.Once
+	runtime             *storeRuntime
 }
 
 // storeRuntime is shared by the owning store and its borrowed read views.
