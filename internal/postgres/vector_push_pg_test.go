@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -39,6 +40,7 @@ type fakeVectorSource struct {
 	genOverride  func(call int, sessionIDs []string) (storage.VectorGenerationInfo, bool, error)
 	genScopes    [][]string // sessionIDs of each Generation call
 	hashScopes   [][]string // sessionIDs of each SessionDocHashes call
+	hashesHook   func()
 }
 
 func (f *fakeVectorSource) BeginExport(
@@ -67,6 +69,11 @@ func (e *fakeVectorExport) Generation() storage.VectorGenerationInfo { return e.
 func (e *fakeVectorExport) SessionDocHashes(
 	ctx context.Context, sessionIDs []string,
 ) (map[string]string, error) {
+	if e.source.hashesHook != nil {
+		hook := e.source.hashesHook
+		e.source.hashesHook = nil
+		hook()
+	}
 	e.source.hashScopes = append(e.source.hashScopes, append([]string(nil), sessionIDs...))
 	if sessionIDs == nil {
 		return e.source.hashes, nil
@@ -117,10 +124,10 @@ func newVectorPushTestSync(t *testing.T) (*Sync, *db.DB, *sql.DB) {
 		require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 	}
 
-	available, err := VectorExtensionAvailable(ctx, pg)
-	require.NoError(t, err, "VectorExtensionAvailable")
-	if !available {
-		t.Skip("pgvector extension unavailable")
+	halfvec, version, err := vectorHalfvecAvailable(ctx, pg)
+	require.NoError(t, err, "vectorHalfvecAvailable")
+	if reason := vectorUnavailableReason(halfvec, version); reason != "" {
+		t.Skip(reason)
 	}
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
@@ -1101,6 +1108,51 @@ func TestVectorPushDeltaNoop(t *testing.T) {
 	assert.Equal(t, 2, res.Vectors.SessionsUnchanged)
 	assert.Equal(t, 0, res.Vectors.SessionsPushed)
 	assert.Equal(t, 0, res.Vectors.DocsPushed)
+}
+
+func TestVectorPushMissingSessionAfterGenerationDrop(t *testing.T) {
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
+	ctx := t.Context()
+	seedVectorSession(t, localDB, "A")
+	seedVectorSession(t, localDB, "B")
+	src := &fakeVectorSource{
+		gen:    storage.VectorGenerationInfo{Fingerprint: "race-drop", Model: "model", Dimension: 4},
+		hasGen: true,
+		hashes: map[string]string{"A": "ha", "B": "hb"},
+		docs: map[string][]storage.VectorPushDoc{
+			"A": {vdoc("A", "A#0", 0, "a", "a1", []float32{1, 0, 0, 0})},
+			"B": {vdoc("B", "B#0", 0, "b", "b1", []float32{0, 1, 0, 0})},
+		},
+	}
+	sync.vectorSource = src
+	_, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err)
+	id, _, ok, err := LookupVectorGeneration(ctx, pg, "race-drop")
+	require.NoError(t, err)
+	require.True(t, ok)
+	src.hashes["A"] = "changed"
+	src.hashesHook = func() {
+		for _, q := range []string{
+			`DELETE FROM sessions WHERE id = 'A'`,
+			`DROP TABLE ` + vectorChunkTable(id),
+			`DELETE FROM vector_generation_machines WHERE generation_id = $1`,
+			`DELETE FROM vector_generations WHERE id = $1`,
+		} {
+			var err error
+			if strings.Contains(q, "$1") {
+				_, err = pg.ExecContext(ctx, q, id)
+			} else {
+				_, err = pg.ExecContext(ctx, q)
+			}
+			require.NoError(t, err)
+		}
+	}
+	result, err := sync.pushVectors(ctx, false, []string{"A"}, id, nil, nil)
+	require.NoError(t, err)
+	assert.NotEqual(t, id, result.GenerationID)
+	assert.Equal(t, 1, result.SessionsPushed)
+	assert.Equal(t, 1, countRows(t, pg, `SELECT COUNT(*) FROM `+vectorChunkTable(result.GenerationID)+` WHERE doc_key = 'B#0'`))
 }
 
 func TestVectorPushUnchangedAfterChunkTableDrop(t *testing.T) {

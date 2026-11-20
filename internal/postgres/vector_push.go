@@ -574,13 +574,7 @@ func (s *Sync) applyVectorDeltas(
 			res.DeferSession(sessionID)
 			continue
 		}
-		if scope.chunks == nil {
-			scope.chunks, err = pgvector.AttachChunks[string](ctx, s.pg, vectorChunkTable(gen.id))
-			if err != nil {
-				return err
-			}
-		}
-		outcome, err := s.pushVectorSession(ctx, scope, export, sessionID, agg)
+		outcome, err := s.pushVectorSession(ctx, &scope, export, sessionID, agg)
 		if err != nil {
 			return err
 		}
@@ -1035,7 +1029,7 @@ type vectorSessionOutcome struct {
 // generation's chunks for them (see deleteParkedVectorDocs). This mirrors the
 // local mirror's park-to-sentinel slot replacement (internal/vector/mirror.go).
 func (s *Sync) pushVectorSession(
-	ctx context.Context, scope vectorPushScope, export storage.VectorExport, sessionID, aggHash string,
+	ctx context.Context, scope *vectorPushScope, export storage.VectorExport, sessionID, aggHash string,
 ) (vectorSessionOutcome, error) {
 	tx, err := s.pg.BeginTx(ctx, nil)
 	if err != nil {
@@ -1043,14 +1037,7 @@ func (s *Sync) pushVectorSession(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// FOR UPDATE locks the sessions row for the life of this tx so a concurrent
-	// pusher cannot take ownership between this probe and the vector writes
-	// below (under READ COMMITTED an unlocked probe could read a stale owner).
-	// This is deadlock-safe: the session push phase has already committed before
-	// pushVectors runs (see pushVectors), so no session-push tx holds this row
-	// concurrently, and each vector push tx locks exactly one session row (by
-	// primary key) before its own vector-table writes — a single, consistent
-	// lock so two vector pushes cannot form a cycle.
+	// Lock the session until vector writes commit to prevent ownership changes.
 	var ownerMarker, machine sql.NullString
 	err = tx.QueryRowContext(ctx,
 		`SELECT owner_marker, machine FROM sessions WHERE id = $1 FOR UPDATE`,
@@ -1067,10 +1054,7 @@ func (s *Sync) pushVectorSession(
 		return vectorSessionOutcome{conflict: true}, nil
 	}
 
-	// Export the full docs (content + decoded chunk blobs) only after the
-	// session passes the existence/ownership probe. A local-only session with no
-	// PG row, or one owned elsewhere, skips forever; fetching docs first would
-	// re-export them on every push for sessions that never land.
+	// Export only after the session passes the existence and ownership check.
 	docs, exportHash, err := export.SessionDocs(ctx, sessionID)
 	if err != nil {
 		return vectorSessionOutcome{}, fmt.Errorf(
@@ -1088,7 +1072,13 @@ func (s *Sync) pushVectorSession(
 		return vectorSessionOutcome{deferred: true}, nil
 	}
 
-	outcome, err := writeSessionVectorsKeeping(ctx, tx, scope, sessionID, aggHash, docs, nil, nil)
+	if scope.chunks == nil {
+		scope.chunks, err = pgvector.AttachChunks[string](ctx, tx, vectorChunkTable(scope.gen.id))
+		if err != nil {
+			return vectorSessionOutcome{}, err
+		}
+	}
+	outcome, err := writeSessionVectorsKeeping(ctx, tx, *scope, sessionID, aggHash, docs, nil, nil)
 	if err != nil {
 		return vectorSessionOutcome{}, err
 	}

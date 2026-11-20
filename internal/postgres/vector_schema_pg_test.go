@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/mod/semver"
 
 	"go.kenn.io/agentsview/internal/storage"
 )
@@ -212,10 +213,10 @@ func TestEnsureSchemaFastPathCreatesVectorTables(t *testing.T) {
 	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, vectorSchemaTestSchema))
 
-	if available, err := VectorExtensionAvailable(ctx, pg); err != nil {
-		require.NoError(t, err)
-	} else if !available {
-		t.Skip("pgvector extension unavailable")
+	halfvec, version, err := vectorHalfvecAvailable(ctx, pg)
+	require.NoError(t, err)
+	if reason := vectorUnavailableReason(halfvec, version); reason != "" {
+		t.Skip(reason)
 	}
 	require.True(t, pushSchemaCurrent(ctx, pg),
 		"a freshly ensured schema must read as current so the fast path is exercised")
@@ -276,22 +277,21 @@ func TestVectorHalfvecGate(t *testing.T) {
 	hasHalfvec, version, err := vectorHalfvecAvailable(ctx, pg)
 	require.NoError(t, err)
 
-	if unavailable == "" {
+	if hadHalfvec && semver.IsValid("v"+beforeVersion) && semver.Compare("v"+beforeVersion, "v0.8.0") >= 0 {
+		assert.Empty(t, unavailable)
 		assert.True(t, hasHalfvec, "available gate implies halfvec exists")
 		assert.NotEmpty(t, version, "installed extension reports a version")
-		if vectorUnavailableReason(hadHalfvec, beforeVersion) == "" {
-			assert.Empty(t, trace.matching(regexp.MustCompile(`(?i)ALTER\s+EXTENSION\s+vector\s+UPDATE`)))
-			assert.Equal(t, beforeVersion, version)
-		}
+		assert.Empty(t, trace.matching(regexp.MustCompile(`(?i)ALTER\s+EXTENSION\s+vector\s+UPDATE`)))
+		assert.Equal(t, beforeVersion, version)
 		return
 	}
-	if version != "" {
-		store, err := NewStore(ctx, pgURL, vectorSchemaTestSchema, true)
-		require.NoError(t, err)
-		t.Cleanup(func() { _ = store.Close() })
-		searcher, reason, err := (Backend{}).OpenVectorSearcher(ctx, store, storage.VectorGenerationInfo{}, 0, nil)
-		require.NoError(t, err)
-		assert.Nil(t, searcher)
-		assert.Equal(t, unavailable, reason)
-	}
+	assert.NotEmpty(t, unavailable)
+	store, err := NewStore(ctx, pgURL, vectorSchemaTestSchema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	searcher, reason, err := (Backend{}).OpenVectorSearcher(ctx, store, storage.VectorGenerationInfo{}, 0, nil)
+	require.NoError(t, err)
+	assert.Nil(t, searcher)
+	assert.NotEmpty(t, reason)
+	assert.Equal(t, unavailable, reason)
 }
