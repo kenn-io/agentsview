@@ -95,7 +95,12 @@ func (s *Store) activityReportIdentity(ctx context.Context, selection, version s
 	if q.RangeEnd.After(time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, q.Loc)) {
 		return identity, unavailable
 	}
-	identity, err := s.activitySourceIdentity(ctx, "")
+	var restricted bool
+	err := s.pg.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema() AND c.relkind IN ('r', 'p') AND row_security_active(c.oid))`).Scan(&restricted)
+	if err != nil || restricted {
+		return "", true
+	}
+	identity, err = s.activitySourceIdentity(ctx, "")
 	unavailable = errors.Is(err, db.ErrUsageSourceUnavailable)
 	if !ok && identity != "" {
 		if entry, found := s.loadActivityReport(selection, version, identity); found {
@@ -125,15 +130,14 @@ func (s *Store) keptActivityReport(ctx context.Context, selection, version strin
 	if ok {
 		after = entries[0].revision
 	}
-	through, changed, err := s.LoadUsageChanges(ctx, after)
+	through, changed, current, previous, err := s.loadUsageChangesWithHistory(ctx, after)
+	if isInsufficientPrivilege(err) || isUndefinedTable(err) {
+		return kept.Report{}, 0, false, nil
+	}
 	if err != nil || through == 0 || !ok {
 		return kept.Report{}, through, false, err
 	}
 	entry := entries[0]
-	current, previous, err := usageHistoryCheckpoints(ctx, s.pg, through, entry.revision)
-	if err != nil {
-		return kept.Report{}, through, false, err
-	}
 	if entry.checkpoint != "" && entry.checkpoint != previous {
 		return kept.Report{}, through, false, nil
 	}

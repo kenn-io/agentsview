@@ -157,6 +157,7 @@ func (s *Store) BuildActivityReportArtifacts(
 			return activity.CandidateArtifacts{}, err
 		}
 		if version != "" {
+			version += "|" + db.TrendsTimezoneKey(db.AnalyticsFilter{Timezone: q.Timezone})
 			selection = kept.Selection(f, q)
 			memo := &s.runtimeState().activityKept
 			identity, unavailable = s.activityReportIdentity(ctx, selection, version, q)

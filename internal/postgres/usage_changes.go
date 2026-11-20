@@ -517,24 +517,32 @@ func (s *Store) LoadUsageChanges(ctx context.Context, afterRevision int64) (int6
 }
 
 func (s *Store) loadUsageChanges(ctx context.Context, afterRevision int64) (int64, []string, error) {
-	rows, err := s.pg.QueryContext(ctx, `SELECT r.revision, c.session_id
+	revision, ids, _, _, err := s.loadUsageChangesWithHistory(ctx, afterRevision)
+	return revision, ids, err
+}
+
+func (s *Store) loadUsageChangesWithHistory(ctx context.Context, afterRevision int64) (int64, []string, string, string, error) {
+	rows, err := s.pg.QueryContext(ctx, `SELECT r.revision, c.session_id,
+ COALESCE((SELECT value FROM sync_metadata WHERE key='usage_history_checkpoint:' || r.revision::text), ''),
+ COALESCE((SELECT value FROM sync_metadata WHERE key='usage_history_checkpoint:' || $2::bigint::text), '')
  FROM (SELECT `+supportedUsageChangeRevisionSQL+` AS revision) r
  LEFT JOIN usage_session_changes c ON r.revision > 0 AND c.revision > $2 AND c.revision <= r.revision AND c.session_id <> ''
  ORDER BY c.revision, c.session_id`, strconv.Itoa(usageChangeJournalVersionPG), afterRevision)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, "", "", err
 	}
 	defer rows.Close()
 	var revision int64
+	var current, previous string
 	var ids []string
 	for rows.Next() {
 		var id sql.NullString
-		if err := rows.Scan(&revision, &id); err != nil {
-			return 0, nil, err
+		if err := rows.Scan(&revision, &id, &current, &previous); err != nil {
+			return 0, nil, "", "", err
 		}
 		if id.Valid {
 			ids = append(ids, id.String)
 		}
 	}
-	return revision, ids, rows.Err()
+	return revision, ids, current, previous, rows.Err()
 }
