@@ -186,6 +186,59 @@ func TestSubstringSearchesAndAnalyticsCanReadTogether(t *testing.T) {
 	}
 }
 
+func TestSearchContentDeadlineReleasesSearchLane(t *testing.T) {
+	database := testDB(t)
+	insertSession(t, database, "session", "project")
+	insertMessages(t, database, userMsg("session", 0, "needle"))
+	reader := database.rawReader()
+	var connections []*sql.Conn
+	t.Cleanup(func() {
+		for _, conn := range connections {
+			_ = conn.Close()
+		}
+	})
+	for range readerMaxOpenConns {
+		conn, err := reader.Conn(t.Context())
+		require.NoError(t, err)
+		connections = append(connections, conn)
+	}
+	waits := reader.Stats().WaitCount
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	results := make(chan error, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: "needle", Mode: "substring", Sources: []string{"messages"}, IncludeOneShot: true})
+		results <- err
+	}()
+	t.Cleanup(func() { cancel(); <-done })
+	require.Eventually(t, func() bool { return reader.Stats().WaitCount > waits }, time.Second, 10*time.Millisecond)
+	// The query is waiting for a reader after acquiring its search slot.
+	err := <-results
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	for _, conn := range connections {
+		require.NoError(t, conn.Close())
+	}
+	connections = nil
+	var releases []func()
+	t.Cleanup(func() {
+		for _, release := range releases {
+			release()
+		}
+	})
+	for range bulkSearchSlots - 1 {
+		release, err := database.acquireBulkSearch(t.Context())
+		require.NoError(t, err)
+		releases = append(releases, release)
+	}
+	probeCtx, probeCancel := context.WithTimeout(t.Context(), time.Second)
+	defer probeCancel()
+	page, err := database.SearchContent(probeCtx, ContentSearchFilter{Pattern: "needle", Mode: "substring", Sources: []string{"messages"}, IncludeOneShot: true})
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, "session", page.Matches[0].SessionID)
+}
+
 func TestAcquireBulkReadHonorsContext(t *testing.T) {
 	database := &DB{}
 	ctx, cancel := context.WithCancel(t.Context())
