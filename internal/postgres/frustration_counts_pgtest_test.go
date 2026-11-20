@@ -624,10 +624,12 @@ type blockedSignalRows struct {
 	started chan struct{}
 	release chan struct{}
 	once    sync.Once
+	reads   atomic.Int32
 }
 
 func (p *blockedSignalRows) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	if strings.Contains(query, "health_score, health_grade, outcome") {
+		p.reads.Add(1)
 		p.once.Do(func() { close(p.started) })
 		select {
 		case <-p.release:
@@ -677,6 +679,12 @@ func TestFrustrationSignalsShortDeadlineJoinsEarlierFlight(t *testing.T) {
 	result, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
 	require.NoError(t, err)
 	require.Equal(t, 2, result.QualityHealth.Totals.FrustrationMarkerCount)
+	<-firstDone
+	reads := probe.reads.Load()
+	repeat, err := store.GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{})
+	require.NoError(t, err)
+	require.Equal(t, result, repeat)
+	require.Equal(t, reads, probe.reads.Load(), "repeat request must reuse the saved panel")
 }
 
 type signalRowsCounter struct {

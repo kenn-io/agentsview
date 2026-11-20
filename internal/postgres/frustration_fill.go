@@ -33,13 +33,9 @@ var errSharedFillWait = errors.New("shared load cannot wait for count fill")
 // keptSignals lets a caller whose shared load would wait on a pending count
 // fill load under its own deadline instead.
 func (s *Store) keptSignals(ctx context.Context, f db.AnalyticsFilter) (db.SignalsAnalyticsResponse, error) {
-	result, err := keptAnalyticsWithLoads(ctx, s, "signals", f, s.keptAnalyticsVersion, s.loadAnalyticsSignals, func(ctx context.Context, f db.AnalyticsFilter) (db.SignalsAnalyticsResponse, error) {
+	return keptAnalyticsWithLoads(ctx, s, "signals", f, s.keptAnalyticsVersion, s.loadAnalyticsSignals, func(ctx context.Context, f db.AnalyticsFilter) (db.SignalsAnalyticsResponse, error) {
 		return s.loadAnalyticsSignalsWithMode(ctx, f, true)
 	})
-	if errors.Is(err, errSharedFillWait) {
-		return s.loadAnalyticsSignals(ctx, f)
-	}
-	return result, err
 }
 
 // completedCount is the number of finished chunks.

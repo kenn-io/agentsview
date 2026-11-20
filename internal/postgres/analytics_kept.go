@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -63,6 +64,21 @@ func keptAnalyticsWithLoads[T any](ctx context.Context, s *Store, panel string, 
 		return json.Marshal(result, json.FormatNilSliceAsNull(true), json.FormatNilMapAsNull(true))
 	})
 	var result T
+	if errors.Is(err, errSharedFillWait) {
+		result, err = load(ctx, f)
+		if err != nil {
+			return result, err
+		}
+		encoded, err = json.Marshal(result, json.FormatNilSliceAsNull(true), json.FormatNilMapAsNull(true))
+		if err != nil {
+			return result, err
+		}
+		s.runtimeState().analytics.Put(slot, version, encoded)
+		if savedVersion != "" {
+			s.trendsDisk.Put(slot, savedVersion, encoded)
+		}
+		return result, nil
+	}
 	if err != nil {
 		return result, err
 	}
