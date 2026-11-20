@@ -3541,7 +3541,7 @@ describe("SessionsStore", () => {
     let replace: ReturnType<typeof vi.spyOn>;
     beforeEach(() => {
       router.navigateToSession(uuid);
-      replace = vi.spyOn(router, "replaceSession");
+      replace = vi.spyOn(router, "resolveSession");
       vi.mocked(api.getSession)
         .mockRejectedValueOnce(new ApiError(404, "missing"))
         .mockResolvedValue(makeSession({ id: canonical }));
@@ -3564,7 +3564,7 @@ describe("SessionsStore", () => {
         expect(replace).not.toHaveBeenCalled();
       };
     }
-    it("resolves a missing bare UUID and replaces its URL", async () => {
+    it("resolves a missing bare UUID and keeps its URL", async () => {
       await sessions.navigateToSession(uuid);
       expect(SessionsService.getApiV1SessionIdsResolve).toHaveBeenCalledExactlyOnceWith(
         { partial: uuid, raw_suffix: true, limit: 2 },
@@ -3574,6 +3574,7 @@ describe("SessionsStore", () => {
       expect(sessions.activeSession?.id).toBe(canonical);
       expect(sessions.activeSessionNotFound).toBe(false);
       expect(replace).toHaveBeenCalledExactlyOnceWith(canonical);
+      expect(window.location.pathname).toBe(`/sessions/${uuid}`);
     });
     it.each([
       { name: "ambiguous", ids: [canonical, `box~${canonical}`] },
