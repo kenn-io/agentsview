@@ -139,6 +139,16 @@ func (s *Store) activityKeptVersion(ctx context.Context, pricingDigest string) (
 	if err != nil {
 		return "", fmt.Errorf("reading kept activity version: %w", err)
 	}
+	var tracking bool
+	if err := s.pg.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM sync_metadata WHERE key='activity_tool_result_tracking' AND value='1')`).Scan(&tracking); err != nil {
+		if isUndefinedTable(err) || isInsufficientPrivilege(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	if !tracking {
+		return "", nil
+	}
 	return fmt.Sprintf("%d|%s|%s", oid, pricingDigest, pricing.ConfiguredAliasesDigest()), nil
 }
 
@@ -162,12 +172,14 @@ func (s *Store) validateKeptActivityReport(ctx context.Context, selection, versi
 	if !hit {
 		return kept.Report{}, revision, checkpoint, false, nil
 	}
+	restricted := reader.activityReportRestricted(ctx)
 	if tx != nil {
 		if err := tx.Commit(); err != nil {
 			return kept.Report{}, 0, "", false, err
 		}
 	}
-	if s.activityReportRestricted(ctx) {
+	liveRestricted := s.activityReportRestricted(ctx)
+	if restricted || liveRestricted {
 		s.runtimeState().activityKept.DeleteSlots(func(slot string) bool { return slot == selection })
 		return kept.Report{}, revision, checkpoint, false, nil
 	}

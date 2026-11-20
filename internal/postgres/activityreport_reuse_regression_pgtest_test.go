@@ -20,6 +20,44 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
+func TestPGSavedActivityReportToolResultChange(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, _ := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	target, directory := testPGURL(t), t.TempDir()
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	store := openPGActivityInputStore(t, target, syncer.schema, directory)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	pgKeptBuild(t, store, f, q, true)
+	_, err := syncer.pg.ExecContext(t.Context(), `INSERT INTO tool_result_events
+		(session_id, tool_call_message_ordinal, call_index, tool_use_id, source, status, content, timestamp, event_index)
+		VALUES ('a', 1, 0, 'call', 'tool_execution', 'completed', '', '2026-06-14T11:00:00Z', 0)`)
+	require.NoError(t, err)
+	got := pgKeptBuild(t, store, f, q, true)
+	restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
+	t.Cleanup(func() { require.NoError(t, restarted.Close()) })
+	requirePGKeptEqual(t, got, pgKeptBuild(t, restarted, f, q, true))
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	fresh := openPGActivityInputStore(t, target, syncer.schema, directory)
+	t.Cleanup(func() { require.NoError(t, fresh.Close()) })
+	requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), got)
+	for _, query := range []string{
+		`UPDATE tool_result_events SET timestamp='2026-06-14T12:00:00Z', status='error' WHERE session_id='a'`,
+		`DELETE FROM tool_result_events WHERE session_id='a'`,
+	} {
+		_, err := syncer.pg.ExecContext(t.Context(), query)
+		require.NoError(t, err)
+		got = pgKeptBuild(t, store, f, q, true)
+		requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), got)
+	}
+	_, err = syncer.pg.ExecContext(t.Context(), `DELETE FROM sync_metadata WHERE key='activity_tool_result_tracking'; DROP FUNCTION mark_activity_tool_result_events() CASCADE`)
+	require.NoError(t, err)
+	pgKeptBuild(t, store, f, q, true)
+	require.True(t, ensureUsageChangeJournalPG(t.Context(), syncer.pg))
+	pgKeptBuild(t, store, f, q, true)
+}
+
 func TestPGSavedActivityReportRespectsChangedRowPolicy(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	local, syncer, _ := newUsageJournalFixture(t)
@@ -119,6 +157,29 @@ func TestPGSavedActivityReportRespectsChangedRowPolicy(t *testing.T) {
 	require.Zero(t, visible)
 	got := pgKeptBuild(t, restarted, f, q, true)
 	require.Empty(t, got.Sessions)
+	_, err = syncer.pg.ExecContext(ctx, `ALTER TABLE sessions DISABLE ROW LEVEL SECURITY`)
+	require.NoError(t, err)
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	advancing := openPGActivityInputStore(t, target, syncer.schema, directory)
+	require.Len(t, pgKeptBuild(t, advancing, f, q, true).Sessions, 1)
+	require.NoError(t, advancing.Close())
+	pgKeptSession(t, local, "b", "project-a", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	_, err = syncer.pg.ExecContext(ctx, `ALTER POLICY activity_reader ON sessions USING (id <> 'b'); ALTER TABLE sessions ENABLE ROW LEVEL SECURITY`)
+	require.NoError(t, err)
+	advancing = openPGActivityInputStore(t, target, syncer.schema, directory)
+	t.Cleanup(func() { require.NoError(t, advancing.Close()) })
+	validationProbe := &activityPolicyProbe{storeExecutor: advancing.pg, afterCheck: func() {
+		_, err := syncer.pg.ExecContext(ctx, `ALTER TABLE sessions DISABLE ROW LEVEL SECURITY`)
+		require.NoError(t, err)
+	}}
+	advancing.pg = validationProbe
+	require.Len(t, pgKeptBuild(t, advancing, f, q, true).Sessions, 2)
+	require.Nil(t, validationProbe.afterCheck)
+	require.NoError(t, advancing.Close())
+	restored := openPGActivityInputStore(t, target, syncer.schema, directory)
+	t.Cleanup(func() { require.NoError(t, restored.Close()) })
+	require.Len(t, pgKeptBuild(t, restored, f, q, false).Sessions, 2)
 }
 
 type activityFilenodeProbe struct {
@@ -129,8 +190,9 @@ type activityFilenodeProbe struct {
 
 type activityPolicyProbe struct {
 	storeExecutor
-	checks int
-	after  func()
+	checks     int
+	after      func()
+	afterCheck func()
 }
 
 func (p *activityPolicyProbe) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
@@ -176,6 +238,11 @@ func TestPGActivityReportIdentityRecovers(t *testing.T) {
 func (p *activityPolicyProbe) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
 	if strings.Contains(query, "row_security_active") {
 		p.checks++
+		if p.afterCheck != nil {
+			after := p.afterCheck
+			p.afterCheck = nil
+			after()
+		}
 	}
 	return p.storeExecutor.QueryRowContext(ctx, query, args...)
 }
