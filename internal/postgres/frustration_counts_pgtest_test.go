@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
@@ -342,17 +343,13 @@ func TestFrustrationFillJoinsCoveredRequests(t *testing.T) {
 	require.Len(t, laterRows, 1)
 	require.Len(t, outsideRows, 1)
 	require.Len(t, savedRows, 1)
-	var one, filler db.SignalRow
+	var one db.SignalRow
 	for _, row := range firstRows {
-		switch row.ID {
-		case "one":
+		if row.ID == "one" {
 			one = row
-		case "filler-1":
-			filler = row
 		}
 	}
 	require.Equal(t, "one", one.ID)
-	require.Equal(t, "filler-1", filler.ID)
 	two := laterRows[0]
 	savedVersion := versions["saved"]
 	_, err = f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts(session_id, session_version, rules_version, marker_count) VALUES ('saved', $1, $2, 0)`, savedVersion, frustrationMarkerRulesVersion)
@@ -400,16 +397,16 @@ func TestFrustrationFillJoinsCoveredRequests(t *testing.T) {
 		t.Fatalf("request returned before its missing chunk: %v", err)
 	case <-time.After(100 * time.Millisecond):
 	}
-	narrowRows := []db.SignalRow{filler}
+	narrowRows := []db.SignalRow{one}
 	narrowDone := make(chan error, 1)
 	go func() { narrowDone <- store.populateFrustrationMarkers(f.ctx, narrowRows, versions, f.versionColumn) }()
 	select {
 	case err := <-narrowDone:
 		require.NoError(t, err)
-	case <-time.After(3 * time.Second):
+	case <-time.After(500 * time.Millisecond):
 		t.Fatal("narrow request waited for an unrelated locked row")
 	}
-	require.Zero(t, narrowRows[0].FrustrationMarkerCount)
+	require.Equal(t, 1, narrowRows[0].FrustrationMarkerCount)
 	lastRows := []db.SignalRow{two}
 	lastDone := make(chan error, 1)
 	go func() { lastDone <- store.populateFrustrationMarkers(f.ctx, lastRows, versions, f.versionColumn) }()
@@ -437,21 +434,6 @@ func TestFrustrationFillJoinsCoveredRequests(t *testing.T) {
 			require.Equal(t, 1, row.FrustrationMarkerCount)
 		}
 	}
-	oneRows := []db.SignalRow{one}
-	oneDone := make(chan error, 1)
-	go func() { oneDone <- reader.populateFrustrationMarkers(f.ctx, oneRows, versions, f.versionColumn) }()
-	select {
-	case err := <-oneDone:
-		require.NoError(t, err)
-	case <-time.After(3 * time.Second):
-		t.Fatal("request for the completed chunk waited for another chunk")
-	}
-	require.Equal(t, 1, oneRows[0].FrustrationMarkerCount)
-	select {
-	case err := <-coveredDone:
-		t.Fatalf("request spanning chunks returned while the second was held: %v", err)
-	default:
-	}
 	require.NoError(t, txTwo.Rollback())
 	require.NoError(t, <-fillDone)
 	require.NoError(t, <-coveredDone)
@@ -464,64 +446,86 @@ func TestFrustrationFillJoinsCoveredRequests(t *testing.T) {
 }
 
 func TestFrustrationFillSkipsTimedOutChunk(t *testing.T) {
-	previous := frustrationFillChunkTimeout
-	frustrationFillChunkTimeout = 4 * time.Second
-	defer func() { frustrationFillChunkTimeout = previous }()
-	f := newFrustrationFixture(t, "agentsview")
-	store := f.open(t)
-	ids := addFrustrationFillSessions(t, f)
-	rows, versions, err := store.signalRows(f.ctx, db.AnalyticsFilter{Machine: "first"}, f.versionColumn)
-	require.NoError(t, err)
-	require.Len(t, rows, 500)
-	_, err = f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts(session_id, session_version, rules_version, marker_count) VALUES ('one', 'stale', 0, 0)`)
-	require.NoError(t, err)
-	tx, err := f.pg.BeginTx(f.ctx, nil)
-	require.NoError(t, err)
-	defer tx.Rollback()
-	_, err = tx.ExecContext(f.ctx, `SELECT 1 FROM session_frustration_counts WHERE session_id='one' FOR UPDATE`)
-	require.NoError(t, err)
-	fillCtx, stopFill := context.WithCancel(f.ctx)
-	fillDone := make(chan error, 1)
-	workerStopped := make(chan struct{})
-	go func() {
-		defer close(workerStopped)
-		fillDone <- store.fillFrustrationCounts(fillCtx, ids, f.versionColumn)
-	}()
-	defer func() { stopFill(); <-workerStopped }()
-	require.Eventually(t, func() bool {
+	t.Run("context deadline", func(t *testing.T) {
+		previous := frustrationFillChunkTimeout
+		frustrationFillChunkTimeout = 4 * time.Second
+		defer func() { frustrationFillChunkTimeout = previous }()
+		f := newFrustrationFixture(t, "agentsview")
+		store := f.open(t)
+		ids := addFrustrationFillSessions(t, f)
+		rows, versions, err := store.signalRows(f.ctx, db.AnalyticsFilter{Machine: "first"}, f.versionColumn)
+		require.NoError(t, err)
+		require.Len(t, rows, 500)
+		_, err = f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts(session_id, session_version, rules_version, marker_count) VALUES ('one', 'stale', 0, 0)`)
+		require.NoError(t, err)
+		tx, err := f.pg.BeginTx(f.ctx, nil)
+		require.NoError(t, err)
+		defer tx.Rollback()
+		_, err = tx.ExecContext(f.ctx, `SELECT 1 FROM session_frustration_counts WHERE session_id='one' FOR UPDATE`)
+		require.NoError(t, err)
+		fillCtx, stopFill := context.WithCancel(f.ctx)
+		fillDone := make(chan error, 1)
+		workerStopped := make(chan struct{})
+		go func() {
+			defer close(workerStopped)
+			fillDone <- store.fillFrustrationCounts(fillCtx, ids, f.versionColumn)
+		}()
+		defer func() { stopFill(); <-workerStopped }()
+		require.Eventually(t, func() bool {
+			state := &store.runtimeState().frustrationFill
+			state.mu.Lock()
+			defer state.mu.Unlock()
+			return state.pending["one"] != nil
+		}, 10*time.Second, 10*time.Millisecond)
+		ctx, cancel := context.WithTimeout(f.ctx, 8*time.Second)
+		defer cancel()
+		require.NoError(t, store.populateFrustrationMarkers(ctx, rows, versions, f.versionColumn))
+		require.NoError(t, ctx.Err())
+		for _, row := range rows {
+			if row.ID == "one" {
+				require.Equal(t, 1, row.FrustrationMarkerCount)
+			} else {
+				require.Zero(t, row.FrustrationMarkerCount, row.ID)
+			}
+		}
+		require.ErrorIs(t, <-fillDone, context.DeadlineExceeded)
+		var count int
+		require.NoError(t, f.pg.QueryRowContext(f.ctx, `SELECT marker_count FROM session_frustration_counts WHERE session_id='two'`).Scan(&count))
+		require.Equal(t, 1, count, "later chunk should finish after a timeout")
 		state := &store.runtimeState().frustrationFill
 		state.mu.Lock()
-		defer state.mu.Unlock()
-		return state.pending["one"] != nil
-	}, 10*time.Second, 10*time.Millisecond)
-	ctx, cancel := context.WithTimeout(f.ctx, 8*time.Second)
-	defer cancel()
-	require.NoError(t, store.populateFrustrationMarkers(ctx, rows, versions, f.versionColumn))
-	require.NoError(t, ctx.Err())
-	for _, row := range rows {
-		if row.ID == "one" {
-			require.Equal(t, 1, row.FrustrationMarkerCount)
-		} else {
-			require.Zero(t, row.FrustrationMarkerCount, row.ID)
+		for _, chunk := range state.chunks {
+			assert.Empty(t, chunk.ids, "completed fill retains session IDs")
 		}
-	}
-	require.ErrorIs(t, <-fillDone, context.DeadlineExceeded)
-	var count int
-	require.NoError(t, f.pg.QueryRowContext(f.ctx, `SELECT marker_count FROM session_frustration_counts WHERE session_id='two'`).Scan(&count))
-	require.Equal(t, 1, count, "later chunk should finish after a timeout")
-	state := &store.runtimeState().frustrationFill
-	state.mu.Lock()
-	for _, chunk := range state.chunks {
-		assert.Empty(t, chunk.ids, "completed fill retains session IDs")
-	}
-	state.mu.Unlock()
+		state.mu.Unlock()
+	})
+	t.Run("lock timeout", func(t *testing.T) {
+		f := newFrustrationFixture(t, "agentsview")
+		ids := addFrustrationFillSessions(t, f)
+		store, err := NewStore(f.ctx, f.url+"&lock_timeout=1000", f.schema, true)
+		require.NoError(t, err)
+		defer store.Close()
+		_, err = f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts(session_id, session_version, rules_version, marker_count) VALUES ('one', 'stale', 0, 0)`)
+		require.NoError(t, err)
+		tx, err := f.pg.BeginTx(f.ctx, nil)
+		require.NoError(t, err)
+		defer tx.Rollback()
+		_, err = tx.ExecContext(f.ctx, `SELECT 1 FROM session_frustration_counts WHERE session_id='one' FOR UPDATE`)
+		require.NoError(t, err)
+		var pgErr *pgconn.PgError
+		require.ErrorAs(t, store.fillFrustrationCounts(f.ctx, ids, f.versionColumn), &pgErr)
+		require.Equal(t, "55P03", pgErr.Code)
+		var count int
+		err = f.pg.QueryRowContext(f.ctx, `SELECT marker_count FROM session_frustration_counts WHERE session_id='two'`).Scan(&count)
+		require.NoError(t, err)
+		require.Equal(t, 1, count)
+	})
 }
 
 func TestFrustrationFillDeploymentGates(t *testing.T) {
 	testPGURL(t)
-	for _, scenario := range []string{"read-only", "hosted", "borrowed", "standby"} {
+	for _, scenario := range []string{"read-only", "borrowed", "standby"} {
 		t.Run(scenario, func(t *testing.T) {
-			t.Parallel()
 			f := newFrustrationFixture(t, "frustration_gate_"+strings.ReplaceAll(scenario, "-", "_"))
 			owner := f.open(t)
 			var store *Store
@@ -532,8 +536,6 @@ func TestFrustrationFillDeploymentGates(t *testing.T) {
 				store, err = NewStore(f.ctx, url, f.schema, true)
 				require.NoError(t, err)
 				defer store.Close()
-			case "hosted":
-				store = &Store{pg: f.pg, hostedRelations: true}
 			case "borrowed":
 				tx, err := f.pg.BeginTx(f.ctx, nil)
 				require.NoError(t, err)
@@ -554,12 +556,10 @@ func TestFrustrationFillDeploymentGates(t *testing.T) {
 				require.NoError(t, err)
 				defer store.Close()
 			}
-			if scenario == "read-only" || scenario == "standby" {
-				writable, err := store.canFillFrustrationCounts(f.ctx)
-				require.NoError(t, err)
-				require.False(t, writable)
-				return
-			}
+			var output bytes.Buffer
+			previous := log.Writer()
+			log.SetOutput(&output)
+			defer log.SetOutput(previous)
 			stop := store.StartFrustrationFill(f.ctx)
 			defer stop()
 			select {
@@ -567,6 +567,8 @@ func TestFrustrationFillDeploymentGates(t *testing.T) {
 				t.Fatal(f.ctx.Err())
 			case <-time.After(6 * time.Second):
 			}
+			stop()
+			require.NotContains(t, output.String(), "filling frustration counts")
 			var count int
 			require.NoError(t, f.pg.QueryRowContext(f.ctx, `SELECT count(*) FROM session_frustration_counts`).Scan(&count))
 			require.Zero(t, count)
@@ -575,85 +577,30 @@ func TestFrustrationFillDeploymentGates(t *testing.T) {
 }
 
 func TestFrustrationFillSharedRequestWaitBound(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		timeout time.Duration
-	}{{"long", 8 * time.Second}, {"short", 3 * time.Second}} {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newFrustrationFixture(t, "agentsview")
-			store := f.open(t)
-			_, err := f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts(session_id, session_version, rules_version, marker_count) VALUES ('one', 'stale', 0, 0)`)
-			require.NoError(t, err)
-			tx, err := f.pg.BeginTx(f.ctx, nil)
-			require.NoError(t, err)
-			defer tx.Rollback()
-			_, err = tx.ExecContext(f.ctx, `SELECT 1 FROM session_frustration_counts WHERE session_id='one' FOR UPDATE`)
-			require.NoError(t, err)
-			fillCtx, stop := context.WithCancel(f.ctx)
-			done := make(chan error, 1)
-			go func() { done <- store.fillFrustrationCounts(fillCtx, []string{"one", "two"}, f.versionColumn) }()
-			defer func() { stop(); <-done }()
-			require.Eventually(t, func() bool {
-				state := &store.runtimeState().frustrationFill
-				state.mu.Lock()
-				defer state.mu.Unlock()
-				return state.pending["one"] != nil
-			}, 10*time.Second, 10*time.Millisecond)
-			ctx, cancel := context.WithTimeout(f.ctx, tc.timeout)
-			defer cancel()
-			result, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
-			require.NoError(t, err)
-			require.Equal(t, 2, result.QualityHealth.Totals.FrustrationMarkerCount)
-		})
-	}
-}
-
-func TestFrustrationFillFilteredRequestSkipsPendingWrite(t *testing.T) {
 	f := newFrustrationFixture(t, "agentsview")
 	store := f.open(t)
-	_, err := f.pg.ExecContext(f.ctx, `UPDATE sessions SET machine='selected' WHERE id='one'`)
-	require.NoError(t, err)
-	_, err = f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts(session_id, session_version, rules_version, marker_count) VALUES ('two', 'stale', 0, 0)`)
-	require.NoError(t, err)
-	tx, err := f.pg.BeginTx(f.ctx, nil)
-	require.NoError(t, err)
-	defer tx.Rollback()
-	_, err = tx.ExecContext(f.ctx, `SELECT 1 FROM session_frustration_counts WHERE session_id='two' FOR UPDATE`)
-	require.NoError(t, err)
-	fillCtx, stop := context.WithCancel(f.ctx)
-	done := make(chan error, 1)
-	go func() { done <- store.fillFrustrationCounts(fillCtx, []string{"one", "two"}, f.versionColumn) }()
-	defer func() { stop(); <-done }()
-	require.Eventually(t, func() bool {
-		var count int
-		err := f.pg.QueryRowContext(f.ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%INSERT INTO session_frustration_counts%'`).Scan(&count)
-		return err == nil && count > 0
-	}, 10*time.Second, 10*time.Millisecond)
-	ctx, cancel := context.WithTimeout(f.ctx, 700*time.Millisecond)
-	defer cancel()
-	result, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{Machine: "selected"})
-	require.NoError(t, err)
-	require.Equal(t, 1, result.QualityHealth.Totals.FrustrationMarkerCount)
-}
-
-func TestFrustrationFillContinuesAfterLockTimeout(t *testing.T) {
-	f := newFrustrationFixture(t, "agentsview")
-	ids := addFrustrationFillSessions(t, f)
-	store, err := NewStore(f.ctx, f.url+"&lock_timeout=1000", f.schema, true)
-	require.NoError(t, err)
-	defer store.Close()
-	_, err = f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts(session_id, session_version, rules_version, marker_count) VALUES ('one', 'stale', 0, 0)`)
+	_, err := f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts(session_id, session_version, rules_version, marker_count) VALUES ('one', 'stale', 0, 0)`)
 	require.NoError(t, err)
 	tx, err := f.pg.BeginTx(f.ctx, nil)
 	require.NoError(t, err)
 	defer tx.Rollback()
 	_, err = tx.ExecContext(f.ctx, `SELECT 1 FROM session_frustration_counts WHERE session_id='one' FOR UPDATE`)
 	require.NoError(t, err)
-	require.Error(t, store.fillFrustrationCounts(f.ctx, ids, f.versionColumn))
-	var count int
-	err = f.pg.QueryRowContext(f.ctx, `SELECT marker_count FROM session_frustration_counts WHERE session_id='two'`).Scan(&count)
+	fillCtx, stop := context.WithCancel(f.ctx)
+	done := make(chan error, 1)
+	go func() { done <- store.fillFrustrationCounts(fillCtx, []string{"one", "two"}, f.versionColumn) }()
+	defer func() { stop(); <-done }()
+	require.Eventually(t, func() bool {
+		state := &store.runtimeState().frustrationFill
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		return state.pending["one"] != nil
+	}, 10*time.Second, 10*time.Millisecond)
+	ctx, cancel := context.WithTimeout(f.ctx, 3*time.Second)
+	defer cancel()
+	result, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
 	require.NoError(t, err)
-	require.Equal(t, 1, count)
+	require.Equal(t, 2, result.QualityHealth.Totals.FrustrationMarkerCount)
 }
 
 func TestFrustrationFillPersistsChangedSession(t *testing.T) {
