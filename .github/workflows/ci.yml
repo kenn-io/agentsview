@@ -1042,7 +1042,6 @@ jobs:
             postgres-target: test-postgres-core-fast-ci
             cockroach: true
             clickhouse-lane: usage
-            parallel-suites: false
           - name: PostgreSQL raw-sync and ClickHouse
             postgres-target: test-postgres-raw-sync-ci test-postgres-core-heavy-ci
             clickhouse-lane: rest
