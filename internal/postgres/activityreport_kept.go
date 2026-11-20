@@ -94,10 +94,7 @@ func (s *Store) activityReportEligible(q activity.Query) bool {
 		return false
 	}
 	local := time.Now().In(q.Loc)
-	if q.RangeEnd.After(time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, q.Loc)) {
-		return false
-	}
-	return true
+	return !q.RangeEnd.After(time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, q.Loc))
 }
 
 func (s *Store) activityReportIdentity(ctx context.Context) string {
