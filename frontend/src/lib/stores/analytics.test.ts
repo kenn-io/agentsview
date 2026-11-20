@@ -319,6 +319,30 @@ describe("AnalyticsStore.setSkillsGranularity", () => {
 });
 
 describe("AnalyticsStore freshness state", () => {
+  it("starts saved panels before the other dashboard requests", async () => {
+    await analytics.fetchAll();
+
+    const saved = [
+      analyticsService.getApiV1AnalyticsVelocity,
+      analyticsService.getApiV1AnalyticsTools,
+      analyticsService.getApiV1AnalyticsSignals,
+    ];
+    const other = [
+      analyticsService.getApiV1AnalyticsSummary,
+      analyticsService.getApiV1AnalyticsActivity,
+      analyticsService.getApiV1AnalyticsHeatmap,
+      analyticsService.getApiV1AnalyticsProjects,
+      analyticsService.getApiV1AnalyticsHourOfWeek,
+      analyticsService.getApiV1AnalyticsSessions,
+      analyticsService.getApiV1AnalyticsSkills,
+      analyticsService.getApiV1AnalyticsTopSessions,
+    ];
+    for (const request of [...saved, ...other]) expect(request).toHaveBeenCalledOnce();
+    expect(Math.max(...saved.map((request) => request.mock.invocationCallOrder[0]))).toBeLessThan(
+      Math.min(...other.map((request) => request.mock.invocationCallOrder[0])),
+    );
+  });
+
   it("records Quality freshness without changing dashboard freshness", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
