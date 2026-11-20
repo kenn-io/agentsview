@@ -616,17 +616,17 @@ class AnalyticsStore {
     const fetchVersion = ++this.fetchAllVersion;
     this.rollDates();
     const results = await Promise.all([
+      this.fetchVelocity(),
+      this.fetchTools(),
+      this.fetchSignals(),
       this.fetchSummary(),
       this.fetchActivity(),
       this.fetchHeatmap(),
       this.fetchProjects(),
       this.fetchHourOfWeek(),
       this.fetchSessionShape(),
-      this.fetchVelocity(),
-      this.fetchTools(),
       this.fetchSkills(),
       this.fetchTopSessions(),
-      this.fetchSignals(),
     ]);
     if (fetchVersion === this.fetchAllVersion && results.every((result) => result === "ok")) {
       this.markRefreshComplete(startedAt);
