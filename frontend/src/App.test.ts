@@ -1968,7 +1968,7 @@ describe("App telemetry", () => {
       await flushEffects();
       router.navigateToSession(id);
       await flushEffects();
-      expect(document.title).toBe("Sessions · source-a:78abcdef · Codex · AgentsView");
+      expect(document.title).toBe("Sessions · 78abcdef · source-a · Codex · AgentsView");
       response.resolve(
         state === "loaded"
           ? new Response(
@@ -1985,8 +1985,8 @@ describe("App telemetry", () => {
       );
       const expected =
         state === "loaded"
-          ? "Sessions · source-a:78abcdef · Codex · AgentsView"
-          : "Sessions · source-a:78abcdef · Codex · Session not found · AgentsView";
+          ? "Sessions · 78abcdef · source-a · Codex · AgentsView"
+          : "Sessions · 78abcdef · source-a · Codex · Session not found · AgentsView";
       if (state === "loaded") {
         await vi.waitFor(() => expect(sessions.activeSession?.display_name).toBe("Private title"));
       }
