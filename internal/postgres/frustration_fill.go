@@ -147,7 +147,7 @@ func (s *Store) StartFrustrationFill(ctx context.Context) func() {
 	go func() {
 		defer close(done)
 		if warmErr == nil && s.usageCache != nil {
-			if err := s.usageCache.WaitWarm(ctx); err != nil {
+			if err := s.usageCache.WaitWarmAttempt(ctx); err != nil {
 				return
 			}
 		}

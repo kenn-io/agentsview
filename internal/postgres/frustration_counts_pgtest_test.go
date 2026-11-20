@@ -295,6 +295,40 @@ func TestFrustrationFillWaitsForUsageWarm(t *testing.T) {
 			return f.pg.QueryRowContext(f.ctx, `SELECT count(*) FROM session_frustration_counts WHERE marker_count=1`).Scan(&count) == nil && count == 2
 		}, 20*time.Second, 100*time.Millisecond)
 	})
+	t.Run("background failure", func(t *testing.T) {
+		server, _ := testPGServer(t)
+		if server.cockroach {
+			t.Skip("Usage warm-up requires PostgreSQL")
+		}
+		f := newFrustrationFixture(t, "agentsview")
+		store := f.open(t)
+		_, err := f.pg.ExecContext(f.ctx, `INSERT INTO usage_events(session_id,source,model,output_tokens,occurred_at) VALUES ('one','provider','model',20,'2026-01-01')`)
+		require.NoError(t, err)
+		probe := attachUsageCacheProbe(t, store, t.TempDir())
+		store.usageCache.SetWarmRetryDelayForTest(time.Minute)
+		store.usageCache.DeferWork()
+		failed := make(chan struct{})
+		var once sync.Once
+		probe.before = func(context.Context, []string) error {
+			once.Do(func() { close(failed) })
+			return fmt.Errorf("usage source failed")
+		}
+		require.NoError(t, store.WarmUsageCache(f.ctx))
+		stop := store.StartFrustrationFill(f.ctx)
+		defer stop()
+		select {
+		case <-failed:
+		case <-time.After(10 * time.Second):
+			t.Fatal("Usage warm-up did not reach the failing source")
+		}
+		require.Eventually(t, func() bool {
+			var count int
+			return f.pg.QueryRowContext(f.ctx, `SELECT count(*) FROM session_frustration_counts WHERE marker_count=1`).Scan(&count) == nil && count == 2
+		}, 5*time.Second, 100*time.Millisecond)
+		ctx, cancel := context.WithTimeout(f.ctx, 100*time.Millisecond)
+		defer cancel()
+		require.ErrorIs(t, store.usageCache.WaitWarm(ctx), context.DeadlineExceeded)
+	})
 	t.Run("failure", func(t *testing.T) {
 		server, _ := testPGServer(t)
 		if server.cockroach {
