@@ -49,7 +49,6 @@ type searchSpy struct {
 }
 
 func (s *searchSpy) HasFTS(ctx context.Context) bool { return true }
-func (s *searchSpy) ReadOnly() bool                  { return true }
 
 func (s *searchSpy) Search(
 	_ context.Context, f db.SearchFilter,
@@ -94,7 +93,11 @@ func TestHandleSearchSortParam(t *testing.T) {
 
 func TestSearchDateRangeHTTPTransport(t *testing.T) {
 	spy := &searchSpy{}
-	srv := New(config.Config{Host: "127.0.0.1"}, spy, nil)
+	srv := &Server{
+		cfg: config.Config{Host: "127.0.0.1"}, db: spy,
+		sessions: service.NewReadOnlyBackend(spy), mux: http.NewServeMux(),
+	}
+	srv.routes()
 	httpServer := httptest.NewServer(srv.mux)
 	t.Cleanup(httpServer.Close)
 	client := servicehttp.NewHTTPBackend(httpServer.URL, "", true, "")

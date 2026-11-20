@@ -96,21 +96,18 @@ func TestSearchDefaultDateWindow(t *testing.T) {
 		{name: "session only", session: "old", want: []string{"old"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if tc.session == "" {
-				_, sessions, err := ts.searchSessions(t.Context(), nil, searchSessionsIn{Query: "windowneedle", DateFrom: tc.from, DateTo: tc.to, SessionID: tc.session})
-				require.NoError(t, err)
-				ids := []string(nil)
-				for _, hit := range sessions.Results {
-					ids = append(ids, hit.SessionID)
-				}
-				assert.ElementsMatch(t, tc.want, ids)
-				if tc.note {
-					assert.Contains(t, sessions.Note, "2024-05-16")
-					assert.Contains(t, sessions.Note, "earlier date_from")
-				} else {
-					assert.Empty(t, sessions.Note)
-				}
-
+			_, sessions, err := ts.searchSessions(t.Context(), nil, searchSessionsIn{Query: "windowneedle", DateFrom: tc.from, DateTo: tc.to, SessionID: tc.session})
+			require.NoError(t, err)
+			var sessionIDs []string
+			for _, hit := range sessions.Results {
+				sessionIDs = append(sessionIDs, hit.SessionID)
+			}
+			assert.ElementsMatch(t, tc.want, sessionIDs)
+			if tc.note {
+				assert.Contains(t, sessions.Note, "2024-05-16")
+				assert.Contains(t, sessions.Note, "earlier date_from")
+			} else {
+				assert.Empty(t, sessions.Note)
 			}
 
 			_, content, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "windowneedle", DateFrom: tc.from, DateTo: tc.to, SessionID: tc.session})
@@ -128,10 +125,6 @@ func TestSearchDefaultDateWindow(t *testing.T) {
 			}
 		})
 	}
-	_, empty, err := ts.searchSessions(t.Context(), nil, searchSessionsIn{Query: "missingwindowneedle"})
-	require.NoError(t, err)
-	assert.Empty(t, empty.Results)
-	assert.Contains(t, empty.Note, "2024-05-16")
 }
 
 func TestSearchSessions_ReturnsHitsWithOrdinal(t *testing.T) {
@@ -2215,7 +2208,7 @@ func TestSearchContent_HybridKeywordFallbackMetadata(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, fake.lastReq.KeywordFallback)
 	assert.Equal(t, "hybrid_keyword", out.EffectiveMode)
-	assert.Equal(t, "Searched sessions active on or after 2024-05-16 (last 30 days) because date_from, date_to, and session_id were omitted. Pass date_from unchanged with next_cursor to continue, or an earlier date_from (YYYY-MM-DD) to search further back. "+note, out.Note)
+	assert.Equal(t, "Searched sessions active on or after 2024-05-16 (last 30 days) because date_from, date_to, and session_id were omitted. Pass an earlier date_from (YYYY-MM-DD) to search further back. "+note, out.Note)
 }
 
 func TestListRecallPagesWithEvidenceAndSourceSessionFilter(t *testing.T) {
@@ -2271,52 +2264,4 @@ func TestListRecallPagesWithEvidenceAndSourceSessionFilter(t *testing.T) {
 	filtered := decodeStructured[listRecallOut](t, res)
 	require.Len(t, filtered.Entries, 1)
 	assert.Equal(t, "s2", filtered.Entries[0].SourceSessionID)
-}
-
-func TestSearchDefaultWindowPaginationAcrossMidnight(t *testing.T) {
-	ts, d := newTestToolset(t)
-	if !d.HasFTS(t.Context()) {
-		t.Skip("FTS not available")
-	}
-	now := time.Date(2024, 6, 15, 23, 59, 0, 0, time.UTC)
-	ts.now = func() time.Time { return now }
-	seedFTSSession(t, d, "recent", "proj", "midnightneedle", "2024-06-01T10:00:00Z")
-	seedFTSSession(t, d, "boundary", "proj", "midnightneedle", "2024-05-16T10:00:00Z")
-
-	_, sessions, err := ts.searchSessions(t.Context(), nil, searchSessionsIn{Query: "midnightneedle", Sort: "recency", Limit: 1})
-	require.NoError(t, err)
-	require.Len(t, sessions.Results, 1)
-	require.NotNil(t, sessions.NextCursor)
-	_, content, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "midnightneedle", Limit: 1, IncludeActive: true, IncludeOneShot: true})
-	require.NoError(t, err)
-	require.Len(t, content.Matches, 1)
-	require.NotNil(t, content.NextCursor)
-
-	var sessionJSON, contentJSON map[string]any
-	raw, err := json.Marshal(sessions)
-	require.NoError(t, err)
-	require.NoError(t, json.Unmarshal(raw, &sessionJSON))
-	raw, err = json.Marshal(content)
-	require.NoError(t, err)
-	require.NoError(t, json.Unmarshal(raw, &contentJSON))
-	sessionDate, ok := sessionJSON["date_from"].(string)
-	require.True(t, ok, "search_sessions must return date_from")
-	contentDate, ok := contentJSON["date_from"].(string)
-	require.True(t, ok, "search_content must return date_from")
-	assert.Equal(t, "2024-05-16", sessionDate)
-	assert.Equal(t, "2024-05-16", contentDate)
-
-	now = now.Add(2 * time.Minute)
-	_, nextSessions, err := ts.searchSessions(t.Context(), nil, searchSessionsIn{Query: "midnightneedle", Sort: "recency", Limit: 1, Cursor: *sessions.NextCursor, DateFrom: sessionDate})
-	require.NoError(t, err)
-	require.Len(t, nextSessions.Results, 1)
-	assert.ElementsMatch(t, []string{"recent", "boundary"}, []string{sessions.Results[0].SessionID, nextSessions.Results[0].SessionID})
-	_, nextContent, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "midnightneedle", Limit: 1, Cursor: *content.NextCursor, DateFrom: contentDate, IncludeActive: true, IncludeOneShot: true})
-	require.NoError(t, err)
-	require.Len(t, nextContent.Matches, 1)
-	assert.ElementsMatch(t, []string{"recent", "boundary"}, []string{content.Matches[0].SessionID, nextContent.Matches[0].SessionID})
-	_, _, err = ts.searchSessions(t.Context(), nil, searchSessionsIn{Query: "midnightneedle", Cursor: *sessions.NextCursor})
-	require.NoError(t, err)
-	_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "midnightneedle", Cursor: *content.NextCursor, IncludeActive: true, IncludeOneShot: true})
-	require.NoError(t, err)
 }

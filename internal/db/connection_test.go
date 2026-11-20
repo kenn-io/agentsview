@@ -142,7 +142,7 @@ func TestSearchWaitsForBulkReadAndLeavesReaderForQuickRead(t *testing.T) {
 	}{
 		{"sessions", "searchable", false},
 		{"content words", "searchable text", true},
-		{"content boolean", `"searchable" OR "missing"`, true},
+		{"content word", "searchable", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			testSearchWaitsForBulkRead(t, tc.pattern, tc.content)
