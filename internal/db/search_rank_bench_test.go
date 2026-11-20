@@ -65,3 +65,43 @@ func BenchmarkSearchCommonContentAndTitleWord(b *testing.B) {
 		require.Len(b, page.Results, 25)
 	}
 }
+
+func BenchmarkSearchDateRank(b *testing.B) {
+	d := seedSearchRankBenchmark(b)
+	for _, tc := range []struct{ name, from string }{
+		{"broad", "2026-03-02"},
+		{"selective", "2026-05-20"},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			d.readOnly = true // Measure the search rather than its result cache.
+			defer func() { d.readOnly = false }()
+			for b.Loop() {
+				page, err := d.Search(b.Context(), SearchFilter{Query: "handler", DateFrom: tc.from, Limit: 25})
+				require.NoError(b, err)
+				require.Len(b, page.Results, 25)
+			}
+		})
+	}
+	_, err := d.getWriter().Exec(b.Context(), `UPDATE messages SET content = 'the handler checks' WHERE role = 'assistant'`)
+	require.NoError(b, err)
+	b.Run("ties", func(b *testing.B) {
+		d.readOnly = true
+		defer func() { d.readOnly = false }()
+		for b.Loop() {
+			page, err := d.Search(b.Context(), SearchFilter{Query: "handler", DateFrom: "2026-03-02", Limit: 25})
+			require.NoError(b, err)
+			require.Len(b, page.Results, 25)
+		}
+	})
+	_, err = d.getWriter().Exec(b.Context(), `UPDATE messages SET content = 'the beacon checks' WHERE role = 'assistant' AND CAST(substr(session_id, 6) AS INTEGER) BETWEEN 0 AND 31`)
+	require.NoError(b, err)
+	b.Run("ties200", func(b *testing.B) {
+		d.readOnly = true
+		defer func() { d.readOnly = false }()
+		for b.Loop() {
+			page, err := d.Search(b.Context(), SearchFilter{Query: "beacon", DateFrom: "2026-03-02", Limit: 1})
+			require.NoError(b, err)
+			require.Len(b, page.Results, 1)
+		}
+	})
+}

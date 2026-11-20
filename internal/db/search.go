@@ -544,7 +544,7 @@ func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage,
 	defer func() { _ = tx.Rollback() }()
 	var walk *searchRankWalk
 	if f.Sort != "recency" && f.Project == "" && f.DateTo == "" {
-		walk, err = walkSearchRanks(ctx, tx, ftsQuery.table, innerWhereSQL, ftsArgs, f.Cursor+f.Limit+1)
+		walk, err = walkSearchRanks(ctx, tx, ftsQuery.table, innerWhereSQL, ftsArgs, f.Cursor+f.Limit+1, f.DateFrom != "")
 		if err != nil {
 			return SearchPage{}, err
 		}

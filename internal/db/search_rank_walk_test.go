@@ -30,6 +30,15 @@ func TestSearchRankWalkMatchesFullRanking(t *testing.T) {
 		}
 		insertMessages(t, d, msgs...)
 	}
+	insertSession(t, d, "older", "proj", func(s *Session) {
+		s.FirstMessage = new("untitled")
+		s.EndedAt = new("2026-04-01T12:00:00Z")
+	})
+	var older []Message
+	for i := range 200 {
+		older = append(older, userMsg("older", i, "deploy the handler"))
+	}
+	insertMessages(t, d, older...)
 	for i := range 100 {
 		seed(fmt.Sprintf("tie-%03d", i), "untitled", "intro", "deploy the handler", "middle", "deploy the handler")
 	}
@@ -52,10 +61,36 @@ func TestSearchRankWalkMatchesFullRanking(t *testing.T) {
 		insertMessages(t, d, userMsg(id, 2, "handler"))
 	}
 
-	walk, err := walkSearchRanks(ctx, d.getReader(), "messages_fts", "messages_fts.rendered MATCH ?", []any{`"handler"`}, 2)
+	walk, err := walkSearchRanks(ctx, d.getReader(), "messages_fts", "messages_fts.rendered MATCH ?", []any{`"handler"`}, 2, false)
 	require.NoError(t, err)
 	require.NotNil(t, walk, "the walk must serve a page with distinct ranks")
 	assert.False(t, walk.complete)
+
+	// A small page can finish this 200-message tie without ranking it twice.
+	conn, err := d.getReader().Conn(ctx)
+	require.NoError(t, err)
+	defer conn.Close()
+	visited := 0
+	require.NoError(t, conn.Raw(func(raw any) error {
+		return raw.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("count_rank_walk", func(int64) bool {
+			visited++
+			return true
+		}, false)
+	}))
+	tied, err := walkSearchRanks(ctx, conn, "messages_fts", "messages_fts.rendered MATCH ? AND s2.ended_at >= ? AND count_rank_walk(m2.id)", []any{`"deploy"`, "2026-05-01"}, 2, true)
+	require.NoError(t, err)
+	require.NotNil(t, tied)
+	assert.True(t, tied.complete)
+	assert.Len(t, tied.best, 100)
+	assert.GreaterOrEqual(t, visited, 200)
+	assert.LessOrEqual(t, visited, 400)
+	for cursor, want := range []string{"tie-000", "tie-001"} {
+		page, err := d.Search(ctx, SearchFilter{Query: "deploy", Limit: 1, Cursor: cursor, DateFrom: "2026-05-01"})
+		require.NoError(t, err)
+		require.Len(t, page.Results, 1)
+		assert.Equal(t, want, page.Results[0].SessionID)
+		assert.Contains(t, page.Results[0].Snippet, "deploy")
+	}
 
 	for _, from := range []string{"", "2026-05-08", "2026-05-09", "2027-01-01"} {
 		for _, query := range []string{"handler", "deploy"} {
@@ -75,7 +110,7 @@ func TestSearchRankWalkMatchesFullRanking(t *testing.T) {
 				}
 				assert.Equal(t, ranked, walked)
 				if query == "handler" && from == "" {
-					require.Len(t, walked, 116, "limit %d", limit)
+					require.Len(t, walked, 117, "limit %d", limit)
 					assert.Equal(t, -1, walked[len(walked)-1].Ordinal, "title-only rows come last")
 				}
 				if from == "2027-01-01" {
