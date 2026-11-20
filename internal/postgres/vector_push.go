@@ -1080,12 +1080,20 @@ func (s *Sync) pushVectorSession(
 	}
 	outcome, err := writeSessionVectorsKeeping(ctx, tx, *scope, sessionID, aggHash, docs, nil, nil)
 	if err != nil {
-		return vectorSessionOutcome{}, err
+		return vectorSessionOutcome{}, vectorPushRepairHint(err)
 	}
 	if err := tx.Commit(); err != nil {
 		return vectorSessionOutcome{}, fmt.Errorf("commit vector push tx: %w", err)
 	}
 	return outcome, nil
+}
+
+func vectorPushRepairHint(err error) error {
+	// Kit does not expose a typed error for invalid stored chunk vectors.
+	if strings.HasSuffix(err.Error(), "pgvector: vector has zero norm") {
+		return fmt.Errorf("%w; for zero vectors in the local index, run agentsview index embeddings build --repair-invalid", err)
+	}
+	return err
 }
 
 func writeSessionVectorsKeeping(ctx context.Context, tx *sql.Tx, scope vectorPushScope, sessionID, aggHash string, docs, covered []storage.VectorPushDoc, loadChunks func(string) ([]storage.VectorPushChunk, error)) (vectorSessionOutcome, error) {

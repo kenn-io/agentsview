@@ -1090,6 +1090,22 @@ func TestVectorPushRoundTrip(t *testing.T) {
 		 WHERE generation_id = $1 AND machine = $2`, genID, witnessKey))
 }
 
+func TestVectorPushInvalidStoredVectorReportsRepair(t *testing.T) {
+	t.Parallel()
+	sync, localDB, _ := newVectorPushTestSync(t)
+	seedVectorSession(t, localDB, "A")
+	sync.vectorSource = &fakeVectorSource{
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-invalid", Model: "m", Dimension: 4},
+		hasGen: true,
+		hashes: map[string]string{"A": "ha"},
+		docs: map[string][]storage.VectorPushDoc{
+			"A": {vdoc("A", "A#0", 0, "content", "hash", []float32{0, 0, 0, 0})},
+		},
+	}
+	_, err := sync.Push(t.Context(), false, nil)
+	require.ErrorContains(t, err, "agentsview index embeddings build --repair-invalid")
+}
+
 func TestVectorPushDeltaNoop(t *testing.T) {
 	t.Parallel()
 	sync, localDB, _ := newVectorPushTestSync(t)
