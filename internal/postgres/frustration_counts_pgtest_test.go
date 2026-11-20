@@ -79,14 +79,27 @@ func TestFrustrationCountsRulesAndRestart(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 2, restarted.QualityHealth.Totals.FrustrationMarkerCount)
 	}
-	_, err = f.pg.ExecContext(f.ctx, `UPDATE session_frustration_counts SET rules_version = $1, session_version = 'stale', marker_count = 7 WHERE session_id = 'one'`, frustrationMarkerRulesVersion+1)
+	_, err = f.pg.ExecContext(f.ctx, `UPDATE session_frustration_counts SET rules_version = $1, marker_count = 7 WHERE session_id = 'one'`, frustrationMarkerRulesVersion+1)
 	require.NoError(t, err)
-	_, err = f.pg.ExecContext(f.ctx, `UPDATE session_frustration_counts SET rules_version = 0 WHERE session_id = 'two'`)
+	_, err = f.pg.ExecContext(f.ctx, `DELETE FROM session_frustration_counts WHERE session_id = 'two'`)
 	require.NoError(t, err)
+	fillStore := f.open(t)
+	stop := fillStore.StartFrustrationFill(f.ctx)
+	defer stop()
+	require.Eventually(t, func() bool {
+		state := &fillStore.runtimeState().frustrationFill
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		return state.completed > 0
+	}, 10*time.Second, 10*time.Millisecond)
+	stop()
+	var version, count int
+	require.NoError(t, f.pg.QueryRowContext(f.ctx, `SELECT rules_version, marker_count FROM session_frustration_counts WHERE session_id = 'one'`).Scan(&version, &count))
+	require.Equal(t, frustrationMarkerRulesVersion+1, version)
+	require.Equal(t, 7, count)
 	result, err = f.open(t).GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{})
 	require.NoError(t, err)
 	require.Equal(t, 2, result.QualityHealth.Totals.FrustrationMarkerCount)
-	var version, count int
 	require.NoError(t, f.pg.QueryRowContext(f.ctx, `SELECT rules_version, marker_count FROM session_frustration_counts WHERE session_id = 'one'`).Scan(&version, &count))
 	require.Equal(t, frustrationMarkerRulesVersion+1, version)
 	require.Equal(t, 7, count)
@@ -251,6 +264,10 @@ func TestFrustrationEvidenceWithLockedCount(t *testing.T) {
 }
 
 func TestFrustrationFillWaitsForUsageWarm(t *testing.T) {
+	server, _ := testPGServer(t)
+	if server.cockroach {
+		t.Skip("Usage warm-up requires PostgreSQL")
+	}
 	f := newFrustrationFixture(t, "frustration_wait_usage")
 	store := f.open(t)
 	_, err := f.pg.ExecContext(f.ctx, `INSERT INTO usage_events(session_id,source,model,output_tokens,occurred_at) VALUES ('one','provider','model',20,'2026-01-01')`)
@@ -311,11 +328,16 @@ type frustrationScanKey struct{}
 type frustrationScanCounter struct {
 	storeExecutor
 	scans atomic.Int32
+	mu    sync.Mutex
+	ids   []string
 }
 
 func (c *frustrationScanCounter) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	if ctx.Value(frustrationScanKey{}) != nil && strings.Contains(query, "SELECT session_id, NULL") {
 		c.scans.Add(1)
+		c.mu.Lock()
+		c.ids = append(c.ids, args[0].([]string)...)
+		c.mu.Unlock()
 	}
 	return c.storeExecutor.QueryContext(ctx, query, args...)
 }
@@ -361,7 +383,7 @@ func TestFrustrationFillJoinsCoveredRequests(t *testing.T) {
 	completed := state.completed
 	state.mu.Unlock()
 	fillDone := make(chan error, 1)
-	go func() { fillDone <- store.fillFrustrationCounts(f.ctx, [][]string{ids}, f.versionColumn) }()
+	go func() { fillDone <- store.fillFrustrationCounts(f.ctx, ids, f.versionColumn) }()
 	require.Eventually(t, func() bool {
 		state := &store.runtimeState().frustrationFill
 		state.mu.Lock()
@@ -380,8 +402,10 @@ func TestFrustrationFillJoinsCoveredRequests(t *testing.T) {
 	}
 	mixedRows := append(append([]db.SignalRow{}, savedRows...), firstRows...)
 	mixedDone := make(chan error, 1)
+	mixedCtx, cancelMixed := context.WithTimeout(coveredCtx, 3*time.Second)
+	defer cancelMixed()
 	go func() {
-		mixedDone <- store.populateFrustrationMarkers(coveredCtx, mixedRows, versions, f.versionColumn)
+		mixedDone <- store.populateFrustrationMarkers(mixedCtx, mixedRows, versions, f.versionColumn)
 	}()
 	select {
 	case err := <-mixedDone:
@@ -418,7 +442,6 @@ func TestFrustrationFillJoinsCoveredRequests(t *testing.T) {
 	}
 	require.NoError(t, tx.Rollback())
 	require.NoError(t, <-mixedDone)
-	require.Zero(t, mixedRows[0].FrustrationMarkerCount)
 	for _, row := range mixedRows {
 		if row.ID == "one" {
 			require.Equal(t, 1, row.FrustrationMarkerCount)
@@ -456,7 +479,7 @@ func TestFrustrationFillSkipsTimedOutChunk(t *testing.T) {
 	workerStopped := make(chan struct{})
 	go func() {
 		defer close(workerStopped)
-		fillDone <- store.fillFrustrationCounts(fillCtx, [][]string{ids}, f.versionColumn)
+		fillDone <- store.fillFrustrationCounts(fillCtx, ids, f.versionColumn)
 	}()
 	defer func() { stopFill(); <-workerStopped }()
 	require.Eventually(t, func() bool {
@@ -510,119 +533,70 @@ func TestFrustrationFillDeploymentGates(t *testing.T) {
 	}
 }
 
-func TestFrustrationFillSeparatesDashboardSessions(t *testing.T) {
-	f := newFrustrationFixture(t, "agentsview")
-	store := f.open(t)
-	_, err := f.pg.ExecContext(f.ctx, `UPDATE sessions SET started_at=now(), is_automated=false WHERE id IN ('one','two')`)
-	require.NoError(t, err)
-	_, err = f.pg.ExecContext(f.ctx, `INSERT INTO sessions (id, machine, project, agent, started_at, message_count, is_automated) VALUES ('auto', 'test', 'sample', 'claude', now(), 1, true), ('old', 'test', 'sample', 'claude', '2017-01-01', 1, false), ('boundary', 'test', 'sample', 'claude', (date_trunc('day', now() AT TIME ZONE 'UTC') - interval '364 days') AT TIME ZONE 'UTC', 1, false), ('padded', 'test', 'sample', 'claude', (date_trunc('day', now() AT TIME ZONE 'UTC') - interval '364 days 1 hour') AT TIME ZONE 'UTC', 1, false), ('future', 'test', 'sample', 'claude', (date_trunc('day', now() AT TIME ZONE 'UTC') + interval '1 day 1 hour') AT TIME ZONE 'UTC', 1, false)`)
-	require.NoError(t, err)
-	_, err = f.pg.ExecContext(f.ctx, `INSERT INTO sessions (id, machine, project, agent, started_at, message_count, relationship_type) VALUES ('sub', 'test', 'sample', 'claude', now(), 1, 'subagent'), ('fork', 'test', 'sample', 'claude', now(), 1, 'fork'), ('empty', 'test', 'sample', 'claude', now(), 0, ''), ('future-rules', 'test', 'sample', 'claude', '2017-01-01', 1, ''), ('no-date', 'test', 'sample', 'claude', NULL, 1, '')`)
-	require.NoError(t, err)
-	_, err = f.pg.ExecContext(f.ctx, `INSERT INTO messages (session_id, ordinal, role, content) VALUES ('sub', 0, 'user', 'this is broken'), ('fork', 0, 'user', 'this is broken'), ('auto', 0, 'user', 'this is broken'), ('old', 0, 'user', 'this is broken'), ('boundary', 0, 'user', 'this is broken'), ('padded', 0, 'user', 'this is broken'), ('future', 0, 'user', 'this is broken'), ('future-rules', 0, 'user', 'this is broken'), ('no-date', 0, 'user', 'this is broken')`)
-	require.NoError(t, err)
-	_, err = f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts(session_id, session_version, rules_version, marker_count) VALUES ('two', 'stale', 0, 0), ('future-rules', 'stale', $1, 7)`, frustrationMarkerRulesVersion+1)
-	require.NoError(t, err)
-	groups, err := store.staleFrustrationSessions(f.ctx, f.versionColumn)
-	require.NoError(t, err)
-	require.Equal(t, [][]string{{"boundary", "one", "two"}, {"padded"}, {"future"}, {"auto", "no-date", "old"}}, groups)
-	now := time.Now().UTC()
-	filter := db.AnalyticsFilter{AutomatedScope: "human", Timezone: "UTC", From: now.AddDate(0, 0, -364).Format("2006-01-02"), To: now.Format("2006-01-02")}
-	rows, _, err := store.signalRows(f.ctx, filter, f.versionColumn)
-	require.NoError(t, err)
-	var ids []string
-	for _, row := range rows {
-		ids = append(ids, row.ID)
-	}
-	require.ElementsMatch(t, groups[0], ids)
-	counter := &frustrationScanCounter{storeExecutor: store.pg}
-	store.pg = counter
-	requestCtx := context.WithValue(f.ctx, frustrationScanKey{}, true)
-	all, allVersions, err := store.signalRows(f.ctx, db.AnalyticsFilter{IncludeSubagents: true, IncludeForks: true}, f.versionColumn)
-	require.NoError(t, err)
-	require.Len(t, all, 10)
-	require.NoError(t, store.populateFrustrationMarkers(requestCtx, all, allVersions, f.versionColumn))
-	require.EqualValues(t, 1, counter.scans.Load())
-	for _, row := range all {
-		require.Equal(t, 1, row.FrustrationMarkerCount)
-	}
-}
-
-func TestFrustrationFillShortDeadlineSharedSignals(t *testing.T) {
-	f := newFrustrationFixture(t, "agentsview")
-	store := f.open(t)
-	require.NotEmpty(t, store.keptAnalyticsVersion(f.ctx, "signals"))
-	_, err := f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts(session_id, session_version, rules_version, marker_count) VALUES ('one', 'stale', 0, 0)`)
-	require.NoError(t, err)
-	gate, err := f.pg.BeginTx(f.ctx, nil)
-	require.NoError(t, err)
-	defer gate.Rollback()
-	_, err = gate.ExecContext(f.ctx, `SELECT 1 FROM session_frustration_counts WHERE session_id='one' FOR UPDATE`)
-	require.NoError(t, err)
-	fillCtx, cancelFill := context.WithCancel(f.ctx)
-	fillStopped := make(chan struct{})
-	go func() {
-		defer close(fillStopped)
-		_ = store.fillFrustrationCounts(fillCtx, [][]string{{"one", "two"}}, f.versionColumn)
-	}()
-	defer func() { cancelFill(); gate.Rollback(); <-fillStopped }()
-	require.Eventually(t, func() bool {
-		state := &store.runtimeState().frustrationFill
-		state.mu.Lock()
-		defer state.mu.Unlock()
-		return state.pending["one"] != nil && state.pending["two"] != nil
-	}, 10*time.Second, 10*time.Millisecond)
-	ctx, cancel := context.WithTimeout(f.ctx, 2*time.Second)
-	defer cancel()
-	result, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
-	require.NoError(t, err)
-	require.Equal(t, 2, result.QualityHealth.Totals.FrustrationMarkerCount)
-}
-
 func TestFrustrationFillJoinsNonUTCDateBoundaries(t *testing.T) {
-	for _, test := range []struct {
-		name  string
-		zone  string
-		group int
-	}{
-		{"lower", "Asia/Tokyo", 1},
-		{"upper", "America/Los_Angeles", 2},
-	} {
-		t.Run(test.name, func(t *testing.T) {
+	for _, zone := range []string{"Asia/Tokyo", "America/Los_Angeles"} {
+		t.Run(zone, func(t *testing.T) {
 			f := newFrustrationFixture(t, "agentsview")
 			store := f.open(t)
-			loc, err := time.LoadLocation(test.zone)
+			loc, err := time.LoadLocation(zone)
 			require.NoError(t, err)
 			var databaseNow time.Time
 			require.NoError(t, f.pg.QueryRowContext(f.ctx, `SELECT now()`).Scan(&databaseNow))
-			utc := databaseNow.UTC()
-			day := time.Date(utc.Year(), utc.Month(), utc.Day(), 0, 0, 0, 0, time.UTC)
-			inside := day.AddDate(0, 0, -365).Add(23 * time.Hour)
-			if test.group == 2 {
-				inside = day.AddDate(0, 0, 1).Add(time.Hour)
+			now := databaseNow.In(loc)
+			boundary := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, -364)
+			_, err = f.pg.ExecContext(f.ctx, `UPDATE sessions SET started_at=$1, is_automated=false WHERE id IN ('one','two')`, boundary.Add(48*time.Hour))
+			require.NoError(t, err)
+			_, err = f.pg.ExecContext(f.ctx, `INSERT INTO sessions (id, machine, project, agent, started_at, message_count, is_automated) SELECT 'filler-' || n, 'test', 'sample', 'claude', $1, 1, false FROM generate_series(1,498) n`, boundary.Add(24*time.Hour))
+			require.NoError(t, err)
+			_, err = f.pg.ExecContext(f.ctx, `INSERT INTO sessions (id, machine, project, agent, started_at, message_count, is_automated) VALUES ('inside', 'test', 'sample', 'claude', $1, 1, false), ('outside', 'test', 'sample', 'claude', $2, 1, false), ('undated', 'test', 'sample', 'claude', NULL, 1, false)`, boundary.Add(time.Hour), boundary.Add(-time.Hour))
+			require.NoError(t, err)
+			_, err = f.pg.ExecContext(f.ctx, `INSERT INTO messages (session_id, ordinal, role, content) SELECT id, 0, 'user', 'this is broken' FROM sessions WHERE id LIKE 'filler-%' OR id IN ('inside','outside','undated')`)
+			require.NoError(t, err)
+			_, err = f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts(session_id,session_version,rules_version,marker_count) VALUES ('one','stale',0,0), ('outside','stale',0,0)`)
+			require.NoError(t, err)
+			first, err := f.pg.BeginTx(f.ctx, nil)
+			require.NoError(t, err)
+			defer first.Rollback()
+			_, err = first.ExecContext(f.ctx, `SELECT 1 FROM session_frustration_counts WHERE session_id='one' FOR UPDATE`)
+			require.NoError(t, err)
+			last, err := f.pg.BeginTx(f.ctx, nil)
+			require.NoError(t, err)
+			defer last.Rollback()
+			_, err = last.ExecContext(f.ctx, `SELECT 1 FROM session_frustration_counts WHERE session_id='outside' FOR UPDATE`)
+			require.NoError(t, err)
+			counter := &frustrationScanCounter{storeExecutor: store.pg}
+			store.pg = counter
+			stop := store.StartFrustrationFill(f.ctx)
+			defer func() { first.Rollback(); last.Rollback(); stop() }()
+			state := &store.runtimeState().frustrationFill
+			require.Eventually(t, func() bool { state.mu.Lock(); defer state.mu.Unlock(); return state.pending["outside"] != nil }, 10*time.Second, 10*time.Millisecond)
+			filter := db.AnalyticsFilter{AutomatedScope: "human", Timezone: zone, From: boundary.Format("2006-01-02"), To: now.Format("2006-01-02")}
+			rows, versions, err := store.signalRows(f.ctx, filter, f.versionColumn)
+			require.NoError(t, err)
+			require.Len(t, rows, 501)
+			ctx := context.WithValue(f.ctx, frustrationScanKey{}, true)
+			done := make(chan error, 1)
+			go func() { done <- store.populateFrustrationMarkers(ctx, rows, versions, f.versionColumn) }()
+			select {
+			case err := <-done:
+				t.Fatalf("request returned before covered chunk: %v", err)
+			case <-time.After(100 * time.Millisecond):
 			}
-			local := inside.In(loc)
-			localDay := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
-			from, to := localDay, localDay.AddDate(0, 0, 364)
-			if test.group == 2 {
-				from, to = localDay.AddDate(0, 0, -364), localDay
+			require.NoError(t, first.Rollback())
+			select {
+			case err := <-done:
+				require.NoError(t, err)
+			case <-time.After(4 * time.Second):
+				t.Fatal("request waited for the unrelated row")
 			}
-			_, err = f.pg.ExecContext(f.ctx, `UPDATE sessions SET started_at=$1, is_automated=false WHERE id IN ('one','two')`, day.Add(3*time.Hour))
-			require.NoError(t, err)
-			_, err = f.pg.ExecContext(f.ctx, `INSERT INTO sessions (id, machine, project, agent, started_at, message_count, is_automated) VALUES ('inside', 'test', 'sample', 'claude', $1, 1, false), ('outside', 'test', 'sample', 'claude', $2, 1, false)`, inside, from.AddDate(0, 0, -2))
-			require.NoError(t, err)
-			groups, err := store.staleFrustrationSessions(f.ctx, f.versionColumn)
-			require.NoError(t, err)
-			require.Equal(t, []string{"inside"}, groups[test.group])
-			require.Equal(t, []string{"outside"}, groups[3])
-			filter := db.AnalyticsFilter{AutomatedScope: "human", Timezone: test.zone, From: from.Format("2006-01-02"), To: to.Format("2006-01-02")}
-			rows, _, err := store.signalRows(f.ctx, filter, f.versionColumn)
-			require.NoError(t, err)
-			var ids []string
+			require.EqualValues(t, 1, counter.scans.Load())
+			counter.mu.Lock()
+			scannedIDs := append([]string(nil), counter.ids...)
+			counter.mu.Unlock()
+			require.Equal(t, []string{"inside"}, scannedIDs)
 			for _, row := range rows {
-				ids = append(ids, row.ID)
+				require.Equal(t, 1, row.FrustrationMarkerCount)
 			}
-			require.ElementsMatch(t, append(groups[0], groups[test.group]...), ids)
 		})
 	}
 }

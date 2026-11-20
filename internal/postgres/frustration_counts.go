@@ -58,7 +58,7 @@ func (s *Store) loadStoredFrustrationCounts(ctx context.Context, ids []string, v
 // Reserve request time for evidence reads when another writer holds a count row.
 func (s *Store) storeFrustrationCountsForRead(ctx context.Context, versions map[string]string, counts map[string]int, versionColumn string) error {
 	budget := time.Second
-	if deadline, ok := frustrationRequestDeadline(ctx); ok {
+	if deadline, ok := ctx.Deadline(); ok {
 		budget = min(budget, time.Until(deadline)/2)
 	}
 	writeCtx, cancel := context.WithTimeout(ctx, budget)
@@ -121,25 +121,23 @@ func (s *Store) scanFrustrationCounts(ctx context.Context, ids []string, version
 	return counts, versions, nil
 }
 
-// staleFrustrationSessions groups stale sessions by UTC day: the default
-// Dashboard window, the day before it, the day after it, and the rest.
-func (s *Store) staleFrustrationSessions(ctx context.Context, versionColumn string) ([][]string, error) {
+// staleFrustrationSessions lists stale sessions in Dashboard order.
+func (s *Store) staleFrustrationSessions(ctx context.Context, versionColumn string) ([]string, error) {
 	where := db.BuildAnalyticsWhere(db.AnalyticsFilter{}, db.NewQueryBuilder(s.sessionDialect(), 1), "s.", "", nil)
-	rows, err := s.pg.QueryContext(ctx, `SELECT s.id, CASE WHEN s.is_automated THEN 3 WHEN d.day BETWEEN -364 AND 0 THEN 0 WHEN d.day = -365 THEN 1 WHEN d.day = 1 THEN 2 ELSE 3 END FROM sessions s CROSS JOIN LATERAL (SELECT (COALESCE(s.started_at, s.created_at) AT TIME ZONE 'UTC')::date - (now() AT TIME ZONE 'UTC')::date AS day) d LEFT JOIN session_frustration_counts c ON c.session_id=s.id WHERE `+where+` AND (c.session_id IS NULL OR (c.rules_version <= $1 AND (c.rules_version < $1 OR c.session_version <> `+frustrationSessionVersion("s."+versionColumn)+`))) ORDER BY s.id`, frustrationMarkerRulesVersion)
+	rows, err := s.pg.QueryContext(ctx, `SELECT s.id FROM sessions s LEFT JOIN session_frustration_counts c ON c.session_id=s.id WHERE `+where+` AND (c.session_id IS NULL OR (c.rules_version <= $1 AND (c.rules_version < $1 OR c.session_version <> `+frustrationSessionVersion("s."+versionColumn)+`))) ORDER BY s.is_automated, COALESCE(s.started_at, s.created_at) DESC NULLS LAST, s.id`, frustrationMarkerRulesVersion)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	groups := make([][]string, 4)
+	var ids []string
 	for rows.Next() {
 		var id string
-		var group int
-		if err := rows.Scan(&id, &group); err != nil {
+		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
-		groups[group] = append(groups[group], id)
+		ids = append(ids, id)
 	}
-	return groups, rows.Err()
+	return ids, rows.Err()
 }
 
 func (s *Store) canFillFrustrationCounts(ctx context.Context) (bool, error) {
