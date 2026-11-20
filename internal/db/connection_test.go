@@ -109,8 +109,8 @@ func TestReaderPoolRetainsConfiguredBurstConnections(t *testing.T) {
 		require.NoError(t, conn.Close())
 	}
 	stats := reader.Stats()
-	assert.Equal(t, readerMaxIdleConns, stats.Idle)
-	assert.EqualValues(t, 1, stats.MaxIdleClosed)
+	assert.Equal(t, readerMaxOpenConns, stats.Idle)
+	assert.Zero(t, stats.MaxIdleClosed)
 }
 
 func TestQuickReadKeepsAReaderWhileAnalyticsFillThePool(t *testing.T) {

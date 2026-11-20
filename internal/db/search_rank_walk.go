@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 )
 
@@ -18,12 +17,6 @@ const searchRankWalkMaxSessions = 4096
 // short messages, would make it read nearly every match; past the bound it
 // hands the page to the query that ranks every match.
 const searchRankWalkRowsPerSession = 64
-
-// Small dated pages can need more than 128 rows to finish a modest tie.
-const searchRankWalkDateMinRows = 256
-
-// Sample recent FTS rows without ranking to choose the dated search path.
-const searchRankWalkDateSampleRows = 256
 
 // searchBestMatch is a session's best message match: the lowest rank, then
 // the lowest ordinal, then the lowest FTS rowid.
@@ -59,19 +52,12 @@ type searchRankWalk struct {
 // the full ordering are among the walk's sessions. FTS5 sorts all matches
 // by rank before the first row, but joins each match to its message and
 // session only as the walk pulls it. The walk returns nil when it reaches
-// more sessions than the page query can bind, reads too many matches, or a
-// dated sample selects full ranking.
+// more sessions than the page query can bind or reads too many matches.
 func walkSearchRanks(
-	ctx context.Context, q messageRowsQuerier, table, innerWhereSQL string, ftsArgs []any, need int, dateBounded bool,
+	ctx context.Context, q messageRowsQuerier, table, innerWhereSQL string, ftsArgs []any, need int,
 ) (*searchRankWalk, error) {
 	if need > searchRankWalkMaxSessions {
 		return nil, nil
-	}
-	if dateBounded {
-		broad, err := searchDateHasBroadMatches(ctx, q, table, innerWhereSQL, ftsArgs, need)
-		if err != nil || !broad {
-			return nil, err
-		}
 	}
 	query := strings.ReplaceAll(`SELECT m2.session_id, messages_fts.rowid, m2.ordinal, rank
 		FROM messages_fts
@@ -88,11 +74,10 @@ func walkSearchRanks(
 	index := make(map[string]int, need)
 	var boundary float64
 	maxRows := need * searchRankWalkRowsPerSession
-	if dateBounded {
-		// One extra row lets a tie ending just past the bound complete.
-		maxRows = max(maxRows, searchRankWalkDateMinRows) + 1
-	}
 	for read := 0; rows.Next(); read++ {
+		if read == maxRows {
+			return nil, nil
+		}
 		var m searchBestMatch
 		if err := rows.Scan(&m.sessionID, &m.rowid, &m.ordinal, &m.rank); err != nil {
 			return nil, fmt.Errorf("scanning ranked search match: %w", err)
@@ -100,9 +85,6 @@ func walkSearchRanks(
 		if len(walk.best) >= need && m.rank > boundary {
 			walk.complete = false
 			break
-		}
-		if read == maxRows {
-			return nil, nil
 		}
 		i, ok := index[m.sessionID]
 		if !ok {
@@ -124,35 +106,6 @@ func walkSearchRanks(
 		return nil, fmt.Errorf("reading ranked search matches: %w", err)
 	}
 	return walk, nil
-}
-
-// searchDateHasBroadMatches samples the newest matching FTS rowids without
-// ranking. Sparse hits or too few sessions select the full-ranking query.
-func searchDateHasBroadMatches(ctx context.Context, q messageRowsQuerier, table, innerWhereSQL string, ftsArgs []any, need int) (bool, error) {
-	// The first predicate is the FTS match; the rest apply to joined rows.
-	match, eligible, _ := strings.Cut(innerWhereSQL, " AND ")
-	query := strings.ReplaceAll(`WITH sample AS MATERIALIZED (
-		SELECT rowid FROM messages_fts WHERE `+match+`
-		ORDER BY rowid DESC LIMIT `+strconv.Itoa(searchRankWalkDateSampleRows)+`)
-		SELECT COUNT(*), COUNT(eligible_session), COUNT(DISTINCT eligible_session)
-		FROM (SELECT CASE WHEN `+eligible+` THEN m2.session_id END AS eligible_session
-		FROM sample LEFT JOIN messages m2 ON sample.rowid = m2.id
-		LEFT JOIN sessions s2 ON m2.session_id = s2.id)`, "messages_fts", table)
-	rows, err := q.QueryContext(ctx, query, ftsArgs...)
-	if err != nil {
-		return false, fmt.Errorf("checking recent search matches: %w", err)
-	}
-	defer rows.Close()
-	var count, eligibleCount, sessions int
-	if rows.Next() {
-		if err := rows.Scan(&count, &eligibleCount, &sessions); err != nil {
-			return false, fmt.Errorf("scanning recent search matches: %w", err)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return false, fmt.Errorf("reading recent search matches: %w", err)
-	}
-	return count > 0 && eligibleCount*2 >= count && sessions >= need, nil
 }
 
 // bestRowsSQL renders the walk's best matches as the best_rows CTE, opening

@@ -713,7 +713,6 @@ const (
 	walCheckpointRetryDelay  = 250 * time.Millisecond
 	sqliteCacheSizeKiB       = -8 * 1024
 	readerMaxOpenConns       = 9
-	readerMaxIdleConns       = 8
 	bulkSearchSlots          = 4
 	bulkReadSlots            = readerMaxOpenConns - bulkSearchSlots - 1 // Reserve one reader for quick reads.
 	readerConnMaxIdleTime    = 5 * time.Minute
@@ -1385,7 +1384,7 @@ func configureReaderPool(reader *sql.DB) {
 	// Keep burst readers warm. The database/sql default retains only two,
 	// which makes concurrent sync checks repeatedly reopen SQLite and parse
 	// the full schema.
-	reader.SetMaxIdleConns(readerMaxIdleConns)
+	reader.SetMaxIdleConns(readerMaxOpenConns)
 	reader.SetConnMaxIdleTime(readerConnMaxIdleTime)
 }
 
