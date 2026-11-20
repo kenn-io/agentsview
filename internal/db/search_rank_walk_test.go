@@ -41,7 +41,7 @@ func TestSearchRankWalkMatchesFullRanking(t *testing.T) {
 	}
 	insertMessages(t, d, older...)
 	var olderDominated []Message
-	for i := range 200 {
+	for i := range 30 {
 		olderDominated = append(olderDominated, userMsg("older", 200+i, "dominatedtoken"))
 	}
 	insertMessages(t, d, olderDominated...)

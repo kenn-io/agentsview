@@ -3,10 +3,13 @@ package db
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -106,8 +109,8 @@ func TestReaderPoolRetainsConfiguredBurstConnections(t *testing.T) {
 		require.NoError(t, conn.Close())
 	}
 	stats := reader.Stats()
-	assert.Equal(t, readerMaxOpenConns, stats.Idle)
-	assert.Zero(t, stats.MaxIdleClosed)
+	assert.Equal(t, readerMaxIdleConns, stats.Idle)
+	assert.EqualValues(t, 1, stats.MaxIdleClosed)
 }
 
 func TestQuickReadKeepsAReaderWhileAnalyticsFillThePool(t *testing.T) {
@@ -133,6 +136,76 @@ func TestQuickReadKeepsAReaderWhileAnalyticsFillThePool(t *testing.T) {
 	probe, err := database.ActivityReportSourceProbe(quickCtx)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, probe.SessionCount)
+}
+
+func TestSubstringSearchesAndAnalyticsCanReadTogether(t *testing.T) {
+	database := testDB(t)
+	insertSession(t, database, "parallel", "project")
+	insertMessages(t, database, userMsg("parallel", 0, "needle"))
+
+	started := make(chan struct{}, bulkReadSlots+bulkSearchSlots)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	var workers sync.WaitGroup
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(release) })
+		workers.Wait()
+	})
+	connections := make([]*sql.Conn, 0, bulkReadSlots+bulkSearchSlots)
+	for range bulkReadSlots + bulkSearchSlots {
+		conn, err := database.rawReader().Conn(t.Context())
+		require.NoError(t, err)
+		connections = append(connections, conn)
+		var once sync.Once
+		require.NoError(t, conn.Raw(func(raw any) error {
+			raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(func(op int, _, _, _ string) int {
+				if op == sqlite3.SQLITE_READ {
+					once.Do(func() {
+						started <- struct{}{}
+						<-release
+					})
+				}
+				return sqlite3.SQLITE_OK
+			})
+			return nil
+		}))
+	}
+	for _, conn := range connections {
+		require.NoError(t, conn.Close())
+	}
+	results := make(chan error, bulkReadSlots+bulkSearchSlots)
+	for range 4 {
+		workers.Go(func() {
+			page, err := database.SearchContent(t.Context(), ContentSearchFilter{Pattern: "needle", Mode: "substring", Sources: []string{"messages"}, IncludeOneShot: true})
+			if err == nil && (len(page.Matches) != 1 || page.Matches[0].SessionID != "parallel") {
+				err = fmt.Errorf("unexpected search matches: %v", page.Matches)
+			}
+			results <- err
+		})
+		workers.Go(func() {
+			_, err := database.GetAnalyticsSummary(t.Context(), AnalyticsFilter{Timezone: "UTC"})
+			results <- err
+		})
+	}
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+	for range bulkReadSlots + bulkSearchSlots {
+		select {
+		case <-started:
+		case <-deadline.C:
+			t.Fatal("searches and analytics did not all reach the reader pool")
+		}
+	}
+	quickCtx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	session, err := database.GetSession(quickCtx, "parallel")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, "parallel", session.ID)
+	releaseOnce.Do(func() { close(release) })
+	for range bulkReadSlots + bulkSearchSlots {
+		require.NoError(t, <-results)
+	}
 }
 
 func TestAcquireBulkReadHonorsContext(t *testing.T) {
