@@ -24,10 +24,10 @@ export function documentTitle({
     const id = providerSeparator >= 0 ? rawId.slice(providerSeparator + 1) : rawId;
     label = [
       m.nav_sessions(),
-      ...(sessionNotFound ? [m.message_list_session_not_found()] : []),
       ...(separator >= 0 ? [sessionId.slice(0, separator)] : []),
       agentLabel(provider),
       id.slice(-12),
+      ...(sessionNotFound ? [m.message_list_session_not_found()] : []),
     ].join(" · ");
   } else {
     const labels: Record<Route, () => string> = {

@@ -1986,7 +1986,7 @@ describe("App telemetry", () => {
       const expected =
         state === "loaded"
           ? "Sessions · source-a · Codex · 345678abcdef · AgentsView"
-          : "Sessions · Session not found · source-a · Codex · 345678abcdef · AgentsView";
+          : "Sessions · source-a · Codex · 345678abcdef · Session not found · AgentsView";
       if (state === "loaded") {
         await vi.waitFor(() => expect(sessions.activeSession?.display_name).toBe("Private title"));
       }

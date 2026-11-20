@@ -53,6 +53,25 @@ describe("documentTitle", () => {
         sessionId: "source-a~codex:12345678abcdef",
         sessionNotFound: true,
       }),
-    ).toBe("Sessions · Session not found · source-a · Codex · 345678abcdef · AgentsView");
+    ).toBe("Sessions · source-a · Codex · 345678abcdef · Session not found · AgentsView");
+  });
+
+  it.each([
+    [
+      "codex:01900000-0000-7000-8000-000000000001",
+      "Sessions · Codex · 000000000001 · Session not found · AgentsView",
+    ],
+    [
+      "codex:01900000-0000-7000-8000-000000000001_11111111-1111-4111-8111-111111111111",
+      "Sessions · Codex · 111111111111 · Session not found · AgentsView",
+    ],
+    [
+      "codex:01900000-0000-7000-8000-000000000001_22222222-2222-4222-8222-222222222222",
+      "Sessions · Codex · 222222222222 · Session not found · AgentsView",
+    ],
+  ])("identifies missing session %s", (sessionId, expected) => {
+    expect(documentTitle({ ...base, route: "sessions", sessionId, sessionNotFound: true })).toBe(
+      expected,
+    );
   });
 });
