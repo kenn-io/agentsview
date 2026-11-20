@@ -246,10 +246,12 @@ reports the guard in `exclusions.recent_active`. Older servers retain the guard
 after pagination and report dropped matches in `excluded_active`, so their pages
 can still be short or empty with a `next_cursor`. Set `include_active: true`
 when you need that recent work. An empty `search_sessions` page with excluded
-active matches includes a `hints` entry with `retry_with: {"include_active": true}`.
-For recall from a known conversation, pass its
-full ID as `current_session_id`; `search_content` then excludes only that
-session before applying the result limit and does not hide other recent work.
+active matches includes a `hints` entry reporting how many sessions active in
+the last 10 minutes were hidden from that page, with
+`retry_with: {"include_active": true}`. For recall from a known conversation,
+pass its full ID as `current_session_id`; `search_content` then excludes only
+that session before applying the result limit and does not hide other recent
+work.
 
 `list_sessions` and `search_content` exclude one-shot and automated sessions by
 default. Set `include_one_shot: true` or `include_automated: true` to include
