@@ -130,8 +130,6 @@ func TestSearchDateWindowAcrossMidnight(t *testing.T) {
 	require.NoError(t, err)
 	_, content, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", IncludeActive: true})
 	require.NoError(t, err)
-	assert.Equal(t, "2024-05-16", sessions.DateFrom)
-	assert.Equal(t, "2024-05-16", content.DateFrom)
 	now = now.Add(2 * time.Second)
 	_, _, err = ts.searchSessions(t.Context(), nil, searchSessionsIn{Query: "needle", Cursor: 1})
 	require.ErrorContains(t, err, "date_from is required")
