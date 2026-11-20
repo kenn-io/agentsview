@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -2870,19 +2869,14 @@ func (s *Store) populateFrustrationMarkers(
 	idx := make(map[string]int, len(rows))
 	ids := make([]string, 0, len(rows))
 	for i := range rows {
+		if count, hit := memo.Lookup(generation, rows[i].ID, versions[rows[i].ID]); hit {
+			rows[i].FrustrationMarkerCount = count
+			continue
+		}
 		idx[rows[i].ID] = i
 		ids = append(ids, rows[i].ID)
 	}
-	reuse := func(ids []string) []string {
-		return slices.DeleteFunc(ids, func(id string) bool {
-			count, hit := memo.Lookup(generation, id, versions[id])
-			if hit {
-				rows[idx[id]].FrustrationMarkerCount = count
-			}
-			return hit
-		})
-	}
-	if ids = reuse(ids); len(ids) == 0 {
+	if len(ids) == 0 {
 		return nil
 	}
 	if s.DB() != nil && !s.hostedRelations {

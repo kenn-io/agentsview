@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
@@ -32,7 +33,8 @@ func TestPGServeStartsUsageCacheWarm(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	require.NoError(t, syncer.EnsureSchema(ctx))
-	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "session", Project: "project", Machine: "test-machine", Agent: "codex"}))
+	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "session", Project: "project", Machine: "test-machine", Agent: "codex", MessageCount: 1}))
+	require.NoError(t, local.InsertMessages(ctx, []db.Message{{SessionID: "session", Ordinal: 0, Role: "user", Content: "this is broken"}}))
 	result, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	require.Empty(t, result.Errors)
@@ -59,4 +61,9 @@ func TestPGServeStartsUsageCacheWarm(t *testing.T) {
 	var ready int
 	require.NoError(t, cache.QueryRowContext(ctx, `SELECT COUNT(*) FROM usage_rollup_timezones WHERE change_revision IS NOT NULL`).Scan(&ready))
 	require.Equal(t, 1, ready)
+	require.Eventually(t, func() bool {
+		var count int
+		err := store.DB().QueryRowContext(ctx, `SELECT marker_count FROM session_frustration_counts WHERE session_id = 'session'`).Scan(&count)
+		return err == nil && count == 1
+	}, 20*time.Second, 50*time.Millisecond)
 }

@@ -8,7 +8,6 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -523,9 +522,6 @@ func TestFrustrationFillDeploymentGates(t *testing.T) {
 	for _, scenario := range []string{"read-only", "hosted", "borrowed", "standby"} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Parallel()
-			if scenario == "standby" && os.Getenv("TEST_PG_STANDBY_URL") == "" {
-				t.Skip("TEST_PG_STANDBY_URL must point to a standby of TEST_PG_URL")
-			}
 			f := newFrustrationFixture(t, "frustration_gate_"+strings.ReplaceAll(scenario, "-", "_"))
 			owner := f.open(t)
 			var store *Store
