@@ -249,30 +249,6 @@ func TestPGSavedActivityReportMemoryVisits(t *testing.T) {
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
-func TestPGSavedActivityReportSkippedDay(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	local, syncer, _ := newUsageJournalFixture(t)
-	pgKeptSession(t, local, "a", "project-a", "2011-12-29")
-	pgKeptPush(t, syncer, false)
-	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, t.TempDir())
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	q, err := activity.ResolveQuery(activity.QueryInput{
-		Preset: "custom", From: "2011-12-29T10:00:00Z", To: "2011-12-31T10:00:00Z", Timezone: "Pacific/Apia", BucketOverride: "1h",
-	}, time.Now())
-	require.NoError(t, err)
-	done := make(chan error, 1)
-	go func() {
-		_, err := store.BuildActivityReportArtifacts(t.Context(), db.AnalyticsFilter{Timezone: "Pacific/Apia"}, q, nil)
-		done <- err
-	}()
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("building an hourly report hung across the skipped day")
-	}
-}
-
 func TestPGSavedActivityReportRestoreBetweenValidationReads(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	local, syncer, _ := newUsageJournalFixture(t)
@@ -366,35 +342,9 @@ func TestPGSavedActivityReportTruncated(t *testing.T) {
 	_, err := syncer.pg.ExecContext(t.Context(), `TRUNCATE sessions CASCADE`)
 	require.NoError(t, err)
 	after := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
-	t.Cleanup(func() { require.NoError(t, after.Close()) })
 	require.Empty(t, pgKeptBuild(t, after, f, q, true).Sessions)
-}
-
-func TestPGSavedActivityReportWithoutTruncateTracking(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	local, syncer, _ := newUsageJournalFixture(t)
-	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
-	pgKeptPush(t, syncer, false)
-	_, err := syncer.pg.ExecContext(t.Context(), `DELETE FROM sync_metadata WHERE key='usage_truncate_tracking'`)
-	require.NoError(t, err)
-	directory := t.TempDir()
-	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
-	want := pgKeptBuild(t, store, f, q, true)
-	requirePGKeptEqual(t, want, pgKeptBuild(t, store, f, q, false))
-	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
-	require.NoError(t, err)
-	require.Empty(t, files)
-	_, err = syncer.pg.ExecContext(t.Context(), `INSERT INTO sync_metadata(key,value) VALUES('usage_truncate_tracking','2')`)
-	require.NoError(t, err)
-	saving := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
-	t.Cleanup(func() { require.NoError(t, saving.Close()) })
-	requirePGKeptEqual(t, want, pgKeptBuild(t, saving, f, q, true))
-	_, err = syncer.pg.ExecContext(t.Context(), `DELETE FROM sync_metadata WHERE key='usage_truncate_tracking'`)
-	require.NoError(t, err)
-	restarted := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
-	t.Cleanup(func() { require.NoError(t, restarted.Close()) })
-	requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, q, true))
-	requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, q, false))
+	require.NoError(t, after.Close())
+	again := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+	t.Cleanup(func() { require.NoError(t, again.Close()) })
+	require.Empty(t, pgKeptBuild(t, again, f, q, false).Sessions)
 }

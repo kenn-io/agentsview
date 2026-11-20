@@ -61,16 +61,20 @@ func (d *Disk) Get(selection, version string) ([]byte, bool) {
 	return data, true
 }
 
-// Refresh updates an existing file without recreating an evicted selection.
-func (d *Disk) Refresh(selection, version string, encode func() ([]byte, error)) bool {
+// Touch refreshes the open time of an existing file.
+func (d *Disk) Touch(selection string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.reports.disk.dir != "" && selection != "" && d.reports.disk.touch(selection) == nil
+}
+
+// Rewrite updates an existing file without recreating an evicted selection.
+func (d *Disk) Rewrite(selection, version string, encode func() ([]byte, error)) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	disk := d.reports.disk
 	if disk.dir == "" || selection == "" {
 		return false
-	}
-	if encode == nil {
-		return disk.touch(selection) == nil
 	}
 	if _, err := os.Stat(disk.path(selection)); err != nil {
 		return false

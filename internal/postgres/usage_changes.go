@@ -87,10 +87,9 @@ var dropUsageChangeJournalSQL = func() string {
 	ddl.WriteString(`DROP TABLE IF EXISTS usage_session_changes;
  DROP FUNCTION IF EXISTS stamp_usage_change();
  DROP FUNCTION IF EXISTS checkpoint_usage_history() CASCADE;
- DROP FUNCTION IF EXISTS invalidate_usage_history_on_truncate() CASCADE;
  DO $cleanup$ BEGIN
  IF to_regclass('sync_metadata') IS NOT NULL THEN
-     DELETE FROM sync_metadata WHERE key LIKE 'usage_history_checkpoint:%' OR key IN ('usage_change_revision', 'usage_change_journal_lock', 'usage_change_journal_version', 'usage_account_revision', 'usage_history_token', 'usage_truncate_tracking', 'dashboard_common', 'dashboard_tools', 'dashboard_velocity', 'dashboard_signals', 'dashboard_scope');
+     DELETE FROM sync_metadata WHERE key LIKE 'usage_history_checkpoint:%' OR key IN ('usage_change_revision', 'usage_change_journal_lock', 'usage_change_journal_version', 'usage_account_revision', 'usage_history_token', 'dashboard_common', 'dashboard_tools', 'dashboard_velocity', 'dashboard_signals', 'dashboard_scope');
  END IF;
  END $cleanup$;`)
 	for _, table := range usageChangeTablesPG {
@@ -141,50 +140,8 @@ func ensureUsageChangeJournalPG(ctx context.Context, pg *sql.DB) (ok bool) {
 	if err != nil {
 		return
 	}
-	err = installUsageTruncateTrackingPG(ctx, tx)
-	if err != nil {
-		return
-	}
 	err = tx.Commit()
 	return
-}
-
-func installUsageTruncateTrackingPG(ctx context.Context, tx *sql.Tx) error {
-	var installed string
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT value FROM sync_metadata WHERE key='usage_truncate_tracking'), '')`).Scan(&installed); err != nil || installed == "2" {
-		return err
-	}
-	var schema string
-	if err := tx.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {
-		return err
-	}
-	quoted, err := quoteIdentifier(schema)
-	if err != nil {
-		return err
-	}
-	var ddl strings.Builder
-	fmt.Fprintf(&ddl, `CREATE OR REPLACE FUNCTION invalidate_usage_history_on_truncate() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
- SET search_path = pg_catalog, %s, pg_temp AS $truncate$
- BEGIN
-   PERFORM 1 FROM sync_metadata WHERE key='usage_history_token' FOR UPDATE;
-   DELETE FROM sync_metadata WHERE key LIKE 'usage_history_checkpoint:%%';
-   UPDATE sync_metadata SET value=pg_catalog.gen_random_uuid()::text WHERE key='usage_history_token';
-   RETURN NULL;
- END $truncate$;
- REVOKE ALL ON FUNCTION invalidate_usage_history_on_truncate() FROM PUBLIC;`, quoted)
-	if installed == "" {
-		for _, table := range usageChangeTablesPG {
-			fmt.Fprintf(&ddl, "CREATE TRIGGER trg_uc_truncate AFTER TRUNCATE ON %s FOR EACH STATEMENT EXECUTE FUNCTION invalidate_usage_history_on_truncate();\n", table.table)
-		}
-		for _, table := range []string{"messages", "tool_result_events"} {
-			fmt.Fprintf(&ddl, "CREATE TRIGGER trg_uc_truncate AFTER TRUNCATE ON %s FOR EACH STATEMENT EXECUTE FUNCTION invalidate_usage_history_on_truncate();\n", table)
-		}
-	}
-	ddl.WriteString(`DELETE FROM sync_metadata WHERE key LIKE 'usage_history_checkpoint:%';
- UPDATE sync_metadata SET value=pg_catalog.gen_random_uuid()::text WHERE key='usage_history_token';
- INSERT INTO sync_metadata(key,value) VALUES('usage_truncate_tracking','2') ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value`)
-	_, err = tx.ExecContext(ctx, ddl.String())
-	return err
 }
 
 func installUsageAccountRevisionPG(ctx context.Context, tx *sql.Tx) error {

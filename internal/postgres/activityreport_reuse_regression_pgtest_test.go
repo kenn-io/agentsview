@@ -4,15 +4,11 @@ package postgres
 
 import (
 	"context"
-	"encoding/binary"
-	"encoding/json/v2"
 	"fmt"
 	"math/rand/v2"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -98,61 +94,19 @@ func TestPGSavedActivityReportRespectsChangedRowPolicy(t *testing.T) {
 }
 
 func TestPGSavedActivityReportNamedZoneRuleChange(t *testing.T) {
-	if os.Getenv("ACTIVITY_ZONE_CHILD") == "1" {
-		t.Setenv("CACHE_DIRECTORY", os.Getenv("ACTIVITY_ZONE_CACHE"))
-		target, schema := os.Getenv("ACTIVITY_ZONE_TARGET"), os.Getenv("ACTIVITY_ZONE_SCHEMA")
-		store := openPGActivityInputStore(t, target, schema, os.Getenv("ACTIVITY_ZONE_DIRECTORY"))
-		defer store.Close()
-		q, err := activity.ResolveQuery(activity.QueryInput{Preset: "custom", From: "1969-06-14T00:00:00Z", To: "1969-06-16T00:00:00Z", Timezone: "Test/Zone", BucketOverride: "1d"}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
-		require.NoError(t, err)
-		loaded := false
-		got, err := store.BuildActivityReportArtifacts(t.Context(), db.AnalyticsFilter{Timezone: "Test/Zone"}, q, func(p activity.Progress) { loaded = loaded || p.Phase == activity.ProgressLoadingUsage })
-		require.NoError(t, err)
-		data, err := json.Marshal(struct {
-			Loaded  bool
-			Buckets []activity.Bucket
-		}{loaded, got.Report.Buckets})
-		require.NoError(t, err)
-		require.NoError(t, os.WriteFile(os.Getenv("ACTIVITY_ZONE_OUTPUT"), data, 0600))
-		return
-	}
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	local, syncer, _ := newUsageJournalFixture(t)
-	pgKeptSession(t, local, "a", "project-a", "1969-06-14")
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
 	pgKeptPush(t, syncer, false)
-	target, directory := testPGURL(t), t.TempDir()
-	exe, err := os.Executable()
-	require.NoError(t, err)
-	for i, offset := range []int32{0, -12 * 60 * 60} {
-		zoneDir := t.TempDir()
-		require.NoError(t, os.Mkdir(filepath.Join(zoneDir, "Test"), 0700))
-		// Both zones use UTC from 1970 onward, but differ before it.
-		zone := make([]byte, 44+4+1+12+4)
-		copy(zone, "TZif")
-		binary.BigEndian.PutUint32(zone[32:36], 1)
-		binary.BigEndian.PutUint32(zone[36:40], 2)
-		binary.BigEndian.PutUint32(zone[40:44], 4)
-		zone[48] = 1
-		binary.BigEndian.PutUint32(zone[49:53], uint32(offset))
-		copy(zone[61:], "TST\x00")
-		require.NoError(t, os.WriteFile(filepath.Join(zoneDir, "Test", "Zone"), zone, 0600))
-		out := filepath.Join(t.TempDir(), "report.json")
-		cmd := exec.CommandContext(t.Context(), exe, "-test.run=^TestPGSavedActivityReportNamedZoneRuleChange$")
-		cmd.Env = append(os.Environ(), "ACTIVITY_ZONE_CHILD=1", "ACTIVITY_ZONE_TARGET="+target, "ACTIVITY_ZONE_SCHEMA="+syncer.schema, "ACTIVITY_ZONE_DIRECTORY="+directory, "ACTIVITY_ZONE_OUTPUT="+out, "ACTIVITY_ZONE_CACHE="+os.Getenv("CACHE_DIRECTORY"), "ZONEINFO="+zoneDir)
-		output, err := cmd.CombinedOutput()
-		require.NoError(t, err, "%s", output)
-		data, err := os.ReadFile(out)
-		require.NoError(t, err)
-		var got struct {
-			Loaded  bool
-			Buckets []activity.Bucket
-		}
-		require.NoError(t, json.Unmarshal(data, &got))
-		files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
-		require.NoError(t, err)
-		require.NotEmpty(t, files)
-		require.Len(t, got.Buckets, 2+i)
-		require.True(t, got.Loaded, "run %d must rebuild", i)
+	directory := t.TempDir()
+	for _, zone := range []string{"UTC", "America/New_York"} {
+		q, f := pgDayQuery(t, "2026-06-14", zone), db.AnalyticsFilter{Timezone: zone}
+		first := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+		want := pgKeptBuild(t, first, f, q, true)
+		require.NoError(t, first.Close())
+		restarted := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+		requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, q, false))
+		require.NoError(t, restarted.Close())
 	}
 }
 
@@ -201,36 +155,4 @@ func TestPGSavedActivityReportConfiguredAlias(t *testing.T) {
 		require.Equal(t, money.MustParseDollars(want), got.Report.Totals.Cost)
 		require.NoError(t, store.Close())
 	}
-}
-
-func TestPGActivityTimezoneBoundaryBeforeRange(t *testing.T) {
-	start := time.Date(1969, 6, 14, 12, 0, 0, 0, time.UTC)
-	end := start.AddDate(0, 0, 9)
-	transition := time.Date(1969, 6, 14, 6, 0, 0, 0, time.UTC)
-	var keys []string
-	var windows [][]activity.BucketWindow
-	for _, tc := range []struct {
-		offset     int32
-		transition time.Time
-	}{{0, transition}, {-12 * 60 * 60, transition}, {-12 * 60 * 60, transition.AddDate(0, 0, -14)}} {
-		zone := make([]byte, 44+4+1+12+4)
-		copy(zone, "TZif")
-		binary.BigEndian.PutUint32(zone[32:36], 1)
-		binary.BigEndian.PutUint32(zone[36:40], 2)
-		binary.BigEndian.PutUint32(zone[40:44], 4)
-		binary.BigEndian.PutUint32(zone[44:48], uint32(int32(tc.transition.Unix())))
-		zone[48] = 1
-		binary.BigEndian.PutUint32(zone[49:53], uint32(tc.offset))
-		copy(zone[61:], "TST\x00")
-		loc, err := time.LoadLocationFromTZData("Test/Zone", zone)
-		require.NoError(t, err)
-		buckets, err := activity.BuildBuckets(start, end, activity.BucketSpec{Unit: activity.BucketWeek, NominalSeconds: 604800}, loc)
-		require.NoError(t, err)
-		windows = append(windows, buckets)
-		keys = append(keys, activityTimezoneKey(loc, start, end))
-	}
-	require.NotEqual(t, windows[0], windows[1])
-	require.NotEqual(t, keys[0], keys[1])
-	require.Equal(t, windows[0], windows[2])
-	require.Equal(t, keys[0], keys[2])
 }

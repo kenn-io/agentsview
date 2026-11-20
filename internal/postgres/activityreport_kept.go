@@ -2,9 +2,7 @@ package postgres
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -87,7 +85,11 @@ func (s *Store) refreshActivityReport(selection, version, identity string, previ
 			return json.Marshal(pgActivitySavedReport{Revision: entry.revision, Checkpoint: entry.checkpoint, Candidates: entry.candidates, Peers: entry.peers, Labels: entry.labels, Report: entry.report}, json.FormatNilSliceAsNull(true))
 		}
 	}
-	s.activityReports.Refresh(selection+"|"+identity+"|"+version, identity+"|"+version, encode)
+	if encode == nil {
+		s.activityReports.Touch(selection + "|" + identity + "|" + version)
+	} else {
+		s.activityReports.Rewrite(selection+"|"+identity+"|"+version, identity+"|"+version, encode)
+	}
 }
 
 func (s *Store) activityReportRestricted(ctx context.Context) bool {
@@ -97,10 +99,6 @@ func (s *Store) activityReportRestricted(ctx context.Context) bool {
 }
 
 func (s *Store) activityReportIdentity(ctx context.Context, selection, version string, q activity.Query) (identity string, unavailable bool) {
-	var tracked bool
-	if err := s.pg.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM sync_metadata WHERE key='usage_truncate_tracking' AND value='2')`).Scan(&tracked); err != nil || !tracked {
-		return "", false
-	}
 	memo := &s.runtimeState().activityKept
 	entries, ok := memo.Get(selection, version)
 	if ok {
@@ -121,38 +119,6 @@ func (s *Store) activityReportIdentity(ctx context.Context, selection, version s
 		}
 	}
 	return identity, unavailable
-}
-
-func activityTimezoneKey(location *time.Location, start, end time.Time) string {
-	if activityTimezoneSkipsDay(location, start.Add(-8*24*time.Hour), end) {
-		return db.TrendsTimezoneRangeKey(location, start.Add(-8*24*time.Hour), end)
-	}
-	digest := sha256.New()
-	fmt.Fprint(digest, db.TrendsTimezoneRangeKey(location, start, end))
-	for _, spec := range []activity.BucketSpec{{Unit: activity.BucketDay, NominalSeconds: 86400}, {Unit: activity.BucketWeek, NominalSeconds: 604800}} {
-		windows, _ := activity.BuildBuckets(start, end, spec, location)
-		for _, window := range windows {
-			fmt.Fprintf(digest, "|%d:%d", window.Start.Unix(), window.End.Unix())
-		}
-	}
-	return hex.EncodeToString(digest.Sum(nil))
-}
-
-func activityTimezoneSkipsDay(location *time.Location, start, end time.Time) bool {
-	for cursor := start; cursor.Before(end); {
-		local := cursor.In(location)
-		_, before := local.Zone()
-		_, next := local.ZoneBounds()
-		if next.IsZero() || !next.After(cursor) || next.After(end) {
-			return false
-		}
-		_, after := next.In(location).Zone()
-		if after-before >= 24*60*60 {
-			return true
-		}
-		cursor = next
-	}
-	return false
 }
 
 func (s *Store) activityKeptVersion(ctx context.Context, pricingDigest string) (string, error) {

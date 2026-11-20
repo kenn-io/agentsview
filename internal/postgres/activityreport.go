@@ -157,8 +157,18 @@ func (s *Store) BuildActivityReportArtifacts(
 			return activity.CandidateArtifacts{}, err
 		}
 		if version != "" && !s.activityReportRestricted(ctx) {
+			tables := make([]string, 0, len(usageChangeTablesPG)+3)
+			for _, table := range usageChangeTablesPG {
+				tables = append(tables, table.table)
+			}
+			tables = append(tables, "messages", "tool_result_events", "usage_session_changes")
+			var files string
+			if err := s.pg.QueryRowContext(ctx, `SELECT md5(string_agg(pg_relation_filenode(to_regclass(t))::text, ',' ORDER BY t)) FROM unnest($1::text[]) t`, tables).Scan(&files); err != nil {
+				return activity.CandidateArtifacts{}, fmt.Errorf("reading activity table identities: %w", err)
+			}
+			version += "|" + files
 			if q.Timezone != "Local" && q.Loc != nil {
-				version += "|" + activityTimezoneKey(q.Loc, q.RangeStart, q.RangeEnd)
+				version += "|" + db.TrendsTimezoneKey(f)
 			}
 			selection = kept.Selection(f, q)
 			identity, unavailable = s.activityReportIdentity(ctx, selection, version, q)
