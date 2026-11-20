@@ -281,7 +281,7 @@ func TestVectorHalfvecGate(t *testing.T) {
 	if unavailable == "" {
 		assert.True(t, hasHalfvec, "available gate implies halfvec exists")
 		assert.NotEmpty(t, version, "installed extension reports a version")
-		if hadHalfvec {
+		if vectorUnavailableReason(hadHalfvec, beforeVersion) == "" {
 			assert.Empty(t, trace.matching(regexp.MustCompile(`(?i)ALTER\s+EXTENSION\s+vector\s+UPDATE`)))
 			assert.Equal(t, beforeVersion, version)
 		}
@@ -315,10 +315,16 @@ func TestVectorHalfvecGate(t *testing.T) {
 		assert.Equal(t, version, afterVersion)
 		return
 	}
-	assert.False(t, hasHalfvec,
-		"unavailable reason %q must mean halfvec is missing", unavailable)
 	if version != "" {
-		assert.Contains(t, unavailable, "halfvec")
+		assert.Contains(t, unavailable, version)
+		assert.Contains(t, unavailable, "0.8.0+")
+		store, err := NewStore(ctx, pgURL, vectorSchemaTestSchema, true)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = store.Close() })
+		searcher, reason, err := (Backend{}).OpenVectorSearcher(ctx, store, storage.VectorGenerationInfo{}, 0, nil)
+		require.NoError(t, err)
+		assert.Nil(t, searcher)
+		assert.Equal(t, unavailable, reason)
 	} else {
 		assert.Contains(t, unavailable, "pgvector extension unavailable")
 	}

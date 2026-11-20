@@ -305,6 +305,13 @@ func (Backend) OpenVectorSearcher(
 	if err != nil {
 		return nil, "", err
 	}
+	hasHalfvec, version, err := vectorHalfvecAvailable(ctx, pool)
+	if err != nil {
+		return nil, "", err
+	}
+	if reason := vectorUnavailableReason(hasHalfvec, version); reason != "" {
+		return nil, reason, nil
+	}
 	genID, dim, ok, err := LookupVectorGeneration(ctx, pool, gen.Fingerprint)
 	if err != nil {
 		return nil, "", fmt.Errorf("looking up PG vector generation: %w", err)

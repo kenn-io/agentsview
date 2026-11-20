@@ -8,6 +8,7 @@ import (
 	"log"
 
 	"go.kenn.io/agentsview/internal/storage"
+	"golang.org/x/mod/semver"
 )
 
 // vectorBaseDDL creates the backend-agnostic vector tables. Chunk tables
@@ -89,11 +90,24 @@ SELECT EXISTS (
 	return hasHalfvec, version, nil
 }
 
+func vectorUnavailableReason(hasHalfvec bool, version string) string {
+	if version == "" {
+		return "pgvector extension unavailable"
+	}
+	if !hasHalfvec {
+		return fmt.Sprintf("pgvector %s lacks the halfvec type; upgrade to pgvector 0.8.0+", version)
+	}
+	if !semver.IsValid("v"+version) || semver.Compare("v"+version, "v0.8.0") < 0 {
+		return fmt.Sprintf("pgvector %s lacks iterative scan; upgrade to pgvector 0.8.0+", version)
+	}
+	return ""
+}
+
 // ensureVectorBaseSchemaPG best-effort-installs pgvector and creates the
 // base vector tables. A non-empty reason (with nil error) means vectors are
 // unavailable on this server: like createContentSearchIndexesPG it never
 // fails schema setup — CockroachDB, a missing package, a role without CREATE
-// privilege, or a pgvector too old for halfvec leave semantic search
+// privilege, or an unsupported pgvector version leave semantic search
 // unavailable with a one-line notice.
 func ensureVectorBaseSchemaPG(ctx context.Context, pg *sql.DB) (string, error) {
 	if _, err := pg.ExecContext(ctx,
@@ -111,7 +125,7 @@ func ensureVectorBaseSchemaPG(ctx context.Context, pg *sql.DB) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !hasHalfvec {
+	if vectorUnavailableReason(hasHalfvec, version) != "" {
 		// CREATE EXTENSION IF NOT EXISTS never upgrades an existing
 		// extension object, so a server whose pgvector package was upgraded
 		// in place can still run an old extension version. ALTER EXTENSION
@@ -123,10 +137,7 @@ func ensureVectorBaseSchemaPG(ctx context.Context, pg *sql.DB) (string, error) {
 			return "", err
 		}
 	}
-	if !hasHalfvec {
-		reason := fmt.Sprintf(
-			"pgvector %s lacks the halfvec type; upgrade the server to pgvector 0.7.0+",
-			version)
+	if reason := vectorUnavailableReason(hasHalfvec, version); reason != "" {
 		log.Printf("pg schema: %s; semantic search disabled", reason)
 		return reason, nil
 	}

@@ -1150,14 +1150,16 @@ Semantic search degrades gracefully when the extension is absent or too old.
 `pg push` best-effort runs `CREATE EXTENSION IF NOT EXISTS vector`; if that
 fails — CockroachDB, which has no pgvector; a database where the extension
 package is not installed; or a role lacking `CREATE` privilege — schema setup
-logs a one-line notice and continues, and the vector phase is skipped. `halfvec`
-needs pgvector 0.7.0 or newer: `CREATE EXTENSION IF NOT EXISTS` never upgrades
-an existing extension object, so when an older version is installed `pg push`
+logs a one-line notice and continues, and the vector phase is skipped. Semantic
+search needs pgvector 0.8.0 or newer. `CREATE EXTENSION IF NOT EXISTS` never
+upgrades an existing extension object, so when an older version is installed `pg push`
 attempts `ALTER EXTENSION vector UPDATE` (healing servers whose pgvector package
 was upgraded in place) and otherwise skips the vector phase, reporting the
-installed version. Session and message sync are unaffected in every case. On the
-read side a missing vector table is treated as "no generation found", so
-`pg serve` starts; semantic search returns 501, and CLI and MCP hybrid searches
+installed version. Existing indexes on pgvector 0.7.x resume semantic search
+after pgvector is upgraded; they don't need to be rebuilt. Session and message
+sync are unaffected in every case. An unsupported extension or missing vector
+table leaves semantic search unavailable on the read side. `pg serve` starts;
+semantic search returns 501, and CLI and MCP hybrid searches
 return keyword matches with a note. Lexical search keeps working.
 
 ### Maintenance
