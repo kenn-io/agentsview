@@ -232,6 +232,15 @@ func (s *Store) keptActivityReport(ctx context.Context, selection, version strin
 		return pgActivityKept{}, through, current, false, nil
 	}
 	if through == entry.revision {
+		if entry.checkpoint != "" {
+			var token string
+			if err := s.pg.QueryRowContext(ctx, `SELECT COALESCE((SELECT value FROM sync_metadata WHERE key='usage_history_token'), '')`).Scan(&token); err != nil {
+				return pgActivityKept{}, through, current, false, err
+			}
+			if token != entry.checkpoint {
+				return pgActivityKept{}, through, current, false, nil
+			}
+		}
 		return entry, through, current, true, nil
 	}
 	if through < entry.revision {
