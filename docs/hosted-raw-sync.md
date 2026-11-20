@@ -101,8 +101,8 @@ For meaning search, install pgvector in the database and configure `[vector]`
 and `[vector.embeddings]` on the server before provisioning. Use the same
 embedding configuration when starting the server. Provision again after changing
 the model or its recipe so the owner creates the new generation's chunk table.
-Older generation tables remain for the operator to manage.
-For example, with an OpenAI-compatible embedding endpoint:
+Older generation tables remain for the operator to manage. For example, with an
+OpenAI-compatible embedding endpoint:
 
 ```toml
 [vector]
@@ -210,9 +210,9 @@ previously retained indexed content. It does not create or consume embeddings.
 The runtime checks the configured policy's grants before readiness and reports
 missing privileges instead of silently disabling hosted processing.
 
-When `[vector]` is enabled for stored content, also grant `SELECT, INSERT,
-UPDATE, DELETE` on `vector_documents` and `vector_push_state`, `SELECT, DELETE`
-on each existing `vector_chunks_g<ID>` table registered in
+When `[vector]` is enabled for stored content, also grant
+`SELECT, INSERT, UPDATE, DELETE` on `vector_documents` and `vector_push_state`,
+`SELECT, DELETE` on each existing `vector_chunks_g<ID>` table registered in
 `vector_generations`, and `INSERT` on the configured generation's chunk table.
 Repeat the chunk-table grants after provisioning a new generation. On a machine
 configured with the hosted PostgreSQL target and query endpoint, search uploaded
