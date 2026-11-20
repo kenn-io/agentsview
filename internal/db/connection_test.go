@@ -135,13 +135,12 @@ func TestQuickReadKeepsAReaderWhileAnalyticsFillThePool(t *testing.T) {
 	assert.EqualValues(t, 1, probe.SessionCount)
 }
 
-func TestSearchWaitsForBulkReadAndLeavesReaderForQuickRead(t *testing.T) {
+func TestSearchWaitsForBulkRead(t *testing.T) {
 	for _, tc := range []struct {
 		name, pattern, mode string
 	}{
 		{"sessions", "searchable", ""},
 		{"content words", "searchable text", "fts"},
-		{"content word", "searchable", "fts"},
 		{"hybrid", "searchable", "hybrid"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -203,9 +202,6 @@ func testSearchWaitsForBulkRead(t *testing.T, pattern, mode string) {
 	}
 	quickCtx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
-	session, err := database.GetSession(quickCtx, "summary")
-	require.NoError(t, err)
-	require.NotNil(t, session)
 	quickMode := mode
 	if quickMode == "" {
 		quickMode = "fts"

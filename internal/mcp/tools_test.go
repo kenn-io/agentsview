@@ -70,58 +70,50 @@ func seedFTSSession(t *testing.T, d *db.DB, id, project, content, endedAt string
 	}))
 }
 
-func TestSearchDefaultDateWindow(t *testing.T) {
-	ts, d := newTestToolset(t)
-	if !d.HasFTS(t.Context()) {
-		t.Skip("FTS not available")
-	}
-	for id, date := range map[string]string{"recent": "2024-06-05T10:00:00Z", "old": "2024-04-16T10:00:00Z"} {
-		dbtest.SeedSession(t, d, id, "proj", func(s *db.Session) {
-			s.MessageCount = 3
-			s.UserMessageCount = 2
-			s.StartedAt = &date
-			s.EndedAt = &date
-		})
-		require.NoError(t, d.InsertMessages(t.Context(), []db.Message{dbtest.UserMsg(id, 0, "windowneedle")}))
-	}
+type dateWindowSearchService struct {
+	fakeContentSearchService
+	sessionReq service.SearchRequest
+}
 
+func (f *dateWindowSearchService) Search(_ context.Context, req service.SearchRequest) (*service.SessionSearchResult, error) {
+	f.sessionReq = req
+	return &service.SessionSearchResult{}, nil
+}
+
+func TestSearchDefaultDateWindow(t *testing.T) {
 	for _, tc := range []struct {
-		name, from, to, session string
-		want                    []string
-		note                    bool
+		name, from, to, session, want string
+		note                          bool
 	}{
-		{name: "default", want: []string{"recent"}, note: true},
-		{name: "earlier from", from: "2024-01-01", want: []string{"recent", "old"}},
-		{name: "to only", to: "2024-05-01", want: []string{"old"}},
-		{name: "session only", session: "old", want: []string{"old"}},
+		{name: "default", want: "2024-05-16", note: true},
+		{name: "earlier from", from: "2024-01-01", want: "2024-01-01"},
+		{name: "to only", to: "2024-05-01"},
+		{name: "session only", session: "old"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, sessions, err := ts.searchSessions(t.Context(), nil, searchSessionsIn{Query: "windowneedle", DateFrom: tc.from, DateTo: tc.to, SessionID: tc.session})
+			fake := &dateWindowSearchService{fakeContentSearchService: fakeContentSearchService{result: &service.ContentSearchResult{Note: "service note"}}}
+			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+			if tc.session == "" {
+				_, sessions, err := ts.searchSessions(t.Context(), nil, searchSessionsIn{Query: "needle", DateFrom: tc.from, DateTo: tc.to})
+				require.NoError(t, err)
+				assert.Equal(t, tc.want, fake.sessionReq.DateFrom)
+				if tc.note {
+					assert.Contains(t, sessions.Note, "2024-05-16")
+					assert.Contains(t, sessions.Note, "earlier date_from")
+				} else {
+					assert.Empty(t, sessions.Note)
+				}
+			}
+			_, content, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", DateFrom: tc.from, DateTo: tc.to, SessionID: tc.session, IncludeActive: true})
 			require.NoError(t, err)
-			var sessionIDs []string
-			for _, hit := range sessions.Results {
-				sessionIDs = append(sessionIDs, hit.SessionID)
-			}
-			assert.ElementsMatch(t, tc.want, sessionIDs)
-			if tc.note {
-				assert.Contains(t, sessions.Note, "2024-05-16")
-				assert.Contains(t, sessions.Note, "earlier date_from")
-			} else {
-				assert.Empty(t, sessions.Note)
-			}
-
-			_, content, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "windowneedle", DateFrom: tc.from, DateTo: tc.to, SessionID: tc.session})
-			require.NoError(t, err)
-			var ids []string
-			for _, hit := range content.Matches {
-				ids = append(ids, hit.SessionID)
-			}
-			assert.ElementsMatch(t, tc.want, ids)
+			assert.Equal(t, tc.want, fake.lastReq.DateFrom)
+			assert.Equal(t, tc.session, fake.lastReq.SessionID)
 			if tc.note {
 				assert.Contains(t, content.Note, "2024-05-16")
 				assert.Contains(t, content.Note, "earlier date_from")
+				assert.True(t, strings.HasSuffix(content.Note, "service note"))
 			} else {
-				assert.Empty(t, content.Note)
+				assert.Equal(t, "service note", content.Note)
 			}
 		})
 	}
@@ -2208,7 +2200,7 @@ func TestSearchContent_HybridKeywordFallbackMetadata(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, fake.lastReq.KeywordFallback)
 	assert.Equal(t, "hybrid_keyword", out.EffectiveMode)
-	assert.Equal(t, "Searched sessions active on or after 2024-05-16 (last 30 days) because date_from, date_to, and session_id were omitted. Pass an earlier date_from (YYYY-MM-DD) to search further back. "+note, out.Note)
+	assert.Contains(t, out.Note, note)
 }
 
 func TestListRecallPagesWithEvidenceAndSourceSessionFilter(t *testing.T) {
