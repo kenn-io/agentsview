@@ -100,6 +100,7 @@ afterEach(() => {
   router.sessionId = null;
   router.isRootPath = false;
   sessions.activeSessionId = null;
+  sessions.activeSessionNotFound = false;
   sessions.archiveEmpty = false;
   sessions.filters.date = "";
   sessions.filters.dateFrom = "";
@@ -1918,6 +1919,7 @@ describe("App telemetry", () => {
     vi.spyOn(sessions, "load").mockResolvedValue();
     // Selects without fetching, as the real store does before hydration lands.
     vi.spyOn(sessions, "navigateToSession").mockImplementation(async (id: string) => {
+      if (sessions.activeSessionId !== id) sessions.activeSessionNotFound = false;
       sessions.activeSessionId = id;
     });
     posted = [];

@@ -151,16 +151,6 @@ describe("sessionLabel", () => {
       "Fix the flaky test",
     ],
     [
-      "teammate task",
-      {
-        s: session({
-          first_message:
-            "<teammate-message>You are a teammate on a team. Work together. Task #2: Fix the login flow 3. Report back</teammate-message>",
-        }),
-      },
-      "Fix the login flow",
-    ],
-    [
       "long opening message is shortened",
       { s: session({ first_message: "x".repeat(200) }) },
       `${"x".repeat(90)}…`,

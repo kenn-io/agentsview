@@ -4,7 +4,7 @@ import type {
   FrictionSession,
   FrictionSignal,
 } from "../../api/generated/index.js";
-import { sessionLabel as sidebarSessionLabel } from "../../utils/messages.js";
+import { normalizeMessagePreview } from "../../utils/messages.js";
 
 // Section order of the rendered Markdown digest (friction.RenderMarkdown).
 export const FRICTION_KINDS = [
@@ -103,9 +103,7 @@ export function sessionLabel(id: string, sessions: FrictionSessions | null | und
   const info = sessions?.[id];
   if (!info) return id;
   if (info.display_name) return info.display_name;
-  const preview = sidebarSessionLabel(undefined, info.first_message, "")
-    .text.replace(/\s+/g, " ")
-    .trim();
+  const preview = normalizeMessagePreview(info.first_message).replace(/\s+/g, " ").trim();
   if (preview) {
     return preview.length > SESSION_LABEL_CHARS
       ? `${preview.slice(0, SESSION_LABEL_CHARS).trimEnd()}…`
