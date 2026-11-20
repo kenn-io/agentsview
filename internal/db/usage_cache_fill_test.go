@@ -72,7 +72,7 @@ func TestContentSearchReaderAdmission(t *testing.T) {
 					release()
 				}
 			}()
-			ctx, cancel = context.WithTimeout(t.Context(), 100*time.Millisecond)
+			ctx, cancel = context.WithTimeout(t.Context(), 100*time.Millisecond) //nolint:kennlint // deadlinetest: deadline expires while all search slots are held
 			_, err = database.SearchContent(ctx, f)
 			cancel()
 			require.ErrorIs(t, err, context.DeadlineExceeded)
