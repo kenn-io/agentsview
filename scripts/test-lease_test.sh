@@ -96,6 +96,13 @@ grep -q 'cleanup failed; retry from the repository root:' "$tmp/cleanup-error"
 
 # Dry runs do not start services or create leases.
 : > "$DOCKER_LOG"
+# Makefile reads Go environment values during parsing, even for `make -n`.
+# Keep those lookups from downloading a toolchain into the temporary HOME.
+cat > "$tmp/bin/go" <<'GO'
+#!/bin/sh
+[ "${1:-}" = env ] || { echo "unexpected go command: $*" >&2; exit 1; }
+GO
+chmod +x "$tmp/bin/go"
 (cd "$root" && make -n test-postgres test-clickhouse bench-pg-usage) > "$tmp/make"
 [[ ! -s "$DOCKER_LOG" ]]
 
