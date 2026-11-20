@@ -8,6 +8,7 @@ import (
 	"encoding/json/jsontext"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -50,10 +51,13 @@ const (
 	// Segment v2 adds the optional prompt_source provenance field on
 	// message records. Segment v3 adds the optional provider_id billing
 	// field. Segment v4 adds reasoning_effort, and v5 adds dialogue_text.
-	// Earlier segments still decode with missing fields empty.
-	messageSegmentFormatVersion    = 5
-	messageSegmentMinDecodeVersion = 1
-	metadataEventFormatVersion     = 1
+	// Earlier segments still decode with missing fields empty. Export writes
+	// v4 unless a record in the segment carries dialogue_text, so readers
+	// that predate v5 can still import segments without it.
+	messageSegmentPreDialogueVersion = 4
+	messageSegmentFormatVersion      = 5
+	messageSegmentMinDecodeVersion   = 1
+	metadataEventFormatVersion       = 1
 )
 
 // metadataEventExtension is the file extension for metadata event artifacts.
@@ -314,9 +318,15 @@ func ValidateRawSource(raw *RawSourceRef) error {
 }
 
 func encodeSegment(msgs []db.Message) ([]byte, error) {
+	version := messageSegmentPreDialogueVersion
+	if slices.ContainsFunc(msgs, func(msg db.Message) bool { return msg.DialogueText != nil }) {
+		version = messageSegmentFormatVersion
+	}
 	var buf bytes.Buffer
 	for _, msg := range msgs {
-		data, err := canonicalJSON(segmentMessageFromDB(msg))
+		record := segmentMessageFromDB(msg)
+		record.Version = version
+		data, err := canonicalJSON(record)
 		if err != nil {
 			return nil, fmt.Errorf("encoding message segment: %w", err)
 		}
@@ -327,7 +337,6 @@ func encodeSegment(msgs []db.Message) ([]byte, error) {
 
 func segmentMessageFromDB(msg db.Message) segmentMessage {
 	record := segmentMessage{
-		Version:           messageSegmentFormatVersion,
 		Ordinal:           msg.Ordinal,
 		Role:              msg.Role,
 		Content:           msg.Content,
