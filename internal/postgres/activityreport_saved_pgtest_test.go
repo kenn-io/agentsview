@@ -16,6 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/pricing"
 )
 
 func TestPGActivityReportSaved(t *testing.T) {
@@ -54,6 +55,18 @@ func TestPGActivityReportSaved(t *testing.T) {
 					}
 					assert.Equal(t, want, got.Report.Totals.Cost)
 				}
+				t.Cleanup(func() { pricing.SetConfiguredAliases(nil) })
+				for i, alias := range []string{"alias-one", "alias-two"} {
+					pricing.SetConfiguredAliases(map[string]string{"kept-model": alias})
+					store := openPGActivityInputStore(t, target, syncer.schema, directory)
+					store.SetCustomPricing(map[string]config.CustomModelRate{
+						"alias-one": {OutputMicrodollarsPerMTok: 20_000_000},
+						"alias-two": {OutputMicrodollarsPerMTok: 40_000_000},
+					})
+					got := pgKeptBuild(t, store, f, q, true)
+					require.Equal(t, money.MustParseDollars([]string{"0.01", "0.02"}[i]), got.Report.Totals.Cost)
+					require.NoError(t, store.Close())
+				}
 				return
 			}
 			if mode == "today" {
@@ -84,7 +97,6 @@ func TestPGActivityReportSaved(t *testing.T) {
 						t.Cleanup(func() { require.NoError(t, restarted.Close()) })
 						requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, q, true))
 					}
-
 				}
 				return
 			}
@@ -220,8 +232,7 @@ func TestPGSavedActivityReportMemoryVisits(t *testing.T) {
 	if stale == files[0] {
 		stale = allFiles[1]
 	}
-	expired := time.Now().Add(-31 * 24 * time.Hour)
-	require.NoError(t, os.Chtimes(stale, expired, expired))
+	require.NoError(t, os.Chtimes(stale, old, old))
 	requirePGKeptEqual(t, want, pgKeptBuild(t, store, f, q, false))
 	_, err = os.Stat(stale)
 	require.ErrorIs(t, err, os.ErrNotExist)
@@ -244,6 +255,8 @@ func TestPGSavedActivityReportMemoryVisits(t *testing.T) {
 	require.Equal(t, revision, saved.Revision)
 	require.Equal(t, checkpoint, saved.Checkpoint)
 	require.NoError(t, os.Remove(files[0]))
+	pgKeptSession(t, local, "c", "project-c", "2026-08-14")
+	pgKeptPush(t, syncer, false)
 	requirePGKeptEqual(t, want, pgKeptBuild(t, store, f, q, false))
 	_, err = os.Stat(files[0])
 	require.ErrorIs(t, err, os.ErrNotExist)
