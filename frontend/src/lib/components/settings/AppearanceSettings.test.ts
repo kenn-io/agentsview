@@ -22,6 +22,7 @@ const settingsService = SettingsService as unknown as {
   putApiV1Settings: ReturnType<typeof vi.fn>;
 };
 const originalIsDesktop = sync.isDesktop;
+const originalMatchMedia = window.matchMedia.bind(window);
 
 describe("AppearanceSettings", () => {
   beforeEach(() => {
@@ -62,6 +63,47 @@ describe("AppearanceSettings", () => {
       configurable: true,
     });
     cleanup();
+  });
+
+  it("returns a pinned theme to following the device appearance", async () => {
+    // A controllable prefers-color-scheme query, starting dark.
+    const listeners = new Set<(e: MediaQueryListEvent) => void>();
+    const query = {
+      matches: true,
+      media: "(prefers-color-scheme: dark)",
+      addEventListener: (_: string, fn: (e: MediaQueryListEvent) => void) => listeners.add(fn),
+      removeEventListener: (_: string, fn: (e: MediaQueryListEvent) => void) =>
+        listeners.delete(fn),
+    };
+    const matchMedia = vi
+      .spyOn(window, "matchMedia")
+      .mockImplementation((q) =>
+        q === query.media ? (query as unknown as MediaQueryList) : originalMatchMedia(q),
+      );
+    const root = document.documentElement;
+    try {
+      ui.theme = "light";
+      const { getByRole } = render(AppearanceSettings);
+      const group = getByRole("radiogroup", { name: "Theme" });
+      expect(root.classList.contains("dark")).toBe(false);
+
+      await fireEvent.click(within(group).getByRole("radio", { name: "Match device" }));
+      expect(localStorage.getItem("theme")).toBe("system");
+      expect(root.classList.contains("dark")).toBe(true);
+
+      // The OS switches to light; the page follows without a reload.
+      query.matches = false;
+      for (const fn of listeners) fn({ matches: false } as MediaQueryListEvent);
+      expect(root.classList.contains("dark")).toBe(false);
+
+      await fireEvent.click(within(group).getByRole("radio", { name: "Dark" }));
+      expect(localStorage.getItem("theme")).toBe("dark");
+      expect(listeners.size).toBe(0);
+      expect(root.classList.contains("dark")).toBe(true);
+    } finally {
+      ui.theme = "light";
+      matchMedia.mockRestore();
+    }
   });
 
   it.each([false, true])("shares one Zoom selector with desktop=%s", async (isDesktop) => {
