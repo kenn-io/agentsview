@@ -28,6 +28,43 @@ type frustrationFillState struct {
 	completed uint64
 }
 
+type sharedLoadKey struct{}
+
+var errSharedFillWait = errors.New("shared load cannot wait for count fill")
+
+// sharedLoad marks a build detached from every caller's deadline.
+func sharedLoad(ctx context.Context) context.Context {
+	return context.WithValue(ctx, sharedLoadKey{}, true)
+}
+
+// keptSignals lets a caller whose shared load would wait on a pending count
+// fill load under its own deadline instead.
+func (s *Store) keptSignals(ctx context.Context, f db.AnalyticsFilter) (db.SignalsAnalyticsResponse, error) {
+	result, err := keptAnalytics(ctx, s, "signals", f, s.loadAnalyticsSignals)
+	if errors.Is(err, errSharedFillWait) {
+		return s.loadAnalyticsSignals(ctx, f)
+	}
+	return result, err
+}
+
+// sharedFillWait reports whether a shared load needs counts a fill still owns.
+func (s *Store) sharedFillWait(ctx context.Context, ids []string) bool {
+	if ctx.Value(sharedLoadKey{}) == nil {
+		return false
+	}
+	state := &s.runtimeState().frustrationFill
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return slices.ContainsFunc(ids, func(id string) bool { return state.pending[id] != nil })
+}
+
+// completedCount is the number of finished chunks.
+func (state *frustrationFillState) completedCount() uint64 {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.completed
+}
+
 // release drops a finished chunk's session IDs and wakes waiters.
 func (state *frustrationFillState) release(chunk *frustrationChunk) {
 	state.mu.Lock()

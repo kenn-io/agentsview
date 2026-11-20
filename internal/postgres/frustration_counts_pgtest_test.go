@@ -614,3 +614,63 @@ func TestFrustrationFillRequestReservesScanTime(t *testing.T) {
 	require.Equal(t, 2, got.result.QualityHealth.Totals.FrustrationMarkerCount)
 	require.EqualValues(t, 1, counter.scans.Load(), "request must scan while fill remains blocked")
 }
+
+type blockedSignalRows struct {
+	storeExecutor
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (p *blockedSignalRows) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	if strings.Contains(query, "health_score, health_grade, outcome") {
+		p.once.Do(func() { close(p.started) })
+		select {
+		case <-p.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return p.storeExecutor.QueryContext(ctx, query, args...)
+}
+
+func TestFrustrationSignalsShortDeadlineJoinsEarlierFlight(t *testing.T) {
+	f := newFrustrationFixture(t, "agentsview")
+	store := f.open(t)
+	require.NotEmpty(t, store.keptAnalyticsVersion(f.ctx, "signals|{}"))
+	_, err := f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts(session_id,session_version,rules_version,marker_count) VALUES ('one','stale',0,0)`)
+	require.NoError(t, err)
+	gate, err := f.pg.BeginTx(f.ctx, nil)
+	require.NoError(t, err)
+	_, err = gate.ExecContext(f.ctx, `SELECT 1 FROM session_frustration_counts WHERE session_id='one' FOR UPDATE`)
+	require.NoError(t, err)
+	probe := &blockedSignalRows{storeExecutor: store.pg, started: make(chan struct{}), release: make(chan struct{})}
+	store.pg = probe
+	firstCtx, cancelFirst := context.WithCancel(f.ctx)
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		_, _ = store.GetAnalyticsSignals(firstCtx, db.AnalyticsFilter{})
+	}()
+	release := sync.OnceFunc(func() { close(probe.release) })
+	defer func() { release(); gate.Rollback(); <-firstDone; cancelFirst() }()
+	select {
+	case <-probe.started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("first request did not start reading signal rows")
+	}
+	stop := store.StartFrustrationFill(f.ctx)
+	defer func() { gate.Rollback(); stop() }()
+	state := &store.runtimeState().frustrationFill
+	require.Eventually(t, func() bool {
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		return state.pending["one"] != nil && state.pending["two"] != nil
+	}, 10*time.Second, 10*time.Millisecond)
+	ctx, cancel := context.WithTimeout(f.ctx, 3*time.Second)
+	defer cancel()
+	release()
+	result, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+	require.NoError(t, err)
+	require.Equal(t, 2, result.QualityHealth.Totals.FrustrationMarkerCount)
+}

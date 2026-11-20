@@ -2604,7 +2604,7 @@ func (s *Store) GetAnalyticsTopSessions(
 func (s *Store) GetAnalyticsSignals(
 	ctx context.Context, f db.AnalyticsFilter,
 ) (db.SignalsAnalyticsResponse, error) {
-	return keptAnalytics(ctx, s, "signals", f, s.loadAnalyticsSignals)
+	return s.keptSignals(ctx, f)
 }
 
 func (s *Store) loadAnalyticsSignals(ctx context.Context, f db.AnalyticsFilter) (db.SignalsAnalyticsResponse, error) {
@@ -2892,11 +2892,11 @@ func (s *Store) populateFrustrationMarkers(
 			}
 			return remaining
 		}
-		state := &s.runtimeState().frustrationFill
-		state.mu.Lock()
-		completed := state.completed
-		state.mu.Unlock()
+		completed := s.runtimeState().frustrationFill.completedCount()
 		ids = load(ids)
+		if s.sharedFillWait(ctx, ids) {
+			return errSharedFillWait
+		}
 		if len(ids) > 0 && s.joinFrustrationFill(ctx, ids, completed) {
 			ids = load(ids)
 		}

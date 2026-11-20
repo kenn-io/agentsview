@@ -52,7 +52,7 @@ func keptAnalyticsWith[T any](ctx context.Context, s *Store, panel string, f db.
 		var result T
 		return b, json.Unmarshal(b, &result)
 	}, func(ctx context.Context) ([]byte, error) {
-		result, err := load(ctx, f)
+		result, err := load(sharedLoad(ctx), f)
 		if err != nil {
 			return nil, err
 		}
