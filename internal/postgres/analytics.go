@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/signals"
 	"go.kenn.io/agentsview/internal/timeutil"
 )
 
@@ -2605,10 +2604,14 @@ func (s *Store) GetAnalyticsTopSessions(
 func (s *Store) GetAnalyticsSignals(
 	ctx context.Context, f db.AnalyticsFilter,
 ) (db.SignalsAnalyticsResponse, error) {
-	return keptAnalytics(ctx, s, "signals", f, s.loadAnalyticsSignals)
+	return s.keptSignals(ctx, f)
 }
 
 func (s *Store) loadAnalyticsSignals(ctx context.Context, f db.AnalyticsFilter) (db.SignalsAnalyticsResponse, error) {
+	return s.loadAnalyticsSignalsWithMode(ctx, f, false)
+}
+
+func (s *Store) loadAnalyticsSignalsWithMode(ctx context.Context, f db.AnalyticsFilter, shared bool) (db.SignalsAnalyticsResponse, error) {
 	versionColumn, err := sessionVersionColumnPG(ctx, s.pg)
 	if err != nil {
 		return db.SignalsAnalyticsResponse{}, err
@@ -2617,7 +2620,7 @@ func (s *Store) loadAnalyticsSignals(ctx context.Context, f db.AnalyticsFilter) 
 	if err != nil {
 		return db.SignalsAnalyticsResponse{}, err
 	}
-	if err := s.populateFrustrationMarkers(ctx, all, versions, versionColumn); err != nil {
+	if err := s.populateFrustrationMarkers(ctx, all, versions, versionColumn, shared); err != nil {
 		return db.SignalsAnalyticsResponse{}, err
 	}
 
@@ -2653,7 +2656,7 @@ func (s *Store) GetAnalyticsSignalSessions(
 	if err != nil {
 		return db.SignalSessionsResponse{}, err
 	}
-	if err := s.populateFrustrationMarkers(ctx, rows, versions, versionColumn); err != nil {
+	if err := s.populateFrustrationMarkers(ctx, rows, versions, versionColumn, false); err != nil {
 		return db.SignalSessionsResponse{}, err
 	}
 	candidates := db.SignalCandidates(rows, signal, limit)
@@ -2857,6 +2860,7 @@ func (s *Store) populateFrustrationMarkers(
 	rows []db.SignalRow,
 	versions map[string]string,
 	versionColumn string,
+	shared bool,
 ) error {
 	if rows == nil {
 		return nil
@@ -2877,62 +2881,46 @@ func (s *Store) populateFrustrationMarkers(
 		return nil
 	}
 	if s.DB() != nil && !s.hostedRelations {
-		counts, err := s.loadStoredFrustrationCounts(ctx, ids, versions, versionColumn)
-		if err != nil {
-			log.Printf("loading frustration counts: %v", err)
+		load := func(ids []string) []string {
+			counts, err := s.loadStoredFrustrationCounts(ctx, ids, versions, versionColumn)
+			if err != nil {
+				log.Printf("loading frustration counts: %v", err)
+			}
+			remaining := ids[:0]
+			for _, id := range ids {
+				if count, ok := counts[id]; ok {
+					rows[idx[id]].FrustrationMarkerCount = count
+					memo.Store(generation, id, versions[id], count)
+				} else {
+					remaining = append(remaining, id)
+				}
+			}
+			return remaining
 		}
-		remaining := ids[:0]
-		for _, id := range ids {
-			if count, ok := counts[id]; ok {
-				rows[idx[id]].FrustrationMarkerCount = count
-				memo.Store(generation, id, versions[id], count)
-			} else {
-				remaining = append(remaining, id)
+		completed := s.runtimeState().frustrationFill.completedCount()
+		ids = load(ids)
+		if len(ids) > 0 {
+			joined, err := s.joinFrustrationFill(ctx, ids, completed, shared)
+			if err != nil {
+				return err
+			}
+			if joined {
+				ids = load(ids)
 			}
 		}
-		ids = remaining
 		if len(ids) == 0 {
 			return nil
 		}
 	}
-	var serverEncoding string
-	if err := s.pg.QueryRowContext(ctx, `SELECT current_setting('server_encoding')`).Scan(&serverEncoding); err != nil {
-		return fmt.Errorf("reading server encoding: %w", err)
-	}
-	scannedVersions := make(map[string]string, len(ids))
-	query, args := pgFrustrationQuery(serverEncoding, frustrationSessionVersion(versionColumn), ids)
-	msgRows, err := s.pg.QueryContext(ctx, query, args...)
+	counts, scannedVersions, err := s.scanFrustrationCounts(ctx, ids, versionColumn)
 	if err != nil {
-		return fmt.Errorf("querying frustration markers: %w", err)
+		return err
 	}
-	defer msgRows.Close()
-	for msgRows.Next() {
-		var sessionID, content string
-		var version *string
-		var decided bool
-		if err := msgRows.Scan(&sessionID, &version, &decided, &content); err != nil {
-			return fmt.Errorf("scanning frustration marker: %w", err)
-		}
-		if version != nil {
-			scannedVersions[sessionID] = *version
-			continue
-		}
-		if decided || signals.IsFrustrationMarker(content) {
-			rows[idx[sessionID]].FrustrationMarkerCount++
-		}
-	}
-	if err := msgRows.Err(); err != nil {
-		return fmt.Errorf("iterating frustration markers: %w", err)
-	}
-	// Only complete scans are memoized, using versions read with the prompts.
 	for id, version := range scannedVersions {
-		memo.Store(generation, id, version, rows[idx[id]].FrustrationMarkerCount)
+		rows[idx[id]].FrustrationMarkerCount = counts[id]
+		memo.Store(generation, id, version, counts[id])
 	}
 	if s.DB() != nil && !s.hostedRelations {
-		counts := make(map[string]int, len(scannedVersions))
-		for id := range scannedVersions {
-			counts[id] = rows[idx[id]].FrustrationMarkerCount
-		}
 		if err := s.storeFrustrationCountsForRead(ctx, scannedVersions, counts, versionColumn); err != nil && !isUndefinedTable(err) && !IsReadOnlyError(err) {
 			log.Printf("storing frustration counts: %v", err)
 		}

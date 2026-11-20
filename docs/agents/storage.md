@@ -1488,10 +1488,13 @@ pairs the session's committed row version and UTC `updated_at` with an
 independent rules version. A saved count must match both the version selected
 for Signals and the current session version at lookup. A mismatch triggers a
 fresh count. Bump `frustrationMarkerRulesVersion` whenever the Go or PostgreSQL
-frustration classifier changes a verdict. Counts fill lazily after a complete
-scan, including zero counts. A save skips sessions changed before the write
-starts. A sync overlapping the save can leave a stale row; later reads reject
-that row and recount the session.
+frustration classifier changes a verdict. On startup, writable PostgreSQL
+stores fill missing or stale counts after the Usage cache warms. A Signals
+request waits up to five seconds when the active fill covers all its missing
+counts, then scans any remaining misses. Requests also scan and save missing
+or stale counts, including zero counts. A save skips sessions changed before
+the write starts. A sync overlapping the save can leave a stale row; later
+reads reject that row and recount the session.
 
 A read-only role reuses rows it can read and scans misses without saving them.
 The table is optional for push. A missing table falls back to scanning. Hosted

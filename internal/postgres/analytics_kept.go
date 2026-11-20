@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -32,6 +33,10 @@ func (s *Store) keptAnalyticsVersion(ctx context.Context, slot string) string {
 }
 
 func keptAnalyticsWith[T any](ctx context.Context, s *Store, panel string, f db.AnalyticsFilter, versionFor func(context.Context, string) string, load func(context.Context, db.AnalyticsFilter) (T, error)) (T, error) {
+	return keptAnalyticsWithLoads(ctx, s, panel, f, versionFor, load, load)
+}
+
+func keptAnalyticsWithLoads[T any](ctx context.Context, s *Store, panel string, f db.AnalyticsFilter, versionFor func(context.Context, string) string, load, shared func(context.Context, db.AnalyticsFilter) (T, error)) (T, error) {
 	if f.ActiveSince != "" || f.Timezone == "Local" || db.TerminationUsesTime(f.Termination) {
 		return load(ctx, f)
 	}
@@ -52,13 +57,28 @@ func keptAnalyticsWith[T any](ctx context.Context, s *Store, panel string, f db.
 		var result T
 		return b, json.Unmarshal(b, &result)
 	}, func(ctx context.Context) ([]byte, error) {
-		result, err := load(ctx, f)
+		result, err := shared(ctx, f)
 		if err != nil {
 			return nil, err
 		}
 		return json.Marshal(result, json.FormatNilSliceAsNull(true), json.FormatNilMapAsNull(true))
 	})
 	var result T
+	if errors.Is(err, errSharedFillWait) {
+		result, err = load(ctx, f)
+		if err != nil {
+			return result, err
+		}
+		encoded, err = json.Marshal(result, json.FormatNilSliceAsNull(true), json.FormatNilMapAsNull(true))
+		if err != nil {
+			return result, err
+		}
+		s.runtimeState().analytics.Put(slot, version, encoded)
+		if savedVersion != "" {
+			s.trendsDisk.Put(slot, savedVersion, encoded)
+		}
+		return result, nil
+	}
 	if err != nil {
 		return result, err
 	}

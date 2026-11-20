@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"log"
 	"time"
+
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/signals"
 )
 
 // Bump when the Go or PostgreSQL frustration classifier changes a verdict.
@@ -82,4 +85,63 @@ func (s *Store) storeFrustrationCounts(ctx context.Context, versions map[string]
 		return fmt.Errorf("writing frustration counts: %w", err)
 	}
 	return nil
+}
+
+func (s *Store) scanFrustrationCounts(ctx context.Context, ids []string, versionColumn string) (map[string]int, map[string]string, error) {
+	var encoding string
+	if err := s.pg.QueryRowContext(ctx, `SELECT current_setting('server_encoding')`).Scan(&encoding); err != nil {
+		return nil, nil, fmt.Errorf("reading server encoding: %w", err)
+	}
+	counts := make(map[string]int, len(ids))
+	versions := make(map[string]string, len(ids))
+	query, args := pgFrustrationQuery(encoding, frustrationSessionVersion(versionColumn), ids)
+	rows, err := s.pg.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("querying frustration markers: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, content string
+		var version *string
+		var decided bool
+		if err := rows.Scan(&id, &version, &decided, &content); err != nil {
+			return nil, nil, fmt.Errorf("scanning frustration marker: %w", err)
+		}
+		if version != nil {
+			versions[id] = *version
+			continue
+		}
+		if decided || signals.IsFrustrationMarker(content) {
+			counts[id]++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("iterating frustration markers: %w", err)
+	}
+	return counts, versions, nil
+}
+
+// staleFrustrationSessions lists stale sessions in Dashboard order.
+func (s *Store) staleFrustrationSessions(ctx context.Context, versionColumn string) ([]string, error) {
+	where := db.BuildAnalyticsWhere(db.AnalyticsFilter{}, db.NewQueryBuilder(s.sessionDialect(), 1), "s.", "", nil)
+	rows, err := s.pg.QueryContext(ctx, `SELECT s.id FROM sessions s LEFT JOIN session_frustration_counts c ON c.session_id=s.id WHERE `+where+` AND (c.session_id IS NULL OR (c.rules_version <= $1 AND (c.rules_version < $1 OR c.session_version <> `+frustrationSessionVersion("s."+versionColumn)+`))) ORDER BY s.is_automated, COALESCE(s.started_at, s.created_at) DESC NULLS LAST, s.id`, frustrationMarkerRulesVersion)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+func (s *Store) canFillFrustrationCounts(ctx context.Context) (bool, error) {
+	var writable bool
+	err := s.pg.QueryRowContext(ctx, `SELECT COALESCE(NOT pg_is_in_recovery() AND current_setting('transaction_read_only') = 'off' AND has_table_privilege(to_regclass('session_frustration_counts'), 'SELECT') AND has_table_privilege(to_regclass('session_frustration_counts'), 'INSERT') AND has_table_privilege(to_regclass('session_frustration_counts'), 'UPDATE'), false)`).Scan(&writable)
+	return writable, err
 }
