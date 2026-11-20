@@ -36,7 +36,7 @@ func TestRawProjectionRolloutBackfillsPromptLinks(t *testing.T) {
 			if tc.recorded {
 				link, ok := parser.NewPRLink("https://github.com/o/r/pull/1", "o/r", 1)
 				require.True(t, ok)
-				outcome.Outcome.Results[0].Result.Session.PRLinks = []parser.PRLink{link}
+				outcome.Outcome.Results[0].Result.Session.PRLinks = []parser.PRLink{link, {URL: "http://github.com/o/r/pull/1", Host: "github.com", Repository: "o/r", Number: 1}}
 				recorded = []db.PRLink{link}
 			}
 			m, receipt := f.accept(t, "device-a", "initial", "", tc.agent)
@@ -208,6 +208,10 @@ func TestRawProjectionClaudeRecordedLinksKeepSharedSession(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, parsed.Results, 1)
 	parsed.Results[0].Result.Session.ID = "claude:portable"
+	assert.Equal(t, []parser.PRLink{
+		{URL: "https://github.com/o/r/pull/7", Host: "github.com", Repository: "o/r", Number: 7},
+		{URL: "http://github.com/o/r/pull/7", Host: "github.com", Repository: "o/r", Number: 7},
+	}, parsed.Results[0].Result.Session.PRLinks)
 
 	// The stored capture represents output from the earlier URL-keyed parser.
 	// Reprocessing uses the current parser, whose output must hash identically.

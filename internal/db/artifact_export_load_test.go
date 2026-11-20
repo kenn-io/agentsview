@@ -209,15 +209,20 @@ func TestLoadArtifactExportDataCardinalityBoundaries(t *testing.T) {
 }
 
 func TestLoadArtifactExportDataRawByteBoundaries(t *testing.T) {
-	t.Run("prompt dialogue counts toward limit", func(t *testing.T) {
+	t.Run("prompt dialogue bytes", func(t *testing.T) {
 		database := artifactExportLoadTestDB(t)
-		dialogue := strings.Repeat("x", 800)
-		require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []Message{{
-			SessionID: "session", Role: "user", Content: dialogue + " other", DialogueText: &dialogue,
-		}}))
+		content := strings.Repeat("x", 600)
+		message := Message{SessionID: "session", Role: "user", Content: content, DialogueText: &content}
+		require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []Message{message}))
 		limits := smallArtifactExportLoadLimits()
-		limits.MessageBytes = 1200
-		_, err := database.LoadArtifactExportData(t.Context(), "session", limits)
+		limits.MessageBytes = 1000
+		data, err := database.LoadArtifactExportData(t.Context(), "session", limits)
+		require.NoError(t, err)
+		require.Equal(t, &content, data.Messages[0].DialogueText)
+		different := strings.Repeat("y", 600)
+		message.DialogueText = &different
+		require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []Message{message}))
+		_, err = database.LoadArtifactExportData(t.Context(), "session", limits)
 		require.ErrorIs(t, err, ErrArtifactExportLimit)
 	})
 	t.Run("dialogue projection is omitted", func(t *testing.T) {
@@ -448,21 +453,4 @@ func artifactExportLoadResultEvent(index int) ToolResultEvent {
 		Source: "tool", Status: "completed", Content: "result",
 		EventIndex: index,
 	}
-}
-
-func TestArtifactExportCountsEqualDialogueOnce(t *testing.T) {
-	database := artifactExportLoadTestDB(t)
-	content := strings.Repeat("x", 600)
-	message := Message{SessionID: "session", Role: "user", Content: content, DialogueText: &content}
-	require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []Message{message}))
-	limits := smallArtifactExportLoadLimits()
-	limits.MessageBytes = 1000
-	data, err := database.LoadArtifactExportData(t.Context(), "session", limits)
-	require.NoError(t, err)
-	require.Equal(t, &content, data.Messages[0].DialogueText)
-	different := strings.Repeat("y", 600)
-	message.DialogueText = &different
-	require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []Message{message}))
-	_, err = database.LoadArtifactExportData(t.Context(), "session", limits)
-	require.ErrorIs(t, err, ErrArtifactExportLimit)
 }

@@ -38,81 +38,80 @@ func TestPromptPRLinksStoredMessages(t *testing.T) {
 	assert.Equal(t, "https://github.com/o/r/pull/13", got.PRLinks[3].URL)
 }
 
+// An interrupted open can leave the archive at the old version after adding the column.
 func TestPromptPRLinksArchiveUpgrade(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "archive.db")
-	d, err := OpenIsolated(t.Context(), path)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		if d != nil {
-			_ = d.Close()
-		}
+	t.Run("missing column", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "archive.db")
+		d, err := OpenIsolated(t.Context(), path)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			if d != nil {
+				_ = d.Close()
+			}
+		})
+		link, ok := parser.NewPRLink("https://github.com/o/r/pull/1", "o/r", 1)
+		require.True(t, ok)
+		s := Session{ID: "archived", Project: "project", Machine: "local", Agent: "chatgpt", PRLinks: []PRLink{link}}
+		require.NoError(t, d.UpsertSession(t.Context(), s))
+		require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "user", Content: "https://github.com/o/r/pull/42"}}))
+		require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+			if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links=structured_pr_links WHERE id=?`, s.ID); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(t.Context(), artifactSessionQueueTriggerDropsSQL); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(t.Context(), `ALTER TABLE sessions DROP COLUMN structured_pr_links`); err != nil {
+				return err
+			}
+			return writeUserVersion(t.Context(), tx, promptPRLinksDataVersion-1)
+		}))
+		require.NoError(t, d.Close())
+		d, err = OpenIsolated(t.Context(), path)
+		require.NoError(t, err)
+		got, err := d.GetSession(t.Context(), s.ID)
+		require.NoError(t, err)
+		require.Len(t, got.PRLinks, 2)
+		assert.Equal(t, link.URL, got.PRLinks[0].URL)
+		assert.Equal(t, "https://github.com/o/r/pull/42", got.PRLinks[1].URL)
 	})
-	link, ok := parser.NewPRLink("https://github.com/o/r/pull/1", "o/r", 1)
-	require.True(t, ok)
-	s := Session{ID: "archived", Project: "project", Machine: "local", Agent: "chatgpt", PRLinks: []PRLink{link}}
-	require.NoError(t, d.UpsertSession(t.Context(), s))
-	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "user", Content: "https://github.com/o/r/pull/42"}}))
-	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links=structured_pr_links WHERE id=?`, s.ID); err != nil {
+	t.Run("interrupted upgrade", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "archive.db")
+		d, err := OpenIsolated(t.Context(), path)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			if d != nil {
+				_ = d.Close()
+			}
+		})
+		first, ok := parser.NewPRLink("https://github.com/o/r/pull/1", "o/r", 1)
+		require.True(t, ok)
+		second, ok := parser.NewPRLink("https://github.com/o/r/pull/2", "o/r", 2)
+		require.True(t, ok)
+		prompt, ok := parser.NewPRLink("https://github.com/o/r/pull/42", "o/r", 42)
+		require.True(t, ok)
+		s := Session{ID: "interrupted", Project: "project", Machine: "local", Agent: "claude", PRLinks: []PRLink{first}}
+		require.NoError(t, d.UpsertSession(t.Context(), s))
+		require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "user", Content: "review " + prompt.URL}}))
+		require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+			if err := writeUserVersion(t.Context(), tx, promptPRLinksDataVersion-1); err != nil {
+				return err
+			}
+			// A version 183 binary writes pr_links and knows no structured column.
+			_, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links=? WHERE id=?`, EncodePRLinks([]PRLink{first, second}), s.ID)
 			return err
-		}
-		if _, err := tx.ExecContext(t.Context(), artifactSessionQueueTriggerDropsSQL); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(t.Context(), `ALTER TABLE sessions DROP COLUMN structured_pr_links`); err != nil {
-			return err
-		}
-		return writeUserVersion(t.Context(), tx, promptPRLinksDataVersion-1)
-	}))
-	require.NoError(t, d.Close())
-	d, err = OpenIsolated(t.Context(), path)
-	require.NoError(t, err)
-	got, err := d.GetSession(t.Context(), s.ID)
-	require.NoError(t, err)
-	require.Len(t, got.PRLinks, 2)
-	assert.Equal(t, link.URL, got.PRLinks[0].URL)
-	assert.Equal(t, "https://github.com/o/r/pull/42", got.PRLinks[1].URL)
-}
+		}))
+		require.NoError(t, d.Close())
 
-// An open that stops after the column migration leaves the archive at 183,
-// where an older binary may rewrite pr_links with only its structured links.
-// The next open must restore prompt links over the older binary's links.
-func TestPromptPRLinksInterruptedUpgrade(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "archive.db")
-	d, err := OpenIsolated(t.Context(), path)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		if d != nil {
-			_ = d.Close()
-		}
+		d, err = OpenIsolated(t.Context(), path)
+		require.NoError(t, err)
+		got, err := d.GetSession(t.Context(), s.ID)
+		require.NoError(t, err)
+		assert.Equal(t, []PRLink{first, second, prompt}, got.PRLinks)
+		structured, err := d.GetSessionStructuredPRLinks(t.Context(), s.ID)
+		require.NoError(t, err)
+		assert.Equal(t, []PRLink{first, second}, structured)
 	})
-	first, ok := parser.NewPRLink("https://github.com/o/r/pull/1", "o/r", 1)
-	require.True(t, ok)
-	second, ok := parser.NewPRLink("https://github.com/o/r/pull/2", "o/r", 2)
-	require.True(t, ok)
-	prompt, ok := parser.NewPRLink("https://github.com/o/r/pull/42", "o/r", 42)
-	require.True(t, ok)
-	s := Session{ID: "interrupted", Project: "project", Machine: "local", Agent: "claude", PRLinks: []PRLink{first}}
-	require.NoError(t, d.UpsertSession(t.Context(), s))
-	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "user", Content: "review " + prompt.URL}}))
-	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
-		if err := writeUserVersion(t.Context(), tx, promptPRLinksDataVersion-1); err != nil {
-			return err
-		}
-		// A version 183 binary writes pr_links and knows no structured column.
-		_, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links=? WHERE id=?`, EncodePRLinks([]PRLink{first, second}), s.ID)
-		return err
-	}))
-	require.NoError(t, d.Close())
-
-	d, err = OpenIsolated(t.Context(), path)
-	require.NoError(t, err)
-	got, err := d.GetSession(t.Context(), s.ID)
-	require.NoError(t, err)
-	assert.Equal(t, []PRLink{first, second, prompt}, got.PRLinks)
-	structured, err := d.GetSessionStructuredPRLinks(t.Context(), s.ID)
-	require.NoError(t, err)
-	assert.Equal(t, []PRLink{first, second}, structured)
 }
 
 func TestPromptPRLinksUsagePolicyWithRetainedHistory(t *testing.T) {
@@ -193,8 +192,10 @@ func TestPromptPRLinksUsageOrphanCopy(t *testing.T) {
 					if _, err := tx.ExecContext(t.Context(), artifactSessionQueueTriggerDropsSQL); err != nil {
 						return err
 					}
-					_, err := tx.ExecContext(t.Context(), `ALTER TABLE sessions DROP COLUMN structured_pr_links`)
-					return err
+					if _, err := tx.ExecContext(t.Context(), `ALTER TABLE sessions DROP COLUMN structured_pr_links`); err != nil {
+						return err
+					}
+					return writeUserVersion(t.Context(), tx, promptPRLinksDataVersion-1)
 				}))
 			}
 			dest := testDB(t)
@@ -250,8 +251,10 @@ func TestPromptPRLinksTrashedCopyRestore(t *testing.T) {
 		if _, err := tx.ExecContext(t.Context(), artifactSessionQueueTriggerDropsSQL); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(t.Context(), `ALTER TABLE sessions DROP COLUMN structured_pr_links`)
-		return err
+		if _, err := tx.ExecContext(t.Context(), `ALTER TABLE sessions DROP COLUMN structured_pr_links`); err != nil {
+			return err
+		}
+		return writeUserVersion(t.Context(), tx, promptPRLinksDataVersion-1)
 	}))
 	require.NoError(t, source.SoftDeleteSession(t.Context(), s.ID))
 	dest := testDB(t)

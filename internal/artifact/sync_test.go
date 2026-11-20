@@ -594,11 +594,10 @@ func TestArtifactSyncPreservesPromptDialogue(t *testing.T) {
 	require.NoError(t, err)
 	_, err = SyncWithRepository(t.Context(), destination, repoB, SyncOptions{Target: target, Origin: "desktop-d4e5f6"})
 	require.NoError(t, err)
-	got, err := destination.GetSessionFull(t.Context(), "laptop-a1b2c3~one")
+	got, err := destination.GetMessages(t.Context(), "laptop-a1b2c3~one", 0, 10, true)
 	require.NoError(t, err)
-	require.NotNil(t, got)
-	assert.Equal(t, []db.PRLink{
-		{URL: "https://github.com/o/r/pull/1", Host: "github.com", Repository: "o/r", Number: 1},
-		{URL: "https://github.com/o/r/pull/3", Host: "github.com", Repository: "o/r", Number: 3},
-	}, got.PRLinks)
+	require.Len(t, got, 3)
+	assert.Nil(t, got[0].DialogueText)
+	assert.Equal(t, new(""), got[1].DialogueText)
+	assert.Equal(t, new("https://github.com/o/r/pull/3"), got[2].DialogueText)
 }

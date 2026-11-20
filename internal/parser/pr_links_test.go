@@ -243,21 +243,6 @@ func TestCombinePRLinksDeduplicatesIdentity(t *testing.T) {
 	assert.Equal(t, []PRLink{first, otherHost, otherRepo, otherNumber}, CombinePRLinks([]PRLink{first}, []PRLink{duplicate, otherHost, otherRepo, otherNumber}))
 }
 
-func TestRecordedPRLinksPreserveDistinctURLs(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "links.jsonl")
-	content := claudeProviderFixture("Review") + `
-{"type":"pr-link","prUrl":"https://github.com/o/r/pull/7","prRepository":"o/r","prNumber":7}
-{"type":"pr-link","prUrl":"http://github.com/o/r/pull/7","prRepository":"o/r","prNumber":7}
-`
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-	results, _, err := claudeParseWithExclusions(t.Context(), path, "project", "local")
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	links := results[0].Session.PRLinks
-	require.Len(t, links, 2)
-	assert.Len(t, CombinePRLinks(links), 1)
-}
-
 func TestPromptPRLinksLongTokenAndCancellation(t *testing.T) {
 	text := strings.Repeat("https://", 100000) + " https://github.com/o/r/pull/1"
 	links, err := PromptPRLinksContext(t.Context(), text)

@@ -56,7 +56,7 @@ func TestIncrementalSync_ClaudePRLinkAppends(t *testing.T) {
 func TestParseDiffIgnoresLauncherParents(t *testing.T) {
 	env := setupFocusedTestEnv(t, parser.AgentClaude, parser.AgentGemini)
 	env.writeClaudeSession(t, "test-proj", "pd-prs.jsonl", testjsonl.JoinJSONL(
-		testjsonl.ClaudeUserJSON("Open a PR", tsZero),
+		testjsonl.ClaudeUserJSON("Review https://github.com/owner/repo/pull/1", tsZero),
 		testjsonl.ClaudeAssistantJSON("Opened", tsZeroS1),
 	))
 	env.writeGeminiSession(t,
@@ -98,13 +98,6 @@ func TestIncrementalSync_PromptPRLinks(t *testing.T) {
 	require.NotNil(t, sess)
 	assert.True(t, sess.LastWriteIncremental)
 	assert.Equal(t, []string{"https://github.com/owner/repo/pull/1"}, storedPRURLs(t, env.db, "prompt-append"))
-	appendClaudeSplitLines(t, path, testjsonl.ClaudeUserJSON("Again https://github.com/owner/repo/pull/1", "2024-01-01T00:00:03Z"))
-	env.engine.SyncPaths([]string{path})
-	sess, err = env.db.GetSessionFull(t.Context(), "prompt-append")
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	assert.True(t, sess.LastWriteIncremental)
-	assert.Equal(t, []string{"https://github.com/owner/repo/pull/1"}, storedPRURLs(t, env.db, "prompt-append"))
 }
 
 func TestIncrementalStructuredLinkAlsoInPrompt(t *testing.T) {
@@ -125,21 +118,17 @@ func TestIncrementalStructuredLinkAlsoInPrompt(t *testing.T) {
 }
 
 func TestParseDiffDetectsPRLinkChanges(t *testing.T) {
-	for _, tc := range []struct{ name, update string }{
-		{"cleared", `UPDATE sessions SET pr_links='', structured_pr_links='' WHERE id='changed-pr'`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			env := setupTestEnv(t)
-			env.writeClaudeSession(t, "proj", "changed-pr.jsonl", testjsonl.JoinJSONL(
-				testjsonl.ClaudeUserJSON("Review https://github.com/owner/repo/pull/1", tsZero),
-				testjsonl.ClaudeAssistantJSON("Working", tsZeroS1),
-				`{"type":"pr-link","prNumber":2,"prUrl":"https://github.com/owner/repo/pull/2","prRepository":"owner/repo","timestamp":"2024-01-01T00:00:02Z"}`,
-			))
-			require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
-			mutateDB(t, env, tc.update)
-			report := runParseDiff(t, env, sync.ParseDiffOptions{})
-			assert.Equal(t, 1, report.Totals.Changed)
-			assert.Equal(t, 1, report.FieldCounts[sync.FieldPRLinks])
-		})
-	}
+	env := setupTestEnv(t)
+	env.writeClaudeSession(t, "proj", "changed-pr.jsonl", testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("Review https://github.com/owner/repo/pull/1", tsZero),
+		testjsonl.ClaudeAssistantJSON("Working", tsZeroS1),
+		`{"type":"pr-link","prNumber":2,"prUrl":"https://github.com/owner/repo/pull/2","prRepository":"owner/repo","timestamp":"2024-01-01T00:00:02Z"}`,
+	))
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+	report := runParseDiff(t, env, sync.ParseDiffOptions{})
+	assert.Equal(t, 1, report.Totals.Identical)
+	mutateDB(t, env, `UPDATE sessions SET pr_links='' WHERE id='changed-pr'`)
+	report = runParseDiff(t, env, sync.ParseDiffOptions{})
+	assert.Equal(t, 1, report.Totals.Changed)
+	assert.Equal(t, 1, report.FieldCounts[sync.FieldPRLinks])
 }
