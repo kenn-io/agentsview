@@ -230,30 +230,93 @@ finally:
 PY
 unset DOWN_STARTED DOWN_RELEASE DOWN_FINISHED
 
-# Termination during startup and while the command runs cleans up the project.
+# Termination during service startup cleans up the project.
 export READY="$tmp/ready"
-for phase in startup command; do
-    : > "$DOCKER_LOG"
-    [[ ! -e "$tmp/ready" ]] || find "$tmp/ready" -delete
-    if [[ $phase == startup ]]; then
-        (cd "$root" && BLOCK_UP=1 exec ./scripts/test-lease.sh ./scripts/test-service-compose.sh postgres 5432 true) &
-    else
-        (cd "$root" && exec ./scripts/test-lease.sh ./scripts/test-service-compose.sh postgres 5432 sh -c 'touch "$READY"; exec sleep 30') &
-    fi
-    first=$!
-    for _ in {1..100}; do [[ -f "$READY" ]] && break; sleep .1; done
-    [[ -f "$READY" ]]
-    kill -TERM "$first"
-    set +e
-    wait "$first"
-    status=$?
-    set -e
-    first=
-    [[ $status == 143 ]]
-    grep -qE -- "-p $(cat "$CHECK_LEASE") .* down -v --remove-orphans" "$DOCKER_LOG"
-    lease="$HOME/.local/state/test-service-leases/$(cat "$CHECK_LEASE")"
-    [[ ! -e "$lease" ]]
-done
+: > "$DOCKER_LOG"
+[[ ! -e "$tmp/ready" ]] || find "$tmp/ready" -delete
+(cd "$root" && BLOCK_UP=1 exec ./scripts/test-lease.sh ./scripts/test-service-compose.sh postgres 5432 true) &
+first=$!
+for _ in {1..100}; do [[ -f "$READY" ]] && break; sleep .1; done
+[[ -f "$READY" ]]
+kill -TERM "$first"
+set +e
+wait "$first"
+status=$?
+set -e
+first=
+[[ $status == 143 ]]
+grep -qE -- "-p $(cat "$CHECK_LEASE") .* down -v --remove-orphans" "$DOCKER_LOG"
+lease="$HOME/.local/state/test-service-leases/$(cat "$CHECK_LEASE")"
+[[ ! -e "$lease" ]]
+
+# A signal received as startup finishes reaches the shutdown helper only once.
+mkdir "$tmp/trace"
+cat > "$tmp/trace/sitecustomize.py" <<'PY'
+import os
+from pathlib import Path
+import signal
+import sys
+import time
+
+def trace(frame, event, arg):
+    if event != "line" or frame.f_globals.get("process_group") is None or "received" not in frame.f_globals:
+        return trace
+    sys.settrace(None)
+    deadline = time.monotonic() + 10
+    while not Path(os.environ["SIGNAL_READY"]).exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    if not Path(os.environ["SIGNAL_READY"]).exists():
+        raise RuntimeError("child did not start")
+    os.kill(os.getpid(), signal.SIGTERM)
+    while not Path(os.environ["SIGNAL_HELPER_STARTED"]).exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    if not Path(os.environ["SIGNAL_HELPER_STARTED"]).exists():
+        raise RuntimeError("shutdown helper did not start")
+    return None
+
+sys.settrace(trace)
+PY
+cat > "$tmp/signal-child" <<'CHILD'
+#!/bin/sh
+trap 'touch "$SIGNAL_RECEIVED"; exec "$SIGNAL_HELPER"' TERM
+touch "$SIGNAL_READY"
+while :; do sleep .1; done
+CHILD
+cat > "$tmp/signal-helper" <<'HELPER'
+#!/bin/sh
+touch "$SIGNAL_HELPER_STARTED"
+while [ ! -f "$SIGNAL_RELEASE" ]; do sleep .1; done
+touch "$SIGNAL_FINISHED"
+HELPER
+chmod +x "$tmp/signal-child" "$tmp/signal-helper"
+export SIGNAL_READY="$tmp/signal-ready" SIGNAL_RECEIVED="$tmp/signal-received" SIGNAL_RELEASE="$tmp/signal-release" SIGNAL_FINISHED="$tmp/signal-finished" SIGNAL_HELPER="$tmp/signal-helper" SIGNAL_HELPER_STARTED="$tmp/signal-helper-started"
+python3 - "$root" "$tmp" <<'PY'
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+root, tmp = map(Path, sys.argv[1:])
+env = os.environ.copy()
+env["PYTHONPATH"] = str(tmp / "trace")
+process = subprocess.Popen([str(root / "scripts/test-lease.sh"), str(tmp / "signal-child")], cwd=root, env=env)
+try:
+    deadline = time.monotonic() + 10
+    while not Path(env["SIGNAL_RECEIVED"]).exists() and process.poll() is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert Path(env["SIGNAL_RECEIVED"]).exists(), "child did not receive SIGTERM"
+    time.sleep(1)
+    assert process.poll() is None, "shutdown helper received SIGTERM twice"
+    Path(env["SIGNAL_RELEASE"]).touch()
+    assert process.wait(timeout=10) == 143
+    assert Path(env["SIGNAL_FINISHED"]).exists(), "shutdown helper did not finish"
+finally:
+    Path(env["SIGNAL_RELEASE"]).touch()
+    if process.poll() is None:
+        process.terminate()
+        process.wait(timeout=10)
+PY
 
 # Dry runs do not start services.
 : > "$DOCKER_LOG"
