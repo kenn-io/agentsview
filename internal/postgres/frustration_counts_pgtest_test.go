@@ -600,3 +600,50 @@ func TestFrustrationFillJoinsNonUTCDateBoundaries(t *testing.T) {
 		})
 	}
 }
+
+func TestFrustrationFillRequestReservesScanTime(t *testing.T) {
+	for _, shared := range []bool{false, true} {
+		name := "direct"
+		if shared {
+			name = "shared"
+		}
+		t.Run(name, func(t *testing.T) {
+			server, _ := testPGServer(t)
+			if shared && server.cockroach {
+				t.Skip("shared analytics requires the PostgreSQL usage journal")
+			}
+			f := newFrustrationFixture(t, "agentsview")
+			store := f.open(t)
+			if !shared {
+				_, err := f.pg.ExecContext(f.ctx, `UPDATE sync_metadata SET value='0' WHERE key='usage_change_journal_version'`)
+				require.NoError(t, err)
+			}
+			version := store.keptAnalyticsVersion(f.ctx, "signals|{}")
+			if shared {
+				require.NotEmpty(t, version)
+			} else {
+				require.Empty(t, version)
+			}
+			_, err := f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts(session_id,session_version,rules_version,marker_count) VALUES ('one','stale',0,0)`)
+			require.NoError(t, err)
+			gate, err := f.pg.BeginTx(f.ctx, nil)
+			require.NoError(t, err)
+			defer gate.Rollback()
+			_, err = gate.ExecContext(f.ctx, `SELECT 1 FROM session_frustration_counts WHERE session_id='one' FOR UPDATE`)
+			require.NoError(t, err)
+			stop := store.StartFrustrationFill(f.ctx)
+			defer func() { gate.Rollback(); stop() }()
+			state := &store.runtimeState().frustrationFill
+			require.Eventually(t, func() bool {
+				state.mu.Lock()
+				defer state.mu.Unlock()
+				return state.pending["one"] != nil && state.pending["two"] != nil
+			}, 10*time.Second, 10*time.Millisecond)
+			ctx, cancel := context.WithTimeout(f.ctx, 3*time.Second)
+			defer cancel()
+			result, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+			require.NoError(t, err)
+			require.Equal(t, 2, result.QualityHealth.Totals.FrustrationMarkerCount)
+		})
+	}
+}
