@@ -31,6 +31,10 @@ with open(sys.argv[1]) as f:
 sys.exit(1)
 PROBE
       printf '%s\n' "$TEST_SERVICE_LEASE" > "$CHECK_LEASE"
+    fi
+    if [ -n "${STALL_UP:-}" ]; then
+      touch "$STALL_UP"
+      sleep 30
     fi ;;
   *' port '*) echo 127.0.0.1:49153 ;;
   *' down '*)
@@ -81,13 +85,20 @@ for mode in killed exited; do
     launcher=$!
     for _ in {1..100}; do [[ -f "$DESC_READY" ]] && break; sleep .1; done
     [[ -f "$DESC_READY" ]] || { cat "$tmp/desc.log"; exit 1; }
-    if [[ $mode == killed ]]; then kill -9 "$launcher"; fi
-    wait "$launcher" 2>/dev/null || true
-    launcher=
+    if [[ $mode == killed ]]; then
+        kill -9 "$launcher"
+        wait "$launcher" 2>/dev/null || true
+        launcher=
+    fi
     lease="$HOME/.local/state/test-service-leases/$(cat "$CHECK_LEASE")"
     if probe; then echo 'lease released while descendant still runs' >&2; exit 1; fi
     if grep -q ' down ' "$DOCKER_LOG"; then echo 'cleanup ran while a descendant held the lease' >&2; exit 1; fi
     touch "$DESC_RELEASE"
+    if [[ $mode == exited ]]; then
+        wait "$launcher"
+        launcher=
+        grep -q ' down ' "$DOCKER_LOG"
+    fi
     for _ in {1..100}; do if probe; then break; fi; sleep .1; done
     probe
 done
@@ -139,9 +150,11 @@ for target in test-postgres bench-pg-usage test-clickhouse; do
     case "$target" in
         test-clickhouse)
             service=clickhouse port=9000
+            grep -Fxq 'PG_FROM_MAKE=' "$tmp/make-url"
             grep -Fxq 'CH_FROM_MAKE=clickhouse://127.0.0.1:49153/default' "$tmp/make-url" ;;
         *)
             service=postgres port=5432
+            grep -Fxq 'CH_FROM_MAKE=' "$tmp/make-url"
             grep -Fxq 'PG_FROM_MAKE=postgres://agentsview_test:agentsview_test_password@127.0.0.1:49153/agentsview_test?sslmode=disable' "$tmp/make-url" ;;
     esac
     grep -qE -- "-p $project .* -f docker-compose.test-lease.yml up -d --wait $service" "$DOCKER_LOG"
@@ -153,7 +166,7 @@ done
 for sig in HUP INT TERM; do
     : > "$DOCKER_LOG"
     ready="$tmp/signal-ready-$sig"
-    (cd "$root" && exec ./scripts/test-lease.sh agentsview "$cleanup_cmd" python3 -c 'import os, signal, sys; sig = getattr(signal, "SIG" + sys.argv[1]); signal.signal(sig, lambda *_: sys.exit(128 + sig)) if sig != signal.SIGTERM else None; open(sys.argv[2], "w").close(); signal.pause()' "$sig" "$ready") >"$tmp/signal.log" 2>&1 &
+    (cd "$root" && exec ./scripts/test-lease.sh agentsview "$cleanup_cmd" sh -c 'python3 -c '\''import os, signal, sys; sig = getattr(signal, "SIG" + sys.argv[1]); signal.signal(sig, lambda *_: sys.exit(128 + sig)) if sig != signal.SIGTERM else None; open(sys.argv[2], "w").close(); signal.pause()'\'' "$@"' sh "$sig" "$ready") >"$tmp/signal.log" 2>&1 &
     launcher=$!
     for _ in {1..100}; do [[ -f "$ready" ]] && break; sleep .1; done
     [[ -f "$ready" ]]
@@ -167,6 +180,23 @@ for sig in HUP INT TERM; do
     [[ $status == "$expected" ]]
     grep -qE -- '-p agentsview-.* down -v --remove-orphans' "$DOCKER_LOG"
 done
+
+# A signal during Compose startup reaches its Docker child before cleanup.
+: > "$DOCKER_LOG"
+export STALL_UP="$tmp/up-ready" CHECK_LEASE="$tmp/up-project"
+(cd "$root" && exec ./scripts/test-lease.sh agentsview "$cleanup_cmd" ./scripts/test-service-compose.sh postgres 5432 true) >"$tmp/up.log" 2>&1 &
+launcher=$!
+for _ in {1..100}; do [[ -f "$STALL_UP" ]] && break; sleep .1; done
+[[ -f "$STALL_UP" ]]
+kill -TERM "$launcher"
+set +e
+wait "$launcher"
+status=$?
+set -e
+launcher=
+[[ $status == 143 ]]
+grep -qE -- '-p agentsview-.* down -v --remove-orphans' "$DOCKER_LOG"
+unset STALL_UP CHECK_LEASE
 
 # Two overlapping runs select different projects and clean up their own project.
 export TEST_SERVICE_LEASE=agentsview-parent-123
