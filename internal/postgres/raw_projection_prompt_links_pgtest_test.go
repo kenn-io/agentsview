@@ -188,3 +188,66 @@ func TestRawProjectionRefreshesLinksWhenDialogueChanges(t *testing.T) {
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&links))
 	assert.Equal(t, []db.PRLink{{URL: "https://github.com/o/r/pull/1", Host: "github.com", Repository: "o/r", Number: 1}}, db.DecodePRLinks(links))
 }
+
+func TestRawProjectionClaudeRecordedLinksKeepSharedSession(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "-home-user-project")
+	require.NoError(t, os.MkdirAll(project, 0o700))
+	path := filepath.Join(project, "portable.jsonl")
+	transcript := `{"type":"user","sessionId":"portable","uuid":"u1","timestamp":"2026-01-01T00:00:00Z","message":{"role":"user","content":"Review this change"}}
+{"type":"pr-link","prUrl":"https://github.com/o/r/pull/7","prRepository":"o/r","prNumber":7}
+{"type":"pr-link","prUrl":"http://github.com/o/r/pull/7","prRepository":"o/r","prNumber":7}
+`
+	require.NoError(t, os.WriteFile(path, []byte(transcript), 0o600))
+	provider, ok := parser.NewProvider(parser.AgentClaude, parser.ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	parsed, err := provider.Parse(t.Context(), parser.ParseRequest{Source: sources[0]})
+	require.NoError(t, err)
+	require.Len(t, parsed.Results, 1)
+	parsed.Results[0].Result.Session.ID = "claude:portable"
+
+	// The stored capture represents output from the earlier URL-keyed parser.
+	// Reprocessing uses the current parser, whose output must hash identically.
+	prior := parsed
+	prior.Results = append([]parser.ParseResultOutcome(nil), parsed.Results...)
+	prior.Results[0].Result.Session.PRLinks = []parser.PRLink{
+		{URL: "https://github.com/o/r/pull/7", Host: "github.com", Repository: "o/r", Number: 7},
+		{URL: "http://github.com/o/r/pull/7", Host: "github.com", Repository: "o/r", Number: 7},
+	}
+	f := newProjectionFixture(t)
+	a, _ := f.accept(t, "device-a", "initial-a", "", parser.AgentClaude)
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, a), a, rawderive.ParsedManifest{Outcome: prior}))
+	b, _ := f.accept(t, "device-b", "initial-b", "", parser.AgentClaude)
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, b), b, rawderive.ParsedManifest{Outcome: prior}))
+	aliasA, aliasB := f.alias(t, a), f.alias(t, b)
+	before, err := f.sink.Resolve(t.Context(), "claude:portable")
+	require.NoError(t, err)
+	require.Equal(t, RawIdentityUnique, before.State)
+
+	_, err = f.sink.SelectSourceGeneration(t.Context(), a, "parser-2")
+	require.NoError(t, err)
+	leases, err := f.jobs.ClaimRawParseJobs(t.Context(), "upgrade-worker", 1, time.Minute)
+	require.NoError(t, err)
+	require.Len(t, leases, 1)
+	require.NoError(t, f.sink.Project(t.Context(), leases[0], a, rawderive.ParsedManifest{Outcome: parsed}))
+	for _, alias := range []string{aliasA, aliasB, "claude:portable"} {
+		resolved, err := f.sink.Resolve(t.Context(), alias)
+		require.NoError(t, err)
+		require.Equal(t, RawIdentityUnique, resolved.State)
+		assert.Equal(t, before.PublicID, resolved.PublicID)
+		assert.Equal(t, before.SessionID, resolved.SessionID)
+	}
+
+	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
+	require.NoError(t, err)
+	pr, err := db.ParsePRFilter("o/r#7")
+	require.NoError(t, err)
+	page, err := h.ListSessions(t.Context(), db.SessionFilter{PR: pr, Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, page.Sessions, 1)
+	assert.Equal(t, before.PublicID, page.Sessions[0].ID)
+	assert.Equal(t, []db.PRLink{{URL: "https://github.com/o/r/pull/7", Host: "github.com", Repository: "o/r", Number: 7}}, page.Sessions[0].PRLinks)
+}
