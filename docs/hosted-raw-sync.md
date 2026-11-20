@@ -4,14 +4,14 @@ title: Hosted Raw Sync
 description: Upload original session files to an operator-managed server and resume interrupted transfers
 ---
 
-Hosted raw sync uploads original agent session files from your machines to a
-server. An operator provides each device's credentials. The client resumes
-interrupted uploads and saves its progress across restarts. Run
-`agentsview source raw watch` to keep the hosted copy current.
+Hosted raw sync uploads original agent session files from your machines to an
+operator-managed server. Your operator gives each device its credentials, and
+the client saves upload progress across restarts and resumes interrupted
+transfers. To keep the hosted copy current, run `agentsview source raw watch`.
 
 ```mermaid
 flowchart LR
-    Files["Original agent files"] --> Client["raw-sync watch"]
+    Files["Original agent files"] --> Client["source raw watch"]
     Client -->|"authenticated upload"| Server["Hosted raw-sync server"]
     Server --> Storage["Retained source files"]
     Server -->|"commit receipt"| Client
@@ -21,42 +21,44 @@ flowchart LR
     PostgreSQL --> Embeddings["Server embeddings"]
 ```
 
-The server can now parse accepted generations directly into PostgreSQL. Enable
-`raw_derivation` on an explicitly provisioned hosted tenant to make uploaded
-sessions browsable. Hosted processing uses no SQLite archive intermediary;
-SQLite databases captured from providers remain valid source artifacts. Hosted
-raw sync carries no archive labels or launcher parent links. Label filters on
-hosted sessions match nothing. With embeddings configured, the server builds
-vectors from uploaded sessions and makes them available for meaning search. The
-embedding worker checks stored session progress and does not read the raw
-embedding outbox. Permanently rejected messages stay unindexed until the session
-revision or embedding generation changes; other messages remain searchable.
-Transient endpoint failures retry on the next worker poll. Rate-limited sessions
-do not block later sessions. For the same session ID and embedding generation,
-the server reuses vectors when document keys, content hashes, and chunk coverage
-match. Ordinary raw edits create a new session ID, so the server embeds that
-session again. Cross-session vector reuse is deferred to kit.
+To make uploaded sessions browsable, enable `raw_derivation` on an explicitly
+provisioned hosted tenant. The server can parse accepted generations directly
+into PostgreSQL without a SQLite archive in the middle, though SQLite databases
+captured from providers remain valid source artifacts. Hosted raw sync does not
+carry archive labels or launcher parent links, and label filters match nothing
+on hosted sessions.
 
-Device enrollment and revocation remain operator-managed. The operator supplies
-each laptop with a server URL, device ID and credential. There is no public
-enrollment command or HTTP endpoint. The broader delivery work remains tracked
-in [agentsview#1352](https://github.com/kenn-io/agentsview/issues/1352),
-including accepted-generation retention and garbage collection, and disaster
-rebuilds.
+When you configure embeddings, the server builds vectors from uploaded sessions
+for meaning search. The embedding worker checks stored session progress instead
+of reading the raw embedding outbox. Permanently rejected messages stay
+unindexed until the session revision or embedding generation changes, while
+other messages remain searchable. Transient endpoint failures retry on the next
+worker poll, and rate-limited sessions do not block later ones. Within the same
+session ID and embedding generation, the server reuses vectors when document
+keys, content hashes, and chunk coverage match. Ordinary raw edits create a new
+session ID, so the server embeds that session again. Cross-session vector reuse
+is deferred to Kit.
+
+Your operator manages device enrollment and revocation and gives each laptop a
+server URL, device ID, and credential. There is no public enrollment command or
+HTTP endpoint. Broader delivery work, including accepted-generation retention,
+garbage collection, and disaster rebuilds, is tracked in
+[agentsview#1352](https://github.com/kenn-io/agentsview/issues/1352).
 
 ## Provision a hosted instance
 
-Use one PostgreSQL schema, restricted runtime role and server instance per
-tenant. Requests cannot select arbitrary tenants. The schema is permanently
-bound to its tenant; runtime connections check the binding, forced row-level
-security, constraints, indexes and protected catalog before serving or leasing
-work. Provisioning and upgrades require a separate schema-owner connection.
+Run one PostgreSQL schema, one restricted runtime role, and one server instance
+per tenant. Requests cannot pick arbitrary tenants. Each schema is permanently
+bound to its tenant, and runtime connections check that binding along with
+forced row-level security, constraints, indexes, and the protected catalog
+before serving traffic or leasing work. Provisioning and upgrades require a
+separate schema-owner connection.
 
-Configure an owner target and a runtime target in the operator's protected
-configuration. Supply actual connection URLs and a generated cursor secret
-through your secret manager or protected config file. The values below are
-placeholders, not environment-variable interpolation. Use the same tenant and
-schema for both targets, and make the runtime target the effective default:
+Configure both an owner target and a runtime target in your protected operator
+configuration. Supply real connection URLs and a generated cursor secret from
+your secret manager or protected config file. The values below are placeholders,
+not environment-variable interpolation. Point both targets at the same tenant
+and schema, and make the runtime target the effective default:
 
 ```toml
 default_pg = "hosted"
@@ -78,11 +80,11 @@ raw_attempt_seconds = 60
 raw_max_attempts = 5
 ```
 
-`cursor_secret` is a stable base64-encoded secret shared by restarts of this
-instance. Keep authentication enabled even on loopback. Supply TLS through your
-reverse proxy and configure the exact public origin as for ordinary remote
-access. The shared server bearer token protects viewer APIs; device credentials
-and scoped tokens separately protect raw-sync routes.
+`cursor_secret` is a stable base64-encoded secret that stays the same across
+restarts of this instance. Keep authentication enabled even on loopback. Supply
+TLS through your reverse proxy and configure the exact public origin as you do
+for ordinary remote access. The shared server bearer token protects viewer APIs,
+while device credentials and scoped tokens protect raw-sync routes separately.
 
 Run explicit provisioning with the owner target:
 
@@ -90,19 +92,20 @@ Run explicit provisioning with the owner target:
 agentsview replica pg hosted-provision provision
 ```
 
-This command installs or upgrades hosted tables and protections. It does not
-create login roles or grant runtime access. Existing derived rows are retained;
-existing raw rows must already belong to the chosen tenant. Unknown relations,
-unmanaged vector layouts and conflicting ownership can block adoption. Plan
-imports and schema upgrades during an operator-controlled maintenance window.
-Runtime startup never migrates or provisions the hosted schema.
+Provisioning installs or upgrades the hosted tables and protections. It does not
+create login roles or grant runtime access. It keeps existing derived rows, and
+any existing raw rows must already belong to the chosen tenant. Unknown
+relations, unmanaged vector layouts, or conflicting ownership can block
+adoption. Plan imports and schema upgrades during an operator-controlled
+maintenance window. Runtime startup never migrates or provisions the hosted
+schema.
 
-For meaning search, install pgvector in the database and configure `[vector]`
-and `[vector.embeddings]` on the server before provisioning. Use the same
-embedding configuration when starting the server. Provision again after changing
-the model or its recipe so the owner creates the new generation's chunk table.
-Older generation tables remain for the operator to manage. For example, with an
-OpenAI-compatible embedding endpoint:
+To enable meaning search, install pgvector in the database and configure
+`[vector]` and `[vector.embeddings]` on the server before you provision. Use the
+same embedding configuration when you start the server. If you change the model
+or its recipe later, provision again so the owner creates the new generation's
+chunk table. Older generation tables stay in place for you to manage. For
+example, here is an OpenAI-compatible embedding endpoint:
 
 ```toml
 [vector]
@@ -118,23 +121,23 @@ default_server = "local"
 endpoint = "http://127.0.0.1:11434/v1"
 ```
 
-See the [vector configuration reference](semantic-search.md#enabling-vector) for
-other models and endpoints.
+For other models and endpoints, see the
+[vector configuration reference](semantic-search.md#enabling-vector).
 
 Create a separate login role with
-`NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT`,
-provision its credential through your normal PostgreSQL administration process,
-and grant it `CONNECT` to the database. It must own no application objects, have
+`NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT`, set
+its credential through your normal PostgreSQL administration process, and grant
+it `CONNECT` to the database. This role must own no application objects and have
 no role memberships, database or schema `CREATE`, sibling-schema data access, or
 callable application `SECURITY DEFINER` functions. Remove inherited `PUBLIC`
-grants where necessary, including `CREATE` on the public schema on older
-PostgreSQL installations. Do not grant `TRUNCATE`, `TRIGGER` or `REFERENCES` on
-hosted tables.
+grants where needed, including `CREATE` on the public schema on older PostgreSQL
+installations. Do not grant `TRUNCATE`, `TRIGGER`, or `REFERENCES` on hosted
+tables.
 
 For a newly provisioned schema, the following grants cover full and transcript
-content, custody, publication, bounded reparse and supported curation. Replace
-`hosted_sessions` and `hosted_runtime` with your schema and restricted role. Run
-this as the owner before starting the runtime:
+content, custody, publication, bounded reparse, and supported curation. Replace
+`hosted_sessions` and `hosted_runtime` with your schema and restricted role,
+then run these statements as the owner before starting the runtime:
 
 ```sql
 GRANT USAGE ON SCHEMA hosted_sessions TO hosted_runtime;
@@ -179,42 +182,44 @@ GRANT USAGE ON SEQUENCE hosted_sessions.raw_ingest_jobs_id_seq,
 ```
 
 For an existing deployment, run
-`agentsview replica pg hosted-provision provision`, then apply the
+`agentsview replica pg hosted-provision provision` first, then apply the
 `raw_message_dialogue` and `UPDATE (dialogue_text)` grants above as the owner.
-`ON ALL TABLES` grants cover only tables that existed when they ran. The runtime
-fails startup until provisioning and these grants are complete.
+`ON ALL TABLES` grants cover only tables that existed when they ran, and the
+runtime fails startup until both provisioning and these grants are complete.
 
 Hosted storage keeps retained dialogue in `raw_message_dialogue` and copies it
-into materialized message rows. Dialogue that repeats a message's content is
-stored once: the retained row is marked instead of holding a second copy, and
-the materialized row stores NULL, which message search reads as the content.
+into materialized message rows. When dialogue repeats a message's content,
+AgentsView stores it once. The retained row is marked instead of holding a
+second copy, and the materialized row stores NULL, which message search reads as
+the content.
 
 Provisioning keeps `pg_trgm` in `public`, so dropping a tenant or mirror schema
 cannot remove the extension that every tenant's message-search indexes use. It
-installs the extension there, or moves it there when a PostgreSQL mirror in the
+installs the extension there, or moves it there if a PostgreSQL mirror in the
 same database installed it in the mirror schema. If the owner cannot do either,
 provisioning logs the command to run and search scans `messages`. A database
 superuser can run `CREATE EXTENSION pg_trgm SCHEMA public` or
-`ALTER EXTENSION pg_trgm SET SCHEMA public`, then provision again.
+`ALTER EXTENSION pg_trgm SET SCHEMA public`, then run provisioning again.
 
-Sequence names above are those created by provisioning. For an adopted schema,
-resolve the actual owned sequence with `pg_get_serial_sequence`; serial IDs need
-`USAGE` or `UPDATE`, while identity-generated IDs need no separate sequence
-grant. Enrollment needs an operator credential with device-write privileges; the
-runtime grants intentionally omit those privileges.
+The sequence names above match those created by provisioning. For an adopted
+schema, resolve the actual owned sequence with `pg_get_serial_sequence`. Serial
+IDs need `USAGE` or `UPDATE`, while identity-generated IDs need no separate
+sequence grant. Enrollment needs an operator credential with device-write
+privileges, which the runtime grants intentionally omit.
 
-`archive_content = "usage"` also requires `SELECT` on `vector_generations` and
-`SELECT, DELETE` on existing `vector_documents`, `vector_push_state` and each
-existing `vector_chunks_g<ID>` table named by a generation. This removes any
-previously retained indexed content. It does not create or consume embeddings.
-The runtime checks the configured policy's grants before readiness and reports
-missing privileges instead of silently disabling hosted processing.
+If you set `archive_content = "usage"`, also grant `SELECT` on
+`vector_generations` and `SELECT, DELETE` on existing `vector_documents`,
+`vector_push_state`, and each existing `vector_chunks_g<ID>` table named by a
+generation. That removes any previously retained indexed content without
+creating or consuming embeddings. Before reporting ready, the runtime checks the
+grants for your configured policy and reports missing privileges instead of
+silently disabling hosted processing.
 
 When `[vector]` is enabled for stored content, also grant
 `SELECT, INSERT, UPDATE, DELETE` on `vector_documents` and `vector_push_state`,
 `SELECT, DELETE` on each existing `vector_chunks_g<ID>` table registered in
 `vector_generations`, and `INSERT` on the configured generation's chunk table.
-Repeat the chunk-table grants after provisioning a new generation. On a machine
+Repeat the chunk-table grants after you provision a new generation. On a machine
 configured with the hosted PostgreSQL target and query endpoint, search uploaded
 sessions with `agentsview session search --pg --semantic "your query"`.
 
@@ -224,42 +229,42 @@ Start the effective default target:
 agentsview replica pg serve --no-browser
 ```
 
-Named targets retain their ordinary selection rules. A single-target deployment
-can put the same hosted keys under `[pg]`. `AGENTSVIEW_PG_URL` and
-`AGENTSVIEW_PG_SCHEMA` override only the effective default target. They do not
-rewrite the separate named owner target. `pg push` refuses a hosted-owned schema
-before mutation, even if the client omits its hosted configuration fields. Use a
-separate legacy schema for local pushes.
+Named targets follow their ordinary selection rules, and a single-target
+deployment can place the same hosted keys under `[pg]`. `AGENTSVIEW_PG_URL` and
+`AGENTSVIEW_PG_SCHEMA` override only the effective default target and do not
+rewrite the separate named owner target. `replica pg push` refuses a
+hosted-owned schema before mutation, even if the client omits its hosted
+configuration fields. Use a separate legacy schema for local pushes.
 
-The server stores uploaded files under the AgentsView data directory, so that
-directory must be writable by the server's user. The stored files are protected
-by lock files in a separate directory. By default, the server puts that
-directory under the home directory of its effective uid, which it looks up in
+The server stores uploaded files under the AgentsView data directory, so the
+server's user must be able to write to that directory. Lock files in a separate
+directory protect those stored files. By default, the server puts that directory
+under the home directory of its effective uid, which it looks up in
 `/etc/passwd`. If the server runs as a uid with no passwd entry, set
 `DOCBANK_LOCK_DIR` to an absolute, writable path. A container started with
 Kubernetes `runAsUser` or `docker --user` is the common case. The published
 image already sets `DOCBANK_LOCK_DIR=/data/docbank-locks`. If you move the data
 directory off `/data`, move this path with it. Without a lock directory, every
-upload fails with a 500 response, which the client retries as transient. The
-server log shows the cause as
-`raw sync request failed: ... resolving effective user`.
+upload fails with a 500 response, which the client retries as transient, and the
+server log shows `raw sync request failed: ... resolving effective user`.
 
 ## Isolation and processing limits
 
 Hosted parser activation requires Linux amd64 or arm64, a cgo-enabled build,
 user/mount/network namespaces, `close_range`, and seccomp with thread
-synchronization. Startup tests actual source visibility inside the sandbox
-before claiming a job. Unsupported kernels, containers, non-Linux hosts and
-Linux builds without cgo fail closed. There is no in-process parser fallback.
-The positive kernel suite has been executed on amd64; arm64 has compile proof
-but still needs an execution gate on that architecture.
+synchronization. At startup, the server tests actual source visibility inside
+the sandbox before claiming a job. Unsupported kernels, containers, non-Linux
+hosts, and Linux builds without cgo fail closed, with no in-process parser
+fallback. The positive kernel suite has run on amd64; arm64 has compile proof
+and still needs an execution gate on that architecture.
 
-Each parser child gets only bounded protocol pipes and a minimal environment. A
-pre-runtime constructor closes inherited descriptors above stderr before Go
-initializes. The child sees a read-only source mount inside an otherwise empty,
-read-only jail. Filesystem escape, networking and process creation are denied;
-seccomp applies to every existing thread and allows only constrained runtime
-thread creation. No external sandbox helper is required.
+Each parser child receives only bounded protocol pipes and a minimal
+environment. Before Go initializes, a pre-runtime constructor closes inherited
+descriptors above stderr. The child sees a read-only source mount inside an
+otherwise empty, read-only jail. Filesystem escape, networking, and process
+creation are denied, and seccomp applies to every existing thread while allowing
+only constrained runtime thread creation. No external sandbox helper is
+required.
 
 | Limit                                        | Value                                            |
 | -------------------------------------------- | ------------------------------------------------ |
@@ -276,84 +281,86 @@ thread creation. No external sandbox helper is required.
 | Child CPU / open descriptors                 | 30 seconds / 64                                  |
 | Manifest bytes / entries / object references | 1 MiB / 4,096 / 16,384                           |
 
-Custody may accept files larger than the materialization limit. Such captures
-remain retained but cannot be projected by this worker. Materialization or
-parser-output byte-limit rejection fails that selected generation immediately
-with a `size_limit` diagnostic. Other failures retain bounded retries. Streaming
-the parser result avoids a separate complete JSON buffer; the parser, hosting
-process and projection still retain normalized content in memory. The child
-memory limits do not bound the hosting process. Accepted source bytes are
-untrusted, even after device authentication. Publication atomically writes
-normalized rows, source proof, identity changes, curation and job outcome under
-the selected generation and lease fence. Partial results retain older proof for
-unresolved members and retry finitely. Attempts that end without an outcome,
-including those interrupted by a restart, count toward `raw_max_attempts`; to
-allow for a restart, the worker runs once past that limit before another claim
-fails the job with error class `lease`. Exhausted jobs remain failed until new
-source or processing-version selection provides new work, or an operator runs
-`pg raw-reparse --repair`.
+Custody can accept files larger than the materialization limit. Those captures
+stay retained, though this worker cannot project them. If a selected generation
+hits the materialization or parser-output byte limit, it fails immediately with
+a `size_limit` diagnostic, while other failures keep bounded retries. Streaming
+the parser result avoids building a separate complete JSON buffer, though the
+parser, hosting process, and projection still hold normalized content in memory,
+and child memory limits do not bound the hosting process. The server treats
+accepted source bytes as untrusted even after device authentication. Publication
+writes normalized rows, source proof, identity changes, curation, and the job
+outcome atomically under the selected generation and lease fence. Partial
+results keep older proof for unresolved members and retry finitely. Attempts
+that end without an outcome, including those interrupted by a restart, count
+toward `raw_max_attempts`. To allow for a restart, the worker runs once past
+that limit before another claim fails the job with error class `lease`.
+Exhausted jobs stay failed until a new source or processing-version selection
+provides new work, or an operator runs `replica pg raw-reparse --repair`.
 
 Equivalent content from several devices coalesces when it shares a stable
 provider session identity. Piebald's numeric database IDs stay scoped to their
 source, so unrelated chats on different devices do not merge. Without a stable
-provider identity, sources remain separate even when their content matches.
+provider identity, sources stay separate even when their content matches.
 
-Device machine filters are available in 0.47.0 and later. The Machine filter
+Device machine filters are available in 0.47.0 and later. The **Machine** filter
 lists contributing devices by their enrollment display names. Its stable
-selector is `raw-device:<hex-encoded-device-id>`, using the lowercase
-hexadecimal UTF-8 representation of the enrolled device ID. Display names need
-not be unique. Selecting several devices matches sessions supplied by any of
-them and counts each shared session once in the result. This selects whole
-sessions, rather than allocating their tokens or cost between devices. Session
-and search responses include the contributing IDs in `source_machines`;
-`machine` stays `hosted` for compatibility. The session browser displays the
-source names, including all contributors to a shared session. Retained
-contributions remain selectable when their source file has left the device.
-Usage machine breakdowns and top-session rows still report hosted sessions under
-the `hosted` machine.
+selector is `raw-device:<hex-encoded-device-id>`, which uses the lowercase
+hexadecimal UTF-8 representation of the enrolled device ID. Display names do not
+need to be unique. Selecting several devices matches sessions supplied by any of
+them and counts each shared session once in the result. This filter selects
+whole sessions rather than allocating their tokens or cost between devices.
+Session and search responses include the contributing IDs in `source_machines`,
+while `machine` stays `hosted` for compatibility. The session browser shows the
+source names, including all contributors to a shared session, and retained
+contributions stay selectable after their source file has left the device. Usage
+machine breakdowns and top-session rows still report hosted sessions under the
+`hosted` machine.
 
 A shorter transcript shares the longer copy's displayed session when every
 retained message and usage event matches its prefix and the source metadata
 agrees. Each source keeps its captured revision. When a later snapshot of the
-longer source no longer contains the session, the shorter copy is displayed
-again. Changed messages, conflicting metadata, or several divergent
-continuations remain separate variants; the bare session ID is then ambiguous.
-Such a removal retracts only that source's proof.
+longer source no longer contains the session, the shorter copy appears again.
+Changed messages, conflicting metadata, or several divergent continuations stay
+separate variants, and the bare session ID is then ambiguous. That removal
+retracts only that source's proof.
 
 A source file that disappears from its device does not remove its sessions.
-`raw-sync watch` reports the disappearance as a tombstone, and the server
-records it as the source's current generation. The sessions that source last
-supplied stay listed and searchable with their names, stars, pins, and source
-proof. If the file returns, its new snapshot updates the same sessions. Only
-three things remove a hosted session: the user deletes it, the parser excludes
-it, or a later snapshot of a source that reports its full contents omits it.
+`agentsview source raw watch` reports the disappearance as a tombstone, and the
+server records it as the source's current generation. The sessions that source
+last supplied stay listed and searchable with their names, stars, pins, and
+source proof. If the file returns, its new snapshot updates the same sessions.
+Only three things remove a hosted session: the user deletes it, the parser
+excludes it, or a later snapshot of a source that reports its full contents
+omits it.
 
 A departed source sends no further snapshot. If its copy of a session conflicts
-with another device's, the two stay separate variants and the bare session ID
-stays ambiguous. Deleting the departed variant resolves it.
+with another device's copy, the two stay separate variants and the bare session
+ID stays ambiguous. Deleting the departed variant resolves the conflict.
 
-A departed source has nothing left to parse, so `pg raw-reparse` leaves its
-retained sessions as the earlier parser produced them. Sessions hidden by a
-tombstone that was processed before this rule took effect stay hidden until
-their source returns; their raw files and manifests remain in custody.
+A departed source has nothing left to parse, so `replica pg raw-reparse` leaves
+its retained sessions as the earlier parser produced them. Sessions hidden by a
+tombstone processed before this rule took effect stay hidden until their source
+returns, while their raw files and manifests remain in custody.
 
-Names, stars and pins survive compatible publication; ambiguous identity never
-silently picks a transcript. Owner imports that change legacy identity must
-retry their transaction on serialization failure (`SQLSTATE 40001`) if
+Names, stars, and pins survive compatible publication, and ambiguous identity
+never silently picks a transcript. Owner imports that change legacy identity
+must retry their transaction on serialization failure, `SQLSTATE 40001`, if
 publication or curation holds a conflicting identity lock. Ordinary legacy
 content and curation writes do not take those identity locks.
 
 Search and session reads keep one read-only PostgreSQL snapshot for each hosted
-store operation, including transcript rows, public identities, links and pins.
+store operation, including transcript rows, public identities, links, and pins.
 Concurrent publication does not invalidate that operation. A later operation can
-see a newer publication; a composed HTTP response is not one shared snapshot.
-Activity-report source probes still check live content, identity and parser
-selection revisions so report construction can detect changed inputs.
+see a newer publication, and a composed HTTP response does not share one
+snapshot across operations. Activity-report source probes still check live
+content, identity, and parser selection revisions so report construction can
+detect changed inputs.
 
-Selecting a parser job does not expire browsing cursors. Publishing changed
-identities does; the sidebar and activity report reload when their next page
-uses an expired cursor. The API returns a bad-request response for invalid or
-expired cursors.
+Selecting a parser job does not expire browsing cursors, while publishing
+changed identities does. The sidebar and activity report reload when their next
+page hits an expired cursor, and the API returns a bad-request response for
+invalid or expired cursors.
 
 Hosted raw derivation accepts `tool_result_images = "keep"` or `"drop"`. It
 rejects `"offload"` at startup because it has no hosted image asset store. This
@@ -361,13 +368,13 @@ restriction does not prevent serving existing hosted sessions with
 `raw_derivation = false`.
 
 The maintenance pass examines at most 64 indexed pending signal rows with a
-10-second timeout. It does not scan the archive during idle polling. Shutdown
-cancels and joins worker, materializer and parser work before closing custody
-and PostgreSQL.
+10-second timeout and does not scan the archive during idle polling. On
+shutdown, the server cancels and joins worker, materializer, and parser work
+before closing custody and PostgreSQL.
 
 ## Reparse and rollback
 
-After an executable upgrade changes the parser data version, Friction Log rules
+After an executable upgrade changes the parser data version, Friction Log rules,
 or hosted parser runtime version, schedule current heads explicitly in bounded
 batches:
 
@@ -375,52 +382,52 @@ batches:
 agentsview replica pg raw-reparse hosted --run-id parser-rollout-1 --batch-size 64
 ```
 
-Repeat the same run ID until the command output contains `complete=true`. A call
-selects at most 1–256 heads and atomically saves its keyset checkpoint. The run
-ID is bound to the executable's processing version. Equal manifest/version
-selection is idempotent: a new run ID does not resurrect completed or exhausted
-jobs for that same selection. Startup and idle polls perform no reparse scan.
-Use a new run ID after the processing version changes; an earlier run is bound
-to its original version. Upgrading alone does not reselect retained failures.
+Repeat the same run ID until the command output contains `complete=true`. Each
+call selects at most 1 to 256 heads and saves its keyset checkpoint atomically.
+The run ID is bound to the executable's processing version. Equal manifest and
+version selection is idempotent. A new run ID does not resurrect completed or
+exhausted jobs for that same selection. Startup and idle polls perform no
+reparse scan. Use a new run ID after the processing version changes; an earlier
+run stays bound to its original version. Upgrading alone does not reselect
+retained failures.
 
-After fixing the cause of a failed job, give it a fresh attempt budget:
+After you fix the cause of a failed job, give it a fresh attempt budget:
 
 ```bash
 agentsview replica pg raw-reparse hosted --repair --batch-size 64
 ```
 
-Repeat until the command prints `Rescheduled 0 failed jobs`. If the count stops
-reaching zero while health still lists the same failures, those jobs are failing
-again. Fix their cause or raise `--batch-size` (up to 256). Repair uses this
-executable's processing version and is safe to repeat. It only reschedules
-failed jobs still selected for current heads, leaving healthy jobs, in-progress
-jobs, and heads at other versions unchanged. `--repair` and `--run-id` are
-mutually exclusive.
+Repeat the command until it prints `Rescheduled 0 failed jobs`. If the count
+stops reaching zero while health still lists the same failures, those jobs are
+failing again. Fix their cause or raise `--batch-size`, up to 256. Repair uses
+this executable's processing version and is safe to repeat. It reschedules only
+failed jobs still selected for current heads and leaves healthy jobs,
+in-progress jobs, and heads at other versions unchanged. `--repair` and
+`--run-id` are mutually exclusive.
 
 A source whose file has left its device has a tombstone as its current head.
 Reparsing it changes nothing, so its retained sessions keep the output of the
 parser that last read the file.
 
 To stop derivation, set `raw_derivation = false` and restart. Keep `raw_tenant`,
-authentication, the cursor secret and the tenant-bound runtime connection.
-Hosted public reads and raw custody remain available; accepted new manifests
+authentication, the cursor secret, and the tenant-bound runtime connection.
+Hosted public reads and raw custody stay available, and accepted new manifests
 still select their current processing version. Removing `raw_tenant` from an
 owned schema fails rather than exposing physical storage identities. This
-rollback does not convert the schema back to a `pg push` destination.
+rollback does not convert the schema back to a `replica pg push` destination.
 
-Keep PostgreSQL metadata and the immutable raw repository together in backups.
-Automated retention and garbage collection of accepted generations, disaster
-rebuilds, enrollment UX and migration cutover tooling remain outside this
-release.
+Back up PostgreSQL metadata and the immutable raw repository together. Automated
+retention and garbage collection of accepted generations, disaster rebuilds,
+enrollment UX, and migration cutover tooling remain outside this release.
 
 ## Backfill existing laptop sources
 
-Run a finite backfill before starting the watcher on a laptop that already has
-session history. The command reads the same configured filesystem roots as local
-sync. It captures and uploads original provider files without opening, parsing,
-or changing the local SQLite archive. S3 roots are not accepted.
+If a laptop already has session history, run a finite backfill before you start
+the watcher. The backfill command reads the same configured filesystem roots as
+local sync, capturing and uploading original provider files without opening,
+parsing, or changing the local SQLite archive. S3 roots are not accepted.
 
-Use a stable run ID and select every provider included in this migration:
+Pick a stable run ID and select every provider included in this migration:
 
 ```bash
 export AGENTSVIEW_RAW_SYNC_URL=https://agents.example.com
@@ -435,72 +442,74 @@ agentsview source raw backfill \
   --format json
 ```
 
-Batch size may be 1–512 and can change between attempts. The run ID is bound to
-the device, server, selected providers, and the root entries as written in the
-configuration. Reordered or duplicate provider flags describe the same
-selection. A changed device, provider set, root entry, or root order needs a new
-run ID, because the order in the configuration decides which root owns a file
-that two overlapping roots both contain.
+You can set the batch size from 1 to 512 and change it between attempts. The run
+ID is bound to the device, server, selected providers, and the root entries as
+written in the configuration. Reordered or duplicate provider flags describe the
+same selection, whereas a changed device, provider set, root entry, or root
+order needs a new run ID, because the order in the configuration decides which
+root owns a file that two overlapping roots both contain.
 
-The checkpoint is bound to one server URL, including any path prefix, for both
-backfill and watch. For example, `https://agents.example.com/team-a` and
-`https://agents.example.com/team-b` are separate destinations. A new run ID does
-not permit a different destination to reuse its receipts. To use another server,
-choose a separate `AGENTSVIEW_DATA_DIR` and enroll a device there. An older
+For both backfill and watch, the checkpoint is bound to one server URL,
+including any path prefix. For example, `https://agents.example.com/team-a` and
+`https://agents.example.com/team-b` are separate destinations, and a new run ID
+does not let a different destination reuse receipts. To point at another server,
+pick a separate `AGENTSVIEW_DATA_DIR` and enroll a device there. An older
 checkpoint with uploads but no recorded server also requires a separate data
-directory and a newly enrolled device; the client cannot establish where those
-uploads went. The original checkpoint and local archive remain intact.
+directory and a newly enrolled device, because the client cannot establish where
+those uploads went. Your original checkpoint and local archive remain intact.
 
 A run starts only when every configured root of the selected providers exists.
 If one is missing, such as a stale entry or an unmounted drive, the command
 exits with status 1 before saving the run. Mount the root or remove it from the
 configuration, then run the command again. A new Crush run also rejects an
-existing `projects.json` that cannot be read or decoded; repair the registry
-before retrying. A started run keeps the roots it resolved on its first attempt,
-so captured work still uploads after a source root is unmounted. It also saves
-Crush's registry-derived project paths, so later registry changes, including a
-broken registry, do not alter the attribution of resumed uploads.
+existing `projects.json` that cannot be read or decoded. Repair the registry
+before retrying. Once a run starts, it keeps the roots it resolved on its first
+attempt, so captured work still uploads after a source root is unmounted. It
+also saves Crush's registry-derived project paths, so later registry changes,
+including a broken registry, do not alter the attribution of resumed uploads.
 
-Each invocation is finite. It does not sleep until a failed or deferred upload
+Each invocation is finite and does not sleep until a failed or deferred upload
 becomes eligible. An incomplete attempt prints current aggregate progress and
-exits with status 2; repair the unavailable root, local spool capacity, device
+exits with status 2. Fix the unavailable root, local spool capacity, device
 authorization, network, or server rejection, then run the same command again.
 
-Two failures end a run for good. Repeating the run can't finish it, so start a
-new run ID, which captures the affected source again:
+Two failures end a run for good. Repeating the run cannot finish it, so start a
+new run ID to capture the affected source again:
 
-- `rejected`: the server permanently refused a capture in the run. Fix the
+- `rejected`. The server permanently refused a capture in the run. Fix the
   source first.
-- `capture_lost`: a capture was removed from the local spool before it uploaded,
+- `capture_lost`. A capture was removed from the local spool before it uploaded,
   for example by checkpoint recovery after a missing object.
 
-JSON output is one object with `captured`, `acknowledged`, `pending`, failure
-counters, and an explicit `complete` field. Human output states `complete` or
-`incomplete` directly. Output and errors do not include source paths, transcript
-content, credentials, receipts, or raw server responses.
+JSON output is one object containing `captured`, `acknowledged`, `pending`,
+failure counters, and an explicit `complete` field. Human output states
+`complete` or `incomplete` directly. Neither output nor errors include source
+paths, transcript content, credentials, receipts, or raw server responses.
 
-When the same immutable run reports `"complete":true`, its saved result is
+Once the same immutable run reports `"complete":true`, its saved result is
 historical proof. Repeating it does not rediscover sources, contact the server,
 or create another generation, even if files were appended or the old root is no
-longer mounted. Start the watcher after that result to capture later changes:
+longer mounted. After you see that result, start the watcher to capture later
+changes:
 
 ```bash
 agentsview source raw watch
 ```
 
 Keep the same device ID, credential, server, and provider configuration for the
-handoff. The watcher owns the same checkpoint writer and continues from the
-acknowledged source heads left by the backfill, so do not run both commands at
+handoff. Because the watcher owns the same checkpoint writer and continues from
+the acknowledged source heads left by the backfill, do not run both commands at
 the same time.
 
 ## Laptop raw watch daemon
 
 `agentsview source raw watch` watches supported local provider roots, captures
 their original files, and uploads durable generations. It does not parse
-sessions or write the normal local SQLite archive. S3 roots are excluded.
+sessions or write to the normal local SQLite archive, and S3 roots are excluded.
 
-The server URL and device ID may be flags or environment variables. The device
-credential is environment-only so it does not appear in process arguments:
+You can pass the server URL and device ID as flags or environment variables. The
+device credential is environment-only so it does not appear in process
+arguments:
 
 ```bash
 export AGENTSVIEW_RAW_SYNC_URL=https://agents.example.com
@@ -515,95 +524,96 @@ To read hosted status without starting the watcher, run:
 agentsview source raw server-status
 ```
 
-`raw-sync watch` performs an initial bounded audit, watches for changes, repeats
-the audit every 15 minutes by default, and retries uploads every minute.
-Captures and upload state are kept under `raw-sync/` in the configured
-AgentsView data directory. `agentsview source raw status` prints path-free JSON
-describing the local checkpoint, pending work, retry time, failures, and
-coverage.
+`agentsview source raw watch` performs an initial bounded audit, watches for
+changes, repeats the audit every 15 minutes by default, and retries uploads
+every minute. Captures and upload state live under `raw-sync/` in the configured
+AgentsView data directory. To inspect the local checkpoint, pending work, retry
+time, failures, and coverage as path-free JSON, run
+`agentsview source raw status`.
 
 Deterministic rejections permanently block the rejected capture so independent
-sources can continue uploading. These include `invalid_request` and
+sources can keep uploading. These include `invalid_request` and
 `checksum_mismatch` errors, plus HTTP 413 responses decoded as server JSON
 errors. Codeless HTTP 400 responses, credential failures, expired upload
 sessions, other conflicts, request timeouts, rate limits, server failures,
 missing-object responses, and non-JSON proxy replies remain retryable.
-Source-head conflicts reconcile with the server's current head. Each signed
-retry uses a fresh signature. After correcting a permanent rejection, a later
-capture or audit can replace the blocked capture; that capture itself is not
-retried.
+Source-head conflicts reconcile with the server's current head, and each signed
+retry uses a fresh signature. After you correct a permanent rejection, a later
+capture or audit can replace the blocked capture, though that capture itself is
+not retried.
 
 When a complete audit finds that a previously captured file is gone, the watcher
 uploads a tombstone for it. The server keeps the sessions already derived from
-that file; see
+that file. See
 [Isolation and processing limits](#isolation-and-processing-limits).
 
-The normal writable `agentsview serve` daemon has its own parser watcher. Run
-both only when local parsed sessions and hosted raw custody are both required;
-doing so intentionally creates two watchers over the same provider roots.
+The normal writable `agentsview serve` daemon runs its own parser watcher. Run
+both only when you need both local parsed sessions and hosted raw custody.
+Running both intentionally creates two watchers over the same provider roots.
 
 ## Upload maintenance
 
 When raw-sync routes are active, `agentsview replica pg serve` cleans upload
-sessions and the private `raw-upload-spool` directory during startup and every
-15 minutes. It expires due open sessions, removes due terminal sessions, and
+sessions and the private `raw-upload-spool` directory at startup and every 15
+minutes. It expires due open sessions, removes due terminal sessions, and
 reconciles orphaned `.part` files through the existing PostgreSQL upload store.
 Each pass uses the existing bound of up to 128 rows per SQL batch and 128 spool
-entries per directory scan. The server keeps its spool cursor between passes.
+entries per directory scan, and the server keeps its spool cursor between
+passes.
 
-Run the same bounded pass on demand with:
+To run the same bounded pass on demand, run:
 
 ```bash
 agentsview source raw clean-uploads
 ```
 
-The command uses the effective PostgreSQL target and data directory paired with
-`pg serve`, so an operator can run it while the server is stopped or when
-cleanup should happen immediately. A short-lived command starts a fresh spool
-cursor, so each invocation inspects at most the first 128 entries returned by
-the spool directory. Repeating the command can revisit the same preserved
-entries. Entries beyond that window require the running server, which keeps its
-cursor between passes. The command checks that the target has the provisioned
-raw-sync schema and write privileges before creating the upload spool. It
-reports `Raw upload cleanup pass completed.` only after the cleanup store closes
+This command uses the effective PostgreSQL target and data directory paired with
+`replica pg serve`, so you can run it while the server is stopped or when you
+want cleanup to happen right away. Because a short-lived command starts a fresh
+spool cursor, each invocation inspects at most the first 128 entries returned by
+the spool directory, and repeating it can revisit the same preserved entries.
+Entries beyond that window require the running server, which keeps its cursor
+between passes. The command checks that the target has the provisioned raw-sync
+schema and write privileges before creating the upload spool, and it prints
+`Raw upload cleanup pass completed.` only after the cleanup store closes
 successfully.
 
 ## HTTP control plane
 
 In legacy mode, `agentsview replica pg serve` registers raw-sync routes when its
 PostgreSQL role has the required custody-table and ingest-job sequence grants. A
-read-only role keeps serving the PostgreSQL UI and API without these routes.
-Explicit hosted mode uses `raw_tenant` and requires the full hosted preflight;
-`raw_derivation` controls its worker. When legacy route requirements are
+read-only role keeps serving the PostgreSQL UI and API without those routes.
+Explicit hosted mode uses `raw_tenant` and requires the full hosted preflight,
+while `raw_derivation` controls its worker. When legacy route requirements are
 missing, startup logs `raw-sync routes disabled; missing requirements:` followed
 by the exact missing table privileges, sequence access, or read-only transaction
 setting.
 
 Explicit hosted mode also requires `UPDATE` on the `tool_calls` columns
 `observed_outcome`, `observed_repeat`, and `sequence_ending`, which hold the
-facts behind tool effectiveness rates. The grant appears in the provisioning
-example above; a table-wide `UPDATE` grant also satisfies it. Without it, or
+facts behind tool effectiveness rates. The provisioning example above includes
+this grant, and a table-wide `UPDATE` grant also satisfies it. Without it, or
 before owner provisioning adds the columns, hosted startup fails with
-`owner provisioning required`. Apply the grant as the schema owner before
-upgrading:
+`owner provisioning required`. Apply the grant as the schema owner before you
+upgrade:
 
 ```sql
 GRANT UPDATE (observed_outcome, observed_repeat, sequence_ending)
   ON hosted_sessions.tool_calls TO hosted_runtime;
 ```
 
-Hosted sessions projected before the upgrade show as not analyzed in tool rate
+Hosted sessions projected before the upgrade appear as not analyzed in tool rate
 coverage. They gain rates when their source changes and the new transcript
 replaces the stored one. Uploading an unchanged transcript keeps the stored row
 and its older signal version, so its calls stay not analyzed.
 
 This release stores Codex Cloud plan usage in a new `session_plan_usage` table.
-A `GRANT ... ON ALL TABLES` covers only the tables that exist when it runs, so
+Because a `GRANT ... ON ALL TABLES` covers only tables that exist when it runs,
 earlier grants do not reach this table. After
 `agentsview replica pg hosted-provision provision` or
 `agentsview replica pg push` creates the table, run the grants below as the
-schema owner. Replace the schema names (`hosted_sessions`, `agentsview`) and the
-role names (`hosted_runtime`, `agentsview_reader`) with your own.
+schema owner. Replace the schema names `hosted_sessions` and `agentsview` and
+the role names `hosted_runtime` and `agentsview_reader` with your own.
 
 In explicit hosted mode, the runtime role needs `SELECT` and `INSERT`. Until it
 has them, hosted startup fails with
@@ -614,16 +624,17 @@ GRANT SELECT, INSERT ON hosted_sessions.session_plan_usage TO hosted_runtime;
 ```
 
 Each read-only role that serves the PostgreSQL UI, such as the reader of a
-legacy schema, needs `SELECT`. Until it has it, `agentsview replica pg serve`
-with that role fails to start with `serve role cannot read the schema` and
-`permission denied for table session_plan_usage`. The schema owner or a database
-administrator grants it:
+legacy schema, needs `SELECT`. Until it has that privilege,
+`agentsview replica pg serve` with that role fails to start with
+`serve role cannot read the schema` and
+`permission denied for table session_plan_usage`. Have the schema owner or a
+database administrator grant it:
 
 ```sql
 GRANT SELECT ON agentsview.session_plan_usage TO agentsview_reader;
 ```
 
-Commit lookups also read the new `retained_commit_links` table; grant it too:
+Commit lookups also read the new `retained_commit_links` table. Grant it too:
 
 ```sql
 GRANT SELECT ON hosted_sessions.retained_commit_links TO hosted_runtime;
@@ -633,7 +644,7 @@ GRANT SELECT ON agentsview.retained_commit_links TO agentsview_reader;
 Upgrading a least-privilege raw-sync role now requires `SELECT` and `UPDATE` on
 `raw_ingest_jobs`, in addition to its existing `INSERT` and sequence `USAGE`.
 Manifest commits retire the previous source head's pending parse job. As the
-schema owner, grant the additional privileges and restart `pg serve`:
+schema owner, grant the extra privileges and restart `replica pg serve`:
 
 ```sql
 GRANT SELECT, UPDATE ON agentsview.raw_ingest_jobs TO raw_sync_runtime;
@@ -641,7 +652,7 @@ GRANT SELECT, UPDATE ON agentsview.raw_ingest_jobs TO raw_sync_runtime;
 
 Upgrading also adds the `friction_findings` table, which the runtime role
 rewrites when it projects a session. Grant it as the schema owner before
-restarting `pg serve`:
+restarting `replica pg serve`:
 
 ```sql
 GRANT SELECT, INSERT, DELETE ON agentsview.friction_findings TO raw_sync_runtime;
@@ -651,10 +662,10 @@ Then run the rollout in [Reparse and rollback](#reparse-and-rollback) so
 sessions projected before the upgrade get findings.
 
 Replace `agentsview` and `raw_sync_runtime` with your schema and runtime role.
-Until these grants are applied, the normal session UI continues to work, but
+Until you apply these grants, the normal session UI keeps working, while
 raw-sync HTTP routes are omitted.
 
-The health read uses `SELECT` on the raw-sync metadata tables and adds no
+The health read uses `SELECT` on the raw-sync metadata tables and needs no
 privilege beyond the grants above.
 
 The implemented routes are:
@@ -671,9 +682,9 @@ The implemented routes are:
 | `POST /api/v1/raw-sync/manifests`       | Access token with the `commit` scope    | Validate and commit one raw generation  |
 
 An empty PATCH finalizes an upload whose accepted offset equals its object
-length, including a zero-byte source file. The server still verifies the
-object's length and SHA-256 digest. An empty PATCH before the full length is
-rejected.
+length, including a zero-byte source file. The server still checks the object's
+length and SHA-256 digest, and it rejects an empty PATCH sent before the full
+length.
 
 These machine routes use their own device credentials and scoped tokens. They do
 not accept the shared bearer token that can protect the rest of a remote
@@ -687,51 +698,53 @@ returned token as `Authorization: Bearer <token>` to
 
 - `source_heads` lists each device, configured root, provider, source key,
   generation, current manifest acceptance time, and independent parse-pending,
-  parse-leased, and parse-failed flags. `last_parse_completed_at` is the
-  latest `updated_at` of a completed parse job for the current manifest,
-  across processing versions. It is `null` for generation-zero heads or when
-  no current parse job has completed.
+  parse-leased, and parse-failed flags. `last_parse_completed_at` is the latest
+  `updated_at` of a completed parse job for the current manifest across
+  processing versions, or `null` for generation-zero heads or when no current
+  parse job has completed.
 - `parse_jobs` counts `ready`, `leased`, `retrying`, `complete`, `failed`, and
   `superseded` parse jobs, including historical generations.
 - `active_device_count` and `devices` report unrevoked devices. Each device's
   `last_seen_at` is its latest token issuance, or `null` when it has no token.
-- `uploads` reports stored-open upload count, remaining bytes, and the oldest
-  open upload. `oldest_open_session` is `null` when no stored-open upload
+- `uploads` reports the stored-open upload count, remaining bytes, and the
+  oldest open upload. `oldest_open_session` is `null` when no stored-open upload
   exists.
 
-Empty `source_heads` and `devices` values are `[]`. A generation-zero head has a
-`null` `last_accepted_at` and false parse flags. Status reads use one read-only
-PostgreSQL transaction and do not expire uploads, alter leases, or change any
-raw-sync state. `agentsview source raw server-status` adds `pipeline_depth`, the
-sum of `ready`, `leased`, and `retrying` parse jobs, including jobs from
-historical generations that the server has not yet superseded. It also adds
+Empty `source_heads` and `devices` values return `[]`. A generation-zero head
+has a `null` `last_accepted_at` and false parse flags. Status reads use one
+read-only PostgreSQL transaction and do not expire uploads, alter leases, or
+change any raw-sync state.
+
+`agentsview source raw server-status` adds `pipeline_depth`, which is the sum of
+`ready`, `leased`, and `retrying` parse jobs, including jobs from historical
+generations that the server has not yet superseded. It also adds
 `last_parse_latency_seconds`, the time from manifest acceptance to completion
-for the most recently completed current head. It includes time waiting to parse
-and is `null` when no current head has both timestamps. It does not measure the
-age of pending work or increase when parsing stalls. A new generation replaces
-its head's previous completion. If the same manifest is parsed again under a new
-processing version, the interval still starts at its original acceptance.
-`last_parse_completed_at` and `last_parse_latency_seconds` stay `null` until
-hosted parsing records completions, while `pipeline_depth` remains the numeric
-sum.
+for the most recently completed current head. That latency includes time spent
+waiting to parse and is `null` when no current head has both timestamps. It does
+not measure the age of pending work or increase when parsing stalls. A new
+generation replaces its head's previous completion, and if the same manifest is
+parsed again under a new processing version, the interval still starts at its
+original acceptance. `last_parse_completed_at` and `last_parse_latency_seconds`
+stay `null` until hosted parsing records completions, while `pipeline_depth`
+stays the numeric sum.
 
 `agentsview source raw status` reads the laptop checkpoint. `server-status`
-reports HTTP 404 as an error and directs the operator to that local command.
-Request failures include their underlying cause; HTTP errors also include the
+reports HTTP 404 as an error and points you to that local command. Request
+failures include their underlying cause, and HTTP errors also include the
 server's error code and message when available.
 
-A status-scoped token can call the health route with positive `max_attempts` and
-`stale_after_seconds` query values. The report covers current accepted manifests
-without parse jobs, expired leased parse jobs, failed parse jobs grouped by
-their stored error class, and retrying jobs at or above
-`greatest(1, max_attempts - 1)`. These counts include only current source heads
-and selected processing versions, so replacing a manifest or parser version
-clears obsolete job warnings.
+With a status-scoped token, you can call the health route with positive
+`max_attempts` and `stale_after_seconds` query values. The report covers current
+accepted manifests without parse jobs, expired leased parse jobs, failed parse
+jobs grouped by their stored error class, and retrying jobs at or above
+`greatest(1, max_attempts - 1)`. Because these counts include only current
+source heads and selected processing versions, replacing a manifest or parser
+version clears obsolete job warnings.
 
 `stale_source_heads` reports parse lag: current manifests accepted at least
 `stale_after_seconds` ago with no completed parse job for a selected processing
-version. It includes pending tombstones but excludes successfully parsed idle
-sessions. Rows expose `accepted_at`, the time used for this threshold. All
+version. It includes pending tombstones and excludes successfully parsed idle
+sessions. Rows expose `accepted_at`, the time used for this threshold, and all
 response timestamps use UTC.
 
 Each affected-row list holds at most 50 rows, failure classes hold at most 20
@@ -740,51 +753,52 @@ messages, and leaves custody and worker state unchanged. The local status
 command still reads the laptop checkpoint.
 
 PostgreSQL stores device, token, manifest, receipt, source-head, and parse-job
-metadata. The raw object repository is opened lazily under `raw-sync/` in the
-configured AgentsView data directory. The HTTP surface is still an internal
-protocol for the AgentsView laptop client, not a supported integration API.
+metadata, while the server opens the raw object repository lazily under
+`raw-sync/` in the configured AgentsView data directory. Treat these HTTP routes
+as an internal protocol for the AgentsView laptop client, not a supported
+integration API.
 
 ## Raw custody contract
 
-The custody foundation accepts a complete logical generation of one provider
-source. A generation is represented by a canonical manifest containing:
+The custody layer accepts a complete logical generation of one provider source.
+A canonical manifest represents each generation and contains:
 
 - the provider, configured source-root identity, and logical source key;
 - a capture identity and capture time;
 - either a snapshot with ordered file-object references or a tombstone; and
 - the expected receipt for the preceding accepted generation.
 
-The custody API accepts authenticated tenant and immutable device identity
-separately from the manifest. The HTTP handlers derive that identity through
-device authentication instead of accepting tenant or device fields in request
-bodies. Canonicalization binds it into the manifest envelope. The canonical JSON
-digest becomes the manifest ID.
+The custody API takes the authenticated tenant and immutable device identity
+separately from the manifest. Instead of accepting tenant or device fields in
+request bodies, the HTTP handlers derive that identity from device
+authentication. Canonicalization binds it into the manifest envelope, and the
+canonical JSON digest becomes the manifest ID.
 
 Raw objects are identified by exact SHA-256 and byte length. Custody is
-tenant-scoped, verifies content before registering it, treats an identical retry
+tenant-scoped, checks content before registering it, treats an identical retry
 as a no-op, and rejects conflicting content. Providers that AgentsView does not
 recognize or excludes from remote sync are rejected before their bytes enter
 custody.
 
 A manifest can commit only after every referenced object exists and verifies.
-The PostgreSQL acceptance transaction then:
+The PostgreSQL acceptance transaction then runs these steps:
 
-1. checks the expected parent receipt against the current source head;
-1. records the manifest, file entries, and ordered object references;
-1. assigns a monotonically increasing generation and durable receipt;
-1. creates the corresponding parse job; and
-1. advances the source head and retires its previous pending parse job.
+1. Check the expected parent receipt against the current source head.
+1. Record the manifest, file entries, and ordered object references.
+1. Assign a monotonically increasing generation and durable receipt.
+1. Create the corresponding parse job.
+1. Advance the source head and retire its previous pending parse job.
 
 Repeating the same capture returns its existing receipt. Reusing a capture
 identity for different content or committing against a stale parent fails
 closed. Accepted manifest metadata is append-only. PostgreSQL holds custody
-metadata and processing state; the object store holds the authoritative raw
+metadata and processing state, and the object store holds the authoritative raw
 bytes and canonical manifests.
 
 ## Device authentication contract
 
 Enrollment creates an immutable device ID and a random credential. The clear
-credential is returned once; PostgreSQL retains only its SHA-256 digest.
+credential is returned once, and PostgreSQL keeps only its SHA-256 digest.
 
 An active device exchanges that credential for an opaque, short-lived token.
 Tokens can be restricted to one or more fixed operations:
@@ -803,36 +817,36 @@ not authorization identity.
 ## Security and deployment boundary
 
 Raw provider files can contain prompts, responses, tool activity, paths, and
-other sensitive data. Hosted raw sync is not end-to-end encrypted: the server
-must be able to read retained source files to parse them.
+other sensitive data. Hosted raw sync is not end-to-end encrypted, because the
+server must be able to read retained source files to parse them.
 
-The implemented foundations isolate object and metadata identities by tenant and
-do not deduplicate across tenants. A production deployment must also provide TLS
-in transit, encryption at rest for object storage, PostgreSQL, backups, and
-worker scratch space, plus access controls around device enrollment and
-revocation. Explicit hosted provisioning installs forced PostgreSQL row-level
-security, tenant constraints and schema binding; runtime validation rejects
-weakened protections. This is one tenant per instance, not request-multiplexed
-tenancy.
+The implemented custody and device authentication foundations isolate object and
+metadata identities by tenant and do not deduplicate across tenants. A
+production deployment must also provide TLS in transit, encryption at rest for
+object storage, PostgreSQL, backups, and worker scratch space, plus access
+controls around device enrollment and revocation. Explicit hosted provisioning
+installs forced PostgreSQL row-level security, tenant constraints, and schema
+binding, and runtime validation rejects weakened protections. This is one tenant
+per instance, not request-multiplexed tenancy.
 
 Treat the HTTP routes as the protocol between the bundled laptop client and a
 hosted AgentsView deployment, not as a general integration API. Enrollment and
-lifecycle controls remain operator-managed; the provisioning and bounded reparse
-commands above are the implemented operator entry points.
+lifecycle controls remain operator-managed, and the provisioning and bounded
+reparse commands above are the implemented operator entry points.
 
 Explicit parent and tool-subagent links first use their own source's historical
-proof. Removed or excluded same-source proof prevents fallback. When no such
-proof exists, a link may resolve across files only within the same tenant,
+proof, and removed or excluded same-source proof prevents fallback. When no such
+proof exists, a link can resolve across files only within the same tenant,
 device, provider, and configured root, and only to one eligible content cohort.
-Conflicting candidates remain unresolved. Fresh session, timing, and sidebar
-reads use this rule. A target-only graph change does not necessarily notify an
-unchanged owner's session stream; graph-only live refresh is not guaranteed.
+Conflicting candidates stay unresolved. Fresh session, timing, and sidebar reads
+use this rule. A target-only graph change does not necessarily notify an
+unchanged owner's session stream, and graph-only live refresh is not guaranteed.
 
 ## Native HTTP request signing
 
 Native HTTP request signing is available in 0.46.0 and later. It adds an
-independent HMAC key to existing device or reader authentication. Browsers
-continue using the normal viewer listener.
+independent HMAC key on top of existing device or reader authentication, while
+browsers keep using the normal viewer listener.
 
 Create private key and replay files in an isolated operator-owned directory:
 
@@ -844,17 +858,17 @@ agentsview signing init-replay /srv/agentsview-signing/request-replay.db
 These commands create new files exclusively. They never overwrite a key or
 replay database and never print the key. A key contains 64 random bytes encoded
 as base64. Key and policy files must be private regular files. Unix-like systems
-reject group and other access. macOS also rejects extended ACL grants to anyone
-other than the current user or root. If a new file inherits an untrusted grant,
-creation fails before writing any key or replay data. Windows applies a private
-ACL when creating the file and accepts grants only for the current user, SYSTEM,
-and built-in Administrators. Do not pass secret values as command arguments or
-place them in ordinary AgentsView configuration.
+reject group and other access, and macOS also rejects extended ACL grants to
+anyone other than the current user or root. If a new file inherits an untrusted
+grant, creation fails before writing any key or replay data. Windows applies a
+private ACL when creating the file and accepts grants only for the current user,
+SYSTEM, and built-in Administrators. Do not pass secret values as command
+arguments or place them in ordinary AgentsView configuration.
 
-An operator supplies a private JSON policy file. This neutral example
-illustrates a contributor grant; use an enrolled immutable device ID. Use
-absolute paths: relative paths resolve against the server's working directory,
-not the policy file's directory.
+Supply a private JSON policy file. The neutral example below shows a contributor
+grant; use an enrolled immutable device ID. Always use absolute paths, because
+relative paths resolve against the server's working directory rather than the
+policy file's directory.
 
 ```json
 {
@@ -872,17 +886,17 @@ not the policy file's directory.
 }
 ```
 
-Set `AGENTSVIEW_MACHINE_SIGNING_POLICY` to this file when starting `serve` or
-`pg serve`. The optional machine listener defaults to `127.0.0.1:18081` and
-rejects non-loopback bindings. It is separate from managed browser proxy setup
-and never opens a public route. It serves plain HTTP to a trusted TLS terminator
-on the same host, and accepts connections only from loopback addresses. The
-terminator must remove exactly the external prefix and preserve the remaining
-path and raw query. Forwarded headers never determine the signature authority or
-grant localhost privileges. Only requests that pass signature verification are
-written to the request log.
+Set `AGENTSVIEW_MACHINE_SIGNING_POLICY` to this file when you start `serve` or
+`replica pg serve`. The optional machine listener defaults to `127.0.0.1:18081`
+and rejects non-loopback bindings. It is separate from managed browser proxy
+setup and never opens a public route. It serves plain HTTP to a trusted TLS
+terminator on the same host and accepts connections only from loopback
+addresses. The terminator must remove the exact external prefix and preserve the
+remaining path and raw query. Forwarded headers never determine the signature
+authority or grant localhost privileges, and only requests that pass signature
+verification are written to the request log.
 
-Native clients enable signing with these environment variables:
+Native clients turn on signing with these environment variables:
 
 ```sh
 export AGENTSVIEW_SIGNING_URL=https://history.example.com/native
@@ -896,13 +910,13 @@ token for reader commands and MCP HTTP access. A reader policy entry uses
 main `auth_token`, so a reader machine also holds full access to the main
 listener wherever that listener is reachable.
 
-Clients sign only requests to the origin in `AGENTSVIEW_SIGNING_URL`. Requests
-to any other host, such as a local daemon or an HTTP remote-sync peer, keep
-their existing unsigned transport. On the signing host, plain HTTP and paths
-outside the configured prefix fail before credentials are sent. Signed clients
-never follow redirects, and signing never falls back after rejection. MCP
-results from a signed server omit browser session links, because the machine
-listener serves no browser UI.
+Clients sign only requests sent to the origin in `AGENTSVIEW_SIGNING_URL`.
+Requests to any other host, such as a local daemon or an HTTP remote-sync peer,
+keep their existing unsigned transport. On the signing host, plain HTTP and
+paths outside the configured prefix fail before credentials are sent. Signed
+clients never follow redirects, and signing never falls back after rejection.
+Because the machine listener serves no browser UI, MCP results from a signed
+server omit browser session links.
 
 | Grant       | Supported operations                                                                                                                                                                                                                                                                                           |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -913,100 +927,105 @@ Reader memory queries always skip usage recording on the server. The machine
 version response advertises read-only capabilities and non-recording recall
 through `X-Agentsview-Recall-Queries: non-recording`. Reader bearer
 authentication is required even if the main listener does not require it.
-Contributor grants bind one device; native tokens still determine the tenant,
-expiry and operation scopes. Valid signing never admits configuration/credential
-management, shutdown, sync, publishing, resume/execution, directory opening,
-arbitrary filesystem reads, profiling or other unlisted operations.
-Localhost-only search reveal is denied.
+Contributor grants bind one device, and native tokens still determine the
+tenant, expiry, and operation scopes. Valid signing never admits configuration
+or credential management, shutdown, sync, publishing, resume or execution,
+directory opening, arbitrary filesystem reads, profiling, or other unlisted
+operations. Localhost-only search reveal is denied.
 
 ### Wire and resource limits
 
 The strict [RFC 9421](https://www.rfc-editor.org/rfc/rfc9421.html) profile uses
 `sig1` and `hmac-sha256`. Ordered covered components are `@method`,
 `@target-uri`, `content-digest`, `content-type`, `authorization`,
-`x-agentsview-device-id`, `upload-offset` and `x-agentsview-search-intent`.
+`x-agentsview-device-id`, `upload-offset`, and `x-agentsview-search-intent`.
 Optional fields are explicitly present with empty values. The final
-signature-base line is `@signature-params`; there is no trailing newline.
-Parameters are ordered `created`, `expires`, `nonce`, `keyid`, `alg`. Signatures
-last at most 30 seconds, allow five seconds of future clock skew, and use a
-fresh 24-byte random base64url nonce per explicit transport attempt. Expiry is
-exclusive and is checked when the request headers arrive, so a slow body may
-finish after the signature expires. Key IDs use 1–128 ASCII letters, digits,
-periods, underscores or hyphens. The MAC must be exactly 32 bytes.
+signature-base line is `@signature-params`, with no trailing newline. Parameters
+are ordered `created`, `expires`, `nonce`, `keyid`, `alg`. Signatures last at
+most 30 seconds, allow five seconds of future clock skew, and use a fresh
+24-byte random base64url nonce per explicit transport attempt. Expiry is
+exclusive and checked when the request headers arrive, so a slow body can finish
+after the signature expires. Key IDs use 1 to 128 ASCII letters, digits,
+periods, underscores, or hyphens, and the MAC must be exactly 32 bytes.
 
 [RFC 9530](https://www.rfc-editor.org/rfc/rfc9530.html) `Content-Digest` covers
-the exact body bytes, including empty bodies. The signer supplies
-`application/octet-stream` when no content type is set. Signed bodies are
-bounded to 4 MiB in memory; existing smaller control-route limits still apply.
-The listener serves at most 32 concurrent signed requests, including at most
-eight event or session streams, and returns `503` with `request_signing_busy`
-when either limit is full. Header verification and body transfers each run at
-most eight at a time; further requests wait for a slot instead of failing, and
-requests without a body never wait for uploads. Headers and targets are limited
-to 16 KiB, header reads to five seconds, and each body transfer to two minutes,
-so a 4 MiB upload chunk needs about 280 kbit/s. The verifier authenticates
-headers before reading a body, checks its digest, then rechecks policy and
-native credentials before durable replay admission. Admission must finish within
-150 seconds after the signature expires.
+the exact body bytes, including empty bodies. When no content type is set, the
+signer supplies `application/octet-stream`. Signed bodies are bounded to 4 MiB
+in memory, and existing smaller control-route limits still apply. The listener
+serves at most 32 concurrent signed requests, including at most eight event or
+session streams, and returns `503` with `request_signing_busy` when either limit
+is full. Header verification and body transfers each run at most eight at a
+time. Further requests wait for a slot instead of failing, and requests without
+a body never wait for uploads. Headers and targets are limited to 16 KiB, header
+reads to five seconds, and each body transfer to two minutes, so a 4 MiB upload
+chunk needs about 280 kbit/s. The verifier authenticates headers before reading
+a body, checks its digest, then rechecks policy and native credentials before
+durable replay admission. Admission must finish within 150 seconds after the
+signature expires.
 
-Only canonical origin-form paths are supported: encoded path aliases, percent
-encoded path segments, dot segments, repeated slashes and backslashes are
-rejected. Raw query order and encoding, including a trailing `?`, remain signed.
-Duplicate covered fields or signature parameters, alternate signature syntax,
-trailers and content encoding are rejected. A prefix change requires restarting
-the listener and updating clients. Opaque retries inside Go's HTTP transport may
-replay a signature and be rejected; explicit token-refresh, upload recovery and
-stream reconnect attempts receive fresh signatures.
+Only canonical origin-form paths are supported. Encoded path aliases,
+percent-encoded path segments, dot segments, repeated slashes, and backslashes
+are rejected. Raw query order and encoding, including a trailing `?`, remain
+signed. Duplicate covered fields or signature parameters, alternate signature
+syntax, trailers, and content encoding are rejected. Changing the prefix
+requires restarting the listener and updating clients. Opaque retries inside
+Go's HTTP transport can replay a signature and be rejected, whereas explicit
+token-refresh, upload recovery, and stream reconnect attempts receive fresh
+signatures.
 
 ### Rotation, recovery and deployment prerequisites
 
 The server rereads the policy and key files for each request, and again after
-the body arrives and before nonce admission. Add a new key ID, provision its
-private file to the native client, switch the client, then remove the old policy
-entry. Removal or an unreadable or invalid policy fails closed; already admitted
-requests may finish. Listener URL, prefix, state or binding changes require
-restart. Revoking a device remains the independent way to revoke native upload
-credentials and tokens.
+the body arrives and before nonce admission. To rotate a key, add a new key ID,
+provision its private file to the native client, switch the client, and then
+remove the old policy entry. Removal or an unreadable or invalid policy fails
+closed, though already admitted requests can finish. Listener URL, prefix,
+state, or binding changes require a restart. Revoking a device remains the
+independent way to revoke native upload credentials and tokens.
 
 The dedicated SQLite replay database is separate from the session archive.
 [EXTRA durability](https://www.sqlite.org/pragma.html#pragma_synchronous)
 flushes database and journal writes before dispatch. Unix-like systems also sync
-the containing directory after initial creation and journal deletion. SQLite's
-Windows VFS does not sync directories. Transactions admit hashed nonces, retain
-each nonce until 150 seconds after its signature expires, bound live state to
-100,000 entries, and retain a wall-clock watermark. Concurrent processes
-accepting the same keys must share this database on a supported local
-filesystem. Separate hosts require disjoint keys; copying independent replay
-files is unsafe. Clock rollback, exhausted state, lock timeout, missing/corrupt
-state or failed persistence denies requests. Never delete or restore older
-replay state to clear an error. If state is lost, revoke and rotate every
-accepted key before explicitly initializing a new file. The session archive is
-never changed by replay recovery. A handler failure still consumes its nonce;
-retry with a fresh signature and the existing idempotent upload/receipt
-protocol.
+the containing directory after initial creation and journal deletion, while
+SQLite's Windows VFS does not sync directories. Transactions admit hashed
+nonces, retain each nonce until 150 seconds after its signature expires, bound
+live state to 100,000 entries, and retain a wall-clock watermark. Concurrent
+processes accepting the same keys must share this database on a supported local
+filesystem. Separate hosts require disjoint keys, and copying independent replay
+files is unsafe. Clock rollback, exhausted state, lock timeout, missing or
+corrupt state, or failed persistence denies requests. Never delete or restore
+older replay state to clear an error. If state is lost, revoke and rotate every
+accepted key before you explicitly initialize a new file. Replay recovery never
+changes the session archive. A handler failure still consumes its nonce. Retry
+with a fresh signature and the existing idempotent upload and receipt protocol.
 
 If `signing init-replay` fails after creating its file, it retains that file and
-will not overwrite it on retry. Stop the machine listener, retain the failed
-file, revoke and rotate every accepted signing key, then initialize a different
-private path with `agentsview signing init-replay ./request-replay-new.db`.
-Update `replay_db` in the policy and restart the listener. This recovery also
-applies to missing or corrupt state. Retaining the failed file avoids deleting
-state another process might have opened during initialization.
+does not overwrite it on retry. To recover from a failed initialization, or from
+missing or corrupt state:
+
+1. Stop the machine listener and keep the failed file.
+1. Revoke and rotate every accepted signing key.
+1. Initialize a different private path with
+   `agentsview signing init-replay ./request-replay-new.db`.
+1. Update `replay_db` in the policy and restart the listener.
+
+Keeping the failed file avoids deleting state another process might have opened
+during initialization.
 
 Raw capture still needs local provider discovery, consistent source snapshots,
-bounded spool space and durable upload checkpoints. Signing does not create a
-second ingestion pipeline or provide missing quota, retention or backfill
-features. Direct `pg push` and PostgreSQL reads use database protocols; HTTP
-signing does not protect them. HTTP reader/search/memory/MCP functionality is
+bounded spool space, and durable upload checkpoints. Signing does not create a
+second ingestion pipeline or add missing quota, retention, or backfill features.
+Direct `replica pg push` and PostgreSQL reads use database protocols. HTTP
+signing does not protect them. HTTP reader, search, memory, and MCP behavior is
 limited by the hosted server's independently available projection and indexes.
-Storage objects continue through the native upload route; this change introduces
-no presigned object-storage URL transport or forwarding of API credentials to
-storage origins.
+Storage objects continue through the native upload route, with no presigned
+object-storage URL transport or forwarding of API credentials to storage
+origins.
 
 Before exposing any route, verify the supporting release, enroll least-privilege
-credentials, select an external prefix, verify TLS certificates and trusted
-rewriting, and probe allowed/denied/unsigned/tampered/replayed requests from
-outside the network. Plan rollback by removing the machine route and stopping
-its listener while retaining replay state; revoke signing keys and native device
-credentials separately. No public routing or deployment is performed by this
-feature.
+credentials, choose an external prefix, verify TLS certificates and trusted
+rewriting, and probe allowed, denied, unsigned, tampered, and replayed requests
+from outside the network. To plan a rollback, remove the machine route and stop
+its listener while keeping replay state, and revoke signing keys and native
+device credentials separately. This feature performs no public routing or
+deployment.
