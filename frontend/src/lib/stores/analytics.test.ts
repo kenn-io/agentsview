@@ -319,28 +319,64 @@ describe("AnalyticsStore.setSkillsGranularity", () => {
 });
 
 describe("AnalyticsStore freshness state", () => {
-  it("starts saved panels before the other dashboard requests", async () => {
+  it("updates saved panels while other dashboard requests occupy the queue", async () => {
     await analytics.fetchAll();
 
-    const saved = [
-      analyticsService.getApiV1AnalyticsVelocity,
-      analyticsService.getApiV1AnalyticsTools,
-      analyticsService.getApiV1AnalyticsSignals,
-    ];
-    const other = [
-      analyticsService.getApiV1AnalyticsSummary,
-      analyticsService.getApiV1AnalyticsActivity,
-      analyticsService.getApiV1AnalyticsHeatmap,
-      analyticsService.getApiV1AnalyticsProjects,
-      analyticsService.getApiV1AnalyticsHourOfWeek,
-      analyticsService.getApiV1AnalyticsSessions,
-      analyticsService.getApiV1AnalyticsSkills,
-      analyticsService.getApiV1AnalyticsTopSessions,
-    ];
-    for (const request of [...saved, ...other]) expect(request).toHaveBeenCalledOnce();
-    expect(Math.max(...saved.map((request) => request.mock.invocationCallOrder[0]))).toBeLessThan(
-      Math.min(...other.map((request) => request.mock.invocationCallOrder[0])),
+    let active = 0;
+    let releaseOthers!: () => void;
+    const otherRequests = new Promise<void>((resolve) => {
+      releaseOthers = resolve;
+    });
+    const queue: (() => void)[] = [];
+    const request = (response: unknown, saved = false) =>
+      new Promise((resolve) => {
+        const start = () => {
+          active++;
+          void (saved ? Promise.resolve() : otherRequests).then(() => {
+            resolve(response);
+            active--;
+            queue.shift()?.();
+          });
+        };
+        if (active < 6) start();
+        else queue.push(start);
+      });
+
+    const velocity = makeVelocity();
+    velocity.overall.msgs_per_active_min = 12;
+    const tools = { ...makeTools(), total_calls: 34 };
+    const signals = { ...makeSignals(), scored_sessions: 56 };
+    analyticsService.getApiV1AnalyticsVelocity.mockImplementation(() => request(velocity, true));
+    analyticsService.getApiV1AnalyticsTools.mockImplementation(() => request(tools, true));
+    analyticsService.getApiV1AnalyticsSignals.mockImplementation(() => request(signals, true));
+    analyticsService.getApiV1AnalyticsSummary.mockImplementation(() => request(makeSummary()));
+    analyticsService.getApiV1AnalyticsActivity.mockImplementation(() => request(makeActivity()));
+    analyticsService.getApiV1AnalyticsHeatmap.mockImplementation(() => request(makeHeatmap()));
+    analyticsService.getApiV1AnalyticsProjects.mockImplementation(() => request(makeProjects()));
+    analyticsService.getApiV1AnalyticsHourOfWeek.mockImplementation(() =>
+      request(makeHourOfWeek()),
     );
+    analyticsService.getApiV1AnalyticsSessions.mockImplementation(() =>
+      request(makeSessionShape()),
+    );
+    analyticsService.getApiV1AnalyticsSkills.mockImplementation(() => request(makeSkills()));
+    analyticsService.getApiV1AnalyticsTopSessions.mockImplementation(() =>
+      request(makeTopSessions()),
+    );
+
+    const pending = analytics.fetchAll();
+    try {
+      await vi.waitFor(() => {
+        expect(analytics.velocity?.overall.msgs_per_active_min).toBe(12);
+        expect(analytics.tools?.total_calls).toBe(34);
+        expect(analytics.signals?.scored_sessions).toBe(56);
+      });
+      expect(active).toBe(6);
+      expect(queue.length).toBeGreaterThan(0);
+    } finally {
+      releaseOthers();
+      await pending;
+    }
   });
 
   it("records Quality freshness without changing dashboard freshness", async () => {
