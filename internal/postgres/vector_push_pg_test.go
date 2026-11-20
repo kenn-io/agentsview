@@ -40,7 +40,6 @@ type fakeVectorSource struct {
 	genOverride  func(call int, sessionIDs []string) (storage.VectorGenerationInfo, bool, error)
 	genScopes    [][]string // sessionIDs of each Generation call
 	hashScopes   [][]string // sessionIDs of each SessionDocHashes call
-	hashesHook   func()
 }
 
 func (f *fakeVectorSource) BeginExport(
@@ -69,11 +68,6 @@ func (e *fakeVectorExport) Generation() storage.VectorGenerationInfo { return e.
 func (e *fakeVectorExport) SessionDocHashes(
 	ctx context.Context, sessionIDs []string,
 ) (map[string]string, error) {
-	if e.source.hashesHook != nil {
-		hook := e.source.hashesHook
-		e.source.hashesHook = nil
-		hook()
-	}
 	e.source.hashScopes = append(e.source.hashScopes, append([]string(nil), sessionIDs...))
 	if sessionIDs == nil {
 		return e.source.hashes, nil
@@ -1173,7 +1167,7 @@ func TestVectorPushLazyChunkAttachment(t *testing.T) {
 		require.True(t, ok)
 		src.hashes["A"] = "changed"
 		src.hashScopes = nil
-		src.hashesHook = func() {
+		sync.afterVectorGenerationLookup = func() {
 			for _, q := range []string{
 				`DELETE FROM sessions WHERE id = 'A'`,
 				`DROP TABLE ` + vectorChunkTable(id),
