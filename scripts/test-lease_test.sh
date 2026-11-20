@@ -33,6 +33,7 @@ PROBE
       printf '%s\n' "$TEST_SERVICE_LEASE" > "$CHECK_LEASE"
     fi
     if [ -n "${STALL_UP:-}" ]; then
+      if [ -n "${SIGNAL_FIXTURE:-}" ]; then exec python3 "$SIGNAL_FIXTURE"; fi
       touch "$STALL_UP"
       sleep 5
     fi ;;
@@ -197,6 +198,69 @@ launcher=
 [[ $((SECONDS - started)) -lt 5 ]]
 grep -qE -- '-p agentsview-.* down -v --remove-orphans' "$DOCKER_LOG"
 unset STALL_UP CHECK_LEASE
+
+# Signal the supervisor started by the public target, with a descendant still
+# holding the lease during Compose startup and during the nested test command.
+cat > "$tmp/signal-child.py" <<'PY'
+import os
+import signal
+import time
+
+if os.fork():
+    os.wait()
+    raise SystemExit(0)
+
+def stop(signum, frame):
+    open(os.environ["SIGNAL_SEEN"], "w").close()
+    deadline = time.monotonic() + 10
+    while not os.path.exists(os.environ["DESC_RELEASE"]) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    open(os.environ["SIGNAL_EXITED"], "w").close()
+    raise SystemExit(128 + signum)
+
+signal.signal(signal.SIGTERM, stop)
+signal.alarm(15)
+open(os.environ["SIGNAL_READY"], "w").close()
+signal.pause()
+PY
+cat > "$tmp/bin/go" <<'SH'
+#!/bin/sh
+[ "$1" = env ] && exit 0
+exec python3 "$SIGNAL_FIXTURE"
+SH
+chmod +x "$tmp/bin/go"
+export SIGNAL_FIXTURE="$tmp/signal-child.py" SIGNAL_READY="$tmp/public-ready" SIGNAL_SEEN="$tmp/public-signal" SIGNAL_EXITED="$tmp/public-exited" CHECK_LEASE="$tmp/public-project"
+for phase in setup test; do
+    find "$SIGNAL_READY" "$SIGNAL_SEEN" "$SIGNAL_EXITED" "$DESC_RELEASE" "$CHECK_LEASE" -maxdepth 0 -delete 2>/dev/null || true
+    : > "$DOCKER_LOG"
+    : > "$CHECK_CLEANUP"
+    if [[ $phase == setup ]]; then export STALL_UP=1; else unset STALL_UP; fi
+    (cd "$root" && exec make -o pricing-snapshot -o ensure-embed-dir test-postgres) >"$tmp/public-$phase.log" 2>&1 &
+    launcher=$!
+    for _ in {1..100}; do [[ -f "$SIGNAL_READY" ]] && break; sleep .1; done
+    [[ -f "$SIGNAL_READY" ]] || { cat "$tmp/public-$phase.log"; exit 1; }
+    project=$(cat "$CHECK_LEASE")
+    lease="$HOME/.local/state/test-service-leases/$project"
+    if probe; then echo 'public target lost its lease' >&2; exit 1; fi
+    supervisor=${project##*-}
+    [[ $(ps -p "$supervisor" -o args=) == *'python3 - agentsview'* ]]
+    kill -TERM "$supervisor"
+    for _ in {1..100}; do [[ -f "$SIGNAL_SEEN" ]] && break; sleep .1; done
+    [[ -f "$SIGNAL_SEEN" ]] || { cat "$tmp/public-$phase.log"; exit 1; }
+    [[ ! -s "$CHECK_CLEANUP" ]] || { echo 'cleanup ran before the descendant exited' >&2; exit 1; }
+    touch "$DESC_RELEASE"
+    set +e
+    wait "$launcher"
+    status=$?
+    set -e
+    launcher=
+    [[ $status == 2 && -f "$SIGNAL_EXITED" ]]
+    [[ $(wc -l < "$CHECK_CLEANUP") == 1 ]]
+    grep -qE -- "-p $project .* down -v --remove-orphans" "$DOCKER_LOG"
+    probe
+done
+unset STALL_UP SIGNAL_FIXTURE SIGNAL_READY SIGNAL_SEEN SIGNAL_EXITED CHECK_LEASE
+find "$tmp/bin/go" -delete
 
 # Two overlapping runs select different projects and clean up their own project.
 export TEST_SERVICE_LEASE=agentsview-parent-123
