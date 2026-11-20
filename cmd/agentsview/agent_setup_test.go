@@ -407,3 +407,49 @@ func TestAgentSetupWithoutMCPRejectsPrint(t *testing.T) {
 	require.EqualError(t, err, "--print requires MCP setup; remove --mcp=false")
 	require.Empty(t, out)
 }
+
+func TestAgentSetupWithoutMCPTwoAgentsPartialFailure(t *testing.T) {
+	home := t.TempDir()
+	setDoctorMemoryTestEnvironment(t, home)
+	fakeAgent(t, "claude", "")
+	fakeAgent(t, "codex", "")
+	claudeConfig := filepath.Join(home, ".claude.json")
+	codexConfig := filepath.Join(home, ".codex", "config.toml")
+	claudeEntry := `{"mcpServers":{"agentsview":{"command":"custom-claude"}}}`
+	codexEntry := "[mcp_servers.agentsview]\ncommand = 'custom-codex'\n"
+	require.NoError(t, os.MkdirAll(filepath.Dir(codexConfig), 0o700))
+	require.NoError(t, os.WriteFile(claudeConfig, []byte(claudeEntry), 0o600))
+	require.NoError(t, os.WriteFile(codexConfig, []byte(codexEntry), 0o600))
+	out, err := executeCommand(newRootCommand(), "agent", "setup", "--agent", "claude", "--mcp=false")
+	require.NoError(t, err, out)
+	skill := filepath.Join(skills.TargetDir(skills.HarnessClaude, home), skillFileName)
+	data, err := os.ReadFile(skill)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(skill, append(data, []byte("\ncustom edit\n")...), 0o600))
+	out, err = executeCommand(newRootCommand(), "agent", "setup", "--agent", "claude", "--agent", "codex", "--mcp=false", "--json")
+	require.Error(t, err)
+	var report struct {
+		Rows []struct {
+			Agent    string `json:"agent"`
+			State    string `json:"state"`
+			Reason   string `json:"reason"`
+			NextStep string `json:"next_step"`
+		} `json:"rows"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &report), out)
+	require.Len(t, report.Rows, 2)
+	require.Equal(t, "claude", report.Rows[0].Agent)
+	require.Equal(t, "failed", report.Rows[0].State)
+	require.Equal(t, "Skill files were edited", report.Rows[0].Reason)
+	require.Equal(t, "agentsview agent setup --mcp=false --agent claude --force", report.Rows[0].NextStep)
+	require.Equal(t, "codex", report.Rows[1].Agent)
+	require.Equal(t, "ok", report.Rows[1].State)
+	_, err = os.Stat(filepath.Join(skills.TargetDir(skills.HarnessAgents, home), skillFileName))
+	require.NoError(t, err)
+	data, err = os.ReadFile(claudeConfig)
+	require.NoError(t, err)
+	require.Equal(t, claudeEntry, string(data))
+	data, err = os.ReadFile(codexConfig)
+	require.NoError(t, err)
+	require.Equal(t, codexEntry, string(data))
+}

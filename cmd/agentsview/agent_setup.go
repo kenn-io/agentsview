@@ -48,15 +48,13 @@ func newAgentCommand() *cobra.Command {
 			Agents: agents, CheckOnly: check, SetupCommand: "agentsview agent setup --mcp=false",
 			Items: func(agent string) ([]agentsetup.Item, error) { return setupItems(agent, force, false) },
 		})
-		for _, name := range []string{"json", "print"} {
-			value, err := cmd.Flags().GetBool(name)
-			if err != nil {
+		jsonOutput, err := cmd.Flags().GetBool("json")
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			if err := setup.Flags().Set("json", "true"); err != nil {
 				return err
-			}
-			if value {
-				if err := setup.Flags().Set(name, "true"); err != nil {
-					return err
-				}
 			}
 		}
 		setup.SetOut(cmd.OutOrStdout())
@@ -138,7 +136,7 @@ func setupItems(agent string, force, withMCP bool) ([]agentsetup.Item, error) {
 		Install: func(context.Context) error {
 			err := runSkillsInstall(io.Discard, []skills.Harness{harness}, home, force, skillRemote)
 			if _, refused := errors.AsType[skillInstallRefusal](err); refused && !withMCP {
-				return fmt.Errorf("Skill files were edited: %w", err)
+				return errors.New("Skill files were edited")
 			}
 			return err
 		},
