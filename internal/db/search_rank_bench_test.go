@@ -68,17 +68,22 @@ func BenchmarkSearchCommonContentAndTitleWord(b *testing.B) {
 
 func BenchmarkSearchDateRank(b *testing.B) {
 	d := seedSearchRankBenchmark(b)
-	for _, tc := range []struct{ name, from string }{
-		{"broad", "2026-03-02"},
-		{"selective", "2026-05-20"},
+	// Each session contributes 25 hits, so the sample can fill the small
+	// broad page but selects full ranking for the 25-result page.
+	for _, tc := range []struct {
+		name, from string
+		limit      int
+	}{
+		{"broad", "2026-03-02", 1},
+		{"selective", "2026-05-20", 25},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			d.readOnly = true // Measure the search rather than its result cache.
 			defer func() { d.readOnly = false }()
 			for b.Loop() {
-				page, err := d.Search(b.Context(), SearchFilter{Query: "handler", DateFrom: tc.from, Limit: 25})
+				page, err := d.Search(b.Context(), SearchFilter{Query: "handler", DateFrom: tc.from, Limit: tc.limit})
 				require.NoError(b, err)
-				require.Len(b, page.Results, 25)
+				require.Len(b, page.Results, tc.limit)
 			}
 		})
 	}

@@ -158,7 +158,7 @@ func TestSubstringSearchesAndAnalyticsCanReadTogether(t *testing.T) {
 		connections = append(connections, conn)
 		var once sync.Once
 		require.NoError(t, conn.Raw(func(raw any) error {
-			raw.(*diagnosticReaderConn).SQLiteConn.RegisterAuthorizer(func(op int, _, _, _ string) int {
+			raw.(*diagnosticReaderConn).RegisterAuthorizer(func(op int, _, _, _ string) int {
 				if op == sqlite3.SQLITE_READ {
 					once.Do(func() {
 						started <- struct{}{}
@@ -193,7 +193,7 @@ func TestSubstringSearchesAndAnalyticsCanReadTogether(t *testing.T) {
 		select {
 		case <-started:
 		case <-deadline.C:
-			t.Fatal("searches and analytics did not all reach the reader pool")
+			require.FailNow(t, "searches and analytics did not all reach the reader pool")
 		}
 	}
 	quickCtx, cancel := context.WithTimeout(t.Context(), 2*time.Second)

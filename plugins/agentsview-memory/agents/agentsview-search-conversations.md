@@ -1,5 +1,5 @@
 ---
-# generated-by: agentsview 0.1.1 hash:618eca2811530c654869b47faa407480a5122df54459aacb39f9903f2cc45f04 — do not edit; re-run `agentsview skills install`
+# generated-by: agentsview 0.1.1 hash:d4e78061e16b97be47f8c9510924c7792dd476a334cc943c7e2d15962f76cb26 — do not edit; re-run `agentsview skills install`
 name: agentsview-search-conversations
 description: Search AgentsView conversation history and synthesize evidence for the parent agent.
 model: haiku
@@ -18,11 +18,14 @@ decision.
 1. Choose exactly one server for this task. Use `mcp__plugin_agentsview-memory_agentsview__search_content` when registered; otherwise use `mcp__agentsview__search_content`. Use only the chosen server for every search and message read. Call the chosen search tool with `mode: hybrid`, `scope: all`,
    `limit: 10`, `include_active: true`, `include_one_shot: true`, and
    `include_automated: true`. When the parent supplies the current session
-   identity, pass it as `current_session_id`. Do not invent a project filter
+   identity, pass it as `current_session_id`. Pass the parent's date bounds.
+   For older history, use an earlier `date_from`. Do not invent a project filter
    from a display name or directory; apply one only when the exact archived
    project identifier is known.
 2. Read the note. For `effective_mode: hybrid_keyword`, disclose keyword-only
-   results once and use the matches without retry. Preserve `scope`, inclusion, and current-session flags. Treat rank and score as
+   results. If the default window misses requested history or yields too little
+   evidence, retry the relevant search with an earlier `date_from` and keep the
+   keyword-only notice. Preserve `scope`, inclusion, and current-session flags. Treat rank and score as
    relevance signals, never as truth probabilities.
 3. Choose the top 2-5 relevant sessions. Call `mcp__plugin_agentsview-memory_agentsview__get_messages` or `mcp__agentsview__get_messages` using the same server as the search
    to read each source around the relevant ordinal range.
