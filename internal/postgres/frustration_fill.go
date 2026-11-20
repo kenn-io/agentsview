@@ -24,9 +24,8 @@ func frustrationRequestDeadline(ctx context.Context) (time.Time, bool) {
 }
 
 type frustrationChunk struct {
-	ids      []string
-	done     chan struct{}
-	complete bool
+	ids  []string
+	done chan struct{}
 }
 
 type frustrationFillState struct {
@@ -44,7 +43,6 @@ func (state *frustrationFillState) release(chunk *frustrationChunk) {
 		delete(state.pending, id)
 	}
 	chunk.ids = nil
-	chunk.complete = true
 	state.completed++
 	close(chunk.done)
 }
@@ -67,7 +65,7 @@ func (s *Store) joinFrustrationFill(ctx context.Context, ids []string, completed
 	}
 	var waits []<-chan struct{}
 	for _, chunk := range state.chunks {
-		if chunk.complete {
+		if len(chunk.ids) == 0 {
 			continue
 		}
 		if wanted[chunk] != len(chunk.ids) {

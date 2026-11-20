@@ -402,7 +402,7 @@ func TestFrustrationFillJoinsCoveredRequests(t *testing.T) {
 	}
 	mixedRows := append(append([]db.SignalRow{}, savedRows...), firstRows...)
 	mixedDone := make(chan error, 1)
-	mixedCtx, cancelMixed := context.WithTimeout(coveredCtx, 3*time.Second)
+	mixedCtx, cancelMixed := context.WithTimeout(coveredCtx, 20*time.Second)
 	defer cancelMixed()
 	go func() {
 		mixedDone <- store.populateFrustrationMarkers(mixedCtx, mixedRows, versions, f.versionColumn)
@@ -441,7 +441,12 @@ func TestFrustrationFillJoinsCoveredRequests(t *testing.T) {
 		t.Fatal("uncovered request waited for the fill")
 	}
 	require.NoError(t, tx.Rollback())
-	require.NoError(t, <-mixedDone)
+	select {
+	case err := <-mixedDone:
+		require.NoError(t, err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("request waited for the unrelated chunk")
+	}
 	for _, row := range mixedRows {
 		if row.ID == "one" {
 			require.Equal(t, 1, row.FrustrationMarkerCount)
@@ -602,12 +607,14 @@ func TestFrustrationFillJoinsNonUTCDateBoundaries(t *testing.T) {
 }
 
 func TestFrustrationFillRequestReservesScanTime(t *testing.T) {
-	for _, shared := range []bool{false, true} {
-		name := "direct"
-		if shared {
-			name = "shared"
-		}
+	for _, name := range []string{"direct", "shared", "join limit"} {
 		t.Run(name, func(t *testing.T) {
+			shared := name == "shared"
+			if name == "join limit" {
+				previous := frustrationJoinWait
+				frustrationJoinWait = time.Second
+				defer func() { frustrationJoinWait = previous }()
+			}
 			server, _ := testPGServer(t)
 			if shared && server.cockroach {
 				t.Skip("shared analytics requires the PostgreSQL usage journal")
@@ -631,6 +638,8 @@ func TestFrustrationFillRequestReservesScanTime(t *testing.T) {
 			defer gate.Rollback()
 			_, err = gate.ExecContext(f.ctx, `SELECT 1 FROM session_frustration_counts WHERE session_id='one' FOR UPDATE`)
 			require.NoError(t, err)
+			counter := &frustrationScanCounter{storeExecutor: store.pg}
+			store.pg = counter
 			stop := store.StartFrustrationFill(f.ctx)
 			defer func() { gate.Rollback(); stop() }()
 			state := &store.runtimeState().frustrationFill
@@ -639,11 +648,18 @@ func TestFrustrationFillRequestReservesScanTime(t *testing.T) {
 				defer state.mu.Unlock()
 				return state.pending["one"] != nil && state.pending["two"] != nil
 			}, 10*time.Second, 10*time.Millisecond)
-			ctx, cancel := context.WithTimeout(f.ctx, 3*time.Second)
-			defer cancel()
+			ctx := context.WithValue(f.ctx, frustrationScanKey{}, true)
+			if name != "join limit" {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, 3*time.Second)
+				defer cancel()
+			}
 			result, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
 			require.NoError(t, err)
 			require.Equal(t, 2, result.QualityHealth.Totals.FrustrationMarkerCount)
+			if name == "join limit" {
+				require.EqualValues(t, 1, counter.scans.Load(), "request must scan while fill remains blocked")
+			}
 		})
 	}
 }
