@@ -101,7 +101,7 @@ func setupItems(agent string, force, withMCP bool) ([]agentsetup.Item, error) {
 					state = agentsetup.StateOutdated
 				}
 			case "modified", "foreign":
-				next := "agentsview agent setup --force"
+				next := fmt.Sprintf("agentsview agent setup --agent %s --force", agent)
 				if !withMCP {
 					next = fmt.Sprintf("agentsview agent setup --mcp=false --agent %s --force", agent)
 				}

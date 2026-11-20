@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -138,6 +139,57 @@ func TestAgentSetupUpdatesOrProtectsSkillChanges(t *testing.T) {
 			got, err := os.ReadFile(path)
 			require.NoError(t, err)
 			require.Equal(t, freshClaudeSkill(t).Content, string(got))
+		})
+	}
+}
+
+func TestAgentSetupSkillRepairPreservesOtherAgent(t *testing.T) {
+	for _, withMCP := range []bool{true, false} {
+		t.Run(fmt.Sprintf("mcp=%t", withMCP), func(t *testing.T) {
+			home := t.TempDir()
+			setDoctorMemoryTestEnvironment(t, home)
+			fakeAgent(t, "claude", "")
+			fakeAgent(t, "codex", "")
+			codexConfig := filepath.Join(home, ".codex", "config.toml")
+			original := "[mcp_servers.agentsview]\ncommand = 'custom-codex'\nargs = ['serve']\n"
+			require.NoError(t, os.MkdirAll(filepath.Dir(codexConfig), 0o700))
+			require.NoError(t, os.WriteFile(codexConfig, []byte(original), 0o600))
+			out, err := executeCommand(newRootCommand(), "skills", "install", "--harness", "claude")
+			require.NoError(t, err, out)
+			skill := filepath.Join(skills.TargetDir(skills.HarnessClaude, home), skillFileName)
+			data, err := os.ReadFile(skill)
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(skill, append(data, []byte("\ncustom edit\n")...), 0o600))
+
+			args := []string{"agent", "setup", "--agent", "claude", "--check", "--json"}
+			if !withMCP {
+				args = append(args, "--mcp=false")
+			}
+			out, err = executeCommand(newRootCommand(), args...)
+			require.Error(t, err)
+			var report struct {
+				Rows []struct {
+					Piece    string `json:"piece"`
+					NextStep string `json:"next_step"`
+				} `json:"rows"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(out), &report), out)
+			require.NotEmpty(t, report.Rows)
+			require.Equal(t, "skill", report.Rows[0].Piece)
+			repair := strings.Fields(report.Rows[0].NextStep)
+			require.NotEmpty(t, repair)
+			require.Equal(t, "agentsview", repair[0])
+			if !withMCP {
+				require.Contains(t, repair, "--mcp=false")
+			}
+			out, err = executeCommand(newRootCommand(), repair[1:]...)
+			require.NoError(t, err, out)
+			data, err = os.ReadFile(skill)
+			require.NoError(t, err)
+			require.Equal(t, freshClaudeSkill(t).Content, string(data))
+			data, err = os.ReadFile(codexConfig)
+			require.NoError(t, err)
+			require.Equal(t, original, string(data))
 		})
 	}
 }
