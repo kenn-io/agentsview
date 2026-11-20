@@ -62,24 +62,28 @@ func (d *Disk) Get(selection, version string) ([]byte, bool) {
 }
 
 // Refresh updates an existing file without recreating an evicted selection.
-func (d *Disk) Refresh(selection, version string, payload []byte) bool {
+func (d *Disk) Refresh(selection, version string, encode func() ([]byte, error)) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	disk := d.reports.disk
 	if disk.dir == "" || selection == "" {
 		return false
 	}
-	if payload == nil {
+	if encode == nil {
 		return disk.touch(selection) == nil
+	}
+	if _, err := os.Stat(disk.path(selection)); err != nil {
+		return false
+	}
+	payload, err := encode()
+	if err != nil {
+		return false
 	}
 	data := append(disk.header(version), payload...)
 	if d.maxFile > 0 && int64(len(data)) > d.maxFile {
 		return false
 	}
-	if _, err := os.Stat(disk.path(selection)); err != nil {
-		return false
-	}
-	err := writeFileAtomic(disk.path(selection), data)
+	err = writeFileAtomic(disk.path(selection), data)
 	if err == nil {
 		_ = d.trim()
 	}

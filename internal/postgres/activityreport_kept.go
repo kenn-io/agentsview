@@ -81,15 +81,13 @@ func (s *Store) refreshActivityReport(selection, version, identity string, previ
 		s.saveActivityReport(selection, version, entry)
 		return
 	}
-	var data []byte
+	var encode func() ([]byte, error)
 	if entry.revision != previousRevision {
-		var err error
-		data, err = json.Marshal(pgActivitySavedReport{Revision: entry.revision, Checkpoint: entry.checkpoint, Candidates: entry.candidates, Peers: entry.peers, Labels: entry.labels, Report: entry.report}, json.FormatNilSliceAsNull(true))
-		if err != nil {
-			return
+		encode = func() ([]byte, error) {
+			return json.Marshal(pgActivitySavedReport{Revision: entry.revision, Checkpoint: entry.checkpoint, Candidates: entry.candidates, Peers: entry.peers, Labels: entry.labels, Report: entry.report}, json.FormatNilSliceAsNull(true))
 		}
 	}
-	s.activityReports.Refresh(selection+"|"+identity+"|"+version, identity+"|"+version, data)
+	s.activityReports.Refresh(selection+"|"+identity+"|"+version, identity+"|"+version, encode)
 }
 
 func (s *Store) activityReportRestricted(ctx context.Context) bool {
@@ -99,6 +97,10 @@ func (s *Store) activityReportRestricted(ctx context.Context) bool {
 }
 
 func (s *Store) activityReportIdentity(ctx context.Context, selection, version string, q activity.Query) (identity string, unavailable bool) {
+	var tracked bool
+	if err := s.pg.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM sync_metadata WHERE key='usage_truncate_tracking' AND value='2')`).Scan(&tracked); err != nil || !tracked {
+		return "", false
+	}
 	memo := &s.runtimeState().activityKept
 	entries, ok := memo.Get(selection, version)
 	if ok {
@@ -206,7 +208,7 @@ func (s *Store) validateKeptActivityReport(ctx context.Context, selection, versi
 					s.runtimeState().activityKept.Put(selection, version, []pgActivityKept{entry})
 				}
 			}
-		} else {
+		} else if !hadEntry || entry.revision != entries[0].revision || entry.checkpoint != entries[0].checkpoint || entry.identity != entries[0].identity {
 			s.runtimeState().activityKept.Put(selection, version, []pgActivityKept{entry})
 		}
 	}

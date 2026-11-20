@@ -154,3 +154,15 @@ func TestLoadJSON(t *testing.T) {
 	require.True(t, retain)
 	require.Equal(t, []string{"current"}, got)
 }
+
+func TestDiskRefreshMissingDoesNotEncode(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	var disk Disk
+	require.NoError(t, disk.Open("saved-reports", "archive", 1024, 0))
+	called := false
+	require.False(t, disk.Refresh("missing", "v", func() ([]byte, error) {
+		called = true
+		return []byte("report"), nil
+	}))
+	require.False(t, called)
+}

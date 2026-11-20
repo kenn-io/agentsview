@@ -150,8 +150,8 @@ func ensureUsageChangeJournalPG(ctx context.Context, pg *sql.DB) (ok bool) {
 }
 
 func installUsageTruncateTrackingPG(ctx context.Context, tx *sql.Tx) error {
-	var installed bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM sync_metadata WHERE key='usage_truncate_tracking')`).Scan(&installed); err != nil || installed {
+	var installed string
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT value FROM sync_metadata WHERE key='usage_truncate_tracking'), '')`).Scan(&installed); err != nil || installed == "2" {
 		return err
 	}
 	var schema string
@@ -163,20 +163,26 @@ func installUsageTruncateTrackingPG(ctx context.Context, tx *sql.Tx) error {
 		return err
 	}
 	var ddl strings.Builder
-	fmt.Fprintf(&ddl, `CREATE FUNCTION invalidate_usage_history_on_truncate() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+	fmt.Fprintf(&ddl, `CREATE OR REPLACE FUNCTION invalidate_usage_history_on_truncate() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
  SET search_path = pg_catalog, %s, pg_temp AS $truncate$
  BEGIN
+   PERFORM 1 FROM sync_metadata WHERE key='usage_history_token' FOR UPDATE;
+   DELETE FROM sync_metadata WHERE key LIKE 'usage_history_checkpoint:%%';
    UPDATE sync_metadata SET value=pg_catalog.gen_random_uuid()::text WHERE key='usage_history_token';
    RETURN NULL;
  END $truncate$;
  REVOKE ALL ON FUNCTION invalidate_usage_history_on_truncate() FROM PUBLIC;`, quoted)
-	for _, table := range usageChangeTablesPG {
-		fmt.Fprintf(&ddl, "CREATE TRIGGER trg_uc_truncate AFTER TRUNCATE ON %s FOR EACH STATEMENT EXECUTE FUNCTION invalidate_usage_history_on_truncate();\n", table.table)
+	if installed == "" {
+		for _, table := range usageChangeTablesPG {
+			fmt.Fprintf(&ddl, "CREATE TRIGGER trg_uc_truncate AFTER TRUNCATE ON %s FOR EACH STATEMENT EXECUTE FUNCTION invalidate_usage_history_on_truncate();\n", table.table)
+		}
+		for _, table := range []string{"messages", "tool_result_events"} {
+			fmt.Fprintf(&ddl, "CREATE TRIGGER trg_uc_truncate AFTER TRUNCATE ON %s FOR EACH STATEMENT EXECUTE FUNCTION invalidate_usage_history_on_truncate();\n", table)
+		}
 	}
-	for _, table := range []string{"messages", "tool_result_events"} {
-		fmt.Fprintf(&ddl, "CREATE TRIGGER trg_uc_truncate AFTER TRUNCATE ON %s FOR EACH STATEMENT EXECUTE FUNCTION invalidate_usage_history_on_truncate();\n", table)
-	}
-	ddl.WriteString(`INSERT INTO sync_metadata(key,value) VALUES('usage_truncate_tracking','1')`)
+	ddl.WriteString(`DELETE FROM sync_metadata WHERE key LIKE 'usage_history_checkpoint:%';
+ UPDATE sync_metadata SET value=pg_catalog.gen_random_uuid()::text WHERE key='usage_history_token';
+ INSERT INTO sync_metadata(key,value) VALUES('usage_truncate_tracking','2') ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value`)
 	_, err = tx.ExecContext(ctx, ddl.String())
 	return err
 }
