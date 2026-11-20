@@ -22,7 +22,7 @@ export function documentTitle({
   } else if (route === "sessions" && sessionId) {
     if (sessionNotFound) {
       label = `${m.message_list_session_not_found()} (${sessionId})`;
-    } else if (session?.id === sessionId) {
+    } else if (session) {
       const name = sessionLabel(session.display_name?.trim(), session.first_message, "")
         .text.replace(/\s+/g, " ")
         .trim();

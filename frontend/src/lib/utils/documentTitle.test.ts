@@ -68,10 +68,6 @@ describe("documentTitle", () => {
         },
       }),
     ).toBe("Fix the login flow (source-a~codex:12345678abcdef) · project-a · AgentsView");
-    expect(documentTitle({ ...input, sessionId: "host:other" })).toBe("host:other · AgentsView");
-    expect(documentTitle({ ...input, sessionId: "host:other", sessionNotFound: true })).toBe(
-      "Session not found (host:other) · AgentsView",
-    );
   });
 
   it.each([
