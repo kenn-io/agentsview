@@ -79,8 +79,12 @@ func (s *Store) storeFrustrationCounts(ctx context.Context, versions map[string]
 		return fmt.Errorf("starting frustration counts write: %w", err)
 	}
 	defer tx.Rollback()
-	// Lock in ID order, then recheck versions in a fresh statement snapshot.
-	rows, err := tx.QueryContext(ctx, `SELECT id FROM sessions WHERE id = ANY($1) ORDER BY id FOR SHARE`, ids)
+	// Lock in ID order before rechecking session versions.
+	lock := "FOR SHARE"
+	if s.cockroach {
+		lock = "FOR UPDATE"
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM sessions WHERE id = ANY($1) ORDER BY id `+lock, ids)
 	if err != nil {
 		return fmt.Errorf("locking frustration sessions: %w", err)
 	}

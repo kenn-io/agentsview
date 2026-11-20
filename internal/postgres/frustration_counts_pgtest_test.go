@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
@@ -231,6 +233,59 @@ func TestFrustrationCountsConcurrentSaves(t *testing.T) {
 			require.Zero(t, count)
 		})
 	}
+}
+
+func TestCockroachFrustrationCountsConcurrentPush(t *testing.T) {
+	server, _ := testPGServer(t)
+	if !server.cockroach {
+		t.Skip("CockroachDB locking semantics")
+	}
+	f := newFrustrationFixture(t, "agentsview")
+	store := f.open(t)
+	_, versions, err := store.signalRows(f.ctx, db.AnalyticsFilter{}, f.versionColumn)
+	require.NoError(t, err)
+	_, err = f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts(session_id, session_version, rules_version, marker_count) VALUES ('one', 'stale', 0, 0)`)
+	require.NoError(t, err)
+	gate, err := f.pg.BeginTx(f.ctx, nil)
+	require.NoError(t, err)
+	defer gate.Rollback()
+	_, err = gate.ExecContext(f.ctx, `SELECT session_id FROM session_frustration_counts WHERE session_id='one' FOR UPDATE`)
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(f.ctx, 30*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- store.storeFrustrationCounts(ctx, versions, map[string]int{"one": 1, "two": 1}, f.versionColumn)
+	}()
+	require.Eventually(t, func() bool {
+		var id string
+		err := f.pg.QueryRowContext(ctx, `SELECT id FROM sessions WHERE id='two' FOR UPDATE NOWAIT`).Scan(&id)
+		var pgErr *pgconn.PgError
+		return errors.As(err, &pgErr) && pgErr.Code == "55P03"
+	}, 10*time.Second, 25*time.Millisecond)
+	session := db.Session{ID: "two", Agent: "claude", Project: "sample", Machine: "workstation", MessageCount: 1}
+	_, err = f.local.WriteSessionBatchContext(ctx, []db.SessionBatchWrite{{Session: session, Messages: []db.Message{{SessionID: "two", Ordinal: 0, Role: "user", Content: "Please explain this function."}}, ReplaceMessages: true}})
+	require.NoError(t, err)
+	require.NoError(t, f.local.UpdateSessionSignals(ctx, "two", db.SessionSignalUpdate{QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion}}))
+	pushDone := make(chan error, 1)
+	go func() {
+		result, err := f.syncer.Push(ctx, false, nil)
+		if err == nil && result.Errors > 0 {
+			err = fmt.Errorf("push errors: %v", result.Errors)
+		}
+		pushDone <- err
+	}()
+	require.NoError(t, gate.Rollback())
+	require.NoError(t, <-done)
+	require.NoError(t, <-pushDone)
+	counts, freshVersions, err := store.scanFrustrationCounts(ctx, []string{"two"}, f.versionColumn)
+	require.NoError(t, err)
+	require.NoError(t, store.storeFrustrationCounts(ctx, freshVersions, counts, f.versionColumn))
+	var saved string
+	var count int
+	require.NoError(t, f.pg.QueryRowContext(ctx, `SELECT session_version, marker_count FROM session_frustration_counts WHERE session_id='two'`).Scan(&saved, &count))
+	require.Equal(t, freshVersions["two"], saved)
+	require.Zero(t, count)
 }
 
 func TestFrustrationCountsBulkSaves(t *testing.T) {
