@@ -5,8 +5,11 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"regexp"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -271,4 +274,29 @@ func TestVectorHalfvecGate(t *testing.T) {
 	}
 	assert.False(t, hasHalfvec,
 		"unavailable reason %q must mean halfvec is missing", unavailable)
+}
+
+// A halfvec-capable installation must not receive an extension upgrade.
+func TestVectorSetupKeepsHalfvecExtensionVersion(t *testing.T) {
+	ctx := t.Context()
+	dsn := testPGSchemaURL(t, vectorSchemaTestSchema)
+	cfg, err := pgx.ParseConfig(dsn)
+	require.NoError(t, err)
+	cfg.RuntimeParams["search_path"] = vectorSchemaTestSchema
+	trace := &statementLog{}
+	cfg.Tracer = trace
+	pg := stdlib.OpenDB(*cfg)
+	t.Cleanup(func() { require.NoError(t, pg.Close()) })
+	available, before, err := vectorHalfvecAvailable(ctx, pg)
+	require.NoError(t, err)
+	require.True(t, available)
+	reason, err := ensureVectorBaseSchemaPG(ctx, pg)
+	require.NoError(t, err)
+	require.Empty(t, reason)
+	available, after, err := vectorHalfvecAvailable(ctx, pg)
+	require.NoError(t, err)
+	require.True(t, available)
+	assert.Equal(t, before, after)
+	assert.NotEmpty(t, trace.matching(regexp.MustCompile(`(?i)CREATE\s+EXTENSION`)))
+	assert.Empty(t, trace.matching(regexp.MustCompile(`(?i)ALTER\s+EXTENSION\s+vector\s+UPDATE`)))
 }
