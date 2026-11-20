@@ -62,7 +62,7 @@ BEGIN
 END;
 `
 
-const usageChangeJournalVersionPG = 4
+const usageChangeJournalVersionPG = 3
 
 // Messages and plan usage reach the journal through the sessions.updated_at
 // bump every released publisher writes with them.
@@ -95,7 +95,6 @@ var dropUsageChangeJournalSQL = func() string {
 	for _, table := range usageChangeTablesPG {
 		ddl.WriteString("DROP FUNCTION IF EXISTS mark_usage_" + table.table + "() CASCADE;")
 	}
-	ddl.WriteString("DROP FUNCTION IF EXISTS mark_usage_tool_result_events() CASCADE;")
 	for _, table := range []string{"messages", "tool_calls"} {
 		ddl.WriteString("DROP FUNCTION IF EXISTS mark_dashboard_" + table + "() CASCADE;")
 	}
@@ -134,10 +133,6 @@ func ensureUsageChangeJournalPG(ctx context.Context, pg *sql.DB) (ok bool) {
 		return
 	}
 	err = installDashboardJournalPG(ctx, tx)
-	if err != nil {
-		return
-	}
-	err = installToolResultJournalPG(ctx, tx)
 	if err != nil {
 		return
 	}
@@ -346,42 +341,7 @@ func installDashboardJournalPG(ctx context.Context, tx *sql.Tx) error {
 			fmt.Fprintf(&ddl, "CREATE TRIGGER trg_dashboard_%s_%s AFTER %s ON %s REFERENCING %s FOR EACH STATEMENT EXECUTE FUNCTION %s();\n", table.name, strings.ToLower(trigger.event), trigger.event, table.name, trigger.referencing, function)
 		}
 	}
-	ddl.WriteString("UPDATE sync_metadata SET value='3' WHERE key='usage_change_journal_version';")
-	_, err = tx.ExecContext(ctx, ddl.String())
-	return err
-}
-
-func installToolResultJournalPG(ctx context.Context, tx *sql.Tx) error {
-	var version string
-	if err := tx.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='usage_change_journal_version'`).Scan(&version); err != nil {
-		return err
-	}
-	if version != "3" {
-		return nil
-	}
-	if _, err := tx.ExecContext(ctx, `LOCK TABLE tool_result_events, usage_session_changes IN SHARE ROW EXCLUSIVE MODE`); err != nil {
-		return err
-	}
-	var schema string
-	if err := tx.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {
-		return err
-	}
-	quoted, err := quoteIdentifier(schema)
-	if err != nil {
-		return err
-	}
-	var ddl strings.Builder
-	fmt.Fprintf(&ddl, `CREATE OR REPLACE FUNCTION mark_usage_tool_result_events() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
- SET search_path = pg_catalog, %s, pg_temp AS $journal$%s$journal$;
- REVOKE ALL ON FUNCTION mark_usage_tool_result_events() FROM PUBLIC;`, quoted, fmt.Sprintf(markUsageChangeFunctionBodyPG, `"session_id"`, "true", "*"))
-	for _, trigger := range []struct{ event, referencing string }{
-		{"INSERT", "NEW TABLE AS new_rows"}, {"UPDATE", "OLD TABLE AS old_rows NEW TABLE AS new_rows"}, {"DELETE", "OLD TABLE AS old_rows"},
-	} {
-		fmt.Fprintf(&ddl, "DROP TRIGGER IF EXISTS trg_uc_tool_result_events_%s ON tool_result_events;\n", strings.ToLower(trigger.event))
-		fmt.Fprintf(&ddl, "CREATE TRIGGER trg_uc_tool_result_events_%s AFTER %s ON tool_result_events REFERENCING %s FOR EACH STATEMENT EXECUTE FUNCTION mark_usage_tool_result_events();\n", strings.ToLower(trigger.event), trigger.event, trigger.referencing)
-	}
-	ddl.WriteString(`UPDATE sync_metadata SET value=pg_catalog.gen_random_uuid()::text WHERE key='usage_history_token';
- UPDATE sync_metadata SET value='4' WHERE key='usage_change_journal_version';`)
+	fmt.Fprintf(&ddl, "UPDATE sync_metadata SET value='%d' WHERE key='usage_change_journal_version';", usageChangeJournalVersionPG)
 	_, err = tx.ExecContext(ctx, ddl.String())
 	return err
 }
@@ -517,7 +477,7 @@ const usageChangeRevisionSQL = `coalesce((
 
 const supportedUsageChangeRevisionSQL = `coalesce((
  SELECT value::bigint FROM sync_metadata WHERE key = 'usage_change_revision'
- AND EXISTS (SELECT 1 FROM sync_metadata WHERE key = 'usage_change_journal_version' AND value IN ('1', '2', '3', $1))
+ AND EXISTS (SELECT 1 FROM sync_metadata WHERE key = 'usage_change_journal_version' AND value IN ('1', '2', $1))
 ), 0)`
 
 // UsageChangeRevision returns the current revision, or 0 when the journal is
@@ -557,32 +517,24 @@ func (s *Store) LoadUsageChanges(ctx context.Context, afterRevision int64) (int6
 }
 
 func (s *Store) loadUsageChanges(ctx context.Context, afterRevision int64) (int64, []string, error) {
-	revision, ids, _, _, err := s.loadUsageChangesWithHistory(ctx, afterRevision)
-	return revision, ids, err
-}
-
-func (s *Store) loadUsageChangesWithHistory(ctx context.Context, afterRevision int64) (int64, []string, string, string, error) {
-	rows, err := s.pg.QueryContext(ctx, `SELECT r.revision, c.session_id,
- COALESCE((SELECT value FROM sync_metadata WHERE key='usage_history_checkpoint:' || r.revision::text), ''),
- COALESCE((SELECT value FROM sync_metadata WHERE key='usage_history_checkpoint:' || $2::bigint::text), '')
+	rows, err := s.pg.QueryContext(ctx, `SELECT r.revision, c.session_id
  FROM (SELECT `+supportedUsageChangeRevisionSQL+` AS revision) r
  LEFT JOIN usage_session_changes c ON r.revision > 0 AND c.revision > $2 AND c.revision <= r.revision AND c.session_id <> ''
  ORDER BY c.revision, c.session_id`, strconv.Itoa(usageChangeJournalVersionPG), afterRevision)
 	if err != nil {
-		return 0, nil, "", "", err
+		return 0, nil, err
 	}
 	defer rows.Close()
 	var revision int64
-	var current, previous string
 	var ids []string
 	for rows.Next() {
 		var id sql.NullString
-		if err := rows.Scan(&revision, &id, &current, &previous); err != nil {
-			return 0, nil, "", "", err
+		if err := rows.Scan(&revision, &id); err != nil {
+			return 0, nil, err
 		}
 		if id.Valid {
 			ids = append(ids, id.String)
 		}
 	}
-	return revision, ids, current, previous, rows.Err()
+	return revision, ids, rows.Err()
 }

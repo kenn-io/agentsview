@@ -47,15 +47,6 @@ func (d *Disk) Sweep(now time.Time) {
 }
 
 func (d *Disk) Get(selection, version string) ([]byte, bool) {
-	return d.get(selection, version, true)
-}
-
-// Peek reads a file without refreshing its open time.
-func (d *Disk) Peek(selection, version string) ([]byte, bool) {
-	return d.get(selection, version, false)
-}
-
-func (d *Disk) get(selection, version string, touch bool) ([]byte, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	disk := d.reports.disk
@@ -66,39 +57,8 @@ func (d *Disk) get(selection, version string, touch bool) ([]byte, bool) {
 	if err != nil || !ok {
 		return nil, false
 	}
-	if touch {
-		_ = disk.touch(selection)
-	}
+	_ = disk.touch(selection)
 	return data, true
-}
-
-// Touch refreshes the open time of an existing file.
-func (d *Disk) Touch(selection string) bool {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.reports.disk.dir != "" && selection != "" && d.reports.disk.touch(selection) == nil
-}
-
-// Rewrite updates an existing file without recreating an evicted selection.
-func (d *Disk) Rewrite(selection, version string, encode func() ([]byte, error)) bool {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	disk := d.reports.disk
-	if disk.dir == "" || selection == "" {
-		return false
-	}
-	if _, err := os.Stat(disk.path(selection)); err != nil {
-		return false
-	}
-	payload, err := encode()
-	if err != nil {
-		return false
-	}
-	saved, _ := disk.save(selection, version, payload, d.maxFile)
-	if saved {
-		_ = d.trim()
-	}
-	return saved
 }
 
 func (d activityReportDisk) load(selection, key string, maxFile int64) ([]byte, bool, error) {

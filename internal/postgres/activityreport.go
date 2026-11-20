@@ -147,8 +147,7 @@ func (s *Store) BuildActivityReportArtifacts(
 		return activity.CandidateArtifacts{}, err
 	}
 
-	var selection, version, identity string
-	var unavailable bool
+	var selection, version, identity, files string
 	var revision int64
 	var checkpoint string
 	if !q.Partial && !s.hostedRelations && !db.TerminationUsesTime(f.Termination) {
@@ -157,59 +156,69 @@ func (s *Store) BuildActivityReportArtifacts(
 			return activity.CandidateArtifacts{}, err
 		}
 		if version != "" && !s.activityReportRestricted(ctx) {
-			files, err := s.activityTableIdentity(ctx)
-			if isInsufficientPrivilege(err) {
-				goto build
+			var fileErr error
+			files, fileErr = s.activityTableIdentity(ctx)
+			if fileErr != nil && !isInsufficientPrivilege(fileErr) {
+				return activity.CandidateArtifacts{}, fileErr
 			}
-			if err != nil {
-				return activity.CandidateArtifacts{}, fmt.Errorf("reading activity table identities: %w", err)
+			if files != "" {
+				version += "|" + files
+			} else {
+				version = ""
 			}
-			version += "|" + files
-			if q.Timezone != "Local" && q.Loc != nil {
-				version += "|" + db.TrendsTimezoneKey(f)
-			}
+		}
+		if version != "" && !s.activityReportRestricted(ctx) {
 			selection = kept.Selection(f, q)
-			identity, unavailable = s.activityReportIdentity(ctx, selection, version, q)
-			var previousRevision int64
-			if entries, ok := s.runtimeState().activityKept.Get(selection, version); ok {
-				previousRevision = entries[0].revision
+			identity = s.activityReportIdentity(ctx, q)
+			memo := &s.runtimeState().activityKept
+			if _, ok := memo.Get(selection, version); !ok && identity != "" {
+				if entry, found := s.loadActivityReport(selection, version, identity); found {
+					token, _, checkErr := usageHistoryCheckpoints(ctx, s.pg, entry.revision, entry.revision)
+					if checkErr == nil && token != "" && token == entry.checkpoint {
+						memo.Put(selection, version, []pgActivityKept{entry})
+					}
+				}
 			}
-			var report kept.Report
-			var hit bool
-			report, revision, checkpoint, hit, err = s.validateKeptActivityReport(ctx, selection, version, files, f,
-				rangeStartUTC, rangeEndUTC, lowerBound, upperBound)
-			if err != nil {
-				return activity.CandidateArtifacts{}, err
+			report, rev, hit, checkErr := s.keptActivityReport(ctx, selection, version, f, rangeStartUTC, rangeEndUTC, lowerBound, upperBound)
+			if checkErr != nil {
+				return activity.CandidateArtifacts{}, checkErr
 			}
+			revision = rev
 			if hit && !s.activityReportRestricted(ctx) {
-				s.refreshActivityReport(selection, version, identity, previousRevision)
-				activity.ReportProgress(onProgress, report.Done)
-				return report.Artifacts, nil
+				currentFiles, fileErr := s.activityTableIdentity(ctx)
+				if fileErr == nil && currentFiles == files {
+					activity.ReportProgress(onProgress, report.Done)
+					return report.Artifacts, nil
+				}
+				selection = ""
 			}
-			if revision == 0 || hit {
+			if revision == 0 {
 				selection = ""
 			}
 		}
 	}
-
-build:
 	reader := s
 	var tx *sql.Tx
 	if selection != "" && s.readTx == nil {
-		// Keep the journal and report reads in one snapshot, even if a restore
-		// returns the live journal to its earlier checkpoint during the build.
 		tx, err = s.beginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
 		if err != nil {
 			return activity.CandidateArtifacts{}, err
 		}
-		defer func() { _ = tx.Rollback() }()
+		defer func(tx *sql.Tx) { _ = tx.Rollback() }(tx)
 		reader = s.readView(tx)
-		revision, _, checkpoint, _, err = reader.loadUsageChangesWithHistory(ctx, revision)
+		revision, _, err = reader.LoadUsageChanges(ctx, revision)
+		if err == nil && revision != 0 {
+			checkpoint, _, err = usageHistoryCheckpoints(ctx, reader.pg, revision, revision)
+		}
+		if isInsufficientPrivilege(err) || isUndefinedTable(err) || (err == nil && revision == 0) {
+			_ = tx.Rollback()
+			tx = nil
+			reader = s
+			selection = ""
+			err = nil
+		}
 		if err != nil {
 			return activity.CandidateArtifacts{}, err
-		}
-		if revision == 0 || reader.activityReportRestricted(ctx) {
-			selection = ""
 		}
 	}
 	sessions, ids, err := reader.activityReportSessions(
@@ -277,13 +286,17 @@ build:
 		entry := pgActivityKept{
 			report: kept.Report{Artifacts: artifacts, Done: done}, revision: revision, checkpoint: checkpoint,
 			candidates: candidates, peers: slices.Clip(slices.Sorted(maps.Keys(read))),
-			labels: activity.ProjectLabels(sessions), identity: identity, identityUnavailable: unavailable,
+			labels: activity.ProjectLabels(sessions), identity: identity,
 		}
-		through, _, current, _, checkErr := s.loadUsageChangesWithHistory(ctx, revision)
-		if checkErr == nil && through == revision && current == checkpoint && !s.activityReportRestricted(ctx) {
-			s.runtimeState().activityKept.Put(selection, version, []pgActivityKept{entry})
-			if identity != "" {
-				s.saveActivityReport(selection, version, entry)
+		through, _, checkErr := s.LoadUsageChanges(ctx, revision)
+		current, _, tokenErr := usageHistoryCheckpoints(ctx, s.pg, revision, revision)
+		if checkErr == nil && tokenErr == nil && through == revision && current == checkpoint && !s.activityReportRestricted(ctx) {
+			memo := &s.runtimeState().activityKept
+			memo.Put(selection, version, []pgActivityKept{entry})
+			if identity != "" && checkpoint != "" {
+				if _, ok := memo.Get(selection, version); ok {
+					s.saveActivityReport(selection, version, entry)
+				}
 			}
 		}
 	}
