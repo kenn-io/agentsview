@@ -175,7 +175,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 				"Antigravity, and others) from every project and machine. Returns ranked snippets with a " +
 				"match_ordinal usable with get_messages to read the surrounding conversation. For prior-work " +
 				"questions, prefer search_content with mode hybrid or semantic when a vector search index " +
-				"is configured. Use this tool for keyword search, with optional date_from/date_to bounds. " +
+				"is configured. Use this tool for keyword search, with optional date_from/date_to bounds. Searches time out after 30 seconds. " +
 				"Every term must appear (AND); wrap the query in double quotes for an exact phrase. " +
 				"Sessions active in the last 10 minutes (including the current conversation) are excluded " +
 				"unless include_active is set. Empty pages with excluded active sessions return a hints entry " +
@@ -240,7 +240,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: ToolSearchContent,
-		Description: "Search raw session text, including thinking, tool inputs, and results. " +
+		Description: "Search raw session text, including thinking, tool inputs, and results. Searches time out after 30 seconds. " +
 			"Prefer mode hybrid (semantic similarity plus keywords) for finding " +
 			"prior work and answering contextual questions, especially when the exact wording is unknown. " +
 			"Hybrid returns keyword matches with effective_mode hybrid_keyword and a note when search by meaning is unavailable. " +
