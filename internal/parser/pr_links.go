@@ -124,7 +124,7 @@ type prLinkIdentity struct {
 
 // PromptPRLinks extracts pull and merge request URLs from text.
 func PromptPRLinks(text string) []PRLink {
-	links, _ := promptPRLinks(nil, text)
+	links, _ := promptPRLinks(context.Background(), text)
 	return links
 }
 
@@ -136,10 +136,8 @@ func PromptPRLinksContext(ctx context.Context, text string) ([]PRLink, error) {
 func promptPRLinks(ctx context.Context, text string) ([]PRLink, error) {
 	var links prLinkCollector
 	for pos := 0; pos < len(text); {
-		if ctx != nil {
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 		start := pos
 		checkAt := pos + 4096
@@ -149,7 +147,7 @@ func promptPRLinks(ctx context.Context, text string) ([]PRLink, error) {
 				break
 			}
 			pos += n
-			if pos >= checkAt && ctx != nil {
+			if pos >= checkAt {
 				checkAt = pos + 4096
 				if err := ctx.Err(); err != nil {
 					return nil, err
@@ -159,8 +157,8 @@ func promptPRLinks(ctx context.Context, text string) ([]PRLink, error) {
 		token := text[start:pos]
 		var starts []int
 		query := false
-		for i := 0; i < len(token); i++ {
-			if i&4095 == 0 && ctx != nil {
+		for i := range len(token) {
+			if i&4095 == 0 {
 				if err := ctx.Err(); err != nil {
 					return nil, err
 				}
@@ -176,7 +174,7 @@ func promptPRLinks(ctx context.Context, text string) ([]PRLink, error) {
 			}
 		}
 		for i, start := range starts {
-			if i&255 == 0 && ctx != nil {
+			if i&255 == 0 {
 				if err := ctx.Err(); err != nil {
 					return nil, err
 				}

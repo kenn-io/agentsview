@@ -179,7 +179,7 @@ func (db *DB) GetSessionPRLinkURLs(
 
 // PromptPRLinks finds links in retained user dialogue.
 func PromptPRLinks(messages []Message) []PRLink {
-	links, _ := promptPRLinks(nil, messages)
+	links, _ := promptPRLinks(context.Background(), messages)
 	return links
 }
 
@@ -203,15 +203,11 @@ func promptPRLinks(ctx context.Context, messages []Message) ([]PRLink, error) {
 			continue
 		}
 		content = withoutSystemReminders(content)
-		if ctx == nil {
-			lists = append(lists, parser.PromptPRLinks(content))
-		} else {
-			links, err := parser.PromptPRLinksContext(ctx, content)
-			if err != nil {
-				return nil, err
-			}
-			lists = append(lists, links)
+		links, err := parser.PromptPRLinksContext(ctx, content)
+		if err != nil {
+			return nil, err
 		}
+		lists = append(lists, links)
 	}
 	return parser.CombinePRLinks(lists...), nil
 }
