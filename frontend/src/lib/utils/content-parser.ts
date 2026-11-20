@@ -247,14 +247,10 @@ function fencedCodeRanges(text: string): Array<[number, number]> {
  * tags that sit inside inline code or fenced code blocks, so examples stay
  * literal and do not end a real skill early or swallow a later one.
  */
-function skillXmlMatches(
-  text: string,
-  codeSpans: Array<[number, number]>,
-): Match[] {
+function skillXmlMatches(text: string, codeSpans: Array<[number, number]>): Match[] {
   const fences = fencedCodeRanges(text);
   const isLiteral = (pos: number) =>
-    insideInlineCode(pos, codeSpans) ||
-    fences.some(([s, e]) => pos >= s && pos < e);
+    insideInlineCode(pos, codeSpans) || fences.some(([s, e]) => pos >= s && pos < e);
 
   const matches: Match[] = [];
   let from = 0;

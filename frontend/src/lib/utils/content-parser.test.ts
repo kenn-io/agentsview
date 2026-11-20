@@ -1234,9 +1234,7 @@ describe("Codex Cloud tool markers", () => {
 describe("parseContent - XML skill injection", () => {
   it("parses a multiline skill with name", () => {
     const segs = parseContent('<skill name="route-work">\n# Title\n\nbody\n</skill>');
-    expect(segs).toEqual([
-      { type: "skill", label: "route-work", content: "# Title\n\nbody" },
-    ]);
+    expect(segs).toEqual([{ type: "skill", label: "route-work", content: "# Title\n\nbody" }]);
   });
 
   it("keeps user text appended directly after the closing tag", () => {
@@ -1246,9 +1244,7 @@ describe("parseContent - XML skill injection", () => {
   });
 
   it("keeps text before the opening tag and ignores extra attributes", () => {
-    const segs = parseContent(
-      'hi <skill name="a" location="/x/SKILL.md">body</skill>',
-    );
+    const segs = parseContent('hi <skill name="a" location="/x/SKILL.md">body</skill>');
     expect(segs.map((s) => s.type)).toEqual(["text", "skill"]);
     expect(segs[1]).toMatchObject({ label: "a", content: "body" });
   });
@@ -1267,27 +1263,21 @@ describe("parseContent - XML skill injection", () => {
   });
 
   it("keeps the full body when it mentions </skill> in inline code", () => {
-    const segs = parseContent(
-      '<skill name="a">\nwrite `</skill>` to close\nmore\n</skill> tail',
-    );
+    const segs = parseContent('<skill name="a">\nwrite `</skill>` to close\nmore\n</skill> tail');
     expect(segs.map((s) => s.type)).toEqual(["skill", "text"]);
     expect(segs[0]!.content).toBe("write `</skill>` to close\nmore");
     expect(segs[1]!.content).toBe(" tail".trimEnd());
   });
 
   it("keeps the full body when a fenced block in it mentions </skill>", () => {
-    const segs = parseContent(
-      '<skill name="a">\n~~~\n</skill>\n~~~\nafter\n</skill>',
-    );
+    const segs = parseContent('<skill name="a">\n~~~\n</skill>\n~~~\nafter\n</skill>');
     expect(segs).toHaveLength(1);
     expect(segs[0]).toMatchObject({ type: "skill", label: "a" });
     expect(segs[0]!.content).toContain("after");
   });
 
   it.each(["```", "~~~"])("does not match inside a %s fenced block", (fence) => {
-    const segs = parseContent(
-      `${fence}\n<skill name="a">x</skill>\n${fence}`,
-    );
+    const segs = parseContent(`${fence}\n<skill name="a">x</skill>\n${fence}`);
     expect(segs.some((s) => s.type === "skill")).toBe(false);
   });
 
