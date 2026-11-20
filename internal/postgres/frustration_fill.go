@@ -40,9 +40,6 @@ type frustrationFillState struct {
 func (state *frustrationFillState) release(chunk *frustrationChunk) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	if chunk.complete {
-		return
-	}
 	for _, id := range chunk.ids {
 		delete(state.pending, id)
 	}
@@ -106,12 +103,12 @@ func (s *Store) joinFrustrationFill(ctx context.Context, ids []string, completed
 	return true
 }
 
-func (s *Store) fillFrustrationCounts(ctx context.Context, dash, edge, next, rest []string, column string) error {
+func (s *Store) fillFrustrationCounts(ctx context.Context, groups [][]string, column string) error {
 	state := &s.runtimeState().frustrationFill
 	state.mu.Lock()
-	state.pending = make(map[string]*frustrationChunk, len(dash)+len(edge)+len(next)+len(rest))
+	state.pending = make(map[string]*frustrationChunk)
 	state.chunks = nil
-	for _, group := range [][]string{dash, edge, next, rest} {
+	for _, group := range groups {
 		for ids := range slices.Chunk(group, maxPGVars) {
 			chunk := &frustrationChunk{ids: ids, done: make(chan struct{})}
 			state.chunks = append(state.chunks, chunk)
@@ -122,11 +119,6 @@ func (s *Store) fillFrustrationCounts(ctx context.Context, dash, edge, next, res
 	}
 	chunks := state.chunks
 	state.mu.Unlock()
-	defer func() {
-		for _, chunk := range chunks {
-			state.release(chunk)
-		}
-	}()
 	var firstErr error
 	for _, chunk := range chunks {
 		chunkCtx, cancel := context.WithTimeout(ctx, frustrationFillChunkTimeout)
@@ -170,12 +162,12 @@ func (s *Store) StartFrustrationFill(ctx context.Context) func() {
 			log.Printf("selecting frustration count version: %v", err)
 			return
 		}
-		dash, edge, next, rest, err := s.staleFrustrationSessions(ctx, column)
+		groups, err := s.staleFrustrationSessions(ctx, column)
 		if err != nil {
 			log.Printf("selecting stale frustration counts: %v", err)
 			return
 		}
-		if err := s.fillFrustrationCounts(ctx, dash, edge, next, rest, column); err != nil && ctx.Err() == nil {
+		if err := s.fillFrustrationCounts(ctx, groups, column); err != nil && ctx.Err() == nil {
 			log.Printf("filling frustration counts: %v", err)
 		}
 	}()

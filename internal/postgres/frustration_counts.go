@@ -55,7 +55,7 @@ func (s *Store) loadStoredFrustrationCounts(ctx context.Context, ids []string, v
 	return counts, rows.Err()
 }
 
-// Reserve request time when another writer holds a count row.
+// Reserve request time for evidence reads when another writer holds a count row.
 func (s *Store) storeFrustrationCountsForRead(ctx context.Context, versions map[string]string, counts map[string]int, versionColumn string) error {
 	budget := time.Second
 	if deadline, ok := frustrationRequestDeadline(ctx); ok {
@@ -121,31 +121,25 @@ func (s *Store) scanFrustrationCounts(ctx context.Context, ids []string, version
 	return counts, versions, nil
 }
 
-func (s *Store) staleFrustrationSessions(ctx context.Context, versionColumn string) ([]string, []string, []string, []string, error) {
+// staleFrustrationSessions groups stale sessions by UTC day: the default
+// Dashboard window, the day before it, the day after it, and the rest.
+func (s *Store) staleFrustrationSessions(ctx context.Context, versionColumn string) ([][]string, error) {
 	where := db.BuildAnalyticsWhere(db.AnalyticsFilter{}, db.NewQueryBuilder(s.sessionDialect(), 1), "s.", "", nil)
-	rows, err := s.pg.QueryContext(ctx, `SELECT s.id, COALESCE(NOT s.is_automated AND COALESCE(s.started_at, s.created_at) >= (date_trunc('day', now() AT TIME ZONE 'UTC') - interval '364 days') AT TIME ZONE 'UTC' AND COALESCE(s.started_at, s.created_at) < (date_trunc('day', now() AT TIME ZONE 'UTC') + interval '1 day') AT TIME ZONE 'UTC', false), COALESCE(NOT s.is_automated AND COALESCE(s.started_at, s.created_at) >= (date_trunc('day', now() AT TIME ZONE 'UTC') - interval '365 days') AT TIME ZONE 'UTC' AND COALESCE(s.started_at, s.created_at) < (date_trunc('day', now() AT TIME ZONE 'UTC') - interval '364 days') AT TIME ZONE 'UTC', false), COALESCE(NOT s.is_automated AND COALESCE(s.started_at, s.created_at) >= (date_trunc('day', now() AT TIME ZONE 'UTC') + interval '1 day') AT TIME ZONE 'UTC' AND COALESCE(s.started_at, s.created_at) < (date_trunc('day', now() AT TIME ZONE 'UTC') + interval '2 days') AT TIME ZONE 'UTC', false) FROM sessions s LEFT JOIN session_frustration_counts c ON c.session_id=s.id WHERE `+where+` AND (c.session_id IS NULL OR (c.rules_version <= $1 AND (c.rules_version < $1 OR c.session_version <> `+frustrationSessionVersion("s."+versionColumn)+`))) ORDER BY s.id`, frustrationMarkerRulesVersion)
+	rows, err := s.pg.QueryContext(ctx, `SELECT s.id, CASE WHEN s.is_automated THEN 3 WHEN d.day BETWEEN -364 AND 0 THEN 0 WHEN d.day = -365 THEN 1 WHEN d.day = 1 THEN 2 ELSE 3 END FROM sessions s CROSS JOIN LATERAL (SELECT (COALESCE(s.started_at, s.created_at) AT TIME ZONE 'UTC')::date - (now() AT TIME ZONE 'UTC')::date AS day) d LEFT JOIN session_frustration_counts c ON c.session_id=s.id WHERE `+where+` AND (c.session_id IS NULL OR (c.rules_version <= $1 AND (c.rules_version < $1 OR c.session_version <> `+frustrationSessionVersion("s."+versionColumn)+`))) ORDER BY s.id`, frustrationMarkerRulesVersion)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, err
 	}
 	defer rows.Close()
-	var dash, edge, next, rest []string
+	groups := make([][]string, 4)
 	for rows.Next() {
 		var id string
-		var inDashboard, inEdge, inNext bool
-		if err := rows.Scan(&id, &inDashboard, &inEdge, &inNext); err != nil {
-			return nil, nil, nil, nil, err
+		var group int
+		if err := rows.Scan(&id, &group); err != nil {
+			return nil, err
 		}
-		if inDashboard {
-			dash = append(dash, id)
-		} else if inEdge {
-			edge = append(edge, id)
-		} else if inNext {
-			next = append(next, id)
-		} else {
-			rest = append(rest, id)
-		}
+		groups[group] = append(groups[group], id)
 	}
-	return dash, edge, next, rest, rows.Err()
+	return groups, rows.Err()
 }
 
 func (s *Store) canFillFrustrationCounts(ctx context.Context) (bool, error) {
