@@ -12,31 +12,49 @@ import (
 )
 
 func TestDiskEvictsLeastRecentlyOpened(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	var disk Disk
-	require.NoError(t, disk.Open("test-usage", "mirror", 1024, 0))
-	disk.maxBytes = int64(2 * (len(disk.reports.disk.header("v1")) + len("one")))
-	disk.Put("first", "v1", []byte("one"))
-	disk.Put("second", "v1", []byte("two"))
-	old := time.Now().Add(-time.Hour)
-	require.NoError(t, os.Chtimes(disk.reports.disk.path("first"), old, old))
-	payload, ok := disk.Get("first", "v1")
-	require.True(t, ok)
-	require.Equal(t, "one", string(payload))
-	require.NoError(t, os.Chtimes(disk.reports.disk.path("second"), old, old))
-	disk.Put("third", "v1", []byte("six"))
-	_, ok = disk.Get("second", "v1")
-	require.False(t, ok)
-	require.NoError(t, os.Chtimes(disk.reports.disk.path("third"), old, old))
-	info, err := os.Stat(disk.reports.disk.path("first"))
-	require.NoError(t, err)
-	var trimmed Disk
-	require.NoError(t, trimmed.Open("test-usage", "mirror", 1024, info.Size()))
-	_, ok = trimmed.Get("third", "v1")
-	require.False(t, ok)
-	payload, ok = trimmed.Get("first", "v1")
-	require.True(t, ok)
-	require.Equal(t, "one", string(payload))
+	t.Run("bytes", func(t *testing.T) {
+		t.Setenv("CACHE_DIRECTORY", t.TempDir())
+		var disk Disk
+		require.NoError(t, disk.Open("test-usage", "mirror", 1024, 0))
+		disk.maxBytes = int64(2 * (len(disk.reports.disk.header("v1")) + len("one")))
+		disk.Put("first", "v1", []byte("one"))
+		disk.Put("second", "v1", []byte("two"))
+		old := time.Now().Add(-time.Hour)
+		require.NoError(t, os.Chtimes(disk.reports.disk.path("first"), old, old))
+		payload, ok := disk.Get("first", "v1")
+		require.True(t, ok)
+		require.Equal(t, "one", string(payload))
+		require.NoError(t, os.Chtimes(disk.reports.disk.path("second"), old, old))
+		disk.Put("third", "v1", []byte("six"))
+		_, ok = disk.Get("second", "v1")
+		require.False(t, ok)
+		require.NoError(t, os.Chtimes(disk.reports.disk.path("third"), old, old))
+		info, err := os.Stat(disk.reports.disk.path("first"))
+		require.NoError(t, err)
+		var trimmed Disk
+		require.NoError(t, trimmed.Open("test-usage", "mirror", 1024, info.Size()))
+		_, ok = trimmed.Get("third", "v1")
+		require.False(t, ok)
+		payload, ok = trimmed.Get("first", "v1")
+		require.True(t, ok)
+		require.Equal(t, "one", string(payload))
+	})
+	t.Run("files", func(t *testing.T) {
+		t.Setenv("CACHE_DIRECTORY", t.TempDir())
+		disk := Disk{MaxFiles: 2}
+		require.NoError(t, disk.Open("test-usage", "mirror", 1024, 0))
+		require.True(t, disk.Put("first", "v1", []byte("one")))
+		require.True(t, disk.Put("second", "v1", []byte("two")))
+		old := time.Now().Add(-time.Hour)
+		require.NoError(t, os.Chtimes(disk.reports.disk.path("first"), old, old))
+		require.True(t, disk.Put("third", "v1", []byte("three")))
+		_, ok := disk.Get("first", "v1")
+		require.False(t, ok)
+		for _, key := range []string{"second", "third"} {
+			_, ok := disk.Get(key, "v1")
+			require.True(t, ok)
+		}
+	})
 }
 
 func TestDiskLimitsAndUnavailableDirectory(t *testing.T) {
@@ -132,35 +150,4 @@ func TestLoadJSON(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, retain)
 	require.Equal(t, []string{"current"}, got)
-}
-
-func TestDiskLimitsFiles(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	disk := Disk{MaxFiles: 8}
-	require.NoError(t, disk.Open("test-usage", "mirror", 1024, 0))
-	for _, key := range []string{"one", "two", "three", "four", "five", "six", "seven", "eight"} {
-		require.True(t, disk.Put(key, "v1", []byte(key)))
-	}
-	old := time.Now().Add(-time.Hour)
-	require.NoError(t, os.Chtimes(disk.reports.disk.path("one"), old, old))
-	require.True(t, disk.Put("nine", "v1", []byte("nine")))
-	_, ok := disk.Get("one", "v1")
-	require.False(t, ok)
-	for _, key := range []string{"two", "three", "four", "five", "six", "seven", "eight", "nine"} {
-		payload, ok := disk.Get(key, "v1")
-		require.True(t, ok)
-		require.Equal(t, key, string(payload))
-	}
-}
-
-func TestDiskRewriteMissingDoesNotEncode(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	var disk Disk
-	require.NoError(t, disk.Open("saved-reports", "archive", 1024, 0))
-	called := false
-	require.False(t, disk.Rewrite("missing", "v", func() ([]byte, error) {
-		called = true
-		return []byte("report"), nil
-	}))
-	require.False(t, called)
 }

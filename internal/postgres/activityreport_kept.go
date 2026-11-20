@@ -72,9 +72,9 @@ func (s *Store) refreshActivityReport(selection, version, identity string, previ
 	entry := entries[0]
 	key := selection + "|" + identity + "|" + version
 	if entry.revision == previousRevision {
-		s.activityReports.Touch(key)
+		s.activityReports.Keep(key, identity+"|"+version, entry.encode)
 	} else {
-		s.activityReports.Rewrite(key, identity+"|"+version, entry.encode)
+		s.saveActivityReport(selection, version, entry)
 	}
 	s.activityReports.Sweep(time.Now())
 }
@@ -86,7 +86,7 @@ func (s *Store) activityReportRestricted(ctx context.Context) bool {
 }
 
 func (s *Store) activityReportIdentity(ctx context.Context, q activity.Query) string {
-	if q.Loc == nil || q.Timezone == "Local" || !s.activityReports.Enabled() {
+	if q.Loc == nil || !s.activityReports.Enabled() {
 		return ""
 	}
 	local := time.Now().In(q.Loc)

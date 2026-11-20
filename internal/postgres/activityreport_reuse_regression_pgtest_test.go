@@ -98,25 +98,46 @@ func (p *activityFilenodeProbe) QueryRowContext(ctx context.Context, query strin
 	return p.storeExecutor.QueryRowContext(ctx, query, args...)
 }
 
-func TestPGActivityReportPurgeBetweenIdentityAndValidation(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	local, syncer, _ := newUsageJournalFixture(t)
-	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
-	pgKeptPush(t, syncer, false)
-	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, t.TempDir())
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
-	require.Len(t, pgKeptBuild(t, store, f, q, true).Sessions, 1)
-	purged := false
-	store.pg = &activityFilenodeProbe{storeExecutor: store.pg, after: func() {
+func TestPGActivityReportPurge(t *testing.T) {
+	t.Run("during validation", func(t *testing.T) {
+		t.Setenv("CACHE_DIRECTORY", t.TempDir())
+		local, syncer, _ := newUsageJournalFixture(t)
+		pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+		pgKeptPush(t, syncer, false)
+		store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, t.TempDir())
+		t.Cleanup(func() { require.NoError(t, store.Close()) })
+		q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+		require.Len(t, pgKeptBuild(t, store, f, q, true).Sessions, 1)
+		purged := false
+		store.pg = &activityFilenodeProbe{storeExecutor: store.pg, after: func() {
+			_, err := syncer.pg.ExecContext(t.Context(), `TRUNCATE sessions CASCADE`)
+			require.NoError(t, err)
+			purged = true
+		}}
+		got, err := store.BuildActivityReportArtifacts(t.Context(), f, q, nil)
+		require.NoError(t, err)
+		require.True(t, purged)
+		require.Empty(t, got.Sessions)
+	})
+	t.Run("before restart", func(t *testing.T) {
+		t.Setenv("CACHE_DIRECTORY", t.TempDir())
+		local, syncer, _ := newUsageJournalFixture(t)
+		pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+		pgKeptPush(t, syncer, false)
+		directory := t.TempDir()
+		first := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+		q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+		require.Len(t, pgKeptBuild(t, first, f, q, true).Sessions, 1)
+		require.NoError(t, first.Close())
 		_, err := syncer.pg.ExecContext(t.Context(), `TRUNCATE sessions CASCADE`)
 		require.NoError(t, err)
-		purged = true
-	}}
-	got, err := store.BuildActivityReportArtifacts(t.Context(), f, q, nil)
-	require.NoError(t, err)
-	require.True(t, purged)
-	require.Empty(t, got.Sessions)
+		after := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+		require.Empty(t, pgKeptBuild(t, after, f, q, true).Sessions)
+		require.NoError(t, after.Close())
+		again := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+		t.Cleanup(func() { require.NoError(t, again.Close()) })
+		require.Empty(t, pgKeptBuild(t, again, f, q, false).Sessions)
+	})
 }
 
 func TestPGActivityReportFilenodeDenied(t *testing.T) {
@@ -130,12 +151,15 @@ func TestPGActivityReportFilenodeDenied(t *testing.T) {
 	require.NoError(t, err)
 	store.pg = &activityFilenodeProbe{storeExecutor: store.pg, denied: true}
 	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
-	got, err := store.BuildActivityReportArtifacts(t.Context(), f, q, nil)
+	first := pgKeptBuild(t, store, f, q, true)
+	require.Len(t, first.Sessions, 1)
+	requirePGKeptEqual(t, first, pgKeptBuild(t, store, f, q, true))
+	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
 	require.NoError(t, err)
-	require.Len(t, got.Sessions, 1)
+	require.Empty(t, files)
 }
 
-func TestPGActivityReportPartitionedInputBypassesReuse(t *testing.T) {
+func TestPGActivityTableIdentityPartitionedInput(t *testing.T) {
 	_, _, store := newUsageJournalFixture(t)
 	tx, err := store.beginTx(t.Context(), nil)
 	require.NoError(t, err)

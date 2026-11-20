@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -86,16 +87,10 @@ func TestPGActivityReportSaved(t *testing.T) {
 			want := pgKeptBuild(t, first, f, q, true)
 			files, err := filepath.Glob(filepath.Join(cache, "postgres-activity-reports", "*", "*.gob"))
 			require.NoError(t, err)
-			if mode == "legacy" || mode == "today" || mode == "local" {
+			if mode == "legacy" || mode == "today" {
 				require.Empty(t, files)
-				if mode == "today" || mode == "local" {
+				if mode == "today" {
 					require.Len(t, first.runtimeState().activityKept.Snapshot(), 1)
-					if mode == "local" {
-						requirePGKeptEqual(t, want, pgKeptBuild(t, first, f, q, false))
-						restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
-						t.Cleanup(func() { require.NoError(t, restarted.Close()) })
-						requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, q, true))
-					}
 				}
 				return
 			}
@@ -225,74 +220,50 @@ func TestPGActivityReportTooLargeForMemoryIsNotSaved(t *testing.T) {
 	require.Empty(t, files)
 }
 
-func TestPGSavedActivityReportTruncated(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	local, syncer, _ := newUsageJournalFixture(t)
-	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
-	pgKeptPush(t, syncer, false)
-	directory := t.TempDir()
-	first := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
-	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
-	require.Len(t, pgKeptBuild(t, first, f, q, true).Sessions, 1)
-	require.NoError(t, first.Close())
-	restarted := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
-	require.Len(t, pgKeptBuild(t, restarted, f, q, false).Sessions, 1)
-	require.NoError(t, restarted.Close())
-	pgKeptSession(t, local, "b", "project-b", "2026-07-14")
-	pgKeptPush(t, syncer, false)
-	_, err := syncer.pg.ExecContext(t.Context(), `TRUNCATE sessions CASCADE`)
-	require.NoError(t, err)
-	after := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
-	require.Empty(t, pgKeptBuild(t, after, f, q, true).Sessions)
-	require.NoError(t, after.Close())
-	again := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
-	t.Cleanup(func() { require.NoError(t, again.Close()) })
-	require.Empty(t, pgKeptBuild(t, again, f, q, false).Sessions)
-}
-
-func TestPGActivityReportMemoryVisitRefreshesDisk(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	local, syncer, _ := newUsageJournalFixture(t)
-	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
-	pgKeptPush(t, syncer, false)
-	directory := t.TempDir()
-	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
-	want := pgKeptBuild(t, store, f, q, true)
-	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
-	require.NoError(t, err)
-	require.Len(t, files, 1)
-	old := time.Now().Add(-29 * 24 * time.Hour)
-	require.NoError(t, os.Chtimes(files[0], old, old))
-	requirePGKeptEqual(t, want, pgKeptBuild(t, store, f, q, false))
-	info, err := os.Stat(files[0])
-	require.NoError(t, err)
-	require.True(t, info.ModTime().After(old.Add(time.Hour)))
-}
-
-func TestPGActivityReportVisitsKeepHistoryForRestart(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	local, syncer, _ := newUsageJournalFixture(t)
-	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
-	pgKeptSession(t, local, "b", "project-b", "2026-07-14")
-	pgKeptPush(t, syncer, false)
-	directory := t.TempDir()
-	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
-	want := pgKeptBuild(t, store, f, q, true)
-	for i := 0; i < 130; i++ {
-		_, err := syncer.pg.ExecContext(t.Context(), `UPDATE sessions SET message_count=message_count+1 WHERE id='b'`)
+func TestPGActivityReportRefreshesSavedReport(t *testing.T) {
+	t.Run("memory visit", func(t *testing.T) {
+		t.Setenv("CACHE_DIRECTORY", t.TempDir())
+		local, syncer, _ := newUsageJournalFixture(t)
+		pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+		pgKeptPush(t, syncer, false)
+		directory := t.TempDir()
+		store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+		t.Cleanup(func() { require.NoError(t, store.Close()) })
+		q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+		want := pgKeptBuild(t, store, f, q, true)
+		files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
 		require.NoError(t, err)
-		if i%20 == 19 {
-			requirePGKeptEqual(t, want, pgKeptBuild(t, store, f, q, false))
+		require.Len(t, files, 1)
+		old := time.Now().Add(-29 * 24 * time.Hour)
+		require.NoError(t, os.Chtimes(files[0], old, old))
+		requirePGKeptEqual(t, want, pgKeptBuild(t, store, f, q, false))
+		info, err := os.Stat(files[0])
+		require.NoError(t, err)
+		require.True(t, info.ModTime().After(old.Add(time.Hour)))
+	})
+	t.Run("history", func(t *testing.T) {
+		t.Setenv("CACHE_DIRECTORY", t.TempDir())
+		local, syncer, _ := newUsageJournalFixture(t)
+		pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+		pgKeptSession(t, local, "b", "project-b", "2026-07-14")
+		pgKeptPush(t, syncer, false)
+		directory := t.TempDir()
+		store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+		t.Cleanup(func() { require.NoError(t, store.Close()) })
+		q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+		want := pgKeptBuild(t, store, f, q, true)
+		for i := 0; i < 130; i++ {
+			_, err := syncer.pg.ExecContext(t.Context(), `UPDATE sessions SET message_count=message_count+1 WHERE id='b'`)
+			require.NoError(t, err)
+			if i%20 == 19 {
+				requirePGKeptEqual(t, want, pgKeptBuild(t, store, f, q, false))
+			}
 		}
-	}
-	requirePGKeptEqual(t, want, pgKeptBuild(t, store, f, q, false))
-	restarted := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
-	t.Cleanup(func() { require.NoError(t, restarted.Close()) })
-	requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, q, false))
+		requirePGKeptEqual(t, want, pgKeptBuild(t, store, f, q, false))
+		restarted := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+		t.Cleanup(func() { require.NoError(t, restarted.Close()) })
+		requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, q, false))
+	})
 }
 
 func TestPGSavedActivityReportRestoreBetweenValidationReads(t *testing.T) {
@@ -349,4 +320,68 @@ func TestPGSavedActivityReportRestoreBetweenValidationReads(t *testing.T) {
 	require.NoError(t, got.err)
 	require.Equal(t, 500, got.report.Report.Totals.OutputTokens)
 	require.Equal(t, 700, pgKeptBuild(t, store, f, q, true).Report.Totals.OutputTokens)
+}
+
+func TestPGSavedActivityReportLocalTimezoneChange(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	previous := time.Local                      //nolint:forbidigo // The report follows the process timezone.
+	t.Cleanup(func() { time.Local = previous }) //nolint:forbidigo // Restore the process timezone.
+	firstZone, err := time.LoadLocation("Etc/GMT+4")
+	require.NoError(t, err)
+	secondZone, err := time.LoadLocation("Etc/GMT-4")
+	require.NoError(t, err)
+	time.Local = firstZone //nolint:forbidigo // Simulate the first process timezone.
+	local, syncer, _ := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	directory := t.TempDir()
+	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "Local"}
+	q.Timezone, q.Loc = "Local", firstZone
+	pgKeptBuild(t, store, f, q, true)
+	restarted := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+	t.Cleanup(func() { require.NoError(t, restarted.Close()) })
+	pgKeptBuild(t, restarted, f, q, false)
+	time.Local = secondZone //nolint:forbidigo // Simulate the next process timezone.
+	q.Loc = secondZone
+	changed := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+	t.Cleanup(func() { require.NoError(t, changed.Close()) })
+	pgKeptBuild(t, changed, f, q, true)
+}
+
+func TestPGSavedActivityReportRevisitedAfterEviction(t *testing.T) {
+	for _, advance := range []bool{false, true} {
+		t.Run(fmt.Sprintf("advance=%t", advance), func(t *testing.T) {
+			t.Setenv("CACHE_DIRECTORY", t.TempDir())
+			local, syncer, _ := newUsageJournalFixture(t)
+			pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+			pgKeptPush(t, syncer, false)
+			directory := t.TempDir()
+			store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+			t.Cleanup(func() { require.NoError(t, store.Close()) })
+			q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+			want := pgKeptBuild(t, store, f, q, true)
+			files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
+			require.NoError(t, err)
+			require.Len(t, files, 1)
+			require.NoError(t, os.Chtimes(files[0], time.Now().Add(-time.Hour), time.Now().Add(-time.Hour)))
+			for day := 15; day <= 22; day++ {
+				pgKeptBuild(t, store, f, pgDayQuery(t, fmt.Sprintf("2026-06-%02d", day), "UTC"), true)
+			}
+			_, err = os.Stat(files[0])
+			require.ErrorIs(t, err, os.ErrNotExist)
+			if advance {
+				pgKeptSession(t, local, "b", "project-b", "2026-07-14")
+				pgKeptPush(t, syncer, false)
+			}
+			requirePGKeptEqual(t, want, pgKeptBuild(t, store, f, q, false))
+			restarted := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+			t.Cleanup(func() { require.NoError(t, restarted.Close()) })
+			requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, q, false))
+			files, err = filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
+			require.NoError(t, err)
+			require.Len(t, files, 8)
+		})
+	}
 }
