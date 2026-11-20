@@ -123,7 +123,7 @@ func (s *Store) scanFrustrationCounts(ctx context.Context, ids []string, version
 
 func (s *Store) staleFrustrationSessions(ctx context.Context, versionColumn string) ([]string, []string, error) {
 	where := db.BuildAnalyticsWhere(db.AnalyticsFilter{}, db.NewQueryBuilder(s.sessionDialect(), 1), "s.", "", nil)
-	rows, err := s.pg.QueryContext(ctx, `SELECT s.id, COALESCE(NOT s.is_automated AND COALESCE(s.started_at, s.created_at) >= now() - interval '364 days', false) FROM sessions s LEFT JOIN session_frustration_counts c ON c.session_id=s.id WHERE `+where+` AND (c.session_id IS NULL OR (c.rules_version <= $1 AND (c.rules_version < $1 OR c.session_version <> `+frustrationSessionVersion("s."+versionColumn)+`))) ORDER BY s.id`, frustrationMarkerRulesVersion)
+	rows, err := s.pg.QueryContext(ctx, `SELECT s.id, COALESCE(NOT s.is_automated AND COALESCE(s.started_at, s.created_at) >= (date_trunc('day', now() AT TIME ZONE 'UTC') - interval '364 days') AT TIME ZONE 'UTC' AND COALESCE(s.started_at, s.created_at) < (date_trunc('day', now() AT TIME ZONE 'UTC') + interval '1 day') AT TIME ZONE 'UTC', false) FROM sessions s LEFT JOIN session_frustration_counts c ON c.session_id=s.id WHERE `+where+` AND (c.session_id IS NULL OR (c.rules_version <= $1 AND (c.rules_version < $1 OR c.session_version <> `+frustrationSessionVersion("s."+versionColumn)+`))) ORDER BY s.id`, frustrationMarkerRulesVersion)
 	if err != nil {
 		return nil, nil, err
 	}

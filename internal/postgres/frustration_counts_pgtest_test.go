@@ -602,21 +602,21 @@ func TestFrustrationFillSeparatesDashboardSessions(t *testing.T) {
 	store := f.open(t)
 	_, err := f.pg.ExecContext(f.ctx, `UPDATE sessions SET started_at=now(), is_automated=false WHERE id IN ('one','two')`)
 	require.NoError(t, err)
-	_, err = f.pg.ExecContext(f.ctx, `INSERT INTO sessions (id, machine, project, agent, started_at, message_count, is_automated) VALUES ('auto', 'test', 'sample', 'claude', now(), 1, true), ('old', 'test', 'sample', 'claude', '2017-01-01', 1, false)`)
+	_, err = f.pg.ExecContext(f.ctx, `INSERT INTO sessions (id, machine, project, agent, started_at, message_count, is_automated) VALUES ('auto', 'test', 'sample', 'claude', now(), 1, true), ('old', 'test', 'sample', 'claude', '2017-01-01', 1, false), ('boundary', 'test', 'sample', 'claude', (date_trunc('day', now() AT TIME ZONE 'UTC') - interval '364 days') AT TIME ZONE 'UTC', 1, false), ('padded', 'test', 'sample', 'claude', (date_trunc('day', now() AT TIME ZONE 'UTC') - interval '364 days 1 hour') AT TIME ZONE 'UTC', 1, false), ('future', 'test', 'sample', 'claude', (date_trunc('day', now() AT TIME ZONE 'UTC') + interval '1 day 1 hour') AT TIME ZONE 'UTC', 1, false)`)
 	require.NoError(t, err)
-	_, err = f.pg.ExecContext(f.ctx, `INSERT INTO messages (session_id, ordinal, role, content) VALUES ('auto', 0, 'user', 'this is broken'), ('old', 0, 'user', 'this is broken')`)
+	_, err = f.pg.ExecContext(f.ctx, `INSERT INTO messages (session_id, ordinal, role, content) VALUES ('auto', 0, 'user', 'this is broken'), ('old', 0, 'user', 'this is broken'), ('boundary', 0, 'user', 'this is broken'), ('padded', 0, 'user', 'this is broken'), ('future', 0, 'user', 'this is broken')`)
 	require.NoError(t, err)
 	_, err = f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts(session_id, session_version, rules_version, marker_count) VALUES ('one', 'stale', 0, 0)`)
 	require.NoError(t, err)
 	dash, rest, err := store.staleFrustrationSessions(f.ctx, f.versionColumn)
 	require.NoError(t, err)
-	require.Equal(t, []string{"one", "two"}, dash)
-	require.Equal(t, []string{"auto", "old"}, rest)
+	require.Equal(t, []string{"boundary", "one", "two"}, dash)
+	require.Equal(t, []string{"auto", "future", "old", "padded"}, rest)
 	now := time.Now().UTC()
-	filter := db.AnalyticsFilter{AutomatedScope: "human", From: now.AddDate(-1, 0, 0).Format("2006-01-02"), To: now.AddDate(0, 0, 1).Format("2006-01-02")}
+	filter := db.AnalyticsFilter{AutomatedScope: "human", Timezone: "UTC", From: now.AddDate(0, 0, -364).Format("2006-01-02"), To: now.Format("2006-01-02")}
 	rows, versions, err := store.signalRows(f.ctx, filter, f.versionColumn)
 	require.NoError(t, err)
-	require.Len(t, rows, 2)
+	require.Len(t, rows, 3)
 	counter := &frustrationScanCounter{storeExecutor: store.pg}
 	store.pg = counter
 	requestCtx := context.WithValue(f.ctx, frustrationScanKey{}, true)
@@ -652,7 +652,7 @@ func TestFrustrationFillSeparatesDashboardSessions(t *testing.T) {
 	require.Zero(t, counter.scans.Load())
 	all, allVersions, err := store.signalRows(f.ctx, db.AnalyticsFilter{}, f.versionColumn)
 	require.NoError(t, err)
-	require.Len(t, all, 4)
+	require.Len(t, all, 7)
 	require.NoError(t, store.populateFrustrationMarkers(requestCtx, all, allVersions, f.versionColumn))
 	for _, row := range all {
 		require.Equal(t, 1, row.FrustrationMarkerCount)
