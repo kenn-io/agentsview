@@ -417,17 +417,13 @@ func TestSearchDateFiltersRequireSupportedServer(t *testing.T) {
 					bounded := bounds.from != "" || bounds.to != ""
 					if bounded && version == 8 {
 						require.ErrorContains(t, err, "restart or upgrade the server")
-						if known {
-							assert.Empty(t, paths)
-						} else {
-							assert.Equal(t, []string{"/api/v1/version"}, paths)
-						}
+						assert.Equal(t, []string{"/api/v1/version"}, paths)
 						return
 					}
 					require.NoError(t, err)
 					require.Len(t, result.Results, 1)
 					assert.Equal(t, "recent", result.Results[0].SessionID)
-					if !known && bounded {
+					if bounded {
 						assert.Equal(t, []string{"/api/v1/version", "/api/v1/search"}, paths)
 					} else {
 						assert.Equal(t, []string{"/api/v1/search"}, paths)
@@ -436,4 +432,24 @@ func TestSearchDateFiltersRequireSupportedServer(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestSearchDateFiltersProbeChangedServer(t *testing.T) {
+	version := 9
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/v1/version" {
+			_, _ = fmt.Fprintf(w, `{"api_version":%d}`, version)
+			return
+		}
+		_, _ = w.Write([]byte(`{"results":[],"next":0}`))
+	}))
+	t.Cleanup(srv.Close)
+	backend := NewHTTPBackendForServer(srv.URL, "", HTTPServerCapabilities{APIVersion: 9})
+	req := service.SearchRequest{Query: "needle", DateFrom: "2024-05-16"}
+	_, err := backend.Search(t.Context(), req)
+	require.NoError(t, err)
+	version = 8
+	_, err = backend.Search(t.Context(), req)
+	require.ErrorContains(t, err, "restart or upgrade the server")
 }

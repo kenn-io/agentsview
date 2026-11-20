@@ -1367,7 +1367,7 @@ const SemanticOverfetchMin = 200
 const maxActivityExpansionCandidates = 4096
 
 // SelectSurvivingVectorHits returns the ranked vector hits that pass the
-// filter's session scope. When an activity cutoff rejects hits and leaves
+// filter's session scope. When a date filter or activity cutoff leaves
 // fewer than f.Limit units, it fetches again with twice the candidates, until
 // the engine is exhausted or the candidate cap is reached. When
 // f.Candidates is set it expands the same way whenever fewer than f.Limit
@@ -1403,7 +1403,7 @@ func SelectSurvivingVectorHits(
 			f.Candidates.Exhausted = exhausted
 		}
 		next := clampRecallVectorCandidates(k*2, ceiling)
-		expand := activityRejected || f.Candidates != nil
+		expand := activityRejected || f.Candidates != nil || f.Date != "" || f.DateFrom != "" || f.DateTo != ""
 		if !expand || units >= f.Limit || exhausted || next <= k {
 			return surviving, nil
 		}

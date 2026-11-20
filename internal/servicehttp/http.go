@@ -819,8 +819,12 @@ func (b *httpBackend) Search(
 		q.DateTo = &runtime.Date{Time: parsedDateTo}
 	}
 	if req.DateFrom != "" || req.DateTo != "" {
-		if err := b.requireAPIVersion(ctx, 9, "session-search date filters"); err != nil {
+		capabilities, err := ProbeHTTPServerCapabilities(ctx, b.baseURL, b.token)
+		if err != nil {
 			return nil, err
+		}
+		if capabilities.APIVersion < 9 {
+			return nil, fmt.Errorf("server API version %d does not support session-search date filters; restart or upgrade the server", capabilities.APIVersion)
 		}
 	}
 	if req.Sort != "" {
