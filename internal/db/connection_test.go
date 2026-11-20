@@ -137,20 +137,20 @@ func TestQuickReadKeepsAReaderWhileAnalyticsFillThePool(t *testing.T) {
 
 func TestSearchWaitsForBulkReadAndLeavesReaderForQuickRead(t *testing.T) {
 	for _, tc := range []struct {
-		name, pattern string
-		content       bool
+		name, pattern, mode string
 	}{
-		{"sessions", "searchable", false},
-		{"content words", "searchable text", true},
-		{"content word", "searchable", true},
+		{"sessions", "searchable", ""},
+		{"content words", "searchable text", "fts"},
+		{"content word", "searchable", "fts"},
+		{"hybrid", "searchable", "hybrid"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			testSearchWaitsForBulkRead(t, tc.pattern, tc.content)
+			testSearchWaitsForBulkRead(t, tc.pattern, tc.mode)
 		})
 	}
 }
 
-func testSearchWaitsForBulkRead(t *testing.T, pattern string, content bool) {
+func testSearchWaitsForBulkRead(t *testing.T, pattern, mode string) {
 	t.Helper()
 	database := testDB(t)
 	seedSearchSession(t, database, "summary", "project", [][2]string{{"user", "searchable text"}})
@@ -180,8 +180,8 @@ func testSearchWaitsForBulkRead(t *testing.T, pattern string, content bool) {
 	}
 	result := make(chan searchResult, 1)
 	go func() {
-		if content {
-			page, err := database.SearchContent(t.Context(), ContentSearchFilter{Pattern: pattern, Mode: "fts"})
+		if mode != "" {
+			page, err := database.SearchContent(t.Context(), ContentSearchFilter{Pattern: pattern, Mode: mode, KeywordOnly: mode == "hybrid"})
 			var ids []string
 			for _, match := range page.Matches {
 				ids = append(ids, match.SessionID)
@@ -206,7 +206,11 @@ func testSearchWaitsForBulkRead(t *testing.T, pattern string, content bool) {
 	session, err := database.GetSession(quickCtx, "summary")
 	require.NoError(t, err)
 	require.NotNil(t, session)
-	page, err := database.SearchContent(quickCtx, ContentSearchFilter{SessionID: "summary", Pattern: pattern, Mode: "fts"})
+	quickMode := mode
+	if quickMode == "" {
+		quickMode = "fts"
+	}
+	page, err := database.SearchContent(quickCtx, ContentSearchFilter{SessionID: "summary", Pattern: pattern, Mode: quickMode, KeywordOnly: quickMode == "hybrid"})
 	require.NoError(t, err)
 	require.Len(t, page.Matches, 1)
 

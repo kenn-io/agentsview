@@ -1741,6 +1741,14 @@ func (db *DB) searchContentHybrid(
 		return ContentSearchPage{}, errFTSUnavailable
 	}
 
+	if f.SessionID == "" {
+		release, err := db.acquireBulkRead(ctx)
+		if err != nil {
+			return ContentSearchPage{}, err
+		}
+		defer release()
+	}
+
 	k := max(f.Limit*4, SemanticOverfetchMin)
 	var vecLeg hybridLeg
 	var err error
