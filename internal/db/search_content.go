@@ -1116,6 +1116,13 @@ func (db *DB) searchContentFTS(
 	if !db.HasFTS(ctx) {
 		return ContentSearchPage{}, errFTSUnavailable
 	}
+	if f.SessionID == "" {
+		release, err := db.acquireBulkRead(ctx)
+		if err != nil {
+			return ContentSearchPage{}, err
+		}
+		defer release()
+	}
 	if _, q, words := routeContentWords(f); words {
 		return db.searchContentWords(ctx, f, q, false)
 	}
