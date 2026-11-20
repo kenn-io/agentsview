@@ -50,10 +50,10 @@ const (
 	manifestMinDecodeVersion = 2
 	// Segment v2 adds the optional prompt_source provenance field on
 	// message records. Segment v3 adds the optional provider_id billing
-	// field. Segment v4 adds reasoning_effort, and v5 adds dialogue_text.
+	// field. Segment v4 adds reasoning_effort, and v5 adds dialogue_text
+	// and ranges that reconstruct it from content.
 	// Earlier segments still decode with missing fields empty. Export writes
-	// v4 unless a record in the segment carries dialogue_text, so readers
-	// that predate v5 can still import segments without it.
+	// the lowest version that holds every record in the segment.
 	messageSegmentPreDialogueVersion = 4
 	messageSegmentFormatVersion      = 5
 	messageSegmentMinDecodeVersion   = 1
@@ -225,6 +225,7 @@ type segmentMessage struct {
 	Content           string            `json:"content"`
 	DialogueText      *string           `json:"dialogue_text,omitzero"`
 	DialogueIsContent bool              `json:"dialogue_is_content,omitzero"`
+	DialogueRanges    [][2]int          `json:"dialogue_ranges,omitzero"`
 	ThinkingText      string            `json:"thinking_text,omitempty"`
 	Timestamp         string            `json:"timestamp,omitempty"`
 	HasThinking       bool              `json:"has_thinking,omitzero"`
@@ -369,6 +370,20 @@ func segmentMessageFromDB(msg db.Message) segmentMessage {
 	if msg.DialogueText != nil && *msg.DialogueText == msg.Content {
 		record.DialogueText = nil
 		record.DialogueIsContent = true
+	}
+	if msg.DialogueText != nil && *msg.DialogueText != "" && !record.DialogueIsContent {
+		if start := strings.Index(msg.Content, *msg.DialogueText); start >= 0 {
+			record.DialogueRanges = [][2]int{{start, start + len(*msg.DialogueText)}}
+		} else if msg.ThinkingText != "" {
+			separator := "\n[Thinking]\n" + msg.ThinkingText + "\n[/Thinking]\n"
+			before, after, found := strings.Cut(msg.Content, separator)
+			if found && before+"\n"+after == *msg.DialogueText {
+				record.DialogueRanges = [][2]int{{0, len(before)}, {len(before) + len(separator), len(msg.Content)}}
+			}
+		}
+		if len(record.DialogueRanges) > 0 {
+			record.DialogueText = nil
+		}
 	}
 	if len(msg.ToolCalls) > 0 {
 		record.ToolCalls = make([]segmentToolCall, len(msg.ToolCalls))

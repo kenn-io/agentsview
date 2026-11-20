@@ -6,6 +6,8 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"strings"
+	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -180,6 +182,23 @@ func decodePreflightedSegment(preflight segmentPreflight) ([]db.Message, error) 
 		var record segmentMessage
 		if err := json.Unmarshal(line, &record); err != nil {
 			return nil, fmt.Errorf("decoding message segment: %w", err)
+		}
+		if len(record.DialogueRanges) > 0 {
+			if record.Version < messageSegmentFormatVersion || len(record.DialogueRanges) > 2 || record.DialogueText != nil || record.DialogueIsContent {
+				return nil, errors.New("invalid dialogue ranges")
+			}
+			parts := make([]string, 0, len(record.DialogueRanges))
+			for _, bounds := range record.DialogueRanges {
+				if bounds[0] < 0 || bounds[1] < bounds[0] || bounds[1] > len(record.Content) {
+					return nil, errors.New("invalid dialogue range bounds")
+				}
+				parts = append(parts, record.Content[bounds[0]:bounds[1]])
+			}
+			dialogue := strings.Join(parts, "\n")
+			if !utf8.ValidString(dialogue) {
+				return nil, errors.New("invalid dialogue range text")
+			}
+			record.DialogueText = &dialogue
 		}
 		msgs = append(msgs, record.dbMessage())
 	}

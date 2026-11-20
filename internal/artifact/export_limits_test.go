@@ -8,7 +8,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 func exportSessionToTestStoreWithLimits(
@@ -644,4 +646,49 @@ func TestExportPreservesSmallSingleSegmentHash(t *testing.T) {
 	require.NoError(t, err)
 	m := latestTestStoreManifest(t, store, origin)
 	assert.Equal(t, []string{wantHash}, m.Segments)
+}
+
+func TestExportMixedClaudeDialogueWithinLimit(t *testing.T) {
+	ctx := t.Context()
+	database := testExportDB(t)
+	store := newTestArtifactStore(t)
+	seedSession(t, database, "sess-1", "alpha", func(s *db.Session) { s.UserMessageCount = 2 })
+	first := strings.Repeat("review ", 80)
+	second := strings.Repeat("changes ", 70)
+	dialogue := first + "\n" + second
+	blocks := gjson.Parse(fmt.Sprintf(`[{"type":"text","text":%q},{"type":"thinking","thinking":"consider"},{"type":"text","text":%q}]`, first, second))
+	content, thinking, parsedDialogue, hasThinking, _, _, _ := parser.ExtractTextContent(ctx, blocks)
+	require.Equal(t, dialogue, parsedDialogue)
+	require.Equal(t, first+"\n[Thinking]\nconsider\n[/Thinking]\n"+second, content)
+	require.NoError(t, database.ReplaceSessionMessages(ctx, "sess-1", []db.Message{
+		{SessionID: "sess-1", Ordinal: 0, Role: "user", Content: content, ThinkingText: thinking, DialogueText: &parsedDialogue, HasThinking: hasThinking},
+		{SessionID: "sess-1", Ordinal: 1, Role: "user", Content: "[Thinking]\nprivate\n[/Thinking]", ThinkingText: "private", DialogueText: new(""), HasThinking: true},
+	}))
+	limits := productionArtifactLimits()
+	limits.sessionDecodedBytes = 1800
+	result, err := exportToStoreWithLimits(ctx, database, store, ExportOptions{Origin: contractOrigin, Full: true}, limits)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.ExportedSessions)
+	m := latestTestStoreManifest(t, store, contractOrigin)
+	require.Len(t, m.Segments, 1)
+	ref, err := NewRef(contractOrigin, KindSegments, m.Segments[0]+".ndjson")
+	require.NoError(t, err)
+	segment := readContractArtifact(t, store, ref)
+	assert.Contains(t, string(segment), `"dialogue_ranges"`)
+	_, err = decodeSegment(segment)
+	require.NoError(t, err)
+	assert.LessOrEqual(t, int64(len(segment)), limits.sessionDecodedBytes)
+	destination := testDB(t)
+	coordinator := NewStoreImportCoordinator(destination, store, importLocalOrigin)
+	recordAllImportEntries(t, coordinator, store, contractOrigin)
+	imported, err := coordinator.Finalize(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, imported.Sessions, "%+v", imported)
+	got, err := destination.GetAllMessages(ctx, contractOrigin+"~sess-1")
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, content, got[0].Content)
+	assert.Equal(t, &dialogue, got[0].DialogueText)
+	assert.Equal(t, "[Thinking]\nprivate\n[/Thinking]", got[1].Content)
+	assert.Equal(t, new(""), got[1].DialogueText)
 }

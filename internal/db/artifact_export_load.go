@@ -37,7 +37,13 @@ type ArtifactExportData struct {
 const artifactMessageRawBytesSQL = `
 	length(CAST(role AS BLOB)) +
 	length(CAST(content AS BLOB)) +
-	length(CAST(CASE WHEN role = 'user' AND dialogue_text <> content THEN dialogue_text ELSE '' END AS BLOB)) +
+	length(CAST(CASE WHEN role = 'user' AND dialogue_text <> content
+		AND instr(CAST(content AS BLOB), CAST(dialogue_text AS BLOB)) = 0
+		AND NOT (thinking_text <> '' AND
+			instr(content, char(10) || '[Thinking]' || char(10) || thinking_text || char(10) || '[/Thinking]' || char(10)) > 0 AND
+			substr(content, 1, instr(content, char(10) || '[Thinking]' || char(10) || thinking_text || char(10) || '[/Thinking]' || char(10)) - 1) || char(10) ||
+			substr(content, instr(content, char(10) || '[Thinking]' || char(10) || thinking_text || char(10) || '[/Thinking]' || char(10)) + length(char(10) || '[Thinking]' || char(10) || thinking_text || char(10) || '[/Thinking]' || char(10))) = dialogue_text)
+		THEN dialogue_text ELSE '' END AS BLOB)) +
 	length(CAST(thinking_text AS BLOB)) +
 	length(CAST(COALESCE(timestamp, '') AS BLOB)) +
 	length(CAST(model AS BLOB)) +
