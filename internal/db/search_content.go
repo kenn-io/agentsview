@@ -363,7 +363,7 @@ func (db *DB) searchContentSubstring(
 ) (ContentSearchPage, error) {
 	f, q, words := routeContentWords(f)
 	if f.SessionID == "" {
-		release, err := db.acquireBulkRead(ctx)
+		release, err := db.acquireBulkSearch(ctx)
 		if err != nil {
 			return ContentSearchPage{}, err
 		}

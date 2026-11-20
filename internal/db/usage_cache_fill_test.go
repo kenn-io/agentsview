@@ -136,10 +136,6 @@ func testBulkReadEntryPoints(t *testing.T, blocked bool) {
 			_, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: "skill", Mode: "regex"})
 			return err
 		}, nil, false},
-		{"substring search", func(ctx context.Context) error {
-			_, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: "skill", Mode: "substring"})
-			return err
-		}, nil, false},
 		{"terms search", func(ctx context.Context) error {
 			_, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: "question", Mode: "terms", IncludeOneShot: true})
 			return err
@@ -274,6 +270,14 @@ func testBulkReadEntryPoints(t *testing.T, blocked bool) {
 	if !blocked {
 		return
 	}
+	t.Run("substring search uses separate lane", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+		defer cancel()
+		page, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: "skill", Mode: "substring", Sources: []string{"messages"}})
+		require.NoError(t, err)
+		require.Len(t, page.Matches, 1)
+		assert.Equal(t, "inside-message", page.Matches[0].SessionID)
+	})
 	for _, tc := range []struct {
 		mode, sessionID, pattern, snippet string
 	}{

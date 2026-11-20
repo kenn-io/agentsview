@@ -10,11 +10,12 @@ to handle a data-version change.
 
 Use non-destructive schema migrations such as `ALTER TABLE` and `UPDATE`.
 
-Dashboard analytics, report, and search scans, change stream reads, and other
+Dashboard analytics, report scans, regex and terms searches, change stream reads, and other
 multi-second scans over message or usage rows, take the lane; the list and
 sidebar reads every page loads (session list, stats, project list) and reads
-scoped to one session stay outside. The lane uses `acquireBulkRead`, using at
-most `readerMaxOpenConns - 1` reader connections so quick reads always get one.
+scoped to one session stay outside. The lane uses `acquireBulkRead` and has
+four slots. Archive-wide substring searches use a separate four-slot lane.
+Both lanes share a pool of nine readers, leaving one for quick reads.
 Each holder uses one reader connection at a time. Validate input before
 acquiring a permit. Release it before waiting for another bulk reader or doing
 host git/GitHub lookups.
@@ -22,9 +23,9 @@ host git/GitHub lookups.
 The archive writer and its serving reader pool cache up to 64 prepared SQL
 statements per connection. This avoids compiling repeated import, project
 attribution, session, and transcript queries. The cache stays in memory and
-closes with its connection. The serving pool retains at most eight connections.
-Cold read-only opens and standalone schema probes use their existing uncached
-connections.
+closes with its connection. The serving pool retains at most eight idle
+connections. Cold read-only opens and standalone schema probes use their
+existing uncached connections.
 
 Reconciliation spools, Codex staging databases, and temporary parser indexes for
 discovery and reconciliation also cache up to 64 prepared statements per
