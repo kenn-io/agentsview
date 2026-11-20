@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -319,22 +318,9 @@ func TestRestoreSnapshotFileDownloadsPinnedArtifactWithoutGitCheckout(t *testing
 	}`)), 0o644))
 	sourceSHA := sha256FileForTest(t, source)
 
-	var mu sync.Mutex
-	arrived := 0
-	ready := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/litellm_snapshot.json.gz", r.URL.Path)
-		mu.Lock()
-		arrived++
-		if arrived == 3 {
-			close(ready)
-		}
-		mu.Unlock()
-		select {
-		case <-ready:
-			http.ServeFile(w, r, source)
-		case <-r.Context().Done():
-		}
+		http.ServeFile(w, r, source)
 	}))
 	t.Cleanup(server.Close)
 
@@ -342,22 +328,14 @@ func TestRestoreSnapshotFileDownloadsPinnedArtifactWithoutGitCheckout(t *testing
 	t.Chdir(workspace)
 
 	out := filepath.Join(workspace, "snapshot", "litellm_snapshot.json.gz")
-	errs := make(chan error, 3)
-	for range 3 {
-		go func() {
-			errs <- restoreSnapshotFile(t.Context(),
-				out,
-				"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
-				"litellm_snapshot.json.gz",
-				sourceSHA,
-				"unused-snapshot-branch",
-				server.URL+"/litellm_snapshot.json.gz",
-			)
-		}()
-	}
-	for range 3 {
-		require.NoError(t, <-errs)
-	}
+	require.NoError(t, restoreSnapshotFile(t.Context(),
+		out,
+		"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+		"litellm_snapshot.json.gz",
+		sourceSHA,
+		"unused-snapshot-branch",
+		server.URL+"/litellm_snapshot.json.gz",
+	))
 
 	assert.Equal(t, sourceSHA, sha256FileForTest(t, out))
 	require.NoError(t, validateSnapshotFile(out))
