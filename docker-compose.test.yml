@@ -16,7 +16,7 @@ services:
     ports:
       - "${TEST_PG_PUBLISH:-5433:5432}"  # Non-standard port to avoid conflict with local postgres
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U agentsview_test -d agentsview_test"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U agentsview_test -d agentsview_test"]
       interval: 2s
       timeout: 5s
       retries: 10

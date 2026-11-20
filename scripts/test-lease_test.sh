@@ -51,12 +51,32 @@ export PATH="$tmp/bin:$PATH" DOCKER_LOG="$tmp/docker.log"
 cleanup_cmd='docker compose -p "$TEST_SERVICE_LEASE" -f docker-compose.test.yml -f docker-compose.test-lease.yml down -v --remove-orphans'
 
 # Both services carry the project lease label in the resolved Compose config.
+export HEALTH_COMMAND="$tmp/postgres-health-command"
 (cd "$root" && TEST_SERVICE_LEASE=agentsview-test-123 "$docker_bin" compose -p agentsview-test-123 -f docker-compose.test.yml -f docker-compose.test-lease.yml config --format json) | python3 -c '
-import json, sys
+import json, os, sys
 services = json.load(sys.stdin)["services"]
 for name in ("postgres", "clickhouse"):
     assert services[name]["labels"]["test-service.lease"] == "agentsview-test-123"
+kind, command = services["postgres"]["healthcheck"]["test"]
+assert kind == "CMD-SHELL"
+open(os.environ["HEALTH_COMMAND"], "w").write(command)
 '
+
+# A socket-only startup server must not satisfy the PostgreSQL health check.
+cat > "$tmp/bin/pg_isready" <<'PGREADY'
+#!/bin/sh
+case " $* " in
+  *' -h 127.0.0.1 '*) [ -e "$TCP_READY" ] ;;
+  *) exit 0 ;;
+esac
+PGREADY
+chmod +x "$tmp/bin/pg_isready"
+export TCP_READY="$tmp/tcp-ready"
+if sh "$HEALTH_COMMAND"; then echo 'socket-only server passed health check' >&2; exit 1; fi
+touch "$TCP_READY"
+sh "$HEALTH_COMMAND"
+find "$tmp/bin/pg_isready" -delete
+unset HEALTH_COMMAND TCP_READY
 
 probe() {
     python3 - "$lease" <<'PY'
