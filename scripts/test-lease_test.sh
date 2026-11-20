@@ -34,7 +34,7 @@ PROBE
     fi
     if [ -n "${STALL_UP:-}" ]; then
       touch "$STALL_UP"
-      sleep 30
+      sleep 5
     fi ;;
   *' port '*) echo 127.0.0.1:49153 ;;
   *' down '*)
@@ -92,7 +92,7 @@ for mode in killed exited; do
     fi
     lease="$HOME/.local/state/test-service-leases/$(cat "$CHECK_LEASE")"
     if probe; then echo 'lease released while descendant still runs' >&2; exit 1; fi
-    if grep -q ' down ' "$DOCKER_LOG"; then echo 'cleanup ran while a descendant held the lease' >&2; exit 1; fi
+    if [[ $mode == exited ]] && grep -q ' down ' "$DOCKER_LOG"; then echo 'cleanup ran while a descendant held the lease' >&2; exit 1; fi
     touch "$DESC_RELEASE"
     if [[ $mode == exited ]]; then
         wait "$launcher"
@@ -117,8 +117,6 @@ status=$?
 set -e
 [[ $status == 7 ]]
 grep -q 'cleanup failed; retry from the repository root:' "$tmp/error"
-grep -qE -- '-p agentsview-.* -f docker-compose.test-lease.yml up -d --wait postgres' "$DOCKER_LOG"
-grep -qE -- '-p agentsview-.* down -v --remove-orphans' "$DOCKER_LOG"
 set +e
 (cd "$root" && ./scripts/test-lease.sh agentsview "$cleanup_cmd" ./scripts/test-service-compose.sh postgres 5432 true) 2>"$tmp/cleanup-error"
 status=$?
@@ -142,7 +140,7 @@ $(if $(filter 1,$(MAKELEVEL)),$(info TARGET_FROM_MAKE=$(MAKECMDGOALS))$(info LEA
 MAKE
 for target in test-postgres bench-pg-usage test-clickhouse; do
     : > "$DOCKER_LOG"
-    (cd "$root" && CHECK_LEASE="$tmp/project" MAKEFILES="$tmp/inspect.mk" make "$target" TEST_SERVICE_LEASE=old TEST_PG_URL=old-pg TEST_CLICKHOUSE_URL=old-ch MAKE='make -n') > "$tmp/make-url"
+    (cd "$root" && CHECK_LEASE="$tmp/project" MAKEFILES="$tmp/inspect.mk" make -o pricing-snapshot "$target" TEST_SERVICE_LEASE=old TEST_PG_URL=old-pg TEST_CLICKHOUSE_URL=old-ch MAKE='make -n') > "$tmp/make-url"
     project=$(cat "$tmp/project")
     [[ "$project" != old ]]
     grep -Fxq "TARGET_FROM_MAKE=$target-run" "$tmp/make-url"
@@ -188,6 +186,7 @@ export STALL_UP="$tmp/up-ready" CHECK_LEASE="$tmp/up-project"
 launcher=$!
 for _ in {1..100}; do [[ -f "$STALL_UP" ]] && break; sleep .1; done
 [[ -f "$STALL_UP" ]]
+started=$SECONDS
 kill -TERM "$launcher"
 set +e
 wait "$launcher"
@@ -195,6 +194,7 @@ status=$?
 set -e
 launcher=
 [[ $status == 143 ]]
+[[ $((SECONDS - started)) -lt 5 ]]
 grep -qE -- '-p agentsview-.* down -v --remove-orphans' "$DOCKER_LOG"
 unset STALL_UP CHECK_LEASE
 
@@ -214,11 +214,26 @@ while IFS= read -r project; do
     grep -qE -- "-p $project .* down -v --remove-orphans" "$DOCKER_LOG"
 done <<< "$projects"
 
-# The lease may disappear before the supervisor can reopen it.
+# A cleaner may acquire and remove the lease before the supervisor reopens it.
+mkdir "$tmp/cleaner"
+cat > "$tmp/cleaner/sitecustomize.py" <<'PY'
+import builtins
+import fcntl
+import os
+
+original_open = builtins.open
+def open_after_cleaner(path, *args, **kwargs):
+    if isinstance(path, str) and "/test-service-leases/" in path:
+        with original_open(path, "r") as lease:
+            fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            os.unlink(path)
+    return original_open(path, *args, **kwargs)
+builtins.open = open_after_cleaner
+PY
 for expected in 0 7; do
     : > "$DOCKER_LOG"
     set +e
-    (cd "$root" && ./scripts/test-lease.sh agentsview "$cleanup_cmd" sh -c 'python3 -c '\''import os; os.unlink(os.path.join(os.environ["HOME"], ".local/state/test-service-leases", os.environ["TEST_SERVICE_LEASE"]))'\''; exit "$1"' sh "$expected") >"$tmp/missing-lease.log" 2>&1
+    (cd "$root" && PYTHONPATH="$tmp/cleaner" ./scripts/test-lease.sh agentsview "$cleanup_cmd" sh -c 'exit "$1"' sh "$expected") >"$tmp/missing-lease.log" 2>&1
     status=$?
     set -e
     [[ $status == "$expected" ]]

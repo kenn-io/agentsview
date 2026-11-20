@@ -319,41 +319,11 @@ func TestRestoreSnapshotFileDownloadsPinnedArtifactWithoutGitCheckout(t *testing
 	}`)), 0o644))
 	sourceSHA := sha256FileForTest(t, source)
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/litellm_snapshot.json.gz", r.URL.Path)
-		http.ServeFile(w, r, source)
-	}))
-	t.Cleanup(server.Close)
-
-	workspace := t.TempDir()
-	t.Chdir(workspace)
-
-	out := filepath.Join(workspace, "snapshot", "litellm_snapshot.json.gz")
-	require.NoError(t, restoreSnapshotFile(t.Context(),
-		out,
-		"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
-		"litellm_snapshot.json.gz",
-		sourceSHA,
-		"unused-snapshot-branch",
-		server.URL+"/litellm_snapshot.json.gz",
-	))
-
-	assert.Equal(t, sourceSHA, sha256FileForTest(t, out))
-	require.NoError(t, validateSnapshotFile(out))
-}
-
-func TestRestoreSnapshotFileConcurrentDownloads(t *testing.T) {
-	source := filepath.Join(t.TempDir(), "snapshot.gz")
-	require.NoError(t, os.WriteFile(source, gzipSnapshot(t, []byte(`{
-		"version": "litellm-url",
-		"source_ref": "551e5d097c11f08fd2400a25a651b1844fcf89c2",
-		"models": [{"ModelPattern": "url-model", "InputPerMTok": {"microdollars": 1000000}}]
-	}`)), 0o644))
-	sha := sha256FileForTest(t, source)
 	var mu sync.Mutex
 	arrived := 0
 	ready := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/litellm_snapshot.json.gz", r.URL.Path)
 		mu.Lock()
 		arrived++
 		if arrived == 3 {
@@ -367,18 +337,30 @@ func TestRestoreSnapshotFileConcurrentDownloads(t *testing.T) {
 		}
 	}))
 	t.Cleanup(server.Close)
-	t.Chdir(t.TempDir())
-	out := filepath.Join("snapshot", "snapshot.gz")
+
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+
+	out := filepath.Join(workspace, "snapshot", "litellm_snapshot.json.gz")
 	errs := make(chan error, 3)
 	for range 3 {
 		go func() {
-			errs <- restoreSnapshotFile(t.Context(), out, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "snapshot.gz", sha, "unused", server.URL)
+			errs <- restoreSnapshotFile(t.Context(),
+				out,
+				"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+				"litellm_snapshot.json.gz",
+				sourceSHA,
+				"unused-snapshot-branch",
+				server.URL+"/litellm_snapshot.json.gz",
+			)
 		}()
 	}
 	for range 3 {
 		require.NoError(t, <-errs)
 	}
-	assert.Equal(t, sha, sha256FileForTest(t, out))
+
+	assert.Equal(t, sourceSHA, sha256FileForTest(t, out))
+	require.NoError(t, validateSnapshotFile(out))
 }
 
 func writeSnapshotFile(t *testing.T, data []byte) string {
