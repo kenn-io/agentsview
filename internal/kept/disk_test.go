@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
-	"fmt"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -46,7 +46,7 @@ func TestDiskEvictsAfterEightReports(t *testing.T) {
 	disk.MaxFiles = 8
 	require.NoError(t, disk.Open("test-usage", "mirror", 1024, 0))
 	for i := range 8 {
-		require.True(t, disk.Put(fmt.Sprint(i), "v1", []byte("report")))
+		require.True(t, disk.Put(strconv.Itoa(i), "v1", []byte("report")))
 	}
 	old := time.Now().Add(-2 * time.Hour)
 	require.NoError(t, os.Chtimes(disk.reports.disk.path("0"), old, old))
