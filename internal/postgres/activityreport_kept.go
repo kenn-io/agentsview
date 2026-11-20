@@ -50,15 +50,11 @@ func (s *Store) loadActivityReport(selection, version, identity string) (pgActiv
 	return pgActivityKept{identity: identity, revision: saved.Revision, checkpoint: saved.Checkpoint, candidates: saved.Candidates, peers: saved.Peers, labels: saved.Labels, report: saved.Report}, true
 }
 
-func encodePGActivityReport(entry pgActivityKept) ([]byte, error) {
-	return json.Marshal(pgActivitySavedReport{Revision: entry.revision, Checkpoint: entry.checkpoint, Candidates: entry.candidates, Peers: entry.peers, Labels: entry.labels, Report: entry.report}, json.FormatNilSliceAsNull(true))
-}
-
 func (s *Store) saveActivityReport(selection, version string, entry pgActivityKept) {
 	if entry.checkpoint == "" {
 		return
 	}
-	data, err := encodePGActivityReport(entry)
+	data, err := json.Marshal(pgActivitySavedReport{Revision: entry.revision, Checkpoint: entry.checkpoint, Candidates: entry.candidates, Peers: entry.peers, Labels: entry.labels, Report: entry.report}, json.FormatNilSliceAsNull(true))
 	if err == nil {
 		s.activityReports.Put(selection+"|"+entry.identity+"|"+version, entry.identity+"|"+version, data)
 	}

@@ -95,15 +95,10 @@ func TestPGActivityReportSaved(t *testing.T) {
 						requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, q, true))
 					}
 				} else if mode == "unavailable" {
-					lookups := 0
-					if denied != nil {
-						lookups = denied.queries
-						require.Positive(t, lookups)
-					}
+					lookups := denied.queries
+					require.Positive(t, lookups)
 					requirePGKeptEqual(t, want, pgKeptBuild(t, first, f, q, false))
-					if denied != nil {
-						assert.Equal(t, lookups, denied.queries)
-					}
+					assert.Equal(t, lookups, denied.queries)
 				}
 				return
 			}
