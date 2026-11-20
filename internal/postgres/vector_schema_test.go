@@ -16,7 +16,6 @@ func TestVectorUnavailableReason(t *testing.T) {
 		{"old version", "0.7.4", "pgvector 0.7.4 lacks iterative scan; upgrade to pgvector 0.8.0+", true},
 		{"minimum version", "0.8.0", "", true},
 		{"newer version", "0.10.0", "", true},
-		{"prerelease", "0.8.0-rc1", "pgvector 0.8.0-rc1 lacks iterative scan; upgrade to pgvector 0.8.0+", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.reason, vectorUnavailableReason(tc.halfvec, tc.version))

@@ -36,6 +36,7 @@ func TestHostedVectorUploadEditAndSearchSnapshot(t *testing.T) {
 	reader, err := OpenHosted(t.Context(), f.dsn, f.schema, f.tenant, false)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, reader.Close()) })
+	// Search must reuse its snapshot connection through candidate hydration.
 	reader.SetMaxOpenConns(1)
 	hosted, err := newHostedAdapter(t.Context(), reader, f.tenant)
 	require.NoError(t, err)

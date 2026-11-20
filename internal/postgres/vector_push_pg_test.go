@@ -1105,18 +1105,25 @@ func TestVectorPushDeltaNoop(t *testing.T) {
 
 func TestVectorPushUnchangedAfterGenerationDrop(t *testing.T) {
 	t.Parallel()
-	sync, _, pg := newVectorPushTestSync(t)
-	id, err := ensureVectorGeneration(t.Context(), pg, "dropped", "model", 4)
+	sync, localDB, pg := newVectorPushTestSync(t)
+	ctx := t.Context()
+	seedVectorSession(t, localDB, "A")
+	sync.vectorSource = &fakeVectorSource{
+		gen:    storage.VectorGenerationInfo{Fingerprint: "dropped", Model: "model", Dimension: 4},
+		hasGen: true,
+		hashes: map[string]string{"A": "ha"},
+		docs:   map[string][]storage.VectorPushDoc{"A": {vdoc("A", "A#0", 0, "content", "hash", []float32{1, 0, 0, 0})}},
+	}
+	_, err := sync.Push(ctx, false, nil)
 	require.NoError(t, err)
-	require.NoError(t, ensureVectorChunkTable(t.Context(), pg, id, 4))
-	_, err = pg.ExecContext(t.Context(), `DROP TABLE `+vectorChunkTable(id))
+	id, _, ok, err := LookupVectorGeneration(ctx, pg, "dropped")
 	require.NoError(t, err)
-	_, err = pg.ExecContext(t.Context(), `DELETE FROM vector_generations WHERE id = $1`, id)
-	require.NoError(t, err)
-	state := map[string]vectorPushStateRow{"A": {docAggHash: "ha", machine: "test-machine", sessionExists: true}}
-	result := &storage.VectorPushResult{}
-	err = sync.applyVectorDeltas(t.Context(), vectorGeneration{id: id}, vectorOwnerIdentity{machine: "test-machine"}, false,
-		map[string]string{"A": "ha"}, state, nil, nil, nil, result)
+	require.True(t, ok)
+	sync.afterVectorGenerationLookup = func() {
+		_, err := pg.ExecContext(ctx, `DROP TABLE `+vectorChunkTable(id))
+		require.NoError(t, err)
+	}
+	result, err := sync.pushVectors(ctx, false, []string{"A"}, id, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.SessionsUnchanged)
 }
@@ -1312,6 +1319,12 @@ func TestVectorPushContentChange(t *testing.T) {
 		"A#0").Scan(&content, &hash), "read updated doc")
 	assert.Equal(t, "c1-updated", content)
 	assert.Equal(t, "h1b", hash)
+	genID, _, ok, err := LookupVectorGeneration(ctx, pg, "fp-cc")
+	require.NoError(t, err)
+	require.True(t, ok)
+	var updatedVector string
+	require.NoError(t, pg.QueryRowContext(ctx, `SELECT embedding::text FROM `+vectorChunkTable(genID)+` WHERE doc_key=$1 AND chunk_index=0`, "A#0").Scan(&updatedVector))
+	assert.Equal(t, "[0,1,0,0]", updatedVector)
 }
 
 func TestVectorPushEviction(t *testing.T) {
@@ -1407,14 +1420,6 @@ func TestVectorPushSharedDocAcrossGenerations(t *testing.T) {
 	genB, _, ok, err := LookupVectorGeneration(ctx, pg, "fp-b")
 	require.NoError(t, err)
 	require.True(t, ok)
-
-	fake.hashes["X"] = "hx-updated"
-	fake.docs["X"] = []storage.VectorPushDoc{vdoc("X", "X#0", 0, "updated shared text", "hx2", []float32{0, 1, 0, 0})}
-	_, err = sync.Push(ctx, false, nil)
-	require.NoError(t, err)
-	var updatedVector string
-	require.NoError(t, pg.QueryRowContext(ctx, `SELECT embedding::text FROM `+vectorChunkTable(genB)+` WHERE doc_key=$1 AND chunk_index=0`, "X#0").Scan(&updatedVector))
-	assert.Equal(t, "[0,1,0,0]", updatedVector)
 
 	// Drop Y from gen B's source, triggering a gen-B eviction of Y.
 	delete(fake.hashes, "Y")

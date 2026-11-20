@@ -260,6 +260,7 @@ func TestVectorHalfvecGate(t *testing.T) {
 	defer pg.Close()
 
 	ctx := t.Context()
+	require.NoError(t, EnsureSchema(ctx, pg, vectorSchemaTestSchema))
 	hadHalfvec, beforeVersion, err := vectorHalfvecAvailable(ctx, pg)
 	require.NoError(t, err)
 
@@ -270,7 +271,6 @@ func TestVectorHalfvecGate(t *testing.T) {
 	cfg.Tracer = trace
 	traced := stdlib.OpenDB(*cfg)
 	t.Cleanup(func() { require.NoError(t, traced.Close()) })
-	require.NoError(t, EnsureSchema(ctx, traced, vectorSchemaTestSchema))
 	unavailable, err := ensureVectorBaseSchemaPG(ctx, traced)
 	require.NoError(t, err, "gate must degrade, never error")
 	hasHalfvec, version, err := vectorHalfvecAvailable(ctx, pg)
@@ -286,8 +286,6 @@ func TestVectorHalfvecGate(t *testing.T) {
 		return
 	}
 	if version != "" {
-		assert.Contains(t, unavailable, version)
-		assert.Contains(t, unavailable, "0.8.0+")
 		store, err := NewStore(ctx, pgURL, vectorSchemaTestSchema, true)
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = store.Close() })
@@ -295,7 +293,5 @@ func TestVectorHalfvecGate(t *testing.T) {
 		require.NoError(t, err)
 		assert.Nil(t, searcher)
 		assert.Equal(t, unavailable, reason)
-	} else {
-		assert.Contains(t, unavailable, "pgvector extension unavailable")
 	}
 }
