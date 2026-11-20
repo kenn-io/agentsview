@@ -121,7 +121,7 @@ func (s *Store) scanFrustrationCounts(ctx context.Context, ids []string, version
 }
 
 func (s *Store) staleFrustrationSessions(ctx context.Context, versionColumn string) ([]string, error) {
-	rows, err := s.pg.QueryContext(ctx, `SELECT s.id FROM sessions s LEFT JOIN session_frustration_counts c ON c.session_id=s.id WHERE s.deleted_at IS NULL AND (c.session_id IS NULL OR c.rules_version < $1 OR c.session_version <> `+frustrationSessionVersion("s."+versionColumn)+`) ORDER BY s.id`, frustrationMarkerRulesVersion)
+	rows, err := s.pg.QueryContext(ctx, `SELECT s.id FROM sessions s LEFT JOIN session_frustration_counts c ON c.session_id=s.id WHERE s.deleted_at IS NULL AND (c.session_id IS NULL OR (c.rules_version <= $1 AND (c.rules_version < $1 OR c.session_version <> `+frustrationSessionVersion("s."+versionColumn)+`))) ORDER BY s.id`, frustrationMarkerRulesVersion)
 	if err != nil {
 		return nil, err
 	}
