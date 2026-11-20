@@ -703,7 +703,8 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // Antigravity CLI sources in place; source and session identities are unchanged.)
 // (187: re-parse compacted Hermes state.db sessions to exclude archived/hidden
 // rows and preserve display_order without losing companion suppression.)
-const dataVersion = 187
+// (188: split Pi /skill: expansions into a skill row and the typed prompt.)
+const dataVersion = 188
 
 const archiveOnlyVersionBase = 1 << 20
 
