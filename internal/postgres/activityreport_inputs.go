@@ -426,8 +426,8 @@ func (s *Store) activityUsageInputs(ctx context.Context, ids []string, lower, up
 const activityMessageSliceSessions = 4096
 
 // activityMessageSlices caps the message reads one pairing runs at once.
-// The terminal read and the report's usage read run beside them on the
-// smaller supported pool of 5 connections, leaving one for other requests.
+// The terminal read and the report's usage read run beside them, so on the
+// default pool of 5 connections this leaves one for other requests.
 const activityMessageSlices = 2
 
 // readActivityMessagePairs pairs the messages of the sessions in ids, one

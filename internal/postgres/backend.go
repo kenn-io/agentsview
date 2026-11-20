@@ -124,7 +124,7 @@ func (Backend) OpenStore(
 func (Backend) OpenServeStore(
 	ctx context.Context, target storage.ReplicaTarget,
 ) (storage.ReplicaStore, error) {
-	store, err := NewStore(ctx, target.URL, target.Schema, target.AllowInsecure)
+	store, err := newServeStore(ctx, target.URL, target.Schema, target.AllowInsecure)
 	if err != nil {
 		return nil, err
 	}
@@ -132,8 +132,6 @@ func (Backend) OpenServeStore(
 		_ = store.Close()
 		return nil, err
 	}
-	store.DB().SetMaxOpenConns(15)
-	store.DB().SetMaxIdleConns(15)
 	return store, nil
 }
 
