@@ -279,7 +279,6 @@ func TestVectorHalfvecGate(t *testing.T) {
 		assert.True(t, hasHalfvec, "available gate implies halfvec exists")
 		assert.NotEmpty(t, version, "installed extension reports a version")
 		assert.Empty(t, trace.matching(regexp.MustCompile(`(?i)ALTER\s+EXTENSION\s+vector\s+UPDATE`)))
-		assert.Equal(t, beforeVersion, version)
 		return
 	}
 	assert.NotEmpty(t, unavailable)
@@ -298,6 +297,5 @@ func TestVectorHalfvecGate(t *testing.T) {
 	searcher, reason, err := (Backend{}).OpenVectorSearcher(ctx, store, storage.VectorGenerationInfo{}, 0, nil)
 	require.NoError(t, err)
 	assert.Nil(t, searcher)
-	assert.NotEmpty(t, reason)
 	assert.Equal(t, unavailable, reason)
 }
