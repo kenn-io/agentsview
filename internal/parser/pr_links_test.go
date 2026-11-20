@@ -198,7 +198,12 @@ func TestPromptPRLinks(t *testing.T) {
 		{"**https://github.com/owner/repo/pull/123**", []string{"https://github.com/owner/repo/pull/123"}},
 		{"https://github.com/owner/repo/pull/1。", []string{"https://github.com/owner/repo/pull/1"}},
 		{"https://gitlab.com/group/team/pull/1/repo/-/merge_requests/9/files", []string{"https://gitlab.com/group/team/pull/1/repo/-/merge_requests/9"}},
-		{"https://github.com/group/team/pulls/1/repo/pull/9/files", []string{"https://github.com/group/team/pulls/1/repo/pull/9"}},
+		{"https://github.com/group/team/pulls/1/repo/pull/9/files", []string{"https://github.com/group/team/pulls/1"}},
+		{"https://github.com/o/r/blob/main/docs/pull/123", nil},
+		{"https://github.com/o/r/tree/feature/pull/5", nil},
+		{"https://github.com/o/pull/5", nil},
+		{"https://gitlab.com/g/r/-/blob/main/-/merge_requests/5", nil},
+		{"https://gitlab.com/g/-/merge_requests/5", nil},
 		{"https://GITHUB.com/owner/repo/pull/123#issuecomment", []string{"https://github.com/owner/repo/pull/123"}},
 		{"(https://github.example.com/owner/repo/pulls/12).", []string{"https://github.example.com/owner/repo/pulls/12"}},
 		{"https://gitlab.com/group/subgroup/repo/-/merge_requests/9?x=y", []string{"https://gitlab.com/group/subgroup/repo/-/merge_requests/9"}},
@@ -208,6 +213,12 @@ func TestPromptPRLinks(t *testing.T) {
 		{"https://github.com/o/r/pull/1,https://github.com/o/r/pull/2", []string{"https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"}},
 		{"https://github.com/o/r/pull/1|https://github.com/o/r/pull/2", []string{"https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"}},
 		{"https://github.com/o/r/pull/1https://github.com/o/r/pull/2", []string{"https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"}},
+		{"https://github.com/o/r/pull/1\u2003https://github.com/o/r/pull/2", []string{"https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"}},
+		{"https://r.example/?u=https://evil.example/a/b/pull/1", nil},
+		{"https://r.example/#https://evil.example/a/b/pull/1", nil},
+		{"https://r.example/go/https://evil.example/a/b/pull/1", nil},
+		{"https://r.example/?u=https://evil.example/a/b/pull/1 https://github.com/o/r/pull/2", []string{"https://github.com/o/r/pull/2"}},
+		{"https://github.com/o/r/pull/1?u=https://evil.example/a/b/pull/2", []string{"https://github.com/o/r/pull/1"}},
 	} {
 		t.Run(tt.text, func(t *testing.T) {
 			links := PromptPRLinks(tt.text)

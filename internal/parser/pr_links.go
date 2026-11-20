@@ -3,6 +3,7 @@ package parser
 import (
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -120,17 +121,14 @@ var (
 // PromptPRLinks extracts pull and merge request URLs from text.
 func PromptPRLinks(text string) []PRLink {
 	var links prLinkCollector
-	starts := promptURLStart.FindAllStringIndex(text, -1)
+	starts := standalonePromptURLStarts(text)
 	for i, start := range starts {
 		end := len(text)
 		if i+1 < len(starts) {
-			end = starts[i+1][0]
+			end = starts[i+1]
 		}
-		part := text[start[0]:end]
-		candidate := promptURL.FindString(part)
-		if n := strings.IndexFunc(candidate, unicode.IsSpace); n >= 0 {
-			candidate = candidate[:n]
-		}
+		part := text[start:end]
+		candidate := promptURLToken(part)
 		if i+1 < len(starts) && len(candidate) == len(part) {
 			candidate = strings.TrimRightFunc(candidate, func(r rune) bool {
 				return unicode.IsPunct(r) || unicode.IsSymbol(r)
@@ -143,12 +141,14 @@ func PromptPRLinks(text string) []PRLink {
 		if err != nil {
 			continue
 		}
-		repo, num, _, routePath, found := prLinkRoute(u.Path)
-		repository := strings.TrimPrefix(repo, "/")
-		if !found || strings.Count(repository, "/") < 1 || strings.Trim(num, "0123456789") != "" {
+		repository, num, routePath, found := promptPRRoute(u.Path)
+		if !found || strings.Trim(num, "0123456789") != "" {
 			continue
 		}
-		n, _ := strconv.Atoi(num)
+		n, err := strconv.Atoi(num)
+		if err != nil {
+			continue
+		}
 		u.Path = routePath
 		u.RawPath, u.RawQuery, u.Fragment = "", "", ""
 		if link, ok := NewPRLink(u.String(), repository, n); ok {
@@ -156,4 +156,60 @@ func PromptPRLinks(text string) []PRLink {
 		}
 	}
 	return links.result()
+}
+
+// promptURLToken returns the URL that starts text, ending at the first
+// character a URL cannot contain or at any Unicode whitespace.
+func promptURLToken(text string) string {
+	token := promptURL.FindString(text)
+	if n := strings.IndexFunc(token, unicode.IsSpace); n >= 0 {
+		token = token[:n]
+	}
+	return token
+}
+
+// standalonePromptURLStarts returns the offsets of URLs that do not start
+// inside another URL. A URL inside an earlier URL's query or fragment, or
+// directly after a "/" or "=" in its path, is part of that URL. Any other
+// URL glued to the previous one, such as "pull/1https://" or
+// "pull/1,https://", starts a new link.
+func standalonePromptURLStarts(text string) []int {
+	var starts []int
+	enclosingEnd := 0
+	for _, match := range promptURLStart.FindAllStringIndex(text, -1) {
+		start := match[0]
+		if start < enclosingEnd {
+			enclosing := text[starts[len(starts)-1]:start]
+			if strings.ContainsAny(enclosing, "?#") || strings.HasSuffix(enclosing, "/") || strings.HasSuffix(enclosing, "=") {
+				continue
+			}
+		}
+		starts = append(starts, start)
+		enclosingEnd = start + len(promptURLToken(text[start:]))
+	}
+	return starts
+}
+
+// promptPRRoute finds the pull or merge request route in a prompt URL path.
+// "/pull/" and "/pulls/" must follow exactly owner/repo, as on GitHub, Gitea,
+// and Forgejo. Only GitLab's "/-/merge_requests/" may follow a nested group
+// path; GitLab reserves "-" as a path segment, so the first "-" ends the
+// project path. Any segments after the number, such as "/files", are a
+// subpage of the request.
+func promptPRRoute(path string) (repository, number, routePath string, found bool) {
+	segments := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	repoLen, numberAt := slices.Index(segments, "-"), 0
+	switch {
+	case repoLen >= 0 && repoLen+2 < len(segments) && segments[repoLen+1] == "merge_requests":
+		numberAt = repoLen + 2
+	case len(segments) > 3 && (segments[2] == "pull" || segments[2] == "pulls"):
+		repoLen, numberAt = 2, 3
+	default:
+		return "", "", "", false
+	}
+	if repoLen < 2 || slices.Contains(segments[:repoLen], "") {
+		return "", "", "", false
+	}
+	return strings.Join(segments[:repoLen], "/"), segments[numberAt],
+		"/" + strings.Join(segments[:numberAt+1], "/"), true
 }
