@@ -205,23 +205,42 @@ func (p *activityIdentityProbe) QueryRowContext(ctx context.Context, query strin
 	return p.storeExecutor.QueryRowContext(ctx, query, args...)
 }
 
-func TestPGActivityReportIdentityRecovers(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	local, syncer, _ := newUsageJournalFixture(t)
-	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
-	pgKeptPush(t, syncer, false)
-	directory := t.TempDir()
-	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	probe := &activityIdentityProbe{storeExecutor: store.pg, deny: true}
-	store.pg = probe
-	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
-	want := pgKeptBuild(t, store, f, q, true)
-	probe.deny = false
-	requirePGKeptEqual(t, want, pgKeptBuild(t, store, f, q, false))
-	restarted := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
-	t.Cleanup(func() { require.NoError(t, restarted.Close()) })
-	requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, q, false))
+func TestPGActivityReportIdentity(t *testing.T) {
+	for _, mode := range []string{"table denied", "source recovers"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv("CACHE_DIRECTORY", t.TempDir())
+			local, syncer, _ := newUsageJournalFixture(t)
+			pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+			pgKeptPush(t, syncer, false)
+			directory := t.TempDir()
+			store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+			t.Cleanup(func() { require.NoError(t, store.Close()) })
+			var source *activityIdentityProbe
+			if mode == "table denied" {
+				createActivityIdentityDenied(t, store)
+				store.pg = &activityFilenodeProbe{storeExecutor: store.pg, denied: true}
+			} else {
+				source = &activityIdentityProbe{storeExecutor: store.pg, deny: true}
+				store.pg = source
+			}
+			q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+			want := pgKeptBuild(t, store, f, q, true)
+			require.Len(t, want.Sessions, 1)
+			if source != nil {
+				source.deny = false
+			}
+			requirePGKeptEqual(t, want, pgKeptBuild(t, store, f, q, false))
+			if source == nil {
+				files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
+				require.NoError(t, err)
+				require.Empty(t, files)
+				return
+			}
+			restarted := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+			t.Cleanup(func() { require.NoError(t, restarted.Close()) })
+			requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, q, false))
+		})
+	}
 }
 
 func (p *activityPolicyProbe) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
@@ -303,25 +322,6 @@ func TestPGActivityReportPurge(t *testing.T) {
 		t.Cleanup(func() { require.NoError(t, again.Close()) })
 		require.Empty(t, pgKeptBuild(t, again, f, q, false).Sessions)
 	})
-}
-
-func TestPGActivityReportFilenodeDenied(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	local, syncer, _ := newUsageJournalFixture(t)
-	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
-	pgKeptPush(t, syncer, false)
-	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, t.TempDir())
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	_, err := store.pg.ExecContext(t.Context(), `CREATE FUNCTION activity_identity_denied() RETURNS text LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'permission denied' USING ERRCODE = '42501'; END $$`)
-	require.NoError(t, err)
-	store.pg = &activityFilenodeProbe{storeExecutor: store.pg, denied: true}
-	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
-	first := pgKeptBuild(t, store, f, q, true)
-	require.Len(t, first.Sessions, 1)
-	requirePGKeptEqual(t, first, pgKeptBuild(t, store, f, q, false))
-	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
-	require.NoError(t, err)
-	require.Empty(t, files)
 }
 
 func TestPGActivityTableIdentityPartitionedInput(t *testing.T) {

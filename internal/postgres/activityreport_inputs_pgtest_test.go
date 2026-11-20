@@ -380,6 +380,12 @@ func TestPGActivityReportInputTranscriptAndCounts(t *testing.T) {
 	assert.Equal(t, 2, changed.Report.Buckets[0].AssistantMessages)
 }
 
+func createActivityIdentityDenied(t *testing.T, store *Store) {
+	t.Helper()
+	_, err := store.pg.ExecContext(t.Context(), `CREATE FUNCTION activity_identity_denied() RETURNS text LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'permission denied' USING ERRCODE = '42501'; END $$`)
+	require.NoError(t, err)
+}
+
 func TestPGActivityReportInputIdentity(t *testing.T) {
 	local, syncer, _ := newUsageJournalFixture(t)
 	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
@@ -411,9 +417,7 @@ func TestPGActivityReportInputIdentity(t *testing.T) {
 				assert.GreaterOrEqual(t, failOnce.queries, 2)
 			case "denied":
 				defer first.Close()
-				_, err := first.pg.ExecContext(t.Context(), `CREATE FUNCTION activity_identity_denied() RETURNS text LANGUAGE plpgsql AS $$
-BEGIN RAISE EXCEPTION 'permission denied' USING ERRCODE = '42501'; END $$`)
-				require.NoError(t, err)
+				createActivityIdentityDenied(t, first)
 				denied := &activityIdentityError{storeExecutor: first.pg, denied: true}
 				first.pg = denied
 				assert.Equal(t, 500, pgKeptBuild(t, first, f, query, true).Report.Totals.OutputTokens)
