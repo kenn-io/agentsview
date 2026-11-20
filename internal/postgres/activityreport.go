@@ -282,6 +282,7 @@ func (s *Store) BuildActivityReportArtifacts(
 	}
 	artifacts, done, err := activity.BuildReportArtifacts(
 		ctx, reportBackend, sessions, ids, q, onProgress, "aggregating pg activity report")
+	restricted := err == nil && selection != "" && reader.activityReportRestricted(ctx)
 	if err == nil && tx != nil {
 		if err := tx.Commit(); err != nil {
 			return activity.CandidateArtifacts{}, err
@@ -308,7 +309,7 @@ func (s *Store) BuildActivityReportArtifacts(
 		}
 		through, _, checkErr := s.LoadUsageChanges(ctx, revision)
 		current, _, tokenErr := usageHistoryCheckpoints(ctx, s.pg, revision, revision)
-		if checkErr == nil && tokenErr == nil && through == revision && current == checkpoint && !s.activityReportRestricted(ctx) {
+		if !restricted && checkErr == nil && tokenErr == nil && through == revision && current == checkpoint && !s.activityReportRestricted(ctx) {
 			memo := &s.runtimeState().activityKept
 			memo.Put(selection, version, []pgActivityKept{entry})
 			if identity != "" && checkpoint != "" {

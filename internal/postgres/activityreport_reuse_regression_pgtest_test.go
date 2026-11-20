@@ -60,6 +60,21 @@ func TestPGSavedActivityReportRespectsChangedRowPolicy(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, files)
 	require.NoError(t, allowedStore.Close())
+	_, err = syncer.pg.ExecContext(ctx, `ALTER POLICY activity_reader ON sessions USING (false)`)
+	require.NoError(t, err)
+	cache := os.Getenv("CACHE_DIRECTORY")
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	changingStore := openPGActivityInputStore(t, target, syncer.schema, directory)
+	probe := &activityPolicyProbe{storeExecutor: changingStore.pg, after: func() {
+		_, err := syncer.pg.ExecContext(ctx, `ALTER TABLE sessions DISABLE ROW LEVEL SECURITY`)
+		require.NoError(t, err)
+	}}
+	changingStore.pg = probe
+	require.Empty(t, pgKeptBuild(t, changingStore, f, q, true).Sessions)
+	require.Nil(t, probe.after)
+	require.Len(t, pgKeptBuild(t, changingStore, f, q, true).Sessions, 1)
+	require.NoError(t, changingStore.Close())
+	t.Setenv("CACHE_DIRECTORY", cache)
 	_, err = syncer.pg.ExecContext(ctx, `ALTER TABLE sessions DISABLE ROW LEVEL SECURITY`)
 	require.NoError(t, err)
 	first := openPGActivityInputStore(t, target, syncer.schema, directory)
@@ -115,6 +130,16 @@ type activityFilenodeProbe struct {
 type activityPolicyProbe struct {
 	storeExecutor
 	checks int
+	after  func()
+}
+
+func (p *activityPolicyProbe) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	if p.after != nil && strings.Contains(query, "SELECT r.revision, c.session_id") {
+		after := p.after
+		p.after = nil
+		after()
+	}
+	return p.storeExecutor.QueryContext(ctx, query, args...)
 }
 
 type activityIdentityProbe struct {
