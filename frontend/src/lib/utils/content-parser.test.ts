@@ -1257,4 +1257,42 @@ describe("parseContent - XML skill injection", () => {
     const segs = parseContent('use `<skill name="a">x</skill>` syntax');
     expect(segs.every((s) => s.type === "text")).toBe(true);
   });
+  it("still finds a real skill after an inline-code opening-tag example", () => {
+    const segs = parseContent(
+      'Use `<skill name="a">` to mark one.\n<skill name="real">\nbody\n</skill> go',
+    );
+    expect(segs.map((s) => s.type)).toEqual(["text", "skill", "text"]);
+    expect(segs[1]).toMatchObject({ label: "real", content: "body" });
+    expect(segs[2]!.content).toBe(" go".trimEnd());
+  });
+
+  it("keeps the full body when it mentions </skill> in inline code", () => {
+    const segs = parseContent(
+      '<skill name="a">\nwrite `</skill>` to close\nmore\n</skill> tail',
+    );
+    expect(segs.map((s) => s.type)).toEqual(["skill", "text"]);
+    expect(segs[0]!.content).toBe("write `</skill>` to close\nmore");
+    expect(segs[1]!.content).toBe(" tail".trimEnd());
+  });
+
+  it("keeps the full body when a fenced block in it mentions </skill>", () => {
+    const segs = parseContent(
+      '<skill name="a">\n~~~\n</skill>\n~~~\nafter\n</skill>',
+    );
+    expect(segs).toHaveLength(1);
+    expect(segs[0]).toMatchObject({ type: "skill", label: "a" });
+    expect(segs[0]!.content).toContain("after");
+  });
+
+  it.each(["```", "~~~"])("does not match inside a %s fenced block", (fence) => {
+    const segs = parseContent(
+      `${fence}\n<skill name="a">x</skill>\n${fence}`,
+    );
+    expect(segs.some((s) => s.type === "skill")).toBe(false);
+  });
+
+  it("leaves an unclosed skill tag as text", () => {
+    const segs = parseContent('<skill name="a">no closing tag');
+    expect(segs.map((s) => s.type)).toEqual(["text"]);
+  });
 });

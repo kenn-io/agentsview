@@ -37,8 +37,8 @@ const SKILL_RE = /\[Skill: (.+?)\]\n?([\s\S]*?)\n?\[\/Skill\]/g;
  * The name is always double-quoted; other attributes are ignored.
  * Not line-anchored: user text may follow </skill> directly.
  */
-const SKILL_XML_RE =
-  /<skill\s+name="([^"]*)"[^>]*>\n?([\s\S]*?)\n?<\/skill>/g;
+const SKILL_XML_OPEN_RE = /<skill\s+name="([^"]*)"[^>]*>/g;
+const SKILL_XML_CLOSE = "</skill>";
 
 const TOOL_NAMES =
   "Tool|Read|Write|Edit|Patch|Bash|Glob|Grep|Other|TaskCreate|TaskUpdate|TaskGet|TaskList|Task|Agent|Skill|" +
@@ -211,6 +211,77 @@ function closingFence(
   return undefined;
 }
 
+/**
+ * Ranges of fenced code blocks opened with three or more backticks or
+ * tildes. Unclosed fences are ignored, like codeBlockMatches does.
+ */
+function fencedCodeRanges(text: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  let open: { char: string; len: number; start: number } | undefined;
+  let pos = 0;
+  while (pos <= text.length) {
+    const nl = text.indexOf("\n", pos);
+    const lineEnd = nl >= 0 ? nl : text.length;
+    const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(text.slice(pos, lineEnd));
+    if (m) {
+      const char = m[1]![0]!;
+      const len = m[1]!.length;
+      const rest = m[2]!;
+      if (open === undefined) {
+        if (char === "~" || !rest.includes("`")) {
+          open = { char, len, start: pos };
+        }
+      } else if (char === open.char && len >= open.len && rest.trim() === "") {
+        ranges.push([open.start, lineEnd]);
+        open = undefined;
+      }
+    }
+    if (nl < 0) break;
+    pos = nl + 1;
+  }
+  return ranges;
+}
+
+/**
+ * Find <skill name="...">...</skill> pairs, ignoring opening and closing
+ * tags that sit inside inline code or fenced code blocks, so examples stay
+ * literal and do not end a real skill early or swallow a later one.
+ */
+function skillXmlMatches(
+  text: string,
+  codeSpans: Array<[number, number]>,
+): Match[] {
+  const fences = fencedCodeRanges(text);
+  const isLiteral = (pos: number) =>
+    insideInlineCode(pos, codeSpans) ||
+    fences.some(([s, e]) => pos >= s && pos < e);
+
+  const matches: Match[] = [];
+  let from = 0;
+  for (const open of text.matchAll(SKILL_XML_OPEN_RE)) {
+    const start = open.index!;
+    if (start < from || isLiteral(start)) continue;
+    const bodyStart = start + open[0].length;
+    let close = text.indexOf(SKILL_XML_CLOSE, bodyStart);
+    while (close >= 0 && isLiteral(close)) {
+      close = text.indexOf(SKILL_XML_CLOSE, close + SKILL_XML_CLOSE.length);
+    }
+    if (close < 0) continue;
+    const end = close + SKILL_XML_CLOSE.length;
+    matches.push({
+      start,
+      end,
+      segment: {
+        type: "skill",
+        content: text.slice(bodyStart, close).trim(),
+        label: open[1] ?? "",
+      },
+    });
+    from = end;
+  }
+  return matches;
+}
+
 function codeBlockMatches(text: string): Match[] {
   const matches: Match[] = [];
   let pos = 0;
@@ -296,10 +367,7 @@ function extractMatches(text: string, parseTools = true): Match[] {
   }
 
   // Skill blocks
-  for (const m of [
-    ...text.matchAll(SKILL_RE),
-    ...text.matchAll(SKILL_XML_RE),
-  ]) {
+  for (const m of text.matchAll(SKILL_RE)) {
     const start = m.index!;
     const end = start + m[0].length;
     if (insideInlineCode(start, codeSpans)) continue;
@@ -314,6 +382,11 @@ function extractMatches(text: string, parseTools = true): Match[] {
         label: m[1] ?? "",
       },
     });
+  }
+
+  for (const m of skillXmlMatches(text, codeSpans)) {
+    const overlaps = matches.some((o) => m.start >= o.start && m.start < o.end);
+    if (!overlaps) matches.push(m);
   }
 
   if (parseTools) {
