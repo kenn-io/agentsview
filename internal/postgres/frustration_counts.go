@@ -74,6 +74,16 @@ func (s *Store) storeFrustrationCounts(ctx context.Context, versions map[string]
 		tokens = append(tokens, version)
 		values = append(values, int32(counts[id]))
 	}
+	if s.cockroach {
+		_, err := retryPGCuration(ctx, func() (struct{}, error) {
+			return struct{}{}, s.writeFrustrationCounts(ctx, ids, tokens, values, versionColumn)
+		})
+		return err
+	}
+	return s.writeFrustrationCounts(ctx, ids, tokens, values, versionColumn)
+}
+
+func (s *Store) writeFrustrationCounts(ctx context.Context, ids, tokens []string, values []int32, versionColumn string) error {
 	tx, err := s.DB().BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("starting frustration counts write: %w", err)
