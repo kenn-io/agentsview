@@ -154,6 +154,23 @@ describe("session search scope", () => {
     expect(result.allowsBlock(system, "text")).toBe(false);
   });
 
+  it("keeps skill expansions out of search whichever filter shows them", () => {
+    const skill = message(7, "[Skill: review]\nneedle\n[/Skill]", {
+      role: "user",
+      is_system: true,
+      source_subtype: "skill_invocation",
+    });
+    const prompt = message(8, "check the diff", { role: "user" });
+    for (const input of [[skill], [skill, prompt]]) {
+      for (const visible of [ALL, new Set<BlockType>(["system"]), new Set<BlockType>(["user"])]) {
+        const result = scope(input, { visibleBlocks: visible, hasBlockFilters: visible.size < ALL.size });
+        expect(result.allowsBlock(skill, "text")).toBe(false);
+        expect(result.allowsBlock(skill, "skill")).toBe(false);
+      }
+    }
+    expect(scope([skill, prompt]).allowsBlock(prompt, "text")).toBe(true);
+  });
+
   it("resolves the provider trailing-tool preference by agent id", () => {
     const providers = [
       { id: "claude", post_answer_tool_work: true },
