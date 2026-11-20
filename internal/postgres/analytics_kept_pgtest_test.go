@@ -5,7 +5,10 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json/v2"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -483,6 +486,45 @@ func TestAnalyticsKeptRestart(t *testing.T) {
 	require.NotNil(t, score.AvgHealthScore)
 	require.InDelta(t, 90, *score.AvgHealthScore, 0)
 	require.Equal(t, [3]int{0, 0, 1}, counts)
+}
+
+func TestSignalsDeadlineKeepsCachedResults(t *testing.T) {
+	cacheDir := t.TempDir()
+	t.Setenv("CACHE_DIRECTORY", cacheDir)
+	f := newFrustrationFixture(t, "agentsview")
+	store := f.open(t)
+	require.NoError(t, store.trendsDisk.Open("postgres-trends", "test", 128<<20, 256<<20))
+	filter := db.AnalyticsFilter{}
+	key, err := json.Marshal(filter)
+	require.NoError(t, err)
+	slot := "signals|" + string(key)
+	version := store.keptDashboardVersion(f.ctx, "signals", filter)
+	require.NotEmpty(t, version)
+	savedVersion := version + "|" + db.TrendsTimezoneKey(filter)
+	ctx, cancel := context.WithTimeout(f.ctx, 10*time.Second)
+	defer cancel()
+	result, err := store.GetAnalyticsSignals(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, 2, result.QualityHealth.Totals.FrustrationMarkerCount)
+	_, ok := store.trendsDisk.Get(slot, savedVersion)
+	require.True(t, ok)
+	files, err := filepath.Glob(filepath.Join(cacheDir, "postgres-trends", "test", "*.gob"))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	require.NoError(t, os.Remove(files[0]))
+	counter := &analyticsReadCounter{storeExecutor: store.pg}
+	store.pg = counter
+	result, err = store.GetAnalyticsSignals(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, 2, result.QualityHealth.Totals.FrustrationMarkerCount)
+	require.Zero(t, counter.count())
+	_, ok = store.trendsDisk.Get(slot, savedVersion)
+	require.True(t, ok, "memory hit restores the saved entry")
+	store.runtimeState().analytics.Clear()
+	result, err = store.GetAnalyticsSignals(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, 2, result.QualityHealth.Totals.FrustrationMarkerCount)
+	require.Zero(t, counter.count(), "disk hit should not reload Signals")
 }
 
 func TestAnalyticsKeptDirectSourceEvents(t *testing.T) {

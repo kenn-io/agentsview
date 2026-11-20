@@ -2604,11 +2604,7 @@ func (s *Store) GetAnalyticsTopSessions(
 func (s *Store) GetAnalyticsSignals(
 	ctx context.Context, f db.AnalyticsFilter,
 ) (db.SignalsAnalyticsResponse, error) {
-	state := &s.runtimeState().frustrationFill
-	state.mu.Lock()
-	filling := len(state.pending) > 0
-	state.mu.Unlock()
-	if _, ok := ctx.Deadline(); ok && filling {
+	if _, ok := ctx.Deadline(); ok {
 		return keptAnalyticsMode(ctx, s, "signals", f, s.keptAnalyticsVersion, s.loadAnalyticsSignals, false)
 	}
 	return keptAnalytics(ctx, s, "signals", f, s.loadAnalyticsSignals)

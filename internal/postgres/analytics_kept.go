@@ -59,6 +59,9 @@ func keptAnalyticsMode[T any](ctx context.Context, s *Store, panel string, f db.
 		}
 		cache := &s.runtimeState().analytics
 		if encoded, ok := cache.Get(slot, version); ok && json.Unmarshal(encoded, &result) == nil {
+			if savedVersion != "" {
+				s.trendsDisk.Keep(slot, savedVersion, func() ([]byte, error) { return encoded, nil })
+			}
 			return result, nil
 		}
 		if savedVersion != "" {
