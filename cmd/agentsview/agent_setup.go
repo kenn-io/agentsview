@@ -29,37 +29,21 @@ func newAgentCommand() *cobra.Command {
 		if mcp {
 			return run(cmd, args)
 		}
-		print, err := cmd.Flags().GetBool("print")
-		if err != nil {
-			return err
-		}
-		if print {
+		if print, _ := cmd.Flags().GetBool("print"); print {
 			return errors.New("--print requires MCP setup; remove --mcp=false")
 		}
-		agents, err := cmd.Flags().GetStringSlice("agent")
-		if err != nil {
-			return err
-		}
-		check, err := cmd.Flags().GetBool("check")
-		if err != nil {
-			return err
-		}
+		agents, _ := cmd.Flags().GetStringSlice("agent")
+		check, _ := cmd.Flags().GetBool("check")
 		setup := agentsetup.NewCommand(agentsetup.Options{
 			Agents: agents, CheckOnly: check, SetupCommand: "agentsview agent setup --mcp=false",
 			Items: func(agent string) ([]agentsetup.Item, error) { return setupItems(agent, force, false) },
 		})
-		jsonOutput, err := cmd.Flags().GetBool("json")
-		if err != nil {
+		if err := setup.Flags().Set("json", cmd.Flag("json").Value.String()); err != nil {
 			return err
-		}
-		if jsonOutput {
-			if err := setup.Flags().Set("json", "true"); err != nil {
-				return err
-			}
 		}
 		setup.SetOut(cmd.OutOrStdout())
 		setup.SetContext(cmd.Context())
-		err = setup.RunE(setup, args)
+		err := setup.RunE(setup, args)
 		cmd.SilenceUsage, cmd.SilenceErrors = setup.SilenceUsage, setup.SilenceErrors
 		return err
 	}
