@@ -222,9 +222,10 @@ create its own runtime state.
 include sessions whose activity overlaps the requested days in UTC. Either bound
 can be omitted. When both bounds and `session_id` are omitted, the search starts
 30 days before the current UTC date. The response note gives the start date; pass
-an earlier `date_from` to search further back. Malformed dates and ranges where
-`date_from` is after `date_to` return an error. Remote session
-searches with either date bound require server API 9 or later; older servers
+an earlier `date_from` to search further back. Pass the returned `date_from` with
+`next_cursor` as `cursor` to keep the date window fixed across pages. Malformed
+dates and ranges where `date_from` is after `date_to` return an error. Remote
+session searches with either date bound require server API 9 or later; older servers
 return an upgrade error.
 
 HTTP-backed session and search results include `web_url` when a browser address
@@ -297,8 +298,9 @@ error without it. Exact `session_id`, `git_branch`, `project`, `agent`,
 `date_from`, and `date_to` filters apply before the final limit. When both date
 bounds and `session_id` are omitted, the search starts 30 days before the current
 UTC date. The response note gives the start date; pass an earlier `date_from` to
-search further back. Limits default to 10 and go up to 50; a value outside that
-range falls back to the default.
+search further back. Pass the returned `date_from` with `next_cursor` as `cursor`
+to keep the date window fixed across pages. Limits default to 10 and go up to 50;
+a value outside that range falls back to the default.
 
 To find one past session that covered several ideas, pass `concepts` instead of
 `pattern`: two to five distinct natural-language strings. The mode defaults to
