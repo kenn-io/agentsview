@@ -37,12 +37,12 @@ type pgActivitySavedReport struct {
 
 func (s *Store) loadActivityReport(selection, version, identity string) (pgActivityKept, bool) {
 	s.activityReports.Sweep(time.Now())
-	data, ok := s.activityReports.Get(selection+"|"+identity+"|"+version, identity+"|"+version)
+	data, ok := s.activityReports.Peek(selection+"|"+identity+"|"+version, identity+"|"+version)
 	if !ok {
 		return pgActivityKept{}, false
 	}
 	var saved pgActivitySavedReport
-	if json.Unmarshal(data, &saved) != nil {
+	if json.Unmarshal(data, &saved) != nil || saved.Checkpoint == "" {
 		return pgActivityKept{}, false
 	}
 	for key, project := range saved.Report.Artifacts.Report.Projects {
@@ -52,12 +52,15 @@ func (s *Store) loadActivityReport(selection, version, identity string) (pgActiv
 	return pgActivityKept{identity: identity, revision: saved.Revision, checkpoint: saved.Checkpoint, candidates: saved.Candidates, peers: saved.Peers, labels: saved.Labels, report: saved.Report}, true
 }
 
+func (e pgActivityKept) encode() ([]byte, error) {
+	return json.Marshal(pgActivitySavedReport{Revision: e.revision, Checkpoint: e.checkpoint, Candidates: e.candidates, Peers: e.peers, Labels: e.labels, Report: e.report}, json.FormatNilSliceAsNull(true))
+}
+
 func (s *Store) saveActivityReport(selection, version string, entry pgActivityKept) {
 	if entry.checkpoint == "" {
 		return
 	}
-	data, err := json.Marshal(pgActivitySavedReport{Revision: entry.revision, Checkpoint: entry.checkpoint, Candidates: entry.candidates, Peers: entry.peers, Labels: entry.labels, Report: entry.report}, json.FormatNilSliceAsNull(true))
-	if err == nil {
+	if data, err := entry.encode(); err == nil {
 		s.activityReports.Put(selection+"|"+entry.identity+"|"+version, entry.identity+"|"+version, data)
 	}
 }
@@ -69,26 +72,20 @@ func (s *Store) refreshActivityReport(selection, version, identity string, previ
 		return
 	}
 	defer s.activityReports.Sweep(time.Now())
-	if identity == "" {
+	entry := entries[0]
+	if identity == "" || entry.checkpoint == "" {
 		return
 	}
-	entry := entries[0]
 	if entry.identity == "" {
 		entry.identity = identity
 		memo.Put(selection, version, []pgActivityKept{entry})
 		s.saveActivityReport(selection, version, entry)
 		return
 	}
-	var encode func() ([]byte, error)
-	if entry.revision != previousRevision {
-		encode = func() ([]byte, error) {
-			return json.Marshal(pgActivitySavedReport{Revision: entry.revision, Checkpoint: entry.checkpoint, Candidates: entry.candidates, Peers: entry.peers, Labels: entry.labels, Report: entry.report}, json.FormatNilSliceAsNull(true))
-		}
-	}
-	if encode == nil {
+	if entry.revision == previousRevision {
 		s.activityReports.Touch(selection + "|" + identity + "|" + version)
 	} else {
-		s.activityReports.Rewrite(selection+"|"+identity+"|"+version, identity+"|"+version, encode)
+		s.activityReports.Rewrite(selection+"|"+identity+"|"+version, identity+"|"+version, entry.encode)
 	}
 }
 
@@ -131,10 +128,21 @@ func (s *Store) activityKeptVersion(ctx context.Context, pricingDigest string) (
 	if err != nil {
 		return "", fmt.Errorf("reading kept activity version: %w", err)
 	}
-	return fmt.Sprintf("%d|%s|%s|%s", oid, pricingDigest, pricing.BillingPolicyVersion(), pricing.ConfiguredAliasesDigest()), nil
+	return fmt.Sprintf("%d|%s|%s", oid, pricingDigest, pricing.ConfiguredAliasesDigest()), nil
 }
 
-func (s *Store) validateKeptActivityReport(ctx context.Context, selection, version string, f db.AnalyticsFilter, rangeStart, rangeEnd, lower, upper string) (kept.Report, int64, string, bool, error) {
+func (s *Store) activityTableIdentity(ctx context.Context) (string, error) {
+	tables := make([]string, 0, len(usageChangeTablesPG)+3)
+	for _, table := range usageChangeTablesPG {
+		tables = append(tables, table.table)
+	}
+	tables = append(tables, "messages", "tool_result_events", "usage_session_changes")
+	var files string
+	err := s.pg.QueryRowContext(ctx, `SELECT md5(string_agg(pg_relation_filenode(to_regclass(t))::text, ',' ORDER BY t)) FROM unnest($1::text[]) t`, tables).Scan(&files)
+	return files, err
+}
+
+func (s *Store) validateKeptActivityReport(ctx context.Context, selection, version, files string, f db.AnalyticsFilter, rangeStart, rangeEnd, lower, upper string) (kept.Report, int64, string, bool, error) {
 	entries, hadEntry := s.runtimeState().activityKept.Get(selection, version)
 	reader := s
 	var tx *sql.Tx
@@ -147,8 +155,12 @@ func (s *Store) validateKeptActivityReport(ctx context.Context, selection, versi
 		defer func() { _ = tx.Rollback() }()
 		reader = s.readView(tx)
 	}
-	if reader.activityReportRestricted(ctx) {
+	currentFiles, err := reader.activityTableIdentity(ctx)
+	if isInsufficientPrivilege(err) || (err == nil && currentFiles != files) || reader.activityReportRestricted(ctx) {
 		return kept.Report{}, 0, "", false, nil
+	}
+	if err != nil {
+		return kept.Report{}, 0, "", false, err
 	}
 	entry, revision, checkpoint, hit, err := reader.keptActivityReport(ctx, selection, version, f, rangeStart, rangeEnd, lower, upper)
 	if err != nil {

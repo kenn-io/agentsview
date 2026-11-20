@@ -47,6 +47,15 @@ func (d *Disk) Sweep(now time.Time) {
 }
 
 func (d *Disk) Get(selection, version string) ([]byte, bool) {
+	return d.get(selection, version, true)
+}
+
+// Peek reads a file without refreshing its open time.
+func (d *Disk) Peek(selection, version string) ([]byte, bool) {
+	return d.get(selection, version, false)
+}
+
+func (d *Disk) get(selection, version string, touch bool) ([]byte, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	disk := d.reports.disk
@@ -57,7 +66,9 @@ func (d *Disk) Get(selection, version string) ([]byte, bool) {
 	if err != nil || !ok {
 		return nil, false
 	}
-	_ = disk.touch(selection)
+	if touch {
+		_ = disk.touch(selection)
+	}
 	return data, true
 }
 
@@ -83,15 +94,11 @@ func (d *Disk) Rewrite(selection, version string, encode func() ([]byte, error))
 	if err != nil {
 		return false
 	}
-	data := append(disk.header(version), payload...)
-	if d.maxFile > 0 && int64(len(data)) > d.maxFile {
-		return false
-	}
-	err = writeFileAtomic(disk.path(selection), data)
-	if err == nil {
+	saved, _ := disk.save(selection, version, payload, d.maxFile)
+	if saved {
 		_ = d.trim()
 	}
-	return err == nil
+	return saved
 }
 
 func (d activityReportDisk) load(selection, key string, maxFile int64) ([]byte, bool, error) {

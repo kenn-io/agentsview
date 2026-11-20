@@ -3,12 +3,16 @@
 package postgres
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
 	"fmt"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/activity"
@@ -97,4 +101,116 @@ func TestPGSavedActivityReportWriteDuringBuild(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, files)
 	require.Empty(t, pgKeptBuild(t, store, f, q, true).Sessions)
+}
+
+type activityFilenodeProbe struct {
+	storeExecutor
+	after  func()
+	denied bool
+}
+
+func (p *activityFilenodeProbe) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	if strings.Contains(query, "pg_relation_filenode") {
+		if p.denied {
+			return p.storeExecutor.QueryRowContext(ctx, "SELECT activity_identity_denied()")
+		}
+		row := p.storeExecutor.QueryRowContext(ctx, query, args...)
+		if p.after != nil {
+			after := p.after
+			p.after = nil
+			after()
+		}
+		return row
+	}
+	return p.storeExecutor.QueryRowContext(ctx, query, args...)
+}
+
+func TestPGActivityReportPurgeBetweenIdentityAndValidation(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, _ := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, t.TempDir())
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	require.Len(t, pgKeptBuild(t, store, f, q, true).Sessions, 1)
+	purged := false
+	store.pg = &activityFilenodeProbe{storeExecutor: store.pg, after: func() {
+		_, err := syncer.pg.ExecContext(t.Context(), `TRUNCATE sessions CASCADE`)
+		require.NoError(t, err)
+		purged = true
+	}}
+	got, err := store.BuildActivityReportArtifacts(t.Context(), f, q, nil)
+	require.NoError(t, err)
+	require.True(t, purged)
+	require.Empty(t, got.Sessions)
+}
+
+func TestPGActivityReportFilenodeDenied(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, _ := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, t.TempDir())
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	_, err := store.pg.ExecContext(t.Context(), `CREATE FUNCTION activity_identity_denied() RETURNS text LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'permission denied' USING ERRCODE = '42501'; END $$`)
+	require.NoError(t, err)
+	store.pg = &activityFilenodeProbe{storeExecutor: store.pg, denied: true}
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	got, err := store.BuildActivityReportArtifacts(t.Context(), f, q, nil)
+	require.NoError(t, err)
+	require.Len(t, got.Sessions, 1)
+}
+
+func TestPGSavedActivityReportInvalidDoesNotRefresh(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	_, syncer, _ := newUsageJournalFixture(t)
+	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, t.TempDir())
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	require.True(t, store.activityReports.Put("slot|identity|version", "identity|version", []byte("invalid")))
+	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	old := time.Now().Add(-time.Hour)
+	require.NoError(t, os.Chtimes(files[0], old, old))
+	_, ok := store.loadActivityReport("slot", "version", "identity")
+	require.False(t, ok)
+	info, err := os.Stat(files[0])
+	require.NoError(t, err)
+	require.WithinDuration(t, old, info.ModTime(), time.Second)
+}
+
+func TestPGSavedActivityReportMissingHistoryMarker(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, _ := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	directory := t.TempDir()
+	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	want := pgKeptBuild(t, store, f, q, true)
+	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	before, err := os.ReadFile(files[0])
+	require.NoError(t, err)
+	pgKeptSession(t, local, "b", "project-b", "2026-07-14")
+	pgKeptPush(t, syncer, false)
+	_, err = syncer.pg.ExecContext(t.Context(), `DELETE FROM sync_metadata WHERE key='usage_history_checkpoint:' || (SELECT value FROM sync_metadata WHERE key='usage_change_revision')`)
+	require.NoError(t, err)
+	requirePGKeptEqual(t, want, pgKeptBuild(t, store, f, q, false))
+	after, err := os.ReadFile(files[0])
+	require.NoError(t, err)
+	require.True(t, bytes.Equal(before, after), "saved report changed without a checkpoint")
+	entries := store.runtimeState().activityKept.Snapshot()
+	require.Len(t, entries, 1)
+	entry := entries[0].Rows[0]
+	require.Empty(t, entry.checkpoint)
+	data, err := entry.encode()
+	require.NoError(t, err)
+	require.True(t, store.activityReports.Put(entries[0].Slot+"|"+entry.identity+"|"+entries[0].Version, entry.identity+"|"+entries[0].Version, data))
+	restarted := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+	t.Cleanup(func() { require.NoError(t, restarted.Close()) })
+	requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, q, true))
 }

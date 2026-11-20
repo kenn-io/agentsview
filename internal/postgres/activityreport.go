@@ -157,13 +157,11 @@ func (s *Store) BuildActivityReportArtifacts(
 			return activity.CandidateArtifacts{}, err
 		}
 		if version != "" && !s.activityReportRestricted(ctx) {
-			tables := make([]string, 0, len(usageChangeTablesPG)+3)
-			for _, table := range usageChangeTablesPG {
-				tables = append(tables, table.table)
+			files, err := s.activityTableIdentity(ctx)
+			if isInsufficientPrivilege(err) {
+				goto build
 			}
-			tables = append(tables, "messages", "tool_result_events", "usage_session_changes")
-			var files string
-			if err := s.pg.QueryRowContext(ctx, `SELECT md5(string_agg(pg_relation_filenode(to_regclass(t))::text, ',' ORDER BY t)) FROM unnest($1::text[]) t`, tables).Scan(&files); err != nil {
+			if err != nil {
 				return activity.CandidateArtifacts{}, fmt.Errorf("reading activity table identities: %w", err)
 			}
 			version += "|" + files
@@ -178,7 +176,7 @@ func (s *Store) BuildActivityReportArtifacts(
 			}
 			var report kept.Report
 			var hit bool
-			report, revision, checkpoint, hit, err = s.validateKeptActivityReport(ctx, selection, version, f,
+			report, revision, checkpoint, hit, err = s.validateKeptActivityReport(ctx, selection, version, files, f,
 				rangeStartUTC, rangeEndUTC, lowerBound, upperBound)
 			if err != nil {
 				return activity.CandidateArtifacts{}, err
@@ -194,16 +192,12 @@ func (s *Store) BuildActivityReportArtifacts(
 		}
 	}
 
-	return s.buildActivityReport(ctx, f, q, onProgress, rangeStartUTC, rangeEndUTC, lowerBound, upperBound, selection, version, identity, unavailable, revision, checkpoint, pricing, pricingDigest)
-}
-
-func (s *Store) buildActivityReport(ctx context.Context, f db.AnalyticsFilter, q activity.Query, onProgress activity.ProgressFunc, rangeStartUTC, rangeEndUTC, lowerBound, upperBound, selection, version, identity string, unavailable bool, revision int64, checkpoint string, pricing []export.EffectivePricingRow, pricingDigest string) (activity.CandidateArtifacts, error) {
+build:
 	reader := s
 	var tx *sql.Tx
 	if selection != "" && s.readTx == nil {
 		// Keep the journal and report reads in one snapshot, even if a restore
 		// returns the live journal to its earlier checkpoint during the build.
-		var err error
 		tx, err = s.beginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
 		if err != nil {
 			return activity.CandidateArtifacts{}, err
