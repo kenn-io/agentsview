@@ -37,18 +37,24 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
 
   interface Props {
     message: Message;
+    /** Skill expansion that preceded this user message, shown as a disclosure. */
+    skillMessage?: Message;
     session?: Session | null;
     isSubagentContext?: boolean;
     searchOrdinal?: number;
     compact?: boolean;
     allowMutations?: boolean;
   }
-  let { message, session, isSubagentContext = false, searchOrdinal, compact = false, allowMutations = true }: Props = $props();
+  let { message, skillMessage, session, isSubagentContext = false, searchOrdinal, compact = false, allowMutations = true }: Props = $props();
   let copied = $state(false);
   let segments = $derived(enrichSegments(
     parseContent(message.content, message.has_tool_use, message.id, message.content_length),
     message.tool_calls,
   ));
+  let attachedSkill = $derived(skillMessage
+    ? parseContent(skillMessage.content, false, skillMessage.id, skillMessage.content_length)
+        .find((s) => s.type === "skill")
+    : undefined);
   // Embedded subagents have their own ordinal namespace and are never searched here.
   let activeSearchOrdinal = $derived(isSubagentContext ? undefined : searchOrdinal);
   let hasSearchQuery = $derived(activeSearchOrdinal !== undefined && inSessionSearch.isActive);
@@ -247,6 +253,11 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     </div>
   </div>
   <div class="message-body">
+    {#if attachedSkill && ui.isBlockVisible("system")}
+      <div class="markdown attached-skill">
+        <SkillBlock content={attachedSkill.content} name={attachedSkill.label} />
+      </div>
+    {/if}
     {#each segments as segment, segmentIndex}
       {@const searchKey = activeSearchOrdinal === undefined || segment.type === "tool"
         ? undefined : blockKey(activeSearchOrdinal, segment.type, segmentIndex)}
@@ -409,6 +420,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   }
 
   .message-body { display: flex; flex-direction: column; gap: 8px; }
+  .attached-skill { margin-bottom: 8px; }
   .markdown :global(p) { margin: 0.5em 0; }
   .markdown :global(p:first-child) { margin-top: 0; }
   .markdown :global(p:last-child) { margin-bottom: 0; }
