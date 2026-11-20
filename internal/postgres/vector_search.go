@@ -29,12 +29,16 @@ type vectorSearcher struct {
 	chunkTable      string
 	afterCandidates func()
 
-	chunksMu sync.Mutex
-	chunks   *pgvector.Chunks[string]
+	chunks *vectorSearchChunks
+}
+
+type vectorSearchChunks struct {
+	mu    sync.Mutex
+	store *pgvector.Chunks[string]
 }
 
 func (v *vectorSearcher) inTx(tx *sql.Tx) *vectorSearcher {
-	return &vectorSearcher{pg: v.pg, tx: tx, genID: v.genID, dimension: v.dimension, maxInputChars: v.maxInputChars, encode: v.encode, chunkTable: v.chunkTable, afterCandidates: v.afterCandidates}
+	return &vectorSearcher{pg: v.pg, tx: tx, genID: v.genID, dimension: v.dimension, maxInputChars: v.maxInputChars, encode: v.encode, chunkTable: v.chunkTable, afterCandidates: v.afterCandidates, chunks: v.chunks}
 }
 
 func (v *vectorSearcher) queryExecutor() interface {
@@ -61,6 +65,7 @@ func NewVectorSearcher(
 		maxInputChars: maxInputChars,
 		encode:        encode,
 		chunkTable:    vectorChunkTable(genID),
+		chunks:        &vectorSearchChunks{},
 	}
 }
 
@@ -85,14 +90,14 @@ func (v *vectorSearcher) PrepareSemanticSearch(
 			len(vec), v.dimension)
 	}
 	return func(ctx context.Context, limit int) ([]db.VectorHit, bool, error) {
-		chunks, rowCap, err := v.knnChunks(ctx, vec, limit)
+		chunks, err := v.knnChunks(ctx, vec, limit)
 		if err != nil {
 			return nil, false, err
 		}
 		if v.afterCandidates != nil {
 			v.afterCandidates()
 		}
-		exhausted := knnExhausted(len(chunks), limit, rowCap)
+		exhausted := len(chunks) < limit
 		docs, err := kitvec.RollupByDocument(chunks)
 		if err != nil {
 			return nil, false, fmt.Errorf("rolling up vector hits: %w", err)
@@ -108,47 +113,38 @@ func (v *vectorSearcher) PrepareSemanticSearch(
 	}, 0, nil
 }
 
-// knnExhausted reports whether a KNN that asked for limit rows and returned
-// rows read every chunk. Only an HNSW index scan stops at rowCap below limit;
-// a sequential scan has no cap. A short result therefore proves exhaustion
-// unless it is exactly the cap, which a capped index scan also returns when
-// more rows remain.
-func knnExhausted(rows, limit, rowCap int) bool {
-	return rows < limit && (rowCap >= limit || rows != rowCap)
-}
-
 // chunkHit is one chunk-level KNN neighbor: the document it belongs to, which
 // chunk matched, and its cosine similarity (1 - cosine distance, higher is
 // better).
 type chunkHit = kitvec.Hit[string]
 
 // knnChunks searches on the borrowed transaction when one is present.
-func (v *vectorSearcher) knnChunks(ctx context.Context, vec []float32, limit int) ([]chunkHit, int, error) {
+func (v *vectorSearcher) knnChunks(ctx context.Context, vec []float32, limit int) ([]chunkHit, error) {
 	tx := v.tx
 	if tx == nil {
 		var err error
 		tx, err = v.pg.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 		if err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 		defer func() { _ = tx.Rollback() }()
 	}
-	v.chunksMu.Lock()
-	if v.chunks == nil {
+	v.chunks.mu.Lock()
+	if v.chunks.store == nil {
 		var err error
-		v.chunks, err = pgvector.AttachChunks[string](ctx, tx, v.chunkTable)
+		v.chunks.store, err = pgvector.AttachChunks[string](ctx, tx, v.chunkTable)
 		if err != nil {
-			v.chunksMu.Unlock()
-			return nil, 0, err
+			v.chunks.mu.Unlock()
+			return nil, err
 		}
 	}
-	chunks := v.chunks
-	v.chunksMu.Unlock()
+	chunks := v.chunks.store
+	v.chunks.mu.Unlock()
 	page, err := chunks.SearchTx(ctx, tx, kitvec.Vector(vec), limit)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
-	return page.Hits, page.ScanCap, nil
+	return page.Hits, nil
 }
 
 // vectorDoc is the subset of a vector_documents row needed to hydrate a chunk

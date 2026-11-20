@@ -9,21 +9,6 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-func TestKNNExhausted(t *testing.T) {
-	for _, tc := range []struct {
-		name             string
-		rows, limit, cap int
-		want             bool
-	}{
-		{"short uncapped scan", 10, 200, 200, true},
-		{"full uncapped scan", 200, 200, 200, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, knnExhausted(tc.rows, tc.limit, tc.cap))
-		})
-	}
-}
-
 func TestSemanticUnavailableError(t *testing.T) {
 	s := &Store{}
 
