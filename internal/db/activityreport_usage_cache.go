@@ -271,7 +271,7 @@ const activityUsageFactBlock = 8192
 
 // activityUsageFactReaders bounds the parallel cache reads of one report. It
 // matches the cache's connection pool.
-const activityUsageFactReaders = readerMaxOpenConns
+const activityUsageFactReaders = usageCacheMaxOpenConns
 
 // loadActivityUsageFacts reads the candidate sessions' facts inside the
 // bounds, plus the Claude snapshot peers that sessions outside the candidate

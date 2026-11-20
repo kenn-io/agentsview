@@ -714,8 +714,8 @@ const (
 	sqliteCacheSizeKiB       = -8 * 1024
 	readerMaxOpenConns       = 9
 	readerMaxIdleConns       = 8
-	bulkReadSlots            = 4
 	bulkSearchSlots          = 4
+	bulkReadSlots            = readerMaxOpenConns - bulkSearchSlots - 1 // Reserve one reader for quick reads.
 	readerConnMaxIdleTime    = 5 * time.Minute
 )
 
