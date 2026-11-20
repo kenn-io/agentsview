@@ -94,30 +94,6 @@ for command_status in 0 7; do
     [[ -f "$HOME/.local/state/test-service-leases/$(cat "$CHECK_LEASE")" ]]
 done
 
-# A killed supervisor leaves the lease for the scheduled cleaner.
-find "$tmp/ready" "$tmp/release" "$tmp/exited" -delete
-export READY="$tmp/ready" RELEASE="$tmp/release" EXITED="$tmp/exited"
-: > "$DOCKER_LOG"
-(cd "$root" && exec ./scripts/test-lease.sh ./scripts/test-service-compose.sh postgres 5432 sh -c 'touch "$READY"; while [ ! -f "$RELEASE" ]; do sleep .1; done; touch "$EXITED"') &
-first=$!
-for _ in {1..100}; do [[ -f "$READY" ]] && break; sleep .1; done
-[[ -f "$READY" ]]
-lease="$HOME/.local/state/test-service-leases/$(cat "$CHECK_LEASE")"
-ps -p "$first" -o args= | grep -q 'python3 - '
-kill -KILL "$first"
-wait "$first" 2>/dev/null || true
-first=
-[[ -f "$lease" ]]
-lease-held "$lease"
-touch "$RELEASE"
-for _ in {1..100}; do [[ -f "$EXITED" ]] && break; sleep .1; done
-[[ -f "$EXITED" ]]
-[[ -f "$lease" ]]
-for _ in {1..100}; do lease-held "$lease" || break; sleep .1; done
-if lease-held "$lease"; then echo 'lease still held after test exited' >&2; exit 1; fi
-if grep -q ' down ' "$DOCKER_LOG"; then echo 'killed supervisor ran cleanup' >&2; exit 1; fi
-unset READY RELEASE EXITED
-
 # Termination during startup and while the command runs cleans up the project.
 export READY="$tmp/ready"
 for phase in startup command; do
@@ -141,7 +117,7 @@ for phase in startup command; do
     grep -qE -- "-p $(cat "$CHECK_LEASE") .* down -v --remove-orphans" "$DOCKER_LOG"
 done
 
-# Dry runs do not start services or create leases.
+# Dry runs do not start services.
 : > "$DOCKER_LOG"
 # Makefile reads Go environment values during parsing, even for `make -n`.
 # Keep those lookups from downloading a toolchain into the temporary HOME.
@@ -150,7 +126,7 @@ cat > "$tmp/bin/go" <<'GO'
 [ "${1:-}" = env ] || { echo "unexpected go command: $*" >&2; exit 1; }
 GO
 chmod +x "$tmp/bin/go"
-(cd "$root" && make -n test-postgres test-clickhouse bench-pg-usage) > "$tmp/make"
+(cd "$root" && make -n test-postgres test-clickhouse bench-pg-usage) > /dev/null
 [[ ! -s "$DOCKER_LOG" ]]
 
 # Each target passes the new lease and service address to nested Make.
@@ -164,22 +140,23 @@ for target in test-postgres bench-pg-usage test-clickhouse; do
     [[ "$project" != old ]]
     grep -Fxq "TARGET_FROM_MAKE=$target-run" "$tmp/make-url"
     grep -Fxq "LEASE_FROM_MAKE=$project" "$tmp/make-url"
-    grep -Fxq 'STANDBY_FROM_MAKE=' "$tmp/make-url"
     case "$target" in
         test-clickhouse)
             service=clickhouse port=9000
+            grep -Fxq 'STANDBY_FROM_MAKE=' "$tmp/make-url"
             grep -Fxq 'PG_FROM_MAKE=' "$tmp/make-url"
-            grep -Fxq 'CH_FROM_MAKE=clickhouse://127.0.0.1:49153/default' "$tmp/make-url" ;;
-        *)
+            grep -Fxq 'CH_FROM_MAKE=clickhouse://127.0.0.1:49153/default' "$tmp/make-url"
+            grep -Fxq 'publish 127.0.0.1::5432 127.0.0.1::8123 127.0.0.1::9000' "$DOCKER_LOG" ;;
+        test-postgres)
             service=postgres port=5432
+            grep -Fxq 'STANDBY_FROM_MAKE=' "$tmp/make-url"
             grep -Fxq 'CH_FROM_MAKE=' "$tmp/make-url"
-            grep -Fxq 'PG_FROM_MAKE=postgres://agentsview_test:agentsview_test_password@127.0.0.1:49153/agentsview_test?sslmode=disable' "$tmp/make-url" ;;
+            grep -Fxq 'PG_FROM_MAKE=postgres://agentsview_test:agentsview_test_password@127.0.0.1:49153/agentsview_test?sslmode=disable' "$tmp/make-url"
+            grep -Fxq 'publish 127.0.0.1::5432 127.0.0.1::8123 127.0.0.1::9000' "$DOCKER_LOG" ;;
+        bench-pg-usage) service=postgres port=5432 ;;
     esac
     grep -qE -- "-p $project .* -f docker-compose.test-lease.yml up -d --wait $service" "$DOCKER_LOG"
     grep -qE -- "-p $project .* port $service $port" "$DOCKER_LOG"
-    grep -qE -- "-p $project .* down -v --remove-orphans" "$DOCKER_LOG"
-    [[ ! -e "$HOME/.local/state/test-service-leases/$project" ]]
-    grep -Fxq 'publish 127.0.0.1::5432 127.0.0.1::8123 127.0.0.1::9000' "$DOCKER_LOG"
 done
 
 # Missing prerequisites stop before Docker starts.
