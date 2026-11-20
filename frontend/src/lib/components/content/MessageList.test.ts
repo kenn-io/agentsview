@@ -1150,7 +1150,7 @@ describe("MessageList follow cancellation", () => {
     expect(skillRow.querySelector(".skill-label")?.textContent?.trim()).toBe("Skill: review");
     expect(skillRow.querySelector(".skill-header")?.getAttribute("aria-expanded")).toBe("false");
     expect(skillRow.querySelector(".skill-content")).toBeNull();
-    expect(skillRow.querySelector(".role-label")?.textContent?.trim()).toBe("Skill");
+    expect(skillRow.querySelector(".role-label")).toBeNull();
     expect(skillRow.classList.contains("is-user")).toBe(false);
     expect(document.querySelector(".system-boundary")).toBeNull();
 
@@ -1191,6 +1191,55 @@ describe("MessageList follow cancellation", () => {
     expect(after).toHaveLength(1);
     expect(after[0]!.querySelector(".skill-label")).toBeNull();
     expect(after[0]!.textContent).toContain("check the diff");
+  });
+
+  it("shows the whole skill body when it contains a literal closing marker", async () => {
+    messages.messages = [
+      {
+        ...makeMessage(0),
+        role: "user",
+        content: "[Skill: review]\nUse this:\n\n```\n[/Skill]\n```\n\nAfter the example.\n[/Skill]",
+        is_system: true,
+        source_type: "system",
+        source_subtype: "skill_invocation",
+      },
+      { ...makeMessage(1), role: "assistant", content: "ok" },
+    ];
+    messages.messageCount = 2;
+    setVirtualRows(2);
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    document.querySelector<HTMLButtonElement>(".skill-header")!.click();
+    await tick();
+    expect(document.querySelector(".skill-content")?.textContent).toContain("After the example.");
+  });
+
+  it("marks a transcript read when an appended skill row ends in a merged card", async () => {
+    messages.messages = [
+      makeMessage(0),
+      {
+        ...makeMessage(1),
+        role: "user",
+        content: "[Skill: review]\nbody\n[/Skill]",
+        is_system: true,
+        source_type: "system",
+        source_subtype: "skill_invocation",
+      },
+      { ...makeMessage(2), role: "user", content: "check the diff" },
+    ];
+    messages.messageCount = 3;
+    messages.activeSessionToken = "current";
+    messages.activeSessionUnreadOrdinal = 1;
+    setVirtualRows(2);
+    readProgress.baseline("s1", "previous", 0);
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
+
+    expect(readProgress.get("s1")?.token).toBe("current");
   });
 
   it("keeps hiding system rows with an unknown subtype", async () => {

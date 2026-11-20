@@ -19,7 +19,7 @@
   import SystemBoundaryCard from "../system/SystemBoundaryCard.svelte";
   import ToolCallGroup from "./ToolCallGroup.svelte";
   import type { DbMessage as Message } from "../../api/generated/index.js";
-  import type { DisplayItem } from "../../utils/display-items.js";
+  import { primaryOrdinal, type DisplayItem } from "../../utils/display-items.js";
   import {
     isSystemBoundaryMessage,
     isSystemMessage,
@@ -249,10 +249,13 @@
       const item = itemAt(row.index);
       if (!item) continue;
       if (item.kind === "message") {
-        visibleOrdinals.add(item.message.ordinal);
-        maxVisibleOrdinal = maxVisibleOrdinal === null
-          ? item.message.ordinal
-          : Math.max(maxVisibleOrdinal, item.message.ordinal);
+        // A merged skill card stands for both its rows.
+        for (const ordinal of item.ordinals) {
+          visibleOrdinals.add(ordinal);
+          maxVisibleOrdinal = maxVisibleOrdinal === null
+            ? ordinal
+            : Math.max(maxVisibleOrdinal, ordinal);
+        }
         continue;
       }
 
@@ -1062,7 +1065,7 @@
             onclick={(event) => {
               const sel = window.getSelection();
               if (sel && sel.toString().length > 0) return;
-              ui.selectOrdinal(clickedEmptyMemberOrdinal(item, event.target) ?? item.ordinals[0]!);
+              ui.selectOrdinal(clickedEmptyMemberOrdinal(item, event.target) ?? primaryOrdinal(item));
             }}
           >
             {#if item.kind !== "tool-group" && readProgressDivider !== null && item.ordinals.includes(readProgressDivider.ordinal)}

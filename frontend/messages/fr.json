@@ -287,7 +287,6 @@
   "message_content_role_agent": "Agent",
   "message_content_role_teammate": "Coéquipier",
   "message_content_role_user": "Utilisateur",
-  "message_content_role_skill": "Skill",
   "message_content_copy_message": "Copier le message",
   "message_content_copied_message": "Message copié",
   "message_content_copied": "Copié !",

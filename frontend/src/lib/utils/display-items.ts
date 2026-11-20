@@ -27,6 +27,15 @@ export interface EmptyGroupItem {
 
 export type DisplayItem = MessageItem | ToolGroupItem | EmptyGroupItem;
 
+/**
+ * The ordinal that stands for an item in selection and prompt navigation. A
+ * message item that carries an attached skill covers two ordinals, but the
+ * user's prompt is the stop.
+ */
+export function primaryOrdinal(item: DisplayItem): number {
+  return item.kind === "message" ? item.message.ordinal : item.ordinals[0]!;
+}
+
 export interface BuildDisplayItemsOptions {
   /** When true, tool-only messages are emitted as individual
    *  MessageItems instead of being grouped into ToolGroupItems.

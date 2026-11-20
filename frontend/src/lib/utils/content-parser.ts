@@ -34,6 +34,20 @@ const THINKING_LEGACY_RE = /\[Thinking\]\n?([\s\S]*?)(?=\n\[|\n\n|$)/g;
  * Skill blocks use [Skill: name]...[/Skill] delimiters,
  * same pattern as thinking blocks.
  */
+/**
+ * The envelope the parsers write for a skill_invocation row. The body is
+ * opaque Markdown, so only the outermost delimiters count: a literal
+ * `[/Skill]` inside it, such as in a code example, must not end it early.
+ */
+const SKILL_INVOCATION_RE = /^\[Skill: ([^\n]*?)\]\n([\s\S]*)\n\[\/Skill\]$/;
+
+/** Reads the whole skill body out of a skill_invocation row's content. */
+export function parseSkillInvocation(content: string): ContentSegment | null {
+  const m = SKILL_INVOCATION_RE.exec(content.trim());
+  if (!m) return null;
+  return { type: "skill", content: (m[2] ?? "").trim(), label: m[1] ?? "" };
+}
+
 const SKILL_RE = /\[Skill: (.+?)\]\n?([\s\S]*?)\n?\[\/Skill\]/g;
 
 const TOOL_NAMES =
@@ -547,7 +561,7 @@ export function hasVisibleSegments(msg: Message, isVisible: (type: BlockType) =>
   if (isSystemBoundaryMessage(msg)) return isVisible("system");
   // A skill expansion is a system row, so the system toggle owns it rather
   // than the user toggle its role would otherwise select.
-  const skillInvocation = isSkillInvocationMessage(msg);
+  if (isSkillInvocationMessage(msg)) return isVisible("system");
   const role: "user" | "assistant" = msg.role === "user" ? "user" : "assistant";
   const segs = enrichSegments(
     parseContent(msg.content, msg.has_tool_use, msg.id, msg.content_length),
@@ -555,10 +569,10 @@ export function hasVisibleSegments(msg: Message, isVisible: (type: BlockType) =>
   );
   // Empty messages (e.g. initial assistant streaming state) should
   // remain visible when their role is not filtered out.
-  if (segs.length === 0) return isVisible(skillInvocation ? "system" : role);
+  if (segs.length === 0) return isVisible(role);
   return segs.some((s) => {
     if (s.type === "text") return isVisible(role);
-    if (s.type === "skill") return isVisible(skillInvocation ? "system" : role);
+    if (s.type === "skill") return isVisible(role);
     return isVisible(s.type);
   });
 }
