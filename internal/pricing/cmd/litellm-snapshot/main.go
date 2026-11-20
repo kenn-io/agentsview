@@ -402,12 +402,8 @@ func ensureGitCommit(ctx context.Context, ref, branch string) error {
 		return fmt.Errorf("locating snapshot repository: %w", err)
 	}
 	fetchLock := flock.New(filepath.Join(commonDir, "agentsview-snapshot-fetch.lock"))
-	locked, err := fetchLock.TryLockContext(ctx, 10*time.Millisecond)
-	if err != nil {
+	if _, err := fetchLock.TryLockContext(ctx, 10*time.Millisecond); err != nil {
 		return fmt.Errorf("locking snapshot fetch: %w", err)
-	}
-	if !locked {
-		return errors.New("locking snapshot fetch: lock was not acquired")
 	}
 	defer func() { _ = fetchLock.Unlock() }()
 
