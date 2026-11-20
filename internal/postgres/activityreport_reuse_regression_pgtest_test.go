@@ -254,6 +254,7 @@ func TestPGSavedActivityReportNewYorkRestart(t *testing.T) {
 }
 
 func TestPGActivityReportViewReadsFreshRows(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	local, syncer, _ := newUsageJournalFixture(t)
 	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
 	pgKeptPush(t, syncer, false)
@@ -314,11 +315,11 @@ func TestPGSavedActivityReportTerminalResultChanges(t *testing.T) {
 		wantID    string
 		wantRead  bool
 	}{
-		{`INSERT INTO tool_result_events (session_id, tool_call_message_ordinal, source, status, content, timestamp) VALUES ('b', 1, 'tool_execution', 'completed', '', '2026-07-14 10:10:00+00')`, "", false},
 		{`INSERT INTO tool_result_events (session_id, tool_call_message_ordinal, source, status, content, timestamp) VALUES ('a', 1, 'tool_execution', 'completed', '', '2026-06-14 10:10:00+00')`, "a", true},
 		{`UPDATE tool_result_events SET status='running' WHERE session_id='a'`, "", true},
 		{`UPDATE tool_result_events SET status='completed' WHERE session_id='a'`, "a", true},
 		{`DELETE FROM tool_result_events WHERE session_id='a'`, "", true},
+		{`INSERT INTO tool_result_events (session_id, tool_call_message_ordinal, source, status, content, timestamp) VALUES ('b', 1, 'tool_execution', 'completed', '', '2026-07-14 10:10:00+00')`, "", false},
 	} {
 		_, err := syncer.pg.ExecContext(t.Context(), change.statement)
 		require.NoError(t, err)
