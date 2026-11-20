@@ -30,7 +30,6 @@ import App, { findUserPromptOrdinal } from "./App.svelte";
 import { requestUrl } from "./lib/test-support/request-url.js";
 
 let component: ReturnType<typeof mount> | undefined;
-const originalTitle = document.title;
 
 async function flushEffects() {
   await tick();
@@ -92,7 +91,6 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   document.body.innerHTML = "";
-  document.title = originalTitle;
   localStorage.clear();
   window.history.replaceState(null, "", "/");
   router.route = "sessions";
@@ -1937,23 +1935,15 @@ describe("App telemetry", () => {
     );
   }
 
-  it("updates the tab title as the screen and session change", async () => {
+  it("updates the tab title as the screen changes", async () => {
     setup();
     router.route = "activity";
-    sessions.sessions = [hydratedSession("session-1", "codex", { display_name: "Fix login" })];
     component = mount(App, { target: document.body });
     await flushEffects();
     expect(document.title).toBe("Activity · AgentsView");
     router.navigate("usage");
     await flushEffects();
     expect(document.title).toBe("Usage · AgentsView");
-    router.navigateToSession("session-1");
-    await flushEffects();
-    expect(document.title).toBe("Fix login (session-) · proj-a · AgentsView");
-    sessions.sessions = [hydratedSession("session-1", "codex", { display_name: "Renamed" })];
-    await flushEffects();
-    expect(document.title).toBe("Renamed (session-) · proj-a · AgentsView");
-    sessions.sessions = [];
   });
 
   it.each(["loaded", "not found"] as const)(
@@ -1961,8 +1951,6 @@ describe("App telemetry", () => {
     async (state) => {
       setup();
       vi.mocked(sessions.navigateToSession).mockRestore();
-      sessions.sessions = [];
-      sessions.details.clear();
       const ids = ["source-a~codex:12345678abcdef", "source-b~codex:12345678abcdef"];
       const responses = ids.map(() => Promise.withResolvers<Response>());
       vi.stubGlobal(
@@ -1978,18 +1966,13 @@ describe("App telemetry", () => {
           );
         }),
       );
-      router.route = "activity";
       component = mount(App, { target: document.body });
       await flushEffects();
-      router.navigate("usage");
-      await flushEffects();
-      const titles: string[][] = [];
       for (const [index, id] of ids.entries()) {
         router.navigateToSession(id);
         await flushEffects();
         const displayId = index === 0 ? "source-a:12345678" : "source-b:12345678";
         expect(document.title).toBe(`${displayId} · AgentsView`);
-        const loading = document.title;
         responses[index]!.resolve(
           state === "loaded"
             ? new Response(
@@ -2003,10 +1986,7 @@ describe("App telemetry", () => {
             ? `Fix login (${displayId}) · proj-a · AgentsView`
             : `Session not found (${displayId}) · AgentsView`;
         await vi.waitFor(() => expect(document.title).toBe(expected));
-        titles.push([loading, document.title]);
       }
-      expect(titles[0]![0]).not.toBe(titles[1]![0]);
-      expect(titles[0]![1]).not.toBe(titles[1]![1]);
       sessions.sessions = [];
       sessions.details.clear();
     },

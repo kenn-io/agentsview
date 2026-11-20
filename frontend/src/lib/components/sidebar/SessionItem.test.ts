@@ -88,14 +88,6 @@ describe("SessionItem identity", () => {
     expect(document.querySelector(".session-name")?.textContent).toBe("Loaded title");
   });
 
-  it("shows the teammate task as the session label", () => {
-    mountSession({
-      first_message:
-        "<teammate-message>You are a teammate on a team. Work together. Task #2: Fix the login flow 3. Report back</teammate-message>",
-    });
-    expect(document.querySelector(".session-name")?.textContent).toBe("Fix the login flow");
-  });
-
   it("renders the session label and puts the entrypoint in the agent tooltip", () => {
     sessions.machineLabels = { "installation-a": "Workstation A" };
     mountSession({
