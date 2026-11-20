@@ -51,17 +51,17 @@ type Panel =
 type FetchResult = "ok" | "error" | "aborted";
 // Execution order of a full refresh; the step breakdown follows it.
 const PANEL_ORDER = [
+  "velocity",
+  "tools",
+  "signals",
   "summary",
   "activity",
   "heatmap",
   "projects",
   "hourOfWeek",
   "sessionShape",
-  "velocity",
-  "tools",
   "skills",
   "topSessions",
-  "signals",
 ] as const satisfies readonly Panel[];
 
 class AnalyticsStore {

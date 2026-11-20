@@ -439,17 +439,17 @@ describe("AnalyticsStore freshness state", () => {
       expect(analytics.qualityLastQueryDurationMs).toBeNull();
       // One step per panel, in execution order, each with its own timing.
       expect(analytics.lastQuerySteps.map((step) => step.name)).toEqual([
+        "velocity",
+        "tools",
+        "signals",
         "summary",
         "activity",
         "heatmap",
         "projects",
         "hourOfWeek",
         "sessionShape",
-        "velocity",
-        "tools",
         "skills",
         "topSessions",
-        "signals",
       ]);
       // The velocity request carried phase timings: 600 ms waiting on the
       // server, 100 ms downloading, applied at once.
@@ -496,11 +496,13 @@ describe("AnalyticsStore freshness state", () => {
     expect(analytics.liveQuery.startedAt).not.toBeNull();
     expect(analytics.liveQuery.steps.find((step) => step.running)?.name).toBe("velocity");
     expect(analytics.liveQuery.steps).toHaveLength(11);
+    const liveOrder = analytics.liveQuery.steps.map((step) => step.name);
 
     releaseVelocity();
     await refresh;
     expect(analytics.liveQuery.startedAt).toBeNull();
     expect(analytics.lastQuerySteps.some((step) => step.running)).toBe(false);
+    expect(analytics.lastQuerySteps.map((step) => step.name)).toEqual(liveOrder);
   });
 
   it("does not mark cached partial refresh failures as current", async () => {
