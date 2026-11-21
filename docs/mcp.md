@@ -108,8 +108,9 @@ client will see these tools:
 | `list_friction_patterns`      | List recurring friction patterns ranked by occurrences                                                    |
 
 `list_recall` accepts a full stored session ID or a raw UUID in
-`source_session_id`. An unindexed or trashed ID is used as given; ambiguous raw
-UUIDs return an error.
+`source_session_id`. An unindexed or trashed ID is used as given. Older servers
+that do not support raw lookup also use the ID as given. Ambiguous raw UUIDs
+return an error listing two matching IDs.
 
 `get_compaction_summaries` accepts a full stored session ID, a raw UUID that
 matches one session, or an `active_since` timestamp. The limit counts sessions;
@@ -236,9 +237,10 @@ base path. Direct PostgreSQL reads omit it.
 
 Set `session_id` to a raw UUID or full stored session ID when you need one
 session. The lookup returns one metadata row, includes active sessions, ignores
-the other search arguments, and returns an error when the ID is missing or its
-raw suffix matches more than one session. A raw UUID matches an exact stored ID,
-an agent ID ending in `:<uuid>`, or a host ID ending in `~<uuid>`; the delimiter
+the other search arguments, and returns an error when the ID is missing. An
+exact stored ID takes precedence. Otherwise, a raw suffix that matches more
+than one session returns an error listing two matches. A raw UUID matches an
+agent ID ending in `:<uuid>` or a host ID ending in `~<uuid>`; the delimiter
 is part of the match, so a fork entry separated by `-` is not selected. The row
 has an empty `snippet`, `match_ordinal` set to `0`, and no `next_cursor`. Call
 `get_messages` with that ordinal to read the first message. For a known full ID
@@ -258,7 +260,8 @@ active matches returns `hints` with `retry_with: {"include_active": true}`. For
 recall from a known conversation, pass a full stored ID or a raw UUID as
 `current_session_id` to exclude that session before applying the result limit.
 Other recent work remains visible. If the ID is not indexed yet, the search
-uses it as given. Ambiguous raw UUIDs return an error.
+uses it as given. Older servers without raw lookup also use the ID as given.
+Ambiguous raw UUIDs return an error listing two matching IDs.
 
 `list_sessions` and `search_content` exclude one-shot and automated sessions by
 default. Set `include_one_shot: true` or `include_automated: true` to include
@@ -301,8 +304,9 @@ Child sessions bypass the one-shot exclusion; top-level one-shot sessions still
 require `include_one_shot: true`. Semantic mode needs the opt-in
 [semantic search](/docs/semantic-search/) index and returns a "not available"
 error without it. `session_id` accepts a full stored ID or a raw UUID that
-matches one session. Exact `git_branch`, `project`, `agent`,
-`date_from`, and `date_to` filters apply before the final limit. Limits default
+matches one session; unknown or trashed session IDs return an error.
+`get_messages` also rejects unknown or trashed sessions. Exact `git_branch`,
+`project`, `agent`, `date_from`, and `date_to` filters apply before the final limit. Limits default
 to 10 and go up to 50; a value outside that range falls back to the default.
 
 To find one past session that covered several ideas, pass `concepts` instead of

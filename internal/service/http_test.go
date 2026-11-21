@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -286,6 +287,7 @@ func TestHTTPBackend_FindSessionIDsByRawSuffixRejectsOldServer(t *testing.T) {
 	svc := servicehttp.NewHTTPBackend(ts.URL, "", false, "")
 	ids, err := svc.FindSessionIDsByRawSuffix(t.Context(), "uuid", 2)
 	require.ErrorContains(t, err, "does not acknowledge raw session ID lookup")
+	require.ErrorIs(t, err, errors.ErrUnsupported)
 	assert.Nil(t, ids)
 	assert.Equal(t, "uuid", got.Get("partial"))
 	assert.Equal(t, "true", got.Get("raw_suffix"))

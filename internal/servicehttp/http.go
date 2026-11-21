@@ -303,9 +303,7 @@ func (b *httpBackend) FindSessionIDsByRawSuffix(
 		return nil, err
 	}
 	if response.JSON200.RawSuffix == nil || !*response.JSON200.RawSuffix {
-		return nil, errors.New(
-			"server does not acknowledge raw session ID lookup",
-		)
+		return nil, fmt.Errorf("server does not acknowledge raw session ID lookup: %w", errors.ErrUnsupported)
 	}
 	return response.JSON200.Ids, nil
 }
