@@ -164,6 +164,7 @@ export class LiveHub {
         this.previous?.close();
         this.previous = null;
         this.source = null;
+        this.connected = false;
         this.broadcast({ type: opened ? "closed" : "permanent_failure" });
       }
     });

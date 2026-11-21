@@ -211,6 +211,26 @@ describe("shared live stream", () => {
     },
   );
 
+  it("reports permanent failure when a fresh stream never connects after recovery is exhausted", () => {
+    const hub = new LiveHub();
+    const archive = { postMessage: vi.fn() };
+    const session = { postMessage: vi.fn() };
+    hub.update(archive, request());
+    sources[0]!.emit("open");
+    sources[0]!.emit("error");
+    hub.update(session, request("a"));
+    vi.advanceTimersByTime(250);
+    for (let i = 0; i < 5; i++) sources[1]!.emit("error");
+    expect(archive.postMessage).toHaveBeenLastCalledWith({ type: "closed" });
+
+    hub.leave(archive);
+    const fresh = { postMessage: vi.fn() };
+    hub.update(fresh, request());
+    for (let i = 0; i < 5; i++) sources[2]!.emit("error");
+    expect(fresh.postMessage).toHaveBeenLastCalledWith({ type: "permanent_failure" });
+    hub.close();
+  });
+
   it("keeps a stream for a duplicate session leaving and shrinks it when the last leaves", () => {
     const hub = new LiveHub();
     const first = { postMessage: vi.fn() };
