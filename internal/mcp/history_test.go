@@ -424,6 +424,33 @@ func TestGetToolCalls_BudgetShortEvents(t *testing.T) {
 	}
 }
 
+func TestGetToolCalls_BudgetCompleteSummary(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "summary-boundary", "proj")
+	events := make([]db.ToolResultEvent, 83)
+	for i := range events {
+		events[i] = db.ToolResultEvent{EventIndex: i, Source: "tool_result", Content: strings.Repeat("x", 64)}
+	}
+	summary := strings.Repeat("y", 560)
+	dbtest.SeedMessages(t, d, toolCallMsg("summary-boundary", 0, db.ToolCall{
+		ToolUseID: "call", ToolName: "wait_agent", InputJSON: strings.Repeat("x", 10000),
+		ResultContent: summary, ResultEvents: events,
+	}))
+	_, small, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "summary-boundary", IncludeResults: true, MaxInputChars: 1})
+	require.NoError(t, err)
+	require.Len(t, small.ToolCalls, 1)
+	assert.Equal(t, summary, small.ToolCalls[0].Result)
+	_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "summary-boundary", IncludeResults: true, MaxInputChars: 10000})
+	require.NoError(t, err)
+	require.Len(t, out.ToolCalls, 1)
+	assert.Equal(t, summary, out.ToolCalls[0].Result)
+	assert.Empty(t, out.ToolCalls[0].ResultCursor)
+	require.Len(t, out.ToolCalls[0].ResultEvents, 83)
+	for _, event := range out.ToolCalls[0].ResultEvents {
+		assert.Equal(t, strings.Repeat("x", 64), event.Content)
+	}
+}
+
 func TestGetToolCalls_IncludesResults(t *testing.T) {
 	ts, d := newTestToolset(t)
 	dbtest.SeedSession(t, d, "results", "proj")
