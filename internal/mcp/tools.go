@@ -939,12 +939,14 @@ func (t *toolset) searchContent(
 		}
 	}
 	currentSession := strings.TrimSpace(in.CurrentSessionID)
+	excludeSessions := db.NormalizeExcludeSessionIDs([]string{currentSession})
 	cutoff := ""
 	if currentSession == "" && !in.IncludeActive {
 		cutoff = in.ActivityCutoff
-		if cutoff == "" && in.Cursor > 0 {
-			return nil, searchContentOut{}, errors.New("activity_cutoff is required with a positive cursor: restart search_content without a cursor, then pass both next_cursor as cursor and activity_cutoff")
-		} else if cutoff == "" {
+		if cutoff == "" {
+			if in.Cursor > 0 {
+				return nil, searchContentOut{}, errors.New("activity_cutoff is required with a positive cursor: restart search_content without a cursor, then pass both next_cursor as cursor and activity_cutoff")
+			}
 			cutoffTime = t.clock().Add(-activeExclusionWindow)
 			cutoff = cutoffTime.UTC().Format(time.RFC3339Nano)
 		} else if cutoffTime.After(t.clock().Add(-activeExclusionWindow)) {
@@ -968,7 +970,7 @@ func (t *toolset) searchContent(
 		Context:            in.Context,
 		IncludeOneShot:     in.IncludeOneShot,
 		IncludeAutomated:   in.IncludeAutomated,
-		ExcludeSessionIDs:  db.NormalizeExcludeSessionIDs([]string{currentSession}),
+		ExcludeSessionIDs:  excludeSessions,
 		ExcludeActiveSince: cutoff,
 	}
 	if listing {
@@ -978,6 +980,7 @@ func (t *toolset) searchContent(
 	if err != nil {
 		return nil, searchContentOut{}, err
 	}
+	legacy := cutoff != "" && !res.ActiveFilterApplied
 	out := searchContentOut{
 		Matches:        make([]contentMatch, 0, len(res.Matches)),
 		ActivityCutoff: cutoff,
@@ -1008,7 +1011,7 @@ func (t *toolset) searchContent(
 		}
 	}
 	for _, m := range res.Matches {
-		if cutoff != "" && !res.ActiveFilterApplied && !keepMatch(m) {
+		if legacy && !keepMatch(m) {
 			out.ExcludedActive++
 			continue
 		}
