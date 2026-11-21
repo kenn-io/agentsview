@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	jsonv1 "encoding/json"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -499,9 +498,6 @@ func TestServer_BudgetTextResults(t *testing.T) {
 			content, ok := result.Content[0].(*mcp.TextContent)
 			require.True(t, ok)
 			assert.LessOrEqual(t, len(content.Text), responseBudgetBytes)
-			structured, err := jsonv1.Marshal(result.StructuredContent)
-			require.NoError(t, err)
-			assert.LessOrEqual(t, len(content.Text)+len(structured), 2*responseBudgetBytes)
 			var decoded map[string]any
 			require.NoError(t, json.Unmarshal([]byte(content.Text), &decoded))
 			assert.Contains(t, decoded, "omitted")

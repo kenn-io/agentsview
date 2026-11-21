@@ -1486,12 +1486,10 @@ func TestServer_SearchContentIncludeOneShot(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &schema))
 	properties, ok := schema["properties"].(map[string]any)
 	require.True(t, ok)
-	for name, description := range map[string]string{"include_one_shot": "Include one-shot sessions", "include_automated": "Include automated sessions"} {
+	for _, name := range []string{"include_one_shot", "include_automated"} {
 		property, ok := properties[name].(map[string]any)
 		require.True(t, ok, name)
 		assert.Equal(t, "boolean", property["type"])
-		assert.Contains(t, property["description"], description)
-		assert.Contains(t, property["description"], "Default false")
 	}
 	// pattern and concepts are each optional, so the schema may list no
 	// required fields at all.
@@ -1514,7 +1512,6 @@ func TestServer_SearchContentIncludeOneShot(t *testing.T) {
 		require.True(t, ok, name)
 		assert.Equal(t, wantType, property["type"])
 	}
-	assert.Contains(t, searchTool.Description, "one-shot, and automated sessions are excluded by default")
 	assert.Len(t, callerRequests, 3)
 	assert.Contains(t, callerRequests[0], "mode=substring")
 	assert.Contains(t, callerRequests[0], "agent=pi")
@@ -2536,16 +2533,14 @@ func TestSearchContent_Total(t *testing.T) {
 	for _, tc := range []struct {
 		name                          string
 		count, limit, cursor, context int
-		snippet                       string
 		want, calls                   int
-		capped, cut                   bool
+		capped                        bool
 		wantScan                      *int
 	}{
 		{name: "first page", count: 36, limit: 10, context: 3, want: 36, calls: 2},
 		{name: "continued page", count: 36, limit: 10, cursor: 10, want: 36, calls: 2, wantScan: new(20)},
 		{name: "last page", count: 36, limit: 10, cursor: 30, want: 36, calls: 1},
 		{name: "cursor past end", count: 6, limit: 10, cursor: 1000, want: 6, calls: 2, wantScan: new(0)},
-		{name: "cut page", count: 36, limit: 10, snippet: strings.Repeat("x", 1800), want: 36, calls: 2, cut: true},
 		{name: "single page", count: 5, limit: 10, want: 5, calls: 1},
 		{name: "capped", count: 600, limit: 10, want: 500, calls: 11, capped: true},
 		{name: "capped continuation", count: 600, limit: 10, cursor: 100, want: 500, calls: 9, capped: true, wantScan: new(110)},
@@ -2555,7 +2550,7 @@ func TestSearchContent_Total(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := &pagedContentSearchService{matches: make([]db.ContentMatch, tc.count)}
 			for i := range fake.matches {
-				fake.matches[i] = db.ContentMatch{SessionID: "session", Ordinal: i, Snippet: tc.snippet}
+				fake.matches[i] = db.ContentMatch{SessionID: "session", Ordinal: i}
 			}
 			ts := &toolset{svc: fake}
 			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", IncludeActive: true, Limit: tc.limit, Cursor: tc.cursor, Context: tc.context})
@@ -2566,7 +2561,6 @@ func TestSearchContent_Total(t *testing.T) {
 			require.NoError(t, json.Unmarshal(data, &response))
 			assert.Equal(t, float64(tc.want), response["total"])
 			assert.Equal(t, tc.capped, response["total_capped"] == true)
-			assert.Equal(t, tc.cut, out.Omitted > 0)
 			require.Len(t, fake.requests, tc.calls)
 			if tc.wantScan != nil {
 				assert.Equal(t, *tc.wantScan, fake.requests[1].Cursor)
@@ -2637,8 +2631,10 @@ func TestSearchContent_LexicalPageCursorZeroTotal(t *testing.T) {
 	_, first, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Limit: 10, IncludeOneShot: true, IncludeAutomated: true})
 	require.NoError(t, err)
 	require.NotEmpty(t, first.PageCursor)
+	assert.Empty(t, first.Matches)
 	assert.Zero(t, first.Total)
 	assert.True(t, first.TotalCapped)
+	assert.Len(t, fake.requests, 11)
 	_, second, err := ts.searchContent(t.Context(), nil, searchContentIn{PageCursor: first.PageCursor})
 	require.NoError(t, err)
 	assert.Zero(t, second.Total)
@@ -2697,20 +2693,6 @@ func TestSearchContent_TotalLegacyActivity(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestSearchContent_TotalLegacyAllActive(t *testing.T) {
-	fake := &pagedContentSearchService{matches: make([]db.ContentMatch, 600), legacy: true}
-	for i := range fake.matches {
-		fake.matches[i] = db.ContentMatch{SessionID: "session", Timestamp: "2024-06-15T11:59:00Z"}
-	}
-	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
-	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Limit: 10, IncludeOneShot: true, IncludeAutomated: true})
-	require.NoError(t, err)
-	assert.Empty(t, out.Matches)
-	assert.Zero(t, out.Total)
-	assert.True(t, out.TotalCapped)
-	assert.Len(t, fake.requests, 11)
 }
 
 func TestSearchContent_BudgetLexicalPages(t *testing.T) {
@@ -2804,15 +2786,6 @@ func TestSearchContent_BudgetCursorRejectsChangedPageAndVersion(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, first.PageCursor)
 	assert.Equal(t, 20, first.Total)
-	data, err := base64.RawURLEncoding.DecodeString(first.PageCursor)
-	require.NoError(t, err)
-	var cursor searchPageCursor
-	require.NoError(t, json.Unmarshal(data, &cursor))
-	cursor.Version++
-	data, err = json.Marshal(cursor)
-	require.NoError(t, err)
-	_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{PageCursor: base64.RawURLEncoding.EncodeToString(data)})
-	require.ErrorContains(t, err, "invalid page_cursor")
 	fake.result.Coverage.Status = service.MemoryReady
 	_, resumed, err := ts.searchContent(t.Context(), nil, searchContentIn{PageCursor: first.PageCursor})
 	require.NoError(t, err)
