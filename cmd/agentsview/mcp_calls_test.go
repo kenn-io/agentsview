@@ -20,15 +20,15 @@ func TestMCPCallsReport(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", home)
 	dir := filepath.Join(home, "mcp", "calls")
-	require.NoError(t, os.MkdirAll(dir, 0700))
+	require.NoError(t, os.MkdirAll(dir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, day1+".jsonl"), []byte(`{"tool":"search_docs","outcome":"empty","empty":true,"bytes":10,"ms":4}
-`), 0600))
+`), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, day2+".jsonl"), []byte(`{"tool":"get_messages","outcome":"error","bytes":20,"ms":8}
 {"tool":"get_messages","outcome":"truncated","truncated":true,"bytes":20,"ms":8}
-`), 0600))
+`), 0o600))
 	earliest := time.Now().UTC().AddDate(0, 0, -91).Format("2006-01-02")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, earliest+".jsonl"), []byte(`{"tool":"query_recall","outcome":"empty","empty":true,"bytes":10,"ms":4}
-`), 0600))
+`), 0o600))
 	cmd := newMCPCallsCommand()
 	var output bytes.Buffer
 	cmd.SetArgs([]string{"--since", day1, "--until", day1, "--json"})
@@ -40,7 +40,7 @@ func TestMCPCallsReport(t *testing.T) {
 	require.Len(t, rows, 1)
 	assert.Equal(t, "search_docs", rows[0].Tool)
 	require.NotNil(t, rows[0].EmptyPercent)
-	assert.Equal(t, 100.0, *rows[0].EmptyPercent)
+	assert.InDelta(t, 100.0, *rows[0].EmptyPercent, 0.001)
 	cmd = newMCPCallsCommand()
 	cmd.SetArgs([]string{"--since", day2, "--until", day2})
 	output.Reset()

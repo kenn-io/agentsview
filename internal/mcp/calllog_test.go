@@ -47,18 +47,18 @@ func TestCallOutcomes(t *testing.T) {
 	require.Len(t, rows, 5)
 	assert.Equal(t, ToolSearchSessions, rows[0].Tool)
 	assert.Equal(t, 2, rows[0].Calls)
-	assert.Equal(t, 50.0, rows[0].ErrorPercent)
+	assert.InDelta(t, 50.0, rows[0].ErrorPercent, 0.001)
 	require.NotNil(t, rows[0].EmptyPercent)
-	assert.Equal(t, 50.0, *rows[0].EmptyPercent)
+	assert.InDelta(t, 50.0, *rows[0].EmptyPercent, 0.001)
 	assert.Equal(t, []CallCount{{Name: "include_one_shot", Count: 1}}, rows[0].Rejected)
 	assert.Equal(t, ToolGetSessionOverview, rows[1].Tool)
-	assert.Equal(t, 100.0, rows[1].ErrorPercent)
+	assert.InDelta(t, 100.0, rows[1].ErrorPercent, 0.001)
 	for _, row := range rows[2:] {
 		require.NotNil(t, row.EmptyPercent)
 		if row.Tool == ToolSearchDocs {
-			assert.Equal(t, 0.0, *row.EmptyPercent)
+			assert.InDelta(t, 0.0, *row.EmptyPercent, 0.001)
 		} else {
-			assert.Equal(t, 100.0, *row.EmptyPercent, row.Tool)
+			assert.InDelta(t, 100.0, *row.EmptyPercent, 0.001, row.Tool)
 		}
 	}
 }
@@ -70,9 +70,9 @@ func TestSummarizeCallsDatesAndMedians(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, day1+".jsonl"), []byte(`{"tool":"search_docs","outcome":"ok","bytes":10,"ms":2}
 {"tool":"search_docs","outcome":"empty","empty":true,"bytes":30,"ms":6}
 broken
-`), 0600))
+`), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, day2+".jsonl"), []byte(`{"tool":"search_docs","outcome":"ok","bytes":90,"ms":20}
-`), 0600))
+`), 0o600))
 	rows, err := SummarizeCalls(dir, day1, day1)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
@@ -80,7 +80,7 @@ broken
 	assert.Equal(t, 20, rows[0].MedianBytes)
 	assert.Equal(t, 4, rows[0].MedianMs)
 	require.NotNil(t, rows[0].EmptyPercent)
-	assert.Equal(t, 50.0, *rows[0].EmptyPercent)
+	assert.InDelta(t, 50.0, *rows[0].EmptyPercent, 0.001)
 	rows, err = SummarizeCalls(dir, day1, day2)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
@@ -115,7 +115,7 @@ func TestCallLogRejectedNames(t *testing.T) {
 func TestCallLogWriteFailureWarnsOnce(t *testing.T) {
 	callLogWarning = sync.Once{}
 	dir := filepath.Join(t.TempDir(), "file")
-	require.NoError(t, os.WriteFile(dir, []byte("file"), 0600))
+	require.NoError(t, os.WriteFile(dir, []byte("file"), 0o600))
 	d := dbtest.OpenTestDB(t)
 	reader, writer, err := os.Pipe()
 	require.NoError(t, err)
@@ -143,7 +143,7 @@ func TestRecordToolCallErrorOutcome(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, ToolSearchDocs, rows[0].Tool)
-	assert.Equal(t, 100.0, rows[0].ErrorPercent)
+	assert.InDelta(t, 100.0, rows[0].ErrorPercent, 0.001)
 }
 
 func TestCallLogArgumentNames(t *testing.T) {
@@ -215,9 +215,9 @@ func TestCallLogListSessionsAndTruncatedMessages(t *testing.T) {
 	assert.Equal(t, ToolListSessions, rows[0].Tool)
 	assert.Equal(t, 3, rows[0].Calls)
 	require.NotNil(t, rows[0].EmptyPercent)
-	assert.Equal(t, 50.0, *rows[0].EmptyPercent)
+	assert.InDelta(t, 50.0, *rows[0].EmptyPercent, 0.001)
 	assert.Equal(t, ToolGetMessages, rows[1].Tool)
-	assert.Equal(t, 50.0, rows[1].TruncatedPercent)
+	assert.InDelta(t, 50.0, rows[1].TruncatedPercent, 0.001)
 }
 
 func TestCallLogEmptyAndTruncated(t *testing.T) {
@@ -276,9 +276,9 @@ func TestCallLogKeepsOldAndPartialRecords(t *testing.T) {
 	dir := t.TempDir()
 	old := time.Now().UTC().AddDate(0, 0, -91).Format("2006-01-02")
 	rec := `{"tool":"search_docs","outcome":"empty","empty":true}` + "\n"
-	require.NoError(t, os.WriteFile(filepath.Join(dir, old+".jsonl"), []byte(rec), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, old+".jsonl"), []byte(rec), 0o600))
 	today := time.Now().UTC().Format("2006-01-02")
-	require.NoError(t, os.WriteFile(filepath.Join(dir, today+".jsonl"), []byte(`{"tool":`), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, today+".jsonl"), []byte(`{"tool":`), 0o600))
 	d := dbtest.OpenTestDB(t)
 	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), CallLogDir: dir}))
 	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()

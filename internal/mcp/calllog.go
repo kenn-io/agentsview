@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -125,7 +126,7 @@ func recordToolCall(dir string, req *mcp.CallToolRequest, result mcp.Result, cal
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(filepath.Join(dir, time.Now().UTC().Format("2006-01-02")+".jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	f, err := os.OpenFile(filepath.Join(dir, time.Now().UTC().Format("2006-01-02")+".jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
@@ -147,10 +148,8 @@ func hasTruncated(value any) bool {
 			}
 		}
 	case []any:
-		for _, child := range value {
-			if hasTruncated(child) {
-				return true
-			}
+		if slices.ContainsFunc(value, hasTruncated) {
+			return true
 		}
 	}
 	return false
