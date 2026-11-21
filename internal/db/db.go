@@ -4110,6 +4110,12 @@ func execSchemaScriptLocked(ctx context.Context, w *writerHandle) error {
 	}
 	if legacyImageText {
 		// Unreleased builds stored image text in a separate, rebuildable index.
+		if _, err := tx.ExecContext(ctx, `UPDATE sessions SET sync_marker=MAX(COALESCE(sync_marker,''),strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id IN (SELECT o.session_id FROM image_text_occurrences o JOIN image_text_cache c ON c.image_hash=o.image_hash WHERE c.succeeded=1 AND c.text<>'')`); err != nil {
+			return fmt.Errorf("marking legacy image text sessions modified: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM stats WHERE key=?`, imageTextBackfillKey); err != nil {
+			return fmt.Errorf("resetting legacy image text backfill: %w", err)
+		}
 		if _, err := tx.ExecContext(ctx, `
 			DROP TRIGGER IF EXISTS image_text_session_delete;
 			DROP TABLE IF EXISTS image_text_fts;
