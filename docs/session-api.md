@@ -665,8 +665,7 @@ ______________________________________________________________________
 
 ### Pull request links
 
-Sessions list pull requests found in retained user prompts or structured transcript records, in
-`pr_links`:
+Sessions list pull requests found in retained user prompts, supported `gh pr` commands, child-agent prompts, or structured transcript records in `pr_links`:
 
 ```json
 "pr_links": [
@@ -679,7 +678,7 @@ Sessions list pull requests found in retained user prompts or structured transcr
 ]
 ```
 
-AgentsView keeps one link per pull request. A prompt link means the prompt
+AgentsView keeps one link per pull request. Commands in shell branches whose execution is uncertain do not add links. Older transcript-only and usage-only archives that omitted tool inputs cannot backfill command or child-agent links from those inputs. A prompt link means the prompt
 mentioned the pull request; it does not establish that the session worked on it. Claude Code
 also records `pr-link` entries in its transcripts.
 Claude Code records these links for the whole transcript, so every session

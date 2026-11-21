@@ -1015,3 +1015,35 @@ func sessionCommitLinkRows(ctx context.Context, q messageRowsQuerier, owners, wh
 	}
 	return out, rows.Err()
 }
+func argvShellText(input string) (string, bool) {
+	var payload struct {
+		Command []string `json:"command"`
+	}
+	if json.Unmarshal([]byte(input), &payload) != nil || payload.Command == nil {
+		return "", false
+	}
+	args := payload.Command
+	if len(args) == 0 {
+		return "", true
+	}
+	program := path.Base(strings.ReplaceAll(args[0], `\`, "/"))
+	if len(args) >= 3 && (program == "sh" || program == "bash" || program == "zsh") && (args[1] == "-c" || args[1] == "-lc") {
+		return args[2], true
+	}
+	return quoteArgv(args), true
+}
+func quoteArgv(args []string) string {
+	for i, arg := range args {
+		if strings.HasPrefix(arg, "~") {
+			arg = "./" + arg
+		}
+		args[i] = shellquote.POSIX(arg)
+	}
+	return strings.Join(args, " ")
+}
+func shellCommandText(input string) string {
+	if command, ok := argvShellText(input); ok {
+		return command
+	}
+	return commitCommandText(input)
+}

@@ -40,6 +40,8 @@ type PreparedSession struct {
 	Findings     []db.SecretFinding
 	Friction     db.SessionFrictionUpdate
 	Validation   db.ValidationStats
+	// ToolPRLinks are derived from pre-policy tool inputs in hosted captures.
+	ToolPRLinks []db.PRLink `json:",omitempty"`
 }
 
 // PrepareCandidate converts and pairs parser output before caller-owned

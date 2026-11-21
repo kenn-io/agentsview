@@ -151,7 +151,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 	}
 	changed := false
 	derivedChanged := false
-	fresh := make(map[string][]byte)
+	fresh := make(map[string]rawFreshContent)
 	dialogueChanges := make([]string, 0)
 	for _, group := range ordered {
 		c, ok := candidates[group]
@@ -244,6 +244,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		}
 		sessionID := "raw-row-" + rawDigest("row-v1", group, revision)
 		branchID := rawDigest("branch-v1", group, source)
+		prepared.ToolPRLinks = db.ToolCallPRLinks(decision.Candidate.Messages, decision.Candidate.Session.Cwd, decision.Candidate.Parsed.Session.GitRemote)
 		payload, err := encodeRawPayload(prepared)
 		if err != nil {
 			return err
@@ -256,11 +257,32 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		if err != nil {
 			return err
 		}
-		// Reuse only bytes inserted by this transaction. Conflicts retain
-		// their stored payload and mutable derived state.
+		// Reuse bytes inserted by this transaction. On a conflict, merge only
+		// the derived tool links into the existing payload.
+		item := fresh[sessionID]
+		item.group = group
 		if count == 1 {
-			fresh[sessionID] = payload
+			item.payload = payload
 		}
+		item.links = parser.CombinePRLinks(item.links, prepared.ToolPRLinks)
+		if count == 0 && len(prepared.ToolPRLinks) > 0 {
+			retained, err := loadRawPayload(ctx, tx, sessionID)
+			if err != nil {
+				return err
+			}
+			merged := parser.CombinePRLinks(retained.ToolPRLinks, prepared.ToolPRLinks)
+			if db.EncodePRLinks(merged) != db.EncodePRLinks(retained.ToolPRLinks) {
+				retained.ToolPRLinks = merged
+				encoded, err := encodeRawPayload(retained)
+				if err != nil {
+					return err
+				}
+				if _, err := tx.ExecContext(ctx, `UPDATE raw_content_revisions SET payload=$2 WHERE session_id=$1`, sessionID, encoded); err != nil {
+					return err
+				}
+			}
+		}
+		fresh[sessionID] = item
 		dialogueChanged, err := syncRawDialogue(ctx, tx, sessionID, prepared.Messages)
 		if err != nil {
 			return err
@@ -328,8 +350,12 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			changed = true
 		}
 	}
+	freshIDsByGroup := make(map[string][]string)
+	for id, item := range fresh {
+		freshIDsByGroup[item.group] = append(freshIDsByGroup[item.group], id)
+	}
 	for _, group := range ordered {
-		linksChanged, err := syncSelectedRawPRLinks(ctx, tx, group, dialogueChanges)
+		linksChanged, err := syncSelectedRawPRLinks(ctx, tx, group, dialogueChanges, freshIDsByGroup[group], fresh)
 		if err != nil {
 			return err
 		}

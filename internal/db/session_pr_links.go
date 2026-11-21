@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -267,19 +268,30 @@ func refreshSessionPromptPRLinksTx(tx transactionQueries, id string) error {
 	if err != nil {
 		return err
 	}
-	return writeSessionPromptPRLinksTx(tx, id, stored, parser.CombinePRLinks(DecodePRLinks(structured), PromptPRLinks(messages)))
+	toolLinks, err := storedToolCallPRLinksTx(tx, id)
+	if err != nil {
+		return err
+	}
+	return writeSessionPromptPRLinksTx(tx, id, stored, parser.CombinePRLinks(DecodePRLinks(structured), PromptPRLinks(messages), toolLinks))
 }
 
 func appendSessionPromptPRLinksTx(tx transactionQueries, id string, messages []Message) error {
 	derived := PromptPRLinks(messages)
+	for _, message := range messages {
+		if len(message.ToolCalls) == 0 {
+			continue
+		}
+		cwd, remote, err := toolCallRepositoryTx(tx, id)
+		if err != nil {
+			return err
+		}
+		derived = parser.CombinePRLinks(derived, ToolCallPRLinks(messages, cwd, remote))
+		break
+	}
 	if len(derived) == 0 {
 		return nil
 	}
-	var stored string
-	if err := tx.QueryRow(`SELECT pr_links FROM sessions WHERE id=?`, id).Scan(&stored); err != nil {
-		return err
-	}
-	return writeSessionPromptPRLinksTx(tx, id, stored, parser.CombinePRLinks(DecodePRLinks(stored), derived))
+	return appendDerivedPRLinksTx(tx, id, derived)
 }
 
 // GetSessionStructuredPRLinks returns parser-recorded links without prompt links.
@@ -321,4 +333,104 @@ func (db *DB) upgradePromptPRLinksTx(ctx context.Context, tx *sql.Tx) error {
 		}
 	}
 	return nil
+}
+
+// CallPRLinks derives links from a tool call and its recorded checkout.
+func CallPRLinks(category, input, cwd, remote string) []PRLink {
+	if category == "Task" {
+		var payload struct {
+			Prompt  string `json:"prompt"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal([]byte(input), &payload) != nil {
+			return nil
+		}
+		a, _ := parser.PromptPRLinksContext(context.Background(), payload.Prompt)
+		b, _ := parser.PromptPRLinksContext(context.Background(), payload.Message)
+		return parser.CombinePRLinks(a, b)
+	}
+	if category != "Bash" {
+		return nil
+	}
+	var payload struct {
+		Workdir string `json:"workdir"`
+		Cwd     string `json:"cwd"`
+	}
+	_ = json.Unmarshal([]byte(input), &payload)
+	dir := payload.Workdir
+	if dir == "" {
+		dir = payload.Cwd
+	}
+	if dir != "" && (cwd == "" || path.Clean(dir) != path.Clean(cwd)) {
+		remote = ""
+	}
+	return parser.CommandPRLinks(shellCommandText(input), remote)
+}
+
+// ToolCallPRLinks derives links from a transcript's tool calls.
+func ToolCallPRLinks(messages []Message, cwd, remote string) []PRLink {
+	var links []PRLink
+	for _, message := range messages {
+		for _, call := range message.ToolCalls {
+			links = parser.CombinePRLinks(links, CallPRLinks(call.Category, call.InputJSON, cwd, remote))
+		}
+	}
+	return links
+}
+
+func toolCallRepositoryTx(tx transactionQueries, id string) (string, string, error) {
+	var cwd, remote string
+	err := tx.QueryRow(`SELECT COALESCE(s.cwd,''), COALESCE(NULLIF(p.recorded_git_remote,''), NULLIF(p.git_remote,''), '') FROM sessions s LEFT JOIN session_project_identity_snapshots p ON p.session_id=s.id WHERE s.id=?`, id).Scan(&cwd, &remote)
+	return cwd, remote, err
+}
+
+func storedToolCallPRLinksTx(tx transactionQueries, id string) ([]PRLink, error) {
+	cwd, remote, err := toolCallRepositoryTx(tx, id)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(`SELECT category, COALESCE(input_json,'') FROM tool_calls WHERE session_id=? AND category IN ('Bash','Task') ORDER BY id`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var links []PRLink
+	for rows.Next() {
+		var category, input string
+		if err := rows.Scan(&category, &input); err != nil {
+			return nil, err
+		}
+		links = parser.CombinePRLinks(links, CallPRLinks(category, input, cwd, remote))
+	}
+	return links, rows.Err()
+}
+
+const toolPRLinksDataVersion = 185
+
+func (db *DB) upgradeToolPRLinksTx(ctx context.Context, tx *sql.Tx) error {
+	version, _, err := readUserVersion(ctx, tx)
+	if err != nil || version >= toolPRLinksDataVersion {
+		return err
+	}
+	if db.usageOnlyStorage() {
+		return nil
+	}
+	ids, err := sessionIDsTx(ctx, tx, "id IN (SELECT session_id FROM tool_calls WHERE category IN ('Bash','Task'))")
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if err := refreshSessionPromptPRLinksTx(tx, id); err != nil {
+			return fmt.Errorf("backfilling tool PR links: %w", err)
+		}
+	}
+	return nil
+}
+
+func appendDerivedPRLinksTx(tx transactionQueries, id string, derived []PRLink) error {
+	var stored string
+	if err := tx.QueryRow(`SELECT pr_links FROM sessions WHERE id=?`, id).Scan(&stored); err != nil {
+		return err
+	}
+	return writeSessionPromptPRLinksTx(tx, id, stored, parser.CombinePRLinks(DecodePRLinks(stored), derived))
 }
