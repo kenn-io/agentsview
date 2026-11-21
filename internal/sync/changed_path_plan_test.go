@@ -411,10 +411,11 @@ func TestPlanChangedPathsClaudeToolResultSelectsOwningSession(t *testing.T) {
 		files []string
 	}{
 		{
-			// Root results are also read by the root's subagents.
+			// Subagents also read root results, but their transcript-only
+			// fingerprints cannot change with them.
 			name:  "session result",
 			path:  filepath.Join(projectDir, "session-05", "tool-results", "out.txt"),
-			files: []string{owner, subagent},
+			files: []string{owner},
 		},
 		{
 			name: "subagent result",
