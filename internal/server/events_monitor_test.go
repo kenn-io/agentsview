@@ -49,7 +49,7 @@ func TestEvents_ReconnectsAfterHostedMonitorCloses(t *testing.T) {
 	select {
 	case <-done:
 	case <-ctx.Done():
-		t.Fatal("stream did not end after monitor stopped")
+		require.FailNow(t, "stream did not end after monitor stopped")
 	}
 	assert.Contains(t, first.BodyString(), "event: session_updated\ndata: watch-a\n")
 	second, done := open()
@@ -57,7 +57,7 @@ func TestEvents_ReconnectsAfterHostedMonitorCloses(t *testing.T) {
 	select {
 	case <-done:
 	case <-ctx.Done():
-		t.Fatal("reconnected stream did not receive a later transition")
+		require.FailNow(t, "reconnected stream did not receive a later transition")
 	}
 	assert.Contains(t, second.BodyString(), "event: session_updated\ndata: watch-a\n")
 }

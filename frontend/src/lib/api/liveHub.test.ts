@@ -147,38 +147,45 @@ describe("shared live stream", () => {
     expect(missing.postMessage.mock.calls).toEqual([[{ type: "session_missing", data: "a" }]]);
   });
 
-  it.each(["old subscriber leaves", "subscriptions arrive out of order"])("keeps the newest credentials when %s", async (scenario) => {
-    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
-    vi.stubGlobal("fetch", fetch);
-    const hub = new LiveHub();
-    const old = { postMessage: vi.fn() };
-    const current = { postMessage: vi.fn() };
-    const oldRequest = { ...request("a"), token: "old-token", credentialTime: 1 };
-    const currentRequest = { ...request("a"), token: "new-token", credentialTime: 2 };
-    if (scenario === "old subscriber leaves") {
-      hub.update(old, oldRequest);
-      hub.update(current, currentRequest);
-    } else {
-      hub.update(current, currentRequest);
-      hub.update(old, oldRequest);
-    }
-    vi.advanceTimersByTime(250);
-    const expectedSources = scenario === "old subscriber leaves" ? 2 : 1;
-    expect(sources).toHaveLength(expectedSources);
-    if (scenario === "old subscriber leaves") {
-      expect(sources[0]!.closed).toBe(true);
-      await sources[1]!.options.fetch(sources[1]!.url, {});
-      expect((fetch.mock.calls[0]![1].headers as Headers).get("Authorization")).toBe("Bearer new-token");
-      hub.leave(old);
+  it.each(["old subscriber leaves", "subscriptions arrive out of order"])(
+    "keeps the newest credentials when %s",
+    async (scenario) => {
+      const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+      vi.stubGlobal("fetch", fetch);
+      const hub = new LiveHub();
+      const old = { postMessage: vi.fn() };
+      const current = { postMessage: vi.fn() };
+      const oldRequest = { ...request("a"), token: "old-token", credentialTime: 1 };
+      const currentRequest = { ...request("a"), token: "new-token", credentialTime: 2 };
+      if (scenario === "old subscriber leaves") {
+        hub.update(old, oldRequest);
+        hub.update(current, currentRequest);
+      } else {
+        hub.update(current, currentRequest);
+        hub.update(old, oldRequest);
+      }
       vi.advanceTimersByTime(250);
+      const expectedSources = scenario === "old subscriber leaves" ? 2 : 1;
       expect(sources).toHaveLength(expectedSources);
-    }
-    const active = sources[expectedSources - 1]!;
-    await active.options.fetch(active.url, {});
-    expect(fetch.mock.calls.at(-1)![0]).toBe("http://example.test/api/v1/events?session=a");
-    expect((fetch.mock.calls.at(-1)![1].headers as Headers).get("Authorization")).toBe("Bearer new-token");
-    hub.close();
-  });
+      if (scenario === "old subscriber leaves") {
+        expect(sources[0]!.closed).toBe(true);
+        await sources[1]!.options.fetch(sources[1]!.url, {});
+        expect((fetch.mock.calls[0]![1].headers as Headers).get("Authorization")).toBe(
+          "Bearer new-token",
+        );
+        hub.leave(old);
+        vi.advanceTimersByTime(250);
+        expect(sources).toHaveLength(expectedSources);
+      }
+      const active = sources[expectedSources - 1]!;
+      await active.options.fetch(active.url, {});
+      expect(fetch.mock.calls.at(-1)![0]).toBe("http://example.test/api/v1/events?session=a");
+      expect((fetch.mock.calls.at(-1)![1].headers as Headers).get("Authorization")).toBe(
+        "Bearer new-token",
+      );
+      hub.close();
+    },
+  );
 
   it("encodes session IDs and keeps tokens out of the stream URL", () => {
     const hub = new LiveHub();

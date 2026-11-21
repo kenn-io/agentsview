@@ -860,7 +860,9 @@ describe("live event payloads", () => {
     let port!: MessagePort;
     class Worker {
       port = { start() {}, postMessage() {}, onmessage: null } as unknown as MessagePort;
-      constructor() { port = this.port; }
+      constructor() {
+        port = this.port;
+      }
     }
     vi.stubGlobal("SharedWorker", Worker);
     const { watchEvents } = await import("./client.js");

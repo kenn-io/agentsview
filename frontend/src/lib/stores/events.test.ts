@@ -68,30 +68,33 @@ describe("events store", () => {
     }
   });
 
-  it.each(["unavailable", "no subscriber", "error", "timeout"])("settles startup on %s", async (reason) => {
-    vi.useFakeTimers();
-    try {
-      const { events } = await import("./events.svelte.js");
-      const settled = vi.fn();
-      void events.whenReady(100).then(settled);
-      if (reason !== "no subscriber") {
-        const unsubscribe = events.subscribe(vi.fn());
-        if (reason !== "unavailable") events.setAvailable(true);
-        if (reason === "error") source.dispatchEvent(new Event("error"));
-        if (reason === "timeout") await vi.advanceTimersByTimeAsync(100);
-        if (reason === "unavailable") events.setAvailable(false);
-        await Promise.resolve();
-        expect(settled).toHaveBeenCalledOnce();
-        unsubscribe();
-      } else {
-        events.setAvailable(true);
-        await Promise.resolve();
-        expect(settled).toHaveBeenCalledOnce();
+  it.each(["unavailable", "no subscriber", "error", "timeout"])(
+    "settles startup on %s",
+    async (reason) => {
+      vi.useFakeTimers();
+      try {
+        const { events } = await import("./events.svelte.js");
+        const settled = vi.fn();
+        void events.whenReady(100).then(settled);
+        if (reason !== "no subscriber") {
+          const unsubscribe = events.subscribe(vi.fn());
+          if (reason !== "unavailable") events.setAvailable(true);
+          if (reason === "error") source.dispatchEvent(new Event("error"));
+          if (reason === "timeout") await vi.advanceTimersByTimeAsync(100);
+          if (reason === "unavailable") events.setAvailable(false);
+          await Promise.resolve();
+          expect(settled).toHaveBeenCalledOnce();
+          unsubscribe();
+        } else {
+          events.setAvailable(true);
+          await Promise.resolve();
+          expect(settled).toHaveBeenCalledOnce();
+        }
+      } finally {
+        vi.useRealTimers();
       }
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+    },
+  );
 
   it("tracks repeated subscriptions and debounces updates", async () => {
     vi.useFakeTimers();
