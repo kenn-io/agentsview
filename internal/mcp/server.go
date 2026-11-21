@@ -123,6 +123,8 @@ func newServer(opts ServeOptions) *mcp.Server {
 	s.AddReceivingMiddleware(argumentHints)
 
 	var warnCallLog sync.Once
+	var pruneMu sync.Mutex
+	var lastPrunedDay string
 	s.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, request mcp.Request) (mcp.Result, error) {
 			if method != "tools/call" {
@@ -136,7 +138,23 @@ func newServer(opts ServeOptions) *mcp.Server {
 				call.Content = append(call.Content, &mcp.TextContent{Text: "Warning: " + apiclient.ArchiveStaleWarning})
 			}
 			if req, ok := request.(*mcp.CallToolRequest); ok {
-				if recordErr := recordToolCall(ctx, opts.CallLogDir, req, result, err, elapsed); recordErr != nil {
+				var pruneErr error
+				if opts.CallLogDir != "" {
+					pruneMu.Lock()
+					now := time.Now().UTC()
+					if day := now.Format("2006-01-02"); day != lastPrunedDay {
+						// Pruning completes call-log maintenance after request cancellation.
+						pruneCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+						pruneErr = pruneCallLog(pruneCtx, opts.CallLogDir, now)
+						cancel()
+						if pruneErr == nil {
+							lastPrunedDay = day
+						}
+					}
+					pruneMu.Unlock()
+				}
+				recordErr := recordToolCall(ctx, opts.CallLogDir, req, result, err, elapsed)
+				if recordErr = errors.Join(pruneErr, recordErr); recordErr != nil {
 					warnCallLog.Do(func() {
 						w := opts.ErrorWriter
 						if w == nil {

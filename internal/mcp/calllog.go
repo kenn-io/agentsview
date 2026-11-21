@@ -21,6 +21,7 @@ import (
 
 const (
 	callRecordVersion    = 1
+	callRetentionDays    = 90
 	maxRecordedNameBytes = 128
 	maxRejectedNames     = 16
 )
@@ -190,6 +191,38 @@ func rejectedProperties(message string) []string {
 	return names
 }
 
+// pruneCallLog removes daily logs outside the retained UTC window.
+func pruneCallLog(ctx context.Context, dir string, now time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	files, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	cutoff := now.UTC().AddDate(0, 0, -(callRetentionDays - 1)).Format("2006-01-02")
+	for _, file := range files {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		name := file.Name()
+		if file.IsDir() || len(name) != 16 || !strings.HasSuffix(name, ".jsonl") {
+			continue
+		}
+		date := strings.TrimSuffix(name, ".jsonl")
+		if _, err := time.Parse("2006-01-02", date); err != nil || date >= cutoff {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
+}
+
 type callAggregate struct {
 	row              CallSummary
 	errors, rejected map[string]int
@@ -201,6 +234,17 @@ type callAggregate struct {
 func SummarizeCalls(ctx context.Context, dir, from, to string) ([]CallSummary, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	now := time.Now().UTC()
+	if err := pruneCallLog(ctx, dir, now); err != nil {
+		return nil, err
+	}
+	cutoff := now.AddDate(0, 0, -(callRetentionDays - 1)).Format("2006-01-02")
+	if from != "" && from < cutoff || to != "" && to < cutoff {
+		return nil, fmt.Errorf("MCP call records retain only the last 90 UTC days; earliest date is %s", cutoff)
+	}
+	if from == "" {
+		from = cutoff
 	}
 	files, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {

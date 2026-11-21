@@ -63,13 +63,15 @@ func TestCallOutcomes(t *testing.T) {
 
 func TestSummarizeCallsDatesAndMedians(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "2026-01-02.jsonl"), []byte(`{"version":1,"at":"2026-01-02T01:00:00Z","tool":"search_docs","outcome":"ok","bytes":10,"ms":2}
+	day1 := time.Now().UTC().AddDate(0, 0, -2).Format("2006-01-02")
+	day2 := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, day1+".jsonl"), []byte(strings.ReplaceAll(`{"version":1,"at":"2026-01-02T01:00:00Z","tool":"search_docs","outcome":"ok","bytes":10,"ms":2}
 {"version":1,"at":"2026-01-02T02:00:00Z","tool":"search_docs","outcome":"empty","bytes":30,"ms":6}
 broken
-`), 0600))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "2026-01-03.jsonl"), []byte(`{"version":1,"at":"2026-01-03T00:00:00Z","tool":"search_docs","outcome":"ok","bytes":90,"ms":20}
-`), 0600))
-	rows, err := SummarizeCalls(t.Context(), dir, "2026-01-02", "2026-01-02")
+`, "2026-01-02", day1)), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, day2+".jsonl"), []byte(strings.ReplaceAll(`{"version":1,"at":"2026-01-03T00:00:00Z","tool":"search_docs","outcome":"ok","bytes":90,"ms":20}
+`, "2026-01-03", day2)), 0600))
+	rows, err := SummarizeCalls(t.Context(), dir, day1, day1)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, 2, rows[0].Calls)
@@ -77,7 +79,7 @@ broken
 	assert.Equal(t, 4, rows[0].MedianMs)
 	require.NotNil(t, rows[0].EmptyPercent)
 	assert.Equal(t, 50.0, *rows[0].EmptyPercent)
-	rows, err = SummarizeCalls(t.Context(), dir, "2026-01-02", "2026-01-03")
+	rows, err = SummarizeCalls(t.Context(), dir, day1, day2)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, 30, rows[0].MedianBytes)
@@ -171,7 +173,9 @@ func TestCallLogFormatRejectsUnknownRecords(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			require.NoError(t, os.WriteFile(filepath.Join(dir, "2026-01-02.jsonl"), []byte(tc.record+"\n"), 0600))
+			day := time.Now().UTC().Format("2006-01-02")
+			record := strings.ReplaceAll(tc.record, "2026-01-02", day)
+			require.NoError(t, os.WriteFile(filepath.Join(dir, day+".jsonl"), []byte(record+"\n"), 0600))
 			_, err := SummarizeCalls(t.Context(), dir, "", "")
 			require.ErrorContains(t, err, tc.want)
 		})
@@ -263,4 +267,44 @@ func TestCallLogValidationValueIsNotARejectedName(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(dir, files[0].Name()))
 	require.NoError(t, err)
 	assert.NotContains(t, string(raw), "private-value")
+}
+
+func TestCallLogRetention(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now().UTC()
+	old := now.AddDate(0, 0, -90).Format("2006-01-02")
+	earliest := now.AddDate(0, 0, -89).Format("2006-01-02")
+	for _, date := range []string{old, earliest} {
+		rec := fmt.Sprintf(`{"version":1,"at":%q,"tool":"search_docs","outcome":"empty"}`+"\n", date+"T00:00:00Z")
+		require.NoError(t, os.WriteFile(filepath.Join(dir, date+".jsonl"), []byte(rec), 0600))
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "unrelated.txt"), []byte("keep"), 0600))
+	rows, err := SummarizeCalls(t.Context(), dir, "", "")
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, 1, rows[0].Calls)
+	_, err = os.Stat(filepath.Join(dir, old+".jsonl"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Stat(filepath.Join(dir, earliest+".jsonl"))
+	require.NoError(t, err)
+	_, err = os.Stat(filepath.Join(dir, "unrelated.txt"))
+	require.NoError(t, err)
+	_, err = SummarizeCalls(t.Context(), dir, old, "")
+	require.ErrorContains(t, err, "retain only the last 90 UTC days")
+	_, err = SummarizeCalls(t.Context(), dir, "", old)
+	require.ErrorContains(t, err, "retain only the last 90 UTC days")
+}
+
+func TestCallLogServerPrunesOldFiles(t *testing.T) {
+	dir := t.TempDir()
+	old := time.Now().UTC().AddDate(0, 0, -90).Format("2006-01-02")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, old+".jsonl"), []byte("old\n"), 0600))
+	d := dbtest.OpenTestDB(t)
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), CallLogDir: dir}))
+	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
+	result, err := ct.CallTool(t.Context(), callParams(ToolSearchDocs, map[string]any{"query": "session"}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+	_, err = os.Stat(filepath.Join(dir, old+".jsonl"))
+	require.ErrorIs(t, err, os.ErrNotExist)
 }

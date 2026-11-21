@@ -7,7 +7,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -15,16 +17,19 @@ import (
 )
 
 func TestMCPCallsReport(t *testing.T) {
+	day1 := time.Now().UTC().AddDate(0, 0, -2).Format("2006-01-02")
+	day2 := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+	day3 := time.Now().UTC().Format("2006-01-02")
 	home := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", home)
 	dir := filepath.Join(home, "mcp", "calls")
 	require.NoError(t, os.MkdirAll(dir, 0700))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "2026-01-02.jsonl"), []byte(`{"version":1,"at":"2026-01-02T00:00:00Z","tool":"search_docs","outcome":"empty","bytes":10,"ms":4}
-`), 0600))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "2026-01-03.jsonl"), []byte(`{"version":1,"at":"2026-01-03T00:00:00Z","tool":"get_messages","outcome":"error","error":"other error","bytes":20,"ms":8}
-`), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, day1+".jsonl"), []byte(strings.ReplaceAll(`{"version":1,"at":"2026-01-02T00:00:00Z","tool":"search_docs","outcome":"empty","bytes":10,"ms":4}
+`, "2026-01-02", day1)), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, day2+".jsonl"), []byte(strings.ReplaceAll(`{"version":1,"at":"2026-01-03T00:00:00Z","tool":"get_messages","outcome":"error","error":"other error","bytes":20,"ms":8}
+`, "2026-01-03", day2)), 0600))
 	cmd := newMCPCallsCommand()
-	cmd.SetArgs([]string{"--since", "2026-01-02", "--until", "2026-01-02", "--json"})
+	cmd.SetArgs([]string{"--since", day1, "--until", day1, "--json"})
 	var output bytes.Buffer
 	cmd.SetOut(&output)
 	require.NoError(t, cmd.Execute())
@@ -35,19 +40,27 @@ func TestMCPCallsReport(t *testing.T) {
 	require.NotNil(t, rows[0].EmptyPercent)
 	assert.Equal(t, 100.0, *rows[0].EmptyPercent)
 	cmd = newMCPCallsCommand()
-	cmd.SetArgs([]string{"--since", "2026-01-03", "--until", "2026-01-03"})
+	cmd.SetArgs([]string{"--since", day2, "--until", day2})
 	output.Reset()
 	cmd.SetOut(&output)
 	require.NoError(t, cmd.Execute())
 	assert.Contains(t, output.String(), "get_messages: 1 calls, 100.0% errors")
 	cmd = newMCPCallsCommand()
-	cmd.SetArgs([]string{"--since", "2026-01-04", "--until", "2026-01-04"})
+	cmd.SetArgs([]string{"--since", day3, "--until", day3})
 	output.Reset()
 	cmd.SetOut(&output)
 	require.NoError(t, cmd.Execute())
 	assert.Equal(t, "No MCP calls recorded in this range.\n", output.String())
 	cmd = newMCPCallsCommand()
-	cmd.SetArgs([]string{"--since", "2026-01-04", "--until", "2026-01-02"})
+	output.Reset()
+	cmd.SetOut(&output)
+	require.NoError(t, cmd.Execute())
+	assert.Contains(t, output.String(), "search_docs: 1 calls")
+	cmd = newMCPCallsCommand()
+	cmd.SetArgs([]string{"--since", time.Now().UTC().AddDate(0, 0, -90).Format("2006-01-02")})
+	assert.ErrorContains(t, cmd.Execute(), "retain only the last 90 UTC days")
+	cmd = newMCPCallsCommand()
+	cmd.SetArgs([]string{"--since", day3, "--until", day1})
 	assert.Error(t, cmd.Execute())
 }
 
