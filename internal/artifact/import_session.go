@@ -156,7 +156,8 @@ func loadImportedSession(
 			ctx, store, manifestRef, "invalid import session closure",
 		)
 	}
-	return rewriteManifestForImport(m, messages), importClosureComplete, nil
+	write, err := rewriteManifestForImport(ctx, m, messages)
+	return write, importClosureComplete, err
 }
 
 // Artifact transport carries transcript rows but no local asset files, so
@@ -291,10 +292,15 @@ func quarantineImportDependency(
 }
 
 func rewriteManifestForImport(
-	m manifest, messages []db.Message,
-) db.SessionBatchWrite {
+	ctx context.Context, m manifest, messages []db.Message,
+) (db.SessionBatchWrite, error) {
 	importedID := m.Origin + "~" + m.NativeSessionID
-	session := sessionFromManifest(m.Session, messages)
+	session := m.Session.dbSession()
+	links, err := db.ToolCallPRLinks(ctx, messages, session.Cwd, "")
+	if err != nil {
+		return db.SessionBatchWrite{}, err
+	}
+	session.ToolPRLinks = parser.CombinePRLinks(session.ToolPRLinks, links)
 	session.ID = importedID
 	session.Machine = m.Origin
 	session.SessionName = m.SessionName
@@ -341,7 +347,7 @@ func rewriteManifestForImport(
 		Signals:         signals,
 		DataVersion:     m.DataVersion,
 		ReplaceMessages: true,
-	}
+	}, nil
 }
 
 func clearImportedSessionSourceState(session *db.Session) {
@@ -406,10 +412,4 @@ func signalsFromImportedSession(session db.Session) db.SessionSignalUpdate {
 		signals.QualitySignals = *quality
 	}
 	return signals
-}
-
-func sessionFromManifest(m manifestSession, messages []db.Message) db.Session {
-	session := m.dbSession()
-	session.ToolPRLinks = parser.CombinePRLinks(session.ToolPRLinks, db.ToolCallPRLinks(messages, session.Cwd, ""))
-	return session
 }

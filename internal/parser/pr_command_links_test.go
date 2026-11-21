@@ -1,10 +1,19 @@
 package parser
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestCommandPRLinksCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, _, err := CommandPRLinks(ctx, "gh pr view 42 -R example/repo", "")
+	assert.ErrorIs(t, err, context.Canceled)
+}
 
 func TestGHPRCommandLinks(t *testing.T) {
 	tests := []struct{ command, remote, want string }{
@@ -80,7 +89,8 @@ func TestGHPRCommandLinks(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.command, func(t *testing.T) {
-			links, _ := CommandPRLinks(tt.command, tt.remote)
+			links, _, err := CommandPRLinks(t.Context(), tt.command, tt.remote)
+			require.NoError(t, err)
 			if tt.want == "" {
 				assert.Empty(t, links)
 				return
@@ -91,7 +101,8 @@ func TestGHPRCommandLinks(t *testing.T) {
 		})
 	}
 	t.Run("child shell directory", func(t *testing.T) {
-		links, changed := CommandPRLinks(`bash -c 'gh pr view 41; cd /other; gh pr view 99'; gh pr view 42`, "https://github.com/example/repo.git")
+		links, changed, err := CommandPRLinks(t.Context(), `bash -c 'gh pr view 41; cd /other; gh pr view 99'; gh pr view 42`, "https://github.com/example/repo.git")
+		require.NoError(t, err)
 		assert.False(t, changed)
 		if assert.Len(t, links, 2) {
 			assert.Equal(t, "https://github.com/example/repo/pull/41", links[0].URL)
@@ -123,7 +134,8 @@ func TestLauncherPromptPRLinks(t *testing.T) {
 	}
 	for _, tt := range launcherTests {
 		t.Run(tt.command, func(t *testing.T) {
-			links, _ := CommandPRLinks(tt.command, "")
+			links, _, err := CommandPRLinks(t.Context(), tt.command, "")
+			require.NoError(t, err)
 			var urls []string
 			for _, link := range links {
 				urls = append(urls, link.URL)

@@ -570,7 +570,7 @@ func backfillCopiedToolPRLinksTx(ctx context.Context, tx *sql.Tx, idsTable strin
 				return err
 			}
 		}
-		links, err := storedToolCallPRLinksTx(tx, id, remote)
+		links, err := storedToolCallPRLinksTx(ctx, tx, id, remote)
 		if err != nil {
 			return err
 		}

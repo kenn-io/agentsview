@@ -177,20 +177,29 @@ func shellLiteral(parts []syntax.WordPart) (string, bool) {
 }
 
 // CommandPRLinks derives links and reports whether later calls may use a different checkout.
-func CommandPRLinks(command, remote string) ([]PRLink, bool) {
+func CommandPRLinks(ctx context.Context, command, remote string) ([]PRLink, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
 	if len(command) > 256*1024 {
-		return nil, true
+		return nil, true, nil
 	}
 	var lists [][]PRLink
 	calls, changed := shellCommands(command)
 	for _, call := range calls {
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
 		call = unwrapShellCall(call)
-		lists = append(lists, ghPRCallLinks(call, remote))
+		lists = append(lists, ghPRCallLinks(ctx, call, remote))
 		prompt := launcherPrompt(call.Words, call.Literal)
-		found, _ := PromptPRLinksContext(context.Background(), prompt)
+		found, err := PromptPRLinksContext(ctx, prompt)
+		if err != nil {
+			return nil, false, err
+		}
 		lists = append(lists, found)
 	}
-	return CombinePRLinks(lists...), changed
+	return CombinePRLinks(lists...), changed, ctx.Err()
 }
 
 func unwrapShellCall(call shellCall) shellCall {
@@ -222,7 +231,7 @@ func unwrapShellCall(call shellCall) shellCall {
 	return call
 }
 
-func ghPRCallLinks(call shellCall, remote string) []PRLink {
+func ghPRCallLinks(ctx context.Context, call shellCall, remote string) []PRLink {
 	args := call.Words
 	if len(args) < 3 || !call.Literal[0] || !strings.EqualFold(strings.TrimSuffix(path.Base(args[0]), ".exe"), "gh") {
 		return nil
@@ -280,7 +289,7 @@ func ghPRCallLinks(call shellCall, remote string) []PRLink {
 		return nil
 	}
 	selector := selectors[0]
-	if links, _ := PromptPRLinksContext(context.Background(), selector); len(links) == 1 {
+	if links, _ := PromptPRLinksContext(ctx, selector); len(links) == 1 {
 		return links
 	}
 	if invalidRepo {

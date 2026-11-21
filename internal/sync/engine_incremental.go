@@ -275,7 +275,10 @@ func (e *Engine) tryProviderIncrementalAppend(
 				}
 				messages = append(messages, db.Message{ToolCalls: calls})
 			}
-			toolLinks := db.ToolCallPRLinks(messages, inc.Cwd, remote)
+			toolLinks, err := db.ToolCallPRLinks(ctx, messages, inc.Cwd, remote)
+			if err != nil {
+				return nil, nil, nil, nil, time.Time{}, 0, nil, nil, err
+			}
 			if len(toolLinks) > 0 {
 				var encoded string
 				if err := e.db.Reader().QueryRowContext(ctx, `SELECT tool_pr_links FROM sessions WHERE id=?`, inc.ID).Scan(&encoded); err != nil {

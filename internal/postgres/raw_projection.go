@@ -238,7 +238,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			}
 		}
 		if decision.Action != ingest.HistoryPreserve {
-			prepared.ToolPRLinks, err = db.ToolCallPRLinksContext(ctx, c.Messages, c.Session.Cwd, "")
+			prepared.ToolPRLinks, err = db.ToolCallPRLinks(ctx, c.Messages, c.Session.Cwd, "")
 			if err != nil {
 				return err
 			}
