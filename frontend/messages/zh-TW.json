@@ -2037,6 +2037,7 @@
   "appearance_title": "外觀",
   "appearance_description": "主題、版面配置、圖表配色與內容區塊顯示偏好。",
   "appearance_theme": "主題",
+  "appearance_match_device": "跟隨裝置",
   "appearance_light": "淺色",
   "appearance_dark": "深色",
   "appearance_chart_palette": "圖表配色",

@@ -2136,6 +2136,7 @@
   "appearance_title": "Appearance",
   "appearance_description": "Theme, layout, chart colors, and block visibility preferences.",
   "appearance_theme": "Theme",
+  "appearance_match_device": "Match device",
   "appearance_light": "Light",
   "appearance_dark": "Dark",
   "appearance_chart_palette": "Chart colors",

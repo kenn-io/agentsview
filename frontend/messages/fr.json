@@ -2137,6 +2137,7 @@
   "appearance_title": "Apparence",
   "appearance_description": "Préférences de thème, de disposition, de couleurs des graphiques et de visibilité des blocs.",
   "appearance_theme": "Thème",
+  "appearance_match_device": "Selon l’appareil",
   "appearance_light": "Clair",
   "appearance_dark": "Sombre",
   "appearance_chart_palette": "Couleurs des graphiques",

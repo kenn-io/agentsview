@@ -1,11 +1,13 @@
 import { SettingsUpdateRequestZoomLevel as ZoomLevel } from "../api/generated/models/settingsUpdateRequestZoomLevel.js";
 import {
   getHighContrast,
+  getThemeMode,
   initTheme,
   isDark,
   MEDIA,
   setHighContrast,
   setThemeMode,
+  type ThemeMode,
 } from "@kenn-io/kit-ui";
 import {
   SIDEBAR_WIDTH_DEFAULT,
@@ -301,6 +303,15 @@ class UIStore {
   }
 
   set theme(value: Theme) {
+    setThemeMode(value);
+  }
+
+  /** The chosen appearance, including "system" (match the device). */
+  get themeMode(): ThemeMode {
+    return getThemeMode();
+  }
+
+  set themeMode(value: ThemeMode) {
     setThemeMode(value);
   }
 

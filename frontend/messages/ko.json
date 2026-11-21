@@ -2039,6 +2039,7 @@
   "appearance_title": "화면 표시",
   "appearance_description": "테마, 레이아웃, 차트 색상, 블록 표시 여부 설정입니다.",
   "appearance_theme": "테마",
+  "appearance_match_device": "기기 설정 따르기",
   "appearance_light": "라이트",
   "appearance_dark": "다크",
   "appearance_chart_palette": "차트 색상",

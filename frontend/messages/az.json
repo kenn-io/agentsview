@@ -2125,6 +2125,7 @@
   "appearance_title": "Görünüş",
   "appearance_description": "Tema, düzülüş, diaqram rəngləri və blokların görünməsi seçimləri.",
   "appearance_theme": "Tema",
+  "appearance_match_device": "Cihaza uyğun",
   "appearance_light": "Açıq",
   "appearance_dark": "Tünd",
   "appearance_chart_palette": "Diaqram rəngləri",

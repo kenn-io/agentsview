@@ -7,6 +7,7 @@
     Toggle,
     Typeahead,
     type ColorInputSwatch,
+    type ThemeMode,
   } from "@kenn-io/kit-ui";
   import { getLocale, m } from "../../i18n/index.js";
   import { TriangleAlertIcon } from "../../icons.js";
@@ -35,6 +36,12 @@
     type MessageRole,
   } from "../../utils/messageColors.js";
   import MessageColorPreview from "./MessageColorPreview.svelte";
+
+  const THEME_OPTIONS: { value: ThemeMode; label: string }[] = $derived([
+    { value: "system", label: m.appearance_match_device() },
+    { value: "light", label: m.appearance_light() },
+    { value: "dark", label: m.appearance_dark() },
+  ]);
 
   const CHART_PALETTE_OPTIONS: { value: ChartPalette; label: string }[] =
     $derived([
@@ -141,11 +148,14 @@
 </script>
 
 <div class="appearance-settings">
-  <div class="setting-row">
+  <div class="setting-row option-row">
     <span class="setting-label">{m.appearance_theme()}</span>
-    <Button onclick={() => ui.toggleTheme()}>
-      {ui.theme === "light" ? m.appearance_light() : m.appearance_dark()}
-    </Button>
+    <SegmentedControl
+      options={THEME_OPTIONS}
+      value={ui.themeMode}
+      ariaLabel={m.appearance_theme()}
+      onchange={(value) => (ui.themeMode = value as ThemeMode)}
+    />
   </div>
 
   <div class="setting-row">

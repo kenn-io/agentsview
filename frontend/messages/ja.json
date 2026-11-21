@@ -2107,6 +2107,7 @@
   "appearance_title": "外観",
   "appearance_description": "テーマ、レイアウト、グラフの色、ブロックの表示設定。",
   "appearance_theme": "テーマ",
+  "appearance_match_device": "デバイスに合わせる",
   "appearance_light": "ライト",
   "appearance_dark": "ダーク",
   "appearance_chart_palette": "グラフの色",

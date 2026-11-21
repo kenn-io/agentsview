@@ -2037,6 +2037,7 @@
   "appearance_title": "外观",
   "appearance_description": "主题、布局、图表配色和内容块可见性偏好。",
   "appearance_theme": "主题",
+  "appearance_match_device": "跟随设备",
   "appearance_light": "浅色",
   "appearance_dark": "深色",
   "appearance_chart_palette": "图表配色",
