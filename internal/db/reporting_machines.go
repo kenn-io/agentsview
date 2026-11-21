@@ -63,8 +63,8 @@ func (m machineIdentities) origin(machine, archiveID string) string {
 }
 
 func loadReportingMachineIdentity(ctx context.Context, tx *sql.Tx, schema int, s *reportingExportSource) error {
-	if schema != export.ReportingJointSchemaVersion {
-		return errors.New("machine snapshots require reporting schema 5")
+	if !export.IsJointReportingSchema(schema) {
+		return errors.New("machine snapshots require reporting schema 5 or 6")
 	}
 	ids, err := loadMachineIdentities(ctx, tx)
 	if err != nil {

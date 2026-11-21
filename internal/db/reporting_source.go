@@ -25,6 +25,7 @@ type reportingExportSource struct {
 	usageSessions       []activity.SessionMeta
 	usageCandidates     []activityReportUsageCandidate
 	standaloneUsage     []activity.UsageRow
+	pollTimes           map[string]string
 	pricing             []export.EffectivePricingRow
 	createdAt           map[string]time.Time
 	projectObservations []export.ProjectIdentityObservation
@@ -51,6 +52,7 @@ type reportingDaySource struct {
 	usageSessions    []activity.SessionMeta
 	usageCandidates  []activityReportUsageCandidate
 	standaloneUsage  []activity.UsageRow
+	pollTimes        map[string]string
 	pricing          []export.EffectivePricingRow
 	createdAt        map[string]time.Time
 	projects         map[string]export.ProjectMapEntry
@@ -128,8 +130,8 @@ func (db *DB) loadReportingExportSource(
 	if err != nil {
 		return source, err
 	}
-	standaloneUsage, err := db.reportingStandaloneUsageCandidatesFrom(
-		ctx, tx, query,
+	standaloneUsage, pollTimes, err := db.reportingStandaloneUsageCandidatesFrom(
+		ctx, tx, query, schemaVersion,
 	)
 	if err != nil {
 		return source, err
@@ -166,7 +168,7 @@ func (db *DB) loadReportingExportSource(
 	labels := activity.ProjectLabels(allSessions)
 	observations := []export.ProjectIdentityObservation{}
 	archiveScope := export.IdentityScope{}
-	if len(labels) > 0 || schemaVersion == export.ReportingJointSchemaVersion {
+	if len(labels) > 0 || export.IsJointReportingSchema(schemaVersion) {
 		archiveID, archiveSalt, scopeErr := reportingArchiveScope(ctx, tx)
 		if scopeErr != nil {
 			return source, scopeErr
@@ -185,7 +187,7 @@ func (db *DB) loadReportingExportSource(
 		}
 	}
 	var references map[string]export.ProjectReference
-	if schemaVersion == export.ReportingJointSchemaVersion {
+	if export.IsJointReportingSchema(schemaVersion) {
 		references, err = db.reportingSessionReferences(ctx, tx, allSessions)
 		if err != nil {
 			return source, err
@@ -197,6 +199,7 @@ func (db *DB) loadReportingExportSource(
 	source.usageSessions = usageSessions
 	source.usageCandidates = usageCandidates
 	source.standaloneUsage = standaloneUsage
+	source.pollTimes = pollTimes
 	source.pricing = pricing
 	source.createdAt = createdAt
 	source.projectObservations = observations
@@ -301,6 +304,7 @@ func (src reportingExportSource) forDate(
 		usageSessions:    usageSessions,
 		usageCandidates:  usageCandidates,
 		standaloneUsage:  standaloneUsage,
+		pollTimes:        src.pollTimes,
 		pricing:          src.pricing,
 		createdAt:        createdAt,
 		projects:         projects,

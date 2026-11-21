@@ -360,6 +360,13 @@ CREATE TABLE IF NOT EXISTS cursor_usage_events (
     dedup_key TEXT NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS cursor_usage_polls (
+    window_start TEXT NOT NULL,
+    window_end_exclusive TEXT NOT NULL,
+    completed_at TEXT NOT NULL,
+    event_max_id INTEGER NOT NULL
+);
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cursor_usage_events_dedup
     ON cursor_usage_events(dedup_key)
     WHERE dedup_key != '';

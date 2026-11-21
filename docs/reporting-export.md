@@ -62,6 +62,20 @@ Usage without a session machine, including standalone Cursor billing, uses
 does not prove that two different archives' account-wide billing is distinct. Do
 not treat it as a machine identity or merge it with a named machine.
 
+Schema 6 requires `--by-machine`. It reports Cursor team usage under
+`cursor-account:<user_id>` when the event has a positive numeric user ID and a
+completed unfiltered Cursor sync covers the entire UTC hour. Account parts carry
+`polled_at`, the time the sync completed, and usage totals by model and agent.
+Events without a valid user ID or a covering poll remain under archive billing.
+Email is never used as an account key. Project-key exports omit these
+sessionless events.
+
+Events fetched before this version stay under archive billing until an
+unfiltered `agentsview source cursor sync-usage --since <date>` covers them. A
+sync filtered by email or user ID does not establish coverage. A later filtered
+sync keeps its new events under archive billing until a complete sync covers the
+hour.
+
 Downstream integrations can select one snapshot per originating machine and UTC
 hour before adding totals. Removing a whole overlapping archive would also
 remove activity from machines that have no other reporter. Existing exports

@@ -407,7 +407,7 @@ type rawUsageEvent struct {
 	TokenUsage     tokenUsage     `json:"tokenUsage"`
 	ChargedCents   jsontext.Value `json:"chargedCents"`
 	CursorTokenFee jsontext.Value `json:"cursorTokenFee"`
-	UserID         string         `json:"userId"`
+	UserID         jsontext.Value `json:"userId"`
 	UserEmail      string         `json:"userEmail"`
 	IsHeadless     bool           `json:"isHeadless"`
 }
@@ -444,10 +444,23 @@ func parseUsageEvent(raw rawUsageEvent) (UsageEvent, error) {
 		},
 		Charged:        charged,
 		CursorTokenFee: tokenFee,
-		UserID:         strings.TrimSpace(raw.UserID),
+		UserID:         parseUsageUserID(raw.UserID),
 		UserEmail:      strings.TrimSpace(raw.UserEmail),
 		IsHeadless:     raw.IsHeadless,
 	}, nil
+}
+
+func parseUsageUserID(value jsontext.Value) string {
+	if value.Kind() == jsontext.KindString {
+		var id string
+		if json.Unmarshal(value, &id) == nil {
+			return strings.TrimSpace(id)
+		}
+	}
+	if value.Kind() == jsontext.KindNumber {
+		return string(value)
+	}
+	return ""
 }
 
 func parseOptionalCents(value jsontext.Value) (money.Money, error) {

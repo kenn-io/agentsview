@@ -1750,14 +1750,14 @@ func (d *DB) CopySessionMetadataFrom(
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO main.cursor_usage_events (
-				agent,
+				id, agent,
 				occurred_at, model, kind,
 				input_tokens, output_tokens,
 				cache_write_tokens, cache_read_tokens,
 				charged_microdollars, cursor_token_fee_microdollars,
 				user_id, user_email, is_headless, dedup_key
 			)
-			SELECT `+agentColumn+`,
+			SELECT id, `+agentColumn+`,
 				occurred_at, model, kind,
 				input_tokens, output_tokens,
 				cache_write_tokens, cache_read_tokens,
@@ -1766,6 +1766,16 @@ func (d *DB) CopySessionMetadataFrom(
 			FROM old_db.cursor_usage_events
 			ORDER BY occurred_at, id`); err != nil {
 			return fmt.Errorf("copying cursor usage events: %w", err)
+		}
+	}
+
+	if oldDBHasTable(ctx, tx, "cursor_usage_polls") {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM main.cursor_usage_polls`); err != nil {
+			return fmt.Errorf("clearing cursor usage polls: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO main.cursor_usage_polls
+			SELECT window_start, window_end_exclusive, completed_at, event_max_id FROM old_db.cursor_usage_polls`); err != nil {
+			return fmt.Errorf("copying cursor usage polls: %w", err)
 		}
 	}
 

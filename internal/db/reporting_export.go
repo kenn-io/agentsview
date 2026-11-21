@@ -9,6 +9,8 @@ import (
 	"math"
 	"slices"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/activity"
@@ -67,6 +69,9 @@ func (db *DB) ExportReportingDay(
 		return export.ReportingDay{}, fmt.Errorf(
 			"unsupported reporting schema version %d", schemaVersion,
 		)
+	}
+	if schemaVersion == export.ReportingAccountSchemaVersion && !opts.ByMachine {
+		return export.ReportingDay{}, errors.New("reporting schema 6 requires --by-machine")
 	}
 	if err := export.ValidateReportingProjectScope(schemaVersion, opts.ProjectKeys); err != nil {
 		return export.ReportingDay{}, err
@@ -129,7 +134,7 @@ func (db *DB) ExportReportingDay(
 		Complete:      complete,
 		Hours:         hours,
 	}
-	if schemaVersion == export.ReportingJointSchemaVersion {
+	if export.IsJointReportingSchema(schemaVersion) {
 		day.BucketSeconds = int(bucket / time.Second)
 	}
 	day, _, err = export.FinalizeReportingDay(day)
@@ -153,6 +158,9 @@ func (db *DB) ExportReportingDigest(
 		return nil, fmt.Errorf(
 			"unsupported reporting schema version %d", schemaVersion,
 		)
+	}
+	if schemaVersion == export.ReportingAccountSchemaVersion && !opts.ByMachine {
+		return nil, errors.New("reporting schema 6 requires --by-machine")
 	}
 	if err := export.ValidateReportingProjectScope(schemaVersion, opts.ProjectKeys); err != nil {
 		return nil, err
@@ -255,7 +263,7 @@ func (db *DB) ExportReportingDigest(
 			Complete:      resolved.complete,
 			Hours:         hours,
 		}
-		if schemaVersion == export.ReportingJointSchemaVersion {
+		if export.IsJointReportingSchema(schemaVersion) {
 			day.BucketSeconds = int(bucket / time.Second)
 		}
 		day, _, err = export.FinalizeReportingDay(day)
@@ -306,8 +314,9 @@ func reportingHoursFromSource(
 	for _, session := range mergeReportingSessions(source.activitySessions, source.usageSessions) {
 		machines[source.machineID(session.Machine)] = true
 	}
-	if len(source.standaloneUsage) > 0 {
+	for _, row := range source.standaloneUsage {
 		machines[source.machineID("")] = true
+		machines[source.machineID(row.Machine)] = true
 	}
 	for i := range hours {
 		hours[i].LocalMachineID = source.localMachineID
@@ -322,6 +331,18 @@ func reportingHoursFromSource(
 			part, _, err = export.FinalizeReportingHour(part)
 			if err != nil {
 				return nil, err
+			}
+			if strings.HasPrefix(machine, "cursor-account:") {
+				part.Activity = quietReportingHour(date.Add(time.Duration(i)*time.Hour), schemaVersion, bucket).Activity
+				part.Joint = &export.ReportingJoint{}
+				if !part.HasData {
+					continue
+				}
+				part.PolledAt = source.pollTimes[machine+"/"+part.Period]
+				part, _, err = export.FinalizeReportingHour(part)
+				if err != nil {
+					return nil, err
+				}
 			}
 			hours[i].Machines[machine] = part
 		}
@@ -397,11 +418,17 @@ func reportingHoursFromMachineSource(
 		events = slices.DeleteFunc(slices.Clone(events), func(e activity.ActivityEvent) bool {
 			return source.machineID(sessionByID[e.SessionID].Machine) != machine
 		})
-		usage = slices.DeleteFunc(slices.Clone(usage), func(u activity.UsageRow) bool { return source.machineID(sessionByID[u.SessionID].Machine) != machine })
+		usage = slices.DeleteFunc(slices.Clone(usage), func(u activity.UsageRow) bool {
+			origin := sessionByID[u.SessionID].Machine
+			if u.SessionID == "" {
+				origin = u.Machine
+			}
+			return source.machineID(origin) != machine
+		})
 	}
 	var references map[string]export.ProjectReference
 	var groupLabels map[string]string
-	if schemaVersion == export.ReportingJointSchemaVersion {
+	if export.IsJointReportingSchema(schemaVersion) {
 		projects, references, groupLabels = partitionReportingProjects(sessionByID, projects, source.references)
 		sessions = slices.Clone(sessions)
 		for i := range sessions {
@@ -447,7 +474,7 @@ func reportingHoursFromMachineSource(
 			candidates = dayCandidates[first:last:last]
 		}
 		aggregate := activity.AggregateCandidates
-		if schemaVersion == export.ReportingJointSchemaVersion {
+		if export.IsJointReportingSchema(schemaVersion) {
 			aggregate = activity.AggregateCandidatesWithJointActivity
 		}
 		report, aggregateErr := aggregate(ctx, activity.Params{
@@ -483,7 +510,9 @@ func reportingHoursFromMachineSource(
 			return nil, usageErr
 		}
 		hour.Usage = reportingUsage
-		applyReportingFirstSeen(&hour.Activity.Totals, firstSeen[i])
+		if !strings.HasPrefix(machine, "cursor-account:") {
+			applyReportingFirstSeen(&hour.Activity.Totals, firstSeen[i])
+		}
 		hour.HasData = hourHasUsage ||
 			hour.Activity.Totals.AgentMinutes > 0 ||
 			hour.Activity.Totals.ActiveMinutes > 0 ||
@@ -491,7 +520,7 @@ func reportingHoursFromMachineSource(
 		if !hour.HasData {
 			hour = quietReportingHour(hourStart, schemaVersion, bucket)
 		}
-		if schemaVersion == export.ReportingJointSchemaVersion {
+		if export.IsJointReportingSchema(schemaVersion) {
 			hour.BucketSeconds = int(bucket / time.Second)
 			hour.Joint, err = jointReportingHour(hourStart, bucket, report.JointActivity, report.BySession, usage, sessionByID, projects, references, projectKeys)
 			if err != nil {
@@ -620,8 +649,8 @@ func (db *DB) reportingUsageSessionsFrom(
 func (db *DB) reportingStandaloneUsageCandidatesFrom(
 	ctx context.Context,
 	tx *sql.Tx,
-	query activity.Query,
-) ([]activity.UsageRow, error) {
+	query activity.Query, schemaVersion int,
+) ([]activity.UsageRow, map[string]string, error) {
 	var tableExists int
 	err := tx.QueryRowContext(
 		ctx,
@@ -629,10 +658,10 @@ func (db *DB) reportingStandaloneUsageCandidatesFrom(
 		 WHERE type = 'table' AND name = 'cursor_usage_events'`,
 	).Scan(&tableExists)
 	if errors.Is(err, sql.ErrNoRows) {
-		return []activity.UsageRow{}, nil
+		return []activity.UsageRow{}, nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf(
+		return nil, nil, fmt.Errorf(
 			"checking standalone reporting usage table: %w", err,
 		)
 	}
@@ -643,24 +672,39 @@ func (db *DB) reportingStandaloneUsageCandidatesFrom(
 	upperBound := PaddedUTCBound(
 		query.RangeEnd.UTC().Format(time.RFC3339), 14,
 	)
+	pollColumns, pollJoin := "'', 0", ""
+	if schemaVersion == export.ReportingAccountSchemaVersion {
+		var pollTableExists bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cursor_usage_polls')`).Scan(&pollTableExists); err != nil {
+			return nil, nil, fmt.Errorf("checking cursor usage polls: %w", err)
+		}
+		if pollTableExists {
+			pollColumns = "COALESCE(p.completed_at, ''), COALESCE(p.event_max_id, 0)"
+			pollJoin = `LEFT JOIN cursor_usage_polls p ON p.rowid = (
+				SELECT rowid FROM cursor_usage_polls
+				WHERE e.agent = 'cursor' AND e.user_id != ''
+				AND julianday(window_start) <= julianday(strftime('%Y-%m-%dT%H:00:00Z', e.occurred_at))
+				AND julianday(window_end_exclusive) >= julianday(strftime('%Y-%m-%dT%H:00:00Z', e.occurred_at), '+1 hour')
+				ORDER BY julianday(completed_at) DESC, rowid DESC LIMIT 1)`
+		}
+	}
 	rows, err := tx.QueryContext(ctx, `
-		SELECT agent, occurred_at, COALESCE(NULLIF(model, ''), '<unknown>'),
-			input_tokens, output_tokens,
-			cache_write_tokens, cache_read_tokens,
-			charged_microdollars, dedup_key
-		FROM cursor_usage_events
-		WHERE occurred_at >= ?
-			AND occurred_at <= ?`,
-		lowerBound, upperBound,
-	)
+		SELECT e.agent, e.occurred_at, COALESCE(NULLIF(e.model, ''), '<unknown>'),
+			e.input_tokens, e.output_tokens, e.cache_write_tokens, e.cache_read_tokens,
+			e.charged_microdollars, e.dedup_key, e.id, e.user_id, `+pollColumns+`
+		FROM cursor_usage_events e `+pollJoin+`
+		WHERE e.occurred_at >= ? AND e.occurred_at <= ?`, lowerBound, upperBound)
 	if err != nil {
-		return nil, fmt.Errorf("querying standalone reporting usage: %w", err)
+		return nil, nil, fmt.Errorf("querying standalone reporting usage: %w", err)
 	}
 	defer rows.Close()
 
 	loaded := []activity.UsageRow{}
+	pollTimes := map[string]string{}
 	for rows.Next() {
 		var row activity.UsageRow
+		var id, maxID int64
+		var userID, polledAt string
 		var inputTokens, outputTokens int
 		var cacheCreationTokens, cacheReadTokens int
 		if err := rows.Scan(
@@ -672,11 +716,19 @@ func (db *DB) reportingStandaloneUsageCandidatesFrom(
 			&cacheCreationTokens,
 			&cacheReadTokens,
 			&row.Cost,
-			&row.UsageDedupKey,
+			&row.UsageDedupKey, &id, &userID, &polledAt, &maxID,
 		); err != nil {
-			return nil, fmt.Errorf(
+			return nil, nil, fmt.Errorf(
 				"scanning standalone reporting usage: %w", err,
 			)
+		}
+		if schemaVersion == export.ReportingAccountSchemaVersion && row.Agent == "cursor" && id <= maxID && polledAt != "" && userID != "" && strings.Trim(userID, "0123456789") == "" {
+			if n, err := strconv.ParseUint(userID, 10, 64); err == nil && n > 0 {
+				if at, err := time.Parse(time.RFC3339Nano, row.Timestamp); err == nil {
+					row.Machine = "cursor-account:" + strconv.FormatUint(n, 10)
+					pollTimes[row.Machine+"/"+at.UTC().Format("2006-01-02-15")] = polledAt
+				}
+			}
 		}
 		row.InputTokens = max(inputTokens, 0)
 		row.OutputTokens = max(outputTokens, 0)
@@ -690,11 +742,11 @@ func (db *DB) reportingStandaloneUsageCandidatesFrom(
 		loaded = append(loaded, row)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf(
+		return nil, nil, fmt.Errorf(
 			"iterating standalone reporting usage: %w", err,
 		)
 	}
-	return loaded, nil
+	return loaded, pollTimes, nil
 }
 
 func sortReportingUsage(rows []activity.UsageRow) {

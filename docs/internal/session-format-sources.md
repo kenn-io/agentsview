@@ -3085,6 +3085,10 @@ schemas keep their existing ordering behavior.
 
 ## Cursor (`cursor`)
 
+- **Admin usage:** The [filtered usage events API](https://prod.cursor.com/docs/account/teams/admin-api)
+  returns team billing events. Its public event example omits `userId`;
+  reporting uses it only when the event supplies a positive numeric value and
+  never derives it from email.
 - **Dialogue projection:** Reverified 2026-10-17 against the JSONL parser and
   shared block fixtures. Assistant text and thinking blocks remain separate.
   Cursor IDE uses a different parser.

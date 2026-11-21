@@ -86,7 +86,7 @@ func newExportHourCommand(deps exportReportingDeps) *cobra.Command {
 	schemaVersion = bindReportingSchemaVersion(command)
 	projectKeys = bindReportingProjectKeys(command)
 	bucket = bindReportingBucket(command)
-	byMachine = command.Flags().Bool("by-machine", false, "Include snapshots by originating machine (schema 5)")
+	byMachine = command.Flags().Bool("by-machine", false, "Include snapshots by originating machine (schemas 5 and 6)")
 	return command
 }
 
@@ -138,7 +138,7 @@ func newExportDayCommand(deps exportReportingDeps) *cobra.Command {
 	schemaVersion = bindReportingSchemaVersion(command)
 	projectKeys = bindReportingProjectKeys(command)
 	bucket = bindReportingBucket(command)
-	byMachine = command.Flags().Bool("by-machine", false, "Include snapshots by originating machine (schema 5)")
+	byMachine = command.Flags().Bool("by-machine", false, "Include snapshots by originating machine (schemas 5 and 6)")
 	return command
 }
 
@@ -212,7 +212,7 @@ func newExportDigestCommand(deps exportReportingDeps) *cobra.Command {
 				To:            toValue,
 				Days:          days,
 			}
-			if *schemaVersion == export.ReportingJointSchemaVersion {
+			if export.IsJointReportingSchema(*schemaVersion) {
 				digest.BucketSeconds = int(duration / time.Second)
 			}
 			return writeCanonicalReportingDocument(cmd, digest)
@@ -222,7 +222,7 @@ func newExportDigestCommand(deps exportReportingDeps) *cobra.Command {
 	schemaVersion = bindReportingSchemaVersion(command)
 	projectKeys = bindReportingProjectKeys(command)
 	bucket = bindReportingBucket(command)
-	byMachine = command.Flags().Bool("by-machine", false, "Include snapshots by originating machine (schema 5)")
+	byMachine = command.Flags().Bool("by-machine", false, "Include snapshots by originating machine (schemas 5 and 6)")
 	command.Flags().StringVar(
 		&fromValue, "from", "", "First UTC date (YYYY-MM-DD)",
 	)
@@ -238,7 +238,7 @@ func bindReportingSchemaVersion(command *cobra.Command) *int {
 		version,
 		"schema-version",
 		export.ReportingSchemaVersion,
-		fmt.Sprintf("Reporting export schema version (%d or %d)", export.ReportingSchemaVersion, export.ReportingJointSchemaVersion),
+		fmt.Sprintf("Reporting export schema version (%d, %d, or %d)", export.ReportingSchemaVersion, export.ReportingJointSchemaVersion, export.ReportingAccountSchemaVersion),
 	)
 	return version
 }
@@ -253,7 +253,7 @@ func bindReportingProjectKeys(command *cobra.Command) *[]string {
 func bindReportingBucket(command *cobra.Command) *string {
 	bucket := new(string)
 	command.Flags().StringVar(bucket, "bucket", "",
-		"Bucket duration: whole-minute divisor of one hour (schema 5; default 5m)")
+		"Bucket duration: whole-minute divisor of one hour (schemas 5 and 6; default 5m)")
 	return bucket
 }
 

@@ -120,6 +120,7 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 		return err
 	}
 
+	completedAt := time.Now().UTC()
 	rows := make([]db.CursorUsageEvent, 0, len(events))
 	for _, ev := range events {
 		rows = append(rows, db.CursorUsageEvent{
@@ -137,7 +138,11 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 			IsHeadless:       ev.IsHeadless,
 		})
 	}
-	if err := database.InsertCursorUsageEvents(ctx, rows); err != nil {
+	var polls []db.CursorUsagePoll
+	if email == "" && userID == "" {
+		polls = append(polls, db.CursorUsagePoll{WindowStart: start, WindowEndExclusive: end.Add(time.Millisecond), CompletedAt: completedAt})
+	}
+	if err := database.InsertCursorUsageEvents(ctx, rows, polls...); err != nil {
 		return err
 	}
 

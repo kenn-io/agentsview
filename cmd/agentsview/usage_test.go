@@ -1535,7 +1535,7 @@ func TestNewUsageCursorCommandUsesConfigFallbacksAndSharedPagination(t *testing.
 					},
 					"chargedCents": 15.66,
 					"cursorTokenFee": 3.32,
-					"userId": "152683922",
+					"userId": 152683922,
 					"userEmail": "config@example.com",
 					"isHeadless": false
 				}]
@@ -1607,6 +1607,9 @@ func TestNewUsageCursorCommandUsesConfigFallbacksAndSharedPagination(t *testing.
 		"SELECT count(*) FROM cursor_usage_events",
 	).Scan(&count))
 	assert.Equal(t, 2, count)
+	var numericUserID string
+	require.NoError(t, database.Reader().QueryRow(cmd.Context(), "SELECT user_id FROM cursor_usage_events WHERE model = 'claude-4.6-opus-high-thinking'").Scan(&numericUserID))
+	assert.Equal(t, "152683922", numericUserID)
 
 	rows, err := database.Reader().Query(cmd.Context(),
 		`SELECT occurred_at, model, input_tokens, output_tokens,
@@ -1950,4 +1953,49 @@ func TestNoTokenDataNote(t *testing.T) {
 				noTokenDataNote(tc.agent, tc.totals))
 		})
 	}
+}
+
+func TestCursorUsagePollRecordsOnlyCompletedUnfilteredSync(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "config.toml"), []byte("cursor_admin_api_key = 'key'\n"), 0o600))
+	fail := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &request)) {
+			return
+		}
+		if fail {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		_, _ = w.Write([]byte(`{"totalUsageEventsCount":0,"usageEvents":[]}`))
+	}))
+	t.Cleanup(server.Close)
+	original := newCursorUsageClient
+	newCursorUsageClient = func(key string) *cursorusage.Client {
+		client := cursorusage.NewClientWithBaseURL(server.URL, key)
+		client.RequestInterval = 0
+		return client
+	}
+	t.Cleanup(func() { newCursorUsageClient = original })
+	for _, args := range [][]string{{"--since", "2026-05-14", "--until", "2026-05-14"}, {"--since", "2026-05-14", "--until", "2026-05-14", "--email", "member@example.com"}} {
+		cmd := newUsageCursorCommand()
+		cmd.SetArgs(args)
+		captureStdout(t, func() { require.NoError(t, cmd.Execute()) })
+	}
+	fail = true
+	failed := newUsageCursorCommand()
+	failed.SetArgs([]string{"--since", "2026-05-14", "--until", "2026-05-14"})
+	captureStdout(t, func() { require.Error(t, failed.Execute()) })
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	var count, maxID int
+	var start, end, completed string
+	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT count(*), window_start, window_end_exclusive, completed_at, event_max_id FROM cursor_usage_polls`).Scan(&count, &start, &end, &completed, &maxID))
+	assert.Equal(t, 1, count)
+	assert.Equal(t, 0, maxID)
+	assert.NotEmpty(t, start)
+	assert.NotEmpty(t, end)
+	_, err := time.Parse(time.RFC3339Nano, completed)
+	require.NoError(t, err)
 }

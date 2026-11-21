@@ -65,3 +65,96 @@ func TestExportReportingByMachine(t *testing.T) {
 	assert.EqualValues(t, 900, day.Hours[10].Machines["origin-b"].Usage.Totals.OutputTokens)
 	assert.EqualValues(t, 17, day.Hours[10].Machines["archive:machine-test-archive"].Usage.Totals.OutputTokens)
 }
+
+func TestExportReportingCursorAccounts(t *testing.T) {
+	dataDir := testDataDir(t)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, database.ConfigureArtifactLocalMachine(t.Context(), "origin-a"))
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `
+			INSERT INTO archive_metadata(key, value) VALUES ('archive_id', 'test-archive') ON CONFLICT(key) DO UPDATE SET value=excluded.value;
+			INSERT INTO cursor_usage_events(id, agent, occurred_at, model, output_tokens, user_id, dedup_key) VALUES
+			(1, 'cursor', '2026-07-28T10:03:00Z', 'model-a', 10, '12', 'a'),
+			(2, 'cursor', '2026-07-28T10:04:00Z', 'model-b', 20, '34', 'b'),
+			(3, 'cursor', '2026-07-28T10:05:00Z', 'model-c', 3, '', 'c'),
+			(4, 'xai', '2026-07-28T10:06:00Z', 'model-d', 4, '12', 'd'),
+			(5, 'cursor', '2026-07-28T10:07:00Z', 'model-e', 5, '12', 'e'),
+			(6, 'cursor', '2026-07-28T11:07:00Z', 'model-f', 6, '12', 'f'),
+			(7, 'cursor', '2026-07-28T10:08:00Z', 'model-g', 8, 'invalid', 'g'),
+			(8, 'cursor', '2026-07-28T09:08:00Z', 'model-h', 9, '12', 'h');
+			INSERT INTO cursor_usage_polls VALUES ('2026-07-28T10:00:00Z', '2026-07-28T11:00:00Z', '2026-07-29T00:00:00Z', 7);
+			UPDATE cursor_usage_polls SET event_max_id=4;
+			INSERT INTO cursor_usage_polls VALUES ('2026-07-28T09:00:00Z', '2026-07-28T10:00:00Z', '2026-07-29T00:00:00Z', 8);`)
+		return err
+	}))
+	require.NoError(t, database.Close())
+	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+	type hour struct {
+		PolledAt string `json:"polled_at"`
+		Joint    struct {
+			Cells []any `json:"cells"`
+		} `json:"joint"`
+		Activity struct {
+			Totals struct {
+				NewModels int `json:"new_models"`
+			} `json:"totals"`
+		} `json:"activity"`
+		Machines map[string]hour `json:"machines"`
+		Usage    struct {
+			Totals struct {
+				OutputTokens int64 `json:"output_tokens"`
+			} `json:"totals"`
+		} `json:"usage"`
+	}
+	read := func(args ...string) (struct {
+		Hours []hour `json:"hours"`
+	}, error,
+	) {
+		var day struct {
+			Hours []hour `json:"hours"`
+		}
+		out, _, err := executeExportSessionsCommand(newExportReportingTestRoot(now), args...)
+		if err == nil {
+			err = json.Unmarshal([]byte(out), &day)
+		}
+		return day, err
+	}
+	day, err := read("export", "day", "--schema-version", "6", "--by-machine", "2026-07-28")
+	require.NoError(t, err)
+	assert.EqualValues(t, 10, day.Hours[10].Machines["cursor-account:12"].Usage.Totals.OutputTokens)
+	assert.EqualValues(t, 20, day.Hours[10].Machines["cursor-account:34"].Usage.Totals.OutputTokens)
+	assert.Equal(t, "2026-07-29T00:00:00Z", day.Hours[10].Machines["cursor-account:12"].PolledAt)
+	assert.Empty(t, day.Hours[10].Machines["cursor-account:12"].Joint.Cells)
+	assert.Zero(t, day.Hours[10].Machines["cursor-account:12"].Activity.Totals.NewModels)
+	assert.EqualValues(t, 20, day.Hours[10].Machines["archive:test-archive"].Usage.Totals.OutputTokens)
+	assert.NotContains(t, day.Hours[11].Machines, "cursor-account:12")
+	assert.Contains(t, day.Hours[9].Machines, "archive:test-archive")
+	assert.Zero(t, day.Hours[9].Machines["archive:test-archive"].Usage.Totals.OutputTokens)
+	scoped, err := read("export", "day", "--schema-version", "6", "--by-machine", "--project-key", "other", "2026-07-28")
+	require.NoError(t, err)
+	assert.NotContains(t, scoped.Hours[10].Machines, "cursor-account:12")
+	database = dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `INSERT INTO cursor_usage_polls VALUES ('2026-07-28T10:00:00Z', '2026-07-28T11:00:00Z', '2026-07-29T01:00:00Z', 6)`)
+		return err
+	}))
+	require.NoError(t, database.Close())
+	day, err = read("export", "day", "--schema-version", "6", "--by-machine", "2026-07-28")
+	require.NoError(t, err)
+	assert.EqualValues(t, 15, day.Hours[10].Machines["cursor-account:12"].Usage.Totals.OutputTokens)
+	assert.EqualValues(t, 15, day.Hours[10].Machines["archive:test-archive"].Usage.Totals.OutputTokens)
+	_, err = read("export", "day", "--schema-version", "6", "2026-07-28")
+	require.Error(t, err)
+	day, err = read("export", "day", "--schema-version", "5", "--by-machine", "2026-07-28")
+	require.NoError(t, err)
+	assert.EqualValues(t, 50, day.Hours[10].Machines["archive:test-archive"].Usage.Totals.OutputTokens)
+	database = dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `DROP TABLE cursor_usage_polls`)
+		return err
+	}))
+	require.NoError(t, database.Close())
+	day, err = read("export", "day", "--schema-version", "6", "--by-machine", "2026-07-28")
+	require.NoError(t, err)
+	assert.EqualValues(t, 50, day.Hours[10].Machines["archive:test-archive"].Usage.Totals.OutputTokens)
+}
