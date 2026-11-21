@@ -7,7 +7,6 @@ import (
 	"cmp"
 	"context"
 	"encoding/base64"
-	jsonv1 "encoding/json"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -526,7 +525,7 @@ type getMessagesOut struct {
 	// NextFrom is set off the last scanned ordinal (not the last visible
 	// one), so paging stays reliable even though filtering can make a page
 	// return fewer than the limit.
-	NextFrom           *int   `json:"next_from,omitempty" jsonschema:"Next page's from anchor. Page until absent; filtering or the byte budget can make pages short."`
+	NextFrom           *int   `json:"next_from,omitzero" jsonschema:"Next page's from anchor. Page until absent; filtering or the byte budget can make pages short."`
 	TranscriptRevision string `json:"transcript_revision"`
 }
 
@@ -770,11 +769,11 @@ func fitOneMessage(out *getMessagesOut, item *messageOut, source string, in getM
 		item.FullLength = utf8.RuneCountInString(item.Content)
 	}
 	item.BodyCursor = encodeMessageBodyCursor(messageBodyCursor{EvidenceSource: source, SessionID: in.SessionID, Revision: out.TranscriptRevision, Ordinal: item.Ordinal, Offset: item.FullLength, NextFrom: out.NextFrom, Roles: in.Roles})
-	envelope, err := jsonv1.Marshal(out)
+	envelope, err := marshalResponseSize(out)
 	if err != nil {
 		return err
 	}
-	item.Content = fitText(item.Content, responseBudgetBytes-len(envelope), func(text string) any { m := *item; m.Content = text; return m })
+	item.Content = fitText(item.Content, responseBudgetBytes-responseSizeMargin-len(envelope), func(text string) any { m := *item; m.Content = text; return m })
 	if item.Content == "" {
 		return errors.New("message response exceeds budget")
 	}
@@ -874,11 +873,11 @@ func (t *toolset) getMessageBodyContinuation(
 		out.Messages[0].Truncated = true
 		item := out.Messages[0]
 		out.Messages = []messageOut{}
-		envelope, err := jsonv1.Marshal(out)
+		envelope, err := marshalResponseSize(out)
 		if err != nil {
 			return nil, getMessagesOut{}, err
 		}
-		item.Content = fitText(item.Content, responseBudgetBytes-len(envelope), func(text string) any { m := item; m.Content = text; return m })
+		item.Content = fitText(item.Content, responseBudgetBytes-responseSizeMargin-len(envelope), func(text string) any { m := item; m.Content = text; return m })
 		if item.Content == "" {
 			return nil, getMessagesOut{}, errors.New("message response exceeds budget")
 		}
@@ -947,7 +946,7 @@ type contentMatch struct {
 	Snippet         string   `json:"snippet"`
 	SnippetCut      bool     `json:"snippet_truncated,omitempty" jsonschema:"Read the full message with get_messages."`
 	MatchedWords    int      `json:"matched_words" jsonschema:"Number of retained query words the match holds in ranked word search; unquoted stop words are dropped. Zero for other searches."`
-	Score           *float64 `json:"score,omitempty" jsonschema:"Relevance score for semantic/hybrid modes; omitted for substring/regex/fts."`
+	Score           *float64 `json:"score,omitzero" jsonschema:"Relevance score for semantic/hybrid modes; omitted for substring/regex/fts."`
 	OrdinalRange    [2]int   `json:"ordinal_range" jsonschema:"[start, end] ordinals of the matching conversation unit; equal for single-message units."`
 	Subordinate     bool     `json:"subordinate,omitzero" jsonschema:"True when this match belongs to a subordinate unit: a sidechain run, or a subagent/fork session."`
 	Relationship    string   `json:"relationship,omitempty" jsonschema:"The matched session's relationship to its parent (for example subagent or fork), when it has one."`
@@ -970,7 +969,7 @@ type searchContentOut struct {
 	Omitted        int                         `json:"omitted,omitempty" jsonschema:"Matches held back."`
 	Total          int                         `json:"total,omitempty" jsonschema:"Match count; ranked searches report a lower bound."`
 	TotalCapped    bool                        `json:"total_capped,omitempty" jsonschema:"True when total is a lower bound."`
-	NextCursor     *int                        `json:"next_cursor,omitempty"`
+	NextCursor     *int                        `json:"next_cursor,omitzero"`
 	ActivityCutoff string                      `json:"activity_cutoff,omitempty" jsonschema:"Effective RFC3339 activity cutoff; pass it unchanged with next_cursor as cursor to continue."`
 	ExcludedActive int                         `json:"excluded_active,omitempty"`
 	// EffectiveMode and EffectiveScope report the defaults the search
@@ -1241,11 +1240,11 @@ func (t *toolset) searchContent(
 			m.ContextBefore, m.ContextAfter = nil, nil
 			originalSnippet := m.Snippet
 			m.SnippetCut = true
-			envelope, err := jsonv1.Marshal(out)
+			envelope, err := marshalResponseSize(out)
 			if err != nil {
 				return nil, searchContentOut{}, err
 			}
-			m.Snippet = fitText(m.Snippet, responseBudgetBytes-len(envelope), func(text string) any { match := *m; match.Snippet = text; return match })
+			m.Snippet = fitText(m.Snippet, responseBudgetBytes-responseSizeMargin-len(envelope), func(text string) any { match := *m; match.Snippet = text; return match })
 			m.SnippetCut = m.Snippet != originalSnippet
 			out.Matches = items[:1]
 		}

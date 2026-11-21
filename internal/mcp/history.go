@@ -4,7 +4,6 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"encoding/json/jsontext"
 	"errors"
 	"fmt"
@@ -59,8 +58,8 @@ type toolCallsOut struct {
 	ToolCalls       []toolCallOut `json:"tool_calls"`
 	Omitted         int           `json:"omitted,omitempty" jsonschema:"Calls held back."`
 	Total           int           `json:"total" jsonschema:"Calls matching the category filter across the whole session."`
-	NextCursor      *int          `json:"next_cursor,omitempty"`
-	NextInputOffset *int          `json:"next_input_offset,omitempty" jsonschema:"Pass as input_offset with next_cursor."`
+	NextCursor      *int          `json:"next_cursor,omitzero"`
+	NextInputOffset *int          `json:"next_input_offset,omitzero" jsonschema:"Pass as input_offset with next_cursor."`
 }
 
 func (t *toolset) toolCalls(
@@ -157,12 +156,12 @@ func fitToolCalls(out *toolCallsOut, start int, last bool, inputOffset int) erro
 		next = start
 		offset := inputOffset + utf8.RuneCountInString(call.Input)
 		out.NextInputOffset = &offset
-		envelope, err := json.Marshal(out)
+		envelope, err := marshalResponseSize(out)
 		if err != nil {
 			return err
 		}
 		original := call.Input
-		call.Input = fitText(call.Input, responseBudgetBytes-len(envelope), func(text string) any { c := *call; c.Input = text; return c })
+		call.Input = fitText(call.Input, responseBudgetBytes-responseSizeMargin-len(envelope), func(text string) any { c := *call; c.Input = text; return c })
 		if call.Input == "" {
 			return errors.New("tool call response exceeds budget")
 		}

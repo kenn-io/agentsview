@@ -4,7 +4,8 @@
 package mcp
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"slices"
 	"sort"
 	"time"
@@ -14,6 +15,8 @@ import (
 
 const (
 	responseBudgetBytes = 12_000
+	// JSON v2 omits zero-valued pointers in shared coverage fields that the SDK includes.
+	responseSizeMargin = 64
 
 	// activeExclusionWindow is how recently a session must have been
 	// active for search tools to exclude it by default. This keeps an
@@ -90,22 +93,29 @@ func roleAllowed(role string, roles []string) bool {
 	return slices.Contains(roles, role)
 }
 
-// fitsResponse measures the same JSON encoding used by the MCP SDK text block.
+// marshalResponseSize uses the MCP SDK's HTML escaping and nil collection format.
+// JSON v2 also includes zero-valued numeric and boolean fields tagged omitempty,
+// so this may overestimate the size of the SDK's JSON v1 encoding.
+func marshalResponseSize(out any) ([]byte, error) {
+	return json.Marshal(out, jsontext.EscapeForHTML(true), jsontext.EscapeForJS(true), jsontext.AllowInvalidUTF8(true), json.FormatNilSliceAsNull(true), json.FormatNilMapAsNull(true))
+}
+
+// fitsResponse reserves space for fields that v2 can omit from shared types.
 func fitsResponse(out any) bool {
-	data, err := json.Marshal(out)
-	return err == nil && len(data) <= responseBudgetBytes
+	data, err := marshalResponseSize(out)
+	return err == nil && len(data)+responseSizeMargin <= responseBudgetBytes
 }
 
 // fitItems counts the JSON encoding of an empty envelope and each array item.
 // Callers reserve space for continuation metadata in envelope first.
 func fitItems[T any](envelope any, items []T) int {
-	data, err := json.Marshal(envelope)
+	data, err := marshalResponseSize(envelope)
 	if err != nil {
 		return 0
 	}
-	size := len(data) + 32
+	size := len(data) + 32 + responseSizeMargin
 	for i, item := range items {
-		data, err = json.Marshal(item)
+		data, err = marshalResponseSize(item)
 		if err != nil {
 			return i
 		}
@@ -124,7 +134,7 @@ func fitItems[T any](envelope any, items []T) int {
 func fitText(text string, budget int, encode func(string) any) string {
 	runes := []rune(text)
 	n := sort.Search(len(runes), func(i int) bool {
-		data, err := json.Marshal(encode(string(runes[:i+1])))
+		data, err := marshalResponseSize(encode(string(runes[:i+1])))
 		return err != nil || len(data) > budget
 	})
 	return string(runes[:n])
