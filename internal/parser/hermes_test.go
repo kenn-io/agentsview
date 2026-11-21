@@ -2525,3 +2525,197 @@ func TestHermesCompactedStateDBExcludesArchivedOrdersByDisplayOrderAndFiltersRes
 	require.Len(t, outcome.Results, 1)
 	verifyResult(t, outcome.Results[0].Result.Session, outcome.Results[0].Result.Messages)
 }
+
+func TestHermesCompactedStateDBBeatsUnfilteredCompanionTranscript(t *testing.T) {
+	cases := []struct {
+		name           string
+		insertMsgsSQL  string
+		wantResultCnt  int
+		wantMessageCnt int
+		wantContents   []string
+	}{
+		{
+			name: "archived active=0 rows excluded despite fuller jsonl companion",
+			insertMsgsSQL: `
+				('compacted', 'user', 'archived turn', 1778767201.000, 0, NULL, NULL),
+				('compacted', 'assistant', 'archived reply', 1778767202.000, 0, NULL, NULL),
+				('compacted', 'user', 'visible prompt', 1778767203.000, 1, 1, NULL)
+			`,
+			wantResultCnt:  1,
+			wantMessageCnt: 1,
+			wantContents:   []string{"visible prompt"},
+		},
+		{
+			name: "all rows archived does not fall back to companion jsonl",
+			insertMsgsSQL: `
+				('compacted', 'user', 'archived turn', 1778767201.000, 0, NULL, NULL),
+				('compacted', 'assistant', 'archived reply', 1778767202.000, 0, NULL, NULL)
+			`,
+			wantResultCnt: 0,
+		},
+		{
+			name: "hidden restatement excludes state row despite companion json",
+			insertMsgsSQL: `
+				('compacted', 'user', 'visible prompt', 1778767201.000, 1, NULL, NULL),
+				('compacted', 'user', 'hidden restatement', 1778767202.000, 1, NULL, '{"compaction_inflight_task_restatement":true}')
+			`,
+			wantResultCnt:  1,
+			wantMessageCnt: 1,
+			wantContents:   []string{"visible prompt"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			sessionsDir := filepath.Join(root, "sessions")
+			require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+
+			// Write unfiltered companion files that have higher raw message count
+			// (including extra tool calls) than the compacted active set in state.db.
+			companionJSON := `{"messages":[` +
+				`{"role":"user","content":"archived turn","timestamp":"2026-05-14T10:00:01Z"},` +
+				`{"role":"assistant","content":"archived reply","tool_calls":[{"id":"t1","function":{"name":"bash","arguments":"{\"command\":\"ls\"}"}}],"timestamp":"2026-05-14T10:00:02Z"},` +
+				`{"role":"user","content":"hidden restatement","timestamp":"2026-05-14T10:00:03Z"},` +
+				`{"role":"assistant","content":"stale reply","timestamp":"2026-05-14T10:00:04Z"}` +
+				`]}`
+			require.NoError(t, os.WriteFile(filepath.Join(sessionsDir, "session_compacted.json"), []byte(companionJSON), 0o644))
+			companionJSONL := strings.Join([]string{
+				`{"role":"session_meta","platform":"cli","timestamp":"2026-05-14T10:00:00Z"}`,
+				`{"role":"user","content":"archived turn","timestamp":"2026-05-14T10:00:01Z"}`,
+				`{"role":"assistant","content":"archived reply","timestamp":"2026-05-14T10:00:02Z"}`,
+				`{"role":"user","content":"hidden restatement","timestamp":"2026-05-14T10:00:03Z"}`,
+			}, "\n")
+			require.NoError(t, os.WriteFile(filepath.Join(sessionsDir, "compacted.jsonl"), []byte(companionJSONL), 0o644))
+
+			stateDB := filepath.Join(root, "state.db")
+			conn, err := sql.Open("sqlite3", stateDB)
+			require.NoError(t, err)
+			_, err = conn.ExecContext(t.Context(), `
+				CREATE TABLE sessions (
+					id TEXT PRIMARY KEY,
+					source TEXT NOT NULL,
+					model TEXT,
+					parent_session_id TEXT,
+					started_at REAL NOT NULL,
+					ended_at REAL,
+					message_count INTEGER DEFAULT 0,
+					input_tokens INTEGER DEFAULT 0,
+					output_tokens INTEGER DEFAULT 0,
+					cache_read_tokens INTEGER DEFAULT 0,
+					cache_write_tokens INTEGER DEFAULT 0,
+					reasoning_tokens INTEGER DEFAULT 0,
+					estimated_cost_usd REAL,
+					actual_cost_usd REAL,
+					cost_status TEXT,
+					cost_source TEXT,
+					title TEXT,
+					api_call_count INTEGER DEFAULT 0
+				);
+				CREATE TABLE messages (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					session_id TEXT NOT NULL,
+					role TEXT NOT NULL,
+					content TEXT,
+					tool_call_id TEXT,
+					tool_calls TEXT,
+					timestamp REAL NOT NULL,
+					finish_reason TEXT,
+					reasoning TEXT,
+					reasoning_content TEXT,
+					reasoning_details TEXT,
+					codex_reasoning_items TEXT,
+					codex_message_items TEXT,
+					active INTEGER DEFAULT 1,
+					display_order INTEGER,
+					display_metadata TEXT
+				);
+				INSERT INTO sessions (id, source, model, started_at, ended_at, message_count)
+				VALUES ('compacted', 'cli', 'gpt-4', 1778767200.0, 1778767205.0, 2);
+				INSERT INTO messages (session_id, role, content, timestamp, active, display_order, display_metadata) VALUES `+tc.insertMsgsSQL)
+			require.NoError(t, err)
+			require.NoError(t, conn.Close())
+
+			results, err := parseHermesTestArchive(t, root, "", "local")
+			require.NoError(t, err)
+			require.Len(t, results, tc.wantResultCnt)
+			if tc.wantResultCnt > 0 {
+				require.Len(t, results[0].Messages, tc.wantMessageCnt)
+				for i, want := range tc.wantContents {
+					assert.Equal(t, want, results[0].Messages[i].Content)
+				}
+			}
+
+			provider := newHermesTestProvider(t, root)
+			outcome, err := provider.parseStateMember(
+				t.Context(),
+				hermesSource{
+					Root:      root,
+					StateDB:   stateDB,
+					SessionID: "compacted",
+					Path:      VirtualSourcePath(stateDB, "compacted"),
+				},
+				"",
+				"local",
+				SourceFingerprint{},
+			)
+			require.NoError(t, err)
+			require.Len(t, outcome.Results, tc.wantResultCnt)
+			if tc.wantResultCnt > 0 {
+				require.Len(t, outcome.Results[0].Result.Messages, tc.wantMessageCnt)
+				for i, want := range tc.wantContents {
+					assert.Equal(t, want, outcome.Results[0].Result.Messages[i].Content)
+				}
+			}
+		})
+	}
+}
+
+func TestHermesDisplayMetadataChangeUpdatesFingerprintAndParse(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "sessions"), 0o755))
+	createHermesStateDB(t, root)
+	stateDB := filepath.Join(root, "state.db")
+
+	conn, err := sql.Open("sqlite3", stateDB)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, conn.Close()) })
+	_, err = conn.ExecContext(t.Context(), `
+		ALTER TABLE messages ADD COLUMN active INTEGER DEFAULT 1;
+		ALTER TABLE messages ADD COLUMN display_order INTEGER;
+		ALTER TABLE messages ADD COLUMN display_metadata TEXT;
+		INSERT INTO messages (session_id, role, content, timestamp, active, display_order, display_metadata)
+		VALUES ('child', 'user', 'inflight restatement', 1778767220.0, 1, 2, NULL);
+	`)
+	require.NoError(t, err)
+
+	set := newHermesSourceSet(AgentHermes, []string{root})
+	member := set.stateMemberSourceRef(root, stateDB, "child")
+	src := member.Opaque.(hermesSource)
+	src.FingerprintSingleMember = true
+
+	fpBefore, err := hermesStateMemberFingerprint(t.Context(), member, src)
+	require.NoError(t, err)
+
+	provider := newHermesTestProvider(t, root)
+	beforeOut, err := provider.parseStateMember(t.Context(), src, "", "local", fpBefore)
+	require.NoError(t, err)
+	require.Len(t, beforeOut.Results, 1)
+	beforeCount := len(beforeOut.Results[0].Result.Messages)
+
+	_, err = conn.ExecContext(t.Context(), `
+		UPDATE messages
+		SET display_metadata = '{"compaction_inflight_task_restatement":true}'
+		WHERE session_id = 'child' AND timestamp = 1778767220.0
+	`)
+	require.NoError(t, err)
+
+	fpAfter, err := hermesStateMemberFingerprint(t.Context(), member, src)
+	require.NoError(t, err)
+	assert.NotEqual(t, fpBefore.Hash, fpAfter.Hash)
+
+	afterOut, err := provider.parseStateMember(t.Context(), src, "", "local", fpAfter)
+	require.NoError(t, err)
+	require.Len(t, afterOut.Results, 1)
+	assert.Equal(t, beforeCount-1, len(afterOut.Results[0].Result.Messages))
+}

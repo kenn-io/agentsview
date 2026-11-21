@@ -42,26 +42,27 @@ const hermesCronAncestorsQuery = `WITH RECURSIVE chain(id, parent) AS (
 SELECT id, parent FROM chain`
 
 type hermesStateSession struct {
-	id               string
-	source           string
-	model            string
-	parentSessionID  string
-	startedAt        time.Time
-	endedAt          time.Time
-	messageCount     int
-	inputTokens      int
-	outputTokens     int
-	cacheReadTokens  int
-	cacheWriteTokens int
-	reasoningTokens  int
-	estimatedCost    sql.NullFloat64
-	actualCost       sql.NullFloat64
-	costStatus       string
-	costSource       string
-	title            string
-	cronJob          string
-	apiCallCount     int
-	modelUsage       []hermesModelUsage
+	id                  string
+	source              string
+	model               string
+	parentSessionID     string
+	startedAt           time.Time
+	endedAt             time.Time
+	messageCount        int
+	inputTokens         int
+	outputTokens        int
+	cacheReadTokens     int
+	cacheWriteTokens    int
+	reasoningTokens     int
+	estimatedCost       sql.NullFloat64
+	actualCost          sql.NullFloat64
+	costStatus          string
+	costSource          string
+	title               string
+	cronJob             string
+	apiCallCount        int
+	modelUsage          []hermesModelUsage
+	hasArchivedMessages bool
 }
 
 type hermesStateMessage struct {
@@ -76,6 +77,7 @@ type hermesStateMessage struct {
 	reasoningDetails    string
 	codexReasoningItems string
 	codexMessageItems   string
+	displayOrder        sql.NullInt64
 	displayMetadata     string
 }
 
@@ -700,15 +702,24 @@ func (p *hermesProvider) parseStateDB(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
+	archived, err := readHermesArchivedSessions(ctx, conn)
+	if err != nil {
+		return nil, err
+	}
 
 	var results []ParseResult
 	seen := make(map[string]struct{}, len(sessions))
 	for _, ss := range sessions {
+		ss.hasArchivedMessages = archived[ss.id]
 		res, ok := buildHermesStateResult(
 			ss, messages[ss.id], sessionsDir, stateDB, project, machine,
 		)
 		if ok {
 			results = append(results, res)
+			seen[ss.id] = struct{}{}
+		} else if hermesStateMessagesAuthoritative(ss.hasArchivedMessages, messages[ss.id]) {
+			// Keep unfiltered companion transcripts from resurrecting a state.db
+			// session whose rows were all archived or hidden by compaction.
 			seen[ss.id] = struct{}{}
 		}
 	}
@@ -812,7 +823,8 @@ func readHermesStateMessages(ctx context.Context,
 			&hm.toolCalls, &ts, &hm.finishReason,
 			&hm.reasoning, &hm.reasoningContent,
 			&hm.reasoningDetails, &hm.codexReasoningItems,
-			&hm.codexMessageItems, &hm.displayMetadata,
+			&hm.codexMessageItems, &hm.displayOrder,
+			&hm.displayMetadata,
 		); err != nil {
 			return nil, fmt.Errorf("scan hermes message: %w", err)
 		}
@@ -858,6 +870,10 @@ func readHermesMessageColumns(ctx context.Context, conn *sql.DB) (hermesMessageC
 }
 
 func hermesStateMessagesQueryString(cols hermesMessageColumns, singleSession bool) string {
+	displayOrderCol := "NULL"
+	if cols.hasDisplayOrder {
+		displayOrderCol = "display_order"
+	}
 	displayMetadataCol := "''"
 	if cols.hasDisplayMetadata {
 		displayMetadataCol = "COALESCE(display_metadata, '')"
@@ -897,12 +913,73 @@ func hermesStateMessagesQueryString(cols hermesMessageColumns, singleSession boo
 			COALESCE(reasoning_details, ''),
 			COALESCE(codex_reasoning_items, ''),
 			COALESCE(codex_message_items, ''),
-			%s
+			%s, %s
 		FROM messages
 		%s
 		ORDER BY %s%s`,
-		selectPrefix, displayMetadataCol, whereClause, orderPrefix, orderCols,
+		selectPrefix, displayOrderCol, displayMetadataCol, whereClause, orderPrefix, orderCols,
 	)
+}
+
+func readHermesArchivedSessions(ctx context.Context, conn *sql.DB) (map[string]bool, error) {
+	cols, err := readHermesMessageColumns(ctx, conn)
+	if err != nil {
+		return nil, err
+	}
+	if !cols.hasActive {
+		return nil, nil
+	}
+	rows, err := conn.QueryContext(ctx, `SELECT DISTINCT session_id FROM messages WHERE COALESCE(active, 1) = 0`)
+	if err != nil {
+		return nil, fmt.Errorf("query hermes archived sessions: %w", err)
+	}
+	defer rows.Close()
+
+	archived := make(map[string]bool)
+	for rows.Next() {
+		var sid string
+		if err := rows.Scan(&sid); err != nil {
+			return nil, fmt.Errorf("scan hermes archived session: %w", err)
+		}
+		archived[sid] = true
+	}
+	return archived, rows.Err()
+}
+
+func hermesSessionHasArchivedMessages(
+	ctx context.Context, conn *sql.DB, rawSessionID string,
+) (bool, error) {
+	cols, err := readHermesMessageColumns(ctx, conn)
+	if err != nil {
+		return false, err
+	}
+	if !cols.hasActive {
+		return false, nil
+	}
+	var archived bool
+	err = conn.QueryRowContext(
+		ctx,
+		`SELECT EXISTS(SELECT 1 FROM messages WHERE session_id = ? AND COALESCE(active, 1) = 0)`,
+		rawSessionID,
+	).Scan(&archived)
+	if err != nil {
+		return false, fmt.Errorf("check hermes archived messages for %s: %w", rawSessionID, err)
+	}
+	return archived, nil
+}
+
+func hermesStateMessagesAuthoritative(
+	hasArchived bool, stateMessages []hermesStateMessage,
+) bool {
+	if hasArchived {
+		return true
+	}
+	for _, hm := range stateMessages {
+		if hm.displayOrder.Valid || isHermesInflightRestatement(hm.displayMetadata) {
+			return true
+		}
+	}
+	return false
 }
 
 func hermesStateMessageTimestampsQueryString(cols hermesMessageColumns) string {
@@ -1018,7 +1095,8 @@ func readHermesStateMessagesForSession(ctx context.Context,
 			&hm.role, &hm.content, &hm.toolCallID, &hm.toolCalls, &ts,
 			&hm.finishReason, &hm.reasoning, &hm.reasoningContent,
 			&hm.reasoningDetails, &hm.codexReasoningItems,
-			&hm.codexMessageItems, &hm.displayMetadata,
+			&hm.codexMessageItems, &hm.displayOrder,
+			&hm.displayMetadata,
 		); err != nil {
 			return nil, fmt.Errorf(
 				"scan hermes message for %s: %w", rawSessionID, err,
@@ -1078,6 +1156,11 @@ func readHermesStateSessionSourceConn(ctx context.Context,
 	if err != nil {
 		return hermesStateSession{}, nil, "", hermesStateLookupError{err: err}
 	}
+	hasArchived, err := hermesSessionHasArchivedMessages(ctx, conn, rawSessionID)
+	if err != nil {
+		return hermesStateSession{}, nil, "", hermesStateLookupError{err: err}
+	}
+	ss.hasArchivedMessages = hasArchived
 	selectedPath, _, _, _ := chooseHermesStateSessionSource(
 		ss,
 		messages,
@@ -1254,6 +1337,9 @@ func chooseHermesStateSessionSource(
 	sessionsDir, stateDB, project, machine string,
 ) (selectedPath string, sess *ParsedSession, msgs []ParsedMessage, err error) {
 	selectedPath = stateDB
+	if hermesStateMessagesAuthoritative(ss.hasArchivedMessages, stateMessages) {
+		return selectedPath, nil, nil, nil
+	}
 	jsonPath := filepath.Join(sessionsDir, "session_"+ss.id+".json")
 	jsonlPath := filepath.Join(sessionsDir, ss.id+".jsonl")
 	if IsRegularFile(jsonPath) {
