@@ -2588,7 +2588,6 @@ func TestSessionToolsResolvePlainIDs(t *testing.T) {
 	_, children, err := ts.childSessions(t.Context(), nil, childSessionsIn{SessionID: "empty"})
 	require.NoError(t, err)
 	assert.Empty(t, children.Sessions)
-
 }
 
 func TestListRecall_SourceSessionRawID(t *testing.T) {
