@@ -287,6 +287,17 @@ func (b *httpBackend) FindSessionIDsByPartial(
 func (b *httpBackend) FindSessionIDsByRawSuffix(
 	ctx context.Context, raw string, limit int,
 ) ([]string, error) {
+	version := b.apiVersion
+	if version == 0 {
+		capabilities, err := ProbeHTTPServerCapabilities(ctx, b.baseURL, b.token)
+		if err != nil {
+			return nil, err
+		}
+		version = capabilities.APIVersion
+	}
+	if version < service.QualifiedRawLookupAPIVersion {
+		return nil, fmt.Errorf("%w: server API version %d requires an upgrade for session ID lookup", service.ErrRawLookupUnsupported, version)
+	}
 	q := &apiclient.GetAPIV1SessionIdsResolveQuery{Partial: raw, RawSuffix: new(true)}
 	if limit > 0 {
 		q.Limit = new(int64(limit))
