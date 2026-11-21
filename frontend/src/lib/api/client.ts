@@ -101,14 +101,13 @@ export interface DataChangedEvent {
 export interface LiveSource extends EventTarget {
   readyState: number;
   close(): void;
-  setVisible(visible: boolean): void;
 }
 
 const localHubs = new Map<string, LiveHub>();
 
 function connectLive(session?: string): LiveSource {
   const base = new URL(getGeneratedBase() || "/", window.location.origin).href.replace(/\/$/, "");
-  const request: LiveRequest = { base, token: getAuthToken(), session, visible: !document.hidden };
+  const request: LiveRequest = { base, token: getAuthToken(), session };
   const target = new EventTarget() as LiveSource;
   target.readyState = 0;
   let send: (value: LiveRequest | "leave") => void;
@@ -144,10 +143,6 @@ function connectLive(session?: string): LiveSource {
     target.readyState = 2;
     window.removeEventListener("pagehide", onPageHide);
     window.removeEventListener("pageshow", onPageShow);
-  };
-  target.setVisible = (visible) => {
-    request.visible = visible;
-    send({ ...request });
   };
   send({ ...request });
   return target;

@@ -129,9 +129,7 @@ describe("session watch visibility", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.spyOn(document, "hidden", "get").mockReturnValue(false);
-    api.watchSession.mockImplementation(() =>
-      Object.assign(new EventTarget(), { close: vi.fn(), setVisible: vi.fn() }),
-    );
+    api.watchSession.mockImplementation(() => Object.assign(new EventTarget(), { close: vi.fn() }));
   });
 
   afterEach(() => {
@@ -159,7 +157,7 @@ describe("session watch visibility", () => {
         expect(settled).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(1);
       } else {
-        expect(api.watchSession).toHaveBeenCalledOnce();
+        expect(api.watchSession).not.toHaveBeenCalled();
       }
       expect(await ready).toBe(reason === "session_ready");
       expect(vi.getTimerCount()).toBe(0);
@@ -192,37 +190,27 @@ describe("session watch visibility", () => {
     expect(onUpdate).toHaveBeenCalledTimes(1);
   });
 
-  it("reports visibility and refreshes when the hub signals readiness", () => {
+  it("closes on hide and refreshes on return", () => {
     const onUpdate = vi.fn();
     void sync.watchSession("session-a", onUpdate);
     const stream = api.watchSession.mock.results[0]!.value;
     stream.dispatchEvent(new Event("session_ready"));
     vi.spyOn(document, "hidden", "get").mockReturnValue(true);
     document.dispatchEvent(new Event("visibilitychange"));
-    expect(stream.setVisible).toHaveBeenLastCalledWith(false);
-    expect(stream.close).not.toHaveBeenCalled();
+    expect(stream.close).toHaveBeenCalledOnce();
     vi.spyOn(document, "hidden", "get").mockReturnValue(false);
     document.dispatchEvent(new Event("visibilitychange"));
-    expect(stream.setVisible).toHaveBeenLastCalledWith(true);
-    stream.dispatchEvent(new Event("session_ready"));
-    expect(onUpdate).toHaveBeenCalledTimes(2);
+    expect(api.watchSession).toHaveBeenCalledTimes(2);
+    api.watchSession.mock.results[1]!.value.dispatchEvent(new Event("session_ready"));
+    expect(onUpdate).toHaveBeenCalledTimes(3);
   });
 
-  it("keeps only the latest session when a hidden tab returns", () => {
-    vi.spyOn(document, "hidden", "get").mockReturnValue(true);
-    const oldUpdate = vi.fn();
-    const newUpdate = vi.fn();
-    void sync.watchSession("session-a", oldUpdate);
-    const first = api.watchSession.mock.results[0]!.value;
-    void sync.watchSession("session-b", newUpdate);
-    const current = api.watchSession.mock.results[1]!.value;
-    expect(first.close).toHaveBeenCalledOnce();
-    vi.spyOn(document, "hidden", "get").mockReturnValue(false);
-    document.dispatchEvent(new Event("visibilitychange"));
-    expect(current.setVisible).toHaveBeenCalledWith(true);
-    current.dispatchEvent(new Event("session_ready"));
-    expect(oldUpdate).not.toHaveBeenCalled();
-    expect(newUpdate).toHaveBeenCalledOnce();
+  it("refreshes a missing session and settles the initial read", async () => {
+    const onUpdate = vi.fn();
+    const ready = sync.watchSession("missing", onUpdate);
+    api.watchSession.mock.results[0]!.value.dispatchEvent(new Event("session_missing"));
+    expect(await ready).toBe(false);
+    expect(onUpdate).toHaveBeenCalledOnce();
   });
 });
 

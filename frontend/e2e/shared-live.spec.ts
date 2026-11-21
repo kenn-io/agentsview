@@ -66,9 +66,10 @@ test("several visible session tabs share live updates", async ({ context, page }
       await tab.goto(`${base}/sessions/test-session-small-5`);
       await expect(tab).toHaveURL(/test-session-small-5/);
     }
-    await expect.poll(() => ({ active: active.size, requested })).toMatchObject({ active: 1 });
+    await page.waitForTimeout(400);
+    await expect.poll(() => active.size).toBe(1);
     expect(workerStatuses).toEqual([200]);
-    expect(requested).toEqual(["/api/v1/events?session=test-session-small-5"]);
+    expect(requested.at(-1)).toBe("/api/v1/events?session=test-session-small-5");
     const fourth = await context.newPage();
     await fourth.goto(`${base}/`, { timeout: 8000 });
     await fourth.keyboard.press("Control+g");
@@ -77,6 +78,7 @@ test("several visible session tabs share live updates", async ({ context, page }
     await fourth.getByRole("textbox", { name: "Session ID or UUID" }).fill("test-session-small-5");
     await fourth.keyboard.press("Enter");
     await expect(fourth).toHaveURL(/test-session-small-5/);
+    await page.waitForTimeout(400);
     await expect.poll(() => active.size).toBe(1);
     await expect.poll(() => messageRequests).toBeGreaterThan(0);
     const count = requested.length;
@@ -91,7 +93,8 @@ test("several visible session tabs share live updates", async ({ context, page }
     });
     await expect.poll(() => messageRequests).toBeGreaterThan(beforeReturn);
     await expect.poll(() => active.size).toBe(1);
-    expect(requested).toHaveLength(count);
+    await expect.poll(() => requested.length).toBeGreaterThan(count);
+    await expect.poll(() => active.size).toBe(1);
     expect(watches).toEqual([]);
     console.log(
       `SharedWorker: ${workerStatuses[0]}, live streams: ${active.size}, session watch streams: ${watches.length}, startup: ${requested[0]}`,

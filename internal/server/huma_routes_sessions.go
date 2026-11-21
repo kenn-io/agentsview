@@ -1462,15 +1462,25 @@ func (s *Server) humaEvents(ctx context.Context, in *eventsInput) (*huma.StreamR
 			continue
 		}
 		seen[id] = true
+		if identity, ok := s.db.(db.SessionWatchStateStore); ok {
+			state, err := identity.GetSessionWatchState(id)
+			if err != nil {
+				return nil, serverError(err)
+			}
+			if state.State != db.SessionWatchResolved {
+				missing = append(missing, id)
+				continue
+			}
+		}
 		sess, err := s.sessions.Get(ctx, id)
 		if err != nil {
 			return nil, serverError(err)
 		}
 		if sess == nil {
 			missing = append(missing, id)
-		} else {
-			found = append(found, id)
+			continue
 		}
+		found = append(found, id)
 	}
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
 		stream, ok := newHumaSSEStream(hctx)
@@ -1492,25 +1502,22 @@ func (s *Server) humaEvents(ctx context.Context, in *eventsInput) (*huma.StreamR
 			closed bool
 		}
 		ticks := make(chan tick)
-		monitors := make(map[string]context.CancelFunc)
 		for _, id := range missing {
 			if !stream.Send("session_missing", id) {
 				return
 			}
 		}
 		for _, id := range found {
-			monitorCtx, stop := context.WithCancel(ctx)
-			monitors[id] = stop
-			updates := s.sessionMonitor(monitorCtx, id)
+			updates := s.sessionMonitor(ctx, id)
 			go func() {
 				for {
 					select {
-					case <-monitorCtx.Done():
+					case <-ctx.Done():
 						return
 					case _, ok := <-updates:
 						select {
 						case ticks <- tick{id, !ok}:
-						case <-monitorCtx.Done():
+						case <-ctx.Done():
 							return
 						}
 						if !ok {
@@ -1541,16 +1548,8 @@ func (s *Server) humaEvents(ctx context.Context, in *eventsInput) (*huma.StreamR
 					return
 				}
 			case t := <-ticks:
-				stop, active := monitors[t.id]
-				if !active {
-					continue
-				}
 				if t.closed || !s.sendSessionFrame(ctx, stream, t.id, true) {
-					stop()
-					delete(monitors, t.id)
-					if !stream.Send("session_missing", t.id) {
-						return
-					}
+					return
 				}
 			case <-heartbeat.C:
 				if !stream.Send("heartbeat", time.Now().Format(time.RFC3339)) {

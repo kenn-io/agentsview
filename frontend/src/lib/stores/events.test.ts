@@ -9,7 +9,6 @@ class FakeSource extends EventTarget implements LiveSource {
   close = vi.fn(() => {
     this.readyState = 2;
   });
-  setVisible = vi.fn();
 }
 
 describe("events store", () => {
@@ -46,7 +45,7 @@ describe("events store", () => {
     expect(source.close).toHaveBeenCalledOnce();
   });
 
-  it("reports visibility and settles startup when hidden", async () => {
+  it("opens on return and settles startup when hidden", async () => {
     vi.spyOn(document, "hidden", "get").mockReturnValue(true);
     const { events } = await import("./events.svelte.js");
     const unsub = events.subscribe(vi.fn());
@@ -54,7 +53,7 @@ describe("events store", () => {
     await expect(events.whenReady(100)).resolves.toBeUndefined();
     vi.spyOn(document, "hidden", "get").mockReturnValue(false);
     document.dispatchEvent(new Event("visibilitychange"));
-    expect(source.setVisible).toHaveBeenCalledWith(true);
+    expect(api.watchEvents).toHaveBeenCalledOnce();
     unsub();
   });
 

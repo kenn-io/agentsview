@@ -51,8 +51,7 @@ class EventsStore {
       this.ensureOpen();
       this.ensureHealTimer();
     }
-    if (this.es === null || (typeof document !== "undefined" && document.hidden))
-      this.settleStartup();
+    if (this.es === null) this.settleStartup();
   }
 
   /** Subscribe to every event. Returns unsubscribe. */
@@ -99,6 +98,10 @@ class EventsStore {
 
   private ensureOpen() {
     if (!this.available) return;
+    // Hidden streams consume HTTP/1.1 connections that API reads need.
+    if (typeof document !== "undefined" && document.hidden) {
+      return;
+    }
     // Don't retry once watchEvents has told us the endpoint is
     // permanently unavailable. The safety-net polls on each view
     // still keep data fresh in that mode.
@@ -197,12 +200,13 @@ class EventsStore {
     this.visibilityHandlerInstalled = true;
     document.addEventListener("visibilitychange", () => {
       if (this.listeners.size === 0 || !this.available) return;
-      this.es?.setVisible(!document.hidden);
-      if (!document.hidden) {
-        this.permanentlyFailed = false;
-        this.ensureOpen();
-        this.ensureHealTimer();
+      if (document.hidden) {
+        this.close();
+        return;
       }
+      this.permanentlyFailed = false;
+      this.ensureOpen();
+      this.ensureHealTimer();
     });
   }
 }

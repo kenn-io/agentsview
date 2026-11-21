@@ -395,28 +395,40 @@ class SyncStore {
         resolve(seen);
       };
     });
-    this.watchEventSource = watchSession(sessionId, onUpdate, onTiming);
-    const es = this.watchEventSource;
-    es.addEventListener("error", () => {
-      if (this.watchEventSource === es) settle(false);
-    });
-    es.addEventListener("session_missing", () => {
-      if (this.watchEventSource === es) {
+    const open = () => {
+      this.watchEventSource = watchSession(sessionId, onUpdate, onTiming);
+      const es = this.watchEventSource;
+      es.addEventListener("error", () => {
+        if (this.watchEventSource !== es) return;
+        settle(false);
+      });
+      es.addEventListener("session_missing", () => {
+        if (this.watchEventSource !== es) return;
         settle(false);
         onUpdate();
-      }
-    });
-    es.addEventListener("session_ready", () => {
-      if (this.watchEventSource === es) {
+      });
+      es.addEventListener("session_ready", () => {
+        if (this.watchEventSource !== es) return;
         settle(true);
         onUpdate();
-      }
-    });
-    if (typeof document !== "undefined") {
-      this.watchVisibilityHandler = () => es.setVisible(!document.hidden);
-      document.addEventListener("visibilitychange", this.watchVisibilityHandler);
-      if (document.hidden) settle(false);
+      });
+    };
+    if (typeof document === "undefined") {
+      open();
+      return ready;
     }
+    this.watchVisibilityHandler = () => {
+      if (document.hidden) {
+        this.closeSessionStream();
+      } else if (!this.watchEventSource || this.watchEventSource.readyState === 2) {
+        open();
+        // A rejected reconnect, such as a deleted session's 404, never sends session_ready.
+        onUpdate();
+      }
+    };
+    document.addEventListener("visibilitychange", this.watchVisibilityHandler);
+    if (!document.hidden) open();
+    else settle(false);
     return ready;
   }
 
