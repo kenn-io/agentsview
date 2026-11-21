@@ -324,3 +324,161 @@ func TestPromptPRLinksBackfillUsesDialogue(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, pending)
 }
+
+func TestToolPRLinksArchiveUpgrade(t *testing.T) {
+	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentUsage} {
+		t.Run(string(policy), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "archive.db")
+			d, err := OpenIsolated(t.Context(), path)
+			require.NoError(t, err)
+			s := Session{ID: "tool-archive", Project: "project", Machine: "local", Agent: "claude"}
+			structured, ok := parser.NewPRLink("https://github.com/example/repo/pull/1", "example/repo", 1)
+			require.True(t, ok)
+			s.PRLinks = []PRLink{structured}
+			require.NoError(t, d.UpsertSession(t.Context(), s))
+			require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`}}}}))
+			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+				if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links=? WHERE id=?`, EncodePRLinks(s.PRLinks), s.ID); err != nil {
+					return err
+				}
+				if _, err := tx.ExecContext(t.Context(), `DROP TRIGGER IF EXISTS artifact_sessions_update_queue; ALTER TABLE sessions DROP COLUMN tool_pr_links`); err != nil {
+					return err
+				}
+				return writeUserVersion(t.Context(), tx, toolPRLinksDataVersion-1)
+			}))
+			require.NoError(t, d.Close())
+			d, err = OpenIsolatedWithArchiveContent(t.Context(), path, policy)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = d.Close() })
+			exported, err := d.GetArtifactExportSession(t.Context(), s.ID)
+			require.NoError(t, err)
+			require.Len(t, exported.ToolPRLinks, 1)
+			assert.Equal(t, "https://github.com/example/repo/pull/42", exported.ToolPRLinks[0].URL)
+			got, err := d.GetSession(t.Context(), s.ID)
+			require.NoError(t, err)
+			require.Len(t, got.PRLinks, 2)
+			assert.Equal(t, structured.URL, got.PRLinks[0].URL)
+			assert.Equal(t, "https://github.com/example/repo/pull/42", got.PRLinks[1].URL)
+			recorded, err := d.GetSessionStructuredPRLinks(t.Context(), s.ID)
+			require.NoError(t, err)
+			assert.Equal(t, []PRLink{structured}, recorded)
+		})
+	}
+}
+
+func TestStagedWriteReplacesToolPRLinks(t *testing.T) {
+	d := testDB(t)
+	s := Session{ID: "staged-tools", Project: "project", Machine: "local", Agent: "codex"}
+	first, ok := parser.NewPRLink("https://github.com/example/repo/pull/1", "example/repo", 1)
+	require.True(t, ok)
+	second, ok := parser.NewPRLink("https://github.com/example/repo/pull/2", "example/repo", 2)
+	require.True(t, ok)
+	s.ToolPRLinks = []PRLink{first}
+	require.NoError(t, d.WriteSessionBatchStaged(t.Context(), SessionBatchWrite{Session: s, ReplaceMessages: true}, newScratchStagedResults(t), nil, nil))
+	s.ToolPRLinks = []PRLink{second}
+	require.NoError(t, d.WriteSessionBatchStaged(t.Context(), SessionBatchWrite{Session: s, ReplaceMessages: true}, newScratchStagedResults(t), nil, nil))
+	got, err := d.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	assert.Equal(t, []PRLink{second}, got.PRLinks)
+}
+
+func TestArchiveCopyRetainsToolPRLinks(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		policy       config.ArchiveContent
+		old, trashed bool
+	}{
+		{"plain", config.ArchiveContentFull, false, false},
+		{"usage-old", config.ArchiveContentUsage, true, false},
+		{"trashed", config.ArchiveContentFull, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := testDB(t)
+			structured, ok := parser.NewPRLink("https://github.com/example/repo/pull/41", "example/repo", 41)
+			require.True(t, ok)
+			tool, ok := parser.NewPRLink("https://github.com/example/repo/pull/42", "example/repo", 42)
+			require.True(t, ok)
+			require.NoError(t, source.UpsertSession(t.Context(), Session{ID: "copy-links", Project: "project", Machine: "local", Agent: "claude", PRLinks: []PRLink{structured}, ToolPRLinks: []PRLink{tool}}))
+			require.NoError(t, source.ReplaceSessionMessages(t.Context(), "copy-links", []Message{
+				{SessionID: "copy-links", Ordinal: 0, Role: "user", Content: "Review https://github.com/example/repo/pull/44"},
+				{SessionID: "copy-links", Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`}}},
+			}))
+			if tc.old {
+				require.NoError(t, source.Update(t.Context(), func(tx *sql.Tx) error {
+					if _, err := tx.ExecContext(t.Context(), `DROP TRIGGER IF EXISTS artifact_sessions_update_queue; ALTER TABLE sessions DROP COLUMN tool_pr_links`); err != nil {
+						return err
+					}
+					return writeUserVersion(t.Context(), tx, toolPRLinksDataVersion-1)
+				}))
+			}
+			if tc.trashed {
+				require.NoError(t, source.SoftDeleteSession(t.Context(), "copy-links"))
+			}
+			destination := testDB(t)
+			destination.SetArchiveContent(tc.policy)
+			var err error
+			if tc.trashed {
+				_, err = destination.CopyTrashedDataFrom(t.Context(), source.Path())
+			} else {
+				_, err = destination.CopyOrphanedDataFromExcluding(t.Context(), source.Path(), nil)
+			}
+			require.NoError(t, err)
+			if tc.trashed {
+				_, err = destination.RestoreSession(t.Context(), "copy-links")
+				require.NoError(t, err)
+			}
+			got, err := destination.GetSessionFull(t.Context(), "copy-links")
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			want := []PRLink{structured, tool}
+			if !tc.policy.UsageOnly() {
+				prompt, ok := parser.NewPRLink("https://github.com/example/repo/pull/44", "example/repo", 44)
+				require.True(t, ok)
+				want = append(want, prompt)
+			}
+			assert.ElementsMatch(t, want, got.PRLinks)
+			recorded, err := destination.GetSessionStructuredPRLinks(t.Context(), "copy-links")
+			require.NoError(t, err)
+			assert.Equal(t, []PRLink{structured}, recorded)
+		})
+	}
+}
+
+func TestArchiveCopyRecoversRecordedRemote(t *testing.T) {
+	for _, tc := range []struct {
+		name, recorded string
+		want           []string
+	}{
+		{"recorded", "git@github.com:example/source.git", []string{"https://github.com/example/source/pull/42", "https://github.com/example/explicit/pull/43"}},
+		{"unrecorded", "", []string{"https://github.com/example/explicit/pull/43"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := testDB(t)
+			require.NoError(t, source.UpsertSession(t.Context(), Session{ID: "copy-recorded", Project: "project", Machine: "local", Agent: "codex", Cwd: "/repo"}))
+			require.NoError(t, source.ReplaceSessionMessages(t.Context(), "copy-recorded", []Message{{SessionID: "copy-recorded", Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{
+				{Category: "Bash", InputJSON: `{"command":"gh pr view 42"}`},
+				{Category: "Bash", InputJSON: `{"command":"gh pr view 43 -R example/explicit"}`},
+			}}}))
+			require.NoError(t, source.Update(t.Context(), func(tx *sql.Tx) error {
+				if _, err := tx.ExecContext(t.Context(), `UPDATE session_project_identity_snapshots SET recorded_git_remote=?, git_remote=?, git_remote_name='origin', remote_candidate_count=1 WHERE session_id='copy-recorded'`, tc.recorded, "https://github.com/example/checkout.git"); err != nil {
+					return err
+				}
+				if _, err := tx.ExecContext(t.Context(), `DROP TRIGGER IF EXISTS artifact_sessions_update_queue; ALTER TABLE sessions DROP COLUMN tool_pr_links`); err != nil {
+					return err
+				}
+				return writeUserVersion(t.Context(), tx, toolPRLinksDataVersion-1)
+			}))
+			dest := testDB(t)
+			dest.SetArchiveContent(config.ArchiveContentTranscripts)
+			_, err := dest.CopyOrphanedDataFromExcluding(t.Context(), source.Path(), nil)
+			require.NoError(t, err)
+			got, err := dest.GetSession(t.Context(), "copy-recorded")
+			require.NoError(t, err)
+			var urls []string
+			for _, link := range got.PRLinks {
+				urls = append(urls, link.URL)
+			}
+			assert.ElementsMatch(t, tc.want, urls)
+		})
+	}
+}

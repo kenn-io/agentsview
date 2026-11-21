@@ -237,6 +237,15 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 				}
 			}
 		}
+		if decision.Action != ingest.HistoryPreserve {
+			prepared.ToolPRLinks = db.ToolCallPRLinks(c.Messages, c.Session.Cwd, "")
+			if decision.Action == ingest.HistoryMerge {
+				if err := loadOld(ctx); err != nil {
+					return err
+				}
+				prepared.ToolPRLinks = parser.CombinePRLinks(old.ToolPRLinks, prepared.ToolPRLinks)
+			}
+		}
 		prepared.Signals = ingest.RefreshSignalRecencyAt(prepared.Session, prepared.Messages, prepared.Signals, s.options.Now())
 		revision, err := rawContentRevision(prepared)
 		if err != nil {
@@ -256,10 +265,28 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		if err != nil {
 			return err
 		}
-		// Reuse only bytes inserted by this transaction. Conflicts retain
-		// their stored payload and mutable derived state.
+		// Reuse only bytes inserted by this transaction. A conflict keeps its
+		// stored payload and merges in only the derived tool links.
 		if count == 1 {
 			fresh[sessionID] = payload
+		}
+		if count == 0 && len(prepared.ToolPRLinks) > 0 {
+			retained, err := loadRawPayload(ctx, tx, sessionID)
+			if err != nil {
+				return err
+			}
+			merged := parser.CombinePRLinks(retained.ToolPRLinks, prepared.ToolPRLinks)
+			if db.EncodePRLinks(merged) != db.EncodePRLinks(retained.ToolPRLinks) {
+				retained.ToolPRLinks = merged
+				encoded, err := encodeRawPayload(retained)
+				if err != nil {
+					return err
+				}
+				if _, err := tx.ExecContext(ctx, `UPDATE raw_content_revisions SET payload=$2 WHERE session_id=$1`, sessionID, encoded); err != nil {
+					return err
+				}
+				dialogueChanges = append(dialogueChanges, sessionID)
+			}
 		}
 		dialogueChanged, err := syncRawDialogue(ctx, tx, sessionID, prepared.Messages)
 		if err != nil {

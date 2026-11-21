@@ -1609,3 +1609,11 @@ func TestConversationExportDiffedReplaceProjectsUsageOnlySession(t *testing.T) {
 	}
 	assert.Equal(t, want, projected)
 }
+
+func TestUsageOnlyRenameMissingSessionDoesNotError(t *testing.T) {
+	// A missing session has no PR links to refresh during usage-only cleanup.
+	d := testDB(t)
+	d.SetArchiveContent(config.ArchiveContentUsage)
+	require.NoError(t, d.RenameSession(t.Context(), "missing", new("Name")))
+	require.NoError(t, d.RefreshSessionName(t.Context(), "missing", new("Name")))
+}

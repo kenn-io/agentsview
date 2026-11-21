@@ -98,6 +98,25 @@ func (e *Engine) projectIdentityObservationForWrite(
 	return export.WithRecordedGitRemote(obs, pw.sess.GitRemote), true
 }
 
+func (e *Engine) toolLinkRemote(s db.Session, recorded string) string {
+	obs, ok := e.projectIdentityObservation(s)
+	if !ok || obs.RemoteCandidateCount != 1 || obs.GitRemoteName == "" {
+		return ""
+	}
+	if recorded != "" {
+		a, aok := export.NormalizeGitRemote(recorded)
+		b, bok := export.NormalizeGitRemote(obs.GitRemote)
+		if !aok || !bok {
+			return ""
+		}
+		sameGitHubRepository := strings.HasPrefix(strings.ToLower(a), "github.com/") && strings.EqualFold(a, b)
+		if a != b && !sameGitHubRepository {
+			return ""
+		}
+	}
+	return obs.GitRemote
+}
+
 // mayDiscoverLocalProject reports whether path may be probed on the local
 // filesystem. Only sessions recorded on this machine qualify: another
 // machine's cwd (e.g. /home/... from a synced Linux host) is meaningless

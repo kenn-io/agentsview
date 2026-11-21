@@ -697,7 +697,7 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // Evener sources in place; source and session identities are unchanged.)
 // (183: prefer structured Antigravity user prompts over skill expansions.)
 // (184: prevent older binaries from overwriting prompt-derived PR links.)
-const dataVersion = 184
+const dataVersion = 185
 
 const archiveOnlyVersionBase = 1 << 20
 
@@ -2564,6 +2564,7 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"sessions", "structured_pr_links",
 			"ALTER TABLE sessions ADD COLUMN structured_pr_links TEXT NOT NULL DEFAULT ''; UPDATE sessions SET structured_pr_links=pr_links",
 		},
+		{"sessions", "tool_pr_links", "ALTER TABLE sessions ADD COLUMN tool_pr_links TEXT NOT NULL DEFAULT ''"},
 		{"excluded_sessions", "file_path", "ALTER TABLE excluded_sessions ADD COLUMN file_path TEXT"},
 		{
 			"sessions", "trash_includes_codex_pages",
@@ -3407,6 +3408,7 @@ WHEN (
     OLD.cwd IS NOT NEW.cwd OR
     OLD.git_branch IS NOT NEW.git_branch OR
     OLD.structured_pr_links IS NOT NEW.structured_pr_links OR
+    OLD.tool_pr_links IS NOT NEW.tool_pr_links OR
     OLD.source_session_id IS NOT NEW.source_session_id OR
     OLD.source_version IS NOT NEW.source_version OR
     OLD.group_key IS NOT NEW.group_key OR
@@ -5552,6 +5554,9 @@ func (db *DB) HasCJKFTS(ctx context.Context) (available bool) {
 func (db *DB) setDataVersion(ctx context.Context) error {
 	return db.Update(ctx, func(tx *sql.Tx) error {
 		if err := db.upgradePromptPRLinksTx(ctx, tx); err != nil {
+			return err
+		}
+		if err := db.upgradeToolPRLinksTx(ctx, tx); err != nil {
 			return err
 		}
 		return advanceDataVersion(ctx, tx, dataVersion)

@@ -665,8 +665,7 @@ ______________________________________________________________________
 
 ### Pull request links
 
-Sessions list pull requests found in retained user prompts or structured transcript records, in
-`pr_links`:
+Sessions list pull requests found in retained user prompts, supported `gh pr` commands, child-agent prompts, or structured transcript records in `pr_links`:
 
 ```json
 "pr_links": [
@@ -679,8 +678,13 @@ Sessions list pull requests found in retained user prompts or structured transcr
 ]
 ```
 
-AgentsView keeps one link per pull request. A prompt link means the prompt
-mentioned the pull request; it does not establish that the session worked on it. Claude Code
+AgentsView keeps one link per pull request. Commands count even when they did not run.
+After `cd`, or with a workdir other than the session directory, a bare number needs `-R`
+or a URL. After `eval` or `source`, use a host-qualified `-R` or a URL. Archives
+from before data version 185 recover explicit links and bare numbers when the source
+recorded its repository. Archives that omitted tool inputs cannot recover links from
+them. A prompt link means the prompt mentioned the pull request; it does not establish
+that the session worked on it. Claude Code
 also records `pr-link` entries in its transcripts.
 Claude Code records these links for the whole transcript, so every session
 split from one transcript, such as a rewind's fork, carries them, like its name
