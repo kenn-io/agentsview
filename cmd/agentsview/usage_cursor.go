@@ -187,23 +187,16 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 			owners := map[string]string{}
 			keyHours := map[string]time.Time{}
 			ambiguous := map[db.CursorAccountHour]bool{}
-			completed := map[string]time.Time{}
-			var memberRows []db.CursorUsageEvent
-			complete := true
 			for _, id := range users {
 				memberEvents, err := client.FetchAllUsageEvents(ctx, cursorusage.Query{StartDate: start, EndDate: windowEnd.Add(-time.Millisecond), PageSize: 1000, UserID: id})
 				if err != nil {
 					if ctx.Err() != nil {
 						return ctx.Err()
 					}
-					fmt.Fprintf(os.Stderr, "Cursor usage for a member could not be fetched: %v\n", err)
-					complete = false
-					break
+					return fmt.Errorf("fetching Cursor usage for member %s: %w", id, err)
 				}
-				completed[id] = polledAt
 				for _, ev := range memberEvents {
 					row := cursorUsageRow(ev)
-					memberRows = append(memberRows, row)
 					hour := ev.Timestamp.UTC().Truncate(time.Hour)
 					if hour.Before(start) || hour.Add(time.Hour).After(windowEnd) {
 						continue
@@ -214,7 +207,9 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 					}
 					keyHours[key] = hour
 					if previous, ok := owners[key]; ok && previous != id {
-						ambiguous[db.CursorAccountHour{UserID: previous, Start: hour}] = true
+						if previous != "" {
+							ambiguous[db.CursorAccountHour{UserID: previous, Start: hour}] = true
+						}
 						ambiguous[db.CursorAccountHour{UserID: id, Start: hour}] = true
 						owners[key] = ""
 					} else if !ok {
@@ -222,32 +217,30 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 					}
 				}
 			}
-			if complete {
-				if err := database.InsertCursorUsageEvents(ctx, memberRows); err != nil {
-					return err
+			byUser := map[string][]string{}
+			coveredSet := map[db.CursorAccountHour]bool{}
+			for key, match := range owners {
+				hour := db.CursorAccountHour{UserID: match, Start: keyHours[key]}
+				byUser[match] = append(byUser[match], key)
+				if match != "" {
+					coveredSet[hour] = true
 				}
-				byUser := map[string][]string{}
-				coveredSet := map[db.CursorAccountHour]bool{}
-				for key, match := range owners {
-					hour := db.CursorAccountHour{UserID: match, Start: keyHours[key]}
-					if match != "" && !ambiguous[hour] {
-						byUser[match] = append(byUser[match], key)
-						coveredSet[hour] = true
-					}
+			}
+			for hour := range ambiguous {
+				coveredSet[hour] = true
+			}
+			for _, hour := range priorHours {
+				index := int64(hour.Start.Sub(start) / rosterWindow)
+				if membersByWindow[index][hour.UserID] {
+					coveredSet[hour] = true
 				}
-				for _, hour := range priorHours {
-					index := int64(hour.Start.Sub(start) / rosterWindow)
-					if membersByWindow[index][hour.UserID] && !ambiguous[hour] {
-						coveredSet[hour] = true
-					}
-				}
-				var covered []db.CursorAccountPoll
-				for hour := range coveredSet {
-					covered = append(covered, db.CursorAccountPoll{CursorAccountHour: hour, CompletedAt: completed[hour.UserID]})
-				}
-				if err := database.RecordCursorAccountPoll(ctx, byUser, completed, covered); err != nil {
-					return err
-				}
+			}
+			var covered []db.CursorAccountHour
+			for hour := range coveredSet {
+				covered = append(covered, hour)
+			}
+			if err := database.RecordCursorAccountPoll(ctx, byUser, polledAt, covered); err != nil {
+				return err
 			}
 		}
 	}

@@ -734,7 +734,7 @@ func (db *DB) loadReportingAccountUsage(ctx context.Context, tx *sql.Tx, start, 
 	}
 	emptyRows, err := tx.QueryContext(ctx, `SELECT account_user_id, hour_start, polled_at FROM cursor_account_polls AS poll
 		WHERE hour_start >= ? AND hour_start < ? AND NOT EXISTS (
-			SELECT 1 FROM cursor_usage_events WHERE agent='cursor' AND account_user_id = poll.account_user_id AND `+reportingCursorHour+` = poll.hour_start AND account_polled_at >= poll.polled_at)`, start.Unix(), end.Unix())
+			SELECT 1 FROM cursor_usage_events WHERE agent='cursor' AND account_user_id = poll.account_user_id AND occurred_at >= strftime('%Y-%m-%dT%H:%M:%SZ', poll.hour_start - 1, 'unixepoch') AND occurred_at < strftime('%Y-%m-%dT%H:%M:%SZ', poll.hour_start + 3601, 'unixepoch') AND `+reportingCursorHour+` = poll.hour_start AND account_polled_at >= poll.polled_at)`, start.Unix(), end.Unix())
 	if err != nil {
 		return fmt.Errorf("querying empty Cursor account polls: %w", err)
 	}

@@ -94,7 +94,7 @@ func TestExportReportingCursorAccountHour(t *testing.T) {
 	require.NoError(t, database.ConfigureArtifactLocalMachine(t.Context(), "origin-a"))
 	event := db.CursorUsageEvent{OccurredAt: "2026-07-28T10:04:00Z", Model: "model-b", OutputTokens: 10, DedupKey: "account"}
 	require.NoError(t, database.InsertCursorUsageEvents(t.Context(), []db.CursorUsageEvent{event}))
-	require.NoError(t, database.RecordCursorAccountPoll(t.Context(), map[string][]string{"12": {"account"}}, map[string]time.Time{"12": time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC)}, nil))
+	require.NoError(t, database.RecordCursorAccountPoll(t.Context(), map[string][]string{"12": {"account"}}, time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), nil))
 	require.NoError(t, database.Close())
 	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
 	out, _, err := executeExportSessionsCommand(newExportReportingTestRoot(now), "export", "hour", "--schema-version", "6", "--by-machine", "2026-07-28-10")

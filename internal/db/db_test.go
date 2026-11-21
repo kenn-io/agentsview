@@ -5686,8 +5686,8 @@ func TestCopySessionMetadataFrom_PreservesCursorUsageEvents(t *testing.T) {
 		},
 	}), "InsertCursorUsageEvents src")
 	stamp := time.Date(2026, 5, 16, 0, 0, 0, 0, time.UTC)
-	require.NoError(t, srcDB.RecordCursorAccountPoll(ctx, map[string][]string{"12": {"first"}}, map[string]time.Time{"12": stamp}, nil))
-	require.NoError(t, srcDB.RecordCursorAccountPoll(ctx, nil, nil, []CursorAccountPoll{{CursorAccountHour: CursorAccountHour{UserID: "12", Start: time.Date(2026, 5, 14, 10, 0, 0, 0, time.UTC)}, CompletedAt: stamp}}))
+	require.NoError(t, srcDB.RecordCursorAccountPoll(ctx, map[string][]string{"12": {"first"}}, stamp, nil))
+	require.NoError(t, srcDB.RecordCursorAccountPoll(ctx, nil, stamp, []CursorAccountHour{{UserID: "12", Start: time.Date(2026, 5, 14, 10, 0, 0, 0, time.UTC)}}))
 	wantFingerprint, err := srcDB.CursorUsageEventFingerprint(ctx)
 	require.NoError(t, err, "CursorUsageEventFingerprint src")
 	require.NoError(t, srcDB.CloseConnections(ctx), "CloseConnections src")

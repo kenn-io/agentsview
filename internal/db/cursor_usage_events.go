@@ -85,11 +85,6 @@ type CursorAccountHour struct {
 	Start  time.Time
 }
 
-type CursorAccountPoll struct {
-	CursorAccountHour
-	CompletedAt time.Time
-}
-
 // CursorAccountHours returns previously attributed hours within a poll range.
 func (db *DB) CursorAccountHours(ctx context.Context, start, end time.Time) ([]CursorAccountHour, error) {
 	rows, err := db.getReader().Query(ctx, `SELECT DISTINCT account_user_id, `+reportingCursorHour+` FROM cursor_usage_events WHERE agent='cursor' AND account_user_id != '' AND occurred_at >= ? AND occurred_at < ? AND agentsview_timestamp_unix_micro(occurred_at) >= ? AND agentsview_timestamp_unix_micro(occurred_at) < ?`, start.Add(-time.Second).UTC().Format(time.RFC3339Nano), end.Add(time.Second).UTC().Format(time.RFC3339Nano), start.UnixMicro(), end.UnixMicro())
@@ -113,20 +108,24 @@ func (db *DB) CursorAccountHours(ctx context.Context, start, end time.Time) ([]C
 }
 
 // RecordCursorAccountPoll commits matched events and completed prior hours together.
-func (db *DB) RecordCursorAccountPoll(ctx context.Context, assignments map[string][]string, completed map[string]time.Time, hours []CursorAccountPoll) error {
+func (db *DB) RecordCursorAccountPoll(ctx context.Context, assignments map[string][]string, polledAt time.Time, hours []CursorAccountHour) error {
+	stamp := polledAt.UTC().Format("2006-01-02T15:04:05.000000Z")
 	return db.Update(ctx, func(tx *sql.Tx) error {
 		for id, keys := range assignments {
-			stamp := completed[id].UTC().Format("2006-01-02T15:04:05.000000Z")
 			encoded, err := json.Marshal(keys)
 			if err != nil {
 				return err
+			}
+			if id == "" {
+				if _, err := tx.ExecContext(ctx, `INSERT INTO cursor_account_polls(account_user_id,hour_start,polled_at) SELECT account_user_id, `+reportingCursorHour+`, ? FROM cursor_usage_events WHERE account_user_id != '' AND dedup_key IN (SELECT value FROM json_each(?)) AND account_polled_at < ? ON CONFLICT(account_user_id,hour_start) DO UPDATE SET polled_at = max(polled_at,excluded.polled_at)`, stamp, string(encoded), stamp); err != nil {
+					return fmt.Errorf("recording previous Cursor account poll: %w", err)
+				}
 			}
 			if _, err := tx.ExecContext(ctx, `UPDATE cursor_usage_events SET account_user_id = ?, account_polled_at = ? WHERE dedup_key IN (SELECT value FROM json_each(?)) AND account_polled_at < ?`, id, stamp, string(encoded), stamp); err != nil {
 				return fmt.Errorf("assigning Cursor usage account: %w", err)
 			}
 		}
 		for _, hour := range hours {
-			stamp := hour.CompletedAt.UTC().Format("2006-01-02T15:04:05.000000Z")
 			if _, err := tx.ExecContext(ctx, `INSERT INTO cursor_account_polls(account_user_id,hour_start,polled_at) VALUES (?,?,?) ON CONFLICT(account_user_id,hour_start) DO UPDATE SET polled_at = max(polled_at,excluded.polled_at)`, hour.UserID, hour.Start.Unix(), stamp); err != nil {
 				return fmt.Errorf("recording Cursor account poll: %w", err)
 			}
