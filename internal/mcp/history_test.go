@@ -57,14 +57,17 @@ func TestGetToolCalls_FiltersPagesAndMasksSecrets(t *testing.T) {
 		),
 	)
 	dbtest.SeedSession(t, d, "empty", "proj")
+	dbtest.SeedSession(t, d, "blank", "proj")
+	dbtest.SeedMessages(t, d, toolCallMsg("blank", 0, db.ToolCall{ToolName: "Bash"}))
 
 	_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "s1", Category: "bash", Limit: 1})
 	require.NoError(t, err)
-	assert.Equal(t, 2, out.Total)
+	require.NotNil(t, out.Total)
+	assert.Equal(t, 2, *out.Total)
 	require.Len(t, out.ToolCalls, 1)
 	assert.Equal(t, "Bash", out.ToolCalls[0].ToolName)
-	assert.NotContains(t, out.ToolCalls[0].Input, "AKIA7QHWN2DKR4FYPLJM")
-	assert.Contains(t, out.ToolCalls[0].Input, "make")
+	assert.NotContains(t, *out.ToolCalls[0].Input, "AKIA7QHWN2DKR4FYPLJM")
+	assert.Contains(t, *out.ToolCalls[0].Input, "make")
 	require.NotNil(t, out.NextCursor)
 
 	_, next, err := ts.toolCalls(t.Context(), nil, toolCallsIn{
@@ -73,7 +76,7 @@ func TestGetToolCalls_FiltersPagesAndMasksSecrets(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, next.ToolCalls, 1)
 	assert.Equal(t, 1, next.ToolCalls[0].Ordinal)
-	assert.Equal(t, `{"com`, next.ToolCalls[0].Input)
+	assert.Equal(t, `{"com`, *next.ToolCalls[0].Input)
 	assert.True(t, next.ToolCalls[0].InputTruncated)
 	assert.Nil(t, next.NextCursor)
 
@@ -85,6 +88,15 @@ func TestGetToolCalls_FiltersPagesAndMasksSecrets(t *testing.T) {
 	_, none, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "empty"})
 	require.NoError(t, err)
 	assert.Empty(t, none.ToolCalls)
+	raw, err := json.Marshal(none)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"total":0`)
+	_, blank, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "blank"})
+	require.NoError(t, err)
+	raw, err = json.Marshal(blank)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"category":""`)
+	assert.Contains(t, string(raw), `"input":""`)
 	_, none, err = ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "empty", IncludeResults: true})
 	require.NoError(t, err)
 	assert.Empty(t, none.ToolCalls)
@@ -419,71 +431,6 @@ func (s *recordingMessageService) Messages(ctx context.Context, id string, filte
 	return s.SessionService.Messages(ctx, id, filter)
 }
 
-func TestGetToolCalls_EventResultsAndSelectedOrdinals(t *testing.T) {
-	ts, d := newTestToolset(t)
-	dbtest.SeedSession(t, d, "events", "proj")
-	dbtest.SeedMessages(t, d,
-		toolCallMsg("events", 0,
-			db.ToolCall{ToolUseID: "read", ToolName: "Read", Category: "Read", ResultContent: "unselected"},
-			db.ToolCall{ToolUseID: "bash", ToolName: "Bash", Category: "Bash", ResultEvents: []db.ToolResultEvent{
-				{Source: "tool_result", Content: "first result"},
-				{Source: "tool_result", Content: "second result"},
-			}},
-		),
-		toolCallMsg("events", 1000, db.ToolCall{ToolUseID: "later", ToolName: "Bash", Category: "Bash", ResultContent: "later result"}),
-	)
-	recording := &recordingMessageService{SessionService: ts.svc}
-	ts.svc = recording
-	_, first, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "events", IncludeResults: true, Category: "Bash", Limit: 1, MaxResultChars: 6})
-	require.NoError(t, err)
-	require.Len(t, first.ToolCalls, 1)
-	assert.Equal(t, "first ", first.ToolCalls[0].Result)
-	assert.Equal(t, len("first result\n\nsecond result"), first.ToolCalls[0].ResultLength)
-	require.Len(t, recording.filters, 1)
-	require.NotNil(t, recording.filters[0].Around)
-	assert.Equal(t, 0, *recording.filters[0].Around)
-	cursor := first.ToolCalls[0].ResultCursor
-	require.NotEmpty(t, cursor)
-	decoded, err := decodeMessageBodyCursor(cursor)
-	require.NoError(t, err)
-	assert.Equal(t, 3, decoded.Version)
-	decoded.Version = 2
-	_, _, err = ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "events", ResultCursor: encodeMessageBodyCursor(decoded)})
-	require.ErrorContains(t, err, "invalid result_cursor")
-	full := first.ToolCalls[0].Result
-	for cursor != "" {
-		_, next, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "events", ResultCursor: cursor, MaxResultChars: 6})
-		require.NoError(t, err)
-		require.Len(t, next.ToolCalls, 1)
-		full += next.ToolCalls[0].Result
-		cursor = next.ToolCalls[0].ResultCursor
-	}
-	assert.Equal(t, "first result\n\nsecond result", full)
-	recording.filters = nil
-	require.NotNil(t, first.NextCursor)
-	_, next, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "events", IncludeResults: true, Category: "Bash", Limit: 1, Cursor: *first.NextCursor})
-	require.NoError(t, err)
-	require.Len(t, next.ToolCalls, 1)
-	assert.Equal(t, "later result", next.ToolCalls[0].Result)
-	require.Len(t, recording.filters, 1)
-	require.NotNil(t, recording.filters[0].Around)
-	assert.Equal(t, 1000, *recording.filters[0].Around)
-}
-
-func TestGetToolCalls_MasksEveryResultEvent(t *testing.T) {
-	ts, d := newTestToolset(t)
-	dbtest.SeedSession(t, d, "events-secret", "proj")
-	dbtest.SeedMessages(t, d, toolCallMsg("events-secret", 0, db.ToolCall{ToolUseID: "call", ToolName: "Bash", ResultEvents: []db.ToolResultEvent{
-		{Source: "tool_result", Content: "first"},
-		{Source: "tool_result", Content: `{"key":"AKIA7QHWN2DKR4FYPLJM"}`},
-	}}))
-	_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "events-secret", IncludeResults: true})
-	require.NoError(t, err)
-	require.Len(t, out.ToolCalls, 1)
-	assert.Contains(t, out.ToolCalls[0].Result, "first")
-	assert.NotContains(t, out.ToolCalls[0].Result, "AKIA7QHWN2DKR4FYPLJM")
-}
-
 type changingMessagesService struct {
 	service.SessionService
 	d     *db.DB
@@ -557,85 +504,114 @@ func (s redactedMessagesService) Messages(ctx context.Context, id string, filter
 	return page, nil
 }
 
-func TestGetToolCalls_RedactedMessagesKeepIdentityAndLength(t *testing.T) {
+func TestGetToolCalls_ReturnsStoredSummary(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "summary", "proj")
+	dbtest.SeedMessages(t, d,
+		toolCallMsg("summary", 0, db.ToolCall{ToolUseID: "single", ToolName: "wait_agent", ResultContent: "latest B", ResultEvents: []db.ToolResultEvent{
+			{AgentID: "agent-a", Source: "tool_result", Content: "earlier A"},
+			{AgentID: "agent-a", Source: "tool_result", Content: "latest B"},
+		}}),
+		toolCallMsg("summary", 1, db.ToolCall{ToolUseID: "multiple", ToolName: "wait_agent", ResultContent: "agent-a:\nfirst\n\nagent-b:\nsecond", ResultEvents: []db.ToolResultEvent{
+			{AgentID: "agent-a", Source: "tool_result", Content: "first"},
+			{AgentID: "agent-b", Source: "tool_result", Content: "second"},
+		}}),
+	)
+	_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "summary", IncludeResults: true})
+	require.NoError(t, err)
+	require.Len(t, out.ToolCalls, 2)
+	assert.Equal(t, "latest B", out.ToolCalls[0].Result)
+	assert.Equal(t, "agent-a:\nfirst\n\nagent-b:\nsecond", out.ToolCalls[1].Result)
+}
+
+func TestGetToolCalls_ReadsSelectedOrdinals(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "selected", "proj")
+	dbtest.SeedMessages(t, d,
+		toolCallMsg("selected", 0, db.ToolCall{ToolUseID: "read", ToolName: "Read", Category: "Read", ResultContent: "unselected"}, db.ToolCall{ToolUseID: "bash", ToolName: "Bash", Category: "Bash", ResultContent: "first"}),
+		toolCallMsg("selected", 1000, db.ToolCall{ToolUseID: "later", ToolName: "Bash", Category: "Bash", ResultContent: "later"}),
+	)
+	recording := &recordingMessageService{SessionService: ts.svc}
+	ts.svc = recording
+	_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "selected", IncludeResults: true, Category: "Bash", Limit: 1})
+	require.NoError(t, err)
+	require.Len(t, out.ToolCalls, 1)
+	assert.Equal(t, "first", out.ToolCalls[0].Result)
+	require.Len(t, recording.filters, 1)
+	require.NotNil(t, recording.filters[0].Around)
+	assert.Equal(t, 0, *recording.filters[0].Around)
+	require.NotNil(t, out.NextCursor)
+	recording.filters = nil
+	_, next, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "selected", IncludeResults: true, Category: "Bash", Cursor: *out.NextCursor, Limit: 1})
+	require.NoError(t, err)
+	require.Len(t, next.ToolCalls, 1)
+	assert.Equal(t, "later", next.ToolCalls[0].Result)
+	require.Len(t, recording.filters, 1)
+	require.NotNil(t, recording.filters[0].Around)
+	assert.Equal(t, 1000, *recording.filters[0].Around)
+}
+
+func TestGetToolCalls_RedactedSummaryKeepsLength(t *testing.T) {
 	ts, d := newTestToolset(t)
 	dbtest.SeedSession(t, d, "masked", "proj")
-	first := "first output AKIA7QHWN2DKR4FYPLJM"
-	second := "second output AKIA7QHWN2DKR4FYPLJM"
-	dbtest.SeedMessages(t, d, toolCallMsg("masked", 0, db.ToolCall{
-		ToolUseID: "one", ToolName: "Bash", Category: "Bash", InputJSON: `{"key":"AKIA7QHWN2DKR4FYPLJM"}`,
-		ResultEvents: []db.ToolResultEvent{{AgentID: "agent-a", Source: "tool_result", Content: first}, {Source: "tool_result", Content: second}},
-	}))
+	summary := "café AKIA7QHWN2DKR4FYPLJM ending"
+	dbtest.SeedMessages(t, d, toolCallMsg("masked", 0, db.ToolCall{ToolUseID: "one", ToolName: "Bash", InputJSON: `{"key":"AKIA7QHWN2DKR4FYPLJM"}`, ResultContent: summary}))
 	ts.svc = redactedMessagesService{SessionService: ts.svc}
 	_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "masked", IncludeResults: true, MaxResultChars: 4})
 	require.NoError(t, err)
 	require.Len(t, out.ToolCalls, 1)
-	assert.Equal(t, len("agent-a:\n")+len(first)+2+len(second), out.ToolCalls[0].ResultLength)
-	require.NotEmpty(t, out.ToolCalls[0].ResultCursor)
-	_, continued, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "masked", ResultCursor: out.ToolCalls[0].ResultCursor})
-	require.NoError(t, err)
-	require.Len(t, continued.ToolCalls, 1)
-	assert.Equal(t, len("agent-a:\n")+len(first)+2+len(second), continued.ToolCalls[0].ResultLength)
-	assert.NotContains(t, out.ToolCalls[0].Input, "AKIA7QHWN2DKR4FYPLJM")
-	assert.NotContains(t, continued.ToolCalls[0].Result, "AKIA7QHWN2DKR4FYPLJM")
-
-	summary := "summary AKIA7QHWN2DKR4FYPLJM"
-	dbtest.SeedSession(t, d, "masked-summary", "proj")
-	dbtest.SeedMessages(t, d, toolCallMsg("masked-summary", 0, db.ToolCall{ToolUseID: "two", ToolName: "Bash", ResultContent: summary}))
-	_, out, err = ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "masked-summary", IncludeResults: true})
-	require.NoError(t, err)
-	require.Len(t, out.ToolCalls, 1)
 	assert.Equal(t, len(summary), out.ToolCalls[0].ResultLength)
-	assert.NotContains(t, out.ToolCalls[0].Result, "AKIA7QHWN2DKR4FYPLJM")
-}
-
-func TestGetToolCalls_AttributesRetainedResults(t *testing.T) {
-	ts, d := newTestToolset(t)
-	dbtest.SeedSession(t, d, "attribution", "proj")
-	dbtest.SeedMessages(t, d, toolCallMsg("attribution", 0, db.ToolCall{ToolUseID: "call", ToolName: "wait_agent", Category: "Task", ResultEvents: []db.ToolResultEvent{
-		{AgentID: "agent-a", Source: "tool_result", Content: "First finished"},
-		{AgentID: "agent-b", Source: "tool_result", Content: "Second finished"},
-	}}))
-	_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "attribution", IncludeResults: true})
-	require.NoError(t, err)
-	require.Len(t, out.ToolCalls, 1)
-	assert.Equal(t, "agent-a:\nFirst finished\n\nagent-b:\nSecond finished", out.ToolCalls[0].Result)
-}
-
-func TestGetToolCalls_ContinuesAttributedResult(t *testing.T) {
-	ts, d := newTestToolset(t)
-	dbtest.SeedSession(t, d, "mixed-agents", "proj")
-	dbtest.SeedMessages(t, d, toolCallMsg("mixed-agents", 0, db.ToolCall{ToolUseID: "call", ToolName: "wait_agent", ResultEvents: []db.ToolResultEvent{
-		{AgentID: "agent-a", Source: "tool_result", Content: "first"},
-		{Source: "tool_result", Content: "anonymous"},
-		{AgentID: "agent-a", Source: "tool_result", Content: "again"},
-		{AgentID: "agent-b", Source: "tool_result", Content: "finished"},
-	}}))
-	_, page, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "mixed-agents", IncludeResults: true, MaxResultChars: 5})
-	require.NoError(t, err)
-	require.Len(t, page.ToolCalls, 1)
-	want := "agent-a:\nfirst\n\nanonymous\n\nagent-a:\nagain\n\nagent-b:\nfinished"
-	assert.Equal(t, len(want), page.ToolCalls[0].ResultLength)
-	text, cursor := page.ToolCalls[0].Result, page.ToolCalls[0].ResultCursor
-	require.NotEmpty(t, cursor)
+	require.NotEmpty(t, out.ToolCalls[0].ResultCursor)
+	text, cursor := out.ToolCalls[0].Result, out.ToolCalls[0].ResultCursor
 	for cursor != "" {
-		_, page, err = ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "mixed-agents", ResultCursor: cursor, MaxResultChars: 5})
+		_, next, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "masked", ResultCursor: cursor, MaxResultChars: 4})
 		require.NoError(t, err)
-		require.Len(t, page.ToolCalls, 1)
-		assert.Equal(t, len(want), page.ToolCalls[0].ResultLength)
-		text += page.ToolCalls[0].Result
-		cursor = page.ToolCalls[0].ResultCursor
+		require.Len(t, next.ToolCalls, 1)
+		assert.Equal(t, len(summary), next.ToolCalls[0].ResultLength)
+		raw, err := json.Marshal(next)
+		require.NoError(t, err)
+		assert.NotContains(t, string(raw), `"input"`)
+		assert.NotContains(t, string(raw), `"category"`)
+		assert.NotContains(t, string(raw), `"total"`)
+		text += next.ToolCalls[0].Result
+		cursor = next.ToolCalls[0].ResultCursor
 	}
-	assert.Equal(t, want, text)
+	assert.NotContains(t, text, "AKIA7QHWN2DKR4FYPLJM")
+	assert.Contains(t, text, "café ")
+	assert.Contains(t, text, " ending")
 }
 
-func TestGetToolCalls_HTTPContinuesAttributedResults(t *testing.T) {
+func TestGetToolCalls_CursorsAreDistinct(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "cursor", "proj")
+	m := toolCallMsg("cursor", 0, db.ToolCall{ToolUseID: "one", ToolName: "Bash", ResultContent: "long result"})
+	m.Content = "long message"
+	dbtest.SeedMessages(t, d, m)
+	_, calls, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "cursor", IncludeResults: true, MaxResultChars: 3})
+	require.NoError(t, err)
+	require.Len(t, calls.ToolCalls, 1)
+	require.NotEmpty(t, calls.ToolCalls[0].ResultCursor)
+	_, _, err = ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "cursor", BodyCursor: calls.ToolCalls[0].ResultCursor})
+	require.ErrorContains(t, err, "invalid body_cursor")
+	_, messages, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "cursor", MaxCharsPerMessage: 3})
+	require.NoError(t, err)
+	require.Len(t, messages.Messages, 1)
+	require.NotEmpty(t, messages.Messages[0].BodyCursor)
+	messageCursor, err := decodeMessageBodyCursor(messages.Messages[0].BodyCursor)
+	require.NoError(t, err)
+	assert.Equal(t, 2, messageCursor.Version)
+	_, _, err = ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "cursor", ResultCursor: messages.Messages[0].BodyCursor})
+	require.ErrorContains(t, err, "invalid result_cursor")
+	_, continuation, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "cursor", BodyCursor: messages.Messages[0].BodyCursor, MaxCharsPerMessage: 20})
+	require.NoError(t, err)
+	require.Len(t, continuation.Messages, 1)
+	assert.Equal(t, "g message", continuation.Messages[0].Content)
+}
+
+func TestGetToolCalls_HTTPContinuesStoredResult(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	dbtest.SeedSession(t, d, "remote", "proj")
-	dbtest.SeedMessages(t, d, toolCallMsg("remote", 0, db.ToolCall{ToolUseID: "call", ToolName: "wait_agent", ResultEvents: []db.ToolResultEvent{
-		{AgentID: "agent-a", Source: "tool_result", Content: "first"},
-		{AgentID: "agent-b", Source: "tool_result", Content: "second"},
-	}}))
+	dbtest.SeedMessages(t, d, toolCallMsg("remote", 0, db.ToolCall{ToolUseID: "call", ToolName: "Bash", ResultContent: "stored result"}))
 	httpServer := httptest.NewUnstartedServer(nil)
 	srv := server.New(config.Config{Host: "127.0.0.1", Port: httpServer.Listener.Addr().(*net.TCPAddr).Port, DataDir: t.TempDir(), WriteTimeout: 30 * time.Second}, d, nil)
 	httpServer.Config.Handler = srv.Handler()
@@ -657,5 +633,5 @@ func TestGetToolCalls_HTTPContinuesAttributedResults(t *testing.T) {
 		text += calls.ToolCalls[0].Result
 		cursor = calls.ToolCalls[0].ResultCursor
 	}
-	assert.Equal(t, "agent-a:\nfirst\n\nagent-b:\nsecond", text)
+	assert.Equal(t, "stored result", text)
 }

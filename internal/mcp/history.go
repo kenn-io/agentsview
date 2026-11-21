@@ -4,7 +4,9 @@ package mcp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -45,23 +47,23 @@ type toolCallsIn struct {
 }
 
 type toolCallOut struct {
-	Ordinal           int    `json:"ordinal" jsonschema:"Ordinal of the assistant message that made the call; pass it to get_messages."`
-	Timestamp         string `json:"timestamp,omitempty"`
-	ToolName          string `json:"tool_name"`
-	Category          string `json:"category"`
-	Input             string `json:"input" jsonschema:"Tool input JSON with secret-shaped values masked."`
-	InputTruncated    bool   `json:"input_truncated,omitempty"`
-	SkillName         string `json:"skill_name,omitempty"`
-	SubagentSessionID string `json:"subagent_session_id,omitempty"`
-	Result            string `json:"result,omitempty"`
-	ResultCursor      string `json:"result_cursor,omitempty"`
-	ResultTruncated   bool   `json:"result_truncated,omitempty"`
-	ResultLength      int    `json:"result_length" jsonschema:"Size of the tool result in bytes."`
+	Ordinal           int     `json:"ordinal" jsonschema:"Ordinal of the assistant message that made the call; pass it to get_messages."`
+	Timestamp         string  `json:"timestamp,omitempty"`
+	ToolName          string  `json:"tool_name"`
+	Category          *string `json:"category,omitzero"`
+	Input             *string `json:"input,omitzero" jsonschema:"Tool input JSON with secret-shaped values masked."`
+	InputTruncated    bool    `json:"input_truncated,omitempty"`
+	SkillName         string  `json:"skill_name,omitempty"`
+	SubagentSessionID string  `json:"subagent_session_id,omitempty"`
+	Result            string  `json:"result,omitempty"`
+	ResultCursor      string  `json:"result_cursor,omitempty"`
+	ResultTruncated   bool    `json:"result_truncated,omitempty"`
+	ResultLength      int     `json:"result_length" jsonschema:"Size of the tool result in bytes."`
 }
 
 type toolCallsOut struct {
 	ToolCalls  []toolCallOut `json:"tool_calls"`
-	Total      int           `json:"total" jsonschema:"Calls matching the category filter across the whole session."`
+	Total      *int          `json:"total,omitzero" jsonschema:"Calls matching the category filter across the whole session."`
 	NextCursor *int          `json:"next_cursor,omitempty"`
 }
 
@@ -123,7 +125,7 @@ func (t *toolset) toolCalls(
 	end := min(start+limit, len(matching))
 	out := toolCallsOut{
 		ToolCalls: make([]toolCallOut, 0, end-start),
-		Total:     len(matching),
+		Total:     new(len(matching)),
 	}
 	results := make(map[int]db.Message)
 	var source string
@@ -153,8 +155,8 @@ func (t *toolset) toolCalls(
 		cut = cut || partial
 		call := toolCallOut{
 			Ordinal: tc.Ordinal, Timestamp: tc.Timestamp,
-			ToolName: tc.ToolName, Category: tc.Category,
-			Input: input, InputTruncated: cut,
+			ToolName: tc.ToolName, Category: new(tc.Category),
+			Input: new(input), InputTruncated: cut,
 			SkillName: tc.SkillName, SubagentSessionID: tc.SubagentSessionID,
 			ResultLength: tc.ResultLength,
 		}
@@ -167,11 +169,9 @@ func (t *toolset) toolCalls(
 			if m.Timestamp != tc.Timestamp || stored.ToolUseID != tc.ToolUseID || stored.ToolName != tc.ToolName || stored.Category != tc.Category || secrets.RedactJSON(stored.InputJSON) != secrets.RedactJSON(tc.InputJSON) || stored.SkillName != tc.SkillName || stored.SubagentSessionID != tc.SubagentSessionID || stored.ResultContentLength != tc.ResultLength {
 				return nil, toolCallsOut{}, fmt.Errorf("%w: cited tool call no longer matches", service.ErrSourceChanged)
 			}
-			masked, length := retainedResult(stored)
-			call.ResultLength = length
-			call.Result, call.ResultTruncated = truncate(masked, clampLimit(in.MaxResultChars, 1000, 10000))
+			call.Result, call.ResultTruncated = truncate(secrets.RedactJSON(stored.ResultContent), clampLimit(in.MaxResultChars, 1000, 10000))
 			if call.ResultTruncated {
-				call.ResultCursor = encodeMessageBodyCursor(messageBodyCursor{Version: 3, EvidenceSource: source, SessionID: in.SessionID, Revision: revision, Ordinal: tc.Ordinal, Offset: utf8.RuneCountInString(call.Result), Kind: "result", Position: tc.position, Total: len(matching)})
+				call.ResultCursor = encodeToolResultCursor(toolResultCursor{Kind: "tool_result", EvidenceSource: source, SessionID: in.SessionID, Revision: revision, Ordinal: tc.Ordinal, Offset: utf8.RuneCountInString(call.Result), Position: tc.position})
 			}
 		}
 		out.ToolCalls = append(out.ToolCalls, call)
@@ -183,8 +183,8 @@ func (t *toolset) toolCalls(
 }
 
 func (t *toolset) toolResultContinuation(ctx context.Context, in toolCallsIn) (*mcp.CallToolResult, toolCallsOut, error) {
-	cursor, err := decodeMessageBodyCursor(in.ResultCursor)
-	if err != nil || cursor.Kind != "result" || cursor.SessionID != in.SessionID || cursor.Position < 0 {
+	cursor, err := decodeToolResultCursor(in.ResultCursor)
+	if err != nil || cursor.SessionID != in.SessionID || cursor.Position < 0 {
 		return nil, toolCallsOut{}, errors.New("invalid result_cursor")
 	}
 	zero := 0
@@ -197,52 +197,44 @@ func (t *toolset) toolResultContinuation(ctx context.Context, in toolCallsIn) (*
 	}
 	m := page.Messages[0]
 	tc := m.ToolCalls[cursor.Position]
-	masked, length := retainedResult(tc)
-	runes := []rune(masked)
+	runes := []rune(secrets.RedactJSON(tc.ResultContent))
 	if cursor.Offset >= len(runes) {
 		return nil, toolCallsOut{}, errors.New("invalid result_cursor offset")
 	}
 	end := min(cursor.Offset+clampLimit(in.MaxResultChars, 1000, 10000), len(runes))
-	maxInput := clampLimit(in.MaxInputChars, defaultToolInputChars, maxToolInputChars)
-	input, partial := redactToolInput(tc.InputJSON, maxInput)
-	input, cut := truncate(input, maxInput)
-	call := toolCallOut{Ordinal: m.Ordinal, Timestamp: m.Timestamp, ToolName: tc.ToolName, Category: tc.Category, Input: input, InputTruncated: partial || cut, SkillName: tc.SkillName, SubagentSessionID: tc.SubagentSessionID, ResultLength: length, Result: string(runes[cursor.Offset:end]), ResultTruncated: end < len(runes)}
+	call := toolCallOut{Ordinal: m.Ordinal, ToolName: tc.ToolName, ResultLength: tc.ResultContentLength, Result: string(runes[cursor.Offset:end]), ResultTruncated: end < len(runes)}
 	if call.ResultTruncated {
 		cursor.Offset = end
-		call.ResultCursor = encodeMessageBodyCursor(cursor)
+		call.ResultCursor = encodeToolResultCursor(cursor)
 	}
-	return nil, toolCallsOut{ToolCalls: []toolCallOut{call}, Total: cursor.Total}, nil
+	return nil, toolCallsOut{ToolCalls: []toolCallOut{call}}, nil
 }
 
-// retainedResult returns masked outputs in event order and their stored byte
-// length, or the summary when no event has retained text.
-func retainedResult(tc db.ToolCall) (string, int) {
-	var masked []string
-	length := 0
-	for _, event := range tc.ResultEvents {
-		if event.Content != "" {
-			content := secrets.RedactJSON(event.Content)
-			if event.AgentID != "" {
-				content = event.AgentID + ":\n" + content
-				length += len(event.AgentID) + 2
-			}
-			masked = append(masked, content)
-			if event.ContentLength > 0 {
-				length += event.ContentLength
-			} else {
-				length += len(event.Content)
-			}
-		}
+type toolResultCursor struct {
+	Kind           string `json:"k"`
+	EvidenceSource string `json:"s"`
+	SessionID      string `json:"i"`
+	Revision       string `json:"r"`
+	Ordinal        int    `json:"o"`
+	Position       int    `json:"c"`
+	Offset         int    `json:"p"`
+}
+
+func encodeToolResultCursor(cursor toolResultCursor) string {
+	raw, _ := json.Marshal(cursor)
+	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
+func decodeToolResultCursor(raw string) (toolResultCursor, error) {
+	payload, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return toolResultCursor{}, errors.New("invalid result_cursor")
 	}
-	if len(masked) == 0 {
-		length = tc.ResultContentLength
-		if length == 0 {
-			length = len(tc.ResultContent)
-		}
-		return secrets.RedactJSON(tc.ResultContent), length
+	var cursor toolResultCursor
+	if err := json.Unmarshal(payload, &cursor); err != nil || cursor.Kind != "tool_result" || cursor.EvidenceSource == "" || cursor.SessionID == "" || cursor.Revision == "" || cursor.Ordinal < 0 || cursor.Position < 0 || cursor.Offset <= 0 {
+		return toolResultCursor{}, errors.New("invalid result_cursor")
 	}
-	length += 2 * (len(masked) - 1)
-	return strings.Join(masked, "\n\n"), length
+	return cursor, nil
 }
 
 // redactToolInput masks secrets in each decoded JSON string of a tool input,

@@ -128,17 +128,3 @@ func TestGetMessages_BodyCursorContinuesUnderIssuingRoles(t *testing.T) {
 	}
 	assert.Equal(t, "remainder text"[4:], strings.Join(parts, ""))
 }
-
-func TestGetMessages_RejectsVersionTwoCursor(t *testing.T) {
-	ts, d := newTestToolset(t)
-	dbtest.SeedSessionWithMessages(t, d, "cursor-version", "proj", []db.Message{dbtest.AsstMsg("cursor-version", 0, "a long message")}, dbtest.WithMessageCounts(1, 0))
-	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "cursor-version", MaxCharsPerMessage: 3})
-	require.NoError(t, err)
-	require.Len(t, first.Messages, 1)
-	cursor, err := decodeMessageBodyCursor(first.Messages[0].BodyCursor)
-	require.NoError(t, err)
-	assert.Equal(t, 3, cursor.Version)
-	cursor.Version = 2
-	_, _, err = ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "cursor-version", BodyCursor: encodeMessageBodyCursor(cursor)})
-	require.ErrorContains(t, err, "invalid body_cursor")
-}
