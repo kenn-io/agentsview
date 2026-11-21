@@ -23,6 +23,7 @@ import (
 	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/export"
@@ -12296,4 +12297,41 @@ func TestDBBackedProcessingFailureCountsWithoutLosingDiscovery(t *testing.T) {
 	require.True(t, stats.AuthoritativeDiscoveryComplete())
 	stats.providerFailures++
 	require.False(t, stats.AuthoritativeDiscoveryComplete())
+}
+
+func TestVisualStudioCopilotMergedHistoryRetainsCommandLinks(t *testing.T) {
+	d := openTestDB(t)
+	e := NewEngine(t.Context(), d, EngineConfig{Machine: "test-machine"})
+	t.Cleanup(e.Close)
+	start := time.Date(2026, 6, 12, 19, 40, 0, 0, time.UTC)
+	sess := parser.ParsedSession{ID: "visualstudio-copilot:links", Project: "project", Machine: "test-machine", Agent: parser.AgentVSCopilot, StartedAt: start}
+	oldPrompt := parser.ParsedMessage{Ordinal: 0, Role: parser.RoleUser, Content: "old question", Timestamp: start}
+	oldCall := parser.ParsedMessage{Ordinal: 1, Role: parser.RoleAssistant, Content: "running", Timestamp: start.Add(time.Minute), ToolCalls: []parser.ParsedToolCall{{ToolUseID: "call", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`}}}
+	require.NoError(t, e.writeSessionFull(pendingWrite{sess: sess, msgs: []parser.ParsedMessage{oldPrompt, oldCall}}))
+	d.SetArchiveContent(config.ArchiveContentTranscripts)
+	require.NoError(t, d.RenameSession(t.Context(), sess.ID, nil))
+	oldCall.Ordinal = 0
+	oldCall.ToolCalls[0].InputJSON = ""
+	oldCall.OutputTokens, oldCall.HasOutputTokens = 10, true
+	newMessage := parser.ParsedMessage{Ordinal: 1, Role: parser.RoleAssistant, Content: "new answer", Timestamp: start.Add(2 * time.Minute)}
+	require.NoError(t, e.writeSessionFull(pendingWrite{sess: sess, msgs: []parser.ParsedMessage{oldCall, newMessage}}))
+	got, err := d.GetSession(t.Context(), sess.ID)
+	require.NoError(t, err)
+	require.Len(t, got.PRLinks, 1)
+	assert.Equal(t, "https://github.com/example/repo/pull/42", got.PRLinks[0].URL)
+}
+
+func TestHistoryReplaceDropsSupersededCommandLinks(t *testing.T) {
+	d := openTestDB(t)
+	e := NewEngine(t.Context(), d, EngineConfig{Machine: "test-machine"})
+	t.Cleanup(e.Close)
+	sess := parser.ParsedSession{ID: "claude:replace-links", Project: "project", Machine: "test-machine", Agent: parser.AgentClaude, StartedAt: time.Date(2026, 6, 12, 19, 40, 0, 0, time.UTC)}
+	message := parser.ParsedMessage{Ordinal: 0, Role: parser.RoleAssistant, Content: "running", ToolCalls: []parser.ParsedToolCall{{ToolUseID: "call", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`}}}
+	require.NoError(t, e.writeSessionFull(pendingWrite{sess: sess, msgs: []parser.ParsedMessage{message}}))
+	message.ToolCalls[0].InputJSON = `{"command":"gh pr view 43 -R example/repo"}`
+	require.NoError(t, e.writeSessionFull(pendingWrite{sess: sess, msgs: []parser.ParsedMessage{message}}))
+	got, err := d.GetSession(t.Context(), sess.ID)
+	require.NoError(t, err)
+	require.Len(t, got.PRLinks, 1)
+	assert.Equal(t, "https://github.com/example/repo/pull/43", got.PRLinks[0].URL)
 }

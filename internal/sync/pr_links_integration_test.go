@@ -182,57 +182,6 @@ func TestClaudeCommandPRUsesCheckoutRemote(t *testing.T) {
 	assert.Equal(t, "checkout-pr", page.Sessions[0].ID)
 }
 
-func TestCodeModeCommandPRUsesItsWorkdir(t *testing.T) {
-	testutil.IsolateGit(t)
-	base := t.TempDir()
-	for _, tc := range []struct{ dir, config string }{
-		{"first", "[remote \"origin\"]\n url = https://github.com/example/first.git\n"},
-		{"second", "[remote \"origin\"]\n url = https://github.com/example/second.git\n"},
-		{"ambiguous", "[remote \"origin\"]\n url = https://github.com/example/fork.git\n[remote \"upstream\"]\n url = https://github.com/example/upstream.git\n"},
-	} {
-		dir := filepath.Join(base, tc.dir, ".git")
-		require.NoError(t, os.MkdirAll(dir, 0o700))
-		require.NoError(t, os.WriteFile(filepath.Join(dir, "config"), []byte(tc.config), 0o600))
-	}
-	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
-	const id = "01900000-0000-7000-8000-000000000091"
-	code := fmt.Sprintf(`text(await tools.exec_command({cmd:"gh pr view 41",workdir:%q})); text(await tools.exec_command({cmd:"gh pr view 42",workdir:%q})); text(await tools.exec_command({cmd:"gh pr view 44",workdir:%q})); text(await tools.exec_command({cmd:"gh pr view 45",workdir:%q}))`, filepath.Join(base, "first"), filepath.Join(base, "second"), filepath.Join(base, "ambiguous"), filepath.Join(base, "missing"))
-	path := env.writeCodexSession(t, filepath.Join("2024", "01", "15"), "rollout-20240115-"+id+".jsonl", testjsonl.JoinJSONL(
-		testjsonl.CodexSessionMetaJSON(id, filepath.Join(base, "first"), "user", tsEarly),
-		testjsonl.CodexMsgJSON("user", "Review changes", tsEarlyS1),
-		testjsonl.CodexFunctionCallWithCallIDJSON("exec", "first", code, tsEarlyS5),
-	))
-	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
-	assert.ElementsMatch(t, []string{"https://github.com/example/first/pull/41", "https://github.com/example/second/pull/42"}, storedPRURLs(t, env.db, "codex:"+id))
-	code = fmt.Sprintf(`text(await tools.exec_command({cmd:"gh pr view 43",workdir:%q}))`, filepath.Join(base, "second"))
-	appendClaudeSplitLines(t, path, testjsonl.CodexFunctionCallWithCallIDJSON("exec", "second", code, "2024-01-01T10:00:06Z"))
-	env.engine.SyncPaths([]string{path})
-	assert.ElementsMatch(t, []string{"https://github.com/example/first/pull/41", "https://github.com/example/second/pull/42", "https://github.com/example/second/pull/43"}, storedPRURLs(t, env.db, "codex:"+id))
-}
-
-func TestCommandPRWorkdirInChangedCheckout(t *testing.T) {
-	testutil.IsolateGit(t)
-	root := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(root, ".git"), 0o700))
-	require.NoError(t, os.Mkdir(filepath.Join(root, "sub"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "config"), []byte("[remote \"origin\"]\n url = https://github.com/example/new.git\n"), 0o600))
-	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
-	const id = "01900000-0000-7000-8000-000000000092"
-	command := func(dir string) string {
-		return fmt.Sprintf(`text(await tools.exec_command({cmd:"gh pr view 42",workdir:%q}))`, dir)
-	}
-	path := env.writeCodexSession(t, filepath.Join("2024", "01", "15"), "rollout-20240115-"+id+".jsonl", testjsonl.JoinJSONL(
-		testjsonl.CodexSessionMetaWithFieldsJSON(id, root, "user", tsEarly, map[string]any{"git": map[string]any{"repository_url": "https://github.com/example/old.git"}}),
-		testjsonl.CodexMsgJSON("user", "Review changes", tsEarlyS1),
-		testjsonl.CodexFunctionCallWithCallIDJSON("exec", "first", command(filepath.Join(root, "sub")), tsEarlyS5),
-	))
-	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
-	assert.Empty(t, storedPRURLs(t, env.db, "codex:"+id))
-	appendClaudeSplitLines(t, path, testjsonl.CodexFunctionCallWithCallIDJSON("exec", "second", command(filepath.Join(root, "sub")), "2024-01-01T10:00:06Z"))
-	env.engine.SyncPaths([]string{path})
-	assert.Empty(t, storedPRURLs(t, env.db, "codex:"+id))
-}
-
 func TestCommandPRLinksSurviveArchiveContentPolicy(t *testing.T) {
 	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
 		for _, bulk := range []bool{false, true} {
@@ -359,4 +308,42 @@ func TestAmbiguousCheckoutRemoteDoesNotInferPR(t *testing.T) {
 	for _, id := range []string{"01900000-0000-7000-8000-000000000081", "01900000-0000-7000-8000-000000000082"} {
 		assert.Empty(t, storedPRURLs(t, env.db, "codex:"+id))
 	}
+}
+
+func TestCommandPRRecordedRemoteCaseInsensitive(t *testing.T) {
+	testutil.IsolateGit(t)
+	root := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "config"), []byte("[remote \"origin\"]\n url = https://github.com/example/repo.git\n"), 0o600))
+	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
+	const id = "01900000-0000-7000-8000-000000000099"
+	env.writeCodexSession(t, filepath.Join("2024", "01", "15"), "rollout-20240115-"+id+".jsonl", testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaWithFieldsJSON(id, root, "user", tsEarly, map[string]any{"git": map[string]any{"repository_url": "git@github.com:Example/Repo.git"}}),
+		testjsonl.CodexMsgJSON("user", "Review", tsEarlyS1),
+		testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call", map[string]any{"cmd": "gh pr view 42"}, tsEarlyS5),
+	))
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+	assert.Equal(t, []string{"https://github.com/example/repo/pull/42"}, storedPRURLs(t, env.db, "codex:"+id))
+}
+
+func TestCommandPRUsesChangedCheckoutAfterRestart(t *testing.T) {
+	testutil.IsolateGit(t)
+	root := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o700))
+	gitConfig := filepath.Join(root, ".git", "config")
+	require.NoError(t, os.WriteFile(gitConfig, []byte("[remote \"origin\"]\n url = https://github.com/example/first.git\n"), 0o600))
+	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
+	const id = "01900000-0000-7000-8000-000000000100"
+	path := env.writeCodexSession(t, filepath.Join("2024", "01", "15"), "rollout-20240115-"+id+".jsonl", testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(id, root, "user", tsEarly),
+		testjsonl.CodexMsgJSON("user", "Review", tsEarlyS1),
+	))
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+	require.NoError(t, os.WriteFile(gitConfig, []byte("[remote \"origin\"]\n url = https://github.com/example/second.git\n"), 0o600))
+	env.engine.Close()
+	env.engine = sync.NewEngine(t.Context(), env.db, sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {env.codexDir}}, Machine: "local"})
+	t.Cleanup(env.engine.Close)
+	appendClaudeSplitLines(t, path, testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call", map[string]any{"cmd": "gh pr view 42"}, tsEarlyS5))
+	env.engine.SyncPaths([]string{path})
+	assert.Equal(t, []string{"https://github.com/example/second/pull/42"}, storedPRURLs(t, env.db, "codex:"+id))
 }

@@ -11450,8 +11450,8 @@ func (e *Engine) writeBatchWithOutcomeContext(
 		// succeeded. The pending upsert deliberately does not touch this
 		// column, and source-missing state is cleared only after this
 		// succeeds, so an old current version cannot hide a failed rewrite.
-		if err := e.db.SetSessionDataVersion(ctx,
-			s.ID, dataVersionForWrite(pw),
+		if err := e.db.SetSessionDataVersionWithToolPRLinks(ctx,
+			s.ID, dataVersionForWrite(pw), s.ToolPRLinks, replaceMessages && !prepared.keepToolPRLinks,
 		); err != nil {
 			if ctx.Err() != nil {
 				return outcome
@@ -11603,6 +11603,11 @@ func (e *Engine) prepareSessionNormalizedContext(
 			return preparedSessionWrite{}, sessionWritePreserved, err
 		}
 	}
+	remote := ""
+	if !pw.sourceIdentityUnverified {
+		remote = e.toolLinkRemote(candidate.Session, pw.sess.GitRemote)
+	}
+	toolLinks := db.ToolCallPRLinks(candidate.Messages, candidate.Session.Cwd, remote)
 	history, err := e.reconcileProviderHistoryContext(ctx, candidate)
 	if err != nil {
 		return preparedSessionWrite{}, sessionWritePreserved, err
@@ -11619,13 +11624,7 @@ func (e *Engine) prepareSessionNormalizedContext(
 	if err := ctx.Err(); err != nil {
 		return preparedSessionWrite{}, sessionWritePreserved, err
 	}
-	remote := ""
-	var resolve func(string) string
-	if !pw.sourceIdentityUnverified {
-		remote = e.toolLinkRemote(candidate.Session, pw.sess.GitRemote)
-		resolve = e.toolLinkRemoteResolver(candidate.Session, pw.sess.GitRemote)
-	}
-	candidate.Session.ToolPRLinks = db.ToolCallPRLinksWithRemoteResolver(candidate.Messages, candidate.Session.Cwd, remote, resolve)
+	candidate.Session.ToolPRLinks = toolLinks
 	options := ingest.ContentOptions{
 		BlockedResultCategories: e.blockedResultCategories,
 		ToolResultImages:        e.toolResultImages,
@@ -11635,7 +11634,7 @@ func (e *Engine) prepareSessionNormalizedContext(
 	if err != nil {
 		return preparedSessionWrite{}, sessionWritePreserved, err
 	}
-	prepared := preparedSessionWrite{PreparedSession: rows, codexForkState: forkState, stagedToolKeys: stagedToolKeys}
+	prepared := preparedSessionWrite{PreparedSession: rows, codexForkState: forkState, stagedToolKeys: stagedToolKeys, keepToolPRLinks: history.Action == ingest.HistoryMerge || forkState != nil && forkState.PreserveHistory}
 	if forkState != nil {
 		// Totals describe the sanitized message and independent event rows that
 		// will be committed. Session-summary events are not additive usage.
@@ -12160,6 +12159,7 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 			SkipSignalUpdates:       e.disableSignalRecompute,
 			DataVersion:             dataVersionForWrite(pw),
 			ReplaceMessages:         replaceMessages,
+			PreserveToolPRLinks:     prepared.keepToolPRLinks,
 			Checkpoint:              checkpoint,
 			CheckpointBlobs:         checkpointBlobs,
 			ClaudeSubagentSources:   claudeSources,
@@ -12449,8 +12449,8 @@ func (e *Engine) writeSessionFullWithResolver(
 
 	// See writeBatch for why data_version is bumped here
 	// rather than inside UpsertSession.
-	if err := e.db.SetSessionDataVersion(ctx,
-		s.ID, dataVersionForWrite(pw),
+	if err := e.db.SetSessionDataVersionWithToolPRLinks(ctx,
+		s.ID, dataVersionForWrite(pw), s.ToolPRLinks, !prepared.keepToolPRLinks,
 	); err != nil {
 		log.Printf(
 			"set data_version for %s: %v", s.ID, err,

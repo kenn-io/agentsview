@@ -47,15 +47,6 @@ func TestCodeModePRLinksUseEachCommandWorkdir(t *testing.T) {
 	assert.Equal(t, "https://github.com/example/beta/pull/42", links[1].URL)
 }
 
-func TestCodeModeOpaqueWorkdir(t *testing.T) {
-	messages := []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", InputJSON: `text(await tools.exec_command({cmd:"gh pr view 42",workdir:unknown}))`}}}}
-	links := db.ToolCallPRLinksWithRemoteResolver(messages, "/repo", "https://github.com/example/repo.git", func(string) string {
-		require.Fail(t, "resolved an opaque workdir")
-		return ""
-	})
-	assert.Empty(t, links)
-}
-
 func TestToolCallPRLinksForgetCheckoutAfterDirectoryChange(t *testing.T) {
 	messages := []db.Message{{ToolCalls: []db.ToolCall{
 		{Category: "Bash", InputJSON: `{"cmd":"gh pr view 41"}`},
@@ -66,5 +57,13 @@ func TestToolCallPRLinksForgetCheckoutAfterDirectoryChange(t *testing.T) {
 	links := db.ToolCallPRLinks(messages, "/repo", "https://github.com/example/repo.git")
 	require.Len(t, links, 2)
 	assert.Equal(t, "https://github.com/example/repo/pull/41", links[0].URL)
+	assert.Equal(t, "https://github.com/example/other/pull/43", links[1].URL)
+}
+
+func TestCodeModePRLinksKeepExplicitIdentities(t *testing.T) {
+	messages := []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", InputJSON: `text(await tools.exec_command({cmd:"gh pr view 41",workdir:"/repo"})); text(await tools.exec_command({cmd:"gh pr view 42"})); text(await tools.exec_command({cmd:"gh pr view 43 -R example/other",workdir:"/other"})); text(await tools.exec_command({cmd:"cd /other"})); text(await tools.exec_command({cmd:"gh pr view 44"}))`}}}}
+	links := db.ToolCallPRLinks(messages, "/repo", "https://github.com/example/repo.git")
+	require.Len(t, links, 2)
+	assert.Equal(t, "https://github.com/example/repo/pull/42", links[0].URL)
 	assert.Equal(t, "https://github.com/example/other/pull/43", links[1].URL)
 }

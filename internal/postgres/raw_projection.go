@@ -237,6 +237,15 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 				}
 			}
 		}
+		if decision.Action != ingest.HistoryPreserve {
+			prepared.ToolPRLinks = db.ToolCallPRLinks(c.Messages, c.Session.Cwd, "")
+			if decision.Action == ingest.HistoryMerge {
+				if err := loadOld(ctx); err != nil {
+					return err
+				}
+				prepared.ToolPRLinks = parser.CombinePRLinks(old.ToolPRLinks, prepared.ToolPRLinks)
+			}
+		}
 		prepared.Signals = ingest.RefreshSignalRecencyAt(prepared.Session, prepared.Messages, prepared.Signals, s.options.Now())
 		revision, err := rawContentRevision(prepared)
 		if err != nil {
@@ -244,7 +253,6 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		}
 		sessionID := "raw-row-" + rawDigest("row-v1", group, revision)
 		branchID := rawDigest("branch-v1", group, source)
-		prepared.ToolPRLinks = db.ToolCallPRLinks(decision.Candidate.Messages, decision.Candidate.Session.Cwd, "")
 		payload, err := encodeRawPayload(prepared)
 		if err != nil {
 			return err

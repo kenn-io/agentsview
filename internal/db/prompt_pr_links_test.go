@@ -357,50 +357,6 @@ func TestToolPRLinksArchiveUpgrade(t *testing.T) {
 	assert.Equal(t, []PRLink{structured}, recorded)
 }
 
-func TestToolPRLinksBackfillDoesNotInferFromRecordedRemote(t *testing.T) {
-	d, err := OpenIsolated(t.Context(), filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = d.Close() })
-	s := Session{ID: "ambiguous-remote", Project: "project", Machine: "local", Agent: "claude", Cwd: "/repo"}
-	require.NoError(t, d.UpsertSession(t.Context(), s))
-	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{Category: "Bash", InputJSON: `{"command":"gh pr view 42"}`}}}}))
-	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(), `UPDATE session_project_identity_snapshots SET git_remote=?, recorded_git_remote=?, remote_candidate_count=1, git_remote_name='' WHERE session_id=?`, "https://github.com/example/fork.git", "https://github.com/example/fork.git", s.ID)
-		if err != nil {
-			return err
-		}
-		links, err := storedToolCallPRLinksTx(tx, s.ID)
-		assert.Empty(t, links)
-		return err
-	}))
-}
-
-func TestToolPRLinksBackfillUsesMatchingCheckoutRemote(t *testing.T) {
-	d, err := OpenIsolated(t.Context(), filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = d.Close() })
-	s := Session{ID: "checkout-remote", Project: "project", Machine: "local", Agent: "claude", Cwd: "/repo"}
-	require.NoError(t, d.UpsertSession(t.Context(), s))
-	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{Category: "Bash", InputJSON: `{"command":"gh pr view 42"}`}}}}))
-	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(), `UPDATE session_project_identity_snapshots SET git_remote=?, recorded_git_remote=?, remote_candidate_count=1, git_remote_name='origin' WHERE session_id=?`, "https://github.com/example/repo.git", "git@github.com:example/repo.git", s.ID)
-		if err != nil {
-			return err
-		}
-		links, err := storedToolCallPRLinksTx(tx, s.ID)
-		require.NoError(t, err)
-		require.Len(t, links, 1)
-		assert.Equal(t, "https://github.com/example/repo/pull/42", links[0].URL)
-		_, err = tx.ExecContext(t.Context(), `UPDATE session_project_identity_snapshots SET recorded_git_remote=? WHERE session_id=?`, "https://github.com/example/other.git", s.ID)
-		if err != nil {
-			return err
-		}
-		links, err = storedToolCallPRLinksTx(tx, s.ID)
-		assert.Empty(t, links)
-		return err
-	}))
-}
-
 func TestStagedWriteReplacesToolPRLinks(t *testing.T) {
 	d := testDB(t)
 	s := Session{ID: "staged-tools", Project: "project", Machine: "local", Agent: "codex"}
@@ -496,6 +452,76 @@ func TestArchiveCopyRetainsToolPRLinks(t *testing.T) {
 			recorded, err := destination.GetSessionStructuredPRLinks(t.Context(), "copy-links")
 			require.NoError(t, err)
 			assert.Equal(t, []PRLink{structured}, recorded)
+		})
+	}
+}
+
+func TestToolPRLinksArchiveUpgradeUsageOnly(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d, err := OpenIsolated(t.Context(), path)
+	require.NoError(t, err)
+	require.NoError(t, d.UpsertSession(t.Context(), Session{ID: "tool-archive-usage", Project: "project", Machine: "local", Agent: "claude"}))
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "tool-archive-usage", []Message{
+		{SessionID: "tool-archive-usage", Ordinal: 0, Role: "user", Content: "https://github.com/example/repo/pull/44"},
+		{SessionID: "tool-archive-usage", Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`}}},
+	}))
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links=? WHERE id=?`, `[{"url":"https://github.com/example/repo/pull/44","host":"github.com","repository":"example/repo","number":44}]`, "tool-archive-usage"); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(t.Context(), `DROP TRIGGER IF EXISTS artifact_sessions_update_queue; ALTER TABLE sessions DROP COLUMN tool_pr_links`); err != nil {
+			return err
+		}
+		return writeUserVersion(t.Context(), tx, toolPRLinksDataVersion-1)
+	}))
+	require.NoError(t, d.Close())
+	d, err = OpenIsolatedWithArchiveContent(t.Context(), path, config.ArchiveContentUsage)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = d.Close() })
+	exported, err := d.GetArtifactExportSession(t.Context(), "tool-archive-usage")
+	require.NoError(t, err)
+	require.Len(t, exported.ToolPRLinks, 1)
+	assert.Equal(t, "https://github.com/example/repo/pull/42", exported.ToolPRLinks[0].URL)
+	got, err := d.GetSession(t.Context(), "tool-archive-usage")
+	require.NoError(t, err)
+	assert.Equal(t, exported.ToolPRLinks, got.PRLinks)
+}
+
+func TestArchiveCopyRecoversRecordedRemote(t *testing.T) {
+	for _, tc := range []struct {
+		name, recorded string
+		want           []string
+	}{
+		{"recorded", "git@github.com:example/source.git", []string{"https://github.com/example/source/pull/42", "https://github.com/example/explicit/pull/43"}},
+		{"unrecorded", "", []string{"https://github.com/example/explicit/pull/43"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := testDB(t)
+			require.NoError(t, source.UpsertSession(t.Context(), Session{ID: "copy-recorded", Project: "project", Machine: "local", Agent: "codex", Cwd: "/repo"}))
+			require.NoError(t, source.ReplaceSessionMessages(t.Context(), "copy-recorded", []Message{{SessionID: "copy-recorded", Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{
+				{Category: "Bash", InputJSON: `{"command":"gh pr view 42"}`},
+				{Category: "Bash", InputJSON: `{"command":"gh pr view 43 -R example/explicit"}`},
+			}}}))
+			require.NoError(t, source.Update(t.Context(), func(tx *sql.Tx) error {
+				if _, err := tx.ExecContext(t.Context(), `UPDATE session_project_identity_snapshots SET recorded_git_remote=?, git_remote=?, git_remote_name='origin', remote_candidate_count=1 WHERE session_id='copy-recorded'`, tc.recorded, "https://github.com/example/checkout.git"); err != nil {
+					return err
+				}
+				if _, err := tx.ExecContext(t.Context(), `DROP TRIGGER IF EXISTS artifact_sessions_update_queue; ALTER TABLE sessions DROP COLUMN tool_pr_links`); err != nil {
+					return err
+				}
+				return writeUserVersion(t.Context(), tx, toolPRLinksDataVersion-1)
+			}))
+			dest := testDB(t)
+			dest.SetArchiveContent(config.ArchiveContentTranscripts)
+			_, err := dest.CopyOrphanedDataFromExcluding(t.Context(), source.Path(), nil)
+			require.NoError(t, err)
+			got, err := dest.GetSession(t.Context(), "copy-recorded")
+			require.NoError(t, err)
+			var urls []string
+			for _, link := range got.PRLinks {
+				urls = append(urls, link.URL)
+			}
+			assert.ElementsMatch(t, tc.want, urls)
 		})
 	}
 }

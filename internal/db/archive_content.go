@@ -517,7 +517,7 @@ func applyArchiveContentToCopiedSessionsTx(
 		}
 	}
 	// Derive tool links before the policy below drops copied tool inputs.
-	if err := backfillCopiedToolPRLinksTx(ctx, tx, tempIDsTable, sourceVersion); err != nil {
+	if err := backfillCopiedToolPRLinksTx(ctx, tx, tempIDsTable, sourceVersion, policy.UsageOnly()); err != nil {
 		return err
 	}
 	switch policy {
@@ -554,7 +554,7 @@ func applyArchiveContentToCopiedSessionsTx(
 	return applyConversationPolicyGapsTx(ctx, tx, where)
 }
 
-func backfillCopiedToolPRLinksTx(ctx context.Context, tx *sql.Tx, idsTable string, sourceVersion int) error {
+func backfillCopiedToolPRLinksTx(ctx context.Context, tx *sql.Tx, idsTable string, sourceVersion int, usageOnly bool) error {
 	if sourceVersion >= toolPRLinksDataVersion {
 		return nil
 	}
@@ -562,12 +562,19 @@ func backfillCopiedToolPRLinksTx(ctx context.Context, tx *sql.Tx, idsTable strin
 	if err != nil {
 		return err
 	}
+	hasRecorded := sourceVersion >= projectIdentitySourceSnapshotDataVersion && oldDBHasTable(ctx, tx, "session_project_identity_snapshots") && oldDBHasColumn(ctx, tx, "session_project_identity_snapshots", "recorded_git_remote")
 	for _, id := range ids {
-		links, err := storedToolCallPRLinksTx(tx, id)
+		remote := ""
+		if hasRecorded {
+			if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(p.recorded_git_remote),'') FROM `+idsTable+` copied LEFT JOIN old_db.session_project_identity_snapshots p ON p.session_id=copied.source_id WHERE copied.id=?`, id).Scan(&remote); err != nil {
+				return err
+			}
+		}
+		links, err := storedToolCallPRLinksTx(tx, id, remote)
 		if err != nil {
 			return err
 		}
-		if err := setAndRefreshToolPRLinksTx(tx, id, links, false, false); err != nil {
+		if err := setAndRefreshToolPRLinksTx(tx, id, links, false, usageOnly); err != nil {
 			return err
 		}
 	}

@@ -14,7 +14,6 @@ import (
 	"strings"
 	"sync"
 
-	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -271,11 +270,7 @@ func refreshSessionPromptPRLinksTx(tx transactionQueries, id string) error {
 	if err != nil {
 		return err
 	}
-	toolLinks, err := storedToolCallPRLinksTx(tx, id)
-	if err != nil {
-		return err
-	}
-	return writeSessionPromptPRLinksTx(tx, id, stored, parser.CombinePRLinks(DecodePRLinks(structured), DecodePRLinks(recordedTools), PromptPRLinks(messages), toolLinks))
+	return writeSessionPromptPRLinksTx(tx, id, stored, parser.CombinePRLinks(DecodePRLinks(structured), DecodePRLinks(recordedTools), PromptPRLinks(messages)))
 }
 
 func appendSessionPromptPRLinksTx(tx transactionQueries, id string, messages []Message) error {
@@ -332,7 +327,7 @@ var (
 	codeModeDirRE  = regexp.MustCompile(`["']?(?:workdir|cwd)["']?\s*:`)
 )
 
-func callPRLinks(category, input, cwd, remote string, resolve func(string) string) ([]PRLink, bool) {
+func callPRLinks(category, input, cwd, remote string) ([]PRLink, bool) {
 	if category == "Task" {
 		var payload struct {
 			Prompt  string         `json:"prompt"`
@@ -352,6 +347,7 @@ func callPRLinks(category, input, cwd, remote string, resolve func(string) strin
 	}
 	if !jsontext.Value(input).IsValid() && codeModeExecRE.MatchString(input) {
 		var links []PRLink
+		changedDir := false
 		for _, loc := range codeModeExecRE.FindAllStringIndex(input, -1) {
 			end, depth, quote, escaped := loc[1], 1, byte(0), false
 			for end < len(input) && depth > 0 {
@@ -387,28 +383,16 @@ func callPRLinks(category, input, cwd, remote string, resolve func(string) strin
 			callRemote := remote
 			withoutCommand := commitCommandRE.ReplaceAllString(call, "")
 			if codeModeDirRE.MatchString(withoutCommand) {
-				dir := commitWorkdirRE.FindStringSubmatch(withoutCommand)
-				if len(dir) != 2 {
-					callRemote = ""
-				} else {
-					value := strings.Trim(dir[1], `"'`)
-					valid := true
-					if strings.HasPrefix(dir[1], `"`) {
-						var err error
-						value, err = strconv.Unquote(dir[1])
-						valid = err == nil
-					}
-					if valid {
-						callRemote = toolCallDirectoryRemote(value, cwd, remote, resolve)
-					} else {
-						callRemote = ""
-					}
-				}
+				callRemote = ""
 			}
-			found := parser.CommandPRLinks(command, callRemote)
+			found, changed := parser.CommandPRLinksAndDirectoryChange(command, callRemote)
 			links = parser.CombinePRLinks(links, found)
+			if changed {
+				remote = ""
+				changedDir = true
+			}
 		}
-		return links, false
+		return links, changedDir
 	}
 	var payload struct {
 		Workdir string `json:"workdir"`
@@ -419,40 +403,23 @@ func callPRLinks(category, input, cwd, remote string, resolve func(string) strin
 	if dir == "" {
 		dir = payload.Cwd
 	}
-	remote = toolCallDirectoryRemote(dir, cwd, remote, resolve)
-	return parser.CommandPRLinksAndDirectoryChange(shellCommandText(input), remote)
-}
-
-func toolCallDirectoryRemote(dir, cwd, remote string, resolve func(string) string) string {
-	if dir == "" {
-		return remote
-	}
-	if !filepath.IsAbs(dir) {
-		if cwd == "" {
-			return ""
+	if dir != "" {
+		if !filepath.IsAbs(dir) {
+			dir = filepath.Join(cwd, dir)
 		}
-		dir = filepath.Join(cwd, dir)
+		if cwd == "" || filepath.Clean(dir) != filepath.Clean(cwd) {
+			remote = ""
+		}
 	}
-	if cwd != "" && filepath.Clean(dir) == filepath.Clean(cwd) {
-		return remote
-	}
-	if resolve != nil {
-		return resolve(filepath.Clean(dir))
-	}
-	return ""
+	return parser.CommandPRLinksAndDirectoryChange(shellCommandText(input), remote)
 }
 
 // ToolCallPRLinks derives links from a transcript's tool calls.
 func ToolCallPRLinks(messages []Message, cwd, remote string) []PRLink {
-	return ToolCallPRLinksWithRemoteResolver(messages, cwd, remote, nil)
-}
-
-// ToolCallPRLinksWithRemoteResolver can discover the repository of an explicit workdir.
-func ToolCallPRLinksWithRemoteResolver(messages []Message, cwd, remote string, resolve func(string) string) []PRLink {
 	var links []PRLink
 	for _, message := range messages {
 		for _, call := range message.ToolCalls {
-			found, changed := callPRLinks(call.Category, call.InputJSON, cwd, remote, resolve)
+			found, changed := callPRLinks(call.Category, call.InputJSON, cwd, remote)
 			links = parser.CombinePRLinks(links, found)
 			if changed {
 				remote = ""
@@ -463,22 +430,9 @@ func ToolCallPRLinksWithRemoteResolver(messages []Message, cwd, remote string, r
 	return links
 }
 
-func toolCallRepositoryTx(tx transactionQueries, id string) (string, string, error) {
-	var cwd, remote, recorded string
-	err := tx.QueryRow(`SELECT COALESCE(s.cwd,''), CASE WHEN p.remote_candidate_count=1 AND COALESCE(p.git_remote_name,'')<>'' THEN COALESCE(p.git_remote,'') ELSE '' END, COALESCE(p.recorded_git_remote,'') FROM sessions s LEFT JOIN session_project_identity_snapshots p ON p.session_id=s.id WHERE s.id=?`, id).Scan(&cwd, &remote, &recorded)
-	if remote != "" && recorded != "" {
-		checkout, checkoutOK := export.NormalizeGitRemote(remote)
-		source, sourceOK := export.NormalizeGitRemote(recorded)
-		if !checkoutOK || !sourceOK || checkout != source {
-			remote = ""
-		}
-	}
-	return cwd, remote, err
-}
-
-func storedToolCallPRLinksTx(tx transactionQueries, id string) ([]PRLink, error) {
-	cwd, remote, err := toolCallRepositoryTx(tx, id)
-	if err != nil {
+func storedToolCallPRLinksTx(tx transactionQueries, id, remote string) ([]PRLink, error) {
+	var cwd string
+	if err := tx.QueryRow(`SELECT COALESCE(cwd,'') FROM sessions WHERE id=?`, id).Scan(&cwd); err != nil {
 		return nil, err
 	}
 	rows, err := tx.Query(`SELECT t.category, COALESCE(t.input_json,'') FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND t.category IN ('Bash','Task') ORDER BY m.ordinal, t.id`, id)
@@ -504,15 +458,12 @@ func (db *DB) upgradeToolPRLinksTx(ctx context.Context, tx *sql.Tx) error {
 	if err != nil || version >= toolPRLinksDataVersion {
 		return err
 	}
-	if db.usageOnlyStorage() {
-		return nil
-	}
 	ids, err := sessionIDsTx(ctx, tx, "id IN (SELECT session_id FROM tool_calls WHERE category IN ('Bash','Task'))")
 	if err != nil {
 		return err
 	}
 	for _, id := range ids {
-		if err := backfillToolPRLinksTx(tx, id); err != nil {
+		if err := backfillToolPRLinksTx(tx, id, db.usageOnlyStorage()); err != nil {
 			return fmt.Errorf("backfilling tool PR links: %w", err)
 		}
 	}
@@ -574,10 +525,14 @@ func clearUsageOnlyTextAndStorePRLinksTx(tx transactionQueries, id string, links
 	return clearUsageOnlyTextTx(tx, id)
 }
 
-func backfillToolPRLinksTx(tx transactionQueries, id string) error {
-	links, err := storedToolCallPRLinksTx(tx, id)
+func backfillToolPRLinksTx(tx transactionQueries, id string, usageOnly bool) error {
+	var remote string
+	if err := tx.QueryRow(`SELECT COALESCE(MAX(recorded_git_remote),'') FROM session_project_identity_snapshots WHERE session_id=?`, id).Scan(&remote); err != nil {
+		return err
+	}
+	links, err := storedToolCallPRLinksTx(tx, id, remote)
 	if err != nil {
 		return err
 	}
-	return setAndRefreshToolPRLinksTx(tx, id, links, true, false)
+	return setAndRefreshToolPRLinksTx(tx, id, links, true, usageOnly)
 }
