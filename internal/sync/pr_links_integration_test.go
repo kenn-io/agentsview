@@ -3,6 +3,7 @@ package sync_test
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -15,6 +16,53 @@ import (
 	"go.kenn.io/agentsview/internal/testjsonl"
 	"go.kenn.io/agentsview/internal/testutil"
 )
+
+func TestRetainedForkCommandPRLinks(t *testing.T) {
+	const parent = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	const child = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts} {
+		for _, stage := range []int64{1, 1 << 30} {
+			t.Run(string(policy)+"/"+strconv.FormatInt(stage, 10), func(t *testing.T) {
+				env := setupSingleAgentTestEnv(t, parser.AgentCodex)
+				env.db.SetArchiveContent(policy)
+				env.engine.Close()
+				env.engine = sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
+					AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {env.codexDir}},
+					Machine:   "local", ArchiveContent: policy, StagedCodexParseMinBytes: stage,
+				})
+				t.Cleanup(env.engine.Close)
+				meta := testjsonl.JoinJSONL(testjsonl.CodexForkedSessionMetaJSON(child, parent, "/work/project", "user", tsEarly))
+				old := testjsonl.JoinJSONL(testjsonl.CodexTurnContextWithIDJSON("gpt-5", "old-turn", tsEarly), testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call1", map[string]any{"cmd": "gh pr view 42 -R example/repo"}, tsEarlyS1))
+				fresh := testjsonl.JoinJSONL(testjsonl.CodexTurnContextWithIDJSON("gpt-5", "new-turn", tsEarly), testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call2", map[string]any{"cmd": "echo done"}, tsEarlyS5))
+				path := env.writeCodexSession(t, "2024/01/15", "rollout-20240115-"+child+".jsonl", meta+old)
+				require.Zero(t, env.engine.SyncAll(t.Context(), nil).Failed)
+				want := []string{"https://github.com/example/repo/pull/42"}
+				require.Equal(t, want, storedPRURLs(t, env.db, "codex:"+child))
+				require.NoError(t, os.WriteFile(path, []byte(meta+fresh), 0o600))
+				require.NoError(t, env.engine.TrySyncSessionWithSubagentsContext(t.Context(), "codex:"+child))
+				messages, err := env.db.GetAllMessages(t.Context(), "codex:"+child)
+				require.NoError(t, err)
+				require.Len(t, messages, 2)
+				assert.Equal(t, want, storedPRURLs(t, env.db, "codex:"+child))
+				require.Zero(t, env.engine.ResyncAll(t.Context(), nil).Failed)
+				assert.Equal(t, want, storedPRURLs(t, env.db, "codex:"+child))
+			})
+		}
+	}
+}
+
+func TestClaudeCommandPRLinksReplaceOnRewrite(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
+	path := env.writeClaudeSession(t, "proj", "replace-pr.jsonl", testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("Review", tsEarly),
+		testjsonl.ClaudeAssistantJSON([]map[string]any{{"type": "tool_use", "id": "call", "name": "Bash", "input": map[string]any{"command": "gh pr view 42 -R example/repo"}}}, tsEarlyS1),
+	))
+	require.Zero(t, env.engine.SyncAll(t.Context(), nil).Failed)
+	require.Equal(t, []string{"https://github.com/example/repo/pull/42"}, storedPRURLs(t, env.db, "replace-pr"))
+	require.NoError(t, os.WriteFile(path, []byte(testjsonl.JoinJSONL(testjsonl.ClaudeUserJSON("Done", tsEarly))), 0o600))
+	require.NoError(t, env.engine.TrySyncSessionWithSubagentsContext(t.Context(), "replace-pr"))
+	assert.Empty(t, storedPRURLs(t, env.db, "replace-pr"))
+}
 
 func storedPRURLs(t *testing.T, d *db.DB, id string) []string {
 	t.Helper()

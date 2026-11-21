@@ -19,9 +19,8 @@ import (
 // Keep local reconciliation metadata out of immutable hosted ingest payloads.
 type preparedSessionWrite struct {
 	ingest.PreparedSession
-	codexForkState  *db.CodexForkState
-	stagedToolKeys  map[string]string
-	keepToolPRLinks bool
+	codexForkState *db.CodexForkState
+	stagedToolKeys map[string]string
 }
 
 const codexForkUnresolvedWarning = "Fork parent unavailable. Messages remain visible; unverified history may include parent replay, and its token usage is withheld until reconciliation."

@@ -290,6 +290,15 @@ func (db *DB) GetSessionStructuredPRLinks(ctx context.Context, id string) ([]PRL
 	return DecodePRLinks(encoded), nil
 }
 
+// GetSessionToolPRLinks returns links derived from tool calls.
+func (db *DB) GetSessionToolPRLinks(ctx context.Context, id string) ([]PRLink, error) {
+	var encoded string
+	if err := db.getReader().QueryRowContext(ctx, `SELECT tool_pr_links FROM sessions WHERE id=?`, id).Scan(&encoded); err != nil {
+		return nil, err
+	}
+	return DecodePRLinks(encoded), nil
+}
+
 // promptPRLinksDataVersion is the first data version whose pr_links include
 // links found in retained prompts.
 const promptPRLinksDataVersion = 184

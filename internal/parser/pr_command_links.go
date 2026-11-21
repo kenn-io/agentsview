@@ -42,7 +42,11 @@ func shellCommands(command string) ([]shellCall, bool) {
 			switch n := node.(type) {
 			case *syntax.DeclClause:
 				if n.Variant.Value == "export" {
-					contextUnknown = true
+					for _, arg := range n.Args {
+						if arg.Name == nil || arg.Name.Value == "GH_REPO" || arg.Name.Value == "GH_HOST" {
+							contextUnknown = true
+						}
+					}
 				}
 			case *syntax.CallExpr:
 				for _, assignment := range n.Assigns {
@@ -69,7 +73,12 @@ func shellCommands(command string) ([]shellCall, bool) {
 				case "cd", "pushd", "popd":
 					changedDir = true
 				case "export", "unset":
-					contextUnknown = true
+					for i, name := range call.Words[1:] {
+						name, _, _ = strings.Cut(name, "=")
+						if !call.Literal[i+1] || name == "GH_REPO" || name == "GH_HOST" {
+							contextUnknown = true
+						}
+					}
 				}
 				unwrapped := unwrapShellCall(call)
 				if unwrapped.Unknown {

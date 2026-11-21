@@ -8,6 +8,10 @@ import (
 
 func TestGHPRCommandLinks(t *testing.T) {
 	tests := []struct{ command, remote, want string }{
+		{`export FOO=1; gh pr view 42 -R example/repo`, "", "https://github.com/example/repo/pull/42"},
+		{`unset FOO; gh pr view 42 -R example/repo`, "", "https://github.com/example/repo/pull/42"},
+		{`export GH_REPO=a/b; gh pr view 42 -R example/repo`, "", ""},
+		{`export "$N=x"; gh pr view 42 -R example/repo`, "", ""},
 		{"gh pr view 42 -R example/repo | cat", "", "https://github.com/example/repo/pull/42"},
 		{"{ cd /other; }; gh pr view 42", "https://github.com/example/repo.git", ""},
 		{"{ gh pr view 42 -R example/repo; }", "", "https://github.com/example/repo/pull/42"},

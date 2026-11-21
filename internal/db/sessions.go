@@ -3007,7 +3007,7 @@ func (db *DB) SetSessionDataVersion(ctx context.Context, id string, version int)
 }
 
 // SetSessionDataVersionWithToolPRLinks commits derived command links with the completed parse version.
-func (db *DB) SetSessionDataVersionWithToolPRLinks(ctx context.Context, id string, version int, links []PRLink, replace bool) error {
+func (db *DB) SetSessionDataVersionWithToolPRLinks(ctx context.Context, id string, version int, links []PRLink) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	tx, err := db.getWriter().Begin(ctx)
@@ -3015,7 +3015,7 @@ func (db *DB) SetSessionDataVersionWithToolPRLinks(ctx context.Context, id strin
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := setAndRefreshToolPRLinksTx(tx, id, links, replace, db.usageOnlyStorage()); err != nil {
+	if err := setAndRefreshToolPRLinksTx(tx, id, links, true, db.usageOnlyStorage()); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET data_version=?, local_modified_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?`, version, id); err != nil {

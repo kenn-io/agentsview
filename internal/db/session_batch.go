@@ -38,10 +38,9 @@ type SessionBatchWrite struct {
 	Findings                []SecretFinding
 	// SkipSignalUpdates omits automatic quality-signal and secret-finding
 	// persistence for bounded ingestion callers that do not consume it.
-	SkipSignalUpdates   bool
-	DataVersion         int
-	ReplaceMessages     bool
-	PreserveToolPRLinks bool
+	SkipSignalUpdates bool
+	DataVersion       int
+	ReplaceMessages   bool
 	// KeepTrashedCopyOnlyOnPinLoss limits ReplaceSessionKeepingTrashedCopy to replacements that lose a pin or note.
 	KeepTrashedCopyOnlyOnPinLoss bool
 	// CompleteStoredRows lets an append write complete stored rows at stored ordinals: it sets results on stored calls that are still empty, replaces stored text with longer text that starts with it (IsTextExtension), and fills a missing model or source identity. Rows keep their IDs; other stored rows are untouched.
@@ -650,7 +649,7 @@ func (db *DB) writeOneSessionBatchTx(
 	}
 	if !usageOnly {
 		if replaceMessages || completed > 0 || upsertResult.structuredPRLinksChanged {
-			if err := setAndRefreshToolPRLinksTx(queries, write.Session.ID, write.Session.ToolPRLinks, replaceMessages && !write.PreserveToolPRLinks, false); err != nil {
+			if err := setAndRefreshToolPRLinksTx(queries, write.Session.ID, write.Session.ToolPRLinks, replaceMessages, false); err != nil {
 				return 0, err
 			}
 		} else if err := appendSessionPRLinksWithToolsTx(queries, write.Session.ID, msgs, write.Session.ToolPRLinks); err != nil {
@@ -692,7 +691,7 @@ func (db *DB) writeOneSessionBatchTx(
 		}
 	}
 	if usageOnly {
-		if err := clearUsageOnlyTextAndStorePRLinksTx(queries, write.Session.ID, write.Session.ToolPRLinks, replaceMessages && !write.PreserveToolPRLinks); err != nil {
+		if err := clearUsageOnlyTextAndStorePRLinksTx(queries, write.Session.ID, write.Session.ToolPRLinks, replaceMessages); err != nil {
 			return 0, err
 		}
 	} else if err := updateSessionAutomationFromMessagesTx(
