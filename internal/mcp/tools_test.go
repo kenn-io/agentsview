@@ -2760,3 +2760,34 @@ func TestSearchContent_SessionIDFilter(t *testing.T) {
 	_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", SessionID: "ambiguous", IncludeActive: true})
 	require.ErrorContains(t, err, "ambiguous session UUID")
 }
+
+func TestSessionResolutionQualifiedSuffix(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "host~codex:source", "project")
+	httpServer := httptest.NewUnstartedServer(nil)
+	srv := server.New(config.Config{Host: "127.0.0.1", Port: httpServer.Listener.Addr().(*net.TCPAddr).Port, DataDir: t.TempDir(), WriteTimeout: 30 * time.Second}, d, nil)
+	httpServer.Config.Handler = srv.Handler()
+	httpServer.Start()
+	t.Cleanup(httpServer.Close)
+	remote := &toolset{svc: servicehttp.NewHTTPBackend(httpServer.URL, "", false, "")}
+	for _, toolset := range []*toolset{ts, remote} {
+		_, out, err := toolset.sessionOverview(t.Context(), nil, sessionOverviewIn{SessionID: "codex:source"})
+		require.NoError(t, err)
+		assert.Equal(t, "host~codex:source", out.Session.SessionID)
+	}
+	dbtest.SeedSession(t, d, "codex:source", "project")
+	_, err := d.InsertRecallEntry(t.Context(), db.RecallEntry{
+		ID: "entry", Type: "fact", Scope: "project", Status: "accepted",
+		Title: "entry", Body: "entry", SourceSessionID: "codex:source",
+	})
+	require.NoError(t, err)
+	require.NoError(t, d.SoftDeleteSession(t.Context(), "codex:source"))
+	for _, toolset := range []*toolset{ts, remote} {
+		_, _, err := toolset.sessionOverview(t.Context(), nil, sessionOverviewIn{SessionID: "codex:source"})
+		require.ErrorIs(t, err, service.ErrSessionNotFound)
+		_, out, err := toolset.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "codex:source"})
+		require.NoError(t, err)
+		require.Len(t, out.Entries, 1)
+		assert.Equal(t, "entry", out.Entries[0].ID)
+	}
+}
