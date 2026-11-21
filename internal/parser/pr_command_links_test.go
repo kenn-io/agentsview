@@ -77,6 +77,38 @@ func TestGHPRCommandLinks(t *testing.T) {
 			}
 		})
 	}
+	launcherTests := []struct {
+		command string
+		want    []string
+	}{
+		{`claude --help https://github.com/example/repo/pull/1`, nil},
+		{`claude --model "$MODEL" -p 'review https://github.com/example/repo/pull/11'`, []string{"https://github.com/example/repo/pull/11"}},
+		{`claude -p "$PROMPT"`, nil},
+		{`codex -m "$MODEL" exec 'review https://github.com/example/repo/pull/12'`, []string{"https://github.com/example/repo/pull/12"}},
+		{`claude --model https://github.com/example/repo/pull/2 -p 'hello'`, nil},
+		{`claude --print 'review https://github.com/example/repo/pull/3'`, []string{"https://github.com/example/repo/pull/3"}},
+		{`claude --resume https://github.com/example/repo/pull/10 -p hello`, nil},
+		{`claude -p 'review https://github.com/example/repo/pull/4; report'`, []string{"https://github.com/example/repo/pull/4"}},
+		{`codex --help https://github.com/example/repo/pull/5`, nil},
+		{`codex exec --help https://github.com/example/repo/pull/6`, nil},
+		{`codex exec --output-schema https://github.com/example/repo/pull/7 'hello'`, nil},
+		{`codex -m model exec -C /tmp 'review https://github.com/example/repo/pull/8'`, []string{"https://github.com/example/repo/pull/8"}},
+		{`codex exec resume https://github.com/example/repo/pull/9`, nil},
+		{`timeout 60 claude -p 'review https://github.com/example/repo/pull/43'`, []string{"https://github.com/example/repo/pull/43"}},
+		{`env FOO=bar nohup codex exec 'review https://github.com/example/repo/pull/44'`, []string{"https://github.com/example/repo/pull/44"}},
+		{`GH_HOST=forge.example gh pr comment 42 -R example/alpha --body "$(cat /tmp/pr-comment)"; claude -p 'review https://github.com/example/repo/pull/43'`, []string{"https://forge.example/example/alpha/pull/42", "https://github.com/example/repo/pull/43"}},
+	}
+	for _, tt := range launcherTests {
+		t.Run(tt.command, func(t *testing.T) {
+			links := CommandPRLinks(tt.command, "")
+			var urls []string
+			for _, link := range links {
+				urls = append(urls, link.URL)
+			}
+			assert.Equal(t, tt.want, urls)
+		})
+	}
+
 }
 
 func TestMergePRLinksIdentity(t *testing.T) {
