@@ -492,14 +492,14 @@ func (t *toolset) sessionOverview(
 
 type getMessagesIn struct {
 	SessionID string `json:"session_id" jsonschema:"The session to read."`
-	From      *int   `json:"from,omitempty" jsonschema:"Ordinal to start from (e.g. match_ordinal from search_sessions). Ordinal 0 is a valid anchor (the first message). Mutually exclusive with around."`
-	Direction string `json:"direction,omitempty" jsonschema:"asc (default, oldest first) or desc (newest first). Mutually exclusive with around."`
+	From      *int   `json:"from,omitempty" jsonschema:"Starting ordinal, e.g. match_ordinal from search_sessions. Zero is valid. Mutually exclusive with around."`
+	Direction string `json:"direction,omitempty" jsonschema:"asc (default, oldest first) or desc (newest first). Excludes around."`
 	Limit     int    `json:"limit,omitempty" jsonschema:"Max messages scanned, default 20, max 100. Filtering or the byte budget can return fewer. Around uses before/after instead."`
 	// Around switches to a symmetric window centered on an ordinal instead
 	// of linear pagination; it is mutually exclusive with From/Direction.
-	Around             *int     `json:"around,omitempty" jsonschema:"Center a symmetric window on this ordinal (e.g. match_ordinal from search_content or search_sessions), instead of linear pagination. Mutually exclusive with from and direction."`
-	Before             *int     `json:"before,omitempty" jsonschema:"Messages of context before the around anchor, default 5. Requires around; replaces limit on that path."`
-	After              *int     `json:"after,omitempty" jsonschema:"Messages of context after the around anchor, default 5. Requires around; replaces limit on that path."`
+	Around             *int     `json:"around,omitempty" jsonschema:"Center a window on this ordinal, e.g. match_ordinal from search_content or search_sessions. Excludes from and direction."`
+	Before             *int     `json:"before,omitempty" jsonschema:"Messages before around, default 5. Requires around; replaces limit."`
+	After              *int     `json:"after,omitempty" jsonschema:"Messages after around, default 5. Requires around; replaces limit."`
 	Roles              []string `json:"roles,omitempty" jsonschema:"Roles to include, e.g. tool. Default: user and assistant only. System messages are always excluded."`
 	MaxCharsPerMessage int      `json:"max_chars_per_message,omitempty" jsonschema:"Max characters per message, default 2000, max 20000; the byte budget can shorten it."`
 	ExpectedRevision   string   `json:"expected_revision,omitempty" jsonschema:"Transcript revision cited by search or an earlier read. Returns source_changed when it no longer matches."`
@@ -522,11 +522,11 @@ type getMessagesOut struct {
 	Messages     []messageOut `json:"messages"`
 	Omitted      int          `json:"omitted,omitempty" jsonschema:"Messages held back."`
 	MessageCount int          `json:"message_count,omitempty" jsonschema:"Session message count when cut."`
-	Filtered     int          `json:"filtered,omitempty" jsonschema:"How many of this page's scanned messages were excluded by the role/system filter (omitted when zero). Summed across a full pagination sweep, filtered plus the returned messages adds up to the session's message_count."`
+	Filtered     int          `json:"filtered,omitempty" jsonschema:"Scanned messages excluded by role/system filter. Across all pages, filtered plus returned messages equals message_count."`
 	// NextFrom is set off the last scanned ordinal (not the last visible
 	// one), so paging stays reliable even though filtering can make a page
 	// return fewer than the limit.
-	NextFrom           *int   `json:"next_from,omitempty" jsonschema:"Anchor for the next page's from parameter when more messages may remain; absent means the end. Filtering can make a page return fewer than limit messages, so keep paging until next_from is absent, not until a page comes back short."`
+	NextFrom           *int   `json:"next_from,omitempty" jsonschema:"Next page's from anchor. Page until absent; filtering or the byte budget can make pages short."`
 	TranscriptRevision string `json:"transcript_revision"`
 }
 
@@ -893,9 +893,9 @@ func (t *toolset) getMessageBodyContinuation(
 // --- search_content ---
 
 type searchContentIn struct {
-	Pattern          string   `json:"pattern,omitempty" jsonschema:"Semantic/hybrid query, whitespace-separated literals for terms, substring, or regex over messages, thinking, and tools. Required unless concepts or session_id is set. Fully quoted substring matches exact text. Mutually exclusive with concepts."`
-	Concepts         []string `json:"concepts,omitempty" jsonschema:"Two to five concepts with evidence in the same session, possibly across messages. Always uses semantic mode, does not page, and is mutually exclusive with pattern."`
-	Mode             string   `json:"mode,omitempty" jsonschema:"substring (default), regex, terms, semantic, or hybrid. Prefer hybrid for contextual questions. Hybrid returns keyword matches with a note when search by meaning is unavailable; semantic requires a ready index."`
+	Pattern          string   `json:"pattern,omitempty" jsonschema:"Natural language for semantic/hybrid, whitespace-separated literals for terms, or substring/regex across messages, thinking, and tool inputs/results. Required unless concepts or session_id is set. Fully quoted substring matches its text. Excludes concepts."`
+	Concepts         []string `json:"concepts,omitempty" jsonschema:"Two to five concepts with evidence in the same session, even in different messages. Implies semantic mode; no paging. Excludes pattern."`
+	Mode             string   `json:"mode,omitempty" jsonschema:"substring (default), regex, terms, semantic, or hybrid. Prefer hybrid for context. Without a ready index, hybrid returns keyword matches with a note; semantic requires an index."`
 	Scope            string   `json:"scope,omitempty" jsonschema:"Substring/regex/terms/semantic/hybrid result scope: top, all (default), or subordinate."`
 	Project          string   `json:"project,omitempty" jsonschema:"Restrict to one project."`
 	Agent            string   `json:"agent,omitempty" jsonschema:"Restrict to one agent."`
@@ -905,11 +905,11 @@ type searchContentIn struct {
 	DateFrom         string   `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
 	DateTo           string   `json:"date_to,omitempty" jsonschema:"Only sessions on or before this date (YYYY-MM-DD)."`
 	Limit            int      `json:"limit,omitempty" jsonschema:"Max matches, default 10, max 50; the byte budget can return fewer."`
-	Cursor           int      `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor; also pass activity_cutoff when the recent-activity heuristic applies."`
-	ActivityCutoff   string   `json:"activity_cutoff,omitempty" jsonschema:"RFC3339 cutoff returned by the previous page. Required with a positive cursor when the recent-activity heuristic applies."`
-	IncludeActive    bool     `json:"include_active,omitempty" jsonschema:"Include sessions active in the last 10 minutes in pattern and concept searches. Default false to exclude the current conversation."`
-	IncludeOneShot   bool     `json:"include_one_shot,omitempty" jsonschema:"Include one-shot sessions in pattern and concept searches. Default false."`
-	IncludeAutomated bool     `json:"include_automated,omitempty" jsonschema:"Include automated sessions in pattern and concept searches. Default false."`
+	Cursor           int      `json:"cursor,omitempty" jsonschema:"Previous next_cursor; also pass activity_cutoff when the recent-activity heuristic applies."`
+	ActivityCutoff   string   `json:"activity_cutoff,omitempty" jsonschema:"Previous RFC3339 cutoff. Required with a positive cursor when the recent-activity heuristic applies."`
+	IncludeActive    bool     `json:"include_active,omitempty" jsonschema:"Include sessions active in the last 10 minutes, including this conversation. Default false."`
+	IncludeOneShot   bool     `json:"include_one_shot,omitempty" jsonschema:"Include one-shot sessions. Default false."`
+	IncludeAutomated bool     `json:"include_automated,omitempty" jsonschema:"Include automated sessions. Default false."`
 	Context          int      `json:"context,omitempty" jsonschema:"Messages of context before/after each match (max 10)."`
 }
 
@@ -948,7 +948,7 @@ type contentMatch struct {
 	SnippetCut      bool     `json:"snippet_truncated,omitempty" jsonschema:"Read the full message with get_messages."`
 	MatchedWords    int      `json:"matched_words" jsonschema:"Number of retained query words the match holds in ranked word search; unquoted stop words are dropped. Zero for other searches."`
 	Score           *float64 `json:"score,omitempty" jsonschema:"Relevance score for semantic/hybrid modes; omitted for substring/regex/fts."`
-	OrdinalRange    [2]int   `json:"ordinal_range" jsonschema:"[start, end] ordinals of the conversation unit containing this match; equal to the match ordinal for single-message units."`
+	OrdinalRange    [2]int   `json:"ordinal_range" jsonschema:"[start, end] ordinals of the matching conversation unit; equal for single-message units."`
 	Subordinate     bool     `json:"subordinate,omitzero" jsonschema:"True when this match belongs to a subordinate unit: a sidechain run, or a subagent/fork session."`
 	Relationship    string   `json:"relationship,omitempty" jsonschema:"The matched session's relationship to its parent (for example subagent or fork), when it has one."`
 	ParentSessionID string   `json:"parent_session_id,omitempty" jsonschema:"The parent session ID, when the matched session has one."`
