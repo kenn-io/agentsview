@@ -177,20 +177,30 @@ func (t *toolset) toolCalls(
 	return nil, out, nil
 }
 
-// fitToolCall searches between result lengths where continuation fields change.
-func fitToolCall(out *toolCallsOut, tc service.ToolCall, position int, m db.Message, in toolCallsIn, maxInput int) bool {
+// resultBoundaries lists the result lengths where continuation fields change:
+// the summary's and each saved event's masked length, within the result limit.
+func resultBoundaries(m db.Message, position int, in toolCallsIn) []int {
 	maxResult := clampLimit(in.MaxResultChars, 1000, 10000)
 	boundaries := []int{1, maxResult + 1}
 	if in.IncludeResults {
 		stored := m.ToolCalls[position]
+		texts := []string{stored.ResultContent}
 		for _, ev := range stored.ResultEvents {
-			n := utf8.RuneCountInString(secrets.RedactJSON(ev.Content))
-			if n > 1 && n <= maxResult {
+			texts = append(texts, ev.Content)
+		}
+		for _, text := range texts {
+			if n := utf8.RuneCountInString(secrets.RedactJSON(text)); n > 1 && n <= maxResult {
 				boundaries = append(boundaries, n)
 			}
 		}
 	}
 	slices.Sort(boundaries)
+	return boundaries
+}
+
+// fitToolCall searches between result lengths where continuation fields change.
+func fitToolCall(out *toolCallsOut, tc service.ToolCall, position int, m db.Message, in toolCallsIn, maxInput int) bool {
+	boundaries := resultBoundaries(m, position, in)
 	best := 0
 	build := func(resultChars, inputChars int) bool {
 		narrow := in
