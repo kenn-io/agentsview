@@ -491,14 +491,14 @@ func (t *toolset) sessionOverview(
 
 type getMessagesIn struct {
 	SessionID string `json:"session_id" jsonschema:"The session to read."`
-	From      *int   `json:"from,omitempty" jsonschema:"Starting ordinal, e.g. match_ordinal from search_sessions. Zero is valid. Mutually exclusive with around."`
-	Direction string `json:"direction,omitempty" jsonschema:"asc (default, oldest first) or desc (newest first). Excludes around."`
+	From      *int   `json:"from,omitempty" jsonschema:"Ordinal to start from (e.g. match_ordinal from search_sessions). Ordinal 0 is a valid anchor (the first message). Mutually exclusive with around."`
+	Direction string `json:"direction,omitempty" jsonschema:"asc (default, oldest first) or desc (newest first). Mutually exclusive with around."`
 	Limit     int    `json:"limit,omitempty" jsonschema:"Max messages scanned, default 20, max 100. Filtering or the byte budget can return fewer. Around uses before/after instead."`
 	// Around switches to a symmetric window centered on an ordinal instead
 	// of linear pagination; it is mutually exclusive with From/Direction.
 	Around             *int     `json:"around,omitempty" jsonschema:"Center a window on this ordinal, e.g. match_ordinal from search_content or search_sessions. Excludes from and direction."`
-	Before             *int     `json:"before,omitempty" jsonschema:"Messages before around, default 5. Requires around; replaces limit."`
-	After              *int     `json:"after,omitempty" jsonschema:"Messages after around, default 5. Requires around; replaces limit."`
+	Before             *int     `json:"before,omitempty" jsonschema:"Messages of context before the around anchor, default 5. Requires around; replaces limit on that path."`
+	After              *int     `json:"after,omitempty" jsonschema:"Messages of context after the around anchor, default 5. Requires around; replaces limit on that path."`
 	Roles              []string `json:"roles,omitempty" jsonschema:"Roles to include, e.g. tool. Default: user and assistant only. System messages are always excluded."`
 	MaxCharsPerMessage int      `json:"max_chars_per_message,omitempty" jsonschema:"Max characters per message, default 2000, max 20000; the byte budget can shorten it."`
 	ExpectedRevision   string   `json:"expected_revision,omitempty" jsonschema:"Transcript revision cited by search or an earlier read. Returns source_changed when it no longer matches."`
