@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -55,9 +56,12 @@ func searchField(tool string) string {
 	return ""
 }
 
-func recordToolCall(dir string, req *mcp.CallToolRequest, result mcp.Result, callErr error, elapsed time.Duration) error {
+func recordToolCall(ctx context.Context, dir string, req *mcp.CallToolRequest, result mcp.Result, callErr error, elapsed time.Duration) error {
 	if dir == "" || req == nil || req.Params == nil {
 		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	name := req.Params.Name
 	rec := callRecord{At: time.Now().UTC(), Tool: name, Outcome: "ok", Ms: int(elapsed.Milliseconds())}
@@ -168,7 +172,10 @@ type callAggregate struct {
 }
 
 // SummarizeCalls reads recorded calls within inclusive UTC date bounds.
-func SummarizeCalls(dir, from, to string) ([]CallSummary, error) {
+func SummarizeCalls(ctx context.Context, dir, from, to string) ([]CallSummary, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	files, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return []CallSummary{}, nil
@@ -178,6 +185,9 @@ func SummarizeCalls(dir, from, to string) ([]CallSummary, error) {
 	}
 	groups := map[string]*callAggregate{}
 	for _, file := range files {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		name := file.Name()
 		if file.IsDir() || len(name) != 16 || !strings.HasSuffix(name, ".jsonl") {
 			continue
@@ -192,6 +202,10 @@ func SummarizeCalls(dir, from, to string) ([]CallSummary, error) {
 		}
 		reader := bufio.NewReader(f)
 		for {
+			if err := ctx.Err(); err != nil {
+				_ = f.Close()
+				return nil, err
+			}
 			line, readErr := reader.ReadBytes('\n')
 			if readErr != nil {
 				if readErr != io.EOF {

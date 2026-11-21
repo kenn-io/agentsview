@@ -2,11 +2,14 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/dbtest"
@@ -33,7 +36,7 @@ func TestCallOutcomes(t *testing.T) {
 		require.NotNil(t, result)
 		assert.Equal(t, tc.isError, result.IsError)
 	}
-	rows, err := SummarizeCalls(dir, "", "")
+	rows, err := SummarizeCalls(t.Context(), dir, "", "")
 	require.NoError(t, err)
 	require.Len(t, rows, 3)
 	assert.Equal(t, ToolSearchSessions, rows[0].Tool)
@@ -64,7 +67,7 @@ broken
 `), 0600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "2026-01-03.jsonl"), []byte(`{"at":"2026-01-03T00:00:00Z","tool":"search_docs","outcome":"ok","bytes":90,"ms":20}
 `), 0600))
-	rows, err := SummarizeCalls(dir, "2026-01-02", "2026-01-02")
+	rows, err := SummarizeCalls(t.Context(), dir, "2026-01-02", "2026-01-02")
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, 2, rows[0].Calls)
@@ -72,7 +75,7 @@ broken
 	assert.Equal(t, 4, rows[0].MedianMs)
 	require.NotNil(t, rows[0].EmptyPercent)
 	assert.Equal(t, 50.0, *rows[0].EmptyPercent)
-	rows, err = SummarizeCalls(dir, "2026-01-02", "2026-01-03")
+	rows, err = SummarizeCalls(t.Context(), dir, "2026-01-02", "2026-01-03")
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, 30, rows[0].MedianBytes)
@@ -92,7 +95,7 @@ func TestCallLogPaginationAndRejectedNames(t *testing.T) {
 		_, err := ct.CallTool(t.Context(), callParams(ToolSearchSessions, args))
 		require.NoError(t, err)
 	}
-	rows, err := SummarizeCalls(dir, "", "")
+	rows, err := SummarizeCalls(t.Context(), dir, "", "")
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, 4, rows[0].Calls)
@@ -116,7 +119,7 @@ func TestCallLogLongRecords(t *testing.T) {
 	result, err := ct.CallTool(t.Context(), callParams(ToolSearchSessions, map[string]any{"query": "secret", name: true}))
 	require.NoError(t, err)
 	require.True(t, result.IsError)
-	rows, err := SummarizeCalls(dir, "", "")
+	rows, err := SummarizeCalls(t.Context(), dir, "", "")
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, []CallCount{{Name: name, Count: 1}}, rows[0].Rejected)
@@ -142,8 +145,25 @@ func TestCallLogUnknownTool(t *testing.T) {
 	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
 	_, err := ct.CallTool(t.Context(), callParams("future_tool", nil))
 	require.Error(t, err)
-	rows, err := SummarizeCalls(dir, "", "")
+	rows, err := SummarizeCalls(t.Context(), dir, "", "")
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, "future_tool", rows[0].Tool)
+}
+
+func TestSummarizeCallsCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := SummarizeCalls(ctx, t.TempDir(), "", "")
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestRecordToolCallCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	dir := filepath.Join(t.TempDir(), "calls")
+	req := &mcp.CallToolRequest{Params: &mcp.CallToolParamsRaw{Name: ToolSearchDocs}}
+	require.ErrorIs(t, recordToolCall(ctx, dir, req, nil, nil, time.Second), context.Canceled)
+	_, err := os.Stat(dir)
+	require.ErrorIs(t, err, os.ErrNotExist)
 }

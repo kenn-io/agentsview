@@ -649,3 +649,4 @@ JSON output. Dates use UTC. Records live in the data directory under
 sizes, and durations. Argument values and results are not recorded. Error
 categories are limited to invalid arguments, session not found, and other error.
 Empty search percentages exclude calls with a nonzero pagination cursor.
+Records have no automatic expiry.

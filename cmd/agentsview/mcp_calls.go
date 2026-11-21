@@ -26,7 +26,7 @@ func newMCPCallsCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rows, err := mcpserver.SummarizeCalls(filepath.Join(cfg.DataDir, "mcp", "calls"), from, to)
+			rows, err := mcpserver.SummarizeCalls(cmd.Context(), filepath.Join(cfg.DataDir, "mcp", "calls"), from, to)
 			if err != nil {
 				return err
 			}
