@@ -1255,7 +1255,13 @@ func (t *toolset) searchContent(
 		}
 	}
 	if mode == "semantic" || mode == "hybrid" {
-		data, err := jsonv1.Marshal(res)
+		page := struct {
+			Matches             []db.ContentMatch
+			NextCursor          int
+			EffectiveMode       string
+			ActiveFilterApplied bool
+		}{res.Matches, res.NextCursor, res.EffectiveMode, res.ActiveFilterApplied}
+		data, err := jsonv1.Marshal(page)
 		if err != nil {
 			return nil, searchContentOut{}, err
 		}

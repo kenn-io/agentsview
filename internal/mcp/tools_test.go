@@ -2491,6 +2491,10 @@ func TestSearchContent_BudgetCursorRejectsChangedPageAndVersion(t *testing.T) {
 	require.NoError(t, err)
 	_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{PageCursor: base64.RawURLEncoding.EncodeToString(data)})
 	require.ErrorContains(t, err, "invalid page_cursor")
+	fake.result.Coverage.Status = service.MemoryReady
+	_, resumed, err := ts.searchContent(t.Context(), nil, searchContentIn{PageCursor: first.PageCursor})
+	require.NoError(t, err)
+	assert.NotEmpty(t, resumed.Matches)
 	fake.result.Matches[0].Snippet = "changed"
 	_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{PageCursor: first.PageCursor})
 	require.ErrorIs(t, err, service.ErrSourceChanged)
@@ -2545,4 +2549,81 @@ func TestGetMessages_BudgetAroundBodyContinuation(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, out.Messages, 2)
 	assert.Equal(t, []int{0, 2}, []int{out.Messages[0].Ordinal, out.Messages[1].Ordinal})
+}
+
+func TestGetMessages_BudgetPagesAndBodyCursors(t *testing.T) {
+	ts, d := newTestToolset(t)
+	messages := make([]db.Message, 21)
+	for i := range messages {
+		messages[i] = dbtest.UserMsg("page-bodies", i, fmt.Sprintf("%02d:", i)+strings.Repeat("<&界", 700))
+	}
+	dbtest.SeedSessionWithMessages(t, d, "page-bodies", "proj", messages, dbtest.WithMessageCounts(21, 21))
+	anchor, before, after := 10, 10, 10
+	for _, around := range []bool{false, true} {
+		t.Run(fmt.Sprintf("around=%t", around), func(t *testing.T) {
+			in := getMessagesIn{SessionID: "page-bodies", Limit: 21, MaxCharsPerMessage: 700}
+			if around {
+				in.Limit = 0
+				in.Around, in.Before, in.After = &anchor, &before, &after
+			}
+			got := make(map[int]string)
+			for {
+				_, out, err := ts.getMessages(t.Context(), nil, in)
+				require.NoError(t, err)
+				require.NotEmpty(t, out.Messages)
+				assert.True(t, fitsResponse(out))
+				var nextFrom *int
+				var nextPage string
+				for _, message := range out.Messages {
+					_, exists := got[message.Ordinal]
+					assert.False(t, exists)
+					content := message.Content
+					cursor := message.BodyCursor
+					require.NotEmpty(t, cursor)
+					for cursor != "" {
+						_, body, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "page-bodies", BodyCursor: cursor, MaxCharsPerMessage: 700})
+						require.NoError(t, err)
+						require.Len(t, body.Messages, 1)
+						assert.True(t, fitsResponse(body))
+						content += body.Messages[0].Content
+						cursor = body.Messages[0].BodyCursor
+						if cursor == "" {
+							nextFrom, nextPage = body.NextFrom, body.PageCursor
+						}
+					}
+					got[message.Ordinal] = content
+				}
+				if nextPage != "" {
+					in = getMessagesIn{SessionID: "page-bodies", PageCursor: nextPage}
+					continue
+				}
+				if nextFrom != nil && !around {
+					in = getMessagesIn{SessionID: "page-bodies", From: nextFrom, Limit: 21, MaxCharsPerMessage: 700}
+					continue
+				}
+				break
+			}
+			require.Len(t, got, len(messages))
+			for _, message := range messages {
+				assert.Equal(t, message.Content, got[message.Ordinal])
+			}
+		})
+	}
+}
+
+func TestGetMessages_AroundPageCursorRejectsChangedTranscript(t *testing.T) {
+	ts, d := newTestToolset(t)
+	messages := make([]db.Message, 21)
+	for i := range messages {
+		messages[i] = dbtest.UserMsg("around-changed", i, strings.Repeat("x", 2000))
+	}
+	dbtest.SeedSessionWithMessages(t, d, "around-changed", "proj", messages, dbtest.WithMessageCounts(21, 21))
+	anchor, before, after := 10, 10, 10
+	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "around-changed", Around: &anchor, Before: &before, After: &after})
+	require.NoError(t, err)
+	require.NotEmpty(t, first.PageCursor)
+	messages[0] = dbtest.UserMsg("around-changed", 0, "changed")
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "around-changed", messages))
+	_, _, err = ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "around-changed", PageCursor: first.PageCursor})
+	require.ErrorIs(t, err, service.ErrSourceChanged)
 }
