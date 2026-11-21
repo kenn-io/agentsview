@@ -541,7 +541,6 @@ type messageBodyCursor struct {
 }
 
 func encodeMessageBodyCursor(cursor messageBodyCursor) string {
-	cursor.Version = 2
 	raw, _ := json.Marshal(cursor)
 	return base64.RawURLEncoding.EncodeToString(raw)
 }
@@ -719,16 +718,28 @@ func (t *toolset) fitMessagePage(ctx context.Context, out *getMessagesOut, scann
 		return fmt.Errorf("session not found: %s", in.SessionID)
 	}
 	out.MessageCount = detail.MessageCount
-	out.Omitted = len(items)
-	next := int(^uint(0) >> 1)
-	out.NextFrom = &next
-	out.Messages = items
-	attachBodyCursors(out, source, in.SessionID, in.Roles)
-	out.NextFrom = &next
-	out.Messages = []messageOut{}
-	n := fitItems(out, items)
+	n := fitPrefix(len(items), func(k int) bool {
+		out.Messages = items[:k]
+		out.Omitted = len(items) - k
+		out.NextFrom = baseNext
+		if k < len(items) && k > 0 {
+			next := items[k-1].Ordinal + 1
+			if in.Direction == "desc" {
+				next = items[k-1].Ordinal - 1
+			}
+			out.NextFrom = &next
+		}
+		attachBodyCursors(out, source, in.SessionID, in.Roles)
+		return fitsResponse(out)
+	})
 	if n == 0 && len(items) > 0 {
 		n = 1
+		next := items[0].Ordinal + 1
+		if in.Direction == "desc" {
+			next = items[0].Ordinal - 1
+		}
+		out.NextFrom = &next
+		out.Omitted = len(items) - 1
 		if err := fitOneMessage(out, &items[0], messageBodyCursor{EvidenceSource: source, SessionID: in.SessionID, Revision: out.TranscriptRevision, Ordinal: items[0].Ordinal, NextFrom: out.NextFrom, Roles: in.Roles}); err != nil {
 			return err
 		}
@@ -747,7 +758,7 @@ func (t *toolset) fitMessagePage(ctx context.Context, out *getMessagesOut, scann
 				out.Filtered++
 			}
 		}
-		next = out.Messages[n-1].Ordinal + 1
+		next := out.Messages[n-1].Ordinal + 1
 		if in.Direction == "desc" {
 			next = out.Messages[n-1].Ordinal - 1
 		}
@@ -758,9 +769,6 @@ func (t *toolset) fitMessagePage(ctx context.Context, out *getMessagesOut, scann
 }
 
 func fitOneMessage(out *getMessagesOut, item *messageOut, cursor messageBodyCursor) error {
-	if cursor.EvidenceSource == "" || cursor.Revision == "" {
-		return errors.New("message exceeds budget without a body cursor")
-	}
 	item.Truncated = true
 	if item.FullLength == 0 {
 		item.FullLength = utf8.RuneCountInString(item.Content)
@@ -778,6 +786,9 @@ func fitOneMessage(out *getMessagesOut, item *messageOut, cursor messageBodyCurs
 	}
 	cursor.Offset = start + utf8.RuneCountInString(item.Content)
 	item.BodyCursor = encodeMessageBodyCursor(cursor)
+	if cursor.EvidenceSource == "" || cursor.Revision == "" {
+		item.BodyCursor = ""
+	}
 	return nil
 }
 
@@ -801,7 +812,7 @@ func attachBodyCursors(
 		}
 		hasBodyCursor = true
 		out.Messages[i].BodyCursor = encodeMessageBodyCursor(messageBodyCursor{
-			EvidenceSource: evidenceSource, SessionID: sessionID,
+			Version: 2, EvidenceSource: evidenceSource, SessionID: sessionID,
 			Revision: out.TranscriptRevision, Ordinal: out.Messages[i].Ordinal,
 			Offset: utf8.RuneCountInString(out.Messages[i].Content), NextFrom: nextFrom,
 			Roles: roles,
@@ -883,9 +894,9 @@ func (t *toolset) getMessageBodyContinuation(
 // --- search_content ---
 
 type searchContentIn struct {
-	Pattern          string   `json:"pattern,omitempty" jsonschema:"Natural language for semantic/hybrid, whitespace-separated literals for terms, or substring/regex across messages, thinking, and tool inputs/results. Required unless concepts or session_id is set. Fully quoted substring matches its text. Excludes concepts."`
-	Concepts         []string `json:"concepts,omitempty" jsonschema:"Two to five concepts with evidence in the same session, even in different messages. Implies semantic mode; no paging. Excludes pattern."`
-	Mode             string   `json:"mode,omitempty" jsonschema:"substring (default), regex, terms, semantic, or hybrid. Prefer hybrid for context. Without a ready index, hybrid returns keyword matches with a note; semantic requires an index."`
+	Pattern          string   `json:"pattern,omitempty" jsonschema:"Semantic/hybrid query, whitespace-separated literals for terms, substring, or regex over messages, thinking, and tools. Required unless concepts or session_id is set. Fully quoted substring matches exact text. Mutually exclusive with concepts."`
+	Concepts         []string `json:"concepts,omitempty" jsonschema:"Two to five concepts with evidence in the same session, possibly across messages. Always uses semantic mode, does not page, and is mutually exclusive with pattern."`
+	Mode             string   `json:"mode,omitempty" jsonschema:"substring (default), regex, terms, semantic, or hybrid. Prefer hybrid for contextual questions. Hybrid returns keyword matches with a note when search by meaning is unavailable; semantic requires a ready index."`
 	Scope            string   `json:"scope,omitempty" jsonschema:"Substring/regex/terms/semantic/hybrid result scope: top, all (default), or subordinate."`
 	Project          string   `json:"project,omitempty" jsonschema:"Restrict to one project."`
 	Agent            string   `json:"agent,omitempty" jsonschema:"Restrict to one agent."`
@@ -895,11 +906,11 @@ type searchContentIn struct {
 	DateFrom         string   `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
 	DateTo           string   `json:"date_to,omitempty" jsonschema:"Only sessions on or before this date (YYYY-MM-DD)."`
 	Limit            int      `json:"limit,omitempty" jsonschema:"Max matches, default 10, max 50; the byte budget can return fewer."`
-	Cursor           int      `json:"cursor,omitempty" jsonschema:"Previous next_cursor; also pass activity_cutoff when the recent-activity heuristic applies."`
-	ActivityCutoff   string   `json:"activity_cutoff,omitempty" jsonschema:"Previous RFC3339 cutoff. Required with a positive cursor when the recent-activity heuristic applies."`
-	IncludeActive    bool     `json:"include_active,omitempty" jsonschema:"Include sessions active in the last 10 minutes, including this conversation. Default false."`
-	IncludeOneShot   bool     `json:"include_one_shot,omitempty" jsonschema:"Include one-shot sessions. Default false."`
-	IncludeAutomated bool     `json:"include_automated,omitempty" jsonschema:"Include automated sessions. Default false."`
+	Cursor           int      `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor; also pass activity_cutoff when the recent-activity heuristic applies."`
+	ActivityCutoff   string   `json:"activity_cutoff,omitempty" jsonschema:"RFC3339 cutoff returned by the previous page. Required with a positive cursor when the recent-activity heuristic applies."`
+	IncludeActive    bool     `json:"include_active,omitempty" jsonschema:"Include sessions active in the last 10 minutes in pattern and concept searches. Default false to exclude the current conversation."`
+	IncludeOneShot   bool     `json:"include_one_shot,omitempty" jsonschema:"Include one-shot sessions in pattern and concept searches. Default false."`
+	IncludeAutomated bool     `json:"include_automated,omitempty" jsonschema:"Include automated sessions in pattern and concept searches. Default false."`
 	Context          int      `json:"context,omitempty" jsonschema:"Messages of context before/after each match (max 10)."`
 }
 
@@ -935,10 +946,10 @@ type contentMatch struct {
 	Ordinal         int      `json:"ordinal"`
 	Timestamp       string   `json:"timestamp"`
 	Snippet         string   `json:"snippet"`
-	SnippetCut      bool     `json:"snippet_truncated,omitempty" jsonschema:"Read the full message with get_messages."`
+	Truncated       bool     `json:"truncated,omitempty" jsonschema:"Read the full message and context with get_messages."`
 	MatchedWords    int      `json:"matched_words" jsonschema:"Number of retained query words the match holds in ranked word search; unquoted stop words are dropped. Zero for other searches."`
 	Score           *float64 `json:"score,omitempty" jsonschema:"Relevance score for semantic/hybrid modes; omitted for substring/regex/fts."`
-	OrdinalRange    [2]int   `json:"ordinal_range" jsonschema:"[start, end] ordinals of the matching conversation unit; equal for single-message units."`
+	OrdinalRange    [2]int   `json:"ordinal_range" jsonschema:"[start, end] ordinals of the conversation unit containing this match; equal to the match ordinal for single-message units."`
 	Subordinate     bool     `json:"subordinate,omitzero" jsonschema:"True when this match belongs to a subordinate unit: a sidechain run, or a subagent/fork session."`
 	Relationship    string   `json:"relationship,omitempty" jsonschema:"The matched session's relationship to its parent (for example subagent or fork), when it has one."`
 	ParentSessionID string   `json:"parent_session_id,omitempty" jsonschema:"The parent session ID, when the matched session has one."`
@@ -946,7 +957,6 @@ type contentMatch struct {
 	// ContextBefore/ContextAfter are populated when Context > 0: the N
 	// messages immediately before/after this match, content truncated to
 	// 500 characters.
-	ContextTruncated   bool                 `json:"context_truncated,omitempty" jsonschema:"Read omitted context with get_messages."`
 	ContextBefore      []contextMessage     `json:"context_before,omitempty"`
 	ContextAfter       []contextMessage     `json:"context_after,omitempty"`
 	TranscriptRevision string               `json:"transcript_revision,omitempty" jsonschema:"Transcript revision observed with this evidence; pass it as expected_revision to get_messages."`
@@ -1036,32 +1046,6 @@ func (t *toolset) countContentMatches(ctx context.Context, req service.ContentSe
 		}
 		cursor = res.NextCursor
 	}
-}
-
-func (t *toolset) contentSearchTotal(ctx context.Context, req service.ContentSearchRequest, res *service.ContentSearchResult, mode string, legacy bool, keep func(db.ContentMatch) bool) (int, bool, error) {
-	if mode == "semantic" || mode == "hybrid" {
-		total := 0
-		for _, m := range res.Matches {
-			if !legacy || keep(m) {
-				total++
-			}
-		}
-		return total, true, nil
-	}
-	if legacy {
-		return t.countContentMatches(ctx, req, 0, 0, keep)
-	}
-	if res.NextCursor > 0 {
-		return t.countContentMatches(ctx, req, res.NextCursor, res.NextCursor, nil)
-	}
-	if len(res.Matches) > 0 {
-		total := req.Cursor + len(res.Matches)
-		return min(total, contentTotalCap), total > contentTotalCap, nil
-	}
-	if req.Cursor > 0 {
-		return t.countContentMatches(ctx, req, 0, 0, nil)
-	}
-	return 0, false, nil
 }
 
 func (t *toolset) searchContent(
@@ -1175,12 +1159,6 @@ func (t *toolset) searchContent(
 			return !isActiveSince(ts, cutoffTime.Add(activeExclusionWindow))
 		}
 	}
-	if len(in.Concepts) == 0 {
-		out.Total, out.TotalCapped, err = t.contentSearchTotal(ctx, req, res, mode, legacy, keepMatch)
-		if err != nil {
-			return nil, searchContentOut{}, err
-		}
-	}
 	rawIndexes := make([]int, 0, len(res.Matches))
 	for i, m := range res.Matches {
 		if legacy && !keepMatch(m) {
@@ -1210,41 +1188,55 @@ func (t *toolset) searchContent(
 	// Hints come only with an empty page, which stays far under the budget.
 	if len(in.Concepts) == 0 && len(out.Matches) > 0 && !fitsResponse(out) {
 		items := out.Matches
-		originalNext, originalNote := out.NextCursor, out.Note
-		if mode == "semantic" || mode == "hybrid" {
-			out.Note = strings.TrimSpace(out.Note + " Reduce limit to fit ranked results in one response.")
+		ranked := mode == "semantic" || mode == "hybrid"
+		if ranked {
+			out.Total, out.TotalCapped = len(items), true
+		} else {
+			var keep func(db.ContentMatch) bool
+			if legacy {
+				keep = keepMatch
+			}
+			out.Total, out.TotalCapped, err = t.countContentMatches(ctx, req, 0, 0, keep)
+			if err != nil {
+				return nil, searchContentOut{}, err
+			}
 		}
-		out.Matches = []contentMatch{}
-		out.Omitted = len(items)
-		next := int(^uint(0) >> 1)
-		out.NextCursor = &next
-		n := fitItems(out, items)
+		originalNext, originalNote := out.NextCursor, out.Note
+		n := fitPrefix(len(items), func(k int) bool {
+			out.Matches = items[:k]
+			out.Omitted = len(items) - k
+			out.NextCursor, out.Note = originalNext, originalNote
+			if k < len(items) {
+				if ranked {
+					out.NextCursor = nil
+					out.Note = strings.TrimSpace(originalNote + " Reduce limit to fit ranked results in one response.")
+				} else if k > 0 {
+					next := in.Cursor + rawIndexes[k-1] + 1
+					out.NextCursor = &next
+				}
+			}
+			return fitsResponse(out)
+		})
 		if n == 0 {
-			n = 1
 			m := &items[0]
-			m.ContextTruncated = len(m.ContextBefore) > 0 || len(m.ContextAfter) > 0
+			m.Truncated = true
 			m.ContextBefore, m.ContextAfter = nil, nil
-			originalSnippet := m.Snippet
-			m.SnippetCut = true
+			out.Omitted = len(items) - 1
+			if !ranked {
+				next := in.Cursor + rawIndexes[0] + 1
+				out.NextCursor = &next
+			}
 			envelope, err := marshalResponseSize(out)
 			if err != nil {
 				return nil, searchContentOut{}, err
 			}
 			m.Snippet = fitText(m.Snippet, responseBudgetBytes-len(envelope), func(text string) any { match := *m; match.Snippet = text; return match })
-			m.SnippetCut = m.Snippet != originalSnippet
-		}
-		out.Matches = items[:n]
-		out.Omitted = len(items) - n
-		if out.Omitted == 0 {
-			out.NextCursor, out.Note = originalNext, originalNote
-		} else {
-			if mode == "semantic" || mode == "hybrid" {
-				out.NextCursor = nil
-			} else {
-				next := in.Cursor + rawIndexes[n-1] + 1
-				out.NextCursor = &next
+			out.Matches = items[:1]
+			if out.Omitted == 0 {
+				out.Note = originalNote
 			}
 		}
+
 	}
 	return nil, out, nil
 }

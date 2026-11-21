@@ -102,28 +102,11 @@ func fitsResponse(out any) bool {
 	return err == nil && len(data) <= responseBudgetBytes
 }
 
-// fitItems counts the JSON encoding of an empty envelope and each array item.
-// Callers reserve space for continuation metadata in envelope first.
-func fitItems[T any](envelope any, items []T) int {
-	data, err := marshalResponseSize(envelope)
-	if err != nil {
-		return 0
-	}
-	size := len(data) + 32
-	for i, item := range items {
-		data, err = marshalResponseSize(item)
-		if err != nil {
-			return i
-		}
-		size += len(data)
-		if i > 0 {
-			size++
-		}
-		if size > responseBudgetBytes {
-			return i
-		}
-	}
-	return len(items)
+// fitPrefix selects the largest fitting prefix and leaves it built.
+func fitPrefix(n int, build func(int) bool) int {
+	k := sort.Search(n+1, func(i int) bool { return !build(i) })
+	build(k - 1)
+	return k - 1
 }
 
 // fitText returns the longest rune prefix whose encoded item fits its budget.

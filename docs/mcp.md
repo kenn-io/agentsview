@@ -335,7 +335,7 @@ includes child sessions.
 
 Pattern searches, `get_messages`, and `get_tool_calls` cap the JSON text of
 each response at 12,000 bytes. When that cuts a page, `omitted` counts the
-items held back. Pattern searches report `total` on every page. When
+items held back. A cut search page reports `total`. When
 `total_capped` is true, at least that many matches exist. For semantic and
 hybrid searches, `total` counts the ranked page and is always a lower bound.
 A zero total is omitted. A cut message page reports the session's `message_count`;
@@ -347,7 +347,7 @@ matches. Search context or snippets marked as truncated
 can be read with `get_messages`.
 
 When `next_cursor` is present, pass it as `cursor` and echo the returned
-RFC3339 `activity_cutoff` unchanged. The total is recounted up to 500. The
+RFC3339 `activity_cutoff` unchanged. A cut page's total is counted up to 500. The
 cutoff keeps the recent-activity exclusion fixed across pages of an unchanged
 archive, including on older servers. A positive cursor without the cutoff
 returns a restart error when that exclusion applies. `include_active: true`
@@ -382,10 +382,8 @@ short page can have a `next_from` and should be continued.
 `get_tool_calls` lists one session's tool calls in order, up to 50 per page
 (maximum 200). Set `category` to `Edit`, `Write`, `Bash`, or another tool
 category to narrow the list. Each input has secret-shaped values masked and is
-cut to `max_input_chars` (default 500, maximum 10000). If the response byte budget splits an input, pass `next_cursor` as `cursor`
-and `next_input_offset` as `input_offset`, keeping the other arguments unchanged.
-Join the returned input fragments. An `input_truncated` flag means the input
-exceeded `max_input_chars`; increase that limit to read more, up to the maximum. Pass a call's `ordinal` to
+cut to `max_input_chars` (default 500, maximum 10000) or the response byte budget.
+An `input_truncated` flag marks a shortened input. Pass a call's `ordinal` to
 `get_messages` to read the surrounding conversation.
 
 `get_recent_edits` matches `path` as a case-insensitive substring of edited file

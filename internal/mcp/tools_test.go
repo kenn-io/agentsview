@@ -2438,22 +2438,14 @@ func (f *pagedContentSearchService) Get(_ context.Context, _ string) (*service.S
 
 func TestSearchContent_Total(t *testing.T) {
 	for _, tc := range []struct {
-		name                          string
-		count, limit, cursor, context int
-		want, calls                   int
-		capped, legacy                bool
-		mode                          string
-		wantScan                      *int
+		name           string
+		count, want    int
+		capped, legacy bool
+		mode           string
 	}{
-		{name: "legacy", count: 36, limit: 10, want: 18, calls: 2, legacy: true},
-		{name: "legacy capped", count: 600, limit: 10, want: 250, calls: 11, capped: true, legacy: true},
-		{name: "ranked", count: 20, limit: 20, want: 20, calls: 1, capped: true, mode: "semantic"},
-		{name: "ranked legacy", count: 20, limit: 20, want: 10, calls: 1, capped: true, legacy: true, mode: "semantic"},
-		{name: "first page", count: 36, limit: 10, context: 3, want: 36, calls: 2},
-		{name: "continued page", count: 36, limit: 10, cursor: 10, want: 36, calls: 2, wantScan: new(20)},
-		{name: "cursor past end", count: 6, limit: 10, cursor: 1000, want: 6, calls: 2, wantScan: new(0)},
-		{name: "capped", count: 600, limit: 10, want: 500, calls: 11, capped: true},
-		{name: "exactly at cap", count: 500, limit: 10, cursor: 490, want: 500, calls: 1},
+		{name: "legacy", count: 36, want: 18, legacy: true},
+		{name: "capped", count: 600, want: 500, capped: true},
+		{name: "ranked", count: 20, want: 20, capped: true, mode: "semantic"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := &pagedContentSearchService{matches: make([]db.ContentMatch, tc.count), legacy: tc.legacy}
@@ -2462,21 +2454,13 @@ func TestSearchContent_Total(t *testing.T) {
 				if i%2 == 0 {
 					timestamp = "2024-06-15T11:00:00Z"
 				}
-				fake.matches[i] = db.ContentMatch{SessionID: "session", Ordinal: i, Timestamp: timestamp}
+				fake.matches[i] = db.ContentMatch{SessionID: "session", Ordinal: i, Timestamp: timestamp, Snippet: strings.Repeat("x", 2000)}
 			}
 			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
-			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Mode: tc.mode, IncludeActive: !tc.legacy, Limit: tc.limit, Cursor: tc.cursor, Context: tc.context})
+			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Mode: tc.mode, IncludeActive: !tc.legacy, Limit: 20})
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, out.Total)
 			assert.Equal(t, tc.capped, out.TotalCapped)
-			require.Len(t, fake.requests, tc.calls)
-			if tc.wantScan != nil {
-				assert.Equal(t, *tc.wantScan, fake.requests[1].Cursor)
-			}
-			for _, req := range fake.requests[1:] {
-				assert.Zero(t, req.Context)
-				assert.Equal(t, 50, req.Limit)
-			}
 		})
 	}
 }
@@ -2492,7 +2476,7 @@ func TestSearchContent_BudgetLongSnippet(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, out.Matches, 1)
 	assert.True(t, fitsResponse(out))
-	assert.True(t, out.Matches[0].SnippetCut)
+	assert.True(t, out.Matches[0].Truncated)
 	assert.Equal(t, "session", out.Matches[0].SessionID)
 	assert.Equal(t, 1, out.Matches[0].Ordinal)
 	assert.Equal(t, "revision", out.Matches[0].TranscriptRevision)

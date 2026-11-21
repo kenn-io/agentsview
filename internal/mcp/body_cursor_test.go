@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -80,6 +81,40 @@ func TestGetMessages_TruncatedWithoutRevisionBindingsKeepsPagination(t *testing.
 	require.NotNil(t, out.NextFrom,
 		"pagination must remain available when no cursor is issued")
 	assert.Equal(t, 1, *out.NextFrom)
+}
+
+func TestGetMessages_OversizedWithoutRevisionBindingsKeepsPagination(t *testing.T) {
+	content := strings.Repeat("<", 20000)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if !strings.HasSuffix(r.URL.Path, "/messages") {
+			_, _ = w.Write([]byte(`{"id":"legacy","message_count":2}`))
+			return
+		}
+		messages := []db.Message{dbtest.UserMsg("legacy", 0, content), dbtest.UserMsg("legacy", 1, "next")}
+		if r.URL.Query().Get("from") == "1" {
+			messages = messages[1:]
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"messages": messages, "count": len(messages)})
+	}))
+	t.Cleanup(srv.Close)
+
+	ts := &toolset{svc: servicehttp.NewHTTPBackend(srv.URL, "", false, ""), now: func() time.Time { return fixedNow }}
+	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "legacy", Limit: 2, MaxCharsPerMessage: 20000})
+	require.NoError(t, err)
+	require.Len(t, first.Messages, 1)
+	assert.True(t, first.Messages[0].Truncated)
+	assert.NotEmpty(t, first.Messages[0].Content)
+	assert.True(t, strings.HasPrefix(content, first.Messages[0].Content))
+	assert.Empty(t, first.Messages[0].BodyCursor)
+	raw, err := json.Marshal(first)
+	require.NoError(t, err)
+	assert.LessOrEqual(t, len(raw), responseBudgetBytes)
+	require.NotNil(t, first.NextFrom)
+	_, next, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "legacy", From: first.NextFrom, Limit: 2})
+	require.NoError(t, err)
+	require.Len(t, next.Messages, 1)
+	assert.Equal(t, "next", next.Messages[0].Content)
 }
 
 // A cursor issued under explicit roles must continue under exactly those

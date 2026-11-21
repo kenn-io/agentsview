@@ -85,8 +85,6 @@ func TestGetToolCalls_FiltersPagesAndMasksSecrets(t *testing.T) {
 	require.ErrorContains(t, err, "session not found")
 	_, _, err = ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "s1", Cursor: -1})
 	require.Error(t, err)
-	_, _, err = ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "s1", InputOffset: -1})
-	require.ErrorContains(t, err, "input_offset")
 }
 
 func TestGetRecentEdits_PagesByFile(t *testing.T) {
@@ -348,30 +346,17 @@ func TestGetToolCalls_BudgetOversizedInput(t *testing.T) {
 		toolCallMsg("large-input", 0, db.ToolCall{ToolName: "Bash", Category: "Bash", InputJSON: input}),
 		toolCallMsg("large-input", 1, db.ToolCall{ToolName: "Bash", Category: "Bash", InputJSON: "next"}),
 	)
-	in := toolCallsIn{SessionID: "large-input", MaxInputChars: 10000}
-	var got strings.Builder
-	var ordinals []int
-	for {
-		_, out, err := ts.toolCalls(t.Context(), nil, in)
-		require.NoError(t, err)
-		assert.True(t, fitsResponse(out))
-		assert.Equal(t, 2, out.Total)
-		for _, call := range out.ToolCalls {
-			ordinals = append(ordinals, call.Ordinal)
-			if call.Ordinal == 0 {
-				got.WriteString(call.Input)
-				assert.False(t, call.InputTruncated)
-			} else {
-				assert.Equal(t, "next", call.Input)
-			}
-		}
-		if out.NextCursor == nil {
-			break
-		}
-		in.Cursor = *out.NextCursor
-		in.InputOffset = out.NextInputOffset
-	}
-	assert.Equal(t, input, got.String())
-	require.GreaterOrEqual(t, len(ordinals), 2)
-	assert.Equal(t, 1, ordinals[len(ordinals)-1])
+	_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "large-input", MaxInputChars: 10000})
+	require.NoError(t, err)
+	require.Len(t, out.ToolCalls, 1)
+	assert.True(t, fitsResponse(out))
+	assert.True(t, out.ToolCalls[0].InputTruncated)
+	assert.True(t, strings.HasPrefix(input, out.ToolCalls[0].Input))
+	require.NotNil(t, out.NextCursor)
+	assert.Equal(t, 1, *out.NextCursor)
+	_, next, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "large-input", Cursor: *out.NextCursor})
+	require.NoError(t, err)
+	require.Len(t, next.ToolCalls, 1)
+	assert.Equal(t, "next", next.ToolCalls[0].Input)
+
 }
