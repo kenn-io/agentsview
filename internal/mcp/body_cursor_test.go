@@ -118,6 +118,9 @@ func TestGetMessages_BodyCursorContinuesUnderIssuingRoles(t *testing.T) {
 	require.Equal(t, "tool", first.Messages[0].Role)
 	require.Equal(t, "remainder text"[:4], first.Messages[0].Content)
 	require.NotEmpty(t, first.Messages[0].BodyCursor)
+	cursor, err := decodeMessageBodyCursor(first.Messages[0].BodyCursor)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"tool"}, cursor.Roles)
 
 	_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{
 		SessionID: "toolroles", BodyCursor: first.Messages[0].BodyCursor,

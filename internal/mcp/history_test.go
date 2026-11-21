@@ -388,48 +388,40 @@ func TestGetToolCalls_BudgetOversized(t *testing.T) {
 	}
 }
 
-func TestGetToolCalls_BudgetLongInputWithShortEvents(t *testing.T) {
-	ts, d := newTestToolset(t)
-	dbtest.SeedSession(t, d, "short-events", "proj")
-	events := make([]db.ToolResultEvent, 68)
-	for i := range events {
-		events[i] = db.ToolResultEvent{EventIndex: i, Source: "tool_result", Content: strings.Repeat("x", 100)}
+func TestGetToolCalls_BudgetShortEvents(t *testing.T) {
+	for _, tc := range []struct {
+		name, session, input, result string
+		count, size, maxInput        int
+		resultContinues              bool
+	}{
+		{name: "long input", session: "short-events", input: strings.Repeat("x", 10000), result: "summary", count: 68, size: 100, maxInput: 10000},
+		{name: "long result", session: "scan", input: strings.Repeat("x", 3000), result: strings.Repeat("y", 3000), count: 85, size: 64, resultContinues: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts, d := newTestToolset(t)
+			dbtest.SeedSession(t, d, tc.session, "proj")
+			events := make([]db.ToolResultEvent, tc.count)
+			for i := range events {
+				events[i] = db.ToolResultEvent{EventIndex: i, Source: "tool_result", Content: strings.Repeat("x", tc.size)}
+			}
+			dbtest.SeedMessages(t, d, toolCallMsg(tc.session, 0, db.ToolCall{
+				ToolUseID: "call", ToolName: "wait_agent", InputJSON: tc.input,
+				ResultContent: tc.result, ResultEvents: events,
+			}))
+			_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: tc.session, IncludeResults: true, MaxInputChars: tc.maxInput})
+			require.NoError(t, err)
+			assert.True(t, fitsResponse(out))
+			require.Len(t, out.ToolCalls, 1)
+			require.Len(t, out.ToolCalls[0].ResultEvents, tc.count)
+			for _, event := range out.ToolCalls[0].ResultEvents {
+				assert.Equal(t, strings.Repeat("x", tc.size), event.Content)
+			}
+			if tc.resultContinues {
+				assert.NotEmpty(t, out.ToolCalls[0].Result)
+				assert.NotEmpty(t, out.ToolCalls[0].ResultCursor)
+			}
+		})
 	}
-	dbtest.SeedMessages(t, d, toolCallMsg("short-events", 0, db.ToolCall{
-		ToolUseID: "call", ToolName: "wait_agent", InputJSON: strings.Repeat("x", 10000),
-		ResultContent: "summary", ResultEvents: events,
-	}))
-	_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "short-events", IncludeResults: true, MaxInputChars: 10000})
-	require.NoError(t, err)
-	assert.True(t, fitsResponse(out))
-	require.Len(t, out.ToolCalls, 1)
-	require.Len(t, out.ToolCalls[0].ResultEvents, 68)
-	for _, event := range out.ToolCalls[0].ResultEvents {
-		assert.Equal(t, strings.Repeat("x", 100), event.Content)
-	}
-}
-
-func TestGetToolCalls_BudgetLongResultWithShortEvents(t *testing.T) {
-	ts, d := newTestToolset(t)
-	dbtest.SeedSession(t, d, "scan", "proj")
-	events := make([]db.ToolResultEvent, 85)
-	for i := range events {
-		events[i] = db.ToolResultEvent{EventIndex: i, Source: "tool_result", Content: strings.Repeat("x", 64)}
-	}
-	dbtest.SeedMessages(t, d, toolCallMsg("scan", 0, db.ToolCall{
-		ToolUseID: "call", ToolName: "wait_agent", InputJSON: strings.Repeat("x", 3000),
-		ResultContent: strings.Repeat("y", 3000), ResultEvents: events,
-	}))
-	_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "scan", IncludeResults: true})
-	require.NoError(t, err)
-	assert.True(t, fitsResponse(out))
-	require.Len(t, out.ToolCalls, 1)
-	require.Len(t, out.ToolCalls[0].ResultEvents, 85)
-	for _, event := range out.ToolCalls[0].ResultEvents {
-		assert.Equal(t, strings.Repeat("x", 64), event.Content)
-	}
-	assert.NotEmpty(t, out.ToolCalls[0].Result)
-	assert.NotEmpty(t, out.ToolCalls[0].ResultCursor)
 }
 
 func TestGetToolCalls_IncludesResults(t *testing.T) {
@@ -789,31 +781,26 @@ func TestGetToolCalls_HTTPContinuesStoredResult(t *testing.T) {
 
 // seedLongToolResult stores one call whose summary or sole saved event holds
 // text, and returns a reader for that text from a page of get_tool_calls.
-func seedLongToolResult(t *testing.T, d *db.DB, sid, field, text string) func(toolCallOut) (string, string) {
-	t.Helper()
-	dbtest.SeedSession(t, d, sid, "proj")
-	call := db.ToolCall{ToolUseID: "call", ToolName: "wait_agent", ResultContent: "short"}
-	if field == "summary" {
-		call.ResultContent = text
-	} else {
-		call.ResultEvents = []db.ToolResultEvent{{AgentID: "agent-a", Source: "tool_result", Content: text}}
-	}
-	dbtest.SeedMessages(t, d, toolCallMsg(sid, 0, call))
-	return func(c toolCallOut) (string, string) {
-		if field == "summary" {
-			return c.Result, c.ResultCursor
-		}
-		require.Len(t, c.ResultEvents, 1)
-		return c.ResultEvents[0].Content, c.ResultEvents[0].ResultCursor
-	}
-}
-
 func TestGetToolCalls_ResumedCursorFitsLargerPages(t *testing.T) {
 	for _, field := range []string{"summary", "event"} {
 		t.Run(field, func(t *testing.T) {
 			ts, d := newTestToolset(t)
 			text := strings.Repeat("가", 12000)
-			read := seedLongToolResult(t, d, "resume", field, text)
+			dbtest.SeedSession(t, d, "resume", "proj")
+			call := db.ToolCall{ToolUseID: "call", ToolName: "wait_agent", ResultContent: "short"}
+			if field == "summary" {
+				call.ResultContent = text
+			} else {
+				call.ResultEvents = []db.ToolResultEvent{{AgentID: "agent-a", Source: "tool_result", Content: text}}
+			}
+			dbtest.SeedMessages(t, d, toolCallMsg("resume", 0, call))
+			read := func(c toolCallOut) (string, string) {
+				if field == "summary" {
+					return c.Result, c.ResultCursor
+				}
+				require.Len(t, c.ResultEvents, 1)
+				return c.ResultEvents[0].Content, c.ResultEvents[0].ResultCursor
+			}
 			_, page, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "resume", IncludeResults: true, MaxResultChars: 10000})
 			require.NoError(t, err)
 			require.Len(t, page.ToolCalls, 1)
