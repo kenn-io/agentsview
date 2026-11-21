@@ -50,7 +50,7 @@ func TestCodeModePRLinksUseEachCommandWorkdir(t *testing.T) {
 func TestCodeModeOpaqueWorkdir(t *testing.T) {
 	messages := []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", InputJSON: `text(await tools.exec_command({cmd:"gh pr view 42",workdir:unknown}))`}}}}
 	links := db.ToolCallPRLinksWithRemoteResolver(messages, "/repo", "https://github.com/example/repo.git", func(string) string {
-		t.Fatal("resolved an opaque workdir")
+		require.Fail(t, "resolved an opaque workdir")
 		return ""
 	})
 	assert.Empty(t, links)

@@ -136,11 +136,12 @@ func TestParseDiffDetectsPRLinkChanges(t *testing.T) {
 	assert.Equal(t, 1, report.Totals.Changed)
 	assert.Equal(t, 1, report.FieldCounts[sync.FieldPRLinks])
 }
+
 func TestCodexCommandPRLinksOnAppend(t *testing.T) {
 	testutil.IsolateGit(t)
 	root := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0700))
-	require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "config"), []byte("[remote \"origin\"]\n url = https://github.com/example/repo.git\n"), 0600))
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "config"), []byte("[remote \"origin\"]\n url = https://github.com/example/repo.git\n"), 0o600))
 	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
 	const id = "01900000-0000-7000-8000-000000000042"
 	path := env.writeCodexSession(t, filepath.Join("2024", "01", "15"), "rollout-20240115-"+id+".jsonl", testjsonl.JoinJSONL(
@@ -165,8 +166,8 @@ func TestCodexCommandPRLinksOnAppend(t *testing.T) {
 func TestClaudeCommandPRUsesCheckoutRemote(t *testing.T) {
 	testutil.IsolateGit(t)
 	root := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0700))
-	require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "config"), []byte("[remote \"origin\"]\n url = https://github.com/example/repo.git\n"), 0600))
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "config"), []byte("[remote \"origin\"]\n url = https://github.com/example/repo.git\n"), 0o600))
 	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 	env.writeClaudeSession(t, "proj", "checkout-pr.jsonl", testjsonl.JoinJSONL(
 		testjsonl.ClaudeUserJSON("Finish the work", tsEarly, root),
@@ -190,8 +191,8 @@ func TestCodeModeCommandPRUsesItsWorkdir(t *testing.T) {
 		{"ambiguous", "[remote \"origin\"]\n url = https://github.com/example/fork.git\n[remote \"upstream\"]\n url = https://github.com/example/upstream.git\n"},
 	} {
 		dir := filepath.Join(base, tc.dir, ".git")
-		require.NoError(t, os.MkdirAll(dir, 0700))
-		require.NoError(t, os.WriteFile(filepath.Join(dir, "config"), []byte(tc.config), 0600))
+		require.NoError(t, os.MkdirAll(dir, 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "config"), []byte(tc.config), 0o600))
 	}
 	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
 	const id = "01900000-0000-7000-8000-000000000091"
@@ -284,11 +285,27 @@ func TestUsageOnlyCleanupRetainsTaskAndCommandPRLinks(t *testing.T) {
 	assert.Empty(t, structured)
 }
 
+func TestIncrementalPromptThenCommandSurvivesUsageOnly(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
+	const id = "01900000-0000-7000-8000-000000000092"
+	path := env.writeCodexSession(t, filepath.Join("2024", "01", "15"), "rollout-20240115-"+id+".jsonl", testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(id, "/tmp/project", "user", tsEarly),
+		testjsonl.CodexMsgJSON("user", "Review https://github.com/example/repo/pull/42", tsEarlyS1),
+	))
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+	appendClaudeSplitLines(t, path, testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call", map[string]any{"cmd": "gh pr view 42 -R example/repo"}, tsEarlyS5))
+	env.engine.SyncPaths([]string{path})
+	assert.Equal(t, []string{"https://github.com/example/repo/pull/42"}, storedPRURLs(t, env.db, "codex:"+id))
+	env.db.SetArchiveContent(config.ArchiveContentUsage)
+	require.NoError(t, env.db.RenameSession(t.Context(), "codex:"+id, nil))
+	assert.Equal(t, []string{"https://github.com/example/repo/pull/42"}, storedPRURLs(t, env.db, "codex:"+id))
+}
+
 func TestAmbiguousCheckoutRemoteDoesNotInferPR(t *testing.T) {
 	testutil.IsolateGit(t)
 	root := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0700))
-	require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "config"), []byte("[remote \"origin\"]\n url = https://github.com/example/fork.git\n[remote \"upstream\"]\n url = https://github.com/example/upstream.git\n"), 0600))
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "config"), []byte("[remote \"origin\"]\n url = https://github.com/example/fork.git\n[remote \"upstream\"]\n url = https://github.com/example/upstream.git\n"), 0o600))
 	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
 	var paths []string
 	for _, tc := range []struct {

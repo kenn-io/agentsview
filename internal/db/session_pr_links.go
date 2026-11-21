@@ -327,8 +327,10 @@ func (db *DB) upgradePromptPRLinksTx(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
-var codeModeExecRE = regexp.MustCompile(`\btools\.exec_command\s*\(`)
-var codeModeDirRE = regexp.MustCompile(`["']?(?:workdir|cwd)["']?\s*:`)
+var (
+	codeModeExecRE = regexp.MustCompile(`\btools\.exec_command\s*\(`)
+	codeModeDirRE  = regexp.MustCompile(`["']?(?:workdir|cwd)["']?\s*:`)
+)
 
 func callPRLinks(category, input, cwd, remote string, resolve func(string) string) ([]PRLink, bool) {
 	if category == "Task" {
@@ -479,7 +481,7 @@ func storedToolCallPRLinksTx(tx transactionQueries, id string) ([]PRLink, error)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := tx.Query(`SELECT category, COALESCE(input_json,'') FROM tool_calls WHERE session_id=? AND category IN ('Bash','Task') ORDER BY id`, id)
+	rows, err := tx.Query(`SELECT t.category, COALESCE(t.input_json,'') FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND t.category IN ('Bash','Task') ORDER BY m.ordinal, t.id`, id)
 	if err != nil {
 		return nil, err
 	}

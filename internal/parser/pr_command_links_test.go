@@ -117,7 +117,6 @@ func TestGHPRCommandLinks(t *testing.T) {
 			assert.Equal(t, tt.want, urls)
 		})
 	}
-
 }
 
 func TestMergePRLinksIdentity(t *testing.T) {

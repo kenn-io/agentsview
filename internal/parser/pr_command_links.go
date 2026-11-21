@@ -396,7 +396,7 @@ func ghPRCallLinks(call shellCall, remote string) []PRLink {
 	flags.SetOutput(io.Discard)
 	flags.SetInterspersed(true)
 	repoFlag := flags.StringP("repo", "R", repo, "")
-	for _, spec := range strings.Fields(ghPRFlags[action]) {
+	for spec := range strings.FieldsSeq(ghPRFlags[action]) {
 		valueFlag := strings.HasSuffix(spec, "=")
 		spec = strings.TrimSuffix(spec, "=")
 		name, short, _ := strings.Cut(spec, ":")

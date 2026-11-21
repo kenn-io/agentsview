@@ -985,6 +985,7 @@ func sessionCommitLinkRows(ctx context.Context, q messageRowsQuerier, owners, wh
 	}
 	return out, rows.Err()
 }
+
 func argvShellText(input string, gitOnly bool) (string, bool) {
 	var payload struct {
 		Command []string `json:"command"`
@@ -1014,6 +1015,7 @@ func argvShellText(input string, gitOnly bool) (string, bool) {
 	}
 	return command, true
 }
+
 func quoteArgv(args []string) string {
 	for i, arg := range args {
 		if strings.HasPrefix(arg, "~") {
@@ -1023,6 +1025,7 @@ func quoteArgv(args []string) string {
 	}
 	return strings.Join(args, " ")
 }
+
 func shellCommandText(input string) string {
 	if command, ok := argvShellText(input, false); ok {
 		return command
