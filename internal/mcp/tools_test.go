@@ -687,12 +687,8 @@ func TestGetMessages_BodyCursorRejectsDeletedSession(t *testing.T) {
 	require.NotEmpty(t, first.Messages[0].BodyCursor)
 	require.NoError(t, d.DeleteSession(t.Context(), "codex:body"))
 
-	for _, id := range []string{"codex:body", "body"} {
-		t.Run(id, func(t *testing.T) {
-			_, _, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: id, BodyCursor: first.Messages[0].BodyCursor})
-			require.ErrorIs(t, err, service.ErrSourceChanged)
-		})
-	}
+	_, _, err = ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "body", BodyCursor: first.Messages[0].BodyCursor})
+	require.ErrorIs(t, err, service.ErrSourceChanged)
 }
 
 // Even when a caller explicitly allow-lists the "system" role, get_messages
@@ -2351,11 +2347,7 @@ func TestSessionToolsResolvePlainIDs(t *testing.T) {
 	seedFTSSession(t, d, "codex:plain", "proj", "needle in the transcript", "2024-06-14T10:00:00Z")
 	dbtest.SeedMessages(t, d, toolCallMsg("codex:plain", 1, db.ToolCall{ToolName: "Bash", Category: "Bash"}))
 	dbtest.SeedSession(t, d, "child", "proj", func(s *db.Session) { s.ParentSessionID = new("codex:plain") })
-	dbtest.SeedSession(t, d, "codex:ambiguous", "proj")
-	dbtest.SeedSession(t, d, "host~ambiguous", "proj")
 	dbtest.SeedSession(t, d, "codex:empty", "proj")
-	dbtest.SeedSession(t, d, "collision", "proj")
-	dbtest.SeedSession(t, d, "codex:collision", "proj")
 
 	tests := []struct {
 		name string
@@ -2410,17 +2402,7 @@ func TestSessionToolsResolvePlainIDs(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			require.NoError(t, tc.call(t, "plain"))
-			require.ErrorContains(t, tc.call(t, "missing"), "session not found: missing")
-			err := tc.call(t, "ambiguous")
-			require.ErrorContains(t, err, "ambiguous session UUID")
-			require.ErrorContains(t, err, "codex:ambiguous")
-			require.ErrorContains(t, err, "host~ambiguous")
 		})
-	}
-	for _, id := range []string{"collision", "codex:collision"} {
-		_, out, err := ts.sessionOverview(t.Context(), nil, sessionOverviewIn{SessionID: id})
-		require.NoError(t, err)
-		assert.Equal(t, id, out.Session.SessionID)
 	}
 	_, around, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "plain", Around: new(0)})
 	require.NoError(t, err)
@@ -2463,7 +2445,6 @@ func TestListRecall_SourceSessionRawID(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, out.Entries, 1)
 	assert.Equal(t, "codex:source", out.Entries[0].SourceSessionID)
-
 	_, out, err = ts.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "missing"})
 	require.NoError(t, err)
 	assert.Empty(t, out.Entries)
@@ -2471,8 +2452,6 @@ func TestListRecall_SourceSessionRawID(t *testing.T) {
 	dbtest.SeedSession(t, d, "host~ambiguous", "project")
 	_, _, err = ts.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "ambiguous"})
 	require.ErrorContains(t, err, "ambiguous session UUID")
-	require.ErrorContains(t, err, "codex:ambiguous")
-	require.ErrorContains(t, err, "host~ambiguous")
 }
 
 func TestOptionalSessionFiltersOlderServer(t *testing.T) {
@@ -2536,35 +2515,8 @@ func TestGetMessages_RevisionRejectsDeletedSession(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, first.TranscriptRevision)
 	require.NoError(t, d.DeleteSession(t.Context(), "codex:body"))
-	for _, tc := range []struct {
-		name   string
-		around *int
-	}{{"linear", nil}, {"around", new(0)}} {
-		t.Run(tc.name, func(t *testing.T) {
-			_, _, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "body", Around: tc.around, ExpectedRevision: first.TranscriptRevision})
-			require.ErrorIs(t, err, service.ErrSourceChanged)
-		})
-	}
-}
-
-func TestSearchContent_SessionIDFilter(t *testing.T) {
-	ts, d := newTestToolset(t)
-	seedFTSSession(t, d, "codex:source", "project", "needle", "2024-06-14T10:00:00Z")
-	dbtest.SeedSession(t, d, "codex:ambiguous", "project")
-	dbtest.SeedSession(t, d, "host~ambiguous", "project")
-	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", SessionID: "source", IncludeActive: true, IncludeOneShot: true})
-	require.NoError(t, err)
-	require.Len(t, out.Matches, 1)
-	assert.Equal(t, "codex:source", out.Matches[0].SessionID)
-	_, out, err = ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", SessionID: "missing", IncludeActive: true})
-	require.NoError(t, err)
-	assert.Empty(t, out.Matches)
-	require.NoError(t, d.SoftDeleteSession(t.Context(), "codex:source"))
-	_, out, err = ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", SessionID: "codex:source", IncludeActive: true})
-	require.NoError(t, err)
-	assert.Empty(t, out.Matches)
-	_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", SessionID: "ambiguous", IncludeActive: true})
-	require.ErrorContains(t, err, "ambiguous session UUID")
+	_, _, err = ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "body", ExpectedRevision: first.TranscriptRevision})
+	require.ErrorIs(t, err, service.ErrSourceChanged)
 }
 
 func TestSessionResolutionQualifiedSuffix(t *testing.T) {

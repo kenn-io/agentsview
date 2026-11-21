@@ -255,6 +255,14 @@ func TestSearchContent_CurrentSessionRawID(t *testing.T) {
 	assert.Equal(t, "codex:current", out.Exclusions.CurrentSessionID)
 	assert.False(t, out.Exclusions.RecentActive)
 
+	_, out, err = ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", SessionID: "current", IncludeActive: true, IncludeOneShot: true})
+	require.NoError(t, err)
+	require.Len(t, out.Matches, 1)
+	assert.Equal(t, "codex:current", out.Matches[0].SessionID)
+	_, out, err = ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", SessionID: "missing", IncludeActive: true})
+	require.NoError(t, err)
+	assert.Empty(t, out.Matches)
+
 	_, out, err = ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", CurrentSessionID: "unindexed", IncludeOneShot: true})
 	require.NoError(t, err)
 	require.Len(t, out.Matches, 2)
@@ -264,5 +272,7 @@ func TestSearchContent_CurrentSessionRawID(t *testing.T) {
 	dbtest.SeedSession(t, d, "codex:duplicate", "proj")
 	dbtest.SeedSession(t, d, "host~duplicate", "proj")
 	_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", CurrentSessionID: "duplicate"})
+	require.ErrorContains(t, err, `ambiguous session UUID "duplicate"`)
+	_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", SessionID: "duplicate"})
 	require.ErrorContains(t, err, `ambiguous session UUID "duplicate"`)
 }
