@@ -101,7 +101,12 @@ class DataStore {
       }, DATA_REFRESH_DEBOUNCE_MS);
     });
     const safetyTimer = setInterval(() => {
-      if (!projectWorkspaceEnabled || this.view !== "inventory" || document.hidden) return;
+      if (document.hidden) return;
+      if (this.view === "rules") {
+        this.rulesRefreshVersion++;
+        return;
+      }
+      if (!projectWorkspaceEnabled) return;
       if (this.#mutationRefreshes === 0) void this.load({ background: true });
       else this.#eventRefreshPending = true;
     }, SAFETY_NET_REFRESH_MS);
