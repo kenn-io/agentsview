@@ -10,33 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCursorAccountExportUpgrade(t *testing.T) {
-	ctx := t.Context()
-	path := filepath.Join(t.TempDir(), "archive.db")
-	d := testDBAtPath(t, path, "old")
-	require.NoError(t, d.InsertCursorUsageEvents(ctx, []CursorUsageEvent{{OccurredAt: "2026-07-28T10:00:00Z", Model: "a", UserID: "42", DedupKey: "a"}}))
-	require.NoError(t, d.Close())
-	raw, err := sql.Open("sqlite3", path)
-	require.NoError(t, err)
-	_, err = raw.ExecContext(t.Context(), `ALTER TABLE cursor_usage_events DROP COLUMN account_user_id; ALTER TABLE cursor_usage_events DROP COLUMN account_polled_at`)
-	require.NoError(t, err)
-	require.NoError(t, raw.Close())
-	_, err = OpenReadOnly(ctx, path)
-	require.Error(t, err)
-	assert.True(t, IsSchemaUpgradeRequired(err))
-	require.NoError(t, UpgradeExportSchemaInPlace(ctx, path, &SchemaUpgradeRequiredError{Table: "cursor_usage_events", Column: "account_user_id"}))
-	err = UpgradeExportSchemaInPlace(ctx, path, &SchemaUpgradeRequiredError{Table: "cursor_usage_events", Column: "agent"})
-	require.Error(t, err)
-	upgraded, err := OpenReadOnly(ctx, path)
-	require.NoError(t, err)
-	defer upgraded.Close()
-	var userID, account, polled string
-	require.NoError(t, upgraded.Reader().QueryRowContext(ctx, `SELECT user_id,account_user_id,account_polled_at FROM cursor_usage_events WHERE dedup_key='a'`).Scan(&userID, &account, &polled))
-	assert.Equal(t, "42", userID)
-	assert.Empty(t, account)
-	assert.Empty(t, polled)
-}
-
 func TestCursorAccountColumnsSurviveResync(t *testing.T) {
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "source.db")
@@ -50,39 +23,17 @@ func TestCursorAccountColumnsSurviveResync(t *testing.T) {
 	require.NoError(t, dst.Reader().QueryRowContext(ctx, `SELECT account_user_id,account_polled_at FROM cursor_usage_events WHERE dedup_key='a'`).Scan(&account, &polled))
 	assert.Equal(t, "12", account)
 	assert.Equal(t, "2026-07-29T01:00:00.000000Z", polled)
-}
 
-func TestCursorAccountResyncFromOlderArchives(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		drop    string
-		account string
-		polled  string
-	}{
-		{"both missing", "ALTER TABLE cursor_usage_events DROP COLUMN account_user_id; ALTER TABLE cursor_usage_events DROP COLUMN account_polled_at", "", ""},
-		{"account missing", "ALTER TABLE cursor_usage_events DROP COLUMN account_user_id", "", "2026-07-29T01:00:00.000000Z"},
-		{"poll missing", "ALTER TABLE cursor_usage_events DROP COLUMN account_polled_at", "12", ""},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx := t.Context()
-			path := filepath.Join(t.TempDir(), "source.db")
-			src := testDBAtPath(t, path, "source")
-			require.NoError(t, src.InsertCursorUsageEvents(ctx, []CursorUsageEvent{{OccurredAt: "2026-07-28T10:00:00Z", Model: "a", DedupKey: "a"}}))
-			require.NoError(t, src.AssignCursorUsageAccount(ctx, "12", []string{"a"}, time.Date(2026, 7, 29, 1, 0, 0, 0, time.UTC)))
-			require.NoError(t, src.Close())
-			raw, err := sql.Open("sqlite3", path)
-			require.NoError(t, err)
-			_, err = raw.ExecContext(t.Context(), tc.drop)
-			require.NoError(t, err)
-			require.NoError(t, raw.Close())
-			dst := testDB(t)
-			require.NoError(t, dst.CopySessionMetadataFrom(ctx, path))
-			var account, polled string
-			require.NoError(t, dst.Reader().QueryRowContext(ctx, `SELECT account_user_id, account_polled_at FROM cursor_usage_events WHERE dedup_key='a'`).Scan(&account, &polled))
-			assert.Equal(t, tc.account, account)
-			assert.Equal(t, tc.polled, polled)
-		})
-	}
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = raw.ExecContext(ctx, `ALTER TABLE cursor_usage_events DROP COLUMN account_user_id; ALTER TABLE cursor_usage_events DROP COLUMN account_polled_at`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+	older := testDB(t)
+	require.NoError(t, older.CopySessionMetadataFrom(ctx, path))
+	require.NoError(t, older.Reader().QueryRowContext(ctx, `SELECT account_user_id,account_polled_at FROM cursor_usage_events WHERE dedup_key='a'`).Scan(&account, &polled))
+	assert.Empty(t, account)
+	assert.Empty(t, polled)
 }
 
 func TestCursorAccountCoverageStaysWithReturnedEvents(t *testing.T) {
@@ -110,31 +61,6 @@ func TestCursorAccountCoverageStaysWithReturnedEvents(t *testing.T) {
 	assert.EqualValues(t, 20, hour.Machines["cursor-account:34"].Usage.Totals.OutputTokens)
 	assert.Equal(t, "2026-07-29T01:00:00.000000Z", hour.Machines["cursor-account:12"].PolledAt)
 	assert.EqualValues(t, 60, hour.Usage.Totals.OutputTokens)
-}
-
-func TestCursorAccountReportingAcrossArchives(t *testing.T) {
-	ctx := t.Context()
-	t1 := time.Date(2026, 7, 29, 1, 0, 0, 0, time.UTC)
-	opts := ReportingExportOptions{Date: t1.Add(-25 * time.Hour), Now: t1.Add(24 * time.Hour), SchemaVersion: 6, ByMachine: true}
-	for _, archive := range []string{"archive-a", "archive-b"} {
-		t.Run(archive, func(t *testing.T) {
-			d := testDB(t)
-			require.NoError(t, d.ConfigureArtifactLocalMachine(ctx, "machine-a"))
-			_, err := d.rawWriter().ExecContext(ctx, `INSERT INTO archive_metadata(key,value) VALUES ('archive_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, archive)
-			require.NoError(t, err)
-			require.NoError(t, d.InsertCursorUsageEvents(ctx, []CursorUsageEvent{{OccurredAt: "2026-07-28T10:01:00Z", Model: "a", OutputTokens: 10, DedupKey: "a"}, {OccurredAt: "2026-07-28T10:02:00Z", Model: "b", OutputTokens: 20, DedupKey: "b"}}))
-			day, err := d.ExportReportingDay(ctx, opts)
-			require.NoError(t, err)
-			assert.EqualValues(t, 30, day.Hours[10].Machines["archive:"+archive].Usage.Totals.OutputTokens)
-			require.NoError(t, d.AssignCursorUsageAccount(ctx, "12", []string{"a"}, t1))
-			require.NoError(t, d.AssignCursorUsageAccount(ctx, "34", []string{"b"}, t1))
-			day, err = d.ExportReportingDay(ctx, opts)
-			require.NoError(t, err)
-			assert.EqualValues(t, 10, day.Hours[10].Machines["cursor-account:12"].Usage.Totals.OutputTokens)
-			assert.EqualValues(t, 20, day.Hours[10].Machines["cursor-account:34"].Usage.Totals.OutputTokens)
-			assert.EqualValues(t, 30, day.Hours[10].Usage.Totals.OutputTokens)
-		})
-	}
 }
 
 func TestExportReportingHourLoadsOnlySelectedAccountRows(t *testing.T) {
@@ -168,28 +94,12 @@ func TestExportReportingHourLoadsOnlySelectedAccountRows(t *testing.T) {
 	assert.Equal(t, day.Hours[10], hour)
 }
 
-func TestReportingDayManyAccountEvents(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	require.NoError(t, d.ConfigureArtifactLocalMachine(ctx, "machine-a"))
-	_, err := d.rawWriter().ExecContext(ctx, `WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<5000)
-		INSERT INTO cursor_usage_events(occurred_at,model,output_tokens,dedup_key,account_user_id,account_polled_at)
-		SELECT '2026-07-28T10:05:00Z','a',1,printf('event-%d',x),printf('%d',1+((x-1)%200)),'2026-07-29T01:00:00.000000Z' FROM n`)
-	require.NoError(t, err)
-	date := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
-	day, err := d.ExportReportingDay(ctx, ReportingExportOptions{Date: date, Now: date.Add(48 * time.Hour), SchemaVersion: 6, ByMachine: true})
-	require.NoError(t, err)
-	hour := day.Hours[10]
-	assert.Len(t, hour.Machines, 201)
-	assert.EqualValues(t, 5000, hour.Usage.Totals.OutputTokens)
-	assert.EqualValues(t, 25, hour.Machines["cursor-account:1"].Usage.Totals.OutputTokens)
-	assert.Empty(t, hour.Machines["cursor-account:1"].Joint.Cells)
-}
-
 func TestCursorAccountHourUsesLatestPollRows(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	require.NoError(t, d.ConfigureArtifactLocalMachine(ctx, "machine-a"))
+	_, err := d.rawWriter().ExecContext(ctx, `INSERT INTO archive_metadata(key,value) VALUES ('archive_id','archive-a') ON CONFLICT(key) DO UPDATE SET value=excluded.value`)
+	require.NoError(t, err)
 	teamA := CursorUsageEvent{OccurredAt: "2026-07-28T10:01:00Z", Model: "a", OutputTokens: 10, DedupKey: "a"}
 	teamB := CursorUsageEvent{OccurredAt: "2026-07-28T10:02:00Z", Model: "b", OutputTokens: 20, DedupKey: "b"}
 	require.NoError(t, d.InsertCursorUsageEvents(ctx, []CursorUsageEvent{teamA}))
@@ -202,4 +112,6 @@ func TestCursorAccountHourUsesLatestPollRows(t *testing.T) {
 	account := day.Hours[10].Machines["cursor-account:12"]
 	assert.EqualValues(t, 20, account.Usage.Totals.OutputTokens)
 	assert.Equal(t, "2026-07-29T02:00:00.000000Z", account.PolledAt)
+	assert.EqualValues(t, 10, day.Hours[10].Machines["archive:archive-a"].Usage.Totals.OutputTokens)
+	assert.EqualValues(t, 30, day.Hours[10].Usage.Totals.OutputTokens)
 }

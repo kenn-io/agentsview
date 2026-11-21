@@ -256,9 +256,6 @@ func requestUserID(raw string) (int64, error) {
 
 // ListDailyUsageUsers returns numeric member IDs from one window of at most 30 days.
 func (c *Client) ListDailyUsageUsers(ctx context.Context, start, end time.Time) ([]string, error) {
-	if c == nil || strings.TrimSpace(c.APIKey) == "" {
-		return nil, errors.New("missing Cursor admin API key")
-	}
 	type dailyResponse struct {
 		Data []struct {
 			UserID jsontext.Value `json:"userId"`
@@ -267,7 +264,6 @@ func (c *Client) ListDailyUsageUsers(ctx context.Context, start, end time.Time) 
 			HasNext bool `json:"hasNextPage"`
 		} `json:"pagination"`
 	}
-	seen := map[string]bool{}
 	var users []string
 	for page := 1; ; page++ {
 		// Daily requests do not use the usage-page retry callback.
@@ -303,10 +299,7 @@ func (c *Client) ListDailyUsageUsers(ctx context.Context, start, end time.Time) 
 				continue
 			}
 			key := strconv.FormatUint(id, 10)
-			if !seen[key] {
-				seen[key] = true
-				users = append(users, key)
-			}
+			users = append(users, key)
 		}
 		if !resp.Pagination.HasNext {
 			return users, nil

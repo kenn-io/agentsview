@@ -13,8 +13,6 @@ import (
 
 const cursorAccountPrefix = "cursor-account:"
 
-func isCursorAccount(id string) bool { return strings.HasPrefix(id, cursorAccountPrefix) }
-
 // machineIdentities maps a session's stored machine key to the identity of
 // the machine it originated on. Schema 5 reporting and the change stream
 // use the same identities.
@@ -85,7 +83,7 @@ func loadReportingMachineIdentity(ctx context.Context, tx *sql.Tx, schema int, s
 
 func (s reportingDaySource) machineID(machine string, schema int) string {
 	machine = machineIdentities{local: s.localMachineID, aliases: s.machineAliases}.origin(machine, s.archiveID)
-	if schema == export.ReportingAccountSchemaVersion && (isCursorAccount(machine) || strings.HasPrefix(machine, "machine:")) {
+	if schema == export.ReportingAccountSchemaVersion && (strings.HasPrefix(machine, cursorAccountPrefix) || strings.HasPrefix(machine, "machine:")) {
 		digest := sha256.Sum256([]byte(machine))
 		return "machine:" + hex.EncodeToString(digest[:])
 	}

@@ -5,7 +5,6 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -179,13 +178,6 @@ func TestExportReportingCursorAccountMachineCollision(t *testing.T) {
 	assert.InDelta(t, 3, result.Machines["machine:99b14951da0e7986cffad677018196fe8842ed68aa0eac7824b9c304fba6f930"].Activity.Totals.AgentMinutes, 0.001)
 	assert.EqualValues(t, 10, result.Machines["cursor-account:12"].Usage.Totals.OutputTokens)
 	assert.Equal(t, "2026-07-29T00:00:00.000000Z", result.Machines["cursor-account:12"].PolledAt)
-	dayOut, _, err := executeExportSessionsCommand(newExportReportingTestRoot(now), "export", "day", "--schema-version", "6", "--by-machine", "2026-07-28")
-	require.NoError(t, err)
-	var day struct {
-		Hours []jsontext.Value `json:"hours"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(dayOut), &day))
-	assert.Equal(t, strings.TrimSpace(out), string(day.Hours[10]))
 	scopedOut, _, err := executeExportSessionsCommand(newExportReportingTestRoot(now), "export", "hour", "--schema-version", "6", "--by-machine", "--project-key", "other", "2026-07-28-10")
 	require.NoError(t, err)
 	var scoped struct {

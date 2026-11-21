@@ -380,13 +380,8 @@ func reportingHoursFromSource(
 				continue
 			}
 			key := accountHour{row.account, index}
-			if row.polledAt > polled[key] {
-				groups[key] = nil
-				polled[key] = row.polledAt
-			}
-			if row.polledAt == polled[key] {
-				groups[key] = append(groups[key], row.usage)
-			}
+			groups[key] = append(groups[key], row.usage)
+			polled[key] = row.polledAt
 		}
 		for key, rows := range groups {
 			start := date.Add(time.Duration(key.index) * time.Hour)
@@ -710,6 +705,10 @@ type reportingAccountRow struct {
 	at                time.Time
 }
 
+const reportingCursorPollWindow = `PARTITION BY agent, account_user_id,
+	(agentsview_timestamp_unix_micro(occurred_at) / 3600000000 -
+	 (agentsview_timestamp_unix_micro(occurred_at) < 0 AND agentsview_timestamp_unix_micro(occurred_at) % 3600000000 != 0))`
+
 func (db *DB) loadReportingAccountUsage(ctx context.Context, tx *sql.Tx, start, end time.Time) ([]reportingAccountRow, error) {
 	var exists bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='cursor_usage_events')`).Scan(&exists); err != nil {
@@ -718,8 +717,10 @@ func (db *DB) loadReportingAccountUsage(ctx context.Context, tx *sql.Tx, start, 
 	if !exists || !start.Before(end) {
 		return nil, nil
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT occurred_at, COALESCE(NULLIF(model, ''), '<unknown>'), input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, charged_microdollars, dedup_key, account_user_id, account_polled_at FROM cursor_usage_events
-		WHERE agent = 'cursor' AND account_user_id != '' AND account_polled_at != '' AND occurred_at >= ? AND occurred_at < ? AND agentsview_timestamp_unix_micro(occurred_at) >= ? AND agentsview_timestamp_unix_micro(occurred_at) < ?`,
+	rows, err := tx.QueryContext(ctx, `SELECT occurred_at, COALESCE(NULLIF(model, ''), '<unknown>'), input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, charged_microdollars, dedup_key, account_user_id, account_polled_at FROM (
+		SELECT *, max(account_polled_at) OVER (`+reportingCursorPollWindow+`) AS latest_poll FROM cursor_usage_events
+		WHERE agent = 'cursor' AND account_user_id != '' AND account_polled_at != '' AND occurred_at >= ? AND occurred_at < ? AND agentsview_timestamp_unix_micro(occurred_at) >= ? AND agentsview_timestamp_unix_micro(occurred_at) < ?)
+		WHERE account_polled_at = latest_poll`,
 		start.Add(-time.Second).UTC().Format(time.RFC3339Nano), end.Add(time.Second).UTC().Format(time.RFC3339Nano), start.UnixMicro(), end.UnixMicro())
 	if err != nil {
 		return nil, fmt.Errorf("querying Cursor account usage: %w", err)
@@ -771,18 +772,18 @@ func (db *DB) reportingStandaloneUsageCandidatesFrom(
 	upperBound := PaddedUTCBound(
 		query.RangeEnd.UTC().Format(time.RFC3339), 14,
 	)
+	source := `SELECT * FROM cursor_usage_events WHERE occurred_at >= ? AND occurred_at <= ?`
 	accountFilter := ""
 	if schemaVersion == export.ReportingAccountSchemaVersion {
-		accountFilter = " AND NOT (agent = 'cursor' AND account_user_id != '' AND account_polled_at != '')"
+		source = `SELECT *, max(account_polled_at) OVER (` + reportingCursorPollWindow + `) AS latest_poll FROM cursor_usage_events WHERE occurred_at >= ? AND occurred_at <= ?`
+		accountFilter = " WHERE NOT (agent = 'cursor' AND account_user_id != '' AND account_polled_at != '' AND account_polled_at = latest_poll)"
 	}
 	rows, err := tx.QueryContext(ctx, `
 		SELECT agent, occurred_at, COALESCE(NULLIF(model, ''), '<unknown>'),
 			input_tokens, output_tokens,
 			cache_write_tokens, cache_read_tokens,
 			charged_microdollars, dedup_key
-		FROM cursor_usage_events
-		WHERE occurred_at >= ?
-			AND occurred_at <= ?`+accountFilter,
+		FROM (`+source+`)`+accountFilter,
 		lowerBound, upperBound,
 	)
 	if err != nil {

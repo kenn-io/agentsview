@@ -1750,10 +1750,7 @@ func (d *DB) CopySessionMetadataFrom(
 		}
 		accountID, polledAt := "''", "''"
 		if oldDBHasColumn(ctx, tx, "cursor_usage_events", "account_user_id") {
-			accountID = "account_user_id"
-		}
-		if oldDBHasColumn(ctx, tx, "cursor_usage_events", "account_polled_at") {
-			polledAt = "account_polled_at"
+			accountID, polledAt = "account_user_id", "account_polled_at"
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO main.cursor_usage_events (

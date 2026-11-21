@@ -2318,17 +2318,7 @@ func checkReadOnlySchemaCompatibility(ctx context.Context, conn *sql.DB) error {
 			}
 		}
 	}
-	var missingAccountAgent bool
-	if err := conn.QueryRowContext(ctx, `SELECT
-		EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cursor_usage_events')
-		AND NOT EXISTS(SELECT 1 FROM pragma_table_info('cursor_usage_events') WHERE name = 'agent')`,
-	).Scan(&missingAccountAgent); err != nil {
-		return fmt.Errorf("checking account usage schema: %w", err)
-	}
-	if missingAccountAgent {
-		return &SchemaUpgradeRequiredError{Table: "cursor_usage_events", Column: "agent"}
-	}
-	for _, column := range []string{"account_user_id", "account_polled_at"} {
+	for _, column := range []string{"agent", "account_user_id", "account_polled_at"} {
 		var missing bool
 		if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cursor_usage_events') AND NOT EXISTS(SELECT 1 FROM pragma_table_info('cursor_usage_events') WHERE name = ?)`, column).Scan(&missing); err != nil {
 			return fmt.Errorf("checking account usage schema: %w", err)

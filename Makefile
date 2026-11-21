@@ -359,6 +359,13 @@ test: pricing-snapshot ensure-embed-dir
 	go test $(GO_TEST_P_FLAG) -tags "fts5" ./... -skip '^TestActiveAppendGrowth$$' -v
 	go test -tags "fts5" ./cmd/perfsim -run '^TestActiveAppendGrowth$$' -v
 
+.PHONY: test-cursor-account-reporting
+test-cursor-account-reporting: pricing-snapshot ensure-embed-dir
+	go test $(GO_TEST_P_FLAG) -tags "fts5" ./internal/cursorusage -run '^(TestListDailyUsageUsersPages|TestListDailyUsageUsersPacesSeparateWindows|TestFetchAllUsageEvents|TestListUsageEventsRejectsNonNumericUserID)$$' -count=1
+	go test $(GO_TEST_P_FLAG) -tags "fts5" ./internal/db -run '^(TestCursorAccountColumnsSurviveResync|TestCursorAccountCoverageStaysWithReturnedEvents|TestCursorAccountHourUsesLatestPollRows|TestExportReportingHourLoadsOnlySelectedAccountRows|TestCursorAccountDataVersionScope|TestReportingExportPreservesStandaloneUsageTokens|TestReportingExportIncludesStandaloneRowsOnlyInUsage|TestReportingDigestMatchesPerDateExport)$$' -count=1
+	go test $(GO_TEST_P_FLAG) -tags "fts5" ./internal/export -run '^(TestFinalizeReportingHourCanonicalizesOrderingAndIgnoresInputDigest|TestFinalizeReportingHourDigestVector|TestFinalizeReportingDayGivesCompletedEmptyDateCanonicalDigest|TestJointReportingCanonicalIdentity|TestJointReportingRejectsInconsistentResolution)$$' -count=1
+	go test $(GO_TEST_P_FLAG) -tags "fts5" ./cmd/agentsview -run '^(TestCursorSyncAssignsOnlyMatchedMembers|TestCursorSyncIncompleteMatchingPreservesAttribution|TestCursorSyncUsesUnfilteredFetchTimeAndDefersLateEvents|TestCursorSyncAllSkipsEmptyRosterWindows|TestCursorUsageAmbiguousKeyClearsPriorAccount|TestCursorSyncDoesNotCoverOpenHour|TestCursorSyncDoesNotCoverPartialBoundaryHours|TestExportReportingByMachine|TestExportReportingUpgradesOldCursorUsageArchive|TestExportReportingCursorAccountMachineCollision|TestExportReportingSchemaVersions|TestExportReportingSchemaVersionRejectsBeforeOpen|TestNewUsageCursorCommandUsesConfigFallbacksAndSharedPagination|TestNewUsageCursorCommandExplicitMemberFilterDoesNotReuseConfigSibling)$$' -count=1
+
 # Reproducible synthetic ingest, steady-state sync, and analytics measurements.
 .PHONY: perf-sim
 PERF_SIM_FLAGS ?=
