@@ -233,13 +233,6 @@ export class RouterStore {
     window.history.pushState(null, "", url);
   }
 
-  replaceSession(id: string) {
-    const url = this.#buildUrl(sessionPath(id), this.params);
-    this.sessionId = id;
-    this.isRootPath = false;
-    window.history.replaceState(null, "", url);
-  }
-
   navigateFromSession(params: Record<string, string> = {}) {
     const url = this.#buildUrl("/sessions", params);
     this.#updateSticky(params);
@@ -252,7 +245,9 @@ export class RouterStore {
 
   /** Update query params without creating a history entry. */
   replaceParams(params: Record<string, string>) {
-    const path = this.sessionId ? sessionPath(this.sessionId) : `/${this.route}`;
+    const path = this.sessionId
+      ? window.location.pathname.slice(getBasePath().length)
+      : `/${this.route}`;
     const url = this.#buildUrl(path, params);
     this.#updateSticky(params);
     this.params = { ...this.#stickyParams, ...params };

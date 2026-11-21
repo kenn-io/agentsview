@@ -863,7 +863,7 @@ class SessionsStore {
               this.activeSessionId === id &&
               this.navigateRead.isCurrent(signal)
             ) {
-              if (router.sessionId === id) router.replaceSession(result.id);
+              if (router.sessionId === id) router.sessionId = result.id;
               await this.navigateToSession(result.id);
               return;
             }
