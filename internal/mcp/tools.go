@@ -141,9 +141,10 @@ type sessionHit struct {
 }
 
 type searchSessionsOut struct {
-	Results        []sessionHit `json:"results"`
-	NextCursor     *int         `json:"next_cursor,omitempty"`
-	ExcludedActive int          `json:"excluded_active,omitempty"`
+	Results        []sessionHit                `json:"results"`
+	NextCursor     *int                        `json:"next_cursor,omitempty"`
+	ExcludedActive int                         `json:"excluded_active,omitempty"`
+	Hints          []service.ContentSearchHint `json:"hints,omitempty"`
 }
 
 func (t *toolset) searchSessions(
@@ -214,6 +215,19 @@ func (t *toolset) searchSessions(
 	if res.NextCursor > 0 && len(res.Results) > 0 {
 		nc := res.NextCursor
 		out.NextCursor = &nc
+	}
+	if len(out.Results) == 0 && out.ExcludedActive > 0 {
+		message := fmt.Sprintf("Sessions active in the last %g minutes hidden from this page: %d. "+
+			"Retry this request with include_active: true to see them; they may include your current conversation.",
+			activeExclusionWindow.Minutes(), out.ExcludedActive)
+		if out.NextCursor != nil {
+			message += " To see later matches without including active sessions, pass next_cursor as cursor."
+		}
+		out.Hints = []service.ContentSearchHint{{
+			Code:      "excluded_active",
+			Message:   message,
+			RetryWith: map[string]any{"include_active": true},
+		}}
 	}
 	return nil, out, nil
 }

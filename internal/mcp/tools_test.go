@@ -372,6 +372,44 @@ func TestSearchSessions_ExcludesRecentlyActive(t *testing.T) {
 	assert.Zero(t, withActive.ExcludedActive)
 }
 
+func TestSearchSessions_EmptyActiveHint(t *testing.T) {
+	ts, d := newTestToolset(t)
+	if !d.HasFTS(t.Context()) {
+		t.Skip("FTS not available")
+	}
+	seedFTSSession(t, d, "active-1", "proj", "shared needle", "2024-06-15T11:55:00Z")
+	seedFTSSession(t, d, "active-2", "proj", "shared needle", "2024-06-15T11:56:00Z")
+	seedFTSSession(t, d, "other", "other", "shared needle", "2024-06-15T11:57:00Z")
+
+	in := searchSessionsIn{Query: "needle", Project: "proj"}
+	out := mustSearch(t, ts, in)
+	assert.Empty(t, out.Results)
+	assert.Equal(t, 2, out.ExcludedActive)
+	assert.Equal(t, []service.ContentSearchHint{{
+		Code: "excluded_active", Message: "Sessions active in the last 10 minutes hidden from this page: 2. " +
+			"Retry this request with include_active: true to see them; they may include your current conversation.",
+		RetryWith: map[string]any{"include_active": true},
+	}}, out.Hints)
+
+	noMatch := mustSearch(t, ts, searchSessionsIn{Query: "absent"})
+	assert.Empty(t, noMatch.Results)
+	assert.Empty(t, noMatch.Hints)
+
+	seedFTSSession(t, d, "older", "proj", "pageexample", "2024-06-15T11:00:00Z")
+	seedFTSSession(t, d, "recent", "proj", "pageexample", "2024-06-15T11:55:00Z")
+	mixed := mustSearch(t, ts, searchSessionsIn{Query: "pageexample"})
+	assert.Len(t, mixed.Results, 1)
+	assert.Equal(t, 1, mixed.ExcludedActive)
+	assert.Empty(t, mixed.Hints)
+	page := mustSearch(t, ts, searchSessionsIn{Query: "pageexample", Sort: "recency", Limit: 1})
+	assert.Empty(t, page.Results)
+	require.NotNil(t, page.NextCursor)
+	require.Len(t, page.Hints, 1)
+	assert.Equal(t, "Sessions active in the last 10 minutes hidden from this page: 1. "+
+		"Retry this request with include_active: true to see them; they may include your current conversation. "+
+		"To see later matches without including active sessions, pass next_cursor as cursor.", page.Hints[0].Message)
+}
+
 func mustSearch(t *testing.T, ts *toolset, in searchSessionsIn) searchSessionsOut {
 	t.Helper()
 	_, out, err := ts.searchSessions(t.Context(), nil, in)
