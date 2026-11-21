@@ -742,6 +742,30 @@ func (t *toolset) fitMessagePage(ctx context.Context, out *getMessagesOut, scann
 		attachBodyCursors(out, source, in.SessionID, in.Roles)
 		return fitsResponse(out)
 	})
+	if in.Around != nil {
+		for i := n; i < len(items); i++ {
+			if items[i].Ordinal == *in.Around {
+				next := items[0].Ordinal
+				out.Messages, out.Omitted, out.NextFrom, out.Filtered = items[i:i+1], len(items)-1, &next, 0
+				attachBodyCursors(out, source, in.SessionID, in.Roles)
+				if fitsResponse(out) {
+					return nil
+				}
+				out.Messages = nil
+				roles := in.Roles
+				if len(roles) > 0 {
+					roles = []string{items[i].Role}
+				}
+				progress := fitOneMessage(out, &items[i], messageBodyCursor{EvidenceSource: source, SessionID: in.SessionID, Revision: out.TranscriptRevision, Ordinal: items[i].Ordinal, NextFrom: &next, Roles: roles})
+				out.Messages = items[i : i+1]
+				attachBodyCursors(out, source, in.SessionID, in.Roles)
+				if !progress || !fitsResponse(out) {
+					return errors.New("message metadata exceeds response budget")
+				}
+				return nil
+			}
+		}
+	}
 	if n == 0 {
 		cut(1)
 		out.Messages = items[:0]

@@ -2467,7 +2467,19 @@ func TestGetMessages_BudgetAroundLinearContinuation(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, fitsResponse(out))
 	require.NotEmpty(t, out.Messages)
-	assert.Equal(t, 0, out.Messages[0].Ordinal)
+	assert.Equal(t, anchor, out.Messages[0].Ordinal)
 	require.NotNil(t, out.NextFrom)
-	assert.Equal(t, out.Messages[len(out.Messages)-1].Ordinal+1, *out.NextFrom)
+	assert.Equal(t, 0, *out.NextFrom)
+	from := out.NextFrom
+	var ordinals []int
+	for from != nil && *from < len(messages) {
+		_, page, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: in.SessionID, From: from, MaxCharsPerMessage: 5000})
+		require.NoError(t, err)
+		assert.True(t, fitsResponse(page))
+		for _, message := range page.Messages {
+			ordinals = append(ordinals, message.Ordinal)
+		}
+		from = page.NextFrom
+	}
+	assert.Equal(t, []int{0, 1, 2, 3, 4}, ordinals)
 }
