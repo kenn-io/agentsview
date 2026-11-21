@@ -2632,4 +2632,11 @@ func TestSessionResolutionQualifiedSuffix(t *testing.T) {
 		require.Len(t, out.Entries, 1)
 		assert.Equal(t, "entry", out.Entries[0].ID)
 	}
+	dbtest.SeedSession(t, d, "5d416183-b894-47ef-9cba-47d5a1201234", "project")
+	dbtest.SeedSession(t, d, "host~5d416183-b894-47ef-9cba-47d5a1201234", "project")
+	require.NoError(t, d.SoftDeleteSession(t.Context(), "5d416183-b894-47ef-9cba-47d5a1201234"))
+	for _, toolset := range []*toolset{ts, remote} {
+		_, _, err := toolset.sessionOverview(t.Context(), nil, sessionOverviewIn{SessionID: "5d416183-b894-47ef-9cba-47d5a1201234"})
+		require.ErrorIs(t, err, service.ErrSessionNotFound)
+	}
 }
