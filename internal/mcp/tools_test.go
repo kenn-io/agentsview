@@ -2634,6 +2634,7 @@ func TestSearchContent_LexicalPageCursorInvalid(t *testing.T) {
 		{"concepts", searchPageCursor{Version: 2, Input: searchContentIn{Concepts: []string{"a", "b"}, Cursor: 1}}},
 		{"above cap", searchPageCursor{Version: 2, Total: 501, Input: searchContentIn{Pattern: "needle", Cursor: 1}}},
 		{"digest", searchPageCursor{Version: 2, Digest: "x", Input: searchContentIn{Pattern: "needle", Cursor: 1}}},
+		{"unsupported version", searchPageCursor{Version: 3, Input: searchContentIn{Pattern: "needle", Cursor: 1}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			data, err := json.Marshal(tc.cursor)
@@ -2675,14 +2676,6 @@ func TestSearchContent_TotalLegacyActivity(t *testing.T) {
 			}
 		})
 	}
-}
-
-func uniqueOrdinals(ordinals []int) map[int]bool {
-	seen := make(map[int]bool, len(ordinals))
-	for _, ordinal := range ordinals {
-		seen[ordinal] = true
-	}
-	return seen
 }
 
 func TestSearchContent_BudgetTruncatesContext(t *testing.T) {
@@ -2727,13 +2720,12 @@ func TestGetMessages_BudgetAroundSweep(t *testing.T) {
 		in = getMessagesIn{SessionID: "around-budget", PageCursor: out.PageCursor}
 	}
 	require.Len(t, ordinals, 21)
-	assert.Len(t, uniqueOrdinals(ordinals), 21)
 	for i := range 21 {
 		assert.Contains(t, ordinals, i)
 	}
 }
 
-func TestSearchContent_BudgetCursorRejectsChangedPageAndVersion(t *testing.T) {
+func TestSearchContent_BudgetCursorRejectsChangedPage(t *testing.T) {
 	matches := make([]db.ContentMatch, 20)
 	for i := range matches {
 		matches[i] = db.ContentMatch{SessionID: "session", Ordinal: i, Snippet: strings.Repeat("x", 1800)}
@@ -2811,7 +2803,6 @@ func TestGetMessages_BudgetPagesAndBodyCursors(t *testing.T) {
 		require.NotEmpty(t, out.Messages)
 		assert.True(t, fitsResponse(out))
 		var nextFrom *int
-		var nextPage string
 		for _, message := range out.Messages {
 			_, exists := got[message.Ordinal]
 			assert.False(t, exists)
@@ -2826,14 +2817,10 @@ func TestGetMessages_BudgetPagesAndBodyCursors(t *testing.T) {
 				content += body.Messages[0].Content
 				cursor = body.Messages[0].BodyCursor
 				if cursor == "" {
-					nextFrom, nextPage = body.NextFrom, body.PageCursor
+					nextFrom = body.NextFrom
 				}
 			}
 			got[message.Ordinal] = content
-		}
-		if nextPage != "" {
-			in = getMessagesIn{SessionID: "page-bodies", PageCursor: nextPage}
-			continue
 		}
 		if nextFrom != nil {
 			in = getMessagesIn{SessionID: "page-bodies", From: nextFrom, Limit: 21, MaxCharsPerMessage: 700}

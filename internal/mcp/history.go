@@ -86,7 +86,15 @@ func (t *toolset) toolCalls(
 			return nil, toolCallsOut{}, fmt.Errorf("session not found: %s", in.SessionID)
 		}
 	}
-	matching := filterToolCalls(list.ToolCalls, in.Category)
+	matching := list.ToolCalls
+	if in.Category != "" {
+		matching = make([]service.ToolCall, 0, len(list.ToolCalls))
+		for _, tc := range list.ToolCalls {
+			if strings.EqualFold(tc.Category, in.Category) {
+				matching = append(matching, tc)
+			}
+		}
+	}
 	limit := clampLimit(in.Limit, defaultToolCallLimit, maxToolCallLimit)
 	maxChars := clampLimit(in.MaxInputChars, defaultToolInputChars, maxToolInputChars)
 	start := min(in.Cursor, len(matching))
@@ -118,19 +126,6 @@ func (t *toolset) toolCalls(
 	}
 
 	return nil, out, nil
-}
-
-func filterToolCalls(calls []service.ToolCall, category string) []service.ToolCall {
-	if category == "" {
-		return calls
-	}
-	matching := make([]service.ToolCall, 0, len(calls))
-	for _, tc := range calls {
-		if strings.EqualFold(tc.Category, category) {
-			matching = append(matching, tc)
-		}
-	}
-	return matching
 }
 
 // toolCallItem redacts and truncates a call's input to maxChars, then drops
