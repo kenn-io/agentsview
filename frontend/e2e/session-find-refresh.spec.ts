@@ -51,6 +51,7 @@ async function installLiveSession(page: Page) {
   await page.addInitScript(() => {
     localStorage.setItem("agentsview-message-layout", "skim");
     localStorage.setItem("agentsview-transcript-mode", "normal");
+    Object.defineProperty(window, "SharedWorker", { value: undefined });
   });
   await page.route(`**/api/v1/sessions/${SESSION_ID}`, async (route) => {
     const response = await route.fetch();
@@ -67,23 +68,33 @@ async function installLiveSession(page: Page) {
       : all.slice(from, from + limit);
     await route.fulfill({ json: { messages: selected, count: selected.length } });
   });
-  // The first watch connection stays open until the test emits an update.
+  // The shared stream stays open until the test emits an update.
   let emit!: () => void;
   const gate = new Promise<void>((resolve) => {
     emit = resolve;
   });
+  let subscribed!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    subscribed = resolve;
+  });
   let served = false;
-  await page.route(`**/api/v1/sessions/${SESSION_ID}/watch*`, async (route) => {
+  await page.route("**/api/v1/events*", async (route) => {
+    if (!new URL(route.request().url()).searchParams.getAll("session").includes(SESSION_ID)) {
+      await route.continue();
+      return;
+    }
     if (served) return new Promise<void>(() => {});
     served = true;
+    subscribed();
     await gate;
     await route.fulfill({
       status: 200,
       contentType: "text/event-stream",
-      body: "event: session_updated\ndata: {}\n\n",
+      body: `event: session_updated\ndata: ${SESSION_ID}\n\n`,
     });
   });
   return {
+    ready,
     refresh: () => {
       for (let i = 0; i < 5; i++) {
         const ordinal = all.length;
@@ -103,6 +114,7 @@ for (const newestFirst of [false, true])
       await page.goto(`/sessions/${SESSION_ID}`);
       const transcript = page.locator(".message-list-scroll");
       await expect(transcript).toHaveAttribute("data-loaded", "true");
+      await live.ready;
 
       if (newestFirst) {
         await page.getByRole("button", { name: "Toggle sort order (o)" }).click();
