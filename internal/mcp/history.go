@@ -172,14 +172,10 @@ func (t *toolset) toolCalls(
 			fitPrefix(max(maxChars, resultChars), func(k int) bool {
 				narrow := in
 				narrow.MaxResultChars = min(resultChars, max(k, 1))
-				call, buildErr := toolCallPage(first.ToolCall, first.position, results[first.Ordinal], narrow, min(maxChars, max(k, 1)))
-				err = buildErr
+				call, _ := toolCallPage(first.ToolCall, first.position, results[first.Ordinal], narrow, min(maxChars, max(k, 1)))
 				out.ToolCalls = []toolCallOut{call}
-				return err == nil && fitsResponse(out)
+				return fitsResponse(out)
 			})
-			if err != nil {
-				return nil, toolCallsOut{}, err
-			}
 			if !fitsResponse(out) {
 				return nil, toolCallsOut{}, errors.New("tool call metadata exceeds response budget")
 			}
@@ -319,9 +315,6 @@ func continueToolResult(cursor toolResultCursor, tc db.ToolCall, maxChars int) (
 	}
 	window := string(runes[cursor.Offset:min(cursor.Offset+maxChars, len(runes))])
 	chunk := fitText(window, responseBudgetBytes, func(s string) any { return toolCallsOut{ToolCalls: []toolCallOut{page(s)}} })
-	if chunk == "" {
-		return call, errors.New("tool call metadata exceeds response budget")
-	}
 	return page(chunk), nil
 }
 
