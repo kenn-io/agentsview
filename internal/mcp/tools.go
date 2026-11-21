@@ -1156,6 +1156,29 @@ func (t *toolset) countContentMatches(ctx context.Context, req service.ContentSe
 	}
 }
 
+func (t *toolset) contentSearchTotal(ctx context.Context, req service.ContentSearchRequest, res *service.ContentSearchResult, mode string, legacy bool, keep func(db.ContentMatch) bool) (int, bool, error) {
+	if mode == "semantic" || mode == "hybrid" {
+		total := 0
+		for _, m := range res.Matches {
+			if !legacy || keep(m) {
+				total++
+			}
+		}
+		return total, true, nil
+	}
+	if legacy {
+		return t.countContentMatches(ctx, req, 0, 0, keep)
+	}
+	if req.Cursor > 0 {
+		return t.countContentMatches(ctx, req, 0, 0, nil)
+	}
+	total := len(res.Matches)
+	if res.NextCursor > 0 {
+		return t.countContentMatches(ctx, req, res.NextCursor, total, nil)
+	}
+	return total, false, nil
+}
+
 func (t *toolset) searchContent(
 	ctx context.Context, _ *mcp.CallToolRequest, in searchContentIn,
 ) (*mcp.CallToolResult, searchContentOut, error) {
@@ -1286,23 +1309,7 @@ func (t *toolset) searchContent(
 		}
 	}
 	if len(in.Concepts) == 0 {
-		if mode == "semantic" || mode == "hybrid" {
-			for _, m := range res.Matches {
-				if !legacy || keepMatch(m) {
-					out.Total++
-				}
-			}
-			out.TotalCapped = true
-		} else if legacy {
-			out.Total, out.TotalCapped, err = t.countContentMatches(ctx, req, 0, 0, keepMatch)
-		} else {
-			out.Total = in.Cursor + len(res.Matches)
-			if res.NextCursor > 0 && out.Total >= contentTotalCap {
-				out.TotalCapped = true
-			} else if res.NextCursor > 0 {
-				out.Total, out.TotalCapped, err = t.countContentMatches(ctx, req, res.NextCursor, out.Total, nil)
-			}
-		}
+		out.Total, out.TotalCapped, err = t.contentSearchTotal(ctx, req, res, mode, legacy, keepMatch)
 		if err != nil {
 			return nil, searchContentOut{}, err
 		}

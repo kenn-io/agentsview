@@ -2506,6 +2506,7 @@ func TestSearchContent_Total(t *testing.T) {
 	}{
 		{name: "first page", count: 36, limit: 10, context: 3, want: 36, calls: 2},
 		{name: "continued page", count: 36, limit: 10, cursor: 10, want: 36, calls: 2},
+		{name: "cursor past end", count: 6, limit: 10, cursor: 1000, want: 6, calls: 2},
 		{name: "cut page", count: 36, limit: 10, snippet: strings.Repeat("x", 1800), want: 36, calls: 2, cut: true},
 		{name: "single page", count: 5, limit: 10, want: 5, calls: 1},
 		{name: "capped", count: 600, limit: 10, want: 510, calls: 11, capped: true},
