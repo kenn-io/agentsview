@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -442,8 +443,15 @@ func ToolCallPRLinks(messages []Message, cwd, remote string) []PRLink {
 }
 
 func toolCallRepositoryTx(tx transactionQueries, id string) (string, string, error) {
-	var cwd, remote string
-	err := tx.QueryRow(`SELECT COALESCE(s.cwd,''), CASE WHEN p.remote_candidate_count=1 AND COALESCE(p.git_remote_name,'')<>'' AND COALESCE(p.recorded_git_remote,'')='' THEN COALESCE(p.git_remote,'') ELSE '' END FROM sessions s LEFT JOIN session_project_identity_snapshots p ON p.session_id=s.id WHERE s.id=?`, id).Scan(&cwd, &remote)
+	var cwd, remote, recorded string
+	err := tx.QueryRow(`SELECT COALESCE(s.cwd,''), CASE WHEN p.remote_candidate_count=1 AND COALESCE(p.git_remote_name,'')<>'' THEN COALESCE(p.git_remote,'') ELSE '' END, COALESCE(p.recorded_git_remote,'') FROM sessions s LEFT JOIN session_project_identity_snapshots p ON p.session_id=s.id WHERE s.id=?`, id).Scan(&cwd, &remote, &recorded)
+	if remote != "" && recorded != "" {
+		checkout, checkoutOK := export.NormalizeGitRemote(remote)
+		source, sourceOK := export.NormalizeGitRemote(recorded)
+		if !checkoutOK || !sourceOK || checkout != source {
+			remote = ""
+		}
+	}
 	return cwd, remote, err
 }
 
