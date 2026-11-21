@@ -1444,6 +1444,19 @@ func (db *DB) getAnalyticsActivityFilteredByModelTime(
 
 // GetAnalyticsActivity returns session/message counts grouped
 // by time bucket.
+func activityMessageCounts(role string, thinking, system bool, subtype string, count int) (user, assistant, thought int) {
+	if role == "user" && !system && subtype != "tool_result" {
+		user = count
+	}
+	if role == "assistant" {
+		assistant = count
+	}
+	if thinking {
+		thought = count
+	}
+	return
+}
+
 func (db *DB) GetAnalyticsActivity(
 	ctx context.Context, f AnalyticsFilter,
 	granularity string,
@@ -1547,17 +1560,10 @@ func (db *DB) GetAnalyticsActivity(
 		if role != nil {
 			entry.Messages += count
 			entry.ByAgent[agent] += count
-			switch *role {
-			case "user":
-				if !sys && sourceSubtype != "tool_result" {
-					entry.UserMessages += count
-				}
-			case "assistant":
-				entry.AssistantMessages += count
-			}
-			if hasThinking != nil && *hasThinking {
-				entry.ThinkingMessages += count
-			}
+			user, assistant, thinking := activityMessageCounts(*role, hasThinking != nil && *hasThinking, sys, sourceSubtype, count)
+			entry.UserMessages += user
+			entry.AssistantMessages += assistant
+			entry.ThinkingMessages += thinking
 		}
 	}
 	if err := rows.Err(); err != nil {

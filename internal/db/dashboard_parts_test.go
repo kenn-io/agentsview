@@ -4,6 +4,8 @@ package db
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"sync/atomic"
@@ -22,6 +24,13 @@ func addDashboardCacheSessions(t *testing.T, d *DB, count int) {
 			s.StartedAt = new("2024-06-01T09:00:00Z")
 		})
 	}
+}
+
+func dashboardTestSlot(t *testing.T, f AnalyticsFilter) string {
+	t.Helper()
+	data, err := json.Marshal(f, json.Deterministic(true))
+	require.NoError(t, err)
+	return "dashboard-parts|" + TrendsTimezoneKey(f) + "|" + string(data)
 }
 
 func TestDashboardPartsMatchScansAndReuse(t *testing.T) {
@@ -76,10 +85,10 @@ func TestDashboardPartsMatchScansAndReuse(t *testing.T) {
 	check(f)
 	require.Equal(t, [][]string{{"a", "b", "empty", "extra-0", "extra-1"}}, reads)
 	check(AnalyticsFilter{Timezone: "UTC", Agent: "codex"})
-	require.Len(t, reads, 1)
+	require.Equal(t, [][]string{{"a", "b", "empty", "extra-0", "extra-1"}, {"b"}}, reads)
 	insertMessages(t, d, asstMsgAt("a", 2, "later", "2024-06-01T09:02:00Z"))
 	check(f)
-	require.Equal(t, [][]string{{"a", "b", "empty", "extra-0", "extra-1"}, {"a"}}, reads)
+	require.Equal(t, [][]string{{"a", "b", "empty", "extra-0", "extra-1"}, {"b"}, {"a"}}, reads)
 	b.ToolCalls = append(b.ToolCalls, ToolCall{SessionID: "a", ToolName: "Write", Category: "Write"})
 	require.NoError(t, d.ReplaceSessionMessages(ctx, "a", []Message{a, b}))
 	check(f)
@@ -104,6 +113,35 @@ func TestDashboardPartsMatchScansAndReuse(t *testing.T) {
 	hour := 9
 	check(AnalyticsFilter{Timezone: "UTC", Hour: &hour})
 	check(AnalyticsFilter{Timezone: "UTC", Model: "other"})
+}
+
+func TestDashboardPartsSelectionUsesSeparateFile(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	for i := range 10 {
+		id := fmt.Sprintf("s%d", i)
+		insertSession(t, d, id, "project", func(s *Session) {
+			if i < 5 {
+				s.Agent = "codex"
+			} else {
+				s.Agent = "gemini"
+			}
+		})
+		insertMessages(t, d, userMsg(id, 0, "hello"))
+	}
+	var reads [][]string
+	dashboardPartsReadObserver = func(ids []string) { reads = append(reads, append([]string(nil), ids...)) }
+	t.Cleanup(func() { dashboardPartsReadObserver = nil })
+	_, _, handled, err := d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC"})
+	require.NoError(t, err)
+	require.True(t, handled)
+	_, parts, handled, err := d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC", Agent: "codex"})
+	require.NoError(t, err)
+	require.True(t, handled)
+	require.Len(t, parts, 5)
+	require.Len(t, reads, 2)
+	assert.Equal(t, []string{"s0", "s1", "s2", "s3", "s4"}, reads[1])
 }
 
 func TestDashboardPartsContentLengthReplacement(t *testing.T) {
@@ -155,10 +193,25 @@ func TestDashboardPartsWriteDuringFillFallsBack(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, result.Series, 1)
 	assert.Equal(t, 2, result.Series[0].Messages)
+	d.readOnly = true
+	scan, err := d.GetAnalyticsActivity(ctx, AnalyticsFilter{Timezone: "UTC"}, "day")
+	d.readOnly = false
+	require.NoError(t, err)
+	assert.Equal(t, scan, result)
 	identity, err := d.GetDatabaseID(ctx)
 	require.NoError(t, err)
-	_, ok := d.trendsDisk.Get("dashboard-parts|"+TrendsTimezoneKey(AnalyticsFilter{Timezone: "UTC"}), fmt.Sprintf("%s|%d", identity, dashboardPartsVersion))
-	assert.False(t, ok)
+	data, ok := d.trendsDisk.Get(dashboardTestSlot(t, AnalyticsFilter{Timezone: "UTC"}), fmt.Sprintf("%s|%d", identity, dashboardPartsVersion))
+	require.True(t, ok)
+	_ = data
+	parts := kept.LoadParts[dashboardPart](&d.trendsDisk, dashboardTestSlot(t, AnalyticsFilter{Timezone: "UTC"}), fmt.Sprintf("%s|%d", identity, dashboardPartsVersion))
+	assert.NotContains(t, parts, "s")
+	assert.Contains(t, parts, "extra-0")
+	var reads [][]string
+	dashboardPartsReadObserver = func(ids []string) { reads = append(reads, append([]string(nil), ids...)) }
+	t.Cleanup(func() { dashboardPartsReadObserver = nil })
+	_, err = d.GetAnalyticsActivity(ctx, AnalyticsFilter{Timezone: "UTC"}, "day")
+	require.NoError(t, err)
+	assert.Equal(t, [][]string{{"s"}}, reads)
 }
 
 func TestDashboardPartsCancellationReleasesPermit(t *testing.T) {
@@ -276,7 +329,7 @@ func TestDashboardPartsOtherSessionWriteDuringFill(t *testing.T) {
 	assert.Equal(t, 33, parts["selected"].Value.Messages)
 	identity, err := d.GetDatabaseID(ctx)
 	require.NoError(t, err)
-	_, ok := d.trendsDisk.Get("dashboard-parts|"+TrendsTimezoneKey(AnalyticsFilter{Timezone: "UTC"}), fmt.Sprintf("%s|%d", identity, dashboardPartsVersion))
+	_, ok := d.trendsDisk.Get(dashboardTestSlot(t, AnalyticsFilter{Timezone: "UTC", Agent: "codex"}), fmt.Sprintf("%s|%d", identity, dashboardPartsVersion))
 	assert.True(t, ok)
 }
 
@@ -293,7 +346,10 @@ func TestDashboardPartsLengthUpdateWithoutRevision(t *testing.T) {
 	require.InDelta(t, 6, before.Overall.CharsPerActiveMin, 0)
 	var revision string
 	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT transcript_revision FROM sessions WHERE id='s'`).Scan(&revision))
-	_, err = d.getWriter().ExecContext(ctx, `UPDATE messages SET content_length=20 WHERE session_id='s' AND ordinal=1`)
+	other, err := sql.Open("sqlite3", makeDSN(d.Path(), false))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, other.Close()) })
+	_, err = other.ExecContext(ctx, `UPDATE messages SET content_length=20 WHERE session_id='s' AND ordinal=1`)
 	require.NoError(t, err)
 	var afterRevision string
 	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT transcript_revision FROM sessions WHERE id='s'`).Scan(&afterRevision))
@@ -308,6 +364,29 @@ func TestDashboardPartsLengthUpdateWithoutRevision(t *testing.T) {
 	after, err = d.GetAnalyticsVelocity(ctx, f)
 	require.NoError(t, err)
 	assert.InDelta(t, 30, after.Overall.CharsPerActiveMin, 0)
+}
+
+func TestDashboardPartsArchiveStripInvalidatesVelocity(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "s", "project", func(s *Session) { s.StartedAt = new("2024-06-01T09:00:00Z"); s.MessageCount = 2 })
+	answer := asstMsgAt("s", 1, "answer", "2024-06-01T09:01:00Z")
+	answer.SourceSubtype = "tool_result"
+	insertMessages(t, d, userMsgAt("s", 0, "hello", "2024-06-01T09:00:00Z"), answer)
+	f := AnalyticsFilter{Timezone: "UTC"}
+	before, err := d.GetAnalyticsVelocity(ctx, f)
+	require.NoError(t, err)
+	require.InDelta(t, 6, before.Overall.CharsPerActiveMin, 0)
+	tx, err := d.getWriter().BeginTx(ctx, nil)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `CREATE TEMP TABLE selected_copy_ids (id TEXT); INSERT INTO selected_copy_ids VALUES ('s')`)
+	require.NoError(t, err)
+	require.NoError(t, dropCopiedToolContentTx(ctx, tx, "selected_copy_ids"))
+	require.NoError(t, tx.Commit())
+	after, err := d.GetAnalyticsVelocity(ctx, f)
+	require.NoError(t, err)
+	assert.Zero(t, after.Overall.CharsPerActiveMin)
 }
 
 func TestDashboardPartsPrunesDeletedSessions(t *testing.T) {
@@ -326,7 +405,7 @@ func TestDashboardPartsPrunesDeletedSessions(t *testing.T) {
 	require.True(t, handled)
 	identity, err := d.GetDatabaseID(ctx)
 	require.NoError(t, err)
-	parts := kept.LoadParts[dashboardPart](&d.trendsDisk, "dashboard-parts|"+TrendsTimezoneKey(AnalyticsFilter{Timezone: "UTC"}), fmt.Sprintf("%s|%d", identity, dashboardPartsVersion))
+	parts := kept.LoadParts[dashboardPart](&d.trendsDisk, dashboardTestSlot(t, AnalyticsFilter{Timezone: "UTC"}), fmt.Sprintf("%s|%d", identity, dashboardPartsVersion))
 	assert.NotContains(t, parts, "a")
 	assert.Contains(t, parts, "b")
 }
@@ -336,14 +415,16 @@ func TestDashboardPartsQueuedFillsDoNotHoldBulkPermits(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "a", "project", func(s *Session) { s.Agent = "codex" })
 	insertSession(t, d, "b", "project", func(s *Session) { s.Agent = "gemini" })
-	for i := range 33 {
-		insertMessages(t, d, userMsg("a", i, "hello"), userMsg("b", i, "hello"))
-	}
-	d.dashboardPartsOnce.Do(func() { d.dashboardPartsSlot = make(chan struct{}, 1) })
-	d.dashboardPartsSlot <- struct{}{}
 	entered := make(chan struct{}, 2)
-	dashboardPartsBeforeSlotObserver = func() { entered <- struct{}{} }
-	t.Cleanup(func() { dashboardPartsBeforeSlotObserver = nil })
+	unblock := make(chan struct{})
+	dashboardPartsBeforeValidationObserver = func(ctx context.Context) {
+		entered <- struct{}{}
+		select {
+		case <-unblock:
+		case <-ctx.Done():
+		}
+	}
+	t.Cleanup(func() { dashboardPartsBeforeValidationObserver = nil })
 	ctx, cancel := context.WithCancel(t.Context())
 	results := make(chan error, 2)
 	for _, agent := range []string{"codex", "gemini"} {
@@ -354,26 +435,19 @@ func TestDashboardPartsQueuedFillsDoNotHoldBulkPermits(t *testing.T) {
 	}
 	<-entered
 	<-entered
-	//nolint:kennlint // deadlinetest: the deadline detects permits held while fills wait.
+	//nolint:kennlint // deadlinetest: detects readers blocked by fills.
 	guard, stop := context.WithTimeout(t.Context(), 5*time.Second)
 	defer stop()
-	var releases []func()
-	for range readerMaxOpenConns - 1 {
-		release, err := d.acquireBulkRead(guard)
-		if err != nil {
-			break
-		}
-		releases = append(releases, release)
-	}
-	for _, release := range releases {
+	release, err := d.acquireBulkRead(guard)
+	if err == nil {
 		release()
 	}
 	cancel()
-	<-d.dashboardPartsSlot
+	close(unblock)
 	for range 2 {
 		<-results
 	}
-	assert.Len(t, releases, readerMaxOpenConns-1)
+	require.NoError(t, err)
 }
 
 func TestDashboardPartsToolChangeWithoutTranscriptRevision(t *testing.T) {
@@ -444,7 +518,7 @@ func TestDashboardPartsSmallFilteredSelection(t *testing.T) {
 	for _, f := range []AnalyticsFilter{{Timezone: "UTC"}, {Timezone: "UTC", Agent: "codex"}, {Timezone: "UTC", Project: "project"}, {Timezone: "UTC", From: "2024-06-01", To: "2024-06-01"}} {
 		_, _, handled, err := d.dashboardParts(ctx, f)
 		require.NoError(t, err)
-		assert.False(t, handled)
+		assert.True(t, handled)
 		hours, err := d.GetAnalyticsHourOfWeek(ctx, f)
 		require.NoError(t, err)
 		require.Len(t, hours.Cells, 168)
@@ -475,7 +549,7 @@ func TestDashboardPartsSmallSelectionAcrossSessions(t *testing.T) {
 	f := AnalyticsFilter{Timezone: "UTC", Project: "project"}
 	_, _, handled, err := d.dashboardParts(ctx, f)
 	require.NoError(t, err)
-	assert.False(t, handled)
+	assert.True(t, handled)
 	insertMessages(t, d, userMsg("s0", 8, "hello"))
 	_, parts, handled, err := d.dashboardParts(ctx, f)
 	require.NoError(t, err)

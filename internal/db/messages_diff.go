@@ -229,23 +229,6 @@ func transcriptMessagesEqual(stored, incoming []Message) bool {
 	return true
 }
 
-// dashboardMessageLengthsEqual checks the stored length used by velocity.
-func dashboardMessageLengthsEqual(stored, incoming []Message) bool {
-	if len(stored) != len(incoming) {
-		return false
-	}
-	lengths := make(map[int]int, len(stored))
-	for _, msg := range stored {
-		lengths[msg.Ordinal] = msg.ContentLength
-	}
-	for _, msg := range incoming {
-		if length, ok := lengths[msg.Ordinal]; !ok || length != msg.ContentLength {
-			return false
-		}
-	}
-	return true
-}
-
 func dialogueMessagesChanged(stored, incoming []Message) bool {
 	byOrdinal := make(map[int]*string, len(stored))
 	for _, msg := range stored {
