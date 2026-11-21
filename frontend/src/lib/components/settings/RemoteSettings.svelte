@@ -13,15 +13,15 @@
     isRemoteConnection,
   } from "../../api/runtime.js";
   import { MetadataService } from "../../api/generated/index.js";
-  import { MIN_REMOTE_API_VERSION, supportsRemoteVersion } from "../../api/remoteVersion.js";
+  import { LIVE_SESSION_API_VERSION, supportsLiveSessionUpdates } from "../../api/remoteVersion.js";
   import { LatestRead } from "../../utils/latest-read.js";
   import RestartAction from "./RestartAction.svelte";
 
   let serverUrl: string = $state(getServerUrl());
   let tokenInput: string = $state(getAuthToken());
   let testing: boolean = $state(false);
-  let testResult: { ok: boolean; message: string } | null = $state(null);
   let saving: boolean = $state(false);
+  let testResults: { tone: "success" | "warning" | "error"; message: string }[] = $state([]);
   let saveMsg: string | null = $state(null);
   let remoteToggling: boolean = $state(false);
   let pendingRequireAuth: boolean = $state(settings.requireAuth);
@@ -38,7 +38,7 @@
     if (!serverUrl.trim()) return;
     testing = true;
     const signal = versionRead.begin();
-    testResult = null;
+    testResults = [];
     try {
       const base = serverUrl.replace(/\/+$/, "");
       const headers: Record<string, string> = {};
@@ -47,27 +47,27 @@
       }
       const data = await MetadataService.getApiV1Version({ baseUrl: base, headers, signal });
       if (!versionRead.isCurrent(signal)) return;
-      if (!supportsRemoteVersion(data.api_version)) {
-        testResult = { ok: false, message: m.settings_remote_upgrade_required({
-          version: data.version || m.settings_remote_unknown(),
-          apiVersion: String(data.api_version ?? m.settings_remote_unknown()),
-          requiredVersion: String(MIN_REMOTE_API_VERSION),
-        }) };
-        return false;
-      }
-      testResult = {
-        ok: true,
+      testResults = [{
+        tone: "success",
         message: m.settings_remote_connected_version({ version: data.version || m.settings_remote_unknown() }),
-      };
-      return true;
+      }];
+      if (!supportsLiveSessionUpdates(data.api_version)) {
+        testResults.push({
+          tone: "warning",
+          message: m.settings_remote_live_updates_unavailable({
+            apiVersion: String(data.api_version ?? m.settings_remote_unknown()),
+            requiredVersion: String(LIVE_SESSION_API_VERSION),
+          }),
+        });
+      }
     } catch (e) {
       if (signal.aborted || !versionRead.isCurrent(signal)) return;
-      testResult = {
-        ok: false,
+      testResults = [{
+        tone: "error",
         message: e instanceof ApiError
           ? m.settings_remote_server_returned({ status: e.status })
           : e instanceof Error ? e.message : m.settings_remote_connection_failed(),
-      };
+      }];
     } finally {
       if (versionRead.finish(signal)) testing = false;
     }
@@ -75,21 +75,13 @@
 
   onDestroy(() => versionRead.cancel());
 
-  async function handleConnect() {
-    if (!serverUrl.trim() || saving) return;
-    saving = true;
+  function handleConnect() {
+    if (!serverUrl.trim()) return;
     const url = serverUrl.replace(/\/+$/, "");
-    const token = tokenInput.trim();
-    try {
-      if (!(await handleTestConnection())) return;
-      if (url !== serverUrl.replace(/\/+$/, "") || token !== tokenInput.trim()) return;
-      setServerUrl(url);
-      setAuthToken(token);
-      saveMsg = m.settings_remote_connected_reloading();
-      setTimeout(() => window.location.reload(), 500);
-    } finally {
-      saving = false;
-    }
+    setServerUrl(url);
+    setAuthToken(tokenInput.trim());
+    saveMsg = m.settings_remote_connected_reloading();
+    setTimeout(() => window.location.reload(), 500);
   }
 
   function handleDisconnect() {
@@ -229,18 +221,18 @@
         <Button
           tone="info"
           surface="solid"
-          disabled={saving || testing || !serverUrl.trim()}
+          disabled={saving || !serverUrl.trim()}
           onclick={handleConnect}
         >
           {m.settings_remote_connect()}
         </Button>
       </div>
 
-      {#if testResult}
-        <p class="msg control-offset" class:success={testResult.ok} class:error={!testResult.ok}>
-          {testResult.message}
+      {#each testResults as result (result.tone)}
+        <p class="msg control-offset {result.tone}">
+          {result.message}
         </p>
-      {/if}
+      {/each}
 
       {#if saveMsg}
         <p class="msg success control-offset">{saveMsg}</p>
@@ -337,6 +329,10 @@
 
   .msg.success {
     color: var(--accent-green, #22c55e);
+  }
+
+  .msg.warning {
+    color: var(--accent-amber, #f59e0b);
   }
 
   .security-warning {

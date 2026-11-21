@@ -27,33 +27,28 @@ afterEach(() => {
 });
 
 describe("RemoteSettings", () => {
-  it.each([27, 28])("checks API %i before connecting", async (apiVersion) => {
+  it.each([27, 28])("reports API %i when testing the connection", async (apiVersion) => {
     const fetch = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ api_version: apiVersion, version: "test" }), {
         headers: { "Content-Type": "application/json" },
       }),
     );
     vi.stubGlobal("fetch", fetch);
-    const { getByRole, getByLabelText, queryByText } = render(RemoteSettings);
+    const { getByRole, getByLabelText, findByText, queryByText } = render(RemoteSettings);
     await fireEvent.input(getByLabelText("Server URL"), {
       target: { value: "https://remote.example.test" },
     });
-    await fireEvent.input(getByLabelText("Auth token"), { target: { value: "test-token" } });
-    await fireEvent.click(getByRole("button", { name: /^Connect$/ }));
+    await fireEvent.click(getByRole("button", { name: "Test connection" }));
+    const connected = await findByText("Connected (vtest)");
+    expect(connected.classList.contains("success")).toBe(true);
+    const warning = queryByText(
+      "Sessions won't update live: this server runs API 27. Upgrade it to API 28, or reload to see new messages.",
+    );
     if (apiVersion === 27) {
-      await waitFor(() =>
-        expect(queryByText("Remote server: AgentsView test (API 27). Upgrade to API 28 or later.")).not.toBeNull(),
-      );
-      expect(localStorage.getItem("agentsview-server-url")).toBeNull();
+      expect(warning?.classList.contains("warning")).toBe(true);
     } else {
-      await waitFor(() =>
-        expect(localStorage.getItem("agentsview-server-url")).toBe("https://remote.example.test"),
-      );
-      expect(localStorage.getItem("agentsview-auth-token::https://remote.example.test")).toBe(
-        "test-token",
-      );
+      expect(warning).toBeNull();
     }
-    expect(fetch).toHaveBeenCalledOnce();
     expect(fetch.mock.calls[0]![0]).toBe("https://remote.example.test/api/v1/version");
   });
 

@@ -2094,7 +2094,7 @@
   "settings_embeddings_state_building": "빌드 중",
   "settings_embeddings_state_retired": "사용 중지됨",
   "settings_embeddings_coverage": "임베딩됨 {embeddedLabel} · 누락 {missingLabel}",
-  "settings_remote_upgrade_required": "원격 서버: AgentsView {version} (API {apiVersion}). API {requiredVersion} 이상으로 업그레이드하세요.",
+  "settings_remote_live_updates_unavailable": "세션이 실시간으로 업데이트되지 않습니다. 이 서버는 API {apiVersion}을(를) 사용합니다. API {requiredVersion}(으)로 업그레이드하거나 새로 고쳐 새 메시지를 확인하세요.",
   "settings_remote_connected_version": "연결됨 (v{version})",
   "settings_remote_server_returned": "서버가 {status}를 반환했습니다",
   "settings_remote_connection_failed": "연결 실패",

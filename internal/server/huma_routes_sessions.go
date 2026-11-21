@@ -1547,17 +1547,13 @@ func (s *Server) humaEvents(ctx context.Context, in *eventsInput) (*huma.StreamR
 				if !ok {
 					return
 				}
-				if !stream.SendJSON("data_changed", map[string]string{"scope": ev.Scope}) {
-					return
-				}
+				stream.SendJSON("data_changed", map[string]string{"scope": ev.Scope})
 			case t := <-ticks:
 				if t.closed || !s.sendSessionFrame(ctx, stream, t.id, true) {
 					return
 				}
 			case <-heartbeat.C:
-				if !stream.Send("heartbeat", time.Now().Format(time.RFC3339)) {
-					return
-				}
+				stream.Send("heartbeat", time.Now().Format(time.RFC3339))
 			}
 		}
 	}}, nil

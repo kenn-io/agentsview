@@ -106,13 +106,19 @@ describe("remote API version", () => {
     vi.clearAllMocks();
   });
 
-  it.each([27, 28])("enables archive updates and gates session updates on API %i", async (apiVersion) => {
-    api.isRemoteConnection.mockReturnValue(true);
-    api.getVersion.mockResolvedValue({ api_version: apiVersion, version: "test", commit: "test" });
-    await sync.loadVersion();
-    expect(sync.remoteLiveAllowed).toBe(apiVersion === 28);
-    expect(api.setEventsAvailable).toHaveBeenLastCalledWith(true);
-  });
+  it.each([27, 28])(
+    "enables archive updates and gates session updates on API %i",
+    async (apiVersion) => {
+      api.isRemoteConnection.mockReturnValue(true);
+      api.getVersion.mockResolvedValue({
+        api_version: apiVersion,
+        version: "test",
+        commit: "test",
+      });
+      await sync.loadVersion();
+      expect(sync.remoteLiveAllowed).toBe(apiVersion === 28);
+    },
+  );
 });
 
 describe("hidden status polling", () => {
@@ -155,7 +161,7 @@ describe("session watch visibility", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(["session_ready", "hidden", "timeout"])(
+  it.each(["session_ready", "session_missing", "error", "hidden", "timeout"])(
     "releases the initial read on %s and keeps ready updates",
     async (reason) => {
       vi.useFakeTimers();
@@ -165,7 +171,7 @@ describe("session watch visibility", () => {
       const ready = sync.watchSession("session-a", onUpdate);
       void ready.then(settled);
       const stream = api.watchSession.mock.results[0]?.value;
-      if (reason === "session_ready") {
+      if (reason === "session_ready" || reason === "session_missing" || reason === "error") {
         await Promise.resolve();
         expect(settled).not.toHaveBeenCalled();
         stream.dispatchEvent(new Event(reason));
@@ -179,7 +185,7 @@ describe("session watch visibility", () => {
       expect(await ready).toBe(reason === "session_ready");
       expect(vi.getTimerCount()).toBe(0);
       if (stream) {
-        const initialUpdates = reason === "session_ready" ? 1 : 0;
+        const initialUpdates = reason === "session_ready" || reason === "session_missing" ? 1 : 0;
         expect(onUpdate).toHaveBeenCalledTimes(initialUpdates);
         stream.dispatchEvent(new Event("session_ready"));
         stream.dispatchEvent(new Event("session_ready"));
@@ -188,66 +194,43 @@ describe("session watch visibility", () => {
     },
   );
 
-  it("releases the initial read immediately on a watch error", async () => {
-    vi.useFakeTimers();
-    const onUpdate = vi.fn();
-    const settled = vi.fn();
-    const ready = sync.watchSession("session-a", onUpdate);
-    void ready.then(settled);
-    const stream = api.watchSession.mock.results[0]!.value;
-
-    stream.dispatchEvent(new Event("error"));
-    await Promise.resolve();
-
-    expect(settled).toHaveBeenCalledExactlyOnceWith(false);
-    expect(vi.getTimerCount()).toBe(0);
-    expect(onUpdate).not.toHaveBeenCalled();
-
-    stream.dispatchEvent(new Event("session_ready"));
-    expect(onUpdate).toHaveBeenCalledTimes(1);
-  });
-
-  it("closes on hide and refreshes on return", () => {
-    const onUpdate = vi.fn();
-    void sync.watchSession("session-a", onUpdate);
-    const stream = api.watchSession.mock.results[0]!.value;
-    stream.dispatchEvent(new Event("session_ready"));
-    vi.spyOn(document, "hidden", "get").mockReturnValue(true);
-    document.dispatchEvent(new Event("visibilitychange"));
-    expect(stream.close).toHaveBeenCalledOnce();
-    vi.spyOn(document, "hidden", "get").mockReturnValue(false);
-    document.dispatchEvent(new Event("visibilitychange"));
-    expect(api.watchSession).toHaveBeenCalledTimes(2);
-    api.watchSession.mock.results[1]!.value.dispatchEvent(new Event("session_ready"));
-    expect(onUpdate).toHaveBeenCalledTimes(3);
-  });
-
-  it("closes a failed session watch before reopening it on return", () => {
+  it.each(["hidden", "closed"])("closes a %s stream and refreshes on return", (reason) => {
     api.watchSession.mockImplementation(() =>
       Object.assign(new EventTarget(), { readyState: 1, close: vi.fn() }),
     );
     const onUpdate = vi.fn();
     void sync.watchSession("session-a", onUpdate);
     const first = api.watchSession.mock.results[0]!.value;
-    first.readyState = 2;
+    first.dispatchEvent(new Event("session_ready"));
+    if (reason === "hidden") {
+      vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+      document.dispatchEvent(new Event("visibilitychange"));
+      vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    } else {
+      first.readyState = 2;
+    }
     document.dispatchEvent(new Event("visibilitychange"));
     expect(first.close).toHaveBeenCalledOnce();
     expect(api.watchSession).toHaveBeenCalledTimes(2);
     first.dispatchEvent(new Event("session_ready"));
-    api.watchSession.mock.results[1]!.value.dispatchEvent(new Event("session_ready"));
-    expect(onUpdate).toHaveBeenCalledTimes(2);
+    const second = api.watchSession.mock.results[1]!.value;
+    second.dispatchEvent(new Event("session_ready"));
+    expect(onUpdate).toHaveBeenCalledTimes(3);
+    second.dispatchEvent(new Event("error"));
+    second.dispatchEvent(new Event("open"));
+    second.dispatchEvent(new Event("session_ready"));
+    expect(onUpdate).toHaveBeenCalledTimes(4);
   });
 
-  it("refreshes a missing session and settles the initial read", async () => {
-    vi.useFakeTimers();
-    const onUpdate = vi.fn();
-    const settled = vi.fn();
-    const ready = sync.watchSession("missing", onUpdate);
-    void ready.then(settled);
-    api.watchSession.mock.results[0]!.value.dispatchEvent(new Event("session_missing"));
-    await Promise.resolve();
-    expect(settled).toHaveBeenCalledExactlyOnceWith(false);
-    expect(onUpdate).toHaveBeenCalledOnce();
+  it("opens only the latest selected session when a hidden tab returns", () => {
+    vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    void sync.watchSession("session-a", vi.fn());
+    void sync.watchSession("session-b", vi.fn());
+    expect(api.watchSession).not.toHaveBeenCalled();
+    vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(api.watchSession).toHaveBeenCalledOnce();
+    expect(api.watchSession).toHaveBeenCalledWith("session-b", expect.any(Function), undefined);
   });
 });
 

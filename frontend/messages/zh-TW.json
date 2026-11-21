@@ -2092,7 +2092,7 @@
   "settings_embeddings_state_building": "建置中",
   "settings_embeddings_state_retired": "已停用",
   "settings_embeddings_coverage": "已嵌入 {embeddedLabel} · 缺少 {missingLabel}",
-  "settings_remote_upgrade_required": "遠端伺服器：AgentsView {version}（API {apiVersion}）。請升級至 API {requiredVersion} 或更新版本。",
+  "settings_remote_live_updates_unavailable": "工作階段不會即時更新：此伺服器執行的是 API {apiVersion}。請將其升級至 API {requiredVersion}，或重新載入以查看新訊息。",
   "settings_remote_connected_version": "已連線 (v{version})",
   "settings_remote_server_returned": "伺服器返回 {status}",
   "settings_remote_connection_failed": "連線失敗",

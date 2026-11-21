@@ -147,7 +147,8 @@ for (const fallback of ["worker", "broadcast"] as const) {
       for (const index of [1, 2]) {
         const beforeUpdate = sessionRequests[index - 1]!;
         const otherBefore = sessionRequests[2 - index]!;
-        for (const response of active) response.write(`event: session_updated\ndata: ${ids[index]}\n\n`);
+        for (const response of active)
+          response.write(`event: session_updated\ndata: ${ids[index]}\n\n`);
         await expect.poll(() => sessionRequests[index - 1]).toBeGreaterThan(beforeUpdate);
         await page.waitForTimeout(250);
         expect(sessionRequests[2 - index]).toBe(otherBefore);

@@ -55,6 +55,7 @@
   import StatusBar from "./lib/components/layout/StatusBar.svelte";
   import SessionList from "./lib/components/sidebar/SessionList.svelte";
   import MessageList from "./lib/components/content/MessageList.svelte";
+  import StateNotice from "./lib/components/shared/StateNotice.svelte";
   import SessionVitals from "./lib/components/content/SessionVitals.svelte";
   import { sessionActivity } from "./lib/stores/sessionActivity.svelte.js";
   import { sessionTiming } from "./lib/stores/sessionTiming.svelte.js";
@@ -100,7 +101,7 @@
   import { documentTitle } from "./lib/utils/documentTitle.js";
   import { setAuthToken, getAuthToken, setServerUrl } from "./lib/api/runtime.js";
   import { setupVisibilityHealthCheck } from "./lib/utils/health.js";
-  import { MIN_REMOTE_API_VERSION } from "./lib/api/remoteVersion.js";
+  import { LIVE_SESSION_API_VERSION } from "./lib/api/remoteVersion.js";
   import { gettingStarted } from "./lib/stores/gettingStarted.svelte.js";
   import { reportTelemetry, setupTelemetryReporting } from "./lib/utils/telemetry.js";
   import { registerShortcuts } from "./lib/utils/keyboard.js";
@@ -192,7 +193,6 @@
         if (ui.isMobileViewport) {
           ui.closeSidebar();
         }
-        if (!liveAllowed) sync.unwatchSession();
         const ready = liveAllowed ? sync.watchSession(
           id,
           () => {
@@ -901,20 +901,6 @@
       </button>
     </div>
   </div>
-{:else if sync.remoteIncompatible}
-  <div class="auth-overlay">
-    <div class="auth-card">
-      <h2 class="auth-card-title">{m.settings_remote_upgrade_required({
-        version: sync.serverVersion?.version || m.settings_remote_unknown(),
-        apiVersion: String(sync.serverVersion?.api_version ?? m.settings_remote_unknown()),
-        requiredVersion: String(MIN_REMOTE_API_VERSION),
-      }).replaceAll("API ", "API\u00a0")}</h2>
-      <div class="auth-card-actions">
-        <button class="auth-card-btn" onclick={() => window.location.reload()}>{m.shared_retry()}</button>
-        <button class="auth-card-disconnect" onclick={() => { setAuthToken(""); setServerUrl(""); window.location.reload(); }}>{m.app_auth_disconnect_reset()}</button>
-      </div>
-    </div>
-  </div>
 {:else}
 
 <AppHeader />
@@ -974,6 +960,16 @@
           session={session}
           onBack={() => sessions.deselectSession()}
         />
+        {#if !remoteLiveAllowed && sync.serverVersion}
+          <StateNotice
+            class="session-live-notice"
+            role="status"
+            description={m.settings_remote_live_updates_unavailable({
+              apiVersion: String(sync.serverVersion.api_version),
+              requiredVersion: String(LIVE_SESSION_API_VERSION),
+            })}
+          />
+        {/if}
         <MessageList bind:this={messageListRef} />
       {:else if sessions.archiveEmpty}
         <EmptyArchivePanel />
@@ -1076,6 +1072,17 @@
     scrollbar-gutter: stable;
   }
 
+  /* Match the transcript's reading column and scrollbar inset. */
+  :global(.session-live-notice) {
+    --column-inset: calc((100% - var(--transcript-scrollbar, 0px) - var(--reading-column)) / 2);
+    flex-shrink: 0;
+    margin: 8px calc(max(12px, var(--column-inset)) + var(--transcript-scrollbar, 0px)) 0 max(12px, var(--column-inset));
+  }
+
+  :global(.session-live-notice .state-notice__description) {
+    color: var(--accent-amber, #f59e0b);
+  }
+
   /* Settings and Data scroll inside their own panes. Keep these hosts apart from
      .page-scroll because a stable gutter would also apply to hidden overflow. */
   .fixed-page-host {
@@ -1165,19 +1172,6 @@
   .auth-card-field {
     display: flex;
     gap: 8px;
-  }
-
-  .auth-card-actions {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 16px;
-    margin-top: 16px;
-  }
-
-  .auth-card-actions .auth-card-disconnect {
-    margin-top: 0;
   }
 
   .auth-card-input {

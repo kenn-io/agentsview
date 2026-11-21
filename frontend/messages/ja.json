@@ -2163,7 +2163,7 @@
   "settings_embeddings_state_building": "構築中",
   "settings_embeddings_state_retired": "廃止済み",
   "settings_embeddings_coverage": "{embeddedLabel} が埋め込まれています · {missingLabel} が見つかりません",
-  "settings_remote_upgrade_required": "リモートサーバー: AgentsView {version} (API {apiVersion})。API {requiredVersion} 以降にアップグレードしてください。",
+  "settings_remote_live_updates_unavailable": "セッションはライブ更新されません。このサーバーは API {apiVersion} です。API {requiredVersion} にアップグレードするか、再読み込みして新しいメッセージを表示してください。",
   "settings_remote_connected_version": "接続済み (v{version})",
   "settings_remote_server_returned": "サーバーが {status} を返しました",
   "settings_remote_connection_failed": "接続に失敗しました",

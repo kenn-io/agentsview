@@ -2192,7 +2192,7 @@
   "settings_embeddings_state_building": "Building",
   "settings_embeddings_state_retired": "Retired",
   "settings_embeddings_coverage": "{embeddedLabel} embedded · {missingLabel} missing",
-  "settings_remote_upgrade_required": "Remote server: AgentsView {version} (API {apiVersion}). Upgrade to API {requiredVersion} or later.",
+  "settings_remote_live_updates_unavailable": "Sessions won't update live: this server runs API {apiVersion}. Upgrade it to API {requiredVersion}, or reload to see new messages.",
   "settings_remote_connected_version": "Connected (v{version})",
   "settings_remote_server_returned": "Server returned {status}",
   "settings_remote_connection_failed": "Connection failed",
