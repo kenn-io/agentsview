@@ -955,6 +955,9 @@ type DB struct {
 	afterSearchRead      func()
 	trendsDisk           kept.Disk
 	trendsDiskOnce       sync.Once
+	dashboardFlights     kept.Flights[dashboardPartsResult]
+	dashboardPartsOnce   sync.Once
+	dashboardPartsSlot   chan struct{}
 	usageKept            kept.Memo[DailyUsageResult]
 	usageFlights         kept.Flights[DailyUsageResult]
 	sessionStatsFacts    *sessionStatsFactsMemo

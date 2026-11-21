@@ -2168,7 +2168,7 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 	} else if err := replaceSessionMessagesTx(tx, sessionID, msgs); err != nil {
 		return err
 	}
-	if transcriptChanged {
+	if transcriptChanged || !dashboardMessageLengthsEqual(stored, msgs) {
 		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
 			return err
 		}
@@ -2632,7 +2632,7 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 		}
 		signals.ToolObservations = nil
 	}
-	if transcriptChanged {
+	if transcriptChanged || !dashboardMessageLengthsEqual(stored, msgs) {
 		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
 			return err
 		}

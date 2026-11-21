@@ -495,6 +495,7 @@ func (db *DB) writeOneSessionBatchTx(
 	}
 	sessionExists := !upsertResult.inserted
 	replacementTranscriptChanged := false
+	dashboardLengthsChanged := false
 	// A transcript whose rows only gain source IDs changes in place, so the
 	// rows keep their pins and notes; the revision still advances.
 	sourceIDsOnly := false
@@ -514,6 +515,7 @@ func (db *DB) writeOneSessionBatchTx(
 				IncomingMessages: len(write.Messages),
 			}
 		}
+		dashboardLengthsChanged = !dashboardMessageLengthsEqual(stored, write.Messages)
 		replacementTranscriptChanged = !transcriptMessagesEqual(
 			stored, write.Messages,
 		)
@@ -600,7 +602,7 @@ func (db *DB) writeOneSessionBatchTx(
 	}
 	transcriptChanged := len(msgs) > 0 || filled > 0 || completed > 0
 	if replaceMessages && sessionExists {
-		transcriptChanged = replacementTranscriptChanged
+		transcriptChanged = replacementTranscriptChanged || dashboardLengthsChanged
 	}
 
 	if len(msgs) > 0 {

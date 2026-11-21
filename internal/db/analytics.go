@@ -1448,15 +1448,20 @@ func (db *DB) GetAnalyticsActivity(
 	ctx context.Context, f AnalyticsFilter,
 	granularity string,
 ) (ActivityResponse, error) {
+	if granularity == "" {
+		granularity = "day"
+	}
+	if sessions, parts, handled, err := db.dashboardParts(ctx, f); err != nil {
+		return ActivityResponse{}, err
+	} else if handled {
+		return dashboardActivity(sessions, parts, f, granularity), nil
+	}
 	release, err := db.acquireBulkRead(ctx)
 	if err != nil {
 		return ActivityResponse{}, err
 	}
 	defer release()
 
-	if granularity == "" {
-		granularity = "day"
-	}
 	if strings.TrimSpace(f.Model) != "" {
 		return db.getAnalyticsActivityFilteredByModelTime(
 			ctx, f, granularity,
@@ -2103,6 +2108,11 @@ type HourOfWeekResponse struct {
 func (db *DB) GetAnalyticsHourOfWeek(
 	ctx context.Context, f AnalyticsFilter,
 ) (HourOfWeekResponse, error) {
+	if sessions, parts, handled, err := db.dashboardParts(ctx, f); err != nil {
+		return HourOfWeekResponse{}, err
+	} else if handled {
+		return dashboardHours(sessions, parts), nil
+	}
 	release, err := db.acquireBulkRead(ctx)
 	if err != nil {
 		return HourOfWeekResponse{}, err
@@ -3757,6 +3767,11 @@ func (db *DB) GetAnalyticsVelocity(
 }
 
 func (db *DB) analyticsVelocity(ctx context.Context, f AnalyticsFilter) (VelocityResponse, error) {
+	if sessions, parts, handled, err := db.dashboardParts(ctx, f); err != nil {
+		return VelocityResponse{}, err
+	} else if handled {
+		return dashboardVelocity(sessions, parts), nil
+	}
 	release, err := db.acquireBulkRead(ctx)
 	if err != nil {
 		return VelocityResponse{}, err
