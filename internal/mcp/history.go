@@ -42,30 +42,30 @@ const (
 // --- get_tool_calls ---
 
 type toolCallsIn struct {
-	ResultCursor   string `json:"result_cursor,omitempty" jsonschema:"Continue one truncated result or event using its result_cursor. A result that changed since the cursor was issued is rejected; restart from get_tool_calls with include_results."`
-	SessionID      string `json:"session_id" jsonschema:"Full stored session ID."`
-	Category       string `json:"category,omitempty" jsonschema:"Only calls in this category: Read, Edit, Write, Bash, Grep, Glob, Task, Tool, or Other."`
-	Limit          int    `json:"limit,omitempty" jsonschema:"Max tool calls, default 50 (1 when include_results is set), max 200."`
-	Cursor         int    `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor."`
-	IncludeResults bool   `json:"include_results,omitempty" jsonschema:"Include masked result text: result is the call's current summary and result_events lists each saved event separately."`
-	MaxResultChars int    `json:"max_result_chars,omitempty" jsonschema:"Max characters per result and per result event, default 1000, max 10000."`
-	MaxInputChars  int    `json:"max_input_chars,omitempty" jsonschema:"Truncate each tool input to this many characters, default 500, max 10000."`
+	ResultCursor   string `json:"result_cursor,omitempty" jsonschema:"Continue a truncated result or event."`
+	SessionID      string `json:"session_id" jsonschema:"Full session ID."`
+	Category       string `json:"category,omitempty" jsonschema:"Filter by tool category, e.g. Bash or Edit."`
+	Limit          int    `json:"limit,omitempty" jsonschema:"Calls per page: default 50 (1 with results), max 200."`
+	Cursor         int    `json:"cursor,omitempty" jsonschema:"Previous next_cursor."`
+	IncludeResults bool   `json:"include_results,omitempty" jsonschema:"Include masked results and events."`
+	MaxResultChars int    `json:"max_result_chars,omitempty" jsonschema:"Characters per result or event: default 1000, max 10000."`
+	MaxInputChars  int    `json:"max_input_chars,omitempty" jsonschema:"Characters per input: default 500, max 10000."`
 }
 
 type toolCallOut struct {
-	Ordinal           int                  `json:"ordinal" jsonschema:"Ordinal of the assistant message that made the call; pass it to get_messages."`
+	Ordinal           int                  `json:"ordinal" jsonschema:"Calling message ordinal for get_messages."`
 	Timestamp         string               `json:"timestamp,omitempty"`
 	ToolName          string               `json:"tool_name"`
 	Category          *string              `json:"category,omitzero"`
-	Input             *string              `json:"input,omitzero" jsonschema:"Tool input JSON with secret-shaped values masked."`
+	Input             *string              `json:"input,omitzero" jsonschema:"Input with secret-shaped values masked."`
 	InputTruncated    bool                 `json:"input_truncated,omitempty"`
 	SkillName         string               `json:"skill_name,omitempty"`
 	SubagentSessionID string               `json:"subagent_session_id,omitempty"`
-	Result            string               `json:"result,omitempty" jsonschema:"Masked summary of the call's saved results."`
+	Result            string               `json:"result,omitempty"`
 	ResultCursor      string               `json:"result_cursor,omitempty"`
 	ResultTruncated   bool                 `json:"result_truncated,omitempty"`
-	ResultLength      int                  `json:"result_length" jsonschema:"Size of the stored result summary in bytes."`
-	ResultEvents      []toolResultEventOut `json:"result_events,omitempty" jsonschema:"Each saved result event in order, masked. Omitted when the only event is anonymous and equals result."`
+	ResultLength      int                  `json:"result_length" jsonschema:"Result size in bytes."`
+	ResultEvents      []toolResultEventOut `json:"result_events,omitempty"`
 }
 
 type toolResultEventOut struct {
@@ -74,14 +74,14 @@ type toolResultEventOut struct {
 	SubagentSessionID string `json:"subagent_session_id,omitempty"`
 	Status            string `json:"status,omitempty"`
 	Content           string `json:"content"`
-	ContentLength     int    `json:"content_length" jsonschema:"Size of the saved event content in bytes."`
+	ContentLength     int    `json:"content_length"`
 	Truncated         bool   `json:"truncated,omitempty"`
 	ResultCursor      string `json:"result_cursor,omitempty"`
 }
 
 type toolCallsOut struct {
 	ToolCalls  []toolCallOut `json:"tool_calls"`
-	Total      *int          `json:"total,omitzero" jsonschema:"Calls matching the category filter across the whole session."`
+	Total      *int          `json:"total,omitzero" jsonschema:"Matching calls in the session."`
 	NextCursor *int          `json:"next_cursor,omitempty"`
 }
 
