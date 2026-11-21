@@ -18,7 +18,6 @@ import (
 var (
 	repoPartRE = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 	repoPathRE = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
-	prPathRE   = regexp.MustCompile(`^/([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+)/pull/([0-9]+)/?$`)
 )
 
 func parsePRURL(raw string) (PRLink, bool) {
@@ -26,15 +25,17 @@ func parsePRURL(raw string) (PRLink, bool) {
 	if err != nil {
 		return PRLink{}, false
 	}
-	match := prPathRE.FindStringSubmatch(u.Path)
-	if match == nil {
+	repository, rawNumber, route, found := promptPRRoute(u.Path)
+	if !found || (u.Path != route && u.Path != route+"/") ||
+		!repoPathRE.MatchString(repository) || strings.Trim(rawNumber, "0123456789") != "" ||
+		(!strings.HasPrefix(route, "/"+repository+"/pull/") && !strings.HasPrefix(route, "/"+repository+"/pulls/")) {
 		return PRLink{}, false
 	}
-	number, err := strconv.Atoi(match[2])
+	number, err := strconv.Atoi(rawNumber)
 	if err != nil {
 		return PRLink{}, false
 	}
-	return NewPRLink(raw, match[1], number)
+	return NewPRLink(raw, repository, number)
 }
 
 // shellCall is one shell command, with expansions marked as opaque.

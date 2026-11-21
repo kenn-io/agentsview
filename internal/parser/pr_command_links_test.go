@@ -13,6 +13,14 @@ func TestGHPRCommandLinks(t *testing.T) {
 		{"env GH_REPO=example/repo timeout 10 nohup gh pr view 42", "", "https://github.com/example/repo/pull/42"},
 		{"echo $(export GH_REPO=example/repo; gh pr view 42)", "", "https://github.com/example/repo/pull/42"},
 		{"gh pr view 42 -R example/repo | cat", "", "https://github.com/example/repo/pull/42"},
+		{"(cd /other); gh pr view 42", "https://github.com/example/repo.git", "https://github.com/example/repo/pull/42"},
+		{"{ cd /other; }; gh pr view 42", "https://github.com/example/repo.git", ""},
+		{"{ gh pr view 42 -R example/repo; }", "", "https://github.com/example/repo/pull/42"},
+		{"export VALUE=$(gh pr view 42 -R example/repo)", "", "https://github.com/example/repo/pull/42"},
+		{"! false && gh pr view 42 -R example/repo", "", "https://github.com/example/repo/pull/42"},
+		{"! true && gh pr view 42 -R example/repo", "", ""},
+		{"cd /other | cat; gh pr view 42", "https://github.com/example/repo.git", "https://github.com/example/repo/pull/42"},
+		{"cat | gh pr view 42 -R example/repo", "", "https://github.com/example/repo/pull/42"},
 		{"export GH_REPO=example/repo; gh pr view 42", "", "https://github.com/example/repo/pull/42"},
 		{"export GH_HOST=forge.example; gh pr view 42 -R example/repo", "", "https://forge.example/example/repo/pull/42"},
 		{"env GH_REPO=example/repo gh pr view 42", "", "https://github.com/example/repo/pull/42"},
@@ -63,7 +71,8 @@ func TestGHPRCommandLinks(t *testing.T) {
 		{"gh pr view 42 -R example/repo#5", "", ""},
 		{"gh pr view 42 --repo=", "https://github.com/example/repo.git", ""},
 		{"gh pr view https://github.com/example/repo/pull/42extra", "", ""},
-		{"gh pr view https://forge.example/group/sub/repo/pull/42?x=1", "", "https://forge.example/group/sub/repo/pull/42"},
+		{"gh pr view https://forge.example/group/sub/repo/pull/42?x=1", "", ""},
+		{"gh pr view https://github.com/example/repo/pull/42/?x=1", "", "https://github.com/example/repo/pull/42"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.command, func(t *testing.T) {
