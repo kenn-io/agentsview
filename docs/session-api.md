@@ -263,12 +263,15 @@ agentsview session list [flags]
 
 By default, `session list` excludes one-shot, automated, and child sessions.
 When the first CLI page hides any of them, `session list` writes an advisory to
-stderr with the hidden count for each category and names the
-`--include-one-shot`, `--include-automated`, or `--include-children` flag that
-reveals each. Human stdout stays unchanged and the JSON catalog is additive, so
-redirecting or piping structured output remains safe. The JSON `total` still
-describes the filtered result rather than the excluded sessions. Pass the
-`--include-*` flags to opt back in.
+stderr with the hidden count for each category and the flags that reveal them:
+`--include-one-shot` for one-shot sessions and `--include-automated` for
+automated sessions. For hidden child sessions, the notice names
+`--include-children` together with whichever of `--include-one-shot` and
+`--include-automated` are not already set, for example
+`--include-one-shot --include-automated --include-children`. Human stdout stays
+unchanged and the JSON catalog is additive, so redirecting or piping structured
+output remains safe. The JSON `total` still describes the filtered result rather
+than the excluded sessions. Pass the `--include-*` flags to opt back in.
 
 On HTTP, pass `exclusion_counts=false` to get hidden one-shot and automated
 counts, or `exclusion_counts=true` to also include the bounded child count. The
