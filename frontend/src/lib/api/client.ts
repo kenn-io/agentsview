@@ -108,6 +108,15 @@ export interface LiveSource extends EventTarget {
 
 const broadcasts = new Map<string, LiveBroadcast>();
 
+function joinBroadcast(base: string, receive: (frame: LiveFrame) => void) {
+  let broadcast = broadcasts.get(base);
+  if (!broadcast) {
+    broadcast = new LiveBroadcast(base);
+    broadcasts.set(base, broadcast);
+  }
+  return broadcast.connect(receive);
+}
+
 function connectLive(session?: string): LiveSource {
   const base = new URL(getGeneratedBase() || "/", window.location.origin).href.replace(/\/$/, "");
   const server = getServerUrl();
@@ -132,17 +141,15 @@ function connectLive(session?: string): LiveSource {
       type: "module",
       name: base,
     });
+    worker.onerror = () => {
+      if (disposed) return;
+      send = joinBroadcast(base, receive);
+      send({ ...request });
+    };
     worker.port.onmessage = (event: MessageEvent<LiveFrame>) => receive(event.data);
     send = (value) => worker.port.postMessage(value === "close" ? "leave" : value);
     worker.port.start();
-  } else {
-    let broadcast = broadcasts.get(base);
-    if (!broadcast) {
-      broadcast = new LiveBroadcast(base);
-      broadcasts.set(base, broadcast);
-    }
-    send = broadcast.connect(receive);
-  }
+  } else send = joinBroadcast(base, receive);
   const onPageHide = () => send("leave");
   const refreshCredentials = () => {
     const token = getAuthToken(server);

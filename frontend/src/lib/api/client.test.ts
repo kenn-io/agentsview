@@ -863,6 +863,7 @@ describe("live event payloads", () => {
   });
   afterEach(() => {
     localStorage.clear();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -874,6 +875,38 @@ describe("live event payloads", () => {
     expect(source.readyState).toBe(2);
     expect(onPermanentFailure).toHaveBeenCalledTimes(type === "permanent_failure" ? 1 : 0);
     source.close();
+  });
+
+  it("moves a stream to the tab broadcast when its SharedWorker fails to start", async () => {
+    vi.useFakeTimers();
+    const states: Record<string, { session?: string }>[] = [];
+    class Channel {
+      onmessage = null;
+      postMessage(message: { type: string; requests: Record<string, { session?: string }> }) {
+        states.push(message.requests);
+      }
+    }
+    vi.stubGlobal("BroadcastChannel", Channel);
+    let worker!: Worker;
+    class Worker {
+      port = { start() {}, postMessage() {}, onmessage: null };
+      onerror: ((event: Event) => void) | null = null;
+      constructor() {
+        worker = this;
+      }
+    }
+    vi.stubGlobal("SharedWorker", Worker);
+    const { watchSession } = await import("./client.js");
+    const source = watchSession("a", vi.fn());
+    expect(states).toEqual([]);
+    worker.onerror?.(new Event("error"));
+    expect(states.at(-1)).toEqual({ "0": expect.objectContaining({ session: "a" }) });
+    expect(source.readyState).toBe(0);
+    source.close();
+    expect(states.at(-1)).toEqual({});
+    const count = states.length;
+    worker.onerror?.(new Event("error"));
+    expect(states).toHaveLength(count);
   });
 
   it("ignores queued frames after a subscription is closed", async () => {
