@@ -84,8 +84,6 @@ func (t *toolset) lookupActivity(
 	return "", false
 }
 
-var errAmbiguousSessionID = errors.New("ambiguous session UUID")
-
 // resolveSession looks up a session by its full stored ID or by a raw
 // UUID that matches exactly one stored ID. Missing and ambiguous IDs are
 // errors.
@@ -96,13 +94,16 @@ func (t *toolset) resolveSession(
 	if err != nil || detail != nil {
 		return detail, err
 	}
-	ids, err := t.svc.FindSessionIDsByRawSuffix(ctx, id, 2)
+	if strings.ContainsAny(id, ":~") {
+		return nil, fmt.Errorf("%w: %s", service.ErrSessionNotFound, id)
+	}
+	ids, err := t.svc.FindSessionIDsByRawSuffix(ctx, id, 5)
 	if err != nil {
 		return nil, err
 	}
 	if len(ids) > 1 {
 		return nil, fmt.Errorf(
-			"%w %q: matches %q and %q; use a full stored session ID", errAmbiguousSessionID, id, ids[0], ids[1],
+			"ambiguous session UUID %q: up to five matches %q; use a full stored session ID", id, ids,
 		)
 	}
 	if len(ids) == 1 {
@@ -122,7 +123,7 @@ func (t *toolset) resolveOptionalSessionID(ctx context.Context, id string) (stri
 		return id, nil
 	}
 	detail, err := t.resolveSession(ctx, id)
-	if errors.Is(err, service.ErrSessionNotFound) || errors.Is(err, errors.ErrUnsupported) {
+	if errors.Is(err, service.ErrSessionNotFound) || errors.Is(err, service.ErrRawLookupUnsupported) {
 		return id, nil
 	}
 	if err != nil {
@@ -608,6 +609,9 @@ func (t *toolset) getMessages(
 		return t.getMessageBodyContinuation(ctx, in)
 	}
 	detail, err := t.resolveSession(ctx, in.SessionID)
+	if errors.Is(err, service.ErrSessionNotFound) && in.ExpectedRevision != "" {
+		return nil, getMessagesOut{}, fmt.Errorf("%w: cited session no longer exists", service.ErrSourceChanged)
+	}
 	if err != nil {
 		return nil, getMessagesOut{}, err
 	}

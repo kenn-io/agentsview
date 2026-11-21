@@ -3,7 +3,6 @@ package mcp
 import (
 	"context"
 	"encoding/json/v2"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -2592,7 +2591,7 @@ func TestSessionToolsResolvePlainIDs(t *testing.T) {
 			require.NoError(t, tc.call(t, "plain"))
 			require.ErrorContains(t, tc.call(t, "missing"), "session not found: missing")
 			err := tc.call(t, "ambiguous")
-			require.ErrorIs(t, err, errAmbiguousSessionID)
+			require.ErrorContains(t, err, "ambiguous session UUID")
 			require.ErrorContains(t, err, "codex:ambiguous")
 			require.ErrorContains(t, err, "host~ambiguous")
 		})
@@ -2656,7 +2655,7 @@ func TestListRecall_SourceSessionRawID(t *testing.T) {
 	dbtest.SeedSession(t, d, "codex:ambiguous", "project")
 	dbtest.SeedSession(t, d, "host~ambiguous", "project")
 	_, _, err = ts.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "ambiguous"})
-	require.ErrorIs(t, err, errAmbiguousSessionID)
+	require.ErrorContains(t, err, "ambiguous session UUID")
 	require.ErrorContains(t, err, "codex:ambiguous")
 	require.ErrorContains(t, err, "host~ambiguous")
 }
@@ -2696,8 +2695,57 @@ func TestOptionalSessionFiltersOlderServer(t *testing.T) {
 	assert.Equal(t, "entry", recall.Entries[0].ID)
 	_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", CurrentSessionID: "broken"})
 	require.Error(t, err)
-	require.NotErrorIs(t, err, errors.ErrUnsupported)
 	_, _, err = ts.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "broken"})
 	require.Error(t, err)
-	require.NotErrorIs(t, err, errors.ErrUnsupported)
+}
+
+func TestSessionResolutionTrashedQualifiedID(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "codex:source", "project")
+	dbtest.SeedSession(t, d, "host~codex:source", "project")
+	_, err := d.InsertRecallEntry(t.Context(), db.RecallEntry{
+		ID: "entry", Type: "fact", Scope: "project", Status: "accepted",
+		Title: "entry", Body: "entry", SourceSessionID: "codex:source",
+	})
+	require.NoError(t, err)
+	require.NoError(t, d.SoftDeleteSession(t.Context(), "codex:source"))
+	_, _, err = ts.sessionOverview(t.Context(), nil, sessionOverviewIn{SessionID: "codex:source"})
+	require.ErrorIs(t, err, service.ErrSessionNotFound)
+	_, out, err := ts.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "codex:source"})
+	require.NoError(t, err)
+	require.Len(t, out.Entries, 1)
+	assert.Equal(t, "entry", out.Entries[0].ID)
+}
+
+func TestSessionResolutionAmbiguousCandidates(t *testing.T) {
+	ts, d := newTestToolset(t)
+	for _, id := range []string{"codex:uuid", "host-a~uuid", "host-b~uuid", "host-c~uuid", "host-d~uuid"} {
+		dbtest.SeedSession(t, d, id, "project")
+	}
+	_, _, err := ts.sessionOverview(t.Context(), nil, sessionOverviewIn{SessionID: "uuid"})
+	require.ErrorContains(t, err, "codex:uuid")
+	require.ErrorContains(t, err, "host-a~uuid")
+	require.ErrorContains(t, err, "host-b~uuid")
+	require.ErrorContains(t, err, "host-c~uuid")
+	require.ErrorContains(t, err, "host-d~uuid")
+}
+
+func TestGetMessages_RevisionRejectsDeletedSession(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSessionWithMessages(t, d, "codex:body", "proj", []db.Message{
+		dbtest.UserMsg("codex:body", 0, "message"),
+	}, dbtest.WithMessageCounts(1, 1))
+	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "body"})
+	require.NoError(t, err)
+	require.NotEmpty(t, first.TranscriptRevision)
+	require.NoError(t, d.DeleteSession(t.Context(), "codex:body"))
+	for _, tc := range []struct {
+		name   string
+		around *int
+	}{{"linear", nil}, {"around", new(0)}} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "body", Around: tc.around, ExpectedRevision: first.TranscriptRevision})
+			require.ErrorIs(t, err, service.ErrSourceChanged)
+		})
+	}
 }
