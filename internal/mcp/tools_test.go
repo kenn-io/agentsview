@@ -2415,6 +2415,42 @@ func TestGetMessages_BudgetPages(t *testing.T) {
 	assert.Positive(t, out.Omitted)
 }
 
+func TestSearchContent_ListSessionBudgetPages(t *testing.T) {
+	ts, d := newTestToolset(t)
+	var messages []db.Message
+	for i := range 29 {
+		messages = append(messages, dbtest.UserMsg("listing-budget", i, fmt.Sprintf("message %d %s", i, strings.Repeat("x", 600))))
+	}
+	messages = append(messages, db.Message{SessionID: "listing-budget", Ordinal: 29, Role: "assistant", ThinkingText: "last thought", ContentLength: len("last thought"), HasThinking: true})
+	dbtest.SeedSessionWithMessages(t, d, "listing-budget", "proj", messages, dbtest.WithMessageCounts(30, 29))
+
+	in := searchContentIn{SessionID: "listing-budget", Limit: 30, Context: 10}
+	var ordinals []int
+	var lastSnippet string
+	for page := 0; ; page++ {
+		_, out, err := ts.searchContent(t.Context(), nil, in)
+		require.NoError(t, err)
+		if page == 0 {
+			require.Positive(t, out.Omitted)
+			require.NotEmpty(t, out.PageCursor)
+		}
+		for _, match := range out.Matches {
+			ordinals = append(ordinals, match.Ordinal)
+			lastSnippet = match.Snippet
+		}
+		if out.PageCursor == "" {
+			break
+		}
+		require.Less(t, page, 30)
+		in = searchContentIn{PageCursor: out.PageCursor}
+	}
+	require.Len(t, ordinals, 30)
+	for i, ordinal := range ordinals {
+		assert.Equal(t, i, ordinal)
+	}
+	assert.Equal(t, "last thought", lastSnippet)
+}
+
 func TestSearchContent_BudgetRankedPages(t *testing.T) {
 	matches := make([]db.ContentMatch, 20)
 	for i := range matches {
@@ -2503,13 +2539,18 @@ func TestSearchContent_Total(t *testing.T) {
 		snippet                       string
 		want, calls                   int
 		capped, cut                   bool
+		wantScan                      *int
 	}{
 		{name: "first page", count: 36, limit: 10, context: 3, want: 36, calls: 2},
-		{name: "continued page", count: 36, limit: 10, cursor: 10, want: 36, calls: 2},
-		{name: "cursor past end", count: 6, limit: 10, cursor: 1000, want: 6, calls: 2},
+		{name: "continued page", count: 36, limit: 10, cursor: 10, want: 36, calls: 2, wantScan: new(20)},
+		{name: "last page", count: 36, limit: 10, cursor: 30, want: 36, calls: 1},
+		{name: "cursor past end", count: 6, limit: 10, cursor: 1000, want: 6, calls: 2, wantScan: new(0)},
 		{name: "cut page", count: 36, limit: 10, snippet: strings.Repeat("x", 1800), want: 36, calls: 2, cut: true},
 		{name: "single page", count: 5, limit: 10, want: 5, calls: 1},
-		{name: "capped", count: 600, limit: 10, want: 510, calls: 11, capped: true},
+		{name: "capped", count: 600, limit: 10, want: 500, calls: 11, capped: true},
+		{name: "capped continuation", count: 600, limit: 10, cursor: 100, want: 500, calls: 9, capped: true, wantScan: new(110)},
+		{name: "cap shortcut", count: 600, limit: 10, cursor: 490, want: 500, calls: 1, capped: true},
+		{name: "exactly at cap", count: 500, limit: 10, cursor: 490, want: 500, calls: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := &pagedContentSearchService{matches: make([]db.ContentMatch, tc.count)}
@@ -2527,12 +2568,112 @@ func TestSearchContent_Total(t *testing.T) {
 			assert.Equal(t, tc.capped, response["total_capped"] == true)
 			assert.Equal(t, tc.cut, out.Omitted > 0)
 			require.Len(t, fake.requests, tc.calls)
+			if tc.wantScan != nil {
+				assert.Equal(t, *tc.wantScan, fake.requests[1].Cursor)
+			}
 			for _, req := range fake.requests[1:] {
 				assert.Zero(t, req.Context)
 				assert.Equal(t, 50, req.Limit)
 			}
 		})
 	}
+}
+
+func TestSearchContent_LexicalPageCursor(t *testing.T) {
+	for _, tc := range []struct {
+		name                     string
+		count, total, countCalls int
+		capped                   bool
+		snippet                  string
+	}{
+		{name: "exact", count: 36, total: 36, countCalls: 1},
+		{name: "capped", count: 600, total: 500, countCalls: 10, capped: true},
+		{name: "budget", count: 36, total: 36, countCalls: 1, snippet: strings.Repeat("x", 1800)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &pagedContentSearchService{matches: make([]db.ContentMatch, tc.count)}
+			for i := range fake.matches {
+				fake.matches[i] = db.ContentMatch{SessionID: "session", Ordinal: i, Snippet: tc.snippet}
+			}
+			ts := &toolset{svc: fake}
+			in := searchContentIn{Pattern: "needle", IncludeActive: true, Limit: 10}
+			var ordinals []int
+			pages := 0
+			for {
+				_, out, err := ts.searchContent(t.Context(), nil, in)
+				require.NoError(t, err)
+				pages++
+				assert.Equal(t, tc.total, out.Total)
+				assert.Equal(t, tc.capped, out.TotalCapped)
+				for _, m := range out.Matches {
+					ordinals = append(ordinals, m.Ordinal)
+				}
+				if out.NextCursor == nil {
+					break
+				}
+				require.NotEmpty(t, out.PageCursor)
+				data, err := base64.RawURLEncoding.DecodeString(out.PageCursor)
+				require.NoError(t, err)
+				var cursor searchPageCursor
+				require.NoError(t, json.Unmarshal(data, &cursor))
+				assert.Equal(t, *out.NextCursor, cursor.Input.Cursor)
+				in = searchContentIn{PageCursor: out.PageCursor}
+			}
+			require.Len(t, ordinals, tc.count)
+			for i, ordinal := range ordinals {
+				assert.Equal(t, i, ordinal)
+			}
+			assert.Len(t, fake.requests, pages+tc.countCalls)
+		})
+	}
+}
+
+func TestSearchContent_LexicalPageCursorZeroTotal(t *testing.T) {
+	fake := &pagedContentSearchService{matches: make([]db.ContentMatch, 600), legacy: true}
+	for i := range fake.matches {
+		fake.matches[i] = db.ContentMatch{SessionID: "session", Timestamp: "2024-06-15T11:59:00Z"}
+	}
+	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+	_, first, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Limit: 10, IncludeOneShot: true, IncludeAutomated: true})
+	require.NoError(t, err)
+	require.NotEmpty(t, first.PageCursor)
+	assert.Zero(t, first.Total)
+	assert.True(t, first.TotalCapped)
+	_, second, err := ts.searchContent(t.Context(), nil, searchContentIn{PageCursor: first.PageCursor})
+	require.NoError(t, err)
+	assert.Zero(t, second.Total)
+	assert.True(t, second.TotalCapped)
+	assert.Len(t, fake.requests, 12)
+}
+
+func TestSearchContent_LexicalPageCursorInvalid(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		cursor searchPageCursor
+	}{
+		{"missing offset", searchPageCursor{Version: 2, Input: searchContentIn{Pattern: "needle"}}},
+		{"ranked mode", searchPageCursor{Version: 2, Input: searchContentIn{Pattern: "needle", Mode: "semantic", Cursor: 1}}},
+		{"concepts", searchPageCursor{Version: 2, Input: searchContentIn{Concepts: []string{"a", "b"}, Cursor: 1}}},
+		{"above cap", searchPageCursor{Version: 2, Total: 501, Input: searchContentIn{Pattern: "needle", Cursor: 1}}},
+		{"digest", searchPageCursor{Version: 2, Digest: "x", Input: searchContentIn{Pattern: "needle", Cursor: 1}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := json.Marshal(tc.cursor)
+			require.NoError(t, err)
+			ts := &toolset{}
+			_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{PageCursor: base64.RawURLEncoding.EncodeToString(data)})
+			require.ErrorContains(t, err, "invalid page_cursor")
+		})
+	}
+}
+
+func TestSearchContent_LexicalPageCursorLength(t *testing.T) {
+	fake := &pagedContentSearchService{matches: make([]db.ContentMatch, 11)}
+	ts := &toolset{svc: fake}
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: strings.Repeat("x", 3000), IncludeActive: true, Limit: 10})
+	require.NoError(t, err)
+	require.NotNil(t, out.NextCursor)
+	assert.Empty(t, out.PageCursor)
 }
 
 func TestSearchContent_TotalLegacyActivity(t *testing.T) {

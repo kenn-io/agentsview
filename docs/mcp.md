@@ -348,9 +348,12 @@ returns `source_changed`; restart the search. Search context marked
 `context_truncated` can be read with `get_messages`. A tool call marked
 `input_truncated` contains a shortened input.
 
-`next_cursor` is present when another page exists. To continue `search_content`,
+`next_cursor` is present when another page exists. For lexical searches, pass
+`page_cursor` alone when available to continue without recounting. It carries
+the first page's total as a snapshot, corrected on the last page. Alternatively,
 pass `next_cursor` as the numeric `cursor` and echo the returned RFC3339
-`activity_cutoff` unchanged. The cutoff keeps the recent-activity exclusion
+`activity_cutoff` unchanged; this recounts the unseen matches up to 500. The
+cutoff keeps the recent-activity exclusion
 fixed across pages of an unchanged archive, including on older servers. A
 positive cursor without the cutoff returns a restart error when that exclusion
 applies. Restart without a cursor to obtain both fields. `include_active: true`

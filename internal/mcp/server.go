@@ -258,7 +258,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 			"sessions are excluded by default; set include_one_shot or include_automated to include them. " +
 			"Pattern searches report total matches; total_capped means at least that many. " +
 			"For semantic and hybrid searches, total is the ranked page count and is always a lower bound. " +
-			"Empty first pages return measured hints with code, message, and retry_with arguments; preserve other arguments when retrying.",
+			"Use page_cursor to continue without recounting. Empty first pages return measured hints with code, message, and retry_with arguments; preserve other arguments when retrying.",
 		Annotations: externalRead,
 	}, t.searchContent)
 

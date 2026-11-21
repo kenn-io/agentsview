@@ -993,7 +993,7 @@ func (t *toolset) getMessageBodyContinuation(
 // --- search_content ---
 
 type searchContentIn struct {
-	PageCursor       string   `json:"page_cursor,omitempty" jsonschema:"Ranked continuation; pass alone."`
+	PageCursor       string   `json:"page_cursor,omitempty" jsonschema:"Preferred continuation; pass alone to retain the total."`
 	Pattern          string   `json:"pattern,omitempty" jsonschema:"Semantic/hybrid query, whitespace-separated literals for terms, substring, or regex over messages, thinking, and tools. Required unless concepts or session_id is set. Fully quoted substring matches exact text. Mutually exclusive with concepts."`
 	Concepts         []string `json:"concepts,omitempty" jsonschema:"Two to five concepts with evidence in the same session, possibly across messages. Always uses semantic mode, does not page, and is mutually exclusive with pattern."`
 	Mode             string   `json:"mode,omitempty" jsonschema:"substring (default), regex, terms, semantic, or hybrid. Prefer hybrid for contextual questions. Hybrid returns keyword matches with a note when search by meaning is unavailable; semantic requires a ready index."`
@@ -1002,7 +1002,7 @@ type searchContentIn struct {
 	Agent            string   `json:"agent,omitempty" jsonschema:"Restrict to one agent."`
 	SessionID        string   `json:"session_id,omitempty" jsonschema:"Exact full stored session ID. Without pattern or concepts, list its messages, ignoring mode and include flags and including active, one-shot, and automated sessions."`
 	GitBranch        string   `json:"git_branch,omitempty" jsonschema:"Restrict to one exact git branch."`
-	CurrentSessionID string   `json:"current_session_id,omitempty" jsonschema:"Exclude this exact full stored session ID instead of applying the recent-activity heuristic."`
+	CurrentSessionID string   `json:"current_session_id,omitempty" jsonschema:"Exclude this exact session ID instead of recent active sessions."`
 	DateFrom         string   `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
 	DateTo           string   `json:"date_to,omitempty" jsonschema:"Only sessions on or before this date (YYYY-MM-DD)."`
 	Limit            int      `json:"limit,omitempty" jsonschema:"Max matches, default 10, max 50; the byte budget can return fewer."`
@@ -1068,6 +1068,8 @@ type searchPageCursor struct {
 	Digest  string          `json:"d"`
 	Input   searchContentIn `json:"i"`
 	Offset  int             `json:"o"`
+	Total   int             `json:"t,omitempty"`
+	Capped  bool            `json:"c,omitempty"`
 }
 
 type searchContentOut struct {
@@ -1075,9 +1077,9 @@ type searchContentOut struct {
 	Hints          []service.ContentSearchHint `json:"hints,omitempty"`
 	Matches        []contentMatch              `json:"matches"`
 	Omitted        int                         `json:"omitted,omitempty" jsonschema:"Matches held back."`
-	Total          int                         `json:"total,omitempty" jsonschema:"Matches across pages. For semantic and hybrid searches, the ranked page count is a lower bound. With total_capped, at least this many."`
-	TotalCapped    bool                        `json:"total_capped,omitempty" jsonschema:"True when total is a lower bound, including for semantic and hybrid searches."`
-	PageCursor     string                      `json:"page_cursor,omitempty" jsonschema:"Pass alone to continue."`
+	Total          int                         `json:"total,omitempty" jsonschema:"Match count; ranked searches report a lower bound."`
+	TotalCapped    bool                        `json:"total_capped,omitempty" jsonschema:"True when total is a lower bound."`
+	PageCursor     string                      `json:"page_cursor,omitempty" jsonschema:"Preferred continuation; pass alone to retain total."`
 	NextCursor     *int                        `json:"next_cursor,omitempty"`
 	ActivityCutoff string                      `json:"activity_cutoff,omitempty" jsonschema:"Effective RFC3339 activity cutoff; pass it unchanged with next_cursor as cursor to continue."`
 	ExcludedActive int                         `json:"excluded_active,omitempty"`
@@ -1146,6 +1148,9 @@ func (t *toolset) countContentMatches(ctx context.Context, req service.ContentSe
 			}
 		}
 		scanned += len(res.Matches)
+		if total > contentTotalCap {
+			return contentTotalCap, true, nil
+		}
 		if res.NextCursor <= 0 || len(res.Matches) == 0 {
 			return total, false, nil
 		}
@@ -1169,14 +1174,30 @@ func (t *toolset) contentSearchTotal(ctx context.Context, req service.ContentSea
 	if legacy {
 		return t.countContentMatches(ctx, req, 0, 0, keep)
 	}
+	if res.NextCursor > 0 {
+		if res.NextCursor >= contentTotalCap {
+			return contentTotalCap, true, nil
+		}
+		return t.countContentMatches(ctx, req, res.NextCursor, res.NextCursor, nil)
+	}
+	if len(res.Matches) > 0 {
+		total := req.Cursor + len(res.Matches)
+		return min(total, contentTotalCap), total > contentTotalCap, nil
+	}
 	if req.Cursor > 0 {
 		return t.countContentMatches(ctx, req, 0, 0, nil)
 	}
-	total := len(res.Matches)
-	if res.NextCursor > 0 {
-		return t.countContentMatches(ctx, req, res.NextCursor, total, nil)
+	return 0, false, nil
+}
+
+func lexicalPageCursor(in searchContentIn, next, total int, capped bool) string {
+	in.Cursor = next
+	data, _ := json.Marshal(searchPageCursor{Version: 2, Input: in, Total: total, Capped: capped})
+	cursor := base64.RawURLEncoding.EncodeToString(data)
+	if len(cursor) > 2048 {
+		return ""
 	}
-	return total, false, nil
+	return cursor
 }
 
 func (t *toolset) searchContent(
@@ -1184,6 +1205,7 @@ func (t *toolset) searchContent(
 ) (*mcp.CallToolResult, searchContentOut, error) {
 	offset := 0
 	expectedDigest := ""
+	knownTotal, knownCapped, hasTotal := 0, false, false
 	if in.PageCursor != "" {
 		raw := in.PageCursor
 		in.PageCursor = ""
@@ -1194,10 +1216,24 @@ func (t *toolset) searchContent(
 		}
 		decoded, err := base64.RawURLEncoding.DecodeString(raw)
 		var cursor searchPageCursor
-		if err != nil || json.Unmarshal(decoded, &cursor) != nil || cursor.Version != 1 || len(cursor.Digest) != 64 || cursor.Offset <= 0 || cursor.Input.PageCursor != "" || (cursor.Input.Mode != "semantic" && cursor.Input.Mode != "hybrid") || len(cursor.Input.Concepts) != 0 {
+		if err != nil || json.Unmarshal(decoded, &cursor) != nil || cursor.Input.PageCursor != "" || len(cursor.Input.Concepts) != 0 {
 			return nil, searchContentOut{}, errors.New("invalid page_cursor")
 		}
-		in, offset, expectedDigest = cursor.Input, cursor.Offset, cursor.Digest
+		switch cursor.Version {
+		case 1:
+			if len(cursor.Digest) != 64 || cursor.Offset <= 0 || (cursor.Input.Mode != "semantic" && cursor.Input.Mode != "hybrid") {
+				return nil, searchContentOut{}, errors.New("invalid page_cursor")
+			}
+			in, offset, expectedDigest = cursor.Input, cursor.Offset, cursor.Digest
+		case 2:
+			normalized, err := service.NormalizeContentSearchRequest(service.ContentSearchRequest{Pattern: cursor.Input.Pattern, Mode: cursor.Input.Mode, Cursor: cursor.Input.Cursor})
+			if err != nil || cursor.Input.Cursor <= 0 || cursor.Total < 0 || cursor.Total > contentTotalCap || cursor.Digest != "" || cursor.Offset != 0 || normalized.Mode == "semantic" || normalized.Mode == "hybrid" {
+				return nil, searchContentOut{}, errors.New("invalid page_cursor")
+			}
+			in, knownTotal, knownCapped, hasTotal = cursor.Input, cursor.Total, cursor.Capped, true
+		default:
+			return nil, searchContentOut{}, errors.New("invalid page_cursor")
+		}
 	}
 	if in.Cursor < 0 {
 		return nil, searchContentOut{}, errors.New("cursor must not be negative")
@@ -1309,7 +1345,19 @@ func (t *toolset) searchContent(
 		}
 	}
 	if len(in.Concepts) == 0 {
-		out.Total, out.TotalCapped, err = t.contentSearchTotal(ctx, req, res, mode, legacy, keepMatch)
+		if hasTotal && len(res.Matches) > 0 {
+			out.Total, out.TotalCapped = knownTotal, knownCapped
+			if !legacy {
+				seen := in.Cursor + len(res.Matches)
+				if res.NextCursor == 0 && seen <= contentTotalCap {
+					out.Total, out.TotalCapped = seen, false
+				} else if seen > out.Total && !out.TotalCapped {
+					out.Total, out.TotalCapped = min(seen, contentTotalCap), true
+				}
+			}
+		} else {
+			out.Total, out.TotalCapped, err = t.contentSearchTotal(ctx, req, res, mode, legacy, keepMatch)
+		}
 		if err != nil {
 			return nil, searchContentOut{}, err
 		}
@@ -1366,14 +1414,21 @@ func (t *toolset) searchContent(
 			ConceptEvidence:    m.ConceptEvidence,
 		})
 	}
+	if listing {
+		in.Pattern, in.Mode = "", ""
+	}
 	if res.NextCursor > 0 && len(res.Matches) > 0 {
 		nc := res.NextCursor
 		out.NextCursor = &nc
+		if len(in.Concepts) == 0 && mode != "semantic" && mode != "hybrid" {
+			in.ActivityCutoff = cutoff
+			out.PageCursor = lexicalPageCursor(in, nc, out.Total, out.TotalCapped)
+		}
 	}
 	out.Hints = service.SearchContentHints(ctx, t.svc, req, res, false, keepMatch)
 	if len(in.Concepts) == 0 && !fitsResponse(out) {
 		items, hints := out.Matches, out.Hints
-		originalNext := out.NextCursor
+		originalNext, originalPage := out.NextCursor, out.PageCursor
 		out.Matches = []contentMatch{}
 		out.Hints = nil
 		out.Omitted = len(items)
@@ -1385,6 +1440,11 @@ func (t *toolset) searchContent(
 		} else if len(items) > 0 {
 			next := int(^uint(0) >> 1)
 			out.NextCursor = &next
+			in.ActivityCutoff = cutoff
+			out.PageCursor = lexicalPageCursor(in, next, out.Total, out.TotalCapped)
+			if out.PageCursor == "" {
+				originalPage = ""
+			}
 		}
 		if !fitsResponse(out) {
 			originalNote := out.Note
@@ -1429,7 +1489,7 @@ func (t *toolset) searchContent(
 			out.Matches = items[:1]
 		} else {
 			out.Omitted = 0
-			out.PageCursor, out.NextCursor = "", originalNext
+			out.PageCursor, out.NextCursor = originalPage, originalNext
 			out.Hints = []service.ContentSearchHint{}
 			out.Hints = hints[:fitItems(out, hints)]
 			if !fitsResponse(out) {
@@ -1439,7 +1499,7 @@ func (t *toolset) searchContent(
 		}
 		out.Omitted = len(items) - n
 		if out.Omitted == 0 {
-			out.PageCursor, out.NextCursor = "", originalNext
+			out.PageCursor, out.NextCursor = originalPage, originalNext
 		} else {
 			out.ExcludedActive = 0
 			for _, m := range res.Matches[offset : rawIndexes[n-1]+1] {
@@ -1453,6 +1513,9 @@ func (t *toolset) searchContent(
 			} else {
 				next := in.Cursor + rawIndexes[n-1] + 1
 				out.NextCursor = &next
+				if out.PageCursor != "" {
+					out.PageCursor = lexicalPageCursor(in, next, out.Total, out.TotalCapped)
+				}
 			}
 		}
 	}
