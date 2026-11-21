@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/json/v2"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -59,4 +61,31 @@ func TestMCPCallsReport(t *testing.T) {
 	require.NoError(t, cmd.Execute())
 	assert.Contains(t, output.String(), "search_docs: 1 calls")
 	assert.NotContains(t, output.String(), "query_recall")
+}
+
+func TestMCPStdioWarnsWhenCallLogConfigFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", home)
+	require.NoError(t, os.WriteFile(filepath.Join(home, "config.toml"), []byte("invalid = [\n"), 0600))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/version" {
+			_, _ = w.Write([]byte(`{"api_version":4}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	input, writer, err := os.Pipe()
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	oldInput := os.Stdin
+	os.Stdin = input
+	t.Cleanup(func() { os.Stdin = oldInput; _ = input.Close() })
+	cmd := newMCPCommand()
+	cmd.SetArgs([]string{"--server", srv.URL})
+	cmd.SetContext(t.Context())
+	var warnings bytes.Buffer
+	cmd.SetErr(&warnings)
+	require.NoError(t, cmd.Execute())
+	assert.Contains(t, warnings.String(), "MCP calls will not be recorded")
 }
