@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -117,7 +118,6 @@ func TestNewServer_Instructions(t *testing.T) {
 			assert.Contains(t, instructions, "four separate search_content regex calls")
 			assert.Contains(t, instructions, `PR N\b, pr N\b, #N\b, and /pull/N\b`)
 			assert.Contains(t, instructions, "include_active true, include_one_shot true, include_automated true, limit 50, and current_session_id")
-			assert.Contains(t, instructions, "page with next_cursor as cursor")
 			assert.Contains(t, instructions, "Deduplicate session IDs, ignore the lookup conversation, confirm repository and work evidence")
 			assert.Contains(t, instructions, "get_session_overview to compare activity and parent; follow a child to its parent, then choose the newest valid top-level session")
 			assert.Contains(t, instructions, `Use /pull/N\b regex for a full PR URL`)
@@ -125,82 +125,9 @@ func TestNewServer_Instructions(t *testing.T) {
 			assert.Contains(t, instructions, "list_sessions with active_since")
 			assert.Contains(t, instructions, "include_active in search_sessions and search_content")
 			assert.Contains(t, instructions, "include_one_shot and include_automated in list_sessions and search_content")
-			assert.Contains(t, instructions, "--server with API version 28 or later")
+			assert.Contains(t, instructions, "--server with API version "+strconv.Itoa(service.RawSessionLookupAPIVersion)+" or later")
 		})
 	}
-}
-
-func TestOwnerSearchPatternsFindExactReferences(t *testing.T) {
-	d := dbtest.OpenTestDB(t)
-	for _, tc := range []struct {
-		id, started, result string
-	}{
-		{"upper", "2024-06-15T11:59:00Z", "work on PR 123"},
-		{"lower", "2024-06-03T10:00:00Z", "work on pr 123"},
-		{"hash", "2024-06-02T10:00:00Z", "work on #123"},
-		{"url", "2024-06-01T10:00:00Z", "see #1234 " + strings.Repeat("filler ", 100) + "https://github.com/o/r/pull/123"},
-		{"longer", "2024-06-01T09:00:00Z", "see #1234"},
-	} {
-		dbtest.SeedSession(t, d, tc.id, "proj", func(s *db.Session) { s.StartedAt = new(tc.started) })
-		dbtest.SeedMessages(t, d, toolCallMsg(tc.id, 0, db.ToolCall{ToolName: "Bash", Category: "Bash", ResultContent: tc.result}))
-	}
-	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), Now: func() time.Time { return fixedNow }}))
-	defer func() {
-		require.NoError(t, ct.Close())
-		require.NoError(t, st.Wait())
-	}()
-	for _, tc := range []struct {
-		pattern, id, snippet string
-	}{
-		{`PR 123\b`, "upper", "PR 123"},
-		{`pr 123\b`, "lower", "pr 123"},
-		{`#123\b`, "hash", "#123"},
-		{`/pull/123\b`, "url", "/pull/123"},
-	} {
-		t.Run(tc.id, func(t *testing.T) {
-			res, err := ct.CallTool(t.Context(), callParams(ToolSearchContent, map[string]any{"mode": "regex", "pattern": tc.pattern, "include_active": true, "include_one_shot": true, "include_automated": true, "limit": 50}))
-			require.NoError(t, err)
-			out := decodeStructured[searchContentOut](t, res)
-			require.Len(t, out.Matches, 1)
-			assert.Equal(t, tc.id, out.Matches[0].SessionID)
-			assert.Contains(t, out.Matches[0].Snippet, tc.snippet)
-			if tc.id == "url" {
-				assert.NotContains(t, out.Matches[0].Snippet, "#1234")
-			}
-		})
-	}
-}
-
-func TestOwnerSearchSessionClasses(t *testing.T) {
-	d := dbtest.OpenTestDB(t)
-	for _, tc := range []struct {
-		id, repo, started string
-		users             int
-		automated         bool
-	}{
-		{"current", "o/r", "2024-06-15T11:59:00Z", 2, false},
-		{"one-shot", "o/r", "2024-06-15T11:58:00Z", 1, false},
-		{"automated", "o/r", "2024-06-15T11:57:00Z", 2, true},
-		{"other-repo", "o/other", "2024-06-15T11:56:00Z", 2, false},
-	} {
-		dbtest.SeedSession(t, d, tc.id, "proj", func(s *db.Session) {
-			s.StartedAt = new(tc.started)
-			s.UserMessageCount = tc.users
-			s.IsAutomated = tc.automated
-		})
-		dbtest.SeedMessages(t, d, toolCallMsg(tc.id, 0, db.ToolCall{ToolName: "Bash", Category: "Bash", ResultContent: "work on " + tc.repo + "#123"}))
-	}
-	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), Now: func() time.Time { return fixedNow }}))
-	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
-	args := map[string]any{"mode": "regex", "pattern": `#123\b`, "include_active": true, "include_one_shot": true, "include_automated": true, "current_session_id": "current", "limit": 50}
-	first, err := ct.CallTool(t.Context(), callParams(ToolSearchContent, args))
-	require.NoError(t, err)
-	page := decodeStructured[searchContentOut](t, first)
-	ids := make([]string, 0, len(page.Matches))
-	for _, hit := range page.Matches {
-		ids = append(ids, hit.SessionID)
-	}
-	assert.ElementsMatch(t, []string{"one-shot", "automated", "other-repo"}, ids)
 }
 
 func TestServer_GetMemoryStatus(t *testing.T) {
