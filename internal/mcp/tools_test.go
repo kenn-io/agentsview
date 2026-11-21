@@ -175,6 +175,46 @@ func TestSearchTimeout(t *testing.T) {
 	}
 }
 
+type postSearchTimeoutService struct {
+	service.SessionService
+	contentCalls int
+}
+
+func (f *postSearchTimeoutService) Search(context.Context, service.SearchRequest) (*service.SessionSearchResult, error) {
+	return &service.SessionSearchResult{Results: []db.SearchResult{{SessionID: "session-a"}}}, nil
+}
+
+func (f *postSearchTimeoutService) Get(ctx context.Context, _ string) (*service.SessionDetail, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (f *postSearchTimeoutService) SearchContent(ctx context.Context, _ service.ContentSearchRequest) (*service.ContentSearchResult, error) {
+	f.contentCalls++
+	if f.contentCalls == 1 {
+		return &service.ContentSearchResult{}, nil
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestSearchTimeoutDuringOptionalWork(t *testing.T) {
+	for _, content := range []bool{false, true} {
+		t.Run(fmt.Sprintf("content=%t", content), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ts := &toolset{svc: &postSearchTimeoutService{}}
+				var err error
+				if content {
+					_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", IncludeActive: true})
+				} else {
+					_, _, err = ts.searchSessions(t.Context(), nil, searchSessionsIn{Query: "needle"})
+				}
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+			})
+		})
+	}
+}
+
 func TestSearchSessions_ReturnsHitsWithOrdinal(t *testing.T) {
 	ts, d := newTestToolset(t)
 	if !d.HasFTS(t.Context()) {

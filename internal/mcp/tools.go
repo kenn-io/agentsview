@@ -233,6 +233,9 @@ func (t *toolset) searchSessions(
 			MatchOrdinal: r.Ordinal,
 		})
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, searchSessionsOut{}, err
+	}
 	if res.NextCursor > 0 && len(res.Results) > 0 {
 		nc := res.NextCursor
 		out.NextCursor = &nc
@@ -1077,6 +1080,9 @@ func (t *toolset) searchContent(
 		out.NextCursor = &nc
 	}
 	out.Hints = service.SearchContentHints(ctx, t.svc, req, res, false, keepMatch)
+	if err := ctx.Err(); err != nil {
+		return nil, searchContentOut{}, err
+	}
 	return nil, out, nil
 }
 
