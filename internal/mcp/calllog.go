@@ -229,13 +229,19 @@ func SummarizeCalls(ctx context.Context, dir, from, to string) ([]CallSummary, e
 		scanner := bufio.NewScanner(ctxio.Reader{Context: ctx, Reader: f})
 		for scanner.Scan() {
 			line := scanner.Bytes()
+			var header struct {
+				Version int `json:"version"`
+			}
+			if json.Unmarshal(line, &header) != nil {
+				continue
+			}
+			if header.Version != callRecordVersion {
+				_ = f.Close()
+				return nil, fmt.Errorf("unsupported MCP call record version %d", header.Version)
+			}
 			var rec callRecord
 			if json.Unmarshal(line, &rec) != nil || !db.InDateRange(rec.At.UTC().Format("2006-01-02"), from, to) {
 				continue
-			}
-			if rec.Version != callRecordVersion {
-				_ = f.Close()
-				return nil, fmt.Errorf("unsupported MCP call record version %d", rec.Version)
 			}
 			if rec.Outcome != "ok" && rec.Outcome != "empty" && rec.Outcome != "error" {
 				_ = f.Close()

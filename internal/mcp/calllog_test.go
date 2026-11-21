@@ -166,6 +166,7 @@ func TestRecordToolCallCanceled(t *testing.T) {
 func TestCallLogFormatRejectsUnknownRecords(t *testing.T) {
 	for _, tc := range []struct{ name, record, want string }{
 		{"version", `{"version":2,"at":"2026-01-02T00:00:00Z","tool":"search_docs","outcome":"ok"}`, "unsupported MCP call record version"},
+		{"version with incompatible timestamp", `{"version":2,"at":{"epoch":0},"tool":"search_docs","outcome":"ok"}`, "unsupported MCP call record version"},
 		{"outcome", `{"version":1,"at":"2026-01-02T00:00:00Z","tool":"search_docs","outcome":"unknown"}`, "unknown MCP call outcome"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
