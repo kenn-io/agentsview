@@ -1,4 +1,5 @@
-import type { EventSource } from "eventsource";
+import { supportsLiveSessionUpdates } from "../api/remoteVersion.js";
+import type { LiveSource } from "../api/client.js";
 import { triggerResync, triggerSync, watchSession, type SyncHandle } from "../api/client.js";
 import { MetadataService, SyncService } from "../api/generated/index";
 import { ApiError, isAbortError, isRemoteConnection } from "../api/runtime.js";
@@ -94,6 +95,13 @@ class SyncStore {
   readonly isDesktop: boolean =
     typeof window !== "undefined" && new URLSearchParams(window.location.search).has("desktop");
 
+  get remoteLiveAllowed(): boolean {
+    return (
+      !isRemoteConnection() ||
+      (this.serverVersion !== null && supportsLiveSessionUpdates(this.serverVersion.api_version))
+    );
+  }
+
   get readOnly(): boolean {
     return this.serverVersion?.read_only === true;
   }
@@ -102,7 +110,7 @@ class SyncStore {
     return this.serverVersion?.archive_only === true;
   }
 
-  private watchEventSource: EventSource | null = null;
+  private watchEventSource: LiveSource | null = null;
   private watchVisibilityHandler: (() => void) | null = null;
   private pollVisibilityHandler: (() => void) | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -396,11 +404,17 @@ class SyncStore {
       };
     });
     const open = () => {
+      this.closeSessionStream();
       this.watchEventSource = watchSession(sessionId, onUpdate, onTiming);
       const es = this.watchEventSource;
       es.addEventListener("error", () => {
         if (this.watchEventSource !== es) return;
         settle(false);
+      });
+      es.addEventListener("session_missing", () => {
+        if (this.watchEventSource !== es) return;
+        settle(false);
+        onUpdate();
       });
       es.addEventListener("session_ready", () => {
         if (this.watchEventSource !== es) return;

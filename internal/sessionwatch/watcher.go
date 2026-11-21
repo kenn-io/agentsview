@@ -108,30 +108,17 @@ func (w *Watcher) Events(
 		lastCount, lastVersion, _ := w.db.GetSessionVersion(ctx, sessionID)
 		go func() {
 			defer close(ch)
-			if err != nil {
-				return
-			}
-			if initial.State != db.SessionWatchResolved {
-				select {
-				case ch <- struct{}{}:
-				case <-ctx.Done():
-				}
-				return
-			}
 			ticker := time.NewTicker(pollInterval())
 			defer ticker.Stop()
+			// After an initial read error, the first successful read
+			// becomes the baseline and is announced once.
+			recovering := err != nil
+			current, e := initial, err
 			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					current, e := identity.GetSessionWatchState(sessionID)
-					if e != nil {
-						continue
-					}
-					transition := current.State != initial.State || current.PublicID != initial.PublicID || current.ContentRevision != initial.ContentRevision || !slices.Equal(current.Variants, initial.Variants)
+				if e == nil {
 					count, version, ok := w.db.GetSessionVersion(ctx, sessionID)
-					if transition || ok && (count != lastCount || version != lastVersion) {
+					transition := current.State != db.SessionWatchResolved || !recovering && (current.State != initial.State || current.PublicID != initial.PublicID || current.ContentRevision != initial.ContentRevision || !slices.Equal(current.Variants, initial.Variants))
+					if recovering || transition || ok && (count != lastCount || version != lastVersion) {
 						select {
 						case ch <- struct{}{}:
 						case <-ctx.Done():
@@ -140,9 +127,16 @@ func (w *Watcher) Events(
 						if transition {
 							return
 						}
+						initial, recovering = current, false
 						lastCount, lastVersion = count, version
 					}
 				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+				}
+				current, e = identity.GetSessionWatchState(sessionID)
 			}
 		}()
 		return ch

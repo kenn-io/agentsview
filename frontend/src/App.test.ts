@@ -14,6 +14,7 @@ import { createSessionsStore, sessions } from "./lib/stores/sessions.svelte.js";
 import { settings } from "./lib/stores/settings.svelte.js";
 import { starred } from "./lib/stores/starred.svelte.js";
 import { sync } from "./lib/stores/sync.svelte.js";
+import { events } from "./lib/stores/events.svelte.js";
 import { codexCloudStatus } from "./lib/stores/codexCloud.svelte.js";
 import { ui } from "./lib/stores/ui.svelte.js";
 import { usage } from "./lib/stores/usage.svelte.js";
@@ -87,6 +88,9 @@ afterEach(() => {
     unmount(component);
     component = undefined;
   }
+  sync.serverVersion = null;
+  sessions.sessions = [];
+  events.setAvailable(false);
   vi.restoreAllMocks();
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -230,6 +234,88 @@ describe("App Recall availability", () => {
   });
 });
 
+describe("saved remote API version", () => {
+  function mountRemoteSession(apiVersion: number) {
+    stubAppDependencies();
+    vi.mocked(sync.watchSession).mockRestore();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    vi.spyOn(sessions, "refreshActiveSession").mockResolvedValue();
+    sessions.sessions = [
+      {
+        id: "session-1",
+        project: "proj-a",
+        machine: "local",
+        agent: "claude",
+        first_message: "hello",
+        started_at: "2026-02-20T12:30:00Z",
+        ended_at: "2026-02-20T12:31:00Z",
+        message_count: 2,
+        user_message_count: 1,
+        created_at: "2026-02-20T12:30:00Z",
+      } as unknown as (typeof sessions.sessions)[number],
+    ];
+    const requests: unknown[] = [];
+    vi.stubGlobal(
+      "SharedWorker",
+      class {
+        port = {
+          onmessage: null,
+          postMessage: (value: unknown) => requests.push(value),
+          start() {},
+        };
+      },
+    );
+    const fetchSpy = vi.fn(
+      async (_input: RequestInfo | URL) =>
+        new Response("[]", { headers: { "Content-Type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+    localStorage.setItem("agentsview-server-url", "https://remote.example.test");
+    sync.serverVersion = {
+      api_version: apiVersion,
+      build_date: "",
+      version: "test",
+      commit: "test",
+      data_version: 1,
+      friction_available: false,
+      friction_build_allowed: false,
+      insight_generation_available: false,
+      kata_available: false,
+      session_stats_available: false,
+    };
+    events.setAvailable(true);
+    router.route = "sessions";
+    router.sessionId = "session-1";
+    sessions.activeSessionId = "session-1";
+    component = mount(App, { target: document.body });
+    return { requests, fetchSpy };
+  }
+
+  const notice =
+    "Sessions won't update live: this server runs API 27. Upgrade it to API 28, or reload to see new messages.";
+
+  it("keeps the archive live on API 27 and warns that the session won't update", async () => {
+    const { requests } = mountRemoteSession(27);
+    await vi.waitFor(() =>
+      expect(document.querySelector(".session-live-notice")?.textContent?.trim()).toBe(notice),
+    );
+    expect(requests).toContainEqual(expect.objectContaining({ session: undefined }));
+    expect(requests).not.toContainEqual(expect.objectContaining({ session: "session-1" }));
+  });
+
+  it("watches the selected session on API 28 without the notice", async () => {
+    const { requests } = mountRemoteSession(28);
+    try {
+      await vi.waitFor(() =>
+        expect(requests).toContainEqual(expect.objectContaining({ session: "session-1" })),
+      );
+      expect(document.querySelector(".session-live-notice")).toBeNull();
+    } finally {
+      sync.unwatchSession();
+    }
+  });
+});
+
 describe("App session URL date state", () => {
   it.each(["selection change", "selection cleared", "route exit", "unmount"])(
     "ignores an old watch's children fallback after %s",
@@ -280,32 +366,36 @@ describe("App session URL date state", () => {
     vi.spyOn(sessions, "navigateToSession").mockResolvedValue();
     vi.spyOn(sessions, "refreshActiveSession").mockResolvedValue();
     vi.spyOn(messages, "reload").mockResolvedValue();
-    let stream!: ReadableStreamDefaultController<Uint8Array>;
-    const watch = vi.spyOn(SessionsService, "getApiV1SessionsByIdWatch").mockResolvedValue(
-      new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            stream = controller;
-          },
-        }),
-        { headers: { "Content-Type": "text/event-stream" } },
-      ),
-    );
+    let port!: {
+      onmessage: ((event: MessageEvent) => void) | null;
+      postMessage: ReturnType<typeof vi.fn>;
+      start: () => void;
+    };
+    class Worker {
+      port = { onmessage: null, postMessage: vi.fn(), start() {} };
+      constructor() {
+        port = this.port;
+      }
+    }
+    vi.stubGlobal("SharedWorker", Worker);
     const fetchSpy = vi.fn(
       async (_input: RequestInfo | URL) =>
-        new Response("[]", {
-          headers: { "Content-Type": "application/json" },
-        }),
+        new Response("[]", { headers: { "Content-Type": "application/json" } }),
     );
     vi.stubGlobal("fetch", fetchSpy);
     router.route = "sessions";
+    router.isRootPath = false;
     router.sessionId = "session-1";
     sessions.activeSessionId = "session-1";
     try {
       component = mount(App, { target: document.body });
       await flushEffects();
-      expect(watch).toHaveBeenCalledWith({ id: "session-1" }, expect.anything());
-      stream.enqueue(new TextEncoder().encode("event: session_ready\ndata: {}\n\n"));
+      expect(port.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ session: "session-1" }),
+      );
+      port.onmessage?.(
+        new MessageEvent("message", { data: { type: "session_ready", data: "session-1" } }),
+      );
       await vi.waitFor(() =>
         expect(
           fetchSpy.mock.calls.some(([input]) =>
@@ -320,7 +410,6 @@ describe("App session URL date state", () => {
       expect(childrenRequests).toHaveLength(1);
     } finally {
       sync.unwatchSession();
-      stream.close();
     }
   });
 

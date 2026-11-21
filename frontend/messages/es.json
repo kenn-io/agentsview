@@ -2196,6 +2196,7 @@
   "settings_embeddings_state_building": "En construcción",
   "settings_embeddings_state_retired": "Retirada",
   "settings_embeddings_coverage": "{embeddedLabel} procesados · {missingLabel} pendientes",
+  "settings_remote_live_updates_unavailable": "Las sesiones no se actualizarán en directo: este servidor usa la API {apiVersion}. Actualízalo a la API {requiredVersion} o recarga para ver los mensajes nuevos.",
   "settings_remote_connected_version": "Conectado (v{version})",
   "settings_remote_server_returned": "El servidor devolvió {status}",
   "settings_remote_connection_failed": "Error de conexión",

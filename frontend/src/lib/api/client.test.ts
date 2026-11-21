@@ -1,14 +1,5 @@
-import { EventSource, type EventSourceInit } from "eventsource";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
-import {
-  triggerSync,
-  watchEvents,
-  WATCH_EVENTS_MAX_CONSECUTIVE_ERRORS,
-  watchSession,
-  syncBrowser,
-  connectClaudeAI,
-  WATCH_SESSION_MAX_CONSECUTIVE_ERRORS,
-} from "./client.js";
+import { triggerSync, syncBrowser, connectClaudeAI } from "./client.js";
 import type { SyncHandle } from "./client.js";
 import { ApiError, setAuthToken, setServerUrl } from "./runtime.js";
 import type { SyncProgress } from "./generated/index.js";
@@ -808,288 +799,6 @@ describe("generateInsight SSE parsing", () => {
   });
 });
 
-vi.mock("eventsource", () => ({ EventSource: vi.fn() }));
-
-describe("watchEvents", () => {
-  class FakeEventSource {
-    static instances: FakeEventSource[] = [];
-    public url: string;
-    public readyState = 1;
-    private listeners: Record<string, ((ev: MessageEvent) => void)[]> = {};
-    public onerror: ((ev: Event) => void) | null = null;
-    public closed = false;
-
-    constructor(
-      url: URL,
-      public options: EventSourceInit,
-    ) {
-      this.url = url.toString();
-      FakeEventSource.instances.push(this);
-    }
-
-    addEventListener(name: string, cb: (ev: MessageEvent) => void) {
-      (this.listeners[name] ||= []).push(cb);
-    }
-
-    close() {
-      this.closed = true;
-    }
-
-    // Fire an onerror event (the native API triggers via the property, not addEventListener).
-    fireError() {
-      if (this.onerror) this.onerror(new Event("error"));
-    }
-
-    // Fire an open event (successful (re)connect).
-    fireOpen() {
-      (this.listeners["open"] || []).forEach((cb) => cb(new Event("open") as MessageEvent));
-    }
-
-    // Fire a frame with a string body (caller controls JSON validity).
-    fireRaw(name: string, data: string) {
-      const payload = { data } as MessageEvent;
-      (this.listeners[name] || []).forEach((cb) => cb(payload));
-    }
-
-    static reset() {
-      FakeEventSource.instances = [];
-    }
-  }
-
-  beforeEach(() => {
-    FakeEventSource.reset();
-    vi.mocked(EventSource).mockImplementation(function (url, options) {
-      return new FakeEventSource(new URL(url), options!) as unknown as EventSource;
-    });
-    localStorage.clear();
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    localStorage.clear();
-  });
-
-  it("opens /api/v1/events locally without a token", () => {
-    watchEvents(() => {});
-    expect(FakeEventSource.instances).toHaveLength(1);
-    expect(FakeEventSource.instances[0]!.url).toBe(`${window.location.origin}/api/v1/events`);
-  });
-
-  it("sends authentication through the generated request", async () => {
-    localStorage.setItem("agentsview-auth-token", "secret");
-    watchEvents(() => {});
-    const source = FakeEventSource.instances[0]!;
-    expect(source.url).toBe(`${window.location.origin}/api/v1/events`);
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(new Response(null, { headers: { "Content-Type": "text/event-stream" } }));
-    vi.stubGlobal("fetch", fetchMock);
-    await source.options.fetch!(source.url, {
-      signal: new AbortController().signal,
-      headers: { Accept: "text/event-stream" },
-      mode: "cors",
-      cache: "no-store",
-      redirect: "follow",
-    });
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/v1/events",
-      expect.objectContaining({ method: "GET" }),
-    );
-    expect(new Headers(fetchMock.mock.calls[0]![1].headers).get("Authorization")).toBe(
-      "Bearer secret",
-    );
-  });
-
-  it("invokes onEvent with parsed scope for valid data_changed frames", () => {
-    const received: string[] = [];
-    watchEvents((e) => received.push(e.scope));
-    FakeEventSource.instances[0]!.fireRaw("data_changed", JSON.stringify({ scope: "messages" }));
-    expect(received).toEqual(["messages"]);
-  });
-
-  it("falls back to { scope: 'sync' } for malformed payloads", () => {
-    const received: string[] = [];
-    watchEvents((e) => received.push(e.scope));
-    FakeEventSource.instances[0]!.fireRaw("data_changed", "not valid json");
-    expect(received).toEqual(["sync"]);
-  });
-
-  it("falls back to { scope: 'sync' } for parsed-but-invalid payloads", () => {
-    const received: string[] = [];
-    watchEvents((e) => received.push(e.scope));
-    const es = FakeEventSource.instances[0]!;
-    // Empty object — no scope field.
-    es.fireRaw("data_changed", JSON.stringify({}));
-    // Unknown scope value.
-    es.fireRaw("data_changed", JSON.stringify({ scope: "bogus" }));
-    // Non-object payloads (string, number, null).
-    es.fireRaw("data_changed", JSON.stringify("messages"));
-    es.fireRaw("data_changed", JSON.stringify(42));
-    es.fireRaw("data_changed", JSON.stringify(null));
-    expect(received).toEqual(["sync", "sync", "sync", "sync", "sync"]);
-  });
-
-  it("opens <server>/api/v1/events with server-scoped token in remote mode", () => {
-    const server = "https://remote.example.com";
-    localStorage.setItem("agentsview-server-url", server);
-    localStorage.setItem(`agentsview-auth-token::${server}`, "remote-token");
-    watchEvents(() => {});
-    expect(FakeEventSource.instances[0]!.url).toBe(`${server}/api/v1/events`);
-  });
-
-  it("keeps token characters out of the stream URL", () => {
-    const rawToken = "a b&c?d=e/f+g";
-    localStorage.setItem("agentsview-auth-token", rawToken);
-    watchEvents(() => {});
-    expect(FakeEventSource.instances[0]!.url).toBe(`${window.location.origin}/api/v1/events`);
-  });
-
-  it("closes the EventSource after N consecutive errors without a successful event", () => {
-    watchEvents(() => {});
-    const es = FakeEventSource.instances[0]!;
-    for (let i = 0; i < WATCH_EVENTS_MAX_CONSECUTIVE_ERRORS - 1; i++) {
-      es.fireError();
-      expect(es.closed).toBe(false);
-    }
-    es.fireError();
-    expect(es.closed).toBe(true);
-  });
-
-  it("resets the error counter on a successful (re)connect", () => {
-    watchEvents(() => {});
-    const es = FakeEventSource.instances[0]!;
-    // Accumulate N-1 errors.
-    for (let i = 0; i < WATCH_EVENTS_MAX_CONSECUTIVE_ERRORS - 1; i++) {
-      es.fireError();
-    }
-    // A successful reconnect (open event) resets the counter.
-    es.fireOpen();
-    // Another N-1 errors should still not close.
-    for (let i = 0; i < WATCH_EVENTS_MAX_CONSECUTIVE_ERRORS - 1; i++) {
-      es.fireError();
-    }
-    expect(es.closed).toBe(false);
-  });
-
-  it("resets the error counter after a successful event delivery", () => {
-    const received: string[] = [];
-    watchEvents((e) => received.push(e.scope));
-    const es = FakeEventSource.instances[0]!;
-    // Accumulate N-1 errors, then a successful event resets the counter.
-    for (let i = 0; i < WATCH_EVENTS_MAX_CONSECUTIVE_ERRORS - 1; i++) {
-      es.fireError();
-    }
-    es.fireRaw("data_changed", JSON.stringify({ scope: "messages" }));
-    expect(received).toEqual(["messages"]);
-    // Another N-1 errors should still not close — counter is back at 0.
-    for (let i = 0; i < WATCH_EVENTS_MAX_CONSECUTIVE_ERRORS - 1; i++) {
-      es.fireError();
-    }
-    expect(es.closed).toBe(false);
-  });
-});
-
-describe("watchSession", () => {
-  class FakeEventSource {
-    static instances: FakeEventSource[] = [];
-    public url: string;
-    public readyState = 1;
-    private listeners: Record<string, ((ev: MessageEvent) => void)[]> = {};
-    public onerror: ((ev: Event) => void) | null = null;
-    public closed = false;
-
-    constructor(
-      url: URL,
-      public options: EventSourceInit,
-    ) {
-      this.url = url.toString();
-      FakeEventSource.instances.push(this);
-    }
-
-    addEventListener(name: string, cb: (ev: MessageEvent) => void) {
-      (this.listeners[name] ||= []).push(cb);
-    }
-
-    close() {
-      this.closed = true;
-    }
-
-    fireError() {
-      if (this.onerror) this.onerror(new Event("error"));
-    }
-
-    fireOpen() {
-      (this.listeners["open"] || []).forEach((cb) => cb(new Event("open") as MessageEvent));
-    }
-
-    fireUpdate() {
-      (this.listeners["session_updated"] || []).forEach((cb) =>
-        cb(new MessageEvent("session_updated")),
-      );
-    }
-
-    static reset() {
-      FakeEventSource.instances = [];
-    }
-  }
-
-  beforeEach(() => {
-    FakeEventSource.reset();
-    vi.mocked(EventSource).mockImplementation(function (url, options) {
-      return new FakeEventSource(new URL(url), options!) as unknown as EventSource;
-    });
-    localStorage.clear();
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    localStorage.clear();
-  });
-
-  it("closes the EventSource after N consecutive errors", () => {
-    // Unknown session ids now return HTTP 404 per the Session API
-    // contract. Without a retry cap the browser would hammer /watch
-    // forever; this test locks in the circuit breaker instead.
-    watchSession("abc", () => {});
-    const es = FakeEventSource.instances[0]!;
-    for (let i = 0; i < WATCH_SESSION_MAX_CONSECUTIVE_ERRORS - 1; i++) {
-      es.fireError();
-      expect(es.closed).toBe(false);
-    }
-    es.fireError();
-    expect(es.closed).toBe(true);
-  });
-
-  it("resets the error counter on session_updated or open", () => {
-    const seen: number[] = [];
-    watchSession("abc", () => seen.push(1));
-    const es = FakeEventSource.instances[0]!;
-
-    for (let i = 0; i < WATCH_SESSION_MAX_CONSECUTIVE_ERRORS - 1; i++) {
-      es.fireError();
-    }
-    es.fireUpdate(); // successful delivery resets counter
-    expect(seen).toEqual([1]);
-
-    for (let i = 0; i < WATCH_SESSION_MAX_CONSECUTIVE_ERRORS - 1; i++) {
-      es.fireError();
-    }
-    es.fireOpen(); // successful (re)connect also resets
-    for (let i = 0; i < WATCH_SESSION_MAX_CONSECUTIVE_ERRORS - 1; i++) {
-      es.fireError();
-    }
-    expect(es.closed).toBe(false);
-  });
-
-  it("encodes the session ID as one URL path segment", () => {
-    watchSession("deepseek-harness:child%7E/%25?#", () => {});
-
-    expect(FakeEventSource.instances[0]?.url).toBe(
-      `${window.location.origin}/api/v1/sessions/deepseek-harness%3Achild%257E%2F%2525%3F%23/watch`,
-    );
-  });
-});
-
 describe("core action telemetry", () => {
   beforeEach(() => {
     vi.mocked(telemetry.reportTelemetry).mockClear();
@@ -1138,5 +847,96 @@ describe("core action telemetry", () => {
     ]);
     await generateInsight(req).done;
     expect(telemetry.reportTelemetry).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("live event payloads", () => {
+  let port!: MessagePort;
+  beforeEach(() => {
+    class Worker {
+      port = { start() {}, postMessage() {}, onmessage: null } as unknown as MessagePort;
+      constructor() {
+        port = this.port;
+      }
+    }
+    vi.stubGlobal("SharedWorker", Worker);
+  });
+  afterEach(() => {
+    localStorage.clear();
+    vi.unstubAllGlobals();
+  });
+
+  it.each(["closed", "permanent_failure"])("exposes %s as a closed stream", async (type) => {
+    const { watchEvents } = await import("./client.js");
+    const onPermanentFailure = vi.fn();
+    const source = watchEvents(() => {}, { onPermanentFailure });
+    port.onmessage?.(new MessageEvent("message", { data: { type } }));
+    expect(source.readyState).toBe(2);
+    expect(onPermanentFailure).toHaveBeenCalledTimes(type === "permanent_failure" ? 1 : 0);
+    source.close();
+  });
+
+  it("ignores queued frames after a subscription is closed", async () => {
+    const { watchSession } = await import("./client.js");
+    const update = vi.fn();
+    const source = watchSession("a", update);
+    port.onmessage?.(new MessageEvent("message", { data: { type: "closed" } }));
+    port.onmessage?.(new MessageEvent("message", { data: { type: "session_ready", data: "a" } }));
+    expect(source.readyState).toBe(1);
+    source.close();
+    port.onmessage?.(new MessageEvent("message", { data: { type: "session_updated", data: "a" } }));
+    port.onmessage?.(new MessageEvent("message", { data: { type: "session_ready", data: "a" } }));
+    expect(update).not.toHaveBeenCalled();
+    expect(source.readyState).toBe(2);
+  });
+
+  it("refreshes the pinned server token on storage changes and page return", async () => {
+    const postMessage = vi.fn();
+    class Worker {
+      port = { start() {}, postMessage, onmessage: null };
+    }
+    vi.stubGlobal("SharedWorker", Worker);
+    localStorage.setItem("agentsview-server-url", "https://example.test");
+    localStorage.setItem("agentsview-auth-token::https://example.test", "old-token");
+    const { watchEvents } = await import("./client.js");
+    const source = watchEvents(() => {});
+    expect(postMessage).toHaveBeenLastCalledWith(expect.objectContaining({ token: "old-token" }));
+    setAuthToken("same-tab-token");
+    expect(postMessage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ token: "same-tab-token" }),
+    );
+    localStorage.setItem("agentsview-server-url", "https://other.example.test");
+    localStorage.setItem("agentsview-auth-token::https://example.test", "new-token");
+    window.dispatchEvent(new Event("storage"));
+    expect(postMessage).toHaveBeenLastCalledWith(expect.objectContaining({ token: "new-token" }));
+    window.dispatchEvent(new Event("pagehide"));
+    expect(postMessage).toHaveBeenLastCalledWith("leave");
+    localStorage.setItem("agentsview-auth-token::https://example.test", "latest-token");
+    window.dispatchEvent(new Event("pageshow"));
+    expect(postMessage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ token: "latest-token" }),
+    );
+    source.close();
+    const count = postMessage.mock.calls.length;
+    window.dispatchEvent(new Event("storage"));
+    expect(postMessage).toHaveBeenCalledTimes(count);
+  });
+
+  it("delivers known scopes and refreshes for malformed or unknown data", async () => {
+    const { watchEvents } = await import("./client.js");
+    const received: string[] = [];
+    const source = watchEvents((event) => received.push(event.scope));
+    for (const data of [
+      '{"scope":"messages"}',
+      '{"scope":"sessions"}',
+      "invalid",
+      "{}",
+      "null",
+      '{"scope":"other"}',
+    ]) {
+      port.onmessage?.(new MessageEvent("message", { data: { type: "data_changed", data } }));
+    }
+    expect(received).toEqual(["messages", "sessions", "sync", "sync", "sync", "sync"]);
+    source.close();
   });
 });

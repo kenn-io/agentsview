@@ -55,6 +55,7 @@
   import StatusBar from "./lib/components/layout/StatusBar.svelte";
   import SessionList from "./lib/components/sidebar/SessionList.svelte";
   import MessageList from "./lib/components/content/MessageList.svelte";
+  import StateNotice from "./lib/components/shared/StateNotice.svelte";
   import SessionVitals from "./lib/components/content/SessionVitals.svelte";
   import { sessionActivity } from "./lib/stores/sessionActivity.svelte.js";
   import { sessionTiming } from "./lib/stores/sessionTiming.svelte.js";
@@ -100,6 +101,7 @@
   import { documentTitle } from "./lib/utils/documentTitle.js";
   import { setAuthToken, getAuthToken, setServerUrl } from "./lib/api/runtime.js";
   import { setupVisibilityHealthCheck } from "./lib/utils/health.js";
+  import { LIVE_SESSION_API_VERSION } from "./lib/api/remoteVersion.js";
   import { gettingStarted } from "./lib/stores/gettingStarted.svelte.js";
   import { reportTelemetry, setupTelemetryReporting } from "./lib/utils/telemetry.js";
   import { registerShortcuts } from "./lib/utils/keyboard.js";
@@ -115,6 +117,7 @@
   } from "./lib/stores/sessionRouteParams.js";
 
   let globalAuthToken: string = $state("");
+  let remoteLiveAllowed = $derived(sync.remoteLiveAllowed);
   let title = $derived(documentTitle({
     route: router.route,
     needsAuth: settings.needsAuth,
@@ -151,6 +154,7 @@
   $effect(() => {
     const route = router.route;
     const id = sessions.activeSessionId;
+    const liveAllowed = remoteLiveAllowed;
     void sessions.activeSessionLoadVersion;
     let current = true;
     untrack(() => {
@@ -189,7 +193,7 @@
         if (ui.isMobileViewport) {
           ui.closeSidebar();
         }
-        const ready = sync.watchSession(
+        const ready = liveAllowed ? sync.watchSession(
           id,
           () => {
             messages.reload();
@@ -204,7 +208,7 @@
           (t) => {
             sessionTiming.applyEvent(t);
           },
-        );
+        ) : Promise.resolve(false);
         messages.loadSession(id, ready);
         void ready.then((seen) => {
           if (!seen && current) sessions.loadChildSessions(id);
@@ -956,6 +960,16 @@
           session={session}
           onBack={() => sessions.deselectSession()}
         />
+        {#if !remoteLiveAllowed && sync.serverVersion}
+          <StateNotice
+            class="session-live-notice"
+            role="status"
+            description={m.settings_remote_live_updates_unavailable({
+              apiVersion: String(sync.serverVersion.api_version),
+              requiredVersion: String(LIVE_SESSION_API_VERSION),
+            })}
+          />
+        {/if}
         <MessageList bind:this={messageListRef} />
       {:else if sessions.archiveEmpty}
         <EmptyArchivePanel />
@@ -1056,6 +1070,17 @@
        right-aligned controls do not shift when content first makes the page
        scroll. */
     scrollbar-gutter: stable;
+  }
+
+  /* Match the transcript's reading column and scrollbar inset. */
+  :global(.session-live-notice) {
+    --column-inset: calc((100% - var(--transcript-scrollbar, 0px) - var(--reading-column)) / 2);
+    flex-shrink: 0;
+    margin: 8px calc(max(12px, var(--column-inset)) + var(--transcript-scrollbar, 0px)) 0 max(12px, var(--column-inset));
+  }
+
+  :global(.session-live-notice .state-notice__description) {
+    color: var(--accent-amber, #f59e0b);
   }
 
   /* Settings and Data scroll inside their own panes. Keep these hosts apart from

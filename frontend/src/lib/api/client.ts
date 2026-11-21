@@ -1,4 +1,5 @@
-import { EventSource } from "eventsource";
+import { type LiveFrame, type LiveRequest } from "./liveHub.js";
+import { LiveBroadcast } from "./liveBroadcast.js";
 import { createParser, type EventSourceMessage } from "eventsource-parser";
 import type {
   SyncProgress,
@@ -17,9 +18,11 @@ import {
 } from "./generated/index.js";
 import {
   ApiError,
+  AUTH_TOKEN_CHANGE_EVENT,
   type ApiRequestOptions,
   getAuthToken,
   getGeneratedBase,
+  getServerUrl,
   isRemoteConnection,
 } from "./runtime.js";
 import { reportTelemetry } from "../utils/telemetry.js";
@@ -98,148 +101,115 @@ export interface DataChangedEvent {
   scope: "messages" | "sessions" | "sync";
 }
 
-/** Number of consecutive onerror firings without a successful
- * connection or event delivery before watchSession gives up. Guards
- * against the browser hammering `/watch` forever when the session
- * id is unknown (server returns 404 per the Session API contract)
- * or the server is permanently refusing the stream. */
-export const WATCH_SESSION_MAX_CONSECUTIVE_ERRORS = 5;
+export interface LiveSource extends EventTarget {
+  readyState: number;
+  close(): void;
+}
+
+const broadcasts = new Map<string, LiveBroadcast>();
+
+function connectLive(session?: string): LiveSource {
+  const base = new URL(getGeneratedBase() || "/", window.location.origin).href.replace(/\/$/, "");
+  const server = getServerUrl();
+  const request: LiveRequest = {
+    base,
+    token: getAuthToken(server),
+    credentialTime: performance.timeOrigin + performance.now(),
+    session,
+  };
+  const target = new EventTarget() as LiveSource;
+  target.readyState = 0;
+  let disposed = false;
+  let send: (value: LiveRequest | "leave" | "close") => void;
+  const receive = (frame: LiveFrame) => {
+    if (disposed) return;
+    if (frame.type === "events_ready" || frame.type === "session_ready") target.readyState = 1;
+    if (frame.type === "closed" || frame.type === "permanent_failure") target.readyState = 2;
+    target.dispatchEvent(new MessageEvent(frame.type, { data: frame.data }));
+  };
+  if (typeof SharedWorker !== "undefined") {
+    const worker = new SharedWorker(new URL("./live.worker.ts", import.meta.url), {
+      type: "module",
+      name: base,
+    });
+    worker.port.onmessage = (event: MessageEvent<LiveFrame>) => receive(event.data);
+    send = (value) => worker.port.postMessage(value === "close" ? "leave" : value);
+    worker.port.start();
+  } else {
+    let broadcast = broadcasts.get(base);
+    if (!broadcast) {
+      broadcast = new LiveBroadcast(base);
+      broadcasts.set(base, broadcast);
+    }
+    send = broadcast.connect(receive);
+  }
+  const onPageHide = () => send("leave");
+  const refreshCredentials = () => {
+    const token = getAuthToken(server);
+    if (request.token === token) return;
+    request.token = token;
+    request.credentialTime = performance.timeOrigin + performance.now();
+    send({ ...request });
+  };
+  const onPageShow = () => {
+    request.token = getAuthToken(server);
+    request.credentialTime = performance.timeOrigin + performance.now();
+    send({ ...request });
+  };
+  window.addEventListener("storage", refreshCredentials);
+  window.addEventListener(AUTH_TOKEN_CHANGE_EVENT, refreshCredentials);
+  window.addEventListener("pagehide", onPageHide);
+  window.addEventListener("pageshow", onPageShow);
+  target.close = () => {
+    disposed = true;
+    send("close");
+    target.readyState = 2;
+    window.removeEventListener("storage", refreshCredentials);
+    window.removeEventListener(AUTH_TOKEN_CHANGE_EVENT, refreshCredentials);
+    window.removeEventListener("pagehide", onPageHide);
+    window.removeEventListener("pageshow", onPageShow);
+  };
+  send({ ...request });
+  return target;
+}
 
 export function watchSession(
   sessionId: string,
   onUpdate: () => void,
   onTiming?: (t: SessionTiming) => void,
-): EventSource {
-  const url = new URL(
-    `${getGeneratedBase()}${SessionsService.getGetApiV1SessionsByIdWatchUrl({ id: sessionId })}`,
-    window.location.origin,
-  );
-  const es = new EventSource(url, {
-    fetch: (_url, options) => SessionsService.getApiV1SessionsByIdWatch({ id: sessionId }, options),
-  });
-
-  // Circuit breaker: mirrors watchEvents. A 404 (unknown session)
-  // or other permanent failure would otherwise have EventSource
-  // reconnect in a loop. Counter resets on `open` or a delivered
-  // event so a healthy-but-quiet stream isn't tripped.
-  let consecutiveErrors = 0;
-
-  es.addEventListener("open", () => {
-    consecutiveErrors = 0;
-  });
-
-  es.addEventListener("session_updated", () => {
-    consecutiveErrors = 0;
-    onUpdate();
-  });
-
-  if (onTiming) {
-    es.addEventListener("session.timing", (ev: MessageEvent) => {
+): LiveSource {
+  const source = connectLive(sessionId);
+  source.addEventListener("session_updated", onUpdate);
+  if (onTiming)
+    source.addEventListener("session.timing", (event) => {
       try {
-        onTiming(JSON.parse(ev.data) as SessionTiming);
+        onTiming(JSON.parse((event as MessageEvent).data) as SessionTiming);
       } catch (err) {
         console.warn("session.timing parse failed", err);
       }
     });
-  }
-
-  es.onerror = () => {
-    consecutiveErrors += 1;
-    if (consecutiveErrors >= WATCH_SESSION_MAX_CONSECUTIVE_ERRORS) {
-      es.close();
-    }
-  };
-
-  return es;
+  return source;
 }
-
-/** Number of consecutive onerror firings without any successful
- * event delivery before watchEvents gives up and closes the
- * underlying EventSource. This protects PG serve mode — where
- * /api/v1/events returns 503 permanently — from turning into a
- * forever retry loop in the browser.
- */
-export const WATCH_EVENTS_MAX_CONSECUTIVE_ERRORS = 5;
 
 export interface WatchEventsOptions {
-  /** Called once when the circuit breaker trips WITHOUT the
-   * EventSource ever having reached the OPEN state. That pattern
-   * indicates the endpoint is permanently unreachable for this
-   * client (PG serve mode returning 503, incompatible server
-   * build, wrong URL, etc.), so callers should stop retrying.
-   * Transient failures — where `open` fired at least once before
-   * the breaker tripped — do not call this, letting callers
-   * recover on their own.
-   */
   onPermanentFailure?: () => void;
 }
-
 export function watchEvents(
   onEvent: (e: DataChangedEvent) => void,
   opts: WatchEventsOptions = {},
-): EventSource {
-  const url = new URL(
-    `${getGeneratedBase()}${SessionsService.getGetApiV1EventsUrl()}`,
-    window.location.origin,
-  );
-  const es = new EventSource(url, {
-    fetch: (_url, options) => SessionsService.getApiV1Events(options),
-  });
-
-  // Circuit breaker: on N consecutive onerror firings without any
-  // successful connection or event delivery, close the stream.
-  // The counter resets on both `open` (a successful (re)connect)
-  // and a delivered `data_changed` event, so a quiet but healthy
-  // stream isn't tripped by transient network blips.
-  //
-  // `hasOpened` distinguishes "never worked" (permanent failure,
-  // e.g. PG serve 503) from "worked once, then failed" (transient
-  // outage). Permanent failures invoke onPermanentFailure so the
-  // caller can stop retrying.
-  let consecutiveErrors = 0;
-  let hasOpened = false;
-
-  es.addEventListener("open", () => {
-    hasOpened = true;
-    consecutiveErrors = 0;
-  });
-
-  es.addEventListener("data_changed", (msg) => {
-    // Successful delivery also resets the circuit breaker.
-    consecutiveErrors = 0;
-    hasOpened = true;
-    // Parse and shape-check the payload. Anything that isn't an
-    // object with a known scope collapses to a safe refresh signal
-    // so subscribers never observe scope === undefined.
-    let parsed: unknown;
+): LiveSource {
+  const source = connectLive();
+  source.addEventListener("data_changed", (event) => {
+    let scope: unknown;
     try {
-      parsed = JSON.parse((msg as MessageEvent).data);
+      scope = (JSON.parse((event as MessageEvent).data) as { scope?: unknown }).scope;
     } catch {
-      onEvent({ scope: "sync" });
-      return;
+      /* refresh all */
     }
-    const scope =
-      typeof parsed === "object" && parsed !== null
-        ? (parsed as { scope?: unknown }).scope
-        : undefined;
-    if (scope === "messages" || scope === "sessions" || scope === "sync") {
-      onEvent({ scope });
-    } else {
-      onEvent({ scope: "sync" });
-    }
+    onEvent({ scope: scope === "messages" || scope === "sessions" ? scope : "sync" });
   });
-
-  es.onerror = () => {
-    consecutiveErrors += 1;
-    if (consecutiveErrors >= WATCH_EVENTS_MAX_CONSECUTIVE_ERRORS) {
-      es.close();
-      if (!hasOpened && opts.onPermanentFailure) {
-        opts.onPermanentFailure();
-      }
-    }
-  };
-
-  return es;
+  source.addEventListener("permanent_failure", () => opts.onPermanentFailure?.());
+  return source;
 }
 
 /** Get the export URL for a session.

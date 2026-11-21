@@ -301,6 +301,7 @@ export * from "./getApiV1DataProjectsByProjectKeySessionsPathParameters.ts";
 export * from "./getApiV1DataProjectsParams.ts";
 export * from "./getApiV1EmbeddingsGenerationsParams.ts";
 export * from "./getApiV1EmbeddingsStatusParams.ts";
+export * from "./getApiV1EventsParams.ts";
 export * from "./getApiV1FrictionDigestsByDateMdPathParameters.ts";
 export * from "./getApiV1FrictionDigestsByDatePathParameters.ts";
 export * from "./getApiV1FrictionDigestsParams.ts";
