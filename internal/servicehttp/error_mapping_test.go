@@ -314,7 +314,7 @@ func TestFindSessionIDsByRawSuffixRequiresServerAcknowledgement(t *testing.T) {
 			srv, _ := fixedServer(t, http.StatusOK, tt.body)
 			ids, err := NewHTTPBackend(srv.URL, "", false, "").FindSessionIDsByRawSuffix(t.Context(), "abc", 5)
 			if tt.wantErr != "" {
-				require.EqualError(t, err, tt.wantErr)
+				require.ErrorIs(t, err, service.ErrRawLookupUnsupported)
 				assert.Nil(t, ids)
 				return
 			}
