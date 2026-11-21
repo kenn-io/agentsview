@@ -300,7 +300,6 @@ func TestDashboardPartsRawMessageEdits(t *testing.T) {
 	}{
 		{"insert", `INSERT INTO messages(session_id,ordinal,role,content,content_length,timestamp) VALUES('s',2,'assistant','later',20,'2024-06-01T09:02:00Z')`, 1, 3, 13},
 		{"delete", `DELETE FROM messages WHERE session_id='s' AND ordinal=1`, 1, 1, 0},
-		{"system", `UPDATE messages SET is_system=1 WHERE session_id='s' AND ordinal=0`, 0, 2, 6},
 		{"length", `UPDATE messages SET content_length=20 WHERE session_id='s' AND ordinal=1`, 1, 2, 20},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

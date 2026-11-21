@@ -3109,17 +3109,9 @@ END;
 CREATE TRIGGER IF NOT EXISTS messages_dashboard_generation_insert AFTER INSERT ON messages BEGIN
     UPDATE sessions SET tools_generation=NULL WHERE id=NEW.session_id AND tools_generation IS NOT NULL;
 END;
-CREATE TRIGGER IF NOT EXISTS messages_dashboard_generation_delete AFTER DELETE ON messages BEGIN
-    UPDATE sessions SET tools_generation=NULL WHERE id=OLD.session_id AND tools_generation IS NOT NULL;
-END;
-CREATE TRIGGER IF NOT EXISTS messages_dashboard_generation_update
-AFTER UPDATE OF session_id, ordinal, role, has_thinking, is_system, source_subtype, timestamp, content_length ON messages
-WHEN NEW.session_id IS NOT OLD.session_id OR NEW.ordinal IS NOT OLD.ordinal OR
-     NEW.role IS NOT OLD.role OR NEW.has_thinking IS NOT OLD.has_thinking OR
-     NEW.is_system IS NOT OLD.is_system OR NEW.source_subtype IS NOT OLD.source_subtype OR
-     NEW.timestamp IS NOT OLD.timestamp OR NEW.content_length IS NOT OLD.content_length
-BEGIN
-    UPDATE sessions SET tools_generation=NULL WHERE id IN (OLD.session_id, NEW.session_id) AND tools_generation IS NOT NULL;
+CREATE TRIGGER IF NOT EXISTS messages_dashboard_generation_update AFTER UPDATE OF content_length ON messages
+WHEN OLD.content_length IS NOT NEW.content_length BEGIN
+    UPDATE sessions SET tools_generation=NULL WHERE id=NEW.session_id AND tools_generation IS NOT NULL;
 END;
 `
 
