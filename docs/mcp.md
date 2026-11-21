@@ -304,10 +304,12 @@ Child sessions bypass the one-shot exclusion; top-level one-shot sessions still
 require `include_one_shot: true`. Semantic mode needs the opt-in
 [semantic search](/docs/semantic-search/) index and returns a "not available"
 error without it. `session_id` accepts a full stored ID or a raw UUID that
-matches one session; unknown or trashed session IDs return an error.
-`get_messages` also rejects unknown or trashed sessions. Exact `git_branch`,
-`project`, `agent`, `date_from`, and `date_to` filters apply before the final limit. Limits default
-to 10 and go up to 50; a value outside that range falls back to the default.
+matches one session. Unknown or trashed IDs are used as given, as they are for
+`current_session_id` above. Exact `git_branch`, `project`, `agent`, `date_from`,
+and `date_to` filters apply before the final limit. Limits default to 10 and go
+up to 50; a value outside that range falls back to the default.
+
+`get_messages` rejects unknown or trashed sessions.
 
 To find one past session that covered several ideas, pass `concepts` instead of
 `pattern`: two to five distinct natural-language strings. AgentsView uses
