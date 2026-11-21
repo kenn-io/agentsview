@@ -676,6 +676,28 @@ func TestGetMessages_BodyCursorRejectsChangedTranscript(t *testing.T) {
 	require.ErrorIs(t, err, service.ErrSourceChanged)
 }
 
+func TestGetMessages_BodyCursorRejectsDeletedSession(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSessionWithMessages(t, d, "codex:body", "proj", []db.Message{
+		dbtest.UserMsg("codex:body", 0, "abcdefghij"),
+	}, dbtest.WithMessageCounts(1, 1))
+
+	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "body", MaxCharsPerMessage: 4})
+	require.NoError(t, err)
+	require.Len(t, first.Messages, 1)
+	require.NotEmpty(t, first.Messages[0].BodyCursor)
+	require.NoError(t, d.DeleteSession(t.Context(), "codex:body"))
+
+	for _, id := range []string{"codex:body", "body"} {
+		t.Run(id, func(t *testing.T) {
+			_, _, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: id, BodyCursor: first.Messages[0].BodyCursor})
+			require.ErrorIs(t, err, service.ErrSourceChanged)
+		})
+	}
+	_, _, err = ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "body"})
+	require.ErrorContains(t, err, "session not found: body")
+}
+
 // Even when a caller explicitly allow-lists the "system" role, get_messages
 // must still drop IsSystem-flagged messages: the schema promises system
 // messages are always excluded. The IsSystem gate short-circuits ahead of the
@@ -2587,4 +2609,8 @@ func TestSessionToolsResolvePlainIDs(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, next.Messages, 1)
 	assert.Equal(t, " in th", next.Messages[0].Content)
+	_, rawNext, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "plain", BodyCursor: first.Messages[0].BodyCursor, MaxCharsPerMessage: 6})
+	require.NoError(t, err)
+	require.Len(t, rawNext.Messages, 1)
+	assert.Equal(t, " in th", rawNext.Messages[0].Content)
 }

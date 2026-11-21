@@ -107,9 +107,10 @@ client will see these tools:
 | `get_friction_digest`         | Read a dated Friction Log digest as Markdown or the summary object                                        |
 | `list_friction_patterns`      | List recurring friction patterns ranked by occurrences                                                    |
 
-`get_compaction_summaries` accepts a session ID or `active_since` timestamp. The
-limit counts sessions; 0 uses the default of 20. Resume `next_cursor` with the
-same `active_since`, even when a page has no summaries. Ambiguous older Evener
+`get_compaction_summaries` accepts a full stored session ID, a raw UUID that
+matches one session, or an `active_since` timestamp. The limit counts sessions;
+0 uses the default of 20. Resume `next_cursor` with the same `active_since`, even
+when a page has no summaries. Ambiguous older Evener
 labels appear separately with their session ID and ordinal.
 
 The two Friction Log tools appear when the backend stores the Friction Log.

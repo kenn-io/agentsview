@@ -110,7 +110,7 @@ func (t *toolset) resolveSession(
 		}
 	}
 	if detail == nil {
-		return nil, fmt.Errorf("session not found: %s", id)
+		return nil, fmt.Errorf("%w: %s", service.ErrSessionNotFound, id)
 	}
 	return detail, nil
 }
@@ -584,14 +584,14 @@ func filterAndMapMessage(m db.Message, roles []string, maxChars int) (messageOut
 func (t *toolset) getMessages(
 	ctx context.Context, _ *mcp.CallToolRequest, in getMessagesIn,
 ) (*mcp.CallToolResult, getMessagesOut, error) {
+	if in.BodyCursor != "" {
+		return t.getMessageBodyContinuation(ctx, in)
+	}
 	detail, err := t.resolveSession(ctx, in.SessionID)
 	if err != nil {
 		return nil, getMessagesOut{}, err
 	}
 	in.SessionID = detail.ID
-	if in.BodyCursor != "" {
-		return t.getMessageBodyContinuation(ctx, in)
-	}
 	if in.Around != nil {
 		return t.getMessagesAround(ctx, in)
 	}
@@ -854,6 +854,14 @@ func (t *toolset) getMessageBodyContinuation(
 	if err != nil {
 		return nil, getMessagesOut{}, err
 	}
+	detail, err := t.resolveSession(ctx, in.SessionID)
+	if errors.Is(err, service.ErrSessionNotFound) {
+		return nil, getMessagesOut{}, fmt.Errorf("%w: cited session no longer exists", service.ErrSourceChanged)
+	}
+	if err != nil {
+		return nil, getMessagesOut{}, err
+	}
+	in.SessionID = detail.ID
 	if cursor.SessionID != in.SessionID ||
 		(in.ExpectedRevision != "" && in.ExpectedRevision != cursor.Revision) {
 		return nil, getMessagesOut{}, fmt.Errorf("%w: body cursor does not match request", service.ErrSourceChanged)
@@ -1307,7 +1315,7 @@ func (t *toolset) fileReferences(ctx context.Context, _ *mcp.CallToolRequest, in
 }
 
 type compactionSummariesIn struct {
-	SessionID   string `json:"session_id,omitempty" jsonschema:"Session ID."`
+	SessionID   string `json:"session_id,omitempty" jsonschema:"A full stored session ID or a raw UUID that matches one session."`
 	ActiveSince string `json:"active_since,omitempty" jsonschema:"RFC3339 timestamp."`
 	Cursor      string `json:"cursor,omitempty" jsonschema:"Session cursor; resume with the same active_since."`
 	Limit       uint   `json:"limit,omitempty" jsonschema:"Sessions per page; 0 uses the default 20, max 100."`
