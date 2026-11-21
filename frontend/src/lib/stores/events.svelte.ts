@@ -120,6 +120,7 @@ class EventsStore {
     if (this.es !== null && this.es.readyState !== CLOSED) {
       return;
     }
+    this.es?.close();
     this.es = watchEvents(
       (e) => {
         for (const fn of this.listeners.values()) fn(e);
@@ -179,6 +180,7 @@ class EventsStore {
       }
       const CLOSED = 2;
       if (this.es !== null && this.es.readyState === CLOSED) {
+        this.es.close();
         this.es = null;
         this.ensureOpen();
       }

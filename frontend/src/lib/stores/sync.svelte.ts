@@ -396,6 +396,7 @@ class SyncStore {
       };
     });
     const open = () => {
+      this.closeSessionStream();
       this.watchEventSource = watchSession(sessionId, onUpdate, onTiming);
       const es = this.watchEventSource;
       es.addEventListener("error", () => {

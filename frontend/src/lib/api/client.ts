@@ -1,4 +1,5 @@
-import { LiveHub, type LiveFrame, type LiveRequest } from "./liveHub.js";
+import { type LiveFrame, type LiveRequest } from "./liveHub.js";
+import { LiveBroadcast } from "./liveBroadcast.js";
 import { createParser, type EventSourceMessage } from "eventsource-parser";
 import type {
   SyncProgress,
@@ -103,14 +104,14 @@ export interface LiveSource extends EventTarget {
   close(): void;
 }
 
-const localHubs = new Map<string, LiveHub>();
+const broadcasts = new Map<string, LiveBroadcast>();
 
 function connectLive(session?: string): LiveSource {
   const base = new URL(getGeneratedBase() || "/", window.location.origin).href.replace(/\/$/, "");
   const request: LiveRequest = { base, token: getAuthToken(), session };
   const target = new EventTarget() as LiveSource;
   target.readyState = 0;
-  let send: (value: LiveRequest | "leave") => void;
+  let send: (value: LiveRequest | "leave" | "close") => void;
   const receive = (frame: LiveFrame) => {
     if (frame.type === "events_ready" || frame.type === "session_ready") target.readyState = 1;
     if (frame.type === "closed" || frame.type === "permanent_failure") target.readyState = 2;
@@ -122,24 +123,22 @@ function connectLive(session?: string): LiveSource {
       name: base,
     });
     worker.port.onmessage = (event: MessageEvent<LiveFrame>) => receive(event.data);
-    send = (value) => worker.port.postMessage(value);
+    send = (value) => worker.port.postMessage(value === "close" ? "leave" : value);
     worker.port.start();
   } else {
-    let hub = localHubs.get(base);
-    if (!hub) {
-      hub = new LiveHub();
-      localHubs.set(base, hub);
+    let broadcast = broadcasts.get(base);
+    if (!broadcast) {
+      broadcast = new LiveBroadcast(base);
+      broadcasts.set(base, broadcast);
     }
-    const port = { postMessage: (frame: LiveFrame) => queueMicrotask(() => receive(frame)) };
-    const ownHub = hub;
-    send = (value) => (value === "leave" ? ownHub.leave(port) : ownHub.update(port, value));
+    send = broadcast.connect(receive);
   }
   const onPageHide = () => send("leave");
   const onPageShow = () => send({ ...request });
   window.addEventListener("pagehide", onPageHide);
   window.addEventListener("pageshow", onPageShow);
   target.close = () => {
-    send("leave");
+    send("close");
     target.readyState = 2;
     window.removeEventListener("pagehide", onPageHide);
     window.removeEventListener("pageshow", onPageShow);

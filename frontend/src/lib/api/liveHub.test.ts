@@ -6,6 +6,7 @@ vi.mock("eventsource", () => ({ EventSource: vi.fn() }));
 
 class FakeSource extends EventTarget {
   closed = false;
+  readyState = 0;
   constructor(public url: URL) {
     super();
   }
@@ -81,18 +82,62 @@ describe("shared live stream", () => {
     hub.update(duplicate, request("a"));
     hub.update(archive, request());
     vi.advanceTimersByTime(250);
-    const active = sources[1]!;
+    const active = sources[0]!;
     hub.leave(duplicate);
     vi.advanceTimersByTime(250);
     expect(active.closed).toBe(false);
-    expect(sources).toHaveLength(2);
+    expect(sources).toHaveLength(1);
     hub.leave(first);
     vi.advanceTimersByTime(250);
     expect(active.closed).toBe(true);
-    expect(sources[2]!.url.searchParams.has("session")).toBe(false);
+    expect(sources[1]!.url.searchParams.has("session")).toBe(false);
     hub.leave(archive);
     vi.advanceTimersByTime(250);
-    expect(sources[2]!.closed).toBe(true);
+    expect(sources[1]!.closed).toBe(true);
+  });
+
+  it("sends the latest readiness and timing only to a duplicate session joining", () => {
+    const hub = new LiveHub();
+    const first = { postMessage: vi.fn() };
+    const joining = { postMessage: vi.fn() };
+    hub.update(first, request("a"));
+    sources[0]!.emit("session_ready", "a");
+    sources[0]!.emit("session.timing", '{"session_id":"a","turn_count":2}');
+    first.postMessage.mockClear();
+    hub.update(joining, request("a"));
+    vi.advanceTimersByTime(250);
+    expect(sources).toHaveLength(1);
+    expect(first.postMessage).not.toHaveBeenCalled();
+    expect(joining.postMessage.mock.calls).toEqual([
+      [{ type: "session_ready", data: "a" }],
+      [{ type: "session.timing", data: '{"session_id":"a","turn_count":2}' }],
+    ]);
+    sources[0]!.emit("session_missing", "a");
+    const missing = { postMessage: vi.fn() };
+    hub.update(missing, request("a"));
+    vi.advanceTimersByTime(250);
+    expect(sources).toHaveLength(1);
+    expect(missing.postMessage.mock.calls).toEqual([[{ type: "session_missing", data: "a" }]]);
+  });
+
+  it("retries when EventSource closes on a temporary HTTP failure", () => {
+    const hub = new LiveHub();
+    const port = { postMessage: vi.fn() };
+    hub.update(port, request());
+    sources[0]!.readyState = 2;
+    sources[0]!.emit("error");
+    expect(port.postMessage).toHaveBeenLastCalledWith({ type: "closed" });
+    vi.advanceTimersByTime(1000);
+    expect(sources).toHaveLength(2);
+    sources[1]!.emit("open");
+    sources[1]!.emit("events_ready", "{}");
+    expect(port.postMessage).toHaveBeenLastCalledWith({ type: "events_ready", data: "{}" });
+    expect(
+      port.postMessage.mock.calls.filter(([frame]) => frame.type === "events_ready"),
+    ).toHaveLength(1);
+    hub.leave(port);
+    vi.advanceTimersByTime(250);
+    expect(sources[1]!.closed).toBe(true);
   });
 
   it("closes after repeated errors and signals permanent failure", () => {
