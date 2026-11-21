@@ -67,6 +67,30 @@ func TestExportReportingHourLoadsOnlySelectedAccountRows(t *testing.T) {
 	assert.Equal(t, day.Hours[10], hour)
 }
 
+func TestReportingDigestIncludesCursorAccountPoll(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	date := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
+	now := date.Add(48 * time.Hour)
+	require.NoError(t, d.InsertCursorUsageEvents(ctx, []CursorUsageEvent{{OccurredAt: "2026-07-28T10:00:00Z", Model: "a", OutputTokens: 10, DedupKey: "a"}}))
+	first := date.Add(25 * time.Hour)
+	require.NoError(t, d.AssignCursorUsageAccount(ctx, "12", []string{"a"}, first))
+	opts := ReportingDigestExportOptions{From: date, To: date, Now: now, SchemaVersion: 6, ByMachine: true}
+	before, err := d.ExportReportingDigest(ctx, opts)
+	require.NoError(t, err)
+	require.Len(t, before, 1)
+	day, err := d.ExportReportingDay(ctx, ReportingExportOptions{Date: date, Now: now, SchemaVersion: 6, ByMachine: true})
+	require.NoError(t, err)
+	assert.Equal(t, day.Hours[10].Digest, before[0].HourDigests[10])
+
+	require.NoError(t, d.AssignCursorUsageAccount(ctx, "12", []string{"a"}, first.Add(time.Hour)))
+	after, err := d.ExportReportingDigest(ctx, opts)
+	require.NoError(t, err)
+	require.Len(t, after, 1)
+	assert.NotEqual(t, before[0].HourDigests[10], after[0].HourDigests[10])
+	assert.Equal(t, before[0].HourDigests[9], after[0].HourDigests[9])
+}
+
 func TestCursorAccountReporting(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
