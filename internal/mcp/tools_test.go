@@ -1609,6 +1609,61 @@ func TestSearchContent_ConceptsMapping(t *testing.T) {
 	assert.Equal(t, evidence, out.Matches[0].ConceptEvidence)
 }
 
+func TestSearchContent_ConceptsOverrideMode(t *testing.T) {
+	for _, mode := range []string{"substring", "hybrid", "invalid"} {
+		t.Run(mode, func(t *testing.T) {
+			fake := &fakeContentSearchService{result: &service.ContentSearchResult{}}
+			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
+				Concepts: []string{"auth model", "retry policy"}, Mode: mode, IncludeActive: true,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, "semantic", fake.lastReq.Mode)
+			assert.Equal(t, "semantic", out.EffectiveMode)
+		})
+	}
+}
+
+func TestSearchContent_ListSessionMessages(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "child", "project-a", func(s *db.Session) {
+		s.MessageCount = 3
+		s.UserMessageCount = 1
+		s.EndedAt = new("2024-06-15T11:59:00Z")
+		s.ParentSessionID = new("parent")
+		s.RelationshipType = "subagent"
+	})
+	key := "AKIA" + "7QHWN2DKR4FYPLJM"
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
+		dbtest.UserMsg("child", 0, "first "+key),
+		{SessionID: "child", Ordinal: 1, Role: "tool", Content: "tool result", ContentLength: len("tool result")},
+		dbtest.AsstMsg("child", 2, "last"),
+	}))
+	_, first, err := ts.searchContent(t.Context(), nil, searchContentIn{SessionID: "child", Mode: "typo", Project: "project-a", Limit: 2})
+	require.NoError(t, err)
+	require.Len(t, first.Matches, 2)
+	assert.Equal(t, 0, first.Matches[0].Ordinal)
+	assert.Equal(t, 1, first.Matches[1].Ordinal)
+	assert.NotContains(t, first.Matches[0].Snippet, key)
+	assert.True(t, first.Matches[0].Subordinate)
+	assert.Equal(t, "regex", first.EffectiveMode)
+	require.NotNil(t, first.NextCursor)
+	_, last, err := ts.searchContent(t.Context(), nil, searchContentIn{SessionID: "child", Limit: 2, Cursor: *first.NextCursor})
+	require.NoError(t, err)
+	require.Len(t, last.Matches, 1)
+	assert.Equal(t, 2, last.Matches[0].Ordinal)
+	assert.Nil(t, last.NextCursor)
+	_, empty, err := ts.searchContent(t.Context(), nil, searchContentIn{SessionID: "child", Project: "other"})
+	require.NoError(t, err)
+	assert.Empty(t, empty.Matches)
+
+	dbtest.SeedSessionWithMessages(t, d, "one-shot", "project-a", []db.Message{dbtest.UserMsg("one-shot", 0, "only")}, dbtest.WithMessageCounts(1, 1))
+	_, oneShot, err := ts.searchContent(t.Context(), nil, searchContentIn{SessionID: "one-shot"})
+	require.NoError(t, err)
+	require.Len(t, oneShot.Matches, 1)
+	assert.Equal(t, "only", oneShot.Matches[0].Snippet)
+}
+
 func TestSearchContent_ConceptsRejectedBeforeService(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -1617,7 +1672,6 @@ func TestSearchContent_ConceptsRejectedBeforeService(t *testing.T) {
 	}{
 		{"neither", searchContentIn{}, "pattern or concepts required"},
 		{"both", searchContentIn{Pattern: "x", Concepts: []string{"a", "b"}}, "mutually exclusive"},
-		{"lexical mode", searchContentIn{Concepts: []string{"a", "b"}, Mode: "regex"}, "mode must be semantic"},
 		{"cursor", searchContentIn{Concepts: []string{"a", "b"}, Cursor: 10}, "cursor is not supported"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

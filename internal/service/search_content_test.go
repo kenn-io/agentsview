@@ -121,8 +121,8 @@ func TestDirectSearchContentConceptsIntersectAndRankSessions(t *testing.T) {
 	be := service.NewReadOnlyBackend(store)
 
 	res, err := be.SearchContent(t.Context(), service.ContentSearchRequest{
-		Concepts: []string{" auth model ", "retry policy"},
-		Project:  "agentsview", Agent: "codex", SessionID: "target",
+		Concepts: []string{" auth model ", "retry policy"}, Mode: "hybrid",
+		Project: "agentsview", Agent: "codex", SessionID: "target",
 		GitBranchExact: "feature/memory", DateFrom: "2026-08-01",
 		DateTo: "2026-09-20", ExcludeSessionIDs: []string{"current"},
 		Scope: "top", Limit: 10,
@@ -179,7 +179,6 @@ func TestDirectSearchContentConceptsRejectInvalidRequests(t *testing.T) {
 		{"six", service.ContentSearchRequest{Concepts: []string{"a", "b", "c", "d", "e", "f"}}, "between 2 and 5"},
 		{"blank", service.ContentSearchRequest{Concepts: []string{"a", " "}}, "must not be blank"},
 		{"duplicate", service.ContentSearchRequest{Concepts: []string{"a", " a"}}, "must be distinct"},
-		{"mode", service.ContentSearchRequest{Concepts: []string{"a", "b"}, Mode: "hybrid"}, "mode must be semantic"},
 		{"cursor", service.ContentSearchRequest{Concepts: []string{"a", "b"}, Cursor: 1}, "cursor is not supported"},
 		{"limit", service.ContentSearchRequest{Concepts: []string{"a", "b"}, Limit: 51}, "limit must be between 1 and 50"},
 	} {

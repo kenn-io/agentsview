@@ -57,7 +57,6 @@ func TestSearchContent_ActivityCutoffPagination(t *testing.T) {
 }
 
 func TestSearchContent_ActivityCutoffContinuationInputs(t *testing.T) {
-	const missing = "activity_cutoff is required with a positive cursor: restart search_content without a cursor, then pass both next_cursor as cursor and activity_cutoff"
 	const malformed = "invalid activity_cutoff: use RFC3339"
 	const future = "activity_cutoff must not be later than the recent-activity boundary: restart search_content without a cursor or activity_cutoff"
 	for _, tc := range []struct {
@@ -69,8 +68,8 @@ func TestSearchContent_ActivityCutoffContinuationInputs(t *testing.T) {
 		{"default first page", searchContentIn{}, "", "2024-06-15T11:50:00Z"},
 		{"blank current session first page", searchContentIn{CurrentSessionID: "   "}, "", "2024-06-15T11:50:00Z"},
 		{"include_one_shot", searchContentIn{IncludeOneShot: true}, "", "2024-06-15T11:50:00Z"},
-		{"missing", searchContentIn{Cursor: 2}, missing, ""},
-		{"blank current session", searchContentIn{Cursor: 2, CurrentSessionID: "   "}, missing, ""},
+		{"missing", searchContentIn{Cursor: 2}, "", "2024-06-15T11:50:00Z"},
+		{"blank current session", searchContentIn{Cursor: 2, CurrentSessionID: "   "}, "", "2024-06-15T11:50:00Z"},
 		{"malformed continuation", searchContentIn{Cursor: 2, ActivityCutoff: "invalid"}, malformed, ""},
 		{"date only", searchContentIn{Cursor: 2, ActivityCutoff: "2024-06-15"}, malformed, ""},
 		{"malformed include active", searchContentIn{Cursor: 2, IncludeActive: true, ActivityCutoff: "invalid"}, malformed, ""},

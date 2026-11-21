@@ -224,7 +224,8 @@ func newServer(opts ServeOptions) *mcp.Server {
 			"Hybrid returns keyword matches with effective_mode hybrid_keyword and a note when search by meaning is unavailable. " +
 			"Use terms when every literal term must occur within one " +
 			"user/assistant exchange, or fully quoted substring text or regex for exact error messages, identifiers, and code fragments. " +
-			"Use concepts with two to five semantic ideas to keep only sessions with evidence for every idea. " +
+			"Use concepts with two to five semantic ideas to keep only sessions with evidence for every idea; concepts always use semantic mode. " +
+			"With session_id and no pattern or concepts, list its messages regardless of mode, including active, one-shot, and automated sessions. " +
 			"The default mode remains substring. On SQLite, PostgreSQL, and ClickHouse, a substring search of several words lists exact text first, " +
 			"then messages holding every word, then those holding more of the words, and reports matched_words. Scope defaults to all, including child sessions and sidechain messages; " +
 			"top excludes them and subordinate returns only them. Child sessions bypass the one-shot exclusion. " +

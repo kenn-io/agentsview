@@ -774,23 +774,23 @@ func (t *toolset) getMessageBodyContinuation(
 // --- search_content ---
 
 type searchContentIn struct {
-	Pattern          string   `json:"pattern,omitempty" jsonschema:"Natural-language query for semantic/hybrid, whitespace-separated literals for terms, or substring/regex for lexical search across message text, thinking, and tool inputs/results. A fully quoted substring pattern matches only its text. Mutually exclusive with concepts."`
-	Concepts         []string `json:"concepts,omitempty" jsonschema:"Two to five semantic concepts that must all have evidence in the same session, even in different messages. Implies mode semantic, does not page, and is mutually exclusive with pattern."`
+	Pattern          string   `json:"pattern,omitempty" jsonschema:"Natural-language query for semantic/hybrid, whitespace-separated literals for terms, or substring/regex for lexical search across message text, thinking, and tool inputs/results. Required unless concepts or session_id is set. A fully quoted substring pattern matches only its text. Mutually exclusive with concepts."`
+	Concepts         []string `json:"concepts,omitempty" jsonschema:"Two to five semantic concepts that must all have evidence in the same session, even in different messages. Runs semantic search regardless of mode, does not page, and is mutually exclusive with pattern."`
 	Mode             string   `json:"mode,omitempty" jsonschema:"substring (default), regex, terms, semantic, or hybrid. Prefer hybrid for contextual questions. Hybrid returns keyword matches with a note when search by meaning is unavailable; semantic requires a ready index."`
 	Scope            string   `json:"scope,omitempty" jsonschema:"Substring/regex/terms/semantic/hybrid result scope: top, all (default), or subordinate."`
 	Project          string   `json:"project,omitempty" jsonschema:"Restrict to one project."`
 	Agent            string   `json:"agent,omitempty" jsonschema:"Restrict to one agent."`
-	SessionID        string   `json:"session_id,omitempty" jsonschema:"Restrict to one exact full stored session ID."`
+	SessionID        string   `json:"session_id,omitempty" jsonschema:"Restrict to one exact full stored session ID. Without pattern or concepts, list that session's messages, ignoring mode and including active, one-shot, and automated sessions."`
 	GitBranch        string   `json:"git_branch,omitempty" jsonschema:"Restrict to one exact git branch."`
 	CurrentSessionID string   `json:"current_session_id,omitempty" jsonschema:"Exclude this exact full stored session ID instead of applying the recent-activity heuristic."`
 	DateFrom         string   `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
 	DateTo           string   `json:"date_to,omitempty" jsonschema:"Only sessions on or before this date (YYYY-MM-DD)."`
 	Limit            int      `json:"limit,omitempty" jsonschema:"Max matches, default 10, max 50."`
-	Cursor           int      `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor; also pass activity_cutoff when the recent-activity heuristic applies."`
-	ActivityCutoff   string   `json:"activity_cutoff,omitempty" jsonschema:"RFC3339 cutoff returned by the previous page. Required with a positive cursor when the recent-activity heuristic applies."`
-	IncludeActive    bool     `json:"include_active,omitempty" jsonschema:"Include matches from sessions active in the last 10 minutes. Default false: the conversation you are in right now is also recorded, so without this exclusion you would find yourself."`
-	IncludeOneShot   bool     `json:"include_one_shot,omitempty" jsonschema:"Include one-shot sessions. Default false."`
-	IncludeAutomated bool     `json:"include_automated,omitempty" jsonschema:"Include automated sessions. Default false."`
+	Cursor           int      `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor; pass activity_cutoff to keep the same recent-activity boundary."`
+	ActivityCutoff   string   `json:"activity_cutoff,omitempty" jsonschema:"RFC3339 cutoff returned by the previous page. Without it a fresh cutoff is used."`
+	IncludeActive    bool     `json:"include_active,omitempty" jsonschema:"Include matches from sessions active in the last 10 minutes for pattern and concept searches. Default false: the conversation you are in right now is also recorded, so without this exclusion you would find yourself."`
+	IncludeOneShot   bool     `json:"include_one_shot,omitempty" jsonschema:"Include one-shot sessions in pattern and concept searches. Default false."`
+	IncludeAutomated bool     `json:"include_automated,omitempty" jsonschema:"Include automated sessions in pattern and concept searches. Default false."`
 	Context          int      `json:"context,omitempty" jsonschema:"Messages of context before/after each match (max 10)."`
 }
 
@@ -902,7 +902,11 @@ func validateSearchDates(from, to string) error {
 func (t *toolset) searchContent(
 	ctx context.Context, _ *mcp.CallToolRequest, in searchContentIn,
 ) (*mcp.CallToolResult, searchContentOut, error) {
-	if strings.TrimSpace(in.Pattern) == "" && len(in.Concepts) == 0 {
+	listing := strings.TrimSpace(in.Pattern) == "" && len(in.Concepts) == 0 && in.SessionID != ""
+	if listing {
+		in.Pattern, in.Mode = "^", "regex"
+		in.IncludeActive, in.IncludeOneShot, in.IncludeAutomated = true, true, true
+	} else if strings.TrimSpace(in.Pattern) == "" && len(in.Concepts) == 0 {
 		return nil, searchContentOut{}, errors.New("pattern or concepts required")
 	}
 	limit := clampLimit(in.Limit, defaultSearchLimit, maxContentSearchLimit)
@@ -937,9 +941,6 @@ func (t *toolset) searchContent(
 	if currentSession == "" && !in.IncludeActive {
 		cutoff = in.ActivityCutoff
 		if cutoff == "" {
-			if in.Cursor > 0 {
-				return nil, searchContentOut{}, errors.New("activity_cutoff is required with a positive cursor: restart search_content without a cursor, then pass both next_cursor as cursor and activity_cutoff")
-			}
 			cutoffTime = t.clock().Add(-activeExclusionWindow)
 			cutoff = cutoffTime.UTC().Format(time.RFC3339Nano)
 		} else if cutoffTime.After(t.clock().Add(-activeExclusionWindow)) {
@@ -949,7 +950,7 @@ func (t *toolset) searchContent(
 	req := service.ContentSearchRequest{
 		Pattern:            in.Pattern,
 		Concepts:           in.Concepts,
-		Mode:               in.Mode,
+		Mode:               mode,
 		KeywordFallback:    mode == "hybrid",
 		Scope:              scope,
 		Project:            in.Project,
@@ -965,6 +966,9 @@ func (t *toolset) searchContent(
 		IncludeAutomated:   in.IncludeAutomated,
 		ExcludeSessionIDs:  excludeSessions,
 		ExcludeActiveSince: cutoff,
+	}
+	if listing {
+		req.Sources = []string{"messages"}
 	}
 	res, err := t.svc.SearchContent(ctx, req)
 	if err != nil {
