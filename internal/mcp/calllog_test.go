@@ -163,7 +163,11 @@ func TestRecordToolCallCanceled(t *testing.T) {
 	cancel()
 	dir := filepath.Join(t.TempDir(), "calls")
 	req := &mcp.CallToolRequest{Params: &mcp.CallToolParamsRaw{Name: ToolSearchDocs}}
-	require.ErrorIs(t, recordToolCall(ctx, dir, req, nil, nil, time.Second), context.Canceled)
-	_, err := os.Stat(dir)
-	require.ErrorIs(t, err, os.ErrNotExist)
+	require.NoError(t, recordToolCall(ctx, dir, req, nil, context.Canceled, time.Second))
+	rows, err := SummarizeCalls(t.Context(), dir, "", "")
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, ToolSearchDocs, rows[0].Tool)
+	assert.Equal(t, 100.0, rows[0].ErrorPercent)
+	assert.Equal(t, &CallCount{Name: "other error", Count: 1}, rows[0].TopError)
 }

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"go.kenn.io/agentsview/internal/ctxio"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/kit/safefileio"
 )
@@ -60,9 +61,9 @@ func recordToolCall(ctx context.Context, dir string, req *mcp.CallToolRequest, r
 	if dir == "" || req == nil || req.Params == nil {
 		return nil
 	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
+	// Record the outcome even when the request has already been canceled.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
 	name := req.Params.Name
 	rec := callRecord{At: time.Now().UTC(), Tool: name, Outcome: "ok", Ms: int(elapsed.Milliseconds())}
 	if name == ToolSearchSessions || name == ToolSearchContent {
@@ -122,7 +123,7 @@ func recordToolCall(ctx context.Context, dir string, req *mcp.CallToolRequest, r
 	if err != nil {
 		return err
 	}
-	_, writeErr := f.Write(append(b, '\n'))
+	_, writeErr := (ctxio.Writer{Context: ctx, Writer: f}).Write(append(b, '\n'))
 	return errors.Join(writeErr, f.Close())
 }
 
