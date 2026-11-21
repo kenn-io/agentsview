@@ -307,8 +307,8 @@ than the limit allowed.
 
 Pass `session_id` without `pattern` or `concepts` to list that session's
 messages in order. This includes active, one-shot, and automated sessions and
-ignores `mode`. Results are search snippets; use `get_messages` for full text.
-Other filters still apply.
+ignores `mode`. Results are search snippets, with `...` when shortened; use
+`get_messages` for full text. Other filters still apply.
 
 A `terms` snippet shows about 60 characters of context around the first
 occurrence of each term. Terms that sit far apart in a long exchange produce

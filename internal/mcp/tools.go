@@ -976,7 +976,7 @@ func (t *toolset) searchContent(
 	if listing {
 		req.Sources = []string{"messages"}
 	}
-	res, err := t.svc.SearchContent(ctx, req)
+	res, err := t.searchContentMatches(ctx, req, listing)
 	if err != nil {
 		return nil, searchContentOut{}, err
 	}
@@ -1035,6 +1035,32 @@ func (t *toolset) searchContent(
 	}
 	out.Hints = service.SearchContentHints(ctx, t.svc, req, res, false, keepMatch)
 	return nil, out, nil
+}
+
+func (t *toolset) searchContentMatches(ctx context.Context, req service.ContentSearchRequest, listing bool) (*service.ContentSearchResult, error) {
+	res, err := t.svc.SearchContent(ctx, req)
+	if err != nil || !listing {
+		return res, err
+	}
+	for i := range res.Matches {
+		match := &res.Matches[i]
+		messages, err := t.svc.Messages(ctx, match.SessionID, service.MessageFilter{
+			From: &match.Ordinal, Limit: 1, ExpectedRevision: match.TranscriptRevision,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if len(messages.Messages) != 1 || messages.Messages[0].Ordinal != match.Ordinal {
+			return nil, service.ErrSourceChanged
+		}
+		body := messages.Messages[0].Content
+		match.Snippet = (db.ContentSearchFilter{}).BuildSnippet(body, 0, 0)
+		_, end := db.SnippetBounds(body, 0, 0, db.ContentSnippetRadius)
+		if end < len(body) {
+			match.Snippet += "..."
+		}
+	}
+	return res, nil
 }
 
 // --- get_usage_summary ---

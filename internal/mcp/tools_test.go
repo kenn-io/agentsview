@@ -1622,17 +1622,21 @@ func TestSearchContent_ListSessionMessages(t *testing.T) {
 		s.ParentSessionID = new("parent")
 		s.RelationshipType = "subagent"
 	})
+	key := "AKIA" + "7QHWN2DKR4FYPLJM"
 	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
-		dbtest.UserMsg("child", 0, "first"),
-		{SessionID: "child", Ordinal: 1, Role: "tool", Content: "tool result", ContentLength: len("tool result")},
-		{SessionID: "child", Ordinal: 2, Role: "assistant", Content: "last", ContentLength: 4, HasToolUse: true,
+		dbtest.UserMsg("child", 0, "first "+key+" "+strings.Repeat("x", 100)),
+		{SessionID: "child", Ordinal: 1, Role: "assistant", Content: "inspect the failure", ContentLength: len("inspect the failure"), DialogueText: new("")},
+		{SessionID: "child", Ordinal: 2, Role: "tool", Content: "echo hello", ContentLength: len("echo hello"), DialogueText: new(""), HasToolUse: true,
 			ToolCalls: []db.ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"echo hello"}`, ResultContent: "hello"}}},
 	}))
 	_, first, err := ts.searchContent(t.Context(), nil, searchContentIn{SessionID: "child", Mode: "typo", Project: "project-a", Limit: 2})
 	require.NoError(t, err)
 	require.Len(t, first.Matches, 2)
 	assert.Equal(t, 0, first.Matches[0].Ordinal)
+	assert.NotContains(t, first.Matches[0].Snippet, key)
+	assert.True(t, strings.HasSuffix(first.Matches[0].Snippet, "..."))
 	assert.Equal(t, 1, first.Matches[1].Ordinal)
+	assert.Equal(t, "inspect the failure", first.Matches[1].Snippet)
 	assert.True(t, first.Matches[0].Subordinate)
 	assert.Equal(t, "regex", first.EffectiveMode)
 	require.NotNil(t, first.NextCursor)
@@ -1640,6 +1644,7 @@ func TestSearchContent_ListSessionMessages(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, last.Matches, 1)
 	assert.Equal(t, 2, last.Matches[0].Ordinal)
+	assert.Equal(t, "echo hello", last.Matches[0].Snippet)
 	assert.Nil(t, last.NextCursor)
 	_, empty, err := ts.searchContent(t.Context(), nil, searchContentIn{SessionID: "child", Project: "other"})
 	require.NoError(t, err)
