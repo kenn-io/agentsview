@@ -184,11 +184,15 @@ func TestNewServer_Instructions(t *testing.T) {
 
 func TestOwnerSearchPatternFindsExactReference(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
-	dbtest.SeedSession(t, d, "url", "proj")
+	dbtest.SeedSession(t, d, "url", "proj", func(s *db.Session) { s.StartedAt = new("2024-06-02T10:00:00Z") })
 	dbtest.SeedSession(t, d, "longer", "proj")
+	dbtest.SeedSession(t, d, "plain", "proj", func(s *db.Session) { s.StartedAt = new("2024-06-03T10:00:00Z") })
+	dbtest.SeedSession(t, d, "hash", "proj", func(s *db.Session) { s.StartedAt = new("2024-06-01T10:00:00Z") })
 	dbtest.SeedMessages(t, d,
 		toolCallMsg("url", 0, db.ToolCall{ToolName: "Bash", Category: "Bash", ResultContent: "see #1234 " + strings.Repeat("filler ", 100) + "https://github.com/o/r/pull/123"}),
 		toolCallMsg("longer", 0, db.ToolCall{ToolName: "Bash", Category: "Bash", ResultContent: "see #1234"}),
+		toolCallMsg("plain", 0, db.ToolCall{ToolName: "Bash", Category: "Bash", ResultContent: "work on PR 123"}),
+		toolCallMsg("hash", 0, db.ToolCall{ToolName: "Bash", Category: "Bash", ResultContent: "work on #123"}),
 	)
 	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil)}))
 	defer func() {
@@ -201,10 +205,18 @@ func TestOwnerSearchPatternFindsExactReference(t *testing.T) {
 	res, err := ct.CallTool(t.Context(), callParams(ToolSearchContent, map[string]any{"mode": "regex", "pattern": pattern, "include_active": true, "include_one_shot": true}))
 	require.NoError(t, err)
 	out := decodeStructured[searchContentOut](t, res)
-	require.Len(t, out.Matches, 1)
-	assert.Equal(t, "url", out.Matches[0].SessionID)
-	assert.Contains(t, out.Matches[0].Snippet, "/pull/123")
-	assert.NotContains(t, out.Matches[0].Snippet, "#1234")
+	require.NotEmpty(t, out.Matches)
+	assert.Equal(t, "plain", out.Matches[0].SessionID)
+	assert.Contains(t, out.Matches[0].Snippet, "PR 123")
+	require.Len(t, out.Matches, 3)
+	snippets := make(map[string]string)
+	for _, hit := range out.Matches {
+		snippets[hit.SessionID] = hit.Snippet
+	}
+	assert.Contains(t, snippets["url"], "/pull/123")
+	assert.NotContains(t, snippets["url"], "#1234")
+	assert.Contains(t, snippets["hash"], "#123")
+	assert.NotContains(t, snippets, "longer")
 }
 
 func TestServer_GetMemoryStatus(t *testing.T) {
