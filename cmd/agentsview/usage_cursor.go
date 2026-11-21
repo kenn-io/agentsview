@@ -121,9 +121,13 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 		return err
 	}
 
+	polledAt := time.Now().UTC()
 	rows := make([]db.CursorUsageEvent, 0, len(events))
+	fetched := make(map[string]bool, len(events))
 	for _, ev := range events {
-		rows = append(rows, cursorUsageRow(ev))
+		row := cursorUsageRow(ev)
+		rows = append(rows, row)
+		fetched[db.CursorUsageEventDedupKey(row)] = true
 	}
 	if err := database.InsertCursorUsageEvents(ctx, rows); err != nil {
 		return err
@@ -196,7 +200,7 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 					complete = false
 					break
 				}
-				completed[id] = time.Now().UTC()
+				completed[id] = polledAt
 				for _, ev := range memberEvents {
 					row := cursorUsageRow(ev)
 					memberRows = append(memberRows, row)
@@ -205,6 +209,9 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 						continue
 					}
 					key := db.CursorUsageEventDedupKey(row)
+					if !fetched[key] {
+						continue
+					}
 					keyHours[key] = hour
 					if previous, ok := owners[key]; ok && previous != id {
 						ambiguous[db.CursorAccountHour{UserID: previous, Start: hour}] = true

@@ -3089,7 +3089,8 @@ schemas keep their existing ordering behavior.
   documents numeric user IDs in paginated daily usage data and as a filter for
   usage events; its usage-event example does not include a user ID. An
   unfiltered sync stores each completed member-filtered response and records
-  the matched account and member fetch completion time in separate columns.
+  the matched account and unfiltered fetch completion time in separate columns.
+  Rows absent from that unfiltered fetch remain in archive billing until a later sync.
   A later empty poll replaces an earlier covered account-hour with zero usage.
   Archives with account stamps require data version 185 or newer. The event's original `user_id`, `user_email`, and dedup key
   remain unchanged.

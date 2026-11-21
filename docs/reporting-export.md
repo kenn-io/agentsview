@@ -64,11 +64,13 @@ does not prove that two different archives' account-wide billing is distinct. Do
 not treat it as a machine identity or merge it with a named machine.
 
 Schema 6 reports matched Cursor usage under `cursor-account:<user_id>`, with
-`polled_at` set to the completion time of the member's event fetch. An unfiltered
+`polled_at` set to the completion time of the unfiltered event fetch. An unfiltered
 sync lists the team roster and fetches usage for each member; this adds requests for each roster
 page and member. Only events returned by a member fetch for a fully closed hour
 are assigned to that account. Filtered syncs do not establish account coverage;
 events without a match from an unfiltered sync remain under archive billing.
+Events first seen in a member fetch remain under archive billing until a later
+unfiltered fetch includes them.
 Each account-hour contains only the rows from that archive's newest poll for
 the user and UTC hour. Rows from an older poll stay under archive billing.
 An empty completed poll replaces a previously covered account-hour with zero usage.

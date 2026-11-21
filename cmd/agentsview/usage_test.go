@@ -2169,7 +2169,7 @@ func TestCursorSyncEmptyPollReplacesAccountHour(t *testing.T) {
 			syncNumber++
 		}
 		if syncNumber == 1 {
-			_, _ = w.Write([]byte(`{"totalUsageEventsCount":1,"usageEvents":[{"timestamp":"2026-07-28T10:03:00Z","model":"a","tokenUsage":{"outputTokens":7}}]}`))
+			_, _ = w.Write([]byte(`{"totalUsageEventsCount":1,"usageEvents":[{"timestamp":"2026-07-28T00:00:00.123Z","model":"a","tokenUsage":{"outputTokens":7}}]}`))
 			return
 		}
 		_, _ = w.Write([]byte(`{"totalUsageEventsCount":0,"usageEvents":[]}`))
@@ -2181,13 +2181,13 @@ func TestCursorSyncEmptyPollReplacesAccountHour(t *testing.T) {
 	date := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
 	day, err := database.ExportReportingDay(t.Context(), db.ReportingExportOptions{Date: date, Now: date.Add(48 * time.Hour), SchemaVersion: 6, ByMachine: true})
 	require.NoError(t, err)
-	part, ok := day.Hours[10].Machines["cursor-account:12"]
+	part, ok := day.Hours[0].Machines["cursor-account:12"]
 	require.True(t, ok)
 	assert.Zero(t, part.Usage.Totals.OutputTokens)
 	assert.NotEmpty(t, part.PolledAt)
-	assert.EqualValues(t, 7, day.Hours[10].Usage.Totals.OutputTokens)
+	assert.EqualValues(t, 7, day.Hours[0].Usage.Totals.OutputTokens)
 	var archiveTokens int64
-	for id, machine := range day.Hours[10].Machines {
+	for id, machine := range day.Hours[0].Machines {
 		if strings.HasPrefix(id, "archive:") {
 			archiveTokens += machine.Usage.Totals.OutputTokens
 		}
@@ -2195,7 +2195,7 @@ func TestCursorSyncEmptyPollReplacesAccountHour(t *testing.T) {
 	assert.EqualValues(t, 7, archiveTokens)
 }
 
-func TestCursorSyncStoresCompletedMemberEvents(t *testing.T) {
+func TestCursorSyncDefersMemberEventsUntilTeamPoll(t *testing.T) {
 	t.Setenv("TZ", "UTC")
 	dataDir := cursorUsageTestDataDir(t)
 	const first = `{"timestamp":"2026-07-28T10:03:00Z","model":"a","tokenUsage":{"outputTokens":7}}`
@@ -2228,12 +2228,20 @@ func TestCursorSyncStoresCompletedMemberEvents(t *testing.T) {
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
 	var count int
 	var account, stamp string
-	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT count(*), account_user_id, account_polled_at FROM cursor_usage_events`).Scan(&count, &account, &stamp))
+	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT count(*) FROM cursor_usage_events`).Scan(&count))
 	assert.Equal(t, 2, count)
+	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT account_user_id, account_polled_at FROM cursor_usage_events WHERE model='a'`).Scan(&account, &stamp))
 	assert.Equal(t, "12", account)
 	polledAt, err := time.Parse(time.RFC3339Nano, stamp)
 	require.NoError(t, err)
-	assert.True(t, polledAt.After(rosterAt))
+	assert.True(t, polledAt.Before(rosterAt))
+	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT account_user_id FROM cursor_usage_events WHERE model='b'`).Scan(&account))
+	assert.Empty(t, account)
+	date := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
+	day, err := database.ExportReportingDay(t.Context(), db.ReportingExportOptions{Date: date, Now: date.Add(48 * time.Hour), SchemaVersion: 6, ByMachine: true})
+	require.NoError(t, err)
+	assert.EqualValues(t, 7, day.Hours[10].Machines["cursor-account:12"].Usage.Totals.OutputTokens)
+	assert.EqualValues(t, 12, day.Hours[10].Usage.Totals.OutputTokens)
 	require.NoError(t, database.Close())
 	syncCursorUsage(t, server.URL, "--since", "2026-07-28", "--until", "2026-07-28")
 	database = dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))

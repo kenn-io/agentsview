@@ -92,7 +92,7 @@ type CursorAccountPoll struct {
 
 // CursorAccountHours returns previously attributed hours within a poll range.
 func (db *DB) CursorAccountHours(ctx context.Context, start, end time.Time) ([]CursorAccountHour, error) {
-	rows, err := db.getReader().Query(ctx, `SELECT DISTINCT account_user_id, `+reportingCursorHour+` FROM cursor_usage_events WHERE agent='cursor' AND account_user_id != '' AND occurred_at >= ? AND occurred_at < ?`, start.UTC().Format(time.RFC3339Nano), end.UTC().Format(time.RFC3339Nano))
+	rows, err := db.getReader().Query(ctx, `SELECT DISTINCT account_user_id, `+reportingCursorHour+` FROM cursor_usage_events WHERE agent='cursor' AND account_user_id != '' AND occurred_at >= ? AND occurred_at < ? AND agentsview_timestamp_unix_micro(occurred_at) >= ? AND agentsview_timestamp_unix_micro(occurred_at) < ?`, start.Add(-time.Second).UTC().Format(time.RFC3339Nano), end.Add(time.Second).UTC().Format(time.RFC3339Nano), start.UnixMicro(), end.UnixMicro())
 	if err != nil {
 		return nil, err
 	}
