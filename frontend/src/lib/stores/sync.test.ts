@@ -1022,6 +1022,7 @@ describe("SyncStore.remoteUnreachable", () => {
   });
 
   it("retries version mode detection after status recovers", async () => {
+    vi.mocked(api.isRemoteConnection).mockReturnValue(false);
     const s = sync as unknown as Record<string, unknown>;
     s.serverVersion = null;
     vi.mocked(api.getVersion)
