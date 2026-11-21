@@ -501,9 +501,11 @@ attach independently launched workers to their manager and roll up their costs.
 - **Pull request** — enter `owner/repo#123` and press Enter to find sessions
   whose retained prompts mention that pull request, whose commands select it,
   or whose transcript has a structured link. Child-agent prompts count too.
-  Commands in uncertain shell branches do not add links. Older archives
-  stored in transcript-only or usage-only mode cannot backfill links from
-  omitted tool inputs.
+  Commands count even when they did not run. After `cd` or with a workdir other than
+  the session directory, a bare number needs `-R` or a URL. After `eval` or
+  `source`, use a host-qualified `-R` or a URL. Archives from before data version
+  185 recover explicit links and bare numbers when the source recorded its
+  repository. Archives that omitted tool inputs cannot recover links from them.
 - **Min Prompts** — filter to sessions with at least 2, 3, 5, or 10 user
   messages
 - **Hide single-turn** — toggle to hide sessions with one or fewer user
