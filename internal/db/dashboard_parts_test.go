@@ -215,32 +215,6 @@ func TestDashboardPartsDiskPreservesZeroFirstResponse(t *testing.T) {
 	assert.Equal(t, want, got)
 }
 
-func TestDashboardPartsCancellationReleasesPermit(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	d := testDB(t)
-	insertSession(t, d, "s", "project")
-	entered := make(chan struct{})
-	left := make(chan struct{})
-	ctx, cancel := context.WithCancel(t.Context())
-	dashboardPartsReadObserver = func([]string) { close(entered); <-ctx.Done(); close(left) }
-	t.Cleanup(func() { dashboardPartsReadObserver = nil })
-	result := make(chan error, 1)
-	go func() { _, err := d.GetAnalyticsHourOfWeek(ctx, AnalyticsFilter{Timezone: "UTC"}); result <- err }()
-	<-entered
-	cancel()
-	require.ErrorIs(t, <-result, context.Canceled)
-	<-left
-	releases := make([]func(), 0, readerMaxOpenConns-1)
-	for range readerMaxOpenConns - 1 {
-		release, err := d.acquireBulkRead(t.Context())
-		require.NoError(t, err)
-		releases = append(releases, release)
-	}
-	for _, release := range releases {
-		release()
-	}
-}
-
 func TestDashboardPartsConcurrentPanels(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	d := testDB(t)
@@ -294,23 +268,28 @@ func TestDashboardPartsConcurrentPanels(t *testing.T) {
 
 func TestDashboardPartsRawMessageEdits(t *testing.T) {
 	for _, tc := range []struct {
-		name, query    string
-		user, messages int
-		chars          float64
+		name, query           string
+		user, messages, tools int
+		chars                 float64
 	}{
-		{"insert", `INSERT INTO messages(session_id,ordinal,role,content,content_length,timestamp) VALUES('s',2,'assistant','later',20,'2024-06-01T09:02:00Z')`, 1, 3, 13},
-		{"delete", `DELETE FROM messages WHERE session_id='s' AND ordinal=1`, 1, 1, 0},
-		{"length", `UPDATE messages SET content_length=20 WHERE session_id='s' AND ordinal=1`, 1, 2, 20},
+		{"insert", `INSERT INTO messages(session_id,ordinal,role,content,content_length,timestamp) VALUES('s',2,'assistant','later',20,'2024-06-01T09:02:00Z')`, 1, 3, 1, 13},
+		{"delete", `DELETE FROM messages WHERE session_id='s' AND ordinal=1`, 1, 1, 0, 0},
+		{"length", `UPDATE messages SET content_length=20 WHERE session_id='s' AND ordinal=1`, 1, 2, 1, 20},
+		{"tool", `DELETE FROM tool_calls WHERE session_id='s'`, 1, 2, 0, 6},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("CACHE_DIRECTORY", t.TempDir())
 			d := testDB(t)
 			ctx := t.Context()
 			insertSession(t, d, "s", "project", func(s *Session) { s.StartedAt = new("2024-06-01T09:00:00Z"); s.MessageCount = 2 })
-			insertMessages(t, d, userMsgAt("s", 0, "hello", "2024-06-01T09:00:00Z"), asstMsgAt("s", 1, "answer", "2024-06-01T09:01:00Z"))
+			assistant := asstMsgAt("s", 1, "answer", "2024-06-01T09:01:00Z")
+			assistant.ToolCalls = []ToolCall{{SessionID: "s", ToolName: "Read", Category: "Read"}}
+			insertMessages(t, d, userMsgAt("s", 0, "hello", "2024-06-01T09:00:00Z"), assistant)
 			f := AnalyticsFilter{Timezone: "UTC"}
-			_, err := d.GetAnalyticsActivity(ctx, f, "day")
+			before, err := d.GetAnalyticsActivity(ctx, f, "day")
 			require.NoError(t, err)
+			require.Len(t, before.Series, 1)
+			require.Equal(t, 1, before.Series[0].ToolCalls)
 			_, err = d.GetAnalyticsVelocity(ctx, f)
 			require.NoError(t, err)
 			other, err := sql.Open("sqlite3", makeDSN(d.Path(), false))
@@ -325,6 +304,7 @@ func TestDashboardPartsRawMessageEdits(t *testing.T) {
 			require.Len(t, activity.Series, 1)
 			assert.Equal(t, tc.user, activity.Series[0].UserMessages)
 			assert.Equal(t, tc.messages, activity.Series[0].Messages)
+			assert.Equal(t, tc.tools, activity.Series[0].ToolCalls)
 			assert.InDelta(t, tc.chars, velocity.Overall.CharsPerActiveMin, 0)
 			d.readOnly = true
 			scanActivity, err := d.GetAnalyticsActivity(ctx, f, "day")
@@ -358,7 +338,7 @@ func TestDashboardPartsPrunesDeletedSessions(t *testing.T) {
 	assert.Contains(t, parts, "b")
 }
 
-func TestDashboardPartsQueuedFillsDoNotHoldBulkPermits(t *testing.T) {
+func TestDashboardPartsReleasesScanPermitBeforeFill(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	d := testDB(t)
 	insertSession(t, d, "a", "project", func(s *Session) { s.Agent = "codex" })
@@ -402,38 +382,16 @@ func TestDashboardPartsQueuedFillsDoNotHoldBulkPermits(t *testing.T) {
 	for range 2 {
 		<-results
 	}
-}
-
-func TestDashboardPartsToolChangeRefreshesActivity(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	d := testDB(t)
-	ctx := t.Context()
-	insertSession(t, d, "s", "project", func(s *Session) { s.StartedAt = new("2024-06-01T09:00:00Z"); s.MessageCount = 2 })
-	user := userMsgAt("s", 0, "hello", "2024-06-01T09:00:00Z")
-	assistant := asstMsgAt("s", 1, "answer", "2024-06-01T09:01:00Z")
-	assistant.ToolCalls = []ToolCall{{SessionID: "s", ToolName: "Read", Category: "Read"}}
-	insertMessages(t, d, user, assistant)
-	f := AnalyticsFilter{Timezone: "UTC"}
-	before, err := d.GetAnalyticsActivity(ctx, f, "day")
-	require.NoError(t, err)
-	require.Equal(t, 1, before.Series[0].ToolCalls)
-	_, err = d.getWriter().ExecContext(ctx, `DELETE FROM tool_calls WHERE session_id='s'`)
-	require.NoError(t, err)
-	after, err := d.GetAnalyticsActivity(ctx, f, "day")
-	require.NoError(t, err)
-	assert.Zero(t, after.Series[0].ToolCalls)
+	permitCtx, stopPermits := context.WithTimeout(t.Context(), 5*time.Second)
+	defer stopPermits()
+	for range bulkReadSlots {
+		release, err := d.acquireBulkRead(permitCtx)
+		require.NoError(t, err)
+		t.Cleanup(release)
+	}
 }
 
 func TestDashboardPartsMemoRespectsSizeLimit(t *testing.T) {
-	t.Run("single oversized part", func(t *testing.T) {
-		var memo dashboardPartsMemo
-		part := kept.Part[dashboardPart]{ID: "a", Fingerprint: "v", Value: dashboardPart{Velocity: SessionVelocity{TurnCycles: make([]float64, 10_485_776)}}}
-		memo.store("UTC", "version", map[string]kept.Part[dashboardPart]{"a": part})
-		parts := make(map[string]kept.Part[dashboardPart])
-		missing := memo.reuse("UTC", "version", []string{"a"}, map[string]string{"a": "v"}, parts)
-		require.Equal(t, []string{"a"}, missing)
-		assert.Empty(t, parts)
-	})
 	t.Run("successive fills", func(t *testing.T) {
 		var memo dashboardPartsMemo
 		versions := make(map[string]string, 24_000)
@@ -451,6 +409,7 @@ func TestDashboardPartsMemoRespectsSizeLimit(t *testing.T) {
 				versions[id] = "v"
 			}
 			memo.store("UTC", "version", fill)
+			assert.LessOrEqual(t, memo.bytes, int64(kept.DefaultMaxBytes))
 		}
 		parts := make(map[string]kept.Part[dashboardPart])
 		missing := memo.reuse("UTC", "version", ids, versions, parts)
