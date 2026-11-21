@@ -8,6 +8,7 @@ import (
 	"maps"
 	"slices"
 	"sort"
+	"sync"
 
 	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/parser"
@@ -30,6 +31,55 @@ type dashboardSession struct {
 	ID, Date, Agent, Fingerprint string
 	MessageCount                 int
 }
+
+// dashboardPartsMemo keeps the latest timezone's validated parts in memory
+// so a selection whose file lacks a session can reuse it from another filter.
+type dashboardPartsMemo struct {
+	mu            sync.Mutex
+	slot, version string
+	parts         map[string]kept.Part[dashboardPart]
+	bytes         int64
+}
+
+// reuse copies parts whose fingerprint matches into parts and returns the ids still to read.
+func (m *dashboardPartsMemo) reuse(slot, version string, ids []string, versions map[string]string, parts map[string]kept.Part[dashboardPart]) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.slot != slot || m.version != version {
+		return ids
+	}
+	return slices.DeleteFunc(ids, func(id string) bool {
+		p, ok := m.parts[id]
+		if ok = ok && p.Fingerprint == versions[id]; ok {
+			parts[id] = p
+		}
+		return ok
+	})
+}
+
+func (m *dashboardPartsMemo) store(slot, version string, parts map[string]kept.Part[dashboardPart]) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.slot != slot || m.version != version || m.bytes > kept.DefaultMaxBytes {
+		m.slot, m.version, m.parts, m.bytes = slot, version, make(map[string]kept.Part[dashboardPart], len(parts)), 0
+	}
+	for id, p := range parts {
+		if old, ok := m.parts[id]; ok {
+			m.bytes -= dashboardPartBytes(old)
+		}
+		m.parts[id] = p
+		m.bytes += dashboardPartBytes(p)
+	}
+}
+
+func dashboardPartBytes(p kept.Part[dashboardPart]) int64 {
+	return int64(len(p.ID)+len(p.Fingerprint)) + dashboardPartSize(p.Value)
+}
+
+func dashboardPartSize(p dashboardPart) int64 {
+	return int64(128 + len(p.Hours)*16 + len(p.Velocity.TurnCycles)*8)
+}
+
 type dashboardPartsResult struct {
 	Parts   map[string]kept.Part[dashboardPart]
 	Handled bool
@@ -168,6 +218,7 @@ func (db *DB) dashboardParts(ctx context.Context, f AnalyticsFilter) ([]dashboar
 			}
 		}
 		sort.Strings(ids)
+		ids = db.dashboardMemo.reuse("dashboard-parts|"+TrendsTimezoneKey(f), version, ids, versions, parts)
 		if len(ids) > 0 {
 			if dashboardPartsReadObserver != nil {
 				dashboardPartsReadObserver(ids)
@@ -189,12 +240,12 @@ func (db *DB) dashboardParts(ctx context.Context, f AnalyticsFilter) ([]dashboar
 				delete(parts, id)
 			}
 			if !maps.Equal(versions, latest) {
-				saveDashboardParts(db, slot, version, parts)
+				saveDashboardParts(db, f, slot, version, parts)
 				return dashboardPartsResult{}, nil
 			}
 		}
 		if len(changed) > 0 {
-			saveDashboardParts(db, slot, version, parts)
+			saveDashboardParts(db, f, slot, version, parts)
 		}
 		return dashboardPartsResult{Parts: parts, Handled: true}, nil
 	})
@@ -204,12 +255,13 @@ func (db *DB) dashboardParts(ctx context.Context, f AnalyticsFilter) ([]dashboar
 	return sessions, result.Parts, result.Handled, nil
 }
 
-func saveDashboardParts(db *DB, slot, version string, parts map[string]kept.Part[dashboardPart]) {
+func saveDashboardParts(db *DB, f AnalyticsFilter, slot, version string, parts map[string]kept.Part[dashboardPart]) {
+	db.dashboardMemo.store("dashboard-parts|"+TrendsTimezoneKey(f), version, parts)
 	saved := make([]kept.Part[dashboardPart], 0, len(parts))
 	for _, p := range parts {
 		saved = append(saved, p)
 	}
-	kept.SaveParts(&db.trendsDisk, slot, version, saved, func(p dashboardPart) int64 { return int64(128 + len(p.Hours)*16 + len(p.Velocity.TurnCycles)*8) })
+	kept.SaveParts(&db.trendsDisk, slot, version, saved, dashboardPartSize)
 }
 
 func (db *DB) fillDashboardParts(ctx context.Context, f AnalyticsFilter, ids []string, versions map[string]string, parts map[string]kept.Part[dashboardPart]) error {

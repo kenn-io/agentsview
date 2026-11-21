@@ -85,10 +85,10 @@ func TestDashboardPartsMatchScansAndReuse(t *testing.T) {
 	check(f)
 	require.Equal(t, [][]string{{"a", "b", "empty", "extra-0", "extra-1"}}, reads)
 	check(AnalyticsFilter{Timezone: "UTC", Agent: "codex"})
-	require.Equal(t, [][]string{{"a", "b", "empty", "extra-0", "extra-1"}, {"b"}}, reads)
+	require.Equal(t, [][]string{{"a", "b", "empty", "extra-0", "extra-1"}}, reads)
 	insertMessages(t, d, asstMsgAt("a", 2, "later", "2024-06-01T09:02:00Z"))
 	check(f)
-	require.Equal(t, [][]string{{"a", "b", "empty", "extra-0", "extra-1"}, {"b"}, {"a"}}, reads)
+	require.Equal(t, [][]string{{"a", "b", "empty", "extra-0", "extra-1"}, {"a"}}, reads)
 	b.ToolCalls = append(b.ToolCalls, ToolCall{SessionID: "a", ToolName: "Write", Category: "Write"})
 	require.NoError(t, d.ReplaceSessionMessages(ctx, "a", []Message{a, b}))
 	check(f)
@@ -115,33 +115,43 @@ func TestDashboardPartsMatchScansAndReuse(t *testing.T) {
 	check(AnalyticsFilter{Timezone: "UTC", Model: "other"})
 }
 
-func TestDashboardPartsSelectionUsesSeparateFile(t *testing.T) {
+func TestDashboardPartsReuseAcrossAgentAndDateFilters(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	d := testDB(t)
 	ctx := t.Context()
-	for i := range 10 {
+	for i := range 6 {
 		id := fmt.Sprintf("s%d", i)
 		insertSession(t, d, id, "project", func(s *Session) {
-			if i < 5 {
+			s.StartedAt = new("2024-06-01T09:00:00Z")
+			if i < 3 {
 				s.Agent = "codex"
 			} else {
 				s.Agent = "gemini"
 			}
 		})
-		insertMessages(t, d, userMsg(id, 0, "hello"))
+		insertMessages(t, d, userMsgAt(id, 0, "hello", "2024-06-01T09:00:00Z"))
 	}
 	var reads [][]string
 	dashboardPartsReadObserver = func(ids []string) { reads = append(reads, append([]string(nil), ids...)) }
 	t.Cleanup(func() { dashboardPartsReadObserver = nil })
-	_, _, handled, err := d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC"})
+	for _, f := range []AnalyticsFilter{{Timezone: "UTC"}, {Timezone: "UTC", Agent: "codex"}, {Timezone: "UTC", From: "2024-06-01", To: "2024-06-01"}} {
+		_, parts, handled, err := d.dashboardParts(ctx, f)
+		require.NoError(t, err)
+		require.True(t, handled)
+		if f.Agent != "" {
+			require.Len(t, parts, 3)
+		} else {
+			require.Len(t, parts, 6)
+		}
+	}
+	assert.Equal(t, [][]string{{"s0", "s1", "s2", "s3", "s4", "s5"}}, reads)
+	// A filter with no saved file must not reuse the retained part of a changed session.
+	insertMessages(t, d, asstMsgAt("s0", 1, "later", "2024-06-01T09:01:00Z"))
+	_, parts, handled, err := d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC", Project: "project"})
 	require.NoError(t, err)
 	require.True(t, handled)
-	_, parts, handled, err := d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC", Agent: "codex"})
-	require.NoError(t, err)
-	require.True(t, handled)
-	require.Len(t, parts, 5)
-	require.Len(t, reads, 2)
-	assert.Equal(t, []string{"s0", "s1", "s2", "s3", "s4"}, reads[1])
+	assert.Equal(t, 2, parts["s0"].Value.Messages)
+	assert.Equal(t, [][]string{{"s0", "s1", "s2", "s3", "s4", "s5"}, {"s0"}}, reads)
 }
 
 func TestDashboardPartsContentLengthReplacement(t *testing.T) {

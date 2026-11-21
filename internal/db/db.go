@@ -956,6 +956,7 @@ type DB struct {
 	trendsDisk           kept.Disk
 	trendsDiskOnce       sync.Once
 	dashboardFlights     kept.Flights[dashboardPartsResult]
+	dashboardMemo        dashboardPartsMemo
 	usageKept            kept.Memo[DailyUsageResult]
 	usageFlights         kept.Flights[DailyUsageResult]
 	sessionStatsFacts    *sessionStatsFactsMemo
