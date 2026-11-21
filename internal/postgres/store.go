@@ -58,7 +58,7 @@ func sizeServePool(ctx context.Context, pg *sql.DB, cockroach bool) error {
 	if !cockroach {
 		var roleLimit int
 		if err := pg.QueryRowContext(ctx,
-			`SELECT rolconnlimit FROM pg_catalog.pg_roles WHERE rolname = current_user`,
+			`SELECT rolconnlimit FROM pg_catalog.pg_roles WHERE rolname = session_user`,
 		).Scan(&roleLimit); err != nil {
 			return fmt.Errorf("reading the role connection limit: %w", err)
 		}
@@ -67,7 +67,7 @@ func sizeServePool(ctx context.Context, pg *sql.DB, cockroach bool) error {
 		}
 	}
 	pg.SetMaxOpenConns(limit)
-	pg.SetMaxIdleConns(servePoolConns)
+	pg.SetMaxIdleConns(limit)
 	return nil
 }
 
