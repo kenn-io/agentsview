@@ -460,3 +460,26 @@ func TestDashboardPartsAgentChangeBeforeStamp(t *testing.T) {
 	require.Len(t, activity.Series, 1)
 	assert.Equal(t, map[string]int{"codex": 1}, activity.Series[0].ByAgent)
 }
+
+func TestDashboardPartsMemoRespectsSizeLimit(t *testing.T) {
+	t.Run("single oversized part", func(t *testing.T) {
+		var memo dashboardPartsMemo
+		part := kept.Part[dashboardPart]{ID: "a", Fingerprint: "v", Value: dashboardPart{Velocity: SessionVelocity{TurnCycles: make([]float64, 10_485_776)}}}
+		memo.store("UTC", "version", map[string]kept.Part[dashboardPart]{"a": part})
+		parts := make(map[string]kept.Part[dashboardPart])
+		missing := memo.reuse("UTC", "version", []string{"a"}, map[string]string{"a": "v"}, parts)
+		require.Equal(t, []string{"a"}, missing)
+		assert.Zero(t, len(parts))
+	})
+	t.Run("successive fills", func(t *testing.T) {
+		var memo dashboardPartsMemo
+		for _, id := range []string{"a", "b"} {
+			part := kept.Part[dashboardPart]{ID: id, Fingerprint: "v", Value: dashboardPart{Velocity: SessionVelocity{TurnCycles: make([]float64, 4_194_304)}}}
+			memo.store("UTC", "version", map[string]kept.Part[dashboardPart]{id: part})
+		}
+		parts := make(map[string]kept.Part[dashboardPart])
+		missing := memo.reuse("UTC", "version", []string{"a", "b"}, map[string]string{"a": "v", "b": "v"}, parts)
+		assert.NotEmpty(t, missing)
+		assert.LessOrEqual(t, len(parts), 1)
+	})
+}
