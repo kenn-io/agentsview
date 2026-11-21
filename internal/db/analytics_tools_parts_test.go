@@ -347,7 +347,7 @@ func TestToolsPartsMigrationInvalidatesOldParts(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, before.ByTool, 1)
 	require.Equal(t, "Read", before.ByTool[0].ToolName)
-	_, err = d.getWriter().ExecContext(ctx, `DROP TRIGGER sessions_tools_generation_insert; DROP TRIGGER tool_calls_tools_generation_insert; DROP TRIGGER tool_calls_tools_generation_update; DROP TRIGGER tool_calls_tools_generation_delete; ALTER TABLE sessions DROP COLUMN tools_generation; UPDATE tool_calls SET tool_name='Write' WHERE session_id='a'`)
+	_, err = d.getWriter().ExecContext(ctx, `DROP TRIGGER messages_dashboard_generation_insert; DROP TRIGGER messages_dashboard_generation_delete; DROP TRIGGER messages_dashboard_generation_update; DROP TRIGGER sessions_tools_generation_insert; DROP TRIGGER tool_calls_tools_generation_insert; DROP TRIGGER tool_calls_tools_generation_update; DROP TRIGGER tool_calls_tools_generation_delete; ALTER TABLE sessions DROP COLUMN tools_generation; UPDATE tool_calls SET tool_name='Write' WHERE session_id='a'`)
 	require.NoError(t, err)
 	require.NoError(t, d.Close())
 	d, err = Open(ctx, path)

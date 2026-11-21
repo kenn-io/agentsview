@@ -3099,7 +3099,6 @@ func schemaColumnMigrations() []schemaColumnMigration {
 
 // A random generation distinguishes transcript histories after restoring a backup.
 const trendsGenerationSchemaSQL = `
-DROP TRIGGER IF EXISTS messages_dashboard_length_generation_update;
 CREATE TRIGGER IF NOT EXISTS sessions_trends_generation_insert AFTER INSERT ON sessions BEGIN
     UPDATE sessions SET trends_generation=lower(hex(randomblob(16))) WHERE id=NEW.id;
 END;

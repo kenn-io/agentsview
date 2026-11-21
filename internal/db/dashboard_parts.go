@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/json/v2"
 	"fmt"
-	"maps"
 	"slices"
 	"sort"
 	"sync"
@@ -17,16 +16,13 @@ import (
 // Increment when dashboard counts, ComputeSessionVelocity, or parser.IsClaudeHookSubtype changes.
 const dashboardPartsVersion = 2
 
-var (
-	dashboardPartsReadObserver             func([]string)
-	dashboardPartsBeforeStampObserver      func()
-	dashboardPartsBeforeValidationObserver func(context.Context)
-)
+var dashboardPartsReadObserver func([]string)
 
 type dashboardPart struct {
 	Messages, User, Assistant, Thinking, Tools int
 	Hours                                      map[int]int
 	Velocity                                   SessionVelocity
+	HasResponse                                bool
 }
 
 type dashboardSession struct {
@@ -102,21 +98,9 @@ type dashboardPartsResult struct {
 }
 
 func (db *DB) dashboardSessions(ctx context.Context, f AnalyticsFilter) ([]dashboardSession, map[string]string, error) {
-	return db.readDashboardSessions(ctx, f, nil, true)
-}
-
-func (db *DB) readDashboardSessions(ctx context.Context, f AnalyticsFilter, ids []string, stamp bool) ([]dashboardSession, map[string]string, error) {
 	loc := f.location()
 	dateCol := "COALESCE(NULLIF(s.started_at, ''), s.created_at)"
 	where, args := f.buildWhereWithDate(dateCol, true, "s.id")
-	if ids != nil {
-		encoded, err := json.Marshal(ids)
-		if err != nil {
-			return nil, nil, err
-		}
-		where += " AND s.id IN (SELECT value FROM json_each(?))"
-		args = append(args, string(encoded))
-	}
 	rows, err := db.getReader().QueryContext(ctx, `SELECT s.id, `+dateCol+`, s.agent, s.message_count, s.transcript_revision || '|' || COALESCE(s.trends_generation, '') || '|' || s.message_count, s.tools_generation, `+toolsSessionFingerprintSQL+` FROM sessions s WHERE `+where+` ORDER BY s.id`, args...)
 	if err != nil {
 		return nil, nil, err
@@ -150,32 +134,15 @@ func (db *DB) readDashboardSessions(ctx context.Context, f AnalyticsFilter, ids 
 		return nil, nil, err
 	}
 	if len(dirty) > 0 {
-		if !stamp {
-			return nil, nil, nil
-		}
-		if dashboardPartsBeforeStampObserver != nil {
-			dashboardPartsBeforeStampObserver()
-		}
 		fingerprints, err := db.stampToolsSessions(ctx, dirty)
 		if err != nil {
 			return nil, nil, err
 		}
-		var stamped []dashboardSession
 		for i := range sessions {
 			if fingerprint, ok := fingerprints[sessions[i].ID]; ok {
 				sessions[i].Fingerprint += "|" + fingerprint
 				versions[sessions[i].ID] = sessions[i].Fingerprint
-				stamped = append(stamped, sessions[i])
 			}
-		}
-		// The writer may have changed a session after the selection read and
-		// before its tools generation was stamped. Reject mixed metadata.
-		current, currentVersions, err := db.readDashboardSessions(ctx, f, dirty, false)
-		if err != nil {
-			return nil, nil, err
-		}
-		if currentVersions == nil || !slices.Equal(stamped, current) {
-			return nil, nil, nil
 		}
 	}
 	return sessions, versions, nil
@@ -204,9 +171,6 @@ func (db *DB) dashboardParts(ctx context.Context, f AnalyticsFilter) ([]dashboar
 	release()
 	if err != nil {
 		return nil, nil, false, err
-	}
-	if versions == nil {
-		return nil, nil, false, nil
 	}
 	filter, err := json.Marshal(f, json.Deterministic(true))
 	if err != nil {
@@ -241,23 +205,6 @@ func (db *DB) dashboardParts(ctx context.Context, f AnalyticsFilter) ([]dashboar
 			}
 			if err := db.fillDashboardParts(ctx, f, ids, versions, parts); err != nil {
 				return dashboardPartsResult{}, err
-			}
-			if dashboardPartsBeforeValidationObserver != nil {
-				dashboardPartsBeforeValidationObserver(ctx)
-			}
-			_, latest, err := db.dashboardSessions(ctx, f)
-			if err != nil {
-				return dashboardPartsResult{}, err
-			}
-			if latest == nil {
-				return dashboardPartsResult{}, nil
-			}
-			for id := range kept.StaleParts(parts, latest) {
-				delete(parts, id)
-			}
-			if !maps.Equal(versions, latest) {
-				saveDashboardParts(db, f, slot, version, parts)
-				return dashboardPartsResult{}, nil
 			}
 		}
 		if len(changed) > 0 {
@@ -309,6 +256,7 @@ func (db *DB) fillDashboardMessageParts(ctx context.Context, f AnalyticsFilter, 
 		if current != "" {
 			p := parts[current]
 			p.Value.Velocity = ComputeSessionVelocity(timings)
+			p.Value.HasResponse = p.Value.Velocity.FirstResponse != nil
 			parts[current] = p
 		}
 	}
@@ -413,7 +361,11 @@ func dashboardVelocity(sessions []dashboardSession, parts map[string]kept.Part[d
 	for _, s := range sessions {
 		ids = append(ids, s.ID)
 		metadata[s.ID] = VelocitySession{Agent: s.Agent, MessageCount: s.MessageCount}
-		velocities[s.ID] = parts[s.ID].Value.Velocity
+		p := parts[s.ID].Value
+		if p.HasResponse && p.Velocity.FirstResponse == nil {
+			p.Velocity.FirstResponse = new(float64)
+		}
+		velocities[s.ID] = p.Velocity
 		tools[s.ID] = parts[s.ID].Value.Tools
 	}
 	return BuildVelocityResponseFromSessions(ids, metadata, velocities, tools)
