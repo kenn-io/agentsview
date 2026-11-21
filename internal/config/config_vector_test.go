@@ -4,6 +4,7 @@ import (
 	"maps"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -315,12 +316,15 @@ func TestVectorConfigValidate(t *testing.T) {
 			wantErr: "backstop_interval",
 		},
 		{
-			name:    "enabled explicit zero backstop interval is invalid",
-			mutate:  func(c *VectorConfig) { c.Embed.BackstopInterval = "0s" },
-			wantErr: "use a negative value to disable",
+			name:   "enabled backstop interval off is valid",
+			mutate: func(c *VectorConfig) { c.Embed.BackstopInterval = "off" },
 		},
 		{
-			name:   "enabled negative backstop interval disables and is valid",
+			name:   "enabled zero backstop interval is valid",
+			mutate: func(c *VectorConfig) { c.Embed.BackstopInterval = "0s" },
+		},
+		{
+			name:   "enabled negative backstop interval is valid",
 			mutate: func(c *VectorConfig) { c.Embed.BackstopInterval = "-1s" },
 		},
 	}
@@ -780,9 +784,9 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 				wantErr: "[vector.embeddings.servers.local] embed endpoint must use http or https",
 			},
 			{
-				name:    "explicit zero backstop_interval",
-				embed:   map[string]any{"backstop_interval": "0s"},
-				wantErr: "use a negative value to disable",
+				name:    "backstop_interval that is not a duration",
+				embed:   map[string]any{"backstop_interval": "daily"},
+				wantErr: `[vector.embed] invalid backstop_interval "daily"`,
 			},
 		}
 		for _, tt := range tests {
@@ -971,4 +975,50 @@ func requireAPIKey(t *testing.T, server interface{ APIKey() (string, error) }) s
 	key, err := server.APIKey()
 	require.NoError(t, err)
 	return key
+}
+
+func TestParseBackstopInterval(t *testing.T) {
+	tests := []struct {
+		in      string
+		want    time.Duration
+		wantErr bool
+	}{
+		{in: "24h", want: 24 * time.Hour},
+		{in: "off", want: 0},
+		{in: "Off", want: 0},
+		{in: "0s", want: 0},
+		{in: "-1h", want: 0},
+		{in: "daily", wantErr: true},
+		{in: "", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			got, err := ParseBackstopInterval(tt.in)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestVectorConfigTOMLLoadBackstopOff(t *testing.T) {
+	cfg := loadMinimalWithConfig(t, map[string]any{
+		"vector": map[string]any{
+			"enabled": true,
+			"embeddings": map[string]any{
+				"model":     "nomic-embed-text",
+				"dimension": 768,
+				"servers": map[string]any{
+					"local": map[string]any{"endpoint": "http://localhost:11434/v1"},
+				},
+			},
+			"embed": map[string]any{"run_after_sync": false, "backstop_interval": "off"},
+		},
+	})
+	backstop, err := ParseBackstopInterval(cfg.Vector.Embed.BackstopInterval)
+	require.NoError(t, err)
+	assert.Zero(t, backstop, "backstop_interval = \"off\" disables the periodic rebuild")
 }

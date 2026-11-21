@@ -94,7 +94,7 @@ func resolveExtractDistillation(
 	if err != nil {
 		return dist, fmt.Errorf("parsing failure_backoff: %w", err)
 	}
-	backstop, err := time.ParseDuration(cfg.BackstopInterval)
+	backstop, err := config.ParseBackstopInterval(cfg.BackstopInterval)
 	if err != nil {
 		return dist, fmt.Errorf("parsing backstop_interval: %w", err)
 	}
