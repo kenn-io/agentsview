@@ -134,7 +134,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 				call.Content = append(call.Content, &mcp.TextContent{Text: "Warning: " + apiclient.ArchiveStaleWarning})
 			}
 			if req, ok := request.(*mcp.CallToolRequest); ok {
-				warnCallLogFailure(recordToolCall(ctx, opts.CallLogDir, req, result, err, elapsed))
+				warnCallLogFailure(recordToolCall(opts.CallLogDir, req, result, err, elapsed))
 			}
 			return result, err
 		}

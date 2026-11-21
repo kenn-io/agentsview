@@ -1,12 +1,10 @@
 package mcp
 
 import (
-	"bufio"
-	"context"
+	"bytes"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,7 +14,6 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"go.kenn.io/agentsview/internal/ctxio"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/kit/safefileio"
 )
@@ -74,13 +71,10 @@ func warnCallLogFailure(err error) {
 	}
 }
 
-func recordToolCall(ctx context.Context, dir string, req *mcp.CallToolRequest, result mcp.Result, callErr error, elapsed time.Duration) error {
+func recordToolCall(dir string, req *mcp.CallToolRequest, result mcp.Result, callErr error, elapsed time.Duration) error {
 	if dir == "" || req == nil || req.Params == nil {
 		return nil
 	}
-	// Record the outcome even when the request has already been canceled.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer cancel()
 	name := req.Params.Name
 	rec := callRecord{Tool: name, Outcome: "ok", Ms: int(elapsed.Milliseconds())}
 	var args map[string]any
@@ -88,7 +82,6 @@ func recordToolCall(ctx context.Context, dir string, req *mcp.CallToolRequest, r
 		for key := range args {
 			rec.Args = append(rec.Args, key)
 		}
-		sort.Strings(rec.Args)
 		switch cursor := args["cursor"].(type) {
 		case string:
 			rec.Continuation = cursor != ""
@@ -106,7 +99,6 @@ func recordToolCall(ctx context.Context, dir string, req *mcp.CallToolRequest, r
 				}
 			}
 		}
-		sort.Strings(rec.Rejected)
 	}
 	if callErr != nil || (call != nil && call.IsError) {
 		rec.Outcome = "error"
@@ -125,11 +117,6 @@ func recordToolCall(ctx context.Context, dir string, req *mcp.CallToolRequest, r
 				}
 			}
 		}
-		if rec.Truncated {
-			rec.Outcome = "truncated"
-		} else if rec.Empty {
-			rec.Outcome = "empty"
-		}
 	}
 	if err := safefileio.EnsurePrivateDir(dir); err != nil {
 		return err
@@ -144,7 +131,7 @@ func recordToolCall(ctx context.Context, dir string, req *mcp.CallToolRequest, r
 	}
 	// A leading newline separates this record from a previous partial write.
 	line := append(append([]byte{'\n'}, b...), '\n')
-	_, writeErr := (ctxio.Writer{Context: ctx, Writer: f}).Write(line)
+	_, writeErr := f.Write(line)
 	return errors.Join(writeErr, f.Close())
 }
 
@@ -199,10 +186,7 @@ type callAggregate struct {
 }
 
 // SummarizeCalls reads recorded calls within inclusive UTC date bounds.
-func SummarizeCalls(ctx context.Context, dir, from, to string) ([]CallSummary, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
+func SummarizeCalls(dir, from, to string) ([]CallSummary, error) {
 	files, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return []CallSummary{}, nil
@@ -212,32 +196,15 @@ func SummarizeCalls(ctx context.Context, dir, from, to string) ([]CallSummary, e
 	}
 	groups := map[string]*callAggregate{}
 	for _, file := range files {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		name := file.Name()
-		if file.IsDir() || len(name) != 16 || !strings.HasSuffix(name, ".jsonl") {
+		date, ok := strings.CutSuffix(file.Name(), ".jsonl")
+		if file.IsDir() || !ok || !db.InDateRange(date, from, to) {
 			continue
 		}
-		date := strings.TrimSuffix(name, ".jsonl")
-		if _, err := time.Parse("2006-01-02", date); err != nil || !db.InDateRange(date, from, to) {
-			continue
-		}
-		f, err := os.Open(filepath.Join(dir, name))
+		data, err := os.ReadFile(filepath.Join(dir, file.Name()))
 		if err != nil {
 			return nil, err
 		}
-		reader := bufio.NewReader(ctxio.Reader{Context: ctx, Reader: f})
-		var readErr error
-		for {
-			line, err := reader.ReadBytes('\n')
-			if err != nil && !errors.Is(err, io.EOF) {
-				readErr = err
-				break
-			}
-			if len(line) == 0 {
-				break
-			}
+		for line := range bytes.Lines(data) {
 			var rec callRecord
 			if json.Unmarshal(line, &rec) != nil {
 				continue
@@ -265,10 +232,6 @@ func SummarizeCalls(ctx context.Context, dir, from, to string) ([]CallSummary, e
 			}
 			g.bytes = append(g.bytes, rec.Bytes)
 			g.ms = append(g.ms, rec.Ms)
-		}
-		closeErr := f.Close()
-		if err := errors.Join(readErr, closeErr); err != nil {
-			return nil, err
 		}
 	}
 	rows := make([]CallSummary, 0, len(groups))
