@@ -41,6 +41,8 @@ func shellCommands(command string) ([]shellCall, bool) {
 		var visit func(syntax.Node) bool
 		visit = func(node syntax.Node) bool {
 			switch n := node.(type) {
+			case *syntax.FuncDecl:
+				return false
 			case *syntax.Subshell, *syntax.CmdSubst:
 				parentUnknown, parentDir := contextUnknown, changedDir
 				var stmts []*syntax.Stmt

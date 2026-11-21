@@ -15,6 +15,18 @@ func TestCommandPRLinksCanceled(t *testing.T) {
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
+func TestCommandPRLinksSkipsFunctionBodies(t *testing.T) {
+	remote := "https://github.com/o/r.git"
+	links, _, err := CommandPRLinks(t.Context(), `f() { gh pr view 5; }; cd /other; f`, remote)
+	require.NoError(t, err)
+	assert.Empty(t, links)
+
+	links, _, err = CommandPRLinks(t.Context(), `f() { cd /x; }; gh pr view 6`, remote)
+	require.NoError(t, err)
+	require.Len(t, links, 1)
+	assert.Equal(t, "https://github.com/o/r/pull/6", links[0].URL)
+}
+
 func TestGHPRCommandLinks(t *testing.T) {
 	tests := []struct{ command, remote, want string }{
 		{`GH_REPO=other/repo gh pr view 1; gh pr view 42`, "https://github.com/example/repo.git", "https://github.com/example/repo/pull/42"},
