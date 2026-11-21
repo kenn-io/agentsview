@@ -247,10 +247,10 @@ trash, the lookup reports it missing instead. The row has an empty `snippet`,
 `match_ordinal` set to `0`, and no `next_cursor`. Call
 `get_messages` with that ordinal to read the first message. For a known full ID
 or raw UUID, `get_session_overview` provides a compact message preview. Remote
-bare UUID lookup requires AgentsView 0.44.0 or later on the server. Qualified
-suffix lookup also requires a server that checks for trashed exact IDs. When
-that check is unavailable, optional filters use the ID as given and required
-lookups return an error. Use an exact full stored ID with an older server.
+bare UUID lookup requires AgentsView 0.44.0 or later on the server. Use an exact
+full stored ID with an older server.
+On servers without the trash check, a trashed exact ID can resolve to a live
+host copy; upgrade the server or use the copy's full stored ID.
 
 `search_sessions` and `search_content` exclude sessions active in the last ten
 minutes by default, including the current conversation. `search_content` applies
