@@ -10,6 +10,7 @@ export class LiveHub {
   private source: EventSource | null = null;
   private sessions = new Set<string>();
   private ready = new Map<string, LiveFrame>();
+  private synced = new Set<LivePort>();
   private timing = new Map<string, LiveFrame>();
   private credentials: { base: string; token: string } | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -17,15 +18,15 @@ export class LiveHub {
   update(port: LivePort, request: LiveRequest) {
     const previous = this.ports.get(port);
     this.ports.set(port, request);
+    if (!previous || previous.session !== request.session) this.synced.delete(port);
     if (
       (!previous || previous.session !== request.session) &&
       this.source &&
-      this.credentials?.base === request.base &&
-      this.credentials.token === request.token
+      this.sameCredentials(request)
     ) {
       const key = request.session ?? "";
       const ready = this.ready.get(key);
-      if (ready) port.postMessage(ready);
+      if (ready) this.deliver(port, ready);
       const timing = this.timing.get(key);
       if (timing) port.postMessage(timing);
     }
@@ -34,6 +35,7 @@ export class LiveHub {
 
   leave(port: LivePort) {
     this.ports.delete(port);
+    this.synced.delete(port);
     this.schedule();
   }
 
@@ -67,14 +69,8 @@ export class LiveHub {
     );
     const changed =
       sessions.size !== this.sessions.size || [...sessions].some((id) => !this.sessions.has(id));
-    if (
-      this.source &&
-      request &&
-      !changed &&
-      this.credentials?.base === request.base &&
-      this.credentials.token === request.token
-    )
-      return;
+    if (this.source && request && !changed && this.sameCredentials(request)) return;
+    if (!this.sameCredentials(request)) this.synced.clear();
     this.source?.close();
     this.source = null;
     this.sessions = sessions;
@@ -132,12 +128,12 @@ export class LiveHub {
           }
         }
         const frame = { type, data };
+        this.broadcast(frame, session);
         if (type === "events_ready" || type === "session_ready" || type === "session_missing") {
           this.ready.set(session ?? "", frame);
           if (type === "session_missing") this.timing.delete(session ?? "");
         }
         if (type === "session.timing" && session) this.timing.set(session, frame);
-        this.broadcast(frame, session);
       });
     }
   }
@@ -147,7 +143,21 @@ export class LiveHub {
       if (session !== undefined && request.session !== session) continue;
       if ((frame.type === "events_ready" || frame.type === "data_changed") && request.session)
         continue;
-      port.postMessage(frame);
+      if (frame.type === "events_ready" && !this.ready.has("") && this.synced.has(port)) continue;
+      this.deliver(port, frame);
     }
+  }
+
+  private deliver(port: LivePort, frame: LiveFrame) {
+    if (frame.type === "events_ready") this.synced.add(port);
+    port.postMessage(frame);
+  }
+
+  private sameCredentials(request?: LiveRequest) {
+    return (
+      !!request &&
+      this.credentials?.base === request.base &&
+      this.credentials.token === request.token
+    );
   }
 }

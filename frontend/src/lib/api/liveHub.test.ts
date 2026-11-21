@@ -78,6 +78,39 @@ describe("shared live stream", () => {
     expect(archive.map((frame) => frame.type)).toEqual(["events_ready", "data_changed"]);
   });
 
+  it("does not refresh archive subscribers when the watched sessions change", () => {
+    const hub = new LiveHub();
+    const archive = { postMessage: vi.fn() };
+    const session = { postMessage: vi.fn() };
+    hub.update(archive, request());
+    sources[0]!.emit("events_ready", "{}");
+    expect(archive.postMessage).toHaveBeenCalledOnce();
+    hub.update(session, request("a"));
+    vi.advanceTimersByTime(250);
+    sources[1]!.emit("events_ready", "{}");
+    expect(archive.postMessage).toHaveBeenCalledOnce();
+    hub.leave(session);
+    vi.advanceTimersByTime(250);
+    sources[2]!.emit("events_ready", "{}");
+    expect(archive.postMessage).toHaveBeenCalledOnce();
+    hub.close();
+  });
+
+  it("sends readiness again to archive subscribers when the same stream reconnects", () => {
+    const hub = new LiveHub();
+    const archive = { postMessage: vi.fn() };
+    hub.update(archive, request());
+    sources[0]!.emit("events_ready", "{}");
+    sources[0]!.emit("error");
+    sources[0]!.emit("events_ready", "{}");
+    expect(archive.postMessage.mock.calls.map(([frame]) => frame.type)).toEqual([
+      "events_ready",
+      "error",
+      "events_ready",
+    ]);
+    hub.close();
+  });
+
   it("keeps a stream for a duplicate session leaving and shrinks it when the last leaves", () => {
     const hub = new LiveHub();
     const first = { postMessage: vi.fn() };
