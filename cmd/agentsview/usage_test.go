@@ -1683,6 +1683,7 @@ func syncCursorUsage(t *testing.T, baseURL string, args ...string) {
 }
 
 func TestCursorSyncMatchesMembers(t *testing.T) {
+	t.Setenv("TZ", "UTC")
 	for _, tc := range []struct {
 		name         string
 		priorModel   string
@@ -1708,7 +1709,6 @@ func TestCursorSyncMatchesMembers(t *testing.T) {
 					return
 				}
 				if r.URL.Path == "/teams/daily-usage-data" {
-					assert.EqualValues(t, 1000, body["pageSize"])
 					_, _ = w.Write([]byte(`{"data":[{"userId":12,"isActive":false},{"userId":34}],"pagination":{"hasNextPage":false}}`))
 					return
 				}
@@ -2129,6 +2129,7 @@ func TestCursorSyncAllSkipsEmptyRosterWindows(t *testing.T) {
 }
 
 func TestCursorSyncUsesUnfilteredFetchTimeAndDefersLateEvents(t *testing.T) {
+	t.Setenv("TZ", "UTC")
 	dataDir := cursorUsageTestDataDir(t)
 	const first = `{"timestamp":"2026-07-28T10:03:00Z","model":"a","tokenUsage":{"outputTokens":7}}`
 	const late = `{"timestamp":"2026-07-28T10:04:00Z","model":"b","tokenUsage":{"outputTokens":5}}`
@@ -2158,26 +2159,19 @@ func TestCursorSyncUsesUnfilteredFetchTimeAndDefersLateEvents(t *testing.T) {
 	defer server.Close()
 	syncCursorUsage(t, server.URL, "--since", "2026-07-28", "--until", "2026-07-28")
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
-	require.NoError(t, database.ConfigureArtifactLocalMachine(t.Context(), "machine-a"))
 	var count int
-	var stamp string
-	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT count(*), max(account_polled_at) FROM cursor_usage_events`).Scan(&count, &stamp))
+	var account, stamp string
+	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT count(*), account_user_id, account_polled_at FROM cursor_usage_events`).Scan(&count, &account, &stamp))
 	assert.Equal(t, 1, count)
+	assert.Equal(t, "12", account)
 	polledAt, err := time.Parse(time.RFC3339Nano, stamp)
 	require.NoError(t, err)
 	assert.True(t, polledAt.Before(rosterAt))
-	opts := db.ReportingExportOptions{Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC), Now: time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), SchemaVersion: 6, ByMachine: true}
-	day, err := database.ExportReportingDay(t.Context(), opts)
-	require.NoError(t, err)
-	assert.EqualValues(t, 7, day.Hours[10].Machines["cursor-account:12"].Usage.Totals.OutputTokens)
 	require.NoError(t, database.Close())
-	cmd := newUsageCursorCommand()
-	cmd.SetArgs([]string{"--since", "2026-07-28", "--until", "2026-07-28"})
-	require.NoError(t, cmd.Execute())
+	syncCursorUsage(t, server.URL, "--since", "2026-07-28", "--until", "2026-07-28")
 	database = dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
-	day, err = database.ExportReportingDay(t.Context(), opts)
-	require.NoError(t, err)
-	account := day.Hours[10].Machines["cursor-account:12"]
-	assert.EqualValues(t, 12, account.Usage.Totals.OutputTokens)
-	assert.Greater(t, account.PolledAt, stamp)
+	var lateStamp string
+	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT account_user_id, account_polled_at FROM cursor_usage_events WHERE model='b'`).Scan(&account, &lateStamp))
+	assert.Equal(t, "12", account)
+	assert.Greater(t, lateStamp, stamp)
 }

@@ -87,7 +87,8 @@ func TestCursorAccountReporting(t *testing.T) {
 	a := CursorUsageEvent{OccurredAt: "2026-07-28T10:01:00Z", Model: "a", OutputTokens: 10, DedupKey: "a", UserID: "raw-a"}
 	b := CursorUsageEvent{OccurredAt: "2026-07-28T10:02:00Z", Model: "b", OutputTokens: 20, DedupKey: "b"}
 	c := CursorUsageEvent{OccurredAt: "2026-07-28T10:03:00Z", Model: "c", OutputTokens: 30, DedupKey: "c"}
-	require.NoError(t, d.InsertCursorUsageEvents(ctx, []CursorUsageEvent{a, b, c}))
+	unassigned := CursorUsageEvent{OccurredAt: "2026-07-28T10:04:00Z", Model: "d", OutputTokens: 5, DedupKey: "d", UserID: "77"}
+	require.NoError(t, d.InsertCursorUsageEvents(ctx, []CursorUsageEvent{a, b, c, unassigned}))
 	first := time.Date(2026, 7, 29, 1, 0, 0, 0, time.UTC)
 	require.NoError(t, d.AssignCursorUsageAccount(ctx, "12", []string{"a"}, first))
 	require.NoError(t, d.AssignCursorUsageAccount(ctx, "12", []string{"b"}, first.Add(time.Hour)))
@@ -110,8 +111,9 @@ func TestCursorAccountReporting(t *testing.T) {
 	assert.EqualValues(t, 20, hour.Machines["cursor-account:12"].Usage.Totals.OutputTokens)
 	assert.Equal(t, "2026-07-29T02:00:00.000000Z", hour.Machines["cursor-account:12"].PolledAt)
 	assert.EqualValues(t, 30, hour.Machines["cursor-account:34"].Usage.Totals.OutputTokens)
-	assert.EqualValues(t, 10, hour.Machines["archive:archive-a"].Usage.Totals.OutputTokens)
-	assert.EqualValues(t, 60, hour.Usage.Totals.OutputTokens)
+	assert.EqualValues(t, 15, hour.Machines["archive:archive-a"].Usage.Totals.OutputTokens)
+	assert.NotContains(t, hour.Machines, "cursor-account:77")
+	assert.EqualValues(t, 65, hour.Usage.Totals.OutputTokens)
 	opts.ProjectKeys = []string{"other"}
 	scoped, err := d.ExportReportingDay(ctx, opts)
 	require.NoError(t, err)
@@ -124,5 +126,5 @@ func TestCursorAccountReporting(t *testing.T) {
 	assert.Equal(t, "cursor-account:12", legacy.Hours[10].LocalMachineID)
 	assert.InDelta(t, 4, legacy.Hours[10].Machines["cursor-account:12"].Activity.Totals.AgentMinutes, 0.001)
 	assert.InDelta(t, 3, legacy.Hours[10].Machines[machine].Activity.Totals.AgentMinutes, 0.001)
-	assert.EqualValues(t, 60, legacy.Hours[10].Machines["archive:archive-a"].Usage.Totals.OutputTokens)
+	assert.EqualValues(t, 65, legacy.Hours[10].Machines["archive:archive-a"].Usage.Totals.OutputTokens)
 }

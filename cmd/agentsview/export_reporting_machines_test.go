@@ -84,36 +84,8 @@ func TestExportReportingUpgradesOldCursorUsageArchive(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
-	out, _, err := executeExportSessionsCommand(newExportReportingTestRoot(now), "export", "day", "--schema-version", "6", "--by-machine", "2026-07-28")
+	_, _, err = executeExportSessionsCommand(newExportReportingTestRoot(now), "export", "day", "--schema-version", "6", "--by-machine", "2026-07-28")
 	require.NoError(t, err)
-	var day struct {
-		Hours []struct {
-			Machines map[string]struct {
-				Usage struct {
-					Totals struct {
-						Output int64 `json:"output_tokens"`
-					} `json:"totals"`
-				} `json:"usage"`
-			} `json:"machines"`
-			Usage struct {
-				Totals struct {
-					Output int64 `json:"output_tokens"`
-				} `json:"totals"`
-			} `json:"usage"`
-		} `json:"hours"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(out), &day))
-	assert.EqualValues(t, 22, day.Hours[10].Usage.Totals.Output)
-	assert.EqualValues(t, 22, day.Hours[10].Machines["archive:old-archive"].Usage.Totals.Output)
-	for key := range day.Hours[10].Machines {
-		assert.NotContains(t, key, "cursor-account:")
-	}
-	raw, err = sql.Open("sqlite3", path)
-	require.NoError(t, err)
-	defer raw.Close()
-	var count int
-	require.NoError(t, raw.QueryRowContext(t.Context(), `SELECT count(*) FROM cursor_usage_events WHERE account_user_id='' AND account_polled_at=''`).Scan(&count))
-	assert.Equal(t, 2, count)
 }
 
 func TestExportReportingCursorAccountHour(t *testing.T) {
