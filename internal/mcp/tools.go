@@ -774,13 +774,13 @@ func (t *toolset) getMessageBodyContinuation(
 // --- search_content ---
 
 type searchContentIn struct {
-	Pattern          string   `json:"pattern,omitempty" jsonschema:"Semantic/hybrid query, terms, substring, or regex over messages, thinking, and tools. Required unless concepts or session_id is set. Fully quoted substring matches exact text. Mutually exclusive with concepts."`
-	Concepts         []string `json:"concepts,omitempty" jsonschema:"Two to five concepts with evidence in the same session. Always uses semantic mode, does not page, and is mutually exclusive with pattern."`
+	Pattern          string   `json:"pattern,omitempty" jsonschema:"Semantic/hybrid query, whitespace-separated literals for terms, substring, or regex over messages, thinking, and tools. Required unless concepts or session_id is set. Fully quoted substring matches exact text. Mutually exclusive with concepts."`
+	Concepts         []string `json:"concepts,omitempty" jsonschema:"Two to five concepts with evidence in the same session, possibly across messages. Always uses semantic mode, does not page, and is mutually exclusive with pattern."`
 	Mode             string   `json:"mode,omitempty" jsonschema:"substring (default), regex, terms, semantic, or hybrid. Prefer hybrid for contextual questions. Hybrid returns keyword matches with a note when search by meaning is unavailable; semantic requires a ready index."`
 	Scope            string   `json:"scope,omitempty" jsonschema:"Substring/regex/terms/semantic/hybrid result scope: top, all (default), or subordinate."`
 	Project          string   `json:"project,omitempty" jsonschema:"Restrict to one project."`
 	Agent            string   `json:"agent,omitempty" jsonschema:"Restrict to one agent."`
-	SessionID        string   `json:"session_id,omitempty" jsonschema:"Exact full stored session ID. Without pattern or concepts, list its messages regardless of mode, including active, one-shot, and automated sessions."`
+	SessionID        string   `json:"session_id,omitempty" jsonschema:"Exact full stored session ID. Without pattern or concepts, list its messages, ignoring mode and include flags and including active, one-shot, and automated sessions."`
 	GitBranch        string   `json:"git_branch,omitempty" jsonschema:"Restrict to one exact git branch."`
 	CurrentSessionID string   `json:"current_session_id,omitempty" jsonschema:"Exclude this exact full stored session ID instead of applying the recent-activity heuristic."`
 	DateFrom         string   `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
