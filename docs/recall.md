@@ -133,8 +133,8 @@ You can also list, fetch, and generate insights from the CLI with
 From a session's actions menu, click **Analyze tool effectiveness** to generate
 a report on that session showing which tool calls helped and which wasted
 turns. Each conclusion is marked **Helped**, **Did not help**, or **Unclear**,
-and names the calls it cites; click a conclusion to inspect those calls and
-jump to their message. The session's observed tool sequences and a note on
+and names the calls it cites; clicking a cited call shows those calls, each with
+a link to its message. The session's observed tool sequences and a note on
 anything cut from the model's input appear below the conclusions.
 
 This report sends each tool call's input and result to the insight agent, up to
