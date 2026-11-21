@@ -264,6 +264,34 @@ describe("shared live stream", () => {
     expect(missing.postMessage.mock.calls).toEqual([[{ type: "session_missing", data: "a" }]]);
   });
 
+  it("rechecks a missing session when a subscriber retries", () => {
+    const hub = new LiveHub();
+    const archive = { postMessage: vi.fn() };
+    const first = { postMessage: vi.fn() };
+    const other = { postMessage: vi.fn() };
+    const retry = { postMessage: vi.fn() };
+    hub.update(archive, request());
+    hub.update(first, request("a"));
+    vi.advanceTimersByTime(250);
+    const old = sources.at(-1)!;
+    old.emit("session_missing", "a");
+    old.emit("events_ready", "{}");
+    hub.update(other, request("a"));
+    expect(other.postMessage).toHaveBeenCalledWith({ type: "session_missing", data: "a" });
+    archive.postMessage.mockClear();
+    hub.leave(first);
+    hub.update(retry, request("a"));
+    expect(retry.postMessage).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(250);
+    expect(sources).toHaveLength(3);
+    const next = sources[2]!;
+    next.emit("session_ready", "a");
+    next.emit("events_ready", "{}");
+    expect(retry.postMessage).toHaveBeenCalledWith({ type: "session_ready", data: "a" });
+    expect(archive.postMessage).not.toHaveBeenCalled();
+    hub.close();
+  });
+
   it("keeps the current credentials when the old subscriber leaves", async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
     vi.stubGlobal("fetch", fetch);
