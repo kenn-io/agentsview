@@ -70,7 +70,10 @@ func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string, dialo
 		if err != nil {
 			return false, err
 		}
-		toolLinks := db.ToolCallPRLinks(payload.Messages, payload.Session.Cwd, "")
+		toolLinks, err := db.ToolCallPRLinksContext(ctx, payload.Messages, payload.Session.Cwd, "")
+		if err != nil {
+			return false, err
+		}
 		links := db.EncodePRLinks(parser.CombinePRLinks(payload.Session.PRLinks, promptLinks, toolLinks, payload.ToolPRLinks))
 		var linksChanged bool
 		err = tx.QueryRowContext(ctx, `WITH prior AS (
@@ -326,7 +329,11 @@ func (s *RawProjectionStore) writePayload(ctx context.Context, tx *sql.Tx, id, g
 	if err != nil {
 		return err
 	}
-	p.Session.PRLinks = parser.CombinePRLinks(p.Session.PRLinks, promptLinks, p.ToolPRLinks, db.ToolCallPRLinks(p.Messages, p.Session.Cwd, ""))
+	toolLinks, err := db.ToolCallPRLinksContext(ctx, p.Messages, p.Session.Cwd, "")
+	if err != nil {
+		return err
+	}
+	p.Session.PRLinks = parser.CombinePRLinks(p.Session.PRLinks, promptLinks, p.ToolPRLinks, toolLinks)
 	if err := writePGSession(ctx, tx, p.Session, "raw-projection:"+group, nil, pgSessionWriteOptions{Machine: "hosted", UsageOnly: s.options.Content.ArchiveContent.UsageOnly(), SkipAliases: true}); err != nil {
 		return err
 	}

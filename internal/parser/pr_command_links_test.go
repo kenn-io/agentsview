@@ -32,6 +32,8 @@ func TestGHPRCommandLinks(t *testing.T) {
 		{`export "$N=x"; gh pr view 42 -R example/repo`, "", ""},
 		{"gh pr view 42 -R example/repo | cat", "", "https://github.com/example/repo/pull/42"},
 		{"{ cd /other; }; gh pr view 42", "https://github.com/example/repo.git", ""},
+		{"(cd /other); gh pr view 42", "https://github.com/example/repo.git", "https://github.com/example/repo/pull/42"},
+		{"echo $(export GH_REPO=a/b); gh pr view 42", "https://github.com/example/repo.git", "https://github.com/example/repo/pull/42"},
 		{"{ gh pr view 42 -R example/repo; }", "", "https://github.com/example/repo/pull/42"},
 		{"cat | gh pr view 42 -R example/repo", "", "https://github.com/example/repo/pull/42"},
 		{"echo $(gh pr view 42 -R example/repo)", "", "https://github.com/example/repo/pull/42"},

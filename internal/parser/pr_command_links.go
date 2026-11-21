@@ -38,8 +38,23 @@ func shellCommands(command string) ([]shellCall, bool) {
 			contextUnknown, changedDir = true, true
 			return
 		}
-		syntax.Walk(file, func(node syntax.Node) bool {
+		var visit func(syntax.Node) bool
+		visit = func(node syntax.Node) bool {
 			switch n := node.(type) {
+			case *syntax.Subshell, *syntax.CmdSubst:
+				parentUnknown, parentDir := contextUnknown, changedDir
+				var stmts []*syntax.Stmt
+				switch child := n.(type) {
+				case *syntax.Subshell:
+					stmts = child.Stmts
+				case *syntax.CmdSubst:
+					stmts = child.Stmts
+				}
+				for _, stmt := range stmts {
+					syntax.Walk(stmt, visit)
+				}
+				contextUnknown, changedDir = parentUnknown, parentDir
+				return false
 			case *syntax.DeclClause:
 				contextUnknown = contextUnknown || declUnknown(n)
 			case *syntax.CallExpr:
@@ -99,7 +114,8 @@ func shellCommands(command string) ([]shellCall, bool) {
 				}
 			}
 			return true
-		})
+		}
+		syntax.Walk(file, visit)
 	}
 	walk(command)
 	return calls, changedDir
@@ -162,16 +178,19 @@ func shellLiteral(parts []syntax.WordPart) (string, bool) {
 
 // CommandPRLinks derives links and reports whether later calls may use a different checkout.
 func CommandPRLinks(command, remote string) ([]PRLink, bool) {
-	var links []PRLink
+	if len(command) > 256*1024 {
+		return nil, true
+	}
+	var lists [][]PRLink
 	calls, changed := shellCommands(command)
 	for _, call := range calls {
 		call = unwrapShellCall(call)
-		links = CombinePRLinks(links, ghPRCallLinks(call, remote))
+		lists = append(lists, ghPRCallLinks(call, remote))
 		prompt := launcherPrompt(call.Words, call.Literal)
 		found, _ := PromptPRLinksContext(context.Background(), prompt)
-		links = CombinePRLinks(links, found)
+		lists = append(lists, found)
 	}
-	return links, changed
+	return CombinePRLinks(lists...), changed
 }
 
 func unwrapShellCall(call shellCall) shellCall {

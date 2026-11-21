@@ -336,7 +336,7 @@ var (
 	codeModeDirRE  = regexp.MustCompile(`["']?(?:workdir|cwd)["']?\s*:`)
 )
 
-func callPRLinks(category, input, cwd, remote string) ([]PRLink, bool) {
+func callPRLinks(ctx context.Context, category, input, cwd, remote string) ([]PRLink, bool) {
 	if category == "Task" {
 		var payload struct {
 			Prompt  string         `json:"prompt"`
@@ -348,15 +348,18 @@ func callPRLinks(category, input, cwd, remote string) ([]PRLink, bool) {
 		}
 		var content string
 		_ = json.Unmarshal(payload.Content, &content)
-		links, _ := parser.PromptPRLinksContext(context.Background(), payload.Prompt+"\n"+payload.Message+"\n"+content)
+		links, _ := parser.PromptPRLinksContext(ctx, payload.Prompt+"\n"+payload.Message+"\n"+content)
 		return links, false
 	}
 	if category != "Bash" {
 		return nil, false
 	}
 	if !jsontext.Value(input).IsValid() && codeModeExecRE.MatchString(input) {
-		var links []PRLink
+		var lists [][]PRLink
 		for _, loc := range codeModeExecRE.FindAllStringIndex(input, -1) {
+			if ctx.Err() != nil {
+				break
+			}
 			end, depth, quote, escaped := loc[1], 1, byte(0), false
 			for end < len(input) && depth > 0 {
 				c := input[end]
@@ -402,18 +405,22 @@ func callPRLinks(category, input, cwd, remote string) ([]PRLink, bool) {
 				}
 			}
 			found, _ := parser.CommandPRLinks(command, callRemote)
-			links = parser.CombinePRLinks(links, found)
+			lists = append(lists, found)
 		}
-		return links, false
+		return parser.CombinePRLinks(lists...), false
 	}
 	var payload struct {
-		Workdir string `json:"workdir"`
-		Cwd     string `json:"cwd"`
+		Workdir          string `json:"workdir"`
+		Cwd              string `json:"cwd"`
+		WorkingDirectory string `json:"working_directory"`
 	}
 	_ = json.Unmarshal([]byte(input), &payload)
 	dir := payload.Workdir
 	if dir == "" {
 		dir = payload.Cwd
+	}
+	if dir == "" {
+		dir = payload.WorkingDirectory
 	}
 	if dir != "" {
 		if !filepath.IsAbs(dir) {
@@ -428,18 +435,30 @@ func callPRLinks(category, input, cwd, remote string) ([]PRLink, bool) {
 
 // ToolCallPRLinks derives links from a transcript's tool calls.
 func ToolCallPRLinks(messages []Message, cwd, remote string) []PRLink {
-	var links []PRLink
+	links, _ := ToolCallPRLinksContext(context.Background(), messages, cwd, remote)
+	return links
+}
+
+// ToolCallPRLinksContext stops extracting links when the caller cancels.
+func ToolCallPRLinksContext(ctx context.Context, messages []Message, cwd, remote string) ([]PRLink, error) {
+	var lists [][]PRLink
 	for _, message := range messages {
 		for _, call := range message.ToolCalls {
-			found, changed := callPRLinks(call.Category, call.InputJSON, cwd, remote)
-			links = parser.CombinePRLinks(links, found)
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			found, changed := callPRLinks(ctx, call.Category, call.InputJSON, cwd, remote)
+			lists = append(lists, found)
 			if changed && call.ToolName != "exec_command" && call.ToolName != "shell_command" && call.ToolName != "shell" {
 				remote = ""
 				cwd = ""
 			}
 		}
 	}
-	return links
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return parser.CombinePRLinks(lists...), nil
 }
 
 func storedToolCallPRLinksTx(tx transactionQueries, id, remote string) ([]PRLink, error) {

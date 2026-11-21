@@ -1,6 +1,8 @@
 package db_test
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -44,6 +46,28 @@ func TestClineCommandArrayPRLinks(t *testing.T) {
 func TestToolCallPRLinksWorkdir(t *testing.T) {
 	links := db.ToolCallPRLinks([]db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", InputJSON: `{"command":"gh pr view 42","workdir":"/work/other"}`}}}}, "/work/repo", "https://github.com/example/repo.git")
 	assert.Empty(t, links)
+}
+
+func TestToolCallPRLinksWorkingDirectory(t *testing.T) {
+	links := db.ToolCallPRLinks([]db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", InputJSON: `{"command":"gh pr view 42","working_directory":"/work/other"}`}}}}, "/work/repo", "https://github.com/example/repo.git")
+	assert.Empty(t, links)
+}
+
+func TestToolCallPRLinksContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := db.ToolCallPRLinksContext(ctx, []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", InputJSON: `{"cmd":"gh pr view 42 -R example/repo"}`}}}}, "", "")
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
+func TestToolCallPRLinksSkipsOversizedCommand(t *testing.T) {
+	messages := []db.Message{{ToolCalls: []db.ToolCall{
+		{Category: "Bash", InputJSON: `{"cmd":"gh pr view 41 -R example/repo; #` + strings.Repeat("x", 256*1024) + `"}`},
+		{Category: "Bash", InputJSON: `{"cmd":"gh pr view 42 -R example/repo"}`},
+	}}}
+	links := db.ToolCallPRLinks(messages, "", "")
+	require.Len(t, links, 1)
+	assert.Equal(t, 42, links[0].Number)
 }
 
 func TestToolCallPRLinksForgetCheckoutAfterDirectoryChange(t *testing.T) {

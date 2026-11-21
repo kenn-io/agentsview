@@ -238,7 +238,10 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			}
 		}
 		if decision.Action != ingest.HistoryPreserve {
-			prepared.ToolPRLinks = db.ToolCallPRLinks(c.Messages, c.Session.Cwd, "")
+			prepared.ToolPRLinks, err = db.ToolCallPRLinksContext(ctx, c.Messages, c.Session.Cwd, "")
+			if err != nil {
+				return err
+			}
 			if decision.Action == ingest.HistoryMerge {
 				if err := loadOld(ctx); err != nil {
 					return err

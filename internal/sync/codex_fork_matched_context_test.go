@@ -143,3 +143,36 @@ func TestCodexForkMatchedContextSurvivesResolvedRefreshes(t *testing.T) {
 		}
 	}
 }
+
+func TestCodexForkRefreshExcludesParentCommandLinks(t *testing.T) {
+	for _, stage := range []int64{1, 1 << 30} {
+		t.Run(fmt.Sprint(stage), func(t *testing.T) {
+			e, d, cp, pp, meta := forkReviewEngine(t, stage, parser.AgentCodex)
+			replay := testjsonl.JoinJSONL(
+				testjsonl.CodexTurnContextWithIDJSON("gpt-5", "parent-turn", forkReviewTime),
+				testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "parent-call", map[string]any{"cmd": "gh pr view 41 -R example/repo"}, forkReviewTime),
+			)
+			child := testjsonl.JoinJSONL(
+				testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", forkReviewTime),
+				testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "child-call", map[string]any{"cmd": "gh pr view 42 -R example/repo"}, forkReviewTime),
+			)
+			require.NoError(t, os.WriteFile(pp, []byte(testjsonl.JoinJSONL(testjsonl.CodexSessionMetaJSON(forkReviewParent, "/work/project", "user", forkReviewTime))+replay), 0o600))
+			require.NoError(t, os.WriteFile(cp, []byte(meta+replay+child), 0o600))
+			require.Zero(t, e.SyncAll(t.Context(), nil).Failed)
+			id := "codex:" + forkReviewChild
+			sess, err := d.GetSessionFull(t.Context(), id)
+			require.NoError(t, err)
+			require.Len(t, sess.PRLinks, 1)
+			assert.Equal(t, 42, sess.PRLinks[0].Number)
+			e.Close()
+			require.NoError(t, os.Remove(pp))
+			e = NewEngine(t.Context(), d, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {filepath.Dir(cp)}}, Machine: "local", DisableFilesystemProjectDiscovery: true, StagedCodexParseMinBytes: stage})
+			t.Cleanup(e.Close)
+			require.NoError(t, e.TrySyncSessionWithSubagentsContext(t.Context(), id))
+			sess, err = d.GetSessionFull(t.Context(), id)
+			require.NoError(t, err)
+			require.Len(t, sess.PRLinks, 1)
+			assert.Equal(t, 42, sess.PRLinks[0].Number)
+		})
+	}
+}
