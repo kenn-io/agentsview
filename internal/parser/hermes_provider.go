@@ -1482,7 +1482,11 @@ func hermesStateDBHasReadableSession(
 	if !readable.scanned || readable.malformed {
 		return false, nil
 	}
-	timestampRows, err := conn.QueryContext(ctx, hermesStateMessageTimestampsQuery, rawID)
+	cols, err := readHermesMessageColumns(ctx, conn)
+	if err != nil {
+		return false, fmt.Errorf("inspect hermes messages for %s: %w", rawID, err)
+	}
+	timestampRows, err := conn.QueryContext(ctx, hermesStateMessageTimestampsQueryString(cols), rawID)
 	if err != nil {
 		return false, fmt.Errorf("query hermes messages for %s: %w", rawID, err)
 	}
