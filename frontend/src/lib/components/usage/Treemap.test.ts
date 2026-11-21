@@ -12,7 +12,7 @@ describe("Treemap", () => {
     document.body.innerHTML = "";
   });
 
-  it("keeps the localized tile hover title", async () => {
+  it("names a plain tile by its label, value, and share", async () => {
     setLocale("en");
     const component = mount(Treemap, {
       target: document.body,
@@ -30,7 +30,11 @@ describe("Treemap", () => {
     });
     await tick();
 
-    expect(document.querySelector(".tile title")?.textContent).toBe("Click to focus Alpha");
+    const value = document.querySelector(".tile-value")?.textContent?.trim();
+    expect(value).toBeTruthy();
+    // A tile that cannot be selected does not tell people to click it.
+    expect(document.querySelector(".tile title")?.textContent).toBe(`Alpha, ${value}, Meta`);
+    expect(document.querySelector(".tile desc")).toBeNull();
     const tile = document.querySelector<SVGGElement>(".tile");
     expect(tile?.hasAttribute("role")).toBe(false);
     expect(tile?.hasAttribute("tabindex")).toBe(false);
@@ -137,6 +141,47 @@ describe("Treemap", () => {
     ui.highContrast = !ui.highContrast;
     if (ui.theme !== startTheme) ui.toggleTheme();
     root.removeProperty("--test-series-swap");
+  });
+
+  it("names a selectable tile from its visible label and describes the click", async () => {
+    const component = mount(Treemap, {
+      target: document.body,
+      props: {
+        onSelect: vi.fn(),
+        items: [
+          {
+            id: "delta",
+            label: "project-delta",
+            value: 42,
+            style: { color: "#1f77b4", fill: "solid" as const },
+            meta: "60.0%",
+            hint: "Click to focus project-delta; double-click to open it",
+          },
+          {
+            id: "echo",
+            label: "project-echo",
+            value: 28,
+            style: { color: "#ff7f0e", fill: "solid" as const },
+          },
+        ],
+      },
+    });
+    await tick();
+
+    const [delta, echo] = [...document.querySelectorAll<SVGGElement>(".tile")];
+    const value = delta!.querySelector(".tile-value")?.textContent?.trim();
+    expect(delta!.getAttribute("role")).toBe("button");
+    // An aria-label would replace the tile text and stop matching it once
+    // the label truncates; the <title> name starts with the full label.
+    expect(delta!.hasAttribute("aria-label")).toBe(false);
+    expect(delta!.querySelector("title")?.textContent).toBe(`project-delta, ${value}, 60.0%`);
+    expect(delta!.querySelector("desc")?.textContent).toBe(
+      "Click to focus project-delta; double-click to open it",
+    );
+    // Without a caller hint the description falls back to the click action.
+    expect(echo!.querySelector("desc")?.textContent).toBe("Click to focus project-echo");
+
+    unmount(component);
   });
 
   it("selects with Enter and opens on double click", async () => {

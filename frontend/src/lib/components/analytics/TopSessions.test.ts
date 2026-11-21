@@ -64,10 +64,11 @@ describe("TopSessions", () => {
     return mount(TopSessions, { target: document.body });
   }
 
+  // Rows are native buttons, so keyboard activation sends the same click.
   function clickRow() {
-    const row = document.querySelector(".session-row");
+    const row = document.querySelector<HTMLButtonElement>("button.session-row");
     expect(row).toBeTruthy();
-    row!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    row!.click();
   }
 
   it("sets filter and navigates when analytics includeOneShot is enabled", async () => {

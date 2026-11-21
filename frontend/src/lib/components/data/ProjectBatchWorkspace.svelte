@@ -29,7 +29,7 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions (Escape is a scoped shortcut; the panel close button is the accessible control) -->
 <section class="workspace" aria-label={m.data_batch_workspace_label()} {onkeydown}>
   <header class="workspace-header">
     <div class="workspace-title">

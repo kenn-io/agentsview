@@ -68,16 +68,18 @@
     };
   }
 
+  // The hover tooltip and the share bar's accessible name share this text.
+  function skillShareLabel(skill: SkillUsage): string {
+    return m.analytics_top_skills_tooltip({
+      skill: skill.skill_name,
+      count: skill.call_count,
+      countLabel: formatCount(skill.call_count),
+      pct: skill.pct,
+    });
+  }
+
   function handleSkillHover(e: MouseEvent, skill: SkillUsage) {
-    showTooltip(
-      e,
-      m.analytics_top_skills_tooltip({
-        skill: skill.skill_name,
-        count: skill.call_count,
-        countLabel: formatCount(skill.call_count),
-        pct: skill.pct,
-      }),
-    );
+    showTooltip(e, skillShareLabel(skill));
   }
 
   function handleLeave() {
@@ -135,9 +137,10 @@
               </button>
             </th>
             <td class="share-cell">
-              <!-- svelte-ignore a11y_no_static_element_interactions -->
               <span
                 class="bar-track"
+                role="img"
+                aria-label={skillShareLabel(skill)}
                 onmouseenter={(e) => handleSkillHover(e, skill)}
                 onmouseleave={handleLeave}
               >

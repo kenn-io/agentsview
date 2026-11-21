@@ -883,33 +883,35 @@
   }
 
   /* QualityPatternCard's severity chip takes its color from the card's
-     severity class. */
-  .pattern-grid :global(.severity-critical .severity) {
-    color: var(--accent-red);
+     severity class. The pill's text mixes its tone toward the primary ink,
+     as kit-ui's tone chips do, so the 11px label clears 4.5:1 on its tinted
+     fill in both themes; the dot keeps the same ink. */
+  .pattern-grid :global(.severity-critical .severity),
+  .pattern-grid :global(.severity-warning .severity),
+  .pattern-grid :global(.severity-watch .severity),
+  .pattern-grid :global(.severity-clear .severity) {
+    color: color-mix(in srgb, var(--severity-tone) 65%, var(--text-primary));
     background: color-mix(
       in srgb,
-      var(--accent-red) 9%,
+      var(--severity-tone) var(--severity-fill),
       transparent
     );
+  }
+
+  .pattern-grid :global(.severity-critical .severity) {
+    --severity-tone: var(--accent-red);
+    --severity-fill: 9%;
   }
 
   .pattern-grid :global(.severity-warning .severity),
   .pattern-grid :global(.severity-watch .severity) {
-    color: var(--accent-amber);
-    background: color-mix(
-      in srgb,
-      var(--accent-amber) 11%,
-      transparent
-    );
+    --severity-tone: var(--accent-amber);
+    --severity-fill: 11%;
   }
 
   .pattern-grid :global(.severity-clear .severity) {
-    color: var(--accent-green);
-    background: color-mix(
-      in srgb,
-      var(--accent-green) 10%,
-      transparent
-    );
+    --severity-tone: var(--accent-green);
+    --severity-fill: 10%;
   }
 
   .pattern-grid :global(.severity-unavailable .severity) {

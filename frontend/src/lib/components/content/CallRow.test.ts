@@ -71,9 +71,35 @@ describe("CallRow measured timing", () => {
     document.querySelector<HTMLButtonElement>("button.chev")!.click();
     expect(onChevronClick).toHaveBeenCalledOnce();
     expect(onClick).not.toHaveBeenCalled();
-    document.querySelector<HTMLElement>(".call")!.click();
+    document.querySelector<HTMLElement>(".call .cn")!.click();
     expect(onClick).toHaveBeenCalledOnce();
     expect(document.querySelector(".cd")?.textContent?.trim()).toBe("");
+    // The chevron is a sibling of the clickable body, not nested in it.
+    const body = document.querySelector<HTMLButtonElement>("button.call-body")!;
+    expect(body.querySelector("button")).toBeNull();
+    unmount(component);
+  });
+
+  it("renders a plain row with no control when it has no click target", async () => {
+    const component = mount(CallRow, {
+      target: document.body,
+      props: {
+        call: {
+          tool_use_id: "call-1",
+          tool_name: "Bash",
+          category: "Bash",
+          duration_ms: 1000,
+          is_parallel: false,
+          input_preview: "pwd",
+        },
+        barWidthPct: 10,
+      },
+    });
+    await tick();
+
+    expect(document.querySelector(".call button")).toBeNull();
+    expect(document.querySelector(".call [tabindex]")).toBeNull();
+    expect(document.querySelector(".call .cn")?.textContent).toBe("Bash");
     unmount(component);
   });
 
@@ -99,7 +125,11 @@ describe("CallRow measured timing", () => {
     expect(row.querySelector(".cbar-wrap")).toBeNull();
     expect(row.querySelector(".cd")).toBeNull();
     expect(row.textContent).not.toContain("unknown");
-    expect([...row.children].map((el) => el.className.split(" ")[0])).toEqual(["chev", "cn", "ca"]);
+    expect(
+      [...row.querySelectorAll(".chev, .cn, .ca, .cbar-wrap, .cd")].map(
+        (el) => el.className.split(" ")[0],
+      ),
+    ).toEqual(["chev", "cn", "ca"]);
     unmount(component);
   });
 });

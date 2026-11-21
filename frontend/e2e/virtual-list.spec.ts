@@ -108,7 +108,7 @@ test.describe("Virtual list behavior", () => {
     await scrollListTo(sp.sessionListScroll, "middle");
 
     await expect(
-      sp.page.getByRole("button", {
+      sp.page.getByRole("link", {
         name: new RegExp(`Hello from deep-session ${MIDDLE_INDEX}`, "i"),
       }),
     ).toBeVisible({ timeout: 10_000 });
@@ -123,7 +123,7 @@ test.describe("Virtual list behavior", () => {
     await scrollListTo(sp.sessionListScroll, "bottom");
 
     await expect(
-      sp.page.getByRole("button", {
+      sp.page.getByRole("link", {
         name: new RegExp(`Hello from deep-session ${LAST_INDEX}`, "i"),
       }),
     ).toBeVisible({ timeout: 10_000 });

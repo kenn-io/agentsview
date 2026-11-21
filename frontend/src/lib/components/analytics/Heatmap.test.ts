@@ -69,4 +69,50 @@ describe("Heatmap", () => {
 
     unmount(component);
   });
+
+  it("lists active days in a table and keeps day clicks as a pointer shortcut", async () => {
+    const select = vi.spyOn(analytics, "selectDate").mockImplementation(() => {});
+    analytics.heatmap = {
+      metric: "messages",
+      entries_from: "2026-03-01",
+      levels: { l1: 1, l2: 2, l3: 3, l4: 4 },
+      entries: [
+        { date: "2026-03-01", value: 0, level: 0 },
+        { date: "2026-03-02", value: 1200, level: 4 },
+        { date: "2026-03-03", value: 3, level: 1 },
+      ],
+    };
+    const component = mount(Heatmap, { target: document.body });
+    await tick();
+
+    const table = document.querySelector("table")!;
+    expect(table.querySelector("caption")?.textContent).toBe("Activity");
+    expect(Array.from(table.querySelectorAll("thead th"), (cell) => cell.textContent)).toEqual([
+      "Date",
+      "Messages",
+    ]);
+    // Days without activity are left out; counts read as the hover tooltip does.
+    expect(
+      Array.from(table.querySelectorAll("tbody tr"), (row) =>
+        Array.from(row.children, (cell) => cell.textContent),
+      ),
+    ).toEqual([
+      ["Mar 2, 2026", "1.2K"],
+      ["Mar 3, 2026", "3"],
+    ]);
+
+    // The squares are hidden from assistive technology, so none poses as a
+    // control it cannot reach.
+    const cells = [...document.querySelectorAll<SVGRectElement>(".heatmap-cell")];
+    expect(cells).toHaveLength(3);
+    expect(cells.some((cell) => cell.hasAttribute("role") || cell.hasAttribute("tabindex"))).toBe(
+      false,
+    );
+    expect(cells[0]!.closest('[aria-hidden="true"]')).not.toBeNull();
+    cells[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    cells[1]!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(select.mock.calls).toEqual([["2026-03-02"]]);
+
+    unmount(component);
+  });
 });

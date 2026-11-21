@@ -5,6 +5,8 @@
   import { router } from "../../stores/router.svelte.js";
   import { m } from "../../i18n/index.js";
 
+  const uid = $props.id();
+
   interface AgentRow {
     name: string;
     sessions: number;
@@ -98,7 +100,7 @@
 </script>
 
 <div class="agent-comparison">
-  <h3 class="chart-title">{m.analytics_agent_comparison_title()}</h3>
+  <h3 class="chart-title" id="{uid}-title">{m.analytics_agent_comparison_title()}</h3>
 
   <PanelStatus
     hasData={ready}
@@ -111,44 +113,48 @@
       {m.analytics_agent_comparison_empty()}
     </div>
   {:else if ready}
-    <div class="comparison-table">
-      <div class="table-header">
-        <span class="col-agent">{m.analytics_col_agent()}</span>
-        <span class="col-num">{m.analytics_col_sessions()}</span>
-        <span class="col-num">{m.analytics_col_messages()}</span>
-        <span class="col-num">{m.analytics_col_cycle_p50()}</span>
-        <span class="col-num">{m.analytics_col_msgs_min()}</span>
-        <span class="col-num">{m.analytics_col_tools_min()}</span>
-        <span class="col-num">{m.analytics_col_tool_calls()}</span>
-        <span class="col-cats">{m.analytics_col_top_categories()}</span>
+    <div class="comparison-table" role="table" aria-labelledby="{uid}-title">
+      <div class="table-header" role="row">
+        <span class="col-agent" role="columnheader">{m.analytics_col_agent()}</span>
+        <span class="col-num" role="columnheader">{m.analytics_col_sessions()}</span>
+        <span class="col-num" role="columnheader">{m.analytics_col_messages()}</span>
+        <span class="col-num" role="columnheader">{m.analytics_col_cycle_p50()}</span>
+        <span class="col-num" role="columnheader">{m.analytics_col_msgs_min()}</span>
+        <span class="col-num" role="columnheader">{m.analytics_col_tools_min()}</span>
+        <span class="col-num" role="columnheader">{m.analytics_col_tool_calls()}</span>
+        <span class="col-cats" role="columnheader">{m.analytics_col_top_categories()}</span>
       </div>
       {#each agents as agent}
-        <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div
-          class="table-row"
-          onclick={() => router.navigateToSessions({ agent: agent.name })}
-        >
-          <span class="col-agent">{agent.name}</span>
-          <span class="col-num">
+        <!-- The agent button's hit area stretches over the whole row, so a
+             click anywhere opens that agent's sessions while the cells keep
+             their column headers. -->
+        <div class="table-row" role="row">
+          <span class="col-agent" role="cell">
+            <button
+              type="button"
+              class="row-action"
+              onclick={() => router.navigateToSessions({ agent: agent.name })}
+            >{agent.name}</button>
+          </span>
+          <span class="col-num" role="cell">
             {formatCount(agent.sessions)}
           </span>
-          <span class="col-num">
+          <span class="col-num" role="cell">
             {formatCount(agent.messages)}
           </span>
-          <span class="col-num">
+          <span class="col-num" role="cell">
             {formatDuration(agent.turnCycleP50)}
           </span>
-          <span class="col-num">
+          <span class="col-num" role="cell">
             {formatRate(agent.msgsPerMin)}
           </span>
-          <span class="col-num">
+          <span class="col-num" role="cell">
             {formatRate(agent.toolsPerMin)}
           </span>
-          <span class="col-num">
+          <span class="col-num" role="cell">
             {formatCount(agent.totalToolCalls)}
           </span>
-          <span class="col-cats">
+          <span class="col-cats" role="cell">
             {agent.topCategories.join(", ") || "-"}
           </span>
         </div>
@@ -192,9 +198,31 @@
   }
 
   .table-row {
+    position: relative;
     font-size: 11px;
     color: var(--text-secondary);
     cursor: pointer;
+  }
+
+  .row-action {
+    padding: 0;
+    font-weight: inherit;
+    text-align: left;
+  }
+
+  .row-action::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+  }
+
+  .row-action:focus-visible {
+    outline: none;
+  }
+
+  .row-action:focus-visible::after {
+    outline: var(--focus-ring);
+    outline-offset: -1px;
   }
 
   .table-row:hover {
