@@ -12,6 +12,19 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 )
 
+func TestCursorAccountHoursIncludesClearedAttribution(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	start := time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC)
+	event := CursorUsageEvent{OccurredAt: "2026-07-28T10:03:00Z", Model: "a", DedupKey: "a"}
+	require.NoError(t, d.InsertCursorUsageEvents(ctx, []CursorUsageEvent{event}))
+	require.NoError(t, d.RecordCursorAccountPoll(ctx, map[string][]string{"12": {"a"}}, start.Add(24*time.Hour), nil))
+	require.NoError(t, d.RecordCursorAccountPoll(ctx, map[string][]string{"": {"a"}}, start.Add(25*time.Hour), nil))
+	hours, err := d.CursorAccountHours(ctx, start, start.Add(time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, []CursorAccountHour{{UserID: "12", Start: start}}, hours)
+}
+
 func TestCursorAccountEmptyPollIgnoresOtherDates(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
