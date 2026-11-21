@@ -95,7 +95,7 @@ client will see these tools:
 | `list_recall`                 | List Recall entries, optionally changed or created since a time, when the backend supports Recall queries |
 | `query_recall`                | Search extracted Recall entries when the backend supports Recall queries                                  |
 | `get_session_file_references` | Find retained image bytes in Docbank, including prior versions and trash                                  |
-| `get_tool_calls`              | List the tool calls one session made, with inputs and result sizes                                        |
+| `get_tool_calls`              | List tool calls, inputs, result sizes, and optional result text                                            |
 | `get_recent_edits`            | Find which sessions edited a file, newest edit first                                                      |
 | `get_child_sessions`          | List the sub-agent and fork sessions started from one session                                             |
 | `compare_usage`               | Compare token usage and cost between two models or two projects                                           |
@@ -361,6 +361,7 @@ archive instance, session, revision, message ordinal, and next content offset,
 so it cannot silently continue against replaced transcript content. A cursor
 stops working when the archive server restarts. If a continuation fails with
 `source_changed` or `invalid body_cursor`, start a fresh `get_messages` listing.
+Cursors from earlier versions require a fresh listing.
 Role and system filtering still happens after each scanned page, so an empty or
 short page can have a `next_from` and should be continued.
 
@@ -370,7 +371,13 @@ short page can have a `next_from` and should be continued.
 (maximum 200). Set `category` to `Edit`, `Write`, `Bash`, or another tool
 category to narrow the list. Each input has secret-shaped values masked and is
 cut to `max_input_chars` (default 500, maximum 10000). Pass a call's `ordinal`
-to `get_messages` to read the surrounding conversation.
+to `get_messages` to read the surrounding conversation. Set `include_results`
+to return masked result text, capped by `max_result_chars` (default 1000,
+maximum 10000). Retained result events are joined in order with a blank line;
+named agents appear before their outputs. `result_length` is the full joined
+text size in bytes, or the stored length when text is unavailable. For a
+truncated result, pass its `result_cursor` back to `get_tool_calls` with the
+same session ID to read the next chunk.
 
 `get_recent_edits` matches `path` as a case-insensitive substring of edited file
 paths. Files come back newest edit first, 10 per page (maximum 50), each with up
