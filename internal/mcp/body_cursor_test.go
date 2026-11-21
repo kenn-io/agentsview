@@ -118,7 +118,7 @@ func TestGetMessages_BodyCursorContinuesUnderIssuingRoles(t *testing.T) {
 	}, dbtest.WithMessageCounts(2, 2))
 
 	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{
-		SessionID: "toolroles", Roles: []string{"tool"},
+		SessionID: "toolroles", Roles: strings.Split(strings.Repeat("tool,", 1999)+"tool", ","),
 		Limit: 2, MaxCharsPerMessage: 4,
 	})
 	require.NoError(t, err)
@@ -147,4 +147,13 @@ func TestGetMessages_BodyCursorContinuesUnderIssuingRoles(t *testing.T) {
 		parts = append(parts, out.Messages[0].Content)
 	}
 	assert.Equal(t, "remainder text"[4:], strings.Join(parts, ""))
+}
+
+func TestGetMessages_BudgetOversizedMetadata(t *testing.T) {
+	ts, d := newTestToolset(t)
+	message := dbtest.UserMsg("large-model", 0, "message")
+	message.Model = strings.Repeat("x", 12000)
+	dbtest.SeedSessionWithMessages(t, d, "large-model", "proj", []db.Message{message}, dbtest.WithMessageCounts(1, 1))
+	_, _, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "large-model"})
+	require.ErrorContains(t, err, "message metadata exceeds response budget")
 }

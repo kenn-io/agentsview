@@ -120,13 +120,13 @@ func (t *toolset) resolveSession(
 type searchSessionsIn struct {
 	DateFrom      string `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
 	DateTo        string `json:"date_to,omitempty" jsonschema:"Only sessions on or before this date (YYYY-MM-DD)."`
-	Query         string `json:"query,omitempty" jsonschema:"Search sessions. Required unless session_id is set. All terms must appear; quote the whole query for an exact phrase, e.g. \"build failed\"."`
+	Query         string `json:"query,omitempty" jsonschema:"Search terms across all agent sessions. Required unless session_id is set. Every term must appear (AND), not an exact phrase; wrap the whole query in double quotes for an exact phrase, e.g. \"build failed\". Punctuation in a term (hyphens, colons) is handled safely."`
 	SessionID     string `json:"session_id,omitempty" jsonschema:"Look up one session by its raw UUID or full stored session ID. Returns one metadata row, includes active sessions, and takes precedence over the other search arguments. Missing IDs and ambiguous raw UUIDs return errors."`
 	Project       string `json:"project,omitempty" jsonschema:"Restrict to one project (repo/directory name)."`
 	Sort          string `json:"sort,omitempty" jsonschema:"relevance (default) or recency."`
 	Limit         int    `json:"limit,omitempty" jsonschema:"Max results, default 10, max 30."`
 	Cursor        int    `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor."`
-	IncludeActive bool   `json:"include_active,omitempty" jsonschema:"Include sessions active in the last 10 minutes, including this conversation. Default false."`
+	IncludeActive bool   `json:"include_active,omitempty" jsonschema:"Include sessions active in the last 10 minutes. Default false: the conversation you are in right now is also recorded, so without this exclusion you would find yourself."`
 }
 
 type sessionHit struct {
@@ -493,7 +493,7 @@ type getMessagesIn struct {
 	SessionID string `json:"session_id" jsonschema:"The session to read."`
 	From      *int   `json:"from,omitempty" jsonschema:"Ordinal to start from (e.g. match_ordinal from search_sessions). Ordinal 0 is a valid anchor (the first message). Mutually exclusive with around."`
 	Direction string `json:"direction,omitempty" jsonschema:"asc (default, oldest first) or desc (newest first). Mutually exclusive with around."`
-	Limit     int    `json:"limit,omitempty" jsonschema:"Max messages scanned, default 20, max 100. Filtering or the byte budget can return fewer. Around uses before/after instead."`
+	Limit     int    `json:"limit,omitempty" jsonschema:"Max messages scanned, default 20, max 100. System/tool messages are filtered after this limit, so a page can return fewer; use next_from to continue. Not used with around; before/after control the window size on that path."`
 	// Around switches to a symmetric window centered on an ordinal instead
 	// of linear pagination; it is mutually exclusive with From/Direction.
 	Around             *int     `json:"around,omitempty" jsonschema:"Center a symmetric window on this ordinal (e.g. match_ordinal from search_content or search_sessions), instead of linear pagination. Mutually exclusive with from and direction."`
@@ -521,11 +521,11 @@ type getMessagesOut struct {
 	Messages     []messageOut `json:"messages"`
 	Omitted      int          `json:"omitted,omitempty" jsonschema:"Messages held back."`
 	MessageCount int          `json:"message_count,omitempty" jsonschema:"Session message count when cut."`
-	Filtered     int          `json:"filtered,omitempty" jsonschema:"Scanned messages excluded by role/system filter. Across all pages, filtered plus returned messages equals message_count."`
+	Filtered     int          `json:"filtered,omitempty" jsonschema:"How many of this page's scanned messages were excluded by the role/system filter (omitted when zero). Summed across a full pagination sweep, filtered plus the returned messages adds up to the session's message_count."`
 	// NextFrom is set off the last scanned ordinal (not the last visible
 	// one), so paging stays reliable even though filtering can make a page
 	// return fewer than the limit.
-	NextFrom           *int   `json:"next_from,omitempty" jsonschema:"Next page's from anchor. Page until absent; filtering or the byte budget can make pages short."`
+	NextFrom           *int   `json:"next_from,omitempty" jsonschema:"Anchor for the next page's from parameter when more messages may remain; absent means the end. Filtering can make a page return fewer than limit messages, so keep paging until next_from is absent, not until a page comes back short."`
 	TranscriptRevision string `json:"transcript_revision"`
 }
 
@@ -745,14 +745,22 @@ func (t *toolset) fitMessagePage(ctx context.Context, out *getMessagesOut, scann
 	if n == 0 {
 		cut(1)
 		out.Messages = items[:0]
-		fitOneMessage(out, &items[0], messageBodyCursor{EvidenceSource: source, SessionID: in.SessionID, Revision: out.TranscriptRevision, Ordinal: items[0].Ordinal, NextFrom: out.NextFrom, Roles: in.Roles})
+		roles := in.Roles
+		if len(roles) > 0 {
+			roles = []string{items[0].Role}
+		}
+		progress := fitOneMessage(out, &items[0], messageBodyCursor{EvidenceSource: source, SessionID: in.SessionID, Revision: out.TranscriptRevision, Ordinal: items[0].Ordinal, NextFrom: out.NextFrom, Roles: roles})
 		out.Messages = items[:1]
 		attachBodyCursors(out, source, in.SessionID, in.Roles)
+		if !progress || !fitsResponse(out) {
+			return errors.New("message metadata exceeds response budget")
+		}
 	}
 	return nil
 }
 
-func fitOneMessage(out *getMessagesOut, item *messageOut, cursor messageBodyCursor) {
+func fitOneMessage(out *getMessagesOut, item *messageOut, cursor messageBodyCursor) bool {
+	hadContent := item.Content != ""
 	item.Truncated = true
 	if item.FullLength == 0 {
 		item.FullLength = utf8.RuneCountInString(item.Content)
@@ -766,6 +774,7 @@ func fitOneMessage(out *getMessagesOut, item *messageOut, cursor messageBodyCurs
 	if cursor.EvidenceSource == "" || cursor.Revision == "" {
 		item.BodyCursor = ""
 	}
+	return !hadContent || item.Content != ""
 }
 
 func attachBodyCursors(
@@ -787,11 +796,15 @@ func attachBodyCursors(
 			continue
 		}
 		hasBodyCursor = true
+		cursorRoles := roles
+		if len(roles) > 0 {
+			cursorRoles = []string{out.Messages[i].Role}
+		}
 		out.Messages[i].BodyCursor = encodeMessageBodyCursor(messageBodyCursor{
 			Version: 2, EvidenceSource: evidenceSource, SessionID: sessionID,
 			Revision: out.TranscriptRevision, Ordinal: out.Messages[i].Ordinal,
 			Offset: utf8.RuneCountInString(out.Messages[i].Content), NextFrom: nextFrom,
-			Roles: roles,
+			Roles: cursorRoles,
 		})
 	}
 	if hasBodyCursor {
@@ -859,8 +872,11 @@ func (t *toolset) getMessageBodyContinuation(
 		cursor.Offset = end - utf8.RuneCountInString(mo.Content)
 		item := out.Messages[0]
 		out.Messages = []messageOut{}
-		fitOneMessage(&out, &item, cursor)
+		progress := fitOneMessage(&out, &item, cursor)
 		out.Messages = []messageOut{item}
+		if !progress || !fitsResponse(out) {
+			return nil, getMessagesOut{}, errors.New("message metadata exceeds response budget")
+		}
 	}
 	return nil, out, nil
 }
@@ -920,7 +936,6 @@ type contentMatch struct {
 	Ordinal         int      `json:"ordinal"`
 	Timestamp       string   `json:"timestamp"`
 	Snippet         string   `json:"snippet"`
-	Truncated       bool     `json:"truncated,omitempty" jsonschema:"Read the full message and context with get_messages."`
 	MatchedWords    int      `json:"matched_words" jsonschema:"Number of retained query words the match holds in ranked word search; unquoted stop words are dropped. Zero for other searches."`
 	Score           *float64 `json:"score,omitempty" jsonschema:"Relevance score for semantic/hybrid modes; omitted for substring/regex/fts."`
 	OrdinalRange    [2]int   `json:"ordinal_range" jsonschema:"[start, end] ordinals of the conversation unit containing this match; equal to the match ordinal for single-message units."`
@@ -1177,23 +1192,11 @@ func (t *toolset) searchContent(
 			}
 			return fitsResponse(out)
 		})
-		if n == 0 && !fitFirstMatch(&out, items) {
+		if n == 0 {
 			return nil, searchContentOut{}, errors.New("search metadata exceeds response budget")
 		}
 	}
 	return nil, out, nil
-}
-
-// fitFirstMatch keeps only the first match, truncating its snippet and dropping
-// its context, and reports whether the page then fits the budget.
-func fitFirstMatch(out *searchContentOut, items []contentMatch) bool {
-	m := &items[0]
-	m.Truncated = true
-	m.ContextBefore, m.ContextAfter = nil, nil
-	out.Omitted = len(items) - 1
-	m.Snippet = fitText(m.Snippet, responseBudgetBytes-responseSize(out), func(text string) any { match := *m; match.Snippet = text; return match })
-	out.Matches = items[:1]
-	return fitsResponse(out)
 }
 
 func (t *toolset) searchContentMatches(ctx context.Context, req service.ContentSearchRequest, listing bool) (*service.ContentSearchResult, error) {

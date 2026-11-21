@@ -127,6 +127,9 @@ func (t *toolset) toolCalls(
 			out.Omitted = len(items) - 1
 			call.Input = fitText(call.Input, responseBudgetBytes-responseSize(out), func(text string) any { c := *call; c.Input = text; return c })
 			out.ToolCalls = items[:1]
+			if !fitsResponse(out) {
+				return nil, toolCallsOut{}, errors.New("tool call metadata exceeds response budget")
+			}
 		}
 	}
 	return nil, out, nil

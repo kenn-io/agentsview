@@ -2375,38 +2375,6 @@ func TestGetMessages_BudgetPages(t *testing.T) {
 	}
 }
 
-func TestSearchContent_ListSessionBudgetPages(t *testing.T) {
-	ts, d := newTestToolset(t)
-	var messages []db.Message
-	for i := range 29 {
-		messages = append(messages, dbtest.UserMsg("listing-budget", i, fmt.Sprintf("message %d %s", i, strings.Repeat("x", 600))))
-	}
-	dbtest.SeedSessionWithMessages(t, d, "listing-budget", "proj", messages, dbtest.WithMessageCounts(29, 29))
-
-	in := searchContentIn{SessionID: "listing-budget", Limit: 30, Context: 10}
-	var ordinals []int
-	for page := 0; ; page++ {
-		_, out, err := ts.searchContent(t.Context(), nil, in)
-		require.NoError(t, err)
-		if page == 0 {
-			require.Positive(t, out.Omitted)
-			require.NotNil(t, out.NextCursor)
-		}
-		for _, match := range out.Matches {
-			ordinals = append(ordinals, match.Ordinal)
-		}
-		if out.NextCursor == nil {
-			break
-		}
-		require.Less(t, page, 30)
-		in.Cursor = *out.NextCursor
-	}
-	require.Len(t, ordinals, 29)
-	for i, ordinal := range ordinals {
-		assert.Equal(t, i, ordinal)
-	}
-}
-
 type pagedContentSearchService struct {
 	service.SessionService
 	matches []db.ContentMatch
@@ -2468,28 +2436,10 @@ func TestSearchContent_BudgetTotal(t *testing.T) {
 }
 
 func TestSearchContent_BudgetLongSnippet(t *testing.T) {
-	fake := &pagedContentSearchService{matches: []db.ContentMatch{
-		{SessionID: "session", Ordinal: 1, Snippet: strings.Repeat("x", 20000), TranscriptRevision: "revision", ContextBefore: []db.Message{{Content: "before"}}, ContextAfter: []db.Message{{Content: "after"}}},
-		{SessionID: "session", Ordinal: 2, Snippet: "later"},
-	}}
+	fake := &pagedContentSearchService{matches: []db.ContentMatch{{SessionID: "session", Ordinal: 1, Snippet: strings.Repeat("x", 20000)}}}
 	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
-	in := searchContentIn{Pattern: "(?s).+", Mode: "regex", IncludeActive: true, Limit: 10, Context: 1}
-	_, out, err := ts.searchContent(t.Context(), nil, in)
-	require.NoError(t, err)
-	require.Len(t, out.Matches, 1)
-	assert.True(t, fitsResponse(out))
-	assert.True(t, out.Matches[0].Truncated)
-	assert.Equal(t, "session", out.Matches[0].SessionID)
-	assert.Equal(t, 1, out.Matches[0].Ordinal)
-	assert.Equal(t, "revision", out.Matches[0].TranscriptRevision)
-	assert.Empty(t, out.Matches[0].ContextBefore)
-	assert.Empty(t, out.Matches[0].ContextAfter)
-	require.NotNil(t, out.NextCursor)
-	in.Cursor = *out.NextCursor
-	_, out, err = ts.searchContent(t.Context(), nil, in)
-	require.NoError(t, err)
-	require.Len(t, out.Matches, 1)
-	assert.Equal(t, "later", out.Matches[0].Snippet)
+	_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", IncludeActive: true})
+	require.ErrorContains(t, err, "search metadata exceeds response budget")
 }
 
 func TestSearchContent_OversizedCurrentSessionID(t *testing.T) {

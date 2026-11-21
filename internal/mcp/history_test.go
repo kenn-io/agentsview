@@ -359,3 +359,11 @@ func TestGetToolCalls_BudgetOversizedInput(t *testing.T) {
 	require.Len(t, next.ToolCalls, 1)
 	assert.Equal(t, `{"command":"next"}`, next.ToolCalls[0].Input)
 }
+
+func TestGetToolCalls_BudgetOversizedMetadata(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "large-name", "proj")
+	dbtest.SeedMessages(t, d, toolCallMsg("large-name", 0, db.ToolCall{ToolName: strings.Repeat("x", 12000), InputJSON: `{}`}))
+	_, _, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "large-name"})
+	require.ErrorContains(t, err, "tool call metadata exceeds response budget")
+}
