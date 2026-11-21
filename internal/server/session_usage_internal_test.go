@@ -123,7 +123,7 @@ func TestSessionUsageRawResolverErrors(t *testing.T) {
 	}
 }
 
-func TestSessionUsageRawAmbiguousHostedAlias(t *testing.T) {
+func TestSessionUsageRawAmbiguousHostedAliasUsesLiveServiceMatches(t *testing.T) {
 	store := &rawUsageStore{t: t, lookupErr: &db.SessionIdentityError{State: "ambiguous", Variants: []string{"stale-a~native", "stale-b~native"}}, matches: []string{"a~native", "b~native"}}
 	srv := &Server{db: store, sessions: service.NewReadOnlyBackend(store)}
 	_, err := srv.humaSessionUsage(context.WithValue(t.Context(), rawUsageContextKey{}, "request"), &sessionUsageInput{ID: "native"})
