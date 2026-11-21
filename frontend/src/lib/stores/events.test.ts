@@ -80,13 +80,29 @@ describe("events store", () => {
 
   it("reopens a stream after a transient failure", async () => {
     vi.useFakeTimers();
+    const active = new Set<(event: DataChangedEvent) => void>();
+    api.watchEvents.mockImplementation((onEvent) => {
+      const stream = new FakeSource();
+      active.add(onEvent);
+      stream.close.mockImplementation(() => {
+        stream.readyState = 2;
+        active.delete(onEvent);
+      });
+      return stream;
+    });
     const { events, EVENTS_STORE_HEAL_INTERVAL_MS } = await import("./events.svelte.js");
     events.setAvailable(true);
-    const unsub = events.subscribe(vi.fn());
-    source.readyState = 2;
+    const listener = vi.fn();
+    const unsub = events.subscribe(listener);
+    const first = api.watchEvents.mock.results[0]!.value as FakeSource;
+    first.readyState = 2;
     await vi.advanceTimersByTimeAsync(EVENTS_STORE_HEAL_INTERVAL_MS);
     expect(api.watchEvents).toHaveBeenCalledTimes(2);
+    expect(first.close).toHaveBeenCalledOnce();
+    for (const send of active) send({ scope: "messages" });
+    expect(listener).toHaveBeenCalledExactlyOnceWith({ scope: "messages" });
     unsub();
+    expect(active.size).toBe(0);
     vi.useRealTimers();
   });
 

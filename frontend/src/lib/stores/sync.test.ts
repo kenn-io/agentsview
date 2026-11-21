@@ -205,6 +205,22 @@ describe("session watch visibility", () => {
     expect(onUpdate).toHaveBeenCalledTimes(3);
   });
 
+  it("closes a failed session watch before reopening it on return", () => {
+    api.watchSession.mockImplementation(() =>
+      Object.assign(new EventTarget(), { readyState: 1, close: vi.fn() }),
+    );
+    const onUpdate = vi.fn();
+    void sync.watchSession("session-a", onUpdate);
+    const first = api.watchSession.mock.results[0]!.value;
+    first.readyState = 2;
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(first.close).toHaveBeenCalledOnce();
+    expect(api.watchSession).toHaveBeenCalledTimes(2);
+    first.dispatchEvent(new Event("session_ready"));
+    api.watchSession.mock.results[1]!.value.dispatchEvent(new Event("session_ready"));
+    expect(onUpdate).toHaveBeenCalledTimes(2);
+  });
+
   it("refreshes a missing session and settles the initial read", async () => {
     const onUpdate = vi.fn();
     const ready = sync.watchSession("missing", onUpdate);
