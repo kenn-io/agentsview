@@ -171,20 +171,17 @@ func newServer(opts ServeOptions) *mcp.Server {
 		addFileReferencesTool(s, t, externalRead)
 		mcp.AddTool(s, &mcp.Tool{
 			Name: ToolSearchSessions,
-			Description: "Full-text search across all recorded AI agent sessions (Claude Code, Codex, Gemini, " +
-				"Antigravity, and others) from every project and machine. Returns ranked snippets with a " +
+			Description: "Full-text search across recorded AI agent sessions. Returns ranked snippets with a " +
 				"match_ordinal usable with get_messages to read the surrounding conversation. For prior-work " +
-				"questions, prefer search_content with mode hybrid or semantic when a vector search index " +
-				"is configured. Use this tool for keyword search, with optional date_from/date_to bounds. " +
+				"questions, prefer search_content with hybrid or semantic mode when a vector index is configured. " +
 				"Every term must appear (AND); wrap the query in double quotes for an exact phrase. " +
-				"Sessions active in the last 10 minutes (including the current conversation) are excluded " +
-				"unless include_active is set. Empty pages with excluded active sessions return a hints entry " +
-				"with code: excluded_active, the count, and retry_with. " +
+				"Sessions active in the last 10 minutes are excluded unless include_active is set. " +
+				"Empty pages may return an excluded_active hint with a count and retry_with. " +
 				"Set session_id to look up one raw UUID or full stored ID. " +
 				"That lookup returns one metadata row, includes active sessions, ignores other search " +
 				"arguments, and reports missing or ambiguous raw IDs as errors. Its snippet is empty and " +
 				"match_ordinal is 0; call get_messages with that anchor for the first message. " +
-				"Use get_session_overview with a full stored session ID or a raw UUID that matches one session when you need a message preview.",
+				"Use get_session_overview for a message preview.",
 			Annotations: readOnly,
 		}, t.searchSessions)
 

@@ -324,17 +324,22 @@ func TestFindSessionIDsByRawSuffixRequiresServerAcknowledgement(t *testing.T) {
 	}
 }
 
-func TestFindSessionIDsByRawSuffixQualifiedVersion(t *testing.T) {
+func TestFindSessionIDsByRawSuffixProbeFailure(t *testing.T) {
+	srv, _ := fixedServer(t, http.StatusInternalServerError, `{"error":"unavailable"}`)
+	_, err := NewHTTPBackend(srv.URL, "", false, "").FindSessionIDsByRawSuffix(t.Context(), "abc", 5)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, service.ErrRawLookupUnsupported)
+}
+
+func TestFindSessionIDsByRawSuffixVersionGate(t *testing.T) {
 	for _, tt := range []struct {
 		name      string
 		version   int
 		raw       string
 		wantError bool
 	}{
-		{"qualified old server", 27, "codex:u", true},
-		{"host qualified old server", 27, "host~u", true},
 		{"plain old server", 27, "u", true},
-		{"qualified current server", 28, "codex:u", false},
+		{"qualified old server", 27, "codex:u", true},
 		{"plain current server", 28, "u", false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

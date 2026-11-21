@@ -76,7 +76,7 @@ type SessionService interface {
 	FindSessionIDsByPartial(ctx context.Context, partial string, limit int) ([]string, error)
 	// FindSessionIDsByRawSuffix matches an exact stored ID or a literal
 	// colon/tilde-delimited suffix before applying limit.
-	// A qualified ID that names a trashed session returns ErrSessionNotFound.
+	// An exact ID that names a trashed session matches nothing.
 	FindSessionIDsByRawSuffix(ctx context.Context, raw string, limit int) ([]string, error)
 	List(ctx context.Context, f ListFilter) (*SessionList, error)
 	Messages(ctx context.Context, id string, f MessageFilter) (*MessageList, error)

@@ -287,16 +287,8 @@ func (b *httpBackend) FindSessionIDsByPartial(
 func (b *httpBackend) FindSessionIDsByRawSuffix(
 	ctx context.Context, raw string, limit int,
 ) ([]string, error) {
-	version := b.apiVersion
-	if version == 0 {
-		capabilities, err := ProbeHTTPServerCapabilities(ctx, b.baseURL, b.token)
-		if err != nil {
-			return nil, err
-		}
-		version = capabilities.APIVersion
-	}
-	if version < service.RawSessionLookupAPIVersion {
-		return nil, fmt.Errorf("%w: server API version %d requires an upgrade for session ID lookup", service.ErrRawLookupUnsupported, version)
+	if err := b.requireRawLookup(ctx); err != nil {
+		return nil, err
 	}
 	q := &apiclient.GetAPIV1SessionIdsResolveQuery{Partial: raw, RawSuffix: new(true)}
 	if limit > 0 {
@@ -309,9 +301,6 @@ func (b *httpBackend) FindSessionIDsByRawSuffix(
 	response, err := api.GetAPIV1SessionIdsResolveWithResponse(ctx, &apiclient.GetAPIV1SessionIdsResolveRequestOptions{Query: q})
 	if response == nil {
 		return nil, err
-	}
-	if response.HTTPResponse.StatusCode == http.StatusGone {
-		return nil, fmt.Errorf("%w: %s", service.ErrSessionNotFound, raw)
 	}
 	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
 		return nil, err
@@ -345,12 +334,27 @@ func (b *httpBackend) requireAPIVersion(ctx context.Context, minVersion int, fea
 		version = capabilities.APIVersion
 	}
 	if version < minVersion {
-		return fmt.Errorf(
-			"server API version %d does not support %s; restart or upgrade the server",
-			version, feature,
-		)
+		return &apiVersionError{version: version, feature: feature}
 	}
 	return nil
+}
+
+type apiVersionError struct {
+	version int
+	feature string
+}
+
+func (e *apiVersionError) Error() string {
+	return fmt.Sprintf("server API version %d does not support %s; restart or upgrade the server", e.version, e.feature)
+}
+
+// Only a confirmed old version means raw lookup is unsupported; a failed probe stays an ordinary error.
+func (b *httpBackend) requireRawLookup(ctx context.Context) error {
+	err := b.requireAPIVersion(ctx, service.RawSessionLookupAPIVersion, "raw session ID lookup")
+	if errors.As(err, new(*apiVersionError)) {
+		return fmt.Errorf("%w: %w", service.ErrRawLookupUnsupported, err)
+	}
+	return err
 }
 
 func (b *httpBackend) List(
