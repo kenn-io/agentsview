@@ -672,8 +672,11 @@ func TestImageTextBatchFillsStoredResult(t *testing.T) {
 }
 
 func TestOpenRepairsPreMergeImageText(t *testing.T) {
-	for _, later := range []bool{false, true} {
-		t.Run(fmt.Sprintf("later_schema_%t", later), func(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		later bool
+	}{{"a08089649", false}, {"b831f99cc", true}} {
+		t.Run(tc.name, func(t *testing.T) {
 			ctx := t.Context()
 			d := testDB(t)
 			path := d.Path()
@@ -683,20 +686,20 @@ func TestOpenRepairsPreMergeImageText(t *testing.T) {
 			content := testInlineImageContent()
 			hash := RetainedToolResultImages(content)[0].SHA256
 			require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "untouched-image", Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-			testutil.LegacyImageTextSchema(t, d.getWriter(), later)
+			testutil.LegacyImageTextSchema(t, d.getWriter(), tc.later)
 			_, err := d.getWriter().ExecContext(ctx, `PRAGMA user_version = 166`)
 			require.NoError(t, err)
 			_, err = d.getWriter().ExecContext(ctx, `INSERT INTO stats(key,value) VALUES (?,1) ON CONFLICT(key) DO UPDATE SET value=1;
 				UPDATE sessions SET sync_marker='2000-01-01T00:00:00.000Z' WHERE id='untouched-image';
 				INSERT INTO image_text_cache(image_hash,processor,provider,model,revision,text,succeeded) VALUES (?, 'processor', 'provider', 'model', 'revision', 'old text', 1)`, imageTextBackfillKey, hash)
 			require.NoError(t, err)
-			if later {
+			if tc.later {
 				_, err = d.getWriter().ExecContext(ctx, `INSERT INTO image_text_occurrences(session_id,call_id,image_index,image_hash,media_type) SELECT 'untouched-image', id, 0, ?, 'image/png' FROM tool_calls WHERE session_id='untouched-image'`, hash)
 			} else {
 				_, err = d.getWriter().ExecContext(ctx, `INSERT INTO image_text_occurrences(session_id,call_id,image_index,image_hash) SELECT 'untouched-image', id, 0, ? FROM tool_calls WHERE session_id='untouched-image'`, hash)
 			}
 			require.NoError(t, err)
-			if later {
+			if tc.later {
 				// A failed sync may have left the current view referencing the old cache.
 				_, err = d.getWriter().ExecContext(ctx, `DROP VIEW message_search_content; CREATE VIEW message_search_content AS SELECT id, session_id, content AS rendered, COALESCE(dialogue_text, content) AS content FROM messages UNION ALL SELECT id, NULL, text, '' FROM image_text_cache`)
 				require.NoError(t, err)
@@ -709,24 +712,19 @@ func TestOpenRepairsPreMergeImageText(t *testing.T) {
 			var marker string
 			require.NoError(t, d.Reader().QueryRow(ctx, `SELECT sync_marker FROM sessions WHERE id='untouched-image'`).Scan(&marker))
 			require.Greater(t, marker, "2000-01-01T00:00:00.000Z")
-			require.NoError(t, d.ReplaceSessionMessages(ctx, "legacy-image", []Message{{SessionID: "legacy-image", Role: "assistant", Content: "updated transcript", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+			newContent := `[{"type":"input_image","image_url":"data:image/png;base64,AwQF"}]`
+			require.NoError(t, d.ReplaceSessionMessages(ctx, "legacy-image", []Message{{SessionID: "legacy-image", Role: "assistant", Content: "updated transcript", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: newContent}}}}))
 			require.NoError(t, d.BackfillImageTextOccurrences(ctx))
-			sources, err := d.ImageTextSources(ctx, hash, 0, 10)
+			require.NoError(t, d.Close())
+			d, err = Open(ctx, path)
 			require.NoError(t, err)
-			require.Len(t, sources, 2)
-			identity, err := ocr.NewIdentity("test", "model", "revision")
+			pending, err := d.PendingImageText(ctx, "processor", time.Now(), 10)
 			require.NoError(t, err)
-			require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "invoice marker", false))
+			require.ElementsMatch(t, []string{hash, RetainedToolResultImages(newContent)[0].SHA256}, pending)
 			page, err := d.Search(ctx, SearchFilter{Query: "updated transcript"})
 			require.NoError(t, err)
 			require.Len(t, page.Results, 1)
 			require.Equal(t, "legacy-image", page.Results[0].SessionID)
-			require.NoError(t, d.Close())
-			d, err = Open(ctx, path)
-			require.NoError(t, err)
-			page, err = d.Search(ctx, SearchFilter{Query: "invoice marker"})
-			require.NoError(t, err)
-			require.Len(t, page.Results, 2)
 		})
 	}
 }

@@ -329,21 +329,72 @@ func TestServeLegacyImageTextAfterRestart(t *testing.T) {
 	conn, err := sql.Open("sqlite3", cfg.DBPath)
 	require.NoError(t, err)
 	testutil.LegacyImageTextSchema(t, conn, true)
-	_, err = conn.ExecContext(t.Context(), `INSERT INTO stats(key,value) VALUES ('image_text_occurrences_backfill_v2',1) ON CONFLICT(key) DO UPDATE SET value=1`)
-	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 	data, err := json.Marshal(cfg)
 	require.NoError(t, err)
 	env := []string{
-		"AGENTSVIEW_STALE_SERVE_CONFIG=" + string(data),
-		"AGENTSVIEW_STALE_SERVE_SOURCES=" + cfg.AgentDirs[parser.AgentClaude][0],
-		"AGENTSVIEW_STALE_SERVE_KIND=legacy image text",
+		"AGENTSVIEW_IMAGE_SERVE_CONFIG=" + string(data),
+		"AGENTSVIEW_IMAGE_SERVE_SOURCES=" + cfg.AgentDirs[parser.AgentClaude][0],
 	}
-	out, err := runRuntimeWarningHelperProcess(t, "serve", "TestServeStaleArchiveHelperProcess", env, "archive rebuild complete")
+	out, err := runRuntimeWarningHelperProcess(t, "serve", "TestServeLegacyImageTextHelperProcess", env, "archive rebuild complete")
 	require.NoError(t, err, string(out))
 	restarted.Store(true)
-	out, err = runRuntimeWarningHelperProcess(t, "serve restart", "TestServeStaleArchiveHelperProcess", append(env, "AGENTSVIEW_STALE_SERVE_RESTART=1"), "archive rebuild complete")
+	out, err = runRuntimeWarningHelperProcess(t, "serve restart", "TestServeLegacyImageTextHelperProcess", append(env, "AGENTSVIEW_IMAGE_SERVE_RESTART=1"), "archive rebuild complete")
 	require.NoError(t, err, string(out))
+}
+
+func TestServeLegacyImageTextHelperProcess(t *testing.T) {
+	data := os.Getenv("AGENTSVIEW_IMAGE_SERVE_CONFIG")
+	if data == "" {
+		return
+	}
+	t.Setenv("PATH", "")
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_CONFIG_DIR", t.TempDir())
+	localTransport := http.DefaultTransport
+	transport := localTransport.(*http.Transport).Clone()
+	transport.DialContext = func(context.Context, string, string) (net.Conn, error) {
+		return nil, errors.New("network disabled in test")
+	}
+	withPricingCatalogTransport(t, transport)
+	var cfg config.Config
+	require.NoError(t, json.Unmarshal([]byte(data), &cfg))
+	cfg.DBPath = filepath.Join(cfg.DataDir, "sessions.db")
+	cfg.AgentDirs = map[parser.AgentType][]string{parser.AgentClaude: {os.Getenv("AGENTSVIEW_IMAGE_SERVE_SOURCES")}}
+	original := writeDaemonRuntimeWithAuthAndNoSync
+	writeDaemonRuntimeWithAuthAndNoSync = func(lifetime *daemonLifetime, dataDir, host string, port int, version, browserURL string, readOnly, requireAuth, noSync bool, explicitPort *int, caddyPID ...int) (string, error) {
+		base := fmt.Sprintf("http://%s:%d", host, port)
+		client := &http.Client{Timeout: 10 * time.Second, Transport: localTransport}
+		stale, _, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
+		require.NoError(t, err)
+		require.False(t, stale, "startup reconciliation must finish before readiness")
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/sessions/session0/messages", nil)
+		require.NoError(t, err)
+		resp, err := client.Do(req)
+		require.NoError(t, err)
+		body, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		require.NoError(t, resp.Body.Close())
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		require.Contains(t, string(body), "hello")
+		if os.Getenv("AGENTSVIEW_IMAGE_SERVE_RESTART") == "1" {
+			require.Eventually(t, func() bool {
+				req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/search?q=invoice+marker&include_one_shot=true", nil)
+				require.NoError(t, err)
+				resp, err := client.Do(req)
+				if err != nil {
+					return false
+				}
+				body, err := io.ReadAll(resp.Body)
+				require.NoError(t, resp.Body.Close())
+				return err == nil && resp.StatusCode == http.StatusOK && strings.Contains(string(body), "retained-image")
+			}, 20*time.Second, time.Second)
+		}
+		fmt.Println("archive rebuild complete")
+		return original(lifetime, dataDir, host, port, version, browserURL, readOnly, requireAuth, noSync, explicitPort, caddyPID...)
+	}
+	runServe(t.Context(), cfg, serveOptions{}, 0)
 }
 
 func TestServeStaleArchiveHelperProcess(t *testing.T) {
@@ -356,15 +407,7 @@ func TestServeStaleArchiveHelperProcess(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "")
 	t.Setenv("GH_CONFIG_DIR", t.TempDir())
 	localTransport := http.DefaultTransport
-	if os.Getenv("AGENTSVIEW_STALE_SERVE_KIND") == "legacy image text" {
-		transport := localTransport.(*http.Transport).Clone()
-		transport.DialContext = func(context.Context, string, string) (net.Conn, error) {
-			return nil, errors.New("network disabled in test")
-		}
-		withPricingCatalogTransport(t, transport)
-	} else {
-		withPricingCatalogTransport(t, pricingCatalogTransport{requests: make(chan *http.Request, 16)})
-	}
+	withPricingCatalogTransport(t, pricingCatalogTransport{requests: make(chan *http.Request, 16)})
 	var cfg config.Config
 	require.NoError(t, json.Unmarshal([]byte(data), &cfg))
 	cfg.DBPath = filepath.Join(cfg.DataDir, "sessions.db")
@@ -397,7 +440,7 @@ func TestServeStaleArchiveHelperProcess(t *testing.T) {
 	writeDaemonRuntimeWithAuthAndNoSync = func(lifetime *daemonLifetime, dataDir, host string, port int, version, browserURL string, readOnly, requireAuth, noSync bool, explicitPort *int, caddyPID ...int) (string, error) {
 		base := fmt.Sprintf("http://%s:%d", host, port)
 		client := &http.Client{Timeout: 10 * time.Second, Transport: localTransport}
-		if kind != "" && kind != "legacy image text" {
+		if kind != "" {
 			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/sessions/retained/messages", nil)
 			require.NoError(t, err)
 			resp, err := client.Do(req)
@@ -442,7 +485,7 @@ func TestServeStaleArchiveHelperProcess(t *testing.T) {
 		stale, _, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
 		require.NoError(t, err)
 		require.False(t, stale, "startup reconciliation must finish before readiness")
-		if kind == "data version" || kind == "scoped pending" || kind == "schema repair" || kind == "legacy image text" {
+		if kind == "data version" || kind == "scoped pending" || kind == "schema repair" {
 			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/sessions/session0/messages", nil)
 			require.NoError(t, err)
 			resp, err := client.Do(req)
@@ -453,23 +496,10 @@ func TestServeStaleArchiveHelperProcess(t *testing.T) {
 			require.Equal(t, http.StatusOK, resp.StatusCode)
 			require.Contains(t, string(body), "hello")
 		}
-		if os.Getenv("AGENTSVIEW_STALE_SERVE_RESTART") == "1" {
-			require.Eventually(t, func() bool {
-				req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/search?q=invoice+marker&include_one_shot=true", nil)
-				require.NoError(t, err)
-				resp, err := client.Do(req)
-				if err != nil {
-					return false
-				}
-				body, err := io.ReadAll(resp.Body)
-				require.NoError(t, resp.Body.Close())
-				return err == nil && resp.StatusCode == http.StatusOK && strings.Contains(string(body), "retained-image")
-			}, 20*time.Second, time.Second)
-		}
 		fmt.Println("archive rebuild complete")
 		return original(lifetime, dataDir, host, port, version, browserURL, readOnly, requireAuth, noSync, explicitPort, caddyPID...)
 	}
-	runServe(t.Context(), cfg, serveOptions{SkipInitialSync: kind != "legacy image text"}, 0)
+	runServe(t.Context(), cfg, serveOptions{SkipInitialSync: true}, 0)
 }
 
 func TestPGServeRuntimeRecordWriteFailureWarnsVisible(t *testing.T) {

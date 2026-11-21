@@ -8,14 +8,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// LegacyImageTextSchema installs the image-text tables used by unreleased builds.
+const imageTextOccurrencesA080 = `CREATE TABLE image_text_occurrences (session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, call_id INTEGER REFERENCES tool_calls(id) ON DELETE CASCADE, event_id INTEGER REFERENCES tool_result_events(id) ON DELETE CASCADE, image_index INTEGER NOT NULL, image_hash TEXT NOT NULL, CHECK ((call_id IS NULL) <> (event_id IS NULL)), PRIMARY KEY (session_id, image_hash));`
+
+const imageTextOccurrencesB831 = `CREATE TABLE image_text_occurrences (session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, call_id INTEGER, event_id INTEGER, image_index INTEGER NOT NULL, image_hash TEXT NOT NULL, media_type TEXT NOT NULL, CHECK ((call_id IS NULL) <> (event_id IS NULL)));`
+
+// LegacyImageTextSchema installs the image-text tables and AFTER DELETE trigger
+// used by unreleased builds a08089649 and b831f99cc.
 func LegacyImageTextSchema(t testing.TB, db interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }, later bool) {
 	t.Helper()
-	occurrences := `CREATE TABLE image_text_occurrences (session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, call_id INTEGER REFERENCES tool_calls(id) ON DELETE CASCADE, event_id INTEGER REFERENCES tool_result_events(id) ON DELETE CASCADE, image_index INTEGER NOT NULL, image_hash TEXT NOT NULL, CHECK ((call_id IS NULL) <> (event_id IS NULL)), PRIMARY KEY (session_id, image_hash));`
+	occurrences := imageTextOccurrencesA080
 	if later {
-		occurrences = `CREATE TABLE image_text_occurrences (session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, call_id INTEGER, event_id INTEGER, image_index INTEGER NOT NULL, image_hash TEXT NOT NULL, media_type TEXT NOT NULL, CHECK ((call_id IS NULL) <> (event_id IS NULL)));`
+		occurrences = imageTextOccurrencesB831
 	}
 	_, err := db.ExecContext(t.Context(), `
 		DROP TRIGGER image_text_session_delete;
