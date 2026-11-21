@@ -102,6 +102,8 @@ func shellCommands(command string) ([]shellCall, bool) {
 					(unwrapped.Words[1] == "-c" || unwrapped.Words[1] == "-lc") {
 					walk(unwrapped.Words[2])
 				} else {
+					call.ChangedDir = changedDir
+					call.RepoOpaque, call.HostOpaque = contextUnknown, contextUnknown
 					calls = append(calls, call)
 				}
 			}
@@ -109,11 +111,6 @@ func shellCommands(command string) ([]shellCall, bool) {
 		})
 	}
 	walk(command)
-	for i := range calls {
-		calls[i].ChangedDir = changedDir
-		calls[i].Repo, calls[i].Host = "", ""
-		calls[i].RepoOpaque, calls[i].HostOpaque = contextUnknown, contextUnknown
-	}
 	return calls, changedDir
 }
 

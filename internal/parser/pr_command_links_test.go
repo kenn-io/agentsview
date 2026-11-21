@@ -124,3 +124,17 @@ func TestCommandPRLinksUnknownContext(t *testing.T) {
 		})
 	}
 }
+
+func TestCommandPRLinksBeforeContextChange(t *testing.T) {
+	for _, command := range []string{
+		`gh pr view 42; eval "export GH_REPO=a/b"; gh pr view 43`,
+		`gh pr view 42; cd /other; gh pr view 43`,
+	} {
+		t.Run(command, func(t *testing.T) {
+			links := CommandPRLinks(command, "https://github.com/example/repo.git")
+			if assert.Len(t, links, 1) {
+				assert.Equal(t, "https://github.com/example/repo/pull/42", links[0].URL)
+			}
+		})
+	}
+}
