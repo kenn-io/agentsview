@@ -2613,7 +2613,8 @@ one; stdio connections do not appear. See
 [listener discovery](/docs/mcp/#discover-running-http-listeners) for endpoint
 fields and token-file paths.
 
-`agentsview mcp calls` summarizes local call outcomes over inclusive UTC dates.
+`agentsview mcp calls` summarizes local call outcomes over inclusive UTC dates,
+including empty and truncated result shares and rejected argument names.
 See [call outcomes](/docs/mcp/#review-call-outcomes) for the recorded fields.
 
 By default, `agentsview mcp` speaks stdio, which is the expected transport for

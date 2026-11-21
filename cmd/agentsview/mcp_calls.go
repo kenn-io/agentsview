@@ -38,10 +38,7 @@ func newMCPCallsCommand() *cobra.Command {
 				return err
 			}
 			for _, row := range rows {
-				top, empty := "-", "-"
-				if row.TopError != nil {
-					top = fmt.Sprintf("%s (%d)", row.TopError.Name, row.TopError.Count)
-				}
+				empty := "-"
 				if row.EmptyPercent != nil {
 					empty = fmt.Sprintf("%.1f%%", *row.EmptyPercent)
 				}
@@ -52,7 +49,7 @@ func newMCPCallsCommand() *cobra.Command {
 				if len(rejected) == 0 {
 					rejected = []string{"-"}
 				}
-				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s: %d calls, %.1f%% errors, %.1f%% truncated, top error: %s, empty: %s, rejected: %s, median: %d bytes, %d ms\n", row.Tool, row.Calls, row.ErrorPercent, row.TruncatedPercent, top, empty, strings.Join(rejected, ", "), row.MedianBytes, row.MedianMs); err != nil {
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s: %d calls, %.1f%% errors, %.1f%% truncated, empty: %s, rejected: %s, median: %d bytes, %d ms\n", row.Tool, row.Calls, row.ErrorPercent, row.TruncatedPercent, empty, strings.Join(rejected, ", "), row.MedianBytes, row.MedianMs); err != nil {
 					return err
 				}
 			}

@@ -6,12 +6,14 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.kenn.io/agentsview/internal/ctxio"
@@ -19,18 +21,15 @@ import (
 	"go.kenn.io/kit/safefileio"
 )
 
-const (
-	callRecordVersion    = 1
-	maxRecordedNameBytes = 128
-	maxRejectedNames     = 16
-)
+const maxRecordedNameBytes = 128
 
 type callRecord struct {
-	Version      int       `json:"version"`
 	At           time.Time `json:"at"`
 	Tool         string    `json:"tool"`
 	Outcome      string    `json:"outcome"`
-	Error        string    `json:"error,omitempty"`
+	Args         []string  `json:"args,omitempty"`
+	Empty        bool      `json:"empty,omitzero"`
+	Truncated    bool      `json:"truncated,omitzero"`
 	Rejected     []string  `json:"rejected,omitempty"`
 	Bytes        int       `json:"bytes"`
 	Ms           int       `json:"ms"`
@@ -46,7 +45,6 @@ type CallSummary struct {
 	Calls            int         `json:"calls"`
 	ErrorPercent     float64     `json:"error_percent"`
 	TruncatedPercent float64     `json:"truncated_percent"`
-	TopError         *CallCount  `json:"top_error,omitempty"`
 	EmptyPercent     *float64    `json:"empty_percent,omitempty"`
 	Rejected         []CallCount `json:"rejected,omitempty"`
 	MedianBytes      int         `json:"median_bytes"`
@@ -75,21 +73,18 @@ func recordToolCall(ctx context.Context, dir string, req *mcp.CallToolRequest, r
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	name := req.Params.Name
-	rec := callRecord{Version: callRecordVersion, At: time.Now().UTC(), Tool: name, Outcome: "ok", Ms: int(elapsed.Milliseconds())}
-	if name == ToolSearchSessions || name == ToolSearchContent {
-		var args struct {
-			Cursor int `json:"cursor"`
+	rec := callRecord{At: time.Now().UTC(), Tool: name, Outcome: "ok", Ms: int(elapsed.Milliseconds())}
+	var args map[string]any
+	if json.Unmarshal(req.Params.Arguments, &args) == nil {
+		for key := range args {
+			rec.Args = append(rec.Args, key)
 		}
-		if json.Unmarshal(req.Params.Arguments, &args) == nil {
-			rec.Continuation = args.Cursor > 0
-		}
-	}
-	if name == ToolListSessions {
-		var args struct {
-			Cursor string `json:"cursor"`
-		}
-		if json.Unmarshal(req.Params.Arguments, &args) == nil {
-			rec.Continuation = args.Cursor != ""
+		sort.Strings(rec.Args)
+		switch cursor := args["cursor"].(type) {
+		case string:
+			rec.Continuation = cursor != ""
+		case float64:
+			rec.Continuation = cursor > 0
 		}
 	}
 	if len(name) == 0 || len(name) > maxRecordedNameBytes || strings.ContainsFunc(name, func(r rune) bool {
@@ -111,39 +106,33 @@ func recordToolCall(ctx context.Context, dir string, req *mcp.CallToolRequest, r
 	}
 	if callErr != nil || (call != nil && call.IsError) {
 		rec.Outcome = "error"
-		switch {
-		case strings.HasPrefix(message, `validating "arguments":`):
-			rec.Error = "invalid arguments"
-			rec.Rejected = rejectedProperties(message)
-			if len(rec.Rejected) == 0 {
-				const prefix = `validating "arguments": validating root: validating /properties/`
-				if rest, ok := strings.CutPrefix(message, prefix); ok {
-					if path, _, ok := strings.Cut(rest, ": type:"); ok && !strings.Contains(path, "/") {
-						name := strings.ReplaceAll(strings.ReplaceAll(path, "~1", "/"), "~0", "~")
-						if len(name) <= maxRecordedNameBytes {
-							rec.Rejected = []string{name}
-						}
-					}
-				}
+		if callErr != nil {
+			message += " " + callErr.Error()
+		}
+		for _, arg := range rec.Args {
+			if containsWholeWord(message, arg) {
+				rec.Rejected = append(rec.Rejected, arg)
 			}
-		case strings.HasPrefix(message, "session not found:"):
-			rec.Error = "session not found"
-		default:
-			rec.Error = "other error"
 		}
 	} else if call != nil {
 		b, err := json.Marshal(call.StructuredContent)
 		if err == nil {
 			var content any
-			if json.Unmarshal(b, &content) == nil && hasTruncated(content) {
-				rec.Outcome = "truncated"
-			} else if fields, ok := content.(map[string]any); ok && searchField(name) != "" {
-				if value, exists := fields[searchField(name)]; exists {
-					if entries, ok := value.([]any); ok && len(entries) == 0 || value == nil {
-						rec.Outcome = "empty"
+			if json.Unmarshal(b, &content) == nil {
+				rec.Truncated = hasTruncated(content)
+				if fields, ok := content.(map[string]any); ok && searchField(name) != "" {
+					if value, exists := fields[searchField(name)]; exists {
+						if entries, ok := value.([]any); ok && len(entries) == 0 || value == nil {
+							rec.Empty = true
+						}
 					}
 				}
 			}
+		}
+		if rec.Truncated {
+			rec.Outcome = "truncated"
+		} else if rec.Empty {
+			rec.Outcome = "empty"
 		}
 	}
 	if err := safefileio.EnsurePrivateDir(dir); err != nil {
@@ -166,10 +155,10 @@ func recordToolCall(ctx context.Context, dir string, req *mcp.CallToolRequest, r
 func hasTruncated(value any) bool {
 	switch value := value.(type) {
 	case map[string]any:
-		if value["truncated"] == true {
-			return true
-		}
-		for _, child := range value {
+		for key, child := range value {
+			if strings.Contains(key, "truncated") && child == true {
+				return true
+			}
 			if hasTruncated(child) {
 				return true
 			}
@@ -184,42 +173,31 @@ func hasTruncated(value any) bool {
 	return false
 }
 
-// rejectedProperties parses the SDK's Go-quoted property list.
-func rejectedProperties(message string) []string {
-	list, ok := strings.CutPrefix(message, `validating "arguments": validating root: unexpected additional properties [`)
-	if !ok {
-		return nil
+func containsWholeWord(text, name string) bool {
+	if name == "" {
+		return false
 	}
-	var names []string
-	for len(list) > 0 {
-		list = strings.TrimLeft(list, " ")
-		if len(list) == 0 || list[0] != '"' {
-			break
+	word := func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' }
+	for offset := 0; offset <= len(text)-len(name); {
+		i := strings.Index(text[offset:], name)
+		if i < 0 {
+			return false
 		}
-		quoted, err := strconv.QuotedPrefix(list)
-		if err != nil {
-			break
+		i += offset
+		before, _ := utf8.DecodeLastRuneInString(text[:i])
+		after, _ := utf8.DecodeRuneInString(text[i+len(name):])
+		if !word(before) && !word(after) {
+			return true
 		}
-		name, err := strconv.Unquote(quoted)
-		if err == nil && len(name) <= maxRecordedNameBytes {
-			i := sort.SearchStrings(names, name)
-			if i < maxRejectedNames {
-				names = append(names, "")
-				copy(names[i+1:], names[i:])
-				names[i] = name
-				if len(names) > maxRejectedNames {
-					names = names[:maxRejectedNames]
-				}
-			}
-		}
-		list = list[len(quoted):]
+		offset = i + len(name)
 	}
-	return names
+	return false
 }
 
 type callAggregate struct {
 	row                        CallSummary
-	errors, rejected           map[string]int
+	rejected                   map[string]int
+	errors                     int
 	empty, searches, truncated int
 	bytes, ms                  []int
 }
@@ -253,18 +231,16 @@ func SummarizeCalls(ctx context.Context, dir, from, to string) ([]CallSummary, e
 		if err != nil {
 			return nil, err
 		}
-		scanner := bufio.NewScanner(ctxio.Reader{Context: ctx, Reader: f})
-		for scanner.Scan() {
-			line := scanner.Bytes()
-			var header struct {
-				Version int `json:"version"`
+		reader := bufio.NewReader(ctxio.Reader{Context: ctx, Reader: f})
+		var readErr error
+		for {
+			line, err := reader.ReadBytes('\n')
+			if err != nil && !errors.Is(err, io.EOF) {
+				readErr = err
+				break
 			}
-			if json.Unmarshal(line, &header) != nil {
-				continue
-			}
-			if header.Version != callRecordVersion {
-				_ = f.Close()
-				return nil, fmt.Errorf("unsupported MCP call record version %d", header.Version)
+			if len(line) == 0 {
+				break
 			}
 			var rec callRecord
 			if json.Unmarshal(line, &rec) != nil || !db.InDateRange(rec.At.UTC().Format("2006-01-02"), from, to) {
@@ -276,19 +252,19 @@ func SummarizeCalls(ctx context.Context, dir, from, to string) ([]CallSummary, e
 			}
 			g := groups[rec.Tool]
 			if g == nil {
-				g = &callAggregate{row: CallSummary{Tool: rec.Tool}, errors: map[string]int{}, rejected: map[string]int{}}
+				g = &callAggregate{row: CallSummary{Tool: rec.Tool}, rejected: map[string]int{}}
 				groups[rec.Tool] = g
 			}
 			g.row.Calls++
 			if rec.Outcome == "error" {
-				g.errors[rec.Error]++
+				g.errors++
 			}
-			if rec.Outcome == "truncated" {
+			if rec.Truncated {
 				g.truncated++
 			}
 			if searchField(rec.Tool) != "" && !rec.Continuation {
 				g.searches++
-				if rec.Outcome == "empty" {
+				if rec.Empty {
 					g.empty++
 				}
 			}
@@ -298,23 +274,15 @@ func SummarizeCalls(ctx context.Context, dir, from, to string) ([]CallSummary, e
 			g.bytes = append(g.bytes, rec.Bytes)
 			g.ms = append(g.ms, rec.Ms)
 		}
-		scanErr := scanner.Err()
 		closeErr := f.Close()
-		if err := errors.Join(scanErr, closeErr); err != nil {
+		if err := errors.Join(readErr, closeErr); err != nil {
 			return nil, err
 		}
 	}
 	rows := make([]CallSummary, 0, len(groups))
 	for _, g := range groups {
-		var errors int
-		for _, count := range g.errors {
-			errors += count
-		}
-		g.row.ErrorPercent = 100 * float64(errors) / float64(g.row.Calls)
+		g.row.ErrorPercent = 100 * float64(g.errors) / float64(g.row.Calls)
 		g.row.TruncatedPercent = 100 * float64(g.truncated) / float64(g.row.Calls)
-		if top := rankedCounts(g.errors); len(top) > 0 {
-			g.row.TopError = &top[0]
-		}
 		if searchField(g.row.Tool) != "" && g.searches > 0 {
 			pct := 100 * float64(g.empty) / float64(g.searches)
 			g.row.EmptyPercent = &pct

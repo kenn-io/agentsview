@@ -645,12 +645,11 @@ separate five-second budget. Claude pasted images aren't covered yet.
 `agentsview mcp calls --since 7d` summarizes calls recorded by local MCP servers.
 Use `--until YYYY-MM-DD` to set the inclusive end date and `--format json` for
 JSON output. Dates use UTC. Records live in the data directory under
-`mcp/calls/`. They contain tool names, outcomes, rejected argument names, result
-sizes, and durations. Reports show the share of all calls with truncated results.
-Argument values and results are not recorded. Error categories are limited to
-invalid arguments, session not found, and other error.
-Empty search percentages include `list_sessions` and exclude continuation pages.
-Records do not expire. The files let MCP servers record calls even when the
-archive database belongs to a separate daemon. Each call records up to 16
-rejected argument names of at most 128 bytes each, in alphabetical order.
-Longer names are omitted.
+`mcp/calls/`. Each record contains the tool name, outcome, argument names,
+rejected argument names, result size, and duration. Argument values, error text,
+and results are not recorded. A rejected name is a sent argument named as a whole
+word in the error text. A result is truncated when a boolean field whose name
+contains `truncated` is true. Empty search percentages include `list_sessions`
+and exclude continuation pages. An empty result can also count as truncated.
+Records do not expire. Files let MCP servers record calls when the archive
+database belongs to a separate daemon.

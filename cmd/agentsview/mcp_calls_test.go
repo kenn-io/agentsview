@@ -24,13 +24,13 @@ func TestMCPCallsReport(t *testing.T) {
 	t.Setenv("AGENTSVIEW_DATA_DIR", home)
 	dir := filepath.Join(home, "mcp", "calls")
 	require.NoError(t, os.MkdirAll(dir, 0700))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, day1+".jsonl"), []byte(strings.ReplaceAll(`{"version":1,"at":"2026-01-02T00:00:00Z","tool":"search_docs","outcome":"empty","bytes":10,"ms":4}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, day1+".jsonl"), []byte(strings.ReplaceAll(`{"at":"2026-01-02T00:00:00Z","tool":"search_docs","outcome":"empty","empty":true,"bytes":10,"ms":4}
 `, "2026-01-02", day1)), 0600))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, day2+".jsonl"), []byte(strings.ReplaceAll(`{"version":1,"at":"2026-01-03T00:00:00Z","tool":"get_messages","outcome":"error","error":"other error","bytes":20,"ms":8}
-{"version":1,"at":"2026-01-03T00:00:00Z","tool":"get_messages","outcome":"truncated","bytes":20,"ms":8}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, day2+".jsonl"), []byte(strings.ReplaceAll(`{"at":"2026-01-03T00:00:00Z","tool":"get_messages","outcome":"error","bytes":20,"ms":8}
+{"at":"2026-01-03T00:00:00Z","tool":"get_messages","outcome":"truncated","truncated":true,"bytes":20,"ms":8}
 `, "2026-01-03", day2)), 0600))
 	earliest := time.Now().UTC().AddDate(0, 0, -91).Format("2006-01-02")
-	require.NoError(t, os.WriteFile(filepath.Join(dir, earliest+".jsonl"), []byte(strings.ReplaceAll(`{"version":1,"at":"2026-01-02T00:00:00Z","tool":"query_recall","outcome":"empty","bytes":10,"ms":4}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, earliest+".jsonl"), []byte(strings.ReplaceAll(`{"at":"2026-01-02T00:00:00Z","tool":"query_recall","outcome":"empty","empty":true,"bytes":10,"ms":4}
 `, "2026-01-02", earliest)), 0600))
 	cmd := newMCPCallsCommand()
 	cmd.SetArgs([]string{"--since", "91d"})
