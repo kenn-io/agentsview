@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -58,6 +60,18 @@ func searchField(tool string) string {
 		return "entries"
 	}
 	return ""
+}
+
+var callLogWarning sync.Once
+
+// warnCallLogFailure tells the user once per process that calls are not being
+// recorded; the tool call itself still succeeds.
+func warnCallLogFailure(err error) {
+	if err != nil {
+		callLogWarning.Do(func() {
+			fmt.Fprintf(os.Stderr, "agentsview: MCP call log is not recording calls: %v\n", err)
+		})
+	}
 }
 
 func recordToolCall(ctx context.Context, dir string, req *mcp.CallToolRequest, result mcp.Result, callErr error, elapsed time.Duration) error {

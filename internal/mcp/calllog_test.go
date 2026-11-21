@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json/v2"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -112,6 +113,28 @@ func TestCallLogPaginationAndRejectedNames(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, string(raw), "secret-value")
 	assert.NotContains(t, string(raw), "validating")
+}
+
+func TestCallLogWriteFailureWarnsOnce(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "file")
+	require.NoError(t, os.WriteFile(dir, []byte("file"), 0600))
+	d := dbtest.OpenTestDB(t)
+	reader, writer, err := os.Pipe()
+	require.NoError(t, err)
+	oldStderr := os.Stderr
+	os.Stderr = writer
+	t.Cleanup(func() { os.Stderr = oldStderr; _ = reader.Close(); _ = writer.Close() })
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), CallLogDir: filepath.Join(dir, "calls")}))
+	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
+	for range 2 {
+		result, err := ct.CallTool(t.Context(), callParams(ToolSearchDocs, map[string]any{"query": "session"}))
+		require.NoError(t, err)
+		require.False(t, result.IsError)
+	}
+	require.NoError(t, writer.Close())
+	warnings, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(string(warnings), "MCP call log"), "warnings: %s", warnings)
 }
 
 func TestCallLogUnknownTool(t *testing.T) {
