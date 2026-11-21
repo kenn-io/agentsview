@@ -269,9 +269,8 @@ func (s *Store) activityReportRuns(
 	if len(missing) > 0 {
 		all := pgActivityAllTime
 		if !q.Partial {
-			// Slot bounds have second precision. Cover the entire seconds so
-			// custom ranges with fractional bounds can share the slot.
-			all.RangeStart = q.RangeStart.Truncate(time.Second)
+			// Start at the slot's lower bound to cover every range sharing it.
+			all.RangeStart, _ = time.Parse(time.RFC3339, db.PaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14))
 			all.EffectiveEnd = q.RangeEnd.Truncate(time.Second).Add(time.Second)
 		}
 		all.GapCapSeconds = q.GapCapSeconds

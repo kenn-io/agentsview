@@ -164,6 +164,36 @@ func TestPGActivityReportInputReadsFinishedFractionalBounds(t *testing.T) {
 	requirePGKeptEqual(t, want, got)
 }
 
+func TestPGActivityReportInputReadsFinishedYearOne(t *testing.T) {
+	t.Parallel()
+	url, store := prepareUsageSchema(t, "agentsview_activity_year_one")
+	_, err := store.DB().ExecContext(t.Context(), `INSERT INTO sessions
+		(id, machine, project, agent, started_at, ended_at, message_count)
+		VALUES ('a', 'test-machine', 'project-a', 'claude', '0001-01-01T01:00:00Z', '0001-01-01T11:00:00Z', 4)`)
+	require.NoError(t, err)
+	_, err = store.DB().ExecContext(t.Context(), `INSERT INTO messages
+		(session_id, ordinal, role, content, timestamp, model, token_usage) VALUES
+		('a', 0, 'user', 'question', '0001-01-01T02:00:00Z', '', ''),
+		('a', 1, 'assistant', 'answer', '0001-01-01T02:01:00Z', 'kept-model', '{"output_tokens":700}'),
+		('a', 2, 'user', 'later question', '0001-01-01T10:00:00Z', '', ''),
+		('a', 3, 'assistant', 'later answer', '0001-01-01T10:01:00Z', 'kept-model', '{"output_tokens":300}')`)
+	require.NoError(t, err)
+	f := db.AnalyticsFilter{Timezone: "UTC"}
+	q := pgDayQuery(t, "0001-01-01", "UTC")
+	q.RangeStart = q.RangeStart.Add(8 * time.Hour)
+	pgKeptBuild(t, store, f, q, true)
+	q.RangeStart = q.RangeStart.Add(-7 * time.Hour)
+	got := pgKeptBuild(t, store, f, q, true)
+	fresh, err := NewStore(t.Context(), url, "agentsview_activity_year_one", true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, fresh.Close()) })
+	fresh.hostedRelations = true
+	want := pgKeptBuild(t, fresh, f, q, true)
+	require.Len(t, want.Sessions, 1)
+	assert.Equal(t, 1000, want.Report.Totals.OutputTokens)
+	requirePGKeptEqual(t, want, got)
+}
+
 func TestPGActivityReportInputReadsLargeChange(t *testing.T) {
 	t.Parallel()
 	local, syncer, store := newUsageJournalFixture(t)

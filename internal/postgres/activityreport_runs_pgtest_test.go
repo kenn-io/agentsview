@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/activity"
+	"go.kenn.io/agentsview/internal/db"
 )
 
 // Sweeping the kept runs gives the report that sweeping every candidate of
@@ -111,12 +112,16 @@ func TestPGActivityRunsMatchCandidateSweep(t *testing.T) {
 		{"custom 5m", activity.QueryInput{Preset: "custom", From: "2026-06-16T03:00:00.250Z", To: "2026-06-16T09:30:00.75Z", Timezone: "UTC", BucketOverride: "5m"}, later},
 		{"week", activity.QueryInput{Preset: "week", Date: "2026-06-16", Timezone: "UTC"}, later},
 	}
-	// One kept set serves every range, as kept inputs serve every effective
-	// end of a slot.
-	kept := &pgActivityInputs{sessions: map[string]pgActivitySession{}}
+	// Inputs serve every effective end of their range slot.
+	kept := map[string]*pgActivityInputs{}
 	for _, query := range queries {
 		q, err := activity.ResolveQuery(query.input, query.now)
 		require.NoError(t, err)
+		slot := db.PaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14) + "|" +
+			db.PaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
+		if kept[slot] == nil {
+			kept[slot] = &pgActivityInputs{sessions: map[string]pgActivitySession{}}
+		}
 		p := activity.Params{
 			RangeStart: q.RangeStart, RangeEnd: q.RangeEnd, Loc: q.Loc, EffectiveEnd: q.EffectiveEnd,
 			Partial: q.Partial, GapCapSeconds: q.GapCapSeconds, Bucket: q.Bucket,
@@ -126,7 +131,7 @@ func TestPGActivityRunsMatchCandidateSweep(t *testing.T) {
 		want, err := activity.BuildCandidateArtifactsFromSource(ctx, p, metas, candidates.ActivityReportCandidateSource(ids, q), nil)
 		require.NoError(t, err)
 		require.NoError(t, candidates.ActivityReportMessageCounts(ctx, ids, q, &want))
-		for _, inputs := range []*pgActivityInputs{{sessions: map[string]pgActivitySession{}}, kept} {
+		for _, inputs := range []*pgActivityInputs{{sessions: map[string]pgActivitySession{}}, kept[slot]} {
 			runs := activityReportRunBackend{activityReportBackend{Store: store, inputs: inputs}}
 			got, err := activity.BuildRunArtifactsWithSurvivorUsage(ctx, p, metas,
 				runs.ActivityReportRunSource(ids, q), func() ([]activity.UsageRow, error) { return nil, nil })
