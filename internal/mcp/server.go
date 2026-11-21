@@ -184,7 +184,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 				"That lookup returns one metadata row, includes active sessions, ignores other search " +
 				"arguments, and reports missing or ambiguous raw IDs as errors. Its snippet is empty and " +
 				"match_ordinal is 0; call get_messages with that anchor for the first message. " +
-				"Use get_session_overview for a known full ID when you need a message preview.",
+				"Use get_session_overview when you need a message preview.",
 			Annotations: readOnly,
 		}, t.searchSessions)
 

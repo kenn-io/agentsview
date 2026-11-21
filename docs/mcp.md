@@ -107,6 +107,10 @@ client will see these tools:
 | `get_friction_digest`         | Read a dated Friction Log digest as Markdown or the summary object                                        |
 | `list_friction_patterns`      | List recurring friction patterns ranked by occurrences                                                    |
 
+Every session tool accepts a plain UUID. Ambiguous IDs list up to five matches.
+A trashed exact ID is reported missing. Remote raw ID lookup requires server
+API version 28 or later.
+
 `get_compaction_summaries` accepts a session ID or `active_since` timestamp. The
 limit counts sessions; 0 uses the default of 20. Resume `next_cursor` with the
 same `active_since`, even when a page has no summaries. Ambiguous older Evener
@@ -236,10 +240,9 @@ raw suffix matches more than one session. A raw UUID matches an exact stored ID,
 an agent ID ending in `:<uuid>`, or a host ID ending in `~<uuid>`; the delimiter
 is part of the match, so a fork entry separated by `-` is not selected. The row
 has an empty `snippet`, `match_ordinal` set to `0`, and no `next_cursor`. Call
-`get_messages` with that ordinal to read the first message. For a known full ID,
-`get_session_overview` remains the way to get a compact message preview. Remote
-bare UUID lookup requires AgentsView 0.44.0 or later on the server. Use an exact
-full stored ID with an older server.
+`get_messages` with that ordinal to read the first message.
+`get_session_overview` provides a compact message preview. Use an exact full
+stored ID with an older server.
 
 `search_sessions` and `search_content` exclude sessions active in the last ten
 minutes by default, including the current conversation. `search_content` applies

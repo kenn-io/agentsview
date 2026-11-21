@@ -34,7 +34,7 @@ const (
 // --- get_tool_calls ---
 
 type toolCallsIn struct {
-	SessionID     string `json:"session_id" jsonschema:"Full stored session ID."`
+	SessionID     string `json:"session_id" jsonschema:"A full stored session ID or a raw UUID that matches one session."`
 	Category      string `json:"category,omitempty" jsonschema:"Only calls in this category: Read, Edit, Write, Bash, Grep, Glob, Task, Tool, or Other."`
 	Limit         int    `json:"limit,omitempty" jsonschema:"Max tool calls, default 50, max 200."`
 	Cursor        int    `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor."`
@@ -65,19 +65,13 @@ func (t *toolset) toolCalls(
 	if in.Cursor < 0 {
 		return nil, toolCallsOut{}, errors.New("cursor must not be negative")
 	}
-	list, err := t.svc.ToolCalls(ctx, in.SessionID)
+	detail, err := t.resolveSession(ctx, in.SessionID)
 	if err != nil {
 		return nil, toolCallsOut{}, err
 	}
-	if len(list.ToolCalls) == 0 {
-		// An unknown session also has no tool calls; tell the two apart.
-		detail, err := t.svc.Get(ctx, in.SessionID)
-		if err != nil {
-			return nil, toolCallsOut{}, err
-		}
-		if detail == nil {
-			return nil, toolCallsOut{}, fmt.Errorf("session not found: %s", in.SessionID)
-		}
+	list, err := t.svc.ToolCalls(ctx, detail.ID)
+	if err != nil {
+		return nil, toolCallsOut{}, err
 	}
 	matching := list.ToolCalls
 	if in.Category != "" {
@@ -204,7 +198,7 @@ func (t *toolset) recentEdits(
 // --- get_child_sessions ---
 
 type childSessionsIn struct {
-	SessionID string `json:"session_id" jsonschema:"Full stored ID of the parent session."`
+	SessionID string `json:"session_id" jsonschema:"A full stored session ID or a raw UUID that matches one session."`
 }
 
 type childSession struct {
@@ -219,18 +213,13 @@ type childSessionsOut struct {
 func (t *toolset) childSessions(
 	ctx context.Context, _ *mcp.CallToolRequest, in childSessionsIn,
 ) (*mcp.CallToolResult, childSessionsOut, error) {
-	children, err := t.svc.ChildSessions(ctx, in.SessionID)
+	detail, err := t.resolveSession(ctx, in.SessionID)
 	if err != nil {
 		return nil, childSessionsOut{}, err
 	}
-	if len(children) == 0 {
-		detail, err := t.svc.Get(ctx, in.SessionID)
-		if err != nil {
-			return nil, childSessionsOut{}, err
-		}
-		if detail == nil {
-			return nil, childSessionsOut{}, fmt.Errorf("session not found: %s", in.SessionID)
-		}
+	children, err := t.svc.ChildSessions(ctx, detail.ID)
+	if err != nil {
+		return nil, childSessionsOut{}, err
 	}
 	out := childSessionsOut{Sessions: make([]childSession, 0, len(children))}
 	for _, s := range children {

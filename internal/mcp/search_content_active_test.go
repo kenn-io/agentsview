@@ -242,3 +242,32 @@ func TestSearchContent_HintsApplyLegacyActivityFilter(t *testing.T) {
 		})
 	}
 }
+
+func TestSearchContent_CurrentSessionRawID(t *testing.T) {
+	ts, d := newTestToolset(t)
+	seedFTSSession(t, d, "codex:current", "proj", "needle current", "2024-06-15T11:59:00Z")
+	seedFTSSession(t, d, "other", "proj", "needle other", "2024-06-15T11:58:00Z")
+
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", CurrentSessionID: "current", IncludeOneShot: true})
+	require.NoError(t, err)
+	require.Len(t, out.Matches, 1)
+	assert.Equal(t, "other", out.Matches[0].SessionID)
+	assert.Equal(t, "codex:current", out.Exclusions.CurrentSessionID)
+	assert.False(t, out.Exclusions.RecentActive)
+
+	_, out, err = ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", SessionID: "current", IncludeActive: true, IncludeOneShot: true})
+	require.NoError(t, err)
+	require.Len(t, out.Matches, 1)
+	assert.Equal(t, "codex:current", out.Matches[0].SessionID)
+
+	_, out, err = ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", CurrentSessionID: "unindexed", IncludeOneShot: true})
+	require.NoError(t, err)
+	require.Len(t, out.Matches, 2)
+	assert.Equal(t, "unindexed", out.Exclusions.CurrentSessionID)
+	assert.False(t, out.Exclusions.RecentActive)
+
+	dbtest.SeedSession(t, d, "codex:duplicate", "proj")
+	dbtest.SeedSession(t, d, "host~duplicate", "proj")
+	_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", CurrentSessionID: "duplicate"})
+	require.ErrorContains(t, err, `ambiguous session UUID "duplicate"`)
+}

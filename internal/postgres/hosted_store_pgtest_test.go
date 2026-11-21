@@ -116,6 +116,24 @@ func TestHostedPublicReadBoundary(t *testing.T) {
 	assert.Empty(t, search.Matches)
 }
 
+func TestHostedTrashedExactLegacyIDDoesNotResolveLiveAlias(t *testing.T) {
+	t.Parallel()
+	f := newProjectionFixture(t)
+	m, _ := f.accept(t, "device-a", "capture-a", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("live transcript")))
+	_, err := f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent,deleted_at) VALUES('portable','legacy','archive','codex','2026-01-01T00:00:00Z')`)
+	require.NoError(t, err)
+	h, err := NewHostedStore(t.Context(), f.dsn, f.schema, f.tenant, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, h.Close()) })
+	ids, err := h.FindSessionIDsByRawSuffix(t.Context(), "codex:portable", 5)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"codex:portable"}, ids)
+	ids, err = h.FindSessionIDsByRawSuffix(t.Context(), "portable", 5)
+	require.NoError(t, err)
+	assert.Empty(t, ids)
+}
+
 func TestHostedPublicConflictCurationAndCursor(t *testing.T) {
 	t.Parallel()
 	f := newProjectionFixture(t)

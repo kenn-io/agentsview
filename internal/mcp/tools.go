@@ -94,13 +94,13 @@ func (t *toolset) resolveSession(
 	if err != nil || detail != nil {
 		return detail, err
 	}
-	ids, err := t.svc.FindSessionIDsByRawSuffix(ctx, id, 2)
+	ids, err := t.svc.FindSessionIDsByRawSuffix(ctx, id, 5)
 	if err != nil {
 		return nil, err
 	}
 	if len(ids) > 1 {
 		return nil, fmt.Errorf(
-			"ambiguous session UUID %q: use a full stored session ID", id,
+			"ambiguous session UUID %q: up to five matches %q; use a full stored session ID", id, ids,
 		)
 	}
 	if len(ids) == 1 {
@@ -110,9 +110,23 @@ func (t *toolset) resolveSession(
 		}
 	}
 	if detail == nil {
-		return nil, fmt.Errorf("session not found: %s", id)
+		return nil, fmt.Errorf("%w: %s", service.ErrSessionNotFound, id)
 	}
 	return detail, nil
+}
+
+func (t *toolset) resolveOptionalSessionID(ctx context.Context, id string) (string, error) {
+	if id == "" {
+		return id, nil
+	}
+	detail, err := t.resolveSession(ctx, id)
+	if errors.Is(err, service.ErrSessionNotFound) || errors.Is(err, service.ErrRawLookupUnsupported) {
+		return id, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return detail.ID, nil
 }
 
 // --- search_sessions ---
@@ -120,13 +134,13 @@ func (t *toolset) resolveSession(
 type searchSessionsIn struct {
 	DateFrom      string `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
 	DateTo        string `json:"date_to,omitempty" jsonschema:"Only sessions on or before this date (YYYY-MM-DD)."`
-	Query         string `json:"query,omitempty" jsonschema:"Search terms across all agent sessions. Required unless session_id is set. Every term must appear (AND), not an exact phrase; wrap the whole query in double quotes for an exact phrase, e.g. \"build failed\". Punctuation in a term (hyphens, colons) is handled safely."`
+	Query         string `json:"query,omitempty" jsonschema:"Search terms; required unless session_id is set. Every term must appear (AND); quote the whole query for an exact phrase. Punctuation is handled safely."`
 	SessionID     string `json:"session_id,omitempty" jsonschema:"Look up one session by its raw UUID or full stored session ID. Returns one metadata row, includes active sessions, and takes precedence over the other search arguments. Missing IDs and ambiguous raw UUIDs return errors."`
 	Project       string `json:"project,omitempty" jsonschema:"Restrict to one project (repo/directory name)."`
 	Sort          string `json:"sort,omitempty" jsonschema:"relevance (default) or recency."`
 	Limit         int    `json:"limit,omitempty" jsonschema:"Max results, default 10, max 30."`
 	Cursor        int    `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor."`
-	IncludeActive bool   `json:"include_active,omitempty" jsonschema:"Include sessions active in the last 10 minutes. Default false: the conversation you are in right now is also recorded, so without this exclusion you would find yourself."`
+	IncludeActive bool   `json:"include_active,omitempty" jsonschema:"Include sessions active in the last 10 minutes, including this conversation. Default false."`
 }
 
 type sessionHit struct {
@@ -286,7 +300,7 @@ type listRecallIn struct {
 	Scope           string `json:"scope,omitempty"`
 	Status          string `json:"status,omitempty"`
 	ExtractorMethod string `json:"extractor_method,omitempty"`
-	SourceSessionID string `json:"source_session_id,omitempty"`
+	SourceSessionID string `json:"source_session_id,omitempty" jsonschema:"Filter by full session ID or unique raw UUID. An unindexed or trashed ID is used as given."`
 	SourceRunID     string `json:"source_run_id,omitempty"`
 	TrustedOnly     bool   `json:"trusted_only,omitempty"`
 	Cursor          string `json:"cursor,omitempty" jsonschema:"Cursor from a previous next_cursor."`
@@ -300,11 +314,15 @@ type listRecallOut struct {
 }
 
 func (t *toolset) listRecall(ctx context.Context, _ *mcp.CallToolRequest, in listRecallIn) (*mcp.CallToolResult, listRecallOut, error) {
+	id, err := t.resolveOptionalSessionID(ctx, in.SourceSessionID)
+	if err != nil {
+		return nil, listRecallOut{}, err
+	}
 	result, err := t.svc.ListRecallEntries(ctx, service.RecallFilter{
 		UpdatedSince: in.UpdatedSince, CreatedSince: in.CreatedSince, Project: in.Project,
 		CWD: in.CWD, GitBranch: in.GitBranch, Agent: in.Agent, Type: in.Type,
 		Scope: in.Scope, Status: in.Status, ExtractorMethod: in.ExtractorMethod,
-		SourceSessionID: in.SourceSessionID, SourceRunID: in.SourceRunID, TrustedOnly: in.TrustedOnly, Cursor: in.Cursor,
+		SourceSessionID: id, SourceRunID: in.SourceRunID, TrustedOnly: in.TrustedOnly, Cursor: in.Cursor,
 		Limit: clampLimit(in.Limit, defaultListLimit, maxListLimit),
 	})
 	if err != nil {
@@ -423,7 +441,7 @@ func toSessionRow(s db.Session) sessionRow {
 // --- get_session_overview ---
 
 type sessionOverviewIn struct {
-	SessionID string `json:"session_id" jsonschema:"The session to summarize."`
+	SessionID string `json:"session_id" jsonschema:"Full session ID or unique raw UUID."`
 }
 
 type overviewMessage struct {
@@ -444,13 +462,9 @@ type sessionOverviewOut struct {
 func (t *toolset) sessionOverview(
 	ctx context.Context, _ *mcp.CallToolRequest, in sessionOverviewIn,
 ) (*mcp.CallToolResult, sessionOverviewOut, error) {
-	detail, err := t.svc.Get(ctx, in.SessionID)
+	detail, err := t.resolveSession(ctx, in.SessionID)
 	if err != nil {
 		return nil, sessionOverviewOut{}, err
-	}
-	if detail == nil {
-		return nil, sessionOverviewOut{}, fmt.Errorf(
-			"session not found: %s", in.SessionID)
 	}
 	out := sessionOverviewOut{
 		Session:      toSessionRow(detail.Session),
@@ -461,7 +475,7 @@ func (t *toolset) sessionOverview(
 	// Tail of the conversation: how did it end? desc returns
 	// newest-first; collect the newest few then restore chronological
 	// order for display.
-	msgs, err := t.svc.Messages(ctx, in.SessionID, service.MessageFilter{
+	msgs, err := t.svc.Messages(ctx, detail.ID, service.MessageFilter{
 		Direction: "desc",
 		Limit:     overviewTailFetch,
 	})
@@ -490,10 +504,10 @@ func (t *toolset) sessionOverview(
 // --- get_messages ---
 
 type getMessagesIn struct {
-	SessionID string `json:"session_id" jsonschema:"The session to read."`
+	SessionID string `json:"session_id" jsonschema:"Full session ID or unique raw UUID."`
 	From      *int   `json:"from,omitempty" jsonschema:"Ordinal to start from (e.g. match_ordinal from search_sessions). Ordinal 0 is a valid anchor (the first message). Mutually exclusive with around."`
 	Direction string `json:"direction,omitempty" jsonschema:"asc (default, oldest first) or desc (newest first). Mutually exclusive with around."`
-	Limit     int    `json:"limit,omitempty" jsonschema:"Max messages scanned, default 20, max 100. System/tool messages are filtered after this limit, so a page can return fewer; use next_from to continue. Not used with around; before/after control the window size on that path."`
+	Limit     int    `json:"limit,omitempty" jsonschema:"Messages scanned, default 20, max 100. Filtering may shorten the page; use next_from to continue. With around, before/after set the window instead."`
 	// Around switches to a symmetric window centered on an ordinal instead
 	// of linear pagination; it is mutually exclusive with From/Direction.
 	Around             *int     `json:"around,omitempty" jsonschema:"Center a symmetric window on this ordinal (e.g. match_ordinal from search_content or search_sessions), instead of linear pagination. Mutually exclusive with from and direction."`
@@ -501,7 +515,7 @@ type getMessagesIn struct {
 	After              *int     `json:"after,omitempty" jsonschema:"Messages of context after the around anchor, default 5. Requires around; replaces limit on that path."`
 	Roles              []string `json:"roles,omitempty" jsonschema:"Roles to include, e.g. tool. Default: user and assistant only. System messages are always excluded."`
 	MaxCharsPerMessage int      `json:"max_chars_per_message,omitempty" jsonschema:"Truncate each message to this many characters, default 2000, max 20000."`
-	ExpectedRevision   string   `json:"expected_revision,omitempty" jsonschema:"Transcript revision cited by search or an earlier read. Returns source_changed when it no longer matches."`
+	ExpectedRevision   string   `json:"expected_revision,omitempty" jsonschema:"Revision from search, file references, or an earlier read. Search and file references require the full session ID. Returns source_changed on mismatch."`
 	BodyCursor         string   `json:"body_cursor,omitempty" jsonschema:"Opaque continuation for the remainder of one oversized message. Use before advancing next_from."`
 }
 
@@ -557,6 +571,24 @@ func decodeMessageBodyCursor(raw string) (messageBodyCursor, error) {
 	return cursor, nil
 }
 
+func bindMessageRevision(sessionID, revision string) string {
+	if revision == "" {
+		return ""
+	}
+	return "mcp1:" + base64.RawURLEncoding.EncodeToString([]byte(sessionID)) + ":" + revision
+}
+
+func unbindMessageRevision(sessionID, revision string) (string, error) {
+	if !strings.HasPrefix(revision, "mcp1:") {
+		return revision, nil
+	}
+	id, value, ok := strings.Cut(strings.TrimPrefix(revision, "mcp1:"), ":")
+	if !ok || id != base64.RawURLEncoding.EncodeToString([]byte(sessionID)) {
+		return "", fmt.Errorf("%w: revision belongs to another session", service.ErrSourceChanged)
+	}
+	return value, nil
+}
+
 // filterAndMapMessage applies the get_messages role/system contract to one
 // message -- always drop system content (IsSystem or a legacy system
 // content prefix), then require its role to be in roles (nil/empty roles
@@ -583,11 +615,36 @@ func filterAndMapMessage(m db.Message, roles []string, maxChars int) (messageOut
 	return mo, true
 }
 
+func (t *toolset) resolveMessageRead(ctx context.Context, in *getMessagesIn) error {
+	var detail *service.SessionDetail
+	var err error
+	if in.ExpectedRevision != "" && !strings.HasPrefix(in.ExpectedRevision, "mcp1:") {
+		detail, err = t.svc.Get(ctx, in.SessionID)
+		if err == nil && (detail == nil || detail.ID != in.SessionID) {
+			err = service.ErrSessionNotFound
+		}
+	} else {
+		detail, err = t.resolveSession(ctx, in.SessionID)
+	}
+	if errors.Is(err, service.ErrSessionNotFound) && in.ExpectedRevision != "" {
+		return fmt.Errorf("%w: cited session no longer exists", service.ErrSourceChanged)
+	}
+	if err != nil {
+		return err
+	}
+	in.SessionID = detail.ID //nolint:nilaway // Both lookup paths return an error when detail is nil.
+	in.ExpectedRevision, err = unbindMessageRevision(in.SessionID, in.ExpectedRevision)
+	return err
+}
+
 func (t *toolset) getMessages(
 	ctx context.Context, _ *mcp.CallToolRequest, in getMessagesIn,
 ) (*mcp.CallToolResult, getMessagesOut, error) {
 	if in.BodyCursor != "" {
 		return t.getMessageBodyContinuation(ctx, in)
+	}
+	if err := t.resolveMessageRead(ctx, &in); err != nil {
+		return nil, getMessagesOut{}, err
 	}
 	if in.Around != nil {
 		return t.getMessagesAround(ctx, in)
@@ -639,6 +696,7 @@ func (t *toolset) getMessages(
 		}
 	}
 	attachBodyCursors(&out, res.EvidenceSource, in.SessionID, in.Roles)
+	out.TranscriptRevision = bindMessageRevision(in.SessionID, out.TranscriptRevision)
 	return nil, out, nil
 }
 
@@ -693,6 +751,7 @@ func (t *toolset) getMessagesAround(
 		out.NextFrom = &next
 	}
 	attachBodyCursors(&out, res.EvidenceSource, in.SessionID, in.Roles)
+	out.TranscriptRevision = bindMessageRevision(in.SessionID, out.TranscriptRevision)
 	return nil, out, nil
 }
 
@@ -738,10 +797,11 @@ func (t *toolset) getMessageBodyContinuation(
 	if err != nil {
 		return nil, getMessagesOut{}, err
 	}
-	if cursor.SessionID != in.SessionID ||
-		(in.ExpectedRevision != "" && in.ExpectedRevision != cursor.Revision) {
+	if cursor.SessionID != in.SessionID && !strings.HasSuffix(cursor.SessionID, ":"+in.SessionID) && !strings.HasSuffix(cursor.SessionID, "~"+in.SessionID) ||
+		(in.ExpectedRevision != "" && in.ExpectedRevision != cursor.Revision && in.ExpectedRevision != bindMessageRevision(cursor.SessionID, cursor.Revision)) {
 		return nil, getMessagesOut{}, fmt.Errorf("%w: body cursor does not match request", service.ErrSourceChanged)
 	}
+	in.SessionID = cursor.SessionID
 	zero := 0
 	res, err := t.svc.Messages(ctx, in.SessionID, service.MessageFilter{
 		Around: &cursor.Ordinal, Before: &zero, After: &zero,
@@ -775,7 +835,7 @@ func (t *toolset) getMessageBodyContinuation(
 		Timestamp: message.Timestamp, Model: message.Model, HasToolUse: message.HasToolUse,
 		FullLength: len(runes), Truncated: end < len(runes),
 	}
-	out := getMessagesOut{Messages: []messageOut{mo}, TranscriptRevision: res.TranscriptRevision}
+	out := getMessagesOut{Messages: []messageOut{mo}, TranscriptRevision: bindMessageRevision(in.SessionID, res.TranscriptRevision)}
 	if end < len(runes) {
 		cursor.Offset = end
 		out.Messages[0].BodyCursor = encodeMessageBodyCursor(cursor)
@@ -794,9 +854,9 @@ type searchContentIn struct {
 	Scope            string   `json:"scope,omitempty" jsonschema:"Substring/regex/terms/semantic/hybrid result scope: top, all (default), or subordinate."`
 	Project          string   `json:"project,omitempty" jsonschema:"Restrict to one project."`
 	Agent            string   `json:"agent,omitempty" jsonschema:"Restrict to one agent."`
-	SessionID        string   `json:"session_id,omitempty" jsonschema:"Exact full stored session ID. Without pattern or concepts, list its messages, ignoring mode and include flags and including active, one-shot, and automated sessions."`
+	SessionID        string   `json:"session_id,omitempty" jsonschema:"Full stored session ID or raw UUID matching one session. Without pattern or concepts, list its messages, ignoring mode and include flags and including active, one-shot, and automated sessions."`
 	GitBranch        string   `json:"git_branch,omitempty" jsonschema:"Restrict to one exact git branch."`
-	CurrentSessionID string   `json:"current_session_id,omitempty" jsonschema:"Exclude this exact full stored session ID instead of applying the recent-activity heuristic."`
+	CurrentSessionID string   `json:"current_session_id,omitempty" jsonschema:"Exclude this full session ID or unique raw UUID instead of using recent activity. An unindexed ID is excluded as given."`
 	DateFrom         string   `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
 	DateTo           string   `json:"date_to,omitempty" jsonschema:"Only sessions on or before this date (YYYY-MM-DD)."`
 	Limit            int      `json:"limit,omitempty" jsonschema:"Max matches, default 10, max 50."`
@@ -926,6 +986,11 @@ func (t *toolset) searchContent(
 	} else if strings.TrimSpace(in.Pattern) == "" && len(in.Concepts) == 0 {
 		return nil, searchContentOut{}, errors.New("pattern or concepts required")
 	}
+	var err error
+	in.SessionID, err = t.resolveOptionalSessionID(ctx, in.SessionID)
+	if err != nil {
+		return nil, searchContentOut{}, err
+	}
 	limit := clampLimit(in.Limit, defaultSearchLimit, maxContentSearchLimit)
 	normalized, err := service.NormalizeContentSearchRequest(service.ContentSearchRequest{
 		Pattern: in.Pattern, Concepts: in.Concepts, Mode: in.Mode,
@@ -952,7 +1017,10 @@ func (t *toolset) searchContent(
 			return nil, searchContentOut{}, errors.New("invalid activity_cutoff: use RFC3339")
 		}
 	}
-	currentSession := strings.TrimSpace(in.CurrentSessionID)
+	currentSession, err := t.resolveOptionalSessionID(ctx, strings.TrimSpace(in.CurrentSessionID))
+	if err != nil {
+		return nil, searchContentOut{}, err
+	}
 	excludeSessions := db.NormalizeExcludeSessionIDs([]string{currentSession})
 	cutoff := ""
 	if currentSession == "" && !in.IncludeActive {
@@ -1108,16 +1176,20 @@ func (t *toolset) usageSummary(
 }
 
 type fileReferencesIn struct {
-	SessionID string `json:"session_id" jsonschema:"The session whose files and images to find in Docbank."`
+	SessionID string `json:"session_id" jsonschema:"Full session ID or unique raw UUID."`
 }
 
 func (t *toolset) fileReferences(ctx context.Context, _ *mcp.CallToolRequest, in fileReferencesIn) (*mcp.CallToolResult, service.FileReferencesResult, error) {
-	result, err := service.FileReferences(ctx, t.svc, in.SessionID)
+	detail, err := t.resolveSession(ctx, in.SessionID)
+	if err != nil {
+		return nil, service.FileReferencesResult{}, err
+	}
+	result, err := service.FileReferences(ctx, t.svc, detail.ID)
 	return nil, result, err
 }
 
 type compactionSummariesIn struct {
-	SessionID   string `json:"session_id,omitempty" jsonschema:"Session ID."`
+	SessionID   string `json:"session_id,omitempty" jsonschema:"Full session ID or unique raw UUID."`
 	ActiveSince string `json:"active_since,omitempty" jsonschema:"RFC3339 timestamp."`
 	Cursor      string `json:"cursor,omitempty" jsonschema:"Session cursor; resume with the same active_since."`
 	Limit       uint   `json:"limit,omitempty" jsonschema:"Sessions per page; 0 uses the default 20, max 100."`

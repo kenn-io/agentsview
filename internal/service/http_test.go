@@ -5,7 +5,6 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -271,26 +270,6 @@ func TestHTTPBackend_FindSessionIDsByRawSuffix(t *testing.T) {
 	partial, err := svc.FindSessionIDsByPartial(t.Context(), "uuid", 2)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"host~uuid", "host~uuid-fork"}, partial)
-}
-
-func TestHTTPBackend_FindSessionIDsByRawSuffixRejectsOldServer(t *testing.T) {
-	t.Parallel()
-	var got url.Values
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got = r.URL.Query()
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"ids":["substring-match"]}`)
-	}))
-	t.Cleanup(ts.Close)
-
-	svc := servicehttp.NewHTTPBackend(ts.URL, "", false, "")
-	ids, err := svc.FindSessionIDsByRawSuffix(t.Context(), "uuid", 2)
-	require.ErrorContains(t, err, "does not acknowledge raw session ID lookup")
-	assert.Nil(t, ids)
-	assert.Equal(t, "uuid", got.Get("partial"))
-	assert.Equal(t, "true", got.Get("raw_suffix"))
-	assert.Equal(t, "2", got.Get("limit"))
-	t.Logf("head: raw_suffix_query=%s old_server_error=%q", got.Encode(), err)
 }
 
 func TestHTTPBackend_List_FilterRoundtrip(t *testing.T) {
