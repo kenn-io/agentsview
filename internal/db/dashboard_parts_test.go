@@ -409,7 +409,7 @@ func TestDashboardPartsQueuedFillsDoNotHoldBulkPermits(t *testing.T) {
 	}
 }
 
-func TestDashboardPartsToolCallCountsRefresh(t *testing.T) {
+func TestDashboardPartsToolChangeRefreshesActivity(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	d := testDB(t)
 	ctx := t.Context()
@@ -439,9 +439,9 @@ func TestDashboardPartsAgentChangeBeforeStamp(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s", "project", func(s *Session) { s.Agent = "claude"; s.StartedAt = new("2024-06-01T09:00:00Z") })
-	msg := asstMsgAt("s", 0, "answer", "2024-06-01T09:01:00Z")
-	msg.ToolCalls = []ToolCall{{SessionID: "s", ToolName: "Read", Category: "Read"}}
-	insertMessages(t, d, msg)
+	insertMessages(t, d, asstMsgAt("s", 0, "answer", "2024-06-01T09:01:00Z"))
+	_, err := d.getWriter().ExecContext(ctx, `UPDATE sessions SET tools_generation=NULL WHERE id='s'`)
+	require.NoError(t, err)
 	other, err := sql.Open("sqlite3", makeDSN(d.Path(), false))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, other.Close()) })
