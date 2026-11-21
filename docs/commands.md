@@ -2670,9 +2670,10 @@ starting one; stdio connections do not appear. For endpoint fields and
 token-file paths, see
 [listener discovery](/docs/mcp/#discover-running-http-listeners).
 
-`agentsview mcp calls` summarizes local call outcomes over inclusive UTC dates,
-including empty and truncated result shares and rejected argument names.
-See [call outcomes](/docs/mcp/#review-call-outcomes) for the recorded fields.
+To summarize local call outcomes over inclusive UTC dates, run
+`agentsview mcp calls`. The summary includes empty and truncated result shares
+and rejected argument names. For the recorded fields, see
+[call outcomes](/docs/mcp/#review-call-outcomes).
 
 By default, `agentsview mcp` uses stdio, the standard transport for local MCP
 clients such as Claude Desktop, Claude Code, and Codex. Pass `--http <addr>`
