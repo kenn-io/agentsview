@@ -28,9 +28,18 @@ func TestMCPCallsReport(t *testing.T) {
 `, "2026-01-02", day1)), 0600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, day2+".jsonl"), []byte(strings.ReplaceAll(`{"version":1,"at":"2026-01-03T00:00:00Z","tool":"get_messages","outcome":"error","error":"other error","bytes":20,"ms":8}
 `, "2026-01-03", day2)), 0600))
+	earliest := time.Now().UTC().AddDate(0, 0, -90).Format("2006-01-02")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, earliest+".jsonl"), []byte(strings.ReplaceAll(`{"version":1,"at":"2026-01-02T00:00:00Z","tool":"query_recall","outcome":"empty","bytes":10,"ms":4}
+`, "2026-01-02", earliest)), 0600))
 	cmd := newMCPCallsCommand()
-	cmd.SetArgs([]string{"--since", day1, "--until", day1, "--json"})
+	cmd.SetArgs([]string{"--since", "90d"})
 	var output bytes.Buffer
+	cmd.SetOut(&output)
+	require.NoError(t, cmd.Execute())
+	assert.Contains(t, output.String(), "query_recall: 1 calls")
+	cmd = newMCPCallsCommand()
+	cmd.SetArgs([]string{"--since", day1, "--until", day1, "--json"})
+	output.Reset()
 	cmd.SetOut(&output)
 	require.NoError(t, cmd.Execute())
 	var rows []mcpserver.CallSummary
@@ -57,8 +66,8 @@ func TestMCPCallsReport(t *testing.T) {
 	require.NoError(t, cmd.Execute())
 	assert.Contains(t, output.String(), "search_docs: 1 calls")
 	cmd = newMCPCallsCommand()
-	cmd.SetArgs([]string{"--since", time.Now().UTC().AddDate(0, 0, -90).Format("2006-01-02")})
-	assert.ErrorContains(t, cmd.Execute(), "retain only the last 90 UTC days")
+	cmd.SetArgs([]string{"--since", time.Now().UTC().AddDate(0, 0, -91).Format("2006-01-02")})
+	assert.ErrorContains(t, cmd.Execute(), "90 UTC days ago")
 	cmd = newMCPCallsCommand()
 	cmd.SetArgs([]string{"--since", day3, "--until", day1})
 	assert.Error(t, cmd.Execute())

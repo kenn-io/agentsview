@@ -272,8 +272,8 @@ func TestCallLogValidationValueIsNotARejectedName(t *testing.T) {
 func TestCallLogRetention(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now().UTC()
-	old := now.AddDate(0, 0, -90).Format("2006-01-02")
-	earliest := now.AddDate(0, 0, -89).Format("2006-01-02")
+	old := now.AddDate(0, 0, -91).Format("2006-01-02")
+	earliest := now.AddDate(0, 0, -90).Format("2006-01-02")
 	for _, date := range []string{old, earliest} {
 		rec := fmt.Sprintf(`{"version":1,"at":%q,"tool":"search_docs","outcome":"empty"}`+"\n", date+"T00:00:00Z")
 		require.NoError(t, os.WriteFile(filepath.Join(dir, date+".jsonl"), []byte(rec), 0600))
@@ -290,14 +290,14 @@ func TestCallLogRetention(t *testing.T) {
 	_, err = os.Stat(filepath.Join(dir, "unrelated.txt"))
 	require.NoError(t, err)
 	_, err = SummarizeCalls(t.Context(), dir, old, "")
-	require.ErrorContains(t, err, "retain only the last 90 UTC days")
+	require.ErrorContains(t, err, "90 UTC days ago")
 	_, err = SummarizeCalls(t.Context(), dir, "", old)
-	require.ErrorContains(t, err, "retain only the last 90 UTC days")
+	require.ErrorContains(t, err, "90 UTC days ago")
 }
 
 func TestCallLogServerPrunesOldFiles(t *testing.T) {
 	dir := t.TempDir()
-	old := time.Now().UTC().AddDate(0, 0, -90).Format("2006-01-02")
+	old := time.Now().UTC().AddDate(0, 0, -91).Format("2006-01-02")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, old+".jsonl"), []byte("old\n"), 0600))
 	d := dbtest.OpenTestDB(t)
 	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), CallLogDir: dir}))

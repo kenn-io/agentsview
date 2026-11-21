@@ -203,7 +203,7 @@ func pruneCallLog(ctx context.Context, dir string, now time.Time) error {
 	if err != nil {
 		return err
 	}
-	cutoff := now.UTC().AddDate(0, 0, -(callRetentionDays - 1)).Format("2006-01-02")
+	cutoff := now.UTC().AddDate(0, 0, -callRetentionDays).Format("2006-01-02")
 	for _, file := range files {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -239,9 +239,9 @@ func SummarizeCalls(ctx context.Context, dir, from, to string) ([]CallSummary, e
 	if err := pruneCallLog(ctx, dir, now); err != nil {
 		return nil, err
 	}
-	cutoff := now.AddDate(0, 0, -(callRetentionDays - 1)).Format("2006-01-02")
+	cutoff := now.AddDate(0, 0, -callRetentionDays).Format("2006-01-02")
 	if from != "" && from < cutoff || to != "" && to < cutoff {
-		return nil, fmt.Errorf("MCP call records retain only the last 90 UTC days; earliest date is %s", cutoff)
+		return nil, fmt.Errorf("MCP call records retain dates from %s (90 UTC days ago)", cutoff)
 	}
 	if from == "" {
 		from = cutoff
