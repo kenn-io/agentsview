@@ -392,6 +392,18 @@ func TestDashboardPartsReleasesScanPermitBeforeFill(t *testing.T) {
 }
 
 func TestDashboardPartsMemoRespectsSizeLimit(t *testing.T) {
+	t.Run("oversized part", func(t *testing.T) {
+		var memo dashboardPartsMemo
+		small := kept.Part[dashboardPart]{ID: "a", Fingerprint: "v"}
+		large := kept.Part[dashboardPart]{ID: "b", Fingerprint: "v", Value: dashboardPart{Velocity: SessionVelocity{TurnCycles: make([]float64, 8_388_592)}}}
+		require.EqualValues(t, kept.DefaultMaxBytes+2, dashboardPartBytes(large))
+		memo.store("UTC", "version", map[string]kept.Part[dashboardPart]{"a": small})
+		memo.store("UTC", "version", map[string]kept.Part[dashboardPart]{"b": large})
+		parts := make(map[string]kept.Part[dashboardPart])
+		missing := memo.reuse("UTC", "version", []string{"a", "b"}, map[string]string{"a": "v", "b": "v"}, parts)
+		assert.Equal(t, []string{"b"}, missing)
+		assert.Equal(t, map[string]kept.Part[dashboardPart]{"a": small}, parts)
+	})
 	t.Run("successive fills", func(t *testing.T) {
 		var memo dashboardPartsMemo
 		versions := make(map[string]string, 24_000)
