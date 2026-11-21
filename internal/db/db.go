@@ -708,7 +708,8 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // canonical input_image blocks so image retention, offload, and image_text
 // indexing see them. Re-parse toolResultContentLength and raw tool-result array
 // providers in place; source and session identities are unchanged.)
-const dataVersion = 189
+// (190: include retained tool calls in pull request links.)
+const dataVersion = 190
 
 const archiveOnlyVersionBase = 1 << 20
 
@@ -5599,6 +5600,9 @@ func (db *DB) HasCJKFTS(ctx context.Context) (available bool) {
 func (db *DB) setDataVersion(ctx context.Context) error {
 	return db.Update(ctx, func(tx *sql.Tx) error {
 		if err := db.upgradePromptPRLinksTx(ctx, tx); err != nil {
+			return err
+		}
+		if err := db.upgradeToolPRLinksTx(ctx, tx); err != nil {
 			return err
 		}
 		return advanceDataVersion(ctx, tx, dataVersion)

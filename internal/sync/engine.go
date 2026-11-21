@@ -11619,6 +11619,13 @@ func (e *Engine) prepareSessionNormalizedContext(
 	if err := ctx.Err(); err != nil {
 		return preparedSessionWrite{}, sessionWritePreserved, err
 	}
+	remote := pw.sess.GitRemote
+	if remote == "" {
+		if obs, ok := e.projectIdentityObservationForWrite(pw, candidate.Session); ok {
+			remote = obs.GitRemote
+		}
+	}
+	candidate.Session.PRLinks = parser.CombinePRLinks(candidate.Session.PRLinks, db.ToolCallPRLinks(candidate.Messages, candidate.Session.Cwd, remote))
 	options := ingest.ContentOptions{
 		BlockedResultCategories: e.blockedResultCategories,
 		ToolResultImages:        e.toolResultImages,

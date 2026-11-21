@@ -299,3 +299,13 @@ func bufferedRawJSONContentRevision(structure any) (string, error) {
 	}
 	return rawDigest("normalized-content-v1", string(encoded)), nil
 }
+
+func TestRawContentRevisionIgnoresDerivedToolPRLinks(t *testing.T) {
+	original := ingest.PreparedSession{Session: db.Session{ID: "session"}}
+	before, err := rawContentRevision(original)
+	require.NoError(t, err)
+	original.ToolPRLinks = []db.PRLink{{URL: "https://github.com/example/repo/pull/42", Host: "github.com", Repository: "example/repo", Number: 42}}
+	after, err := rawContentRevision(original)
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+}

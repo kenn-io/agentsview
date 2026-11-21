@@ -682,7 +682,8 @@ ______________________________________________________________________
 ### Pull request links
 
 Each session's `pr_links` field lists pull requests found in retained user
-prompts or structured transcript records:
+prompts, supported `gh pr` commands, child-agent prompts, or structured
+transcript records:
 
 ```json
 "pr_links": [
@@ -695,7 +696,9 @@ prompts or structured transcript records:
 ]
 ```
 
-AgentsView keeps one link per pull request. When a link comes from a prompt, it
+AgentsView keeps one link per pull request. Commands in uncertain shell branches
+do not add links. Archives that omitted tool inputs cannot recover command or
+child-agent links from those inputs. When a link comes from a prompt, it
 tells you only that the prompt mentioned the pull request, not that the session
 worked on it. Claude Code also includes `pr-link` entries in its transcripts.
 Because Claude Code records these links for the whole transcript, every session

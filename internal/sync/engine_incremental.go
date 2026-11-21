@@ -264,6 +264,33 @@ func (e *Engine) tryProviderIncrementalAppend(
 		case parser.IncrementalNoNewData:
 			return nil, nil, nil, nil, time.Time{}, 0, nil, nil, nil
 		default:
+			var toolLinks []parser.PRLink
+			remote := inc.RecordedGitRemote
+			remoteResolved := remote != ""
+			for _, message := range outcome.Messages {
+				for _, call := range message.ToolCalls {
+					if call.Category != "Bash" && call.Category != "Task" {
+						continue
+					}
+					if !remoteResolved {
+						remoteResolved = true
+						if obs, ok := e.projectIdentityObservation(db.Session{Machine: inc.Machine, Cwd: inc.Cwd, Project: inc.Project}); ok {
+							remote = obs.GitRemote
+						}
+					}
+					toolLinks = parser.CombinePRLinks(toolLinks, db.CallPRLinks(call.Category, call.InputJSON, inc.Cwd, remote))
+				}
+			}
+			if len(toolLinks) > 0 {
+				var encoded string
+				if err := e.db.Reader().QueryRowContext(ctx, `SELECT pr_links FROM sessions WHERE id=?`, inc.ID).Scan(&encoded); err != nil {
+					return nil, nil, nil, nil, time.Time{}, 0, nil, nil, err
+				}
+				stored := db.DecodePRLinks(encoded)
+				if len(parser.CombinePRLinks(stored, toolLinks)) > len(stored) {
+					return nil, nil, nil, nil, time.Time{}, 0, nil, nil, parser.ErrIncrementalNeedsFullParse
+				}
+			}
 			var terminationStatus *string
 			if outcome.TerminationStatus != nil {
 				status := string(*outcome.TerminationStatus)
