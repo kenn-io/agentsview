@@ -84,34 +84,30 @@ func TestExportReportingUpgradesOldCursorUsageArchive(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
-	read := func(version string) string {
-		out, _, err := executeExportSessionsCommand(newExportReportingTestRoot(now), "export", "day", "--schema-version", version, "--by-machine", "2026-07-28")
-		require.NoError(t, err)
-		var day struct {
-			Hours []struct {
-				Machines map[string]struct {
-					Usage struct {
-						Totals struct {
-							Output int64 `json:"output_tokens"`
-						} `json:"totals"`
-					} `json:"usage"`
-				} `json:"machines"`
+	out, _, err := executeExportSessionsCommand(newExportReportingTestRoot(now), "export", "day", "--schema-version", "6", "--by-machine", "2026-07-28")
+	require.NoError(t, err)
+	var day struct {
+		Hours []struct {
+			Machines map[string]struct {
 				Usage struct {
 					Totals struct {
 						Output int64 `json:"output_tokens"`
 					} `json:"totals"`
 				} `json:"usage"`
-			} `json:"hours"`
-		}
-		require.NoError(t, json.Unmarshal([]byte(out), &day))
-		assert.EqualValues(t, 22, day.Hours[10].Usage.Totals.Output)
-		assert.EqualValues(t, 22, day.Hours[10].Machines["archive:old-archive"].Usage.Totals.Output)
-		for key := range day.Hours[10].Machines {
-			assert.NotContains(t, key, "cursor-account:")
-		}
-		return out
+			} `json:"machines"`
+			Usage struct {
+				Totals struct {
+					Output int64 `json:"output_tokens"`
+				} `json:"totals"`
+			} `json:"usage"`
+		} `json:"hours"`
 	}
-	read("6")
+	require.NoError(t, json.Unmarshal([]byte(out), &day))
+	assert.EqualValues(t, 22, day.Hours[10].Usage.Totals.Output)
+	assert.EqualValues(t, 22, day.Hours[10].Machines["archive:old-archive"].Usage.Totals.Output)
+	for key := range day.Hours[10].Machines {
+		assert.NotContains(t, key, "cursor-account:")
+	}
 	raw, err = sql.Open("sqlite3", path)
 	require.NoError(t, err)
 	defer raw.Close()

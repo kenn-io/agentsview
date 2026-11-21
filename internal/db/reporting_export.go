@@ -113,11 +113,9 @@ func (db *DB) ExportReportingDay(
 		if opts.accountHour != nil {
 			start, end = *opts.accountHour, opts.accountHour.Add(time.Hour)
 		}
-		source.accountUsage, err = db.loadReportingAccountUsage(ctx, tx, start, end)
-		if err != nil {
+		if err := db.loadReportingAccountUsage(ctx, tx, start, end, &source); err != nil {
 			return export.ReportingDay{}, err
 		}
-		source.loadStats.AccountUsageRows = len(source.accountUsage)
 	}
 	if opts.afterSourceLoad != nil {
 		opts.afterSourceLoad(source.observerStats())
@@ -254,11 +252,9 @@ func (db *DB) ExportReportingDigest(
 		return nil, err
 	}
 	if schemaVersion == export.ReportingAccountSchemaVersion && opts.ByMachine {
-		source.accountUsage, err = db.loadReportingAccountUsage(ctx, tx, from, unionEnd)
-		if err != nil {
+		if err := db.loadReportingAccountUsage(ctx, tx, from, unionEnd, &source); err != nil {
 			return nil, err
 		}
-		source.loadStats.AccountUsageRows = len(source.accountUsage)
 	}
 	if opts.afterSourceLoad != nil {
 		opts.afterSourceLoad(source.observerStats())
@@ -477,9 +473,7 @@ func reportingHoursFromMachineSource(
 		events = slices.DeleteFunc(slices.Clone(events), func(e activity.ActivityEvent) bool {
 			return source.machineID(sessionByID[e.SessionID].Machine, schemaVersion) != machine
 		})
-		usage = slices.DeleteFunc(slices.Clone(usage), func(u activity.UsageRow) bool {
-			return source.machineID(sessionByID[u.SessionID].Machine, schemaVersion) != machine
-		})
+		usage = slices.DeleteFunc(slices.Clone(usage), func(u activity.UsageRow) bool { return source.machineID(sessionByID[u.SessionID].Machine, schemaVersion) != machine })
 	}
 	var references map[string]export.ProjectReference
 	var groupLabels map[string]string
@@ -709,41 +703,43 @@ const reportingCursorPollWindow = `PARTITION BY agent, account_user_id,
 	(agentsview_timestamp_unix_micro(occurred_at) / 3600000000 -
 	 (agentsview_timestamp_unix_micro(occurred_at) < 0 AND agentsview_timestamp_unix_micro(occurred_at) % 3600000000 != 0))`
 
-func (db *DB) loadReportingAccountUsage(ctx context.Context, tx *sql.Tx, start, end time.Time) ([]reportingAccountRow, error) {
+func (db *DB) loadReportingAccountUsage(ctx context.Context, tx *sql.Tx, start, end time.Time, source *reportingExportSource) error {
 	var exists bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='cursor_usage_events')`).Scan(&exists); err != nil {
-		return nil, err
+		return err
 	}
 	if !exists || !start.Before(end) {
-		return nil, nil
+		return nil
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT occurred_at, COALESCE(NULLIF(model, ''), '<unknown>'), input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, charged_microdollars, dedup_key, account_user_id, account_polled_at FROM (
+	rows, err := tx.QueryContext(ctx, `SELECT occurred_at, agentsview_timestamp_unix_micro(occurred_at), COALESCE(NULLIF(model, ''), '<unknown>'), input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, charged_microdollars, dedup_key, account_user_id, account_polled_at FROM (
 		SELECT *, max(account_polled_at) OVER (`+reportingCursorPollWindow+`) AS latest_poll FROM cursor_usage_events
 		WHERE agent = 'cursor' AND account_user_id != '' AND account_polled_at != '' AND occurred_at >= ? AND occurred_at < ? AND agentsview_timestamp_unix_micro(occurred_at) >= ? AND agentsview_timestamp_unix_micro(occurred_at) < ?)
 		WHERE account_polled_at = latest_poll`,
 		start.Add(-time.Second).UTC().Format(time.RFC3339Nano), end.Add(time.Second).UTC().Format(time.RFC3339Nano), start.UnixMicro(), end.UnixMicro())
 	if err != nil {
-		return nil, fmt.Errorf("querying Cursor account usage: %w", err)
+		return fmt.Errorf("querying Cursor account usage: %w", err)
 	}
 	defer rows.Close()
 	var result []reportingAccountRow
 	for rows.Next() {
 		var r reportingAccountRow
 		var input, output, write, read int
-		if err := rows.Scan(&r.usage.Timestamp, &r.usage.Model, &input, &output, &write, &read, &r.usage.Cost, &r.usage.UsageDedupKey, &r.account, &r.polledAt); err != nil {
-			return nil, err
+		var occurredMicros int64
+		if err := rows.Scan(&r.usage.Timestamp, &occurredMicros, &r.usage.Model, &input, &output, &write, &read, &r.usage.Cost, &r.usage.UsageDedupKey, &r.account, &r.polledAt); err != nil {
+			return err
 		}
 		r.account = cursorAccountPrefix + r.account
-		r.at, err = time.Parse(time.RFC3339Nano, r.usage.Timestamp)
-		if err != nil {
-			continue
-		}
-		r.at = r.at.UTC()
+		r.at = time.UnixMicro(occurredMicros).UTC()
 		r.usage.Agent = "cursor"
 		setStandaloneUsageFields(&r.usage, input, output, write, read)
 		result = append(result, r)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	source.accountUsage = result
+	source.loadStats.AccountUsageRows = len(result)
+	return nil
 }
 
 func (db *DB) reportingStandaloneUsageCandidatesFrom(

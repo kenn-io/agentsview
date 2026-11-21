@@ -143,7 +143,6 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 				if !hour.Before(start) && !hour.Add(time.Hour).After(windowEnd) {
 					windows[int64(ev.Timestamp.Sub(start)/rosterWindow)] = true
 					row := cursorUsageRow(ev)
-					row.Agent = "cursor"
 					fetched[db.CursorUsageEventDedupKey(row)] = true
 				}
 			}
@@ -181,7 +180,6 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 				}
 				for _, ev := range memberEvents {
 					row := cursorUsageRow(ev)
-					row.Agent = "cursor"
 					key := db.CursorUsageEventDedupKey(row)
 					if !fetched[key] {
 						continue

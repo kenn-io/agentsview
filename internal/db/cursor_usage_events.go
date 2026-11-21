@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -73,36 +74,15 @@ func (db *DB) AssignCursorUsageAccount(ctx context.Context, accountUserID string
 	if len(keys) == 0 {
 		return nil
 	}
-	if accountUserID != "" {
-		id, err := strconv.ParseUint(accountUserID, 10, 64)
-		if err != nil || id == 0 || strconv.FormatUint(id, 10) != accountUserID {
-			return fmt.Errorf("invalid Cursor account user ID %q", accountUserID)
-		}
-	}
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	tx, err := db.getWriter().Begin(ctx)
+	encoded, err := json.Marshal(keys)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	stamp := polledAt.UTC().Format("2006-01-02T15:04:05.000000Z")
-	for len(keys) > 0 {
-		n := min(len(keys), 500)
-		args := make([]any, 0, n+3)
-		args = append(args, accountUserID, stamp)
-		for _, key := range keys[:n] {
-			args = append(args, key)
-		}
-		args = append(args, stamp)
-		query := "UPDATE cursor_usage_events SET account_user_id = ?, account_polled_at = ? WHERE dedup_key IN (" + strings.TrimSuffix(strings.Repeat("?,", n), ",") + ") AND account_polled_at < ?"
-		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
-			return fmt.Errorf("assigning Cursor usage account: %w", err)
-		}
-		keys = keys[n:]
-	}
-	if err := tx.Commit(); err != nil {
-		return err
+	if _, err := db.getWriter().Exec(ctx, `UPDATE cursor_usage_events SET account_user_id = ?, account_polled_at = ? WHERE dedup_key IN (SELECT value FROM json_each(?)) AND account_polled_at < ?`, accountUserID, stamp, string(encoded), stamp); err != nil {
+		return fmt.Errorf("assigning Cursor usage account: %w", err)
 	}
 	db.notifyCursorUsage()
 	return nil

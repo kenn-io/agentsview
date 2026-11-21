@@ -89,7 +89,6 @@ func TestCursorAccountReporting(t *testing.T) {
 	c := CursorUsageEvent{OccurredAt: "2026-07-28T10:03:00Z", Model: "c", OutputTokens: 30, DedupKey: "c"}
 	require.NoError(t, d.InsertCursorUsageEvents(ctx, []CursorUsageEvent{a, b, c}))
 	first := time.Date(2026, 7, 29, 1, 0, 0, 0, time.UTC)
-	require.Error(t, d.AssignCursorUsageAccount(ctx, "invalid", []string{"a"}, first))
 	require.NoError(t, d.AssignCursorUsageAccount(ctx, "12", []string{"a"}, first))
 	require.NoError(t, d.AssignCursorUsageAccount(ctx, "12", []string{"b"}, first.Add(time.Hour)))
 	require.NoError(t, d.AssignCursorUsageAccount(ctx, "34", []string{"c"}, first))
