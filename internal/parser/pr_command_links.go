@@ -247,14 +247,10 @@ func shellCommands(command string) ([]shellCall, bool) {
 				}
 				status = 0
 			default:
-				call := shellCall{Words: args, Literal: literals, ChangedDir: local.changedDir}
-				if local.repo.exported {
-					call.Repo = local.repo.value
-					call.RepoOpaque = !local.repo.known
-				}
-				if local.host.exported {
-					call.Host = local.host.value
-					call.HostOpaque = !local.host.known
+				call := local.call(args, literals)
+				if childFile, child, ok := nestedShellCall(call, local); ok {
+					walkStmts(childFile.Stmts, &child)
+					break
 				}
 				calls = append(calls, call)
 			}
@@ -282,6 +278,33 @@ func shellCommands(command string) ([]shellCall, bool) {
 	return calls, state.changedDir
 }
 
+func (state shellState) call(args []string, literals []bool) shellCall {
+	call := shellCall{Words: args, Literal: literals, ChangedDir: state.changedDir}
+	if state.repo.exported {
+		call.Repo, call.RepoOpaque = state.repo.value, !state.repo.known
+	}
+	if state.host.exported {
+		call.Host, call.HostOpaque = state.host.value, !state.host.known
+	}
+	return call
+}
+
+func nestedShellCall(call shellCall, state shellState) (*syntax.File, shellState, bool) {
+	call = unwrapShellCall(call)
+	if len(call.Words) < 3 || !call.Literal[0] || !call.Literal[1] || !call.Literal[2] ||
+		(path.Base(call.Words[0]) != "sh" && path.Base(call.Words[0]) != "bash" && path.Base(call.Words[0]) != "zsh") ||
+		(call.Words[1] != "-c" && call.Words[1] != "-lc") {
+		return nil, state, false
+	}
+	file, err := syntax.NewParser().Parse(strings.NewReader(call.Words[2]), "")
+	state.repo = shellValue{value: call.Repo, known: !call.RepoOpaque, exported: call.Repo != "" || call.RepoOpaque}
+	state.host = shellValue{value: call.Host, known: !call.HostOpaque, exported: call.Host != "" || call.HostOpaque}
+	if err != nil {
+		return &syntax.File{}, state, true
+	}
+	return file, state, true
+}
+
 func shellLiteral(parts []syntax.WordPart) (string, bool) {
 	var b strings.Builder
 	for _, part := range parts {
@@ -290,20 +313,21 @@ func shellLiteral(parts []syntax.WordPart) (string, bool) {
 			b.WriteString(v.Value)
 		case *syntax.SglQuoted:
 			if v.Dollar {
-				return "", false
+				return b.String(), false
 			}
 			b.WriteString(v.Value)
 		case *syntax.DblQuoted:
 			if v.Dollar {
-				return "", false
+				return b.String(), false
 			}
 			value, ok := shellLiteral(v.Parts)
 			if !ok {
-				return "", false
+				b.WriteString(value)
+				return b.String(), false
 			}
 			b.WriteString(value)
 		default:
-			return "", false
+			return b.String(), false
 		}
 	}
 	return b.String(), true
@@ -406,21 +430,13 @@ func ghPRCallLinks(call shellCall, remote string) []PRLink {
 			flags.BoolP(name, short, false, "")
 		}
 	}
-	const opaque = "\x00opaque-shell-word"
-	var arguments []string
-	for j := i + 2; j < len(args); j++ {
-		if call.Literal[j] {
-			arguments = append(arguments, args[j])
-		} else {
-			arguments = append(arguments, opaque)
-		}
-	}
+	arguments := shellFlagArguments(call, i+2)
 	if flags.Parse(arguments) != nil {
 		return nil
 	}
 	if flags.Changed("repo") {
 		repo = *repoFlag
-		invalidRepo = repo == "" || repo == opaque
+		invalidRepo = repo == "" || strings.Contains(repo, opaque)
 	}
 	selectors := flags.Args()
 	if len(selectors) != 1 || selectors[0] == opaque {
@@ -459,6 +475,23 @@ func ghPRCallLinks(call shellCall, remote string) []PRLink {
 		return []PRLink{link}
 	}
 	return nil
+}
+
+const opaque = "\x00opaque-shell-word"
+
+func shellFlagArguments(call shellCall, start int) []string {
+	var arguments []string
+	for i := start; i < len(call.Words); i++ {
+		arg := call.Words[i]
+		if call.Literal[i] {
+			arguments = append(arguments, arg)
+		} else if strings.HasPrefix(arg, "-") && (strings.Contains(arg, "=") || !strings.HasPrefix(arg, "--") && len(arg) >= 2) {
+			arguments = append(arguments, arg+opaque)
+		} else {
+			arguments = append(arguments, opaque)
+		}
+	}
+	return arguments
 }
 
 // Options follow the GitHub CLI's arity and short names for each subcommand.
