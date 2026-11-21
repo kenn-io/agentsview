@@ -384,7 +384,8 @@ func TestSearchSessions_EmptyActiveHint(t *testing.T) {
 	assert.Empty(t, out.Results)
 	assert.Equal(t, 2, out.ExcludedActive)
 	assert.Equal(t, []service.ContentSearchHint{{
-		Code: "excluded_active", Message: "Sessions active in the last 10 minutes hidden from this page: 2. Retry this request with include_active: true to see them; they may include your current conversation.",
+		Code: "excluded_active", Message: "Sessions active in the last 10 minutes hidden from this page: 2. " +
+			"Retry this request with include_active: true to see them; they may include your current conversation.",
 		RetryWith: map[string]any{"include_active": true},
 	}}, out.Hints)
 
@@ -401,13 +402,16 @@ func TestSearchSessions_EmptyActiveHint(t *testing.T) {
 	seedFTSSession(t, d, "recent", "proj", "pageexample singleexample", "2024-06-15T11:55:00Z")
 	single := mustSearch(t, ts, searchSessionsIn{Query: "singleexample"})
 	require.Len(t, single.Hints, 1)
-	assert.Equal(t, "Sessions active in the last 10 minutes hidden from this page: 1. Retry this request with include_active: true to see them; they may include your current conversation.", single.Hints[0].Message)
+	assert.Equal(t, "Sessions active in the last 10 minutes hidden from this page: 1. "+
+		"Retry this request with include_active: true to see them; they may include your current conversation.", single.Hints[0].Message)
 
 	page := mustSearch(t, ts, searchSessionsIn{Query: "pageexample", Sort: "recency", Limit: 1})
 	assert.Empty(t, page.Results)
 	require.NotNil(t, page.NextCursor)
 	require.Len(t, page.Hints, 1)
-	assert.Equal(t, "Sessions active in the last 10 minutes hidden from this page: 1. Retry this request with include_active: true to see them; they may include your current conversation. To see later matches without including active sessions, pass next_cursor as cursor.", page.Hints[0].Message)
+	assert.Equal(t, "Sessions active in the last 10 minutes hidden from this page: 1. "+
+		"Retry this request with include_active: true to see them; they may include your current conversation. "+
+		"To see later matches without including active sessions, pass next_cursor as cursor.", page.Hints[0].Message)
 	next := mustSearch(t, ts, searchSessionsIn{Query: "pageexample", Sort: "recency", Limit: 1, Cursor: *page.NextCursor})
 	require.Len(t, next.Results, 1)
 	assert.Equal(t, "older", next.Results[0].SessionID)
