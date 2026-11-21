@@ -737,9 +737,6 @@ func (t *toolset) fitMessagePage(ctx context.Context, out *getMessagesOut, scann
 			return err
 		}
 	}
-	if n == 0 {
-		return errors.New("message response exceeds budget")
-	}
 	out.Messages = items[:n]
 	out.Omitted = len(items) - n
 	if n == len(items) {
@@ -939,23 +936,23 @@ func toContextMessages(msgs []db.Message) []contextMessage {
 }
 
 type contentMatch struct {
-	WebURL           string   `json:"web_url,omitempty" jsonschema:"Browser URL for this session; use this URL when linking to it."`
-	SessionID        string   `json:"session_id"`
-	Project          string   `json:"project,omitempty"`
-	Agent            string   `json:"agent"`
-	Location         string   `json:"location" jsonschema:"Where the match occurred: one of message, thinking, tool_input, or tool_result."`
-	Role             string   `json:"role,omitempty"`
-	Ordinal          int      `json:"ordinal"`
-	Timestamp        string   `json:"timestamp"`
-	Snippet          string   `json:"snippet"`
-	SnippetTruncated bool     `json:"snippet_truncated,omitempty" jsonschema:"Read the full message with get_messages."`
-	MatchedWords     int      `json:"matched_words" jsonschema:"Number of retained query words the match holds in ranked word search; unquoted stop words are dropped. Zero for other searches."`
-	Score            *float64 `json:"score,omitempty" jsonschema:"Relevance score for semantic/hybrid modes; omitted for substring/regex/fts."`
-	OrdinalRange     [2]int   `json:"ordinal_range" jsonschema:"[start, end] ordinals of the conversation unit containing this match; equal to the match ordinal for single-message units."`
-	Subordinate      bool     `json:"subordinate,omitzero" jsonschema:"True when this match belongs to a subordinate unit: a sidechain run, or a subagent/fork session."`
-	Relationship     string   `json:"relationship,omitempty" jsonschema:"The matched session's relationship to its parent (for example subagent or fork), when it has one."`
-	ParentSessionID  string   `json:"parent_session_id,omitempty" jsonschema:"The parent session ID, when the matched session has one."`
-	Sidechain        bool     `json:"is_sidechain,omitzero" jsonschema:"True when the matched message itself is flagged as a sidechain message."`
+	WebURL          string   `json:"web_url,omitempty" jsonschema:"Browser URL for this session; use this URL when linking to it."`
+	SessionID       string   `json:"session_id"`
+	Project         string   `json:"project,omitempty"`
+	Agent           string   `json:"agent"`
+	Location        string   `json:"location" jsonschema:"Where the match occurred: one of message, thinking, tool_input, or tool_result."`
+	Role            string   `json:"role,omitempty"`
+	Ordinal         int      `json:"ordinal"`
+	Timestamp       string   `json:"timestamp"`
+	Snippet         string   `json:"snippet"`
+	SnippetCut      bool     `json:"snippet_truncated,omitempty" jsonschema:"Read the full message with get_messages."`
+	MatchedWords    int      `json:"matched_words" jsonschema:"Number of retained query words the match holds in ranked word search; unquoted stop words are dropped. Zero for other searches."`
+	Score           *float64 `json:"score,omitempty" jsonschema:"Relevance score for semantic/hybrid modes; omitted for substring/regex/fts."`
+	OrdinalRange    [2]int   `json:"ordinal_range" jsonschema:"[start, end] ordinals of the conversation unit containing this match; equal to the match ordinal for single-message units."`
+	Subordinate     bool     `json:"subordinate,omitzero" jsonschema:"True when this match belongs to a subordinate unit: a sidechain run, or a subagent/fork session."`
+	Relationship    string   `json:"relationship,omitempty" jsonschema:"The matched session's relationship to its parent (for example subagent or fork), when it has one."`
+	ParentSessionID string   `json:"parent_session_id,omitempty" jsonschema:"The parent session ID, when the matched session has one."`
+	Sidechain       bool     `json:"is_sidechain,omitzero" jsonschema:"True when the matched message itself is flagged as a sidechain message."`
 	// ContextBefore/ContextAfter are populated when Context > 0: the N
 	// messages immediately before/after this match, content truncated to
 	// 500 characters.
@@ -1068,9 +1065,6 @@ func (t *toolset) contentSearchTotal(ctx context.Context, req service.ContentSea
 		return t.countContentMatches(ctx, req, 0, 0, keep)
 	}
 	if res.NextCursor > 0 {
-		if res.NextCursor >= contentTotalCap {
-			return contentTotalCap, true, nil
-		}
 		return t.countContentMatches(ctx, req, res.NextCursor, res.NextCursor, nil)
 	}
 	if len(res.Matches) > 0 {
@@ -1246,25 +1240,19 @@ func (t *toolset) searchContent(
 			m.ContextTruncated = len(m.ContextBefore) > 0 || len(m.ContextAfter) > 0
 			m.ContextBefore, m.ContextAfter = nil, nil
 			originalSnippet := m.Snippet
-			m.SnippetTruncated = true
+			m.SnippetCut = true
 			envelope, err := jsonv1.Marshal(out)
 			if err != nil {
 				return nil, searchContentOut{}, err
 			}
 			m.Snippet = fitText(m.Snippet, responseBudgetBytes-len(envelope), func(text string) any { match := *m; match.Snippet = text; return match })
-			m.SnippetTruncated = m.Snippet != originalSnippet
+			m.SnippetCut = m.Snippet != originalSnippet
 			out.Matches = items[:1]
 		}
 		out.Omitted = len(items) - n
 		if out.Omitted == 0 {
 			out.NextCursor, out.Note = originalNext, originalNote
 		} else {
-			out.ExcludedActive = 0
-			for _, m := range res.Matches[:rawIndexes[n-1]+1] {
-				if legacy && !keepMatch(m) {
-					out.ExcludedActive++
-				}
-			}
 			if mode == "semantic" || mode == "hybrid" {
 				out.NextCursor = nil
 			} else {

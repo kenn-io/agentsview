@@ -38,7 +38,7 @@ type toolCallsIn struct {
 	SessionID     string `json:"session_id" jsonschema:"Full stored session ID."`
 	Category      string `json:"category,omitempty" jsonschema:"Only calls in this category: Read, Edit, Write, Bash, Grep, Glob, Task, Tool, or Other."`
 	Limit         int    `json:"limit,omitempty" jsonschema:"Max tool calls, default 50, max 200; the byte budget can return fewer."`
-	Cursor        *int   `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor."`
+	Cursor        int    `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor."`
 	InputOffset   *int   `json:"input_offset,omitempty" jsonschema:"Pass next_input_offset with cursor to continue an input; measured in characters."`
 	MaxInputChars int    `json:"max_input_chars,omitempty" jsonschema:"Max input characters, default 500, max 10000; the byte budget can shorten it."`
 }
@@ -66,13 +66,13 @@ type toolCallsOut struct {
 func (t *toolset) toolCalls(
 	ctx context.Context, _ *mcp.CallToolRequest, in toolCallsIn,
 ) (*mcp.CallToolResult, toolCallsOut, error) {
-	if in.Cursor != nil && *in.Cursor < 0 {
+	if in.Cursor < 0 {
 		return nil, toolCallsOut{}, errors.New("cursor must not be negative")
 	}
 	inputOffset := 0
 	if in.InputOffset != nil {
-		if *in.InputOffset < 0 || in.Cursor == nil {
-			return nil, toolCallsOut{}, errors.New("input_offset requires a cursor and must not be negative")
+		if *in.InputOffset < 0 {
+			return nil, toolCallsOut{}, errors.New("input_offset must not be negative")
 		}
 		inputOffset = *in.InputOffset
 	}
@@ -101,16 +101,10 @@ func (t *toolset) toolCalls(
 	}
 	limit := clampLimit(in.Limit, defaultToolCallLimit, maxToolCallLimit)
 	maxChars := clampLimit(in.MaxInputChars, defaultToolInputChars, maxToolInputChars)
-	start := 0
-	if in.Cursor != nil {
-		start = min(*in.Cursor, len(matching))
-	}
+	start := min(in.Cursor, len(matching))
 	end := min(start+limit, len(matching))
 	if inputOffset > 0 {
-		if start == end {
-			return nil, toolCallsOut{}, errors.New("invalid input_offset")
-		}
-		end = start + 1
+		end = min(start+1, end)
 	}
 	out := toolCallsOut{
 		ToolCalls: make([]toolCallOut, 0, end-start),
@@ -119,6 +113,7 @@ func (t *toolset) toolCalls(
 	for _, tc := range matching[start:end] {
 		input, partial := redactToolInput(tc.InputJSON, maxChars)
 		input, cut := truncate(input, maxChars)
+		cut = cut || partial
 		if inputOffset > 0 {
 			runes := []rune(input)
 			if inputOffset >= len(runes) {
@@ -127,9 +122,11 @@ func (t *toolset) toolCalls(
 			input = string(runes[inputOffset:])
 		}
 		out.ToolCalls = append(out.ToolCalls, toolCallOut{
-			Ordinal: tc.Ordinal, Timestamp: tc.Timestamp, ToolName: tc.ToolName, Category: tc.Category,
-			Input: input, InputTruncated: cut || partial, SkillName: tc.SkillName,
-			SubagentSessionID: tc.SubagentSessionID, ResultLength: tc.ResultLength,
+			Ordinal: tc.Ordinal, Timestamp: tc.Timestamp,
+			ToolName: tc.ToolName, Category: tc.Category,
+			Input: input, InputTruncated: cut,
+			SkillName: tc.SkillName, SubagentSessionID: tc.SubagentSessionID,
+			ResultLength: tc.ResultLength,
 		})
 	}
 	if end < len(matching) {
@@ -180,9 +177,6 @@ func fitToolCalls(out *toolCallsOut, start int, last bool, inputOffset int) erro
 		}
 	} else {
 		next = start + n
-		if n == len(items) && last {
-			out.NextCursor = nil
-		}
 	}
 	out.ToolCalls = items[:n]
 	out.Omitted = len(items) - n

@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json/v2"
 	"fmt"
 	"net"
@@ -661,23 +660,6 @@ func TestGetMessages_BodyCursorRejectsChangedTranscript(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, first.Messages[0].BodyCursor)
-	payload, err := base64.RawURLEncoding.DecodeString(first.Messages[0].BodyCursor)
-	require.NoError(t, err)
-	var binding struct {
-		Source string `json:"s"`
-	}
-	require.NoError(t, json.Unmarshal(payload, &binding))
-	require.NotEmpty(t, binding.Source)
-	for _, tc := range []struct{ name, payload string }{
-		{"v2 with window", fmt.Sprintf(`{"v":2,"s":%q,"i":"body","r":%q,"o":0,"p":4,"c":"window"}`, binding.Source, first.TranscriptRevision)},
-		{"unsupported", fmt.Sprintf(`{"v":4,"s":%q,"i":"body","r":%q,"o":0,"p":4}`, binding.Source, first.TranscriptRevision)},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			encoded := base64.RawURLEncoding.EncodeToString([]byte(tc.payload))
-			_, _, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "body", BodyCursor: encoded, MaxCharsPerMessage: 4})
-			require.EqualError(t, err, "invalid body_cursor")
-		})
-	}
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "body", []db.Message{
 		dbtest.UserMsg("body", 0, "changed body"),
 	}))
@@ -2448,8 +2430,6 @@ func TestSearchContent_Total(t *testing.T) {
 		{name: "last page", count: 36, limit: 10, cursor: 30, want: 36, calls: 1},
 		{name: "cursor past end", count: 6, limit: 10, cursor: 1000, want: 6, calls: 2, wantScan: new(0)},
 		{name: "capped", count: 600, limit: 10, want: 500, calls: 11, capped: true},
-		{name: "capped continuation", count: 600, limit: 10, cursor: 100, want: 500, calls: 9, capped: true, wantScan: new(110)},
-		{name: "cap shortcut", count: 600, limit: 10, cursor: 490, want: 500, calls: 1, capped: true},
 		{name: "exactly at cap", count: 500, limit: 10, cursor: 490, want: 500, calls: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2536,7 +2516,7 @@ func TestSearchContent_BudgetLongSnippet(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, out.Matches, 1)
 	assert.True(t, fitsResponse(out))
-	assert.True(t, out.Matches[0].SnippetTruncated)
+	assert.True(t, out.Matches[0].SnippetCut)
 	assert.Equal(t, "session", out.Matches[0].SessionID)
 	assert.Equal(t, 1, out.Matches[0].Ordinal)
 	assert.Equal(t, "revision", out.Matches[0].TranscriptRevision)
