@@ -268,7 +268,7 @@ func (s *Store) activityReportRuns(
 	}
 	if len(missing) > 0 {
 		all := pgActivityAllTime
-		if !q.Partial && q.RangeStart.Year() > 1 {
+		if !q.Partial {
 			// Slot bounds have second precision. Cover the entire seconds so
 			// custom ranges with fractional bounds can share the slot.
 			all.RangeStart = q.RangeStart.Truncate(time.Second)
