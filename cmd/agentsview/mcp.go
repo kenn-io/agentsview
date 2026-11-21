@@ -91,14 +91,17 @@ Add to your MCP client config (e.g. Claude Desktop):
 			defer stop()
 
 			opts := mcpserver.ServeOptions{
-				Service: svc,
-				Version: version,
-				Profile: profile,
+				Service:     svc,
+				Version:     version,
+				Profile:     profile,
+				ErrorWriter: cmd.ErrOrStderr(),
 			}
 
 			cfg, cfgErr := config.LoadPFlagsFor(cmd.Flags(), config.ScopeLocal)
 			if cfgErr == nil {
 				opts.CallLogDir = filepath.Join(cfg.DataDir, "mcp", "calls")
+			} else if httpAddr == "" {
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Warning: MCP calls will not be recorded: %v\n", cfgErr)
 			}
 			var serveErr error
 			if httpAddr != "" {

@@ -84,6 +84,7 @@ func ParseProfile(name string) (Profile, error) {
 // time.Now).
 type ServeOptions struct {
 	CallLogDir         string
+	ErrorWriter        io.Writer
 	DiscoveryDirectory string
 	BackendURL         string
 	Service            service.SessionService
@@ -133,7 +134,13 @@ func newServer(opts ServeOptions) *mcp.Server {
 				call.Content = append(call.Content, &mcp.TextContent{Text: "Warning: " + apiclient.ArchiveStaleWarning})
 			}
 			if req, ok := request.(*mcp.CallToolRequest); ok {
-				recordToolCall(opts.CallLogDir, req, result, err, elapsed)
+				if recordErr := recordToolCall(opts.CallLogDir, req, result, err, elapsed); recordErr != nil {
+					w := opts.ErrorWriter
+					if w == nil {
+						w = os.Stderr
+					}
+					_, _ = fmt.Fprintf(w, "Warning: could not record MCP call: %v\n", recordErr)
+				}
 			}
 			return result, err
 		}

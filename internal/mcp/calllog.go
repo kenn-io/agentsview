@@ -4,10 +4,11 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,13 +18,14 @@ import (
 )
 
 type callRecord struct {
-	At       time.Time `json:"at"`
-	Tool     string    `json:"tool"`
-	Outcome  string    `json:"outcome"`
-	Error    string    `json:"error,omitempty"`
-	Rejected []string  `json:"rejected,omitempty"`
-	Bytes    int       `json:"bytes"`
-	Ms       int       `json:"ms"`
+	At           time.Time `json:"at"`
+	Tool         string    `json:"tool"`
+	Outcome      string    `json:"outcome"`
+	Error        string    `json:"error,omitempty"`
+	Rejected     []string  `json:"rejected,omitempty"`
+	Bytes        int       `json:"bytes"`
+	Ms           int       `json:"ms"`
+	Continuation bool      `json:"continuation,omitempty"`
 }
 
 type CallCount struct {
@@ -41,8 +43,6 @@ type CallSummary struct {
 	MedianMs     int         `json:"median_ms"`
 }
 
-var rejectedNames = regexp.MustCompile(`"([a-z][a-z0-9_]{0,63})"`)
-
 func searchField(tool string) string {
 	switch tool {
 	case ToolSearchSessions, ToolSearchDocs:
@@ -55,23 +55,20 @@ func searchField(tool string) string {
 	return ""
 }
 
-func knownTool(name string) bool {
-	switch name {
-	case ToolSearchSessions, ToolQueryRecall, ToolListRecall, ToolListSessions, ToolGetSessionOverview, ToolGetMessages, ToolSearchContent, ToolGetMemoryStatus, ToolGetUsageSummary, ToolGetSessionUsage, ToolGetToolCalls, ToolGetRecentEdits, ToolGetChildSessions, ToolCompareUsage, ToolGetActivityReport, ToolGetToolUsage, ToolGetQualitySignals, ToolGetTermTrends, ToolSearchDocs, ToolGetFrictionDigest, ToolListFrictionPatterns, ToolGetSessionFileReferences, ToolGetCompactionSummaries:
-		return true
-	}
-	return false
-}
-
-func recordToolCall(dir string, req *mcp.CallToolRequest, result mcp.Result, callErr error, elapsed time.Duration) {
+func recordToolCall(dir string, req *mcp.CallToolRequest, result mcp.Result, callErr error, elapsed time.Duration) error {
 	if dir == "" || req == nil || req.Params == nil {
-		return
+		return nil
 	}
 	name := req.Params.Name
-	if !knownTool(name) {
-		name = "unknown tool"
-	}
 	rec := callRecord{At: time.Now().UTC(), Tool: name, Outcome: "ok", Ms: int(elapsed.Milliseconds())}
+	if name == ToolSearchSessions || name == ToolSearchContent {
+		var args struct {
+			Cursor int `json:"cursor"`
+		}
+		if json.Unmarshal(req.Params.Arguments, &args) == nil {
+			rec.Continuation = args.Cursor != 0
+		}
+	}
 	call, _ := result.(*mcp.CallToolResult)
 	var message string
 	if call != nil {
@@ -89,16 +86,9 @@ func recordToolCall(dir string, req *mcp.CallToolRequest, result mcp.Result, cal
 		switch {
 		case strings.HasPrefix(message, `validating "arguments":`):
 			rec.Error = "invalid arguments"
-			if _, rest, found := strings.Cut(message, "unexpected additional properties "); found {
-				if end := strings.IndexByte(rest, ']'); end >= 0 {
-					var args map[string]json.RawMessage
-					_ = json.Unmarshal(req.Params.Arguments, &args)
-					for _, match := range rejectedNames.FindAllStringSubmatch(rest[:end], -1) {
-						if _, ok := args[match[1]]; ok {
-							rec.Rejected = append(rec.Rejected, match[1])
-						}
-					}
-				}
+			var args map[string]json.RawMessage
+			if json.Unmarshal(req.Params.Arguments, &args) == nil {
+				rec.Rejected = rejectedProperties(message, args)
 			}
 		case strings.HasPrefix(message, "session not found:"):
 			rec.Error = "session not found"
@@ -117,25 +107,63 @@ func recordToolCall(dir string, req *mcp.CallToolRequest, result mcp.Result, cal
 			}
 		}
 	}
-	if safefileio.EnsurePrivateDir(dir) != nil {
-		return
+	if err := safefileio.EnsurePrivateDir(dir); err != nil {
+		return err
 	}
 	b, err := json.Marshal(rec)
 	if err != nil {
-		return
+		return err
 	}
 	f, err := os.OpenFile(filepath.Join(dir, rec.At.Format("2006-01-02")+".jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
-		return
+		return err
 	}
-	defer f.Close()
-	_, _ = f.Write(append(b, '\n'))
+	_, writeErr := f.Write(append(b, '\n'))
+	return errors.Join(writeErr, f.Close())
+}
+
+// rejectedProperties parses the SDK's Go-quoted property list and accepts only
+// names present in the request. Validation messages and values are discarded.
+func rejectedProperties(message string, args map[string]json.RawMessage) []string {
+	_, list, ok := strings.Cut(message, "unexpected additional properties [")
+	if !ok {
+		return nil
+	}
+	var names []string
+	for len(list) > 0 {
+		list = strings.TrimLeft(list, " ")
+		if len(list) == 0 || list[0] != '"' {
+			break
+		}
+		end := 1
+		for end < len(list) {
+			if list[end] == '\\' {
+				end += 2
+				continue
+			}
+			if list[end] == '"' {
+				break
+			}
+			end++
+		}
+		if end >= len(list) {
+			break
+		}
+		name, err := strconv.Unquote(list[:end+1])
+		if err == nil {
+			if _, exists := args[name]; exists {
+				names = append(names, name)
+			}
+		}
+		list = list[end+1:]
+	}
+	return names
 }
 
 type callAggregate struct {
 	row              CallSummary
 	errors, rejected map[string]int
-	empty            int
+	empty, searches  int
 	bytes, ms        []int
 }
 
@@ -162,10 +190,18 @@ func SummarizeCalls(dir, from, to string) ([]CallSummary, error) {
 		if err != nil {
 			return nil, err
 		}
-		scanner := bufio.NewScanner(f)
-		for scanner.Scan() {
+		reader := bufio.NewReader(f)
+		for {
+			line, readErr := reader.ReadBytes('\n')
+			if readErr != nil {
+				if readErr != io.EOF {
+					_ = f.Close()
+					return nil, readErr
+				}
+				break
+			}
 			var rec callRecord
-			if json.Unmarshal(scanner.Bytes(), &rec) != nil || !db.InDateRange(rec.At.UTC().Format("2006-01-02"), from, to) {
+			if json.Unmarshal(line, &rec) != nil || !db.InDateRange(rec.At.UTC().Format("2006-01-02"), from, to) {
 				continue
 			}
 			g := groups[rec.Tool]
@@ -177,8 +213,11 @@ func SummarizeCalls(dir, from, to string) ([]CallSummary, error) {
 			if rec.Outcome == "error" {
 				g.errors[rec.Error]++
 			}
-			if rec.Outcome == "empty" {
-				g.empty++
+			if searchField(rec.Tool) != "" && !rec.Continuation {
+				g.searches++
+				if rec.Outcome == "empty" {
+					g.empty++
+				}
 			}
 			for _, name := range rec.Rejected {
 				g.rejected[name]++
@@ -186,13 +225,8 @@ func SummarizeCalls(dir, from, to string) ([]CallSummary, error) {
 			g.bytes = append(g.bytes, rec.Bytes)
 			g.ms = append(g.ms, rec.Ms)
 		}
-		err = scanner.Err()
-		closeErr := f.Close()
-		if err != nil {
+		if err := f.Close(); err != nil {
 			return nil, err
-		}
-		if closeErr != nil {
-			return nil, closeErr
 		}
 	}
 	rows := make([]CallSummary, 0, len(groups))
@@ -205,8 +239,8 @@ func SummarizeCalls(dir, from, to string) ([]CallSummary, error) {
 		if top := rankedCounts(g.errors); len(top) > 0 {
 			g.row.TopError = &top[0]
 		}
-		if searchField(g.row.Tool) != "" {
-			pct := 100 * float64(g.empty) / float64(g.row.Calls)
+		if searchField(g.row.Tool) != "" && g.searches > 0 {
+			pct := 100 * float64(g.empty) / float64(g.searches)
 			g.row.EmptyPercent = &pct
 		}
 		g.row.Rejected = rankedCounts(g.rejected)

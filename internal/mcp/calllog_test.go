@@ -1,13 +1,16 @@
 package mcp
 
 import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/service"
-	"os"
-	"path/filepath"
-	"testing"
 )
 
 func TestCallOutcomes(t *testing.T) {
@@ -73,4 +76,74 @@ broken
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, 30, rows[0].MedianBytes)
+}
+
+func TestCallLogPaginationAndRejectedNames(t *testing.T) {
+	dir := t.TempDir()
+	d := dbtest.OpenTestDB(t)
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), CallLogDir: dir}))
+	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
+	for _, args := range []map[string]any{
+		{"query": "unmatched-search"},
+		{"query": "unmatched-search", "cursor": 3},
+		{"query": "secret-value", "Mixed Case]\\\"": "secret-value"},
+		{"query": 123},
+	} {
+		_, err := ct.CallTool(t.Context(), callParams(ToolSearchSessions, args))
+		require.NoError(t, err)
+	}
+	rows, err := SummarizeCalls(dir, "", "")
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, 4, rows[0].Calls)
+	require.NotNil(t, rows[0].EmptyPercent)
+	assert.InDelta(t, 100.0/3, *rows[0].EmptyPercent, 0.001)
+	assert.Equal(t, []CallCount{{Name: "Mixed Case]\\\"", Count: 1}}, rows[0].Rejected)
+	files, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	raw, err := os.ReadFile(filepath.Join(dir, files[0].Name()))
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "secret-value")
+	assert.NotContains(t, string(raw), "validating")
+}
+
+func TestCallLogLongRecords(t *testing.T) {
+	dir := t.TempDir()
+	d := dbtest.OpenTestDB(t)
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), CallLogDir: dir}))
+	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
+	name := strings.Repeat("x", 70000)
+	result, err := ct.CallTool(t.Context(), callParams(ToolSearchSessions, map[string]any{"query": "secret", name: true}))
+	require.NoError(t, err)
+	require.True(t, result.IsError)
+	rows, err := SummarizeCalls(dir, "", "")
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, []CallCount{{Name: name, Count: 1}}, rows[0].Rejected)
+}
+
+func TestCallLogWriteFailureWarns(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "file")
+	require.NoError(t, os.WriteFile(dir, []byte("file"), 0600))
+	var warnings bytes.Buffer
+	d := dbtest.OpenTestDB(t)
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), CallLogDir: filepath.Join(dir, "calls"), ErrorWriter: &warnings}))
+	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
+	result, err := ct.CallTool(t.Context(), callParams(ToolSearchDocs, map[string]any{"query": "session"}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+	assert.Contains(t, warnings.String(), "could not record MCP call")
+}
+
+func TestCallLogUnknownTool(t *testing.T) {
+	dir := t.TempDir()
+	d := dbtest.OpenTestDB(t)
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), CallLogDir: dir}))
+	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
+	_, err := ct.CallTool(t.Context(), callParams("future_tool", nil))
+	require.Error(t, err)
+	rows, err := SummarizeCalls(dir, "", "")
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "future_tool", rows[0].Tool)
 }
