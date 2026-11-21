@@ -1,4 +1,4 @@
-import type { EventSource } from "eventsource";
+import type { LiveSource } from "../api/client.js";
 import { triggerResync, triggerSync, watchSession, type SyncHandle } from "../api/client.js";
 import { MetadataService, SyncService } from "../api/generated/index";
 import { ApiError, isAbortError, isRemoteConnection } from "../api/runtime.js";
@@ -102,7 +102,7 @@ class SyncStore {
     return this.serverVersion?.archive_only === true;
   }
 
-  private watchEventSource: EventSource | null = null;
+  private watchEventSource: LiveSource | null = null;
   private watchVisibilityHandler: (() => void) | null = null;
   private pollVisibilityHandler: (() => void) | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -395,35 +395,28 @@ class SyncStore {
         resolve(seen);
       };
     });
-    const open = () => {
-      this.watchEventSource = watchSession(sessionId, onUpdate, onTiming);
-      const es = this.watchEventSource;
-      es.addEventListener("error", () => {
-        if (this.watchEventSource !== es) return;
+    this.watchEventSource = watchSession(sessionId, onUpdate, onTiming);
+    const es = this.watchEventSource;
+    es.addEventListener("error", () => {
+      if (this.watchEventSource === es) settle(false);
+    });
+    es.addEventListener("session_missing", () => {
+      if (this.watchEventSource === es) {
         settle(false);
-      });
-      es.addEventListener("session_ready", () => {
-        if (this.watchEventSource !== es) return;
-        settle(true);
-        onUpdate();
-      });
-    };
-    if (typeof document === "undefined") {
-      open();
-      return ready;
-    }
-    this.watchVisibilityHandler = () => {
-      if (document.hidden) {
-        this.closeSessionStream();
-      } else if (!this.watchEventSource || this.watchEventSource.readyState === 2) {
-        open();
-        // A rejected reconnect, such as a deleted session's 404, never sends session_ready.
         onUpdate();
       }
-    };
-    document.addEventListener("visibilitychange", this.watchVisibilityHandler);
-    if (!document.hidden) open();
-    else settle(false);
+    });
+    es.addEventListener("session_ready", () => {
+      if (this.watchEventSource === es) {
+        settle(true);
+        onUpdate();
+      }
+    });
+    if (typeof document !== "undefined") {
+      this.watchVisibilityHandler = () => es.setVisible(!document.hidden);
+      document.addEventListener("visibilitychange", this.watchVisibilityHandler);
+      if (document.hidden) settle(false);
+    }
     return ready;
   }
 

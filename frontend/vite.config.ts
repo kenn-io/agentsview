@@ -105,7 +105,10 @@ export default defineConfig(({ command }) => {
     experimental: {
       renderBuiltUrl(filename, { hostType }) {
         // Keep the worker URL relative to its JS chunk under a server base path.
-        if (hostType === "js" && filename.includes("syntax-highlight.worker"))
+        if (
+          hostType === "js" &&
+          (filename.includes("syntax-highlight.worker") || filename.includes("live.worker"))
+        )
           return { relative: true };
       },
     },

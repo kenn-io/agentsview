@@ -1,4 +1,4 @@
-import type { EventSource } from "eventsource";
+import type { LiveSource } from "../api/client.js";
 import { watchEvents, type DataChangedEvent } from "../api/client.js";
 
 type Listener = (e: DataChangedEvent) => void;
@@ -10,7 +10,7 @@ type Listener = (e: DataChangedEvent) => void;
 export const EVENTS_STORE_HEAL_INTERVAL_MS = 60_000;
 
 class EventsStore {
-  private es: EventSource | null = null;
+  private es: LiveSource | null = null;
   // Use a Map keyed by a unique per-call token so two subscribes
   // of the same function reference are tracked independently and
   // each unsubscribe only removes its own entry.
@@ -51,7 +51,8 @@ class EventsStore {
       this.ensureOpen();
       this.ensureHealTimer();
     }
-    if (this.es === null) this.settleStartup();
+    if (this.es === null || (typeof document !== "undefined" && document.hidden))
+      this.settleStartup();
   }
 
   /** Subscribe to every event. Returns unsubscribe. */
@@ -98,10 +99,6 @@ class EventsStore {
 
   private ensureOpen() {
     if (!this.available) return;
-    // Hidden streams consume HTTP/1.1 connections that API reads need.
-    if (typeof document !== "undefined" && document.hidden) {
-      return;
-    }
     // Don't retry once watchEvents has told us the endpoint is
     // permanently unavailable. The safety-net polls on each view
     // still keep data fresh in that mode.
@@ -200,13 +197,12 @@ class EventsStore {
     this.visibilityHandlerInstalled = true;
     document.addEventListener("visibilitychange", () => {
       if (this.listeners.size === 0 || !this.available) return;
-      if (document.hidden) {
-        this.close();
-        return;
+      this.es?.setVisible(!document.hidden);
+      if (!document.hidden) {
+        this.permanentlyFailed = false;
+        this.ensureOpen();
+        this.ensureHealTimer();
       }
-      this.permanentlyFailed = false;
-      this.ensureOpen();
-      this.ensureHealTimer();
     });
   }
 }

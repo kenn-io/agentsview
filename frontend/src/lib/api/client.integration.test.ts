@@ -7,27 +7,29 @@ afterEach(() => {
   localStorage.clear();
 });
 
-describe("generated session watch", () => {
+describe("shared session watch", () => {
   it("delivers updates through the generated authenticated request", async () => {
     localStorage.setItem("agentsview-auth-token", "test-token");
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
         new ReadableStream({
           start(controller) {
-            controller.enqueue(new TextEncoder().encode("event: session_updated\ndata: {}\n\n"));
+            controller.enqueue(
+              new TextEncoder().encode("event: session_updated\ndata: session/one\n\n"),
+            );
           },
         }),
         { headers: { "Content-Type": "text/event-stream" } },
       ),
     );
     vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(document, "hidden", "get").mockReturnValue(false);
     const onUpdate = vi.fn();
     const source = watchSession("session/one", onUpdate);
     try {
       await vi.waitFor(() => expect(onUpdate).toHaveBeenCalledOnce());
-      expect(fetchMock).toHaveBeenCalledWith(
-        "/api/v1/sessions/session%2Fone/watch",
-        expect.objectContaining({ method: "GET" }),
+      expect(String(fetchMock.mock.calls[0]![0])).toBe(
+        "http://localhost:3000/api/v1/events?session=session%2Fone",
       );
       const headers = new Headers(fetchMock.mock.calls[0]![1].headers);
       expect(headers.get("Authorization")).toBe("Bearer test-token");
