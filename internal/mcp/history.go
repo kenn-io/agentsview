@@ -166,7 +166,10 @@ func fitToolCalls(out *toolCallsOut, start int, last bool, inOffset, maxChars in
 		next = start
 		offset := maxChars
 		out.NextInputOffset = &offset
-		envelope, _ := json.Marshal(out)
+		envelope, err := json.Marshal(out)
+		if err != nil {
+			return err
+		}
 		call.Input = fitText(call.Input, responseBudgetBytes-len(envelope), func(text string) any { c := *call; c.Input = text; return c })
 		if call.Input == "" {
 			return errors.New("tool call response exceeds budget")

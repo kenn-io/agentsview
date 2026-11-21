@@ -361,9 +361,7 @@ func TestGetToolCalls_BudgetOversizedInput(t *testing.T) {
 		}
 		assert.Equal(t, 0, out.ToolCalls[0].Ordinal)
 		got.WriteString(out.ToolCalls[0].Input)
-		if out.NextCursor == nil {
-			t.Fatal("missing cursor for following call")
-		}
+		require.NotNil(t, out.NextCursor, "missing cursor for following call")
 		in.Cursor, in.InputOffset = *out.NextCursor, 0
 		if out.NextInputOffset != nil {
 			assert.Equal(t, got.Len(), *out.NextInputOffset)

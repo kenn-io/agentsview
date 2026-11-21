@@ -2724,7 +2724,8 @@ func TestGetMessages_BudgetPagesAndBodyCursors(t *testing.T) {
 		for _, message := range out.Messages {
 			_, exists := got[message.Ordinal]
 			assert.False(t, exists)
-			content := message.Content
+			var content strings.Builder
+			content.WriteString(message.Content)
 			cursor := message.BodyCursor
 			require.NotEmpty(t, cursor)
 			for cursor != "" {
@@ -2732,13 +2733,13 @@ func TestGetMessages_BudgetPagesAndBodyCursors(t *testing.T) {
 				require.NoError(t, err)
 				require.Len(t, body.Messages, 1)
 				assert.True(t, fitsResponse(body))
-				content += body.Messages[0].Content
+				content.WriteString(body.Messages[0].Content)
 				cursor = body.Messages[0].BodyCursor
 				if cursor == "" {
 					nextFrom = body.NextFrom
 				}
 			}
-			got[message.Ordinal] = content
+			got[message.Ordinal] = content.String()
 		}
 		if nextFrom != nil {
 			in = getMessagesIn{SessionID: "page-bodies", From: nextFrom, Limit: 21, MaxCharsPerMessage: 700}

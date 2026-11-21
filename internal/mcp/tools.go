@@ -815,7 +815,10 @@ func fitOneMessage(out *getMessagesOut, item *messageOut, source string, in getM
 		item.FullLength = utf8.RuneCountInString(item.Content)
 	}
 	item.BodyCursor = encodeMessageBodyCursor(messageBodyCursor{EvidenceSource: source, SessionID: in.SessionID, Revision: out.TranscriptRevision, Ordinal: item.Ordinal, Offset: item.FullLength, NextFrom: out.NextFrom, PageCursor: out.PageCursor, Roles: in.Roles})
-	envelope, _ := jsonv1.Marshal(out)
+	envelope, err := jsonv1.Marshal(out)
+	if err != nil {
+		return err
+	}
 	item.Content = fitText(item.Content, responseBudgetBytes-len(envelope), func(text string) any { m := *item; m.Content = text; return m })
 	if item.Content == "" {
 		return errors.New("message response exceeds budget")
@@ -977,7 +980,10 @@ func (t *toolset) getMessageBodyContinuation(
 		out.Messages[0].Truncated = true
 		item := out.Messages[0]
 		out.Messages = []messageOut{}
-		envelope, _ := jsonv1.Marshal(out)
+		envelope, err := jsonv1.Marshal(out)
+		if err != nil {
+			return nil, getMessagesOut{}, err
+		}
 		item.Content = fitText(item.Content, responseBudgetBytes-len(envelope), func(text string) any { m := item; m.Content = text; return m })
 		if item.Content == "" {
 			return nil, getMessagesOut{}, errors.New("message response exceeds budget")
@@ -1445,10 +1451,16 @@ func (t *toolset) searchContent(
 			n = 1
 			m := &items[0]
 			m.ContextTruncated = true
-			envelope, _ := jsonv1.Marshal(out)
+			envelope, err := jsonv1.Marshal(out)
+			if err != nil {
+				return nil, searchContentOut{}, err
+			}
 			budget := responseBudgetBytes - len(envelope)
 			for len(m.ContextBefore) > 0 || len(m.ContextAfter) > 0 {
-				data, _ := jsonv1.Marshal(m)
+				data, err := jsonv1.Marshal(m)
+				if err != nil {
+					return nil, searchContentOut{}, err
+				}
 				if len(data) <= budget {
 					break
 				}
@@ -1458,7 +1470,11 @@ func (t *toolset) searchContent(
 					m.ContextBefore = m.ContextBefore[1:]
 				}
 			}
-			if data, _ := jsonv1.Marshal(m); len(data) > budget {
+			data, err := jsonv1.Marshal(m)
+			if err != nil {
+				return nil, searchContentOut{}, err
+			}
+			if len(data) > budget {
 				return nil, searchContentOut{}, errors.New("search match exceeds budget")
 			}
 			out.Matches = items[:1]
