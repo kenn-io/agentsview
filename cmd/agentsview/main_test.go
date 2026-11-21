@@ -14,6 +14,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -39,6 +40,8 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 	agentsync "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
+	"go.kenn.io/agentsview/internal/testutil"
+	"go.kenn.io/docbank/document/glmocr"
 	"go.kenn.io/kit/stacktest"
 )
 
@@ -298,6 +301,118 @@ func TestServeSkipInitialSyncStillReparsesStaleArchive(t *testing.T) {
 			require.NoError(t, err, string(out))
 		})
 	}
+}
+
+func TestServeLegacyImageTextAfterRestart(t *testing.T) {
+	cfg := testConfigWithClaudeFixture(t)
+	cfg.Host = "127.0.0.1"
+	var restarted atomic.Bool
+	release := make(chan struct{})
+	ocrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !restarted.Load() {
+			select {
+			case <-release:
+			case <-r.Context().Done():
+			}
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"invoice marker"}]]}`, glmocr.DefaultDeploymentFingerprint)
+	}))
+	t.Cleanup(ocrServer.Close)
+	t.Cleanup(func() { close(release) })
+	cfg.ImageText = config.ImageTextConfig{Enabled: true, Endpoint: ocrServer.URL + "/glmocr/parse"}
+	conn, err := sql.Open("sqlite3", cfg.DBPath)
+	require.NoError(t, err)
+	schema, err := os.ReadFile("testdata/legacy/schema-a0c95ef21.sql")
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), string(schema))
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), `PRAGMA user_version = 166;
+		INSERT INTO sessions(id, project) VALUES ('replacement', 'project'), ('retained-image', 'project');
+		INSERT INTO messages(id, session_id, ordinal, role, content) VALUES (1, 'replacement', 0, 'user', 'old transcript'), (2, 'retained-image', 0, 'assistant', 'answer');
+		INSERT INTO tool_calls(message_id, session_id, tool_name, category, result_content) VALUES (2, 'retained-image', 'Read', 'file', '[{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgppbWFnZQ=="}]');`)
+	require.NoError(t, err)
+	testutil.LegacyImageTextSchema(t, conn, testutil.LegacyImageTextLayoutB831F99CC)
+	require.NoError(t, conn.Close())
+	database, err := db.Open(t.Context(), cfg.DBPath)
+	require.NoError(t, err)
+	require.NoError(t, database.ReplaceSessionMessages(t.Context(), "replacement", []db.Message{{SessionID: "replacement", Role: "user", Content: "updated transcript"}}))
+	require.NoError(t, database.Close())
+	data, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	env := []string{
+		"AGENTSVIEW_IMAGE_SERVE_CONFIG=" + string(data),
+		"AGENTSVIEW_IMAGE_SERVE_SOURCES=" + cfg.AgentDirs[parser.AgentClaude][0],
+	}
+	out, err := runRuntimeWarningHelperProcess(t, "serve", "TestServeLegacyImageTextHelperProcess", env, "archive rebuild complete")
+	require.NoError(t, err, string(out))
+	restarted.Store(true)
+	out, err = runRuntimeWarningHelperProcess(t, "serve restart", "TestServeLegacyImageTextHelperProcess", append(env, "AGENTSVIEW_IMAGE_SERVE_RESTART=1"), "archive rebuild complete")
+	require.NoError(t, err, string(out))
+}
+
+func TestServeLegacyImageTextHelperProcess(t *testing.T) {
+	data := os.Getenv("AGENTSVIEW_IMAGE_SERVE_CONFIG")
+	if data == "" {
+		return
+	}
+	t.Setenv("PATH", "")
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_CONFIG_DIR", t.TempDir())
+	localTransport := http.DefaultTransport
+	transport := localTransport.(*http.Transport).Clone()
+	transport.DialContext = func(context.Context, string, string) (net.Conn, error) {
+		return nil, errors.New("network disabled in test")
+	}
+	withPricingCatalogTransport(t, transport)
+	var cfg config.Config
+	require.NoError(t, json.Unmarshal([]byte(data), &cfg))
+	cfg.DBPath = filepath.Join(cfg.DataDir, "sessions.db")
+	cfg.AgentDirs = map[parser.AgentType][]string{parser.AgentClaude: {os.Getenv("AGENTSVIEW_IMAGE_SERVE_SOURCES")}}
+	original := writeDaemonRuntimeWithAuthAndNoSync
+	writeDaemonRuntimeWithAuthAndNoSync = func(lifetime *daemonLifetime, dataDir, host string, port int, version, browserURL string, readOnly, requireAuth, noSync bool, explicitPort *int, caddyPID ...int) (string, error) {
+		base := fmt.Sprintf("http://%s:%d", host, port)
+		client := &http.Client{Timeout: 10 * time.Second, Transport: localTransport}
+		stale, _, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
+		require.NoError(t, err)
+		require.False(t, stale, "startup reconciliation must finish before readiness")
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/sessions/session0/messages", nil)
+		require.NoError(t, err)
+		resp, err := client.Do(req)
+		require.NoError(t, err)
+		body, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		require.NoError(t, resp.Body.Close())
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		require.Contains(t, string(body), "hello")
+		req, err = http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/sessions/replacement/messages", nil)
+		require.NoError(t, err)
+		resp, err = client.Do(req)
+		require.NoError(t, err)
+		body, err = io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		require.NoError(t, resp.Body.Close())
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		require.Contains(t, string(body), "updated transcript")
+		if os.Getenv("AGENTSVIEW_IMAGE_SERVE_RESTART") == "1" {
+			require.Eventually(t, func() bool {
+				req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/search?q=invoice+marker&include_one_shot=true", nil)
+				require.NoError(t, err)
+				resp, err := client.Do(req)
+				if err != nil {
+					return false
+				}
+				body, err := io.ReadAll(resp.Body)
+				require.NoError(t, resp.Body.Close())
+				return err == nil && resp.StatusCode == http.StatusOK && strings.Contains(string(body), "retained-image")
+			}, 20*time.Second, time.Second)
+		}
+		fmt.Println("archive rebuild complete")
+		return original(lifetime, dataDir, host, port, version, browserURL, readOnly, requireAuth, noSync, explicitPort, caddyPID...)
+	}
+	runServe(t.Context(), cfg, serveOptions{}, 0)
 }
 
 func TestServeStaleArchiveHelperProcess(t *testing.T) {

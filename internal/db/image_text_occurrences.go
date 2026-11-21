@@ -41,7 +41,7 @@ func (db *DB) BackfillImageTextOccurrences(ctx context.Context) error {
 			return fmt.Errorf("backfilling image text occurrences: %w", err)
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET sync_marker=MAX(COALESCE(sync_marker,''),strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id IN (SELECT o.session_id FROM image_text_occurrences o JOIN image_text_cache c ON c.image_hash=o.image_hash WHERE c.succeeded=1 AND c.text<>'')`); err != nil {
+	if err := markImageTextSessionsModifiedTx(ctx, tx); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM image_text_cache WHERE NOT EXISTS (SELECT 1 FROM image_text_occurrences o WHERE o.image_hash=image_text_cache.image_hash)`); err != nil {
