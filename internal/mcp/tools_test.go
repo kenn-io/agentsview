@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -2356,6 +2357,8 @@ func TestSessionToolsResolvePlainIDs(t *testing.T) {
 	dbtest.SeedSession(t, d, "codex:ambiguous", "proj")
 	dbtest.SeedSession(t, d, "host~ambiguous", "proj")
 	dbtest.SeedSession(t, d, "codex:empty", "proj")
+	dbtest.SeedSession(t, d, "collision", "proj")
+	dbtest.SeedSession(t, d, "codex:collision", "proj")
 
 	tests := []struct {
 		name string
@@ -2420,9 +2423,21 @@ func TestSessionToolsResolvePlainIDs(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			require.NoError(t, tc.call(t, "plain"))
 			require.ErrorContains(t, tc.call(t, "missing"), "session not found: missing")
-			require.ErrorContains(t, tc.call(t, "ambiguous"), `ambiguous session UUID "ambiguous"`)
+			err := tc.call(t, "ambiguous")
+			require.ErrorIs(t, err, errAmbiguousSessionID)
+			assert.ErrorContains(t, err, "codex:ambiguous")
+			assert.ErrorContains(t, err, "host~ambiguous")
 		})
 	}
+	for _, id := range []string{"collision", "codex:collision"} {
+		_, out, err := ts.sessionOverview(t.Context(), nil, sessionOverviewIn{SessionID: id})
+		require.NoError(t, err)
+		assert.Equal(t, id, out.Session.SessionID)
+	}
+	_, around, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "plain", Around: new(0)})
+	require.NoError(t, err)
+	require.NotEmpty(t, around.Messages)
+	assert.Equal(t, "needle in the transcript", around.Messages[0].Content)
 	_, messages, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "empty"})
 	require.NoError(t, err)
 	assert.Empty(t, messages.Messages)
@@ -2473,5 +2488,48 @@ func TestListRecall_SourceSessionRawID(t *testing.T) {
 	dbtest.SeedSession(t, d, "codex:ambiguous", "project")
 	dbtest.SeedSession(t, d, "host~ambiguous", "project")
 	_, _, err = ts.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "ambiguous"})
-	require.ErrorContains(t, err, `ambiguous session UUID "ambiguous"`)
+	require.ErrorIs(t, err, errAmbiguousSessionID)
+	assert.ErrorContains(t, err, "codex:ambiguous")
+	assert.ErrorContains(t, err, "host~ambiguous")
+}
+
+func TestOptionalSessionFiltersOlderServer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/sessions/unindexed", "/api/v1/sessions/broken":
+			w.WriteHeader(http.StatusNotFound)
+		case "/api/v1/session-ids/resolve":
+			if r.URL.Query().Get("partial") == "broken" {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			_, _ = fmt.Fprint(w, `{"ids":["substring-match"]}`)
+		case "/api/v1/search/content":
+			assert.Equal(t, "unindexed", r.URL.Query().Get("exclude_session"))
+			_, _ = fmt.Fprint(w, `{"matches":[{"session_id":"other","snippet":"needle"}],"active_filter_applied":true}`)
+		case "/api/v1/recall/entries":
+			assert.Equal(t, "unindexed", r.URL.Query().Get("source_session_id"))
+			_, _ = fmt.Fprint(w, `{"entries":[{"id":"entry","source_session_id":"unindexed"}]}`)
+		default:
+			t.Errorf("unexpected request %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	ts := &toolset{svc: servicehttp.NewHTTPBackend(srv.URL, "", false, "")}
+	_, search, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", CurrentSessionID: "unindexed"})
+	require.NoError(t, err)
+	require.Len(t, search.Matches, 1)
+	assert.Equal(t, "other", search.Matches[0].SessionID)
+	_, recall, err := ts.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "unindexed"})
+	require.NoError(t, err)
+	require.Len(t, recall.Entries, 1)
+	assert.Equal(t, "entry", recall.Entries[0].ID)
+	_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", CurrentSessionID: "broken"})
+	require.Error(t, err)
+	assert.False(t, errors.Is(err, errors.ErrUnsupported))
+	_, _, err = ts.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "broken"})
+	require.Error(t, err)
+	assert.False(t, errors.Is(err, errors.ErrUnsupported))
 }

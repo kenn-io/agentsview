@@ -84,6 +84,8 @@ func (t *toolset) lookupActivity(
 	return "", false
 }
 
+var errAmbiguousSessionID = errors.New("ambiguous session UUID")
+
 // resolveSession looks up a session by its full stored ID or by a raw
 // UUID that matches exactly one stored ID. Missing and ambiguous IDs are
 // errors.
@@ -100,7 +102,7 @@ func (t *toolset) resolveSession(
 	}
 	if len(ids) > 1 {
 		return nil, fmt.Errorf(
-			"ambiguous session UUID %q: use a full stored session ID", id,
+			"%w %q: matches %q and %q; use a full stored session ID", errAmbiguousSessionID, id, ids[0], ids[1],
 		)
 	}
 	if len(ids) == 1 {
@@ -120,7 +122,7 @@ func (t *toolset) resolveOptionalSessionID(ctx context.Context, id string) (stri
 		return id, nil
 	}
 	detail, err := t.resolveSession(ctx, id)
-	if errors.Is(err, service.ErrSessionNotFound) {
+	if errors.Is(err, service.ErrSessionNotFound) || errors.Is(err, errors.ErrUnsupported) {
 		return id, nil
 	}
 	if err != nil {
