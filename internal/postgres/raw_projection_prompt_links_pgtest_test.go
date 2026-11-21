@@ -273,3 +273,39 @@ func TestRawProjectionDoesNotInferFromRecordedRemote(t *testing.T) {
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&links))
 	assert.Empty(t, db.DecodePRLinks(links))
 }
+
+func TestRawProjectionMergeRetainsCommandLinks(t *testing.T) {
+	t.Parallel()
+	f := newProjectionFixture(t)
+	var err error
+	f.sink, err = NewRawProjectionStore(t.Context(), f.runtime, RawProjectionOptions{Tenant: f.tenant, Content: ingest.ContentOptions{ArchiveContent: config.ArchiveContentTranscripts}})
+	require.NoError(t, err)
+	first := projectionOutcome("old question")
+	first.Outcome.Results[0].Result.Session.Agent = parser.AgentVSCopilot
+	first.Outcome.Results[0].Result.Session.ID = "visualstudio-copilot:portable"
+	first.Outcome.Results[0].Result.Messages[0].Timestamp = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	first.Outcome.Results[0].Result.Messages[1].Timestamp = time.Date(2026, 1, 1, 0, 1, 0, 0, time.UTC)
+	first.Outcome.Results[0].Result.Messages[1].ToolCalls[0].InputJSON = `{"command":"gh pr view 42 -R example/repo"}`
+	m, receipt := f.accept(t, "device-a", "first", "", parser.AgentVSCopilot)
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, first))
+	second := projectionOutcome("new question")
+	second.Outcome.Results[0].Result.Session.Agent = parser.AgentVSCopilot
+	second.Outcome.Results[0].Result.Session.ID = "visualstudio-copilot:portable"
+	updated := first.Outcome.Results[0].Result.Messages[1]
+	updated.Ordinal = 0
+	updated.ToolCalls[0].InputJSON = ""
+	updated.OutputTokens, updated.HasOutputTokens = 10, true
+	second.Outcome.Results[0].Result.Messages = []parser.ParsedMessage{updated, {Ordinal: 1, Role: parser.RoleAssistant, Content: "new answer", Timestamp: time.Date(2026, 1, 1, 0, 2, 0, 0, time.UTC)}}
+	m, _ = f.accept(t, "device-a", "second", receipt.Receipt, parser.AgentVSCopilot)
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, second))
+	resolved, err := f.sink.Resolve(t.Context(), "visualstudio-copilot:portable")
+	require.NoError(t, err)
+	store := &Store{pg: f.runtime}
+	messages, err := store.GetMessages(t.Context(), resolved.SessionID, 0, 10, true)
+	require.NoError(t, err)
+	require.Len(t, messages, 3)
+	var links string
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&links))
+	require.Len(t, db.DecodePRLinks(links), 1)
+	assert.Equal(t, "https://github.com/example/repo/pull/42", db.DecodePRLinks(links)[0].URL)
+}

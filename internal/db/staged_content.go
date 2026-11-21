@@ -780,7 +780,7 @@ func (db *DB) publishStagedSessionMetadataTx(ctx context.Context, tx *sql.Tx, wr
 	if err := writeSessionBatchMetadataTx(ctx, tx, queries, *write, result); err != nil {
 		return err
 	}
-	if err := setToolPRLinksTx(queries, write.Session.ID, write.Session.ToolPRLinks, write.ReplaceMessages); err != nil {
+	if err := setToolPRLinksTx(queries, write.Session.ID, write.Session.ToolPRLinks, write.ReplaceMessages && !write.PreserveToolPRLinks); err != nil {
 		return err
 	}
 	if write.DataVersion > 0 {

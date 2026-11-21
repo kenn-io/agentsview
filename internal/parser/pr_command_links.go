@@ -49,260 +49,72 @@ type shellCall struct {
 	ChangedDir bool
 }
 
-type shellValue struct {
-	value    string
-	known    bool
-	exported bool
-}
-
-type shellState struct {
-	repo, host shellValue
-	changedDir bool
-}
-
-// shellCommands walks shell statements without evaluating expansions or uncertain branches.
+// shellCommands collects calls without assuming which branches executed.
 func shellCommands(command string) ([]shellCall, bool) {
-	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
-	if err != nil {
-		return nil, true
-	}
 	var calls []shellCall
-	var walkStmts func([]*syntax.Stmt, *shellState) int
-	var walkStmt func(*syntax.Stmt, *shellState) int
-	var walkIf func(*syntax.IfClause, *shellState) int
-	walkIf = func(node *syntax.IfClause, state *shellState) int {
-		if node.Cond == nil {
-			return walkStmts(node.Then, state)
+	contextUnknown, changedDir := false, false
+	var walk func(string)
+	walk = func(text string) {
+		file, err := syntax.NewParser().Parse(strings.NewReader(text), "")
+		if err != nil {
+			contextUnknown, changedDir = true, true
+			return
 		}
-		status := walkStmts(node.Cond, state)
-		if status == 0 {
-			return walkStmts(node.Then, state)
-		}
-		if status == 1 {
-			if node.Else != nil {
-				return walkIf(node.Else, state)
-			}
-			return 0
-		}
-		state.repo = shellValue{exported: true}
-		state.host = shellValue{exported: true}
-		state.changedDir = true
-		return -1
-	}
-	walkStmts = func(stmts []*syntax.Stmt, state *shellState) int {
-		status := -1
-		for _, stmt := range stmts {
-			status = walkStmt(stmt, state)
-		}
-		return status
-	}
-	walkStmt = func(stmt *syntax.Stmt, state *shellState) int {
-		if stmt == nil || stmt.Background || stmt.Coprocess {
-			return -1
-		}
-		before := *state
-		status := -1
-		switch node := stmt.Cmd.(type) {
-		case *syntax.BinaryCmd:
-			if node.Op == syntax.Pipe || node.Op == syntax.PipeAll {
-				left, right := *state, *state
-				walkStmt(node.X, &left)
-				walkStmt(node.Y, &right)
-				break
-			}
-			status = walkStmt(node.X, state)
-			switch node.Op {
-			case syntax.AndStmt, syntax.OrStmt:
-				if status < 0 {
-					state.repo = shellValue{known: false, exported: true}
-					state.host = shellValue{known: false, exported: true}
-					state.changedDir = true
-				} else if node.Op == syntax.AndStmt && status == 0 || node.Op == syntax.OrStmt && status == 1 {
-					status = walkStmt(node.Y, state)
+		syntax.Walk(file, func(node syntax.Node) bool {
+			switch n := node.(type) {
+			case *syntax.DeclClause:
+				if n.Variant.Value == "export" {
+					contextUnknown = true
 				}
-			default:
-				state.repo = shellValue{known: false, exported: true}
-				state.host = shellValue{known: false, exported: true}
-				state.changedDir = true
-				status = -1
-			}
-		case *syntax.IfClause:
-			status = walkIf(node, state)
-		case *syntax.Subshell:
-			child := *state
-			status = walkStmts(node.Stmts, &child)
-		case *syntax.Block:
-			status = walkStmts(node.Stmts, state)
-		case *syntax.DeclClause:
-			if node.Variant.Value != "export" {
-				return -1
-			}
-			for _, assignment := range node.Args {
-				if assignment.Value != nil {
-					syntax.Walk(assignment.Value, func(n syntax.Node) bool {
-						if sub, ok := n.(*syntax.CmdSubst); ok {
-							child := *state
-							walkStmts(sub.Stmts, &child)
-							return false
-						}
-						return true
-					})
-				}
-				if assignment.Name == nil {
-					continue
-				}
-				var target *shellValue
-				switch assignment.Name.Value {
-				case "GH_REPO":
-					target = &state.repo
-				case "GH_HOST":
-					target = &state.host
-				}
-				if target == nil {
-					continue
-				}
-				target.exported = true
-				if assignment.Value != nil {
-					target.value, target.known = shellLiteral(assignment.Value.Parts)
-				}
-			}
-			status = 0
-		case *syntax.CallExpr:
-			visitWord := func(word *syntax.Word) {
-				if word == nil {
-					return
-				}
-				syntax.Walk(word, func(n syntax.Node) bool {
-					if sub, ok := n.(*syntax.CmdSubst); ok {
-						child := *state
-						walkStmts(sub.Stmts, &child)
-						return false
+			case *syntax.CallExpr:
+				for _, assignment := range n.Assigns {
+					if assignment.Name != nil && (assignment.Name.Value == "GH_REPO" || assignment.Name.Value == "GH_HOST") {
+						contextUnknown = true
 					}
+				}
+				if len(n.Args) == 0 {
 					return true
-				})
-			}
-			for _, assignment := range node.Assigns {
-				visitWord(assignment.Value)
-			}
-			for _, word := range node.Args {
-				visitWord(word)
-			}
-			local := *state
-			for _, assignment := range node.Assigns {
-				if assignment.Name == nil {
-					continue
 				}
-				value, known := "", true
-				if assignment.Value != nil {
-					value, known = shellLiteral(assignment.Value.Parts)
+				var call shellCall
+				for _, word := range n.Args {
+					value, literal := shellLiteral(word.Parts)
+					call.Words = append(call.Words, value)
+					call.Literal = append(call.Literal, literal)
 				}
-				var target *shellValue
-				switch assignment.Name.Value {
-				case "GH_REPO":
-					target = &local.repo
-				case "GH_HOST":
-					target = &local.host
+				if !call.Literal[0] {
+					contextUnknown = true
+					return true
 				}
-				if target != nil {
-					target.value, target.known = value, known
-					if len(node.Args) > 0 {
-						target.exported = true
-					}
+				switch path.Base(call.Words[0]) {
+				case "eval", "source", ".":
+					contextUnknown, changedDir = true, true
+				case "cd", "pushd", "popd":
+					changedDir = true
+				case "export", "unset":
+					contextUnknown = true
+				}
+				unwrapped := unwrapShellCall(call)
+				if unwrapped.Repo != "" || unwrapped.Host != "" || unwrapped.RepoOpaque || unwrapped.HostOpaque {
+					contextUnknown = true
+				}
+				if len(unwrapped.Words) >= 3 && unwrapped.Literal[0] && unwrapped.Literal[1] && unwrapped.Literal[2] &&
+					(path.Base(unwrapped.Words[0]) == "sh" || path.Base(unwrapped.Words[0]) == "bash" || path.Base(unwrapped.Words[0]) == "zsh") &&
+					(unwrapped.Words[1] == "-c" || unwrapped.Words[1] == "-lc") {
+					walk(unwrapped.Words[2])
+				} else {
+					calls = append(calls, call)
 				}
 			}
-			if len(node.Args) == 0 {
-				*state = local
-				status = 0
-				break
-			}
-			var args []string
-			var literals []bool
-			for _, word := range node.Args {
-				value, known := shellLiteral(word.Parts)
-				args = append(args, value)
-				literals = append(literals, known)
-			}
-			if !literals[0] {
-				return -1
-			}
-			switch args[0] {
-			case "true", ":":
-				status = 0
-			case "false":
-				status = 1
-			case "cd", "pushd", "popd":
-				state.changedDir = true
-			case "unset":
-				// The parser reads export as a DeclClause, handled above.
-				for i := 1; i < len(args); i++ {
-					switch {
-					case !literals[i]:
-						state.repo = shellValue{exported: true}
-						state.host = shellValue{exported: true}
-					case args[i] == "GH_REPO":
-						state.repo = shellValue{}
-					case args[i] == "GH_HOST":
-						state.host = shellValue{}
-					}
-				}
-				status = 0
-			default:
-				call := local.call(args, literals)
-				if childFile, child, ok := nestedShellCall(call, local); ok {
-					walkStmts(childFile.Stmts, &child)
-					break
-				}
-				calls = append(calls, call)
-			}
-		default:
-			state.repo = shellValue{exported: true}
-			state.host = shellValue{exported: true}
-			state.changedDir = true
-		}
-		if len(stmt.Redirs) > 0 {
-			if state.repo != before.repo {
-				state.repo = shellValue{exported: true}
-			}
-			if state.host != before.host {
-				state.host = shellValue{exported: true}
-			}
-			status = -1
-		}
-		if stmt.Negated && status >= 0 {
-			status = 1 - status
-		}
-		return status
+			return true
+		})
 	}
-	state := &shellState{}
-	walkStmts(file.Stmts, state)
-	return calls, state.changedDir
-}
-
-func (state shellState) call(args []string, literals []bool) shellCall {
-	call := shellCall{Words: args, Literal: literals, ChangedDir: state.changedDir}
-	if state.repo.exported {
-		call.Repo, call.RepoOpaque = state.repo.value, !state.repo.known
+	walk(command)
+	for i := range calls {
+		calls[i].ChangedDir = changedDir
+		calls[i].Repo, calls[i].Host = "", ""
+		calls[i].RepoOpaque, calls[i].HostOpaque = contextUnknown, contextUnknown
 	}
-	if state.host.exported {
-		call.Host, call.HostOpaque = state.host.value, !state.host.known
-	}
-	return call
-}
-
-func nestedShellCall(call shellCall, state shellState) (*syntax.File, shellState, bool) {
-	call = unwrapShellCall(call)
-	if len(call.Words) < 3 || !call.Literal[0] || !call.Literal[1] || !call.Literal[2] ||
-		(path.Base(call.Words[0]) != "sh" && path.Base(call.Words[0]) != "bash" && path.Base(call.Words[0]) != "zsh") ||
-		(call.Words[1] != "-c" && call.Words[1] != "-lc") {
-		return nil, state, false
-	}
-	file, err := syntax.NewParser().Parse(strings.NewReader(call.Words[2]), "")
-	state.repo = shellValue{value: call.Repo, known: !call.RepoOpaque, exported: call.Repo != "" || call.RepoOpaque}
-	state.host = shellValue{value: call.Host, known: !call.HostOpaque, exported: call.Host != "" || call.HostOpaque}
-	if err != nil {
-		return &syntax.File{}, state, true
-	}
-	return file, state, true
+	return calls, changedDir
 }
 
 func shellLiteral(parts []syntax.WordPart) (string, bool) {
@@ -366,15 +178,15 @@ func unwrapShellCall(call shellCall) shellCall {
 		case "env":
 			call.Words, call.Literal = call.Words[1:], call.Literal[1:]
 			for len(call.Words) > 0 && call.Literal[0] {
-				name, value, ok := strings.Cut(call.Words[0], "=")
+				name, _, ok := strings.Cut(call.Words[0], "=")
 				if !ok {
 					break
 				}
 				switch name {
 				case "GH_REPO":
-					call.Repo, call.RepoOpaque = value, false
+					call.Repo, call.RepoOpaque = "", true
 				case "GH_HOST":
-					call.Host, call.HostOpaque = value, false
+					call.Host, call.HostOpaque = "", true
 				}
 				call.Words, call.Literal = call.Words[1:], call.Literal[1:]
 			}
@@ -454,7 +266,7 @@ func ghPRCallLinks(call shellCall, remote string) []PRLink {
 		return nil
 	}
 	host := "github.com"
-	if repo == "" && !call.ChangedDir {
+	if repo == "" && !call.ChangedDir && !call.HostOpaque {
 		if normalized, ok := export.NormalizeGitRemote(remote); ok {
 			host, repo, _ = strings.Cut(normalized, "/")
 		}

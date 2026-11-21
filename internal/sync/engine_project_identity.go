@@ -106,27 +106,11 @@ func (e *Engine) toolLinkRemote(s db.Session, recorded string) string {
 	if recorded != "" {
 		a, aok := export.NormalizeGitRemote(recorded)
 		b, bok := export.NormalizeGitRemote(obs.GitRemote)
-		if !aok || !bok || a != b {
+		if !aok || !bok || (a != b && !(strings.HasPrefix(strings.ToLower(a), "github.com/") && strings.EqualFold(a, b))) {
 			return ""
 		}
 	}
 	return obs.GitRemote
-}
-
-func (e *Engine) toolLinkRemoteResolver(s db.Session, recorded string) func(string) string {
-	return func(dir string) string {
-		return e.toolLinkRemoteInDirectory(s, recorded, dir)
-	}
-}
-
-func (e *Engine) toolLinkRemoteInDirectory(s db.Session, recorded, dir string) string {
-	checkout := e.cachedProjectIdentity(s.Machine, s.Cwd)
-	identity := e.cachedProjectIdentity(s.Machine, dir)
-	if checkout.gitDir == "" || identity.gitDir != checkout.gitDir {
-		recorded = ""
-	}
-	s.Cwd = dir
-	return e.toolLinkRemote(s, recorded)
 }
 
 // mayDiscoverLocalProject reports whether path may be probed on the local
