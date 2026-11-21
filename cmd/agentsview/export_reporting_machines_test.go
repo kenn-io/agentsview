@@ -166,6 +166,7 @@ func TestExportReportingCursorAccountMachineCollision(t *testing.T) {
 	require.NoError(t, database.ConfigureArtifactLocalMachine(t.Context(), "cursor-account:12"))
 	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
+			INSERT INTO archive_metadata(key, value) VALUES ('archive_id', 'test-archive') ON CONFLICT(key) DO UPDATE SET value=excluded.value;
 			INSERT INTO pg_sync_state(key, value) VALUES ('machine_alias:peer', 'cursor-account:12');
 			INSERT INTO sessions(id, project, machine, agent, message_count, started_at, ended_at) VALUES
 			('native', 'project', 'local', 'claude', 2, '2026-07-28T10:00:00Z', '2026-07-28T10:01:00Z'),
@@ -212,4 +213,14 @@ func TestExportReportingCursorAccountMachineCollision(t *testing.T) {
 	assert.InDelta(t, 3, result.Machines["machine:99b14951da0e7986cffad677018196fe8842ed68aa0eac7824b9c304fba6f930"].Activity.Totals.AgentMinutes, 0.001)
 	assert.EqualValues(t, 10, result.Machines["cursor-account:12"].Usage.Totals.OutputTokens)
 	assert.Equal(t, "2026-07-29T00:00:00Z", result.Machines["cursor-account:12"].PolledAt)
+
+	out, _, err = executeExportSessionsCommand(newExportReportingTestRoot(now), "export", "hour", "--schema-version", "5", "--by-machine", "2026-07-28-10")
+	require.NoError(t, err)
+	result.Machines = nil
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+	assert.Equal(t, "cursor-account:12", result.LocalMachineID)
+	assert.InDelta(t, 4, result.Machines["cursor-account:12"].Activity.Totals.AgentMinutes, 0.001)
+	assert.NotEmpty(t, result.Machines["cursor-account:12"].Joint.Cells)
+	assert.InDelta(t, 3, result.Machines[machine].Activity.Totals.AgentMinutes, 0.001)
+	assert.EqualValues(t, 10, result.Machines["archive:test-archive"].Usage.Totals.OutputTokens)
 }

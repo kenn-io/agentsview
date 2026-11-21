@@ -12,8 +12,8 @@ import (
 )
 
 // machineIdentities maps a session's stored machine key to the identity of
-// the machine it originated on. Per-machine reporting snapshots and the
-// change stream use the same rule, so their identities compare equal.
+// the machine it originated on. Schema 5 reporting and the change stream
+// use the same identities.
 type machineIdentities struct {
 	// local is this installation's identity, or empty when the archive has
 	// none recorded.
@@ -60,11 +60,6 @@ func (m machineIdentities) origin(machine, archiveID string) string {
 	} else if canonical := m.aliases[machine]; canonical != "" {
 		machine = canonical
 	}
-	// Reserve the account namespace and escape the escape namespace itself.
-	if strings.HasPrefix(machine, "cursor-account:") || strings.HasPrefix(machine, "machine:") {
-		digest := sha256.Sum256([]byte(machine))
-		return "machine:" + hex.EncodeToString(digest[:])
-	}
 	return machine
 }
 
@@ -83,6 +78,11 @@ func loadReportingMachineIdentity(ctx context.Context, tx *sql.Tx, schema int, s
 	return nil
 }
 
-func (s reportingDaySource) machineID(machine string) string {
-	return machineIdentities{local: s.localMachineID, aliases: s.machineAliases}.origin(machine, s.archiveID)
+func (s reportingDaySource) machineID(machine string, schema int) string {
+	machine = machineIdentities{local: s.localMachineID, aliases: s.machineAliases}.origin(machine, s.archiveID)
+	if schema == export.ReportingAccountSchemaVersion && (strings.HasPrefix(machine, "cursor-account:") || strings.HasPrefix(machine, "machine:")) {
+		digest := sha256.Sum256([]byte(machine))
+		return "machine:" + hex.EncodeToString(digest[:])
+	}
+	return machine
 }

@@ -200,7 +200,7 @@ func (db *DB) ReadChangeStreamHead(ctx context.Context) (ChangeStreamHead, error
 		return ChangeStreamHead{}, fmt.Errorf("reading machine identities: %w", err)
 	}
 	return ChangeStreamHead{
-		ArchiveID: heads.archiveID, DatabaseID: heads.databaseID, Head: head, LocalMachineID: machines.origin("local", heads.archiveID),
+		ArchiveID: heads.archiveID, DatabaseID: heads.databaseID, Head: head, LocalMachineID: machines.local,
 	}, tx.Commit()
 }
 

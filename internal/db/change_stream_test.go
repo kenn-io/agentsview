@@ -132,7 +132,7 @@ func TestChangeStreamReservedMachineIdentity(t *testing.T) {
 	require.NoError(t, d.UpsertSession(t.Context(), Session{ID: "chat", Project: "sample", Machine: "local", Agent: "codex"}))
 	head, err := d.ReadChangeStreamHead(t.Context())
 	require.NoError(t, err)
-	const machine = "machine:2939296221cda1ef57dff3bf4333caa28eafdc25e0bc81db56cfd1ad9b755e9e"
+	const machine = "cursor-account:12"
 	assert.Equal(t, machine, head.LocalMachineID)
 	batch, err := d.ReadChangeStream(t.Context(), "", nil)
 	require.NoError(t, err)

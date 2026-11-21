@@ -310,13 +310,13 @@ func reportingHoursFromSource(
 	if err != nil || source.localMachineID == "" {
 		return hours, err
 	}
-	localMachineID := source.machineID("local")
+	localMachineID := source.machineID("local", schemaVersion)
 	machines := map[string]bool{localMachineID: true}
 	for _, session := range mergeReportingSessions(source.activitySessions, source.usageSessions) {
-		machines[source.machineID(session.Machine)] = true
+		machines[source.machineID(session.Machine, schemaVersion)] = true
 	}
 	for _, row := range source.standaloneUsage {
-		machines[source.machineID("")] = true
+		machines[source.machineID("", schemaVersion)] = true
 		if row.Machine != "" {
 			machines[row.Machine] = true
 		}
@@ -335,7 +335,7 @@ func reportingHoursFromSource(
 			if err != nil {
 				return nil, err
 			}
-			if strings.HasPrefix(machine, "cursor-account:") {
+			if schemaVersion == export.ReportingAccountSchemaVersion && strings.HasPrefix(machine, "cursor-account:") {
 				part.Activity = quietReportingHour(date.Add(time.Duration(i)*time.Hour), schemaVersion, bucket).Activity
 				part.Joint = &export.ReportingJoint{}
 				if !part.HasData {
@@ -413,20 +413,20 @@ func reportingHoursFromMachineSource(
 	}
 	projects := source.projects
 	if machine != "" {
-		sessions = slices.DeleteFunc(slices.Clone(sessions), func(s activity.SessionMeta) bool { return source.machineID(s.Machine) != machine })
+		sessions = slices.DeleteFunc(slices.Clone(sessions), func(s activity.SessionMeta) bool { return source.machineID(s.Machine, schemaVersion) != machine })
 		ids = make([]string, 0, len(sessions))
 		for _, session := range sessions {
 			ids = append(ids, session.SessionID)
 		}
 		events = slices.DeleteFunc(slices.Clone(events), func(e activity.ActivityEvent) bool {
-			return source.machineID(sessionByID[e.SessionID].Machine) != machine
+			return source.machineID(sessionByID[e.SessionID].Machine, schemaVersion) != machine
 		})
 		usage = slices.DeleteFunc(slices.Clone(usage), func(u activity.UsageRow) bool {
 			origin := sessionByID[u.SessionID].Machine
 			if u.SessionID == "" && u.Machine != "" {
 				return u.Machine != machine
 			}
-			return source.machineID(origin) != machine
+			return source.machineID(origin, schemaVersion) != machine
 		})
 	}
 	var references map[string]export.ProjectReference

@@ -49,8 +49,6 @@ without nested machine metadata. The local identity comes from the archive's
 recorded installation, not its display label. Recorded machine aliases resolve
 to their canonical identities. Run `agentsview source sync` first if the archive has
 not recorded its installation identity.
-Machine identities beginning with `cursor-account:` or `machine:` are exported
-as stable `machine:` hashes so they remain distinct from account parts.
 
 All machine snapshots use the same read transaction, bucket resolution, project
 selection, pricing, and usage-survivor selection as the combined hour. The local
@@ -72,6 +70,10 @@ starts. Account parts carry
 Events without a valid user ID or a covering poll remain under archive billing.
 Email is never used as an account key. Project-key exports omit these
 sessionless events.
+
+In schema 6, machine identities beginning with `cursor-account:` or `machine:`
+are exported as stable `machine:` hashes to distinguish them from account parts.
+Schema 5 and the change stream retain the original machine identities.
 
 Events fetched before this version stay under archive billing until an
 unfiltered `agentsview source cursor sync-usage --since <date>` covers them. A
