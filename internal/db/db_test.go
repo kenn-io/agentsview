@@ -908,6 +908,30 @@ func TestUpgradeExportSchemaInPlaceOnlyAddsExportIdentitySchema(t *testing.T) {
 	assert.Equal(t, 3, metadataCount)
 }
 
+func TestUpgradeExportSchemaInPlaceAddsCursorAccountStorage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	d := testDBAtPath(t, path, "cursor upgrade")
+	require.NoError(t, d.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{{OccurredAt: "2026-07-28T10:00:00Z", Model: "a", OutputTokens: 7, DedupKey: "a"}}))
+	require.NoError(t, d.Close())
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = raw.ExecContext(t.Context(), `DROP TABLE cursor_account_polls; ALTER TABLE cursor_usage_events DROP COLUMN account_user_id; ALTER TABLE cursor_usage_events DROP COLUMN account_polled_at`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+	_, err = OpenReadOnly(t.Context(), path)
+	require.Error(t, err)
+	require.NoError(t, UpgradeExportSchemaInPlace(t.Context(), path, err))
+	upgraded, err := OpenReadOnly(t.Context(), path)
+	require.NoError(t, err)
+	defer upgraded.Close()
+	var tokens int
+	var account, stamp string
+	require.NoError(t, upgraded.Reader().QueryRowContext(t.Context(), `SELECT output_tokens, account_user_id, account_polled_at FROM cursor_usage_events WHERE dedup_key='a'`).Scan(&tokens, &account, &stamp))
+	assert.Equal(t, 7, tokens)
+	assert.Empty(t, account)
+	assert.Empty(t, stamp)
+}
+
 func TestUpgradeExportSchemaInPlaceRejectsUnrelatedSchemaGap(t *testing.T) {
 	d := testDB(t)
 	err := UpgradeExportSchemaInPlace(t.Context(), d.Path(), &SchemaUpgradeRequiredError{
@@ -5661,6 +5685,9 @@ func TestCopySessionMetadataFrom_PreservesCursorUsageEvents(t *testing.T) {
 			InputTokens: 12, DedupKey: "xai:item-a",
 		},
 	}), "InsertCursorUsageEvents src")
+	stamp := time.Date(2026, 5, 16, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, srcDB.RecordCursorAccountPoll(ctx, map[string][]string{"12": {"first"}}, map[string]time.Time{"12": stamp}, nil))
+	require.NoError(t, srcDB.RecordCursorAccountPoll(ctx, nil, nil, []CursorAccountPoll{{CursorAccountHour: CursorAccountHour{UserID: "12", Start: time.Date(2026, 5, 14, 10, 0, 0, 0, time.UTC)}, CompletedAt: stamp}}))
 	wantFingerprint, err := srcDB.CursorUsageEventFingerprint(ctx)
 	require.NoError(t, err, "CursorUsageEventFingerprint src")
 	require.NoError(t, srcDB.CloseConnections(ctx), "CloseConnections src")
@@ -5686,6 +5713,13 @@ func TestCopySessionMetadataFrom_PreservesCursorUsageEvents(t *testing.T) {
 	require.NoError(t, err, "CursorUsageEventFingerprint dst")
 	assert.Equal(t, wantFingerprint, gotFingerprint,
 		"final metadata copy should preserve cursor usage rows verbatim")
+	var account, polled string
+	require.NoError(t, dstDB.Reader().QueryRowContext(ctx, `SELECT account_user_id, account_polled_at FROM cursor_usage_events WHERE dedup_key='first'`).Scan(&account, &polled))
+	assert.Equal(t, "12", account)
+	assert.Equal(t, "2026-05-16T00:00:00.000000Z", polled)
+	require.NoError(t, dstDB.Reader().QueryRowContext(ctx, `SELECT account_user_id, polled_at FROM cursor_account_polls`).Scan(&account, &polled))
+	assert.Equal(t, "12", account)
+	assert.Equal(t, "2026-05-16T00:00:00.000000Z", polled)
 }
 
 func TestCopyOrphanedDataFrom(t *testing.T) {

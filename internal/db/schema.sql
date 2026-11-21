@@ -370,6 +370,13 @@ CREATE INDEX IF NOT EXISTS idx_cursor_usage_events_occurred
 CREATE INDEX IF NOT EXISTS idx_cursor_usage_events_model
     ON cursor_usage_events(model);
 
+CREATE TABLE IF NOT EXISTS cursor_account_polls (
+    account_user_id TEXT NOT NULL,
+    hour_start INTEGER NOT NULL,
+    polled_at TEXT NOT NULL,
+    PRIMARY KEY (account_user_id, hour_start)
+);
+
 -- Tool calls table
 CREATE TABLE IF NOT EXISTS tool_calls (
     id         INTEGER PRIMARY KEY,

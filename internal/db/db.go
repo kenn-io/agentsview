@@ -1895,7 +1895,7 @@ CREATE TABLE IF NOT EXISTS background_migrations (
     started_at      TEXT,
     updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     completed_at    TEXT
-);` + projectIdentityRevisionSchemaSQL + projectIdentitySnapshotInvariantSchemaSQL
+);` + projectIdentityRevisionSchemaSQL + projectIdentitySnapshotInvariantSchemaSQL + cursorAccountPollsSchemaSQL
 
 var exportIdentityColumnMigrations = []schemaColumnMigration{
 	{"cursor_usage_events", "account_user_id", "ALTER TABLE cursor_usage_events ADD COLUMN account_user_id TEXT NOT NULL DEFAULT ''"},
@@ -1914,6 +1914,7 @@ var exportIdentityColumnMigrations = []schemaColumnMigration{
 
 var exportIdentityUpgradeTables = map[string]struct{}{
 	"cursor_usage_events":                {},
+	"cursor_account_polls":               {},
 	"archive_metadata":                   {},
 	"background_migrations":              {},
 	"project_identity_observations":      {},
@@ -2127,6 +2128,7 @@ func OpenReadOnly(ctx context.Context, path string) (*DB, error) {
 }
 
 var readOnlyRequiredTables = []string{
+	"cursor_account_polls",
 	"commit_trailers",
 	"commit_links",
 	"sessions",

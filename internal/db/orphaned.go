@@ -1772,6 +1772,11 @@ func (d *DB) CopySessionMetadataFrom(
 			return fmt.Errorf("copying cursor usage events: %w", err)
 		}
 	}
+	if oldDBHasTable(ctx, tx, "cursor_account_polls") {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM main.cursor_account_polls; INSERT INTO main.cursor_account_polls SELECT account_user_id, hour_start, polled_at FROM old_db.cursor_account_polls`); err != nil {
+			return fmt.Errorf("copying Cursor account polls: %w", err)
+		}
+	}
 
 	// database_id identifies the new physical generation and is never
 	// copied: every mirror push keys its incremental cursors to it, so the

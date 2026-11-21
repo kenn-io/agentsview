@@ -1715,14 +1715,18 @@ func TestCursorSyncImportsBillingWhileRebuildPending(t *testing.T) {
 func TestCursorSyncMatchesMembers(t *testing.T) {
 	t.Setenv("TZ", "UTC")
 	for _, tc := range []struct {
-		name         string
-		priorModel   string
-		priorAccount string
-		wantAccount  string
+		name          string
+		priorModel    string
+		priorAccount  string
+		wantAccount   string
+		secondEmpty   bool
+		secondFails   bool
+		extraEvent    bool
+		priorRetained bool
 	}{
-		{"single", "other-team", "99", "12"},
-		{"ambiguous", "model-a", "12", ""},
-		{"failed member", "model-a", "99", "99"},
+		{name: "single", priorModel: "other-team", priorAccount: "99", wantAccount: "12", secondEmpty: true, priorRetained: true},
+		{name: "ambiguous", priorModel: "model-a", priorAccount: "12", wantAccount: "12"},
+		{name: "failed member", priorModel: "model-a", priorAccount: "99", wantAccount: "99", secondFails: true, extraEvent: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dataDir := cursorUsageTestDataDir(t)
@@ -1730,7 +1734,7 @@ func TestCursorSyncMatchesMembers(t *testing.T) {
 			prior := db.CursorUsageEvent{OccurredAt: "2026-07-28T10:03:00Z", Model: tc.priorModel, OutputTokens: 7}
 			require.NoError(t, database.InsertCursorUsageEvents(t.Context(), []db.CursorUsageEvent{prior}))
 			priorTime := time.Date(2026, 7, 29, 1, 0, 0, 0, time.UTC)
-			require.NoError(t, database.AssignCursorUsageAccount(t.Context(), tc.priorAccount, []string{db.CursorUsageEventDedupKey(prior)}, priorTime))
+			require.NoError(t, database.RecordCursorAccountPoll(t.Context(), map[string][]string{tc.priorAccount: {db.CursorUsageEventDedupKey(prior)}}, map[string]time.Time{tc.priorAccount: priorTime}, nil))
 			require.NoError(t, database.Close())
 			var requests []string
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1745,17 +1749,17 @@ func TestCursorSyncMatchesMembers(t *testing.T) {
 				assert.Equal(t, "/teams/filtered-usage-events", r.URL.Path)
 				id, _ := body["userId"].(float64)
 				requests = append(requests, fmt.Sprint(id))
-				if id == 34 && tc.name == "failed member" {
+				if id == 34 && tc.secondFails {
 					http.Error(w, "failed", http.StatusBadRequest)
 					return
 				}
-				if id == 34 && tc.name == "single" {
+				if id == 34 && tc.secondEmpty {
 					_, _ = w.Write([]byte(`{"totalUsageEventsCount":0,"usageEvents":[]}`))
 					return
 				}
 				events := `{"timestamp":"2026-07-28T10:03:00Z","model":"model-a","tokenUsage":{"outputTokens":7}}`
 				count := 1
-				if tc.name == "failed member" {
+				if tc.extraEvent {
 					events += `,{"timestamp":"2026-07-28T10:04:00Z","model":"new","tokenUsage":{"outputTokens":6}}`
 					count++
 				}
@@ -1768,18 +1772,15 @@ func TestCursorSyncMatchesMembers(t *testing.T) {
 			var account, stamp string
 			require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT account_user_id, account_polled_at FROM cursor_usage_events WHERE model='model-a'`).Scan(&account, &stamp))
 			assert.Equal(t, tc.wantAccount, account)
-			switch tc.name {
-			case "failed member":
+			if tc.secondFails || tc.priorModel == "model-a" {
 				assert.Equal(t, "2026-07-29T01:00:00.000000Z", stamp)
+			}
+			if tc.extraEvent {
 				require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT account_user_id, account_polled_at FROM cursor_usage_events WHERE model='new'`).Scan(&account, &stamp))
 				assert.Empty(t, account)
 				assert.Empty(t, stamp)
-			case "ambiguous":
-				polledAt, err := time.Parse(time.RFC3339Nano, stamp)
-				require.NoError(t, err)
-				assert.True(t, polledAt.After(priorTime))
 			}
-			if tc.name == "single" {
+			if tc.priorRetained {
 				require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT account_user_id, account_polled_at FROM cursor_usage_events WHERE model='other-team'`).Scan(&account, &stamp))
 				assert.Equal(t, "99", account)
 				assert.Equal(t, "2026-07-29T01:00:00.000000Z", stamp)
@@ -1795,25 +1796,17 @@ func TestCursorSyncDoesNotCoverIncompleteHours(t *testing.T) {
 		want                           map[string]string
 	}{
 		{"partial boundaries", "Asia/Kathmandu", "2026-07-28", "2026-07-28", `[{"timestamp":"2026-07-27T18:20:00Z","model":"first-partial"},{"timestamp":"2026-07-27T19:00:00Z","model":"first-full"},{"timestamp":"2026-07-28T17:59:00Z","model":"last-full"},{"timestamp":"2026-07-28T18:05:00Z","model":"last-partial"}]`, map[string]string{"first-partial": "", "first-full": "12", "last-full": "12", "last-partial": ""}},
-		{"open hour", "UTC", current.Add(-48 * time.Hour).Format("2006-01-02"), current.Add(48 * time.Hour).Format("2006-01-02"), "", map[string]string{"closed": "12", "open": ""}},
+		{"open hour", "UTC", current.Add(-48 * time.Hour).Format("2006-01-02"), current.Add(48 * time.Hour).Format("2006-01-02"), fmt.Sprintf(`[{"timestamp":%q,"model":"closed"},{"timestamp":%q,"model":"open"}]`, current.Add(-24*time.Hour).Format(time.RFC3339), current.Add(time.Minute).Format(time.RFC3339)), map[string]string{"closed": "12", "open": ""}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dataDir := cursorUsageTestDataDir(t)
 			t.Setenv("TZ", tc.tz)
-			var openEvents string
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/teams/daily-usage-data" {
 					_, _ = w.Write([]byte(`{"data":[{"userId":12}],"pagination":{"hasNextPage":false}}`))
 					return
 				}
-				events := tc.events
-				if tc.name == "open hour" {
-					if openEvents == "" {
-						openEvents = fmt.Sprintf(`[{"timestamp":%q,"model":"closed"},{"timestamp":%q,"model":"open"}]`, current.Add(-24*time.Hour).Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339))
-					}
-					events = openEvents
-				}
-				_, _ = fmt.Fprintf(w, `{"totalUsageEventsCount":%d,"usageEvents":%s}`, len(tc.want), events)
+				_, _ = fmt.Fprintf(w, `{"totalUsageEventsCount":%d,"usageEvents":%s}`, len(tc.want), tc.events)
 			}))
 			defer server.Close()
 			syncCursorUsage(t, server.URL, "--since", tc.since, "--until", tc.until)
@@ -2159,7 +2152,50 @@ func TestCursorSyncAllSkipsEmptyRosterWindows(t *testing.T) {
 	}
 }
 
-func TestCursorSyncUsesUnfilteredFetchTimeAndDefersLateEvents(t *testing.T) {
+func TestCursorSyncEmptyPollReplacesAccountHour(t *testing.T) {
+	t.Setenv("TZ", "UTC")
+	dataDir := cursorUsageTestDataDir(t)
+	syncNumber := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &body)) {
+			return
+		}
+		if r.URL.Path == "/teams/daily-usage-data" {
+			_, _ = w.Write([]byte(`{"data":[{"userId":12}],"pagination":{"hasNextPage":false}}`))
+			return
+		}
+		if _, filtered := body["userId"]; !filtered {
+			syncNumber++
+		}
+		if syncNumber == 1 {
+			_, _ = w.Write([]byte(`{"totalUsageEventsCount":1,"usageEvents":[{"timestamp":"2026-07-28T10:03:00Z","model":"a","tokenUsage":{"outputTokens":7}}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"totalUsageEventsCount":0,"usageEvents":[]}`))
+	}))
+	defer server.Close()
+	syncCursorUsage(t, server.URL, "--since", "2026-07-28", "--until", "2026-07-28")
+	syncCursorUsage(t, server.URL, "--since", "2026-07-28", "--until", "2026-07-28")
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	date := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
+	day, err := database.ExportReportingDay(t.Context(), db.ReportingExportOptions{Date: date, Now: date.Add(48 * time.Hour), SchemaVersion: 6, ByMachine: true})
+	require.NoError(t, err)
+	part, ok := day.Hours[10].Machines["cursor-account:12"]
+	require.True(t, ok)
+	assert.Zero(t, part.Usage.Totals.OutputTokens)
+	assert.NotEmpty(t, part.PolledAt)
+	assert.EqualValues(t, 7, day.Hours[10].Usage.Totals.OutputTokens)
+	var archiveTokens int64
+	for id, machine := range day.Hours[10].Machines {
+		if strings.HasPrefix(id, "archive:") {
+			archiveTokens += machine.Usage.Totals.OutputTokens
+		}
+	}
+	assert.EqualValues(t, 7, archiveTokens)
+}
+
+func TestCursorSyncStoresCompletedMemberEvents(t *testing.T) {
 	t.Setenv("TZ", "UTC")
 	dataDir := cursorUsageTestDataDir(t)
 	const first = `{"timestamp":"2026-07-28T10:03:00Z","model":"a","tokenUsage":{"outputTokens":7}}`
@@ -2193,11 +2229,11 @@ func TestCursorSyncUsesUnfilteredFetchTimeAndDefersLateEvents(t *testing.T) {
 	var count int
 	var account, stamp string
 	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT count(*), account_user_id, account_polled_at FROM cursor_usage_events`).Scan(&count, &account, &stamp))
-	assert.Equal(t, 1, count)
+	assert.Equal(t, 2, count)
 	assert.Equal(t, "12", account)
 	polledAt, err := time.Parse(time.RFC3339Nano, stamp)
 	require.NoError(t, err)
-	assert.True(t, polledAt.Before(rosterAt))
+	assert.True(t, polledAt.After(rosterAt))
 	require.NoError(t, database.Close())
 	syncCursorUsage(t, server.URL, "--since", "2026-07-28", "--until", "2026-07-28")
 	database = dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))

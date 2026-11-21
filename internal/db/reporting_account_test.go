@@ -11,31 +11,12 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 )
 
-func TestCursorAccountAssignmentRequiresCurrentDataVersion(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	require.NoError(t, d.InsertCursorUsageEvents(ctx, []CursorUsageEvent{{OccurredAt: "2026-07-28T10:00:00Z", Model: "a", DedupKey: "a"}}))
-	_, err := d.rawWriter().ExecContext(ctx, "PRAGMA user_version = 184")
-	require.NoError(t, err)
-	require.Error(t, d.AssignCursorUsageAccount(ctx, "12", []string{"a"}, time.Now()))
-	var account string
-	require.NoError(t, d.Reader().QueryRowContext(ctx, "SELECT account_user_id FROM cursor_usage_events WHERE dedup_key='a'").Scan(&account))
-	assert.Empty(t, account)
-}
-
-func TestCursorAccountColumnsSurviveResync(t *testing.T) {
+func TestCursorAccountColumnsAbsentInOldResyncSource(t *testing.T) {
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "source.db")
 	src := testDBAtPath(t, path, "source")
 	require.NoError(t, src.InsertCursorUsageEvents(ctx, []CursorUsageEvent{{OccurredAt: "2026-07-28T10:00:00Z", Model: "a", DedupKey: "a"}}))
-	require.NoError(t, src.AssignCursorUsageAccount(ctx, "12", []string{"a"}, time.Date(2026, 7, 29, 1, 0, 0, 0, time.UTC)))
 	require.NoError(t, src.Close())
-	dst := testDB(t)
-	require.NoError(t, dst.CopySessionMetadataFrom(ctx, path))
-	var account, polled string
-	require.NoError(t, dst.Reader().QueryRowContext(ctx, `SELECT account_user_id,account_polled_at FROM cursor_usage_events WHERE dedup_key='a'`).Scan(&account, &polled))
-	assert.Equal(t, "12", account)
-	assert.Equal(t, "2026-07-29T01:00:00.000000Z", polled)
 
 	raw, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
@@ -44,34 +25,10 @@ func TestCursorAccountColumnsSurviveResync(t *testing.T) {
 	require.NoError(t, raw.Close())
 	older := testDB(t)
 	require.NoError(t, older.CopySessionMetadataFrom(ctx, path))
+	var account, polled string
 	require.NoError(t, older.Reader().QueryRowContext(ctx, `SELECT account_user_id,account_polled_at FROM cursor_usage_events WHERE dedup_key='a'`).Scan(&account, &polled))
 	assert.Empty(t, account)
 	assert.Empty(t, polled)
-}
-
-func TestReportingDigestIncludesCursorAccountPoll(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	require.NoError(t, d.ConfigureArtifactLocalMachine(ctx, "machine-a"))
-	date := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
-	now := date.Add(48 * time.Hour)
-	require.NoError(t, d.InsertCursorUsageEvents(ctx, []CursorUsageEvent{{OccurredAt: "2026-07-28T10:00:00Z", Model: "a", OutputTokens: 10, DedupKey: "a"}}))
-	first := date.Add(25 * time.Hour)
-	require.NoError(t, d.AssignCursorUsageAccount(ctx, "12", []string{"a"}, first))
-	opts := ReportingDigestExportOptions{From: date, To: date, Now: now, SchemaVersion: 6, ByMachine: true}
-	before, err := d.ExportReportingDigest(ctx, opts)
-	require.NoError(t, err)
-	require.Len(t, before, 1)
-	day, err := d.ExportReportingDay(ctx, ReportingExportOptions{Date: date, Now: now, SchemaVersion: 6, ByMachine: true})
-	require.NoError(t, err)
-	assert.Equal(t, day.Hours[10].Digest, before[0].HourDigests[10])
-
-	require.NoError(t, d.AssignCursorUsageAccount(ctx, "12", []string{"a"}, first.Add(time.Hour)))
-	after, err := d.ExportReportingDigest(ctx, opts)
-	require.NoError(t, err)
-	require.Len(t, after, 1)
-	assert.NotEqual(t, before[0].HourDigests[10], after[0].HourDigests[10])
-	assert.Equal(t, before[0].HourDigests[9], after[0].HourDigests[9])
 }
 
 func TestCursorAccountReporting(t *testing.T) {
@@ -91,19 +48,19 @@ func TestCursorAccountReporting(t *testing.T) {
 		('direct',0,'user','start','2026-07-28T10:00:00Z',''),('direct',1,'assistant','end','2026-07-28T10:01:00Z','model-a'),
 		('escaped',0,'user','start','2026-07-28T10:00:00Z',''),('escaped',1,'assistant','end','2026-07-28T10:03:00Z','model-a')`)
 	require.NoError(t, err)
-	a := CursorUsageEvent{OccurredAt: "2026-07-28T10:01:00Z", Model: "a", OutputTokens: 10, DedupKey: "a", UserID: "raw-a"}
+	a := CursorUsageEvent{OccurredAt: "2026-07-28T10:01:00Z", Model: "a", OutputTokens: 10, DedupKey: "a", UserID: "152683922"}
 	b := CursorUsageEvent{OccurredAt: "2026-07-28T10:02:00Z", Model: "b", OutputTokens: 20, Charged: money.MustParseDollars("0.007"), DedupKey: "b"}
 	c := CursorUsageEvent{OccurredAt: "2026-07-28T10:03:00Z", Model: "c", OutputTokens: 30, DedupKey: "c"}
 	unassigned := CursorUsageEvent{OccurredAt: "2026-07-28T10:04:00Z", Model: "d", OutputTokens: 5, DedupKey: "d", UserID: "77"}
 	require.NoError(t, d.InsertCursorUsageEvents(ctx, []CursorUsageEvent{a, b, c, unassigned}))
 	first := time.Date(2026, 7, 29, 1, 0, 0, 0, time.UTC)
-	require.NoError(t, d.AssignCursorUsageAccount(ctx, "12", []string{"a"}, first))
-	require.NoError(t, d.AssignCursorUsageAccount(ctx, "12", []string{"b"}, first.Add(time.Hour)))
-	require.NoError(t, d.AssignCursorUsageAccount(ctx, "34", []string{"c"}, first))
-	require.NoError(t, d.AssignCursorUsageAccount(ctx, "99", []string{"a"}, first.Add(-time.Hour)))
+	require.NoError(t, d.RecordCursorAccountPoll(ctx, map[string][]string{"12": {"a"}}, map[string]time.Time{"12": first}, nil))
+	require.NoError(t, d.RecordCursorAccountPoll(ctx, map[string][]string{"12": {"b"}}, map[string]time.Time{"12": first.Add(time.Hour)}, nil))
+	require.NoError(t, d.RecordCursorAccountPoll(ctx, map[string][]string{"34": {"c"}}, map[string]time.Time{"34": first}, nil))
+	require.NoError(t, d.RecordCursorAccountPoll(ctx, map[string][]string{"99": {"a"}}, map[string]time.Time{"99": first.Add(-time.Hour)}, nil))
 	var raw, id, stamp string
 	require.NoError(t, d.Reader().QueryRowContext(ctx, `SELECT user_id,account_user_id,account_polled_at FROM cursor_usage_events WHERE dedup_key='a'`).Scan(&raw, &id, &stamp))
-	assert.Equal(t, "raw-a", raw)
+	assert.Equal(t, "152683922", raw)
 	assert.Equal(t, "12", id)
 	assert.Equal(t, "2026-07-29T01:00:00.000000Z", stamp)
 	opts := ReportingExportOptions{Date: first.Add(-25 * time.Hour), Now: first.Add(24 * time.Hour), SchemaVersion: 6, ByMachine: true}

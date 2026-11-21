@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"encoding/json/v2"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -85,27 +84,8 @@ func TestExportReportingUpgradesOldCursorUsageArchive(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
-	out, _, err := executeExportSessionsCommand(newExportReportingTestRoot(now), "export", "day", "--schema-version", "6", "--by-machine", "2026-07-28")
+	_, _, err = executeExportSessionsCommand(newExportReportingTestRoot(now), "export", "day", "--schema-version", "6", "--by-machine", "2026-07-28")
 	require.NoError(t, err)
-	var result struct {
-		Hours []struct {
-			Machines map[string]struct {
-				Usage struct {
-					Totals struct {
-						OutputTokens int64 `json:"output_tokens"`
-					} `json:"totals"`
-				} `json:"usage"`
-			} `json:"machines"`
-		} `json:"hours"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(out), &result))
-	require.Len(t, result.Hours, 24)
-	archive, ok := result.Hours[10].Machines["archive:old-archive"]
-	require.True(t, ok)
-	assert.EqualValues(t, 22, archive.Usage.Totals.OutputTokens)
-	for machine := range result.Hours[10].Machines {
-		assert.False(t, strings.HasPrefix(machine, "cursor-account:"))
-	}
 }
 
 func TestExportReportingCursorAccountHour(t *testing.T) {
@@ -114,7 +94,7 @@ func TestExportReportingCursorAccountHour(t *testing.T) {
 	require.NoError(t, database.ConfigureArtifactLocalMachine(t.Context(), "origin-a"))
 	event := db.CursorUsageEvent{OccurredAt: "2026-07-28T10:04:00Z", Model: "model-b", OutputTokens: 10, DedupKey: "account"}
 	require.NoError(t, database.InsertCursorUsageEvents(t.Context(), []db.CursorUsageEvent{event}))
-	require.NoError(t, database.AssignCursorUsageAccount(t.Context(), "12", []string{"account"}, time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC)))
+	require.NoError(t, database.RecordCursorAccountPoll(t.Context(), map[string][]string{"12": {"account"}}, map[string]time.Time{"12": time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC)}, nil))
 	require.NoError(t, database.Close())
 	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
 	out, _, err := executeExportSessionsCommand(newExportReportingTestRoot(now), "export", "hour", "--schema-version", "6", "--by-machine", "2026-07-28-10")

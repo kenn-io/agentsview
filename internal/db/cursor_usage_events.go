@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json/v2"
 	"errors"
@@ -34,6 +35,14 @@ type CursorUsageEvent struct {
 	IsHeadless       bool
 	DedupKey         string
 }
+
+const cursorAccountPollsSchemaSQL = `
+CREATE TABLE IF NOT EXISTS cursor_account_polls (
+    account_user_id TEXT NOT NULL,
+    hour_start INTEGER NOT NULL,
+    polled_at TEXT NOT NULL,
+    PRIMARY KEY (account_user_id, hour_start)
+);`
 
 func (db *DB) ensureCursorUsageEventsSchemaLocked(ctx context.Context, w *writerHandle) error {
 	if _, err := w.Exec(ctx, `
@@ -71,6 +80,61 @@ func (db *DB) ensureCursorUsageEventsSchemaLocked(ctx context.Context, w *writer
 
 var ErrCursorAccountRebuildPending = errors.New("Cursor account reporting requires the pending archive rebuild")
 
+type CursorAccountHour struct {
+	UserID string
+	Start  time.Time
+}
+
+type CursorAccountPoll struct {
+	CursorAccountHour
+	CompletedAt time.Time
+}
+
+// CursorAccountHours returns previously attributed hours within a poll range.
+func (db *DB) CursorAccountHours(ctx context.Context, start, end time.Time) ([]CursorAccountHour, error) {
+	rows, err := db.getReader().Query(ctx, `SELECT DISTINCT account_user_id, `+reportingCursorHour+` FROM cursor_usage_events WHERE agent='cursor' AND account_user_id != '' AND occurred_at >= ? AND occurred_at < ?`, start.UTC().Format(time.RFC3339Nano), end.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var hours []CursorAccountHour
+	for rows.Next() {
+		var id string
+		var seconds int64
+		if err := rows.Scan(&id, &seconds); err != nil {
+			return nil, err
+		}
+		hour := CursorAccountHour{UserID: id, Start: time.Unix(seconds, 0).UTC()}
+		if !hour.Start.Before(start) && !hour.Start.Add(time.Hour).After(end) {
+			hours = append(hours, hour)
+		}
+	}
+	return hours, rows.Err()
+}
+
+// RecordCursorAccountPoll commits matched events and completed prior hours together.
+func (db *DB) RecordCursorAccountPoll(ctx context.Context, assignments map[string][]string, completed map[string]time.Time, hours []CursorAccountPoll) error {
+	return db.Update(ctx, func(tx *sql.Tx) error {
+		for id, keys := range assignments {
+			stamp := completed[id].UTC().Format("2006-01-02T15:04:05.000000Z")
+			encoded, err := json.Marshal(keys)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE cursor_usage_events SET account_user_id = ?, account_polled_at = ? WHERE dedup_key IN (SELECT value FROM json_each(?)) AND account_polled_at < ?`, id, stamp, string(encoded), stamp); err != nil {
+				return fmt.Errorf("assigning Cursor usage account: %w", err)
+			}
+		}
+		for _, hour := range hours {
+			stamp := hour.CompletedAt.UTC().Format("2006-01-02T15:04:05.000000Z")
+			if _, err := tx.ExecContext(ctx, `INSERT INTO cursor_account_polls(account_user_id,hour_start,polled_at) VALUES (?,?,?) ON CONFLICT(account_user_id,hour_start) DO UPDATE SET polled_at = max(polled_at,excluded.polled_at)`, hour.UserID, hour.Start.Unix(), stamp); err != nil {
+				return fmt.Errorf("recording Cursor account poll: %w", err)
+			}
+		}
+		return nil
+	})
+}
+
 // RequireCursorAccountStamping checks that older binaries will refuse this archive.
 func (db *DB) RequireCursorAccountStamping(ctx context.Context) error {
 	version, _, err := readUserVersion(ctx, db.getReader())
@@ -79,27 +143,6 @@ func (db *DB) RequireCursorAccountStamping(ctx context.Context) error {
 	}
 	if version < dataVersion {
 		return ErrCursorAccountRebuildPending
-	}
-	return nil
-}
-
-// AssignCursorUsageAccount records a member match or clears an ambiguous match.
-func (db *DB) AssignCursorUsageAccount(ctx context.Context, accountUserID string, keys []string, polledAt time.Time) error {
-	if err := db.RequireCursorAccountStamping(ctx); err != nil {
-		return err
-	}
-	if len(keys) == 0 {
-		return nil
-	}
-	encoded, err := json.Marshal(keys)
-	if err != nil {
-		return err
-	}
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	stamp := polledAt.UTC().Format("2006-01-02T15:04:05.000000Z")
-	if _, err := db.getWriter().Exec(ctx, `UPDATE cursor_usage_events SET account_user_id = ?, account_polled_at = ? WHERE dedup_key IN (SELECT value FROM json_each(?)) AND account_polled_at < ?`, accountUserID, stamp, string(encoded), stamp); err != nil {
-		return fmt.Errorf("assigning Cursor usage account: %w", err)
 	}
 	return nil
 }
