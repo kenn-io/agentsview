@@ -12309,7 +12309,6 @@ func TestVisualStudioCopilotMergedHistoryRetainsCommandLinks(t *testing.T) {
 	oldCall := parser.ParsedMessage{Ordinal: 1, Role: parser.RoleAssistant, Content: "running", Timestamp: start.Add(time.Minute), ToolCalls: []parser.ParsedToolCall{{ToolUseID: "call", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`}}}
 	require.NoError(t, e.writeSessionFull(pendingWrite{sess: sess, msgs: []parser.ParsedMessage{oldPrompt, oldCall}}))
 	d.SetArchiveContent(config.ArchiveContentTranscripts)
-	require.NoError(t, d.RenameSession(t.Context(), sess.ID, nil))
 	oldCall.Ordinal = 0
 	oldCall.ToolCalls[0].InputJSON = ""
 	oldCall.OutputTokens, oldCall.HasOutputTokens = 10, true
@@ -12334,4 +12333,9 @@ func TestHistoryReplaceDropsSupersededCommandLinks(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got.PRLinks, 1)
 	assert.Equal(t, "https://github.com/example/repo/pull/43", got.PRLinks[0].URL)
+	message.ToolCalls = nil
+	require.NoError(t, e.writeSessionFull(pendingWrite{sess: sess, msgs: []parser.ParsedMessage{message}}))
+	got, err = d.GetSession(t.Context(), sess.ID)
+	require.NoError(t, err)
+	assert.Empty(t, got.PRLinks)
 }

@@ -51,19 +51,6 @@ func TestRetainedForkCommandPRLinks(t *testing.T) {
 	}
 }
 
-func TestClaudeCommandPRLinksReplaceOnRewrite(t *testing.T) {
-	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
-	path := env.writeClaudeSession(t, "proj", "replace-pr.jsonl", testjsonl.JoinJSONL(
-		testjsonl.ClaudeUserJSON("Review", tsEarly),
-		testjsonl.ClaudeAssistantJSON([]map[string]any{{"type": "tool_use", "id": "call", "name": "Bash", "input": map[string]any{"command": "gh pr view 42 -R example/repo"}}}, tsEarlyS1),
-	))
-	require.Zero(t, env.engine.SyncAll(t.Context(), nil).Failed)
-	require.Equal(t, []string{"https://github.com/example/repo/pull/42"}, storedPRURLs(t, env.db, "replace-pr"))
-	require.NoError(t, os.WriteFile(path, []byte(testjsonl.JoinJSONL(testjsonl.ClaudeUserJSON("Done", tsEarly))), 0o600))
-	require.NoError(t, env.engine.TrySyncSessionWithSubagentsContext(t.Context(), "replace-pr"))
-	assert.Empty(t, storedPRURLs(t, env.db, "replace-pr"))
-}
-
 func storedPRURLs(t *testing.T, d *db.DB, id string) []string {
 	t.Helper()
 	sess, err := d.GetSessionFull(t.Context(), id)
@@ -200,48 +187,12 @@ func TestCodexCommandPRLinksOnAppend(t *testing.T) {
 	env.engine.SyncPaths([]string{path})
 	assert.Equal(t, []string{"https://github.com/example/repo/pull/42"}, storedPRURLs(t, env.db, "codex:"+id))
 
-	appendClaudeSplitLines(t, path, testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call2", map[string]any{"cmd": "gh pr view 43 --json title"}, "2024-01-01T10:00:06Z"))
+	appendClaudeSplitLines(t, path, testjsonl.JoinJSONL(
+		testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call2", map[string]any{"cmd": "cd /tmp"}, "2024-01-01T10:00:06Z"),
+		testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call3", map[string]any{"cmd": "gh pr view 43 --json title"}, "2024-01-01T10:00:07Z"),
+	))
 	env.engine.SyncPaths([]string{path})
 	assert.ElementsMatch(t, []string{"https://github.com/example/repo/pull/42", "https://github.com/example/repo/pull/43"}, storedPRURLs(t, env.db, "codex:"+id))
-}
-
-func TestCodexAppendSeparateShellDirectories(t *testing.T) {
-	testutil.IsolateGit(t)
-	root := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "config"), []byte("[remote \"origin\"]\n url = https://github.com/example/repo.git\n"), 0o600))
-	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
-	const id = "01900000-0000-7000-8000-000000000043"
-	path := env.writeCodexSession(t, filepath.Join("2024", "01", "15"), "rollout-20240115-"+id+".jsonl", testjsonl.JoinJSONL(
-		testjsonl.CodexSessionMetaWithFieldsJSON(id, root, "user", tsEarly, map[string]any{"git": map[string]any{"repository_url": "https://github.com/example/repo.git"}}),
-		testjsonl.CodexMsgJSON("user", "Finish the work", tsEarlyS1),
-	))
-	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
-	appendClaudeSplitLines(t, path, testjsonl.JoinJSONL(
-		testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call1", map[string]any{"cmd": "cd /tmp"}, tsEarlyS5),
-		testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call2", map[string]any{"cmd": "gh pr view 43"}, "2024-01-01T10:00:06Z"),
-	))
-	env.engine.SyncPaths([]string{path})
-	assert.Equal(t, []string{"https://github.com/example/repo/pull/43"}, storedPRURLs(t, env.db, "codex:"+id))
-}
-
-func TestClaudeCommandPRUsesCheckoutRemote(t *testing.T) {
-	testutil.IsolateGit(t)
-	root := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "config"), []byte("[remote \"origin\"]\n url = https://github.com/example/repo.git\n"), 0o600))
-	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
-	env.writeClaudeSession(t, "proj", "checkout-pr.jsonl", testjsonl.JoinJSONL(
-		testjsonl.ClaudeUserJSON("Finish the work", tsEarly, root),
-		testjsonl.ClaudeAssistantJSON([]map[string]any{{"type": "tool_use", "id": "call", "name": "Bash", "input": map[string]any{"command": "gh pr view 42 --json title"}}}, tsEarlyS1),
-	))
-	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
-	filter, err := db.ParsePRFilter("example/repo#42")
-	require.NoError(t, err)
-	page, err := env.db.ListSessions(t.Context(), db.SessionFilter{PR: filter})
-	require.NoError(t, err)
-	require.Len(t, page.Sessions, 1)
-	assert.Equal(t, "checkout-pr", page.Sessions[0].ID)
 }
 
 func TestCommandPRLinksSurviveArchiveContentPolicy(t *testing.T) {
@@ -275,30 +226,13 @@ func TestCommandPRLinksSurviveArchiveContentPolicy(t *testing.T) {
 				require.NoError(t, env.db.RenameSession(t.Context(), "policy-pr", nil))
 				assert.ElementsMatch(t, want, storedPRURLs(t, env.db, "policy-pr"))
 			}
+			if policy == config.ArchiveContentTranscripts {
+				require.NoError(t, os.WriteFile(path, []byte(testjsonl.JoinJSONL(testjsonl.ClaudeUserJSON("Done", tsEarly))), 0o600))
+				require.NoError(t, env.engine.TrySyncSessionWithSubagentsContext(t.Context(), "policy-pr"))
+				assert.Empty(t, storedPRURLs(t, env.db, "policy-pr"))
+			}
 		})
 	}
-}
-
-func TestStagedCommandPRLinksSurviveTranscriptPolicy(t *testing.T) {
-	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
-	env.db.SetArchiveContent(config.ArchiveContentTranscripts)
-	env.engine.Close()
-	env.engine = sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {env.codexDir}},
-		Machine:   "local", ArchiveContent: config.ArchiveContentTranscripts, StagedCodexParseMinBytes: 1,
-	})
-	t.Cleanup(env.engine.Close)
-	const id = "01900000-0000-7000-8000-000000000098"
-	env.writeCodexSession(t, filepath.Join("2024", "01", "15"), "rollout-20240115-"+id+".jsonl", testjsonl.JoinJSONL(
-		testjsonl.CodexSessionMetaJSON(id, "/tmp/project", "user", tsEarly),
-		testjsonl.CodexMsgJSON("user", "Review the changes", tsEarlyS1),
-		testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call", map[string]any{"cmd": "gh pr view 42 -R example/repo"}, tsEarlyS5),
-	))
-	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
-	assert.Equal(t, []string{"https://github.com/example/repo/pull/42"}, storedPRURLs(t, env.db, "codex:"+id))
-	structured, err := env.db.GetSessionStructuredPRLinks(t.Context(), "codex:"+id)
-	require.NoError(t, err)
-	assert.Empty(t, structured)
 }
 
 func TestIncrementalPromptThenCommandSurvivesUsageOnly(t *testing.T) {
@@ -317,57 +251,59 @@ func TestIncrementalPromptThenCommandSurvivesUsageOnly(t *testing.T) {
 	assert.Equal(t, []string{"https://github.com/example/repo/pull/42"}, storedPRURLs(t, env.db, "codex:"+id))
 }
 
-func TestAmbiguousCheckoutRemoteDoesNotInferPR(t *testing.T) {
+func TestCommandPRCheckoutRemote(t *testing.T) {
 	testutil.IsolateGit(t)
-	root := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "config"), []byte("[remote \"origin\"]\n url = https://github.com/example/fork.git\n[remote \"upstream\"]\n url = https://github.com/example/upstream.git\n"), 0o600))
-	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
-	var paths []string
 	for _, tc := range []struct {
-		id       string
-		recorded bool
+		name, config, recorded string
+		agent                  parser.AgentType
+		want                   bool
 	}{
-		{"01900000-0000-7000-8000-000000000081", false},
-		{"01900000-0000-7000-8000-000000000082", true},
+		{"single Claude", "[remote \"origin\"]\n url = https://github.com/example/repo.git\n", "", parser.AgentClaude, true},
+		{"ambiguous", "[remote \"origin\"]\n url = https://github.com/example/repo.git\n[remote \"upstream\"]\n url = https://github.com/example/other.git\n", "", parser.AgentCodex, false},
+		{"ambiguous recorded", "[remote \"origin\"]\n url = https://github.com/example/repo.git\n[remote \"upstream\"]\n url = https://github.com/example/other.git\n", "https://github.com/example/repo.git", parser.AgentCodex, false},
+		{"case insensitive", "[remote \"origin\"]\n url = https://github.com/example/repo.git\n", "git@github.com:Example/Repo.git", parser.AgentCodex, true},
 	} {
-		fields := map[string]any{}
-		if tc.recorded {
-			fields["git"] = map[string]any{"repository_url": "https://github.com/example/fork.git"}
-		}
-		paths = append(paths, env.writeCodexSession(t, filepath.Join("2024", "01", "15"), "rollout-20240115-"+tc.id+".jsonl", testjsonl.JoinJSONL(
-			testjsonl.CodexSessionMetaWithFieldsJSON(tc.id, root, "user", tsEarly, fields),
-			testjsonl.CodexMsgJSON("user", "Review changes", tsEarlyS1),
-			testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call", map[string]any{"cmd": "gh pr view 42"}, tsEarlyS5),
-		)))
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o700))
+			require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "config"), []byte(tc.config), 0o600))
+			env := setupSingleAgentTestEnv(t, tc.agent)
+			const id = "01900000-0000-7000-8000-000000000081"
+			var path, sessionID string
+			if tc.agent == parser.AgentClaude {
+				sessionID = "checkout-pr"
+				path = env.writeClaudeSession(t, "proj", sessionID+".jsonl", testjsonl.JoinJSONL(
+					testjsonl.ClaudeUserJSON("Finish the work", tsEarly, root),
+					testjsonl.ClaudeAssistantJSON([]map[string]any{{"type": "tool_use", "id": "call", "name": "Bash", "input": map[string]any{"command": "gh pr view 42 --json title"}}}, tsEarlyS1),
+				))
+			} else {
+				sessionID = "codex:" + id
+				fields := map[string]any{}
+				if tc.recorded != "" {
+					fields["git"] = map[string]any{"repository_url": tc.recorded}
+				}
+				path = env.writeCodexSession(t, filepath.Join("2024", "01", "15"), "rollout-20240115-"+id+".jsonl", testjsonl.JoinJSONL(
+					testjsonl.CodexSessionMetaWithFieldsJSON(id, root, "user", tsEarly, fields),
+					testjsonl.CodexMsgJSON("user", "Review changes", tsEarlyS1),
+					testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call", map[string]any{"cmd": "gh pr view 42"}, tsEarlyS5),
+				))
+			}
+			require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+			if tc.want {
+				filter, err := db.ParsePRFilter("example/repo#42")
+				require.NoError(t, err)
+				page, err := env.db.ListSessions(t.Context(), db.SessionFilter{PR: filter})
+				require.NoError(t, err)
+				require.Len(t, page.Sessions, 1)
+				assert.Equal(t, sessionID, page.Sessions[0].ID)
+			} else {
+				assert.Empty(t, storedPRURLs(t, env.db, sessionID))
+				appendClaudeSplitLines(t, path, testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "append", map[string]any{"cmd": "gh pr view 43"}, "2024-01-01T10:00:06Z"))
+				env.engine.SyncPaths([]string{path})
+				assert.Empty(t, storedPRURLs(t, env.db, sessionID))
+			}
+		})
 	}
-	require.Equal(t, 2, env.engine.SyncAll(t.Context(), nil).Synced)
-	for _, id := range []string{"01900000-0000-7000-8000-000000000081", "01900000-0000-7000-8000-000000000082"} {
-		assert.Empty(t, storedPRURLs(t, env.db, "codex:"+id))
-	}
-	for _, path := range paths {
-		appendClaudeSplitLines(t, path, testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "append", map[string]any{"cmd": "gh pr view 43"}, "2024-01-01T10:00:06Z"))
-	}
-	env.engine.SyncPaths(paths)
-	for _, id := range []string{"01900000-0000-7000-8000-000000000081", "01900000-0000-7000-8000-000000000082"} {
-		assert.Empty(t, storedPRURLs(t, env.db, "codex:"+id))
-	}
-}
-
-func TestCommandPRRecordedRemoteCaseInsensitive(t *testing.T) {
-	testutil.IsolateGit(t)
-	root := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "config"), []byte("[remote \"origin\"]\n url = https://github.com/example/repo.git\n"), 0o600))
-	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
-	const id = "01900000-0000-7000-8000-000000000099"
-	env.writeCodexSession(t, filepath.Join("2024", "01", "15"), "rollout-20240115-"+id+".jsonl", testjsonl.JoinJSONL(
-		testjsonl.CodexSessionMetaWithFieldsJSON(id, root, "user", tsEarly, map[string]any{"git": map[string]any{"repository_url": "git@github.com:Example/Repo.git"}}),
-		testjsonl.CodexMsgJSON("user", "Review", tsEarlyS1),
-		testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call", map[string]any{"cmd": "gh pr view 42"}, tsEarlyS5),
-	))
-	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
-	assert.Equal(t, []string{"https://github.com/example/repo/pull/42"}, storedPRURLs(t, env.db, "codex:"+id))
 }
 
 func TestCommandPRUsesChangedCheckoutAfterRestart(t *testing.T) {

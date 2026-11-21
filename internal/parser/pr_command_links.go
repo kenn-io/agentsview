@@ -176,7 +176,6 @@ func CommandPRLinks(command, remote string) ([]PRLink, bool) {
 
 func unwrapShellCall(call shellCall) shellCall {
 	for len(call.Words) > 0 && call.Literal[0] {
-		call = unwrapBuiltin(call)
 		switch path.Base(call.Words[0]) {
 		case "timeout":
 			if len(call.Words) < 3 || !call.Literal[1] || strings.HasPrefix(call.Words[1], "-") {
