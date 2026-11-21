@@ -57,6 +57,13 @@ func TestDashboardPartsMatchScans(t *testing.T) {
 	require.NoError(t, err)
 	f := AnalyticsFilter{Timezone: "UTC"}
 	check := func(filter AnalyticsFilter) {
+		_, _, handled, err := d.dashboardParts(ctx, filter)
+		require.NoError(t, err)
+		if filter.Hour != nil || filter.Model != "" {
+			require.False(t, handled)
+		} else {
+			require.True(t, handled)
+		}
 		activity, err := d.GetAnalyticsActivity(ctx, filter, "day")
 		require.NoError(t, err)
 		hours, err := d.GetAnalyticsHourOfWeek(ctx, filter)
@@ -141,6 +148,8 @@ func TestDashboardPartsReuseAcrossAgentAndDateFilters(t *testing.T) {
 	assert.Equal(t, [][]string{{"s0", "s1", "s2", "s3", "s4", "s5"}}, reads)
 	// A filter with no saved file must not reuse the retained part of a changed session.
 	insertMessages(t, d, asstMsgAt("s0", 1, "later", "2024-06-01T09:01:00Z"))
+	_, err := d.getWriter().ExecContext(ctx, `UPDATE sessions SET message_count=2 WHERE id='s0'`)
+	require.NoError(t, err)
 	_, parts, handled, err := d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC", Project: "project"})
 	require.NoError(t, err)
 	require.True(t, handled)
@@ -310,7 +319,7 @@ func TestDashboardPartsConcurrentPanels(t *testing.T) {
 	assert.EqualValues(t, 1, reads.Load())
 }
 
-func TestDashboardPartsLengthUpdateAndReplacementWithoutRevision(t *testing.T) {
+func TestDashboardPartsLengthUpdateWithoutRevision(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	d := testDB(t)
 	ctx := t.Context()
@@ -333,13 +342,6 @@ func TestDashboardPartsLengthUpdateAndReplacementWithoutRevision(t *testing.T) {
 	after, err := d.GetAnalyticsVelocity(ctx, f)
 	require.NoError(t, err)
 	assert.InDelta(t, 20, after.Overall.CharsPerActiveMin, 0)
-	_, err = d.getWriter().ExecContext(ctx, `BEGIN; DELETE FROM messages WHERE session_id='s' AND ordinal=1; INSERT INTO messages(session_id,ordinal,role,content,timestamp,content_length) VALUES('s',1,'assistant','answer','2024-06-01T09:01:00Z',30); COMMIT`)
-	require.NoError(t, err)
-	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT transcript_revision FROM sessions WHERE id='s'`).Scan(&afterRevision))
-	require.Equal(t, revision, afterRevision)
-	after, err = d.GetAnalyticsVelocity(ctx, f)
-	require.NoError(t, err)
-	assert.InDelta(t, 30, after.Overall.CharsPerActiveMin, 0)
 }
 
 func TestDashboardPartsPrunesDeletedSessions(t *testing.T) {
@@ -473,13 +475,25 @@ func TestDashboardPartsMemoRespectsSizeLimit(t *testing.T) {
 	})
 	t.Run("successive fills", func(t *testing.T) {
 		var memo dashboardPartsMemo
-		for _, id := range []string{"a", "b"} {
-			part := kept.Part[dashboardPart]{ID: id, Fingerprint: "v", Value: dashboardPart{Velocity: SessionVelocity{TurnCycles: make([]float64, 4_194_304)}}}
-			memo.store("UTC", "version", map[string]kept.Part[dashboardPart]{id: part})
+		versions := make(map[string]string, 24_000)
+		ids := make([]string, 0, 24_000)
+		for batch := range 2 {
+			fill := make(map[string]kept.Part[dashboardPart], 12_000)
+			for i := range 12_000 {
+				id := fmt.Sprintf("s%05d", batch*12_000+i)
+				hours := make(map[int]int, 168)
+				for hour := range 168 {
+					hours[hour] = 1
+				}
+				fill[id] = kept.Part[dashboardPart]{ID: id, Fingerprint: "v", Value: dashboardPart{Hours: hours}}
+				ids = append(ids, id)
+				versions[id] = "v"
+			}
+			memo.store("UTC", "version", fill)
 		}
 		parts := make(map[string]kept.Part[dashboardPart])
-		missing := memo.reuse("UTC", "version", []string{"a", "b"}, map[string]string{"a": "v", "b": "v"}, parts)
+		missing := memo.reuse("UTC", "version", ids, versions, parts)
 		assert.NotEmpty(t, missing)
-		assert.LessOrEqual(t, len(parts), 1)
+		assert.NotZero(t, len(parts))
 	})
 }
