@@ -931,7 +931,7 @@ type searchContentIn struct {
 	Agent            string   `json:"agent,omitempty" jsonschema:"Restrict to one agent."`
 	SessionID        string   `json:"session_id,omitempty" jsonschema:"Full stored session ID or raw UUID matching one session. Without pattern or concepts, list its messages, ignoring mode and include flags and including active, one-shot, and automated sessions."`
 	GitBranch        string   `json:"git_branch,omitempty" jsonschema:"Restrict to one exact git branch."`
-	CurrentSessionID string   `json:"current_session_id,omitempty" jsonschema:"Exclude this exact full stored session ID instead of applying the recent-activity heuristic."`
+	CurrentSessionID string   `json:"current_session_id,omitempty" jsonschema:"Exclude this full stored session ID or a raw UUID that matches one session instead of applying the recent-activity heuristic. An unindexed ID is excluded as given."`
 	DateFrom         string   `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
 	DateTo           string   `json:"date_to,omitempty" jsonschema:"Only sessions on or before this date (YYYY-MM-DD)."`
 	Limit            int      `json:"limit,omitempty" jsonschema:"Max matches, default 10, max 50."`
@@ -1121,6 +1121,15 @@ func (t *toolset) searchContent(
 		}
 	}
 	currentSession := strings.TrimSpace(in.CurrentSessionID)
+	if currentSession != "" {
+		detail, err := t.resolveSession(ctx, currentSession)
+		if err != nil && !errors.Is(err, service.ErrSessionNotFound) {
+			return nil, searchContentOut{}, err
+		}
+		if detail != nil {
+			currentSession = detail.ID
+		}
+	}
 	excludeSessions := db.NormalizeExcludeSessionIDs([]string{currentSession})
 	cutoff := ""
 	if currentSession == "" && !in.IncludeActive {
