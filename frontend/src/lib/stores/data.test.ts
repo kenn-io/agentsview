@@ -248,6 +248,26 @@ describe("load", () => {
 });
 
 describe("attach", () => {
+  it("refreshes visible inventory without events and stops after detach", async () => {
+    vi.useFakeTimers();
+    const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    const updated = makeInventory([makeRow({ project_key: "updated" })]);
+    api.getApiV1DataProjects.mockResolvedValue(updated);
+    detach = data.attach(true);
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+    expect(data.inventory).toEqual(updated);
+    expect(api.getApiV1DataProjects).toHaveBeenCalledTimes(1);
+    hidden.mockReturnValue(true);
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+    expect(api.getApiV1DataProjects).toHaveBeenCalledTimes(1);
+    hidden.mockReturnValue(false);
+    detach();
+    detach = null;
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+    expect(api.getApiV1DataProjects).toHaveBeenCalledTimes(1);
+    hidden.mockRestore();
+  });
+
   it("hydrates from the URL on attach, then re-hydrates and reloads on popstate", async () => {
     const initial = makeInventory([makeRow({ project_key: "k1" })]);
     api.getApiV1DataProjects.mockResolvedValueOnce(initial);
