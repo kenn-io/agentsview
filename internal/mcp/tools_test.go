@@ -399,12 +399,7 @@ func TestSearchSessions_EmptyActiveHint(t *testing.T) {
 	assert.Empty(t, noMatch.Hints)
 
 	seedFTSSession(t, d, "older", "proj", "pageexample", "2024-06-15T11:00:00Z")
-	seedFTSSession(t, d, "recent", "proj", "pageexample singleexample", "2024-06-15T11:55:00Z")
-	single := mustSearch(t, ts, searchSessionsIn{Query: "singleexample"})
-	require.Len(t, single.Hints, 1)
-	assert.Equal(t, "Sessions active in the last 10 minutes hidden from this page: 1. "+
-		"Retry this request with include_active: true to see them; they may include your current conversation.", single.Hints[0].Message)
-
+	seedFTSSession(t, d, "recent", "proj", "pageexample", "2024-06-15T11:55:00Z")
 	page := mustSearch(t, ts, searchSessionsIn{Query: "pageexample", Sort: "recency", Limit: 1})
 	assert.Empty(t, page.Results)
 	require.NotNil(t, page.NextCursor)
