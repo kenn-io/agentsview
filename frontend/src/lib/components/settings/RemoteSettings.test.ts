@@ -20,12 +20,43 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   localStorage.clear();
   settings.requireAuth = false;
   settings.authToken = "";
 });
 
 describe("RemoteSettings", () => {
+  it.each([27, 28])("checks API %i before connecting", async (apiVersion) => {
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ api_version: apiVersion, version: "test" }), {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const { getByRole, getByLabelText, queryByText } = render(RemoteSettings);
+    await fireEvent.input(getByLabelText("Server URL"), {
+      target: { value: "https://remote.example.test" },
+    });
+    await fireEvent.input(getByLabelText("Auth token"), { target: { value: "test-token" } });
+    await fireEvent.click(getByRole("button", { name: "Connect", exact: true }));
+    if (apiVersion === 27) {
+      await waitFor(() =>
+        expect(queryByText("Upgrade the remote AgentsView server to continue.")).not.toBeNull(),
+      );
+      expect(localStorage.getItem("agentsview-server-url")).toBeNull();
+    } else {
+      await waitFor(() =>
+        expect(localStorage.getItem("agentsview-server-url")).toBe("https://remote.example.test"),
+      );
+      expect(localStorage.getItem("agentsview-auth-token::https://remote.example.test")).toBe(
+        "test-token",
+      );
+    }
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch.mock.calls[0]![0]).toBe("https://remote.example.test/api/v1/version");
+  });
+
   it("offers a restart beside the auth notice before any save", async () => {
     const restart = vi.spyOn(settings, "restartDaemon").mockResolvedValue();
     const { getByRole } = render(RemoteSettings);

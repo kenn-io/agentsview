@@ -230,6 +230,34 @@ describe("App Recall availability", () => {
   });
 });
 
+describe("saved remote API version", () => {
+  it.each([27, 28])("gates session updates on API %i", async (apiVersion) => {
+    stubAppDependencies();
+    localStorage.setItem("agentsview-server-url", "https://remote.example.test");
+    sync.serverVersion = {
+      api_version: apiVersion,
+      version: "test",
+      commit: "test",
+    } as NonNullable<typeof sync.serverVersion>;
+    router.route = "sessions";
+    sessions.activeSessionId = "session-1";
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    if (apiVersion === 27) {
+      expect(document.body.textContent).toContain(
+        "Upgrade the remote AgentsView server to continue.",
+      );
+      expect(sync.watchSession).not.toHaveBeenCalled();
+    } else {
+      expect(document.body.textContent).not.toContain(
+        "Upgrade the remote AgentsView server to continue.",
+      );
+      expect(sync.watchSession).toHaveBeenCalled();
+    }
+    sync.serverVersion = null;
+  });
+});
+
 describe("App session URL date state", () => {
   it.each(["selection change", "selection cleared", "route exit", "unmount"])(
     "ignores an old watch's children fallback after %s",
@@ -274,38 +302,45 @@ describe("App session URL date state", () => {
   it("requests children once when the session watch becomes ready on open", async () => {
     stubAppDependencies();
     vi.mocked(sync.watchSession).mockRestore();
+    expect(sync.remoteLiveAllowed).toBe(true);
+    const watch = vi.spyOn(sync, "watchSession");
     vi.mocked(sessions.loadChildSessions).mockRestore();
     vi.spyOn(document, "hidden", "get").mockReturnValue(false);
     vi.spyOn(sessions, "load").mockResolvedValue();
     vi.spyOn(sessions, "navigateToSession").mockResolvedValue();
     vi.spyOn(sessions, "refreshActiveSession").mockResolvedValue();
     vi.spyOn(messages, "reload").mockResolvedValue();
-    let stream!: ReadableStreamDefaultController<Uint8Array>;
-    const watch = vi.spyOn(SessionsService, "getApiV1SessionsByIdWatch").mockResolvedValue(
-      new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            stream = controller;
-          },
-        }),
-        { headers: { "Content-Type": "text/event-stream" } },
-      ),
-    );
+    let port!: {
+      onmessage: ((event: MessageEvent) => void) | null;
+      postMessage: ReturnType<typeof vi.fn>;
+      start: () => void;
+    };
+    class Worker {
+      port = { onmessage: null, postMessage: vi.fn(), start() {} };
+      constructor() {
+        port = this.port;
+      }
+    }
+    vi.stubGlobal("SharedWorker", Worker);
     const fetchSpy = vi.fn(
       async (_input: RequestInfo | URL) =>
-        new Response("[]", {
-          headers: { "Content-Type": "application/json" },
-        }),
+        new Response("[]", { headers: { "Content-Type": "application/json" } }),
     );
     vi.stubGlobal("fetch", fetchSpy);
     router.route = "sessions";
+    router.isRootPath = false;
     router.sessionId = "session-1";
     sessions.activeSessionId = "session-1";
     try {
       component = mount(App, { target: document.body });
       await flushEffects();
-      expect(watch).toHaveBeenCalledWith({ id: "session-1" }, expect.anything());
-      stream.enqueue(new TextEncoder().encode("event: session_ready\ndata: {}\n\n"));
+      expect(watch).toHaveBeenCalled();
+      expect(port.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ session: "session-1" }),
+      );
+      port.onmessage?.(
+        new MessageEvent("message", { data: { type: "session_ready", data: "session-1" } }),
+      );
       await vi.waitFor(() =>
         expect(
           fetchSpy.mock.calls.some(([input]) =>
@@ -320,7 +355,6 @@ describe("App session URL date state", () => {
       expect(childrenRequests).toHaveLength(1);
     } finally {
       sync.unwatchSession();
-      stream.close();
     }
   });
 

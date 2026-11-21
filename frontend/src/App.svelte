@@ -115,6 +115,7 @@
   } from "./lib/stores/sessionRouteParams.js";
 
   let globalAuthToken: string = $state("");
+  let remoteLiveAllowed = $derived(sync.remoteLiveAllowed);
   let title = $derived(documentTitle({
     route: router.route,
     needsAuth: settings.needsAuth,
@@ -151,6 +152,7 @@
   $effect(() => {
     const route = router.route;
     const id = sessions.activeSessionId;
+    const liveAllowed = remoteLiveAllowed;
     void sessions.activeSessionLoadVersion;
     let current = true;
     untrack(() => {
@@ -189,7 +191,8 @@
         if (ui.isMobileViewport) {
           ui.closeSidebar();
         }
-        const ready = sync.watchSession(
+        if (!liveAllowed) sync.unwatchSession();
+        const ready = liveAllowed ? sync.watchSession(
           id,
           () => {
             messages.reload();
@@ -204,7 +207,7 @@
           (t) => {
             sessionTiming.applyEvent(t);
           },
-        );
+        ) : Promise.resolve(false);
         messages.loadSession(id, ready);
         void ready.then((seen) => {
           if (!seen && current) sessions.loadChildSessions(id);
@@ -895,6 +898,14 @@
       >
         {m.app_auth_disconnect_reset()}
       </button>
+    </div>
+  </div>
+{:else if sync.remoteIncompatible}
+  <div class="auth-overlay">
+    <div class="auth-card">
+      <h2 class="auth-card-title">{m.settings_remote_upgrade_required()}</h2>
+      <button class="auth-card-btn" onclick={() => window.location.reload()}>{m.shared_retry()}</button>
+      <button class="auth-card-disconnect" onclick={() => { setAuthToken(""); setServerUrl(""); window.location.reload(); }}>{m.app_auth_disconnect_reset()}</button>
     </div>
   </div>
 {:else}

@@ -98,6 +98,24 @@ function mockResyncFailure(error: Error): void {
   });
 }
 
+describe("remote API version", () => {
+  afterEach(() => {
+    sync.serverVersion = null;
+    api.isRemoteConnection.mockReset();
+    api.getVersion.mockReset();
+    vi.clearAllMocks();
+  });
+
+  it.each([27, 28])("gates saved remote connections on API %i", async (apiVersion) => {
+    api.isRemoteConnection.mockReturnValue(true);
+    api.getVersion.mockResolvedValue({ api_version: apiVersion, version: "test", commit: "test" });
+    await sync.loadVersion();
+    expect(sync.remoteIncompatible).toBe(apiVersion === 27);
+    expect(sync.remoteLiveAllowed).toBe(apiVersion === 28);
+    expect(api.setEventsAvailable).toHaveBeenLastCalledWith(apiVersion === 28);
+  });
+});
+
 describe("hidden status polling", () => {
   it("leaves a hidden tab quiet and polls again when visible", async () => {
     vi.useFakeTimers();

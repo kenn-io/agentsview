@@ -13,6 +13,7 @@
     isRemoteConnection,
   } from "../../api/runtime.js";
   import { MetadataService } from "../../api/generated/index.js";
+  import { supportsRemoteVersion } from "../../api/remoteVersion.js";
   import { LatestRead } from "../../utils/latest-read.js";
   import RestartAction from "./RestartAction.svelte";
 
@@ -46,10 +47,15 @@
       }
       const data = await MetadataService.getApiV1Version({ baseUrl: base, headers, signal });
       if (!versionRead.isCurrent(signal)) return;
+      if (!supportsRemoteVersion(data.api_version)) {
+        testResult = { ok: false, message: m.settings_remote_upgrade_required() };
+        return false;
+      }
       testResult = {
         ok: true,
         message: m.settings_remote_connected_version({ version: data.version || m.settings_remote_unknown() }),
       };
+      return true;
     } catch (e) {
       if (signal.aborted || !versionRead.isCurrent(signal)) return;
       testResult = {
@@ -65,13 +71,21 @@
 
   onDestroy(() => versionRead.cancel());
 
-  function handleConnect() {
-    if (!serverUrl.trim()) return;
+  async function handleConnect() {
+    if (!serverUrl.trim() || saving) return;
+    saving = true;
     const url = serverUrl.replace(/\/+$/, "");
-    setServerUrl(url);
-    setAuthToken(tokenInput.trim());
-    saveMsg = m.settings_remote_connected_reloading();
-    setTimeout(() => window.location.reload(), 500);
+    const token = tokenInput.trim();
+    try {
+      if (!(await handleTestConnection())) return;
+      if (url !== serverUrl.replace(/\/+$/, "") || token !== tokenInput.trim()) return;
+      setServerUrl(url);
+      setAuthToken(token);
+      saveMsg = m.settings_remote_connected_reloading();
+      setTimeout(() => window.location.reload(), 500);
+    } finally {
+      saving = false;
+    }
   }
 
   function handleDisconnect() {
@@ -211,7 +225,7 @@
         <Button
           tone="info"
           surface="solid"
-          disabled={saving || !serverUrl.trim()}
+          disabled={saving || testing || !serverUrl.trim()}
           onclick={handleConnect}
         >
           {m.settings_remote_connect()}

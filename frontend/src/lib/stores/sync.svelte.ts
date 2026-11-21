@@ -1,3 +1,4 @@
+import { supportsRemoteVersion } from "../api/remoteVersion.js";
 import type { LiveSource } from "../api/client.js";
 import { triggerResync, triggerSync, watchSession, type SyncHandle } from "../api/client.js";
 import { MetadataService, SyncService } from "../api/generated/index";
@@ -93,6 +94,21 @@ class SyncStore {
   readonly buildCommit: string = import.meta.env.VITE_BUILD_COMMIT;
   readonly isDesktop: boolean =
     typeof window !== "undefined" && new URLSearchParams(window.location.search).has("desktop");
+
+  get remoteIncompatible(): boolean {
+    return (
+      isRemoteConnection() &&
+      this.serverVersion !== null &&
+      !supportsRemoteVersion(this.serverVersion.api_version)
+    );
+  }
+
+  get remoteLiveAllowed(): boolean {
+    return (
+      !isRemoteConnection() ||
+      (this.serverVersion !== null && supportsRemoteVersion(this.serverVersion.api_version))
+    );
+  }
 
   get readOnly(): boolean {
     return this.serverVersion?.read_only === true;
@@ -267,7 +283,7 @@ class SyncStore {
     try {
       this.serverVersion = await MetadataService.getApiV1Version();
       fileReferences.enabled = this.serverVersion.docbank_enabled === true;
-      events.setAvailable(this.serverVersion.read_only !== true);
+      events.setAvailable(this.serverVersion.read_only !== true && this.remoteLiveAllowed);
       this.markRemoteReachable(true);
       this.failedReads.version = null;
       this.versionMismatch = commitsDisagree(this.buildCommit, this.serverVersion.commit);
