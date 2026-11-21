@@ -332,8 +332,10 @@ includes child sessions.
 pass `next_cursor` as the numeric `cursor` and echo the returned RFC3339
 `activity_cutoff` unchanged. The cutoff keeps the recent-activity exclusion
 fixed across pages of an unchanged archive, including on older servers. A
-cursor without the cutoff uses a fresh boundary, so sessions crossing that
-boundary can shift results between pages. Archive edits can also shift results.
+positive cursor without the cutoff returns a restart error when that exclusion
+applies. Restart without a cursor to obtain both fields. `include_active: true`
+or an explicit `current_session_id` allows numeric-only continuation. Archive
+edits retain the existing offset-pagination behavior.
 
 `exclusions.children` reports whether child sessions were excluded, including in
 empty results. It is true for `scope: top` and FTS searches without an exact

@@ -297,9 +297,8 @@ The latest release is
 
 **Bug fixes**
 
-- Search session messages by ID without a pattern, continue with a cursor
-  alone, and use concepts with any mode. A cursor without its activity cutoff
-  uses a fresh boundary, which can shift results between pages.
+- Search session messages by ID without a pattern, and use concepts with any
+  mode.
 
 - The container image now accepts hosted raw-sync uploads when it runs as a
   non-root uid with no passwd entry, such as a Kubernetes pod with `runAsUser`.
