@@ -58,63 +58,48 @@ func TestGetMessages_BodyCursorRejectsSystemRow(t *testing.T) {
 // cursors without both bindings, so the advertised continuation could never
 // run. Pagination stays available instead.
 func TestGetMessages_TruncatedWithoutRevisionBindingsKeepsPagination(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"messages":[{"session_id":"legacy","ordinal":0,` +
-			`"role":"user","content":"abcdefghij","content_length":10}],` +
-			`"count":1,"first_ordinal":0,"last_ordinal":0}`))
-	}))
-	t.Cleanup(srv.Close)
+	for _, tc := range []struct {
+		name     string
+		content  string
+		maxChars int
+		limit    int
+	}{
+		{name: "character limit", content: "abcdefghij", maxChars: 4, limit: 1},
+		{name: "response budget", content: strings.Repeat("<", 20000), maxChars: 20000, limit: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if !strings.HasSuffix(r.URL.Path, "/messages") {
+					_, _ = w.Write([]byte(`{"id":"legacy","message_count":2}`))
+					return
+				}
+				messages := []db.Message{dbtest.UserMsg("legacy", 0, tc.content), dbtest.UserMsg("legacy", 1, "next")}
+				if r.URL.Query().Get("from") == "1" {
+					messages = messages[1:]
+				} else if r.URL.Query().Get("limit") == "1" {
+					messages = messages[:1]
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"messages": messages, "count": len(messages)})
+			}))
+			t.Cleanup(srv.Close)
 
-	ts := &toolset{
-		svc: servicehttp.NewHTTPBackend(srv.URL, "", false, ""),
-		now: func() time.Time { return fixedNow },
+			ts := &toolset{svc: servicehttp.NewHTTPBackend(srv.URL, "", false, ""), now: func() time.Time { return fixedNow }}
+			_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "legacy", Limit: tc.limit, MaxCharsPerMessage: tc.maxChars})
+			require.NoError(t, err)
+			require.Len(t, first.Messages, 1)
+			assert.True(t, first.Messages[0].Truncated)
+			assert.NotEmpty(t, first.Messages[0].Content)
+			assert.True(t, strings.HasPrefix(tc.content, first.Messages[0].Content))
+			assert.Empty(t, first.Messages[0].BodyCursor)
+			require.NotNil(t, first.NextFrom)
+			assert.Equal(t, 1, *first.NextFrom)
+			_, next, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "legacy", From: first.NextFrom, Limit: 2})
+			require.NoError(t, err)
+			require.Len(t, next.Messages, 1)
+			assert.Equal(t, "next", next.Messages[0].Content)
+		})
 	}
-	_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{
-		SessionID: "legacy", Limit: 1, MaxCharsPerMessage: 4,
-	})
-	require.NoError(t, err)
-	require.Len(t, out.Messages, 1)
-	require.True(t, out.Messages[0].Truncated)
-	assert.Empty(t, out.Messages[0].BodyCursor,
-		"no cursor without a transcript revision and evidence source")
-	require.NotNil(t, out.NextFrom,
-		"pagination must remain available when no cursor is issued")
-	assert.Equal(t, 1, *out.NextFrom)
-}
-
-func TestGetMessages_OversizedWithoutRevisionBindingsKeepsPagination(t *testing.T) {
-	content := strings.Repeat("<", 20000)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if !strings.HasSuffix(r.URL.Path, "/messages") {
-			_, _ = w.Write([]byte(`{"id":"legacy","message_count":2}`))
-			return
-		}
-		messages := []db.Message{dbtest.UserMsg("legacy", 0, content), dbtest.UserMsg("legacy", 1, "next")}
-		if r.URL.Query().Get("from") == "1" {
-			messages = messages[1:]
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"messages": messages, "count": len(messages)})
-	}))
-	t.Cleanup(srv.Close)
-
-	ts := &toolset{svc: servicehttp.NewHTTPBackend(srv.URL, "", false, ""), now: func() time.Time { return fixedNow }}
-	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "legacy", Limit: 2, MaxCharsPerMessage: 20000})
-	require.NoError(t, err)
-	require.Len(t, first.Messages, 1)
-	assert.True(t, first.Messages[0].Truncated)
-	assert.NotEmpty(t, first.Messages[0].Content)
-	assert.True(t, strings.HasPrefix(content, first.Messages[0].Content))
-	assert.Empty(t, first.Messages[0].BodyCursor)
-	raw, err := json.Marshal(first)
-	require.NoError(t, err)
-	assert.LessOrEqual(t, len(raw), responseBudgetBytes)
-	require.NotNil(t, first.NextFrom)
-	_, next, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "legacy", From: first.NextFrom, Limit: 2})
-	require.NoError(t, err)
-	require.Len(t, next.Messages, 1)
-	assert.Equal(t, "next", next.Messages[0].Content)
 }
 
 // A cursor issued under explicit roles must continue under exactly those

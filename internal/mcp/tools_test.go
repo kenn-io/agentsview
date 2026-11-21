@@ -2446,24 +2446,29 @@ func TestSearchContent_Total(t *testing.T) {
 				if i%2 == 0 {
 					timestamp = "2024-06-15T11:00:00Z"
 				}
-				fake.matches[i] = db.ContentMatch{SessionID: "session", Ordinal: i, Timestamp: timestamp, Snippet: strings.Repeat("x", 2000)}
+				fake.matches[i] = db.ContentMatch{SessionID: "session", Ordinal: i, Timestamp: timestamp, Snippet: "needle", ContextBefore: []db.Message{{Content: strings.Repeat("x", 500)}, {Content: strings.Repeat("x", 500)}, {Content: strings.Repeat("x", 500)}, {Content: strings.Repeat("x", 500)}}}
 			}
 			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
-			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", IncludeActive: !tc.legacy, Limit: 20})
+			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", IncludeActive: !tc.legacy, Limit: 20, Context: 4})
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, out.Total)
 			assert.Equal(t, tc.capped, out.TotalCapped)
+			if tc.legacy {
+				require.NotEmpty(t, out.Matches)
+				require.NotNil(t, out.NextCursor)
+				assert.Equal(t, out.Matches[len(out.Matches)-1].Ordinal+1, *out.NextCursor)
+			}
 		})
 	}
 }
 
 func TestSearchContent_BudgetLongSnippet(t *testing.T) {
 	fake := &pagedContentSearchService{matches: []db.ContentMatch{
-		{SessionID: "session", Ordinal: 1, Snippet: strings.Repeat("x", 20000), TranscriptRevision: "revision"},
+		{SessionID: "session", Ordinal: 1, Snippet: strings.Repeat("x", 20000), TranscriptRevision: "revision", ContextBefore: []db.Message{{Content: "before"}}, ContextAfter: []db.Message{{Content: "after"}}},
 		{SessionID: "session", Ordinal: 2, Snippet: "later"},
 	}}
 	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
-	in := searchContentIn{Pattern: "(?s).+", Mode: "regex", IncludeActive: true, Limit: 10}
+	in := searchContentIn{Pattern: "(?s).+", Mode: "regex", IncludeActive: true, Limit: 10, Context: 1}
 	_, out, err := ts.searchContent(t.Context(), nil, in)
 	require.NoError(t, err)
 	require.Len(t, out.Matches, 1)
@@ -2472,6 +2477,8 @@ func TestSearchContent_BudgetLongSnippet(t *testing.T) {
 	assert.Equal(t, "session", out.Matches[0].SessionID)
 	assert.Equal(t, 1, out.Matches[0].Ordinal)
 	assert.Equal(t, "revision", out.Matches[0].TranscriptRevision)
+	assert.Empty(t, out.Matches[0].ContextBefore)
+	assert.Empty(t, out.Matches[0].ContextAfter)
 	require.NotNil(t, out.NextCursor)
 	in.Cursor = *out.NextCursor
 	_, out, err = ts.searchContent(t.Context(), nil, in)
@@ -2504,12 +2511,12 @@ func TestGetMessages_BudgetAroundLinearContinuation(t *testing.T) {
 func TestSearchContent_BudgetRanked(t *testing.T) {
 	for _, mode := range []string{"semantic", "hybrid"} {
 		t.Run(mode, func(t *testing.T) {
-			fake := &pagedContentSearchService{matches: make([]db.ContentMatch, 20)}
+			fake := &pagedContentSearchService{matches: make([]db.ContentMatch, 30)}
 			for i := range fake.matches {
-				fake.matches[i] = db.ContentMatch{SessionID: "session", Ordinal: i, Snippet: strings.Repeat("x", 1800)}
+				fake.matches[i] = db.ContentMatch{SessionID: "session", Ordinal: i, Snippet: "needle", ContextBefore: []db.Message{{Content: strings.Repeat("x", 500)}, {Content: strings.Repeat("x", 500)}, {Content: strings.Repeat("x", 500)}, {Content: strings.Repeat("x", 500)}}}
 			}
 			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
-			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Mode: mode, IncludeActive: true, Limit: 20})
+			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Mode: mode, IncludeActive: true, Limit: 20, Context: 4})
 			require.NoError(t, err)
 			assert.True(t, fitsResponse(out))
 			assert.Positive(t, out.Omitted)
