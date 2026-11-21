@@ -185,3 +185,21 @@ func TestReportingDayManyAccountEvents(t *testing.T) {
 	assert.EqualValues(t, 25, hour.Machines["cursor-account:1"].Usage.Totals.OutputTokens)
 	assert.Empty(t, hour.Machines["cursor-account:1"].Joint.Cells)
 }
+
+func TestCursorAccountHourUsesLatestPollRows(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	require.NoError(t, d.ConfigureArtifactLocalMachine(ctx, "machine-a"))
+	teamA := CursorUsageEvent{OccurredAt: "2026-07-28T10:01:00Z", Model: "a", OutputTokens: 10, DedupKey: "a"}
+	teamB := CursorUsageEvent{OccurredAt: "2026-07-28T10:02:00Z", Model: "b", OutputTokens: 20, DedupKey: "b"}
+	require.NoError(t, d.InsertCursorUsageEvents(ctx, []CursorUsageEvent{teamA}))
+	first := time.Date(2026, 7, 29, 1, 0, 0, 0, time.UTC)
+	require.NoError(t, d.AssignCursorUsageAccount(ctx, "12", []string{"a"}, first))
+	require.NoError(t, d.InsertCursorUsageEvents(ctx, []CursorUsageEvent{teamB}))
+	require.NoError(t, d.AssignCursorUsageAccount(ctx, "12", []string{"b"}, first.Add(time.Hour)))
+	day, err := d.ExportReportingDay(ctx, ReportingExportOptions{Date: first.Add(-25 * time.Hour), Now: first.Add(24 * time.Hour), SchemaVersion: 6, ByMachine: true})
+	require.NoError(t, err)
+	account := day.Hours[10].Machines["cursor-account:12"]
+	assert.EqualValues(t, 20, account.Usage.Totals.OutputTokens)
+	assert.Equal(t, "2026-07-29T02:00:00.000000Z", account.PolledAt)
+}

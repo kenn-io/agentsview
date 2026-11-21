@@ -9,7 +9,6 @@ import (
 	"math"
 	"slices"
 	"sort"
-	"strconv"
 	"time"
 
 	"go.kenn.io/agentsview/internal/activity"
@@ -381,9 +380,12 @@ func reportingHoursFromSource(
 				continue
 			}
 			key := accountHour{row.account, index}
-			groups[key] = append(groups[key], row.usage)
 			if row.polledAt > polled[key] {
+				groups[key] = nil
 				polled[key] = row.polledAt
+			}
+			if row.polledAt == polled[key] {
+				groups[key] = append(groups[key], row.usage)
 			}
 		}
 		for key, rows := range groups {
@@ -730,21 +732,14 @@ func (db *DB) loadReportingAccountUsage(ctx context.Context, tx *sql.Tx, start, 
 		if err := rows.Scan(&r.usage.Timestamp, &r.usage.Model, &input, &output, &write, &read, &r.usage.Cost, &r.usage.UsageDedupKey, &r.account, &r.polledAt); err != nil {
 			return nil, err
 		}
-		id, err := strconv.ParseUint(r.account, 10, 64)
-		if err != nil || id == 0 {
-			continue
-		}
-		r.account = cursorAccountPrefix + strconv.FormatUint(id, 10)
+		r.account = cursorAccountPrefix + r.account
 		r.at, err = time.Parse(time.RFC3339Nano, r.usage.Timestamp)
 		if err != nil {
 			continue
 		}
 		r.at = r.at.UTC()
-		r.usage.Agent, r.usage.UsageSource = "cursor", "cursor"
-		r.usage.InputTokens, r.usage.OutputTokens = max(input, 0), max(output, 0)
-		r.usage.CacheCreationTokens, r.usage.CacheReadTokens = max(write, 0), max(read, 0)
-		r.usage.MessageOrdinal, r.usage.CostSource = -1, export.CostSourceReported
-		r.usage.Priced, r.usage.Contributes = true, true
+		r.usage.Agent = "cursor"
+		setStandaloneUsageFields(&r.usage, input, output, write, read)
 		result = append(result, r)
 	}
 	return result, rows.Err()
@@ -815,15 +810,7 @@ func (db *DB) reportingStandaloneUsageCandidatesFrom(
 				"scanning standalone reporting usage: %w", err,
 			)
 		}
-		row.InputTokens = max(inputTokens, 0)
-		row.OutputTokens = max(outputTokens, 0)
-		row.CacheCreationTokens = max(cacheCreationTokens, 0)
-		row.CacheReadTokens = max(cacheReadTokens, 0)
-		row.MessageOrdinal = -1
-		row.UsageSource = row.Agent
-		row.CostSource = export.CostSourceReported
-		row.Priced = true
-		row.Contributes = true
+		setStandaloneUsageFields(&row, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens)
 		loaded = append(loaded, row)
 	}
 	if err := rows.Err(); err != nil {
@@ -832,6 +819,13 @@ func (db *DB) reportingStandaloneUsageCandidatesFrom(
 		)
 	}
 	return loaded, nil
+}
+
+func setStandaloneUsageFields(row *activity.UsageRow, input, output, write, read int) {
+	row.InputTokens, row.OutputTokens = max(input, 0), max(output, 0)
+	row.CacheCreationTokens, row.CacheReadTokens = max(write, 0), max(read, 0)
+	row.MessageOrdinal, row.UsageSource = -1, row.Agent
+	row.CostSource, row.Priced, row.Contributes = export.CostSourceReported, true, true
 }
 
 func sortReportingUsage(rows []activity.UsageRow) {
