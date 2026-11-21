@@ -14,6 +14,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -40,6 +42,7 @@ import (
 	agentsync "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 	"go.kenn.io/agentsview/internal/testutil"
+	"go.kenn.io/docbank/document/glmocr"
 	"go.kenn.io/kit/stacktest"
 )
 
@@ -269,12 +272,32 @@ func TestServeSkipInitialSyncStillReparsesStaleArchive(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			cfg := testConfigWithClaudeFixture(t)
 			cfg.Host = "127.0.0.1"
+			var restarted atomic.Bool
+			var releaseFirst func()
+			if kind == "legacy image text" {
+				release := make(chan struct{})
+				releaseFirst = sync.OnceFunc(func() { close(release) })
+				ocrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if !restarted.Load() {
+						select {
+						case <-release:
+						case <-r.Context().Done():
+						}
+						return
+					}
+					w.Header().Set("Content-Type", "application/json")
+					fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"invoice marker"}]]}`, glmocr.DefaultDeploymentFingerprint)
+				}))
+				t.Cleanup(ocrServer.Close)
+				t.Cleanup(releaseFirst)
+				cfg.ImageText = config.ImageTextConfig{Enabled: true, Endpoint: ocrServer.URL + "/glmocr/parse"}
+			}
 			database, err := db.Open(t.Context(), cfg.DBPath)
 			require.NoError(t, err)
 			dbtest.SeedSessionWithMessages(t, database, "retained", "project", []db.Message{dbtest.UserMsg("retained", 0, "retained transcript")})
 			if kind == "legacy image text" {
 				dbtest.SeedSessionWithMessages(t, database, "session0", "project", []db.Message{dbtest.UserMsg("session0", 0, "old transcript")})
-				dbtest.SeedSessionWithMessages(t, database, "retained-image", "project", []db.Message{{SessionID: "retained-image", Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`}}}})
+				dbtest.SeedSessionWithMessages(t, database, "retained-image", "project", []db.Message{{SessionID: "retained-image", Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: `[{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgppbWFnZQ=="}]`}}}})
 			}
 			if kind == "archive only" {
 				require.NoError(t, database.EnableArchiveOnly(t.Context()))
@@ -305,20 +328,15 @@ func TestServeSkipInitialSyncStillReparsesStaleArchive(t *testing.T) {
 			}, "archive rebuild complete")
 			require.NoError(t, err, string(out))
 			if kind == "legacy image text" {
+				releaseFirst()
+				restarted.Store(true)
 				out, err = runRuntimeWarningHelperProcess(t, "serve restart", "TestServeStaleArchiveHelperProcess", []string{
 					"AGENTSVIEW_STALE_SERVE_CONFIG=" + string(data),
 					"AGENTSVIEW_STALE_SERVE_SOURCES=" + cfg.AgentDirs[parser.AgentClaude][0],
 					"AGENTSVIEW_STALE_SERVE_KIND=" + kind,
+					"AGENTSVIEW_STALE_SERVE_RESTART=1",
 				}, "archive rebuild complete")
 				require.NoError(t, err, string(out))
-				database, err = db.Open(t.Context(), cfg.DBPath)
-				require.NoError(t, err)
-				t.Cleanup(func() { _ = database.Close() })
-				require.NoError(t, database.BackfillImageTextOccurrences(t.Context()))
-				pending, err := database.PendingImageText(t.Context(), "processor", time.Now(), 10)
-				require.NoError(t, err)
-				require.Equal(t, []string{"ae4b3280e56e2faf83f414a6e3dabe9d5fbe18976544c05fed121accb85b53fc"}, pending)
-				require.NoError(t, database.Close())
 			}
 		})
 	}
@@ -334,7 +352,17 @@ func TestServeStaleArchiveHelperProcess(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "")
 	t.Setenv("GH_CONFIG_DIR", t.TempDir())
 	localTransport := http.DefaultTransport
-	withPricingCatalogTransport(t, pricingCatalogTransport{requests: make(chan *http.Request, 16)})
+	if os.Getenv("AGENTSVIEW_STALE_SERVE_KIND") == "legacy image text" {
+		transport := localTransport.(*http.Transport).Clone()
+		transport.Proxy = nil
+		transport.DialContext = func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("network disabled in test")
+		}
+		withPricingCatalogTransport(t, transport)
+		t.Cleanup(transport.CloseIdleConnections)
+	} else {
+		withPricingCatalogTransport(t, pricingCatalogTransport{requests: make(chan *http.Request, 16)})
+	}
 	var cfg config.Config
 	require.NoError(t, json.Unmarshal([]byte(data), &cfg))
 	cfg.DBPath = filepath.Join(cfg.DataDir, "sessions.db")
@@ -426,6 +454,19 @@ func TestServeStaleArchiveHelperProcess(t *testing.T) {
 			} else {
 				require.Contains(t, string(body), "hello")
 			}
+		}
+		if os.Getenv("AGENTSVIEW_STALE_SERVE_RESTART") == "1" {
+			require.Eventually(t, func() bool {
+				req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/search?q=invoice+marker&include_one_shot=true", nil)
+				require.NoError(t, err)
+				resp, err := client.Do(req)
+				if err != nil {
+					return false
+				}
+				body, err := io.ReadAll(resp.Body)
+				require.NoError(t, resp.Body.Close())
+				return err == nil && resp.StatusCode == http.StatusOK && strings.Contains(string(body), "retained-image")
+			}, 20*time.Second, time.Second)
 		}
 		fmt.Println("archive rebuild complete")
 		return original(lifetime, dataDir, host, port, version, browserURL, readOnly, requireAuth, noSync, explicitPort, caddyPID...)
