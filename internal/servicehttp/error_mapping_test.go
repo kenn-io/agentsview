@@ -2,6 +2,7 @@ package servicehttp
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -395,4 +396,52 @@ func TestFrictionDigestLatestWithNoDigestsIsNotFound(t *testing.T) {
 	require.ErrorIs(t, err, service.ErrFrictionDigestNotFound)
 	assert.Nil(t, view)
 	assert.Equal(t, int32(1), requests.Load(), "no digest date means no detail read")
+}
+
+func TestQualifiedSuffixRequiresTrashAcknowledgement(t *testing.T) {
+	for _, tc := range []struct {
+		name, raw, body string
+		want            []string
+		unsupported     bool
+		acknowledged    bool
+	}{
+		{"older qualified", "codex:abc", `{"ids":["host~codex:abc"],"raw_suffix":true}`, nil, true, false},
+		{"older raw", "abc", `{"ids":["codex:abc"],"raw_suffix":true}`, []string{"codex:abc"}, false, false},
+		{"current qualified", "codex:abc", `{"ids":["host~codex:abc"],"raw_suffix":true}`, []string{"host~codex:abc"}, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if tc.acknowledged {
+					w.Header().Set(service.QualifiedTrashCheckedHeader, "true")
+				}
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			t.Cleanup(srv.Close)
+			ids, err := NewHTTPBackend(srv.URL, "", false, "").FindSessionIDsByRawSuffix(t.Context(), tc.raw, 5)
+			if tc.unsupported {
+				require.ErrorIs(t, err, service.ErrRawLookupUnsupported)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, ids)
+		})
+	}
+	for _, acknowledged := range []bool{false, true} {
+		t.Run(fmt.Sprintf("gone acknowledged=%t", acknowledged), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if acknowledged {
+					w.Header().Set(service.QualifiedTrashCheckedHeader, "true")
+				}
+				w.WriteHeader(http.StatusGone)
+			}))
+			t.Cleanup(srv.Close)
+			_, err := NewHTTPBackend(srv.URL, "", false, "").FindSessionIDsByRawSuffix(t.Context(), "codex:abc", 5)
+			if acknowledged {
+				require.ErrorIs(t, err, service.ErrSessionNotFound)
+			} else {
+				require.ErrorIs(t, err, service.ErrRawLookupUnsupported)
+			}
+		})
+	}
 }

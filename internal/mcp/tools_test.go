@@ -2484,22 +2484,27 @@ func TestListRecall_SourceSessionRawID(t *testing.T) {
 }
 
 func TestOptionalSessionFiltersOlderServer(t *testing.T) {
+	expected := "unindexed"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/api/v1/sessions/unindexed", "/api/v1/sessions/broken":
+		case "/api/v1/sessions/unindexed", "/api/v1/sessions/codex:unindexed", "/api/v1/sessions/broken":
 			w.WriteHeader(http.StatusNotFound)
 		case "/api/v1/session-ids/resolve":
 			if r.URL.Query().Get("partial") == "broken" {
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
+			if r.URL.Query().Get("partial") == "codex:unindexed" {
+				_, _ = fmt.Fprint(w, `{"ids":["host~codex:unindexed"],"raw_suffix":true}`)
+				return
+			}
 			_, _ = fmt.Fprint(w, `{"ids":["substring-match"]}`)
 		case "/api/v1/search/content":
-			assert.Equal(t, "unindexed", r.URL.Query().Get("exclude_session"))
+			assert.Equal(t, expected, r.URL.Query().Get("exclude_session"))
 			_, _ = fmt.Fprint(w, `{"matches":[{"session_id":"other","snippet":"needle"}],"active_filter_applied":true}`)
 		case "/api/v1/recall/entries":
-			assert.Equal(t, "unindexed", r.URL.Query().Get("source_session_id"))
+			assert.Equal(t, expected, r.URL.Query().Get("source_session_id"))
 			_, _ = fmt.Fprint(w, `{"entries":[{"id":"entry","source_session_id":"unindexed"}]}`)
 		default:
 			assert.Fail(t, "unexpected request", "path: %s", r.URL.Path)
@@ -2516,6 +2521,11 @@ func TestOptionalSessionFiltersOlderServer(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, recall.Entries, 1)
 	assert.Equal(t, "entry", recall.Entries[0].ID)
+	expected = "codex:unindexed"
+	_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", CurrentSessionID: "codex:unindexed"})
+	require.NoError(t, err)
+	_, _, err = ts.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "codex:unindexed"})
+	require.NoError(t, err)
 	_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", CurrentSessionID: "broken"})
 	require.Error(t, err)
 	_, _, err = ts.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "broken"})
