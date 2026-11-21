@@ -27,6 +27,7 @@ func TestMCPCallsReport(t *testing.T) {
 `), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, day2+".jsonl"), []byte(`{"tool":"get_messages","outcome":"error","bytes":20,"ms":8}
 {"tool":"get_messages","outcome":"truncated","truncated":true,"bytes":20,"ms":8}
+{"tool":"get_session","outcome":"error","rejected":["limit"],"bytes":5,"ms":2}
 `), 0o600))
 	earliest := time.Now().UTC().AddDate(0, 0, -91).Format("2006-01-02")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, earliest+".jsonl"), []byte(`{"tool":"query_recall","outcome":"empty","empty":true,"bytes":10,"ms":4}
@@ -48,7 +49,7 @@ func TestMCPCallsReport(t *testing.T) {
 	output.Reset()
 	cmd.SetOut(&output)
 	require.NoError(t, cmd.Execute())
-	assert.Equal(t, "get_messages: 2 calls\n  50.0% errors, 50.0% truncated, empty: -\n  rejected: -\n  median: 20 bytes, 8 ms\n", output.String())
+	assert.Equal(t, "get_messages: 2 calls\n    errors: 50.0%, truncated: 50.0%, empty: -\n    rejected: -\n    median: 20 bytes, 8 ms\n\nget_session: 1 calls\n    errors: 100.0%, truncated: 0.0%, empty: -\n    rejected: limit (1)\n    median: 5 bytes, 2 ms\n", output.String())
 	cmd = newMCPCallsCommand()
 	cmd.SetArgs([]string{"--since", day3, "--until", day3})
 	output.Reset()

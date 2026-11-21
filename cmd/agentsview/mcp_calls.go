@@ -37,7 +37,12 @@ func newMCPCallsCommand() *cobra.Command {
 				_, err := fmt.Fprintln(cmd.OutOrStdout(), "No MCP calls recorded in this range.")
 				return err
 			}
-			for _, row := range rows {
+			for i, row := range rows {
+				if i > 0 {
+					if _, err := fmt.Fprintln(cmd.OutOrStdout()); err != nil {
+						return err
+					}
+				}
 				empty := "-"
 				if row.EmptyPercent != nil {
 					empty = fmt.Sprintf("%.1f%%", *row.EmptyPercent)
@@ -49,7 +54,7 @@ func newMCPCallsCommand() *cobra.Command {
 				if len(rejected) == 0 {
 					rejected = []string{"-"}
 				}
-				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s: %d calls\n  %.1f%% errors, %.1f%% truncated, empty: %s\n  rejected: %s\n  median: %d bytes, %d ms\n", row.Tool, row.Calls, row.ErrorPercent, row.TruncatedPercent, empty, strings.Join(rejected, ", "), row.MedianBytes, row.MedianMs); err != nil {
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s: %d calls\n    errors: %.1f%%, truncated: %.1f%%, empty: %s\n    rejected: %s\n    median: %d bytes, %d ms\n", row.Tool, row.Calls, row.ErrorPercent, row.TruncatedPercent, empty, strings.Join(rejected, ", "), row.MedianBytes, row.MedianMs); err != nil {
 					return err
 				}
 			}
