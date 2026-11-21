@@ -370,11 +370,26 @@ short page can have a `next_from` and should be continued.
 (maximum 200). Set `category` to `Edit`, `Write`, `Bash`, or another tool
 category to narrow the list. Each input has secret-shaped values masked and is
 cut to `max_input_chars` (default 500, maximum 10000). Pass a call's `ordinal`
-to `get_messages` to read the surrounding conversation. Set `include_results`
-to return the stored result with secret-shaped values masked, capped by
-`max_result_chars` (default 1000, maximum 10000). For a truncated result, pass
-its `result_cursor` back to `get_tool_calls` with the same session ID to read
-the next chunk.
+to `get_messages` to read the surrounding conversation.
+
+Set `include_results` to return saved result text with secret-shaped values
+masked. Each call carries two kinds of result text:
+
+- `result` is the call's current summary, and `result_length` is its stored size
+  in bytes.
+- `result_events` lists each saved event in order, with its `event_index`,
+  `agent_id`, `subagent_session_id`, `status`, `content`, and `content_length`.
+  Events are never joined into `result`. A call whose only event is anonymous
+  and equals `result` omits `result_events`.
+
+With `include_results`, a page defaults to one call instead of 50; follow
+`next_cursor` for the next call, or raise `limit` (maximum 200). `max_result_chars`
+(default 1000, maximum 10000) caps `result` and each event's `content`
+separately. A truncated summary or event has its own `result_cursor`; pass it
+back to `get_tool_calls` with the same session ID to read the next chunk of that
+one summary or event. New messages in the session do not invalidate a cursor,
+but a changed result does: the call fails with `source_changed`, and you restart
+from `get_tool_calls` with `include_results`.
 
 `get_recent_edits` matches `path` as a case-insensitive substring of edited file
 paths. Files come back newest edit first, 10 per page (maximum 50), each with up

@@ -286,7 +286,10 @@ func newServer(opts ServeOptions) *mcp.Server {
 			Description: "List the tool calls one session made, in order: tool name, category, input, and " +
 				"result size. Filter by category (for example Edit, Write, or Bash) to see what the agent " +
 				"ran or changed. Inputs have secret-shaped values masked and are cut to max_input_chars. " +
-				"Set include_results to return masked result text, capped by max_result_chars.",
+				"Set include_results to return masked result text, capped by max_result_chars: result is the call's " +
+				"current summary and result_events lists each saved event separately. With include_results the " +
+				"page defaults to one call; follow next_cursor, or raise limit. Continue a truncated result or " +
+				"event with its result_cursor; if the result changed, the cursor is rejected and the read restarts.",
 			Annotations: readOnly,
 		}, t.toolCalls)
 

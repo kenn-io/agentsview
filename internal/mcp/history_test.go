@@ -384,25 +384,25 @@ func TestGetToolCalls_RejectsChangedTranscript(t *testing.T) {
 	require.ErrorIs(t, err, service.ErrSourceChanged)
 }
 
-type appendAfterGetService struct {
+type appendAfterToolCallsService struct {
 	service.SessionService
 	t *testing.T
 	d *db.DB
 }
 
-func (s appendAfterGetService) Get(ctx context.Context, id string) (*service.SessionDetail, error) {
-	detail, err := s.SessionService.Get(ctx, id)
-	if err == nil && detail != nil {
+func (s appendAfterToolCallsService) ToolCalls(ctx context.Context, id string) (*service.ToolCallList, error) {
+	calls, err := s.SessionService.ToolCalls(ctx, id)
+	if err == nil {
 		dbtest.SeedMessages(s.t, s.d, dbtest.AsstMsg(id, 1, "later message"))
 	}
-	return detail, err
+	return calls, err
 }
 
 func TestGetToolCalls_FirstReadSurvivesAppend(t *testing.T) {
 	ts, d := newTestToolset(t)
 	dbtest.SeedSession(t, d, "growing", "proj")
 	dbtest.SeedMessages(t, d, toolCallMsg("growing", 0, db.ToolCall{ToolUseID: "one", ToolName: "Bash", ResultContent: "saved result"}))
-	ts.svc = appendAfterGetService{SessionService: ts.svc, t: t, d: d}
+	ts.svc = appendAfterToolCallsService{SessionService: ts.svc, t: t, d: d}
 	_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "growing", IncludeResults: true})
 	require.NoError(t, err)
 	require.Len(t, out.ToolCalls, 1)
