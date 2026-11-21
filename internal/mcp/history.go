@@ -39,7 +39,6 @@ type toolCallsIn struct {
 	Category      string `json:"category,omitempty" jsonschema:"Only calls in this category: Read, Edit, Write, Bash, Grep, Glob, Task, Tool, or Other."`
 	Limit         int    `json:"limit,omitempty" jsonschema:"Max tool calls, default 50, max 200; the byte budget can return fewer."`
 	Cursor        int    `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor."`
-	InputOffset   int    `json:"input_offset,omitempty" jsonschema:"Pass next_input_offset with next_cursor to continue a split input; otherwise omit it."`
 	MaxInputChars int    `json:"max_input_chars,omitempty" jsonschema:"Max input characters, default 500, max 10000; the byte budget can shorten it."`
 }
 
@@ -56,11 +55,10 @@ type toolCallOut struct {
 }
 
 type toolCallsOut struct {
-	ToolCalls       []toolCallOut `json:"tool_calls"`
-	Omitted         int           `json:"omitted,omitempty" jsonschema:"Calls held back."`
-	Total           int           `json:"total" jsonschema:"Calls matching the category filter across the whole session."`
-	NextCursor      *int          `json:"next_cursor,omitempty"`
-	NextInputOffset *int          `json:"next_input_offset,omitempty" jsonschema:"Pass as input_offset with next_cursor to continue this input."`
+	ToolCalls  []toolCallOut `json:"tool_calls"`
+	Omitted    int           `json:"omitted,omitempty" jsonschema:"Calls held back."`
+	Total      int           `json:"total" jsonschema:"Calls matching the category filter across the whole session."`
+	NextCursor *int          `json:"next_cursor,omitempty"`
 }
 
 func (t *toolset) toolCalls(
@@ -68,9 +66,6 @@ func (t *toolset) toolCalls(
 ) (*mcp.CallToolResult, toolCallsOut, error) {
 	if in.Cursor < 0 {
 		return nil, toolCallsOut{}, errors.New("cursor must not be negative")
-	}
-	if in.InputOffset < 0 {
-		return nil, toolCallsOut{}, errors.New("input_offset must not be negative")
 	}
 	list, err := t.svc.ToolCalls(ctx, in.SessionID)
 	if err != nil {
@@ -99,28 +94,24 @@ func (t *toolset) toolCalls(
 	maxChars := clampLimit(in.MaxInputChars, defaultToolInputChars, maxToolInputChars)
 	start := min(in.Cursor, len(matching))
 	end := min(start+limit, len(matching))
-	if in.InputOffset > 0 {
-		if start == end {
-			return nil, toolCallsOut{}, errors.New("invalid input_offset")
-		}
-		end = start + 1
-	}
 	out := toolCallsOut{
 		ToolCalls: make([]toolCallOut, 0, end-start),
 		Total:     len(matching),
 	}
 	for _, tc := range matching[start:end] {
-		item, err := toolCallItem(tc, maxChars, in.InputOffset)
-		if err != nil {
-			return nil, toolCallsOut{}, err
-		}
-		out.ToolCalls = append(out.ToolCalls, item)
+		input, partial := redactToolInput(tc.InputJSON, maxChars)
+		input, cut := truncate(input, maxChars)
+		out.ToolCalls = append(out.ToolCalls, toolCallOut{
+			Ordinal: tc.Ordinal, Timestamp: tc.Timestamp, ToolName: tc.ToolName, Category: tc.Category,
+			Input: input, InputTruncated: cut || partial, SkillName: tc.SkillName,
+			SubagentSessionID: tc.SubagentSessionID, ResultLength: tc.ResultLength,
+		})
 	}
 	if end < len(matching) {
 		out.NextCursor = &end
 	}
 	if !fitsResponse(out) && len(out.ToolCalls) > 0 {
-		if err := fitToolCalls(&out, start, end == len(matching), in.InputOffset, maxChars); err != nil {
+		if err := fitToolCalls(&out, start, end == len(matching)); err != nil {
 			return nil, toolCallsOut{}, err
 		}
 	}
@@ -128,31 +119,10 @@ func (t *toolset) toolCalls(
 	return nil, out, nil
 }
 
-// toolCallItem redacts and truncates a call's input to maxChars, then drops
-// the first offset runes when continuing a split input.
-func toolCallItem(tc service.ToolCall, maxChars, offset int) (toolCallOut, error) {
-	input, partial := redactToolInput(tc.InputJSON, maxChars)
-	input, cut := truncate(input, maxChars)
-	if offset > 0 {
-		runes := []rune(input)
-		if offset >= len(runes) {
-			return toolCallOut{}, errors.New("invalid input_offset")
-		}
-		input = string(runes[offset:])
-	}
-	return toolCallOut{
-		Ordinal: tc.Ordinal, Timestamp: tc.Timestamp,
-		ToolName: tc.ToolName, Category: tc.Category,
-		Input: input, InputTruncated: cut || partial,
-		SkillName: tc.SkillName, SubagentSessionID: tc.SubagentSessionID,
-		ResultLength: tc.ResultLength,
-	}, nil
-}
-
 // fitToolCalls holds back calls that overflow the response budget. When even
 // the first call does not fit, it keeps a prefix of its input and points the
-// cursor and input offset at the rest.
-func fitToolCalls(out *toolCallsOut, start int, last bool, inOffset, maxChars int) error {
+// cursor at the next call.
+func fitToolCalls(out *toolCallsOut, start int, last bool) error {
 	items := out.ToolCalls
 	out.ToolCalls = []toolCallOut{}
 	out.Omitted = len(items)
@@ -163,9 +133,7 @@ func fitToolCalls(out *toolCallsOut, start int, last bool, inOffset, maxChars in
 		n = 1
 		call := &items[0]
 		call.InputTruncated = true
-		next = start
-		offset := maxChars
-		out.NextInputOffset = &offset
+		next = start + 1
 		envelope, err := json.Marshal(out)
 		if err != nil {
 			return err
@@ -174,7 +142,6 @@ func fitToolCalls(out *toolCallsOut, start int, last bool, inOffset, maxChars in
 		if call.Input == "" {
 			return errors.New("tool call response exceeds budget")
 		}
-		offset = inOffset + utf8.RuneCountInString(call.Input)
 	} else {
 		next = start + n
 		if n == len(items) && last {

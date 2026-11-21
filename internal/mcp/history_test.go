@@ -347,25 +347,16 @@ func TestGetToolCalls_BudgetOversizedInput(t *testing.T) {
 		toolCallMsg("large-input", 1, db.ToolCall{ToolName: "Bash", Category: "Bash", InputJSON: "next"}),
 	)
 	in := toolCallsIn{SessionID: "large-input", MaxInputChars: 10000}
-	var got strings.Builder
-	for {
-		_, out, err := ts.toolCalls(t.Context(), nil, in)
-		require.NoError(t, err)
-		require.Len(t, out.ToolCalls, 1)
-		assert.True(t, fitsResponse(out))
-		if out.ToolCalls[0].Ordinal == 1 {
-			assert.Equal(t, input, got.String())
-			assert.Equal(t, "next", out.ToolCalls[0].Input)
-			assert.Nil(t, out.NextCursor)
-			break
-		}
-		assert.Equal(t, 0, out.ToolCalls[0].Ordinal)
-		got.WriteString(out.ToolCalls[0].Input)
-		require.NotNil(t, out.NextCursor, "missing cursor for following call")
-		in.Cursor, in.InputOffset = *out.NextCursor, 0
-		if out.NextInputOffset != nil {
-			assert.Equal(t, got.Len(), *out.NextInputOffset)
-			in.InputOffset = *out.NextInputOffset
-		}
-	}
+	_, out, err := ts.toolCalls(t.Context(), nil, in)
+	require.NoError(t, err)
+	require.Len(t, out.ToolCalls, 1)
+	assert.True(t, fitsResponse(out))
+	assert.True(t, out.ToolCalls[0].InputTruncated)
+	assert.True(t, strings.HasPrefix(input, out.ToolCalls[0].Input))
+	require.NotNil(t, out.NextCursor)
+	in.Cursor = *out.NextCursor
+	_, out, err = ts.toolCalls(t.Context(), nil, in)
+	require.NoError(t, err)
+	require.Len(t, out.ToolCalls, 1)
+	assert.Equal(t, "next", out.ToolCalls[0].Input)
 }

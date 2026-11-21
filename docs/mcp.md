@@ -341,22 +341,17 @@ hybrid searches, `total` counts the ranked page and is always a lower bound.
 A zero total is omitted. A cut message page reports the session's `message_count`;
 tool calls always report `total`. The budget can return fewer items than the
 requested limit. Continue messages with `next_from`, and tool calls with `next_cursor`.
-A cut `around` window returns its anchor first; pass its `page_cursor` with
-`session_id` to read the rest. If a ranked pattern search returns `page_cursor`,
-pass it alone to continue that page. If the ranked results change, continuation
-returns `source_changed`; restart the search. Search context marked
-`context_truncated` can be read with `get_messages`. A tool call marked
-`input_truncated` contains a shortened input.
+A cut `around` window returns messages in ascending order. Continue with
+`next_from` to read the rest. Ranked searches do not support cursors; reduce `limit` when a response omits
+matches. Search context or snippets marked as truncated
+can be read with `get_messages`. A tool call marked `input_truncated` contains
+a shortened input.
 
-`next_cursor` is present when another page exists. For lexical searches, pass
-`page_cursor` alone when available to continue without recounting. It carries
-the first page's total as a snapshot. Alternatively,
-pass `next_cursor` as the numeric `cursor` and echo the returned RFC3339
-`activity_cutoff` unchanged; this recounts the unseen matches up to 500. The
-cutoff keeps the recent-activity exclusion
-fixed across pages of an unchanged archive, including on older servers. A
-positive cursor without the cutoff returns a restart error when that exclusion
-applies. Restart without a cursor to obtain both fields. `include_active: true`
+When `next_cursor` is present, pass it as `cursor` and echo the returned
+RFC3339 `activity_cutoff` unchanged. The total is recounted up to 500. The
+cutoff keeps the recent-activity exclusion fixed across pages of an unchanged
+archive, including on older servers. A positive cursor without the cutoff
+returns a restart error when that exclusion applies. `include_active: true`
 or an explicit `current_session_id` allows numeric-only continuation. Archive
 edits retain the existing offset-pagination behavior.
 
@@ -374,7 +369,7 @@ citation.
 
 `get_messages` returns the revision observed for its page. A message longer than
 `max_chars_per_message` or the response budget has a `body_cursor`; keep calling
-`get_messages` with that cursor before following `next_from` or `page_cursor`.
+`get_messages` with that cursor before following `next_from`.
 The opaque cursor stays bound to the archive instance, session, revision,
 message ordinal, and next content offset, so it cannot silently continue
 against replaced transcript content. A cursor
@@ -388,13 +383,9 @@ short page can have a `next_from` and should be continued.
 `get_tool_calls` lists one session's tool calls in order, up to 50 per page
 (maximum 200). Set `category` to `Edit`, `Write`, `Bash`, or another tool
 category to narrow the list. Each input has secret-shaped values masked and is
-cut to `max_input_chars` (default 500, maximum 10000). If the response byte
-budget splits an input, pass `next_cursor` as `cursor` and `next_input_offset`
-as `input_offset`, keeping the other arguments unchanged. Join the returned
-input fragments to read the input up to `max_input_chars`. When
-`next_input_offset` is absent, omit `input_offset` on the next request. An
-`input_truncated` flag can also mean the input exceeded `max_input_chars`;
-increase that limit to read more, up to the maximum. Pass a call's `ordinal` to
+cut to `max_input_chars` (default 500, maximum 10000). The response byte budget can also shorten an input. An `input_truncated` flag
+can mean the input exceeded `max_input_chars`; increase that limit to read
+more, up to the maximum. Pass a call's `ordinal` to
 `get_messages` to read the surrounding conversation.
 
 `get_recent_edits` matches `path` as a case-insensitive substring of edited file
