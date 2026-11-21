@@ -2446,3 +2446,32 @@ func TestSessionToolsResolvePlainIDs(t *testing.T) {
 	require.Len(t, rawNext.Messages, 1)
 	assert.Equal(t, " in th", rawNext.Messages[0].Content)
 }
+
+func TestListRecall_SourceSessionRawID(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "codex:source", "project")
+	_, err := d.InsertRecallEntry(t.Context(), db.RecallEntry{
+		ID: "entry", Type: "fact", Scope: "project", Status: "accepted",
+		Title: "entry", Body: "entry", SourceSessionID: "codex:source",
+	})
+	require.NoError(t, err)
+
+	_, out, err := ts.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "source"})
+	require.NoError(t, err)
+	require.Len(t, out.Entries, 1)
+	assert.Equal(t, "codex:source", out.Entries[0].SourceSessionID)
+
+	_, out, err = ts.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "missing"})
+	require.NoError(t, err)
+	assert.Empty(t, out.Entries)
+	require.NoError(t, d.SoftDeleteSession(t.Context(), "codex:source"))
+	_, out, err = ts.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "codex:source"})
+	require.NoError(t, err)
+	require.Len(t, out.Entries, 1)
+	assert.Equal(t, "entry", out.Entries[0].ID)
+
+	dbtest.SeedSession(t, d, "codex:ambiguous", "project")
+	dbtest.SeedSession(t, d, "host~ambiguous", "project")
+	_, _, err = ts.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "ambiguous"})
+	require.ErrorContains(t, err, `ambiguous session UUID "ambiguous"`)
+}

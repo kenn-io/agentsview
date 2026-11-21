@@ -115,6 +115,20 @@ func (t *toolset) resolveSession(
 	return detail, nil
 }
 
+func (t *toolset) resolveOptionalSessionID(ctx context.Context, id string) (string, error) {
+	if id == "" {
+		return id, nil
+	}
+	detail, err := t.resolveSession(ctx, id)
+	if errors.Is(err, service.ErrSessionNotFound) {
+		return id, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return detail.ID, nil
+}
+
 // --- search_sessions ---
 
 type searchSessionsIn struct {
@@ -286,7 +300,7 @@ type listRecallIn struct {
 	Scope           string `json:"scope,omitempty"`
 	Status          string `json:"status,omitempty"`
 	ExtractorMethod string `json:"extractor_method,omitempty"`
-	SourceSessionID string `json:"source_session_id,omitempty"`
+	SourceSessionID string `json:"source_session_id,omitempty" jsonschema:"Filter by a full stored session ID or a raw UUID that matches one session. An unindexed or trashed ID is used as given."`
 	SourceRunID     string `json:"source_run_id,omitempty"`
 	TrustedOnly     bool   `json:"trusted_only,omitempty"`
 	Cursor          string `json:"cursor,omitempty" jsonschema:"Cursor from a previous next_cursor."`
@@ -300,11 +314,15 @@ type listRecallOut struct {
 }
 
 func (t *toolset) listRecall(ctx context.Context, _ *mcp.CallToolRequest, in listRecallIn) (*mcp.CallToolResult, listRecallOut, error) {
+	id, err := t.resolveOptionalSessionID(ctx, in.SourceSessionID)
+	if err != nil {
+		return nil, listRecallOut{}, err
+	}
 	result, err := t.svc.ListRecallEntries(ctx, service.RecallFilter{
 		UpdatedSince: in.UpdatedSince, CreatedSince: in.CreatedSince, Project: in.Project,
 		CWD: in.CWD, GitBranch: in.GitBranch, Agent: in.Agent, Type: in.Type,
 		Scope: in.Scope, Status: in.Status, ExtractorMethod: in.ExtractorMethod,
-		SourceSessionID: in.SourceSessionID, SourceRunID: in.SourceRunID, TrustedOnly: in.TrustedOnly, Cursor: in.Cursor,
+		SourceSessionID: id, SourceRunID: in.SourceRunID, TrustedOnly: in.TrustedOnly, Cursor: in.Cursor,
 		Limit: clampLimit(in.Limit, defaultListLimit, maxListLimit),
 	})
 	if err != nil {
@@ -968,15 +986,9 @@ func (t *toolset) searchContent(
 			return nil, searchContentOut{}, errors.New("invalid activity_cutoff: use RFC3339")
 		}
 	}
-	currentSession := strings.TrimSpace(in.CurrentSessionID)
-	if currentSession != "" {
-		detail, err := t.resolveSession(ctx, currentSession)
-		if err != nil && !errors.Is(err, service.ErrSessionNotFound) {
-			return nil, searchContentOut{}, err
-		}
-		if detail != nil {
-			currentSession = detail.ID
-		}
+	currentSession, err := t.resolveOptionalSessionID(ctx, strings.TrimSpace(in.CurrentSessionID))
+	if err != nil {
+		return nil, searchContentOut{}, err
 	}
 	excludeSessions := db.NormalizeExcludeSessionIDs([]string{currentSession})
 	cutoff := ""
