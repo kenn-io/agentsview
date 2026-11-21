@@ -5,15 +5,13 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.kenn.io/agentsview/internal/ctxio"
@@ -21,19 +19,16 @@ import (
 	"go.kenn.io/kit/safefileio"
 )
 
-const maxRecordedNameBytes = 128
-
 type callRecord struct {
-	At           time.Time `json:"at"`
-	Tool         string    `json:"tool"`
-	Outcome      string    `json:"outcome"`
-	Args         []string  `json:"args,omitempty"`
-	Empty        bool      `json:"empty,omitzero"`
-	Truncated    bool      `json:"truncated,omitzero"`
-	Rejected     []string  `json:"rejected,omitempty"`
-	Bytes        int       `json:"bytes"`
-	Ms           int       `json:"ms"`
-	Continuation bool      `json:"continuation,omitzero"`
+	Tool         string   `json:"tool"`
+	Outcome      string   `json:"outcome"`
+	Args         []string `json:"args,omitempty"`
+	Empty        bool     `json:"empty,omitzero"`
+	Truncated    bool     `json:"truncated,omitzero"`
+	Rejected     []string `json:"rejected,omitempty"`
+	Bytes        int      `json:"bytes"`
+	Ms           int      `json:"ms"`
+	Continuation bool     `json:"continuation,omitzero"`
 }
 
 type CallCount struct {
@@ -73,7 +68,7 @@ func recordToolCall(ctx context.Context, dir string, req *mcp.CallToolRequest, r
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	name := req.Params.Name
-	rec := callRecord{At: time.Now().UTC(), Tool: name, Outcome: "ok", Ms: int(elapsed.Milliseconds())}
+	rec := callRecord{Tool: name, Outcome: "ok", Ms: int(elapsed.Milliseconds())}
 	var args map[string]any
 	if json.Unmarshal(req.Params.Arguments, &args) == nil {
 		for key := range args {
@@ -87,33 +82,20 @@ func recordToolCall(ctx context.Context, dir string, req *mcp.CallToolRequest, r
 			rec.Continuation = cursor > 0
 		}
 	}
-	if len(name) == 0 || len(name) > maxRecordedNameBytes || strings.ContainsFunc(name, func(r rune) bool {
-		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-' || r == '.')
-	}) {
-		rec.Tool = "<invalid tool name>"
-	}
 	call, _ := result.(*mcp.CallToolResult)
-	var message string
 	if call != nil {
 		for _, c := range call.Content {
 			if text, ok := c.(*mcp.TextContent); ok {
 				rec.Bytes += len(text.Text)
 				if call.IsError {
-					message += text.Text
+					rec.Rejected = append(rec.Rejected, rejectedProperties(text.Text, args)...)
 				}
 			}
 		}
+		sort.Strings(rec.Rejected)
 	}
 	if callErr != nil || (call != nil && call.IsError) {
 		rec.Outcome = "error"
-		if callErr != nil {
-			message += " " + callErr.Error()
-		}
-		for _, arg := range rec.Args {
-			if containsWholeWord(message, arg) {
-				rec.Rejected = append(rec.Rejected, arg)
-			}
-		}
 	} else if call != nil {
 		b, err := json.Marshal(call.StructuredContent)
 		if err == nil {
@@ -142,7 +124,7 @@ func recordToolCall(ctx context.Context, dir string, req *mcp.CallToolRequest, r
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(filepath.Join(dir, rec.At.Format("2006-01-02")+".jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	f, err := os.OpenFile(filepath.Join(dir, time.Now().UTC().Format("2006-01-02")+".jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
 	}
@@ -173,25 +155,25 @@ func hasTruncated(value any) bool {
 	return false
 }
 
-func containsWholeWord(text, name string) bool {
-	if name == "" {
-		return false
+func rejectedProperties(message string, args map[string]any) []string {
+	list, ok := strings.CutPrefix(message, `validating "arguments": validating root: unexpected additional properties [`)
+	if !ok {
+		return nil
 	}
-	word := func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' }
-	for offset := 0; offset <= len(text)-len(name); {
-		i := strings.Index(text[offset:], name)
-		if i < 0 {
-			return false
+	var names []string
+	for {
+		list = strings.TrimLeft(list, " ")
+		quoted, err := strconv.QuotedPrefix(list)
+		if err != nil {
+			break
 		}
-		i += offset
-		before, _ := utf8.DecodeLastRuneInString(text[:i])
-		after, _ := utf8.DecodeRuneInString(text[i+len(name):])
-		if !word(before) && !word(after) {
-			return true
+		name, err := strconv.Unquote(quoted)
+		if _, sent := args[name]; err == nil && sent {
+			names = append(names, name)
 		}
-		offset = i + len(name)
+		list = list[len(quoted):]
 	}
-	return false
+	return names
 }
 
 type callAggregate struct {
@@ -243,12 +225,8 @@ func SummarizeCalls(ctx context.Context, dir, from, to string) ([]CallSummary, e
 				break
 			}
 			var rec callRecord
-			if json.Unmarshal(line, &rec) != nil || !db.InDateRange(rec.At.UTC().Format("2006-01-02"), from, to) {
+			if json.Unmarshal(line, &rec) != nil {
 				continue
-			}
-			if rec.Outcome != "ok" && rec.Outcome != "empty" && rec.Outcome != "error" && rec.Outcome != "truncated" {
-				_ = f.Close()
-				return nil, fmt.Errorf("unknown MCP call outcome %q", rec.Outcome)
 			}
 			g := groups[rec.Tool]
 			if g == nil {

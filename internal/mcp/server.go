@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"go.kenn.io/agentsview/internal/apiclient"
@@ -85,7 +84,6 @@ func ParseProfile(name string) (Profile, error) {
 // time.Now).
 type ServeOptions struct {
 	CallLogDir         string
-	ErrorWriter        io.Writer
 	DiscoveryDirectory string
 	BackendURL         string
 	Service            service.SessionService
@@ -136,15 +134,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 				call.Content = append(call.Content, &mcp.TextContent{Text: "Warning: " + apiclient.ArchiveStaleWarning})
 			}
 			if req, ok := request.(*mcp.CallToolRequest); ok {
-				if recordErr := recordToolCall(ctx, opts.CallLogDir, req, result, err, elapsed); recordErr != nil {
-					warnCallLog.Do(func() {
-						w := opts.ErrorWriter
-						if w == nil {
-							w = os.Stderr
-						}
-						_, _ = fmt.Fprintf(w, "Warning: could not maintain MCP call log: %v\n", recordErr)
-					})
-				}
+				_ = recordToolCall(ctx, opts.CallLogDir, req, result, err, elapsed)
 			}
 			return result, err
 		}

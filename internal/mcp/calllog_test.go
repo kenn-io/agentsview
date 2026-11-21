@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json/v2"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,12 +63,12 @@ func TestSummarizeCallsDatesAndMedians(t *testing.T) {
 	dir := t.TempDir()
 	day1 := time.Now().UTC().AddDate(0, 0, -2).Format("2006-01-02")
 	day2 := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
-	require.NoError(t, os.WriteFile(filepath.Join(dir, day1+".jsonl"), []byte(strings.ReplaceAll(`{"at":"2026-01-02T01:00:00Z","tool":"search_docs","outcome":"ok","bytes":10,"ms":2}
-{"at":"2026-01-02T02:00:00Z","tool":"search_docs","outcome":"empty","empty":true,"bytes":30,"ms":6}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, day1+".jsonl"), []byte(`{"tool":"search_docs","outcome":"ok","bytes":10,"ms":2}
+{"tool":"search_docs","outcome":"empty","empty":true,"bytes":30,"ms":6}
 broken
-`, "2026-01-02", day1)), 0600))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, day2+".jsonl"), []byte(strings.ReplaceAll(`{"at":"2026-01-03T00:00:00Z","tool":"search_docs","outcome":"ok","bytes":90,"ms":20}
-`, "2026-01-03", day2)), 0600))
+`), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, day2+".jsonl"), []byte(`{"tool":"search_docs","outcome":"ok","bytes":90,"ms":20}
+`), 0600))
 	rows, err := SummarizeCalls(t.Context(), dir, day1, day1)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
@@ -93,7 +92,7 @@ func TestCallLogPaginationAndRejectedNames(t *testing.T) {
 		{"query": "unmatched-search"},
 		{"query": "unmatched-search", "cursor": 3},
 		{"query": "unmatched-search", "cursor": -1},
-		{"query": "secret-value", "odd name": "secret-value"},
+		{"query": "secret-value", "odd name": "secret-value", `quote"name`: true},
 		{"query": 123},
 		{"query": "secret-value", "limit": "bad"},
 	} {
@@ -106,29 +105,13 @@ func TestCallLogPaginationAndRejectedNames(t *testing.T) {
 	assert.Equal(t, 6, rows[0].Calls)
 	require.NotNil(t, rows[0].EmptyPercent)
 	assert.InDelta(t, 40.0, *rows[0].EmptyPercent, 0.001)
-	assert.Equal(t, []CallCount{{Name: "limit", Count: 1}, {Name: "odd name", Count: 1}, {Name: "query", Count: 1}}, rows[0].Rejected)
+	assert.Equal(t, []CallCount{{Name: "odd name", Count: 1}, {Name: `quote"name`, Count: 1}}, rows[0].Rejected)
 	files, err := os.ReadDir(dir)
 	require.NoError(t, err)
 	raw, err := os.ReadFile(filepath.Join(dir, files[0].Name()))
 	require.NoError(t, err)
 	assert.NotContains(t, string(raw), "secret-value")
 	assert.NotContains(t, string(raw), "validating")
-}
-
-func TestCallLogWriteFailureWarns(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "file")
-	require.NoError(t, os.WriteFile(dir, []byte("file"), 0600))
-	var warnings bytes.Buffer
-	d := dbtest.OpenTestDB(t)
-	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), CallLogDir: filepath.Join(dir, "calls"), ErrorWriter: &warnings}))
-	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
-	result, err := ct.CallTool(t.Context(), callParams(ToolSearchDocs, map[string]any{"query": "session"}))
-	require.NoError(t, err)
-	require.False(t, result.IsError)
-	result, err = ct.CallTool(t.Context(), callParams(ToolSearchDocs, map[string]any{"query": "session"}))
-	require.NoError(t, err)
-	require.False(t, result.IsError)
-	assert.Equal(t, 1, strings.Count(warnings.String(), "could not maintain MCP call log"))
 }
 
 func TestCallLogUnknownTool(t *testing.T) {
@@ -164,15 +147,6 @@ func TestRecordToolCallCanceled(t *testing.T) {
 	assert.Equal(t, 100.0, rows[0].ErrorPercent)
 }
 
-func TestCallLogFormatRejectsUnknownRecords(t *testing.T) {
-	dir := t.TempDir()
-	day := time.Now().UTC().Format("2006-01-02")
-	record := fmt.Sprintf(`{"at":%q,"tool":"search_docs","outcome":"unknown"}`+"\n", day+"T00:00:00Z")
-	require.NoError(t, os.WriteFile(filepath.Join(dir, day+".jsonl"), []byte(record), 0600))
-	_, err := SummarizeCalls(t.Context(), dir, "", "")
-	require.ErrorContains(t, err, "unknown MCP call outcome")
-}
-
 func TestCallLogArgumentNames(t *testing.T) {
 	dir := t.TempDir()
 	d := dbtest.OpenTestDB(t)
@@ -200,7 +174,7 @@ func TestCallLogArgumentNames(t *testing.T) {
 	}
 	require.Len(t, records, 2)
 	assert.Equal(t, []string{"odd name!", "query", longName}, records[0].Args)
-	assert.Equal(t, "<invalid tool name>", records[1].Tool)
+	assert.Equal(t, strings.Repeat("z", 500), records[1].Tool)
 	assert.NotContains(t, string(raw), "private-value")
 	rows, err := SummarizeCalls(t.Context(), dir, "", "")
 	require.NoError(t, err)
@@ -289,7 +263,7 @@ func TestCallLogConceptSearch(t *testing.T) {
 	rows, err := SummarizeCalls(t.Context(), dir, "", "")
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	assert.Equal(t, []CallCount{{Name: "activity_cutoff", Count: 2}}, rows[0].Rejected)
+	assert.Empty(t, rows[0].Rejected)
 	assert.InDelta(t, 100.0/3, rows[0].TruncatedPercent, 0.001)
 	require.NotNil(t, rows[0].EmptyPercent)
 	assert.InDelta(t, 100.0/3, *rows[0].EmptyPercent, 0.001)
@@ -302,10 +276,7 @@ func TestCallLogConceptSearch(t *testing.T) {
 	assert.NotContains(t, string(raw), "invalid activity_cutoff")
 }
 
-func TestCallLogWholeWordsAndCursors(t *testing.T) {
-	assert.True(t, containsWholeWord("invalid activity_cutoff: use RFC3339", "activity_cutoff"))
-	assert.False(t, containsWholeWord("invalid activity_cutoff", "cut"))
-	assert.True(t, containsWholeWord("invalid limit", "limit"))
+func TestCallLogCursors(t *testing.T) {
 	for _, tc := range []struct {
 		cursor any
 		want   bool
@@ -331,26 +302,26 @@ func TestCallLogValidationValueIsNotARejectedName(t *testing.T) {
 	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), CallLogDir: dir}))
 	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
 	result, err := ct.CallTool(t.Context(), callParams(ToolSearchSessions, map[string]any{
-		"query": "term", "cursor": `unexpected additional properties ["private-value"]`,
+		"query": "term", "cursor": `unexpected additional properties ["cursor"]`,
 	}))
 	require.NoError(t, err)
 	require.True(t, result.IsError)
 	rows, err := SummarizeCalls(t.Context(), dir, "", "")
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	assert.Equal(t, []CallCount{{Name: "cursor", Count: 1}}, rows[0].Rejected)
+	assert.Empty(t, rows[0].Rejected)
 	files, err := os.ReadDir(dir)
 	require.NoError(t, err)
 	require.Len(t, files, 1)
 	raw, err := os.ReadFile(filepath.Join(dir, files[0].Name()))
 	require.NoError(t, err)
-	assert.NotContains(t, string(raw), "private-value")
+	assert.NotContains(t, string(raw), "unexpected additional properties")
 }
 
 func TestCallLogKeepsOldRecords(t *testing.T) {
 	dir := t.TempDir()
 	old := time.Now().UTC().AddDate(0, 0, -91).Format("2006-01-02")
-	rec := fmt.Sprintf(`{"at":%q,"tool":"search_docs","outcome":"empty","empty":true}`+"\n", old+"T00:00:00Z")
+	rec := `{"tool":"search_docs","outcome":"empty","empty":true}` + "\n"
 	path := filepath.Join(dir, old+".jsonl")
 	require.NoError(t, os.WriteFile(path, []byte(rec), 0600))
 	d := dbtest.OpenTestDB(t)
@@ -375,7 +346,7 @@ func TestCallLogKeepsOldRecords(t *testing.T) {
 func TestCallLogRecoversAfterPartialAppend(t *testing.T) {
 	dir := t.TempDir()
 	today := time.Now().UTC().Format("2006-01-02")
-	require.NoError(t, os.WriteFile(filepath.Join(dir, today+".jsonl"), []byte(`{"at":`), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, today+".jsonl"), []byte(`{"tool":`), 0600))
 	d := dbtest.OpenTestDB(t)
 	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), CallLogDir: dir}))
 	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
