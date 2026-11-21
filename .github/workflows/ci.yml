@@ -100,7 +100,7 @@ jobs:
           owner: "true"
           extra-path: ~/.cache/golangci-lint
 
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.53.2
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.58.1
 
       - name: Prepare SQLite header
         if: runner.os == 'Linux'
@@ -172,7 +172,7 @@ jobs:
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
 
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.53.2
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.58.1
 
       - name: Prepare SQLite header
         if: runner.os == 'Linux'
@@ -234,7 +234,7 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.53.2
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.58.1
 
       - name: Install frontend dependencies
         run: kit-retry 3 5 npm ci
@@ -271,7 +271,7 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@v10.3.3
 
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.53.2
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.58.1
 
       - name: Install documentation dependencies
         run: kit-retry 3 5 uv sync --project docs --frozen
@@ -280,7 +280,7 @@ jobs:
         run: make docs-check
 
       - name: Check that docs pages paint with their stylesheets and fonts
-        uses: kenn-io/actions/first-paint@33ced853fa88b70eb178ecd40ec74ef64420479d  # main
+        uses: kenn-io/actions/first-paint@a75fd176648b63e41d3db03d942ef101a69e0e50  # main
         with:
           dist: docs/site
 
@@ -291,7 +291,7 @@ jobs:
           cp -R internal/web/fallback "$RUNNER_TEMP/app-pages/fallback"
 
       - name: Check that static app pages paint with their stylesheets and fonts
-        uses: kenn-io/actions/first-paint@33ced853fa88b70eb178ecd40ec74ef64420479d  # main
+        uses: kenn-io/actions/first-paint@a75fd176648b63e41d3db03d942ef101a69e0e50  # main
         with:
           dist: ${{ runner.temp }}/app-pages
 
@@ -357,7 +357,7 @@ jobs:
           group: test-${{ runner.os }}-${{ runner.arch }}
           owner: &test-cache-owner ${{ matrix.testSet != 'lint' && (runner.os != 'Linux' || matrix.testSet == 'other') }}
 
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.53.2
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.58.1
 
       - name: Prepare SQLite header
         if: runner.os == 'Linux'
@@ -737,7 +737,7 @@ jobs:
           install: mingw-w64-x86_64-gcc
           path-type: inherit
 
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.53.2
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.58.1
 
       - name: Restore pricing snapshot
         shell: bash
@@ -936,7 +936,7 @@ jobs:
           group: race-linux
           owner: &race-cache-owner ${{ matrix.testSet == 'other' }}
 
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.53.2
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.58.1
 
       - name: Prepare SQLite header
         if: runner.os == 'Linux'
@@ -1018,7 +1018,7 @@ jobs:
           New-Item -ItemType Directory -Force desktop/src-tauri/binaries | Out-Null
           New-Item -ItemType File -Force "desktop/src-tauri/binaries/agentsview-$hostTriple.exe" | Out-Null
 
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.53.2
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.58.1
 
       - name: Fetch Windows desktop Rust dependencies
         shell: bash
@@ -1096,7 +1096,7 @@ jobs:
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
 
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.53.2
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.58.1
 
       - name: Restore pricing snapshot
         run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
@@ -1267,7 +1267,7 @@ jobs:
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
 
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.53.2
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.58.1
 
       - name: Prepare SQLite header
         if: runner.os == 'Linux'
@@ -1328,7 +1328,7 @@ jobs:
 
       - name: Check that pages paint with their stylesheets and fonts
         if: matrix.browser == 'chromium'
-        uses: kenn-io/actions/first-paint@33ced853fa88b70eb178ecd40ec74ef64420479d  # main
+        uses: kenn-io/actions/first-paint@a75fd176648b63e41d3db03d942ef101a69e0e50  # main
         with:
           urls: |
             http://127.0.0.1:8095/
