@@ -109,8 +109,8 @@ client will see these tools:
 
 `list_recall` accepts a full stored session ID or a raw UUID in
 `source_session_id`. An unindexed or trashed ID is used as given. Older servers
-that do not support raw lookup also use the ID as given. Ambiguous raw UUIDs
-return an error listing two matching IDs.
+that do not support raw lookup also use the ID as given. See `search_sessions`
+below for ambiguous IDs.
 
 `get_compaction_summaries` accepts a full stored session ID, a raw UUID that
 matches one session, or an `active_since` timestamp. The limit counts sessions;
@@ -239,9 +239,9 @@ Set `session_id` to a raw UUID or full stored session ID when you need one
 session. The lookup returns one metadata row, includes active sessions, ignores
 the other search arguments, and returns an error when the ID is missing. An
 exact stored ID takes precedence. Otherwise, a raw suffix that matches more
-than one session returns an error listing two matches. A raw UUID matches an
-agent ID ending in `:<uuid>` or a host ID ending in `~<uuid>`; the delimiter
-is part of the match, so a fork entry separated by `-` is not selected. The row
+than one session returns an error listing up to five matches. A raw UUID matches
+an agent ID ending in `:<uuid>` or a host ID ending in `~<uuid>`; the delimiter is
+part of the match, so a fork entry separated by `-` is not selected. The row
 has an empty `snippet`, `match_ordinal` set to `0`, and no `next_cursor`. Call
 `get_messages` with that ordinal to read the first message. For a known full ID
 or raw UUID, `get_session_overview` provides a compact message preview. Remote
@@ -261,7 +261,7 @@ recall from a known conversation, pass a full stored ID or a raw UUID as
 `current_session_id` to exclude that session before applying the result limit.
 Other recent work remains visible. If the ID is not indexed yet, the search
 uses it as given. Older servers without raw lookup also use the ID as given.
-Ambiguous raw UUIDs return an error listing two matching IDs.
+For ambiguous IDs, see `search_sessions` above.
 
 `list_sessions` and `search_content` exclude one-shot and automated sessions by
 default. Set `include_one_shot: true` or `include_automated: true` to include
