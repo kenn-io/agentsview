@@ -96,6 +96,12 @@ Add to your MCP client config (e.g. Claude Desktop):
 				Profile: profile,
 			}
 
+			cfg, cfgErr := config.LoadPFlagsFor(cmd.Flags(), config.ScopeLocal)
+			if cfgErr == nil {
+				opts.CallLogDir = filepath.Join(cfg.DataDir, "mcp", "calls")
+			} else if httpAddr == "" {
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Warning: MCP calls will not be recorded: %v\n", cfgErr)
+			}
 			var serveErr error
 			if httpAddr != "" {
 				addr, err := normalizeMCPHTTPAddr(httpAddr, httpAllowInsecure)
@@ -106,9 +112,8 @@ Add to your MCP client config (e.g. Claude Desktop):
 				// an unauthenticated remote read surface over the session
 				// archive. Loopback binds stay local-trust (no listener
 				// auth), matching the daemon.
-				cfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeLocal)
-				if err != nil {
-					return fmt.Errorf("loading config: %w", err)
+				if cfgErr != nil {
+					return fmt.Errorf("loading config: %w", cfgErr)
 				}
 				if err := cfg.ApplyDeploymentAuth(); err != nil {
 					return fmt.Errorf("loading listener auth: %w", err)
@@ -168,7 +173,7 @@ Add to your MCP client config (e.g. Claude Desktop):
 	cmd.Flags().StringVar(&profileName, "profile", string(mcpserver.ProfileFull),
 		"Tool profile to advertise (full or memory)")
 
-	cmd.AddCommand(newMCPStatusCommand())
+	cmd.AddCommand(newMCPStatusCommand(), newMCPCallsCommand())
 	return cmd
 }
 
