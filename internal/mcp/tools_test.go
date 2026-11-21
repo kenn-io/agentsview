@@ -1613,8 +1613,20 @@ func TestSearchContent_ConceptsMapping(t *testing.T) {
 	}
 }
 
+type listingMessageSpy struct {
+	service.SessionService
+	filters []service.MessageFilter
+}
+
+func (s *listingMessageSpy) Messages(ctx context.Context, id string, f service.MessageFilter) (*service.MessageList, error) {
+	s.filters = append(s.filters, f)
+	return s.SessionService.Messages(ctx, id, f)
+}
+
 func TestSearchContent_ListSessionMessages(t *testing.T) {
 	ts, d := newTestToolset(t)
+	spy := &listingMessageSpy{SessionService: ts.svc}
+	ts.svc = spy
 	dbtest.SeedSession(t, d, "child", "project-a", func(s *db.Session) {
 		s.MessageCount = 3
 		s.UserMessageCount = 1
@@ -1639,6 +1651,10 @@ func TestSearchContent_ListSessionMessages(t *testing.T) {
 	assert.Equal(t, "inspect the failure", first.Matches[1].Snippet)
 	assert.True(t, first.Matches[0].Subordinate)
 	assert.Equal(t, "regex", first.EffectiveMode)
+	require.Len(t, spy.filters, 1)
+	assert.Equal(t, 2, spy.filters[0].Limit)
+	require.NotEmpty(t, first.Matches[0].TranscriptRevision)
+	assert.Equal(t, first.Matches[0].TranscriptRevision, spy.filters[0].ExpectedRevision)
 	require.NotNil(t, first.NextCursor)
 	_, last, err := ts.searchContent(t.Context(), nil, searchContentIn{SessionID: "child", Limit: 2, Cursor: *first.NextCursor})
 	require.NoError(t, err)
@@ -1646,15 +1662,23 @@ func TestSearchContent_ListSessionMessages(t *testing.T) {
 	assert.Equal(t, 2, last.Matches[0].Ordinal)
 	assert.Equal(t, "echo hello", last.Matches[0].Snippet)
 	assert.Nil(t, last.NextCursor)
+	require.Len(t, spy.filters, 2)
 	_, empty, err := ts.searchContent(t.Context(), nil, searchContentIn{SessionID: "child", Project: "other"})
 	require.NoError(t, err)
 	assert.Empty(t, empty.Matches)
 
-	dbtest.SeedSessionWithMessages(t, d, "one-shot", "project-a", []db.Message{dbtest.UserMsg("one-shot", 0, "only")}, dbtest.WithMessageCounts(1, 1), func(s *db.Session) { s.IsAutomated = true })
-	_, oneShot, err := ts.searchContent(t.Context(), nil, searchContentIn{SessionID: "one-shot"})
+	dbtest.SeedSessionWithMessages(t, d, "one-shot", "project-a", []db.Message{
+		dbtest.UserMsg("one-shot", 0, "only"),
+		{SessionID: "one-shot", Ordinal: 1, Role: "assistant", Content: "side", ContentLength: 4, IsSidechain: true},
+		dbtest.AsstMsg("one-shot", 2, "reply"),
+	}, dbtest.WithMessageCounts(3, 1), func(s *db.Session) { s.IsAutomated = true })
+	spy.filters = nil
+	_, oneShot, err := ts.searchContent(t.Context(), nil, searchContentIn{SessionID: "one-shot", Scope: "top"})
 	require.NoError(t, err)
-	require.Len(t, oneShot.Matches, 1)
+	require.Len(t, oneShot.Matches, 2)
 	assert.Equal(t, "only", oneShot.Matches[0].Snippet)
+	assert.Equal(t, "reply", oneShot.Matches[1].Snippet)
+	require.Len(t, spy.filters, 2)
 }
 
 func TestSearchContent_ConceptsRejectedBeforeService(t *testing.T) {

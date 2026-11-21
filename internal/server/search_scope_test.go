@@ -239,7 +239,7 @@ func TestSearchContentConceptsIntersectDifferentExchangesThroughHTTP(t *testing.
 	})
 
 	w := te.wrappedRequest(http.MethodGet,
-		"/api/v1/search/content?concepts=auth+model&concepts=retry+policy&scope=top&limit=10",
+		"/api/v1/search/content?concepts=auth+model&concepts=retry+policy&mode=substring&scope=top&limit=10",
 		withHeader("X-AgentsView-Search-Intent", "semantic"))
 	assertStatus(t, w, http.StatusOK)
 	res := decode[service.ContentSearchResult](t, w)
