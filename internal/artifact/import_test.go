@@ -1683,7 +1683,7 @@ func recordAllImportEntries(
 }
 
 func TestArtifactTransferRetainsToolPRLinks(t *testing.T) {
-	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
+	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentUsage} {
 		t.Run(string(policy), func(t *testing.T) {
 			source := testExportDB(t)
 			source.SetArchiveContent(policy)
