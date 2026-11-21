@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -117,10 +118,10 @@ func newVectorPushTestSync(t *testing.T) (*Sync, *db.DB, *sql.DB) {
 		require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 	}
 
-	available, err := VectorExtensionAvailable(ctx, pg)
-	require.NoError(t, err, "VectorExtensionAvailable")
-	if !available {
-		t.Skip("pgvector extension unavailable")
+	unavailable, err := ensureVectorBaseSchemaPG(ctx, pg)
+	require.NoError(t, err, "ensureVectorBaseSchemaPG")
+	if unavailable != "" {
+		t.Skip(unavailable)
 	}
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
@@ -1075,6 +1076,63 @@ func TestVectorPushRoundTrip(t *testing.T) {
 		 WHERE generation_id = $1 AND machine = $2`, genID, witnessKey))
 }
 
+func TestVectorPushUsesReadCommitted(t *testing.T) {
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
+	ctx := t.Context()
+	// Kit requires read committed even when the database defaults to repeatable read.
+	var database string
+	require.NoError(t, pg.QueryRowContext(ctx, `SELECT current_database()`).Scan(&database))
+	_, err := pg.ExecContext(ctx, `ALTER DATABASE `+pgx.Identifier{database}.Sanitize()+` SET default_transaction_isolation = 'repeatable read'`)
+	require.NoError(t, err)
+	sync.pg, err = Open(ctx, testPGURL(t), vectorPushTestSchema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, sync.pg.Close()) })
+
+	seedVectorSession(t, localDB, "A")
+	sync.vectorSource = &fakeVectorSource{
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-isolation", Model: "m", Dimension: 4},
+		hasGen: true,
+		hashes: map[string]string{"A": "ha"},
+		docs:   map[string][]storage.VectorPushDoc{"A": {vdoc("A", "A#0", 0, "content", "hash", []float32{1, 0, 0, 0})}},
+	}
+	res, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Vectors.ChunksPushed)
+}
+
+func TestVectorPushInvalidStoredVectorReportsRepair(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		vector []float32
+		repair bool
+	}{
+		{"zero", []float32{0, 0, 0, 0}, true},
+		{"rounds to zero", []float32{1e-10, 0, 0, 0}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sync, localDB, _ := newVectorPushTestSync(t)
+			seedVectorSession(t, localDB, "A")
+			sync.vectorSource = &fakeVectorSource{
+				gen:    storage.VectorGenerationInfo{Fingerprint: "fp-invalid", Model: "m", Dimension: 4},
+				hasGen: true,
+				hashes: map[string]string{"A": "ha"},
+				docs: map[string][]storage.VectorPushDoc{
+					"A": {vdoc("A", "A#0", 0, "content", "hash", tc.vector)},
+				},
+			}
+			_, err := sync.Push(t.Context(), false, nil)
+			require.Error(t, err)
+			if tc.repair {
+				assert.ErrorContains(t, err, "agentsview index embeddings build --repair-invalid")
+			} else {
+				assert.NotContains(t, err.Error(), "--repair-invalid")
+			}
+		})
+	}
+}
+
 func TestVectorPushDeltaNoop(t *testing.T) {
 	t.Parallel()
 	sync, localDB, _ := newVectorPushTestSync(t)
@@ -1101,6 +1159,44 @@ func TestVectorPushDeltaNoop(t *testing.T) {
 	assert.Equal(t, 2, res.Vectors.SessionsUnchanged)
 	assert.Equal(t, 0, res.Vectors.SessionsPushed)
 	assert.Equal(t, 0, res.Vectors.DocsPushed)
+}
+
+func TestVectorPushLazyChunkAttachment(t *testing.T) {
+	t.Parallel()
+	t.Run("missing session after chunk table drop", func(t *testing.T) {
+		sync, localDB, pg := newVectorPushTestSync(t)
+		ctx := t.Context()
+		seedVectorSession(t, localDB, "A")
+		src := &fakeVectorSource{
+			gen:    storage.VectorGenerationInfo{Fingerprint: "race-drop", Model: "model", Dimension: 4},
+			hasGen: true,
+			hashes: map[string]string{"A": "ha"},
+			docs: map[string][]storage.VectorPushDoc{
+				"A": {vdoc("A", "A#0", 0, "a", "a1", []float32{1, 0, 0, 0})},
+			},
+		}
+		sync.vectorSource = src
+		_, err := sync.Push(ctx, false, nil)
+		require.NoError(t, err)
+		id, _, ok, err := LookupVectorGeneration(ctx, pg, "race-drop")
+		require.NoError(t, err)
+		require.True(t, ok)
+		src.hashes["A"] = "changed"
+		src.hashScopes = nil
+		sync.afterVectorGenerationLookup = func() {
+			for _, q := range []string{
+				`DELETE FROM sessions WHERE id = 'A'`,
+				`DROP TABLE ` + vectorChunkTable(id),
+			} {
+				_, err := pg.ExecContext(ctx, q)
+				require.NoError(t, err)
+			}
+		}
+		result, err := sync.pushVectors(ctx, false, []string{"A"}, id, nil, nil)
+		require.NoError(t, err)
+		require.Equal(t, [][]string{{"A"}}, src.hashScopes)
+		assert.Zero(t, result.SessionsPushed)
+	})
 }
 
 // TestVectorPushFullRepairsSilentCorruption pins --full's repair contract for
@@ -1294,6 +1390,12 @@ func TestVectorPushContentChange(t *testing.T) {
 		"A#0").Scan(&content, &hash), "read updated doc")
 	assert.Equal(t, "c1-updated", content)
 	assert.Equal(t, "h1b", hash)
+	genID, _, ok, err := LookupVectorGeneration(ctx, pg, "fp-cc")
+	require.NoError(t, err)
+	require.True(t, ok)
+	var updatedVector string
+	require.NoError(t, pg.QueryRowContext(ctx, `SELECT embedding::text FROM `+vectorChunkTable(genID)+` WHERE doc_key=$1 AND chunk_index=0`, "A#0").Scan(&updatedVector))
+	assert.Equal(t, "[0,1,0,0]", updatedVector)
 }
 
 func TestVectorPushEviction(t *testing.T) {

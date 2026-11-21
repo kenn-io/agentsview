@@ -6,7 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -75,12 +75,10 @@ VALUES ($1, $2, '', $3, $4, FALSE, $5, $6, 'h')`,
 
 func insertSearchChunk(
 	t *testing.T, pg *sql.DB, table, halfvecType, docKey string,
-	chunkIndex int, emb []float32,
+	chunkIndex int, literal string,
 ) {
 	t.Helper()
-	literal, err := halfvecLiteral(emb)
-	require.NoError(t, err, "halfvecLiteral "+docKey)
-	_, err = pg.ExecContext(t.Context(),
+	_, err := pg.ExecContext(t.Context(),
 		`INSERT INTO `+table+` (doc_key, chunk_index, embedding)
 		 VALUES ($1, $2, $3::`+halfvecType+`)`,
 		docKey, chunkIndex, literal)
@@ -116,12 +114,12 @@ func seedVectorSearchFixture(t *testing.T, pg *sql.DB) (genID int64, table strin
 	insertSearchDoc(t, pg, "gone", "S", 30, 30, "[]", "vanished")
 	insertSearchDoc(t, pg, "tomb", "S", -1, -1, "[]", "parked tombstone")
 
-	insertSearchChunk(t, pg, table, halfvec, "u1", 0, []float32{1, 0, 0, 0})
-	insertSearchChunk(t, pg, table, halfvec, "r1", 0, []float32{0, 0, 1, 0})
-	insertSearchChunk(t, pg, table, halfvec, "r1", 1, []float32{1, 0.2, 0, 0})
-	insertSearchChunk(t, pg, table, halfvec, "u2", 0, []float32{0, 1, 0, 0})
-	insertSearchChunk(t, pg, table, halfvec, "gone", 0, []float32{0.9, 0.4359, 0, 0})
-	insertSearchChunk(t, pg, table, halfvec, "tomb", 0, []float32{0.95, 0.3122, 0, 0})
+	insertSearchChunk(t, pg, table, halfvec, "u1", 0, "[1,0,0,0]")
+	insertSearchChunk(t, pg, table, halfvec, "r1", 0, "[0,0,1,0]")
+	insertSearchChunk(t, pg, table, halfvec, "r1", 1, "[1,0.2,0,0]")
+	insertSearchChunk(t, pg, table, halfvec, "u2", 0, "[0,1,0,0]")
+	insertSearchChunk(t, pg, table, halfvec, "gone", 0, "[0.9,0.4359,0,0]")
+	insertSearchChunk(t, pg, table, halfvec, "tomb", 0, "[0.95,0.3122,0,0]")
 
 	// gone's chunk stays; its document row disappears between KNN and hydrate.
 	_, err = pg.ExecContext(t.Context(), `DELETE FROM vector_documents WHERE doc_key = 'gone'`)
@@ -138,6 +136,40 @@ var (
 	runContent = runMemberA + "\n\n" + runMemberB
 	runOffsets = `[{"o":10,"r":0,"b":0},{"o":12,"r":19,"b":19}]`
 )
+
+func TestPGVectorSearcherReadOnlyRole(t *testing.T) {
+	t.Parallel()
+	pg := newVectorSearchTestPG(t)
+	ctx := t.Context()
+	genID, _ := seedVectorSearchFixture(t, pg)
+	searcher := NewVectorSearcher(pg, genID, 4, searchMaxInputChars, fixedEncoder([]float32{1, 0, 0, 0}))
+	role := "reader_" + pgDatabaseName(t, testPGURL(t))
+	_, err := pg.ExecContext(ctx, `CREATE ROLE `+role+` LOGIN PASSWORD 'reader_fixture'`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = pg.ExecContext(context.WithoutCancel(ctx), `DROP OWNED BY `+role)
+		_, _ = pg.ExecContext(context.WithoutCancel(ctx), `DROP ROLE `+role)
+	})
+	_, err = pg.ExecContext(ctx, `GRANT USAGE ON SCHEMA `+vectorSearchTestSchema+` TO `+role+`; GRANT SELECT ON ALL TABLES IN SCHEMA `+vectorSearchTestSchema+` TO `+role)
+	require.NoError(t, err)
+	readerURL, err := url.Parse(testPGSchemaURL(t, vectorSearchTestSchema))
+	require.NoError(t, err)
+	readerURL.User = url.UserPassword(role, "reader_fixture")
+	reader, err := NewStore(ctx, readerURL.String(), vectorSearchTestSchema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reader.Close() })
+	require.NoError(t, prepareServeStore(ctx, reader, vectorSearchTestSchema))
+	encoder := fixedEncoder([]float32{1, 0, 0, 0})
+	readerSearcher, reason, err := (Backend{}).OpenVectorSearcher(ctx, reader, storage.VectorGenerationInfo{Fingerprint: "fp-search"}, searchMaxInputChars, encoder)
+	require.NoError(t, err)
+	require.Empty(t, reason)
+	hits, err := dbtest.SemanticSearch(ctx, readerSearcher, "query", 10)
+	require.NoError(t, err)
+	require.NotEmpty(t, hits)
+	expected, err := dbtest.SemanticSearch(ctx, searcher, "query", 10)
+	require.NoError(t, err)
+	assert.Equal(t, expected, hits)
+}
 
 func TestPGVectorSearcher(t *testing.T) {
 	t.Parallel()
@@ -298,9 +330,9 @@ func TestPGVectorSearcherExactK(t *testing.T) {
 	// [1,0,0,0]); "outside" is next-best at rank 3, beyond k=2.
 	insertSearchDoc(t, pg, "multi", "S", 1, 1, "[]", "multi doc content")
 	insertSearchDoc(t, pg, "outside", "S", 2, 2, "[]", "outside doc content")
-	insertSearchChunk(t, pg, table, halfvec, "multi", 0, []float32{1, 0, 0, 0})
-	insertSearchChunk(t, pg, table, halfvec, "multi", 1, []float32{1, 0.1, 0, 0})
-	insertSearchChunk(t, pg, table, halfvec, "outside", 0, []float32{0, 1, 0, 0})
+	insertSearchChunk(t, pg, table, halfvec, "multi", 0, "[1,0,0,0]")
+	insertSearchChunk(t, pg, table, halfvec, "multi", 1, "[1,0.1,0,0]")
+	insertSearchChunk(t, pg, table, halfvec, "outside", 0, "[0,1,0,0]")
 
 	searcher := NewVectorSearcher(
 		pg, genID, 4, searchMaxInputChars, fixedEncoder([]float32{1, 0, 0, 0}))
@@ -308,83 +340,4 @@ func TestPGVectorSearcherExactK(t *testing.T) {
 	require.NoError(t, err, "SemanticSearch")
 	require.Len(t, hits, 1, "both top-2 chunks belong to multi -> one rolled-up doc")
 	assert.Equal(t, 1, hits[0].Ordinal, "only multi survives; outside sits beyond k")
-}
-
-// TestPGVectorSearcherEfSearchRecall pins the HNSW recall contract: with a
-// candidate pool larger than pgvector's default hnsw.ef_search (40), a search
-// for k neighbors must return k docs, not ~40. The searcher raises ef_search to
-// k inside the query transaction; without that the KNN silently caps the pool
-// below k, diverging from the local backend's exact scan.
-func TestPGVectorSearcherEfSearchRecall(t *testing.T) {
-	t.Parallel()
-	pg := newVectorSearchTestPG(t)
-	ctx := t.Context()
-
-	genID, err := ensureVectorGeneration(ctx, pg, "fp-efsearch", "m", 4)
-	require.NoError(t, err, "ensureVectorGeneration")
-	require.NoError(t, ensureVectorChunkTable(ctx, pg, genID, 4), "ensureVectorChunkTable")
-	extSchema, err := vectorExtensionSchema(ctx, pg)
-	require.NoError(t, err, "vectorExtensionSchema")
-	halfvec := extSchema + ".halfvec"
-	table := vectorChunkTable(genID)
-
-	// 100 distinct docs (> the ef_search default of 40), one chunk each. The
-	// vectors spread across the plane so all are neighbors of the query.
-	const docCount = 100
-	for i := 0; i < docCount; i++ {
-		key := fmt.Sprintf("d%d", i)
-		insertSearchDoc(t, pg, key, "S", i, i, "[]", fmt.Sprintf("doc %d", i))
-		emb := []float32{1, float32(i) / float32(docCount), 0, 0}
-		insertSearchChunk(t, pg, table, halfvec, key, 0, emb)
-	}
-
-	searcher := NewVectorSearcher(
-		pg, genID, 4, searchMaxInputChars, fixedEncoder([]float32{1, 0, 0, 0}))
-	hits, err := dbtest.SemanticSearch(ctx, searcher, "query", docCount)
-	require.NoError(t, err, "SemanticSearch")
-	assert.Len(t, hits, docCount,
-		"ef_search raised to k returns all %d docs, not the ~40 default cap", docCount)
-}
-
-// TestPGVectorSearcherCappedScanIsNotExhausted pins the exhaustion signal past
-// hnsw.ef_search's 1000-row ceiling. Without iterative scan (pgvector < 0.8)
-// an HNSW index scan for k=1600 returns 1000 rows; with it, 1600. Either way
-// rows remain, so the page must not report the index exhausted. The table is
-// large enough that the planner scans the index instead of sorting rows.
-func TestPGVectorSearcherCappedScanIsNotExhausted(t *testing.T) {
-	t.Parallel()
-	pg := newVectorSearchTestPG(t)
-	ctx := t.Context()
-
-	genID, err := ensureVectorGeneration(ctx, pg, "fp-capped", "m", 4)
-	require.NoError(t, err, "ensureVectorGeneration")
-	require.NoError(t, ensureVectorChunkTable(ctx, pg, genID, 4), "ensureVectorChunkTable")
-	extSchema, err := vectorExtensionSchema(ctx, pg)
-	require.NoError(t, err, "vectorExtensionSchema")
-	table := vectorChunkTable(genID)
-
-	const docCount, k = 20000, 1600
-	_, err = pg.ExecContext(ctx, `
-INSERT INTO vector_documents (
-    doc_key, session_id, source_uuid, ordinal, ordinal_end,
-    subordinate, offsets, content, content_hash)
-SELECT 'd' || i, 'S', '', i, i, FALSE, '[]', 'doc ' || i, 'h'
-  FROM generate_series(0, $1 - 1) AS i`, docCount)
-	require.NoError(t, err, "insert docs")
-	_, err = pg.ExecContext(ctx, `
-INSERT INTO `+table+` (doc_key, chunk_index, embedding)
-SELECT 'd' || i, 0, ('[1,' || (i::float8 / $1) || ',' || ((i % 97)::float8 / 97) || ',0]')::`+extSchema+`.halfvec
-  FROM generate_series(0, $1 - 1) AS i`, docCount)
-	require.NoError(t, err, "insert chunks")
-	_, err = pg.ExecContext(ctx, `ANALYZE `+table)
-	require.NoError(t, err, "analyze chunks")
-
-	searcher := NewVectorSearcher(
-		pg, genID, 4, searchMaxInputChars, fixedEncoder([]float32{1, 0, 0, 0}))
-	page, _, err := searcher.PrepareSemanticSearch(ctx, "query")
-	require.NoError(t, err, "PrepareSemanticSearch")
-	hits, exhausted, err := page(ctx, k)
-	require.NoError(t, err, "page")
-	assert.GreaterOrEqual(t, len(hits), 1000)
-	assert.False(t, exhausted, "%d of %d docs returned", len(hits), docCount)
 }

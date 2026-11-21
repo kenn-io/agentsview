@@ -108,11 +108,11 @@ func seedSemanticFixture(t *testing.T, store *Store) (int64, string) {
 	halfvec := extSchema + ".halfvec"
 	table := vectorChunkTable(genID)
 
-	insertSearchChunk(t, pg, table, halfvec, "dsub", 0, []float32{1, 0, 0, 0})
-	insertSearchChunk(t, pg, table, halfvec, "d1", 0, []float32{1, 0.2, 0, 0})
-	insertSearchChunk(t, pg, table, halfvec, "d2", 0, []float32{1, 0.5, 0, 0})
-	insertSearchChunk(t, pg, table, halfvec, "run1", 0, []float32{0, 0, 1, 0})
-	insertSearchChunk(t, pg, table, halfvec, "run1", 1, []float32{1, 1, 0, 0})
+	insertSearchChunk(t, pg, table, halfvec, "dsub", 0, "[1,0,0,0]")
+	insertSearchChunk(t, pg, table, halfvec, "d1", 0, "[1,0.2,0,0]")
+	insertSearchChunk(t, pg, table, halfvec, "d2", 0, "[1,0.5,0,0]")
+	insertSearchChunk(t, pg, table, halfvec, "run1", 0, "[0,0,1,0]")
+	insertSearchChunk(t, pg, table, halfvec, "run1", 1, "[1,1,0,0]")
 
 	return genID, table
 }

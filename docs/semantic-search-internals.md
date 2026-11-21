@@ -577,6 +577,7 @@ covers the invariants.
   content duplicated into PG so snippets and anchoring reuse the exact local
   mirror semantics (rebuilding content from `messages` at query time would
   need duplicate extraction logic that can drift).
+- Kit attaches to each application-owned chunk table for replacement and raw nearest-chunk search. AgentsView owns generations, document metadata, and result hydration.
 - `vector_chunks_g<id>` is one table per generation with a `halfvec(N)` column
   and an HNSW cosine index. Per-generation tables are required because a
   pgvector column has a fixed typed dimension; `halfvec` stays under HNSW's
@@ -679,9 +680,7 @@ covers the invariants.
   below k for large fetches, so each search runs
   `SET LOCAL hnsw.ef_search = clamp(k, 40, 1000)` in the query transaction.
   For k past pgvector's 1000 ceiling, `hnsw.iterative_scan = 'relaxed_order'`
-  (pgvector >= 0.8) lets the scan continue; the GUC is probed with
-  `current_setting(..., missing_ok)` first so older pgvector skips it instead
-  of aborting the transaction.
+  lets the scan continue. Semantic search requires pgvector 0.8.0 or newer.
 - The hybrid keyword leg selects ILIKE candidates in recency order over the
   embedded-universe predicates, resolves them to units through
   `ResolveMessageUnits` point lookups against `vector_documents`, and feeds

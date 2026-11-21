@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-18
+last_edited: 2026-11-20
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -462,6 +462,10 @@ The latest release is
 **Upgrade notes**
 
 - Usage telemetry is off unless you have opted in or set `TELEMETRY_ENABLED=1`.
+- PostgreSQL semantic search now requires pgvector 0.8 or newer. On pgvector
+  0.7, `pg serve` reports semantic search unavailable, and CLI and MCP hybrid
+  searches return keyword matches. Upgrade pgvector to restore semantic results
+  without rebuilding vectors.
 - If you turned on built-in search by meaning in another app that uses Kit,
   AgentsView now turns it on too. Set `[vector] enabled = false` to keep it off.
   See [Turned on in another app](/docs/semantic-search/#turned-on-in-another-app).

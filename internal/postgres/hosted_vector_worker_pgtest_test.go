@@ -4,17 +4,30 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"testing"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
-func TestHostedVectorUploadEditAndSearchSnapshot(t *testing.T) {
+func hostedVectorTestSetup(t *testing.T, repeatableRead bool) (projectionFixture, *sql.DB, storage.VectorGenerationInfo, int64, func(context.Context, []string) ([][]float32, error)) {
+	t.Helper()
 	f := newProjectionFixture(t)
-	_, err := f.admin.ExecContext(t.Context(), `CREATE EXTENSION IF NOT EXISTS vector SCHEMA public`)
+	if repeatableRead {
+		var database string
+		require.NoError(t, f.admin.QueryRowContext(t.Context(), `SELECT current_database()`).Scan(&database))
+		_, err := f.admin.ExecContext(t.Context(), `ALTER DATABASE `+pgx.Identifier{database}.Sanitize()+` SET default_transaction_isolation = 'repeatable read'`)
+		require.NoError(t, err)
+	}
+	writer, err := OpenHosted(t.Context(), f.dsn, f.schema, f.tenant, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, writer.Close()) })
+	_, err = f.admin.ExecContext(t.Context(), `CREATE EXTENSION IF NOT EXISTS vector SCHEMA public`)
 	require.NoError(t, err)
 	gen := storage.VectorGenerationInfo{Fingerprint: "snapshot-fixture", Model: "fixture", Dimension: 2}
 	require.NoError(t, ProvisionHostedVector(t.Context(), f.admin, f.schema, f.tenant, gen))
@@ -30,12 +43,20 @@ func TestHostedVectorUploadEditAndSearchSnapshot(t *testing.T) {
 		}
 		return out, nil
 	}
+	return f, writer, gen, id, encode
+}
+
+func TestHostedVectorUploadEditAndSearchSnapshot(t *testing.T) {
+	f, writer, gen, id, encode := hostedVectorTestSetup(t, false)
 	upload, receipt := f.accept(t, "device-a", "upload", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, upload), upload, projectionOutcome("old words")))
-	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false))
-	hosted, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
+	require.NoError(t, EmbedBatch(t.Context(), writer, gen, encode, 128, 1, false))
+	reader, err := OpenHosted(t.Context(), f.dsn, f.schema, f.tenant, false)
 	require.NoError(t, err)
-	searcher := NewVectorSearcher(f.runtime, id, 2, 128, func(context.Context, string) ([]float32, error) { return []float32{1, 0}, nil }).(*vectorSearcher)
+	t.Cleanup(func() { assert.NoError(t, reader.Close()) })
+	hosted, err := newHostedAdapter(t.Context(), reader, f.tenant)
+	require.NoError(t, err)
+	searcher := NewVectorSearcher(reader, id, 2, 128, func(context.Context, string) ([]float32, error) { return []float32{1, 0}, nil }).(*vectorSearcher)
 	selected := make(chan struct{})
 	resume := make(chan struct{})
 	defer func() {
@@ -46,7 +67,8 @@ func TestHostedVectorUploadEditAndSearchSnapshot(t *testing.T) {
 		}
 	}()
 	hosted.SetVectorSearcher(searcher)
-	initial, err := hosted.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "old", Mode: "semantic", IncludeOneShot: true, Limit: 10})
+	searchCtx := t.Context()
+	initial, err := hosted.SearchContent(searchCtx, db.ContentSearchFilter{Pattern: "old", Mode: "semantic", IncludeOneShot: true, Limit: 10})
 	require.NoError(t, err)
 	var initialSnippets []string
 	for _, match := range initial.Matches {
@@ -55,10 +77,10 @@ func TestHostedVectorUploadEditAndSearchSnapshot(t *testing.T) {
 	assert.Contains(t, initialSnippets, "old words")
 	first, receipt := f.accept(t, "device-a", "snapshot-first", receipt.Receipt)
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, first), first, projectionOutcome("old snapshot words")))
-	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false))
+	require.NoError(t, EmbedBatch(t.Context(), writer, gen, encode, 128, 1, false))
 	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET deleted_at=now()`)
 	require.NoError(t, err)
-	trashed, err := hosted.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "old", Mode: "semantic", IncludeOneShot: true, Limit: 10})
+	trashed, err := hosted.SearchContent(searchCtx, db.ContentSearchFilter{Pattern: "old", Mode: "semantic", IncludeOneShot: true, Limit: 10})
 	require.NoError(t, err)
 	assert.Empty(t, trashed.Matches)
 	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET deleted_at=NULL`)
@@ -70,17 +92,19 @@ func TestHostedVectorUploadEditAndSearchSnapshot(t *testing.T) {
 	}
 	resultCh := make(chan result, 1)
 	go func() {
-		page, err := hosted.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "old", Mode: "semantic", IncludeOneShot: true, Limit: 10})
+		page, err := hosted.SearchContent(searchCtx, db.ContentSearchFilter{Pattern: "old", Mode: "semantic", IncludeOneShot: true, Limit: 10})
 		resultCh <- result{page, err}
 	}()
 	select {
 	case <-selected:
-	case <-t.Context().Done():
-		t.Fatal(t.Context().Err())
+	case res := <-resultCh:
+		t.Fatalf("search ended before selecting candidates: %v", res.err)
+	case <-searchCtx.Done():
+		t.Fatal(searchCtx.Err())
 	}
 	second, _ := f.accept(t, "device-a", "snapshot-second", receipt.Receipt)
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, second), second, projectionOutcome("new snapshot words")))
-	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false))
+	require.NoError(t, EmbedBatch(t.Context(), writer, gen, encode, 128, 1, false))
 	close(resume)
 	res := <-resultCh
 	require.NoError(t, res.err)
@@ -90,7 +114,7 @@ func TestHostedVectorUploadEditAndSearchSnapshot(t *testing.T) {
 	}
 	assert.Contains(t, snippets, "old snapshot words")
 	searcher.afterCandidates = nil
-	page, err := hosted.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "new", Mode: "semantic", IncludeOneShot: true, Limit: 10})
+	page, err := hosted.SearchContent(searchCtx, db.ContentSearchFilter{Pattern: "new", Mode: "semantic", IncludeOneShot: true, Limit: 10})
 	require.NoError(t, err)
 	snippets = nil
 	for _, match := range page.Matches {
@@ -100,4 +124,37 @@ func TestHostedVectorUploadEditAndSearchSnapshot(t *testing.T) {
 	var old int
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM vector_documents WHERE content='old snapshot words'`).Scan(&old))
 	assert.Zero(t, old)
+}
+
+func TestHostedVectorWriteUsesReadCommitted(t *testing.T) {
+	f, writer, gen, id, encode := hostedVectorTestSetup(t, true)
+	upload, _ := f.accept(t, "device-a", "upload", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, upload), upload, projectionOutcome("isolation words")))
+	require.NoError(t, EmbedBatch(t.Context(), writer, gen, encode, 128, 1, false))
+	var count int
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM `+vectorChunkTable(id)).Scan(&count))
+	assert.Greater(t, count, 0)
+}
+
+func TestHostedVectorSearchUsesOneConnection(t *testing.T) {
+	f, writer, gen, id, encode := hostedVectorTestSetup(t, false)
+	upload, _ := f.accept(t, "device-a", "upload", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, upload), upload, projectionOutcome("single connection words")))
+	require.NoError(t, EmbedBatch(t.Context(), writer, gen, encode, 128, 1, false))
+	reader, err := OpenHosted(t.Context(), f.dsn, f.schema, f.tenant, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, reader.Close()) })
+	reader.SetMaxOpenConns(1)
+	hosted, err := newHostedAdapter(t.Context(), reader, f.tenant)
+	require.NoError(t, err)
+	hosted.SetVectorSearcher(NewVectorSearcher(reader, id, 2, 128, func(context.Context, string) ([]float32, error) { return []float32{1, 0}, nil }))
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	page, err := hosted.SearchContent(ctx, db.ContentSearchFilter{Pattern: "single", Mode: "semantic", IncludeOneShot: true, Limit: 10})
+	require.NoError(t, err)
+	var snippets []string
+	for _, match := range page.Matches {
+		snippets = append(snippets, match.Snippet)
+	}
+	assert.Contains(t, snippets, "single connection words")
 }

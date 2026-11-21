@@ -1035,6 +1035,7 @@ below.
 | Embeddings request timed out                                                                                    | `embed request failed: no response within the <timeout> request timeout`; see [Transport trade-offs](#transport-trade-offs)                                           |
 | Embeddings endpoint returned non-200                                                                            | `[vector.embeddings] status <code>: <body>`                                                                                                                           |
 | Embeddings endpoint returned a non-finite or zero-norm vector                                                   | `[vector.embeddings] invalid embedding at index <n>: ...`; correct the endpoint/cache configuration, then run `agentsview index embeddings build --repair-invalid`    |
+| `pg push` reports a stored vector has zero norm                                                                | Run `agentsview index embeddings build --repair-invalid` on the source, then retry the push.                                                                       |
 | Embeddings endpoint returned a JSON `null` component                                                            | `[vector.embeddings] decode response: embedding component <n> is null`; correct the endpoint/cache configuration, then run the targeted repair                        |
 | `--in` names a source other than `messages` with `--semantic`/`--hybrid`                                        | CLI: `--semantic searches messages only; drop --in` (or `--hybrid ...`); HTTP/MCP: `search: semantic search only supports the messages source (got "...")`            |
 | `--cursor` with `--semantic`/`--hybrid`                                                                         | `semantic search returns a single ranked page; cursor pagination is not supported`                                                                                    |
@@ -1150,14 +1151,16 @@ Semantic search degrades gracefully when the extension is absent or too old.
 `pg push` best-effort runs `CREATE EXTENSION IF NOT EXISTS vector`; if that
 fails — CockroachDB, which has no pgvector; a database where the extension
 package is not installed; or a role lacking `CREATE` privilege — schema setup
-logs a one-line notice and continues, and the vector phase is skipped. `halfvec`
-needs pgvector 0.7.0 or newer: `CREATE EXTENSION IF NOT EXISTS` never upgrades
-an existing extension object, so when an older version is installed `pg push`
+logs a one-line notice and continues, and the vector phase is skipped. Semantic
+search needs pgvector 0.8.0 or newer. `CREATE EXTENSION IF NOT EXISTS` never
+upgrades an existing extension object, so when an older version is installed `pg push`
 attempts `ALTER EXTENSION vector UPDATE` (healing servers whose pgvector package
 was upgraded in place) and otherwise skips the vector phase, reporting the
-installed version. Session and message sync are unaffected in every case. On the
-read side a missing vector table is treated as "no generation found", so
-`pg serve` starts; semantic search returns 501, and CLI and MCP hybrid searches
+installed version. Existing indexes on pgvector 0.7.x resume semantic search
+after pgvector is upgraded; they don't need to be rebuilt. Session and message
+sync are unaffected in every case. An unsupported extension or missing vector
+table leaves semantic search unavailable on the read side. `pg serve` starts;
+semantic search returns 501, and CLI and MCP hybrid searches
 return keyword matches with a note. Lexical search keeps working.
 
 ### Maintenance

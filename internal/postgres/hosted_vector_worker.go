@@ -15,6 +15,7 @@ import (
 	"go.kenn.io/agentsview/internal/vector"
 	"go.kenn.io/kit/embedclient"
 	kitvec "go.kenn.io/kit/vector"
+	"go.kenn.io/kit/vector/pgvector"
 )
 
 func embeddingFailureCause(err error) string {
@@ -42,7 +43,7 @@ func EmbedBatch(ctx context.Context, pg *sql.DB, generation storage.VectorGenera
 	if !ok {
 		return errors.New("hosted embedding generation is missing; run hosted-provision")
 	}
-	ext, err := vectorExtensionSchema(ctx, pg)
+	chunks, err := pgvector.AttachChunks[string](ctx, pg, vectorChunkTable(id))
 	if err != nil {
 		return fmt.Errorf("hosted embeddings require pgvector and hosted-provision: %w", err)
 	}
@@ -58,7 +59,7 @@ func EmbedBatch(ctx context.Context, pg *sql.DB, generation storage.VectorGenera
 	if rollbackErr != nil {
 		return rollbackErr
 	}
-	scope := vectorPushScope{gen: vectorGeneration{id: id, halfvecType: ext + ".halfvec"}, genIDs: ids}
+	scope := vectorPushScope{gen: vectorGeneration{id: id}, genIDs: ids, chunks: chunks}
 	var failedSessions int
 	var failures []string
 	cursor := ""
@@ -180,7 +181,7 @@ func clearHostedOrphan(ctx context.Context, pg *sql.DB, sessionID string) error 
 }
 
 func writeHostedVectors(ctx context.Context, pg *sql.DB, scope vectorPushScope, id, revision string, automated bool, docs, covered []storage.VectorPushDoc, loadChunks func(string) ([]storage.VectorPushChunk, error)) error {
-	tx, err := pg.BeginTx(ctx, nil)
+	tx, err := pg.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return err
 	}

@@ -209,10 +209,10 @@ func TestEnsureSchemaFastPathCreatesVectorTables(t *testing.T) {
 	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, vectorSchemaTestSchema))
 
-	if available, err := VectorExtensionAvailable(ctx, pg); err != nil {
-		require.NoError(t, err)
-	} else if !available {
-		t.Skip("pgvector extension unavailable")
+	unavailable, err := ensureVectorBaseSchemaPG(ctx, pg)
+	require.NoError(t, err)
+	if unavailable != "" {
+		t.Skip(unavailable)
 	}
 	require.True(t, pushSchemaCurrent(ctx, pg),
 		"a freshly ensured schema must read as current so the fast path is exercised")
@@ -242,12 +242,8 @@ func TestEnsureSchemaFastPathCreatesVectorTables(t *testing.T) {
 	assert.True(t, tableExistsPG(t, pg, "vector_push_state"))
 }
 
-// TestVectorHalfvecGate pins the availability gate's two observable shapes:
-// on a server with pgvector >= 0.7 the gate reports available (empty reason)
-// and the halfvec probe returns the type plus a version; on a server without
-// pgvector the gate degrades to a reason instead of an error, which is what
-// keeps an old or missing extension from hard-failing `pg push`.
-func TestVectorHalfvecGate(t *testing.T) {
+// TestVectorSearcherReportsMissingExtension checks search without pgvector.
+func TestVectorSearcherReportsMissingExtension(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanVectorSchemaTestPG(t, pgURL)
@@ -258,17 +254,14 @@ func TestVectorHalfvecGate(t *testing.T) {
 
 	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, vectorSchemaTestSchema))
-
-	unavailable, err := ensureVectorBaseSchemaPG(ctx, pg)
-	require.NoError(t, err, "gate must degrade, never error")
-	hasHalfvec, version, err := vectorHalfvecAvailable(ctx, pg)
+	// Search must report a missing extension even when the schema exists.
+	_, err = pg.ExecContext(ctx, `DROP EXTENSION IF EXISTS vector CASCADE`)
 	require.NoError(t, err)
-
-	if unavailable == "" {
-		assert.True(t, hasHalfvec, "available gate implies halfvec exists")
-		assert.NotEmpty(t, version, "installed extension reports a version")
-		return
-	}
-	assert.False(t, hasHalfvec,
-		"unavailable reason %q must mean halfvec is missing", unavailable)
+	store, err := NewStore(ctx, pgURL, vectorSchemaTestSchema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	searcher, reason, err := (Backend{}).OpenVectorSearcher(ctx, store, storage.VectorGenerationInfo{}, 0, nil)
+	require.NoError(t, err)
+	assert.Nil(t, searcher)
+	assert.Equal(t, "pgvector extension unavailable", reason)
 }

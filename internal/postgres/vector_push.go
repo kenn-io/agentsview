@@ -6,27 +6,20 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/storage"
+	kitvec "go.kenn.io/kit/vector"
+	"go.kenn.io/kit/vector/pgvector"
 )
-
-// vectorChunkInsertBatch caps rows per multi-row INSERT so parameter counts
-// stay well under PG's 65535 bound (each chunk row binds 3 parameters).
-const vectorChunkInsertBatch = 200
 
 // vectorProgressStride bounds how many unchanged sessions the delta scan
 // examines between progress reports; pushed sessions always report.
 const vectorProgressStride = 2000
 
-// vectorGeneration is the resolved PG generation this push targets: its id and
-// the schema-qualified halfvec type. The type must be qualified because the
-// connection's search_path is the target schema only, while pgvector's types
-// live in whichever schema first installed the extension.
+// vectorGeneration identifies the resolved PostgreSQL generation for this push.
 // machineRecorded reports whether this pusher's scoped witness record already
 // existed for the generation before this push touched it: recreating the
 // vector tables restarts the id sequence, so a reused id can satisfy the memo
@@ -36,7 +29,6 @@ const vectorProgressStride = 2000
 type vectorGeneration struct {
 	id              int64
 	createdAt       time.Time
-	halfvecType     string
 	machineRecorded bool
 }
 
@@ -49,6 +41,7 @@ type vectorGeneration struct {
 // positional-parameter limit.
 type vectorPushScope struct {
 	gen    vectorGeneration
+	chunks *pgvector.Chunks[string]
 	genIDs []int64
 	owner  vectorOwnerIdentity
 }
@@ -444,10 +437,6 @@ func (s *Sync) lookupVectorGeneration(
 	if err != nil {
 		return vectorGeneration{}, false, fmt.Errorf("looking up vector generation: %w", err)
 	}
-	extSchema, err := vectorExtensionSchema(ctx, s.pg)
-	if err != nil {
-		return vectorGeneration{}, false, err
-	}
 	var machineRecorded bool
 	if err := s.pg.QueryRowContext(ctx, `
 SELECT EXISTS (
@@ -461,7 +450,6 @@ SELECT EXISTS (
 	return vectorGeneration{
 		id:              genID,
 		createdAt:       createdAt,
-		halfvecType:     extSchema + ".halfvec",
 		machineRecorded: machineRecorded,
 	}, true, nil
 }
@@ -586,7 +574,7 @@ func (s *Sync) applyVectorDeltas(
 			res.DeferSession(sessionID)
 			continue
 		}
-		outcome, err := s.pushVectorSession(ctx, scope, export, sessionID, agg)
+		outcome, err := s.pushVectorSession(ctx, &scope, export, sessionID, agg)
 		if err != nil {
 			return err
 		}
@@ -893,10 +881,6 @@ func (s *Sync) resolveVectorGeneration(
 	if err != nil {
 		return vectorGeneration{}, err
 	}
-	extSchema, err := vectorExtensionSchema(ctx, s.pg)
-	if err != nil {
-		return vectorGeneration{}, err
-	}
 	var createdAt time.Time
 	if err := s.pg.QueryRowContext(ctx,
 		`SELECT created_at FROM vector_generations WHERE id = $1`, genID,
@@ -914,7 +898,6 @@ SELECT EXISTS (
 	return vectorGeneration{
 		id:              genID,
 		createdAt:       createdAt,
-		halfvecType:     extSchema + ".halfvec",
 		machineRecorded: machineRecorded,
 	}, nil
 }
@@ -1046,22 +1029,15 @@ type vectorSessionOutcome struct {
 // generation's chunks for them (see deleteParkedVectorDocs). This mirrors the
 // local mirror's park-to-sentinel slot replacement (internal/vector/mirror.go).
 func (s *Sync) pushVectorSession(
-	ctx context.Context, scope vectorPushScope, export storage.VectorExport, sessionID, aggHash string,
+	ctx context.Context, scope *vectorPushScope, export storage.VectorExport, sessionID, aggHash string,
 ) (vectorSessionOutcome, error) {
-	tx, err := s.pg.BeginTx(ctx, nil)
+	tx, err := s.pg.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return vectorSessionOutcome{}, fmt.Errorf("begin vector push tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// FOR UPDATE locks the sessions row for the life of this tx so a concurrent
-	// pusher cannot take ownership between this probe and the vector writes
-	// below (under READ COMMITTED an unlocked probe could read a stale owner).
-	// This is deadlock-safe: the session push phase has already committed before
-	// pushVectors runs (see pushVectors), so no session-push tx holds this row
-	// concurrently, and each vector push tx locks exactly one session row (by
-	// primary key) before its own vector-table writes — a single, consistent
-	// lock so two vector pushes cannot form a cycle.
+	// Lock the session until vector writes commit to prevent ownership changes.
 	var ownerMarker, machine sql.NullString
 	err = tx.QueryRowContext(ctx,
 		`SELECT owner_marker, machine FROM sessions WHERE id = $1 FOR UPDATE`,
@@ -1078,10 +1054,7 @@ func (s *Sync) pushVectorSession(
 		return vectorSessionOutcome{conflict: true}, nil
 	}
 
-	// Export the full docs (content + decoded chunk blobs) only after the
-	// session passes the existence/ownership probe. A local-only session with no
-	// PG row, or one owned elsewhere, skips forever; fetching docs first would
-	// re-export them on every push for sessions that never land.
+	// Export only after the session passes the existence and ownership check.
 	docs, exportHash, err := export.SessionDocs(ctx, sessionID)
 	if err != nil {
 		return vectorSessionOutcome{}, fmt.Errorf(
@@ -1099,7 +1072,13 @@ func (s *Sync) pushVectorSession(
 		return vectorSessionOutcome{deferred: true}, nil
 	}
 
-	outcome, err := writeSessionVectorsKeeping(ctx, tx, scope, sessionID, aggHash, docs, nil, nil)
+	if scope.chunks == nil {
+		scope.chunks, err = pgvector.AttachChunks[string](ctx, tx, vectorChunkTable(scope.gen.id))
+		if err != nil {
+			return vectorSessionOutcome{}, err
+		}
+	}
+	outcome, err := writeVectorPushSession(ctx, tx, *scope, sessionID, aggHash, docs)
 	if err != nil {
 		return vectorSessionOutcome{}, err
 	}
@@ -1107,6 +1086,17 @@ func (s *Sync) pushVectorSession(
 		return vectorSessionOutcome{}, fmt.Errorf("commit vector push tx: %w", err)
 	}
 	return outcome, nil
+}
+
+func writeVectorPushSession(ctx context.Context, tx *sql.Tx, scope vectorPushScope, sessionID, aggHash string, docs []storage.VectorPushDoc) (vectorSessionOutcome, error) {
+	for _, doc := range docs {
+		for _, chunk := range doc.Chunks {
+			if len(chunk.Embedding) > 0 && !slices.ContainsFunc(chunk.Embedding, func(v float32) bool { return v != 0 }) {
+				return vectorSessionOutcome{}, fmt.Errorf("document %s chunk %d has a zero vector; run agentsview index embeddings build --repair-invalid", doc.DocKey, chunk.ChunkIndex)
+			}
+		}
+	}
+	return writeSessionVectorsKeeping(ctx, tx, scope, sessionID, aggHash, docs, nil, nil)
 }
 
 func writeSessionVectorsKeeping(ctx context.Context, tx *sql.Tx, scope vectorPushScope, sessionID, aggHash string, docs, covered []storage.VectorPushDoc, loadChunks func(string) ([]storage.VectorPushChunk, error)) (vectorSessionOutcome, error) {
@@ -1123,7 +1113,7 @@ func writeSessionVectorsKeeping(ctx context.Context, tx *sql.Tx, scope vectorPus
 	for _, doc := range covered {
 		keep = append(keep, doc.DocKey)
 	}
-	chunks, err := replaceVectorChunks(ctx, tx, scope.gen, sessionID, docs, keep, loadChunks)
+	chunks, err := replaceVectorChunks(ctx, tx, scope.chunks, sessionID, docs, keep, loadChunks)
 	if err != nil {
 		return vectorSessionOutcome{}, err
 	}
@@ -1206,75 +1196,50 @@ ON CONFLICT (doc_key) DO UPDATE SET
 	return nil
 }
 
-// replaceVectorChunks replaces the session's chunks in bounded batches while
-// keeping covered documents intact. It returns the number of rows inserted.
-func replaceVectorChunks(
-	ctx context.Context, tx *sql.Tx, gen vectorGeneration,
-	sessionID string, docs []storage.VectorPushDoc, keep []string, loadChunks func(string) ([]storage.VectorPushChunk, error),
-) (int, error) {
-	table := vectorChunkTable(gen.id)
-	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`
-DELETE FROM %s WHERE doc_key IN (
-    SELECT doc_key FROM vector_documents WHERE session_id = $1) AND NOT (doc_key = ANY($2))`, table),
-		sessionID, keep); err != nil {
-		return 0, fmt.Errorf("clearing chunks for session %s: %w", sessionID, err)
+// replaceVectorChunks replaces all session chunks except covered documents.
+func replaceVectorChunks(ctx context.Context, tx *sql.Tx, store *pgvector.Chunks[string], sessionID string, docs []storage.VectorPushDoc, keep []string, loadChunks func(string) ([]storage.VectorPushChunk, error)) (int, error) {
+	covered := make(map[string]struct{}, len(keep))
+	for _, key := range keep {
+		covered[key] = struct{}{}
 	}
-
-	type chunkRow struct {
-		docKey     string
-		chunkIndex int
-		embedding  string
-	}
-	rows := make([]chunkRow, 0, vectorChunkInsertBatch)
-	total := 0
-	flush := func() error {
-		if len(rows) == 0 {
-			return nil
+	keys, err := func() (keys []string, err error) {
+		rows, err := tx.QueryContext(ctx, `SELECT doc_key FROM vector_documents WHERE session_id=$1`, sessionID)
+		if err != nil {
+			return nil, err
 		}
-		var values strings.Builder
-		args := make([]any, 0, len(rows)*3)
-		for i, r := range rows {
-			if i > 0 {
-				values.WriteByte(',')
+		defer func() { err = errors.Join(err, rows.Close()) }()
+		for rows.Next() {
+			var key string
+			if err := rows.Scan(&key); err != nil {
+				return nil, err
 			}
-			base := i * 3
-			fmt.Fprintf(&values, "($%d,$%d,$%d::%s)", base+1, base+2, base+3, gen.halfvecType)
-			args = append(args, r.docKey, r.chunkIndex, r.embedding)
-		}
-		stmt := fmt.Sprintf(`INSERT INTO %s (doc_key, chunk_index, embedding) VALUES %s`, table, values.String())
-		if _, err := tx.ExecContext(ctx, stmt, args...); err != nil {
-			return fmt.Errorf("inserting chunks for session %s: %w", sessionID, err)
-		}
-		total += len(rows)
-		rows = rows[:0]
-		return nil
-	}
-	for _, doc := range docs {
-		chunks := doc.Chunks
-		if loadChunks != nil {
-			var err error
-			chunks, err = loadChunks(doc.DocKey)
-			if err != nil {
-				return 0, fmt.Errorf("loading chunks for doc %s: %w", doc.DocKey, err)
+			if _, ok := covered[key]; !ok {
+				keys = append(keys, key)
 			}
 		}
-		for _, chunk := range chunks {
-			literal, err := halfvecLiteral(chunk.Embedding)
-			if err != nil {
-				return 0, fmt.Errorf("doc %s chunk %d: %w", doc.DocKey, chunk.ChunkIndex, err)
+		return keys, rows.Err()
+	}()
+	if err != nil {
+		return 0, err
+	}
+	return store.ReplaceTx(ctx, tx, keys, func(yield func(pgvector.Chunk[string], error) bool) {
+		for _, doc := range docs {
+			chunks := doc.Chunks
+			if loadChunks != nil {
+				var err error
+				chunks, err = loadChunks(doc.DocKey)
+				if err != nil {
+					yield(pgvector.Chunk[string]{}, fmt.Errorf("loading chunks for doc %s: %w", doc.DocKey, err))
+					return
+				}
 			}
-			rows = append(rows, chunkRow{docKey: doc.DocKey, chunkIndex: chunk.ChunkIndex, embedding: literal})
-			if len(rows) == cap(rows) {
-				if err := flush(); err != nil {
-					return 0, err
+			for _, chunk := range chunks {
+				if !yield(pgvector.Chunk[string]{Doc: doc.DocKey, ChunkIndex: chunk.ChunkIndex, Vector: kitvec.Vector(chunk.Embedding)}, nil) {
+					return
 				}
 			}
 		}
-	}
-	if err := flush(); err != nil {
-		return 0, err
-	}
-	return total, nil
+	})
 }
 
 // evictVectorSessions removes each session's chunks and push state for the
@@ -1460,28 +1425,6 @@ func deleteOrphanVectorDocs(
 		return 0, fmt.Errorf("counting pruned docs for session %s: %w", sessionID, err)
 	}
 	return int(affected), nil
-}
-
-// halfvecLiteral renders v in pgvector's text input format ("[1,2,3]"), bound
-// as a parameter and cast with ::halfvec. It errors on any non-finite element
-// (NaN, +Inf, -Inf): pgvector rejects those on input, so a single pathological
-// vector would otherwise abort the whole multi-row INSERT with an opaque driver
-// error. Catching it here lets the caller attribute the failure to a doc/chunk.
-func halfvecLiteral(v []float32) (string, error) {
-	var b strings.Builder
-	b.WriteByte('[')
-	for i, f := range v {
-		if i > 0 {
-			b.WriteByte(',')
-		}
-		f64 := float64(f)
-		if math.IsNaN(f64) || math.IsInf(f64, 0) {
-			return "", fmt.Errorf("non-finite embedding value at index %d", i)
-		}
-		b.WriteString(strconv.FormatFloat(f64, 'g', -1, 32))
-	}
-	b.WriteByte(']')
-	return b.String(), nil
 }
 
 // clearUsageOnlyVectorSessions discovers indexed sessions in PostgreSQL rather
