@@ -1489,7 +1489,7 @@ type fakeContentSearchService struct {
 
 func (f *fakeContentSearchService) Get(_ context.Context, id string) (*service.SessionDetail, error) {
 	if id == "child" || id == "older" {
-		return &service.SessionDetail{Session: db.Session{ID: id}}, nil
+		return &service.SessionDetail{ID: id}, nil
 	}
 	return nil, fmt.Errorf("unexpected session lookup: %s", id)
 }
@@ -2508,6 +2508,7 @@ func TestSessionToolsResolvePlainIDs(t *testing.T) {
 		call func(*testing.T, string) error
 	}{
 		{"overview", func(t *testing.T, id string) error {
+			t.Helper()
 			_, out, err := ts.sessionOverview(t.Context(), nil, sessionOverviewIn{SessionID: id})
 			if err == nil {
 				assert.Equal(t, "codex:plain", out.Session.SessionID)
@@ -2516,6 +2517,7 @@ func TestSessionToolsResolvePlainIDs(t *testing.T) {
 			return err
 		}},
 		{"messages", func(t *testing.T, id string) error {
+			t.Helper()
 			_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: id})
 			if err == nil {
 				require.NotEmpty(t, out.Messages)
@@ -2524,6 +2526,7 @@ func TestSessionToolsResolvePlainIDs(t *testing.T) {
 			return err
 		}},
 		{"tool calls", func(t *testing.T, id string) error {
+			t.Helper()
 			_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: id})
 			if err == nil {
 				require.Len(t, out.ToolCalls, 1)
@@ -2532,6 +2535,7 @@ func TestSessionToolsResolvePlainIDs(t *testing.T) {
 			return err
 		}},
 		{"children", func(t *testing.T, id string) error {
+			t.Helper()
 			_, out, err := ts.childSessions(t.Context(), nil, childSessionsIn{SessionID: id})
 			if err == nil {
 				require.Len(t, out.Sessions, 1)
@@ -2540,6 +2544,7 @@ func TestSessionToolsResolvePlainIDs(t *testing.T) {
 			return err
 		}},
 		{"file references", func(t *testing.T, id string) error {
+			t.Helper()
 			_, out, err := ts.fileReferences(t.Context(), nil, fileReferencesIn{SessionID: id})
 			if err == nil {
 				assert.Equal(t, "enabled", out.Integration)
@@ -2548,6 +2553,7 @@ func TestSessionToolsResolvePlainIDs(t *testing.T) {
 			return err
 		}},
 		{"search content", func(t *testing.T, id string) error {
+			t.Helper()
 			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{SessionID: id, Pattern: "needle", IncludeActive: true, IncludeOneShot: true})
 			if err == nil {
 				require.Len(t, out.Matches, 1)
