@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -146,7 +147,7 @@ func TestCodexForkMatchedContextSurvivesResolvedRefreshes(t *testing.T) {
 
 func TestCodexForkRefreshExcludesParentCommandLinks(t *testing.T) {
 	for _, stage := range []int64{1, 1 << 30} {
-		t.Run(fmt.Sprint(stage), func(t *testing.T) {
+		t.Run(strconv.FormatInt(stage, 10), func(t *testing.T) {
 			e, d, cp, pp, meta := forkReviewEngine(t, stage, parser.AgentCodex)
 			replay := testjsonl.JoinJSONL(
 				testjsonl.CodexTurnContextWithIDJSON("gpt-5", "parent-turn", forkReviewTime),

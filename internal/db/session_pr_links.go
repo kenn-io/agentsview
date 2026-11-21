@@ -344,7 +344,7 @@ func callPRLinks(ctx context.Context, category, input, cwd, remote string) ([]PR
 			Content jsontext.Value `json:"content"`
 		}
 		if json.Unmarshal([]byte(input), &payload) != nil {
-			return nil, false, nil
+			return nil, false, nil //nolint:nilerr // Skip malformed optional input without failing session processing.
 		}
 		var content string
 		_ = json.Unmarshal(payload.Content, &content)
