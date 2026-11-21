@@ -95,7 +95,7 @@ client will see these tools:
 | `list_recall`                 | List Recall entries, optionally changed or created since a time, when the backend supports Recall queries |
 | `query_recall`                | Search extracted Recall entries when the backend supports Recall queries                                  |
 | `get_session_file_references` | Find retained image bytes in Docbank, including prior versions and trash                                  |
-| `get_tool_calls`              | List the tool calls one session made, with inputs and result sizes                                        |
+| `get_tool_calls`              | List tool calls, inputs, result sizes, and optional result text                                            |
 | `get_recent_edits`            | Find which sessions edited a file, newest edit first                                                      |
 | `get_child_sessions`          | List the sub-agent and fork sessions started from one session                                             |
 | `compare_usage`               | Compare token usage and cost between two models or two projects                                           |
@@ -127,7 +127,7 @@ include each session's labels, pull request links, and parent session. See
 [pull request links](/docs/session-api/#pull-request-links).
 
 With Docbank and every optional tool listed, the tool list the server sends is
-about 87 KB. `TestNewServer_CatalogFitsBudget` fails when it grows past 96 KB.
+about 96 KB. `TestNewServer_CatalogFitsBudget` fails when it grows past 97 KB.
 
 ### Focused memory profile
 
@@ -156,7 +156,7 @@ an `unsupported` reason. The tools use the same schemas and backend selection as
 the full profile, over either stdio or StreamableHTTP. Omitting `--profile` or
 choosing `--profile full` preserves the complete tool list above.
 
-This profile's tool list is about 21 KB, and the same test holds it under 24 KB.
+This profile's tool list is about 23 KB, and the same test holds it under 24 KB.
 
 ### Choose an installation route
 
@@ -377,6 +377,25 @@ short page can have a `next_from` and should be continued.
 category to narrow the list. Each input has secret-shaped values masked and is
 cut to `max_input_chars` (default 500, maximum 10000). Pass a call's `ordinal`
 to `get_messages` to read the surrounding conversation.
+
+Set `include_results` to return saved result text with secret-shaped values
+masked. Each call carries two kinds of result text:
+
+- `result` is the call's current summary, and `result_length` is its stored size
+  in bytes.
+- `result_events` lists each saved event in order, with its `event_index`,
+  `agent_id`, `subagent_session_id`, `status`, `content`, and `content_length`.
+  Events are never joined into `result`. A call omits `result_events` when its
+  only event equals `result` and has no agent, subagent, or status.
+
+With `include_results`, a page defaults to one call instead of 50; follow
+`next_cursor` for the next call, or raise `limit` (maximum 200). `max_result_chars`
+(default 1000, maximum 10000) caps `result` and each event's `content`
+separately. A truncated summary or event has its own `result_cursor`; pass it
+back to `get_tool_calls` with the same session ID to read the next chunk of that
+one summary or event. New messages in the session do not invalidate a cursor,
+but a changed result does: the call fails with `source_changed`, and you restart
+from `get_tool_calls` with `include_results`.
 
 `get_recent_edits` matches `path` as a case-insensitive substring of edited file
 paths. Files come back newest edit first, 10 per page (maximum 50), each with up
