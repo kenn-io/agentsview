@@ -416,22 +416,22 @@ func TestGetToolCalls_BudgetLongInputWithShortEvents(t *testing.T) {
 
 func TestGetToolCalls_BudgetLongResultWithShortEvents(t *testing.T) {
 	ts, d := newTestToolset(t)
-	dbtest.SeedSession(t, d, "long-result-events", "proj")
-	events := make([]db.ToolResultEvent, 81)
+	dbtest.SeedSession(t, d, "scan", "proj")
+	events := make([]db.ToolResultEvent, 85)
 	for i := range events {
-		events[i] = db.ToolResultEvent{EventIndex: i, Source: "tool_result", Content: strings.Repeat("x", 53)}
+		events[i] = db.ToolResultEvent{EventIndex: i, Source: "tool_result", Content: strings.Repeat("x", 64)}
 	}
-	dbtest.SeedMessages(t, d, toolCallMsg("long-result-events", 0, db.ToolCall{
+	dbtest.SeedMessages(t, d, toolCallMsg("scan", 0, db.ToolCall{
 		ToolUseID: "call", ToolName: "wait_agent", InputJSON: strings.Repeat("x", 3000),
 		ResultContent: strings.Repeat("y", 3000), ResultEvents: events,
 	}))
-	_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "long-result-events", IncludeResults: true})
+	_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "scan", IncludeResults: true})
 	require.NoError(t, err)
 	assert.True(t, fitsResponse(out))
 	require.Len(t, out.ToolCalls, 1)
-	require.Len(t, out.ToolCalls[0].ResultEvents, 81)
+	require.Len(t, out.ToolCalls[0].ResultEvents, 85)
 	for _, event := range out.ToolCalls[0].ResultEvents {
-		assert.Equal(t, strings.Repeat("x", 53), event.Content)
+		assert.Equal(t, strings.Repeat("x", 64), event.Content)
 	}
 	assert.NotEmpty(t, out.ToolCalls[0].Result)
 	assert.NotEmpty(t, out.ToolCalls[0].ResultCursor)
