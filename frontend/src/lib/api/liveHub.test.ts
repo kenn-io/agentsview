@@ -307,10 +307,6 @@ describe("shared live stream", () => {
       hub.update(old, oldRequest);
       hub.update(current, newRequest);
       expect(sources[0]!.closed).toBe(true);
-      await sources[1]!.options.fetch(sources[1]!.url, {});
-      expect((fetch.mock.calls[0]![1].headers as Headers).get("Authorization")).toBe(
-        "Bearer new-token",
-      );
       hub.leave(old);
     } else {
       hub.update(current, newRequest);
@@ -318,6 +314,11 @@ describe("shared live stream", () => {
     }
     vi.advanceTimersByTime(250);
     expect(sources).toHaveLength(order === "old first" ? 2 : 1);
+    const source = sources.at(-1)!;
+    await source.options.fetch(source.url, {});
+    expect((fetch.mock.calls[0]![1].headers as Headers).get("Authorization")).toBe(
+      "Bearer new-token",
+    );
     hub.close();
   });
 
