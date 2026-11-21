@@ -55,6 +55,7 @@ type toolCallOut struct {
 
 type toolCallsOut struct {
 	ToolCalls  []toolCallOut `json:"tool_calls"`
+	Omitted    int           `json:"omitted,omitempty" jsonschema:"Calls held back."`
 	Total      int           `json:"total" jsonschema:"Calls matching the category filter across the whole session."`
 	NextCursor *int          `json:"next_cursor,omitempty"`
 }
@@ -110,6 +111,23 @@ func (t *toolset) toolCalls(
 	}
 	if end < len(matching) {
 		out.NextCursor = &end
+	}
+	if !fitsResponse(out) {
+		items := out.ToolCalls
+		n := fitPrefix(len(items), func(k int) bool {
+			out.ToolCalls = items[:k]
+			out.Omitted = len(items) - k
+			next := start + max(k, 1)
+			out.NextCursor = &next
+			return fitsResponse(out)
+		})
+		if n == 0 {
+			call := &items[0]
+			call.InputTruncated = true
+			out.Omitted = len(items) - 1
+			call.Input = fitText(call.Input, responseBudgetBytes-responseSize(out), func(text string) any { c := *call; c.Input = text; return c })
+			out.ToolCalls = items[:1]
+		}
 	}
 	return nil, out, nil
 }

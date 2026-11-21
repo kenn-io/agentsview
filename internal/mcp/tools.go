@@ -120,13 +120,13 @@ func (t *toolset) resolveSession(
 type searchSessionsIn struct {
 	DateFrom      string `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
 	DateTo        string `json:"date_to,omitempty" jsonschema:"Only sessions on or before this date (YYYY-MM-DD)."`
-	Query         string `json:"query,omitempty" jsonschema:"Search terms across all agent sessions. Required unless session_id is set. Every term must appear (AND), not an exact phrase; wrap the whole query in double quotes for an exact phrase, e.g. \"build failed\". Punctuation in a term (hyphens, colons) is handled safely."`
+	Query         string `json:"query,omitempty" jsonschema:"Search sessions. Required unless session_id is set. All terms must appear; quote the whole query for an exact phrase, e.g. \"build failed\"."`
 	SessionID     string `json:"session_id,omitempty" jsonschema:"Look up one session by its raw UUID or full stored session ID. Returns one metadata row, includes active sessions, and takes precedence over the other search arguments. Missing IDs and ambiguous raw UUIDs return errors."`
 	Project       string `json:"project,omitempty" jsonschema:"Restrict to one project (repo/directory name)."`
 	Sort          string `json:"sort,omitempty" jsonschema:"relevance (default) or recency."`
 	Limit         int    `json:"limit,omitempty" jsonschema:"Max results, default 10, max 30."`
 	Cursor        int    `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor."`
-	IncludeActive bool   `json:"include_active,omitempty" jsonschema:"Include sessions active in the last 10 minutes. Default false: the conversation you are in right now is also recorded, so without this exclusion you would find yourself."`
+	IncludeActive bool   `json:"include_active,omitempty" jsonschema:"Include sessions active in the last 10 minutes, including this conversation. Default false."`
 }
 
 type sessionHit struct {
@@ -493,7 +493,7 @@ type getMessagesIn struct {
 	SessionID string `json:"session_id" jsonschema:"The session to read."`
 	From      *int   `json:"from,omitempty" jsonschema:"Ordinal to start from (e.g. match_ordinal from search_sessions). Ordinal 0 is a valid anchor (the first message). Mutually exclusive with around."`
 	Direction string `json:"direction,omitempty" jsonschema:"asc (default, oldest first) or desc (newest first). Mutually exclusive with around."`
-	Limit     int    `json:"limit,omitempty" jsonschema:"Max messages scanned, default 20, max 100. System/tool messages are filtered after this limit, so a page can return fewer; use next_from to continue. Not used with around; before/after control the window size on that path."`
+	Limit     int    `json:"limit,omitempty" jsonschema:"Max messages scanned, default 20, max 100. Filtering or the byte budget can return fewer. Around uses before/after instead."`
 	// Around switches to a symmetric window centered on an ordinal instead
 	// of linear pagination; it is mutually exclusive with From/Direction.
 	Around             *int     `json:"around,omitempty" jsonschema:"Center a symmetric window on this ordinal (e.g. match_ordinal from search_content or search_sessions), instead of linear pagination. Mutually exclusive with from and direction."`
@@ -518,12 +518,14 @@ type messageOut struct {
 }
 
 type getMessagesOut struct {
-	Messages []messageOut `json:"messages"`
-	Filtered int          `json:"filtered,omitempty" jsonschema:"How many of this page's scanned messages were excluded by the role/system filter (omitted when zero). Summed across a full pagination sweep, filtered plus the returned messages adds up to the session's message_count."`
+	Messages     []messageOut `json:"messages"`
+	Omitted      int          `json:"omitted,omitempty" jsonschema:"Messages held back."`
+	MessageCount int          `json:"message_count,omitempty" jsonschema:"Session message count when cut."`
+	Filtered     int          `json:"filtered,omitempty" jsonschema:"Scanned messages excluded by role/system filter. Across all pages, filtered plus returned messages equals message_count."`
 	// NextFrom is set off the last scanned ordinal (not the last visible
 	// one), so paging stays reliable even though filtering can make a page
 	// return fewer than the limit.
-	NextFrom           *int   `json:"next_from,omitempty" jsonschema:"Anchor for the next page's from parameter when more messages may remain; absent means the end. Filtering can make a page return fewer than limit messages, so keep paging until next_from is absent, not until a page comes back short."`
+	NextFrom           *int   `json:"next_from,omitempty" jsonschema:"Next page's from anchor. Page until absent; filtering or the byte budget can make pages short."`
 	TranscriptRevision string `json:"transcript_revision"`
 }
 
@@ -638,7 +640,9 @@ func (t *toolset) getMessages(
 			out.NextFrom = &next
 		}
 	}
-	attachBodyCursors(&out, res.EvidenceSource, in.SessionID, in.Roles)
+	if err := t.fitMessagePage(ctx, &out, res.Messages, res.EvidenceSource, in); err != nil {
+		return nil, getMessagesOut{}, err
+	}
 	return nil, out, nil
 }
 
@@ -692,8 +696,76 @@ func (t *toolset) getMessagesAround(
 		next := out.Messages[len(out.Messages)-1].Ordinal + 1
 		out.NextFrom = &next
 	}
-	attachBodyCursors(&out, res.EvidenceSource, in.SessionID, in.Roles)
+	if err := t.fitMessagePage(ctx, &out, res.Messages, res.EvidenceSource, in); err != nil {
+		return nil, getMessagesOut{}, err
+	}
 	return nil, out, nil
+}
+
+// fitMessagePage preserves the scan position when the budget cuts a page.
+func (t *toolset) fitMessagePage(ctx context.Context, out *getMessagesOut, scanned []db.Message, source string, in getMessagesIn) error {
+	items, baseNext, filtered := out.Messages, out.NextFrom, out.Filtered
+	attachBodyCursors(out, source, in.SessionID, in.Roles)
+	if fitsResponse(out) {
+		return nil
+	}
+	detail, err := t.svc.Get(ctx, in.SessionID)
+	if err != nil {
+		return err
+	}
+	if detail == nil {
+		return fmt.Errorf("session not found: %s", in.SessionID)
+	}
+	out.MessageCount = detail.MessageCount
+	cut := func(k int) {
+		out.Messages, out.Omitted = items[:k], len(items)-k
+		out.NextFrom, out.Filtered = baseNext, filtered
+		if k > 0 && k < len(items) {
+			last := items[k-1].Ordinal
+			next := last + 1
+			if in.Direction == "desc" {
+				next = last - 1
+			}
+			out.NextFrom, out.Filtered = &next, 0
+			for _, m := range scanned {
+				if m.Ordinal == last {
+					break
+				}
+				if isSystemMessage(m) || !roleAllowed(m.Role, in.Roles) {
+					out.Filtered++
+				}
+			}
+		}
+	}
+	n := fitPrefix(len(items), func(k int) bool {
+		cut(k)
+		attachBodyCursors(out, source, in.SessionID, in.Roles)
+		return fitsResponse(out)
+	})
+	if n == 0 {
+		cut(1)
+		out.Messages = items[:0]
+		fitOneMessage(out, &items[0], messageBodyCursor{EvidenceSource: source, SessionID: in.SessionID, Revision: out.TranscriptRevision, Ordinal: items[0].Ordinal, NextFrom: out.NextFrom, Roles: in.Roles})
+		out.Messages = items[:1]
+		attachBodyCursors(out, source, in.SessionID, in.Roles)
+	}
+	return nil
+}
+
+func fitOneMessage(out *getMessagesOut, item *messageOut, cursor messageBodyCursor) {
+	item.Truncated = true
+	if item.FullLength == 0 {
+		item.FullLength = utf8.RuneCountInString(item.Content)
+	}
+	start := cursor.Offset
+	cursor.Offset = item.FullLength
+	item.BodyCursor = encodeMessageBodyCursor(cursor)
+	item.Content = fitText(item.Content, responseBudgetBytes-responseSize(out), func(text string) any { m := *item; m.Content = text; return m })
+	cursor.Offset = start + utf8.RuneCountInString(item.Content)
+	item.BodyCursor = encodeMessageBodyCursor(cursor)
+	if cursor.EvidenceSource == "" || cursor.Revision == "" {
+		item.BodyCursor = ""
+	}
 }
 
 func attachBodyCursors(
@@ -782,6 +854,14 @@ func (t *toolset) getMessageBodyContinuation(
 	} else {
 		out.NextFrom = cursor.NextFrom
 	}
+	if !fitsResponse(out) {
+		out.NextFrom = nil
+		cursor.Offset = end - utf8.RuneCountInString(mo.Content)
+		item := out.Messages[0]
+		out.Messages = []messageOut{}
+		fitOneMessage(&out, &item, cursor)
+		out.Messages = []messageOut{item}
+	}
 	return nil, out, nil
 }
 
@@ -840,6 +920,7 @@ type contentMatch struct {
 	Ordinal         int      `json:"ordinal"`
 	Timestamp       string   `json:"timestamp"`
 	Snippet         string   `json:"snippet"`
+	Truncated       bool     `json:"truncated,omitempty" jsonschema:"Read the full message and context with get_messages."`
 	MatchedWords    int      `json:"matched_words" jsonschema:"Number of retained query words the match holds in ranked word search; unquoted stop words are dropped. Zero for other searches."`
 	Score           *float64 `json:"score,omitempty" jsonschema:"Relevance score for semantic/hybrid modes; omitted for substring/regex/fts."`
 	OrdinalRange    [2]int   `json:"ordinal_range" jsonschema:"[start, end] ordinals of the conversation unit containing this match; equal to the match ordinal for single-message units."`
@@ -860,6 +941,9 @@ type searchContentOut struct {
 	Note           string                      `json:"note,omitempty"`
 	Hints          []service.ContentSearchHint `json:"hints,omitempty"`
 	Matches        []contentMatch              `json:"matches"`
+	Omitted        int                         `json:"omitted,omitempty" jsonschema:"Matches held back."`
+	Total          int                         `json:"total,omitempty" jsonschema:"Match count."`
+	TotalCapped    bool                        `json:"total_capped,omitempty" jsonschema:"True when total is a lower bound."`
 	NextCursor     *int                        `json:"next_cursor,omitempty"`
 	ActivityCutoff string                      `json:"activity_cutoff,omitempty" jsonschema:"Effective RFC3339 activity cutoff; pass it unchanged with next_cursor as cursor to continue."`
 	ExcludedActive int                         `json:"excluded_active,omitempty"`
@@ -911,6 +995,29 @@ func validateSearchDates(from, to string) error {
 		return errors.New("date_from must not be after date_to")
 	}
 	return nil
+}
+
+func (t *toolset) countContentMatches(ctx context.Context, req service.ContentSearchRequest, legacy bool, keep func(db.ContentMatch) bool) (int, bool, error) {
+	req.Context, req.Limit = 0, maxContentSearchLimit
+	cursor, total, scanned := 0, 0, 0
+	for {
+		req.Cursor = cursor
+		res, err := t.svc.SearchContent(ctx, req)
+		if err != nil {
+			return 0, false, err
+		}
+		for _, m := range res.Matches {
+			if !legacy || keep(m) {
+				total++
+			}
+		}
+		scanned += len(res.Matches)
+		more := res.NextCursor > 0 && len(res.Matches) > 0
+		if !more || scanned >= contentTotalCap {
+			return min(total, contentTotalCap), more || total > contentTotalCap, nil
+		}
+		cursor = res.NextCursor
+	}
 }
 
 func (t *toolset) searchContent(
@@ -1024,11 +1131,13 @@ func (t *toolset) searchContent(
 			return !isActiveSince(ts, cutoffTime.Add(activeExclusionWindow))
 		}
 	}
-	for _, m := range res.Matches {
+	rawIndexes := make([]int, 0, len(res.Matches))
+	for i, m := range res.Matches {
 		if legacy && !keepMatch(m) {
 			out.ExcludedActive++
 			continue
 		}
+		rawIndexes = append(rawIndexes, i)
 		out.Matches = append(out.Matches, contentMatch{
 			WebURL: m.WebURL, SessionID: m.SessionID, Project: m.Project, Agent: m.Agent,
 			Location: m.Location, Role: m.Role, Ordinal: m.Ordinal,
@@ -1048,7 +1157,43 @@ func (t *toolset) searchContent(
 		out.NextCursor = &nc
 	}
 	out.Hints = service.SearchContentHints(ctx, t.svc, req, res, false, keepMatch)
+	// Hints come only with an empty page.
+	if len(in.Concepts) == 0 && len(out.Matches) > 0 && !fitsResponse(out) {
+		items := out.Matches
+		ranked := mode == "semantic" || mode == "hybrid"
+		if ranked {
+			out.NextCursor, out.Note = nil, strings.TrimSpace(out.Note+" Reduce limit to fit ranked results in one response.")
+		} else {
+			out.Total, out.TotalCapped, err = t.countContentMatches(ctx, req, legacy, keepMatch)
+			if err != nil {
+				return nil, searchContentOut{}, err
+			}
+		}
+		n := fitPrefix(len(items), func(k int) bool {
+			out.Matches, out.Omitted = items[:k], len(items)-k
+			if !ranked {
+				next := in.Cursor + rawIndexes[max(k, 1)-1] + 1
+				out.NextCursor = &next
+			}
+			return fitsResponse(out)
+		})
+		if n == 0 && !fitFirstMatch(&out, items) {
+			return nil, searchContentOut{}, errors.New("search metadata exceeds response budget")
+		}
+	}
 	return nil, out, nil
+}
+
+// fitFirstMatch keeps only the first match, truncating its snippet and dropping
+// its context, and reports whether the page then fits the budget.
+func fitFirstMatch(out *searchContentOut, items []contentMatch) bool {
+	m := &items[0]
+	m.Truncated = true
+	m.ContextBefore, m.ContextAfter = nil, nil
+	out.Omitted = len(items) - 1
+	m.Snippet = fitText(m.Snippet, responseBudgetBytes-responseSize(out), func(text string) any { match := *m; match.Snippet = text; return match })
+	out.Matches = items[:1]
+	return fitsResponse(out)
 }
 
 func (t *toolset) searchContentMatches(ctx context.Context, req service.ContentSearchRequest, listing bool) (*service.ContentSearchResult, error) {

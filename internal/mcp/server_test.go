@@ -471,3 +471,23 @@ func TestCompactionSummaryTool(t *testing.T) {
 	assert.Equal(t, "summary", out.Summaries[0].Content)
 	assert.Equal(t, "codex:session", out.Summaries[0].SessionID)
 }
+
+func TestServer_BudgetTextResults(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	messages := make([]db.Message, 50)
+	for i := range messages {
+		messages[i] = dbtest.AsstMsg("budget", i, "needle "+strings.Repeat("<&", 950))
+	}
+	dbtest.SeedSessionWithMessages(t, d, "budget", "project", messages, dbtest.WithMessageCounts(50, 50))
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil)}))
+	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
+	result, err := ct.CallTool(t.Context(), callParams(ToolGetMessages, map[string]any{"session_id": "budget", "limit": 50}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+	require.Len(t, result.Content, 1)
+	content, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	assert.LessOrEqual(t, len(content.Text), responseBudgetBytes)
+	assert.Contains(t, content.Text, `\u003c`)
+	assert.Contains(t, content.Text, `\u0026`)
+}
