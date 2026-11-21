@@ -51,11 +51,29 @@ func TestToolCallPRLinksForgetCheckoutAfterDirectoryChange(t *testing.T) {
 	assert.Equal(t, "https://github.com/example/other/pull/43", links[1].URL)
 }
 
+func TestCodexSeparateShellWorkingDirectories(t *testing.T) {
+	messages := []db.Message{{ToolCalls: []db.ToolCall{
+		{ToolName: "exec_command", Category: "Bash", InputJSON: `{"cmd":"cd /other"}`},
+		{ToolName: "exec_command", Category: "Bash", InputJSON: `{"cmd":"gh pr view 42"}`},
+	}}}
+	links := db.ToolCallPRLinks(messages, "/repo", "https://github.com/example/repo.git")
+	require.Len(t, links, 1)
+	assert.Equal(t, "https://github.com/example/repo/pull/42", links[0].URL)
+}
+
+func TestCodeModeExplicitSameDirectory(t *testing.T) {
+	messages := []db.Message{{ToolCalls: []db.ToolCall{{ToolName: "exec", Category: "Bash", InputJSON: `text(await tools.exec_command({cmd:"gh pr view 42",workdir:"/repo"})); text(await tools.exec_command({cmd:"gh pr view 43",workdir:"/other"})); text(await tools.exec_command({cmd:"gh pr view 44",workdir:dir})); text(await tools.exec_command({cmd:"gh pr view 45",workdir:"/repo"+suffix}))`}}}}
+	links := db.ToolCallPRLinks(messages, "/repo", "https://github.com/example/repo.git")
+	require.Len(t, links, 1)
+	assert.Equal(t, "https://github.com/example/repo/pull/42", links[0].URL)
+}
+
 func TestCodeModePRLinksKeepExplicitIdentities(t *testing.T) {
-	// A code-mode workdir suppresses bare-number inference even when it equals the session directory.
 	messages := []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", InputJSON: `text(await tools.exec_command({cmd:"gh pr view 41",workdir:"/repo"})); text(await tools.exec_command({cmd:"gh pr view 42"})); text(await tools.exec_command({cmd:"gh pr view 43 -R example/other",workdir:"/other"})); text(await tools.exec_command({cmd:"cd /other"})); text(await tools.exec_command({cmd:"gh pr view 44"}))`}}}}
 	links := db.ToolCallPRLinks(messages, "/repo", "https://github.com/example/repo.git")
-	require.Len(t, links, 2)
-	assert.Equal(t, "https://github.com/example/repo/pull/42", links[0].URL)
-	assert.Equal(t, "https://github.com/example/other/pull/43", links[1].URL)
+	require.Len(t, links, 4)
+	assert.Equal(t, "https://github.com/example/repo/pull/41", links[0].URL)
+	assert.Equal(t, "https://github.com/example/repo/pull/42", links[1].URL)
+	assert.Equal(t, "https://github.com/example/other/pull/43", links[2].URL)
+	assert.Equal(t, "https://github.com/example/repo/pull/44", links[3].URL)
 }

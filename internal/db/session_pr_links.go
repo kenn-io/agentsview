@@ -356,7 +356,6 @@ func callPRLinks(category, input, cwd, remote string) ([]PRLink, bool) {
 	}
 	if !jsontext.Value(input).IsValid() && codeModeExecRE.MatchString(input) {
 		var links []PRLink
-		changedDir := false
 		for _, loc := range codeModeExecRE.FindAllStringIndex(input, -1) {
 			end, depth, quote, escaped := loc[1], 1, byte(0), false
 			for end < len(input) && depth > 0 {
@@ -392,16 +391,20 @@ func callPRLinks(category, input, cwd, remote string) ([]PRLink, bool) {
 			callRemote := remote
 			withoutCommand := commitCommandRE.ReplaceAllString(call, "")
 			if codeModeDirRE.MatchString(withoutCommand) {
-				callRemote = ""
+				match := commitWorkdirRE.FindStringIndex(withoutCommand)
+				literal := false
+				if match != nil {
+					rest := strings.TrimSpace(withoutCommand[match[1]:])
+					literal = strings.HasPrefix(rest, ",") || strings.HasPrefix(rest, "}")
+				}
+				if !literal || cwd == "" || filepath.Clean(commitRepository(call, cwd)) != filepath.Clean(cwd) {
+					callRemote = ""
+				}
 			}
-			found, changed := parser.CommandPRLinks(command, callRemote)
+			found, _ := parser.CommandPRLinks(command, callRemote)
 			links = parser.CombinePRLinks(links, found)
-			if changed {
-				remote = ""
-				changedDir = true
-			}
 		}
-		return links, changedDir
+		return links, false
 	}
 	var payload struct {
 		Workdir string `json:"workdir"`
@@ -430,7 +433,7 @@ func ToolCallPRLinks(messages []Message, cwd, remote string) []PRLink {
 		for _, call := range message.ToolCalls {
 			found, changed := callPRLinks(call.Category, call.InputJSON, cwd, remote)
 			links = parser.CombinePRLinks(links, found)
-			if changed {
+			if changed && call.ToolName != "exec_command" && call.ToolName != "shell_command" && call.ToolName != "shell" {
 				remote = ""
 				cwd = ""
 			}
@@ -444,18 +447,18 @@ func storedToolCallPRLinksTx(tx transactionQueries, id, remote string) ([]PRLink
 	if err := tx.QueryRow(`SELECT COALESCE(cwd,'') FROM sessions WHERE id=?`, id).Scan(&cwd); err != nil {
 		return nil, err
 	}
-	rows, err := tx.Query(`SELECT t.category, COALESCE(t.input_json,'') FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND t.category IN ('Bash','Task') ORDER BY m.ordinal, t.id`, id)
+	rows, err := tx.Query(`SELECT t.tool_name, t.category, COALESCE(t.input_json,'') FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND t.category IN ('Bash','Task') ORDER BY m.ordinal, t.id`, id)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var messages []Message
 	for rows.Next() {
-		var category, input string
-		if err := rows.Scan(&category, &input); err != nil {
+		var name, category, input string
+		if err := rows.Scan(&name, &category, &input); err != nil {
 			return nil, err
 		}
-		messages = append(messages, Message{ToolCalls: []ToolCall{{Category: category, InputJSON: input}}})
+		messages = append(messages, Message{ToolCalls: []ToolCall{{ToolName: name, Category: category, InputJSON: input}}})
 	}
 	return ToolCallPRLinks(messages, cwd, remote), rows.Err()
 }
