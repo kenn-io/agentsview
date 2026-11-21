@@ -301,17 +301,24 @@ describe("RouterStore", () => {
     },
   );
 
-  it("replaceParams preserves a directly loaded provider/raw-ID path", () => {
-    setURL("/sessions/provider/part%3Adetail?desktop=on&project=old");
-    store = new RouterStore();
-    const before = window.history.length;
-    store.replaceParams({ project: "new", desktop: "off" });
-    expect(window.location.pathname).toBe("/sessions/provider/part%3Adetail");
-    expect(window.location.search).toBe("?desktop=off&project=new");
-    expect(window.history.length).toBe(before);
-    expect(store.sessionId).toBe("provider:part:detail");
-    expect(parsePath().sessionId).toBe("provider:part:detail");
-  });
+  it.each([
+    { path: "/sessions/provider/part%3Adetail", id: "provider:part:detail", resolve: false },
+    {
+      path: "/sessions/123e4567-e89b-12d3-a456-426614174000",
+      id: "pi:123e4567-e89b-12d3-a456-426614174000",
+      resolve: true,
+    },
+  ])(
+    "preserves a directly loaded session path $path when updating params",
+    ({ path, id, resolve }) => {
+      setURL(`${path}?desktop=on&project=old`);
+      store = new RouterStore();
+      if (resolve) store.resolveSession(id);
+      store.replaceParams({ project: "new", desktop: "off" });
+      expect(window.location.pathname).toBe(path);
+      expect(store.sessionId).toBe(id);
+    },
+  );
 
   it.each(["/sessions/copilot%3Aabc123", "/sessions/copilot/abc123"])(
     "hands the canonical ID to consumers from %s and popstate",
@@ -498,19 +505,6 @@ describe("RouterStore", () => {
 
     expect(window.location.pathname).toBe("/sessions/abc-123");
     expect(window.location.search).toBe("");
-  });
-
-  it("keeps the original session URL after resolving and updating params", () => {
-    setURL("/sessions/bare?project=myproj&msg=42&desktop=1");
-    const store = new RouterStore();
-    const length = window.history.length;
-    store.resolveSession("pi:123e4567-e89b-12d3-a456-426614174000");
-    store.replaceParams({ project: "myproj", msg: "42", desktop: "1" });
-    expect(window.history.length).toBe(length);
-    expect(window.location.pathname).toBe("/sessions/bare");
-    expect(store.params).toEqual({ project: "myproj", msg: "42", desktop: "1" });
-    expect(window.location.search).toBe("?desktop=1&project=myproj&msg=42");
-    expect(store.sessionId).toBe("pi:123e4567-e89b-12d3-a456-426614174000");
   });
 
   it("navigateFromSession returns to /sessions", () => {

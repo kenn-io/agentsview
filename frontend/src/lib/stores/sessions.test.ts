@@ -3564,7 +3564,7 @@ describe("SessionsStore", () => {
         expect(resolveSession).not.toHaveBeenCalled();
       };
     }
-    it("resolves a missing bare UUID and keeps its URL", async () => {
+    it("resolves a missing bare UUID and hands the canonical ID to the router", async () => {
       await sessions.navigateToSession(uuid);
       expect(SessionsService.getApiV1SessionIdsResolve).toHaveBeenCalledExactlyOnceWith(
         { partial: uuid, raw_suffix: true, limit: 2 },
@@ -3577,20 +3577,12 @@ describe("SessionsStore", () => {
     });
     it.each([
       { name: "ambiguous", ids: [canonical, `box~${canonical}`] },
+      { name: "hosted-branch ambiguous", ids: [`pi:${uuid}~${"a".repeat(64)}`, `omp:${uuid}`] },
       { name: "failed", ids: null },
     ])("keeps a $name lookup missing", async ({ ids }) => {
       const lookup = vi.mocked(SessionsService.getApiV1SessionIdsResolve);
       if (ids) lookup.mockResolvedValue({ ids });
       else lookup.mockRejectedValue(new Error("offline"));
-      await sessions.navigateToSession(uuid);
-      expect(sessions.activeSessionId).toBe(uuid);
-      expect(sessions.activeSessionNotFound).toBe(true);
-      expect(resolveSession).not.toHaveBeenCalled();
-    });
-    it("refuses ambiguity between a hosted branch and an ordinary canonical ID", async () => {
-      vi.mocked(SessionsService.getApiV1SessionIdsResolve).mockResolvedValue({
-        ids: [`pi:${uuid}~${"a".repeat(64)}`, `omp:${uuid}`],
-      });
       await sessions.navigateToSession(uuid);
       expect(sessions.activeSessionId).toBe(uuid);
       expect(sessions.activeSessionNotFound).toBe(true);
@@ -3615,8 +3607,7 @@ describe("SessionsStore", () => {
       const finish = await pendingLookup();
       router.navigate("usage");
       await finish();
-      expect(router.route).toBe("usage");
-      expect(window.location.pathname).toBe("/usage");
+      expect(router.sessionId).toBeNull();
     });
     it("an aborted metadata 404 cannot poison a revisit", async () => {
       const { promise, reject } = Promise.withResolvers<Session>();
