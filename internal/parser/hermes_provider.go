@@ -389,6 +389,11 @@ func (p *hermesProvider) parseStateMember(
 	if err != nil {
 		return ParseOutcome{}, err
 	}
+	hasArchived, err := hermesSessionHasArchivedMessages(ctx, conn, src.SessionID)
+	if err != nil {
+		return ParseOutcome{}, err
+	}
+	ss.hasArchivedMessages = hasArchived
 	result, ok := buildHermesStateResult(
 		ss, messages, filepath.Join(filepath.Dir(src.StateDB), "sessions"),
 		src.StateDB, project, machine,
@@ -2207,6 +2212,14 @@ func addHermesStateSessionFingerprint(
 	}
 	if err := json.MarshalWrite(h, ss.modelUsage); err != nil {
 		return err
+	}
+	for _, hm := range messages {
+		if _, err := fmt.Fprintf(
+			h, "display-meta\x00%t\x00%d\x00%q\x00",
+			hm.displayOrder.Valid, hm.displayOrder.Int64, hm.displayMetadata,
+		); err != nil {
+			return err
+		}
 	}
 	return encodeHermesStateSessionJSONL(h, ss, messages)
 }
