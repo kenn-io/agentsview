@@ -8,6 +8,20 @@ import (
 
 func TestGHPRCommandLinks(t *testing.T) {
 	tests := []struct{ command, remote, want string }{
+		{`GH_REPO=other/repo gh pr view 1; gh pr view 42`, "https://github.com/example/repo.git", "https://github.com/example/repo/pull/42"},
+		{`bash -c 'cd /other'; gh pr view 42`, "https://github.com/example/repo.git", "https://github.com/example/repo/pull/42"},
+		{`env GH_HOST=other.example gh pr view 1; gh pr view 42`, "https://github.com/example/repo.git", "https://github.com/example/repo/pull/42"},
+		{`declare -x GH_REPO=a/b; gh pr view 42`, "https://github.com/example/repo.git", ""},
+		{`declare -x FOO=1; gh pr view 42`, "https://github.com/example/repo.git", "https://github.com/example/repo/pull/42"},
+		{`typeset GH_HOST=other.example; gh pr view 42`, "https://github.com/example/repo.git", ""},
+		{`readonly GH_REPO=a/b; gh pr view 42`, "https://github.com/example/repo.git", ""},
+		{`local GH_HOST=other.example; gh pr view 42`, "https://github.com/example/repo.git", ""},
+		{`builtin cd /other; gh pr view 42`, "https://github.com/example/repo.git", ""},
+		{`command cd /other; gh pr view 42`, "https://github.com/example/repo.git", ""},
+		{`builtin pushd /other; gh pr view 42`, "https://github.com/example/repo.git", ""},
+		{`command popd; gh pr view 42`, "https://github.com/example/repo.git", ""},
+		{`builtin eval 'GH_REPO=a/b'; gh pr view 42`, "https://github.com/example/repo.git", ""},
+		{`command source config; gh pr view 42`, "https://github.com/example/repo.git", ""},
 		{`GH_HOST=github.com gh pr view 42 -R example/repo`, "", "https://github.com/example/repo/pull/42"},
 		{`env GH_HOST=github.com gh pr view 42 -R example/repo`, "", "https://github.com/example/repo/pull/42"},
 		{`GH_HOST=ghe.example.com gh pr view 42 -R example/repo`, "", ""},
@@ -80,6 +94,15 @@ func TestGHPRCommandLinks(t *testing.T) {
 				assert.Equal(t, tt.want, links[0].URL)
 			}
 		})
+	}
+}
+
+func TestChildShellKeepsItsOwnDirectory(t *testing.T) {
+	links, changed := CommandPRLinks(`bash -c 'gh pr view 41; cd /other; gh pr view 99'; gh pr view 42`, "https://github.com/example/repo.git")
+	assert.False(t, changed)
+	if assert.Len(t, links, 2) {
+		assert.Equal(t, "https://github.com/example/repo/pull/41", links[0].URL)
+		assert.Equal(t, "https://github.com/example/repo/pull/42", links[1].URL)
 	}
 }
 

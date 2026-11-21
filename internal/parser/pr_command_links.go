@@ -41,14 +41,21 @@ func shellCommands(command string) ([]shellCall, bool) {
 		syntax.Walk(file, func(node syntax.Node) bool {
 			switch n := node.(type) {
 			case *syntax.DeclClause:
-				if n.Variant.Value == "export" {
+				if n.Variant.Value == "export" || n.Variant.Value == "declare" || n.Variant.Value == "typeset" || n.Variant.Value == "readonly" || n.Variant.Value == "local" {
 					for _, arg := range n.Args {
+						if arg.Name == nil && arg.Value != nil {
+							value, literal := shellLiteral(arg.Value.Parts)
+							if literal && strings.HasPrefix(value, "-") {
+								continue
+							}
+						}
 						if arg.Name == nil || arg.Name.Value == "GH_REPO" || arg.Name.Value == "GH_HOST" {
 							contextUnknown = true
 						}
 					}
 				}
 			case *syntax.CallExpr:
+				callUnknown := contextUnknown
 				for _, assignment := range n.Assigns {
 					if assignment.Name != nil && (assignment.Name.Value == "GH_REPO" || assignment.Name.Value == "GH_HOST") {
 						if assignment.Name.Value == "GH_HOST" && len(n.Args) > 0 && assignment.Value != nil {
@@ -57,10 +64,11 @@ func shellCommands(command string) ([]shellCall, bool) {
 								continue
 							}
 						}
-						contextUnknown = true
+						callUnknown = true
 					}
 				}
 				if len(n.Args) == 0 {
+					contextUnknown = callUnknown
 					return true
 				}
 				var call shellCall
@@ -73,30 +81,32 @@ func shellCommands(command string) ([]shellCall, bool) {
 					contextUnknown = true
 					return true
 				}
-				switch path.Base(call.Words[0]) {
+				builtin := unwrapBuiltin(call)
+				switch path.Base(builtin.Words[0]) {
 				case "eval", "source", ".":
 					contextUnknown, changedDir = true, true
 				case "cd", "pushd", "popd":
 					changedDir = true
 				case "export", "unset":
-					for i, name := range call.Words[1:] {
+					for i, name := range builtin.Words[1:] {
 						name, _, _ = strings.Cut(name, "=")
-						if !call.Literal[i+1] || name == "GH_REPO" || name == "GH_HOST" {
+						if !builtin.Literal[i+1] || name == "GH_REPO" || name == "GH_HOST" {
 							contextUnknown = true
 						}
 					}
 				}
 				unwrapped := unwrapShellCall(call)
-				if unwrapped.Unknown {
-					contextUnknown = true
-				}
+				callUnknown = callUnknown || unwrapped.Unknown || contextUnknown
 				if len(unwrapped.Words) >= 3 && unwrapped.Literal[0] && unwrapped.Literal[1] && unwrapped.Literal[2] &&
 					(path.Base(unwrapped.Words[0]) == "sh" || path.Base(unwrapped.Words[0]) == "bash" || path.Base(unwrapped.Words[0]) == "zsh") &&
 					(unwrapped.Words[1] == "-c" || unwrapped.Words[1] == "-lc") {
+					parentUnknown, parentDir := contextUnknown, changedDir
+					contextUnknown = callUnknown
 					walk(unwrapped.Words[2])
+					contextUnknown, changedDir = parentUnknown, parentDir
 				} else {
 					call.ChangedDir = changedDir
-					call.Unknown = contextUnknown
+					call.Unknown = callUnknown
 					calls = append(calls, call)
 				}
 			}
@@ -105,6 +115,13 @@ func shellCommands(command string) ([]shellCall, bool) {
 	}
 	walk(command)
 	return calls, changedDir
+}
+
+func unwrapBuiltin(call shellCall) shellCall {
+	for len(call.Words) > 1 && call.Literal[0] && call.Literal[1] && !strings.HasPrefix(call.Words[1], "-") && (path.Base(call.Words[0]) == "builtin" || path.Base(call.Words[0]) == "command") {
+		call.Words, call.Literal = call.Words[1:], call.Literal[1:]
+	}
+	return call
 }
 
 func shellLiteral(parts []syntax.WordPart) (string, bool) {
@@ -151,6 +168,7 @@ func CommandPRLinks(command, remote string) ([]PRLink, bool) {
 
 func unwrapShellCall(call shellCall) shellCall {
 	for len(call.Words) > 0 && call.Literal[0] {
+		call = unwrapBuiltin(call)
 		switch path.Base(call.Words[0]) {
 		case "timeout":
 			if len(call.Words) < 3 || !call.Literal[1] || strings.HasPrefix(call.Words[1], "-") {
