@@ -280,17 +280,6 @@ func refreshSessionPromptPRLinksTx(tx transactionQueries, id string) error {
 
 func appendSessionPromptPRLinksTx(tx transactionQueries, id string, messages []Message) error {
 	derived := PromptPRLinks(messages)
-	for _, message := range messages {
-		if len(message.ToolCalls) == 0 {
-			continue
-		}
-		cwd, remote, err := toolCallRepositoryTx(tx, id)
-		if err != nil {
-			return err
-		}
-		derived = parser.CombinePRLinks(derived, ToolCallPRLinks(messages, cwd, remote))
-		break
-	}
 	if len(derived) == 0 {
 		return nil
 	}
@@ -336,12 +325,6 @@ func (db *DB) upgradePromptPRLinksTx(ctx context.Context, tx *sql.Tx) error {
 		}
 	}
 	return nil
-}
-
-// CallPRLinks derives links from a tool call and its recorded checkout.
-func CallPRLinks(category, input, cwd, remote string) []PRLink {
-	links, _ := callPRLinks(category, input, cwd, remote, nil)
-	return links
 }
 
 var codeModeExecRE = regexp.MustCompile(`\btools\.exec_command\s*\(`)
