@@ -676,9 +676,8 @@ ______________________________________________________________________
 
 ### Pull request links
 
-Sessions list pull requests found in retained user prompts or structured
-transcript records, in
-`pr_links`:
+Each session's `pr_links` field lists pull requests found in retained user
+prompts or structured transcript records:
 
 ```json
 "pr_links": [
@@ -691,11 +690,12 @@ transcript records, in
 ]
 ```
 
-AgentsView keeps one link per pull request. A prompt link means the prompt
-mentioned the pull request; it does not establish that the session worked on it.
-Claude Code also records `pr-link` entries in its transcripts. Because Claude
-Code records these links for the whole transcript, every session split from that
-transcript, such as a rewind's fork, carries them like its name and git branch.
+AgentsView keeps one link per pull request. When a link comes from a prompt, it
+tells you only that the prompt mentioned the pull request, not that the session
+worked on it. Claude Code also includes `pr-link` entries in its transcripts.
+Because Claude Code records these links for the whole transcript, every session
+split from that transcript, such as a rewind's fork, carries them like its name
+and git branch.
 
 To filter by pull request, use `session list --pr` or the `pr` query parameter.
 Pass `owner/repo` for any pull request in that repository, `owner/repo#123` for
