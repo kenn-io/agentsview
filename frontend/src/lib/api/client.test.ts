@@ -851,6 +851,41 @@ describe("core action telemetry", () => {
 });
 
 describe("live event payloads", () => {
+  it("refreshes the pinned server token on storage changes and page return", async () => {
+    const postMessage = vi.fn();
+    class Worker {
+      port = { start() {}, postMessage, onmessage: null };
+    }
+    vi.stubGlobal("SharedWorker", Worker);
+    localStorage.setItem("agentsview-server-url", "https://example.test");
+    localStorage.setItem("agentsview-auth-token::https://example.test", "old-token");
+    const { watchEvents } = await import("./client.js");
+    const source = watchEvents(() => {});
+    expect(postMessage).toHaveBeenLastCalledWith(expect.objectContaining({ token: "old-token" }));
+    setAuthToken("same-tab-token");
+    expect(postMessage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ token: "same-tab-token" }),
+    );
+    localStorage.setItem("agentsview-server-url", "https://other.example.test");
+    localStorage.setItem("agentsview-auth-token::https://example.test", "new-token");
+    window.dispatchEvent(new Event("storage"));
+    expect(postMessage).toHaveBeenLastCalledWith(expect.objectContaining({ token: "new-token" }));
+    window.dispatchEvent(new Event("pagehide"));
+    localStorage.setItem("agentsview-auth-token::https://example.test", "latest-token");
+    window.dispatchEvent(new Event("storage"));
+    expect(postMessage).toHaveBeenLastCalledWith("leave");
+    window.dispatchEvent(new Event("pageshow"));
+    expect(postMessage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ token: "latest-token" }),
+    );
+    source.close();
+    const count = postMessage.mock.calls.length;
+    window.dispatchEvent(new Event("storage"));
+    expect(postMessage).toHaveBeenCalledTimes(count);
+    localStorage.clear();
+    vi.unstubAllGlobals();
+  });
+
   it("delivers known scopes and refreshes for malformed or unknown data", async () => {
     let port!: MessagePort;
     class Worker {

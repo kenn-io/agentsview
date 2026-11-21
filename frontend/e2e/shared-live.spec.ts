@@ -12,12 +12,18 @@ for (const fallback of ["worker", "broadcast", "storage"] as const) {
     const watches: string[] = [];
     const workerStatuses: number[] = [];
     let rejected = false;
+    let realAuthorization: string | undefined;
+    const streamAuthorizations: (string | undefined)[] = [];
     const proxy = http.createServer((req, res) => {
       const url = req.url ?? "/";
+      const authorization = req.headers.authorization;
+      if (authorization && authorization !== "Bearer rotated-token")
+        realAuthorization = authorization;
       if (/^\/api\/v1\/sessions\/[^/]+\/watch(?:\?|$)/.test(url)) watches.push(url);
       if (url.startsWith("/api/v1/events")) {
         active.add(res);
         requested.push(url);
+        streamAuthorizations.push(authorization);
         res.on("close", () => active.delete(res));
         if (fallback !== "worker" && !rejected) {
           rejected = true;
@@ -33,6 +39,9 @@ for (const fallback of ["worker", "broadcast", "storage"] as const) {
           method: req.method,
           headers: {
             ...req.headers,
+            ...(authorization === "Bearer rotated-token"
+              ? { authorization: realAuthorization }
+              : {}),
             host: `127.0.0.1:${process.env.AGENTSVIEW_E2E_PORT ?? 8090}`,
             ...(req.headers.origin
               ? { origin: `http://127.0.0.1:${process.env.AGENTSVIEW_E2E_PORT ?? 8090}` }
@@ -99,6 +108,9 @@ for (const fallback of ["worker", "broadcast", "storage"] as const) {
         .fill("test-session-small-5");
       await fourth.keyboard.press("Enter");
       await expect(fourth).toHaveURL(/test-session-small-5/);
+      await fourth.evaluate(() => localStorage.setItem("agentsview-auth-token", "rotated-token"));
+      await expect.poll(() => streamAuthorizations.at(-1)).toBe("Bearer rotated-token");
+      expect(page.isClosed()).toBe(false);
       await page.waitForTimeout(400);
       await expect.poll(() => active.size).toBe(1);
       await expect.poll(() => messageRequests).toBeGreaterThan(0);

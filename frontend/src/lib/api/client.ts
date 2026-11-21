@@ -18,9 +18,11 @@ import {
 } from "./generated/index.js";
 import {
   ApiError,
+  AUTH_TOKEN_CHANGE_EVENT,
   type ApiRequestOptions,
   getAuthToken,
   getGeneratedBase,
+  getServerUrl,
   isRemoteConnection,
 } from "./runtime.js";
 import { reportTelemetry } from "../utils/telemetry.js";
@@ -108,7 +110,13 @@ const broadcasts = new Map<string, LiveBroadcast>();
 
 function connectLive(session?: string): LiveSource {
   const base = new URL(getGeneratedBase() || "/", window.location.origin).href.replace(/\/$/, "");
-  const request: LiveRequest = { base, token: getAuthToken(), session };
+  const server = getServerUrl();
+  const request: LiveRequest = {
+    base,
+    token: getAuthToken(server),
+    credentialTime: performance.timeOrigin + performance.now(),
+    session,
+  };
   const target = new EventTarget() as LiveSource;
   target.readyState = 0;
   let send: (value: LiveRequest | "leave" | "close") => void;
@@ -133,13 +141,33 @@ function connectLive(session?: string): LiveSource {
     }
     send = broadcast.connect(receive);
   }
-  const onPageHide = () => send("leave");
-  const onPageShow = () => send({ ...request });
+  let active = true;
+  const onPageHide = () => {
+    active = false;
+    send("leave");
+  };
+  const refreshCredentials = () => {
+    const token = getAuthToken(server);
+    if (request.token === token) return;
+    request.token = token;
+    request.credentialTime = performance.timeOrigin + performance.now();
+    if (active) send({ ...request });
+  };
+  const onPageShow = () => {
+    active = true;
+    request.token = getAuthToken(server);
+    request.credentialTime = performance.timeOrigin + performance.now();
+    send({ ...request });
+  };
+  window.addEventListener("storage", refreshCredentials);
+  window.addEventListener(AUTH_TOKEN_CHANGE_EVENT, refreshCredentials);
   window.addEventListener("pagehide", onPageHide);
   window.addEventListener("pageshow", onPageShow);
   target.close = () => {
     send("close");
     target.readyState = 2;
+    window.removeEventListener("storage", refreshCredentials);
+    window.removeEventListener(AUTH_TOKEN_CHANGE_EVENT, refreshCredentials);
     window.removeEventListener("pagehide", onPageHide);
     window.removeEventListener("pageshow", onPageShow);
   };

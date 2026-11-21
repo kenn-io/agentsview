@@ -33,7 +33,7 @@ it("recovers from a 503 and delivers readiness and updates", async () => {
             }
           },
         },
-        { base: `http://127.0.0.1:${address.port}`, token: "" },
+        { base: `http://127.0.0.1:${address.port}`, token: "", credentialTime: 0 },
       );
     });
     expect(requests).toBe(2);

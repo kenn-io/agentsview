@@ -1,7 +1,7 @@
 import { EventSource } from "eventsource";
 import { getApiV1Events, getGetApiV1EventsUrl } from "./generated/sessions/sessions.js";
 
-export type LiveRequest = { base: string; token: string; session?: string };
+export type LiveRequest = { base: string; token: string; credentialTime: number; session?: string };
 export type LiveFrame = { type: string; data?: string };
 export type LivePort = { postMessage: (frame: LiveFrame) => void };
 
@@ -17,7 +17,12 @@ export class LiveHub {
   update(port: LivePort, request: LiveRequest) {
     const previous = this.ports.get(port);
     this.ports.set(port, request);
-    if ((!previous || previous.session !== request.session) && this.source) {
+    if (
+      (!previous || previous.session !== request.session) &&
+      this.source &&
+      this.credentials?.base === request.base &&
+      this.credentials.token === request.token
+    ) {
       const key = request.session ?? "";
       const ready = this.ready.get(key);
       if (ready) port.postMessage(ready);
@@ -59,7 +64,11 @@ export class LiveHub {
     const sessions = new Set(
       [...this.ports.values()].flatMap((request) => (request.session ? [request.session] : [])),
     );
-    const request = this.ports.values().next().value;
+    const request = [...this.ports.values()].reduce<LiveRequest | undefined>(
+      (latest, candidate) =>
+        !latest || candidate.credentialTime >= latest.credentialTime ? candidate : latest,
+      undefined,
+    );
     const changed =
       sessions.size !== this.sessions.size || [...sessions].some((id) => !this.sessions.has(id));
     if (
