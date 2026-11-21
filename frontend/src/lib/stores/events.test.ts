@@ -169,4 +169,29 @@ describe("events store", () => {
     unsub();
     vi.useRealTimers();
   });
+
+  it("resumes healing after a shared stream recovers from permanent failure", async () => {
+    vi.useFakeTimers();
+    try {
+      const { events, EVENTS_STORE_HEAL_INTERVAL_MS } = await import("./events.svelte.js");
+      events.setAvailable(true);
+      const listener = vi.fn();
+      const unsub = events.subscribe(listener);
+      options.onPermanentFailure?.();
+      source.readyState = 2;
+      await vi.advanceTimersByTimeAsync(EVENTS_STORE_HEAL_INTERVAL_MS);
+      expect(api.watchEvents).toHaveBeenCalledOnce();
+
+      source.readyState = 1;
+      source.dispatchEvent(new Event("events_ready"));
+      expect(listener).toHaveBeenCalledWith({ scope: "sync" });
+      source.readyState = 2;
+      await vi.advanceTimersByTimeAsync(EVENTS_STORE_HEAL_INTERVAL_MS);
+      expect(source.close).toHaveBeenCalledOnce();
+      expect(api.watchEvents).toHaveBeenCalledTimes(2);
+      unsub();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

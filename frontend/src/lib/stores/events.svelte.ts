@@ -21,9 +21,8 @@ class EventsStore {
   // OPEN — typical of PG serve mode's 503 but also possible for
   // false positives: slow startup, tunnel handshake, transient
   // network issue at mount time), stop rebuilding the connection.
-  // The flag clears when the subscriber set empties OR when the
-  // tab becomes visible again (giving a user-initiated retry
-  // window so false positives recover without a page reload).
+  // Clear the flag when the stream recovers, the subscriber set
+  // empties, or the tab becomes visible again.
   private permanentlyFailed = false;
   private available = false;
   private visibilityHandlerInstalled = false;
@@ -138,6 +137,8 @@ class EventsStore {
     const es = this.es;
     es.addEventListener("events_ready", () => {
       if (this.es !== es) return;
+      this.permanentlyFailed = false;
+      this.ensureHealTimer();
       for (const fn of this.listeners.values()) fn({ scope: "sync" });
       this.settleStartup();
     });
