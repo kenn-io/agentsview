@@ -358,5 +358,4 @@ func TestGetToolCalls_BudgetOversizedInput(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, next.ToolCalls, 1)
 	assert.Equal(t, "next", next.ToolCalls[0].Input)
-
 }

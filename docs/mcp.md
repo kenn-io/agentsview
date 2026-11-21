@@ -335,9 +335,8 @@ includes child sessions.
 
 Pattern searches, `get_messages`, and `get_tool_calls` cap the JSON text of
 each response at 12,000 bytes. When that cuts a page, `omitted` counts the
-items held back. A cut search page reports `total`. When
-`total_capped` is true, at least that many matches exist. For semantic and
-hybrid searches, `total` counts the ranked page and is always a lower bound.
+items held back. A cut pageable search reports `total`. When
+`total_capped` is true, at least that many matches exist.
 A zero total is omitted. A cut message page reports the session's `message_count`;
 tool calls always report `total`. The budget can return fewer items than the
 requested limit. Continue messages with `next_from`, and tool calls with `next_cursor`.
@@ -368,10 +367,9 @@ citation.
 
 `get_messages` returns the revision observed for its page. A message longer than
 `max_chars_per_message` or the response budget has a `body_cursor`; keep calling
-`get_messages` with that cursor before following `next_from`.
-The opaque cursor stays bound to the archive instance, session, revision,
-message ordinal, and next content offset, so it cannot silently continue
-against replaced transcript content. A cursor
+`get_messages` with that cursor before following `next_from`. The opaque cursor
+stays bound to the archive instance, session, revision, message ordinal, and next
+content offset, so it cannot silently continue against replaced transcript content. A cursor
 stops working when the archive server restarts. If a continuation fails with
 `source_changed` or `invalid body_cursor`, start a fresh `get_messages` listing.
 Role and system filtering still happens after each scanned page, so an empty or

@@ -91,15 +91,15 @@ func roleAllowed(role string, roles []string) bool {
 	return slices.Contains(roles, role)
 }
 
-// marshalResponseSize matches the SDK's escaping and nil collection format.
-func marshalResponseSize(out any) ([]byte, error) {
-	return json.Marshal(out, jsontext.EscapeForHTML(true), jsontext.EscapeForJS(true), jsontext.AllowInvalidUTF8(true), json.FormatNilSliceAsNull(true), json.FormatNilMapAsNull(true))
+// responseSize matches the SDK's escaping and nil collection format.
+func responseSize(out any) int {
+	data, _ := json.Marshal(out, jsontext.EscapeForHTML(true), jsontext.EscapeForJS(true), jsontext.AllowInvalidUTF8(true), json.FormatNilSliceAsNull(true), json.FormatNilMapAsNull(true))
+	return len(data)
 }
 
 // fitsResponse reports whether the encoded response fits the byte budget.
 func fitsResponse(out any) bool {
-	data, err := marshalResponseSize(out)
-	return err == nil && len(data) <= responseBudgetBytes
+	return responseSize(out) <= responseBudgetBytes
 }
 
 // fitPrefix selects the largest fitting prefix and leaves it built.
@@ -113,8 +113,7 @@ func fitPrefix(n int, build func(int) bool) int {
 func fitText(text string, budget int, encode func(string) any) string {
 	runes := []rune(text)
 	n := sort.Search(len(runes), func(i int) bool {
-		data, err := marshalResponseSize(encode(string(runes[:i+1])))
-		return err != nil || len(data) > budget
+		return responseSize(encode(string(runes[:i+1]))) > budget
 	})
 	return string(runes[:n])
 }

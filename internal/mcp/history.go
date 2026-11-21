@@ -36,9 +36,9 @@ const (
 type toolCallsIn struct {
 	SessionID     string `json:"session_id" jsonschema:"Full stored session ID."`
 	Category      string `json:"category,omitempty" jsonschema:"Only calls in this category: Read, Edit, Write, Bash, Grep, Glob, Task, Tool, or Other."`
-	Limit         int    `json:"limit,omitempty" jsonschema:"Max tool calls, default 50, max 200; the byte budget can return fewer."`
+	Limit         int    `json:"limit,omitempty" jsonschema:"Max tool calls, default 50, max 200."`
 	Cursor        int    `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor."`
-	MaxInputChars int    `json:"max_input_chars,omitempty" jsonschema:"Max input characters, default 500, max 10000; the byte budget can shorten it."`
+	MaxInputChars int    `json:"max_input_chars,omitempty" jsonschema:"Truncate each tool input to this many characters, default 500, max 10000."`
 }
 
 type toolCallOut struct {
@@ -112,46 +112,24 @@ func (t *toolset) toolCalls(
 	if end < len(matching) {
 		out.NextCursor = &end
 	}
-	if !fitsResponse(out) && len(out.ToolCalls) > 0 {
-		if err := fitToolCalls(&out, start); err != nil {
-			return nil, toolCallsOut{}, err
+	if !fitsResponse(out) {
+		items := out.ToolCalls
+		n := fitPrefix(len(items), func(k int) bool {
+			out.ToolCalls = items[:k]
+			out.Omitted = len(items) - k
+			next := start + max(k, 1)
+			out.NextCursor = &next
+			return fitsResponse(out)
+		})
+		if n == 0 {
+			call := &items[0]
+			call.InputTruncated = true
+			out.Omitted = len(items) - 1
+			call.Input = fitText(call.Input, responseBudgetBytes-responseSize(out), func(text string) any { c := *call; c.Input = text; return c })
+			out.ToolCalls = items[:1]
 		}
 	}
-
 	return nil, out, nil
-}
-
-// fitToolCalls holds back calls that exceed the response budget.
-func fitToolCalls(out *toolCallsOut, start int) error {
-	items := out.ToolCalls
-	originalNext := out.NextCursor
-	n := fitPrefix(len(items), func(k int) bool {
-		out.ToolCalls = items[:k]
-		out.Omitted = len(items) - k
-		next := start + k
-		out.NextCursor = &next
-		if k == len(items) {
-			out.NextCursor = originalNext
-		}
-		return fitsResponse(out)
-	})
-	if n == 0 {
-		call := &items[0]
-		call.InputTruncated = true
-		next := start + 1
-		out.NextCursor = &next
-		out.Omitted = len(items) - 1
-		envelope, err := marshalResponseSize(out)
-		if err != nil {
-			return err
-		}
-		call.Input = fitText(call.Input, responseBudgetBytes-len(envelope), func(text string) any { c := *call; c.Input = text; return c })
-		if call.Input == "" {
-			return errors.New("tool call response exceeds budget")
-		}
-		out.ToolCalls = items[:1]
-	}
-	return nil
 }
 
 // redactToolInput masks secrets in each decoded JSON string of a tool input,

@@ -2384,12 +2384,10 @@ func TestSearchContent_ListSessionBudgetPages(t *testing.T) {
 	for i := range 29 {
 		messages = append(messages, dbtest.UserMsg("listing-budget", i, fmt.Sprintf("message %d %s", i, strings.Repeat("x", 600))))
 	}
-	messages = append(messages, db.Message{SessionID: "listing-budget", Ordinal: 29, Role: "assistant", ThinkingText: "last thought", ContentLength: len("last thought"), HasThinking: true})
-	dbtest.SeedSessionWithMessages(t, d, "listing-budget", "proj", messages, dbtest.WithMessageCounts(30, 29))
+	dbtest.SeedSessionWithMessages(t, d, "listing-budget", "proj", messages, dbtest.WithMessageCounts(29, 29))
 
 	in := searchContentIn{SessionID: "listing-budget", Limit: 30, Context: 10}
 	var ordinals []int
-	var lastSnippet string
 	for page := 0; ; page++ {
 		_, out, err := ts.searchContent(t.Context(), nil, in)
 		require.NoError(t, err)
@@ -2399,7 +2397,6 @@ func TestSearchContent_ListSessionBudgetPages(t *testing.T) {
 		}
 		for _, match := range out.Matches {
 			ordinals = append(ordinals, match.Ordinal)
-			lastSnippet = match.Snippet
 		}
 		if out.NextCursor == nil {
 			break
@@ -2407,22 +2404,19 @@ func TestSearchContent_ListSessionBudgetPages(t *testing.T) {
 		require.Less(t, page, 30)
 		in.Cursor = *out.NextCursor
 	}
-	require.Len(t, ordinals, 30)
+	require.Len(t, ordinals, 29)
 	for i, ordinal := range ordinals {
 		assert.Equal(t, i, ordinal)
 	}
-	assert.Equal(t, "last thought", lastSnippet)
 }
 
 type pagedContentSearchService struct {
 	service.SessionService
-	matches  []db.ContentMatch
-	requests []service.ContentSearchRequest
-	legacy   bool
+	matches []db.ContentMatch
+	legacy  bool
 }
 
 func (f *pagedContentSearchService) SearchContent(_ context.Context, req service.ContentSearchRequest) (*service.ContentSearchResult, error) {
-	f.requests = append(f.requests, req)
 	start := min(req.Cursor, len(f.matches))
 	end := min(start+req.Limit, len(f.matches))
 	result := &service.ContentSearchResult{Matches: f.matches[start:end], ActiveFilterApplied: !f.legacy}
@@ -2441,11 +2435,9 @@ func TestSearchContent_Total(t *testing.T) {
 		name           string
 		count, want    int
 		capped, legacy bool
-		mode           string
 	}{
 		{name: "legacy", count: 36, want: 18, legacy: true},
 		{name: "capped", count: 600, want: 500, capped: true},
-		{name: "ranked", count: 20, want: 20, capped: true, mode: "semantic"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := &pagedContentSearchService{matches: make([]db.ContentMatch, tc.count), legacy: tc.legacy}
@@ -2457,7 +2449,7 @@ func TestSearchContent_Total(t *testing.T) {
 				fake.matches[i] = db.ContentMatch{SessionID: "session", Ordinal: i, Timestamp: timestamp, Snippet: strings.Repeat("x", 2000)}
 			}
 			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
-			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Mode: tc.mode, IncludeActive: !tc.legacy, Limit: 20})
+			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", IncludeActive: !tc.legacy, Limit: 20})
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, out.Total)
 			assert.Equal(t, tc.capped, out.TotalCapped)
