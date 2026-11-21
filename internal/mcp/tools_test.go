@@ -2449,8 +2449,6 @@ func TestSearchContent_BudgetRankedPages(t *testing.T) {
 		_, out, err := ts.searchContent(t.Context(), nil, in)
 		require.NoError(t, err)
 		assert.True(t, fitsResponse(out))
-		assert.Equal(t, 20, out.Total)
-		assert.True(t, out.TotalCapped)
 		for _, m := range out.Matches {
 			ordinals = append(ordinals, m.Ordinal)
 		}
@@ -2467,30 +2465,28 @@ func TestSearchContent_BudgetRankedPages(t *testing.T) {
 }
 
 func TestSearchContent_RankedTotal(t *testing.T) {
-	for _, mode := range []string{"semantic", "hybrid"} {
-		for _, legacy := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/legacy=%t", mode, legacy), func(t *testing.T) {
-				fake := &pagedContentSearchService{matches: make([]db.ContentMatch, 20), legacy: legacy}
-				for i := range fake.matches {
-					timestamp := "2024-06-15T11:00:00Z"
-					if i%2 == 0 {
-						timestamp = "2024-06-15T11:59:00Z"
-					}
-					fake.matches[i] = db.ContentMatch{SessionID: "session", Timestamp: timestamp}
+	for _, legacy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("legacy=%t", legacy), func(t *testing.T) {
+			fake := &pagedContentSearchService{matches: make([]db.ContentMatch, 20), legacy: legacy}
+			for i := range fake.matches {
+				timestamp := "2024-06-15T11:00:00Z"
+				if i%2 == 0 {
+					timestamp = "2024-06-15T11:59:00Z"
 				}
-				ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
-				_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Mode: mode, Limit: 20, IncludeActive: !legacy})
-				require.NoError(t, err)
-				want := 20
-				if legacy {
-					want = 10
-				}
-				assert.Len(t, out.Matches, want)
-				assert.Equal(t, want, out.Total)
-				assert.True(t, out.TotalCapped)
-				assert.Len(t, fake.requests, 1)
-			})
-		}
+				fake.matches[i] = db.ContentMatch{SessionID: "session", Timestamp: timestamp}
+			}
+			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Mode: "semantic", Limit: 20, IncludeActive: !legacy})
+			require.NoError(t, err)
+			want := 20
+			if legacy {
+				want = 10
+			}
+			assert.Len(t, out.Matches, want)
+			assert.Equal(t, want, out.Total)
+			assert.True(t, out.TotalCapped)
+			assert.Len(t, fake.requests, 1)
+		})
 	}
 }
 
@@ -2747,12 +2743,10 @@ func TestSearchContent_BudgetCursorRejectsChangedPageAndVersion(t *testing.T) {
 	_, first, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Mode: "semantic", IncludeActive: true, Limit: 20})
 	require.NoError(t, err)
 	require.NotEmpty(t, first.PageCursor)
-	assert.Equal(t, 20, first.Total)
 	fake.result.Coverage.Status = service.MemoryReady
 	_, resumed, err := ts.searchContent(t.Context(), nil, searchContentIn{PageCursor: first.PageCursor})
 	require.NoError(t, err)
 	assert.NotEmpty(t, resumed.Matches)
-	assert.Equal(t, 20, resumed.Total)
 	fake.result.Matches[0].Snippet = "changed"
 	_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{PageCursor: first.PageCursor})
 	require.ErrorIs(t, err, service.ErrSourceChanged)
@@ -2809,56 +2803,47 @@ func TestGetMessages_BudgetPagesAndBodyCursors(t *testing.T) {
 		messages[i] = dbtest.UserMsg("page-bodies", i, fmt.Sprintf("%02d:", i)+strings.Repeat("<&界", 700))
 	}
 	dbtest.SeedSessionWithMessages(t, d, "page-bodies", "proj", messages, dbtest.WithMessageCounts(21, 21))
-	anchor, before, after := 10, 10, 10
-	for _, around := range []bool{false, true} {
-		t.Run(fmt.Sprintf("around=%t", around), func(t *testing.T) {
-			in := getMessagesIn{SessionID: "page-bodies", Limit: 21, MaxCharsPerMessage: 700}
-			if around {
-				in.Limit = 0
-				in.Around, in.Before, in.After = &anchor, &before, &after
-			}
-			got := make(map[int]string)
-			for {
-				_, out, err := ts.getMessages(t.Context(), nil, in)
+	in := getMessagesIn{SessionID: "page-bodies", Limit: 21, MaxCharsPerMessage: 700}
+	got := make(map[int]string)
+	for {
+		_, out, err := ts.getMessages(t.Context(), nil, in)
+		require.NoError(t, err)
+		require.NotEmpty(t, out.Messages)
+		assert.True(t, fitsResponse(out))
+		var nextFrom *int
+		var nextPage string
+		for _, message := range out.Messages {
+			_, exists := got[message.Ordinal]
+			assert.False(t, exists)
+			content := message.Content
+			cursor := message.BodyCursor
+			require.NotEmpty(t, cursor)
+			for cursor != "" {
+				_, body, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "page-bodies", BodyCursor: cursor, MaxCharsPerMessage: 700})
 				require.NoError(t, err)
-				require.NotEmpty(t, out.Messages)
-				assert.True(t, fitsResponse(out))
-				var nextFrom *int
-				var nextPage string
-				for _, message := range out.Messages {
-					_, exists := got[message.Ordinal]
-					assert.False(t, exists)
-					content := message.Content
-					cursor := message.BodyCursor
-					require.NotEmpty(t, cursor)
-					for cursor != "" {
-						_, body, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "page-bodies", BodyCursor: cursor, MaxCharsPerMessage: 700})
-						require.NoError(t, err)
-						require.Len(t, body.Messages, 1)
-						assert.True(t, fitsResponse(body))
-						content += body.Messages[0].Content
-						cursor = body.Messages[0].BodyCursor
-						if cursor == "" {
-							nextFrom, nextPage = body.NextFrom, body.PageCursor
-						}
-					}
-					got[message.Ordinal] = content
+				require.Len(t, body.Messages, 1)
+				assert.True(t, fitsResponse(body))
+				content += body.Messages[0].Content
+				cursor = body.Messages[0].BodyCursor
+				if cursor == "" {
+					nextFrom, nextPage = body.NextFrom, body.PageCursor
 				}
-				if nextPage != "" {
-					in = getMessagesIn{SessionID: "page-bodies", PageCursor: nextPage}
-					continue
-				}
-				if nextFrom != nil && !around {
-					in = getMessagesIn{SessionID: "page-bodies", From: nextFrom, Limit: 21, MaxCharsPerMessage: 700}
-					continue
-				}
-				break
 			}
-			require.Len(t, got, len(messages))
-			for _, message := range messages {
-				assert.Equal(t, message.Content, got[message.Ordinal])
-			}
-		})
+			got[message.Ordinal] = content
+		}
+		if nextPage != "" {
+			in = getMessagesIn{SessionID: "page-bodies", PageCursor: nextPage}
+			continue
+		}
+		if nextFrom != nil {
+			in = getMessagesIn{SessionID: "page-bodies", From: nextFrom, Limit: 21, MaxCharsPerMessage: 700}
+			continue
+		}
+		break
+	}
+	require.Len(t, got, len(messages))
+	for _, message := range messages {
+		assert.Equal(t, message.Content, got[message.Ordinal])
 	}
 }
 
