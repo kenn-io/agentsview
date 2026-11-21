@@ -1064,9 +1064,10 @@ func (t *toolset) searchContentMatches(ctx context.Context, req service.ContentS
 			if message.Ordinal != match.Ordinal {
 				return nil, service.ErrSourceChanged
 			}
-			match.Snippet = (db.ContentSearchFilter{}).BuildSnippet(message.Content, 0, 0)
-			_, snippetEnd := db.SnippetBounds(message.Content, 0, 0, db.ContentSnippetRadius)
-			if snippetEnd < len(message.Content) {
+			body := cmp.Or(message.Content, message.ThinkingText)
+			match.Snippet = (db.ContentSearchFilter{}).BuildSnippet(body, 0, 0)
+			_, snippetEnd := db.SnippetBounds(body, 0, 0, db.ContentSnippetRadius)
+			if snippetEnd < len(body) {
 				match.Snippet += "..."
 			}
 		}

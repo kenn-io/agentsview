@@ -1628,7 +1628,7 @@ func TestSearchContent_ListSessionMessages(t *testing.T) {
 	spy := &listingMessageSpy{SessionService: ts.svc}
 	ts.svc = spy
 	dbtest.SeedSession(t, d, "child", "project-a", func(s *db.Session) {
-		s.MessageCount = 3
+		s.MessageCount = 4
 		s.UserMessageCount = 1
 		s.EndedAt = new("2024-06-15T11:59:00Z")
 		s.ParentSessionID = new("parent")
@@ -1642,6 +1642,7 @@ func TestSearchContent_ListSessionMessages(t *testing.T) {
 			SessionID: "child", Ordinal: 2, Role: "tool", Content: "echo hello", ContentLength: len("echo hello"), DialogueText: new(""), HasToolUse: true,
 			ToolCalls: []db.ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"echo hello"}`, ResultContent: "hello"}},
 		},
+		{SessionID: "child", Ordinal: 3, Role: "assistant", ThinkingText: "check the log", ContentLength: len("check the log"), HasThinking: true},
 	}))
 	_, first, err := ts.searchContent(t.Context(), nil, searchContentIn{SessionID: "child", Mode: "typo", Project: "project-a", Limit: 2})
 	require.NoError(t, err)
@@ -1660,9 +1661,11 @@ func TestSearchContent_ListSessionMessages(t *testing.T) {
 	require.NotNil(t, first.NextCursor)
 	_, last, err := ts.searchContent(t.Context(), nil, searchContentIn{SessionID: "child", Limit: 2, Cursor: *first.NextCursor})
 	require.NoError(t, err)
-	require.Len(t, last.Matches, 1)
+	require.Len(t, last.Matches, 2)
 	assert.Equal(t, 2, last.Matches[0].Ordinal)
 	assert.Equal(t, "echo hello", last.Matches[0].Snippet)
+	assert.Equal(t, 3, last.Matches[1].Ordinal)
+	assert.Equal(t, "check the log", last.Matches[1].Snippet)
 	assert.Nil(t, last.NextCursor)
 	require.Len(t, spy.filters, 2)
 	_, empty, err := ts.searchContent(t.Context(), nil, searchContentIn{SessionID: "child", Project: "other"})
