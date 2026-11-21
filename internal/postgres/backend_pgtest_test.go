@@ -29,7 +29,7 @@ func TestServePageWaitsAtRoleConnectionLimit(t *testing.T) {
 	t.Cleanup(func() { _ = admin.Close() })
 
 	role := fmt.Sprintf("page_limit_%x", rand.Uint64())
-	_, err = admin.ExecContext(t.Context(), `CREATE ROLE `+role+` LOGIN PASSWORD 'test-password' CONNECTION LIMIT 5`)
+	_, err = admin.ExecContext(t.Context(), `CREATE ROLE `+role+` LOGIN PASSWORD 'test-password' CONNECTION LIMIT 10`)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		ctx := context.WithoutCancel(t.Context())
@@ -42,7 +42,20 @@ func TestServePageWaitsAtRoleConnectionLimit(t *testing.T) {
 	serveURL, err := url.Parse(pgURL)
 	require.NoError(t, err)
 	serveURL.User = url.UserPassword(role, "test-password")
-	store, err := (Backend{}).OpenServeStore(t.Context(), storage.ReplicaTarget{URL: serveURL.String(), Schema: testSchema, AllowInsecure: true})
+	target := storage.ReplicaTarget{URL: serveURL.String(), Schema: testSchema, AllowInsecure: true}
+	initial, err := (Backend{}).OpenServeStore(t.Context(), target)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if initial != nil {
+			_ = initial.Close()
+		}
+	})
+	require.Equal(t, 10, initial.(*Store).DB().Stats().MaxOpenConnections)
+	require.NoError(t, initial.Close())
+	initial = nil
+	_, err = admin.ExecContext(t.Context(), `ALTER ROLE `+role+` CONNECTION LIMIT 5`)
+	require.NoError(t, err)
+	store, err := (Backend{}).OpenServeStore(t.Context(), target)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	pgStore := store.(*Store)
