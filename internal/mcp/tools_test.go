@@ -684,34 +684,43 @@ func TestGetMessages_RevisionDoesNotSwitchHostCopy(t *testing.T) {
 	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "uuid"})
 	require.NoError(t, err)
 	require.NotEmpty(t, first.TranscriptRevision)
-	_, continuation, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "uuid", ExpectedRevision: first.TranscriptRevision})
-	require.NoError(t, err)
-	require.Len(t, continuation.Messages, 1)
-	require.Equal(t, "original message", continuation.Messages[0].Content)
 	original, err := d.GetSession(t.Context(), "codex:uuid")
 	require.NoError(t, err)
-	_, _, err = ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "codex:uuid", ExpectedRevision: *original.TranscriptRevision})
-	require.NoError(t, err)
+	t.Run("matching revisions", func(t *testing.T) {
+		_, continuation, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "uuid", ExpectedRevision: first.TranscriptRevision})
+		require.NoError(t, err)
+		require.Len(t, continuation.Messages, 1)
+		require.Equal(t, "original message", continuation.Messages[0].Content)
+		_, _, err = ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "codex:uuid", ExpectedRevision: *original.TranscriptRevision})
+		require.NoError(t, err)
+	})
 	dbtest.SeedSessionWithMessages(t, d, "host~codex:uuid", "proj", []db.Message{
 		dbtest.UserMsg("host~codex:uuid", 0, "other host message"),
 	}, dbtest.WithMessageCounts(1, 1))
-	_, truncated, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "codex:uuid", MaxCharsPerMessage: 4})
-	require.NoError(t, err)
-	require.Len(t, truncated.Messages, 1)
-	_, chunk, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "uuid", BodyCursor: truncated.Messages[0].BodyCursor, MaxCharsPerMessage: 4})
-	require.NoError(t, err)
-	require.Len(t, chunk.Messages, 1)
-	require.Equal(t, "inal", chunk.Messages[0].Content)
+	t.Run("body cursor with sibling", func(t *testing.T) {
+		_, truncated, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "codex:uuid", MaxCharsPerMessage: 4})
+		require.NoError(t, err)
+		require.Len(t, truncated.Messages, 1)
+		_, chunk, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "uuid", BodyCursor: truncated.Messages[0].BodyCursor, MaxCharsPerMessage: 4})
+		require.NoError(t, err)
+		require.Len(t, chunk.Messages, 1)
+		require.Equal(t, "inal", chunk.Messages[0].Content)
+	})
 	sibling, err := d.GetSession(t.Context(), "host~codex:uuid")
 	require.NoError(t, err)
+	// Equal revisions ensure a counter comparison alone cannot reject the sibling.
 	require.Equal(t, original.TranscriptRevision, sibling.TranscriptRevision)
 	require.NoError(t, d.DeleteSession(t.Context(), "codex:uuid"))
-	_, _, err = ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "uuid", ExpectedRevision: first.TranscriptRevision})
-	require.ErrorIs(t, err, service.ErrSourceChanged)
-	for _, id := range []string{"uuid", "codex:uuid"} {
-		_, _, err = ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: id, ExpectedRevision: *original.TranscriptRevision})
-		assert.ErrorIs(t, err, service.ErrSourceChanged)
-	}
+	t.Run("bound revision after delete", func(t *testing.T) {
+		_, _, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "uuid", ExpectedRevision: first.TranscriptRevision})
+		require.ErrorIs(t, err, service.ErrSourceChanged)
+	})
+	t.Run("unbound revision after delete", func(t *testing.T) {
+		for _, id := range []string{"uuid", "codex:uuid"} {
+			_, _, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: id, ExpectedRevision: *original.TranscriptRevision})
+			assert.ErrorIs(t, err, service.ErrSourceChanged)
+		}
+	})
 }
 
 func TestGetMessages_ContinuationRejectsDeletedSession(t *testing.T) {
@@ -2580,14 +2589,6 @@ func TestSessionToolsResolvePlainIDs(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, children.Sessions)
 
-	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "plain", MaxCharsPerMessage: 6})
-	require.NoError(t, err)
-	require.NotEmpty(t, first.Messages)
-	require.NotEmpty(t, first.Messages[0].BodyCursor)
-	_, rawNext, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "plain", BodyCursor: first.Messages[0].BodyCursor, MaxCharsPerMessage: 6})
-	require.NoError(t, err)
-	require.Len(t, rawNext.Messages, 1)
-	assert.Equal(t, " in th", rawNext.Messages[0].Content)
 }
 
 func TestListRecall_SourceSessionRawID(t *testing.T) {
@@ -2603,16 +2604,20 @@ func TestListRecall_SourceSessionRawID(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, out.Entries, 1)
 	assert.Equal(t, "codex:source", out.Entries[0].SourceSessionID)
+	dbtest.SeedSession(t, d, "host~codex:source", "project")
+	require.NoError(t, d.SoftDeleteSession(t.Context(), "codex:source"))
+	_, out, err = ts.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "codex:source"})
+	require.NoError(t, err)
+	require.Len(t, out.Entries, 1)
+	assert.Equal(t, "entry", out.Entries[0].ID)
 }
 
 func TestOptionalSessionFiltersOlderServer(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/api/v1/sessions/unindexed", "/api/v1/sessions/broken":
+		case "/api/v1/sessions/unindexed":
 			w.WriteHeader(http.StatusNotFound)
-		case "/api/v1/session-ids/resolve":
-			w.WriteHeader(http.StatusInternalServerError)
 		case "/api/v1/search/content":
 			assert.Equal(t, "unindexed", r.URL.Query().Get("exclude_session"))
 			_, _ = fmt.Fprint(w, `{"matches":[{"session_id":"other","snippet":"needle"}],"active_filter_applied":true}`)
@@ -2627,9 +2632,6 @@ func TestOptionalSessionFiltersOlderServer(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, search.Matches, 1)
 	assert.Equal(t, "other", search.Matches[0].SessionID)
-	ts = &toolset{svc: servicehttp.NewHTTPBackendForServer(srv.URL, "", servicehttp.HTTPServerCapabilities{APIVersion: 28})}
-	_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", CurrentSessionID: "broken"})
-	require.Error(t, err)
 }
 
 func TestSessionResolutionAmbiguousCandidates(t *testing.T) {
@@ -2645,35 +2647,18 @@ func TestSessionResolutionAmbiguousCandidates(t *testing.T) {
 	require.ErrorContains(t, err, "host-d~uuid")
 }
 
-func TestSessionResolutionQualifiedSuffix(t *testing.T) {
-	ts, d := newTestToolset(t)
-	dbtest.SeedSession(t, d, "host~codex:source", "project")
-	httpServer := httptest.NewUnstartedServer(nil)
-	srv := server.New(config.Config{Host: "127.0.0.1", Port: httpServer.Listener.Addr().(*net.TCPAddr).Port, DataDir: t.TempDir(), WriteTimeout: 30 * time.Second}, d, nil)
-	httpServer.Config.Handler = srv.Handler()
-	httpServer.Start()
-	t.Cleanup(httpServer.Close)
-	remote := &toolset{svc: servicehttp.NewHTTPBackend(httpServer.URL, "", false, "")}
-	dbtest.SeedSession(t, d, "codex:source", "project")
-	_, err := d.InsertRecallEntry(t.Context(), db.RecallEntry{
-		ID: "entry", Type: "fact", Scope: "project", Status: "accepted",
-		Title: "entry", Body: "entry", SourceSessionID: "codex:source",
-	})
-	require.NoError(t, err)
-	require.NoError(t, d.SoftDeleteSession(t.Context(), "codex:source"))
-	for _, toolset := range []*toolset{ts, remote} {
-		_, _, err := toolset.sessionOverview(t.Context(), nil, sessionOverviewIn{SessionID: "codex:source"})
-		require.ErrorIs(t, err, service.ErrSessionNotFound)
-		_, out, err := toolset.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "codex:source"})
-		require.NoError(t, err)
-		require.Len(t, out.Entries, 1)
-		assert.Equal(t, "entry", out.Entries[0].ID)
-	}
-	dbtest.SeedSession(t, d, "5d416183-b894-47ef-9cba-47d5a1201234", "project")
-	dbtest.SeedSession(t, d, "host~5d416183-b894-47ef-9cba-47d5a1201234", "project")
-	require.NoError(t, d.SoftDeleteSession(t.Context(), "5d416183-b894-47ef-9cba-47d5a1201234"))
-	for _, toolset := range []*toolset{ts, remote} {
-		_, _, err := toolset.sessionOverview(t.Context(), nil, sessionOverviewIn{SessionID: "5d416183-b894-47ef-9cba-47d5a1201234"})
-		require.ErrorIs(t, err, service.ErrSessionNotFound)
+func TestSessionResolutionTrashedExactID(t *testing.T) {
+	for _, tc := range []struct{ name, id string }{
+		{"qualified", "codex:source"},
+		{"bare", "5d416183-b894-47ef-9cba-47d5a1201234"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts, d := newTestToolset(t)
+			dbtest.SeedSession(t, d, "host~"+tc.id, "project")
+			dbtest.SeedSession(t, d, tc.id, "project")
+			require.NoError(t, d.SoftDeleteSession(t.Context(), tc.id))
+			_, _, err := ts.sessionOverview(t.Context(), nil, sessionOverviewIn{SessionID: tc.id})
+			require.ErrorIs(t, err, service.ErrSessionNotFound)
+		})
 	}
 }

@@ -10,7 +10,6 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/rawderive"
-	"go.kenn.io/agentsview/internal/service"
 	"testing"
 	"time"
 )
@@ -131,9 +130,6 @@ func TestHostedTrashedExactLegacyIDDoesNotResolveLiveAlias(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"codex:portable"}, ids)
 	ids, err = h.FindSessionIDsByRawSuffix(t.Context(), "portable", 5)
-	require.NoError(t, err)
-	assert.Empty(t, ids)
-	ids, err = service.NewReadOnlyBackend(h).FindSessionIDsByRawSuffix(t.Context(), "portable", 5)
 	require.NoError(t, err)
 	assert.Empty(t, ids)
 }

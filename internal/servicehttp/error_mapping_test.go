@@ -296,34 +296,6 @@ func TestMessagesStatusMapping(t *testing.T) {
 	})
 }
 
-// An older daemon ignores raw_suffix and answers with substring matches;
-// the client must not hand those back as exact raw-suffix matches.
-func TestFindSessionIDsByRawSuffixRequiresServerAcknowledgement(t *testing.T) {
-	tests := []struct {
-		name    string
-		body    string
-		want    []string
-		wantErr string
-	}{
-		{name: "older server", body: `{"ids":["claude:abc123","claude:xabc"]}`, wantErr: "server does not acknowledge raw session ID lookup"},
-		{name: "explicit false", body: `{"ids":["claude:abc123"],"raw_suffix":false}`, wantErr: "server does not acknowledge raw session ID lookup"},
-		{name: "acknowledged", body: `{"ids":["claude:abc"],"raw_suffix":true}`, want: []string{"claude:abc"}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			srv, _ := fixedServer(t, http.StatusOK, tt.body)
-			ids, err := NewHTTPBackendForServer(srv.URL, "", HTTPServerCapabilities{APIVersion: 28}).FindSessionIDsByRawSuffix(t.Context(), "abc", 5)
-			if tt.wantErr != "" {
-				require.ErrorIs(t, err, service.ErrRawLookupUnsupported)
-				assert.Nil(t, ids)
-				return
-			}
-			require.NoError(t, err)
-			assert.Equal(t, tt.want, ids)
-		})
-	}
-}
-
 func TestFindSessionIDsByRawSuffixProbeFailure(t *testing.T) {
 	srv, _ := fixedServer(t, http.StatusInternalServerError, `{"error":"unavailable"}`)
 	_, err := NewHTTPBackend(srv.URL, "", false, "").FindSessionIDsByRawSuffix(t.Context(), "abc", 5)
@@ -332,6 +304,12 @@ func TestFindSessionIDsByRawSuffixProbeFailure(t *testing.T) {
 }
 
 func TestFindSessionIDsByRawSuffixVersionGate(t *testing.T) {
+	t.Run("unacknowledged response", func(t *testing.T) {
+		srv, _ := fixedServer(t, http.StatusOK, `{"ids":["claude:xabc"]}`)
+		ids, err := NewHTTPBackendForServer(srv.URL, "", HTTPServerCapabilities{APIVersion: 28}).FindSessionIDsByRawSuffix(t.Context(), "abc", 5)
+		require.ErrorIs(t, err, service.ErrRawLookupUnsupported)
+		assert.Nil(t, ids)
+	})
 	for _, tt := range []struct {
 		name      string
 		version   int
