@@ -1497,7 +1497,8 @@ func hermesStateDBHasReadableSession(
 	}
 	readable, err = hermesRowsScanCleanly(ctx, timestampRows, func(rows *sql.Rows) error {
 		var ts float64
-		return rows.Scan(&ts)
+		var displayOrder sql.NullInt64
+		return rows.Scan(&ts, &displayOrder)
 	})
 	if err != nil {
 		return false, fmt.Errorf("query hermes messages for %s: %w", rawID, err)

@@ -983,10 +983,17 @@ func hermesStateMessagesAuthoritative(
 }
 
 func hermesStateMessageTimestampsQueryString(cols hermesMessageColumns) string {
-	if cols.hasActive {
-		return `SELECT timestamp FROM messages WHERE session_id = ? AND COALESCE(active, 1) = 1`
+	displayOrderCol := "NULL"
+	if cols.hasDisplayOrder {
+		displayOrderCol = "display_order"
 	}
-	return `SELECT timestamp FROM messages WHERE session_id = ?`
+	if cols.hasActive {
+		return fmt.Sprintf(
+			`SELECT timestamp, %s FROM messages WHERE session_id = ? AND COALESCE(active, 1) = 1`,
+			displayOrderCol,
+		)
+	}
+	return fmt.Sprintf(`SELECT timestamp, %s FROM messages WHERE session_id = ?`, displayOrderCol)
 }
 
 const hermesStateSessionColumns = `id, source, COALESCE(model, ''),

@@ -2002,6 +2002,10 @@ func TestHermesMalformedSessionRowFallsBackToReadableTranscript(t *testing.T) {
 			name:   "a message that fails to decode",
 			damage: "UPDATE messages SET timestamp = 'not-a-number' WHERE session_id = 'child'",
 		},
+		{
+			name:   "a message with non-integer display_order",
+			damage: "ALTER TABLE messages ADD COLUMN display_order INTEGER; UPDATE messages SET display_order = 'not-a-number' WHERE session_id = 'child'",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
