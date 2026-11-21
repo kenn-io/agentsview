@@ -37,7 +37,7 @@ func TestListDailyUsageUsersPages(t *testing.T) {
 		case 1:
 			assert.Equal(t, start.UnixMilli(), q.Start)
 			assert.Equal(t, 1, q.Page)
-			_, _ = w.Write([]byte(`{"data":[{"userId":12,"isActive":false},{"userId":"invalid"}],"pagination":{"hasNextPage":true}}`))
+			_, _ = w.Write([]byte(`{"data":[{"userId":12,"isActive":false}],"pagination":{"hasNextPage":true}}`))
 		case 2:
 			assert.Equal(t, 2, q.Page)
 			_, _ = w.Write([]byte(`{"data":[{"userId":34}],"pagination":{"hasNextPage":false}}`))

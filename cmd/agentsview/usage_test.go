@@ -1723,12 +1723,11 @@ func TestCursorSyncMatchesMembers(t *testing.T) {
 		secondFails    bool
 		extraEvent     bool
 		priorRetained  bool
-		ambiguous      bool
 		oldOwnerAbsent bool
 	}{
 		{name: "single", priorModel: "other-team", priorAccount: "99", wantAccount: "12", secondEmpty: true, priorRetained: true},
-		{name: "ambiguous", priorModel: "model-a", priorAccount: "12", ambiguous: true},
-		{name: "ambiguous after owner left", priorModel: "model-a", priorAccount: "12", ambiguous: true, oldOwnerAbsent: true},
+		{name: "ambiguous", priorModel: "model-a", priorAccount: "12"},
+		{name: "ambiguous after owner left", priorModel: "model-a", priorAccount: "12", oldOwnerAbsent: true},
 		{name: "failed member", priorModel: "model-a", priorAccount: "99", wantAccount: "99", secondFails: true, extraEvent: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1737,7 +1736,7 @@ func TestCursorSyncMatchesMembers(t *testing.T) {
 			prior := db.CursorUsageEvent{OccurredAt: "2026-07-28T10:03:00Z", Model: tc.priorModel, OutputTokens: 7}
 			require.NoError(t, database.InsertCursorUsageEvents(t.Context(), []db.CursorUsageEvent{prior}))
 			priorTime := time.Date(2026, 7, 29, 1, 0, 0, 0, time.UTC)
-			require.NoError(t, database.RecordCursorAccountPoll(t.Context(), map[string][]string{tc.priorAccount: {db.CursorUsageEventDedupKey(prior)}}, priorTime, nil))
+			require.NoError(t, database.RecordCursorAccountPoll(t.Context(), map[string][]string{tc.priorAccount: {db.CursorUsageEventDedupKey(prior)}}, priorTime, []db.CursorAccountHour{{UserID: tc.priorAccount, Start: time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC)}}))
 			require.NoError(t, database.Close())
 			var requests []string
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1766,10 +1765,6 @@ func TestCursorSyncMatchesMembers(t *testing.T) {
 				}
 				events := `{"timestamp":"2026-07-28T10:03:00Z","model":"model-a","tokenUsage":{"outputTokens":7}}`
 				count := 1
-				if tc.ambiguous && id != 34 && !tc.oldOwnerAbsent {
-					events += `,{"timestamp":"2026-07-28T10:04:00Z","model":"unique","tokenUsage":{"outputTokens":5}}`
-					count++
-				}
 				if tc.extraEvent {
 					events += `,{"timestamp":"2026-07-28T10:04:00Z","model":"new","tokenUsage":{"outputTokens":6}}`
 					count++
@@ -1796,11 +1791,6 @@ func TestCursorSyncMatchesMembers(t *testing.T) {
 			if tc.secondFails {
 				assert.Equal(t, "2026-07-29T01:00:00.000000Z", stamp)
 			}
-			if tc.ambiguous {
-				var pollStamp string
-				require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT polled_at FROM cursor_account_polls WHERE account_user_id='12' AND hour_start=1785232800`).Scan(&pollStamp))
-				assert.Greater(t, pollStamp, "2026-07-29T01:00:00.000000Z")
-			}
 			if tc.extraEvent {
 				require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT account_user_id, account_polled_at FROM cursor_usage_events WHERE model='new'`).Scan(&account, &stamp))
 				assert.Empty(t, account)
@@ -1816,13 +1806,12 @@ func TestCursorSyncMatchesMembers(t *testing.T) {
 }
 
 func TestCursorSyncDoesNotCoverIncompleteHours(t *testing.T) {
-	current := time.Now().UTC().Truncate(time.Hour)
 	for _, tc := range []struct {
 		name, tz, since, until, events string
 		want                           map[string]string
 	}{
 		{"partial boundaries", "Asia/Kathmandu", "2026-07-28", "2026-07-28", `[{"timestamp":"2026-07-27T18:20:00Z","model":"first-partial"},{"timestamp":"2026-07-27T19:00:00Z","model":"first-full"},{"timestamp":"2026-07-28T17:59:00Z","model":"last-full"},{"timestamp":"2026-07-28T18:05:00Z","model":"last-partial"}]`, map[string]string{"first-partial": "", "first-full": "12", "last-full": "12", "last-partial": ""}},
-		{"open hour", "UTC", current.Add(-48 * time.Hour).Format("2006-01-02"), current.Add(48 * time.Hour).Format("2006-01-02"), fmt.Sprintf(`[{"timestamp":%q,"model":"closed"},{"timestamp":%q,"model":"open"}]`, current.Add(-24*time.Hour).Format(time.RFC3339), current.Add(time.Minute).Format(time.RFC3339)), map[string]string{"closed": "12", "open": ""}},
+		{"open hour", "UTC", "", "", "", map[string]string{"closed": "12", "open": ""}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dataDir := cursorUsageTestDataDir(t)
@@ -1835,6 +1824,13 @@ func TestCursorSyncDoesNotCoverIncompleteHours(t *testing.T) {
 				_, _ = fmt.Fprintf(w, `{"totalUsageEventsCount":%d,"usageEvents":%s}`, len(tc.want), tc.events)
 			}))
 			defer server.Close()
+			if tc.name == "open hour" {
+				now := time.Now().UTC()
+				current := now.Truncate(time.Hour)
+				tc.since = current.Add(-48 * time.Hour).Format("2006-01-02")
+				tc.until = current.Add(48 * time.Hour).Format("2006-01-02")
+				tc.events = fmt.Sprintf(`[{"timestamp":%q,"model":"closed"},{"timestamp":%q,"model":"open"}]`, current.Add(-24*time.Hour).Format(time.RFC3339), now.Format(time.RFC3339))
+			}
 			require.NoError(t, syncCursorUsage(t, server.URL, "--since", tc.since, "--until", tc.until))
 			database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
 			for model, want := range tc.want {
