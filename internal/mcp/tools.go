@@ -1075,7 +1075,8 @@ type searchContentOut struct {
 	Hints          []service.ContentSearchHint `json:"hints,omitempty"`
 	Matches        []contentMatch              `json:"matches"`
 	Omitted        int                         `json:"omitted,omitempty" jsonschema:"Matches held back."`
-	PageTotal      int                         `json:"page_total,omitempty" jsonschema:"Matches in the backend page when cut."`
+	Total          int                         `json:"total,omitempty" jsonschema:"Matches for this query across all pages. With total_capped, at least this many."`
+	TotalCapped    bool                        `json:"total_capped,omitempty"`
 	PageCursor     string                      `json:"page_cursor,omitempty" jsonschema:"Pass alone to continue."`
 	NextCursor     *int                        `json:"next_cursor,omitempty"`
 	ActivityCutoff string                      `json:"activity_cutoff,omitempty" jsonschema:"Effective RFC3339 activity cutoff; pass it unchanged with next_cursor as cursor to continue."`
@@ -1128,6 +1129,31 @@ func validateSearchDates(from, to string) error {
 		return errors.New("date_from must not be after date_to")
 	}
 	return nil
+}
+
+func (t *toolset) countContentMatches(ctx context.Context, req service.ContentSearchRequest, cursor, total int, keep func(db.ContentMatch) bool) (int, bool, error) {
+	req.Context, req.Limit = 0, maxContentSearchLimit
+	scanned := 0
+	for {
+		req.Cursor = cursor
+		res, err := t.svc.SearchContent(ctx, req)
+		if err != nil {
+			return 0, false, err
+		}
+		for _, m := range res.Matches {
+			if keep == nil || keep(m) {
+				total++
+			}
+		}
+		scanned += len(res.Matches)
+		if res.NextCursor <= 0 || len(res.Matches) == 0 {
+			return total, false, nil
+		}
+		if total >= contentTotalCap || scanned >= contentTotalCap {
+			return total, true, nil
+		}
+		cursor = res.NextCursor
+	}
 }
 
 func (t *toolset) searchContent(
@@ -1259,6 +1285,21 @@ func (t *toolset) searchContent(
 			return !isActiveSince(ts, cutoffTime.Add(activeExclusionWindow))
 		}
 	}
+	if len(in.Concepts) == 0 {
+		if legacy {
+			out.Total, out.TotalCapped, err = t.countContentMatches(ctx, req, 0, 0, keepMatch)
+		} else {
+			out.Total = in.Cursor + len(res.Matches)
+			if res.NextCursor > 0 && out.Total >= contentTotalCap {
+				out.TotalCapped = true
+			} else if res.NextCursor > 0 {
+				out.Total, out.TotalCapped, err = t.countContentMatches(ctx, req, res.NextCursor, out.Total, nil)
+			}
+		}
+		if err != nil {
+			return nil, searchContentOut{}, err
+		}
+	}
 	if mode == "semantic" || mode == "hybrid" {
 		page := struct {
 			Matches             []db.ContentMatch
@@ -1322,12 +1363,6 @@ func (t *toolset) searchContent(
 		out.Matches = []contentMatch{}
 		out.Hints = nil
 		out.Omitted = len(items)
-		out.PageTotal = len(items)
-		for _, m := range res.Matches[:min(offset, len(res.Matches))] {
-			if !legacy || keepMatch(m) {
-				out.PageTotal++
-			}
-		}
 		if len(items) > 0 && (mode == "semantic" || mode == "hybrid") {
 			in.ActivityCutoff = cutoff
 			data, _ := json.Marshal(searchPageCursor{Version: 1, Digest: digest, Input: in, Offset: len(res.Matches)})
@@ -1379,7 +1414,7 @@ func (t *toolset) searchContent(
 			}
 			out.Matches = items[:1]
 		} else {
-			out.Omitted, out.PageTotal = 0, 0
+			out.Omitted = 0
 			out.PageCursor, out.NextCursor = "", originalNext
 			out.Hints = []service.ContentSearchHint{}
 			out.Hints = hints[:fitItems(out, hints)]
@@ -1390,7 +1425,6 @@ func (t *toolset) searchContent(
 		}
 		out.Omitted = len(items) - n
 		if out.Omitted == 0 {
-			out.PageTotal = 0
 			out.PageCursor, out.NextCursor = "", originalNext
 		} else {
 			out.ExcludedActive = 0

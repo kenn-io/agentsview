@@ -31,6 +31,7 @@ const (
 	// matches are short snippets, and recall callers page fewer times when
 	// a filtered search can return more of them at once.
 	maxContentSearchLimit = 50
+	contentTotalCap       = 500
 	defaultListLimit      = 20
 	maxListLimit          = 100
 

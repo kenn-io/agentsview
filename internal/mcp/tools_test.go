@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -2443,6 +2444,103 @@ func TestSearchContent_BudgetRankedPages(t *testing.T) {
 	assert.Equal(t, "project", fake.lastReq.Project)
 }
 
+type pagedContentSearchService struct {
+	service.SessionService
+	matches  []db.ContentMatch
+	requests []service.ContentSearchRequest
+	legacy   bool
+}
+
+func (f *pagedContentSearchService) SearchContent(_ context.Context, req service.ContentSearchRequest) (*service.ContentSearchResult, error) {
+	f.requests = append(f.requests, req)
+	start := min(req.Cursor, len(f.matches))
+	end := min(start+req.Limit, len(f.matches))
+	result := &service.ContentSearchResult{Matches: f.matches[start:end], ActiveFilterApplied: !f.legacy}
+	if end < len(f.matches) {
+		result.NextCursor = end
+	}
+	return result, nil
+}
+
+func (f *pagedContentSearchService) Get(_ context.Context, _ string) (*service.SessionDetail, error) {
+	return nil, nil
+}
+
+func TestSearchContent_Total(t *testing.T) {
+	for _, tc := range []struct {
+		name                          string
+		count, limit, cursor, context int
+		snippet                       string
+		want, calls                   int
+		capped, cut                   bool
+	}{
+		{name: "first page", count: 36, limit: 10, context: 3, want: 36, calls: 2},
+		{name: "continued page", count: 36, limit: 10, cursor: 10, want: 36, calls: 2},
+		{name: "cut page", count: 36, limit: 10, snippet: strings.Repeat("x", 1800), want: 36, calls: 2, cut: true},
+		{name: "single page", count: 5, limit: 10, want: 5, calls: 1},
+		{name: "capped", count: 600, limit: 10, want: 510, calls: 11, capped: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &pagedContentSearchService{matches: make([]db.ContentMatch, tc.count)}
+			for i := range fake.matches {
+				fake.matches[i] = db.ContentMatch{SessionID: "session", Ordinal: i, Snippet: tc.snippet}
+			}
+			ts := &toolset{svc: fake}
+			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", IncludeActive: true, Limit: tc.limit, Cursor: tc.cursor, Context: tc.context})
+			require.NoError(t, err)
+			data, err := json.Marshal(out)
+			require.NoError(t, err)
+			var response map[string]any
+			require.NoError(t, json.Unmarshal(data, &response))
+			assert.Equal(t, float64(tc.want), response["total"])
+			assert.Equal(t, tc.capped, response["total_capped"] == true)
+			assert.Equal(t, tc.cut, out.Omitted > 0)
+			require.Len(t, fake.requests, tc.calls)
+			for _, req := range fake.requests[1:] {
+				assert.Zero(t, req.Context)
+				assert.Equal(t, 50, req.Limit)
+			}
+		})
+	}
+}
+
+func TestSearchContent_TotalLegacyActivity(t *testing.T) {
+	for _, count := range []int{36, 600} {
+		t.Run(strconv.Itoa(count), func(t *testing.T) {
+			fake := &pagedContentSearchService{matches: make([]db.ContentMatch, count), legacy: true}
+			for i := range fake.matches {
+				timestamp := "2024-06-15T11:59:00Z"
+				if i%2 == 0 {
+					timestamp = "2024-06-15T11:00:00Z"
+				}
+				fake.matches[i] = db.ContentMatch{SessionID: "session", Timestamp: timestamp}
+			}
+			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Limit: 10})
+			require.NoError(t, err)
+			assert.Equal(t, min(count, 500)/2, out.Total)
+			assert.Equal(t, count > 500, out.TotalCapped)
+			if count > 500 {
+				assert.Len(t, fake.requests, 11)
+			}
+		})
+	}
+}
+
+func TestSearchContent_TotalLegacyAllActive(t *testing.T) {
+	fake := &pagedContentSearchService{matches: make([]db.ContentMatch, 600), legacy: true}
+	for i := range fake.matches {
+		fake.matches[i] = db.ContentMatch{SessionID: "session", Timestamp: "2024-06-15T11:59:00Z"}
+	}
+	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Limit: 10, IncludeOneShot: true, IncludeAutomated: true})
+	require.NoError(t, err)
+	assert.Empty(t, out.Matches)
+	assert.Zero(t, out.Total)
+	assert.True(t, out.TotalCapped)
+	assert.Len(t, fake.requests, 11)
+}
+
 func TestSearchContent_BudgetLexicalPages(t *testing.T) {
 	ts, d := newTestToolset(t)
 	messages := make([]db.Message, 50)
@@ -2533,6 +2631,7 @@ func TestSearchContent_BudgetCursorRejectsChangedPageAndVersion(t *testing.T) {
 	_, first, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Mode: "semantic", IncludeActive: true, Limit: 20})
 	require.NoError(t, err)
 	require.NotEmpty(t, first.PageCursor)
+	assert.Equal(t, 20, first.Total)
 	data, err := base64.RawURLEncoding.DecodeString(first.PageCursor)
 	require.NoError(t, err)
 	var cursor searchPageCursor
@@ -2546,6 +2645,7 @@ func TestSearchContent_BudgetCursorRejectsChangedPageAndVersion(t *testing.T) {
 	_, resumed, err := ts.searchContent(t.Context(), nil, searchContentIn{PageCursor: first.PageCursor})
 	require.NoError(t, err)
 	assert.NotEmpty(t, resumed.Matches)
+	assert.Equal(t, 20, resumed.Total)
 	fake.result.Matches[0].Snippet = "changed"
 	_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{PageCursor: first.PageCursor})
 	require.ErrorIs(t, err, service.ErrSourceChanged)

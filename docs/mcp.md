@@ -335,10 +335,11 @@ includes child sessions.
 
 Pattern searches, `get_messages`, and `get_tool_calls` cap the JSON text of
 each response at 12,000 bytes. When that cuts a page, `omitted` counts the
-items held back. A cut search reports `page_total` for the fetched backend
-page. A cut message page reports the session's `message_count`; tool calls
-always report `total`. The budget can return fewer items than the requested
-limit. Continue messages with `next_from`, and tool calls with `next_cursor`.
+items held back. Pattern searches report `total` across the whole query on every
+page. When `total_capped` is true, at least that many matches exist. A zero
+total is omitted. A cut message page reports the session's `message_count`;
+tool calls always report `total`. The budget can return fewer items than the
+requested limit. Continue messages with `next_from`, and tool calls with `next_cursor`.
 A cut `around` window returns its anchor first; pass its `page_cursor` with
 `session_id` to read the rest. If a ranked pattern search returns `page_cursor`,
 pass it alone to continue that page. If the ranked results change, continuation

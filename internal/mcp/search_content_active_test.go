@@ -123,14 +123,26 @@ func TestSearchContent_ActiveFilterHTTPCompatibility(t *testing.T) {
 				if r.URL.Path == "/api/v1/search/content" {
 					searches++
 					q := r.URL.Query()
-					assert.Equal(t, "4", q.Get("cursor"))
+					if searches == 1 {
+						assert.Equal(t, "4", q.Get("cursor"))
+					} else {
+						assert.Equal(t, "50", q.Get("limit"))
+					}
 					assert.Equal(t, "2024-06-15T11:50:00Z", q.Get("exclude_active_since"))
 					if tc.supported {
+						if searches > 1 {
+							_, _ = w.Write([]byte(`{"active_filter_applied":true,"matches":[]}`))
+							return
+						}
 						_, err := w.Write([]byte(`{"active_filter_applied":true,"matches":[{"session_id":"idle","timestamp":"2024-06-15T11:59:00Z"}],"next_cursor":13}`))
 						assert.NoError(t, err)
 						return
 					}
-					_, err := w.Write([]byte(`{"matches":[{"session_id":"active"},{"session_id":"active"},{"session_id":"idle","timestamp":"2024-06-15T11:59:00Z"},{"session_id":"malformed","timestamp":"2024-06-15T11:59:00Z"},{"session_id":"missing-active","timestamp":"2024-06-15T11:59:00Z"},{"session_id":"missing-idle","timestamp":"2024-06-15T11:50:00Z"},{"session_id":"boundary"},{"session_id":"crossing"}],"next_cursor":13}`))
+					next := `,"next_cursor":13`
+					if searches > 1 {
+						next = ""
+					}
+					_, err := fmt.Fprintf(w, `{"matches":[{"session_id":"active"},{"session_id":"active"},{"session_id":"idle","timestamp":"2024-06-15T11:59:00Z"},{"session_id":"malformed","timestamp":"2024-06-15T11:59:00Z"},{"session_id":"missing-active","timestamp":"2024-06-15T11:59:00Z"},{"session_id":"missing-idle","timestamp":"2024-06-15T11:50:00Z"},{"session_id":"boundary"},{"session_id":"crossing"}]%s}`, next)
 					assert.NoError(t, err)
 					return
 				}
@@ -159,7 +171,7 @@ func TestSearchContent_ActiveFilterHTTPCompatibility(t *testing.T) {
 			require.NotNil(t, out.NextCursor)
 			assert.Equal(t, 13, *out.NextCursor)
 			assert.True(t, out.Exclusions.RecentActive)
-			assert.Equal(t, 1, searches)
+			assert.Equal(t, 2, searches)
 			if tc.supported {
 				require.Len(t, out.Matches, 1)
 				assert.Equal(t, "idle", out.Matches[0].SessionID)
@@ -173,7 +185,7 @@ func TestSearchContent_ActiveFilterHTTPCompatibility(t *testing.T) {
 				ids = append(ids, match.SessionID)
 			}
 			assert.ElementsMatch(t, []string{"idle", "malformed", "missing-idle", "boundary"}, ids)
-			assert.Equal(t, map[string]int{"active": 1, "idle": 1, "malformed": 1, "missing-active": 1, "missing-idle": 1, "boundary": 1, "crossing": 1}, lookups)
+			assert.Equal(t, map[string]int{"active": 1, "idle": 1, "malformed": 1, "missing-active": 2, "missing-idle": 2, "boundary": 1, "crossing": 1}, lookups)
 		})
 	}
 }
@@ -187,12 +199,18 @@ func TestSearchContent_HintsApplyLegacyActivityFilter(t *testing.T) {
 			if response == "idle" {
 				limit, hintLimit, includeAutomated = 1, "1", true
 			}
+			searches := 0
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				if r.URL.Path == "/api/v1/search/content" {
 					assert.Equal(t, "2024-06-15T11:50:00Z", r.URL.Query().Get("exclude_active_since"))
 					if r.URL.Query().Get("include_one_shot") != "true" {
-						assert.Equal(t, strconv.Itoa(limit), r.URL.Query().Get("limit"))
+						searches++
+						wantLimit := limit
+						if searches > 1 {
+							wantLimit = 50
+						}
+						assert.Equal(t, strconv.Itoa(wantLimit), r.URL.Query().Get("limit"))
 						if response == "active first page" {
 							_, _ = w.Write([]byte(`{"matches":[{"session_id":"active"}]}`))
 						} else {
