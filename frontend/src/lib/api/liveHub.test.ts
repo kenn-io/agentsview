@@ -44,7 +44,7 @@ describe("shared live stream", () => {
     vi.useRealTimers();
   });
 
-  it("refreshes archive subscribers after stream replacement and routes session updates", () => {
+  it("keeps archive updates flowing while changing watched sessions", () => {
     const hub = new LiveHub();
     const archive: LiveFrame[] = [];
     const a: LiveFrame[] = [];
@@ -64,12 +64,14 @@ describe("shared live stream", () => {
     hub.update(bPort, request("b"));
     expect(sources).toHaveLength(1);
     vi.advanceTimersByTime(250);
-    expect(old.closed).toBe(true);
+    expect(old.closed).toBe(false);
     const next = sources[1]!;
     expect(next.url.searchParams.getAll("session")).toEqual(["a", "b"]);
     expect(a).toEqual([]);
-    old.emit("session_ready", "a");
+    old.emit("data_changed", '{"scope":"sessions"}');
     next.emit("session_ready", "a");
+    expect(old.closed).toBe(true);
+    old.emit("data_changed", '{"scope":"sessions"}');
     next.emit("session.timing", '{"session_id":"a","turn_count":2}');
     next.emit("session_ready", "b");
     next.emit("events_ready", "{}");
@@ -83,18 +85,21 @@ describe("shared live stream", () => {
     expect(b.map((frame) => frame.type)).toEqual(["session_ready"]);
     expect(archive.map((frame) => frame.type)).toEqual([
       "events_ready",
-      "events_ready",
+      "data_changed",
       "data_changed",
     ]);
     hub.leave(aPort);
     hub.leave(bPort);
     vi.advanceTimersByTime(250);
+    expect(next.closed).toBe(false);
+    next.emit("data_changed", '{"scope":"sessions"}');
     sources[2]!.emit("events_ready", "{}");
+    expect(next.closed).toBe(true);
     expect(archive.map((frame) => frame.type)).toEqual([
       "events_ready",
-      "events_ready",
       "data_changed",
-      "events_ready",
+      "data_changed",
+      "data_changed",
     ]);
     hub.close();
   });
@@ -114,6 +119,63 @@ describe("shared live stream", () => {
     hub.close();
   });
 
+  it("refreshes archives if the old stream fails during handoff", () => {
+    const hub = new LiveHub();
+    const archive = { postMessage: vi.fn() };
+    hub.update(archive, request());
+    sources[0]!.emit("events_ready", "{}");
+    hub.update({ postMessage: vi.fn() }, request("a"));
+    vi.advanceTimersByTime(250);
+    sources[0]!.emit("error");
+    sources[1]!.emit("session_ready", "a");
+    sources[1]!.emit("events_ready", "{}");
+    expect(archive.postMessage.mock.calls.map(([frame]) => frame.type)).toEqual([
+      "events_ready",
+      "error",
+      "events_ready",
+    ]);
+    hub.close();
+  });
+
+  it("keeps the old stream while a pending replacement is superseded", () => {
+    const hub = new LiveHub();
+    const archive = { postMessage: vi.fn() };
+    const a = { postMessage: vi.fn() };
+    const b = { postMessage: vi.fn() };
+    hub.update(archive, request());
+    sources[0]!.emit("events_ready", "{}");
+    hub.update(a, request("a"));
+    vi.advanceTimersByTime(250);
+    hub.update(b, request("b"));
+    vi.advanceTimersByTime(250);
+    expect(sources[0]!.closed).toBe(false);
+    expect(sources[1]!.closed).toBe(true);
+    sources[0]!.emit("data_changed", '{"scope":"sessions"}');
+    sources[2]!.emit("session_ready", "a");
+    sources[2]!.emit("events_ready", "{}");
+    expect(sources[0]!.closed).toBe(true);
+    expect(archive.postMessage.mock.calls.map(([frame]) => frame.type)).toEqual([
+      "events_ready",
+      "data_changed",
+    ]);
+    hub.close();
+  });
+
+  it("reports a failed replacement after keeping the old stream during retries", () => {
+    const hub = new LiveHub();
+    const archive = { postMessage: vi.fn() };
+    hub.update(archive, request());
+    sources[0]!.emit("events_ready", "{}");
+    hub.update({ postMessage: vi.fn() }, request("a"));
+    vi.advanceTimersByTime(250);
+    for (let i = 0; i < 4; i++) sources[1]!.emit("error");
+    expect(sources[0]!.closed).toBe(false);
+    sources[1]!.emit("error");
+    expect(sources[0]!.closed).toBe(true);
+    expect(archive.postMessage).toHaveBeenLastCalledWith({ type: "permanent_failure" });
+    hub.close();
+  });
+
   it("keeps a stream for a duplicate session leaving and shrinks it when the last leaves", () => {
     const hub = new LiveHub();
     const first = { postMessage: vi.fn() };
@@ -130,6 +192,8 @@ describe("shared live stream", () => {
     expect(sources).toHaveLength(1);
     hub.leave(first);
     vi.advanceTimersByTime(250);
+    expect(active.closed).toBe(false);
+    sources[1]!.emit("events_ready", "{}");
     expect(active.closed).toBe(true);
     expect(sources[1]!.url.searchParams.has("session")).toBe(false);
     hub.leave(archive);
@@ -182,6 +246,8 @@ describe("shared live stream", () => {
       const expectedSources = scenario === "old subscriber leaves" ? 2 : 1;
       expect(sources).toHaveLength(expectedSources);
       if (scenario === "old subscriber leaves") {
+        expect(sources[0]!.closed).toBe(false);
+        sources[1]!.emit("session_ready", "a");
         expect(sources[0]!.closed).toBe(true);
         await sources[1]!.options.fetch(sources[1]!.url, {});
         expect((fetch.mock.calls[0]![1].headers as Headers).get("Authorization")).toBe(

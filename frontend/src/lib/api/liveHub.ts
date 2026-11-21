@@ -8,6 +8,9 @@ export type LivePort = { postMessage: (frame: LiveFrame) => void };
 export class LiveHub {
   private ports = new Map<LivePort, LiveRequest>();
   private source: EventSource | null = null;
+  private previous: EventSource | null = null;
+  private continuous = false;
+  private synced = new Set<LivePort>();
   private sessions = new Set<string>();
   private ready = new Map<string, LiveFrame>();
   private timing = new Map<string, LiveFrame>();
@@ -17,6 +20,7 @@ export class LiveHub {
   update(port: LivePort, request: LiveRequest) {
     const previous = this.ports.get(port);
     this.ports.set(port, request);
+    if (!previous || previous.session !== request.session) this.synced.delete(port);
     if (
       (!previous || previous.session !== request.session) &&
       this.source &&
@@ -24,7 +28,7 @@ export class LiveHub {
     ) {
       const key = request.session ?? "";
       const ready = this.ready.get(key);
-      if (ready) port.postMessage(ready);
+      if (ready) this.deliver(port, ready);
       const timing = this.timing.get(key);
       if (timing) port.postMessage(timing);
     }
@@ -33,6 +37,7 @@ export class LiveHub {
 
   leave(port: LivePort) {
     this.ports.delete(port);
+    this.synced.delete(port);
     this.schedule();
   }
 
@@ -40,7 +45,9 @@ export class LiveHub {
     if (this.timer !== null) clearTimeout(this.timer);
     this.timer = null;
     this.source?.close();
+    this.previous?.close();
     this.source = null;
+    this.previous = null;
   }
 
   private schedule() {
@@ -67,13 +74,29 @@ export class LiveHub {
     const changed =
       sessions.size !== this.sessions.size || [...sessions].some((id) => !this.sessions.has(id));
     if (this.source && request && !changed && this.sameCredentials(request)) return;
-    this.source?.close();
+    if (this.previous) {
+      this.source?.close();
+    } else {
+      this.previous = this.source;
+      this.continuous =
+        this.previous !== null && this.ready.has("") && this.credentials?.base === request?.base;
+    }
     this.source = null;
+    if (!this.previous) {
+      this.ready.clear();
+      this.timing.clear();
+      this.synced.clear();
+    }
     this.sessions = sessions;
-    this.ready.clear();
-    this.timing.clear();
     this.credentials = request ? { base: request.base, token: request.token } : null;
-    if (!request) return;
+    if (!request) {
+      this.previous?.close();
+      this.previous = null;
+      this.ready.clear();
+      this.timing.clear();
+      this.synced.clear();
+      return;
+    }
     const params = { session: [...sessions] };
     const url = new URL(`${request.base}${getGetApiV1EventsUrl(params)}`);
     const source = new EventSource(url, {
@@ -86,20 +109,32 @@ export class LiveHub {
     this.source = source;
     let errors = 0;
     let opened = false;
+    let suppressReady = false;
 
     source.addEventListener("open", () => {
-      if (this.source !== source) return;
+      if (this.source !== source && this.previous !== source) return;
       errors = 0;
       opened = true;
     });
     source.addEventListener("error", () => {
-      if (this.source !== source) return;
+      if (this.source !== source && this.previous !== source) return;
       errors++;
-      this.broadcast({ type: "error" });
+      if (this.previous === source || !this.previous) {
+        this.continuous = false;
+        this.synced.clear();
+        this.broadcast({ type: "error" });
+      }
+      suppressReady = false;
       if (errors >= 5) {
         source.close();
-        this.source = null;
-        this.broadcast({ type: opened ? "closed" : "permanent_failure" });
+        if (this.previous === source) {
+          this.previous = null;
+        } else {
+          this.previous?.close();
+          this.previous = null;
+          this.source = null;
+          this.broadcast({ type: opened ? "closed" : "permanent_failure" });
+        }
       }
     });
     for (const type of [
@@ -111,7 +146,15 @@ export class LiveHub {
       "session.timing",
     ]) {
       source.addEventListener(type, (event) => {
-        if (this.source !== source) return;
+        if (this.source !== source && this.previous !== source) return;
+        if (this.source === source && this.previous) {
+          // The server subscribes to archive updates before sending its first frame.
+          suppressReady = this.continuous;
+          this.previous.close();
+          this.previous = null;
+          this.ready.clear();
+          this.timing.clear();
+        }
         errors = 0;
         const data = (event as MessageEvent).data as string;
         let session: string | undefined;
@@ -124,7 +167,8 @@ export class LiveHub {
           }
         }
         const frame = { type, data };
-        this.broadcast(frame, session);
+        this.broadcast(frame, session, suppressReady && type === "events_ready");
+        if (type === "events_ready") suppressReady = false;
         if (type === "events_ready" || type === "session_ready" || type === "session_missing") {
           this.ready.set(session ?? "", frame);
           if (type === "session_missing") this.timing.delete(session ?? "");
@@ -134,13 +178,19 @@ export class LiveHub {
     }
   }
 
-  private broadcast(frame: LiveFrame, session?: string) {
+  private broadcast(frame: LiveFrame, session?: string, suppressSynced = false) {
     for (const [port, request] of this.ports) {
       if (session !== undefined && request.session !== session) continue;
       if ((frame.type === "events_ready" || frame.type === "data_changed") && request.session)
         continue;
-      port.postMessage(frame);
+      if (suppressSynced && this.synced.has(port)) continue;
+      this.deliver(port, frame);
     }
+  }
+
+  private deliver(port: LivePort, frame: LiveFrame) {
+    if (frame.type === "events_ready") this.synced.add(port);
+    port.postMessage(frame);
   }
 
   private sameCredentials(request?: LiveRequest) {
