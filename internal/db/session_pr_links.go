@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -339,15 +340,19 @@ func (db *DB) upgradePromptPRLinksTx(ctx context.Context, tx *sql.Tx) error {
 func CallPRLinks(category, input, cwd, remote string) []PRLink {
 	if category == "Task" {
 		var payload struct {
-			Prompt  string `json:"prompt"`
-			Message string `json:"message"`
+			Prompt  string         `json:"prompt"`
+			Message string         `json:"message"`
+			Content jsontext.Value `json:"content"`
 		}
 		if json.Unmarshal([]byte(input), &payload) != nil {
 			return nil
 		}
 		a, _ := parser.PromptPRLinksContext(context.Background(), payload.Prompt)
 		b, _ := parser.PromptPRLinksContext(context.Background(), payload.Message)
-		return parser.CombinePRLinks(a, b)
+		var content string
+		_ = json.Unmarshal(payload.Content, &content)
+		c, _ := parser.PromptPRLinksContext(context.Background(), content)
+		return parser.CombinePRLinks(a, b, c)
 	}
 	if category != "Bash" {
 		return nil

@@ -92,3 +92,9 @@ func TestCallPRLinksMixedShellCalls(t *testing.T) {
 	assert.Equal(t, "https://forge.example/example/alpha/pull/42", links[0].URL)
 	assert.Equal(t, "https://github.com/example/repo/pull/43", links[1].URL)
 }
+
+func TestTaskPRLinksWithNonStringContent(t *testing.T) {
+	links := db.CallPRLinks("Task", `{"prompt":"Review https://github.com/example/repo/pull/42","content":[{"type":"text","text":"other"}]}`, "", "")
+	require.Len(t, links, 1)
+	assert.Equal(t, "https://github.com/example/repo/pull/42", links[0].URL)
+}
