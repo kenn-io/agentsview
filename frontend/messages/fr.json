@@ -2193,6 +2193,7 @@
   "settings_embeddings_state_building": "En construction",
   "settings_embeddings_state_retired": "Retirée",
   "settings_embeddings_coverage": "{embeddedLabel} traités · {missingLabel} manquants",
+  "settings_remote_upgrade_required": "Serveur distant : AgentsView {version} (API {apiVersion}). Mettez à jour vers l’API {requiredVersion} ou une version ultérieure.",
   "settings_remote_connected_version": "Connecté (v{version})",
   "settings_remote_server_returned": "Le serveur a renvoyé {status}",
   "settings_remote_connection_failed": "Échec de la connexion",

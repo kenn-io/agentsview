@@ -2181,6 +2181,7 @@
   "settings_embeddings_state_building": "Qurulur",
   "settings_embeddings_state_retired": "İstifadədən çıxarılmış",
   "settings_embeddings_coverage": "{embeddedLabel} semantik vektorlara çevrilmiş · {missingLabel} çatışmayan",
+  "settings_remote_upgrade_required": "Uzaq server: AgentsView {version} (API {apiVersion}). API {requiredVersion} və ya daha yeni versiyaya yeniləyin.",
   "settings_remote_connected_version": "Əlaqə quruldu (v{version})",
   "settings_remote_server_returned": "Server {status} qaytardı",
   "settings_remote_connection_failed": "Əlaqə qurmaq mümkün olmadı",
