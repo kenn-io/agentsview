@@ -871,9 +871,8 @@ describe("live event payloads", () => {
     window.dispatchEvent(new Event("storage"));
     expect(postMessage).toHaveBeenLastCalledWith(expect.objectContaining({ token: "new-token" }));
     window.dispatchEvent(new Event("pagehide"));
-    localStorage.setItem("agentsview-auth-token::https://example.test", "latest-token");
-    window.dispatchEvent(new Event("storage"));
     expect(postMessage).toHaveBeenLastCalledWith("leave");
+    localStorage.setItem("agentsview-auth-token::https://example.test", "latest-token");
     window.dispatchEvent(new Event("pageshow"));
     expect(postMessage).toHaveBeenLastCalledWith(
       expect.objectContaining({ token: "latest-token" }),

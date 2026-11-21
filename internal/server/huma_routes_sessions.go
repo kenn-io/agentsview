@@ -1485,7 +1485,8 @@ func (s *Server) humaEvents(ctx context.Context, in *eventsInput) (*huma.StreamR
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
 		stream, ok := newHumaSSEStream(hctx)
 		if !ok {
-			writeHumaJSON(hctx, http.StatusInternalServerError, apiResponseError{Message: "streaming not supported"})
+			writeHumaJSON(hctx, http.StatusInternalServerError,
+				apiResponseError{Message: "streaming not supported"})
 			return
 		}
 		ctx, cancel := context.WithCancel(hctx.Context())
@@ -1534,7 +1535,9 @@ func (s *Server) humaEvents(ctx context.Context, in *eventsInput) (*huma.StreamR
 		if !stream.SendJSON("events_ready", struct{}{}) {
 			return
 		}
-		heartbeat := time.NewTicker(sessionwatch.PollInterval * sessionwatch.HeartbeatTicks)
+		heartbeat := time.NewTicker(
+			sessionwatch.PollInterval * sessionwatch.HeartbeatTicks,
+		)
 		defer heartbeat.Stop()
 		for {
 			select {

@@ -283,7 +283,7 @@ class SyncStore {
     try {
       this.serverVersion = await MetadataService.getApiV1Version();
       fileReferences.enabled = this.serverVersion.docbank_enabled === true;
-      events.setAvailable(this.serverVersion.read_only !== true && this.remoteLiveAllowed);
+      events.setAvailable(this.serverVersion.read_only !== true);
       this.markRemoteReachable(true);
       this.failedReads.version = null;
       this.versionMismatch = commitsDisagree(this.buildCommit, this.serverVersion.commit);

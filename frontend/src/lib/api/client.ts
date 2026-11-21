@@ -141,20 +141,15 @@ function connectLive(session?: string): LiveSource {
     }
     send = broadcast.connect(receive);
   }
-  let active = true;
-  const onPageHide = () => {
-    active = false;
-    send("leave");
-  };
+  const onPageHide = () => send("leave");
   const refreshCredentials = () => {
     const token = getAuthToken(server);
     if (request.token === token) return;
     request.token = token;
     request.credentialTime = performance.timeOrigin + performance.now();
-    if (active) send({ ...request });
+    send({ ...request });
   };
   const onPageShow = () => {
-    active = true;
     request.token = getAuthToken(server);
     request.credentialTime = performance.timeOrigin + performance.now();
     send({ ...request });

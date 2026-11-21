@@ -28,20 +28,9 @@ export class LiveBroadcast {
       if (!known) this.announce();
       this.elect();
     };
-    const name = `agentsview-live:${base}`;
-    if (typeof BroadcastChannel !== "undefined") {
-      const channel = new BroadcastChannel(name);
-      channel.onmessage = (event: MessageEvent<Message>) => receive(event.data);
-      this.send = (message) => channel.postMessage(message);
-    } else {
-      window.addEventListener("storage", (event) => {
-        if (event.key === name && event.newValue) receive(JSON.parse(event.newValue) as Message);
-      });
-      this.send = (message) => {
-        localStorage.setItem(name, JSON.stringify(message));
-        localStorage.removeItem(name);
-      };
-    }
+    const channel = new BroadcastChannel(`agentsview-live:${base}`);
+    channel.onmessage = (event: MessageEvent<Message>) => receive(event.data);
+    this.send = (message) => channel.postMessage(message);
     setInterval(() => {
       const cutoff = Date.now() - 4000;
       for (const [id, peer] of this.peers) if (peer.seen < cutoff) this.peers.delete(id);

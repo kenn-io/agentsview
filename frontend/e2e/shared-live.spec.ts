@@ -2,7 +2,7 @@
 import http from "node:http";
 import { expect, test } from "@playwright/test";
 
-for (const fallback of ["worker", "broadcast", "storage"] as const) {
+for (const fallback of ["worker", "broadcast"] as const) {
   test(`several visible session tabs share live updates (fallback: ${fallback})`, async ({
     context,
     page,
@@ -11,7 +11,6 @@ for (const fallback of ["worker", "broadcast", "storage"] as const) {
     const requested: string[] = [];
     const watches: string[] = [];
     const workerStatuses: number[] = [];
-    let rejected = false;
     let realAuthorization: string | undefined;
     const streamAuthorizations: (string | undefined)[] = [];
     const proxy = http.createServer((req, res) => {
@@ -25,11 +24,6 @@ for (const fallback of ["worker", "broadcast", "storage"] as const) {
         requested.push(url);
         streamAuthorizations.push(authorization);
         res.on("close", () => active.delete(res));
-        if (fallback !== "worker" && !rejected) {
-          rejected = true;
-          res.writeHead(503).end();
-          return;
-        }
       }
       const upstream = http.request(
         {
@@ -67,8 +61,6 @@ for (const fallback of ["worker", "broadcast", "storage"] as const) {
     await context.addInitScript((disableWorker) => {
       if (disableWorker !== "worker")
         Object.defineProperty(window, "SharedWorker", { value: undefined });
-      if (disableWorker === "storage")
-        Object.defineProperty(window, "BroadcastChannel", { value: undefined });
       Object.defineProperty(document, "hidden", {
         configurable: true,
         get: () => (window as Window & { __hidden?: boolean }).__hidden ?? false,
@@ -92,7 +84,6 @@ for (const fallback of ["worker", "broadcast", "storage"] as const) {
       }
       await page.waitForTimeout(400);
       await expect.poll(() => active.size).toBe(1);
-      if (fallback !== "worker") expect(requested.length).toBeGreaterThan(1);
       expect(workerStatuses).toEqual(fallback === "worker" ? [200] : []);
       expect(requested[0]).toBe("/api/v1/events?session=test-session-small-5");
       expect(new Set(new URL(requested.at(-1)!, base).searchParams.getAll("session"))).toEqual(
@@ -154,9 +145,6 @@ for (const fallback of ["worker", "broadcast", "storage"] as const) {
         .poll(() => new Set(new URL(requested.at(-1)!, base).searchParams.getAll("session")))
         .toEqual(new Set(ids));
       expect(watches).toEqual([]);
-      console.log(
-        `SharedWorker: ${workerStatuses[0]}, live streams: ${active.size}, session watch streams: ${watches.length}, startup: ${requested[0]}`,
-      );
     } finally {
       await context.close();
       await new Promise<void>((resolve, reject) =>

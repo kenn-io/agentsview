@@ -42,10 +42,6 @@ export class LiveHub {
     this.timer = null;
     this.source?.close();
     this.source = null;
-    this.ports.clear();
-    this.ready.clear();
-    this.timing.clear();
-    this.credentials = null;
   }
 
   private schedule() {
@@ -111,8 +107,6 @@ export class LiveHub {
       if (errors >= 5) {
         source.close();
         this.source = null;
-        this.ready.clear();
-        this.timing.clear();
         this.broadcast({ type: opened ? "closed" : "permanent_failure" });
       }
     });
