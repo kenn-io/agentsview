@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -92,6 +93,93 @@ func TestNewServer_MemoryProfileRegistersOnlyEvidenceTools(t *testing.T) {
 		}
 	}
 	assert.ElementsMatch(t, []string{ToolSearchContent, ToolGetMessages, ToolGetMemoryStatus, ToolGetCompactionSummaries}, names)
+}
+
+func TestNewServer_Instructions(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		profile Profile
+	}{{"default", ""}, {"memory", ProfileMemory}} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := dbtest.OpenTestDB(t)
+			st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), Profile: tc.profile}))
+			defer func() {
+				require.NoError(t, ct.Close())
+				require.NoError(t, st.Wait())
+			}()
+			instructions := ct.InitializeResult().Instructions
+			if tc.profile == ProfileMemory {
+				assert.Equal(t, "Use returned web_url values when linking to recorded sessions.", instructions)
+				return
+			}
+			catalog, err := ct.ListTools(t.Context(), nil)
+			require.NoError(t, err)
+			type schemaProperty struct {
+				Description string `json:"description"`
+			}
+			properties := map[string]map[string]schemaProperty{}
+			identifiers := map[string]bool{"web_url": true}
+			for _, tool := range catalog.Tools {
+				identifiers[tool.Name] = true
+				raw, err := json.Marshal(tool.InputSchema)
+				require.NoError(t, err)
+				var schema struct {
+					Properties map[string]schemaProperty `json:"properties"`
+				}
+				require.NoError(t, json.Unmarshal(raw, &schema))
+				properties[tool.Name] = schema.Properties
+				for field := range schema.Properties {
+					identifiers[field] = true
+				}
+			}
+			for _, name := range regexp.MustCompile(`[a-z]+(?:_[a-z]+)+`).FindAllString(instructions, -1) {
+				assert.True(t, identifiers[name], "unregistered tool or input property %q", name)
+			}
+			lines := strings.Split(instructions, "\n")
+			for _, route := range []struct {
+				prefix string
+				tool   string
+				args   []string
+				mode   string
+			}{
+				{"Find sessions by topic:", "search_content", []string{"mode"}, "hybrid"},
+				{"Find sessions by topic:", "search_sessions", nil, ""},
+				{"Find a named session:", "search_sessions", []string{"query"}, ""},
+				{"Find who owns a PR or task:", "search_content", []string{"mode", "pattern"}, "substring"},
+				{"Find who owns a PR or task:", "list_sessions", []string{"pr", "labels"}, ""},
+				{"See what a session did:", "get_session_overview", nil, ""},
+				{"See what a session did:", "get_tool_calls", nil, ""},
+				{"See what a session did:", "get_messages", nil, ""},
+				{"See what a session did:", "get_child_sessions", nil, ""},
+				{"Find recently active sessions:", "list_sessions", []string{"active_since"}, ""},
+				{"Results can hide sessions", "search_sessions", []string{"include_active"}, ""},
+				{"Results can hide sessions", "search_content", []string{"include_active", "include_one_shot", "include_automated"}, ""},
+				{"Results can hide sessions", "list_sessions", []string{"include_one_shot", "include_automated"}, ""},
+			} {
+				var line string
+				for _, l := range lines {
+					if strings.HasPrefix(l, route.prefix) {
+						line = l
+					}
+				}
+				require.NotEmpty(t, line, "missing route %q", route.prefix)
+				assert.Contains(t, line, route.tool)
+				schema, ok := properties[route.tool]
+				require.True(t, ok, "route %q names unregistered tool %q", route.prefix, route.tool)
+				for _, arg := range route.args {
+					assert.Regexp(t, `\b`+regexp.QuoteMeta(arg)+`\b`, line)
+					assert.Contains(t, schema, arg, "route %q names %q, which %s does not accept", route.prefix, arg, route.tool)
+				}
+				if route.mode != "" {
+					assert.Contains(t, line, "mode "+route.mode)
+					assert.Contains(t, schema["mode"].Description, route.mode, "%s mode does not list %q", route.tool, route.mode)
+				}
+			}
+			assert.Contains(t, instructions, "--server with API version 28 or later")
+			assert.Contains(t, instructions, "UUID")
+			assert.Contains(t, instructions, "RFC3339")
+		})
+	}
 }
 
 func TestServer_GetMemoryStatus(t *testing.T) {
