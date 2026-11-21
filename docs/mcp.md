@@ -388,8 +388,14 @@ short page can have a `next_from` and should be continued.
 `get_tool_calls` lists one session's tool calls in order, up to 50 per page
 (maximum 200). Set `category` to `Edit`, `Write`, `Bash`, or another tool
 category to narrow the list. Each input has secret-shaped values masked and is
-cut to `max_input_chars` (default 500, maximum 10000). Pass a call's `ordinal`
-to `get_messages` to read the surrounding conversation.
+cut to `max_input_chars` (default 500, maximum 10000). If the response byte
+budget splits an input, pass `next_cursor` as `cursor` and `next_input_offset`
+as `input_offset`, keeping the other arguments unchanged. Join the returned
+input fragments to read the input up to `max_input_chars`. When
+`next_input_offset` is absent, omit `input_offset` on the next request. An
+`input_truncated` flag can also mean the input exceeded `max_input_chars`;
+increase that limit to read more, up to the maximum. Pass a call's `ordinal` to
+`get_messages` to read the surrounding conversation.
 
 `get_recent_edits` matches `path` as a case-insensitive substring of edited file
 paths. Files come back newest edit first, 10 per page (maximum 50), each with up
