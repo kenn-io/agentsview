@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json/v2"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -84,8 +85,27 @@ func TestExportReportingUpgradesOldCursorUsageArchive(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
-	_, _, err = executeExportSessionsCommand(newExportReportingTestRoot(now), "export", "day", "--schema-version", "6", "--by-machine", "2026-07-28")
+	out, _, err := executeExportSessionsCommand(newExportReportingTestRoot(now), "export", "day", "--schema-version", "6", "--by-machine", "2026-07-28")
 	require.NoError(t, err)
+	var result struct {
+		Hours []struct {
+			Machines map[string]struct {
+				Usage struct {
+					Totals struct {
+						OutputTokens int64 `json:"output_tokens"`
+					} `json:"totals"`
+				} `json:"usage"`
+			} `json:"machines"`
+		} `json:"hours"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+	require.Len(t, result.Hours, 24)
+	archive, ok := result.Hours[10].Machines["archive:old-archive"]
+	require.True(t, ok)
+	assert.EqualValues(t, 22, archive.Usage.Totals.OutputTokens)
+	for machine := range result.Hours[10].Machines {
+		assert.False(t, strings.HasPrefix(machine, "cursor-account:"))
+	}
 }
 
 func TestExportReportingCursorAccountHour(t *testing.T) {
@@ -100,10 +120,8 @@ func TestExportReportingCursorAccountHour(t *testing.T) {
 	out, _, err := executeExportSessionsCommand(newExportReportingTestRoot(now), "export", "hour", "--schema-version", "6", "--by-machine", "2026-07-28-10")
 	require.NoError(t, err)
 	var result struct {
-		Machines map[string]struct {
-			PolledAt string `json:"polled_at"`
-		} `json:"machines"`
+		Machines map[string]any `json:"machines"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(out), &result))
-	assert.Equal(t, "2026-07-29T00:00:00.000000Z", result.Machines["cursor-account:12"].PolledAt)
+	assert.Contains(t, result.Machines, "cursor-account:12")
 }

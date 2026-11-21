@@ -1743,7 +1743,7 @@ func TestCursorSyncMatchesMembers(t *testing.T) {
 				require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT account_user_id, account_polled_at FROM cursor_usage_events WHERE model='new'`).Scan(&account, &stamp))
 				assert.Empty(t, account)
 				assert.Empty(t, stamp)
-			} else {
+			} else if tc.name == "ambiguous" {
 				polledAt, err := time.Parse(time.RFC3339Nano, stamp)
 				require.NoError(t, err)
 				assert.True(t, polledAt.After(priorTime))

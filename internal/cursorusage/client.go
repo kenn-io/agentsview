@@ -298,8 +298,7 @@ func (c *Client) ListDailyUsageUsers(ctx context.Context, start, end time.Time) 
 			if err != nil || id == 0 {
 				continue
 			}
-			key := strconv.FormatUint(id, 10)
-			users = append(users, key)
+			users = append(users, strconv.FormatUint(id, 10))
 		}
 		if !resp.Pagination.HasNext {
 			return users, nil

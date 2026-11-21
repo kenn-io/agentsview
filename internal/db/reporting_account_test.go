@@ -70,6 +70,7 @@ func TestExportReportingHourLoadsOnlySelectedAccountRows(t *testing.T) {
 func TestReportingDigestIncludesCursorAccountPoll(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
+	require.NoError(t, d.ConfigureArtifactLocalMachine(ctx, "machine-a"))
 	date := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
 	now := date.Add(48 * time.Hour)
 	require.NoError(t, d.InsertCursorUsageEvents(ctx, []CursorUsageEvent{{OccurredAt: "2026-07-28T10:00:00Z", Model: "a", OutputTokens: 10, DedupKey: "a"}}))

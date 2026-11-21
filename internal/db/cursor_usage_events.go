@@ -84,7 +84,6 @@ func (db *DB) AssignCursorUsageAccount(ctx context.Context, accountUserID string
 	if _, err := db.getWriter().Exec(ctx, `UPDATE cursor_usage_events SET account_user_id = ?, account_polled_at = ? WHERE dedup_key IN (SELECT value FROM json_each(?)) AND account_polled_at < ?`, accountUserID, stamp, string(encoded), stamp); err != nil {
 		return fmt.Errorf("assigning Cursor usage account: %w", err)
 	}
-	db.notifyCursorUsage()
 	return nil
 }
 
@@ -224,10 +223,9 @@ func (db *DB) MaxCursorUsageEventID(ctx context.Context) (int64, error) {
 }
 
 // GetCursorUsageEvents returns account usage rows with id greater than
-// sinceID, in (occurred_at, id) order. The table is append-only (no
-// updates or deletes), so its integer primary key grows monotonically and
-// sinceID acts as a high-water mark: pass 0 for the full history, or the
-// largest previously consumed ID to load only appended rows.
+// sinceID, in (occurred_at, id) order. Account stamps can update existing rows;
+// their IDs stay unchanged. Pass 0 for the full history, or the largest
+// previously consumed ID to load only appended rows.
 func (db *DB) GetCursorUsageEvents(
 	ctx context.Context, sinceID int64,
 ) ([]CursorUsageEvent, error) {
