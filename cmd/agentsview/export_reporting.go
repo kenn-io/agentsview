@@ -73,7 +73,8 @@ func newExportHourCommand(deps exportReportingDeps) *cobra.Command {
 				return err
 			}
 			index := hourStart.Hour()
-			if index >= len(day.Hours) || day.Hours[index].Period != args[0] {
+			if index >= len(day.Hours) ||
+				day.Hours[index].Period != args[0] {
 				return fmt.Errorf("reporting hour %q is unavailable", args[0])
 			}
 			return writeCanonicalReportingDocument(

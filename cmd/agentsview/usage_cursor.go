@@ -134,7 +134,7 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 			if !errors.Is(err, db.ErrCursorAccountRebuildPending) {
 				return err
 			}
-			fmt.Fprintf(os.Stdout, "Imported %d events; account reporting starts after the archive finishes its pending rebuild. Rerun after sync.\n", len(rows))
+			fmt.Fprintf(os.Stdout, "Imported %d events; skipped account reporting until the archive rebuild finishes. Rerun this sync then.\n", len(rows))
 			return nil
 		}
 		windowEnd := end.Add(time.Millisecond)
@@ -210,7 +210,10 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 		}
 	}
 
-	fmt.Fprintf(os.Stdout, "Fetched %d Cursor usage events into the archive\n", len(rows))
+	fmt.Fprintf(os.Stdout,
+		"Fetched %d Cursor usage events into the archive\n",
+		len(rows),
+	)
 	return nil
 }
 

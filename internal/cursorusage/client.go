@@ -406,7 +406,9 @@ func retryCursorRequest[T any](ctx context.Context, c *Client, lastRequest *time
 			return zero, backoff.RetryAfter(min(statusErr.retryAfter, maxRetryDelay), err)
 		}
 		return zero, err
-	}, backoff.WithBackOff(newRetryBackOff()), backoff.WithMaxTries(maxPageAttempts),
+	},
+		backoff.WithBackOff(newRetryBackOff()),
+		backoff.WithMaxTries(maxPageAttempts),
 		// Attempts and the context bound the loop; an elapsed-time limit
 		// would cut off a run of honored 60-second Retry-After waits.
 		backoff.WithMaxElapsedTime(0),
