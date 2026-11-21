@@ -264,7 +264,8 @@ func (e *Engine) tryProviderIncrementalAppend(
 		case parser.IncrementalNoNewData:
 			return nil, nil, nil, nil, time.Time{}, 0, nil, nil, nil
 		default:
-			remote := e.toolLinkRemote(db.Session{Machine: inc.Machine, Cwd: inc.Cwd, Project: inc.Project}, inc.RecordedGitRemote)
+			session := db.Session{Machine: inc.Machine, Cwd: inc.Cwd, Project: inc.Project}
+			remote := e.toolLinkRemote(session, inc.RecordedGitRemote)
 			var messages []db.Message
 			for _, message := range outcome.Messages {
 				var calls []db.ToolCall
@@ -273,7 +274,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 				}
 				messages = append(messages, db.Message{ToolCalls: calls})
 			}
-			toolLinks := db.ToolCallPRLinks(messages, inc.Cwd, remote)
+			toolLinks := db.ToolCallPRLinksWithRemoteResolver(messages, inc.Cwd, remote, e.toolLinkRemoteResolver(session))
 			if len(toolLinks) > 0 {
 				var encoded string
 				if err := e.db.Reader().QueryRowContext(ctx, `SELECT pr_links FROM sessions WHERE id=?`, inc.ID).Scan(&encoded); err != nil {
