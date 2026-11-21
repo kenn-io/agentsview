@@ -96,10 +96,8 @@ func TestGetMessages_TruncatedWithoutRevisionBindingsKeepsPagination(t *testing.
 	}
 }
 
-// A cursor issued under explicit roles must continue under exactly those
-// roles: the issuing roles ride inside the cursor, so an explicit-role
-// listing (here roles: ["tool"]) gets a working continuation even though the
-// continuation request itself carries no Roles.
+// A cursor continues under the issuing role without carrying the full list of
+// requested roles, even when the continuation request has no Roles.
 func TestGetMessages_BodyCursorContinuesUnderIssuingRoles(t *testing.T) {
 	ts, d := newTestToolset(t)
 	dbtest.SeedSessionWithMessages(t, d, "toolroles", "proj", []db.Message{

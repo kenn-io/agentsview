@@ -337,28 +337,34 @@ func TestGetToolCalls_BudgetPages(t *testing.T) {
 	}
 }
 
-func TestGetToolCalls_BudgetOversizedInput(t *testing.T) {
-	ts, d := newTestToolset(t)
-	dbtest.SeedSession(t, d, "large-input", "proj")
+func TestGetToolCalls_BudgetOversized(t *testing.T) {
 	input := `{"command":"` + strings.Repeat("<", 9985) + `z"}`
-	dbtest.SeedMessages(t, d,
-		toolCallMsg("large-input", 0, db.ToolCall{ToolName: "Bash", Category: "Bash", InputJSON: input}),
-		toolCallMsg("large-input", 1, db.ToolCall{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"next"}`}),
-	)
-	_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "large-input", MaxInputChars: 10000})
-	require.NoError(t, err)
-	require.Len(t, out.ToolCalls, 1)
-	assert.True(t, fitsResponse(out))
-	assert.True(t, out.ToolCalls[0].InputTruncated)
-	assert.True(t, strings.HasPrefix(input, out.ToolCalls[0].Input))
-	require.NotNil(t, out.NextCursor)
-	assert.Equal(t, 1, *out.NextCursor)
-}
-
-func TestGetToolCalls_BudgetOversizedMetadata(t *testing.T) {
-	ts, d := newTestToolset(t)
-	dbtest.SeedSession(t, d, "large-name", "proj")
-	dbtest.SeedMessages(t, d, toolCallMsg("large-name", 0, db.ToolCall{ToolName: strings.Repeat("x", 12000), InputJSON: `{}`}))
-	_, _, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "large-name"})
-	require.ErrorContains(t, err, "tool call metadata exceeds response budget")
+	for _, tc := range []struct {
+		name, toolName, input string
+		wantError             bool
+	}{
+		{name: "input", toolName: "Bash", input: input},
+		{name: "metadata", toolName: strings.Repeat("x", 12000), input: `{}`, wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts, d := newTestToolset(t)
+			dbtest.SeedSession(t, d, "large-input", "proj")
+			dbtest.SeedMessages(t, d,
+				toolCallMsg("large-input", 0, db.ToolCall{ToolName: tc.toolName, Category: "Bash", InputJSON: tc.input}),
+				toolCallMsg("large-input", 1, db.ToolCall{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"next"}`}),
+			)
+			_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "large-input", MaxInputChars: 10000})
+			if tc.wantError {
+				require.ErrorContains(t, err, "tool call metadata exceeds response budget")
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, out.ToolCalls, 1)
+			assert.True(t, fitsResponse(out))
+			assert.True(t, out.ToolCalls[0].InputTruncated)
+			assert.True(t, strings.HasPrefix(input, out.ToolCalls[0].Input))
+			require.NotNil(t, out.NextCursor)
+			assert.Equal(t, 1, *out.NextCursor)
+		})
+	}
 }

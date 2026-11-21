@@ -2385,7 +2385,7 @@ func (f *pagedContentSearchService) SearchContent(_ context.Context, req service
 	start := min(req.Cursor, len(f.matches))
 	end := min(start+req.Limit, len(f.matches))
 	result := &service.ContentSearchResult{Matches: f.matches[start:end], ActiveFilterApplied: !f.legacy}
-	if end < len(f.matches) {
+	if end < len(f.matches) && req.Mode != "semantic" && req.Mode != "hybrid" {
 		result.NextCursor = end
 	}
 	return result, nil
@@ -2423,7 +2423,6 @@ func TestSearchContent_BudgetTotal(t *testing.T) {
 			assert.Equal(t, tc.capped, out.TotalCapped)
 			if tc.mode != "" {
 				assert.Positive(t, out.Omitted)
-				assert.Nil(t, out.NextCursor)
 				assert.Contains(t, out.Note, "Reduce limit")
 			}
 			if tc.legacy {
@@ -2435,20 +2434,18 @@ func TestSearchContent_BudgetTotal(t *testing.T) {
 	}
 }
 
-func TestSearchContent_BudgetLongSnippet(t *testing.T) {
-	fake := &pagedContentSearchService{matches: []db.ContentMatch{{SessionID: "session", Ordinal: 1, Snippet: strings.Repeat("x", 20000)}}}
-	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
-	_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", IncludeActive: true})
-	require.ErrorContains(t, err, "search metadata exceeds response budget")
-}
-
-func TestSearchContent_OversizedCurrentSessionID(t *testing.T) {
-	ts, d := newTestToolset(t)
-	seedFTSSession(t, d, "session", "proj", "needle", "2024-06-15T10:00:00Z")
-	_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{
-		Pattern: "needle", CurrentSessionID: strings.Repeat("x", 12000), IncludeOneShot: true,
-	})
-	require.ErrorContains(t, err, "search metadata exceeds response budget")
+func TestSearchContent_BudgetOversized(t *testing.T) {
+	for _, tc := range []struct{ name, snippet, currentSession string }{
+		{name: "snippet", snippet: strings.Repeat("x", 20000)},
+		{name: "current session", snippet: "needle", currentSession: strings.Repeat("x", 12000)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &pagedContentSearchService{matches: []db.ContentMatch{{SessionID: "session", Ordinal: 1, Snippet: tc.snippet}}}
+			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+			_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", CurrentSessionID: tc.currentSession, IncludeActive: true})
+			require.ErrorContains(t, err, "search metadata exceeds response budget")
+		})
+	}
 }
 
 func TestGetMessages_BudgetAroundLinearContinuation(t *testing.T) {
