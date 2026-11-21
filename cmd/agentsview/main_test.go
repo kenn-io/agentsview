@@ -326,6 +326,7 @@ func TestServeLegacyImageTextAfterRestart(t *testing.T) {
 	cfg.ImageText = config.ImageTextConfig{Enabled: true, Endpoint: ocrServer.URL + "/glmocr/parse"}
 	database, err := db.Open(t.Context(), cfg.DBPath)
 	require.NoError(t, err)
+	dbtest.SeedSessionWithMessages(t, database, "session0", "project", []db.Message{dbtest.UserMsg("session0", 0, "old transcript")})
 	dbtest.SeedSessionWithMessages(t, database, "retained-image", "project", []db.Message{{SessionID: "retained-image", Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: `[{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgppbWFnZQ=="}]`}}}})
 	require.NoError(t, database.Close())
 	conn, err := sql.Open("sqlite3", cfg.DBPath)
@@ -442,12 +443,10 @@ func TestServeStaleArchiveHelperProcess(t *testing.T) {
 				return err == nil && !stale
 			}, 20*time.Second, 10*time.Millisecond, "replacement archive must be installed and fresh")
 		}
-		if kind != "legacy image text" {
-			stale, _, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
-			require.NoError(t, err)
-			require.False(t, stale, "startup reconciliation must finish before readiness")
-		}
-		if kind == "data version" || kind == "scoped pending" || kind == "schema repair" {
+		stale, _, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
+		require.NoError(t, err)
+		require.False(t, stale, "startup reconciliation must finish before readiness")
+		if kind == "data version" || kind == "scoped pending" || kind == "schema repair" || kind == "legacy image text" {
 			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/sessions/session0/messages", nil)
 			require.NoError(t, err)
 			resp, err := client.Do(req)
@@ -456,7 +455,11 @@ func TestServeStaleArchiveHelperProcess(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, resp.Body.Close())
 			require.Equal(t, http.StatusOK, resp.StatusCode)
-			require.Contains(t, string(body), "hello")
+			if kind == "legacy image text" {
+				require.Contains(t, string(body), `"content":"hi"`)
+			} else {
+				require.Contains(t, string(body), "hello")
+			}
 		}
 		if os.Getenv("AGENTSVIEW_STALE_SERVE_RESTART") == "1" {
 			require.Eventually(t, func() bool {
