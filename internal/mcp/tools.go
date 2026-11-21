@@ -217,9 +217,13 @@ func (t *toolset) searchSessions(
 		out.NextCursor = &nc
 	}
 	if len(out.Results) == 0 && out.ExcludedActive > 0 {
+		message := fmt.Sprintf("Sessions active in the last %g minutes hidden from this page: %d. Retry this request with include_active: true to see them; they may include your current conversation.", activeExclusionWindow.Minutes(), out.ExcludedActive)
+		if out.NextCursor != nil {
+			message += " To see later matches without including active sessions, pass next_cursor as cursor."
+		}
 		out.Hints = []service.ContentSearchHint{{
 			Code:      "excluded_active",
-			Message:   fmt.Sprintf("Sessions active in the last 10 minutes hidden from this page: %d. Retry this request with include_active: true to see them.", out.ExcludedActive),
+			Message:   message,
 			RetryWith: map[string]any{"include_active": true},
 		}}
 	}
