@@ -123,3 +123,20 @@ func TestChangeStreamReadWaitsForBulkReadPermit(t *testing.T) {
 	require.Len(t, got.batch.Sessions, 1)
 	assert.Equal(t, "chat", got.batch.Sessions[0].SessionID)
 }
+
+func TestChangeStreamReservedMachineIdentity(t *testing.T) {
+	d := testDB(t)
+	_, err := d.EnsureConversationExportInitialized(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, d.ConfigureArtifactLocalMachine(t.Context(), "cursor-account:12"))
+	require.NoError(t, d.UpsertSession(t.Context(), Session{ID: "chat", Project: "sample", Machine: "local", Agent: "codex"}))
+	head, err := d.ReadChangeStreamHead(t.Context())
+	require.NoError(t, err)
+	const machine = "machine:2939296221cda1ef57dff3bf4333caa28eafdc25e0bc81db56cfd1ad9b755e9e"
+	assert.Equal(t, machine, head.LocalMachineID)
+	batch, err := d.ReadChangeStream(t.Context(), "", nil)
+	require.NoError(t, err)
+	require.Len(t, batch.Sessions, 1)
+	require.NotNil(t, batch.Sessions[0].MachineID)
+	assert.Equal(t, machine, *batch.Sessions[0].MachineID)
+}

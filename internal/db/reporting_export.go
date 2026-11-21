@@ -310,16 +310,19 @@ func reportingHoursFromSource(
 	if err != nil || source.localMachineID == "" {
 		return hours, err
 	}
-	machines := map[string]bool{source.localMachineID: true}
+	localMachineID := source.machineID("local")
+	machines := map[string]bool{localMachineID: true}
 	for _, session := range mergeReportingSessions(source.activitySessions, source.usageSessions) {
 		machines[source.machineID(session.Machine)] = true
 	}
 	for _, row := range source.standaloneUsage {
 		machines[source.machineID("")] = true
-		machines[source.machineID(row.Machine)] = true
+		if row.Machine != "" {
+			machines[row.Machine] = true
+		}
 	}
 	for i := range hours {
-		hours[i].LocalMachineID = source.localMachineID
+		hours[i].LocalMachineID = localMachineID
 		hours[i].Machines = make(map[string]export.ReportingHour, len(machines))
 	}
 	for machine := range machines {
@@ -420,8 +423,8 @@ func reportingHoursFromMachineSource(
 		})
 		usage = slices.DeleteFunc(slices.Clone(usage), func(u activity.UsageRow) bool {
 			origin := sessionByID[u.SessionID].Machine
-			if u.SessionID == "" {
-				origin = u.Machine
+			if u.SessionID == "" && u.Machine != "" {
+				return u.Machine != machine
 			}
 			return source.machineID(origin) != machine
 		})
@@ -685,6 +688,7 @@ func (db *DB) reportingStandaloneUsageCandidatesFrom(
 				WHERE e.agent = 'cursor' AND e.user_id != ''
 				AND julianday(window_start) <= julianday(strftime('%Y-%m-%dT%H:00:00Z', e.occurred_at))
 				AND julianday(window_end_exclusive) >= julianday(strftime('%Y-%m-%dT%H:00:00Z', e.occurred_at), '+1 hour')
+				AND julianday(completed_at) >= julianday(strftime('%Y-%m-%dT%H:00:00Z', e.occurred_at), '+1 hour')
 				ORDER BY julianday(completed_at) DESC, rowid DESC LIMIT 1)`
 		}
 	}

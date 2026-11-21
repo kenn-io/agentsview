@@ -2,7 +2,9 @@ package db
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"strings"
 
@@ -54,10 +56,14 @@ func (m machineIdentities) origin(machine, archiveID string) string {
 		return "archive:" + archiveID
 	}
 	if machine == "local" {
-		return m.local
+		machine = m.local
+	} else if canonical := m.aliases[machine]; canonical != "" {
+		machine = canonical
 	}
-	if canonical := m.aliases[machine]; canonical != "" {
-		return canonical
+	// Reserve the account namespace and escape the escape namespace itself.
+	if strings.HasPrefix(machine, "cursor-account:") || strings.HasPrefix(machine, "machine:") {
+		digest := sha256.Sum256([]byte(machine))
+		return "machine:" + hex.EncodeToString(digest[:])
 	}
 	return machine
 }

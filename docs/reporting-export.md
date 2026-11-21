@@ -49,6 +49,8 @@ without nested machine metadata. The local identity comes from the archive's
 recorded installation, not its display label. Recorded machine aliases resolve
 to their canonical identities. Run `agentsview source sync` first if the archive has
 not recorded its installation identity.
+Machine identities beginning with `cursor-account:` or `machine:` are exported
+as stable `machine:` hashes so they remain distinct from account parts.
 
 All machine snapshots use the same read transaction, bucket resolution, project
 selection, pricing, and usage-survivor selection as the combined hour. The local
@@ -64,7 +66,8 @@ not treat it as a machine identity or merge it with a named machine.
 
 Schema 6 requires `--by-machine`. It reports Cursor team usage under
 `cursor-account:<user_id>` when the event has a positive numeric user ID and a
-completed unfiltered Cursor sync covers the entire UTC hour. Account parts carry
+completed unfiltered Cursor sync covers the entire UTC hour before the sync
+starts. Account parts carry
 `polled_at`, the time the sync completed, and usage totals by model and agent.
 Events without a valid user ID or a covering poll remain under archive billing.
 Email is never used as an account key. Project-key exports omit these

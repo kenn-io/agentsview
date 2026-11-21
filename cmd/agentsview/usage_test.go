@@ -2012,3 +2012,38 @@ func TestCursorUsagePollRecordsOnlyCompletedUnfilteredSync(t *testing.T) {
 	_, err := time.Parse(time.RFC3339Nano, completed)
 	require.NoError(t, err)
 }
+
+func TestCursorUsagePollExcludesOpenHour(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "config.toml"), []byte("cursor_admin_api_key = 'key'\n"), 0o600))
+	eventTime := time.Now().UTC()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"totalUsageEventsCount":1,"usageEvents":[{"timestamp":"%d","model":"model-a","userId":12,"tokenUsage":{"outputTokens":10}}]}`, eventTime.UnixMilli())
+	}))
+	t.Cleanup(server.Close)
+	original := newCursorUsageClient
+	newCursorUsageClient = func(key string) *cursorusage.Client {
+		client := cursorusage.NewClientWithBaseURL(server.URL, key)
+		client.RequestInterval = 0
+		return client
+	}
+	t.Cleanup(func() { newCursorUsageClient = original })
+	localNow := eventTime.In(timeutil.LocalLocation())
+	cmd := newUsageCursorCommand()
+	cmd.SetArgs([]string{"--since", localNow.AddDate(0, 0, -1).Format("2006-01-02"), "--until", localNow.AddDate(0, 0, 1).Format("2006-01-02")})
+	captureStdout(t, func() { require.NoError(t, cmd.Execute()) })
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, database.ConfigureArtifactLocalMachine(t.Context(), "origin-a"))
+	var windowEnd string
+	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT window_end_exclusive FROM cursor_usage_polls`).Scan(&windowEnd))
+	assert.Equal(t, eventTime.Truncate(time.Hour).Format(time.RFC3339), windowEnd)
+	day, err := database.ExportReportingDay(t.Context(), db.ReportingExportOptions{
+		Date: eventTime.Truncate(24 * time.Hour), Now: eventTime.Add(2 * time.Hour),
+		SchemaVersion: export.ReportingAccountSchemaVersion, ByMachine: true,
+	})
+	require.NoError(t, err)
+	hour := day.Hours[eventTime.Hour()]
+	assert.NotContains(t, hour.Machines, "cursor-account:12")
+	assert.EqualValues(t, 10, hour.Usage.Totals.OutputTokens)
+}

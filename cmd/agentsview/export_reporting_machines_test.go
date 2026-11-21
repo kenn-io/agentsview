@@ -84,7 +84,8 @@ func TestExportReportingCursorAccounts(t *testing.T) {
 			(8, 'cursor', '2026-07-28T09:08:00Z', 'model-h', 9, '12', 'h');
 			INSERT INTO cursor_usage_polls VALUES ('2026-07-28T10:00:00Z', '2026-07-28T11:00:00Z', '2026-07-29T00:00:00Z', 7);
 			UPDATE cursor_usage_polls SET event_max_id=4;
-			INSERT INTO cursor_usage_polls VALUES ('2026-07-28T09:00:00Z', '2026-07-28T10:00:00Z', '2026-07-29T00:00:00Z', 8);`)
+			INSERT INTO cursor_usage_polls VALUES ('2026-07-28T09:00:00Z', '2026-07-28T10:00:00Z', '2026-07-29T00:00:00Z', 8);
+			INSERT INTO cursor_usage_polls VALUES ('2026-07-28T11:00:00Z', '2026-07-28T12:00:00Z', '2026-07-28T11:30:00Z', 8);`)
 		return err
 	}))
 	require.NoError(t, database.Close())
@@ -157,4 +158,58 @@ func TestExportReportingCursorAccounts(t *testing.T) {
 	day, err = read("export", "day", "--schema-version", "6", "--by-machine", "2026-07-28")
 	require.NoError(t, err)
 	assert.EqualValues(t, 50, day.Hours[10].Machines["archive:test-archive"].Usage.Totals.OutputTokens)
+}
+
+func TestExportReportingCursorAccountMachineCollision(t *testing.T) {
+	dataDir := testDataDir(t)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, database.ConfigureArtifactLocalMachine(t.Context(), "cursor-account:12"))
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `
+			INSERT INTO pg_sync_state(key, value) VALUES ('machine_alias:peer', 'cursor-account:12');
+			INSERT INTO sessions(id, project, machine, agent, message_count, started_at, ended_at) VALUES
+			('native', 'project', 'local', 'claude', 2, '2026-07-28T10:00:00Z', '2026-07-28T10:01:00Z'),
+			('peer', 'project', 'peer', 'claude', 2, '2026-07-28T10:00:00Z', '2026-07-28T10:02:00Z'),
+			('direct', 'project', 'cursor-account:12', 'claude', 2, '2026-07-28T10:00:00Z', '2026-07-28T10:01:00Z'),
+			('escaped', 'project', 'machine:2939296221cda1ef57dff3bf4333caa28eafdc25e0bc81db56cfd1ad9b755e9e', 'claude', 2, '2026-07-28T10:00:00Z', '2026-07-28T10:03:00Z');
+			INSERT INTO messages(session_id, ordinal, role, content, timestamp, model) VALUES
+			('native', 0, 'user', 'start', '2026-07-28T10:00:00Z', ''), ('native', 1, 'assistant', 'end', '2026-07-28T10:01:00Z', 'model-a'),
+			('peer', 0, 'user', 'start', '2026-07-28T10:00:00Z', ''), ('peer', 1, 'assistant', 'end', '2026-07-28T10:02:00Z', 'model-a'),
+			('direct', 0, 'user', 'start', '2026-07-28T10:00:00Z', ''), ('direct', 1, 'assistant', 'end', '2026-07-28T10:01:00Z', 'model-a'),
+			('escaped', 0, 'user', 'start', '2026-07-28T10:00:00Z', ''), ('escaped', 1, 'assistant', 'end', '2026-07-28T10:03:00Z', 'model-a');
+			INSERT INTO cursor_usage_events(occurred_at, model, output_tokens, user_id, dedup_key) VALUES ('2026-07-28T10:04:00Z', 'model-b', 10, '12', 'account');
+			INSERT INTO cursor_usage_polls VALUES ('2026-07-28T10:00:00Z', '2026-07-28T11:00:00Z', '2026-07-29T00:00:00Z', 1);`)
+		return err
+	}))
+	require.NoError(t, database.Close())
+	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+	out, _, err := executeExportSessionsCommand(newExportReportingTestRoot(now), "export", "hour", "--schema-version", "6", "--by-machine", "2026-07-28-10")
+	require.NoError(t, err)
+	var result struct {
+		LocalMachineID string `json:"local_machine_id"`
+		Machines       map[string]struct {
+			PolledAt string `json:"polled_at"`
+			Activity struct {
+				Totals struct {
+					AgentMinutes float64 `json:"agent_minutes"`
+				} `json:"totals"`
+			} `json:"activity"`
+			Joint struct {
+				Cells []any `json:"cells"`
+			} `json:"joint"`
+			Usage struct {
+				Totals struct {
+					OutputTokens int64 `json:"output_tokens"`
+				} `json:"totals"`
+			} `json:"usage"`
+		} `json:"machines"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+	const machine = "machine:2939296221cda1ef57dff3bf4333caa28eafdc25e0bc81db56cfd1ad9b755e9e"
+	assert.Equal(t, machine, result.LocalMachineID)
+	assert.InDelta(t, 4, result.Machines[machine].Activity.Totals.AgentMinutes, 0.001)
+	assert.NotEmpty(t, result.Machines[machine].Joint.Cells)
+	assert.InDelta(t, 3, result.Machines["machine:99b14951da0e7986cffad677018196fe8842ed68aa0eac7824b9c304fba6f930"].Activity.Totals.AgentMinutes, 0.001)
+	assert.EqualValues(t, 10, result.Machines["cursor-account:12"].Usage.Totals.OutputTokens)
+	assert.Equal(t, "2026-07-29T00:00:00Z", result.Machines["cursor-account:12"].PolledAt)
 }

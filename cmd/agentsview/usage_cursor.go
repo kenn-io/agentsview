@@ -109,6 +109,7 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 		fmt.Fprintf(os.Stderr, "Cursor usage page %d: %v; retrying in %s\n",
 			page, err, wait.Round(time.Second))
 	}
+	closedThrough := time.Now().UTC().Truncate(time.Hour)
 	events, err := client.FetchAllUsageEvents(ctx, cursorusage.Query{
 		StartDate: start,
 		EndDate:   end,
@@ -140,7 +141,13 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 	}
 	var polls []db.CursorUsagePoll
 	if email == "" && userID == "" {
-		polls = append(polls, db.CursorUsagePoll{WindowStart: start, WindowEndExclusive: end.Add(time.Millisecond), CompletedAt: completedAt})
+		windowEnd := end.Add(time.Millisecond)
+		if windowEnd.After(closedThrough) {
+			windowEnd = closedThrough
+		}
+		if start.Before(windowEnd) {
+			polls = append(polls, db.CursorUsagePoll{WindowStart: start, WindowEndExclusive: windowEnd, CompletedAt: completedAt})
+		}
 	}
 	if err := database.InsertCursorUsageEvents(ctx, rows, polls...); err != nil {
 		return err
