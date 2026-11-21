@@ -210,6 +210,29 @@ func TestCodeModeCommandPRUsesItsWorkdir(t *testing.T) {
 	assert.ElementsMatch(t, []string{"https://github.com/example/first/pull/41", "https://github.com/example/second/pull/42", "https://github.com/example/second/pull/43"}, storedPRURLs(t, env.db, "codex:"+id))
 }
 
+func TestCommandPRWorkdirInChangedCheckout(t *testing.T) {
+	testutil.IsolateGit(t)
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".git"), 0o700))
+	require.NoError(t, os.Mkdir(filepath.Join(root, "sub"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "config"), []byte("[remote \"origin\"]\n url = https://github.com/example/new.git\n"), 0o600))
+	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
+	const id = "01900000-0000-7000-8000-000000000092"
+	command := func(dir string) string {
+		return fmt.Sprintf(`text(await tools.exec_command({cmd:"gh pr view 42",workdir:%q}))`, dir)
+	}
+	path := env.writeCodexSession(t, filepath.Join("2024", "01", "15"), "rollout-20240115-"+id+".jsonl", testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaWithFieldsJSON(id, root, "user", tsEarly, map[string]any{"git": map[string]any{"repository_url": "https://github.com/example/old.git"}}),
+		testjsonl.CodexMsgJSON("user", "Review changes", tsEarlyS1),
+		testjsonl.CodexFunctionCallWithCallIDJSON("exec", "first", command(filepath.Join(root, "sub")), tsEarlyS5),
+	))
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+	assert.Empty(t, storedPRURLs(t, env.db, "codex:"+id))
+	appendClaudeSplitLines(t, path, testjsonl.CodexFunctionCallWithCallIDJSON("exec", "second", command(filepath.Join(root, "sub")), "2024-01-01T10:00:06Z"))
+	env.engine.SyncPaths([]string{path})
+	assert.Empty(t, storedPRURLs(t, env.db, "codex:"+id))
+}
+
 func TestCommandPRLinksSurviveArchiveContentPolicy(t *testing.T) {
 	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
 		for _, bulk := range []bool{false, true} {

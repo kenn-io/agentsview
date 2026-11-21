@@ -113,11 +113,20 @@ func (e *Engine) toolLinkRemote(s db.Session, recorded string) string {
 	return obs.GitRemote
 }
 
-func (e *Engine) toolLinkRemoteResolver(s db.Session) func(string) string {
+func (e *Engine) toolLinkRemoteResolver(s db.Session, recorded string) func(string) string {
 	return func(dir string) string {
-		s.Cwd = dir
-		return e.toolLinkRemote(s, "")
+		return e.toolLinkRemoteInDirectory(s, recorded, dir)
 	}
+}
+
+func (e *Engine) toolLinkRemoteInDirectory(s db.Session, recorded, dir string) string {
+	checkout := e.cachedProjectIdentity(s.Machine, s.Cwd)
+	identity := e.cachedProjectIdentity(s.Machine, dir)
+	if checkout.gitDir == "" || identity.gitDir != checkout.gitDir {
+		recorded = ""
+	}
+	s.Cwd = dir
+	return e.toolLinkRemote(s, recorded)
 }
 
 // mayDiscoverLocalProject reports whether path may be probed on the local

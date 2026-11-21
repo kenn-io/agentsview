@@ -11623,7 +11623,7 @@ func (e *Engine) prepareSessionNormalizedContext(
 	var resolve func(string) string
 	if !pw.sourceIdentityUnverified {
 		remote = e.toolLinkRemote(candidate.Session, pw.sess.GitRemote)
-		resolve = e.toolLinkRemoteResolver(candidate.Session)
+		resolve = e.toolLinkRemoteResolver(candidate.Session, pw.sess.GitRemote)
 	}
 	candidate.Session.ToolPRLinks = db.ToolCallPRLinksWithRemoteResolver(candidate.Messages, candidate.Session.Cwd, remote, resolve)
 	options := ingest.ContentOptions{
