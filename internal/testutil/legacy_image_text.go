@@ -8,9 +8,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const imageTextOccurrencesA080 = `CREATE TABLE image_text_occurrences (session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, call_id INTEGER REFERENCES tool_calls(id) ON DELETE CASCADE, event_id INTEGER REFERENCES tool_result_events(id) ON DELETE CASCADE, image_index INTEGER NOT NULL, image_hash TEXT NOT NULL, CHECK ((call_id IS NULL) <> (event_id IS NULL)), PRIMARY KEY (session_id, image_hash));`
+const imageTextOccurrencesA080 = `CREATE TABLE image_text_occurrences (session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, call_id INTEGER REFERENCES tool_calls(id) ON DELETE CASCADE, event_id INTEGER REFERENCES tool_result_events(id) ON DELETE CASCADE, image_index INTEGER NOT NULL, image_hash TEXT NOT NULL, PRIMARY KEY (session_id, image_hash));`
 
-const imageTextOccurrencesB831 = `CREATE TABLE image_text_occurrences (session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, call_id INTEGER, event_id INTEGER, image_index INTEGER NOT NULL, image_hash TEXT NOT NULL, media_type TEXT NOT NULL, CHECK ((call_id IS NULL) <> (event_id IS NULL)));`
+const imageTextOccurrencesB831 = `CREATE TABLE image_text_occurrences (session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, call_id INTEGER, event_id INTEGER, image_index INTEGER NOT NULL, image_hash TEXT NOT NULL, media_type TEXT NOT NULL);`
 
 type LegacyImageTextLayout string
 
@@ -19,12 +19,13 @@ const (
 	LegacyImageTextLayoutB831F99CC LegacyImageTextLayout = "b831f99cc"
 )
 
-// LegacyImageTextSchema installs the image-text tables and AFTER DELETE trigger
-// used by unreleased builds a08089649 and b831f99cc.
-func LegacyImageTextSchema(t testing.TB, db interface {
+// LegacyImageTextSchema installs the image-text table shapes used by the
+// archive-repair tests.
+func LegacyImageTextSchema(tb testing.TB, db interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
-}, layout LegacyImageTextLayout) {
-	t.Helper()
+}, layout LegacyImageTextLayout,
+) {
+	tb.Helper()
 	var occurrences string
 	switch layout {
 	case LegacyImageTextLayoutA08089649:
@@ -32,9 +33,9 @@ func LegacyImageTextSchema(t testing.TB, db interface {
 	case LegacyImageTextLayoutB831F99CC:
 		occurrences = imageTextOccurrencesB831
 	default:
-		t.Fatalf("unknown legacy image-text layout %q", layout)
+		require.FailNow(tb, "unknown legacy image-text layout %q", layout)
 	}
-	_, err := db.ExecContext(t.Context(), `
+	_, err := db.ExecContext(tb.Context(), `
 		DROP TRIGGER image_text_session_delete;
 		DROP TABLE image_text_occurrences;
 		DROP TABLE image_text_cache;
@@ -45,5 +46,5 @@ func LegacyImageTextSchema(t testing.TB, db interface {
 		CREATE VIRTUAL TABLE image_text_fts USING fts5(text, content='image_text_cache', content_rowid='rowid', tokenize='porter unicode61');
 		CREATE TRIGGER image_text_session_delete AFTER DELETE ON sessions BEGIN DELETE FROM image_text_cache WHERE NOT EXISTS (SELECT 1 FROM image_text_occurrences o WHERE o.image_hash=image_text_cache.image_hash); END;
 	`)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 }
