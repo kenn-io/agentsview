@@ -38,7 +38,7 @@ func storedFields(v reflect.Value, root string) any {
 		fields := make(map[string]any)
 		for i := range v.NumField() {
 			field := v.Type().Field(i)
-			if !field.IsExported() || field.Name == "FileMtime" || field.Name == "FileInode" || field.Name == "FileDevice" || field.Name == "FileHash" {
+			if !field.IsExported() || field.Name == "FileMtime" || field.Name == "FileInode" || field.Name == "FileDevice" || field.Name == "FileHash" || (v.Type() == reflect.TypeFor[db.Session]() && field.Name == "ToolPRLinks") {
 				continue
 			}
 			fields[field.Name] = storedFields(v.Field(i), root)
@@ -332,4 +332,13 @@ func TestStoredFieldsNormalizesPaths(t *testing.T) {
 	require.Equal(t, "$ROOT/a/b.jsonl", storedFields(reflect.ValueOf("/tmp/fixture/a/b.jsonl"), "/tmp/fixture"))
 	require.Equal(t, "read $ROOT/a then continue", storedFields(reflect.ValueOf("read /tmp/fixture/a then continue"), "/tmp/fixture"))
 	require.Equal(t, "$ROOT", storedFields(reflect.ValueOf("fixture"), "/tmp/fixture"))
+}
+
+func TestStoredFieldsExcludesTransientToolPRLinks(t *testing.T) {
+	link := db.PRLink{URL: "https://github.com/example/repo/pull/42", Host: "github.com", Repository: "example/repo", Number: 42}
+	session := db.Session{ID: "session", ToolPRLinks: []db.PRLink{link}}
+	fields := storedFields(reflect.ValueOf(session), "/fixture").(map[string]any)
+	require.NotContains(t, fields, "ToolPRLinks")
+	other := storedFields(reflect.ValueOf(struct{ ToolPRLinks string }{ToolPRLinks: "stored"}), "/fixture").(map[string]any)
+	require.Equal(t, "stored", other["ToolPRLinks"])
 }

@@ -35,16 +35,9 @@ func rawGroupHasStaleFriction(
 	return stale, err
 }
 
-type rawFreshContent struct {
-	group   string
-	payload []byte
-	links   []db.PRLink
-}
-
 // syncSelectedRawPRLinks refreshes materialized revisions selected by active
 // branches, including longer retained captures whose source has departed.
-func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string, dialogueChanges, freshIDs []string, fresh map[string]rawFreshContent) (bool, error) {
-	dialogueChanges = append(dialogueChanges, freshIDs...)
+func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string, dialogueChanges []string) (bool, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT b.session_id,s.data_version FROM raw_session_branches b JOIN sessions s ON s.id=b.session_id WHERE b.group_id=$1 AND b.active AND (s.data_version<$2 OR b.session_id=ANY($3::text[]))`, group, db.CurrentDataVersion(), dialogueChanges)
 	if err != nil {
 		return false, err
@@ -78,7 +71,7 @@ func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string, dialo
 			return false, err
 		}
 		toolLinks := db.ToolCallPRLinks(payload.Messages, payload.Session.Cwd, "")
-		links := db.EncodePRLinks(parser.CombinePRLinks(payload.Session.PRLinks, promptLinks, toolLinks, payload.ToolPRLinks, fresh[id].links))
+		links := db.EncodePRLinks(parser.CombinePRLinks(payload.Session.PRLinks, promptLinks, toolLinks, payload.ToolPRLinks))
 		var linksChanged bool
 		err = tx.QueryRowContext(ctx, `WITH prior AS (
  SELECT pr_links FROM sessions WHERE id=$1 FOR UPDATE
@@ -124,7 +117,7 @@ func publishRawRevision(ctx context.Context, tx *sql.Tx, identityChanged bool, c
 
 // materializeGroup requires the caller to hold the group's row lock. It
 // returns the embedding changes for the caller to pass to publishRawRevision.
-func (s *RawProjectionStore) materializeGroup(ctx context.Context, tx *sql.Tx, group string, fresh map[string]rawFreshContent) ([]rawEmbeddingChange, error) {
+func (s *RawProjectionStore) materializeGroup(ctx context.Context, tx *sql.Tx, group string, fresh map[string][]byte) ([]rawEmbeddingChange, error) {
 	if err := reconcileRawPrefixes(ctx, tx, group); err != nil {
 		return nil, err
 	}
@@ -185,13 +178,12 @@ func (s *RawProjectionStore) materializeGroup(ctx context.Context, tx *sql.Tx, g
 			if !exists {
 				// Prefix reconciliation may select a retained revision instead of
 				// the new capture. Reuse only the selected, freshly inserted row.
-				item := fresh[c.id]
+				encoded := fresh[c.id]
 				delete(fresh, c.id)
-				payload, err := loadRawPayloadBytes(ctx, tx, c.id, item.payload)
+				payload, err := loadRawPayloadBytes(ctx, tx, c.id, encoded)
 				if err != nil {
 					return nil, err
 				}
-				payload.Session.PRLinks = parser.CombinePRLinks(payload.Session.PRLinks, item.links)
 				if err = s.writePayload(ctx, tx, c.id, group, c.revision, payload); err != nil {
 					return nil, err
 				}

@@ -347,12 +347,10 @@ func CallPRLinks(category, input, cwd, remote string) []PRLink {
 		if json.Unmarshal([]byte(input), &payload) != nil {
 			return nil
 		}
-		a, _ := parser.PromptPRLinksContext(context.Background(), payload.Prompt)
-		b, _ := parser.PromptPRLinksContext(context.Background(), payload.Message)
 		var content string
 		_ = json.Unmarshal(payload.Content, &content)
-		c, _ := parser.PromptPRLinksContext(context.Background(), content)
-		return parser.CombinePRLinks(a, b, c)
+		links, _ := parser.PromptPRLinksContext(context.Background(), payload.Prompt+"\n"+payload.Message+"\n"+content)
+		return links
 	}
 	if category != "Bash" {
 		return nil
@@ -454,7 +452,7 @@ func setToolPRLinksTx(tx transactionQueries, id string, links []PRLink, replace 
 
 func resetUsageOnlyPRLinksTx(tx transactionQueries, id string) error {
 	var stored, structured, tools string
-	if err := tx.QueryRow(`SELECT pr_links, structured_pr_links, tool_pr_links FROM sessions WHERE id=?`, id).Scan(&stored, &structured, &tools); err != nil {
+	if err := tx.QueryRow(`SELECT COALESCE(MAX(pr_links),''), COALESCE(MAX(structured_pr_links),''), COALESCE(MAX(tool_pr_links),'') FROM sessions WHERE id=?`, id).Scan(&stored, &structured, &tools); err != nil {
 		return err
 	}
 	return writeSessionPromptPRLinksTx(tx, id, stored, parser.CombinePRLinks(DecodePRLinks(structured), DecodePRLinks(tools)))
