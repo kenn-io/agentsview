@@ -549,6 +549,61 @@ func TestGetToolCalls_ReturnsSavedEvents(t *testing.T) {
 	assert.Contains(t, string(events[1]["content"]), "latest B")
 }
 
+func TestGetToolCalls_EventCursorSurvivesAppendAndRejectsReplacement(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "event-cursor", "proj")
+	call := toolCallMsg("event-cursor", 0, db.ToolCall{ToolUseID: "one", ToolName: "wait_agent", ResultContent: "summary", ResultEvents: []db.ToolResultEvent{
+		{AgentID: "agent-a", Source: "tool_result", Content: "first"},
+		{AgentID: "agent-b", SubagentSessionID: "child", Status: "completed", Source: "tool_result", Content: "abcdefghij"},
+	}})
+	dbtest.SeedMessages(t, d, call)
+	_, first, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "event-cursor", IncludeResults: true, MaxResultChars: 4})
+	require.NoError(t, err)
+	require.Len(t, first.ToolCalls, 1)
+	type event struct {
+		AgentID           string `json:"agent_id"`
+		SubagentSessionID string `json:"subagent_session_id"`
+		Status            string `json:"status"`
+		EventIndex        int    `json:"event_index"`
+		Content           string `json:"content"`
+		ContentLength     int    `json:"content_length"`
+		Cursor            string `json:"result_cursor"`
+	}
+	var firstCall struct {
+		Events []event `json:"result_events"`
+	}
+	raw, err := json.Marshal(first.ToolCalls[0])
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(raw, &firstCall))
+	require.Len(t, firstCall.Events, 2)
+	assert.Equal(t, "agent-b", firstCall.Events[1].AgentID)
+	assert.Equal(t, 1, firstCall.Events[1].EventIndex)
+	assert.Equal(t, "abcd", firstCall.Events[1].Content)
+	cursor := firstCall.Events[1].Cursor
+	require.NotEmpty(t, cursor)
+	dbtest.SeedMessages(t, d, dbtest.AsstMsg("event-cursor", 1, "later message"))
+	_, next, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "event-cursor", ResultCursor: cursor, MaxResultChars: 100})
+	require.NoError(t, err)
+	require.Len(t, next.ToolCalls, 1)
+	raw, err = json.Marshal(next.ToolCalls[0])
+	require.NoError(t, err)
+	var nextCall struct {
+		Events []event `json:"result_events"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &nextCall))
+	require.Len(t, nextCall.Events, 1)
+	assert.Equal(t, "agent-b", nextCall.Events[0].AgentID)
+	assert.Equal(t, "child", nextCall.Events[0].SubagentSessionID)
+	assert.Equal(t, "completed", nextCall.Events[0].Status)
+	assert.Equal(t, 1, nextCall.Events[0].EventIndex)
+	assert.Equal(t, "efghij", nextCall.Events[0].Content)
+	assert.Equal(t, 10, nextCall.Events[0].ContentLength)
+	call.ToolCalls[0].ResultEvents[1].Content = "ABCDEFGHIJ"
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "event-cursor", []db.Message{call, dbtest.AsstMsg("event-cursor", 1, "later message")}))
+	_, _, err = ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "event-cursor", ResultCursor: cursor})
+	require.ErrorIs(t, err, service.ErrSourceChanged)
+}
+
 func TestGetToolCalls_ResultCursorSurvivesAppend(t *testing.T) {
 	ts, d := newTestToolset(t)
 	dbtest.SeedSession(t, d, "append", "proj")
