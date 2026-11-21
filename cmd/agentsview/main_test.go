@@ -264,13 +264,16 @@ func TestServeCommandMountsWritableServerAtBasePath(t *testing.T) {
 }
 
 func TestServeSkipInitialSyncStillReparsesStaleArchive(t *testing.T) {
-	for _, kind := range []string{"data version", "archive only", "scoped pending", "schema repair"} {
+	for _, kind := range []string{"data version", "archive only", "scoped pending", "schema repair", "legacy image text"} {
 		t.Run(kind, func(t *testing.T) {
 			cfg := testConfigWithClaudeFixture(t)
 			cfg.Host = "127.0.0.1"
 			database, err := db.Open(t.Context(), cfg.DBPath)
 			require.NoError(t, err)
 			dbtest.SeedSessionWithMessages(t, database, "retained", "project", []db.Message{dbtest.UserMsg("retained", 0, "retained transcript")})
+			if kind == "legacy image text" {
+				dbtest.SeedSessionWithMessages(t, database, "session0", "project", []db.Message{dbtest.UserMsg("session0", 0, "old transcript")})
+			}
 			if kind == "archive only" {
 				require.NoError(t, database.EnableArchiveOnly(t.Context()))
 			}
@@ -283,6 +286,13 @@ func TestServeSkipInitialSyncStillReparsesStaleArchive(t *testing.T) {
 				statement := "INSERT INTO stats(key, value) VALUES ('scoped_upgrade_pending', 1)"
 				if kind == "schema repair" {
 					statement = "ALTER TABLE tool_calls DROP COLUMN result_content_length"
+				} else if kind == "legacy image text" {
+					statement = `DROP TRIGGER image_text_session_delete; DROP TABLE image_text_occurrences; DROP TABLE image_text_cache;
+						DROP VIEW message_search_content;
+						CREATE VIEW message_search_content AS SELECT id, session_id, content AS rendered, COALESCE(dialogue_text, content) AS content FROM messages;
+						CREATE TABLE image_text_cache (image_hash TEXT NOT NULL, processor TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL, revision TEXT NOT NULL, text TEXT NOT NULL DEFAULT '', succeeded INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0, retry_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT '', PRIMARY KEY (image_hash, processor));
+						CREATE TABLE image_text_occurrences (session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, call_id INTEGER, event_id INTEGER, image_index INTEGER NOT NULL, image_hash TEXT NOT NULL, media_type TEXT NOT NULL, CHECK ((call_id IS NULL) <> (event_id IS NULL)));
+						CREATE TRIGGER image_text_session_delete AFTER DELETE ON sessions BEGIN DELETE FROM image_text_cache WHERE NOT EXISTS (SELECT 1 FROM image_text_occurrences o WHERE o.image_hash=image_text_cache.image_hash); END;`
 				}
 				_, err = conn.ExecContext(t.Context(), statement)
 				require.NoError(t, err)
@@ -388,7 +398,7 @@ func TestServeStaleArchiveHelperProcess(t *testing.T) {
 		stale, _, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
 		require.NoError(t, err)
 		require.False(t, stale, "startup reconciliation must finish before readiness")
-		if kind == "data version" || kind == "scoped pending" || kind == "schema repair" {
+		if kind == "data version" || kind == "scoped pending" || kind == "schema repair" || kind == "legacy image text" {
 			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/sessions/session0/messages", nil)
 			require.NoError(t, err)
 			resp, err := client.Do(req)
@@ -397,12 +407,16 @@ func TestServeStaleArchiveHelperProcess(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, resp.Body.Close())
 			require.Equal(t, http.StatusOK, resp.StatusCode)
-			require.Contains(t, string(body), "hello")
+			if kind == "legacy image text" {
+				require.Contains(t, string(body), `"content":"hi"`)
+			} else {
+				require.Contains(t, string(body), "hello")
+			}
 		}
 		fmt.Println("archive rebuild complete")
 		return original(lifetime, dataDir, host, port, version, browserURL, readOnly, requireAuth, noSync, explicitPort, caddyPID...)
 	}
-	runServe(t.Context(), cfg, serveOptions{SkipInitialSync: true}, 0)
+	runServe(t.Context(), cfg, serveOptions{SkipInitialSync: kind != "legacy image text"}, 0)
 }
 
 func TestPGServeRuntimeRecordWriteFailureWarnsVisible(t *testing.T) {

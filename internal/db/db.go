@@ -4104,6 +4104,22 @@ func execSchemaScriptLocked(ctx context.Context, w *writerHandle) error {
 		return fmt.Errorf("beginning schema script transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	var legacyImageText bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='image_text_cache') AND NOT EXISTS(SELECT 1 FROM pragma_table_info('image_text_cache') WHERE name='id')`).Scan(&legacyImageText); err != nil {
+		return fmt.Errorf("checking legacy image text schema: %w", err)
+	}
+	if legacyImageText {
+		// Unreleased builds stored image text in a separate, rebuildable index.
+		if _, err := tx.ExecContext(ctx, `
+			DROP TRIGGER IF EXISTS image_text_session_delete;
+			DROP TABLE IF EXISTS image_text_fts;
+			DROP TABLE IF EXISTS image_text_cjk_fts;
+			DROP TABLE IF EXISTS image_text_occurrences;
+			DROP TABLE image_text_cache;
+		`); err != nil {
+			return fmt.Errorf("removing legacy image text schema: %w", err)
+		}
+	}
 	if _, err := tx.ExecContext(ctx, schemaSQL); err != nil {
 		return err
 	}

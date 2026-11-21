@@ -669,3 +669,57 @@ func TestImageTextBatchFillsStoredResult(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{RetainedToolResultImages(msg.ToolCalls[0].ResultContent)[0].SHA256}, pending)
 }
+
+func TestOpenRepairsPreMergeImageText(t *testing.T) {
+	for _, later := range []bool{false, true} {
+		t.Run(fmt.Sprintf("later_schema_%t", later), func(t *testing.T) {
+			ctx := t.Context()
+			d := testDB(t)
+			path := d.Path()
+			insertSession(t, d, "legacy-image", "demo")
+			require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "legacy-image", Role: "user", Content: "original transcript"}}))
+			occurrences := `CREATE TABLE image_text_occurrences (session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, call_id INTEGER REFERENCES tool_calls(id) ON DELETE CASCADE, event_id INTEGER REFERENCES tool_result_events(id) ON DELETE CASCADE, image_index INTEGER NOT NULL, image_hash TEXT NOT NULL, CHECK ((call_id IS NULL) <> (event_id IS NULL)), PRIMARY KEY (session_id, image_hash));`
+			if later {
+				occurrences = `CREATE TABLE image_text_occurrences (session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, call_id INTEGER, event_id INTEGER, image_index INTEGER NOT NULL, image_hash TEXT NOT NULL, media_type TEXT NOT NULL, CHECK ((call_id IS NULL) <> (event_id IS NULL)));`
+			}
+			_, err := d.getWriter().ExecContext(ctx, `
+				DROP TRIGGER image_text_session_delete;
+				DROP TABLE image_text_occurrences;
+				DROP TABLE image_text_cache;
+				DROP VIEW message_search_content;
+				CREATE VIEW message_search_content AS SELECT id, session_id, content AS rendered, COALESCE(dialogue_text, content) AS content FROM messages;
+				CREATE TABLE image_text_cache (image_hash TEXT NOT NULL, processor TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL, revision TEXT NOT NULL, text TEXT NOT NULL DEFAULT '', succeeded INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0, retry_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT '', PRIMARY KEY (image_hash, processor));
+				`+occurrences+`
+				CREATE VIRTUAL TABLE image_text_fts USING fts5(text, content='image_text_cache', content_rowid='rowid', tokenize='porter unicode61');
+				CREATE TRIGGER image_text_session_delete AFTER DELETE ON sessions BEGIN DELETE FROM image_text_cache WHERE NOT EXISTS (SELECT 1 FROM image_text_occurrences o WHERE o.image_hash=image_text_cache.image_hash); END;
+				PRAGMA user_version = 166;
+			`)
+			require.NoError(t, err)
+			if later {
+				// A failed sync may have left the current view referencing the old cache.
+				_, err = d.getWriter().ExecContext(ctx, `DROP VIEW message_search_content; CREATE VIEW message_search_content AS SELECT id, session_id, content AS rendered, COALESCE(dialogue_text, content) AS content FROM messages UNION ALL SELECT id, NULL, text, '' FROM image_text_cache`)
+				require.NoError(t, err)
+			}
+			require.NoError(t, d.Close())
+
+			d, err = Open(ctx, path)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = d.Close() })
+			content := testInlineImageContent()
+			require.NoError(t, d.ReplaceSessionMessages(ctx, "legacy-image", []Message{{SessionID: "legacy-image", Role: "assistant", Content: "updated transcript", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+			require.NoError(t, d.BackfillImageTextOccurrences(ctx))
+			identity, err := ocr.NewIdentity("test", "model", "revision")
+			require.NoError(t, err)
+			require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "invoice marker", false))
+			for _, query := range []string{"updated transcript", "invoice marker"} {
+				page, err := d.Search(ctx, SearchFilter{Query: query})
+				require.NoError(t, err)
+				require.Len(t, page.Results, 1)
+				require.Equal(t, "legacy-image", page.Results[0].SessionID)
+			}
+			require.NoError(t, d.Close())
+			d, err = Open(ctx, path)
+			require.NoError(t, err)
+		})
+	}
+}
