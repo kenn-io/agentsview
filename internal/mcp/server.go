@@ -120,7 +120,6 @@ func newServer(opts ServeOptions) *mcp.Server {
 
 	s.AddReceivingMiddleware(argumentHints)
 
-	var warnCallLog sync.Once
 	s.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, request mcp.Request) (mcp.Result, error) {
 			if method != "tools/call" {
