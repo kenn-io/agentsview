@@ -241,9 +241,8 @@ an agent ID ending in `:<uuid>`, or a host ID ending in `~<uuid>`; the delimiter
 is part of the match, so a fork entry separated by `-` is not selected. The row
 has an empty `snippet`, `match_ordinal` set to `0`, and no `next_cursor`. Call
 `get_messages` with that ordinal to read the first message.
-`get_session_overview` provides a compact message preview. Remote
-bare UUID lookup requires AgentsView 0.44.0 or later on the server. Use an exact
-full stored ID with an older server.
+`get_session_overview` provides a compact message preview. Use an exact full
+stored ID with an older server.
 
 `search_sessions` and `search_content` exclude sessions active in the last ten
 minutes by default, including the current conversation. `search_content` applies

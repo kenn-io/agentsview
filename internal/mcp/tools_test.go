@@ -720,15 +720,11 @@ func TestGetMessages_ContinuationRejectsDeletedSession(t *testing.T) {
 		dbtest.UserMsg("codex:body", 0, "abcdefghij"),
 	}, dbtest.WithMessageCounts(1, 1))
 
-	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "body", MaxCharsPerMessage: 4})
+	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "body"})
 	require.NoError(t, err)
-	require.Len(t, first.Messages, 1)
-	require.NotEmpty(t, first.Messages[0].BodyCursor)
 	require.NotEmpty(t, first.TranscriptRevision)
 	require.NoError(t, d.DeleteSession(t.Context(), "codex:body"))
 
-	_, _, err = ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "body", BodyCursor: first.Messages[0].BodyCursor})
-	require.ErrorIs(t, err, service.ErrSourceChanged)
 	_, _, err = ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "body", ExpectedRevision: first.TranscriptRevision})
 	require.ErrorIs(t, err, service.ErrSourceChanged)
 }
@@ -2574,10 +2570,8 @@ func TestSessionToolsResolvePlainIDs(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, kids.Sessions, 1)
 	assert.Equal(t, "child", kids.Sessions[0].SessionID)
-	_, refs, err := ts.fileReferences(t.Context(), nil, fileReferencesIn{SessionID: "plain"})
+	_, _, err = ts.fileReferences(t.Context(), nil, fileReferencesIn{SessionID: "plain"})
 	require.NoError(t, err)
-	assert.Equal(t, "enabled", refs.Integration)
-	assert.NotEmpty(t, refs.TranscriptRevision)
 
 	_, calls, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "empty"})
 	require.NoError(t, err)

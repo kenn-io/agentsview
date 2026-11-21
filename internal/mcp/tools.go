@@ -135,7 +135,7 @@ type searchSessionsIn struct {
 	DateFrom      string `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
 	DateTo        string `json:"date_to,omitempty" jsonschema:"Only sessions on or before this date (YYYY-MM-DD)."`
 	Query         string `json:"query,omitempty" jsonschema:"Search terms; required unless session_id is set. Every term must appear (AND); quote the whole query for an exact phrase. Punctuation is handled safely."`
-	SessionID     string `json:"session_id,omitempty" jsonschema:"Look up one raw UUID or full ID. Returns one metadata row, includes active sessions, and ignores other search arguments. Missing or ambiguous IDs return errors."`
+	SessionID     string `json:"session_id,omitempty" jsonschema:"Look up one session by its raw UUID or full stored session ID. Returns one metadata row, includes active sessions, and takes precedence over the other search arguments. Missing IDs and ambiguous raw UUIDs return errors."`
 	Project       string `json:"project,omitempty" jsonschema:"Restrict to one project (repo/directory name)."`
 	Sort          string `json:"sort,omitempty" jsonschema:"relevance (default) or recency."`
 	Limit         int    `json:"limit,omitempty" jsonschema:"Max results, default 10, max 30."`
@@ -505,7 +505,7 @@ func (t *toolset) sessionOverview(
 
 type getMessagesIn struct {
 	SessionID string `json:"session_id" jsonschema:"Full session ID or unique raw UUID."`
-	From      *int   `json:"from,omitempty" jsonschema:"Starting ordinal, e.g. match_ordinal from search_sessions. Zero anchors the first message. Mutually exclusive with around."`
+	From      *int   `json:"from,omitempty" jsonschema:"Ordinal to start from (e.g. match_ordinal from search_sessions). Ordinal 0 is a valid anchor (the first message). Mutually exclusive with around."`
 	Direction string `json:"direction,omitempty" jsonschema:"asc (default, oldest first) or desc (newest first). Mutually exclusive with around."`
 	Limit     int    `json:"limit,omitempty" jsonschema:"Max messages scanned, default 20, max 100. Filtering or the byte budget can return fewer. Around uses before/after instead."`
 	// Around switches to a symmetric window centered on an ordinal instead
@@ -617,12 +617,7 @@ func filterAndMapMessage(m db.Message, roles []string, maxChars int) (messageOut
 	return mo, true
 }
 
-func (t *toolset) getMessages(
-	ctx context.Context, _ *mcp.CallToolRequest, in getMessagesIn,
-) (*mcp.CallToolResult, getMessagesOut, error) {
-	if in.BodyCursor != "" {
-		return t.getMessageBodyContinuation(ctx, in)
-	}
+func (t *toolset) resolveMessageRead(ctx context.Context, in *getMessagesIn) error {
 	var detail *service.SessionDetail
 	var err error
 	if in.ExpectedRevision != "" && !strings.HasPrefix(in.ExpectedRevision, "mcp1:") {
@@ -634,14 +629,23 @@ func (t *toolset) getMessages(
 		detail, err = t.resolveSession(ctx, in.SessionID)
 	}
 	if errors.Is(err, service.ErrSessionNotFound) && in.ExpectedRevision != "" {
-		return nil, getMessagesOut{}, fmt.Errorf("%w: cited session no longer exists", service.ErrSourceChanged)
+		return fmt.Errorf("%w: cited session no longer exists", service.ErrSourceChanged)
 	}
 	if err != nil {
-		return nil, getMessagesOut{}, err
+		return err
 	}
 	in.SessionID = detail.ID
 	in.ExpectedRevision, err = unbindMessageRevision(in.SessionID, in.ExpectedRevision)
-	if err != nil {
+	return err
+}
+
+func (t *toolset) getMessages(
+	ctx context.Context, _ *mcp.CallToolRequest, in getMessagesIn,
+) (*mcp.CallToolResult, getMessagesOut, error) {
+	if in.BodyCursor != "" {
+		return t.getMessageBodyContinuation(ctx, in)
+	}
+	if err := t.resolveMessageRead(ctx, &in); err != nil {
 		return nil, getMessagesOut{}, err
 	}
 	if in.Around != nil {
