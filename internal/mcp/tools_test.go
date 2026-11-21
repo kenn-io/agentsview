@@ -687,17 +687,30 @@ func TestGetMessages_RevisionDoesNotSwitchHostCopy(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, continuation.Messages, 1)
 	require.Equal(t, "original message", continuation.Messages[0].Content)
+	original, err := d.GetSession(t.Context(), "codex:uuid")
+	require.NoError(t, err)
+	_, _, err = ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "codex:uuid", ExpectedRevision: *original.TranscriptRevision})
+	require.NoError(t, err)
 	dbtest.SeedSessionWithMessages(t, d, "host~codex:uuid", "proj", []db.Message{
 		dbtest.UserMsg("host~codex:uuid", 0, "other host message"),
 	}, dbtest.WithMessageCounts(1, 1))
-	original, err := d.GetSession(t.Context(), "codex:uuid")
+	_, truncated, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "codex:uuid", MaxCharsPerMessage: 4})
 	require.NoError(t, err)
+	require.Len(t, truncated.Messages, 1)
+	_, chunk, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "uuid", BodyCursor: truncated.Messages[0].BodyCursor, MaxCharsPerMessage: 4})
+	require.NoError(t, err)
+	require.Len(t, chunk.Messages, 1)
+	require.Equal(t, "inal", chunk.Messages[0].Content)
 	sibling, err := d.GetSession(t.Context(), "host~codex:uuid")
 	require.NoError(t, err)
 	require.Equal(t, original.TranscriptRevision, sibling.TranscriptRevision)
 	require.NoError(t, d.DeleteSession(t.Context(), "codex:uuid"))
 	_, _, err = ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "uuid", ExpectedRevision: first.TranscriptRevision})
 	require.ErrorIs(t, err, service.ErrSourceChanged)
+	for _, id := range []string{"uuid", "codex:uuid"} {
+		_, _, err = ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: id, ExpectedRevision: *original.TranscriptRevision})
+		assert.ErrorIs(t, err, service.ErrSourceChanged)
+	}
 }
 
 func TestGetMessages_ContinuationRejectsDeletedSession(t *testing.T) {

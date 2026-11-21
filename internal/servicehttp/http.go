@@ -351,7 +351,7 @@ func (e *apiVersionError) Error() string {
 // Only a confirmed old version means raw lookup is unsupported; a failed probe stays an ordinary error.
 func (b *httpBackend) requireRawLookup(ctx context.Context) error {
 	err := b.requireAPIVersion(ctx, service.RawSessionLookupAPIVersion, "raw session ID lookup")
-	if errors.As(err, new(*apiVersionError)) {
+	if _, ok := errors.AsType[*apiVersionError](err); ok {
 		return fmt.Errorf("%w: %w", service.ErrRawLookupUnsupported, err)
 	}
 	return err
