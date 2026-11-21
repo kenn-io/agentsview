@@ -8,6 +8,11 @@ import (
 
 func TestGHPRCommandLinks(t *testing.T) {
 	tests := []struct{ command, remote, want string }{
+		{`GH_HOST=github.com gh pr view 42 -R example/repo`, "", "https://github.com/example/repo/pull/42"},
+		{`env GH_HOST=github.com gh pr view 42 -R example/repo`, "", "https://github.com/example/repo/pull/42"},
+		{`GH_HOST=ghe.example.com gh pr view 42 -R example/repo`, "", ""},
+		{`GH_HOST=github.com; gh pr view 42 -R example/repo`, "", ""},
+		{`export GH_HOST=github.com; gh pr view 42 -R example/repo`, "", ""},
 		{`export FOO=1; gh pr view 42 -R example/repo`, "", "https://github.com/example/repo/pull/42"},
 		{`unset FOO; gh pr view 42 -R example/repo`, "", "https://github.com/example/repo/pull/42"},
 		{`export GH_REPO=a/b; gh pr view 42 -R example/repo`, "", ""},

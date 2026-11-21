@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -268,9 +269,9 @@ func (e *Engine) tryProviderIncrementalAppend(
 			remote := e.toolLinkRemote(session, inc.RecordedGitRemote)
 			var messages []db.Message
 			for _, message := range outcome.Messages {
-				var calls []db.ToolCall
-				for _, call := range message.ToolCalls {
-					calls = append(calls, db.ToolCall{Category: call.Category, InputJSON: call.InputJSON})
+				calls, err := ingest.ConvertToolCallsContext(ctx, inc.ID, message.ToolCalls)
+				if err != nil {
+					return nil, nil, nil, nil, time.Time{}, 0, nil, nil, err
 				}
 				messages = append(messages, db.Message{ToolCalls: calls})
 			}

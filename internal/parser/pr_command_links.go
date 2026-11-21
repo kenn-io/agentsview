@@ -51,6 +51,12 @@ func shellCommands(command string) ([]shellCall, bool) {
 			case *syntax.CallExpr:
 				for _, assignment := range n.Assigns {
 					if assignment.Name != nil && (assignment.Name.Value == "GH_REPO" || assignment.Name.Value == "GH_HOST") {
+						if assignment.Name.Value == "GH_HOST" && len(n.Args) > 0 && assignment.Value != nil {
+							value, literal := shellLiteral(assignment.Value.Parts)
+							if literal && value == "github.com" {
+								continue
+							}
+						}
 						contextUnknown = true
 					}
 				}
@@ -156,12 +162,11 @@ func unwrapShellCall(call shellCall) shellCall {
 		case "env":
 			call.Words, call.Literal = call.Words[1:], call.Literal[1:]
 			for len(call.Words) > 0 && call.Literal[0] {
-				name, _, ok := strings.Cut(call.Words[0], "=")
+				name, value, ok := strings.Cut(call.Words[0], "=")
 				if !ok {
 					break
 				}
-				switch name {
-				case "GH_REPO", "GH_HOST":
+				if name == "GH_REPO" || name == "GH_HOST" && value != "github.com" {
 					call.Unknown = true
 				}
 				call.Words, call.Literal = call.Words[1:], call.Literal[1:]
