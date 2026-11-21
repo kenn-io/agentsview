@@ -48,6 +48,10 @@ async function installLiveSession(page: Page) {
   const all = Array.from({ length: 300 }, (_, i) =>
     message(i, i === 5 || i === 250 ? `needle at ${i}` : `Message ${i}`),
   );
+  let resolveReload!: () => void;
+  const reloaded = new Promise<void>((resolve) => {
+    resolveReload = resolve;
+  });
   await page.addInitScript(() => {
     localStorage.setItem("agentsview-message-layout", "skim");
     localStorage.setItem("agentsview-transcript-mode", "normal");
@@ -67,6 +71,7 @@ async function installLiveSession(page: Page) {
       ? all.slice(Math.max(0, from - limit + 1), from + 1).reverse()
       : all.slice(from, from + limit);
     await route.fulfill({ json: { messages: selected, count: selected.length } });
+    if (selected.some((entry) => entry.content === "Live message 304")) resolveReload();
   });
   // The shared stream stays open until the test emits an update.
   let emit!: () => void;
@@ -95,6 +100,7 @@ async function installLiveSession(page: Page) {
   });
   return {
     ready,
+    reloaded,
     refresh: () => {
       for (let i = 0; i < 5; i++) {
         const ordinal = all.length;
@@ -142,12 +148,21 @@ for (const newestFirst of [false, true])
       const before = await waitForScrollSettled(transcript);
 
       // The refresh only counts once the client has fetched the appended rows.
-      const reloaded = page.waitForResponse(
-        async (r) =>
-          /\/messages/.test(r.url()) && r.ok() && (await r.text()).includes("Live message 304"),
-      );
       live.refresh();
-      await reloaded;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          live.reloaded,
+          new Promise<never>((_, reject) => {
+            timeout = setTimeout(
+              () => reject(new Error("No message refresh included Live message 304")),
+              15_000,
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(timeout);
+      }
       // Nothing observable marks "the reveal did not run", so give a stray
       // re-reveal time to land before comparing offsets.
       await page.waitForTimeout(500);
