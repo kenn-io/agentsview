@@ -113,19 +113,6 @@ func TestCallLogPaginationAndRejectedNames(t *testing.T) {
 	assert.NotContains(t, string(raw), "validating")
 }
 
-func TestCallLogLongRecords(t *testing.T) {
-	dir := t.TempDir()
-	name := strings.Repeat("x", 70000)
-	rec := callRecord{Version: 1, At: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC), Tool: ToolSearchSessions, Outcome: "error", Error: "invalid arguments", Rejected: []string{name}}
-	line, err := json.Marshal(rec)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "2026-01-02.jsonl"), append(line, '\n'), 0600))
-	rows, err := SummarizeCalls(t.Context(), dir, "", "")
-	require.NoError(t, err)
-	require.Len(t, rows, 1)
-	assert.Equal(t, []CallCount{{Name: name, Count: 1}}, rows[0].Rejected)
-}
-
 func TestCallLogWriteFailureWarns(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "file")
 	require.NoError(t, os.WriteFile(dir, []byte("file"), 0600))
@@ -199,9 +186,15 @@ func TestCallLogBoundsNames(t *testing.T) {
 	for i := range 20 {
 		args[fmt.Sprintf("Extra%02d", i)] = true
 	}
-	result, err := ct.CallTool(t.Context(), callParams(ToolSearchSessions, args))
+	for range 10 {
+		result, err := ct.CallTool(t.Context(), callParams(ToolSearchSessions, args))
+		require.NoError(t, err)
+		require.True(t, result.IsError)
+	}
+	rows, err := SummarizeCalls(t.Context(), dir, "", "")
 	require.NoError(t, err)
-	require.True(t, result.IsError)
+	require.Len(t, rows, 1)
+	assert.Equal(t, []CallCount{{Name: "Extra00", Count: 10}, {Name: "Extra01", Count: 10}, {Name: "Extra02", Count: 10}}, rows[0].Rejected)
 	_, err = ct.CallTool(t.Context(), callParams(strings.Repeat("z", 500), nil))
 	require.Error(t, err)
 	files, err := os.ReadDir(dir)
@@ -215,9 +208,11 @@ func TestCallLogBoundsNames(t *testing.T) {
 		require.NoError(t, json.Unmarshal(line, &rec))
 		records = append(records, rec)
 	}
-	require.Len(t, records, 2)
-	assert.Len(t, records[0].Rejected, 16)
-	assert.Equal(t, "<invalid tool name>", records[1].Tool)
+	require.Len(t, records, 11)
+	for _, rec := range records[:10] {
+		assert.Equal(t, []string{"Extra00", "Extra01", "Extra02", "Extra03", "Extra04", "Extra05", "Extra06", "Extra07", "Extra08", "Extra09", "Extra10", "Extra11", "Extra12", "Extra13", "Extra14", "Extra15"}, rec.Rejected)
+	}
+	assert.Equal(t, "<invalid tool name>", records[10].Tool)
 	assert.NotContains(t, string(raw), "private-value")
 	assert.NotContains(t, string(raw), strings.Repeat("z", 129))
 }

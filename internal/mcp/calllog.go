@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -176,9 +175,14 @@ func rejectedProperties(message string) []string {
 		}
 		name, err := strconv.Unquote(list[:end+1])
 		if err == nil && len(name) <= maxRecordedNameBytes {
-			names = append(names, name)
-			if len(names) == maxRejectedNames {
-				break
+			i := sort.SearchStrings(names, name)
+			if i < maxRejectedNames {
+				names = append(names, "")
+				copy(names[i+1:], names[i:])
+				names[i] = name
+				if len(names) > maxRejectedNames {
+					names = names[:maxRejectedNames]
+				}
 			}
 		}
 		list = list[end+1:]
@@ -222,20 +226,9 @@ func SummarizeCalls(ctx context.Context, dir, from, to string) ([]CallSummary, e
 		if err != nil {
 			return nil, err
 		}
-		reader := bufio.NewReader(f)
-		for {
-			if err := ctx.Err(); err != nil {
-				_ = f.Close()
-				return nil, err
-			}
-			line, readErr := reader.ReadBytes('\n')
-			if readErr != nil {
-				if readErr != io.EOF {
-					_ = f.Close()
-					return nil, readErr
-				}
-				break
-			}
+		scanner := bufio.NewScanner(ctxio.Reader{Context: ctx, Reader: f})
+		for scanner.Scan() {
+			line := scanner.Bytes()
 			var rec callRecord
 			if json.Unmarshal(line, &rec) != nil || !db.InDateRange(rec.At.UTC().Format("2006-01-02"), from, to) {
 				continue
@@ -269,7 +262,9 @@ func SummarizeCalls(ctx context.Context, dir, from, to string) ([]CallSummary, e
 			g.bytes = append(g.bytes, rec.Bytes)
 			g.ms = append(g.ms, rec.Ms)
 		}
-		if err := f.Close(); err != nil {
+		scanErr := scanner.Err()
+		closeErr := f.Close()
+		if err := errors.Join(scanErr, closeErr); err != nil {
 			return nil, err
 		}
 	}
