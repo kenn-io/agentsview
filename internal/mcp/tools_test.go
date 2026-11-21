@@ -694,8 +694,6 @@ func TestGetMessages_BodyCursorRejectsDeletedSession(t *testing.T) {
 			require.ErrorIs(t, err, service.ErrSourceChanged)
 		})
 	}
-	_, _, err = ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "body"})
-	require.ErrorContains(t, err, "session not found: body")
 }
 
 // Even when a caller explicitly allow-lists the "system" role, get_messages
@@ -2637,12 +2635,6 @@ func TestListRecall_SourceSessionRawID(t *testing.T) {
 	_, out, err = ts.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "missing"})
 	require.NoError(t, err)
 	assert.Empty(t, out.Entries)
-	require.NoError(t, d.SoftDeleteSession(t.Context(), "codex:source"))
-	_, out, err = ts.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "codex:source"})
-	require.NoError(t, err)
-	require.Len(t, out.Entries, 1)
-	assert.Equal(t, "entry", out.Entries[0].ID)
-
 	dbtest.SeedSession(t, d, "codex:ambiguous", "project")
 	dbtest.SeedSession(t, d, "host~ambiguous", "project")
 	_, _, err = ts.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "ambiguous"})
@@ -2652,27 +2644,22 @@ func TestListRecall_SourceSessionRawID(t *testing.T) {
 }
 
 func TestOptionalSessionFiltersOlderServer(t *testing.T) {
-	expected := "unindexed"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/api/v1/sessions/unindexed", "/api/v1/sessions/codex:unindexed", "/api/v1/sessions/broken":
+		case "/api/v1/sessions/unindexed", "/api/v1/sessions/broken":
 			w.WriteHeader(http.StatusNotFound)
 		case "/api/v1/session-ids/resolve":
 			if r.URL.Query().Get("partial") == "broken" {
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
-			if r.URL.Query().Get("partial") == "codex:unindexed" {
-				_, _ = fmt.Fprint(w, `{"ids":["host~codex:unindexed"],"raw_suffix":true}`)
-				return
-			}
 			_, _ = fmt.Fprint(w, `{"ids":["substring-match"]}`)
 		case "/api/v1/search/content":
-			assert.Equal(t, expected, r.URL.Query().Get("exclude_session"))
+			assert.Equal(t, "unindexed", r.URL.Query().Get("exclude_session"))
 			_, _ = fmt.Fprint(w, `{"matches":[{"session_id":"other","snippet":"needle"}],"active_filter_applied":true}`)
 		case "/api/v1/recall/entries":
-			assert.Equal(t, expected, r.URL.Query().Get("source_session_id"))
+			assert.Equal(t, "unindexed", r.URL.Query().Get("source_session_id"))
 			_, _ = fmt.Fprint(w, `{"entries":[{"id":"entry","source_session_id":"unindexed"}]}`)
 		default:
 			assert.Fail(t, "unexpected request", "path: %s", r.URL.Path)
@@ -2689,33 +2676,10 @@ func TestOptionalSessionFiltersOlderServer(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, recall.Entries, 1)
 	assert.Equal(t, "entry", recall.Entries[0].ID)
-	expected = "codex:unindexed"
-	_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", CurrentSessionID: "codex:unindexed"})
-	require.NoError(t, err)
-	_, _, err = ts.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "codex:unindexed"})
-	require.NoError(t, err)
 	_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", CurrentSessionID: "broken"})
 	require.Error(t, err)
 	_, _, err = ts.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "broken"})
 	require.Error(t, err)
-}
-
-func TestSessionResolutionTrashedQualifiedID(t *testing.T) {
-	ts, d := newTestToolset(t)
-	dbtest.SeedSession(t, d, "codex:source", "project")
-	dbtest.SeedSession(t, d, "host~codex:source", "project")
-	_, err := d.InsertRecallEntry(t.Context(), db.RecallEntry{
-		ID: "entry", Type: "fact", Scope: "project", Status: "accepted",
-		Title: "entry", Body: "entry", SourceSessionID: "codex:source",
-	})
-	require.NoError(t, err)
-	require.NoError(t, d.SoftDeleteSession(t.Context(), "codex:source"))
-	_, _, err = ts.sessionOverview(t.Context(), nil, sessionOverviewIn{SessionID: "codex:source"})
-	require.ErrorIs(t, err, service.ErrSessionNotFound)
-	_, out, err := ts.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "codex:source"})
-	require.NoError(t, err)
-	require.Len(t, out.Entries, 1)
-	assert.Equal(t, "entry", out.Entries[0].ID)
 }
 
 func TestSessionResolutionAmbiguousCandidates(t *testing.T) {

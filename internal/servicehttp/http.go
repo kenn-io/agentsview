@@ -300,18 +300,12 @@ func (b *httpBackend) FindSessionIDsByRawSuffix(
 		return nil, err
 	}
 	if response.HTTPResponse.StatusCode == http.StatusGone {
-		if strings.ContainsAny(raw, ":~") && response.HTTPResponse.Header.Get(service.QualifiedTrashCheckedHeader) != "true" {
-			return nil, service.ErrRawLookupUnsupported
-		}
 		return nil, fmt.Errorf("%w: %s", service.ErrSessionNotFound, raw)
 	}
 	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
 		return nil, err
 	}
 	if response.JSON200.RawSuffix == nil || !*response.JSON200.RawSuffix {
-		return nil, service.ErrRawLookupUnsupported
-	}
-	if strings.ContainsAny(raw, ":~") && response.HTTPResponse.Header.Get(service.QualifiedTrashCheckedHeader) != "true" {
 		return nil, service.ErrRawLookupUnsupported
 	}
 	return response.JSON200.Ids, nil

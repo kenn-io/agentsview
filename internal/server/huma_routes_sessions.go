@@ -36,13 +36,7 @@ func (s *Server) registerSessionRoutes() {
 
 	s.get(group, "/sessions", "List sessions", s.humaListSessions)
 	s.get(group, "/sessions/sidebar-index", "List sidebar sessions", s.humaSidebarSessionIndex)
-	registerRoute(group, http.MethodGet, "/session-ids/resolve", "Resolve session IDs", s.humaResolveSessionIDs, s.humaTimeout(),
-		func(op *huma.Operation) {
-			op.Middlewares = append(op.Middlewares, func(ctx huma.Context, next func(huma.Context)) {
-				ctx.SetHeader(service.QualifiedTrashCheckedHeader, "true")
-				next(ctx)
-			})
-		})
+	s.get(group, "/session-ids/resolve", "Resolve session IDs", s.humaResolveSessionIDs)
 	s.get(group, "/sessions/{id}", "Get session", s.humaGetSession)
 	s.get(group, "/sessions/{id}/messages", "List session messages", s.humaGetMessages)
 	s.get(group, "/sessions/{id}/commits", "List session commits", s.humaSessionCommits)
