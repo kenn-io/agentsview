@@ -29,6 +29,18 @@ func TestToolCallPRLinks(t *testing.T) {
 	}
 }
 
+func TestClineCommandArrayPRLinks(t *testing.T) {
+	for _, name := range []string{"execute_command", "run_commands"} {
+		t.Run(name, func(t *testing.T) {
+			messages := []db.Message{{ToolCalls: []db.ToolCall{{ToolName: name, Category: "Bash", InputJSON: `{"commands":["gh pr view 41 -R example/other","gh pr view 42 -R example/repo"]}`}}}}
+			links := db.ToolCallPRLinks(messages, "", "")
+			require.Len(t, links, 2)
+			assert.Equal(t, "https://github.com/example/other/pull/41", links[0].URL)
+			assert.Equal(t, "https://github.com/example/repo/pull/42", links[1].URL)
+		})
+	}
+}
+
 func TestToolCallPRLinksWorkdir(t *testing.T) {
 	links := db.ToolCallPRLinks([]db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", InputJSON: `{"command":"gh pr view 42","workdir":"/work/other"}`}}}}, "/work/repo", "https://github.com/example/repo.git")
 	assert.Empty(t, links)

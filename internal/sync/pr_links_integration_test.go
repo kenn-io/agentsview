@@ -11,11 +11,33 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 	"go.kenn.io/agentsview/internal/testutil"
 )
+
+func TestClineCommandArrayPRFilter(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "data", "sessions", "pr-commands")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "pr-commands.json"), []byte(`{"session_id":"pr-commands","cwd":"/workspace"}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "pr-commands.messages.json"), []byte(`{"messages":[{"id":"m1","role":"user","content":[{"type":"text","text":"Review changes"}],"ts":1000},{"id":"m2","role":"assistant","content":[{"type":"tool_use","id":"call","name":"execute_command","input":{"commands":["gh pr view 41 -R example/other","gh pr view 42 -R example/repo"]}}],"ts":2000}]}`), 0o600))
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCline: {root}}, Machine: "local"})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	for _, pr := range []string{"example/other#41", "example/repo#42"} {
+		filter, err := db.ParsePRFilter(pr)
+		require.NoError(t, err)
+		page, err := database.ListSessions(t.Context(), db.SessionFilter{PR: filter})
+		require.NoError(t, err)
+		if assert.Len(t, page.Sessions, 1) {
+			assert.Equal(t, "cline:pr-commands", page.Sessions[0].ID)
+		}
+	}
+}
 
 func TestRetainedForkCommandPRLinks(t *testing.T) {
 	const parent = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"

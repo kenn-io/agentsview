@@ -1030,5 +1030,11 @@ func shellCommandText(input string) string {
 	if command, ok := argvShellText(input, false); ok {
 		return command
 	}
+	var payload struct {
+		Commands []string `json:"commands"`
+	}
+	if json.Unmarshal([]byte(input), &payload) == nil && payload.Commands != nil {
+		return strings.Join(payload.Commands, "\n")
+	}
 	return commitCommandText(input)
 }
