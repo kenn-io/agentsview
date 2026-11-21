@@ -20,6 +20,8 @@ import (
 // regardless of transport (the REST handler maps it back to HTTP 501).
 var ErrSearchUnavailable = errors.New("search not available")
 
+const QualifiedTrashCheckedHeader = "X-AgentsView-Qualified-Trash-Checked"
+
 // RecallQueryCapability is implemented by services whose backing store can
 // query Recall entries. Callers should treat services without this capability
 // as unsupported so retrieval surfaces are not advertised optimistically.
