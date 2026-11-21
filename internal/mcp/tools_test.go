@@ -2409,9 +2409,12 @@ func TestSearchContent_BudgetTotal(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := &pagedContentSearchService{matches: make([]db.ContentMatch, tc.count), legacy: tc.legacy}
 			for i := range fake.matches {
-				timestamp := "2024-06-15T11:59:00Z"
-				if i%2 == 0 {
-					timestamp = "2024-06-15T11:00:00Z"
+				var timestamp string
+				if tc.legacy {
+					timestamp = "2024-06-15T11:59:00Z"
+					if i%2 == 0 {
+						timestamp = "2024-06-15T11:00:00Z"
+					}
 				}
 				fake.matches[i] = db.ContentMatch{SessionID: "session", Ordinal: i, Timestamp: timestamp, Snippet: "needle", ContextBefore: []db.Message{{Content: strings.Repeat("x", 500)}, {Content: strings.Repeat("x", 500)}, {Content: strings.Repeat("x", 500)}, {Content: strings.Repeat("x", 500)}}}
 			}

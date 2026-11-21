@@ -774,29 +774,16 @@ func seedLongToolResult(t *testing.T, d *db.DB, sid, field, text string) func(to
 	}
 }
 
-func TestGetToolCalls_FitsOversizedUnicodeResult(t *testing.T) {
-	ts, d := newTestToolset(t)
-	text := hangulText(10000)
-	read := seedLongToolResult(t, d, "wide", "summary", text)
-	_, page, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "wide", IncludeResults: true, MaxResultChars: 10000})
-	require.NoError(t, err)
-	require.Len(t, page.ToolCalls, 1)
-	assert.True(t, fitsResponse(page))
-	got, cursor := read(page.ToolCalls[0])
-	assert.NotEmpty(t, got)
-	assert.True(t, strings.HasPrefix(text, got))
-	assert.NotEmpty(t, cursor)
-}
-
 func TestGetToolCalls_ResumedCursorFitsLargerPages(t *testing.T) {
 	for _, field := range []string{"summary", "event"} {
 		t.Run(field, func(t *testing.T) {
 			ts, d := newTestToolset(t)
 			text := hangulText(12000)
 			read := seedLongToolResult(t, d, "resume", field, text)
-			_, page, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "resume", IncludeResults: true, MaxResultChars: 4})
+			_, page, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "resume", IncludeResults: true, MaxResultChars: 10000})
 			require.NoError(t, err)
 			require.Len(t, page.ToolCalls, 1)
+			assert.True(t, fitsResponse(page))
 			got, cursor := read(page.ToolCalls[0])
 			var recovered strings.Builder
 			recovered.WriteString(got)
