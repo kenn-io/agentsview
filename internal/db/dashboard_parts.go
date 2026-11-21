@@ -6,6 +6,7 @@ import (
 	"encoding/json/v2"
 	"fmt"
 	"maps"
+	"slices"
 	"sort"
 
 	"go.kenn.io/agentsview/internal/kept"
@@ -16,6 +17,7 @@ import (
 const dashboardPartsVersion = 2
 
 var dashboardPartsReadObserver func([]string)
+var dashboardPartsBeforeStampObserver func()
 var dashboardPartsBeforeValidationObserver func(context.Context)
 
 type dashboardPart struct {
@@ -34,9 +36,21 @@ type dashboardPartsResult struct {
 }
 
 func (db *DB) dashboardSessions(ctx context.Context, f AnalyticsFilter) ([]dashboardSession, map[string]string, error) {
+	return db.readDashboardSessions(ctx, f, nil, true)
+}
+
+func (db *DB) readDashboardSessions(ctx context.Context, f AnalyticsFilter, ids []string, stamp bool) ([]dashboardSession, map[string]string, error) {
 	loc := f.location()
 	dateCol := "COALESCE(NULLIF(s.started_at, ''), s.created_at)"
 	where, args := f.buildWhereWithDate(dateCol, true, "s.id")
+	if ids != nil {
+		encoded, err := json.Marshal(ids)
+		if err != nil {
+			return nil, nil, err
+		}
+		where += " AND s.id IN (SELECT value FROM json_each(?))"
+		args = append(args, string(encoded))
+	}
 	rows, err := db.getReader().QueryContext(ctx, `SELECT s.id, `+dateCol+`, s.agent, s.message_count, s.transcript_revision || '|' || COALESCE(s.trends_generation, '') || '|' || COALESCE(s.usage_generation, '') || '|' || s.created_at || '|' || COALESCE(s.started_at, '') || '|' || s.message_count, s.tools_generation, `+toolsSessionFingerprintSQL+` FROM sessions s WHERE `+where+` ORDER BY s.id`, args...)
 	if err != nil {
 		return nil, nil, err
@@ -70,6 +84,12 @@ func (db *DB) dashboardSessions(ctx context.Context, f AnalyticsFilter) ([]dashb
 		return nil, nil, err
 	}
 	if len(dirty) > 0 {
+		if !stamp {
+			return nil, nil, nil
+		}
+		if dashboardPartsBeforeStampObserver != nil {
+			dashboardPartsBeforeStampObserver()
+		}
 		fingerprints, err := db.stampToolsSessions(ctx, dirty)
 		if err != nil {
 			return nil, nil, err
@@ -77,11 +97,22 @@ func (db *DB) dashboardSessions(ctx context.Context, f AnalyticsFilter) ([]dashb
 		if len(fingerprints) != len(dirty) {
 			return nil, nil, nil
 		}
+		var stamped []dashboardSession
 		for i := range sessions {
 			if fingerprint, ok := fingerprints[sessions[i].ID]; ok {
 				sessions[i].Fingerprint += "|" + fingerprint
 				versions[sessions[i].ID] = sessions[i].Fingerprint
+				stamped = append(stamped, sessions[i])
 			}
+		}
+		// The writer may have changed a session after the selection read and
+		// before its tools generation was stamped. Reject mixed metadata.
+		current, currentVersions, err := db.readDashboardSessions(ctx, f, dirty, false)
+		if err != nil {
+			return nil, nil, err
+		}
+		if currentVersions == nil || !slices.Equal(stamped, current) {
+			return nil, nil, nil
 		}
 	}
 	return sessions, versions, nil

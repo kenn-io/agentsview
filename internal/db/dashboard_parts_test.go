@@ -488,6 +488,41 @@ func TestDashboardPartsToolChangeWithoutTranscriptRevision(t *testing.T) {
 	assert.Equal(t, revision, finalRevision)
 }
 
+func TestDashboardPartsAgentAndToolChangeBeforeStamp(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "s", "project", func(s *Session) { s.Agent = "claude"; s.StartedAt = new("2024-06-01T09:00:00Z") })
+	msg := asstMsgAt("s", 0, "answer", "2024-06-01T09:01:00Z")
+	msg.ToolCalls = []ToolCall{{SessionID: "s", ToolName: "Read", Category: "Read"}}
+	insertMessages(t, d, msg)
+	other, err := sql.Open("sqlite3", makeDSN(d.Path(), false))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, other.Close()) })
+	dashboardPartsBeforeStampObserver = func() {
+		dashboardPartsBeforeStampObserver = nil
+		tx, err := other.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		_, err = tx.ExecContext(ctx, `UPDATE sessions SET agent='codex' WHERE id='s'`)
+		require.NoError(t, err)
+		_, err = tx.ExecContext(ctx, `INSERT INTO tool_calls(session_id,message_id,tool_name,category) SELECT 's', id, 'Write', 'Write' FROM messages WHERE session_id='s' AND ordinal=0`)
+		require.NoError(t, err)
+		require.NoError(t, tx.Commit())
+	}
+	t.Cleanup(func() { dashboardPartsBeforeStampObserver = nil })
+	f := AnalyticsFilter{Timezone: "UTC"}
+	activity, err := d.GetAnalyticsActivity(ctx, f, "day")
+	require.NoError(t, err)
+	require.Len(t, activity.Series, 1)
+	assert.Equal(t, map[string]int{"codex": 1}, activity.Series[0].ByAgent)
+	assert.Equal(t, 2, activity.Series[0].ToolCalls)
+	d.readOnly = true
+	scan, err := d.GetAnalyticsActivity(ctx, f, "day")
+	d.readOnly = false
+	require.NoError(t, err)
+	assert.Equal(t, scan, activity)
+}
+
 func TestDashboardPartsSessionMetadataChangeDuringFill(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	d := testDB(t)
