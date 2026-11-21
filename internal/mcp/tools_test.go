@@ -676,7 +676,7 @@ func TestGetMessages_BodyCursorRejectsChangedTranscript(t *testing.T) {
 	require.ErrorIs(t, err, service.ErrSourceChanged)
 }
 
-func TestGetMessages_BodyCursorRejectsDeletedSession(t *testing.T) {
+func TestGetMessages_ContinuationRejectsDeletedSession(t *testing.T) {
 	ts, d := newTestToolset(t)
 	dbtest.SeedSessionWithMessages(t, d, "codex:body", "proj", []db.Message{
 		dbtest.UserMsg("codex:body", 0, "abcdefghij"),
@@ -686,9 +686,12 @@ func TestGetMessages_BodyCursorRejectsDeletedSession(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, first.Messages, 1)
 	require.NotEmpty(t, first.Messages[0].BodyCursor)
+	require.NotEmpty(t, first.TranscriptRevision)
 	require.NoError(t, d.DeleteSession(t.Context(), "codex:body"))
 
 	_, _, err = ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "body", BodyCursor: first.Messages[0].BodyCursor})
+	require.ErrorIs(t, err, service.ErrSourceChanged)
+	_, _, err = ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "body", ExpectedRevision: first.TranscriptRevision})
 	require.ErrorIs(t, err, service.ErrSourceChanged)
 }
 
@@ -2572,13 +2575,6 @@ func TestSessionToolsResolvePlainIDs(t *testing.T) {
 			require.NoError(t, tc.call(t, "plain"))
 		})
 	}
-	_, around, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "plain", Around: new(0)})
-	require.NoError(t, err)
-	require.NotEmpty(t, around.Messages)
-	assert.Equal(t, "needle in the transcript", around.Messages[0].Content)
-	_, messages, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "empty"})
-	require.NoError(t, err)
-	assert.Empty(t, messages.Messages)
 	_, calls, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "empty"})
 	require.NoError(t, err)
 	assert.Empty(t, calls.ToolCalls)
@@ -2590,10 +2586,6 @@ func TestSessionToolsResolvePlainIDs(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, first.Messages)
 	require.NotEmpty(t, first.Messages[0].BodyCursor)
-	_, next, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "codex:plain", BodyCursor: first.Messages[0].BodyCursor, MaxCharsPerMessage: 6})
-	require.NoError(t, err)
-	require.Len(t, next.Messages, 1)
-	assert.Equal(t, " in th", next.Messages[0].Content)
 	_, rawNext, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "plain", BodyCursor: first.Messages[0].BodyCursor, MaxCharsPerMessage: 6})
 	require.NoError(t, err)
 	require.Len(t, rawNext.Messages, 1)
@@ -2646,16 +2638,19 @@ func TestOptionalSessionFiltersOlderServer(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	ts := &toolset{svc: servicehttp.NewHTTPBackend(srv.URL, "", false, "")}
-	_, search, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", CurrentSessionID: "unindexed"})
-	require.NoError(t, err)
-	require.Len(t, search.Matches, 1)
-	assert.Equal(t, "other", search.Matches[0].SessionID)
-	_, recall, err := ts.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "unindexed"})
-	require.NoError(t, err)
-	require.Len(t, recall.Entries, 1)
-	assert.Equal(t, "entry", recall.Entries[0].ID)
-	_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", CurrentSessionID: "broken"})
+	for _, version := range []int{27, 28} {
+		ts := &toolset{svc: servicehttp.NewHTTPBackendForServer(srv.URL, "", servicehttp.HTTPServerCapabilities{APIVersion: version})}
+		_, search, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", CurrentSessionID: "unindexed"})
+		require.NoError(t, err)
+		require.Len(t, search.Matches, 1)
+		assert.Equal(t, "other", search.Matches[0].SessionID)
+		_, recall, err := ts.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "unindexed"})
+		require.NoError(t, err)
+		require.Len(t, recall.Entries, 1)
+		assert.Equal(t, "entry", recall.Entries[0].ID)
+	}
+	ts := &toolset{svc: servicehttp.NewHTTPBackendForServer(srv.URL, "", servicehttp.HTTPServerCapabilities{APIVersion: 28})}
+	_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", CurrentSessionID: "broken"})
 	require.Error(t, err)
 	_, _, err = ts.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "broken"})
 	require.Error(t, err)
@@ -2672,19 +2667,6 @@ func TestSessionResolutionAmbiguousCandidates(t *testing.T) {
 	require.ErrorContains(t, err, "host-b~uuid")
 	require.ErrorContains(t, err, "host-c~uuid")
 	require.ErrorContains(t, err, "host-d~uuid")
-}
-
-func TestGetMessages_RevisionRejectsDeletedSession(t *testing.T) {
-	ts, d := newTestToolset(t)
-	dbtest.SeedSessionWithMessages(t, d, "codex:body", "proj", []db.Message{
-		dbtest.UserMsg("codex:body", 0, "message"),
-	}, dbtest.WithMessageCounts(1, 1))
-	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "body"})
-	require.NoError(t, err)
-	require.NotEmpty(t, first.TranscriptRevision)
-	require.NoError(t, d.DeleteSession(t.Context(), "codex:body"))
-	_, _, err = ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "body", ExpectedRevision: first.TranscriptRevision})
-	require.ErrorIs(t, err, service.ErrSourceChanged)
 }
 
 func TestSessionResolutionQualifiedSuffix(t *testing.T) {

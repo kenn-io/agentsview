@@ -312,7 +312,7 @@ func TestFindSessionIDsByRawSuffixRequiresServerAcknowledgement(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv, _ := fixedServer(t, http.StatusOK, tt.body)
-			ids, err := NewHTTPBackend(srv.URL, "", false, "").FindSessionIDsByRawSuffix(t.Context(), "abc", 5)
+			ids, err := NewHTTPBackendForServer(srv.URL, "", HTTPServerCapabilities{APIVersion: 28}).FindSessionIDsByRawSuffix(t.Context(), "abc", 5)
 			if tt.wantErr != "" {
 				require.ErrorIs(t, err, service.ErrRawLookupUnsupported)
 				assert.Nil(t, ids)
@@ -320,6 +320,37 @@ func TestFindSessionIDsByRawSuffixRequiresServerAcknowledgement(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, ids)
+		})
+	}
+}
+
+func TestFindSessionIDsByRawSuffixQualifiedVersion(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		version   int
+		raw       string
+		wantError bool
+	}{
+		{"qualified old server", 27, "codex:u", true},
+		{"host qualified old server", 27, "host~u", true},
+		{"plain old server", 27, "u", true},
+		{"qualified current server", 28, "codex:u", false},
+		{"plain current server", 28, "u", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, requests := fixedServer(t, http.StatusOK, `{"ids":["host~codex:u"],"raw_suffix":true}`)
+			backend := NewHTTPBackendForServer(srv.URL, "", HTTPServerCapabilities{APIVersion: tt.version})
+			ids, err := backend.FindSessionIDsByRawSuffix(t.Context(), tt.raw, 5)
+			if tt.wantError {
+				require.ErrorIs(t, err, service.ErrRawLookupUnsupported)
+				require.ErrorContains(t, err, "server API version 27")
+				assert.Nil(t, ids)
+				assert.EqualValues(t, 0, requests.Load())
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, []string{"host~codex:u"}, ids)
+			assert.EqualValues(t, 1, requests.Load())
 		})
 	}
 }

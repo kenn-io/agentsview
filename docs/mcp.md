@@ -247,10 +247,12 @@ trash, the lookup reports it missing instead. The row has an empty `snippet`,
 `match_ordinal` set to `0`, and no `next_cursor`. Call
 `get_messages` with that ordinal to read the first message. For a known full ID
 or raw UUID, `get_session_overview` provides a compact message preview. Remote
-bare UUID lookup requires AgentsView 0.44.0 or later on the server. Use an exact
-full stored ID with an older server.
-On servers without the trash check, a trashed exact ID can resolve to a live
-host copy; upgrade the server or use the copy's full stored ID.
+raw ID lookup requires server API version 28 or later. Use an exact full stored
+ID with an older server.
+For multi-page reads, first look up the plain UUID with `search_sessions`, then
+pass the returned full `session_id` on every page.
+Other tools that require a session ID return an error for unresolved raw IDs
+when the remote server does not support raw lookup. Use a full stored ID.
 
 `search_sessions` and `search_content` exclude sessions active in the last ten
 minutes by default, including the current conversation. `search_content` applies
@@ -309,7 +311,8 @@ require `include_one_shot: true`. Semantic mode needs the opt-in
 [semantic search](/docs/semantic-search/) index and returns a "not available"
 error without it. `session_id` accepts a full stored ID or a raw UUID that
 matches one session. Unknown or trashed IDs are used as given, as they are for
-`current_session_id` above. Exact `git_branch`, `project`, `agent`, `date_from`,
+`current_session_id` above. Raw UUID resolution on a remote server requires
+API version 28 or later. Exact `git_branch`, `project`, `agent`, `date_from`,
 and `date_to` filters apply before the final limit. Limits default to 10 and go
 up to 50; a value outside that range falls back to the default.
 
