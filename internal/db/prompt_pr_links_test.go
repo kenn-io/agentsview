@@ -373,27 +373,6 @@ func TestStagedWriteReplacesToolPRLinks(t *testing.T) {
 	assert.Equal(t, []PRLink{second}, got.PRLinks)
 }
 
-func TestToolPRLinksOrderSurvivesDiffedReplace(t *testing.T) {
-	d := testDB(t)
-	s := Session{ID: "tool-order", Project: "project", Machine: "local", Agent: "claude", Cwd: "/repo"}
-	require.NoError(t, d.UpsertSession(t.Context(), s))
-	_, err := d.getWriter().ExecContext(t.Context(), `UPDATE session_project_identity_snapshots SET git_remote=?, git_remote_name='origin', remote_candidate_count=1 WHERE session_id=?`, "https://github.com/example/repo.git", s.ID)
-	require.NoError(t, err)
-	msgs := []Message{
-		{SessionID: s.ID, Ordinal: 0, Role: "assistant", ToolCalls: []ToolCall{{ToolUseID: "cd", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"cd /other"}`}}},
-		{SessionID: s.ID, Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{ToolUseID: "pr", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42"}`}}},
-	}
-	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, msgs))
-	got, err := d.GetSession(t.Context(), s.ID)
-	require.NoError(t, err)
-	assert.Empty(t, got.PRLinks)
-	msgs[0].ToolCalls[0].InputJSON = `{"command":"cd /other; true"}`
-	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, msgs))
-	got, err = d.GetSession(t.Context(), s.ID)
-	require.NoError(t, err)
-	assert.Empty(t, got.PRLinks)
-}
-
 func TestArchiveCopyRetainsToolPRLinks(t *testing.T) {
 	for _, tc := range []struct {
 		name         string

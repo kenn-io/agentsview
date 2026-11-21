@@ -16,6 +16,8 @@ func TestGHPRCommandLinks(t *testing.T) {
 		{"echo $(gh pr view 42 -R example/repo)", "", "https://github.com/example/repo/pull/42"},
 		{"gh pr co 42 -R example/repo", "", "https://github.com/example/repo/pull/42"},
 		{"gh pr view https://github.com/example/repo/pull/42", "", "https://github.com/example/repo/pull/42"},
+		{"gh pr view https://github.com/example/repo/pull/42/files", "", "https://github.com/example/repo/pull/42"},
+		{"gh pr view https://gitlab.example/group/repo/-/merge_requests/42", "", "https://gitlab.example/group/repo/-/merge_requests/42"},
 		{"gh pr merge 42 -R forge.example/example/repo", "", "https://forge.example/example/repo/pull/42"},
 		{"gh pr view 42 --json title", "git@github.com:example/repo.git", "https://github.com/example/repo/pull/42"},
 		{"gh pr view --repo=example/repo 42", "", "https://github.com/example/repo/pull/42"},
@@ -55,7 +57,7 @@ func TestGHPRCommandLinks(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.command, func(t *testing.T) {
-			links := CommandPRLinks(tt.command, tt.remote)
+			links, _ := CommandPRLinks(tt.command, tt.remote)
 			if tt.want == "" {
 				assert.Empty(t, links)
 				return
@@ -88,7 +90,7 @@ func TestGHPRCommandLinks(t *testing.T) {
 	}
 	for _, tt := range launcherTests {
 		t.Run(tt.command, func(t *testing.T) {
-			links := CommandPRLinks(tt.command, "")
+			links, _ := CommandPRLinks(tt.command, "")
 			var urls []string
 			for _, link := range links {
 				urls = append(urls, link.URL)
@@ -115,7 +117,7 @@ func TestCommandPRLinksUnknownContext(t *testing.T) {
 		{`false && gh pr view 42 -R example/repo`, "https://github.com/example/repo/pull/42"},
 	} {
 		t.Run(tt.command, func(t *testing.T) {
-			links := CommandPRLinks(tt.command, "https://github.com/example/repo.git")
+			links, _ := CommandPRLinks(tt.command, "https://github.com/example/repo.git")
 			if tt.want == "" {
 				assert.Empty(t, links)
 			} else if assert.Len(t, links, 1) {
@@ -131,7 +133,7 @@ func TestCommandPRLinksBeforeContextChange(t *testing.T) {
 		`gh pr view 42; cd /other; gh pr view 43`,
 	} {
 		t.Run(command, func(t *testing.T) {
-			links := CommandPRLinks(command, "https://github.com/example/repo.git")
+			links, _ := CommandPRLinks(command, "https://github.com/example/repo.git")
 			if assert.Len(t, links, 1) {
 				assert.Equal(t, "https://github.com/example/repo/pull/42", links[0].URL)
 			}

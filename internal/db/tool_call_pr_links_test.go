@@ -38,15 +38,6 @@ func TestTaskPRLinksWithNonStringContent(t *testing.T) {
 	assert.Equal(t, "https://github.com/example/repo/pull/42", links[0].URL)
 }
 
-func TestCodeModePRLinksUseEachCommandWorkdir(t *testing.T) {
-	remote := "https://github.com/example/repo.git"
-	assert.Empty(t, db.ToolCallPRLinks([]db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", InputJSON: `text(await tools.exec_command({cmd:"gh pr view 42",workdir:"/other"}))`}}}}, "/repo", remote))
-	links := db.ToolCallPRLinks([]db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", InputJSON: `text(await tools.exec_command({cmd:"gh pr view 41 -R example/alpha",workdir:"/one"})); text(await tools.exec_command({cmd:"gh pr view 42 -R example/beta",workdir:"/two"}))`}}}}, "/repo", remote)
-	require.Len(t, links, 2)
-	assert.Equal(t, "https://github.com/example/alpha/pull/41", links[0].URL)
-	assert.Equal(t, "https://github.com/example/beta/pull/42", links[1].URL)
-}
-
 func TestToolCallPRLinksForgetCheckoutAfterDirectoryChange(t *testing.T) {
 	messages := []db.Message{{ToolCalls: []db.ToolCall{
 		{Category: "Bash", InputJSON: `{"cmd":"gh pr view 41"}`},

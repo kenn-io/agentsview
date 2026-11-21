@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net/url"
 	"path"
 	"regexp"
 	"strconv"
@@ -20,32 +19,11 @@ var (
 	repoPathRE = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 )
 
-func parsePRURL(raw string) (PRLink, bool) {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return PRLink{}, false
-	}
-	repository, rawNumber, route, found := promptPRRoute(u.Path)
-	if !found || (u.Path != route && u.Path != route+"/") ||
-		!repoPathRE.MatchString(repository) || strings.Trim(rawNumber, "0123456789") != "" ||
-		(!strings.HasPrefix(route, "/"+repository+"/pull/") && !strings.HasPrefix(route, "/"+repository+"/pulls/")) {
-		return PRLink{}, false
-	}
-	number, err := strconv.Atoi(rawNumber)
-	if err != nil {
-		return PRLink{}, false
-	}
-	return NewPRLink(raw, repository, number)
-}
-
 // shellCall is one shell command, with expansions marked as opaque.
 type shellCall struct {
 	Words      []string
 	Literal    []bool
-	Repo       string
-	Host       string
-	RepoOpaque bool
-	HostOpaque bool
+	Unknown    bool
 	ChangedDir bool
 }
 
@@ -94,7 +72,7 @@ func shellCommands(command string) ([]shellCall, bool) {
 					contextUnknown = true
 				}
 				unwrapped := unwrapShellCall(call)
-				if unwrapped.Repo != "" || unwrapped.Host != "" || unwrapped.RepoOpaque || unwrapped.HostOpaque {
+				if unwrapped.Unknown {
 					contextUnknown = true
 				}
 				if len(unwrapped.Words) >= 3 && unwrapped.Literal[0] && unwrapped.Literal[1] && unwrapped.Literal[2] &&
@@ -103,7 +81,7 @@ func shellCommands(command string) ([]shellCall, bool) {
 					walk(unwrapped.Words[2])
 				} else {
 					call.ChangedDir = changedDir
-					call.RepoOpaque, call.HostOpaque = contextUnknown, contextUnknown
+					call.Unknown = contextUnknown
 					calls = append(calls, call)
 				}
 			}
@@ -142,14 +120,8 @@ func shellLiteral(parts []syntax.WordPart) (string, bool) {
 	return b.String(), true
 }
 
-// CommandPRLinks derives links from one shell command and child-agent prompts.
-func CommandPRLinks(command, remote string) []PRLink {
-	links, _ := CommandPRLinksAndDirectoryChange(command, remote)
-	return links
-}
-
-// CommandPRLinksAndDirectoryChange also reports whether later calls may use a different checkout.
-func CommandPRLinksAndDirectoryChange(command, remote string) ([]PRLink, bool) {
+// CommandPRLinks derives links and reports whether later calls may use a different checkout.
+func CommandPRLinks(command, remote string) ([]PRLink, bool) {
 	var links []PRLink
 	calls, changed := shellCommands(command)
 	for _, call := range calls {
@@ -180,10 +152,8 @@ func unwrapShellCall(call shellCall) shellCall {
 					break
 				}
 				switch name {
-				case "GH_REPO":
-					call.Repo, call.RepoOpaque = "", true
-				case "GH_HOST":
-					call.Host, call.HostOpaque = "", true
+				case "GH_REPO", "GH_HOST":
+					call.Unknown = true
 				}
 				call.Words, call.Literal = call.Words[1:], call.Literal[1:]
 			}
@@ -199,7 +169,7 @@ func ghPRCallLinks(call shellCall, remote string) []PRLink {
 	if len(args) < 3 || !call.Literal[0] || !strings.EqualFold(strings.TrimSuffix(path.Base(args[0]), ".exe"), "gh") {
 		return nil
 	}
-	repo, invalidRepo, i := call.Repo, call.RepoOpaque, 1
+	repo, invalidRepo, i := "", call.Unknown, 1
 	if i+1 < len(args) && call.Literal[i] && (args[i] == "-R" || args[i] == "--repo") {
 		repo = args[i+1]
 		invalidRepo = !call.Literal[i+1] || repo == ""
@@ -252,8 +222,8 @@ func ghPRCallLinks(call shellCall, remote string) []PRLink {
 		return nil
 	}
 	selector := selectors[0]
-	if link, ok := parsePRURL(selector); ok {
-		return []PRLink{link}
+	if links, _ := PromptPRLinksContext(context.Background(), selector); len(links) == 1 {
+		return links
 	}
 	if invalidRepo {
 		return nil
@@ -263,18 +233,15 @@ func ghPRCallLinks(call shellCall, remote string) []PRLink {
 		return nil
 	}
 	host := "github.com"
-	if repo == "" && !call.ChangedDir && !call.HostOpaque {
+	if repo == "" && !call.ChangedDir && !call.Unknown {
 		if normalized, ok := export.NormalizeGitRemote(remote); ok {
 			host, repo, _ = strings.Cut(normalized, "/")
 		}
 	} else if parts := strings.Split(repo, "/"); len(parts) == 3 {
 		host, repo = parts[0], strings.Join(parts[1:], "/")
 	} else if repo != "" {
-		if call.HostOpaque {
+		if call.Unknown {
 			return nil
-		}
-		if call.Host != "" {
-			host = call.Host
 		}
 	}
 	if !repoPartRE.MatchString(host) || !repoPathRE.MatchString(repo) {

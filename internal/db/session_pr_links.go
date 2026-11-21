@@ -385,7 +385,7 @@ func callPRLinks(category, input, cwd, remote string) ([]PRLink, bool) {
 			if codeModeDirRE.MatchString(withoutCommand) {
 				callRemote = ""
 			}
-			found, changed := parser.CommandPRLinksAndDirectoryChange(command, callRemote)
+			found, changed := parser.CommandPRLinks(command, callRemote)
 			links = parser.CombinePRLinks(links, found)
 			if changed {
 				remote = ""
@@ -411,7 +411,7 @@ func callPRLinks(category, input, cwd, remote string) ([]PRLink, bool) {
 			remote = ""
 		}
 	}
-	return parser.CommandPRLinksAndDirectoryChange(shellCommandText(input), remote)
+	return parser.CommandPRLinks(shellCommandText(input), remote)
 }
 
 // ToolCallPRLinks derives links from a transcript's tool calls.
