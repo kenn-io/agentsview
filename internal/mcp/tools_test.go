@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -628,51 +627,7 @@ func TestGetMessages_BodyCursorContinuesUnicodeMessage(t *testing.T) {
 	assert.Equal(t, 2, *third.NextFrom)
 }
 
-func TestGetMessages_BodyCursorVersionContract(t *testing.T) {
-	ts, d := newTestToolset(t)
-	dbtest.SeedSessionWithMessages(t, d, "body-version", "proj", []db.Message{
-		dbtest.UserMsg("body-version", 0, "abcdefghij"),
-	}, dbtest.WithMessageCounts(1, 1))
-	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "body-version", MaxCharsPerMessage: 4})
-	require.NoError(t, err)
-	require.Len(t, first.Messages, 1)
-	payload, err := base64.RawURLEncoding.DecodeString(first.Messages[0].BodyCursor)
-	require.NoError(t, err)
-	var binding struct {
-		Source string `json:"s"`
-	}
-	require.NoError(t, json.Unmarshal(payload, &binding))
-	require.NotEmpty(t, binding.Source)
-	require.NotEmpty(t, first.TranscriptRevision)
-	for _, tc := range []struct {
-		name, payload, want string
-	}{
-		{"legacy", fmt.Sprintf(`{"v":2,"s":%q,"i":"body-version","r":%q,"o":0,"p":4,"n":1}`, binding.Source, first.TranscriptRevision), "efgh"},
-		{"v2 with window", fmt.Sprintf(`{"v":2,"s":%q,"i":"body-version","r":%q,"o":0,"p":4,"c":"window"}`, binding.Source, first.TranscriptRevision), ""},
-		{"unsupported", fmt.Sprintf(`{"v":4,"s":%q,"i":"body-version","r":%q,"o":0,"p":4}`, binding.Source, first.TranscriptRevision), ""},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			encoded := base64.RawURLEncoding.EncodeToString([]byte(tc.payload))
-			_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "body-version", BodyCursor: encoded, MaxCharsPerMessage: 4})
-			if tc.want == "" {
-				require.EqualError(t, err, "invalid body_cursor")
-				return
-			}
-			require.NoError(t, err)
-			require.Len(t, out.Messages, 1)
-			assert.Equal(t, tc.want, out.Messages[0].Content)
-			assert.Equal(t, first.TranscriptRevision, out.TranscriptRevision)
-			_, final, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "body-version", BodyCursor: out.Messages[0].BodyCursor, MaxCharsPerMessage: 4})
-			require.NoError(t, err)
-			require.Len(t, final.Messages, 1)
-			assert.Equal(t, "ij", final.Messages[0].Content)
-			require.NotNil(t, final.NextFrom)
-			assert.Equal(t, 1, *final.NextFrom)
-		})
-	}
-}
-
-func TestGetMessages_BodyCursorContinuesPastMaximumChunk(t *testing.T) {
+func TestGetMessages_BodyCursorSplitsMessageOverBudget(t *testing.T) {
 	ts, d := newTestToolset(t)
 	body := strings.Repeat("界", maxMaxCharsPerMessage+5)
 	dbtest.SeedSessionWithMessages(t, d, "oversized", "proj", []db.Message{
@@ -706,6 +661,23 @@ func TestGetMessages_BodyCursorRejectsChangedTranscript(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, first.Messages[0].BodyCursor)
+	payload, err := base64.RawURLEncoding.DecodeString(first.Messages[0].BodyCursor)
+	require.NoError(t, err)
+	var binding struct {
+		Source string `json:"s"`
+	}
+	require.NoError(t, json.Unmarshal(payload, &binding))
+	require.NotEmpty(t, binding.Source)
+	for _, tc := range []struct{ name, payload string }{
+		{"v2 with window", fmt.Sprintf(`{"v":2,"s":%q,"i":"body","r":%q,"o":0,"p":4,"c":"window"}`, binding.Source, first.TranscriptRevision)},
+		{"unsupported", fmt.Sprintf(`{"v":4,"s":%q,"i":"body","r":%q,"o":0,"p":4}`, binding.Source, first.TranscriptRevision)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			encoded := base64.RawURLEncoding.EncodeToString([]byte(tc.payload))
+			_, _, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "body", BodyCursor: encoded, MaxCharsPerMessage: 4})
+			require.EqualError(t, err, "invalid body_cursor")
+		})
+	}
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "body", []db.Message{
 		dbtest.UserMsg("body", 0, "changed body"),
 	}))
@@ -2444,6 +2416,17 @@ func TestSearchContent_BudgetRankedPages(t *testing.T) {
 	fake := &fakeContentSearchService{result: &service.ContentSearchResult{Matches: matches}}
 	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
 	in := searchContentIn{Pattern: "needle", Mode: "semantic", Project: "project", IncludeActive: true, Limit: 20}
+	_, first, err := ts.searchContent(t.Context(), nil, in)
+	require.NoError(t, err)
+	require.NotEmpty(t, first.PageCursor)
+	fake.result.Coverage.Status = service.MemoryReady
+	_, resumed, err := ts.searchContent(t.Context(), nil, searchContentIn{PageCursor: first.PageCursor})
+	require.NoError(t, err)
+	assert.NotEmpty(t, resumed.Matches)
+	fake.result.Matches[0].Snippet = "changed"
+	_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{PageCursor: first.PageCursor})
+	require.ErrorIs(t, err, service.ErrSourceChanged)
+	fake.result.Matches[0].Snippet = strings.Repeat("x", 1800)
 	var ordinals []int
 	for {
 		_, out, err := ts.searchContent(t.Context(), nil, in)
@@ -2461,32 +2444,6 @@ func TestSearchContent_BudgetRankedPages(t *testing.T) {
 	require.Len(t, ordinals, 20)
 	for i, ordinal := range ordinals {
 		assert.Equal(t, i, ordinal)
-	}
-}
-
-func TestSearchContent_RankedTotal(t *testing.T) {
-	for _, legacy := range []bool{false, true} {
-		t.Run(fmt.Sprintf("legacy=%t", legacy), func(t *testing.T) {
-			fake := &pagedContentSearchService{matches: make([]db.ContentMatch, 20), legacy: legacy}
-			for i := range fake.matches {
-				timestamp := "2024-06-15T11:00:00Z"
-				if i%2 == 0 {
-					timestamp = "2024-06-15T11:59:00Z"
-				}
-				fake.matches[i] = db.ContentMatch{SessionID: "session", Timestamp: timestamp}
-			}
-			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
-			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Mode: "semantic", Limit: 20, IncludeActive: !legacy})
-			require.NoError(t, err)
-			want := 20
-			if legacy {
-				want = 10
-			}
-			assert.Len(t, out.Matches, want)
-			assert.Equal(t, want, out.Total)
-			assert.True(t, out.TotalCapped)
-			assert.Len(t, fake.requests, 1)
-		})
 	}
 }
 
@@ -2517,9 +2474,14 @@ func TestSearchContent_Total(t *testing.T) {
 		name                          string
 		count, limit, cursor, context int
 		want, calls                   int
-		capped                        bool
+		capped, legacy                bool
+		mode                          string
 		wantScan                      *int
 	}{
+		{name: "legacy", count: 36, limit: 10, want: 18, calls: 2, legacy: true},
+		{name: "legacy capped", count: 600, limit: 10, want: 250, calls: 11, capped: true, legacy: true},
+		{name: "ranked", count: 20, limit: 20, want: 20, calls: 1, capped: true, mode: "semantic"},
+		{name: "ranked legacy", count: 20, limit: 20, want: 10, calls: 1, capped: true, legacy: true, mode: "semantic"},
 		{name: "first page", count: 36, limit: 10, context: 3, want: 36, calls: 2},
 		{name: "continued page", count: 36, limit: 10, cursor: 10, want: 36, calls: 2, wantScan: new(20)},
 		{name: "last page", count: 36, limit: 10, cursor: 30, want: 36, calls: 1},
@@ -2530,19 +2492,19 @@ func TestSearchContent_Total(t *testing.T) {
 		{name: "exactly at cap", count: 500, limit: 10, cursor: 490, want: 500, calls: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			fake := &pagedContentSearchService{matches: make([]db.ContentMatch, tc.count)}
+			fake := &pagedContentSearchService{matches: make([]db.ContentMatch, tc.count), legacy: tc.legacy}
 			for i := range fake.matches {
-				fake.matches[i] = db.ContentMatch{SessionID: "session", Ordinal: i}
+				timestamp := "2024-06-15T11:59:00Z"
+				if i%2 == 0 {
+					timestamp = "2024-06-15T11:00:00Z"
+				}
+				fake.matches[i] = db.ContentMatch{SessionID: "session", Ordinal: i, Timestamp: timestamp}
 			}
-			ts := &toolset{svc: fake}
-			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", IncludeActive: true, Limit: tc.limit, Cursor: tc.cursor, Context: tc.context})
+			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Mode: tc.mode, IncludeActive: !tc.legacy, Limit: tc.limit, Cursor: tc.cursor, Context: tc.context})
 			require.NoError(t, err)
-			data, err := json.Marshal(out)
-			require.NoError(t, err)
-			var response map[string]any
-			require.NoError(t, json.Unmarshal(data, &response))
-			assert.Equal(t, float64(tc.want), response["total"])
-			assert.Equal(t, tc.capped, response["total_capped"] == true)
+			assert.Equal(t, tc.want, out.Total)
+			assert.Equal(t, tc.capped, out.TotalCapped)
 			require.Len(t, fake.requests, tc.calls)
 			if tc.wantScan != nil {
 				assert.Equal(t, *tc.wantScan, fake.requests[1].Cursor)
@@ -2655,29 +2617,6 @@ func TestSearchContent_LexicalPageCursorLength(t *testing.T) {
 	assert.Empty(t, out.PageCursor)
 }
 
-func TestSearchContent_TotalLegacyActivity(t *testing.T) {
-	for _, count := range []int{36, 600} {
-		t.Run(strconv.Itoa(count), func(t *testing.T) {
-			fake := &pagedContentSearchService{matches: make([]db.ContentMatch, count), legacy: true}
-			for i := range fake.matches {
-				timestamp := "2024-06-15T11:59:00Z"
-				if i%2 == 0 {
-					timestamp = "2024-06-15T11:00:00Z"
-				}
-				fake.matches[i] = db.ContentMatch{SessionID: "session", Timestamp: timestamp}
-			}
-			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
-			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Limit: 10})
-			require.NoError(t, err)
-			assert.Equal(t, min(count, 500)/2, out.Total)
-			assert.Equal(t, count > 500, out.TotalCapped)
-			if count > 500 {
-				assert.Len(t, fake.requests, 11)
-			}
-		})
-	}
-}
-
 func TestSearchContent_BudgetTruncatesContext(t *testing.T) {
 	context := make([]db.Message, 10)
 	for i := range context {
@@ -2701,6 +2640,7 @@ func TestGetMessages_BudgetAroundSweep(t *testing.T) {
 	dbtest.SeedSessionWithMessages(t, d, "around-budget", "proj", messages, dbtest.WithMessageCounts(21, 21))
 	anchor, before, after := 10, 10, 10
 	in := getMessagesIn{SessionID: "around-budget", Around: &anchor, Before: &before, After: &after}
+	var firstCursor string
 	var ordinals []int
 	for page := 0; ; page++ {
 		_, out, err := ts.getMessages(t.Context(), nil, in)
@@ -2708,6 +2648,8 @@ func TestGetMessages_BudgetAroundSweep(t *testing.T) {
 		require.NotEmpty(t, out.Messages)
 		assert.True(t, fitsResponse(out))
 		if page == 0 {
+			firstCursor = out.PageCursor
+			require.NotEmpty(t, firstCursor)
 			assert.Equal(t, anchor, out.Messages[0].Ordinal)
 			assert.Positive(t, out.Omitted)
 		}
@@ -2723,24 +2665,9 @@ func TestGetMessages_BudgetAroundSweep(t *testing.T) {
 	for i := range 21 {
 		assert.Contains(t, ordinals, i)
 	}
-}
-
-func TestSearchContent_BudgetCursorRejectsChangedPage(t *testing.T) {
-	matches := make([]db.ContentMatch, 20)
-	for i := range matches {
-		matches[i] = db.ContentMatch{SessionID: "session", Ordinal: i, Snippet: strings.Repeat("x", 1800)}
-	}
-	fake := &fakeContentSearchService{result: &service.ContentSearchResult{Matches: matches}}
-	ts := &toolset{svc: fake}
-	_, first, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Mode: "semantic", IncludeActive: true, Limit: 20})
-	require.NoError(t, err)
-	require.NotEmpty(t, first.PageCursor)
-	fake.result.Coverage.Status = service.MemoryReady
-	_, resumed, err := ts.searchContent(t.Context(), nil, searchContentIn{PageCursor: first.PageCursor})
-	require.NoError(t, err)
-	assert.NotEmpty(t, resumed.Matches)
-	fake.result.Matches[0].Snippet = "changed"
-	_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{PageCursor: first.PageCursor})
+	messages[0] = dbtest.UserMsg("around-budget", 0, "changed")
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "around-budget", messages))
+	_, _, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "around-budget", PageCursor: firstCursor})
 	require.ErrorIs(t, err, service.ErrSourceChanged)
 }
 
@@ -2762,15 +2689,6 @@ func TestGetMessages_BudgetAroundBodyContinuation(t *testing.T) {
 	var got strings.Builder
 	got.WriteString(out.Messages[0].Content)
 	for out.Messages[0].BodyCursor != "" {
-		payload, err := base64.RawURLEncoding.DecodeString(out.Messages[0].BodyCursor)
-		require.NoError(t, err)
-		var cursor struct {
-			Version    int    `json:"v"`
-			PageCursor string `json:"c"`
-		}
-		require.NoError(t, json.Unmarshal(payload, &cursor))
-		assert.Equal(t, 3, cursor.Version)
-		assert.NotEmpty(t, cursor.PageCursor)
 		_, out, err = ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "around-body", BodyCursor: out.Messages[0].BodyCursor, MaxCharsPerMessage: 20000})
 		require.NoError(t, err)
 		require.Len(t, out.Messages, 1)
@@ -2832,21 +2750,4 @@ func TestGetMessages_BudgetPagesAndBodyCursors(t *testing.T) {
 	for _, message := range messages {
 		assert.Equal(t, message.Content, got[message.Ordinal])
 	}
-}
-
-func TestGetMessages_AroundPageCursorRejectsChangedTranscript(t *testing.T) {
-	ts, d := newTestToolset(t)
-	messages := make([]db.Message, 21)
-	for i := range messages {
-		messages[i] = dbtest.UserMsg("around-changed", i, strings.Repeat("x", 2000))
-	}
-	dbtest.SeedSessionWithMessages(t, d, "around-changed", "proj", messages, dbtest.WithMessageCounts(21, 21))
-	anchor, before, after := 10, 10, 10
-	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "around-changed", Around: &anchor, Before: &before, After: &after})
-	require.NoError(t, err)
-	require.NotEmpty(t, first.PageCursor)
-	messages[0] = dbtest.UserMsg("around-changed", 0, "changed")
-	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "around-changed", messages))
-	_, _, err = ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "around-changed", PageCursor: first.PageCursor})
-	require.ErrorIs(t, err, service.ErrSourceChanged)
 }

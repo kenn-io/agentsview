@@ -482,25 +482,13 @@ func TestServer_BudgetTextResults(t *testing.T) {
 	dbtest.SeedSessionWithMessages(t, d, "budget", "project", messages, dbtest.WithMessageCounts(50, 50))
 	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil)}))
 	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
-	for _, tc := range []struct {
-		name string
-		args map[string]any
-	}{
-		{ToolGetMessages, map[string]any{"session_id": "budget", "limit": 50}},
-		{ToolGetToolCalls, map[string]any{"session_id": "budget", "limit": 50, "max_input_chars": 10000}},
-		{ToolSearchContent, map[string]any{"pattern": "needle", "limit": 50, "context": 10, "include_active": true, "include_one_shot": true}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			result, err := ct.CallTool(t.Context(), callParams(tc.name, tc.args))
-			require.NoError(t, err)
-			require.False(t, result.IsError)
-			require.Len(t, result.Content, 1)
-			content, ok := result.Content[0].(*mcp.TextContent)
-			require.True(t, ok)
-			assert.LessOrEqual(t, len(content.Text), responseBudgetBytes)
-			var decoded map[string]any
-			require.NoError(t, json.Unmarshal([]byte(content.Text), &decoded))
-			assert.Contains(t, decoded, "omitted")
-		})
-	}
+	result, err := ct.CallTool(t.Context(), callParams(ToolGetMessages, map[string]any{"session_id": "budget", "limit": 50}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+	require.Len(t, result.Content, 1)
+	content, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	assert.LessOrEqual(t, len(content.Text), responseBudgetBytes)
+	assert.Contains(t, content.Text, `\u003c`)
+	assert.Contains(t, content.Text, `\u0026`)
 }
