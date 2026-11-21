@@ -384,6 +384,31 @@ func TestGetToolCalls_RejectsChangedTranscript(t *testing.T) {
 	require.ErrorIs(t, err, service.ErrSourceChanged)
 }
 
+type appendAfterGetService struct {
+	service.SessionService
+	t *testing.T
+	d *db.DB
+}
+
+func (s appendAfterGetService) Get(ctx context.Context, id string) (*service.SessionDetail, error) {
+	detail, err := s.SessionService.Get(ctx, id)
+	if err == nil && detail != nil {
+		dbtest.SeedMessages(s.t, s.d, dbtest.AsstMsg(id, 1, "later message"))
+	}
+	return detail, err
+}
+
+func TestGetToolCalls_FirstReadSurvivesAppend(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "growing", "proj")
+	dbtest.SeedMessages(t, d, toolCallMsg("growing", 0, db.ToolCall{ToolUseID: "one", ToolName: "Bash", ResultContent: "saved result"}))
+	ts.svc = appendAfterGetService{SessionService: ts.svc, t: t, d: d}
+	_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "growing", IncludeResults: true})
+	require.NoError(t, err)
+	require.Len(t, out.ToolCalls, 1)
+	assert.Equal(t, "saved result", out.ToolCalls[0].Result)
+}
+
 func TestGetToolCalls_ContinuesPlainTextResult(t *testing.T) {
 	ts, d := newTestToolset(t)
 	dbtest.SeedSession(t, d, "long", "proj")
@@ -415,7 +440,7 @@ func TestGetToolCalls_PreservesPlainResultText(t *testing.T) {
 	for i, text := range texts {
 		dbtest.SeedMessages(t, d, toolCallMsg("plain", i, db.ToolCall{ToolUseID: fmt.Sprintf("call-%d", i), ToolName: "Bash", Category: "Bash", ResultContent: text}))
 	}
-	_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "plain", IncludeResults: true})
+	_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "plain", IncludeResults: true, Limit: 4})
 	require.NoError(t, err)
 	require.Len(t, out.ToolCalls, len(texts))
 	for i, text := range texts {
@@ -459,7 +484,7 @@ func TestGetToolCalls_RejectsChangeBetweenSelectedMessages(t *testing.T) {
 		toolCallMsg("walk", 1000, db.ToolCall{ToolUseID: "two", ToolName: "Bash", ResultContent: "second"}),
 	)
 	ts.svc = &changingMessagesService{SessionService: ts.svc, d: d}
-	_, _, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "walk", IncludeResults: true})
+	_, _, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "walk", IncludeResults: true, Limit: 2})
 	require.ErrorIs(t, err, service.ErrSourceChanged)
 }
 
@@ -519,7 +544,7 @@ func TestGetToolCalls_ReturnsStoredSummary(t *testing.T) {
 			{AgentID: "agent-b", Source: "tool_result", Content: "second"},
 		}}),
 	)
-	_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "summary", IncludeResults: true})
+	_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "summary", IncludeResults: true, Limit: 2})
 	require.NoError(t, err)
 	require.Len(t, out.ToolCalls, 2)
 	assert.Equal(t, "latest B", out.ToolCalls[0].Result)
