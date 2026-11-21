@@ -283,7 +283,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 
 		mcp.AddTool(s, &mcp.Tool{
 			Name:        ToolGetToolCalls,
-			Description: "List a session's tool calls, inputs, and result sizes. Set include_results for masked summaries and saved events.",
+			Description: "List tool calls with masked inputs. Set include_results for saved results and events.",
 			Annotations: readOnly,
 		}, t.toolCalls)
 

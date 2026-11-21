@@ -42,22 +42,22 @@ const (
 // --- get_tool_calls ---
 
 type toolCallsIn struct {
-	ResultCursor   string `json:"result_cursor,omitempty" jsonschema:"Continue a truncated result or event."`
-	SessionID      string `json:"session_id" jsonschema:"Full session ID."`
-	Category       string `json:"category,omitempty" jsonschema:"Filter by tool category, e.g. Bash or Edit."`
-	Limit          int    `json:"limit,omitempty" jsonschema:"Calls per page: default 50 (1 with results), max 200."`
-	Cursor         int    `json:"cursor,omitempty" jsonschema:"Previous next_cursor."`
-	IncludeResults bool   `json:"include_results,omitempty" jsonschema:"Include masked results and events."`
-	MaxResultChars int    `json:"max_result_chars,omitempty" jsonschema:"Characters per result or event: default 1000, max 10000."`
-	MaxInputChars  int    `json:"max_input_chars,omitempty" jsonschema:"Characters per input: default 500, max 10000."`
+	ResultCursor   string `json:"result_cursor,omitempty" jsonschema:"Continue a result or event."`
+	SessionID      string `json:"session_id"`
+	Category       string `json:"category,omitempty"`
+	Limit          int    `json:"limit,omitempty" jsonschema:"Default 50 (1 with results), max 200."`
+	Cursor         int    `json:"cursor,omitempty"`
+	IncludeResults bool   `json:"include_results,omitempty"`
+	MaxResultChars int    `json:"max_result_chars,omitempty" jsonschema:"Per result or event: default 1000, max 10000 characters."`
+	MaxInputChars  int    `json:"max_input_chars,omitempty" jsonschema:"Per input: default 500, max 10000 characters."`
 }
 
 type toolCallOut struct {
-	Ordinal           int                  `json:"ordinal" jsonschema:"Calling message ordinal for get_messages."`
+	Ordinal           int                  `json:"ordinal"`
 	Timestamp         string               `json:"timestamp,omitempty"`
 	ToolName          string               `json:"tool_name"`
 	Category          *string              `json:"category,omitzero"`
-	Input             *string              `json:"input,omitzero" jsonschema:"Input with secret-shaped values masked."`
+	Input             *string              `json:"input,omitzero"`
 	InputTruncated    bool                 `json:"input_truncated,omitempty"`
 	SkillName         string               `json:"skill_name,omitempty"`
 	SubagentSessionID string               `json:"subagent_session_id,omitempty"`
@@ -81,7 +81,7 @@ type toolResultEventOut struct {
 
 type toolCallsOut struct {
 	ToolCalls  []toolCallOut `json:"tool_calls"`
-	Total      *int          `json:"total,omitzero" jsonschema:"Matching calls in the session."`
+	Total      *int          `json:"total,omitzero"`
 	NextCursor *int          `json:"next_cursor,omitempty"`
 }
 
