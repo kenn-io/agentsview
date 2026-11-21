@@ -2,6 +2,8 @@ package mcp
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
 	"net"
@@ -522,6 +524,84 @@ func TestGetToolCalls_ReturnsStoredSummary(t *testing.T) {
 	require.Len(t, out.ToolCalls, 2)
 	assert.Equal(t, "latest B", out.ToolCalls[0].Result)
 	assert.Equal(t, "agent-a:\nfirst\n\nagent-b:\nsecond", out.ToolCalls[1].Result)
+}
+
+func TestGetToolCalls_ReturnsSavedEvents(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "events", "proj")
+	dbtest.SeedMessages(t, d, toolCallMsg("events", 0, db.ToolCall{ToolUseID: "one", ToolName: "wait_agent", ResultContent: "latest B", ResultEvents: []db.ToolResultEvent{
+		{AgentID: "agent-a", Source: "tool_result", Content: "earlier A"},
+		{AgentID: "agent-a", Source: "tool_result", Content: "latest B"},
+	}}))
+	_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "events", IncludeResults: true})
+	require.NoError(t, err)
+	require.Len(t, out.ToolCalls, 1)
+	assert.Equal(t, "latest B", out.ToolCalls[0].Result)
+	raw, err := json.Marshal(out.ToolCalls[0])
+	require.NoError(t, err)
+	var call map[string]jsontext.Value
+	require.NoError(t, json.Unmarshal(raw, &call))
+	var events []map[string]jsontext.Value
+	require.NoError(t, json.Unmarshal(call["result_events"], &events))
+	require.Len(t, events, 2)
+	assert.Contains(t, string(events[0]["agent_id"]), "agent-a")
+	assert.Contains(t, string(events[0]["content"]), "earlier A")
+	assert.Contains(t, string(events[1]["content"]), "latest B")
+}
+
+func TestGetToolCalls_ResultCursorSurvivesAppend(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "append", "proj")
+	call := toolCallMsg("append", 0, db.ToolCall{ToolUseID: "one", ToolName: "Bash", ResultContent: "original result"})
+	dbtest.SeedMessages(t, d, call)
+	_, first, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "append", IncludeResults: true, MaxResultChars: 4})
+	require.NoError(t, err)
+	require.Len(t, first.ToolCalls, 1)
+	cursor := first.ToolCalls[0].ResultCursor
+	require.NotEmpty(t, cursor)
+	dbtest.SeedMessages(t, d, dbtest.AsstMsg("append", 1, "later message"))
+	_, next, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "append", ResultCursor: cursor, MaxResultChars: 100})
+	require.NoError(t, err)
+	require.Len(t, next.ToolCalls, 1)
+	assert.Equal(t, "inal result", next.ToolCalls[0].Result)
+	call.ToolCalls[0].ResultContent = "replaced result"
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "append", []db.Message{call, dbtest.AsstMsg("append", 1, "later message")}))
+	_, _, err = ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "append", ResultCursor: cursor})
+	require.ErrorIs(t, err, service.ErrSourceChanged)
+}
+
+func TestGetToolCalls_RejectsUnknownResultCursorVersion(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "version", "proj")
+	dbtest.SeedMessages(t, d, toolCallMsg("version", 0, db.ToolCall{ToolName: "Bash", ResultContent: "long result"}))
+	_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "version", IncludeResults: true, MaxResultChars: 3})
+	require.NoError(t, err)
+	require.Len(t, out.ToolCalls, 1)
+	raw, err := base64.RawURLEncoding.DecodeString(out.ToolCalls[0].ResultCursor)
+	require.NoError(t, err)
+	var cursor map[string]any
+	require.NoError(t, json.Unmarshal(raw, &cursor))
+	cursor["v"] = 999
+	raw, err = json.Marshal(cursor)
+	require.NoError(t, err)
+	_, _, err = ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "version", ResultCursor: base64.RawURLEncoding.EncodeToString(raw)})
+	require.ErrorContains(t, err, "invalid result_cursor")
+}
+
+func TestGetToolCalls_DefaultResultPageIsSmall(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "many", "proj")
+	for i := range 50 {
+		dbtest.SeedMessages(t, d, toolCallMsg("many", i, db.ToolCall{ToolUseID: fmt.Sprint(i), ToolName: "Bash", ResultContent: "result"}))
+	}
+	_, first, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "many", IncludeResults: true})
+	require.NoError(t, err)
+	assert.Less(t, len(first.ToolCalls), 50)
+	require.NotNil(t, first.NextCursor)
+	_, next, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "many", IncludeResults: true, Cursor: *first.NextCursor})
+	require.NoError(t, err)
+	assert.NotEmpty(t, next.ToolCalls)
+	assert.Equal(t, *first.NextCursor, next.ToolCalls[0].Ordinal)
 }
 
 func TestGetToolCalls_ReadsSelectedOrdinals(t *testing.T) {
