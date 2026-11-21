@@ -83,6 +83,7 @@ func ParseProfile(name string) (Profile, error) {
 // tests can control the self-reference exclusion window (defaults to
 // time.Now).
 type ServeOptions struct {
+	CallLogDir         string
 	DiscoveryDirectory string
 	BackendURL         string
 	Service            service.SessionService
@@ -125,9 +126,14 @@ func newServer(opts ServeOptions) *mcp.Server {
 				return next(ctx, method, request)
 			}
 			ctx, stale := apiclient.TrackArchiveFreshness(ctx, nil)
+			start := time.Now()
 			result, err := next(ctx, method, request)
+			elapsed := time.Since(start)
 			if call, ok := result.(*mcp.CallToolResult); ok && call != nil && stale() {
 				call.Content = append(call.Content, &mcp.TextContent{Text: "Warning: " + apiclient.ArchiveStaleWarning})
+			}
+			if req, ok := request.(*mcp.CallToolRequest); ok {
+				recordToolCall(opts.CallLogDir, req, result, err, elapsed)
 			}
 			return result, err
 		}

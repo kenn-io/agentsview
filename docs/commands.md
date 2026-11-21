@@ -2605,12 +2605,16 @@ agentsview mcp --profile memory
 agentsview mcp --http 127.0.0.1:8085
 agentsview mcp --server http://127.0.0.1:8080
 agentsview mcp status --json
+agentsview mcp calls --since 7d
 ```
 
 `agentsview mcp status --json` lists local HTTP MCP listeners without starting
 one; stdio connections do not appear. See
 [listener discovery](/docs/mcp/#discover-running-http-listeners) for endpoint
 fields and token-file paths.
+
+`agentsview mcp calls` summarizes local call outcomes over inclusive UTC dates.
+See [call outcomes](/docs/mcp/#review-call-outcomes) for the recorded fields.
 
 By default, `agentsview mcp` speaks stdio, which is the expected transport for
 local MCP clients such as Claude Desktop, Claude Code, and Codex.
