@@ -1638,8 +1638,10 @@ func TestSearchContent_ListSessionMessages(t *testing.T) {
 	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		dbtest.UserMsg("child", 0, "first "+key+" "+strings.Repeat("x", 100)),
 		{SessionID: "child", Ordinal: 1, Role: "assistant", Content: "inspect the failure", ContentLength: len("inspect the failure"), DialogueText: new("")},
-		{SessionID: "child", Ordinal: 2, Role: "tool", Content: "echo hello", ContentLength: len("echo hello"), DialogueText: new(""), HasToolUse: true,
-			ToolCalls: []db.ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"echo hello"}`, ResultContent: "hello"}}},
+		{
+			SessionID: "child", Ordinal: 2, Role: "tool", Content: "echo hello", ContentLength: len("echo hello"), DialogueText: new(""), HasToolUse: true,
+			ToolCalls: []db.ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"echo hello"}`, ResultContent: "hello"}},
+		},
 	}))
 	_, first, err := ts.searchContent(t.Context(), nil, searchContentIn{SessionID: "child", Mode: "typo", Project: "project-a", Limit: 2})
 	require.NoError(t, err)
