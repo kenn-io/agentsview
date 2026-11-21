@@ -6,6 +6,7 @@ package mcp
 import (
 	"encoding/json"
 	"slices"
+	"sort"
 	"time"
 
 	"go.kenn.io/agentsview/internal/stringutil"
@@ -121,15 +122,9 @@ func fitItems[T any](envelope any, items []T) int {
 // fitText returns the longest rune prefix whose encoded item fits its budget.
 func fitText(text string, budget int, encode func(string) any) string {
 	runes := []rune(text)
-	lo, hi := 0, len(runes)
-	for lo < hi {
-		mid := (lo + hi + 1) / 2
-		data, err := json.Marshal(encode(string(runes[:mid])))
-		if err == nil && len(data) <= budget {
-			lo = mid
-		} else {
-			hi = mid - 1
-		}
-	}
-	return string(runes[:lo])
+	n := sort.Search(len(runes), func(i int) bool {
+		data, err := json.Marshal(encode(string(runes[:i+1])))
+		return err != nil || len(data) > budget
+	})
+	return string(runes[:n])
 }
