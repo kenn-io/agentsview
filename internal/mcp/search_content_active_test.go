@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -181,6 +182,9 @@ func TestSearchContent_ActiveFilterHTTPCompatibility(t *testing.T) {
 				ids = append(ids, match.SessionID)
 			}
 			assert.ElementsMatch(t, []string{"idle", "malformed", "missing-idle", "boundary"}, ids)
+			for _, id := range []string{"active", "idle", "malformed", "boundary", "crossing"} {
+				assert.Equal(t, 1, lookups[id], id)
+			}
 		})
 	}
 }
@@ -194,9 +198,14 @@ func TestSearchContent_HintsApplyLegacyActivityFilter(t *testing.T) {
 			if response == "idle" {
 				limit, hintLimit, includeAutomated = 1, "1", true
 			}
+			searches := 0
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				if r.URL.Path == "/api/v1/search/content" {
+					searches++
+					if searches == 1 {
+						assert.Equal(t, strconv.Itoa(limit), r.URL.Query().Get("limit"))
+					}
 					assert.Equal(t, "2024-06-15T11:50:00Z", r.URL.Query().Get("exclude_active_since"))
 					if r.URL.Query().Get("include_one_shot") != "true" {
 						if response == "active first page" {

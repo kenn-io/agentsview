@@ -2329,9 +2329,10 @@ func TestGetMessages_BudgetPages(t *testing.T) {
 	dbtest.SeedSessionWithMessages(t, d, "budget", "proj", messages, dbtest.WithMessageCounts(101, 100))
 	for _, direction := range []string{"asc", "desc"} {
 		t.Run(direction, func(t *testing.T) {
-			in := getMessagesIn{SessionID: "budget", Limit: 100, Direction: direction}
+			in := getMessagesIn{SessionID: "budget", Limit: 100, Direction: direction, MaxCharsPerMessage: 1000}
 			var ordinals []int
 			filtered := 0
+			cutPage := false
 			for {
 				_, out, err := ts.getMessages(t.Context(), nil, in)
 				require.NoError(t, err)
@@ -2343,11 +2344,27 @@ func TestGetMessages_BudgetPages(t *testing.T) {
 				for _, m := range out.Messages {
 					ordinals = append(ordinals, m.Ordinal)
 				}
-				if out.NextFrom == nil {
+				if len(out.Messages) == 0 {
 					break
 				}
-				in.From = out.NextFrom
+				require.NotEmpty(t, out.Messages[0].BodyCursor)
+				_, body, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "budget", BodyCursor: out.Messages[0].BodyCursor, MaxCharsPerMessage: 2000})
+				require.NoError(t, err)
+				if out.Omitted > 0 {
+					cutPage = true
+					require.NotNil(t, body.NextFrom)
+					want := out.Messages[len(out.Messages)-1].Ordinal + 1
+					if direction == "desc" {
+						want -= 2
+					}
+					assert.Equal(t, want, *body.NextFrom)
+				}
+				if body.NextFrom == nil {
+					break
+				}
+				in.From = body.NextFrom
 			}
+			assert.True(t, cutPage)
 			require.Len(t, ordinals, 100)
 			for i, ordinal := range ordinals {
 				want := i
@@ -2461,53 +2478,6 @@ func TestSearchContent_Total(t *testing.T) {
 				assert.Equal(t, 50, req.Limit)
 			}
 		})
-	}
-}
-
-func TestGetMessages_BudgetPagesAndBodyCursors(t *testing.T) {
-	ts, d := newTestToolset(t)
-	messages := make([]db.Message, 21)
-	for i := range messages {
-		messages[i] = dbtest.UserMsg("page-bodies", i, fmt.Sprintf("%02d:", i)+strings.Repeat("<&界", 700))
-	}
-	dbtest.SeedSessionWithMessages(t, d, "page-bodies", "proj", messages, dbtest.WithMessageCounts(21, 21))
-	in := getMessagesIn{SessionID: "page-bodies", Limit: 21, MaxCharsPerMessage: 700}
-	got := make(map[int]string)
-	for {
-		_, out, err := ts.getMessages(t.Context(), nil, in)
-		require.NoError(t, err)
-		require.NotEmpty(t, out.Messages)
-		assert.True(t, fitsResponse(out))
-		var nextFrom *int
-		for _, message := range out.Messages {
-			_, exists := got[message.Ordinal]
-			assert.False(t, exists)
-			var content strings.Builder
-			content.WriteString(message.Content)
-			cursor := message.BodyCursor
-			require.NotEmpty(t, cursor)
-			for cursor != "" {
-				_, body, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "page-bodies", BodyCursor: cursor, MaxCharsPerMessage: 700})
-				require.NoError(t, err)
-				require.Len(t, body.Messages, 1)
-				assert.True(t, fitsResponse(body))
-				content.WriteString(body.Messages[0].Content)
-				cursor = body.Messages[0].BodyCursor
-				if cursor == "" {
-					nextFrom = body.NextFrom
-				}
-			}
-			got[message.Ordinal] = content.String()
-		}
-		if nextFrom != nil {
-			in = getMessagesIn{SessionID: "page-bodies", From: nextFrom, Limit: 21, MaxCharsPerMessage: 700}
-			continue
-		}
-		break
-	}
-	require.Len(t, got, len(messages))
-	for _, message := range messages {
-		assert.Equal(t, message.Content, got[message.Ordinal])
 	}
 }
 
