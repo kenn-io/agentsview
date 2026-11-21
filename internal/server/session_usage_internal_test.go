@@ -18,6 +18,7 @@ type rawUsageStore struct {
 	db.Store
 	t                       *testing.T
 	exactErr, suffixErr     error
+	lookupErr               error
 	suffixCalls, usageCalls int
 	matches                 []string
 	retryErr                error
@@ -25,6 +26,10 @@ type rawUsageStore struct {
 	rawID, canonicalID      string
 	retryUsage              *db.SessionUsage
 	wantBreakdown           bool
+}
+
+func (s *rawUsageStore) GetSessionFull(context.Context, string) (*db.Session, error) {
+	return nil, s.lookupErr
 }
 
 func (s *rawUsageStore) GetSessionUsage(ctx context.Context, id string, breakdown bool) (*db.SessionUsage, error) {
@@ -94,6 +99,7 @@ func TestSessionUsageRawResolverErrors(t *testing.T) {
 		status, calls       int
 	}{
 		{"query", nil, errors.New("unavailable"), 500, 1},
+		{"missing", nil, fmt.Errorf("resolver: %w", service.ErrSessionNotFound), 404, 1},
 		{"canceled", nil, fmt.Errorf("resolver: %w", context.Canceled), 500, 1},
 		{"deadline", nil, fmt.Errorf("resolver: %w", context.DeadlineExceeded), 504, 1},
 		{"exact query", errors.New("unavailable"), nil, 500, 0},
@@ -116,6 +122,17 @@ func TestSessionUsageRawResolverErrors(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSessionUsageRawAmbiguousHostedAlias(t *testing.T) {
+	store := &rawUsageStore{t: t, lookupErr: &db.SessionIdentityError{State: "ambiguous", Variants: []string{"stale-a~native", "stale-b~native"}}, matches: []string{"a~native", "b~native"}}
+	srv := &Server{db: store, sessions: service.NewReadOnlyBackend(store)}
+	_, err := srv.humaSessionUsage(context.WithValue(t.Context(), rawUsageContextKey{}, "request"), &sessionUsageInput{ID: "native"})
+	var usageErr *sessionUsageError
+	require.ErrorAs(t, err, &usageErr)
+	assert.Equal(t, 409, usageErr.Status)
+	assert.Equal(t, []string{"a~native", "b~native"}, usageErr.Body.Candidates)
+	assert.Equal(t, 1, store.suffixCalls)
 }
 
 type canonicalUsageStore struct {
