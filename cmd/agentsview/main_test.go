@@ -328,7 +328,7 @@ func TestServeLegacyImageTextAfterRestart(t *testing.T) {
 	require.NoError(t, database.Close())
 	conn, err := sql.Open("sqlite3", cfg.DBPath)
 	require.NoError(t, err)
-	testutil.LegacyImageTextSchema(t, conn, true)
+	testutil.LegacyImageTextSchema(t, conn, testutil.LegacyImageTextLayoutB831F99CC)
 	require.NoError(t, conn.Close())
 	data, err := json.Marshal(cfg)
 	require.NoError(t, err)

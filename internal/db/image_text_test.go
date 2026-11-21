@@ -673,9 +673,12 @@ func TestImageTextBatchFillsStoredResult(t *testing.T) {
 
 func TestOpenRepairsPreMergeImageText(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		later bool
-	}{{"a08089649", false}, {"b831f99cc", true}} {
+		name   string
+		layout testutil.LegacyImageTextLayout
+	}{
+		{"a08089649", testutil.LegacyImageTextLayoutA08089649},
+		{"b831f99cc", testutil.LegacyImageTextLayoutB831F99CC},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := t.Context()
 			d := testDB(t)
@@ -686,20 +689,20 @@ func TestOpenRepairsPreMergeImageText(t *testing.T) {
 			content := testInlineImageContent()
 			hash := RetainedToolResultImages(content)[0].SHA256
 			require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "untouched-image", Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-			testutil.LegacyImageTextSchema(t, d.getWriter(), tc.later)
+			testutil.LegacyImageTextSchema(t, d.getWriter(), tc.layout)
 			_, err := d.getWriter().ExecContext(ctx, `PRAGMA user_version = 166`)
 			require.NoError(t, err)
 			_, err = d.getWriter().ExecContext(ctx, `INSERT INTO stats(key,value) VALUES (?,1) ON CONFLICT(key) DO UPDATE SET value=1;
 				UPDATE sessions SET sync_marker='2000-01-01T00:00:00.000Z' WHERE id='untouched-image';
 				INSERT INTO image_text_cache(image_hash,processor,provider,model,revision,text,succeeded) VALUES (?, 'processor', 'provider', 'model', 'revision', 'old text', 1)`, imageTextBackfillKey, hash)
 			require.NoError(t, err)
-			if tc.later {
+			if tc.layout == testutil.LegacyImageTextLayoutB831F99CC {
 				_, err = d.getWriter().ExecContext(ctx, `INSERT INTO image_text_occurrences(session_id,call_id,image_index,image_hash,media_type) SELECT 'untouched-image', id, 0, ?, 'image/png' FROM tool_calls WHERE session_id='untouched-image'`, hash)
 			} else {
 				_, err = d.getWriter().ExecContext(ctx, `INSERT INTO image_text_occurrences(session_id,call_id,image_index,image_hash) SELECT 'untouched-image', id, 0, ? FROM tool_calls WHERE session_id='untouched-image'`, hash)
 			}
 			require.NoError(t, err)
-			if tc.later {
+			if tc.layout == testutil.LegacyImageTextLayoutB831F99CC {
 				// A failed sync may have left the current view referencing the old cache.
 				_, err = d.getWriter().ExecContext(ctx, `DROP VIEW message_search_content; CREATE VIEW message_search_content AS SELECT id, session_id, content AS rendered, COALESCE(dialogue_text, content) AS content FROM messages UNION ALL SELECT id, NULL, text, '' FROM image_text_cache`)
 				require.NoError(t, err)
