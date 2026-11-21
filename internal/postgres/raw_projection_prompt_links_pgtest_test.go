@@ -255,3 +255,33 @@ func TestRawProjectionClaudeRecordedLinksKeepSharedSession(t *testing.T) {
 	assert.Equal(t, before.PublicID, page.Sessions[0].ID)
 	assert.Equal(t, []db.PRLink{{URL: "https://github.com/o/r/pull/7", Host: "github.com", Repository: "o/r", Number: 7}}, page.Sessions[0].PRLinks)
 }
+
+func TestRawProjectionFutureVersionDialogueRefresh(t *testing.T) {
+	f := newProjectionFixture(t)
+	outcome := projectionOutcome("https://github.com/o/r/pull/1\n[Thinking]\nhttps://github.com/o/r/pull/2\n[/Thinking]")
+	message := &outcome.Outcome.Results[0].Result.Messages[0]
+	message.DialogueText = nil
+	m, _ := f.accept(t, "device-a", "future", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
+	resolved, err := f.sink.Resolve(t.Context(), "codex:portable")
+	require.NoError(t, err)
+	future := db.CurrentDataVersion() + 1
+	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET data_version=$2, pr_links=$3 WHERE id=$1`, resolved.SessionID, future, db.EncodePRLinks([]db.PRLink{{URL: "https://github.com/o/r/pull/99", Host: "github.com", Repository: "o/r", Number: 99}}))
+	require.NoError(t, err)
+	_, err = NewRawProjectionStore(t.Context(), f.runtime, RawProjectionOptions{Tenant: f.tenant})
+	var tooNew *db.DataVersionTooNewError
+	require.ErrorAs(t, err, &tooNew)
+	message.DialogueText = new("https://github.com/o/r/pull/1")
+	_, err = f.sink.SelectSourceGeneration(t.Context(), m, "parser-future")
+	require.NoError(t, err)
+	leases, err := f.jobs.ClaimRawParseJobs(t.Context(), "future-worker", 1, time.Minute)
+	require.NoError(t, err)
+	require.Len(t, leases, 1)
+	err = f.sink.Project(t.Context(), leases[0], m, outcome)
+	require.ErrorAs(t, err, &tooNew)
+	var links string
+	var version int
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links,data_version FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&links, &version))
+	assert.Equal(t, future, version)
+	assert.Equal(t, []db.PRLink{{URL: "https://github.com/o/r/pull/99", Host: "github.com", Repository: "o/r", Number: 99}}, db.DecodePRLinks(links))
+}

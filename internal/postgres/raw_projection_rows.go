@@ -38,7 +38,7 @@ func rawGroupHasStaleFriction(
 // syncSelectedRawPRLinks refreshes materialized revisions selected by active
 // branches, including longer retained captures whose source has departed.
 func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string, dialogueChanges []string) (bool, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT b.session_id FROM raw_session_branches b JOIN sessions s ON s.id=b.session_id WHERE b.group_id=$1 AND b.active AND (s.data_version<$2 OR b.session_id=ANY($3::text[]))`, group, db.CurrentDataVersion(), dialogueChanges)
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT b.session_id,s.data_version FROM raw_session_branches b JOIN sessions s ON s.id=b.session_id WHERE b.group_id=$1 AND b.active AND (s.data_version<$2 OR b.session_id=ANY($3::text[]))`, group, db.CurrentDataVersion(), dialogueChanges)
 	if err != nil {
 		return false, err
 	}
@@ -46,8 +46,12 @@ func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string, dialo
 	var ids []string
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
+		var version int
+		if err := rows.Scan(&id, &version); err != nil {
 			return false, err
+		}
+		if version > db.CurrentDataVersion() {
+			return false, &db.DataVersionTooNewError{DatabaseVersion: version, BinaryVersion: db.CurrentDataVersion()}
 		}
 		ids = append(ids, id)
 	}

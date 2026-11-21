@@ -157,6 +157,7 @@ func promptPRLinks(ctx context.Context, text string) ([]PRLink, error) {
 		token := text[start:pos]
 		var starts []int
 		query := false
+		queryCanSeparate := false
 		for i := range len(token) {
 			if i&4095 == 0 {
 				if err := ctx.Err(); err != nil {
@@ -164,12 +165,24 @@ func promptPRLinks(ctx context.Context, text string) ([]PRLink, error) {
 				}
 			}
 			if token[i] == '?' || token[i] == '#' {
+				if !query && len(starts) > 0 {
+					previous, err := url.Parse(token[starts[len(starts)-1]:i])
+					if err == nil {
+						repository, number, routePath, found := promptPRRoute(previous.Path)
+						if n, parseErr := strconv.Atoi(number); found && parseErr == nil {
+							previous.Path, previous.RawPath = routePath, ""
+							_, queryCanSeparate = NewPRLink(previous.String(), repository, n)
+						}
+					}
+				}
 				query = true
 			}
 			if (len(token)-i >= 7 && strings.EqualFold(token[i:i+7], "http://")) || (len(token)-i >= 8 && strings.EqualFold(token[i:i+8], "https://")) {
-				if len(starts) == 0 || (!query && token[i-1] != '/' && token[i-1] != '=') {
+				separated := i > 0 && (!query || queryCanSeparate && token[i-1] == ',') && token[i-1] != '/' && token[i-1] != '='
+				if len(starts) == 0 || separated {
 					starts = append(starts, i)
 					query = false
+					queryCanSeparate = false
 				}
 			}
 		}

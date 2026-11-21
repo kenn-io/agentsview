@@ -315,7 +315,7 @@ type listSessionsIn struct {
 	IncludeOneShot   *bool    `json:"include_one_shot,omitempty" jsonschema:"Include one-shot sessions (a single user message). Default false."`
 	IncludeAutomated *bool    `json:"include_automated,omitempty" jsonschema:"Include automated runs identified by roborev tags or matching prompt patterns. Default false."`
 	Labels           []string `json:"labels,omitempty" jsonschema:"Only sessions carrying every one of these exact labels, such as ticket=example."`
-	PR               string   `json:"pr,omitempty" jsonschema:"Only sessions linked to a pull request: owner/repo, owner/repo#123, or github.com::owner/repo#123."`
+	PR               string   `json:"pr,omitempty" jsonschema:"Only sessions linked to a pull request: owner/repo, owner/repo#123, or github.com::owner/repo#123. Includes URLs in user prompts; a mention does not mean work was done on the PR."`
 	Limit            int      `json:"limit,omitempty" jsonschema:"Max results, default 20, max 100."`
 	Cursor           string   `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor."`
 }
