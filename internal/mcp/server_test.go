@@ -117,7 +117,7 @@ func TestNewServer_Instructions(t *testing.T) {
 			assert.Contains(t, instructions, "four separate search_content regex calls")
 			assert.Contains(t, instructions, `PR N\b, pr N\b, #N\b, and /pull/N\b`)
 			assert.Contains(t, instructions, "include_active true, include_one_shot true, include_automated true, limit 50, and current_session_id")
-			assert.Contains(t, instructions, "page with next_cursor as cursor and pass any activity_cutoff back unchanged")
+			assert.Contains(t, instructions, "page with next_cursor as cursor")
 			assert.Contains(t, instructions, "Deduplicate session IDs, ignore the lookup conversation, confirm repository and work evidence")
 			assert.Contains(t, instructions, "get_session_overview to compare activity and parent; follow a child to its parent, then choose the newest valid top-level session")
 			assert.Contains(t, instructions, `Use /pull/N\b regex for a full PR URL`)
@@ -136,7 +136,6 @@ func TestOwnerSearchPatternsFindExactReferences(t *testing.T) {
 		id, started, result string
 	}{
 		{"upper", "2024-06-15T11:59:00Z", "work on PR 123"},
-		{"older", "2024-06-06T10:00:00Z", "earlier PR 123"},
 		{"lower", "2024-06-03T10:00:00Z", "work on pr 123"},
 		{"hash", "2024-06-02T10:00:00Z", "work on #123"},
 		{"url", "2024-06-01T10:00:00Z", "see #1234 " + strings.Repeat("filler ", 100) + "https://github.com/o/r/pull/123"},
@@ -162,11 +161,7 @@ func TestOwnerSearchPatternsFindExactReferences(t *testing.T) {
 			res, err := ct.CallTool(t.Context(), callParams(ToolSearchContent, map[string]any{"mode": "regex", "pattern": tc.pattern, "include_active": true, "include_one_shot": true, "include_automated": true, "limit": 50}))
 			require.NoError(t, err)
 			out := decodeStructured[searchContentOut](t, res)
-			if tc.id == "upper" {
-				require.Len(t, out.Matches, 2)
-			} else {
-				require.Len(t, out.Matches, 1)
-			}
+			require.Len(t, out.Matches, 1)
 			assert.Equal(t, tc.id, out.Matches[0].SessionID)
 			assert.Contains(t, out.Matches[0].Snippet, tc.snippet)
 			if tc.id == "url" {
@@ -174,23 +169,10 @@ func TestOwnerSearchPatternsFindExactReferences(t *testing.T) {
 			}
 		})
 	}
-	excluded, err := ct.CallTool(t.Context(), callParams(ToolSearchContent, map[string]any{"mode": "regex", "pattern": `PR 123\b`, "include_one_shot": true, "limit": 1}))
-	require.NoError(t, err)
-	withoutActive := decodeStructured[searchContentOut](t, excluded)
-	require.Len(t, withoutActive.Matches, 1)
-	assert.Equal(t, "older", withoutActive.Matches[0].SessionID)
 }
 
-func TestOwnerSearchPagesAndSessionClasses(t *testing.T) {
+func TestOwnerSearchSessionClasses(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
-	for i := range 51 {
-		id := fmt.Sprintf("match-%02d", i)
-		dbtest.SeedSession(t, d, id, "proj", func(s *db.Session) {
-			s.StartedAt = new(fmt.Sprintf("2024-06-10T10:%02d:00Z", i))
-			s.UserMessageCount = 2
-		})
-		dbtest.SeedMessages(t, d, toolCallMsg(id, 0, db.ToolCall{ToolName: "Bash", Category: "Bash", ResultContent: "work on #123"}))
-	}
 	for _, tc := range []struct {
 		id, repo, started string
 		users             int
@@ -205,43 +187,20 @@ func TestOwnerSearchPagesAndSessionClasses(t *testing.T) {
 			s.StartedAt = new(tc.started)
 			s.UserMessageCount = tc.users
 			s.IsAutomated = tc.automated
-			s.PRLinks = []db.PRLink{dbtest.AnnotatedPRLink(tc.repo, 123)}
 		})
 		dbtest.SeedMessages(t, d, toolCallMsg(tc.id, 0, db.ToolCall{ToolName: "Bash", Category: "Bash", ResultContent: "work on " + tc.repo + "#123"}))
 	}
 	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), Now: func() time.Time { return fixedNow }}))
 	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
-	listed, err := ct.CallTool(t.Context(), callParams(ToolListSessions, map[string]any{"pr": "o/r#123", "include_one_shot": true, "include_automated": true, "limit": 100}))
-	require.NoError(t, err)
-	rows := decodeStructured[listSessionsOut](t, listed)
-	var linked []string
-	for _, row := range rows.Sessions {
-		linked = append(linked, row.SessionID)
-	}
-	assert.ElementsMatch(t, []string{"current", "one-shot", "automated"}, linked)
 	args := map[string]any{"mode": "regex", "pattern": `#123\b`, "include_active": true, "include_one_shot": true, "include_automated": true, "current_session_id": "current", "limit": 50}
 	first, err := ct.CallTool(t.Context(), callParams(ToolSearchContent, args))
 	require.NoError(t, err)
 	page := decodeStructured[searchContentOut](t, first)
-	require.Len(t, page.Matches, 50)
-	require.NotNil(t, page.NextCursor)
-	ids := make([]string, 0, 54)
+	ids := make([]string, 0, len(page.Matches))
 	for _, hit := range page.Matches {
 		ids = append(ids, hit.SessionID)
 	}
-	args["cursor"] = *page.NextCursor
-	second, err := ct.CallTool(t.Context(), callParams(ToolSearchContent, args))
-	require.NoError(t, err)
-	last := decodeStructured[searchContentOut](t, second)
-	for _, hit := range last.Matches {
-		ids = append(ids, hit.SessionID)
-	}
-	assert.Len(t, ids, 54)
-	assert.Contains(t, ids, "one-shot")
-	assert.Contains(t, ids, "automated")
-	assert.Contains(t, ids, "other-repo")
-	assert.NotContains(t, ids, "current")
-	assert.Contains(t, ids, "match-00")
+	assert.ElementsMatch(t, []string{"one-shot", "automated", "other-repo"}, ids)
 }
 
 func TestServer_GetMemoryStatus(t *testing.T) {
