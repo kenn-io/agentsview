@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -114,7 +113,11 @@ func TestNewServer_Instructions(t *testing.T) {
 			}
 			assert.Contains(t, instructions, "search_content with mode hybrid, or search_sessions")
 			assert.Contains(t, instructions, "search_sessions with its name as query")
-			assert.Contains(t, instructions, "search_content with mode regex, include_active true, and pattern")
+			assert.Contains(t, instructions, "four separate search_content searches with mode regex, include_active true, and limit 1")
+			assert.Contains(t, instructions, `PR N\b, pr N\b, #N\b, and /pull/N\b`)
+			assert.Contains(t, instructions, "deduplicate matching session IDs")
+			assert.Contains(t, instructions, "call get_session_overview on each distinct candidate to compare activity and parent")
+			assert.Contains(t, instructions, "choose the newest top-level session; if a candidate is a child, follow it to its parent")
 			assert.Contains(t, instructions, "list_sessions with pr or labels")
 			assert.Contains(t, instructions, "get_session_overview, then get_tool_calls, get_messages, or get_child_sessions")
 			assert.Contains(t, instructions, "list_sessions with active_since")
@@ -125,46 +128,51 @@ func TestNewServer_Instructions(t *testing.T) {
 	}
 }
 
-func TestOwnerSearchPatternFindsExactReference(t *testing.T) {
+func TestOwnerSearchPatternsFindExactReferences(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
-	dbtest.SeedSession(t, d, "url", "proj", func(s *db.Session) { s.StartedAt = new("2024-06-02T10:00:00Z") })
-	dbtest.SeedSession(t, d, "longer", "proj")
-	dbtest.SeedSession(t, d, "plain", "proj", func(s *db.Session) { s.StartedAt = new("2024-06-15T11:59:00Z") })
-	dbtest.SeedSession(t, d, "hash", "proj", func(s *db.Session) { s.StartedAt = new("2024-06-01T10:00:00Z") })
-	dbtest.SeedMessages(t, d,
-		toolCallMsg("url", 0, db.ToolCall{ToolName: "Bash", Category: "Bash", ResultContent: "see #1234 " + strings.Repeat("filler ", 100) + "https://github.com/o/r/pull/123"}),
-		toolCallMsg("longer", 0, db.ToolCall{ToolName: "Bash", Category: "Bash", ResultContent: "see #1234"}),
-		toolCallMsg("plain", 0, db.ToolCall{ToolName: "Bash", Category: "Bash", ResultContent: "work on PR 123"}),
-		toolCallMsg("hash", 0, db.ToolCall{ToolName: "Bash", Category: "Bash", ResultContent: "work on #123"}),
-	)
+	for _, tc := range []struct {
+		id, started, result string
+	}{
+		{"upper", "2024-06-15T11:59:00Z", "work on PR 123"},
+		{"older", "2024-06-06T10:00:00Z", "earlier PR 123"},
+		{"lower", "2024-06-03T10:00:00Z", "work on pr 123"},
+		{"hash", "2024-06-02T10:00:00Z", "work on #123"},
+		{"url", "2024-06-01T10:00:00Z", "see #1234 " + strings.Repeat("filler ", 100) + "https://github.com/o/r/pull/123"},
+		{"longer", "2024-06-01T09:00:00Z", "see #1234"},
+	} {
+		dbtest.SeedSession(t, d, tc.id, "proj", func(s *db.Session) { s.StartedAt = new(tc.started) })
+		dbtest.SeedMessages(t, d, toolCallMsg(tc.id, 0, db.ToolCall{ToolName: "Bash", Category: "Bash", ResultContent: tc.result}))
+	}
 	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), Now: func() time.Time { return fixedNow }}))
 	defer func() {
 		require.NoError(t, ct.Close())
 		require.NoError(t, st.Wait())
 	}()
-	match := regexp.MustCompile(`pattern (\S+)`).FindStringSubmatch(ct.InitializeResult().Instructions)
-	require.Len(t, match, 2)
-	pattern := strings.Replace(match[1], "<number>", "123", 1)
-	excluded, err := ct.CallTool(t.Context(), callParams(ToolSearchContent, map[string]any{"mode": "regex", "pattern": pattern, "include_one_shot": true}))
+	for _, tc := range []struct {
+		pattern, id, snippet string
+	}{
+		{`PR 123\b`, "upper", "PR 123"},
+		{`pr 123\b`, "lower", "pr 123"},
+		{`#123\b`, "hash", "#123"},
+		{`/pull/123\b`, "url", "/pull/123"},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			res, err := ct.CallTool(t.Context(), callParams(ToolSearchContent, map[string]any{"mode": "regex", "pattern": tc.pattern, "include_active": true, "include_one_shot": true, "limit": 1}))
+			require.NoError(t, err)
+			out := decodeStructured[searchContentOut](t, res)
+			require.Len(t, out.Matches, 1)
+			assert.Equal(t, tc.id, out.Matches[0].SessionID)
+			assert.Contains(t, out.Matches[0].Snippet, tc.snippet)
+			if tc.id == "url" {
+				assert.NotContains(t, out.Matches[0].Snippet, "#1234")
+			}
+		})
+	}
+	excluded, err := ct.CallTool(t.Context(), callParams(ToolSearchContent, map[string]any{"mode": "regex", "pattern": `PR 123\b`, "include_one_shot": true, "limit": 1}))
 	require.NoError(t, err)
 	withoutActive := decodeStructured[searchContentOut](t, excluded)
-	require.NotEmpty(t, withoutActive.Matches)
-	assert.Equal(t, "url", withoutActive.Matches[0].SessionID)
-	res, err := ct.CallTool(t.Context(), callParams(ToolSearchContent, map[string]any{"mode": "regex", "pattern": pattern, "include_active": true, "include_one_shot": true}))
-	require.NoError(t, err)
-	out := decodeStructured[searchContentOut](t, res)
-	require.NotEmpty(t, out.Matches)
-	assert.Equal(t, "plain", out.Matches[0].SessionID)
-	assert.Contains(t, out.Matches[0].Snippet, "PR 123")
-	require.Len(t, out.Matches, 3)
-	snippets := make(map[string]string)
-	for _, hit := range out.Matches {
-		snippets[hit.SessionID] = hit.Snippet
-	}
-	assert.Contains(t, snippets["url"], "/pull/123")
-	assert.NotContains(t, snippets["url"], "#1234")
-	assert.Contains(t, snippets["hash"], "#123")
-	assert.NotContains(t, snippets, "longer")
+	require.Len(t, withoutActive.Matches, 1)
+	assert.Equal(t, "older", withoutActive.Matches[0].SessionID)
 }
 
 func TestServer_GetMemoryStatus(t *testing.T) {
