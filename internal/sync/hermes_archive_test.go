@@ -2002,6 +2002,10 @@ func TestHermesMalformedSessionRowFallsBackToReadableTranscript(t *testing.T) {
 			name:   "a message that fails to decode",
 			damage: "UPDATE messages SET timestamp = 'not-a-number' WHERE session_id = 'child'",
 		},
+		{
+			name:   "a message with non-integer display_order",
+			damage: "ALTER TABLE messages ADD COLUMN display_order INTEGER; UPDATE messages SET display_order = 'not-a-number' WHERE session_id = 'child'",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -2500,6 +2504,115 @@ func TestHermesLedgerResyncReplacesUsageAndPreservesIdentity(t *testing.T) {
 			usage, err := database.GetDailyUsage(t.Context(), db.UsageFilter{})
 			require.NoError(t, err)
 			assert.Equal(t, int64(143000), usage.Totals.TotalCost.Microdollars)
+		})
+	}
+}
+
+func TestHermesCompactionArchivalClearsImportedMessagesOnResync(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		mutateSQL string
+	}{
+		{
+			name:      "all messages archived active=0",
+			mutateSQL: `UPDATE messages SET active = 0 WHERE session_id = 'compacted'`,
+		},
+		{
+			name: "all remaining messages hidden as inflight restatement",
+			mutateSQL: `
+				UPDATE messages SET display_metadata = '{"compaction_inflight_task_restatement":true}'
+				WHERE session_id = 'compacted'
+			`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			sessionsDir := filepath.Join(root, "sessions")
+			require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+			stateDB := filepath.Join(root, "state.db")
+
+			conn, err := sql.Open("sqlite3", stateDB)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, conn.Close()) })
+			_, err = conn.ExecContext(t.Context(), `
+				CREATE TABLE sessions (
+					id TEXT PRIMARY KEY,
+					source TEXT NOT NULL,
+					model TEXT,
+					parent_session_id TEXT,
+					started_at REAL NOT NULL,
+					ended_at REAL,
+					message_count INTEGER DEFAULT 0,
+					input_tokens INTEGER DEFAULT 0,
+					output_tokens INTEGER DEFAULT 0,
+					cache_read_tokens INTEGER DEFAULT 0,
+					cache_write_tokens INTEGER DEFAULT 0,
+					reasoning_tokens INTEGER DEFAULT 0,
+					estimated_cost_usd REAL,
+					actual_cost_usd REAL,
+					cost_status TEXT,
+					cost_source TEXT,
+					title TEXT,
+					api_call_count INTEGER DEFAULT 0
+				);
+				CREATE TABLE messages (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					session_id TEXT NOT NULL,
+					role TEXT NOT NULL,
+					content TEXT,
+					tool_call_id TEXT,
+					tool_calls TEXT,
+					timestamp REAL NOT NULL,
+					finish_reason TEXT,
+					reasoning TEXT,
+					reasoning_content TEXT,
+					reasoning_details TEXT,
+					codex_reasoning_items TEXT,
+					codex_message_items TEXT,
+					active INTEGER DEFAULT 1,
+					display_order INTEGER,
+					display_metadata TEXT
+				);
+				INSERT INTO sessions (id, source, model, started_at, ended_at, message_count)
+				VALUES ('compacted', 'cli', 'gpt-5.4', 1778767200.0, 1778767205.0, 2);
+				INSERT INTO messages (session_id, role, content, timestamp, active, display_order, display_metadata) VALUES
+					('compacted', 'user', 'initial prompt', 1778767201.0, 1, 1, NULL),
+					('compacted', 'assistant', 'initial reply', 1778767202.0, 1, 2, NULL);
+			`)
+			require.NoError(t, err)
+
+			database := dbtest.OpenTestDB(t)
+			engine := NewEngine(t.Context(), database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{
+					parser.AgentHermes: {sessionsDir},
+				},
+				Machine: "local",
+			})
+			t.Cleanup(engine.Close)
+
+			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+			initialMsgs, err := database.GetMessages(t.Context(), "hermes:compacted", 0, 10, true)
+			require.NoError(t, err)
+			require.Len(t, initialMsgs, 2)
+
+			_, err = conn.ExecContext(t.Context(), tc.mutateSQL)
+			require.NoError(t, err)
+			// Advance state.db mtime past the stored file watermark so SyncAll reparses.
+			nextTime := time.Now().Add(2 * time.Second).Truncate(time.Second)
+			require.NoError(t, os.Chtimes(stateDB, nextTime, nextTime))
+
+			res := engine.SyncAll(t.Context(), nil)
+			assert.Equal(t, 1, res.Synced)
+
+			afterMsgs, err := database.GetMessages(t.Context(), "hermes:compacted", 0, 10, true)
+			require.NoError(t, err)
+			assert.Empty(t, afterMsgs)
+
+			sess, err := database.GetSession(t.Context(), "hermes:compacted")
+			require.NoError(t, err)
+			require.NotNil(t, sess)
+			assert.Equal(t, 0, sess.MessageCount)
+			assert.Equal(t, 0, sess.UserMessageCount)
 		})
 	}
 }

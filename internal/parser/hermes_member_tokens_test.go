@@ -336,3 +336,79 @@ func TestHermesWatcherSelectsCronChildAfterAncestorChanges(t *testing.T) {
 		stored[0].FingerprintHash = fp.Hash
 	}
 }
+
+func TestHermesMemberCompactionColumnsSchemaGateAndTokens(t *testing.T) {
+	c, path := hermesTokenFixture(t)
+	_, err := c.ExecContext(t.Context(), `
+		ALTER TABLE messages ADD COLUMN active INTEGER DEFAULT 1;
+		ALTER TABLE messages ADD COLUMN display_order INTEGER;
+		ALTER TABLE messages ADD COLUMN display_metadata TEXT;
+		INSERT INTO messages(session_id, role, content, timestamp, active, display_order, display_metadata)
+		VALUES ('child', 'user', 'compaction target', 1778767225.0, 1, 5, NULL);
+	`)
+	require.NoError(t, err)
+
+	// Existing triggers cover display_metadata, but do not cover active or
+	// display_order, so hermesStoreTracksRewrites must fail closed.
+	tracks, err := hermesStoreTracksRewrites(t.Context(), c)
+	require.NoError(t, err)
+	assert.False(t, tracks)
+
+	_, err = c.ExecContext(t.Context(), `
+		CREATE TRIGGER messages_compaction_revision_update
+		AFTER UPDATE OF active,display_order ON messages
+		BEGIN
+			UPDATE sessions SET transcript_revision = transcript_revision + 1 WHERE id = new.session_id;
+		END;
+	`)
+	require.NoError(t, err)
+	tracks, err = hermesStoreTracksRewrites(t.Context(), c)
+	require.NoError(t, err)
+	assert.True(t, tracks)
+
+	set := newHermesSourceSet(AgentHermes, []string{filepath.Dir(path)})
+	childRef := set.stateMemberSourceRef(filepath.Dir(path), path, "child")
+	fp, err := set.Fingerprint(t.Context(), childRef)
+	require.NoError(t, err)
+	stored := []StoredMemberFreshness{{Path: VirtualSourcePath(path, "child"), FingerprintHash: fp.Hash}}
+
+	// Mutating active, display_order, or display_metadata without bumping
+	// transcript_revision must still change the token and select the member.
+	mutations := []string{
+		`UPDATE messages SET display_metadata = '{"compaction_inflight_task_restatement":true}' WHERE session_id = 'child' AND timestamp = 1778767225.0`,
+		`UPDATE messages SET display_order = 1 WHERE session_id = 'child' AND timestamp = 1778767225.0`,
+		`UPDATE messages SET active = 0 WHERE session_id = 'child' AND timestamp = 1778767225.0`,
+	}
+	for _, stmt := range mutations {
+		beforeToken := tokenMap(t, c)["child"]
+		_, err = c.ExecContext(t.Context(), stmt)
+		require.NoError(t, err)
+		// Reset transcript_revision back so we also test token-level checksums
+		// independent of trigger firing.
+		_, err = c.ExecContext(t.Context(), `UPDATE sessions SET transcript_revision = 0 WHERE id = 'child'`)
+		require.NoError(t, err)
+
+		afterToken := tokenMap(t, c)["child"]
+		assert.NotEqual(t, beforeToken, afterToken, "token must change for %s", stmt)
+
+		sources, err := set.SourcesForChangedPath(t.Context(), ChangedPathRequest{
+			Path:                      path,
+			AllowWatermarkOnlySources: true,
+			StoredMemberFreshnessPage: memoryFreshnessPager(stored, 1),
+		})
+		require.NoError(t, err)
+		var selected bool
+		for _, s := range sources {
+			if s.FingerprintKey == childRef.FingerprintKey {
+				selected = true
+			}
+		}
+		assert.True(t, selected, "member must be selected for %s", stmt)
+
+		nextFP, err := set.Fingerprint(t.Context(), childRef)
+		require.NoError(t, err)
+		assert.NotEqual(t, fp.Hash, nextFP.Hash)
+		fp = nextFP
+		stored[0].FingerprintHash = fp.Hash
+	}
+}

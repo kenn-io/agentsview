@@ -73,6 +73,7 @@ var dataVersionScopes = map[int][]parser.AgentType{
 	182:                         {parser.AgentEvener},
 	183:                         {parser.AgentAntigravity, parser.AgentAntigravityCLI},
 	184:                         {}, // Existing prompts are indexed on open; nothing to reparse.
+	185:                         {parser.AgentHermes, parser.AgentAugureDesktop},
 }
 
 // firstScopedDataVersion is the oldest version that may be declared. Released

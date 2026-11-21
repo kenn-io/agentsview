@@ -29,6 +29,11 @@ func TestAntigravityCLIPromptEnvelopeUpgradeScopes(t *testing.T) {
 		ScopedDataVersionProviders(158, 160))
 }
 
+func TestHermesCompactionUpgradeScopes(t *testing.T) {
+	assert.ElementsMatch(t, []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop},
+		ScopedDataVersionProviders(184, 185))
+}
+
 func TestCommitLinkUpgradeScope(t *testing.T) {
 	d := testDB(t)
 	for _, agent := range []string{"codex", "claude"} {
