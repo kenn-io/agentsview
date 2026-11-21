@@ -1821,6 +1821,11 @@ func TestCursorSyncDoesNotCoverIncompleteHours(t *testing.T) {
 					_, _ = w.Write([]byte(`{"data":[{"userId":12}],"pagination":{"hasNextPage":false}}`))
 					return
 				}
+				if tc.name == "open hour" && tc.events == "" {
+					// The sync captures its closed-hour boundary before this request.
+					now := time.Now().UTC()
+					tc.events = fmt.Sprintf(`[{"timestamp":%q,"model":"closed"},{"timestamp":%q,"model":"open"}]`, now.Add(-24*time.Hour).Truncate(time.Hour).Format(time.RFC3339), now.Format(time.RFC3339))
+				}
 				_, _ = fmt.Fprintf(w, `{"totalUsageEventsCount":%d,"usageEvents":%s}`, len(tc.want), tc.events)
 			}))
 			defer server.Close()
@@ -1829,7 +1834,6 @@ func TestCursorSyncDoesNotCoverIncompleteHours(t *testing.T) {
 				current := now.Truncate(time.Hour)
 				tc.since = current.Add(-48 * time.Hour).Format("2006-01-02")
 				tc.until = current.Add(48 * time.Hour).Format("2006-01-02")
-				tc.events = fmt.Sprintf(`[{"timestamp":%q,"model":"closed"},{"timestamp":%q,"model":"open"}]`, current.Add(-24*time.Hour).Format(time.RFC3339), now.Format(time.RFC3339))
 			}
 			require.NoError(t, syncCursorUsage(t, server.URL, "--since", tc.since, "--until", tc.until))
 			database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
