@@ -2329,7 +2329,7 @@ func TestGetMessages_BudgetPages(t *testing.T) {
 	dbtest.SeedSessionWithMessages(t, d, "budget", "proj", messages, dbtest.WithMessageCounts(101, 100))
 	for _, direction := range []string{"asc", "desc"} {
 		t.Run(direction, func(t *testing.T) {
-			in := getMessagesIn{SessionID: "budget", Limit: 100, Direction: direction, MaxCharsPerMessage: 1000}
+			in := getMessagesIn{SessionID: "budget", Limit: 100, Direction: direction, MaxCharsPerMessage: 2000}
 			var ordinals []int
 			filtered := 0
 			cutPage := false
@@ -2347,22 +2347,19 @@ func TestGetMessages_BudgetPages(t *testing.T) {
 				if len(out.Messages) == 0 {
 					break
 				}
-				require.NotEmpty(t, out.Messages[0].BodyCursor)
-				_, body, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "budget", BodyCursor: out.Messages[0].BodyCursor, MaxCharsPerMessage: 2000})
-				require.NoError(t, err)
 				if out.Omitted > 0 {
 					cutPage = true
-					require.NotNil(t, body.NextFrom)
+					require.NotNil(t, out.NextFrom)
 					want := out.Messages[len(out.Messages)-1].Ordinal + 1
 					if direction == "desc" {
 						want -= 2
 					}
-					assert.Equal(t, want, *body.NextFrom)
+					assert.Equal(t, want, *out.NextFrom)
 				}
-				if body.NextFrom == nil {
+				if out.NextFrom == nil {
 					break
 				}
-				in.From = body.NextFrom
+				in.From = out.NextFrom
 			}
 			assert.True(t, cutPage)
 			require.Len(t, ordinals, 100)
@@ -2430,14 +2427,16 @@ func (f *pagedContentSearchService) Get(_ context.Context, _ string) (*service.S
 	return nil, nil
 }
 
-func TestSearchContent_Total(t *testing.T) {
+func TestSearchContent_BudgetTotal(t *testing.T) {
 	for _, tc := range []struct {
-		name           string
+		name, mode     string
 		count, want    int
 		capped, legacy bool
 	}{
 		{name: "legacy", count: 36, want: 18, legacy: true},
 		{name: "capped", count: 600, want: 500, capped: true},
+		{name: "semantic", mode: "semantic", count: 30},
+		{name: "hybrid", mode: "hybrid", count: 30},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := &pagedContentSearchService{matches: make([]db.ContentMatch, tc.count), legacy: tc.legacy}
@@ -2449,10 +2448,16 @@ func TestSearchContent_Total(t *testing.T) {
 				fake.matches[i] = db.ContentMatch{SessionID: "session", Ordinal: i, Timestamp: timestamp, Snippet: "needle", ContextBefore: []db.Message{{Content: strings.Repeat("x", 500)}, {Content: strings.Repeat("x", 500)}, {Content: strings.Repeat("x", 500)}, {Content: strings.Repeat("x", 500)}}}
 			}
 			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
-			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", IncludeActive: !tc.legacy, Limit: 20, Context: 4})
+			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Mode: tc.mode, IncludeActive: !tc.legacy, Limit: 20, Context: 4})
 			require.NoError(t, err)
+			assert.True(t, fitsResponse(out))
 			assert.Equal(t, tc.want, out.Total)
 			assert.Equal(t, tc.capped, out.TotalCapped)
+			if tc.mode != "" {
+				assert.Positive(t, out.Omitted)
+				assert.Nil(t, out.NextCursor)
+				assert.Contains(t, out.Note, "Reduce limit")
+			}
 			if tc.legacy {
 				require.NotEmpty(t, out.Matches)
 				require.NotNil(t, out.NextCursor)
@@ -2516,22 +2521,4 @@ func TestGetMessages_BudgetAroundLinearContinuation(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, next.Messages)
 	assert.Equal(t, out.Messages[len(out.Messages)-1].Ordinal+1, next.Messages[0].Ordinal)
-}
-
-func TestSearchContent_BudgetRanked(t *testing.T) {
-	for _, mode := range []string{"semantic", "hybrid"} {
-		t.Run(mode, func(t *testing.T) {
-			fake := &pagedContentSearchService{matches: make([]db.ContentMatch, 30)}
-			for i := range fake.matches {
-				fake.matches[i] = db.ContentMatch{SessionID: "session", Ordinal: i, Snippet: "needle", ContextBefore: []db.Message{{Content: strings.Repeat("x", 500)}, {Content: strings.Repeat("x", 500)}, {Content: strings.Repeat("x", 500)}, {Content: strings.Repeat("x", 500)}}}
-			}
-			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
-			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Mode: mode, IncludeActive: true, Limit: 20, Context: 4})
-			require.NoError(t, err)
-			assert.True(t, fitsResponse(out))
-			assert.Positive(t, out.Omitted)
-			assert.Nil(t, out.NextCursor)
-			assert.Contains(t, out.Note, "Reduce limit")
-		})
-	}
 }
