@@ -314,7 +314,7 @@ func TestGetToolCalls_BudgetPages(t *testing.T) {
 	dbtest.SeedSession(t, d, "budget-calls", "proj")
 	messages := make([]db.Message, 0, 200)
 	for i := range 200 {
-		messages = append(messages, toolCallMsg("budget-calls", i, db.ToolCall{ToolName: "Bash", Category: "Bash", InputJSON: strings.Repeat("x", 5000)}))
+		messages = append(messages, toolCallMsg("budget-calls", i, db.ToolCall{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"` + strings.Repeat("x", 5000) + `"}`}))
 	}
 	dbtest.SeedMessages(t, d, messages...)
 	in := toolCallsIn{SessionID: "budget-calls", Limit: 200, MaxInputChars: 10000}
@@ -341,10 +341,10 @@ func TestGetToolCalls_BudgetPages(t *testing.T) {
 func TestGetToolCalls_BudgetOversizedInput(t *testing.T) {
 	ts, d := newTestToolset(t)
 	dbtest.SeedSession(t, d, "large-input", "proj")
-	input := strings.Repeat("<", 9999) + "z"
+	input := `{"command":"` + strings.Repeat("<", 9985) + `z"}`
 	dbtest.SeedMessages(t, d,
 		toolCallMsg("large-input", 0, db.ToolCall{ToolName: "Bash", Category: "Bash", InputJSON: input}),
-		toolCallMsg("large-input", 1, db.ToolCall{ToolName: "Bash", Category: "Bash", InputJSON: "next"}),
+		toolCallMsg("large-input", 1, db.ToolCall{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"next"}`}),
 	)
 	_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "large-input", MaxInputChars: 10000})
 	require.NoError(t, err)
@@ -357,5 +357,5 @@ func TestGetToolCalls_BudgetOversizedInput(t *testing.T) {
 	_, next, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "large-input", Cursor: *out.NextCursor})
 	require.NoError(t, err)
 	require.Len(t, next.ToolCalls, 1)
-	assert.Equal(t, "next", next.ToolCalls[0].Input)
+	assert.Equal(t, `{"command":"next"}`, next.ToolCalls[0].Input)
 }
