@@ -213,6 +213,16 @@ func (b *directBackend) FindSessionIDsByPartial(
 func (b *directBackend) FindSessionIDsByRawSuffix(
 	ctx context.Context, raw string, limit int,
 ) ([]string, error) {
+	if strings.ContainsAny(raw, ":~") {
+		// An exact trashed ID must not resolve to another session's suffix.
+		session, err := b.db.GetSessionFull(ctx, raw)
+		if err != nil {
+			return nil, err
+		}
+		if session != nil && session.ID == raw && session.DeletedAt != nil {
+			return nil, fmt.Errorf("%w: %s", ErrSessionNotFound, raw)
+		}
+	}
 	return b.db.FindSessionIDsByRawSuffix(ctx, raw, limit)
 }
 

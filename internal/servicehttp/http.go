@@ -299,6 +299,9 @@ func (b *httpBackend) FindSessionIDsByRawSuffix(
 	if response == nil {
 		return nil, err
 	}
+	if response.HTTPResponse.StatusCode == http.StatusGone {
+		return nil, fmt.Errorf("%w: %s", service.ErrSessionNotFound, raw)
+	}
 	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
 		return nil, err
 	}

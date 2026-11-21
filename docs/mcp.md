@@ -241,8 +241,10 @@ the other search arguments, and returns an error when the ID is missing. An
 exact stored ID takes precedence. Otherwise, a raw suffix that matches more
 than one session returns an error listing up to five matches. A raw UUID matches
 an agent ID ending in `:<uuid>` or a host ID ending in `~<uuid>`; the delimiter is
-part of the match, so a fork entry separated by `-` is not selected. The row
-has an empty `snippet`, `match_ordinal` set to `0`, and no `next_cursor`. Call
+part of the match, so a fork entry separated by `-` is not selected. Qualified
+IDs can also match a host-prefixed suffix. If the exact qualified ID is in the
+trash, the lookup reports it missing instead. The row has an empty `snippet`,
+`match_ordinal` set to `0`, and no `next_cursor`. Call
 `get_messages` with that ordinal to read the first message. For a known full ID
 or raw UUID, `get_session_overview` provides a compact message preview. Remote
 bare UUID lookup requires AgentsView 0.44.0 or later on the server. Use an exact

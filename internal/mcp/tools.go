@@ -94,9 +94,6 @@ func (t *toolset) resolveSession(
 	if err != nil || detail != nil {
 		return detail, err
 	}
-	if strings.ContainsAny(id, ":~") {
-		return nil, fmt.Errorf("%w: %s", service.ErrSessionNotFound, id)
-	}
 	ids, err := t.svc.FindSessionIDsByRawSuffix(ctx, id, 5)
 	if err != nil {
 		return nil, err
