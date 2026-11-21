@@ -82,20 +82,17 @@ async function installLiveSession(page: Page) {
   const ready = new Promise<void>((resolve) => {
     subscribed = resolve;
   });
-  let served = false;
   await page.route("**/api/v1/events*", async (route) => {
     if (!new URL(route.request().url()).searchParams.getAll("session").includes(SESSION_ID)) {
       await route.continue();
       return;
     }
-    if (served) return new Promise<void>(() => {});
-    served = true;
     subscribed();
     await gate;
     await route.fulfill({
       status: 200,
       contentType: "text/event-stream",
-      body: `event: session_ready\ndata: ${SESSION_ID}\n\nevent: events_ready\ndata: {}\n\nevent: session_updated\ndata: ${SESSION_ID}\n\n`,
+      body: `retry: 60000\n\nevent: session_ready\ndata: ${SESSION_ID}\n\nevent: events_ready\ndata: {}\n\nevent: session_updated\ndata: ${SESSION_ID}\n\n`,
     });
   });
   return {
