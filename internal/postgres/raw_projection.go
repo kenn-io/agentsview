@@ -151,7 +151,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 	}
 	changed := false
 	derivedChanged := false
-	fresh := make(map[string]rawFreshContent)
+	fresh := make(map[string][]byte)
 	dialogueChanges := make([]string, 0)
 	for _, group := range ordered {
 		c, ok := candidates[group]
@@ -257,14 +257,11 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		if err != nil {
 			return err
 		}
-		// Reuse bytes inserted by this transaction. On a conflict, merge only
-		// the derived tool links into the existing payload.
-		item := fresh[sessionID]
-		item.group = group
+		// Reuse only bytes inserted by this transaction. A conflict keeps its
+		// stored payload and merges in only the derived tool links.
 		if count == 1 {
-			item.payload = payload
+			fresh[sessionID] = payload
 		}
-		item.links = parser.CombinePRLinks(item.links, prepared.ToolPRLinks)
 		if count == 0 && len(prepared.ToolPRLinks) > 0 {
 			retained, err := loadRawPayload(ctx, tx, sessionID)
 			if err != nil {
@@ -280,9 +277,9 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 				if _, err := tx.ExecContext(ctx, `UPDATE raw_content_revisions SET payload=$2 WHERE session_id=$1`, sessionID, encoded); err != nil {
 					return err
 				}
+				dialogueChanges = append(dialogueChanges, sessionID)
 			}
 		}
-		fresh[sessionID] = item
 		dialogueChanged, err := syncRawDialogue(ctx, tx, sessionID, prepared.Messages)
 		if err != nil {
 			return err
@@ -350,12 +347,8 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			changed = true
 		}
 	}
-	freshIDsByGroup := make(map[string][]string)
-	for id, item := range fresh {
-		freshIDsByGroup[item.group] = append(freshIDsByGroup[item.group], id)
-	}
 	for _, group := range ordered {
-		linksChanged, err := syncSelectedRawPRLinks(ctx, tx, group, dialogueChanges, freshIDsByGroup[group], fresh)
+		linksChanged, err := syncSelectedRawPRLinks(ctx, tx, group, dialogueChanges)
 		if err != nil {
 			return err
 		}

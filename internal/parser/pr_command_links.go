@@ -231,32 +231,17 @@ func shellCommands(command string) []shellCall {
 				status = 1
 			case "cd", "pushd", "popd":
 				state.changedDir = true
-			case "export", "unset":
+			case "unset":
+				// The parser reads export as a DeclClause, handled above.
 				for i := 1; i < len(args); i++ {
-					if !literals[i] {
+					switch {
+					case !literals[i]:
 						state.repo = shellValue{exported: true}
 						state.host = shellValue{exported: true}
-						continue
-					}
-					name, value, assigned := strings.Cut(args[i], "=")
-					var target *shellValue
-					switch name {
-					case "GH_REPO":
-						target = &state.repo
-					case "GH_HOST":
-						target = &state.host
-					}
-					if target == nil {
-						continue
-					}
-					if args[0] == "unset" {
-						*target = shellValue{}
-					} else {
-						target.exported = true
-						if assigned {
-							target.value = value
-							target.known = true
-						}
+					case args[i] == "GH_REPO":
+						state.repo = shellValue{}
+					case args[i] == "GH_HOST":
+						state.host = shellValue{}
 					}
 				}
 				status = 0

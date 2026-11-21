@@ -516,28 +516,32 @@ func applyArchiveContentToCopiedSessionsTx(
 			return err
 		}
 	}
+	// Derive tool links before the policy below drops copied tool inputs.
+	if err := backfillCopiedToolPRLinksTx(ctx, tx, tempIDsTable, sourceVersion); err != nil {
+		return err
+	}
 	switch policy {
 	case config.ArchiveContentFull:
 		// Skip unchanged projections only when the source already carries
 		// visible metadata. Older indexes must derive it from copied dialogue.
 		if sourceVersion >= sanitizedSourceDataVersion && oldDBHasColumn(ctx, tx, "conversation_messages", "visible_digest") {
-			return backfillCopiedToolPRLinksTx(ctx, tx, tempIDsTable, sourceVersion)
+			return nil
 		}
 	case config.ArchiveContentTranscripts:
 		if _, err := tx.ExecContext(ctx, `DELETE FROM commit_links WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)`); err != nil {
 			return err
 		}
-		err = projectCopiedToolPRLinksTx(ctx, tx, tempIDsTable, sourceVersion, policy)
+		err = dropCopiedToolContentTx(ctx, tx, tempIDsTable)
 	case config.ArchiveContentUsage:
 		if _, err := tx.ExecContext(ctx, `DELETE FROM commit_links WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)`); err != nil {
 			return err
 		}
-		err = projectCopiedToolPRLinksTx(ctx, tx, tempIDsTable, sourceVersion, policy)
+		err = compactCopiedSessionsForUsageTx(ctx, tx, tempIDsTable)
 	}
 	if err != nil {
 		return err
 	}
-	if err := refreshCopiedToolPRLinksAndCodexDigestsTx(ctx, tx, tempIDsTable, sourceVersion, policy); err != nil {
+	if err := refreshCopiedCodexForkDigestsTx(ctx, tx, tempIDsTable); err != nil {
 		return err
 	}
 	if active, err := conversationExportActiveTx(contextTransaction{ctx: ctx, tx: tx}); err != nil || !active {
@@ -568,25 +572,6 @@ func backfillCopiedToolPRLinksTx(ctx context.Context, tx *sql.Tx, idsTable strin
 		}
 	}
 	return nil
-}
-
-func projectCopiedToolPRLinksTx(ctx context.Context, tx *sql.Tx, idsTable string, sourceVersion int, policy config.ArchiveContent) error {
-	if err := backfillCopiedToolPRLinksTx(ctx, tx, idsTable, sourceVersion); err != nil {
-		return err
-	}
-	if policy.UsageOnly() {
-		return compactCopiedSessionsForUsageTx(ctx, tx, idsTable)
-	}
-	return dropCopiedToolContentTx(ctx, tx, idsTable)
-}
-
-func refreshCopiedToolPRLinksAndCodexDigestsTx(ctx context.Context, tx *sql.Tx, idsTable string, sourceVersion int, policy config.ArchiveContent) error {
-	if policy == config.ArchiveContentFull {
-		if err := backfillCopiedToolPRLinksTx(ctx, tx, idsTable, sourceVersion); err != nil {
-			return err
-		}
-	}
-	return refreshCopiedCodexForkDigestsTx(ctx, tx, idsTable)
 }
 
 // toolOutputMarkerDataVersion is the first data version whose parsers mark
@@ -779,7 +764,10 @@ func compactCopiedSessionsForUsageTx(
 		return fmt.Errorf("listing copied sessions: %w", err)
 	}
 	for _, id := range ids {
-		if err := resetUsageOnlyCopiedPRLinksTx(contextTransaction{ctx: ctx, tx: tx}, id); err != nil {
+		if err := resetUsageOnlyPRLinksTx(contextTransaction{ctx: ctx, tx: tx}, id); err != nil {
+			return err
+		}
+		if err := clearUsageOnlyConversationTx(contextTransaction{ctx: ctx, tx: tx}, id); err != nil {
 			return err
 		}
 		if err := settleUsageOnlySignalsTx(tx, id); err != nil {
@@ -787,13 +775,6 @@ func compactCopiedSessionsForUsageTx(
 		}
 	}
 	return nil
-}
-
-func resetUsageOnlyCopiedPRLinksTx(tx transactionQueries, id string) error {
-	if err := resetUsageOnlyPRLinksTx(tx, id); err != nil {
-		return err
-	}
-	return clearUsageOnlyConversationTx(tx, id)
 }
 
 func scanStrings(rows *sql.Rows) ([]string, error) {
