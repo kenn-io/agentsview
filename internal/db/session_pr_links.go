@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -338,6 +339,14 @@ func (db *DB) upgradePromptPRLinksTx(ctx context.Context, tx *sql.Tx) error {
 
 // CallPRLinks derives links from a tool call and its recorded checkout.
 func CallPRLinks(category, input, cwd, remote string) []PRLink {
+	links, _ := callPRLinks(category, input, cwd, remote)
+	return links
+}
+
+var codeModeExecRE = regexp.MustCompile(`\btools\.exec_command\s*\(`)
+var codeModeDirRE = regexp.MustCompile(`["']?(?:workdir|cwd)["']?\s*:`)
+
+func callPRLinks(category, input, cwd, remote string) ([]PRLink, bool) {
 	if category == "Task" {
 		var payload struct {
 			Prompt  string         `json:"prompt"`
@@ -345,15 +354,62 @@ func CallPRLinks(category, input, cwd, remote string) []PRLink {
 			Content jsontext.Value `json:"content"`
 		}
 		if json.Unmarshal([]byte(input), &payload) != nil {
-			return nil
+			return nil, false
 		}
 		var content string
 		_ = json.Unmarshal(payload.Content, &content)
 		links, _ := parser.PromptPRLinksContext(context.Background(), payload.Prompt+"\n"+payload.Message+"\n"+content)
-		return links
+		return links, false
 	}
 	if category != "Bash" {
-		return nil
+		return nil, false
+	}
+	if !jsontext.Value(input).IsValid() && codeModeExecRE.MatchString(input) {
+		var links []PRLink
+		for _, loc := range codeModeExecRE.FindAllStringIndex(input, -1) {
+			end, depth, quote, escaped := loc[1], 1, byte(0), false
+			for end < len(input) && depth > 0 {
+				c := input[end]
+				end++
+				if quote != 0 {
+					if escaped {
+						escaped = false
+					} else if c == '\\' {
+						escaped = true
+					} else if c == quote {
+						quote = 0
+					}
+					continue
+				}
+				switch c {
+				case '\'', '"', '`':
+					quote = c
+				case '(':
+					depth++
+				case ')':
+					depth--
+				}
+			}
+			if depth != 0 {
+				continue
+			}
+			call := input[loc[0]:end]
+			command := commitCommandText(call)
+			if command == "" {
+				continue
+			}
+			callRemote := remote
+			withoutCommand := commitCommandRE.ReplaceAllString(call, "")
+			if codeModeDirRE.MatchString(withoutCommand) {
+				dir := commitWorkdirRE.FindStringSubmatch(withoutCommand)
+				if len(dir) != 2 || strings.Trim(dir[1], `"'`) != cwd {
+					callRemote = ""
+				}
+			}
+			found := parser.CommandPRLinks(command, callRemote)
+			links = parser.CombinePRLinks(links, found)
+		}
+		return links, false
 	}
 	var payload struct {
 		Workdir string `json:"workdir"`
@@ -367,7 +423,7 @@ func CallPRLinks(category, input, cwd, remote string) []PRLink {
 	if dir != "" && (cwd == "" || path.Clean(dir) != path.Clean(cwd)) {
 		remote = ""
 	}
-	return parser.CommandPRLinks(shellCommandText(input), remote)
+	return parser.CommandPRLinksAndDirectoryChange(shellCommandText(input), remote)
 }
 
 // ToolCallPRLinks derives links from a transcript's tool calls.
@@ -375,7 +431,11 @@ func ToolCallPRLinks(messages []Message, cwd, remote string) []PRLink {
 	var links []PRLink
 	for _, message := range messages {
 		for _, call := range message.ToolCalls {
-			links = parser.CombinePRLinks(links, CallPRLinks(call.Category, call.InputJSON, cwd, remote))
+			found, changed := callPRLinks(call.Category, call.InputJSON, cwd, remote)
+			links = parser.CombinePRLinks(links, found)
+			if changed {
+				remote = ""
+			}
 		}
 	}
 	return links
@@ -383,7 +443,7 @@ func ToolCallPRLinks(messages []Message, cwd, remote string) []PRLink {
 
 func toolCallRepositoryTx(tx transactionQueries, id string) (string, string, error) {
 	var cwd, remote string
-	err := tx.QueryRow(`SELECT COALESCE(s.cwd,''), COALESCE(NULLIF(p.recorded_git_remote,''), NULLIF(p.git_remote,''), '') FROM sessions s LEFT JOIN session_project_identity_snapshots p ON p.session_id=s.id WHERE s.id=?`, id).Scan(&cwd, &remote)
+	err := tx.QueryRow(`SELECT COALESCE(s.cwd,''), CASE WHEN p.remote_candidate_count=1 AND COALESCE(p.git_remote_name,'')<>'' AND COALESCE(p.recorded_git_remote,'')='' THEN COALESCE(p.git_remote,'') ELSE '' END FROM sessions s LEFT JOIN session_project_identity_snapshots p ON p.session_id=s.id WHERE s.id=?`, id).Scan(&cwd, &remote)
 	return cwd, remote, err
 }
 
@@ -397,15 +457,15 @@ func storedToolCallPRLinksTx(tx transactionQueries, id string) ([]PRLink, error)
 		return nil, err
 	}
 	defer rows.Close()
-	var links []PRLink
+	var messages []Message
 	for rows.Next() {
 		var category, input string
 		if err := rows.Scan(&category, &input); err != nil {
 			return nil, err
 		}
-		links = parser.CombinePRLinks(links, CallPRLinks(category, input, cwd, remote))
+		messages = append(messages, Message{ToolCalls: []ToolCall{{Category: category, InputJSON: input}}})
 	}
-	return links, rows.Err()
+	return ToolCallPRLinks(messages, cwd, remote), rows.Err()
 }
 
 const toolPRLinksDataVersion = 185

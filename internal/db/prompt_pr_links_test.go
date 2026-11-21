@@ -357,6 +357,24 @@ func TestToolPRLinksArchiveUpgrade(t *testing.T) {
 	assert.Equal(t, []PRLink{structured}, recorded)
 }
 
+func TestToolPRLinksBackfillDoesNotInferFromRecordedRemote(t *testing.T) {
+	d, err := OpenIsolated(t.Context(), filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = d.Close() })
+	s := Session{ID: "ambiguous-remote", Project: "project", Machine: "local", Agent: "claude", Cwd: "/repo"}
+	require.NoError(t, d.UpsertSession(t.Context(), s))
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{Category: "Bash", InputJSON: `{"command":"gh pr view 42"}`}}}}))
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `UPDATE session_project_identity_snapshots SET git_remote=?, recorded_git_remote=?, remote_candidate_count=1, git_remote_name='' WHERE session_id=?`, "https://github.com/example/fork.git", "https://github.com/example/fork.git", s.ID)
+		if err != nil {
+			return err
+		}
+		links, err := storedToolCallPRLinksTx(tx, s.ID)
+		assert.Empty(t, links)
+		return err
+	}))
+}
+
 func TestArchiveCopyRetainsToolPRLinks(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
