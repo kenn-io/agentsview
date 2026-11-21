@@ -65,6 +65,7 @@ afterEach(() => {
   analytics.to = "";
   analytics.selectedDate = null;
   analytics.selectedActivityRange = null;
+  analytics.activity = null;
   analytics.machine = "";
   analytics.model = "";
   analytics.termination = "";
@@ -830,10 +831,7 @@ describe("AnalyticsPage refresh behavior", () => {
   });
 
   it("uses an Activity brush as a Sessions filter without replacing the chart window", async () => {
-    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
-      configurable: true,
-      get: () => 600,
-    });
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(600);
     vi.stubGlobal(
       "ResizeObserver",
       class {
