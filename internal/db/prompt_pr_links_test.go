@@ -339,6 +339,9 @@ func TestToolPRLinksArchiveUpgrade(t *testing.T) {
 		if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links=? WHERE id=?`, EncodePRLinks(s.PRLinks), s.ID); err != nil {
 			return err
 		}
+		if _, err := tx.ExecContext(t.Context(), `DROP TRIGGER IF EXISTS artifact_sessions_update_queue; ALTER TABLE sessions DROP COLUMN tool_pr_links`); err != nil {
+			return err
+		}
 		return writeUserVersion(t.Context(), tx, toolPRLinksDataVersion-1)
 	}))
 	require.NoError(t, d.Close())
@@ -352,4 +355,10 @@ func TestToolPRLinksArchiveUpgrade(t *testing.T) {
 	recorded, err := d.GetSessionStructuredPRLinks(t.Context(), s.ID)
 	require.NoError(t, err)
 	assert.Equal(t, []PRLink{structured}, recorded)
+	d.SetArchiveContent(config.ArchiveContentUsage)
+	require.NoError(t, d.RenameSession(t.Context(), s.ID, nil))
+	got, err = d.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	require.Len(t, got.PRLinks, 2)
+	assert.Equal(t, "https://github.com/example/repo/pull/42", got.PRLinks[1].URL)
 }

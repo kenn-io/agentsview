@@ -253,8 +253,8 @@ func writeSessionPromptPRLinksTx(tx transactionQueries, id, stored string, links
 const promptPRLinkCandidateSQL = `role='user' AND (COALESCE(` + sqliteDialogueExprBare + `, content) LIKE '%http://%' OR COALESCE(` + sqliteDialogueExprBare + `, content) LIKE '%https://%')`
 
 func refreshSessionPromptPRLinksTx(tx transactionQueries, id string) error {
-	var stored, structured string
-	if err := tx.QueryRow(`SELECT pr_links, structured_pr_links FROM sessions WHERE id=?`, id).Scan(&stored, &structured); err != nil {
+	var stored, structured, recordedTools string
+	if err := tx.QueryRow(`SELECT pr_links, structured_pr_links, tool_pr_links FROM sessions WHERE id=?`, id).Scan(&stored, &structured, &recordedTools); err != nil {
 		return err
 	}
 	rows, err := tx.Query(`SELECT `+selectMessageCols+` FROM messages WHERE session_id=? AND `+promptPRLinkCandidateSQL+` ORDER BY ordinal`, id)
@@ -273,7 +273,7 @@ func refreshSessionPromptPRLinksTx(tx transactionQueries, id string) error {
 	if err != nil {
 		return err
 	}
-	return writeSessionPromptPRLinksTx(tx, id, stored, parser.CombinePRLinks(DecodePRLinks(structured), PromptPRLinks(messages), toolLinks))
+	return writeSessionPromptPRLinksTx(tx, id, stored, parser.CombinePRLinks(DecodePRLinks(structured), DecodePRLinks(recordedTools), PromptPRLinks(messages), toolLinks))
 }
 
 func appendSessionPromptPRLinksTx(tx transactionQueries, id string, messages []Message) error {
@@ -295,7 +295,7 @@ func appendSessionPromptPRLinksTx(tx transactionQueries, id string, messages []M
 	return appendDerivedPRLinksTx(tx, id, derived)
 }
 
-// GetSessionStructuredPRLinks returns parser-recorded links without prompt links.
+// GetSessionStructuredPRLinks returns only parser-recorded links.
 func (db *DB) GetSessionStructuredPRLinks(ctx context.Context, id string) ([]PRLink, error) {
 	var encoded string
 	if err := db.getReader().QueryRowContext(ctx, `SELECT structured_pr_links FROM sessions WHERE id=?`, id).Scan(&encoded); err != nil {
@@ -425,7 +425,7 @@ func (db *DB) upgradeToolPRLinksTx(ctx context.Context, tx *sql.Tx) error {
 		return err
 	}
 	for _, id := range ids {
-		if err := refreshSessionPromptPRLinksTx(tx, id); err != nil {
+		if err := backfillToolPRLinksTx(tx, id); err != nil {
 			return fmt.Errorf("backfilling tool PR links: %w", err)
 		}
 	}
@@ -438,4 +438,59 @@ func appendDerivedPRLinksTx(tx transactionQueries, id string, derived []PRLink) 
 		return err
 	}
 	return writeSessionPromptPRLinksTx(tx, id, stored, parser.CombinePRLinks(DecodePRLinks(stored), derived))
+}
+
+func setToolPRLinksTx(tx transactionQueries, id string, links []PRLink, replace bool) error {
+	if !replace {
+		var stored string
+		if err := tx.QueryRow(`SELECT tool_pr_links FROM sessions WHERE id=?`, id).Scan(&stored); err != nil {
+			return err
+		}
+		links = parser.CombinePRLinks(DecodePRLinks(stored), links)
+	}
+	_, err := tx.Exec(`UPDATE sessions SET tool_pr_links=? WHERE id=?`, EncodePRLinks(links), id)
+	return err
+}
+
+func resetUsageOnlyPRLinksTx(tx transactionQueries, id string) error {
+	var stored, structured, tools string
+	if err := tx.QueryRow(`SELECT pr_links, structured_pr_links, tool_pr_links FROM sessions WHERE id=?`, id).Scan(&stored, &structured, &tools); err != nil {
+		return err
+	}
+	return writeSessionPromptPRLinksTx(tx, id, stored, parser.CombinePRLinks(DecodePRLinks(structured), DecodePRLinks(tools)))
+}
+
+func setAndRefreshToolPRLinksTx(tx transactionQueries, id string, links []PRLink, replace, usageOnly bool) error {
+	if err := setToolPRLinksTx(tx, id, links, replace); err != nil {
+		return err
+	}
+	if usageOnly {
+		return resetUsageOnlyPRLinksTx(tx, id)
+	}
+	return refreshSessionPromptPRLinksTx(tx, id)
+}
+
+func appendSessionPRLinksWithToolsTx(tx transactionQueries, id string, messages []Message, links []PRLink) error {
+	if err := setToolPRLinksTx(tx, id, links, false); err != nil {
+		return err
+	}
+	if err := appendSessionPromptPRLinksTx(tx, id, messages); err != nil {
+		return err
+	}
+	return appendDerivedPRLinksTx(tx, id, links)
+}
+
+func clearUsageOnlyTextAndStorePRLinksTx(tx transactionQueries, id string, links []PRLink, replace bool) error {
+	if err := setToolPRLinksTx(tx, id, links, replace); err != nil {
+		return err
+	}
+	return clearUsageOnlyTextTx(tx, id)
+}
+
+func backfillToolPRLinksTx(tx transactionQueries, id string) error {
+	links, err := storedToolCallPRLinksTx(tx, id)
+	if err != nil {
+		return err
+	}
+	return setAndRefreshToolPRLinksTx(tx, id, links, true, false)
 }
