@@ -1075,8 +1075,8 @@ type searchContentOut struct {
 	Hints          []service.ContentSearchHint `json:"hints,omitempty"`
 	Matches        []contentMatch              `json:"matches"`
 	Omitted        int                         `json:"omitted,omitempty" jsonschema:"Matches held back."`
-	Total          int                         `json:"total,omitempty" jsonschema:"Matches for this query across all pages. With total_capped, at least this many."`
-	TotalCapped    bool                        `json:"total_capped,omitempty"`
+	Total          int                         `json:"total,omitempty" jsonschema:"Matches across pages. For semantic and hybrid searches, the ranked page count is a lower bound. With total_capped, at least this many."`
+	TotalCapped    bool                        `json:"total_capped,omitempty" jsonschema:"True when total is a lower bound, including for semantic and hybrid searches."`
 	PageCursor     string                      `json:"page_cursor,omitempty" jsonschema:"Pass alone to continue."`
 	NextCursor     *int                        `json:"next_cursor,omitempty"`
 	ActivityCutoff string                      `json:"activity_cutoff,omitempty" jsonschema:"Effective RFC3339 activity cutoff; pass it unchanged with next_cursor as cursor to continue."`
@@ -1286,7 +1286,14 @@ func (t *toolset) searchContent(
 		}
 	}
 	if len(in.Concepts) == 0 {
-		if legacy {
+		if mode == "semantic" || mode == "hybrid" {
+			for _, m := range res.Matches {
+				if !legacy || keepMatch(m) {
+					out.Total++
+				}
+			}
+			out.TotalCapped = true
+		} else if legacy {
 			out.Total, out.TotalCapped, err = t.countContentMatches(ctx, req, 0, 0, keepMatch)
 		} else {
 			out.Total = in.Cursor + len(res.Matches)

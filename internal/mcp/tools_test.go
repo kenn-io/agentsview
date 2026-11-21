@@ -2428,6 +2428,8 @@ func TestSearchContent_BudgetRankedPages(t *testing.T) {
 		_, out, err := ts.searchContent(t.Context(), nil, in)
 		require.NoError(t, err)
 		assert.True(t, fitsResponse(out))
+		assert.Equal(t, 20, out.Total)
+		assert.True(t, out.TotalCapped)
 		for _, m := range out.Matches {
 			ordinals = append(ordinals, m.Ordinal)
 		}
@@ -2442,6 +2444,34 @@ func TestSearchContent_BudgetRankedPages(t *testing.T) {
 		assert.Equal(t, i, ordinal)
 	}
 	assert.Equal(t, "project", fake.lastReq.Project)
+}
+
+func TestSearchContent_RankedTotal(t *testing.T) {
+	for _, mode := range []string{"semantic", "hybrid"} {
+		for _, legacy := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/legacy=%t", mode, legacy), func(t *testing.T) {
+				fake := &pagedContentSearchService{matches: make([]db.ContentMatch, 20), legacy: legacy}
+				for i := range fake.matches {
+					timestamp := "2024-06-15T11:00:00Z"
+					if i%2 == 0 {
+						timestamp = "2024-06-15T11:59:00Z"
+					}
+					fake.matches[i] = db.ContentMatch{SessionID: "session", Timestamp: timestamp}
+				}
+				ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+				_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Mode: mode, Limit: 20, IncludeActive: !legacy})
+				require.NoError(t, err)
+				want := 20
+				if legacy {
+					want = 10
+				}
+				assert.Len(t, out.Matches, want)
+				assert.Equal(t, want, out.Total)
+				assert.True(t, out.TotalCapped)
+				assert.Len(t, fake.requests, 1)
+			})
+		}
+	}
 }
 
 type pagedContentSearchService struct {
