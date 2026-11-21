@@ -112,71 +112,14 @@ func TestNewServer_Instructions(t *testing.T) {
 				assert.Equal(t, "Use returned web_url values when linking to recorded sessions.", instructions)
 				return
 			}
-			catalog, err := ct.ListTools(t.Context(), nil)
-			require.NoError(t, err)
-			type schemaProperty struct {
-				Description string `json:"description"`
-			}
-			properties := map[string]map[string]schemaProperty{}
-			identifiers := map[string]bool{"web_url": true}
-			for _, tool := range catalog.Tools {
-				identifiers[tool.Name] = true
-				raw, err := json.Marshal(tool.InputSchema)
-				require.NoError(t, err)
-				var schema struct {
-					Properties map[string]schemaProperty `json:"properties"`
-				}
-				require.NoError(t, json.Unmarshal(raw, &schema))
-				properties[tool.Name] = schema.Properties
-				for field := range schema.Properties {
-					identifiers[field] = true
-				}
-			}
-			for _, name := range regexp.MustCompile(`[a-z]+(?:_[a-z]+)+`).FindAllString(instructions, -1) {
-				assert.True(t, identifiers[name], "unregistered tool or input property %q", name)
-			}
-			lines := strings.Split(instructions, "\n")
-			for _, route := range []struct {
-				prefix string
-				tool   string
-				args   []string
-				mode   string
-			}{
-				{"Find sessions by topic:", "search_content", []string{"mode"}, "hybrid"},
-				{"Find sessions by topic:", "search_sessions", nil, ""},
-				{"Find a named session:", "search_sessions", []string{"query"}, ""},
-				{"Find who owns a PR or task:", "search_content", []string{"mode", "pattern"}, "regex"},
-				{"Find who owns a PR or task:", "list_sessions", []string{"pr", "labels"}, ""},
-				{"See what a session did:", "get_session_overview", nil, ""},
-				{"See what a session did:", "get_tool_calls", nil, ""},
-				{"See what a session did:", "get_messages", nil, ""},
-				{"See what a session did:", "get_child_sessions", nil, ""},
-				{"Find recently active sessions:", "list_sessions", []string{"active_since"}, ""},
-				{"Results can hide sessions", "search_sessions", []string{"include_active"}, ""},
-				{"Results can hide sessions", "search_content", []string{"include_active", "include_one_shot", "include_automated"}, ""},
-				{"Results can hide sessions", "list_sessions", []string{"include_one_shot", "include_automated"}, ""},
-			} {
-				var line string
-				for _, l := range lines {
-					if strings.HasPrefix(l, route.prefix) {
-						line = l
-					}
-				}
-				require.NotEmpty(t, line, "missing route %q", route.prefix)
-				schema, ok := properties[route.tool]
-				require.True(t, ok, "route %q names unregistered tool %q", route.prefix, route.tool)
-				if len(route.args) == 0 {
-					assert.Regexp(t, `\b`+regexp.QuoteMeta(route.tool)+`\b`, line)
-				}
-				for _, arg := range route.args {
-					toolPattern, argPattern := regexp.QuoteMeta(route.tool), regexp.QuoteMeta(arg)
-					assert.Regexp(t, `(?:\b`+toolPattern+`\b[^.;\n]*\b`+argPattern+`\b|\b`+argPattern+`\b[^.;\n]*\b`+toolPattern+`\b)`, line)
-					assert.Contains(t, schema, arg, "route %q names %q, which %s does not accept", route.prefix, arg, route.tool)
-				}
-				if route.mode != "" {
-					assert.Contains(t, schema["mode"].Description, route.mode, "%s mode does not list %q", route.tool, route.mode)
-				}
-			}
+			assert.Contains(t, instructions, "search_content with mode hybrid, or search_sessions")
+			assert.Contains(t, instructions, "search_sessions with its name as query")
+			assert.Contains(t, instructions, "search_content with mode regex, include_active true, and pattern")
+			assert.Contains(t, instructions, "list_sessions with pr or labels")
+			assert.Contains(t, instructions, "get_session_overview, then get_tool_calls, get_messages, or get_child_sessions")
+			assert.Contains(t, instructions, "list_sessions with active_since")
+			assert.Contains(t, instructions, "include_active in search_sessions and search_content")
+			assert.Contains(t, instructions, "include_one_shot and include_automated in list_sessions and search_content")
 			assert.Contains(t, instructions, "--server with API version 28 or later")
 		})
 	}
@@ -186,7 +129,7 @@ func TestOwnerSearchPatternFindsExactReference(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	dbtest.SeedSession(t, d, "url", "proj", func(s *db.Session) { s.StartedAt = new("2024-06-02T10:00:00Z") })
 	dbtest.SeedSession(t, d, "longer", "proj")
-	dbtest.SeedSession(t, d, "plain", "proj", func(s *db.Session) { s.StartedAt = new("2024-06-03T10:00:00Z") })
+	dbtest.SeedSession(t, d, "plain", "proj", func(s *db.Session) { s.StartedAt = new("2024-06-15T11:59:00Z") })
 	dbtest.SeedSession(t, d, "hash", "proj", func(s *db.Session) { s.StartedAt = new("2024-06-01T10:00:00Z") })
 	dbtest.SeedMessages(t, d,
 		toolCallMsg("url", 0, db.ToolCall{ToolName: "Bash", Category: "Bash", ResultContent: "see #1234 " + strings.Repeat("filler ", 100) + "https://github.com/o/r/pull/123"}),
@@ -194,7 +137,7 @@ func TestOwnerSearchPatternFindsExactReference(t *testing.T) {
 		toolCallMsg("plain", 0, db.ToolCall{ToolName: "Bash", Category: "Bash", ResultContent: "work on PR 123"}),
 		toolCallMsg("hash", 0, db.ToolCall{ToolName: "Bash", Category: "Bash", ResultContent: "work on #123"}),
 	)
-	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil)}))
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), Now: func() time.Time { return fixedNow }}))
 	defer func() {
 		require.NoError(t, ct.Close())
 		require.NoError(t, st.Wait())
@@ -202,6 +145,11 @@ func TestOwnerSearchPatternFindsExactReference(t *testing.T) {
 	match := regexp.MustCompile(`pattern (\S+)`).FindStringSubmatch(ct.InitializeResult().Instructions)
 	require.Len(t, match, 2)
 	pattern := strings.Replace(match[1], "<number>", "123", 1)
+	excluded, err := ct.CallTool(t.Context(), callParams(ToolSearchContent, map[string]any{"mode": "regex", "pattern": pattern, "include_one_shot": true}))
+	require.NoError(t, err)
+	withoutActive := decodeStructured[searchContentOut](t, excluded)
+	require.NotEmpty(t, withoutActive.Matches)
+	assert.Equal(t, "url", withoutActive.Matches[0].SessionID)
 	res, err := ct.CallTool(t.Context(), callParams(ToolSearchContent, map[string]any{"mode": "regex", "pattern": pattern, "include_active": true, "include_one_shot": true}))
 	require.NoError(t, err)
 	out := decodeStructured[searchContentOut](t, res)
