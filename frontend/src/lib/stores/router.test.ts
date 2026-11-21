@@ -313,7 +313,7 @@ describe("RouterStore", () => {
     ({ path, id, resolve }) => {
       setURL(`${path}?desktop=on&project=old`);
       store = new RouterStore();
-      if (resolve) store.resolveSession(id);
+      if (resolve) store.sessionId = id;
       store.replaceParams({ project: "new", desktop: "off" });
       expect(window.location.pathname).toBe(path);
       expect(store.sessionId).toBe(id);

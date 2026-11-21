@@ -3538,17 +3538,14 @@ describe("SessionsStore", () => {
   describe("bare UUID navigation", () => {
     const uuid = "123e4567-e89b-12d3-a456-426614174000";
     const canonical = `pi:${uuid}`;
-    let resolveSession: ReturnType<typeof vi.spyOn>;
     beforeEach(() => {
       router.navigateToSession(uuid);
-      resolveSession = vi.spyOn(router, "resolveSession");
       vi.mocked(api.getSession)
         .mockRejectedValueOnce(new ApiError(404, "missing"))
         .mockResolvedValue(makeSession({ id: canonical }));
       vi.mocked(SessionsService.getApiV1SessionIdsResolve).mockResolvedValue({ ids: [canonical] });
     });
     afterEach(() => {
-      resolveSession.mockRestore();
       router.replace("sessions");
     });
     async function pendingLookup() {
@@ -3559,9 +3556,10 @@ describe("SessionsStore", () => {
         expect(SessionsService.getApiV1SessionIdsResolve).toHaveBeenCalledOnce(),
       );
       return async () => {
+        const currentSessionId = router.sessionId;
         resolve({ ids: [canonical] });
         await navigation;
-        expect(resolveSession).not.toHaveBeenCalled();
+        expect(router.sessionId).toBe(currentSessionId);
       };
     }
     it("resolves a missing bare UUID and hands the canonical ID to the router", async () => {
@@ -3573,7 +3571,8 @@ describe("SessionsStore", () => {
       expect(sessions.activeSessionId).toBe(canonical);
       expect(sessions.activeSession?.id).toBe(canonical);
       expect(sessions.activeSessionNotFound).toBe(false);
-      expect(resolveSession).toHaveBeenCalledExactlyOnceWith(canonical);
+      expect(router.sessionId).toBe(canonical);
+      expect(window.location.pathname).toBe(`/sessions/${uuid}`);
     });
     it.each([
       { name: "ambiguous", ids: [canonical, `box~${canonical}`] },
@@ -3586,7 +3585,7 @@ describe("SessionsStore", () => {
       await sessions.navigateToSession(uuid);
       expect(sessions.activeSessionId).toBe(uuid);
       expect(sessions.activeSessionNotFound).toBe(true);
-      expect(resolveSession).not.toHaveBeenCalled();
+      expect(router.sessionId).toBe(uuid);
     });
     it("does not resolve an exact Claude UUID hit", async () => {
       vi.mocked(api.getSession)
