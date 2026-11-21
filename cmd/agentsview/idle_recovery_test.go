@@ -238,7 +238,9 @@ func TestDaemonIngestionFailedCatchupClearsPending(t *testing.T) {
 	assert.NotContains(t, body, "hello from overnight")
 	assert.Empty(t, headers.Get(apiclient.ArchiveStaleHeader))
 	assert.False(t, f.ingestion.Pending(), "a finished wake pass clears pending even when a source fails")
-	assert.Contains(t, logs.String(), "archive catch-up incomplete: changed-path sync incomplete: 1 source or archive failures")
+	// The watcher can finish before the wake flush starts, leaving the failed
+	// file waiting for retry. Its callback reports the failure in either order.
+	assert.Contains(t, logs.String(), "watcher callback: changed-path sync incomplete: 1 source or archive failures")
 }
 
 func TestIdleManualWakeRunsOneFullPass(t *testing.T) {
