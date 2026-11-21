@@ -285,9 +285,11 @@ describe("shared live stream", () => {
     vi.advanceTimersByTime(250);
     expect(sources).toHaveLength(3);
     const next = sources[2]!;
+    expect(next.url.searchParams.getAll("session")).toEqual(["a"]);
     next.emit("session_ready", "a");
     next.emit("events_ready", "{}");
     expect(retry.postMessage).toHaveBeenCalledWith({ type: "session_ready", data: "a" });
+    expect(other.postMessage).toHaveBeenCalledWith({ type: "session_ready", data: "a" });
     expect(archive.postMessage).not.toHaveBeenCalled();
     hub.close();
   });
