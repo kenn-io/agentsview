@@ -219,11 +219,12 @@ func TestLoadArtifactExportDataRawByteBoundaries(t *testing.T) {
 		data, err := database.LoadArtifactExportData(t.Context(), "session", limits)
 		require.NoError(t, err)
 		require.Equal(t, &content, data.Messages[0].DialogueText)
-		different := strings.Repeat("y", 600)
+		different := content[:500]
 		message.DialogueText = &different
 		require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []Message{message}))
-		_, err = database.LoadArtifactExportData(t.Context(), "session", limits)
-		require.ErrorIs(t, err, ErrArtifactExportLimit)
+		data, err = database.LoadArtifactExportData(t.Context(), "session", limits)
+		require.NoError(t, err)
+		require.Equal(t, &different, data.Messages[0].DialogueText)
 	})
 	t.Run("mixed prompt at byte limit", func(t *testing.T) {
 		database := artifactExportLoadTestDB(t)

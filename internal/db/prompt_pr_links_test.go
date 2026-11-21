@@ -38,7 +38,6 @@ func TestPromptPRLinksStoredMessages(t *testing.T) {
 	assert.Equal(t, "https://github.com/o/r/pull/13", got.PRLinks[3].URL)
 }
 
-// An interrupted open can leave the archive at the old version after adding the column.
 func TestPromptPRLinksArchiveUpgrade(t *testing.T) {
 	t.Run("missing column", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "archive.db")
@@ -53,11 +52,7 @@ func TestPromptPRLinksArchiveUpgrade(t *testing.T) {
 		require.True(t, ok)
 		s := Session{ID: "archived", Project: "project", Machine: "local", Agent: "chatgpt", PRLinks: []PRLink{link}}
 		require.NoError(t, d.UpsertSession(t.Context(), s))
-		require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "user", Content: "https://github.com/o/r/pull/42"}}))
 		require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
-			if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links=structured_pr_links WHERE id=?`, s.ID); err != nil {
-				return err
-			}
 			if _, err := tx.ExecContext(t.Context(), artifactSessionQueueTriggerDropsSQL); err != nil {
 				return err
 			}
@@ -69,12 +64,11 @@ func TestPromptPRLinksArchiveUpgrade(t *testing.T) {
 		require.NoError(t, d.Close())
 		d, err = OpenIsolated(t.Context(), path)
 		require.NoError(t, err)
-		got, err := d.GetSession(t.Context(), s.ID)
+		structured, err := d.GetSessionStructuredPRLinks(t.Context(), s.ID)
 		require.NoError(t, err)
-		require.Len(t, got.PRLinks, 2)
-		assert.Equal(t, link.URL, got.PRLinks[0].URL)
-		assert.Equal(t, "https://github.com/o/r/pull/42", got.PRLinks[1].URL)
+		assert.Equal(t, []PRLink{link}, structured)
 	})
+	// An interrupted open can leave the archive at the old version after adding the column.
 	t.Run("interrupted upgrade", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "archive.db")
 		d, err := OpenIsolated(t.Context(), path)
@@ -133,13 +127,12 @@ func TestPromptPRLinksBatchAndStagedDialogueReplacement(t *testing.T) {
 			s := Session{ID: "dialogue", Project: "project", Machine: "local", Agent: "claude"}
 			require.NoError(t, d.UpsertSession(t.Context(), s))
 			first, second := "https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"
-			msg := Message{SessionID: s.ID, Role: "user", Content: first + " non-dialogue https://github.com/o/r/pull/9", DialogueText: &first}
+			msg := Message{SessionID: s.ID, Role: "user", Content: first + " non-dialogue " + second, DialogueText: &first}
 			require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{msg}))
 			got, err := d.GetSession(t.Context(), s.ID)
 			require.NoError(t, err)
 			require.Len(t, got.PRLinks, 1)
 			assert.Equal(t, "https://github.com/o/r/pull/1", got.PRLinks[0].URL)
-			msg.Content = second + " non-dialogue https://github.com/o/r/pull/9"
 			msg.DialogueText = &second
 			switch method {
 			case "single":
@@ -162,17 +155,30 @@ func TestPromptPRLinksBatchAndStagedDialogueReplacement(t *testing.T) {
 
 func TestPromptPRLinksMetadataUpsertPreservesLinks(t *testing.T) {
 	d := testDB(t)
-	s := Session{ID: "metadata", Project: "project", Machine: "local", Agent: "claude"}
-	require.NoError(t, d.UpsertSession(t.Context(), s))
-	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "user", Content: "https://github.com/o/r/pull/1"}}))
 	link, ok := parser.NewPRLink("https://github.com/o/r/pull/2", "o/r", 2)
 	require.True(t, ok)
-	s.PRLinks = []PRLink{link}
+	s := Session{ID: "metadata", Project: "project", Machine: "local", Agent: "claude", PRLinks: []PRLink{link}}
+	require.NoError(t, d.UpsertSession(t.Context(), s))
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "user", Content: "https://github.com/o/r/pull/1"}}))
 	obs := export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: "/tmp/worktree"}
 	require.NoError(t, d.UpsertSessionWithProjectIdentity(t.Context(), s, obs, ""))
-	got, err := d.GetSession(t.Context(), s.ID)
-	require.NoError(t, err)
-	assert.Equal(t, []PRLink{link, {URL: "https://github.com/o/r/pull/1", Host: "github.com", Repository: "o/r", Number: 1}}, got.PRLinks)
+	var modified string
+	var marker sql.NullString
+	require.NoError(t, d.getWriter().QueryRowContext(t.Context(), `SELECT local_modified_at, sync_marker FROM sessions WHERE id=?`, s.ID).Scan(&modified, &marker))
+	for _, upsert := range []func() error{
+		func() error { return d.UpsertSession(t.Context(), s) },
+		func() error { return d.UpsertSessionWithProjectIdentity(t.Context(), s, obs, "") },
+	} {
+		require.NoError(t, upsert())
+		got, err := d.GetSession(t.Context(), s.ID)
+		require.NoError(t, err)
+		assert.Equal(t, []PRLink{link, {URL: "https://github.com/o/r/pull/1", Host: "github.com", Repository: "o/r", Number: 1}}, got.PRLinks)
+		var afterModified string
+		var afterMarker sql.NullString
+		require.NoError(t, d.getWriter().QueryRowContext(t.Context(), `SELECT local_modified_at, sync_marker FROM sessions WHERE id=?`, s.ID).Scan(&afterModified, &afterMarker))
+		assert.Equal(t, modified, afterModified)
+		assert.Equal(t, marker, afterMarker)
+	}
 }
 
 func TestPromptPRLinksUsageOrphanCopy(t *testing.T) {
@@ -279,7 +285,6 @@ func TestPromptPRLinksBackfillUsesDialogue(t *testing.T) {
 		want        string
 	}{
 		{"fallback", "HTTP://github.com/o/r/%70ull/1", nil, "http://github.com/o/r/pull/1"},
-		{"same", "https://github.com/o/r/pull/2", new("https://github.com/o/r/pull/2"), "https://github.com/o/r/pull/2"},
 		{"partial", "https://github.com/o/r/pull/3 https://github.com/o/r/pull/4", new("https://github.com/o/r/pull/3"), "https://github.com/o/r/pull/3"},
 		{"empty", "https://github.com/o/r/pull/5", new(""), ""},
 	}

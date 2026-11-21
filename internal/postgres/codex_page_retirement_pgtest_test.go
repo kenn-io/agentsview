@@ -247,12 +247,15 @@ func TestCodexPageUpgradeRetiresMissingPostgresHead(t *testing.T) {
 			assert.Empty(t, headMessages, "the retired thread must not retain the page transcript")
 			pageMessages, err := store.GetMessages(ctx, page, 0, 10, true)
 			require.NoError(t, err)
-			require.NotEmpty(t, pageMessages)
+			wantMessages := 1
+			if tc.promptLink {
+				wantMessages = 2
+			}
+			require.Len(t, pageMessages, wantMessages)
 			assert.Equal(t, "retained page answer", pageMessages[0].Content)
 			pageRow, err := store.GetSessionFull(ctx, page)
 			require.NoError(t, err)
 			require.NotNil(t, pageRow)
-
 			wantTitle := "remote page title"
 			if tc.newerPage {
 				wantTitle = "newer page title"

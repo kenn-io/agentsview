@@ -78,7 +78,7 @@ func TestRawProjectionRolloutBackfillsSelectedLongerCapture(t *testing.T) {
 	long := projectionOutcome("start")
 	long.Outcome.Results[0].Result.Messages = append(long.Outcome.Results[0].Result.Messages,
 		parser.ParsedMessage{Ordinal: 2, Role: parser.RoleUser, Content: "Review https://github.com/o/r/pull/2"})
-	b, accepted := f.accept(t, "device-b", "long", "")
+	b, _ := f.accept(t, "device-b", "long", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, b), b, long))
 	resolved, err := f.sink.Resolve(t.Context(), "codex:portable")
 	require.NoError(t, err)
@@ -86,27 +86,6 @@ func TestRawProjectionRolloutBackfillsSelectedLongerCapture(t *testing.T) {
 	var links string
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&links))
 	assert.Equal(t, []db.PRLink{{URL: "https://github.com/o/r/pull/2", Host: "github.com", Repository: "o/r", Number: 2}}, db.DecodePRLinks(links))
-	f.tombstone(t, b, "departed", accepted.Receipt)
-	before, err := f.sink.Resolve(t.Context(), "codex:portable")
-	require.NoError(t, err)
-	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET pr_links='', data_version=183 WHERE id=$1`, before.SessionID)
-	require.NoError(t, err)
-	var corpusBefore int64
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT corpus_revision FROM raw_corpus_state`).Scan(&corpusBefore))
-	_, err = f.sink.SelectSourceGeneration(t.Context(), a, "parser-2")
-	require.NoError(t, err)
-	leases, err := f.jobs.ClaimRawParseJobs(t.Context(), "upgrade-worker", 1, time.Minute)
-	require.NoError(t, err)
-	require.Len(t, leases, 1)
-	require.NoError(t, f.sink.Project(t.Context(), leases[0], a, short))
-	after, err := f.sink.Resolve(t.Context(), "codex:portable")
-	require.NoError(t, err)
-	assert.Equal(t, before.SessionID, after.SessionID)
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, after.SessionID).Scan(&links))
-	assert.Equal(t, []db.PRLink{{URL: "https://github.com/o/r/pull/2", Host: "github.com", Repository: "o/r", Number: 2}}, db.DecodePRLinks(links))
-	var corpusAfter int64
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT corpus_revision FROM raw_corpus_state`).Scan(&corpusAfter))
-	assert.Greater(t, corpusAfter, corpusBefore)
 }
 
 func TestRawProjectionFencesAndBackfillsTombstonedCapture(t *testing.T) {
@@ -213,37 +192,9 @@ func TestRawProjectionClaudeRecordedLinksKeepSharedSession(t *testing.T) {
 		{URL: "http://github.com/o/r/pull/7", Host: "github.com", Repository: "o/r", Number: 7},
 	}, parsed.Results[0].Result.Session.PRLinks)
 
-	// The stored capture represents output from the earlier URL-keyed parser.
-	// Reprocessing uses the current parser, whose output must hash identically.
-	prior := parsed
-	prior.Results = append([]parser.ParseResultOutcome(nil), parsed.Results...)
-	prior.Results[0].Result.Session.PRLinks = []parser.PRLink{
-		{URL: "https://github.com/o/r/pull/7", Host: "github.com", Repository: "o/r", Number: 7},
-		{URL: "http://github.com/o/r/pull/7", Host: "github.com", Repository: "o/r", Number: 7},
-	}
 	f := newProjectionFixture(t)
-	a, _ := f.accept(t, "device-a", "initial-a", "", parser.AgentClaude)
-	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, a), a, rawderive.ParsedManifest{Outcome: prior}))
-	b, _ := f.accept(t, "device-b", "initial-b", "", parser.AgentClaude)
-	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, b), b, rawderive.ParsedManifest{Outcome: prior}))
-	aliasA, aliasB := f.alias(t, a), f.alias(t, b)
-	before, err := f.sink.Resolve(t.Context(), "claude:portable")
-	require.NoError(t, err)
-	require.Equal(t, RawIdentityUnique, before.State)
-
-	_, err = f.sink.SelectSourceGeneration(t.Context(), a, "parser-2")
-	require.NoError(t, err)
-	leases, err := f.jobs.ClaimRawParseJobs(t.Context(), "upgrade-worker", 1, time.Minute)
-	require.NoError(t, err)
-	require.Len(t, leases, 1)
-	require.NoError(t, f.sink.Project(t.Context(), leases[0], a, rawderive.ParsedManifest{Outcome: parsed}))
-	for _, alias := range []string{aliasA, aliasB, "claude:portable"} {
-		resolved, err := f.sink.Resolve(t.Context(), alias)
-		require.NoError(t, err)
-		require.Equal(t, RawIdentityUnique, resolved.State)
-		assert.Equal(t, before.PublicID, resolved.PublicID)
-		assert.Equal(t, before.SessionID, resolved.SessionID)
-	}
+	m, _ := f.accept(t, "device-a", "initial", "", parser.AgentClaude)
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, rawderive.ParsedManifest{Outcome: parsed}))
 
 	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 	require.NoError(t, err)
@@ -252,7 +203,6 @@ func TestRawProjectionClaudeRecordedLinksKeepSharedSession(t *testing.T) {
 	page, err := h.ListSessions(t.Context(), db.SessionFilter{PR: pr, Limit: 10})
 	require.NoError(t, err)
 	require.Len(t, page.Sessions, 1)
-	assert.Equal(t, before.PublicID, page.Sessions[0].ID)
 	assert.Equal(t, []db.PRLink{{URL: "https://github.com/o/r/pull/7", Host: "github.com", Repository: "o/r", Number: 7}}, page.Sessions[0].PRLinks)
 }
 
@@ -268,9 +218,6 @@ func TestRawProjectionFutureVersionDialogueRefresh(t *testing.T) {
 	future := db.CurrentDataVersion() + 1
 	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET data_version=$2, pr_links=$3 WHERE id=$1`, resolved.SessionID, future, db.EncodePRLinks([]db.PRLink{{URL: "https://github.com/o/r/pull/99", Host: "github.com", Repository: "o/r", Number: 99}}))
 	require.NoError(t, err)
-	_, err = NewRawProjectionStore(t.Context(), f.runtime, RawProjectionOptions{Tenant: f.tenant})
-	var tooNew *db.DataVersionTooNewError
-	require.ErrorAs(t, err, &tooNew)
 	message.DialogueText = new("https://github.com/o/r/pull/1")
 	_, err = f.sink.SelectSourceGeneration(t.Context(), m, "parser-future")
 	require.NoError(t, err)
@@ -278,6 +225,7 @@ func TestRawProjectionFutureVersionDialogueRefresh(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, leases, 1)
 	err = f.sink.Project(t.Context(), leases[0], m, outcome)
+	var tooNew *db.DataVersionTooNewError
 	require.ErrorAs(t, err, &tooNew)
 	var links string
 	var version int

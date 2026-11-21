@@ -56,7 +56,7 @@ func TestIncrementalSync_ClaudePRLinkAppends(t *testing.T) {
 func TestParseDiffIgnoresLauncherParents(t *testing.T) {
 	env := setupFocusedTestEnv(t, parser.AgentClaude, parser.AgentGemini)
 	env.writeClaudeSession(t, "test-proj", "pd-prs.jsonl", testjsonl.JoinJSONL(
-		testjsonl.ClaudeUserJSON("Review https://github.com/owner/repo/pull/1", tsZero),
+		testjsonl.ClaudeUserJSON("Review", tsZero),
 		testjsonl.ClaudeAssistantJSON("Opened", tsZeroS1),
 	))
 	env.writeGeminiSession(t,
@@ -131,23 +131,4 @@ func TestParseDiffDetectsPRLinkChanges(t *testing.T) {
 	report = runParseDiff(t, env, sync.ParseDiffOptions{})
 	assert.Equal(t, 1, report.Totals.Changed)
 	assert.Equal(t, 1, report.FieldCounts[sync.FieldPRLinks])
-}
-
-func TestSyncCommaSeparatedPromptPRLinks(t *testing.T) {
-	env := setupFocusedTestEnv(t, parser.AgentClaude)
-	env.writeClaudeSession(t, "proj", "comma-prs.jsonl", testjsonl.JoinJSONL(
-		testjsonl.ClaudeUserJSON("https://github.com/o/r/pull/1?tab=files,https://github.com/o/r/pull/2", tsZero),
-	))
-	env.writeClaudeSession(t, "proj", "nested-pr.jsonl", testjsonl.JoinJSONL(
-		testjsonl.ClaudeUserJSON("https://example.org/?url=https://github.com/o/r/pull/2 https://example.org/?url=foo,https://github.com/o/r/pull/2", tsZero),
-	))
-	require.Equal(t, 2, env.engine.SyncAll(t.Context(), nil).Synced)
-	assert.Equal(t, []string{"https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"}, storedPRURLs(t, env.db, "comma-prs"))
-	assert.Empty(t, storedPRURLs(t, env.db, "nested-pr"))
-	pr, err := db.ParsePRFilter("o/r#2")
-	require.NoError(t, err)
-	page, err := env.db.ListSessions(t.Context(), db.SessionFilter{PR: pr})
-	require.NoError(t, err)
-	require.Len(t, page.Sessions, 1)
-	assert.Equal(t, "comma-prs", page.Sessions[0].ID)
 }

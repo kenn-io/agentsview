@@ -211,6 +211,8 @@ func TestPromptPRLinks(t *testing.T) {
 		{"https://github.com/owner/repo/pull/12-", nil},
 		{"https://github.com/owner/repo/pull/12a", nil},
 		{"https://github.com/owner/repo/issues/12", nil},
+		{"https://github.com/o/r/pull/1?tab=files,https://github.com/o/r/pull/2", []string{"https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"}},
+		{"https://example.org/?url=https://github.com/o/r/pull/2 https://example.org/?url=foo,https://github.com/o/r/pull/2", nil},
 		{"https://github.com/o/r/pull/1,https://github.com/o/r/pull/2", []string{"https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"}},
 		{"https://github.com/o/r/pull/1|https://github.com/o/r/pull/2", []string{"https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"}},
 		{"https://github.com/o/r/pull/1https://github.com/o/r/pull/2", []string{"https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"}},
