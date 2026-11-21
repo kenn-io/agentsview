@@ -300,7 +300,7 @@ type listRecallIn struct {
 	Scope           string `json:"scope,omitempty"`
 	Status          string `json:"status,omitempty"`
 	ExtractorMethod string `json:"extractor_method,omitempty"`
-	SourceSessionID string `json:"source_session_id,omitempty" jsonschema:"Filter by a full stored session ID or a raw UUID that matches one session. An unindexed or trashed ID is used as given."`
+	SourceSessionID string `json:"source_session_id,omitempty" jsonschema:"Filter by full session ID or unique raw UUID. An unindexed or trashed ID is used as given."`
 	SourceRunID     string `json:"source_run_id,omitempty"`
 	TrustedOnly     bool   `json:"trusted_only,omitempty"`
 	Cursor          string `json:"cursor,omitempty" jsonschema:"Cursor from a previous next_cursor."`
@@ -441,7 +441,7 @@ func toSessionRow(s db.Session) sessionRow {
 // --- get_session_overview ---
 
 type sessionOverviewIn struct {
-	SessionID string `json:"session_id" jsonschema:"A full stored session ID or a raw UUID that matches one session."`
+	SessionID string `json:"session_id" jsonschema:"Full session ID or unique raw UUID."`
 }
 
 type overviewMessage struct {
@@ -504,7 +504,7 @@ func (t *toolset) sessionOverview(
 // --- get_messages ---
 
 type getMessagesIn struct {
-	SessionID string `json:"session_id" jsonschema:"A full stored session ID or a raw UUID that matches one session."`
+	SessionID string `json:"session_id" jsonschema:"Full session ID or unique raw UUID."`
 	From      *int   `json:"from,omitempty" jsonschema:"Ordinal to start from (e.g. match_ordinal from search_sessions). Ordinal 0 is a valid anchor (the first message). Mutually exclusive with around."`
 	Direction string `json:"direction,omitempty" jsonschema:"asc (default, oldest first) or desc (newest first). Mutually exclusive with around."`
 	Limit     int    `json:"limit,omitempty" jsonschema:"Max messages scanned, default 20, max 100. System/tool messages are filtered after this limit, so a page can return fewer; use next_from to continue. Not used with around; before/after control the window size on that path."`
@@ -571,6 +571,24 @@ func decodeMessageBodyCursor(raw string) (messageBodyCursor, error) {
 	return cursor, nil
 }
 
+func bindMessageRevision(sessionID, revision string) string {
+	if revision == "" {
+		return ""
+	}
+	return "mcp1:" + base64.RawURLEncoding.EncodeToString([]byte(sessionID)) + ":" + revision
+}
+
+func unbindMessageRevision(sessionID, revision string) (string, error) {
+	if !strings.HasPrefix(revision, "mcp1:") {
+		return revision, nil
+	}
+	id, value, ok := strings.Cut(strings.TrimPrefix(revision, "mcp1:"), ":")
+	if !ok || id != base64.RawURLEncoding.EncodeToString([]byte(sessionID)) {
+		return "", fmt.Errorf("%w: revision belongs to another session", service.ErrSourceChanged)
+	}
+	return value, nil
+}
+
 // filterAndMapMessage applies the get_messages role/system contract to one
 // message -- always drop system content (IsSystem or a legacy system
 // content prefix), then require its role to be in roles (nil/empty roles
@@ -611,6 +629,10 @@ func (t *toolset) getMessages(
 		return nil, getMessagesOut{}, err
 	}
 	in.SessionID = detail.ID
+	in.ExpectedRevision, err = unbindMessageRevision(in.SessionID, in.ExpectedRevision)
+	if err != nil {
+		return nil, getMessagesOut{}, err
+	}
 	if in.Around != nil {
 		return t.getMessagesAround(ctx, in)
 	}
@@ -661,6 +683,7 @@ func (t *toolset) getMessages(
 		}
 	}
 	attachBodyCursors(&out, res.EvidenceSource, in.SessionID, in.Roles)
+	out.TranscriptRevision = bindMessageRevision(in.SessionID, out.TranscriptRevision)
 	return nil, out, nil
 }
 
@@ -715,6 +738,7 @@ func (t *toolset) getMessagesAround(
 		out.NextFrom = &next
 	}
 	attachBodyCursors(&out, res.EvidenceSource, in.SessionID, in.Roles)
+	out.TranscriptRevision = bindMessageRevision(in.SessionID, out.TranscriptRevision)
 	return nil, out, nil
 }
 
@@ -769,7 +793,7 @@ func (t *toolset) getMessageBodyContinuation(
 	}
 	in.SessionID = detail.ID
 	if cursor.SessionID != in.SessionID ||
-		(in.ExpectedRevision != "" && in.ExpectedRevision != cursor.Revision) {
+		(in.ExpectedRevision != "" && in.ExpectedRevision != cursor.Revision && in.ExpectedRevision != bindMessageRevision(in.SessionID, cursor.Revision)) {
 		return nil, getMessagesOut{}, fmt.Errorf("%w: body cursor does not match request", service.ErrSourceChanged)
 	}
 	zero := 0
@@ -805,7 +829,7 @@ func (t *toolset) getMessageBodyContinuation(
 		Timestamp: message.Timestamp, Model: message.Model, HasToolUse: message.HasToolUse,
 		FullLength: len(runes), Truncated: end < len(runes),
 	}
-	out := getMessagesOut{Messages: []messageOut{mo}, TranscriptRevision: res.TranscriptRevision}
+	out := getMessagesOut{Messages: []messageOut{mo}, TranscriptRevision: bindMessageRevision(in.SessionID, res.TranscriptRevision)}
 	if end < len(runes) {
 		cursor.Offset = end
 		out.Messages[0].BodyCursor = encodeMessageBodyCursor(cursor)
@@ -826,7 +850,7 @@ type searchContentIn struct {
 	Agent            string   `json:"agent,omitempty" jsonschema:"Restrict to one agent."`
 	SessionID        string   `json:"session_id,omitempty" jsonschema:"Full stored session ID or raw UUID matching one session. Without pattern or concepts, list its messages, ignoring mode and include flags and including active, one-shot, and automated sessions."`
 	GitBranch        string   `json:"git_branch,omitempty" jsonschema:"Restrict to one exact git branch."`
-	CurrentSessionID string   `json:"current_session_id,omitempty" jsonschema:"Exclude this full stored session ID or a raw UUID that matches one session instead of applying the recent-activity heuristic. An unindexed ID is excluded as given."`
+	CurrentSessionID string   `json:"current_session_id,omitempty" jsonschema:"Exclude this full session ID or unique raw UUID instead of using recent activity. An unindexed ID is excluded as given."`
 	DateFrom         string   `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
 	DateTo           string   `json:"date_to,omitempty" jsonschema:"Only sessions on or before this date (YYYY-MM-DD)."`
 	Limit            int      `json:"limit,omitempty" jsonschema:"Max matches, default 10, max 50."`
@@ -1146,7 +1170,7 @@ func (t *toolset) usageSummary(
 }
 
 type fileReferencesIn struct {
-	SessionID string `json:"session_id" jsonschema:"A full stored session ID or a raw UUID that matches one session."`
+	SessionID string `json:"session_id" jsonschema:"Full session ID or unique raw UUID."`
 }
 
 func (t *toolset) fileReferences(ctx context.Context, _ *mcp.CallToolRequest, in fileReferencesIn) (*mcp.CallToolResult, service.FileReferencesResult, error) {
@@ -1159,7 +1183,7 @@ func (t *toolset) fileReferences(ctx context.Context, _ *mcp.CallToolRequest, in
 }
 
 type compactionSummariesIn struct {
-	SessionID   string `json:"session_id,omitempty" jsonschema:"A full stored session ID or a raw UUID that matches one session."`
+	SessionID   string `json:"session_id,omitempty" jsonschema:"Full session ID or unique raw UUID."`
 	ActiveSince string `json:"active_since,omitempty" jsonschema:"RFC3339 timestamp."`
 	Cursor      string `json:"cursor,omitempty" jsonschema:"Session cursor; resume with the same active_since."`
 	Limit       uint   `json:"limit,omitempty" jsonschema:"Sessions per page; 0 uses the default 20, max 100."`
