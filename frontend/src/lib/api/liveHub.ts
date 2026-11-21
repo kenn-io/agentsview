@@ -10,7 +10,6 @@ export class LiveHub {
   private source: EventSource | null = null;
   private sessions = new Set<string>();
   private ready = new Map<string, LiveFrame>();
-  private synced = new Set<LivePort>();
   private timing = new Map<string, LiveFrame>();
   private credentials: { base: string; token: string } | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -18,7 +17,6 @@ export class LiveHub {
   update(port: LivePort, request: LiveRequest) {
     const previous = this.ports.get(port);
     this.ports.set(port, request);
-    if (!previous || previous.session !== request.session) this.synced.delete(port);
     if (
       (!previous || previous.session !== request.session) &&
       this.source &&
@@ -26,7 +24,7 @@ export class LiveHub {
     ) {
       const key = request.session ?? "";
       const ready = this.ready.get(key);
-      if (ready) this.deliver(port, ready);
+      if (ready) port.postMessage(ready);
       const timing = this.timing.get(key);
       if (timing) port.postMessage(timing);
     }
@@ -35,7 +33,6 @@ export class LiveHub {
 
   leave(port: LivePort) {
     this.ports.delete(port);
-    this.synced.delete(port);
     this.schedule();
   }
 
@@ -70,7 +67,6 @@ export class LiveHub {
     const changed =
       sessions.size !== this.sessions.size || [...sessions].some((id) => !this.sessions.has(id));
     if (this.source && request && !changed && this.sameCredentials(request)) return;
-    if (!this.sameCredentials(request)) this.synced.clear();
     this.source?.close();
     this.source = null;
     this.sessions = sessions;
@@ -143,14 +139,8 @@ export class LiveHub {
       if (session !== undefined && request.session !== session) continue;
       if ((frame.type === "events_ready" || frame.type === "data_changed") && request.session)
         continue;
-      if (frame.type === "events_ready" && !this.ready.has("") && this.synced.has(port)) continue;
-      this.deliver(port, frame);
+      port.postMessage(frame);
     }
-  }
-
-  private deliver(port: LivePort, frame: LiveFrame) {
-    if (frame.type === "events_ready") this.synced.add(port);
-    port.postMessage(frame);
   }
 
   private sameCredentials(request?: LiveRequest) {

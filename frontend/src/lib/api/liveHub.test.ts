@@ -44,7 +44,7 @@ describe("shared live stream", () => {
     vi.useRealTimers();
   });
 
-  it("replaces the stream for joins and routes real readiness and updates", () => {
+  it("refreshes archive subscribers after stream replacement and routes session updates", () => {
     const hub = new LiveHub();
     const archive: LiveFrame[] = [];
     const a: LiveFrame[] = [];
@@ -55,6 +55,11 @@ describe("shared live stream", () => {
     hub.update(archivePort, request());
     const old = sources[0]!;
     old.emit("events_ready", "{}");
+    const duplicateArchive = { postMessage: vi.fn() };
+    hub.update(duplicateArchive, request());
+    expect(duplicateArchive.postMessage).toHaveBeenCalledOnce();
+    expect(archive.map((frame) => frame.type)).toEqual(["events_ready"]);
+    hub.leave(duplicateArchive);
     hub.update(aPort, request("a"));
     hub.update(bPort, request("b"));
     expect(sources).toHaveLength(1);
@@ -76,12 +81,21 @@ describe("shared live stream", () => {
       "session_updated",
     ]);
     expect(b.map((frame) => frame.type)).toEqual(["session_ready"]);
-    expect(archive.map((frame) => frame.type)).toEqual(["events_ready", "data_changed"]);
+    expect(archive.map((frame) => frame.type)).toEqual([
+      "events_ready",
+      "events_ready",
+      "data_changed",
+    ]);
     hub.leave(aPort);
     hub.leave(bPort);
     vi.advanceTimersByTime(250);
     sources[2]!.emit("events_ready", "{}");
-    expect(archive.map((frame) => frame.type)).toEqual(["events_ready", "data_changed"]);
+    expect(archive.map((frame) => frame.type)).toEqual([
+      "events_ready",
+      "events_ready",
+      "data_changed",
+      "events_ready",
+    ]);
     hub.close();
   });
 
