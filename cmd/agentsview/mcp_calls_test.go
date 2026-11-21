@@ -66,7 +66,7 @@ func TestMCPCallsReport(t *testing.T) {
 func TestMCPStdioWarnsWhenCallLogConfigFails(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", home)
-	require.NoError(t, os.WriteFile(filepath.Join(home, "config.toml"), []byte("invalid = [\n"), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(home, "config.toml"), []byte("invalid = [\n"), 0o600))
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/version" {
 			_, _ = w.Write([]byte(`{"api_version":4}`))

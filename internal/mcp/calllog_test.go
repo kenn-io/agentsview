@@ -66,7 +66,8 @@ func TestCallOutcomes(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(dir, files[0].Name()))
 	require.NoError(t, err)
 	var outcomes []string
-	for _, line := range bytes.Split(raw, []byte("\n")) {
+	for line := range bytes.Lines(raw) {
+		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
 			continue
 		}
@@ -262,7 +263,8 @@ func TestCallLogEmptyAndTruncated(t *testing.T) {
 	assert.NotContains(t, string(raw), "bad-date")
 	assert.NotContains(t, string(raw), "invalid activity_cutoff")
 	var outcomes []string
-	for _, line := range bytes.Split(raw, []byte("\n")) {
+	for line := range bytes.Lines(raw) {
+		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
 			continue
 		}
