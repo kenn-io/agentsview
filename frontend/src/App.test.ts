@@ -246,12 +246,12 @@ describe("saved remote API version", () => {
     await flushEffects();
     if (apiVersion === 27) {
       expect(document.body.textContent).toContain(
-        "Remote server: AgentsView test (API 27). Upgrade to API 28 or later.",
+        "Remote server: AgentsView test (API\u00a027). Upgrade to API\u00a028 or later.",
       );
       expect(sync.watchSession).not.toHaveBeenCalled();
     } else {
       expect(document.body.textContent).not.toContain(
-        "Remote server: AgentsView test (API 27). Upgrade to API 28 or later.",
+        "Remote server: AgentsView test (API\u00a027). Upgrade to API\u00a028 or later.",
       );
       expect(sync.watchSession).toHaveBeenCalled();
     }

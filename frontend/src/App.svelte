@@ -908,9 +908,11 @@
         version: sync.serverVersion?.version || m.settings_remote_unknown(),
         apiVersion: String(sync.serverVersion?.api_version ?? m.settings_remote_unknown()),
         requiredVersion: String(MIN_REMOTE_API_VERSION),
-      })}</h2>
-      <button class="auth-card-btn" onclick={() => window.location.reload()}>{m.shared_retry()}</button>
-      <button class="auth-card-disconnect" onclick={() => { setAuthToken(""); setServerUrl(""); window.location.reload(); }}>{m.app_auth_disconnect_reset()}</button>
+      }).replaceAll("API ", "API\u00a0")}</h2>
+      <div class="auth-card-actions">
+        <button class="auth-card-btn" onclick={() => window.location.reload()}>{m.shared_retry()}</button>
+        <button class="auth-card-disconnect" onclick={() => { setAuthToken(""); setServerUrl(""); window.location.reload(); }}>{m.app_auth_disconnect_reset()}</button>
+      </div>
     </div>
   </div>
 {:else}
@@ -1163,6 +1165,19 @@
   .auth-card-field {
     display: flex;
     gap: 8px;
+  }
+
+  .auth-card-actions {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin-top: 16px;
+  }
+
+  .auth-card-actions .auth-card-disconnect {
+    margin-top: 0;
   }
 
   .auth-card-input {
