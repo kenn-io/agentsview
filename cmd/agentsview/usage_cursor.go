@@ -150,6 +150,9 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 		"Fetched %d Cursor usage events into the archive\n",
 		len(rows),
 	)
+	if email != "" || userID != "" {
+		fmt.Fprintln(os.Stdout, `Filtered syncs do not establish account reporting coverage. To cover this period, rerun with --email "" --user-id "".`)
+	}
 	return nil
 }
 

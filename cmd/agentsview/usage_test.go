@@ -1588,6 +1588,7 @@ func TestNewUsageCursorCommandUsesConfigFallbacksAndSharedPagination(t *testing.
 		require.NoError(t, cmd.Execute(), "Execute")
 	})
 	assert.Contains(t, out, "Fetched 2 Cursor usage events into the archive")
+	assert.Contains(t, out, `Filtered syncs do not establish account reporting coverage. To cover this period, rerun with --email "" --user-id "".`)
 
 	require.Len(t, requests, 2, "request count")
 	for _, req := range requests {
@@ -1979,10 +1980,22 @@ func TestCursorUsagePollRecordsOnlyCompletedUnfilteredSync(t *testing.T) {
 		return client
 	}
 	t.Cleanup(func() { newCursorUsageClient = original })
-	for _, args := range [][]string{{"--since", "2026-05-14", "--until", "2026-05-14"}, {"--since", "2026-05-14", "--until", "2026-05-14", "--email", "member@example.com"}} {
+	for _, tc := range []struct {
+		args     []string
+		filtered bool
+	}{
+		{[]string{"--since", "2026-05-14", "--until", "2026-05-14"}, false},
+		{[]string{"--since", "2026-05-14", "--until", "2026-05-14", "--email", "member@example.com"}, true},
+		{[]string{"--since", "2026-05-14", "--until", "2026-05-14", "--user-id", "42"}, true},
+	} {
 		cmd := newUsageCursorCommand()
-		cmd.SetArgs(args)
-		captureStdout(t, func() { require.NoError(t, cmd.Execute()) })
+		cmd.SetArgs(tc.args)
+		out := captureStdout(t, func() { require.NoError(t, cmd.Execute()) })
+		if tc.filtered {
+			assert.Contains(t, out, `Filtered syncs do not establish account reporting coverage. To cover this period, rerun with --email "" --user-id "".`)
+		} else {
+			assert.NotContains(t, out, "account reporting coverage")
+		}
 	}
 	fail = true
 	failed := newUsageCursorCommand()
