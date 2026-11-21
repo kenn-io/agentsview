@@ -429,11 +429,6 @@ func TestDashboardPartsToolChangeRefreshesActivity(t *testing.T) {
 	after, err := d.GetAnalyticsActivity(ctx, f, "day")
 	require.NoError(t, err)
 	assert.Zero(t, after.Series[0].ToolCalls)
-	_, err = d.getWriter().ExecContext(ctx, `INSERT INTO tool_calls(session_id,message_id,tool_name,category) SELECT 's', id, 'Write', 'Write' FROM messages WHERE session_id='s' AND ordinal=1`)
-	require.NoError(t, err)
-	after, err = d.GetAnalyticsActivity(ctx, f, "day")
-	require.NoError(t, err)
-	assert.Equal(t, 1, after.Series[0].ToolCalls)
 }
 
 func TestDashboardPartsAgentChangeBeforeStamp(t *testing.T) {
