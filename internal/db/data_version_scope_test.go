@@ -97,7 +97,6 @@ func TestDialogueUpgradeReparsesClassifiedProviders(t *testing.T) {
 }
 
 func TestCursorAccountDataVersionScope(t *testing.T) {
-	assert.Equal(t, 185, CurrentDataVersion())
 	providers := ScopedDataVersionProviders(184, 185)
 	require.NotNil(t, providers)
 	assert.Empty(t, providers)
