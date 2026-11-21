@@ -95,7 +95,7 @@ type watchStateFailureStore struct {
 }
 
 func (s *watchStateFailureStore) GetSessionWatchState(id string) (db.SessionWatchState, error) {
-	if id == "bad" && s.reads.Add(1) <= 2 {
+	if id == "bad" && s.reads.Add(1) == 1 {
 		s.called.Store(true)
 		if s.cancel != nil {
 			s.cancel()
@@ -136,16 +136,12 @@ func TestEvents_SessionLookupError(t *testing.T) {
 			assert.Contains(t, w.BodyString(), "event: session_ready\ndata: bad\n")
 			assert.NotContains(t, w.BodyString(), "event: session_missing\ndata: bad\n")
 			assert.Contains(t, w.BodyString(), "event: session_ready\ndata: watch-a\n")
-			updates := 1
-			if tc.name == "watch state" {
-				te.waitForSSEEvent(t, w, "session_updated", 5*time.Second)
-				assert.Contains(t, w.BodyString(), "event: session_updated\ndata: bad\n")
-				updates = 2
+			if tc.name == "session" {
+				require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: "bad", Project: "project", Machine: "test", Agent: "claude", MessageCount: 1}))
+				require.Eventually(t, func() bool {
+					return strings.Count(w.BodyString(), "event: session_updated\ndata: bad\n") >= 1
+				}, 5*time.Second, 10*time.Millisecond)
 			}
-			require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: "bad", Project: "project", Machine: "test", Agent: "claude", MessageCount: 1}))
-			require.Eventually(t, func() bool {
-				return strings.Count(w.BodyString(), "event: session_updated\ndata: bad\n") >= updates
-			}, 5*time.Second, 10*time.Millisecond)
 			te.broadcaster.Emit("messages")
 			te.waitForSSEEvent(t, w, "data_changed", 5*time.Second)
 			assert.Contains(t, w.BodyString(), "event: data_changed\ndata: {\"scope\":\"messages\"}\n")

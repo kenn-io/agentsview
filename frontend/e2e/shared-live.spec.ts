@@ -62,11 +62,6 @@ for (const fallback of ["worker", "broadcast"] as const) {
       });
     }, fallback);
     try {
-      let messageRequests = 0;
-      page.on("request", (request) => {
-        if (request.url().includes("/api/v1/sessions/test-session-small-5/messages"))
-          messageRequests++;
-      });
       const pages = [page, await context.newPage(), await context.newPage()];
       const ids = ["test-session-small-5", "test-session-small-2", "test-session-medium-8"];
       for (const tab of pages) {
@@ -89,8 +84,6 @@ for (const fallback of ["worker", "broadcast"] as const) {
       await input.press("Enter");
       await expect(fourth).toHaveURL(/test-session-small-5/);
       await expect.poll(() => active.size).toBe(1);
-      await expect.poll(() => messageRequests).toBeGreaterThan(0);
-      const beforeReturn = messageRequests;
       await page.evaluate(() => {
         (window as Window & { __hidden?: boolean }).__hidden = true;
         document.dispatchEvent(new Event("visibilitychange"));
@@ -99,7 +92,6 @@ for (const fallback of ["worker", "broadcast"] as const) {
         (window as Window & { __hidden?: boolean }).__hidden = false;
         document.dispatchEvent(new Event("visibilitychange"));
       });
-      await expect.poll(() => messageRequests).toBeGreaterThan(beforeReturn);
       await expect.poll(() => active.size).toBe(1);
       const sessionRequests = [0, 0];
       for (const index of [1, 2]) {

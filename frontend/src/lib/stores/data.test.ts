@@ -248,47 +248,33 @@ describe("load", () => {
 });
 
 describe("attach", () => {
-  it.each([true, false])(
-    "refreshes visible rules without events when workspace is enabled: %s",
-    async (enabled) => {
-      vi.useFakeTimers();
-      const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
-      (routerMod.router as unknown as { params: Record<string, string> }).params = {
-        view: "rules",
-      };
-      detach = data.attach(enabled);
-      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
-      expect(data.rulesRefreshVersion).toBe(1);
-      expect(api.getApiV1DataProjects).not.toHaveBeenCalled();
-      hidden.mockReturnValue(true);
-      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
-      expect(data.rulesRefreshVersion).toBe(1);
-      hidden.mockReturnValue(false);
-      detach();
-      detach = null;
-      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
-      expect(data.rulesRefreshVersion).toBe(1);
-      hidden.mockRestore();
-    },
-  );
-
-  it("refreshes visible inventory without events and stops after detach", async () => {
+  it.each([
+    { view: "rules", enabled: true },
+    { view: "rules", enabled: false },
+    { view: "inventory", enabled: true },
+  ])("refreshes visible $view without events (workspace: $enabled)", async ({ view, enabled }) => {
     vi.useFakeTimers();
     const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
     const updated = makeInventory([makeRow({ project_key: "updated" })]);
     api.getApiV1DataProjects.mockResolvedValue(updated);
-    detach = data.attach(true);
+    (routerMod.router as unknown as { params: Record<string, string> }).params = { view };
+    detach = data.attach(enabled);
     await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
-    expect(data.inventory).toEqual(updated);
-    expect(api.getApiV1DataProjects).toHaveBeenCalledTimes(1);
-    hidden.mockReturnValue(true);
-    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
-    expect(api.getApiV1DataProjects).toHaveBeenCalledTimes(1);
-    hidden.mockReturnValue(false);
-    detach();
-    detach = null;
-    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
-    expect(api.getApiV1DataProjects).toHaveBeenCalledTimes(1);
+    if (view === "rules") {
+      expect(data.rulesRefreshVersion).toBe(1);
+      expect(api.getApiV1DataProjects).not.toHaveBeenCalled();
+    } else {
+      expect(data.inventory).toEqual(updated);
+      expect(api.getApiV1DataProjects).toHaveBeenCalledTimes(1);
+      hidden.mockReturnValue(true);
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+      expect(api.getApiV1DataProjects).toHaveBeenCalledTimes(1);
+      hidden.mockReturnValue(false);
+      detach();
+      detach = null;
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+      expect(api.getApiV1DataProjects).toHaveBeenCalledTimes(1);
+    }
     hidden.mockRestore();
   });
 

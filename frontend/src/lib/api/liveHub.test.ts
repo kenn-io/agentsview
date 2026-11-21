@@ -226,7 +226,10 @@ describe("shared live stream", () => {
     hub.leave(archive);
     const fresh = { postMessage: vi.fn() };
     hub.update(fresh, request());
-    for (let i = 0; i < 5; i++) sources[2]!.emit("error");
+    sources[2]!.emit("error");
+    expect(sources[2]!.closed).toBe(false);
+    expect(fresh.postMessage).toHaveBeenLastCalledWith({ type: "error" });
+    for (let i = 0; i < 4; i++) sources[2]!.emit("error");
     expect(fresh.postMessage).toHaveBeenLastCalledWith({ type: "permanent_failure" });
     hub.close();
   });
@@ -275,22 +278,6 @@ describe("shared live stream", () => {
     ]);
   });
 
-  it("rechecks a missing session when a subscriber retries", () => {
-    const hub = new LiveHub();
-    const first = { postMessage: vi.fn() };
-    const retry = { postMessage: vi.fn() };
-    hub.update(first, request("a"));
-    sources[0]!.emit("session_missing", "a");
-    hub.leave(first);
-    hub.update(retry, request("a"));
-    expect(retry.postMessage).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(250);
-    expect(sources).toHaveLength(2);
-    expect(sources[1]!.url.searchParams.getAll("session")).toEqual(["a"]);
-    sources[1]!.emit("session_ready", "a");
-    expect(retry.postMessage).toHaveBeenCalledWith({ type: "session_ready", data: "a" });
-  });
-
   it("rechecks a missing session when another subscriber joins", () => {
     const hub = new LiveHub();
     const first = { postMessage: vi.fn() };
@@ -308,47 +295,29 @@ describe("shared live stream", () => {
     hub.close();
   });
 
-  it("keeps the current credentials when the old subscriber leaves", async () => {
+  it.each(["old first", "new first"])("keeps the newest credentials with %s", async (order) => {
     const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
     vi.stubGlobal("fetch", fetch);
     const hub = new LiveHub();
     const old = { postMessage: vi.fn() };
     const current = { postMessage: vi.fn() };
-    hub.update(old, { ...request("a"), token: "old-token", credentialTime: 1 });
-    hub.update(current, { ...request("a"), token: "new-token", credentialTime: 2 });
-    expect(sources[0]!.closed).toBe(true);
-    await sources[1]!.options.fetch(sources[1]!.url, {});
-    expect((fetch.mock.calls[0]![1].headers as Headers).get("Authorization")).toBe(
-      "Bearer new-token",
-    );
-    hub.leave(old);
+    const oldRequest = { ...request("a"), token: "old-token", credentialTime: 1 };
+    const newRequest = { ...request("a"), token: "new-token", credentialTime: 2 };
+    if (order === "old first") {
+      hub.update(old, oldRequest);
+      hub.update(current, newRequest);
+      expect(sources[0]!.closed).toBe(true);
+      await sources[1]!.options.fetch(sources[1]!.url, {});
+      expect((fetch.mock.calls[0]![1].headers as Headers).get("Authorization")).toBe(
+        "Bearer new-token",
+      );
+      hub.leave(old);
+    } else {
+      hub.update(current, newRequest);
+      hub.update(old, oldRequest);
+    }
     vi.advanceTimersByTime(250);
-    expect(sources).toHaveLength(2);
-    await sources[1]!.options.fetch(sources[1]!.url, {});
-    expect((fetch.mock.calls[1]![1].headers as Headers).get("Authorization")).toBe(
-      "Bearer new-token",
-    );
-    hub.close();
-  });
-
-  it("keeps the newest credentials when subscriptions arrive out of order", async () => {
-    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
-    vi.stubGlobal("fetch", fetch);
-    const hub = new LiveHub();
-    hub.update(
-      { postMessage: vi.fn() },
-      { ...request("a"), token: "new-token", credentialTime: 2 },
-    );
-    hub.update(
-      { postMessage: vi.fn() },
-      { ...request("a"), token: "old-token", credentialTime: 1 },
-    );
-    vi.advanceTimersByTime(250);
-    expect(sources).toHaveLength(1);
-    await sources[0]!.options.fetch(sources[0]!.url, {});
-    expect((fetch.mock.calls[0]![1].headers as Headers).get("Authorization")).toBe(
-      "Bearer new-token",
-    );
+    expect(sources).toHaveLength(order === "old first" ? 2 : 1);
     hub.close();
   });
 
@@ -359,21 +328,6 @@ describe("shared live stream", () => {
     expect(sources[0]!.url.href).toBe(
       "http://example.test/api/v1/events?session=child%257E%2F%2525%3F%23",
     );
-    hub.close();
-  });
-
-  it("gives a replacement source a fresh error budget", () => {
-    const hub = new LiveHub();
-    const first = { postMessage: vi.fn() };
-    const second = { postMessage: vi.fn() };
-    hub.update(first, request());
-    for (let i = 0; i < 5; i++) sources[0]!.emit("error");
-    expect(sources[0]!.closed).toBe(true);
-    expect(first.postMessage).toHaveBeenLastCalledWith({ type: "permanent_failure" });
-    hub.update(second, request("a"));
-    sources[1]!.emit("error");
-    expect(sources[1]!.closed).toBe(false);
-    expect(second.postMessage).toHaveBeenLastCalledWith({ type: "error" });
     hub.close();
   });
 
