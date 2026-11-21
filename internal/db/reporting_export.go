@@ -107,7 +107,7 @@ func (db *DB) ExportReportingDay(
 	if err != nil {
 		return export.ReportingDay{}, err
 	}
-	if schemaVersion == export.ReportingAccountSchemaVersion && opts.ByMachine {
+	if schemaVersion == export.ReportingAccountSchemaVersion {
 		if err := db.loadReportingAccountUsage(ctx, tx, date, date.Add(time.Duration(hourCount)*time.Hour), &source); err != nil {
 			return export.ReportingDay{}, err
 		}
@@ -231,7 +231,7 @@ func (db *DB) ExportReportingDigest(
 	if err != nil {
 		return nil, err
 	}
-	if schemaVersion == export.ReportingAccountSchemaVersion && opts.ByMachine {
+	if schemaVersion == export.ReportingAccountSchemaVersion {
 		if err := db.loadReportingAccountUsage(ctx, tx, from, unionEnd, &source); err != nil {
 			return nil, err
 		}
@@ -691,9 +691,7 @@ type reportingAccountRow struct {
 
 const reportingCursorHour = `(agentsview_timestamp_unix_micro(occurred_at) / 3600000000 - (agentsview_timestamp_unix_micro(occurred_at) < 0 AND agentsview_timestamp_unix_micro(occurred_at) % 3600000000 != 0)) * 3600`
 
-const reportingCursorPollWindow = `PARTITION BY agent, account_user_id,
-	(agentsview_timestamp_unix_micro(occurred_at) / 3600000000 -
-	 (agentsview_timestamp_unix_micro(occurred_at) < 0 AND agentsview_timestamp_unix_micro(occurred_at) % 3600000000 != 0))`
+const reportingCursorPollWindow = `PARTITION BY agent, account_user_id, ` + reportingCursorHour
 
 func (db *DB) loadReportingAccountUsage(ctx context.Context, tx *sql.Tx, start, end time.Time, source *reportingExportSource) error {
 	var exists bool
@@ -727,9 +725,6 @@ func (db *DB) loadReportingAccountUsage(ctx context.Context, tx *sql.Tx, start, 
 		result = append(result, r)
 	}
 	if err := rows.Err(); err != nil {
-		return err
-	}
-	if err := rows.Close(); err != nil {
 		return err
 	}
 	emptyRows, err := tx.QueryContext(ctx, `SELECT account_user_id, hour_start, polled_at FROM cursor_account_polls AS poll
