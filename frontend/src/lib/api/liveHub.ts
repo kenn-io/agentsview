@@ -1,4 +1,5 @@
 import { EventSource } from "eventsource";
+import { getApiV1Events, getGetApiV1EventsUrl } from "./generated/sessions/sessions.js";
 
 export type LiveRequest = { base: string; token: string; session?: string };
 export type LiveFrame = { type: string; data?: string };
@@ -10,8 +11,7 @@ export class LiveHub {
   private sessions = new Set<string>();
   private ready = new Map<string, LiveFrame>();
   private timing = new Map<string, LiveFrame>();
-  private errors = 0;
-  private opened = false;
+  private credentials: { base: string; token: string } | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
 
   update(port: LivePort, request: LiveRequest) {
@@ -38,6 +38,9 @@ export class LiveHub {
     this.source?.close();
     this.source = null;
     this.ports.clear();
+    this.ready.clear();
+    this.timing.clear();
+    this.credentials = null;
   }
 
   private schedule() {
@@ -56,47 +59,52 @@ export class LiveHub {
     const sessions = new Set(
       [...this.ports.values()].flatMap((request) => (request.session ? [request.session] : [])),
     );
+    const request = this.ports.values().next().value;
     const changed =
       sessions.size !== this.sessions.size || [...sessions].some((id) => !this.sessions.has(id));
-    if (this.source && this.ports.size && !changed) return;
+    if (
+      this.source &&
+      request &&
+      !changed &&
+      this.credentials?.base === request.base &&
+      this.credentials.token === request.token
+    )
+      return;
     this.source?.close();
     this.source = null;
     this.sessions = sessions;
     this.ready.clear();
     this.timing.clear();
-    const request = this.ports.values().next().value;
+    this.credentials = request ? { base: request.base, token: request.token } : null;
     if (!request) return;
-    const url = new URL(`${request.base}/api/v1/events`);
-    for (const id of sessions) url.searchParams.append("session", id);
+    const params = { session: [...sessions] };
+    const url = new URL(`${request.base}${getGetApiV1EventsUrl(params)}`);
     const source = new EventSource(url, {
-      fetch: (input, options) => {
+      fetch: (_input, options) => {
         const headers = new Headers(options?.headers);
         if (request.token) headers.set("Authorization", `Bearer ${request.token}`);
-        return fetch(input, { ...options, headers });
+        return getApiV1Events(params, { ...options, baseUrl: request.base, headers });
       },
     });
     this.source = source;
+    let errors = 0;
+    let opened = false;
 
     source.addEventListener("open", () => {
       if (this.source !== source) return;
-      this.errors = 0;
-      this.opened = true;
+      errors = 0;
+      opened = true;
     });
     source.addEventListener("error", () => {
       if (this.source !== source) return;
-      this.errors++;
+      errors++;
       this.broadcast({ type: "error" });
-      if (this.errors >= 5) {
+      if (errors >= 5) {
         source.close();
         this.source = null;
-        this.broadcast({ type: this.opened ? "closed" : "permanent_failure" });
-      } else if (source.readyState === 2) {
-        this.source = null;
-        this.broadcast({ type: "closed" });
-        this.timer = setTimeout(() => {
-          this.timer = null;
-          this.reconcile();
-        }, 1000);
+        this.ready.clear();
+        this.timing.clear();
+        this.broadcast({ type: opened ? "closed" : "permanent_failure" });
       }
     });
     for (const type of [
@@ -109,7 +117,7 @@ export class LiveHub {
     ]) {
       source.addEventListener(type, (event) => {
         if (this.source !== source) return;
-        this.errors = 0;
+        errors = 0;
         const data = (event as MessageEvent).data as string;
         let session: string | undefined;
         if (type.startsWith("session_")) session = data;

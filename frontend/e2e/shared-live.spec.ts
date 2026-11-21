@@ -76,16 +76,19 @@ for (const fallback of ["worker", "broadcast", "storage"] as const) {
           messageRequests++;
       });
       const pages = [page, await context.newPage(), await context.newPage()];
+      const ids = ["test-session-small-5", "test-session-small-2", "test-session-medium-8"];
       for (const tab of pages) {
-        await tab.goto(`${base}/sessions/test-session-small-5`);
-        await expect(tab).toHaveURL(/test-session-small-5/);
+        await tab.goto(`${base}/sessions/${ids[0]}`);
+        await expect(tab).toHaveURL(new RegExp(ids[0]!));
       }
       await page.waitForTimeout(400);
       await expect.poll(() => active.size).toBe(1);
       if (fallback !== "worker") expect(requested.length).toBeGreaterThan(1);
       expect(workerStatuses).toEqual(fallback === "worker" ? [200] : []);
       expect(requested[0]).toBe("/api/v1/events?session=test-session-small-5");
-      expect(requested.at(-1)).toBe("/api/v1/events?session=test-session-small-5");
+      expect(new Set(new URL(requested.at(-1)!, base).searchParams.getAll("session"))).toEqual(
+        new Set([ids[0]]),
+      );
       const fourth = await context.newPage();
       await fourth.goto(`${base}/`, { timeout: 8000 });
       await fourth.keyboard.press("Control+g");
@@ -99,7 +102,6 @@ for (const fallback of ["worker", "broadcast", "storage"] as const) {
       await page.waitForTimeout(400);
       await expect.poll(() => active.size).toBe(1);
       await expect.poll(() => messageRequests).toBeGreaterThan(0);
-      const count = requested.length;
       const beforeReturn = messageRequests;
       await page.evaluate(() => {
         (window as Window & { __hidden?: boolean }).__hidden = true;
@@ -112,8 +114,33 @@ for (const fallback of ["worker", "broadcast", "storage"] as const) {
       await expect.poll(() => messageRequests).toBeGreaterThan(beforeReturn);
       await expect.poll(() => active.size).toBe(1);
       await page.waitForTimeout(400);
-      expect(requested.length).toBe(count);
       await expect.poll(() => active.size).toBe(1);
+      const count = requested.length;
+      const beforeSecondReturn = messageRequests;
+      await page.evaluate(() => {
+        (window as Window & { __hidden?: boolean }).__hidden = true;
+        document.dispatchEvent(new Event("visibilitychange"));
+        (window as Window & { __hidden?: boolean }).__hidden = false;
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await expect.poll(() => messageRequests).toBeGreaterThan(beforeSecondReturn);
+      await page.waitForTimeout(400);
+      expect(requested.length).toBe(count);
+      for (const index of [1, 2]) {
+        await pages[index]!.goto(`${base}/sessions/${ids[index]}`);
+        await expect(pages[index]!).toHaveURL(new RegExp(ids[index]!));
+      }
+      await expect
+        .poll(() => new Set(new URL(requested.at(-1)!, base).searchParams.getAll("session")))
+        .toEqual(new Set(ids));
+      const beforeLeaderClose = requested.length;
+      await page.close();
+      if (fallback !== "worker")
+        await expect.poll(() => requested.length).toBeGreaterThan(beforeLeaderClose);
+      await expect.poll(() => active.size).toBe(1);
+      await expect
+        .poll(() => new Set(new URL(requested.at(-1)!, base).searchParams.getAll("session")))
+        .toEqual(new Set(ids));
       expect(watches).toEqual([]);
       console.log(
         `SharedWorker: ${workerStatuses[0]}, live streams: ${active.size}, session watch streams: ${watches.length}, startup: ${requested[0]}`,

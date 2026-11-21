@@ -849,3 +849,32 @@ describe("core action telemetry", () => {
     expect(telemetry.reportTelemetry).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("live event payloads", () => {
+  it("delivers known scopes and refreshes for malformed or unknown data", async () => {
+    let port!: MessagePort;
+    class Worker {
+      port = { start() {}, postMessage() {}, onmessage: null } as unknown as MessagePort;
+      constructor() {
+        port = this.port;
+      }
+    }
+    vi.stubGlobal("SharedWorker", Worker);
+    const { watchEvents } = await import("./client.js");
+    const received: string[] = [];
+    const source = watchEvents((event) => received.push(event.scope));
+    for (const data of [
+      '{"scope":"messages"}',
+      '{"scope":"sessions"}',
+      "invalid",
+      "{}",
+      "null",
+      '{"scope":"other"}',
+    ]) {
+      port.onmessage?.(new MessageEvent("message", { data: { type: "data_changed", data } }));
+    }
+    expect(received).toEqual(["messages", "sessions", "sync", "sync", "sync", "sync"]);
+    source.close();
+    vi.unstubAllGlobals();
+  });
+});

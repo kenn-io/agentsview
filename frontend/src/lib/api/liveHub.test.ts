@@ -7,7 +7,10 @@ vi.mock("eventsource", () => ({ EventSource: vi.fn() }));
 class FakeSource extends EventTarget {
   closed = false;
   readyState = 0;
-  constructor(public url: URL) {
+  constructor(
+    public url: URL,
+    public options: { fetch: typeof fetch },
+  ) {
     super();
   }
   close() {
@@ -28,13 +31,14 @@ describe("shared live stream", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     sources = [];
-    vi.mocked(EventSource).mockImplementation(function (url) {
-      const source = new FakeSource(new URL(url));
+    vi.mocked(EventSource).mockImplementation(function (url, options) {
+      const source = new FakeSource(new URL(url), options as { fetch: typeof fetch });
       sources.push(source);
       return source as unknown as EventSource;
     });
   });
   afterEach(() => {
+    vi.unstubAllGlobals();
     vi.clearAllTimers();
     vi.useRealTimers();
   });
@@ -120,24 +124,68 @@ describe("shared live stream", () => {
     expect(missing.postMessage.mock.calls).toEqual([[{ type: "session_missing", data: "a" }]]);
   });
 
-  it("retries when EventSource closes on a temporary HTTP failure", () => {
+  it("switches to the surviving subscriber's credentials", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+    const hub = new LiveHub();
+    const old = { postMessage: vi.fn() };
+    const current = { postMessage: vi.fn() };
+    hub.update(old, { ...request("a"), token: "old-token" });
+    hub.update(current, { ...request("a"), token: "new-token" });
+    vi.advanceTimersByTime(250);
+    expect(sources).toHaveLength(1);
+    hub.leave(old);
+    vi.advanceTimersByTime(250);
+    expect(sources[0]!.closed).toBe(true);
+    expect(sources).toHaveLength(2);
+    await sources[1]!.options.fetch(sources[1]!.url, {});
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch.mock.calls[0]![0]).toBe("http://example.test/api/v1/events?session=a");
+    expect((fetch.mock.calls[0]![1].headers as Headers).get("Authorization")).toBe(
+      "Bearer new-token",
+    );
+    hub.close();
+  });
+
+  it("encodes session IDs and keeps tokens out of the stream URL", () => {
     const hub = new LiveHub();
     const port = { postMessage: vi.fn() };
-    hub.update(port, request());
-    sources[0]!.readyState = 2;
-    sources[0]!.emit("error");
-    expect(port.postMessage).toHaveBeenLastCalledWith({ type: "closed" });
-    vi.advanceTimersByTime(1000);
-    expect(sources).toHaveLength(2);
-    sources[1]!.emit("open");
-    sources[1]!.emit("events_ready", "{}");
-    expect(port.postMessage).toHaveBeenLastCalledWith({ type: "events_ready", data: "{}" });
-    expect(
-      port.postMessage.mock.calls.filter(([frame]) => frame.type === "events_ready"),
-    ).toHaveLength(1);
-    hub.leave(port);
-    vi.advanceTimersByTime(250);
-    expect(sources[1]!.closed).toBe(true);
+    hub.update(port, { ...request("child%7E/%25?#"), token: "a b&c?d=e/f+g" });
+    expect(sources[0]!.url.href).toBe(
+      "http://example.test/api/v1/events?session=child%257E%2F%2525%3F%23",
+    );
+    hub.close();
+  });
+
+  it("gives a replacement source a fresh error budget", () => {
+    const hub = new LiveHub();
+    const first = { postMessage: vi.fn() };
+    const second = { postMessage: vi.fn() };
+    hub.update(first, request("a"));
+    for (let i = 0; i < 5; i++) sources[0]!.emit("error");
+    expect(first.postMessage).toHaveBeenLastCalledWith({ type: "permanent_failure" });
+    hub.update(second, request("a"));
+    sources[1]!.emit("error");
+    expect(sources[1]!.closed).toBe(false);
+    expect(second.postMessage).toHaveBeenLastCalledWith({ type: "error" });
+    hub.close();
+  });
+
+  it.each(["open", "data_changed", "session_updated"])("resets the error budget on %s", (type) => {
+    const hub = new LiveHub();
+    const port = { postMessage: vi.fn() };
+    hub.update(port, request("a"));
+    const source = sources[0]!;
+    for (let i = 0; i < 4; i++) source.emit("error");
+    source.emit(type, type === "session_updated" ? "a" : "{}");
+    for (let i = 0; i < 4; i++) source.emit("error");
+    expect(source.closed).toBe(false);
+    source.emit("error");
+    expect(source.closed).toBe(true);
+    expect(port.postMessage).toHaveBeenLastCalledWith({
+      type: type === "open" ? "closed" : "permanent_failure",
+    });
+    hub.close();
   });
 
   it("closes after repeated errors and signals permanent failure", () => {
