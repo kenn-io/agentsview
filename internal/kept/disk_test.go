@@ -5,6 +5,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -132,4 +133,48 @@ func TestLoadJSON(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, retain)
 	require.Equal(t, []string{"current"}, got)
+}
+
+func TestDiskOpenWhileInUse(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	for _, operation := range []string{"enabled", "read-write-sweep"} {
+		t.Run(operation, func(t *testing.T) {
+			var disk Disk
+			require.False(t, disk.Enabled())
+			start := make(chan struct{})
+			// Repeat opens to exercise initialization while the other worker uses the cache.
+			openErrors := make(chan error, 32)
+			var workers sync.WaitGroup
+			workers.Go(func() {
+				<-start
+				for range 32 {
+					openErrors <- disk.Open("concurrent-cache", operation, 1024, 4096)
+				}
+			})
+			workers.Go(func() {
+				<-start
+				for range 1000 {
+					if operation == "enabled" {
+						disk.Enabled()
+						continue
+					}
+					disk.Put("selection", "v1", []byte("saved"))
+					disk.Get("selection", "v1")
+					disk.Keep("selection", "v1", func() ([]byte, error) { return []byte("saved"), nil })
+					disk.Sweep(time.Now())
+				}
+			})
+			close(start)
+			workers.Wait()
+			close(openErrors)
+			for err := range openErrors {
+				require.NoError(t, err)
+			}
+			require.True(t, disk.Enabled())
+			require.True(t, disk.Put("selection", "v1", []byte("saved")))
+			payload, ok := disk.Get("selection", "v1")
+			require.True(t, ok)
+			require.Equal(t, "saved", string(payload))
+		})
+	}
 }
