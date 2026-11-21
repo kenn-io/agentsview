@@ -119,6 +119,40 @@ func TestPGActivityReportInputReads(t *testing.T) {
 	}
 }
 
+func TestPGActivityReportInputReadsFinishedTransition(t *testing.T) {
+	t.Parallel()
+	local, syncer, store := newUsageJournalFixture(t)
+	for _, id := range []string{"a", "b"} {
+		pgKeptSession(t, local, id, "project-a", "2026-06-14")
+	}
+	pgKeptPush(t, syncer, false)
+	counter := &activityInputReadCounter{storeExecutor: store.pg}
+	store.pg = counter
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	q.Partial, q.EffectiveEnd = true, q.RangeStart.Add(10*time.Hour+30*time.Second)
+	pgKeptBuild(t, store, f, q, true)
+	q.Partial, q.EffectiveEnd = false, q.RangeEnd
+	finished := pgKeptBuild(t, store, f, q, true)
+	fresh, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, fresh.Close()) })
+	requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), finished)
+	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "a", []db.Message{
+		{SessionID: "a", Ordinal: 0, Role: "user", Content: "question", Timestamp: "2026-06-14T10:00:00Z"},
+		{SessionID: "a", Ordinal: 1, Role: "assistant", Content: "answer", Timestamp: "2026-06-14T10:02:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":700}`)},
+	}))
+	pgKeptPush(t, syncer, false)
+	changed := pgKeptBuild(t, store, f, q, true)
+	assert.Equal(t, 1200, changed.Report.Totals.OutputTokens)
+	require.Len(t, counter.transcriptReads, 2)
+	assert.Equal(t, []string{"a"}, counter.transcriptReads[1])
+	require.Len(t, counter.usageReads, 2)
+	assert.Equal(t, []string{"a"}, counter.usageReads[1])
+	fresh.runtimeState().activityKept.DeleteSlots(func(string) bool { return true })
+	fresh.runtimeState().activityInputs.DeleteSlots(func(string) bool { return true })
+	requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), changed)
+}
+
 func TestPGActivityReportInputReadsLargeChange(t *testing.T) {
 	t.Parallel()
 	local, syncer, store := newUsageJournalFixture(t)
