@@ -953,9 +953,9 @@ mode, the effective scope, and which default exclusions applied, and include
 
 When you need to find a single session that covers several distinct ideas, pass
 `concepts` with two to five natural-language strings and omit `pattern`.
-Concepts always use `semantic` mode, regardless of `mode`. The HTTP
-API accepts the same list as repeated `concepts` query parameters and requires
-the `X-AgentsView-Search-Intent: semantic` header.
+A `concepts` search always runs in `semantic` mode, no matter what you set
+`mode` to. The HTTP API accepts the same list as repeated `concepts` query
+parameters and requires the `X-AgentsView-Search-Intent: semantic` header.
 
 AgentsView runs one semantic search per concept and keeps only the sessions
 found by every search, even if the concepts match different exchanges. A
@@ -1187,11 +1187,11 @@ when an older version is installed `pg push` attempts
 `ALTER EXTENSION vector UPDATE` (healing servers whose pgvector package was
 upgraded in place) and otherwise skips the vector phase while reporting the
 installed version. Existing indexes on pgvector 0.7.x resume semantic search
-after pgvector is upgraded; they don't need to be rebuilt. Session and message
-sync are unaffected in every case. An unsupported extension or missing vector
-table leaves semantic search unavailable on the read side: `pg serve` starts,
-semantic search returns 501, CLI and MCP hybrid searches return keyword matches
-with a note, and lexical search keeps working.
+after you upgrade pgvector, and you do not need to rebuild them. Session and
+message sync are unaffected in every case. On the read side, if the extension
+is unsupported or the vector table is missing, semantic search is unavailable.
+`pg serve` still starts, semantic search returns 501, CLI and MCP hybrid
+searches return keyword matches with a note, and lexical search keeps working.
 
 ### Maintenance
 
