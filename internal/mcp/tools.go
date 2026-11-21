@@ -959,12 +959,10 @@ func (t *toolset) searchContent(
 	} else if strings.TrimSpace(in.Pattern) == "" && len(in.Concepts) == 0 {
 		return nil, searchContentOut{}, errors.New("pattern or concepts required")
 	}
-	if in.SessionID != "" {
-		detail, err := t.resolveSession(ctx, in.SessionID)
-		if err != nil {
-			return nil, searchContentOut{}, err
-		}
-		in.SessionID = detail.ID
+	var err error
+	in.SessionID, err = t.resolveOptionalSessionID(ctx, in.SessionID)
+	if err != nil {
+		return nil, searchContentOut{}, err
 	}
 	limit := clampLimit(in.Limit, defaultSearchLimit, maxContentSearchLimit)
 	normalized, err := service.NormalizeContentSearchRequest(service.ContentSearchRequest{

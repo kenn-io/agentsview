@@ -2408,15 +2408,6 @@ func TestSessionToolsResolvePlainIDs(t *testing.T) {
 			}
 			return err
 		}},
-		{"search content", func(t *testing.T, id string) error {
-			t.Helper()
-			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{SessionID: id, Pattern: "needle", IncludeActive: true, IncludeOneShot: true})
-			if err == nil {
-				require.Len(t, out.Matches, 1)
-				assert.Equal(t, "codex:plain", out.Matches[0].SessionID)
-			}
-			return err
-		}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2580,4 +2571,24 @@ func TestGetMessages_RevisionRejectsDeletedSession(t *testing.T) {
 			require.ErrorIs(t, err, service.ErrSourceChanged)
 		})
 	}
+}
+
+func TestSearchContent_SessionIDFilter(t *testing.T) {
+	ts, d := newTestToolset(t)
+	seedFTSSession(t, d, "codex:source", "project", "needle", "2024-06-14T10:00:00Z")
+	dbtest.SeedSession(t, d, "codex:ambiguous", "project")
+	dbtest.SeedSession(t, d, "host~ambiguous", "project")
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", SessionID: "source", IncludeActive: true, IncludeOneShot: true})
+	require.NoError(t, err)
+	require.Len(t, out.Matches, 1)
+	assert.Equal(t, "codex:source", out.Matches[0].SessionID)
+	_, out, err = ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", SessionID: "missing", IncludeActive: true})
+	require.NoError(t, err)
+	assert.Empty(t, out.Matches)
+	require.NoError(t, d.SoftDeleteSession(t.Context(), "codex:source"))
+	_, out, err = ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", SessionID: "codex:source", IncludeActive: true})
+	require.NoError(t, err)
+	assert.Empty(t, out.Matches)
+	_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", SessionID: "ambiguous", IncludeActive: true})
+	require.ErrorContains(t, err, "ambiguous session UUID")
 }
