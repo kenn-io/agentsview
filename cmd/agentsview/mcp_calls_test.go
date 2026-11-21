@@ -19,9 +19,9 @@ func TestMCPCallsReport(t *testing.T) {
 	t.Setenv("AGENTSVIEW_DATA_DIR", home)
 	dir := filepath.Join(home, "mcp", "calls")
 	require.NoError(t, os.MkdirAll(dir, 0700))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "2026-01-02.jsonl"), []byte(`{"at":"2026-01-02T00:00:00Z","tool":"search_docs","outcome":"empty","bytes":10,"ms":4}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "2026-01-02.jsonl"), []byte(`{"version":1,"at":"2026-01-02T00:00:00Z","tool":"search_docs","outcome":"empty","bytes":10,"ms":4}
 `), 0600))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "2026-01-03.jsonl"), []byte(`{"at":"2026-01-03T00:00:00Z","tool":"get_messages","outcome":"error","error":"other error","bytes":20,"ms":8}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "2026-01-03.jsonl"), []byte(`{"version":1,"at":"2026-01-03T00:00:00Z","tool":"get_messages","outcome":"error","error":"other error","bytes":20,"ms":8}
 `), 0600))
 	cmd := newMCPCallsCommand()
 	cmd.SetArgs([]string{"--since", "2026-01-02", "--until", "2026-01-02", "--json"})

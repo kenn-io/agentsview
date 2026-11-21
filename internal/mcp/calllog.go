@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -19,7 +20,14 @@ import (
 	"go.kenn.io/kit/safefileio"
 )
 
+const (
+	callRecordVersion    = 1
+	maxRecordedNameBytes = 128
+	maxRejectedNames     = 16
+)
+
 type callRecord struct {
+	Version      int       `json:"version"`
 	At           time.Time `json:"at"`
 	Tool         string    `json:"tool"`
 	Outcome      string    `json:"outcome"`
@@ -65,14 +73,19 @@ func recordToolCall(ctx context.Context, dir string, req *mcp.CallToolRequest, r
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	name := req.Params.Name
-	rec := callRecord{At: time.Now().UTC(), Tool: name, Outcome: "ok", Ms: int(elapsed.Milliseconds())}
+	rec := callRecord{Version: callRecordVersion, At: time.Now().UTC(), Tool: name, Outcome: "ok", Ms: int(elapsed.Milliseconds())}
 	if name == ToolSearchSessions || name == ToolSearchContent {
 		var args struct {
 			Cursor int `json:"cursor"`
 		}
 		if json.Unmarshal(req.Params.Arguments, &args) == nil {
-			rec.Continuation = args.Cursor != 0
+			rec.Continuation = args.Cursor > 0
 		}
+	}
+	if len(name) == 0 || len(name) > maxRecordedNameBytes || strings.ContainsFunc(name, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-' || r == '.')
+	}) {
+		rec.Tool = "<invalid tool name>"
 	}
 	call, _ := result.(*mcp.CallToolResult)
 	var message string
@@ -91,9 +104,17 @@ func recordToolCall(ctx context.Context, dir string, req *mcp.CallToolRequest, r
 		switch {
 		case strings.HasPrefix(message, `validating "arguments":`):
 			rec.Error = "invalid arguments"
-			var args map[string]json.RawMessage
-			if json.Unmarshal(req.Params.Arguments, &args) == nil {
-				rec.Rejected = rejectedProperties(message, args)
+			rec.Rejected = rejectedProperties(message)
+			if len(rec.Rejected) == 0 {
+				const prefix = `validating "arguments": validating root: validating /properties/`
+				if rest, ok := strings.CutPrefix(message, prefix); ok {
+					if path, _, ok := strings.Cut(rest, ": type:"); ok && !strings.Contains(path, "/") {
+						name := strings.ReplaceAll(strings.ReplaceAll(path, "~1", "/"), "~0", "~")
+						if len(name) <= maxRecordedNameBytes {
+							rec.Rejected = []string{name}
+						}
+					}
+				}
 			}
 		case strings.HasPrefix(message, "session not found:"):
 			rec.Error = "session not found"
@@ -127,10 +148,9 @@ func recordToolCall(ctx context.Context, dir string, req *mcp.CallToolRequest, r
 	return errors.Join(writeErr, f.Close())
 }
 
-// rejectedProperties parses the SDK's Go-quoted property list and accepts only
-// names present in the request. Validation messages and values are discarded.
-func rejectedProperties(message string, args map[string]json.RawMessage) []string {
-	_, list, ok := strings.Cut(message, "unexpected additional properties [")
+// rejectedProperties parses the SDK's Go-quoted property list.
+func rejectedProperties(message string) []string {
+	list, ok := strings.CutPrefix(message, `validating "arguments": validating root: unexpected additional properties [`)
 	if !ok {
 		return nil
 	}
@@ -155,9 +175,10 @@ func rejectedProperties(message string, args map[string]json.RawMessage) []strin
 			break
 		}
 		name, err := strconv.Unquote(list[:end+1])
-		if err == nil {
-			if _, exists := args[name]; exists {
-				names = append(names, name)
+		if err == nil && len(name) <= maxRecordedNameBytes {
+			names = append(names, name)
+			if len(names) == maxRejectedNames {
+				break
 			}
 		}
 		list = list[end+1:]
@@ -218,6 +239,14 @@ func SummarizeCalls(ctx context.Context, dir, from, to string) ([]CallSummary, e
 			var rec callRecord
 			if json.Unmarshal(line, &rec) != nil || !db.InDateRange(rec.At.UTC().Format("2006-01-02"), from, to) {
 				continue
+			}
+			if rec.Version != callRecordVersion {
+				_ = f.Close()
+				return nil, fmt.Errorf("unsupported MCP call record version %d", rec.Version)
+			}
+			if rec.Outcome != "ok" && rec.Outcome != "empty" && rec.Outcome != "error" {
+				_ = f.Close()
+				return nil, fmt.Errorf("unknown MCP call outcome %q", rec.Outcome)
 			}
 			g := groups[rec.Tool]
 			if g == nil {

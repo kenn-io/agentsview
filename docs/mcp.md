@@ -648,5 +648,6 @@ JSON output. Dates use UTC. Records live in the data directory under
 `mcp/calls/`. They contain tool names, outcomes, rejected argument names, result
 sizes, and durations. Argument values and results are not recorded. Error
 categories are limited to invalid arguments, session not found, and other error.
-Empty search percentages exclude calls with a nonzero pagination cursor.
-Records have no automatic expiry.
+Empty search percentages exclude calls with a positive pagination cursor.
+Records have no automatic expiry. Each call records up to 16 rejected argument
+names of at most 128 bytes each. Longer names are omitted.

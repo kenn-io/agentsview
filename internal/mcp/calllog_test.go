@@ -3,6 +3,8 @@ package mcp
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,11 +63,11 @@ func TestCallOutcomes(t *testing.T) {
 
 func TestSummarizeCallsDatesAndMedians(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "2026-01-02.jsonl"), []byte(`{"at":"2026-01-02T01:00:00Z","tool":"search_docs","outcome":"ok","bytes":10,"ms":2}
-{"at":"2026-01-02T02:00:00Z","tool":"search_docs","outcome":"empty","bytes":30,"ms":6}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "2026-01-02.jsonl"), []byte(`{"version":1,"at":"2026-01-02T01:00:00Z","tool":"search_docs","outcome":"ok","bytes":10,"ms":2}
+{"version":1,"at":"2026-01-02T02:00:00Z","tool":"search_docs","outcome":"empty","bytes":30,"ms":6}
 broken
 `), 0600))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "2026-01-03.jsonl"), []byte(`{"at":"2026-01-03T00:00:00Z","tool":"search_docs","outcome":"ok","bytes":90,"ms":20}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "2026-01-03.jsonl"), []byte(`{"version":1,"at":"2026-01-03T00:00:00Z","tool":"search_docs","outcome":"ok","bytes":90,"ms":20}
 `), 0600))
 	rows, err := SummarizeCalls(t.Context(), dir, "2026-01-02", "2026-01-02")
 	require.NoError(t, err)
@@ -89,6 +91,7 @@ func TestCallLogPaginationAndRejectedNames(t *testing.T) {
 	for _, args := range []map[string]any{
 		{"query": "unmatched-search"},
 		{"query": "unmatched-search", "cursor": 3},
+		{"query": "unmatched-search", "cursor": -1},
 		{"query": "secret-value", "Mixed Case]\\\"": "secret-value"},
 		{"query": 123},
 	} {
@@ -98,10 +101,10 @@ func TestCallLogPaginationAndRejectedNames(t *testing.T) {
 	rows, err := SummarizeCalls(t.Context(), dir, "", "")
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	assert.Equal(t, 4, rows[0].Calls)
+	assert.Equal(t, 5, rows[0].Calls)
 	require.NotNil(t, rows[0].EmptyPercent)
-	assert.InDelta(t, 100.0/3, *rows[0].EmptyPercent, 0.001)
-	assert.Equal(t, []CallCount{{Name: "Mixed Case]\\\"", Count: 1}}, rows[0].Rejected)
+	assert.InDelta(t, 50.0, *rows[0].EmptyPercent, 0.001)
+	assert.Equal(t, []CallCount{{Name: "Mixed Case]\\\"", Count: 1}, {Name: "query", Count: 1}}, rows[0].Rejected)
 	files, err := os.ReadDir(dir)
 	require.NoError(t, err)
 	raw, err := os.ReadFile(filepath.Join(dir, files[0].Name()))
@@ -112,13 +115,11 @@ func TestCallLogPaginationAndRejectedNames(t *testing.T) {
 
 func TestCallLogLongRecords(t *testing.T) {
 	dir := t.TempDir()
-	d := dbtest.OpenTestDB(t)
-	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), CallLogDir: dir}))
-	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
 	name := strings.Repeat("x", 70000)
-	result, err := ct.CallTool(t.Context(), callParams(ToolSearchSessions, map[string]any{"query": "secret", name: true}))
+	rec := callRecord{Version: 1, At: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC), Tool: ToolSearchSessions, Outcome: "error", Error: "invalid arguments", Rejected: []string{name}}
+	line, err := json.Marshal(rec)
 	require.NoError(t, err)
-	require.True(t, result.IsError)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "2026-01-02.jsonl"), append(line, '\n'), 0600))
 	rows, err := SummarizeCalls(t.Context(), dir, "", "")
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
@@ -135,7 +136,10 @@ func TestCallLogWriteFailureWarns(t *testing.T) {
 	result, err := ct.CallTool(t.Context(), callParams(ToolSearchDocs, map[string]any{"query": "session"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
-	assert.Contains(t, warnings.String(), "could not record MCP call")
+	result, err = ct.CallTool(t.Context(), callParams(ToolSearchDocs, map[string]any{"query": "session"}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+	assert.Equal(t, 1, strings.Count(warnings.String(), "could not record MCP call"))
 }
 
 func TestCallLogUnknownTool(t *testing.T) {
@@ -170,4 +174,97 @@ func TestRecordToolCallCanceled(t *testing.T) {
 	assert.Equal(t, ToolSearchDocs, rows[0].Tool)
 	assert.Equal(t, 100.0, rows[0].ErrorPercent)
 	assert.Equal(t, &CallCount{Name: "other error", Count: 1}, rows[0].TopError)
+}
+
+func TestCallLogFormatRejectsUnknownRecords(t *testing.T) {
+	for _, tc := range []struct{ name, record, want string }{
+		{"version", `{"version":2,"at":"2026-01-02T00:00:00Z","tool":"search_docs","outcome":"ok"}`, "unsupported MCP call record version"},
+		{"outcome", `{"version":1,"at":"2026-01-02T00:00:00Z","tool":"search_docs","outcome":"unknown"}`, "unknown MCP call outcome"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "2026-01-02.jsonl"), []byte(tc.record+"\n"), 0600))
+			_, err := SummarizeCalls(t.Context(), dir, "", "")
+			require.ErrorContains(t, err, tc.want)
+		})
+	}
+}
+
+func TestCallLogBoundsNames(t *testing.T) {
+	dir := t.TempDir()
+	d := dbtest.OpenTestDB(t)
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), CallLogDir: dir}))
+	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
+	args := map[string]any{"query": "private-value", strings.Repeat("z", 129): true}
+	for i := range 20 {
+		args[fmt.Sprintf("Extra%02d", i)] = true
+	}
+	result, err := ct.CallTool(t.Context(), callParams(ToolSearchSessions, args))
+	require.NoError(t, err)
+	require.True(t, result.IsError)
+	_, err = ct.CallTool(t.Context(), callParams(strings.Repeat("z", 500), nil))
+	require.Error(t, err)
+	files, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	raw, err := os.ReadFile(filepath.Join(dir, files[0].Name()))
+	require.NoError(t, err)
+	var records []callRecord
+	for _, line := range bytes.Split(bytes.TrimSpace(raw), []byte("\n")) {
+		var rec callRecord
+		require.NoError(t, json.Unmarshal(line, &rec))
+		records = append(records, rec)
+	}
+	require.Len(t, records, 2)
+	assert.Len(t, records[0].Rejected, 16)
+	assert.Equal(t, "<invalid tool name>", records[1].Tool)
+	assert.NotContains(t, string(raw), "private-value")
+	assert.NotContains(t, string(raw), strings.Repeat("z", 129))
+}
+
+func TestCallLogEmptySearchTools(t *testing.T) {
+	dir := t.TempDir()
+	d := dbtest.OpenTestDB(t)
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), CallLogDir: dir}))
+	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
+	for _, tc := range []struct {
+		name string
+		args map[string]any
+	}{
+		{ToolSearchContent, map[string]any{"pattern": "unmatched", "mode": "substring"}},
+		{ToolQueryRecall, map[string]any{"query": "unmatched"}},
+	} {
+		result, err := ct.CallTool(t.Context(), callParams(tc.name, tc.args))
+		require.NoError(t, err)
+		require.False(t, result.IsError, "%s: %+v", tc.name, result.Content)
+	}
+	rows, err := SummarizeCalls(t.Context(), dir, "", "")
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	for _, row := range rows {
+		require.NotNil(t, row.EmptyPercent)
+		assert.Equal(t, 100.0, *row.EmptyPercent, row.Tool)
+	}
+}
+
+func TestCallLogValidationValueIsNotARejectedName(t *testing.T) {
+	dir := t.TempDir()
+	d := dbtest.OpenTestDB(t)
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), CallLogDir: dir}))
+	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
+	result, err := ct.CallTool(t.Context(), callParams(ToolSearchSessions, map[string]any{
+		"query": "term", "cursor": `unexpected additional properties ["private-value"]`,
+	}))
+	require.NoError(t, err)
+	require.True(t, result.IsError)
+	rows, err := SummarizeCalls(t.Context(), dir, "", "")
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, []CallCount{{Name: "cursor", Count: 1}}, rows[0].Rejected)
+	files, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	raw, err := os.ReadFile(filepath.Join(dir, files[0].Name()))
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "private-value")
 }

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"go.kenn.io/agentsview/internal/apiclient"
@@ -121,6 +122,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 
 	s.AddReceivingMiddleware(argumentHints)
 
+	var warnCallLog sync.Once
 	s.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, request mcp.Request) (mcp.Result, error) {
 			if method != "tools/call" {
@@ -135,11 +137,13 @@ func newServer(opts ServeOptions) *mcp.Server {
 			}
 			if req, ok := request.(*mcp.CallToolRequest); ok {
 				if recordErr := recordToolCall(ctx, opts.CallLogDir, req, result, err, elapsed); recordErr != nil {
-					w := opts.ErrorWriter
-					if w == nil {
-						w = os.Stderr
-					}
-					_, _ = fmt.Fprintf(w, "Warning: could not record MCP call: %v\n", recordErr)
+					warnCallLog.Do(func() {
+						w := opts.ErrorWriter
+						if w == nil {
+							w = os.Stderr
+						}
+						_, _ = fmt.Fprintf(w, "Warning: could not record MCP call: %v\n", recordErr)
+					})
 				}
 			}
 			return result, err
