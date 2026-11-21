@@ -32,7 +32,7 @@ for (const apiVersion of [27, 28]) {
               body += chunk;
             });
             response.on("end", () => {
-              const data = JSON.stringify({ ...JSON.parse(body), api_version: apiVersion });
+              const data = JSON.stringify({ ...JSON.parse(body), version: "0.46.0", api_version: apiVersion });
               const headers = { ...response.headers, "content-length": Buffer.byteLength(data) };
               res.writeHead(response.statusCode ?? 500, headers);
               res.end(data);
@@ -64,14 +64,14 @@ for (const apiVersion of [27, 28]) {
       await page.goto(`${base}/sessions/test-session-small-5`);
       if (apiVersion === 27) {
         await expect(
-          page.getByText("Upgrade the remote AgentsView server to continue."),
+          page.getByText("Remote server: AgentsView 0.46.0 (API 27). Upgrade to API 28 or later."),
         ).toBeVisible();
         await expect(page.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
         await page.waitForTimeout(750);
         expect(streams).toEqual([]);
       } else {
         await expect(
-          page.getByText("Upgrade the remote AgentsView server to continue."),
+          page.getByText("Remote server: AgentsView 0.46.0 (API 27). Upgrade to API 28 or later."),
         ).toHaveCount(0);
         await expect
           .poll(() =>

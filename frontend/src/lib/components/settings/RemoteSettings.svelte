@@ -13,7 +13,7 @@
     isRemoteConnection,
   } from "../../api/runtime.js";
   import { MetadataService } from "../../api/generated/index.js";
-  import { supportsRemoteVersion } from "../../api/remoteVersion.js";
+  import { MIN_REMOTE_API_VERSION, supportsRemoteVersion } from "../../api/remoteVersion.js";
   import { LatestRead } from "../../utils/latest-read.js";
   import RestartAction from "./RestartAction.svelte";
 
@@ -48,7 +48,11 @@
       const data = await MetadataService.getApiV1Version({ baseUrl: base, headers, signal });
       if (!versionRead.isCurrent(signal)) return;
       if (!supportsRemoteVersion(data.api_version)) {
-        testResult = { ok: false, message: m.settings_remote_upgrade_required() };
+        testResult = { ok: false, message: m.settings_remote_upgrade_required({
+          version: data.version || m.settings_remote_unknown(),
+          apiVersion: String(data.api_version ?? m.settings_remote_unknown()),
+          requiredVersion: String(MIN_REMOTE_API_VERSION),
+        }) };
         return false;
       }
       testResult = {

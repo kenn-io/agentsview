@@ -100,6 +100,7 @@
   import { documentTitle } from "./lib/utils/documentTitle.js";
   import { setAuthToken, getAuthToken, setServerUrl } from "./lib/api/runtime.js";
   import { setupVisibilityHealthCheck } from "./lib/utils/health.js";
+  import { MIN_REMOTE_API_VERSION } from "./lib/api/remoteVersion.js";
   import { gettingStarted } from "./lib/stores/gettingStarted.svelte.js";
   import { reportTelemetry, setupTelemetryReporting } from "./lib/utils/telemetry.js";
   import { registerShortcuts } from "./lib/utils/keyboard.js";
@@ -903,7 +904,11 @@
 {:else if sync.remoteIncompatible}
   <div class="auth-overlay">
     <div class="auth-card">
-      <h2 class="auth-card-title">{m.settings_remote_upgrade_required()}</h2>
+      <h2 class="auth-card-title">{m.settings_remote_upgrade_required({
+        version: sync.serverVersion?.version || m.settings_remote_unknown(),
+        apiVersion: String(sync.serverVersion?.api_version ?? m.settings_remote_unknown()),
+        requiredVersion: String(MIN_REMOTE_API_VERSION),
+      })}</h2>
       <button class="auth-card-btn" onclick={() => window.location.reload()}>{m.shared_retry()}</button>
       <button class="auth-card-disconnect" onclick={() => { setAuthToken(""); setServerUrl(""); window.location.reload(); }}>{m.app_auth_disconnect_reset()}</button>
     </div>

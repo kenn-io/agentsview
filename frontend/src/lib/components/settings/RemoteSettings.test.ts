@@ -42,7 +42,7 @@ describe("RemoteSettings", () => {
     await fireEvent.click(getByRole("button", { name: "Connect", exact: true }));
     if (apiVersion === 27) {
       await waitFor(() =>
-        expect(queryByText("Upgrade the remote AgentsView server to continue.")).not.toBeNull(),
+        expect(queryByText("Remote server: AgentsView test (API 27). Upgrade to API 28 or later.")).not.toBeNull(),
       );
       expect(localStorage.getItem("agentsview-server-url")).toBeNull();
     } else {
