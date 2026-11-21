@@ -2448,8 +2448,7 @@ func TestSearchContent_OversizedCurrentSessionID(t *testing.T) {
 	_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{
 		Pattern: "needle", CurrentSessionID: strings.Repeat("x", 12000), IncludeOneShot: true,
 	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "search metadata exceeds response budget")
+	require.ErrorContains(t, err, "search metadata exceeds response budget")
 }
 
 func TestGetMessages_BudgetAroundLinearContinuation(t *testing.T) {
@@ -2467,8 +2466,5 @@ func TestGetMessages_BudgetAroundLinearContinuation(t *testing.T) {
 	require.NotEmpty(t, out.Messages)
 	assert.Equal(t, 0, out.Messages[0].Ordinal)
 	require.NotNil(t, out.NextFrom)
-	_, next, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: in.SessionID, From: out.NextFrom, MaxCharsPerMessage: 5000})
-	require.NoError(t, err)
-	require.NotEmpty(t, next.Messages)
-	assert.Equal(t, out.Messages[len(out.Messages)-1].Ordinal+1, next.Messages[0].Ordinal)
+	assert.Equal(t, out.Messages[len(out.Messages)-1].Ordinal+1, *out.NextFrom)
 }

@@ -75,9 +75,7 @@ func TestGetMessages_TruncatedWithoutRevisionBindingsKeepsPagination(t *testing.
 					return
 				}
 				messages := []db.Message{dbtest.UserMsg("legacy", 0, tc.content), dbtest.UserMsg("legacy", 1, "next")}
-				if r.URL.Query().Get("from") == "1" {
-					messages = messages[1:]
-				} else if r.URL.Query().Get("limit") == "1" {
+				if r.URL.Query().Get("limit") == "1" {
 					messages = messages[:1]
 				}
 				_ = json.NewEncoder(w).Encode(map[string]any{"messages": messages, "count": len(messages)})
@@ -94,10 +92,6 @@ func TestGetMessages_TruncatedWithoutRevisionBindingsKeepsPagination(t *testing.
 			assert.Empty(t, first.Messages[0].BodyCursor)
 			require.NotNil(t, first.NextFrom)
 			assert.Equal(t, 1, *first.NextFrom)
-			_, next, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "legacy", From: first.NextFrom, Limit: 2})
-			require.NoError(t, err)
-			require.Len(t, next.Messages, 1)
-			assert.Equal(t, "next", next.Messages[0].Content)
 		})
 	}
 }

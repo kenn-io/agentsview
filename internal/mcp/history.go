@@ -55,7 +55,7 @@ type toolCallOut struct {
 
 type toolCallsOut struct {
 	ToolCalls  []toolCallOut `json:"tool_calls"`
-	Omitted    int           `json:"omitted,omitempty" jsonschema:"Calls held back."`
+	Omitted    int           `json:"omitted,omitempty"`
 	Total      int           `json:"total" jsonschema:"Calls matching the category filter across the whole session."`
 	NextCursor *int          `json:"next_cursor,omitempty"`
 }
