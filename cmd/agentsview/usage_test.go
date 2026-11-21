@@ -1682,6 +1682,36 @@ func syncCursorUsage(t *testing.T, baseURL string, args ...string) {
 	require.NoError(t, cmd.Execute())
 }
 
+func TestCursorSyncImportsBillingWhileRebuildPending(t *testing.T) {
+	t.Setenv("TZ", "UTC")
+	path := filepath.Join(cursorUsageTestDataDir(t), "sessions.db")
+	database := dbtest.OpenTestDBAt(t, path)
+	require.NoError(t, database.Close())
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	defer raw.Close()
+	_, err = raw.ExecContext(t.Context(), "PRAGMA user_version = 1048760") // Archive-only version 184.
+	require.NoError(t, err)
+	var rosterCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/teams/daily-usage-data" {
+			rosterCalls++
+			_, _ = w.Write([]byte(`{"data":[{"userId":12}],"pagination":{"hasNextPage":false}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"totalUsageEventsCount":1,"usageEvents":[{"timestamp":"2026-07-28T10:03:00Z","model":"model-a","tokenUsage":{"outputTokens":7}}]}`))
+	}))
+	defer server.Close()
+	syncCursorUsage(t, server.URL, "--since", "2026-07-28", "--until", "2026-07-28")
+	assert.Zero(t, rosterCalls)
+	var account, stamp string
+	var tokens int
+	require.NoError(t, raw.QueryRowContext(t.Context(), "SELECT output_tokens, account_user_id, account_polled_at FROM cursor_usage_events WHERE model='model-a'").Scan(&tokens, &account, &stamp))
+	assert.Equal(t, 7, tokens)
+	assert.Empty(t, account)
+	assert.Empty(t, stamp)
+}
+
 func TestCursorSyncMatchesMembers(t *testing.T) {
 	t.Setenv("TZ", "UTC")
 	for _, tc := range []struct {

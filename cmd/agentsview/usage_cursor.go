@@ -130,6 +130,13 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 		return err
 	}
 	if email == "" && userID == "" {
+		if err := database.RequireCursorAccountStamping(ctx); err != nil {
+			if !errors.Is(err, db.ErrCursorAccountRebuildPending) {
+				return err
+			}
+			fmt.Fprintf(os.Stdout, "Imported %d events; account reporting starts after the archive finishes its pending rebuild. Rerun after sync.\n", len(rows))
+			return nil
+		}
 		windowEnd := end.Add(time.Millisecond)
 		if windowEnd.After(closedThrough) {
 			windowEnd = closedThrough
@@ -201,8 +208,6 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 				}
 			}
 		}
-	} else {
-		fmt.Fprintln(os.Stdout, `Filtered syncs do not establish account reporting coverage. To cover this period, rerun with --email "" --user-id "".`)
 	}
 
 	fmt.Fprintf(os.Stdout, "Fetched %d Cursor usage events into the archive\n", len(rows))

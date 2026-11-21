@@ -4,7 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"strconv"
@@ -69,8 +69,25 @@ func (db *DB) ensureCursorUsageEventsSchemaLocked(ctx context.Context, w *writer
 	return nil
 }
 
+var ErrCursorAccountRebuildPending = errors.New("Cursor account reporting requires the pending archive rebuild")
+
+// RequireCursorAccountStamping checks that older binaries will refuse this archive.
+func (db *DB) RequireCursorAccountStamping(ctx context.Context) error {
+	version, _, err := readUserVersion(ctx, db.getReader())
+	if err != nil {
+		return err
+	}
+	if version < dataVersion {
+		return ErrCursorAccountRebuildPending
+	}
+	return nil
+}
+
 // AssignCursorUsageAccount records a member match or clears an ambiguous match.
 func (db *DB) AssignCursorUsageAccount(ctx context.Context, accountUserID string, keys []string, polledAt time.Time) error {
+	if err := db.RequireCursorAccountStamping(ctx); err != nil {
+		return err
+	}
 	if len(keys) == 0 {
 		return nil
 	}

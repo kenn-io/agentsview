@@ -15,7 +15,6 @@ type reportingSourceLoadStats struct {
 	ActivityHistoryRows int
 	UsageSessions       int
 	PaddedUsageRows     int
-	AccountUsageRows    int
 }
 
 type reportingExportSource struct {

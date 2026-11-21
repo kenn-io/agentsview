@@ -360,11 +360,6 @@ test: pricing-snapshot ensure-embed-dir
 	go test -tags "fts5" ./cmd/perfsim -run '^TestActiveAppendGrowth$$' -v
 
 .PHONY: test-cursor-account-reporting
-test-cursor-account-reporting: pricing-snapshot ensure-embed-dir
-	go test $(GO_TEST_P_FLAG) -tags "fts5" ./internal/cursorusage -run '^(TestListDailyUsageUsersPages|TestListDailyUsageUsersPacesSeparateWindows|TestFetchAllUsageEvents|TestListUsageEventsRejectsNonNumericUserID)$$' -count=1
-	go test $(GO_TEST_P_FLAG) -tags "fts5" ./internal/db -run '^(TestCursorAccountColumnsSurviveResync|TestCursorAccountReporting|TestExportReportingHourLoadsOnlySelectedAccountRows|TestReportingDigestIncludesCursorAccountPoll)$$' -count=1
-	go test $(GO_TEST_P_FLAG) -tags "fts5" ./cmd/agentsview -run '^(TestCursorSyncMatchesMembers|TestCursorSyncDoesNotCoverIncompleteHours|TestCursorSyncUsesUnfilteredFetchTimeAndDefersLateEvents|TestCursorSyncAllSkipsEmptyRosterWindows|TestExportReportingUpgradesOldCursorUsageArchive|TestExportReportingCursorAccountHour|TestNewUsageCursorCommandUsesConfigFallbacksAndSharedPagination|TestNewUsageCursorCommandExplicitMemberFilterDoesNotReuseConfigSibling)$$' -count=1
-
 # Reproducible synthetic ingest, steady-state sync, and analytics measurements.
 .PHONY: perf-sim
 PERF_SIM_FLAGS ?=

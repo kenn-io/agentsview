@@ -77,9 +77,6 @@ Project-key exports omit account parts.
 Events already in the archive stay under archive billing until an unfiltered
 sync matches them. The first export of an older archive adds empty account
 columns in place. Archives with account stamps require data version 185 or newer.
-An hour export selects account snapshot rows only for the requested hour. Its
-shared report reads still cover the padded date range for usage selection,
-allocation, and Cursor poll ranking.
 Schema 6 hashes machine IDs beginning with `cursor-account:` or `machine:` to
 keep them distinct from account keys. Schema 5 and the change stream retain the
 original IDs.

@@ -25,7 +25,6 @@ type ReportingExportOptions struct {
 	SchemaVersion int
 	ProjectKeys   []string
 	Bucket        string
-	accountHour   *time.Time
 
 	// afterSnapshot is a deterministic test seam for proving that every source
 	// read uses the transaction established before this callback.
@@ -109,11 +108,7 @@ func (db *DB) ExportReportingDay(
 		return export.ReportingDay{}, err
 	}
 	if schemaVersion == export.ReportingAccountSchemaVersion && opts.ByMachine {
-		start, end := date, date.Add(time.Duration(hourCount)*time.Hour)
-		if opts.accountHour != nil {
-			start, end = *opts.accountHour, opts.accountHour.Add(time.Hour)
-		}
-		if err := db.loadReportingAccountUsage(ctx, tx, start, end, &source); err != nil {
+		if err := db.loadReportingAccountUsage(ctx, tx, date, date.Add(time.Duration(hourCount)*time.Hour), &source); err != nil {
 			return export.ReportingDay{}, err
 		}
 	}
@@ -150,21 +145,6 @@ func (db *DB) ExportReportingDay(
 		return export.ReportingDay{}, fmt.Errorf("finalize reporting date: %w", err)
 	}
 	return day, nil
-}
-
-func (db *DB) ExportReportingHour(ctx context.Context, opts ReportingExportOptions, hourStart time.Time) (export.ReportingHour, error) {
-	hourStart = hourStart.UTC()
-	opts.Date = hourStart.Truncate(24 * time.Hour)
-	opts.accountHour = &hourStart
-	day, err := db.ExportReportingDay(ctx, opts)
-	if err != nil {
-		return export.ReportingHour{}, err
-	}
-	index := hourStart.Hour()
-	if index >= len(day.Hours) || day.Hours[index].Period != hourStart.Format("2006-01-02-15") {
-		return export.ReportingHour{}, fmt.Errorf("reporting hour %q is unavailable", hourStart.Format("2006-01-02-15"))
-	}
-	return day.Hours[index], nil
 }
 
 // ExportReportingDigest builds compact day projections from one read
@@ -383,7 +363,10 @@ func reportingHoursFromSource(
 			start := date.Add(time.Duration(key.index) * time.Hour)
 			part := quietReportingHour(start, schemaVersion, bucket)
 			part.BucketSeconds = int(bucket / time.Second)
-			part.Joint = &export.ReportingJoint{}
+			part.Joint, err = jointReportingHour(start, bucket, nil, nil, rows, nil, nil, nil, nil)
+			if err != nil {
+				return nil, err
+			}
 			part.PolledAt = polled[key]
 			part.Usage, part.HasData, err = reportingUsageForHour(start, start.Add(time.Hour), rows, nil, nil)
 			if err != nil {
@@ -740,7 +723,6 @@ func (db *DB) loadReportingAccountUsage(ctx context.Context, tx *sql.Tx, start, 
 		return err
 	}
 	source.accountUsage = result
-	source.loadStats.AccountUsageRows = len(result)
 	return nil
 }
 
