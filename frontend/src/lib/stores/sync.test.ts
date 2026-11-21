@@ -112,6 +112,7 @@ describe("remote API version", () => {
     await sync.loadVersion();
     expect(sync.remoteIncompatible).toBe(apiVersion === 27);
     expect(sync.remoteLiveAllowed).toBe(apiVersion === 28);
+    expect(api.setEventsAvailable).toHaveBeenLastCalledWith(true);
   });
 });
 

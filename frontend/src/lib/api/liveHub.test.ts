@@ -136,12 +136,16 @@ describe("shared live stream", () => {
     vi.advanceTimersByTime(250);
     expect(sources).toHaveLength(2);
     expect(sources[0]!.closed).toBe(true);
+    await sources[1]!.options.fetch(sources[1]!.url, {});
+    expect((fetch.mock.calls[0]![1].headers as Headers).get("Authorization")).toBe(
+      "Bearer new-token",
+    );
     hub.leave(old);
     vi.advanceTimersByTime(250);
     expect(sources).toHaveLength(2);
     await sources[1]!.options.fetch(sources[1]!.url, {});
-    expect(fetch.mock.calls[0]![0]).toBe("http://example.test/api/v1/events?session=a");
-    expect((fetch.mock.calls[0]![1].headers as Headers).get("Authorization")).toBe(
+    expect(fetch.mock.calls[1]![0]).toBe("http://example.test/api/v1/events?session=a");
+    expect((fetch.mock.calls[1]![1].headers as Headers).get("Authorization")).toBe(
       "Bearer new-token",
     );
     hub.close();
@@ -182,8 +186,9 @@ describe("shared live stream", () => {
     const hub = new LiveHub();
     const first = { postMessage: vi.fn() };
     const second = { postMessage: vi.fn() };
-    hub.update(first, request("a"));
+    hub.update(first, request());
     for (let i = 0; i < 5; i++) sources[0]!.emit("error");
+    expect(sources[0]!.closed).toBe(true);
     expect(first.postMessage).toHaveBeenLastCalledWith({ type: "permanent_failure" });
     hub.update(second, request("a"));
     sources[1]!.emit("error");
