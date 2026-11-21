@@ -1738,12 +1738,13 @@ func TestCursorSyncMatchesMembers(t *testing.T) {
 			var account, stamp string
 			require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT account_user_id, account_polled_at FROM cursor_usage_events WHERE model='model-a'`).Scan(&account, &stamp))
 			assert.Equal(t, tc.wantAccount, account)
-			if tc.name == "failed member" {
+			switch tc.name {
+			case "failed member":
 				assert.Equal(t, "2026-07-29T01:00:00.000000Z", stamp)
 				require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT account_user_id, account_polled_at FROM cursor_usage_events WHERE model='new'`).Scan(&account, &stamp))
 				assert.Empty(t, account)
 				assert.Empty(t, stamp)
-			} else if tc.name == "ambiguous" {
+			case "ambiguous":
 				polledAt, err := time.Parse(time.RFC3339Nano, stamp)
 				require.NoError(t, err)
 				assert.True(t, polledAt.After(priorTime))

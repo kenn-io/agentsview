@@ -473,7 +473,9 @@ func reportingHoursFromMachineSource(
 		events = slices.DeleteFunc(slices.Clone(events), func(e activity.ActivityEvent) bool {
 			return source.machineID(sessionByID[e.SessionID].Machine, schemaVersion) != machine
 		})
-		usage = slices.DeleteFunc(slices.Clone(usage), func(u activity.UsageRow) bool { return source.machineID(sessionByID[u.SessionID].Machine, schemaVersion) != machine })
+		usage = slices.DeleteFunc(slices.Clone(usage), func(u activity.UsageRow) bool {
+			return source.machineID(sessionByID[u.SessionID].Machine, schemaVersion) != machine
+		})
 	}
 	var references map[string]export.ProjectReference
 	var groupLabels map[string]string
