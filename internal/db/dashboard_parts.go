@@ -60,16 +60,30 @@ func (m *dashboardPartsMemo) reuse(slot, version string, ids []string, versions 
 func (m *dashboardPartsMemo) store(slot, version string, parts map[string]kept.Part[dashboardPart]) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.slot != slot || m.version != version || m.bytes > kept.DefaultMaxBytes {
+	if m.slot != slot || m.version != version {
 		m.slot, m.version, m.parts, m.bytes = slot, version, make(map[string]kept.Part[dashboardPart], len(parts)), 0
 	}
 	for id, p := range parts {
-		if old, ok := m.parts[id]; ok {
-			m.bytes -= dashboardPartBytes(old)
-		}
-		m.parts[id] = p
-		m.bytes += dashboardPartBytes(p)
+		m.add(id, p)
 	}
+}
+
+// add skips oversized parts and clears earlier entries when a fitting part would exceed the limit.
+func (m *dashboardPartsMemo) add(id string, p kept.Part[dashboardPart]) {
+	if old, ok := m.parts[id]; ok {
+		m.bytes -= dashboardPartBytes(old)
+		delete(m.parts, id)
+	}
+	n := dashboardPartBytes(p)
+	if n > kept.DefaultMaxBytes {
+		return
+	}
+	if m.bytes+n > kept.DefaultMaxBytes {
+		clear(m.parts)
+		m.bytes = 0
+	}
+	m.parts[id] = p
+	m.bytes += n
 }
 
 func dashboardPartBytes(p kept.Part[dashboardPart]) int64 {
