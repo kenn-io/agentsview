@@ -217,7 +217,7 @@ func pruneCallLog(ctx context.Context, dir string, now time.Time) error {
 			continue
 		}
 		if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
+			return fmt.Errorf("remove old MCP call log %q: %w", name, err)
 		}
 	}
 	return nil

@@ -143,13 +143,11 @@ func newServer(opts ServeOptions) *mcp.Server {
 					pruneMu.Lock()
 					now := time.Now().UTC()
 					if day := now.Format("2006-01-02"); day != lastPrunedDay {
+						lastPrunedDay = day
 						// Pruning completes call-log maintenance after request cancellation.
 						pruneCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 						pruneErr = pruneCallLog(pruneCtx, opts.CallLogDir, now)
 						cancel()
-						if pruneErr == nil {
-							lastPrunedDay = day
-						}
 					}
 					pruneMu.Unlock()
 				}
@@ -160,7 +158,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 						if w == nil {
 							w = os.Stderr
 						}
-						_, _ = fmt.Fprintf(w, "Warning: could not record MCP call: %v\n", recordErr)
+						_, _ = fmt.Fprintf(w, "Warning: could not maintain MCP call log: %v\n", recordErr)
 					})
 				}
 			}

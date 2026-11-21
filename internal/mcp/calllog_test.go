@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -128,7 +129,7 @@ func TestCallLogWriteFailureWarns(t *testing.T) {
 	result, err = ct.CallTool(t.Context(), callParams(ToolSearchDocs, map[string]any{"query": "session"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
-	assert.Equal(t, 1, strings.Count(warnings.String(), "could not record MCP call"))
+	assert.Equal(t, 1, strings.Count(warnings.String(), "could not maintain MCP call log"))
 }
 
 func TestCallLogUnknownTool(t *testing.T) {
@@ -307,4 +308,32 @@ func TestCallLogServerPrunesOldFiles(t *testing.T) {
 	require.False(t, result.IsError)
 	_, err = os.Stat(filepath.Join(dir, old+".jsonl"))
 	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestCallLogPruneFailureWarnsOnceAndWrites(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("requires Unix directory permissions")
+	}
+	dir := t.TempDir()
+	old := time.Now().UTC().AddDate(0, 0, -91).Format("2006-01-02") + ".jsonl"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, old), []byte("old\n"), 0600))
+	require.NoError(t, os.Chmod(dir, 0500))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0700) })
+	var warnings bytes.Buffer
+	d := dbtest.OpenTestDB(t)
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), CallLogDir: dir, ErrorWriter: &warnings}))
+	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
+	for range 2 {
+		result, err := ct.CallTool(t.Context(), callParams(ToolSearchDocs, map[string]any{"query": "session"}))
+		require.NoError(t, err)
+		require.False(t, result.IsError)
+	}
+	assert.Equal(t, 1, strings.Count(warnings.String(), "could not maintain MCP call log"))
+	assert.Contains(t, warnings.String(), "remove old MCP call log")
+	_, err := os.Stat(filepath.Join(dir, old))
+	require.NoError(t, err)
+	today := time.Now().UTC().Format("2006-01-02") + ".jsonl"
+	raw, err := os.ReadFile(filepath.Join(dir, today))
+	require.NoError(t, err)
+	assert.Equal(t, 2, bytes.Count(raw, []byte("\n")))
 }
