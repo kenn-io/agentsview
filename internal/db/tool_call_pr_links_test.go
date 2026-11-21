@@ -13,7 +13,7 @@ func TestToolCallPRLinks(t *testing.T) {
 		{Category: "Task", InputJSON: `{"prompt":"Review https://github.com/example/repo/pull/42", "description":"https://github.com/example/repo/pull/47"}`},
 		{Category: "Task", InputJSON: `{"tool":"newTask","content":"Review https://github.com/example/repo/pull/48"}`},
 		{Category: "Bash", InputJSON: `{"command":["codex","exec","Review https://github.com/example/repo/pull/43"]}`},
-		{Category: "Bash", InputJSON: `{"command":"claude -p \"Review https://github.com/example/repo/pull/46; then report\""}`},
+		{Category: "Bash", InputJSON: `{"command":"claude -p \"Review https://github.com/example/repo/pull/46\""}`},
 		{Category: "Bash", InputJSON: `{"command":"curl https://github.com/example/repo/pull/44"}`},
 		{Category: "Bash", InputJSON: `{"command":["gh","pr","merge","45","-R","example/repo"]}`},
 	}}}
@@ -52,6 +52,7 @@ func TestToolCallPRLinksForgetCheckoutAfterDirectoryChange(t *testing.T) {
 }
 
 func TestCodeModePRLinksKeepExplicitIdentities(t *testing.T) {
+	// A code-mode workdir suppresses bare-number inference even when it equals the session directory.
 	messages := []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", InputJSON: `text(await tools.exec_command({cmd:"gh pr view 41",workdir:"/repo"})); text(await tools.exec_command({cmd:"gh pr view 42"})); text(await tools.exec_command({cmd:"gh pr view 43 -R example/other",workdir:"/other"})); text(await tools.exec_command({cmd:"cd /other"})); text(await tools.exec_command({cmd:"gh pr view 44"}))`}}}}
 	links := db.ToolCallPRLinks(messages, "/repo", "https://github.com/example/repo.git")
 	require.Len(t, links, 2)

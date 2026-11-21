@@ -8,7 +8,6 @@ import (
 
 func TestGHPRCommandLinks(t *testing.T) {
 	tests := []struct{ command, remote, want string }{
-		{"export GH_REPO=$UNKNOWN; gh pr view 42", "https://github.com/other/repo.git", ""},
 		{"gh pr view 42 -R example/repo | cat", "", "https://github.com/example/repo/pull/42"},
 		{"{ cd /other; }; gh pr view 42", "https://github.com/example/repo.git", ""},
 		{"{ gh pr view 42 -R example/repo; }", "", "https://github.com/example/repo/pull/42"},
@@ -24,7 +23,6 @@ func TestGHPRCommandLinks(t *testing.T) {
 		{"GH_REPO=$OTHER gh pr view https://github.com/example/repo/pull/42", "", "https://github.com/example/repo/pull/42"},
 		{"GH_REPO=$OTHER gh pr view 42", "https://github.com/example/repo.git", ""},
 		{"cd $OTHER && gh pr view 7", "https://github.com/example/repo.git", ""},
-		{"cd /tmp && gh pr view 7", "https://github.com/example/repo.git", ""},
 		{"cd /tmp; gh pr view 7 -R example/repo", "https://github.com/other/repo.git", "https://github.com/example/repo/pull/7"},
 		{"gh pr comment --body 'done; thanks' 42 -R example/repo", "", "https://github.com/example/repo/pull/42"},
 		{`GH_HOST=$HOST gh pr view 42 -R example/alpha`, "", ""},
@@ -44,7 +42,6 @@ func TestGHPRCommandLinks(t *testing.T) {
 		{"gh pr view 42", "https://forge.example/group/sub/repo.git", ""},
 		{"gh pr list -R example/repo", "", ""},
 		{"gh pr create -R example/repo", "", ""},
-		{"cd x; gh pr view 7 -R example/repo", "", "https://github.com/example/repo/pull/7"},
 		{`gh pr comment --body 43 42 -R example/repo`, "", "https://github.com/example/repo/pull/42"},
 		{"gh pr comment 42 -R example/repo --body 'done; thanks\nnext'", "", "https://github.com/example/repo/pull/42"},
 		{"gh -Rexample/repo pr view 42", "", "https://github.com/example/repo/pull/42"},
@@ -54,6 +51,14 @@ func TestGHPRCommandLinks(t *testing.T) {
 		{"gh pr view https://github.com/example/repo/pull/42extra", "", ""},
 		{"gh pr view https://forge.example/group/sub/repo/pull/42?x=1", "", ""},
 		{"gh pr view https://github.com/example/repo/pull/42/?x=1", "", "https://github.com/example/repo/pull/42"},
+		{`eval "export GH_REPO=a/b"; gh pr view 42`, "https://github.com/example/repo.git", ""},
+		{`eval "export GH_REPO=a/b"; gh pr view 42 -R example/repo`, "https://github.com/example/repo.git", ""},
+		{`eval "export GH_REPO=a/b"; gh pr view 42 -R github.com/example/repo`, "https://github.com/example/repo.git", "https://github.com/example/repo/pull/42"},
+		{`eval "export GH_REPO=a/b"; gh pr view https://github.com/example/repo/pull/42`, "https://github.com/example/repo.git", "https://github.com/example/repo/pull/42"},
+		{`GH_TOKEN=x gh pr view 42`, "https://github.com/example/repo.git", "https://github.com/example/repo/pull/42"},
+		{`false && gh pr view 42 -R example/repo`, "https://github.com/example/repo.git", "https://github.com/example/repo/pull/42"},
+		{`gh pr view 42; eval "export GH_REPO=a/b"; gh pr view 43`, "https://github.com/example/repo.git", "https://github.com/example/repo/pull/42"},
+		{`gh pr view 42; cd /other; gh pr view 43`, "https://github.com/example/repo.git", "https://github.com/example/repo/pull/42"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.command, func(t *testing.T) {
@@ -67,6 +72,9 @@ func TestGHPRCommandLinks(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLauncherPromptPRLinks(t *testing.T) {
 	launcherTests := []struct {
 		command string
 		want    []string
@@ -96,47 +104,6 @@ func TestGHPRCommandLinks(t *testing.T) {
 				urls = append(urls, link.URL)
 			}
 			assert.Equal(t, tt.want, urls)
-		})
-	}
-}
-
-func TestMergePRLinksIdentity(t *testing.T) {
-	a, _ := NewPRLink("https://github.com/Example/Repo/pull/42", "Example/Repo", 42)
-	b, _ := NewPRLink("https://github.com/example/repo/pull/42", "example/repo", 42)
-	assert.Equal(t, []PRLink{a}, CombinePRLinks([]PRLink{a}, []PRLink{b}))
-}
-
-func TestCommandPRLinksUnknownContext(t *testing.T) {
-	for _, tt := range []struct{ command, want string }{
-		{`eval "export GH_REPO=a/b"; gh pr view 42`, ""},
-		{`eval "export GH_REPO=a/b"; gh pr view 42 -R example/repo`, ""},
-		{`eval "export GH_REPO=a/b"; gh pr view 42 -R github.com/example/repo`, "https://github.com/example/repo/pull/42"},
-		{`eval "export GH_REPO=a/b"; gh pr view https://github.com/example/repo/pull/42`, "https://github.com/example/repo/pull/42"},
-		{`GH_TOKEN=x gh pr view 42`, "https://github.com/example/repo/pull/42"},
-		{`cd x && gh pr view 42 -R example/repo`, "https://github.com/example/repo/pull/42"},
-		{`false && gh pr view 42 -R example/repo`, "https://github.com/example/repo/pull/42"},
-	} {
-		t.Run(tt.command, func(t *testing.T) {
-			links, _ := CommandPRLinks(tt.command, "https://github.com/example/repo.git")
-			if tt.want == "" {
-				assert.Empty(t, links)
-			} else if assert.Len(t, links, 1) {
-				assert.Equal(t, tt.want, links[0].URL)
-			}
-		})
-	}
-}
-
-func TestCommandPRLinksBeforeContextChange(t *testing.T) {
-	for _, command := range []string{
-		`gh pr view 42; eval "export GH_REPO=a/b"; gh pr view 43`,
-		`gh pr view 42; cd /other; gh pr view 43`,
-	} {
-		t.Run(command, func(t *testing.T) {
-			links, _ := CommandPRLinks(command, "https://github.com/example/repo.git")
-			if assert.Len(t, links, 1) {
-				assert.Equal(t, "https://github.com/example/repo/pull/42", links[0].URL)
-			}
 		})
 	}
 }

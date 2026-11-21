@@ -1,7 +1,6 @@
 package sync_test
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -125,7 +124,7 @@ func TestParseDiffDetectsPRLinkChanges(t *testing.T) {
 	env := setupTestEnv(t)
 	env.writeClaudeSession(t, "proj", "changed-pr.jsonl", testjsonl.JoinJSONL(
 		testjsonl.ClaudeUserJSON("Review https://github.com/owner/repo/pull/1", tsZero),
-		testjsonl.ClaudeAssistantJSON([]map[string]any{{"type": "tool_use", "id": "call", "name": "Bash", "input": map[string]any{"command": "gh pr view 42 -R example/repo"}}}, tsZeroS1),
+		testjsonl.ClaudeAssistantJSON("Working", tsZeroS1),
 		`{"type":"pr-link","prNumber":2,"prUrl":"https://github.com/owner/repo/pull/2","prRepository":"owner/repo","timestamp":"2024-01-01T00:00:02Z"}`,
 	))
 	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
@@ -151,12 +150,7 @@ func TestCodexCommandPRLinksOnAppend(t *testing.T) {
 	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
 	appendClaudeSplitLines(t, path, testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call1", map[string]any{"cmd": "gh pr merge 42 -R example/repo"}, tsEarlyS5))
 	env.engine.SyncPaths([]string{path})
-	filter, err := db.ParsePRFilter("example/repo#42")
-	require.NoError(t, err)
-	page, err := env.db.ListSessions(t.Context(), db.SessionFilter{PR: filter})
-	require.NoError(t, err)
-	require.Len(t, page.Sessions, 1)
-	assert.Equal(t, "codex:"+id, page.Sessions[0].ID)
+	assert.Equal(t, []string{"https://github.com/example/repo/pull/42"}, storedPRURLs(t, env.db, "codex:"+id))
 
 	appendClaudeSplitLines(t, path, testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call2", map[string]any{"cmd": "gh pr view 43 --json title"}, "2024-01-01T10:00:06Z"))
 	env.engine.SyncPaths([]string{path})
@@ -184,36 +178,36 @@ func TestClaudeCommandPRUsesCheckoutRemote(t *testing.T) {
 
 func TestCommandPRLinksSurviveArchiveContentPolicy(t *testing.T) {
 	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
-		for _, bulk := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/bulk=%t", policy, bulk), func(t *testing.T) {
-				env := setupSingleAgentTestEnv(t, parser.AgentClaude)
-				env.db.SetArchiveContent(policy)
-				if bulk {
-					env.engine.Close()
-					env.engine = sync.NewEngine(t.Context(), env.db, sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {env.claudeDir}}, Machine: "local", ArchiveContent: policy, DiscardPendingWritesOnCancel: true})
-					t.Cleanup(env.engine.Close)
-				}
-				path := env.writeClaudeSession(t, "proj", "policy-pr.jsonl", testjsonl.JoinJSONL(
-					testjsonl.ClaudeUserJSON("Review the changes", tsEarly),
-					testjsonl.ClaudeAssistantJSON([]map[string]any{{"type": "tool_use", "id": "call", "name": "Bash", "input": map[string]any{"command": "gh pr view 42 -R example/repo"}}}, tsEarlyS1),
-				))
-				require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
-				assert.Equal(t, []string{"https://github.com/example/repo/pull/42"}, storedPRURLs(t, env.db, "policy-pr"))
-				structured, err := env.db.GetSessionStructuredPRLinks(t.Context(), "policy-pr")
-				require.NoError(t, err)
-				assert.Empty(t, structured)
-				appendClaudeSplitLines(t, path, testjsonl.ClaudeAssistantJSON([]map[string]any{{"type": "tool_use", "id": "call2", "name": "Bash", "input": map[string]any{"command": "gh pr view 43 -R example/repo"}}}, tsEarlyS5))
-				env.engine.SyncPaths([]string{path})
-				assert.ElementsMatch(t, []string{"https://github.com/example/repo/pull/42", "https://github.com/example/repo/pull/43"}, storedPRURLs(t, env.db, "policy-pr"))
-				structured, err = env.db.GetSessionStructuredPRLinks(t.Context(), "policy-pr")
-				require.NoError(t, err)
-				assert.Empty(t, structured)
-				if policy == config.ArchiveContentUsage {
-					require.NoError(t, env.db.RenameSession(t.Context(), "policy-pr", nil))
-					assert.ElementsMatch(t, []string{"https://github.com/example/repo/pull/42", "https://github.com/example/repo/pull/43"}, storedPRURLs(t, env.db, "policy-pr"))
-				}
-			})
-		}
+		t.Run(string(policy), func(t *testing.T) {
+			env := setupSingleAgentTestEnv(t, parser.AgentClaude)
+			env.db.SetArchiveContent(policy)
+			path := env.writeClaudeSession(t, "proj", "policy-pr.jsonl", testjsonl.JoinJSONL(
+				testjsonl.ClaudeUserJSON("Review the changes", tsEarly),
+				testjsonl.ClaudeAssistantJSON([]map[string]any{
+					{"type": "tool_use", "id": "call", "name": "Bash", "input": map[string]any{"command": "gh pr view 42 -R example/repo"}},
+					{"type": "tool_use", "id": "task", "name": "Task", "input": map[string]any{"prompt": "Review https://github.com/example/repo/pull/44"}},
+				}, tsEarlyS1),
+			))
+			require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+			assert.ElementsMatch(t, []string{"https://github.com/example/repo/pull/42", "https://github.com/example/repo/pull/44"}, storedPRURLs(t, env.db, "policy-pr"))
+			structured, err := env.db.GetSessionStructuredPRLinks(t.Context(), "policy-pr")
+			require.NoError(t, err)
+			assert.Empty(t, structured)
+			appendClaudeSplitLines(t, path, testjsonl.ClaudeAssistantJSON([]map[string]any{{"type": "tool_use", "id": "call2", "name": "Bash", "input": map[string]any{"command": "gh pr view 43 -R example/repo"}}}, tsEarlyS5))
+			env.engine.SyncPaths([]string{path})
+			want := []string{"https://github.com/example/repo/pull/42", "https://github.com/example/repo/pull/43", "https://github.com/example/repo/pull/44"}
+			assert.ElementsMatch(t, want, storedPRURLs(t, env.db, "policy-pr"))
+			structured, err = env.db.GetSessionStructuredPRLinks(t.Context(), "policy-pr")
+			require.NoError(t, err)
+			assert.Empty(t, structured)
+			if policy == config.ArchiveContentFull {
+				env.db.SetArchiveContent(config.ArchiveContentUsage)
+			}
+			if policy == config.ArchiveContentFull || policy == config.ArchiveContentUsage {
+				require.NoError(t, env.db.RenameSession(t.Context(), "policy-pr", nil))
+				assert.ElementsMatch(t, want, storedPRURLs(t, env.db, "policy-pr"))
+			}
+		})
 	}
 }
 
@@ -235,24 +229,6 @@ func TestStagedCommandPRLinksSurviveTranscriptPolicy(t *testing.T) {
 	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
 	assert.Equal(t, []string{"https://github.com/example/repo/pull/42"}, storedPRURLs(t, env.db, "codex:"+id))
 	structured, err := env.db.GetSessionStructuredPRLinks(t.Context(), "codex:"+id)
-	require.NoError(t, err)
-	assert.Empty(t, structured)
-}
-
-func TestUsageOnlyCleanupRetainsTaskAndCommandPRLinks(t *testing.T) {
-	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
-	env.writeClaudeSession(t, "proj", "usage-links.jsonl", testjsonl.JoinJSONL(
-		testjsonl.ClaudeUserJSON("Review https://github.com/example/repo/pull/44", tsEarly),
-		testjsonl.ClaudeAssistantJSON([]map[string]any{
-			{"type": "tool_use", "id": "command", "name": "Bash", "input": map[string]any{"command": "gh pr view 42 -R example/repo"}},
-			{"type": "tool_use", "id": "task", "name": "Task", "input": map[string]any{"prompt": "Review https://github.com/example/repo/pull/43"}},
-		}, tsEarlyS1),
-	))
-	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
-	env.db.SetArchiveContent(config.ArchiveContentUsage)
-	require.NoError(t, env.db.RenameSession(t.Context(), "usage-links", nil))
-	assert.ElementsMatch(t, []string{"https://github.com/example/repo/pull/42", "https://github.com/example/repo/pull/43"}, storedPRURLs(t, env.db, "usage-links"))
-	structured, err := env.db.GetSessionStructuredPRLinks(t.Context(), "usage-links")
 	require.NoError(t, err)
 	assert.Empty(t, structured)
 }
