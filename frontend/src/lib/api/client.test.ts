@@ -856,6 +856,22 @@ describe("live event payloads", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each(["closed", "permanent_failure"])("exposes %s as a closed stream", async (type) => {
+    let port!: MessagePort;
+    class Worker {
+      port = { start() {}, postMessage() {}, onmessage: null } as unknown as MessagePort;
+      constructor() { port = this.port; }
+    }
+    vi.stubGlobal("SharedWorker", Worker);
+    const { watchEvents } = await import("./client.js");
+    const onPermanentFailure = vi.fn();
+    const source = watchEvents(() => {}, { onPermanentFailure });
+    port.onmessage?.(new MessageEvent("message", { data: { type } }));
+    expect(source.readyState).toBe(2);
+    expect(onPermanentFailure).toHaveBeenCalledTimes(type === "permanent_failure" ? 1 : 0);
+    source.close();
+  });
+
   it("refreshes the pinned server token on storage changes and page return", async () => {
     const postMessage = vi.fn();
     class Worker {

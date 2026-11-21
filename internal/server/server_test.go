@@ -5616,6 +5616,8 @@ func TestEvents_StreamsSessionsAndArchive(t *testing.T) {
 	done := make(chan struct{})
 	go func() { te.handler.ServeHTTP(w, req); close(done) }()
 	te.waitForSSEEvent(t, w, "events_ready", 5*time.Second)
+	te.waitForSSEEvent(t, w, "session.timing", 5*time.Second)
+	assert.Contains(t, w.BodyString(), `"session_id":"watch-a"`)
 	assert.Contains(t, w.BodyString(), "event: session_ready\ndata: watch-a\n")
 	assert.Contains(t, w.BodyString(), "event: session_ready\ndata: watch-b\n")
 	assert.Contains(t, w.BodyString(), "event: session_missing\ndata: missing\n")

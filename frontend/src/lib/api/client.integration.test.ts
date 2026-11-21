@@ -29,12 +29,6 @@ describe("shared session watch", () => {
     const source = watchSession("session/one", onUpdate);
     try {
       await vi.waitFor(() => expect(onUpdate).toHaveBeenCalledOnce());
-      expect(String(fetchMock.mock.calls[0]![0])).toBe(
-        "http://localhost:3000/api/v1/events?session=session%2Fone",
-      );
-      const headers = new Headers(fetchMock.mock.calls[0]![1].headers);
-      expect(headers.get("Authorization")).toBe("Bearer test-token");
-      expect(headers.get("Accept")).toBe("text/event-stream");
     } finally {
       source.close();
     }

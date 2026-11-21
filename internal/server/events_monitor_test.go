@@ -26,14 +26,6 @@ func (s *watchStateStore) GetSessionWatchState(string) (db.SessionWatchState, er
 	return s.state.Load().(db.SessionWatchState), nil
 }
 
-func (s *watchStateStore) GetSession(ctx context.Context, id string) (*db.Session, error) {
-	state := s.state.Load().(db.SessionWatchState)
-	if state.State != db.SessionWatchResolved {
-		return nil, &db.SessionIdentityError{State: state.State}
-	}
-	return s.Store.GetSession(ctx, id)
-}
-
 func TestEvents_ReconnectsAfterHostedMonitorCloses(t *testing.T) {
 	t.Cleanup(sessionwatch.SetTimingsForTest(25*time.Millisecond, 50*time.Millisecond))
 	te := setup(t)
