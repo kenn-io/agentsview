@@ -117,7 +117,7 @@ func TestNewServer_Instructions(t *testing.T) {
 			assert.Contains(t, instructions, "list_sessions with pr=owner/repo#N, include_one_shot true, include_automated true, and limit 100; page with next_cursor as cursor")
 			assert.Contains(t, instructions, "four search_content regex calls")
 			assert.Contains(t, instructions, `PR N\b, pr N\b, #N\b, and /pull/N\b`)
-			assert.Contains(t, instructions, "include_active, include_one_shot, and include_automated true, limit 50, and current_session_id")
+			assert.Contains(t, instructions, "include_active, include_one_shot, and include_automated to true, limit to 50, and current_session_id")
 			assert.Contains(t, instructions, "Deduplicate session IDs, ignore the lookup conversation, and confirm repository and work evidence")
 			assert.Contains(t, instructions, "get_session_overview to compare activity and parent; follow a child to its parent, then choose the newest valid top-level session")
 			assert.Contains(t, instructions, `For a full PR URL, use /pull/N\b regex`)

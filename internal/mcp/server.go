@@ -57,7 +57,7 @@ var routeInstructions = "\nFind sessions by topic: use " + ToolSearchContent + "
 	"Find a named session: use " + ToolSearchSessions + " with its name as query.\n" +
 	"Find who owns a PR or task:\n" +
 	"Use " + ToolListSessions + " with pr=owner/repo#N, include_one_shot true, include_automated true, and limit 100; page with next_cursor as cursor.\n" +
-	"Search tool results with four " + ToolSearchContent + " regex calls: PR N\\b, pr N\\b, #N\\b, and /pull/N\\b. For each, set include_active, include_one_shot, and include_automated true, limit 50, and current_session_id when known; page with next_cursor as cursor. For a full PR URL, use /pull/N\\b regex. For a task ID, use substring.\n" +
+	"Search tool results with four " + ToolSearchContent + " regex calls: PR N\\b, pr N\\b, #N\\b, and /pull/N\\b. For each, set include_active, include_one_shot, and include_automated to true, limit to 50, and current_session_id when known; page with next_cursor as cursor. For a full PR URL, use /pull/N\\b regex. For a task ID, use substring.\n" +
 	"Deduplicate session IDs, ignore the lookup conversation, and confirm repository and work evidence. Use " + ToolGetSessionOverview + " to compare activity and parent; follow a child to its parent, then choose the newest valid top-level session.\n" +
 	"See what a session did: use " + ToolGetSessionOverview + ", then " + ToolGetToolCalls + ", " + ToolGetMessages + ", or " + ToolGetChildSessions + ".\n" +
 	"Find recently active sessions: use " + ToolListSessions + " with active_since as an RFC3339 timestamp.\n" +
