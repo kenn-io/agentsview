@@ -168,20 +168,54 @@ func (t *toolset) toolCalls(
 		})
 		if n == 0 {
 			out.Omitted = len(items) - 1
-			first, resultChars := matching[start], clampLimit(in.MaxResultChars, 1000, 10000)
-			fitPrefix(max(maxChars, resultChars), func(k int) bool {
-				narrow := in
-				narrow.MaxResultChars = min(resultChars, max(k, 1))
-				call, _ := toolCallPage(first.ToolCall, first.position, results[first.Ordinal], narrow, min(maxChars, max(k, 1)))
-				out.ToolCalls = []toolCallOut{call}
-				return fitsResponse(out)
-			})
-			if !fitsResponse(out) {
+			first := matching[start]
+			if !fitToolCall(&out, first.ToolCall, first.position, results[first.Ordinal], in, maxChars) {
 				return nil, toolCallsOut{}, errors.New("tool call metadata exceeds response budget")
 			}
 		}
 	}
 	return nil, out, nil
+}
+
+// fitToolCall searches between result lengths where continuation fields change.
+func fitToolCall(out *toolCallsOut, tc service.ToolCall, position int, m db.Message, in toolCallsIn, maxInput int) bool {
+	maxResult := clampLimit(in.MaxResultChars, 1000, 10000)
+	boundaries := []int{1, maxResult + 1}
+	if in.IncludeResults {
+		stored := m.ToolCalls[position]
+		for _, ev := range stored.ResultEvents {
+			n := utf8.RuneCountInString(secrets.RedactJSON(ev.Content))
+			if n > 1 && n <= maxResult {
+				boundaries = append(boundaries, n)
+			}
+		}
+		n := utf8.RuneCountInString(secrets.RedactJSON(stored.ResultContent))
+		if n > 1 && n <= maxResult {
+			boundaries = append(boundaries, n)
+		}
+	}
+	slices.Sort(boundaries)
+	best := 0
+	build := func(resultChars, inputChars int) bool {
+		narrow := in
+		narrow.MaxResultChars = resultChars
+		call, _ := toolCallPage(tc, position, m, narrow, inputChars)
+		out.ToolCalls = []toolCallOut{call}
+		return fitsResponse(out)
+	}
+	for i := 0; i+1 < len(boundaries); i++ {
+		lo, hi := boundaries[i], boundaries[i+1]-1
+		if lo > hi || !build(lo, 1) {
+			continue
+		}
+		k := fitPrefix(hi-lo, func(k int) bool { return build(lo+k, 1) })
+		best = lo + k
+	}
+	if best == 0 {
+		return false
+	}
+	fitPrefix(maxInput-1, func(k int) bool { return build(best, k+1) })
+	return true
 }
 
 func (t *toolset) toolResultContinuation(ctx context.Context, in toolCallsIn) (*mcp.CallToolResult, toolCallsOut, error) {
