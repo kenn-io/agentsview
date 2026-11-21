@@ -4,6 +4,7 @@
 package mcp
 
 import (
+	"encoding/json"
 	"slices"
 	"time"
 
@@ -11,6 +12,8 @@ import (
 )
 
 const (
+	responseBudgetBytes = 12_000
+
 	// activeExclusionWindow is how recently a session must have been
 	// active for search tools to exclude it by default. This keeps an
 	// agent from retrieving its own in-progress conversation (which
@@ -83,4 +86,10 @@ func roleAllowed(role string, roles []string) bool {
 		return role == "user" || role == "assistant"
 	}
 	return slices.Contains(roles, role)
+}
+
+// fitsResponse measures the same JSON encoding used by the MCP SDK text block.
+func fitsResponse(out any) bool {
+	data, err := json.Marshal(out)
+	return err == nil && len(data) <= responseBudgetBytes
 }

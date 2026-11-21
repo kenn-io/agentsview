@@ -518,8 +518,10 @@ type messageOut struct {
 }
 
 type getMessagesOut struct {
-	Messages []messageOut `json:"messages"`
-	Filtered int          `json:"filtered,omitempty" jsonschema:"How many of this page's scanned messages were excluded by the role/system filter (omitted when zero). Summed across a full pagination sweep, filtered plus the returned messages adds up to the session's message_count."`
+	Messages     []messageOut `json:"messages"`
+	Omitted      int          `json:"omitted,omitempty" jsonschema:"Messages held back."`
+	MessageCount int          `json:"message_count,omitempty" jsonschema:"Session message count when cut."`
+	Filtered     int          `json:"filtered,omitempty" jsonschema:"How many of this page's scanned messages were excluded by the role/system filter (omitted when zero). Summed across a full pagination sweep, filtered plus the returned messages adds up to the session's message_count."`
 	// NextFrom is set off the last scanned ordinal (not the last visible
 	// one), so paging stays reliable even though filtering can make a page
 	// return fewer than the limit.
@@ -638,7 +640,9 @@ func (t *toolset) getMessages(
 			out.NextFrom = &next
 		}
 	}
-	attachBodyCursors(&out, res.EvidenceSource, in.SessionID, in.Roles)
+	if err := t.fitMessagePage(ctx, &out, res.Messages, res.EvidenceSource, in); err != nil {
+		return nil, getMessagesOut{}, err
+	}
 	return nil, out, nil
 }
 
@@ -692,8 +696,76 @@ func (t *toolset) getMessagesAround(
 		next := out.Messages[len(out.Messages)-1].Ordinal + 1
 		out.NextFrom = &next
 	}
-	attachBodyCursors(&out, res.EvidenceSource, in.SessionID, in.Roles)
+	if err := t.fitMessagePage(ctx, &out, res.Messages, res.EvidenceSource, in); err != nil {
+		return nil, getMessagesOut{}, err
+	}
 	return nil, out, nil
+}
+
+// fitMessagePage keeps the scan cursor and filtered count aligned with the
+// visible prefix when the response budget holds messages back.
+func (t *toolset) fitMessagePage(ctx context.Context, out *getMessagesOut, scanned []db.Message, source string, in getMessagesIn) error {
+	original := append([]messageOut(nil), out.Messages...)
+	base := *out
+	attachBodyCursors(out, source, in.SessionID, in.Roles)
+	if fitsResponse(out) {
+		return nil
+	}
+	detail, err := t.svc.Get(ctx, in.SessionID)
+	if err != nil {
+		return err
+	}
+	if detail == nil {
+		return fmt.Errorf("session not found: %s", in.SessionID)
+	}
+	for n := len(original); n > 0; n-- {
+		*out = base
+		out.Messages = append([]messageOut(nil), original[:n]...)
+		out.Omitted = len(original) - n
+		out.MessageCount = detail.MessageCount
+		if n < len(original) {
+			out.Filtered = 0
+			for _, m := range scanned {
+				if m.Ordinal == out.Messages[n-1].Ordinal {
+					break
+				}
+				if isSystemMessage(m) || !roleAllowed(m.Role, in.Roles) {
+					out.Filtered++
+				}
+			}
+			next := out.Messages[n-1].Ordinal + 1
+			if in.Direction == "desc" {
+				next = out.Messages[n-1].Ordinal - 1
+			}
+			out.NextFrom = &next
+		}
+		attachBodyCursors(out, source, in.SessionID, in.Roles)
+		if fitsResponse(out) {
+			return nil
+		}
+		if n == 1 {
+			m := &out.Messages[0]
+			for !fitsResponse(out) && len(m.Content) > 0 {
+				runes := []rune(m.Content)
+				m.Content = string(runes[:len(runes)/2])
+				m.Truncated = true
+				if m.FullLength == 0 {
+					m.FullLength = utf8.RuneCountInString(original[0].Content)
+				}
+				out.NextFrom = base.NextFrom
+				if out.Omitted > 0 {
+					next := m.Ordinal + 1
+					if in.Direction == "desc" {
+						next = m.Ordinal - 1
+					}
+					out.NextFrom = &next
+				}
+				attachBodyCursors(out, source, in.SessionID, in.Roles)
+			}
+			return nil
+		}
+	}
+	return nil
 }
 
 func attachBodyCursors(
@@ -776,11 +848,21 @@ func (t *toolset) getMessageBodyContinuation(
 		FullLength: len(runes), Truncated: end < len(runes),
 	}
 	out := getMessagesOut{Messages: []messageOut{mo}, TranscriptRevision: res.TranscriptRevision}
-	if end < len(runes) {
-		cursor.Offset = end
-		out.Messages[0].BodyCursor = encodeMessageBodyCursor(cursor)
-	} else {
-		out.NextFrom = cursor.NextFrom
+	for {
+		if end < len(runes) {
+			cursor.Offset = end
+			out.Messages[0].BodyCursor = encodeMessageBodyCursor(cursor)
+		} else {
+			out.NextFrom = cursor.NextFrom
+		}
+		if fitsResponse(out) || end <= cursor.Offset && len(out.Messages[0].Content) == 0 {
+			break
+		}
+		chunk := []rune(out.Messages[0].Content)
+		end -= len(chunk) - len(chunk)/2
+		out.Messages[0].Content = string(chunk[:len(chunk)/2])
+		out.Messages[0].Truncated = true
+		out.NextFrom = nil
 	}
 	return nil, out, nil
 }
@@ -788,6 +870,7 @@ func (t *toolset) getMessageBodyContinuation(
 // --- search_content ---
 
 type searchContentIn struct {
+	PageCursor       string   `json:"page_cursor,omitempty" jsonschema:"Ranked continuation; pass alone."`
 	Pattern          string   `json:"pattern,omitempty" jsonschema:"Semantic/hybrid query, whitespace-separated literals for terms, substring, or regex over messages, thinking, and tools. Required unless concepts or session_id is set. Fully quoted substring matches exact text. Mutually exclusive with concepts."`
 	Concepts         []string `json:"concepts,omitempty" jsonschema:"Two to five concepts with evidence in the same session, possibly across messages. Always uses semantic mode, does not page, and is mutually exclusive with pattern."`
 	Mode             string   `json:"mode,omitempty" jsonschema:"substring (default), regex, terms, semantic, or hybrid. Prefer hybrid for contextual questions. Hybrid returns keyword matches with a note when search by meaning is unavailable; semantic requires a ready index."`
@@ -850,16 +933,25 @@ type contentMatch struct {
 	// ContextBefore/ContextAfter are populated when Context > 0: the N
 	// messages immediately before/after this match, content truncated to
 	// 500 characters.
+	ContextTruncated   bool                 `json:"context_truncated,omitempty" jsonschema:"Read omitted context with get_messages."`
 	ContextBefore      []contextMessage     `json:"context_before,omitempty"`
 	ContextAfter       []contextMessage     `json:"context_after,omitempty"`
 	TranscriptRevision string               `json:"transcript_revision,omitempty" jsonschema:"Transcript revision observed with this evidence; pass it as expected_revision to get_messages."`
 	ConceptEvidence    []db.ConceptEvidence `json:"concept_evidence,omitempty" jsonschema:"With concepts: each concept's strongest match in this session, in request order. score is then the mean of these scores."`
 }
 
+type searchPageCursor struct {
+	Input  searchContentIn `json:"i"`
+	Offset int             `json:"o"`
+}
+
 type searchContentOut struct {
 	Note           string                      `json:"note,omitempty"`
 	Hints          []service.ContentSearchHint `json:"hints,omitempty"`
 	Matches        []contentMatch              `json:"matches"`
+	Omitted        int                         `json:"omitted,omitempty" jsonschema:"Matches held back."`
+	PageTotal      int                         `json:"page_total,omitempty" jsonschema:"Matches in the backend page when cut."`
+	PageCursor     string                      `json:"page_cursor,omitempty" jsonschema:"Pass alone to continue."`
 	NextCursor     *int                        `json:"next_cursor,omitempty"`
 	ActivityCutoff string                      `json:"activity_cutoff,omitempty" jsonschema:"Effective RFC3339 activity cutoff; pass it unchanged with next_cursor as cursor to continue."`
 	ExcludedActive int                         `json:"excluded_active,omitempty"`
@@ -916,6 +1008,22 @@ func validateSearchDates(from, to string) error {
 func (t *toolset) searchContent(
 	ctx context.Context, _ *mcp.CallToolRequest, in searchContentIn,
 ) (*mcp.CallToolResult, searchContentOut, error) {
+	offset := 0
+	if in.PageCursor != "" {
+		raw := in.PageCursor
+		in.PageCursor = ""
+		data, _ := json.Marshal(in)
+		empty, _ := json.Marshal(searchContentIn{})
+		if string(data) != string(empty) {
+			return nil, searchContentOut{}, errors.New("page_cursor must be passed alone")
+		}
+		decoded, err := base64.RawURLEncoding.DecodeString(raw)
+		var cursor searchPageCursor
+		if err != nil || json.Unmarshal(decoded, &cursor) != nil || cursor.Offset <= 0 || cursor.Input.PageCursor != "" || (cursor.Input.Mode != "semantic" && cursor.Input.Mode != "hybrid") || len(cursor.Input.Concepts) != 0 {
+			return nil, searchContentOut{}, errors.New("invalid page_cursor")
+		}
+		in, offset = cursor.Input, cursor.Offset
+	}
 	if in.Cursor < 0 {
 		return nil, searchContentOut{}, errors.New("cursor must not be negative")
 	}
@@ -1024,11 +1132,16 @@ func (t *toolset) searchContent(
 			return !isActiveSince(ts, cutoffTime.Add(activeExclusionWindow))
 		}
 	}
-	for _, m := range res.Matches {
+	rawIndexes := make([]int, 0, len(res.Matches))
+	for i, m := range res.Matches {
+		if i < offset {
+			continue
+		}
 		if legacy && !keepMatch(m) {
 			out.ExcludedActive++
 			continue
 		}
+		rawIndexes = append(rawIndexes, i)
 		out.Matches = append(out.Matches, contentMatch{
 			WebURL: m.WebURL, SessionID: m.SessionID, Project: m.Project, Agent: m.Agent,
 			Location: m.Location, Role: m.Role, Ordinal: m.Ordinal,
@@ -1048,6 +1161,49 @@ func (t *toolset) searchContent(
 		out.NextCursor = &nc
 	}
 	out.Hints = service.SearchContentHints(ctx, t.svc, req, res, false, keepMatch)
+	if len(in.Concepts) == 0 && !fitsResponse(out) && len(out.Matches) > 0 {
+		original := len(out.Matches)
+		pageTotal := original
+		for _, m := range res.Matches[:min(offset, len(res.Matches))] {
+			if !legacy || keepMatch(m) {
+				pageTotal++
+			}
+		}
+		for n := original - 1; n > 0; n-- {
+			out.Matches = out.Matches[:n]
+			out.Omitted = original - n
+			out.PageTotal = pageTotal
+			out.ExcludedActive = 0
+			for _, m := range res.Matches[offset : rawIndexes[n-1]+1] {
+				if legacy && !keepMatch(m) {
+					out.ExcludedActive++
+				}
+			}
+			if mode == "semantic" || mode == "hybrid" {
+				in.ActivityCutoff = cutoff
+				data, _ := json.Marshal(searchPageCursor{Input: in, Offset: rawIndexes[n-1] + 1})
+				out.PageCursor = base64.RawURLEncoding.EncodeToString(data)
+				out.NextCursor = nil
+			} else {
+				next := in.Cursor + rawIndexes[n-1] + 1
+				out.NextCursor = &next
+			}
+			if fitsResponse(out) {
+				break
+			}
+		}
+		if !fitsResponse(out) {
+			m := &out.Matches[0]
+			for !fitsResponse(out) && (len(m.ContextBefore) > 0 || len(m.ContextAfter) > 0) {
+				if len(m.ContextAfter) > 0 {
+					m.ContextAfter = m.ContextAfter[:len(m.ContextAfter)-1]
+				} else {
+					m.ContextBefore = m.ContextBefore[1:]
+				}
+				m.ContextTruncated = true
+			}
+		}
+	}
 	return nil, out, nil
 }
 

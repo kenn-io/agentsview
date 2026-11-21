@@ -308,3 +308,47 @@ func TestRedactToolInput_MasksEscapedPrivateKey(t *testing.T) {
 	assert.NotContains(t, plain, "AKIA7QHWN2DKR4FYPLJM")
 	assert.Contains(t, plain, "not json")
 }
+
+func TestGetToolCalls_BudgetPages(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "budget-calls", "proj")
+	messages := make([]db.Message, 0, 200)
+	for i := range 200 {
+		messages = append(messages, toolCallMsg("budget-calls", i, db.ToolCall{ToolName: "Bash", Category: "Bash", InputJSON: strings.Repeat("x", 5000)}))
+	}
+	dbtest.SeedMessages(t, d, messages...)
+	in := toolCallsIn{SessionID: "budget-calls", Limit: 200, MaxInputChars: 10000}
+	var ordinals []int
+	for {
+		_, out, err := ts.toolCalls(t.Context(), nil, in)
+		require.NoError(t, err)
+		assert.True(t, fitsResponse(out))
+		assert.Equal(t, 200, out.Total)
+		for _, call := range out.ToolCalls {
+			ordinals = append(ordinals, call.Ordinal)
+		}
+		if out.NextCursor == nil {
+			break
+		}
+		in.Cursor = *out.NextCursor
+	}
+	require.Len(t, ordinals, 200)
+	for i, ordinal := range ordinals {
+		assert.Equal(t, i, ordinal)
+	}
+}
+
+func TestGetToolCalls_BudgetOversizedInput(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "large-input", "proj")
+	dbtest.SeedMessages(t, d, toolCallMsg("large-input", 0, db.ToolCall{ToolName: "Bash", Category: "Bash", InputJSON: strings.Repeat("<", 10000)}))
+	_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "large-input", MaxInputChars: 10000})
+	require.NoError(t, err)
+	require.Len(t, out.ToolCalls, 1)
+	assert.True(t, fitsResponse(out))
+	assert.True(t, out.ToolCalls[0].InputTruncated)
+	_, messages, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "large-input", From: &out.ToolCalls[0].Ordinal})
+	require.NoError(t, err)
+	require.Len(t, messages.Messages, 1)
+	assert.Equal(t, out.ToolCalls[0].Ordinal, messages.Messages[0].Ordinal)
+}

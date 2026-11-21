@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
@@ -634,23 +633,20 @@ func TestGetMessages_BodyCursorContinuesPastMaximumChunk(t *testing.T) {
 		dbtest.UserMsg("oversized", 0, body),
 	}, dbtest.WithMessageCounts(1, 1))
 
-	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{
-		SessionID: "oversized", MaxCharsPerMessage: maxMaxCharsPerMessage,
-	})
-	require.NoError(t, err)
-	require.Len(t, first.Messages, 1)
-	assert.Equal(t, maxMaxCharsPerMessage, utf8.RuneCountInString(first.Messages[0].Content))
-	assert.Equal(t, maxMaxCharsPerMessage+5, first.Messages[0].FullLength)
-	require.NotEmpty(t, first.Messages[0].BodyCursor)
-
-	_, rest, err := ts.getMessages(t.Context(), nil, getMessagesIn{
-		SessionID: "oversized", BodyCursor: first.Messages[0].BodyCursor,
-		MaxCharsPerMessage: maxMaxCharsPerMessage,
-	})
-	require.NoError(t, err)
-	require.Len(t, rest.Messages, 1)
-	assert.Equal(t, strings.Repeat("界", 5), rest.Messages[0].Content)
-	assert.False(t, rest.Messages[0].Truncated)
+	in := getMessagesIn{SessionID: "oversized", MaxCharsPerMessage: maxMaxCharsPerMessage}
+	var got strings.Builder
+	for {
+		_, out, err := ts.getMessages(t.Context(), nil, in)
+		require.NoError(t, err)
+		require.Len(t, out.Messages, 1)
+		assert.True(t, fitsResponse(out))
+		got.WriteString(out.Messages[0].Content)
+		in.BodyCursor = out.Messages[0].BodyCursor
+		if in.BodyCursor == "" {
+			break
+		}
+	}
+	assert.Equal(t, body, got.String())
 }
 
 func TestGetMessages_BodyCursorRejectsChangedTranscript(t *testing.T) {
@@ -2317,4 +2313,127 @@ func TestListRecallPagesWithEvidenceAndSourceSessionFilter(t *testing.T) {
 	filtered := decodeStructured[listRecallOut](t, res)
 	require.Len(t, filtered.Entries, 1)
 	assert.Equal(t, "s2", filtered.Entries[0].SourceSessionID)
+}
+
+func TestGetMessages_BudgetPages(t *testing.T) {
+	ts, d := newTestToolset(t)
+	messages := make([]db.Message, 0, 101)
+	for i := range 100 {
+		messages = append(messages, dbtest.UserMsg("budget", i, strings.Repeat("x", 2000)))
+	}
+	messages = append(messages, db.Message{SessionID: "budget", Ordinal: 100, Role: "system", Content: "hidden", IsSystem: true})
+	dbtest.SeedSessionWithMessages(t, d, "budget", "proj", messages, dbtest.WithMessageCounts(101, 100))
+	for _, direction := range []string{"asc", "desc"} {
+		t.Run(direction, func(t *testing.T) {
+			in := getMessagesIn{SessionID: "budget", Limit: 100, Direction: direction}
+			var ordinals []int
+			filtered := 0
+			for {
+				_, out, err := ts.getMessages(t.Context(), nil, in)
+				require.NoError(t, err)
+				assert.True(t, fitsResponse(out))
+				filtered += out.Filtered
+				if out.Omitted > 0 {
+					assert.Equal(t, 101, out.MessageCount)
+				}
+				for _, m := range out.Messages {
+					ordinals = append(ordinals, m.Ordinal)
+				}
+				if out.NextFrom == nil {
+					break
+				}
+				in.From = out.NextFrom
+			}
+			require.Len(t, ordinals, 100)
+			for i, ordinal := range ordinals {
+				want := i
+				if direction == "desc" {
+					want = 99 - i
+				}
+				assert.Equal(t, want, ordinal)
+			}
+			assert.Equal(t, 101, len(ordinals)+filtered)
+		})
+	}
+	anchor, before, after := 50, 50, 49
+	_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "budget", Around: &anchor, Before: &before, After: &after})
+	require.NoError(t, err)
+	assert.True(t, fitsResponse(out))
+	assert.Positive(t, out.Omitted)
+}
+
+func TestSearchContent_BudgetRankedPages(t *testing.T) {
+	matches := make([]db.ContentMatch, 20)
+	for i := range matches {
+		matches[i] = db.ContentMatch{SessionID: "session", Ordinal: i, Snippet: strings.Repeat("x", 1800)}
+	}
+	fake := &fakeContentSearchService{result: &service.ContentSearchResult{Matches: matches}}
+	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+	in := searchContentIn{Pattern: "needle", Mode: "semantic", Project: "project", IncludeActive: true, Limit: 20}
+	var ordinals []int
+	for {
+		_, out, err := ts.searchContent(t.Context(), nil, in)
+		require.NoError(t, err)
+		assert.True(t, fitsResponse(out))
+		for _, m := range out.Matches {
+			ordinals = append(ordinals, m.Ordinal)
+		}
+		if out.PageCursor == "" {
+			break
+		}
+		assert.Positive(t, out.Omitted)
+		in = searchContentIn{PageCursor: out.PageCursor}
+	}
+	require.Len(t, ordinals, 20)
+	for i, ordinal := range ordinals {
+		assert.Equal(t, i, ordinal)
+	}
+	assert.Equal(t, "project", fake.lastReq.Project)
+}
+
+func TestSearchContent_BudgetLexicalPages(t *testing.T) {
+	ts, d := newTestToolset(t)
+	messages := make([]db.Message, 50)
+	for i := range messages {
+		messages[i] = dbtest.UserMsg("search-budget", i, "needle "+strings.Repeat("x", 500))
+	}
+	dbtest.SeedSessionWithMessages(t, d, "search-budget", "proj", messages, dbtest.WithMessageCounts(50, 50))
+	in := searchContentIn{Pattern: "needle", Limit: 50, Context: 10, IncludeActive: true, IncludeOneShot: true}
+	var ordinals []int
+	for {
+		_, out, err := ts.searchContent(t.Context(), nil, in)
+		require.NoError(t, err)
+		assert.True(t, fitsResponse(out))
+		for _, match := range out.Matches {
+			ordinals = append(ordinals, match.Ordinal)
+		}
+		if out.NextCursor == nil {
+			break
+		}
+		in.Cursor = *out.NextCursor
+	}
+	require.Len(t, ordinals, 50)
+	assert.Len(t, uniqueOrdinals(ordinals), 50)
+}
+
+func uniqueOrdinals(ordinals []int) map[int]bool {
+	seen := make(map[int]bool, len(ordinals))
+	for _, ordinal := range ordinals {
+		seen[ordinal] = true
+	}
+	return seen
+}
+
+func TestSearchContent_BudgetTruncatesContext(t *testing.T) {
+	context := make([]db.Message, 10)
+	for i := range context {
+		context[i] = db.Message{Ordinal: i, Role: "user", Content: strings.Repeat("<", 500)}
+	}
+	fake := &fakeContentSearchService{result: &service.ContentSearchResult{Matches: []db.ContentMatch{{SessionID: "session", Ordinal: 10, Snippet: "needle", ContextBefore: context, ContextAfter: context}}}}
+	ts := &toolset{svc: fake}
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", IncludeActive: true, Context: 10})
+	require.NoError(t, err)
+	require.Len(t, out.Matches, 1)
+	assert.True(t, fitsResponse(out))
+	assert.True(t, out.Matches[0].ContextTruncated)
 }

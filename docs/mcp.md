@@ -333,6 +333,16 @@ for semantic and hybrid searches or when activity filtering or candidate limits
 prevent an exact count. Failed probes add no hint. Default scope already
 includes child sessions.
 
+Pattern searches, `get_messages`, and `get_tool_calls` cap the JSON text of
+each response at 12,000 bytes. When that cuts a page, `omitted` counts the
+items held back. A cut search reports `page_total` for the fetched backend
+page. A cut message page reports the session's `message_count`; tool calls
+always report `total`. Continue messages with `next_from`, and tool calls with
+`next_cursor`. If a ranked pattern search returns `page_cursor`, pass it alone
+to continue that page. Search context marked `context_truncated` can be read
+with `get_messages`. A tool call marked `input_truncated` can be read at its
+ordinal with `get_messages`.
+
 `next_cursor` is present when another page exists. To continue `search_content`,
 pass `next_cursor` as the numeric `cursor` and echo the returned RFC3339
 `activity_cutoff` unchanged. The cutoff keeps the recent-activity exclusion
@@ -355,7 +365,7 @@ between, the read returns `source_changed`; repeat the search and use the new
 citation.
 
 `get_messages` returns the revision observed for its page. A message longer than
-`max_chars_per_message` has a `body_cursor`; keep calling `get_messages` with
+`max_chars_per_message` or the response budget has a `body_cursor`; keep calling `get_messages` with
 that cursor before following `next_from`. The opaque cursor stays bound to the
 archive instance, session, revision, message ordinal, and next content offset,
 so it cannot silently continue against replaced transcript content. A cursor

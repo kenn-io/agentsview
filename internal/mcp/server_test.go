@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	jsonv1 "encoding/json"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -470,4 +471,40 @@ func TestCompactionSummaryTool(t *testing.T) {
 	require.Len(t, out.Summaries, 1)
 	assert.Equal(t, "summary", out.Summaries[0].Content)
 	assert.Equal(t, "codex:session", out.Summaries[0].SessionID)
+}
+
+func TestServer_BudgetTextResults(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	messages := make([]db.Message, 50)
+	for i := range messages {
+		messages[i] = toolCallMsg("budget", i, db.ToolCall{ToolName: "Bash", Category: "Bash", InputJSON: strings.Repeat("<", 5000)})
+		messages[i].Content = "needle " + strings.Repeat("<&", 950)
+	}
+	dbtest.SeedSessionWithMessages(t, d, "budget", "project", messages, dbtest.WithMessageCounts(50, 50))
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil)}))
+	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
+	for _, tc := range []struct {
+		name string
+		args map[string]any
+	}{
+		{ToolGetMessages, map[string]any{"session_id": "budget", "limit": 50}},
+		{ToolGetToolCalls, map[string]any{"session_id": "budget", "limit": 50, "max_input_chars": 10000}},
+		{ToolSearchContent, map[string]any{"pattern": "needle", "limit": 50, "context": 10, "include_active": true, "include_one_shot": true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := ct.CallTool(t.Context(), callParams(tc.name, tc.args))
+			require.NoError(t, err)
+			require.False(t, result.IsError)
+			require.Len(t, result.Content, 1)
+			content, ok := result.Content[0].(*mcp.TextContent)
+			require.True(t, ok)
+			assert.LessOrEqual(t, len(content.Text), responseBudgetBytes)
+			structured, err := jsonv1.Marshal(result.StructuredContent)
+			require.NoError(t, err)
+			assert.LessOrEqual(t, len(content.Text)+len(structured), 2*responseBudgetBytes)
+			var decoded map[string]any
+			require.NoError(t, json.Unmarshal([]byte(content.Text), &decoded))
+			assert.Contains(t, decoded, "omitted")
+		})
+	}
 }
