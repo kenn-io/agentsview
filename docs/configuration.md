@@ -516,6 +516,81 @@ matches every connection. The PostgreSQL driver ignores a missing passfile, so a
 missing mount shows up as a PostgreSQL authentication error rather than an error
 naming the file.
 
+### SSH hosts from a container
+
+The image includes an SSH client, so a containerized AgentsView can collect
+sessions from [SSH remote hosts](/docs/remote-access/#ssh-remote-sync). The
+container runs as root and reads its SSH settings from `/root/.ssh`. Give it a
+dedicated key, not your personal `~/.ssh` directory or an SSH agent socket.
+
+The SSH client is new on `main`. Released images do not include it yet, so
+the steps below fail because `ssh` is missing until the next release.
+
+1. Create a directory, for example `container-ssh/`, holding only:
+
+   - `id_ed25519`: a key without a passphrase, authorized on the remote
+     account.
+   - `known_hosts`: the remote's host key.
+   - `config`: an entry for each host, such as:
+
+   ```sshconfig
+   Host devbox
+       HostName devbox.example.com
+       User collector
+       IdentityFile /root/.ssh/id_ed25519
+       IdentitiesOnly yes
+       StrictHostKeyChecking yes
+   ```
+
+1. Make the files owned by root inside the container. OpenSSH refuses a
+   `config` owned by anyone else with `Bad owner or permissions`, even on a
+   read-only mount. With rootful Docker on Linux:
+
+   ```bash
+   sudo chown -R 0:0 container-ssh
+   sudo chmod 0700 container-ssh
+   sudo chmod 0600 container-ssh/id_ed25519 container-ssh/config
+   sudo chmod 0644 container-ssh/known_hosts
+   ```
+
+   With rootless Docker or user namespace remapping, container root maps to a
+   different host user. Use that user's UID and GID in place of `0:0`.
+
+1. Add the host to the container's `config.toml`:
+
+   ```toml
+   [[remote_hosts]]
+   host = "devbox"
+   transport = "ssh"
+   ```
+
+1. Check the connection. It must exit 0 and print nothing:
+
+   ```bash
+   docker run --rm --entrypoint ssh \
+     --mount type=bind,src="$PWD/container-ssh",dst=/root/.ssh,readonly \
+     ghcr.io/kenn-io/agentsview:latest -o BatchMode=yes devbox true
+   ```
+
+1. Sync the host once, mounting the data directory that holds `config.toml`:
+
+   ```bash
+   docker run --rm \
+     --mount type=bind,src="$PWD/container-ssh",dst=/root/.ssh,readonly \
+     --mount type=bind,src="$PWD/agentsview-data",dst=/data \
+     ghcr.io/kenn-io/agentsview:latest source sync --host devbox
+   ```
+
+Add the same `/root/.ssh` mount to your long-running container and set
+`interval` on the entry to sync on a schedule.
+
+The container's key can run any command as the remote account. In
+`authorized_keys`, the options `from=`, `no-port-forwarding`,
+`no-agent-forwarding`, `no-X11-forwarding`, and `no-pty` narrow what the key can
+do, but they do not sandbox it. A forced `command=` breaks sync, because sync
+runs several different commands. Before relying on `from=`, check which source
+address the remote's `sshd` logs for the container.
+
 ## Remote Hosts
 
 Add `[[remote_hosts]]` entries when a bare `agentsview source sync` should include raw

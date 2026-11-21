@@ -295,6 +295,11 @@ The latest release is
   `search_sessions` MCP tool, no longer fail with `503 request timed out` after
   `--write-timeout`. Cancelling still stops the search.
 
+- The Docker image can sync [SSH remote hosts](/docs/remote-access/#ssh-remote-sync)
+  without a custom build, because it now includes an SSH client. See
+  [SSH hosts from a container](/docs/configuration/#ssh-hosts-from-a-container)
+  for mounting a dedicated key.
+
 **Bug fixes**
 
 - The container image now accepts hosted raw-sync uploads when it runs as a
