@@ -130,24 +130,19 @@ func (t *toolset) toolCalls(
 		Total:     new(len(matching)),
 	}
 	results := make(map[int]db.Message)
-	var source string
 	if in.IncludeResults {
 		for _, tc := range matching[start:end] {
 			if _, ok := results[tc.Ordinal]; ok {
 				continue
 			}
 			zero := 0
-			page, err := t.svc.Messages(ctx, in.SessionID, service.MessageFilter{Around: &tc.Ordinal, Before: &zero, After: &zero, EvidenceSource: source})
+			page, err := t.svc.Messages(ctx, in.SessionID, service.MessageFilter{Around: &tc.Ordinal, Before: &zero, After: &zero})
 			if err != nil {
 				return nil, toolCallsOut{}, err
 			}
 			if len(page.Messages) != 1 || page.Messages[0].Ordinal != tc.Ordinal {
 				return nil, toolCallsOut{}, fmt.Errorf("%w: cited message no longer exists", service.ErrSourceChanged)
 			}
-			if page.EvidenceSource == "" {
-				return nil, toolCallsOut{}, service.ErrRevisionBoundReadUnavailable
-			}
-			source = page.EvidenceSource
 			results[tc.Ordinal] = page.Messages[0]
 		}
 	}
@@ -163,7 +158,7 @@ func (t *toolset) toolCalls(
 			ResultLength: tc.ResultLength,
 		}
 		if in.IncludeResults {
-			if err := fillToolResult(&call, results[tc.Ordinal], tc.ToolCall, tc.position, in, source); err != nil {
+			if err := fillToolResult(&call, results[tc.Ordinal], tc.ToolCall, tc.position, in); err != nil {
 				return nil, toolCallsOut{}, err
 			}
 		}
@@ -181,7 +176,7 @@ func (t *toolset) toolResultContinuation(ctx context.Context, in toolCallsIn) (*
 		return nil, toolCallsOut{}, errors.New("invalid result_cursor")
 	}
 	zero := 0
-	page, err := t.svc.Messages(ctx, in.SessionID, service.MessageFilter{Around: &cursor.Ordinal, Before: &zero, After: &zero, EvidenceSource: cursor.EvidenceSource})
+	page, err := t.svc.Messages(ctx, in.SessionID, service.MessageFilter{Around: &cursor.Ordinal, Before: &zero, After: &zero})
 	if err != nil {
 		return nil, toolCallsOut{}, err
 	}
@@ -207,15 +202,15 @@ func toolCallLimit(in toolCallsIn) int {
 
 // fillToolResult checks that the stored call is the one cited and adds its
 // masked summary and saved events to call.
-func fillToolResult(call *toolCallOut, m db.Message, tc service.ToolCall, position int, in toolCallsIn, source string) error {
+func fillToolResult(call *toolCallOut, m db.Message, tc service.ToolCall, position int, in toolCallsIn) error {
 	if position >= len(m.ToolCalls) {
 		return fmt.Errorf("%w: cited tool call no longer matches", service.ErrSourceChanged)
 	}
 	stored := m.ToolCalls[position]
-	if m.Timestamp != tc.Timestamp || stored.ToolUseID != tc.ToolUseID || stored.ToolName != tc.ToolName || stored.Category != tc.Category || secrets.RedactJSON(stored.InputJSON) != secrets.RedactJSON(tc.InputJSON) || stored.SkillName != tc.SkillName || stored.SubagentSessionID != tc.SubagentSessionID || stored.ResultContentLength != tc.ResultLength {
+	if m.Timestamp != tc.Timestamp || stored.ToolUseID != tc.ToolUseID || stored.ToolName != tc.ToolName || stored.Category != tc.Category || stored.InputJSON != tc.InputJSON || stored.SkillName != tc.SkillName || stored.SubagentSessionID != tc.SubagentSessionID || stored.ResultContentLength != tc.ResultLength {
 		return fmt.Errorf("%w: cited tool call no longer matches", service.ErrSourceChanged)
 	}
-	base := toolResultCursor{Version: toolResultCursorVersion, Kind: "tool_result", EvidenceSource: source, SessionID: in.SessionID, Ordinal: tc.Ordinal, Position: position}
+	base := toolResultCursor{Version: toolResultCursorVersion, SessionID: in.SessionID, Ordinal: tc.Ordinal, Position: position}
 	maxChars := clampLimit(in.MaxResultChars, 1000, 10000)
 	summary := secrets.RedactJSON(stored.ResultContent)
 	call.Result, call.ResultTruncated, call.ResultCursor = firstResultPage(base, nil, summary, maxChars)
@@ -291,15 +286,13 @@ const toolResultCursorVersion = 1
 // toolResultCursor binds a continuation to the exact masked text it pages
 // through, by digest, so unrelated transcript growth does not invalidate it.
 type toolResultCursor struct {
-	Version        int    `json:"v"`
-	Kind           string `json:"k"`
-	EvidenceSource string `json:"s"`
-	SessionID      string `json:"i"`
-	Digest         []byte `json:"d"`
-	Ordinal        int    `json:"o"`
-	Position       int    `json:"c"`
-	Event          *int   `json:"e,omitempty"`
-	Offset         int    `json:"p"`
+	Version   int    `json:"v"`
+	SessionID string `json:"i"`
+	Digest    []byte `json:"d"`
+	Ordinal   int    `json:"o"`
+	Position  int    `json:"c"`
+	Event     *int   `json:"e,omitempty"`
+	Offset    int    `json:"p"`
 }
 
 func textDigest(text string) []byte {
@@ -318,7 +311,7 @@ func decodeToolResultCursor(raw string) (toolResultCursor, error) {
 		return toolResultCursor{}, errors.New("invalid result_cursor")
 	}
 	var cursor toolResultCursor
-	if err := json.Unmarshal(payload, &cursor); err != nil || cursor.Version != toolResultCursorVersion || cursor.Kind != "tool_result" || cursor.EvidenceSource == "" || cursor.SessionID == "" || len(cursor.Digest) != sha256.Size || cursor.Ordinal < 0 || cursor.Position < 0 || (cursor.Event != nil && *cursor.Event < 0) || cursor.Offset <= 0 {
+	if err := json.Unmarshal(payload, &cursor); err != nil || cursor.Version != toolResultCursorVersion || cursor.SessionID == "" || len(cursor.Digest) != sha256.Size || cursor.Ordinal < 0 || cursor.Position < 0 || (cursor.Event != nil && *cursor.Event < 0) || cursor.Offset <= 0 {
 		return toolResultCursor{}, errors.New("invalid result_cursor")
 	}
 	return cursor, nil
