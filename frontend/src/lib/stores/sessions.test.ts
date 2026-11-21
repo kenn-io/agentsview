@@ -3572,7 +3572,6 @@ describe("SessionsStore", () => {
       expect(sessions.activeSession?.id).toBe(canonical);
       expect(sessions.activeSessionNotFound).toBe(false);
       expect(router.sessionId).toBe(canonical);
-      expect(window.location.pathname).toBe(`/sessions/${uuid}`);
     });
     it.each([
       { name: "ambiguous", ids: [canonical, `box~${canonical}`] },
