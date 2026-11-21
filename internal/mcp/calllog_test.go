@@ -210,6 +210,9 @@ func TestCallLogBoundsNames(t *testing.T) {
 	require.NoError(t, err)
 	var records []callRecord
 	for _, line := range bytes.Split(bytes.TrimSpace(raw), []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
 		var rec callRecord
 		require.NoError(t, json.Unmarshal(line, &rec))
 		records = append(records, rec)
@@ -335,5 +338,22 @@ func TestCallLogPruneFailureWarnsOnceAndWrites(t *testing.T) {
 	today := time.Now().UTC().Format("2006-01-02") + ".jsonl"
 	raw, err := os.ReadFile(filepath.Join(dir, today))
 	require.NoError(t, err)
-	assert.Equal(t, 2, bytes.Count(raw, []byte("\n")))
+	assert.Equal(t, 2, bytes.Count(raw, []byte(`"tool":"search_docs"`)))
+}
+
+func TestCallLogRecoversAfterPartialAppend(t *testing.T) {
+	dir := t.TempDir()
+	today := time.Now().UTC().Format("2006-01-02")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, today+".jsonl"), []byte(`{"version":1,"at":`), 0600))
+	d := dbtest.OpenTestDB(t)
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), CallLogDir: dir}))
+	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
+	result, err := ct.CallTool(t.Context(), callParams(ToolSearchDocs, map[string]any{"query": "session"}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+	rows, err := SummarizeCalls(t.Context(), dir, "", "")
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, ToolSearchDocs, rows[0].Tool)
+	assert.Equal(t, 1, rows[0].Calls)
 }

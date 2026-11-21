@@ -144,7 +144,9 @@ func recordToolCall(ctx context.Context, dir string, req *mcp.CallToolRequest, r
 	if err != nil {
 		return err
 	}
-	_, writeErr := (ctxio.Writer{Context: ctx, Writer: f}).Write(append(b, '\n'))
+	// A leading newline separates this record from a previous partial write.
+	line := append(append([]byte{'\n'}, b...), '\n')
+	_, writeErr := (ctxio.Writer{Context: ctx, Writer: f}).Write(line)
 	return errors.Join(writeErr, f.Close())
 }
 
