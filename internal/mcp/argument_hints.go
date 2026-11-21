@@ -14,16 +14,16 @@ func argumentHints(next mcp.MethodHandler) mcp.MethodHandler {
 		result, err := next(ctx, method, request)
 		call, ok := result.(*mcp.CallToolResult)
 		req, isCall := request.(*mcp.CallToolRequest)
-		if method != "tools/call" || !ok || call == nil || !call.IsError || !isCall || req.Params == nil {
+		if method != "tools/call" || !ok || call == nil || !call.IsError || !isCall {
 			return result, err
 		}
 		var arguments map[string]json.RawMessage
 		if json.Unmarshal(req.Params.Arguments, &arguments) != nil {
 			return result, err
 		}
-		listed, listErr := next(ctx, "tools/list", &mcp.ListToolsRequest{Session: req.Session, Params: &mcp.ListToolsParams{}})
+		listed, listErr := next(ctx, "tools/list", &mcp.ListToolsRequest{Session: req.Session})
 		list, ok := listed.(*mcp.ListToolsResult)
-		if listErr != nil || !ok || list == nil {
+		if listErr != nil || !ok {
 			return result, err
 		}
 		for _, tool := range list.Tools {
