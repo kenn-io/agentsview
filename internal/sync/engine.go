@@ -11475,10 +11475,12 @@ func (e *Engine) prepareSessionNormalizedContext(
 		return preparedSessionWrite{}, sessionWritePreserved, err
 	}
 	remote := ""
+	var resolve func(string) string
 	if !pw.sourceIdentityUnverified {
 		remote = e.toolLinkRemote(candidate.Session, pw.sess.GitRemote)
+		resolve = e.toolLinkRemoteResolver(candidate.Session)
 	}
-	candidate.Session.ToolPRLinks = db.ToolCallPRLinks(candidate.Messages, candidate.Session.Cwd, remote)
+	candidate.Session.ToolPRLinks = db.ToolCallPRLinksWithRemoteResolver(candidate.Messages, candidate.Session.Cwd, remote, resolve)
 	options := ingest.ContentOptions{
 		BlockedResultCategories: e.blockedResultCategories,
 		ToolResultImages:        e.toolResultImages,

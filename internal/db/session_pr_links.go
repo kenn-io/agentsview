@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"path"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -340,14 +340,14 @@ func (db *DB) upgradePromptPRLinksTx(ctx context.Context, tx *sql.Tx) error {
 
 // CallPRLinks derives links from a tool call and its recorded checkout.
 func CallPRLinks(category, input, cwd, remote string) []PRLink {
-	links, _ := callPRLinks(category, input, cwd, remote)
+	links, _ := callPRLinks(category, input, cwd, remote, nil)
 	return links
 }
 
 var codeModeExecRE = regexp.MustCompile(`\btools\.exec_command\s*\(`)
 var codeModeDirRE = regexp.MustCompile(`["']?(?:workdir|cwd)["']?\s*:`)
 
-func callPRLinks(category, input, cwd, remote string) ([]PRLink, bool) {
+func callPRLinks(category, input, cwd, remote string, resolve func(string) string) ([]PRLink, bool) {
 	if category == "Task" {
 		var payload struct {
 			Prompt  string         `json:"prompt"`
@@ -403,8 +403,21 @@ func callPRLinks(category, input, cwd, remote string) ([]PRLink, bool) {
 			withoutCommand := commitCommandRE.ReplaceAllString(call, "")
 			if codeModeDirRE.MatchString(withoutCommand) {
 				dir := commitWorkdirRE.FindStringSubmatch(withoutCommand)
-				if len(dir) != 2 || strings.Trim(dir[1], `"'`) != cwd {
+				if len(dir) != 2 {
 					callRemote = ""
+				} else {
+					value := strings.Trim(dir[1], `"'`)
+					valid := true
+					if strings.HasPrefix(dir[1], `"`) {
+						var err error
+						value, err = strconv.Unquote(dir[1])
+						valid = err == nil
+					}
+					if valid {
+						callRemote = toolCallDirectoryRemote(value, cwd, remote, resolve)
+					} else {
+						callRemote = ""
+					}
 				}
 			}
 			found := parser.CommandPRLinks(command, callRemote)
@@ -421,21 +434,44 @@ func callPRLinks(category, input, cwd, remote string) ([]PRLink, bool) {
 	if dir == "" {
 		dir = payload.Cwd
 	}
-	if dir != "" && (cwd == "" || path.Clean(dir) != path.Clean(cwd)) {
-		remote = ""
-	}
+	remote = toolCallDirectoryRemote(dir, cwd, remote, resolve)
 	return parser.CommandPRLinksAndDirectoryChange(shellCommandText(input), remote)
+}
+
+func toolCallDirectoryRemote(dir, cwd, remote string, resolve func(string) string) string {
+	if dir == "" {
+		return remote
+	}
+	if !filepath.IsAbs(dir) {
+		if cwd == "" {
+			return ""
+		}
+		dir = filepath.Join(cwd, dir)
+	}
+	if cwd != "" && filepath.Clean(dir) == filepath.Clean(cwd) {
+		return remote
+	}
+	if resolve != nil {
+		return resolve(filepath.Clean(dir))
+	}
+	return ""
 }
 
 // ToolCallPRLinks derives links from a transcript's tool calls.
 func ToolCallPRLinks(messages []Message, cwd, remote string) []PRLink {
+	return ToolCallPRLinksWithRemoteResolver(messages, cwd, remote, nil)
+}
+
+// ToolCallPRLinksWithRemoteResolver can discover the repository of an explicit workdir.
+func ToolCallPRLinksWithRemoteResolver(messages []Message, cwd, remote string, resolve func(string) string) []PRLink {
 	var links []PRLink
 	for _, message := range messages {
 		for _, call := range message.ToolCalls {
-			found, changed := callPRLinks(call.Category, call.InputJSON, cwd, remote)
+			found, changed := callPRLinks(call.Category, call.InputJSON, cwd, remote, resolve)
 			links = parser.CombinePRLinks(links, found)
 			if changed {
 				remote = ""
+				cwd = ""
 			}
 		}
 	}

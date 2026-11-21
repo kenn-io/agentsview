@@ -113,6 +113,13 @@ func (e *Engine) toolLinkRemote(s db.Session, recorded string) string {
 	return obs.GitRemote
 }
 
+func (e *Engine) toolLinkRemoteResolver(s db.Session) func(string) string {
+	return func(dir string) string {
+		s.Cwd = dir
+		return e.toolLinkRemote(s, "")
+	}
+}
+
 // mayDiscoverLocalProject reports whether path may be probed on the local
 // filesystem. Only sessions recorded on this machine qualify: another
 // machine's cwd (e.g. /home/... from a synced Linux host) is meaningless
