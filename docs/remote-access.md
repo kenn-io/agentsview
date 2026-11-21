@@ -3,15 +3,13 @@ title: Remote Access
 description: Access AgentsView from other devices on your network
 ---
 
-AgentsView binds to `127.0.0.1` by default, so only your local machine can reach
-it. To make the UI available from other devices, you need to do two things:
+By default, AgentsView binds to `127.0.0.1`, so only your local machine can
+reach it. To open the UI from other devices on your network, you need to listen
+on a non-loopback address or put the server behind a proxy, and require a bearer
+token for API access. In current releases, `require_auth` controls bearer-token
+auth.
 
-- listen on a non-loopback address or put the server behind a proxy
-- require a bearer token for API access
-
-In current releases, bearer-token auth is controlled by `require_auth`.
-
-## Quick Setup
+## Quick setup
 
 For a one-off background server, enable auth in `~/.agentsview/config.toml`:
 
@@ -19,26 +17,26 @@ For a one-off background server, enable auth in `~/.agentsview/config.toml`:
 require_auth = true
 ```
 
-Then pass a one-off non-loopback bind:
+Then start the server with a one-off non-loopback bind:
 
 ```bash
 agentsview serve --background --host 0.0.0.0
 ```
 
-Omit `--background` when you want that `serve` invocation to stay in the
-foreground. The explicit `--host` flag also permits a one-off unauthenticated
-non-loopback bind, though authenticated access is strongly recommended.
+To keep that `serve` run in the foreground, omit `--background`. Passing
+`--host` explicitly also allows a one-off unauthenticated non-loopback bind,
+though authenticated access is strongly recommended.
 
-For a persistent, config-driven node — so restarts and auto-started daemons keep
-the server reachable — set both values in `config.toml` instead of passing a
-flag each time:
+For a persistent, config-driven node that stays reachable across restarts and
+auto-started daemons, set both values in `config.toml` instead of passing a flag
+each time:
 
 ```toml
 host = "0.0.0.0"
 require_auth = true
 ```
 
-Then use the canonical writable-daemon lifecycle:
+Then manage the server with the canonical writable-daemon lifecycle:
 
 ```bash
 agentsview daemon start
@@ -47,17 +45,17 @@ agentsview daemon status
 agentsview daemon restart
 ```
 
-A non-loopback host from `config.toml` or from `AGENTSVIEW_HOST` (under a
-[container deployment](/docs/configuration/#container-deployment)) requires
-`require_auth`; the server refuses to start rather than persistently exposing
-an unauthenticated API. The `--host` flag remains available for one-off
-unauthenticated binds.
+If you set a non-loopback host in `config.toml`, or in `AGENTSVIEW_HOST` under
+a [container deployment](/docs/configuration/#container-deployment), you must
+also enable `require_auth`. Otherwise, the server refuses to start instead of
+persistently exposing an unauthenticated API. The `--host` flag remains
+available for one-off unauthenticated binds.
 
 When the server runs inside WSL, AgentsView advertises the WSL `eth0` address
-instead of `127.0.0.1` so the printed URL is usable from the Windows host and
+instead of `127.0.0.1`, so the printed URL works from the Windows host and
 nearby LAN clients. An explicit `--public-url` still takes precedence.
 
-When auth is enabled, AgentsView generates a token if needed and stores it in
+When you enable auth, AgentsView generates a token if needed and stores it in
 `~/.agentsview/config.toml`. Open `http://<your-ip>:8080` from another device
 and enter the configured token in the frontend, or send it in an `Authorization`
 header.
@@ -69,28 +67,28 @@ header.
 
 ## Authentication
 
-When `require_auth` is enabled, all `/api/` requests must include:
+When `require_auth` is enabled, every `/api/` request must include this header:
 
 ```
 Authorization: Bearer <token>
 ```
 
-The token is stored in `config.toml` as `auth_token`. It is generated
-automatically the first time auth is enabled, so you do not need to mint one
+AgentsView generates the token automatically the first time you enable auth and
+stores it in `config.toml` as `auth_token`, so you do not need to mint one
 manually. For supervised services or temporary overrides, set
-`AGENTSVIEW_AUTH_TOKEN`; it takes precedence over the config file.
+`AGENTSVIEW_AUTH_TOKEN`, which takes precedence over the config file.
 
-Auth is enforced on API routes, not on static assets. That means a browser can
-load the HTML shell, but API requests fail with `401` until the correct token is
-supplied.
+AgentsView enforces auth on API routes, not on static assets. A browser can load
+the HTML shell, while API requests fail with `401` until you supply the correct
+token.
 
 When `require_auth` is disabled, normal local loopback use remains ungated.
 
-## HTTP Remote Sync
+## HTTP remote sync
 
-A `[[remote_hosts]]` entry syncs a remote machine over one of two transports:
-HTTP, described here, or [SSH](#ssh-remote-sync). An HTTP entry requires the URL
-and bearer token of a running AgentsView daemon:
+A `[[remote_hosts]]` entry syncs a remote machine over either HTTP, described
+here, or [SSH](#ssh-remote-sync). For an HTTP entry, provide the URL and bearer
+token of a running AgentsView daemon:
 
 ```toml
 [[remote_hosts]]
@@ -103,59 +101,63 @@ interval = "5m" # optional: sync periodically while the collector daemon runs
 
 Treat `host` as the remote machine's stable, unique identity. AgentsView uses it
 to namespace imported session IDs, the database skip cache, and the mirror
-directory. Changing it creates a new namespace and can duplicate sessions from
-the same machine; reusing it for a different machine can reuse stale cached
-state. Changing only `url` is fine when the same logical machine moves.
+directory. Changing `host` creates a new namespace and can duplicate sessions
+from the same machine, while reusing it for a different machine can reuse stale
+cached state. If the same logical machine moves, changing only `url` is fine.
 
-The daemon on the remote machine must bind a non-loopback interface (set
-`host = "0.0.0.0"` with `require_auth = true` in its config.toml) or every sync
-fails with a connection-refused error. See
-[Remote Hosts](/docs/configuration/#remote-hosts) for the full remote-side setup,
-including keeping detached daemons alive.
+The daemon on the remote machine must bind to a non-loopback interface by
+setting `host = "0.0.0.0"` with `require_auth = true` in its `config.toml`, or
+every sync fails with a connection-refused error. See
+[Remote Hosts](/docs/configuration/#remote-hosts) for the full remote-side
+setup, including how to keep detached daemons alive.
 
-Use `require_auth = true` on remote nodes when practical, or at minimum keep
+Set `require_auth = true` on remote nodes when practical, or at minimum keep
 their generated `auth_token` configured. The remote archive endpoints always
 require `Authorization: Bearer <token>`, even when the rest of the daemon API is
 unauthenticated. The `token` in the collector's `remote_hosts` entry must match
 the remote daemon's `auth_token` and is required for HTTP remote sync. Do not
 reuse the collector daemon's own `auth_token` for untrusted remote endpoints.
 
-The HTTP transport is intended for private networking such as Tailscale or an
-equivalent restricted overlay. Do not expose raw archive endpoints directly to
-the public internet.
+The HTTP transport is meant for private networks such as Tailscale or another
+restricted overlay. Do not expose raw archive endpoints directly to the public
+internet.
 
-HTTP remote sync failures are summarized without echoing remote-controlled URLs
-or response bodies. Common summaries point at the specific fix: a rejected token
-means the collector's per-host `token` does not match the remote daemon's
-`auth_token`; a missing endpoint means the remote host needs a newer AgentsView;
-connection refusal usually means the daemon is not running, is still bound to
-loopback, or the URL port is wrong; DNS and timeout messages point back to the
-configured `url`.
+AgentsView summarizes HTTP remote sync failures without echoing
+remote-controlled URLs or response bodies. Common summaries point to the
+specific fix:
 
-A bare `agentsview source sync` treats offline, unreachable, and timed-out configured
-HTTP hosts as absent fleet members. It prints a skipped-host progress line,
-continues with local and reachable remote sources, and exits successfully unless
-another error occurs. `agentsview source sync --host X` remains strict and reports an
-unavailable explicitly selected host as an error.
+- A rejected token means the collector's per-host `token` does not match the
+  remote daemon's `auth_token`.
+- A missing endpoint means the remote host needs a newer AgentsView.
+- Connection refusal usually means the daemon is not running, is still bound to
+  loopback, or uses a different port than the URL.
+- DNS and timeout messages point back to the configured `url`.
 
-Fleet nodes launched with `agentsview daemon start` stay available until
-stopped.
+A bare `agentsview source sync` treats offline, unreachable, and timed-out
+configured HTTP hosts as absent fleet members. It prints a skipped-host progress
+line, continues with local and reachable remote sources, and exits with success
+unless another error occurs. By contrast, `agentsview source sync --host X`
+stays strict and reports an unavailable explicitly selected host as an error.
+
+Fleet nodes launched with `agentsview daemon start` stay available until you
+stop them.
 
 Run `agentsview source sync` on the collector to sync local sessions and every
-configured host. Set `interval` on a `[[remote_hosts]]` entry when a running
-collector daemon should sync that host periodically; omit it or set it to `0s`
-for manual sync only. See [`agentsview source sync`](/docs/commands/#agentsview-sync) for
-single-host selection and failure behavior.
+configured host. To have a running collector daemon sync a host periodically,
+set `interval` on its `[[remote_hosts]]` entry; omit `interval` or set it to
+`0s` for manual sync only. See
+[`agentsview source sync`](/docs/commands/#agentsview-sync) for single-host
+selection and failure behavior.
 
-## SSH Remote Sync
+## SSH remote sync
 
 SSH remote sync collects sessions from a machine you can reach with `ssh`. The
-remote machine needs no AgentsView install and no running daemon. The feature is
-available in 0.46.0 and later.
+remote machine needs no AgentsView install and no running daemon. This feature
+is available in 0.46.0 and later.
 
-### Set Up
+### Set up
 
-Add an entry with `transport = "ssh"`:
+Add an entry with `transport = "ssh"` to `config.toml`:
 
 ```toml
 [[remote_hosts]]
@@ -165,29 +167,30 @@ destination = "user@devbox.example.com" # optional; defaults to host
 interval = "15m" # optional: sync periodically while the collector daemon runs
 ```
 
-`host` names the machine in your archive, as for HTTP hosts. `destination` is
-the argument passed to `ssh`. It can be a `~/.ssh/config` alias or
-`user@hostname`. Set the port, user, identity file, `ProxyJump`, and
-`ControlMaster` in `~/.ssh/config`; the entry has no fields for them. See
+`host` names the machine in your archive, the same way as an HTTP host.
+`destination` is the argument passed to `ssh`, which can be a `~/.ssh/config`
+alias or `user@hostname`. Set the port, user, identity file, `ProxyJump`, and
+`ControlMaster` in `~/.ssh/config`. The entry has no fields for them. See
 [Remote Hosts](/docs/configuration/#remote-hosts) for the validation rules.
 
-AgentsView runs `ssh` without a prompt (`BatchMode=yes`), so a key must work
-without asking for a password or passphrase. Check it first:
+AgentsView runs `ssh` without a prompt (`BatchMode=yes`), so your key must work
+without asking for a password or passphrase. Test it first:
 
 ```bash
 ssh -o BatchMode=yes user@devbox.example.com true
 ```
 
-Then run `agentsview source sync --host devbox`. A bare `agentsview source sync`, the daemon's
-periodic `interval` sync, and full rebuilds also include SSH hosts. Sessions get
-the same IDs, machine name, and paths as HTTP hosts. Mirrors, manifests, and
-delta transfers work as described in [Incremental Sync](#incremental-sync).
+Then run `agentsview source sync --host devbox`. A bare `agentsview source sync`,
+the daemon's periodic `interval` sync, and full rebuilds also include SSH hosts.
+Sessions get the same IDs, machine name, and paths as HTTP hosts, and mirrors,
+manifests, and delta transfers work as described in
+[Incremental sync](#incremental-sync).
 
 A daemon started by a service manager may not see your SSH agent. For
 daemon-driven SSH sync, set `IdentityAgent` in `~/.ssh/config` or use a key
 without a passphrase.
 
-### What Lands On The Remote
+### What lands on the remote
 
 AgentsView installs one file per version on the remote account:
 
@@ -196,68 +199,68 @@ AgentsView installs one file per version on the remote account:
 ~/.cache/agentsview/bin/<id>/.last-used
 ```
 
-The `<id>` is `v<version>` for a release build. A development build uses
+For a release build, `<id>` is `v<version>`. For a development build, it is
 `<version>-<16 hex characters of the executable's SHA-256>`, so two builds never
 share a binary. Each sync updates `.last-used` for the binary it runs. An
 install removes other binaries that have been idle for more than 30 days and
 leftover `.tmp-*` upload directories older than one day. If one cannot be
 removed, the install still succeeds. If another collector's cleanup removes a
-binary just after a sync picked it, that sync installs it again and carries
-on.
+binary right after a sync picked it, that sync installs it again and carries on.
 
 Each sync runs a short `agentsview remote-sync serve` process per step: target
 resolution, manifest, and archive. Each process reads its own configuration
-read-only, writes only temporary SQLite snapshots that it removes before it
-exits, and then ends. Nothing keeps running on the remote. Responses are
-compressed with zstd, and ssh compression is turned off so the stream is not
-compressed twice.
+read-only, writes only temporary SQLite snapshots that it removes before
+exiting, and then ends. Nothing stays running on the remote. AgentsView
+compresses responses with zstd and turns off ssh compression so the stream is
+not compressed twice.
 
-### Where The Binary Comes From
+### Where the binary comes from
 
-At the start of each sync, one ssh call reports the remote platform and looks
+At the start of each sync, one `ssh` call reports the remote platform and looks
 for a usable binary. AgentsView picks the first match:
 
-1. The cached binary for this version, under `~/.cache/agentsview/bin/`.
+1. The cached binary for this version under `~/.cache/agentsview/bin/`.
 1. An `agentsview` on the remote's `PATH` that speaks the same remote-sync
-   protocol version. Your own install wins over an upload. AgentsView first
-   runs `agentsview version` and skips a `PATH` binary older than v0.23.0, or
-   one whose version is not a release number, such as `dev` or a bare commit
-   hash. Releases before v0.23.0 would start a server instead of answering.
+   protocol version. Your own install wins over an upload. AgentsView first runs
+   `agentsview version` and skips a `PATH` binary older than v0.23.0, or one
+   whose version is not a release number, such as `dev` or a bare commit hash.
+   Releases before v0.23.0 start a server instead of answering.
 1. An upload, described next. Sync progress shows
    `Installing agentsview on <host>` while it runs.
 
 A release build downloads `agentsview_<version>_<os>_<arch>.tar.gz` from the
 GitHub release for its version and checks it against the release's `SHA256SUMS`.
-It does not check `SHA256SUMS.sig`. The verified tarball is cached under
-`<data_dir>/ssh-binaries/<version>/` and streamed to the remote, where it is
-unpacked, probed, and moved into place. A checksum mismatch deletes the download
-and fails that host's sync.
+It does not check `SHA256SUMS.sig`. AgentsView caches the verified tarball under
+`<data_dir>/ssh-binaries/<version>/` and streams it to the remote, where it
+unpacks, probes, and moves the binary into place. A checksum mismatch deletes
+the download and fails that host's sync.
 
-A development build has no release to download. When the remote's OS and
+A development build has no release to download. If the remote's OS and
 architecture match the collector's, AgentsView uploads its own executable.
-Otherwise the sync fails with a message to install agentsview on the remote or
-to sync from a release build.
+Otherwise, the sync fails with a message to install agentsview on the remote or
+sync from a release build.
 
-### Offline Hosts
+### Offline hosts
 
-A bare `agentsview source sync` skips an SSH host that the network cannot reach, the
-same as an offline HTTP host. `agentsview source sync --host devbox` reports it as an
-error. `ssh` must exit with status 255 and print one of these OpenSSH messages:
+A bare `agentsview source sync` skips an SSH host that the network cannot reach,
+the same as an offline HTTP host. `agentsview source sync --host devbox` reports
+it as an error. `ssh` must exit with status 255 and print one of these OpenSSH
+messages:
 
 - `Could not resolve hostname`
 - `connect to host ... port ...: Connection refused`, `Connection timed out`,
   `Operation timed out`, `No route to host`, or `Network is unreachable`
 - `Connection timed out during banner exchange`
 
-These also cover a `ProxyJump` host that is down. Every other failure is
-reported with the last line `ssh` printed. That includes authentication
-failures, host key verification failures, ssh configuration errors, and a
-target that is down behind a reachable jump host.
+These also cover a `ProxyJump` host that is down. AgentsView reports every other
+failure with the last line `ssh` printed. That includes authentication failures,
+host key verification failures, ssh configuration errors, and a target that is
+down behind a reachable jump host.
 
-`ssh` checks the connection every 15 seconds while a sync runs. If the host
+While a sync runs, `ssh` checks the connection every 15 seconds. If the host
 stops answering for about a minute, `ssh` exits with
-`Timeout, server ... not responding.` That is reported as a failure, not
-skipped, because the sync had already started.
+`Timeout, server ... not responding.` Because the sync had already started,
+AgentsView reports that as a failure instead of skipping the host.
 
 ### Limits
 
@@ -275,103 +278,105 @@ skipped, because the sync had already started.
 - A `serve` process killed with `SIGKILL` can leave one
   `agentsview-sqlite-snapshot-*` directory in the remote's temporary directory.
 - Offline detection depends on OpenSSH's English error text. With another ssh
-  client, or new OpenSSH wording, an unreachable host is reported as a failure
-  instead of being skipped.
+  client or new OpenSSH wording, AgentsView reports an unreachable host as a
+  failure instead of skipping it.
 
-## Incremental Sync
+## Incremental sync
 
 Starting in 0.37.4, HTTP remote sync keeps a persistent mirror of each remote
-machine's syncable source files under the path below. SSH remote sync uses the
-same mirror and the same steps; each step asks a short-lived process over `ssh`
-instead of a daemon.
+machine's syncable source files under this path:
 
 ```text
 <data_dir>/remote-mirrors/<sanitized-host>-<hash>/
 ```
 
+SSH remote sync uses the same mirror and the same steps, asking a short-lived
+process over `ssh` instead of a daemon.
+
 For the default data directory, that parent is `~/.agentsview/remote-mirrors/`.
-The readable host component is followed by a hash so names that sanitize to the
-same directory name do not collide. A lock file next to each mirror serializes
+A hash follows the readable host component so names that sanitize to the same
+directory name do not collide. A lock file next to each mirror serializes
 concurrent syncs of that host from the same data directory.
 
-The mirror adds an on-disk copy of the remote session sources to the collector,
-in addition to the indexed database. Budget roughly the size of each remote
-host's syncable source corpus for it.
+The mirror adds an on-disk copy of the remote session sources to the collector
+alongside the indexed database. Budget roughly the size of each remote host's
+syncable source corpus for it.
 
-### How A Sync Works
+### How a sync works
 
 1. The collector asks the remote daemon for its resolved agent roots. The remote
-   controls this allowlist; the collector cannot name arbitrary roots.
+   controls this allowlist, and the collector cannot name arbitrary roots.
 1. The collector locks the host mirror and requests a gzip-compressed manifest
    of regular, non-symlink files. Each entry carries its absolute remote path,
    size, and modification time.
 1. The remote sends manifest entries sorted by mirror path. As each entry
    arrives, the collector walks the mirror in the same order and compares file
-   size and modification time at microsecond precision, so neither the manifest
-   nor the mirror listing is held in memory. It schedules missing or changed
+   size and modification time at microsecond precision, so it holds neither the
+   manifest nor the mirror listing in memory. It schedules missing or changed
    files for fetch and removes mirror files that disappeared from the manifest.
-   Each list stays in memory up to 4 MiB of paths and moves to a temporary file
-   next to the mirror past that. Before changing the mirror, it durably merges
-   those paths into a bounded recovery journal next to the mirror. When more
-   than 8,192 files change, or their paths add up to more than 4 MiB, the
-   journal records one full import instead, and that sync re-reads every
-   session from the host.
-1. The collector requests only missing or changed files, in requests of at
-   most 4 MiB of paths each. When every manifest file needs fetching, it
-   requests a full archive instead of sending the full file list. Archive
-   transfers prefer Zstandard compression; gzip remains available through HTTP
-   encoding negotiation. Manifests use gzip.
-1. For a changed file the mirror already holds, the request also sends the
+   Each list stays in memory up to 4 MiB of paths and spills to a temporary file
+   next to the mirror past that. Before changing the mirror, the collector
+   durably merges those paths into a bounded recovery journal next to the
+   mirror. When more than 8,192 files change, or their paths add up to more than
+   2 MiB, the journal records one full import instead, and that sync re-reads
+   every session from the host.
+1. The collector requests only missing or changed files in requests of at most 4
+   MiB of paths each. When every manifest file needs fetching, it requests a
+   full archive instead of sending the full file list. Archive transfers prefer
+   Zstandard compression, while gzip remains available through HTTP encoding
+   negotiation. Manifests use gzip.
+1. For a changed file that the mirror already holds, the request also sends the
    mirror copy's length and a SHA-256 hash of its last 64 KiB. When the file is
-   a JSON Lines (`.jsonl`) transcript, the remote copy is longer, and its bytes
-   before that length end the same way, the remote sends only the bytes past
-   it, and the collector appends them to the mirror copy. Agent transcripts
-   grow by appending, so a long session costs only its new lines. Any other
-   file, such as a SQLite database that rewrites earlier pages as it grows,
-   and every file from a remote that predates this check, arrives whole. An append that fails partway leaves the mirror copy at
-   its old length, so the next sync fetches the file again.
-1. The archive is extracted into the mirror with remote modification times
-   preserved. AgentsView classifies the pending journal paths and imports only
-   their affected sources. A provider whose exact scope cannot be proven falls
-   back to discovery under that provider's roots; it does not widen other
-   providers. The journal is retired only after session writes and the remote
-   skip cache are durable.
+   a JSON Lines `.jsonl` transcript, the remote copy is longer, and its bytes
+   before that length end the same way, the remote sends only the bytes past it
+   and the collector appends them to the mirror copy. Agent transcripts grow by
+   appending, so a long session transfers only its new lines. Any other file,
+   such as a SQLite database that rewrites earlier pages as it grows, and every
+   file from a remote that predates this check, arrives whole. If an append
+   fails partway, the mirror copy stays at its old length, so the next sync
+   fetches the file again.
+1. The collector extracts the archive into the mirror with remote modification
+   times preserved. AgentsView classifies the pending journal paths and imports
+   only their affected sources. If a provider's exact scope cannot be proven, it
+   falls back to discovery under that provider's roots without widening other
+   providers. AgentsView retires the journal only after session writes and the
+   remote skip cache are durable.
 
 An explicit full import reparses the complete mirror without forcing unchanged
 bytes across the network. If a rejected delta request requires a full archive,
 the collector still imports only the affected sources.
 
-Sync logs report target resolution time and manifest time. The manifest time
-includes the mirror comparison. They also report each archive's encoding,
-compressed byte count, download time, and extraction time. Download time
-includes waiting for the remote response. The existing import log reports
-planning, processing, and cache persistence times.
+Sync logs report target resolution time and manifest time, which includes the
+mirror comparison. They also report each archive's encoding, compressed byte
+count, download time, and extraction time. Download time includes waiting for
+the remote response. The existing import log reports planning, processing, and
+cache persistence times.
 
 For a configured full sync that includes local sources, mirror preparation
 finishes before database work begins. Up to four remote hosts prepare at once
-for this combined rebuild. Mirror locks keep the same acquisition order across
-collectors to avoid deadlocks. The collector then ingests local sources
+for this combined rebuild, and mirror locks keep the same acquisition order
+across collectors to avoid deadlocks. The collector then ingests local sources
 and every prepared remote mirror through the same batched temporary-database
-path, with FTS maintenance suspended during ingest and rebuilt once before an
+path, suspending FTS maintenance during ingest and rebuilding it once before an
 atomic swap. A preparation, parser, batch-write, or FTS failure leaves the
 active archive unchanged.
 
 Remote-only syncs, including
-`agentsview source sync --host <configured-http-host> --full`, continue to import into
-the active archive and do not use the combined rebuild path.
+`agentsview source sync --host <configured-http-host> --full`, continue to
+import into the active archive and do not use the combined rebuild path.
 
 If no directory-scoped files changed, the collector skips the archive request
 and, when no recovery work is pending, performs no import. Files that disappear
-remotely are deleted from the mirror, but remote import is intentionally
-non-destructive: sessions already stored in the AgentsView database remain
+remotely are deleted from the mirror, though remote import is intentionally
+non-destructive and sessions already stored in the AgentsView database remain
 available.
 
-If a process stops after mirror mutation, the next sync replays the pending
-journal. Cache invalidation is armed once per observed remote version so a
-same-mtime extraction cannot be hidden by stale cache state. A deterministic
+If a process stops after mutating the mirror, the next sync replays the pending
+journal. AgentsView arms cache invalidation once per observed remote version so
+a same-mtime extraction cannot be hidden by stale cache state. A deterministic
 parse failure is then retained in the existing error-skip cache, retried on
 replay as a skip, and re-armed only when the remote path changes again. Recovery
-work is bounded; overflow collapses to one conservative full import.
+work is bounded, and overflow collapses to one conservative full import.
 
 A remote sync requested from a running daemon, such as `agentsview sync` while
 `agentsview serve` runs, belongs to the daemon. If the requesting client
@@ -385,11 +390,11 @@ each sync while the rest of the host remains eligible for delta transfer. The
 Windsurf content in the mirror is the sanitized export, not a byte-for-byte copy
 of the remote state database.
 
-### Curated Provider Exports
+### Curated provider exports
 
 Most providers export their configured directories as-is. Providers whose
-configured root is a broad application-data directory export a curated file
-list instead, so caches, extension state, and credential files stored near the
+configured root is a broad application-data directory export a curated file list
+instead, so caches, extension state, and credential files stored near the
 sessions never enter the manifest, the archive, or the mirror:
 
 - **Cursor** exports only the transcript files its parser discovers under each
@@ -412,29 +417,29 @@ session under a curated Cursor or VS Code Copilot root disappears, the root
 stays advertised with an empty file list so the next sync empties the mirror
 instead of failing.
 
-An unreadable snapshot database is treated as missing: the sync continues, the
-mirror drops its cached copy, and the file transfers again once the remote
-application repairs it. Sessions already imported into the AgentsView database
-remain available throughout. Any other read failure during target resolution
-fails that host's sync without touching the mirror.
+AgentsView treats an unreadable snapshot database as missing: the sync
+continues, the mirror drops its cached copy, and the file transfers again once
+the remote application repairs it. Sessions already imported into the AgentsView
+database remain available throughout. Any other read failure during target
+resolution fails that host's sync without touching the mirror.
 
-### When AgentsView Downloads A Full Archive
+### When AgentsView downloads a full archive
 
-A full HTTP transfer occurs in these cases:
+A full HTTP transfer happens in these cases:
 
 - the per-host mirror is new or was removed
 - every manifest file is missing or changed
-- a delta request is rejected after a manifest succeeded; the collector retries
-  once with a full archive
+- a delta request is rejected after a manifest succeeded, in which case the
+  collector retries once with a full archive
 
 Windsurf's curated export is also fetched in full on every sync, independently
 of the directory-scoped archive decision.
 
-`--full` reparses every discovered remote session but still uses the manifest
-comparison to decide which mirror bytes need transferring. It does not delete
-the local database or turn remote sync into a destructive reconciliation.
+`--full` reparses every discovered remote session, while still using the
+manifest comparison to decide which mirror bytes need transferring. It does not
+delete the local database or turn remote sync into a destructive reconciliation.
 
-### Compatibility And Recovery
+### Compatibility and recovery
 
 HTTP remote sync requires the collector and remote daemon to use the same
 remote-sync protocol version. Every target, manifest, and archive request
@@ -443,40 +448,40 @@ request version returns HTTP 426 before targets or archive data are exchanged,
 so upgrade both hosts before syncing again after either side changes protocol.
 
 An HTTP remote on Windows running an older AgentsView can fail a sync with a
-message to upgrade AgentsView on the remote host. The older release lists its
+message to upgrade AgentsView on the remote host. That older release lists its
 files in a different order under the same protocol version.
 
-The normal mirror comparison detects interrupted extraction when the resulting
-file size or modification time differs from the manifest, and the next sync
-fetches that file again. It also repairs file-versus-directory conflicts left by
-an interrupted extraction.
+The normal mirror comparison detects an interrupted extraction when the
+resulting file size or modification time differs from the manifest, and the next
+sync fetches that file again. It also repairs file-versus-directory conflicts
+left by an interrupted extraction.
 
 The comparison does not hash file content. A remote rewrite that preserves both
 size and modification time, or local mirror corruption with the same metadata,
 can therefore look unchanged. Because `--full` now separates reparsing from
 mirror transfer, it does not repair same-stat corruption by itself.
 
-The mirror is a disposable transfer cache. When no sync is running, deleting a
-host's mirror directory is the repair procedure: the next compatible sync
-bootstraps it again. Leave the adjacent `.lock` file in place. Removing mirror
-files never removes imported sessions from the database.
+The mirror is a disposable transfer cache. When no sync is running, you can
+repair a host's mirror by deleting its mirror directory; the next compatible
+sync bootstraps it again. Leave the adjacent `.lock` file in place. Removing
+mirror files never removes imported sessions from the database.
 
-### Transfer Safety
+### Transfer safety
 
 The remote daemon recomputes its allowed sync targets for each request and
-rejects paths outside them. Manifest walks omit symlinks and special files;
-delta requests must either match an allowed extra file exactly or use an
+rejects paths outside them. Manifest walks omit symlinks and special files.
+Delta requests must either match an allowed extra file exactly or use an
 absolute path in the same POSIX, drive-letter, or UNC dialect as the allowed
-root. Symlinked roots or intermediate components are refused. The collector
-rejects a manifest whose entry is larger than 256 KiB, which is well above the
-longest path any supported system allows. Mirror deletions and type-conflict
-cleanup are separately confined to the per-host mirror root.
+root, and the daemon refuses symlinked roots or intermediate components. The
+collector rejects any manifest whose entry is larger than 256 KiB, which is well
+above the longest path any supported system allows. Mirror deletions and
+type-conflict cleanup are separately confined to the per-host mirror root.
 
 These checks limit what authenticated sync requests can read, but they do not
 replace network isolation or bearer-token security. Keep the daemon on a private
 network and protect its `auth_token` as described above.
 
-## SSE Endpoints
+## SSE endpoints
 
 The live-update streams accept the same `Authorization: Bearer <token>` header
 as every other API call. The bundled web UI always sends the header, including
@@ -491,13 +496,13 @@ http://<host>:8080/api/v1/sessions/<id>/watch?token=<token>
 http://<host>:8080/api/v1/changes/stream?token=<token>
 ```
 
-A token in the URL can end up in proxy access logs and browser history, so
-send the header whenever your client can. Managed Caddy mode removes the
+Because a token in the URL can end up in proxy access logs and browser history,
+send the header whenever your client supports it. Managed Caddy mode strips the
 `token` parameter from the request URLs it logs. If you run your own reverse
 proxy, filter the parameter out of its access logs. Other API endpoints never
 accept the query parameter.
 
-## Public URL And Trusted Origins
+## Public URL and trusted origins
 
 The bind address, browser URL, and trusted origins serve different purposes:
 
@@ -508,7 +513,7 @@ The bind address, browser URL, and trusted origins serve different purposes:
 | `--public-url` | Choose the browser URL and add it to the trusted origins. Managed Caddy also uses it as its site address. |
 | `--public-origin` | Add trusted origins for request `Host` and `Origin` checks without selecting a browser URL. |
 
-For a hostname or reverse proxy you already operate, set the URL you intend to
+If you already operate a hostname or reverse proxy, pass the URL you intend to
 open in the browser:
 
 ```bash
@@ -516,22 +521,22 @@ agentsview serve --public-url https://agents.example.com
 ```
 
 This setting does not configure DNS, port forwarding, certificates, or an
-external reverse proxy. The startup message labels it **browser URL**, separately
-from the backend's listening address; it does not confirm that the URL is
+external reverse proxy. The startup message labels it **browser URL**, separate
+from the backend's listening address, and does not confirm that the URL is
 reachable. Here, "public" means the client-facing address, which may be local
 or private.
 
-Opening that URL locally is useful when you want to use the same HTTPS hostname
-and proxy route as other clients. Direct backend access uses a different browser
-origin, with separate browser storage. On a headless server, use `--no-browser`;
-the URL still contributes to origin validation and managed Caddy configuration.
+Opening that URL locally helps when you want the same HTTPS hostname and proxy
+route as other clients. Direct backend access uses a different browser origin,
+with separate browser storage. On a headless server, pass `--no-browser`. The
+URL still contributes to origin validation and managed Caddy configuration.
 
 Use a concrete hostname or IP in `--public-url`. Wildcard addresses such as
-`0.0.0.0` and `::` select listening interfaces, so they belong in `--host` or
-`--proxy-bind-host`, not the browser URL.
+`0.0.0.0` and `::` select listening interfaces, so put them in `--host` or
+`--proxy-bind-host` instead of the browser URL.
 
-For trust-only configuration, use `--public-origin`. It works on its own or
-alongside `--public-url`:
+To add trusted origins without choosing a browser URL, use `--public-origin`.
+It works on its own or alongside `--public-url`:
 
 ```bash
 agentsview serve \
@@ -539,13 +544,13 @@ agentsview serve \
   --public-origin https://internal.example.com
 ```
 
-Flags can also be comma-separated:
+You can also pass comma-separated values:
 
 ```bash
 agentsview serve --public-origin https://a.example.com,https://b.example.com
 ```
 
-These can also be persisted:
+To persist these settings in `config.toml`:
 
 ```toml
 public_url = "https://agents.example.com"
@@ -555,14 +560,14 @@ public_origins = [
 ```
 
 You do not need to repeat `public_url` in `public_origins`. Neither setting
-enables bearer-token authentication; that is controlled by `--require-auth`.
+enables bearer-token authentication; `--require-auth` controls that.
 
-### Reverse Proxy Subpaths
+### Reverse proxy subpaths
 
-Use `--base-path` when an external reverse proxy mounts AgentsView below a URL
-prefix. Keep `--public-url` origin-only; the server adds the mount path to the
-browser URL and uses it for assets, API requests, live event streams, and
-client-side navigation.
+If an external reverse proxy mounts AgentsView under a URL prefix, pass
+`--base-path`. Keep `--public-url` origin-only; the server appends the mount
+path to the browser URL and uses it for assets, API requests, live event
+streams, and client-side navigation.
 
 ```bash
 agentsview serve \
@@ -587,21 +592,21 @@ location /av/ {
 }
 ```
 
-The same flag works with `serve --background`. The configuration-only
+The same flag works with `serve --background`. Because the configuration-only
 `daemon start` and `daemon restart` commands do not accept serve-specific flags,
-so start a subpath-mounted background server with `agentsview serve --background
+start a subpath-mounted background server with `agentsview serve --background
 --base-path /av`.
 
-### Forwarded Dev Environments
+### Forwarded dev environments
 
 AgentsView validates the request `Host` header before serving API requests. That
-protects local loopback servers from DNS-rebinding attacks, but it also means
-SSH port forwards, reverse proxies, WSL2, Codespaces, Coder, and similar remote
+protects local loopback servers from DNS-rebinding attacks, and it means SSH
+port forwards, reverse proxies, WSL2, Codespaces, Coder, and similar remote
 development environments must use a trusted public URL or origin.
 
 Static assets can still load in these environments because the HTML shell is
-intentionally less strict than `/api/` routes. The dashboard may appear briefly,
-then `/api/v1/settings` or another API request can fail with `403 Forbidden` if
+intentionally less strict than `/api/` routes. The dashboard may appear briefly
+before `/api/v1/settings` or another API request fails with `403 Forbidden` if
 the browser `Host` is the forwarded hostname rather than one of the local
 allowed hosts.
 
@@ -619,13 +624,13 @@ agentsview serve --public-url http://127.0.0.1:18080
 `--public-url` must match the browser origin exactly, including the scheme,
 hostname, and non-default port. When the browser sends an untrusted `Host`,
 current releases return `403 Forbidden` with a response body that explains the
-rejected host, the allowed set, and the `--public-url` fix. The Settings page
-shows the same actionable message instead of prompting for an auth token. A
-short breadcrumb is also written to the server debug log.
+rejected host, the allowed set, and the `--public-url` fix. The **Settings**
+page shows the same actionable message instead of prompting for an auth token,
+and the server writes a short breadcrumb to its debug log.
 
-### Troubleshooting Forwarded Access
+### Troubleshoot forwarded access
 
-If the UI flashes and then the dashboard or settings page fails, check the
+If the UI flashes and then the dashboard or **Settings** page fails, inspect the
 `/api/v1/settings` request in browser devtools:
 
 | Symptom or check                              | Meaning                                    | Fix                                                                          |
@@ -642,12 +647,13 @@ localStorage.removeItem("agentsview-server-url")
 location.reload()
 ```
 
-### Slow Aggregates Behind A Proxy
+### Slow aggregates behind a proxy
 
-Most API responses have a write deadline; a request that exceeds it returns `503`
-with a `{"error":"request timed out"}` body, and affected dashboard panels show
-"request timed out". The default is 30 seconds, which is comfortable for local
-archives but can be tight for large shared datasets.
+Most API responses have a write deadline. When a request exceeds it, the server
+returns `503` with a JSON body that has an `error` field set to
+`request timed out` and a `detail` field, and affected dashboard panels show
+"request timed out". The default deadline is 30 seconds, which is comfortable
+for local archives but can be tight for large shared datasets.
 
 Long-running routes are exempt from this deadline. They include session and
 content search, session statistics, usage summaries, comparisons, and top
@@ -655,8 +661,8 @@ sessions, activity report sessions, Kata status, single-session sync, archive
 maintenance, friction reviews, and conversation export. Cancelling a search
 request stops its search. A reverse proxy may impose its own timeout.
 
-Raise the deadline with `--write-timeout` (a Go duration). The flag is available
-on both the local SQLite server and the PostgreSQL read server:
+To raise the deadline, pass `--write-timeout` with a Go duration. Both the local
+SQLite server and the PostgreSQL read server accept this flag:
 
 ```bash
 # Local SQLite server
@@ -666,13 +672,13 @@ agentsview serve --write-timeout 120s
 agentsview replica pg serve --write-timeout 120s
 ```
 
-Set it to `0` to disable the deadline entirely. If aggregates are slow enough to
-need a large timeout, that usually points at a database-side cost worth
-investigating first — for a multi-tenant read role, confirm any row-level
+Set `--write-timeout` to `0` to disable the deadline entirely. If aggregates are
+slow enough to need a large timeout, that usually points at a database-side cost
+worth investigating first. For a multi-tenant read role, confirm any row-level
 security policy is set-based (`session_id IN (SELECT ...)`) rather than a
 per-row function call, which the query planner cannot hoist into a single join.
 
-## Managed Caddy Mode
+## Managed Caddy mode
 
 AgentsView can manage a [Caddy](https://caddyserver.com) reverse proxy for
 TLS-terminated access. The AgentsView backend stays on loopback while Caddy
@@ -702,22 +708,22 @@ agentsview serve \
 | `--tls-key`         |             | TLS key file path                                     |
 | `--allowed-subnet`  |             | Client CIDR allowlist (repeatable or comma-separated) |
 
-Caddy must already be installed and available on `PATH` unless you override it
-with `--caddy-bin`.
+Caddy must already be installed and on `PATH` unless you override it with
+`--caddy-bin`.
 
-### Listener And URL Ports
+### Listener and URL ports
 
 `--public-port` applies only to managed Caddy. It controls Caddy's listening
-port and the port in the resolved `--public-url`; it does not change the backend
-`--port`. It works with both HTTP and HTTPS, as selected by the URL scheme.
-HTTPS requires `--tls-cert` and `--tls-key`; HTTP must omit them.
+port and the port in the resolved `--public-url`, without changing the backend
+`--port`. It works with both HTTP and HTTPS based on the URL scheme. HTTPS
+requires `--tls-cert` and `--tls-key`, and HTTP must omit them.
 
 - If the URL has an explicit port, Caddy uses that port.
-- If the URL omits a port, Caddy uses `--public-port`, or `8443` when the flag is
-  unset. Thus `--proxy caddy --public-url https://agents.example.com` resolves to
-  `https://agents.example.com:8443`, not port 443.
+- If the URL omits a port, Caddy uses `--public-port`, or `8443` when the flag
+  is unset. For example, `--proxy caddy --public-url https://agents.example.com`
+  resolves to `https://agents.example.com:8443`, not port 443.
 - If both the URL and `--public-port` specify ports, they must match. For HTTPS
-  on port 443, use `--public-port 443` or put `:443` in the URL.
+  on port 443, pass `--public-port 443` or put `:443` in the URL.
 
 Caddy binds to `127.0.0.1` by default, even when the URL contains a remote
 hostname. To accept LAN connections, set `--proxy-bind-host` and an
@@ -731,12 +737,11 @@ example, if an existing proxy listens on 443 and forwards to backend port 8080:
 agentsview serve --port 8080 --public-url https://agents.example.com --no-browser
 ```
 
-### Subnet Allowlists
+### Subnet allowlists
 
-When using a non-loopback bind host for Caddy, restrict access to specific
+When you bind Caddy to a non-loopback host, restrict access to specific
 networks. Subnet allowlists complement bearer-token auth rather than replacing
-it — `require_auth = true` should still be set before binding Caddy off
-loopback.
+it, so still set `require_auth = true` before binding Caddy off loopback.
 
 ```bash
 agentsview serve \
@@ -748,10 +753,10 @@ agentsview serve \
 
 Requests from outside the allowed subnets receive `403`.
 
-## Settings Page
+## Settings page
 
-Remote access can also be configured from the Settings page. The **Remote
-Access** section lets you:
+You can also configure remote access from the **Settings** page. In the
+**Remote access** section, you can:
 
 - toggle `require_auth`
 - view the auto-generated auth token
@@ -759,9 +764,9 @@ Access** section lets you:
 
 ![Settings remote access](/docs/assets/generated/screenshots/settings-remote.png)
 
-Auth changes take effect when you save.
+Auth changes take effect as soon as you flip the toggle.
 
-## CLI Flags Reference
+## CLI flags reference
 
 | Flag                | Default     | Description                                         |
 | ------------------- | ----------- | --------------------------------------------------- |
@@ -778,9 +783,9 @@ Auth changes take effect when you save.
 | `--tls-key`         |             | TLS key path                                        |
 | `--allowed-subnet`  |             | Client CIDR allowlist (repeatable/comma-separated)  |
 
-## Config File Reference
+## Config file reference
 
-Remote-access-related fields in `~/.agentsview/config.toml`:
+Remote-access fields in `~/.agentsview/config.toml`:
 
 ```toml
 require_auth = true
@@ -813,6 +818,6 @@ allowed_subnets = ["192.168.1.0/24"]
 | `proxy.tls_key`         | TLS key path                                                               |
 | `proxy.allowed_subnets` | CIDR allowlist for proxy connections                                       |
 
-For LAN access you still need a non-loopback bind such as
-`agentsview serve --host 0.0.0.0`. `require_auth` controls API auth; it does not
-change the bind address by itself.
+For LAN access, you still need a non-loopback bind such as
+`agentsview serve --host 0.0.0.0`. `require_auth` controls API auth and does not
+change the bind address on its own.
