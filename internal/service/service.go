@@ -443,6 +443,10 @@ const SessionAnnotationsAPIVersion = 11
 // lists by updated_since and created_since; older daemons ignore them.
 const RecallTimeBoundsAPIVersion = 21
 
+// RawSessionLookupAPIVersion is the first daemon API that protects trashed
+// exact IDs during raw-suffix lookup.
+const RawSessionLookupAPIVersion = 28
+
 // ListFilter mirrors the HTTP query parameters in handleListSessions.
 // Field names map to HTTP query param names via json tags.
 type ListFilter struct {

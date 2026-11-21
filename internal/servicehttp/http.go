@@ -295,7 +295,7 @@ func (b *httpBackend) FindSessionIDsByRawSuffix(
 		}
 		version = capabilities.APIVersion
 	}
-	if version < service.QualifiedRawLookupAPIVersion {
+	if version < service.RawSessionLookupAPIVersion {
 		return nil, fmt.Errorf("%w: server API version %d requires an upgrade for session ID lookup", service.ErrRawLookupUnsupported, version)
 	}
 	q := &apiclient.GetAPIV1SessionIdsResolveQuery{Partial: raw, RawSuffix: new(true)}
