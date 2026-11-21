@@ -322,14 +322,23 @@ func TestServeLegacyImageTextAfterRestart(t *testing.T) {
 	t.Cleanup(ocrServer.Close)
 	t.Cleanup(func() { close(release) })
 	cfg.ImageText = config.ImageTextConfig{Enabled: true, Endpoint: ocrServer.URL + "/glmocr/parse"}
-	database, err := db.Open(t.Context(), cfg.DBPath)
-	require.NoError(t, err)
-	dbtest.SeedSessionWithMessages(t, database, "retained-image", "project", []db.Message{{SessionID: "retained-image", Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: `[{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgppbWFnZQ=="}]`}}}})
-	require.NoError(t, database.Close())
 	conn, err := sql.Open("sqlite3", cfg.DBPath)
+	require.NoError(t, err)
+	schema, err := os.ReadFile("testdata/legacy/schema-a0c95ef21.sql")
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), string(schema))
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), `PRAGMA user_version = 166;
+		INSERT INTO sessions(id, project) VALUES ('replacement', 'project'), ('retained-image', 'project');
+		INSERT INTO messages(id, session_id, ordinal, role, content) VALUES (1, 'replacement', 0, 'user', 'old transcript'), (2, 'retained-image', 0, 'assistant', 'answer');
+		INSERT INTO tool_calls(message_id, session_id, tool_name, category, result_content) VALUES (2, 'retained-image', 'Read', 'file', '[{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgppbWFnZQ=="}]');`)
 	require.NoError(t, err)
 	testutil.LegacyImageTextSchema(t, conn, testutil.LegacyImageTextLayoutB831F99CC)
 	require.NoError(t, conn.Close())
+	database, err := db.Open(t.Context(), cfg.DBPath)
+	require.NoError(t, err)
+	require.NoError(t, database.ReplaceSessionMessages(t.Context(), "replacement", []db.Message{{SessionID: "replacement", Role: "user", Content: "updated transcript"}}))
+	require.NoError(t, database.Close())
 	data, err := json.Marshal(cfg)
 	require.NoError(t, err)
 	env := []string{
@@ -378,6 +387,15 @@ func TestServeLegacyImageTextHelperProcess(t *testing.T) {
 		require.NoError(t, resp.Body.Close())
 		require.Equal(t, http.StatusOK, resp.StatusCode)
 		require.Contains(t, string(body), "hello")
+		req, err = http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/sessions/replacement/messages", nil)
+		require.NoError(t, err)
+		resp, err = client.Do(req)
+		require.NoError(t, err)
+		body, err = io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		require.NoError(t, resp.Body.Close())
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		require.Contains(t, string(body), "updated transcript")
 		if os.Getenv("AGENTSVIEW_IMAGE_SERVE_RESTART") == "1" {
 			require.Eventually(t, func() bool {
 				req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/search?q=invoice+marker&include_one_shot=true", nil)
