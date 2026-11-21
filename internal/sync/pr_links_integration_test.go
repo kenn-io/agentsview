@@ -279,3 +279,25 @@ func TestStagedCommandPRLinksSurviveTranscriptPolicy(t *testing.T) {
 	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
 	assert.Equal(t, []string{"https://github.com/example/repo/pull/42"}, storedPRURLs(t, env.db, "codex:"+id))
 }
+
+func TestPRFilterCommandAliasAndRedirection(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
+	for _, tc := range []struct{ id, command string }{
+		{"01900000-0000-7000-8000-000000000061", "gh pr co 42 -R example/alpha"},
+		{"01900000-0000-7000-8000-000000000062", "true > /no/such/directory/output && gh pr view 42 -R example/alpha"},
+		{"01900000-0000-7000-8000-000000000063", "gh pr view 42 -R example/beta"},
+	} {
+		env.writeCodexSession(t, filepath.Join("2024", "01", "15"), "rollout-20240115-"+tc.id+".jsonl", testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON(tc.id, "/tmp/project", "user", tsEarly),
+			testjsonl.CodexMsgJSON("user", "Review the work", tsEarlyS1),
+			testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call", map[string]any{"cmd": tc.command}, tsEarlyS5),
+		))
+	}
+	require.Equal(t, 3, env.engine.SyncAll(t.Context(), nil).Synced)
+	filter, err := db.ParsePRFilter("example/alpha#42")
+	require.NoError(t, err)
+	page, err := env.db.ListSessions(t.Context(), db.SessionFilter{PR: filter})
+	require.NoError(t, err)
+	require.Len(t, page.Sessions, 1)
+	assert.Equal(t, "codex:01900000-0000-7000-8000-000000000061", page.Sessions[0].ID)
+}

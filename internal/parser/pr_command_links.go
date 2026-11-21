@@ -99,6 +99,7 @@ func shellCommands(command string) []shellCall {
 		if stmt == nil || stmt.Background || stmt.Coprocess {
 			return -1
 		}
+		before := *state
 		status := -1
 		switch node := stmt.Cmd.(type) {
 		case *syntax.BinaryCmd:
@@ -210,7 +211,8 @@ func shellCommands(command string) []shellCall {
 			}
 			if len(node.Args) == 0 {
 				*state = local
-				return 0
+				status = 0
+				break
 			}
 			var args []string
 			var literals []bool
@@ -274,6 +276,15 @@ func shellCommands(command string) []shellCall {
 			state.repo = shellValue{exported: true}
 			state.host = shellValue{exported: true}
 			state.changedDir = true
+		}
+		if len(stmt.Redirs) > 0 {
+			if state.repo != before.repo {
+				state.repo = shellValue{exported: true}
+			}
+			if state.host != before.host {
+				state.host = shellValue{exported: true}
+			}
+			status = -1
 		}
 		if stmt.Negated && status >= 0 {
 			status = 1 - status
@@ -379,6 +390,9 @@ func ghPRCallLinks(call shellCall, remote string) []PRLink {
 		return nil
 	}
 	action := args[i+1]
+	if action == "co" {
+		action = "checkout"
+	}
 	switch action {
 	case "view", "diff", "checks", "merge", "edit", "comment", "review", "ready", "close", "reopen", "checkout", "update-branch", "lock", "unlock", "revert":
 	default:

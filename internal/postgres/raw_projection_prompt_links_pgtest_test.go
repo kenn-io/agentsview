@@ -259,3 +259,23 @@ func TestRawProjectionToolPRLinksKeepCaptureIdentity(t *testing.T) {
 	require.Len(t, links, 2)
 	assert.ElementsMatch(t, []string{"https://github.com/example/repo/pull/42", "https://github.com/example/repo/pull/43"}, []string{links[0].URL, links[1].URL})
 }
+
+func TestRawProjectionRooCodeChildPromptPRLink(t *testing.T) {
+	f := newProjectionFixture(t)
+	outcome := projectionOutcome("Delegate the review")
+	result := &outcome.Outcome.Results[0].Result
+	result.Session.Agent = parser.AgentRooCode
+	result.Session.ID = "roocode:portable"
+	result.Messages[1].ToolCalls[0].ToolName = "newTask"
+	result.Messages[1].ToolCalls[0].Category = "Task"
+	result.Messages[1].ToolCalls[0].InputJSON = `{"tool":"newTask","content":"Review https://github.com/example/repo/pull/42"}`
+	manifest, _ := f.accept(t, "device-a", "roo-pr", "", parser.AgentRooCode)
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, manifest), manifest, outcome))
+	resolved, err := f.sink.Resolve(t.Context(), "roocode:portable")
+	require.NoError(t, err)
+	var encoded string
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&encoded))
+	links := db.DecodePRLinks(encoded)
+	require.Len(t, links, 1)
+	assert.Equal(t, "https://github.com/example/repo/pull/42", links[0].URL)
+}
