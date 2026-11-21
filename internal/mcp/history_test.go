@@ -85,7 +85,7 @@ func TestGetToolCalls_FiltersPagesAndMasksSecrets(t *testing.T) {
 	require.ErrorContains(t, err, "session not found")
 	_, _, err = ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "s1", Cursor: -1})
 	require.Error(t, err)
-	_, _, err = ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "s1", InputOffset: new(-1)})
+	_, _, err = ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "s1", InputOffset: -1})
 	require.ErrorContains(t, err, "input_offset")
 }
 

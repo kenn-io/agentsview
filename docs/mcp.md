@@ -344,8 +344,7 @@ requested limit. Continue messages with `next_from`, and tool calls with `next_c
 A cut `around` window returns messages in ascending order. Continue with
 `next_from` to read the rest. Ranked searches do not support cursors; reduce `limit` when a response omits
 matches. Search context or snippets marked as truncated
-can be read with `get_messages`. A tool call marked `input_truncated` contains
-a shortened input.
+can be read with `get_messages`.
 
 When `next_cursor` is present, pass it as `cursor` and echo the returned
 RFC3339 `activity_cutoff` unchanged. The total is recounted up to 500. The

@@ -525,7 +525,7 @@ type getMessagesOut struct {
 	// NextFrom is set off the last scanned ordinal (not the last visible
 	// one), so paging stays reliable even though filtering can make a page
 	// return fewer than the limit.
-	NextFrom           *int   `json:"next_from,omitzero" jsonschema:"Next page's from anchor. Page until absent; filtering or the byte budget can make pages short."`
+	NextFrom           *int   `json:"next_from,omitempty" jsonschema:"Next page's from anchor. Page until absent; filtering or the byte budget can make pages short."`
 	TranscriptRevision string `json:"transcript_revision"`
 }
 
@@ -722,9 +722,6 @@ func (t *toolset) fitMessagePage(ctx context.Context, out *getMessagesOut, scann
 	out.Omitted = len(items)
 	next := int(^uint(0) >> 1)
 	out.NextFrom = &next
-	for i := range items {
-		items[i].BodyCursor = ""
-	}
 	out.Messages = items
 	attachBodyCursors(out, source, in.SessionID, in.Roles)
 	out.NextFrom = &next
@@ -732,7 +729,7 @@ func (t *toolset) fitMessagePage(ctx context.Context, out *getMessagesOut, scann
 	n := fitItems(out, items)
 	if n == 0 && len(items) > 0 {
 		n = 1
-		if err := fitOneMessage(out, &items[0], source, in); err != nil {
+		if err := fitOneMessage(out, &items[0], messageBodyCursor{EvidenceSource: source, SessionID: in.SessionID, Revision: out.TranscriptRevision, Ordinal: items[0].Ordinal, NextFrom: out.NextFrom, Roles: in.Roles}); err != nil {
 			return err
 		}
 	}
@@ -760,23 +757,27 @@ func (t *toolset) fitMessagePage(ctx context.Context, out *getMessagesOut, scann
 	return nil
 }
 
-func fitOneMessage(out *getMessagesOut, item *messageOut, source string, in getMessagesIn) error {
-	if source == "" || out.TranscriptRevision == "" {
+func fitOneMessage(out *getMessagesOut, item *messageOut, cursor messageBodyCursor) error {
+	if cursor.EvidenceSource == "" || cursor.Revision == "" {
 		return errors.New("message exceeds budget without a body cursor")
 	}
 	item.Truncated = true
 	if item.FullLength == 0 {
 		item.FullLength = utf8.RuneCountInString(item.Content)
 	}
-	item.BodyCursor = encodeMessageBodyCursor(messageBodyCursor{EvidenceSource: source, SessionID: in.SessionID, Revision: out.TranscriptRevision, Ordinal: item.Ordinal, Offset: item.FullLength, NextFrom: out.NextFrom, Roles: in.Roles})
+	start := cursor.Offset
+	cursor.Offset = item.FullLength
+	item.BodyCursor = encodeMessageBodyCursor(cursor)
 	envelope, err := marshalResponseSize(out)
 	if err != nil {
 		return err
 	}
-	item.Content = fitText(item.Content, responseBudgetBytes-responseSizeMargin-len(envelope), func(text string) any { m := *item; m.Content = text; return m })
+	item.Content = fitText(item.Content, responseBudgetBytes-len(envelope), func(text string) any { m := *item; m.Content = text; return m })
 	if item.Content == "" {
 		return errors.New("message response exceeds budget")
 	}
+	cursor.Offset = start + utf8.RuneCountInString(item.Content)
+	item.BodyCursor = encodeMessageBodyCursor(cursor)
 	return nil
 }
 
@@ -868,22 +869,12 @@ func (t *toolset) getMessageBodyContinuation(
 	}
 	if !fitsResponse(out) {
 		out.NextFrom = nil
-		cursor.Offset = end
-		out.Messages[0].BodyCursor = encodeMessageBodyCursor(cursor)
-		out.Messages[0].Truncated = true
+		cursor.Offset = end - utf8.RuneCountInString(mo.Content)
 		item := out.Messages[0]
 		out.Messages = []messageOut{}
-		envelope, err := marshalResponseSize(out)
-		if err != nil {
+		if err := fitOneMessage(&out, &item, cursor); err != nil {
 			return nil, getMessagesOut{}, err
 		}
-		item.Content = fitText(item.Content, responseBudgetBytes-responseSizeMargin-len(envelope), func(text string) any { m := item; m.Content = text; return m })
-		if item.Content == "" {
-			return nil, getMessagesOut{}, errors.New("message response exceeds budget")
-		}
-		// cursor.Offset now advances from the original offset by the emitted chunk.
-		cursor.Offset = end - utf8.RuneCountInString(mo.Content) + utf8.RuneCountInString(item.Content)
-		item.BodyCursor = encodeMessageBodyCursor(cursor)
 		out.Messages = []messageOut{item}
 	}
 	return nil, out, nil
@@ -946,7 +937,7 @@ type contentMatch struct {
 	Snippet         string   `json:"snippet"`
 	SnippetCut      bool     `json:"snippet_truncated,omitempty" jsonschema:"Read the full message with get_messages."`
 	MatchedWords    int      `json:"matched_words" jsonschema:"Number of retained query words the match holds in ranked word search; unquoted stop words are dropped. Zero for other searches."`
-	Score           *float64 `json:"score,omitzero" jsonschema:"Relevance score for semantic/hybrid modes; omitted for substring/regex/fts."`
+	Score           *float64 `json:"score,omitempty" jsonschema:"Relevance score for semantic/hybrid modes; omitted for substring/regex/fts."`
 	OrdinalRange    [2]int   `json:"ordinal_range" jsonschema:"[start, end] ordinals of the matching conversation unit; equal for single-message units."`
 	Subordinate     bool     `json:"subordinate,omitzero" jsonschema:"True when this match belongs to a subordinate unit: a sidechain run, or a subagent/fork session."`
 	Relationship    string   `json:"relationship,omitempty" jsonschema:"The matched session's relationship to its parent (for example subagent or fork), when it has one."`
@@ -969,7 +960,7 @@ type searchContentOut struct {
 	Omitted        int                         `json:"omitted,omitempty" jsonschema:"Matches held back."`
 	Total          int                         `json:"total,omitempty" jsonschema:"Match count; ranked searches report a lower bound."`
 	TotalCapped    bool                        `json:"total_capped,omitempty" jsonschema:"True when total is a lower bound."`
-	NextCursor     *int                        `json:"next_cursor,omitzero"`
+	NextCursor     *int                        `json:"next_cursor,omitempty"`
 	ActivityCutoff string                      `json:"activity_cutoff,omitempty" jsonschema:"Effective RFC3339 activity cutoff; pass it unchanged with next_cursor as cursor to continue."`
 	ExcludedActive int                         `json:"excluded_active,omitempty"`
 	// EffectiveMode and EffectiveScope report the defaults the search
@@ -1037,14 +1028,11 @@ func (t *toolset) countContentMatches(ctx context.Context, req service.ContentSe
 			}
 		}
 		scanned += len(res.Matches)
-		if total > contentTotalCap {
-			return contentTotalCap, true, nil
-		}
 		if res.NextCursor <= 0 || len(res.Matches) == 0 {
-			return total, false, nil
+			return min(total, contentTotalCap), total > contentTotalCap, nil
 		}
 		if total >= contentTotalCap || scanned >= contentTotalCap {
-			return total, true, nil
+			return min(total, contentTotalCap), true, nil
 		}
 		cursor = res.NextCursor
 	}
@@ -1231,9 +1219,7 @@ func (t *toolset) searchContent(
 		next := int(^uint(0) >> 1)
 		out.NextCursor = &next
 		n := fitItems(out, items)
-		if n > 0 {
-			out.Matches = items[:n]
-		} else {
+		if n == 0 {
 			n = 1
 			m := &items[0]
 			m.ContextTruncated = len(m.ContextBefore) > 0 || len(m.ContextAfter) > 0
@@ -1244,10 +1230,10 @@ func (t *toolset) searchContent(
 			if err != nil {
 				return nil, searchContentOut{}, err
 			}
-			m.Snippet = fitText(m.Snippet, responseBudgetBytes-responseSizeMargin-len(envelope), func(text string) any { match := *m; match.Snippet = text; return match })
+			m.Snippet = fitText(m.Snippet, responseBudgetBytes-len(envelope), func(text string) any { match := *m; match.Snippet = text; return match })
 			m.SnippetCut = m.Snippet != originalSnippet
-			out.Matches = items[:1]
 		}
+		out.Matches = items[:n]
 		out.Omitted = len(items) - n
 		if out.Omitted == 0 {
 			out.NextCursor, out.Note = originalNext, originalNote

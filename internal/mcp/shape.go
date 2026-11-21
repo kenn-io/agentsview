@@ -15,8 +15,6 @@ import (
 
 const (
 	responseBudgetBytes = 12_000
-	// JSON v2 omits zero-valued pointers in shared coverage fields that the SDK includes.
-	responseSizeMargin = 64
 
 	// activeExclusionWindow is how recently a session must have been
 	// active for search tools to exclude it by default. This keeps an
@@ -93,17 +91,15 @@ func roleAllowed(role string, roles []string) bool {
 	return slices.Contains(roles, role)
 }
 
-// marshalResponseSize uses the MCP SDK's HTML escaping and nil collection format.
-// JSON v2 also includes zero-valued numeric and boolean fields tagged omitempty,
-// so this may overestimate the size of the SDK's JSON v1 encoding.
+// marshalResponseSize matches the SDK's escaping and nil collection format.
 func marshalResponseSize(out any) ([]byte, error) {
 	return json.Marshal(out, jsontext.EscapeForHTML(true), jsontext.EscapeForJS(true), jsontext.AllowInvalidUTF8(true), json.FormatNilSliceAsNull(true), json.FormatNilMapAsNull(true))
 }
 
-// fitsResponse reserves space for fields that v2 can omit from shared types.
+// fitsResponse reports whether the encoded response fits the byte budget.
 func fitsResponse(out any) bool {
 	data, err := marshalResponseSize(out)
-	return err == nil && len(data)+responseSizeMargin <= responseBudgetBytes
+	return err == nil && len(data) <= responseBudgetBytes
 }
 
 // fitItems counts the JSON encoding of an empty envelope and each array item.
@@ -113,7 +109,7 @@ func fitItems[T any](envelope any, items []T) int {
 	if err != nil {
 		return 0
 	}
-	size := len(data) + 32 + responseSizeMargin
+	size := len(data) + 32
 	for i, item := range items {
 		data, err = marshalResponseSize(item)
 		if err != nil {
