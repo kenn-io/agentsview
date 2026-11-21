@@ -15,6 +15,7 @@ export class LiveHub {
   private ready = new Map<string, LiveFrame>();
   private timing = new Map<string, LiveFrame>();
   private credentials: { base: string; token: string } | null = null;
+  private connected = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
 
   update(port: LivePort, request: LiveRequest) {
@@ -68,6 +69,7 @@ export class LiveHub {
     this.previous?.close();
     this.source = null;
     this.previous = null;
+    this.connected = false;
   }
 
   private schedule() {
@@ -95,7 +97,7 @@ export class LiveHub {
       sessions.size !== this.sessions.size || [...sessions].some((id) => !this.sessions.has(id));
     if (this.source && request && !changed && this.sameCredentials(request)) return;
     const old = this.previous ?? this.source;
-    const previouslyConnected = this.sameCredentials(request) && old?.readyState === 1;
+    this.connected = this.sameCredentials(request) && (this.connected || old?.readyState === 1);
     if (!request || !this.sameCredentials(request) || old?.readyState !== 1) {
       this.source?.close();
       this.previous?.close();
@@ -134,13 +136,14 @@ export class LiveHub {
     });
     this.source = source;
     let errors = 0;
-    let opened = previouslyConnected;
+    let opened = this.connected;
     let suppressReady = false;
 
     source.addEventListener("open", () => {
       if (this.source !== source && this.previous !== source) return;
       errors = 0;
       opened = true;
+      this.connected = true;
     });
     source.addEventListener("error", () => {
       if (this.source !== source && this.previous !== source) return;

@@ -188,6 +188,29 @@ describe("shared live stream", () => {
     hub.close();
   });
 
+  it.each(["same credentials", "new credentials"])(
+    "classifies replacement failure during reconnect with %s",
+    (credentials) => {
+      const hub = new LiveHub();
+      const archive = { postMessage: vi.fn() };
+      hub.update(archive, request());
+      sources[0]!.emit("open");
+      sources[0]!.emit("error");
+      if (credentials === "same credentials") {
+        hub.update({ postMessage: vi.fn() }, request("a"));
+        vi.advanceTimersByTime(250);
+      } else {
+        hub.update(archive, { ...request("a"), token: "new-token", credentialTime: 1 });
+      }
+      expect(sources[0]!.closed).toBe(true);
+      for (let i = 0; i < 5; i++) sources[1]!.emit("error");
+      expect(archive.postMessage).toHaveBeenLastCalledWith({
+        type: credentials === "same credentials" ? "closed" : "permanent_failure",
+      });
+      hub.close();
+    },
+  );
+
   it("keeps a stream for a duplicate session leaving and shrinks it when the last leaves", () => {
     const hub = new LiveHub();
     const first = { postMessage: vi.fn() };
