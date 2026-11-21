@@ -23,7 +23,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -309,7 +308,6 @@ func TestServeLegacyImageTextAfterRestart(t *testing.T) {
 	cfg.Host = "127.0.0.1"
 	var restarted atomic.Bool
 	release := make(chan struct{})
-	releaseFirst := sync.OnceFunc(func() { close(release) })
 	ocrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !restarted.Load() {
 			select {
@@ -322,11 +320,10 @@ func TestServeLegacyImageTextAfterRestart(t *testing.T) {
 		fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"invoice marker"}]]}`, glmocr.DefaultDeploymentFingerprint)
 	}))
 	t.Cleanup(ocrServer.Close)
-	t.Cleanup(releaseFirst)
+	t.Cleanup(func() { close(release) })
 	cfg.ImageText = config.ImageTextConfig{Enabled: true, Endpoint: ocrServer.URL + "/glmocr/parse"}
 	database, err := db.Open(t.Context(), cfg.DBPath)
 	require.NoError(t, err)
-	dbtest.SeedSessionWithMessages(t, database, "session0", "project", []db.Message{dbtest.UserMsg("session0", 0, "old transcript")})
 	dbtest.SeedSessionWithMessages(t, database, "retained-image", "project", []db.Message{{SessionID: "retained-image", Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: `[{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgppbWFnZQ=="}]`}}}})
 	require.NoError(t, database.Close())
 	conn, err := sql.Open("sqlite3", cfg.DBPath)
@@ -344,7 +341,6 @@ func TestServeLegacyImageTextAfterRestart(t *testing.T) {
 	}
 	out, err := runRuntimeWarningHelperProcess(t, "serve", "TestServeStaleArchiveHelperProcess", env, "archive rebuild complete")
 	require.NoError(t, err, string(out))
-	releaseFirst()
 	restarted.Store(true)
 	out, err = runRuntimeWarningHelperProcess(t, "serve restart", "TestServeStaleArchiveHelperProcess", append(env, "AGENTSVIEW_STALE_SERVE_RESTART=1"), "archive rebuild complete")
 	require.NoError(t, err, string(out))
@@ -455,11 +451,7 @@ func TestServeStaleArchiveHelperProcess(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, resp.Body.Close())
 			require.Equal(t, http.StatusOK, resp.StatusCode)
-			if kind == "legacy image text" {
-				require.Contains(t, string(body), `"content":"hi"`)
-			} else {
-				require.Contains(t, string(body), "hello")
-			}
+			require.Contains(t, string(body), "hello")
 		}
 		if os.Getenv("AGENTSVIEW_STALE_SERVE_RESTART") == "1" {
 			require.Eventually(t, func() bool {
