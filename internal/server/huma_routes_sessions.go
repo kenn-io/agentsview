@@ -1455,13 +1455,8 @@ func (s *Server) humaEvents(ctx context.Context, in *eventsInput) (*huma.StreamR
 			http.Header{"Retry-After": []string{"300"}},
 		)
 	}
-	seen := make(map[string]bool)
 	var found, missing []string
 	for _, id := range in.Sessions {
-		if seen[id] {
-			continue
-		}
-		seen[id] = true
 		if identity, ok := s.db.(db.SessionWatchStateStore); ok {
 			state, err := identity.GetSessionWatchState(id)
 			if err != nil {
