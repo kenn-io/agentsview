@@ -647,8 +647,11 @@ Use `--until YYYY-MM-DD` to set the inclusive end date and `--format json` for
 JSON output. Dates use UTC. Records live in the data directory under
 `mcp/calls/`. Each record contains the tool name, outcome, argument names,
 rejected argument names, result size, and duration. Argument values, error text,
-and results are not recorded. A rejected name is an argument the tool does not take. A result is truncated when a boolean field whose name
-contains `truncated` is true. Empty search percentages include `list_sessions`
-and exclude continuation pages. An empty result can also count as truncated.
+and results are not recorded. A rejected name is an argument the tool does not
+take. A failed call's outcome is `error`. Otherwise it is `truncated` when a
+boolean field whose name contains `truncated` is true, then `empty` when a
+search returns no results, then `ok`. Empty search percentages include
+`list_sessions` and exclude continuation pages. A truncated empty result counts
+toward both percentages.
 Records do not expire. Files let MCP servers record calls when the archive
 database belongs to a separate daemon.
