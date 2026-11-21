@@ -68,24 +68,50 @@ describe("events store", () => {
     "settles startup on %s",
     async (reason) => {
       vi.useFakeTimers();
+      let detach = () => {};
+      let index: ReturnType<typeof vi.spyOn> | undefined;
       try {
         if (reason === "hidden") vi.spyOn(document, "hidden", "get").mockReturnValue(true);
         const { events } = await import("./events.svelte.js");
+        let first: Promise<void> | undefined;
+        if (reason === "timeout") {
+          const { createSessionsStore } = await import("./sessions.svelte.js");
+          const { SessionsService } = await import("../api/generated/index");
+          index = vi
+            .spyOn(SessionsService, "getApiV1SessionsSidebarIndex")
+            .mockImplementation(
+              () =>
+                new Promise((resolve) =>
+                  setTimeout(() => resolve({ sessions: [], total: 0 }), 400),
+                ),
+            );
+          const sessions = createSessionsStore();
+          detach = sessions.attachSidebar();
+          first = sessions.load();
+        }
         const settled = vi.fn();
-        void events.whenReady(100).then(settled);
+        void events.whenReady(reason === "timeout" ? 1000 : 100).then(settled);
         if (reason !== "no subscriber") {
           const listener = vi.fn();
           const unsubscribe = events.subscribe(listener);
           if (reason === "unavailable") expect(api.watchEvents).not.toHaveBeenCalled();
           if (reason !== "unavailable") events.setAvailable(true);
           if (reason === "error") source.dispatchEvent(new Event("error"));
-          if (reason === "timeout") await vi.advanceTimersByTimeAsync(100);
+          if (reason === "timeout") {
+            await vi.advanceTimersByTimeAsync(999);
+            expect(index).not.toHaveBeenCalled();
+            await vi.advanceTimersByTimeAsync(1);
+          }
           if (reason === "unavailable") events.setAvailable(false);
           await Promise.resolve();
           expect(settled).toHaveBeenCalledOnce();
           if (reason === "timeout") {
+            expect(index).toHaveBeenCalledTimes(1);
+            await vi.advanceTimersByTimeAsync(400);
+            await first;
             source.dispatchEvent(new Event("events_ready"));
-            expect(listener).toHaveBeenCalledWith({ scope: "sync" });
+            await vi.advanceTimersByTimeAsync(1000);
+            expect(index).toHaveBeenCalledTimes(2);
           }
           unsubscribe();
         } else {
@@ -94,6 +120,8 @@ describe("events store", () => {
           expect(settled).toHaveBeenCalledOnce();
         }
       } finally {
+        detach();
+        index?.mockRestore();
         vi.useRealTimers();
       }
     },

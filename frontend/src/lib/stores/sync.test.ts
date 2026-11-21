@@ -229,13 +229,14 @@ describe("session watch visibility", () => {
   it("opens only the latest selected session when a hidden tab returns", () => {
     vi.spyOn(document, "hidden", "get").mockReturnValue(true);
     void sync.watchSession("session-a", vi.fn());
+    const onUpdate = vi.fn();
     const onTiming = vi.fn();
-    void sync.watchSession("session-b", vi.fn(), onTiming);
+    void sync.watchSession("session-b", onUpdate, onTiming);
     expect(api.watchSession).not.toHaveBeenCalled();
     vi.spyOn(document, "hidden", "get").mockReturnValue(false);
     document.dispatchEvent(new Event("visibilitychange"));
     expect(api.watchSession).toHaveBeenCalledOnce();
-    expect(api.watchSession).toHaveBeenCalledWith("session-b", expect.any(Function), onTiming);
+    expect(api.watchSession).toHaveBeenCalledWith("session-b", onUpdate, onTiming);
   });
 });
 

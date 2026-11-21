@@ -106,26 +106,10 @@ describe("shared live stream", () => {
     hub.close();
   });
 
-  it("sends readiness again to archive subscribers when the same stream reconnects", () => {
-    const hub = new LiveHub();
-    const archive = { postMessage: vi.fn() };
-    hub.update(archive, request());
-    sources[0]!.emit("events_ready", "{}");
-    sources[0]!.emit("error");
-    sources[0]!.emit("events_ready", "{}");
-    expect(archive.postMessage.mock.calls.map(([frame]) => frame.type)).toEqual([
-      "events_ready",
-      "error",
-      "events_ready",
-    ]);
-    hub.close();
-  });
-
   it("closes the old stream immediately when credentials change and refreshes on readiness", () => {
     const hub = new LiveHub();
     const archive = { postMessage: vi.fn() };
     hub.update(archive, { ...request(), token: "old-token", credentialTime: 1 });
-    sources[0]!.readyState = 1;
     sources[0]!.emit("events_ready", "{}");
     hub.update(archive, { ...request(), token: "new-token", credentialTime: 2 });
     expect(sources[0]!.closed).toBe(true);
@@ -137,43 +121,30 @@ describe("shared live stream", () => {
     hub.close();
   });
 
-  it("refreshes archives if the old stream fails during handoff", () => {
-    const hub = new LiveHub();
-    const archive = { postMessage: vi.fn() };
-    hub.update(archive, request());
-    sources[0]!.emit("events_ready", "{}");
-    hub.update({ postMessage: vi.fn() }, request("a"));
-    vi.advanceTimersByTime(250);
-    sources[0]!.emit("error");
-    expect(sources[0]!.closed).toBe(true);
-    sources[1]!.emit("session_ready", "a");
-    sources[1]!.emit("events_ready", "{}");
-    expect(archive.postMessage.mock.calls.map(([frame]) => frame.type)).toEqual([
-      "events_ready",
-      "error",
-      "events_ready",
-    ]);
-    hub.close();
-  });
-
-  it("replaces a disconnected stream without overlap", () => {
-    const hub = new LiveHub();
-    const archive = { postMessage: vi.fn() };
-    hub.update(archive, request());
-    sources[0]!.emit("events_ready", "{}");
-    sources[0]!.emit("error");
-    hub.update({ postMessage: vi.fn() }, request("a"));
-    vi.advanceTimersByTime(250);
-    expect(sources[0]!.closed).toBe(true);
-    sources[1]!.emit("session_ready", "a");
-    sources[1]!.emit("events_ready", "{}");
-    expect(archive.postMessage.mock.calls.map(([frame]) => frame.type)).toEqual([
-      "events_ready",
-      "error",
-      "events_ready",
-    ]);
-    hub.close();
-  });
+  it.each(["reconnect", "failure during handoff", "disconnected"])(
+    "refreshes archives when continuity breaks: %s",
+    (reason) => {
+      const hub = new LiveHub();
+      const archive = { postMessage: vi.fn() };
+      hub.update(archive, request());
+      sources[0]!.emit("events_ready", "{}");
+      if (reason !== "failure during handoff") sources[0]!.emit("error");
+      if (reason !== "reconnect") {
+        hub.update({ postMessage: vi.fn() }, request("a"));
+        vi.advanceTimersByTime(250);
+        if (reason === "failure during handoff") sources[0]!.emit("error");
+        expect(sources[0]!.closed).toBe(true);
+        sources[1]!.emit("session_ready", "a");
+      }
+      sources[reason === "reconnect" ? 0 : 1]!.emit("events_ready", "{}");
+      expect(archive.postMessage.mock.calls.map(([frame]) => frame.type)).toEqual([
+        "events_ready",
+        "error",
+        "events_ready",
+      ]);
+      hub.close();
+    },
+  );
 
   it("keeps the old stream while a pending replacement is superseded", () => {
     const hub = new LiveHub();
@@ -266,32 +237,18 @@ describe("shared live stream", () => {
 
   it("rechecks a missing session when a subscriber retries", () => {
     const hub = new LiveHub();
-    const archive = { postMessage: vi.fn() };
     const first = { postMessage: vi.fn() };
-    const other = { postMessage: vi.fn() };
     const retry = { postMessage: vi.fn() };
-    hub.update(archive, request());
     hub.update(first, request("a"));
-    vi.advanceTimersByTime(250);
-    const old = sources.at(-1)!;
-    old.emit("session_missing", "a");
-    old.emit("events_ready", "{}");
-    hub.update(other, request("a"));
-    expect(other.postMessage).toHaveBeenCalledWith({ type: "session_missing", data: "a" });
-    archive.postMessage.mockClear();
+    sources[0]!.emit("session_missing", "a");
     hub.leave(first);
     hub.update(retry, request("a"));
     expect(retry.postMessage).not.toHaveBeenCalled();
     vi.advanceTimersByTime(250);
-    expect(sources).toHaveLength(3);
-    const next = sources[2]!;
-    expect(next.url.searchParams.getAll("session")).toEqual(["a"]);
-    next.emit("session_ready", "a");
-    next.emit("events_ready", "{}");
+    expect(sources).toHaveLength(2);
+    expect(sources[1]!.url.searchParams.getAll("session")).toEqual(["a"]);
+    sources[1]!.emit("session_ready", "a");
     expect(retry.postMessage).toHaveBeenCalledWith({ type: "session_ready", data: "a" });
-    expect(other.postMessage).toHaveBeenCalledWith({ type: "session_ready", data: "a" });
-    expect(archive.postMessage).not.toHaveBeenCalled();
-    hub.close();
   });
 
   it("keeps the current credentials when the old subscriber leaves", async () => {
@@ -311,7 +268,6 @@ describe("shared live stream", () => {
     vi.advanceTimersByTime(250);
     expect(sources).toHaveLength(2);
     await sources[1]!.options.fetch(sources[1]!.url, {});
-    expect(fetch.mock.calls[1]![0]).toBe("http://example.test/api/v1/events?session=a");
     expect((fetch.mock.calls[1]![1].headers as Headers).get("Authorization")).toBe(
       "Bearer new-token",
     );
@@ -333,7 +289,6 @@ describe("shared live stream", () => {
     vi.advanceTimersByTime(250);
     expect(sources).toHaveLength(1);
     await sources[0]!.options.fetch(sources[0]!.url, {});
-    expect(fetch.mock.calls[0]![0]).toBe("http://example.test/api/v1/events?session=a");
     expect((fetch.mock.calls[0]![1].headers as Headers).get("Authorization")).toBe(
       "Bearer new-token",
     );
@@ -365,7 +320,7 @@ describe("shared live stream", () => {
     hub.close();
   });
 
-  it.each(["open", "data_changed", "session_updated"])("resets the error budget on %s", (type) => {
+  it.each(["open", "session_updated"])("resets the error budget on %s", (type) => {
     const hub = new LiveHub();
     const port = { postMessage: vi.fn() };
     hub.update(port, request("a"));

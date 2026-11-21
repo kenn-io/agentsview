@@ -12,7 +12,6 @@ export class LiveHub {
   private continuous = false;
   private synced = new Set<LivePort>();
   private sessions = new Set<string>();
-  private recheckMissing = false;
   private ready = new Map<string, LiveFrame>();
   private timing = new Map<string, LiveFrame>();
   private credentials: { base: string; token: string } | null = null;
@@ -52,7 +51,7 @@ export class LiveHub {
     const session = this.ports.get(port)?.session;
     if (session && this.ready.get(session)?.type === "session_missing") {
       this.ready.delete(session);
-      this.recheckMissing = true;
+      this.sessions.delete(session);
     }
     this.ports.delete(port);
     this.synced.delete(port);
@@ -91,9 +90,7 @@ export class LiveHub {
     );
     const changed =
       sessions.size !== this.sessions.size || [...sessions].some((id) => !this.sessions.has(id));
-    if (this.source && request && !changed && !this.recheckMissing && this.sameCredentials(request))
-      return;
-    this.recheckMissing = false;
+    if (this.source && request && !changed && this.sameCredentials(request)) return;
     const old = this.previous ?? this.source;
     if (!request || !this.sameCredentials(request) || old?.readyState !== 1) {
       this.source?.close();

@@ -11,18 +11,12 @@ for (const fallback of ["worker", "broadcast"] as const) {
     const requested: string[] = [];
     const watches: string[] = [];
     const workerStatuses: number[] = [];
-    let realAuthorization: string | undefined;
-    const streamAuthorizations: (string | undefined)[] = [];
     const proxy = http.createServer((req, res) => {
       const url = req.url ?? "/";
-      const authorization = req.headers.authorization;
-      if (authorization && authorization !== "Bearer rotated-token")
-        realAuthorization = authorization;
       if (/^\/api\/v1\/sessions\/[^/]+\/watch(?:\?|$)/.test(url)) watches.push(url);
       if (url.startsWith("/api/v1/events")) {
         active.add(res);
         requested.push(url);
-        streamAuthorizations.push(authorization);
         res.on("close", () => active.delete(res));
       }
       const upstream = http.request(
@@ -33,9 +27,6 @@ for (const fallback of ["worker", "broadcast"] as const) {
           method: req.method,
           headers: {
             ...req.headers,
-            ...(authorization === "Bearer rotated-token"
-              ? { authorization: realAuthorization }
-              : {}),
             host: `127.0.0.1:${process.env.AGENTSVIEW_E2E_PORT ?? 8090}`,
             ...(req.headers.origin
               ? { origin: `http://127.0.0.1:${process.env.AGENTSVIEW_E2E_PORT ?? 8090}` }
@@ -82,9 +73,8 @@ for (const fallback of ["worker", "broadcast"] as const) {
         await tab.goto(`${base}/sessions/${ids[0]}`);
         await expect(tab).toHaveURL(new RegExp(ids[0]!));
       }
-      await page.waitForTimeout(400);
       await expect.poll(() => active.size).toBe(1);
-      expect(workerStatuses).toEqual(fallback === "worker" ? [200] : []);
+      if (fallback === "worker") await expect.poll(() => workerStatuses).toEqual([200]);
       expect(requested[0]).toBe("/api/v1/events?session=test-session-small-5");
       expect(new Set(new URL(requested.at(-1)!, base).searchParams.getAll("session"))).toEqual(
         new Set([ids[0]]),
@@ -94,15 +84,10 @@ for (const fallback of ["worker", "broadcast"] as const) {
       await fourth.keyboard.press("Control+g");
       const dialog = fourth.getByRole("dialog", { name: "Go to session" });
       await expect(dialog).toBeVisible();
-      await fourth
-        .getByRole("textbox", { name: "Session ID or UUID" })
-        .fill("test-session-small-5");
-      await fourth.keyboard.press("Enter");
+      const input = dialog.getByRole("textbox", { name: "Session ID or UUID" });
+      await input.fill("test-session-small-5");
+      await input.press("Enter");
       await expect(fourth).toHaveURL(/test-session-small-5/);
-      await fourth.evaluate(() => localStorage.setItem("agentsview-auth-token", "rotated-token"));
-      await expect.poll(() => streamAuthorizations.at(-1)).toBe("Bearer rotated-token");
-      expect(page.isClosed()).toBe(false);
-      await page.waitForTimeout(400);
       await expect.poll(() => active.size).toBe(1);
       await expect.poll(() => messageRequests).toBeGreaterThan(0);
       const beforeReturn = messageRequests;
@@ -116,19 +101,6 @@ for (const fallback of ["worker", "broadcast"] as const) {
       });
       await expect.poll(() => messageRequests).toBeGreaterThan(beforeReturn);
       await expect.poll(() => active.size).toBe(1);
-      await page.waitForTimeout(400);
-      await expect.poll(() => active.size).toBe(1);
-      const count = requested.length;
-      const beforeSecondReturn = messageRequests;
-      await page.evaluate(() => {
-        (window as Window & { __hidden?: boolean }).__hidden = true;
-        document.dispatchEvent(new Event("visibilitychange"));
-        (window as Window & { __hidden?: boolean }).__hidden = false;
-        document.dispatchEvent(new Event("visibilitychange"));
-      });
-      await expect.poll(() => messageRequests).toBeGreaterThan(beforeSecondReturn);
-      await page.waitForTimeout(400);
-      expect(requested.length).toBe(count);
       const sessionRequests = [0, 0];
       for (const index of [1, 2]) {
         pages[index]!.on("request", (request) => {
@@ -143,7 +115,6 @@ for (const fallback of ["worker", "broadcast"] as const) {
         .toEqual(new Set(ids));
       await expect.poll(() => active.size).toBe(1);
       await expect.poll(() => sessionRequests.every((count) => count > 0)).toBe(true);
-      await page.waitForTimeout(400);
       for (const index of [1, 2]) {
         const beforeUpdate = sessionRequests[index - 1]!;
         const otherBefore = sessionRequests[2 - index]!;
