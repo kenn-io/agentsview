@@ -2487,6 +2487,16 @@ func TestSearchContent_BudgetLongSnippet(t *testing.T) {
 	assert.Equal(t, "later", out.Matches[0].Snippet)
 }
 
+func TestSearchContent_OversizedCurrentSessionID(t *testing.T) {
+	ts, d := newTestToolset(t)
+	seedFTSSession(t, d, "session", "proj", "needle", "2024-06-15T10:00:00Z")
+	_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{
+		Pattern: "needle", CurrentSessionID: strings.Repeat("x", 12000), IncludeOneShot: true,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "search metadata exceeds response budget")
+}
+
 func TestGetMessages_BudgetAroundLinearContinuation(t *testing.T) {
 	ts, d := newTestToolset(t)
 	messages := make([]db.Message, 5)

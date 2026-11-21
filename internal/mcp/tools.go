@@ -1157,7 +1157,12 @@ func (t *toolset) searchContent(
 		out.NextCursor = &nc
 	}
 	out.Hints = service.SearchContentHints(ctx, t.svc, req, res, false, keepMatch)
-	// Hints come only with an empty page, which stays far under the budget.
+	empty := out
+	empty.Matches = nil
+	if !fitsResponse(empty) {
+		return nil, searchContentOut{}, errors.New("search metadata exceeds response budget")
+	}
+	// Hints come only with an empty page.
 	if len(in.Concepts) == 0 && len(out.Matches) > 0 && !fitsResponse(out) {
 		items := out.Matches
 		ranked := mode == "semantic" || mode == "hybrid"
@@ -1169,14 +1174,18 @@ func (t *toolset) searchContent(
 				return nil, searchContentOut{}, err
 			}
 		}
-		n := fitPrefix(len(items), func(k int) bool {
+		build := func(k int) bool {
 			out.Matches, out.Omitted = items[:k], len(items)-k
 			if !ranked {
 				next := in.Cursor + rawIndexes[max(k, 1)-1] + 1
 				out.NextCursor = &next
 			}
 			return fitsResponse(out)
-		})
+		}
+		if !build(0) {
+			return nil, searchContentOut{}, errors.New("search metadata exceeds response budget")
+		}
+		n := fitPrefix(len(items), build)
 		if n == 0 {
 			m := &items[0]
 			m.Truncated = true
@@ -1184,6 +1193,9 @@ func (t *toolset) searchContent(
 			out.Omitted = len(items) - 1
 			m.Snippet = fitText(m.Snippet, responseBudgetBytes-responseSize(out), func(text string) any { match := *m; match.Snippet = text; return match })
 			out.Matches = items[:1]
+			if !fitsResponse(out) {
+				return nil, searchContentOut{}, errors.New("search metadata exceeds response budget")
+			}
 		}
 	}
 	return nil, out, nil
