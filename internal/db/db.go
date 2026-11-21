@@ -3107,6 +3107,10 @@ CREATE TRIGGER IF NOT EXISTS sessions_trends_generation_update AFTER UPDATE OF t
 WHEN OLD.transcript_revision IS NOT NEW.transcript_revision BEGIN
     UPDATE sessions SET trends_generation=lower(hex(randomblob(16))) WHERE id=NEW.id;
 END;
+CREATE TRIGGER IF NOT EXISTS messages_dashboard_length_generation_update AFTER UPDATE OF content_length ON messages
+WHEN OLD.content_length IS NOT NEW.content_length BEGIN
+    UPDATE sessions SET trends_generation=lower(hex(randomblob(16))) WHERE id=NEW.session_id;
+END;
 `
 
 const toolsGenerationSchemaSQL = `

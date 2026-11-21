@@ -2,7 +2,9 @@ package db
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"maps"
 	"sort"
@@ -11,10 +13,14 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-const dashboardPartsVersion = 1
+// Increment when dashboard counts, velocity, or hook exclusions change.
+const dashboardPartsVersion = 2
+
+var errDashboardSelectionChanged = errors.New("dashboard session selection changed")
 
 var dashboardPartsReadObserver func([]string)
 var dashboardPartsBeforeValidationObserver func(context.Context)
+var dashboardPartsBeforeSlotObserver func()
 
 type dashboardPart struct {
 	Messages, User, Assistant, Thinking, Tools int
@@ -36,25 +42,54 @@ func (db *DB) dashboardSessions(ctx context.Context, f AnalyticsFilter) ([]dashb
 	loc := f.location()
 	dateCol := "COALESCE(NULLIF(s.started_at, ''), s.created_at)"
 	where, args := f.buildWhereWithDate(dateCol, true, "s.id")
-	rows, err := db.getReader().QueryContext(ctx, `SELECT s.id, `+dateCol+`, s.agent, s.message_count, s.transcript_revision || '|' || COALESCE(s.trends_generation, '') || '|' || s.created_at || '|' || COALESCE(s.started_at, '') FROM sessions s WHERE `+where, args...)
+	rows, err := db.getReader().QueryContext(ctx, `SELECT s.id, `+dateCol+`, s.agent, s.message_count, s.transcript_revision || '|' || COALESCE(s.trends_generation, '') || '|' || COALESCE(s.usage_generation, '') || '|' || s.created_at || '|' || COALESCE(s.started_at, ''), s.tools_generation, `+toolsSessionFingerprintSQL+` FROM sessions s WHERE `+where, args...)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer rows.Close()
 	var sessions []dashboardSession
+	var dirty []string
 	versions := make(map[string]string)
 	for rows.Next() {
 		var s dashboardSession
-		if err := rows.Scan(&s.ID, &s.Date, &s.Agent, &s.MessageCount, &s.Fingerprint); err != nil {
+		var generation *string
+		var toolsFingerprint string
+		if err := rows.Scan(&s.ID, &s.Date, &s.Agent, &s.MessageCount, &s.Fingerprint, &generation, &toolsFingerprint); err != nil {
 			return nil, nil, err
 		}
 		if !InDateRange(LocalDate(s.Date, loc), f.From, f.To) {
 			continue
 		}
+		if generation == nil {
+			dirty = append(dirty, s.ID)
+		} else {
+			s.Fingerprint += "|" + toolsFingerprint
+		}
 		sessions = append(sessions, s)
 		versions[s.ID] = s.Fingerprint
 	}
-	return sessions, versions, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, nil, err
+	}
+	if len(dirty) > 0 {
+		fingerprints, err := db.stampToolsSessions(ctx, dirty)
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(fingerprints) != len(dirty) {
+			return nil, nil, errDashboardSelectionChanged
+		}
+		for i := range sessions {
+			if fingerprint, ok := fingerprints[sessions[i].ID]; ok {
+				sessions[i].Fingerprint += "|" + fingerprint
+				versions[sessions[i].ID] = sessions[i].Fingerprint
+			}
+		}
+	}
+	return sessions, versions, nil
 }
 
 func (db *DB) dashboardParts(ctx context.Context, f AnalyticsFilter) ([]dashboardSession, map[string]kept.Part[dashboardPart], bool, error) {
@@ -75,6 +110,9 @@ func (db *DB) dashboardParts(ctx context.Context, f AnalyticsFilter) ([]dashboar
 	}
 	_, versions, err := db.dashboardSessions(ctx, f)
 	release()
+	if errors.Is(err, errDashboardSelectionChanged) {
+		return nil, nil, false, nil
+	}
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -82,19 +120,23 @@ func (db *DB) dashboardParts(ctx context.Context, f AnalyticsFilter) ([]dashboar
 	if err != nil {
 		return nil, nil, false, err
 	}
-	result, err := db.dashboardFlights.Do(ctx, identity+"|"+TrendsTimezoneKey(f)+"|"+string(key), func(ctx context.Context) (dashboardPartsResult, error) {
-		release, err := db.acquireBulkRead(ctx)
-		if err != nil {
-			return dashboardPartsResult{}, err
-		}
-		defer release()
+	keyHash := sha256.Sum256(key)
+	result, err := db.dashboardFlights.Do(ctx, fmt.Sprintf("%s|%s|%x", identity, TrendsTimezoneKey(f), keyHash), func(ctx context.Context) (dashboardPartsResult, error) {
 		db.dashboardPartsOnce.Do(func() { db.dashboardPartsSlot = make(chan struct{}, 1) })
+		if dashboardPartsBeforeSlotObserver != nil {
+			dashboardPartsBeforeSlotObserver()
+		}
 		select {
 		case db.dashboardPartsSlot <- struct{}{}:
 			defer func() { <-db.dashboardPartsSlot }()
 		case <-ctx.Done():
 			return dashboardPartsResult{}, ctx.Err()
 		}
+		release, err := db.acquireBulkRead(ctx)
+		if err != nil {
+			return dashboardPartsResult{}, err
+		}
+		defer release()
 		tokens := func() ([2]string, error) {
 			var v [2]string
 			err := db.getReader().QueryRowContext(ctx, `SELECT COALESCE((SELECT value FROM archive_metadata WHERE key='dashboard_common'), ''), COALESCE((SELECT value FROM archive_metadata WHERE key='dashboard_scope'), '')`).Scan(&v[0], &v[1])
@@ -108,6 +150,9 @@ func (db *DB) dashboardParts(ctx context.Context, f AnalyticsFilter) ([]dashboar
 			return dashboardPartsResult{}, nil
 		}
 		sessions, current, err := db.dashboardSessions(ctx, f)
+		if errors.Is(err, errDashboardSelectionChanged) {
+			return dashboardPartsResult{}, nil
+		}
 		if err != nil {
 			return dashboardPartsResult{}, err
 		}
@@ -117,6 +162,10 @@ func (db *DB) dashboardParts(ctx context.Context, f AnalyticsFilter) ([]dashboar
 		slot := "dashboard-parts|" + TrendsTimezoneKey(f)
 		version := fmt.Sprintf("%s|%d", identity, dashboardPartsVersion)
 		parts := kept.LoadParts[dashboardPart](&db.trendsDisk, slot, version)
+		pruned, err := db.pruneDashboardParts(ctx, parts)
+		if err != nil {
+			return dashboardPartsResult{}, err
+		}
 		var ids []string
 		for id, fingerprint := range versions {
 			if p, ok := parts[id]; !ok || p.Fingerprint != fingerprint {
@@ -139,14 +188,17 @@ func (db *DB) dashboardParts(ctx context.Context, f AnalyticsFilter) ([]dashboar
 		if err != nil {
 			return dashboardPartsResult{}, err
 		}
-		_, latest, err := db.dashboardSessions(ctx, f)
+		latestSessions, latest, err := db.dashboardSessions(ctx, f)
+		if errors.Is(err, errDashboardSelectionChanged) {
+			return dashboardPartsResult{}, nil
+		}
 		if err != nil {
 			return dashboardPartsResult{}, err
 		}
-		if before != after || !maps.Equal(versions, latest) {
+		if after[0] == "" || after[1] == "" || !maps.Equal(versions, latest) || !sameDashboardSessions(sessions, latestSessions) {
 			return dashboardPartsResult{}, nil
 		}
-		if len(ids) > 0 {
+		if len(ids) > 0 || pruned {
 			saved := make([]kept.Part[dashboardPart], 0, len(parts))
 			for _, p := range parts {
 				saved = append(saved, p)
@@ -159,6 +211,51 @@ func (db *DB) dashboardParts(ctx context.Context, f AnalyticsFilter) ([]dashboar
 		return nil, nil, false, err
 	}
 	return result.Sessions, result.Parts, result.Handled, nil
+}
+
+func sameDashboardSessions(a, b []dashboardSession) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	byID := make(map[string]dashboardSession, len(a))
+	for _, s := range a {
+		byID[s.ID] = s
+	}
+	for _, s := range b {
+		if byID[s.ID] != s {
+			return false
+		}
+	}
+	return true
+}
+
+func (db *DB) pruneDashboardParts(ctx context.Context, parts map[string]kept.Part[dashboardPart]) (bool, error) {
+	if len(parts) == 0 {
+		return false, nil
+	}
+	rows, err := db.getReader().QueryContext(ctx, `SELECT id FROM sessions`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	missing := make(map[string]bool, len(parts))
+	for id := range parts {
+		missing[id] = true
+	}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return false, err
+		}
+		delete(missing, id)
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	for id := range missing {
+		delete(parts, id)
+	}
+	return len(missing) > 0, nil
 }
 
 func (db *DB) fillDashboardParts(ctx context.Context, f AnalyticsFilter, ids []string, versions map[string]string, parts map[string]kept.Part[dashboardPart]) error {
