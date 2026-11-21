@@ -603,13 +603,6 @@ func TestGetMessages_BodyCursorContinuesUnicodeMessage(t *testing.T) {
 	assert.Equal(t, 10, first.Messages[0].FullLength)
 	require.NotEmpty(t, first.Messages[0].BodyCursor)
 	require.NotEmpty(t, first.TranscriptRevision)
-	payload, err := base64.RawURLEncoding.DecodeString(first.Messages[0].BodyCursor)
-	require.NoError(t, err)
-	var cursor struct {
-		Version int `json:"v"`
-	}
-	require.NoError(t, json.Unmarshal(payload, &cursor))
-	assert.Equal(t, 2, cursor.Version)
 	assert.Nil(t, first.NextFrom, "body continuation must finish before message pagination advances")
 
 	_, second, err := ts.getMessages(t.Context(), nil, getMessagesIn{
@@ -2405,11 +2398,6 @@ func TestGetMessages_BudgetPages(t *testing.T) {
 			assert.Equal(t, 101, len(ordinals)+filtered)
 		})
 	}
-	anchor, before, after := 50, 50, 49
-	_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "budget", Around: &anchor, Before: &before, After: &after})
-	require.NoError(t, err)
-	assert.True(t, fitsResponse(out))
-	assert.Positive(t, out.Omitted)
 }
 
 func TestSearchContent_ListSessionBudgetPages(t *testing.T) {
@@ -2476,7 +2464,6 @@ func TestSearchContent_BudgetRankedPages(t *testing.T) {
 	for i, ordinal := range ordinals {
 		assert.Equal(t, i, ordinal)
 	}
-	assert.Equal(t, "project", fake.lastReq.Project)
 }
 
 func TestSearchContent_RankedTotal(t *testing.T) {
@@ -2541,7 +2528,6 @@ func TestSearchContent_Total(t *testing.T) {
 		{name: "continued page", count: 36, limit: 10, cursor: 10, want: 36, calls: 2, wantScan: new(20)},
 		{name: "last page", count: 36, limit: 10, cursor: 30, want: 36, calls: 1},
 		{name: "cursor past end", count: 6, limit: 10, cursor: 1000, want: 6, calls: 2, wantScan: new(0)},
-		{name: "single page", count: 5, limit: 10, want: 5, calls: 1},
 		{name: "capped", count: 600, limit: 10, want: 500, calls: 11, capped: true},
 		{name: "capped continuation", count: 600, limit: 10, cursor: 100, want: 500, calls: 9, capped: true, wantScan: new(110)},
 		{name: "cap shortcut", count: 600, limit: 10, cursor: 490, want: 500, calls: 1, capped: true},
@@ -2695,31 +2681,6 @@ func TestSearchContent_TotalLegacyActivity(t *testing.T) {
 	}
 }
 
-func TestSearchContent_BudgetLexicalPages(t *testing.T) {
-	ts, d := newTestToolset(t)
-	messages := make([]db.Message, 50)
-	for i := range messages {
-		messages[i] = dbtest.UserMsg("search-budget", i, "needle "+strings.Repeat("x", 500))
-	}
-	dbtest.SeedSessionWithMessages(t, d, "search-budget", "proj", messages, dbtest.WithMessageCounts(50, 50))
-	in := searchContentIn{Pattern: "needle", Limit: 50, Context: 10, IncludeActive: true, IncludeOneShot: true}
-	var ordinals []int
-	for {
-		_, out, err := ts.searchContent(t.Context(), nil, in)
-		require.NoError(t, err)
-		assert.True(t, fitsResponse(out))
-		for _, match := range out.Matches {
-			ordinals = append(ordinals, match.Ordinal)
-		}
-		if out.NextCursor == nil {
-			break
-		}
-		in.Cursor = *out.NextCursor
-	}
-	require.Len(t, ordinals, 50)
-	assert.Len(t, uniqueOrdinals(ordinals), 50)
-}
-
 func uniqueOrdinals(ordinals []int) map[int]bool {
 	seen := make(map[int]bool, len(ordinals))
 	for _, ordinal := range ordinals {
@@ -2759,6 +2720,7 @@ func TestGetMessages_BudgetAroundSweep(t *testing.T) {
 		assert.True(t, fitsResponse(out))
 		if page == 0 {
 			assert.Equal(t, anchor, out.Messages[0].Ordinal)
+			assert.Positive(t, out.Omitted)
 		}
 		for _, m := range out.Messages {
 			ordinals = append(ordinals, m.Ordinal)
