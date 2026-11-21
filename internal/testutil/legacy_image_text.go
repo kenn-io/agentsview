@@ -33,7 +33,7 @@ func LegacyImageTextSchema(tb testing.TB, db interface {
 	case LegacyImageTextLayoutB831F99CC:
 		occurrences = imageTextOccurrencesB831
 	default:
-		require.FailNow(tb, "unknown legacy image-text layout %q", layout)
+		require.FailNow(tb, "unknown legacy image-text layout "+string(layout))
 	}
 	_, err := db.ExecContext(tb.Context(), `
 		DROP TRIGGER image_text_session_delete;
