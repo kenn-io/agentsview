@@ -112,6 +112,7 @@ func TestCallLogRejectedNames(t *testing.T) {
 		{"query": "term", "cursor": `unexpected additional properties ["cursor"]`},
 		{"query": 123},
 		{"query": "secret-value", "limit": "bad"},
+		{"query": "secret-value", "limit": "bad", "include_one_shot": true},
 	} {
 		_, err := ct.CallTool(t.Context(), callParams(ToolSearchSessions, args))
 		require.NoError(t, err)
@@ -119,11 +120,10 @@ func TestCallLogRejectedNames(t *testing.T) {
 	rows, err := SummarizeCalls(dir, "", "")
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	assert.Equal(t, 5, rows[0].Calls)
+	assert.Equal(t, 6, rows[0].Calls)
 	require.NotNil(t, rows[0].EmptyPercent)
-	assert.InDelta(t, 25.0, *rows[0].EmptyPercent, 0.001)
-	assert.Equal(t, []CallCount{{Name: "odd name", Count: 1}, {Name: `quote"name`, Count: 1}}, rows[0].Rejected)
-	assert.Equal(t, []string{"sent"}, rejectedProperties(`validating "arguments": validating root: unexpected additional properties ["sent" "unsent"]`, map[string]any{"sent": true}))
+	assert.InDelta(t, 20.0, *rows[0].EmptyPercent, 0.001)
+	assert.Equal(t, []CallCount{{Name: "include_one_shot", Count: 1}, {Name: "odd name", Count: 1}, {Name: `quote"name`, Count: 1}}, rows[0].Rejected)
 }
 
 func TestCallLogWriteFailureWarnsOnce(t *testing.T) {
@@ -153,7 +153,7 @@ func TestRecordToolCallErrorOutcome(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "calls")
 	req := &mcp.CallToolRequest{Params: &mcp.CallToolParamsRaw{Name: ToolSearchDocs}}
 	result := &mcp.CallToolResult{IsError: true, StructuredContent: map[string]any{"results": []any{}, "truncated": true}}
-	require.NoError(t, recordToolCall(dir, req, result, context.Canceled, time.Second))
+	require.NoError(t, recordToolCall(dir, req, result, context.Canceled, time.Second, nil))
 	rows, err := SummarizeCalls(dir, "", "")
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
@@ -286,7 +286,7 @@ func TestCallLogCursors(t *testing.T) {
 			name = ToolSearchSessions
 		}
 		req := &mcp.CallToolRequest{Params: &mcp.CallToolParamsRaw{Name: name, Arguments: args}}
-		require.NoError(t, recordToolCall(dir, req, nil, nil, 0))
+		require.NoError(t, recordToolCall(dir, req, nil, nil, 0, nil))
 		files, err := os.ReadDir(dir)
 		require.NoError(t, err)
 		raw, err := os.ReadFile(filepath.Join(dir, files[0].Name()))

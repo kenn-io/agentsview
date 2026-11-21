@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -72,7 +71,7 @@ func warnCallLogFailure(err error) {
 	}
 }
 
-func recordToolCall(dir string, req *mcp.CallToolRequest, result mcp.Result, callErr error, elapsed time.Duration) error {
+func recordToolCall(dir string, req *mcp.CallToolRequest, result mcp.Result, callErr error, elapsed time.Duration, tool *mcp.Tool) error {
 	if dir == "" || req == nil || req.Params == nil {
 		return nil
 	}
@@ -95,14 +94,23 @@ func recordToolCall(dir string, req *mcp.CallToolRequest, result mcp.Result, cal
 		for _, c := range call.Content {
 			if text, ok := c.(*mcp.TextContent); ok {
 				rec.Bytes += len(text.Text)
-				if call.IsError {
-					rec.Rejected = append(rec.Rejected, rejectedProperties(text.Text, args)...)
-				}
 			}
 		}
 	}
 	if callErr != nil || (call != nil && call.IsError) {
 		rec.Outcome = "error"
+		if tool != nil {
+			var schema struct {
+				Properties map[string]any `json:"properties"`
+			}
+			if b, err := json.Marshal(tool.InputSchema); err == nil && json.Unmarshal(b, &schema) == nil {
+				for arg := range args {
+					if _, ok := schema.Properties[arg]; !ok {
+						rec.Rejected = append(rec.Rejected, arg)
+					}
+				}
+			}
+		}
 	} else if call != nil {
 		b, err := json.Marshal(call.StructuredContent)
 		if err == nil {
@@ -158,27 +166,6 @@ func hasTruncated(value any) bool {
 		}
 	}
 	return false
-}
-
-func rejectedProperties(message string, args map[string]any) []string {
-	list, ok := strings.CutPrefix(message, `validating "arguments": validating root: unexpected additional properties [`)
-	if !ok {
-		return nil
-	}
-	var names []string
-	for {
-		list = strings.TrimLeft(list, " ")
-		quoted, err := strconv.QuotedPrefix(list)
-		if err != nil {
-			break
-		}
-		name, err := strconv.Unquote(quoted)
-		if _, sent := args[name]; err == nil && sent {
-			names = append(names, name)
-		}
-		list = list[len(quoted):]
-	}
-	return names
 }
 
 type callAggregate struct {

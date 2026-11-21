@@ -134,7 +134,19 @@ func newServer(opts ServeOptions) *mcp.Server {
 				call.Content = append(call.Content, &mcp.TextContent{Text: "Warning: " + apiclient.ArchiveStaleWarning})
 			}
 			if req, ok := request.(*mcp.CallToolRequest); ok {
-				warnCallLogFailure(recordToolCall(opts.CallLogDir, req, result, err, elapsed))
+				var tool *mcp.Tool
+				if call, ok := result.(*mcp.CallToolResult); opts.CallLogDir != "" && req.Params != nil && ok && call != nil && call.IsError {
+					listed, listErr := next(ctx, "tools/list", &mcp.ListToolsRequest{Session: req.Session})
+					if list, ok := listed.(*mcp.ListToolsResult); listErr == nil && ok {
+						for _, item := range list.Tools {
+							if item.Name == req.Params.Name {
+								tool = item
+								break
+							}
+						}
+					}
+				}
+				warnCallLogFailure(recordToolCall(opts.CallLogDir, req, result, err, elapsed, tool))
 			}
 			return result, err
 		}
