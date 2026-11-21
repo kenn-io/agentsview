@@ -251,9 +251,10 @@ matches in `excluded_active`, so their pages can still be short or empty with a
 `next_cursor`. Set `include_active: true` when you need that recent work. An
 empty `search_sessions` page with excluded
 active matches returns `hints` with `retry_with: {"include_active": true}`. For
-recall from a known conversation, pass its full ID as `current_session_id`;
-`search_content` then excludes only that session before applying the result
-limit and does not hide other recent work.
+recall from a known conversation, pass a full stored ID or a raw UUID as
+`current_session_id` to exclude that session before applying the result limit.
+Other recent work remains visible. If the ID is not indexed yet, the search
+uses it as given. Ambiguous raw UUIDs return an error.
 
 `list_sessions` and `search_content` exclude one-shot and automated sessions by
 default. Set `include_one_shot: true` or `include_automated: true` to include

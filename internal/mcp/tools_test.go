@@ -1509,7 +1509,7 @@ type fakeContentSearchService struct {
 }
 
 func (f *fakeContentSearchService) Get(_ context.Context, id string) (*service.SessionDetail, error) {
-	if id == "child" || id == "older" {
+	if id == "child" || id == "older" || id == "current" {
 		return &service.SessionDetail{ID: id}, nil
 	}
 	return nil, fmt.Errorf("unexpected session lookup: %s", id)
