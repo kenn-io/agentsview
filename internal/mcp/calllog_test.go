@@ -14,6 +14,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/service"
 )
@@ -248,6 +249,46 @@ func TestCallLogEmptySearchTools(t *testing.T) {
 		require.NotNil(t, row.EmptyPercent)
 		assert.Equal(t, 100.0, *row.EmptyPercent, row.Tool)
 	}
+}
+
+func TestCallLogListSessionsAndTruncatedMessages(t *testing.T) {
+	dir := t.TempDir()
+	d := dbtest.OpenTestDB(t)
+	dbtest.SeedSession(t, d, "a", "project", dbtest.WithMessageCounts(4, 2))
+	dbtest.SeedSession(t, d, "b", "project", dbtest.WithMessageCounts(4, 2))
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{dbtest.UserMsg("a", 0, strings.Repeat("x", 50))}))
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), CallLogDir: dir}))
+	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
+	page, err := ct.CallTool(t.Context(), callParams(ToolListSessions, map[string]any{"limit": 1}))
+	require.NoError(t, err)
+	require.False(t, page.IsError)
+	var out listSessionsOut
+	b, err := json.Marshal(page.StructuredContent)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(b, &out))
+	require.NotEmpty(t, out.NextCursor)
+	for _, args := range []map[string]any{
+		{"project": "missing"},
+		{"project": "missing", "cursor": out.NextCursor},
+	} {
+		result, err := ct.CallTool(t.Context(), callParams(ToolListSessions, args))
+		require.NoError(t, err)
+		require.False(t, result.IsError)
+	}
+	for _, limit := range []int{10, 100} {
+		result, err := ct.CallTool(t.Context(), callParams(ToolGetMessages, map[string]any{"session_id": "a", "max_chars_per_message": limit}))
+		require.NoError(t, err)
+		require.False(t, result.IsError)
+	}
+	rows, err := SummarizeCalls(t.Context(), dir, "", "")
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	assert.Equal(t, ToolListSessions, rows[0].Tool)
+	assert.Equal(t, 3, rows[0].Calls)
+	require.NotNil(t, rows[0].EmptyPercent)
+	assert.Equal(t, 50.0, *rows[0].EmptyPercent)
+	assert.Equal(t, ToolGetMessages, rows[1].Tool)
+	assert.Equal(t, 50.0, rows[1].TruncatedPercent)
 }
 
 func TestCallLogValidationValueIsNotARejectedName(t *testing.T) {

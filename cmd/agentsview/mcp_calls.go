@@ -52,7 +52,7 @@ func newMCPCallsCommand() *cobra.Command {
 				if len(rejected) == 0 {
 					rejected = []string{"-"}
 				}
-				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s: %d calls, %.1f%% errors, top error: %s, empty: %s, rejected: %s, median: %d bytes, %d ms\n", row.Tool, row.Calls, row.ErrorPercent, top, empty, strings.Join(rejected, ", "), row.MedianBytes, row.MedianMs); err != nil {
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s: %d calls, %.1f%% errors, %.1f%% truncated, top error: %s, empty: %s, rejected: %s, median: %d bytes, %d ms\n", row.Tool, row.Calls, row.ErrorPercent, row.TruncatedPercent, top, empty, strings.Join(rejected, ", "), row.MedianBytes, row.MedianMs); err != nil {
 					return err
 				}
 			}

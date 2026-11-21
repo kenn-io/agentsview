@@ -42,20 +42,23 @@ type CallCount struct {
 	Count int    `json:"count"`
 }
 type CallSummary struct {
-	Tool         string      `json:"tool"`
-	Calls        int         `json:"calls"`
-	ErrorPercent float64     `json:"error_percent"`
-	TopError     *CallCount  `json:"top_error,omitempty"`
-	EmptyPercent *float64    `json:"empty_percent,omitempty"`
-	Rejected     []CallCount `json:"rejected,omitempty"`
-	MedianBytes  int         `json:"median_bytes"`
-	MedianMs     int         `json:"median_ms"`
+	Tool             string      `json:"tool"`
+	Calls            int         `json:"calls"`
+	ErrorPercent     float64     `json:"error_percent"`
+	TruncatedPercent float64     `json:"truncated_percent"`
+	TopError         *CallCount  `json:"top_error,omitempty"`
+	EmptyPercent     *float64    `json:"empty_percent,omitempty"`
+	Rejected         []CallCount `json:"rejected,omitempty"`
+	MedianBytes      int         `json:"median_bytes"`
+	MedianMs         int         `json:"median_ms"`
 }
 
 func searchField(tool string) string {
 	switch tool {
 	case ToolSearchSessions, ToolSearchDocs:
 		return "results"
+	case ToolListSessions:
+		return "sessions"
 	case ToolSearchContent:
 		return "matches"
 	case ToolQueryRecall:
@@ -79,6 +82,14 @@ func recordToolCall(ctx context.Context, dir string, req *mcp.CallToolRequest, r
 		}
 		if json.Unmarshal(req.Params.Arguments, &args) == nil {
 			rec.Continuation = args.Cursor > 0
+		}
+	}
+	if name == ToolListSessions {
+		var args struct {
+			Cursor string `json:"cursor"`
+		}
+		if json.Unmarshal(req.Params.Arguments, &args) == nil {
+			rec.Continuation = args.Cursor != ""
 		}
 	}
 	if len(name) == 0 || len(name) > maxRecordedNameBytes || strings.ContainsFunc(name, func(r rune) bool {
@@ -120,14 +131,19 @@ func recordToolCall(ctx context.Context, dir string, req *mcp.CallToolRequest, r
 		default:
 			rec.Error = "other error"
 		}
-	} else if field := searchField(name); field != "" && call != nil {
+	} else if call != nil {
 		b, err := json.Marshal(call.StructuredContent)
 		if err == nil {
-			var fields map[string]json.RawMessage
-			if json.Unmarshal(b, &fields) == nil {
-				var entries []json.RawMessage
-				if value, ok := fields[field]; ok && json.Unmarshal(value, &entries) == nil && len(entries) == 0 {
-					rec.Outcome = "empty"
+			var content any
+			if json.Unmarshal(b, &content) == nil && hasTruncated(content) {
+				rec.Outcome = "truncated"
+			} else if field := searchField(name); field != "" {
+				var fields map[string]json.RawMessage
+				if json.Unmarshal(b, &fields) == nil {
+					var entries []json.RawMessage
+					if value, ok := fields[field]; ok && json.Unmarshal(value, &entries) == nil && len(entries) == 0 {
+						rec.Outcome = "empty"
+					}
 				}
 			}
 		}
@@ -147,6 +163,27 @@ func recordToolCall(ctx context.Context, dir string, req *mcp.CallToolRequest, r
 	line := append(append([]byte{'\n'}, b...), '\n')
 	_, writeErr := (ctxio.Writer{Context: ctx, Writer: f}).Write(line)
 	return errors.Join(writeErr, f.Close())
+}
+
+func hasTruncated(value any) bool {
+	switch value := value.(type) {
+	case map[string]any:
+		if value["truncated"] == true {
+			return true
+		}
+		for _, child := range value {
+			if hasTruncated(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range value {
+			if hasTruncated(child) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // rejectedProperties parses the SDK's Go-quoted property list.
@@ -183,10 +220,10 @@ func rejectedProperties(message string) []string {
 }
 
 type callAggregate struct {
-	row              CallSummary
-	errors, rejected map[string]int
-	empty, searches  int
-	bytes, ms        []int
+	row                        CallSummary
+	errors, rejected           map[string]int
+	empty, searches, truncated int
+	bytes, ms                  []int
 }
 
 // SummarizeCalls reads recorded calls within inclusive UTC date bounds.
@@ -235,7 +272,7 @@ func SummarizeCalls(ctx context.Context, dir, from, to string) ([]CallSummary, e
 			if json.Unmarshal(line, &rec) != nil || !db.InDateRange(rec.At.UTC().Format("2006-01-02"), from, to) {
 				continue
 			}
-			if rec.Outcome != "ok" && rec.Outcome != "empty" && rec.Outcome != "error" {
+			if rec.Outcome != "ok" && rec.Outcome != "empty" && rec.Outcome != "error" && rec.Outcome != "truncated" {
 				_ = f.Close()
 				return nil, fmt.Errorf("unknown MCP call outcome %q", rec.Outcome)
 			}
@@ -247,6 +284,9 @@ func SummarizeCalls(ctx context.Context, dir, from, to string) ([]CallSummary, e
 			g.row.Calls++
 			if rec.Outcome == "error" {
 				g.errors[rec.Error]++
+			}
+			if rec.Outcome == "truncated" {
+				g.truncated++
 			}
 			if searchField(rec.Tool) != "" && !rec.Continuation {
 				g.searches++
@@ -273,6 +313,7 @@ func SummarizeCalls(ctx context.Context, dir, from, to string) ([]CallSummary, e
 			errors += count
 		}
 		g.row.ErrorPercent = 100 * float64(errors) / float64(g.row.Calls)
+		g.row.TruncatedPercent = 100 * float64(g.truncated) / float64(g.row.Calls)
 		if top := rankedCounts(g.errors); len(top) > 0 {
 			g.row.TopError = &top[0]
 		}

@@ -27,6 +27,7 @@ func TestMCPCallsReport(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, day1+".jsonl"), []byte(strings.ReplaceAll(`{"version":1,"at":"2026-01-02T00:00:00Z","tool":"search_docs","outcome":"empty","bytes":10,"ms":4}
 `, "2026-01-02", day1)), 0600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, day2+".jsonl"), []byte(strings.ReplaceAll(`{"version":1,"at":"2026-01-03T00:00:00Z","tool":"get_messages","outcome":"error","error":"other error","bytes":20,"ms":8}
+{"version":1,"at":"2026-01-03T00:00:00Z","tool":"get_messages","outcome":"truncated","bytes":20,"ms":8}
 `, "2026-01-03", day2)), 0600))
 	earliest := time.Now().UTC().AddDate(0, 0, -91).Format("2006-01-02")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, earliest+".jsonl"), []byte(strings.ReplaceAll(`{"version":1,"at":"2026-01-02T00:00:00Z","tool":"query_recall","outcome":"empty","bytes":10,"ms":4}
@@ -53,7 +54,15 @@ func TestMCPCallsReport(t *testing.T) {
 	output.Reset()
 	cmd.SetOut(&output)
 	require.NoError(t, cmd.Execute())
-	assert.Contains(t, output.String(), "get_messages: 1 calls, 100.0% errors")
+	assert.Contains(t, output.String(), "get_messages: 2 calls, 50.0% errors, 50.0% truncated")
+	cmd = newMCPCallsCommand()
+	cmd.SetArgs([]string{"--since", day2, "--until", day2, "--format", "json"})
+	output.Reset()
+	cmd.SetOut(&output)
+	require.NoError(t, cmd.Execute())
+	require.NoError(t, json.Unmarshal(output.Bytes(), &rows))
+	require.Len(t, rows, 1)
+	assert.Equal(t, 50.0, rows[0].TruncatedPercent)
 	cmd = newMCPCallsCommand()
 	cmd.SetArgs([]string{"--since", day3, "--until", day3})
 	output.Reset()
