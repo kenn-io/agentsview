@@ -178,12 +178,6 @@ func shellLiteral(parts []syntax.WordPart) (string, bool) {
 
 // CommandPRLinks derives links and reports whether later calls may use a different checkout.
 func CommandPRLinks(ctx context.Context, command, remote string) ([]PRLink, bool, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, false, err
-	}
-	if len(command) > 256*1024 {
-		return nil, true, nil
-	}
 	var lists [][]PRLink
 	calls, changed := shellCommands(command)
 	for _, call := range calls {

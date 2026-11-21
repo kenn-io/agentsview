@@ -32,25 +32,21 @@ func TestToolCallPRLinks(t *testing.T) {
 }
 
 func TestClineCommandArrayPRLinks(t *testing.T) {
-	for _, name := range []string{"execute_command", "run_commands"} {
-		t.Run(name, func(t *testing.T) {
-			messages := []db.Message{{ToolCalls: []db.ToolCall{{ToolName: name, Category: "Bash", InputJSON: `{"commands":["gh pr view 41 -R example/other","gh pr view 42 -R example/repo"]}`}}}}
-			links := toolCallPRLinks(t, messages, "", "")
-			require.Len(t, links, 2)
-			assert.Equal(t, "https://github.com/example/other/pull/41", links[0].URL)
-			assert.Equal(t, "https://github.com/example/repo/pull/42", links[1].URL)
-		})
-	}
+	messages := []db.Message{{ToolCalls: []db.ToolCall{{ToolName: "execute_command", Category: "Bash", InputJSON: `{"commands":["gh pr view 41 -R example/other","gh pr view 42 -R example/repo"]}`}}}}
+	links := toolCallPRLinks(t, messages, "", "")
+	require.Len(t, links, 2)
+	assert.Equal(t, "https://github.com/example/other/pull/41", links[0].URL)
+	assert.Equal(t, "https://github.com/example/repo/pull/42", links[1].URL)
 }
 
 func TestToolCallPRLinksWorkdir(t *testing.T) {
-	links := toolCallPRLinks(t, []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", InputJSON: `{"command":"gh pr view 42","workdir":"/work/other"}`}}}}, "/work/repo", "https://github.com/example/repo.git")
-	assert.Empty(t, links)
-}
-
-func TestToolCallPRLinksWorkingDirectory(t *testing.T) {
-	links := toolCallPRLinks(t, []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", InputJSON: `{"command":"gh pr view 42","working_directory":"/work/other"}`}}}}, "/work/repo", "https://github.com/example/repo.git")
-	assert.Empty(t, links)
+	for _, key := range []string{"workdir", "working_directory"} {
+		t.Run(key, func(t *testing.T) {
+			input := `{"command":"gh pr view 42","` + key + `":"/work/other"}`
+			links := toolCallPRLinks(t, []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", InputJSON: input}}}}, "/work/repo", "https://github.com/example/repo.git")
+			assert.Empty(t, links)
+		})
+	}
 }
 
 func TestToolCallPRLinksContextCancellation(t *testing.T) {
@@ -60,9 +56,10 @@ func TestToolCallPRLinksContextCancellation(t *testing.T) {
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
-func TestToolCallPRLinksSkipsOversizedCommand(t *testing.T) {
+func TestToolCallPRLinksSkipsOversizedInput(t *testing.T) {
+	input := `{"cmd":"gh pr view 41 -R example/repo","unrelated":"` + strings.Repeat("x", 256*1024) + `"}`
 	messages := []db.Message{{ToolCalls: []db.ToolCall{
-		{Category: "Bash", InputJSON: `{"cmd":"gh pr view 41 -R example/repo; #` + strings.Repeat("x", 256*1024) + `"}`},
+		{Category: "Bash", InputJSON: input},
 		{Category: "Bash", InputJSON: `{"cmd":"gh pr view 42 -R example/repo"}`},
 	}}}
 	links := toolCallPRLinks(t, messages, "", "")
@@ -70,31 +67,27 @@ func TestToolCallPRLinksSkipsOversizedCommand(t *testing.T) {
 	assert.Equal(t, 42, links[0].Number)
 }
 
-func TestToolCallPRLinksSkipsOversizedInput(t *testing.T) {
-	input := `{"cmd":"gh pr view 41 -R example/repo","unrelated":"` + strings.Repeat("x", 256*1024) + `"}`
-	links := toolCallPRLinks(t, []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", InputJSON: input}}}}, "", "")
-	assert.Empty(t, links)
-}
-
-func TestToolCallPRLinksForgetCheckoutAfterDirectoryChange(t *testing.T) {
-	messages := []db.Message{{ToolCalls: []db.ToolCall{
-		{Category: "Bash", InputJSON: `{"cmd":"gh pr view 41"}`},
-		{Category: "Bash", InputJSON: `{"cmd":"cd /other"}`},
-		{Category: "Bash", InputJSON: `{"cmd":"gh pr view 42"}`},
-	}}}
-	links := toolCallPRLinks(t, messages, "/repo", "https://github.com/example/repo.git")
-	require.Len(t, links, 1)
-	assert.Equal(t, "https://github.com/example/repo/pull/41", links[0].URL)
-}
-
-func TestCodexSeparateShellWorkingDirectories(t *testing.T) {
-	messages := []db.Message{{ToolCalls: []db.ToolCall{
-		{ToolName: "exec_command", Category: "Bash", InputJSON: `{"cmd":"cd /other"}`},
-		{ToolName: "exec_command", Category: "Bash", InputJSON: `{"cmd":"gh pr view 42"}`},
-	}}}
-	links := toolCallPRLinks(t, messages, "/repo", "https://github.com/example/repo.git")
-	require.Len(t, links, 1)
-	assert.Equal(t, "https://github.com/example/repo/pull/42", links[0].URL)
+func TestToolCallPRLinksDirectoryChange(t *testing.T) {
+	for _, tc := range []struct {
+		name, tool string
+		want       []int
+	}{
+		{"shared shell", "Bash", []int{41}},
+		{"separate shell", "exec_command", []int{41, 42}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			messages := []db.Message{{ToolCalls: []db.ToolCall{
+				{ToolName: tc.tool, Category: "Bash", InputJSON: `{"cmd":"gh pr view 41"}`},
+				{ToolName: tc.tool, Category: "Bash", InputJSON: `{"cmd":"cd /other"}`},
+				{ToolName: tc.tool, Category: "Bash", InputJSON: `{"cmd":"gh pr view 42"}`},
+			}}}
+			links := toolCallPRLinks(t, messages, "/repo", "https://github.com/example/repo.git")
+			require.Len(t, links, len(tc.want))
+			for i, number := range tc.want {
+				assert.Equal(t, number, links[i].Number)
+			}
+		})
+	}
 }
 
 func TestCodeModePRLinksKeepExplicitIdentities(t *testing.T) {

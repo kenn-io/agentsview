@@ -458,9 +458,6 @@ func ToolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string
 			}
 		}
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
 	return parser.CombinePRLinks(lists...), nil
 }
 

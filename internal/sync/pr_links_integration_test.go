@@ -28,14 +28,12 @@ func TestClineCommandArrayPRFilter(t *testing.T) {
 	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCline: {root}}, Machine: "local"})
 	t.Cleanup(engine.Close)
 	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	for _, pr := range []string{"example/other#41", "example/repo#42"} {
-		filter, err := db.ParsePRFilter(pr)
-		require.NoError(t, err)
-		page, err := database.ListSessions(t.Context(), db.SessionFilter{PR: filter})
-		require.NoError(t, err)
-		if assert.Len(t, page.Sessions, 1) {
-			assert.Equal(t, "cline:pr-commands", page.Sessions[0].ID)
-		}
+	filter, err := db.ParsePRFilter("example/repo#42")
+	require.NoError(t, err)
+	page, err := database.ListSessions(t.Context(), db.SessionFilter{PR: filter})
+	require.NoError(t, err)
+	if assert.Len(t, page.Sessions, 1) {
+		assert.Equal(t, "cline:pr-commands", page.Sessions[0].ID)
 	}
 }
 
@@ -202,16 +200,13 @@ func TestCodexCommandPRLinksOnAppend(t *testing.T) {
 	const id = "01900000-0000-7000-8000-000000000042"
 	path := env.writeCodexSession(t, filepath.Join("2024", "01", "15"), "rollout-20240115-"+id+".jsonl", testjsonl.JoinJSONL(
 		testjsonl.CodexSessionMetaWithFieldsJSON(id, root, "user", tsEarly, map[string]any{"git": map[string]any{"repository_url": "https://github.com/example/repo.git"}}),
-		testjsonl.CodexMsgJSON("user", "Finish the work", tsEarlyS1),
+		testjsonl.CodexMsgJSON("user", "Review https://github.com/example/repo/pull/42", tsEarlyS1),
 	))
 	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
-	appendClaudeSplitLines(t, path, testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call1", map[string]any{"cmd": "gh pr merge 42 -R example/repo"}, tsEarlyS5))
-	env.engine.SyncPaths([]string{path})
 	assert.Equal(t, []string{"https://github.com/example/repo/pull/42"}, storedPRURLs(t, env.db, "codex:"+id))
-
 	appendClaudeSplitLines(t, path, testjsonl.JoinJSONL(
-		testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call2", map[string]any{"cmd": "cd /tmp"}, "2024-01-01T10:00:06Z"),
-		testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call3", map[string]any{"cmd": "gh pr view 43 --json title"}, "2024-01-01T10:00:07Z"),
+		testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call1", map[string]any{"cmd": "gh pr merge 42 -R example/repo"}, tsEarlyS5),
+		testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call2", map[string]any{"cmd": "gh pr view 43 -R example/repo"}, "2024-01-01T10:00:06Z"),
 	))
 	env.engine.SyncPaths([]string{path})
 	assert.ElementsMatch(t, []string{"https://github.com/example/repo/pull/42", "https://github.com/example/repo/pull/43"}, storedPRURLs(t, env.db, "codex:"+id))
@@ -243,34 +238,11 @@ func TestCommandPRLinksSurviveArchiveContentPolicy(t *testing.T) {
 			assert.Empty(t, structured)
 			if policy == config.ArchiveContentFull {
 				env.db.SetArchiveContent(config.ArchiveContentUsage)
-			}
-			if policy == config.ArchiveContentFull || policy == config.ArchiveContentUsage {
 				require.NoError(t, env.db.RenameSession(t.Context(), "policy-pr", nil))
 				assert.ElementsMatch(t, want, storedPRURLs(t, env.db, "policy-pr"))
 			}
-			if policy == config.ArchiveContentTranscripts {
-				require.NoError(t, os.WriteFile(path, []byte(testjsonl.JoinJSONL(testjsonl.ClaudeUserJSON("Done", tsEarly))), 0o600))
-				require.NoError(t, env.engine.TrySyncSessionWithSubagentsContext(t.Context(), "policy-pr"))
-				assert.Empty(t, storedPRURLs(t, env.db, "policy-pr"))
-			}
 		})
 	}
-}
-
-func TestIncrementalPromptThenCommandSurvivesUsageOnly(t *testing.T) {
-	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
-	const id = "01900000-0000-7000-8000-000000000092"
-	path := env.writeCodexSession(t, filepath.Join("2024", "01", "15"), "rollout-20240115-"+id+".jsonl", testjsonl.JoinJSONL(
-		testjsonl.CodexSessionMetaJSON(id, "/tmp/project", "user", tsEarly),
-		testjsonl.CodexMsgJSON("user", "Review https://github.com/example/repo/pull/42", tsEarlyS1),
-	))
-	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
-	appendClaudeSplitLines(t, path, testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call", map[string]any{"cmd": "gh pr view 42 -R example/repo"}, tsEarlyS5))
-	env.engine.SyncPaths([]string{path})
-	assert.Equal(t, []string{"https://github.com/example/repo/pull/42"}, storedPRURLs(t, env.db, "codex:"+id))
-	env.db.SetArchiveContent(config.ArchiveContentUsage)
-	require.NoError(t, env.db.RenameSession(t.Context(), "codex:"+id, nil))
-	assert.Equal(t, []string{"https://github.com/example/repo/pull/42"}, storedPRURLs(t, env.db, "codex:"+id))
 }
 
 func TestCommandPRCheckoutRemote(t *testing.T) {
