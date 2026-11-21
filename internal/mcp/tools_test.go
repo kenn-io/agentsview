@@ -2593,8 +2593,8 @@ func TestSessionToolsResolvePlainIDs(t *testing.T) {
 			require.ErrorContains(t, tc.call(t, "missing"), "session not found: missing")
 			err := tc.call(t, "ambiguous")
 			require.ErrorIs(t, err, errAmbiguousSessionID)
-			assert.ErrorContains(t, err, "codex:ambiguous")
-			assert.ErrorContains(t, err, "host~ambiguous")
+			require.ErrorContains(t, err, "codex:ambiguous")
+			require.ErrorContains(t, err, "host~ambiguous")
 		})
 	}
 	for _, id := range []string{"collision", "codex:collision"} {
@@ -2657,8 +2657,8 @@ func TestListRecall_SourceSessionRawID(t *testing.T) {
 	dbtest.SeedSession(t, d, "host~ambiguous", "project")
 	_, _, err = ts.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "ambiguous"})
 	require.ErrorIs(t, err, errAmbiguousSessionID)
-	assert.ErrorContains(t, err, "codex:ambiguous")
-	assert.ErrorContains(t, err, "host~ambiguous")
+	require.ErrorContains(t, err, "codex:ambiguous")
+	require.ErrorContains(t, err, "host~ambiguous")
 }
 
 func TestOptionalSessionFiltersOlderServer(t *testing.T) {
@@ -2680,7 +2680,7 @@ func TestOptionalSessionFiltersOlderServer(t *testing.T) {
 			assert.Equal(t, "unindexed", r.URL.Query().Get("source_session_id"))
 			_, _ = fmt.Fprint(w, `{"entries":[{"id":"entry","source_session_id":"unindexed"}]}`)
 		default:
-			t.Errorf("unexpected request %s", r.URL.Path)
+			assert.Fail(t, "unexpected request", "path: %s", r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
@@ -2696,8 +2696,8 @@ func TestOptionalSessionFiltersOlderServer(t *testing.T) {
 	assert.Equal(t, "entry", recall.Entries[0].ID)
 	_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", CurrentSessionID: "broken"})
 	require.Error(t, err)
-	assert.False(t, errors.Is(err, errors.ErrUnsupported))
+	require.NotErrorIs(t, err, errors.ErrUnsupported)
 	_, _, err = ts.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "broken"})
 	require.Error(t, err)
-	assert.False(t, errors.Is(err, errors.ErrUnsupported))
+	require.NotErrorIs(t, err, errors.ErrUnsupported)
 }
