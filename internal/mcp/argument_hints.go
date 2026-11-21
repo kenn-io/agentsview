@@ -2,7 +2,8 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"slices"
 	"strings"
 
@@ -17,8 +18,8 @@ func argumentHints(next mcp.MethodHandler) mcp.MethodHandler {
 		if method != "tools/call" || !ok || call == nil || !call.IsError || !isCall {
 			return result, err
 		}
-		var arguments map[string]json.RawMessage
-		if json.Unmarshal(req.Params.Arguments, &arguments) != nil {
+		var arguments map[string]jsontext.Value
+		if json.Unmarshal(req.Params.Arguments, &arguments, jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true)) != nil {
 			return result, err
 		}
 		listed, listErr := next(ctx, "tools/list", &mcp.ListToolsRequest{Session: req.Session})
@@ -32,7 +33,7 @@ func argumentHints(next mcp.MethodHandler) mcp.MethodHandler {
 			}
 			raw, marshalErr := json.Marshal(tool.InputSchema)
 			var schema struct {
-				Properties map[string]json.RawMessage `json:"properties"`
+				Properties map[string]jsontext.Value `json:"properties"`
 			}
 			if marshalErr != nil || json.Unmarshal(raw, &schema) != nil {
 				return result, err
