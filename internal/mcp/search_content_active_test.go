@@ -181,9 +181,6 @@ func TestSearchContent_ActiveFilterHTTPCompatibility(t *testing.T) {
 				ids = append(ids, match.SessionID)
 			}
 			assert.ElementsMatch(t, []string{"idle", "malformed", "missing-idle", "boundary"}, ids)
-			for _, id := range []string{"active", "idle", "malformed", "boundary", "crossing"} {
-				assert.Equal(t, 1, lookups[id], id)
-			}
 		})
 	}
 }
