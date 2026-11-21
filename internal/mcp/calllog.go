@@ -3,7 +3,7 @@ package mcp
 import (
 	"bufio"
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"os"
@@ -34,7 +34,7 @@ type callRecord struct {
 	Rejected     []string  `json:"rejected,omitempty"`
 	Bytes        int       `json:"bytes"`
 	Ms           int       `json:"ms"`
-	Continuation bool      `json:"continuation,omitempty"`
+	Continuation bool      `json:"continuation,omitzero"`
 }
 
 type CallCount struct {
@@ -137,11 +137,9 @@ func recordToolCall(ctx context.Context, dir string, req *mcp.CallToolRequest, r
 			var content any
 			if json.Unmarshal(b, &content) == nil && hasTruncated(content) {
 				rec.Outcome = "truncated"
-			} else if field := searchField(name); field != "" {
-				var fields map[string]json.RawMessage
-				if json.Unmarshal(b, &fields) == nil {
-					var entries []json.RawMessage
-					if value, ok := fields[field]; ok && json.Unmarshal(value, &entries) == nil && len(entries) == 0 {
+			} else if fields, ok := content.(map[string]any); ok && searchField(name) != "" {
+				if value, exists := fields[searchField(name)]; exists {
+					if entries, ok := value.([]any); ok && len(entries) == 0 || value == nil {
 						rec.Outcome = "empty"
 					}
 				}
