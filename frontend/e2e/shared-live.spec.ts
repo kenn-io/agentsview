@@ -129,13 +129,29 @@ for (const fallback of ["worker", "broadcast"] as const) {
       await expect.poll(() => messageRequests).toBeGreaterThan(beforeSecondReturn);
       await page.waitForTimeout(400);
       expect(requested.length).toBe(count);
+      const sessionRequests = [0, 0];
       for (const index of [1, 2]) {
+        pages[index]!.on("request", (request) => {
+          if (request.url().includes(`/api/v1/sessions/${ids[index]}/messages`))
+            sessionRequests[index - 1]!++;
+        });
         await pages[index]!.goto(`${base}/sessions/${ids[index]}`);
         await expect(pages[index]!).toHaveURL(new RegExp(ids[index]!));
       }
       await expect
         .poll(() => new Set(new URL(requested.at(-1)!, base).searchParams.getAll("session")))
         .toEqual(new Set(ids));
+      await expect.poll(() => active.size).toBe(1);
+      await expect.poll(() => sessionRequests.every((count) => count > 0)).toBe(true);
+      await page.waitForTimeout(400);
+      for (const index of [1, 2]) {
+        const beforeUpdate = sessionRequests[index - 1]!;
+        const otherBefore = sessionRequests[2 - index]!;
+        for (const response of active) response.write(`event: session_updated\ndata: ${ids[index]}\n\n`);
+        await expect.poll(() => sessionRequests[index - 1]).toBeGreaterThan(beforeUpdate);
+        await page.waitForTimeout(250);
+        expect(sessionRequests[2 - index]).toBe(otherBefore);
+      }
       const beforeLeaderClose = requested.length;
       await page.close();
       if (fallback !== "worker")
