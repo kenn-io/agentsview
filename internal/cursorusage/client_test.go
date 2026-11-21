@@ -1,6 +1,7 @@
 package cursorusage
 
 import (
+	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"net/http"
@@ -27,7 +28,9 @@ func TestListDailyUsageUsersPagesAndWindows(t *testing.T) {
 			Page     int   `json:"page"`
 			PageSize int   `json:"pageSize"`
 		}
-		require.NoError(t, json.UnmarshalRead(r.Body, &q))
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &q)) {
+			return
+		}
 		assert.Equal(t, 1000, q.PageSize)
 		assert.LessOrEqual(t, q.End-q.Start, int64((30*24*time.Hour)/time.Millisecond))
 		calls++
@@ -43,7 +46,7 @@ func TestListDailyUsageUsersPagesAndWindows(t *testing.T) {
 			assert.Equal(t, start.Add(30*24*time.Hour).UnixMilli(), q.Start)
 			_, _ = w.Write([]byte(`{"data":[{"userId":34},{"userId":56}],"pagination":{"hasNextPage":false}}`))
 		default:
-			t.Errorf("unexpected roster request %d", calls)
+			assert.Fail(t, "unexpected roster request", "request %d", calls)
 		}
 	}))
 	defer srv.Close()
@@ -53,6 +56,25 @@ func TestListDailyUsageUsersPagesAndWindows(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"12", "34", "56"}, users)
 	assert.Equal(t, 3, calls)
+}
+
+func TestListDailyUsageUsersPacesSeparateWindows(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(`{"data":[],"pagination":{"hasNextPage":false}}`))
+	}))
+	defer server.Close()
+	client := NewClientWithBaseURL(server.URL, "key")
+	client.DailyRequestInterval = time.Hour
+	start := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	_, err := client.ListDailyUsageUsers(t.Context(), start, start.Add(24*time.Hour))
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond) //nolint:kennlint // deadlinetest: cancellation expires while the request waits for its slot.
+	defer cancel()
+	_, err = client.ListDailyUsageUsers(ctx, start.AddDate(20, 0, 0), start.AddDate(20, 0, 1))
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Equal(t, 1, calls)
 }
 
 func TestFetchAllUsageEvents(t *testing.T) {

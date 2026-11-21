@@ -134,11 +134,40 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 			windowEnd = closedThrough
 		}
 		if start.Before(windowEnd) {
-			users, err := client.ListDailyUsageUsers(ctx, start, windowEnd)
-			if err != nil {
-				return err
+			const rosterWindow = 30 * 24 * time.Hour
+			windows := map[int64]bool{}
+			for _, ev := range events {
+				hour := ev.Timestamp.UTC().Truncate(time.Hour)
+				if !hour.Before(start) && !hour.Add(time.Hour).After(windowEnd) && !ev.Timestamp.Before(start) && ev.Timestamp.Before(windowEnd) {
+					windows[int64(ev.Timestamp.Sub(start)/rosterWindow)] = true
+				}
 			}
-			owners := map[string]string{}
+			var users []string
+			seenUsers := map[string]bool{}
+			for from, index := start, int64(0); from.Before(windowEnd); index++ {
+				to := from.Add(rosterWindow)
+				if to.After(windowEnd) {
+					to = windowEnd
+				}
+				if windows[index] {
+					members, err := client.ListDailyUsageUsers(ctx, from, to)
+					if err != nil {
+						return err
+					}
+					for _, id := range members {
+						if !seenUsers[id] {
+							users = append(users, id)
+							seenUsers[id] = true
+						}
+					}
+				}
+				from = to
+			}
+			type owner struct {
+				id          string
+				completedAt time.Time
+			}
+			owners := map[string]owner{}
 			for _, id := range users {
 				memberEvents, err := client.FetchAllUsageEvents(ctx, cursorusage.Query{StartDate: start, EndDate: windowEnd.Add(-time.Millisecond), PageSize: 1000, UserID: id})
 				if err != nil {
@@ -148,6 +177,7 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 					fmt.Fprintf(os.Stderr, "Cursor usage for a member could not be fetched: %v\n", err)
 					continue
 				}
+				completedAt := time.Now().UTC()
 				for _, ev := range memberEvents {
 					hour := ev.Timestamp.UTC().Truncate(time.Hour)
 					if hour.Before(start) || hour.Add(time.Hour).After(windowEnd) {
@@ -156,20 +186,19 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 					row := cursorUsageRow(ev)
 					row.Agent = "cursor"
 					key := db.CursorUsageEventDedupKey(row)
-					if previous, ok := owners[key]; ok && previous != id {
-						owners[key] = ""
+					if previous, ok := owners[key]; ok && previous.id != id {
+						owners[key] = owner{completedAt: completedAt}
 					} else if !ok {
-						owners[key] = id
+						owners[key] = owner{id: id, completedAt: completedAt}
 					}
 				}
 			}
-			completedAt := time.Now().UTC()
-			byUser := map[string][]string{}
-			for key, id := range owners {
-				byUser[id] = append(byUser[id], key)
+			byUser := map[owner][]string{}
+			for key, match := range owners {
+				byUser[match] = append(byUser[match], key)
 			}
-			for id, keys := range byUser {
-				if err := database.AssignCursorUsageAccount(ctx, id, keys, completedAt); err != nil {
+			for match, keys := range byUser {
+				if err := database.AssignCursorUsageAccount(ctx, match.id, keys, match.completedAt); err != nil {
 					return err
 				}
 			}

@@ -49,6 +49,7 @@ type Client struct {
 	RequestInterval      time.Duration
 	DailyRequestInterval time.Duration
 	lastUsageRequest     time.Time
+	lastDailyRequest     time.Time
 
 	// OnRetry, when set, is called before FetchAllUsageEvents waits to retry
 	// a page after a rate-limit or server error, with the page number, that
@@ -260,7 +261,8 @@ func (c *Client) ListDailyUsageUsers(ctx context.Context, start, end time.Time) 
 	}
 	seen := map[string]bool{}
 	var users []string
-	var last time.Time
+	last := c.lastDailyRequest
+	defer func() { c.lastDailyRequest = last }()
 	for from := start; from.Before(end); {
 		to := minTime(from.Add(30*24*time.Hour), end)
 		for page := 1; ; page++ {
@@ -271,7 +273,8 @@ func (c *Client) ListDailyUsageUsers(ctx context.Context, start, end time.Time) 
 				Pagination struct {
 					HasNext bool `json:"hasNextPage"`
 				} `json:"pagination"`
-			}, error) {
+			}, error,
+			) {
 				var result struct {
 					Data []struct {
 						UserID jsontext.Value `json:"userId"`

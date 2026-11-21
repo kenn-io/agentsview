@@ -81,7 +81,7 @@ func TestExportReportingUpgradesOldCursorUsageArchive(t *testing.T) {
 	require.NoError(t, database.Close())
 	raw, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
-	_, err = raw.Exec(`ALTER TABLE cursor_usage_events DROP COLUMN account_polled_at; ALTER TABLE cursor_usage_events DROP COLUMN account_user_id`)
+	_, err = raw.ExecContext(t.Context(), `ALTER TABLE cursor_usage_events DROP COLUMN account_polled_at; ALTER TABLE cursor_usage_events DROP COLUMN account_user_id`)
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
@@ -119,7 +119,7 @@ func TestExportReportingUpgradesOldCursorUsageArchive(t *testing.T) {
 	require.NoError(t, err)
 	defer raw.Close()
 	var count int
-	require.NoError(t, raw.QueryRow(`SELECT count(*) FROM cursor_usage_events WHERE account_user_id='' AND account_polled_at=''`).Scan(&count))
+	require.NoError(t, raw.QueryRowContext(t.Context(), `SELECT count(*) FROM cursor_usage_events WHERE account_user_id='' AND account_polled_at=''`).Scan(&count))
 	assert.Equal(t, 2, count)
 }
 
