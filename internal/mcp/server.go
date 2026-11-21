@@ -117,6 +117,8 @@ func newServer(opts ServeOptions) *mcp.Server {
 		}},
 	}, &mcp.ServerOptions{Instructions: "Use returned web_url values when linking to recorded sessions."})
 
+	s.AddReceivingMiddleware(argumentHints)
+
 	s.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, request mcp.Request) (mcp.Result, error) {
 			if method != "tools/call" {
