@@ -41,19 +41,7 @@ func shellCommands(command string) ([]shellCall, bool) {
 		syntax.Walk(file, func(node syntax.Node) bool {
 			switch n := node.(type) {
 			case *syntax.DeclClause:
-				if n.Variant.Value == "export" || n.Variant.Value == "declare" || n.Variant.Value == "typeset" || n.Variant.Value == "readonly" || n.Variant.Value == "local" {
-					for _, arg := range n.Args {
-						if arg.Name == nil && arg.Value != nil {
-							value, literal := shellLiteral(arg.Value.Parts)
-							if literal && strings.HasPrefix(value, "-") {
-								continue
-							}
-						}
-						if arg.Name == nil || arg.Name.Value == "GH_REPO" || arg.Name.Value == "GH_HOST" {
-							contextUnknown = true
-						}
-					}
-				}
+				contextUnknown = contextUnknown || declUnknown(n)
 			case *syntax.CallExpr:
 				callUnknown := contextUnknown
 				for _, assignment := range n.Assigns {
@@ -115,6 +103,26 @@ func shellCommands(command string) ([]shellCall, bool) {
 	}
 	walk(command)
 	return calls, changedDir
+}
+
+// declUnknown reports whether a declaration may change GH_REPO or GH_HOST.
+func declUnknown(n *syntax.DeclClause) bool {
+	switch n.Variant.Value {
+	case "export", "declare", "typeset", "readonly", "local":
+	default:
+		return false
+	}
+	for _, arg := range n.Args {
+		if arg.Name == nil && arg.Value != nil {
+			if value, literal := shellLiteral(arg.Value.Parts); literal && strings.HasPrefix(value, "-") {
+				continue
+			}
+		}
+		if arg.Name == nil || arg.Name.Value == "GH_REPO" || arg.Name.Value == "GH_HOST" {
+			return true
+		}
+	}
+	return false
 }
 
 func unwrapBuiltin(call shellCall) shellCall {
