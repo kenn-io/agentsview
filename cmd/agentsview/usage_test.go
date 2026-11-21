@@ -1779,7 +1779,8 @@ func TestCursorSyncMatchesMembers(t *testing.T) {
 			defer server.Close()
 			err := syncCursorUsage(t, server.URL, "--since", "2026-07-28", "--until", "2026-07-28")
 			if tc.secondFails {
-				require.ErrorContains(t, err, "34")
+				require.ErrorContains(t, err, "fetching Cursor usage for a member")
+				assert.NotContains(t, err.Error(), "34")
 			} else {
 				require.NoError(t, err)
 			}

@@ -193,7 +193,7 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 					if ctx.Err() != nil {
 						return ctx.Err()
 					}
-					return fmt.Errorf("fetching Cursor usage for member %s: %w", id, err)
+					return fmt.Errorf("fetching Cursor usage for a member: %w", err)
 				}
 				for _, ev := range memberEvents {
 					row := cursorUsageRow(ev)
