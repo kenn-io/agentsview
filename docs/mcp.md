@@ -259,11 +259,12 @@ the page, and reports it in `exclusions.recent_active`. `search_sessions` and
 older `search_content` servers apply the exclusion after pagination and report
 dropped matches in `excluded_active`, which means their pages can come back
 short or empty even with a `next_cursor`. Pass `include_active: true` when you
-want recent work included. An empty `search_sessions` page with excluded active
-matches returns `hints` with `retry_with: {"include_active": true}`. If you are recalling
-from a known conversation, pass its full ID as `current_session_id` so
-`search_content` excludes only that session before the result limit without
-hiding other recent work.
+want recent work included. When `search_sessions` returns an empty page with
+excluded active matches, the response includes `hints` with
+`retry_with: {"include_active": true}`. If you are recalling from a known
+conversation, pass its full ID as `current_session_id` so `search_content`
+excludes only that session before the result limit without hiding other recent
+work.
 
 `list_sessions` and `search_content` also exclude one-shot and automated
 sessions by default. Set `include_one_shot: true` or `include_automated: true`
@@ -313,21 +314,22 @@ limit. Limits default to 10 and go up to 50, with out-of-range values falling
 back to the default.
 
 To find one past session that covered several ideas, pass two to five distinct
-natural-language strings in `concepts` instead of `pattern`. AgentsView uses
-`semantic` mode regardless of the requested mode and searches each concept
-separately and keeps only sessions with evidence for all
-of them, even across different exchanges, ranking results by the mean of each
-concept's strongest score. Each match includes `concept_evidence` in request
-order with the concept, snippet, score, ordinal, `ordinal_range`, and
+natural-language strings in `concepts` instead of `pattern`. No matter which
+mode you request, AgentsView always uses `semantic` mode. It searches each
+concept separately and keeps only sessions with evidence for every concept,
+even across different exchanges, ranking results by the mean of each concept's
+strongest score. Each match includes `concept_evidence` in request order with
+the concept, snippet, score, ordinal, `ordinal_range`, and
 `transcript_revision`. Concept searches do not paginate, so passing `cursor` is
 rejected. `candidate_truncated` is true when a matching session may be missing,
 either because one concept's candidate search filled up or hit its fetch cap,
 or because more sessions matched than the limit allowed.
 
-Pass `session_id` without `pattern` or `concepts` to list that session's
-messages in order. This includes active, one-shot, and automated sessions and
-ignores `mode`. Results are search snippets, with `...` when shortened; use
-`get_messages` for full text. Other filters still apply.
+To list a session's messages in order, pass `session_id` without `pattern` or
+`concepts`. This call includes active, one-shot, and automated sessions and
+ignores `mode`, while any other filters you pass still apply. Results come back
+as search snippets, with `...` when shortened. For the full text, use
+`get_messages`.
 
 In `terms` mode, each snippet shows about 60 characters of context around the
 first occurrence of each term. When terms sit far apart in a long exchange,
@@ -669,16 +671,19 @@ Claude pasted images aren't covered yet.
 
 ## Review call outcomes
 
-`agentsview mcp calls --since 7d` summarizes calls recorded by local MCP servers.
-Use `--until YYYY-MM-DD` to set the inclusive end date and `--format json` for
-JSON output. Dates use UTC. Records live in the data directory under
-`mcp/calls/`. Each record contains the tool name, outcome, argument names,
-rejected argument names, result size, and duration. Argument values, error text,
-and results are not recorded. A rejected name is an argument the tool does not
-take. A failed call's outcome is `error`. Otherwise it is `truncated` when a
+To summarize calls recorded by local MCP servers, run
+`agentsview mcp calls --since 7d`. You can pass `--until YYYY-MM-DD` to set the
+inclusive end date and `--format json` for JSON output; dates use UTC.
+
+Call records live under `mcp/calls/` in the data directory and do not expire.
+Storing them as files lets MCP servers record calls when the archive database
+belongs to a separate daemon. Each record includes the tool name, outcome,
+argument names, rejected argument names (arguments the tool does not take),
+result size, and duration. AgentsView does not record argument values, error
+text, or results.
+
+If a call fails, its outcome is `error`. Otherwise, it is `truncated` when a
 boolean field whose name contains `truncated` is true, then `empty` when a
-search returns no results, then `ok`. Empty search percentages include
-`list_sessions` and exclude continuation pages. A truncated empty result counts
-toward both percentages.
-Records do not expire. Files let MCP servers record calls when the archive
-database belongs to a separate daemon.
+search returns no results, and `ok` for everything else. Empty search
+percentages include `list_sessions` and exclude continuation pages. If a result
+is both truncated and empty, it counts toward both percentages.
