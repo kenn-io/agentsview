@@ -124,8 +124,12 @@ func (Backend) OpenStore(
 func (Backend) OpenServeStore(
 	ctx context.Context, target storage.ReplicaTarget,
 ) (storage.ReplicaStore, error) {
-	store, err := newServeStore(ctx, target.URL, target.Schema, target.AllowInsecure)
+	store, err := NewStore(ctx, target.URL, target.Schema, target.AllowInsecure)
 	if err != nil {
+		return nil, err
+	}
+	if err := sizeServePool(ctx, store.DB(), store.cockroach); err != nil {
+		_ = store.Close()
 		return nil, err
 	}
 	if err := prepareServeStore(ctx, store, target.Schema); err != nil {

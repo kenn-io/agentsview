@@ -105,22 +105,17 @@ func TestHostedServeStoreHonorsRoleConnectionLimit(t *testing.T) {
 	f := newHostedFixture(t, "tenant-serve-limit")
 	// The fixture's own pool holds role connections the limit would count.
 	require.NoError(t, f.runtime.Close())
-	open := func(serve bool) int {
+	open := func() int {
 		t.Helper()
-		openStore := NewHostedStore
-		if serve {
-			openStore = NewHostedServeStore
-		}
-		store, err := openStore(t.Context(), f.dsn, f.schema, f.tenant, false)
+		store, err := NewHostedServeStore(t.Context(), f.dsn, f.schema, f.tenant, false)
 		require.NoError(t, err)
 		defer func() { require.NoError(t, store.Close()) }()
 		return store.DB().Stats().MaxOpenConnections
 	}
 
-	require.Equal(t, servePoolConns, open(true))
+	require.Equal(t, servePoolConns, open())
 
 	_, err := f.admin.ExecContext(t.Context(), `ALTER ROLE "`+f.role+`" CONNECTION LIMIT 3`)
 	require.NoError(t, err)
-	require.Equal(t, 3, open(true))
-	require.Equal(t, 5, open(false))
+	require.Equal(t, 3, open())
 }

@@ -71,21 +71,6 @@ func sizeServePool(ctx context.Context, pg *sql.DB, cockroach bool) error {
 	return nil
 }
 
-// newServeStore opens a Store whose pool is sized for serving.
-func newServeStore(
-	ctx context.Context, pgURL, schema string, allowInsecure bool,
-) (*Store, error) {
-	store, err := NewStore(ctx, pgURL, schema, allowInsecure)
-	if err != nil {
-		return nil, err
-	}
-	if err := sizeServePool(ctx, store.DB(), store.cockroach); err != nil {
-		_ = store.Close()
-		return nil, err
-	}
-	return store, nil
-}
-
 // NewHostedServeStore opens a HostedStore whose pool is sized for `pg serve`.
 // Other callers use NewHostedStore and keep the default pool.
 func NewHostedServeStore(ctx context.Context, pgURL, schema, tenant string, allowInsecure bool) (*HostedStore, error) {
