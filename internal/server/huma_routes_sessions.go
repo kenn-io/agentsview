@@ -1401,11 +1401,7 @@ func (s *Server) humaWatchSession(
 			sessionwatch.PollInterval * sessionwatch.HeartbeatTicks,
 		)
 		defer heartbeat.Stop()
-		if t, err := s.db.GetSessionTiming(streamCtx, in.ID); err != nil {
-			log.Printf("session timing initial: %v", err)
-		} else if t != nil {
-			stream.SendJSON("session.timing", t)
-		}
+		s.sendSessionFrame(streamCtx, stream, in.ID, false)
 		for {
 			select {
 			case <-streamCtx.Done():
@@ -1414,22 +1410,8 @@ func (s *Server) humaWatchSession(
 				if !ok {
 					return
 				}
-				if identity, ok := s.db.(db.SessionWatchStateStore); ok {
-					state, e := identity.GetSessionWatchState(in.ID)
-					if e != nil {
-						return
-					}
-					if state.State != db.SessionWatchResolved {
-						stream.SendJSON("session.identity", state)
-						return
-					}
-					stream.SendJSON("session.identity", state)
-				}
-				stream.Send("session_updated", in.ID)
-				if t, err := s.db.GetSessionTiming(streamCtx, in.ID); err != nil {
-					log.Printf("session timing update: %v", err)
-				} else if t != nil {
-					stream.SendJSON("session.timing", t)
+				if !s.sendSessionFrame(streamCtx, stream, in.ID, true) {
+					return
 				}
 			case <-heartbeat.C:
 				stream.Send("heartbeat", time.Now().UTC().Format(time.RFC3339))
@@ -1438,15 +1420,70 @@ func (s *Server) humaWatchSession(
 	}}, nil
 }
 
-func (s *Server) humaEvents(
-	_ context.Context,
-	_ *emptyInput,
-) (*huma.StreamResponse, error) {
-	if s.broadcaster == nil {
+func (s *Server) sendSessionFrame(ctx context.Context, stream *SSEStream, id string, update bool) bool {
+	if update {
+		if identity, ok := s.db.(db.SessionWatchStateStore); ok {
+			state, err := identity.GetSessionWatchState(id)
+			if err != nil {
+				return false
+			}
+			stream.SendJSON("session.identity", state)
+			if state.State != db.SessionWatchResolved {
+				return false
+			}
+		}
+		if !stream.Send("session_updated", id) {
+			return false
+		}
+	}
+	if t, err := s.db.GetSessionTiming(ctx, id); err != nil {
+		log.Printf("session timing: %v", err)
+	} else if t != nil {
+		stream.SendJSON("session.timing", t)
+	}
+	return true
+}
+
+type eventsInput struct {
+	Sessions []string `query:"session,explode" doc:"Session IDs to watch; repeat for each session"`
+}
+
+func (s *Server) humaEvents(ctx context.Context, in *eventsInput) (*huma.StreamResponse, error) {
+	if s.broadcaster == nil && len(in.Sessions) == 0 {
 		return nil, huma.ErrorWithHeaders(
 			apiError(http.StatusServiceUnavailable, "events not available in this mode"),
 			http.Header{"Retry-After": []string{"300"}},
 		)
+	}
+	var found, missing []string
+	for _, id := range in.Sessions {
+		if identity, ok := s.db.(db.SessionWatchStateStore); ok {
+			state, err := identity.GetSessionWatchState(id)
+			if err != nil {
+				if ctx.Err() != nil {
+					return nil, serverError(err)
+				}
+				log.Printf("session watch state %q: %v", id, err)
+			}
+			if err == nil && state.State != db.SessionWatchResolved {
+				missing = append(missing, id)
+				continue
+			}
+		}
+		sess, err := s.sessions.Get(ctx, id)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, serverError(err)
+			}
+			log.Printf("session watch %q: %v", id, err)
+			found = append(found, id)
+			continue
+		}
+		if sess == nil {
+			missing = append(missing, id)
+			continue
+		}
+		found = append(found, id)
 	}
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
 		stream, ok := newHumaSSEStream(hctx)
@@ -1455,11 +1492,49 @@ func (s *Server) humaEvents(
 				apiResponseError{Message: "streaming not supported"})
 			return
 		}
-		sub, unsub := s.broadcaster.Subscribe()
-		defer unsub()
-		// The web UI keeps this stream open only while it is visible, so a
-		// subscriber means someone is looking at the archive.
-		defer s.holdSyncInterval(syncpkg.LiveInterval)()
+		ctx, cancel := context.WithCancel(hctx.Context())
+		defer cancel()
+		var sub <-chan Event
+		if s.broadcaster != nil {
+			var unsub func()
+			sub, unsub = s.broadcaster.Subscribe()
+			defer unsub()
+			defer s.holdSyncInterval(syncpkg.LiveInterval)()
+		}
+		type tick struct {
+			id     string
+			closed bool
+		}
+		ticks := make(chan tick)
+		for _, id := range missing {
+			if !stream.Send("session_missing", id) {
+				return
+			}
+		}
+		for _, id := range found {
+			updates := s.sessionMonitor(ctx, id)
+			go func() {
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case _, ok := <-updates:
+						select {
+						case ticks <- tick{id, !ok}:
+						case <-ctx.Done():
+							return
+						}
+						if !ok {
+							return
+						}
+					}
+				}
+			}()
+			if !stream.Send("session_ready", id) {
+				return
+			}
+			s.sendSessionFrame(ctx, stream, id, false)
+		}
 		if !stream.SendJSON("events_ready", struct{}{}) {
 			return
 		}
@@ -1469,13 +1544,17 @@ func (s *Server) humaEvents(
 		defer heartbeat.Stop()
 		for {
 			select {
-			case <-hctx.Context().Done():
+			case <-ctx.Done():
 				return
 			case ev, ok := <-sub:
 				if !ok {
 					return
 				}
 				stream.SendJSON("data_changed", map[string]string{"scope": ev.Scope})
+			case t := <-ticks:
+				if t.closed || !s.sendSessionFrame(ctx, stream, t.id, true) {
+					return
+				}
 			case <-heartbeat.C:
 				stream.Send("heartbeat", time.Now().Format(time.RFC3339))
 			}

@@ -2,6 +2,7 @@ export const SERVER_URL_KEY = "agentsview-server-url";
 /** Dispatched on window when this tab changes the selected server. */
 export const SERVER_URL_CHANGE_EVENT = "agentsview:server-url-change";
 const AUTH_TOKEN_KEY = "agentsview-auth-token";
+export const AUTH_TOKEN_CHANGE_EVENT = "agentsview:auth-token-change";
 
 export function getGeneratedBase(): string {
   const server = getServerUrl();
@@ -44,6 +45,7 @@ export function setAuthToken(token: string): void {
   } else {
     localStorage.removeItem(key);
   }
+  window.dispatchEvent(new Event(AUTH_TOKEN_CHANGE_EVENT));
 }
 
 export function isRemoteConnection(): boolean {

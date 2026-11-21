@@ -5599,6 +5599,39 @@ func TestEvents_StreamsDataChangedAfterSync(t *testing.T) {
 	<-done
 }
 
+func TestEvents_StreamsSessionsAndArchive(t *testing.T) {
+	t.Cleanup(sessionwatch.SetTimingsForTest(25*time.Millisecond, 50*time.Millisecond))
+	te := setup(t)
+	builder := testjsonl.NewSessionBuilder().AddClaudeUser(tsZero, "initial")
+	path := te.writeSessionFile(t, "watch-proj", "watch-a.jsonl", builder)
+	te.writeSessionFile(t, "watch-proj", "watch-b.jsonl", builder)
+	engine := sync.NewEngine(t.Context(), te.db, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {te.claudeDir}}, Machine: "test",
+	})
+	engine.SyncAll(t.Context(), nil)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/events?session=watch-a&session=watch-b&session=missing", nil)
+	w := newFlushRecorder()
+	done := make(chan struct{})
+	go func() { te.handler.ServeHTTP(w, req); close(done) }()
+	te.waitForSSEEvent(t, w, "events_ready", 5*time.Second)
+	te.waitForSSEEvent(t, w, "session.timing", 5*time.Second)
+	assert.Contains(t, w.BodyString(), `"session_id":"watch-a"`)
+	assert.Contains(t, w.BodyString(), "event: session_ready\ndata: watch-a\n")
+	assert.Contains(t, w.BodyString(), "event: session_ready\ndata: watch-b\n")
+	assert.Contains(t, w.BodyString(), "event: session_missing\ndata: missing\n")
+	updated := builder.String() + testjsonl.NewSessionBuilder().AddClaudeAssistant(tsZeroS5, "response").String()
+	require.NoError(t, os.WriteFile(path, []byte(updated), 0o644))
+	engine.SyncPaths([]string{path})
+	te.waitForSSEEvent(t, w, "session_updated", 5*time.Second)
+	assert.Contains(t, w.BodyString(), "event: session_updated\ndata: watch-a\n")
+	te.broadcaster.Emit("messages")
+	te.waitForSSEEvent(t, w, "data_changed", 5*time.Second)
+	cancel()
+	<-done
+}
+
 func TestEvents_HoldsLiveSyncIntervalWhileConnected(t *testing.T) {
 	override := &sync.IntervalOverride{}
 	te := setupWithServerOpts(t,
@@ -5640,6 +5673,23 @@ func TestEvents_StreamsInLocalNoSyncMode(t *testing.T) {
 	}()
 
 	te.emitUntilSSEEvent(t, w, "sessions", "data_changed", 3*time.Second)
+	cancel()
+	<-done
+}
+
+func TestEvents_WatchesSessionWithoutBroadcaster(t *testing.T) {
+	te := setupPGMode(t)
+	require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{
+		ID: "watch-a", Project: "watch-proj", Machine: "test", Agent: "claude",
+	}))
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/events?session=watch-a", nil)
+	w := newFlushRecorder()
+	done := make(chan struct{})
+	go func() { te.handler.ServeHTTP(w, req); close(done) }()
+	te.waitForSSEEvent(t, w, "events_ready", 5*time.Second)
+	assert.Contains(t, w.BodyString(), "event: session_ready\ndata: watch-a\n")
 	cancel()
 	<-done
 }

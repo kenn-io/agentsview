@@ -17,6 +17,7 @@ import {
 
 export type DataView = "inventory" | "rules";
 const DATA_REFRESH_DEBOUNCE_MS = 300;
+const SAFETY_NET_REFRESH_MS = 5 * 60 * 1000;
 
 class DataStore {
   inventory: DbProjectInventory | null = $state(null);
@@ -99,12 +100,23 @@ class DataStore {
         if (this.view === "rules") this.rulesRefreshVersion++;
       }, DATA_REFRESH_DEBOUNCE_MS);
     });
+    const safetyTimer = setInterval(() => {
+      if (document.hidden) return;
+      if (this.view === "rules") {
+        this.rulesRefreshVersion++;
+        return;
+      }
+      if (!projectWorkspaceEnabled) return;
+      if (this.#mutationRefreshes === 0) void this.load({ background: true });
+      else this.#eventRefreshPending = true;
+    }, SAFETY_NET_REFRESH_MS);
     let detached = false;
     return () => {
       if (detached) return;
       detached = true;
       window.removeEventListener("popstate", onPop);
       unsubscribe();
+      clearInterval(safetyTimer);
       if (refreshTimer !== null) {
         clearTimeout(refreshTimer);
         refreshTimer = null;

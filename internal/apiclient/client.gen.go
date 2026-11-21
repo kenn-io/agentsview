@@ -770,6 +770,50 @@ func (o *GetAPIV1EmbeddingsStatusRequestOptions) GetHeader() (map[string]string,
 	return nil, nil
 }
 
+// GetAPIV1EventsRequestOptions is the options needed to make a request to GetAPIV1Events.
+type GetAPIV1EventsRequestOptions struct {
+	Query *GetAPIV1EventsQuery
+}
+
+// Validate validates all the fields in the options.
+// Use it if fields validation was not run.
+func (o *GetAPIV1EventsRequestOptions) Validate() error {
+	var errors runtime.ValidationErrors
+
+	if o.Query != nil {
+		if v, ok := any(o.Query).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Query", err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+
+	return errors
+}
+
+// GetPathParams returns the path params as a map.
+func (o *GetAPIV1EventsRequestOptions) GetPathParams() (map[string]any, error) {
+	return nil, nil
+}
+
+// GetQuery returns the query params as a map.
+func (o *GetAPIV1EventsRequestOptions) GetQuery() (map[string]any, error) {
+	return runtime.AsMap[any](o.Query)
+}
+
+// GetBody returns the payload in any type that can be marshalled to JSON by the client.
+func (o *GetAPIV1EventsRequestOptions) GetBody() any {
+	return nil
+}
+
+// GetHeader returns the headers as a map.
+func (o *GetAPIV1EventsRequestOptions) GetHeader() (map[string]string, error) {
+	return nil, nil
+}
+
 // GetAPIV1FrictionDigestsRequestOptions is the options needed to make a request to GetAPIV1FrictionDigests.
 type GetAPIV1FrictionDigestsRequestOptions struct {
 	Query *GetAPIV1FrictionDigestsQuery
@@ -3546,12 +3590,13 @@ func (c *Client) GetAPIV1ActivityReportStreamWithResponse(ctx context.Context, o
 
 // GetAPIV1EventsStreamWithResponse is the envelope form: it populates
 // Stream200 instead of the buffered body field.
-func (c *Client) GetAPIV1EventsStreamWithResponse(ctx context.Context, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1EventsResp, error) {
+func (c *Client) GetAPIV1EventsStreamWithResponse(ctx context.Context, options *GetAPIV1EventsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1EventsResp, error) {
 	var err error
 	reqParams := runtime.RequestOptionsParameters{
 		RequestURL: c.apiClient.GetBaseURL() + "/api/v1/events",
 		Method:     "GET",
 		Stream:     "text/event-stream",
+		Options:    options,
 	}
 
 	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
@@ -3653,6 +3698,22 @@ func (c *Client) GetAPIV1EventsStreamWithResponse(ctx context.Context, reqEditor
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
 					TargetType:    "GetAPIV1EventsErrorResponseJSON409",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 422:
+		out.JSON422 = new(GetAPIV1EventsErrorResponseJSON422)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON422); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1EventsErrorResponseJSON422",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -5811,8 +5872,8 @@ type ClientInterface interface {
 	PostAPIV1EmbeddingsGenerationsIDRetireWithResponse(ctx context.Context, options *PostAPIV1EmbeddingsGenerationsIDRetireRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1EmbeddingsGenerationsIDRetireResp, error)
 	PostAPIV1EmbeddingsSetupWithResponse(ctx context.Context, options *PostAPIV1EmbeddingsSetupRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1EmbeddingsSetupResp, error)
 	GetAPIV1EmbeddingsStatusWithResponse(ctx context.Context, options *GetAPIV1EmbeddingsStatusRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1EmbeddingsStatusResp, error)
-	GetAPIV1EventsWithResponse(ctx context.Context, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1EventsResp, error)
-	GetAPIV1EventsStreamWithResponse(ctx context.Context, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1EventsResp, error)
+	GetAPIV1EventsWithResponse(ctx context.Context, options *GetAPIV1EventsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1EventsResp, error)
+	GetAPIV1EventsStreamWithResponse(ctx context.Context, options *GetAPIV1EventsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1EventsResp, error)
 	PostAPIV1ExportConversationsInitializeWithResponse(ctx context.Context, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1ExportConversationsInitializeResp, error)
 	GetAPIV1FrictionDigestsWithResponse(ctx context.Context, options *GetAPIV1FrictionDigestsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1FrictionDigestsResp, error)
 	GetAPIV1FrictionDigestsDateWithResponse(ctx context.Context, options *GetAPIV1FrictionDigestsDateRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1FrictionDigestsDateResp, error)
@@ -9526,11 +9587,12 @@ func (c *Client) GetAPIV1EmbeddingsStatusWithResponse(ctx context.Context, optio
 }
 
 // GetAPIV1Events Watch server events
-func (c *Client) GetAPIV1EventsWithResponse(ctx context.Context, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1EventsResp, error) {
+func (c *Client) GetAPIV1EventsWithResponse(ctx context.Context, options *GetAPIV1EventsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1EventsResp, error) {
 	var err error
 	reqParams := runtime.RequestOptionsParameters{
 		RequestURL: c.apiClient.GetBaseURL() + "/api/v1/events",
 		Method:     "GET",
+		Options:    options,
 	}
 
 	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
@@ -9626,6 +9688,22 @@ func (c *Client) GetAPIV1EventsWithResponse(ctx context.Context, reqEditors ...r
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
 					TargetType:    "GetAPIV1EventsErrorResponseJSON409",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 422:
+		out.JSON422 = new(GetAPIV1EventsErrorResponseJSON422)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON422); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1EventsErrorResponseJSON422",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -23733,6 +23811,11 @@ type GetAPIV1EmbeddingsStatusQuery struct {
 	Store *string `json:"store,omitempty"`
 }
 
+type GetAPIV1EventsQuery struct {
+	// Session Session IDs to watch; repeat for each session
+	Session []string `json:"session,omitempty"`
+}
+
 type GetAPIV1FrictionDigestsQuery struct {
 	// From First digest date (YYYY-MM-DD)
 	From *string `json:"from,omitempty"`
@@ -25284,6 +25367,8 @@ type GetAPIV1EventsErrorResponseJSON403 = APIErrorResponse
 type GetAPIV1EventsErrorResponseJSON404 = APIErrorResponse
 
 type GetAPIV1EventsErrorResponseJSON409 = APIErrorResponse
+
+type GetAPIV1EventsErrorResponseJSON422 = APIErrorResponse
 
 type GetAPIV1EventsErrorResponseJSON500 = APIErrorResponse
 
@@ -27036,6 +27121,7 @@ type GetAPIV1EventsResp struct {
 	JSON403      *GetAPIV1EventsErrorResponseJSON403
 	JSON404      *GetAPIV1EventsErrorResponseJSON404
 	JSON409      *GetAPIV1EventsErrorResponseJSON409
+	JSON422      *GetAPIV1EventsErrorResponseJSON422
 	JSON500      *GetAPIV1EventsErrorResponseJSON500
 	JSON501      *GetAPIV1EventsErrorResponseJSON501
 	JSON502      *GetAPIV1EventsErrorResponseJSON502

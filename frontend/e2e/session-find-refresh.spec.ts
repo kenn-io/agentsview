@@ -48,9 +48,14 @@ async function installLiveSession(page: Page) {
   const all = Array.from({ length: 300 }, (_, i) =>
     message(i, i === 5 || i === 250 ? `needle at ${i}` : `Message ${i}`),
   );
+  let resolveReload!: () => void;
+  const reloaded = new Promise<void>((resolve) => {
+    resolveReload = resolve;
+  });
   await page.addInitScript(() => {
     localStorage.setItem("agentsview-message-layout", "skim");
     localStorage.setItem("agentsview-transcript-mode", "normal");
+    Object.defineProperty(window, "SharedWorker", { value: undefined });
   });
   await page.route(`**/api/v1/sessions/${SESSION_ID}`, async (route) => {
     const response = await route.fetch();
@@ -66,24 +71,33 @@ async function installLiveSession(page: Page) {
       ? all.slice(Math.max(0, from - limit + 1), from + 1).reverse()
       : all.slice(from, from + limit);
     await route.fulfill({ json: { messages: selected, count: selected.length } });
+    if (selected.some((entry) => entry.content === "Live message 304")) resolveReload();
   });
-  // The first watch connection stays open until the test emits an update.
+  // The shared stream stays open until the test emits an update.
   let emit!: () => void;
   const gate = new Promise<void>((resolve) => {
     emit = resolve;
   });
-  let served = false;
-  await page.route(`**/api/v1/sessions/${SESSION_ID}/watch*`, async (route) => {
-    if (served) return new Promise<void>(() => {});
-    served = true;
+  let subscribed!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    subscribed = resolve;
+  });
+  await page.route("**/api/v1/events*", async (route) => {
+    if (!new URL(route.request().url()).searchParams.getAll("session").includes(SESSION_ID)) {
+      await route.continue();
+      return;
+    }
+    subscribed();
     await gate;
     await route.fulfill({
       status: 200,
       contentType: "text/event-stream",
-      body: "event: session_updated\ndata: {}\n\n",
+      body: `retry: 60000\n\nevent: session_ready\ndata: ${SESSION_ID}\n\nevent: events_ready\ndata: {}\n\nevent: session_updated\ndata: ${SESSION_ID}\n\n`,
     });
   });
   return {
+    ready,
+    reloaded,
     refresh: () => {
       for (let i = 0; i < 5; i++) {
         const ordinal = all.length;
@@ -103,6 +117,7 @@ for (const newestFirst of [false, true])
       await page.goto(`/sessions/${SESSION_ID}`);
       const transcript = page.locator(".message-list-scroll");
       await expect(transcript).toHaveAttribute("data-loaded", "true");
+      await live.ready;
 
       if (newestFirst) {
         await page.getByRole("button", { name: "Toggle sort order (o)" }).click();
@@ -130,12 +145,21 @@ for (const newestFirst of [false, true])
       const before = await waitForScrollSettled(transcript);
 
       // The refresh only counts once the client has fetched the appended rows.
-      const reloaded = page.waitForResponse(
-        async (r) =>
-          /\/messages/.test(r.url()) && r.ok() && (await r.text()).includes("Live message 304"),
-      );
       live.refresh();
-      await reloaded;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          live.reloaded,
+          new Promise<never>((_, reject) => {
+            timeout = setTimeout(
+              () => reject(new Error("No message refresh included Live message 304")),
+              15_000,
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(timeout);
+      }
       // Nothing observable marks "the reveal did not run", so give a stray
       // re-reveal time to land before comparing offsets.
       await page.waitForTimeout(500);

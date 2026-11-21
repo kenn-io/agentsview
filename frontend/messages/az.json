@@ -2181,6 +2181,7 @@
   "settings_embeddings_state_building": "Qurulur",
   "settings_embeddings_state_retired": "İstifadədən çıxarılmış",
   "settings_embeddings_coverage": "{embeddedLabel} semantik vektorlara çevrilmiş · {missingLabel} çatışmayan",
+  "settings_remote_live_updates_unavailable": "Sessiyalar canlı yenilənməyəcək: bu server API {apiVersion} işlədir. Onu API {requiredVersion} versiyasına yeniləyin və ya yeni mesajları görmək üçün səhifəni yeniləyin.",
   "settings_remote_connected_version": "Əlaqə quruldu (v{version})",
   "settings_remote_server_returned": "Server {status} qaytardı",
   "settings_remote_connection_failed": "Əlaqə qurmaq mümkün olmadı",

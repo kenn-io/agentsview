@@ -109,7 +109,7 @@ func watchDaemonArchive(
 	if err != nil {
 		return err
 	}
-	response, err := api.GetAPIV1EventsStreamWithResponse(ctx)
+	response, err := api.GetAPIV1EventsStreamWithResponse(ctx, &apiclient.GetAPIV1EventsRequestOptions{})
 	if response != nil && response.HTTPResponse != nil {
 		defer response.HTTPResponse.Body.Close()
 	}

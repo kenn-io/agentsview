@@ -13,6 +13,7 @@ import type {
   DeleteApiV1SessionsByIdPathParameters,
   DeleteApiV1SessionsByIdPermanentPathParameters,
   EmptyTrashResponse,
+  GetApiV1EventsParams,
   GetApiV1SessionIdsResolveParams,
   GetApiV1SessionsByIdActivityPathParameters,
   GetApiV1SessionsByIdChildrenPathParameters,
@@ -71,17 +72,33 @@ import type {
 import { orvalRequest } from "../../runtime.ts";
 import { orvalFetch } from "../../runtime.ts";
 
-export const getGetApiV1EventsUrl = () => {
-  return `/api/v1/events`;
+export const getGetApiV1EventsUrl = (params?: GetApiV1EventsParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    const explodeParameters = ["session"];
+
+    if (Array.isArray(value) && explodeParameters.includes(key)) {
+      value.forEach((v) => {
+        normalizedParams.append(key, v === null ? "null" : String(v));
+      });
+      return;
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/v1/events?${stringifiedParams}` : `/api/v1/events`;
 };
 
 /**
  * @summary Watch server events
  */
 export const getApiV1Events = async (
+  params?: GetApiV1EventsParams,
   options?: Parameters<typeof orvalRequest>[1],
 ): Promise<Response> => {
-  return orvalRequest<Response>(getGetApiV1EventsUrl(), {
+  return orvalRequest<Response>(getGetApiV1EventsUrl(params), {
     ...options,
     method: "GET",
   });
