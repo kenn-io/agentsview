@@ -1639,6 +1639,8 @@ func TestSearchContent_ListSessionMessages(t *testing.T) {
 		{SessionID: "child", Ordinal: 1, Role: "tool", Content: "tool result", ContentLength: len("tool result")},
 		dbtest.AsstMsg("child", 2, "last"),
 	}))
+	_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{SessionID: "child", Limit: 2, Cursor: -1})
+	require.EqualError(t, err, "cursor must not be negative")
 	_, first, err := ts.searchContent(t.Context(), nil, searchContentIn{SessionID: "child", Mode: "typo", Project: "project-a", Limit: 2})
 	require.NoError(t, err)
 	require.Len(t, first.Matches, 2)
@@ -1673,6 +1675,7 @@ func TestSearchContent_ConceptsRejectedBeforeService(t *testing.T) {
 		{"neither", searchContentIn{}, "pattern or concepts required"},
 		{"both", searchContentIn{Pattern: "x", Concepts: []string{"a", "b"}}, "mutually exclusive"},
 		{"cursor", searchContentIn{Concepts: []string{"a", "b"}, Cursor: 10}, "cursor is not supported"},
+		{"negative cursor", searchContentIn{Pattern: "x", Cursor: -1}, "cursor must not be negative"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := &fakeContentSearchService{result: &service.ContentSearchResult{}}

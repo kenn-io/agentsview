@@ -902,6 +902,9 @@ func validateSearchDates(from, to string) error {
 func (t *toolset) searchContent(
 	ctx context.Context, _ *mcp.CallToolRequest, in searchContentIn,
 ) (*mcp.CallToolResult, searchContentOut, error) {
+	if in.Cursor < 0 {
+		return nil, searchContentOut{}, errors.New("cursor must not be negative")
+	}
 	listing := strings.TrimSpace(in.Pattern) == "" && len(in.Concepts) == 0 && in.SessionID != ""
 	if listing {
 		in.Pattern, in.Mode = "^", "regex"
