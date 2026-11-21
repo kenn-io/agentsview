@@ -153,6 +153,31 @@ func TestPGActivityReportInputReadsFinishedTransition(t *testing.T) {
 	requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), changed)
 }
 
+func TestPGActivityReportInputReadsFinishedFractionalBounds(t *testing.T) {
+	t.Parallel()
+	local, syncer, store := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "a", []db.Message{
+		{SessionID: "a", Ordinal: 0, Role: "user", Content: "question", Timestamp: "2026-06-14T00:00:00.500Z"},
+		{SessionID: "a", Ordinal: 1, Role: "assistant", Content: "answer", Timestamp: "2026-06-14T00:01:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":700}`)},
+	}))
+	pgKeptPush(t, syncer, false)
+	f := db.AnalyticsFilter{Timezone: "UTC"}
+	q := pgDayQuery(t, "2026-06-14", "UTC")
+	q.RangeStart = q.RangeStart.Add(900 * time.Millisecond)
+	pgKeptBuild(t, store, f, q, true)
+	q.RangeStart = q.RangeStart.Add(-800 * time.Millisecond)
+	store.runtimeState().activityKept.DeleteSlots(func(string) bool { return true })
+	got := pgKeptBuild(t, store, f, q, true)
+
+	fresh, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, fresh.Close()) })
+	fresh.hostedRelations = true
+	want := pgKeptBuild(t, fresh, f, q, true)
+	requirePGKeptEqual(t, want, got)
+}
+
 func TestPGActivityReportInputReadsLargeChange(t *testing.T) {
 	t.Parallel()
 	local, syncer, store := newUsageJournalFixture(t)

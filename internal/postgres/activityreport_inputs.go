@@ -66,9 +66,8 @@ type pgActivityPricedRow struct {
 	reported, priced, contributes, sessionCost bool
 }
 
-// pgActivitySession is one session's activity over all time: its runs and
-// the ascending Unix microsecond times of its counted user and assistant
-// messages. None of it depends on the report range.
+// pgActivitySession holds runs and ascending Unix microsecond times of counted
+// user and assistant messages for the input slot's range.
 type pgActivitySession struct {
 	runs              activity.SessionRuns
 	users, assistants []int64
@@ -254,7 +253,7 @@ var pgActivityAllTime = activity.Query{
 
 // activityReportRuns returns the sessions' runs clipped to q, in start
 // order. It derives the sessions inputs does not hold from one pairing scan
-// over all time and adds them to inputs.
+// over the input slot's range and adds them to inputs.
 func (s *Store) activityReportRuns(
 	ctx context.Context, ids []string, q activity.Query, inputs *pgActivityInputs,
 ) ([]activity.Run, error) {
@@ -269,6 +268,12 @@ func (s *Store) activityReportRuns(
 	}
 	if len(missing) > 0 {
 		all := pgActivityAllTime
+		if !q.Partial && q.RangeStart.Year() > 1 {
+			// Slot bounds have second precision. Cover the entire seconds so
+			// custom ranges with fractional bounds can share the slot.
+			all.RangeStart = q.RangeStart.Truncate(time.Second)
+			all.EffectiveEnd = q.RangeEnd.Truncate(time.Second).Add(time.Second)
+		}
 		all.GapCapSeconds = q.GapCapSeconds
 		terminal, pairs, counted, err := s.readActivityCandidates(ctx, missing, all, true)
 		if err != nil {
