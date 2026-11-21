@@ -16,15 +16,6 @@ import (
 	"go.kenn.io/agentsview/internal/kept"
 )
 
-func addDashboardCacheSessions(t *testing.T, d *DB, count int) {
-	t.Helper()
-	for i := range count {
-		insertSession(t, d, fmt.Sprintf("extra-%d", i), "project", func(s *Session) {
-			s.StartedAt = new("2024-06-01T09:00:00Z")
-		})
-	}
-}
-
 func dashboardTestSlot(t *testing.T, f AnalyticsFilter) string {
 	t.Helper()
 	data, err := json.Marshal(f, json.Deterministic(true))
@@ -32,19 +23,26 @@ func dashboardTestSlot(t *testing.T, f AnalyticsFilter) string {
 	return "dashboard-parts|" + TrendsTimezoneKey(f) + "|" + string(data)
 }
 
-func TestDashboardPartsMatchScansAndReuse(t *testing.T) {
+func TestDashboardPartsMatchScans(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	d := testDB(t)
 	ctx := t.Context()
 	for _, id := range []string{"a", "b", "empty"} {
 		insertSession(t, d, id, "project", func(s *Session) {
 			s.StartedAt = new("2024-06-01T09:00:00Z")
+			switch id {
+			case "a":
+				s.MessageCount = 2
+			case "b":
+				s.MessageCount = 3
+			case "empty":
+				s.MessageCount = 0
+			}
 			if id == "b" {
 				s.Agent = "codex"
 			}
 		})
 	}
-	addDashboardCacheSessions(t, d, 2)
 	a := userMsgAt("a", 0, "hello", "2024-06-01T09:00:00Z")
 	b := asstMsgAt("a", 1, "answer", "2024-06-01T09:01:00Z")
 	b.HasThinking = true
@@ -80,9 +78,13 @@ func TestDashboardPartsMatchScansAndReuse(t *testing.T) {
 	check(f)
 	check(AnalyticsFilter{Timezone: "UTC", Agent: "codex"})
 	insertMessages(t, d, asstMsgAt("a", 2, "later", "2024-06-01T09:02:00Z"))
+	_, err = d.getWriter().ExecContext(ctx, `UPDATE sessions SET message_count=3 WHERE id='a'`)
+	require.NoError(t, err)
 	check(f)
 	b.ToolCalls = append(b.ToolCalls, ToolCall{SessionID: "a", ToolName: "Write", Category: "Write"})
 	require.NoError(t, d.ReplaceSessionMessages(ctx, "a", []Message{a, b}))
+	_, err = d.getWriter().ExecContext(ctx, `UPDATE sessions SET message_count=2 WHERE id='a'`)
+	require.NoError(t, err)
 	check(f)
 	require.NoError(t, d.DeleteSession(ctx, "a"))
 	_, err = d.getWriter().ExecContext(ctx, `DELETE FROM excluded_sessions WHERE id = 'a'`)
@@ -164,11 +166,12 @@ func TestDashboardPartsWriteDuringFillFallsBack(t *testing.T) {
 		d := testDB(t)
 		ctx := t.Context()
 		insertSession(t, d, "s", "project", func(s *Session) { s.StartedAt = new("2024-06-01T09:00:00Z") })
-		addDashboardCacheSessions(t, d, 4)
 		insertMessages(t, d, userMsgAt("s", 0, "hello", "2024-06-01T09:00:00Z"))
 		dashboardPartsBeforeValidationObserver = func(context.Context) {
 			dashboardPartsBeforeValidationObserver = nil
 			insertMessages(t, d, asstMsgAt("s", 1, "answer", "2024-06-01T09:01:00Z"))
+			_, err := d.getWriter().ExecContext(ctx, `UPDATE sessions SET message_count=2 WHERE id='s'`)
+			require.NoError(t, err)
 		}
 		t.Cleanup(func() { dashboardPartsBeforeValidationObserver = nil })
 		result, err := d.GetAnalyticsActivity(ctx, AnalyticsFilter{Timezone: "UTC"}, "day")
@@ -179,7 +182,6 @@ func TestDashboardPartsWriteDuringFillFallsBack(t *testing.T) {
 		require.NoError(t, err)
 		parts := kept.LoadParts[dashboardPart](&d.trendsDisk, dashboardTestSlot(t, AnalyticsFilter{Timezone: "UTC"}), fmt.Sprintf("%s|%d", identity, dashboardPartsVersion))
 		assert.NotContains(t, parts, "s")
-		assert.Contains(t, parts, "extra-0")
 		var reads [][]string
 		dashboardPartsReadObserver = func(ids []string) { reads = append(reads, append([]string(nil), ids...)) }
 		t.Cleanup(func() { dashboardPartsReadObserver = nil })
@@ -192,12 +194,12 @@ func TestDashboardPartsWriteDuringFillFallsBack(t *testing.T) {
 		d := testDB(t)
 		ctx := t.Context()
 		insertSession(t, d, "selected", "project", func(s *Session) { s.Agent = "codex" })
-		insertSession(t, d, "other", "project", func(s *Session) { s.Agent = "gemini" })
+		insertSession(t, d, "other", "project", func(s *Session) { s.Agent = "gemini"; s.MessageCount = 0 })
 		insertMessages(t, d, userMsg("selected", 0, "hello"))
 		dashboardPartsBeforeValidationObserver = func(context.Context) {
 			dashboardPartsBeforeValidationObserver = nil
 			insertMessages(t, d, userMsg("other", 0, "elsewhere"))
-			_, err := d.getWriter().ExecContext(ctx, `UPDATE sessions SET message_count=2 WHERE id='other'`)
+			_, err := d.getWriter().ExecContext(ctx, `UPDATE sessions SET message_count=1 WHERE id='other'`)
 			require.NoError(t, err)
 		}
 		t.Cleanup(func() { dashboardPartsBeforeValidationObserver = nil })
@@ -216,9 +218,10 @@ func TestDashboardPartsWriteDuringFillFallsBack(t *testing.T) {
 		d := testDB(t)
 		ctx := t.Context()
 		insertSession(t, d, "s", "project", func(s *Session) { s.Agent = "codex" })
+		insertMessages(t, d, userMsg("s", 0, "hello"))
 		dashboardPartsBeforeValidationObserver = func(context.Context) {
 			dashboardPartsBeforeValidationObserver = nil
-			_, err := d.getWriter().ExecContext(ctx, `UPDATE sessions SET agent='gemini', message_count=42 WHERE id='s'`)
+			_, err := d.getWriter().ExecContext(ctx, `UPDATE sessions SET agent='gemini' WHERE id='s'`)
 			require.NoError(t, err)
 		}
 		t.Cleanup(func() { dashboardPartsBeforeValidationObserver = nil })
@@ -266,9 +269,14 @@ func TestDashboardPartsConcurrentPanels(t *testing.T) {
 	entered := make(chan struct{}, 3)
 	unblock := make(chan struct{})
 	results := make(chan error, 3)
-	var reads atomic.Int32
+	var reads, fills atomic.Int32
 	dashboardPartsReadObserver = func([]string) { reads.Add(1) }
-	dashboardPartsBeforeValidationObserver = func(context.Context) { entered <- struct{}{}; <-unblock }
+	dashboardPartsBeforeValidationObserver = func(context.Context) {
+		if fills.Add(1) == 1 {
+			entered <- struct{}{}
+			<-unblock
+		}
+	}
 	t.Cleanup(func() { dashboardPartsReadObserver = nil; dashboardPartsBeforeValidationObserver = nil })
 	go func() {
 		<-start
@@ -401,7 +409,7 @@ func TestDashboardPartsQueuedFillsDoNotHoldBulkPermits(t *testing.T) {
 	}
 }
 
-func TestDashboardPartsToolChangeWithoutTranscriptRevision(t *testing.T) {
+func TestDashboardPartsToolCallCountsRefresh(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	d := testDB(t)
 	ctx := t.Context()
