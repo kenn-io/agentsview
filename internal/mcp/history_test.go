@@ -743,16 +743,6 @@ func TestGetToolCalls_HTTPContinuesStoredResult(t *testing.T) {
 	assert.NotEmpty(t, calls.ToolCalls[0].ResultCursor)
 }
 
-// hangulText is n distinct-enough 3-byte runes, so a page of 10000 of them
-// exceeds the response budget and a gap or overlap changes the text.
-func hangulText(n int) string {
-	runes := make([]rune, n)
-	for i := range runes {
-		runes[i] = rune('가' + i%2000)
-	}
-	return string(runes)
-}
-
 // seedLongToolResult stores one call whose summary or sole saved event holds
 // text, and returns a reader for that text from a page of get_tool_calls.
 func seedLongToolResult(t *testing.T, d *db.DB, sid, field, text string) func(toolCallOut) (string, string) {
@@ -778,7 +768,7 @@ func TestGetToolCalls_ResumedCursorFitsLargerPages(t *testing.T) {
 	for _, field := range []string{"summary", "event"} {
 		t.Run(field, func(t *testing.T) {
 			ts, d := newTestToolset(t)
-			text := hangulText(12000)
+			text := strings.Repeat("가", 12000)
 			read := seedLongToolResult(t, d, "resume", field, text)
 			_, page, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "resume", IncludeResults: true, MaxResultChars: 10000})
 			require.NoError(t, err)

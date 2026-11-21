@@ -742,43 +742,49 @@ func (t *toolset) fitMessagePage(ctx context.Context, out *getMessagesOut, scann
 		attachBodyCursors(out, source, in.SessionID, in.Roles)
 		return fitsResponse(out)
 	})
-	if in.Around != nil {
-		for i := n; i < len(items); i++ {
-			if items[i].Ordinal == *in.Around {
-				next := items[0].Ordinal
-				out.Messages, out.Omitted, out.NextFrom, out.Filtered = items[i:i+1], len(items)-1, &next, 0
-				attachBodyCursors(out, source, in.SessionID, in.Roles)
-				if fitsResponse(out) {
-					return nil
-				}
-				out.Messages = nil
-				roles := in.Roles
-				if len(roles) > 0 {
-					roles = []string{items[i].Role}
-				}
-				progress := fitOneMessage(out, &items[i], messageBodyCursor{EvidenceSource: source, SessionID: in.SessionID, Revision: out.TranscriptRevision, Ordinal: items[i].Ordinal, NextFrom: &next, Roles: roles})
-				out.Messages = items[i : i+1]
-				attachBodyCursors(out, source, in.SessionID, in.Roles)
-				if !progress || !fitsResponse(out) {
-					return errors.New("message metadata exceeds response budget")
-				}
-				return nil
-			}
-		}
+	if i := anchorBeyond(items, in.Around, n); i >= 0 {
+		first := items[0].Ordinal
+		out.Omitted, out.Filtered = len(items)-1, 0
+		return fitSingle(out, items[i:i+1], &first, source, in)
 	}
 	if n == 0 {
 		cut(1)
-		out.Messages = items[:0]
-		roles := in.Roles
-		if len(roles) > 0 {
-			roles = []string{items[0].Role}
+		return fitSingle(out, items[:1], out.NextFrom, source, in)
+	}
+	return nil
+}
+
+// anchorBeyond returns the index of the around anchor when the cut page left
+// it out, or -1.
+func anchorBeyond(items []messageOut, around *int, n int) int {
+	if around != nil {
+		for i := max(n, 1); i < len(items); i++ {
+			if items[i].Ordinal == *around {
+				return i
+			}
 		}
-		progress := fitOneMessage(out, &items[0], messageBodyCursor{EvidenceSource: source, SessionID: in.SessionID, Revision: out.TranscriptRevision, Ordinal: items[0].Ordinal, NextFrom: out.NextFrom, Roles: roles})
-		out.Messages = items[:1]
-		attachBodyCursors(out, source, in.SessionID, in.Roles)
-		if !progress || !fitsResponse(out) {
-			return errors.New("message metadata exceeds response budget")
-		}
+	}
+	return -1
+}
+
+// fitSingle returns msgs[0] alone, truncating its body if needed, and
+// continues from next.
+func fitSingle(out *getMessagesOut, msgs []messageOut, next *int, source string, in getMessagesIn) error {
+	out.Messages, out.NextFrom = msgs, next
+	attachBodyCursors(out, source, in.SessionID, in.Roles)
+	if fitsResponse(out) {
+		return nil
+	}
+	roles := in.Roles
+	if len(roles) > 0 {
+		roles = []string{msgs[0].Role}
+	}
+	out.Messages, out.NextFrom = msgs[:0], next
+	progress := fitOneMessage(out, &msgs[0], messageBodyCursor{EvidenceSource: source, SessionID: in.SessionID, Revision: out.TranscriptRevision, Ordinal: msgs[0].Ordinal, NextFrom: next, Roles: roles})
+	out.Messages = msgs
+	attachBodyCursors(out, source, in.SessionID, in.Roles)
+	if !progress || !fitsResponse(out) {
+		return errors.New("message metadata exceeds response budget")
 	}
 	return nil
 }
@@ -1211,7 +1217,7 @@ func (t *toolset) searchContent(
 		n := fitPrefix(len(items), func(k int) bool {
 			out.Matches, out.Omitted = items[:k], len(items)-k
 			if !ranked && k > 0 {
-				next := in.Cursor + rawIndexes[max(k, 1)-1] + 1
+				next := in.Cursor + rawIndexes[k-1] + 1
 				out.NextCursor = &next
 			}
 			return fitsResponse(out)

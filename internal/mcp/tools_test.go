@@ -2438,17 +2438,21 @@ func TestSearchContent_BudgetTotal(t *testing.T) {
 }
 
 func TestSearchContent_BudgetOversized(t *testing.T) {
+	context := make([]db.Message, 10)
+	for i := range context {
+		context[i].Content = strings.Repeat("<", 500)
+	}
 	for _, tc := range []struct {
 		name           string
 		matches        []db.ContentMatch
 		currentSession string
 	}{
-		{name: "snippet", matches: []db.ContentMatch{{SessionID: "session", Ordinal: 1, Snippet: strings.Repeat("x", 20000)}}},
+		{name: "context", matches: []db.ContentMatch{{SessionID: "session", Ordinal: 1, Snippet: "needle", ContextBefore: context}}},
 		{name: "empty result", currentSession: strings.Repeat("x", 12000)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ts := &toolset{svc: &pagedContentSearchService{matches: tc.matches}, now: func() time.Time { return fixedNow }}
-			_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", CurrentSessionID: tc.currentSession, IncludeActive: true})
+			_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", CurrentSessionID: tc.currentSession, IncludeActive: true, Context: 10})
 			require.ErrorContains(t, err, "search metadata exceeds response budget")
 		})
 	}
