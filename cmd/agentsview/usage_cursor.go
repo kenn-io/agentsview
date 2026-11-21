@@ -121,9 +121,14 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 		return err
 	}
 
+	polledAt := time.Now().UTC()
 	rows := make([]db.CursorUsageEvent, 0, len(events))
+	fetched := make(map[string]bool, len(events))
 	for _, ev := range events {
-		rows = append(rows, cursorUsageRow(ev))
+		row := cursorUsageRow(ev)
+		rows = append(rows, row)
+		row.Agent = "cursor"
+		fetched[db.CursorUsageEventDedupKey(row)] = true
 	}
 	if err := database.InsertCursorUsageEvents(ctx, rows); err != nil {
 		return err
@@ -163,11 +168,7 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 				}
 				from = to
 			}
-			type owner struct {
-				id          string
-				completedAt time.Time
-			}
-			owners := map[string]owner{}
+			owners := map[string]string{}
 			for _, id := range users {
 				memberEvents, err := client.FetchAllUsageEvents(ctx, cursorusage.Query{StartDate: start, EndDate: windowEnd.Add(-time.Millisecond), PageSize: 1000, UserID: id})
 				if err != nil {
@@ -177,7 +178,6 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 					fmt.Fprintf(os.Stderr, "Cursor usage for a member could not be fetched: %v\n", err)
 					continue
 				}
-				completedAt := time.Now().UTC()
 				for _, ev := range memberEvents {
 					hour := ev.Timestamp.UTC().Truncate(time.Hour)
 					if hour.Before(start) || hour.Add(time.Hour).After(windowEnd) {
@@ -186,19 +186,22 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 					row := cursorUsageRow(ev)
 					row.Agent = "cursor"
 					key := db.CursorUsageEventDedupKey(row)
-					if previous, ok := owners[key]; ok && previous.id != id {
-						owners[key] = owner{completedAt: completedAt}
+					if !fetched[key] {
+						continue
+					}
+					if previous, ok := owners[key]; ok && previous != id {
+						owners[key] = ""
 					} else if !ok {
-						owners[key] = owner{id: id, completedAt: completedAt}
+						owners[key] = id
 					}
 				}
 			}
-			byUser := map[owner][]string{}
+			byUser := map[string][]string{}
 			for key, match := range owners {
 				byUser[match] = append(byUser[match], key)
 			}
 			for match, keys := range byUser {
-				if err := database.AssignCursorUsageAccount(ctx, match.id, keys, match.completedAt); err != nil {
+				if err := database.AssignCursorUsageAccount(ctx, match, keys, polledAt); err != nil {
 					return err
 				}
 			}

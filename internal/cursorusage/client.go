@@ -254,103 +254,64 @@ func requestUserID(raw string) (int64, error) {
 	return userID, nil
 }
 
-// ListDailyUsageUsers returns numeric member IDs from all pages and windows.
+// ListDailyUsageUsers returns numeric member IDs from one window of at most 30 days.
 func (c *Client) ListDailyUsageUsers(ctx context.Context, start, end time.Time) ([]string, error) {
 	if c == nil || strings.TrimSpace(c.APIKey) == "" {
 		return nil, errors.New("missing Cursor admin API key")
 	}
+	type dailyResponse struct {
+		Data []struct {
+			UserID jsontext.Value `json:"userId"`
+		} `json:"data"`
+		Pagination struct {
+			HasNext bool `json:"hasNextPage"`
+		} `json:"pagination"`
+	}
 	seen := map[string]bool{}
 	var users []string
-	last := c.lastDailyRequest
-	defer func() { c.lastDailyRequest = last }()
-	for from := start; from.Before(end); {
-		to := minTime(from.Add(30*24*time.Hour), end)
-		for page := 1; ; page++ {
-			resp, err := backoff.Retry(ctx, func() (struct {
-				Data []struct {
-					UserID jsontext.Value `json:"userId"`
-				} `json:"data"`
-				Pagination struct {
-					HasNext bool `json:"hasNextPage"`
-				} `json:"pagination"`
-			}, error,
-			) {
-				var result struct {
-					Data []struct {
-						UserID jsontext.Value `json:"userId"`
-					} `json:"data"`
-					Pagination struct {
-						HasNext bool `json:"hasNextPage"`
-					} `json:"pagination"`
-				}
-				if wait := c.DailyRequestInterval - time.Since(last); !last.IsZero() && wait > 0 {
-					timer := time.NewTimer(wait)
-					select {
-					case <-ctx.Done():
-						timer.Stop()
-						return result, backoff.Permanent(ctx.Err())
-					case <-timer.C:
-					}
-				}
-				last = time.Now()
-				body, err := json.Marshal(map[string]any{"startDate": timestampMillis(from), "endDate": timestampMillis(to), "page": page, "pageSize": 1000})
-				if err != nil {
-					return result, backoff.Permanent(err)
-				}
-				req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL()+"/teams/daily-usage-data", bytes.NewReader(body))
-				if err != nil {
-					return result, backoff.Permanent(err)
-				}
-				req.SetBasicAuth(c.APIKey, "")
-				req.Header.Set("Content-Type", "application/json")
-				r, err := c.httpClient().Do(req)
-				if err != nil {
-					return result, backoff.Permanent(err)
-				}
-				defer r.Body.Close()
-				if r.StatusCode < 200 || r.StatusCode >= 300 {
-					e := &statusError{statusCode: r.StatusCode, status: r.Status, retryAfter: httputil.ParseRetryAfter(r.Header.Get("Retry-After"))}
-					if !e.retryable() {
-						return result, backoff.Permanent(e)
-					}
-					if e.retryAfter > 0 {
-						return result, backoff.RetryAfter(min(e.retryAfter, maxRetryDelay), e)
-					}
-					return result, e
-				}
-				if err := json.UnmarshalRead(r.Body, &result); err != nil {
-					return result, backoff.Permanent(err)
-				}
-				return result, nil
-			}, backoff.WithBackOff(newRetryBackOff()), backoff.WithMaxTries(maxPageAttempts), backoff.WithMaxElapsedTime(0))
+	for page := 1; ; page++ {
+		// Daily requests do not use the usage-page retry callback.
+		resp, err := retryCursorRequest(ctx, c, &c.lastDailyRequest, c.DailyRequestInterval, 0, func() (dailyResponse, error) {
+			var result dailyResponse
+			body, err := json.Marshal(map[string]any{"startDate": timestampMillis(start), "endDate": timestampMillis(end), "page": page, "pageSize": 1000})
 			if err != nil {
-				return nil, fmt.Errorf("fetching Cursor daily usage page %d: %w", page, err)
+				return result, err
 			}
-			for _, row := range resp.Data {
-				id, err := strconv.ParseUint(string(row.UserID), 10, 64)
-				if err != nil || id == 0 {
-					continue
-				}
-				key := strconv.FormatUint(id, 10)
-				if !seen[key] {
-					seen[key] = true
-					users = append(users, key)
-				}
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL()+"/teams/daily-usage-data", bytes.NewReader(body))
+			if err != nil {
+				return result, err
 			}
-			if !resp.Pagination.HasNext {
-				break
+			req.SetBasicAuth(c.APIKey, "")
+			req.Header.Set("Content-Type", "application/json")
+			r, err := c.httpClient().Do(req)
+			if err != nil {
+				return result, err
+			}
+			defer r.Body.Close()
+			if r.StatusCode < 200 || r.StatusCode >= 300 {
+				return result, &statusError{statusCode: r.StatusCode, status: r.Status, retryAfter: httputil.ParseRetryAfter(r.Header.Get("Retry-After"))}
+			}
+			err = json.UnmarshalRead(r.Body, &result)
+			return result, err
+		})
+		if err != nil {
+			return nil, fmt.Errorf("fetching Cursor daily usage page %d: %w", page, err)
+		}
+		for _, row := range resp.Data {
+			id, err := strconv.ParseUint(string(row.UserID), 10, 64)
+			if err != nil || id == 0 {
+				continue
+			}
+			key := strconv.FormatUint(id, 10)
+			if !seen[key] {
+				seen[key] = true
+				users = append(users, key)
 			}
 		}
-		from = to
+		if !resp.Pagination.HasNext {
+			return users, nil
+		}
 	}
-	return users, nil
-}
-
-func minTime(a, b time.Time) time.Time {
-	if a.Before(b) {
-		return a
-	}
-	return b
 }
 
 // FetchAllUsageEvents requests every page of q, starting at q.Page. Requests,
@@ -403,13 +364,13 @@ func (c *Client) FetchAllUsageEvents(
 
 // waitForRequestSlot blocks until RequestInterval has passed since
 // lastRequest. A zero lastRequest means no request has been made yet.
-func (c *Client) waitForRequestSlot(
-	ctx context.Context, lastRequest time.Time,
+func waitForRequestSlot(
+	ctx context.Context, lastRequest time.Time, interval time.Duration,
 ) error {
-	if lastRequest.IsZero() || c.RequestInterval <= 0 {
+	if lastRequest.IsZero() || interval <= 0 {
 		return nil
 	}
-	wait := c.RequestInterval - time.Since(lastRequest)
+	wait := interval - time.Since(lastRequest)
 	if wait <= 0 {
 		return nil
 	}
@@ -429,54 +390,51 @@ func (c *Client) waitForRequestSlot(
 func (c *Client) listUsageEventsWithRetry(
 	ctx context.Context, lastRequest *time.Time, q Query,
 ) (Page, error) {
-	page, err := backoff.Retry(ctx, func() (Page, error) {
-		if err := c.waitForRequestSlot(ctx, *lastRequest); err != nil {
-			return Page{}, backoff.Permanent(err)
+	return retryCursorRequest(ctx, c, lastRequest, c.RequestInterval, q.Page, func() (Page, error) {
+		return c.ListUsageEvents(ctx, q)
+	})
+}
+
+func retryCursorRequest[T any](ctx context.Context, c *Client, lastRequest *time.Time, interval time.Duration, page int, request func() (T, error)) (T, error) {
+	result, err := backoff.Retry(ctx, func() (T, error) {
+		var zero T
+		if err := waitForRequestSlot(ctx, *lastRequest, interval); err != nil {
+			return zero, backoff.Permanent(err)
 		}
 		*lastRequest = time.Now()
-		page, err := c.ListUsageEvents(ctx, q)
+		result, err := request()
 		if err == nil {
-			return page, nil
+			return result, nil
 		}
 		statusErr, ok := errors.AsType[*statusError](err)
 		if !ok || !statusErr.retryable() {
-			return Page{}, backoff.Permanent(err)
+			return zero, backoff.Permanent(err)
 		}
 		if statusErr.retryAfter > 0 {
-			return Page{}, backoff.RetryAfter(
-				min(statusErr.retryAfter, maxRetryDelay), err,
-			)
+			return zero, backoff.RetryAfter(min(statusErr.retryAfter, maxRetryDelay), err)
 		}
-		return Page{}, err
-	},
-		backoff.WithBackOff(newRetryBackOff()),
-		backoff.WithMaxTries(maxPageAttempts),
-		// Attempts and the context bound the loop; an elapsed-time limit
-		// would cut off a run of honored 60-second Retry-After waits.
-		backoff.WithMaxElapsedTime(0),
+		return zero, err
+	}, backoff.WithBackOff(newRetryBackOff()), backoff.WithMaxTries(maxPageAttempts), backoff.WithMaxElapsedTime(0),
 		backoff.WithNotify(func(err error, wait time.Duration) {
-			if c.OnRetry == nil {
-				return
+			if page > 0 && c.OnRetry != nil {
+				if statusErr, ok := errors.AsType[*statusError](err); ok {
+					err = statusErr
+				}
+				c.OnRetry(page, err, wait)
 			}
-			if statusErr, ok := errors.AsType[*statusError](err); ok {
-				err = statusErr
-			}
-			c.OnRetry(q.Page, err, wait)
 		}),
 	)
 	retryErr := backoff.AsRetryError(err)
 	if retryErr == nil {
-		return page, err
+		return result, err
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return Page{}, ctxErr
+		return result, ctxErr
 	}
 	if errors.Is(retryErr.Cause, backoff.ErrExhausted) {
-		return Page{}, fmt.Errorf(
-			"giving up after %d attempts: %w", maxPageAttempts, retryErr.LastErr,
-		)
+		return result, fmt.Errorf("giving up after %d attempts: %w", maxPageAttempts, retryErr.LastErr)
 	}
-	return Page{}, retryErr.LastErr
+	return result, retryErr.LastErr
 }
 
 // newRetryBackOff paces retries of a failed page when the server gave no
@@ -511,7 +469,7 @@ type rawUsageEvent struct {
 	TokenUsage     tokenUsage     `json:"tokenUsage"`
 	ChargedCents   jsontext.Value `json:"chargedCents"`
 	CursorTokenFee jsontext.Value `json:"cursorTokenFee"`
-	UserID         jsontext.Value `json:"userId"`
+	UserID         string         `json:"userId"`
 	UserEmail      string         `json:"userEmail"`
 	IsHeadless     bool           `json:"isHeadless"`
 }
@@ -548,23 +506,10 @@ func parseUsageEvent(raw rawUsageEvent) (UsageEvent, error) {
 		},
 		Charged:        charged,
 		CursorTokenFee: tokenFee,
-		UserID:         parseUsageUserID(raw.UserID),
+		UserID:         strings.TrimSpace(raw.UserID),
 		UserEmail:      strings.TrimSpace(raw.UserEmail),
 		IsHeadless:     raw.IsHeadless,
 	}, nil
-}
-
-func parseUsageUserID(value jsontext.Value) string {
-	if value.Kind() == jsontext.KindString {
-		var id string
-		if json.Unmarshal(value, &id) == nil {
-			return strings.TrimSpace(id)
-		}
-	}
-	if value.Kind() == jsontext.KindNumber {
-		return string(value)
-	}
-	return ""
 }
 
 func parseOptionalCents(value jsontext.Value) (money.Money, error) {

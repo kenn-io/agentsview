@@ -96,6 +96,13 @@ func TestDialogueUpgradeReparsesClassifiedProviders(t *testing.T) {
 	assert.Equal(t, completedVersion, reopened.GetSessionDataVersion(t.Context(), "pi"))
 }
 
+func TestCursorAccountDataVersionScope(t *testing.T) {
+	assert.Equal(t, 185, CurrentDataVersion())
+	providers := ScopedDataVersionProviders(184, 185)
+	require.NotNil(t, providers)
+	assert.Empty(t, providers)
+}
+
 func TestValidateDataVersionScopes(t *testing.T) {
 	require.NoError(t, validateDataVersionScopes(dataVersionScopes),
 		"declared parser upgrades must stay within the scoped-upgrade rules")

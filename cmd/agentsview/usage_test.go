@@ -1674,12 +1674,14 @@ func TestCursorSyncAssignsOnlyMatchedMembers(t *testing.T) {
 	require.NoError(t, database.Close())
 	var requests []string
 	var newerPoll time.Time
+	var rosterAt time.Time
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		if !assert.NoError(t, json.UnmarshalRead(r.Body, &body)) {
 			return
 		}
 		if r.URL.Path == "/teams/daily-usage-data" {
+			rosterAt = time.Now().UTC()
 			assert.EqualValues(t, 1000, body["pageSize"])
 			_, _ = w.Write([]byte(`{"data":[{"userId":12,"isActive":false},{"userId":34}],"pagination":{"hasNextPage":false}}`))
 			return
@@ -1715,7 +1717,7 @@ func TestCursorSyncAssignsOnlyMatchedMembers(t *testing.T) {
 	assert.NotEmpty(t, stamp)
 	completed, err := time.Parse(time.RFC3339Nano, stamp)
 	require.NoError(t, err)
-	assert.True(t, completed.Before(newerPoll), "member timestamp must precede the later member request")
+	assert.True(t, completed.Before(rosterAt), "poll timestamp must precede the roster request")
 	key := db.CursorUsageEventDedupKey(db.CursorUsageEvent{OccurredAt: "2026-07-28T10:03:00Z", Model: "model-a", OutputTokens: 7, UserEmail: "a@example.com", Agent: "cursor"})
 	other := dbtest.OpenTestDBAt(t, filepath.Join(t.TempDir(), "sessions.db"))
 	require.NoError(t, other.ConfigureArtifactLocalMachine(t.Context(), "machine-b"))
@@ -1775,7 +1777,7 @@ func TestCursorUsageAmbiguousKeyClearsPriorAccount(t *testing.T) {
 			http.Error(w, "failed", http.StatusBadRequest)
 			return
 		}
-		_, _ = w.Write([]byte(`{"totalUsageEventsCount":1,"usageEvents":[{"timestamp":"2026-07-28T10:03:00Z","model":"model-a","tokenUsage":{"outputTokens":10},"userId":42,"userEmail":"a@example.com","chargedCents":25}]}`))
+		_, _ = w.Write([]byte(`{"totalUsageEventsCount":1,"usageEvents":[{"timestamp":"2026-07-28T10:03:00Z","model":"model-a","tokenUsage":{"outputTokens":10},"userId":"42","userEmail":"a@example.com","chargedCents":25}]}`))
 	}))
 	defer server.Close()
 	original := newCursorUsageClient
@@ -2251,4 +2253,70 @@ func TestCursorSyncAllSkipsEmptyRosterWindows(t *testing.T) {
 			assert.Equal(t, tc.want, rosterCalls)
 		})
 	}
+}
+
+func TestCursorSyncUsesUnfilteredFetchTimeAndDefersLateEvents(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "config.toml"), []byte("cursor_admin_api_key = 'key'\n"), 0o600))
+	const first = `{"timestamp":"2026-07-28T10:03:00Z","model":"a","tokenUsage":{"outputTokens":7}}`
+	const late = `{"timestamp":"2026-07-28T10:04:00Z","model":"b","tokenUsage":{"outputTokens":5}}`
+	var rosterAt time.Time
+	syncNumber := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &body)) {
+			return
+		}
+		if r.URL.Path == "/teams/daily-usage-data" {
+			if syncNumber == 1 {
+				rosterAt = time.Now().UTC()
+			}
+			_, _ = w.Write([]byte(`{"data":[{"userId":12}],"pagination":{"hasNextPage":false}}`))
+			return
+		}
+		if _, filtered := body["userId"]; !filtered {
+			syncNumber++
+			if syncNumber == 1 {
+				_, _ = fmt.Fprintf(w, `{"totalUsageEventsCount":1,"usageEvents":[%s]}`, first)
+				return
+			}
+		}
+		_, _ = fmt.Fprintf(w, `{"totalUsageEventsCount":2,"usageEvents":[%s,%s]}`, first, late)
+	}))
+	defer server.Close()
+	original := newCursorUsageClient
+	newCursorUsageClient = func(key string) *cursorusage.Client {
+		c := cursorusage.NewClientWithBaseURL(server.URL, key)
+		c.RequestInterval = 0
+		c.DailyRequestInterval = 0
+		return c
+	}
+	t.Cleanup(func() { newCursorUsageClient = original })
+	cmd := newUsageCursorCommand()
+	cmd.SetArgs([]string{"--since", "2026-07-28", "--until", "2026-07-28"})
+	require.NoError(t, cmd.Execute())
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, database.ConfigureArtifactLocalMachine(t.Context(), "machine-a"))
+	var count int
+	var stamp string
+	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT count(*), max(account_polled_at) FROM cursor_usage_events`).Scan(&count, &stamp))
+	assert.Equal(t, 1, count)
+	polledAt, err := time.Parse(time.RFC3339Nano, stamp)
+	require.NoError(t, err)
+	assert.True(t, polledAt.Before(rosterAt))
+	opts := db.ReportingExportOptions{Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC), Now: time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), SchemaVersion: 6, ByMachine: true}
+	day, err := database.ExportReportingDay(t.Context(), opts)
+	require.NoError(t, err)
+	assert.EqualValues(t, 7, day.Hours[10].Machines["cursor-account:12"].Usage.Totals.OutputTokens)
+	require.NoError(t, database.Close())
+	cmd = newUsageCursorCommand()
+	cmd.SetArgs([]string{"--since", "2026-07-28", "--until", "2026-07-28"})
+	require.NoError(t, cmd.Execute())
+	database = dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	day, err = database.ExportReportingDay(t.Context(), opts)
+	require.NoError(t, err)
+	account := day.Hours[10].Machines["cursor-account:12"]
+	assert.EqualValues(t, 12, account.Usage.Totals.OutputTokens)
+	assert.Greater(t, account.PolledAt, stamp)
 }

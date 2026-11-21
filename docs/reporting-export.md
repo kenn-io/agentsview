@@ -64,7 +64,8 @@ does not prove that two different archives' account-wide billing is distinct. Do
 not treat it as a machine identity or merge it with a named machine.
 
 Schema 6 reports matched Cursor usage under `cursor-account:<user_id>`, with
-`polled_at` set to the sync completion time. An unfiltered sync lists the team
+`polled_at` set to the completion time of the unfiltered event fetch. Events
+added after that fetch appear on the next sync. An unfiltered sync lists the team
 roster and fetches usage for each member; this adds requests for each roster
 page and member. Only events returned by a member fetch for a fully closed hour
 are assigned to that account. Filtered syncs do not establish account coverage;
@@ -73,7 +74,8 @@ Project-key exports omit account parts.
 
 Events already in the archive stay under archive billing until an unfiltered
 sync matches them. The first export of an older archive adds empty account
-columns in place. An hour export loads account events only for that hour.
+columns in place. Archives with account stamps require data version 185 or newer.
+An hour export loads account events only for that hour.
 Schema 6 hashes machine IDs beginning with `cursor-account:` or `machine:` to
 keep them distinct from account keys. Schema 5 and the change stream retain the
 original IDs.

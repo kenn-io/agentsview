@@ -17,7 +17,7 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 )
 
-func TestListDailyUsageUsersPagesAndWindows(t *testing.T) {
+func TestListDailyUsageUsersPages(t *testing.T) {
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	var calls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -42,9 +42,6 @@ func TestListDailyUsageUsersPagesAndWindows(t *testing.T) {
 		case 2:
 			assert.Equal(t, 2, q.Page)
 			_, _ = w.Write([]byte(`{"data":[{"userId":34}],"pagination":{"hasNextPage":false}}`))
-		case 3:
-			assert.Equal(t, start.Add(30*24*time.Hour).UnixMilli(), q.Start)
-			_, _ = w.Write([]byte(`{"data":[{"userId":34},{"userId":56}],"pagination":{"hasNextPage":false}}`))
 		default:
 			assert.Fail(t, "unexpected roster request", "request %d", calls)
 		}
@@ -52,10 +49,10 @@ func TestListDailyUsageUsersPagesAndWindows(t *testing.T) {
 	defer srv.Close()
 	c := NewClientWithBaseURL(srv.URL, "key")
 	c.DailyRequestInterval = 0
-	users, err := c.ListDailyUsageUsers(t.Context(), start, start.Add(31*24*time.Hour))
+	users, err := c.ListDailyUsageUsers(t.Context(), start, start.Add(30*24*time.Hour))
 	require.NoError(t, err)
-	assert.Equal(t, []string{"12", "34", "56"}, users)
-	assert.Equal(t, 3, calls)
+	assert.Equal(t, []string{"12", "34"}, users)
+	assert.Equal(t, 2, calls)
 }
 
 func TestListDailyUsageUsersPacesSeparateWindows(t *testing.T) {
