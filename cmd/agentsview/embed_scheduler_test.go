@@ -828,10 +828,10 @@ func TestSearcherAdapterActivityCandidateExpansion(t *testing.T) {
 		encodes = 0
 		hits, err := db.SelectSurvivingVectorHits(t.Context(), db.ContentSearchFilter{
 			Pattern: "query", Limit: 4, ExcludeActiveSince: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
-		}, adapter, 5000, func(_ context.Context, _ db.ContentSearchFilter, ids []string) (map[string]bool, error) {
-			allowed := make(map[string]bool, len(ids))
+		}, adapter, 5000, func(_ context.Context, _ db.ContentSearchFilter, ids []string) (map[string]db.VectorSessionEligibility, error) {
+			allowed := make(map[string]db.VectorSessionEligibility, len(ids))
 			for _, id := range ids {
-				allowed[id] = false
+				allowed[id] = db.VectorSessionEligibility{DateAllowed: true}
 			}
 			return allowed, nil
 		})

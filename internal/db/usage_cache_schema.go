@@ -17,6 +17,8 @@ import (
 )
 
 const (
+	usageCacheMaxOpenConns = 4
+
 	// Version 5 rebuilds version 4 facts and rollups so Posit Assistant
 	// sidecar events use request-scoped pricing semantics.
 	// Version 6 rebuilds version 5 facts and rollups because
@@ -844,8 +846,8 @@ func openUsageCacheDatabase(ctx context.Context, path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening usage cache %s: %w", path, err)
 	}
-	database.SetMaxOpenConns(readerMaxOpenConns)
-	database.SetMaxIdleConns(readerMaxOpenConns)
+	database.SetMaxOpenConns(usageCacheMaxOpenConns)
+	database.SetMaxIdleConns(usageCacheMaxOpenConns)
 	if err := database.PingContext(ctx); err != nil {
 		_ = database.Close()
 		return nil, fmt.Errorf("opening usage cache %s: %w", path, err)

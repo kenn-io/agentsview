@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -54,25 +55,64 @@ func TestSearchRankWalkMatchesFullRanking(t *testing.T) {
 	require.NotNil(t, walk, "the walk must serve a page with distinct ranks")
 	assert.False(t, walk.complete)
 
-	for _, query := range []string{"handler", "deploy"} {
-		for _, limit := range []int{1, 2, 7, 50} {
-			var walked, ranked []SearchResult
-			for cursor := 0; ; cursor += limit {
-				got, err := d.Search(ctx, SearchFilter{Query: query, Limit: limit, Cursor: cursor})
-				require.NoError(t, err)
-				want, err := d.Search(ctx, SearchFilter{Query: query, Limit: limit, Cursor: cursor, Project: "proj"})
-				require.NoError(t, err)
-				require.Equal(t, want, got, "%s limit %d cursor %d", query, limit, cursor)
-				walked = append(walked, got.Results...)
-				ranked = append(ranked, want.Results...)
-				if got.NextCursor == 0 {
-					break
+	// Fresh readers prevent cached statements from hiding which ranking query ran.
+	observe := func(filter SearchFilter) (SearchPage, int) {
+		t.Helper()
+		reader, err := OpenReadOnly(ctx, d.Path())
+		require.NoError(t, err)
+		defer func() { require.NoError(t, reader.Close()) }()
+		reader.rawReader().SetMaxOpenConns(1)
+		conn, err := reader.getReader().Conn(ctx)
+		require.NoError(t, err)
+		var rankingWindows int
+		require.NoError(t, conn.Raw(func(raw any) error {
+			raw.(interface {
+				RegisterAuthorizer(func(int, string, string, string) int)
+			}).RegisterAuthorizer(func(op int, _, arg2, _ string) int {
+				if op == sqlite3.SQLITE_FUNCTION && arg2 == "row_number" {
+					rankingWindows++
 				}
-			}
-			assert.Equal(t, ranked, walked)
-			if query == "handler" {
-				require.Len(t, walked, 116, "limit %d", limit)
-				assert.Equal(t, -1, walked[len(walked)-1].Ordinal, "title-only rows come last")
+				return sqlite3.SQLITE_OK
+			})
+			return nil
+		}))
+		require.NoError(t, conn.Close())
+		page, err := reader.Search(ctx, filter)
+		require.NoError(t, err)
+		return page, rankingWindows
+	}
+	filter := SearchFilter{Query: "handler", DateFrom: "2026-05-10", Limit: 1, Project: "proj"}
+	full, fullWindows := observe(filter)
+	filter.Project = ""
+	page, walkWindows := observe(filter)
+	require.Equal(t, full, page)
+	require.Len(t, page.Results, 1)
+	assert.Less(t, walkWindows, fullWindows, "dated relevance search must use the rank walk")
+
+	for _, from := range []string{"", "2026-05-08", "2026-05-10", "2027-01-01"} {
+		for _, query := range []string{"handler", "deploy"} {
+			for _, limit := range []int{1, 2, 7, 50} {
+				var walked, ranked []SearchResult
+				for cursor := 0; ; cursor += limit {
+					got, err := d.Search(ctx, SearchFilter{Query: query, Limit: limit, Cursor: cursor, DateFrom: from})
+					require.NoError(t, err)
+					want, err := d.Search(ctx, SearchFilter{Query: query, Limit: limit, Cursor: cursor, Project: "proj", DateFrom: from})
+					require.NoError(t, err)
+					require.Equal(t, want, got, "%s from %s limit %d cursor %d", query, from, limit, cursor)
+					walked = append(walked, got.Results...)
+					ranked = append(ranked, want.Results...)
+					if got.NextCursor == 0 {
+						break
+					}
+				}
+				assert.Equal(t, ranked, walked)
+				if from == "2027-01-01" {
+					assert.Empty(t, walked)
+				}
+				if query == "handler" && from == "" {
+					require.Len(t, walked, 116, "limit %d", limit)
+					assert.Equal(t, -1, walked[len(walked)-1].Ordinal, "title-only rows come last")
+				}
 			}
 		}
 	}

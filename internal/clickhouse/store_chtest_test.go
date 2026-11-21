@@ -332,6 +332,20 @@ func TestSearchContentExcludeActiveSince(t *testing.T) {
 	}
 }
 
+func TestSemanticSessionDateEligibility(t *testing.T) {
+	store := newClonedReadStore(t)
+	ids := []string{fixtureAlphaID, fixtureBetaID}
+	for _, tc := range []struct {
+		date string
+		want bool
+	}{{"2026-01-10", true}, {"2026-01-12", false}} {
+		allowed, err := store.semanticAllowedSessionIDs(t.Context(), db.ContentSearchFilter{Date: tc.date, IncludeOneShot: true}, ids)
+		require.NoError(t, err)
+		require.Contains(t, allowed, fixtureAlphaID)
+		assert.Equal(t, tc.want, allowed[fixtureAlphaID].DateAllowed)
+	}
+}
+
 func TestSearchTreatsUnderscoreAsLiteral(t *testing.T) {
 	t.Parallel()
 	store, syncer, local := newPushedStore(t)

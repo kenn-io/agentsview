@@ -711,8 +711,9 @@ const (
 	walCheckpointAttempts    = 3
 	walCheckpointRetryDelay  = 250 * time.Millisecond
 	sqliteCacheSizeKiB       = -8 * 1024
-	readerMaxOpenConns       = 4
-	bulkReadSlots            = readerMaxOpenConns - 1 // Keep one reader connection for quick reads.
+	readerMaxOpenConns       = 9
+	bulkSearchSlots          = 4
+	bulkReadSlots            = readerMaxOpenConns - bulkSearchSlots - 1 // Reserve one reader for quick reads.
 	readerConnMaxIdleTime    = 5 * time.Minute
 )
 
@@ -1030,6 +1031,10 @@ type DB struct {
 		waitMu       sync.Mutex
 		waitCount    int64
 		waitDuration time.Duration
+	}
+	bulkSearches struct {
+		once  sync.Once
+		slots chan struct{}
 	}
 
 	// memberFreshnessPages counts ListVirtualContainerMemberFreshnessPage
@@ -1412,6 +1417,21 @@ func (db *DB) acquireBulkRead(ctx context.Context) (func(), error) {
 	select {
 	case db.bulkReads.slots <- struct{}{}:
 		return func() { <-db.bulkReads.slots }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (db *DB) acquireBulkSearch(ctx context.Context) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	db.bulkSearches.once.Do(func() {
+		db.bulkSearches.slots = make(chan struct{}, bulkSearchSlots)
+	})
+	select {
+	case db.bulkSearches.slots <- struct{}{}:
+		return func() { <-db.bulkSearches.slots }, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}

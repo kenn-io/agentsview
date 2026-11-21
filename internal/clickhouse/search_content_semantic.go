@@ -80,23 +80,25 @@ func (s *Store) survivingVectorHits(
 	return db.SelectSurvivingVectorHits(ctx, f, searcher, k, s.semanticAllowedSessionIDs)
 }
 
-// semanticAllowedSessionIDs returns activity eligibility for ids passing
+// semanticAllowedSessionIDs returns activity and date eligibility for ids passing
 // the filter's metadata scope, reusing the shared session filter SQL so this
 // path cannot drift from the substring and regex scope.
 func (s *Store) semanticAllowedSessionIDs(
 	ctx context.Context, f db.ContentSearchFilter, ids []string,
-) (map[string]bool, error) {
-	allowed := make(map[string]bool, len(ids))
+) (map[string]db.VectorSessionEligibility, error) {
+	allowed := make(map[string]db.VectorSessionEligibility, len(ids))
 	if len(ids) == 0 {
 		return allowed, nil
 	}
 	sessionFilter := db.SemanticContentSessionFilter(f)
 	sessionFilter.ExcludeActiveSince = time.Time{}
+	sessionFilter.Date, sessionFilter.DateFrom, sessionFilter.DateTo = "", "", ""
 	b := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
 	activity := "1"
 	if !f.ExcludeActiveSince.IsZero() {
 		activity = b.ExcludeActiveSincePredicate(f.ExcludeActiveSince)
 	}
+	date := db.VectorSessionDatePredicate(b, f)
 	scopeWhere, scopeArgs := db.BuildSessionBaseFilterSQL(sessionFilter, db.ClickHouseQueryDialect())
 	scopeWhere, scopeArgs = db.AppendExcludeSessionIDs(scopeWhere, scopeArgs, "id", f.ExcludeSessionIDs)
 	scopeArgs = append(b.Args(), scopeArgs...)
@@ -104,7 +106,7 @@ func (s *Store) semanticAllowedSessionIDs(
 		placeholders, args := inArgs(batch)
 		if err := func() error {
 			rows, err := s.queryContext(ctx,
-				"SELECT id, "+activity+" FROM sessions WHERE "+scopeWhere+" AND id IN ("+placeholders+")",
+				"SELECT id, "+activity+", "+date+" FROM sessions WHERE "+scopeWhere+" AND id IN ("+placeholders+")",
 				append(append([]any{}, scopeArgs...), args...)...)
 			if err != nil {
 				return fmt.Errorf("clickhouse semantic search session scope: %w", err)
@@ -112,11 +114,11 @@ func (s *Store) semanticAllowedSessionIDs(
 			defer rows.Close()
 			for rows.Next() {
 				var id string
-				var activityAllowed uint8
-				if err := rows.Scan(&id, &activityAllowed); err != nil {
+				var activityAllowed, dateAllowed uint8
+				if err := rows.Scan(&id, &activityAllowed, &dateAllowed); err != nil {
 					return fmt.Errorf("scanning clickhouse semantic session id: %w", err)
 				}
-				allowed[id] = activityAllowed != 0
+				allowed[id] = db.VectorSessionEligibility{ActivityAllowed: activityAllowed != 0, DateAllowed: dateAllowed != 0}
 			}
 			return rows.Err()
 		}(); err != nil {

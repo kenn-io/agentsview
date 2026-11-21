@@ -35,6 +35,19 @@ func (t *toolset) clock() time.Time {
 	return time.Now()
 }
 
+const (
+	defaultSearchWindowDays = 30
+	searchTimeLimit         = 30 * time.Second
+)
+
+func (t *toolset) defaultDateFrom(from, to, sessionID string) (string, string) {
+	if from != "" || to != "" || sessionID != "" {
+		return from, ""
+	}
+	from = t.clock().UTC().AddDate(0, 0, -defaultSearchWindowDays).Format(time.DateOnly)
+	return from, fmt.Sprintf("Searched sessions active on or after %s (last 30 days) because date_from, date_to, and session_id were omitted. Pass an earlier date_from (YYYY-MM-DD) to search further back.", from)
+}
+
 func strval(p *string) string {
 	if p == nil {
 		return ""
@@ -118,14 +131,14 @@ func (t *toolset) resolveSession(
 // --- search_sessions ---
 
 type searchSessionsIn struct {
-	DateFrom      string `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
+	DateFrom      string `json:"date_from,omitempty" jsonschema:"Start date (YYYY-MM-DD). First page defaults to 30 days ago UTC unless date_to or session_id is set."`
 	DateTo        string `json:"date_to,omitempty" jsonschema:"Only sessions on or before this date (YYYY-MM-DD)."`
 	Query         string `json:"query,omitempty" jsonschema:"Search terms across all agent sessions. Required unless session_id is set. Every term must appear (AND), not an exact phrase; wrap the whole query in double quotes for an exact phrase, e.g. \"build failed\". Punctuation in a term (hyphens, colons) is handled safely."`
 	SessionID     string `json:"session_id,omitempty" jsonschema:"Look up one session by its raw UUID or full stored session ID. Returns one metadata row, includes active sessions, and takes precedence over the other search arguments. Missing IDs and ambiguous raw UUIDs return errors."`
 	Project       string `json:"project,omitempty" jsonschema:"Restrict to one project (repo/directory name)."`
 	Sort          string `json:"sort,omitempty" jsonschema:"relevance (default) or recency."`
 	Limit         int    `json:"limit,omitempty" jsonschema:"Max results, default 10, max 30."`
-	Cursor        int    `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor."`
+	Cursor        int    `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor; pass the returned date_from unchanged."`
 	IncludeActive bool   `json:"include_active,omitempty" jsonschema:"Include sessions active in the last 10 minutes. Default false: the conversation you are in right now is also recorded, so without this exclusion you would find yourself."`
 }
 
@@ -141,6 +154,8 @@ type sessionHit struct {
 }
 
 type searchSessionsOut struct {
+	Note           string       `json:"note,omitempty"`
+	DateFrom       string       `json:"date_from,omitempty" jsonschema:"Effective start date; pass it unchanged with next_cursor as cursor."`
 	Results        []sessionHit `json:"results"`
 	NextCursor     *int         `json:"next_cursor,omitempty"`
 	ExcludedActive int          `json:"excluded_active,omitempty"`
@@ -149,6 +164,8 @@ type searchSessionsOut struct {
 func (t *toolset) searchSessions(
 	ctx context.Context, _ *mcp.CallToolRequest, in searchSessionsIn,
 ) (*mcp.CallToolResult, searchSessionsOut, error) {
+	ctx, cancel := context.WithTimeout(ctx, searchTimeLimit)
+	defer cancel()
 	if in.SessionID != "" {
 		detail, err := t.resolveSession(ctx, in.SessionID)
 		if err != nil {
@@ -168,8 +185,12 @@ func (t *toolset) searchSessions(
 			EndedAt:   ended,
 		}}}, nil
 	}
+	if in.Cursor > 0 && in.DateFrom == "" && in.DateTo == "" {
+		return nil, searchSessionsOut{}, errors.New("date_from is required with a positive cursor: pass date_from from the first page")
+	}
+	dateFrom, note := t.defaultDateFrom(in.DateFrom, in.DateTo, in.SessionID)
 	res, err := t.svc.Search(ctx, service.SearchRequest{
-		DateFrom: in.DateFrom,
+		DateFrom: dateFrom,
 		DateTo:   in.DateTo,
 		Query:    in.Query,
 		Project:  in.Project,
@@ -182,7 +203,7 @@ func (t *toolset) searchSessions(
 	}
 	now := t.clock()
 	activity := make(map[string]string)
-	out := searchSessionsOut{Results: make([]sessionHit, 0, len(res.Results))}
+	out := searchSessionsOut{Results: make([]sessionHit, 0, len(res.Results)), Note: note, DateFrom: dateFrom}
 	for _, r := range res.Results {
 		if !in.IncludeActive {
 			act := r.SessionEndedAt
@@ -210,6 +231,9 @@ func (t *toolset) searchSessions(
 			Snippet:      r.Snippet,
 			MatchOrdinal: r.Ordinal,
 		})
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, searchSessionsOut{}, err
 	}
 	if res.NextCursor > 0 && len(res.Results) > 0 {
 		nc := res.NextCursor
@@ -783,10 +807,10 @@ type searchContentIn struct {
 	SessionID        string   `json:"session_id,omitempty" jsonschema:"Restrict to one exact full stored session ID."`
 	GitBranch        string   `json:"git_branch,omitempty" jsonschema:"Restrict to one exact git branch."`
 	CurrentSessionID string   `json:"current_session_id,omitempty" jsonschema:"Exclude this exact full stored session ID instead of applying the recent-activity heuristic."`
-	DateFrom         string   `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
+	DateFrom         string   `json:"date_from,omitempty" jsonschema:"Start date (YYYY-MM-DD). First page defaults to 30 days ago UTC unless date_to or session_id is set."`
 	DateTo           string   `json:"date_to,omitempty" jsonschema:"Only sessions on or before this date (YYYY-MM-DD)."`
 	Limit            int      `json:"limit,omitempty" jsonschema:"Max matches, default 10, max 50."`
-	Cursor           int      `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor; also pass activity_cutoff when the recent-activity heuristic applies."`
+	Cursor           int      `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor; pass the returned date_from and, when present, activity_cutoff unchanged."`
 	ActivityCutoff   string   `json:"activity_cutoff,omitempty" jsonschema:"RFC3339 cutoff returned by the previous page. Required with a positive cursor when the recent-activity heuristic applies."`
 	IncludeActive    bool     `json:"include_active,omitempty" jsonschema:"Include matches from sessions active in the last 10 minutes. Default false: the conversation you are in right now is also recorded, so without this exclusion you would find yourself."`
 	IncludeOneShot   bool     `json:"include_one_shot,omitempty" jsonschema:"Include one-shot sessions. Default false."`
@@ -844,6 +868,7 @@ type contentMatch struct {
 
 type searchContentOut struct {
 	Note           string                      `json:"note,omitempty"`
+	DateFrom       string                      `json:"date_from,omitempty" jsonschema:"Effective start date; pass it unchanged with next_cursor as cursor."`
 	Hints          []service.ContentSearchHint `json:"hints,omitempty"`
 	Matches        []contentMatch              `json:"matches"`
 	NextCursor     *int                        `json:"next_cursor,omitempty"`
@@ -902,6 +927,8 @@ func validateSearchDates(from, to string) error {
 func (t *toolset) searchContent(
 	ctx context.Context, _ *mcp.CallToolRequest, in searchContentIn,
 ) (*mcp.CallToolResult, searchContentOut, error) {
+	ctx, cancel := context.WithTimeout(ctx, searchTimeLimit)
+	defer cancel()
 	if strings.TrimSpace(in.Pattern) == "" && len(in.Concepts) == 0 {
 		return nil, searchContentOut{}, errors.New("pattern or concepts required")
 	}
@@ -924,6 +951,10 @@ func (t *toolset) searchContent(
 	if err := validateSearchDates(in.DateFrom, in.DateTo); err != nil {
 		return nil, searchContentOut{}, err
 	}
+	if in.Cursor > 0 && in.DateFrom == "" && in.DateTo == "" && in.SessionID == "" {
+		return nil, searchContentOut{}, errors.New("date_from is required with a positive cursor: pass date_from from the first page")
+	}
+	dateFrom, note := t.defaultDateFrom(in.DateFrom, in.DateTo, in.SessionID)
 	var cutoffTime time.Time
 	if in.ActivityCutoff != "" {
 		cutoffTime, err = time.Parse(time.RFC3339, in.ActivityCutoff)
@@ -956,7 +987,7 @@ func (t *toolset) searchContent(
 		Agent:              in.Agent,
 		SessionID:          in.SessionID,
 		GitBranchExact:     in.GitBranch,
-		DateFrom:           in.DateFrom,
+		DateFrom:           dateFrom,
 		DateTo:             in.DateTo,
 		Limit:              limit,
 		Cursor:             in.Cursor,
@@ -973,9 +1004,10 @@ func (t *toolset) searchContent(
 	legacy := cutoff != "" && !res.ActiveFilterApplied
 	out := searchContentOut{
 		Matches:        make([]contentMatch, 0, len(res.Matches)),
+		DateFrom:       dateFrom,
 		ActivityCutoff: cutoff,
 		EffectiveMode:  cmp.Or(res.EffectiveMode, mode, "substring"),
-		Note:           res.Note,
+		Note:           strings.TrimSpace(strings.Join([]string{note, res.Note}, " ")),
 		Exclusions: searchContentExclusions{
 			CurrentSessionID: currentSession,
 			RecentActive:     currentSession == "" && !in.IncludeActive,
@@ -1024,6 +1056,9 @@ func (t *toolset) searchContent(
 		out.NextCursor = &nc
 	}
 	out.Hints = service.SearchContentHints(ctx, t.svc, req, res, false, keepMatch)
+	if err := ctx.Err(); err != nil {
+		return nil, searchContentOut{}, err
+	}
 	return nil, out, nil
 }
 

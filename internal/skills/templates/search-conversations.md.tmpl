@@ -17,11 +17,14 @@ decision.
 1. {{if .AlternateToolPrefix}}Choose exactly one server for this task. Use `{{.ToolPrefix}}search_content` when registered; otherwise use `{{.AlternateToolPrefix}}search_content`. Use only the chosen server for every search and message read. Call the chosen search tool{{else}}Call `{{.ToolPrefix}}search_content`{{end}} with `mode: hybrid`, `scope: all`,
    `limit: 10`, `include_active: true`, `include_one_shot: true`, and
    `include_automated: true`. When the parent supplies the current session
-   identity, pass it as `current_session_id`. Do not invent a project filter
+   identity, pass it as `current_session_id`. Pass the parent's date bounds.
+   For older history, use an earlier `date_from`. Do not invent a project filter
    from a display name or directory; apply one only when the exact archived
    project identifier is known.
 2. Read the note. For `effective_mode: hybrid_keyword`, disclose keyword-only
-   results once and use the matches without retry.{{if .ServerArgs}} For thin
+   results. If the default window misses requested history or yields too little
+   evidence, retry the relevant search with an earlier `date_from` and keep the
+   keyword-only notice.{{if .ServerArgs}} For thin
    or empty results, try short `mode: substring` queries with key terms or
    synonyms.{{end}} Preserve `scope`, inclusion, and current-session flags. Treat rank and score as
    relevance signals, never as truth probabilities.

@@ -159,6 +159,8 @@ func TestRenderClaudeSearchAgentContract(t *testing.T) {
 	agent := artifactByBase(t, rendered, "agentsview-search-conversations.md").Content
 
 	assert.Contains(t, agent, "For `effective_mode: hybrid_keyword`, disclose keyword-only")
+	assert.Contains(t, agent, "Pass the parent's date bounds.")
+	assert.Contains(t, agent, "retry the relevant search with an earlier `date_from`")
 	assert.Contains(t, agent, "name: agentsview-search-conversations")
 	assert.Contains(t, agent, "model: haiku")
 	// The subagent reads untrusted archived transcripts. Claude Code treats

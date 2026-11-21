@@ -83,6 +83,56 @@ func TestSearchForwardsCursor(t *testing.T) {
 	assert.NotEmpty(t, result.Results[0].WebURL)
 }
 
+func TestSearchDateFiltersAPIVersion(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		version    int
+		request    service.SearchRequest
+		wantError  bool
+		wantProbes int32
+	}{
+		{name: "known old from", version: 8, request: service.SearchRequest{Query: "needle", DateFrom: "2024-05-16"}, wantError: true},
+		{name: "known old to", version: 8, request: service.SearchRequest{Query: "needle", DateTo: "2024-06-15"}, wantError: true},
+		{name: "known old unbounded", version: 8, request: service.SearchRequest{Query: "needle"}},
+		{name: "known current", version: 9, request: service.SearchRequest{Query: "needle", DateTo: "2024-06-15"}},
+		{name: "unknown probes current", request: service.SearchRequest{Query: "needle", DateFrom: "2024-05-16"}, wantProbes: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var probes, searches atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/api/v1/version":
+					probes.Add(1)
+					_, _ = w.Write([]byte(`{"api_version":9}`))
+				case "/api/v1/search":
+					searches.Add(1)
+					assert.Equal(t, "needle", r.URL.Query().Get("q"))
+					assert.Equal(t, tc.request.DateFrom, r.URL.Query().Get("date_from"))
+					assert.Equal(t, tc.request.DateTo, r.URL.Query().Get("date_to"))
+					_, _ = w.Write([]byte(`{"results":[{"session_id":"session-a"}]}`))
+				default:
+					assert.Fail(t, "unexpected path", "path: %s", r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			t.Cleanup(srv.Close)
+			backend := NewHTTPBackendForServer(srv.URL, "", HTTPServerCapabilities{APIVersion: tc.version})
+			result, err := backend.Search(t.Context(), tc.request)
+			if tc.wantError {
+				require.ErrorContains(t, err, "server API version 8 does not support session-search date filters")
+				assert.Zero(t, searches.Load())
+			} else {
+				require.NoError(t, err)
+				require.Len(t, result.Results, 1)
+				assert.Equal(t, "session-a", result.Results[0].SessionID)
+				assert.EqualValues(t, 1, searches.Load())
+			}
+			assert.Equal(t, tc.wantProbes, probes.Load())
+		})
+	}
+}
+
 func TestStatsForwardsGitHubOutcomes(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/v1/session-stats", r.URL.Path)
