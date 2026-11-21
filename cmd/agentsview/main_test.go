@@ -268,37 +268,13 @@ func TestServeCommandMountsWritableServerAtBasePath(t *testing.T) {
 }
 
 func TestServeSkipInitialSyncStillReparsesStaleArchive(t *testing.T) {
-	for _, kind := range []string{"data version", "archive only", "scoped pending", "schema repair", "legacy image text"} {
+	for _, kind := range []string{"data version", "archive only", "scoped pending", "schema repair"} {
 		t.Run(kind, func(t *testing.T) {
 			cfg := testConfigWithClaudeFixture(t)
 			cfg.Host = "127.0.0.1"
-			var restarted atomic.Bool
-			var releaseFirst func()
-			if kind == "legacy image text" {
-				release := make(chan struct{})
-				releaseFirst = sync.OnceFunc(func() { close(release) })
-				ocrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					if !restarted.Load() {
-						select {
-						case <-release:
-						case <-r.Context().Done():
-						}
-						return
-					}
-					w.Header().Set("Content-Type", "application/json")
-					fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"invoice marker"}]]}`, glmocr.DefaultDeploymentFingerprint)
-				}))
-				t.Cleanup(ocrServer.Close)
-				t.Cleanup(releaseFirst)
-				cfg.ImageText = config.ImageTextConfig{Enabled: true, Endpoint: ocrServer.URL + "/glmocr/parse"}
-			}
 			database, err := db.Open(t.Context(), cfg.DBPath)
 			require.NoError(t, err)
 			dbtest.SeedSessionWithMessages(t, database, "retained", "project", []db.Message{dbtest.UserMsg("retained", 0, "retained transcript")})
-			if kind == "legacy image text" {
-				dbtest.SeedSessionWithMessages(t, database, "session0", "project", []db.Message{dbtest.UserMsg("session0", 0, "old transcript")})
-				dbtest.SeedSessionWithMessages(t, database, "retained-image", "project", []db.Message{{SessionID: "retained-image", Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: `[{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgppbWFnZQ=="}]`}}}})
-			}
 			if kind == "archive only" {
 				require.NoError(t, database.EnableArchiveOnly(t.Context()))
 			}
@@ -311,9 +287,6 @@ func TestServeSkipInitialSyncStillReparsesStaleArchive(t *testing.T) {
 				statement := "INSERT INTO stats(key, value) VALUES ('scoped_upgrade_pending', 1)"
 				if kind == "schema repair" {
 					statement = "ALTER TABLE tool_calls DROP COLUMN result_content_length"
-				} else if kind == "legacy image text" {
-					testutil.LegacyImageTextSchema(t, conn, true)
-					statement = `INSERT INTO stats(key,value) VALUES ('image_text_occurrences_backfill_v2',1) ON CONFLICT(key) DO UPDATE SET value=1`
 				}
 				_, err = conn.ExecContext(t.Context(), statement)
 				require.NoError(t, err)
@@ -327,19 +300,53 @@ func TestServeSkipInitialSyncStillReparsesStaleArchive(t *testing.T) {
 				"AGENTSVIEW_STALE_SERVE_KIND=" + kind,
 			}, "archive rebuild complete")
 			require.NoError(t, err, string(out))
-			if kind == "legacy image text" {
-				releaseFirst()
-				restarted.Store(true)
-				out, err = runRuntimeWarningHelperProcess(t, "serve restart", "TestServeStaleArchiveHelperProcess", []string{
-					"AGENTSVIEW_STALE_SERVE_CONFIG=" + string(data),
-					"AGENTSVIEW_STALE_SERVE_SOURCES=" + cfg.AgentDirs[parser.AgentClaude][0],
-					"AGENTSVIEW_STALE_SERVE_KIND=" + kind,
-					"AGENTSVIEW_STALE_SERVE_RESTART=1",
-				}, "archive rebuild complete")
-				require.NoError(t, err, string(out))
-			}
 		})
 	}
+}
+
+func TestServeLegacyImageTextAfterRestart(t *testing.T) {
+	cfg := testConfigWithClaudeFixture(t)
+	cfg.Host = "127.0.0.1"
+	var restarted atomic.Bool
+	release := make(chan struct{})
+	releaseFirst := sync.OnceFunc(func() { close(release) })
+	ocrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !restarted.Load() {
+			select {
+			case <-release:
+			case <-r.Context().Done():
+			}
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"invoice marker"}]]}`, glmocr.DefaultDeploymentFingerprint)
+	}))
+	t.Cleanup(ocrServer.Close)
+	t.Cleanup(releaseFirst)
+	cfg.ImageText = config.ImageTextConfig{Enabled: true, Endpoint: ocrServer.URL + "/glmocr/parse"}
+	database, err := db.Open(t.Context(), cfg.DBPath)
+	require.NoError(t, err)
+	dbtest.SeedSessionWithMessages(t, database, "retained-image", "project", []db.Message{{SessionID: "retained-image", Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: `[{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgppbWFnZQ=="}]`}}}})
+	require.NoError(t, database.Close())
+	conn, err := sql.Open("sqlite3", cfg.DBPath)
+	require.NoError(t, err)
+	testutil.LegacyImageTextSchema(t, conn, true)
+	_, err = conn.ExecContext(t.Context(), `INSERT INTO stats(key,value) VALUES ('image_text_occurrences_backfill_v2',1) ON CONFLICT(key) DO UPDATE SET value=1`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	data, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	env := []string{
+		"AGENTSVIEW_STALE_SERVE_CONFIG=" + string(data),
+		"AGENTSVIEW_STALE_SERVE_SOURCES=" + cfg.AgentDirs[parser.AgentClaude][0],
+		"AGENTSVIEW_STALE_SERVE_KIND=legacy image text",
+	}
+	out, err := runRuntimeWarningHelperProcess(t, "serve", "TestServeStaleArchiveHelperProcess", env, "archive rebuild complete")
+	require.NoError(t, err, string(out))
+	releaseFirst()
+	restarted.Store(true)
+	out, err = runRuntimeWarningHelperProcess(t, "serve restart", "TestServeStaleArchiveHelperProcess", append(env, "AGENTSVIEW_STALE_SERVE_RESTART=1"), "archive rebuild complete")
+	require.NoError(t, err, string(out))
 }
 
 func TestServeStaleArchiveHelperProcess(t *testing.T) {
@@ -393,7 +400,7 @@ func TestServeStaleArchiveHelperProcess(t *testing.T) {
 	writeDaemonRuntimeWithAuthAndNoSync = func(lifetime *daemonLifetime, dataDir, host string, port int, version, browserURL string, readOnly, requireAuth, noSync bool, explicitPort *int, caddyPID ...int) (string, error) {
 		base := fmt.Sprintf("http://%s:%d", host, port)
 		client := &http.Client{Timeout: 10 * time.Second, Transport: localTransport}
-		if kind != "" {
+		if kind != "" && kind != "legacy image text" {
 			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/sessions/retained/messages", nil)
 			require.NoError(t, err)
 			resp, err := client.Do(req)
@@ -435,10 +442,12 @@ func TestServeStaleArchiveHelperProcess(t *testing.T) {
 				return err == nil && !stale
 			}, 20*time.Second, 10*time.Millisecond, "replacement archive must be installed and fresh")
 		}
-		stale, _, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
-		require.NoError(t, err)
-		require.False(t, stale, "startup reconciliation must finish before readiness")
-		if kind == "data version" || kind == "scoped pending" || kind == "schema repair" || kind == "legacy image text" {
+		if kind != "legacy image text" {
+			stale, _, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
+			require.NoError(t, err)
+			require.False(t, stale, "startup reconciliation must finish before readiness")
+		}
+		if kind == "data version" || kind == "scoped pending" || kind == "schema repair" {
 			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/sessions/session0/messages", nil)
 			require.NoError(t, err)
 			resp, err := client.Do(req)
@@ -447,11 +456,7 @@ func TestServeStaleArchiveHelperProcess(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, resp.Body.Close())
 			require.Equal(t, http.StatusOK, resp.StatusCode)
-			if kind == "legacy image text" {
-				require.Contains(t, string(body), `"content":"hi"`)
-			} else {
-				require.Contains(t, string(body), "hello")
-			}
+			require.Contains(t, string(body), "hello")
 		}
 		if os.Getenv("AGENTSVIEW_STALE_SERVE_RESTART") == "1" {
 			require.Eventually(t, func() bool {
