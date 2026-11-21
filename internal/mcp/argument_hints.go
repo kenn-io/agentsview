@@ -14,11 +14,11 @@ func argumentHints(next mcp.MethodHandler) mcp.MethodHandler {
 		result, err := next(ctx, method, request)
 		call, ok := result.(*mcp.CallToolResult)
 		req, isCall := request.(*mcp.CallToolRequest)
-		if method != "tools/call" || !ok || call == nil || !call.IsError || !isCall || req.Params == nil || len(call.Content) == 0 {
+		if method != "tools/call" || !ok || call == nil || !call.IsError || !isCall || req.Params == nil {
 			return result, err
 		}
-		first, ok := call.Content[0].(*mcp.TextContent)
-		if !ok || !strings.Contains(first.Text, "unexpected additional properties") {
+		var arguments map[string]json.RawMessage
+		if json.Unmarshal(req.Params.Arguments, &arguments) != nil {
 			return result, err
 		}
 		listed, listErr := next(ctx, "tools/list", &mcp.ListToolsRequest{Session: req.Session, Params: &mcp.ListToolsParams{}})
@@ -37,6 +37,16 @@ func argumentHints(next mcp.MethodHandler) mcp.MethodHandler {
 			if marshalErr != nil || json.Unmarshal(raw, &schema) != nil {
 				return result, err
 			}
+			var unknown []string
+			for name := range arguments {
+				if _, ok := schema.Properties[name]; !ok {
+					unknown = append(unknown, name)
+				}
+			}
+			if len(unknown) == 0 {
+				return result, err
+			}
+			slices.Sort(unknown)
 			names := make([]string, 0, len(schema.Properties))
 			for name := range schema.Properties {
 				names = append(names, name)
@@ -46,7 +56,7 @@ func argumentHints(next mcp.MethodHandler) mcp.MethodHandler {
 			if len(names) > 0 {
 				accepted = strings.Join(names, ", ")
 			}
-			call.Content = append(call.Content, &mcp.TextContent{Text: "Accepted arguments: " + accepted + "."})
+			call.Content = append(call.Content, &mcp.TextContent{Text: "Unknown arguments: " + strings.Join(unknown, ", ") + ". Accepted arguments: " + accepted + "."})
 			break
 		}
 		return result, err

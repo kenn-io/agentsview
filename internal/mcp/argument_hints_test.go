@@ -37,18 +37,27 @@ func TestToolArgumentHints(t *testing.T) {
 						require.True(t, result.IsError)
 						require.Len(t, result.Content, 2)
 						assert.Contains(t, result.Content[0].(*mcp.TextContent).Text, `unexpected additional properties ["include_one_shot"]`)
-						assert.Equal(t, searchHint, result.Content[1].(*mcp.TextContent).Text)
+						assert.Equal(t, "Unknown arguments: include_one_shot. "+searchHint, result.Content[1].(*mcp.TextContent).Text)
 						result, err = client.CallTool(t.Context(), &mcp.CallToolParams{Name: ToolSearchSessions, Arguments: json.RawMessage(tc.corrected)})
 						require.NoError(t, err)
 						assert.False(t, result.IsError, "%+v", result.Content)
 					})
 				}
+				t.Run("unknown and wrong type", func(t *testing.T) {
+					result, err := client.CallTool(t.Context(), callParams(ToolSearchSessions, map[string]any{"limit": "10", "include_one_shot": true}))
+					require.NoError(t, err)
+					require.True(t, result.IsError)
+					require.Len(t, result.Content, 2)
+					assert.Contains(t, result.Content[0].(*mcp.TextContent).Text, "limit")
+					assert.Equal(t, "Unknown arguments: include_one_shot. "+searchHint, result.Content[1].(*mcp.TextContent).Text)
+				})
 				for _, tc := range []struct {
 					name, tool string
 					args       map[string]any
 				}{
 					{"wrong type", ToolSearchSessions, map[string]any{"limit": "ten"}},
 					{"missing session", ToolGetSessionOverview, map[string]any{"session_id": "missing"}},
+					{"missing session with validator words", ToolGetSessionOverview, map[string]any{"session_id": "unexpected additional properties"}},
 				} {
 					t.Run(tc.name, func(t *testing.T) {
 						result, err := client.CallTool(t.Context(), callParams(tc.tool, tc.args))
@@ -69,6 +78,8 @@ func TestToolArgumentHints(t *testing.T) {
 					require.Len(t, result.Content, 2)
 					assert.Contains(t, result.Content[0].(*mcp.TextContent).Text, "not_an_argument")
 					hint := result.Content[1].(*mcp.TextContent).Text
+					require.True(t, strings.HasPrefix(hint, "Unknown arguments: not_an_argument. "))
+					hint = strings.TrimPrefix(hint, "Unknown arguments: not_an_argument. ")
 					switch tool.Name {
 					case ToolSearchSessions:
 						assert.Equal(t, searchHint, hint)
