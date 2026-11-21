@@ -48,7 +48,7 @@ func TestMCPCallsReport(t *testing.T) {
 	output.Reset()
 	cmd.SetOut(&output)
 	require.NoError(t, cmd.Execute())
-	assert.Contains(t, output.String(), "get_messages: 2 calls, 50.0% errors, 50.0% truncated")
+	assert.Equal(t, "get_messages: 2 calls\n  50.0% errors, 50.0% truncated, empty: -\n  rejected: -\n  median: 20 bytes, 8 ms\n", output.String())
 	cmd = newMCPCallsCommand()
 	cmd.SetArgs([]string{"--since", day3, "--until", day3})
 	output.Reset()
