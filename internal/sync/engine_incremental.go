@@ -277,7 +277,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 			toolLinks := db.ToolCallPRLinksWithRemoteResolver(messages, inc.Cwd, remote, e.toolLinkRemoteResolver(session))
 			if len(toolLinks) > 0 {
 				var encoded string
-				if err := e.db.Reader().QueryRowContext(ctx, `SELECT pr_links FROM sessions WHERE id=?`, inc.ID).Scan(&encoded); err != nil {
+				if err := e.db.Reader().QueryRowContext(ctx, `SELECT tool_pr_links FROM sessions WHERE id=?`, inc.ID).Scan(&encoded); err != nil {
 					return nil, nil, nil, nil, time.Time{}, 0, nil, nil, err
 				}
 				stored := db.DecodePRLinks(encoded)
