@@ -244,7 +244,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		}
 		sessionID := "raw-row-" + rawDigest("row-v1", group, revision)
 		branchID := rawDigest("branch-v1", group, source)
-		prepared.ToolPRLinks = db.ToolCallPRLinks(decision.Candidate.Messages, decision.Candidate.Session.Cwd, decision.Candidate.Parsed.Session.GitRemote)
+		prepared.ToolPRLinks = db.ToolCallPRLinks(decision.Candidate.Messages, decision.Candidate.Session.Cwd, "")
 		payload, err := encodeRawPayload(prepared)
 		if err != nil {
 			return err

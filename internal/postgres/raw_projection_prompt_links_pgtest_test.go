@@ -259,3 +259,17 @@ func TestRawProjectionToolPRLinksKeepCaptureIdentity(t *testing.T) {
 	require.Len(t, links, 2)
 	assert.ElementsMatch(t, []string{"https://github.com/example/repo/pull/42", "https://github.com/example/repo/pull/43"}, []string{links[0].URL, links[1].URL})
 }
+
+func TestRawProjectionDoesNotInferFromRecordedRemote(t *testing.T) {
+	f := newProjectionFixture(t)
+	outcome := projectionOutcome("Review changes")
+	outcome.Outcome.Results[0].Result.Session.GitRemote = "https://github.com/example/fork.git"
+	outcome.Outcome.Results[0].Result.Messages[1].ToolCalls[0].InputJSON = `{"command":"gh pr view 42"}`
+	m, _ := f.accept(t, "device-a", "first", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
+	resolved, err := f.sink.Resolve(t.Context(), "codex:portable")
+	require.NoError(t, err)
+	var links string
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&links))
+	assert.Empty(t, db.DecodePRLinks(links))
+}

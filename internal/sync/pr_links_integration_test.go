@@ -137,10 +137,14 @@ func TestParseDiffDetectsPRLinkChanges(t *testing.T) {
 	assert.Equal(t, 1, report.FieldCounts[sync.FieldPRLinks])
 }
 func TestCodexCommandPRLinksOnAppend(t *testing.T) {
+	testutil.IsolateGit(t)
+	root := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "config"), []byte("[remote \"origin\"]\n url = https://github.com/example/repo.git\n"), 0600))
 	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
 	const id = "01900000-0000-7000-8000-000000000042"
 	path := env.writeCodexSession(t, filepath.Join("2024", "01", "15"), "rollout-20240115-"+id+".jsonl", testjsonl.JoinJSONL(
-		testjsonl.CodexSessionMetaWithFieldsJSON(id, "/tmp/project", "user", tsEarly, map[string]any{"git": map[string]any{"repository_url": "https://github.com/example/repo.git"}}),
+		testjsonl.CodexSessionMetaWithFieldsJSON(id, root, "user", tsEarly, map[string]any{"git": map[string]any{"repository_url": "https://github.com/example/repo.git"}}),
 		testjsonl.CodexMsgJSON("user", "Finish the work", tsEarlyS1),
 	))
 	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
@@ -250,4 +254,41 @@ func TestUsageOnlyCleanupRetainsTaskAndCommandPRLinks(t *testing.T) {
 	structured, err := env.db.GetSessionStructuredPRLinks(t.Context(), "usage-links")
 	require.NoError(t, err)
 	assert.Empty(t, structured)
+}
+
+func TestAmbiguousCheckoutRemoteDoesNotInferPR(t *testing.T) {
+	testutil.IsolateGit(t)
+	root := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "config"), []byte("[remote \"origin\"]\n url = https://github.com/example/fork.git\n[remote \"upstream\"]\n url = https://github.com/example/upstream.git\n"), 0600))
+	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
+	var paths []string
+	for _, tc := range []struct {
+		id       string
+		recorded bool
+	}{
+		{"01900000-0000-7000-8000-000000000081", false},
+		{"01900000-0000-7000-8000-000000000082", true},
+	} {
+		fields := map[string]any{}
+		if tc.recorded {
+			fields["git"] = map[string]any{"repository_url": "https://github.com/example/fork.git"}
+		}
+		paths = append(paths, env.writeCodexSession(t, filepath.Join("2024", "01", "15"), "rollout-20240115-"+tc.id+".jsonl", testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaWithFieldsJSON(tc.id, root, "user", tsEarly, fields),
+			testjsonl.CodexMsgJSON("user", "Review changes", tsEarlyS1),
+			testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call", map[string]any{"cmd": "gh pr view 42"}, tsEarlyS5),
+		)))
+	}
+	require.Equal(t, 2, env.engine.SyncAll(t.Context(), nil).Synced)
+	for _, id := range []string{"01900000-0000-7000-8000-000000000081", "01900000-0000-7000-8000-000000000082"} {
+		assert.Empty(t, storedPRURLs(t, env.db, "codex:"+id))
+	}
+	for _, path := range paths {
+		appendClaudeSplitLines(t, path, testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "append", map[string]any{"cmd": "gh pr view 43"}, "2024-01-01T10:00:06Z"))
+	}
+	env.engine.SyncPaths(paths)
+	for _, id := range []string{"01900000-0000-7000-8000-000000000081", "01900000-0000-7000-8000-000000000082"} {
+		assert.Empty(t, storedPRURLs(t, env.db, "codex:"+id))
+	}
 }

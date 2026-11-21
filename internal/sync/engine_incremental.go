@@ -264,23 +264,16 @@ func (e *Engine) tryProviderIncrementalAppend(
 		case parser.IncrementalNoNewData:
 			return nil, nil, nil, nil, time.Time{}, 0, nil, nil, nil
 		default:
-			var toolLinks []parser.PRLink
-			remote := inc.RecordedGitRemote
-			remoteResolved := remote != ""
+			remote := e.toolLinkRemote(db.Session{Machine: inc.Machine, Cwd: inc.Cwd, Project: inc.Project}, inc.RecordedGitRemote)
+			var messages []db.Message
 			for _, message := range outcome.Messages {
+				var calls []db.ToolCall
 				for _, call := range message.ToolCalls {
-					if call.Category != "Bash" && call.Category != "Task" {
-						continue
-					}
-					if !remoteResolved {
-						remoteResolved = true
-						if obs, ok := e.projectIdentityObservation(db.Session{Machine: inc.Machine, Cwd: inc.Cwd, Project: inc.Project}); ok {
-							remote = obs.GitRemote
-						}
-					}
-					toolLinks = parser.CombinePRLinks(toolLinks, db.CallPRLinks(call.Category, call.InputJSON, inc.Cwd, remote))
+					calls = append(calls, db.ToolCall{Category: call.Category, InputJSON: call.InputJSON})
 				}
+				messages = append(messages, db.Message{ToolCalls: calls})
 			}
+			toolLinks := db.ToolCallPRLinks(messages, inc.Cwd, remote)
 			if len(toolLinks) > 0 {
 				var encoded string
 				if err := e.db.Reader().QueryRowContext(ctx, `SELECT pr_links FROM sessions WHERE id=?`, inc.ID).Scan(&encoded); err != nil {

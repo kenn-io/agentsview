@@ -60,10 +60,10 @@ type shellState struct {
 }
 
 // shellCommands walks shell statements without evaluating expansions or uncertain branches.
-func shellCommands(command string) []shellCall {
+func shellCommands(command string) ([]shellCall, bool) {
 	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
 	if err != nil {
-		return nil
+		return nil, true
 	}
 	var calls []shellCall
 	var walkStmts func([]*syntax.Stmt, *shellState) int
@@ -276,8 +276,9 @@ func shellCommands(command string) []shellCall {
 		}
 		return status
 	}
-	walkStmts(file.Stmts, &shellState{})
-	return calls
+	state := &shellState{}
+	walkStmts(file.Stmts, state)
+	return calls, state.changedDir
 }
 
 func shellLiteral(parts []syntax.WordPart) (string, bool) {
@@ -309,15 +310,22 @@ func shellLiteral(parts []syntax.WordPart) (string, bool) {
 
 // CommandPRLinks derives links from one shell command and child-agent prompts.
 func CommandPRLinks(command, remote string) []PRLink {
+	links, _ := CommandPRLinksAndDirectoryChange(command, remote)
+	return links
+}
+
+// CommandPRLinksAndDirectoryChange also reports whether later calls may use a different checkout.
+func CommandPRLinksAndDirectoryChange(command, remote string) ([]PRLink, bool) {
 	var links []PRLink
-	for _, call := range shellCommands(command) {
+	calls, changed := shellCommands(command)
+	for _, call := range calls {
 		call = unwrapShellCall(call)
 		links = CombinePRLinks(links, ghPRCallLinks(call, remote))
 		prompt := launcherPrompt(call.Words, call.Literal)
 		found, _ := PromptPRLinksContext(context.Background(), prompt)
 		links = CombinePRLinks(links, found)
 	}
-	return links
+	return links, changed
 }
 
 func unwrapShellCall(call shellCall) shellCall {
