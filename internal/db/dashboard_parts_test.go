@@ -318,6 +318,35 @@ func TestDashboardPartsConcurrentPanels(t *testing.T) {
 	assert.EqualValues(t, 1, reads.Load())
 }
 
+func TestDashboardPartsUpgradeRemovesLengthTrigger(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "s", "project", func(s *Session) { s.StartedAt = new("2024-06-01T09:00:00Z"); s.MessageCount = 2 })
+	insertMessages(t, d, userMsgAt("s", 0, "hello", "2024-06-01T09:00:00Z"), asstMsgAt("s", 1, "answer", "2024-06-01T09:01:00Z"))
+	_, err := d.getWriter().ExecContext(ctx, `CREATE TRIGGER messages_dashboard_length_generation_update AFTER UPDATE OF content_length ON messages
+WHEN OLD.content_length IS NOT NEW.content_length BEGIN
+    UPDATE sessions SET trends_generation=lower(hex(randomblob(16))) WHERE id=NEW.session_id;
+END`)
+	require.NoError(t, err)
+	upgraded, err := OpenIsolated(ctx, d.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, upgraded.Close()) })
+	f := AnalyticsFilter{Timezone: "UTC"}
+	_, err = upgraded.GetAnalyticsVelocity(ctx, f)
+	require.NoError(t, err)
+	var before string
+	require.NoError(t, upgraded.getReader().QueryRowContext(ctx, `SELECT trends_generation FROM sessions WHERE id='s'`).Scan(&before))
+	_, err = upgraded.getWriter().ExecContext(ctx, `UPDATE messages SET content_length=20 WHERE session_id='s' AND ordinal=1`)
+	require.NoError(t, err)
+	var after string
+	require.NoError(t, upgraded.getReader().QueryRowContext(ctx, `SELECT trends_generation FROM sessions WHERE id='s'`).Scan(&after))
+	assert.Equal(t, before, after)
+	velocity, err := upgraded.GetAnalyticsVelocity(ctx, f)
+	require.NoError(t, err)
+	assert.InDelta(t, 20, velocity.Overall.CharsPerActiveMin, 0)
+}
+
 func TestDashboardPartsRawMessageEdits(t *testing.T) {
 	for _, tc := range []struct {
 		name, query    string
