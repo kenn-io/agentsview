@@ -15,8 +15,10 @@ class FakeSource extends EventTarget {
   }
   close() {
     this.closed = true;
+    this.readyState = 2;
   }
   emit(type: string, data = "") {
+    this.readyState = type === "error" ? 0 : 1;
     this.dispatchEvent(new MessageEvent(type, { data }));
   }
 }
@@ -119,6 +121,40 @@ describe("shared live stream", () => {
     hub.close();
   });
 
+  it("closes the old stream immediately when credentials change and refreshes on readiness", () => {
+    const hub = new LiveHub();
+    const archive = { postMessage: vi.fn() };
+    hub.update(archive, { ...request(), token: "old-token", credentialTime: 1 });
+    sources[0]!.readyState = 1;
+    sources[0]!.emit("events_ready", "{}");
+    hub.update(archive, { ...request(), token: "new-token", credentialTime: 2 });
+    expect(sources[0]!.closed).toBe(true);
+    sources[1]!.emit("events_ready", "{}");
+    expect(archive.postMessage.mock.calls.map(([frame]) => frame.type)).toEqual([
+      "events_ready",
+      "events_ready",
+    ]);
+    hub.close();
+  });
+
+  it("catches up when the old source disconnects before the new source is ready", () => {
+    const hub = new LiveHub();
+    const archive = { postMessage: vi.fn() };
+    hub.update(archive, request());
+    sources[0]!.readyState = 1;
+    sources[0]!.emit("events_ready", "{}");
+    hub.update({ postMessage: vi.fn() }, request("a"));
+    vi.advanceTimersByTime(250);
+    sources[0]!.readyState = 0;
+    sources[1]!.emit("session_ready", "a");
+    sources[1]!.emit("events_ready", "{}");
+    expect(archive.postMessage.mock.calls.map(([frame]) => frame.type)).toEqual([
+      "events_ready",
+      "events_ready",
+    ]);
+    hub.close();
+  });
+
   it("refreshes archives if the old stream fails during handoff", () => {
     const hub = new LiveHub();
     const archive = { postMessage: vi.fn() };
@@ -127,6 +163,26 @@ describe("shared live stream", () => {
     hub.update({ postMessage: vi.fn() }, request("a"));
     vi.advanceTimersByTime(250);
     sources[0]!.emit("error");
+    expect(sources[0]!.closed).toBe(true);
+    sources[1]!.emit("session_ready", "a");
+    sources[1]!.emit("events_ready", "{}");
+    expect(archive.postMessage.mock.calls.map(([frame]) => frame.type)).toEqual([
+      "events_ready",
+      "error",
+      "events_ready",
+    ]);
+    hub.close();
+  });
+
+  it("replaces a disconnected stream without overlap", () => {
+    const hub = new LiveHub();
+    const archive = { postMessage: vi.fn() };
+    hub.update(archive, request());
+    sources[0]!.emit("events_ready", "{}");
+    sources[0]!.emit("error");
+    hub.update({ postMessage: vi.fn() }, request("a"));
+    vi.advanceTimersByTime(250);
+    expect(sources[0]!.closed).toBe(true);
     sources[1]!.emit("session_ready", "a");
     sources[1]!.emit("events_ready", "{}");
     expect(archive.postMessage.mock.calls.map(([frame]) => frame.type)).toEqual([
@@ -182,6 +238,7 @@ describe("shared live stream", () => {
     const duplicate = { postMessage: vi.fn() };
     const archive = { postMessage: vi.fn() };
     hub.update(first, request("a"));
+    sources[0]!.emit("session_ready", "a");
     hub.update(duplicate, request("a"));
     hub.update(archive, request());
     vi.advanceTimersByTime(250);
@@ -246,7 +303,7 @@ describe("shared live stream", () => {
       const expectedSources = scenario === "old subscriber leaves" ? 2 : 1;
       expect(sources).toHaveLength(expectedSources);
       if (scenario === "old subscriber leaves") {
-        expect(sources[0]!.closed).toBe(false);
+        expect(sources[0]!.closed).toBe(true);
         sources[1]!.emit("session_ready", "a");
         expect(sources[0]!.closed).toBe(true);
         await sources[1]!.options.fetch(sources[1]!.url, {});

@@ -32,6 +32,18 @@ export class LiveHub {
       const timing = this.timing.get(key);
       if (timing) port.postMessage(timing);
     }
+    if (
+      this.source &&
+      !this.sameCredentials(request) &&
+      [...this.ports.values()].every(
+        (candidate) => candidate.credentialTime <= request.credentialTime,
+      )
+    ) {
+      if (this.timer !== null) clearTimeout(this.timer);
+      this.timer = null;
+      this.reconcile();
+      return;
+    }
     this.schedule();
   }
 
@@ -74,12 +86,17 @@ export class LiveHub {
     const changed =
       sessions.size !== this.sessions.size || [...sessions].some((id) => !this.sessions.has(id));
     if (this.source && request && !changed && this.sameCredentials(request)) return;
-    if (this.previous) {
+    const old = this.previous ?? this.source;
+    if (!request || !this.sameCredentials(request) || old?.readyState !== 1) {
+      this.source?.close();
+      this.previous?.close();
+      this.previous = null;
+      this.continuous = false;
+    } else if (this.previous) {
       this.source?.close();
     } else {
       this.previous = this.source;
-      this.continuous =
-        this.previous !== null && this.ready.has("") && this.credentials?.base === request?.base;
+      this.continuous = this.ready.has("");
     }
     this.source = null;
     if (!this.previous) {
@@ -125,16 +142,17 @@ export class LiveHub {
         this.broadcast({ type: "error" });
       }
       suppressReady = false;
+      if (this.previous === source) {
+        source.close();
+        this.previous = null;
+        return;
+      }
       if (errors >= 5) {
         source.close();
-        if (this.previous === source) {
-          this.previous = null;
-        } else {
-          this.previous?.close();
-          this.previous = null;
-          this.source = null;
-          this.broadcast({ type: opened ? "closed" : "permanent_failure" });
-        }
+        this.previous?.close();
+        this.previous = null;
+        this.source = null;
+        this.broadcast({ type: opened ? "closed" : "permanent_failure" });
       }
     });
     for (const type of [
@@ -149,7 +167,7 @@ export class LiveHub {
         if (this.source !== source && this.previous !== source) return;
         if (this.source === source && this.previous) {
           // The server subscribes to archive updates before sending its first frame.
-          suppressReady = this.continuous;
+          suppressReady = this.continuous && this.previous.readyState === 1;
           this.previous.close();
           this.previous = null;
           this.ready.clear();
