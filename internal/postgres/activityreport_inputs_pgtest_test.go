@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -76,40 +77,76 @@ func (c *activityInputReadCounter) QueryContext(ctx context.Context, query strin
 
 func TestPGActivityReportInputReads(t *testing.T) {
 	t.Parallel()
+	for _, partial := range []bool{true, false} {
+		t.Run(fmt.Sprintf("partial=%t", partial), func(t *testing.T) {
+			local, syncer, store := newUsageJournalFixture(t)
+			for _, id := range []string{"a", "b"} {
+				pgKeptSession(t, local, id, "project-a", "2026-06-14")
+			}
+			pgKeptPush(t, syncer, false)
+			counter := &activityInputReadCounter{storeExecutor: store.pg}
+			store.pg = counter
+			q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+			if partial {
+				q.Partial, q.EffectiveEnd = true, q.RangeEnd.Add(-time.Hour)
+			}
+			before := pgKeptBuild(t, store, f, q, true)
+			require.Len(t, counter.transcriptReads, 1)
+			assert.ElementsMatch(t, []string{"a", "b"}, counter.transcriptReads[0])
+			require.Len(t, counter.usageReads, 1)
+			repeated := pgKeptBuild(t, store, f, q, partial)
+			requirePGKeptEqual(t, before, repeated)
+			assert.Len(t, counter.transcriptReads, 1)
+			assert.Len(t, counter.usageReads, 1)
+			assert.Equal(t, 1000, repeated.Report.Totals.OutputTokens)
+			assert.Len(t, repeated.Sessions, 2)
+			require.NoError(t, local.ReplaceSessionMessages(t.Context(), "a", []db.Message{
+				{SessionID: "a", Ordinal: 0, Role: "user", Content: "question", Timestamp: "2026-06-14T10:00:00Z"},
+				{SessionID: "a", Ordinal: 1, Role: "assistant", Content: "answer", Timestamp: "2026-06-14T10:02:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":700}`)},
+			}))
+			pgKeptPush(t, syncer, false)
+			changed := pgKeptBuild(t, store, f, q, true)
+			require.Len(t, counter.transcriptReads, 2)
+			assert.Equal(t, []string{"a"}, counter.transcriptReads[1])
+			require.Len(t, counter.usageReads, 2)
+			assert.Equal(t, []string{"a"}, counter.usageReads[1])
+			assert.Equal(t, 1200, changed.Report.Totals.OutputTokens)
+			store.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}})
+			pgKeptBuild(t, store, f, q, true)
+			assert.Len(t, counter.transcriptReads, 2)
+			assert.Len(t, counter.usageReads, 2)
+		})
+	}
+}
+
+func TestPGActivityReportInputReadsLargeChange(t *testing.T) {
+	t.Parallel()
 	local, syncer, store := newUsageJournalFixture(t)
-	for _, id := range []string{"a", "b"} {
-		pgKeptSession(t, local, id, "project-a", "2026-06-14")
+	for i := range 70 {
+		pgKeptSession(t, local, fmt.Sprintf("s%02d", i), "project-a", "2026-06-14")
 	}
 	pgKeptPush(t, syncer, false)
 	counter := &activityInputReadCounter{storeExecutor: store.pg}
 	store.pg = counter
 	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
-	q.Partial, q.EffectiveEnd = true, q.RangeEnd.Add(-time.Hour)
-	before := pgKeptBuild(t, store, f, q, true)
-	require.Len(t, counter.transcriptReads, 1)
-	assert.ElementsMatch(t, []string{"a", "b"}, counter.transcriptReads[0])
-	require.Len(t, counter.usageReads, 1)
-	repeated := pgKeptBuild(t, store, f, q, true)
-	requirePGKeptEqual(t, before, repeated)
-	assert.Len(t, counter.transcriptReads, 1)
-	assert.Len(t, counter.usageReads, 1)
-	assert.Equal(t, 1000, repeated.Report.Totals.OutputTokens)
-	assert.Len(t, repeated.Sessions, 2)
-	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "a", []db.Message{
-		{SessionID: "a", Ordinal: 0, Role: "user", Content: "question", Timestamp: "2026-06-14T10:00:00Z"},
-		{SessionID: "a", Ordinal: 1, Role: "assistant", Content: "answer", Timestamp: "2026-06-14T10:02:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":700}`)},
-	}))
-	pgKeptPush(t, syncer, false)
-	changed := pgKeptBuild(t, store, f, q, true)
-	require.Len(t, counter.transcriptReads, 2)
-	assert.Equal(t, []string{"a"}, counter.transcriptReads[1])
-	require.Len(t, counter.usageReads, 2)
-	assert.Equal(t, []string{"a"}, counter.usageReads[1])
-	assert.Equal(t, 1200, changed.Report.Totals.OutputTokens)
-	store.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}})
 	pgKeptBuild(t, store, f, q, true)
-	assert.Len(t, counter.transcriptReads, 2)
-	assert.Len(t, counter.usageReads, 2)
+	for i := range 65 {
+		id := fmt.Sprintf("s%02d", i)
+		require.NoError(t, local.ReplaceSessionMessages(t.Context(), id, []db.Message{
+			{SessionID: id, Ordinal: 0, Role: "user", Content: "question", Timestamp: "2026-06-14T10:00:00Z"},
+			{SessionID: id, Ordinal: 1, Role: "assistant", Content: "changed", Timestamp: "2026-06-14T10:01:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":700}`)},
+		}))
+	}
+	pgKeptPush(t, syncer, false)
+	got := pgKeptBuild(t, store, f, q, true)
+	require.Len(t, counter.transcriptReads, 2)
+	assert.Len(t, counter.transcriptReads[1], 65)
+	require.Len(t, counter.usageReads, 2)
+	assert.Len(t, counter.usageReads[1], 70)
+	fresh, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, fresh.Close()) })
+	requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), got)
 }
 
 func TestPGActivityReportInputSharedBudget(t *testing.T) {
@@ -127,8 +164,7 @@ func TestPGActivityReportInputSharedBudget(t *testing.T) {
 		activity.QueryInput{Preset: "month", Date: "2026-06-14", Timezone: "UTC"},
 		time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC))
 	require.NoError(t, err)
-	month.Partial = true
-	month.EffectiveEnd = day.EffectiveEnd
+	month.Partial, month.EffectiveEnd = false, month.RangeEnd
 	version, err := store.activityKeptVersion(t.Context(), "")
 	require.NoError(t, err)
 
@@ -160,6 +196,7 @@ func TestPGActivityReportInputSharedBudget(t *testing.T) {
 	for range 2 {
 		gotDay := pgKeptBuild(t, store, f, day, true)
 		requirePGKeptEqual(t, wantDay, gotDay)
+		store.runtimeState().activityKept.DeleteSlots(func(string) bool { return true })
 		gotMonth := pgKeptBuild(t, store, f, month, true)
 		requirePGKeptEqual(t, wantMonth, gotMonth)
 	}

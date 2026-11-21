@@ -252,6 +252,7 @@ func TestPGActivityReportKeptChanges(t *testing.T) {
 				}
 				pgKeptPush(t, syncer, false)
 				before := pgKeptBuild(t, store, f, q, true)
+				assert.NotEmpty(t, store.runtimeState().activityInputs.Snapshot())
 				if tc.write != nil {
 					tc.write(t, d)
 				}
@@ -283,6 +284,29 @@ func TestPGActivityReportKeptChanges(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestPGActivityReportKeptChangesPricedPeer(t *testing.T) {
+	t.Parallel()
+	local, syncer, store := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "past", "project-a", "2026-06-14")
+	pgKeptSession(t, local, "peer", "project-b", "2026-06-14")
+	for _, row := range []struct{ id, tokens string }{{"past", `{"output_tokens":5}`}, {"peer", `{"output_tokens":631}`}} {
+		require.NoError(t, local.ReplaceSessionMessages(t.Context(), row.id, []db.Message{{SessionID: row.id, Ordinal: 0, Role: "assistant", Content: "answer", Timestamp: "2026-06-14T10:01:00Z", Model: "kept-model", TokenUsage: []byte(row.tokens), ClaudeMessageID: "shared-message", ClaudeRequestID: "shared-request"}}))
+	}
+	pgKeptPush(t, syncer, false)
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC", Project: "project-a"}
+	assert.Equal(t, 631, pgKeptBuild(t, store, f, q, true).Report.Totals.OutputTokens)
+	require.NoError(t, local.UpsertProjectIdentityObservation(t.Context(), pgKeptIdentity("past", 14)))
+	pgKeptPush(t, syncer, false)
+	assert.Equal(t, 631, pgKeptBuild(t, store, f, q, true).Report.Totals.OutputTokens)
+	require.NoError(t, local.DeleteSession(t.Context(), "peer"))
+	pgKeptPush(t, syncer, true)
+	got := pgKeptBuild(t, store, f, q, true)
+	assert.Equal(t, 5, got.Report.Totals.OutputTokens)
+	store.runtimeState().activityKept.DeleteSlots(func(string) bool { return true })
+	store.runtimeState().activityInputs.DeleteSlots(func(string) bool { return true })
+	requirePGKeptEqual(t, pgKeptBuild(t, store, f, q, true), got)
 }
 
 func TestPGActivityReportKeptPushDuringBuild(t *testing.T) {

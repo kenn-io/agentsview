@@ -144,7 +144,7 @@ func pgActivityPricedBytes(priced *pgActivityPriced) int64 {
 	return int64(unsafe.Sizeof(*priced)) + int64(cap(priced.rows))*int64(unsafe.Sizeof(pgActivityPricedRow{})) + kept.JSONBytes(priced.block)
 }
 
-func (s *Store) activityReportInputs(ctx context.Context, version, lower, upper string) (*pgActivityInputs, error) {
+func (s *Store) activityReportInputs(ctx context.Context, version, lower, upper string, finished bool) (*pgActivityInputs, error) {
 	slot := lower + "|" + upper
 	previousRows, ok := s.runtimeState().activityInputs.Get(slot, version)
 	var previous pgActivityInputs
@@ -155,7 +155,7 @@ func (s *Store) activityReportInputs(ctx context.Context, version, lower, upper 
 	}
 	identity := ""
 	identityUnavailable := ok && previous.identityUnavailable
-	if (!ok || previous.identity == "") && !identityUnavailable && s.activityDisk.Enabled() {
+	if !finished && (!ok || previous.identity == "") && !identityUnavailable && s.activityDisk.Enabled() {
 		var err error
 		identity, err = s.activitySourceIdentity(ctx, "")
 		identityUnavailable = errors.Is(err, db.ErrUsageSourceUnavailable)
@@ -175,10 +175,10 @@ func (s *Store) activityReportInputs(ctx context.Context, version, lower, upper 
 		return nil, err
 	}
 	next := &pgActivityInputs{revision: revision, identity: identity, identityUnavailable: identityUnavailable, sessions: map[string]pgActivitySession{}, changed: changed}
-	if ok && previous.identity != "" {
+	if !finished && ok && previous.identity != "" {
 		next.identity = previous.identity
 	}
-	if ok && revision >= after && len(changed) <= max(64, len(previous.candidates)/4) {
+	if ok && revision >= after && (finished || len(changed) <= max(64, len(previous.candidates)/4)) {
 		old := previous
 		dirty := make(map[string]bool, len(changed))
 		for _, id := range changed {
@@ -190,9 +190,11 @@ func (s *Store) activityReportInputs(ctx context.Context, version, lower, upper 
 				next.sessions[id] = session
 			}
 		}
-		next.usage = old.usage
-		next.priced = old.priced
-		next.candidates = old.candidates
+		if len(changed) <= max(64, len(previous.candidates)/4) {
+			next.usage = old.usage
+			next.priced = old.priced
+			next.candidates = old.candidates
+		}
 	}
 	return next, nil
 }

@@ -188,13 +188,13 @@ func (s *Store) BuildActivityReportArtifacts(
 	}
 	var inputs *pgActivityInputs
 	var inputVersion string
-	if q.Partial && !s.hostedRelations && s.readTx == nil {
+	if !s.hostedRelations && s.readTx == nil {
 		inputVersion, err = s.activityKeptVersion(ctx, "")
 		if err != nil {
 			return activity.CandidateArtifacts{}, err
 		}
 		if inputVersion != "" {
-			inputs, err = s.activityReportInputs(ctx, inputVersion, lowerBound, upperBound)
+			inputs, err = s.activityReportInputs(ctx, inputVersion, lowerBound, upperBound, !q.Partial)
 			if err != nil {
 				return activity.CandidateArtifacts{}, err
 			}
@@ -752,6 +752,11 @@ func (s *Store) activityReportUsage(
 		return out, &block, nil
 	}
 
+	if read != nil {
+		for _, r := range raw {
+			read[r.sessionID.Value()] = struct{}{}
+		}
+	}
 	if inputs != nil && inputs.priced != nil && inputs.priced.covers(q, pricingDigest) {
 		return pgAssembleActivityUsage(raw, inputs.priced.rows), inputs.priced.block, nil
 	}
@@ -762,9 +767,6 @@ func (s *Store) activityReportUsage(
 		at := time.UnixMicro(r.us).UTC()
 		if !at.Before(q.EffectiveEnd) && at.Before(q.RangeEnd) && (saved.next.IsZero() || at.Before(saved.next)) {
 			saved.next = at
-		}
-		if read != nil {
-			read[r.sessionID.Value()] = struct{}{}
 		}
 	}
 	sort.SliceStable(order, func(i, j int) bool {
