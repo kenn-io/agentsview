@@ -2440,14 +2440,14 @@ func TestSearchContent_BudgetTotal(t *testing.T) {
 func TestSearchContent_BudgetOversized(t *testing.T) {
 	context := make([]db.Message, 10)
 	for i := range context {
-		context[i].Content = strings.Repeat("<", 500)
+		context[i] = dbtest.UserMsg("session", i, strings.Repeat("<", 500))
 	}
 	for _, tc := range []struct {
 		name           string
 		matches        []db.ContentMatch
 		currentSession string
 	}{
-		{name: "context", matches: []db.ContentMatch{{SessionID: "session", Ordinal: 1, Snippet: "needle", ContextBefore: context}}},
+		{name: "context", matches: []db.ContentMatch{{SessionID: "session", Ordinal: 10, Snippet: "needle", ContextBefore: context}}},
 		{name: "empty result", currentSession: strings.Repeat("x", 12000)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
