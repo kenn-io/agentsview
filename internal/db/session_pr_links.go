@@ -179,16 +179,12 @@ func (db *DB) GetSessionPRLinkURLs(
 
 // PromptPRLinks finds links in retained user dialogue.
 func PromptPRLinks(messages []Message) []PRLink {
-	links, _ := promptPRLinks(context.Background(), messages)
+	links, _ := PromptPRLinksContext(context.Background(), messages)
 	return links
 }
 
 // PromptPRLinksContext allows hosted projection to stop when its deadline expires.
 func PromptPRLinksContext(ctx context.Context, messages []Message) ([]PRLink, error) {
-	return promptPRLinks(ctx, messages)
-}
-
-func promptPRLinks(ctx context.Context, messages []Message) ([]PRLink, error) {
 	var lists [][]PRLink
 	for _, msg := range messages {
 		if msg.Role != "user" || msg.IsSystem || msg.IsCompactBoundary || msg.SourceSubtype == parser.SourceSubtypeToolResult || IsSystemPrefixed(msg.Content, msg.Role) {

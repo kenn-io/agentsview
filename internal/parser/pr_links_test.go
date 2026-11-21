@@ -224,7 +224,8 @@ func TestPromptPRLinks(t *testing.T) {
 		{"https://github.com/o/r/pull/1?u=https://evil.example/a/b/pull/2", []string{"https://github.com/o/r/pull/1"}},
 	} {
 		t.Run(tt.text, func(t *testing.T) {
-			links := PromptPRLinks(tt.text)
+			links, err := PromptPRLinksContext(t.Context(), tt.text)
+			require.NoError(t, err)
 			var urls []string
 			for _, link := range links {
 				urls = append(urls, link.URL)

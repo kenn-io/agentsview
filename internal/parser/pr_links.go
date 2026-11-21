@@ -122,18 +122,9 @@ type prLinkIdentity struct {
 	number           int
 }
 
-// PromptPRLinks extracts pull and merge request URLs from text.
-func PromptPRLinks(text string) []PRLink {
-	links, _ := promptPRLinks(context.Background(), text)
-	return links
-}
-
-// PromptPRLinksContext permits callers holding locks to interrupt scanning.
+// PromptPRLinksContext extracts pull and merge request URLs from text,
+// stopping when ctx ends so callers holding locks can interrupt scanning.
 func PromptPRLinksContext(ctx context.Context, text string) ([]PRLink, error) {
-	return promptPRLinks(ctx, text)
-}
-
-func promptPRLinks(ctx context.Context, text string) ([]PRLink, error) {
 	var links prLinkCollector
 	for pos := 0; pos < len(text); {
 		if err := ctx.Err(); err != nil {
