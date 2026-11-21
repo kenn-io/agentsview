@@ -336,7 +336,7 @@ var (
 	codeModeDirRE  = regexp.MustCompile(`["']?(?:workdir|cwd)["']?\s*:`)
 )
 
-func callPRLinks(ctx context.Context, category, input, cwd, remote string) ([]PRLink, bool, error) {
+func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote string) ([]PRLink, bool, error) {
 	if category == "Task" {
 		var payload struct {
 			Prompt  string         `json:"prompt"`
@@ -436,7 +436,11 @@ func callPRLinks(ctx context.Context, category, input, cwd, remote string) ([]PR
 			remote = ""
 		}
 	}
-	return parser.CommandPRLinks(ctx, shellCommandText(input), remote)
+	command := shellCommandText(input)
+	if command == "" && !jsontext.Value(input).IsValid() && (toolName == "exec_command" || toolName == "shell_command") {
+		command = input
+	}
+	return parser.CommandPRLinks(ctx, command, remote)
 }
 
 // ToolCallPRLinks derives links from a transcript's tool calls.
@@ -447,7 +451,7 @@ func ToolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
-			found, changed, err := callPRLinks(ctx, call.Category, call.InputJSON, cwd, remote)
+			found, changed, err := callPRLinks(ctx, call.Category, call.ToolName, call.InputJSON, cwd, remote)
 			if err != nil {
 				return nil, err
 			}

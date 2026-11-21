@@ -100,6 +100,11 @@ func TestCodeModePRLinksKeepExplicitIdentities(t *testing.T) {
 	assert.Equal(t, "https://github.com/example/repo/pull/44", links[3].URL)
 }
 
+func TestCodeModeDoesNotTreatRawJavaScriptAsShell(t *testing.T) {
+	messages := []db.Message{{ToolCalls: []db.ToolCall{{ToolName: "exec", Category: "Bash", InputJSON: `gh pr view 42 -R example/repo`}}}}
+	assert.Empty(t, toolCallPRLinks(t, messages, "", ""))
+}
+
 func toolCallPRLinks(t *testing.T, messages []db.Message, cwd, remote string) []db.PRLink {
 	t.Helper()
 	links, err := db.ToolCallPRLinks(t.Context(), messages, cwd, remote)

@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
@@ -94,6 +95,56 @@ func TestCodexForkMatchedMessageKeepsSourceBoundary(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestCodexForkDropsParentCommandLinkAfterShrink(t *testing.T) {
+	for _, stage := range []int64{1, 1 << 30} {
+		t.Run(strconv.FormatInt(stage, 10), func(t *testing.T) {
+			e, d, cp, pp, meta := forkReviewEngine(t, stage, parser.AgentCodex)
+			replay := testjsonl.JoinJSONL(
+				testjsonl.CodexTurnContextWithIDJSON("gpt-5", "parent-turn", forkReviewTime),
+				testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "parent-call", map[string]any{"cmd": "gh pr view 41 -R example/repo"}, forkReviewTime),
+			)
+			child := testjsonl.JoinJSONL(
+				testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", forkReviewTime),
+				testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "child-call", map[string]any{"cmd": "gh pr view 42 -R example/repo"}, forkReviewTime),
+			)
+			require.NoError(t, os.WriteFile(cp, []byte(meta+replay+child+testjsonl.JoinJSONL(testjsonl.CodexTokenCountJSON(forkReviewTime, 20, 5, 0))), 0o600))
+			require.Zero(t, e.SyncAll(t.Context(), nil).Failed)
+			page, err := d.ListSessions(t.Context(), db.SessionFilter{PR: db.PRFilter{Repository: "example/repo", Number: 41}})
+			require.NoError(t, err)
+			require.Len(t, page.Sessions, 1)
+			assert.Equal(t, "codex:"+forkReviewChild, page.Sessions[0].ID)
+			require.NoError(t, os.WriteFile(cp, []byte(meta+replay+child), 0o600))
+			require.NoError(t, e.TrySyncSessionWithSubagentsContext(t.Context(), "codex:"+forkReviewChild))
+			require.NoError(t, os.WriteFile(pp, []byte(testjsonl.JoinJSONL(testjsonl.CodexSessionMetaJSON(forkReviewParent, "/work/project", "user", forkReviewTime))+replay), 0o600))
+			require.NoError(t, e.TrySyncSessionWithSubagentsContext(t.Context(), "codex:"+forkReviewChild))
+			page, err = d.ListSessions(t.Context(), db.SessionFilter{PR: db.PRFilter{Repository: "example/repo", Number: 41}})
+			require.NoError(t, err)
+			for _, session := range page.Sessions {
+				assert.NotEqual(t, "codex:"+forkReviewChild, session.ID)
+			}
+			page, err = d.ListSessions(t.Context(), db.SessionFilter{PR: db.PRFilter{Repository: "example/repo", Number: 42}})
+			require.NoError(t, err)
+			require.Len(t, page.Sessions, 1)
+			assert.Equal(t, "codex:"+forkReviewChild, page.Sessions[0].ID)
+		})
+	}
+}
+
+func TestCodexPlainTextShellCommandPRSearch(t *testing.T) {
+	for _, tool := range []string{"shell_command", "exec_command"} {
+		t.Run(tool, func(t *testing.T) {
+			e, d, cp, _, meta := forkReviewEngine(t, 1<<30, parser.AgentCodex)
+			body := meta + testjsonl.JoinJSONL(testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", forkReviewTime), testjsonl.CodexFunctionCallArgsJSON(tool, "gh pr view 42 -R example/repo", forkReviewTime))
+			require.NoError(t, os.WriteFile(cp, []byte(body), 0o600))
+			require.Zero(t, e.SyncAll(t.Context(), nil).Failed)
+			page, err := d.ListSessions(t.Context(), db.SessionFilter{PR: db.PRFilter{Repository: "example/repo", Number: 42}})
+			require.NoError(t, err)
+			require.Len(t, page.Sessions, 1)
+			assert.Equal(t, "codex:"+forkReviewChild, page.Sessions[0].ID)
+		})
 	}
 }
 
