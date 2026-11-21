@@ -15,6 +15,15 @@ import (
 	"go.kenn.io/agentsview/internal/kept"
 )
 
+func addDashboardCacheSessions(t *testing.T, d *DB, count int) {
+	t.Helper()
+	for i := range count {
+		insertSession(t, d, fmt.Sprintf("extra-%d", i), "project", func(s *Session) {
+			s.StartedAt = new("2024-06-01T09:00:00Z")
+		})
+	}
+}
+
 func TestDashboardPartsMatchScansAndReuse(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	d := testDB(t)
@@ -28,6 +37,7 @@ func TestDashboardPartsMatchScansAndReuse(t *testing.T) {
 			}
 		})
 	}
+	addDashboardCacheSessions(t, d, 2)
 	a := userMsgAt("a", 0, "hello", "2024-06-01T09:00:00Z")
 	b := asstMsgAt("a", 1, "answer", "2024-06-01T09:01:00Z")
 	b.HasThinking = true
@@ -64,12 +74,12 @@ func TestDashboardPartsMatchScansAndReuse(t *testing.T) {
 		assert.Equal(t, scanVelocity, velocity)
 	}
 	check(f)
-	require.Equal(t, [][]string{{"a", "b", "empty"}}, reads)
+	require.Equal(t, [][]string{{"a", "b", "empty", "extra-0", "extra-1"}}, reads)
 	check(AnalyticsFilter{Timezone: "UTC", Agent: "codex"})
 	require.Len(t, reads, 1)
 	insertMessages(t, d, asstMsgAt("a", 2, "later", "2024-06-01T09:02:00Z"))
 	check(f)
-	require.Equal(t, [][]string{{"a", "b", "empty"}, {"a"}}, reads)
+	require.Equal(t, [][]string{{"a", "b", "empty", "extra-0", "extra-1"}, {"a"}}, reads)
 	b.ToolCalls = append(b.ToolCalls, ToolCall{SessionID: "a", ToolName: "Write", Category: "Write"})
 	require.NoError(t, d.ReplaceSessionMessages(ctx, "a", []Message{a, b}))
 	check(f)
@@ -101,6 +111,7 @@ func TestDashboardPartsContentLengthReplacement(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s", "project", func(s *Session) { s.StartedAt = new("2024-06-01T09:00:00Z"); s.MessageCount = 2 })
+	addDashboardCacheSessions(t, d, 4)
 	messages := []Message{userMsgAt("s", 0, "hello", "2024-06-01T09:00:00Z"), asstMsgAt("s", 1, "answer", "2024-06-01T09:01:00Z")}
 	insertMessages(t, d, messages...)
 	before, err := d.GetAnalyticsVelocity(ctx, AnalyticsFilter{Timezone: "UTC"})
@@ -133,6 +144,7 @@ func TestDashboardPartsWriteDuringFillFallsBack(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s", "project", func(s *Session) { s.StartedAt = new("2024-06-01T09:00:00Z") })
+	addDashboardCacheSessions(t, d, 4)
 	insertMessages(t, d, userMsgAt("s", 0, "hello", "2024-06-01T09:00:00Z"))
 	dashboardPartsBeforeValidationObserver = func(context.Context) {
 		dashboardPartsBeforeValidationObserver = nil
@@ -153,6 +165,7 @@ func TestDashboardPartsCancellationReleasesPermit(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	d := testDB(t)
 	insertSession(t, d, "s", "project")
+	addDashboardCacheSessions(t, d, 4)
 	entered := make(chan struct{})
 	left := make(chan struct{})
 	dashboardPartsBeforeValidationObserver = func(ctx context.Context) { close(entered); <-ctx.Done(); close(left) }
@@ -194,6 +207,7 @@ func TestDashboardPartsConcurrentPanels(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	d := testDB(t)
 	insertSession(t, d, "s", "project", func(s *Session) { s.StartedAt = new("2024-06-01T09:00:00Z"); s.MessageCount = 2 })
+	addDashboardCacheSessions(t, d, 4)
 	insertMessages(t, d, userMsgAt("s", 0, "hello", "2024-06-01T09:00:00Z"), asstMsgAt("s", 1, "answer", "2024-06-01T09:01:00Z"))
 	ctx := t.Context()
 	f := AnalyticsFilter{Timezone: "UTC"}
@@ -240,6 +254,9 @@ func TestDashboardPartsOtherSessionWriteDuringFill(t *testing.T) {
 	insertSession(t, d, "selected", "project", func(s *Session) { s.Agent = "codex" })
 	insertSession(t, d, "other", "project", func(s *Session) { s.Agent = "gemini" })
 	insertMessages(t, d, userMsg("selected", 0, "hello"))
+	for i := 1; i <= 32; i++ {
+		insertMessages(t, d, userMsg("selected", i, "hello"))
+	}
 	var before, after, commonBefore, commonAfter string
 	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT (SELECT value FROM archive_metadata WHERE key='dashboard_scope'), (SELECT value FROM archive_metadata WHERE key='dashboard_common')`).Scan(&before, &commonBefore))
 	dashboardPartsBeforeValidationObserver = func(context.Context) {
@@ -256,7 +273,7 @@ func TestDashboardPartsOtherSessionWriteDuringFill(t *testing.T) {
 	require.NotEqual(t, before, after)
 	require.NotEqual(t, commonBefore, commonAfter)
 	require.Len(t, sessions, 1)
-	assert.Equal(t, 1, parts["selected"].Value.Messages)
+	assert.Equal(t, 33, parts["selected"].Value.Messages)
 	identity, err := d.GetDatabaseID(ctx)
 	require.NoError(t, err)
 	_, ok := d.trendsDisk.Get("dashboard-parts|"+TrendsTimezoneKey(AnalyticsFilter{Timezone: "UTC"}), fmt.Sprintf("%s|%d", identity, dashboardPartsVersion))
@@ -268,6 +285,7 @@ func TestDashboardPartsLengthUpdateWithoutRevision(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s", "project", func(s *Session) { s.StartedAt = new("2024-06-01T09:00:00Z"); s.MessageCount = 2 })
+	addDashboardCacheSessions(t, d, 4)
 	insertMessages(t, d, userMsgAt("s", 0, "hello", "2024-06-01T09:00:00Z"), asstMsgAt("s", 1, "answer", "2024-06-01T09:01:00Z"))
 	f := AnalyticsFilter{Timezone: "UTC"}
 	before, err := d.GetAnalyticsVelocity(ctx, f)
@@ -298,11 +316,12 @@ func TestDashboardPartsPrunesDeletedSessions(t *testing.T) {
 	ctx := t.Context()
 	insertSession(t, d, "a", "project", func(s *Session) { s.Agent = "codex" })
 	insertSession(t, d, "b", "project", func(s *Session) { s.Agent = "gemini" })
+	addDashboardCacheSessions(t, d, 4)
 	_, _, handled, err := d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC"})
 	require.NoError(t, err)
 	require.True(t, handled)
 	require.NoError(t, d.DeleteSession(ctx, "a"))
-	_, _, handled, err = d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC", Agent: "gemini"})
+	_, _, handled, err = d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC"})
 	require.NoError(t, err)
 	require.True(t, handled)
 	identity, err := d.GetDatabaseID(ctx)
@@ -317,6 +336,9 @@ func TestDashboardPartsQueuedFillsDoNotHoldBulkPermits(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "a", "project", func(s *Session) { s.Agent = "codex" })
 	insertSession(t, d, "b", "project", func(s *Session) { s.Agent = "gemini" })
+	for i := range 33 {
+		insertMessages(t, d, userMsg("a", i, "hello"), userMsg("b", i, "hello"))
+	}
 	d.dashboardPartsOnce.Do(func() { d.dashboardPartsSlot = make(chan struct{}, 1) })
 	d.dashboardPartsSlot <- struct{}{}
 	entered := make(chan struct{}, 2)
@@ -359,6 +381,7 @@ func TestDashboardPartsToolChangeWithoutTranscriptRevision(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s", "project", func(s *Session) { s.StartedAt = new("2024-06-01T09:00:00Z"); s.MessageCount = 2 })
+	addDashboardCacheSessions(t, d, 4)
 	user := userMsgAt("s", 0, "hello", "2024-06-01T09:00:00Z")
 	assistant := asstMsgAt("s", 1, "answer", "2024-06-01T09:01:00Z")
 	assistant.ToolCalls = []ToolCall{{SessionID: "s", ToolName: "Read", Category: "Read"}}
@@ -396,6 +419,7 @@ func TestDashboardPartsSessionMetadataChangeDuringFill(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s", "project", func(s *Session) { s.Agent = "codex" })
+	addDashboardCacheSessions(t, d, 4)
 	dashboardPartsBeforeValidationObserver = func(context.Context) {
 		dashboardPartsBeforeValidationObserver = nil
 		_, err := d.getWriter().ExecContext(ctx, `UPDATE sessions SET agent='gemini', message_count=42 WHERE id='s'`)
@@ -405,4 +429,56 @@ func TestDashboardPartsSessionMetadataChangeDuringFill(t *testing.T) {
 	_, _, handled, err := d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC"})
 	require.NoError(t, err)
 	assert.False(t, handled)
+}
+
+func TestDashboardPartsSmallFilteredSelection(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "s", "project", func(s *Session) { s.Agent = "codex"; s.StartedAt = new("2024-06-01T09:00:00Z"); s.MessageCount = 32 })
+	messages := make([]Message, 32)
+	for i := range messages {
+		messages[i] = userMsgAt("s", i, "hello", "2024-06-01T09:00:00Z")
+	}
+	insertMessages(t, d, messages...)
+	for _, f := range []AnalyticsFilter{{Timezone: "UTC"}, {Timezone: "UTC", Agent: "codex"}, {Timezone: "UTC", Project: "project"}, {Timezone: "UTC", From: "2024-06-01", To: "2024-06-01"}} {
+		_, _, handled, err := d.dashboardParts(ctx, f)
+		require.NoError(t, err)
+		assert.False(t, handled)
+		hours, err := d.GetAnalyticsHourOfWeek(ctx, f)
+		require.NoError(t, err)
+		require.Len(t, hours.Cells, 168)
+		assert.Equal(t, HourOfWeekCell{DayOfWeek: 5, Hour: 9, Messages: 32}, hours.Cells[129])
+	}
+	insertMessages(t, d, userMsgAt("s", 32, "hello", "2024-06-01T09:00:00Z"))
+	for _, f := range []AnalyticsFilter{{Timezone: "UTC"}, {Timezone: "UTC", Agent: "codex"}, {Timezone: "UTC", Project: "project"}, {Timezone: "UTC", From: "2024-06-01", To: "2024-06-01"}} {
+		_, parts, handled, err := d.dashboardParts(ctx, f)
+		require.NoError(t, err)
+		require.True(t, handled)
+		assert.Equal(t, 33, parts["s"].Value.Messages)
+	}
+}
+
+func TestDashboardPartsSmallSelectionAcrossSessions(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	for i := range 4 {
+		id := fmt.Sprintf("s%d", i)
+		insertSession(t, d, id, "project", func(s *Session) { s.Agent = "codex" })
+		messages := make([]Message, 8)
+		for n := range messages {
+			messages[n] = userMsg(id, n, "hello")
+		}
+		insertMessages(t, d, messages...)
+	}
+	f := AnalyticsFilter{Timezone: "UTC", Project: "project"}
+	_, _, handled, err := d.dashboardParts(ctx, f)
+	require.NoError(t, err)
+	assert.False(t, handled)
+	insertMessages(t, d, userMsg("s0", 8, "hello"))
+	_, parts, handled, err := d.dashboardParts(ctx, f)
+	require.NoError(t, err)
+	require.True(t, handled)
+	assert.Equal(t, 9, parts["s0"].Value.Messages)
 }

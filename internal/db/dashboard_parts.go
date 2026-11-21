@@ -108,7 +108,25 @@ func (db *DB) dashboardParts(ctx context.Context, f AnalyticsFilter) ([]dashboar
 	if err != nil {
 		return nil, nil, false, err
 	}
-	_, versions, err := db.dashboardSessions(ctx, f)
+	sessions, versions, err := db.dashboardSessions(ctx, f)
+	// Tiny selections are cheaper to scan than decoding every saved part.
+	if err == nil && len(sessions) <= 4 {
+		ids := make([]string, 0, len(sessions))
+		for _, session := range sessions {
+			ids = append(ids, session.ID)
+		}
+		if len(ids) == 0 {
+			release()
+			return nil, nil, false, nil
+		}
+		ph, args := InPlaceholders(ids)
+		var larger bool
+		err = db.getReader().QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM messages WHERE session_id IN `+ph+` LIMIT 1 OFFSET 32)`, args...).Scan(&larger)
+		if err == nil && !larger {
+			release()
+			return nil, nil, false, nil
+		}
+	}
 	release()
 	if errors.Is(err, errDashboardSelectionChanged) {
 		return nil, nil, false, nil
