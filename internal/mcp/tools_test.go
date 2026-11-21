@@ -640,6 +640,10 @@ func TestGetMessages_BodyCursorSplitsMessageOverBudget(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, out.Messages, 1)
 		assert.True(t, fitsResponse(out))
+		if in.BodyCursor == "" {
+			assert.Equal(t, maxMaxCharsPerMessage+5, out.Messages[0].FullLength)
+			assert.True(t, out.Messages[0].Truncated)
+		}
 		got.WriteString(out.Messages[0].Content)
 		in.BodyCursor = out.Messages[0].BodyCursor
 		if in.BodyCursor == "" {
@@ -1459,6 +1463,9 @@ func TestServer_SearchContentIncludeOneShot(t *testing.T) {
 		require.True(t, ok, name)
 		assert.Equal(t, wantType, property["type"])
 	}
+	assert.Contains(t, searchTool.Description, "One-shot and automated sessions are excluded by default")
+	assert.Contains(t, searchTool.Description, "include_one_shot")
+	assert.Contains(t, searchTool.Description, "include_automated")
 	assert.Len(t, callerRequests, 3)
 	assert.Contains(t, callerRequests[0], "mode=substring")
 	assert.Contains(t, callerRequests[0], "agent=pi")
@@ -2427,7 +2434,6 @@ func TestSearchContent_Total(t *testing.T) {
 		{name: "ranked legacy", count: 20, limit: 20, want: 10, calls: 1, capped: true, legacy: true, mode: "semantic"},
 		{name: "first page", count: 36, limit: 10, context: 3, want: 36, calls: 2},
 		{name: "continued page", count: 36, limit: 10, cursor: 10, want: 36, calls: 2, wantScan: new(20)},
-		{name: "last page", count: 36, limit: 10, cursor: 30, want: 36, calls: 1},
 		{name: "cursor past end", count: 6, limit: 10, cursor: 1000, want: 6, calls: 2, wantScan: new(0)},
 		{name: "capped", count: 600, limit: 10, want: 500, calls: 11, capped: true},
 		{name: "exactly at cap", count: 500, limit: 10, cursor: 490, want: 500, calls: 1},

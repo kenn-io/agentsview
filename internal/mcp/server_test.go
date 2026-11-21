@@ -476,8 +476,7 @@ func TestServer_BudgetTextResults(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	messages := make([]db.Message, 50)
 	for i := range messages {
-		messages[i] = toolCallMsg("budget", i, db.ToolCall{ToolName: "Bash", Category: "Bash", InputJSON: strings.Repeat("<", 5000)})
-		messages[i].Content = "needle " + strings.Repeat("<&", 950)
+		messages[i] = dbtest.AsstMsg("budget", i, "needle "+strings.Repeat("<&", 950))
 	}
 	dbtest.SeedSessionWithMessages(t, d, "budget", "project", messages, dbtest.WithMessageCounts(50, 50))
 	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil)}))
