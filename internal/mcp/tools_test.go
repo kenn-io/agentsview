@@ -2448,6 +2448,14 @@ func TestSearchContent_BudgetOversized(t *testing.T) {
 	}
 }
 
+func TestSearchContent_BudgetOversizedEmptyResult(t *testing.T) {
+	ts := &toolset{svc: &pagedContentSearchService{}, now: func() time.Time { return fixedNow }}
+	_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{
+		Pattern: "needle", CurrentSessionID: strings.Repeat("x", 12000), IncludeActive: true,
+	})
+	require.ErrorContains(t, err, "search metadata exceeds response budget")
+}
+
 func TestGetMessages_BudgetAroundLinearContinuation(t *testing.T) {
 	ts, d := newTestToolset(t)
 	messages := make([]db.Message, 5)
