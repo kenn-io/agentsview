@@ -15,6 +15,31 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 )
 
+func TestReportingCursorCoverageWithManyPolls(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	_, err := d.rawWriter().ExecContext(ctx, `
+		WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<5000)
+		INSERT INTO cursor_usage_events(occurred_at, model, output_tokens, user_id, dedup_key)
+		SELECT '2026-07-28T10:04:00Z', 'model-a', 1, '12', printf('event-%d', x) FROM n;
+		WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<20000)
+		INSERT INTO cursor_usage_polls SELECT '2026-07-28T10:00:00Z', '2026-07-28T11:00:00Z', '2026-07-29T01:00:00Z', 5000 FROM n`)
+	require.NoError(t, err)
+	tx, err := d.getReader().BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer tx.Rollback()
+	rows, times, err := d.reportingStandaloneUsageCandidatesFrom(ctx, tx, activity.Query{
+		RangeStart: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
+		RangeEnd:   time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC),
+	}, export.ReportingAccountSchemaVersion)
+	require.NoError(t, err)
+	require.Len(t, rows, 5000)
+	for _, row := range rows {
+		assert.Equal(t, "cursor-account:12", row.Machine)
+	}
+	assert.Equal(t, "2026-07-29T01:00:00Z", times["cursor-account:12/2026-07-28-10"])
+}
+
 func TestReportingExportCompletedEmptyDayHas24QuietHours(t *testing.T) {
 	d := testDB(t)
 

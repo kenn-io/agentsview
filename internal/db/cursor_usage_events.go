@@ -139,6 +139,15 @@ func (db *DB) InsertCursorUsageEvents(ctx context.Context,
 			poll.WindowStart.UTC().Format(time.RFC3339Nano), poll.WindowEndExclusive.UTC().Format(time.RFC3339Nano), poll.CompletedAt.UTC().Format(time.RFC3339Nano)); err != nil {
 			return fmt.Errorf("inserting cursor usage poll: %w", err)
 		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM cursor_usage_polls
+			WHERE rowid != last_insert_rowid()
+			AND julianday(window_start) >= julianday(?)
+			AND julianday(window_end_exclusive) <= julianday(?)
+			AND julianday(completed_at) <= julianday(?)
+			AND event_max_id <= (SELECT event_max_id FROM cursor_usage_polls WHERE rowid = last_insert_rowid())`,
+			poll.WindowStart.UTC().Format(time.RFC3339Nano), poll.WindowEndExclusive.UTC().Format(time.RFC3339Nano), poll.CompletedAt.UTC().Format(time.RFC3339Nano)); err != nil {
+			return fmt.Errorf("pruning cursor usage polls: %w", err)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return err

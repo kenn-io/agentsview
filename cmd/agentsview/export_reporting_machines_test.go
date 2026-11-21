@@ -193,6 +193,9 @@ func TestExportReportingCursorAccountMachineCollision(t *testing.T) {
 			Activity struct {
 				Totals struct {
 					AgentMinutes float64 `json:"agent_minutes"`
+					NewSessions  int     `json:"new_sessions"`
+					NewProjects  int     `json:"new_projects"`
+					NewModels    int     `json:"new_models"`
 				} `json:"totals"`
 			} `json:"activity"`
 			Joint struct {
@@ -220,6 +223,9 @@ func TestExportReportingCursorAccountMachineCollision(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(out), &result))
 	assert.Equal(t, "cursor-account:12", result.LocalMachineID)
 	assert.InDelta(t, 4, result.Machines["cursor-account:12"].Activity.Totals.AgentMinutes, 0.001)
+	assert.Equal(t, 3, result.Machines["cursor-account:12"].Activity.Totals.NewSessions)
+	assert.Equal(t, 1, result.Machines["cursor-account:12"].Activity.Totals.NewProjects)
+	assert.Equal(t, 1, result.Machines["cursor-account:12"].Activity.Totals.NewModels)
 	assert.NotEmpty(t, result.Machines["cursor-account:12"].Joint.Cells)
 	assert.InDelta(t, 3, result.Machines[machine].Activity.Totals.AgentMinutes, 0.001)
 	assert.EqualValues(t, 10, result.Machines["archive:test-archive"].Usage.Totals.OutputTokens)
