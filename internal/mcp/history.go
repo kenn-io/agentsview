@@ -4,6 +4,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"encoding/json/jsontext"
 	"errors"
 	"fmt"
@@ -36,9 +37,9 @@ const (
 type toolCallsIn struct {
 	SessionID     string `json:"session_id" jsonschema:"Full stored session ID."`
 	Category      string `json:"category,omitempty" jsonschema:"Only calls in this category: Read, Edit, Write, Bash, Grep, Glob, Task, Tool, or Other."`
-	Limit         int    `json:"limit,omitempty" jsonschema:"Max tool calls, default 50, max 200."`
+	Limit         int    `json:"limit,omitempty" jsonschema:"Max tool calls, default 50, max 200; the byte budget can return fewer."`
 	Cursor        int    `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor."`
-	MaxInputChars int    `json:"max_input_chars,omitempty" jsonschema:"Truncate each tool input to this many characters, default 500, max 10000."`
+	MaxInputChars int    `json:"max_input_chars,omitempty" jsonschema:"Max input characters, default 500, max 10000; the byte budget can shorten it."`
 }
 
 type toolCallOut struct {
@@ -113,22 +114,28 @@ func (t *toolset) toolCalls(
 		out.NextCursor = &end
 	}
 	if !fitsResponse(out) && len(out.ToolCalls) > 0 {
-		original := len(out.ToolCalls)
-		for len(out.ToolCalls) > 1 && !fitsResponse(out) {
-			out.ToolCalls = out.ToolCalls[:len(out.ToolCalls)-1]
-			out.Omitted = original - len(out.ToolCalls)
-			next := start + len(out.ToolCalls)
-			out.NextCursor = &next
+		items := out.ToolCalls
+		out.ToolCalls = []toolCallOut{}
+		out.Omitted = len(items)
+		next := start + len(items)
+		out.NextCursor = &next
+		n := fitItems(out, items)
+		if n == 0 {
+			n = 1
+			call := &items[0]
+			call.InputTruncated = true
+			envelope, _ := json.Marshal(out)
+			call.Input = fitText(call.Input, responseBudgetBytes-len(envelope), func(text string) any { c := *call; c.Input = text; return c })
 		}
-		if !fitsResponse(out) {
-			call := &out.ToolCalls[0]
-			for !fitsResponse(out) && len(call.Input) > 0 {
-				runes := []rune(call.Input)
-				call.Input = string(runes[:len(runes)/2])
-				call.InputTruncated = true
-			}
+		out.ToolCalls = items[:n]
+		out.Omitted = len(items) - n
+		next = start + n
+		out.NextCursor = &next
+		if n == len(items) && end == len(matching) {
+			out.NextCursor = nil
 		}
 	}
+
 	return nil, out, nil
 }
 

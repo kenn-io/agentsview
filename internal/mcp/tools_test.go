@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json/v2"
 	"fmt"
 	"net"
@@ -2436,4 +2437,112 @@ func TestSearchContent_BudgetTruncatesContext(t *testing.T) {
 	require.Len(t, out.Matches, 1)
 	assert.True(t, fitsResponse(out))
 	assert.True(t, out.Matches[0].ContextTruncated)
+}
+
+func TestGetMessages_BudgetAroundSweep(t *testing.T) {
+	ts, d := newTestToolset(t)
+	messages := make([]db.Message, 21)
+	for i := range messages {
+		messages[i] = dbtest.UserMsg("around-budget", i, strings.Repeat("x", 2000))
+	}
+	dbtest.SeedSessionWithMessages(t, d, "around-budget", "proj", messages, dbtest.WithMessageCounts(21, 21))
+	anchor, before, after := 10, 10, 10
+	in := getMessagesIn{SessionID: "around-budget", Around: &anchor, Before: &before, After: &after}
+	var ordinals []int
+	for page := 0; ; page++ {
+		_, out, err := ts.getMessages(t.Context(), nil, in)
+		require.NoError(t, err)
+		require.NotEmpty(t, out.Messages)
+		assert.True(t, fitsResponse(out))
+		if page == 0 {
+			assert.Equal(t, anchor, out.Messages[0].Ordinal)
+		}
+		for _, m := range out.Messages {
+			ordinals = append(ordinals, m.Ordinal)
+		}
+		if out.PageCursor == "" {
+			break
+		}
+		in = getMessagesIn{SessionID: "around-budget", PageCursor: out.PageCursor}
+	}
+	require.Len(t, ordinals, 21)
+	assert.Len(t, uniqueOrdinals(ordinals), 21)
+	for i := range 21 {
+		assert.Contains(t, ordinals, i)
+	}
+}
+
+func TestSearchContent_BudgetCursorRejectsChangedPageAndVersion(t *testing.T) {
+	matches := make([]db.ContentMatch, 20)
+	for i := range matches {
+		matches[i] = db.ContentMatch{SessionID: "session", Ordinal: i, Snippet: strings.Repeat("x", 1800)}
+	}
+	fake := &fakeContentSearchService{result: &service.ContentSearchResult{Matches: matches}}
+	ts := &toolset{svc: fake}
+	_, first, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Mode: "semantic", IncludeActive: true, Limit: 20})
+	require.NoError(t, err)
+	require.NotEmpty(t, first.PageCursor)
+	data, err := base64.RawURLEncoding.DecodeString(first.PageCursor)
+	require.NoError(t, err)
+	var cursor searchPageCursor
+	require.NoError(t, json.Unmarshal(data, &cursor))
+	cursor.Version++
+	data, err = json.Marshal(cursor)
+	require.NoError(t, err)
+	_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{PageCursor: base64.RawURLEncoding.EncodeToString(data)})
+	require.ErrorContains(t, err, "invalid page_cursor")
+	fake.result.Matches[0].Snippet = "changed"
+	_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{PageCursor: first.PageCursor})
+	require.ErrorIs(t, err, service.ErrSourceChanged)
+}
+
+type budgetHintService struct {
+	service.SessionService
+	probes int
+}
+
+func (f *budgetHintService) SearchContent(_ context.Context, req service.ContentSearchRequest) (*service.ContentSearchResult, error) {
+	if req.IncludeOneShot {
+		f.probes++
+		return &service.ContentSearchResult{Matches: []db.ContentMatch{{SessionID: "hidden"}}}, nil
+	}
+	return &service.ContentSearchResult{Note: strings.Repeat("x", 12000)}, nil
+}
+
+func TestSearchContent_BudgetEmptyHints(t *testing.T) {
+	fake := &budgetHintService{}
+	ts := &toolset{svc: fake}
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", IncludeActive: true, IncludeAutomated: true})
+	require.NoError(t, err)
+	assert.Empty(t, out.Matches)
+	assert.True(t, fitsResponse(out))
+	assert.NotEmpty(t, out.Note)
+	assert.Positive(t, fake.probes)
+}
+
+func TestGetMessages_BudgetAroundBodyContinuation(t *testing.T) {
+	ts, d := newTestToolset(t)
+	body := strings.Repeat("<", 20000)
+	messages := []db.Message{dbtest.UserMsg("around-body", 0, "before"), dbtest.UserMsg("around-body", 1, body), dbtest.UserMsg("around-body", 2, "after")}
+	dbtest.SeedSessionWithMessages(t, d, "around-body", "proj", messages, dbtest.WithMessageCounts(3, 3))
+	anchor, before, after := 1, 1, 1
+	in := getMessagesIn{SessionID: "around-body", Around: &anchor, Before: &before, After: &after, MaxCharsPerMessage: 20000}
+	_, out, err := ts.getMessages(t.Context(), nil, in)
+	require.NoError(t, err)
+	require.Len(t, out.Messages, 1)
+	assert.Equal(t, anchor, out.Messages[0].Ordinal)
+	var got strings.Builder
+	got.WriteString(out.Messages[0].Content)
+	for out.Messages[0].BodyCursor != "" {
+		_, out, err = ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "around-body", BodyCursor: out.Messages[0].BodyCursor, MaxCharsPerMessage: 20000})
+		require.NoError(t, err)
+		assert.True(t, fitsResponse(out))
+		got.WriteString(out.Messages[0].Content)
+	}
+	assert.Equal(t, body, got.String())
+	require.NotEmpty(t, out.PageCursor)
+	_, out, err = ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "around-body", PageCursor: out.PageCursor})
+	require.NoError(t, err)
+	require.Len(t, out.Messages, 2)
+	assert.Equal(t, []int{0, 2}, []int{out.Messages[0].Ordinal, out.Messages[1].Ordinal})
 }

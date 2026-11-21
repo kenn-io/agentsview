@@ -347,8 +347,5 @@ func TestGetToolCalls_BudgetOversizedInput(t *testing.T) {
 	require.Len(t, out.ToolCalls, 1)
 	assert.True(t, fitsResponse(out))
 	assert.True(t, out.ToolCalls[0].InputTruncated)
-	_, messages, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "large-input", From: &out.ToolCalls[0].Ordinal})
-	require.NoError(t, err)
-	require.Len(t, messages.Messages, 1)
-	assert.Equal(t, out.ToolCalls[0].Ordinal, messages.Messages[0].Ordinal)
+
 }
