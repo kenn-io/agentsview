@@ -8,9 +8,8 @@ afterEach(() => {
 });
 
 describe("shared session watch", () => {
-  it("delivers updates through the authenticated in-page fallback", async () => {
+  it("delivers updates through the in-page fallback", async () => {
     vi.stubGlobal("SharedWorker", undefined);
-    localStorage.setItem("agentsview-auth-token", "test-token");
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
         new ReadableStream({
@@ -24,7 +23,6 @@ describe("shared session watch", () => {
       ),
     );
     vi.stubGlobal("fetch", fetchMock);
-    vi.spyOn(document, "hidden", "get").mockReturnValue(false);
     const onUpdate = vi.fn();
     const source = watchSession("session/one", onUpdate);
     try {

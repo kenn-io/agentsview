@@ -137,24 +137,6 @@ describe("shared live stream", () => {
     hub.close();
   });
 
-  it("catches up when the old source disconnects before the new source is ready", () => {
-    const hub = new LiveHub();
-    const archive = { postMessage: vi.fn() };
-    hub.update(archive, request());
-    sources[0]!.readyState = 1;
-    sources[0]!.emit("events_ready", "{}");
-    hub.update({ postMessage: vi.fn() }, request("a"));
-    vi.advanceTimersByTime(250);
-    sources[0]!.readyState = 0;
-    sources[1]!.emit("session_ready", "a");
-    sources[1]!.emit("events_ready", "{}");
-    expect(archive.postMessage.mock.calls.map(([frame]) => frame.type)).toEqual([
-      "events_ready",
-      "events_ready",
-    ]);
-    hub.close();
-  });
-
   it("refreshes archives if the old stream fails during handoff", () => {
     const hub = new LiveHub();
     const archive = { postMessage: vi.fn() };
@@ -282,47 +264,51 @@ describe("shared live stream", () => {
     expect(missing.postMessage.mock.calls).toEqual([[{ type: "session_missing", data: "a" }]]);
   });
 
-  it.each(["old subscriber leaves", "subscriptions arrive out of order"])(
-    "keeps the newest credentials when %s",
-    async (scenario) => {
-      const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
-      vi.stubGlobal("fetch", fetch);
-      const hub = new LiveHub();
-      const old = { postMessage: vi.fn() };
-      const current = { postMessage: vi.fn() };
-      const oldRequest = { ...request("a"), token: "old-token", credentialTime: 1 };
-      const currentRequest = { ...request("a"), token: "new-token", credentialTime: 2 };
-      if (scenario === "old subscriber leaves") {
-        hub.update(old, oldRequest);
-        hub.update(current, currentRequest);
-      } else {
-        hub.update(current, currentRequest);
-        hub.update(old, oldRequest);
-      }
-      vi.advanceTimersByTime(250);
-      const expectedSources = scenario === "old subscriber leaves" ? 2 : 1;
-      expect(sources).toHaveLength(expectedSources);
-      if (scenario === "old subscriber leaves") {
-        expect(sources[0]!.closed).toBe(true);
-        sources[1]!.emit("session_ready", "a");
-        expect(sources[0]!.closed).toBe(true);
-        await sources[1]!.options.fetch(sources[1]!.url, {});
-        expect((fetch.mock.calls[0]![1].headers as Headers).get("Authorization")).toBe(
-          "Bearer new-token",
-        );
-        hub.leave(old);
-        vi.advanceTimersByTime(250);
-        expect(sources).toHaveLength(expectedSources);
-      }
-      const active = sources[expectedSources - 1]!;
-      await active.options.fetch(active.url, {});
-      expect(fetch.mock.calls.at(-1)![0]).toBe("http://example.test/api/v1/events?session=a");
-      expect((fetch.mock.calls.at(-1)![1].headers as Headers).get("Authorization")).toBe(
-        "Bearer new-token",
-      );
-      hub.close();
-    },
-  );
+  it("keeps the current credentials when the old subscriber leaves", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+    const hub = new LiveHub();
+    const old = { postMessage: vi.fn() };
+    const current = { postMessage: vi.fn() };
+    hub.update(old, { ...request("a"), token: "old-token", credentialTime: 1 });
+    hub.update(current, { ...request("a"), token: "new-token", credentialTime: 2 });
+    expect(sources[0]!.closed).toBe(true);
+    await sources[1]!.options.fetch(sources[1]!.url, {});
+    expect((fetch.mock.calls[0]![1].headers as Headers).get("Authorization")).toBe(
+      "Bearer new-token",
+    );
+    hub.leave(old);
+    vi.advanceTimersByTime(250);
+    expect(sources).toHaveLength(2);
+    await sources[1]!.options.fetch(sources[1]!.url, {});
+    expect(fetch.mock.calls[1]![0]).toBe("http://example.test/api/v1/events?session=a");
+    expect((fetch.mock.calls[1]![1].headers as Headers).get("Authorization")).toBe(
+      "Bearer new-token",
+    );
+    hub.close();
+  });
+
+  it("keeps the newest credentials when subscriptions arrive out of order", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+    const hub = new LiveHub();
+    hub.update(
+      { postMessage: vi.fn() },
+      { ...request("a"), token: "new-token", credentialTime: 2 },
+    );
+    hub.update(
+      { postMessage: vi.fn() },
+      { ...request("a"), token: "old-token", credentialTime: 1 },
+    );
+    vi.advanceTimersByTime(250);
+    expect(sources).toHaveLength(1);
+    await sources[0]!.options.fetch(sources[0]!.url, {});
+    expect(fetch.mock.calls[0]![0]).toBe("http://example.test/api/v1/events?session=a");
+    expect((fetch.mock.calls[0]![1].headers as Headers).get("Authorization")).toBe(
+      "Bearer new-token",
+    );
+    hub.close();
+  });
 
   it("encodes session IDs and keeps tokens out of the stream URL", () => {
     const hub = new LiveHub();

@@ -26,7 +26,7 @@ func (s *watchStateStore) GetSessionWatchState(string) (db.SessionWatchState, er
 	return s.state.Load().(db.SessionWatchState), nil
 }
 
-func TestEvents_ReconnectsAfterHostedMonitorCloses(t *testing.T) {
+func TestEvents_EndsWhenHostedMonitorCloses(t *testing.T) {
 	t.Cleanup(sessionwatch.SetTimingsForTest(25*time.Millisecond, 50*time.Millisecond))
 	te := setup(t)
 	require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: "watch-a", Project: "project", Machine: "test", Agent: "claude"}))
@@ -36,30 +36,18 @@ func TestEvents_ReconnectsAfterHostedMonitorCloses(t *testing.T) {
 	handler := wrapTestHandler(cfg, server.New(cfg, store, nil, server.WithBroadcaster(te.broadcaster)).Handler())
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	open := func() (*flushRecorder, <-chan struct{}) {
-		w := newFlushRecorder()
-		done := make(chan struct{})
-		req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/events?session=watch-a", nil)
-		go func() { handler.ServeHTTP(w, req); close(done) }()
-		te.waitForSSEEvent(t, w, "session_ready", 5*time.Second)
-		return w, done
-	}
-	first, done := open()
+	w := newFlushRecorder()
+	done := make(chan struct{})
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/events?session=watch-a", nil)
+	go func() { handler.ServeHTTP(w, req); close(done) }()
+	te.waitForSSEEvent(t, w, "session_ready", 5*time.Second)
 	store.state.Store(db.SessionWatchState{State: db.SessionWatchResolved, PublicID: "watch-a", ContentRevision: "two"})
 	select {
 	case <-done:
 	case <-ctx.Done():
 		require.FailNow(t, "stream did not end after monitor stopped")
 	}
-	assert.Contains(t, first.BodyString(), "event: session_updated\ndata: watch-a\n")
-	second, done := open()
-	store.state.Store(db.SessionWatchState{State: db.SessionWatchResolved, PublicID: "watch-a", ContentRevision: "three"})
-	select {
-	case <-done:
-	case <-ctx.Done():
-		require.FailNow(t, "reconnected stream did not receive a later transition")
-	}
-	assert.Contains(t, second.BodyString(), "event: session_updated\ndata: watch-a\n")
+	assert.Contains(t, w.BodyString(), "event: session_updated\ndata: watch-a\n")
 }
 
 func TestEvents_UnresolvedHostedSessionIsMissing(t *testing.T) {

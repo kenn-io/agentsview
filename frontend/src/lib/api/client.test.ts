@@ -851,13 +851,8 @@ describe("core action telemetry", () => {
 });
 
 describe("live event payloads", () => {
-  afterEach(() => {
-    localStorage.clear();
-    vi.unstubAllGlobals();
-  });
-
-  it.each(["closed", "permanent_failure"])("exposes %s as a closed stream", async (type) => {
-    let port!: MessagePort;
+  let port!: MessagePort;
+  beforeEach(() => {
     class Worker {
       port = { start() {}, postMessage() {}, onmessage: null } as unknown as MessagePort;
       constructor() {
@@ -865,6 +860,13 @@ describe("live event payloads", () => {
       }
     }
     vi.stubGlobal("SharedWorker", Worker);
+  });
+  afterEach(() => {
+    localStorage.clear();
+    vi.unstubAllGlobals();
+  });
+
+  it.each(["closed", "permanent_failure"])("exposes %s as a closed stream", async (type) => {
     const { watchEvents } = await import("./client.js");
     const onPermanentFailure = vi.fn();
     const source = watchEvents(() => {}, { onPermanentFailure });
@@ -907,14 +909,6 @@ describe("live event payloads", () => {
   });
 
   it("delivers known scopes and refreshes for malformed or unknown data", async () => {
-    let port!: MessagePort;
-    class Worker {
-      port = { start() {}, postMessage() {}, onmessage: null } as unknown as MessagePort;
-      constructor() {
-        port = this.port;
-      }
-    }
-    vi.stubGlobal("SharedWorker", Worker);
     const { watchEvents } = await import("./client.js");
     const received: string[] = [];
     const source = watchEvents((event) => received.push(event.scope));

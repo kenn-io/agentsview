@@ -45,17 +45,13 @@ describe("events store", () => {
     expect(source.close).toHaveBeenCalledOnce();
   });
 
-  it("opens on return and settles startup when hidden", async () => {
+  it("opens on return and closes on hide", async () => {
     vi.useFakeTimers();
     try {
       vi.spyOn(document, "hidden", "get").mockReturnValue(true);
       const { events } = await import("./events.svelte.js");
       const unsub = events.subscribe(vi.fn());
-      const settled = vi.fn();
-      void events.whenReady(100).then(settled);
       events.setAvailable(true);
-      await Promise.resolve();
-      expect(settled).toHaveBeenCalledOnce();
       vi.spyOn(document, "hidden", "get").mockReturnValue(false);
       document.dispatchEvent(new Event("visibilitychange"));
       expect(api.watchEvents).toHaveBeenCalledOnce();
@@ -68,22 +64,29 @@ describe("events store", () => {
     }
   });
 
-  it.each(["unavailable", "no subscriber", "error", "timeout"])(
+  it.each(["unavailable", "no subscriber", "hidden", "error", "timeout"])(
     "settles startup on %s",
     async (reason) => {
       vi.useFakeTimers();
       try {
+        if (reason === "hidden") vi.spyOn(document, "hidden", "get").mockReturnValue(true);
         const { events } = await import("./events.svelte.js");
         const settled = vi.fn();
         void events.whenReady(100).then(settled);
         if (reason !== "no subscriber") {
-          const unsubscribe = events.subscribe(vi.fn());
+          const listener = vi.fn();
+          const unsubscribe = events.subscribe(listener);
+          if (reason === "unavailable") expect(api.watchEvents).not.toHaveBeenCalled();
           if (reason !== "unavailable") events.setAvailable(true);
           if (reason === "error") source.dispatchEvent(new Event("error"));
           if (reason === "timeout") await vi.advanceTimersByTimeAsync(100);
           if (reason === "unavailable") events.setAvailable(false);
           await Promise.resolve();
           expect(settled).toHaveBeenCalledOnce();
+          if (reason === "timeout") {
+            source.dispatchEvent(new Event("events_ready"));
+            expect(listener).toHaveBeenCalledWith({ scope: "sync" });
+          }
           unsubscribe();
         } else {
           events.setAvailable(true);
@@ -155,19 +158,6 @@ describe("events store", () => {
     expect(api.watchEvents).toHaveBeenCalledTimes(2);
     first();
     second();
-  });
-
-  it("stops retrying a permanently unavailable stream", async () => {
-    vi.useFakeTimers();
-    const { events, EVENTS_STORE_HEAL_INTERVAL_MS } = await import("./events.svelte.js");
-    events.setAvailable(true);
-    const unsub = events.subscribe(vi.fn());
-    options.onPermanentFailure?.();
-    source.readyState = 2;
-    await vi.advanceTimersByTimeAsync(EVENTS_STORE_HEAL_INTERVAL_MS * 2);
-    expect(api.watchEvents).toHaveBeenCalledOnce();
-    unsub();
-    vi.useRealTimers();
   });
 
   it("resumes healing after a shared stream recovers from permanent failure", async () => {

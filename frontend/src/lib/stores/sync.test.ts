@@ -106,17 +106,21 @@ describe("remote API version", () => {
     vi.clearAllMocks();
   });
 
-  it.each([27, 28])(
-    "enables archive updates and gates session updates on API %i",
-    async (apiVersion) => {
-      api.isRemoteConnection.mockReturnValue(true);
+  it.each([
+    { remote: true, apiVersion: 27, allowed: false },
+    { remote: true, apiVersion: 28, allowed: true },
+    { remote: false, apiVersion: 27, allowed: true },
+  ])(
+    "gates session updates for remote=$remote API $apiVersion",
+    async ({ remote, apiVersion, allowed }) => {
+      api.isRemoteConnection.mockReturnValue(remote);
       api.getVersion.mockResolvedValue({
         api_version: apiVersion,
         version: "test",
         commit: "test",
       });
       await sync.loadVersion();
-      expect(sync.remoteLiveAllowed).toBe(apiVersion === 28);
+      expect(sync.remoteLiveAllowed).toBe(allowed);
     },
   );
 });
@@ -225,12 +229,13 @@ describe("session watch visibility", () => {
   it("opens only the latest selected session when a hidden tab returns", () => {
     vi.spyOn(document, "hidden", "get").mockReturnValue(true);
     void sync.watchSession("session-a", vi.fn());
-    void sync.watchSession("session-b", vi.fn());
+    const onTiming = vi.fn();
+    void sync.watchSession("session-b", vi.fn(), onTiming);
     expect(api.watchSession).not.toHaveBeenCalled();
     vi.spyOn(document, "hidden", "get").mockReturnValue(false);
     document.dispatchEvent(new Event("visibilitychange"));
     expect(api.watchSession).toHaveBeenCalledOnce();
-    expect(api.watchSession).toHaveBeenCalledWith("session-b", expect.any(Function), undefined);
+    expect(api.watchSession).toHaveBeenCalledWith("session-b", expect.any(Function), onTiming);
   });
 });
 

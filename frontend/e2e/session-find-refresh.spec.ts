@@ -90,7 +90,7 @@ async function installLiveSession(page: Page) {
     await route.fulfill({
       status: 200,
       contentType: "text/event-stream",
-      body: `event: session_updated\ndata: ${SESSION_ID}\n\n`,
+      body: `event: session_ready\ndata: ${SESSION_ID}\n\nevent: events_ready\ndata: {}\n\nevent: session_updated\ndata: ${SESSION_ID}\n\n`,
     });
   });
   return {

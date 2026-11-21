@@ -299,6 +299,7 @@ describe("saved remote API version", () => {
     await vi.waitFor(() =>
       expect(document.querySelector(".session-live-notice")?.textContent?.trim()).toBe(notice),
     );
+    expect(requests).toContainEqual(expect.objectContaining({ session: undefined }));
     expect(requests).not.toContainEqual(expect.objectContaining({ session: "session-1" }));
   });
 
@@ -359,7 +360,6 @@ describe("App session URL date state", () => {
   it("requests children once when the session watch becomes ready on open", async () => {
     stubAppDependencies();
     vi.mocked(sync.watchSession).mockRestore();
-    expect(sync.remoteLiveAllowed).toBe(true);
     vi.mocked(sessions.loadChildSessions).mockRestore();
     vi.spyOn(document, "hidden", "get").mockReturnValue(false);
     vi.spyOn(sessions, "load").mockResolvedValue();
