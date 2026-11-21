@@ -21,7 +21,6 @@ import (
 
 const (
 	callRecordVersion    = 1
-	callRetentionDays    = 90
 	maxRecordedNameBytes = 128
 	maxRejectedNames     = 16
 )
@@ -162,21 +161,11 @@ func rejectedProperties(message string) []string {
 		if len(list) == 0 || list[0] != '"' {
 			break
 		}
-		end := 1
-		for end < len(list) {
-			if list[end] == '\\' {
-				end += 2
-				continue
-			}
-			if list[end] == '"' {
-				break
-			}
-			end++
-		}
-		if end >= len(list) {
+		quoted, err := strconv.QuotedPrefix(list)
+		if err != nil {
 			break
 		}
-		name, err := strconv.Unquote(list[:end+1])
+		name, err := strconv.Unquote(quoted)
 		if err == nil && len(name) <= maxRecordedNameBytes {
 			i := sort.SearchStrings(names, name)
 			if i < maxRejectedNames {
@@ -188,41 +177,9 @@ func rejectedProperties(message string) []string {
 				}
 			}
 		}
-		list = list[end+1:]
+		list = list[len(quoted):]
 	}
 	return names
-}
-
-// pruneCallLog removes daily logs outside the retained UTC window.
-func pruneCallLog(ctx context.Context, dir string, now time.Time) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	files, err := os.ReadDir(dir)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	cutoff := now.UTC().AddDate(0, 0, -callRetentionDays).Format("2006-01-02")
-	for _, file := range files {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		name := file.Name()
-		if file.IsDir() || len(name) != 16 || !strings.HasSuffix(name, ".jsonl") {
-			continue
-		}
-		date := strings.TrimSuffix(name, ".jsonl")
-		if _, err := time.Parse("2006-01-02", date); err != nil || date >= cutoff {
-			continue
-		}
-		if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove old MCP call log %q: %w", name, err)
-		}
-	}
-	return nil
 }
 
 type callAggregate struct {
@@ -236,17 +193,6 @@ type callAggregate struct {
 func SummarizeCalls(ctx context.Context, dir, from, to string) ([]CallSummary, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
-	}
-	now := time.Now().UTC()
-	if err := pruneCallLog(ctx, dir, now); err != nil {
-		return nil, err
-	}
-	cutoff := now.AddDate(0, 0, -callRetentionDays).Format("2006-01-02")
-	if from != "" && from < cutoff || to != "" && to < cutoff {
-		return nil, fmt.Errorf("MCP call records retain dates from %s (90 UTC days ago)", cutoff)
-	}
-	if from == "" {
-		from = cutoff
 	}
 	files, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {

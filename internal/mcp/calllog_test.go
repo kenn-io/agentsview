@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -273,72 +272,18 @@ func TestCallLogValidationValueIsNotARejectedName(t *testing.T) {
 	assert.NotContains(t, string(raw), "private-value")
 }
 
-func TestCallLogRetention(t *testing.T) {
+func TestCallLogKeepsOldRecords(t *testing.T) {
 	dir := t.TempDir()
-	now := time.Now().UTC()
-	old := now.AddDate(0, 0, -91).Format("2006-01-02")
-	earliest := now.AddDate(0, 0, -90).Format("2006-01-02")
-	for _, date := range []string{old, earliest} {
-		rec := fmt.Sprintf(`{"version":1,"at":%q,"tool":"search_docs","outcome":"empty"}`+"\n", date+"T00:00:00Z")
-		require.NoError(t, os.WriteFile(filepath.Join(dir, date+".jsonl"), []byte(rec), 0600))
-	}
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "unrelated.txt"), []byte("keep"), 0600))
-	rows, err := SummarizeCalls(t.Context(), dir, "", "")
+	old := time.Now().UTC().AddDate(0, 0, -91).Format("2006-01-02")
+	rec := fmt.Sprintf(`{"version":1,"at":%q,"tool":"search_docs","outcome":"empty"}`+"\n", old+"T00:00:00Z")
+	path := filepath.Join(dir, old+".jsonl")
+	require.NoError(t, os.WriteFile(path, []byte(rec), 0600))
+	rows, err := SummarizeCalls(t.Context(), dir, old, old)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, 1, rows[0].Calls)
-	_, err = os.Stat(filepath.Join(dir, old+".jsonl"))
-	require.ErrorIs(t, err, os.ErrNotExist)
-	_, err = os.Stat(filepath.Join(dir, earliest+".jsonl"))
+	_, err = os.Stat(path)
 	require.NoError(t, err)
-	_, err = os.Stat(filepath.Join(dir, "unrelated.txt"))
-	require.NoError(t, err)
-	_, err = SummarizeCalls(t.Context(), dir, old, "")
-	require.ErrorContains(t, err, "90 UTC days ago")
-	_, err = SummarizeCalls(t.Context(), dir, "", old)
-	require.ErrorContains(t, err, "90 UTC days ago")
-}
-
-func TestCallLogServerPrunesOldFiles(t *testing.T) {
-	dir := t.TempDir()
-	old := time.Now().UTC().AddDate(0, 0, -91).Format("2006-01-02")
-	require.NoError(t, os.WriteFile(filepath.Join(dir, old+".jsonl"), []byte("old\n"), 0600))
-	d := dbtest.OpenTestDB(t)
-	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), CallLogDir: dir}))
-	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
-	result, err := ct.CallTool(t.Context(), callParams(ToolSearchDocs, map[string]any{"query": "session"}))
-	require.NoError(t, err)
-	require.False(t, result.IsError)
-	_, err = os.Stat(filepath.Join(dir, old+".jsonl"))
-	require.ErrorIs(t, err, os.ErrNotExist)
-}
-
-func TestCallLogPruneFailureWarnsOnceAndWrites(t *testing.T) {
-	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
-		t.Skip("requires Unix directory permissions")
-	}
-	dir := t.TempDir()
-	old := time.Now().UTC().AddDate(0, 0, -91).Format("2006-01-02") + ".jsonl"
-	require.NoError(t, os.WriteFile(filepath.Join(dir, old), []byte("old\n"), 0600))
-	require.NoError(t, os.Chmod(dir, 0500))
-	t.Cleanup(func() { _ = os.Chmod(dir, 0700) })
-	var warnings bytes.Buffer
-	d := dbtest.OpenTestDB(t)
-	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), CallLogDir: dir, ErrorWriter: &warnings}))
-	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
-	for range 2 {
-		result, err := ct.CallTool(t.Context(), callParams(ToolSearchDocs, map[string]any{"query": "session"}))
-		require.NoError(t, err)
-		require.False(t, result.IsError)
-	}
-	assert.Equal(t, 1, strings.Count(warnings.String(), "could not maintain MCP call log"))
-	assert.Contains(t, warnings.String(), "remove old MCP call log")
-	_, err := os.Stat(filepath.Join(dir, old))
-	require.NoError(t, err)
-	today := time.Now().UTC().Format("2006-01-02") + ".jsonl"
-	raw, err := os.ReadFile(filepath.Join(dir, today))
-	require.NoError(t, err)
-	assert.Equal(t, 2, bytes.Count(raw, []byte(`"tool":"search_docs"`)))
 }
 
 func TestCallLogRecoversAfterPartialAppend(t *testing.T) {
