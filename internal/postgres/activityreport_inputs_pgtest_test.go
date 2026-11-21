@@ -77,8 +77,8 @@ func (c *activityInputReadCounter) QueryContext(ctx context.Context, query strin
 
 func TestPGActivityReportInputReads(t *testing.T) {
 	t.Parallel()
-	for _, partial := range []bool{true, false} {
-		t.Run(fmt.Sprintf("partial=%t", partial), func(t *testing.T) {
+	for _, mode := range []string{"partial", "finished", "transition"} {
+		t.Run(mode, func(t *testing.T) {
 			local, syncer, store := newUsageJournalFixture(t)
 			for _, id := range []string{"a", "b"} {
 				pgKeptSession(t, local, id, "project-a", "2026-06-14")
@@ -87,19 +87,34 @@ func TestPGActivityReportInputReads(t *testing.T) {
 			counter := &activityInputReadCounter{storeExecutor: store.pg}
 			store.pg = counter
 			q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
-			if partial {
+			if mode == "partial" {
 				q.Partial, q.EffectiveEnd = true, q.RangeEnd.Add(-time.Hour)
+			}
+			if mode == "transition" {
+				q.Partial, q.EffectiveEnd = true, q.RangeStart.Add(10*time.Hour+30*time.Second)
+				pgKeptBuild(t, store, f, q, true)
+				q.Partial, q.EffectiveEnd = false, q.RangeEnd
 			}
 			before := pgKeptBuild(t, store, f, q, true)
 			require.Len(t, counter.transcriptReads, 1)
 			assert.ElementsMatch(t, []string{"a", "b"}, counter.transcriptReads[0])
 			require.Len(t, counter.usageReads, 1)
-			repeated := pgKeptBuild(t, store, f, q, partial)
-			requirePGKeptEqual(t, before, repeated)
-			assert.Len(t, counter.transcriptReads, 1)
-			assert.Len(t, counter.usageReads, 1)
-			assert.Equal(t, 1000, repeated.Report.Totals.OutputTokens)
-			assert.Len(t, repeated.Sessions, 2)
+			if mode == "partial" {
+				repeated := pgKeptBuild(t, store, f, q, true)
+				requirePGKeptEqual(t, before, repeated)
+				assert.Len(t, counter.transcriptReads, 1)
+				assert.Len(t, counter.usageReads, 1)
+			}
+			assert.Equal(t, 1000, before.Report.Totals.OutputTokens)
+			assert.Len(t, before.Sessions, 2)
+			var fresh *Store
+			if mode == "transition" {
+				var err error
+				fresh, err = NewStore(t.Context(), testPGURL(t), syncer.schema, true)
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, fresh.Close()) })
+				requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), before)
+			}
 			require.NoError(t, local.ReplaceSessionMessages(t.Context(), "a", []db.Message{
 				{SessionID: "a", Ordinal: 0, Role: "user", Content: "question", Timestamp: "2026-06-14T10:00:00Z"},
 				{SessionID: "a", Ordinal: 1, Role: "assistant", Content: "answer", Timestamp: "2026-06-14T10:02:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":700}`)},
@@ -111,46 +126,17 @@ func TestPGActivityReportInputReads(t *testing.T) {
 			require.Len(t, counter.usageReads, 2)
 			assert.Equal(t, []string{"a"}, counter.usageReads[1])
 			assert.Equal(t, 1200, changed.Report.Totals.OutputTokens)
+			if fresh != nil {
+				fresh.runtimeState().activityKept.DeleteSlots(func(string) bool { return true })
+				fresh.runtimeState().activityInputs.DeleteSlots(func(string) bool { return true })
+				requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), changed)
+			}
 			store.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}})
 			pgKeptBuild(t, store, f, q, true)
 			assert.Len(t, counter.transcriptReads, 2)
 			assert.Len(t, counter.usageReads, 2)
 		})
 	}
-}
-
-func TestPGActivityReportInputReadsFinishedTransition(t *testing.T) {
-	t.Parallel()
-	local, syncer, store := newUsageJournalFixture(t)
-	for _, id := range []string{"a", "b"} {
-		pgKeptSession(t, local, id, "project-a", "2026-06-14")
-	}
-	pgKeptPush(t, syncer, false)
-	counter := &activityInputReadCounter{storeExecutor: store.pg}
-	store.pg = counter
-	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
-	q.Partial, q.EffectiveEnd = true, q.RangeStart.Add(10*time.Hour+30*time.Second)
-	pgKeptBuild(t, store, f, q, true)
-	q.Partial, q.EffectiveEnd = false, q.RangeEnd
-	finished := pgKeptBuild(t, store, f, q, true)
-	fresh, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, fresh.Close()) })
-	requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), finished)
-	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "a", []db.Message{
-		{SessionID: "a", Ordinal: 0, Role: "user", Content: "question", Timestamp: "2026-06-14T10:00:00Z"},
-		{SessionID: "a", Ordinal: 1, Role: "assistant", Content: "answer", Timestamp: "2026-06-14T10:02:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":700}`)},
-	}))
-	pgKeptPush(t, syncer, false)
-	changed := pgKeptBuild(t, store, f, q, true)
-	assert.Equal(t, 1200, changed.Report.Totals.OutputTokens)
-	require.Len(t, counter.transcriptReads, 2)
-	assert.Equal(t, []string{"a"}, counter.transcriptReads[1])
-	require.Len(t, counter.usageReads, 2)
-	assert.Equal(t, []string{"a"}, counter.usageReads[1])
-	fresh.runtimeState().activityKept.DeleteSlots(func(string) bool { return true })
-	fresh.runtimeState().activityInputs.DeleteSlots(func(string) bool { return true })
-	requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), changed)
 }
 
 func TestPGActivityReportInputReadsFinishedFractionalBounds(t *testing.T) {
