@@ -1173,12 +1173,12 @@ func (t *toolset) searchContent(
 	}
 	out.Hints = service.SearchContentHints(ctx, t.svc, req, res, false, keepMatch)
 	// Hints come only with an empty page.
-	if len(in.Concepts) == 0 && len(out.Matches) > 0 && !fitsResponse(out) {
+	if len(in.Concepts) == 0 && !fitsResponse(out) {
 		items := out.Matches
 		ranked := mode == "semantic" || mode == "hybrid"
 		if ranked {
 			out.NextCursor, out.Note = nil, strings.TrimSpace(out.Note+" Reduce limit to fit ranked results in one response.")
-		} else {
+		} else if len(items) > 0 {
 			out.Total, out.TotalCapped, err = t.countContentMatches(ctx, req, legacy, keepMatch)
 			if err != nil {
 				return nil, searchContentOut{}, err
@@ -1186,7 +1186,7 @@ func (t *toolset) searchContent(
 		}
 		n := fitPrefix(len(items), func(k int) bool {
 			out.Matches, out.Omitted = items[:k], len(items)-k
-			if !ranked {
+			if !ranked && k > 0 {
 				next := in.Cursor + rawIndexes[max(k, 1)-1] + 1
 				out.NextCursor = &next
 			}
