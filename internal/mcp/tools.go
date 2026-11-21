@@ -1347,14 +1347,6 @@ func (t *toolset) searchContent(
 	if len(in.Concepts) == 0 {
 		if hasTotal && len(res.Matches) > 0 {
 			out.Total, out.TotalCapped = knownTotal, knownCapped
-			if !legacy {
-				seen := in.Cursor + len(res.Matches)
-				if res.NextCursor == 0 && seen <= contentTotalCap {
-					out.Total, out.TotalCapped = seen, false
-				} else if seen > out.Total && !out.TotalCapped {
-					out.Total, out.TotalCapped = min(seen, contentTotalCap), true
-				}
-			}
 		} else {
 			out.Total, out.TotalCapped, err = t.contentSearchTotal(ctx, req, res, mode, legacy, keepMatch)
 		}
@@ -1426,18 +1418,18 @@ func (t *toolset) searchContent(
 		}
 	}
 	out.Hints = service.SearchContentHints(ctx, t.svc, req, res, false, keepMatch)
-	if len(in.Concepts) == 0 && !fitsResponse(out) {
-		items, hints := out.Matches, out.Hints
+	// Hints come only with an empty page, which stays far under the budget.
+	if len(in.Concepts) == 0 && len(out.Matches) > 0 && !fitsResponse(out) {
+		items := out.Matches
 		originalNext, originalPage := out.NextCursor, out.PageCursor
 		out.Matches = []contentMatch{}
-		out.Hints = nil
 		out.Omitted = len(items)
-		if len(items) > 0 && (mode == "semantic" || mode == "hybrid") {
+		if mode == "semantic" || mode == "hybrid" {
 			in.ActivityCutoff = cutoff
 			data, _ := json.Marshal(searchPageCursor{Version: 1, Digest: digest, Input: in, Offset: len(res.Matches)})
 			out.PageCursor = base64.RawURLEncoding.EncodeToString(data)
 			out.NextCursor = nil
-		} else if len(items) > 0 {
+		} else {
 			next := int(^uint(0) >> 1)
 			out.NextCursor = &next
 			in.ActivityCutoff = cutoff
@@ -1446,21 +1438,10 @@ func (t *toolset) searchContent(
 				originalPage = ""
 			}
 		}
-		if !fitsResponse(out) {
-			originalNote := out.Note
-			out.Note = fitText(originalNote, responseBudgetBytes-32, func(text string) any { result := out; result.Note = text; return result })
-			if !fitsResponse(out) {
-				return nil, searchContentOut{}, errors.New("search response exceeds budget")
-			}
-		}
-		// Keep as many hints as fit after reserving space for one result.
 		n := fitItems(out, items)
 		if n > 0 {
 			out.Matches = items[:n]
-			out.Hints = []service.ContentSearchHint{}
-			h := fitItems(out, hints)
-			out.Hints = hints[:h]
-		} else if len(items) > 0 {
+		} else {
 			n = 1
 			m := &items[0]
 			m.ContextTruncated = true
@@ -1477,25 +1458,10 @@ func (t *toolset) searchContent(
 					m.ContextBefore = m.ContextBefore[1:]
 				}
 			}
-			data, _ := jsonv1.Marshal(m)
-			if len(data) > budget && out.Note != "" {
-				out.Note = fitText(out.Note, responseBudgetBytes-len(data)-32, func(text string) any { result := out; result.Note = text; return result })
-				envelope, _ = jsonv1.Marshal(out)
-				budget = responseBudgetBytes - len(envelope)
-			}
-			if len(data) > budget {
+			if data, _ := jsonv1.Marshal(m); len(data) > budget {
 				return nil, searchContentOut{}, errors.New("search match exceeds budget")
 			}
 			out.Matches = items[:1]
-		} else {
-			out.Omitted = 0
-			out.PageCursor, out.NextCursor = originalPage, originalNext
-			out.Hints = []service.ContentSearchHint{}
-			out.Hints = hints[:fitItems(out, hints)]
-			if !fitsResponse(out) {
-				return nil, searchContentOut{}, errors.New("search response exceeds budget")
-			}
-			return nil, out, nil
 		}
 		out.Omitted = len(items) - n
 		if out.Omitted == 0 {

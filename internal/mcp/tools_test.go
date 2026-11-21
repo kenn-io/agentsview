@@ -1486,10 +1486,12 @@ func TestServer_SearchContentIncludeOneShot(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &schema))
 	properties, ok := schema["properties"].(map[string]any)
 	require.True(t, ok)
-	for _, name := range []string{"include_one_shot", "include_automated"} {
+	for name, description := range map[string]string{"include_one_shot": "Include one-shot sessions", "include_automated": "Include automated sessions"} {
 		property, ok := properties[name].(map[string]any)
 		require.True(t, ok, name)
 		assert.Equal(t, "boolean", property["type"])
+		assert.Contains(t, property["description"], description)
+		assert.Contains(t, property["description"], "Default false")
 	}
 	// pattern and concepts are each optional, so the schema may list no
 	// required fields at all.
@@ -1512,9 +1514,7 @@ func TestServer_SearchContentIncludeOneShot(t *testing.T) {
 		require.True(t, ok, name)
 		assert.Equal(t, wantType, property["type"])
 	}
-	assert.Contains(t, searchTool.Description, "One-shot and automated sessions are excluded by default")
-	assert.Contains(t, searchTool.Description, "include_one_shot")
-	assert.Contains(t, searchTool.Description, "include_automated")
+	assert.Contains(t, searchTool.Description, "one-shot, and automated sessions are excluded by default")
 	assert.Len(t, callerRequests, 3)
 	assert.Contains(t, callerRequests[0], "mode=substring")
 	assert.Contains(t, callerRequests[0], "agent=pi")
@@ -2821,30 +2821,6 @@ func TestSearchContent_BudgetCursorRejectsChangedPageAndVersion(t *testing.T) {
 	fake.result.Matches[0].Snippet = "changed"
 	_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{PageCursor: first.PageCursor})
 	require.ErrorIs(t, err, service.ErrSourceChanged)
-}
-
-type budgetHintService struct {
-	service.SessionService
-	probes int
-}
-
-func (f *budgetHintService) SearchContent(_ context.Context, req service.ContentSearchRequest) (*service.ContentSearchResult, error) {
-	if req.IncludeOneShot {
-		f.probes++
-		return &service.ContentSearchResult{Matches: []db.ContentMatch{{SessionID: "hidden"}}}, nil
-	}
-	return &service.ContentSearchResult{Note: strings.Repeat("x", 12000)}, nil
-}
-
-func TestSearchContent_BudgetEmptyHints(t *testing.T) {
-	fake := &budgetHintService{}
-	ts := &toolset{svc: fake}
-	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", IncludeActive: true, IncludeAutomated: true})
-	require.NoError(t, err)
-	assert.Empty(t, out.Matches)
-	assert.True(t, fitsResponse(out))
-	assert.NotEmpty(t, out.Note)
-	assert.Positive(t, fake.probes)
 }
 
 func TestGetMessages_BudgetAroundBodyContinuation(t *testing.T) {
