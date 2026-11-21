@@ -115,7 +115,7 @@ func (db *DB) readDashboardSessions(ctx context.Context, f AnalyticsFilter, ids 
 		where += " AND s.id IN (SELECT value FROM json_each(?))"
 		args = append(args, string(encoded))
 	}
-	rows, err := db.getReader().QueryContext(ctx, `SELECT s.id, `+dateCol+`, s.agent, s.message_count, s.transcript_revision || '|' || COALESCE(s.trends_generation, '') || '|' || COALESCE(s.usage_generation, '') || '|' || s.created_at || '|' || COALESCE(s.started_at, '') || '|' || s.message_count, s.tools_generation, `+toolsSessionFingerprintSQL+` FROM sessions s WHERE `+where+` ORDER BY s.id`, args...)
+	rows, err := db.getReader().QueryContext(ctx, `SELECT s.id, `+dateCol+`, s.agent, s.message_count, s.transcript_revision || '|' || COALESCE(s.trends_generation, '') || '|' || s.message_count, s.tools_generation, `+toolsSessionFingerprintSQL+` FROM sessions s WHERE `+where+` ORDER BY s.id`, args...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -157,9 +157,6 @@ func (db *DB) readDashboardSessions(ctx context.Context, f AnalyticsFilter, ids 
 		fingerprints, err := db.stampToolsSessions(ctx, dirty)
 		if err != nil {
 			return nil, nil, err
-		}
-		if len(fingerprints) != len(dirty) {
-			return nil, nil, nil
 		}
 		var stamped []dashboardSession
 		for i := range sessions {
