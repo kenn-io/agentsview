@@ -546,6 +546,10 @@ type messageBodyCursor struct {
 }
 
 func encodeMessageBodyCursor(cursor messageBodyCursor) string {
+	cursor.Version = 2
+	if cursor.PageCursor != "" {
+		cursor.Version = 3
+	}
 	raw, _ := json.Marshal(cursor)
 	return base64.RawURLEncoding.EncodeToString(raw)
 }
@@ -556,7 +560,8 @@ func decodeMessageBodyCursor(raw string) (messageBodyCursor, error) {
 		return messageBodyCursor{}, errors.New("invalid body_cursor")
 	}
 	var cursor messageBodyCursor
-	if err := json.Unmarshal(payload, &cursor); err != nil || cursor.Version != 2 ||
+	if err := json.Unmarshal(payload, &cursor); err != nil || (cursor.Version != 2 && cursor.Version != 3) ||
+		(cursor.Version == 2 && cursor.PageCursor != "") ||
 		cursor.EvidenceSource == "" || cursor.SessionID == "" || cursor.Revision == "" ||
 		cursor.Ordinal < 0 || cursor.Offset <= 0 {
 		return messageBodyCursor{}, errors.New("invalid body_cursor")
@@ -809,7 +814,7 @@ func fitOneMessage(out *getMessagesOut, item *messageOut, source string, in getM
 	if item.FullLength == 0 {
 		item.FullLength = utf8.RuneCountInString(item.Content)
 	}
-	item.BodyCursor = encodeMessageBodyCursor(messageBodyCursor{Version: 2, EvidenceSource: source, SessionID: in.SessionID, Revision: out.TranscriptRevision, Ordinal: item.Ordinal, Offset: item.FullLength, NextFrom: out.NextFrom, PageCursor: out.PageCursor, Roles: in.Roles})
+	item.BodyCursor = encodeMessageBodyCursor(messageBodyCursor{EvidenceSource: source, SessionID: in.SessionID, Revision: out.TranscriptRevision, Ordinal: item.Ordinal, Offset: item.FullLength, NextFrom: out.NextFrom, PageCursor: out.PageCursor, Roles: in.Roles})
 	envelope, _ := jsonv1.Marshal(out)
 	item.Content = fitText(item.Content, responseBudgetBytes-len(envelope), func(text string) any { m := *item; m.Content = text; return m })
 	if item.Content == "" {
@@ -896,7 +901,7 @@ func attachBodyCursors(
 		}
 		hasBodyCursor = true
 		out.Messages[i].BodyCursor = encodeMessageBodyCursor(messageBodyCursor{
-			Version: 2, EvidenceSource: evidenceSource, SessionID: sessionID,
+			EvidenceSource: evidenceSource, SessionID: sessionID,
 			Revision: out.TranscriptRevision, Ordinal: out.Messages[i].Ordinal,
 			Offset: utf8.RuneCountInString(out.Messages[i].Content), NextFrom: nextFrom, PageCursor: pageCursor,
 			Roles: roles,

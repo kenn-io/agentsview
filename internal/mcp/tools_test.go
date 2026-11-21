@@ -602,6 +602,13 @@ func TestGetMessages_BodyCursorContinuesUnicodeMessage(t *testing.T) {
 	assert.Equal(t, 10, first.Messages[0].FullLength)
 	require.NotEmpty(t, first.Messages[0].BodyCursor)
 	require.NotEmpty(t, first.TranscriptRevision)
+	payload, err := base64.RawURLEncoding.DecodeString(first.Messages[0].BodyCursor)
+	require.NoError(t, err)
+	var cursor struct {
+		Version int `json:"v"`
+	}
+	require.NoError(t, json.Unmarshal(payload, &cursor))
+	assert.Equal(t, 2, cursor.Version)
 	assert.Nil(t, first.NextFrom, "body continuation must finish before message pagination advances")
 
 	_, second, err := ts.getMessages(t.Context(), nil, getMessagesIn{
@@ -625,6 +632,50 @@ func TestGetMessages_BodyCursorContinuesUnicodeMessage(t *testing.T) {
 	assert.Empty(t, third.Messages[0].BodyCursor)
 	require.NotNil(t, third.NextFrom)
 	assert.Equal(t, 2, *third.NextFrom)
+}
+
+func TestGetMessages_BodyCursorVersionContract(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSessionWithMessages(t, d, "body-version", "proj", []db.Message{
+		dbtest.UserMsg("body-version", 0, "abcdefghij"),
+	}, dbtest.WithMessageCounts(1, 1))
+	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "body-version", MaxCharsPerMessage: 4})
+	require.NoError(t, err)
+	require.Len(t, first.Messages, 1)
+	payload, err := base64.RawURLEncoding.DecodeString(first.Messages[0].BodyCursor)
+	require.NoError(t, err)
+	var binding struct {
+		Source string `json:"s"`
+	}
+	require.NoError(t, json.Unmarshal(payload, &binding))
+	require.NotEmpty(t, binding.Source)
+	require.NotEmpty(t, first.TranscriptRevision)
+	for _, tc := range []struct {
+		name, payload, want string
+	}{
+		{"legacy", fmt.Sprintf(`{"v":2,"s":%q,"i":"body-version","r":%q,"o":0,"p":4,"n":1}`, binding.Source, first.TranscriptRevision), "efgh"},
+		{"v2 with window", fmt.Sprintf(`{"v":2,"s":%q,"i":"body-version","r":%q,"o":0,"p":4,"c":"window"}`, binding.Source, first.TranscriptRevision), ""},
+		{"unsupported", fmt.Sprintf(`{"v":4,"s":%q,"i":"body-version","r":%q,"o":0,"p":4}`, binding.Source, first.TranscriptRevision), ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			encoded := base64.RawURLEncoding.EncodeToString([]byte(tc.payload))
+			_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "body-version", BodyCursor: encoded, MaxCharsPerMessage: 4})
+			if tc.want == "" {
+				require.EqualError(t, err, "invalid body_cursor")
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, out.Messages, 1)
+			assert.Equal(t, tc.want, out.Messages[0].Content)
+			assert.Equal(t, first.TranscriptRevision, out.TranscriptRevision)
+			_, final, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "body-version", BodyCursor: out.Messages[0].BodyCursor, MaxCharsPerMessage: 4})
+			require.NoError(t, err)
+			require.Len(t, final.Messages, 1)
+			assert.Equal(t, "ij", final.Messages[0].Content)
+			require.NotNil(t, final.NextFrom)
+			assert.Equal(t, 1, *final.NextFrom)
+		})
+	}
 }
 
 func TestGetMessages_BodyCursorContinuesPastMaximumChunk(t *testing.T) {
@@ -2535,12 +2586,27 @@ func TestGetMessages_BudgetAroundBodyContinuation(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, out.Messages, 1)
 	assert.Equal(t, anchor, out.Messages[0].Ordinal)
+	revision := out.TranscriptRevision
+	require.NotEmpty(t, revision)
+	assert.True(t, fitsResponse(out))
+	require.NotEmpty(t, out.Messages[0].BodyCursor)
 	var got strings.Builder
 	got.WriteString(out.Messages[0].Content)
 	for out.Messages[0].BodyCursor != "" {
+		payload, err := base64.RawURLEncoding.DecodeString(out.Messages[0].BodyCursor)
+		require.NoError(t, err)
+		var cursor struct {
+			Version    int    `json:"v"`
+			PageCursor string `json:"c"`
+		}
+		require.NoError(t, json.Unmarshal(payload, &cursor))
+		assert.Equal(t, 3, cursor.Version)
+		assert.NotEmpty(t, cursor.PageCursor)
 		_, out, err = ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "around-body", BodyCursor: out.Messages[0].BodyCursor, MaxCharsPerMessage: 20000})
 		require.NoError(t, err)
+		require.Len(t, out.Messages, 1)
 		assert.True(t, fitsResponse(out))
+		assert.Equal(t, revision, out.TranscriptRevision)
 		got.WriteString(out.Messages[0].Content)
 	}
 	assert.Equal(t, body, got.String())
@@ -2549,6 +2615,8 @@ func TestGetMessages_BudgetAroundBodyContinuation(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, out.Messages, 2)
 	assert.Equal(t, []int{0, 2}, []int{out.Messages[0].Ordinal, out.Messages[1].Ordinal})
+	assert.Equal(t, []string{"before", "after"}, []string{out.Messages[0].Content, out.Messages[1].Content})
+	assert.Equal(t, revision, out.TranscriptRevision)
 }
 
 func TestGetMessages_BudgetPagesAndBodyCursors(t *testing.T) {
