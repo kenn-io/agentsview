@@ -112,8 +112,9 @@ known.
 The HTTP `/api/v1/events` stream sends `events_ready` on every connection
 after subscribing to changes. Repeat the `session` query parameter to include
 updates for those sessions on the same stream. The stream sends `session_ready`
-and `session.timing` for each session, and `session_missing` when it does not
-exist, cannot be resolved, or cannot be read. Reconnecting sends readiness again.
+and `session.timing` for each session, and `session_missing` when the initial
+lookup finds that it does not exist, cannot be resolved, or cannot be read.
+Reconnecting sends readiness again.
 To receive the changed session and message records themselves, with a cursor
 for resuming, use the
 [change stream](/docs/conversation-export/#follow-changes-live).
