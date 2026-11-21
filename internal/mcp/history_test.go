@@ -63,7 +63,7 @@ func TestGetToolCalls_FiltersPagesAndMasksSecrets(t *testing.T) {
 	require.NotNil(t, out.NextCursor)
 
 	_, next, err := ts.toolCalls(t.Context(), nil, toolCallsIn{
-		SessionID: "s1", Category: "Bash", Limit: 1, Cursor: *out.NextCursor, MaxInputChars: 5,
+		SessionID: "s1", Category: "Bash", Limit: 1, Cursor: out.NextCursor, MaxInputChars: 5,
 	})
 	require.NoError(t, err)
 	require.Len(t, next.ToolCalls, 1)
@@ -83,7 +83,7 @@ func TestGetToolCalls_FiltersPagesAndMasksSecrets(t *testing.T) {
 
 	_, _, err = ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "missing"})
 	require.ErrorContains(t, err, "session not found")
-	_, _, err = ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "s1", Cursor: -1})
+	_, _, err = ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "s1", Cursor: new(-1)})
 	require.Error(t, err)
 }
 
@@ -330,7 +330,7 @@ func TestGetToolCalls_BudgetPages(t *testing.T) {
 		if out.NextCursor == nil {
 			break
 		}
-		in.Cursor = *out.NextCursor
+		in.Cursor = out.NextCursor
 	}
 	require.Len(t, ordinals, 200)
 	for i, ordinal := range ordinals {
@@ -347,16 +347,50 @@ func TestGetToolCalls_BudgetOversizedInput(t *testing.T) {
 		toolCallMsg("large-input", 1, db.ToolCall{ToolName: "Bash", Category: "Bash", InputJSON: "next"}),
 	)
 	in := toolCallsIn{SessionID: "large-input", MaxInputChars: 10000}
-	_, out, err := ts.toolCalls(t.Context(), nil, in)
+	var got strings.Builder
+	var ordinals []int
+	for {
+		_, out, err := ts.toolCalls(t.Context(), nil, in)
+		require.NoError(t, err)
+		assert.True(t, fitsResponse(out))
+		assert.Equal(t, 2, out.Total)
+		for _, call := range out.ToolCalls {
+			ordinals = append(ordinals, call.Ordinal)
+			if call.Ordinal == 0 {
+				got.WriteString(call.Input)
+				assert.False(t, call.InputTruncated)
+			} else {
+				assert.Equal(t, "next", call.Input)
+			}
+		}
+		if out.NextCursor == nil {
+			break
+		}
+		in.Cursor = out.NextCursor
+		in.InputOffset = out.NextInputOffset
+	}
+	assert.Equal(t, input, got.String())
+	require.GreaterOrEqual(t, len(ordinals), 2)
+	assert.Equal(t, 1, ordinals[len(ordinals)-1])
+}
+
+func TestGetToolCalls_InputLimit(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "input-limit", "proj")
+	dbtest.SeedMessages(t, d, toolCallMsg("input-limit", 0, db.ToolCall{ToolName: "Bash", Category: "Bash", InputJSON: strings.Repeat("x", 9000)}))
+	_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "input-limit", MaxInputChars: 500})
 	require.NoError(t, err)
 	require.Len(t, out.ToolCalls, 1)
-	assert.True(t, fitsResponse(out))
+	assert.Len(t, out.ToolCalls[0].Input, 500)
 	assert.True(t, out.ToolCalls[0].InputTruncated)
-	assert.True(t, strings.HasPrefix(input, out.ToolCalls[0].Input))
-	require.NotNil(t, out.NextCursor)
-	in.Cursor = *out.NextCursor
-	_, out, err = ts.toolCalls(t.Context(), nil, in)
-	require.NoError(t, err)
-	require.Len(t, out.ToolCalls, 1)
-	assert.Equal(t, "next", out.ToolCalls[0].Input)
+	assert.Nil(t, out.NextInputOffset)
+	assert.Nil(t, out.NextCursor)
+}
+
+func TestGetToolCalls_InputOffsetValidation(t *testing.T) {
+	ts, _ := newTestToolset(t)
+	for _, in := range []toolCallsIn{{InputOffset: new(-1)}, {InputOffset: new(1)}, {InputOffset: new(0)}} {
+		_, _, err := ts.toolCalls(t.Context(), nil, in)
+		require.ErrorContains(t, err, "input_offset")
+	}
 }
