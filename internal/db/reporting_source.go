@@ -15,6 +15,7 @@ type reportingSourceLoadStats struct {
 	ActivityHistoryRows int
 	UsageSessions       int
 	PaddedUsageRows     int
+	AccountUsageRows    int
 }
 
 type reportingExportSource struct {
@@ -25,6 +26,7 @@ type reportingExportSource struct {
 	usageSessions       []activity.SessionMeta
 	usageCandidates     []activityReportUsageCandidate
 	standaloneUsage     []activity.UsageRow
+	accountUsage        []reportingAccountRow
 	pricing             []export.EffectivePricingRow
 	createdAt           map[string]time.Time
 	projectObservations []export.ProjectIdentityObservation
@@ -51,6 +53,7 @@ type reportingDaySource struct {
 	usageSessions    []activity.SessionMeta
 	usageCandidates  []activityReportUsageCandidate
 	standaloneUsage  []activity.UsageRow
+	accountUsage     []reportingAccountRow
 	pricing          []export.EffectivePricingRow
 	createdAt        map[string]time.Time
 	projects         map[string]export.ProjectMapEntry
@@ -129,7 +132,7 @@ func (db *DB) loadReportingExportSource(
 		return source, err
 	}
 	standaloneUsage, err := db.reportingStandaloneUsageCandidatesFrom(
-		ctx, tx, query,
+		ctx, tx, query, schemaVersion,
 	)
 	if err != nil {
 		return source, err
@@ -166,7 +169,7 @@ func (db *DB) loadReportingExportSource(
 	labels := activity.ProjectLabels(allSessions)
 	observations := []export.ProjectIdentityObservation{}
 	archiveScope := export.IdentityScope{}
-	if len(labels) > 0 || schemaVersion == export.ReportingJointSchemaVersion {
+	if len(labels) > 0 || export.IsJointReportingSchema(schemaVersion) {
 		archiveID, archiveSalt, scopeErr := reportingArchiveScope(ctx, tx)
 		if scopeErr != nil {
 			return source, scopeErr
@@ -185,7 +188,7 @@ func (db *DB) loadReportingExportSource(
 		}
 	}
 	var references map[string]export.ProjectReference
-	if schemaVersion == export.ReportingJointSchemaVersion {
+	if export.IsJointReportingSchema(schemaVersion) {
 		references, err = db.reportingSessionReferences(ctx, tx, allSessions)
 		if err != nil {
 			return source, err
@@ -263,6 +266,12 @@ func (src reportingExportSource) forDate(
 			standaloneUsage = append(standaloneUsage, row)
 		}
 	}
+	var accountUsage []reportingAccountRow
+	for _, row := range src.accountUsage {
+		if !row.at.Before(date) && row.at.Before(end) {
+			accountUsage = append(accountUsage, row)
+		}
+	}
 
 	allSessions := mergeReportingSessions(selectedSessions, usageSessions)
 	labels := activity.ProjectLabels(allSessions)
@@ -301,6 +310,7 @@ func (src reportingExportSource) forDate(
 		usageSessions:    usageSessions,
 		usageCandidates:  usageCandidates,
 		standaloneUsage:  standaloneUsage,
+		accountUsage:     accountUsage,
 		pricing:          src.pricing,
 		createdAt:        createdAt,
 		projects:         projects,

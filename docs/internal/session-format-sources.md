@@ -3085,6 +3085,15 @@ schemas keep their existing ordering behavior.
 
 ## Cursor (`cursor`)
 
+- **Team usage:** The [Admin API](https://cursor.com/docs/account/teams/admin-api)
+  documents numeric user IDs in paginated daily usage data and as a filter for
+  usage events; its usage-event example does not include a user ID. An
+  unfiltered sync matches member-filtered events to stored events by their raw
+  deduplication key and records the matched account and unfiltered fetch completion
+  time in separate columns. A later sync picks up events added after the fetch.
+  Archives with account stamps require data version 185 or newer. The event's original `user_id`, `user_email`, and dedup key
+  remain unchanged.
+
 - **Dialogue projection:** Reverified 2026-10-17 against the JSONL parser and
   shared block fixtures. Assistant text and thinking blocks remain separate.
   Cursor IDE uses a different parser.

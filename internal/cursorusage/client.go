@@ -46,7 +46,10 @@ type Client struct {
 	// RequestInterval is the minimum time between the starts of consecutive
 	// requests in FetchAllUsageEvents, retries included. NewClient sets it to
 	// one second; zero disables pacing.
-	RequestInterval time.Duration
+	RequestInterval      time.Duration
+	DailyRequestInterval time.Duration
+	lastUsageRequest     time.Time
+	lastDailyRequest     time.Time
 
 	// OnRetry, when set, is called before FetchAllUsageEvents waits to retry
 	// a page after a rate-limit or server error, with the page number, that
@@ -119,7 +122,8 @@ func NewClient(apiKey string) *Client {
 		HTTPClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		RequestInterval: defaultRequestInterval,
+		RequestInterval:      defaultRequestInterval,
+		DailyRequestInterval: 3 * time.Second,
 	}
 }
 
@@ -250,6 +254,58 @@ func requestUserID(raw string) (int64, error) {
 	return userID, nil
 }
 
+// ListDailyUsageUsers returns numeric member IDs from one window of at most 30 days.
+func (c *Client) ListDailyUsageUsers(ctx context.Context, start, end time.Time) ([]string, error) {
+	type dailyResponse struct {
+		Data []struct {
+			UserID jsontext.Value `json:"userId"`
+		} `json:"data"`
+		Pagination struct {
+			HasNext bool `json:"hasNextPage"`
+		} `json:"pagination"`
+	}
+	var users []string
+	for page := 1; ; page++ {
+		// Daily requests do not use the usage-page retry callback.
+		resp, err := retryCursorRequest(ctx, c, &c.lastDailyRequest, c.DailyRequestInterval, 0, func() (dailyResponse, error) {
+			var result dailyResponse
+			body, err := json.Marshal(map[string]any{"startDate": timestampMillis(start), "endDate": timestampMillis(end), "page": page, "pageSize": 1000})
+			if err != nil {
+				return result, err
+			}
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL()+"/teams/daily-usage-data", bytes.NewReader(body))
+			if err != nil {
+				return result, err
+			}
+			req.SetBasicAuth(c.APIKey, "")
+			req.Header.Set("Content-Type", "application/json")
+			r, err := c.httpClient().Do(req)
+			if err != nil {
+				return result, err
+			}
+			defer r.Body.Close()
+			if r.StatusCode < 200 || r.StatusCode >= 300 {
+				return result, &statusError{statusCode: r.StatusCode, status: r.Status, retryAfter: httputil.ParseRetryAfter(r.Header.Get("Retry-After"))}
+			}
+			err = json.UnmarshalRead(r.Body, &result)
+			return result, err
+		})
+		if err != nil {
+			return nil, fmt.Errorf("fetching Cursor daily usage page %d: %w", page, err)
+		}
+		for _, row := range resp.Data {
+			id, err := strconv.ParseUint(string(row.UserID), 10, 64)
+			if err != nil || id == 0 {
+				continue
+			}
+			users = append(users, strconv.FormatUint(id, 10))
+		}
+		if !resp.Pagination.HasNext {
+			return users, nil
+		}
+	}
+}
+
 // FetchAllUsageEvents requests every page of q, starting at q.Page. Requests,
 // retries included, start at least RequestInterval apart. A page that fails
 // with a rate limit or server error is requested again after the server's
@@ -270,7 +326,8 @@ func (c *Client) FetchAllUsageEvents(
 	var out []UsageEvent
 	// lastRequest spans the whole fetch so the request after a retried page
 	// is paced from the retry, not from the page's first attempt.
-	var lastRequest time.Time
+	lastRequest := c.lastUsageRequest
+	defer func() { c.lastUsageRequest = lastRequest }()
 	for {
 		resp, err := c.listUsageEventsWithRetry(ctx, &lastRequest, Query{
 			StartDate: q.StartDate,
@@ -299,13 +356,13 @@ func (c *Client) FetchAllUsageEvents(
 
 // waitForRequestSlot blocks until RequestInterval has passed since
 // lastRequest. A zero lastRequest means no request has been made yet.
-func (c *Client) waitForRequestSlot(
-	ctx context.Context, lastRequest time.Time,
+func waitForRequestSlot(
+	ctx context.Context, lastRequest time.Time, interval time.Duration,
 ) error {
-	if lastRequest.IsZero() || c.RequestInterval <= 0 {
+	if lastRequest.IsZero() || interval <= 0 {
 		return nil
 	}
-	wait := c.RequestInterval - time.Since(lastRequest)
+	wait := interval - time.Since(lastRequest)
 	if wait <= 0 {
 		return nil
 	}
@@ -325,54 +382,54 @@ func (c *Client) waitForRequestSlot(
 func (c *Client) listUsageEventsWithRetry(
 	ctx context.Context, lastRequest *time.Time, q Query,
 ) (Page, error) {
-	page, err := backoff.Retry(ctx, func() (Page, error) {
-		if err := c.waitForRequestSlot(ctx, *lastRequest); err != nil {
-			return Page{}, backoff.Permanent(err)
+	return retryCursorRequest(ctx, c, lastRequest, c.RequestInterval, q.Page, func() (Page, error) {
+		return c.ListUsageEvents(ctx, q)
+	})
+}
+
+func retryCursorRequest[T any](ctx context.Context, c *Client, lastRequest *time.Time, interval time.Duration, page int, request func() (T, error)) (T, error) {
+	result, err := backoff.Retry(ctx, func() (T, error) {
+		var zero T
+		if err := waitForRequestSlot(ctx, *lastRequest, interval); err != nil {
+			return zero, backoff.Permanent(err)
 		}
 		*lastRequest = time.Now()
-		page, err := c.ListUsageEvents(ctx, q)
+		result, err := request()
 		if err == nil {
-			return page, nil
+			return result, nil
 		}
 		statusErr, ok := errors.AsType[*statusError](err)
 		if !ok || !statusErr.retryable() {
-			return Page{}, backoff.Permanent(err)
+			return zero, backoff.Permanent(err)
 		}
 		if statusErr.retryAfter > 0 {
-			return Page{}, backoff.RetryAfter(
-				min(statusErr.retryAfter, maxRetryDelay), err,
-			)
+			return zero, backoff.RetryAfter(min(statusErr.retryAfter, maxRetryDelay), err)
 		}
-		return Page{}, err
-	},
-		backoff.WithBackOff(newRetryBackOff()),
-		backoff.WithMaxTries(maxPageAttempts),
+		return zero, err
+	}, backoff.WithBackOff(newRetryBackOff()), backoff.WithMaxTries(maxPageAttempts),
 		// Attempts and the context bound the loop; an elapsed-time limit
 		// would cut off a run of honored 60-second Retry-After waits.
 		backoff.WithMaxElapsedTime(0),
 		backoff.WithNotify(func(err error, wait time.Duration) {
-			if c.OnRetry == nil {
-				return
+			if page > 0 && c.OnRetry != nil {
+				if statusErr, ok := errors.AsType[*statusError](err); ok {
+					err = statusErr
+				}
+				c.OnRetry(page, err, wait)
 			}
-			if statusErr, ok := errors.AsType[*statusError](err); ok {
-				err = statusErr
-			}
-			c.OnRetry(q.Page, err, wait)
 		}),
 	)
 	retryErr := backoff.AsRetryError(err)
 	if retryErr == nil {
-		return page, err
+		return result, err
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return Page{}, ctxErr
+		return result, ctxErr
 	}
 	if errors.Is(retryErr.Cause, backoff.ErrExhausted) {
-		return Page{}, fmt.Errorf(
-			"giving up after %d attempts: %w", maxPageAttempts, retryErr.LastErr,
-		)
+		return result, fmt.Errorf("giving up after %d attempts: %w", maxPageAttempts, retryErr.LastErr)
 	}
-	return Page{}, retryErr.LastErr
+	return result, retryErr.LastErr
 }
 
 // newRetryBackOff paces retries of a failed page when the server gave no

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -50,6 +51,8 @@ func (db *DB) ensureCursorUsageEventsSchemaLocked(ctx context.Context, w *writer
 			cursor_token_fee_microdollars INTEGER NOT NULL DEFAULT 0,
 			user_id TEXT NOT NULL DEFAULT '',
 			user_email TEXT NOT NULL DEFAULT '',
+			account_user_id TEXT NOT NULL DEFAULT '',
+			account_polled_at TEXT NOT NULL DEFAULT '',
 			is_headless INTEGER NOT NULL DEFAULT 0,
 			dedup_key TEXT NOT NULL DEFAULT ''
 		);
@@ -62,6 +65,24 @@ func (db *DB) ensureCursorUsageEventsSchemaLocked(ctx context.Context, w *writer
 			ON cursor_usage_events(model);
 	`); err != nil {
 		return fmt.Errorf("creating cursor_usage_events: %w", err)
+	}
+	return nil
+}
+
+// AssignCursorUsageAccount records a member match or clears an ambiguous match.
+func (db *DB) AssignCursorUsageAccount(ctx context.Context, accountUserID string, keys []string, polledAt time.Time) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	encoded, err := json.Marshal(keys)
+	if err != nil {
+		return err
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	stamp := polledAt.UTC().Format("2006-01-02T15:04:05.000000Z")
+	if _, err := db.getWriter().Exec(ctx, `UPDATE cursor_usage_events SET account_user_id = ?, account_polled_at = ? WHERE dedup_key IN (SELECT value FROM json_each(?)) AND account_polled_at < ?`, accountUserID, stamp, string(encoded), stamp); err != nil {
+		return fmt.Errorf("assigning Cursor usage account: %w", err)
 	}
 	return nil
 }
@@ -202,10 +223,9 @@ func (db *DB) MaxCursorUsageEventID(ctx context.Context) (int64, error) {
 }
 
 // GetCursorUsageEvents returns account usage rows with id greater than
-// sinceID, in (occurred_at, id) order. The table is append-only (no
-// updates or deletes), so its integer primary key grows monotonically and
-// sinceID acts as a high-water mark: pass 0 for the full history, or the
-// largest previously consumed ID to load only appended rows.
+// sinceID, in (occurred_at, id) order. Account stamps can update existing rows;
+// their IDs stay unchanged. Pass 0 for the full history, or the largest
+// previously consumed ID to load only appended rows.
 func (db *DB) GetCursorUsageEvents(
 	ctx context.Context, sinceID int64,
 ) ([]CursorUsageEvent, error) {

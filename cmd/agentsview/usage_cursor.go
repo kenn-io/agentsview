@@ -109,6 +109,7 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 		fmt.Fprintf(os.Stderr, "Cursor usage page %d: %v; retrying in %s\n",
 			page, err, wait.Round(time.Second))
 	}
+	closedThrough := time.Now().UTC().Truncate(time.Hour)
 	events, err := client.FetchAllUsageEvents(ctx, cursorusage.Query{
 		StartDate: start,
 		EndDate:   end,
@@ -120,32 +121,109 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 		return err
 	}
 
+	polledAt := time.Now().UTC()
 	rows := make([]db.CursorUsageEvent, 0, len(events))
 	for _, ev := range events {
-		rows = append(rows, db.CursorUsageEvent{
-			OccurredAt:       ev.Timestamp.UTC().Format(time.RFC3339Nano),
-			Model:            ev.Model,
-			Kind:             ev.Kind,
-			InputTokens:      ev.TokenUsage.InputTokens,
-			OutputTokens:     ev.TokenUsage.OutputTokens,
-			CacheWriteTokens: ev.TokenUsage.CacheWriteTokens,
-			CacheReadTokens:  ev.TokenUsage.CacheReadTokens,
-			Charged:          ev.Charged,
-			CursorTokenFee:   ev.CursorTokenFee,
-			UserID:           ev.UserID,
-			UserEmail:        ev.UserEmail,
-			IsHeadless:       ev.IsHeadless,
-		})
+		rows = append(rows, cursorUsageRow(ev))
 	}
 	if err := database.InsertCursorUsageEvents(ctx, rows); err != nil {
 		return err
 	}
+	if email == "" && userID == "" {
+		windowEnd := end.Add(time.Millisecond)
+		if windowEnd.After(closedThrough) {
+			windowEnd = closedThrough
+		}
+		if start.Before(windowEnd) {
+			const rosterWindow = 30 * 24 * time.Hour
+			windows := map[int64]bool{}
+			fetched := make(map[string]bool, len(events))
+			for _, ev := range events {
+				hour := ev.Timestamp.UTC().Truncate(time.Hour)
+				if !hour.Before(start) && !hour.Add(time.Hour).After(windowEnd) {
+					windows[int64(ev.Timestamp.Sub(start)/rosterWindow)] = true
+					row := cursorUsageRow(ev)
+					fetched[db.CursorUsageEventDedupKey(row)] = true
+				}
+			}
+			var users []string
+			seenUsers := map[string]bool{}
+			for from, index := start, int64(0); from.Before(windowEnd); index++ {
+				to := from.Add(rosterWindow)
+				if to.After(windowEnd) {
+					to = windowEnd
+				}
+				if windows[index] {
+					members, err := client.ListDailyUsageUsers(ctx, from, to)
+					if err != nil {
+						return err
+					}
+					for _, id := range members {
+						if !seenUsers[id] {
+							users = append(users, id)
+							seenUsers[id] = true
+						}
+					}
+				}
+				from = to
+			}
+			owners := map[string]string{}
+			for _, id := range users {
+				memberEvents, err := client.FetchAllUsageEvents(ctx, cursorusage.Query{StartDate: start, EndDate: windowEnd.Add(-time.Millisecond), PageSize: 1000, UserID: id})
+				if err != nil {
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
+					fmt.Fprintf(os.Stderr, "Cursor usage for a member could not be fetched: %v\n", err)
+					owners = nil
+					break
+				}
+				for _, ev := range memberEvents {
+					row := cursorUsageRow(ev)
+					key := db.CursorUsageEventDedupKey(row)
+					if !fetched[key] {
+						continue
+					}
+					if previous, ok := owners[key]; ok && previous != id {
+						owners[key] = ""
+					} else if !ok {
+						owners[key] = id
+					}
+				}
+			}
+			byUser := map[string][]string{}
+			for key, match := range owners {
+				byUser[match] = append(byUser[match], key)
+			}
+			for match, keys := range byUser {
+				if err := database.AssignCursorUsageAccount(ctx, match, keys, polledAt); err != nil {
+					return err
+				}
+			}
+		}
+	} else {
+		fmt.Fprintln(os.Stdout, `Filtered syncs do not establish account reporting coverage. To cover this period, rerun with --email "" --user-id "".`)
+	}
 
-	fmt.Fprintf(os.Stdout,
-		"Fetched %d Cursor usage events into the archive\n",
-		len(rows),
-	)
+	fmt.Fprintf(os.Stdout, "Fetched %d Cursor usage events into the archive\n", len(rows))
 	return nil
+}
+
+func cursorUsageRow(ev cursorusage.UsageEvent) db.CursorUsageEvent {
+	return db.CursorUsageEvent{
+		OccurredAt:       ev.Timestamp.UTC().Format(time.RFC3339Nano),
+		Model:            ev.Model,
+		Kind:             ev.Kind,
+		InputTokens:      ev.TokenUsage.InputTokens,
+		OutputTokens:     ev.TokenUsage.OutputTokens,
+		CacheWriteTokens: ev.TokenUsage.CacheWriteTokens,
+		CacheReadTokens:  ev.TokenUsage.CacheReadTokens,
+		Charged:          ev.Charged,
+		CursorTokenFee:   ev.CursorTokenFee,
+		UserID:           ev.UserID,
+		UserEmail:        ev.UserEmail,
+		IsHeadless:       ev.IsHeadless,
+	}
 }
 
 func resolveCursorUsageWindow(

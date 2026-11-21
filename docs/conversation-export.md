@@ -143,7 +143,7 @@ A message object has no text and no digest of its text:
 An archive can hold copies of sessions synced from other machines. To tell which
 sessions started on this machine, compare each record's `machine_id` with the
 `local_machine_id` from `ready`. They are equal strings for this machine's
-sessions. Both use the originating machine identities of
+sessions. Both use the originating machine identities of schema 5
 [per-machine reporting exports](reporting-export.md#report-an-archive-that-contains-several-machines):
 
 - `local_machine_id` is this installation's identity. The daemon records it when

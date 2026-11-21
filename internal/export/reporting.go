@@ -19,17 +19,25 @@ const (
 	// ReportingJointSchemaVersion adds opt-in session-free joint bucket cells,
 	// with project contributions partitioned by identity evidence.
 	ReportingJointSchemaVersion = 5
+	// ReportingAccountSchemaVersion adds Cursor account usage parts.
+	ReportingAccountSchemaVersion = 6
 )
 
 // IsSupportedReportingSchemaVersion reports whether reporting exports can
 // still produce the requested wire semantics.
 func IsSupportedReportingSchemaVersion(version int) bool {
-	return version == ReportingSchemaVersion || version == ReportingJointSchemaVersion
+	return version == ReportingSchemaVersion || IsJointReportingSchema(version)
+}
+
+// IsJointReportingSchema reports whether the schema includes joint activity.
+func IsJointReportingSchema(version int) bool {
+	return version == ReportingJointSchemaVersion || version == ReportingAccountSchemaVersion
 }
 
 // ReportingHour is one immutable UTC-hour export. Digest identifies the
 // canonical document body with the derived Digest field omitted.
 type ReportingHour struct {
+	PolledAt       string                   `json:"polled_at,omitempty"`
 	SchemaVersion  int                      `json:"schema_version"`
 	BucketSeconds  int                      `json:"bucket_seconds,omitzero"`
 	Period         string                   `json:"period"`
@@ -235,6 +243,7 @@ func FinalizeReportingHour(hour ReportingHour) (ReportingHour, []byte, error) {
 
 	digest, err := DigestCanonical(reportingHourDigestInput{
 		SchemaVersion:  hour.SchemaVersion,
+		PolledAt:       hour.PolledAt,
 		BucketSeconds:  hour.BucketSeconds,
 		Period:         hour.Period,
 		HasData:        hour.HasData,
@@ -327,6 +336,7 @@ func FinalizeReportingDay(day ReportingDay) (ReportingDay, []byte, error) {
 }
 
 type reportingHourDigestInput struct {
+	PolledAt       string                   `json:"polled_at,omitempty"`
 	SchemaVersion  int                      `json:"schema_version"`
 	BucketSeconds  int                      `json:"bucket_seconds,omitzero"`
 	Period         string                   `json:"period"`

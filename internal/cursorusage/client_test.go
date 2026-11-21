@@ -1,6 +1,7 @@
 package cursorusage
 
 import (
+	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"net/http"
@@ -15,6 +16,62 @@ import (
 
 	"go.kenn.io/agentsview/internal/money"
 )
+
+func TestListDailyUsageUsersPages(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/teams/daily-usage-data", r.URL.Path)
+		var q struct {
+			Start    int64 `json:"startDate"`
+			End      int64 `json:"endDate"`
+			Page     int   `json:"page"`
+			PageSize int   `json:"pageSize"`
+		}
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &q)) {
+			return
+		}
+		assert.Equal(t, 1000, q.PageSize)
+		calls++
+		switch calls {
+		case 1:
+			assert.Equal(t, start.UnixMilli(), q.Start)
+			assert.Equal(t, 1, q.Page)
+			_, _ = w.Write([]byte(`{"data":[{"userId":12,"isActive":false},{"userId":"invalid"}],"pagination":{"hasNextPage":true}}`))
+		case 2:
+			assert.Equal(t, 2, q.Page)
+			_, _ = w.Write([]byte(`{"data":[{"userId":34}],"pagination":{"hasNextPage":false}}`))
+		default:
+			assert.Fail(t, "unexpected roster request", "request %d", calls)
+		}
+	}))
+	defer srv.Close()
+	c := NewClientWithBaseURL(srv.URL, "key")
+	c.DailyRequestInterval = 0
+	users, err := c.ListDailyUsageUsers(t.Context(), start, start.Add(30*24*time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"12", "34"}, users)
+	assert.Equal(t, 2, calls)
+}
+
+func TestListDailyUsageUsersPacesSeparateWindows(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(`{"data":[],"pagination":{"hasNextPage":false}}`))
+	}))
+	defer server.Close()
+	client := NewClientWithBaseURL(server.URL, "key")
+	client.DailyRequestInterval = time.Hour
+	start := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	_, err := client.ListDailyUsageUsers(t.Context(), start, start.Add(24*time.Hour))
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond) //nolint:kennlint // deadlinetest: cancellation expires while the request waits for its slot.
+	defer cancel()
+	_, err = client.ListDailyUsageUsers(ctx, start.AddDate(20, 0, 0), start.AddDate(20, 0, 1))
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Equal(t, 1, calls)
+}
 
 func TestFetchAllUsageEvents(t *testing.T) {
 	fixturePath := filepath.Join("testdata", "admin_usage_page.json")
