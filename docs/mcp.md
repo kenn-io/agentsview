@@ -350,7 +350,7 @@ returns `source_changed`; restart the search. Search context marked
 
 `next_cursor` is present when another page exists. For lexical searches, pass
 `page_cursor` alone when available to continue without recounting. It carries
-the first page's total as a snapshot, corrected on the last page. Alternatively,
+the first page's total as a snapshot. Alternatively,
 pass `next_cursor` as the numeric `cursor` and echo the returned RFC3339
 `activity_cutoff` unchanged; this recounts the unseen matches up to 500. The
 cutoff keeps the recent-activity exclusion
