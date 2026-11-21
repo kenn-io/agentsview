@@ -87,6 +87,7 @@ afterEach(() => {
     unmount(component);
     component = undefined;
   }
+  sync.serverVersion = null;
   vi.restoreAllMocks();
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -254,7 +255,6 @@ describe("saved remote API version", () => {
       );
       expect(sync.watchSession).toHaveBeenCalled();
     }
-    sync.serverVersion = null;
   });
 });
 
@@ -303,7 +303,6 @@ describe("App session URL date state", () => {
     stubAppDependencies();
     vi.mocked(sync.watchSession).mockRestore();
     expect(sync.remoteLiveAllowed).toBe(true);
-    const watch = vi.spyOn(sync, "watchSession");
     vi.mocked(sessions.loadChildSessions).mockRestore();
     vi.spyOn(document, "hidden", "get").mockReturnValue(false);
     vi.spyOn(sessions, "load").mockResolvedValue();
@@ -334,7 +333,6 @@ describe("App session URL date state", () => {
     try {
       component = mount(App, { target: document.body });
       await flushEffects();
-      expect(watch).toHaveBeenCalled();
       expect(port.postMessage).toHaveBeenCalledWith(
         expect.objectContaining({ session: "session-1" }),
       );

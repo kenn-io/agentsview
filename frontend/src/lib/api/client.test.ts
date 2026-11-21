@@ -851,6 +851,11 @@ describe("core action telemetry", () => {
 });
 
 describe("live event payloads", () => {
+  afterEach(() => {
+    localStorage.clear();
+    vi.unstubAllGlobals();
+  });
+
   it("refreshes the pinned server token on storage changes and page return", async () => {
     const postMessage = vi.fn();
     class Worker {
@@ -881,8 +886,6 @@ describe("live event payloads", () => {
     const count = postMessage.mock.calls.length;
     window.dispatchEvent(new Event("storage"));
     expect(postMessage).toHaveBeenCalledTimes(count);
-    localStorage.clear();
-    vi.unstubAllGlobals();
   });
 
   it("delivers known scopes and refreshes for malformed or unknown data", async () => {
@@ -909,6 +912,5 @@ describe("live event payloads", () => {
     }
     expect(received).toEqual(["messages", "sessions", "sync", "sync", "sync", "sync"]);
     source.close();
-    vi.unstubAllGlobals();
   });
 });

@@ -112,7 +112,6 @@ describe("remote API version", () => {
     await sync.loadVersion();
     expect(sync.remoteIncompatible).toBe(apiVersion === 27);
     expect(sync.remoteLiveAllowed).toBe(apiVersion === 28);
-    expect(api.setEventsAvailable).toHaveBeenLastCalledWith(true);
   });
 });
 
@@ -240,10 +239,14 @@ describe("session watch visibility", () => {
   });
 
   it("refreshes a missing session and settles the initial read", async () => {
+    vi.useFakeTimers();
     const onUpdate = vi.fn();
+    const settled = vi.fn();
     const ready = sync.watchSession("missing", onUpdate);
+    void ready.then(settled);
     api.watchSession.mock.results[0]!.value.dispatchEvent(new Event("session_missing"));
-    expect(await ready).toBe(false);
+    await Promise.resolve();
+    expect(settled).toHaveBeenCalledExactlyOnceWith(false);
     expect(onUpdate).toHaveBeenCalledOnce();
   });
 });

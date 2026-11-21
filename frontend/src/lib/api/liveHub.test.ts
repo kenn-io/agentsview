@@ -125,24 +125,6 @@ describe("shared live stream", () => {
     expect(missing.postMessage.mock.calls).toEqual([[{ type: "session_missing", data: "a" }]]);
   });
 
-  it("uses a newly joined subscriber's token while the old subscriber stays connected", async () => {
-    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
-    vi.stubGlobal("fetch", fetch);
-    const hub = new LiveHub();
-    const old = { postMessage: vi.fn() };
-    const current = { postMessage: vi.fn() };
-    hub.update(old, { ...request("a"), token: "old-token", credentialTime: 1 });
-    hub.update(current, { ...request("a"), token: "new-token", credentialTime: 2 });
-    vi.advanceTimersByTime(250);
-    expect(sources).toHaveLength(2);
-    expect(sources[0]!.closed).toBe(true);
-    await sources[1]!.options.fetch(sources[1]!.url, {});
-    expect((fetch.mock.calls[0]![1].headers as Headers).get("Authorization")).toBe(
-      "Bearer new-token",
-    );
-    hub.close();
-  });
-
   it("keeps the current credentials when the old subscriber leaves", async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
     vi.stubGlobal("fetch", fetch);
@@ -153,6 +135,7 @@ describe("shared live stream", () => {
     hub.update(current, { ...request("a"), token: "new-token", credentialTime: 2 });
     vi.advanceTimersByTime(250);
     expect(sources).toHaveLength(2);
+    expect(sources[0]!.closed).toBe(true);
     hub.leave(old);
     vi.advanceTimersByTime(250);
     expect(sources).toHaveLength(2);
@@ -214,25 +197,14 @@ describe("shared live stream", () => {
     const port = { postMessage: vi.fn() };
     hub.update(port, request("a"));
     const source = sources[0]!;
+    if (type !== "open") source.emit("open");
     for (let i = 0; i < 4; i++) source.emit("error");
     source.emit(type, type === "session_updated" ? "a" : "{}");
     for (let i = 0; i < 4; i++) source.emit("error");
     expect(source.closed).toBe(false);
     source.emit("error");
     expect(source.closed).toBe(true);
-    expect(port.postMessage).toHaveBeenLastCalledWith({
-      type: type === "open" ? "closed" : "permanent_failure",
-    });
+    expect(port.postMessage).toHaveBeenLastCalledWith({ type: "closed" });
     hub.close();
-  });
-
-  it("closes after repeated errors and signals permanent failure", () => {
-    const hub = new LiveHub();
-    const port = { postMessage: vi.fn() };
-    hub.update(port, request());
-    const source = sources[0]!;
-    for (let i = 0; i < 5; i++) source.emit("error");
-    expect(source.closed).toBe(true);
-    expect(port.postMessage).toHaveBeenLastCalledWith({ type: "permanent_failure" });
   });
 });

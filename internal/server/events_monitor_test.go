@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -73,7 +74,7 @@ func TestEvents_UnresolvedHostedSessionIsMissing(t *testing.T) {
 	te := setup(t)
 	require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: "watch-a", Project: "project", Machine: "test", Agent: "claude"}))
 	store := &watchStateStore{Store: te.db}
-	store.state.Store(db.SessionWatchState{State: "ambiguous"})
+	store.state.Store(db.SessionWatchState{State: "ambiguous", Variants: []string{"watch-a~one", "watch-a~two"}})
 	cfg := config.Config{Host: "127.0.0.1", InstallationID: "server-installation"}
 	handler := wrapTestHandler(cfg, server.New(cfg, store, nil, server.WithBroadcaster(te.broadcaster)).Handler())
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
@@ -87,4 +88,24 @@ func TestEvents_UnresolvedHostedSessionIsMissing(t *testing.T) {
 	assert.NotContains(t, w.BodyString(), "event: session_ready\n")
 	cancel()
 	<-done
+}
+
+type sessionLookupFailureStore struct {
+	db.Store
+	called bool
+}
+
+func (s *sessionLookupFailureStore) GetSession(context.Context, string) (*db.Session, error) {
+	s.called = true
+	return nil, errors.New("session read failed")
+}
+
+func TestEvents_SessionLookupError(t *testing.T) {
+	te := setup(t)
+	store := &sessionLookupFailureStore{Store: te.db}
+	cfg := config.Config{Host: "127.0.0.1", InstallationID: "server-installation"}
+	te.handler = wrapTestHandler(cfg, server.New(cfg, store, nil).Handler())
+	w := te.get(t, "/api/v1/events?session=missing")
+	assertStatus(t, w, http.StatusInternalServerError)
+	assert.True(t, store.called)
 }

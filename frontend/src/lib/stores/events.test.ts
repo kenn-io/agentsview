@@ -46,15 +46,23 @@ describe("events store", () => {
   });
 
   it("opens on return and settles startup when hidden", async () => {
-    vi.spyOn(document, "hidden", "get").mockReturnValue(true);
-    const { events } = await import("./events.svelte.js");
-    const unsub = events.subscribe(vi.fn());
-    events.setAvailable(true);
-    await expect(events.whenReady(100)).resolves.toBeUndefined();
-    vi.spyOn(document, "hidden", "get").mockReturnValue(false);
-    document.dispatchEvent(new Event("visibilitychange"));
-    expect(api.watchEvents).toHaveBeenCalledOnce();
-    unsub();
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+      const { events } = await import("./events.svelte.js");
+      const unsub = events.subscribe(vi.fn());
+      const settled = vi.fn();
+      void events.whenReady(100).then(settled);
+      events.setAvailable(true);
+      await Promise.resolve();
+      expect(settled).toHaveBeenCalledOnce();
+      vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(api.watchEvents).toHaveBeenCalledOnce();
+      unsub();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("tracks repeated subscriptions and debounces updates", async () => {
