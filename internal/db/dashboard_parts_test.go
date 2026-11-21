@@ -300,7 +300,6 @@ func TestDashboardPartsConcurrentPanels(t *testing.T) {
 		<-started
 	}
 	<-entered
-	//nolint:kennlint // deadlinetest: panels must wait for the shared fill.
 	var early bool
 	select {
 	case <-results:
@@ -319,29 +318,51 @@ func TestDashboardPartsConcurrentPanels(t *testing.T) {
 	assert.EqualValues(t, 1, reads.Load())
 }
 
-func TestDashboardPartsLengthUpdateWithoutRevision(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	d := testDB(t)
-	ctx := t.Context()
-	insertSession(t, d, "s", "project", func(s *Session) { s.StartedAt = new("2024-06-01T09:00:00Z"); s.MessageCount = 2 })
-	insertMessages(t, d, userMsgAt("s", 0, "hello", "2024-06-01T09:00:00Z"), asstMsgAt("s", 1, "answer", "2024-06-01T09:01:00Z"))
-	f := AnalyticsFilter{Timezone: "UTC"}
-	before, err := d.GetAnalyticsVelocity(ctx, f)
-	require.NoError(t, err)
-	require.InDelta(t, 6, before.Overall.CharsPerActiveMin, 0)
-	var revision string
-	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT transcript_revision FROM sessions WHERE id='s'`).Scan(&revision))
-	other, err := sql.Open("sqlite3", makeDSN(d.Path(), false))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, other.Close()) })
-	_, err = other.ExecContext(ctx, `UPDATE messages SET content_length=20 WHERE session_id='s' AND ordinal=1`)
-	require.NoError(t, err)
-	var afterRevision string
-	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT transcript_revision FROM sessions WHERE id='s'`).Scan(&afterRevision))
-	require.Equal(t, revision, afterRevision)
-	after, err := d.GetAnalyticsVelocity(ctx, f)
-	require.NoError(t, err)
-	assert.InDelta(t, 20, after.Overall.CharsPerActiveMin, 0)
+func TestDashboardPartsRawMessageEdits(t *testing.T) {
+	for _, tc := range []struct {
+		name, query    string
+		user, messages int
+		chars          float64
+	}{
+		{"insert", `INSERT INTO messages(session_id,ordinal,role,content,content_length,timestamp) VALUES('s',2,'assistant','later',20,'2024-06-01T09:02:00Z')`, 1, 3, 13},
+		{"delete", `DELETE FROM messages WHERE session_id='s' AND ordinal=1`, 1, 1, 0},
+		{"system", `UPDATE messages SET is_system=1 WHERE session_id='s' AND ordinal=0`, 0, 2, 6},
+		{"length", `UPDATE messages SET content_length=20 WHERE session_id='s' AND ordinal=1`, 1, 2, 20},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CACHE_DIRECTORY", t.TempDir())
+			d := testDB(t)
+			ctx := t.Context()
+			insertSession(t, d, "s", "project", func(s *Session) { s.StartedAt = new("2024-06-01T09:00:00Z"); s.MessageCount = 2 })
+			insertMessages(t, d, userMsgAt("s", 0, "hello", "2024-06-01T09:00:00Z"), asstMsgAt("s", 1, "answer", "2024-06-01T09:01:00Z"))
+			f := AnalyticsFilter{Timezone: "UTC"}
+			_, err := d.GetAnalyticsActivity(ctx, f, "day")
+			require.NoError(t, err)
+			_, err = d.GetAnalyticsVelocity(ctx, f)
+			require.NoError(t, err)
+			other, err := sql.Open("sqlite3", makeDSN(d.Path(), false))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, other.Close()) })
+			_, err = other.ExecContext(ctx, tc.query)
+			require.NoError(t, err)
+			activity, err := d.GetAnalyticsActivity(ctx, f, "day")
+			require.NoError(t, err)
+			velocity, err := d.GetAnalyticsVelocity(ctx, f)
+			require.NoError(t, err)
+			require.Len(t, activity.Series, 1)
+			assert.Equal(t, tc.user, activity.Series[0].UserMessages)
+			assert.Equal(t, tc.messages, activity.Series[0].Messages)
+			assert.InDelta(t, tc.chars, velocity.Overall.CharsPerActiveMin, 0)
+			d.readOnly = true
+			scanActivity, err := d.GetAnalyticsActivity(ctx, f, "day")
+			require.NoError(t, err)
+			scanVelocity, err := d.GetAnalyticsVelocity(ctx, f)
+			require.NoError(t, err)
+			d.readOnly = false
+			assert.Equal(t, scanActivity, activity)
+			assert.Equal(t, scanVelocity, velocity)
+		})
+	}
 }
 
 func TestDashboardPartsPrunesDeletedSessions(t *testing.T) {
@@ -387,7 +408,6 @@ func TestDashboardPartsQueuedFillsDoNotHoldBulkPermits(t *testing.T) {
 			results <- err
 		}()
 	}
-	//nolint:kennlint // deadlinetest: detect fills blocked by held reader permits.
 	guard, stop := context.WithTimeout(t.Context(), 5*time.Second)
 	defer stop()
 	count := 0
@@ -401,7 +421,7 @@ func TestDashboardPartsQueuedFillsDoNotHoldBulkPermits(t *testing.T) {
 			for range 2 {
 				<-results
 			}
-			t.Fatal("fills could not both enter validation")
+			require.Fail(t, "fills could not both enter validation")
 		}
 	}
 	cancel()
@@ -466,7 +486,7 @@ func TestDashboardPartsMemoRespectsSizeLimit(t *testing.T) {
 		parts := make(map[string]kept.Part[dashboardPart])
 		missing := memo.reuse("UTC", "version", []string{"a"}, map[string]string{"a": "v"}, parts)
 		require.Equal(t, []string{"a"}, missing)
-		assert.Zero(t, len(parts))
+		assert.Empty(t, parts)
 	})
 	t.Run("successive fills", func(t *testing.T) {
 		var memo dashboardPartsMemo
@@ -489,6 +509,6 @@ func TestDashboardPartsMemoRespectsSizeLimit(t *testing.T) {
 		parts := make(map[string]kept.Part[dashboardPart])
 		missing := memo.reuse("UTC", "version", ids, versions, parts)
 		assert.NotEmpty(t, missing)
-		assert.NotZero(t, len(parts))
+		assert.NotEmpty(t, parts)
 	})
 }

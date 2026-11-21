@@ -17,9 +17,11 @@ import (
 // Increment when dashboard counts, ComputeSessionVelocity, or parser.IsClaudeHookSubtype changes.
 const dashboardPartsVersion = 2
 
-var dashboardPartsReadObserver func([]string)
-var dashboardPartsBeforeStampObserver func()
-var dashboardPartsBeforeValidationObserver func(context.Context)
+var (
+	dashboardPartsReadObserver             func([]string)
+	dashboardPartsBeforeStampObserver      func()
+	dashboardPartsBeforeValidationObserver func(context.Context)
+)
 
 type dashboardPart struct {
 	Messages, User, Assistant, Thinking, Tools int
@@ -188,7 +190,10 @@ func (db *DB) dashboardParts(ctx context.Context, f AnalyticsFilter) ([]dashboar
 		return nil, nil, false, nil
 	}
 	identity, err := db.GetDatabaseID(ctx)
-	if err != nil || identity == "" {
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if identity == "" {
 		return nil, nil, false, nil
 	}
 	release, err := db.acquireBulkRead(ctx)
@@ -279,80 +284,86 @@ func saveDashboardParts(db *DB, f AnalyticsFilter, slot, version string, parts m
 }
 
 func (db *DB) fillDashboardParts(ctx context.Context, f AnalyticsFilter, ids []string, versions map[string]string, parts map[string]kept.Part[dashboardPart]) error {
-	loc := f.location()
 	for _, id := range ids {
 		parts[id] = kept.Part[dashboardPart]{ID: id, Fingerprint: versions[id]}
 	}
 	return queryChunked(ids, func(chunk []string) error {
 		ph, args := InPlaceholders(chunk)
-		rows, err := db.getReader().QueryContext(ctx, `SELECT session_id, role, has_thinking, is_system, COALESCE(source_subtype,''), COALESCE(timestamp,''), content_length FROM messages WHERE session_id IN `+ph+` ORDER BY session_id, ordinal`, args...)
-		if err != nil {
+		if err := db.fillDashboardMessageParts(ctx, f, ph, args, parts); err != nil {
 			return err
 		}
-		var current string
-		var timings []TimingMessage
-		finish := func() {
-			if current != "" {
-				p := parts[current]
-				p.Value.Velocity = ComputeSessionVelocity(timings)
-				parts[current] = p
-			}
-		}
-		for rows.Next() {
-			var id, role, subtype, ts string
-			var thinking, system bool
-			var length int
-			if err := rows.Scan(&id, &role, &thinking, &system, &subtype, &ts, &length); err != nil {
-				rows.Close()
-				return err
-			}
-			if id != current {
-				finish()
-				current = id
-				timings = nil
-			}
-			p := parts[id]
-			v := &p.Value
-			v.Messages++
-			user, assistant, thought := activityMessageCounts(role, thinking, system, subtype, 1)
-			v.User += user
-			v.Assistant += assistant
-			v.Thinking += thought
-			t, valid := LocalTime(ts, loc)
-			if valid {
-				if v.Hours == nil {
-					v.Hours = make(map[int]int)
-				}
-				v.Hours[((int(t.Weekday())+6)%7)*24+t.Hour()]++
-			}
-			if !parser.IsClaudeHookSubtype(subtype) {
-				timings = append(timings, TimingMessage{Role: role, Time: t, Valid: valid, ContentLength: length})
-			}
-			parts[id] = p
-		}
-		finish()
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return err
-		}
-		rows, err = db.getReader().QueryContext(ctx, `SELECT session_id, COUNT(*) FROM tool_calls WHERE session_id IN `+ph+` GROUP BY session_id`, args...)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var id string
-			var n int
-			if err := rows.Scan(&id, &n); err != nil {
-				return err
-			}
-			p := parts[id]
-			p.Value.Tools = n
-			parts[id] = p
-		}
-		return rows.Err()
+		return db.fillDashboardToolParts(ctx, ph, args, parts)
 	})
+}
+
+func (db *DB) fillDashboardMessageParts(ctx context.Context, f AnalyticsFilter, ph string, args []any, parts map[string]kept.Part[dashboardPart]) error {
+	rows, err := db.getReader().QueryContext(ctx, `SELECT session_id, role, has_thinking, is_system, COALESCE(source_subtype,''), COALESCE(timestamp,''), content_length FROM messages WHERE session_id IN `+ph+` ORDER BY session_id, ordinal`, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	loc := f.location()
+	var current string
+	var timings []TimingMessage
+	finish := func() {
+		if current != "" {
+			p := parts[current]
+			p.Value.Velocity = ComputeSessionVelocity(timings)
+			parts[current] = p
+		}
+	}
+	for rows.Next() {
+		var id, role, subtype, ts string
+		var thinking, system bool
+		var length int
+		if err := rows.Scan(&id, &role, &thinking, &system, &subtype, &ts, &length); err != nil {
+			return err
+		}
+		if id != current {
+			finish()
+			current = id
+			timings = nil
+		}
+		p := parts[id]
+		v := &p.Value
+		v.Messages++
+		user, assistant, thought := activityMessageCounts(role, thinking, system, subtype, 1)
+		v.User += user
+		v.Assistant += assistant
+		v.Thinking += thought
+		t, valid := LocalTime(ts, loc)
+		if valid {
+			if v.Hours == nil {
+				v.Hours = make(map[int]int)
+			}
+			v.Hours[((int(t.Weekday())+6)%7)*24+t.Hour()]++
+		}
+		if !parser.IsClaudeHookSubtype(subtype) {
+			timings = append(timings, TimingMessage{Role: role, Time: t, Valid: valid, ContentLength: length})
+		}
+		parts[id] = p
+	}
+	finish()
+	return rows.Err()
+}
+
+func (db *DB) fillDashboardToolParts(ctx context.Context, ph string, args []any, parts map[string]kept.Part[dashboardPart]) error {
+	rows, err := db.getReader().QueryContext(ctx, `SELECT session_id, COUNT(*) FROM tool_calls WHERE session_id IN `+ph+` GROUP BY session_id`, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return err
+		}
+		p := parts[id]
+		p.Value.Tools = n
+		parts[id] = p
+	}
+	return rows.Err()
 }
 
 func dashboardActivity(sessions []dashboardSession, parts map[string]kept.Part[dashboardPart], f AnalyticsFilter, granularity string) ActivityResponse {
