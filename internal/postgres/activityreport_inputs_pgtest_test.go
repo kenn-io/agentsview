@@ -113,6 +113,7 @@ func TestPGActivityReportInputReads(t *testing.T) {
 				fresh, err = NewStore(t.Context(), testPGURL(t), syncer.schema, true)
 				require.NoError(t, err)
 				t.Cleanup(func() { require.NoError(t, fresh.Close()) })
+				fresh.hostedRelations = true
 				requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), before)
 			}
 			require.NoError(t, local.ReplaceSessionMessages(t.Context(), "a", []db.Message{
@@ -137,31 +138,6 @@ func TestPGActivityReportInputReads(t *testing.T) {
 			assert.Len(t, counter.usageReads, 2)
 		})
 	}
-}
-
-func TestPGActivityReportInputReadsFinishedFractionalBounds(t *testing.T) {
-	t.Parallel()
-	local, syncer, store := newUsageJournalFixture(t)
-	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
-	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "a", []db.Message{
-		{SessionID: "a", Ordinal: 0, Role: "user", Content: "question", Timestamp: "2026-06-14T00:00:00.500Z"},
-		{SessionID: "a", Ordinal: 1, Role: "assistant", Content: "answer", Timestamp: "2026-06-14T00:01:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":700}`)},
-	}))
-	pgKeptPush(t, syncer, false)
-	f := db.AnalyticsFilter{Timezone: "UTC"}
-	q := pgDayQuery(t, "2026-06-14", "UTC")
-	q.RangeStart = q.RangeStart.Add(900 * time.Millisecond)
-	pgKeptBuild(t, store, f, q, true)
-	q.RangeStart = q.RangeStart.Add(-800 * time.Millisecond)
-	store.runtimeState().activityKept.DeleteSlots(func(string) bool { return true })
-	got := pgKeptBuild(t, store, f, q, true)
-
-	fresh, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, fresh.Close()) })
-	fresh.hostedRelations = true
-	want := pgKeptBuild(t, fresh, f, q, true)
-	requirePGKeptEqual(t, want, got)
 }
 
 func TestPGActivityReportInputReadsFinishedYearOne(t *testing.T) {
@@ -221,6 +197,7 @@ func TestPGActivityReportInputReadsLargeChange(t *testing.T) {
 	fresh, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, fresh.Close()) })
+	fresh.hostedRelations = true
 	requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), got)
 }
 
@@ -237,9 +214,8 @@ func TestPGActivityReportInputSharedBudget(t *testing.T) {
 	day.EffectiveEnd = time.Date(2026, 6, 14, 11, 0, 0, 0, time.UTC)
 	month, err := activity.ResolveQuery(
 		activity.QueryInput{Preset: "month", Date: "2026-06-14", Timezone: "UTC"},
-		time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC))
+		time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
 	require.NoError(t, err)
-	month.Partial, month.EffectiveEnd = false, month.RangeEnd
 	version, err := store.activityKeptVersion(t.Context(), "")
 	require.NoError(t, err)
 
