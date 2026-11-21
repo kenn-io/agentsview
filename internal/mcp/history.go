@@ -189,10 +189,6 @@ func fitToolCall(out *toolCallsOut, tc service.ToolCall, position int, m db.Mess
 				boundaries = append(boundaries, n)
 			}
 		}
-		n := utf8.RuneCountInString(secrets.RedactJSON(stored.ResultContent))
-		if n > 1 && n <= maxResult {
-			boundaries = append(boundaries, n)
-		}
 	}
 	slices.Sort(boundaries)
 	best := 0

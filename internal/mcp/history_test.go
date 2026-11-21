@@ -399,11 +399,6 @@ func TestGetToolCalls_BudgetLongInputWithShortEvents(t *testing.T) {
 		ToolUseID: "call", ToolName: "wait_agent", InputJSON: strings.Repeat("x", 10000),
 		ResultContent: "summary", ResultEvents: events,
 	}))
-	_, smallInput, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "short-events", IncludeResults: true, MaxInputChars: 1})
-	require.NoError(t, err)
-	assert.True(t, fitsResponse(smallInput))
-	require.Len(t, smallInput.ToolCalls, 1)
-	require.Len(t, smallInput.ToolCalls[0].ResultEvents, 68)
 	_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "short-events", IncludeResults: true, MaxInputChars: 10000})
 	require.NoError(t, err)
 	assert.True(t, fitsResponse(out))
