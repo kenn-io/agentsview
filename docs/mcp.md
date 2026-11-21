@@ -107,8 +107,9 @@ client will see these tools:
 | `get_friction_digest`         | Read a dated Friction Log digest as Markdown or the summary object                                        |
 | `list_friction_patterns`      | List recurring friction patterns ranked by occurrences                                                    |
 
-`list_recall` accepts a full stored session ID or a raw UUID in
-`source_session_id`. An unindexed or trashed ID is used as given.
+Every session tool accepts a plain UUID. Ambiguous IDs list up to five matches.
+A trashed exact ID is reported missing. Remote raw ID lookup requires server
+API version 28 or later.
 
 `get_compaction_summaries` accepts a session ID or `active_since` timestamp. The
 limit counts sessions; 0 uses the default of 20. Resume `next_cursor` with the
@@ -234,20 +235,15 @@ base path. Direct PostgreSQL reads omit it.
 
 Set `session_id` to a raw UUID or full stored session ID when you need one
 session. The lookup returns one metadata row, includes active sessions, ignores
-the other search arguments, and returns an error when the ID is missing. An
-exact stored ID takes precedence. Otherwise, a raw suffix that matches more
-than one session returns an error listing up to five matches. A raw UUID matches
-an agent ID ending in `:<uuid>` or a host ID ending in `~<uuid>`; the delimiter is
-part of the match, so a fork entry separated by `-` is not selected. If the
-exact ID is in the trash, the lookup reports it missing instead. The row has an
-empty `snippet`, `match_ordinal` set to `0`, and no `next_cursor`. Call
-`get_messages` with that ordinal to read the first message. For a known full ID
-or raw UUID, `get_session_overview` provides a compact message preview. Every
-tool accepts the same ID forms. Remote raw ID lookup requires server API version
-28 or later; with an older server, tools that require a session need a full
-stored ID, and optional ID filters use the ID as given.
-For multi-page reads, first look up the plain UUID with `search_sessions`, then
-pass the returned full `session_id` on every page.
+the other search arguments, and returns an error when the ID is missing or its
+raw suffix matches more than one session. A raw UUID matches an exact stored ID,
+an agent ID ending in `:<uuid>`, or a host ID ending in `~<uuid>`; the delimiter
+is part of the match, so a fork entry separated by `-` is not selected. The row
+has an empty `snippet`, `match_ordinal` set to `0`, and no `next_cursor`. Call
+`get_messages` with that ordinal to read the first message.
+`get_session_overview` provides a compact message preview. Remote
+bare UUID lookup requires AgentsView 0.44.0 or later on the server. Use an exact
+full stored ID with an older server.
 
 `search_sessions` and `search_content` exclude sessions active in the last ten
 minutes by default, including the current conversation. `search_content` applies
@@ -258,10 +254,9 @@ matches in `excluded_active`, so their pages can still be short or empty with a
 `next_cursor`. Set `include_active: true` when you need that recent work. An
 empty `search_sessions` page with excluded
 active matches returns `hints` with `retry_with: {"include_active": true}`. For
-recall from a known conversation, pass a full stored ID or a raw UUID as
-`current_session_id` to exclude that session before applying the result limit.
-Other recent work remains visible. If the ID is not indexed yet, the search
-uses it as given.
+recall from a known conversation, pass its full ID as `current_session_id`;
+`search_content` then excludes only that session before applying the result
+limit and does not hide other recent work.
 
 `list_sessions` and `search_content` exclude one-shot and automated sessions by
 default. Set `include_one_shot: true` or `include_automated: true` to include
@@ -303,13 +298,9 @@ sidechain messages; `top` excludes them, and `subordinate` returns only them.
 Child sessions bypass the one-shot exclusion; top-level one-shot sessions still
 require `include_one_shot: true`. Semantic mode needs the opt-in
 [semantic search](/docs/semantic-search/) index and returns a "not available"
-error without it. `session_id` accepts a full stored ID or a raw UUID that
-matches one session. Unknown or trashed IDs are used as given, as they are for
-`current_session_id` above. Exact `git_branch`, `project`, `agent`,
+error without it. Exact `session_id`, `git_branch`, `project`, `agent`,
 `date_from`, and `date_to` filters apply before the final limit. Limits default
 to 10 and go up to 50; a value outside that range falls back to the default.
-
-`get_messages` rejects unknown or trashed sessions.
 
 To find one past session that covered several ideas, pass `concepts` instead of
 `pattern`: two to five distinct natural-language strings. AgentsView uses

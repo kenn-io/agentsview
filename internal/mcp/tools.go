@@ -134,13 +134,13 @@ func (t *toolset) resolveOptionalSessionID(ctx context.Context, id string) (stri
 type searchSessionsIn struct {
 	DateFrom      string `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
 	DateTo        string `json:"date_to,omitempty" jsonschema:"Only sessions on or before this date (YYYY-MM-DD)."`
-	Query         string `json:"query,omitempty" jsonschema:"Search terms across all agent sessions. Required unless session_id is set. Every term must appear (AND), not an exact phrase; wrap the whole query in double quotes for an exact phrase, e.g. \"build failed\". Punctuation in a term (hyphens, colons) is handled safely."`
-	SessionID     string `json:"session_id,omitempty" jsonschema:"Look up one session by its raw UUID or full stored session ID. Returns one metadata row, includes active sessions, and takes precedence over the other search arguments. Missing IDs and ambiguous raw UUIDs return errors."`
+	Query         string `json:"query,omitempty" jsonschema:"Search terms; required unless session_id is set. Every term must appear (AND); quote the whole query for an exact phrase. Punctuation is handled safely."`
+	SessionID     string `json:"session_id,omitempty" jsonschema:"Look up one raw UUID or full ID. Returns one metadata row, includes active sessions, and ignores other search arguments. Missing or ambiguous IDs return errors."`
 	Project       string `json:"project,omitempty" jsonschema:"Restrict to one project (repo/directory name)."`
 	Sort          string `json:"sort,omitempty" jsonschema:"relevance (default) or recency."`
 	Limit         int    `json:"limit,omitempty" jsonschema:"Max results, default 10, max 30."`
 	Cursor        int    `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor."`
-	IncludeActive bool   `json:"include_active,omitempty" jsonschema:"Include sessions active in the last 10 minutes. Default false: the conversation you are in right now is also recorded, so without this exclusion you would find yourself."`
+	IncludeActive bool   `json:"include_active,omitempty" jsonschema:"Include sessions active in the last 10 minutes, including this conversation. Default false."`
 }
 
 type sessionHit struct {
@@ -505,7 +505,7 @@ func (t *toolset) sessionOverview(
 
 type getMessagesIn struct {
 	SessionID string `json:"session_id" jsonschema:"Full session ID or unique raw UUID."`
-	From      *int   `json:"from,omitempty" jsonschema:"Ordinal to start from (e.g. match_ordinal from search_sessions). Ordinal 0 is a valid anchor (the first message). Mutually exclusive with around."`
+	From      *int   `json:"from,omitempty" jsonschema:"Starting ordinal, e.g. match_ordinal from search_sessions. Zero anchors the first message. Mutually exclusive with around."`
 	Direction string `json:"direction,omitempty" jsonschema:"asc (default, oldest first) or desc (newest first). Mutually exclusive with around."`
 	Limit     int    `json:"limit,omitempty" jsonschema:"Max messages scanned, default 20, max 100. Filtering or the byte budget can return fewer. Around uses before/after instead."`
 	// Around switches to a symmetric window centered on an ordinal instead
@@ -515,7 +515,7 @@ type getMessagesIn struct {
 	After              *int     `json:"after,omitempty" jsonschema:"Messages of context after the around anchor, default 5. Requires around; replaces limit on that path."`
 	Roles              []string `json:"roles,omitempty" jsonschema:"Roles to include, e.g. tool. Default: user and assistant only. System messages are always excluded."`
 	MaxCharsPerMessage int      `json:"max_chars_per_message,omitempty" jsonschema:"Truncate each message to this many characters, default 2000, max 20000."`
-	ExpectedRevision   string   `json:"expected_revision,omitempty" jsonschema:"Transcript revision cited by search or an earlier read. Returns source_changed when it no longer matches."`
+	ExpectedRevision   string   `json:"expected_revision,omitempty" jsonschema:"Revision from search, file references, or an earlier read. Search and file references require the full session ID. Returns source_changed on mismatch."`
 	BodyCursor         string   `json:"body_cursor,omitempty" jsonschema:"Opaque continuation for the remainder of one oversized message. Use before advancing next_from."`
 }
 
@@ -623,7 +623,16 @@ func (t *toolset) getMessages(
 	if in.BodyCursor != "" {
 		return t.getMessageBodyContinuation(ctx, in)
 	}
-	detail, err := t.resolveSession(ctx, in.SessionID)
+	var detail *service.SessionDetail
+	var err error
+	if in.ExpectedRevision != "" && !strings.HasPrefix(in.ExpectedRevision, "mcp1:") {
+		detail, err = t.svc.Get(ctx, in.SessionID)
+		if err == nil && (detail == nil || detail.ID != in.SessionID) {
+			err = service.ErrSessionNotFound
+		}
+	} else {
+		detail, err = t.resolveSession(ctx, in.SessionID)
+	}
 	if errors.Is(err, service.ErrSessionNotFound) && in.ExpectedRevision != "" {
 		return nil, getMessagesOut{}, fmt.Errorf("%w: cited session no longer exists", service.ErrSourceChanged)
 	}
@@ -899,18 +908,11 @@ func (t *toolset) getMessageBodyContinuation(
 	if err != nil {
 		return nil, getMessagesOut{}, err
 	}
-	detail, err := t.resolveSession(ctx, in.SessionID)
-	if errors.Is(err, service.ErrSessionNotFound) {
-		return nil, getMessagesOut{}, fmt.Errorf("%w: cited session no longer exists", service.ErrSourceChanged)
-	}
-	if err != nil {
-		return nil, getMessagesOut{}, err
-	}
-	in.SessionID = detail.ID
-	if cursor.SessionID != in.SessionID ||
-		(in.ExpectedRevision != "" && in.ExpectedRevision != cursor.Revision && in.ExpectedRevision != bindMessageRevision(in.SessionID, cursor.Revision)) {
+	if cursor.SessionID != in.SessionID && !strings.HasSuffix(cursor.SessionID, ":"+in.SessionID) && !strings.HasSuffix(cursor.SessionID, "~"+in.SessionID) ||
+		(in.ExpectedRevision != "" && in.ExpectedRevision != cursor.Revision && in.ExpectedRevision != bindMessageRevision(cursor.SessionID, cursor.Revision)) {
 		return nil, getMessagesOut{}, fmt.Errorf("%w: body cursor does not match request", service.ErrSourceChanged)
 	}
+	in.SessionID = cursor.SessionID
 	zero := 0
 	res, err := t.svc.Messages(ctx, in.SessionID, service.MessageFilter{
 		Around: &cursor.Ordinal, Before: &zero, After: &zero,
