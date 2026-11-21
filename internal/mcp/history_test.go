@@ -742,3 +742,84 @@ func TestGetToolCalls_HTTPContinuesStoredResult(t *testing.T) {
 	assert.Equal(t, "ed r", calls.ToolCalls[0].Result)
 	assert.NotEmpty(t, calls.ToolCalls[0].ResultCursor)
 }
+
+// hangulText is n distinct-enough 3-byte runes, so a page of 10000 of them
+// exceeds the response budget and a gap or overlap changes the text.
+func hangulText(n int) string {
+	runes := make([]rune, n)
+	for i := range runes {
+		runes[i] = rune('가' + i%2000)
+	}
+	return string(runes)
+}
+
+// seedLongToolResult stores one call whose summary or sole saved event holds
+// text, and returns a reader for that text from a page of get_tool_calls.
+func seedLongToolResult(t *testing.T, d *db.DB, sid, field, text string) func(toolCallOut) (string, string) {
+	t.Helper()
+	dbtest.SeedSession(t, d, sid, "proj")
+	call := db.ToolCall{ToolUseID: "call", ToolName: "wait_agent", ResultContent: "short"}
+	if field == "summary" {
+		call.ResultContent = text
+	} else {
+		call.ResultEvents = []db.ToolResultEvent{{AgentID: "agent-a", Source: "tool_result", Content: text}}
+	}
+	dbtest.SeedMessages(t, d, toolCallMsg(sid, 0, call))
+	return func(c toolCallOut) (string, string) {
+		if field == "summary" {
+			return c.Result, c.ResultCursor
+		}
+		require.Len(t, c.ResultEvents, 1)
+		return c.ResultEvents[0].Content, c.ResultEvents[0].ResultCursor
+	}
+}
+
+func TestGetToolCalls_FitsOversizedUnicodeResult(t *testing.T) {
+	for _, field := range []string{"summary", "event"} {
+		t.Run(field, func(t *testing.T) {
+			ts, d := newTestToolset(t)
+			text := hangulText(10000)
+			read := seedLongToolResult(t, d, "wide", field, text)
+			_, page, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "wide", IncludeResults: true, MaxResultChars: 10000})
+			require.NoError(t, err)
+			require.Len(t, page.ToolCalls, 1)
+			assert.True(t, fitsResponse(page))
+			got, cursor := read(page.ToolCalls[0])
+			assert.NotEmpty(t, got)
+			assert.True(t, strings.HasPrefix(text, got))
+			assert.Less(t, len(got), len(text))
+			assert.NotEmpty(t, cursor)
+		})
+	}
+}
+
+func TestGetToolCalls_ResumedCursorFitsLargerPages(t *testing.T) {
+	for _, field := range []string{"summary", "event"} {
+		t.Run(field, func(t *testing.T) {
+			ts, d := newTestToolset(t)
+			text := hangulText(12000)
+			read := seedLongToolResult(t, d, "resume", field, text)
+			_, page, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "resume", IncludeResults: true, MaxResultChars: 4})
+			require.NoError(t, err)
+			require.Len(t, page.ToolCalls, 1)
+			got, cursor := read(page.ToolCalls[0])
+			require.Equal(t, text[:len(got)], got)
+			var recovered strings.Builder
+			recovered.WriteString(got)
+			for range len(text) {
+				if cursor == "" {
+					break
+				}
+				_, page, err = ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "resume", ResultCursor: cursor, MaxResultChars: 10000})
+				require.NoError(t, err)
+				require.Len(t, page.ToolCalls, 1)
+				assert.True(t, fitsResponse(page))
+				got, cursor = read(page.ToolCalls[0])
+				require.NotEmpty(t, got)
+				recovered.WriteString(got)
+			}
+			assert.Empty(t, cursor)
+			assert.Equal(t, text, recovered.String())
+		})
+	}
+}
