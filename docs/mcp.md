@@ -35,6 +35,8 @@ Use the MCP server when you want a coding assistant to answer questions such as:
 The tools are read-only. They expose session history and usage data, but they do
 not mutate the archive or resync files directly.
 
+When a call includes an unknown argument, its error lists the accepted arguments.
+
 Every tool explicitly declares read-only, non-destructive, and idempotent hints.
 `search_content` and `query_recall` are open-world because their semantic search
 modes can send queries to the configured embedding provider.
