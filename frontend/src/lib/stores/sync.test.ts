@@ -106,11 +106,10 @@ describe("remote API version", () => {
     vi.clearAllMocks();
   });
 
-  it.each([27, 28])("gates saved remote connections on API %i", async (apiVersion) => {
+  it.each([27, 28])("enables archive updates and gates session updates on API %i", async (apiVersion) => {
     api.isRemoteConnection.mockReturnValue(true);
     api.getVersion.mockResolvedValue({ api_version: apiVersion, version: "test", commit: "test" });
     await sync.loadVersion();
-    expect(sync.remoteIncompatible).toBe(apiVersion === 27);
     expect(sync.remoteLiveAllowed).toBe(apiVersion === 28);
     expect(api.setEventsAvailable).toHaveBeenLastCalledWith(true);
   });

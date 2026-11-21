@@ -1,4 +1,4 @@
-import { supportsRemoteVersion } from "../api/remoteVersion.js";
+import { supportsLiveSessionUpdates } from "../api/remoteVersion.js";
 import type { LiveSource } from "../api/client.js";
 import { triggerResync, triggerSync, watchSession, type SyncHandle } from "../api/client.js";
 import { MetadataService, SyncService } from "../api/generated/index";
@@ -95,18 +95,10 @@ class SyncStore {
   readonly isDesktop: boolean =
     typeof window !== "undefined" && new URLSearchParams(window.location.search).has("desktop");
 
-  get remoteIncompatible(): boolean {
-    return (
-      isRemoteConnection() &&
-      this.serverVersion !== null &&
-      !supportsRemoteVersion(this.serverVersion.api_version)
-    );
-  }
-
   get remoteLiveAllowed(): boolean {
     return (
       !isRemoteConnection() ||
-      (this.serverVersion !== null && supportsRemoteVersion(this.serverVersion.api_version))
+      (this.serverVersion !== null && supportsLiveSessionUpdates(this.serverVersion.api_version))
     );
   }
 
