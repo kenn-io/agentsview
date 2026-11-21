@@ -1770,11 +1770,7 @@ func TestCursorUsageAmbiguousKeyClearsPriorAccount(t *testing.T) {
 			return
 		}
 		if r.URL.Path == "/teams/daily-usage-data" {
-			_, _ = w.Write([]byte(`{"data":[{"userId":12},{"userId":34},{"userId":56},{"userId":"invalid"}],"pagination":{"hasNextPage":false}}`))
-			return
-		}
-		if body["userId"] == float64(56) {
-			http.Error(w, "failed", http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"data":[{"userId":12},{"userId":34},{"userId":"invalid"}],"pagination":{"hasNextPage":false}}`))
 			return
 		}
 		_, _ = w.Write([]byte(`{"totalUsageEventsCount":1,"usageEvents":[{"timestamp":"2026-07-28T10:03:00Z","model":"model-a","tokenUsage":{"outputTokens":10},"userId":"42","userEmail":"a@example.com","chargedCents":25}]}`))
@@ -1821,6 +1817,64 @@ func TestCursorUsageAmbiguousKeyClearsPriorAccount(t *testing.T) {
 	day, err = database.ExportReportingDay(t.Context(), opts)
 	require.NoError(t, err)
 	assert.EqualValues(t, 10, day.Hours[10].Machines["cursor-account:34"].Usage.Totals.OutputTokens)
+}
+
+func TestCursorSyncIncompleteMatchingPreservesAttribution(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "config.toml"), []byte("cursor_admin_api_key = 'key'\n"), 0o600))
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, database.ConfigureArtifactLocalMachine(t.Context(), "machine-a"))
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `INSERT INTO archive_metadata(key,value) VALUES ('archive_id','test-archive') ON CONFLICT(key) DO UPDATE SET value=excluded.value`)
+		return err
+	}))
+	ambiguous := db.CursorUsageEvent{OccurredAt: "2026-07-28T10:03:00Z", Model: "ambiguous", OutputTokens: 10}
+	assigned := db.CursorUsageEvent{OccurredAt: "2026-07-28T10:04:00Z", Model: "assigned", OutputTokens: 5}
+	require.NoError(t, database.InsertCursorUsageEvents(t.Context(), []db.CursorUsageEvent{ambiguous, assigned}))
+	prior := time.Date(2026, 7, 29, 1, 0, 0, 0, time.UTC)
+	require.NoError(t, database.AssignCursorUsageAccount(t.Context(), "", []string{db.CursorUsageEventDedupKey(ambiguous)}, prior))
+	require.NoError(t, database.AssignCursorUsageAccount(t.Context(), "99", []string{db.CursorUsageEventDedupKey(assigned)}, prior))
+	require.NoError(t, database.Close())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &body)) {
+			return
+		}
+		if r.URL.Path == "/teams/daily-usage-data" {
+			_, _ = w.Write([]byte(`{"data":[{"userId":12},{"userId":34}],"pagination":{"hasNextPage":false}}`))
+			return
+		}
+		if body["userId"] == float64(34) {
+			http.Error(w, "failed", http.StatusBadRequest)
+			return
+		}
+		_, _ = w.Write([]byte(`{"totalUsageEventsCount":3,"usageEvents":[{"timestamp":"2026-07-28T10:03:00Z","model":"ambiguous","tokenUsage":{"outputTokens":10}},{"timestamp":"2026-07-28T10:04:00Z","model":"assigned","tokenUsage":{"outputTokens":5}},{"timestamp":"2026-07-28T10:05:00Z","model":"new","tokenUsage":{"outputTokens":6}}]}`))
+	}))
+	defer server.Close()
+	original := newCursorUsageClient
+	newCursorUsageClient = func(key string) *cursorusage.Client {
+		c := cursorusage.NewClientWithBaseURL(server.URL, key)
+		c.RequestInterval = 0
+		c.DailyRequestInterval = 0
+		return c
+	}
+	t.Cleanup(func() { newCursorUsageClient = original })
+	cmd := newUsageCursorCommand()
+	cmd.SetArgs([]string{"--since", "2026-07-28", "--until", "2026-07-28"})
+	require.NoError(t, cmd.Execute())
+	database = dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	for _, tc := range []struct{ model, account string }{{"ambiguous", ""}, {"assigned", "99"}} {
+		var account, stamp string
+		require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT account_user_id, account_polled_at FROM cursor_usage_events WHERE model=?`, tc.model).Scan(&account, &stamp))
+		assert.Equal(t, tc.account, account, tc.model)
+		assert.Equal(t, "2026-07-29T01:00:00.000000Z", stamp, tc.model)
+	}
+	day, err := database.ExportReportingDay(t.Context(), db.ReportingExportOptions{Date: prior.Add(-25 * time.Hour), Now: prior.Add(24 * time.Hour), SchemaVersion: 6, ByMachine: true})
+	require.NoError(t, err)
+	assert.EqualValues(t, 16, day.Hours[10].Machines["archive:test-archive"].Usage.Totals.OutputTokens)
+	assert.EqualValues(t, 5, day.Hours[10].Machines["cursor-account:99"].Usage.Totals.OutputTokens)
+	assert.NotContains(t, day.Hours[10].Machines, "cursor-account:12")
 }
 
 func TestCursorSyncDoesNotCoverOpenHour(t *testing.T) {

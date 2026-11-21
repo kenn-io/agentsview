@@ -169,6 +169,7 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 				from = to
 			}
 			owners := map[string]string{}
+			complete := true
 			for _, id := range users {
 				memberEvents, err := client.FetchAllUsageEvents(ctx, cursorusage.Query{StartDate: start, EndDate: windowEnd.Add(-time.Millisecond), PageSize: 1000, UserID: id})
 				if err != nil {
@@ -176,6 +177,7 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 						return ctx.Err()
 					}
 					fmt.Fprintf(os.Stderr, "Cursor usage for a member could not be fetched: %v\n", err)
+					complete = false
 					continue
 				}
 				for _, ev := range memberEvents {
@@ -195,6 +197,9 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 						owners[key] = id
 					}
 				}
+			}
+			if !complete {
+				clear(owners)
 			}
 			byUser := map[string][]string{}
 			for key, match := range owners {
