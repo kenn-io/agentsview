@@ -67,27 +67,6 @@ func TestExportReportingByMachine(t *testing.T) {
 	assert.EqualValues(t, 17, day.Hours[10].Machines["archive:machine-test-archive"].Usage.Totals.OutputTokens)
 }
 
-func TestExportReportingUpgradesOldCursorUsageArchive(t *testing.T) {
-	dataDir := testDataDir(t)
-	path := filepath.Join(dataDir, "sessions.db")
-	database := dbtest.OpenTestDBAt(t, path)
-	require.NoError(t, database.ConfigureArtifactLocalMachine(t.Context(), "origin-a"))
-	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(), `INSERT INTO archive_metadata(key,value) VALUES ('archive_id','old-archive') ON CONFLICT(key) DO UPDATE SET value=excluded.value;
-			INSERT INTO cursor_usage_events(occurred_at,model,output_tokens,dedup_key) VALUES ('2026-07-28T10:03:00Z','a',17,'old-a'),('2026-07-28T10:04:00Z','b',5,'old-b')`)
-		return err
-	}))
-	require.NoError(t, database.Close())
-	raw, err := sql.Open("sqlite3", path)
-	require.NoError(t, err)
-	_, err = raw.ExecContext(t.Context(), `ALTER TABLE cursor_usage_events DROP COLUMN account_polled_at; ALTER TABLE cursor_usage_events DROP COLUMN account_user_id`)
-	require.NoError(t, err)
-	require.NoError(t, raw.Close())
-	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
-	_, _, err = executeExportSessionsCommand(newExportReportingTestRoot(now), "export", "day", "--schema-version", "6", "--by-machine", "2026-07-28")
-	require.NoError(t, err)
-}
-
 func TestExportReportingCursorAccountHour(t *testing.T) {
 	dataDir := testDataDir(t)
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))

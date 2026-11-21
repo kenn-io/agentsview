@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,7 +15,8 @@ import (
 func TestCursorAccountEmptyPollIgnoresOtherDates(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
-	_, err := d.rawWriter().ExecContext(ctx, `INSERT INTO cursor_usage_events(occurred_at, model, account_user_id, account_polled_at) VALUES ('2025-07-28T10:00:00Z', 'a', '12', '2025-07-29T00:00:00.000000Z'); INSERT INTO cursor_account_polls(account_user_id, hour_start, polled_at) VALUES ('12', 1785232800, '2026-07-29T00:00:00.000000Z')`)
+	require.NoError(t, d.ConfigureArtifactLocalMachine(ctx, "origin-a"))
+	_, err := d.rawWriter().ExecContext(ctx, `INSERT INTO cursor_usage_events(occurred_at, model, account_user_id, account_polled_at) VALUES ('2025-07-28T10:00:00Z', 'a', '12', '2025-07-29T00:00:00.000000Z'), ('2026-07-28T10:00:00Z', 'b', '12', '2026-07-28T23:00:00.000000Z'); UPDATE cursor_usage_events SET output_tokens=7 WHERE model='b'; INSERT INTO cursor_account_polls(account_user_id, hour_start, polled_at) VALUES ('12', 1785232800, '2026-07-29T00:00:00.000000Z')`)
 	require.NoError(t, err)
 	conn, err := d.getReader().Conn(ctx)
 	require.NoError(t, err)
@@ -37,6 +39,21 @@ func TestCursorAccountEmptyPollIgnoresOtherDates(t *testing.T) {
 	require.NoError(t, d.loadReportingAccountUsage(ctx, tx, start, start.Add(24*time.Hour), &source))
 	require.Len(t, source.accountUsage, 1)
 	assert.Zero(t, oldRows, "a selected hour should not inspect another year's events")
+	require.NoError(t, tx.Rollback())
+	day, err := d.ExportReportingDay(ctx, ReportingExportOptions{Date: start, Now: start.Add(48 * time.Hour), SchemaVersion: 6, ByMachine: true})
+	require.NoError(t, err)
+	part, ok := day.Hours[10].Machines["cursor-account:12"]
+	require.True(t, ok)
+	assert.Zero(t, part.Usage.Totals.OutputTokens)
+	assert.Equal(t, "2026-07-29T00:00:00.000000Z", part.PolledAt)
+	assert.EqualValues(t, 7, day.Hours[10].Usage.Totals.OutputTokens)
+	var archiveTokens int64
+	for id, machine := range day.Hours[10].Machines {
+		if strings.HasPrefix(id, "archive:") {
+			archiveTokens += machine.Usage.Totals.OutputTokens
+		}
+	}
+	assert.EqualValues(t, 7, archiveTokens)
 }
 
 func TestCursorAccountColumnsAbsentInOldResyncSource(t *testing.T) {
@@ -48,7 +65,7 @@ func TestCursorAccountColumnsAbsentInOldResyncSource(t *testing.T) {
 
 	raw, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
-	_, err = raw.ExecContext(ctx, `ALTER TABLE cursor_usage_events DROP COLUMN account_user_id; ALTER TABLE cursor_usage_events DROP COLUMN account_polled_at`)
+	_, err = raw.ExecContext(ctx, `ALTER TABLE cursor_usage_events DROP COLUMN account_user_id; ALTER TABLE cursor_usage_events DROP COLUMN account_polled_at; DROP TABLE cursor_account_polls`)
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 	older := testDB(t)
