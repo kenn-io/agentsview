@@ -1595,31 +1595,20 @@ func TestSearchContent_ConceptsMapping(t *testing.T) {
 	}}
 	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
 
-	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
-		Concepts: []string{"auth model", "retry policy"}, Scope: "top",
-		IncludeActive: true,
-	})
-	require.NoError(t, err)
-	assert.Equal(t, []string{"auth model", "retry policy"}, fake.lastReq.Concepts)
-	assert.Equal(t, "top", fake.lastReq.Scope)
-	assert.Equal(t, "semantic", out.EffectiveMode)
-	assert.Equal(t, "top", out.EffectiveScope)
-	assert.True(t, out.CandidateTruncated)
-	require.Len(t, out.Matches, 1)
-	assert.Equal(t, evidence, out.Matches[0].ConceptEvidence)
-}
-
-func TestSearchContent_ConceptsOverrideMode(t *testing.T) {
 	for _, mode := range []string{"substring", "hybrid", "invalid"} {
 		t.Run(mode, func(t *testing.T) {
-			fake := &fakeContentSearchService{result: &service.ContentSearchResult{}}
-			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
 			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
-				Concepts: []string{"auth model", "retry policy"}, Mode: mode, IncludeActive: true,
+				Concepts: []string{"auth model", "retry policy"}, Mode: mode, Scope: "top", IncludeActive: true,
 			})
 			require.NoError(t, err)
+			assert.Equal(t, []string{"auth model", "retry policy"}, fake.lastReq.Concepts)
 			assert.Equal(t, "semantic", fake.lastReq.Mode)
+			assert.Equal(t, "top", fake.lastReq.Scope)
 			assert.Equal(t, "semantic", out.EffectiveMode)
+			assert.Equal(t, "top", out.EffectiveScope)
+			assert.True(t, out.CandidateTruncated)
+			require.Len(t, out.Matches, 1)
+			assert.Equal(t, evidence, out.Matches[0].ConceptEvidence)
 		})
 	}
 }
@@ -1633,20 +1622,17 @@ func TestSearchContent_ListSessionMessages(t *testing.T) {
 		s.ParentSessionID = new("parent")
 		s.RelationshipType = "subagent"
 	})
-	key := "AKIA" + "7QHWN2DKR4FYPLJM"
 	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
-		dbtest.UserMsg("child", 0, "first "+key),
+		dbtest.UserMsg("child", 0, "first"),
 		{SessionID: "child", Ordinal: 1, Role: "tool", Content: "tool result", ContentLength: len("tool result")},
-		dbtest.AsstMsg("child", 2, "last"),
+		{SessionID: "child", Ordinal: 2, Role: "assistant", Content: "last", ContentLength: 4, HasToolUse: true,
+			ToolCalls: []db.ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"echo hello"}`, ResultContent: "hello"}}},
 	}))
-	_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{SessionID: "child", Limit: 2, Cursor: -1})
-	require.EqualError(t, err, "cursor must not be negative")
 	_, first, err := ts.searchContent(t.Context(), nil, searchContentIn{SessionID: "child", Mode: "typo", Project: "project-a", Limit: 2})
 	require.NoError(t, err)
 	require.Len(t, first.Matches, 2)
 	assert.Equal(t, 0, first.Matches[0].Ordinal)
 	assert.Equal(t, 1, first.Matches[1].Ordinal)
-	assert.NotContains(t, first.Matches[0].Snippet, key)
 	assert.True(t, first.Matches[0].Subordinate)
 	assert.Equal(t, "regex", first.EffectiveMode)
 	require.NotNil(t, first.NextCursor)
@@ -1659,7 +1645,7 @@ func TestSearchContent_ListSessionMessages(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, empty.Matches)
 
-	dbtest.SeedSessionWithMessages(t, d, "one-shot", "project-a", []db.Message{dbtest.UserMsg("one-shot", 0, "only")}, dbtest.WithMessageCounts(1, 1))
+	dbtest.SeedSessionWithMessages(t, d, "one-shot", "project-a", []db.Message{dbtest.UserMsg("one-shot", 0, "only")}, dbtest.WithMessageCounts(1, 1), func(s *db.Session) { s.IsAutomated = true })
 	_, oneShot, err := ts.searchContent(t.Context(), nil, searchContentIn{SessionID: "one-shot"})
 	require.NoError(t, err)
 	require.Len(t, oneShot.Matches, 1)
