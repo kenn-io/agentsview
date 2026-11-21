@@ -113,12 +113,14 @@ func TestNewServer_Instructions(t *testing.T) {
 			}
 			assert.Contains(t, instructions, "search_content with mode hybrid, or search_sessions")
 			assert.Contains(t, instructions, "search_sessions with its name as query")
-			assert.Contains(t, instructions, "four separate search_content searches with mode regex, include_active true, and limit 1")
+			assert.Contains(t, instructions, "list_sessions with pr=owner/repo#N, include_one_shot true, include_automated true, and limit 100; page with next_cursor as cursor")
+			assert.Contains(t, instructions, "four separate search_content regex calls")
 			assert.Contains(t, instructions, `PR N\b, pr N\b, #N\b, and /pull/N\b`)
-			assert.Contains(t, instructions, "deduplicate matching session IDs")
-			assert.Contains(t, instructions, "call get_session_overview on each distinct candidate to compare activity and parent")
-			assert.Contains(t, instructions, "choose the newest top-level session; if a candidate is a child, follow it to its parent")
-			assert.Contains(t, instructions, "list_sessions with pr or labels")
+			assert.Contains(t, instructions, "include_active true, include_one_shot true, include_automated true, limit 50, and current_session_id")
+			assert.Contains(t, instructions, "page with next_cursor as cursor and pass any activity_cutoff back unchanged")
+			assert.Contains(t, instructions, "Deduplicate session IDs, ignore the lookup conversation, confirm repository and work evidence")
+			assert.Contains(t, instructions, "get_session_overview to compare activity and parent; follow a child to its parent, then choose the newest valid top-level session")
+			assert.Contains(t, instructions, `Use /pull/N\b regex for a full PR URL`)
 			assert.Contains(t, instructions, "get_session_overview, then get_tool_calls, get_messages, or get_child_sessions")
 			assert.Contains(t, instructions, "list_sessions with active_since")
 			assert.Contains(t, instructions, "include_active in search_sessions and search_content")
@@ -157,10 +159,14 @@ func TestOwnerSearchPatternsFindExactReferences(t *testing.T) {
 		{`/pull/123\b`, "url", "/pull/123"},
 	} {
 		t.Run(tc.id, func(t *testing.T) {
-			res, err := ct.CallTool(t.Context(), callParams(ToolSearchContent, map[string]any{"mode": "regex", "pattern": tc.pattern, "include_active": true, "include_one_shot": true, "limit": 1}))
+			res, err := ct.CallTool(t.Context(), callParams(ToolSearchContent, map[string]any{"mode": "regex", "pattern": tc.pattern, "include_active": true, "include_one_shot": true, "include_automated": true, "limit": 50}))
 			require.NoError(t, err)
 			out := decodeStructured[searchContentOut](t, res)
-			require.Len(t, out.Matches, 1)
+			if tc.id == "upper" {
+				require.Len(t, out.Matches, 2)
+			} else {
+				require.Len(t, out.Matches, 1)
+			}
 			assert.Equal(t, tc.id, out.Matches[0].SessionID)
 			assert.Contains(t, out.Matches[0].Snippet, tc.snippet)
 			if tc.id == "url" {
@@ -173,6 +179,69 @@ func TestOwnerSearchPatternsFindExactReferences(t *testing.T) {
 	withoutActive := decodeStructured[searchContentOut](t, excluded)
 	require.Len(t, withoutActive.Matches, 1)
 	assert.Equal(t, "older", withoutActive.Matches[0].SessionID)
+}
+
+func TestOwnerSearchPagesAndSessionClasses(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	for i := range 51 {
+		id := fmt.Sprintf("match-%02d", i)
+		dbtest.SeedSession(t, d, id, "proj", func(s *db.Session) {
+			s.StartedAt = new(fmt.Sprintf("2024-06-10T10:%02d:00Z", i))
+			s.UserMessageCount = 2
+		})
+		dbtest.SeedMessages(t, d, toolCallMsg(id, 0, db.ToolCall{ToolName: "Bash", Category: "Bash", ResultContent: "work on #123"}))
+	}
+	for _, tc := range []struct {
+		id, repo, started string
+		users             int
+		automated         bool
+	}{
+		{"current", "o/r", "2024-06-15T11:59:00Z", 2, false},
+		{"one-shot", "o/r", "2024-06-15T11:58:00Z", 1, false},
+		{"automated", "o/r", "2024-06-15T11:57:00Z", 2, true},
+		{"other-repo", "o/other", "2024-06-15T11:56:00Z", 2, false},
+	} {
+		dbtest.SeedSession(t, d, tc.id, "proj", func(s *db.Session) {
+			s.StartedAt = new(tc.started)
+			s.UserMessageCount = tc.users
+			s.IsAutomated = tc.automated
+			s.PRLinks = []db.PRLink{dbtest.AnnotatedPRLink(tc.repo, 123)}
+		})
+		dbtest.SeedMessages(t, d, toolCallMsg(tc.id, 0, db.ToolCall{ToolName: "Bash", Category: "Bash", ResultContent: "work on " + tc.repo + "#123"}))
+	}
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), Now: func() time.Time { return fixedNow }}))
+	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
+	listed, err := ct.CallTool(t.Context(), callParams(ToolListSessions, map[string]any{"pr": "o/r#123", "include_one_shot": true, "include_automated": true, "limit": 100}))
+	require.NoError(t, err)
+	rows := decodeStructured[listSessionsOut](t, listed)
+	var linked []string
+	for _, row := range rows.Sessions {
+		linked = append(linked, row.SessionID)
+	}
+	assert.ElementsMatch(t, []string{"current", "one-shot", "automated"}, linked)
+	args := map[string]any{"mode": "regex", "pattern": `#123\b`, "include_active": true, "include_one_shot": true, "include_automated": true, "current_session_id": "current", "limit": 50}
+	first, err := ct.CallTool(t.Context(), callParams(ToolSearchContent, args))
+	require.NoError(t, err)
+	page := decodeStructured[searchContentOut](t, first)
+	require.Len(t, page.Matches, 50)
+	require.NotNil(t, page.NextCursor)
+	ids := make([]string, 0, 54)
+	for _, hit := range page.Matches {
+		ids = append(ids, hit.SessionID)
+	}
+	args["cursor"] = *page.NextCursor
+	second, err := ct.CallTool(t.Context(), callParams(ToolSearchContent, args))
+	require.NoError(t, err)
+	last := decodeStructured[searchContentOut](t, second)
+	for _, hit := range last.Matches {
+		ids = append(ids, hit.SessionID)
+	}
+	assert.Len(t, ids, 54)
+	assert.Contains(t, ids, "one-shot")
+	assert.Contains(t, ids, "automated")
+	assert.Contains(t, ids, "other-repo")
+	assert.NotContains(t, ids, "current")
+	assert.Contains(t, ids, "match-00")
 }
 
 func TestServer_GetMemoryStatus(t *testing.T) {
