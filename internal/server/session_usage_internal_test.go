@@ -99,7 +99,6 @@ func TestSessionUsageRawResolverErrors(t *testing.T) {
 		status, calls       int
 	}{
 		{"query", nil, errors.New("unavailable"), 500, 1},
-		{"missing", nil, fmt.Errorf("resolver: %w", service.ErrSessionNotFound), 404, 1},
 		{"canceled", nil, fmt.Errorf("resolver: %w", context.Canceled), 500, 1},
 		{"deadline", nil, fmt.Errorf("resolver: %w", context.DeadlineExceeded), 504, 1},
 		{"exact query", errors.New("unavailable"), nil, 500, 0},

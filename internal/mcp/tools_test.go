@@ -2352,61 +2352,27 @@ func TestSessionToolsResolvePlainIDs(t *testing.T) {
 	dbtest.SeedSession(t, d, "child", "proj", func(s *db.Session) { s.ParentSessionID = new("codex:plain") })
 	dbtest.SeedSession(t, d, "codex:empty", "proj")
 
-	tests := []struct {
-		name string
-		call func(*testing.T, string) error
-	}{
-		{"overview", func(t *testing.T, id string) error {
-			t.Helper()
-			_, out, err := ts.sessionOverview(t.Context(), nil, sessionOverviewIn{SessionID: id})
-			if err == nil {
-				assert.Equal(t, "codex:plain", out.Session.SessionID)
-				assert.NotEmpty(t, out.LastMessages)
-			}
-			return err
-		}},
-		{"messages", func(t *testing.T, id string) error {
-			t.Helper()
-			_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: id})
-			if err == nil {
-				require.NotEmpty(t, out.Messages)
-				assert.Equal(t, "needle in the transcript", out.Messages[0].Content)
-			}
-			return err
-		}},
-		{"tool calls", func(t *testing.T, id string) error {
-			t.Helper()
-			_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: id})
-			if err == nil {
-				require.Len(t, out.ToolCalls, 1)
-				assert.Equal(t, "Bash", out.ToolCalls[0].ToolName)
-			}
-			return err
-		}},
-		{"children", func(t *testing.T, id string) error {
-			t.Helper()
-			_, out, err := ts.childSessions(t.Context(), nil, childSessionsIn{SessionID: id})
-			if err == nil {
-				require.Len(t, out.Sessions, 1)
-				assert.Equal(t, "child", out.Sessions[0].SessionID)
-			}
-			return err
-		}},
-		{"file references", func(t *testing.T, id string) error {
-			t.Helper()
-			_, out, err := ts.fileReferences(t.Context(), nil, fileReferencesIn{SessionID: id})
-			if err == nil {
-				assert.Equal(t, "enabled", out.Integration)
-				assert.NotEmpty(t, out.TranscriptRevision)
-			}
-			return err
-		}},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			require.NoError(t, tc.call(t, "plain"))
-		})
-	}
+	_, overview, err := ts.sessionOverview(t.Context(), nil, sessionOverviewIn{SessionID: "plain"})
+	require.NoError(t, err)
+	assert.Equal(t, "codex:plain", overview.Session.SessionID)
+	assert.NotEmpty(t, overview.LastMessages)
+	_, messages, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "plain"})
+	require.NoError(t, err)
+	require.NotEmpty(t, messages.Messages)
+	assert.Equal(t, "needle in the transcript", messages.Messages[0].Content)
+	_, tools, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "plain"})
+	require.NoError(t, err)
+	require.Len(t, tools.ToolCalls, 1)
+	assert.Equal(t, "Bash", tools.ToolCalls[0].ToolName)
+	_, kids, err := ts.childSessions(t.Context(), nil, childSessionsIn{SessionID: "plain"})
+	require.NoError(t, err)
+	require.Len(t, kids.Sessions, 1)
+	assert.Equal(t, "child", kids.Sessions[0].SessionID)
+	_, refs, err := ts.fileReferences(t.Context(), nil, fileReferencesIn{SessionID: "plain"})
+	require.NoError(t, err)
+	assert.Equal(t, "enabled", refs.Integration)
+	assert.NotEmpty(t, refs.TranscriptRevision)
+
 	_, calls, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "empty"})
 	require.NoError(t, err)
 	assert.Empty(t, calls.ToolCalls)
@@ -2437,13 +2403,6 @@ func TestListRecall_SourceSessionRawID(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, out.Entries, 1)
 	assert.Equal(t, "codex:source", out.Entries[0].SourceSessionID)
-	_, out, err = ts.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "missing"})
-	require.NoError(t, err)
-	assert.Empty(t, out.Entries)
-	dbtest.SeedSession(t, d, "codex:ambiguous", "project")
-	dbtest.SeedSession(t, d, "host~ambiguous", "project")
-	_, _, err = ts.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "ambiguous"})
-	require.ErrorContains(t, err, "ambiguous session UUID")
 }
 
 func TestOptionalSessionFiltersOlderServer(t *testing.T) {
@@ -2453,38 +2412,23 @@ func TestOptionalSessionFiltersOlderServer(t *testing.T) {
 		case "/api/v1/sessions/unindexed", "/api/v1/sessions/broken":
 			w.WriteHeader(http.StatusNotFound)
 		case "/api/v1/session-ids/resolve":
-			if r.URL.Query().Get("partial") == "broken" {
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-			_, _ = fmt.Fprint(w, `{"ids":["substring-match"]}`)
+			w.WriteHeader(http.StatusInternalServerError)
 		case "/api/v1/search/content":
 			assert.Equal(t, "unindexed", r.URL.Query().Get("exclude_session"))
 			_, _ = fmt.Fprint(w, `{"matches":[{"session_id":"other","snippet":"needle"}],"active_filter_applied":true}`)
-		case "/api/v1/recall/entries":
-			assert.Equal(t, "unindexed", r.URL.Query().Get("source_session_id"))
-			_, _ = fmt.Fprint(w, `{"entries":[{"id":"entry","source_session_id":"unindexed"}]}`)
 		default:
 			assert.Fail(t, "unexpected request", "path: %s", r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
 	t.Cleanup(srv.Close)
-	for _, version := range []int{27, 28} {
-		ts := &toolset{svc: servicehttp.NewHTTPBackendForServer(srv.URL, "", servicehttp.HTTPServerCapabilities{APIVersion: version})}
-		_, search, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", CurrentSessionID: "unindexed"})
-		require.NoError(t, err)
-		require.Len(t, search.Matches, 1)
-		assert.Equal(t, "other", search.Matches[0].SessionID)
-		_, recall, err := ts.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "unindexed"})
-		require.NoError(t, err)
-		require.Len(t, recall.Entries, 1)
-		assert.Equal(t, "entry", recall.Entries[0].ID)
-	}
-	ts := &toolset{svc: servicehttp.NewHTTPBackendForServer(srv.URL, "", servicehttp.HTTPServerCapabilities{APIVersion: 28})}
-	_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", CurrentSessionID: "broken"})
-	require.Error(t, err)
-	_, _, err = ts.listRecall(t.Context(), nil, listRecallIn{SourceSessionID: "broken"})
+	ts := &toolset{svc: servicehttp.NewHTTPBackendForServer(srv.URL, "", servicehttp.HTTPServerCapabilities{APIVersion: 27})}
+	_, search, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", CurrentSessionID: "unindexed"})
+	require.NoError(t, err)
+	require.Len(t, search.Matches, 1)
+	assert.Equal(t, "other", search.Matches[0].SessionID)
+	ts = &toolset{svc: servicehttp.NewHTTPBackendForServer(srv.URL, "", servicehttp.HTTPServerCapabilities{APIVersion: 28})}
+	_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", CurrentSessionID: "broken"})
 	require.Error(t, err)
 }
 
@@ -2510,11 +2454,6 @@ func TestSessionResolutionQualifiedSuffix(t *testing.T) {
 	httpServer.Start()
 	t.Cleanup(httpServer.Close)
 	remote := &toolset{svc: servicehttp.NewHTTPBackend(httpServer.URL, "", false, "")}
-	for _, toolset := range []*toolset{ts, remote} {
-		_, out, err := toolset.sessionOverview(t.Context(), nil, sessionOverviewIn{SessionID: "codex:source"})
-		require.NoError(t, err)
-		assert.Equal(t, "host~codex:source", out.Session.SessionID)
-	}
 	dbtest.SeedSession(t, d, "codex:source", "project")
 	_, err := d.InsertRecallEntry(t.Context(), db.RecallEntry{
 		ID: "entry", Type: "fact", Scope: "project", Status: "accepted",

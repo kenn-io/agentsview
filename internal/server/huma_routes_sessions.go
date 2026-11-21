@@ -357,9 +357,6 @@ func (s *Server) humaResolveSessionIDs(
 		ids, err = s.sessions.FindSessionIDsByPartial(ctx, in.Partial, in.Limit)
 	}
 	if err != nil {
-		if errors.Is(err, service.ErrSessionNotFound) {
-			return nil, apiError(http.StatusGone, err.Error())
-		}
 		if handled := handleHumaContextError(err); handled != nil {
 			return nil, handled
 		}
