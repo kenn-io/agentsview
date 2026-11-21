@@ -106,7 +106,11 @@ func (e *Engine) toolLinkRemote(s db.Session, recorded string) string {
 	if recorded != "" {
 		a, aok := export.NormalizeGitRemote(recorded)
 		b, bok := export.NormalizeGitRemote(obs.GitRemote)
-		if !aok || !bok || (a != b && !(strings.HasPrefix(strings.ToLower(a), "github.com/") && strings.EqualFold(a, b))) {
+		if !aok || !bok {
+			return ""
+		}
+		sameGitHubRepository := strings.HasPrefix(strings.ToLower(a), "github.com/") && strings.EqualFold(a, b)
+		if a != b && !sameGitHubRepository {
 			return ""
 		}
 	}
