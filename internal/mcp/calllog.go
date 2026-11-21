@@ -118,6 +118,11 @@ func recordToolCall(dir string, req *mcp.CallToolRequest, result mcp.Result, cal
 				}
 			}
 		}
+		if rec.Truncated {
+			rec.Outcome = "truncated"
+		} else if rec.Empty {
+			rec.Outcome = "empty"
+		}
 	}
 	if err := safefileio.EnsurePrivateDir(dir); err != nil {
 		return err

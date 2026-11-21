@@ -32,7 +32,7 @@ func TestCallOutcomes(t *testing.T) {
 	}{
 		{ToolGetSessionOverview, map[string]any{"session_id": "private_missing_id"}, true},
 		{ToolSearchSessions, map[string]any{"query": "private_unmatched_query"}, false},
-		{ToolSearchDocs, map[string]any{"query": "session"}, false},
+		{ToolSearchDocs, map[string]any{"query": "session", "limit": 1, "max_chars": 8000}, false},
 		{ToolSearchContent, map[string]any{"pattern": "unmatched", "mode": "substring"}, false},
 		{ToolQueryRecall, map[string]any{"query": "unmatched"}, false},
 		{ToolSearchSessions, map[string]any{"query": "private_query", "include_one_shot": true}, true},
@@ -61,6 +61,20 @@ func TestCallOutcomes(t *testing.T) {
 			assert.InDelta(t, 100.0, *row.EmptyPercent, 0.001, row.Tool)
 		}
 	}
+	files, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	raw, err := os.ReadFile(filepath.Join(dir, files[0].Name()))
+	require.NoError(t, err)
+	var outcomes []string
+	for _, line := range bytes.Split(raw, []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
+		var rec callRecord
+		require.NoError(t, json.Unmarshal(line, &rec))
+		outcomes = append(outcomes, rec.Outcome)
+	}
+	assert.Equal(t, []string{"error", "empty", "ok", "empty", "empty", "error"}, outcomes)
 }
 
 func TestSummarizeCallsDatesAndMedians(t *testing.T) {
@@ -138,7 +152,8 @@ func TestCallLogWriteFailureWarnsOnce(t *testing.T) {
 func TestRecordToolCallErrorOutcome(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "calls")
 	req := &mcp.CallToolRequest{Params: &mcp.CallToolParamsRaw{Name: ToolSearchDocs}}
-	require.NoError(t, recordToolCall(dir, req, nil, context.Canceled, time.Second))
+	result := &mcp.CallToolResult{IsError: true, StructuredContent: map[string]any{"results": []any{}, "truncated": true}}
+	require.NoError(t, recordToolCall(dir, req, result, context.Canceled, time.Second))
 	rows, err := SummarizeCalls(dir, "", "")
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
@@ -246,6 +261,16 @@ func TestCallLogEmptyAndTruncated(t *testing.T) {
 	assert.NotContains(t, string(raw), "secret")
 	assert.NotContains(t, string(raw), "bad-date")
 	assert.NotContains(t, string(raw), "invalid activity_cutoff")
+	var outcomes []string
+	for _, line := range bytes.Split(raw, []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
+		var rec callRecord
+		require.NoError(t, json.Unmarshal(line, &rec))
+		outcomes = append(outcomes, rec.Outcome)
+	}
+	assert.Equal(t, []string{"error", "truncated"}, outcomes)
 }
 
 func TestCallLogCursors(t *testing.T) {
