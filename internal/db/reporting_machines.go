@@ -11,6 +11,10 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 )
 
+const cursorAccountPrefix = "cursor-account:"
+
+func isCursorAccount(id string) bool { return strings.HasPrefix(id, cursorAccountPrefix) }
+
 // machineIdentities maps a session's stored machine key to the identity of
 // the machine it originated on. Schema 5 reporting and the change stream
 // use the same identities.
@@ -56,9 +60,10 @@ func (m machineIdentities) origin(machine, archiveID string) string {
 		return "archive:" + archiveID
 	}
 	if machine == "local" {
-		machine = m.local
-	} else if canonical := m.aliases[machine]; canonical != "" {
-		machine = canonical
+		return m.local
+	}
+	if canonical := m.aliases[machine]; canonical != "" {
+		return canonical
 	}
 	return machine
 }
@@ -80,7 +85,7 @@ func loadReportingMachineIdentity(ctx context.Context, tx *sql.Tx, schema int, s
 
 func (s reportingDaySource) machineID(machine string, schema int) string {
 	machine = machineIdentities{local: s.localMachineID, aliases: s.machineAliases}.origin(machine, s.archiveID)
-	if schema == export.ReportingAccountSchemaVersion && (strings.HasPrefix(machine, "cursor-account:") || strings.HasPrefix(machine, "machine:")) {
+	if schema == export.ReportingAccountSchemaVersion && (isCursorAccount(machine) || strings.HasPrefix(machine, "machine:")) {
 		digest := sha256.Sum256([]byte(machine))
 		return "machine:" + hex.EncodeToString(digest[:])
 	}

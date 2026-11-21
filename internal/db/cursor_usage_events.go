@@ -34,10 +34,6 @@ type CursorUsageEvent struct {
 	DedupKey         string
 }
 
-type CursorUsagePoll struct {
-	WindowStart, WindowEndExclusive, CompletedAt time.Time
-}
-
 func (db *DB) ensureCursorUsageEventsSchemaLocked(ctx context.Context, w *writerHandle) error {
 	if _, err := w.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS cursor_usage_events (
@@ -54,14 +50,10 @@ func (db *DB) ensureCursorUsageEventsSchemaLocked(ctx context.Context, w *writer
 			cursor_token_fee_microdollars INTEGER NOT NULL DEFAULT 0,
 			user_id TEXT NOT NULL DEFAULT '',
 			user_email TEXT NOT NULL DEFAULT '',
+			account_user_id TEXT NOT NULL DEFAULT '',
+			account_polled_at TEXT NOT NULL DEFAULT '',
 			is_headless INTEGER NOT NULL DEFAULT 0,
 			dedup_key TEXT NOT NULL DEFAULT ''
-		);
-		CREATE TABLE IF NOT EXISTS cursor_usage_polls (
-			window_start TEXT NOT NULL,
-			window_end_exclusive TEXT NOT NULL,
-			completed_at TEXT NOT NULL,
-			event_max_id INTEGER NOT NULL
 		);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_cursor_usage_events_dedup
 			ON cursor_usage_events(dedup_key)
@@ -76,12 +68,52 @@ func (db *DB) ensureCursorUsageEventsSchemaLocked(ctx context.Context, w *writer
 	return nil
 }
 
+// AssignCursorUsageAccount records a member match or clears an ambiguous match.
+func (db *DB) AssignCursorUsageAccount(ctx context.Context, accountUserID string, keys []string, polledAt time.Time) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	if accountUserID != "" {
+		id, err := strconv.ParseUint(accountUserID, 10, 64)
+		if err != nil || id == 0 || strconv.FormatUint(id, 10) != accountUserID {
+			return fmt.Errorf("invalid Cursor account user ID %q", accountUserID)
+		}
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	tx, err := db.getWriter().Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	stamp := polledAt.UTC().Format("2006-01-02T15:04:05.000000Z")
+	for len(keys) > 0 {
+		n := min(len(keys), 500)
+		args := make([]any, 0, n+3)
+		args = append(args, accountUserID, stamp)
+		for _, key := range keys[:n] {
+			args = append(args, key)
+		}
+		args = append(args, stamp)
+		query := "UPDATE cursor_usage_events SET account_user_id = ?, account_polled_at = ? WHERE dedup_key IN (" + strings.TrimSuffix(strings.Repeat("?,", n), ",") + ") AND account_polled_at < ?"
+		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+			return fmt.Errorf("assigning Cursor usage account: %w", err)
+		}
+		keys = keys[n:]
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	db.notifyCursorUsage()
+	return nil
+}
+
 // InsertCursorUsageEvents appends account usage rows and ignores duplicates
 // with the same billing identity or stable fingerprint.
 func (db *DB) InsertCursorUsageEvents(ctx context.Context,
-	events []CursorUsageEvent, polls ...CursorUsagePoll,
+	events []CursorUsageEvent,
 ) error {
-	if len(events) == 0 && len(polls) == 0 {
+	if len(events) == 0 {
 		return nil
 	}
 
@@ -132,23 +164,6 @@ func (db *DB) InsertCursorUsageEvents(ctx context.Context,
 		}
 	}
 
-	for _, poll := range polls {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO cursor_usage_polls
-			(window_start, window_end_exclusive, completed_at, event_max_id)
-			SELECT ?, ?, ?, COALESCE(MAX(id), 0) FROM cursor_usage_events`,
-			poll.WindowStart.UTC().Format(time.RFC3339Nano), poll.WindowEndExclusive.UTC().Format(time.RFC3339Nano), poll.CompletedAt.UTC().Format(time.RFC3339Nano)); err != nil {
-			return fmt.Errorf("inserting cursor usage poll: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM cursor_usage_polls
-			WHERE rowid != last_insert_rowid()
-			AND julianday(window_start) >= julianday(?)
-			AND julianday(window_end_exclusive) <= julianday(?)
-			AND julianday(completed_at) <= julianday(?)
-			AND event_max_id <= (SELECT event_max_id FROM cursor_usage_polls WHERE rowid = last_insert_rowid())`,
-			poll.WindowStart.UTC().Format(time.RFC3339Nano), poll.WindowEndExclusive.UTC().Format(time.RFC3339Nano), poll.CompletedAt.UTC().Format(time.RFC3339Nano)); err != nil {
-			return fmt.Errorf("pruning cursor usage polls: %w", err)
-		}
-	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}

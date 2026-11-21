@@ -46,7 +46,9 @@ type Client struct {
 	// RequestInterval is the minimum time between the starts of consecutive
 	// requests in FetchAllUsageEvents, retries included. NewClient sets it to
 	// one second; zero disables pacing.
-	RequestInterval time.Duration
+	RequestInterval      time.Duration
+	DailyRequestInterval time.Duration
+	lastUsageRequest     time.Time
 
 	// OnRetry, when set, is called before FetchAllUsageEvents waits to retry
 	// a page after a rate-limit or server error, with the page number, that
@@ -119,7 +121,8 @@ func NewClient(apiKey string) *Client {
 		HTTPClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		RequestInterval: defaultRequestInterval,
+		RequestInterval:      defaultRequestInterval,
+		DailyRequestInterval: 3 * time.Second,
 	}
 }
 
@@ -250,6 +253,103 @@ func requestUserID(raw string) (int64, error) {
 	return userID, nil
 }
 
+// ListDailyUsageUsers returns numeric member IDs from all pages and windows.
+func (c *Client) ListDailyUsageUsers(ctx context.Context, start, end time.Time) ([]string, error) {
+	if c == nil || strings.TrimSpace(c.APIKey) == "" {
+		return nil, errors.New("missing Cursor admin API key")
+	}
+	seen := map[string]bool{}
+	var users []string
+	var last time.Time
+	for from := start; from.Before(end); {
+		to := minTime(from.Add(30*24*time.Hour), end)
+		for page := 1; ; page++ {
+			resp, err := backoff.Retry(ctx, func() (struct {
+				Data []struct {
+					UserID jsontext.Value `json:"userId"`
+				} `json:"data"`
+				Pagination struct {
+					HasNext bool `json:"hasNextPage"`
+				} `json:"pagination"`
+			}, error) {
+				var result struct {
+					Data []struct {
+						UserID jsontext.Value `json:"userId"`
+					} `json:"data"`
+					Pagination struct {
+						HasNext bool `json:"hasNextPage"`
+					} `json:"pagination"`
+				}
+				if wait := c.DailyRequestInterval - time.Since(last); !last.IsZero() && wait > 0 {
+					timer := time.NewTimer(wait)
+					select {
+					case <-ctx.Done():
+						timer.Stop()
+						return result, backoff.Permanent(ctx.Err())
+					case <-timer.C:
+					}
+				}
+				last = time.Now()
+				body, err := json.Marshal(map[string]any{"startDate": timestampMillis(from), "endDate": timestampMillis(to), "page": page, "pageSize": 1000})
+				if err != nil {
+					return result, backoff.Permanent(err)
+				}
+				req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL()+"/teams/daily-usage-data", bytes.NewReader(body))
+				if err != nil {
+					return result, backoff.Permanent(err)
+				}
+				req.SetBasicAuth(c.APIKey, "")
+				req.Header.Set("Content-Type", "application/json")
+				r, err := c.httpClient().Do(req)
+				if err != nil {
+					return result, backoff.Permanent(err)
+				}
+				defer r.Body.Close()
+				if r.StatusCode < 200 || r.StatusCode >= 300 {
+					e := &statusError{statusCode: r.StatusCode, status: r.Status, retryAfter: httputil.ParseRetryAfter(r.Header.Get("Retry-After"))}
+					if !e.retryable() {
+						return result, backoff.Permanent(e)
+					}
+					if e.retryAfter > 0 {
+						return result, backoff.RetryAfter(min(e.retryAfter, maxRetryDelay), e)
+					}
+					return result, e
+				}
+				if err := json.UnmarshalRead(r.Body, &result); err != nil {
+					return result, backoff.Permanent(err)
+				}
+				return result, nil
+			}, backoff.WithBackOff(newRetryBackOff()), backoff.WithMaxTries(maxPageAttempts), backoff.WithMaxElapsedTime(0))
+			if err != nil {
+				return nil, fmt.Errorf("fetching Cursor daily usage page %d: %w", page, err)
+			}
+			for _, row := range resp.Data {
+				id, err := strconv.ParseUint(string(row.UserID), 10, 64)
+				if err != nil || id == 0 {
+					continue
+				}
+				key := strconv.FormatUint(id, 10)
+				if !seen[key] {
+					seen[key] = true
+					users = append(users, key)
+				}
+			}
+			if !resp.Pagination.HasNext {
+				break
+			}
+		}
+		from = to
+	}
+	return users, nil
+}
+
+func minTime(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
+}
+
 // FetchAllUsageEvents requests every page of q, starting at q.Page. Requests,
 // retries included, start at least RequestInterval apart. A page that fails
 // with a rate limit or server error is requested again after the server's
@@ -270,7 +370,8 @@ func (c *Client) FetchAllUsageEvents(
 	var out []UsageEvent
 	// lastRequest spans the whole fetch so the request after a retried page
 	// is paced from the retry, not from the page's first attempt.
-	var lastRequest time.Time
+	lastRequest := c.lastUsageRequest
+	defer func() { c.lastUsageRequest = lastRequest }()
 	for {
 		resp, err := c.listUsageEventsWithRetry(ctx, &lastRequest, Query{
 			StartDate: q.StartDate,

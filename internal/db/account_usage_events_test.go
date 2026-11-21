@@ -11,23 +11,6 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 )
 
-func TestCursorUsagePollReplacesCoveredHistory(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	require.NoError(t, d.ConfigureArtifactLocalMachine(ctx, "test-machine"))
-	start := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
-	first := CursorUsagePoll{WindowStart: start, WindowEndExclusive: start.Add(24 * time.Hour), CompletedAt: start.Add(25 * time.Hour)}
-	second := CursorUsagePoll{WindowStart: start, WindowEndExclusive: start.Add(48 * time.Hour), CompletedAt: start.Add(49 * time.Hour)}
-	require.NoError(t, d.InsertCursorUsageEvents(ctx, nil, first))
-	require.NoError(t, d.InsertCursorUsageEvents(ctx, []CursorUsageEvent{{OccurredAt: "2026-07-28T10:00:00Z", Model: "model-a", UserID: "12", OutputTokens: 1}}, second))
-	var count int
-	require.NoError(t, d.Reader().QueryRowContext(ctx, `SELECT COUNT(*) FROM cursor_usage_polls`).Scan(&count))
-	assert.Equal(t, 1, count)
-	day, err := d.ExportReportingDay(ctx, ReportingExportOptions{Date: start, Now: start.Add(72 * time.Hour), SchemaVersion: 6, ByMachine: true})
-	require.NoError(t, err)
-	assert.Equal(t, "2026-07-30T01:00:00Z", day.Hours[10].Machines["cursor-account:12"].PolledAt)
-}
-
 func TestAccountUsageEventsKeepAgentsDatesAndReportedZero(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()

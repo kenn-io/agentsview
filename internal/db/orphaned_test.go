@@ -912,24 +912,3 @@ func TestCopySessionMetadataDoesNotCarryRevisionCounters(t *testing.T) {
 		SELECT value FROM archive_metadata WHERE key = 'analytics_change_revision'`).Scan(&revision)
 	require.ErrorIs(t, err, sql.ErrNoRows)
 }
-
-func TestFullResyncPreservesCursorPollEventIDs(t *testing.T) {
-	ctx := t.Context()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "source.db")
-	source := testDBAtPath(t, path, "source")
-	require.NoError(t, source.Update(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `INSERT INTO cursor_usage_events(id, occurred_at, model, dedup_key) VALUES
-			(3, '2026-07-28T10:00:00Z', 'model', 'a'), (9, '2026-07-28T09:00:00Z', 'model', 'b');
-			INSERT INTO cursor_usage_polls VALUES ('2026-07-28T00:00:00Z', '2026-07-29T00:00:00Z', '2026-07-29T01:00:00Z', 3)`)
-		return err
-	}))
-	require.NoError(t, source.Close())
-	destination := testDBAtPath(t, filepath.Join(dir, "destination.db"), "destination")
-	defer destination.Close()
-	require.NoError(t, destination.CopySessionMetadataFrom(ctx, path))
-	var id, maxID int
-	require.NoError(t, destination.Reader().QueryRow(ctx, `SELECT id, (SELECT event_max_id FROM cursor_usage_polls) FROM cursor_usage_events WHERE dedup_key='a'`).Scan(&id, &maxID))
-	assert.Equal(t, 3, id)
-	assert.Equal(t, 3, maxID)
-}

@@ -3085,10 +3085,14 @@ schemas keep their existing ordering behavior.
 
 ## Cursor (`cursor`)
 
-- **Admin usage:** The [filtered usage events API](https://prod.cursor.com/docs/account/teams/admin-api)
-  returns team billing events. Its public event example omits `userId`;
-  reporting uses it only when the event supplies a positive numeric value and
-  never derives it from email.
+- **Team usage:** The [Admin API](https://cursor.com/docs/account/teams/admin-api)
+  documents numeric user IDs in paginated daily usage data and as a filter for
+  usage events; its usage-event example does not include a user ID. An
+  unfiltered sync matches member-filtered events to stored events by their raw
+  deduplication key and records the matched account and completion time in
+  separate columns. The event's original `user_id`, `user_email`, and dedup key
+  remain unchanged.
+
 - **Dialogue projection:** Reverified 2026-10-17 against the JSONL parser and
   shared block fixtures. Assistant text and thinking blocks remain separate.
   Cursor IDE uses a different parser.

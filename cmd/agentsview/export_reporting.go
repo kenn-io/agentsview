@@ -58,7 +58,7 @@ func newExportHourCommand(deps exportReportingDeps) *cobra.Command {
 				return err
 			}
 			defer cleanup()
-			day, err := database.ExportReportingDay(
+			hour, err := database.ExportReportingHour(
 				cmd.Context(),
 				db.ReportingExportOptions{
 					Date:          hourStart.Truncate(24 * time.Hour),
@@ -67,18 +67,13 @@ func newExportHourCommand(deps exportReportingDeps) *cobra.Command {
 					ProjectKeys:   *projectKeys,
 					Bucket:        *bucket,
 					ByMachine:     *byMachine,
-				},
+				}, hourStart,
 			)
 			if err != nil {
 				return err
 			}
-			index := hourStart.Hour()
-			if index >= len(day.Hours) ||
-				day.Hours[index].Period != args[0] {
-				return fmt.Errorf("reporting hour %q is unavailable", args[0])
-			}
 			return writeCanonicalReportingDocument(
-				cmd, day.Hours[index],
+				cmd, hour,
 			)
 		},
 	}

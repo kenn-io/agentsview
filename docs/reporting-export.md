@@ -23,7 +23,8 @@ Digest ranges are inclusive, require both bounds, and may contain at most 31
 dates.
 
 Version 3 is the default. Hour, day, and digest commands also accept
-`--schema-version 5` for joint cells. Versions 1, 2, and 4 are no longer
+`--schema-version 5` for joint cells or `--schema-version 6 --by-machine` for
+Cursor account usage. Versions 1, 2, and 4 are no longer
 available. Any other value is rejected before the archive is opened or output is
 written. Integrations pinned to version 1 or 2 must update to version 3, and
 integrations pinned to version 4 must update to version 5. Both must refresh
@@ -62,24 +63,20 @@ Usage without a session machine, including standalone Cursor billing, uses
 does not prove that two different archives' account-wide billing is distinct. Do
 not treat it as a machine identity or merge it with a named machine.
 
-Schema 6 requires `--by-machine`. It reports Cursor team usage under
-`cursor-account:<user_id>` when the event has a positive numeric user ID and a
-completed unfiltered Cursor sync covers the entire UTC hour before the sync
-starts. Account parts carry
-`polled_at`, the time the sync completed, and usage totals by model and agent.
-Events without a valid user ID or a covering poll remain under archive billing.
-Email is never used as an account key. Project-key exports omit these
-sessionless events.
+Schema 6 reports matched Cursor usage under `cursor-account:<user_id>`, with
+`polled_at` set to the sync completion time. An unfiltered sync lists the team
+roster and fetches usage for each member; this adds requests for each roster
+page and member. Only events returned by a member fetch for a fully closed hour
+are assigned to that account. Filtered syncs do not establish account coverage;
+events without a match from an unfiltered sync remain under archive billing.
+Project-key exports omit account parts.
 
-In schema 6, machine identities beginning with `cursor-account:` or `machine:`
-are exported as stable `machine:` hashes to distinguish them from account parts.
-Schema 5 and the change stream retain the original machine identities.
-
-Events fetched before this version stay under archive billing until an
-unfiltered `agentsview source cursor sync-usage --since <date>` covers them. A
-sync filtered by email or user ID does not establish coverage. A later filtered
-sync keeps its new events under archive billing until a complete sync covers the
-hour.
+Events already in the archive stay under archive billing until an unfiltered
+sync matches them. The first export of an older archive adds empty account
+columns in place. An hour export loads account events only for that hour.
+Schema 6 hashes machine IDs beginning with `cursor-account:` or `machine:` to
+keep them distinct from account keys. Schema 5 and the change stream retain the
+original IDs.
 
 Downstream integrations can select one snapshot per originating machine and UTC
 hour before adding totals. Removing a whole overlapping archive would also

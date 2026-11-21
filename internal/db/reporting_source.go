@@ -15,6 +15,7 @@ type reportingSourceLoadStats struct {
 	ActivityHistoryRows int
 	UsageSessions       int
 	PaddedUsageRows     int
+	AccountUsageRows    int
 }
 
 type reportingExportSource struct {
@@ -25,7 +26,7 @@ type reportingExportSource struct {
 	usageSessions       []activity.SessionMeta
 	usageCandidates     []activityReportUsageCandidate
 	standaloneUsage     []activity.UsageRow
-	pollTimes           map[string]string
+	accountUsage        []reportingAccountRow
 	pricing             []export.EffectivePricingRow
 	createdAt           map[string]time.Time
 	projectObservations []export.ProjectIdentityObservation
@@ -52,7 +53,7 @@ type reportingDaySource struct {
 	usageSessions    []activity.SessionMeta
 	usageCandidates  []activityReportUsageCandidate
 	standaloneUsage  []activity.UsageRow
-	pollTimes        map[string]string
+	accountUsage     []reportingAccountRow
 	pricing          []export.EffectivePricingRow
 	createdAt        map[string]time.Time
 	projects         map[string]export.ProjectMapEntry
@@ -130,7 +131,7 @@ func (db *DB) loadReportingExportSource(
 	if err != nil {
 		return source, err
 	}
-	standaloneUsage, pollTimes, err := db.reportingStandaloneUsageCandidatesFrom(
+	standaloneUsage, err := db.reportingStandaloneUsageCandidatesFrom(
 		ctx, tx, query, schemaVersion,
 	)
 	if err != nil {
@@ -199,7 +200,6 @@ func (db *DB) loadReportingExportSource(
 	source.usageSessions = usageSessions
 	source.usageCandidates = usageCandidates
 	source.standaloneUsage = standaloneUsage
-	source.pollTimes = pollTimes
 	source.pricing = pricing
 	source.createdAt = createdAt
 	source.projectObservations = observations
@@ -266,6 +266,12 @@ func (src reportingExportSource) forDate(
 			standaloneUsage = append(standaloneUsage, row)
 		}
 	}
+	var accountUsage []reportingAccountRow
+	for _, row := range src.accountUsage {
+		if !row.at.Before(date) && row.at.Before(end) {
+			accountUsage = append(accountUsage, row)
+		}
+	}
 
 	allSessions := mergeReportingSessions(selectedSessions, usageSessions)
 	labels := activity.ProjectLabels(allSessions)
@@ -304,7 +310,7 @@ func (src reportingExportSource) forDate(
 		usageSessions:    usageSessions,
 		usageCandidates:  usageCandidates,
 		standaloneUsage:  standaloneUsage,
-		pollTimes:        src.pollTimes,
+		accountUsage:     accountUsage,
 		pricing:          src.pricing,
 		createdAt:        createdAt,
 		projects:         projects,

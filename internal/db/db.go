@@ -1897,6 +1897,8 @@ CREATE TABLE IF NOT EXISTS background_migrations (
 );` + projectIdentityRevisionSchemaSQL + projectIdentitySnapshotInvariantSchemaSQL
 
 var exportIdentityColumnMigrations = []schemaColumnMigration{
+	{"cursor_usage_events", "account_user_id", "ALTER TABLE cursor_usage_events ADD COLUMN account_user_id TEXT NOT NULL DEFAULT ''"},
+	{"cursor_usage_events", "account_polled_at", "ALTER TABLE cursor_usage_events ADD COLUMN account_polled_at TEXT NOT NULL DEFAULT ''"},
 	{"project_identity_observations", "session_id", "ALTER TABLE project_identity_observations ADD COLUMN session_id TEXT NOT NULL DEFAULT ''"},
 	{"project_identity_observations", "source_archive_id", "ALTER TABLE project_identity_observations ADD COLUMN source_archive_id TEXT NOT NULL DEFAULT ''"},
 	{"project_identity_observations", "source_archive_salt", "ALTER TABLE project_identity_observations ADD COLUMN source_archive_salt TEXT NOT NULL DEFAULT ''"},
@@ -1910,6 +1912,7 @@ var exportIdentityColumnMigrations = []schemaColumnMigration{
 }
 
 var exportIdentityUpgradeTables = map[string]struct{}{
+	"cursor_usage_events":                {},
 	"archive_metadata":                   {},
 	"background_migrations":              {},
 	"project_identity_observations":      {},
@@ -2324,6 +2327,15 @@ func checkReadOnlySchemaCompatibility(ctx context.Context, conn *sql.DB) error {
 	if missingAccountAgent {
 		return &SchemaUpgradeRequiredError{Table: "cursor_usage_events", Column: "agent"}
 	}
+	for _, column := range []string{"account_user_id", "account_polled_at"} {
+		var missing bool
+		if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cursor_usage_events') AND NOT EXISTS(SELECT 1 FROM pragma_table_info('cursor_usage_events') WHERE name = ?)`, column).Scan(&missing); err != nil {
+			return fmt.Errorf("checking account usage schema: %w", err)
+		}
+		if missing {
+			return &SchemaUpgradeRequiredError{Table: "cursor_usage_events", Column: column}
+		}
+	}
 	for _, index := range []string{
 		"idx_messages_usage_timestamp",
 		"idx_messages_usage_session_covering",
@@ -2547,6 +2559,8 @@ func legacySchemaColumnMigrations() []schemaColumnMigration {
 
 func schemaColumnMigrations() []schemaColumnMigration {
 	return []schemaColumnMigration{
+		{"cursor_usage_events", "account_user_id", "ALTER TABLE cursor_usage_events ADD COLUMN account_user_id TEXT NOT NULL DEFAULT ''"},
+		{"cursor_usage_events", "account_polled_at", "ALTER TABLE cursor_usage_events ADD COLUMN account_polled_at TEXT NOT NULL DEFAULT ''"},
 		{"sessions", "usage_generation", "ALTER TABLE sessions ADD COLUMN usage_generation TEXT;" +
 			" UPDATE sessions SET usage_generation=lower(hex(randomblob(8)))"},
 		{"sessions", "trends_generation", "ALTER TABLE sessions ADD COLUMN trends_generation TEXT"},

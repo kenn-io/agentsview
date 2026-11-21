@@ -16,6 +16,45 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 )
 
+func TestListDailyUsageUsersPagesAndWindows(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/teams/daily-usage-data", r.URL.Path)
+		var q struct {
+			Start    int64 `json:"startDate"`
+			End      int64 `json:"endDate"`
+			Page     int   `json:"page"`
+			PageSize int   `json:"pageSize"`
+		}
+		require.NoError(t, json.UnmarshalRead(r.Body, &q))
+		assert.Equal(t, 1000, q.PageSize)
+		assert.LessOrEqual(t, q.End-q.Start, int64((30*24*time.Hour)/time.Millisecond))
+		calls++
+		switch calls {
+		case 1:
+			assert.Equal(t, start.UnixMilli(), q.Start)
+			assert.Equal(t, 1, q.Page)
+			_, _ = w.Write([]byte(`{"data":[{"userId":12,"isActive":false},{"userId":12}],"pagination":{"hasNextPage":true}}`))
+		case 2:
+			assert.Equal(t, 2, q.Page)
+			_, _ = w.Write([]byte(`{"data":[{"userId":34}],"pagination":{"hasNextPage":false}}`))
+		case 3:
+			assert.Equal(t, start.Add(30*24*time.Hour).UnixMilli(), q.Start)
+			_, _ = w.Write([]byte(`{"data":[{"userId":34},{"userId":56}],"pagination":{"hasNextPage":false}}`))
+		default:
+			t.Errorf("unexpected roster request %d", calls)
+		}
+	}))
+	defer srv.Close()
+	c := NewClientWithBaseURL(srv.URL, "key")
+	c.DailyRequestInterval = 0
+	users, err := c.ListDailyUsageUsers(t.Context(), start, start.Add(31*24*time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"12", "34", "56"}, users)
+	assert.Equal(t, 3, calls)
+}
+
 func TestFetchAllUsageEvents(t *testing.T) {
 	fixturePath := filepath.Join("testdata", "admin_usage_page.json")
 	fixture, err := os.ReadFile(fixturePath)

@@ -356,15 +356,10 @@ CREATE TABLE IF NOT EXISTS cursor_usage_events (
     cursor_token_fee_microdollars INTEGER NOT NULL DEFAULT 0,
     user_id TEXT NOT NULL DEFAULT '',
     user_email TEXT NOT NULL DEFAULT '',
+    account_user_id TEXT NOT NULL DEFAULT '',
+    account_polled_at TEXT NOT NULL DEFAULT '',
     is_headless INTEGER NOT NULL DEFAULT 0,
     dedup_key TEXT NOT NULL DEFAULT ''
-);
-
-CREATE TABLE IF NOT EXISTS cursor_usage_polls (
-    window_start TEXT NOT NULL,
-    window_end_exclusive TEXT NOT NULL,
-    completed_at TEXT NOT NULL,
-    event_max_id INTEGER NOT NULL
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cursor_usage_events_dedup

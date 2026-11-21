@@ -121,46 +121,82 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 		return err
 	}
 
-	completedAt := time.Now().UTC()
 	rows := make([]db.CursorUsageEvent, 0, len(events))
 	for _, ev := range events {
-		rows = append(rows, db.CursorUsageEvent{
-			OccurredAt:       ev.Timestamp.UTC().Format(time.RFC3339Nano),
-			Model:            ev.Model,
-			Kind:             ev.Kind,
-			InputTokens:      ev.TokenUsage.InputTokens,
-			OutputTokens:     ev.TokenUsage.OutputTokens,
-			CacheWriteTokens: ev.TokenUsage.CacheWriteTokens,
-			CacheReadTokens:  ev.TokenUsage.CacheReadTokens,
-			Charged:          ev.Charged,
-			CursorTokenFee:   ev.CursorTokenFee,
-			UserID:           ev.UserID,
-			UserEmail:        ev.UserEmail,
-			IsHeadless:       ev.IsHeadless,
-		})
+		rows = append(rows, cursorUsageRow(ev))
 	}
-	var polls []db.CursorUsagePoll
+	if err := database.InsertCursorUsageEvents(ctx, rows); err != nil {
+		return err
+	}
 	if email == "" && userID == "" {
 		windowEnd := end.Add(time.Millisecond)
 		if windowEnd.After(closedThrough) {
 			windowEnd = closedThrough
 		}
 		if start.Before(windowEnd) {
-			polls = append(polls, db.CursorUsagePoll{WindowStart: start, WindowEndExclusive: windowEnd, CompletedAt: completedAt})
+			users, err := client.ListDailyUsageUsers(ctx, start, windowEnd)
+			if err != nil {
+				return err
+			}
+			owners := map[string]string{}
+			for _, id := range users {
+				memberEvents, err := client.FetchAllUsageEvents(ctx, cursorusage.Query{StartDate: start, EndDate: windowEnd.Add(-time.Millisecond), PageSize: 1000, UserID: id})
+				if err != nil {
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
+					fmt.Fprintf(os.Stderr, "Cursor usage for a member could not be fetched: %v\n", err)
+					continue
+				}
+				for _, ev := range memberEvents {
+					hour := ev.Timestamp.UTC().Truncate(time.Hour)
+					if hour.Before(start) || hour.Add(time.Hour).After(windowEnd) {
+						continue
+					}
+					row := cursorUsageRow(ev)
+					row.Agent = "cursor"
+					key := db.CursorUsageEventDedupKey(row)
+					if previous, ok := owners[key]; ok && previous != id {
+						owners[key] = ""
+					} else if !ok {
+						owners[key] = id
+					}
+				}
+			}
+			completedAt := time.Now().UTC()
+			byUser := map[string][]string{}
+			for key, id := range owners {
+				byUser[id] = append(byUser[id], key)
+			}
+			for id, keys := range byUser {
+				if err := database.AssignCursorUsageAccount(ctx, id, keys, completedAt); err != nil {
+					return err
+				}
+			}
 		}
-	}
-	if err := database.InsertCursorUsageEvents(ctx, rows, polls...); err != nil {
-		return err
-	}
-
-	fmt.Fprintf(os.Stdout,
-		"Fetched %d Cursor usage events into the archive\n",
-		len(rows),
-	)
-	if email != "" || userID != "" {
+	} else {
 		fmt.Fprintln(os.Stdout, `Filtered syncs do not establish account reporting coverage. To cover this period, rerun with --email "" --user-id "".`)
 	}
+
+	fmt.Fprintf(os.Stdout, "Fetched %d Cursor usage events into the archive\n", len(rows))
 	return nil
+}
+
+func cursorUsageRow(ev cursorusage.UsageEvent) db.CursorUsageEvent {
+	return db.CursorUsageEvent{
+		OccurredAt:       ev.Timestamp.UTC().Format(time.RFC3339Nano),
+		Model:            ev.Model,
+		Kind:             ev.Kind,
+		InputTokens:      ev.TokenUsage.InputTokens,
+		OutputTokens:     ev.TokenUsage.OutputTokens,
+		CacheWriteTokens: ev.TokenUsage.CacheWriteTokens,
+		CacheReadTokens:  ev.TokenUsage.CacheReadTokens,
+		Charged:          ev.Charged,
+		CursorTokenFee:   ev.CursorTokenFee,
+		UserID:           ev.UserID,
+		UserEmail:        ev.UserEmail,
+		IsHeadless:       ev.IsHeadless,
+	}
 }
 
 func resolveCursorUsageWindow(
