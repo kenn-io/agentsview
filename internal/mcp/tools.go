@@ -1042,36 +1042,23 @@ func (t *toolset) searchContentMatches(ctx context.Context, req service.ContentS
 	if err != nil || !listing {
 		return res, err
 	}
-	for i := 0; i < len(res.Matches); {
-		first := &res.Matches[i]
-		end := i + 1
-		for end < len(res.Matches) && res.Matches[end].SessionID == first.SessionID &&
-			res.Matches[end].TranscriptRevision == first.TranscriptRevision &&
-			res.Matches[end].Ordinal == res.Matches[end-1].Ordinal+1 {
-			end++
-		}
-		messages, err := t.svc.Messages(ctx, first.SessionID, service.MessageFilter{
-			From: &first.Ordinal, Limit: end - i, ExpectedRevision: first.TranscriptRevision,
+	for i := range res.Matches {
+		match := &res.Matches[i]
+		messages, err := t.svc.Messages(ctx, match.SessionID, service.MessageFilter{
+			From: &match.Ordinal, Limit: 1, ExpectedRevision: match.TranscriptRevision,
 		})
 		if err != nil {
 			return nil, err
 		}
-		if len(messages.Messages) != end-i {
+		if len(messages.Messages) != 1 || messages.Messages[0].Ordinal != match.Ordinal {
 			return nil, service.ErrSourceChanged
 		}
-		for j := i; j < end; j++ {
-			match, message := &res.Matches[j], messages.Messages[j-i]
-			if message.Ordinal != match.Ordinal {
-				return nil, service.ErrSourceChanged
-			}
-			body := cmp.Or(message.Content, message.ThinkingText)
-			match.Snippet = (db.ContentSearchFilter{}).BuildSnippet(body, 0, 0)
-			_, snippetEnd := db.SnippetBounds(body, 0, 0, db.ContentSnippetRadius)
-			if snippetEnd < len(body) {
-				match.Snippet += "..."
-			}
+		body := cmp.Or(messages.Messages[0].Content, messages.Messages[0].ThinkingText)
+		match.Snippet = (db.ContentSearchFilter{}).BuildSnippet(body, 0, 0)
+		_, end := db.SnippetBounds(body, 0, 0, db.ContentSnippetRadius)
+		if end < len(body) {
+			match.Snippet += "..."
 		}
-		i = end
 	}
 	return res, nil
 }
