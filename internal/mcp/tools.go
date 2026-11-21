@@ -632,7 +632,7 @@ func (t *toolset) resolveMessageRead(ctx context.Context, in *getMessagesIn) err
 	if err != nil {
 		return err
 	}
-	in.SessionID = detail.ID
+	in.SessionID = detail.ID //nolint:nilaway // Both lookup paths return an error when detail is nil.
 	in.ExpectedRevision, err = unbindMessageRevision(in.SessionID, in.ExpectedRevision)
 	return err
 }
