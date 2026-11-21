@@ -354,12 +354,10 @@ func TestServeStaleArchiveHelperProcess(t *testing.T) {
 	localTransport := http.DefaultTransport
 	if os.Getenv("AGENTSVIEW_STALE_SERVE_KIND") == "legacy image text" {
 		transport := localTransport.(*http.Transport).Clone()
-		transport.Proxy = nil
 		transport.DialContext = func(context.Context, string, string) (net.Conn, error) {
 			return nil, errors.New("network disabled in test")
 		}
 		withPricingCatalogTransport(t, transport)
-		t.Cleanup(transport.CloseIdleConnections)
 	} else {
 		withPricingCatalogTransport(t, pricingCatalogTransport{requests: make(chan *http.Request, 16)})
 	}
