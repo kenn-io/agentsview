@@ -647,6 +647,15 @@ func (db *DB) writeOneSessionBatchTx(
 			return 0, err
 		}
 	}
+	if !usageOnly {
+		if replaceMessages || completed > 0 || upsertResult.structuredPRLinksChanged {
+			if err := refreshSessionPromptPRLinksTx(queries, write.Session.ID); err != nil {
+				return 0, err
+			}
+		} else if err := appendSessionPromptPRLinksTx(queries, write.Session.ID, msgs); err != nil {
+			return 0, err
+		}
+	}
 	if imageDiff != nil {
 		err = refreshMessageDiffImageTextTx(queries, write.Session.ID, *imageDiff, true)
 	} else if !sessionExists || replaceMessages || filled > 0 {

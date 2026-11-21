@@ -574,3 +574,30 @@ func TestArchiveOnlyRefusesArtifactExchange(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, entries)
 }
+
+func TestArtifactSyncPreservesPromptDialogue(t *testing.T) {
+	target := t.TempDir()
+	source, destination := testDB(t), testDB(t)
+	repoA, err := OpenRepository(t.Context(), t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, repoA.Close()) })
+	repoB, err := OpenRepository(t.Context(), t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, repoB.Close()) })
+	seedSession(t, source, "one", "alpha", func(s *db.Session) { s.MessageCount = 3; s.UserMessageCount = 3 })
+	require.NoError(t, source.ReplaceSessionMessages(t.Context(), "one", []db.Message{
+		{SessionID: "one", Ordinal: 0, Role: "user", Content: "https://github.com/o/r/pull/1", ContentLength: 29},
+		{SessionID: "one", Ordinal: 1, Role: "user", Content: "https://github.com/o/r/pull/2", DialogueText: new(""), ContentLength: 29},
+		{SessionID: "one", Ordinal: 2, Role: "user", Content: "https://github.com/o/r/pull/3 https://github.com/o/r/pull/4", DialogueText: new("https://github.com/o/r/pull/3"), ContentLength: 59},
+	}))
+	_, err = SyncWithRepository(t.Context(), source, repoA, SyncOptions{Target: target, Origin: "laptop-a1b2c3"})
+	require.NoError(t, err)
+	_, err = SyncWithRepository(t.Context(), destination, repoB, SyncOptions{Target: target, Origin: "desktop-d4e5f6"})
+	require.NoError(t, err)
+	got, err := destination.GetMessages(t.Context(), "laptop-a1b2c3~one", 0, 10, true)
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+	assert.Nil(t, got[0].DialogueText)
+	assert.Equal(t, new(""), got[1].DialogueText)
+	assert.Equal(t, new("https://github.com/o/r/pull/3"), got[2].DialogueText)
+}

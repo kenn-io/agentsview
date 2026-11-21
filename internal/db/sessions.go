@@ -400,8 +400,8 @@ type Session struct {
 	Cwd                         string `json:"cwd,omitempty"`
 	GitBranch                   string `json:"git_branch,omitempty"`
 	ProjectAssigned             bool   `json:"project_assigned,omitempty"`
-	// PRLinks lists the pull or merge requests the source transcript
-	// associated with the session. Parser-owned: a full reparse replaces it.
+	// PRLinks lists pull or merge requests from structured records and retained
+	// user prompts. A prompt mention does not establish active work.
 	// Always serialized, as [] when empty, so a client merging a fresh
 	// response over a cached one drops cleared values.
 	PRLinks []PRLink `json:"pr_links" required:"false"`
@@ -1266,7 +1266,8 @@ func (db *DB) GetSessionFull(
 	return s, nil
 }
 
-// GetArtifactExportSession returns uncoalesced names and omits applied launcher parents.
+// GetArtifactExportSession returns uncoalesced names and structured PR links,
+// and omits applied launcher parents.
 func (db *DB) GetArtifactExportSession(
 	ctx context.Context, id string,
 ) (*Session, error) {
@@ -1277,8 +1278,13 @@ func (db *DB) GetArtifactExportSession(
 	parent := `CASE WHEN ` + launcherApplied + ` THEN NULL ELSE parent_session_id END`
 	relationship := `CASE WHEN ` + launcherApplied + ` THEN ` + parserRelationshipSQL + ` ELSE relationship_type END`
 	cols := sessionFullColsBeforeParent + parent + `, parser_parent_session_id, ` + relationship + sessionFullColsAfterRelationship
-	return scanSessionFullRow(db.getReader().QueryRowContext(ctx,
+	s, err := scanSessionFullRow(db.getReader().QueryRowContext(ctx,
 		"SELECT "+cols+" FROM sessions WHERE id = ?", id), id)
+	if err != nil || s == nil {
+		return s, err
+	}
+	s.PRLinks, err = db.GetSessionStructuredPRLinks(ctx, id)
+	return s, err
 }
 
 func (db *DB) getSessionFullUncoalesced(
@@ -1569,8 +1575,8 @@ const insertSessionSQL = `
 			file_path, file_size, file_mtime,
 			next_ordinal, last_entry_uuid, claude_linear_parse,
 			file_inode, file_device, file_hash,
-			pr_links, parser_relationship_type
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			pr_links, structured_pr_links, parser_relationship_type
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // insertSessionIfAbsentSQL inserts a session only when its id does not already
 // exist, leaving an existing row untouched.
@@ -1639,7 +1645,7 @@ const upsertSessionBaseSQL = insertSessionSQL + `
 			file_inode = excluded.file_inode,
 			file_device = excluded.file_device,
 			file_hash = excluded.file_hash,
-			pr_links = excluded.pr_links`
+			structured_pr_links = excluded.structured_pr_links`
 
 const upsertSessionSQL = upsertSessionBaseSQL + `,
 			source_missing_at = NULL`
@@ -1683,6 +1689,7 @@ func upsertSessionArgs(s Session) []any {
 		s.FilePath, s.FileSize, s.FileMtime,
 		s.NextOrdinal, s.LastEntryUUID, s.ClaudeLinearParse,
 		s.FileInode, s.FileDevice, s.FileHash,
+		EncodePRLinks(s.PRLinks),
 		EncodePRLinks(s.PRLinks),
 		s.RelationshipType,
 	}
@@ -1746,6 +1753,11 @@ func (db *DB) upsertSession(ctx context.Context,
 	if err != nil {
 		return result, err
 	}
+	if result.structuredPRLinksChanged && !db.usageOnlyStorage() {
+		if err := refreshSessionPromptPRLinksTx(tx, s.ID); err != nil {
+			return result, err
+		}
+	}
 	if db.usageOnlyStorage() {
 		if err := settleUsageOnlySessionTx(tx, s.ID); err != nil {
 			return result, err
@@ -1758,10 +1770,11 @@ func (db *DB) upsertSession(ctx context.Context,
 }
 
 type sessionUpsertResult struct {
-	inserted        bool
-	sourceMissing   bool
-	previousProject string
-	currentProject  string
+	inserted                 bool
+	structuredPRLinksChanged bool
+	sourceMissing            bool
+	previousProject          string
+	currentProject           string
 }
 
 func upsertSessionExec(
@@ -1792,19 +1805,20 @@ func upsertSessionExec(
 	var previousSessionName sql.NullString
 	var previousAutomated bool
 	var previousParent sql.NullString
-	var previousRelationship string
+	var previousRelationship, previousStructuredPRLinks string
 	var deletedAt, sourceMissingAt sql.NullString
 	err = queryRow(ctx,
-		"SELECT project, session_name, deleted_at, source_missing_at, is_automated, parent_session_id, relationship_type "+
+		"SELECT project, session_name, deleted_at, source_missing_at, is_automated, parent_session_id, relationship_type, structured_pr_links "+
 			"FROM sessions WHERE id = ?", s.ID,
 	).Scan(
 		&previousProject, &previousSessionName, &deletedAt, &sourceMissingAt, &previousAutomated,
-		&previousParent, &previousRelationship,
+		&previousParent, &previousRelationship, &previousStructuredPRLinks,
 	)
 	result := sessionUpsertResult{
-		inserted:        errors.Is(err, sql.ErrNoRows),
-		previousProject: previousProject,
-		currentProject:  s.Project,
+		inserted:                 errors.Is(err, sql.ErrNoRows),
+		structuredPRLinksChanged: err == nil && previousStructuredPRLinks != EncodePRLinks(s.PRLinks),
+		previousProject:          previousProject,
+		currentProject:           s.Project,
 	}
 	if err != nil && !result.inserted {
 		return sessionUpsertResult{},

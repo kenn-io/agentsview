@@ -14,6 +14,7 @@ import (
 	"os"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -625,6 +626,12 @@ func exportClaimedSessionToStore(
 	)
 }
 
+// preDialogueVersionSuffix ends every message record the streaming exporter
+// encodes. The version digit sits just before the closing brace.
+var preDialogueVersionSuffix = []byte(
+	`,"v":` + strconv.Itoa(messageSegmentPreDialogueVersion) + "}\n",
+)
+
 func exportMessageSegmentsToStore(
 	ctx context.Context,
 	store ArtifactStore,
@@ -639,6 +646,10 @@ func exportMessageSegmentsToStore(
 	var spool *os.File
 	var hasher hash.Hash
 	var segmentBytes int64
+	// versionOffsets locates each record's version digit in the spool so a
+	// segment can move from v4 to v5 once a record carries dialogue_text.
+	var versionOffsets []int64
+	segmentHasDialogue := false
 	segmentMessages := 0
 	segmentNested := nestedCollectionCounts{}
 	defer func() {
@@ -658,6 +669,8 @@ func exportMessageSegmentsToStore(
 		}
 		hasher = sha256.New()
 		segmentBytes = 0
+		versionOffsets = versionOffsets[:0]
+		segmentHasDialogue = false
 		segmentMessages = 0
 		segmentNested = nestedCollectionCounts{}
 		return nil
@@ -667,6 +680,21 @@ func exportMessageSegmentsToStore(
 			return rejectArtifactExportf(
 				"manifest segment reference limit exceeded for %s: limit %d",
 				sessionID, limits.manifestSegments)
+		}
+		if segmentHasDialogue {
+			version := []byte(strconv.Itoa(messageSegmentFormatVersion))
+			for _, offset := range versionOffsets {
+				if _, err := spool.WriteAt(version, offset); err != nil {
+					return fmt.Errorf("setting artifact segment version: %w", err)
+				}
+			}
+			if _, err := spool.Seek(0, io.SeekStart); err != nil {
+				return fmt.Errorf("rewinding artifact segment spool: %w", err)
+			}
+			hasher.Reset()
+			if _, err := io.Copy(hasher, spool); err != nil {
+				return fmt.Errorf("hashing artifact segment spool: %w", err)
+			}
 		}
 		digest := hex.EncodeToString(hasher.Sum(nil))
 		if _, duplicate := seen[digest]; duplicate {
@@ -711,7 +739,9 @@ func exportMessageSegmentsToStore(
 		if err := validateMessageFitsSegment(message.Ordinal, messageNested, limits); err != nil {
 			return nil, err
 		}
-		data, err := canonicalJSON(segmentMessageFromDB(message))
+		record := segmentMessageFromDB(message)
+		record.Version = messageSegmentPreDialogueVersion
+		data, err := canonicalJSON(record)
 		if err != nil {
 			return nil, fmt.Errorf(
 				"%w: encoding message segment at ordinal %d: %w",
@@ -742,6 +772,16 @@ func exportMessageSegmentsToStore(
 				"session decoded byte limit exceeded for %s: limit %d",
 				sessionID, limits.sessionDecodedBytes)
 		}
+		// "v" sorts after every other record key, so canonical JSON ends
+		// each record with the version.
+		if !bytes.HasSuffix(data, preDialogueVersionSuffix) {
+			return nil, fmt.Errorf(
+				"message record at ordinal %d does not end with its segment version",
+				message.Ordinal,
+			)
+		}
+		versionOffsets = append(versionOffsets, segmentBytes+int64(len(data)-len("}\n")-1))
+		segmentHasDialogue = segmentHasDialogue || message.DialogueText != nil
 		if _, err := io.MultiWriter(spool, hasher).Write(data); err != nil {
 			return nil, fmt.Errorf("writing artifact segment spool: %w", err)
 		}

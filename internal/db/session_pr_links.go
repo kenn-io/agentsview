@@ -14,9 +14,8 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-// PRLink is a pull or merge request associated with a session. Parsers
-// populate it from structured source records, so a full reparse replaces
-// the stored list.
+// PRLink is a pull or merge request named in a structured record or retained
+// user prompt.
 type PRLink = parser.PRLink
 
 // EncodePRLinks returns the stored text form of links: a JSON array, or
@@ -159,14 +158,14 @@ func (c labelsColumn) Scan(src any) error {
 	return nil
 }
 
-// GetSessionPRLinkURLs returns the pull request URLs stored for a session.
+// GetSessionPRLinkURLs returns the structured pull request URLs for a session.
 // A missing session yields an empty map.
 func (db *DB) GetSessionPRLinkURLs(
 	ctx context.Context, sessionID string,
 ) (map[string]struct{}, error) {
 	var text string
 	err := db.getReader().QueryRowContext(ctx,
-		"SELECT pr_links FROM sessions WHERE id = ?", sessionID,
+		"SELECT structured_pr_links FROM sessions WHERE id = ?", sessionID,
 	).Scan(&text)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("reading pr links for %s: %w", sessionID, err)
@@ -176,4 +175,150 @@ func (db *DB) GetSessionPRLinkURLs(
 		seen[link.URL] = struct{}{}
 	}
 	return seen, nil
+}
+
+// PromptPRLinks finds links in retained user dialogue.
+func PromptPRLinks(messages []Message) []PRLink {
+	links, _ := PromptPRLinksContext(context.Background(), messages)
+	return links
+}
+
+// PromptPRLinksContext allows hosted projection to stop when its deadline expires.
+func PromptPRLinksContext(ctx context.Context, messages []Message) ([]PRLink, error) {
+	var lists [][]PRLink
+	for _, msg := range messages {
+		if msg.Role != "user" || msg.IsSystem || msg.IsCompactBoundary || msg.SourceSubtype == parser.SourceSubtypeToolResult || IsSystemPrefixed(msg.Content, msg.Role) {
+			continue
+		}
+		content := msg.Content
+		if msg.DialogueText != nil {
+			content = *msg.DialogueText
+		}
+		trimmed := strings.TrimSpace(content)
+		if strings.HasPrefix(trimmed, "<bash-stdout>") || strings.HasPrefix(trimmed, "<bash-stderr>") {
+			continue
+		}
+		content = withoutSystemReminders(content)
+		links, err := parser.PromptPRLinksContext(ctx, content)
+		if err != nil {
+			return nil, err
+		}
+		lists = append(lists, links)
+	}
+	return parser.CombinePRLinks(lists...), nil
+}
+
+func withoutSystemReminders(text string) string {
+	const open = "<system-reminder"
+	var result strings.Builder
+	for {
+		start := strings.Index(text, open)
+		if start < 0 {
+			break
+		}
+		endName := start + len(open)
+		if endName == len(text) || !strings.ContainsRune("> \t\r\n", rune(text[endName])) {
+			result.WriteString(text[:endName])
+			text = text[endName:]
+			continue
+		}
+		tagEnd := strings.IndexByte(text[endName:], '>')
+		if tagEnd < 0 {
+			break
+		}
+		body := endName + tagEnd + 1
+		end := strings.Index(text[body:], systemReminderCloseTag)
+		if end < 0 {
+			break
+		}
+		result.WriteString(text[:start])
+		result.WriteByte(' ')
+		text = text[body+end+len(systemReminderCloseTag):]
+	}
+	result.WriteString(text)
+	return result.String()
+}
+
+func writeSessionPromptPRLinksTx(tx transactionQueries, id, stored string, links []PRLink) error {
+	encoded := EncodePRLinks(links)
+	if encoded == stored {
+		return nil
+	}
+	_, err := tx.Exec(`UPDATE sessions SET pr_links=?, local_modified_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?`, encoded, id)
+	return err
+}
+
+const promptPRLinkCandidateSQL = `role='user' AND (COALESCE(` + sqliteDialogueExprBare + `, content) LIKE '%http://%' OR COALESCE(` + sqliteDialogueExprBare + `, content) LIKE '%https://%')`
+
+func refreshSessionPromptPRLinksTx(tx transactionQueries, id string) error {
+	var stored, structured string
+	if err := tx.QueryRow(`SELECT pr_links, structured_pr_links FROM sessions WHERE id=?`, id).Scan(&stored, &structured); err != nil {
+		return err
+	}
+	rows, err := tx.Query(`SELECT `+selectMessageCols+` FROM messages WHERE session_id=? AND `+promptPRLinkCandidateSQL+` ORDER BY ordinal`, id)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	messages, err := scanMessages(rows)
+	if closeErr := rows.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return writeSessionPromptPRLinksTx(tx, id, stored, parser.CombinePRLinks(DecodePRLinks(structured), PromptPRLinks(messages)))
+}
+
+func appendSessionPromptPRLinksTx(tx transactionQueries, id string, messages []Message) error {
+	derived := PromptPRLinks(messages)
+	if len(derived) == 0 {
+		return nil
+	}
+	var stored string
+	if err := tx.QueryRow(`SELECT pr_links FROM sessions WHERE id=?`, id).Scan(&stored); err != nil {
+		return err
+	}
+	return writeSessionPromptPRLinksTx(tx, id, stored, parser.CombinePRLinks(DecodePRLinks(stored), derived))
+}
+
+// GetSessionStructuredPRLinks returns parser-recorded links without prompt links.
+func (db *DB) GetSessionStructuredPRLinks(ctx context.Context, id string) ([]PRLink, error) {
+	var encoded string
+	if err := db.getReader().QueryRowContext(ctx, `SELECT structured_pr_links FROM sessions WHERE id=?`, id).Scan(&encoded); err != nil {
+		return nil, err
+	}
+	return DecodePRLinks(encoded), nil
+}
+
+// promptPRLinksDataVersion is the first data version whose pr_links include
+// links found in retained prompts.
+const promptPRLinksDataVersion = 184
+
+// upgradePromptPRLinksTx indexes stored prompts in the transaction that raises
+// the archive to promptPRLinksDataVersion. An older binary may have rewritten
+// pr_links without structured_pr_links since the column was added, so the
+// structured column is refreshed first. Doing both with the version change
+// means an archive an older binary still accepts never holds prompt links.
+func (db *DB) upgradePromptPRLinksTx(ctx context.Context, tx *sql.Tx) error {
+	version, _, err := readUserVersion(ctx, tx)
+	if err != nil || version >= promptPRLinksDataVersion {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET structured_pr_links=pr_links WHERE structured_pr_links IS NOT pr_links`); err != nil {
+		return fmt.Errorf("copying structured PR links: %w", err)
+	}
+	if db.usageOnlyStorage() {
+		return nil
+	}
+	ids, err := sessionIDsTx(ctx, tx, "id IN (SELECT session_id FROM messages WHERE "+promptPRLinkCandidateSQL+")")
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if err := refreshSessionPromptPRLinksTx(tx, id); err != nil {
+			return fmt.Errorf("backfilling prompt PR links: %w", err)
+		}
+	}
+	return nil
 }

@@ -1,9 +1,13 @@
 package parser
 
 import (
+	"context"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // PRLink is a pull or merge request associated with a session. The shape
@@ -95,4 +99,148 @@ func mergePRLinks(lists ...[]PRLink) []PRLink {
 		}
 	}
 	return c.result()
+}
+
+// CombinePRLinks combines links to the same pull request for display and search.
+func CombinePRLinks(lists ...[]PRLink) []PRLink {
+	seen := make(map[prLinkIdentity]struct{})
+	var result []PRLink
+	for _, list := range lists {
+		for _, link := range list {
+			key := prLinkIdentity{strings.ToLower(link.Host), strings.ToLower(link.Repository), link.Number}
+			if _, ok := seen[key]; !ok {
+				seen[key] = struct{}{}
+				result = append(result, link)
+			}
+		}
+	}
+	return result
+}
+
+type prLinkIdentity struct {
+	host, repository string
+	number           int
+}
+
+// PromptPRLinksContext extracts pull and merge request URLs from text,
+// stopping when ctx ends so callers holding locks can interrupt scanning.
+func PromptPRLinksContext(ctx context.Context, text string) ([]PRLink, error) {
+	var links prLinkCollector
+	for pos := 0; pos < len(text); {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		start := pos
+		checkAt := pos + 4096
+		for pos < len(text) {
+			r, n := utf8.DecodeRuneInString(text[pos:])
+			if unicode.IsSpace(r) || strings.ContainsRune("<>\"'()[]", r) {
+				break
+			}
+			pos += n
+			if pos >= checkAt {
+				checkAt = pos + 4096
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+			}
+		}
+		token := text[start:pos]
+		var starts []int
+		query := false
+		queryCanSeparate := false
+		for i := range len(token) {
+			if i&4095 == 0 {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+			}
+			if token[i] == '?' || token[i] == '#' {
+				if !query && len(starts) > 0 {
+					previous, err := url.Parse(token[starts[len(starts)-1]:i])
+					if err == nil {
+						repository, number, routePath, found := promptPRRoute(previous.Path)
+						if n, parseErr := strconv.Atoi(number); found && parseErr == nil {
+							previous.Path, previous.RawPath = routePath, ""
+							_, queryCanSeparate = NewPRLink(previous.String(), repository, n)
+						}
+					}
+				}
+				query = true
+			}
+			if (len(token)-i >= 7 && strings.EqualFold(token[i:i+7], "http://")) || (len(token)-i >= 8 && strings.EqualFold(token[i:i+8], "https://")) {
+				separated := i > 0 && (!query || queryCanSeparate && token[i-1] == ',') && token[i-1] != '/' && token[i-1] != '='
+				if len(starts) == 0 || separated {
+					starts = append(starts, i)
+					query = false
+					queryCanSeparate = false
+				}
+			}
+		}
+		for i, start := range starts {
+			if i&255 == 0 {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+			}
+			end := len(token)
+			if i+1 < len(starts) {
+				end = starts[i+1]
+			}
+			candidate := token[start:end]
+			if i+1 < len(starts) {
+				candidate = strings.TrimRightFunc(candidate, func(r rune) bool { return unicode.IsPunct(r) || unicode.IsSymbol(r) })
+			}
+			candidate = strings.TrimRightFunc(candidate, func(r rune) bool {
+				return strings.ContainsRune(".,;:!?]`*_", r) || r > unicode.MaxASCII && unicode.IsPunct(r)
+			})
+			u, err := url.Parse(candidate)
+			if err != nil {
+				continue
+			}
+			repository, num, routePath, found := promptPRRoute(u.Path)
+			if !found || strings.Trim(num, "0123456789") != "" {
+				continue
+			}
+			n, err := strconv.Atoi(num)
+			if err != nil {
+				continue
+			}
+			u.Path = routePath
+			u.RawPath, u.RawQuery, u.Fragment = "", "", ""
+			if link, ok := NewPRLink(u.String(), repository, n); ok {
+				links.add(link)
+			}
+		}
+		if pos < len(text) {
+			_, n := utf8.DecodeRuneInString(text[pos:])
+			pos += n
+		}
+	}
+	return CombinePRLinks(links.result()), nil
+}
+
+// promptPRRoute finds the pull or merge request route in a prompt URL path.
+// "/pull/" and "/pulls/" must follow exactly owner/repo, as on GitHub, Gitea,
+// and Forgejo. Only GitLab's "/-/merge_requests/" may follow a nested group
+// path; GitLab reserves "-" as a path segment, so the first "-" ends the
+// project path. Any segments after the number, such as "/files", are a
+// subpage of the request.
+func promptPRRoute(path string) (repository, number, routePath string, found bool) {
+	segments := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	repoLen := slices.Index(segments, "-")
+	var numberAt int
+	switch {
+	case repoLen >= 0 && repoLen+2 < len(segments) && segments[repoLen+1] == "merge_requests":
+		numberAt = repoLen + 2
+	case len(segments) > 3 && (segments[2] == "pull" || segments[2] == "pulls"):
+		repoLen, numberAt = 2, 3
+	default:
+		return "", "", "", false
+	}
+	if repoLen < 2 || slices.Contains(segments[:repoLen], "") {
+		return "", "", "", false
+	}
+	return strings.Join(segments[:repoLen], "/"), segments[numberAt],
+		"/" + strings.Join(segments[:numberAt+1], "/"), true
 }

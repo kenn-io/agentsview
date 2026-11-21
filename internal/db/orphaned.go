@@ -252,10 +252,22 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		); err != nil {
 			return nil, fmt.Errorf("sanitizing orphaned data: %w", err)
 		}
+		if !oldDBHasColumn(ctx, tx, "sessions", "structured_pr_links") {
+			if _, err := tx.ExecContext(ctx, `UPDATE sessions SET structured_pr_links=pr_links WHERE id IN (SELECT id FROM _orphaned_ids)`); err != nil {
+				return nil, err
+			}
+		}
 		if err := applyArchiveContentToCopiedSessionsTx(
 			ctx, tx, "_orphaned_ids", d.ArchiveContent(), sourceVersion,
 		); err != nil {
 			return nil, fmt.Errorf("projecting orphaned data: %w", err)
+		}
+		if !d.usageOnlyStorage() {
+			for _, id := range ids {
+				if err := refreshSessionPromptPRLinksTx(tx, id); err != nil {
+					return nil, fmt.Errorf("refreshing orphaned prompt PR links: %w", err)
+				}
+			}
 		}
 		if err := clearCopiedSelfParents(ctx, tx, "_orphaned_ids"); err != nil {
 			return nil, err
@@ -412,10 +424,22 @@ func (d *DB) CopyTrashedDataFrom(ctx context.Context, sourcePath string) ([]stri
 	); err != nil {
 		return nil, fmt.Errorf("sanitizing trashed data: %w", err)
 	}
+	if !oldDBHasColumn(ctx, tx, "sessions", "structured_pr_links") {
+		if _, err := tx.ExecContext(ctx, `UPDATE sessions SET structured_pr_links=pr_links WHERE id IN (SELECT id FROM _trashed_ids)`); err != nil {
+			return nil, err
+		}
+	}
 	if err := applyArchiveContentToCopiedSessionsTx(
 		ctx, tx, "_trashed_ids", d.ArchiveContent(), sourceVersion,
 	); err != nil {
 		return nil, fmt.Errorf("projecting trashed data: %w", err)
+	}
+	if !d.usageOnlyStorage() {
+		for _, id := range ids {
+			if err := refreshSessionPromptPRLinksTx(tx, id); err != nil {
+				return nil, fmt.Errorf("refreshing trashed prompt PR links: %w", err)
+			}
+		}
 	}
 	// Keep the archived transcript under its page ID before the upgrade loses
 	// the filename mapping. Retain an empty thread row for legacy trash scope;
@@ -2247,7 +2271,7 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 		"missing_verification_count",
 		"duplicate_prompt_count", "no_code_context_count",
 		"runaway_tool_loop_count",
-		"cwd", "git_branch", "pr_links", "source_session_id",
+		"cwd", "git_branch", "pr_links", "structured_pr_links", "source_session_id",
 		"source_version", "group_key", "transcript_fidelity", "parser_malformed_lines",
 		"is_truncated", "last_write_incremental",
 		"termination_status", "transcript_revision",

@@ -9,6 +9,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/ingest"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 const (
@@ -32,6 +33,59 @@ func rawGroupHasStaleFriction(
 		WHERE s.friction_rules_version NOT IN ($2, $3)
 	)`, group, friction.RulesVersion, friction.SkippedRulesVersion).Scan(&stale)
 	return stale, err
+}
+
+// syncSelectedRawPRLinks refreshes materialized revisions selected by active
+// branches, including longer retained captures whose source has departed.
+func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string, dialogueChanges []string) (bool, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT b.session_id,s.data_version FROM raw_session_branches b JOIN sessions s ON s.id=b.session_id WHERE b.group_id=$1 AND b.active AND (s.data_version<$2 OR b.session_id=ANY($3::text[]))`, group, db.CurrentDataVersion(), dialogueChanges)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		var version int
+		if err := rows.Scan(&id, &version); err != nil {
+			return false, err
+		}
+		if version > db.CurrentDataVersion() {
+			return false, &db.DataVersionTooNewError{DatabaseVersion: version, BinaryVersion: db.CurrentDataVersion()}
+		}
+		ids = append(ids, id)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return false, err
+	}
+	changed := false
+	for _, id := range ids {
+		payload, err := loadRawPayload(ctx, tx, id)
+		if err != nil {
+			return false, err
+		}
+		promptLinks, err := db.PromptPRLinksContext(ctx, payload.Messages)
+		if err != nil {
+			return false, err
+		}
+		links := db.EncodePRLinks(parser.CombinePRLinks(payload.Session.PRLinks, promptLinks))
+		var linksChanged bool
+		err = tx.QueryRowContext(ctx, `WITH prior AS (
+ SELECT pr_links FROM sessions WHERE id=$1 FOR UPDATE
+), updated AS (
+ UPDATE sessions SET pr_links=$2,data_version=GREATEST(data_version,$3)
+ FROM prior WHERE id=$1 AND (sessions.pr_links IS DISTINCT FROM $2 OR data_version<$3)
+ RETURNING prior.pr_links IS DISTINCT FROM $2 AS links_changed
+)
+SELECT COALESCE((SELECT links_changed FROM updated),false)`, id, links, db.CurrentDataVersion()).Scan(&linksChanged)
+		if err != nil {
+			return false, err
+		}
+		changed = changed || linksChanged
+	}
+	return changed, nil
 }
 
 // rawEmbeddingChange is a physical session whose embeddings must follow a
@@ -267,6 +321,11 @@ func (s *RawProjectionStore) writePayload(ctx context.Context, tx *sql.Tx, id, g
 	for i := range p.Findings {
 		p.Findings[i].SessionID = id
 	}
+	promptLinks, err := db.PromptPRLinksContext(ctx, p.Messages)
+	if err != nil {
+		return err
+	}
+	p.Session.PRLinks = parser.CombinePRLinks(p.Session.PRLinks, promptLinks)
 	if err := writePGSession(ctx, tx, p.Session, "raw-projection:"+group, nil, pgSessionWriteOptions{Machine: "hosted", UsageOnly: s.options.Content.ArchiveContent.UsageOnly(), SkipAliases: true}); err != nil {
 		return err
 	}

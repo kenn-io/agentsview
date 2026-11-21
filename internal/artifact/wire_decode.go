@@ -6,6 +6,8 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"strings"
+	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -181,6 +183,25 @@ func decodePreflightedSegment(preflight segmentPreflight) ([]db.Message, error) 
 		if err := json.Unmarshal(line, &record); err != nil {
 			return nil, fmt.Errorf("decoding message segment: %w", err)
 		}
+		if len(record.DialogueRanges) > 0 {
+			if record.Version < messageSegmentFormatVersion || len(record.DialogueRanges) > maxDialogueRanges || record.DialogueText != nil || record.DialogueIsContent {
+				return nil, errors.New("invalid dialogue ranges")
+			}
+			var text strings.Builder
+			end := 0
+			for _, bounds := range record.DialogueRanges {
+				if bounds[0] < end || bounds[1] < bounds[0] || bounds[1] > len(record.Content) {
+					return nil, errors.New("invalid dialogue range bounds")
+				}
+				text.WriteString(record.Content[bounds[0]:bounds[1]])
+				end = bounds[1]
+			}
+			dialogue := text.String()
+			if !utf8.ValidString(dialogue) {
+				return nil, errors.New("invalid dialogue range text")
+			}
+			record.DialogueText = &dialogue
+		}
 		msgs = append(msgs, record.dbMessage())
 	}
 	return msgs, nil
@@ -352,6 +373,7 @@ func (m segmentMessage) dbMessage() db.Message {
 		Ordinal:           m.Ordinal,
 		Role:              m.Role,
 		Content:           m.Content,
+		DialogueText:      m.DialogueText,
 		ThinkingText:      m.ThinkingText,
 		Timestamp:         m.Timestamp,
 		HasThinking:       m.HasThinking,
@@ -375,6 +397,9 @@ func (m segmentMessage) dbMessage() db.Message {
 		IsSidechain:       m.IsSidechain,
 		IsCompactBoundary: m.IsCompactBoundary,
 		PromptSource:      m.PromptSource,
+	}
+	if m.DialogueIsContent {
+		msg.DialogueText = &msg.Content
 	}
 	if len(m.ToolCalls) > 0 {
 		msg.ToolCalls = make([]db.ToolCall, len(m.ToolCalls))

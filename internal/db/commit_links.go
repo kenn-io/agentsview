@@ -392,7 +392,7 @@ func commitLinkCandidate(input, tool, category string) bool {
 		(invokesGitCommit(commitCommandText(input)) || len(commitPollIDs(input, tool)) > 0)
 }
 
-func bumpIncrementalTranscriptRevisionTx(tx transactionQueries, sessionID string, msgs []Message, update IncrementalSessionUpdate) error {
+func bumpIncrementalTranscriptRevisionTx(tx transactionQueries, sessionID string, msgs []Message, update IncrementalSessionUpdate, usageOnly bool) error {
 	// Replacements can remove evidence. Appends only affect links through
 	// commit commands and polls, including late results for existing calls.
 	refresh := update.ReplaceFromOrdinal != nil
@@ -441,6 +441,15 @@ func bumpIncrementalTranscriptRevisionTx(tx transactionQueries, sessionID string
 	}
 	if refresh {
 		if err := refreshSessionCommitLinksTx(tx, sessionID); err != nil {
+			return err
+		}
+	}
+	if !usageOnly {
+		if update.ReplaceFromOrdinal != nil {
+			if err := refreshSessionPromptPRLinksTx(tx, sessionID); err != nil {
+				return err
+			}
+		} else if err := appendSessionPromptPRLinksTx(tx, sessionID, msgs); err != nil {
 			return err
 		}
 	}

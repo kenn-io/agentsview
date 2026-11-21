@@ -121,7 +121,7 @@ export type GetApiV1SessionsParams = {
    */
   label?: string[];
   /**
-   * Keep sessions linked to a pull request: owner/repo, owner/repo#123, or github.com::owner/repo#123
+   * Keep sessions linked to a pull request: owner/repo, owner/repo#123, or github.com::owner/repo#123. Includes URLs in user prompts; a mention does not mean work was done on the PR
    */
   pr?: string;
   /**

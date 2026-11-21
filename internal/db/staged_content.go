@@ -344,6 +344,11 @@ func (db *DB) commitStagedDerivedStateAndCheckpoint(
 	// message/tool row and the transcript revision. Metadata, detector rules,
 	// and prior failed post-processing may still have changed; refresh every
 	// derived projection in one transaction with the checkpoint.
+	if !db.usageOnlyStorage() {
+		if err := refreshSessionPromptPRLinksTx(tx, sessionID); err != nil {
+			return err
+		}
+	}
 	if err := resetIncrementalMarkerTx(tx, sessionID); err != nil {
 		return err
 	}
@@ -509,6 +514,11 @@ func (db *DB) replaceSessionContentStaged(
 	}
 	if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
 		return err
+	}
+	if !db.usageOnlyStorage() {
+		if err := refreshSessionPromptPRLinksTx(tx, sessionID); err != nil {
+			return err
+		}
 	}
 	if err := refreshImageTextOccurrencesTx(tx, sessionID); err != nil {
 		return err

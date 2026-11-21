@@ -665,7 +665,7 @@ ______________________________________________________________________
 
 ### Pull request links
 
-Sessions list the pull requests their agent recorded in the transcript, in
+Sessions list pull requests found in retained user prompts or structured transcript records, in
 `pr_links`:
 
 ```json
@@ -679,9 +679,9 @@ Sessions list the pull requests their agent recorded in the transcript, in
 ]
 ```
 
-Claude Code is the only agent that records these today, as `pr-link` entries
-in its transcripts. AgentsView keeps one link per URL. The link says the session was associated with the pull request. It
-does not say whether the session opened it.
+AgentsView keeps one link per pull request. A prompt link means the prompt
+mentioned the pull request; it does not establish that the session worked on it. Claude Code
+also records `pr-link` entries in its transcripts.
 Claude Code records these links for the whole transcript, so every session
 split from one transcript, such as a rewind's fork, carries them, like its name
 and git branch.

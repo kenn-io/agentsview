@@ -2225,3 +2225,63 @@ func TestExportRoundTripsSessionQualitySignals(t *testing.T) {
 	assert.NotContains(t, string(sessionData), `"quality_signals"`,
 		"the inner session DTO must carry no quality-signals content of its own")
 }
+
+func TestExportMessageSegmentVersions(t *testing.T) {
+	plain := db.Message{Role: "user", Content: "ordinary"}
+	prompt := db.Message{Ordinal: 1, Role: "user", Content: "prompt", DialogueText: new("prompt")}
+	for _, tc := range []struct {
+		name            string
+		messages        []db.Message
+		segmentMessages int
+		want            [][]db.Message
+		versions        []string
+	}{
+		{
+			name:     "no dialogue keeps v4",
+			messages: []db.Message{plain},
+			want:     [][]db.Message{{plain}},
+			versions: []string{`"v":4`},
+		},
+		{
+			name:     "dialogue raises every record to v5",
+			messages: []db.Message{plain, prompt},
+			want:     [][]db.Message{{plain, prompt}},
+			versions: []string{`"v":5`},
+		},
+		{
+			name:            "version follows each segment",
+			messages:        []db.Message{plain, prompt},
+			segmentMessages: 1,
+			want:            [][]db.Message{{plain}, {prompt}},
+			versions:        []string{`"v":4`, `"v":5`},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newTestArtifactStore(t)
+			limits := productionArtifactLimits()
+			if tc.segmentMessages > 0 {
+				limits.segmentMessages = tc.segmentMessages
+			}
+			hashes, err := exportMessageSegmentsToStore(t.Context(), store, contractOrigin, "session", tc.messages, limits)
+			require.NoError(t, err)
+			require.Len(t, hashes, len(tc.want))
+			for i, hash := range hashes {
+				ref, err := NewRef(contractOrigin, KindSegments, hash+".ndjson")
+				require.NoError(t, err)
+				_, reader, err := store.Open(t.Context(), ref)
+				require.NoError(t, err)
+				data, err := io.ReadAll(reader)
+				require.NoError(t, err)
+				require.NoError(t, reader.Verify())
+				require.NoError(t, reader.Close())
+				assert.Equal(t, len(tc.want[i]), strings.Count(string(data), tc.versions[i]))
+				decoded, err := decodeSegment(data)
+				require.NoError(t, err)
+				require.Len(t, decoded, len(tc.want[i]))
+				for j, msg := range decoded {
+					assert.Equal(t, tc.want[i][j].DialogueText, msg.DialogueText)
+				}
+			}
+		})
+	}
+}

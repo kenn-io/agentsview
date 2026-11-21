@@ -8,6 +8,7 @@ import (
 	"encoding/json/jsontext"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -49,11 +50,14 @@ const (
 	manifestMinDecodeVersion = 2
 	// Segment v2 adds the optional prompt_source provenance field on
 	// message records. Segment v3 adds the optional provider_id billing
-	// field. Segment v4 adds the optional reasoning_effort field; v1 through
-	// v3 segments still decode, with the fields defaulting to empty.
-	messageSegmentFormatVersion    = 4
-	messageSegmentMinDecodeVersion = 1
-	metadataEventFormatVersion     = 1
+	// field. Segment v4 adds reasoning_effort, and v5 adds dialogue_text
+	// and ranges that reconstruct it from content.
+	// Earlier segments still decode with missing fields empty. Export writes
+	// the lowest version that holds every record in the segment.
+	messageSegmentPreDialogueVersion = 4
+	messageSegmentFormatVersion      = 5
+	messageSegmentMinDecodeVersion   = 1
+	metadataEventFormatVersion       = 1
 )
 
 // metadataEventExtension is the file extension for metadata event artifacts.
@@ -219,6 +223,9 @@ type segmentMessage struct {
 	Ordinal           int               `json:"ordinal"`
 	Role              string            `json:"role"`
 	Content           string            `json:"content"`
+	DialogueText      *string           `json:"dialogue_text,omitzero"`
+	DialogueIsContent bool              `json:"dialogue_is_content,omitzero"`
+	DialogueRanges    [][2]int          `json:"dialogue_ranges,omitzero"`
 	ThinkingText      string            `json:"thinking_text,omitempty"`
 	Timestamp         string            `json:"timestamp,omitempty"`
 	HasThinking       bool              `json:"has_thinking,omitzero"`
@@ -313,9 +320,15 @@ func ValidateRawSource(raw *RawSourceRef) error {
 }
 
 func encodeSegment(msgs []db.Message) ([]byte, error) {
+	version := messageSegmentPreDialogueVersion
+	if slices.ContainsFunc(msgs, func(msg db.Message) bool { return msg.DialogueText != nil }) {
+		version = messageSegmentFormatVersion
+	}
 	var buf bytes.Buffer
 	for _, msg := range msgs {
-		data, err := canonicalJSON(segmentMessageFromDB(msg))
+		record := segmentMessageFromDB(msg)
+		record.Version = version
+		data, err := canonicalJSON(record)
 		if err != nil {
 			return nil, fmt.Errorf("encoding message segment: %w", err)
 		}
@@ -324,12 +337,41 @@ func encodeSegment(msgs []db.Message) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// Limit range overhead and fall back to literal dialogue for fragmented text.
+const maxDialogueRanges = 4096
+
+func dialogueContentRanges(content, dialogue string) [][2]int {
+	var ranges [][2]int
+	pos := 0
+	for i := range len(dialogue) {
+		start := pos
+		if pos >= len(content) || content[pos] != dialogue[i] {
+			offset := strings.IndexByte(content[pos:], dialogue[i])
+			if offset < 0 {
+				return nil
+			}
+			start += offset
+		}
+		pos = start + 1
+		if len(ranges) > 0 && ranges[len(ranges)-1][1] == start {
+			ranges[len(ranges)-1][1] = pos
+		} else {
+			// A range needs at most 45 JSON bytes with 64-bit offsets.
+			if len(ranges) >= maxDialogueRanges || (len(ranges)+1)*45 >= len(dialogue) {
+				return nil
+			}
+			ranges = append(ranges, [2]int{start, pos})
+		}
+	}
+	return ranges
+}
+
 func segmentMessageFromDB(msg db.Message) segmentMessage {
 	record := segmentMessage{
-		Version:           messageSegmentFormatVersion,
 		Ordinal:           msg.Ordinal,
 		Role:              msg.Role,
 		Content:           msg.Content,
+		DialogueText:      msg.DialogueText,
 		ThinkingText:      msg.ThinkingText,
 		Timestamp:         msg.Timestamp,
 		HasThinking:       msg.HasThinking,
@@ -353,6 +395,16 @@ func segmentMessageFromDB(msg db.Message) segmentMessage {
 		SourceParentUUID:  msg.SourceParentUUID,
 		IsSidechain:       msg.IsSidechain,
 		IsCompactBoundary: msg.IsCompactBoundary,
+	}
+	if msg.DialogueText != nil && *msg.DialogueText == msg.Content {
+		record.DialogueText = nil
+		record.DialogueIsContent = true
+	}
+	if msg.DialogueText != nil && *msg.DialogueText != "" && !record.DialogueIsContent {
+		record.DialogueRanges = dialogueContentRanges(msg.Content, *msg.DialogueText)
+		if len(record.DialogueRanges) > 0 {
+			record.DialogueText = nil
+		}
 	}
 	if len(msg.ToolCalls) > 0 {
 		record.ToolCalls = make([]segmentToolCall, len(msg.ToolCalls))
