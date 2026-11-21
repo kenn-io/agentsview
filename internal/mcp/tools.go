@@ -1157,11 +1157,6 @@ func (t *toolset) searchContent(
 		out.NextCursor = &nc
 	}
 	out.Hints = service.SearchContentHints(ctx, t.svc, req, res, false, keepMatch)
-	empty := out
-	empty.Matches = nil
-	if !fitsResponse(empty) {
-		return nil, searchContentOut{}, errors.New("search metadata exceeds response budget")
-	}
 	// Hints come only with an empty page.
 	if len(in.Concepts) == 0 && len(out.Matches) > 0 && !fitsResponse(out) {
 		items := out.Matches
@@ -1174,31 +1169,31 @@ func (t *toolset) searchContent(
 				return nil, searchContentOut{}, err
 			}
 		}
-		build := func(k int) bool {
+		n := fitPrefix(len(items), func(k int) bool {
 			out.Matches, out.Omitted = items[:k], len(items)-k
 			if !ranked {
 				next := in.Cursor + rawIndexes[max(k, 1)-1] + 1
 				out.NextCursor = &next
 			}
 			return fitsResponse(out)
-		}
-		if !build(0) {
+		})
+		if n == 0 && !fitFirstMatch(&out, items) {
 			return nil, searchContentOut{}, errors.New("search metadata exceeds response budget")
-		}
-		n := fitPrefix(len(items), build)
-		if n == 0 {
-			m := &items[0]
-			m.Truncated = true
-			m.ContextBefore, m.ContextAfter = nil, nil
-			out.Omitted = len(items) - 1
-			m.Snippet = fitText(m.Snippet, responseBudgetBytes-responseSize(out), func(text string) any { match := *m; match.Snippet = text; return match })
-			out.Matches = items[:1]
-			if !fitsResponse(out) {
-				return nil, searchContentOut{}, errors.New("search metadata exceeds response budget")
-			}
 		}
 	}
 	return nil, out, nil
+}
+
+// fitFirstMatch keeps only the first match, truncating its snippet and dropping
+// its context, and reports whether the page then fits the budget.
+func fitFirstMatch(out *searchContentOut, items []contentMatch) bool {
+	m := &items[0]
+	m.Truncated = true
+	m.ContextBefore, m.ContextAfter = nil, nil
+	out.Omitted = len(items) - 1
+	m.Snippet = fitText(m.Snippet, responseBudgetBytes-responseSize(out), func(text string) any { match := *m; match.Snippet = text; return match })
+	out.Matches = items[:1]
+	return fitsResponse(out)
 }
 
 func (t *toolset) searchContentMatches(ctx context.Context, req service.ContentSearchRequest, listing bool) (*service.ContentSearchResult, error) {

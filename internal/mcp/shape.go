@@ -105,8 +105,9 @@ func fitsResponse(out any) bool {
 // fitPrefix selects the largest fitting prefix and leaves it built.
 func fitPrefix(n int, build func(int) bool) int {
 	k := sort.Search(n+1, func(i int) bool { return !build(i) })
-	build(k - 1)
-	return k - 1
+	k = max(k-1, 0)
+	build(k)
+	return k
 }
 
 // fitText returns the longest rune prefix whose encoded item fits its budget.
