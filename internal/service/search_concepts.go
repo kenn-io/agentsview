@@ -46,9 +46,6 @@ func NormalizeContentSearchRequest(req ContentSearchRequest) (ContentSearchReque
 			return req, &db.SearchInputError{Msg: "search: concepts must be distinct"}
 		}
 	}
-	if req.Mode != "" && req.Mode != "semantic" {
-		return req, &db.SearchInputError{Msg: "search: mode must be semantic when concepts are supplied"}
-	}
 	if req.Cursor != 0 {
 		return req, &db.SearchInputError{Msg: "search: cursor is not supported with concepts"}
 	}

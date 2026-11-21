@@ -788,13 +788,13 @@ func (t *toolset) getMessageBodyContinuation(
 // --- search_content ---
 
 type searchContentIn struct {
-	Pattern          string   `json:"pattern,omitempty" jsonschema:"Natural-language query for semantic/hybrid, whitespace-separated literals for terms, or substring/regex for lexical search across message text, thinking, and tool inputs/results. A fully quoted substring pattern matches only its text. Mutually exclusive with concepts."`
-	Concepts         []string `json:"concepts,omitempty" jsonschema:"Two to five semantic concepts that must all have evidence in the same session, even in different messages. Implies mode semantic, does not page, and is mutually exclusive with pattern."`
+	Pattern          string   `json:"pattern,omitempty" jsonschema:"Semantic/hybrid query, whitespace-separated literals for terms, substring, or regex over messages, thinking, and tools. Required unless concepts or session_id is set. Fully quoted substring matches exact text. Mutually exclusive with concepts."`
+	Concepts         []string `json:"concepts,omitempty" jsonschema:"Two to five concepts with evidence in the same session, possibly across messages. Always uses semantic mode, does not page, and is mutually exclusive with pattern."`
 	Mode             string   `json:"mode,omitempty" jsonschema:"substring (default), regex, terms, semantic, or hybrid. Prefer hybrid for contextual questions. Hybrid returns keyword matches with a note when search by meaning is unavailable; semantic requires a ready index."`
 	Scope            string   `json:"scope,omitempty" jsonschema:"Substring/regex/terms/semantic/hybrid result scope: top, all (default), or subordinate."`
 	Project          string   `json:"project,omitempty" jsonschema:"Restrict to one project."`
 	Agent            string   `json:"agent,omitempty" jsonschema:"Restrict to one agent."`
-	SessionID        string   `json:"session_id,omitempty" jsonschema:"Restrict to one exact full stored session ID."`
+	SessionID        string   `json:"session_id,omitempty" jsonschema:"Exact full stored session ID. Without pattern or concepts, list its messages, ignoring mode and include flags and including active, one-shot, and automated sessions."`
 	GitBranch        string   `json:"git_branch,omitempty" jsonschema:"Restrict to one exact git branch."`
 	CurrentSessionID string   `json:"current_session_id,omitempty" jsonschema:"Exclude this exact full stored session ID instead of applying the recent-activity heuristic."`
 	DateFrom         string   `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
@@ -802,9 +802,9 @@ type searchContentIn struct {
 	Limit            int      `json:"limit,omitempty" jsonschema:"Max matches, default 10, max 50."`
 	Cursor           int      `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor; also pass activity_cutoff when the recent-activity heuristic applies."`
 	ActivityCutoff   string   `json:"activity_cutoff,omitempty" jsonschema:"RFC3339 cutoff returned by the previous page. Required with a positive cursor when the recent-activity heuristic applies."`
-	IncludeActive    bool     `json:"include_active,omitempty" jsonschema:"Include matches from sessions active in the last 10 minutes. Default false: the conversation you are in right now is also recorded, so without this exclusion you would find yourself."`
-	IncludeOneShot   bool     `json:"include_one_shot,omitempty" jsonschema:"Include one-shot sessions. Default false."`
-	IncludeAutomated bool     `json:"include_automated,omitempty" jsonschema:"Include automated sessions. Default false."`
+	IncludeActive    bool     `json:"include_active,omitempty" jsonschema:"Include sessions active in the last 10 minutes in pattern and concept searches. Default false to exclude the current conversation."`
+	IncludeOneShot   bool     `json:"include_one_shot,omitempty" jsonschema:"Include one-shot sessions in pattern and concept searches. Default false."`
+	IncludeAutomated bool     `json:"include_automated,omitempty" jsonschema:"Include automated sessions in pattern and concept searches. Default false."`
 	Context          int      `json:"context,omitempty" jsonschema:"Messages of context before/after each match (max 10)."`
 }
 
@@ -916,7 +916,14 @@ func validateSearchDates(from, to string) error {
 func (t *toolset) searchContent(
 	ctx context.Context, _ *mcp.CallToolRequest, in searchContentIn,
 ) (*mcp.CallToolResult, searchContentOut, error) {
-	if strings.TrimSpace(in.Pattern) == "" && len(in.Concepts) == 0 {
+	if in.Cursor < 0 {
+		return nil, searchContentOut{}, errors.New("cursor must not be negative")
+	}
+	listing := strings.TrimSpace(in.Pattern) == "" && len(in.Concepts) == 0 && in.SessionID != ""
+	if listing {
+		in.Pattern, in.Mode = "^", "regex"
+		in.IncludeActive, in.IncludeOneShot, in.IncludeAutomated = true, true, true
+	} else if strings.TrimSpace(in.Pattern) == "" && len(in.Concepts) == 0 {
 		return nil, searchContentOut{}, errors.New("pattern or concepts required")
 	}
 	limit := clampLimit(in.Limit, defaultSearchLimit, maxContentSearchLimit)
@@ -963,7 +970,7 @@ func (t *toolset) searchContent(
 	req := service.ContentSearchRequest{
 		Pattern:            in.Pattern,
 		Concepts:           in.Concepts,
-		Mode:               in.Mode,
+		Mode:               mode,
 		KeywordFallback:    mode == "hybrid",
 		Scope:              scope,
 		Project:            in.Project,
@@ -980,7 +987,10 @@ func (t *toolset) searchContent(
 		ExcludeSessionIDs:  excludeSessions,
 		ExcludeActiveSince: cutoff,
 	}
-	res, err := t.svc.SearchContent(ctx, req)
+	if listing {
+		req.Sources = []string{"messages"}
+	}
+	res, err := t.searchContentMatches(ctx, req, listing)
 	if err != nil {
 		return nil, searchContentOut{}, err
 	}
@@ -1039,6 +1049,32 @@ func (t *toolset) searchContent(
 	}
 	out.Hints = service.SearchContentHints(ctx, t.svc, req, res, false, keepMatch)
 	return nil, out, nil
+}
+
+func (t *toolset) searchContentMatches(ctx context.Context, req service.ContentSearchRequest, listing bool) (*service.ContentSearchResult, error) {
+	res, err := t.svc.SearchContent(ctx, req)
+	if err != nil || !listing {
+		return res, err
+	}
+	for i := range res.Matches {
+		match := &res.Matches[i]
+		messages, err := t.svc.Messages(ctx, match.SessionID, service.MessageFilter{
+			From: &match.Ordinal, Limit: 1, ExpectedRevision: match.TranscriptRevision,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if len(messages.Messages) != 1 || messages.Messages[0].Ordinal != match.Ordinal {
+			return nil, service.ErrSourceChanged
+		}
+		body := cmp.Or(messages.Messages[0].Content, messages.Messages[0].ThinkingText)
+		match.Snippet = (db.ContentSearchFilter{}).BuildSnippet(body, 0, 0)
+		_, end := db.SnippetBounds(body, 0, 0, db.ContentSnippetRadius)
+		if end < len(body) {
+			match.Snippet += "..."
+		}
+	}
+	return res, nil
 }
 
 // --- get_usage_summary ---

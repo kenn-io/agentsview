@@ -933,7 +933,7 @@ exists.
 
 Pass `concepts` with two to five distinct natural-language ideas when recall
 must find one session that covers all of them. Do not also pass `pattern`.
-`mode` defaults to `semantic`; an explicit mode must also be `semantic`. The
+Concepts always use `semantic` mode, regardless of `mode`. The
 HTTP API takes the same list as repeated `concepts` query parameters and
 requires the `X-AgentsView-Search-Intent: semantic` header.
 

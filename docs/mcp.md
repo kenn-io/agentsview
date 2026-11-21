@@ -299,8 +299,8 @@ error without it. Exact `session_id`, `git_branch`, `project`, `agent`,
 to 10 and go up to 50; a value outside that range falls back to the default.
 
 To find one past session that covered several ideas, pass `concepts` instead of
-`pattern`: two to five distinct natural-language strings. The mode defaults to
-`semantic`, and any other explicit mode is rejected. AgentsView searches each
+`pattern`: two to five distinct natural-language strings. AgentsView uses
+`semantic` mode regardless of the requested mode and searches each
 concept separately and keeps only sessions with evidence for all of them, even
 when different exchanges carry that evidence. Results rank by the mean of each
 concept's strongest score. Each match lists `concept_evidence` in request order:
@@ -309,6 +309,11 @@ the concept, its snippet, score, ordinal, `ordinal_range`, and
 `candidate_truncated` is true when a session may be missing: one concept's
 candidate search filled up or stopped at its fetch cap, or more sessions matched
 than the limit allowed.
+
+Pass `session_id` without `pattern` or `concepts` to list that session's
+messages in order. This includes active, one-shot, and automated sessions and
+ignores `mode`. Results are search snippets, with `...` when shortened; use
+`get_messages` for full text. Other filters still apply.
 
 A `terms` snippet shows about 60 characters of context around the first
 occurrence of each term. Terms that sit far apart in a long exchange produce

@@ -239,7 +239,7 @@ func TestSearchContentConceptsIntersectDifferentExchangesThroughHTTP(t *testing.
 	})
 
 	w := te.wrappedRequest(http.MethodGet,
-		"/api/v1/search/content?concepts=auth+model&concepts=retry+policy&scope=top&limit=10",
+		"/api/v1/search/content?concepts=auth+model&concepts=retry+policy&mode=substring&scope=top&limit=10",
 		withHeader("X-AgentsView-Search-Intent", "semantic"))
 	assertStatus(t, w, http.StatusOK)
 	res := decode[service.ContentSearchResult](t, w)
@@ -267,8 +267,7 @@ func TestSearchContentConceptsRejectedRequestsThroughHTTP(t *testing.T) {
 		{"neither", "", []requestOpt{intent}, http.StatusBadRequest, "pattern or concepts required"},
 		{"both", "pattern=x&concepts=a&concepts=b", []requestOpt{intent}, http.StatusBadRequest, "mutually exclusive"},
 		{"one concept", "concepts=a", []requestOpt{intent}, http.StatusBadRequest, "between 2 and 5"},
-		{"lexical mode", "concepts=a&concepts=b&mode=substring", []requestOpt{intent}, http.StatusBadRequest, "mode must be semantic"},
-		{"no intent header", "concepts=a&concepts=b", nil, http.StatusForbidden, "X-AgentsView-Search-Intent"},
+		{"no intent header", "concepts=a&concepts=b&mode=substring", nil, http.StatusForbidden, "X-AgentsView-Search-Intent"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := te.wrappedRequest(http.MethodGet, "/api/v1/search/content?"+tc.query, tc.opts...)

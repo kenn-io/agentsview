@@ -297,6 +297,9 @@ The latest release is
 
 **Bug fixes**
 
+- Search session messages by ID without a pattern, and use concepts with any
+  mode.
+
 - The container image now accepts hosted raw-sync uploads when it runs as a
   non-root uid with no passwd entry, such as a Kubernetes pod with `runAsUser`.
   Before, every upload failed and the client kept retrying it as pending. The
