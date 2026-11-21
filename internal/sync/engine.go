@@ -11305,8 +11305,8 @@ func (e *Engine) writeBatchWithOutcomeContext(
 		// succeeded. The pending upsert deliberately does not touch this
 		// column, and source-missing state is cleared only after this
 		// succeeds, so an old current version cannot hide a failed rewrite.
-		if err := e.db.SetSessionDataVersion(ctx,
-			s.ID, dataVersionForWrite(pw),
+		if err := e.db.SetSessionDataVersionWithToolPRLinks(ctx,
+			s.ID, dataVersionForWrite(pw), s.ToolPRLinks, replaceMessages,
 		); err != nil {
 			if ctx.Err() != nil {
 				return outcome
@@ -11480,7 +11480,7 @@ func (e *Engine) prepareSessionNormalizedContext(
 			remote = obs.GitRemote
 		}
 	}
-	candidate.Session.PRLinks = parser.CombinePRLinks(candidate.Session.PRLinks, db.ToolCallPRLinks(candidate.Messages, candidate.Session.Cwd, remote))
+	candidate.Session.ToolPRLinks = db.ToolCallPRLinks(candidate.Messages, candidate.Session.Cwd, remote)
 	options := ingest.ContentOptions{
 		BlockedResultCategories: e.blockedResultCategories,
 		ToolResultImages:        e.toolResultImages,
@@ -12022,8 +12022,8 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 				outcome.failedSessions++
 				continue
 			}
-			if err := e.db.SetSessionDataVersion(ctx,
-				s.ID, dataVersionForWrite(pw),
+			if err := e.db.SetSessionDataVersionWithToolPRLinks(ctx,
+				s.ID, dataVersionForWrite(pw), s.ToolPRLinks, true,
 			); err != nil {
 				log.Printf(
 					"set data_version for %s: %v", s.ID, err,
@@ -12392,8 +12392,8 @@ func (e *Engine) writeSessionFullWithResolver(
 
 	// See writeBatch for why data_version is bumped here
 	// rather than inside UpsertSession.
-	if err := e.db.SetSessionDataVersion(ctx,
-		s.ID, dataVersionForWrite(pw),
+	if err := e.db.SetSessionDataVersionWithToolPRLinks(ctx,
+		s.ID, dataVersionForWrite(pw), s.ToolPRLinks, true,
 	); err != nil {
 		log.Printf(
 			"set data_version for %s: %v", s.ID, err,

@@ -7,6 +7,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/ingest"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 type importClosureOutcome uint8
@@ -293,7 +294,7 @@ func rewriteManifestForImport(
 	m manifest, messages []db.Message,
 ) db.SessionBatchWrite {
 	importedID := m.Origin + "~" + m.NativeSessionID
-	session := m.Session.dbSession()
+	session := sessionFromManifest(m.Session, messages)
 	session.ID = importedID
 	session.Machine = m.Origin
 	session.SessionName = m.SessionName
@@ -405,4 +406,10 @@ func signalsFromImportedSession(session db.Session) db.SessionSignalUpdate {
 		signals.QualitySignals = *quality
 	}
 	return signals
+}
+
+func sessionFromManifest(m manifestSession, messages []db.Message) db.Session {
+	session := m.dbSession()
+	session.ToolPRLinks = parser.CombinePRLinks(session.ToolPRLinks, db.ToolCallPRLinks(messages, session.Cwd, ""))
+	return session
 }

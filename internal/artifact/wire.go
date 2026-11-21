@@ -42,11 +42,13 @@ const (
 	// integer-microdollar cost objects. Manifest v3 adds the optional
 	// session_kind provenance field. Manifest v4 adds the optional
 	// provider_id billing field on usage events. Manifest v5 adds session group_key,
-	// v6 adds session pr_links, and v7 adds plan_usage and capture_coverage.
+	// v6 adds session pr_links, v7 adds plan_usage and capture_coverage,
+	// and v8 adds session tool_pr_links.
 	// Older manifests decode with missing fields empty. Export writes the
 	// lowest version that holds the session's fields.
 	manifestPRLinksVersion   = 6
-	manifestFormatVersion    = 7
+	manifestPlanUsageVersion = 7
+	manifestFormatVersion    = 8
 	manifestMinDecodeVersion = 2
 	// Segment v2 adds the optional prompt_source provenance field on
 	// message records. Segment v3 adds the optional provider_id billing

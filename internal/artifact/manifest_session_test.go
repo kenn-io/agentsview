@@ -28,6 +28,7 @@ func TestManifestSessionMatchesDBSessionWireFormat(t *testing.T) {
 
 	var sess db.Session
 	populateWireFixture(t, reflect.ValueOf(&sess).Elem(), 1)
+	sess.ToolPRLinks = nil
 	require.Len(t, sess.ParentSessionIDs, 2)
 	require.NotEqual(t, sess.ParentSessionIDs[0], sess.ParentSessionIDs[1])
 
