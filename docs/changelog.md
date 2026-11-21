@@ -11,7 +11,7 @@ The latest release is
 
 **New features**
 
-- Read large MCP search results, messages, and tool calls in pages that fit
+- Read large MCP pattern-search results, messages, and tool calls in pages that fit
   within a 12,000-byte response budget. A page can contain fewer items than the
   requested limit or a shorter message chunk, and reports how to continue.
 
