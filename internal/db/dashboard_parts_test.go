@@ -4,7 +4,9 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -32,7 +34,10 @@ func TestDashboardPartsMatchScansAndReuse(t *testing.T) {
 	hook.SourceSubtype = "hook_success"
 	result := userMsgAt("b", 1, "tool result", "2024-06-02T01:00:00Z")
 	result.SourceSubtype = "tool_result"
-	insertMessages(t, d, a, b, hook, result)
+	nullTime := asstMsgAt("b", 2, "undated", "2024-06-02T02:00:00Z")
+	insertMessages(t, d, a, b, hook, result, nullTime)
+	_, err := d.getWriter().ExecContext(ctx, `UPDATE messages SET timestamp=NULL WHERE session_id='b' AND ordinal=2`)
+	require.NoError(t, err)
 	f := AnalyticsFilter{Timezone: "UTC"}
 	var reads [][]string
 	dashboardPartsReadObserver = func(ids []string) { reads = append(reads, append([]string(nil), ids...)) }
@@ -67,13 +72,22 @@ func TestDashboardPartsMatchScansAndReuse(t *testing.T) {
 	require.NoError(t, d.ReplaceSessionMessages(ctx, "a", []Message{a, b}))
 	check(f)
 	require.NoError(t, d.DeleteSession(ctx, "a"))
-	_, err := d.getWriter().ExecContext(ctx, `DELETE FROM excluded_sessions WHERE id = 'a'`)
+	_, err = d.getWriter().ExecContext(ctx, `DELETE FROM excluded_sessions WHERE id = 'a'`)
 	require.NoError(t, err)
 	insertSession(t, d, "a", "other", func(s *Session) { s.StartedAt = new("2024-06-01T09:00:00Z") })
 	insertMessages(t, d, userMsgAt("a", 0, "new", "2024-06-01T10:00:00Z"))
 	check(f)
 	check(AnalyticsFilter{Timezone: "UTC", Project: "other"})
 	check(AnalyticsFilter{Timezone: "UTC", Project: "absent"})
+	session, err := d.GetSession(ctx, "b")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	session.Agent = "claude"
+	session.Project = "other"
+	session.ParentSessionID = new("empty")
+	require.NoError(t, d.UpsertSession(ctx, *session))
+	check(f)
+	check(AnalyticsFilter{Timezone: "UTC", IncludeSubagents: true})
 	check(AnalyticsFilter{Timezone: "America/New_York", From: "2024-06-01", To: "2024-06-01"})
 	hour := 9
 	check(AnalyticsFilter{Timezone: "UTC", Hour: &hour})
@@ -172,4 +186,47 @@ func TestDashboardPartsReadOnlyBypassesDisk(t *testing.T) {
 	require.Len(t, result.Series, 1)
 	assert.Equal(t, 1, result.Series[0].Messages)
 	assert.False(t, reader.trendsDisk.Enabled())
+}
+
+func TestDashboardPartsConcurrentPanels(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	insertSession(t, d, "s", "project", func(s *Session) { s.StartedAt = new("2024-06-01T09:00:00Z"); s.MessageCount = 2 })
+	insertMessages(t, d, userMsgAt("s", 0, "hello", "2024-06-01T09:00:00Z"), asstMsgAt("s", 1, "answer", "2024-06-01T09:01:00Z"))
+	ctx := t.Context()
+	f := AnalyticsFilter{Timezone: "UTC"}
+	start := make(chan struct{})
+	results := make(chan error, 3)
+	var reads atomic.Int32
+	dashboardPartsReadObserver = func([]string) { reads.Add(1) }
+	t.Cleanup(func() { dashboardPartsReadObserver = nil })
+	go func() {
+		<-start
+		a, err := d.GetAnalyticsActivity(ctx, f, "day")
+		if err == nil && (len(a.Series) != 1 || a.Series[0].Messages != 2) {
+			err = errors.New("wrong activity")
+		}
+		results <- err
+	}()
+	go func() {
+		<-start
+		h, err := d.GetAnalyticsHourOfWeek(ctx, f)
+		if err == nil && (len(h.Cells) != 168 || h.Cells[129] != (HourOfWeekCell{DayOfWeek: 5, Hour: 9, Messages: 2})) {
+			err = errors.New("wrong hours")
+		}
+		results <- err
+	}()
+	go func() {
+		<-start
+		v, err := d.GetAnalyticsVelocity(ctx, f)
+		if err == nil && v.Overall.CharsPerActiveMin != 6 {
+			err = errors.New("wrong velocity")
+		}
+		results <- err
+	}()
+	close(start)
+	for range 3 {
+		require.NoError(t, <-results)
+	}
+	assert.EqualValues(t, 1, reads.Load())
 }
