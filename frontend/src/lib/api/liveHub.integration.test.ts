@@ -1,3 +1,4 @@
+/// <reference types="node" />
 import http from "node:http";
 import { expect, it } from "vite-plus/test";
 import { LiveHub, type LiveFrame } from "./liveHub.js";

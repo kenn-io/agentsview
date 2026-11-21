@@ -39,7 +39,7 @@ describe("RemoteSettings", () => {
       target: { value: "https://remote.example.test" },
     });
     await fireEvent.input(getByLabelText("Auth token"), { target: { value: "test-token" } });
-    await fireEvent.click(getByRole("button", { name: "Connect", exact: true }));
+    await fireEvent.click(getByRole("button", { name: /^Connect$/ }));
     if (apiVersion === 27) {
       await waitFor(() =>
         expect(queryByText("Remote server: AgentsView test (API 27). Upgrade to API 28 or later.")).not.toBeNull(),
