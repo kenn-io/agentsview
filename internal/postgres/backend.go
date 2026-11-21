@@ -128,6 +128,10 @@ func (Backend) OpenServeStore(
 	if err != nil {
 		return nil, err
 	}
+	if err := sizeServePool(ctx, store.DB(), store.cockroach); err != nil {
+		_ = store.Close()
+		return nil, err
+	}
 	if err := prepareServeStore(ctx, store, target.Schema); err != nil {
 		_ = store.Close()
 		return nil, err

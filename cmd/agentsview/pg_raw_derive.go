@@ -101,7 +101,7 @@ func prepareHostedPGServe(ctx context.Context, app config.Config, pg config.PGCo
 		return replicaServeStartup{}, errors.New("tool_result_images = offload is not supported for hosted raw derivation; use keep or drop")
 	}
 	applyClassifierConfig(app)
-	store, err := postgres.NewHostedStore(ctx, pg.URL, pg.Schema, pg.RawTenant, pg.AllowInsecure)
+	store, err := postgres.NewHostedServeStore(ctx, pg.URL, pg.Schema, pg.RawTenant, pg.AllowInsecure)
 	if err != nil {
 		return replicaServeStartup{}, err
 	}
