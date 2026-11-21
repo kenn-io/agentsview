@@ -39,6 +39,7 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 	agentsync "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
+	"go.kenn.io/agentsview/internal/testutil"
 	"go.kenn.io/kit/stacktest"
 )
 
@@ -273,6 +274,7 @@ func TestServeSkipInitialSyncStillReparsesStaleArchive(t *testing.T) {
 			dbtest.SeedSessionWithMessages(t, database, "retained", "project", []db.Message{dbtest.UserMsg("retained", 0, "retained transcript")})
 			if kind == "legacy image text" {
 				dbtest.SeedSessionWithMessages(t, database, "session0", "project", []db.Message{dbtest.UserMsg("session0", 0, "old transcript")})
+				dbtest.SeedSessionWithMessages(t, database, "retained-image", "project", []db.Message{{SessionID: "retained-image", Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`}}}})
 			}
 			if kind == "archive only" {
 				require.NoError(t, database.EnableArchiveOnly(t.Context()))
@@ -287,12 +289,8 @@ func TestServeSkipInitialSyncStillReparsesStaleArchive(t *testing.T) {
 				if kind == "schema repair" {
 					statement = "ALTER TABLE tool_calls DROP COLUMN result_content_length"
 				} else if kind == "legacy image text" {
-					statement = `DROP TRIGGER image_text_session_delete; DROP TABLE image_text_occurrences; DROP TABLE image_text_cache;
-						DROP VIEW message_search_content;
-						CREATE VIEW message_search_content AS SELECT id, session_id, content AS rendered, COALESCE(dialogue_text, content) AS content FROM messages;
-						CREATE TABLE image_text_cache (image_hash TEXT NOT NULL, processor TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL, revision TEXT NOT NULL, text TEXT NOT NULL DEFAULT '', succeeded INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0, retry_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT '', PRIMARY KEY (image_hash, processor));
-						CREATE TABLE image_text_occurrences (session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, call_id INTEGER, event_id INTEGER, image_index INTEGER NOT NULL, image_hash TEXT NOT NULL, media_type TEXT NOT NULL, CHECK ((call_id IS NULL) <> (event_id IS NULL)));
-						CREATE TRIGGER image_text_session_delete AFTER DELETE ON sessions BEGIN DELETE FROM image_text_cache WHERE NOT EXISTS (SELECT 1 FROM image_text_occurrences o WHERE o.image_hash=image_text_cache.image_hash); END;`
+					testutil.LegacyImageTextSchema(t, conn, true)
+					statement = `INSERT INTO stats(key,value) VALUES ('image_text_occurrences_backfill_v2',1) ON CONFLICT(key) DO UPDATE SET value=1`
 				}
 				_, err = conn.ExecContext(t.Context(), statement)
 				require.NoError(t, err)
@@ -306,6 +304,22 @@ func TestServeSkipInitialSyncStillReparsesStaleArchive(t *testing.T) {
 				"AGENTSVIEW_STALE_SERVE_KIND=" + kind,
 			}, "archive rebuild complete")
 			require.NoError(t, err, string(out))
+			if kind == "legacy image text" {
+				out, err = runRuntimeWarningHelperProcess(t, "serve restart", "TestServeStaleArchiveHelperProcess", []string{
+					"AGENTSVIEW_STALE_SERVE_CONFIG=" + string(data),
+					"AGENTSVIEW_STALE_SERVE_SOURCES=" + cfg.AgentDirs[parser.AgentClaude][0],
+					"AGENTSVIEW_STALE_SERVE_KIND=" + kind,
+				}, "archive rebuild complete")
+				require.NoError(t, err, string(out))
+				database, err = db.Open(t.Context(), cfg.DBPath)
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = database.Close() })
+				require.NoError(t, database.BackfillImageTextOccurrences(t.Context()))
+				pending, err := database.PendingImageText(t.Context(), "processor", time.Now(), 10)
+				require.NoError(t, err)
+				require.Equal(t, []string{"ae4b3280e56e2faf83f414a6e3dabe9d5fbe18976544c05fed121accb85b53fc"}, pending)
+				require.NoError(t, database.Close())
+			}
 		})
 	}
 }

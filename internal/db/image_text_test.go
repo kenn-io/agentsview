@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/testutil"
 	"go.kenn.io/docbank/document/ocr"
 )
 
@@ -682,22 +683,8 @@ func TestOpenRepairsPreMergeImageText(t *testing.T) {
 			content := testInlineImageContent()
 			hash := RetainedToolResultImages(content)[0].SHA256
 			require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "untouched-image", Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-			occurrences := `CREATE TABLE image_text_occurrences (session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, call_id INTEGER REFERENCES tool_calls(id) ON DELETE CASCADE, event_id INTEGER REFERENCES tool_result_events(id) ON DELETE CASCADE, image_index INTEGER NOT NULL, image_hash TEXT NOT NULL, CHECK ((call_id IS NULL) <> (event_id IS NULL)), PRIMARY KEY (session_id, image_hash));`
-			if later {
-				occurrences = `CREATE TABLE image_text_occurrences (session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, call_id INTEGER, event_id INTEGER, image_index INTEGER NOT NULL, image_hash TEXT NOT NULL, media_type TEXT NOT NULL, CHECK ((call_id IS NULL) <> (event_id IS NULL)));`
-			}
-			_, err := d.getWriter().ExecContext(ctx, `
-				DROP TRIGGER image_text_session_delete;
-				DROP TABLE image_text_occurrences;
-				DROP TABLE image_text_cache;
-				DROP VIEW message_search_content;
-				CREATE VIEW message_search_content AS SELECT id, session_id, content AS rendered, COALESCE(dialogue_text, content) AS content FROM messages;
-				CREATE TABLE image_text_cache (image_hash TEXT NOT NULL, processor TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL, revision TEXT NOT NULL, text TEXT NOT NULL DEFAULT '', succeeded INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0, retry_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT '', PRIMARY KEY (image_hash, processor));
-				`+occurrences+`
-				CREATE VIRTUAL TABLE image_text_fts USING fts5(text, content='image_text_cache', content_rowid='rowid', tokenize='porter unicode61');
-				CREATE TRIGGER image_text_session_delete AFTER DELETE ON sessions BEGIN DELETE FROM image_text_cache WHERE NOT EXISTS (SELECT 1 FROM image_text_occurrences o WHERE o.image_hash=image_text_cache.image_hash); END;
-				PRAGMA user_version = 166;
-			`)
+			testutil.LegacyImageTextSchema(t, d.getWriter(), later)
+			_, err := d.getWriter().ExecContext(ctx, `PRAGMA user_version = 166`)
 			require.NoError(t, err)
 			_, err = d.getWriter().ExecContext(ctx, `INSERT INTO stats(key,value) VALUES (?,1) ON CONFLICT(key) DO UPDATE SET value=1;
 				UPDATE sessions SET sync_marker='2000-01-01T00:00:00.000Z' WHERE id='untouched-image';
