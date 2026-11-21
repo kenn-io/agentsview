@@ -1460,7 +1460,12 @@ func (s *Server) humaEvents(ctx context.Context, in *eventsInput) (*huma.StreamR
 		if identity, ok := s.db.(db.SessionWatchStateStore); ok {
 			state, err := identity.GetSessionWatchState(id)
 			if err != nil {
-				return nil, serverError(err)
+				if ctx.Err() != nil {
+					return nil, serverError(err)
+				}
+				log.Printf("session watch state %q: %v", id, err)
+				missing = append(missing, id)
+				continue
 			}
 			if state.State != db.SessionWatchResolved {
 				missing = append(missing, id)
@@ -1469,7 +1474,12 @@ func (s *Server) humaEvents(ctx context.Context, in *eventsInput) (*huma.StreamR
 		}
 		sess, err := s.sessions.Get(ctx, id)
 		if err != nil {
-			return nil, serverError(err)
+			if ctx.Err() != nil {
+				return nil, serverError(err)
+			}
+			log.Printf("session watch %q: %v", id, err)
+			missing = append(missing, id)
+			continue
 		}
 		if sess == nil {
 			missing = append(missing, id)
