@@ -136,7 +136,7 @@ function connectLive(session?: string): LiveSource {
     send = (value) => (value === "leave" ? ownHub.leave(port) : ownHub.update(port, value));
   }
   const onPageHide = () => send("leave");
-  const onPageShow = () => send(request);
+  const onPageShow = () => send({ ...request });
   window.addEventListener("pagehide", onPageHide);
   window.addEventListener("pageshow", onPageShow);
   target.close = () => {
@@ -147,9 +147,9 @@ function connectLive(session?: string): LiveSource {
   };
   target.setVisible = (visible) => {
     request.visible = visible;
-    send(request);
+    send({ ...request });
   };
-  send(request);
+  send({ ...request });
   return target;
 }
 

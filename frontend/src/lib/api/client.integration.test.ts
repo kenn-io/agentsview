@@ -38,6 +38,45 @@ describe("shared session watch", () => {
       source.close();
     }
   });
+  it("catches up after visibility changes without SharedWorker", async () => {
+    vi.stubGlobal("SharedWorker", undefined);
+    vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          new ReadableStream({
+            start(c) {
+              controller = c;
+            },
+          }),
+          { headers: { "Content-Type": "text/event-stream" } },
+        ),
+      ),
+    );
+    const timing = vi.fn();
+    const ready = vi.fn();
+    const source = watchSession("fallback-session", vi.fn(), timing);
+    source.addEventListener("session_ready", ready);
+    const emit = (text: string) => controller.enqueue(new TextEncoder().encode(text));
+    try {
+      await vi.waitFor(() => expect(controller).toBeDefined());
+      emit("event: session_ready\ndata: fallback-session\n\nevent: events_ready\ndata: {}\n\n");
+      await vi.waitFor(() => expect(ready).toHaveBeenCalledTimes(1));
+      source.setVisible(false);
+      emit('event: session.timing\ndata: {"session_id":"fallback-session","turn_count":3}\n\n');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(timing).not.toHaveBeenCalled();
+      source.setVisible(true);
+      await vi.waitFor(() => expect(ready).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() =>
+        expect(timing).toHaveBeenCalledWith(expect.objectContaining({ turn_count: 3 })),
+      );
+    } finally {
+      source.close();
+    }
+  });
 });
 
 describe("generated binary downloads", () => {

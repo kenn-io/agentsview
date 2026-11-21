@@ -406,6 +406,16 @@ func TestHandleToolSequences_ReadErrors(t *testing.T) {
 	assert.True(t, store.cancelled)
 }
 
+func TestEvents_SessionLookupError(t *testing.T) {
+	te := setup(t)
+	store := &toolSequenceFailureStore{Store: te.db, fail: "session"}
+	cfg := config.Config{Host: "127.0.0.1", InstallationID: "server-installation"}
+	te.handler = wrapTestHandler(cfg, server.New(cfg, store, nil).Handler())
+	w := te.get(t, "/api/v1/events?session=missing")
+	assertStatus(t, w, http.StatusInternalServerError)
+	assert.GreaterOrEqual(t, store.called["session"], 1)
+}
+
 func fetchSessionToolSequences(
 	t *testing.T, te *testEnv, sessionID string,
 ) sessionToolSequencesResponse {

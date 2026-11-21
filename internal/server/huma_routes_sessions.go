@@ -1448,12 +1448,29 @@ type eventsInput struct {
 	Sessions []string `query:"session,explode" doc:"Session IDs to watch; repeat for each session"`
 }
 
-func (s *Server) humaEvents(_ context.Context, in *eventsInput) (*huma.StreamResponse, error) {
+func (s *Server) humaEvents(ctx context.Context, in *eventsInput) (*huma.StreamResponse, error) {
 	if s.broadcaster == nil && len(in.Sessions) == 0 {
 		return nil, huma.ErrorWithHeaders(
 			apiError(http.StatusServiceUnavailable, "events not available in this mode"),
 			http.Header{"Retry-After": []string{"300"}},
 		)
+	}
+	seen := make(map[string]bool)
+	var found, missing []string
+	for _, id := range in.Sessions {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		sess, err := s.sessions.Get(ctx, id)
+		if err != nil {
+			return nil, serverError(err)
+		}
+		if sess == nil {
+			missing = append(missing, id)
+		} else {
+			found = append(found, id)
+		}
 	}
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
 		stream, ok := newHumaSSEStream(hctx)
@@ -1475,18 +1492,13 @@ func (s *Server) humaEvents(_ context.Context, in *eventsInput) (*huma.StreamRes
 			closed bool
 		}
 		ticks := make(chan tick)
-		seen := make(map[string]bool)
 		monitors := make(map[string]context.CancelFunc)
-		for _, id := range in.Sessions {
-			if seen[id] {
-				continue
+		for _, id := range missing {
+			if !stream.Send("session_missing", id) {
+				return
 			}
-			seen[id] = true
-			sess, err := s.sessions.Get(ctx, id)
-			if err != nil || sess == nil {
-				stream.Send("session_missing", id)
-				continue
-			}
+		}
+		for _, id := range found {
 			monitorCtx, stop := context.WithCancel(ctx)
 			monitors[id] = stop
 			updates := s.sessionMonitor(monitorCtx, id)

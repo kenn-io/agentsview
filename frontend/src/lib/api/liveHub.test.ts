@@ -54,7 +54,7 @@ describe("shared live stream", () => {
     expect(archive.map((frame) => frame.type)).toEqual(["events_ready", "data_changed"]);
   });
 
-  it("keeps the old stream until the new one is ready without refreshing existing tabs", () => {
+  it("replays session snapshots when the new stream takes over", () => {
     const hub = new LiveHub();
     const a: LiveFrame[] = [];
     const b: LiveFrame[] = [];
@@ -65,27 +65,69 @@ describe("shared live stream", () => {
     hub.update({ postMessage: (frame) => b.push(frame) }, request("b"));
     const next = sources[1]!;
     next.emit("session_ready", "a");
+    next.emit("session.timing", '{"session_id":"a","turn_count":2}');
+    next.emit("session_updated", "a");
     next.emit("session_ready", "b");
     expect(old.closed).toBe(false);
     next.emit("events_ready", "{}");
     expect(old.closed).toBe(true);
-    expect(a.map((frame) => frame.type)).toEqual(["session_ready"]);
+    expect(a.map((frame) => frame.type)).toEqual([
+      "session_ready",
+      "session_ready",
+      "session.timing",
+      "session_updated",
+    ]);
+    expect(a[2]?.data).toBe('{"session_id":"a","turn_count":2}');
     expect(b.map((frame) => frame.type)).toEqual(["session_ready"]);
   });
 
-  it("catches a hidden port up when it returns", () => {
+  it("replays the latest timing when a hidden tab returns", () => {
     const hub = new LiveHub();
     const frames: LiveFrame[] = [];
     const port = { postMessage: (frame: LiveFrame) => frames.push(frame) };
+    const other = { postMessage: vi.fn() };
     hub.update(port, request("a"));
-    const source = sources[0]!;
+    hub.update(other, request("a"));
+    const source = sources.at(-1)!;
     source.emit("session_ready", "a");
     source.emit("events_ready", "{}");
     hub.update(port, { ...request("a"), visible: false });
     source.emit("session_updated", "a");
+    source.emit("session.timing", '{"session_id":"a","turn_count":4}');
     hub.update(port, request("a"));
-    expect(frames.map((frame) => frame.type)).toEqual(["session_ready", "session_ready"]);
+    expect(frames).toEqual([
+      { type: "session_ready", data: "a" },
+      { type: "session_ready", data: "a" },
+      { type: "session.timing", data: '{"session_id":"a","turn_count":4}' },
+    ]);
     hub.leave(port);
+    hub.leave(other);
+    const reopened: LiveFrame[] = [];
+    const newPort = { postMessage: (frame: LiveFrame) => reopened.push(frame) };
+    hub.update(newPort, request("a"));
+    expect(reopened).toEqual([{ type: "session_ready", data: "a" }]);
+    hub.leave(newPort);
+  });
+
+  it("does not send candidate errors to ports served by the current stream", () => {
+    const hub = new LiveHub();
+    const archive = { postMessage: vi.fn() };
+    const a = { postMessage: vi.fn() };
+    const b = { postMessage: vi.fn() };
+    hub.update(archive, request());
+    hub.update(a, request("a"));
+    const old = sources.at(-1)!;
+    old.emit("session_ready", "a");
+    old.emit("events_ready", "{}");
+    archive.postMessage.mockClear();
+    a.postMessage.mockClear();
+    hub.update(b, request("b"));
+    const next = sources.at(-1)!;
+    for (let i = 0; i < 5; i++) next.emit("error");
+    expect(archive.postMessage).not.toHaveBeenCalled();
+    expect(a.postMessage).not.toHaveBeenCalled();
+    expect(b.postMessage).toHaveBeenLastCalledWith({ type: "permanent_failure" });
+    expect(old.closed).toBe(false);
   });
   it("closes after repeated errors and signals a permanent failure", () => {
     const hub = new LiveHub();
