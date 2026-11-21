@@ -1586,17 +1586,16 @@ func TestSearchContent_ConceptsMapping(t *testing.T) {
 		{Concept: "auth model", Ordinal: 4, OrdinalRange: [2]int{3, 5}, Score: 0.7},
 		{Concept: "retry policy", Ordinal: 12, OrdinalRange: [2]int{11, 13}, Score: 0.9},
 	}
-	fake := &fakeContentSearchService{result: &service.ContentSearchResult{
-		Matches: []db.ContentMatch{{
-			SessionID: "both", Location: "message", Ordinal: 4,
-			OrdinalRange: [2]int{3, 5}, Score: new(0.8), ConceptEvidence: evidence,
-		}},
-		CandidateTruncated: true,
-	}}
-	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
-
 	for _, mode := range []string{"substring", "hybrid", "invalid"} {
 		t.Run(mode, func(t *testing.T) {
+			fake := &fakeContentSearchService{result: &service.ContentSearchResult{
+				Matches: []db.ContentMatch{{
+					SessionID: "both", Location: "message", Ordinal: 4,
+					OrdinalRange: [2]int{3, 5}, Score: new(0.8), ConceptEvidence: evidence,
+				}},
+				CandidateTruncated: true,
+			}}
+			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
 			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
 				Concepts: []string{"auth model", "retry policy"}, Mode: mode, Scope: "top", IncludeActive: true,
 			})
@@ -1637,7 +1636,7 @@ func TestSearchContent_ListSessionMessages(t *testing.T) {
 	key := "AKIA" + "7QHWN2DKR4FYPLJM"
 	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		dbtest.UserMsg("child", 0, "first "+key+" "+strings.Repeat("x", 100)),
-		{SessionID: "child", Ordinal: 1, Role: "assistant", Content: "inspect the failure", ContentLength: len("inspect the failure"), DialogueText: new("")},
+		{SessionID: "child", Ordinal: 1, Role: "assistant", Content: "inspect the failure", ContentLength: len("inspect the failure")},
 		{
 			SessionID: "child", Ordinal: 2, Role: "tool", Content: "echo hello", ContentLength: len("echo hello"), DialogueText: new(""), HasToolUse: true,
 			ToolCalls: []db.ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"echo hello"}`, ResultContent: "hello"}},
@@ -1682,7 +1681,7 @@ func TestSearchContent_ListSessionMessages(t *testing.T) {
 	assert.Equal(t, "reply", oneShot.Matches[1].Snippet)
 }
 
-func TestSearchContent_ConceptsRejectedBeforeService(t *testing.T) {
+func TestSearchContent_RejectedBeforeService(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		in   searchContentIn
