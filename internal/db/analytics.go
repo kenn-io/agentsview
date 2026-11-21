@@ -1442,8 +1442,6 @@ func (db *DB) getAnalyticsActivityFilteredByModelTime(
 	}, nil
 }
 
-// GetAnalyticsActivity returns session/message counts grouped
-// by time bucket.
 func activityMessageCounts(role string, thinking, system bool, subtype string, count int) (user, assistant, thought int) {
 	if role == "user" && !system && subtype != "tool_result" {
 		user = count
@@ -1457,6 +1455,8 @@ func activityMessageCounts(role string, thinking, system bool, subtype string, c
 	return
 }
 
+// GetAnalyticsActivity returns session/message counts grouped
+// by time bucket.
 func (db *DB) GetAnalyticsActivity(
 	ctx context.Context, f AnalyticsFilter,
 	granularity string,
