@@ -1464,10 +1464,8 @@ func (s *Server) humaEvents(ctx context.Context, in *eventsInput) (*huma.StreamR
 					return nil, serverError(err)
 				}
 				log.Printf("session watch state %q: %v", id, err)
-				missing = append(missing, id)
-				continue
 			}
-			if state.State != db.SessionWatchResolved {
+			if err == nil && state.State != db.SessionWatchResolved {
 				missing = append(missing, id)
 				continue
 			}
@@ -1478,7 +1476,7 @@ func (s *Server) humaEvents(ctx context.Context, in *eventsInput) (*huma.StreamR
 				return nil, serverError(err)
 			}
 			log.Printf("session watch %q: %v", id, err)
-			missing = append(missing, id)
+			found = append(found, id)
 			continue
 		}
 		if sess == nil {

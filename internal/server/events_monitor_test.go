@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -77,8 +78,7 @@ type sessionLookupFailureStore struct {
 }
 
 func (s *sessionLookupFailureStore) GetSession(ctx context.Context, id string) (*db.Session, error) {
-	if id == "bad" {
-		s.called.Store(true)
+	if id == "bad" && !s.called.Swap(true) {
 		if s.cancel != nil {
 			s.cancel()
 		}
@@ -91,10 +91,11 @@ type watchStateFailureStore struct {
 	db.Store
 	cancel context.CancelFunc
 	called *atomic.Bool
+	reads  atomic.Int32
 }
 
 func (s *watchStateFailureStore) GetSessionWatchState(id string) (db.SessionWatchState, error) {
-	if id == "bad" {
+	if id == "bad" && s.reads.Add(1) <= 2 {
 		s.called.Store(true)
 		if s.cancel != nil {
 			s.cancel()
@@ -117,9 +118,11 @@ func TestEvents_SessionLookupError(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Cleanup(sessionwatch.SetTimingsForTest(25*time.Millisecond, 50*time.Millisecond))
 			te := setup(t)
 			var called atomic.Bool
 			require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: "watch-a", Project: "project", Machine: "test", Agent: "claude"}))
+			require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: "bad", Project: "project", Machine: "test", Agent: "claude"}))
 			cfg := config.Config{Host: "127.0.0.1", InstallationID: "server-installation"}
 			handler := wrapTestHandler(cfg, server.New(cfg, tc.store(te.db, nil, &called), nil, server.WithBroadcaster(te.broadcaster)).Handler())
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
@@ -130,8 +133,19 @@ func TestEvents_SessionLookupError(t *testing.T) {
 			go func() { handler.ServeHTTP(w, req); close(done) }()
 			te.waitForSSEEvent(t, w, "events_ready", 5*time.Second)
 			assert.True(t, called.Load())
-			assert.Contains(t, w.BodyString(), "event: session_missing\ndata: bad\n")
+			assert.Contains(t, w.BodyString(), "event: session_ready\ndata: bad\n")
+			assert.NotContains(t, w.BodyString(), "event: session_missing\ndata: bad\n")
 			assert.Contains(t, w.BodyString(), "event: session_ready\ndata: watch-a\n")
+			updates := 1
+			if tc.name == "watch state" {
+				te.waitForSSEEvent(t, w, "session_updated", 5*time.Second)
+				assert.Contains(t, w.BodyString(), "event: session_updated\ndata: bad\n")
+				updates = 2
+			}
+			require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: "bad", Project: "project", Machine: "test", Agent: "claude", MessageCount: 1}))
+			require.Eventually(t, func() bool {
+				return strings.Count(w.BodyString(), "event: session_updated\ndata: bad\n") >= updates
+			}, 5*time.Second, 10*time.Millisecond)
 			te.broadcaster.Emit("messages")
 			te.waitForSSEEvent(t, w, "data_changed", 5*time.Second)
 			assert.Contains(t, w.BodyString(), "event: data_changed\ndata: {\"scope\":\"messages\"}\n")

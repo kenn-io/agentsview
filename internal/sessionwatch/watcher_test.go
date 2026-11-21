@@ -2,6 +2,7 @@ package sessionwatch
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -48,6 +49,53 @@ func TestEventsBaselineTakenBeforeReturn(t *testing.T) {
 			require.FailNow(t, "reply after watch creation was lost")
 		}
 	})
+}
+
+type transientIdentityStore struct {
+	baselineStore
+	reads atomic.Int32
+	state string
+}
+
+func (s *transientIdentityStore) GetSessionWatchState(id string) (db.SessionWatchState, error) {
+	if s.reads.Add(1) == 1 {
+		return db.SessionWatchState{}, errors.New("watch state unavailable")
+	}
+	return db.SessionWatchState{State: s.state, PublicID: id}, nil
+}
+
+func TestEventsRecoversFromInitialWatchStateError(t *testing.T) {
+	for _, state := range []string{db.SessionWatchResolved, "ambiguous"} {
+		t.Run(state, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				store := &transientIdentityStore{state: state}
+				updates := New(store, nil).Events(ctx, "session-a")
+				synctest.Wait()
+				time.Sleep(PollInterval)
+				synctest.Wait()
+				select {
+				case _, ok := <-updates:
+					require.True(t, ok, "recovery must emit an update")
+				default:
+					require.FailNow(t, "recovery did not emit an update")
+				}
+				synctest.Wait()
+				if state != db.SessionWatchResolved {
+					_, ok := <-updates
+					assert.False(t, ok)
+				} else {
+					select {
+					case _, ok := <-updates:
+						require.True(t, ok, "resolved watch must remain open")
+						require.FailNow(t, "unexpected second update")
+					default:
+					}
+				}
+			})
+		})
+	}
 }
 
 // testWatcher creates a Watcher backed by a fresh SQLite database
