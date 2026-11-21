@@ -2204,22 +2204,33 @@ func TestNoTokenDataNote(t *testing.T) {
 }
 
 func TestCursorSyncAllSkipsEmptyRosterWindows(t *testing.T) {
+	type rosterRange struct {
+		Start int64 `json:"startDate"`
+		End   int64 `json:"endDate"`
+	}
 	for _, tc := range []struct {
 		name   string
 		events string
-		want   int
+		want   []rosterRange
 	}{
-		{name: "empty", events: `[]`, want: 0},
-		{name: "sparse", events: `[{"timestamp":"2000-01-02T10:00:00Z","model":"a"},{"timestamp":"2020-01-02T10:00:00Z","model":"b"}]`, want: 2},
+		{name: "empty", events: `[]`},
+		{name: "sparse", events: `[{"timestamp":"2000-01-02T10:00:00Z","model":"a"},{"timestamp":"2020-01-02T10:00:00Z","model":"b"}]`, want: []rosterRange{
+			{Start: 946080000000, End: 948672000000},
+			{Start: 1575936000000, End: 1578528000000},
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dataDir := t.TempDir()
 			t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
 			require.NoError(t, os.WriteFile(filepath.Join(dataDir, "config.toml"), []byte("cursor_admin_api_key = 'key'\n"), 0o600))
-			var rosterCalls int
+			var rosterCalls []rosterRange
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/teams/daily-usage-data" {
-					rosterCalls++
+					var window rosterRange
+					if !assert.NoError(t, json.UnmarshalRead(r.Body, &window)) {
+						return
+					}
+					rosterCalls = append(rosterCalls, window)
 					_, _ = w.Write([]byte(`{"data":[],"pagination":{"hasNextPage":false}}`))
 					return
 				}
