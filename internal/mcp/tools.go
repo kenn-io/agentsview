@@ -35,8 +35,10 @@ func (t *toolset) clock() time.Time {
 	return time.Now()
 }
 
-const defaultSearchWindowDays = 30
-const searchTimeLimit = 30 * time.Second
+const (
+	defaultSearchWindowDays = 30
+	searchTimeLimit         = 30 * time.Second
+)
 
 func (t *toolset) defaultDateFrom(from, to, sessionID string) (string, string) {
 	if from != "" || to != "" || sessionID != "" {
