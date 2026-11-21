@@ -876,6 +876,20 @@ describe("live event payloads", () => {
     source.close();
   });
 
+  it("ignores queued frames after a subscription is closed", async () => {
+    const { watchSession } = await import("./client.js");
+    const update = vi.fn();
+    const source = watchSession("a", update);
+    port.onmessage?.(new MessageEvent("message", { data: { type: "closed" } }));
+    port.onmessage?.(new MessageEvent("message", { data: { type: "session_ready", data: "a" } }));
+    expect(source.readyState).toBe(1);
+    source.close();
+    port.onmessage?.(new MessageEvent("message", { data: { type: "session_updated", data: "a" } }));
+    port.onmessage?.(new MessageEvent("message", { data: { type: "session_ready", data: "a" } }));
+    expect(update).not.toHaveBeenCalled();
+    expect(source.readyState).toBe(2);
+  });
+
   it("refreshes the pinned server token on storage changes and page return", async () => {
     const postMessage = vi.fn();
     class Worker {

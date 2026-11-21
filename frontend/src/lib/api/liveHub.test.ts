@@ -170,7 +170,7 @@ describe("shared live stream", () => {
     hub.close();
   });
 
-  it("reports a failed replacement after keeping the old stream during retries", () => {
+  it("recovers from a failed replacement after keeping the old stream during retries", () => {
     const hub = new LiveHub();
     const archive = { postMessage: vi.fn() };
     hub.update(archive, request());
@@ -181,7 +181,10 @@ describe("shared live stream", () => {
     expect(sources[0]!.closed).toBe(false);
     sources[1]!.emit("error");
     expect(sources[0]!.closed).toBe(true);
-    expect(archive.postMessage).toHaveBeenLastCalledWith({ type: "permanent_failure" });
+    expect(archive.postMessage).toHaveBeenLastCalledWith({ type: "closed" });
+    hub.update(archive, request());
+    sources[2]!.emit("events_ready", "{}");
+    expect(archive.postMessage).toHaveBeenLastCalledWith({ type: "events_ready", data: "{}" });
     hub.close();
   });
 
@@ -227,12 +230,6 @@ describe("shared live stream", () => {
       [{ type: "session_ready", data: "a" }],
       [{ type: "session.timing", data: '{"session_id":"a","turn_count":2}' }],
     ]);
-    sources[0]!.emit("session_missing", "a");
-    const missing = { postMessage: vi.fn() };
-    hub.update(missing, request("a"));
-    vi.advanceTimersByTime(250);
-    expect(sources).toHaveLength(1);
-    expect(missing.postMessage.mock.calls).toEqual([[{ type: "session_missing", data: "a" }]]);
   });
 
   it("rechecks a missing session when a subscriber retries", () => {
@@ -249,6 +246,23 @@ describe("shared live stream", () => {
     expect(sources[1]!.url.searchParams.getAll("session")).toEqual(["a"]);
     sources[1]!.emit("session_ready", "a");
     expect(retry.postMessage).toHaveBeenCalledWith({ type: "session_ready", data: "a" });
+  });
+
+  it("rechecks a missing session when another subscriber joins", () => {
+    const hub = new LiveHub();
+    const first = { postMessage: vi.fn() };
+    const joining = { postMessage: vi.fn() };
+    hub.update(first, request("a"));
+    sources[0]!.emit("session_missing", "a");
+    hub.update(joining, request("a"));
+    expect(joining.postMessage).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(250);
+    expect(sources).toHaveLength(2);
+    expect(sources[1]!.url.searchParams.getAll("session")).toEqual(["a"]);
+    sources[1]!.emit("session_ready", "a");
+    expect(first.postMessage).toHaveBeenLastCalledWith({ type: "session_ready", data: "a" });
+    expect(joining.postMessage).toHaveBeenLastCalledWith({ type: "session_ready", data: "a" });
+    hub.close();
   });
 
   it("keeps the current credentials when the old subscriber leaves", async () => {

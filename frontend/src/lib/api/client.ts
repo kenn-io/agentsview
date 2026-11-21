@@ -119,8 +119,10 @@ function connectLive(session?: string): LiveSource {
   };
   const target = new EventTarget() as LiveSource;
   target.readyState = 0;
+  let disposed = false;
   let send: (value: LiveRequest | "leave" | "close") => void;
   const receive = (frame: LiveFrame) => {
+    if (disposed) return;
     if (frame.type === "events_ready" || frame.type === "session_ready") target.readyState = 1;
     if (frame.type === "closed" || frame.type === "permanent_failure") target.readyState = 2;
     target.dispatchEvent(new MessageEvent(frame.type, { data: frame.data }));
@@ -159,6 +161,7 @@ function connectLive(session?: string): LiveSource {
   window.addEventListener("pagehide", onPageHide);
   window.addEventListener("pageshow", onPageShow);
   target.close = () => {
+    disposed = true;
     send("close");
     target.readyState = 2;
     window.removeEventListener("storage", refreshCredentials);

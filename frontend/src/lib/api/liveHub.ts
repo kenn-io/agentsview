@@ -28,7 +28,10 @@ export class LiveHub {
     ) {
       const key = request.session ?? "";
       const ready = this.ready.get(key);
-      if (ready) this.deliver(port, ready);
+      if (ready?.type === "session_missing") {
+        this.ready.delete(key);
+        this.sessions.delete(key);
+      } else if (ready) this.deliver(port, ready);
       const timing = this.timing.get(key);
       if (timing) port.postMessage(timing);
     }
@@ -92,6 +95,7 @@ export class LiveHub {
       sessions.size !== this.sessions.size || [...sessions].some((id) => !this.sessions.has(id));
     if (this.source && request && !changed && this.sameCredentials(request)) return;
     const old = this.previous ?? this.source;
+    const previouslyConnected = this.sameCredentials(request) && old?.readyState === 1;
     if (!request || !this.sameCredentials(request) || old?.readyState !== 1) {
       this.source?.close();
       this.previous?.close();
@@ -130,7 +134,7 @@ export class LiveHub {
     });
     this.source = source;
     let errors = 0;
-    let opened = false;
+    let opened = previouslyConnected;
     let suppressReady = false;
 
     source.addEventListener("open", () => {
