@@ -214,11 +214,11 @@ func fillToolResult(call *toolCallOut, m db.Message, tc service.ToolCall, positi
 	maxChars := clampLimit(in.MaxResultChars, 1000, 10000)
 	summary := secrets.RedactJSON(stored.ResultContent)
 	call.Result, call.ResultTruncated, call.ResultCursor = firstResultPage(base, nil, summary, maxChars)
-	if sole, ok := db.SoleToolResultContent(stored.ResultEvents); ok && sole.AgentID == "" && sole.Content == stored.ResultContent {
+	if sole, ok := db.SoleToolResultContent(stored.ResultEvents); ok && len(stored.ResultEvents) == 1 && sole.AgentID == "" && sole.SubagentSessionID == "" && sole.Status == "" && sole.Content == stored.ResultContent {
 		return nil
 	}
 	for _, ev := range stored.ResultEvents {
-		if ev.Content != "" {
+		if ev.Content != "" || ev.Status != "" {
 			call.ResultEvents = append(call.ResultEvents, resultEventPage(base, ev, maxChars))
 		}
 	}

@@ -379,8 +379,8 @@ masked. Each call carries two kinds of result text:
   in bytes.
 - `result_events` lists each saved event in order, with its `event_index`,
   `agent_id`, `subagent_session_id`, `status`, `content`, and `content_length`.
-  Events are never joined into `result`. A call whose only event is anonymous
-  and equals `result` omits `result_events`.
+  Events are never joined into `result`. A call omits `result_events` when its
+  only event equals `result` and has no agent, subagent, or status.
 
 With `include_results`, a page defaults to one call instead of 50; follow
 `next_cursor` for the next call, or raise `limit` (maximum 200). `max_result_chars`

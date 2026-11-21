@@ -533,17 +533,28 @@ func TestGetToolCalls_ReturnsStoredSummary(t *testing.T) {
 		toolCallMsg("summary", 1, db.ToolCall{ToolUseID: "multiple", ToolName: "wait_agent", ResultContent: "agent-a:\nfirst\n\nagent-b:\nsecond", ResultEvents: []db.ToolResultEvent{
 			{AgentID: "agent-a", Source: "tool_result", Content: "first"},
 			{AgentID: "agent-b", Source: "tool_result", Content: "second"},
+			{AgentID: "agent-b", Source: "tool_result", Status: "completed"},
+		}}),
+		toolCallMsg("summary", 2, db.ToolCall{ToolUseID: "anonymous", ToolName: "wait_agent", ResultContent: "output", ResultEvents: []db.ToolResultEvent{
+			{Source: "tool_result", Content: "output"},
+			{AgentID: "agent-c", Source: "tool_result", Status: "completed"},
 		}}),
 	)
-	_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "summary", IncludeResults: true, Limit: 2})
+	_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "summary", IncludeResults: true, Limit: 3})
 	require.NoError(t, err)
-	require.Len(t, out.ToolCalls, 2)
+	require.Len(t, out.ToolCalls, 3)
 	assert.Equal(t, "latest B", out.ToolCalls[0].Result)
 	require.Len(t, out.ToolCalls[0].ResultEvents, 2)
 	assert.Equal(t, "agent-a", out.ToolCalls[0].ResultEvents[0].AgentID)
 	assert.Equal(t, "earlier A", out.ToolCalls[0].ResultEvents[0].Content)
 	assert.Equal(t, "latest B", out.ToolCalls[0].ResultEvents[1].Content)
 	assert.Equal(t, "agent-a:\nfirst\n\nagent-b:\nsecond", out.ToolCalls[1].Result)
+	require.Len(t, out.ToolCalls[1].ResultEvents, 3)
+	assert.Equal(t, "agent-b", out.ToolCalls[1].ResultEvents[2].AgentID)
+	assert.Equal(t, "completed", out.ToolCalls[1].ResultEvents[2].Status)
+	require.Len(t, out.ToolCalls[2].ResultEvents, 2)
+	assert.Equal(t, "agent-c", out.ToolCalls[2].ResultEvents[1].AgentID)
+	assert.Equal(t, "completed", out.ToolCalls[2].ResultEvents[1].Status)
 }
 
 func TestGetToolCalls_EventCursorRejectsReplacement(t *testing.T) {
