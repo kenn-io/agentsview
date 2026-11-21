@@ -246,6 +246,9 @@ func (db *DB) dashboardParts(ctx context.Context, f AnalyticsFilter) ([]dashboar
 		}
 		if len(changed) > 0 {
 			saveDashboardParts(db, f, slot, version, parts)
+		} else {
+			// A file loaded after a restart must seed the memo for other filters.
+			db.dashboardMemo.store("dashboard-parts|"+TrendsTimezoneKey(f), version, parts)
 		}
 		return dashboardPartsResult{Parts: parts, Handled: true}, nil
 	})

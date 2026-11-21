@@ -154,6 +154,39 @@ func TestDashboardPartsReuseAcrossAgentAndDateFilters(t *testing.T) {
 	assert.Equal(t, [][]string{{"s0", "s1", "s2", "s3", "s4", "s5"}, {"s0"}}, reads)
 }
 
+func TestDashboardPartsReuseAfterRestartFromDiskHit(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	for i := range 4 {
+		id := fmt.Sprintf("s%d", i)
+		insertSession(t, d, id, "project", func(s *Session) {
+			s.StartedAt = new("2024-06-01T09:00:00Z")
+			if i < 2 {
+				s.Agent = "codex"
+			}
+		})
+		insertMessages(t, d, userMsgAt(id, 0, "hello", "2024-06-01T09:00:00Z"))
+	}
+	var reads [][]string
+	dashboardPartsReadObserver = func(ids []string) { reads = append(reads, append([]string(nil), ids...)) }
+	t.Cleanup(func() { dashboardPartsReadObserver = nil })
+	read := func(f AnalyticsFilter) {
+		t.Helper()
+		_, _, handled, err := d.dashboardParts(ctx, f)
+		require.NoError(t, err)
+		require.True(t, handled)
+	}
+	read(AnalyticsFilter{Timezone: "UTC"})
+	require.Equal(t, [][]string{{"s0", "s1", "s2", "s3"}}, reads)
+	// A fresh process starts with an empty memo but keeps the saved file.
+	d.dashboardMemo.slot, d.dashboardMemo.version, d.dashboardMemo.parts, d.dashboardMemo.bytes = "", "", nil, 0
+	read(AnalyticsFilter{Timezone: "UTC"})
+	require.Equal(t, [][]string{{"s0", "s1", "s2", "s3"}}, reads)
+	read(AnalyticsFilter{Timezone: "UTC", Agent: "codex"})
+	assert.Equal(t, [][]string{{"s0", "s1", "s2", "s3"}}, reads)
+}
+
 func TestDashboardPartsContentLengthReplacement(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	d := testDB(t)
