@@ -15,6 +15,7 @@ import (
 )
 
 func TestClickHouseSearchMemory(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	dsn, database := chtest.FreshDatabase(t)
 	target := Target{URL: dsn, Database: database}
@@ -42,6 +43,7 @@ func TestClickHouseSearchMemory(t *testing.T) {
 }
 
 func TestClickHouseSearchResultsAndPages(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	dsn, database := chtest.FreshDatabase(t)
 	target := Target{URL: dsn, Database: database}

@@ -288,6 +288,7 @@ func TestTrendsKeptMemoryHitRepairsDiskVersion(t *testing.T) {
 }
 
 func TestTrendsKeptPush(t *testing.T) {
+	t.Parallel()
 	local, target := seedFixture(t)
 	ctx := t.Context()
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})

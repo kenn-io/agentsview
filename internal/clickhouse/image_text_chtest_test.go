@@ -61,6 +61,7 @@ type searchHit struct {
 // global result anchored at the call's message, and tool_result rows in
 // substring and regex modes.
 func TestClickHouseImageTextPushAndSearch(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedFixture(t)
 	callImage, eventImage := inlineImage("call"), inlineImage("event")
@@ -213,6 +214,7 @@ func TestClickHouseImageTextPushAndSearch(t *testing.T) {
 }
 
 func TestClickHouseImageTextContentPageOrder(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedFixture(t)
 	content := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"},{"type":"input_image","image_url":"data:image/png;base64,AwQF"}]`
@@ -250,6 +252,7 @@ func TestClickHouseImageTextContentPageOrder(t *testing.T) {
 }
 
 func TestClickHouseImageTextPendingSessionVersion(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedFixture(t)
 	image := inlineImage("pending")
@@ -301,6 +304,7 @@ func TestClickHouseImageTextPendingSessionVersion(t *testing.T) {
 }
 
 func TestClickHouseImageTextHiddenAfterNewerSessionRow(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedFixture(t)
 	image := inlineImage("interrupted")

@@ -13,6 +13,7 @@ import (
 )
 
 func TestSessionUsageTotalStaysApartFromUsage(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local := dbtest.OpenTestDB(t)
 	dbtest.SeedSessionUsageTotal(t, local)

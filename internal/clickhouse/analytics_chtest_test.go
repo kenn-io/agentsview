@@ -278,6 +278,7 @@ func TestAnalyticsSummaryFromYearOne(t *testing.T) {
 }
 
 func TestTrendsTermsSessionWindowParity(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	store, syncer, local := newPushedStore(t)
 	cases := testutil.TrendsSessionWindowCases()

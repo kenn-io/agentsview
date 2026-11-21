@@ -13,6 +13,7 @@ import (
 )
 
 func TestClickHouseCommitLinksBeforeUpgradePush(t *testing.T) {
+	t.Parallel()
 	local, target := seedFixture(t)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
 	_, err := syncer.Push(t.Context(), true, nil)
@@ -34,6 +35,7 @@ func TestClickHouseCommitLinksBeforeUpgradePush(t *testing.T) {
 }
 
 func TestClickHouseCommitLinkParity(t *testing.T) {
+	t.Parallel()
 	local, target := seedFixture(t)
 	dbtest.SeedCommitLinks(t, local)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{Projects: []string{"commit-project"}})
@@ -80,6 +82,7 @@ func TestClickHouseCommitLinkParity(t *testing.T) {
 }
 
 func TestClickHouseRetainedCommitLinkScope(t *testing.T) {
+	t.Parallel()
 	local, target := seedFixture(t)
 	dbtest.SeedCommitLinks(t, local)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})

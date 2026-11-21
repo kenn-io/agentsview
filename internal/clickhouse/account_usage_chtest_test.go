@@ -16,6 +16,7 @@ import (
 )
 
 func TestAccountUsageAgentUpgradePreservesCursorRows(t *testing.T) {
+	t.Parallel()
 	dsn, database := chtest.FreshDatabase(t)
 	conn := chtest.Open(t, dsn, database)
 	_, err := conn.ExecContext(t.Context(), `CREATE TABLE cursor_usage_events (
@@ -46,6 +47,7 @@ func TestAccountUsageAgentUpgradePreservesCursorRows(t *testing.T) {
 }
 
 func TestAccountUsagePushKeepsAgentsUnknownModelsAndReportedCosts(t *testing.T) {
+	t.Parallel()
 	const billingScale = 10_000_000
 	local := dbtest.OpenTestDB(t)
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
@@ -125,6 +127,7 @@ func TestAccountUsagePushKeepsAgentsUnknownModelsAndReportedCosts(t *testing.T) 
 // survive; the daily read keeps the earliest copy, and keeps exactly one when
 // copies also share a timestamp.
 func TestAccountUsageDuplicateCursorRowsCountOnce(t *testing.T) {
+	t.Parallel()
 	local := dbtest.OpenTestDB(t)
 	require.NoError(t, local.InsertCursorUsageEvents(t.Context(), []db.CursorUsageEvent{
 		{OccurredAt: "2026-11-04T13:00:00Z", Model: "dup-test", InputTokens: 5, DedupKey: "cursor:dup"},

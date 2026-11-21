@@ -45,6 +45,7 @@ func usageQueryCountsOf(t *testing.T, store *Store, probe string) (probes, resul
 }
 
 func TestUsageRowsVersionProbeFailure(t *testing.T) {
+	t.Parallel()
 	for _, failure := range []string{"identity cancellation", "parts timeout"} {
 		t.Run(failure, func(t *testing.T) {
 			store, _, _ := newPushedStore(t)
@@ -90,6 +91,7 @@ func TestUsageRowsVersionProbeFailure(t *testing.T) {
 }
 
 func TestUsageMemosSurviveMerges(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, syncer, store := newPreparedUsageStore(t)
 	require.NoError(t, syncer.syncModelPricing(ctx))
@@ -173,6 +175,7 @@ func TestUsageMemosSurviveMerges(t *testing.T) {
 
 // A push during either identity probe must leave subsequent usage reads fresh.
 func TestUsageReadsStayFreshAfterPushDuringIdentityProbe(t *testing.T) {
+	t.Parallel()
 	f := db.UsageFilter{Timezone: "UTC"}
 	for _, table := range []string{"model_pricing", "sessions"} {
 		for kind, read := range map[string]func(context.Context, *Store) (any, error){

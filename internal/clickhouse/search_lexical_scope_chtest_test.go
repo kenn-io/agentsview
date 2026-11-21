@@ -11,6 +11,7 @@ import (
 )
 
 func TestLexicalScope(t *testing.T) {
+	t.Parallel()
 	local, target := seedFixture(t)
 	dbtest.SeedLexicalScope(t, local)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})

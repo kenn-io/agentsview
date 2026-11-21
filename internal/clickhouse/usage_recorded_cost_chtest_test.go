@@ -12,6 +12,7 @@ import (
 )
 
 func TestRecordedCostPricesOnlyUnpricedModels(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local := dbtest.OpenTestDB(t)
 	dbtest.SeedRecordedCostSessions(t, local)
