@@ -282,10 +282,8 @@ func newServer(opts ServeOptions) *mcp.Server {
 		}, t.sessionUsage)
 
 		mcp.AddTool(s, &mcp.Tool{
-			Name: ToolGetToolCalls,
-			Description: "List the tool calls one session made, in order: tool name, category, input, and " +
-				"result size. Filter by category (for example Edit, Write, or Bash) to see what the agent " +
-				"ran or changed. Inputs have secret-shaped values masked and are cut to max_input_chars.",
+			Name:        ToolGetToolCalls,
+			Description: "List tool calls with masked inputs. Set include_results for saved results and events.",
 			Annotations: readOnly,
 		}, t.toolCalls)
 
