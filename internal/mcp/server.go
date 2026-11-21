@@ -54,7 +54,7 @@ const ToolGetCompactionSummaries = "get_compaction_summaries"
 
 var routeInstructions = "\nFind sessions by topic: use " + ToolSearchContent + " with mode hybrid, or " + ToolSearchSessions + " for keywords.\n" +
 	"Find a named session: use " + ToolSearchSessions + " with its name as query.\n" +
-	"Find who owns a PR or task: use " + ToolSearchContent + " with mode substring and pattern set to the bare PR number, the full PR URL, or the task ID. Substring search covers tool results. A number can match longer numbers, so check that each hit has the exact PR reference and repository. " + ToolListSessions + " with pr or labels finds linked or labeled sessions. Compare candidate sessions by parent and activity time.\n" +
+	"Find who owns a PR or task: use " + ToolSearchContent + " with mode regex and pattern (#|/pull/)<number>\\b for a PR number, or mode substring with the full PR URL or the task ID. These searches cover tool results. Confirm that the hit names the right repository. " + ToolListSessions + " with pr or labels finds linked or labeled sessions. The newest top-level session that mentions it owns it; a child session counts as its parent.\n" +
 	"See what a session did: use " + ToolGetSessionOverview + ", then " + ToolGetToolCalls + ", " + ToolGetMessages + ", or " + ToolGetChildSessions + ".\n" +
 	"Find recently active sessions: use " + ToolListSessions + " with active_since as an RFC3339 timestamp.\n" +
 	"Session tools accept a stored ID such as codex:<uuid>. A plain UUID works locally or against a --server with API version " + fmt.Sprint(service.RawSessionLookupAPIVersion) + " or later; for an older --server, use the full stored ID from search or list results.\n" +

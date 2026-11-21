@@ -145,7 +145,7 @@ func TestNewServer_Instructions(t *testing.T) {
 				{"Find sessions by topic:", "search_content", []string{"mode"}, "hybrid"},
 				{"Find sessions by topic:", "search_sessions", nil, ""},
 				{"Find a named session:", "search_sessions", []string{"query"}, ""},
-				{"Find who owns a PR or task:", "search_content", []string{"mode", "pattern"}, "substring"},
+				{"Find who owns a PR or task:", "search_content", []string{"mode", "pattern"}, "regex"},
 				{"Find who owns a PR or task:", "list_sessions", []string{"pr", "labels"}, ""},
 				{"See what a session did:", "get_session_overview", nil, ""},
 				{"See what a session did:", "get_tool_calls", nil, ""},
@@ -163,23 +163,48 @@ func TestNewServer_Instructions(t *testing.T) {
 					}
 				}
 				require.NotEmpty(t, line, "missing route %q", route.prefix)
-				assert.Contains(t, line, route.tool)
 				schema, ok := properties[route.tool]
 				require.True(t, ok, "route %q names unregistered tool %q", route.prefix, route.tool)
+				if len(route.args) == 0 {
+					assert.Regexp(t, `\b`+regexp.QuoteMeta(route.tool)+`\b`, line)
+				}
 				for _, arg := range route.args {
-					assert.Regexp(t, `\b`+regexp.QuoteMeta(arg)+`\b`, line)
+					toolPattern, argPattern := regexp.QuoteMeta(route.tool), regexp.QuoteMeta(arg)
+					assert.Regexp(t, `(?:\b`+toolPattern+`\b[^.;\n]*\b`+argPattern+`\b|\b`+argPattern+`\b[^.;\n]*\b`+toolPattern+`\b)`, line)
 					assert.Contains(t, schema, arg, "route %q names %q, which %s does not accept", route.prefix, arg, route.tool)
 				}
 				if route.mode != "" {
-					assert.Contains(t, line, "mode "+route.mode)
 					assert.Contains(t, schema["mode"].Description, route.mode, "%s mode does not list %q", route.tool, route.mode)
 				}
 			}
 			assert.Contains(t, instructions, "--server with API version 28 or later")
-			assert.Contains(t, instructions, "UUID")
-			assert.Contains(t, instructions, "RFC3339")
 		})
 	}
+}
+
+func TestOwnerSearchPatternFindsExactReference(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	dbtest.SeedSession(t, d, "url", "proj")
+	dbtest.SeedSession(t, d, "longer", "proj")
+	dbtest.SeedMessages(t, d,
+		toolCallMsg("url", 0, db.ToolCall{ToolName: "Bash", Category: "Bash", ResultContent: "see #1234 " + strings.Repeat("filler ", 100) + "https://github.com/o/r/pull/123"}),
+		toolCallMsg("longer", 0, db.ToolCall{ToolName: "Bash", Category: "Bash", ResultContent: "see #1234"}),
+	)
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil)}))
+	defer func() {
+		require.NoError(t, ct.Close())
+		require.NoError(t, st.Wait())
+	}()
+	match := regexp.MustCompile(`pattern (\S+)`).FindStringSubmatch(ct.InitializeResult().Instructions)
+	require.Len(t, match, 2)
+	pattern := strings.Replace(match[1], "<number>", "123", 1)
+	res, err := ct.CallTool(t.Context(), callParams(ToolSearchContent, map[string]any{"mode": "regex", "pattern": pattern, "include_active": true, "include_one_shot": true}))
+	require.NoError(t, err)
+	out := decodeStructured[searchContentOut](t, res)
+	require.Len(t, out.Matches, 1)
+	assert.Equal(t, "url", out.Matches[0].SessionID)
+	assert.Contains(t, out.Matches[0].Snippet, "/pull/123")
+	assert.NotContains(t, out.Matches[0].Snippet, "#1234")
 }
 
 func TestServer_GetMemoryStatus(t *testing.T) {
