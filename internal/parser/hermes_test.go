@@ -2551,7 +2551,8 @@ func TestHermesCompactedStateDBBeatsUnfilteredCompanionTranscript(t *testing.T) 
 				('compacted', 'user', 'archived turn', 1778767201.000, 0, NULL, NULL),
 				('compacted', 'assistant', 'archived reply', 1778767202.000, 0, NULL, NULL)
 			`,
-			wantResultCnt: 0,
+			wantResultCnt:  1,
+			wantMessageCnt: 0,
 		},
 		{
 			name: "hidden restatement excludes state row despite companion json",
