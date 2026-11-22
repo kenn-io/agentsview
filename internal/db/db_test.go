@@ -4827,6 +4827,20 @@ func TestFTSBackfill(t *testing.T) {
 	assert.Equal(t, "s1", page.Results[0].SessionID, "result session_id")
 }
 
+func TestCheckFTSModuleLoadsDoesNotReadContent(t *testing.T) {
+	d := testDB(t)
+	requireFTS(t, d)
+	w := d.getWriter()
+	// Make any content scan fail, while leaving the FTS index available.
+	_, err := w.Exec(t.Context(), `DROP VIEW message_search_content;
+		CREATE VIEW message_search_content AS SELECT * FROM missing_content`)
+	require.NoError(t, err)
+	_, err = w.Exec(t.Context(), "SELECT 1 FROM messages_fts LIMIT 1")
+	require.Error(t, err)
+	require.NoError(t, d.checkFTSModuleLoads(t.Context(), w))
+	assert.True(t, d.HasFTS(t.Context()), "FTS index should remain available without the content view")
+}
+
 func TestOpenRejectsArchiveWhoseFTSModuleIsUnavailable(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "archive.db")
 	d, err := Open(t.Context(), path)

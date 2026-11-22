@@ -5490,6 +5490,8 @@ func restoreUsageGenerationsLocked(ctx context.Context, w *writerHandle) error {
 	return nil
 }
 
+const messageFTSProbe = "SELECT 1 FROM messages_fts WHERE messages_fts MATCH 'agentsviewprobe' LIMIT 1"
+
 // checkFTSModuleLoads fails when messages_fts is in the schema but this
 // executable's SQLite cannot load its virtual table module. Writes to
 // messages fire triggers into messages_fts, so such an archive is
@@ -5497,7 +5499,7 @@ func restoreUsageGenerationsLocked(ctx context.Context, w *writerHandle) error {
 func (db *DB) checkFTSModuleLoads(
 	ctx context.Context, w *writerHandle,
 ) error {
-	_, err := w.ExecContext(ctx, "SELECT 1 FROM messages_fts LIMIT 1")
+	_, err := w.ExecContext(ctx, messageFTSProbe)
 	if err == nil {
 		return nil
 	}
@@ -5522,9 +5524,7 @@ func (db *DB) HasFTS(ctx context.Context) bool {
 	// sqlite_master but fail to load if the fts5 module is missing in the
 	// current runtime. A MATCH reads the index instead of scanning rows, and
 	// succeeds whether or not any row matches.
-	_, err := db.getReader().Exec(ctx,
-		"SELECT 1 FROM messages_fts WHERE messages_fts MATCH 'agentsviewprobe' LIMIT 1",
-	)
+	_, err := db.getReader().Exec(ctx, messageFTSProbe)
 	return err == nil
 }
 
