@@ -3,17 +3,18 @@ package sync
 import (
 	"context"
 	"slices"
+	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-var firstImportWaves = []int{25, 250, 2500}
+const firstImportWaveSize = 100
 
 type firstImportWave struct {
-	limit   int
-	cutoff  int64
-	partial bool
+	limit    int
+	selected map[firstImportSource]struct{}
+	partial  bool
 }
 
 // SyncNewest imports a bounded first wave without recording a completed sync.
@@ -36,29 +37,38 @@ func (e *Engine) SyncNewest(ctx context.Context, n int, onProgress ProgressFunc)
 
 // RunFirstImport publishes recent sessions before completing startup reconciliation.
 func (e *Engine) RunFirstImport(ctx context.Context, onProgress ProgressFunc) (SyncStats, bool, error) {
-	for _, n := range firstImportWaves {
-		if e.StartupReconciled() {
-			return SyncStats{}, false, nil
-		}
-		stats, complete := e.SyncNewest(ctx, n, onProgress)
-		if ctx.Err() != nil {
-			return stats, true, ctx.Err()
-		}
-		if stats.Aborted || complete {
-			break
-		}
+	if e.StartupReconciled() {
+		return SyncStats{}, false, nil
 	}
+	stats, _ := e.SyncNewest(ctx, firstImportWaveSize, onProgress)
+	if ctx.Err() != nil {
+		return stats, true, ctx.Err()
+	}
+
 	return e.RunStartupSyncFallback(ctx, onProgress)
 }
 
-func (e *Engine) firstImportCutoff(ctx context.Context, files []parser.DiscoveredFile, scope *rootSyncScope, wave *firstImportWave) error {
-	times := make([]int64, 0, len(files))
+type firstImportSource struct {
+	agent parser.AgentType
+	path  string
+}
+
+type firstImportCandidate struct {
+	source firstImportSource
+	mtime  int64
+}
+
+func (e *Engine) firstImportSelect(ctx context.Context, files []parser.DiscoveredFile, scope *rootSyncScope, wave *firstImportWave) error {
+	candidates := make([]firstImportCandidate, 0, len(files))
 	for _, file := range files {
-		mtime, err := e.discoveredFileEffectiveMtime(ctx, file)
-		if err != nil {
-			mtime = 0
+		var mtime int64
+		if file.ProviderSource != nil {
+			mtime = file.ProviderSource.DiscoveryMTimeNS
 		}
-		times = append(times, mtime)
+		if mtime == 0 {
+			mtime, _ = discoveredFileMtime(ctx, file)
+		}
+		candidates = append(candidates, firstImportCandidate{firstImportSource{file.Agent, file.Path}, mtime})
 	}
 	for _, agent := range []parser.AgentType{parser.AgentWarp, parser.AgentForge, parser.AgentPiebald, parser.AgentZCode, parser.AgentGoose, parser.AgentCrush} {
 		var roots []string
@@ -77,17 +87,34 @@ func (e *Engine) firstImportCutoff(ctx context.Context, files []parser.Discovere
 			continue
 		}
 		if err := discoverer.DiscoverEach(ctx, func(source parser.SourceRef) error {
-			times = append(times, source.DiscoveryMTimeNS)
+			candidates = append(candidates, firstImportCandidate{firstImportSource{agent, providerDiscoveredPath(source)}, source.DiscoveryMTimeNS})
 			return ctx.Err()
 		}); err != nil {
 			return err
 		}
 	}
-	if len(times) <= wave.limit {
+	if len(candidates) <= wave.limit {
 		return nil
 	}
 	wave.partial = true
-	slices.Sort(times)
-	wave.cutoff = max(times[len(times)-wave.limit], 1)
+	slices.SortFunc(candidates, func(a, b firstImportCandidate) int {
+		if a.mtime != b.mtime {
+			if a.mtime > b.mtime {
+				return -1
+			}
+			return 1
+		}
+		if c := strings.Compare(string(a.source.agent), string(b.source.agent)); c != 0 {
+			return c
+		}
+		return strings.Compare(a.source.path, b.source.path)
+	})
+	wave.selected = make(map[firstImportSource]struct{}, wave.limit)
+	for _, candidate := range candidates {
+		if candidate.mtime <= 0 || len(wave.selected) >= wave.limit {
+			break
+		}
+		wave.selected[candidate.source] = struct{}{}
+	}
 	return nil
 }

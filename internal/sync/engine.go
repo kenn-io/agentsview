@@ -6333,11 +6333,11 @@ func (e *Engine) syncAllLocked(
 	}
 
 	if wave != nil {
-		if err := e.firstImportCutoff(ctx, dedupeDiscoveredFiles(all), scope, wave); err != nil {
+		if err := e.firstImportSelect(ctx, dedupeDiscoveredFiles(all), scope, wave); err != nil {
 			return SyncStats{Aborted: true, Warnings: []string{err.Error()}}
 		}
 		if wave.partial {
-			since = time.Unix(0, wave.cutoff)
+			since = time.Unix(0, 1)
 		}
 	}
 
@@ -6347,7 +6347,15 @@ func (e *Engine) syncAllLocked(
 	e.beginSQLiteContainerPass(providerFound, preContainerStates)
 
 	quickSyncCutoff := !since.IsZero()
-	if quickSyncCutoff {
+	if wave != nil && wave.partial {
+		kept := all[:0]
+		for _, file := range all {
+			if _, ok := wave.selected[firstImportSource{file.Agent, file.Path}]; ok {
+				kept = append(kept, file)
+			}
+		}
+		all = kept
+	} else if quickSyncCutoff {
 		all = e.dedupeClaudeDiscoveredFiles(ctx, all)
 		// A Codex UUID can exist as both a live dated transcript and a flat
 		// archived copy. The provider's discovery deduplicates them to the
@@ -6360,16 +6368,6 @@ func (e *Engine) syncAllLocked(
 		// preference.
 		all = e.expandCodexProviderDuplicates(all, scope)
 		all = e.filterQuickSyncFiles(ctx, all, since)
-		if wave != nil && wave.partial {
-			kept := all[:0]
-			for _, file := range all {
-				mtime, err := e.discoveredFileEffectiveMtime(ctx, file)
-				if err == nil && mtime > 0 && mtime >= wave.cutoff {
-					kept = append(kept, file)
-				}
-			}
-			all = kept
-		}
 	}
 
 	if quickSyncCutoff {
@@ -7452,8 +7450,10 @@ func (e *Engine) syncProviderDBBacked(
 				piebaldDiscovered[key] = struct{}{}
 			}
 		}
-		if wave != nil && wave.partial && (source.DiscoveryMTimeNS <= 0 || source.DiscoveryMTimeNS < wave.cutoff) {
-			return nil
+		if wave != nil && wave.partial {
+			if _, ok := wave.selected[firstImportSource{agent, providerDiscoveredPath(source)}]; !ok {
+				return nil
+			}
 		}
 		var piebaldFailure piebaldFailureLookup
 		piebaldRetry := false
