@@ -14,7 +14,10 @@ Session providers**, where you can configure those sources.
 
 Once your archive has sessions and none is selected, AgentsView shows the
 analytics dashboard. It gives you an overview of your agent activity across all
-projects, even when sidebar filters hide every session.
+projects, even when sidebar filters hide every session. First-time users with
+session history also see a **Get started** checklist for opening a session,
+searching history, viewing token use, and exploring insights; it disappears once
+completed or dismissed.
 
 ![Analytics dashboard](/docs/assets/generated/screenshots/dashboard.png)
 
@@ -656,6 +659,9 @@ choose one under **Layout** in the session header's **View** menu, or set one in
 | Stream  | Chat without speaker labels                |
 | Skim    | One line per message and tool call         |
 
+All four layouts share one reading column. Choose **Default**, **Wider**, or
+**Full** under **Settings > Appearance > Reading width** to control its width.
+
 ### Focused transcript mode
 
 Focused mode hides intermediate tool calls, thinking blocks, and partial
@@ -1084,7 +1090,9 @@ Each result uses a compact row:
   copyable session ID.
 
 Select a result to open that session and scroll straight to the matching
-message.
+message. Reopening `Cmd+K` before reloading the page restores your previous
+query and filters and highlights your pick if results had finished loading;
+click the clear button or press `Esc` after clearing to start a fresh search.
 
 ### Project and date filters
 
@@ -1369,7 +1377,7 @@ into these sections:
 | Section            | What You Can Configure                                                                                   |
 | ------------------ | -------------------------------------------------------------------------------------------------------- |
 | Language           | Interface language (Azerbaijani, English, French, Japanese, Korean, Spanish, Simplified Chinese, or Traditional Chinese)       |
-| Appearance         | Theme (light/dark), high-contrast mode, chart colors, message colors, message layout, reading width, zoom, always show year, block visibility |
+| Appearance         | Theme (Match device, light, or dark), high-contrast mode, chart colors, message colors, message layout, reading width, zoom, always show year, block visibility |
 | Date ranges        | Browser-local checkbox for linking date selections across Sessions, Usage, Activity, and Quality          |
 | Session Providers  | Enable session providers, inspect their session directories, and add alternate agent homes               |
 | Tool-result images | Choose whether future imports keep, drop, or offload tool-result images; preview and remove images already stored |
@@ -1437,8 +1445,11 @@ ______________________________________________________________________
 
 ## Theme
 
-Click the theme toggle in the header or open **Settings > Appearance** to switch
-between light and dark mode. Your choice persists across sessions.
+Open **Settings > Appearance > Theme** to choose **Match device**, **Light**, or
+**Dark**. **Match device** follows the light or dark setting reported by your
+browser or desktop app and switches live when that setting changes. You can also
+click the theme toggle in the header to switch directly between light and dark
+mode. Your choice persists across sessions.
 
 ![Light theme](/docs/assets/generated/screenshots/theme-light.png)
 
