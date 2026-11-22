@@ -17,7 +17,7 @@ import (
 
 // CursorUsageEvent stores authoritative account billing data. Agent defaults
 // to cursor for Cursor admin API imports; xAI CSV imports identify each product.
-// The table is append-only, deduped by a stable event fingerprint.
+// Events are deduped by a stable fingerprint; account attribution can update existing rows.
 type CursorUsageEvent struct {
 	ID               int64
 	Agent            string
