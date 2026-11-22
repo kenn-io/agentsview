@@ -6188,6 +6188,12 @@ const (
 	deleteSyncStateQuery = "DELETE FROM pg_sync_state WHERE key = ?"
 )
 
+// ParseSyncStateTime parses a persisted sync timestamp, returning zero for an invalid value.
+func ParseSyncStateTime(raw string) time.Time {
+	t, _ := time.Parse(time.RFC3339Nano, raw)
+	return t
+}
+
 // GetSyncState reads a value from the pg_sync_state table.
 func (db *DB) GetSyncState(ctx context.Context, key string) (string, error) {
 	return scanSyncState(db.getReader().QueryRow(ctx, getSyncStateQuery, key))

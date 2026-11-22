@@ -487,7 +487,7 @@ func benchResyncBulkIngest(b *testing.B, withUsage bool) {
 			engine.syncMu.Lock()
 			defer engine.syncMu.Unlock()
 			return engine.syncAllLocked(
-				ctx, nil, time.Time{}, nil, syncWriteBulk, true, false,
+				ctx, nil, time.Time{}, nil, syncWriteBulk, true, false, nil,
 			)
 		},
 		func(engine *Engine, stats SyncStats, sessions int) {

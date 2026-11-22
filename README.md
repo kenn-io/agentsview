@@ -72,9 +72,8 @@ agentsview index embeddings build  # turn on search by meaning
 agentsview report usage daily     # print daily cost summary
 ```
 
-On first run, agentsview discovers sessions from every supported agent on your
-machine, syncs them into a local SQLite database, and serves a web UI at
-`http://127.0.0.1:8080`.
+On first run, agentsview serves a web UI at `http://127.0.0.1:8080` while it
+imports sessions into a local SQLite database, showing recent sessions first.
 
 The daemon is the server: the web UI, API, session sync, and file watchers share
 one process. Choose `serve` for a foreground process or `daemon start` for a

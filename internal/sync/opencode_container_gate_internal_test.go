@@ -2056,3 +2056,26 @@ func readContainerVerification(t *testing.T, archive *db.DB, path string) (sqlit
 	require.NoError(t, json.Unmarshal([]byte(raw), &record))
 	return record, true
 }
+
+func TestFirstImportOpenCodeWaveDoesNotPromotePartialContainer(t *testing.T) {
+	path, source := seededCompositeContainerTestDB(t)
+	_, err := source.ExecContext(t.Context(), `
+		INSERT INTO session (id, project_id, time_created, time_updated)
+		VALUES ('ses-2', 'proj', 1779012000000, 1779109999000);
+		INSERT INTO message (id, session_id, data, time_created, time_updated)
+		VALUES ('msg-2', 'ses-2', '{"role":"user"}', 1779109999000, 1779109999000);
+		INSERT INTO part (id, session_id, message_id, data, time_created, time_updated)
+		VALUES ('part-2', 'ses-2', 'msg-2', '{"type":"text","text":"new prompt"}', 1779109999000, 1779109999000)
+	`)
+	require.NoError(t, err)
+	archive := openTestDB(t)
+	engine := NewEngine(t.Context(), archive, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentOpenCode: {filepath.Dir(path)}}, Machine: "local"})
+	t.Cleanup(engine.Close)
+	stats, complete := engine.SyncNewest(t.Context(), 1, nil)
+	require.False(t, complete)
+	require.Equal(t, 1, stats.Synced)
+	require.NotContains(t, engine.trustedSQLiteContainers, path)
+	stats = engine.SyncAll(t.Context(), nil)
+	require.Equal(t, 1, stats.Synced)
+	require.Contains(t, engine.trustedSQLiteContainers, path)
+}

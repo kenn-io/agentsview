@@ -2054,7 +2054,7 @@ func TestSyncProviderDBBackedBaselinesOnlyCompleteSuccessfulSources(t *testing.T
 				stats := SyncStats{}
 				aborted := engine.syncProviderDBBackedAgent(
 					t.Context(), agent, string(agent), writeMode, false,
-					newRootSyncScope([]string{root}), &stats, func(int, int) {},
+					newRootSyncScope([]string{root}), &stats, func(int, int) {}, nil,
 				)
 
 				assert.False(t, aborted)
@@ -2148,7 +2148,7 @@ func TestSyncProviderDBBackedBatchesWarmSourceAttributionLookup(t *testing.T) {
 
 			aborted := engine.syncProviderDBBackedAgent(
 				t.Context(), agent, string(agent), syncWriteBulk, false,
-				newRootSyncScope([]string{root}), &stats, func(int, int) {},
+				newRootSyncScope([]string{root}), &stats, func(int, int) {}, nil,
 			)
 
 			assert.False(t, aborted)
@@ -2214,7 +2214,7 @@ func TestSyncProviderDBBackedBaselinesEveryStoredMachineForSharedSource(
 
 	aborted := engine.syncProviderDBBackedAgent(
 		t.Context(), agent, string(agent), syncWriteBulk, false,
-		newRootSyncScope([]string{root}), &stats, func(int, int) {},
+		newRootSyncScope([]string{root}), &stats, func(int, int) {}, nil,
 	)
 
 	assert.False(t, aborted)
@@ -2286,7 +2286,7 @@ func TestSyncProviderDBBackedAgentFlushesEachSourceBeforeParsingNext(t *testing.
 	aborted := engine.syncProviderDBBackedAgent(
 		t.Context(), parser.AgentWarp, "warp", syncWriteBulk, false,
 		newRootSyncScope([]string{root}), &stats,
-		func(total, _ int) { progressTotal += total },
+		func(total, _ int) { progressTotal += total }, nil,
 	)
 
 	assert.False(t, aborted)

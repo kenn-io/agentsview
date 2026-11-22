@@ -369,7 +369,7 @@ func (e *Engine) resyncBuildLocked(
 		"",
 	)
 	stats = e.syncAllLocked(
-		ctx, reportResyncProgress, time.Time{}, nil, syncWriteBulk, true, false,
+		ctx, reportResyncProgress, time.Time{}, nil, syncWriteBulk, true, false, nil,
 	)
 	e.db = origDB // restore immediately
 	e.archiveStore = nil
@@ -440,7 +440,7 @@ func (e *Engine) resyncBuildLocked(
 		if contributor.Run != nil {
 			contributorStats, contributorErr = contributor.Run(ctx, contributorEngine, newDB, contributorProgress)
 		} else {
-			contributorStats = contributorEngine.syncAllLocked(ctx, contributorProgress, time.Time{}, nil, syncWriteBulk, true, contributor.ForceParse)
+			contributorStats = contributorEngine.syncAllLocked(ctx, contributorProgress, time.Time{}, nil, syncWriteBulk, true, contributor.ForceParse, nil)
 		}
 		e.failures.Merge(&contributorEngine.failures)
 		contributorEngine.phaseStats.Log("resync contributor " + contributor.Name)

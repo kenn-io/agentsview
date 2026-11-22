@@ -242,6 +242,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	workerSyncDone := false
 	startupRebuild := false
 	skipInitialSync := opts.SkipInitialSync
+	firstImport := false
 	if !cfg.NoSync || archiveOnly {
 		needsResync, fullRebuild, err := db.ArchiveResyncState(ctx, cfg.DBPath)
 		if err != nil && skipInitialSync {
@@ -249,6 +250,15 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		}
 		// Scoped upgrades and schema repairs finish before startup publishes readiness.
 		startupRebuild = err == nil && fullRebuild
+		if err == nil && !needsResync && !cfg.NoSync && !archiveOnly {
+			firstImport, err = isFirstImport(ctx, cfg.DBPath)
+			if err != nil {
+				log.Printf("checking first import: %v", err)
+			}
+			if firstImport {
+				skipInitialSync = true
+			}
+		}
 		if skipInitialSync {
 			skipInitialSync = !needsResync
 		}
@@ -829,11 +839,22 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	}
 	startDaemonUsageCacheBackfill(ctx, database, idleTracker)
 	if engine != nil && !cfg.NoSync && skipInitialSync {
+		fallbackCtx, cancelFallback := context.WithCancel(ctx)
+		fallbackDone := make(chan struct{})
+		defer func() {
+			cancelFallback()
+			<-fallbackDone
+		}()
 		go func() {
-			timer := time.NewTimer(deferredStartupSyncGracePeriod)
+			defer close(fallbackDone)
+			grace := deferredStartupSyncGracePeriod
+			if firstImport && !opts.SkipInitialSync {
+				grace = 0
+			}
+			timer := time.NewTimer(grace)
 			defer timer.Stop()
 			ran, fallbackErr := runDeferredStartupSyncFallback(
-				ctx, cfg, engine, database, writeLock, idleTracker, timer.C,
+				fallbackCtx, cfg, engine, database, writeLock, idleTracker, timer.C, firstImport,
 			)
 			if fallbackErr != nil && ctx.Err() == nil {
 				log.Printf("deferred startup sync: %v", fallbackErr)
@@ -931,6 +952,24 @@ func startDaemonUsageCacheBackfill(
 	}
 }
 
+func isFirstImport(ctx context.Context, path string) (bool, error) {
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return true, nil
+	} else if err != nil {
+		return false, err
+	}
+	database, err := db.OpenReadOnly(ctx, path)
+	if err != nil {
+		return false, err
+	}
+	defer database.Close()
+	raw, err := database.GetSyncState(ctx, "last_sync_finished_at")
+	if err != nil {
+		return false, err
+	}
+	return db.ParseSyncStateTime(raw).IsZero(), nil
+}
+
 func runDeferredStartupSyncFallback(
 	ctx context.Context,
 	cfg config.Config,
@@ -939,6 +978,7 @@ func runDeferredStartupSyncFallback(
 	lock *writeOwnerLock,
 	idleTracker *server.IdleTracker,
 	timeout <-chan time.Time,
+	firstImport bool,
 ) (bool, error) {
 	select {
 	case <-ctx.Done():
@@ -960,6 +1000,11 @@ func runDeferredStartupSyncFallback(
 	// firing mid-pass cannot launch a second archive-scale worker.
 	if engine.StartupReconciled() {
 		return false, nil
+	}
+
+	if firstImport {
+		_, ran, err := engine.RunFirstImport(ctx, nil)
+		return ran, err
 	}
 
 	// Route the skipped startup sync through the worker so it does not run at
