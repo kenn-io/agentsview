@@ -1721,11 +1721,13 @@ func TestCursorSyncMatchesMembers(t *testing.T) {
 		wantAccount   string
 		secondEmpty   bool
 		secondFails   bool
+		rosterFails   bool
 		priorRetained bool
 	}{
 		{name: "single", priorModel: "other-team", priorAccount: "99", wantAccount: "12", secondEmpty: true, priorRetained: true},
 		{name: "ambiguous", priorModel: "model-a", priorAccount: "12"},
 		{name: "failed member", priorModel: "model-a", priorAccount: "99", wantAccount: "99", secondFails: true},
+		{name: "failed roster", priorModel: "other-team", priorAccount: "99", rosterFails: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dataDir := cursorUsageTestDataDir(t)
@@ -1742,6 +1744,10 @@ func TestCursorSyncMatchesMembers(t *testing.T) {
 					return
 				}
 				if r.URL.Path == "/teams/daily-usage-data" {
+					if tc.rosterFails {
+						http.Error(w, "forbidden", http.StatusForbidden)
+						return
+					}
 					_, _ = w.Write([]byte(`{"data":[{"userId":12,"isActive":false},{"userId":34}],"pagination":{"hasNextPage":false}}`))
 					return
 				}
@@ -1762,16 +1768,25 @@ func TestCursorSyncMatchesMembers(t *testing.T) {
 			stderr := captureStderr(t, func() {
 				require.NoError(t, syncCursorUsage(t, server.URL, "--since", "2026-07-28", "--until", "2026-07-28"))
 			})
-			if tc.secondFails {
+			if tc.secondFails || tc.rosterFails {
 				assert.Contains(t, stderr, "Cursor account reporting could not be refreshed")
 			}
-			assert.Equal(t, []string{"0", "12", "34"}, requests)
+			if tc.rosterFails {
+				assert.Equal(t, []string{"0"}, requests)
+			} else {
+				assert.Equal(t, []string{"0", "12", "34"}, requests)
+			}
 			database = dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
 			var account, stamp string
 			require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT account_user_id, account_polled_at FROM cursor_usage_events WHERE model='model-a'`).Scan(&account, &stamp))
 			assert.Equal(t, tc.wantAccount, account)
 			if tc.secondFails {
 				assert.Equal(t, "2026-07-29T01:00:00.000000Z", stamp)
+			}
+			if tc.rosterFails {
+				var tokens int
+				require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT output_tokens FROM cursor_usage_events WHERE model='model-a'`).Scan(&tokens))
+				assert.Equal(t, 7, tokens)
 			}
 			if tc.priorRetained {
 				require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT account_user_id, account_polled_at FROM cursor_usage_events WHERE model='other-team'`).Scan(&account, &stamp))
@@ -2170,28 +2185,7 @@ func TestCursorSyncAllSkipsEmptyRosterWindows(t *testing.T) {
 	}
 }
 
-func TestCursorSyncKeepsEventsWhenRosterFails(t *testing.T) {
-	t.Setenv("TZ", "UTC")
-	dataDir := cursorUsageTestDataDir(t)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/teams/daily-usage-data" {
-			http.Error(w, "forbidden", http.StatusForbidden)
-			return
-		}
-		_, _ = w.Write([]byte(`{"totalUsageEventsCount":1,"usageEvents":[{"timestamp":"2026-07-28T10:03:00Z","model":"model-a","tokenUsage":{"outputTokens":7}}]}`))
-	}))
-	defer server.Close()
-	stderr := captureStderr(t, func() {
-		require.NoError(t, syncCursorUsage(t, server.URL, "--since", "2026-07-28", "--until", "2026-07-28"))
-	})
-	assert.Contains(t, stderr, "Cursor account reporting could not be refreshed")
-	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
-	var tokens int
-	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT output_tokens FROM cursor_usage_events WHERE model='model-a'`).Scan(&tokens))
-	assert.Equal(t, 7, tokens)
-}
-
-func TestCursorSyncEmptyPollReplacesAccountHour(t *testing.T) {
+func TestCursorSyncRefreshesPriorAccountHours(t *testing.T) {
 	t.Setenv("TZ", "UTC")
 	dataDir := cursorUsageTestDataDir(t)
 	syncNumber := 0

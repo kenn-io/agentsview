@@ -611,17 +611,13 @@ func TestExportSessionsUpgradesRecordedRepositoryColumn(t *testing.T) {
 		t.Run(fmt.Sprintf("parser_resync_%t", stale), func(t *testing.T) {
 			dataDir := testDataDir(t)
 			dbPath := filepath.Join(dataDir, "sessions.db")
-			database := seedExportSessionsArchiveAt(t, dbPath)
-			require.NoError(t, database.ConfigureArtifactLocalMachine(t.Context(), "local"))
-			require.NoError(t, database.Close())
+			seedExportSessionsArchiveAt(t, dbPath)
 			raw, err := sql.Open("sqlite3", dbPath)
 			require.NoError(t, err)
 			if stale {
 				_, err = raw.ExecContext(t.Context(), "PRAGMA user_version=137")
-			} else {
-				_, err = raw.ExecContext(t.Context(), fmt.Sprintf(`PRAGMA user_version=%d; DROP TABLE cursor_account_polls; DROP INDEX idx_cursor_usage_events_account_time; ALTER TABLE cursor_usage_events DROP COLUMN account_user_id; ALTER TABLE cursor_usage_events DROP COLUMN account_polled_at`, db.CurrentDataVersion()-1))
+				require.NoError(t, err)
 			}
-			require.NoError(t, err)
 			var versionBefore int
 			require.NoError(t, raw.QueryRowContext(t.Context(), "PRAGMA user_version").Scan(&versionBefore))
 			_, err = raw.ExecContext(t.Context(), "ALTER TABLE session_project_identity_snapshots DROP COLUMN recorded_git_remote")

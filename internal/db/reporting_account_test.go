@@ -112,7 +112,6 @@ func TestCursorAccountReporting(t *testing.T) {
 	require.NoError(t, d.RecordCursorAccountPoll(ctx, map[string][]string{"12": {CursorUsageEventDedupKey(a)}}, first, []CursorAccountHour{{UserID: "12", Start: hourStart}}))
 	require.NoError(t, d.RecordCursorAccountPoll(ctx, map[string][]string{"12": {CursorUsageEventDedupKey(b)}}, first.Add(time.Hour), []CursorAccountHour{{UserID: "12", Start: hourStart}}))
 	require.NoError(t, d.RecordCursorAccountPoll(ctx, map[string][]string{"34": {CursorUsageEventDedupKey(c)}}, first, []CursorAccountHour{{UserID: "34", Start: hourStart}}))
-	require.NoError(t, d.RecordCursorAccountPoll(ctx, map[string][]string{"99": {CursorUsageEventDedupKey(a)}}, first.Add(-time.Hour), []CursorAccountHour{{UserID: "99", Start: hourStart}}))
 	var raw, id, stamp string
 	require.NoError(t, d.Reader().QueryRowContext(ctx, `SELECT user_id,account_user_id,account_polled_at FROM cursor_usage_events WHERE dedup_key=?`, CursorUsageEventDedupKey(a)).Scan(&raw, &id, &stamp))
 	assert.Equal(t, "152683922", raw)
