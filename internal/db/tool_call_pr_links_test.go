@@ -125,3 +125,18 @@ text(await tools.exec_command({cmd:"gh pr view 41",workdir:"/repo"})); text(awai
 	assert.Equal(t, "https://github.com/example/repo/pull/41", links[0].URL)
 	assert.Equal(t, "https://github.com/example/other/pull/42", links[1].URL)
 }
+
+func TestCodeModeSyntaxCorpus(t *testing.T) {
+	input := "const pattern = /tools.exec_command({cmd:\"gh pr view 99\"})/;\n" +
+		"// tools.exec_command({cmd:'gh pr view 98'})\n" +
+		"/* tools.exec_command({cmd:'gh pr view 97'}) */\n" +
+		"const text = `tools.exec_command({cmd:'gh pr view 96'})`;\n" +
+		"tools.exec_command({cmd:`gh pr view ${number}`});\n" +
+		"text(tools.exec_command({cmd:'gh pr view 41'}));\n" +
+		"tools.exec_command({cmd:tools.exec_command({cmd:'gh pr view 42'})});"
+	messages := []db.Message{{ToolCalls: []db.ToolCall{{ToolName: "exec", Category: "Bash", InputJSON: input}}}}
+	links := toolCallPRLinks(t, messages, "/repo", "https://github.com/example/repo.git")
+	require.Len(t, links, 2)
+	assert.Equal(t, 41, links[0].Number)
+	assert.Equal(t, 42, links[1].Number)
+}

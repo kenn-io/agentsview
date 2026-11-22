@@ -9,11 +9,12 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 
+	"github.com/tdewolff/parse/v2"
+	"github.com/tdewolff/parse/v2/js"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -470,109 +471,116 @@ func callPRLinkSets(ctx context.Context, category, toolName, input, cwd, remote 
 	if command == "" && !jsontext.Value(input).IsValid() && (toolName == "exec_command" || toolName == "shell_command") {
 		command = input
 	}
-	return parser.CommandPRLinkSets(ctx, command, remote)
+	return parser.CommandPRLinkSets(ctx, command, cwd, remote)
 }
 
-var codeModeDirKeyRE = regexp.MustCompile(`["']?(?:workdir|cwd)["']?\s*:`)
-
-// codeModePRLinks reads each exec_command independently; its shell does not
-// retain the working directory of another call in the same cell.
+// codeModePRLinks reads each exec_command independently.
 func codeModePRLinks(ctx context.Context, input, cwd, remote string) ([]PRLink, []PRLink, bool, error) {
-	var lists, explicitLists [][]PRLink
-	const name = "tools.exec_command"
-	for i := 0; i < len(input); {
-		if end := skipCodeModeText(input, i); end > i {
-			i = end
-			continue
-		}
-		if !strings.HasPrefix(input[i:], name) || i > 0 && (input[i-1] == '.' || input[i-1] == '_' || input[i-1] >= 'a' && input[i-1] <= 'z' || input[i-1] >= 'A' && input[i-1] <= 'Z' || input[i-1] >= '0' && input[i-1] <= '9') {
-			i++
-			continue
-		}
-		start := i
-		i += len(name)
-		for i < len(input) && strings.ContainsRune(" \t\r\n", rune(input[i])) {
-			i++
-		}
-		if i == len(input) || input[i] != '(' {
-			continue
-		}
-		depth := 0
-		for ; i < len(input); i++ {
-			if end := skipCodeModeText(input, i); end > i {
-				i = end - 1
-				continue
-			}
-			if input[i] == '(' {
-				depth++
-			}
-			if input[i] == ')' {
-				depth--
-				if depth == 0 {
-					i++
-					break
-				}
-			}
-		}
-		if depth != 0 {
-			break
-		}
-		call := input[start:i]
-		command := commitCommandText(call)
-		if command == "" {
-			continue
-		}
-		callRemote := remote
-		withoutCommand := commitCommandRE.ReplaceAllString(call, "")
-		if codeModeDirKeyRE.MatchString(withoutCommand) {
-			loc := commitWorkdirRE.FindStringIndex(withoutCommand)
-			literal := false
-			if loc != nil {
-				rest := strings.TrimSpace(withoutCommand[loc[1]:])
-				literal = strings.HasPrefix(rest, ",") || strings.HasPrefix(rest, "}")
-			}
-			if !literal || cwd == "" || filepath.Clean(commitRepository(call, cwd)) != filepath.Clean(cwd) {
-				callRemote = ""
-			}
-		}
-		links, explicit, _, err := parser.CommandPRLinkSets(ctx, command, callRemote)
-		if err != nil {
-			return nil, nil, false, err
-		}
-		lists = append(lists, links)
-		explicitLists = append(explicitLists, explicit)
+	ast, err := js.Parse(parse.NewInputString(input), js.Options{})
+	if err != nil {
+		return nil, nil, false, nil
 	}
-	return parser.CombinePRLinks(lists...), parser.CombinePRLinks(explicitLists...), false, ctx.Err()
+	visitor := &codeModeVisitor{ctx: ctx, cwd: cwd, remote: remote}
+	js.Walk(visitor, ast)
+	return parser.CombinePRLinks(visitor.links...), parser.CombinePRLinks(visitor.explicit...), false, ctx.Err()
 }
 
-// skipCodeModeText skips quoted strings and comments while finding calls.
-func skipCodeModeText(input string, i int) int {
-	if i+1 < len(input) && input[i:i+2] == "//" {
-		if end := strings.IndexByte(input[i+2:], '\n'); end >= 0 {
-			return i + 2 + end
-		}
-		return len(input)
+type codeModeVisitor struct {
+	ctx             context.Context
+	cwd, remote     string
+	links, explicit [][]PRLink
+}
+
+func (v *codeModeVisitor) Enter(node js.INode) js.IVisitor {
+	call, ok := node.(*js.CallExpr)
+	if !ok || len(call.Args.List) != 1 || call.Args.List[0].Rest {
+		return v
 	}
-	if i+1 < len(input) && input[i:i+2] == "/*" {
-		if end := strings.Index(input[i+2:], "*/"); end >= 0 {
-			return i + 4 + end
-		}
-		return len(input)
+	dot, ok := call.X.(*js.DotExpr)
+	if !ok || dot.Optional {
+		return v
 	}
-	quote := input[i]
-	if quote != '\'' && quote != '"' && quote != '`' {
-		return i
+	owner, ok := dot.X.(*js.Var)
+	if !ok || string(owner.Data) != "tools" || dot.Y.String() != "exec_command" {
+		return v
 	}
-	for j := i + 1; j < len(input); j++ {
-		if input[j] == '\\' {
-			j++
+	object, ok := call.Args.List[0].Value.(*js.ObjectExpr)
+	if !ok {
+		return v
+	}
+	command, dir := "", ""
+	knownDir := true
+	for _, property := range object.List {
+		if property.Spread || property.Name == nil || property.Name.IsComputed() {
+			knownDir = false
 			continue
 		}
-		if input[j] == quote {
-			return j + 1
+		name := string(property.Name.Literal.Data)
+		name = strings.Trim(name, "\"'")
+		switch name {
+		case "cmd", "command":
+			command, _ = codeModeLiteral(property.Value)
+		case "workdir", "cwd", "working_directory":
+			var literal bool
+			dir, literal = codeModeLiteral(property.Value)
+			knownDir = knownDir && literal
 		}
 	}
-	return len(input)
+	if command == "" {
+		return v
+	}
+	remote := v.remote
+	if !knownDir {
+		remote = ""
+	} else if dir != "" {
+		if !filepath.IsAbs(dir) {
+			dir = filepath.Join(v.cwd, dir)
+		}
+		if v.cwd == "" || filepath.Clean(dir) != filepath.Clean(v.cwd) {
+			remote = ""
+		}
+	}
+	links, explicit, _, err := parser.CommandPRLinkSets(v.ctx, command, v.cwd, remote)
+	if err == nil {
+		v.links = append(v.links, links)
+		v.explicit = append(v.explicit, explicit)
+	}
+	return v
+}
+
+func (v *codeModeVisitor) Exit(js.INode) {}
+
+func codeModeLiteral(expr js.IExpr) (string, bool) {
+	var literal string
+	switch value := expr.(type) {
+	case *js.LiteralExpr:
+		if value.TokenType != js.StringToken {
+			return "", false
+		}
+		literal = string(value.Data)
+	case *js.TemplateExpr:
+		if value.Tag != nil || len(value.List) != 0 {
+			return "", false
+		}
+		literal = string(value.Tail)
+	default:
+		return "", false
+	}
+	if len(literal) < 2 {
+		return "", false
+	}
+	quote := literal[0]
+	rest := literal[1 : len(literal)-1]
+	var result strings.Builder
+	for len(rest) > 0 {
+		r, _, tail, err := strconv.UnquoteChar(rest, quote)
+		if err != nil {
+			return "", false
+		}
+		result.WriteRune(r)
+		rest = tail
+	}
+	return result.String(), true
 }
 
 // ToolCallPRLinks derives links from a transcript's tool calls.

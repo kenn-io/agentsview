@@ -3,6 +3,7 @@ package sync_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -278,4 +279,31 @@ func TestCheckoutAliasPRFilter(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, page.Sessions, 1)
 	assert.Equal(t, "checkout-alias", page.Sessions[0].ID)
+}
+
+func TestCommandPRFilterRepositoryAndSameDirectory(t *testing.T) {
+	testutil.IsolateGit(t)
+	for _, tc := range []struct{ name, command, filter string }{
+		{"global repo", "gh --repo=example/other pr view 42", "example/other#42"},
+		{"same directory", "cd %s && gh pr merge 42", "example/repo#42"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o700))
+			require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "config"), []byte("[remote \"origin\"]\n url = https://github.com/example/repo.git\n"), 0o600))
+			command := strings.ReplaceAll(tc.command, "%s", root)
+			env := setupSingleAgentTestEnv(t, parser.AgentClaude)
+			env.writeClaudeSession(t, "proj", "filter-pr.jsonl", testjsonl.JoinJSONL(
+				testjsonl.ClaudeUserJSON("Review", tsEarly, root),
+				testjsonl.ClaudeAssistantJSON([]map[string]any{{"type": "tool_use", "id": "call", "name": "Bash", "input": map[string]any{"command": command}}}, tsEarlyS1),
+			))
+			require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+			filter, err := db.ParsePRFilter(tc.filter)
+			require.NoError(t, err)
+			page, err := env.db.ListSessions(t.Context(), db.SessionFilter{PR: filter})
+			require.NoError(t, err)
+			require.Len(t, page.Sessions, 1)
+			assert.Equal(t, "filter-pr", page.Sessions[0].ID)
+		})
+	}
 }

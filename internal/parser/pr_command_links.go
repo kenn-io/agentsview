@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -53,12 +54,12 @@ func shellLiteral(parts []syntax.WordPart) (string, bool) {
 
 // CommandPRLinks derives links and reports whether the shell context changed.
 func CommandPRLinks(ctx context.Context, command, remote string) ([]PRLink, bool, error) {
-	links, _, changed, err := CommandPRLinkSets(ctx, command, remote)
+	links, _, changed, err := CommandPRLinkSets(ctx, command, "", remote)
 	return links, changed, err
 }
 
 // CommandPRLinkSets also returns links that do not rely on the checkout remote.
-func CommandPRLinkSets(ctx context.Context, command, remote string) ([]PRLink, []PRLink, bool, error) {
+func CommandPRLinkSets(ctx context.Context, command, cwd, remote string) ([]PRLink, []PRLink, bool, error) {
 	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
 	if err != nil {
 		return nil, nil, true, nil
@@ -88,7 +89,19 @@ func CommandPRLinkSets(ctx context.Context, command, remote string) ([]PRLink, [
 			}
 			if len(call.Words) > 0 && call.Literal[0] {
 				switch path.Base(call.Words[0]) {
-				case "cd", "pushd", "popd", "eval", "source", ".":
+				case "cd":
+					if len(call.Words) != 2 || !call.Literal[1] || cwd == "" {
+						tainted = true
+					} else {
+						dir := call.Words[1]
+						if !filepath.IsAbs(dir) {
+							dir = filepath.Join(cwd, dir)
+						}
+						if filepath.Clean(dir) != filepath.Clean(cwd) {
+							tainted = true
+						}
+					}
+				case "pushd", "popd", "eval", "source", ".":
 					tainted = true
 				case "export", "unset":
 					for _, arg := range call.Words[1:] {
@@ -140,6 +153,13 @@ func ghPRCallLinks(ctx context.Context, call shellCall, remote string) []PRLink 
 		repo = args[i+1]
 		repoSpecified = true
 		i += 2
+	}
+	if i < len(args) && call.Literal[i] && strings.HasPrefix(args[i], "--repo=") {
+		repo, repoSpecified = strings.TrimPrefix(args[i], "--repo="), true
+		i++
+	} else if i < len(args) && call.Literal[i] && strings.HasPrefix(args[i], "-R") && len(args[i]) > 2 {
+		repo, repoSpecified = strings.TrimPrefix(args[i][2:], "="), true
+		i++
 	}
 	if i+2 >= len(args) || !call.Literal[i] || !call.Literal[i+1] || args[i] != "pr" {
 		return nil
