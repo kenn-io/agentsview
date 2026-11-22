@@ -59,12 +59,15 @@
 <style>
   /* Fixed line boxes keep every card 64px tall, with or without a
      sublabel, so wrapped rows line up. Three classes outrank kit-ui's
-     scoped padding and surface rules. 107px with 8px side padding fits
-     the common labels and keeps a row of 10 cards on one line in a
+     scoped padding and surface rules. Cards share the row equally down
+     to their min-content width: the label's 107px-card floor, or the
+     whole label when it is longer, so a long label such as "Copilot AI
+     Credits" widens its card rather than truncating. The 107px floor
+     with 8px side padding keeps a row of 10 cards on one line in a
      1200px-wide browser. */
   :global(.kit-card.stat-card.card) {
     flex: 1;
-    min-width: 107px;
+    min-width: min-content;
     min-height: 64px;
     box-sizing: border-box;
     padding: 5px 8px;
@@ -145,6 +148,7 @@
   }
 
   .card-label {
+    min-width: calc(107px - 16px - 2 * var(--border-width, 1px));
     font-weight: 500;
     color: var(--text-secondary);
   }
@@ -159,5 +163,7 @@
     font-size: 10px;
     line-height: 12px;
     color: var(--text-muted);
+    /* A long breakdown fits the card instead of widening it. */
+    contain: inline-size;
   }
 </style>
