@@ -350,10 +350,10 @@ filtering or candidate limits prevent an exact count. Failed probes add no
 hint, and the default scope already includes child sessions.
 
 Pattern searches, `get_messages`, and `get_tool_calls` cap responses at 12,000
-bytes. When a page is cut, `omitted` counts the items held back. Pageable
-searches report `total` up to 500, with `total_capped` when more matches exist.
-Message pages report `message_count`. Ranked searches have no cursor; reduce
-`limit` when results are omitted.
+bytes, and when a page is cut, `omitted` tells you how many items were held
+back. Pageable searches report `total` up to 500, along with `total_capped` when
+more matches exist, while message pages report `message_count`. Ranked searches
+have no cursor; if results are omitted, reduce `limit`.
 
 When another page is available, the response includes `next_cursor`. To
 continue a `search_content` listing, pass `next_cursor` as the numeric `cursor`
