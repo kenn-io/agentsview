@@ -160,6 +160,8 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 			var users []string
 			seenUsers := map[string]bool{}
 			membersByWindow := map[int64]map[string]bool{}
+			type memberWindow struct{ start, end time.Time }
+			userWindows := map[string][]memberWindow{}
 			for from, index := start, int64(0); from.Before(windowEnd); index++ {
 				to := from.Add(rosterWindow)
 				if to.After(windowEnd) {
@@ -168,11 +170,19 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 				if windows[index] {
 					members, err := client.ListDailyUsageUsers(ctx, from, to)
 					if err != nil {
-						return err
+						if ctx.Err() != nil {
+							return ctx.Err()
+						}
+						fmt.Fprintln(os.Stderr, "Cursor account reporting could not be refreshed; rerun the sync.")
+						goto imported
 					}
 					membersByWindow[index] = map[string]bool{}
 					for _, id := range members {
+						if membersByWindow[index][id] {
+							continue
+						}
 						membersByWindow[index][id] = true
+						userWindows[id] = append(userWindows[id], memberWindow{from, to})
 						if !seenUsers[id] {
 							users = append(users, id)
 							seenUsers[id] = true
@@ -185,29 +195,35 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 			keyHours := map[string]time.Time{}
 			ambiguous := map[db.CursorAccountHour]bool{}
 			for _, id := range users {
-				memberEvents, err := client.FetchAllUsageEvents(ctx, cursorusage.Query{StartDate: start, EndDate: windowEnd.Add(-time.Millisecond), PageSize: 1000, UserID: id})
-				if err != nil {
-					return fmt.Errorf("fetching Cursor usage for a member: %w", err)
-				}
-				for _, ev := range memberEvents {
-					row := cursorUsageRow(ev)
-					hour := ev.Timestamp.UTC().Truncate(time.Hour)
-					if hour.Before(start) || hour.Add(time.Hour).After(windowEnd) {
-						continue
-					}
-					key := db.CursorUsageEventDedupKey(row)
-					if !fetched[key] {
-						continue
-					}
-					keyHours[key] = hour
-					if previous, ok := owners[key]; ok && previous != id {
-						if previous != "" {
-							ambiguous[db.CursorAccountHour{UserID: previous, Start: hour}] = true
+				for _, window := range userWindows[id] {
+					memberEvents, err := client.FetchAllUsageEvents(ctx, cursorusage.Query{StartDate: window.start, EndDate: window.end.Add(-time.Millisecond), PageSize: 1000, UserID: id})
+					if err != nil {
+						if ctx.Err() != nil {
+							return ctx.Err()
 						}
-						ambiguous[db.CursorAccountHour{UserID: id, Start: hour}] = true
-						owners[key] = ""
-					} else if !ok {
-						owners[key] = id
+						fmt.Fprintln(os.Stderr, "Cursor account reporting could not be refreshed; rerun the sync.")
+						goto imported
+					}
+					for _, ev := range memberEvents {
+						row := cursorUsageRow(ev)
+						hour := ev.Timestamp.UTC().Truncate(time.Hour)
+						if hour.Before(start) || hour.Add(time.Hour).After(windowEnd) {
+							continue
+						}
+						key := db.CursorUsageEventDedupKey(row)
+						if !fetched[key] {
+							continue
+						}
+						keyHours[key] = hour
+						if previous, ok := owners[key]; ok && previous != id {
+							if previous != "" {
+								ambiguous[db.CursorAccountHour{UserID: previous, Start: hour}] = true
+							}
+							ambiguous[db.CursorAccountHour{UserID: id, Start: hour}] = true
+							owners[key] = ""
+						} else if !ok {
+							owners[key] = id
+						}
 					}
 				}
 			}
@@ -239,6 +255,7 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 		}
 	}
 
+imported:
 	fmt.Fprintf(os.Stdout,
 		"Fetched %d Cursor usage events into the archive\n",
 		len(rows),

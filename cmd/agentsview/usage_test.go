@@ -1772,12 +1772,12 @@ func TestCursorSyncMatchesMembers(t *testing.T) {
 				_, _ = fmt.Fprintf(w, `{"totalUsageEventsCount":%d,"usageEvents":[%s]}`, count, events)
 			}))
 			defer server.Close()
-			err := syncCursorUsage(t, server.URL, "--since", "2026-07-28", "--until", "2026-07-28")
+			stderr := captureStderr(t, func() {
+				require.NoError(t, syncCursorUsage(t, server.URL, "--since", "2026-07-28", "--until", "2026-07-28"))
+			})
 			if tc.secondFails {
-				require.ErrorContains(t, err, "fetching Cursor usage for a member")
-				assert.NotContains(t, err.Error(), "34")
-			} else {
-				require.NoError(t, err)
+				assert.Contains(t, stderr, "Cursor account reporting could not be refreshed")
+				assert.NotContains(t, stderr, "34")
 			}
 			if tc.oldOwnerAbsent {
 				assert.Equal(t, []string{"0", "34", "56"}, requests)
@@ -2164,6 +2164,7 @@ func TestCursorSyncAllSkipsEmptyRosterWindows(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cursorUsageTestDataDir(t)
 			var rosterCalls []rosterRange
+			var memberCalls []rosterRange
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/teams/daily-usage-data" {
 					var window rosterRange
@@ -2171,7 +2172,20 @@ func TestCursorSyncAllSkipsEmptyRosterWindows(t *testing.T) {
 						return
 					}
 					rosterCalls = append(rosterCalls, window)
-					_, _ = w.Write([]byte(`{"data":[],"pagination":{"hasNextPage":false}}`))
+					_, _ = w.Write([]byte(`{"data":[{"userId":12}],"pagination":{"hasNextPage":false}}`))
+					return
+				}
+				var body struct {
+					Start  int64 `json:"startDate"`
+					End    int64 `json:"endDate"`
+					UserID int64 `json:"userId"`
+				}
+				if !assert.NoError(t, json.UnmarshalRead(r.Body, &body)) {
+					return
+				}
+				if body.UserID != 0 {
+					memberCalls = append(memberCalls, rosterRange{Start: body.Start, End: body.End + 1})
+					_, _ = w.Write([]byte(`{"totalUsageEventsCount":0,"usageEvents":[]}`))
 					return
 				}
 				_, _ = fmt.Fprintf(w, `{"totalUsageEventsCount":%d,"usageEvents":%s}`, tc.total, tc.events)
@@ -2179,8 +2193,30 @@ func TestCursorSyncAllSkipsEmptyRosterWindows(t *testing.T) {
 			defer server.Close()
 			require.NoError(t, syncCursorUsage(t, server.URL, "--all"))
 			assert.Equal(t, tc.want, rosterCalls)
+			assert.Equal(t, tc.want, memberCalls)
 		})
 	}
+}
+
+func TestCursorSyncKeepsEventsWhenRosterFails(t *testing.T) {
+	t.Setenv("TZ", "UTC")
+	dataDir := cursorUsageTestDataDir(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/teams/daily-usage-data" {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		_, _ = w.Write([]byte(`{"totalUsageEventsCount":1,"usageEvents":[{"timestamp":"2026-07-28T10:03:00Z","model":"model-a","tokenUsage":{"outputTokens":7}}]}`))
+	}))
+	defer server.Close()
+	stderr := captureStderr(t, func() {
+		require.NoError(t, syncCursorUsage(t, server.URL, "--since", "2026-07-28", "--until", "2026-07-28"))
+	})
+	assert.Contains(t, stderr, "Cursor account reporting could not be refreshed")
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	var tokens int
+	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT output_tokens FROM cursor_usage_events WHERE model='model-a'`).Scan(&tokens))
+	assert.Equal(t, 7, tokens)
 }
 
 func TestCursorSyncEmptyPollReplacesAccountHour(t *testing.T) {

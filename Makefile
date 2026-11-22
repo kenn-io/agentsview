@@ -359,13 +359,19 @@ test: pricing-snapshot ensure-embed-dir
 	go test $(GO_TEST_P_FLAG) -tags "fts5" ./... -skip '^TestActiveAppendGrowth$$' -v
 	go test -tags "fts5" ./cmd/perfsim -run '^TestActiveAppendGrowth$$' -v
 
-.PHONY: test-cursor-account-reporting
-test-cursor-account-reporting: pricing-snapshot ensure-embed-dir
+.PHONY: test-cursor-account-reporting test-cursor-account-db test-cursor-account-cmd
+TEST_CURSOR_DB ?= ^(TestArchiveResyncState|TestUpgradeExportSchemaInPlaceOnlyAddsExportIdentitySchema|TestCursorAccountColumnsAbsentInOldResyncSource|TestCopySessionMetadataFrom_PreservesCursorUsageEvents|TestCursorAccountReporting|TestCursorAccountReassignmentAndClearing|TestCursorAccountPollRangeUsesHourIndex|TestCursorEmptyPollLookupUsesAccountTimeIndex)$$
+TEST_CURSOR_CMD ?= ^(TestExportSessionsUpgradesRecordedRepositoryColumn|TestCursorSyncImportsBillingWhileRebuildPending|TestCursorSyncMatchesMembers|TestCursorSyncDoesNotCoverIncompleteHours|TestCursorSyncEmptyPollReplacesAccountHour|TestCursorSyncDefersMemberEventsUntilTeamPoll|TestCursorSyncAllSkipsEmptyRosterWindows|TestCursorSyncKeepsEventsWhenRosterFails|TestExportReportingCursorAccountHour|TestExportHourMatchesExactCanonicalDayElement|TestExportHourRejectsOpenAndMalformedPeriods|TestNewUsageCursorCommandUsesConfigFallbacksAndSharedPagination|TestNewUsageCursorCommandExplicitMemberFilterDoesNotReuseConfigSibling)$$
+test-cursor-account-reporting: pricing-snapshot ensure-embed-dir test-cursor-account-db test-cursor-account-cmd
 	go test $(GO_TEST_P_FLAG) -tags "fts5" ./internal/cursorusage -run '^(TestListDailyUsageUsersPages|TestListDailyUsageUsersPacesSeparateWindows|TestFetchAllUsageEvents|TestListUsageEventsRejectsNonNumericUserID)$$' -count=1
-	go test $(GO_TEST_P_FLAG) -tags "fts5" ./internal/db -run '^(TestArchiveResyncState|TestUpgradeExportSchemaInPlaceOnlyAddsExportIdentitySchema|TestCursorAccountColumnsAbsentInOldResyncSource|TestCopySessionMetadataFrom_PreservesCursorUsageEvents|TestCursorAccountReporting|TestCursorAccountReassignmentAndClearing|TestCursorAccountPollRangeUsesHourIndex)$$' -count=1
-	go test $(GO_TEST_P_FLAG) -tags "fts5" ./cmd/agentsview -run '^(TestExportSessionsUpgradesRecordedRepositoryColumn|TestCursorSyncImportsBillingWhileRebuildPending|TestCursorSyncMatchesMembers|TestCursorSyncDoesNotCoverIncompleteHours|TestCursorSyncEmptyPollReplacesAccountHour|TestCursorSyncDefersMemberEventsUntilTeamPoll|TestCursorSyncAllSkipsEmptyRosterWindows|TestExportReportingCursorAccountHour|TestExportHourMatchesExactCanonicalDayElement|TestExportHourRejectsOpenAndMalformedPeriods|TestNewUsageCursorCommandUsesConfigFallbacksAndSharedPagination|TestNewUsageCursorCommandExplicitMemberFilterDoesNotReuseConfigSibling)$$' -count=1
 	go test $(GO_TEST_P_FLAG) -tags "fts5" ./internal/export -run '^TestFinalizeReportingHourDigestIncludesPollTime$$' -count=1
 	go test $(GO_TEST_P_FLAG) -tags "fts5" ./internal/parser -run '^TestParsedOutputMatchesDataVersion$$' -count=1
+
+test-cursor-account-db: pricing-snapshot ensure-embed-dir
+	go test $(GO_TEST_P_FLAG) -tags "fts5" ./internal/db -run '$(TEST_CURSOR_DB)' -count=1
+
+test-cursor-account-cmd: pricing-snapshot ensure-embed-dir
+	go test $(GO_TEST_P_FLAG) -tags "fts5" ./cmd/agentsview -run '$(TEST_CURSOR_CMD)' -count=1
 
 # Reproducible synthetic ingest, steady-state sync, and analytics measurements.
 .PHONY: perf-sim
