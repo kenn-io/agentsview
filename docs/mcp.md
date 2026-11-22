@@ -397,23 +397,25 @@ secret-shaped values in each input and truncates it to `max_input_chars`
 (default 500, maximum 10000). To read the surrounding conversation for a call,
 pass its `ordinal` to `get_messages`.
 
-Set `include_results` to return saved result text with secret-shaped values
-masked. Each call carries two kinds of result text:
+If you want saved result text, set `include_results`. The server masks
+secret-shaped values in results too, and each call carries two kinds of result
+text:
 
-- `result` is the call's current summary, and `result_length` is its stored size
-  in bytes.
-- `result_events` lists each saved event in order, with its `event_index`,
+- `result`: the call's current summary, along with `result_length` for its
+  stored size in bytes.
+- `result_events`: each saved event in order, with its `event_index`,
   `agent_id`, `subagent_session_id`, `status`, `content`, and `content_length`.
-  Events are never joined into `result`. A call omits `result_events` when its
-  only event equals `result` and has no agent, subagent, or status.
+  The server never joins events into `result`, and a call omits `result_events`
+  when its only event equals `result` and has no agent, subagent, or status.
 
-With `include_results`, a page defaults to one call instead of 50; follow
-`next_cursor` for the next call, or raise `limit` (maximum 200). `max_result_chars`
-(default 1000, maximum 10000) caps `result` and each event's `content`
-separately. A truncated summary or event has its own `result_cursor`; pass it
-back to `get_tool_calls` with the same session ID to read the next chunk of that
-one summary or event. New messages in the session do not invalidate a cursor,
-but a changed result does: the call fails with `source_changed`, and you restart
+With `include_results`, each page defaults to one call instead of 50. You can
+follow `next_cursor` for the next call, or raise `limit` (maximum 200).
+`max_result_chars` (default 1000, maximum 10000) caps `result` and each event's
+`content` separately. If a summary or event is truncated, it includes its own
+`result_cursor`. To read the next chunk of that one summary or event, pass the
+cursor back to `get_tool_calls` with the same session ID. New messages in the
+session do not invalidate a cursor, but if a result changes, the cursor becomes
+invalid and the call fails with `source_changed`. When that happens, restart
 from `get_tool_calls` with `include_results`.
 
 `get_recent_edits` matches `path` as a case-insensitive substring of edited
