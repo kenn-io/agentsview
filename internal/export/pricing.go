@@ -576,10 +576,8 @@ func (r *PricingResolver) resolveFlat(
 	}
 	flatLookup := r.Lookup(pricedModel)
 	if !flatLookup.OK {
-		if slug := pricingpkg.DisplayNameModelID(pricedModel); slug != pricedModel {
-			if target := pricingpkg.FixedCanonicalModel(slug); target != "" {
-				flatLookup = r.Lookup(target)
-			}
+		if target := pricingpkg.FixedCanonicalModel(pricingpkg.DisplayNameModelID(pricedModel)); target != "" {
+			flatLookup = r.Lookup(target)
 		}
 	}
 	return pricedModel, flatLookup,

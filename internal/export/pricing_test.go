@@ -1728,13 +1728,26 @@ func TestPricingResolverResolvesGeminiDisplayNames(t *testing.T) {
 	})
 
 	t.Run("untimestamped display name resolves via fixed Gemini 4 flat fallback", func(t *testing.T) {
-		priced, lookup := resolver.ResolveAt("Gemini 4 Neon (High)", "Gemini 4 Neon (High)", time.Time{})
-		require.True(t, lookup.OK)
-		assert.Equal(t, "Gemini 4 Neon (High)", priced)
-		assert.Equal(t, "gemini/gemini-4-neon", lookup.Pattern)
-		assert.Equal(t, money.MustParseDollars("3"), lookup.Rates.InputPerMTok)
-		assert.Equal(t, money.MustParseDollars("15"), lookup.Rates.OutputPerMTok)
-		assert.Equal(t, money.MustParseDollars("0.15"), lookup.Rates.CacheReadPerMTok)
+		for _, model := range []string{"Gemini 4 Neon (High)", "gemini-4-neon"} {
+			priced, lookup := resolver.ResolveAt(model, model, time.Time{})
+			require.True(t, lookup.OK, "%s should resolve", model)
+			assert.Equal(t, model, priced)
+			assert.Equal(t, "gemini/gemini-4-neon", lookup.Pattern)
+			assert.Equal(t, money.MustParseDollars("3"), lookup.Rates.InputPerMTok)
+			assert.Equal(t, money.MustParseDollars("15"), lookup.Rates.OutputPerMTok)
+			assert.Equal(t, money.MustParseDollars("0.15"), lookup.Rates.CacheReadPerMTok)
+		}
+	})
+
+	t.Run("dependency fingerprint tracks flat Gemini 4 target for uncanonicalized bare id", func(t *testing.T) {
+		flatOnly := NewPricingResolver(flatRows)
+		before, err := flatOnly.DependencyFingerprint("", "gemini-4-neon", "gemini-4-neon")
+		require.NoError(t, err)
+		repricedRows := slices.Clone(flatRows)
+		repricedRows[0].Rates.InputPerMTok = money.MustParseDollars("4")
+		after, err := NewPricingResolver(repricedRows).DependencyFingerprint("", "gemini-4-neon", "gemini-4-neon")
+		require.NoError(t, err)
+		assert.NotEqual(t, before, after)
 	})
 
 	t.Run("custom override wins over GenAI Prices for display name", func(t *testing.T) {

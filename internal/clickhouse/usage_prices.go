@@ -428,14 +428,13 @@ func (c chUsagePriceContext) customPriced(pricing *export.PricingResolver) bool 
 		if pricing.Lookup(model).Rates.Source == export.PricingRowSourceCustom {
 			return true
 		}
-		if slug := pricingpkg.DisplayNameModelID(model); slug != model {
-			if pricing.Lookup(slug).Rates.Source == export.PricingRowSourceCustom {
-				return true
-			}
-			if target := pricingpkg.FixedCanonicalModel(slug); target != "" &&
-				pricing.Lookup(target).Rates.Source == export.PricingRowSourceCustom {
-				return true
-			}
+		slug := pricingpkg.DisplayNameModelID(model)
+		if slug != model && pricing.Lookup(slug).Rates.Source == export.PricingRowSourceCustom {
+			return true
+		}
+		if target := pricingpkg.FixedCanonicalModel(slug); target != "" &&
+			pricing.Lookup(target).Rates.Source == export.PricingRowSourceCustom {
+			return true
 		}
 	}
 	return false
