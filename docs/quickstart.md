@@ -8,9 +8,9 @@ the legacy names in the [command migration](commands.md#command-migration).
 
 ## Install
 
-### Desktop App
+### Desktop app
 
-On macOS, the easiest install is via Homebrew Cask:
+On macOS, the easiest way to install the desktop app is with Homebrew Cask:
 
 ```bash
 brew install --cask agentsview
@@ -19,19 +19,18 @@ brew install --cask agentsview
 On Windows and Linux (and as an alternative on macOS), download the latest
 `.dmg`, `.exe`, or `.AppImage` from
 [GitHub Releases](https://github.com/kenn-io/agentsview/releases). The desktop
-app is fully bundled — no CLI or dependencies needed — and includes built-in
-auto-update support.
+app is fully bundled, needs no separate CLI or dependencies, and includes
+built-in auto-update support.
 
 !!! note
 
     The desktop app and CLI share the same data directory (`~/.agentsview/`), so
-    you can use one or both. They are fully complementary, not mutually
-    exclusive.
+    you can use one or both together.
 
 On macOS, closing the desktop window hides it instead of quitting AgentsView.
 Use the AgentsView menu-bar status item to show the window again, open the logs
-folder, check for updates, or quit the desktop app and its managed backend.
-Clicking its Dock icon or selecting it with Cmd-Tab restores the hidden window.
+folder, check for updates, or quit the desktop app. You can also restore a
+hidden window by clicking its Dock icon or selecting it with Cmd-Tab.
 
 To keep AgentsView out of the Dock and Cmd-Tab while its window is closed, turn
 on **Hide from Dock and Cmd-Tab when window closed** in the menu-bar menu. This
@@ -43,26 +42,30 @@ The macOS app includes the `agentsview` CLI at
 `/Applications/AgentsView.app/Contents/MacOS/agentsview`. Homebrew Cask links it
 into Homebrew's `bin` directory automatically.
 
-If you installed the `.app` from a downloaded `.dmg`, move it to Applications,
-then add its CLI to your current shell's `PATH`:
+If you installed the `.app` from a downloaded `.dmg`:
 
-```bash
-export PATH="/Applications/AgentsView.app/Contents/MacOS:$PATH"
-```
+1. Move `AgentsView.app` to Applications.
+1. Add its CLI to your current shell's `PATH`:
 
-Add that same `export` line to `~/.zshrc` to keep it in new Terminal windows
-(or your shell's startup file if you use a different shell). Adjust the path
-if you installed the app elsewhere. The CLI follows updates to the app at that
-location; update it through the desktop app or Homebrew.
+   ```bash
+   export PATH="/Applications/AgentsView.app/Contents/MacOS:$PATH"
+   ```
 
-Before running the bundled CLI for the first time, open AgentsView from
+1. Add that same `export` line to `~/.zshrc` (or your shell's startup file if
+   you use a different shell) to keep it in new Terminal windows. Adjust the
+   path if you installed the app elsewhere.
+
+The CLI follows updates to the app at that location; update it through the
+desktop app or Homebrew.
+
+Before you run the bundled CLI for the first time, open AgentsView from
 Applications in a graphical login session and complete the macOS first-launch
 dialogs. A fresh Homebrew Cask install over SSH has been reported to leave the
-CLI hanging without output until this step is completed. Adding it to `PATH`
+CLI hanging without output until you complete this step, and adding it to `PATH`
 does not replace that first launch. For an unattended Mac, use the
 [standalone CLI installer](#shell-script) instead.
 
-Confirm which CLI your shell finds and check its version:
+To confirm which CLI your shell finds and check its version, run:
 
 ```bash
 command -v agentsview
@@ -76,13 +79,13 @@ pip install agentsview    # install permanently
 uvx agentsview            # or run without installing
 ```
 
-Platform-specific wheels are published to PyPI for Linux (x86_64, aarch64),
-macOS (x86_64, arm64), and Windows (x86_64, arm64).
+PyPI publishes platform-specific wheels for Linux (x86_64, aarch64), macOS
+(x86_64, arm64), and Windows (x86_64, arm64).
 
-### Shell Script
+### Shell script
 
-For macOS and Linux, this installs the standalone CLI without the desktop app.
-Use this path when setting up a Mac over SSH without a graphical login session.
+On macOS and Linux, this script installs the standalone CLI without the desktop
+app. Use it when you set up a Mac over SSH without a graphical login session.
 
 ```bash
 curl -fsSL https://agentsview.io/install.sh | bash
@@ -100,40 +103,41 @@ from GitHub Releases, verifies the SHA-256 checksum, and installs the binary.
 On macOS and Linux, it installs to `/usr/local/bin` when that directory is
 writable, or `~/.local/bin` otherwise. Follow the installer's `PATH`
 instructions and run `command -v agentsview` to check which binary your shell
-uses. When the standalone CLI and bundled CLI use different directories, put the
-standalone install directory first in `PATH` to select it.
+uses. If the standalone CLI and bundled CLI live in different directories, put
+the standalone install directory first in `PATH` to select it.
 
 !!! note
 
     On Windows on ARM, the installer uses the native `arm64` build when one is
-    available and otherwise falls back to the `x86_64` build, which runs under
-    Windows' built-in x64 emulation. To get a native binary on a release that
-    predates arm64 support, [build from source](#build-from-source).
+    available and otherwise falls back to the `x86_64` build under Windows'
+    built-in x64 emulation. To get a native binary on a release that predates
+    arm64 support, [build from source](#build-from-source).
 
 ### Build from source
 
-Requires Go 1.27.4+ with CGO and Node.js 24.22.1+:
+Building from source requires Go 1.27.4+ with CGO and Node.js 24.22.1 or a
+later 24.x release, or 26.12.1 or later:
 
 ```bash
 git clone https://github.com/kenn-io/agentsview.git
 cd agentsview
 make build
-make install  # installs to ~/.local/bin
+make install  # installs to ~/.local/bin if it exists, otherwise Go's bin directory
 ```
 
 !!! note
 
-    CGO is required for the SQLite driver. The `fts5` build tag enables
+    CGO is required for the SQLite driver, and the `fts5` build tag enables
     full-text search.
 
 #### Windows on ARM
 
-`make` isn't available on Windows, and CGO needs a C compiler that targets
+`make` is not available on Windows, and CGO needs a C compiler targeting
 `aarch64`. Install [Go for Windows/ARM64](https://go.dev/dl/),
 [Node.js](https://nodejs.org/), and the aarch64
 [llvm-mingw](https://github.com/mstorsjo/llvm-mingw/releases) toolchain (a
-self-contained clang + runtime; no Visual Studio or Windows SDK required), then
-build manually in PowerShell:
+self-contained clang and runtime that needs no Visual Studio or Windows SDK),
+then build manually in PowerShell:
 
 ```powershell
 git clone https://github.com/kenn-io/agentsview.git
@@ -149,43 +153,43 @@ $env:CC = "C:\path\to\llvm-mingw\bin\aarch64-w64-mingw32-clang.exe"
 go build -tags fts5 -o agentsview.exe ./cmd/agentsview
 ```
 
-The resulting `agentsview.exe` is a native ARM64 binary. Most users don't need
-this — the installer and PyPI wheels ship native arm64 builds — but it's useful
-for development or to run unreleased changes.
+This produces a native ARM64 `agentsview.exe`. Most users do not need to build
+manually, since the installer and PyPI wheels ship native arm64 builds, but it
+is useful for development or running unreleased changes.
 
 ### Docker
 
-Multi-arch images for `linux/amd64` and `linux/arm64` are published to GitHub
-Container Registry on every tagged release and on pushes to main:
+AgentsView publishes multi-arch images for `linux/amd64` and `linux/arm64` to
+GitHub Container Registry on every tagged release and on pushes to main:
 
 ```bash
 docker run --rm -p 127.0.0.1:8080:8080 \
   -v agentsview-data:/data \
-  -v "$HOME/.claude/projects:/assets/static/agents/claude:ro" \
-  -e CLAUDE_PROJECTS_DIR=/assets/static/agents/claude \
+  -v "$HOME/.claude/projects:/agents/claude:ro" \
+  -e CLAUDE_PROJECTS_DIR=/agents/claude \
   ghcr.io/kenn-io/agentsview:latest
 ```
 
-The image runs `agentsview serve` by default. Set `AGENTSVIEW_MODE=pg-serve`, or
-pass `pg serve` as the command, to read PostgreSQL instead; the older
-`PG_SERVE=1` selector still works. The image listens on `0.0.0.0` inside the
-container and requires a bearer token. Flags you add, such as `--port 9000`,
+The image runs `agentsview serve` by default. To read PostgreSQL instead, set
+`AGENTSVIEW_MODE=pg-serve` or pass `replica pg serve` as the command; the older
+`PG_SERVE=1` selector still works. Inside the container, the image listens on
+`0.0.0.0` and requires a bearer token, and flags you add, such as `--port 9000`,
 keep those defaults. The generated token is stored in `/data/config.toml`, or
 you can supply one with `AGENTSVIEW_AUTH_TOKEN_FILE`. See
 [container deployment](/docs/configuration/#container-deployment) for every
 variable.
 
-A containerized AgentsView only sees agent sessions from directories you
+A containerized AgentsView sees only agent sessions from directories you
 explicitly bind-mount into the container. Mount each agent's session root
 read-only and point the matching
-[directory env var](/docs/configuration/#session-discovery) at it. The data volume
-(`/data`) is owned by root inside the container, so prefer a named Docker volume
-over a host bind mount, or pre-create the host directory with the desired
-ownership.
+[directory env var](/docs/configuration/#session-discovery) at it. Because root
+owns the data volume (`/data`) inside the container, prefer a named Docker
+volume over a host bind mount, or pre-create the host directory with the
+ownership you want.
 
 A production-style Compose example lives in the repo at
 [`docker-compose.prod.yaml`](https://github.com/kenn-io/agentsview/blob/main/docker-compose.prod.yaml).
-It persists `/data` in a named volume, mounts Claude, Codex, and OpenCode
+It persists `/data` in a named volume, mounts Claude, Codex, Forge, and OpenCode
 session roots read-only, and publishes the UI on `127.0.0.1:8080`:
 
 ```bash
@@ -193,8 +197,8 @@ docker compose -f docker-compose.prod.yaml up -d
 ```
 
 The example publishes the UI on loopback only. The image already requires
-bearer-token [authentication](/docs/remote-access/#authentication); publish the
-port beyond the host only intentionally.
+bearer-token [authentication](/docs/remote-access/#authentication), and you
+should publish the port beyond the host only intentionally.
 
 For a PostgreSQL-backed deployment, point the container at your shared database:
 
@@ -213,12 +217,12 @@ container 40 seconds to finish its final push.
 ## Run
 
 The desktop app handles startup automatically: it attaches to an existing local
-daemon or starts one in the background, then opens the discovered URL. The
-daemon is shared with CLI commands and may outlive the desktop window.
-Automatically started daemons self-exit after an idle period when no client
+daemon or starts one in the background, then opens the discovered URL. CLI
+commands share the same daemon, which may outlive the desktop window. Daemons
+started automatically exit on their own after an idle period when no client
 request or daemon-owned job is active.
 
-CLI users can start the web UI explicitly:
+From the CLI, start the web UI explicitly:
 
 ```bash
 agentsview serve
@@ -228,13 +232,13 @@ Bare `agentsview serve` runs in the foreground until you press `Ctrl+C`. If a
 compatible server is already running, it reports that server's URL and exits
 with an error (status 1).
 
-This will:
+Running `agentsview serve`:
 
-1. Initialize the SQLite database at `~/.agentsview/sessions.db`
-1. Discover and sync sessions from all
-   [supported agents](/docs/configuration/#session-discovery)
-1. Start watching session directories for changes
-1. Launch the web UI at `http://127.0.0.1:8080`
+1. Initializes the SQLite database at `~/.agentsview/sessions.db`.
+1. Discovers and syncs sessions from all
+   [supported agents](/docs/configuration/#session-discovery).
+1. Starts watching session directories for changes.
+1. Launches the web UI at `http://127.0.0.1:8080`.
 
 Open `http://127.0.0.1:8080` in your browser. Pass `--no-browser` to disable
 automatic browser launch. Alternatively, start the same server in the background
@@ -249,15 +253,15 @@ agentsview daemon stop
 
 The daemon includes the web UI, API, session sync, and file watchers. You do not
 need to run `serve` after `daemon start`. Stopping it with `daemon stop` or
-`serve stop` shuts down the web UI and sync together. `serve stop` also stops
-read-only mirror servers for the same data directory.
+`serve stop` shuts down the web UI and sync together, and `serve stop` also
+stops read-only mirror servers for the same data directory.
 
-`daemon start` and `daemon restart` use the normal effective configuration from
-`config.toml` and supported environment variables. They do not accept
-serve-specific flags. `daemon restart` also starts the daemon when it is
-stopped. A restart stays attached and reports startup phases until the
-replacement daemon is ready; press `Ctrl+C` to stop waiting without terminating
-the child, then inspect it with `agentsview daemon status`.
+`daemon start` and `daemon restart` use the effective configuration from
+`config.toml` and supported environment variables, and they do not accept
+serve-specific flags. `daemon restart` also starts the daemon if it is stopped.
+A restart stays attached and reports startup phases until the replacement daemon
+is ready; press `Ctrl+C` to stop waiting without terminating the child, then
+inspect it with `agentsview daemon status`.
 
 The existing `agentsview serve --background`, `agentsview serve status`, and
 `agentsview serve stop` commands remain available. Use `serve --background` when
@@ -266,26 +270,27 @@ unauthenticated non-loopback `--host` override. `--no-sync` is runtime-only and
 cannot be set in `config.toml`.
 
 You do not need to keep a server running for every CLI command. Read-only
-commands attach to the daemon when it is warm, otherwise they read the local
+commands attach to the daemon when it is warm, and otherwise read the local
 archive directly in read-only mode. Commands that need fresh data or need to
-write, including `sync`, `usage`, `token-use`, `pg push`, and `clickhouse push`,
-auto-start the detached daemon when needed. The server remains running after
-these commands finish. For scripts or CI jobs that must leave no background
-server, stop the daemon first, then run `AGENTSVIEW_NO_DAEMON=1 agentsview source sync`.
-That setting disables auto-start; it does not stop a running daemon or bypass
-its archive lock.
+write, including `sync`, `report usage`, `session usage`, `replica pg push`, and
+`replica clickhouse push`, auto-start the detached daemon when needed, and the
+server remains running after they finish. For scripts or CI jobs that must leave
+no background server, stop the daemon first, then run
+`AGENTSVIEW_NO_DAEMON=1 agentsview source sync`. That setting disables
+auto-start; it does not stop a running daemon or bypass its archive lock.
 
 ### Search by meaning
 
-Choose **Settings → Embeddings → Turn on** or run `agentsview index embeddings build`
-and approve the download. Embeddings run locally by default; agents use keyword
-search until indexing is ready. Use `agentsview session search --semantic` or
-`--hybrid` to search by meaning. See [Semantic Search](/docs/semantic-search/#enabling-vector)
-to configure other providers.
+To turn on search by meaning, choose **Settings → Embeddings → Turn on** or run
+`agentsview index embeddings build` and approve the download. Embeddings run
+locally by default, and agents use keyword search until indexing is ready. Use
+`agentsview session search --semantic` or `--hybrid` to search by meaning. See
+[Semantic Search](/docs/semantic-search/#enabling-vector) to configure other
+providers.
 
 ## Customize
 
-Override the default port or host:
+Override the default port or host with flags:
 
 ```bash
 agentsview serve --port 9090
@@ -301,12 +306,12 @@ agentsview serve --background --no-sync  # One-off flag-driven background run
     the exact browser origin:
     `agentsview serve --public-url https://<vm>.exe.xyz`.
 
-    A dashboard flash followed by a settings or API error usually means the
-    server rejected the forwarded host or origin. It is not a missing auth
+    If the dashboard flashes and then shows a settings or API error, the server
+    usually rejected the forwarded host or origin. It is not a missing auth
     token unless `/api/v1/settings` returns `401`. See
     [Remote Access](/docs/remote-access/#forwarded-dev-environments).
 
-Point to custom session directories with environment variables. Aider has no
+Use environment variables to point to custom session directories. Aider has no
 default discovery root, so set `AIDER_DIR` to opt into scanning Aider logs:
 
 ```bash
@@ -369,7 +374,7 @@ export ZENCODER_DIR=~/custom/zencoder/sessions
 agentsview serve
 ```
 
-For Claude, Codex, and Cursor, custom roots may also be `s3://` URIs:
+For Claude, Codex, Cursor, and IcodeMate, custom roots may also be `s3://` URIs:
 
 ```toml
 [agents.claude]
@@ -381,24 +386,26 @@ dirs = ["s3://agent-archive/laptop/raw/cursor"]
 ```
 
 Set `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, and optionally
-`AWS_S3_ENDPOINT` before starting AgentsView. See
-[S3-compatible session sources](/docs/configuration/#s3-compatible-session-sources)
-for the expected object layout and sync behavior.
+`AWS_S3_ENDPOINT` before you start AgentsView. For the expected object layout
+and sync behavior, see
+[S3-compatible session sources](/docs/configuration/#s3-compatible-session-sources).
 
-## What You'll See
+## What you see
 
-Once running, the web UI provides:
+Once AgentsView is running, the web UI gives you:
 
-- **Session list** with filtering by project, agent, date, and message count
-- **Message viewer** with full content, tool calls, and thinking blocks
-- **Session intelligence** with health grades, outcomes, and signal panels
-- **Full-text search** with project and date filters in `Ctrl/Cmd+K`
-- **Open session** by full ID or UUID with `Ctrl/Cmd+G`
-- **Analytics** including activity heatmaps, tool usage, and velocity charts
-- **Activity reporting** with concurrency, agent-minutes, cost, and session rows
-- **Session export** to standalone HTML, markdown export links for agent
-  handoff, or GitHub Gist
+- **Session list.** Filter by project, agent, date, and message count.
+- **Message viewer.** Inspect full content, tool calls, and thinking blocks.
+- **Session intelligence.** View health grades, outcomes, and signal panels.
+- **Full-text search.** Press `Ctrl/Cmd+K` to open search with project and date
+  filters.
+- **Open session.** Jump to a session by full ID or UUID with `Ctrl/Cmd+G`.
+- **Analytics.** Explore activity heatmaps, tool usage, and velocity charts.
+- **Activity reporting.** Track concurrency, agent-minutes, cost, and session
+  rows.
+- **Session export.** Export to standalone HTML, markdown export links for agent
+  handoff, or GitHub Gist.
 
-Use the [Usage Guide](/docs/usage/) for navigation and resume controls. To
+For navigation and resume controls, see the [Usage Guide](/docs/usage/). To
 correct project assignments, see the [Data page](/docs/data/) and its opt-in
 project workspace.
