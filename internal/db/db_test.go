@@ -1168,6 +1168,49 @@ func TestOpenAcceptsArchiveUserVersion111(t *testing.T) {
 	require.Len(t, page.Sessions, 1)
 }
 
+func TestAdditiveVersionGapOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		version              int
+		pending, archiveOnly bool
+		needsResync          bool
+	}{
+		{name: "additive", version: dataVersion - 1},
+		{name: "provider upgrade", version: dataVersion - 2, needsResync: true},
+		{name: "undeclared upgrade", version: dataVersion - 3, needsResync: true},
+		{name: "pending upgrade", version: dataVersion - 1, pending: true, needsResync: true},
+		{name: "archive only", version: dataVersion - 1, archiveOnly: true, needsResync: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Cleanup(InstallDataVersionScopesForTest(map[int][]parser.AgentType{
+				dataVersion - 1: {parser.AgentClaude},
+				dataVersion:     {},
+			}))
+			d := testDB(t)
+			ctx := t.Context()
+			require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
+				if err := writeUserVersion(ctx, tx, tc.version); err != nil {
+					return err
+				}
+				if tc.pending {
+					_, err := tx.ExecContext(ctx, "INSERT INTO stats(key,value) VALUES ('scoped_upgrade_pending',1)")
+					return err
+				}
+				return nil
+			}))
+			if tc.archiveOnly {
+				require.NoError(t, d.EnableArchiveOnly(ctx))
+			}
+			path := d.Path()
+			require.NoError(t, d.Close())
+			reader, err := OpenReadOnly(ctx, path)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, reader.Close()) })
+			assert.Equal(t, tc.needsResync, reader.NeedsResync())
+		})
+	}
+}
+
 func TestArchiveResyncState(t *testing.T) {
 	for _, tc := range []struct {
 		name                                      string
