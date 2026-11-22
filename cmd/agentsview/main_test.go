@@ -49,6 +49,62 @@ type cursorSecretRecorder struct {
 	secret []byte
 }
 
+func TestRepairMessageFTSRecoversAfterFailure(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "archive.db")
+		database, err := db.Open(t.Context(), path)
+		require.NoError(t, err)
+		require.NoError(t, database.DropFTS(t.Context()))
+		require.NoError(t, database.Close())
+		database, err = db.OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, database.Close()) })
+		raw, err := sql.Open("sqlite3", path)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, raw.Close()) })
+		_, err = raw.ExecContext(t.Context(), `CREATE TRIGGER fail_search_repair BEFORE INSERT ON stats WHEN NEW.key='message_search_corpus_version' BEGIN SELECT RAISE(ABORT, 'repair failed'); END`)
+		require.NoError(t, err)
+		failed, resume, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		go func() {
+			defer close(done)
+			repairMessageFTS(t.Context(), nil, func(ctx context.Context) error {
+				err := database.RepairMessageFTS(ctx)
+				if err != nil {
+					close(failed)
+					<-resume
+				}
+				return err
+			})
+		}()
+		<-failed
+		assert.False(t, database.HasFTS(t.Context()))
+		_, err = raw.ExecContext(t.Context(), `DROP TRIGGER fail_search_repair`)
+		require.NoError(t, err)
+		close(resume)
+		<-done
+		assert.True(t, database.HasFTS(t.Context()))
+	})
+}
+
+func TestRepairMessageFTSRetryStopsOnCancellation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		var attempts atomic.Int32
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			repairMessageFTS(ctx, nil, func(context.Context) error {
+				attempts.Add(1)
+				return errors.New("repair failed")
+			})
+		}()
+		synctest.Wait()
+		cancel()
+		<-done
+		assert.EqualValues(t, 1, attempts.Load())
+	})
+}
+
 func TestDeferredMessageFTSHTTP(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Config{Host: "127.0.0.1", DBPath: filepath.Join(dir, "archive.db"), DataDir: dir, ArchiveContent: config.ArchiveContentFull}
@@ -83,20 +139,6 @@ func TestDeferredMessageFTSHTTP(t *testing.T) {
 	require.Equal(t, http.StatusOK, quoted.Code)
 	assert.Contains(t, quoted.Body.String(), "first")
 	assert.NotContains(t, quoted.Body.String(), "second")
-	raw, err := sql.Open("sqlite3", cfg.DBPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, raw.Close()) })
-	_, err = raw.ExecContext(t.Context(), `CREATE TRIGGER fail_search_repair BEFORE INSERT ON stats WHEN NEW.key='message_search_corpus_version' BEGIN SELECT RAISE(ABORT, 'repair failed'); END`)
-	require.NoError(t, err)
-	var logs bytes.Buffer
-	oldOutput := log.Writer()
-	log.SetOutput(&logs)
-	repairMessageFTS(t.Context(), nil, database.RepairMessageFTS)
-	log.SetOutput(oldOutput)
-	assert.Contains(t, logs.String(), "repair failed")
-	assert.Equal(t, http.StatusNotImplemented, get("/api/v1/search?q=searchneedle").Code)
-	_, err = raw.ExecContext(t.Context(), `DROP TRIGGER fail_search_repair`)
-	require.NoError(t, err)
 	repairMessageFTS(t.Context(), nil, database.RepairMessageFTS)
 	content := get("/api/v1/search/content?pattern=deploy%20window")
 	require.Equal(t, http.StatusOK, content.Code)

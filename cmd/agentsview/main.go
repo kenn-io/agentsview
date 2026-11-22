@@ -21,6 +21,7 @@ import (
 	"time"
 	_ "time/tzdata"
 
+	"github.com/cenkalti/backoff/v7"
 	"github.com/gofrs/flock"
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/archivesource"
@@ -895,14 +896,21 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 }
 
 func repairMessageFTS(ctx context.Context, idleTracker *server.IdleTracker, repair func(context.Context) error) {
-	done, ok := idleTracker.BeginWork()
-	if !ok {
-		return
-	}
-	defer done()
-	if err := repair(ctx); err != nil && ctx.Err() == nil {
-		log.Printf("search index repair: %v", err)
-	}
+	policy := backoff.NewExponentialBackOff()
+	policy.InitialInterval = time.Minute
+	policy.MaxInterval = time.Hour
+	_, _ = backoff.Retry(ctx, func() (struct{}, error) {
+		done, ok := idleTracker.BeginWork()
+		if !ok {
+			return struct{}{}, backoff.Permanent(context.Canceled)
+		}
+		err := repair(ctx)
+		done()
+		if err != nil && ctx.Err() == nil {
+			log.Printf("search index repair: %v", err)
+		}
+		return struct{}{}, err
+	}, backoff.WithBackOff(policy), backoff.WithMaxElapsedTime(0))
 }
 
 type foregroundRestartError struct {

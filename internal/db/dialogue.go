@@ -5,10 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log"
 	"slices"
 	"strconv"
-	"time"
 )
 
 // The same corpus version invalidates ordinary FTS and the CJK fingerprint.
@@ -109,12 +107,11 @@ func (db *DB) RepairMessageFTS(ctx context.Context) error {
 			return struct{}{}, err
 		}
 		if !exists {
-			start := time.Now()
-			log.Print("rebuilding message search index")
 			if err := rebuildMessageFTS(ctx, w, nil, true); err != nil {
 				return struct{}{}, err
 			}
-			log.Printf("rebuilt message search index in %s", time.Since(start))
+		} else if _, err := w.ExecContext(ctx, searchTokenSQL); err != nil {
+			return struct{}{}, err
 		}
 		db.messageFTSRepairPending.Store(false)
 		return struct{}{}, nil

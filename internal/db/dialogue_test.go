@@ -412,6 +412,32 @@ func TestRepairMessageFTSInvalidatesSavedSearchPage(t *testing.T) {
 	assert.Empty(t, page.Results)
 }
 
+func TestRepairMessageFTSInvalidatesSavedSearchAfterHandoff(t *testing.T) {
+	d := testDB(t)
+	seedSearchSession(t, d, "first", "project", nil)
+	seedSearchSession(t, d, "second", "project", nil)
+	insertMessages(t, d, Message{SessionID: "first", Role: "user", Content: "needle"})
+	insertMessages(t, d, Message{SessionID: "second", Role: "user", Content: "needle"})
+	_, err := d.getWriter().Exec(t.Context(), `INSERT INTO messages_fts(messages_fts, rowid, rendered, content)
+ SELECT 'delete', id, content, COALESCE(dialogue_text, content) FROM messages WHERE session_id='second'`)
+	require.NoError(t, err)
+	filter := SearchFilter{Query: "needle"}
+	page, err := d.Search(t.Context(), filter)
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	require.NoError(t, prepareMessageFTSRepair(t.Context(), d.getWriter()))
+	d.messageFTSRepairPending.Store(true)
+	require.NoError(t, d.CloseWriter())
+	worker, err := Open(t.Context(), d.Path())
+	require.NoError(t, err)
+	require.NoError(t, worker.Close())
+	require.NoError(t, d.ReopenWriter())
+	require.NoError(t, d.RepairMessageFTS(t.Context()))
+	page, err = d.Search(t.Context(), filter)
+	require.NoError(t, err)
+	require.Len(t, page.Results, 2)
+}
+
 func TestRepairMessageFTSWaitsForWriter(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		d := testDB(t)
