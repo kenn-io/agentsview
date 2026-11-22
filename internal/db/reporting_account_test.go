@@ -37,6 +37,7 @@ func TestCursorAccountReassignmentAdvancesPreviousPoll(t *testing.T) {
 	first := start.Add(24 * time.Hour)
 	require.NoError(t, d.RecordCursorAccountPoll(ctx, map[string][]string{"12": {"a"}}, first, []CursorAccountHour{{UserID: "12", Start: start}}))
 	require.NoError(t, d.RecordCursorAccountPoll(ctx, map[string][]string{"34": {"a"}}, first.Add(2*time.Hour), []CursorAccountHour{{UserID: "34", Start: start}}))
+	require.NoError(t, d.RecordCursorAccountPoll(ctx, map[string][]string{"12": {"a"}}, first.Add(time.Hour), []CursorAccountHour{{UserID: "12", Start: start}}))
 	day, err := d.ExportReportingDay(ctx, ReportingExportOptions{Date: start.Truncate(24 * time.Hour), Now: first.Add(3 * time.Hour), SchemaVersion: 6, ByMachine: true})
 	require.NoError(t, err)
 	old := day.Hours[10].Machines["cursor-account:12"]

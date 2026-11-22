@@ -653,25 +653,49 @@ func TestExportSessionsUpgradesRecordedRepositoryColumn(t *testing.T) {
 	}
 }
 
-func TestExportSessionsWithAccountOnlyVersionUpgrade(t *testing.T) {
+func TestExportReportingFromVersion184Archive(t *testing.T) {
 	dataDir := testDataDir(t)
 	dbPath := filepath.Join(dataDir, "sessions.db")
-	seedExportSessionsArchiveAt(t, dbPath)
+	database := seedExportSessionsArchiveAt(t, dbPath)
+	require.NoError(t, database.ConfigureArtifactLocalMachine(t.Context(), "local"))
+	require.NoError(t, database.Close())
 	raw, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = raw.ExecContext(t.Context(), `PRAGMA user_version=184; ALTER TABLE cursor_usage_events DROP COLUMN account_user_id; ALTER TABLE cursor_usage_events DROP COLUMN account_polled_at`)
+	_, err = raw.ExecContext(t.Context(), `PRAGMA user_version=184; DROP TABLE cursor_account_polls; ALTER TABLE cursor_usage_events DROP COLUMN account_user_id; ALTER TABLE cursor_usage_events DROP COLUMN account_polled_at`)
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
-	stdout, _, err := executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--format", "json")
-	require.NoError(t, err)
-	assert.Len(t, decodeExportSessionsDocument(t, stdout).Sessions, 2)
+	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+	for _, version := range []string{"5", "6"} {
+		args := []string{"export", "hour", "--schema-version", version}
+		if version == "6" {
+			args = append(args, "--by-machine")
+		}
+		args = append(args, "2026-07-28-10")
+		stdout, _, exportErr := executeExportSessionsCommand(newExportReportingTestRoot(now), args...)
+		require.NoError(t, exportErr)
+		assert.Contains(t, stdout, `"schema_version":`+version)
+		raw, err = sql.Open("sqlite3", dbPath)
+		require.NoError(t, err)
+		var dataVersion int
+		require.NoError(t, raw.QueryRowContext(t.Context(), "PRAGMA user_version").Scan(&dataVersion))
+		assert.Equal(t, 184, dataVersion)
+		require.NoError(t, raw.Close())
+	}
 
 	raw, err = sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	_, err = raw.ExecContext(t.Context(), `INSERT INTO stats(key, value) VALUES ('scoped_upgrade_pending', 184)`)
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
-	_, _, err = executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--format", "json")
+	_, _, err = executeExportSessionsCommand(newExportReportingTestRoot(now), "export", "hour", "--schema-version", "6", "--by-machine", "2026-07-28-10")
+	require.ErrorContains(t, err, "archive data needs resync")
+
+	raw, err = sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = raw.ExecContext(t.Context(), `DELETE FROM stats WHERE key='scoped_upgrade_pending'; PRAGMA user_version=182`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+	_, _, err = executeExportSessionsCommand(newExportReportingTestRoot(now), "export", "hour", "--schema-version", "5", "2026-07-28-10")
 	require.ErrorContains(t, err, "archive data needs resync")
 }
 
