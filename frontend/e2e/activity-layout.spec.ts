@@ -105,8 +105,8 @@ test("shows the whole Sessions breakdown in narrow summary cards", async ({ page
     });
     await route.fulfill({ response: upstream, json: report });
   });
-  // Seven cards share this width, so the breakdown cannot fit on one line.
-  await page.setViewportSize({ width: 900, height: 800 });
+  // Cards wrap into multiple rows and the breakdown wraps within its card.
+  await page.setViewportSize({ width: 600, height: 800 });
   await page.goto(`/activity?preset=day&date=${date}&timezone=UTC`);
 
   const sessions = page.locator(".summary-cards .stat-card").filter({ hasText: "Sessions" });
@@ -129,6 +129,7 @@ test("shows the whole Sessions breakdown in narrow summary cards", async ({ page
       return { top: Math.round(top), height: Math.round(height) };
     }),
   );
+  expect(new Set(boxes.map((box) => box.top)).size).toBeGreaterThan(1);
   const sessionsTop = Math.round((await sessions.boundingBox())!.y);
   const line = boxes.filter((box) => box.top === sessionsTop);
   expect(line.length).toBeGreaterThan(1);

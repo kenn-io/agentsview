@@ -67,7 +67,7 @@
     min-width: min-content;
     min-height: 64px;
     box-sizing: border-box;
-    padding: 5px 8px;
+    padding: 5px 10px;
     display: flex;
     flex-direction: column;
     gap: 1px;

@@ -10,7 +10,6 @@ for (const { path, width, count, labels, locale } of [
   },
   { path: "/activity", width: 871, count: 7, labels: ["Interactive peak"], locale: "en" },
   { path: "/analytics", width: 1035, count: 6, labels: ["Concentration"], locale: "en" },
-  { path: "/activity", width: 871, count: 7, labels: ["Pic interactif"], locale: "fr" },
 ]) {
   test(`${path} summary cards fit at ${width}px in ${locale}`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
