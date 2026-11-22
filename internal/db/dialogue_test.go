@@ -360,6 +360,10 @@ func TestDaemonOpenDefersMessageFTSRepair(t *testing.T) {
 				assert.Equal(t, tokenBefore, tokenAfter)
 			}
 			assert.True(t, d.HasFTS(t.Context()))
+			content, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "deploy window", Limit: 50, Sources: []string{"messages"}})
+			require.NoError(t, err)
+			require.Len(t, content.Matches, 1)
+			assert.Equal(t, "session", content.Matches[0].SessionID)
 			page, err := d.Search(t.Context(), SearchFilter{Query: "needle"})
 			require.NoError(t, err)
 			assert.Len(t, page.Results, 1)
