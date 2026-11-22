@@ -1627,6 +1627,7 @@ const upsertSessionBaseSQL = insertSessionSQL + `
 			has_peak_context_tokens = excluded.has_peak_context_tokens,
 			is_automated = excluded.is_automated,
 			termination_status = excluded.termination_status,
+			pr_shell_tainted = CASE WHEN sessions.cwd IS NOT excluded.cwd THEN NULL ELSE sessions.pr_shell_tainted END,
 			cwd = excluded.cwd,
 			git_branch = excluded.git_branch,
 			source_session_id = excluded.source_session_id,
@@ -3776,6 +3777,7 @@ func (db *DB) updateSessionCwd(ctx context.Context,
 	result, err := db.getWriter().Exec(ctx,
 		`UPDATE sessions SET
 			cwd = ?,
+			pr_shell_tainted = NULL,
 			data_version = MIN(data_version, ?),
 			local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		`+identityWhere+` AND cwd IS NOT ?
@@ -3811,6 +3813,7 @@ func (db *DB) UpdateCwdByAgentPathCount(ctx context.Context, path, agent, cwd st
 	result, err := db.getWriter().Exec(ctx,
 		`UPDATE sessions SET
 			cwd = ?,
+			pr_shell_tainted = NULL,
 			data_version = MIN(data_version, ?),
 			local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		 WHERE file_path = ? AND agent = ?

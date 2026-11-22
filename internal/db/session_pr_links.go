@@ -275,8 +275,11 @@ func refreshSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, i
 	if err := tx.QueryRow(`SELECT COALESCE(MAX(git_remote),'') FROM session_project_identity_snapshots WHERE session_id=? AND remote_candidate_count=1`, id).Scan(&remote); err != nil {
 		return err
 	}
-	tools, err := storedToolCallPRLinksTx(ctx, tx, id, remote)
+	tools, tainted, err := storedToolCallPRLinksTx(ctx, tx, id, remote, nil)
 	if err != nil {
+		return err
+	}
+	if err := writePRShellTaintTx(tx, id, tainted); err != nil {
 		return err
 	}
 	links := parser.CombinePRLinks(DecodePRLinks(structured), PromptPRLinks(messages), tools)
@@ -307,54 +310,23 @@ func appendSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id
 	var tools []PRLink
 	if hasTools {
 		var cwd, remote string
-		if err := tx.QueryRow(`SELECT COALESCE(cwd,''), COALESCE((SELECT MAX(git_remote) FROM session_project_identity_snapshots WHERE session_id=? AND remote_candidate_count=1),'') FROM sessions WHERE id=?`, id, id).Scan(&cwd, &remote); err != nil {
+		var state sql.NullBool
+		if err := tx.QueryRow(`SELECT COALESCE(cwd,''), COALESCE((SELECT MAX(git_remote) FROM session_project_identity_snapshots WHERE session_id=? AND remote_candidate_count=1),''), pr_shell_tainted FROM sessions WHERE id=?`, id, id).Scan(&cwd, &remote, &state); err != nil {
 			return err
 		}
-		var explicit []PRLink
-		tools, explicit, err = toolCallPRLinkSets(ctx, messages, cwd, remote)
+		tainted := state.Bool
+		if !state.Valid {
+			_, tainted, err = storedToolCallPRLinksTx(ctx, tx, id, remote, &messages[0].Ordinal)
+			if err != nil {
+				return err
+			}
+		}
+		tools, tainted, err = toolCallPRLinksWithShellState(ctx, messages, cwd, remote, tainted)
 		if err != nil {
 			return err
 		}
-		if remote != "" {
-			if EncodePRLinks(tools) != EncodePRLinks(explicit) {
-				// Earlier commands in a shared shell can change the checkout.
-				rows, err := tx.Query(`SELECT t.tool_name, t.input_json FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND t.category='Bash' AND t.tool_name NOT IN ('exec_command','shell_command','shell') AND m.ordinal < ? AND (t.input_json IS NULL OR `+shellTaintCandidateSQL+`) ORDER BY m.ordinal, t.id`, id, messages[0].Ordinal)
-				if err != nil {
-					return err
-				}
-				tainted := false
-				for rows.Next() {
-					var name string
-					var input sql.NullString
-					if err := rows.Scan(&name, &input); err != nil {
-						rows.Close()
-						return err
-					}
-					if !input.Valid {
-						tainted = true
-						break
-					}
-					_, changed, err := callPRLinks(ctx, "Bash", name, input.String, cwd, remote)
-					if err != nil {
-						rows.Close()
-						return err
-					}
-					if changed {
-						tainted = true
-						break
-					}
-				}
-				if err := rows.Err(); err != nil {
-					rows.Close()
-					return err
-				}
-				if err := rows.Close(); err != nil {
-					return err
-				}
-				if tainted {
-					tools = explicit
-				}
-			}
+		if err := writePRShellTaintTx(tx, id, tainted); err != nil {
+			return err
 		}
 	}
 	derived := parser.CombinePRLinks(prompts, tools)
@@ -414,11 +386,6 @@ func (db *DB) upgradePromptPRLinksTx(ctx context.Context, tx *sql.Tx) error {
 		}
 	}
 	return nil
-}
-
-func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote string) ([]PRLink, bool, error) {
-	links, _, changed, err := callPRLinkSets(ctx, category, toolName, input, cwd, remote)
-	return links, changed, err
 }
 
 func callPRLinkSets(ctx context.Context, category, toolName, input, cwd, remote string) ([]PRLink, []PRLink, bool, error) {
@@ -585,56 +552,94 @@ func codeModeLiteral(expr js.IExpr) (string, bool) {
 
 // ToolCallPRLinks derives links from a transcript's tool calls.
 func ToolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string) ([]PRLink, error) {
-	links, _, err := toolCallPRLinkSets(ctx, messages, cwd, remote)
+	links, _, err := toolCallPRLinksWithShellState(ctx, messages, cwd, remote, false)
 	return links, err
 }
 
-func toolCallPRLinkSets(ctx context.Context, messages []Message, cwd, remote string) ([]PRLink, []PRLink, error) {
-	var lists, explicitLists [][]PRLink
+func independentShell(name string) bool {
+	return name == "exec_command" || name == "shell_command" || name == "shell" || name == "exec"
+}
+
+func toolCallPRLinksWithShellState(ctx context.Context, messages []Message, cwd, remote string, tainted bool) ([]PRLink, bool, error) {
+	var lists [][]PRLink
 	for _, message := range messages {
 		for _, call := range message.ToolCalls {
 			if err := ctx.Err(); err != nil {
-				return nil, nil, err
+				return nil, tainted, err
 			}
-			found, explicit, changed, err := callPRLinkSets(ctx, call.Category, call.ToolName, call.InputJSON, cwd, remote)
+			if call.Category == "Bash" && call.InputJSON == "" && !independentShell(call.ToolName) {
+				tainted = true
+				continue
+			}
+			callCwd, callRemote := cwd, remote
+			if tainted {
+				callCwd, callRemote = "", ""
+			}
+			found, _, changed, err := callPRLinkSets(ctx, call.Category, call.ToolName, call.InputJSON, callCwd, callRemote)
 			if err != nil {
-				return nil, nil, err
+				return nil, tainted, err
 			}
 			lists = append(lists, found)
-			explicitLists = append(explicitLists, explicit)
-			if changed && call.ToolName != "exec_command" && call.ToolName != "shell_command" && call.ToolName != "shell" {
-				remote = ""
-				cwd = ""
+			if changed && !independentShell(call.ToolName) {
+				tainted = true
 			}
 		}
 	}
-	return parser.CombinePRLinks(lists...), parser.CombinePRLinks(explicitLists...), nil
+	return parser.CombinePRLinks(lists...), tainted, nil
 }
 
 const shellTaintCandidateSQL = `t.input_json LIKE '%cd%' OR t.input_json LIKE '%pushd%' OR t.input_json LIKE '%popd%' OR t.input_json LIKE '%eval%' OR t.input_json LIKE '%source%' OR t.input_json LIKE '%. %' OR t.input_json LIKE '%GH_REPO%' OR t.input_json LIKE '%GH_HOST%' OR t.input_json LIKE '%(%' OR t.input_json LIKE '%function %'`
 
-func storedToolCallPRLinksTx(ctx context.Context, tx transactionQueries, id, remote string) ([]PRLink, error) {
+func writePRShellTaintTx(tx transactionQueries, id string, tainted bool) error {
+	_, err := tx.Exec(`UPDATE sessions SET pr_shell_tainted=? WHERE id=? AND pr_shell_tainted IS NOT ?`, tainted, id, tainted)
+	return err
+}
+
+// A NULL state is initialized once from retained history. New appends then
+// advance it without reading earlier tool calls again.
+func storedToolCallPRLinksTx(ctx context.Context, tx transactionQueries, id, remote string, before *int) ([]PRLink, bool, error) {
 	var cwd string
 	if err := tx.QueryRow(`SELECT COALESCE(cwd,'') FROM sessions WHERE id=?`, id).Scan(&cwd); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	rows, err := tx.Query(`SELECT t.tool_name, t.category, COALESCE(t.input_json,'') FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND t.category IN ('Bash','Task') AND (t.input_json LIKE '%gh%' OR t.input_json LIKE '%http%' OR (t.category='Bash' AND (`+shellTaintCandidateSQL+`))) ORDER BY m.ordinal, t.id`, id)
+	query := `SELECT t.tool_name, t.category, t.input_json FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND t.category IN ('Bash','Task') AND (t.input_json IS NULL OR t.input_json LIKE '%gh%' OR t.input_json LIKE '%http%' OR (t.category='Bash' AND (` + shellTaintCandidateSQL + `)))`
+	args := []any{id}
+	if before != nil {
+		query += ` AND m.ordinal < ?`
+		args = append(args, *before)
+	}
+	query += ` ORDER BY m.ordinal, t.id`
+	rows, err := tx.Query(query, args...)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer rows.Close()
-	var messages []Message
+	var lists [][]PRLink
+	tainted := false
 	for rows.Next() {
-		var name, category, input string
+		var name, category string
+		var input sql.NullString
 		if err := rows.Scan(&name, &category, &input); err != nil {
-			return nil, err
+			return nil, false, err
 		}
-		messages = append(messages, Message{ToolCalls: []ToolCall{{ToolName: name, Category: category, InputJSON: input}}})
+		if !input.Valid {
+			if category == "Bash" && !independentShell(name) {
+				tainted = true
+			}
+			continue
+		}
+		messages := []Message{{ToolCalls: []ToolCall{{ToolName: name, Category: category, InputJSON: input.String}}}}
+		links, next, err := toolCallPRLinksWithShellState(ctx, messages, cwd, remote, tainted)
+		if err != nil {
+			return nil, false, err
+		}
+		tainted = next
+		lists = append(lists, links)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return ToolCallPRLinks(ctx, messages, cwd, remote)
+	return parser.CombinePRLinks(lists...), tainted, nil
 }
 
 const toolPRLinksDataVersion = 186
