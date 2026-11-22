@@ -135,7 +135,7 @@ func TestNewServer_Instructions(t *testing.T) {
 					continue
 				}
 				var line string
-				for _, candidate := range strings.Split(instructions, "\n") {
+				for candidate := range strings.SplitSeq(instructions, "\n") {
 					if strings.Contains(candidate, route.text) {
 						line = candidate
 						break
