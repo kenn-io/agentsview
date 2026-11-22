@@ -23,7 +23,8 @@ Digest ranges are inclusive, require both bounds, and may contain at most 31
 dates.
 
 Version 3 is the default. Hour, day, and digest commands also accept
-`--schema-version 5` for joint cells. Versions 1, 2, and 4 are no longer
+`--schema-version 5` for joint cells or `--schema-version 6 --by-machine` for
+Cursor account usage. Versions 1, 2, and 4 are no longer
 available. Any other value is rejected before the archive is opened or output is
 written. Integrations pinned to version 1 or 2 must update to version 3, and
 integrations pinned to version 4 must update to version 5. Both must refresh
@@ -61,6 +62,25 @@ Usage without a session machine, including standalone Cursor billing, uses
 `archive:<archive_id>`. This identifies the archive that supplied the data; it
 does not prove that two different archives' account-wide billing is distinct. Do
 not treat it as a machine identity or merge it with a named machine.
+
+Schema 6 reports matched Cursor usage under `cursor-account:<user_id>`, with
+`polled_at` set to the completion time of the unfiltered event fetch. An unfiltered
+sync lists the team roster and fetches usage for each member; this adds requests for each roster
+page and member. Only events returned by a member fetch for a fully closed hour
+are assigned to that account. Filtered syncs do not establish account coverage;
+events without a match from an unfiltered sync remain under archive billing.
+Each account-hour contains only the rows from that archive's newest poll for
+the user and UTC hour. Rows from an older poll stay under archive billing.
+An empty completed poll replaces a previously covered account-hour with zero usage.
+Project-key exports omit account parts.
+
+Events already in the archive stay under archive billing until an unfiltered
+sync matches them. The first export of an older archive adds empty account
+columns in place. Archives with account stamps require data version 185 or newer.
+Schema 6 hashes machine IDs beginning with `cursor-account:` or `machine:` to
+keep them distinct from account keys. Schema 5 and the change stream retain the
+original IDs. When reports mix schemas 5 and 6, these machines have different
+IDs and can be counted twice. Use the same schema version across reporters.
 
 Downstream integrations can select one snapshot per originating machine and UTC
 hour before adding totals. Removing a whole overlapping archive would also

@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 )
 
@@ -64,4 +65,22 @@ func TestExportReportingByMachine(t *testing.T) {
 	assert.EqualValues(t, 100, day.Hours[10].Machines["origin-a"].Usage.Totals.OutputTokens)
 	assert.EqualValues(t, 900, day.Hours[10].Machines["origin-b"].Usage.Totals.OutputTokens)
 	assert.EqualValues(t, 17, day.Hours[10].Machines["archive:machine-test-archive"].Usage.Totals.OutputTokens)
+}
+
+func TestExportReportingCursorAccountHour(t *testing.T) {
+	dataDir := testDataDir(t)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, database.ConfigureArtifactLocalMachine(t.Context(), "origin-a"))
+	event := db.CursorUsageEvent{OccurredAt: "2026-07-28T10:04:00Z", Model: "model-b", OutputTokens: 10}
+	require.NoError(t, database.InsertCursorUsageEvents(t.Context(), []db.CursorUsageEvent{event}))
+	require.NoError(t, database.RecordCursorAccountPoll(t.Context(), map[string][]string{"12": {db.CursorUsageEventDedupKey(event)}}, time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), []db.CursorAccountHour{{UserID: "12", Start: time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC)}}))
+	require.NoError(t, database.Close())
+	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+	out, _, err := executeExportSessionsCommand(newExportReportingTestRoot(now), "export", "hour", "--schema-version", "6", "--by-machine", "2026-07-28-10")
+	require.NoError(t, err)
+	var result struct {
+		Machines map[string]any `json:"machines"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+	assert.Contains(t, result.Machines, "cursor-account:12")
 }

@@ -2,16 +2,20 @@ package db
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/export"
 )
 
+const cursorAccountPrefix = "cursor-account:"
+
 // machineIdentities maps a session's stored machine key to the identity of
-// the machine it originated on. Per-machine reporting snapshots and the
-// change stream use the same rule, so their identities compare equal.
+// the machine it originated on. Schema 5 reporting and the change stream
+// use the same identities.
 type machineIdentities struct {
 	// local is this installation's identity, or empty when the archive has
 	// none recorded.
@@ -63,8 +67,8 @@ func (m machineIdentities) origin(machine, archiveID string) string {
 }
 
 func loadReportingMachineIdentity(ctx context.Context, tx *sql.Tx, schema int, s *reportingExportSource) error {
-	if schema != export.ReportingJointSchemaVersion {
-		return errors.New("machine snapshots require reporting schema 5")
+	if !export.IsJointReportingSchema(schema) {
+		return errors.New("machine snapshots require reporting schema 5 or 6")
 	}
 	ids, err := loadMachineIdentities(ctx, tx)
 	if err != nil {
@@ -77,6 +81,11 @@ func loadReportingMachineIdentity(ctx context.Context, tx *sql.Tx, schema int, s
 	return nil
 }
 
-func (s reportingDaySource) machineID(machine string) string {
-	return machineIdentities{local: s.localMachineID, aliases: s.machineAliases}.origin(machine, s.archiveID)
+func (s reportingDaySource) machineID(machine string, schema int) string {
+	machine = machineIdentities{local: s.localMachineID, aliases: s.machineAliases}.origin(machine, s.archiveID)
+	if schema == export.ReportingAccountSchemaVersion && (strings.HasPrefix(machine, cursorAccountPrefix) || strings.HasPrefix(machine, "machine:")) {
+		digest := sha256.Sum256([]byte(machine))
+		return "machine:" + hex.EncodeToString(digest[:])
+	}
+	return machine
 }

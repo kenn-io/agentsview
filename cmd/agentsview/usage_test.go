@@ -1660,6 +1660,185 @@ func TestNewUsageCursorCommandUsesConfigFallbacksAndSharedPagination(t *testing.
 	assert.Equal(t, 1, got[1].isHeadless)
 }
 
+func cursorUsageTestDataDir(t *testing.T) string {
+	t.Helper()
+	dataDir := testDataDir(t)
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "config.toml"), []byte("cursor_admin_api_key = 'key'\n"), 0o600))
+	return dataDir
+}
+
+func syncCursorUsage(t *testing.T, baseURL string, args ...string) error {
+	t.Helper()
+	original := newCursorUsageClient
+	newCursorUsageClient = func(key string) *cursorusage.Client {
+		c := cursorusage.NewClientWithBaseURL(baseURL, key)
+		c.RequestInterval = 0
+		c.DailyRequestInterval = 0
+		return c
+	}
+	t.Cleanup(func() { newCursorUsageClient = original })
+	cmd := newUsageCursorCommand()
+	cmd.SetArgs(args)
+	return cmd.Execute()
+}
+
+func TestCursorSyncImportsBillingWhileRebuildPending(t *testing.T) {
+	t.Setenv("TZ", "UTC")
+	path := filepath.Join(cursorUsageTestDataDir(t), "sessions.db")
+	database := dbtest.OpenTestDBAt(t, path)
+	require.NoError(t, database.Close())
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	defer raw.Close()
+	_, err = raw.ExecContext(t.Context(), "PRAGMA user_version = 1048760") // Archive-only version 184.
+	require.NoError(t, err)
+	var rosterCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/teams/daily-usage-data" {
+			rosterCalls++
+			_, _ = w.Write([]byte(`{"data":[{"userId":12}],"pagination":{"hasNextPage":false}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"totalUsageEventsCount":1,"usageEvents":[{"timestamp":"2026-07-28T10:03:00Z","model":"model-a","tokenUsage":{"outputTokens":7}}]}`))
+	}))
+	defer server.Close()
+	require.NoError(t, syncCursorUsage(t, server.URL, "--since", "2026-07-28", "--until", "2026-07-28"))
+	assert.Zero(t, rosterCalls)
+	var account, stamp string
+	var tokens int
+	require.NoError(t, raw.QueryRowContext(t.Context(), "SELECT output_tokens, account_user_id, account_polled_at FROM cursor_usage_events WHERE model='model-a'").Scan(&tokens, &account, &stamp))
+	assert.Equal(t, 7, tokens)
+	assert.Empty(t, account)
+	assert.Empty(t, stamp)
+}
+
+func TestCursorSyncMatchesMembers(t *testing.T) {
+	t.Setenv("TZ", "UTC")
+	for _, tc := range []struct {
+		name          string
+		priorModel    string
+		priorAccount  string
+		wantAccount   string
+		secondEmpty   bool
+		secondFails   bool
+		rosterFails   bool
+		priorRetained bool
+	}{
+		{name: "single", priorModel: "other-team", priorAccount: "99", wantAccount: "12", secondEmpty: true, priorRetained: true},
+		{name: "ambiguous", priorModel: "model-a", priorAccount: "12"},
+		{name: "failed member", priorModel: "model-a", priorAccount: "99", wantAccount: "99", secondFails: true},
+		{name: "failed roster", priorModel: "other-team", priorAccount: "99", rosterFails: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dataDir := cursorUsageTestDataDir(t)
+			database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+			prior := db.CursorUsageEvent{OccurredAt: "2026-07-28T10:03:00Z", Model: tc.priorModel, OutputTokens: 7}
+			require.NoError(t, database.InsertCursorUsageEvents(t.Context(), []db.CursorUsageEvent{prior}))
+			priorTime := time.Date(2026, 7, 29, 1, 0, 0, 0, time.UTC)
+			require.NoError(t, database.RecordCursorAccountPoll(t.Context(), map[string][]string{tc.priorAccount: {db.CursorUsageEventDedupKey(prior)}}, priorTime, []db.CursorAccountHour{{UserID: tc.priorAccount, Start: time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC)}}))
+			require.NoError(t, database.Close())
+			var requests []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				if !assert.NoError(t, json.UnmarshalRead(r.Body, &body)) {
+					return
+				}
+				if r.URL.Path == "/teams/daily-usage-data" {
+					if tc.rosterFails {
+						http.Error(w, "forbidden", http.StatusForbidden)
+						return
+					}
+					_, _ = w.Write([]byte(`{"data":[{"userId":12,"isActive":false},{"userId":34}],"pagination":{"hasNextPage":false}}`))
+					return
+				}
+				assert.Equal(t, "/teams/filtered-usage-events", r.URL.Path)
+				id, _ := body["userId"].(float64)
+				requests = append(requests, fmt.Sprint(id))
+				if id == 34 && tc.secondFails {
+					http.Error(w, "failed", http.StatusBadRequest)
+					return
+				}
+				if id == 34 && tc.secondEmpty {
+					_, _ = w.Write([]byte(`{"totalUsageEventsCount":0,"usageEvents":[]}`))
+					return
+				}
+				_, _ = w.Write([]byte(`{"totalUsageEventsCount":1,"usageEvents":[{"timestamp":"2026-07-28T10:03:00Z","model":"model-a","tokenUsage":{"outputTokens":7}}]}`))
+			}))
+			defer server.Close()
+			stderr := captureStderr(t, func() {
+				require.NoError(t, syncCursorUsage(t, server.URL, "--since", "2026-07-28", "--until", "2026-07-28"))
+			})
+			if tc.secondFails || tc.rosterFails {
+				assert.Contains(t, stderr, "Cursor account reporting could not be refreshed")
+			}
+			if tc.rosterFails {
+				assert.Equal(t, []string{"0"}, requests)
+			} else {
+				assert.Equal(t, []string{"0", "12", "34"}, requests)
+			}
+			database = dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+			var account, stamp string
+			require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT account_user_id, account_polled_at FROM cursor_usage_events WHERE model='model-a'`).Scan(&account, &stamp))
+			assert.Equal(t, tc.wantAccount, account)
+			if tc.secondFails {
+				assert.Equal(t, "2026-07-29T01:00:00.000000Z", stamp)
+			}
+			if tc.rosterFails {
+				var tokens int
+				require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT output_tokens FROM cursor_usage_events WHERE model='model-a'`).Scan(&tokens))
+				assert.Equal(t, 7, tokens)
+			}
+			if tc.priorRetained {
+				require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT account_user_id, account_polled_at FROM cursor_usage_events WHERE model='other-team'`).Scan(&account, &stamp))
+				assert.Equal(t, "99", account)
+				assert.Equal(t, "2026-07-29T01:00:00.000000Z", stamp)
+			}
+		})
+	}
+}
+
+func TestCursorSyncDoesNotCoverIncompleteHours(t *testing.T) {
+	for _, tc := range []struct {
+		name, tz, since, until, events string
+		want                           map[string]string
+	}{
+		{"partial boundaries", "Asia/Kathmandu", "2026-07-28", "2026-07-28", `[{"timestamp":"2026-07-27T18:20:00Z","model":"first-partial"},{"timestamp":"2026-07-27T19:00:00Z","model":"first-full"},{"timestamp":"2026-07-28T17:59:00Z","model":"last-full"},{"timestamp":"2026-07-28T18:05:00Z","model":"last-partial"}]`, map[string]string{"first-partial": "", "first-full": "12", "last-full": "12", "last-partial": ""}},
+		{"open hour", "UTC", "", "", "", map[string]string{"closed": "12", "open": ""}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dataDir := cursorUsageTestDataDir(t)
+			t.Setenv("TZ", tc.tz)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/teams/daily-usage-data" {
+					_, _ = w.Write([]byte(`{"data":[{"userId":12}],"pagination":{"hasNextPage":false}}`))
+					return
+				}
+				if tc.name == "open hour" && tc.events == "" {
+					// The sync captures its closed-hour boundary before this request.
+					now := time.Now().UTC()
+					tc.events = fmt.Sprintf(`[{"timestamp":%q,"model":"closed"},{"timestamp":%q,"model":"open"}]`, now.Add(-24*time.Hour).Truncate(time.Hour).Format(time.RFC3339), now.Format(time.RFC3339))
+				}
+				_, _ = fmt.Fprintf(w, `{"totalUsageEventsCount":%d,"usageEvents":%s}`, len(tc.want), tc.events)
+			}))
+			defer server.Close()
+			if tc.name == "open hour" {
+				now := time.Now().UTC()
+				current := now.Truncate(time.Hour)
+				tc.since = current.Add(-48 * time.Hour).Format("2006-01-02")
+				tc.until = current.Add(48 * time.Hour).Format("2006-01-02")
+			}
+			require.NoError(t, syncCursorUsage(t, server.URL, "--since", tc.since, "--until", tc.until))
+			database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+			for model, want := range tc.want {
+				var account, stamp string
+				require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT account_user_id, account_polled_at FROM cursor_usage_events WHERE model=?`, model).Scan(&account, &stamp))
+				assert.Equal(t, want, account, model)
+				assert.Equal(t, want != "", stamp != "", model)
+			}
+		})
+	}
+}
+
 func TestResolveCursorUsageWindowUntilOnlyUsesDefaultLookback(t *testing.T) {
 	loc := time.UTC
 
@@ -1950,4 +2129,145 @@ func TestNoTokenDataNote(t *testing.T) {
 				noTokenDataNote(tc.agent, tc.totals))
 		})
 	}
+}
+
+func TestCursorSyncAllSkipsEmptyRosterWindows(t *testing.T) {
+	type rosterRange struct {
+		Start int64 `json:"startDate"`
+		End   int64 `json:"endDate"`
+	}
+	for _, tc := range []struct {
+		name   string
+		events string
+		total  int
+		want   []rosterRange
+	}{
+		{name: "empty", events: `[]`},
+		{name: "sparse", total: 2, events: `[{"timestamp":"2000-01-02T10:00:00Z","model":"a"},{"timestamp":"2020-01-02T10:00:00Z","model":"b"}]`, want: []rosterRange{
+			{Start: 946080000000, End: 948672000000},
+			{Start: 1575936000000, End: 1578528000000},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cursorUsageTestDataDir(t)
+			var rosterCalls []rosterRange
+			var memberCalls []rosterRange
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/teams/daily-usage-data" {
+					var window rosterRange
+					if !assert.NoError(t, json.UnmarshalRead(r.Body, &window)) {
+						return
+					}
+					rosterCalls = append(rosterCalls, window)
+					_, _ = w.Write([]byte(`{"data":[{"userId":12}],"pagination":{"hasNextPage":false}}`))
+					return
+				}
+				var body struct {
+					Start  int64 `json:"startDate"`
+					End    int64 `json:"endDate"`
+					UserID int64 `json:"userId"`
+				}
+				if !assert.NoError(t, json.UnmarshalRead(r.Body, &body)) {
+					return
+				}
+				if body.UserID != 0 {
+					memberCalls = append(memberCalls, rosterRange{Start: body.Start, End: body.End + 1})
+					_, _ = w.Write([]byte(`{"totalUsageEventsCount":0,"usageEvents":[]}`))
+					return
+				}
+				_, _ = fmt.Fprintf(w, `{"totalUsageEventsCount":%d,"usageEvents":%s}`, tc.total, tc.events)
+			}))
+			defer server.Close()
+			require.NoError(t, syncCursorUsage(t, server.URL, "--all"))
+			assert.Equal(t, tc.want, rosterCalls)
+			assert.Equal(t, tc.want, memberCalls)
+		})
+	}
+}
+
+func TestCursorSyncRefreshesPriorAccountHours(t *testing.T) {
+	t.Setenv("TZ", "UTC")
+	dataDir := cursorUsageTestDataDir(t)
+	syncNumber := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &body)) {
+			return
+		}
+		if r.URL.Path == "/teams/daily-usage-data" {
+			_, _ = w.Write([]byte(`{"data":[{"userId":12}],"pagination":{"hasNextPage":false}}`))
+			return
+		}
+		if _, filtered := body["userId"]; !filtered {
+			syncNumber++
+		}
+		_, filtered := body["userId"]
+		if syncNumber == 1 || filtered {
+			_, _ = w.Write([]byte(`{"totalUsageEventsCount":1,"usageEvents":[{"timestamp":"2026-07-28T00:00:00.123Z","model":"a","tokenUsage":{"outputTokens":7}}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"totalUsageEventsCount":0,"usageEvents":[]}`))
+	}))
+	defer server.Close()
+	require.NoError(t, syncCursorUsage(t, server.URL, "--since", "2026-07-28", "--until", "2026-07-28"))
+	require.NoError(t, syncCursorUsage(t, server.URL, "--since", "2026-07-28", "--until", "2026-07-28"))
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	var account, stamp, pollStamp string
+	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT account_user_id, account_polled_at FROM cursor_usage_events WHERE model='a'`).Scan(&account, &stamp))
+	assert.Equal(t, "12", account)
+	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT polled_at FROM cursor_account_polls WHERE account_user_id='12' AND hour_start=1785196800`).Scan(&pollStamp))
+	assert.Greater(t, pollStamp, stamp)
+}
+
+func TestCursorSyncDefersMemberEventsUntilTeamPoll(t *testing.T) {
+	t.Setenv("TZ", "UTC")
+	dataDir := cursorUsageTestDataDir(t)
+	const first = `{"timestamp":"2026-07-28T10:03:00Z","model":"a","tokenUsage":{"outputTokens":7}}`
+	const late = `{"timestamp":"2026-07-28T10:04:00Z","model":"b","tokenUsage":{"outputTokens":5}}`
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, database.InsertCursorUsageEvents(t.Context(), []db.CursorUsageEvent{{OccurredAt: "2026-07-28T10:04:00Z", Model: "b", OutputTokens: 5}}))
+	require.NoError(t, database.Close())
+	var rosterAt time.Time
+	syncNumber := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &body)) {
+			return
+		}
+		if r.URL.Path == "/teams/daily-usage-data" {
+			if syncNumber == 1 {
+				rosterAt = time.Now().UTC()
+			}
+			_, _ = w.Write([]byte(`{"data":[{"userId":12}],"pagination":{"hasNextPage":false}}`))
+			return
+		}
+		if _, filtered := body["userId"]; !filtered {
+			syncNumber++
+			if syncNumber == 1 {
+				_, _ = fmt.Fprintf(w, `{"totalUsageEventsCount":1,"usageEvents":[%s]}`, first)
+				return
+			}
+		}
+		_, _ = fmt.Fprintf(w, `{"totalUsageEventsCount":2,"usageEvents":[%s,%s]}`, first, late)
+	}))
+	defer server.Close()
+	require.NoError(t, syncCursorUsage(t, server.URL, "--since", "2026-07-28", "--until", "2026-07-28"))
+	database = dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	var count int
+	var account, stamp string
+	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT count(*) FROM cursor_usage_events`).Scan(&count))
+	assert.Equal(t, 2, count)
+	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT account_user_id, account_polled_at FROM cursor_usage_events WHERE model='a'`).Scan(&account, &stamp))
+	assert.Equal(t, "12", account)
+	polledAt, err := time.Parse(time.RFC3339Nano, stamp)
+	require.NoError(t, err)
+	assert.True(t, polledAt.Before(rosterAt))
+	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT account_user_id, account_polled_at FROM cursor_usage_events WHERE model='b'`).Scan(&account, &stamp))
+	assert.Empty(t, account)
+	assert.Empty(t, stamp)
+	require.NoError(t, database.Close())
+	require.NoError(t, syncCursorUsage(t, server.URL, "--since", "2026-07-28", "--until", "2026-07-28"))
+	database = dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT account_user_id FROM cursor_usage_events WHERE model='b'`).Scan(&account))
+	assert.Equal(t, "12", account)
 }

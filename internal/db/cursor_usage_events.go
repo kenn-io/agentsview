@@ -3,7 +3,9 @@ package db
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"strconv"
@@ -15,7 +17,7 @@ import (
 
 // CursorUsageEvent stores authoritative account billing data. Agent defaults
 // to cursor for Cursor admin API imports; xAI CSV imports identify each product.
-// The table is append-only, deduped by a stable event fingerprint.
+// Events are deduped by a stable fingerprint; account attribution can update existing rows.
 type CursorUsageEvent struct {
 	ID               int64
 	Agent            string
@@ -34,6 +36,18 @@ type CursorUsageEvent struct {
 	DedupKey         string
 }
 
+const cursorAccountPollsSchemaSQL = `
+CREATE TABLE IF NOT EXISTS cursor_account_polls (
+    account_user_id TEXT NOT NULL,
+    hour_start INTEGER NOT NULL,
+    polled_at TEXT NOT NULL,
+    PRIMARY KEY (account_user_id, hour_start)
+);`
+
+// Created after column migrations so older archives can open without a rebuild.
+const cursorAccountEventIndexSQL = `CREATE INDEX IF NOT EXISTS idx_cursor_usage_events_account_time
+ON cursor_usage_events(agent, account_user_id, occurred_at, account_polled_at)`
+
 func (db *DB) ensureCursorUsageEventsSchemaLocked(ctx context.Context, w *writerHandle) error {
 	if _, err := w.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS cursor_usage_events (
@@ -50,6 +64,8 @@ func (db *DB) ensureCursorUsageEventsSchemaLocked(ctx context.Context, w *writer
 			cursor_token_fee_microdollars INTEGER NOT NULL DEFAULT 0,
 			user_id TEXT NOT NULL DEFAULT '',
 			user_email TEXT NOT NULL DEFAULT '',
+			account_user_id TEXT NOT NULL DEFAULT '',
+			account_polled_at TEXT NOT NULL DEFAULT '',
 			is_headless INTEGER NOT NULL DEFAULT 0,
 			dedup_key TEXT NOT NULL DEFAULT ''
 		);
@@ -63,7 +79,69 @@ func (db *DB) ensureCursorUsageEventsSchemaLocked(ctx context.Context, w *writer
 	`); err != nil {
 		return fmt.Errorf("creating cursor_usage_events: %w", err)
 	}
+	if _, err := w.Exec(ctx, cursorAccountEventIndexSQL); err != nil {
+		return fmt.Errorf("indexing Cursor account usage: %w", err)
+	}
 	return nil
+}
+
+type CursorAccountHour struct {
+	UserID string
+	Start  time.Time
+}
+
+const cursorAccountHoursQuery = `SELECT account_user_id, hour_start FROM cursor_account_polls WHERE hour_start >= ? AND hour_start < ?`
+
+// CursorAccountHours returns account-hours with a recorded poll within a range.
+func (db *DB) CursorAccountHours(ctx context.Context, start, end time.Time) ([]CursorAccountHour, error) {
+	rows, err := db.getReader().Query(ctx, cursorAccountHoursQuery, start.Unix(), end.Unix()+1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var hours []CursorAccountHour
+	for rows.Next() {
+		var id string
+		var seconds int64
+		if err := rows.Scan(&id, &seconds); err != nil {
+			return nil, err
+		}
+		hour := CursorAccountHour{UserID: id, Start: time.Unix(seconds, 0).UTC()}
+		if !hour.Start.Before(start) && !hour.Start.Add(time.Hour).After(end) {
+			hours = append(hours, hour)
+		}
+	}
+	return hours, rows.Err()
+}
+
+const (
+	cursorAccountPreviousPollQuery = `INSERT INTO cursor_account_polls(account_user_id,hour_start,polled_at) SELECT account_user_id, ` + reportingCursorHour + `, ? FROM cursor_usage_events WHERE account_user_id != '' AND account_user_id != ? AND dedup_key != '' AND dedup_key IN (SELECT value FROM json_each(?)) AND account_polled_at < ? ON CONFLICT(account_user_id,hour_start) DO UPDATE SET polled_at = max(polled_at,excluded.polled_at)`
+	cursorAccountAssignQuery       = `UPDATE cursor_usage_events SET account_user_id = ?, account_polled_at = ? WHERE dedup_key != '' AND dedup_key IN (SELECT value FROM json_each(?)) AND account_polled_at < ?`
+)
+
+// RecordCursorAccountPoll commits matched events and completed prior hours together.
+func (db *DB) RecordCursorAccountPoll(ctx context.Context, assignments map[string][]string, polledAt time.Time, hours []CursorAccountHour) error {
+	stamp := polledAt.UTC().Format("2006-01-02T15:04:05.000000Z")
+	return db.Update(ctx, func(tx *sql.Tx) error {
+		for id, keys := range assignments {
+			encoded, err := json.Marshal(keys)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, cursorAccountPreviousPollQuery, stamp, id, string(encoded), stamp); err != nil {
+				return fmt.Errorf("recording previous Cursor account poll: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, cursorAccountAssignQuery, id, stamp, string(encoded), stamp); err != nil {
+				return fmt.Errorf("assigning Cursor usage account: %w", err)
+			}
+		}
+		for _, hour := range hours {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO cursor_account_polls(account_user_id,hour_start,polled_at) VALUES (?,?,?) ON CONFLICT(account_user_id,hour_start) DO UPDATE SET polled_at = max(polled_at,excluded.polled_at)`, hour.UserID, hour.Start.Unix(), stamp); err != nil {
+				return fmt.Errorf("recording Cursor account poll: %w", err)
+			}
+		}
+		return nil
+	})
 }
 
 // InsertCursorUsageEvents appends account usage rows and ignores duplicates
@@ -202,10 +280,9 @@ func (db *DB) MaxCursorUsageEventID(ctx context.Context) (int64, error) {
 }
 
 // GetCursorUsageEvents returns account usage rows with id greater than
-// sinceID, in (occurred_at, id) order. The table is append-only (no
-// updates or deletes), so its integer primary key grows monotonically and
-// sinceID acts as a high-water mark: pass 0 for the full history, or the
-// largest previously consumed ID to load only appended rows.
+// sinceID, in (occurred_at, id) order. Account stamps can update existing rows;
+// their IDs stay unchanged. Pass 0 for the full history, or the largest
+// previously consumed ID to load only appended rows.
 func (db *DB) GetCursorUsageEvents(
 	ctx context.Context, sinceID int64,
 ) ([]CursorUsageEvent, error) {

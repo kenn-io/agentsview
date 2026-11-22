@@ -1748,6 +1748,10 @@ func (d *DB) CopySessionMetadataFrom(
 		if oldDBHasColumn(ctx, tx, "cursor_usage_events", "agent") {
 			agentColumn = "agent"
 		}
+		accountID, polledAt := "''", "''"
+		if oldDBHasColumn(ctx, tx, "cursor_usage_events", "account_user_id") {
+			accountID, polledAt = "account_user_id", "account_polled_at"
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO main.cursor_usage_events (
 				agent,
@@ -1755,17 +1759,22 @@ func (d *DB) CopySessionMetadataFrom(
 				input_tokens, output_tokens,
 				cache_write_tokens, cache_read_tokens,
 				charged_microdollars, cursor_token_fee_microdollars,
-				user_id, user_email, is_headless, dedup_key
+				user_id, user_email, is_headless, dedup_key, account_user_id, account_polled_at
 			)
 			SELECT `+agentColumn+`,
 				occurred_at, model, kind,
 				input_tokens, output_tokens,
 				cache_write_tokens, cache_read_tokens,
 				charged_microdollars, cursor_token_fee_microdollars,
-				user_id, user_email, is_headless, dedup_key
+				user_id, user_email, is_headless, dedup_key, `+accountID+`, `+polledAt+`
 			FROM old_db.cursor_usage_events
 			ORDER BY occurred_at, id`); err != nil {
 			return fmt.Errorf("copying cursor usage events: %w", err)
+		}
+	}
+	if oldDBHasTable(ctx, tx, "cursor_account_polls") {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM main.cursor_account_polls; INSERT INTO main.cursor_account_polls SELECT account_user_id, hour_start, polled_at FROM old_db.cursor_account_polls`); err != nil {
+			return fmt.Errorf("copying Cursor account polls: %w", err)
 		}
 	}
 

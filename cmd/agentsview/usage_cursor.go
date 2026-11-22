@@ -109,6 +109,7 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 		fmt.Fprintf(os.Stderr, "Cursor usage page %d: %v; retrying in %s\n",
 			page, err, wait.Round(time.Second))
 	}
+	closedThrough := time.Now().UTC().Truncate(time.Hour)
 	events, err := client.FetchAllUsageEvents(ctx, cursorusage.Query{
 		StartDate: start,
 		EndDate:   end,
@@ -120,32 +121,163 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 		return err
 	}
 
+	polledAt := time.Now().UTC()
 	rows := make([]db.CursorUsageEvent, 0, len(events))
+	fetched := make(map[string]bool, len(events))
 	for _, ev := range events {
-		rows = append(rows, db.CursorUsageEvent{
-			OccurredAt:       ev.Timestamp.UTC().Format(time.RFC3339Nano),
-			Model:            ev.Model,
-			Kind:             ev.Kind,
-			InputTokens:      ev.TokenUsage.InputTokens,
-			OutputTokens:     ev.TokenUsage.OutputTokens,
-			CacheWriteTokens: ev.TokenUsage.CacheWriteTokens,
-			CacheReadTokens:  ev.TokenUsage.CacheReadTokens,
-			Charged:          ev.Charged,
-			CursorTokenFee:   ev.CursorTokenFee,
-			UserID:           ev.UserID,
-			UserEmail:        ev.UserEmail,
-			IsHeadless:       ev.IsHeadless,
-		})
+		row := cursorUsageRow(ev)
+		rows = append(rows, row)
+		fetched[db.CursorUsageEventDedupKey(row)] = true
 	}
 	if err := database.InsertCursorUsageEvents(ctx, rows); err != nil {
 		return err
 	}
+	if email == "" && userID == "" {
+		if database.NeedsResync() {
+			fmt.Fprintf(os.Stdout, "Imported %d events; skipped account reporting until the archive rebuild finishes. Rerun this sync then.\n", len(rows))
+			return nil
+		}
+		windowEnd := end.Add(time.Millisecond)
+		if windowEnd.After(closedThrough) {
+			windowEnd = closedThrough
+		}
+		if start.Before(windowEnd) {
+			const rosterWindow = 30 * 24 * time.Hour
+			windows := map[int64]bool{}
+			priorHours, err := database.CursorAccountHours(ctx, start, windowEnd)
+			if err != nil {
+				return err
+			}
+			for _, hour := range priorHours {
+				windows[int64(hour.Start.Sub(start)/rosterWindow)] = true
+			}
+			for _, ev := range events {
+				hour := ev.Timestamp.UTC().Truncate(time.Hour)
+				if !hour.Before(start) && !hour.Add(time.Hour).After(windowEnd) {
+					windows[int64(ev.Timestamp.Sub(start)/rosterWindow)] = true
+				}
+			}
+			var users []string
+			seenUsers := map[string]bool{}
+			membersByWindow := map[int64]map[string]bool{}
+			type memberWindow struct{ start, end time.Time }
+			userWindows := map[string][]memberWindow{}
+			for from, index := start, int64(0); from.Before(windowEnd); index++ {
+				to := from.Add(rosterWindow)
+				if to.After(windowEnd) {
+					to = windowEnd
+				}
+				if windows[index] {
+					members, err := client.ListDailyUsageUsers(ctx, from, to)
+					if err != nil {
+						if ctx.Err() != nil {
+							return ctx.Err()
+						}
+						fmt.Fprintln(os.Stderr, "Cursor account reporting could not be refreshed; rerun the sync.")
+						goto imported
+					}
+					membersByWindow[index] = map[string]bool{}
+					for _, id := range members {
+						if membersByWindow[index][id] {
+							continue
+						}
+						membersByWindow[index][id] = true
+						userWindows[id] = append(userWindows[id], memberWindow{from, to})
+						if !seenUsers[id] {
+							users = append(users, id)
+							seenUsers[id] = true
+						}
+					}
+				}
+				from = to
+			}
+			owners := map[string]string{}
+			keyHours := map[string]time.Time{}
+			ambiguous := map[db.CursorAccountHour]bool{}
+			for _, id := range users {
+				for _, window := range userWindows[id] {
+					memberEvents, err := client.FetchAllUsageEvents(ctx, cursorusage.Query{StartDate: window.start, EndDate: window.end.Add(-time.Millisecond), PageSize: 1000, UserID: id})
+					if err != nil {
+						if ctx.Err() != nil {
+							return ctx.Err()
+						}
+						fmt.Fprintln(os.Stderr, "Cursor account reporting could not be refreshed; rerun the sync.")
+						goto imported
+					}
+					for _, ev := range memberEvents {
+						row := cursorUsageRow(ev)
+						hour := ev.Timestamp.UTC().Truncate(time.Hour)
+						if hour.Before(start) || hour.Add(time.Hour).After(windowEnd) {
+							continue
+						}
+						key := db.CursorUsageEventDedupKey(row)
+						if !fetched[key] {
+							continue
+						}
+						keyHours[key] = hour
+						if previous, ok := owners[key]; ok && previous != id {
+							if previous != "" {
+								ambiguous[db.CursorAccountHour{UserID: previous, Start: hour}] = true
+							}
+							ambiguous[db.CursorAccountHour{UserID: id, Start: hour}] = true
+							owners[key] = ""
+						} else if !ok {
+							owners[key] = id
+						}
+					}
+				}
+			}
+			byUser := map[string][]string{}
+			coveredSet := map[db.CursorAccountHour]bool{}
+			for key, match := range owners {
+				hour := db.CursorAccountHour{UserID: match, Start: keyHours[key]}
+				byUser[match] = append(byUser[match], key)
+				if match != "" {
+					coveredSet[hour] = true
+				}
+			}
+			for hour := range ambiguous {
+				coveredSet[hour] = true
+			}
+			for _, hour := range priorHours {
+				index := int64(hour.Start.Sub(start) / rosterWindow)
+				if membersByWindow[index][hour.UserID] {
+					coveredSet[hour] = true
+				}
+			}
+			var covered []db.CursorAccountHour
+			for hour := range coveredSet {
+				covered = append(covered, hour)
+			}
+			if err := database.RecordCursorAccountPoll(ctx, byUser, polledAt, covered); err != nil {
+				return err
+			}
+		}
+	}
 
+imported:
 	fmt.Fprintf(os.Stdout,
 		"Fetched %d Cursor usage events into the archive\n",
 		len(rows),
 	)
 	return nil
+}
+
+func cursorUsageRow(ev cursorusage.UsageEvent) db.CursorUsageEvent {
+	return db.CursorUsageEvent{
+		OccurredAt:       ev.Timestamp.UTC().Format(time.RFC3339Nano),
+		Model:            ev.Model,
+		Kind:             ev.Kind,
+		InputTokens:      ev.TokenUsage.InputTokens,
+		OutputTokens:     ev.TokenUsage.OutputTokens,
+		CacheWriteTokens: ev.TokenUsage.CacheWriteTokens,
+		CacheReadTokens:  ev.TokenUsage.CacheReadTokens,
+		Charged:          ev.Charged,
+		CursorTokenFee:   ev.CursorTokenFee,
+		UserID:           ev.UserID,
+		UserEmail:        ev.UserEmail,
+		IsHeadless:       ev.IsHeadless,
+	}
 }
 
 func resolveCursorUsageWindow(

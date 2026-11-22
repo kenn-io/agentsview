@@ -697,7 +697,8 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // Evener sources in place; source and session identities are unchanged.)
 // (183: prefer structured Antigravity user prompts over skill expansions.)
 // (184: prevent older binaries from overwriting prompt-derived PR links.)
-const dataVersion = 184
+// (185: prevent older binaries from clearing Cursor account usage stamps on reparse.)
+const dataVersion = 185
 
 const archiveOnlyVersionBase = 1 << 20
 
@@ -1894,9 +1895,12 @@ CREATE TABLE IF NOT EXISTS background_migrations (
     started_at      TEXT,
     updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     completed_at    TEXT
-);` + projectIdentityRevisionSchemaSQL + projectIdentitySnapshotInvariantSchemaSQL
+);` + projectIdentityRevisionSchemaSQL + projectIdentitySnapshotInvariantSchemaSQL + cursorAccountPollsSchemaSQL + `
+CREATE INDEX IF NOT EXISTS idx_cursor_account_polls_hour ON cursor_account_polls(hour_start);`
 
 var exportIdentityColumnMigrations = []schemaColumnMigration{
+	{"cursor_usage_events", "account_user_id", "ALTER TABLE cursor_usage_events ADD COLUMN account_user_id TEXT NOT NULL DEFAULT ''"},
+	{"cursor_usage_events", "account_polled_at", "ALTER TABLE cursor_usage_events ADD COLUMN account_polled_at TEXT NOT NULL DEFAULT ''"},
 	{"project_identity_observations", "session_id", "ALTER TABLE project_identity_observations ADD COLUMN session_id TEXT NOT NULL DEFAULT ''"},
 	{"project_identity_observations", "source_archive_id", "ALTER TABLE project_identity_observations ADD COLUMN source_archive_id TEXT NOT NULL DEFAULT ''"},
 	{"project_identity_observations", "source_archive_salt", "ALTER TABLE project_identity_observations ADD COLUMN source_archive_salt TEXT NOT NULL DEFAULT ''"},
@@ -1910,6 +1914,8 @@ var exportIdentityColumnMigrations = []schemaColumnMigration{
 }
 
 var exportIdentityUpgradeTables = map[string]struct{}{
+	"cursor_usage_events":                {},
+	"cursor_account_polls":               {},
 	"archive_metadata":                   {},
 	"background_migrations":              {},
 	"project_identity_observations":      {},
@@ -2123,6 +2129,7 @@ func OpenReadOnly(ctx context.Context, path string) (*DB, error) {
 }
 
 var readOnlyRequiredTables = []string{
+	"cursor_account_polls",
 	"commit_trailers",
 	"commit_links",
 	"sessions",
@@ -2314,15 +2321,14 @@ func checkReadOnlySchemaCompatibility(ctx context.Context, conn *sql.DB) error {
 			}
 		}
 	}
-	var missingAccountAgent bool
-	if err := conn.QueryRowContext(ctx, `SELECT
-		EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cursor_usage_events')
-		AND NOT EXISTS(SELECT 1 FROM pragma_table_info('cursor_usage_events') WHERE name = 'agent')`,
-	).Scan(&missingAccountAgent); err != nil {
-		return fmt.Errorf("checking account usage schema: %w", err)
-	}
-	if missingAccountAgent {
-		return &SchemaUpgradeRequiredError{Table: "cursor_usage_events", Column: "agent"}
+	for _, column := range []string{"agent", "account_user_id", "account_polled_at"} {
+		var missing bool
+		if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cursor_usage_events') AND NOT EXISTS(SELECT 1 FROM pragma_table_info('cursor_usage_events') WHERE name = ?)`, column).Scan(&missing); err != nil {
+			return fmt.Errorf("checking account usage schema: %w", err)
+		}
+		if missing {
+			return &SchemaUpgradeRequiredError{Table: "cursor_usage_events", Column: column}
+		}
 	}
 	for _, index := range []string{
 		"idx_messages_usage_timestamp",
@@ -2421,6 +2427,12 @@ func probeDatabaseConn(ctx context.Context,
 	}
 	if version >= dataVersion {
 		return false, false, false, nil
+	}
+	if !archiveOnly && !fullRebuild {
+		providers := ScopedDataVersionProviders(version, dataVersion)
+		if providers != nil && len(providers) == 0 {
+			return false, false, false, nil
+		}
 	}
 	return false, countScoped || fullRebuild, fullRebuild, nil
 }
@@ -2547,6 +2559,8 @@ func legacySchemaColumnMigrations() []schemaColumnMigration {
 
 func schemaColumnMigrations() []schemaColumnMigration {
 	return []schemaColumnMigration{
+		{"cursor_usage_events", "account_user_id", "ALTER TABLE cursor_usage_events ADD COLUMN account_user_id TEXT NOT NULL DEFAULT ''"},
+		{"cursor_usage_events", "account_polled_at", "ALTER TABLE cursor_usage_events ADD COLUMN account_polled_at TEXT NOT NULL DEFAULT ''"},
 		{"sessions", "usage_generation", "ALTER TABLE sessions ADD COLUMN usage_generation TEXT;" +
 			" UPDATE sessions SET usage_generation=lower(hex(randomblob(8)))"},
 		{"sessions", "trends_generation", "ALTER TABLE sessions ADD COLUMN trends_generation TEXT"},

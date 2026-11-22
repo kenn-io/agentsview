@@ -91,6 +91,20 @@ func TestFinalizeReportingHourCanonicalizesOrderingAndIgnoresInputDigest(t *test
 	assert.Equal(t, finalized.Digest, decoded["digest"])
 }
 
+func TestFinalizeReportingHourDigestIncludesPollTime(t *testing.T) {
+	hour := quietReportingHourFixture("2026-07-28-00")
+	hour.SchemaVersion = ReportingAccountSchemaVersion
+	hour.BucketSeconds = 300
+	hour.Joint = &ReportingJoint{}
+	hour.PolledAt = "2026-07-29T01:00:00.000000Z"
+	first, _, err := FinalizeReportingHour(hour)
+	require.NoError(t, err)
+	hour.PolledAt = "2026-07-29T02:00:00.000000Z"
+	second, _, err := FinalizeReportingHour(hour)
+	require.NoError(t, err)
+	assert.NotEqual(t, first.Digest, second.Digest)
+}
+
 func TestFinalizeReportingHourDigestVector(t *testing.T) {
 	hour := quietReportingHourFixture("2026-07-28-00")
 	hour.Digest = "sha256:stale-derived-field"
