@@ -46,14 +46,29 @@ func (e *Engine) RunFirstImport(ctx context.Context, onProgress ProgressFunc) (S
 		return stats, true, ctx.Err()
 	}
 
-	// Leave time for clients to refresh between notifications during a long import.
-	var lastRefresh time.Time
-	return e.runStartupSyncFallback(ctx, onProgress, &firstImportWave{onWrite: func() {
-		if time.Since(lastRefresh) >= time.Second {
-			lastRefresh = time.Now()
+	refresh := make(chan struct{}, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		var lastRefresh time.Time
+		for range refresh {
+			// Leave time for clients to refresh between notifications.
+			if delay := time.Until(lastRefresh.Add(time.Second)); delay > 0 {
+				time.Sleep(delay)
+			}
 			e.emit("sessions")
+			lastRefresh = time.Now()
+		}
+	}()
+	stats, ran, err := e.runStartupSyncFallback(ctx, onProgress, &firstImportWave{onWrite: func() {
+		select {
+		case refresh <- struct{}{}:
+		default:
 		}
 	}})
+	close(refresh)
+	<-done
+	return stats, ran, err
 }
 
 type firstImportSource struct {

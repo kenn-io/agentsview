@@ -2,10 +2,12 @@ package sync
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -56,31 +58,53 @@ func TestFirstImportResumesAfterFirstWave(t *testing.T) {
 }
 
 func TestFirstImportBoundsCopilotSessionsWithSharedStore(t *testing.T) {
-	root := t.TempDir()
-	for i := range 30 {
-		id := fmt.Sprintf("00000000-0000-4000-8000-%012d", i)
-		path := filepath.Join(root, "session-state", id, "events.jsonl")
-		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-		content := fmt.Sprintf("{\"type\":\"session.start\",\"data\":{\"sessionId\":%q},\"timestamp\":\"2026-01-01T00:00:00Z\"}\n{\"type\":\"user.message\",\"data\":{\"content\":\"hello\"},\"timestamp\":\"2026-01-01T00:00:01Z\"}\n", id)
-		require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-		mtime := time.Unix(1700000000, 0)
-		require.NoError(t, os.Chtimes(path, mtime, mtime))
+	for _, tied := range []bool{false, true} {
+		t.Run(fmt.Sprintf("tied-%t", tied), func(t *testing.T) {
+			root := t.TempDir()
+			for i := range 30 {
+				id := fmt.Sprintf("00000000-0000-4000-8000-%012d", i)
+				path := filepath.Join(root, "session-state", id, "events.jsonl")
+				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+				content := fmt.Sprintf("{\"type\":\"session.start\",\"data\":{\"sessionId\":%q},\"timestamp\":\"2026-01-01T00:00:00Z\"}\n{\"type\":\"user.message\",\"data\":{\"content\":\"hello\"},\"timestamp\":\"2026-01-01T00:00:01Z\"}\n", id)
+				require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+				mtime := time.Unix(1700000000, 0)
+				if !tied {
+					mtime = mtime.Add(time.Duration(i) * time.Second)
+				}
+				require.NoError(t, os.Chtimes(path, mtime, mtime))
+			}
+			store, err := sql.Open("sqlite3", filepath.Join(root, "session-store.db"))
+			require.NoError(t, err)
+			_, err = store.ExecContext(t.Context(), `CREATE TABLE assistant_usage_events(id INTEGER PRIMARY KEY, session_id TEXT, model TEXT, input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER, cache_write_tokens INTEGER, reasoning_tokens INTEGER, created_at TEXT)`)
+			require.NoError(t, err)
+			require.NoError(t, store.Close())
+			archive := openTestDB(t)
+			engine := NewEngine(t.Context(), archive, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentCopilot: {root}}, Machine: "local", DeferStartupMaintenance: true,
+			})
+			t.Cleanup(engine.Close)
+			_, complete := engine.SyncNewest(t.Context(), 25, nil)
+			require.False(t, complete)
+			page, err := archive.ListSessions(t.Context(), db.SessionFilter{Limit: 100})
+			require.NoError(t, err)
+			require.Len(t, page.Sessions, 25)
+			for i := range 30 {
+				id := fmt.Sprintf("copilot:00000000-0000-4000-8000-%012d", i)
+				session, err := archive.GetSession(t.Context(), id)
+				require.NoError(t, err)
+				if (tied && i < 25) || (!tied && i >= 5) {
+					require.NotNil(t, session, id)
+				} else {
+					require.Nil(t, session, id)
+				}
+			}
+			_, _, err = engine.RunFirstImport(t.Context(), nil)
+			require.NoError(t, err)
+			page, err = archive.ListSessions(t.Context(), db.SessionFilter{Limit: 100})
+			require.NoError(t, err)
+			require.Len(t, page.Sessions, 30)
+		})
 	}
-	archive := openTestDB(t)
-	engine := NewEngine(t.Context(), archive, EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{parser.AgentCopilot: {root}}, Machine: "local", DeferStartupMaintenance: true,
-	})
-	t.Cleanup(engine.Close)
-	_, complete := engine.SyncNewest(t.Context(), 25, nil)
-	require.False(t, complete)
-	page, err := archive.ListSessions(t.Context(), db.SessionFilter{Limit: 100})
-	require.NoError(t, err)
-	require.Len(t, page.Sessions, 25)
-	_, _, err = engine.RunFirstImport(t.Context(), nil)
-	require.NoError(t, err)
-	page, err = archive.ListSessions(t.Context(), db.SessionFilter{Limit: 100})
-	require.NoError(t, err)
-	require.Len(t, page.Sessions, 30)
 }
 
 type firstImportFingerprintProvider struct {
@@ -151,16 +175,17 @@ func TestFirstImportRefreshesWhileOlderSessionsAreWritten(t *testing.T) {
 	}
 	archive := openTestDB(t)
 	refresh := make(chan struct{}, 1)
+	paused := make(chan struct{}, 1)
 	resume := make(chan struct{})
-	var events int
-	engine := NewEngine(t.Context(), archive, EngineConfig{
+	var events atomic.Int32
+	var engine *Engine
+	engine = NewEngine(t.Context(), archive, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}, Machine: "local", DeferStartupMaintenance: true,
 		Emitter: emitterFunc(func(scope string) {
 			if scope == "sessions" {
-				events++
-				if events == 2 {
+				if events.Add(1) == 2 {
 					refresh <- struct{}{}
-					<-resume
+					engine.SyncAll(t.Context(), nil)
 				}
 			}
 		}),
@@ -168,7 +193,12 @@ func TestFirstImportRefreshesWhileOlderSessionsAreWritten(t *testing.T) {
 	t.Cleanup(engine.Close)
 	done := make(chan error, 1)
 	go func() {
-		_, _, err := engine.RunFirstImport(t.Context(), nil)
+		_, _, err := engine.RunFirstImport(t.Context(), func(progress Progress) {
+			if progress.Phase == PhaseSyncing && progress.SessionsDone == 200 {
+				paused <- struct{}{}
+				<-resume
+			}
+		})
 		done <- err
 	}()
 	select {
@@ -177,10 +207,21 @@ func TestFirstImportRefreshesWhileOlderSessionsAreWritten(t *testing.T) {
 		close(resume)
 		t.Fatal("no refresh while importing older sessions")
 	}
+	select {
+	case <-paused:
+	case <-time.After(30 * time.Second):
+		close(resume)
+		t.Fatal("import did not reach the pause")
+	}
 	page, err := archive.ListSessions(t.Context(), db.SessionFilter{Limit: 300})
 	close(resume)
 	require.NoError(t, err)
 	require.Greater(t, len(page.Sessions), 100)
 	require.Less(t, len(page.Sessions), 250)
-	require.NoError(t, <-done)
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("reentrant emitter blocked the import")
+	}
 }
