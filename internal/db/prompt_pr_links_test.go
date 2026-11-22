@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 	"time"
@@ -630,4 +631,60 @@ func TestToolPRLinksShellContextMissingNewInput(t *testing.T) {
 	got, err := d.GetSession(t.Context(), s.ID)
 	require.NoError(t, err)
 	assert.Empty(t, got.PRLinks)
+}
+
+func TestShellTaintPrefilterAndBackfill(t *testing.T) {
+	d := testDB(t)
+	cases := []struct {
+		name, command      string
+		candidate, tainted bool
+	}{
+		{"substitution", `echo "$(date)"`, false, false},
+		{"parentheses", `printf '(hello world)'`, false, false},
+		{"function", `work() { :; }`, true, true},
+		{"spaced function", `work ( ) { :; }`, true, true},
+		{"continued function", "work(\\\n) { :; }", true, true},
+		{"keyword function", `function work { :; }`, true, true},
+		{"subshell function", `work() ( : )`, true, true},
+		{"cd", `cd /elsewhere`, true, true},
+		{"pushd", `pushd /elsewhere`, true, true},
+		{"popd", `popd`, true, true},
+		{"eval", `eval true`, true, true},
+		{"source", `source script`, true, true},
+		{"dot source", `. script`, true, true},
+		{"dot tab", ".\tscript", true, true},
+		{"dot only", `.`, true, true},
+		{"dot semicolon", `.; true`, true, true},
+		{"dot continued", ".\\\n script", true, true},
+		{"repo assignment", `GH_REPO=example/other`, true, true},
+		{"host assignment", `export GH_HOST=example.com`, true, true},
+		{"unset", `unset GH_REPO`, true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			encoded, err := json.Marshal(map[string]string{"command": tc.command})
+			require.NoError(t, err)
+			var candidate bool
+			require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT `+shellTaintCandidateSQL+` FROM (SELECT ? AS input_json) t`, string(encoded)).Scan(&candidate))
+			assert.Equal(t, tc.candidate, candidate)
+			s := Session{ID: tc.name, Project: "project", Machine: "local", Agent: "claude", Cwd: "/work/repo"}
+			require.NoError(t, d.UpsertSession(t.Context(), s))
+			obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://github.com/example/repo.git")
+			require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), obs))
+			require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Ordinal: 0, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: string(encoded)}}}}))
+			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_shell_tainted=NULL WHERE id=?`, s.ID)
+				return err
+			}))
+			require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42"}`}}}}))
+			got, err := d.GetSession(t.Context(), s.ID)
+			require.NoError(t, err)
+			if tc.tainted {
+				assert.Empty(t, got.PRLinks)
+			} else {
+				require.Len(t, got.PRLinks, 1)
+				assert.Equal(t, 42, got.PRLinks[0].Number)
+			}
+		})
+	}
 }

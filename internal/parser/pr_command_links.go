@@ -53,16 +53,10 @@ func shellLiteral(parts []syntax.WordPart) (string, bool) {
 }
 
 // CommandPRLinks derives links and reports whether the shell context changed.
-func CommandPRLinks(ctx context.Context, command, remote string) ([]PRLink, bool, error) {
-	links, _, changed, err := CommandPRLinkSets(ctx, command, "", remote)
-	return links, changed, err
-}
-
-// CommandPRLinkSets also returns links that do not rely on the checkout remote.
-func CommandPRLinkSets(ctx context.Context, command, cwd, remote string) ([]PRLink, []PRLink, bool, error) {
+func CommandPRLinks(ctx context.Context, command, cwd, remote string) ([]PRLink, bool, error) {
 	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
 	if err != nil {
-		return nil, nil, true, nil
+		return nil, true, nil
 	}
 	var calls []shellCall
 	tainted := false
@@ -103,7 +97,7 @@ func CommandPRLinkSets(ctx context.Context, command, cwd, remote string) ([]PRLi
 					}
 				case "pushd", "popd", "eval", "source", ".":
 					tainted = true
-				case "export", "unset":
+				case "unset":
 					for _, arg := range call.Words[1:] {
 						name, _, _ := strings.Cut(arg, "=")
 						if name == "GH_REPO" || name == "GH_HOST" {
@@ -117,25 +111,41 @@ func CommandPRLinkSets(ctx context.Context, command, cwd, remote string) ([]PRLi
 		}
 		return true
 	})
-	var lists, explicitLists [][]PRLink
+	var lists [][]PRLink
 	for _, call := range calls {
 		if err := ctx.Err(); err != nil {
-			return nil, nil, false, err
+			return nil, false, err
 		}
 		callRemote := remote
 		if call.Tainted {
 			callRemote = ""
 		}
 		lists = append(lists, ghPRCallLinks(ctx, call, callRemote))
-		explicitLists = append(explicitLists, ghPRCallLinks(ctx, call, ""))
 		links, err := PromptPRLinksContext(ctx, launcherPrompt(call.Words, call.Literal))
 		if err != nil {
-			return nil, nil, false, err
+			return nil, false, err
 		}
 		lists = append(lists, links)
-		explicitLists = append(explicitLists, links)
 	}
-	return CombinePRLinks(lists...), CombinePRLinks(explicitLists...), tainted, ctx.Err()
+	return CombinePRLinks(lists...), tainted, ctx.Err()
+}
+
+// repoFlag reports whether args[i] is a -R or --repo option, its value, and
+// the index of its last word, or -1 when the value is missing or not literal.
+func repoFlag(call shellCall, i int) (string, int, bool) {
+	arg := call.Words[i]
+	switch {
+	case arg == "-R" || arg == "--repo":
+		if i+1 >= len(call.Words) || !call.Literal[i+1] {
+			return "", -1, true
+		}
+		return call.Words[i+1], i + 1, true
+	case strings.HasPrefix(arg, "--repo="):
+		return strings.TrimPrefix(arg, "--repo="), i, true
+	case strings.HasPrefix(arg, "-R") && len(arg) > 2:
+		return strings.TrimPrefix(arg[2:], "="), i, true
+	}
+	return "", i, false
 }
 
 func ghPRCallLinks(ctx context.Context, call shellCall, remote string) []PRLink {
@@ -146,20 +156,15 @@ func ghPRCallLinks(ctx context.Context, call shellCall, remote string) []PRLink 
 	repo, selector := "", ""
 	repoSpecified := false
 	i := 1
-	if i < len(args) && call.Literal[i] && (args[i] == "-R" || args[i] == "--repo") {
-		if i+1 >= len(args) || !call.Literal[i+1] {
+	for i < len(args) && call.Literal[i] {
+		value, last, isRepo := repoFlag(call, i)
+		if !isRepo {
+			break
+		}
+		if last < 0 {
 			return nil
 		}
-		repo = args[i+1]
-		repoSpecified = true
-		i += 2
-	}
-	if i < len(args) && call.Literal[i] && strings.HasPrefix(args[i], "--repo=") {
-		repo, repoSpecified = strings.TrimPrefix(args[i], "--repo="), true
-		i++
-	} else if i < len(args) && call.Literal[i] && strings.HasPrefix(args[i], "-R") && len(args[i]) > 2 {
-		repo, repoSpecified = strings.TrimPrefix(args[i][2:], "="), true
-		i++
+		repo, repoSpecified, i = value, true, last+1
 	}
 	if i+2 >= len(args) || !call.Literal[i] || !call.Literal[i+1] || args[i] != "pr" {
 		return nil
@@ -196,23 +201,11 @@ func ghPRCallLinks(ctx context.Context, call shellCall, remote string) []PRLink 
 			continue
 		}
 		arg := args[j]
-		if arg == "-R" || arg == "--repo" {
-			if j+1 >= len(args) || !call.Literal[j+1] {
+		if value, last, isRepo := repoFlag(call, j); isRepo {
+			if last < 0 {
 				return nil
 			}
-			j++
-			repo = args[j]
-			repoSpecified = true
-			continue
-		}
-		if strings.HasPrefix(arg, "--repo=") {
-			repo = strings.TrimPrefix(arg, "--repo=")
-			repoSpecified = true
-			continue
-		}
-		if strings.HasPrefix(arg, "-R") && len(arg) > 2 {
-			repo = strings.TrimPrefix(arg[2:], "=")
-			repoSpecified = true
+			repo, repoSpecified, j = value, true, last
 			continue
 		}
 		if strings.HasPrefix(arg, "-") {

@@ -11,7 +11,7 @@ import (
 func TestCommandPRLinksCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	_, _, err := CommandPRLinks(ctx, "gh pr view 42 -R example/repo", "")
+	_, _, err := CommandPRLinks(ctx, "gh pr view 42 -R example/repo", "", "")
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
@@ -37,7 +37,7 @@ EOF`, remote, ""},
 		{`gh pr view 42 --repo=`, remote, ""},
 	} {
 		t.Run(tc.command, func(t *testing.T) {
-			links, _, err := CommandPRLinks(t.Context(), tc.command, tc.remote)
+			links, _, err := CommandPRLinks(t.Context(), tc.command, "", tc.remote)
 			require.NoError(t, err)
 			if tc.want == "" {
 				assert.Empty(t, links)
@@ -70,7 +70,7 @@ func TestLauncherPromptPRLinks(t *testing.T) {
 	}
 	for _, tt := range launcherTests {
 		t.Run(tt.command, func(t *testing.T) {
-			links, _, err := CommandPRLinks(t.Context(), tt.command, "")
+			links, _, err := CommandPRLinks(t.Context(), tt.command, "", "")
 			require.NoError(t, err)
 			var urls []string
 			for _, link := range links {
@@ -82,7 +82,7 @@ func TestLauncherPromptPRLinks(t *testing.T) {
 }
 
 func TestCommandPRLinksBeforeDirectoryChange(t *testing.T) {
-	links, changed, err := CommandPRLinks(t.Context(), "gh pr view 42; cd /other; gh pr view 43", "https://github.com/example/repo.git")
+	links, changed, err := CommandPRLinks(t.Context(), "gh pr view 42; cd /other; gh pr view 43", "", "https://github.com/example/repo.git")
 	require.NoError(t, err)
 	assert.True(t, changed)
 	require.Len(t, links, 1)
