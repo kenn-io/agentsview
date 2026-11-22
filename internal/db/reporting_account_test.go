@@ -12,6 +12,13 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 )
 
+func TestCursorAccountPollRangeUsesHourIndex(t *testing.T) {
+	d := testDB(t)
+	plan := strings.Join(explainQueryPlan(t, d, `SELECT account_user_id, hour_start FROM cursor_account_polls WHERE hour_start >= ? AND hour_start < ?`, 0, 3600), "\n")
+	assert.Contains(t, plan, "SEARCH cursor_account_polls")
+	assert.Contains(t, plan, "hour_start>? AND hour_start<?")
+}
+
 func TestCursorAccountHoursIncludesClearedAttribution(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()

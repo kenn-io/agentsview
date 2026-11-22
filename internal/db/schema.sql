@@ -376,6 +376,7 @@ CREATE TABLE IF NOT EXISTS cursor_account_polls (
     polled_at TEXT NOT NULL,
     PRIMARY KEY (account_user_id, hour_start)
 );
+CREATE INDEX IF NOT EXISTS idx_cursor_account_polls_hour ON cursor_account_polls(hour_start);
 
 -- Tool calls table
 CREATE TABLE IF NOT EXISTS tool_calls (

@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS cursor_account_polls (
     hour_start INTEGER NOT NULL,
     polled_at TEXT NOT NULL,
     PRIMARY KEY (account_user_id, hour_start)
-);`
+);
+CREATE INDEX IF NOT EXISTS idx_cursor_account_polls_hour ON cursor_account_polls(hour_start);`
 
 func (db *DB) ensureCursorUsageEventsSchemaLocked(ctx context.Context, w *writerHandle) error {
 	if _, err := w.Exec(ctx, `
