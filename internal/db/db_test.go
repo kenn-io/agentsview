@@ -4817,6 +4817,7 @@ func TestCheckFTSModuleLoadsDoesNotReadContent(t *testing.T) {
 	_, err = w.Exec(t.Context(), "SELECT 1 FROM messages_fts LIMIT 1")
 	require.Error(t, err)
 	require.NoError(t, d.checkFTSModuleLoads(t.Context(), w))
+	assert.True(t, d.HasFTS(t.Context()), "FTS index should remain available without the content view")
 }
 
 func TestOpenRejectsArchiveWhoseFTSModuleIsUnavailable(t *testing.T) {
