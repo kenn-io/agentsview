@@ -11,6 +11,10 @@ The latest release is
 
 **New features**
 
+- Read large MCP pattern-search results, messages, and tool calls in pages that fit
+  within a 12,000-byte response budget. A page can contain fewer items than the
+  requested limit or a shorter message chunk, and reports how to continue.
+
 - Sync ChatGPT chats into AgentsView without waiting for an export email. Run
   `agentsview source import --type chatgpt --sync` with Chrome open and signed
   in to ChatGPT. Later runs fetch only chats that changed. New turns are added

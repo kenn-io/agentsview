@@ -333,6 +333,12 @@ for semantic and hybrid searches or when activity filtering or candidate limits
 prevent an exact count. Failed probes add no hint. Default scope already
 includes child sessions.
 
+Pattern searches, `get_messages`, and `get_tool_calls` cap responses at 12,000
+bytes. When a page is cut, `omitted` counts the items held back. Pageable
+searches report `total` up to 500, with `total_capped` when more matches exist.
+Message pages report `message_count`. Ranked searches have no cursor; reduce
+`limit` when results are omitted.
+
 `next_cursor` is present when another page exists. To continue `search_content`,
 pass `next_cursor` as the numeric `cursor` and echo the returned RFC3339
 `activity_cutoff` unchanged. The cutoff keeps the recent-activity exclusion

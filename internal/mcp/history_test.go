@@ -327,6 +327,109 @@ func TestRedactToolInput_MasksEscapedPrivateKey(t *testing.T) {
 	assert.Contains(t, plain, "not json")
 }
 
+func TestGetToolCalls_BudgetPages(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "budget-calls", "proj")
+	messages := make([]db.Message, 0, 200)
+	for i := range 200 {
+		messages = append(messages, toolCallMsg("budget-calls", i, db.ToolCall{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"` + strings.Repeat("x", 5000) + `"}`}))
+	}
+	dbtest.SeedMessages(t, d, messages...)
+	in := toolCallsIn{SessionID: "budget-calls", Limit: 200, MaxInputChars: 10000}
+	var ordinals []int
+	for i := 0; ; i++ {
+		require.Less(t, i, len(messages)+1, "tool call pagination did not end")
+		_, out, err := ts.toolCalls(t.Context(), nil, in)
+		require.NoError(t, err)
+		assert.True(t, fitsResponse(out))
+		for _, call := range out.ToolCalls {
+			ordinals = append(ordinals, call.Ordinal)
+		}
+		if out.NextCursor == nil {
+			break
+		}
+		in.Cursor = *out.NextCursor
+	}
+	require.Len(t, ordinals, 200)
+	for i, ordinal := range ordinals {
+		assert.Equal(t, i, ordinal)
+	}
+}
+
+func TestGetToolCalls_BudgetOversized(t *testing.T) {
+	input := `{"command":"` + strings.Repeat("<", 9985) + `z"}`
+	for _, tc := range []struct {
+		name, toolName, input string
+		wantError             bool
+	}{
+		{name: "input", toolName: "Bash", input: input},
+		{name: "metadata", toolName: strings.Repeat("x", 12000), input: `{}`, wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts, d := newTestToolset(t)
+			dbtest.SeedSession(t, d, "large-input", "proj")
+			dbtest.SeedMessages(t, d,
+				toolCallMsg("large-input", 0, db.ToolCall{ToolName: tc.toolName, Category: "Bash", InputJSON: tc.input}),
+				toolCallMsg("large-input", 1, db.ToolCall{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"next"}`}),
+			)
+			_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "large-input", MaxInputChars: 10000})
+			if tc.wantError {
+				require.ErrorContains(t, err, "tool call metadata exceeds response budget")
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, out.ToolCalls, 1)
+			assert.True(t, fitsResponse(out))
+			assert.True(t, out.ToolCalls[0].InputTruncated)
+			require.NotNil(t, out.ToolCalls[0].Input)
+			assert.True(t, strings.HasPrefix(input, *out.ToolCalls[0].Input))
+			require.NotNil(t, out.NextCursor)
+			assert.Equal(t, 1, *out.NextCursor)
+		})
+	}
+}
+
+func TestGetToolCalls_BudgetShortEvents(t *testing.T) {
+	for _, tc := range []struct {
+		name, session, input, result     string
+		count, size, maxInput, maxResult int
+		resultContinues, completeSummary bool
+	}{
+		{name: "long input", session: "short-events", input: strings.Repeat("x", 10000), result: "summary", count: 68, size: 100, maxInput: 10000},
+		{name: "long result", session: "scan", input: strings.Repeat("x", 3000), result: strings.Repeat("y", 3000), count: 85, size: 64, maxResult: 3000, resultContinues: true},
+		{name: "complete summary", session: "summary-boundary", input: strings.Repeat("x", 10000), result: strings.Repeat("y", 560), count: 83, size: 64, maxInput: 10000, completeSummary: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts, d := newTestToolset(t)
+			dbtest.SeedSession(t, d, tc.session, "proj")
+			events := make([]db.ToolResultEvent, tc.count)
+			for i := range events {
+				events[i] = db.ToolResultEvent{EventIndex: i, Source: "tool_result", Content: strings.Repeat("x", tc.size)}
+			}
+			dbtest.SeedMessages(t, d, toolCallMsg(tc.session, 0, db.ToolCall{
+				ToolUseID: "call", ToolName: "wait_agent", InputJSON: tc.input,
+				ResultContent: tc.result, ResultEvents: events,
+			}))
+			_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: tc.session, IncludeResults: true, MaxInputChars: tc.maxInput, MaxResultChars: tc.maxResult})
+			require.NoError(t, err)
+			assert.True(t, fitsResponse(out))
+			require.Len(t, out.ToolCalls, 1)
+			require.Len(t, out.ToolCalls[0].ResultEvents, tc.count)
+			for _, event := range out.ToolCalls[0].ResultEvents {
+				assert.Equal(t, strings.Repeat("x", tc.size), event.Content)
+			}
+			if tc.completeSummary {
+				assert.Equal(t, tc.result, out.ToolCalls[0].Result)
+				assert.Empty(t, out.ToolCalls[0].ResultCursor)
+			}
+			if tc.resultContinues {
+				assert.NotEmpty(t, out.ToolCalls[0].Result)
+				assert.NotEmpty(t, out.ToolCalls[0].ResultCursor)
+			}
+		})
+	}
+}
+
 func TestGetToolCalls_IncludesResults(t *testing.T) {
 	ts, d := newTestToolset(t)
 	dbtest.SeedSession(t, d, "results", "proj")
@@ -680,4 +783,49 @@ func TestGetToolCalls_HTTPContinuesStoredResult(t *testing.T) {
 	require.Len(t, calls.ToolCalls, 1)
 	assert.Equal(t, "ed r", calls.ToolCalls[0].Result)
 	assert.NotEmpty(t, calls.ToolCalls[0].ResultCursor)
+}
+
+func TestGetToolCalls_ResumedCursorFitsLargerPages(t *testing.T) {
+	for _, field := range []string{"summary", "event"} {
+		t.Run(field, func(t *testing.T) {
+			ts, d := newTestToolset(t)
+			text := strings.Repeat("가", 12000)
+			dbtest.SeedSession(t, d, "resume", "proj")
+			call := db.ToolCall{ToolUseID: "call", ToolName: "wait_agent", ResultContent: "short"}
+			if field == "summary" {
+				call.ResultContent = text
+			} else {
+				call.ResultEvents = []db.ToolResultEvent{{AgentID: "agent-a", Source: "tool_result", Content: text}}
+			}
+			dbtest.SeedMessages(t, d, toolCallMsg("resume", 0, call))
+			read := func(c toolCallOut) (string, string) {
+				if field == "summary" {
+					return c.Result, c.ResultCursor
+				}
+				require.Len(t, c.ResultEvents, 1)
+				return c.ResultEvents[0].Content, c.ResultEvents[0].ResultCursor
+			}
+			_, page, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "resume", IncludeResults: true, MaxResultChars: 10000})
+			require.NoError(t, err)
+			require.Len(t, page.ToolCalls, 1)
+			assert.True(t, fitsResponse(page))
+			got, cursor := read(page.ToolCalls[0])
+			var recovered strings.Builder
+			recovered.WriteString(got)
+			for range len(text) {
+				if cursor == "" {
+					break
+				}
+				_, page, err = ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "resume", ResultCursor: cursor, MaxResultChars: 10000})
+				require.NoError(t, err)
+				require.Len(t, page.ToolCalls, 1)
+				assert.True(t, fitsResponse(page))
+				got, cursor = read(page.ToolCalls[0])
+				require.NotEmpty(t, got)
+				recovered.WriteString(got)
+			}
+			assert.Empty(t, cursor)
+			assert.Equal(t, text, recovered.String())
+		})
+	}
 }

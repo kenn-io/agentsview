@@ -81,6 +81,7 @@ type toolResultEventOut struct {
 
 type toolCallsOut struct {
 	ToolCalls  []toolCallOut `json:"tool_calls"`
+	Omitted    int           `json:"omitted,omitempty"`
 	Total      *int          `json:"total,omitzero"`
 	NextCursor *int          `json:"next_cursor,omitempty"`
 }
@@ -147,27 +148,80 @@ func (t *toolset) toolCalls(
 		}
 	}
 	for _, tc := range matching[start:end] {
-		input, partial := redactToolInput(tc.InputJSON, maxChars)
-		input, cut := truncate(input, maxChars)
-		cut = cut || partial
-		call := toolCallOut{
-			Ordinal: tc.Ordinal, Timestamp: tc.Timestamp,
-			ToolName: tc.ToolName, Category: new(tc.Category),
-			Input: new(input), InputTruncated: cut,
-			SkillName: tc.SkillName, SubagentSessionID: tc.SubagentSessionID,
-			ResultLength: tc.ResultLength,
-		}
-		if in.IncludeResults {
-			if err := fillToolResult(&call, results[tc.Ordinal], tc.ToolCall, tc.position, in); err != nil {
-				return nil, toolCallsOut{}, err
-			}
+		call, err := toolCallPage(tc.ToolCall, tc.position, results[tc.Ordinal], in, maxChars)
+		if err != nil {
+			return nil, toolCallsOut{}, err
 		}
 		out.ToolCalls = append(out.ToolCalls, call)
 	}
 	if end < len(matching) {
 		out.NextCursor = &end
 	}
+	if !fitsResponse(out) {
+		items := out.ToolCalls
+		n := fitPrefix(len(items), func(k int) bool {
+			out.ToolCalls = items[:k]
+			out.Omitted = len(items) - k
+			next := start + max(k, 1)
+			out.NextCursor = &next
+			return fitsResponse(out)
+		})
+		if n == 0 {
+			out.Omitted = len(items) - 1
+			first := matching[start]
+			if !fitToolCall(&out, first.ToolCall, first.position, results[first.Ordinal], in, maxChars) {
+				return nil, toolCallsOut{}, errors.New("tool call metadata exceeds response budget")
+			}
+		}
+	}
 	return nil, out, nil
+}
+
+// resultBoundaries lists the result lengths where continuation fields change:
+// the summary's and each saved event's masked length, within the result limit.
+func resultBoundaries(m db.Message, position int, in toolCallsIn) []int {
+	maxResult := clampLimit(in.MaxResultChars, 1000, 10000)
+	boundaries := []int{1, maxResult + 1}
+	if in.IncludeResults {
+		stored := m.ToolCalls[position]
+		texts := []string{stored.ResultContent}
+		for _, ev := range stored.ResultEvents {
+			texts = append(texts, ev.Content)
+		}
+		for _, text := range texts {
+			if n := utf8.RuneCountInString(secrets.RedactJSON(text)); n > 1 && n <= maxResult {
+				boundaries = append(boundaries, n)
+			}
+		}
+	}
+	slices.Sort(boundaries)
+	return boundaries
+}
+
+// fitToolCall searches between result lengths where continuation fields change.
+func fitToolCall(out *toolCallsOut, tc service.ToolCall, position int, m db.Message, in toolCallsIn, maxInput int) bool {
+	boundaries := resultBoundaries(m, position, in)
+	best := 0
+	build := func(resultChars, inputChars int) bool {
+		narrow := in
+		narrow.MaxResultChars = resultChars
+		call, _ := toolCallPage(tc, position, m, narrow, inputChars)
+		out.ToolCalls = []toolCallOut{call}
+		return fitsResponse(out)
+	}
+	for i := 0; i+1 < len(boundaries); i++ {
+		lo, hi := boundaries[i], boundaries[i+1]-1
+		if lo > hi || !build(lo, 1) {
+			continue
+		}
+		k := fitPrefix(hi-lo, func(k int) bool { return build(lo+k, 1) })
+		best = lo + k
+	}
+	if best == 0 {
+		return false
+	}
+	fitPrefix(maxInput-1, func(k int) bool { return build(best, k+1) })
+	return true
 }
 
 func (t *toolset) toolResultContinuation(ctx context.Context, in toolCallsIn) (*mcp.CallToolResult, toolCallsOut, error) {
@@ -187,8 +241,25 @@ func (t *toolset) toolResultContinuation(ctx context.Context, in toolCallsIn) (*
 	if err != nil {
 		return nil, toolCallsOut{}, err
 	}
-	call.Ordinal = cursor.Ordinal
 	return nil, toolCallsOut{ToolCalls: []toolCallOut{call}}, nil
+}
+
+// toolCallPage builds one call's page: its masked input cut to inputChars and,
+// when requested, its result text cut to in.MaxResultChars.
+func toolCallPage(tc service.ToolCall, position int, m db.Message, in toolCallsIn, inputChars int) (toolCallOut, error) {
+	input, partial := redactToolInput(tc.InputJSON, inputChars)
+	input, cut := truncate(input, inputChars)
+	call := toolCallOut{
+		Ordinal: tc.Ordinal, Timestamp: tc.Timestamp,
+		ToolName: tc.ToolName, Category: new(tc.Category),
+		Input: new(input), InputTruncated: cut || partial,
+		SkillName: tc.SkillName, SubagentSessionID: tc.SubagentSessionID,
+		ResultLength: tc.ResultLength,
+	}
+	if in.IncludeResults {
+		return call, fillToolResult(&call, m, tc, position, in)
+	}
+	return call, nil
 }
 
 // toolCallLimit is the page size: a page with results defaults to one call.
@@ -247,7 +318,7 @@ func resultEventPage(base toolResultCursor, ev db.ToolResultEvent, maxChars int)
 // continueToolResult returns the next chunk of the one summary or event the
 // cursor names, once its masked text still matches the cursor's digest.
 func continueToolResult(cursor toolResultCursor, tc db.ToolCall, maxChars int) (toolCallOut, error) {
-	call := toolCallOut{ToolName: tc.ToolName, ResultLength: tc.ResultContentLength}
+	call := toolCallOut{Ordinal: cursor.Ordinal, ToolName: tc.ToolName, ResultLength: tc.ResultContentLength}
 	text, event := secrets.RedactJSON(tc.ResultContent), toolResultEventOut{}
 	if cursor.Event != nil {
 		i := slices.IndexFunc(tc.ResultEvents, func(ev db.ToolResultEvent) bool { return ev.EventIndex == *cursor.Event })
@@ -265,20 +336,26 @@ func continueToolResult(cursor toolResultCursor, tc db.ToolCall, maxChars int) (
 	if cursor.Offset >= len(runes) {
 		return call, errors.New("invalid result_cursor offset")
 	}
-	end := min(cursor.Offset+maxChars, len(runes))
-	chunk, more := string(runes[cursor.Offset:end]), end < len(runes)
-	cursor.Offset = end
-	next := ""
-	if more {
-		next = encodeToolResultCursor(cursor)
+	// page places s, and the cursor that follows it, where the cursor names.
+	page := func(s string) toolCallOut {
+		next, after := "", cursor
+		after.Offset += utf8.RuneCountInString(s)
+		if after.Offset < len(runes) {
+			next = encodeToolResultCursor(after)
+		}
+		out := call
+		if cursor.Event == nil {
+			out.Result, out.ResultTruncated, out.ResultCursor = s, next != "", next
+			return out
+		}
+		ev := event
+		ev.Content, ev.Truncated, ev.ResultCursor = s, next != "", next
+		out.ResultEvents = []toolResultEventOut{ev}
+		return out
 	}
-	if cursor.Event == nil {
-		call.Result, call.ResultTruncated, call.ResultCursor = chunk, more, next
-		return call, nil
-	}
-	event.Content, event.Truncated, event.ResultCursor = chunk, more, next
-	call.ResultEvents = []toolResultEventOut{event}
-	return call, nil
+	window := string(runes[cursor.Offset:min(cursor.Offset+maxChars, len(runes))])
+	chunk := fitText(window, responseBudgetBytes, func(s string) any { return toolCallsOut{ToolCalls: []toolCallOut{page(s)}} })
+	return page(chunk), nil
 }
 
 const toolResultCursorVersion = 1
