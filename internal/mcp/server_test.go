@@ -112,17 +112,47 @@ func TestNewServer_Instructions(t *testing.T) {
 				assert.Equal(t, "Use returned web_url values when linking to recorded sessions.", instructions)
 				return
 			}
-			assert.Contains(t, instructions, "search_content with mode hybrid, or search_sessions")
-			assert.Contains(t, instructions, "search_sessions with its name as query")
-			assert.Contains(t, instructions, "list_sessions with pr=owner/repo#N, include_one_shot true, include_automated true, and limit 100; page with next_cursor as cursor")
-			assert.Contains(t, instructions, "four search_content regex calls")
+			catalog, err := ct.ListTools(t.Context(), nil)
+			require.NoError(t, err)
+			for _, route := range []struct {
+				text string
+				tool string
+				args []string
+			}{
+				{"search_content with mode hybrid", ToolSearchContent, []string{"mode"}},
+				{"search_sessions for keywords", ToolSearchSessions, nil},
+				{"search_sessions with its name as query", ToolSearchSessions, []string{"query"}},
+				{"list_sessions with pr=owner/repo#N, include_one_shot and include_automated true", ToolListSessions, []string{"pr", "include_one_shot", "include_automated"}},
+				{"search_content with mode regex and each pattern", ToolSearchContent, []string{"mode", "pattern", "include_active", "include_one_shot", "include_automated", "current_session_id", "cursor"}},
+				{"get_session_overview, then", ToolGetSessionOverview, nil},
+				{"get_tool_calls", ToolGetToolCalls, nil},
+				{"get_messages", ToolGetMessages, nil},
+				{"get_child_sessions", ToolGetChildSessions, nil},
+				{"list_sessions with active_since", ToolListSessions, []string{"active_since"}},
+			} {
+				assert.Contains(t, instructions, route.text)
+				var found bool
+				for _, tool := range catalog.Tools {
+					if tool.Name != route.tool {
+						continue
+					}
+					found = true
+					raw, err := json.Marshal(tool.InputSchema)
+					require.NoError(t, err)
+					var schema struct {
+						Properties map[string]any `json:"properties"`
+					}
+					require.NoError(t, json.Unmarshal(raw, &schema))
+					for _, arg := range route.args {
+						assert.Contains(t, schema.Properties, arg, "%s argument", route.tool)
+					}
+				}
+				assert.True(t, found, "missing tool %s", route.tool)
+			}
+			assert.Contains(t, instructions, "For every PR, including a URL")
 			assert.Contains(t, instructions, `PR N\b, pr N\b, #N\b, and /pull/N\b`)
-			assert.Contains(t, instructions, "include_active, include_one_shot, and include_automated to true, limit to 50, and current_session_id")
-			assert.Contains(t, instructions, "Deduplicate session IDs, ignore the lookup conversation, and confirm repository and work evidence")
-			assert.Contains(t, instructions, "get_session_overview to compare activity and parent; follow a child to its parent, then choose the newest valid top-level session")
-			assert.Contains(t, instructions, `For a full PR URL, use /pull/N\b regex`)
+			assert.Contains(t, instructions, "identifying it by this question or search calls if its ID is unknown")
 			assert.Contains(t, instructions, "get_session_overview, then get_tool_calls, get_messages, or get_child_sessions")
-			assert.Contains(t, instructions, "list_sessions with active_since")
 			assert.Contains(t, instructions, "include_active in search_sessions and search_content")
 			assert.Contains(t, instructions, "include_one_shot and include_automated in list_sessions and search_content")
 			assert.Contains(t, instructions, "--server with API version "+strconv.Itoa(service.RawSessionLookupAPIVersion)+" or later")

@@ -56,9 +56,9 @@ const ToolGetCompactionSummaries = "get_compaction_summaries"
 var routeInstructions = "\nFind sessions by topic: use " + ToolSearchContent + " with mode hybrid, or " + ToolSearchSessions + " for keywords.\n" +
 	"Find a named session: use " + ToolSearchSessions + " with its name as query.\n" +
 	"Find who owns a PR or task:\n" +
-	"Use " + ToolListSessions + " with pr=owner/repo#N, include_one_shot true, include_automated true, and limit 100; page with next_cursor as cursor.\n" +
-	"Search tool results with four " + ToolSearchContent + " regex calls: PR N\\b, pr N\\b, #N\\b, and /pull/N\\b. For each, set include_active, include_one_shot, and include_automated to true, limit to 50, and current_session_id when known; page with next_cursor as cursor. For a full PR URL, use /pull/N\\b regex. For a task ID, use substring.\n" +
-	"Deduplicate session IDs, ignore the lookup conversation, and confirm repository and work evidence. Use " + ToolGetSessionOverview + " to compare activity and parent; follow a child to its parent, then choose the newest valid top-level session.\n" +
+	"Use " + ToolListSessions + " with pr=owner/repo#N, include_one_shot and include_automated true; page with next_cursor as cursor.\n" +
+	"For every PR, including a URL, use " + ToolSearchContent + " with mode regex and each pattern: PR N\\b, pr N\\b, #N\\b, and /pull/N\\b; for a task ID, use mode substring. Set include_active, include_one_shot, and include_automated true, and current_session_id if known; page with next_cursor as cursor.\n" +
+	"Discard the lookup session, identifying it by this question or search calls if its ID is unknown. Confirm repository and work evidence; use " + ToolGetSessionOverview + " to compare activity, follow children to their parent, and choose the newest valid top-level session.\n" +
 	"See what a session did: use " + ToolGetSessionOverview + ", then " + ToolGetToolCalls + ", " + ToolGetMessages + ", or " + ToolGetChildSessions + ".\n" +
 	"Find recently active sessions: use " + ToolListSessions + " with active_since as an RFC3339 timestamp.\n" +
 	"Session tools accept a stored ID such as codex:<uuid>. A plain UUID works locally or against a --server with API version " + strconv.Itoa(service.RawSessionLookupAPIVersion) + " or later; for an older --server, use the full stored ID from search or list results.\n" +
