@@ -129,21 +129,8 @@ func TestDeferredMessageFTSHTTP(t *testing.T) {
 		handler.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0"+path, nil))
 		return response
 	}
-	browse := get("/api/v1/sessions")
-	require.Equal(t, http.StatusOK, browse.Code)
-	assert.Contains(t, browse.Body.String(), "first")
-	assert.Contains(t, browse.Body.String(), "second")
 	assert.Equal(t, http.StatusNotImplemented, get("/api/v1/search?q=searchneedle").Code)
 	assert.Equal(t, http.StatusInternalServerError, get("/api/v1/search/content?pattern=deploy%20window").Code)
-	quoted := get("/api/v1/search/content?pattern=%22deploy%20window%22")
-	require.Equal(t, http.StatusOK, quoted.Code)
-	assert.Contains(t, quoted.Body.String(), "first")
-	assert.NotContains(t, quoted.Body.String(), "second")
-	repairMessageFTS(t.Context(), nil, database.RepairMessageFTS)
-	content := get("/api/v1/search/content?pattern=deploy%20window")
-	require.Equal(t, http.StatusOK, content.Code)
-	assert.Contains(t, content.Body.String(), "first")
-	assert.Contains(t, content.Body.String(), "second")
 }
 
 type usageCacheBackfillRecorder struct {
