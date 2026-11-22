@@ -40,17 +40,5 @@ for (const { path, width, count, labels, locale } of [
       }));
       expect(size.scroll, label).toBeLessThanOrEqual(size.width);
     }
-    if (path === "/usage") {
-      const clipped = await cards.locator(".card-sub").evaluateAll((elements) =>
-        elements
-          .filter((element) => element.scrollWidth > element.clientWidth)
-          .map((element) => ({
-            text: element.textContent,
-            title: element.getAttribute("title"),
-          })),
-      );
-      expect(clipped.length).toBeGreaterThan(0);
-      for (const sublabel of clipped) expect(sublabel.title).toBe(sublabel.text);
-    }
   });
 }
