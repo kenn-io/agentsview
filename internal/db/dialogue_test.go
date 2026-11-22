@@ -408,6 +408,7 @@ func TestRepairMessageFTSInvalidatesSavedSearchPage(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, worker.Close())
 		require.NoError(t, d.ReopenWriter())
+		require.False(t, d.HasFTS(t.Context()))
 		require.NoError(t, d.RepairMessageFTS(t.Context()))
 		page, err = d.Search(t.Context(), filter)
 		require.NoError(t, err)

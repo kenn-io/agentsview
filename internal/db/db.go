@@ -5536,6 +5536,9 @@ func (db *DB) checkFTSModuleLoads(
 
 // HasFTS checks if Full Text Search is available.
 func (db *DB) HasFTS(ctx context.Context) bool {
+	if db.messageFTSRepairPending.Load() {
+		return false
+	}
 	// We need to actually query the table, because it might exist in
 	// sqlite_master but fail to load if the fts5 module is missing in the
 	// current runtime. A MATCH reads the index instead of scanning rows, and
