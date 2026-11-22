@@ -993,12 +993,12 @@ type DB struct {
 	archiveContent atomic.Int32
 	// Rebuilds reserve attached IDs before their session rows are restored.
 	archiveRebuildProvenance atomic.Pointer[map[string]ArchiveSessionProvenance]
+	messageFTSRepairPending  atomic.Bool
 	// writerClosed is set while the writer pool is intentionally closed for a
 	// worker maintenance pass (CloseWriter). It lets write attempts report
 	// ErrWriterClosed instead of the generic read-only error.
-	writerClosed            atomic.Bool
-	messageFTSRepairPending atomic.Bool
-	dataStale               atomic.Bool // see NeedsResync
+	writerClosed atomic.Bool
+	dataStale    atomic.Bool // see NeedsResync
 	// extractAllowCandidateFindings narrows the recall-extraction secret
 	// gate to definite-confidence findings. Set by the extraction manager
 	// from [recall.extract] candidate_findings; false (every recorded
@@ -5650,8 +5650,7 @@ func (db *DB) init(ctx context.Context, progress OpenProgressFunc, deferMessageF
 		needsRepair := !hadFTS
 		if hadFTS {
 			var err error
-			needsRepair, err = refreshDialogueFTS(ctx, w)
-			if err != nil {
+			if needsRepair, err = refreshDialogueFTS(ctx, w); err != nil {
 				return err
 			}
 		}

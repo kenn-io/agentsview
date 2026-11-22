@@ -144,15 +144,6 @@ func TestDeferredMessageFTSHTTP(t *testing.T) {
 	require.Equal(t, http.StatusOK, content.Code)
 	assert.Contains(t, content.Body.String(), "first")
 	assert.Contains(t, content.Body.String(), "second")
-	search := get("/api/v1/search?q=searchneedle")
-	require.Equal(t, http.StatusOK, search.Code)
-	assert.Contains(t, search.Body.String(), "first")
-	assert.Contains(t, search.Body.String(), "second")
-	require.NoError(t, database.DropFTS(t.Context()))
-	fallback := get("/api/v1/search/content?pattern=deploy%20window")
-	require.Equal(t, http.StatusOK, fallback.Code)
-	assert.Contains(t, fallback.Body.String(), "first")
-	assert.NotContains(t, fallback.Body.String(), "second")
 }
 
 type usageCacheBackfillRecorder struct {

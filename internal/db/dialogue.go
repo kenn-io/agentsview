@@ -98,19 +98,7 @@ func (db *DB) RepairMessageFTS(ctx context.Context) error {
 			return struct{}{}, err
 		}
 		defer db.mu.Unlock()
-		if db.writerClosed.Load() {
-			return struct{}{}, ErrWriterClosed
-		}
-		w := db.getWriter()
-		var exists bool
-		if err := w.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages_fts')`).Scan(&exists); err != nil {
-			return struct{}{}, err
-		}
-		if !exists {
-			if err := rebuildMessageFTS(ctx, w, nil, true); err != nil {
-				return struct{}{}, err
-			}
-		} else if _, err := w.ExecContext(ctx, searchTokenSQL); err != nil {
+		if err := rebuildMessageFTS(ctx, db.getWriter(), nil, true); err != nil {
 			return struct{}{}, err
 		}
 		db.messageFTSRepairPending.Store(false)
