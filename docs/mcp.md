@@ -137,6 +137,7 @@ match) and `pr` (`owner/repo`, `owner/repo#123`, or
 pull request links, and parent session. For details, see
 [labels](/docs/session-api/#agentsview-session-label) and
 [pull request links](/docs/session-api/#pull-request-links).
+Connection instructions use the `pr` filter before `search_content` finds references in tool results.
 
 With Docbank and every optional tool enabled, the full tool list is about 96 KB.
 `TestNewServer_CatalogFitsBudget` fails if it grows past 97 KB.

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -92,6 +93,85 @@ func TestNewServer_MemoryProfileRegistersOnlyEvidenceTools(t *testing.T) {
 		}
 	}
 	assert.ElementsMatch(t, []string{ToolSearchContent, ToolGetMessages, ToolGetMemoryStatus, ToolGetCompactionSummaries}, names)
+}
+
+func TestNewServer_Instructions(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		profile Profile
+	}{{"default", ""}, {"memory", ProfileMemory}} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := dbtest.OpenTestDB(t)
+			st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), Profile: tc.profile}))
+			defer func() {
+				require.NoError(t, ct.Close())
+				require.NoError(t, st.Wait())
+			}()
+			instructions := ct.InitializeResult().Instructions
+			if tc.profile == ProfileMemory {
+				assert.Equal(t, "Use returned web_url values when linking to recorded sessions.", instructions)
+				return
+			}
+			catalog, err := ct.ListTools(t.Context(), nil)
+			require.NoError(t, err)
+			for _, route := range []struct {
+				text string
+				tool string
+				args []string
+			}{
+				{"search_content with mode hybrid", ToolSearchContent, nil},
+				{"search_sessions for keywords", ToolSearchSessions, nil},
+				{"search_sessions with its name as query", ToolSearchSessions, []string{"query"}},
+				{"list_sessions with pr=owner/repo#N, include_one_shot and include_automated true", ToolListSessions, []string{"pr", "include_one_shot", "include_automated"}},
+				{"search_content with mode regex and each pattern", ToolSearchContent, []string{"mode", "pattern", "include_active", "include_one_shot", "include_automated", "current_session_id", "cursor"}},
+				{"get_session_overview, then", ToolGetSessionOverview, nil},
+				{"get_tool_calls", ToolGetToolCalls, nil},
+				{"get_messages", ToolGetMessages, nil},
+				{"get_child_sessions", ToolGetChildSessions, nil},
+				{"list_sessions with active_since", ToolListSessions, []string{"active_since"}},
+			} {
+				assert.Contains(t, instructions, route.text)
+				if len(route.args) == 0 {
+					continue
+				}
+				var line string
+				for candidate := range strings.SplitSeq(instructions, "\n") {
+					if strings.Contains(candidate, route.text) {
+						line = candidate
+						break
+					}
+				}
+				for _, arg := range route.args {
+					assert.Regexp(t, `\b`+arg+`\b`, line, "%s instruction", route.tool)
+				}
+				var found bool
+				for _, tool := range catalog.Tools {
+					if tool.Name != route.tool {
+						continue
+					}
+					found = true
+					raw, err := json.Marshal(tool.InputSchema)
+					require.NoError(t, err)
+					var schema struct {
+						Properties map[string]any `json:"properties"`
+					}
+					require.NoError(t, json.Unmarshal(raw, &schema))
+					for _, arg := range route.args {
+						assert.Contains(t, schema.Properties, arg, "%s argument", route.tool)
+					}
+				}
+				assert.True(t, found, "missing tool %s", route.tool)
+			}
+			assert.Contains(t, instructions, "For every PR, including a URL")
+			assert.Contains(t, instructions, `PR N\b, pr N\b, #N\b, and /pull/N\b`)
+			assert.Contains(t, instructions, "identifying it by this question or search calls if its ID is unknown")
+			assert.Contains(t, instructions, "include_active in search_sessions and search_content")
+			assert.Contains(t, instructions, "include_one_shot and include_automated in list_sessions and search_content")
+			assert.Contains(t, instructions, "stored ID such as codex:<uuid>")
+			assert.Contains(t, instructions, "plain UUID works locally")
+			assert.Contains(t, instructions, "--server with API version "+strconv.Itoa(service.RawSessionLookupAPIVersion)+" or later")
+		})
+	}
 }
 
 func TestServer_GetMemoryStatus(t *testing.T) {

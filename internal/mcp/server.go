@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -51,6 +52,17 @@ const (
 const ToolGetSessionFileReferences = "get_session_file_references"
 
 const ToolGetCompactionSummaries = "get_compaction_summaries"
+
+var routeInstructions = "\nFind sessions by topic: use " + ToolSearchContent + " with mode hybrid, or " + ToolSearchSessions + " for keywords.\n" +
+	"Find a named session: use " + ToolSearchSessions + " with its name as query.\n" +
+	"Find who owns a PR or task:\n" +
+	"Use " + ToolListSessions + " with pr=owner/repo#N, include_one_shot and include_automated true; page with next_cursor as cursor.\n" +
+	"For every PR, including a URL, use " + ToolSearchContent + " with mode regex and each pattern: PR N\\b, pr N\\b, #N\\b, and /pull/N\\b; for a task ID, use mode substring. Set include_active, include_one_shot, and include_automated true, and current_session_id if known; page with next_cursor as cursor.\n" +
+	"Discard the lookup session, identifying it by this question or search calls if its ID is unknown. Confirm repository and work evidence; use " + ToolGetSessionOverview + " to compare activity, follow children to their parent, and choose the newest valid top-level session.\n" +
+	"See what a session did: use " + ToolGetSessionOverview + ", then " + ToolGetToolCalls + ", " + ToolGetMessages + ", or " + ToolGetChildSessions + ".\n" +
+	"Find recently active sessions: use " + ToolListSessions + " with active_since as an RFC3339 timestamp.\n" +
+	"Session tools accept a stored ID such as codex:<uuid>. A plain UUID works locally or against a --server with API version " + strconv.Itoa(service.RawSessionLookupAPIVersion) + " or later; for an older --server, use the full stored ID from search or list results.\n" +
+	"Results can hide sessions unless a flag is set: include_active in " + ToolSearchSessions + " and " + ToolSearchContent + "; include_one_shot and include_automated in " + ToolListSessions + " and " + ToolSearchContent + "."
 
 // Profile selects the tools advertised by an MCP server while keeping their
 // implementations and schemas shared.
@@ -106,6 +118,10 @@ func newServer(opts ServeOptions) *mcp.Server {
 	if version == "" {
 		version = "dev"
 	}
+	instructions := "Use returned web_url values when linking to recorded sessions."
+	if opts.Profile != ProfileMemory {
+		instructions += routeInstructions
+	}
 	s := mcp.NewServer(&mcp.Implementation{
 		Name:       "agentsview",
 		Title:      "agentsview session history",
@@ -116,7 +132,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 			MIMEType: "image/png",
 			Sizes:    []string{"256x256"},
 		}},
-	}, &mcp.ServerOptions{Instructions: "Use returned web_url values when linking to recorded sessions."})
+	}, &mcp.ServerOptions{Instructions: instructions})
 
 	s.AddReceivingMiddleware(argumentHints)
 
