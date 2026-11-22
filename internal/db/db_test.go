@@ -4809,9 +4809,8 @@ func TestFTSBackfill(t *testing.T) {
 func TestCheckFTSModuleLoadsDoesNotReadContent(t *testing.T) {
 	d := testDB(t)
 	requireFTS(t, d)
-	insertSession(t, d, "s1", "proj")
-	insertMessages(t, d, userMsg("s1", 0, "indexed text"))
 	w := d.getWriter()
+	// Make any content scan fail, while leaving the FTS index available.
 	_, err := w.Exec(t.Context(), `DROP VIEW message_search_content;
 		CREATE VIEW message_search_content AS SELECT * FROM missing_content`)
 	require.NoError(t, err)
