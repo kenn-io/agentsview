@@ -2870,7 +2870,7 @@ func TestOpenReadOnlyDBRejectsStaleArchive(t *testing.T) {
 	require.NoError(t, writer.Close())
 	raw, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
-	_, err = raw.ExecContext(t.Context(), fmt.Sprintf("PRAGMA user_version = %d", db.CurrentDataVersion()-1))
+	_, err = raw.ExecContext(t.Context(), "PRAGMA user_version = 0")
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 
