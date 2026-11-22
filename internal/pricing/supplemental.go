@@ -90,9 +90,12 @@ type FixedPricingAlias struct {
 // writes k2d6-agent for the K2.6 era. Codex also writes codex-auto-review for
 // auto-review threads and doesn't say which model serves them. Muse Code
 // writes bare Muse Spark ids that match both the meta/ and openrouter/meta/
-// catalog rows, so they map to Meta's own rows. A static supplemental rate
-// row for these names would hide later catalog updates for the canonical
-// model, including Pydantic time-window rates for GPT-5.6 Luna.
+// catalog rows, so they map to Meta's own rows. LiteLLM lists Gemini 4 models
+// only under provider-qualified prefixes (gemini/, vertex_ai/, github_copilot/),
+// so bare Gemini 4 ids map to Google's gemini/ rows for flat fallback while
+// GenAI Prices still matches them through Google's provider rules. A static
+// supplemental rate row for these names would hide later catalog updates for
+// the canonical model, including Pydantic time-window rates.
 var fixedPricingAliases = []FixedPricingAlias{
 	{Name: "k2d6-agent", Canonical: KimiK26Canonical},
 	{Name: GPTReserveModelName, Canonical: GPT56LunaCanonical},
@@ -106,6 +109,10 @@ var fixedPricingAliases = []FixedPricingAlias{
 	{Name: "muse-spark-1.3", Canonical: "meta/muse-spark-1.3", Exact: true},
 	{Name: "muse-spark-1.2-contributor", Canonical: "meta/muse-spark-1.2-contributor", Exact: true},
 	{Name: "muse-spark-1.3-contributor", Canonical: "meta/muse-spark-1.3-contributor", Exact: true},
+	{Name: "gemini-4-argon", Canonical: "gemini/gemini-4-argon", Exact: true},
+	{Name: "gemini-4-carbon", Canonical: "gemini/gemini-4-carbon", Exact: true},
+	{Name: "gemini-4-hydrogen", Canonical: "gemini/gemini-4-hydrogen", Exact: true},
+	{Name: "gemini-4-neon", Canonical: "gemini/gemini-4-neon", Exact: true},
 }
 
 // DateAliasedModels returns the sorted unqualified date-ambiguous
@@ -210,7 +217,9 @@ func isDateAliasedModel(model string) bool {
 	return slices.Contains(kimiAmbiguousDateAliases, pricingAliasName(model))
 }
 
-func fixedCanonicalModel(model string) string {
+// FixedCanonicalModel returns the timestamp-independent catalog target for
+// model, or "" when model is not a fixed alias.
+func FixedCanonicalModel(model string) string {
 	name := pricingAliasName(model)
 	for _, alias := range fixedPricingAliases {
 		if alias.Name == model || (!alias.Exact && alias.Name == name) {
@@ -234,7 +243,7 @@ func pricingAliasName(model string) string {
 // for any other model. A zero time falls back to the post-cutoff K3
 // model only for date-ambiguous aliases.
 func CanonicalModelForDate(model string, t time.Time) string {
-	if canonical := fixedCanonicalModel(model); canonical != "" {
+	if canonical := FixedCanonicalModel(model); canonical != "" {
 		return canonical
 	}
 	if !isDateAliasedModel(model) {
@@ -251,7 +260,7 @@ func CanonicalModelForDate(model string, t time.Time) string {
 // an empty or unparseable timestamp falls back to K3 only for date-ambiguous
 // aliases.
 func CanonicalModelForTimestamp(model, ts string) string {
-	if canonical := fixedCanonicalModel(model); canonical != "" {
+	if canonical := FixedCanonicalModel(model); canonical != "" {
 		return canonical
 	}
 	if !isDateAliasedModel(model) {

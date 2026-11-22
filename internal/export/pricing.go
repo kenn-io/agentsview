@@ -575,6 +575,13 @@ func (r *PricingResolver) resolveFlat(
 		pricedModel = reportedModel
 	}
 	flatLookup := r.Lookup(pricedModel)
+	if !flatLookup.OK {
+		if slug := pricingpkg.DisplayNameModelID(pricedModel); slug != pricedModel {
+			if target := pricingpkg.FixedCanonicalModel(slug); target != "" {
+				flatLookup = r.Lookup(target)
+			}
+		}
+	}
 	return pricedModel, flatLookup,
 		flatLookup.OK && flatLookup.Rates.Source == PricingRowSourceCustom
 }
@@ -626,9 +633,9 @@ type genAICandidate struct {
 	priced   string
 }
 
-// genAICandidates is a fixed array (four aliases, two candidates each) to stay off the heap.
+// genAICandidates is a fixed array (five aliases, two candidates each) to stay off the heap.
 type genAICandidates struct {
-	items [8]genAICandidate
+	items [10]genAICandidate
 	count int
 }
 
@@ -640,7 +647,7 @@ func genAICandidatesFor(
 		lookup string
 		priced string
 	}
-	var aliasStorage [4]modelAlias
+	var aliasStorage [5]modelAlias
 	models := append(aliasStorage[:0],
 		modelAlias{lookup: reportedModel, priced: reportedModel})
 	if canonicalModel != "" && canonicalModel != reportedModel {
@@ -661,8 +668,17 @@ func genAICandidatesFor(
 			priced: pricedModel,
 		})
 	}
+	displaySlug := pricingpkg.DisplayNameModelID(pricedModel)
+	if displaySlug != pricedModel && displaySlug != reportedModel &&
+		displaySlug != canonicalModel && displaySlug != baseModel {
+		models = append(models, modelAlias{
+			lookup: displaySlug,
+			priced: pricedModel,
+		})
+	}
 	if fallbackModel != "" && fallbackModel != reportedModel &&
-		fallbackModel != canonicalModel && fallbackModel != baseModel {
+		fallbackModel != canonicalModel && fallbackModel != baseModel &&
+		fallbackModel != displaySlug {
 		models = append(models, modelAlias{
 			lookup: fallbackModel,
 			priced: pricedModel,

@@ -1631,3 +1631,152 @@ func TestPricingResolverDependencyFingerprint(t *testing.T) {
 		})
 	}
 }
+
+func TestPricingResolverResolvesGeminiDisplayNames(t *testing.T) {
+	genAI, err := pricingpkg.ParseGenAIPrices([]byte(`[
+		{
+			"id": "google",
+			"name": "Google",
+			"api_pattern": "https://example.invalid",
+			"model_match": {"contains": "gemini"},
+			"provider_match": {"or": [{"contains": "google"}, {"contains": "gemini"}]},
+			"models": [
+				{
+					"id": "gemini-4-neon",
+					"match": {"or": [{"equals": "gemini-4-neon"}, {"starts_with": "gemini-4-neon-preview"}]},
+					"prices": {"input_mtok": 3, "cache_read_mtok": 0.15, "output_mtok": 15}
+				},
+				{
+					"id": "gemini-4-argon",
+					"match": {"equals": "gemini-4-argon"},
+					"prices": [
+						{"prices": {"input_mtok": 2, "cache_read_mtok": 0.1, "output_mtok": 10}},
+						{"constraint": {"start_date": "2026-12-01"}, "prices": {"input_mtok": 4, "cache_read_mtok": 0.2, "output_mtok": 20}}
+					]
+				},
+				{
+					"id": "gemini-3.5-flash",
+					"match": {"equals": "gemini-3.5-flash"},
+					"prices": {"input_mtok": 1.5, "cache_read_mtok": 0.15, "output_mtok": 6}
+				}
+			]
+		}
+	]`))
+	require.NoError(t, err)
+
+	flatRows := []EffectivePricingRow{
+		{
+			ModelPattern: "gemini/gemini-4-neon",
+			Rates: ModelRates{
+				InputPerMTok:     money.MustParseDollars("3"),
+				OutputPerMTok:    money.MustParseDollars("15"),
+				CacheReadPerMTok: money.MustParseDollars("0.15"),
+				Source:           PricingRowSourceFetched,
+			},
+		},
+		{
+			ModelPattern: "vertex_ai/gemini-4-neon",
+			Rates: ModelRates{
+				InputPerMTok:     money.MustParseDollars("3"),
+				OutputPerMTok:    money.MustParseDollars("15"),
+				CacheReadPerMTok: money.MustParseDollars("0.15"),
+				Source:           PricingRowSourceFetched,
+			},
+		},
+		{
+			ModelPattern: "github_copilot/gemini-4-neon",
+			Rates: ModelRates{
+				InputPerMTok:     money.MustParseDollars("3"),
+				OutputPerMTok:    money.MustParseDollars("15"),
+				CacheReadPerMTok: money.MustParseDollars("0.15"),
+				Source:           PricingRowSourceFetched,
+			},
+		},
+	}
+
+	resolver := NewPricingResolver(append(slices.Clone(flatRows), EffectivePricingRow{
+		GenAI: genAI, GenAISource: PricingRowSourceFetched,
+	}))
+
+	nov := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
+	dec := time.Date(2026, 12, 2, 12, 0, 0, 0, time.UTC)
+
+	t.Run("timestamped display names match GenAI Prices including date windows", func(t *testing.T) {
+		tests := []struct {
+			model       string
+			at          time.Time
+			wantPattern string
+			wantInput   string
+			wantOutput  string
+			wantRead    string
+		}{
+			{"Gemini 4 Neon (High)", nov, "google/gemini-4-neon", "3", "15", "0.15"},
+			{"Gemini 4 Neon", nov, "google/gemini-4-neon", "3", "15", "0.15"},
+			{"Gemini 4 Argon (High)", nov, "google/gemini-4-argon", "2", "10", "0.1"},
+			{"Gemini 4 Argon (High)", dec, "google/gemini-4-argon", "4", "20", "0.2"},
+			{"Gemini 3.5 Flash (High)", nov, "google/gemini-3.5-flash", "1.5", "6", "0.15"},
+		}
+		for _, tt := range tests {
+			priced, lookup := resolver.ResolveAt(tt.model, tt.model, tt.at)
+			require.True(t, lookup.OK, "%s should resolve", tt.model)
+			assert.Equal(t, tt.model, priced)
+			assert.Equal(t, tt.wantPattern, lookup.Pattern)
+			assert.Equal(t, money.MustParseDollars(tt.wantInput), lookup.Rates.InputPerMTok)
+			assert.Equal(t, money.MustParseDollars(tt.wantOutput), lookup.Rates.OutputPerMTok)
+			assert.Equal(t, money.MustParseDollars(tt.wantRead), lookup.Rates.CacheReadPerMTok)
+		}
+	})
+
+	t.Run("untimestamped display name resolves via fixed Gemini 4 flat fallback", func(t *testing.T) {
+		priced, lookup := resolver.ResolveAt("Gemini 4 Neon (High)", "Gemini 4 Neon (High)", time.Time{})
+		require.True(t, lookup.OK)
+		assert.Equal(t, "Gemini 4 Neon (High)", priced)
+		assert.Equal(t, "gemini/gemini-4-neon", lookup.Pattern)
+		assert.Equal(t, money.MustParseDollars("3"), lookup.Rates.InputPerMTok)
+		assert.Equal(t, money.MustParseDollars("15"), lookup.Rates.OutputPerMTok)
+		assert.Equal(t, money.MustParseDollars("0.15"), lookup.Rates.CacheReadPerMTok)
+	})
+
+	t.Run("custom override wins over GenAI Prices for display name", func(t *testing.T) {
+		customResolver := NewPricingResolver([]EffectivePricingRow{
+			{
+				ModelPattern: "Gemini 4 Neon (High)",
+				Rates: ModelRates{
+					InputPerMTok: money.MustParseDollars("9"),
+					Source:       PricingRowSourceCustom,
+				},
+			},
+			{GenAI: genAI, GenAISource: PricingRowSourceFetched},
+		})
+		priced, lookup := customResolver.ResolveAt("Gemini 4 Neon (High)", "Gemini 4 Neon (High)", nov)
+		require.True(t, lookup.OK)
+		assert.Equal(t, "Gemini 4 Neon (High)", priced)
+		assert.Equal(t, PricingRowSourceCustom, lookup.Rates.Source)
+		assert.Equal(t, money.MustParseDollars("9"), lookup.Rates.InputPerMTok)
+	})
+
+	t.Run("dependency fingerprint tracks GenAI rate changes for display names", func(t *testing.T) {
+		updatedGenAI, parseErr := pricingpkg.ParseGenAIPrices([]byte(`[
+			{
+				"id": "google",
+				"name": "Google",
+				"api_pattern": "https://example.invalid",
+				"model_match": {"contains": "gemini"},
+				"models": [{
+					"id": "gemini-4-neon",
+					"match": {"equals": "gemini-4-neon"},
+					"prices": {"input_mtok": 5, "cache_read_mtok": 0.25, "output_mtok": 25}
+				}]
+			}
+		]`))
+		require.NoError(t, parseErr)
+		before, err := resolver.DependencyFingerprint("", "Gemini 4 Neon (High)", "Gemini 4 Neon (High)")
+		require.NoError(t, err)
+		afterResolver := NewPricingResolver(append(slices.Clone(flatRows), EffectivePricingRow{
+			GenAI: updatedGenAI, GenAISource: PricingRowSourceFetched,
+		}))
+		after, err := afterResolver.DependencyFingerprint("", "Gemini 4 Neon (High)", "Gemini 4 Neon (High)")
+		require.NoError(t, err)
+		assert.NotEqual(t, before, after)
+	})
+}

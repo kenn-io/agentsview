@@ -29,7 +29,8 @@ import (
 // new digest. Provider billing policies carry their own version in the
 // digest and need no bump here.
 // Version 3 reprices the mirror after codex-auto-review joined the fixed pricing aliases.
-const chUsagePriceFormatVersion = 3
+// Version 4 reprices the mirror after Gemini 4 fixed aliases and display-name slug matching joined pricing resolution.
+const chUsagePriceFormatVersion = 4
 
 // Persist error identity with its diagnostic text. The format version in the
 // digest keeps readers from decoding records written in the old string format.
@@ -426,6 +427,15 @@ func (c chUsagePriceContext) customPriced(pricing *export.PricingResolver) bool 
 	} {
 		if pricing.Lookup(model).Rates.Source == export.PricingRowSourceCustom {
 			return true
+		}
+		if slug := pricingpkg.DisplayNameModelID(model); slug != model {
+			if pricing.Lookup(slug).Rates.Source == export.PricingRowSourceCustom {
+				return true
+			}
+			if target := pricingpkg.FixedCanonicalModel(slug); target != "" &&
+				pricing.Lookup(target).Rates.Source == export.PricingRowSourceCustom {
+				return true
+			}
 		}
 	}
 	return false

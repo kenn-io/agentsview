@@ -41,6 +41,28 @@ func TestUsageLookupModelResolvesCodexAutoReview(t *testing.T) {
 		chUsageLookupModel("openai/codex-auto-review", ""))
 }
 
+func TestUsageLookupModelResolvesGemini4(t *testing.T) {
+	assert.Equal(t, "gemini/gemini-4-neon",
+		chUsageLookupModel("gemini-4-neon", "2026-11-21T12:00:00Z"))
+	assert.Equal(t, "vertex_ai/gemini-4-neon",
+		chUsageLookupModel("vertex_ai/gemini-4-neon", "2026-11-21T12:00:00Z"))
+}
+
+func TestUsagePriceContextCustomPricedDetectsGeminiDisplayNameTarget(t *testing.T) {
+	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
+		ModelPattern: "gemini/gemini-4-neon",
+		Rates: export.ModelRates{
+			InputPerMTok: money.MustParseDollars("9"),
+			Source:       export.PricingRowSourceCustom,
+		},
+	}})
+	ctx := chUsagePriceContext{
+		ReportedModel:  "Gemini 4 Neon (High)",
+		CanonicalModel: "Gemini 4 Neon (High)",
+	}
+	assert.True(t, ctx.customPriced(resolver))
+}
+
 func usagePriceTestDigest(
 	t *testing.T, rows []export.EffectivePricingRow, models ...chUsagePriceModel,
 ) string {
