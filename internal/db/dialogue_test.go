@@ -461,6 +461,7 @@ func TestRepairMessageFTSRollbackPreservesToken(t *testing.T) {
 
 func TestRepairMessageFTSCancellationRollsBack(t *testing.T) {
 	d := testDB(t)
+	seedWordSearch(t, d, "project", [3]string{"session", "deploy window", ""})
 	require.NoError(t, d.DropFTS(t.Context()))
 	d.messageFTSRepairPending.Store(true)
 	entered, resume := make(chan struct{}), make(chan struct{})
@@ -485,6 +486,8 @@ func TestRepairMessageFTSCancellationRollsBack(t *testing.T) {
 	close(resume)
 	require.ErrorIs(t, <-result, context.Canceled)
 	assert.False(t, d.HasFTS(t.Context()))
+	_, err = d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "deploy window", Limit: 50, Sources: []string{"messages"}})
+	require.ErrorIs(t, err, errFTSUnavailable)
 	conn, err = d.getWriter().Conn(t.Context())
 	require.NoError(t, err)
 	require.NoError(t, conn.Raw(func(raw any) error {
