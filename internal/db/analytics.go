@@ -1442,21 +1442,39 @@ func (db *DB) getAnalyticsActivityFilteredByModelTime(
 	}, nil
 }
 
+func activityMessageCounts(role string, thinking, system bool, subtype string, count int) (user, assistant, thought int) {
+	if role == "user" && !system && subtype != "tool_result" {
+		user = count
+	}
+	if role == "assistant" {
+		assistant = count
+	}
+	if thinking {
+		thought = count
+	}
+	return
+}
+
 // GetAnalyticsActivity returns session/message counts grouped
 // by time bucket.
 func (db *DB) GetAnalyticsActivity(
 	ctx context.Context, f AnalyticsFilter,
 	granularity string,
 ) (ActivityResponse, error) {
+	if granularity == "" {
+		granularity = "day"
+	}
+	if sessions, parts, handled, err := db.dashboardParts(ctx, f); err != nil {
+		return ActivityResponse{}, err
+	} else if handled {
+		return dashboardActivity(sessions, parts, f, granularity), nil
+	}
 	release, err := db.acquireBulkRead(ctx)
 	if err != nil {
 		return ActivityResponse{}, err
 	}
 	defer release()
 
-	if granularity == "" {
-		granularity = "day"
-	}
 	if strings.TrimSpace(f.Model) != "" {
 		return db.getAnalyticsActivityFilteredByModelTime(
 			ctx, f, granularity,
@@ -1542,17 +1560,10 @@ func (db *DB) GetAnalyticsActivity(
 		if role != nil {
 			entry.Messages += count
 			entry.ByAgent[agent] += count
-			switch *role {
-			case "user":
-				if !sys && sourceSubtype != "tool_result" {
-					entry.UserMessages += count
-				}
-			case "assistant":
-				entry.AssistantMessages += count
-			}
-			if hasThinking != nil && *hasThinking {
-				entry.ThinkingMessages += count
-			}
+			user, assistant, thinking := activityMessageCounts(*role, hasThinking != nil && *hasThinking, sys, sourceSubtype, count)
+			entry.UserMessages += user
+			entry.AssistantMessages += assistant
+			entry.ThinkingMessages += thinking
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -2103,6 +2114,11 @@ type HourOfWeekResponse struct {
 func (db *DB) GetAnalyticsHourOfWeek(
 	ctx context.Context, f AnalyticsFilter,
 ) (HourOfWeekResponse, error) {
+	if sessions, parts, handled, err := db.dashboardParts(ctx, f); err != nil {
+		return HourOfWeekResponse{}, err
+	} else if handled {
+		return dashboardHours(sessions, parts), nil
+	}
 	release, err := db.acquireBulkRead(ctx)
 	if err != nil {
 		return HourOfWeekResponse{}, err
@@ -3757,6 +3773,11 @@ func (db *DB) GetAnalyticsVelocity(
 }
 
 func (db *DB) analyticsVelocity(ctx context.Context, f AnalyticsFilter) (VelocityResponse, error) {
+	if sessions, parts, handled, err := db.dashboardParts(ctx, f); err != nil {
+		return VelocityResponse{}, err
+	} else if handled {
+		return dashboardVelocity(sessions, parts), nil
+	}
 	release, err := db.acquireBulkRead(ctx)
 	if err != nil {
 		return VelocityResponse{}, err

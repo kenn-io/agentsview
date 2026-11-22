@@ -956,6 +956,8 @@ type DB struct {
 	afterSearchRead      func()
 	trendsDisk           kept.Disk
 	trendsDiskOnce       sync.Once
+	dashboardFlights     kept.Flights[dashboardPartsResult]
+	dashboardMemo        dashboardPartsMemo
 	usageKept            kept.Memo[DailyUsageResult]
 	usageFlights         kept.Flights[DailyUsageResult]
 	sessionStatsFacts    *sessionStatsFactsMemo
@@ -3117,6 +3119,13 @@ END;
 CREATE TRIGGER IF NOT EXISTS sessions_trends_generation_update AFTER UPDATE OF transcript_revision ON sessions
 WHEN OLD.transcript_revision IS NOT NEW.transcript_revision BEGIN
     UPDATE sessions SET trends_generation=lower(hex(randomblob(16))) WHERE id=NEW.id;
+END;
+CREATE TRIGGER IF NOT EXISTS messages_dashboard_generation_insert AFTER INSERT ON messages BEGIN
+    UPDATE sessions SET tools_generation=NULL WHERE id=NEW.session_id AND tools_generation IS NOT NULL;
+END;
+CREATE TRIGGER IF NOT EXISTS messages_dashboard_generation_update AFTER UPDATE OF content_length ON messages
+WHEN OLD.content_length IS NOT NEW.content_length BEGIN
+    UPDATE sessions SET tools_generation=NULL WHERE id=NEW.session_id AND tools_generation IS NOT NULL;
 END;
 `
 
