@@ -1,7 +1,13 @@
 import { expect, test } from "@playwright/test";
 
 for (const { path, width, count, labels, locale } of [
-  { path: "/usage", width: 1350, count: 11, labels: ["Copilot AI Credits", "Uncached Input"], locale: "en" },
+  {
+    path: "/usage",
+    width: 1350,
+    count: 11,
+    labels: ["Copilot AI Credits", "Uncached Input"],
+    locale: "en",
+  },
   { path: "/activity", width: 871, count: 7, labels: ["Interactive peak"], locale: "en" },
   { path: "/analytics", width: 1035, count: 6, labels: ["Concentration"], locale: "en" },
   { path: "/activity", width: 871, count: 7, labels: ["Pic interactif"], locale: "fr" },
@@ -28,8 +34,23 @@ for (const { path, width, count, labels, locale } of [
     for (const label of labels) {
       const element = cards.locator(".card-label").getByText(label, { exact: true });
       await expect(element).toBeVisible();
-      const size = await element.evaluate((el) => ({ width: el.clientWidth, scroll: el.scrollWidth }));
+      const size = await element.evaluate((el) => ({
+        width: el.clientWidth,
+        scroll: el.scrollWidth,
+      }));
       expect(size.scroll, label).toBeLessThanOrEqual(size.width);
+    }
+    if (path === "/usage") {
+      const clipped = await cards.locator(".card-sub").evaluateAll((elements) =>
+        elements
+          .filter((element) => element.scrollWidth > element.clientWidth)
+          .map((element) => ({
+            text: element.textContent,
+            title: element.getAttribute("title"),
+          })),
+      );
+      expect(clipped.length).toBeGreaterThan(0);
+      for (const sublabel of clipped) expect(sublabel.title).toBe(sublabel.text);
     }
   });
 }
