@@ -42,8 +42,7 @@ CREATE TABLE IF NOT EXISTS cursor_account_polls (
     hour_start INTEGER NOT NULL,
     polled_at TEXT NOT NULL,
     PRIMARY KEY (account_user_id, hour_start)
-);
-CREATE INDEX IF NOT EXISTS idx_cursor_account_polls_hour ON cursor_account_polls(hour_start);`
+);`
 
 // Created after column migrations so older archives can open without a rebuild.
 const cursorAccountEventIndexSQL = `CREATE INDEX IF NOT EXISTS idx_cursor_usage_events_account_time
