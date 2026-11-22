@@ -114,8 +114,10 @@ func (db *DB) CursorAccountHours(ctx context.Context, start, end time.Time) ([]C
 	return hours, rows.Err()
 }
 
-const cursorAccountPreviousPollQuery = `INSERT INTO cursor_account_polls(account_user_id,hour_start,polled_at) SELECT account_user_id, ` + reportingCursorHour + `, ? FROM cursor_usage_events WHERE account_user_id != '' AND account_user_id != ? AND dedup_key != '' AND dedup_key IN (SELECT value FROM json_each(?)) AND account_polled_at < ? ON CONFLICT(account_user_id,hour_start) DO UPDATE SET polled_at = max(polled_at,excluded.polled_at)`
-const cursorAccountAssignQuery = `UPDATE cursor_usage_events SET account_user_id = ?, account_polled_at = ? WHERE dedup_key != '' AND dedup_key IN (SELECT value FROM json_each(?)) AND account_polled_at < ?`
+const (
+	cursorAccountPreviousPollQuery = `INSERT INTO cursor_account_polls(account_user_id,hour_start,polled_at) SELECT account_user_id, ` + reportingCursorHour + `, ? FROM cursor_usage_events WHERE account_user_id != '' AND account_user_id != ? AND dedup_key != '' AND dedup_key IN (SELECT value FROM json_each(?)) AND account_polled_at < ? ON CONFLICT(account_user_id,hour_start) DO UPDATE SET polled_at = max(polled_at,excluded.polled_at)`
+	cursorAccountAssignQuery       = `UPDATE cursor_usage_events SET account_user_id = ?, account_polled_at = ? WHERE dedup_key != '' AND dedup_key IN (SELECT value FROM json_each(?)) AND account_polled_at < ?`
+)
 
 // RecordCursorAccountPoll commits matched events and completed prior hours together.
 func (db *DB) RecordCursorAccountPoll(ctx context.Context, assignments map[string][]string, polledAt time.Time, hours []CursorAccountHour) error {
