@@ -364,14 +364,15 @@ with code 1.
 
 The command normally keeps the archive read-only. If opening read-only returns a
 typed missing-schema error for `archive_metadata`, `background_migrations`,
-`project_identity_observations`, or `session_project_identity_snapshots`, the
-command can create a missing one of those tables, or add an explicitly supported
-column to an existing `project_identity_observations` or
-`session_project_identity_snapshots` table, in one transaction before reopening
-read-only. An existing table with any other missing column is not eligible. The
-command does not initialize unrelated tables, run data repairs, or reclassify
-sessions. Any other missing core schema still requires the normal writable
-daemon migration or a full resync.
+`cursor_usage_events`, `cursor_account_polls`, `project_identity_observations`,
+or `session_project_identity_snapshots`, the command can create those tables
+when they are missing, or add an explicitly supported column to an existing
+`project_identity_observations`, `session_project_identity_snapshots`, or
+`cursor_usage_events` table, in one transaction before reopening read-only. An
+existing table with any other missing column is not eligible. The command does
+not initialize unrelated tables, run data repairs, or reclassify sessions. Any
+other missing core schema still requires the normal writable daemon migration or
+a full resync.
 
 When an older archive lacks per-session identity snapshots, the writable daemon
 reconstructs them in a resumable background migration. That reconstruction is
