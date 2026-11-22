@@ -56,7 +56,7 @@ func shellLiteral(parts []syntax.WordPart) (string, bool) {
 func CommandPRLinks(ctx context.Context, command, cwd, remote string) ([]PRLink, bool, error) {
 	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
 	if err != nil {
-		return nil, true, nil
+		return nil, true, nil //nolint:nilerr // Malformed optional shell input leaves the shell context unknown.
 	}
 	var calls []shellCall
 	tainted := false

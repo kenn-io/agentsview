@@ -444,7 +444,7 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 func codeModePRLinks(ctx context.Context, input, cwd, remote string) ([]PRLink, bool, error) {
 	ast, err := js.Parse(parse.NewInputString(input), js.Options{})
 	if err != nil {
-		return nil, false, nil
+		return nil, false, nil //nolint:nilerr // Skip malformed optional code-mode input without failing session processing.
 	}
 	visitor := &codeModeVisitor{ctx: ctx, cwd: cwd, remote: remote}
 	js.Walk(visitor, ast)
