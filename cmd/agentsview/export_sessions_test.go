@@ -619,7 +619,7 @@ func TestExportSessionsUpgradesRecordedRepositoryColumn(t *testing.T) {
 			if stale {
 				_, err = raw.ExecContext(t.Context(), "PRAGMA user_version=137")
 			} else {
-				_, err = raw.ExecContext(t.Context(), `PRAGMA user_version=184; DROP TABLE cursor_account_polls; ALTER TABLE cursor_usage_events DROP COLUMN account_user_id; ALTER TABLE cursor_usage_events DROP COLUMN account_polled_at`)
+				_, err = raw.ExecContext(t.Context(), `PRAGMA user_version=184; DROP TABLE cursor_account_polls; DROP INDEX idx_cursor_usage_events_account_time; ALTER TABLE cursor_usage_events DROP COLUMN account_user_id; ALTER TABLE cursor_usage_events DROP COLUMN account_polled_at`)
 			}
 			require.NoError(t, err)
 			var versionBefore int
