@@ -112,13 +112,13 @@ browser address is known.
 ## Shared metadata endpoints
 
 After subscribing to changes, the HTTP `/api/v1/events` stream sends
-`events_ready` on every connection. Repeat the `session` query parameter to
-include updates for those sessions on the same stream. The stream sends
-`session_ready` and `session.timing` for each session, and `session_missing`
-when the initial lookup finds that it does not exist or cannot be resolved.
-Reconnecting sends readiness again. To receive the changed session and message
-records themselves with a cursor for resuming, use the
-[change stream](/docs/conversation-export/#follow-changes-live).
+`events_ready` on every connection. If you want updates for specific sessions on
+the same stream, you can repeat the `session` query parameter. For each one, the
+stream sends `session_ready` and `session.timing`, or `session_missing` if the
+initial lookup finds that the session does not exist or cannot be resolved. When
+you reconnect, the stream sends the readiness events again. To receive the
+changed session and message records themselves with a cursor for resuming, use
+the [change stream](/docs/conversation-export/#follow-changes-live).
 
 The web UI and generated API clients fetch filter options from these shared
 metadata endpoints:
