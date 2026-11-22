@@ -295,7 +295,11 @@ func appendSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id
 		return err
 	}
 	hasTools := false
-	for _, message := range messages {
+	firstOrdinal := 0
+	for i, message := range messages {
+		if i == 0 {
+			firstOrdinal = message.Ordinal
+		}
 		for _, call := range message.ToolCalls {
 			if call.Category == "Bash" || call.Category == "Task" {
 				hasTools = true
@@ -312,7 +316,7 @@ func appendSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id
 		}
 		tainted := state.Bool
 		if !state.Valid {
-			_, tainted, err = storedToolCallPRLinksTx(ctx, tx, id, cwd, remote, &messages[0].Ordinal)
+			_, tainted, err = storedToolCallPRLinksTx(ctx, tx, id, cwd, remote, &firstOrdinal)
 			if err != nil {
 				return err
 			}
