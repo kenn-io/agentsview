@@ -361,7 +361,7 @@ test: pricing-snapshot ensure-embed-dir
 
 .PHONY: test-cursor-account-reporting
 test-cursor-account-reporting: pricing-snapshot ensure-embed-dir
-	go test $(GO_TEST_P_FLAG) -tags "fts5" ./internal/db ./cmd/agentsview ./internal/cursorusage -run '^(TestCursorAccount|TestCursorEmptyPoll|TestCursorSync|TestExportReportingCursorAccount|TestListDailyUsageUsers|TestFetchAllUsageEvents|TestListUsageEventsRejectsNonNumericUserID)' -count=1
+	go test $(GO_TEST_P_FLAG) -tags "fts5" ./internal/db ./cmd/agentsview ./internal/cursorusage -run '^(TestCursorAccount|TestCursorEmptyPoll|TestCursorSync|TestExportReportingCursorAccount|TestListDailyUsageUsers|TestFetchAllUsageEvents|TestListUsageEventsRejectsNonNumericUserID|TestAccountUsageAgentMigrationPreservesCursorRows|TestOpenReadOnlyDBRejectsStaleArchive)' -count=1
 
 # Reproducible synthetic ingest, steady-state sync, and analytics measurements.
 .PHONY: perf-sim
