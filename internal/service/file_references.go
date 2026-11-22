@@ -12,7 +12,10 @@ import (
 	"go.kenn.io/agentsview/internal/integrations/docbank"
 )
 
-var ErrSessionNotFound = errors.New("session not found")
+var (
+	ErrSessionNotFound      = errors.New("session not found")
+	ErrRawLookupUnsupported = errors.New("server does not acknowledge raw session ID lookup")
+)
 
 type FileReferenceOccurrence struct {
 	MessageOrdinal int             `json:"message_ordinal"`

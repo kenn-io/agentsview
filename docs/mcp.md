@@ -111,6 +111,10 @@ client sees these tools:
 | `get_friction_digest`         | Read a dated Friction Log digest as Markdown or the summary object                                        |
 | `list_friction_patterns`      | List recurring friction patterns ranked by occurrences                                                    |
 
+Every session tool accepts a plain UUID. Ambiguous IDs list up to five matches.
+A trashed exact ID is reported missing. Remote raw ID lookup requires server
+API version 29 or later.
+
 `get_compaction_summaries` accepts either a session ID or an `active_since`
 timestamp. Its limit counts sessions, and passing 0 uses the default of 20.
 When you paginate with `next_cursor`, keep the same `active_since` value even
@@ -262,9 +266,21 @@ short or empty even with a `next_cursor`. Pass `include_active: true` when you
 want recent work included. When `search_sessions` returns an empty page with
 excluded active matches, the response includes `hints` with
 `retry_with: {"include_active": true}`. If you are recalling from a known
-conversation, pass its full ID as `current_session_id` so `search_content`
-excludes only that session before the result limit without hiding other recent
-work.
+conversation, pass a full stored ID or a raw UUID as `current_session_id` so
+`search_content` excludes only that session before the result limit without
+hiding other recent work. If the ID is not indexed yet, the search uses it as
+given. Ambiguous raw UUIDs return an error.
+
+Set `session_id` to a raw UUID or full stored session ID when you need one
+session. The lookup returns one metadata row, includes active sessions, ignores
+the other search arguments, and returns an error when the ID is missing or its
+raw suffix matches more than one session. A raw UUID matches an exact stored ID,
+an agent ID ending in `:<uuid>`, or a host ID ending in `~<uuid>`; the delimiter
+is part of the match, so a fork entry separated by `-` is not selected. The row
+has an empty `snippet`, `match_ordinal` set to `0`, and no `next_cursor`. Call
+`get_messages` with that ordinal to read the first message.
+`get_session_overview` provides a compact message preview. Use an exact full
+stored ID with an older server.
 
 `list_sessions` and `search_content` also exclude one-shot and automated
 sessions by default. Set `include_one_shot: true` or `include_automated: true`

@@ -296,30 +296,44 @@ func TestMessagesStatusMapping(t *testing.T) {
 	})
 }
 
-// An older daemon ignores raw_suffix and answers with substring matches;
-// the client must not hand those back as exact raw-suffix matches.
-func TestFindSessionIDsByRawSuffixRequiresServerAcknowledgement(t *testing.T) {
-	tests := []struct {
-		name    string
-		body    string
-		want    []string
-		wantErr string
+func TestFindSessionIDsByRawSuffixProbeFailure(t *testing.T) {
+	srv, _ := fixedServer(t, http.StatusInternalServerError, `{"error":"unavailable"}`)
+	_, err := NewHTTPBackend(srv.URL, "", false, "").FindSessionIDsByRawSuffix(t.Context(), "abc", 5)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, service.ErrRawLookupUnsupported)
+}
+
+func TestFindSessionIDsByRawSuffixVersionGate(t *testing.T) {
+	t.Run("unacknowledged response", func(t *testing.T) {
+		srv, _ := fixedServer(t, http.StatusOK, `{"ids":["claude:xabc"]}`)
+		ids, err := NewHTTPBackendForServer(srv.URL, "", HTTPServerCapabilities{APIVersion: 29}).FindSessionIDsByRawSuffix(t.Context(), "abc", 5)
+		require.ErrorIs(t, err, service.ErrRawLookupUnsupported)
+		assert.Nil(t, ids)
+	})
+	for _, tt := range []struct {
+		name      string
+		version   int
+		raw       string
+		wantError bool
 	}{
-		{name: "older server", body: `{"ids":["claude:abc123","claude:xabc"]}`, wantErr: "server does not acknowledge raw session ID lookup"},
-		{name: "explicit false", body: `{"ids":["claude:abc123"],"raw_suffix":false}`, wantErr: "server does not acknowledge raw session ID lookup"},
-		{name: "acknowledged", body: `{"ids":["claude:abc"],"raw_suffix":true}`, want: []string{"claude:abc"}},
-	}
-	for _, tt := range tests {
+		{"plain old server", 27, "u", true},
+		{"qualified old server", 27, "codex:u", true},
+		{"plain current server", 29, "u", false},
+	} {
 		t.Run(tt.name, func(t *testing.T) {
-			srv, _ := fixedServer(t, http.StatusOK, tt.body)
-			ids, err := NewHTTPBackend(srv.URL, "", false, "").FindSessionIDsByRawSuffix(t.Context(), "abc", 5)
-			if tt.wantErr != "" {
-				require.EqualError(t, err, tt.wantErr)
+			srv, requests := fixedServer(t, http.StatusOK, `{"ids":["host~codex:u"],"raw_suffix":true}`)
+			backend := NewHTTPBackendForServer(srv.URL, "", HTTPServerCapabilities{APIVersion: tt.version})
+			ids, err := backend.FindSessionIDsByRawSuffix(t.Context(), tt.raw, 5)
+			if tt.wantError {
+				require.ErrorIs(t, err, service.ErrRawLookupUnsupported)
+				require.ErrorContains(t, err, "server API version 27")
 				assert.Nil(t, ids)
+				assert.EqualValues(t, 0, requests.Load())
 				return
 			}
 			require.NoError(t, err)
-			assert.Equal(t, tt.want, ids)
+			assert.Equal(t, []string{"host~codex:u"}, ids)
+			assert.EqualValues(t, 1, requests.Load())
 		})
 	}
 }

@@ -76,6 +76,7 @@ type SessionService interface {
 	FindSessionIDsByPartial(ctx context.Context, partial string, limit int) ([]string, error)
 	// FindSessionIDsByRawSuffix matches an exact stored ID or a literal
 	// colon/tilde-delimited suffix before applying limit.
+	// An exact ID that names a trashed session matches nothing.
 	FindSessionIDsByRawSuffix(ctx context.Context, raw string, limit int) ([]string, error)
 	List(ctx context.Context, f ListFilter) (*SessionList, error)
 	Messages(ctx context.Context, id string, f MessageFilter) (*MessageList, error)
@@ -441,6 +442,10 @@ const SessionAnnotationsAPIVersion = 11
 // RecallTimeBoundsAPIVersion is the first daemon API that filters Recall
 // lists by updated_since and created_since; older daemons ignore them.
 const RecallTimeBoundsAPIVersion = 21
+
+// RawSessionLookupAPIVersion is the first daemon API that protects trashed
+// exact IDs during raw-suffix lookup.
+const RawSessionLookupAPIVersion = 29
 
 // ListFilter mirrors the HTTP query parameters in handleListSessions.
 // Field names map to HTTP query param names via json tags.

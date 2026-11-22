@@ -541,6 +541,23 @@ func TestGetToolCalls_ContinuesPlainTextResult(t *testing.T) {
 	require.ErrorIs(t, err, service.ErrSourceChanged)
 }
 
+func TestGetToolCalls_RawSessionIDResultContinuation(t *testing.T) {
+	ts, d := newTestToolset(t)
+	const rawID = "550e8400-e29b-41d4-a716-446655440000"
+	const storedID = "codex:" + rawID
+	dbtest.SeedSession(t, d, storedID, "proj")
+	dbtest.SeedMessages(t, d, toolCallMsg(storedID, 0, db.ToolCall{ToolUseID: "call", ToolName: "Bash", ResultContent: "saved result"}))
+	_, first, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: rawID, IncludeResults: true, MaxResultChars: 5})
+	require.NoError(t, err)
+	require.Len(t, first.ToolCalls, 1)
+	assert.Equal(t, "saved", first.ToolCalls[0].Result)
+	require.NotEmpty(t, first.ToolCalls[0].ResultCursor)
+	_, next, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: rawID, ResultCursor: first.ToolCalls[0].ResultCursor, MaxResultChars: 10})
+	require.NoError(t, err)
+	require.Len(t, next.ToolCalls, 1)
+	assert.Equal(t, " result", next.ToolCalls[0].Result)
+}
+
 type recordingMessageService struct {
 	service.SessionService
 	filters []service.MessageFilter

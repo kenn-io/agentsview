@@ -43,10 +43,10 @@ const (
 
 type toolCallsIn struct {
 	ResultCursor   string `json:"result_cursor,omitempty" jsonschema:"Continue a result or event."`
-	SessionID      string `json:"session_id"`
-	Category       string `json:"category,omitempty"`
+	SessionID      string `json:"session_id" jsonschema:"A full stored session ID or a raw UUID that matches one session."`
+	Category       string `json:"category,omitempty" jsonschema:"Only calls in this category: Read, Edit, Write, Bash, Grep, Glob, Task, Tool, or Other."`
 	Limit          int    `json:"limit,omitempty" jsonschema:"Default 50 (1 with results), max 200."`
-	Cursor         int    `json:"cursor,omitempty"`
+	Cursor         int    `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor."`
 	IncludeResults bool   `json:"include_results,omitempty"`
 	MaxResultChars int    `json:"max_result_chars,omitempty" jsonschema:"Per result or event: default 1000, max 10000 characters."`
 	MaxInputChars  int    `json:"max_input_chars,omitempty" jsonschema:"Per input: default 500, max 10000 characters."`
@@ -95,19 +95,14 @@ func (t *toolset) toolCalls(
 	if in.Cursor < 0 {
 		return nil, toolCallsOut{}, errors.New("cursor must not be negative")
 	}
-	list, err := t.svc.ToolCalls(ctx, in.SessionID)
+	detail, err := t.resolveSession(ctx, in.SessionID)
 	if err != nil {
 		return nil, toolCallsOut{}, err
 	}
-	if len(list.ToolCalls) == 0 {
-		// An unknown session also has no tool calls; tell the two apart.
-		detail, err := t.svc.Get(ctx, in.SessionID)
-		if err != nil {
-			return nil, toolCallsOut{}, err
-		}
-		if detail == nil {
-			return nil, toolCallsOut{}, fmt.Errorf("session not found: %s", in.SessionID)
-		}
+	in.SessionID = detail.ID
+	list, err := t.svc.ToolCalls(ctx, detail.ID)
+	if err != nil {
+		return nil, toolCallsOut{}, err
 	}
 	type positionedCall struct {
 		service.ToolCall
@@ -226,11 +221,18 @@ func fitToolCall(out *toolCallsOut, tc service.ToolCall, position int, m db.Mess
 
 func (t *toolset) toolResultContinuation(ctx context.Context, in toolCallsIn) (*mcp.CallToolResult, toolCallsOut, error) {
 	cursor, err := decodeToolResultCursor(in.ResultCursor)
-	if err != nil || cursor.SessionID != in.SessionID {
+	if err != nil {
+		return nil, toolCallsOut{}, errors.New("invalid result_cursor")
+	}
+	detail, err := t.resolveSession(ctx, in.SessionID)
+	if err != nil {
+		return nil, toolCallsOut{}, err
+	}
+	if cursor.SessionID != detail.ID {
 		return nil, toolCallsOut{}, errors.New("invalid result_cursor")
 	}
 	zero := 0
-	page, err := t.svc.Messages(ctx, in.SessionID, service.MessageFilter{Around: &cursor.Ordinal, Before: &zero, After: &zero})
+	page, err := t.svc.Messages(ctx, detail.ID, service.MessageFilter{Around: &cursor.Ordinal, Before: &zero, After: &zero})
 	if err != nil {
 		return nil, toolCallsOut{}, err
 	}
@@ -484,7 +486,7 @@ func (t *toolset) recentEdits(
 // --- get_child_sessions ---
 
 type childSessionsIn struct {
-	SessionID string `json:"session_id" jsonschema:"Full stored ID of the parent session."`
+	SessionID string `json:"session_id" jsonschema:"A full stored session ID or a raw UUID that matches one session."`
 }
 
 type childSession struct {
@@ -499,18 +501,13 @@ type childSessionsOut struct {
 func (t *toolset) childSessions(
 	ctx context.Context, _ *mcp.CallToolRequest, in childSessionsIn,
 ) (*mcp.CallToolResult, childSessionsOut, error) {
-	children, err := t.svc.ChildSessions(ctx, in.SessionID)
+	detail, err := t.resolveSession(ctx, in.SessionID)
 	if err != nil {
 		return nil, childSessionsOut{}, err
 	}
-	if len(children) == 0 {
-		detail, err := t.svc.Get(ctx, in.SessionID)
-		if err != nil {
-			return nil, childSessionsOut{}, err
-		}
-		if detail == nil {
-			return nil, childSessionsOut{}, fmt.Errorf("session not found: %s", in.SessionID)
-		}
+	children, err := t.svc.ChildSessions(ctx, detail.ID)
+	if err != nil {
+		return nil, childSessionsOut{}, err
 	}
 	out := childSessionsOut{Sessions: make([]childSession, 0, len(children))}
 	for _, s := range children {

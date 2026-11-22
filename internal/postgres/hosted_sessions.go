@@ -151,6 +151,13 @@ func (h *HostedStore) findAliases(ctx context.Context, term string, limit int, s
 		limit = db.MaxSessionLimit
 	}
 	return hostedRead(ctx, h, func(h *HostedStore, _ hostedRevision) ([]string, error) {
+		if suffix {
+			var trashed bool
+			err := h.physical.pg.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sessions WHERE provenance_kind='legacy' AND id=$1 AND deleted_at IS NOT NULL)`, term).Scan(&trashed)
+			if err != nil || trashed {
+				return nil, err
+			}
+		}
 		predicate := `strpos(a.alias_id,$1)>0`
 		if suffix {
 			predicate = `(a.alias_id=$1 OR right(a.alias_id,length($1)+1)=':'||$1 OR right(a.alias_id,length($1)+1)='~'||$1)`
