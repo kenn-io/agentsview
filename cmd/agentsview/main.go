@@ -281,7 +281,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	startupProgress.SetPhase("opening database")
 	databaseProgress := newResyncProgressPrinter(os.Stdout, time.Now)
 	database, writeLock, err := openWriteDBWith(ctx, cfg, func(ctx context.Context, cfg config.Config) (*db.DB, error) {
-		return openDBWithProgress(ctx, cfg, func(p db.OpenProgress) {
+		return openDBWithOpener(ctx, cfg, db.OpenDaemonWithProgress, func(p db.OpenProgress) {
 			if p.ResyncRequired {
 				fmt.Println(p.Detail)
 			} else {
@@ -828,6 +828,12 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		go idleTracker.Run(ctx)
 	}
 	startDaemonUsageCacheBackfill(ctx, database, idleTracker)
+	repairDone := make(chan struct{})
+	go func() {
+		defer close(repairDone)
+		repairMessageFTS(ctx, idleTracker, database.RepairMessageFTS)
+	}()
+	defer func() { requestRestart(nil); <-repairDone }()
 	if engine != nil && !cfg.NoSync && skipInitialSync {
 		go func() {
 			timer := time.NewTimer(deferredStartupSyncGracePeriod)
@@ -886,6 +892,17 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		return restart
 	}
 	return err
+}
+
+func repairMessageFTS(ctx context.Context, idleTracker *server.IdleTracker, repair func(context.Context) error) {
+	done, ok := idleTracker.BeginWork()
+	if !ok {
+		return
+	}
+	defer done()
+	if err := repair(ctx); err != nil && ctx.Err() == nil {
+		log.Printf("search index repair: %v", err)
+	}
 }
 
 type foregroundRestartError struct {
@@ -1823,11 +1840,15 @@ func openDB(ctx context.Context, cfg config.Config) (*db.DB, error) {
 }
 
 func openDBWithProgress(ctx context.Context, cfg config.Config, progress db.OpenProgressFunc) (*db.DB, error) {
+	return openDBWithOpener(ctx, cfg, db.OpenWithProgress, progress)
+}
+
+func openDBWithOpener(ctx context.Context, cfg config.Config, open func(context.Context, string, config.ArchiveContent, db.OpenProgressFunc) (*db.DB, error), progress db.OpenProgressFunc) (*db.DB, error) {
 	if err := clearUsageOnlyVectors(ctx, cfg); err != nil {
 		return nil, err
 	}
 	applyClassifierConfig(cfg)
-	database, err := db.OpenWithProgress(ctx, cfg.DBPath, cfg.ArchiveContent, progress)
+	database, err := open(ctx, cfg.DBPath, cfg.ArchiveContent, progress)
 	if err != nil {
 		return nil, err
 	}

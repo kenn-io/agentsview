@@ -369,6 +369,9 @@ func (db *DB) searchContentSubstring(
 		}
 		defer release()
 	}
+	if words && db.messageFTSRepairPending.Load() {
+		return ContentSearchPage{}, errFTSUnavailable
+	}
 	if words && db.HasFTS(ctx) {
 		return db.searchContentWordsOrSubstring(ctx, f, q)
 	}

@@ -100,6 +100,24 @@ func TestSyncWorkerStartupModeSyncsAndEmitsTerminalResult(t *testing.T) {
 		"public SyncStats fields must survive the NDJSON protocol")
 }
 
+func TestSyncWorkerRepairsMessageFTSExceptAtStartup(t *testing.T) {
+	for _, mode := range []string{"startup", "sync", "audit"} {
+		t.Run(mode, func(t *testing.T) {
+			cfg := testConfigWithClaudeFixture(t)
+			database, err := db.Open(t.Context(), cfg.DBPath)
+			require.NoError(t, err)
+			require.NoError(t, database.DropFTS(t.Context()))
+			require.NoError(t, database.Close())
+			var out bytes.Buffer
+			require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: mode}, &out))
+			database, err = db.OpenReadOnly(t.Context(), cfg.DBPath)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			assert.Equal(t, mode != "startup", database.HasFTS(t.Context()))
+		})
+	}
+}
+
 func TestSyncWorkerAuditModeForwardsReconciliationProgress(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	var out bytes.Buffer

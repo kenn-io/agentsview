@@ -796,11 +796,14 @@ END;
 `
 
 // Each row indexes its full transcript in rendered and its dialogue in content.
-const schemaFTS = `
+const schemaMessageSearchView = `
 CREATE VIEW IF NOT EXISTS message_search_content AS
 SELECT id, session_id, content AS rendered,
     COALESCE(dialogue_text, content) AS content FROM messages
 UNION ALL SELECT id, NULL, text, '' FROM image_text_cache;
+`
+
+const schemaFTS = schemaMessageSearchView + `
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
     content, rendered,
     content='message_search_content',
@@ -993,8 +996,9 @@ type DB struct {
 	// writerClosed is set while the writer pool is intentionally closed for a
 	// worker maintenance pass (CloseWriter). It lets write attempts report
 	// ErrWriterClosed instead of the generic read-only error.
-	writerClosed atomic.Bool
-	dataStale    atomic.Bool // see NeedsResync
+	writerClosed            atomic.Bool
+	messageFTSRepairPending atomic.Bool
+	dataStale               atomic.Bool // see NeedsResync
 	// extractAllowCandidateFindings narrows the recall-extraction secret
 	// gate to definite-confidence findings. Set by the extraction manager
 	// from [recall.extract] candidate_findings; false (every recorded
@@ -1468,6 +1472,11 @@ func OpenWithProgress(
 	return open(ctx, path, openOptions{backgroundMaintenance: true}, policy, progress)
 }
 
+// OpenDaemonWithProgress defers standard message search repair until the daemon listens.
+func OpenDaemonWithProgress(ctx context.Context, path string, policy config.ArchiveContent, progress OpenProgressFunc) (*DB, error) {
+	return open(ctx, path, openOptions{backgroundMaintenance: true, deferMessageFTSRepair: true}, policy, progress)
+}
+
 // OpenIsolated opens an archive without starting long-running database
 // maintenance. Short-lived, isolated workflows must close the returned DB.
 func OpenIsolated(ctx context.Context, path string) (*DB, error) {
@@ -1515,7 +1524,7 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 	if !info.Mode().IsRegular() || info.Size() != 0 {
 		return nil, errors.New("fresh database file must be an empty regular file")
 	}
-	d, err := openAndInit(ctx, path, false, false, nil)
+	d, err := openAndInit(ctx, path, false, false, false, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1576,6 +1585,7 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 type openOptions struct {
 	backgroundMaintenance        bool
 	deferRepositoryProjectRepair bool
+	deferMessageFTSRepair        bool
 }
 
 func open(
@@ -1611,7 +1621,7 @@ func open(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	d, err := openAndInit(ctx, path, schemaRepairNeeded, options.backgroundMaintenance, progress)
+	d, err := openAndInit(ctx, path, schemaRepairNeeded, options.backgroundMaintenance, options.deferMessageFTSRepair, progress)
 	if err != nil {
 		return nil, err
 	}
@@ -5144,7 +5154,7 @@ func (db *DB) Vacuum(ctx context.Context) error {
 func openAndInit(
 	ctx context.Context,
 	path string,
-	schemaRepairNeeded, backgroundMaintenance bool,
+	schemaRepairNeeded, backgroundMaintenance, deferMessageFTSRepair bool,
 	progress OpenProgressFunc,
 ) (*DB, error) {
 	if err := ctx.Err(); err != nil {
@@ -5210,7 +5220,7 @@ func openAndInit(
 		)
 	}
 
-	if err := db.init(ctx, progress); err != nil {
+	if err := db.init(ctx, progress, deferMessageFTSRepair); err != nil {
 		_ = db.CloseContext(ctx)
 		return nil, fmt.Errorf("initializing schema: %w", err)
 	}
@@ -5346,7 +5356,6 @@ func (db *DB) DropFTS(ctx context.Context) error {
 	defer db.mu.Unlock()
 	stmts := []string{
 		"DROP TRIGGER IF EXISTS image_text_cjk_ai", "DROP TRIGGER IF EXISTS image_text_cjk_ad", "DROP TRIGGER IF EXISTS image_text_cjk_au",
-		"DROP TRIGGER IF EXISTS image_text_ai", "DROP TRIGGER IF EXISTS image_text_ad", "DROP TRIGGER IF EXISTS image_text_au",
 		"DROP TRIGGER IF EXISTS messages_cjk_ai",
 		"DROP TRIGGER IF EXISTS messages_cjk_ad",
 		"DROP TRIGGER IF EXISTS messages_cjk_au",
@@ -5354,11 +5363,8 @@ func (db *DB) DropFTS(ctx context.Context) error {
 		"DROP TRIGGER IF EXISTS sessions_cjk_pending_au",
 		"DROP TRIGGER IF EXISTS sessions_cjk_pending_ad",
 		"DROP TABLE IF EXISTS messages_cjk_fts",
-		"DROP TRIGGER IF EXISTS messages_ai",
-		"DROP TRIGGER IF EXISTS messages_ad",
-		"DROP TRIGGER IF EXISTS messages_au",
-		"DROP TABLE IF EXISTS messages_fts",
 	}
+	stmts = append(stmts, messageFTSDrops...)
 	stmts = append(stmts, dropSubstringIndexSQL...)
 	// One transaction, so an interrupted drop cannot leave the index without
 	// its triggers while the corpus marker still says it is current.
@@ -5386,9 +5392,10 @@ func (db *DB) RebuildFTS(ctx context.Context) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	w := db.getWriter()
-	if err := rebuildMessageFTS(ctx, w, nil); err != nil {
+	if err := rebuildMessageFTS(ctx, w, nil, false); err != nil {
 		return err
 	}
+	db.messageFTSRepairPending.Store(false)
 	if err := rebuildSubstringIndex(ctx, w); err != nil {
 		return err
 	}
@@ -5581,7 +5588,7 @@ func (db *DB) setDataVersion(ctx context.Context) error {
 	})
 }
 
-func (db *DB) init(ctx context.Context, progress OpenProgressFunc) error {
+func (db *DB) init(ctx context.Context, progress OpenProgressFunc, deferMessageFTSRepair bool) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	w := db.getWriter()
@@ -5640,12 +5647,23 @@ func (db *DB) init(ctx context.Context, progress OpenProgressFunc) error {
 		}
 	}
 	if fts5Available {
-		if !hadFTS {
-			if err := rebuildMessageFTS(ctx, w, progress); err != nil {
+		needsRepair := !hadFTS
+		if hadFTS {
+			var err error
+			needsRepair, err = refreshDialogueFTS(ctx, w)
+			if err != nil {
 				return err
 			}
-		} else if err := refreshDialogueFTS(ctx, w, progress); err != nil {
-			return err
+		}
+		if needsRepair {
+			if deferMessageFTSRepair {
+				if err := prepareMessageFTSRepair(ctx, w); err != nil {
+					return err
+				}
+				db.messageFTSRepairPending.Store(true)
+			} else if err := rebuildMessageFTS(ctx, w, progress, false); err != nil {
+				return err
+			}
 		}
 	}
 

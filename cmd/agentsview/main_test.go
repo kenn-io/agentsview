@@ -49,6 +49,70 @@ type cursorSecretRecorder struct {
 	secret []byte
 }
 
+func TestDeferredMessageFTSHTTP(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Config{Host: "127.0.0.1", DBPath: filepath.Join(dir, "archive.db"), DataDir: dir, ArchiveContent: config.ArchiveContentFull}
+	database, err := db.Open(t.Context(), cfg.DBPath)
+	require.NoError(t, err)
+	for id, content := range map[string]string{"first": "searchneedle deploy window", "second": "searchneedle deploy during the window"} {
+		dbtest.SeedSession(t, database, id, "project", func(s *db.Session) {
+			s.MessageCount = 2
+			s.UserMessageCount = 2
+			s.StartedAt = new("2025-01-15T10:00:00Z")
+		})
+		require.NoError(t, database.ReplaceSessionMessages(t.Context(), id, []db.Message{{SessionID: id, Role: "user", Content: content, Timestamp: "2025-01-15T10:00:00Z"}}))
+	}
+	require.NoError(t, database.DropFTS(t.Context()))
+	require.NoError(t, database.Close())
+	database, err = openDBWithOpener(t.Context(), cfg, db.OpenDaemonWithProgress, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	handler := server.New(cfg, database, nil).Handler()
+	get := func(path string) *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0"+path, nil))
+		return response
+	}
+	browse := get("/api/v1/sessions")
+	require.Equal(t, http.StatusOK, browse.Code)
+	assert.Contains(t, browse.Body.String(), "first")
+	assert.Contains(t, browse.Body.String(), "second")
+	assert.Equal(t, http.StatusNotImplemented, get("/api/v1/search?q=searchneedle").Code)
+	assert.Equal(t, http.StatusInternalServerError, get("/api/v1/search/content?pattern=deploy%20window").Code)
+	quoted := get("/api/v1/search/content?pattern=%22deploy%20window%22")
+	require.Equal(t, http.StatusOK, quoted.Code)
+	assert.Contains(t, quoted.Body.String(), "first")
+	assert.NotContains(t, quoted.Body.String(), "second")
+	raw, err := sql.Open("sqlite3", cfg.DBPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
+	_, err = raw.ExecContext(t.Context(), `CREATE TRIGGER fail_search_repair BEFORE INSERT ON stats WHEN NEW.key='message_search_corpus_version' BEGIN SELECT RAISE(ABORT, 'repair failed'); END`)
+	require.NoError(t, err)
+	var logs bytes.Buffer
+	oldOutput := log.Writer()
+	log.SetOutput(&logs)
+	repairMessageFTS(t.Context(), nil, database.RepairMessageFTS)
+	log.SetOutput(oldOutput)
+	assert.Contains(t, logs.String(), "repair failed")
+	assert.Equal(t, http.StatusNotImplemented, get("/api/v1/search?q=searchneedle").Code)
+	_, err = raw.ExecContext(t.Context(), `DROP TRIGGER fail_search_repair`)
+	require.NoError(t, err)
+	repairMessageFTS(t.Context(), nil, database.RepairMessageFTS)
+	content := get("/api/v1/search/content?pattern=deploy%20window")
+	require.Equal(t, http.StatusOK, content.Code)
+	assert.Contains(t, content.Body.String(), "first")
+	assert.Contains(t, content.Body.String(), "second")
+	search := get("/api/v1/search?q=searchneedle")
+	require.Equal(t, http.StatusOK, search.Code)
+	assert.Contains(t, search.Body.String(), "first")
+	assert.Contains(t, search.Body.String(), "second")
+	require.NoError(t, database.DropFTS(t.Context()))
+	fallback := get("/api/v1/search/content?pattern=deploy%20window")
+	require.Equal(t, http.StatusOK, fallback.Code)
+	assert.Contains(t, fallback.Body.String(), "first")
+	assert.NotContains(t, fallback.Body.String(), "second")
+}
+
 type usageCacheBackfillRecorder struct {
 	started  chan struct{}
 	release  chan struct{}
