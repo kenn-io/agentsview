@@ -113,7 +113,7 @@ client sees these tools:
 
 Every session tool accepts a plain UUID. Ambiguous IDs list up to five matches.
 A trashed exact ID is reported missing. Remote raw ID lookup requires server
-API version 28 or later.
+API version 29 or later.
 
 `get_compaction_summaries` accepts either a session ID or an `active_since`
 timestamp. Its limit counts sessions, and passing 0 uses the default of 20.

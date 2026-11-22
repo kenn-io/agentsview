@@ -306,7 +306,7 @@ func TestFindSessionIDsByRawSuffixProbeFailure(t *testing.T) {
 func TestFindSessionIDsByRawSuffixVersionGate(t *testing.T) {
 	t.Run("unacknowledged response", func(t *testing.T) {
 		srv, _ := fixedServer(t, http.StatusOK, `{"ids":["claude:xabc"]}`)
-		ids, err := NewHTTPBackendForServer(srv.URL, "", HTTPServerCapabilities{APIVersion: 28}).FindSessionIDsByRawSuffix(t.Context(), "abc", 5)
+		ids, err := NewHTTPBackendForServer(srv.URL, "", HTTPServerCapabilities{APIVersion: 29}).FindSessionIDsByRawSuffix(t.Context(), "abc", 5)
 		require.ErrorIs(t, err, service.ErrRawLookupUnsupported)
 		assert.Nil(t, ids)
 	})
@@ -318,7 +318,7 @@ func TestFindSessionIDsByRawSuffixVersionGate(t *testing.T) {
 	}{
 		{"plain old server", 27, "u", true},
 		{"qualified old server", 27, "codex:u", true},
-		{"plain current server", 28, "u", false},
+		{"plain current server", 29, "u", false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			srv, requests := fixedServer(t, http.StatusOK, `{"ids":["host~codex:u"],"raw_suffix":true}`)

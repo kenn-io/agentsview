@@ -445,7 +445,7 @@ const RecallTimeBoundsAPIVersion = 21
 
 // RawSessionLookupAPIVersion is the first daemon API that protects trashed
 // exact IDs during raw-suffix lookup.
-const RawSessionLookupAPIVersion = 28
+const RawSessionLookupAPIVersion = 29
 
 // ListFilter mirrors the HTTP query parameters in handleListSessions.
 // Field names map to HTTP query param names via json tags.
