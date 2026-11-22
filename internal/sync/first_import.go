@@ -32,7 +32,7 @@ func (e *Engine) SyncNewest(ctx context.Context, n int, onProgress ProgressFunc)
 	}()
 	defer e.syncMu.Unlock()
 	defer e.clearCurrentProgress()
-	stats = e.syncAllLocked(ctx, onProgress, time.Time{}, nil, syncWriteDefault, false, false, wave)
+	stats = e.syncAllLocked(ctx, onProgress, time.Time{}, nil, syncWriteFirstImport, false, false, wave)
 	return stats, !wave.partial
 }
 

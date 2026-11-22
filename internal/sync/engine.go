@@ -42,6 +42,7 @@ type syncWriteMode int
 const (
 	syncWriteDefault syncWriteMode = iota
 	syncWriteBulk
+	syncWriteFirstImport
 )
 
 const (
@@ -3355,19 +3356,23 @@ func (e *Engine) syncThenRunLocked(
 	onProgress ProgressFunc,
 	work func(forceFull bool) error, wave *firstImportWave,
 ) (stats SyncStats, err error) {
+	writeMode := syncWriteDefault
+	if wave != nil && wave.onWrite != nil {
+		writeMode = syncWriteFirstImport
+	}
 	didResync := full || e.db.NeedsResync()
 	if didResync {
 		stats = e.resyncAllLocked(ctx, onProgress)
 		if stats.Aborted && ctx.Err() == nil {
 			stats = e.syncAllLocked(
 				ctx, onProgress, time.Time{}, nil,
-				syncWriteDefault, true, false, wave,
+				writeMode, true, false, wave,
 			)
 		}
 	} else {
 		stats = e.syncAllLocked(
 			ctx, onProgress, time.Time{}, nil,
-			syncWriteDefault, true, false, wave,
+			writeMode, true, false, wave,
 		)
 	}
 	if ctx.Err() != nil {
@@ -7639,7 +7644,7 @@ func (e *Engine) syncProviderDBBackedAgent(
 			indexedMessages += len(pw.msgs)
 		}
 		tWrite := time.Now()
-		if writeMode == syncWriteBulk {
+		if writeMode == syncWriteBulk || writeMode == syncWriteFirstImport {
 			var outcome writeBatchOutcome
 			if e.writeBatchOverride != nil {
 				batchWritten, batchMessages, failedWrites, cwdFiltered := e.writeBatchOverride(pending, writeMode, true)
@@ -11134,8 +11139,8 @@ func (e *Engine) writeBatchWithOutcomeContext(
 	if ctx.Err() != nil {
 		return outcome
 	}
-	if writeMode == syncWriteBulk || e.discardWritesOnCancel {
-		return e.writeBatchBulkWithOutcomeContext(ctx, batch, forceReplace)
+	if writeMode == syncWriteBulk || writeMode == syncWriteFirstImport || e.discardWritesOnCancel {
+		return e.writeBatchBulkWithOutcomeContext(ctx, batch, forceReplace, writeMode == syncWriteFirstImport)
 	}
 	resolveWorktreeProject := e.loadWorktreeProjectResolverContext(ctx)
 	for i, pw := range batch {
@@ -11152,7 +11157,7 @@ func (e *Engine) writeBatchWithOutcomeContext(
 			// Keep contributing paths and content in the same transaction.
 			version := e.db.GetSessionDataVersion(ctx, applyIDPrefixToID(e.idPrefix, pw.sess.ID))
 			stale := version > 0 && version < db.CurrentDataVersion()
-			written := e.writeBatchBulkWithOutcomeContext(ctx, batch[i:i+1], forceReplace || stale)
+			written := e.writeBatchBulkWithOutcomeContext(ctx, batch[i:i+1], forceReplace || stale, false)
 			outcome.writtenSessions += written.writtenSessions
 			outcome.writtenMessages += written.writtenMessages
 			outcome.failedSessions += written.failedSessions
@@ -11924,12 +11929,12 @@ func (e *Engine) writeBatchBulkWithOutcome(
 	batch []pendingWrite, forceReplace bool,
 ) writeBatchOutcome {
 	return e.writeBatchBulkWithOutcomeContext(
-		context.Background(), batch, forceReplace,
+		context.Background(), batch, forceReplace, false,
 	)
 }
 
 func (e *Engine) writeBatchBulkWithOutcomeContext(
-	ctx context.Context, batch []pendingWrite, forceReplace bool,
+	ctx context.Context, batch []pendingWrite, forceReplace bool, atomicStaged bool,
 ) writeBatchOutcome {
 	outcome := writeBatchOutcome{
 		written:  make([]bool, len(batch)),
@@ -11968,7 +11973,7 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 			outcome.failedSessions++
 			return outcome
 		}
-		if pw.staged != nil && (provenance != nil || prepared.codexForkState != nil) {
+		if pw.staged != nil && (atomicStaged || provenance != nil || prepared.codexForkState != nil) {
 			err := e.writeAttachedStaged(ctx, prepared, pw, provenance)
 			if err != nil {
 				if isIntentionalSessionSkip(err) {
@@ -12300,7 +12305,7 @@ func (e *Engine) writeSessionFullWithResolver(
 		return err
 	}
 	if claudeSources != nil || pw.sess.CodexFork != nil {
-		outcome := e.writeBatchBulkWithOutcomeContext(ctx, []pendingWrite{pw}, true)
+		outcome := e.writeBatchBulkWithOutcomeContext(ctx, []pendingWrite{pw}, true, false)
 		if outcome.err != nil {
 			return outcome.err
 		}

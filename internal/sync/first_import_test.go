@@ -214,8 +214,24 @@ func TestFirstImportRefreshesWhileOlderSessionsAreWritten(t *testing.T) {
 		t.Fatal("import did not reach the pause")
 	}
 	page, err := archive.ListSessions(t.Context(), db.SessionFilter{Limit: 300})
+	if err == nil {
+		for _, session := range page.Sessions {
+			messages, readErr := archive.GetMessages(t.Context(), session.ID, 0, 10, true)
+			if readErr != nil || len(messages) == 0 {
+				close(resume)
+				t.Fatalf("listed session %s has no readable messages: %v", session.ID, readErr)
+			}
+		}
+	}
+	var starred bool
+	var starErr error
+	if len(page.Sessions) > 0 {
+		starred, starErr = archive.StarSession(t.Context(), page.Sessions[0].ID)
+	}
 	close(resume)
 	require.NoError(t, err)
+	require.NoError(t, starErr)
+	require.True(t, starred)
 	require.Greater(t, len(page.Sessions), 100)
 	require.Less(t, len(page.Sessions), 250)
 	select {
@@ -223,5 +239,73 @@ func TestFirstImportRefreshesWhileOlderSessionsAreWritten(t *testing.T) {
 		require.NoError(t, err)
 	case <-time.After(30 * time.Second):
 		t.Fatal("reentrant emitter blocked the import")
+	}
+}
+
+func TestFirstImportListsStagedCodexWithMessages(t *testing.T) {
+	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122b05"
+	root := writeCodexParityRoot(t, uuid)
+	archive := openTestDB(t)
+	engine := NewEngine(t.Context(), archive, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}, Machine: "local", StagedCodexParseMinBytes: 1,
+	})
+	t.Cleanup(engine.Close)
+	stats, _ := engine.SyncNewest(t.Context(), 1, nil)
+	require.Zero(t, stats.Failed)
+	page, err := archive.ListSessions(t.Context(), db.SessionFilter{Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, page.Sessions, 1)
+	messages, err := archive.GetMessages(t.Context(), page.Sessions[0].ID, 0, 100, true)
+	require.NoError(t, err)
+	require.NotEmpty(t, messages)
+	require.Equal(t, "run the suite", messages[0].Content)
+}
+
+func TestFirstImportListedSessionsHaveMessages(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	require.NoError(t, os.MkdirAll(project, 0o755))
+	for i := range 220 {
+		path := filepath.Join(project, fmt.Sprintf("session-%03d.jsonl", i))
+		content := testjsonl.NewSessionBuilder().AddClaudeUser("2026-01-01T00:00:00Z", "hello").String()
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	}
+	archive := openTestDB(t)
+	engine := NewEngine(t.Context(), archive, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}, Machine: "local", DeferStartupMaintenance: true,
+	})
+	t.Cleanup(engine.Close)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		engine.RunFirstImport(t.Context(), nil)
+	}()
+	observed := false
+	var failure string
+	deadline := time.NewTimer(60 * time.Second)
+	defer deadline.Stop()
+	for {
+		select {
+		case <-deadline.C:
+			t.Fatal("first import did not finish")
+		case <-done:
+			require.True(t, observed, "read at least one session while importing")
+			require.Empty(t, failure)
+			return
+		default:
+		}
+		page, err := archive.ListSessions(t.Context(), db.SessionFilter{Limit: 300})
+		if err != nil {
+			failure = err.Error()
+			continue
+		}
+		for _, session := range page.Sessions {
+			observed = true
+			messages, err := archive.GetMessages(t.Context(), session.ID, 0, 10, true)
+			if err != nil || len(messages) == 0 {
+				failure = fmt.Sprintf("listed session %s had no messages: %v", session.ID, err)
+				break
+			}
+		}
 	}
 }
