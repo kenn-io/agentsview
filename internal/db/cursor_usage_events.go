@@ -79,8 +79,6 @@ func (db *DB) ensureCursorUsageEventsSchemaLocked(ctx context.Context, w *writer
 	return nil
 }
 
-var ErrCursorAccountRebuildPending = errors.New("Cursor account reporting requires the pending archive rebuild")
-
 type CursorAccountHour struct {
 	UserID string
 	Start  time.Time
@@ -133,18 +131,6 @@ func (db *DB) RecordCursorAccountPoll(ctx context.Context, assignments map[strin
 		}
 		return nil
 	})
-}
-
-// RequireCursorAccountStamping checks that older binaries will refuse this archive.
-func (db *DB) RequireCursorAccountStamping(ctx context.Context) error {
-	version, _, err := readUserVersion(ctx, db.getReader())
-	if err != nil {
-		return err
-	}
-	if version < dataVersion {
-		return ErrCursorAccountRebuildPending
-	}
-	return nil
 }
 
 // InsertCursorUsageEvents appends account usage rows and ignores duplicates

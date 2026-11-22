@@ -133,10 +133,7 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 		return err
 	}
 	if email == "" && userID == "" {
-		if err := database.RequireCursorAccountStamping(ctx); err != nil {
-			if !errors.Is(err, db.ErrCursorAccountRebuildPending) {
-				return err
-			}
+		if database.NeedsResync() {
 			fmt.Fprintf(os.Stdout, "Imported %d events; skipped account reporting until the archive rebuild finishes. Rerun this sync then.\n", len(rows))
 			return nil
 		}
@@ -190,9 +187,6 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 			for _, id := range users {
 				memberEvents, err := client.FetchAllUsageEvents(ctx, cursorusage.Query{StartDate: start, EndDate: windowEnd.Add(-time.Millisecond), PageSize: 1000, UserID: id})
 				if err != nil {
-					if ctx.Err() != nil {
-						return ctx.Err()
-					}
 					return fmt.Errorf("fetching Cursor usage for a member: %w", err)
 				}
 				for _, ev := range memberEvents {
