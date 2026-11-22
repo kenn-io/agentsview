@@ -372,7 +372,7 @@ func TestDashboardPartsReleasesScanPermitBeforeFill(t *testing.T) {
 			cancel()
 			close(unblock)
 			for range 2 {
-				<-results
+				assert.ErrorIs(t, <-results, context.Canceled)
 			}
 			require.Fail(t, "fills could not both start")
 		}
@@ -380,7 +380,7 @@ func TestDashboardPartsReleasesScanPermitBeforeFill(t *testing.T) {
 	cancel()
 	close(unblock)
 	for range 2 {
-		<-results
+		assert.ErrorIs(t, <-results, context.Canceled)
 	}
 	permitCtx, stopPermits := context.WithTimeout(t.Context(), 5*time.Second)
 	defer stopPermits()
