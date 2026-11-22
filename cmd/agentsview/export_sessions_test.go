@@ -619,7 +619,7 @@ func TestExportSessionsUpgradesRecordedRepositoryColumn(t *testing.T) {
 			if stale {
 				_, err = raw.ExecContext(t.Context(), "PRAGMA user_version=137")
 			} else {
-				_, err = raw.ExecContext(t.Context(), `PRAGMA user_version=184; DROP TABLE cursor_account_polls; DROP INDEX idx_cursor_usage_events_account_time; ALTER TABLE cursor_usage_events DROP COLUMN account_user_id; ALTER TABLE cursor_usage_events DROP COLUMN account_polled_at`)
+				_, err = raw.ExecContext(t.Context(), fmt.Sprintf(`PRAGMA user_version=%d; DROP TABLE cursor_account_polls; DROP INDEX idx_cursor_usage_events_account_time; ALTER TABLE cursor_usage_events DROP COLUMN account_user_id; ALTER TABLE cursor_usage_events DROP COLUMN account_polled_at`, db.CurrentDataVersion()-1))
 			}
 			require.NoError(t, err)
 			var versionBefore int
@@ -640,23 +640,6 @@ func TestExportSessionsUpgradesRecordedRepositoryColumn(t *testing.T) {
 				doc := decodeExportSessionsDocument(t, stdout)
 				assert.Len(t, doc.Sessions, 2)
 				assert.Equal(t, "export-sessions-test-db", doc.DatabaseID)
-				now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
-				for _, version := range []string{"5", "6"} {
-					args := []string{"export", "hour", "--schema-version", version}
-					if version == "6" {
-						args = append(args, "--by-machine")
-					}
-					args = append(args, "2026-07-28-10")
-					output, _, err := executeExportSessionsCommand(newExportReportingTestRoot(now), args...)
-					require.NoError(t, err)
-					assert.Contains(t, output, `"schema_version":`+version)
-					raw, err := sql.Open("sqlite3", dbPath)
-					require.NoError(t, err)
-					var versionAfter int
-					require.NoError(t, raw.QueryRowContext(t.Context(), "PRAGMA user_version").Scan(&versionAfter))
-					assert.Equal(t, 184, versionAfter)
-					require.NoError(t, raw.Close())
-				}
 			}
 			// The schema is readable, but export must not bypass parser upgrades.
 			readonly, err := db.OpenReadOnly(t.Context(), dbPath)

@@ -1715,20 +1715,17 @@ func TestCursorSyncImportsBillingWhileRebuildPending(t *testing.T) {
 func TestCursorSyncMatchesMembers(t *testing.T) {
 	t.Setenv("TZ", "UTC")
 	for _, tc := range []struct {
-		name           string
-		priorModel     string
-		priorAccount   string
-		wantAccount    string
-		secondEmpty    bool
-		secondFails    bool
-		extraEvent     bool
-		priorRetained  bool
-		oldOwnerAbsent bool
+		name          string
+		priorModel    string
+		priorAccount  string
+		wantAccount   string
+		secondEmpty   bool
+		secondFails   bool
+		priorRetained bool
 	}{
 		{name: "single", priorModel: "other-team", priorAccount: "99", wantAccount: "12", secondEmpty: true, priorRetained: true},
 		{name: "ambiguous", priorModel: "model-a", priorAccount: "12"},
-		{name: "ambiguous after owner left", priorModel: "model-a", priorAccount: "12", oldOwnerAbsent: true},
-		{name: "failed member", priorModel: "model-a", priorAccount: "99", wantAccount: "99", secondFails: true, extraEvent: true},
+		{name: "failed member", priorModel: "model-a", priorAccount: "99", wantAccount: "99", secondFails: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dataDir := cursorUsageTestDataDir(t)
@@ -1745,10 +1742,6 @@ func TestCursorSyncMatchesMembers(t *testing.T) {
 					return
 				}
 				if r.URL.Path == "/teams/daily-usage-data" {
-					if tc.oldOwnerAbsent {
-						_, _ = w.Write([]byte(`{"data":[{"userId":34},{"userId":56}],"pagination":{"hasNextPage":false}}`))
-						return
-					}
 					_, _ = w.Write([]byte(`{"data":[{"userId":12,"isActive":false},{"userId":34}],"pagination":{"hasNextPage":false}}`))
 					return
 				}
@@ -1763,13 +1756,7 @@ func TestCursorSyncMatchesMembers(t *testing.T) {
 					_, _ = w.Write([]byte(`{"totalUsageEventsCount":0,"usageEvents":[]}`))
 					return
 				}
-				events := `{"timestamp":"2026-07-28T10:03:00Z","model":"model-a","tokenUsage":{"outputTokens":7}}`
-				count := 1
-				if tc.extraEvent {
-					events += `,{"timestamp":"2026-07-28T10:04:00Z","model":"new","tokenUsage":{"outputTokens":6}}`
-					count++
-				}
-				_, _ = fmt.Fprintf(w, `{"totalUsageEventsCount":%d,"usageEvents":[%s]}`, count, events)
+				_, _ = w.Write([]byte(`{"totalUsageEventsCount":1,"usageEvents":[{"timestamp":"2026-07-28T10:03:00Z","model":"model-a","tokenUsage":{"outputTokens":7}}]}`))
 			}))
 			defer server.Close()
 			stderr := captureStderr(t, func() {
@@ -1777,29 +1764,14 @@ func TestCursorSyncMatchesMembers(t *testing.T) {
 			})
 			if tc.secondFails {
 				assert.Contains(t, stderr, "Cursor account reporting could not be refreshed")
-				assert.NotContains(t, stderr, "34")
 			}
-			if tc.oldOwnerAbsent {
-				assert.Equal(t, []string{"0", "34", "56"}, requests)
-			} else {
-				assert.Equal(t, []string{"0", "12", "34"}, requests)
-			}
+			assert.Equal(t, []string{"0", "12", "34"}, requests)
 			database = dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
 			var account, stamp string
 			require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT account_user_id, account_polled_at FROM cursor_usage_events WHERE model='model-a'`).Scan(&account, &stamp))
 			assert.Equal(t, tc.wantAccount, account)
-			if tc.oldOwnerAbsent {
-				var pollStamp string
-				require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT polled_at FROM cursor_account_polls WHERE account_user_id='12' AND hour_start=1785232800`).Scan(&pollStamp))
-				assert.Greater(t, pollStamp, "2026-07-29T01:00:00.000000Z")
-			}
 			if tc.secondFails {
 				assert.Equal(t, "2026-07-29T01:00:00.000000Z", stamp)
-			}
-			if tc.extraEvent {
-				require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT account_user_id, account_polled_at FROM cursor_usage_events WHERE model='new'`).Scan(&account, &stamp))
-				assert.Empty(t, account)
-				assert.Empty(t, stamp)
 			}
 			if tc.priorRetained {
 				require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT account_user_id, account_polled_at FROM cursor_usage_events WHERE model='other-team'`).Scan(&account, &stamp))

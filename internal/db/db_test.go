@@ -848,7 +848,7 @@ func TestUpgradeExportSchemaInPlaceOnlyAddsExportIdentitySchema(t *testing.T) {
 	path := filepath.Join(dir, "test.db")
 	d := testDBAtPath(t, path, "schema-only upgrade db")
 	insertSession(t, d, "schema-only", "project")
-	require.NoError(t, d.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{{OccurredAt: "2026-07-28T10:00:00Z", Model: "a", OutputTokens: 7, DedupKey: "a"}}))
+	require.NoError(t, d.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{{OccurredAt: "2026-07-28T10:00:00Z", Model: "a", OutputTokens: 7}}))
 	requireNoError(t, d.Close(), "close schema-only upgrade db")
 
 	conn, err := sql.Open("sqlite3", path)
@@ -913,11 +913,13 @@ func TestUpgradeExportSchemaInPlaceOnlyAddsExportIdentitySchema(t *testing.T) {
 	assert.Equal(t, 3, metadataCount)
 	var tokens int
 	var account, stamp string
-	require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT output_tokens, account_user_id, account_polled_at FROM cursor_usage_events WHERE dedup_key='a'`).Scan(&tokens, &account, &stamp))
+	require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT output_tokens, account_user_id, account_polled_at FROM cursor_usage_events WHERE model='a'`).Scan(&tokens, &account, &stamp))
 	assert.Equal(t, 7, tokens)
 	assert.Empty(t, account)
 	assert.Empty(t, stamp)
 	require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'cursor_account_polls'`).Scan(&tableCount))
+	assert.Equal(t, 1, tableCount)
+	require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_cursor_account_polls_hour'`).Scan(&tableCount))
 	assert.Equal(t, 1, tableCount)
 }
 
@@ -5642,12 +5644,32 @@ func TestCopyModelPricingFromRollsBackParentWhenBandCopyFails(t *testing.T) {
 }
 
 func TestCopySessionMetadataFrom_PreservesCursorUsageEvents(t *testing.T) {
+	t.Run("old source without account columns", func(t *testing.T) {
+		ctx := t.Context()
+		path := filepath.Join(t.TempDir(), "source.db")
+		src := testDBAtPath(t, path, "source")
+		event := CursorUsageEvent{OccurredAt: "2026-07-28T10:00:00Z", Model: "a"}
+		require.NoError(t, src.InsertCursorUsageEvents(ctx, []CursorUsageEvent{event}))
+		require.NoError(t, src.Close())
+		raw, err := sql.Open("sqlite3", path)
+		require.NoError(t, err)
+		_, err = raw.ExecContext(ctx, `DROP INDEX idx_cursor_usage_events_account_time; ALTER TABLE cursor_usage_events DROP COLUMN account_user_id; ALTER TABLE cursor_usage_events DROP COLUMN account_polled_at; DROP TABLE cursor_account_polls`)
+		require.NoError(t, err)
+		require.NoError(t, raw.Close())
+		dst := testDB(t)
+		require.NoError(t, dst.CopySessionMetadataFrom(ctx, path))
+		var account, polled string
+		require.NoError(t, dst.Reader().QueryRowContext(ctx, `SELECT account_user_id, account_polled_at FROM cursor_usage_events WHERE dedup_key=?`, CursorUsageEventDedupKey(event)).Scan(&account, &polled))
+		assert.Empty(t, account)
+		assert.Empty(t, polled)
+	})
+
 	dir := t.TempDir()
 	ctx := t.Context()
 
 	srcPath := filepath.Join(dir, "src.db")
 	srcDB := testDBAtPath(t, srcPath, "src")
-	require.NoError(t, srcDB.InsertCursorUsageEvents(ctx, []CursorUsageEvent{
+	events := []CursorUsageEvent{
 		{
 			OccurredAt:       "2026-05-14T10:05:00Z",
 			Model:            "claude-4.6-opus-high-thinking",
@@ -5660,7 +5682,6 @@ func TestCopySessionMetadataFrom_PreservesCursorUsageEvents(t *testing.T) {
 			CursorTokenFee:   money.MustParseDollars("0.0332"),
 			UserID:           "152683922",
 			UserEmail:        "member@example.com",
-			DedupKey:         "first",
 		},
 		{
 			OccurredAt:     "2026-05-15T11:15:00Z",
@@ -5673,15 +5694,15 @@ func TestCopySessionMetadataFrom_PreservesCursorUsageEvents(t *testing.T) {
 			UserID:         "777",
 			UserEmail:      "next@example.com",
 			IsHeadless:     true,
-			DedupKey:       "second",
 		},
 		{
 			Agent: "grok", OccurredAt: "2026-11-04T13:00:00Z",
 			InputTokens: 12, DedupKey: "xai:item-a",
 		},
-	}), "InsertCursorUsageEvents src")
+	}
+	require.NoError(t, srcDB.InsertCursorUsageEvents(ctx, events), "InsertCursorUsageEvents src")
 	stamp := time.Date(2026, 5, 16, 0, 0, 0, 0, time.UTC)
-	require.NoError(t, srcDB.RecordCursorAccountPoll(ctx, map[string][]string{"12": {"first"}}, stamp, []CursorAccountHour{{UserID: "12", Start: time.Date(2026, 5, 14, 10, 0, 0, 0, time.UTC)}}))
+	require.NoError(t, srcDB.RecordCursorAccountPoll(ctx, map[string][]string{"12": {CursorUsageEventDedupKey(events[0])}}, stamp, []CursorAccountHour{{UserID: "12", Start: time.Date(2026, 5, 14, 10, 0, 0, 0, time.UTC)}}))
 	wantFingerprint, err := srcDB.CursorUsageEventFingerprint(ctx)
 	require.NoError(t, err, "CursorUsageEventFingerprint src")
 	require.NoError(t, srcDB.CloseConnections(ctx), "CloseConnections src")
@@ -5695,7 +5716,6 @@ func TestCopySessionMetadataFrom_PreservesCursorUsageEvents(t *testing.T) {
 		Model:      "stale-model",
 		Kind:       "USAGE_EVENT_KIND_USAGE_BASED",
 		Charged:    money.MustParseDollars("0.99"),
-		DedupKey:   "stale",
 	}}), "InsertCursorUsageEvents dst")
 
 	require.NoError(t, dstDB.CopySessionMetadataFrom(t.Context(), srcPath), "CopySessionMetadataFrom")
@@ -5708,7 +5728,7 @@ func TestCopySessionMetadataFrom_PreservesCursorUsageEvents(t *testing.T) {
 	assert.Equal(t, wantFingerprint, gotFingerprint,
 		"final metadata copy should preserve cursor usage rows verbatim")
 	var account, polled string
-	require.NoError(t, dstDB.Reader().QueryRowContext(ctx, `SELECT account_user_id, account_polled_at FROM cursor_usage_events WHERE dedup_key='first'`).Scan(&account, &polled))
+	require.NoError(t, dstDB.Reader().QueryRowContext(ctx, `SELECT account_user_id, account_polled_at FROM cursor_usage_events WHERE dedup_key=?`, CursorUsageEventDedupKey(events[0])).Scan(&account, &polled))
 	assert.Equal(t, "12", account)
 	assert.Equal(t, "2026-05-16T00:00:00.000000Z", polled)
 	require.NoError(t, dstDB.Reader().QueryRowContext(ctx, `SELECT account_user_id, polled_at FROM cursor_account_polls`).Scan(&account, &polled))
