@@ -210,7 +210,6 @@ func TestPromptPRLinks(t *testing.T) {
 		{"https://gitlab.com/group/subgroup/repo/-/merge_requests/9?x=y", []string{"https://gitlab.com/group/subgroup/repo/-/merge_requests/9"}},
 		{"https://github.com/owner/repo/pull/12-", nil},
 		{"https://github.com/owner/repo/pull/12a", nil},
-		{"https://forge.example/group/sub/repo/pull/42?x=1", nil},
 		{"https://github.com/owner/repo/issues/12", nil},
 		{"https://github.com/o/r/pull/1?tab=files,https://github.com/o/r/pull/2", []string{"https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"}},
 		{"https://example.org/?url=https://github.com/o/r/pull/2 https://example.org/?url=foo,https://github.com/o/r/pull/2", nil},

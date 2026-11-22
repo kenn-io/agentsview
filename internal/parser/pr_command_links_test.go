@@ -17,28 +17,43 @@ func TestCommandPRLinksCanceled(t *testing.T) {
 
 func TestGHPRCommandLinks(t *testing.T) {
 	remote := "https://github.com/example/repo.git"
-	for _, tc := range []struct{ command, remote, want string }{
-		{`gh pr view 42`, remote, "https://github.com/example/repo/pull/42"},
-		{`gh pr merge 42 -R example/other`, remote, "https://github.com/example/other/pull/42"},
-		{`gh pr diff https://github.com/example/repo/pull/42`, "", "https://github.com/example/repo/pull/42"},
-		{`echo 'gh pr view 42 -R example/repo'`, remote, ""},
+	for _, tc := range []struct {
+		command, cwd, remote, want string
+		changed                    bool
+	}{
+		{`gh pr view 42`, "", remote, "https://github.com/example/repo/pull/42", false},
+		{`gh pr merge 42 -R example/other`, "", remote, "https://github.com/example/other/pull/42", false},
+		{`gh pr co 42 -R example/repo`, "", remote, "https://github.com/example/repo/pull/42", false},
+		{`gh --repo=example/other pr view 42`, "", remote, "https://github.com/example/other/pull/42", false},
+		{`cd /repo && gh pr merge 42`, "/repo", remote, "https://github.com/example/repo/pull/42", false},
+		{`gh pr view 42; cd /other; gh pr view 43`, "", remote, "https://github.com/example/repo/pull/42", true},
+		{`gh pr diff https://github.com/example/repo/pull/42`, "", "", "https://github.com/example/repo/pull/42", false},
+		{`echo 'gh pr view 42 -R example/repo'`, "", remote, "", false},
 		{`cat <<EOF
 gh pr view 42 -R example/repo
-EOF`, remote, ""},
-		{`gh pr view 42; GH_REPO=other/repo`, remote, "https://github.com/example/repo/pull/42"},
-		{`cd /other; gh pr view 42`, remote, ""},
-		{`eval true; gh pr view 42`, remote, ""},
-		{`GH_REPO=other/repo gh pr view 42`, remote, ""},
-		{`f() { cd /other; }; gh pr view 42`, remote, ""},
-		{`cd /other; gh pr view 42 -R example/repo`, remote, "https://github.com/example/repo/pull/42"},
-		{`gh pr comment --body 41 42 -R example/repo`, remote, "https://github.com/example/repo/pull/42"},
-		{`gh pr view --json title 42`, remote, "https://github.com/example/repo/pull/42"},
-		{`gh pr create -R example/repo`, remote, ""},
-		{`gh pr view 42 --repo=`, remote, ""},
+EOF`, "", remote, "", false},
+		{`gh pr view 42; GH_REPO=other/repo`, "", remote, "https://github.com/example/repo/pull/42", true},
+		{`cd /other; gh pr view 42`, "", remote, "", true},
+		{`pushd /other`, "", remote, "", true},
+		{`popd`, "", remote, "", true},
+		{`eval true; gh pr view 42`, "", remote, "", true},
+		{`source script`, "", remote, "", true},
+		{`. script`, "", remote, "", true},
+		{`unset GH_REPO`, "", remote, "", true},
+		{`export GH_HOST=example.com`, "", remote, "", true},
+		{`echo GH_REPO`, "", remote, "", false},
+		{`GH_REPO=other/repo gh pr view 42`, "", remote, "", true},
+		{`f() { cd /other; }; gh pr view 42`, "", remote, "", true},
+		{`cd /other; gh pr view 42 -R example/repo`, "", remote, "https://github.com/example/repo/pull/42", true},
+		{`gh pr comment --body 41 42 -R example/repo`, "", remote, "https://github.com/example/repo/pull/42", false},
+		{`gh pr view --json title 42`, "", remote, "https://github.com/example/repo/pull/42", false},
+		{`gh pr create -R example/repo`, "", remote, "", false},
+		{`gh pr view 42 --repo=`, "", remote, "", false},
 	} {
 		t.Run(tc.command, func(t *testing.T) {
-			links, _, err := CommandPRLinks(t.Context(), tc.command, "", tc.remote)
+			links, changed, err := CommandPRLinks(t.Context(), tc.command, tc.cwd, tc.remote)
 			require.NoError(t, err)
+			assert.Equal(t, tc.changed, changed)
 			if tc.want == "" {
 				assert.Empty(t, links)
 				return
@@ -79,12 +94,4 @@ func TestLauncherPromptPRLinks(t *testing.T) {
 			assert.Equal(t, tt.want, urls)
 		})
 	}
-}
-
-func TestCommandPRLinksBeforeDirectoryChange(t *testing.T) {
-	links, changed, err := CommandPRLinks(t.Context(), "gh pr view 42; cd /other; gh pr view 43", "", "https://github.com/example/repo.git")
-	require.NoError(t, err)
-	assert.True(t, changed)
-	require.Len(t, links, 1)
-	assert.Equal(t, "https://github.com/example/repo/pull/42", links[0].URL)
 }

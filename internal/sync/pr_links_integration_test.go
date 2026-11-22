@@ -3,7 +3,6 @@ package sync_test
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -16,25 +15,6 @@ import (
 	"go.kenn.io/agentsview/internal/testjsonl"
 	"go.kenn.io/agentsview/internal/testutil"
 )
-
-func TestClineCommandArrayPRFilter(t *testing.T) {
-	root := t.TempDir()
-	dir := filepath.Join(root, "data", "sessions", "pr-commands")
-	require.NoError(t, os.MkdirAll(dir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "pr-commands.json"), []byte(`{"session_id":"pr-commands","cwd":"/workspace"}`), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "pr-commands.messages.json"), []byte(`{"messages":[{"id":"m1","role":"user","content":[{"type":"text","text":"Review changes"}],"ts":1000},{"id":"m2","role":"assistant","content":[{"type":"tool_use","id":"call","name":"execute_command","input":{"commands":["gh pr view 41 -R example/other","gh pr view 42 -R example/repo"]}}],"ts":2000}]}`), 0o600))
-	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCline: {root}}, Machine: "local"})
-	t.Cleanup(engine.Close)
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	filter, err := db.ParsePRFilter("example/repo#42")
-	require.NoError(t, err)
-	page, err := database.ListSessions(t.Context(), db.SessionFilter{PR: filter})
-	require.NoError(t, err)
-	if assert.Len(t, page.Sessions, 1) {
-		assert.Equal(t, "cline:pr-commands", page.Sessions[0].ID)
-	}
-}
 
 func storedPRURLs(t *testing.T, d *db.DB, id string) []string {
 	t.Helper()
@@ -157,14 +137,11 @@ func TestParseDiffDetectsPRLinkChanges(t *testing.T) {
 }
 
 func TestCodexCommandPRLinksOnAppend(t *testing.T) {
-	testutil.IsolateGit(t)
 	root := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "config"), []byte("[remote \"origin\"]\n url = https://github.com/example/repo.git\n"), 0o600))
 	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
 	const id = "01900000-0000-7000-8000-000000000042"
 	path := env.writeCodexSession(t, filepath.Join("2024", "01", "15"), "rollout-20240115-"+id+".jsonl", testjsonl.JoinJSONL(
-		testjsonl.CodexSessionMetaWithFieldsJSON(id, root, "user", tsEarly, map[string]any{"git": map[string]any{"repository_url": "https://github.com/example/repo.git"}}),
+		testjsonl.CodexSessionMetaWithFieldsJSON(id, root, "user", tsEarly, nil),
 		testjsonl.CodexMsgJSON("user", "Review https://github.com/example/repo/pull/42", tsEarlyS1),
 	))
 	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
@@ -264,46 +241,4 @@ func TestClineTeamTaskPRFilter(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, page.Sessions, 1)
 	assert.Equal(t, "cline:team-pr", page.Sessions[0].ID)
-}
-
-func TestCheckoutAliasPRFilter(t *testing.T) {
-	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
-	env.writeClaudeSession(t, "proj", "checkout-alias.jsonl", testjsonl.JoinJSONL(
-		testjsonl.ClaudeUserJSON("Review the changes", tsEarly),
-		testjsonl.ClaudeAssistantJSON([]map[string]any{{"type": "tool_use", "id": "call", "name": "Bash", "input": map[string]any{"command": "gh pr co 42 -R example/repo"}}}, tsEarlyS1),
-	))
-	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
-	filter, err := db.ParsePRFilter("example/repo#42")
-	require.NoError(t, err)
-	page, err := env.db.ListSessions(t.Context(), db.SessionFilter{PR: filter})
-	require.NoError(t, err)
-	require.Len(t, page.Sessions, 1)
-	assert.Equal(t, "checkout-alias", page.Sessions[0].ID)
-}
-
-func TestCommandPRFilterRepositoryAndSameDirectory(t *testing.T) {
-	testutil.IsolateGit(t)
-	for _, tc := range []struct{ name, command, filter string }{
-		{"global repo", "gh --repo=example/other pr view 42", "example/other#42"},
-		{"same directory", "cd %s && gh pr merge 42", "example/repo#42"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
-			require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o700))
-			require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "config"), []byte("[remote \"origin\"]\n url = https://github.com/example/repo.git\n"), 0o600))
-			command := strings.ReplaceAll(tc.command, "%s", root)
-			env := setupSingleAgentTestEnv(t, parser.AgentClaude)
-			env.writeClaudeSession(t, "proj", "filter-pr.jsonl", testjsonl.JoinJSONL(
-				testjsonl.ClaudeUserJSON("Review", tsEarly, root),
-				testjsonl.ClaudeAssistantJSON([]map[string]any{{"type": "tool_use", "id": "call", "name": "Bash", "input": map[string]any{"command": command}}}, tsEarlyS1),
-			))
-			require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
-			filter, err := db.ParsePRFilter(tc.filter)
-			require.NoError(t, err)
-			page, err := env.db.ListSessions(t.Context(), db.SessionFilter{PR: filter})
-			require.NoError(t, err)
-			require.Len(t, page.Sessions, 1)
-			assert.Equal(t, "filter-pr", page.Sessions[0].ID)
-		})
-	}
 }

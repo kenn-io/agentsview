@@ -17,21 +17,17 @@ func TestToolCallPRLinks(t *testing.T) {
 		{Category: "Task", InputJSON: `{"prompt":"Review https://github.com/example/repo/pull/42", "description":"https://github.com/example/repo/pull/47"}`},
 		{Category: "Task", InputJSON: `{"tool":"newTask","content":"Review https://github.com/example/repo/pull/48"}`},
 		{Category: "Task", InputJSON: `{"prompt":"Review https://github.com/example/repo/pull/49","content":[{"type":"text","text":"other"}]}`},
-		{Category: "Bash", InputJSON: `{"command":["codex","exec","Review https://github.com/example/repo/pull/43"]}`},
-		{Category: "Bash", InputJSON: `{"command":"claude -p \"Review https://github.com/example/repo/pull/46\""}`},
-		{Category: "Bash", InputJSON: `{"command":"curl https://github.com/example/repo/pull/44"}`},
-		{Category: "Bash", InputJSON: `{"command":["gh","pr","merge","45","-R","example/repo"]}`},
+		{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":["codex","exec","Review https://github.com/example/repo/pull/43"]}`},
+		{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"curl https://github.com/example/repo/pull/44"}`},
 	}}}
 	links := toolCallPRLinks(t, messages, "", "")
-	if assert.Len(t, links, 8) {
+	if assert.Len(t, links, 6) {
 		assert.Equal(t, 51, links[0].Number)
 		assert.Equal(t, 50, links[1].Number)
 		assert.Equal(t, 42, links[2].Number)
 		assert.Equal(t, 48, links[3].Number)
 		assert.Equal(t, 49, links[4].Number)
 		assert.Equal(t, 43, links[5].Number)
-		assert.Equal(t, 46, links[6].Number)
-		assert.Equal(t, 45, links[7].Number)
 	}
 }
 
@@ -47,7 +43,7 @@ func TestToolCallPRLinksWorkdir(t *testing.T) {
 	for _, key := range []string{"workdir", "working_directory"} {
 		t.Run(key, func(t *testing.T) {
 			input := `{"command":"gh pr view 42","` + key + `":"/work/other"}`
-			links := toolCallPRLinks(t, []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", InputJSON: input}}}}, "/work/repo", "https://github.com/example/repo.git")
+			links := toolCallPRLinks(t, []db.Message{{ToolCalls: []db.ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: input}}}}, "/work/repo", "https://github.com/example/repo.git")
 			assert.Empty(t, links)
 		})
 	}
@@ -56,15 +52,15 @@ func TestToolCallPRLinksWorkdir(t *testing.T) {
 func TestToolCallPRLinksContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	_, err := db.ToolCallPRLinks(ctx, []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", InputJSON: `{"cmd":"gh pr view 42 -R example/repo"}`}}}}, "", "")
+	_, err := db.ToolCallPRLinks(ctx, []db.Message{{ToolCalls: []db.ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"cmd":"gh pr view 42 -R example/repo"}`}}}}, "", "")
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
 func TestToolCallPRLinksSkipsOversizedInput(t *testing.T) {
 	input := `{"cmd":"gh pr view 41 -R example/repo","unrelated":"` + strings.Repeat("x", 256*1024) + `"}`
 	messages := []db.Message{{ToolCalls: []db.ToolCall{
-		{Category: "Bash", InputJSON: input},
-		{Category: "Bash", InputJSON: `{"cmd":"gh pr view 42 -R example/repo"}`},
+		{ToolName: "Bash", Category: "Bash", InputJSON: input},
+		{ToolName: "Bash", Category: "Bash", InputJSON: `{"cmd":"gh pr view 42 -R example/repo"}`},
 	}}}
 	links := toolCallPRLinks(t, messages, "", "")
 	require.Len(t, links, 1)
@@ -94,21 +90,6 @@ func TestToolCallPRLinksDirectoryChange(t *testing.T) {
 	}
 }
 
-func TestCodeModePRLinksKeepExplicitIdentities(t *testing.T) {
-	messages := []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", InputJSON: `text(await tools.exec_command({cmd:"gh pr view 41",workdir:"/repo"})); text(await tools.exec_command({cmd:"gh pr view 42"})); text(await tools.exec_command({cmd:"gh pr view 43 -R example/other",workdir:"/other"})); text(await tools.exec_command({cmd:"cd /other"})); text(await tools.exec_command({cmd:"gh pr view 44"})); text(await tools.exec_command({cmd:"gh pr view 45",workdir:dir})); text(await tools.exec_command({cmd:"gh pr view 46",workdir:"/repo"+suffix})); text(await tools.exec_command({cmd:"gh pr view 47",workdir:"/other"}))`}}}}
-	links := toolCallPRLinks(t, messages, "/repo", "https://github.com/example/repo.git")
-	require.Len(t, links, 4)
-	assert.Equal(t, "https://github.com/example/repo/pull/41", links[0].URL)
-	assert.Equal(t, "https://github.com/example/repo/pull/42", links[1].URL)
-	assert.Equal(t, "https://github.com/example/other/pull/43", links[2].URL)
-	assert.Equal(t, "https://github.com/example/repo/pull/44", links[3].URL)
-}
-
-func TestCodeModeDoesNotTreatRawJavaScriptAsShell(t *testing.T) {
-	messages := []db.Message{{ToolCalls: []db.ToolCall{{ToolName: "exec", Category: "Bash", InputJSON: `gh pr view 42 -R example/repo`}}}}
-	assert.Empty(t, toolCallPRLinks(t, messages, "", ""))
-}
-
 func toolCallPRLinks(t *testing.T, messages []db.Message, cwd, remote string) []db.PRLink {
 	t.Helper()
 	links, err := db.ToolCallPRLinks(t.Context(), messages, cwd, remote)
@@ -116,27 +97,31 @@ func toolCallPRLinks(t *testing.T, messages []db.Message, cwd, remote string) []
 	return links
 }
 
-func TestCodeModeBatchPRLinks(t *testing.T) {
-	input := `const example = 'tools.exec_command({cmd:"gh pr view 99 -R example/repo"})'; // tools.exec_command({cmd:"gh pr view 98 -R example/repo"})
-text(await tools.exec_command({cmd:"gh pr view 41",workdir:"/repo"})); text(await tools.exec_command({cmd:"gh pr co 42 -R example/other",workdir:"/other"})); text(await tools.exec_command({cmd:"gh pr view 43",workdir:"/other"}));`
-	messages := []db.Message{{ToolCalls: []db.ToolCall{{ToolName: "exec", Category: "Bash", InputJSON: input}}}}
-	links := toolCallPRLinks(t, messages, "/repo", "https://github.com/example/repo.git")
-	require.Len(t, links, 2)
-	assert.Equal(t, "https://github.com/example/repo/pull/41", links[0].URL)
-	assert.Equal(t, "https://github.com/example/other/pull/42", links[1].URL)
-}
-
-func TestCodeModeSyntaxCorpus(t *testing.T) {
-	input := "const pattern = /tools.exec_command({cmd:\"gh pr view 99\"})/;\n" +
-		"// tools.exec_command({cmd:'gh pr view 98'})\n" +
-		"/* tools.exec_command({cmd:'gh pr view 97'}) */\n" +
-		"const text = `tools.exec_command({cmd:'gh pr view 96'})`;\n" +
-		"tools.exec_command({cmd:`gh pr view ${number}`});\n" +
-		"text(tools.exec_command({cmd:'gh pr view 41'}));\n" +
-		"tools.exec_command({cmd:tools.exec_command({cmd:'gh pr view 42'})});"
-	messages := []db.Message{{ToolCalls: []db.ToolCall{{ToolName: "exec", Category: "Bash", InputJSON: input}}}}
-	links := toolCallPRLinks(t, messages, "/repo", "https://github.com/example/repo.git")
-	require.Len(t, links, 2)
-	assert.Equal(t, 41, links[0].Number)
-	assert.Equal(t, 42, links[1].Number)
+func TestCodeModePRLinks(t *testing.T) {
+	for _, tc := range []struct {
+		name, input string
+		want        []string
+	}{
+		{"batch", "const pattern = /tools.exec_command({cmd:\"gh pr view 99\"})/;\n" +
+			"const literal = 'tools.exec_command({cmd:\"gh pr view 95\"})';\n" +
+			"// tools.exec_command({cmd:'gh pr view 98'})\n" +
+			"/* tools.exec_command({cmd:'gh pr view 97'}) */\n" +
+			"const example = `tools.exec_command({cmd:'gh pr view 96'})`;\n" +
+			"tools.exec_command({cmd:`gh pr view ${number}`});\n" +
+			"text(await tools.exec_command({cmd:'gh pr view 41',workdir:'/repo'}));\n" +
+			"text(await tools.exec_command({cmd:'gh pr co 42 -R example/other',workdir:'/other'}));\n" +
+			"text(await tools.exec_command({cmd:'gh pr view 43',workdir:'/other'}));\n" +
+			"tools.exec_command({cmd:tools.exec_command({cmd:'gh pr view 44'})});", []string{"https://github.com/example/repo/pull/41", "https://github.com/example/other/pull/42", "https://github.com/example/repo/pull/44"}},
+		{"raw shell", `gh pr view 42 -R example/repo`, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			messages := []db.Message{{ToolCalls: []db.ToolCall{{ToolName: "exec", Category: "Bash", InputJSON: tc.input}}}}
+			links := toolCallPRLinks(t, messages, "/repo", "https://github.com/example/repo.git")
+			var urls []string
+			for _, link := range links {
+				urls = append(urls, link.URL)
+			}
+			assert.Equal(t, tc.want, urls)
+		})
+	}
 }

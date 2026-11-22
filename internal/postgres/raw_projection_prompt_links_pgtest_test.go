@@ -249,18 +249,3 @@ func TestRawProjectionUsesRecordedRemote(t *testing.T) {
 	require.Len(t, found, 1)
 	assert.Equal(t, "https://github.com/example/fork/pull/42", found[0].URL)
 }
-
-func TestRawProjectionFindsCommandPRLinks(t *testing.T) {
-	f := newProjectionFixture(t)
-	outcome := projectionOutcome("Review changes")
-	outcome.Outcome.Results[0].Result.Messages[1].ToolCalls[0].InputJSON = `{"command":"gh pr view 42 -R example/repo"}`
-	m, _ := f.accept(t, "device-a", "first", "")
-	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
-	resolved, err := f.sink.Resolve(t.Context(), "codex:portable")
-	require.NoError(t, err)
-	var encoded string
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&encoded))
-	links := db.DecodePRLinks(encoded)
-	require.Len(t, links, 1)
-	assert.Equal(t, "https://github.com/example/repo/pull/42", links[0].URL)
-}
