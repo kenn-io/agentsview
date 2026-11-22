@@ -168,6 +168,13 @@ The latest release is
 
 **Improvements**
 
+- Turn off the periodic embedding rebuild with `backstop_interval = "off"` in
+  `[vector.embed]`, or the periodic Recall scan in `[recall.extract]`. Before,
+  only a negative duration such as `"-1h"` turned them off, and `"0s"` was an
+  error; `"0s"` now also means off, as it does for a remote host's `interval`.
+  `run_after_sync = false` alone still leaves the rebuild on. See
+  [Semantic search](/docs/semantic-search/).
+
 - Session search finds messages that hold your words in any order and in
   their regular forms, ranking exact matches first. See
   [`session search`](/docs/session-api/#agentsview-session-search).

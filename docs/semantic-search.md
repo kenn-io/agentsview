@@ -6,8 +6,8 @@ description: Vector (semantic) search over session messages, plus hybrid search 
 AgentsView can index user and assistant message content into a local vector
 store and search it by meaning instead of exact terms, alongside the existing
 substring/regex/FTS5 content search. This is an opt-in feature backed by Ollama,
-Kit's shared local server, or a configured OpenAI-compatible API.
-For uploaded sessions, see [hosted raw sync setup](/docs/hosted-raw-sync/).
+Kit's shared local server, or a configured OpenAI-compatible API. For uploaded
+sessions, see [hosted raw sync setup](/docs/hosted-raw-sync/).
 
 For the architecture behind this page — storage layout, generations,
 concurrency, and the search path — see
@@ -16,9 +16,9 @@ concurrency, and the search path — see
 !!! note "Backends"
 
     Semantic and hybrid search run on the local SQLite archive, on
-    [PostgreSQL](#postgresql) via pgvector, and on [ClickHouse](#clickhouse).
-    CLI and MCP hybrid searches return keyword matches with a note when search
-    by meaning is unavailable.
+    [PostgreSQL](#postgresql) via pgvector, and on [ClickHouse](#clickhouse). CLI
+    and MCP hybrid searches return keyword matches with a note when search by
+    meaning is unavailable.
 
 ## Enabling `[vector]`
 
@@ -29,11 +29,10 @@ and starts semantic search without a restart. Full-text search remains available
 during indexing.
 
 For CLI setup, run `agentsview index embeddings build` with a writable daemon
-running. AgentsView uses a
-running Ollama server with Nomic or Kit's shared local server. If the local
-server needs files, the CLI asks before downloading them. Search and automatic
-builds reuse installed files; they direct you to the CLI when a download needs
-approval. Declining stops the download and build.
+running. AgentsView uses a running Ollama server with Nomic or Kit's shared
+local server. If the local server needs files, the CLI asks before downloading
+them. Search and automatic builds reuse installed files; they direct you to the
+CLI when a download needs approval. Declining stops the download and build.
 
 ### Turned on in another app
 
@@ -88,8 +87,15 @@ max_retries = 3                   # attempts on 5xx/network errors; 4xx fails fa
 [vector.embed]
 run_after_sync = true             # daemon embeds deltas after each sync, debounced ~30s (default true)
 recall = false                    # default; set true to permit automatic Recall embedding
-backstop_interval = "24h"         # periodic full reconciliation scan; negative disables (default "24h")
+backstop_interval = "24h"         # periodic full reconciliation scan; "off" disables (default "24h")
 ```
+
+`run_after_sync = false` stops only the builds that follow each sync. The
+backstop still runs a full reconciliation every `backstop_interval`, which on a
+large archive can keep a local GPU busy for hours. To keep this machine from
+building embeddings on its own, set both `run_after_sync = false` and
+`backstop_interval = "off"`, then run `agentsview index embeddings build` when
+you choose.
 
 The 4,000-character cap usually fits nomic-embed-text's 2,048-token window in
 Ollama for English and code session text. Lower `max_input_chars` for
@@ -160,8 +166,8 @@ Model identity — `model`, `dimension`, `request_dimensions`, `max_input_chars`
 in the `servers` table must serve that same model and input recipe, so vectors
 produced by any of them are interchangeable and land in the same generation.
 What varies per server is transport and capacity: `endpoint`, `local`,
-`api_key_env` or `api_key_file`, `timeout`, `max_retries`, `batch_size`, `max_batch_tokens`,
-`concurrency`, and `ollama_cpu_fallback`.
+`api_key_env` or `api_key_file`, `timeout`, `max_retries`, `batch_size`,
+`max_batch_tokens`, `concurrency`, and `ollama_cpu_fallback`.
 
 When `model_context_tokens` and a server's `max_batch_tokens` are both set,
 builds cap that server's effective batch size at
@@ -302,8 +308,8 @@ When a request of several inputs times out, Kit's client retries it as two
 requests of half the size, and keeps halving while requests time out. Each split
 costs one full timeout first. Kit's server stops work on an abandoned request
 after its current input. A single input that times out fails the build with
-`embed request timed out`, and the next build retries it. If builds keep
-failing this way, raise `timeout` or lower `batch_size`.
+`embed request timed out`, and the next build retries it. If builds keep failing
+this way, raise `timeout` or lower `batch_size`.
 
 ### Role-aware task prefixes
 
@@ -809,8 +815,8 @@ agentsview session search "flaky test" --hybrid --project myapp
   matches both surface. When search by meaning is unavailable, CLI and MCP
   return the keyword matches with `effective_mode: hybrid_keyword` and a note
   beside `coverage`. The note gives the readiness reason (`not set up` or
-  indexing progress) and explains that only keyword matches were returned.
-  On CockroachDB, keyword terms must all appear. If results are few, try short
+  indexing progress) and explains that only keyword matches were returned. On
+  CockroachDB, keyword terms must all appear. If results are few, try short
   substring queries with key terms or synonyms, keeping your filters.
 - Both modes are restricted to the `messages` source — the same restriction
   `--fts` already has — since only user/assistant message content is embedded

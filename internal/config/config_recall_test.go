@@ -126,14 +126,15 @@ func TestRecallExtractConfigValidate(t *testing.T) {
 			wantErr: "backstop_interval",
 		},
 		{
-			name: "zero backstop_interval",
-			mutate: func(c *RecallExtractConfig) {
-				c.BackstopInterval = "0s"
-			},
-			wantErr: "backstop_interval must not be zero",
+			name:   "backstop_interval off is valid",
+			mutate: func(c *RecallExtractConfig) { c.BackstopInterval = "off" },
 		},
 		{
-			name: "negative backstop_interval disables and is valid",
+			name:   "zero backstop_interval is valid",
+			mutate: func(c *RecallExtractConfig) { c.BackstopInterval = "0s" },
+		},
+		{
+			name: "negative backstop_interval is valid",
 			mutate: func(c *RecallExtractConfig) {
 				c.BackstopInterval = "-1s"
 			},

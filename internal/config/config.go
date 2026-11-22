@@ -452,9 +452,23 @@ type VectorEmbedConfig struct {
 	// Recall explicitly permits automatic Recall embedding. It defaults to
 	// false because Recall entries may contain distilled private content.
 	Recall bool `toml:"recall" json:"recall"`
-	// BackstopInterval is a parseable duration string for a periodic
-	// full rescan. Default "24h"; a negative duration disables it.
+	// BackstopInterval is how often a periodic full rescan runs, read via
+	// ParseBackstopInterval. Default "24h"; "off" disables it.
 	BackstopInterval string `toml:"backstop_interval" json:"backstop_interval"`
+}
+
+// ParseBackstopInterval reads a backstop_interval setting. "off", zero, or a
+// negative duration disables the periodic pass and returns 0; zero matches
+// what a remote host's interval = "0s" means.
+func ParseBackstopInterval(s string) (time.Duration, error) {
+	if strings.EqualFold(strings.TrimSpace(s), "off") {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, err
+	}
+	return max(d, 0), nil
 }
 
 // DefaultRecallMaxRevisionLag is the default [vector]
@@ -492,13 +506,8 @@ func (c VectorConfig) Validate() error {
 	if err := c.Embeddings.validateServers(); err != nil {
 		return err
 	}
-	backstop, err := time.ParseDuration(c.Embed.BackstopInterval)
-	if err != nil {
+	if _, err := ParseBackstopInterval(c.Embed.BackstopInterval); err != nil {
 		return fmt.Errorf("[vector.embed] invalid backstop_interval %q: %w", c.Embed.BackstopInterval, err)
-	}
-	if backstop == 0 {
-		return errors.New("[vector.embed] backstop_interval must not be zero; " +
-			"use a negative value to disable or omit for the 24h default")
 	}
 	return nil
 }
