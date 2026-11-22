@@ -303,3 +303,15 @@ func bufferedRawJSONContentRevision(structure any) (string, error) {
 	}
 	return rawDigest("normalized-content-v1", string(encoded)), nil
 }
+
+func TestRawPayloadKeepsRecordedRemote(t *testing.T) {
+	p := ingest.PreparedSession{RecordedGitRemote: "https://github.com/example/repo.git", Session: db.Session{Cwd: "/work/repo"}, Messages: []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", InputJSON: `{"command":"gh pr view 42"}`}}}}}
+	encoded, err := encodeRawPayload(p)
+	require.NoError(t, err)
+	decoded, err := decodeRawPayload(encoded)
+	require.NoError(t, err)
+	links, err := db.ToolCallPRLinks(t.Context(), decoded.Messages, decoded.Session.Cwd, decoded.RecordedGitRemote)
+	require.NoError(t, err)
+	require.Len(t, links, 1)
+	assert.Equal(t, "https://github.com/example/repo/pull/42", links[0].URL)
+}

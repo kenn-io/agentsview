@@ -12,6 +12,8 @@ import (
 
 func TestToolCallPRLinks(t *testing.T) {
 	messages := []db.Message{{ToolCalls: []db.ToolCall{
+		{Category: "Task", InputJSON: `{"message":"Review https://github.com/example/repo/pull/51"}`},
+		{Category: "Task", InputJSON: `{"task":"Review https://github.com/example/repo/pull/50"}`},
 		{Category: "Task", InputJSON: `{"prompt":"Review https://github.com/example/repo/pull/42", "description":"https://github.com/example/repo/pull/47"}`},
 		{Category: "Task", InputJSON: `{"tool":"newTask","content":"Review https://github.com/example/repo/pull/48"}`},
 		{Category: "Task", InputJSON: `{"prompt":"Review https://github.com/example/repo/pull/49","content":[{"type":"text","text":"other"}]}`},
@@ -21,13 +23,15 @@ func TestToolCallPRLinks(t *testing.T) {
 		{Category: "Bash", InputJSON: `{"command":["gh","pr","merge","45","-R","example/repo"]}`},
 	}}}
 	links := toolCallPRLinks(t, messages, "", "")
-	if assert.Len(t, links, 6) {
-		assert.Equal(t, 42, links[0].Number)
-		assert.Equal(t, 48, links[1].Number)
-		assert.Equal(t, 49, links[2].Number)
-		assert.Equal(t, 43, links[3].Number)
-		assert.Equal(t, 46, links[4].Number)
-		assert.Equal(t, 45, links[5].Number)
+	if assert.Len(t, links, 8) {
+		assert.Equal(t, 51, links[0].Number)
+		assert.Equal(t, 50, links[1].Number)
+		assert.Equal(t, 42, links[2].Number)
+		assert.Equal(t, 48, links[3].Number)
+		assert.Equal(t, 49, links[4].Number)
+		assert.Equal(t, 43, links[5].Number)
+		assert.Equal(t, 46, links[6].Number)
+		assert.Equal(t, 45, links[7].Number)
 	}
 }
 

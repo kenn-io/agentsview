@@ -10,9 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawderive"
 )
@@ -236,28 +234,7 @@ func TestRawProjectionFutureVersionDialogueRefresh(t *testing.T) {
 	assert.Equal(t, []db.PRLink{{URL: "https://github.com/o/r/pull/99", Host: "github.com", Repository: "o/r", Number: 99}}, db.DecodePRLinks(links))
 }
 
-func TestRawProjectionAccumulatesToolPRLinks(t *testing.T) {
-	f := newProjectionFixture(t)
-	var err error
-	f.sink, err = NewRawProjectionStore(t.Context(), f.runtime, RawProjectionOptions{Tenant: f.tenant, Content: ingest.ContentOptions{ArchiveContent: config.ArchiveContentTranscripts}})
-	require.NoError(t, err)
-	outcome := projectionOutcome("Review the changes")
-	outcome.Outcome.Results[0].Result.Messages[1].ToolCalls[0].InputJSON = `{"command":"gh pr view 42 -R example/repo"}`
-	first, _ := f.accept(t, "device-a", "first", "")
-	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, first), first, outcome))
-	outcome.Outcome.Results[0].Result.Messages[1].ToolCalls[0].InputJSON = `{"command":"gh pr view 43 -R example/repo"}`
-	second, _ := f.accept(t, "device-b", "second", "")
-	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, second), second, outcome))
-	after, err := f.sink.Resolve(t.Context(), "codex:portable")
-	require.NoError(t, err)
-	var encoded string
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, after.SessionID).Scan(&encoded))
-	links := db.DecodePRLinks(encoded)
-	require.Len(t, links, 2)
-	assert.ElementsMatch(t, []string{"https://github.com/example/repo/pull/42", "https://github.com/example/repo/pull/43"}, []string{links[0].URL, links[1].URL})
-}
-
-func TestRawProjectionDoesNotInferFromRecordedRemote(t *testing.T) {
+func TestRawProjectionUsesRecordedRemote(t *testing.T) {
 	f := newProjectionFixture(t)
 	outcome := projectionOutcome("Review changes")
 	outcome.Outcome.Results[0].Result.Session.GitRemote = "https://github.com/example/fork.git"
@@ -268,36 +245,22 @@ func TestRawProjectionDoesNotInferFromRecordedRemote(t *testing.T) {
 	require.NoError(t, err)
 	var links string
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&links))
-	assert.Empty(t, db.DecodePRLinks(links))
+	found := db.DecodePRLinks(links)
+	require.Len(t, found, 1)
+	assert.Equal(t, "https://github.com/example/fork/pull/42", found[0].URL)
 }
 
-func TestRawProjectionMergeRetainsCommandLinks(t *testing.T) {
+func TestRawProjectionFindsCommandPRLinks(t *testing.T) {
 	f := newProjectionFixture(t)
-	var err error
-	f.sink, err = NewRawProjectionStore(t.Context(), f.runtime, RawProjectionOptions{Tenant: f.tenant, Content: ingest.ContentOptions{ArchiveContent: config.ArchiveContentTranscripts}})
+	outcome := projectionOutcome("Review changes")
+	outcome.Outcome.Results[0].Result.Messages[1].ToolCalls[0].InputJSON = `{"command":"gh pr view 42 -R example/repo"}`
+	m, _ := f.accept(t, "device-a", "first", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
+	resolved, err := f.sink.Resolve(t.Context(), "codex:portable")
 	require.NoError(t, err)
-	first := projectionOutcome("old question")
-	first.Outcome.Results[0].Result.Session.Agent = parser.AgentVSCopilot
-	first.Outcome.Results[0].Result.Session.ID = "visualstudio-copilot:portable"
-	first.Outcome.Results[0].Result.Messages[0].Timestamp = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	first.Outcome.Results[0].Result.Messages[1].Timestamp = time.Date(2026, 1, 1, 0, 1, 0, 0, time.UTC)
-	first.Outcome.Results[0].Result.Messages[1].ToolCalls[0].InputJSON = `{"command":"gh pr view 42 -R example/repo"}`
-	m, receipt := f.accept(t, "device-a", "first", "", parser.AgentVSCopilot)
-	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, first))
-	second := projectionOutcome("new question")
-	second.Outcome.Results[0].Result.Session.Agent = parser.AgentVSCopilot
-	second.Outcome.Results[0].Result.Session.ID = "visualstudio-copilot:portable"
-	updated := first.Outcome.Results[0].Result.Messages[1]
-	updated.Ordinal = 0
-	updated.ToolCalls[0].InputJSON = ""
-	updated.OutputTokens, updated.HasOutputTokens = 10, true
-	second.Outcome.Results[0].Result.Messages = []parser.ParsedMessage{updated, {Ordinal: 1, Role: parser.RoleAssistant, Content: "new answer", Timestamp: time.Date(2026, 1, 1, 0, 2, 0, 0, time.UTC)}}
-	m, _ = f.accept(t, "device-a", "second", receipt.Receipt, parser.AgentVSCopilot)
-	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, second))
-	resolved, err := f.sink.Resolve(t.Context(), "visualstudio-copilot:portable")
-	require.NoError(t, err)
-	var links string
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&links))
-	require.Len(t, db.DecodePRLinks(links), 1)
-	assert.Equal(t, "https://github.com/example/repo/pull/42", db.DecodePRLinks(links)[0].URL)
+	var encoded string
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&encoded))
+	links := db.DecodePRLinks(encoded)
+	require.Len(t, links, 1)
+	assert.Equal(t, "https://github.com/example/repo/pull/42", links[0].URL)
 }

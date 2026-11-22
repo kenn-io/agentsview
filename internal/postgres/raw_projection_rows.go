@@ -70,7 +70,7 @@ func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string, dialo
 		if err != nil {
 			return false, err
 		}
-		toolLinks, err := db.ToolCallPRLinks(ctx, payload.Messages, payload.Session.Cwd, "")
+		toolLinks, err := db.ToolCallPRLinks(ctx, payload.Messages, payload.Session.Cwd, payload.RecordedGitRemote)
 		if err != nil {
 			return false, err
 		}
@@ -329,7 +329,7 @@ func (s *RawProjectionStore) writePayload(ctx context.Context, tx *sql.Tx, id, g
 	if err != nil {
 		return err
 	}
-	toolLinks, err := db.ToolCallPRLinks(ctx, p.Messages, p.Session.Cwd, "")
+	toolLinks, err := db.ToolCallPRLinks(ctx, p.Messages, p.Session.Cwd, p.RecordedGitRemote)
 	if err != nil {
 		return err
 	}
