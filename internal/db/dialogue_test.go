@@ -9,6 +9,7 @@ import (
 	"testing"
 	"testing/synctest"
 
+	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -456,4 +457,41 @@ func TestRepairMessageFTSRollbackPreservesToken(t *testing.T) {
 	require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key='search_history_token'`).Scan(&after))
 	assert.Equal(t, before, after)
 	assert.False(t, d.HasFTS(t.Context()))
+}
+
+func TestRepairMessageFTSCancellationRollsBack(t *testing.T) {
+	d := testDB(t)
+	require.NoError(t, d.DropFTS(t.Context()))
+	d.messageFTSRepairPending.Store(true)
+	entered, resume := make(chan struct{}), make(chan struct{})
+	conn, err := d.getWriter().Conn(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, conn.Raw(func(raw any) error {
+		raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(func(op int, table, _, _ string) int {
+			if op == sqlite3.SQLITE_CREATE_VTABLE && table == "messages_fts" {
+				close(entered)
+				<-resume
+			}
+			return sqlite3.SQLITE_OK
+		})
+		return nil
+	}))
+	require.NoError(t, conn.Close())
+	ctx, cancel := context.WithCancel(t.Context())
+	result := make(chan error, 1)
+	go func() { result <- d.RepairMessageFTS(ctx) }()
+	<-entered
+	cancel()
+	close(resume)
+	require.ErrorIs(t, <-result, context.Canceled)
+	assert.False(t, d.HasFTS(t.Context()))
+	conn, err = d.getWriter().Conn(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, conn.Raw(func(raw any) error {
+		raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(nil)
+		return nil
+	}))
+	require.NoError(t, conn.Close())
+	require.NoError(t, d.RepairMessageFTS(t.Context()))
+	assert.True(t, d.HasFTS(t.Context()))
 }
