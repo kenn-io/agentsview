@@ -916,7 +916,8 @@ func TestUpgradeExportSchemaInPlaceOnlyAddsExportIdentitySchema(t *testing.T) {
 	assert.Equal(t, 7, tokens)
 	assert.Empty(t, account)
 	assert.Empty(t, stamp)
-	require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT count(*) FROM cursor_account_polls`).Scan(&tableCount))
+	require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'cursor_account_polls'`).Scan(&tableCount))
+	assert.Equal(t, 1, tableCount)
 }
 
 func TestUpgradeExportSchemaInPlaceRejectsUnrelatedSchemaGap(t *testing.T) {
@@ -1163,6 +1164,7 @@ func TestArchiveResyncState(t *testing.T) {
 	}{
 		{name: "current", version: dataVersion},
 		{name: "additive", version: dataVersion - 1, additive: true},
+		{name: "additive with pending scope", version: dataVersion - 1, additive: true, pending: true, needs: true},
 		{name: "data stale", version: 129, needs: true, full: true},
 		{name: "scoped version", version: dataVersion - 1, needs: true},
 		{name: "scoped pending", version: dataVersion, pending: true, needs: true},
