@@ -119,7 +119,7 @@ func TestNewServer_Instructions(t *testing.T) {
 				tool string
 				args []string
 			}{
-				{"search_content with mode hybrid", ToolSearchContent, []string{"mode"}},
+				{"search_content with mode hybrid", ToolSearchContent, nil},
 				{"search_sessions for keywords", ToolSearchSessions, nil},
 				{"search_sessions with its name as query", ToolSearchSessions, []string{"query"}},
 				{"list_sessions with pr=owner/repo#N, include_one_shot and include_automated true", ToolListSessions, []string{"pr", "include_one_shot", "include_automated"}},
@@ -131,6 +131,19 @@ func TestNewServer_Instructions(t *testing.T) {
 				{"list_sessions with active_since", ToolListSessions, []string{"active_since"}},
 			} {
 				assert.Contains(t, instructions, route.text)
+				if len(route.args) == 0 {
+					continue
+				}
+				var line string
+				for _, candidate := range strings.Split(instructions, "\n") {
+					if strings.Contains(candidate, route.text) {
+						line = candidate
+						break
+					}
+				}
+				for _, arg := range route.args {
+					assert.Regexp(t, `\b`+arg+`\b`, line, "%s instruction", route.tool)
+				}
 				var found bool
 				for _, tool := range catalog.Tools {
 					if tool.Name != route.tool {
@@ -154,6 +167,8 @@ func TestNewServer_Instructions(t *testing.T) {
 			assert.Contains(t, instructions, "identifying it by this question or search calls if its ID is unknown")
 			assert.Contains(t, instructions, "include_active in search_sessions and search_content")
 			assert.Contains(t, instructions, "include_one_shot and include_automated in list_sessions and search_content")
+			assert.Contains(t, instructions, "stored ID such as codex:<uuid>")
+			assert.Contains(t, instructions, "plain UUID works locally")
 			assert.Contains(t, instructions, "--server with API version "+strconv.Itoa(service.RawSessionLookupAPIVersion)+" or later")
 		})
 	}
