@@ -143,12 +143,3 @@ func TestGetMessages_BodyCursorContinuesUnderIssuingRoles(t *testing.T) {
 	}
 	assert.Equal(t, "remainder text"[4:], strings.Join(parts, ""))
 }
-
-func TestGetMessages_BudgetOversizedMetadata(t *testing.T) {
-	ts, d := newTestToolset(t)
-	message := dbtest.UserMsg("large-model", 0, "message")
-	message.Model = strings.Repeat("x", 12000)
-	dbtest.SeedSessionWithMessages(t, d, "large-model", "proj", []db.Message{message}, dbtest.WithMessageCounts(1, 1))
-	_, _, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "large-model"})
-	require.ErrorContains(t, err, "message metadata exceeds response budget")
-}

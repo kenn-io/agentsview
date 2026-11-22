@@ -635,7 +635,8 @@ func TestGetMessages_BodyCursorSplitsMessageOverBudget(t *testing.T) {
 
 	in := getMessagesIn{SessionID: "oversized", MaxCharsPerMessage: maxMaxCharsPerMessage}
 	var got strings.Builder
-	for {
+	for i := 0; ; i++ {
+		require.Less(t, i, len(body), "body continuation did not end")
 		_, out, err := ts.getMessages(t.Context(), nil, in)
 		require.NoError(t, err)
 		require.Len(t, out.Messages, 1)
@@ -2333,7 +2334,8 @@ func TestGetMessages_BudgetPages(t *testing.T) {
 			var ordinals []int
 			filtered := 0
 			cutPage := false
-			for {
+			for i := 0; ; i++ {
+				require.Less(t, i, len(messages)+1, "message pagination did not end")
 				_, out, err := ts.getMessages(t.Context(), nil, in)
 				require.NoError(t, err)
 				assert.True(t, fitsResponse(out))
@@ -2373,6 +2375,15 @@ func TestGetMessages_BudgetPages(t *testing.T) {
 			assert.Equal(t, 101, len(ordinals)+filtered)
 		})
 	}
+}
+
+func TestGetMessages_BudgetOversizedMetadata(t *testing.T) {
+	ts, d := newTestToolset(t)
+	message := dbtest.UserMsg("large-model", 0, "message")
+	message.Model = strings.Repeat("x", 12000)
+	dbtest.SeedSessionWithMessages(t, d, "large-model", "proj", []db.Message{message}, dbtest.WithMessageCounts(1, 1))
+	_, _, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "large-model"})
+	require.ErrorContains(t, err, "message metadata exceeds response budget")
 }
 
 type pagedContentSearchService struct {
