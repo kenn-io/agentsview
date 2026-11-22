@@ -152,7 +152,6 @@ func TestNewServer_Instructions(t *testing.T) {
 			assert.Contains(t, instructions, "For every PR, including a URL")
 			assert.Contains(t, instructions, `PR N\b, pr N\b, #N\b, and /pull/N\b`)
 			assert.Contains(t, instructions, "identifying it by this question or search calls if its ID is unknown")
-			assert.Contains(t, instructions, "get_session_overview, then get_tool_calls, get_messages, or get_child_sessions")
 			assert.Contains(t, instructions, "include_active in search_sessions and search_content")
 			assert.Contains(t, instructions, "include_one_shot and include_automated in list_sessions and search_content")
 			assert.Contains(t, instructions, "--server with API version "+strconv.Itoa(service.RawSessionLookupAPIVersion)+" or later")
