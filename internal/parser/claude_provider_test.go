@@ -840,6 +840,59 @@ func TestClaudeProviderParseResolvesPersistedToolResultsThroughStoredPathResolve
 		"a stored persisted-output path must resolve through ParseRequest.StoredPathResolver")
 }
 
+// A changed tool result must recapture every source whose raw capture plan
+// uploads it. Sync selects only the owning transcript, because a subagent's
+// transcript-only fingerprint cannot change with its parent's results.
+func TestClaudeToolResultChangeSelectsSourcesByConsumer(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "project-a")
+	owner := filepath.Join(projectDir, "session-1.jsonl")
+	subagent := filepath.Join(projectDir, "session-1", "subagents", "agent-a1.jsonl")
+	for _, path := range []string{owner, subagent, filepath.Join(projectDir, "session-2.jsonl")} {
+		writeSourceFile(t, path, claudeProviderFixture(filepath.Base(path)))
+	}
+	result := filepath.Join(projectDir, "session-1", "tool-results", "out.txt")
+	writeSourceFile(t, result, "output\n")
+	resultInfo, err := os.Stat(result)
+	require.NoError(t, err)
+
+	provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	discovered, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, discovered, 3)
+	var uploaders []string
+	for _, source := range discovered {
+		plan, supported, err := ResolveRawCapturePlan(t.Context(), provider, source)
+		require.NoError(t, err)
+		require.True(t, supported)
+		for _, entry := range plan.Entries {
+			info, err := os.Stat(entry.LocalPath)
+			require.NoError(t, err)
+			if os.SameFile(resultInfo, info) {
+				uploaders = append(uploaders, source.Key)
+			}
+		}
+	}
+	keys := func(sources []SourceRef) []string {
+		out := make([]string, 0, len(sources))
+		for _, source := range sources {
+			out = append(out, source.Key)
+		}
+		return out
+	}
+
+	req := ChangedPathRequest{Path: result, EventKind: "change", WatchRoot: root}
+	captured, err := RawCaptureSourcesForChangedPath(t.Context(), provider, req)
+	require.NoError(t, err)
+	synced, err := provider.SourcesForChangedPath(t.Context(), req)
+	require.NoError(t, err)
+
+	assert.ElementsMatch(t, []string{owner, subagent}, uploaders)
+	assert.ElementsMatch(t, uploaders, keys(captured))
+	assert.Equal(t, []string{owner}, keys(synced))
+}
+
 func TestClaudePlanRawCaptureCarriesLineageSiblingInputs(t *testing.T) {
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "demo-project")
