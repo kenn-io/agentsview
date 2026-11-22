@@ -15,6 +15,7 @@ type firstImportWave struct {
 	limit    int
 	selected map[firstImportSource]struct{}
 	partial  bool
+	onWrite  func()
 }
 
 // SyncNewest imports a bounded first wave without recording a completed sync.
@@ -45,7 +46,14 @@ func (e *Engine) RunFirstImport(ctx context.Context, onProgress ProgressFunc) (S
 		return stats, true, ctx.Err()
 	}
 
-	return e.RunStartupSyncFallback(ctx, onProgress)
+	// Leave time for clients to refresh between notifications during a long import.
+	var lastRefresh time.Time
+	return e.runStartupSyncFallback(ctx, onProgress, &firstImportWave{onWrite: func() {
+		if time.Since(lastRefresh) >= time.Second {
+			lastRefresh = time.Now()
+			e.emit("sessions")
+		}
+	}})
 }
 
 type firstImportSource struct {
@@ -68,7 +76,7 @@ func (e *Engine) firstImportSelect(ctx context.Context, files []parser.Discovere
 		if mtime == 0 {
 			mtime, _ = discoveredFileMtime(ctx, file)
 		}
-		candidates = append(candidates, firstImportCandidate{firstImportSource{file.Agent, file.Path}, mtime})
+		candidates = append(candidates, firstImportCandidate{firstImportSource{file.Agent, file.Path}, max(mtime, 0)})
 	}
 	for _, agent := range []parser.AgentType{parser.AgentWarp, parser.AgentForge, parser.AgentPiebald, parser.AgentZCode, parser.AgentGoose, parser.AgentCrush} {
 		var roots []string
@@ -87,7 +95,7 @@ func (e *Engine) firstImportSelect(ctx context.Context, files []parser.Discovere
 			continue
 		}
 		if err := discoverer.DiscoverEach(ctx, func(source parser.SourceRef) error {
-			candidates = append(candidates, firstImportCandidate{firstImportSource{agent, providerDiscoveredPath(source)}, source.DiscoveryMTimeNS})
+			candidates = append(candidates, firstImportCandidate{firstImportSource{agent, providerDiscoveredPath(source)}, max(source.DiscoveryMTimeNS, 0)})
 			return ctx.Err()
 		}); err != nil {
 			return err
@@ -111,7 +119,7 @@ func (e *Engine) firstImportSelect(ctx context.Context, files []parser.Discovere
 	})
 	wave.selected = make(map[firstImportSource]struct{}, wave.limit)
 	for _, candidate := range candidates {
-		if candidate.mtime <= 0 || len(wave.selected) >= wave.limit {
+		if len(wave.selected) >= wave.limit {
 			break
 		}
 		wave.selected[candidate.source] = struct{}{}

@@ -139,3 +139,48 @@ func TestFirstImportFingerprintsOnlySelectedClaudeFiles(t *testing.T) {
 		}, path)
 	}
 }
+
+func TestFirstImportRefreshesWhileOlderSessionsAreWritten(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	require.NoError(t, os.MkdirAll(project, 0o755))
+	for i := range 250 {
+		path := filepath.Join(project, fmt.Sprintf("session-%03d.jsonl", i))
+		content := testjsonl.NewSessionBuilder().AddClaudeUser("2026-01-01T00:00:00Z", "hello").String()
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	}
+	archive := openTestDB(t)
+	refresh := make(chan struct{}, 1)
+	resume := make(chan struct{})
+	var events int
+	engine := NewEngine(t.Context(), archive, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}, Machine: "local", DeferStartupMaintenance: true,
+		Emitter: emitterFunc(func(scope string) {
+			if scope == "sessions" {
+				events++
+				if events == 2 {
+					refresh <- struct{}{}
+					<-resume
+				}
+			}
+		}),
+	})
+	t.Cleanup(engine.Close)
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := engine.RunFirstImport(t.Context(), nil)
+		done <- err
+	}()
+	select {
+	case <-refresh:
+	case <-time.After(30 * time.Second):
+		close(resume)
+		t.Fatal("no refresh while importing older sessions")
+	}
+	page, err := archive.ListSessions(t.Context(), db.SessionFilter{Limit: 300})
+	close(resume)
+	require.NoError(t, err)
+	require.Greater(t, len(page.Sessions), 100)
+	require.Less(t, len(page.Sessions), 250)
+	require.NoError(t, <-done)
+}

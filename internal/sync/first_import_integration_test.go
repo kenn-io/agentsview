@@ -91,3 +91,43 @@ func TestFirstImportWithoutSourceTimestamp(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, unknown)
 }
+
+func TestFirstImportFillsWaveWithoutTimestamps(t *testing.T) {
+	for _, known := range []bool{false, true} {
+		t.Run(fmt.Sprintf("known-%t", known), func(t *testing.T) {
+			env := setupFocusedTestEnv(t, parser.AgentClaude)
+			defer env.engine.Close()
+			content := testjsonl.NewSessionBuilder().AddClaudeUser(tsEarly, "hello").String()
+			for i := range 4 {
+				path := env.writeClaudeSession(t, "project", fmt.Sprintf("unknown-%d.jsonl", i), content)
+				require.NoError(t, os.Chtimes(path, time.Unix(0, 0), time.Unix(0, 0)))
+			}
+			if known {
+				path := env.writeClaudeSession(t, "project", "known.jsonl", content)
+				require.NoError(t, os.Chtimes(path, time.Unix(10, 0), time.Unix(10, 0)))
+			}
+			stats, complete := env.engine.SyncNewest(t.Context(), 3, nil)
+			require.False(t, complete)
+			require.Equal(t, 3, stats.Synced)
+			page, err := env.db.ListSessions(t.Context(), db.SessionFilter{Limit: 10})
+			require.NoError(t, err)
+			ids := make([]string, 0, len(page.Sessions))
+			for _, session := range page.Sessions {
+				ids = append(ids, session.ID)
+			}
+			if known {
+				require.ElementsMatch(t, []string{"known", "unknown-0", "unknown-1"}, ids)
+			} else {
+				require.ElementsMatch(t, []string{"unknown-0", "unknown-1", "unknown-2"}, ids)
+			}
+			env.engine.SyncAll(t.Context(), nil)
+			page, err = env.db.ListSessions(t.Context(), db.SessionFilter{Limit: 10})
+			require.NoError(t, err)
+			if known {
+				require.Len(t, page.Sessions, 5)
+			} else {
+				require.Len(t, page.Sessions, 4)
+			}
+		})
+	}
+}

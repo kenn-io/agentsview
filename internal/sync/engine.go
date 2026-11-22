@@ -3339,7 +3339,7 @@ func (e *Engine) SyncThenRun(
 	defer e.syncMu.Unlock()
 	defer e.clearCurrentProgress()
 	defer func() { e.recordStartupReconciled(ctx, stats, err) }()
-	stats, err = e.syncThenRunLocked(ctx, full, onProgress, work)
+	stats, err = e.syncThenRunLocked(ctx, full, onProgress, work, nil)
 	if err == nil && (stats.Deferred == 0 || stats.ArchiveRebuilt) {
 		// Release while syncMu is still held. A timed fallback that was
 		// already waiting on the mutex can then recheck the gate before it
@@ -3353,7 +3353,7 @@ func (e *Engine) syncThenRunLocked(
 	ctx context.Context,
 	full bool,
 	onProgress ProgressFunc,
-	work func(forceFull bool) error,
+	work func(forceFull bool) error, wave *firstImportWave,
 ) (stats SyncStats, err error) {
 	didResync := full || e.db.NeedsResync()
 	if didResync {
@@ -3361,13 +3361,13 @@ func (e *Engine) syncThenRunLocked(
 		if stats.Aborted && ctx.Err() == nil {
 			stats = e.syncAllLocked(
 				ctx, onProgress, time.Time{}, nil,
-				syncWriteDefault, true, false, nil,
+				syncWriteDefault, true, false, wave,
 			)
 		}
 	} else {
 		stats = e.syncAllLocked(
 			ctx, onProgress, time.Time{}, nil,
-			syncWriteDefault, true, false, nil,
+			syncWriteDefault, true, false, wave,
 		)
 	}
 	if ctx.Err() != nil {
@@ -3711,6 +3711,12 @@ func (e *Engine) RunStartupMaintenance(
 func (e *Engine) RunStartupSyncFallback(
 	ctx context.Context, onProgress ProgressFunc,
 ) (stats SyncStats, ran bool, err error) {
+	return e.runStartupSyncFallback(ctx, onProgress, nil)
+}
+
+func (e *Engine) runStartupSyncFallback(
+	ctx context.Context, onProgress ProgressFunc, wave *firstImportWave,
+) (stats SyncStats, ran bool, err error) {
 	if e.refuseWriteInForceParse("RunStartupSyncFallback") {
 		return SyncStats{}, false, nil
 	}
@@ -3734,7 +3740,7 @@ func (e *Engine) RunStartupSyncFallback(
 		}
 	}
 	stats, err = e.syncThenRunLocked(
-		ctx, false, onProgress, func(bool) error { return nil },
+		ctx, false, onProgress, func(bool) error { return nil }, wave,
 	)
 	// Once the fallback has attempted the skipped startup sync, maintenance
 	// must be allowed to proceed even if that attempt was interrupted.
@@ -6332,7 +6338,7 @@ func (e *Engine) syncAllLocked(
 		}()
 	}
 
-	if wave != nil {
+	if wave != nil && wave.onWrite == nil {
 		if err := e.firstImportSelect(ctx, dedupeDiscoveredFiles(all), scope, wave); err != nil {
 			return SyncStats{Aborted: true, Warnings: []string{err.Error()}}
 		}
@@ -6429,8 +6435,12 @@ func (e *Engine) syncAllLocked(
 		ctx = e.withSourceFreshnessSnapshot(ctx, all)
 	}
 	results := e.startWorkers(ctx, all)
-	stats = e.collectAndBatch(
-		ctx, results, len(all), progressTotal, onProgress, writeMode,
+	options := collectAndBatchOptions{}
+	if wave != nil && wave.onWrite != nil {
+		options.afterWrite = wave.onWrite
+	}
+	stats = e.collectAndBatchWithOptions(
+		ctx, results, len(all), progressTotal, onProgress, writeMode, options,
 	)
 	if err := e.finishCodexParentInventoryBatch(ctx, &stats); err != nil {
 		log.Printf("%v", err)
@@ -7622,6 +7632,7 @@ func (e *Engine) syncProviderDBBackedAgent(
 	var pendingCount, indexedMessages, written int
 	var writeDuration time.Duration
 	flush := func(pending []pendingWrite) bool {
+		beforeWrite := written
 		complete := true
 		pendingCount += len(pending)
 		for _, pw := range pending {
@@ -7679,6 +7690,9 @@ func (e *Engine) syncProviderDBBackedAgent(
 			}
 		}
 		writeDuration += time.Since(tWrite)
+		if wave != nil && wave.onWrite != nil && written > beforeWrite {
+			wave.onWrite()
+		}
 		return complete
 	}
 	discovered, sourceFailures, discoveryErr := e.syncProviderDBBacked(
@@ -7836,6 +7850,7 @@ func (e *Engine) collectAndBatch(
 
 type collectAndBatchOptions struct {
 	observeResult func(syncJob)
+	afterWrite    func()
 }
 
 func (e *Engine) collectAndBatchWithOptions(
@@ -8173,6 +8188,9 @@ func (e *Engine) collectAndBatchWithOptions(
 				}
 			}
 			stats.RecordSynced(outcome.writtenSessions)
+			if outcome.writtenSessions > 0 && options.afterWrite != nil {
+				options.afterWrite()
+			}
 			for range outcome.failedSessions {
 				stats.RecordFailed()
 			}
