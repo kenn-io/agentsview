@@ -654,6 +654,32 @@ func TestGetMessages_BodyCursorSplitsMessageOverBudget(t *testing.T) {
 	assert.Equal(t, body, got.String())
 }
 
+func TestGetMessages_AroundBodyCursorSplitsMessageOverBudget(t *testing.T) {
+	ts, d := newTestToolset(t)
+	body := strings.Repeat("界", maxMaxCharsPerMessage+5)
+	dbtest.SeedSessionWithMessages(t, d, "oversized", "proj", []db.Message{
+		dbtest.UserMsg("oversized", 0, body),
+	}, dbtest.WithMessageCounts(1, 1))
+
+	anchor := 0
+	_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "oversized", Around: &anchor, MaxCharsPerMessage: maxMaxCharsPerMessage})
+	require.NoError(t, err)
+	require.Len(t, out.Messages, 1)
+	assert.True(t, fitsResponse(out))
+	require.NotEmpty(t, out.Messages[0].BodyCursor)
+	var got strings.Builder
+	got.WriteString(out.Messages[0].Content)
+	for i, cursor := 0, out.Messages[0].BodyCursor; cursor != ""; i++ {
+		require.Less(t, i, len(body), "body continuation did not end")
+		_, next, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "oversized", BodyCursor: cursor, MaxCharsPerMessage: maxMaxCharsPerMessage})
+		require.NoError(t, err)
+		require.Len(t, next.Messages, 1)
+		got.WriteString(next.Messages[0].Content)
+		cursor = next.Messages[0].BodyCursor
+	}
+	assert.Equal(t, body, got.String())
+}
+
 func TestGetMessages_BodyCursorRejectsChangedTranscript(t *testing.T) {
 	ts, d := newTestToolset(t)
 	dbtest.SeedSessionWithMessages(t, d, "body", "proj", []db.Message{

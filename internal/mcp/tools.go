@@ -700,7 +700,6 @@ func (t *toolset) getMessages(
 	if err := t.fitMessagePage(ctx, &out, res.Messages, res.EvidenceSource, in); err != nil {
 		return nil, getMessagesOut{}, err
 	}
-	out.TranscriptRevision = bindMessageRevision(in.SessionID, out.TranscriptRevision)
 	return nil, out, nil
 }
 
@@ -757,14 +756,15 @@ func (t *toolset) getMessagesAround(
 	if err := t.fitMessagePage(ctx, &out, res.Messages, res.EvidenceSource, in); err != nil {
 		return nil, getMessagesOut{}, err
 	}
-	out.TranscriptRevision = bindMessageRevision(in.SessionID, out.TranscriptRevision)
 	return nil, out, nil
 }
 
 // fitMessagePage preserves the scan position when the budget cuts a page.
 func (t *toolset) fitMessagePage(ctx context.Context, out *getMessagesOut, scanned []db.Message, source string, in getMessagesIn) error {
+	revision := out.TranscriptRevision
+	out.TranscriptRevision = bindMessageRevision(in.SessionID, revision)
 	items, baseNext, filtered := out.Messages, out.NextFrom, out.Filtered
-	attachBodyCursors(out, source, in.SessionID, in.Roles)
+	attachBodyCursors(out, source, in.SessionID, revision, in.Roles)
 	if fitsResponse(out) {
 		return nil
 	}
@@ -798,17 +798,17 @@ func (t *toolset) fitMessagePage(ctx context.Context, out *getMessagesOut, scann
 	}
 	n := fitPrefix(len(items), func(k int) bool {
 		cut(k)
-		attachBodyCursors(out, source, in.SessionID, in.Roles)
+		attachBodyCursors(out, source, in.SessionID, revision, in.Roles)
 		return fitsResponse(out)
 	})
 	if i := anchorBeyond(items, in.Around, n); i >= 0 {
 		first := items[0].Ordinal
 		out.Omitted, out.Filtered = len(items)-1, 0
-		return fitSingle(out, items[i:i+1], &first, source, in)
+		return fitSingle(out, items[i:i+1], &first, source, revision, in)
 	}
 	if n == 0 {
 		cut(1)
-		return fitSingle(out, items[:1], out.NextFrom, source, in)
+		return fitSingle(out, items[:1], out.NextFrom, source, revision, in)
 	}
 	return nil
 }
@@ -828,9 +828,9 @@ func anchorBeyond(items []messageOut, around *int, n int) int {
 
 // fitSingle returns msgs[0] alone, truncating its body if needed, and
 // continues from next.
-func fitSingle(out *getMessagesOut, msgs []messageOut, next *int, source string, in getMessagesIn) error {
+func fitSingle(out *getMessagesOut, msgs []messageOut, next *int, source, revision string, in getMessagesIn) error {
 	out.Messages, out.NextFrom = msgs, next
-	attachBodyCursors(out, source, in.SessionID, in.Roles)
+	attachBodyCursors(out, source, in.SessionID, revision, in.Roles)
 	if fitsResponse(out) {
 		return nil
 	}
@@ -839,9 +839,9 @@ func fitSingle(out *getMessagesOut, msgs []messageOut, next *int, source string,
 		roles = []string{msgs[0].Role}
 	}
 	out.Messages, out.NextFrom = msgs[:0], next
-	progress := fitOneMessage(out, &msgs[0], messageBodyCursor{EvidenceSource: source, SessionID: in.SessionID, Revision: out.TranscriptRevision, Ordinal: msgs[0].Ordinal, NextFrom: next, Roles: roles})
+	progress := fitOneMessage(out, &msgs[0], messageBodyCursor{EvidenceSource: source, SessionID: in.SessionID, Revision: revision, Ordinal: msgs[0].Ordinal, NextFrom: next, Roles: roles})
 	out.Messages = msgs
-	attachBodyCursors(out, source, in.SessionID, in.Roles)
+	attachBodyCursors(out, source, in.SessionID, revision, in.Roles)
 	if !progress || !fitsResponse(out) {
 		return errors.New("message metadata exceeds response budget")
 	}
@@ -867,7 +867,7 @@ func fitOneMessage(out *getMessagesOut, item *messageOut, cursor messageBodyCurs
 }
 
 func attachBodyCursors(
-	out *getMessagesOut, evidenceSource, sessionID string, roles []string,
+	out *getMessagesOut, evidenceSource, sessionID, revision string, roles []string,
 ) {
 	nextFrom := out.NextFrom
 	hasBodyCursor := false
@@ -881,7 +881,7 @@ func attachBodyCursors(
 		// advertise a continuation that can never run (for example against
 		// a backend that does not expose the bindings). Leave pagination
 		// in place instead.
-		if evidenceSource == "" || out.TranscriptRevision == "" {
+		if evidenceSource == "" || revision == "" {
 			continue
 		}
 		hasBodyCursor = true
@@ -891,7 +891,7 @@ func attachBodyCursors(
 		}
 		out.Messages[i].BodyCursor = encodeMessageBodyCursor(messageBodyCursor{
 			Version: 2, EvidenceSource: evidenceSource, SessionID: sessionID,
-			Revision: out.TranscriptRevision, Ordinal: out.Messages[i].Ordinal,
+			Revision: revision, Ordinal: out.Messages[i].Ordinal,
 			Offset: utf8.RuneCountInString(out.Messages[i].Content), NextFrom: nextFrom,
 			Roles: cursorRoles,
 		})
