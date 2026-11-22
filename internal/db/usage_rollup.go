@@ -154,7 +154,7 @@ func usagePricingIdentity(rows []export.EffectivePricingRow) (string, error) {
 }
 
 func usagePricingIdentityWithDigest(digest string) string {
-	identity := digest + "\x00" + pricingpkg.BillingPolicyVersion() + "\x00" + usageSessionPricingIdentityVersion
+	identity := digest + "\x00" + pricingpkg.BillingPolicyVersion() + "\x00" + usageSessionPricingIdentityVersion + "\x00" + usageZonePricingIdentityVersion
 	if aliases := pricingpkg.ConfiguredAliasesDigest(); aliases != "" {
 		identity += "\x00" + aliases
 	}

@@ -142,6 +142,96 @@ func TestPricingMuseModels(t *testing.T) {
 	}
 }
 
+// TestPricingGemini4Models verifies that bare Gemini 4 model ids resolve to
+// Google's gemini/ catalog rows instead of tying across competing provider
+// prefixes (gemini/, vertex_ai/, github_copilot/).
+func TestPricingGemini4Models(t *testing.T) {
+	byPattern := map[string]ModelPricing{
+		"gemini/gemini-4-argon": {
+			ModelPattern:     "gemini/gemini-4-argon",
+			InputPerMTok:     money.MustParseDollars("2"),
+			OutputPerMTok:    money.MustParseDollars("10"),
+			CacheReadPerMTok: money.MustParseDollars("0.1"),
+		},
+		"vertex_ai/gemini-4-argon": {
+			ModelPattern:     "vertex_ai/gemini-4-argon",
+			InputPerMTok:     money.MustParseDollars("2"),
+			OutputPerMTok:    money.MustParseDollars("10"),
+			CacheReadPerMTok: money.MustParseDollars("0.1"),
+		},
+		"gemini/gemini-4-carbon": {
+			ModelPattern:     "gemini/gemini-4-carbon",
+			InputPerMTok:     money.MustParseDollars("2"),
+			OutputPerMTok:    money.MustParseDollars("10"),
+			CacheReadPerMTok: money.MustParseDollars("0.1"),
+		},
+		"github_copilot/gemini-4-carbon": {
+			ModelPattern:     "github_copilot/gemini-4-carbon",
+			InputPerMTok:     money.MustParseDollars("2"),
+			OutputPerMTok:    money.MustParseDollars("10"),
+			CacheReadPerMTok: money.MustParseDollars("0.1"),
+		},
+		"gemini/gemini-4-hydrogen": {
+			ModelPattern:     "gemini/gemini-4-hydrogen",
+			InputPerMTok:     money.MustParseDollars("1.5"),
+			OutputPerMTok:    money.MustParseDollars("7.5"),
+			CacheReadPerMTok: money.MustParseDollars("0.075"),
+		},
+		"vertex_ai/gemini-4-hydrogen": {
+			ModelPattern:     "vertex_ai/gemini-4-hydrogen",
+			InputPerMTok:     money.MustParseDollars("1.5"),
+			OutputPerMTok:    money.MustParseDollars("7.5"),
+			CacheReadPerMTok: money.MustParseDollars("0.075"),
+		},
+		"gemini/gemini-4-neon": {
+			ModelPattern:     "gemini/gemini-4-neon",
+			InputPerMTok:     money.MustParseDollars("3"),
+			OutputPerMTok:    money.MustParseDollars("15"),
+			CacheReadPerMTok: money.MustParseDollars("0.15"),
+		},
+		"vertex_ai/gemini-4-neon": {
+			ModelPattern:     "vertex_ai/gemini-4-neon",
+			InputPerMTok:     money.MustParseDollars("3"),
+			OutputPerMTok:    money.MustParseDollars("15"),
+			CacheReadPerMTok: money.MustParseDollars("0.15"),
+		},
+		"github_copilot/gemini-4-neon": {
+			ModelPattern:     "github_copilot/gemini-4-neon",
+			InputPerMTok:     money.MustParseDollars("3"),
+			OutputPerMTok:    money.MustParseDollars("15"),
+			CacheReadPerMTok: money.MustParseDollars("0.15"),
+		},
+	}
+
+	tests := []struct {
+		model       string
+		wantPattern string
+		wantInput   string
+		wantOutput  string
+		wantRead    string
+	}{
+		{"gemini-4-argon", "gemini/gemini-4-argon", "2", "10", "0.1"},
+		{"gemini-4-carbon", "gemini/gemini-4-carbon", "2", "10", "0.1"},
+		{"gemini-4-hydrogen", "gemini/gemini-4-hydrogen", "1.5", "7.5", "0.075"},
+		{"gemini-4-neon", "gemini/gemini-4-neon", "3", "15", "0.15"},
+		{"vertex_ai/gemini-4-neon", "vertex_ai/gemini-4-neon", "3", "15", "0.15"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			model := tt.model
+			if canonical := CanonicalModelForDate(model, time.Time{}); canonical != "" {
+				model = canonical
+			}
+			match := ResolveMatch(model, byPattern)
+			require.True(t, match.OK, "%q found no pricing", tt.model)
+			assert.Equal(t, tt.wantPattern, match.Pattern)
+			assert.Equal(t, money.MustParseDollars(tt.wantInput), match.Value.InputPerMTok)
+			assert.Equal(t, money.MustParseDollars(tt.wantOutput), match.Value.OutputPerMTok)
+			assert.Equal(t, money.MustParseDollars(tt.wantRead), match.Value.CacheReadPerMTok)
+		})
+	}
+}
+
 func TestKimiK26Aliases(t *testing.T) {
 	assert.Equal(t, []string{"k2d6-agent"}, KimiK26Aliases())
 }

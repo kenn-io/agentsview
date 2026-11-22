@@ -244,7 +244,7 @@ func TestUsageJournaledFreshness(t *testing.T) {
 func TestUsageJournaledConfiguredAliasChanges(t *testing.T) {
 	t.Cleanup(func() { pricingpkg.SetConfiguredAliases(nil) })
 	pricingpkg.SetConfiguredAliases(nil)
-	assert.Equal(t, "catalog\x00"+pricingpkg.BillingPolicyVersion()+"\x00"+usageSessionPricingIdentityVersion, usagePricingIdentityWithDigest("catalog"))
+	assert.Equal(t, "catalog\x00"+pricingpkg.BillingPolicyVersion()+"\x00"+usageSessionPricingIdentityVersion+"\x00"+usageZonePricingIdentityVersion, usagePricingIdentityWithDigest("catalog"))
 	database := testDB(t)
 	seedJournaledUsage(t, database, "mapped")
 	seedJournaledUsage(t, database, "unrelated")
@@ -1363,4 +1363,176 @@ func TestUsageJournaledWarmSevenDaysReuseInstalledTotals(t *testing.T) {
 	assert.EqualValues(t, 5, reads.Load(), "every warm report must read the journaled window")
 	assert.Zero(t, fills.Load(), "warm reads must reuse cached facts")
 	assert.Zero(t, builds.Load(), "warm reads must reuse installed daily totals")
+}
+
+// TestUsageJournaledRepricesSavedZeroCostGemini4AfterUpgrade proves that saved
+// zero-cost SQLite rollups written under the previous zone pricing identity for
+// bare gemini-4-neon and decorated Gemini 4 display names reprice with an
+// unchanged catalog during both usage reads and startup backfill, even when
+// GenAI Prices lacks matching rates, without rebuilding unrelated sessions.
+func TestUsageJournaledRepricesSavedZeroCostGemini4AfterUpgrade(t *testing.T) {
+	for _, mode := range []string{"usage read", "startup backfill"} {
+		t.Run(mode, func(t *testing.T) {
+			database := testDB(t)
+			// Seed a GenAI Prices document that lacks Gemini 4, alongside
+			// competing provider-qualified LiteLLM rows for gemini-4-neon.
+			noGemini4GenAI := []byte(`[{
+				"id": "openai",
+				"name": "OpenAI",
+				"api_pattern": "https://example.invalid",
+				"model_match": {"starts_with": "gpt-"},
+				"models": [{
+					"id": "gpt-placeholder",
+					"match": {"equals": "gpt-placeholder"},
+					"prices": {"input_mtok": 1, "output_mtok": 2}
+				}]
+			}]`)
+			parsedGenAI, err := pricingpkg.ParseGenAIPrices(noGemini4GenAI)
+			require.NoError(t, err)
+			require.NoError(t, database.UpsertGenAIPricing(t.Context(), GenAIPricingDocument{
+				Version: parsedGenAI.Version(),
+				Source:  GenAIPricingSourceFetched,
+				Data:    noGemini4GenAI,
+			}))
+			require.NoError(t, database.UpsertModelPricing([]ModelPricing{
+				{ModelPattern: "unrelated-model", InputPerMTok: money.MustParseDollars("1")},
+				{ModelPattern: "gemini/gemini-4-neon", InputPerMTok: money.MustParseDollars("3"), OutputPerMTok: money.MustParseDollars("15"), CacheReadPerMTok: money.MustParseDollars("0.15")},
+				{ModelPattern: "vertex_ai/gemini-4-neon", InputPerMTok: money.MustParseDollars("3"), OutputPerMTok: money.MustParseDollars("15"), CacheReadPerMTok: money.MustParseDollars("0.15")},
+				{ModelPattern: "github_copilot/gemini-4-neon", InputPerMTok: money.MustParseDollars("3"), OutputPerMTok: money.MustParseDollars("15"), CacheReadPerMTok: money.MustParseDollars("0.15")},
+			}))
+
+			insertSession(t, database, "unrelated", "project", func(s *Session) {
+				s.Agent = "codex"
+				s.StartedAt = new("2026-11-20T11:00:00Z")
+			})
+			require.NoError(t, database.InsertMessages(t.Context(), []Message{{
+				SessionID:  "unrelated",
+				Ordinal:    0,
+				Role:       "assistant",
+				Timestamp:  "2026-11-20T11:00:00Z",
+				Model:      "unrelated-model",
+				TokenUsage: []byte(`{"input_tokens":1000000}`),
+			}}))
+
+			insertSession(t, database, "bare-gemini4", "project", func(s *Session) {
+				s.Agent = "gemini"
+				s.StartedAt = new("2026-11-20T12:00:00Z")
+			})
+			require.NoError(t, database.InsertMessages(t.Context(), []Message{{
+				SessionID:  "bare-gemini4",
+				Ordinal:    0,
+				Role:       "assistant",
+				Timestamp:  "2026-11-20T12:00:00Z",
+				Model:      "gemini-4-neon",
+				TokenUsage: []byte(`{"input_tokens":1000000}`),
+			}}))
+
+			insertSession(t, database, "display-gemini4", "project", func(s *Session) {
+				s.Agent = "antigravity-cli"
+				s.StartedAt = new("2026-11-20T13:00:00Z")
+			})
+			require.NoError(t, database.InsertMessages(t.Context(), []Message{{
+				SessionID:  "display-gemini4",
+				Ordinal:    0,
+				Role:       "assistant",
+				Timestamp:  "2026-11-20T13:00:00Z",
+				Model:      "Gemini 4 Neon (High)",
+				TokenUsage: []byte(`{"input_tokens":1000000}`),
+			}}))
+
+			filter := UsageFilter{From: "2026-11-20", To: "2026-11-20", Timezone: "UTC"}
+			cache := warmJournaledUsage(t, database, filter)
+
+			var unrelatedRevision int64
+			require.NoError(t, cache.db.QueryRowContext(t.Context(),
+				`SELECT install_revision FROM usage_rollup_installs WHERE session_id = 'unrelated'`,
+			).Scan(&unrelatedRevision))
+
+			// Compute the exact pre-upgrade per-session pricing hashes when
+			// neither gemini-4-neon nor Gemini 4 Neon (High) resolved to any rate.
+			unpricedIdentities := newUsagePricingIdentities(export.NewPricingResolver([]export.EffectivePricingRow{{
+				GenAI: parsedGenAI, GenAISource: export.PricingRowSourceFetched,
+			}}))
+			bareInputs, bareOldHash, err := unpricedIdentities.forInputs([]usagePricingInput{{
+				ReportedModel: "gemini-4-neon", CanonicalModel: "gemini-4-neon",
+			}})
+			require.NoError(t, err)
+			displayInputs, displayOldHash, err := unpricedIdentities.forInputs([]usagePricingInput{{
+				ReportedModel: "Gemini 4 Neon (High)", CanonicalModel: "Gemini 4 Neon (High)",
+			}})
+			require.NoError(t, err)
+
+			// Rewrite the warmed cache to the pre-upgrade state: same catalog
+			// digest under the old zone pricing identity, real unpriced v1
+			// per-session hashes, and saved $0 daily totals for both Gemini 4
+			// sessions while keeping the unrelated session intact.
+			currentPricing, err := database.UsagePricingDigest(t.Context())
+			require.NoError(t, err)
+			oldPricing := strings.TrimSuffix(currentPricing, "\x00"+usageZonePricingIdentityVersion)
+			require.NotEqual(t, currentPricing, oldPricing)
+
+			_, err = cache.db.ExecContext(t.Context(), `UPDATE usage_rollup_timezones SET change_pricing = ?`, oldPricing)
+			require.NoError(t, err)
+			_, err = cache.db.ExecContext(t.Context(), `UPDATE usage_rollup_installs SET source_pricing = ?`, oldPricing)
+			require.NoError(t, err)
+			_, err = cache.db.ExecContext(t.Context(), `
+				UPDATE usage_rollup_installs
+				SET pricing_inputs = ?, pricing_hash = ?
+				WHERE session_id = 'bare-gemini4'`, bareInputs, bareOldHash)
+			require.NoError(t, err)
+			_, err = cache.db.ExecContext(t.Context(), `
+				UPDATE usage_rollup_installs
+				SET pricing_inputs = ?, pricing_hash = ?
+				WHERE session_id = 'display-gemini4'`, displayInputs, displayOldHash)
+			require.NoError(t, err)
+			_, err = cache.db.ExecContext(t.Context(), `
+				UPDATE usage_daily_rollups
+				SET priced_model = reported_model,
+				    matched_pattern = '',
+				    rate_ok = 0,
+				    estimated_cost_microdollars = 0,
+				    savings_microdollars = 0
+				WHERE reported_model IN ('gemini-4-neon', 'Gemini 4 Neon (High)')`)
+			require.NoError(t, err)
+			_, err = cache.db.ExecContext(t.Context(), `
+				UPDATE usage_day_totals
+				SET priced_model = reported_model,
+				    estimated_cost_microdollars = 0,
+				    savings_microdollars = 0
+				WHERE reported_model IN ('gemini-4-neon', 'Gemini 4 Neon (High)')`)
+			require.NoError(t, err)
+
+			if mode == "usage read" {
+				database.usageBackfillMu.Lock()
+				database.usageBackfillEnabled = false
+				database.usageBackfillMu.Unlock()
+				got, err := database.GetDailyUsage(t.Context(), filter)
+				require.NoError(t, err)
+				assert.EqualValues(t, 7_000_000, got.Totals.TotalCost.Microdollars)
+			} else {
+				require.NoError(t, database.StartUsageCacheBackfill(t.Context()))
+				t.Cleanup(database.StopUsageCacheBackfill)
+				require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
+				database.StopUsageCacheBackfill()
+				zone, err := readUsageZoneCoverage(t.Context(), cache.db, usageTimezoneIdentityFor(filter.Location(), nil).Key)
+				require.NoError(t, err)
+				assert.Equal(t, currentPricing, zone.pricing)
+				got, err := database.GetDailyUsage(t.Context(), filter)
+				require.NoError(t, err)
+				assert.EqualValues(t, 7_000_000, got.Totals.TotalCost.Microdollars)
+			}
+
+			var gotUnrelatedRevision int64
+			require.NoError(t, cache.db.QueryRowContext(t.Context(),
+				`SELECT install_revision FROM usage_rollup_installs WHERE session_id = 'unrelated'`,
+			).Scan(&gotUnrelatedRevision))
+			assert.Equal(t, unrelatedRevision, gotUnrelatedRevision, "unrelated session must not rebuild")
+
+			var storedInputs string
+			require.NoError(t, cache.db.QueryRowContext(t.Context(),
+				`SELECT pricing_inputs FROM usage_rollup_installs WHERE session_id = 'bare-gemini4'`,
+			).Scan(&storedInputs))
+			assert.Contains(t, storedInputs, `"gemini/gemini-4-neon"`)
+		})
+	}
 }
