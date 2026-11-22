@@ -28,6 +28,23 @@ func TestCursorAccountHoursIncludesClearedAttribution(t *testing.T) {
 	assert.Equal(t, "2026-07-29T11:00:00.000000Z", polledAt)
 }
 
+func TestCursorAccountReassignmentAdvancesPreviousPoll(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	require.NoError(t, d.ConfigureArtifactLocalMachine(ctx, "local"))
+	start := time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC)
+	require.NoError(t, d.InsertCursorUsageEvents(ctx, []CursorUsageEvent{{OccurredAt: "2026-07-28T10:03:00Z", Model: "a", DedupKey: "a", OutputTokens: 7}}))
+	first := start.Add(24 * time.Hour)
+	require.NoError(t, d.RecordCursorAccountPoll(ctx, map[string][]string{"12": {"a"}}, first, []CursorAccountHour{{UserID: "12", Start: start}}))
+	require.NoError(t, d.RecordCursorAccountPoll(ctx, map[string][]string{"34": {"a"}}, first.Add(2*time.Hour), []CursorAccountHour{{UserID: "34", Start: start}}))
+	day, err := d.ExportReportingDay(ctx, ReportingExportOptions{Date: start.Truncate(24 * time.Hour), Now: first.Add(3 * time.Hour), SchemaVersion: 6, ByMachine: true})
+	require.NoError(t, err)
+	old := day.Hours[10].Machines["cursor-account:12"]
+	assert.Zero(t, old.Usage.Totals.OutputTokens)
+	assert.Equal(t, "2026-07-29T12:00:00.000000Z", old.PolledAt)
+	assert.EqualValues(t, 7, day.Hours[10].Machines["cursor-account:34"].Usage.Totals.OutputTokens)
+}
+
 func TestCursorAccountEmptyPollIgnoresOtherDates(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()

@@ -653,6 +653,28 @@ func TestExportSessionsUpgradesRecordedRepositoryColumn(t *testing.T) {
 	}
 }
 
+func TestExportSessionsWithAccountOnlyVersionUpgrade(t *testing.T) {
+	dataDir := testDataDir(t)
+	dbPath := filepath.Join(dataDir, "sessions.db")
+	seedExportSessionsArchiveAt(t, dbPath)
+	raw, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = raw.ExecContext(t.Context(), `PRAGMA user_version=184; ALTER TABLE cursor_usage_events DROP COLUMN account_user_id; ALTER TABLE cursor_usage_events DROP COLUMN account_polled_at`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+	stdout, _, err := executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--format", "json")
+	require.NoError(t, err)
+	assert.Len(t, decodeExportSessionsDocument(t, stdout).Sessions, 2)
+
+	raw, err = sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = raw.ExecContext(t.Context(), `INSERT INTO stats(key, value) VALUES ('scoped_upgrade_pending', 184)`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+	_, _, err = executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--format", "json")
+	require.ErrorContains(t, err, "archive data needs resync")
+}
+
 func TestExportSessionsUpgradeRequiresBackgroundEvidenceBackfill(t *testing.T) {
 	dataDir := testDataDir(t)
 	dbPath := filepath.Join(dataDir, "sessions.db")

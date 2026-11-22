@@ -116,10 +116,8 @@ func (db *DB) RecordCursorAccountPoll(ctx context.Context, assignments map[strin
 			if err != nil {
 				return err
 			}
-			if id == "" {
-				if _, err := tx.ExecContext(ctx, `INSERT INTO cursor_account_polls(account_user_id,hour_start,polled_at) SELECT account_user_id, `+reportingCursorHour+`, ? FROM cursor_usage_events WHERE account_user_id != '' AND dedup_key IN (SELECT value FROM json_each(?)) AND account_polled_at < ? ON CONFLICT(account_user_id,hour_start) DO UPDATE SET polled_at = max(polled_at,excluded.polled_at)`, stamp, string(encoded), stamp); err != nil {
-					return fmt.Errorf("recording previous Cursor account poll: %w", err)
-				}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO cursor_account_polls(account_user_id,hour_start,polled_at) SELECT account_user_id, `+reportingCursorHour+`, ? FROM cursor_usage_events WHERE account_user_id != '' AND account_user_id != ? AND dedup_key IN (SELECT value FROM json_each(?)) AND account_polled_at < ? ON CONFLICT(account_user_id,hour_start) DO UPDATE SET polled_at = max(polled_at,excluded.polled_at)`, stamp, id, string(encoded), stamp); err != nil {
+				return fmt.Errorf("recording previous Cursor account poll: %w", err)
 			}
 			if _, err := tx.ExecContext(ctx, `UPDATE cursor_usage_events SET account_user_id = ?, account_polled_at = ? WHERE dedup_key IN (SELECT value FROM json_each(?)) AND account_polled_at < ?`, id, stamp, string(encoded), stamp); err != nil {
 				return fmt.Errorf("assigning Cursor usage account: %w", err)

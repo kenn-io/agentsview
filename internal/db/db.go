@@ -2427,6 +2427,12 @@ func probeDatabaseConn(ctx context.Context,
 	if version >= dataVersion {
 		return false, false, false, nil
 	}
+	if !archiveOnly && !fullRebuild {
+		providers := ScopedDataVersionProviders(version, dataVersion)
+		if providers != nil && len(providers) == 0 {
+			return false, false, false, nil
+		}
+	}
 	return false, countScoped || fullRebuild, fullRebuild, nil
 }
 
