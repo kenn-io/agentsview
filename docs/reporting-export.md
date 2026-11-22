@@ -79,7 +79,8 @@ sync matches them. The first export of an older archive adds empty account
 columns in place. Archives with account stamps require data version 185 or newer.
 Schema 6 hashes machine IDs beginning with `cursor-account:` or `machine:` to
 keep them distinct from account keys. Schema 5 and the change stream retain the
-original IDs.
+original IDs. When reports mix schemas 5 and 6, these machines have different
+IDs and can be counted twice. Use the same schema version across reporters.
 
 Downstream integrations can select one snapshot per originating machine and UTC
 hour before adding totals. Removing a whole overlapping archive would also
