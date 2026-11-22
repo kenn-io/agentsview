@@ -45,7 +45,8 @@ func TestFirstImportResumesAfterFirstWave(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	page, err := archive.ListSessions(t.Context(), db.SessionFilter{Limit: 300})
 	require.NoError(t, err)
-	require.Len(t, page.Sessions, 100)
+	require.NotEmpty(t, page.Sessions)
+	require.LessOrEqual(t, len(page.Sessions), 100)
 	require.True(t, engine.LastSyncFinishedAt(t.Context()).IsZero())
 	engine.emitter = nil
 	_, ran, err = engine.RunFirstImport(t.Context(), nil)
@@ -177,13 +178,15 @@ func TestFirstImportRefreshesWhileOlderSessionsAreWritten(t *testing.T) {
 	refresh := make(chan struct{}, 1)
 	paused := make(chan struct{}, 1)
 	resume := make(chan struct{})
+	var fallback atomic.Bool
 	var events atomic.Int32
 	var engine *Engine
 	engine = NewEngine(t.Context(), archive, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}, Machine: "local", DeferStartupMaintenance: true,
 		Emitter: emitterFunc(func(scope string) {
-			if scope == "sessions" {
-				if events.Add(1) == 2 {
+			if scope == "sessions" && fallback.Load() {
+				page, err := archive.ListSessions(t.Context(), db.SessionFilter{Limit: 300})
+				if err == nil && len(page.Sessions) > 100 && events.CompareAndSwap(0, 1) {
 					refresh <- struct{}{}
 					engine.SyncAll(t.Context(), nil)
 				}
@@ -194,6 +197,9 @@ func TestFirstImportRefreshesWhileOlderSessionsAreWritten(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		_, _, err := engine.RunFirstImport(t.Context(), func(progress Progress) {
+			if progress.Phase == PhaseSyncing && progress.SessionsTotal == 250 {
+				fallback.Store(true)
+			}
 			if progress.Phase == PhaseSyncing && progress.SessionsDone == 200 {
 				paused <- struct{}{}
 				<-resume
@@ -239,6 +245,151 @@ func TestFirstImportRefreshesWhileOlderSessionsAreWritten(t *testing.T) {
 		require.NoError(t, err)
 	case <-time.After(30 * time.Second):
 		t.Fatal("reentrant emitter blocked the import")
+	}
+}
+
+func TestFirstImportCancellationStopsPendingRefresh(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	require.NoError(t, os.MkdirAll(project, 0o755))
+	for i := range 450 {
+		path := filepath.Join(project, fmt.Sprintf("session-%03d.jsonl", i))
+		content := testjsonl.NewSessionBuilder().AddClaudeUser("2026-01-01T00:00:00Z", "hello").String()
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	}
+	archive := openTestDB(t)
+	refresh := make(chan struct{})
+	releaseRefresh := make(chan struct{})
+	paused := make(chan struct{})
+	resume := make(chan struct{})
+	var fallback atomic.Bool
+	var events atomic.Int32
+	engine := NewEngine(t.Context(), archive, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}, Machine: "local", DeferStartupMaintenance: true,
+		Emitter: emitterFunc(func(scope string) {
+			if scope == "sessions" && fallback.Load() && events.Add(1) == 1 {
+				close(refresh)
+				<-releaseRefresh
+			}
+		}),
+	})
+	t.Cleanup(engine.Close)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := engine.RunFirstImport(ctx, func(progress Progress) {
+			if progress.Phase == PhaseSyncing && progress.SessionsTotal == 450 {
+				fallback.Store(true)
+			}
+			if progress.Phase == PhaseSyncing && progress.SessionsDone == 400 {
+				close(paused)
+				<-resume
+			}
+		})
+		done <- err
+	}()
+	select {
+	case <-refresh:
+	case <-time.After(30 * time.Second):
+		close(releaseRefresh)
+		close(resume)
+		t.Fatal("no refresh during import")
+	}
+	select {
+	case <-paused:
+	case <-time.After(30 * time.Second):
+		close(releaseRefresh)
+		close(resume)
+		t.Fatal("import did not reach the pause")
+	}
+	cancel()
+	close(releaseRefresh)
+	close(resume)
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("pending refresh delayed cancellation")
+	}
+}
+
+func TestFirstImportWavePublishesInNewestOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		pauseAt     int
+		constrained bool
+	}{
+		{name: "partial wave", pauseAt: 50},
+		{name: "newest first under retention pressure", pauseAt: 1, constrained: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			project := filepath.Join(root, "project")
+			require.NoError(t, os.MkdirAll(project, 0o755))
+			for i := range 120 {
+				path := filepath.Join(project, fmt.Sprintf("session-%03d.jsonl", i))
+				content := testjsonl.NewSessionBuilder().AddClaudeUser("2026-01-01T00:00:00Z", "hello").String()
+				require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+				mtime := time.Unix(1700000000+int64(i), 0)
+				require.NoError(t, os.Chtimes(path, mtime, mtime))
+			}
+			archive := openTestDB(t)
+			refresh := make(chan struct{}, 1)
+			engine := NewEngine(t.Context(), archive, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}, Machine: "local", DeferStartupMaintenance: true,
+				Emitter: emitterFunc(func(scope string) {
+					if scope == "sessions" {
+						select {
+						case refresh <- struct{}{}:
+						default:
+						}
+					}
+				}),
+			})
+			t.Cleanup(engine.Close)
+			engine.workerCountOverride = 1
+			if tc.constrained {
+				engine.bulkRetentionBudget = newBulkParseRetentionBudget(1 << 20)
+				engine.bulkRetentionBudget.pendingCapacity = 1
+			}
+			paused := make(chan struct{})
+			resume := make(chan struct{})
+			done := make(chan struct{})
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			go func() {
+				defer close(done)
+				_, _, _ = engine.RunFirstImport(ctx, func(progress Progress) {
+					if progress.Phase == PhaseSyncing && progress.SessionsDone == tc.pauseAt {
+						close(paused)
+						<-resume
+					}
+				})
+			}()
+			select {
+			case <-paused:
+			case <-time.After(30 * time.Second):
+				close(resume)
+				<-done
+				t.Fatal("wave did not reach the pause")
+			}
+			page, err := archive.ListSessions(t.Context(), db.SessionFilter{Limit: 120})
+			newest, getErr := archive.GetSession(t.Context(), "session-119")
+			var notified bool
+			select {
+			case <-refresh:
+				notified = true
+			case <-time.After(5 * time.Second):
+			}
+			cancel()
+			close(resume)
+			<-done
+			require.NoError(t, err)
+			require.NoError(t, getErr)
+			require.NotEmpty(t, page.Sessions, "sessions should be visible before the wave finishes")
+			require.NotNil(t, newest, "the newest session should appear first")
+			require.True(t, notified, "the page should be notified before the wave finishes")
+		})
 	}
 }
 

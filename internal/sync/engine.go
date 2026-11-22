@@ -6343,7 +6343,7 @@ func (e *Engine) syncAllLocked(
 		}()
 	}
 
-	if wave != nil && wave.onWrite == nil {
+	if wave != nil && wave.limit > 0 {
 		if err := e.firstImportSelect(ctx, dedupeDiscoveredFiles(all), scope, wave); err != nil {
 			return SyncStats{Aborted: true, Warnings: []string{err.Error()}}
 		}
@@ -6439,11 +6439,8 @@ func (e *Engine) syncAllLocked(
 	if e.soleArchiveWriter.Load() {
 		ctx = e.withSourceFreshnessSnapshot(ctx, all)
 	}
-	results := e.startWorkers(ctx, all)
-	options := collectAndBatchOptions{}
-	if wave != nil && wave.onWrite != nil {
-		options.afterWrite = wave.onWrite
-	}
+	results := e.startFirstImportWorkers(ctx, firstImportFiles(all, wave), wave)
+	options := firstImportBatchOptions(wave)
 	stats = e.collectAndBatchWithOptions(
 		ctx, results, len(all), progressTotal, onProgress, writeMode, options,
 	)
@@ -7742,10 +7739,21 @@ func (e *Engine) startWorkers(
 	ctx context.Context,
 	files []parser.DiscoveredFile,
 ) <-chan syncJob {
+	return e.startWorkersLimited(ctx, files, e.workerCount())
+}
+
+func (e *Engine) startFirstImportWorkers(ctx context.Context, files []parser.DiscoveredFile, wave *firstImportWave) <-chan syncJob {
+	if wave != nil && wave.limit > 0 {
+		return e.startWorkersLimited(ctx, files, 1)
+	}
+	return e.startWorkers(ctx, files)
+}
+
+func (e *Engine) startWorkersLimited(ctx context.Context, files []parser.DiscoveredFile, limit int) <-chan syncJob {
 	// Cap fan-out and channel buffers by the batch: a single-path
 	// watcher sync needs one worker and one result slot, not a
 	// CPU-scaled pool with page-sized buffers of grown syncJob values.
-	workers := min(e.workerCount(), max(len(files), 1))
+	workers := min(limit, max(len(files), 1))
 	buffer := min(max(workers*2, 1), max(len(files), 1))
 
 	jobs := make(chan parser.DiscoveredFile, buffer)
@@ -7856,6 +7864,25 @@ func (e *Engine) collectAndBatch(
 type collectAndBatchOptions struct {
 	observeResult func(syncJob)
 	afterWrite    func()
+	batchLimit    int
+}
+
+func firstImportBatchOptions(wave *firstImportWave) collectAndBatchOptions {
+	options := collectAndBatchOptions{batchLimit: batchSize}
+	if wave != nil {
+		options.afterWrite = wave.onWrite
+		if wave.limit > 0 {
+			options.batchLimit = 10
+		}
+	}
+	return options
+}
+
+func (options collectAndBatchOptions) limit() int {
+	if options.batchLimit > 0 {
+		return options.batchLimit
+	}
+	return batchSize
 }
 
 func (e *Engine) collectAndBatchWithOptions(
@@ -8735,7 +8762,7 @@ func (e *Engine) collectAndBatchWithOptions(
 					sourceFingerprint: r.sourceFingerprint,
 				})
 			}
-			if len(pending) >= batchSize ||
+			if len(pending) >= options.limit() ||
 				(archiveRetention &&
 					pendingRetentionBytes >= pendingRetentionLimit) ||
 				(!archiveRetention && (budget.underPressure() ||

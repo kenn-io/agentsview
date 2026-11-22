@@ -4469,6 +4469,31 @@ describe("SessionsStore live refresh", () => {
     mockGetProjects();
   });
 
+  it.each(["agents", "machines"] as const)("refreshes %s choices as sessions arrive", async (kind) => {
+    let registered!: (e: { scope: string }) => void;
+    const spy = vi.spyOn(events, "subscribe").mockImplementation((fn) => {
+      registered = fn as (e: { scope: string }) => void;
+      return () => {};
+    });
+    api.getAgents.mockResolvedValue({ agents: [] });
+    api.getMachines.mockResolvedValue({ machines: [], resolved_machines: [] });
+    const sessions = createSessionsStore();
+    const detach = sessions.attachSidebar();
+    try {
+      await sessions.loadAgents();
+      await sessions.loadMachines();
+      api.getAgents.mockResolvedValue({ agents: ["claude"] });
+      api.getMachines.mockResolvedValue({ machines: ["host-a"], resolved_machines: [] });
+      registered({ scope: "sessions" });
+      await vi.waitFor(() => {
+        expect(sessions[kind]).toEqual(kind === "agents" ? ["claude"] : ["host-a"]);
+      });
+    } finally {
+      detach();
+      spy.mockRestore();
+    }
+  });
+
   it.each(["messages", "sync"])(
     "%s events invalidate hydrated detail before the index reload",
     async (scope) => {
