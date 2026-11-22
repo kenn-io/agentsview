@@ -3189,9 +3189,6 @@ func TestSessionUsageWaitCancellation(t *testing.T) {
 }
 
 func TestSessionUsageArchiveOnlyWaitIncomplete(t *testing.T) {
-	previous := sessionUsageWaitTimeout
-	sessionUsageWaitTimeout = 100 * time.Millisecond
-	t.Cleanup(func() { sessionUsageWaitTimeout = previous })
 	for _, tc := range []struct {
 		name                         string
 		ownOnly, noSync, statusError bool
@@ -3202,32 +3199,44 @@ func TestSessionUsageArchiveOnlyWaitIncomplete(t *testing.T) {
 		{name: "no sync status error", noSync: true, statusError: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ts, _ := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
-			original := ts.Config.Handler
-			ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path == "/api/v1/sync/status" {
-					if tc.statusError {
-						http.Error(w, "unavailable", http.StatusServiceUnavailable)
-					} else {
-						writeJSONResponse(w, `{"archive_stale":true}`)
-					}
-					return
-				}
-				original.ServeHTTP(w, r)
-			})
 			stderr := captureStderr(t, func() {
-				out, code, err := httpSessionUsageData(t.Context(), ts.URL, "", sessionUsageQuery{SessionID: "remote-session", Wait: true, OwnOnly: tc.ownOnly, NoSync: tc.noSync})
-				require.NoError(t, err)
-				require.NotNil(t, out)
-				assert.Equal(t, tokenUseExitOK, code)
-				assert.True(t, out.WaitIncomplete)
-				assert.False(t, out.RefreshIncomplete)
-				data, err := json.Marshal(out)
-				require.NoError(t, err)
-				assert.Contains(t, string(data), `"wait_incomplete":true`)
-				var human strings.Builder
-				require.NoError(t, renderSessionUsageHuman(&human, out))
-				assert.NotContains(t, human.String(), "Waiting for ingestion did not finish")
+				synctest.Test(t, func(t *testing.T) {
+					previous := sessionUsageWaitTimeout
+					sessionUsageWaitTimeout = 100 * time.Millisecond
+					t.Cleanup(func() { sessionUsageWaitTimeout = previous })
+					original, _ := newRemoteUsageHandler(t, remoteUsageSpec{canonicalID: "remote-session"})
+					handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						if r.URL.Path == "/api/v1/sync/status" {
+							if tc.statusError {
+								http.Error(w, "unavailable", http.StatusServiceUnavailable)
+							} else {
+								writeJSONResponse(w, `{"archive_stale":true}`)
+							}
+							return
+						}
+						original.ServeHTTP(w, r)
+					})
+					// Serve requests in memory so the virtual deadline cannot expire
+					// while the operating system is scheduling the session lookup.
+					previousTransport := http.DefaultTransport
+					http.DefaultTransport = sessionUsageHandlerTransport{handler}
+					t.Cleanup(func() { http.DefaultTransport = previousTransport })
+					started := time.Now()
+					out, code, err := httpSessionUsageData(t.Context(), "http://usage.test", "", sessionUsageQuery{SessionID: "remote-session", Wait: true, OwnOnly: tc.ownOnly, NoSync: tc.noSync})
+					assert.Equal(t, sessionUsageWaitTimeout, time.Since(started))
+					require.NoError(t, err)
+					require.NotNil(t, out)
+					assert.Equal(t, tokenUseExitOK, code)
+					assert.Equal(t, 42, out.TotalOutputTokens)
+					assert.True(t, out.WaitIncomplete)
+					assert.False(t, out.RefreshIncomplete)
+					data, err := json.Marshal(out)
+					require.NoError(t, err)
+					assert.Contains(t, string(data), `"wait_incomplete":true`)
+					var human strings.Builder
+					require.NoError(t, renderSessionUsageHuman(&human, out))
+					assert.NotContains(t, human.String(), "Waiting for ingestion did not finish")
+				})
 			})
 			assert.Contains(t, stderr, "waiting for ingestion did not finish")
 			assert.Contains(t, stderr, "saved totals may be out of date")
