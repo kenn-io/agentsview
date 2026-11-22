@@ -848,6 +848,7 @@ func TestUpgradeExportSchemaInPlaceOnlyAddsExportIdentitySchema(t *testing.T) {
 	path := filepath.Join(dir, "test.db")
 	d := testDBAtPath(t, path, "schema-only upgrade db")
 	insertSession(t, d, "schema-only", "project")
+	require.NoError(t, d.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{{OccurredAt: "2026-07-28T10:00:00Z", Model: "a", OutputTokens: 7, DedupKey: "a"}}))
 	requireNoError(t, d.Close(), "close schema-only upgrade db")
 
 	conn, err := sql.Open("sqlite3", path)
@@ -861,6 +862,9 @@ func TestUpgradeExportSchemaInPlaceOnlyAddsExportIdentitySchema(t *testing.T) {
 		DELETE FROM archive_metadata;
 		ALTER TABLE project_identity_observations DROP COLUMN checkout_state;
 		DROP TABLE remote_skipped_files;
+		DROP TABLE cursor_account_polls;
+		ALTER TABLE cursor_usage_events DROP COLUMN account_user_id;
+		ALTER TABLE cursor_usage_events DROP COLUMN account_polled_at;
 		DROP TABLE session_project_identity_snapshots;
 	`)
 	requireNoError(t, err, "prepare schema-only upgrade fixture")
@@ -906,30 +910,13 @@ func TestUpgradeExportSchemaInPlaceOnlyAddsExportIdentitySchema(t *testing.T) {
 		  AND trim(value) != ''
 	`).Scan(&metadataCount), "read initialized export metadata")
 	assert.Equal(t, 3, metadataCount)
-}
-
-func TestUpgradeExportSchemaInPlaceAddsCursorAccountStorage(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "test.db")
-	d := testDBAtPath(t, path, "cursor upgrade")
-	require.NoError(t, d.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{{OccurredAt: "2026-07-28T10:00:00Z", Model: "a", OutputTokens: 7, DedupKey: "a"}}))
-	require.NoError(t, d.Close())
-	raw, err := sql.Open("sqlite3", path)
-	require.NoError(t, err)
-	_, err = raw.ExecContext(t.Context(), `DROP TABLE cursor_account_polls; ALTER TABLE cursor_usage_events DROP COLUMN account_user_id; ALTER TABLE cursor_usage_events DROP COLUMN account_polled_at`)
-	require.NoError(t, err)
-	require.NoError(t, raw.Close())
-	_, err = OpenReadOnly(t.Context(), path)
-	require.Error(t, err)
-	require.NoError(t, UpgradeExportSchemaInPlace(t.Context(), path, err))
-	upgraded, err := OpenReadOnly(t.Context(), path)
-	require.NoError(t, err)
-	defer upgraded.Close()
 	var tokens int
 	var account, stamp string
-	require.NoError(t, upgraded.Reader().QueryRowContext(t.Context(), `SELECT output_tokens, account_user_id, account_polled_at FROM cursor_usage_events WHERE dedup_key='a'`).Scan(&tokens, &account, &stamp))
+	require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT output_tokens, account_user_id, account_polled_at FROM cursor_usage_events WHERE dedup_key='a'`).Scan(&tokens, &account, &stamp))
 	assert.Equal(t, 7, tokens)
 	assert.Empty(t, account)
 	assert.Empty(t, stamp)
+	require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT count(*) FROM cursor_account_polls`).Scan(&tableCount))
 }
 
 func TestUpgradeExportSchemaInPlaceRejectsUnrelatedSchemaGap(t *testing.T) {
@@ -1168,56 +1155,14 @@ func TestOpenAcceptsArchiveUserVersion111(t *testing.T) {
 	require.Len(t, page.Sessions, 1)
 }
 
-func TestAdditiveVersionGapOnly(t *testing.T) {
-	for _, tc := range []struct {
-		name                 string
-		version              int
-		pending, archiveOnly bool
-		needsResync          bool
-	}{
-		{name: "additive", version: dataVersion - 1},
-		{name: "provider upgrade", version: dataVersion - 2, needsResync: true},
-		{name: "undeclared upgrade", version: dataVersion - 3, needsResync: true},
-		{name: "pending upgrade", version: dataVersion - 1, pending: true, needsResync: true},
-		{name: "archive only", version: dataVersion - 1, archiveOnly: true, needsResync: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Cleanup(InstallDataVersionScopesForTest(map[int][]parser.AgentType{
-				dataVersion - 1: {parser.AgentClaude},
-				dataVersion:     {},
-			}))
-			d := testDB(t)
-			ctx := t.Context()
-			require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
-				if err := writeUserVersion(ctx, tx, tc.version); err != nil {
-					return err
-				}
-				if tc.pending {
-					_, err := tx.ExecContext(ctx, "INSERT INTO stats(key,value) VALUES ('scoped_upgrade_pending',1)")
-					return err
-				}
-				return nil
-			}))
-			if tc.archiveOnly {
-				require.NoError(t, d.EnableArchiveOnly(ctx))
-			}
-			path := d.Path()
-			require.NoError(t, d.Close())
-			reader, err := OpenReadOnly(ctx, path)
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, reader.Close()) })
-			assert.Equal(t, tc.needsResync, reader.NeedsResync())
-		})
-	}
-}
-
 func TestArchiveResyncState(t *testing.T) {
 	for _, tc := range []struct {
-		name                                      string
-		version                                   int
-		pending, repair, archiveOnly, needs, full bool
+		name                                                string
+		version                                             int
+		pending, repair, archiveOnly, needs, full, additive bool
 	}{
 		{name: "current", version: dataVersion},
+		{name: "additive", version: dataVersion - 1, additive: true},
 		{name: "data stale", version: 129, needs: true, full: true},
 		{name: "scoped version", version: dataVersion - 1, needs: true},
 		{name: "scoped pending", version: dataVersion, pending: true, needs: true},
@@ -1225,7 +1170,11 @@ func TestArchiveResyncState(t *testing.T) {
 		{name: "archive only", version: dataVersion - 1, archiveOnly: true, needs: true, full: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Cleanup(InstallDataVersionScopesForTest(map[int][]parser.AgentType{dataVersion: {parser.AgentClaude}}))
+			scopes := map[int][]parser.AgentType{dataVersion: {parser.AgentClaude}}
+			if tc.additive {
+				scopes[dataVersion] = []parser.AgentType{}
+			}
+			t.Cleanup(InstallDataVersionScopesForTest(scopes))
 			d := testDB(t)
 			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
 				_, err := tx.ExecContext(t.Context(), fmt.Sprintf("PRAGMA user_version=%d", tc.version))

@@ -86,9 +86,11 @@ type CursorAccountHour struct {
 	Start  time.Time
 }
 
+const cursorAccountHoursQuery = `SELECT account_user_id, hour_start FROM cursor_account_polls WHERE hour_start >= ? AND hour_start < ?`
+
 // CursorAccountHours returns account-hours with a recorded poll within a range.
 func (db *DB) CursorAccountHours(ctx context.Context, start, end time.Time) ([]CursorAccountHour, error) {
-	rows, err := db.getReader().Query(ctx, `SELECT account_user_id, hour_start FROM cursor_account_polls WHERE hour_start >= ? AND hour_start < ?`, start.Unix(), end.Unix()+1)
+	rows, err := db.getReader().Query(ctx, cursorAccountHoursQuery, start.Unix(), end.Unix()+1)
 	if err != nil {
 		return nil, err
 	}

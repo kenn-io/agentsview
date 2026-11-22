@@ -1788,6 +1788,11 @@ func TestCursorSyncMatchesMembers(t *testing.T) {
 			var account, stamp string
 			require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT account_user_id, account_polled_at FROM cursor_usage_events WHERE model='model-a'`).Scan(&account, &stamp))
 			assert.Equal(t, tc.wantAccount, account)
+			if tc.oldOwnerAbsent {
+				var pollStamp string
+				require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT polled_at FROM cursor_account_polls WHERE account_user_id='12' AND hour_start=1785232800`).Scan(&pollStamp))
+				assert.Greater(t, pollStamp, "2026-07-29T01:00:00.000000Z")
+			}
 			if tc.secondFails {
 				assert.Equal(t, "2026-07-29T01:00:00.000000Z", stamp)
 			}
@@ -2217,6 +2222,9 @@ func TestCursorSyncDefersMemberEventsUntilTeamPoll(t *testing.T) {
 	dataDir := cursorUsageTestDataDir(t)
 	const first = `{"timestamp":"2026-07-28T10:03:00Z","model":"a","tokenUsage":{"outputTokens":7}}`
 	const late = `{"timestamp":"2026-07-28T10:04:00Z","model":"b","tokenUsage":{"outputTokens":5}}`
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, database.InsertCursorUsageEvents(t.Context(), []db.CursorUsageEvent{{OccurredAt: "2026-07-28T10:04:00Z", Model: "b", OutputTokens: 5}}))
+	require.NoError(t, database.Close())
 	var rosterAt time.Time
 	syncNumber := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -2242,16 +2250,19 @@ func TestCursorSyncDefersMemberEventsUntilTeamPoll(t *testing.T) {
 	}))
 	defer server.Close()
 	require.NoError(t, syncCursorUsage(t, server.URL, "--since", "2026-07-28", "--until", "2026-07-28"))
-	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	database = dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
 	var count int
 	var account, stamp string
 	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT count(*) FROM cursor_usage_events`).Scan(&count))
-	assert.Equal(t, 1, count)
+	assert.Equal(t, 2, count)
 	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT account_user_id, account_polled_at FROM cursor_usage_events WHERE model='a'`).Scan(&account, &stamp))
 	assert.Equal(t, "12", account)
 	polledAt, err := time.Parse(time.RFC3339Nano, stamp)
 	require.NoError(t, err)
 	assert.True(t, polledAt.Before(rosterAt))
+	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT account_user_id, account_polled_at FROM cursor_usage_events WHERE model='b'`).Scan(&account, &stamp))
+	assert.Empty(t, account)
+	assert.Empty(t, stamp)
 	require.NoError(t, database.Close())
 	require.NoError(t, syncCursorUsage(t, server.URL, "--since", "2026-07-28", "--until", "2026-07-28"))
 	database = dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))

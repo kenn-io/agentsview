@@ -14,66 +14,33 @@ import (
 
 func TestCursorAccountPollRangeUsesHourIndex(t *testing.T) {
 	d := testDB(t)
-	plan := strings.Join(explainQueryPlan(t, d, `SELECT account_user_id, hour_start FROM cursor_account_polls WHERE hour_start >= ? AND hour_start < ?`, 0, 3600), "\n")
+	plan := strings.Join(explainQueryPlan(t, d, cursorAccountHoursQuery, 0, 3600), "\n")
 	assert.Contains(t, plan, "SEARCH cursor_account_polls")
 	assert.Contains(t, plan, "hour_start>? AND hour_start<?")
 }
 
 func TestCursorAccountHoursIncludesClearedAttribution(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	start := time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC)
-	event := CursorUsageEvent{OccurredAt: "2026-07-28T10:03:00Z", Model: "a", DedupKey: "a"}
-	require.NoError(t, d.InsertCursorUsageEvents(ctx, []CursorUsageEvent{event}))
-	require.NoError(t, d.RecordCursorAccountPoll(ctx, map[string][]string{"12": {"a"}}, start.Add(24*time.Hour), []CursorAccountHour{{UserID: "12", Start: start}}))
-	require.NoError(t, d.RecordCursorAccountPoll(ctx, map[string][]string{"": {"a"}}, start.Add(25*time.Hour), nil))
-	hours, err := d.CursorAccountHours(ctx, start, start.Add(time.Hour))
-	require.NoError(t, err)
-	assert.Equal(t, []CursorAccountHour{{UserID: "12", Start: start}}, hours)
-	var polledAt string
-	require.NoError(t, d.Reader().QueryRowContext(ctx, `SELECT polled_at FROM cursor_account_polls WHERE account_user_id='12' AND hour_start=?`, start.Unix()).Scan(&polledAt))
-	assert.Equal(t, "2026-07-29T11:00:00.000000Z", polledAt)
-}
-
-func TestCursorAccountReassignmentAdvancesPreviousPoll(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	require.NoError(t, d.ConfigureArtifactLocalMachine(ctx, "local"))
-	start := time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC)
-	require.NoError(t, d.InsertCursorUsageEvents(ctx, []CursorUsageEvent{{OccurredAt: "2026-07-28T10:03:00Z", Model: "a", DedupKey: "a", OutputTokens: 7}}))
-	first := start.Add(24 * time.Hour)
-	require.NoError(t, d.RecordCursorAccountPoll(ctx, map[string][]string{"12": {"a"}}, first, []CursorAccountHour{{UserID: "12", Start: start}}))
-	require.NoError(t, d.RecordCursorAccountPoll(ctx, map[string][]string{"34": {"a"}}, first.Add(2*time.Hour), []CursorAccountHour{{UserID: "34", Start: start}}))
-	require.NoError(t, d.RecordCursorAccountPoll(ctx, map[string][]string{"12": {"a"}}, first.Add(time.Hour), []CursorAccountHour{{UserID: "12", Start: start}}))
-	day, err := d.ExportReportingDay(ctx, ReportingExportOptions{Date: start.Truncate(24 * time.Hour), Now: first.Add(3 * time.Hour), SchemaVersion: 6, ByMachine: true})
-	require.NoError(t, err)
-	old := day.Hours[10].Machines["cursor-account:12"]
-	assert.Zero(t, old.Usage.Totals.OutputTokens)
-	assert.Equal(t, "2026-07-29T12:00:00.000000Z", old.PolledAt)
-	assert.EqualValues(t, 7, day.Hours[10].Machines["cursor-account:34"].Usage.Totals.OutputTokens)
-}
-
-func TestCursorAccountEmptyPollIgnoresOtherDates(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	require.NoError(t, d.ConfigureArtifactLocalMachine(ctx, "origin-a"))
-	_, err := d.rawWriter().ExecContext(ctx, `INSERT INTO cursor_usage_events(occurred_at, model, account_user_id, account_polled_at) VALUES ('2025-07-28T10:00:00Z', 'a', '12', '2025-07-29T00:00:00.000000Z'), ('2026-07-28T10:00:00Z', 'b', '12', '2026-07-28T23:00:00.000000Z'); UPDATE cursor_usage_events SET output_tokens=7 WHERE model='b'; INSERT INTO cursor_account_polls(account_user_id, hour_start, polled_at) VALUES ('12', 1785232800, '2026-07-29T00:00:00.000000Z')`)
-	require.NoError(t, err)
-	start := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
-	day, err := d.ExportReportingDay(ctx, ReportingExportOptions{Date: start, Now: start.Add(48 * time.Hour), SchemaVersion: 6, ByMachine: true})
-	require.NoError(t, err)
-	part, ok := day.Hours[10].Machines["cursor-account:12"]
-	require.True(t, ok)
-	assert.Zero(t, part.Usage.Totals.OutputTokens)
-	assert.Equal(t, "2026-07-29T00:00:00.000000Z", part.PolledAt)
-	assert.EqualValues(t, 7, day.Hours[10].Usage.Totals.OutputTokens)
-	var archiveTokens int64
-	for id, machine := range day.Hours[10].Machines {
-		if strings.HasPrefix(id, "archive:") {
-			archiveTokens += machine.Usage.Totals.OutputTokens
-		}
+	for _, owner := range []string{"", "34"} {
+		t.Run("new owner "+owner, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			start := time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC)
+			event := CursorUsageEvent{OccurredAt: "2026-07-28T10:03:00Z", Model: "a", DedupKey: "a"}
+			require.NoError(t, d.InsertCursorUsageEvents(ctx, []CursorUsageEvent{event}))
+			first := start.Add(24 * time.Hour)
+			require.NoError(t, d.RecordCursorAccountPoll(ctx, map[string][]string{"12": {"a"}}, first, []CursorAccountHour{{UserID: "12", Start: start}}))
+			require.NoError(t, d.RecordCursorAccountPoll(ctx, map[string][]string{owner: {"a"}}, first.Add(2*time.Hour), nil))
+			require.NoError(t, d.RecordCursorAccountPoll(ctx, map[string][]string{"12": {"a"}}, first.Add(time.Hour), nil))
+			hours, err := d.CursorAccountHours(ctx, start, start.Add(time.Hour))
+			require.NoError(t, err)
+			assert.Contains(t, hours, CursorAccountHour{UserID: "12", Start: start})
+			var polledAt, account string
+			require.NoError(t, d.Reader().QueryRowContext(ctx, `SELECT polled_at FROM cursor_account_polls WHERE account_user_id='12' AND hour_start=?`, start.Unix()).Scan(&polledAt))
+			assert.Equal(t, "2026-07-29T12:00:00.000000Z", polledAt)
+			require.NoError(t, d.Reader().QueryRowContext(ctx, `SELECT account_user_id FROM cursor_usage_events WHERE dedup_key='a'`).Scan(&account))
+			assert.Equal(t, owner, account)
+		})
 	}
-	assert.EqualValues(t, 7, archiveTokens)
 }
 
 func TestCursorAccountColumnsAbsentInOldResyncSource(t *testing.T) {
@@ -163,4 +130,14 @@ func TestCursorAccountReporting(t *testing.T) {
 	assert.InDelta(t, 4, legacy.Hours[10].Machines["cursor-account:12"].Activity.Totals.AgentMinutes, 0.001)
 	assert.InDelta(t, 3, legacy.Hours[10].Machines[machine].Activity.Totals.AgentMinutes, 0.001)
 	assert.EqualValues(t, 65, legacy.Hours[10].Machines["archive:archive-a"].Usage.Totals.OutputTokens)
+
+	// A later empty poll moves the earlier account usage back to the archive.
+	require.NoError(t, d.RecordCursorAccountPoll(ctx, nil, first.Add(3*time.Hour), []CursorAccountHour{{UserID: "12", Start: hourStart}}))
+	opts.SchemaVersion = 6
+	day, err = d.ExportReportingDay(ctx, opts)
+	require.NoError(t, err)
+	empty := day.Hours[10].Machines["cursor-account:12"]
+	assert.Zero(t, empty.Usage.Totals.OutputTokens)
+	assert.Equal(t, "2026-07-29T04:00:00.000000Z", empty.PolledAt)
+	assert.EqualValues(t, 35, day.Hours[10].Machines["archive:archive-a"].Usage.Totals.OutputTokens)
 }
