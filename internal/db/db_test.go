@@ -863,6 +863,7 @@ func TestUpgradeExportSchemaInPlaceOnlyAddsExportIdentitySchema(t *testing.T) {
 		ALTER TABLE project_identity_observations DROP COLUMN checkout_state;
 		DROP TABLE remote_skipped_files;
 		DROP TABLE cursor_account_polls;
+		DROP INDEX idx_cursor_usage_events_account_time;
 		ALTER TABLE cursor_usage_events DROP COLUMN account_user_id;
 		ALTER TABLE cursor_usage_events DROP COLUMN account_polled_at;
 		DROP TABLE session_project_identity_snapshots;

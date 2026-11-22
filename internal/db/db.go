@@ -2009,6 +2009,15 @@ func UpgradeExportSchemaInPlace(ctx context.Context, path string, cause error) (
 	); err != nil {
 		return err
 	}
+	var hasCursorEvents bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='cursor_usage_events')`).Scan(&hasCursorEvents); err != nil {
+		return fmt.Errorf("checking Cursor usage table: %w", err)
+	}
+	if hasCursorEvents {
+		if _, err := tx.ExecContext(ctx, cursorAccountEventIndexSQL); err != nil {
+			return fmt.Errorf("indexing Cursor account usage: %w", err)
+		}
+	}
 	if err := initializeSchemaUpgradeMetadata(ctx, tx); err != nil {
 		return err
 	}

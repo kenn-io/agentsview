@@ -45,6 +45,10 @@ CREATE TABLE IF NOT EXISTS cursor_account_polls (
 );
 CREATE INDEX IF NOT EXISTS idx_cursor_account_polls_hour ON cursor_account_polls(hour_start);`
 
+// Created after column migrations so older archives can open without a rebuild.
+const cursorAccountEventIndexSQL = `CREATE INDEX IF NOT EXISTS idx_cursor_usage_events_account_time
+ON cursor_usage_events(agent, account_user_id, occurred_at, account_polled_at)`
+
 func (db *DB) ensureCursorUsageEventsSchemaLocked(ctx context.Context, w *writerHandle) error {
 	if _, err := w.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS cursor_usage_events (
@@ -75,6 +79,9 @@ func (db *DB) ensureCursorUsageEventsSchemaLocked(ctx context.Context, w *writer
 			ON cursor_usage_events(model);
 	`); err != nil {
 		return fmt.Errorf("creating cursor_usage_events: %w", err)
+	}
+	if _, err := w.Exec(ctx, cursorAccountEventIndexSQL); err != nil {
+		return fmt.Errorf("indexing Cursor account usage: %w", err)
 	}
 	return nil
 }

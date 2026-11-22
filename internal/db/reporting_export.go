@@ -693,6 +693,10 @@ const reportingCursorHour = `(agentsview_timestamp_unix_micro(occurred_at) / 360
 
 const reportingCursorPollWindow = `PARTITION BY agent, account_user_id, ` + reportingCursorHour
 
+const reportingEmptyCursorPollsQuery = `SELECT account_user_id, hour_start, polled_at FROM cursor_account_polls AS poll
+		WHERE hour_start >= ? AND hour_start < ? AND NOT EXISTS (
+			SELECT 1 FROM cursor_usage_events WHERE agent='cursor' AND account_user_id = poll.account_user_id AND occurred_at >= strftime('%Y-%m-%dT%H:%M:%SZ', poll.hour_start - 1, 'unixepoch') AND occurred_at < strftime('%Y-%m-%dT%H:%M:%SZ', poll.hour_start + 3601, 'unixepoch') AND ` + reportingCursorHour + ` = poll.hour_start AND account_polled_at >= poll.polled_at)`
+
 func (db *DB) loadReportingAccountUsage(ctx context.Context, tx *sql.Tx, start, end time.Time, source *reportingExportSource) error {
 	var exists bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='cursor_usage_events')`).Scan(&exists); err != nil {
@@ -727,9 +731,7 @@ func (db *DB) loadReportingAccountUsage(ctx context.Context, tx *sql.Tx, start, 
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	emptyRows, err := tx.QueryContext(ctx, `SELECT account_user_id, hour_start, polled_at FROM cursor_account_polls AS poll
-		WHERE hour_start >= ? AND hour_start < ? AND NOT EXISTS (
-			SELECT 1 FROM cursor_usage_events WHERE agent='cursor' AND account_user_id = poll.account_user_id AND occurred_at >= strftime('%Y-%m-%dT%H:%M:%SZ', poll.hour_start - 1, 'unixepoch') AND occurred_at < strftime('%Y-%m-%dT%H:%M:%SZ', poll.hour_start + 3601, 'unixepoch') AND `+reportingCursorHour+` = poll.hour_start AND account_polled_at >= poll.polled_at)`, start.Unix(), end.Unix())
+	emptyRows, err := tx.QueryContext(ctx, reportingEmptyCursorPollsQuery, start.Unix(), end.Unix())
 	if err != nil {
 		return fmt.Errorf("querying empty Cursor account polls: %w", err)
 	}

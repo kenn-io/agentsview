@@ -19,6 +19,13 @@ func TestCursorAccountPollRangeUsesHourIndex(t *testing.T) {
 	assert.Contains(t, plan, "hour_start>? AND hour_start<?")
 }
 
+func TestCursorEmptyPollLookupUsesAccountTimeIndex(t *testing.T) {
+	d := testDB(t)
+	plan := strings.Join(explainQueryPlan(t, d, reportingEmptyCursorPollsQuery, 0, 3600), "\n")
+	assert.Contains(t, plan, "idx_cursor_usage_events_account_time")
+	assert.Contains(t, plan, "account_user_id=? AND occurred_at>? AND occurred_at<?")
+}
+
 func TestCursorAccountReassignmentAndClearing(t *testing.T) {
 	for _, owner := range []string{"", "34"} {
 		t.Run("new owner "+owner, func(t *testing.T) {
@@ -72,7 +79,7 @@ func TestCursorAccountColumnsAbsentInOldResyncSource(t *testing.T) {
 
 	raw, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
-	_, err = raw.ExecContext(ctx, `ALTER TABLE cursor_usage_events DROP COLUMN account_user_id; ALTER TABLE cursor_usage_events DROP COLUMN account_polled_at; DROP TABLE cursor_account_polls`)
+	_, err = raw.ExecContext(ctx, `DROP INDEX idx_cursor_usage_events_account_time; ALTER TABLE cursor_usage_events DROP COLUMN account_user_id; ALTER TABLE cursor_usage_events DROP COLUMN account_polled_at; DROP TABLE cursor_account_polls`)
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 	older := testDB(t)
