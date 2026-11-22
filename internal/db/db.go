@@ -1895,7 +1895,8 @@ CREATE TABLE IF NOT EXISTS background_migrations (
     started_at      TEXT,
     updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     completed_at    TEXT
-);` + projectIdentityRevisionSchemaSQL + projectIdentitySnapshotInvariantSchemaSQL + cursorAccountPollsSchemaSQL
+);` + projectIdentityRevisionSchemaSQL + projectIdentitySnapshotInvariantSchemaSQL + cursorAccountPollsSchemaSQL + `
+CREATE INDEX IF NOT EXISTS idx_cursor_account_polls_hour ON cursor_account_polls(hour_start);`
 
 var exportIdentityColumnMigrations = []schemaColumnMigration{
 	{"cursor_usage_events", "account_user_id", "ALTER TABLE cursor_usage_events ADD COLUMN account_user_id TEXT NOT NULL DEFAULT ''"},
