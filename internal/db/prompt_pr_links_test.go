@@ -507,7 +507,7 @@ func TestToolPRLinksAppendTracksSharedShell(t *testing.T) {
 	for _, tc := range []struct {
 		tool string
 		want int
-	}{{"Bash", 0}, {"exec_command", 1}} {
+	}{{"Bash", 1}, {"exec_command", 2}} {
 		t.Run(tc.tool, func(t *testing.T) {
 			d := testDB(t)
 			s := Session{ID: "shared-shell", Project: "project", Machine: "local", Agent: "claude", Cwd: "/work/repo"}
@@ -515,10 +515,11 @@ func TestToolPRLinksAppendTracksSharedShell(t *testing.T) {
 			obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://github.com/example/repo.git")
 			require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), obs))
 			require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Ordinal: 0, Role: "assistant", ToolCalls: []ToolCall{{ToolName: tc.tool, Category: "Bash", InputJSON: `{"command":"cd /elsewhere"}`}}}}))
-			require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{ToolName: tc.tool, Category: "Bash", InputJSON: `{"command":"gh pr view 42"}`}}}}))
+			require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{ToolName: tc.tool, Category: "Bash", InputJSON: `{"command":"gh pr view 42; gh pr view 43 -R example/other"}`}}}}))
 			got, err := d.GetSession(t.Context(), s.ID)
 			require.NoError(t, err)
-			assert.Len(t, got.PRLinks, tc.want)
+			require.Len(t, got.PRLinks, tc.want)
+			assert.Equal(t, "https://github.com/example/other/pull/43", got.PRLinks[tc.want-1].URL)
 		})
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -308,15 +309,12 @@ func appendSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id
 		if err := tx.QueryRow(`SELECT COALESCE(cwd,''), COALESCE((SELECT MAX(git_remote) FROM session_project_identity_snapshots WHERE session_id=? AND remote_candidate_count=1),'') FROM sessions WHERE id=?`, id, id).Scan(&cwd, &remote); err != nil {
 			return err
 		}
-		tools, err = ToolCallPRLinks(ctx, messages, cwd, remote)
+		var explicit []PRLink
+		tools, explicit, err = toolCallPRLinkSets(ctx, messages, cwd, remote)
 		if err != nil {
 			return err
 		}
 		if remote != "" {
-			explicit, err := ToolCallPRLinks(ctx, messages, cwd, "")
-			if err != nil {
-				return err
-			}
 			if EncodePRLinks(tools) != EncodePRLinks(explicit) {
 				// Earlier commands in a shared shell can change the checkout.
 				rows, err := tx.Query(`SELECT t.tool_name, t.input_json FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND t.category='Bash' AND t.tool_name NOT IN ('exec_command','shell_command','shell') AND m.ordinal < ? AND (t.input_json IS NULL OR `+shellTaintCandidateSQL+`) ORDER BY m.ordinal, t.id`, id, messages[0].Ordinal)
@@ -418,6 +416,11 @@ func (db *DB) upgradePromptPRLinksTx(ctx context.Context, tx *sql.Tx) error {
 }
 
 func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote string) ([]PRLink, bool, error) {
+	links, _, changed, err := callPRLinkSets(ctx, category, toolName, input, cwd, remote)
+	return links, changed, err
+}
+
+func callPRLinkSets(ctx context.Context, category, toolName, input, cwd, remote string) ([]PRLink, []PRLink, bool, error) {
 	if category == "Task" {
 		var payload struct {
 			Prompt  string         `json:"prompt"`
@@ -426,18 +429,21 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 			Content jsontext.Value `json:"content"`
 		}
 		if json.Unmarshal([]byte(input), &payload) != nil {
-			return nil, false, nil //nolint:nilerr // Skip malformed optional input without failing session processing.
+			return nil, nil, false, nil //nolint:nilerr // Skip malformed optional input without failing session processing.
 		}
 		var content string
 		_ = json.Unmarshal(payload.Content, &content)
 		links, err := parser.PromptPRLinksContext(ctx, payload.Prompt+"\n"+payload.Message+"\n"+payload.Task+"\n"+content)
-		return links, false, err
+		return links, links, false, err
 	}
 	if category != "Bash" {
-		return nil, false, nil
+		return nil, nil, false, nil
 	}
 	if len(input) > 256*1024 {
-		return nil, true, nil
+		return nil, nil, true, nil
+	}
+	if toolName == "exec" && !jsontext.Value(input).IsValid() {
+		return codeModePRLinks(ctx, input, cwd, remote)
 	}
 	var payload struct {
 		Workdir          string `json:"workdir"`
@@ -464,29 +470,137 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 	if command == "" && !jsontext.Value(input).IsValid() && (toolName == "exec_command" || toolName == "shell_command") {
 		command = input
 	}
-	return parser.CommandPRLinks(ctx, command, remote)
+	return parser.CommandPRLinkSets(ctx, command, remote)
+}
+
+var codeModeDirKeyRE = regexp.MustCompile(`["']?(?:workdir|cwd)["']?\s*:`)
+
+// codeModePRLinks reads each exec_command independently; its shell does not
+// retain the working directory of another call in the same cell.
+func codeModePRLinks(ctx context.Context, input, cwd, remote string) ([]PRLink, []PRLink, bool, error) {
+	var lists, explicitLists [][]PRLink
+	const name = "tools.exec_command"
+	for i := 0; i < len(input); {
+		if end := skipCodeModeText(input, i); end > i {
+			i = end
+			continue
+		}
+		if !strings.HasPrefix(input[i:], name) || i > 0 && (input[i-1] == '.' || input[i-1] == '_' || input[i-1] >= 'a' && input[i-1] <= 'z' || input[i-1] >= 'A' && input[i-1] <= 'Z' || input[i-1] >= '0' && input[i-1] <= '9') {
+			i++
+			continue
+		}
+		start := i
+		i += len(name)
+		for i < len(input) && strings.ContainsRune(" \t\r\n", rune(input[i])) {
+			i++
+		}
+		if i == len(input) || input[i] != '(' {
+			continue
+		}
+		depth := 0
+		for ; i < len(input); i++ {
+			if end := skipCodeModeText(input, i); end > i {
+				i = end - 1
+				continue
+			}
+			if input[i] == '(' {
+				depth++
+			}
+			if input[i] == ')' {
+				depth--
+				if depth == 0 {
+					i++
+					break
+				}
+			}
+		}
+		if depth != 0 {
+			break
+		}
+		call := input[start:i]
+		command := commitCommandText(call)
+		if command == "" {
+			continue
+		}
+		callRemote := remote
+		withoutCommand := commitCommandRE.ReplaceAllString(call, "")
+		if codeModeDirKeyRE.MatchString(withoutCommand) {
+			loc := commitWorkdirRE.FindStringIndex(withoutCommand)
+			literal := false
+			if loc != nil {
+				rest := strings.TrimSpace(withoutCommand[loc[1]:])
+				literal = strings.HasPrefix(rest, ",") || strings.HasPrefix(rest, "}")
+			}
+			if !literal || cwd == "" || filepath.Clean(commitRepository(call, cwd)) != filepath.Clean(cwd) {
+				callRemote = ""
+			}
+		}
+		links, explicit, _, err := parser.CommandPRLinkSets(ctx, command, callRemote)
+		if err != nil {
+			return nil, nil, false, err
+		}
+		lists = append(lists, links)
+		explicitLists = append(explicitLists, explicit)
+	}
+	return parser.CombinePRLinks(lists...), parser.CombinePRLinks(explicitLists...), false, ctx.Err()
+}
+
+// skipCodeModeText skips quoted strings and comments while finding calls.
+func skipCodeModeText(input string, i int) int {
+	if i+1 < len(input) && input[i:i+2] == "//" {
+		if end := strings.IndexByte(input[i+2:], '\n'); end >= 0 {
+			return i + 2 + end
+		}
+		return len(input)
+	}
+	if i+1 < len(input) && input[i:i+2] == "/*" {
+		if end := strings.Index(input[i+2:], "*/"); end >= 0 {
+			return i + 4 + end
+		}
+		return len(input)
+	}
+	quote := input[i]
+	if quote != '\'' && quote != '"' && quote != '`' {
+		return i
+	}
+	for j := i + 1; j < len(input); j++ {
+		if input[j] == '\\' {
+			j++
+			continue
+		}
+		if input[j] == quote {
+			return j + 1
+		}
+	}
+	return len(input)
 }
 
 // ToolCallPRLinks derives links from a transcript's tool calls.
 func ToolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string) ([]PRLink, error) {
-	var lists [][]PRLink
+	links, _, err := toolCallPRLinkSets(ctx, messages, cwd, remote)
+	return links, err
+}
+
+func toolCallPRLinkSets(ctx context.Context, messages []Message, cwd, remote string) ([]PRLink, []PRLink, error) {
+	var lists, explicitLists [][]PRLink
 	for _, message := range messages {
 		for _, call := range message.ToolCalls {
 			if err := ctx.Err(); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
-			found, changed, err := callPRLinks(ctx, call.Category, call.ToolName, call.InputJSON, cwd, remote)
+			found, explicit, changed, err := callPRLinkSets(ctx, call.Category, call.ToolName, call.InputJSON, cwd, remote)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			lists = append(lists, found)
+			explicitLists = append(explicitLists, explicit)
 			if changed && call.ToolName != "exec_command" && call.ToolName != "shell_command" && call.ToolName != "shell" {
 				remote = ""
 				cwd = ""
 			}
 		}
 	}
-	return parser.CombinePRLinks(lists...), nil
+	return parser.CombinePRLinks(lists...), parser.CombinePRLinks(explicitLists...), nil
 }
 
 const shellTaintCandidateSQL = `t.input_json LIKE '%cd%' OR t.input_json LIKE '%pushd%' OR t.input_json LIKE '%popd%' OR t.input_json LIKE '%eval%' OR t.input_json LIKE '%source%' OR t.input_json LIKE '%. %' OR t.input_json LIKE '%GH_REPO%' OR t.input_json LIKE '%GH_HOST%' OR t.input_json LIKE '%(%' OR t.input_json LIKE '%function %'`

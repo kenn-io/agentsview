@@ -20,6 +20,7 @@ var (
 type shellCall struct {
 	Words   []string
 	Literal []bool
+	Tainted bool
 }
 
 func shellLiteral(parts []syntax.WordPart) (string, bool) {
@@ -52,9 +53,15 @@ func shellLiteral(parts []syntax.WordPart) (string, bool) {
 
 // CommandPRLinks derives links and reports whether the shell context changed.
 func CommandPRLinks(ctx context.Context, command, remote string) ([]PRLink, bool, error) {
+	links, _, changed, err := CommandPRLinkSets(ctx, command, remote)
+	return links, changed, err
+}
+
+// CommandPRLinkSets also returns links that do not rely on the checkout remote.
+func CommandPRLinkSets(ctx context.Context, command, remote string) ([]PRLink, []PRLink, bool, error) {
 	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
 	if err != nil {
-		return nil, true, nil
+		return nil, nil, true, nil
 	}
 	var calls []shellCall
 	tainted := false
@@ -68,6 +75,11 @@ func CommandPRLinks(ctx context.Context, command, remote string) ([]PRLink, bool
 				tainted = true
 			}
 		case *syntax.CallExpr:
+			for _, assignment := range n.Assigns {
+				if assignment.Name != nil && (assignment.Name.Value == "GH_REPO" || assignment.Name.Value == "GH_HOST") {
+					tainted = true
+				}
+			}
 			var call shellCall
 			for _, word := range n.Args {
 				value, literal := shellLiteral(word.Parts)
@@ -87,26 +99,30 @@ func CommandPRLinks(ctx context.Context, command, remote string) ([]PRLink, bool
 					}
 				}
 			}
+			call.Tainted = tainted
 			calls = append(calls, call)
 		}
 		return true
 	})
-	if tainted {
-		remote = ""
-	}
-	var lists [][]PRLink
+	var lists, explicitLists [][]PRLink
 	for _, call := range calls {
 		if err := ctx.Err(); err != nil {
-			return nil, false, err
+			return nil, nil, false, err
 		}
-		lists = append(lists, ghPRCallLinks(ctx, call, remote))
+		callRemote := remote
+		if call.Tainted {
+			callRemote = ""
+		}
+		lists = append(lists, ghPRCallLinks(ctx, call, callRemote))
+		explicitLists = append(explicitLists, ghPRCallLinks(ctx, call, ""))
 		links, err := PromptPRLinksContext(ctx, launcherPrompt(call.Words, call.Literal))
 		if err != nil {
-			return nil, false, err
+			return nil, nil, false, err
 		}
 		lists = append(lists, links)
+		explicitLists = append(explicitLists, links)
 	}
-	return CombinePRLinks(lists...), tainted, ctx.Err()
+	return CombinePRLinks(lists...), CombinePRLinks(explicitLists...), tainted, ctx.Err()
 }
 
 func ghPRCallLinks(ctx context.Context, call shellCall, remote string) []PRLink {
@@ -128,7 +144,11 @@ func ghPRCallLinks(ctx context.Context, call shellCall, remote string) []PRLink 
 	if i+2 >= len(args) || !call.Literal[i] || !call.Literal[i+1] || args[i] != "pr" {
 		return nil
 	}
-	switch args[i+1] {
+	action := args[i+1]
+	if action == "co" {
+		action = "checkout"
+	}
+	switch action {
 	case "view", "diff", "checks", "merge", "edit", "comment", "review", "ready", "close", "reopen", "checkout", "update-branch", "lock", "unlock", "revert":
 	default:
 		return nil
@@ -147,7 +167,7 @@ func ghPRCallLinks(ctx context.Context, call shellCall, remote string) []PRLink 
 		"lock":     "--reason -r",
 		"revert":   "--body -b --body-file -F --title -t",
 	}
-	takesValue := strings.Fields(valueFlags[args[i+1]])
+	takesValue := strings.Fields(valueFlags[action])
 	for j := i + 2; j < len(args); j++ {
 		if !call.Literal[j] {
 			if selector == "" {

@@ -115,3 +115,13 @@ func toolCallPRLinks(t *testing.T, messages []db.Message, cwd, remote string) []
 	require.NoError(t, err)
 	return links
 }
+
+func TestCodeModeBatchPRLinks(t *testing.T) {
+	input := `const example = 'tools.exec_command({cmd:"gh pr view 99 -R example/repo"})'; // tools.exec_command({cmd:"gh pr view 98 -R example/repo"})
+text(await tools.exec_command({cmd:"gh pr view 41",workdir:"/repo"})); text(await tools.exec_command({cmd:"gh pr co 42 -R example/other",workdir:"/other"})); text(await tools.exec_command({cmd:"gh pr view 43",workdir:"/other"}));`
+	messages := []db.Message{{ToolCalls: []db.ToolCall{{ToolName: "exec", Category: "Bash", InputJSON: input}}}}
+	links := toolCallPRLinks(t, messages, "/repo", "https://github.com/example/repo.git")
+	require.Len(t, links, 2)
+	assert.Equal(t, "https://github.com/example/repo/pull/41", links[0].URL)
+	assert.Equal(t, "https://github.com/example/other/pull/42", links[1].URL)
+}

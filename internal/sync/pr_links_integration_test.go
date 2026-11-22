@@ -264,3 +264,18 @@ func TestClineTeamTaskPRFilter(t *testing.T) {
 	require.Len(t, page.Sessions, 1)
 	assert.Equal(t, "cline:team-pr", page.Sessions[0].ID)
 }
+
+func TestCheckoutAliasPRFilter(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
+	env.writeClaudeSession(t, "proj", "checkout-alias.jsonl", testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("Review the changes", tsEarly),
+		testjsonl.ClaudeAssistantJSON([]map[string]any{{"type": "tool_use", "id": "call", "name": "Bash", "input": map[string]any{"command": "gh pr co 42 -R example/repo"}}}, tsEarlyS1),
+	))
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+	filter, err := db.ParsePRFilter("example/repo#42")
+	require.NoError(t, err)
+	page, err := env.db.ListSessions(t.Context(), db.SessionFilter{PR: filter})
+	require.NoError(t, err)
+	require.Len(t, page.Sessions, 1)
+	assert.Equal(t, "checkout-alias", page.Sessions[0].ID)
+}

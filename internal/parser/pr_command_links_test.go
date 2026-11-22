@@ -25,6 +25,7 @@ func TestGHPRCommandLinks(t *testing.T) {
 		{`cat <<EOF
 gh pr view 42 -R example/repo
 EOF`, remote, ""},
+		{`gh pr view 42; GH_REPO=other/repo`, remote, "https://github.com/example/repo/pull/42"},
 		{`cd /other; gh pr view 42`, remote, ""},
 		{`eval true; gh pr view 42`, remote, ""},
 		{`GH_REPO=other/repo gh pr view 42`, remote, ""},
@@ -78,4 +79,12 @@ func TestLauncherPromptPRLinks(t *testing.T) {
 			assert.Equal(t, tt.want, urls)
 		})
 	}
+}
+
+func TestCommandPRLinksBeforeDirectoryChange(t *testing.T) {
+	links, changed, err := CommandPRLinks(t.Context(), "gh pr view 42; cd /other; gh pr view 43", "https://github.com/example/repo.git")
+	require.NoError(t, err)
+	assert.True(t, changed)
+	require.Len(t, links, 1)
+	assert.Equal(t, "https://github.com/example/repo/pull/42", links[0].URL)
 }
