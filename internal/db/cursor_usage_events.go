@@ -114,6 +114,9 @@ func (db *DB) CursorAccountHours(ctx context.Context, start, end time.Time) ([]C
 	return hours, rows.Err()
 }
 
+const cursorAccountPreviousPollQuery = `INSERT INTO cursor_account_polls(account_user_id,hour_start,polled_at) SELECT account_user_id, ` + reportingCursorHour + `, ? FROM cursor_usage_events WHERE account_user_id != '' AND account_user_id != ? AND dedup_key != '' AND dedup_key IN (SELECT value FROM json_each(?)) AND account_polled_at < ? ON CONFLICT(account_user_id,hour_start) DO UPDATE SET polled_at = max(polled_at,excluded.polled_at)`
+const cursorAccountAssignQuery = `UPDATE cursor_usage_events SET account_user_id = ?, account_polled_at = ? WHERE dedup_key != '' AND dedup_key IN (SELECT value FROM json_each(?)) AND account_polled_at < ?`
+
 // RecordCursorAccountPoll commits matched events and completed prior hours together.
 func (db *DB) RecordCursorAccountPoll(ctx context.Context, assignments map[string][]string, polledAt time.Time, hours []CursorAccountHour) error {
 	stamp := polledAt.UTC().Format("2006-01-02T15:04:05.000000Z")
@@ -123,10 +126,10 @@ func (db *DB) RecordCursorAccountPoll(ctx context.Context, assignments map[strin
 			if err != nil {
 				return err
 			}
-			if _, err := tx.ExecContext(ctx, `INSERT INTO cursor_account_polls(account_user_id,hour_start,polled_at) SELECT account_user_id, `+reportingCursorHour+`, ? FROM cursor_usage_events WHERE account_user_id != '' AND account_user_id != ? AND dedup_key IN (SELECT value FROM json_each(?)) AND account_polled_at < ? ON CONFLICT(account_user_id,hour_start) DO UPDATE SET polled_at = max(polled_at,excluded.polled_at)`, stamp, id, string(encoded), stamp); err != nil {
+			if _, err := tx.ExecContext(ctx, cursorAccountPreviousPollQuery, stamp, id, string(encoded), stamp); err != nil {
 				return fmt.Errorf("recording previous Cursor account poll: %w", err)
 			}
-			if _, err := tx.ExecContext(ctx, `UPDATE cursor_usage_events SET account_user_id = ?, account_polled_at = ? WHERE dedup_key IN (SELECT value FROM json_each(?)) AND account_polled_at < ?`, id, stamp, string(encoded), stamp); err != nil {
+			if _, err := tx.ExecContext(ctx, cursorAccountAssignQuery, id, stamp, string(encoded), stamp); err != nil {
 				return fmt.Errorf("assigning Cursor usage account: %w", err)
 			}
 		}

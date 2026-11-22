@@ -24,6 +24,23 @@ func TestCursorAccountQueriesUseIndexes(t *testing.T) {
 	}
 }
 
+func TestCursorAccountPollStatementsUseDedupIndex(t *testing.T) {
+	d := testDB(t)
+	for _, tc := range []struct {
+		name, query string
+		args        []any
+	}{
+		{"previous poll", cursorAccountPreviousPollQuery, []any{"stamp", "12", "[]", "stamp"}},
+		{"assignment", cursorAccountAssignQuery, []any{"12", "stamp", "[]", "stamp"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			plan := strings.Join(explainQueryPlan(t, d, tc.query, tc.args...), "\n")
+			assert.Contains(t, plan, "idx_cursor_usage_events_dedup")
+			assert.NotContains(t, plan, "SCAN cursor_usage_events")
+		})
+	}
+}
+
 func TestCursorAccountReassignmentAndClearing(t *testing.T) {
 	for _, owner := range []string{"", "34"} {
 		t.Run("new owner "+owner, func(t *testing.T) {
