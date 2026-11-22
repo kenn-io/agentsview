@@ -59,14 +59,15 @@
 <style>
   /* Fixed line boxes keep every card 64px tall, with or without a
      sublabel, so wrapped rows line up. Three classes outrank kit-ui's
-     scoped padding and surface rules. 112px fits the common labels
-     inside the 10px padding, so cards wrap before a label truncates. */
+     scoped padding and surface rules. 107px with 8px side padding fits
+     the common labels and keeps a row of 10 cards on one line in a
+     1200px-wide browser. */
   :global(.kit-card.stat-card.card) {
     flex: 1;
-    min-width: 112px;
+    min-width: 107px;
     min-height: 64px;
     box-sizing: border-box;
-    padding: 5px 10px;
+    padding: 5px 8px;
     display: flex;
     flex-direction: column;
     gap: 1px;
