@@ -1,7 +1,4 @@
-import {
-  isTreemapLabelScale,
-  type TreemapLabelScale,
-} from "../components/usage/treemapLabelSize.js";
+import { isTreemapScale, type TreemapScale } from "../components/usage/treemapScale.js";
 
 // Usage page choices remembered in localStorage: chart and attribution
 // toggles, and the picker exclusions.
@@ -12,7 +9,7 @@ export type AttributionView = "treemap" | "list" | "bars";
 
 export interface Toggles {
   timeSeries: { groupBy: GroupBy; view: TimeSeriesView };
-  attribution: { groupBy: GroupBy; view: AttributionView; labelScale: TreemapLabelScale };
+  attribution: { groupBy: GroupBy; view: AttributionView; tileScale: TreemapScale };
 }
 
 const TOGGLES_KEY = "usage-toggles";
@@ -20,7 +17,7 @@ const TOGGLES_KEY = "usage-toggles";
 function defaultToggles(): Toggles {
   return {
     timeSeries: { groupBy: "project", view: "smooth" },
-    attribution: { groupBy: "project", view: "treemap", labelScale: "sqrt" },
+    attribution: { groupBy: "project", view: "treemap", tileScale: "linear" },
   };
 }
 
@@ -56,9 +53,9 @@ export function loadToggles(): Toggles {
         attribution: {
           groupBy: sharedGroupBy,
           view: parsed.attribution?.view ?? defaults.attribution.view,
-          labelScale: isTreemapLabelScale(parsed.attribution?.labelScale)
-            ? parsed.attribution.labelScale
-            : defaults.attribution.labelScale,
+          tileScale: isTreemapScale(parsed.attribution?.tileScale)
+            ? parsed.attribution.tileScale
+            : defaults.attribution.tileScale,
         },
       };
     }

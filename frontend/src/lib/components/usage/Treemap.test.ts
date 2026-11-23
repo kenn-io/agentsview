@@ -184,37 +184,59 @@ describe("Treemap", () => {
     expect(onSelect.mock.calls).toEqual([["beta"], ["alpha"], ["alpha"]]);
     await unmount(project);
   });
-  it("sizes labels by tile share on the chosen scale", async () => {
+  it("sizes tile areas on the chosen scale and keeps the real values in the labels", async () => {
     const items = [
       {
         id: "big",
         label: "Big",
-        value: 80,
+        value: 999,
         style: { color: "#1f77b4", fill: "solid" as const },
       },
       {
         id: "small",
         label: "Small",
-        value: 20,
+        value: 1,
         style: { color: "#ff7f0e", fill: "solid" as const },
       },
     ];
-    const labelSizes = () =>
-      [...document.querySelectorAll<SVGTextElement>(".tile-label")].map((label) =>
-        parseFloat(label.style.fontSize),
+    // The clip rect of each tile matches the tile's laid-out box.
+    const smallShare = () => {
+      const areas = [...document.querySelectorAll("clipPath rect")].map(
+        (rect) => Number(rect.getAttribute("width")) * Number(rect.getAttribute("height")),
       );
+      return areas[1]! / (areas[0]! + areas[1]!);
+    };
 
     const linear = mount(Treemap, {
       target: document.body,
-      props: { items, labelScale: "linear" },
+      props: { items, scale: "linear", formatValue: String },
     });
     await tick();
-    expect(labelSizes()).toEqual([17, 12]);
+    // 1 / 1000 of the area.
+    expect(smallShare()).toBeLessThan(0.01);
     unmount(linear);
 
-    const log = mount(Treemap, { target: document.body, props: { items, labelScale: "log" } });
+    const sqrt = mount(Treemap, {
+      target: document.body,
+      props: { items, scale: "sqrt", formatValue: String },
+    });
     await tick();
-    expect(labelSizes()).toEqual([18, 16]);
+    // sqrt(999) = 31.6 against 1, so about 3%.
+    expect(smallShare()).toBeGreaterThan(0.02);
+    expect(smallShare()).toBeLessThan(0.05);
+    unmount(sqrt);
+
+    const log = mount(Treemap, {
+      target: document.body,
+      props: { items, scale: "log", formatValue: String },
+    });
+    await tick();
+    // 1 + ln(999) = 7.9 against 1, so about 11%.
+    expect(smallShare()).toBeGreaterThan(0.09);
+    expect(smallShare()).toBeLessThan(0.14);
+    expect(
+      [...document.querySelectorAll(".tile-value")].map((value) => value.textContent?.trim()),
+    ).toEqual(["999", "1"]);
     unmount(log);
   });
 });
