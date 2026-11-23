@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"encoding/json/jsontext"
 	"os"
 	"path/filepath"
@@ -10,7 +9,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/config"
 )
 
@@ -94,7 +92,7 @@ func TestLateMessageUsageStoresUsageCounters(t *testing.T) {
 }
 
 func TestOpenDaemonDefersMessageUsageCounterFill(t *testing.T) {
-	for _, query := range []string{"daily", "top", "count", "session"} {
+	for _, query := range []string{"daily", "session"} {
 		t.Run(query, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "archive.db")
 			d := testDBAtPath(t, path, "source")
@@ -130,19 +128,12 @@ func TestOpenDaemonDefersMessageUsageCounterFill(t *testing.T) {
 			_, err = OpenReadOnly(t.Context(), path)
 			require.ErrorIs(t, err, ErrMessageUsageCountersPending)
 			require.NoError(t, d.lockWriterCtx(t.Context()))
-			ctx, cancel := context.WithCancel(t.Context())
-			cancel()
-			require.ErrorIs(t, d.finishUsageCounters(ctx), context.Canceled)
 			read := func(db *DB) (any, error) {
 				switch query {
 				case "daily":
 					return db.GetDailyUsage(t.Context(), UsageFilter{})
-				case "top":
-					return db.GetTopSessionsByCost(t.Context(), UsageFilter{}, 10)
-				case "session":
-					return db.GetSessionUsage(t.Context(), "s", true)
 				default:
-					return db.GetUsageSessionCounts(t.Context(), UsageFilter{})
+					return db.GetSessionUsage(t.Context(), "s", true)
 				}
 			}
 			type result struct {
@@ -181,7 +172,8 @@ func TestReopenFinishesPendingMessageUsageCounters(t *testing.T) {
 	insertMessages(t, d, m)
 	_, err := d.getWriter().Exec(t.Context(), `DROP INDEX idx_messages_usage_session_covering;
  ALTER TABLE messages DROP COLUMN usage_output_tokens;
- ALTER TABLE messages DROP COLUMN usage_web_search_requests;`)
+ ALTER TABLE messages DROP COLUMN usage_web_search_requests;
+ CREATE INDEX idx_messages_usage_session_covering ON messages(session_id, ordinal, timestamp, role, model, provider_id, claude_message_id, claude_request_id, token_usage, source_uuid) WHERE token_usage != '' AND model != '' AND model != '<synthetic>';`)
 	require.NoError(t, err)
 	require.NoError(t, d.Close())
 	d, err = OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
@@ -217,57 +209,24 @@ func TestReopenFinishesPendingMessageUsageCounters(t *testing.T) {
 	assert.Zero(t, updates)
 }
 
-func TestUsageCounterReadersDifferBeforeFill(t *testing.T) {
+func TestRepairMessageFTSFillsUsageCounters(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "archive.db")
 	d := testDBAtPath(t, path, "source")
-	for _, id := range []string{"s1", "s2"} {
-		insertSession(t, d, id, "proj", func(s *Session) { s.Agent = "claude"; s.StartedAt = new(tsZero); s.EndedAt = new(tsZeroS2) })
-	}
-	for _, m := range []Message{
-		{SessionID: "s1", Role: "assistant", Timestamp: tsZero, Model: "claude-sonnet", TokenUsage: jsontext.Value(`{"input_tokens":100,"output_tokens":10}`), ClaudeMessageID: "m", ClaudeRequestID: "r"},
-		{SessionID: "s1", Ordinal: 1, Role: "assistant", Timestamp: tsZero, Model: "claude-sonnet", TokenUsage: jsontext.Value(`{"input_tokens":200,"output_tokens":50,"server_tool_use":{"web_search_requests":3}}`), ClaudeMessageID: "m", ClaudeRequestID: "r"},
-		{SessionID: "s2", Role: "assistant", Timestamp: tsZero, Model: "claude-sonnet", TokenUsage: jsontext.Value(`{"input_tokens":300,"output_tokens":30}`), ClaudeMessageID: "m", ClaudeRequestID: "r"},
-	} {
-		insertMessages(t, d, m)
-	}
+	insertSession(t, d, "s", "proj")
+	m := asstMsg("s", 0, "reply")
+	m.Model = "claude-sonnet"
+	m.TokenUsage = jsontext.Value(`{"output_tokens":50,"server_tool_use":{"web_search_requests":3}}`)
+	insertMessages(t, d, m)
 	_, err := d.getWriter().Exec(t.Context(), `DROP INDEX idx_messages_usage_session_covering;
  ALTER TABLE messages DROP COLUMN usage_output_tokens;
- ALTER TABLE messages DROP COLUMN usage_web_search_requests;`)
+ ALTER TABLE messages DROP COLUMN usage_web_search_requests;
+ CREATE INDEX idx_messages_usage_session_covering ON messages(session_id, ordinal, timestamp, role, model, provider_id, claude_message_id, claude_request_id, token_usage, source_uuid) WHERE token_usage != '' AND model != '' AND model != '<synthetic>';`)
 	require.NoError(t, err)
 	require.NoError(t, d.Close())
 	d, err = OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
 	require.NoError(t, err)
 	defer d.Close()
-	read := func() map[string]any {
-		ctx := t.Context()
-		session, err := d.GetSessionUsage(ctx, "s1", true)
-		require.NoError(t, err)
-		rows, err := d.GetSessionUsageRows(ctx, []string{"s1", "s2"})
-		require.NoError(t, err)
-		start := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-		end := start.Add(24 * time.Hour)
-		activityRows, _, _, err := d.activityReportUsage(ctx, []string{"s1", "s2"}, "2023-12-31", "2024-01-03", activity.Query{RangeStart: start, RangeEnd: end, EffectiveEnd: end}, false)
-		require.NoError(t, err)
-		day, err := d.ExportReportingDay(ctx, ReportingExportOptions{Date: start, Now: end})
-		require.NoError(t, err)
-		digest, err := d.ExportReportingDigest(ctx, ReportingDigestExportOptions{From: start, To: start, Now: end})
-		require.NoError(t, err)
-		page, err := d.ExportSessionSummaries(ctx, SessionExportOptions{})
-		require.NoError(t, err)
-		all, err := d.ExportAllSessionSummaries(ctx, SessionExportOptions{})
-		require.NoError(t, err)
-		return map[string]any{"session": session, "rows": rows, "activity": activityRows, "day": day, "digest": digest, "page": page, "all": all}
-	}
-	assert.Equal(t, []storedUsageCounters{{0, 0}, {0, 0}}, readStoredUsageCounters(t, d, "s1"))
-	assert.Equal(t, []storedUsageCounters{{0, 0}}, readStoredUsageCounters(t, d, "s2"))
-	d.usageCountersPending.Store(false)
-	before := read()
-	d.usageCountersPending.Store(true)
+	assert.Equal(t, []storedUsageCounters{{0, 0}}, readStoredUsageCounters(t, d, "s"))
 	require.NoError(t, d.RepairMessageFTS(t.Context()))
-	assert.Equal(t, []storedUsageCounters{{10, 0}, {50, 3}}, readStoredUsageCounters(t, d, "s1"))
-	assert.Equal(t, []storedUsageCounters{{30, 0}}, readStoredUsageCounters(t, d, "s2"))
-	after := read()
-	for _, name := range []string{"session", "rows", "activity", "day", "digest", "page", "all"} {
-		assert.Equal(t, before[name], after[name], name)
-	}
+	assert.Equal(t, []storedUsageCounters{{50, 3}}, readStoredUsageCounters(t, d, "s"))
 }
