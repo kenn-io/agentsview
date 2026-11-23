@@ -313,7 +313,8 @@ func appendSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id
 				return err
 			}
 		}
-		tools, tainted, err = toolCallPRLinksWithShellState(ctx, messages, cwd, remote, tainted)
+		// Tool writes store an empty InputJSON as SQL NULL.
+		tools, tainted, err = toolCallPRLinksWithShellState(ctx, messages, cwd, remote, tainted, true)
 		if err != nil {
 			return err
 		}
@@ -552,7 +553,7 @@ func decodeJSLiteral(literal string) (string, bool) {
 
 // ToolCallPRLinks derives links from a transcript's tool calls.
 func ToolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string) ([]PRLink, error) {
-	links, _, err := toolCallPRLinksWithShellState(ctx, messages, cwd, remote, parser.PRShellContext{})
+	links, _, err := toolCallPRLinksWithShellState(ctx, messages, cwd, remote, parser.PRShellContext{}, false)
 	return links, err
 }
 
@@ -560,14 +561,14 @@ func independentShell(name string) bool {
 	return name == "exec_command" || name == "shell_command" || name == "shell" || name == "exec"
 }
 
-func toolCallPRLinksWithShellState(ctx context.Context, messages []Message, cwd, remote string, tainted parser.PRShellContext) ([]PRLink, parser.PRShellContext, error) {
+func toolCallPRLinksWithShellState(ctx context.Context, messages []Message, cwd, remote string, tainted parser.PRShellContext, emptyInputMissing bool) ([]PRLink, parser.PRShellContext, error) {
 	var lists [][]PRLink
 	for _, message := range messages {
 		for _, call := range message.ToolCalls {
 			if err := ctx.Err(); err != nil {
 				return nil, tainted, err
 			}
-			if call.Category == "Bash" && call.InputJSON == "" && !independentShell(call.ToolName) {
+			if emptyInputMissing && call.Category == "Bash" && call.InputJSON == "" && !independentShell(call.ToolName) {
 				tainted = parser.UncertainPRShell()
 				continue
 			}
@@ -604,7 +605,7 @@ func writePRShellTaintTx(tx transactionQueries, id string, tainted parser.PRShel
 // A NULL state is initialized once from retained history. New appends then
 // advance it without reading earlier tool calls again.
 func storedToolCallPRLinksTx(ctx context.Context, tx transactionQueries, id, cwd, remote string, before *int) ([]PRLink, parser.PRShellContext, error) {
-	query := `SELECT t.tool_name, t.category, COALESCE(t.input_json,'') FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND (t.category='Bash' OR (t.category='Task' AND t.input_json LIKE '%http%'))`
+	query := `SELECT t.tool_name, t.category, t.input_json FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND (t.category='Bash' OR (t.category='Task' AND t.input_json LIKE '%http%'))`
 	args := []any{id}
 	if before != nil {
 		query += ` AND m.ordinal < ?`
@@ -619,12 +620,19 @@ func storedToolCallPRLinksTx(ctx context.Context, tx transactionQueries, id, cwd
 	var lists [][]PRLink
 	tainted := parser.PRShellContext{}
 	for rows.Next() {
-		var name, category, input string
+		var name, category string
+		var input sql.NullString
 		if err := rows.Scan(&name, &category, &input); err != nil {
 			return nil, parser.PRShellContext{}, err
 		}
-		messages := []Message{{ToolCalls: []ToolCall{{ToolName: name, Category: category, InputJSON: input}}}}
-		links, next, err := toolCallPRLinksWithShellState(ctx, messages, cwd, remote, tainted)
+		if !input.Valid {
+			if category == "Bash" && !independentShell(name) {
+				tainted = parser.UncertainPRShell()
+			}
+			continue
+		}
+		messages := []Message{{ToolCalls: []ToolCall{{ToolName: name, Category: category, InputJSON: input.String}}}}
+		links, next, err := toolCallPRLinksWithShellState(ctx, messages, cwd, remote, tainted, false)
 		if err != nil {
 			return nil, parser.PRShellContext{}, err
 		}

@@ -577,23 +577,40 @@ func TestCwdChangeRefreshesToolPRLinks(t *testing.T) {
 }
 
 func TestToolPRLinksMissingShellInput(t *testing.T) {
-	d := testDB(t)
-	s := Session{ID: "missing-shell", Project: "project", Machine: "local", Agent: "claude", Cwd: "/work/repo"}
-	require.NoError(t, d.UpsertSession(t.Context(), s))
-	obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://github.com/example/repo.git")
-	require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), obs))
-	message := func(ordinal int, input string) Message {
-		return Message{SessionID: s.ID, Ordinal: ordinal, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: input}}}
+	for _, tc := range []struct {
+		name  string
+		input any
+		want  int
+	}{
+		{"missing", nil, 0}, {"empty", "", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			s := Session{ID: "missing-shell", Project: "project", Machine: "local", Agent: "claude", Cwd: "/work/repo"}
+			require.NoError(t, d.UpsertSession(t.Context(), s))
+			obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://github.com/example/repo.git")
+			require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), obs))
+			message := func(ordinal int, input string) Message {
+				return Message{SessionID: s.ID, Ordinal: ordinal, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: input}}}
+			}
+			require.NoError(t, d.InsertMessages(t.Context(), []Message{message(0, `{"command":"echo hi"}`)}))
+			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+				if _, err := tx.ExecContext(t.Context(), `UPDATE tool_calls SET input_json=? WHERE session_id=?`, tc.input, s.ID); err != nil {
+					return err
+				}
+				_, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_shell_tainted=NULL WHERE id=?`, s.ID)
+				return err
+			}))
+			require.NoError(t, d.InsertMessages(t.Context(), []Message{message(1, `{"command":"gh pr view 42"}`)}))
+			got, err := d.GetSession(t.Context(), s.ID)
+			require.NoError(t, err)
+			require.Len(t, got.PRLinks, tc.want)
+			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error { return refreshSessionPromptPRLinksTx(t.Context(), tx, s.ID) }))
+			got, err = d.GetSession(t.Context(), s.ID)
+			require.NoError(t, err)
+			assert.Len(t, got.PRLinks, tc.want)
+		})
 	}
-	require.NoError(t, d.InsertMessages(t.Context(), []Message{message(0, "")}))
-	require.NoError(t, d.InsertMessages(t.Context(), []Message{message(1, `{"command":"gh pr view 42"}`)}))
-	got, err := d.GetSession(t.Context(), s.ID)
-	require.NoError(t, err)
-	assert.Empty(t, got.PRLinks)
-	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error { return refreshSessionPromptPRLinksTx(t.Context(), tx, s.ID) }))
-	got, err = d.GetSession(t.Context(), s.ID)
-	require.NoError(t, err)
-	assert.Empty(t, got.PRLinks)
 }
 
 func TestToolPRLinksAppendRefreshParity(t *testing.T) {
