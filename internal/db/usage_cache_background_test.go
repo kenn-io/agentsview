@@ -922,6 +922,55 @@ func TestUsageBackfillJournalCapture(t *testing.T) {
 	assert.Len(t, snapshot.Sessions, 2)
 }
 
+func TestUsageBackfillCaptureStopsAfterFirstPendingSession(t *testing.T) {
+	for _, pending := range []string{"changes", "invalidations"} {
+		t.Run(pending, func(t *testing.T) {
+			database := testDB(t)
+			for _, id := range []string{"one", "two", "three"} {
+				insertSession(t, database, id, "project")
+			}
+			require.NoError(t, database.runUsageCacheBackfill(t.Context()))
+			id, err := database.GetDatabaseID(t.Context())
+			require.NoError(t, err)
+			cache, err := database.usageCache.Generation(t.Context(), id)
+			require.NoError(t, err)
+
+			var reads int
+			register := func(raw any) error {
+				return raw.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("count_pending", func(id string) string {
+					reads++
+					return id
+				}, false)
+			}
+			if pending == "changes" {
+				for _, sessionID := range []string{"one", "two"} {
+					require.NoError(t, database.InsertMessages(t.Context(), []Message{{SessionID: sessionID, Ordinal: 0, Role: "assistant"}}))
+				}
+				_, err = database.getWriter().Exec(t.Context(), `ALTER TABLE usage_session_changes RENAME TO counted_changes;
+					CREATE VIEW usage_session_changes AS SELECT count_pending(session_id) AS session_id, revision FROM counted_changes`)
+				require.NoError(t, err)
+				conn, err := database.getReader().Conn(t.Context())
+				require.NoError(t, err)
+				require.NoError(t, conn.Raw(register))
+				require.NoError(t, conn.Close())
+			} else {
+				_, err = cache.db.ExecContext(t.Context(), `DELETE FROM usage_rollup_installs WHERE session_id IN ('one', 'two');
+					ALTER TABLE usage_rollup_invalidations RENAME TO counted_invalidations;
+					CREATE VIEW usage_rollup_invalidations AS SELECT timezone_id, count_pending(session_id) AS session_id FROM counted_invalidations`)
+				require.NoError(t, err)
+				conn, err := cache.db.Conn(t.Context())
+				require.NoError(t, err)
+				require.NoError(t, conn.Raw(register))
+				require.NoError(t, conn.Close())
+			}
+			_, _, _, delta, err := database.captureUsageBackfill(t.Context(), cache, id, 0)
+			require.NoError(t, err)
+			assert.False(t, delta)
+			assert.LessOrEqual(t, reads, 1, "capture should stop after finding a pending session")
+		})
+	}
+}
+
 func TestUsageBackfillCaptureExternalSource(t *testing.T) {
 	database := testDB(t)
 	seedUsageSnapshotSession(t, database, "rollup-race", "project-a", "2026-08-10T09:00:00Z", 0, 10, "model-a")

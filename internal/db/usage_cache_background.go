@@ -243,7 +243,7 @@ func (db *DB) captureUsageBackfill(ctx context.Context, cache *usageCache, datab
 	}
 	defer func() { _ = tx.Rollback() }()
 	zones := make([]usageZoneCoverage, len(locations))
-	var lost []string
+	var lost bool
 	trusted := db.usageSource == nil
 	for i, location := range locations {
 		zones[i], err = readUsageZoneCoverage(ctx, tx, usageTimezoneIdentityFor(location, nil).Key)
@@ -251,14 +251,14 @@ func (db *DB) captureUsageBackfill(ctx context.Context, cache *usageCache, datab
 			return usageQuerySnapshot{}, nil, nil, false, err
 		}
 		zone := zones[i]
-		if !zone.revision.Valid || zone.foreignPricing {
+		if lost || !zone.revision.Valid || zone.foreignPricing {
 			continue
 		}
-		ids, err := usageSessionsWithoutRollup(ctx, tx, zone.id, -1)
+		ids, err := usageSessionsWithoutRollup(ctx, tx, zone.id, 1)
 		if err != nil {
 			return usageQuerySnapshot{}, nil, nil, false, err
 		}
-		lost = append(lost, ids...)
+		lost = len(ids) > 0
 	}
 	if err := tx.Commit(); err != nil {
 		return usageQuerySnapshot{}, nil, nil, false, err
@@ -282,13 +282,13 @@ func (db *DB) captureUsageBackfill(ctx context.Context, cache *usageCache, datab
 			if !trusted {
 				return captureUsageQueryFrom(ctx, tx, filter, usageQueryKindActivity, snapshot)
 			}
-			ids, err := loadSessionJournalChanges(ctx, tx, "usage_session_changes", "usage", lowest, snapshot.ChangeRevision)
-			if err != nil {
+			var changed bool
+			if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM usage_session_changes WHERE revision > ? AND revision <= ?)`, lowest, snapshot.ChangeRevision).Scan(&changed); err != nil {
 				return err
 			}
 			// Filling a changed session can invalidate an unchanged dedup peer.
 			// A full capture lets the pass rebuild both before claiming coverage.
-			if len(ids) > 0 || len(lost) > 0 {
+			if changed || lost {
 				trusted = false
 				return captureUsageQueryFrom(ctx, tx, filter, usageQueryKindActivity, snapshot)
 			}
