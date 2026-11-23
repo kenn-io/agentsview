@@ -221,6 +221,12 @@ func contentHash(content string) string {
 func (ix *Index) Refresh(
 	ctx context.Context, src UnitSource, full, includeAutomated bool,
 ) (RefreshStats, error) {
+	return ix.refresh(ctx, src, full, includeAutomated, nil)
+}
+
+func (ix *Index) refresh(
+	ctx context.Context, src UnitSource, full, includeAutomated bool, seed *reuseGeneration,
+) (RefreshStats, error) {
 	if err := ix.requireWritable(); err != nil {
 		return RefreshStats{}, err
 	}
@@ -302,7 +308,7 @@ func (ix *Index) Refresh(
 			}
 			return nil
 		}
-		unchanged, evictedKeys, err := ix.upsertMirrorRow(ctx, key, u, &sentinel)
+		unchanged, evictedKeys, err := ix.upsertMirrorRow(ctx, key, u, &sentinel, seed)
 		if err != nil {
 			return fmt.Errorf("upserting mirror row %s: %w", key, err)
 		}
@@ -429,7 +435,7 @@ func (ix *Index) deleteMirrorDocument(ctx context.Context, key string) (bool, er
 // is a per-Refresh-call counter evictSlotOccupant uses to park a displaced
 // row at a unique negative ordinal; see evictSlotOccupant.
 func (ix *Index) upsertMirrorRow(
-	ctx context.Context, key string, u db.EmbeddableUnit, sentinel *int,
+	ctx context.Context, key string, u db.EmbeddableUnit, sentinel *int, seed *reuseGeneration,
 ) (unchanged bool, evicted []string, err error) {
 	evicted, err = ix.evictSlotOccupant(ctx, key, u.SessionID, u.Ordinal, sentinel)
 	if err != nil {
@@ -446,6 +452,15 @@ func (ix *Index) upsertMirrorRow(
 
 	hash := contentHash(u.Content)
 	unchanged = existingHash.Valid && existingHash.String == hash
+	if seed != nil && existingHash.Valid && !unchanged {
+		var oldContent string
+		if err := ix.db.QueryRowContext(ctx, `SELECT content FROM `+ix.spec.DocsTable+` WHERE doc_key = ?`, key).Scan(&oldContent); err != nil {
+			return false, evicted, fmt.Errorf("reading existing content: %w", err)
+		}
+		if err := ix.seedReuse(ctx, *seed, key, oldContent, existingHash.String, u.Content); err != nil {
+			return false, evicted, err
+		}
+	}
 
 	offsets, err := marshalOffsets(u.Offsets)
 	if err != nil {

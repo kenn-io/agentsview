@@ -23,7 +23,7 @@ func BenchmarkVectorMirrorUpsert(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i, unit := range units {
-		unchanged, evicted, err := ix.upsertMirrorRow(b.Context(), keys[i], unit, &sentinel)
+		unchanged, evicted, err := ix.upsertMirrorRow(b.Context(), keys[i], unit, &sentinel, nil)
 		require.NoError(b, err)
 		require.False(b, unchanged)
 		require.Empty(b, evicted)

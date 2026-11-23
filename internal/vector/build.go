@@ -2,6 +2,7 @@ package vector
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -180,6 +181,22 @@ func (ix *Index) Build(
 			return BuildResult{}, err
 		}
 	}
+	var seed *reuseGeneration
+	if ix.spec.Name == "messages" && !o.FullRebuild {
+		var g reuseGeneration
+		err := ix.db.QueryRowContext(ctx, `SELECT ordinal, dimension FROM `+ix.spec.generationsTable()+` WHERE gen_key = ?`, fp).Scan(&g.ordinal, &g.dimension)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return BuildResult{}, err
+		}
+		if err == nil {
+			seed = &g
+		}
+	}
+	if o.FullRebuild {
+		if err := ix.clearReuse(ctx); err != nil {
+			return BuildResult{}, err
+		}
+	}
 	// Report the scanning phase before the mirror refresh: on a large archive
 	// the refresh (and the pending count below) can run for a while with no
 	// chunk totals yet, and without a phase report a progress consumer can
@@ -187,7 +204,7 @@ func (ix *Index) Build(
 	if o.Progress != nil {
 		o.Progress(BuildProgress{Phase: "scanning"})
 	}
-	refreshStats, err := ix.Refresh(ctx, src, full, o.IncludeAutomated)
+	refreshStats, err := ix.refresh(ctx, src, full, o.IncludeAutomated, seed)
 	if err != nil {
 		return BuildResult{}, err
 	}
@@ -216,6 +233,9 @@ func (ix *Index) Build(
 		return result, err
 	}
 
+	if seed != nil && target == fp {
+		enc = ix.reuseEncoder(enc, *seed)
+	}
 	wrapped, finish := ix.wrapProgress(enc, total, o.Progress)
 	fillStore := &repairQueueCompletingStore{
 		Store: ix.store,
@@ -240,6 +260,10 @@ func (ix *Index) Build(
 	result.Fill = fillStats
 	if fillErr != nil {
 		return result, fillErr
+	}
+
+	if err := ix.clearReuse(ctx); err != nil {
+		return result, err
 	}
 
 	activated, err := ix.maybeActivate(ctx, target, wasBuilding)
