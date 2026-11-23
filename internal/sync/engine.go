@@ -11975,7 +11975,7 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 			outcome.failedSessions++
 			return outcome
 		}
-		if pw.staged != nil && (provenance != nil || prepared.codexForkState != nil) {
+		if pw.staged != nil {
 			err := e.writeAttachedStaged(ctx, prepared, pw, provenance)
 			if err != nil {
 				if isIntentionalSessionSkip(err) {
@@ -11987,95 +11987,6 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 				continue
 			}
 			outcome.written[pendingIndex], outcome.resolved[pendingIndex] = true, true
-			outcome.writtenSessions++
-			outcome.writtenMessages += len(msgs)
-			continue
-		}
-		if pw.staged != nil {
-			// Staged streaming results bypass the bulk batch: their
-			// tool-result rows live in the staging scratch database and
-			// must be published through the staged transaction, which
-			// also persists the content-failure-aware signals in the
-			// same commit. A staged full parse always force-replaces.
-			// The bulk batch would normally create the session row, so
-			// mirror the standard write path's session upsert and
-			// post-write sequence here.
-			_, err := e.upsertSessionPendingContentForWrite(ctx, pw, s)
-			if err != nil {
-				if isIntentionalSessionSkip(err) {
-					if pw.sess.File.Path != "" {
-						e.cacheSkip(
-							pw.sess.File.Path,
-							pw.sess.File.Mtime,
-							pw.sess.File.Hash,
-						)
-					}
-					continue
-				}
-				log.Printf("upsert session %s: %v", s.ID, err)
-				e.markStaleFailedMemberWrite(ctx, pw)
-				outcome.failedSessions++
-				continue
-			}
-			tWrite := time.Now()
-			err = e.writeStagedFullParse(ctx, s, msgs, pw, nil)
-			e.phaseStats.WriteNanos.Add(int64(time.Since(tWrite)))
-			if err != nil {
-				log.Printf(
-					"write staged session %s: %v", s.ID, err,
-				)
-				e.markStaleFailedMemberWrite(ctx, pw)
-				outcome.failedSessions++
-				continue
-			}
-			if err := e.db.ReplaceSessionUsageEvents(ctx,
-				s.ID, prepared.UsageEvents,
-			); err != nil {
-				log.Printf(
-					"write usage events for %s: %v", s.ID, err,
-				)
-				e.markStaleFailedMemberWrite(ctx, pw)
-				outcome.failedSessions++
-				continue
-			}
-			if err := e.db.ReplaceSessionPlanUsage(ctx,
-				s.ID, prepared.PlanUsage,
-			); err != nil {
-				log.Printf(
-					"write plan usage for %s: %v", s.ID, err,
-				)
-				e.markStaleFailedMemberWrite(ctx, pw)
-				outcome.failedSessions++
-				continue
-			}
-			if err := e.db.ReplaceSessionUsageTotal(ctx,
-				s.ID, prepared.SessionTotal,
-			); err != nil {
-				log.Printf(
-					"write session total for %s: %v", s.ID, err,
-				)
-				e.markStaleFailedMemberWrite(ctx, pw)
-				outcome.failedSessions++
-				continue
-			}
-			if err := e.db.SetSessionDataVersion(ctx,
-				s.ID, dataVersionForWrite(pw),
-			); err != nil {
-				log.Printf(
-					"set data_version for %s: %v", s.ID, err,
-				)
-				e.markStaleFailedMemberWrite(ctx, pw)
-				outcome.failedSessions++
-				continue
-			}
-			if err := e.db.ClearSessionSourceMissing(ctx, s.ID); err != nil {
-				log.Printf(
-					"clear source-missing state for session %s: %v", s.ID, err,
-				)
-				outcome.failedSessions++
-				continue
-			}
-			outcome.written[pendingIndex] = true
 			outcome.writtenSessions++
 			outcome.writtenMessages += len(msgs)
 			continue

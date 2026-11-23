@@ -92,7 +92,7 @@ func (e *Engine) firstImportSelect(ctx context.Context, files []parser.Discovere
 		mtime := discoveredFileOrderingMtime(ctx, file)
 		candidates = append(candidates, firstImportCandidate{firstImportSource{file.Agent, file.Path}, max(mtime, 0)})
 	}
-	for _, agent := range []parser.AgentType{parser.AgentWarp, parser.AgentForge, parser.AgentPiebald, parser.AgentGoose, parser.AgentCrush} {
+	for _, agent := range []parser.AgentType{parser.AgentWarp, parser.AgentForge, parser.AgentPiebald, parser.AgentZCode, parser.AgentGoose, parser.AgentCrush} {
 		var roots []string
 		for _, root := range e.sources().agentDirs[agent] {
 			if root != "" && scope.includes(root) {

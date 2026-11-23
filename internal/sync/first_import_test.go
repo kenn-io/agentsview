@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -127,6 +128,52 @@ func TestFirstImportNewestWave(t *testing.T) {
 	for _, path := range counting.paths {
 		require.Equal(t, filepath.Join(project, "session-029.jsonl"), path)
 	}
+}
+
+func TestFirstImportSelectsZCodeBeforeOlderFile(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	require.NoError(t, os.MkdirAll(project, 0o755))
+	writeFirstImportClaudeSession(t, project, 0, time.Unix(1, 0))
+	zcode := filepath.Join(t.TempDir(), ".zcode", "cli")
+	writeProcessProviderZCodeDB(t, zcode)
+	archive := openTestDB(t)
+	engine := NewEngine(t.Context(), archive, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}, parser.AgentZCode: {zcode}}, Machine: "local", DeferStartupMaintenance: true,
+	})
+	t.Cleanup(engine.Close)
+	engine.syncNewest(t.Context(), nil, nil)
+	newest, err := archive.GetSession(t.Context(), "zcode:session-001")
+	require.NoError(t, err)
+	require.NotNil(t, newest)
+	older, err := archive.GetSession(t.Context(), "session-000")
+	require.NoError(t, err)
+	require.Nil(t, older)
+}
+
+func TestFirstImportStagedFailureLeavesNoSession(t *testing.T) {
+	root := t.TempDir()
+	const id = "019eb791-cf7d-75c1-8439-9ed74c122c80"
+	path := filepath.Join(root, "2026", "08", "01", "rollout-2026-08-01T10-00-00-"+id+".jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	source := fmt.Sprintf("{\"type\":\"session_meta\",\"timestamp\":\"2026-08-01T10:00:00Z\",\"payload\":{\"id\":%q,\"cwd\":%q,\"originator\":\"codex_cli_rs\"}}\n", id, root) +
+		`{"type":"response_item","timestamp":"2026-08-01T10:00:01Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Check this code"}]}}` + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(source), 0o600))
+	archive := openTestDB(t)
+	raw, err := sql.Open("sqlite3", archive.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
+	_, err = raw.ExecContext(t.Context(), `CREATE TRIGGER fail_message BEFORE INSERT ON messages BEGIN SELECT RAISE(ABORT, 'blocked message'); END`)
+	require.NoError(t, err)
+	engine := NewEngine(t.Context(), archive, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}, Machine: "local", DeferStartupMaintenance: true, StagedCodexParseMinBytes: 1, CodexStagingDir: t.TempDir(),
+	})
+	t.Cleanup(engine.Close)
+	stats := engine.syncNewest(t.Context(), nil, nil)
+	require.Positive(t, stats.Failed)
+	session, err := archive.GetSession(t.Context(), "codex:"+id)
+	require.NoError(t, err)
+	require.Nil(t, session)
 }
 
 func TestFirstImportRefreshesWhileOlderSessionsAreWritten(t *testing.T) {
