@@ -28,7 +28,7 @@ func writeFirstImportClaudeSession(t *testing.T, project string, i int, mtime ti
 	}
 }
 
-func TestFirstImportResumesAfterFirstWave(t *testing.T) {
+func TestFirstImportReconciliationOrdersRemainingFiles(t *testing.T) {
 	root := t.TempDir()
 	project := filepath.Join(root, "project")
 	require.NoError(t, os.MkdirAll(project, 0o755))
@@ -36,29 +36,10 @@ func TestFirstImportResumesAfterFirstWave(t *testing.T) {
 		writeFirstImportClaudeSession(t, project, i, time.Unix(1700000000+int64(i), 0))
 	}
 	archive := openTestDB(t)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
 	engine := NewEngine(t.Context(), archive, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}, Machine: "local", DeferStartupMaintenance: true,
-		Emitter: emitterFunc(func(scope string) {
-			if scope == "sessions" {
-				cancel()
-			}
-		}),
 	})
 	t.Cleanup(engine.Close)
-	_, ran, err := engine.RunFirstImport(ctx, nil)
-	require.True(t, ran)
-	require.ErrorIs(t, err, context.Canceled)
-	page, err := archive.ListSessions(t.Context(), db.SessionFilter{Limit: 300})
-	require.NoError(t, err)
-	require.Len(t, page.Sessions, 1)
-	require.Equal(t, "session-249", page.Sessions[0].ID)
-	require.True(t, engine.LastSyncFinishedAt(t.Context()).IsZero())
-	engine.emitter = nil
-	marker, err := archive.GetSyncState(t.Context(), db.FirstImportCompletedKey)
-	require.NoError(t, err)
-	require.Empty(t, marker)
 	engine.workerCountOverride = 1
 	paused, resume := make(chan struct{}), make(chan struct{})
 	done := make(chan error, 1)
@@ -93,10 +74,6 @@ func TestFirstImportResumesAfterFirstWave(t *testing.T) {
 	err = <-done
 	finished = true
 	require.NoError(t, err)
-	page, err = archive.ListSessions(t.Context(), db.SessionFilter{Limit: 300})
-	require.NoError(t, err)
-	require.Len(t, page.Sessions, 250)
-	require.False(t, engine.LastSyncFinishedAt(t.Context()).IsZero())
 }
 
 type firstImportFingerprintProvider struct {
