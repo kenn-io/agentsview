@@ -75,7 +75,7 @@ func AnalyzePRCommand(ctx context.Context, command, remote string, allowBare, ho
 	if err != nil {
 		return nil, false, false, nil, ctx.Err()
 	}
-	directoryChanged, repositoryChanged, repoAssignment, functions := bashChangesRepositoryContext(file)
+	directoryChanged, repositoryChanged, firstRepoAssignment, functions := bashChangesRepositoryContext(file)
 	var dependsOnRemote []PRLink
 	type segment struct {
 		stmt   *syntax.Stmt
@@ -130,9 +130,12 @@ func AnalyzePRCommand(ctx context.Context, command, remote string, allowBare, ho
 	}
 	shellHost, shellHostSet, shellHostValid := "", false, true
 	var links [][]PRLink
-	bareSafe := allowBare && !repoAssignment
+	bareSafe := allowBare
 	for _, segment := range segments {
 		stmt := segment.stmt
+		if firstRepoAssignment.IsValid() && firstRepoAssignment.Offset() < stmt.End().Offset() {
+			bareSafe = false
+		}
 		if err := ctx.Err(); err != nil {
 			return nil, false, false, nil, err
 		}
@@ -337,8 +340,14 @@ func literalCondition(stmts []*syntax.Stmt) (bool, bool) {
 	return word == "true", literal && (word == "true" || word == "false")
 }
 
-func bashChangesRepositoryContext(file *syntax.File) (bool, bool, bool, map[string]bool) {
-	repositoryChanged, repoAssignment := false, false
+func bashChangesRepositoryContext(file *syntax.File) (bool, bool, syntax.Pos, map[string]bool) {
+	repositoryChanged := false
+	var firstRepoAssignment syntax.Pos
+	recordRepoAssignment := func(pos syntax.Pos) {
+		if !firstRepoAssignment.IsValid() || pos.Offset() < firstRepoAssignment.Offset() {
+			firstRepoAssignment = pos
+		}
+	}
 	functions := make(map[string]bool)
 	syntax.Walk(file, func(node syntax.Node) bool {
 		if fn, ok := node.(*syntax.FuncDecl); ok {
@@ -368,7 +377,7 @@ func bashChangesRepositoryContext(file *syntax.File) (bool, bool, bool, map[stri
 				return false
 			case *syntax.Assign:
 				if call.Name != nil && call.Name.Value == "GH_REPO" {
-					repoAssignment = true
+					recordRepoAssignment(call.Pos())
 				}
 			case *syntax.DeclClause:
 				if call.Variant.Value == "export" {
@@ -383,7 +392,9 @@ func bashChangesRepositoryContext(file *syntax.File) (bool, bool, bool, map[stri
 					for _, assign := range call.Assigns {
 						if assign.Name != nil && (assign.Name.Value == "GH_REPO" || assign.Name.Value == "GH_HOST") {
 							repositoryChanged = true
-							repoAssignment = repoAssignment || assign.Name.Value == "GH_REPO"
+							if assign.Name.Value == "GH_REPO" {
+								recordRepoAssignment(assign.Pos())
+							}
 						}
 					}
 				}
@@ -424,7 +435,7 @@ func bashChangesRepositoryContext(file *syntax.File) (bool, bool, bool, map[stri
 		}
 		return !directoryChanged
 	})
-	return directoryChanged, repositoryChanged, repoAssignment, functions
+	return directoryChanged, repositoryChanged, firstRepoAssignment, functions
 }
 
 func repositoryMutation(words []string) bool {
