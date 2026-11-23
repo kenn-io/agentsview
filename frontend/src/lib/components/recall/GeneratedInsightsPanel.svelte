@@ -281,8 +281,7 @@
   }
 
   onMount(() => {
-    void sessions.loadProjects();
-    void sessions.loadAgents();
+    sessions.refreshFilterOptions();
     void loadInsights();
   });
 
