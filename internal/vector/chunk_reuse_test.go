@@ -6,12 +6,14 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/kit/embedclient"
 	kitvec "go.kenn.io/kit/vector"
 )
 
@@ -104,6 +106,66 @@ func TestBuildChunkReuse(t *testing.T) {
 			assert.Zero(t, count)
 		})
 	}
+}
+
+func TestBuildReusesChunksAfterSkippedGrowth(t *testing.T) {
+	ctx := t.Context()
+	ix := openTestIndex(t)
+	ix.split = kitvec.SplitOptions{MaxRunes: 10, Overlap: 2}
+	src := twoDocSource()
+	src.rows = src.rows[:1]
+	src.rows[0].unit.Content = "abcdefghijklmnopqrstuv"
+	gen := fakeGeneration("skipped-growth")
+	_, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{})
+	require.NoError(t, err)
+	src.rows[0].unit.Content += "wxyz"
+	src.rows[0].endedAt = "2025-01-01T00:00:00Z"
+	reject := func(context.Context, []string) ([][]float32, error) {
+		return nil, &embedclient.APIError{StatusCode: http.StatusBadRequest, Reason: embedclient.ReasonInputTooLong}
+	}
+	result, err := ix.Build(ctx, src, reject, gen, BuildOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Fill.Skipped)
+	_, err = ix.Build(ctx, src, reject, gen, BuildOptions{})
+	require.NoError(t, err)
+	src.rows[0].unit.Content += "ABCDEFGH"
+	src.rows[0].endedAt = "2026-01-01T00:00:00Z"
+	var inputs []string
+	enc := func(ctx context.Context, texts []string) ([][]float32, error) {
+		inputs = append(inputs, texts...)
+		return fakeBuildEncoder()(ctx, texts)
+	}
+	_, err = ix.Build(ctx, src, enc, gen, BuildOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"qrstuvwxyz", "yzABCDEFGH"}, inputs)
+	var count int
+	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM message_vectors_reuse`).Scan(&count))
+	assert.Zero(t, count)
+}
+
+func TestBuildClearsReuseAfterEmptyReplacement(t *testing.T) {
+	ctx := t.Context()
+	ix := openTestIndex(t)
+	ix.split = kitvec.SplitOptions{MaxRunes: 10, Overlap: 2}
+	src := twoDocSource()
+	src.rows = src.rows[:1]
+	src.rows[0].unit.Content = "abcdefghijklmnopqrstuv"
+	gen := fakeGeneration("empty-replacement")
+	_, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{})
+	require.NoError(t, err)
+	src.rows[0].unit.Content += "wxyz"
+	src.rows[0].endedAt = "2025-01-01T00:00:00Z"
+	_, err = ix.Build(ctx, src, func(context.Context, []string) ([][]float32, error) {
+		return nil, &embedclient.APIError{StatusCode: http.StatusBadRequest, Reason: embedclient.ReasonInputTooLong}
+	}, gen, BuildOptions{})
+	require.NoError(t, err)
+	src.rows[0].unit.Content = "\u200b \n"
+	src.rows[0].endedAt = "2026-01-01T00:00:00Z"
+	_, err = ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{})
+	require.NoError(t, err)
+	var count int
+	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM message_vectors_reuse`).Scan(&count))
+	assert.Zero(t, count)
 }
 
 func TestBuildReusesChunksEmbeddedBeforeUpgrade(t *testing.T) {

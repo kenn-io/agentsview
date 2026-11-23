@@ -246,7 +246,7 @@ func (ix *Index) Build(
 		db:    ix.db,
 		spec:  ix.spec,
 	}
-	fillStats, fillErr := kitvec.Fill[string, string](ctx, fillStore, target, wrapped,
+	fillStats, fillErr := kitvec.Fill[string, string](ctx, &reuseCompletingStore{fillStore}, target, wrapped,
 		kitvec.WithFillSplit[string](ix.split),
 		kitvec.WithFillBatch[string](o.EncodeBatchOptions()...),
 		kitvec.WithFillConcurrency[string](o.Concurrency),
@@ -264,12 +264,6 @@ func (ix *Index) Build(
 	result.Fill = fillStats
 	if fillErr != nil {
 		return result, fillErr
-	}
-
-	if ix.spec.Name == "messages" {
-		if err := ix.clearReuse(ctx); err != nil {
-			return result, err
-		}
 	}
 
 	activated, err := ix.maybeActivate(ctx, target, wasBuilding)

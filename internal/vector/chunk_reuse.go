@@ -22,6 +22,24 @@ func (ix *Index) clearReuse(ctx context.Context) error {
 	return nil
 }
 
+type reuseCompletingStore struct{ *repairQueueCompletingStore }
+
+func (s *reuseCompletingStore) SaveVectors(ctx context.Context, gen, doc string, revision any, vectors []kitvec.ChunkVector) error {
+	if err := s.repairQueueCompletingStore.SaveVectors(ctx, gen, doc, revision, vectors); err != nil {
+		return err
+	}
+	// Fill passes nil for a skipped document and a non-nil slice for a
+	// successful replacement, including a document with no chunks.
+	if s.spec.Name != "messages" || vectors == nil {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM `+s.spec.reuseTable()+` WHERE doc_key = ? AND ordinal = (SELECT ordinal FROM `+s.spec.generationsTable()+` WHERE gen_key = ?)`, doc, gen)
+	if err != nil {
+		return fmt.Errorf("clear completed chunk reuse for %s: %w", doc, err)
+	}
+	return nil
+}
+
 func (ix *Index) seedReuse(ctx context.Context, gen reuseGeneration, key, old, hash, current string) error {
 	var stamp sql.NullString
 	err := ix.db.QueryRowContext(ctx, `SELECT revision FROM `+ix.spec.stampsTable()+` WHERE ordinal = ? AND doc_key = ?`, gen.ordinal, key).Scan(&stamp)
