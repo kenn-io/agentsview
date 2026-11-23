@@ -192,21 +192,17 @@ func TestFirstImportRefreshesWhileOlderSessionsAreWritten(t *testing.T) {
 }
 
 type firstImportFailingProvider struct {
-	parser.ProviderBase
+	parser.Provider
 }
 
 func (p *firstImportFailingProvider) Capabilities() parser.Capabilities {
-	caps := p.ProviderBase.Capabilities()
+	caps := p.Provider.Capabilities()
 	caps.Source.StreamingDiscovery = parser.CapabilitySupported
 	return caps
 }
 
 func (p *firstImportFailingProvider) DiscoverEach(context.Context, func(parser.SourceRef) error) error {
 	return errors.New("listing unavailable")
-}
-
-func (p *firstImportFailingProvider) Parse(context.Context, parser.ParseRequest) (parser.ParseOutcome, error) {
-	return parser.ParseOutcome{}, nil
 }
 
 type firstImportFailingFactory struct{ provider *firstImportFailingProvider }
@@ -229,7 +225,9 @@ func TestFirstImportNewestWaveSurvivesListingFailure(t *testing.T) {
 	writeFirstImportClaudeSession(t, filepath.Dir(path), 0, time.Unix(1, 0))
 	require.NoError(t, os.Chtimes(path, time.Unix(2, 0), time.Unix(2, 0)))
 	archive := openTestDB(t)
-	provider := &firstImportFailingProvider{parser.ProviderBase{Def: parser.AgentDef{Type: parser.AgentWarp, FileBased: false}}}
+	warp, ok := parser.ProviderFactoryByType(parser.AgentWarp)
+	require.True(t, ok)
+	provider := &firstImportFailingProvider{warp.NewProvider(parser.ProviderConfig{})}
 	claude, ok := parser.ProviderFactoryByType(parser.AgentClaude)
 	require.True(t, ok)
 	engine := NewEngine(t.Context(), archive, EngineConfig{
