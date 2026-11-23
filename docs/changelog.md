@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-22
+last_edited: 2026-11-23
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -49,6 +49,15 @@ The latest release is
   when the push user has `GRANT OPTIMIZE ON <database>.*` and
   `GRANT SELECT ON system.parts`. See
   [Compaction after a large push](/docs/clickhouse-sync/#compaction-after-a-large-push).
+- ClickHouse: before upgrading, grant the push user
+  `SELECT ON system.data_skipping_indices`, along with `system.parts` and
+  `system.projections` if it lacks them. Without it, every push fails with
+  `reading clickhouse skipping indexes`, the schema upgrade never runs, and
+  `clickhouse serve` can refuse to start with an error saying a table "comes
+  from an older agentsview version". A serve role that can create tables needs
+  the same grant. For XML-managed users, add the `<query>` line to `<grants>`
+  and run `SYSTEM RELOAD USERS`. See
+  [Required grants](/docs/clickhouse-sync/#required-grants).
 
 **New features**
 
