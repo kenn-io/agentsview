@@ -393,7 +393,7 @@ func TestToolPRLinksArchiveUpgrade(t *testing.T) {
 }
 
 func TestToolCallPRLinksSkipsSimpleCommands(t *testing.T) {
-	const input = `{"command":"pwd"}`
+	const input = `{"command":"go version"}`
 	d := testDB(t)
 	s := Session{ID: "simple-commands", Project: "project", Machine: "local", Agent: "claude"}
 	require.NoError(t, d.UpsertSession(t.Context(), s))
@@ -421,7 +421,7 @@ func TestToolCallPRLinksSkipsSimpleCommands(t *testing.T) {
 }
 
 func TestSimplePRInertCommandParity(t *testing.T) {
-	for _, command := range []string{"pwd", "ls -al /work/repo", "cat README.md", "head -n 10 README.md", "tail -n 10 README.md", "wc -l README.md", "rg pattern src", "echo hello"} {
+	for _, command := range []string{"pwd", "ls -al /work/repo", "cat README.md", "head -n 10 README.md", "tail -n 10 README.md", "wc -l README.md", "rg pattern src", "echo hello", "go version", "npm install", "curl https://example.com/api", "/usr/bin/python3 script.py", "echo gh pr view 42"} {
 		t.Run(command, func(t *testing.T) {
 			input := `{"command":"` + command + `"}`
 			require.True(t, simplePRInertCommand("Bash", input))
@@ -434,7 +434,7 @@ func TestSimplePRInertCommandParity(t *testing.T) {
 			}
 		})
 	}
-	for _, input := range []string{`{"command":"echo $(gh pr view 42)"}`, `{"command":"pwd; cd /other"}`, `{"command":"git remote set-url origin example"}`, `{"command":"pwd`, ""} {
+	for _, input := range []string{`{"command":"echo $(gh pr view 42)"}`, `{"command":"pwd; cd /other"}`, `{"command":"git remote set-url origin example"}`, `{"command":"/usr/bin/GH.exe pr view 42"}`, `{"command":"claude review"}`, `{"command":"codex exec review"}`, `{"command":"sh -c script"}`, `{"command":"env GH_REPO=x gh pr view 42"}`, `{"command":"GH_REPO=example/repo"}`, `{"command":"export GH_HOST=example"}`, `{"command":"if true"}`, `{"command":"for"}`, `{"command":"pwd`, ""} {
 		assert.False(t, simplePRInertCommand("Bash", input), input)
 	}
 	assert.False(t, simplePRInertCommand("Bash", `{"command":"echo `+strings.Repeat("x", 256*1024)+`"}`))

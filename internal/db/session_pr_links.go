@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -565,7 +566,8 @@ func independentShell(name string) bool {
 }
 
 // simplePRInertCommand recognizes literal commands that cannot name a PR or
-// alter the shell context tracked by the PR parser.
+// alter the shell context tracked by the PR parser. Keep its exclusions aligned
+// with prShellWalker and shellCall's link and nested shell handling.
 func simplePRInertCommand(name, input string) bool {
 	if name == "exec" || len(input) > 256*1024 || !jsontext.Value(input).IsValid() {
 		return false
@@ -577,15 +579,18 @@ func simplePRInertCommand(name, input string) bool {
 		}
 	}
 	words := strings.Fields(command)
-	if len(words) == 0 {
+	if len(words) == 0 || strings.Contains(words[0], "=") || strings.HasPrefix(words[0], "-") {
 		return false
 	}
 	switch words[0] {
-	case "pwd", "ls", "cat", "head", "tail", "wc", "rg", "echo":
-		return true
-	default:
+	case "if", "then", "else", "elif", "fi", "case", "esac", "for", "select", "while", "until", "do", "done", "in", "function", "time", "coproc", "export", "declare", "local", "typeset", "readonly":
 		return false
 	}
+	switch strings.TrimSuffix(strings.ToLower(path.Base(words[0])), ".exe") {
+	case "gh", "git", "cd", "pushd", "popd", "unset", "env", "sh", "bash", "zsh", "claude", "codex":
+		return false
+	}
+	return true
 }
 
 // replayPRLinks is callPRLinks without the parser for commands that cannot
