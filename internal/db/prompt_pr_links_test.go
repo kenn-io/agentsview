@@ -584,3 +584,67 @@ func TestPRFilterCommandRepositoryAndCallback(t *testing.T) {
 		})
 	}
 }
+
+func TestToolPRLinksDefaultChangeAcrossAppends(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d, err := OpenIsolated(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	s := Session{ID: "default-repo", Project: "project", Machine: "local", Agent: "claude", Cwd: "/work/repo"}
+	require.NoError(t, d.UpsertSession(t.Context(), s))
+	obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://github.com/example/repo.git")
+	require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), obs))
+	message := func(ordinal int, input string) Message {
+		return Message{SessionID: s.ID, Ordinal: ordinal, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: input}}}
+	}
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{message(0, `{"command":"gh repo set-default example/other"}`)}))
+	require.NoError(t, d.Close())
+	d, err = OpenIsolated(t.Context(), path)
+	require.NoError(t, err)
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{message(1, `{"command":"gh pr view 42"}`)}))
+	got, err := d.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	assert.Empty(t, got.PRLinks)
+}
+
+func TestToolPRLinksUpgradeSkipsUnrelatedBash(t *testing.T) {
+	d := testDB(t)
+	s := Session{ID: "ordinary-bash", Project: "project", Machine: "local", Agent: "claude"}
+	require.NoError(t, d.UpsertSession(t.Context(), s))
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"echo high"}`}}}}))
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_shell_tainted=NULL WHERE id=?`, s.ID); err != nil {
+			return err
+		}
+		if err := writeUserVersion(t.Context(), tx, toolPRLinksDataVersion-1); err != nil {
+			return err
+		}
+		return d.upgradeToolPRLinksTx(t.Context(), tx)
+	}))
+	var state sql.NullInt64
+	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT pr_shell_tainted FROM sessions WHERE id=?`, s.ID).Scan(&state))
+	assert.False(t, state.Valid, "unrelated input should not trigger a refresh")
+}
+
+func TestToolPRLinksBothShellUncertaintiesSurviveReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d, err := OpenIsolated(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	s := Session{ID: "both-uncertain", Project: "project", Machine: "local", Agent: "claude", Cwd: "/work/repo"}
+	require.NoError(t, d.UpsertSession(t.Context(), s))
+	obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://github.com/example/repo.git")
+	require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), obs))
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Ordinal: 0, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"cd /other; export GH_HOST=git.example"}`}}}}))
+	require.NoError(t, d.Close())
+	d, err = OpenIsolated(t.Context(), path)
+	require.NoError(t, err)
+	var state int
+	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT pr_shell_tainted FROM sessions WHERE id=?`, s.ID).Scan(&state))
+	assert.Equal(t, 3, state)
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42; gh pr view 43 -R example/repo; gh pr view 44 -R git.example/example/repo"}`}}}}))
+	got, err := d.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	require.Len(t, got.PRLinks, 1)
+	assert.Equal(t, "https://git.example/example/repo/pull/44", got.PRLinks[0].URL)
+}

@@ -2,6 +2,9 @@ package db_test
 
 import (
 	"context"
+	"os"
+	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -155,4 +158,24 @@ func TestCodeModePRLinks(t *testing.T) {
 			assert.Equal(t, tc.want, urls)
 		})
 	}
+}
+
+func TestCodeModeMalformedWarning(t *testing.T) {
+	const marker = "private-command-marker"
+	if os.Getenv("AGENTSVIEW_TEST_MALFORMED_CODE") == "1" {
+		messages := []db.Message{{ToolCalls: []db.ToolCall{{ToolName: "exec", Category: "Bash", InputJSON: `tools.exec_command({cmd:'` + marker + `';`}}}}
+		for range 2 {
+			links, err := db.ToolCallPRLinks(t.Context(), messages, "", "")
+			require.NoError(t, err)
+			assert.Empty(t, links)
+		}
+		return
+	}
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestCodeModeMalformedWarning$")
+	cmd.Env = append(os.Environ(), "AGENTSVIEW_TEST_MALFORMED_CODE=1")
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(output))
+	warnings := regexp.MustCompile(`(?i)code[- ]mode|javascript`).FindAll(output, -1)
+	assert.Len(t, warnings, 1, "one generic warning should report skipped code-mode input")
+	assert.NotContains(t, string(output), marker)
 }
