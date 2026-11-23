@@ -25,7 +25,11 @@ func (db *DB) prepareMessageFTSQuery(
 func (db *DB) prepareMessageFTSQueryWithCJK(ctx context.Context, raw string, cjk bool) (messageFTSQuery, error) {
 	trimmed := strings.TrimSpace(raw)
 	prepared := PrepareFTSQuery(trimmed)
-	query := messageFTSQuery{table: "messages_fts", match: prepared, plain: StripFTSQuotes(prepared)}
+	query := messageFTSQuery{
+		table: "messages_fts",
+		match: prepared,
+		plain: StripFTSQuotes(prepared),
+	}
 	if !cjk && db.searchIndexRepairPending.Load() && simpleFTSRuntimeConfig.available() && containsCJK(raw) {
 		return messageFTSQuery{}, errFTSUnavailable
 	}
