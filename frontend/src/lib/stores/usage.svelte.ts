@@ -14,7 +14,7 @@ import { sessions } from "./sessions.svelte.js";
 import { perf, type PerfEntryStatus } from "./perf.svelte.js";
 import { rollingRange, today } from "../utils/dates.js";
 import { ALL_TOKEN_TYPES, canonicalTokenTypes, type UsageTokenType } from "./usageTokenTypes.js";
-import type { TreemapLabelScale } from "../components/usage/treemapLabelSize.js";
+import type { TreemapScale } from "../components/usage/treemapScale.js";
 import {
   loadToggles,
   loadUsageFilters,
@@ -708,8 +708,8 @@ class UsageStore {
     saveToggles(this.toggles);
   }
 
-  setAttributionLabelScale(scale: TreemapLabelScale) {
-    this.toggles.attribution.labelScale = scale;
+  setAttributionTileScale(scale: TreemapScale) {
+    this.toggles.attribution.tileScale = scale;
     saveToggles(this.toggles);
   }
 
