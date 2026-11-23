@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"encoding/json/jsontext"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -93,104 +94,80 @@ func TestLateMessageUsageStoresUsageCounters(t *testing.T) {
 }
 
 func TestOpenDaemonDefersMessageUsageCounterFill(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "archive.db")
-	d := testDBAtPath(t, path, "source")
-	insertSession(t, d, "s", "proj")
-	m := asstMsg("s", 0, "reply")
-	m.Model = "claude-sonnet"
-	m.TokenUsage = jsontext.Value(`{"output_tokens":250,"server_tool_use":{"web_search_requests":3}}`)
-	insertMessages(t, d, m)
-	_, err := d.getWriter().Exec(t.Context(), `DROP INDEX idx_messages_usage_session_covering;
+	for _, query := range []string{"daily", "top", "count"} {
+		t.Run(query, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "archive.db")
+			d := testDBAtPath(t, path, "source")
+			insertSession(t, d, "s", "proj")
+			m := asstMsg("s", 0, "reply")
+			m.Model = "claude-sonnet"
+			m.TokenUsage = jsontext.Value(`{"output_tokens":250,"server_tool_use":{"web_search_requests":3}}`)
+			insertMessages(t, d, m)
+			_, err := d.getWriter().Exec(t.Context(), `DROP INDEX idx_messages_usage_session_covering;
  ALTER TABLE messages DROP COLUMN usage_output_tokens;
- ALTER TABLE messages DROP COLUMN usage_web_search_requests;`)
-	require.NoError(t, err)
-	require.NoError(t, d.Close())
-
-	d, err = OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
-	require.NoError(t, err)
-	assert.True(t, d.SearchRepairPending())
-	assert.Equal(t, []storedUsageCounters{{0, 0}}, readStoredUsageCounters(t, d, "s"))
-	var pending bool
-	require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM stats WHERE key='message_usage_counters_pending')`).Scan(&pending))
-	require.True(t, pending)
-	readOnly, err := OpenReadOnly(t.Context(), path)
-	require.NoError(t, err)
-	defer readOnly.Close()
-	_, err = readOnly.GetDailyUsage(t.Context(), UsageFilter{})
-	require.ErrorIs(t, err, ErrMessageUsageCountersPending)
-	_, err = readOnly.GetSessionUsage(t.Context(), "s", true)
-	require.ErrorIs(t, err, ErrMessageUsageCountersPending)
-	_, err = readOnly.GetTopSessionsByCost(t.Context(), UsageFilter{}, 10)
-	require.ErrorIs(t, err, ErrMessageUsageCountersPending)
-	date := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	_, err = readOnly.ExportReportingDay(t.Context(), ReportingExportOptions{Date: date, Now: date.Add(24 * time.Hour)})
-	require.ErrorIs(t, err, ErrMessageUsageCountersPending)
-	_, err = readOnly.ExportReportingDigest(t.Context(), ReportingDigestExportOptions{From: date, To: date, Now: date.Add(24 * time.Hour)})
-	require.ErrorIs(t, err, ErrMessageUsageCountersPending)
-	_, err = readOnly.ListSessions(t.Context(), SessionFilter{Limit: 25})
-	require.NoError(t, err)
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	_, err = d.GetDailyUsage(ctx, UsageFilter{})
-	require.ErrorIs(t, err, context.Canceled)
-
-	type dailyResult struct {
-		usage DailyUsageResult
-		err   error
+ ALTER TABLE messages DROP COLUMN usage_web_search_requests;
+ CREATE INDEX idx_messages_usage_session_covering ON messages(session_id, ordinal, timestamp, role, model, provider_id, claude_message_id, claude_request_id, token_usage, source_uuid) WHERE token_usage != '' AND model != '' AND model != '<synthetic>';`)
+			require.NoError(t, err)
+			require.NoError(t, d.Close())
+			fixture, err := os.ReadFile(path)
+			require.NoError(t, err)
+			plainPath := filepath.Join(t.TempDir(), "archive.db")
+			require.NoError(t, os.WriteFile(plainPath, fixture, 0600))
+			plain, err := Open(t.Context(), plainPath)
+			require.NoError(t, err)
+			defer plain.Close()
+			d, err = OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
+			require.NoError(t, err)
+			defer d.Close()
+			assert.True(t, d.SearchRepairPending())
+			assert.Equal(t, []storedUsageCounters{{0, 0}}, readStoredUsageCounters(t, d, "s"))
+			var pending bool
+			require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM stats WHERE key='message_usage_counters_pending')`).Scan(&pending))
+			require.True(t, pending)
+			var columns int
+			require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT count(*) FROM pragma_index_info('idx_messages_usage_session_covering')`).Scan(&columns))
+			assert.Equal(t, 10, columns)
+			_, err = OpenReadOnly(t.Context(), path)
+			require.True(t, IsSchemaUpgradeRequired(err))
+			require.NoError(t, d.lockWriterCtx(t.Context()))
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			require.ErrorIs(t, d.finishUsageCounters(ctx), context.Canceled)
+			read := func(db *DB) (any, error) {
+				switch query {
+				case "daily":
+					return db.GetDailyUsage(t.Context(), UsageFilter{})
+				case "top":
+					return db.GetTopSessionsByCost(t.Context(), UsageFilter{}, 10)
+				default:
+					return db.GetUsageSessionCounts(t.Context(), UsageFilter{})
+				}
+			}
+			type result struct {
+				value any
+				err   error
+			}
+			done := make(chan result, 1)
+			go func() { value, err := read(d); done <- result{value, err} }()
+			select {
+			case got := <-done:
+				d.mu.Unlock()
+				require.FailNow(t, "usage returned before fill", "%v", got.err)
+			case <-time.After(50 * time.Millisecond): //nolint:kennlint // deadlinetest: writer lock holds the fill
+			}
+			d.mu.Unlock()
+			got := <-done
+			require.NoError(t, got.err)
+			want, err := read(plain)
+			require.NoError(t, err)
+			assert.Equal(t, want, got.value)
+			assert.Equal(t, []storedUsageCounters{{250, 3}}, readStoredUsageCounters(t, d, "s"))
+			require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM stats WHERE key='message_usage_counters_pending')`).Scan(&pending))
+			assert.False(t, pending)
+			require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT count(*) FROM pragma_index_info('idx_messages_usage_session_covering')`).Scan(&columns))
+			assert.Equal(t, 12, columns)
+		})
 	}
-	daily := make(chan dailyResult, 1)
-	go func() {
-		usage, err := d.GetDailyUsage(t.Context(), UsageFilter{})
-		daily <- dailyResult{usage, err}
-	}()
-	done := make(chan error, 1)
-	go func() { _, err := d.GetSessionUsage(t.Context(), "s", true); done <- err }()
-	snapshots := make(chan string, 2)
-	reports := make(chan error, 2)
-	go func() {
-		_, err := d.ExportReportingDay(t.Context(), ReportingExportOptions{Date: date, Now: date.Add(24 * time.Hour), afterSnapshot: func() { snapshots <- "day" }})
-		reports <- err
-	}()
-	go func() {
-		_, err := d.ExportReportingDigest(t.Context(), ReportingDigestExportOptions{From: date, To: date, Now: date.Add(24 * time.Hour), afterSnapshot: func() { snapshots <- "digest" }})
-		reports <- err
-	}()
-	select {
-	case result := <-daily:
-		require.FailNow(t, "daily usage returned before fill", "%v", result.err)
-	case <-time.After(50 * time.Millisecond): //nolint:kennlint // deadlinetest: pending fill keeps usage waiting
-	}
-	select {
-	case err := <-done:
-		require.FailNow(t, "session usage returned before fill", "%v", err)
-	case <-time.After(50 * time.Millisecond): //nolint:kennlint // deadlinetest: the pending fill keeps activity usage waiting
-	}
-	select {
-	case report := <-snapshots:
-		require.FailNow(t, "report took a snapshot before fill", report)
-	case <-time.After(50 * time.Millisecond): //nolint:kennlint // deadlinetest: pending fill keeps reporting snapshots waiting
-	}
-	require.NoError(t, d.RepairMessageFTS(t.Context()))
-	dailyGot := <-daily
-	require.NoError(t, dailyGot.err)
-	assert.Equal(t, 250, dailyGot.usage.Totals.OutputTokens)
-	require.NoError(t, <-done)
-	require.NoError(t, <-reports)
-	require.NoError(t, <-reports)
-	assert.ElementsMatch(t, []string{"day", "digest"}, []string{<-snapshots, <-snapshots})
-	readOnlyUsage, err := readOnly.GetDailyUsage(t.Context(), UsageFilter{})
-	require.NoError(t, err)
-	assert.Equal(t, 250, readOnlyUsage.Totals.OutputTokens)
-	assert.Equal(t, []storedUsageCounters{{250, 3}}, readStoredUsageCounters(t, d, "s"))
-	require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM stats WHERE key='message_usage_counters_pending')`).Scan(&pending))
-	assert.False(t, pending)
-	require.NoError(t, d.Close())
-	d, err = Open(t.Context(), path)
-	require.NoError(t, err)
-	defer d.Close()
-	dailyWant, err := d.GetDailyUsage(t.Context(), UsageFilter{})
-	require.NoError(t, err)
-	assert.Equal(t, dailyWant, dailyGot.usage)
 }
 
 func TestReopenFinishesPendingMessageUsageCounters(t *testing.T) {
@@ -203,6 +180,17 @@ func TestReopenFinishesPendingMessageUsageCounters(t *testing.T) {
 	_, err := d.getWriter().Exec(t.Context(), `DROP INDEX idx_messages_usage_session_covering;
  ALTER TABLE messages DROP COLUMN usage_output_tokens;
  ALTER TABLE messages DROP COLUMN usage_web_search_requests;`)
+	require.NoError(t, err)
+	require.NoError(t, d.Close())
+	d, err = OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
+	require.NoError(t, err)
+	_, err = d.getWriter().Exec(t.Context(), `CREATE TRIGGER fail_counter_fill BEFORE UPDATE OF usage_output_tokens ON messages BEGIN SELECT RAISE(ABORT, 'injected fill failure'); END`)
+	require.NoError(t, err)
+	require.ErrorContains(t, d.finishUsageCounters(t.Context()), "injected fill failure")
+	var stillPending bool
+	require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM stats WHERE key='message_usage_counters_pending')`).Scan(&stillPending))
+	assert.True(t, stillPending)
+	_, err = d.getWriter().Exec(t.Context(), `DROP TRIGGER fail_counter_fill`)
 	require.NoError(t, err)
 	require.NoError(t, d.Close())
 	for range 2 {
@@ -285,37 +273,4 @@ func TestUsageCounterReadersDifferBeforeFill(t *testing.T) {
 	for _, name := range []string{"session", "rows", "activity", "day", "digest", "page", "all"} {
 		assert.Equal(t, before[name], after[name], name)
 	}
-}
-
-func TestDailyUsageWaitsWithWarmMemo(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "s", "proj")
-	m := asstMsg("s", 0, "reply")
-	m.Model = "claude-sonnet"
-	m.TokenUsage = jsontext.Value(`{"output_tokens":42}`)
-	insertMessages(t, d, m)
-	filter := UsageFilter{}
-	want, err := d.GetDailyUsage(t.Context(), filter)
-	require.NoError(t, err)
-	_, ok := d.usageKept.Get(UsageSlot(filter, true), d.dailyUsageVersion(t.Context()))
-	require.True(t, ok)
-	_, err = d.getWriter().Exec(t.Context(), `INSERT INTO stats(key, value) VALUES ('message_usage_counters_pending', 1)`)
-	require.NoError(t, err)
-	d.usageCountersReady = make(chan struct{})
-	d.usageCountersPending.Store(true)
-	type result struct {
-		usage DailyUsageResult
-		err   error
-	}
-	done := make(chan result, 1)
-	go func() { got, err := d.GetDailyUsage(t.Context(), filter); done <- result{got, err} }()
-	select {
-	case got := <-done:
-		require.FailNow(t, "warm daily usage returned before fill", "%v", got.err)
-	case <-time.After(50 * time.Millisecond): //nolint:kennlint // deadlinetest: the pending fill keeps the warm reader waiting
-	}
-	require.NoError(t, d.RepairMessageFTS(t.Context()))
-	got := <-done
-	require.NoError(t, got.err)
-	assert.Equal(t, want, got.usage)
 }

@@ -83,9 +83,6 @@ func (db *DB) ExportReportingDay(
 		return export.ReportingDay{}, err
 	}
 
-	if err := db.waitMessageUsageCounters(ctx); err != nil {
-		return export.ReportingDay{}, err
-	}
 	tx, err := db.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return export.ReportingDay{}, fmt.Errorf("begin reporting snapshot: %w", err)
@@ -212,9 +209,6 @@ func (db *DB) ExportReportingDigest(
 		}
 	}
 
-	if err := db.waitMessageUsageCounters(ctx); err != nil {
-		return nil, err
-	}
 	tx, err := db.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, fmt.Errorf("begin reporting snapshot: %w", err)

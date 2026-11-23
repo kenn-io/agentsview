@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 
 	"go.kenn.io/agentsview/internal/usagefacts"
@@ -81,28 +80,39 @@ func fillMessageUsageCounters(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
-// ErrMessageUsageCountersPending indicates that a writable process must finish the upgrade.
-var ErrMessageUsageCountersPending = errors.New("archive upgrade is still running; retry once the daemon finishes")
-
-func (db *DB) waitMessageUsageCounters(ctx context.Context) error {
+// finishUsageCounters fills the deferred counters before widening the usage index.
+func (db *DB) finishUsageCounters(ctx context.Context) error {
 	if !db.usageCountersPending.Load() {
 		return nil
 	}
-	if db.readOnly {
-		var pending bool
-		if err := db.getReader().QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM stats WHERE key = 'message_usage_counters_pending')`).Scan(&pending); err != nil {
-			return fmt.Errorf("checking message usage counter upgrade: %w", err)
+	_, err := RetryAcrossHandoff(ctx, db, func() (struct{}, error) {
+		if err := db.lockWriterCtx(ctx); err != nil {
+			return struct{}{}, err
 		}
-		if pending {
-			return ErrMessageUsageCountersPending
+		defer db.mu.Unlock()
+		if db.writerClosed.Load() {
+			return struct{}{}, ErrWriterClosed
+		}
+		if !db.usageCountersPending.Load() {
+			return struct{}{}, nil
+		}
+		w := db.getWriter()
+		tx, err := w.BeginTx(ctx, nil)
+		if err != nil {
+			return struct{}{}, err
+		}
+		defer func() { _ = tx.Rollback() }()
+		if err := fillMessageUsageCounters(ctx, tx); err != nil {
+			return struct{}{}, err
+		}
+		if err := tx.Commit(); err != nil {
+			return struct{}{}, err
+		}
+		if err := ensureUsageIndexesLocked(ctx, w); err != nil {
+			return struct{}{}, err
 		}
 		db.usageCountersPending.Store(false)
-		return nil
-	}
-	select {
-	case <-db.usageCountersReady:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+		return struct{}{}, nil
+	})
+	return err
 }

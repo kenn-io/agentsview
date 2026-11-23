@@ -98,6 +98,9 @@ func (db *DB) RepairMessageFTS(ctx context.Context) error {
 	if !db.SearchRepairPending() {
 		return nil
 	}
+	if err := db.finishUsageCounters(ctx); err != nil {
+		return err
+	}
 	_, err := RetryAcrossHandoff(ctx, db, func() (struct{}, error) {
 		if err := db.lockWriterCtx(ctx); err != nil {
 			return struct{}{}, err
@@ -107,21 +110,6 @@ func (db *DB) RepairMessageFTS(ctx context.Context) error {
 			return struct{}{}, ErrWriterClosed
 		}
 		w := db.getWriter()
-		if db.usageCountersPending.Load() {
-			tx, err := w.BeginTx(ctx, nil)
-			if err != nil {
-				return struct{}{}, err
-			}
-			if err := fillMessageUsageCounters(ctx, tx); err != nil {
-				_ = tx.Rollback()
-				return struct{}{}, err
-			}
-			if err := tx.Commit(); err != nil {
-				return struct{}{}, err
-			}
-			db.usageCountersPending.Store(false)
-			close(db.usageCountersReady)
-		}
 		if db.messageFTSRepairPending.Load() {
 			var exists bool
 			if err := w.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages_fts')`).Scan(&exists); err != nil {

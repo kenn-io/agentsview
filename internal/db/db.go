@@ -994,7 +994,6 @@ type DB struct {
 	// Rebuilds reserve attached IDs before their session rows are restored.
 	archiveRebuildProvenance atomic.Pointer[map[string]ArchiveSessionProvenance]
 	usageCountersPending     atomic.Bool
-	usageCountersReady       chan struct{}
 	messageFTSRepairPending  atomic.Bool
 	searchIndexRepairPending atomic.Bool
 	// writerClosed is set while the writer pool is intentionally closed for a
@@ -2130,12 +2129,6 @@ func OpenReadOnly(ctx context.Context, path string) (*DB, error) {
 		usageCache: newUsageCacheManager(path),
 		usageKept:  newDailyUsageMemo(),
 	}
-	var usageCountersPending bool
-	if err := reader.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM stats WHERE key = 'message_usage_counters_pending')`).Scan(&usageCountersPending); err != nil {
-		reader.Close()
-		return nil, fmt.Errorf("checking message usage counter upgrade: %w", err)
-	}
-	db.usageCountersPending.Store(usageCountersPending)
 	db.dataStale.Store(dataStale)
 	db.usageCache.attachArchive(db)
 	db.reader.Store(reader)
@@ -2350,6 +2343,13 @@ func checkReadOnlySchemaCompatibility(ctx context.Context, conn *sql.DB) error {
 		if missing {
 			return &SchemaUpgradeRequiredError{Table: "cursor_usage_events", Column: column}
 		}
+	}
+	var pending bool
+	if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM stats WHERE key = 'message_usage_counters_pending')`).Scan(&pending); err != nil {
+		return fmt.Errorf("checking message usage counter upgrade: %w", err)
+	}
+	if pending {
+		return &SchemaUpgradeRequiredError{Index: "idx_messages_usage_session_covering"}
 	}
 	for _, index := range []string{
 		"idx_messages_usage_timestamp",
@@ -3532,7 +3532,6 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc, def
 		return err
 	}
 	if pending {
-		db.usageCountersReady = make(chan struct{})
 		db.usageCountersPending.Store(true)
 	}
 	if _, err := w.ExecContext(ctx, artifactSessionQueueTriggerCreatesSQL); err != nil {
@@ -4453,15 +4452,21 @@ func ensureUsageIndexesLocked(ctx context.Context, w *writerHandle) error {
 	); err != nil {
 		return err
 	}
-	if err := ensureIndexColumnsLocked(ctx,
-		w, "idx_messages_usage_session_covering", usageSessionCoveringIndexColumns,
-		`CREATE INDEX IF NOT EXISTS idx_messages_usage_session_covering
-		 ON messages(session_id, ordinal, timestamp, role, model, provider_id,
-		             claude_message_id, claude_request_id, token_usage, source_uuid,
-		             usage_output_tokens, usage_web_search_requests)
-		 WHERE token_usage != '' AND model != '' AND model != '<synthetic>'`,
-	); err != nil {
-		return err
+	var countersPending bool
+	if err := w.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM stats WHERE key = 'message_usage_counters_pending')`).Scan(&countersPending); err != nil {
+		return fmt.Errorf("checking message usage counter upgrade: %w", err)
+	}
+	if !countersPending {
+		if err := ensureIndexColumnsLocked(ctx,
+			w, "idx_messages_usage_session_covering", usageSessionCoveringIndexColumns,
+			`CREATE INDEX IF NOT EXISTS idx_messages_usage_session_covering
+			 ON messages(session_id, ordinal, timestamp, role, model, provider_id,
+			             claude_message_id, claude_request_id, token_usage, source_uuid,
+			             usage_output_tokens, usage_web_search_requests)
+			 WHERE token_usage != '' AND model != '' AND model != '<synthetic>'`,
+		); err != nil {
+			return err
+		}
 	}
 	if err := ensureIndexColumnsLocked(ctx,
 		w, "idx_messages_activity_timestamp",

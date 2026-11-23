@@ -132,7 +132,10 @@ func TestServeSessionsWhileUsageCounterFillPending(t *testing.T) {
 	database, err := db.Open(t.Context(), cfg.DBPath)
 	require.NoError(t, err)
 	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(), `INSERT INTO stats(key, value) VALUES ('message_usage_counters_pending', 1);
+		_, err := tx.ExecContext(t.Context(), `DROP INDEX idx_messages_usage_session_covering;
+ALTER TABLE messages DROP COLUMN usage_output_tokens;
+ALTER TABLE messages DROP COLUMN usage_web_search_requests;
+PRAGMA user_version = 167;
 CREATE TRIGGER test_hold_usage_fill BEFORE DELETE ON stats WHEN OLD.key='message_usage_counters_pending' BEGIN SELECT RAISE(ABORT, 'hold usage fill'); END`)
 		return err
 	}))
@@ -140,12 +143,8 @@ CREATE TRIGGER test_hold_usage_fill BEFORE DELETE ON stats WHEN OLD.key='message
 	base := startRestartServe(t, cfg)
 	page := restartGet(t, base+"/api/v1/sessions?limit=25&include_one_shot=true")
 	require.Contains(t, page, "session0")
-	readOnly, err := db.OpenReadOnly(t.Context(), cfg.DBPath)
-	require.NoError(t, err)
-	defer readOnly.Close()
-	var pending bool
-	require.NoError(t, readOnly.Reader().QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM stats WHERE key='message_usage_counters_pending')`).Scan(&pending))
-	require.True(t, pending)
+	_, err = db.OpenReadOnly(t.Context(), cfg.DBPath)
+	require.True(t, db.IsSchemaUpgradeRequired(err))
 }
 
 func TestServeStartupWorkerFailure(t *testing.T) {

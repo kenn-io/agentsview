@@ -449,9 +449,6 @@ func (db *DB) queryUsageRollups(
 	ctx context.Context, filter UsageFilter, kind usageQueryKind,
 	includeCursor bool, topSessionsLimit int,
 ) (usageQuerySnapshot, usageFactsResult, *export.PricingResolver, error) {
-	if err := db.waitMessageUsageCounters(ctx); err != nil {
-		return usageQuerySnapshot{}, usageFactsResult{}, nil, err
-	}
 	// Retirement and cache-side install invalidation require a fresh capture.
 	var lastErr error
 	memo, _ := ctx.Value(usageWindowMemoKey{}).(*usageWindowMemo)
@@ -670,8 +667,5 @@ func (db *DB) GetUsageMatchingSessionCount(
 func (db *DB) GetSessionUsage(
 	ctx context.Context, sessionID string, includeBreakdown bool,
 ) (*SessionUsage, error) {
-	if err := db.waitMessageUsageCounters(ctx); err != nil {
-		return nil, err
-	}
 	return db.getSessionUsageLegacy(ctx, sessionID, includeBreakdown)
 }

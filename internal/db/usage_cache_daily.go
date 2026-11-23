@@ -29,9 +29,6 @@ type usageDailyFactsSessionCost struct {
 func (db *DB) GetDailyUsage(
 	ctx context.Context, filter UsageFilter,
 ) (DailyUsageResult, error) {
-	if err := db.waitMessageUsageCounters(ctx); err != nil {
-		return DailyUsageResult{}, err
-	}
 	return db.keptDailyUsage(ctx, filter)
 }
 

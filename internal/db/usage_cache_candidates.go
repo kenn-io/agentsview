@@ -183,6 +183,9 @@ func (db *DB) captureUsageSnapshot(ctx context.Context, filter UsageFilter, capt
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := db.finishUsageCounters(ctx); err != nil {
+		return usageQuerySnapshot{}, err
+	}
 	release, err := db.acquireBulkRead(ctx)
 	if err != nil {
 		return usageQuerySnapshot{}, err
