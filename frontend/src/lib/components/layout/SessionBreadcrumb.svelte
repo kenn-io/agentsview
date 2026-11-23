@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { tick } from "svelte";
   import DocbankStatus from "../content/DocbankStatus.svelte";
   import {
     ChartColumnIcon,
@@ -53,14 +52,9 @@
   let renaming = $state(false);
   let renameValue = $state("");
   let renameError = $state("");
-  let renameSessionId = $state<string | undefined>();
   let renameInput = $state<HTMLInputElement | null>(null);
   let menuBtnEl = $state<HTMLButtonElement | null>(null);
   let menuEl = $state<HTMLDivElement | null>(null);
-
-  $effect(() => {
-    if (renameSessionId && renameSessionId !== session?.id) renaming = false;
-  });
 
   const openers = new SessionOpeners(() => session);
   const usageStats = new SessionUsage(() => session);
@@ -143,7 +137,6 @@
   function startRename() {
     renameError = "";
     if (!session) return;
-    renameSessionId = session.id;
     renameValue =
       session.display_name
       ?? normalizeMessagePreview(session.first_message)
@@ -168,12 +161,6 @@
     if (id !== session?.id) return;
     renameError = error instanceof Error ? error.message : String(error);
     renaming = true;
-  }
-
-  async function submitRenameFromKey() {
-    await submitRename();
-    await tick();
-    renameInput?.focus();
   }
 
   function cancelRename() {
@@ -379,7 +366,7 @@
       bind:value={renameValue}
       bind:this={renameInput}
       onkeydown={(e) => {
-        if (e.key === "Enter") submitRenameFromKey();
+        if (e.key === "Enter") submitRename();
         if (e.key === "Escape") cancelRename();
       }}
       onblur={submitRename}

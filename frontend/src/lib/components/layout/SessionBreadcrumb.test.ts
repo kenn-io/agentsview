@@ -423,9 +423,6 @@ describe("SessionBreadcrumb", () => {
     await tick();
     await tick();
     expect(document.querySelector<HTMLInputElement>(".rename-input")?.value).toBe("My new name");
-    await vi.waitFor(() =>
-      expect(document.activeElement).toBe(document.querySelector(".rename-input")),
-    );
     expect(document.querySelector('[role="alert"]')?.textContent).toContain("retry shortly");
     document
       .querySelector<HTMLInputElement>(".rename-input")!
@@ -461,38 +458,6 @@ describe("SessionBreadcrumb", () => {
     await tick();
     await tick();
     expect(document.querySelector(".rename-input")).toBeNull();
-    expect(rename).toHaveBeenCalledTimes(1);
-    expect(rename).toHaveBeenCalledWith("first", "First title");
-  });
-
-  it("discards a failed rename when switching sessions", async () => {
-    const rename = vi
-      .spyOn(sessions, "renameSession")
-      .mockRejectedValueOnce(new Error("retry shortly"));
-    onTestFinished(() => rename.mockRestore());
-    const component = createClassComponent({
-      component: SessionBreadcrumb,
-      target: document.body,
-      props: { session: makeSession("claude", { id: "first" }), onBack: () => {} },
-    });
-    await tick();
-    document.querySelector<HTMLButtonElement>(".actions-btn")!.click();
-    await tick();
-    [...document.querySelectorAll<HTMLButtonElement>(".actions-menu-item")]
-      .find((button) => button.textContent?.trim() === "Rename")!
-      .click();
-    await tick();
-    const input = document.querySelector<HTMLInputElement>(".rename-input")!;
-    input.value = "First title";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    await tick();
-    await tick();
-    expect(document.querySelector('[role="alert"]')?.textContent).toContain("retry shortly");
-    component.$set({ session: makeSession("claude", { id: "second" }) });
-    await tick();
-    expect(document.querySelector(".rename-input")).toBeNull();
-    expect(document.querySelector('[role="alert"]')).toBeNull();
     expect(rename).toHaveBeenCalledTimes(1);
     expect(rename).toHaveBeenCalledWith("first", "First title");
   });

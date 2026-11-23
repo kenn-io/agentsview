@@ -84,10 +84,8 @@ func TestCompleteWorkerStartupReconciliationLogsLifecycle(t *testing.T) {
 		err         error
 		wantOutcome string
 		wantQueued  bool
-		workerError string
 	}{
 		{name: "no roots", wantOutcome: "completed"},
-		{name: "worker failure", workerError: "worker output was truncated", wantOutcome: "failed"},
 		{
 			name:        "failed reconciliation",
 			roots:       []string{"/sessions"},
@@ -104,7 +102,7 @@ func TestCompleteWorkerStartupReconciliationLogsLifecycle(t *testing.T) {
 			queued := false
 			var recordedErr error
 			completeWorkerStartupReconciliation(
-				t.Context(), tc.roots, syncpkg.SyncStats{}, tc.workerError, func(bool) {},
+				t.Context(), tc.roots, syncpkg.SyncStats{}, func(bool) {},
 				func(context.Context, []string, bool) error {
 					reconcileCalls++
 					return tc.err
@@ -121,11 +119,7 @@ func TestCompleteWorkerStartupReconciliationLogsLifecycle(t *testing.T) {
 			assert.Contains(t, output, "outcome="+tc.wantOutcome)
 			assert.Equal(t, len(tc.roots) > 0, reconcileCalls > 0)
 			assert.Equal(t, tc.wantQueued, queued)
-			if tc.workerError == "" {
-				assert.Equal(t, tc.err, recordedErr)
-			} else {
-				assert.ErrorContains(t, recordedErr, tc.workerError)
-			}
+			assert.Equal(t, tc.err, recordedErr)
 		})
 	}
 }
@@ -363,7 +357,6 @@ func TestStartupWorkerOutcomeDiscriminatesSpawnFromRanFailed(t *testing.T) {
 		wantDone    bool
 		wantAborted bool
 		wantSynced  int
-		wantError   string
 	}{
 		{
 			name:       "completed",
@@ -387,7 +380,6 @@ func TestStartupWorkerOutcomeDiscriminatesSpawnFromRanFailed(t *testing.T) {
 			wantDone:    true,
 			wantAborted: true,
 			wantSynced:  1,
-			wantError:   "startup worker pass reported aborted",
 		},
 		{
 			name:        "ran and failed with unusable result is synthesized",
@@ -395,7 +387,6 @@ func TestStartupWorkerOutcomeDiscriminatesSpawnFromRanFailed(t *testing.T) {
 			err:         errors.New("startup worker emitted 0 terminal results"),
 			wantDone:    true,
 			wantAborted: true,
-			wantError:   "startup worker emitted 0 terminal results",
 		},
 	}
 	for _, tc := range tests {
@@ -406,11 +397,50 @@ func TestStartupWorkerOutcomeDiscriminatesSpawnFromRanFailed(t *testing.T) {
 				// A spawn failure discards the result and falls back in process.
 				return
 			}
-			assert.Equal(t, tc.wantError, got.Error)
 			stats := statsFromWorkerResult(got)
 			assert.Equal(t, tc.wantAborted, stats.Aborted)
 			assert.Equal(t, tc.wantSynced, stats.Synced)
 		})
+	}
+}
+
+// TestStartupWorkerRanFailedSurfacedWithoutResync exercises the Finding 1 daemon
+// path end to end: the worker ran and returned a valid terminal result with a
+// non-spawn error. The daemon must NOT fall back to the in-process initial sync
+// (done stays true), and the gap reconciliation plus RecordStartupReconciled
+// still open watcher dispatch, carrying the worker's aborted stats.
+func TestStartupWorkerRanFailedSurfacedWithoutResync(t *testing.T) {
+	cfg := testConfigWithClaudeFixture(t)
+
+	restore := stubLaunchSyncWorker(t, func(
+		context.Context, config.Config, syncWorkerRequest, func(workerLine),
+	) (workerResult, error) {
+		return workerResult{Status: "aborted", DiscoveryComplete: false},
+			errors.New("startup worker pass reported aborted")
+	})
+	defer restore()
+
+	result, syncErr := runStartupSyncViaWorker(
+		t.Context(), cfg, newStartupStateWriter(cfg.DataDir, time.Now),
+	)
+	require.Error(t, syncErr)
+	require.NotErrorIs(t, syncErr, errWorkerSpawn,
+		"ran-and-failed must be distinct from spawn failure")
+
+	carried, done := startupWorkerOutcome(result, syncErr)
+	require.True(t, done, "daemon must not re-run the in-process initial sync")
+	stats := statsFromWorkerResult(carried)
+	require.True(t, stats.Aborted, "carried stats must reflect the aborted pass")
+
+	opened := make(chan struct{}, 1)
+	engine := engineWithDispatchHandler(t, cfg, opened)
+	gapErr := engine.ReconcileWatchRoots(t.Context(), reconcileRootPaths(cfg), true)
+	engine.RecordStartupReconciled(stats, gapErr)
+
+	select {
+	case <-opened:
+	case <-time.After(2 * time.Second):
+		require.FailNow(t, "dispatch did not open after ran-and-failed handshake")
 	}
 }
 
@@ -466,7 +496,7 @@ func TestStartupWorkerLostResultRetriesParentLinks(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, child)
 	require.Nil(t, child.ParentSessionID)
-	completeWorkerStartupReconciliation(t.Context(), reconcileRootPaths(cfg), statsFromWorkerResult(carried), carried.Error,
+	completeWorkerStartupReconciliation(t.Context(), reconcileRootPaths(cfg), statsFromWorkerResult(carried),
 		engine.RetainSubagentLinkRetry, engine.ReconcileWatchRoots, func(syncpkg.WatchBatch) { assert.Fail(t, "unchanged gap should succeed") },
 		engine.RecordStartupReconciled)
 	child, err = database.GetSession(t.Context(), "startup-child")

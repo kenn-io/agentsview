@@ -158,9 +158,6 @@ describe("SessionItem identity", () => {
     await tick();
     await tick();
     expect(document.querySelector<HTMLInputElement>(".rename-input")?.value).toBe("My new name");
-    expect(document.activeElement).toBe(
-      trigger === "Enter" ? document.querySelector(".rename-input") : document.body,
-    );
     expect(document.querySelector('[role="alert"]')?.textContent).toContain("retry shortly");
     expect(document.querySelector('[role="alert"]')?.getAttribute("title")).toBe("retry shortly");
     expect(rename).toHaveBeenCalledTimes(1);

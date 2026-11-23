@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { flushSync } from "svelte";
   import { m } from "../../i18n/index.js";
   import { getSessionStatus } from "../../stores/sessionStatus.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
@@ -276,10 +275,7 @@
       ?? "";
     renaming = true;
     closeContextMenu();
-    requestAnimationFrame(() => {
-      renameInput?.focus();
-      renameInput?.select();
-    });
+    requestAnimationFrame(() => renameInput?.select());
   }
 
   async function submitRename() {
@@ -296,12 +292,6 @@
   function failRename(error: unknown) {
     renameError = error instanceof Error ? error.message : String(error);
     renaming = true;
-  }
-
-  async function submitRenameFromKey() {
-    await submitRename();
-    flushSync();
-    renameInput?.focus();
   }
 
   async function handleDelete() {
@@ -473,16 +463,18 @@
 
   <div class="session-info">
     {#if renaming}
+      <!-- svelte-ignore a11y_autofocus -->
       <input
         bind:this={renameInput}
         bind:value={renameValue}
         class="rename-input"
+        autofocus
         onclick={(e) => e.stopPropagation()}
         onblur={submitRename}
         onkeydown={(e) => {
           if (e.key === "Enter") {
             e.stopPropagation();
-            submitRenameFromKey();
+            submitRename();
           }
           if (e.key === "Escape") {
             e.stopPropagation();
@@ -916,13 +908,8 @@
   }
 
   .rename-error {
-    display: block;
     color: var(--accent-red);
     font-size: 11px;
-    line-height: 13px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .rename-input {

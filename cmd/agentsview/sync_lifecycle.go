@@ -27,7 +27,6 @@ func completeWorkerStartupReconciliation(
 	ctx context.Context,
 	roots []string,
 	workerStats syncpkg.SyncStats,
-	workerError string,
 	retainLinks func(bool),
 	reconcile func(context.Context, []string, bool) error,
 	queueRetry func(syncpkg.WatchBatch),
@@ -51,9 +50,6 @@ func completeWorkerStartupReconciliation(
 		if deferred, ok := gapErr.(interface{ ReconciliationRetryDeferOnly() bool }); ok && deferred.ReconciliationRetryDeferOnly() {
 			gapErr = nil
 		}
-	}
-	if workerError != "" {
-		gapErr = errors.Join(errors.New(workerError), gapErr)
 	}
 	record(workerStats, gapErr)
 

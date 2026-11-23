@@ -148,28 +148,6 @@ func runWorkerWritePassExclusive(
 	return result, err
 }
 
-// runStartupWorkerWritePass skips startup if a foreground sync completed while it waited for the engine lock.
-func runStartupWorkerWritePass(
-	ctx context.Context,
-	cfg config.Config,
-	engine *sync.Engine,
-	database *db.DB,
-	lock *writeOwnerLock,
-	runExclusive func(func() error) error,
-) (workerResult, bool, error) {
-	ran := false
-	result, err := runWorkerWritePassExclusive(ctx, ctx, cfg, engine, database, lock, "startup", nil, func(work func() error) error {
-		return runExclusive(func() error {
-			if engine.StartupReconciled() {
-				return nil
-			}
-			ran = true
-			return work()
-		})
-	})
-	return result, ran, err
-}
-
 // runWorkerSyncPass runs a "sync"-mode worker pass with SyncThenRun-equivalent
 // completion semantics. When skipIfReconciled is set, the startup gate is
 // rechecked while the exclusive lock is held — a foreground pass may have

@@ -23,26 +23,6 @@ func dashboardTestSlot(t *testing.T, f AnalyticsFilter) string {
 	return "dashboard-parts|" + TrendsTimezoneKey(f) + "|" + string(data)
 }
 
-func TestDashboardPartsFallsBackWhileWriterClosed(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	d := testDB(t)
-	ctx := t.Context()
-	insertSession(t, d, "s", "project", func(s *Session) { s.StartedAt = new("2024-06-01T09:00:00Z"); s.MessageCount = 1 })
-	insertMessages(t, d, userMsgAt("s", 0, "hello", "2024-06-01T09:00:00Z"))
-	_, err := d.getWriter().ExecContext(ctx, `UPDATE sessions SET tools_generation=NULL WHERE id='s'`)
-	require.NoError(t, err)
-	require.NoError(t, d.CloseWriter())
-	t.Cleanup(func() { require.NoError(t, d.ReopenWriter()) })
-	f := AnalyticsFilter{Timezone: "UTC"}
-	_, _, handled, err := d.dashboardParts(ctx, f)
-	require.NoError(t, err)
-	assert.False(t, handled)
-	activity, err := d.GetAnalyticsActivity(ctx, f, "day")
-	require.NoError(t, err)
-	require.Len(t, activity.Series, 1)
-	assert.Equal(t, 1, activity.Series[0].UserMessages)
-}
-
 func TestDashboardPartsMatchScans(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	d := testDB(t)

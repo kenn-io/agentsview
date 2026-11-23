@@ -579,7 +579,7 @@ func TestStartupWorkerQueuesMissingParentAfterRestart(t *testing.T) {
 	engineCfg.OnRebuildDeferred = func(batch sync.WatchBatch) { retries = append(retries, batch) }
 	engine := sync.NewEngine(t.Context(), database, engineCfg)
 	t.Cleanup(engine.Close)
-	completeWorkerStartupReconciliation(t.Context(), reconcileRootPaths(cfg), statsFromWorkerResult(result), result.Error,
+	completeWorkerStartupReconciliation(t.Context(), reconcileRootPaths(cfg), statsFromWorkerResult(result),
 		engine.RetainSubagentLinkRetry, engine.ReconcileWatchRoots,
 		func(batch sync.WatchBatch) { retries = append(retries, batch) }, engine.RecordStartupReconciled)
 	assert.True(t, engine.StartupReconciled())

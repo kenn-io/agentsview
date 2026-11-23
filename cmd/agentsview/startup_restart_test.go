@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -128,6 +129,7 @@ func TestServeStartupWorkerFailure(t *testing.T) {
 			isolateServeTestHome(t)
 			cfg := testConfigWithClaudeFixture(t)
 			cfg.Host = "127.0.0.1"
+			cfg.EventsCoalesceInterval = 0
 			writeRestartSession(t, cfg, "session0")
 			var seed bytes.Buffer
 			require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &seed))
@@ -135,15 +137,32 @@ func TestServeStartupWorkerFailure(t *testing.T) {
 				writeRestartSession(t, cfg, "fallback")
 			}
 			launched := make(chan struct{}, 1)
-			restore := stubLaunchSyncWorker(t, func(context.Context, config.Config, syncWorkerRequest, func(workerLine)) (workerResult, error) {
+			release := make(chan struct{})
+			restore := stubLaunchSyncWorker(t, func(ctx context.Context, _ config.Config, _ syncWorkerRequest, _ func(workerLine)) (workerResult, error) {
 				launched <- struct{}{}
+				select {
+				case <-release:
+				case <-ctx.Done():
+					return workerResult{}, ctx.Err()
+				}
 				if tc.spawnError {
 					return workerResult{}, fmt.Errorf("%w: test", errWorkerSpawn)
 				}
-				return workerResult{Status: "aborted"}, errors.New("injected worker failure")
+				return workerResult{Status: "aborted", Synced: 1}, errors.New("injected worker failure")
 			})
 			t.Cleanup(restore)
 			base := startRestartServe(t, cfg)
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancel()
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/v1/events", nil)
+			require.NoError(t, err)
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			scanner := bufio.NewScanner(resp.Body)
+			require.True(t, scanner.Scan())
+			require.Contains(t, scanner.Text(), "events_ready")
+			close(release)
 			var status string
 			require.Eventually(t, func() bool {
 				status = restartGet(t, base+"/api/v1/sync/status")
@@ -159,6 +178,15 @@ func TestServeStartupWorkerFailure(t *testing.T) {
 			}
 			if tc.spawnError {
 				assert.Contains(t, status, `"synced":1`)
+			} else {
+				found := false
+				for scanner.Scan() {
+					if strings.Contains(scanner.Text(), `"scope":"sessions"`) {
+						found = true
+						break
+					}
+				}
+				require.True(t, found, "committed sessions should emit an event: %v", scanner.Err())
 			}
 		})
 	}

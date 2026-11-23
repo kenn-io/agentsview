@@ -855,71 +855,63 @@ func TestWorkerNeverRanClassifiesFallbackErrors(t *testing.T) {
 // and the deferred pass rechecks the gate while holding it, so exactly one
 // archive-scale worker runs.
 func TestRunWorkerSyncPassLockHeldRecheckSkipsDuplicate(t *testing.T) {
-	for _, mode := range []string{"deferred", "startup"} {
-		t.Run(mode, func(t *testing.T) {
-			cfg := testConfigWithClaudeFixture(t)
-			database, lock := openTestWriteDB(t, cfg)
-			engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{})
-			defer engine.Close()
+	cfg := testConfigWithClaudeFixture(t)
+	database, lock := openTestWriteDB(t, cfg)
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{})
+	defer engine.Close()
 
-			launches := make(chan struct{}, 2)
-			release := make(chan struct{})
-			restore := stubLaunchSyncWorker(t, func(
-				_ context.Context, _ config.Config, _ syncWorkerRequest, _ func(workerLine),
-			) (workerResult, error) {
-				launches <- struct{}{}
-				<-release
-				return workerResult{Status: "ok", Synced: 1, DiscoveryComplete: true}, nil
-			})
-			defer restore()
+	launches := make(chan struct{}, 2)
+	release := make(chan struct{})
+	restore := stubLaunchSyncWorker(t, func(
+		_ context.Context, _ config.Config, _ syncWorkerRequest, _ func(workerLine),
+	) (workerResult, error) {
+		launches <- struct{}{}
+		<-release
+		return workerResult{Status: "ok", Synced: 1, DiscoveryComplete: true}, nil
+	})
+	defer restore()
 
-			require.False(t, engine.StartupReconciled(),
-				"the deferred fallback's pre-lock gate must read false mid-race")
+	require.False(t, engine.StartupReconciled(),
+		"the deferred fallback's pre-lock gate must read false mid-race")
 
-			type passOutcome struct {
-				ran bool
-				err error
-			}
-			foreground := make(chan passOutcome, 1)
-			go func() {
-				_, ran, err := runWorkerSyncPass(
-					t.Context(), t.Context(), cfg, engine, database, lock, false, nil,
-				)
-				foreground <- passOutcome{ran: ran, err: err}
-			}()
-			<-launches // the foreground worker is running and holds the exclusive lock
-
-			exclusiveEntered := make(chan struct{})
-			deferred := make(chan passOutcome, 1)
-			go func() {
-				runExclusive := func(work func() error) error { close(exclusiveEntered); return engine.RunExclusive(work) }
-				var ran bool
-				var err error
-				if mode == "startup" {
-					_, ran, err = runStartupWorkerWritePass(t.Context(), cfg, engine, database, lock, runExclusive)
-				} else {
-					_, ran, err = runWorkerSyncPassExclusive(t.Context(), t.Context(), cfg, engine, database, lock, true, nil, runExclusive)
-				}
-				deferred <- passOutcome{ran: ran, err: err}
-			}()
-			// Let the deferred pass reach the exclusive lock before the foreground
-			// worker finishes, then release the worker.
-			<-exclusiveEntered
-			close(release)
-
-			fg := <-foreground
-			require.NoError(t, fg.err)
-			assert.True(t, fg.ran)
-			df := <-deferred
-			require.NoError(t, df.err)
-			assert.False(t, df.ran,
-				"the deferred pass must skip after the foreground pass reconciled startup")
-			assert.Empty(t, launches,
-				"exactly one archive-scale worker may launch across the race")
-			assertWriteOwnerLockHeld(t, cfg.DataDir, "flock restored after both passes")
-			assert.NoError(t, writeOneSession(t.Context(), database), "writer restored after both passes")
-		})
+	type passOutcome struct {
+		ran bool
+		err error
 	}
+	foreground := make(chan passOutcome, 1)
+	go func() {
+		_, ran, err := runWorkerSyncPass(
+			t.Context(), t.Context(), cfg, engine, database, lock, false, nil,
+		)
+		foreground <- passOutcome{ran: ran, err: err}
+	}()
+	<-launches // the foreground worker is running and holds the exclusive lock
+
+	exclusiveEntered := make(chan struct{})
+	deferred := make(chan passOutcome, 1)
+	go func() {
+		_, ran, err := runWorkerSyncPassExclusive(
+			t.Context(), t.Context(), cfg, engine, database, lock, true, nil,
+			func(work func() error) error { close(exclusiveEntered); return engine.RunExclusive(work) },
+		)
+		deferred <- passOutcome{ran: ran, err: err}
+	}()
+	// Let the deferred pass reach the exclusive lock before the foreground
+	// worker finishes, then release the worker.
+	<-exclusiveEntered
+	close(release)
+
+	fg := <-foreground
+	require.NoError(t, fg.err)
+	assert.True(t, fg.ran)
+	df := <-deferred
+	require.NoError(t, df.err)
+	assert.False(t, df.ran,
+		"the deferred pass must skip after the foreground pass reconciled startup")
+	assert.Empty(t, launches,
+		"exactly one archive-scale worker may launch across the race")
+	assertWriteOwnerLockHeld(t, cfg.DataDir, "flock restored after both passes")
+	assert.NoError(t, writeOneSession(t.Context(), database), "writer restored after both passes")
 }
 
 func TestRunWorkerWritePassRecoversLockAfterRequestCancel(t *testing.T) {

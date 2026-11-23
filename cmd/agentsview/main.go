@@ -469,37 +469,33 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 				// startup maintenance keeps waiting until
 				// RecordStartupReconciled fires.
 				completeWorkerStartup = func() {
-					recordStartup := engine.RecordStartupReconciled
 					if workerAfterListen {
 						done, ok := idleTracker.BeginWork()
 						if !ok {
 							return
 						}
 						defer done()
-						result, ran, err := runStartupWorkerWritePass(ctx, cfg, engine, database, writeLock, engine.RunExclusive)
-						if !ran && err == nil {
-							// Foreground sync recorded startup; still reconcile
-							// missing sources without recording it a second time.
-							recordStartup = func(sync.SyncStats, error) {}
-						}
+						result, err := runWorkerWritePass(ctx, ctx, cfg, engine, database, writeLock, "startup", nil)
 						if workerNeverRan(err) {
 							_, _, err = engine.RunStartupSyncFallback(ctx, nil)
 							if err != nil && ctx.Err() == nil {
 								log.Printf("startup sync fallback: %v", err)
 							}
-							recordStartup = func(sync.SyncStats, error) {}
+							return
 						}
 						workerStartupResult, _ = startupWorkerOutcome(result, err)
+						if emitter != nil && workerResultHasSessionChanges(workerStartupResult) {
+							emitter.Emit("sessions")
+						}
 					}
 					completeWorkerStartupReconciliation(
 						ctx,
 						reconcileRootPaths(ingestion.Config()),
 						statsFromWorkerResult(workerStartupResult),
-						workerStartupResult.Error,
 						engine.RetainSubagentLinkRetry,
 						engine.ReconcileWatchRoots,
 						ingestion.QueueWatchRetry,
-						recordStartup,
+						engine.RecordStartupReconciled,
 					)
 				}
 			} else if database.NeedsResync() {
@@ -1091,7 +1087,6 @@ func startupWorkerOutcome(result workerResult, err error) (workerResult, bool) {
 	case errors.Is(err, errWorkerSpawn):
 		return workerResult{}, false
 	default:
-		result.Error = err.Error()
 		if result.Status == "" {
 			result.Status = "aborted"
 		}
