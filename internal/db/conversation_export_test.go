@@ -842,11 +842,16 @@ func TestConversationExportArchivedRewritePreservesText(t *testing.T) {
 	assert.Empty(t, quiet.Changes)
 }
 
-func TestConversationExportUsageOnlySessionGap(t *testing.T) {
+func TestUsageOnlyRenameMissingSession(t *testing.T) {
 	d := testDB(t)
 	d.SetArchiveContent(config.ArchiveContentUsage)
 	require.NoError(t, d.RenameSession(t.Context(), "missing", new("Name")))
 	require.NoError(t, d.RefreshSessionName(t.Context(), "missing", new("Name")))
+}
+
+func TestConversationExportUsageOnlySessionGap(t *testing.T) {
+	d := testDB(t)
+	d.SetArchiveContent(config.ArchiveContentUsage)
 	require.NoError(t, d.UpsertSession(t.Context(), Session{ID: "chat", Project: "sample", Machine: "local", Agent: "claude", MessageCount: 1, UserMessageCount: 1}))
 	require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: "chat", Role: "user", Content: "Question", SourceUUID: "one"}}))
 	page, err := d.ExportConversationChanges(t.Context(), ConversationExportOptions{})

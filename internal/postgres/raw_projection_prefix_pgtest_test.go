@@ -116,8 +116,6 @@ func TestRawProjectionRecordedRemoteSurvivesRematerialization(t *testing.T) {
 	old.Outcome.Results[0].Result.Messages[1].ToolCalls[0].InputJSON = `{"command":"gh pr view 42"}`
 	a, _ := f.accept(t, "device-a", "old", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, a), a, old))
-	original, err := f.sink.Resolve(t.Context(), "codex:portable")
-	require.NoError(t, err)
 	updated := projectionOutcome("same prompt")
 	updated.Outcome.Results[0].Result.Messages[1].ToolCalls[0].InputJSON = `{"command":"gh pr view 42"}`
 	updated.Outcome.Results[0].Result.Session.GitRemote = "https://github.com/example/repo.git"
@@ -125,7 +123,10 @@ func TestRawProjectionRecordedRemoteSurvivesRematerialization(t *testing.T) {
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, b), b, updated))
 	current, err := f.sink.Resolve(t.Context(), "codex:portable")
 	require.NoError(t, err)
-	assert.Equal(t, original.SessionID, current.SessionID)
+	var encoded string
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, current.SessionID).Scan(&encoded))
+	require.Len(t, db.DecodePRLinks(encoded), 1)
+	assert.Equal(t, "https://github.com/example/repo/pull/42", db.DecodePRLinks(encoded)[0].URL)
 	var payload []byte
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT payload FROM raw_content_revisions WHERE session_id=$1`, current.SessionID).Scan(&payload))
 	decoded, err := decodeRawPayload(payload)
@@ -145,8 +146,7 @@ func TestRawProjectionRecordedRemoteSurvivesRematerialization(t *testing.T) {
 	_, err = f.runtime.ExecContext(t.Context(), `DELETE FROM sessions WHERE id=$1`, current.SessionID)
 	require.NoError(t, err)
 	c, _ := f.accept(t, "device-c", "rebuild", "")
-	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, c), c, updated))
-	var encoded string
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, c), c, other))
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, current.SessionID).Scan(&encoded))
 	require.Len(t, db.DecodePRLinks(encoded), 1)
 	assert.Equal(t, "https://github.com/example/repo/pull/42", db.DecodePRLinks(encoded)[0].URL)

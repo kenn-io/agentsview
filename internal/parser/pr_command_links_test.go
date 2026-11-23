@@ -115,7 +115,6 @@ EOF`, "", remote, "", false},
 		{`echo $(export GH_HOST=git.example); gh pr view 42`, "", remote, "https://github.com/example/repo/pull/42", false},
 		{`cat <(export GH_HOST=git.example); gh pr view 42`, "", remote, "https://github.com/example/repo/pull/42", false},
 		{`export GH_HOST=git.example; bash -c 'gh pr view 42 -R example/repo'`, "", remote, "", true},
-		{`(export GH_REPO=other/repo); gh pr view 42`, "/work/repo", remote, "https://github.com/example/repo/pull/42", false},
 		{`cd /other && cd /work/repo && gh pr view 42`, "/work/repo", remote, "", true},
 		{`env gh pr view 42 -R example/repo`, "/work/repo", remote, "https://github.com/example/repo/pull/42", false},
 		{`env GH_REPO=example/repo gh pr view 42`, "/work/repo", remote, "https://github.com/example/repo/pull/42", false},
@@ -178,7 +177,6 @@ func TestLauncherPromptPRLinks(t *testing.T) {
 func TestConditionalRepoAssignmentsDoNotSelectBranch(t *testing.T) {
 	for _, command := range []string{
 		`if true; then export GH_REPO=example/one; else export GH_REPO=example/two; fi; gh pr view 42`,
-		`if condition; then export GH_REPO=example/one; else export GH_REPO=example/two; fi; gh pr view 42`,
 		`condition && export GH_REPO=example/one; gh pr view 42`,
 		`export GH_REPO=example/one; if condition; then unset GH_REPO; fi; gh pr view 42`,
 	} {

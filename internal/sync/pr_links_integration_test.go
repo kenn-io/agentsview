@@ -160,10 +160,11 @@ func TestCommandPRCheckoutRemote(t *testing.T) {
 		name, config, recorded string
 		agent                  parser.AgentType
 		want                   bool
+		parseDiff              bool
 	}{
-		{"single Claude", "[remote \"origin\"]\n url = https://github.com/example/repo.git\n", "", parser.AgentClaude, true},
-		{"ambiguous", "[remote \"origin\"]\n url = https://github.com/example/repo.git\n[remote \"upstream\"]\n url = https://github.com/example/other.git\n", "", parser.AgentCodex, false},
-		{"ambiguous recorded", "[remote \"origin\"]\n url = https://github.com/example/repo.git\n[remote \"upstream\"]\n url = https://github.com/example/other.git\n", "https://github.com/example/repo.git", parser.AgentCodex, true},
+		{"single Claude", "[remote \"origin\"]\n url = https://github.com/example/repo.git\n", "", parser.AgentClaude, true, true},
+		{"ambiguous", "[remote \"origin\"]\n url = https://github.com/example/repo.git\n[remote \"upstream\"]\n url = https://github.com/example/other.git\n", "", parser.AgentCodex, false, false},
+		{"ambiguous recorded", "[remote \"origin\"]\n url = https://github.com/example/repo.git\n[remote \"upstream\"]\n url = https://github.com/example/other.git\n", "https://github.com/example/repo.git", parser.AgentCodex, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -198,7 +199,7 @@ func TestCommandPRCheckoutRemote(t *testing.T) {
 				require.NoError(t, err)
 				require.Len(t, page.Sessions, 1)
 				assert.Equal(t, sessionID, page.Sessions[0].ID)
-				if tc.name == "single Claude" {
+				if tc.parseDiff {
 					report := runParseDiff(t, env, sync.ParseDiffOptions{})
 					assert.Equal(t, 1, report.Totals.Identical)
 				}

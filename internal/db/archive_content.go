@@ -442,6 +442,9 @@ func clearUsageOnlyTextTx(
 func retainStructuredAndToolPRLinksTx(tx transactionQueries, id string) error {
 	var stored, structured, tools string
 	if err := tx.QueryRow(`SELECT pr_links, structured_pr_links, tool_pr_links FROM sessions WHERE id=?`, id).Scan(&stored, &structured, &tools); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
 		return err
 	}
 	return writeSessionPromptPRLinksTx(tx, id, stored, parser.CombinePRLinks(DecodePRLinks(structured), DecodePRLinks(tools)))
