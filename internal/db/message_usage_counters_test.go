@@ -227,6 +227,15 @@ func TestRepairMessageFTSFillsUsageCounters(t *testing.T) {
 	require.NoError(t, err)
 	defer d.Close()
 	assert.Equal(t, []storedUsageCounters{{0, 0}}, readStoredUsageCounters(t, d, "s"))
+	appended := asstMsg("s", 1, "new reply")
+	appended.Model = "claude-sonnet"
+	appended.TokenUsage = jsontext.Value(`{"output_tokens":75,"server_tool_use":{"web_search_requests":2}}`)
+	_, err = d.WriteSessionIncremental(t.Context(), "s", []Message{appended}, IncrementalSessionUpdate{MsgCount: 2, NextOrdinal: 2})
+	require.NoError(t, err)
+	assert.Equal(t, []storedUsageCounters{{0, 0}, {75, 2}}, readStoredUsageCounters(t, d, "s"))
+	var pending bool
+	require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM stats WHERE key='message_usage_counters_pending')`).Scan(&pending))
+	require.True(t, pending)
 	require.NoError(t, d.RepairMessageFTS(t.Context()))
-	assert.Equal(t, []storedUsageCounters{{50, 3}}, readStoredUsageCounters(t, d, "s"))
+	assert.Equal(t, []storedUsageCounters{{50, 3}, {75, 2}}, readStoredUsageCounters(t, d, "s"))
 }
