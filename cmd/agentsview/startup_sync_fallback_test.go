@@ -4,6 +4,9 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -12,80 +15,42 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/parser"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
-type blockingStartupEmitter struct {
-	committed chan struct{}
-	release   chan struct{}
-}
-
-func (e *blockingStartupEmitter) Emit(scope string) {
-	if scope == "sessions" {
-		select {
-		case e.committed <- struct{}{}:
-			<-e.release
-		default:
-		}
-	}
-}
-
-func TestDeferredStartupServesCommittedSessionsDuringImport(t *testing.T) {
-	cfg := testConfigWithClaudeFixture(t)
-	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
-	emitter := &blockingStartupEmitter{committed: make(chan struct{}, 1), release: make(chan struct{})}
-	engine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "local", DeferStartupMaintenance: true, Emitter: emitter})
-	t.Cleanup(engine.Close)
-	timeout := make(chan time.Time, 1)
-	timeout <- time.Now()
-	done := make(chan error, 1)
-	go func() {
-		_, err := runDeferredStartupSyncFallback(t.Context(), cfg, engine, database, nil, nil, timeout, true)
-		done <- err
-	}()
-	t.Cleanup(func() { close(emitter.release); <-done })
-	select {
-	case <-emitter.committed:
-	case <-time.After(10 * time.Second):
-		require.FailNow(t, "no session committed")
-	}
-}
-
 func TestRunDeferredStartupSyncFallbackPerformsSkippedSync(t *testing.T) {
-	cfg := testConfigWithClaudeFixture(t)
-	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
-	reconciled := make(chan struct{}, 1)
-	emitter := &scopedEmitter{scopes: make(chan string, 100)}
-	engine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{
-		AgentDirs:               cfg.AgentDirs,
-		Machine:                 "local",
-		Emitter:                 emitter,
-		DeferStartupMaintenance: true,
-		OnStartupReconciled: func(syncpkg.SyncStats, error) {
-			reconciled <- struct{}{}
-		},
-	})
-	t.Cleanup(engine.Close)
-	timeout := make(chan time.Time, 1)
-	timeout <- time.Now()
-
-	// Under a test binary the worker path is skipped (testing.Testing()), so
-	// the fallback runs the in-process sync; database/lock stay unused.
-	ran, err := runDeferredStartupSyncFallback(
-		t.Context(), cfg, engine, database, nil, nil, timeout, false,
-	)
-
-	require.NoError(t, err)
-	assert.True(t, ran)
-	for len(emitter.scopes) > 0 {
-		assert.NotEqual(t, "sessions", <-emitter.scopes)
-	}
-	assert.False(t, engine.LastSyncStartedAt(t.Context()).IsZero(),
-		"timeout fallback must perform the skipped local sync")
-	select {
-	case <-reconciled:
-	case <-time.After(time.Second):
-		require.FailNow(t, "deferred fallback did not reconcile watcher startup")
+	for _, firstImport := range []bool{false, true} {
+		t.Run(fmt.Sprintf("first-import-%t", firstImport), func(t *testing.T) {
+			cfg := testConfigWithClaudeFixture(t)
+			database := dbtest.OpenTestDBAt(t, cfg.DBPath)
+			reconciled := make(chan struct{}, 1)
+			emitter := &scopedEmitter{scopes: make(chan string, 100)}
+			engine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{
+				AgentDirs: cfg.AgentDirs, Machine: "local", Emitter: emitter,
+				DeferStartupMaintenance: true,
+				OnStartupReconciled:     func(syncpkg.SyncStats, error) { reconciled <- struct{}{} },
+			})
+			t.Cleanup(engine.Close)
+			timeout := make(chan time.Time, 1)
+			timeout <- time.Now()
+			ran, err := runDeferredStartupSyncFallback(t.Context(), cfg, engine, database, nil, nil, timeout, firstImport)
+			require.NoError(t, err)
+			assert.True(t, ran)
+			found := false
+			for len(emitter.scopes) > 0 {
+				if <-emitter.scopes == "sessions" {
+					found = true
+				}
+			}
+			assert.Equal(t, firstImport, found)
+			assert.False(t, engine.LastSyncStartedAt(t.Context()).IsZero())
+			select {
+			case <-reconciled:
+			case <-time.After(time.Second):
+				require.FailNow(t, "deferred fallback did not reconcile watcher startup")
+			}
+		})
 	}
 }
 
@@ -164,8 +129,67 @@ func TestFirstImportProbe(t *testing.T) {
 	first, err = isFirstImport(t.Context(), cfg)
 	require.NoError(t, err)
 	require.True(t, first)
+	require.NoError(t, database.SetSyncState(t.Context(), "first_import_completed", "1"))
+	first, err = isFirstImport(t.Context(), cfg)
+	require.NoError(t, err)
+	require.False(t, first)
+	require.NoError(t, database.SetSyncState(t.Context(), "first_import_completed", ""))
 	require.NoError(t, database.SetSyncState(t.Context(), "last_sync_finished_at", time.Now().UTC().Format(time.RFC3339Nano)))
 	first, err = isFirstImport(t.Context(), cfg)
 	require.NoError(t, err)
 	require.False(t, first)
+}
+
+func TestFirstImportCompletionReadError(t *testing.T) {
+	cfg := testConfigWithClaudeFixture(t)
+	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
+	require.NoError(t, database.Close())
+	raw, err := sql.Open("sqlite3", cfg.DBPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
+	_, err = raw.ExecContext(t.Context(), `
+		ALTER TABLE pg_sync_state RENAME TO first_import_test_state;
+		INSERT INTO first_import_test_state (key, value) VALUES ('first_import_completed', '1');
+		CREATE VIEW pg_sync_state AS SELECT key,
+			CASE WHEN key = 'first_import_completed' THEN abs(-9223372036854775808) ELSE value END AS value
+			FROM first_import_test_state;
+	`)
+	require.NoError(t, err)
+	first, err := isFirstImport(t.Context(), cfg)
+	require.Error(t, err)
+	require.False(t, first)
+}
+
+type failingFirstImportProvider struct{ parser.Provider }
+
+func (p failingFirstImportProvider) Parse(context.Context, parser.ParseRequest) (parser.ParseOutcome, error) {
+	return parser.ParseOutcome{}, errors.New("source unavailable")
+}
+
+type failingFirstImportFactory struct{ parser.ProviderFactory }
+
+func (f failingFirstImportFactory) NewProvider(cfg parser.ProviderConfig) parser.Provider {
+	return failingFirstImportProvider{f.ProviderFactory.NewProvider(cfg)}
+}
+
+func TestFirstImportCompletionWithFailedSources(t *testing.T) {
+	cfg := testConfigWithClaudeFixture(t)
+	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
+	factory, ok := parser.ProviderFactoryByType(parser.AgentClaude)
+	require.True(t, ok)
+	engine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{
+		AgentDirs: cfg.AgentDirs, Machine: "local", DeferStartupMaintenance: true,
+		ProviderFactories: []parser.ProviderFactory{failingFirstImportFactory{factory}},
+	})
+	t.Cleanup(engine.Close)
+	timeout := make(chan time.Time, 1)
+	timeout <- time.Now()
+	ran, err := runDeferredStartupSyncFallback(t.Context(), cfg, engine, database, nil, nil, timeout, true)
+	require.NoError(t, err)
+	require.True(t, ran)
+	require.Positive(t, engine.LastSyncStats().Failed)
+	require.True(t, engine.LastSyncFinishedAt(t.Context()).IsZero())
+	first, err := isFirstImport(t.Context(), cfg)
+	require.NoError(t, err)
+	require.False(t, first, "a full pass with source failures should not repeat first-import startup")
 }

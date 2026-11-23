@@ -200,6 +200,7 @@ func TestFirstImportNewestWave(t *testing.T) {
 			})
 			t.Cleanup(engine.Close)
 			_, complete := engine.syncNewest(t.Context(), 3, nil, nil)
+			require.True(t, engine.LastSyncFinishedAt(t.Context()).IsZero())
 			require.False(t, complete)
 			page, err := archive.ListSessions(t.Context(), db.SessionFilter{Limit: 100})
 			require.NoError(t, err)
