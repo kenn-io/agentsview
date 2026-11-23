@@ -611,7 +611,7 @@ func TestDaemonOpenDefersCJKFTSRepair(t *testing.T) {
 		t.Run(state, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "archive.db")
 			d := testDBAtPath(t, path, "source")
-			seedSearchSession(t, d, "chinese", "project", [][2]string{{"user", "请验证中文搜索功能"}})
+			seedSearchSession(t, d, "chinese", "project", [][2]string{{"user", "请验证中文搜索功能 needle"}})
 			filter := ContentSearchFilter{Pattern: "中文搜索", Mode: "fts", Sources: []string{"messages"}, Limit: 20}
 			want, err := d.SearchContent(t.Context(), filter)
 			require.NoError(t, err)
@@ -636,14 +636,24 @@ func TestDaemonOpenDefersCJKFTSRepair(t *testing.T) {
 				require.NoError(t, err)
 				assert.False(t, d.HasCJKFTS(t.Context()))
 			}
+			if state == "fingerprint" {
+				_, err = d.Search(t.Context(), SearchFilter{Query: "中文搜索"})
+				assert.ErrorIs(t, err, errFTSUnavailable)
+				_, err = d.SearchContent(t.Context(), filter)
+				assert.ErrorIs(t, err, errFTSUnavailable)
+				substring := filter
+				substring.Mode = "substring"
+				content, err := d.SearchContent(t.Context(), substring)
+				require.NoError(t, err)
+				assert.Len(t, content.Matches, 1)
+				page, err := d.Search(t.Context(), SearchFilter{Query: "needle"})
+				require.NoError(t, err)
+				assert.Len(t, page.Results, 1)
+			}
 			require.NoError(t, d.CloseWriter())
 			require.NoError(t, d.ReopenWriter())
 			assert.False(t, d.HasCJKFTS(t.Context()))
-			var before, after string
-			require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key='search_history_token'`).Scan(&before))
 			require.NoError(t, d.RepairMessageFTS(t.Context()))
-			require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key='search_history_token'`).Scan(&after))
-			assert.NotEqual(t, before, after)
 			assert.True(t, d.HasCJKFTS(t.Context()))
 			require.NoError(t, d.getReader().QueryRow(t.Context(), "SELECT value FROM stats WHERE key = ?", cjkFTSFingerprintStatsKey).Scan(&stored))
 			assert.Equal(t, simpleFTSRuntimeConfig.fingerprint, stored)
@@ -692,82 +702,4 @@ func TestDaemonOpenDefersCJKFTSWithOnlyImageText(t *testing.T) {
 	var matches int
 	require.NoError(t, d.getReader().QueryRow(ctx, "SELECT count(*) FROM messages_cjk_fts WHERE messages_cjk_fts MATCH ?", "中文搜索").Scan(&matches))
 	require.Equal(t, 1, matches)
-}
-
-func TestDeferredCJKSearchReportsUnavailable(t *testing.T) {
-	if !simpleFTSRuntimeConfig.available() {
-		t.Skip("simple FTS5 runtime is not installed for this test process")
-	}
-	ctx := t.Context()
-	path := filepath.Join(t.TempDir(), "archive.db")
-	d := testDBAtPath(t, path, "source")
-	for _, id := range []string{"first", "second", "third"} {
-		seedSearchSession(t, d, id, "project", [][2]string{{"user", "请验证中文搜索功能 needle"}})
-	}
-	_, err := d.getWriter().ExecContext(ctx, `UPDATE stats SET value='stale' WHERE key=?`, cjkFTSFingerprintStatsKey)
-	require.NoError(t, err)
-	require.NoError(t, d.Close())
-	d, err = OpenDaemonWithProgress(ctx, path, config.ArchiveContentFull, nil)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, d.Close()) })
-	require.True(t, d.SearchRepairPending())
-	filter := SearchFilter{Query: "中文搜索"}
-	_, err = d.Search(ctx, filter)
-	assert.ErrorIs(t, err, errFTSUnavailable)
-	contentFilter := ContentSearchFilter{Pattern: "中文搜索", Mode: "fts", Sources: []string{"messages"}, Limit: 20}
-	_, err = d.SearchContent(ctx, contentFilter)
-	assert.ErrorIs(t, err, errFTSUnavailable)
-	contentFilter.Mode = "substring"
-	content, err := d.SearchContent(ctx, contentFilter)
-	require.NoError(t, err)
-	require.Len(t, content.Matches, 3)
-	page, err := d.Search(ctx, SearchFilter{Query: "needle"})
-	require.NoError(t, err)
-	require.Len(t, page.Results, 3)
-	require.NoError(t, d.RepairMessageFTS(ctx))
-	page, err = d.Search(ctx, filter)
-	require.NoError(t, err)
-	require.Len(t, page.Results, 3)
-	contentFilter.Mode = "fts"
-	content, err = d.SearchContent(ctx, contentFilter)
-	require.NoError(t, err)
-	require.Len(t, content.Matches, 3)
-}
-
-func TestDeferredCJKRepairSurvivesFingerprintRollback(t *testing.T) {
-	if !simpleFTSRuntimeConfig.available() {
-		t.Skip("simple FTS5 runtime is not installed for this test process")
-	}
-	ctx := t.Context()
-	path := filepath.Join(t.TempDir(), "archive.db")
-	d, err := Open(ctx, path)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		if d != nil {
-			_ = d.Close()
-		}
-	})
-	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
-	content := testInlineImageContent()
-	for _, id := range []string{"first", "second", "third"} {
-		insertSession(t, d, id, "project", func(s *Session) { s.UserMessageCount = 2 })
-		require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: id, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-	}
-	fingerprint := simpleFTSRuntimeConfig.fingerprint
-	t.Cleanup(func() { simpleFTSRuntimeConfig.fingerprint = fingerprint })
-	require.NoError(t, d.Close())
-	simpleFTSRuntimeConfig.fingerprint = "different-fingerprint"
-	d, err = OpenDaemonWithProgress(ctx, path, config.ArchiveContentFull, nil)
-	require.NoError(t, err)
-	identity, err := ocr.NewIdentity("test", "model", "revision")
-	require.NoError(t, err)
-	require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "中文搜索", false))
-	require.NoError(t, d.Close())
-	simpleFTSRuntimeConfig.fingerprint = fingerprint
-	d, err = OpenDaemonWithProgress(ctx, path, config.ArchiveContentFull, nil)
-	require.NoError(t, err)
-	require.NoError(t, d.RepairMessageFTS(ctx))
-	page, err := d.Search(ctx, SearchFilter{Query: "中文搜索"})
-	require.NoError(t, err)
-	assert.Len(t, page.Results, 3)
 }

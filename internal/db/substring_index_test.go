@@ -449,6 +449,7 @@ func TestDaemonOpenBuildsIndexesForEmptyArchive(t *testing.T) {
 	seedSearchSession(t, d, "session", "project", [][2]string{{"user", "中文搜索 needleexample"}})
 	requireSubstringIndexIntact(t, d)
 	assert.Len(t, substringHits(t, d, ContentSearchFilter{Pattern: "needleexample", Limit: 50}), 1)
+	require.True(t, d.SearchRepairPending())
 	require.NoError(t, d.RepairMessageFTS(t.Context()))
 	if simpleFTSRuntimeConfig.available() {
 		page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "中文搜索", Mode: "fts", Sources: []string{"messages"}, Limit: 20})

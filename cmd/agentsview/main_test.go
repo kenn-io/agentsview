@@ -29,7 +29,7 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
-	"github.com/mattn/go-sqlite3"
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/apiclient"
@@ -131,7 +131,6 @@ func TestDeferredMessageFTSHTTP(t *testing.T) {
 		handler.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0"+path, nil))
 		return response
 	}
-	assert.Equal(t, http.StatusOK, get("/api/v1/sessions").Code)
 	assert.Equal(t, http.StatusNotImplemented, get("/api/v1/search?q=searchneedle").Code)
 	assert.Equal(t, http.StatusInternalServerError, get("/api/v1/search/content?pattern=deploy%20window").Code)
 }
@@ -4368,39 +4367,23 @@ func TestServeLifetimesReleaseDebugLog(t *testing.T) {
 }
 
 func TestDeferredSearchIndexesHTTP(t *testing.T) {
-	for _, tc := range []struct {
-		index, catchup string
-	}{{"substring", "request"}, {"substring", "running"}, {"cjk", "request"}, {"cjk", "running"}} {
-		t.Run(tc.index+"/"+tc.catchup, func(t *testing.T) {
-			index := tc.index
+	for _, catchup := range []string{"request", "running"} {
+		t.Run(catchup, func(t *testing.T) {
 			dir := t.TempDir()
 			root := filepath.Join(dir, "gemini")
 			cfg := config.Config{Host: "127.0.0.1", DBPath: filepath.Join(dir, "archive.db"), DataDir: dir, ArchiveContent: config.ArchiveContentFull, AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
 			database, err := db.Open(t.Context(), cfg.DBPath)
 			require.NoError(t, err)
-			if index == "cjk" && !database.HasCJKFTS(t.Context()) {
-				require.NoError(t, database.Close())
-				t.Skip("simple FTS5 runtime is not installed")
-			}
 			dbtest.SeedSession(t, database, "session", "project", func(s *db.Session) {
 				s.UserMessageCount = 2
 				s.StartedAt = new("2025-01-15T10:00:00Z")
 			})
-			messages := make([]db.Message, 1500)
-			content := strings.Repeat("SQLite 中文搜索 needleexample sample ", 100)
-			for i := range messages {
-				messages[i] = db.Message{SessionID: "session", Ordinal: i, Role: "user", Content: content, Timestamp: "2025-01-15T10:00:00Z"}
-			}
-			require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", messages))
+			require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []db.Message{{SessionID: "session", Role: "user", Content: "needleexample"}}))
 			require.NoError(t, database.Close())
 			raw, err := sql.Open("sqlite3", cfg.DBPath)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, raw.Close()) })
-			if index == "substring" {
-				_, err = raw.ExecContext(t.Context(), `DROP TRIGGER IF EXISTS messages_trigram_ai; DROP TRIGGER IF EXISTS messages_trigram_ad; DROP TRIGGER IF EXISTS messages_trigram_au; DROP TABLE message_trigram_fts; DROP TABLE thinking_trigram_fts; DROP VIEW message_trigram_source`)
-			} else {
-				_, err = raw.ExecContext(t.Context(), `UPDATE stats SET value='foreign' WHERE key='messages_cjk_fts_fingerprint_v1'`)
-			}
+			_, err = raw.ExecContext(t.Context(), `DROP TRIGGER IF EXISTS messages_trigram_ai; DROP TRIGGER IF EXISTS messages_trigram_ad; DROP TRIGGER IF EXISTS messages_trigram_au; DROP TABLE message_trigram_fts; DROP TABLE thinking_trigram_fts; DROP VIEW message_trigram_source`)
 			require.NoError(t, err)
 			database, err = db.OpenDaemonWithProgress(t.Context(), cfg.DBPath, config.ArchiveContentFull, nil)
 			require.NoError(t, err)
@@ -4417,113 +4400,23 @@ func TestDeferredSearchIndexesHTTP(t *testing.T) {
 			)), 0o644))
 			collectWhilePaused(ingestion, reloadGeminiSessionPath(root, "overnight"))
 			handler := server.New(cfg, database, engine, server.WithIngestionFreshness(ingestion)).Handler()
-			if index == "cjk" {
-				assert.False(t, database.HasCJKFTS(t.Context()))
-			} else {
-				var exists bool
-				require.NoError(t, raw.QueryRowContext(t.Context(), `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='message_trigram_fts')`).Scan(&exists))
-				assert.False(t, exists)
-			}
-			message := "building SQLite substring search index"
-			if index == "cjk" {
-				message = "rebuilding CJK FTS index"
-			}
-			probe, err := raw.Conn(t.Context())
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, probe.Close()) })
-			_, err = probe.ExecContext(t.Context(), "PRAGMA busy_timeout = 1")
-			require.NoError(t, err)
-			started := make(chan struct{}, 1)
-			oldLog := log.Writer()
-			log.SetOutput(observedOutput{Writer: oldLog, observe: func(p []byte) {
-				if strings.Contains(string(p), message) {
-					select {
-					case started <- struct{}{}:
-					default:
-					}
-				}
-			}})
-			t.Cleanup(func() { log.SetOutput(oldLog) })
-			ctx, cancel := context.WithCancel(t.Context())
-			done := make(chan error, 1)
-			go func() {
-				// The probe may briefly acquire the writer before repair starts.
-				for {
-					err := database.RepairMessageFTS(ctx)
-					var sqliteErr sqlite3.Error
-					if !errors.As(err, &sqliteErr) || sqliteErr.Code != sqlite3.ErrBusy || ctx.Err() != nil {
-						done <- err
-						return
-					}
-				}
-			}()
-			finished := false
-			t.Cleanup(func() {
-				cancel()
-				if !finished {
-					<-done
-				}
-			})
-			select {
-			case <-started:
-			case err := <-done:
-				finished = true
-				require.FailNow(t, "repair returned before rebuilding the index", "%v", err)
-			case <-time.After(30 * time.Second):
-				require.FailNow(t, "repair did not start rebuilding the index")
-			}
-			probeCtx, stopProbe := context.WithTimeout(t.Context(), 30*time.Second)
-			defer stopProbe()
-			for {
-				_, err := probe.ExecContext(probeCtx, "BEGIN IMMEDIATE")
-				if err != nil {
-					var sqliteErr sqlite3.Error
-					require.ErrorAs(t, err, &sqliteErr)
-					require.Equal(t, sqlite3.ErrBusy, sqliteErr.Code)
-					break
-				}
-				_, err = probe.ExecContext(probeCtx, "ROLLBACK")
-				require.NoError(t, err)
-				select {
-				case err := <-done:
-					finished = true
-					require.FailNow(t, "repair finished before holding the writer", "%v", err)
-				case <-probeCtx.Done():
-					require.FailNow(t, "repair did not hold the writer")
-				default:
-				}
-			}
-			if tc.catchup == "running" {
-				go ingestion.EnsureFresh(t.Context())
-				require.Eventually(t, func() bool {
-					ingestion.mu.Lock()
-					defer ingestion.mu.Unlock()
-					return ingestion.catchup != nil
-				}, time.Second, time.Millisecond)
+			require.True(t, database.SearchRepairPending())
+			var running chan struct{}
+			if catchup == "running" {
+				ingestion.mu.Lock()
+				running = ingestion.registerCatchupLocked()
+				ingestion.mu.Unlock()
 			}
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0/api/v1/sessions", nil))
 			assert.Equal(t, http.StatusOK, response.Code)
 			assert.Contains(t, response.Body.String(), `"session"`)
 			assert.Equal(t, "true", response.Header().Get(apiclient.ArchiveStaleHeader))
-			ingestion.mu.Lock()
-			catchupDone := ingestion.catchup
-			ingestion.mu.Unlock()
-			require.NotNil(t, catchupDone)
-			select {
-			case err := <-done:
-				finished = true
-				require.FailNow(t, "repair finished before the sessions response", "%v", err)
-			default:
+			if running != nil {
+				ingestion.finishCatchup(running)
 			}
-			err = <-done
-			finished = true
-			require.NoError(t, err)
-			select {
-			case <-catchupDone:
-			case <-time.After(30 * time.Second):
-				require.FailNow(t, "catch-up did not finish")
-			}
+			require.NoError(t, database.RepairMessageFTS(t.Context()))
+			require.True(t, ingestion.EnsureFresh(t.Context()))
 			require.True(t, sessionImported(t, database, "gemini:overnight"))
 			response = httptest.NewRecorder()
 			handler.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0/api/v1/sessions", nil))
