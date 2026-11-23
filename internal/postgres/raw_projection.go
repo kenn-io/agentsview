@@ -152,7 +152,6 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 	}
 	changed := false
 	derivedChanged := false
-	remoteChanged := make(map[string]bool)
 	fresh := make(map[string][]byte)
 	dialogueChanges := make([]string, 0)
 	for _, group := range ordered {
@@ -162,7 +161,6 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		}
 		previous, exists := priorByGroup[group]
 		var old ingest.PreparedSession
-		previousRemote := ""
 		var history *ingest.PriorSession
 		if exists {
 			metadata, decodeErr := decodeRawPayload(previous.Payload)
@@ -170,7 +168,6 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 				return decodeErr
 			}
 			old.Session = metadata.Session
-			previousRemote = metadata.RecordedGitRemote
 		}
 		oldLoaded := false
 		loadOld := func(ctx context.Context) error {
@@ -241,12 +238,8 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 				}
 			}
 		}
-		prepared.RecordedGitRemote = export.WithRecordedGitRemote(export.ProjectIdentityObservation{}, c.Parsed.Session.GitRemote).GitRemote
-		if decision.Action == ingest.HistoryPreserve && prepared.RecordedGitRemote == "" {
-			prepared.RecordedGitRemote = previousRemote
-		}
-		if previousRemote != prepared.RecordedGitRemote {
-			remoteChanged[group] = true
+		if remote := export.WithRecordedGitRemote(export.ProjectIdentityObservation{}, c.Parsed.Session.GitRemote).GitRemote; remote != "" {
+			prepared.RecordedGitRemote = remote
 		}
 		prepared.Signals = ingest.RefreshSignalRecencyAt(prepared.Session, prepared.Messages, prepared.Signals, s.options.Now())
 		revision, err := rawContentRevision(prepared)
@@ -267,8 +260,26 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		if err != nil {
 			return err
 		}
+		// Keep transcript content intact while retaining new repository evidence.
 		if count == 1 {
 			fresh[sessionID] = payload
+		} else if prepared.RecordedGitRemote != "" {
+			retained, err := loadRawPayload(ctx, tx, sessionID)
+			if err != nil {
+				return err
+			}
+			if retained.RecordedGitRemote == "" {
+				retained.RecordedGitRemote = prepared.RecordedGitRemote
+				updated, err := encodeRawPayload(retained)
+				if err != nil {
+					return err
+				}
+				if _, err := tx.ExecContext(ctx, `UPDATE raw_content_revisions SET payload=$2 WHERE session_id=$1`, sessionID, updated); err != nil {
+					return err
+				}
+				dialogueChanges = append(dialogueChanges, sessionID)
+				derivedChanged = true
+			}
 		}
 		dialogueChanged, err := syncRawDialogue(ctx, tx, sessionID, prepared.Messages)
 		if err != nil {
@@ -284,11 +295,11 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		}
 		derivedChanged = derivedChanged || visibleChange
 
-		metadata, err := encodeRawPayload(ingest.PreparedSession{Session: prepared.Session, RecordedGitRemote: prepared.RecordedGitRemote})
+		metadata, err := encodeRawPayload(ingest.PreparedSession{Session: prepared.Session})
 		if err != nil {
 			return err
 		}
-		observed, err := encodeRawPayload(ingest.PreparedSession{Session: c.Session, RecordedGitRemote: prepared.RecordedGitRemote})
+		observed, err := encodeRawPayload(ingest.PreparedSession{Session: c.Session})
 		if err != nil {
 			return err
 		}
@@ -338,7 +349,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		}
 	}
 	for _, group := range ordered {
-		linksChanged, err := syncSelectedRawPRLinks(ctx, tx, group, dialogueChanges, false)
+		linksChanged, err := syncSelectedRawPRLinks(ctx, tx, group, dialogueChanges)
 		if err != nil {
 			return err
 		}
@@ -358,9 +369,9 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 	// The corpus row is shared with manifest acceptance and every other
 	// projection, so it is locked only after every row write.
 	var embeddings []rawEmbeddingChange
-	if changed || len(remoteChanged) > 0 || len(staleFrictionGroups) > 0 {
+	if changed || len(staleFrictionGroups) > 0 {
 		for _, group := range ordered {
-			if !changed && !remoteChanged[group] && !staleFrictionGroups[group] {
+			if !changed && !staleFrictionGroups[group] {
 				continue
 			}
 			changes, err := s.materializeGroup(ctx, tx, group, fresh)
@@ -387,7 +398,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 	if err != nil {
 		return err
 	}
-	if changed || len(remoteChanged) > 0 || derivedChanged || len(staleFrictionGroups) > 0 {
+	if changed || derivedChanged || len(staleFrictionGroups) > 0 {
 		if err = publishRawRevision(ctx, tx, changed, embeddings); err != nil {
 			return err
 		}

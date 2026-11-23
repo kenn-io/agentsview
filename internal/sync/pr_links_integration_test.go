@@ -239,7 +239,7 @@ func TestShellCommandPRFilter(t *testing.T) {
 	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 	for _, tc := range []struct{ id, command string }{
 		{"shell-function", "other() { cd /other; }; gh pr view 42"},
-		{"shell-export", "export GH_REPO=example/other; gh pr view 43"},
+		{"shell-export", "echo hello; gh pr view 43 -R example/other"},
 		{"unrelated-a", "echo hello"},
 		{"unrelated-b", "gh pr view 44 -R example/other"},
 	} {
@@ -249,7 +249,7 @@ func TestShellCommandPRFilter(t *testing.T) {
 		))
 	}
 	require.Equal(t, 4, env.engine.SyncAll(t.Context(), nil).Synced)
-	for _, tc := range []struct{ filter, id string }{{"example/repo#42", "shell-function"}, {"example/other#43", "shell-export"}} {
+	for _, tc := range []struct{ filter, id string }{{"example/other#43", "shell-export"}} {
 		filter, err := db.ParsePRFilter(tc.filter)
 		require.NoError(t, err)
 		page, err := env.db.ListSessions(t.Context(), db.SessionFilter{PR: filter})

@@ -683,12 +683,10 @@ ______________________________________________________________________
 
 Each session's `pr_links` field lists pull requests found in retained user
 prompts, supported `gh pr` commands, child-agent prompts, or structured
-transcript records. The supported `gh pr` actions are `view`, `diff`, `checks`,
-`merge`, `edit`, `comment`, `review`, `ready`, `close`, `reopen`, `checkout`
-(or `co`), `update-branch`, `lock`, `unlock`, and `revert`. A command can name
-the pull request by number (with or without a leading `#`) or by URL, and can
-name its repository with `-R`, `--repo`, or `GH_REPO` as `owner/repo` or
-`host/owner/repo`. `-R` and `--repo` also accept a repository URL.
+transcript records. Supported actions are `view`, `checkout`, `edit`, `diff`,
+`checks`, `comment`, `review`, `ready`, `merge`, `close`, and `reopen`.
+Commands can name a pull request by URL or number. A number can use `-R` or
+`--repo` with `owner/repo`.
 
 ```json
 "pr_links": [
@@ -701,27 +699,15 @@ name its repository with `-R`, `--repo`, or `GH_REPO` as `owner/repo` or
 ]
 ```
 
-AgentsView keeps one link per pull request. A bare PR number uses a repository
-named by `-R`, `--repo`, or a literal `GH_REPO` set unconditionally in the
-same shell command.
-Otherwise, it links when the session has a single known checkout remote and no
-earlier command changed the directory or GitHub settings. This assumes no
-unrecorded GitHub CLI repository override. Archives that omitted tool inputs
-cannot recover links from those inputs. A prompt link tells you only
-that the prompt mentioned the pull request, not that the session worked on it.
-Claude Code also includes `pr-link` entries in its transcripts.
-Because Claude Code records these links for the whole transcript, every session
-split from that transcript, such as a rewind's fork, carries them like its name
-and git branch.
+AgentsView keeps one link per pull request. A single command with a bare
+number uses the session's repository evidence. Compound shell commands link
+only when they name a PR URL or use `-R` or `--repo`. Child-agent prompts link
+full PR URLs as references. Prompt mentions indicate a reference, not work on
+the pull request. Archives that dropped tool inputs cannot recover command or
+child-prompt links. Push-to-head linking is planned for slice 2.
 
-Hosted sessions use the repository recorded by each active source. For a bare
-number without an explicit repository, every active source contributing to the
-session must identify the same repository. If a source has no repository or the
-sources disagree, the number does not produce a link.
-
-Older hosted source records can gain repository evidence when their retained
-inputs are reparsed. Operators can [schedule a reparse](https://agentsview.io/docs/hosted-raw-sync/#reparse-and-rollback)
-of retained inputs. A departed source cannot be reparsed until it returns.
+Claude Code also includes `pr-link` entries in its transcripts. Every session
+split from that transcript carries them like its name and git branch.
 
 To filter by pull request, use `session list --pr` or the `pr` query parameter.
 Pass `owner/repo` for any pull request in that repository, `owner/repo#123` for
