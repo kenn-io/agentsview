@@ -173,8 +173,7 @@ func TestFirstImportRefreshesWhileOlderSessionsAreWritten(t *testing.T) {
 			resume := make(chan struct{})
 			var fallback atomic.Bool
 			var events atomic.Int32
-			var engine *Engine
-			engine = NewEngine(t.Context(), archive, EngineConfig{
+			engine := NewEngine(t.Context(), archive, EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}, Machine: "local", DeferStartupMaintenance: true,
 				Emitter: emitterFunc(func(scope string) {
 					if scope != "sessions" || !fallback.Load() {
@@ -321,7 +320,7 @@ func TestFirstImportProviderFailures(t *testing.T) {
 
 			if listingFailure {
 				_, complete := engine.syncNewest(t.Context(), 1, nil, nil)
-				require.False(t, complete)
+				assert.False(t, complete)
 				healthy, err := archive.GetSession(t.Context(), "healthy")
 				require.NoError(t, err)
 				require.NotNil(t, healthy)
