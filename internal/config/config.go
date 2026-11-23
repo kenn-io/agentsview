@@ -1559,6 +1559,9 @@ func Default() (Config, error) {
 				filepath.Join(home, ".hermes", "profiles"),
 			)
 		}
+		if root == "" {
+			dirs = append(dirs, resolveMetaHarnessDefaultDirs(def.Type, home)...)
+		}
 		agentDirs[def.Type] = dirs
 		agentDirSource[def.Type] = dirDefault
 	}

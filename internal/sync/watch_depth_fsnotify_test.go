@@ -11,6 +11,8 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 // depthLimitedTree builds root/{a,b} plus root/a/deep/deeper and returns root.
@@ -224,4 +226,75 @@ func TestFSNotifyBackendRuntimeCreateFollowsExtraDirectories(t *testing.T) {
 	_, excluded = backend.watchCreatedPath(other)
 	assert.True(t, excluded)
 	assert.NotContains(t, backend.watcher.WatchList(), other)
+}
+
+func TestFSNotifyBackendAntigravityCLIContainerWatchPlan(t *testing.T) {
+	backend := testFSNotifyBackend(t)
+	container := filepath.Join(t.TempDir(), ".t3", "userdata", "providers", "antigravity")
+	require.NoError(t, os.MkdirAll(container, 0o755))
+
+	provider, ok := parser.NewProvider(parser.AgentAntigravityCLI, parser.ProviderConfig{
+		Roots: []string{container},
+	})
+	require.True(t, ok)
+	plan, err := provider.WatchPlan(t.Context())
+	require.NoError(t, err)
+	require.Len(t, plan.Roots, 1)
+
+	backend.setWatchRootPlan([]WatchRoot{{
+		Path:             plan.Roots[0].Path,
+		Recursive:        plan.Roots[0].Recursive,
+		MaxDepth:         plan.Roots[0].MaxDepth,
+		ExtraDirectories: plan.Roots[0].ExtraDirectories,
+		Exists:           true,
+	}})
+	require.NoError(t, backend.AddRecursive(container, math.MaxInt).Err)
+
+	// Runtime creation of a new T3 Code instance and its session directories
+	// must be watched, while high-churn sibling trees stay excluded.
+	const id = "66666666-7777-8888-9999-aaaaaaaaaaaa"
+	instance := filepath.Join(container, "insthash")
+	acp := filepath.Join(instance, "antigravity-acp")
+	convDir := filepath.Join(acp, "conversations")
+	brainDir := filepath.Join(acp, "brain")
+	brainSession := filepath.Join(brainDir, id)
+	generated := filepath.Join(brainSession, ".system_generated")
+	logsDir := filepath.Join(generated, "logs")
+	for _, dir := range []string{instance, acp, convDir, brainDir, brainSession, generated, logsDir} {
+		require.NoError(t, os.Mkdir(dir, 0o755))
+		_, excluded := backend.watchCreatedPath(dir)
+		assert.False(t, excluded, "expected %s to be watched", dir)
+		assert.Contains(t, backend.watcher.WatchList(), dir)
+	}
+
+	for _, ignored := range []string{
+		filepath.Join(acp, "log"),
+		filepath.Join(acp, "builtin"),
+		filepath.Join(brainSession, "scratch"),
+		filepath.Join(generated, "steps"),
+		filepath.Join(logsDir, "chunks"),
+	} {
+		require.NoError(t, os.Mkdir(ignored, 0o755))
+		_, excluded := backend.watchCreatedPath(ignored)
+		assert.True(t, excluded, "expected %s to be excluded", ignored)
+		assert.NotContains(t, backend.watcher.WatchList(), ignored)
+	}
+
+	// Session database and brain transcript events inside watched leaf dirs stay visible.
+	for _, file := range []string{
+		filepath.Join(convDir, id+".db-wal"),
+		filepath.Join(logsDir, "transcript.jsonl"),
+	} {
+		event, relevant := backend.translateEvent(fsnotify.Event{
+			Name: file, Op: fsnotify.Write,
+		})
+		assert.True(t, relevant, "expected event for %s to stay visible", file)
+		assert.Equal(t, filepath.Clean(file), event.Path)
+	}
+
+	// Noise in intermediate directories stays ignored.
+	_, relevant := backend.translateEvent(fsnotify.Event{
+		Name: filepath.Join(generated, "noise.txt"), Op: fsnotify.Write,
+	})
+	assert.False(t, relevant)
 }

@@ -1008,3 +1008,54 @@ func TestAntigravityCLIRebuildInstallsWhenOnlyFallbackIsPreserved(t *testing.T) 
 	assert.Less(t, env.db.GetSessionDataVersion(t.Context(), sessionID), db.CurrentDataVersion(),
 		"the preserved session must stay marked for retry")
 }
+
+func TestAntigravityCLIT3ContainerSyncsRuntimeCreatedInstance(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	container := filepath.Join(t.TempDir(), ".t3", "userdata", "providers", "antigravity")
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentAntigravityCLI: {container},
+		},
+		Machine: "devbox",
+	})
+
+	// Missing container at startup yields zero sessions with no error.
+	stats := engine.SyncAll(t.Context(), nil)
+	require.Zero(t, stats.Failed)
+	require.Zero(t, stats.Synced)
+
+	// Runtime creation of an isolated T3 Code antigravity-acp instance.
+	const uuid = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+	const sessionID = "antigravity-cli:" + uuid
+	acpRoot := filepath.Join(container, "deadbeef01234567", "antigravity-acp")
+	convDir := filepath.Join(acpRoot, "conversations")
+	require.NoError(t, os.MkdirAll(convDir, 0o755))
+	dbPath := filepath.Join(convDir, uuid+".db")
+	createAntigravityCLIDisplayStepDB(t, dbPath, "Initial prompt from T3 ACP")
+	conn := openAntigravityCLITestDB(t, dbPath)
+	insertAntigravityCLIStep(t, conn, 1, 15, "Initial reply from Gemini 4 Neon")
+	require.NoError(t, conn.Close())
+
+	brainLog := filepath.Join(acpRoot, "brain", uuid, ".system_generated", "logs", "transcript.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(brainLog), 0o755))
+	brainContent := `{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","created_at":"2026-11-23T10:00:00Z","content":"<USER_REQUEST>\nFix T3 ACP discovery\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nnow\n</ADDITIONAL_METADATA>"}` + "\n" +
+		`{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","created_at":"2026-11-23T10:00:05Z","content":"Found the container path."}` + "\n"
+	require.NoError(t, os.WriteFile(brainLog, []byte(brainContent), 0o600))
+
+	stats = engine.SyncAll(t.Context(), nil)
+	require.Zero(t, stats.Failed)
+	assert.Equal(t, 1, stats.Synced)
+	msgs := antigravityCLIMessageContents(fetchMessages(t, database, sessionID))
+	assert.Equal(t, []string{"Fix T3 ACP discovery", "Found the container path."}, msgs)
+
+	// Changed-path sync routes a write inside the nested instance without a full scan.
+	conn = openAntigravityCLITestDB(t, dbPath)
+	insertAntigravityCLIStep(t, conn, 2, 14, "Follow-up prompt")
+	require.NoError(t, conn.Close())
+	brainContent += `{"step_index":2,"source":"USER_EXPLICIT","type":"USER_INPUT","created_at":"2026-11-23T10:01:00Z","content":"Follow-up prompt"}` + "\n"
+	require.NoError(t, os.WriteFile(brainLog, []byte(brainContent), 0o600))
+
+	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{dbPath}))
+	msgs = antigravityCLIMessageContents(fetchMessages(t, database, sessionID))
+	assert.Equal(t, []string{"Fix T3 ACP discovery", "Found the container path.", "Follow-up prompt"}, msgs)
+}

@@ -65,6 +65,16 @@ func ResolveTargets(ctx context.Context, cfg config.Config) (TargetSet, error) {
 				}
 				continue
 			}
+			if def.Type == parser.AgentAntigravityCLI {
+				cliDirs, err := resolveAntigravityCLITargets(dir)
+				if err != nil {
+					return TargetSet{}, err
+				}
+				if len(cliDirs) > 0 {
+					dirs[def.Type] = append(dirs[def.Type], cliDirs...)
+				}
+				continue
+			}
 			if def.Type == parser.AgentAider {
 				targets, err := resolveAiderTargets(ctx, dir)
 				if err != nil {
@@ -408,6 +418,22 @@ func appendUniqueForbiddenRoot(roots []string, root string) []string {
 		return roots
 	}
 	return append(roots, root)
+}
+
+func resolveAntigravityCLITargets(root string) ([]string, error) {
+	expanded, err := parser.ExpandAntigravityCLIRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	var dirs []string
+	for _, candidate := range expanded {
+		info, statErr := os.Stat(candidate)
+		if statErr != nil || !info.IsDir() {
+			continue
+		}
+		dirs = append(dirs, candidate)
+	}
+	return dirs, nil
 }
 
 func resolveHermesTargets(root string) ([]string, []string) {

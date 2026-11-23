@@ -692,7 +692,7 @@ keeps the default directories.
 | Aider                 | No default; opt in with `AIDER_DIR` or `agents.aider.dirs`                                                                                                       | `.aider.chat.history.md` Markdown history files                                                                                                               |
 | Amp (deprecated)      | `~/.local/share/amp/threads/`                                                                                                                                    | Historical local JSON thread files                                                                                                                            |
 | Antigravity (IDE)     | `~/.gemini/antigravity/`, `~/.gemini/antigravity-ide/`                                                                                                           | SQLite database per session, or the plaintext `brain/<uuid>/.system_generated/logs/transcript.jsonl` for a conversation with no database                      |
-| Antigravity CLI       | `~/.gemini/antigravity-cli/`                                                                                                                                     | SQLite `conversations/<uuid>.db`, `<uuid>.trajectory.json` sidecars, or encrypted `.pb` files plus `brain/` and `history.jsonl`                               |
+| Antigravity CLI       | `~/.gemini/antigravity-cli/`, `~/.t3/userdata/providers/antigravity/` (or `$T3CODE_HOME/userdata/providers/antigravity/`)                                        | SQLite `conversations/<uuid>.db`, `<uuid>.trajectory.json` sidecars, or encrypted `.pb` files plus `brain/` and `history.jsonl`                               |
 | Augure Code           | `~/.augure/sessions/`                                                                                                                                            | Codex-format JSONL per session                                                                                                                                |
 | Augure Desktop 3 beta | (platform-specific, see below)                                                                                                                                   | Hermes-format `state.db` and `sessions/` transcripts                                                                                                          |
 | Claude Code           | `~/.claude/projects/`                                                                                                                                            | JSONL per session                                                                                                                                             |
@@ -1195,6 +1195,19 @@ receiving new sessions after Kilo rebuilt the extension on OpenCode (public beta
 2026-03-10, GA 2026-04-02). The `kilo-legacy` agent stays frozen at that legacy
 format and only archives older sessions, while newer Kilo VS Code activity shows
 up under `kilo`.
+
+**Antigravity CLI meta-harness containers.** Meta-harnesses such as T3 Code run
+`agy acp` with isolated per-instance directories beneath a shared container
+root (by default `~/.t3/userdata/providers/antigravity/<hash>/antigravity-acp`,
+or `$T3CODE_HOME/userdata/providers/antigravity` when `T3CODE_HOME` is an
+absolute path). AgentsView includes the T3 Code container by default alongside
+`~/.gemini/antigravity-cli/` and discovers new instances without restarting.
+Other meta-harnesses that isolate Antigravity CLI or ACP profiles beneath a
+directory root (`<root>/<instance>/antigravity-acp`,
+`<root>/<instance>/antigravity-cli`, `<root>/<instance>/conversations`, or a
+single `--gemini-dir` profile containing `antigravity-acp` or
+`antigravity-cli`) can be added directly to `agents.antigravity-cli.dirs` or
+`ANTIGRAVITY_CLI_DIR`.
 
 **Antigravity CLI transcript sources.** Antigravity CLI has used both SQLite
 databases and AES-encrypted `.pb` files. AgentsView reads whichever source is

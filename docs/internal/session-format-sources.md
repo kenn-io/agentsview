@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-17
+last_edited: 2026-11-23
 ---
 
 # Session Format Source Inventory
@@ -5497,6 +5497,24 @@ schemas keep their existing ordering behavior.
   Main-database and WAL changes still resolve to their conversation. These are
   import-routing rules; the closed producer format and its evidence
   classification are unchanged.
+- **Meta-harness ACP isolation (checked 2026-11-23):** Verified on Linux and
+  macOS against T3 Code 0.1.11 launching `agy acp` (`cli-1.5.13`) with
+  `--gemini-dir <stateDir>/providers/antigravity/<sha256(instanceId)>` and
+  `--app-data-dir antigravity-acp`, where `<stateDir>` is
+  `$T3CODE_HOME/userdata` (default `~/.t3/userdata`). Each isolated
+  `antigravity-acp/` directory uses the same SQLite schema (`1.0.7-1.0.10`),
+  `conversations/<uuid>.db`, `implicit/<uuid>.pb`,
+  `brain/<uuid>/.system_generated/logs/transcript.jsonl`, and
+  `conversation_summaries.db` (`app_data_dir = 'antigravity-acp'`, populated
+  `workspace_uris` and `title`), without `history.jsonl` or
+  `cache/last_conversations.json`. Agentsview includes
+  `$T3CODE_HOME/userdata/providers/antigravity` (default
+  `~/.t3/userdata/providers/antigravity`) as a default container root for
+  `antigravity-cli` and expands per-instance roots dynamically across both T3
+  Code and user-configured meta-harness containers (`internal/config/meta_harnesses.go`,
+  `internal/parser/instance_container.go`, and
+  `internal/parser/antigravity_cli_provider.go`). Evidence remains
+  `no-public-source`.
 
 ## iFlow CLI (`iflow`)
 
