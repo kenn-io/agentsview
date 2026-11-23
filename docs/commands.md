@@ -709,7 +709,7 @@ agentsview serve --public-url https://agents.example.com
 agentsview serve --base-path /agentsview --public-url https://example.com
 ```
 
-The server does the following at startup:
+On startup, the server:
 
 1. Loads or creates `~/.agentsview/sessions.db`.
 1. Runs initial sync across all discovered session directories.

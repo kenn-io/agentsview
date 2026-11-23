@@ -122,80 +122,46 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 }
 
 func TestServeStartupWorkerFailure(t *testing.T) {
-	for _, tc := range []struct {
-		name       string
-		spawnError bool
-	}{
-		{name: "worker failed"},
-		{name: "spawn failed", spawnError: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			isolateServeTestHome(t)
-			cfg := testConfigWithClaudeFixture(t)
-			cfg.Host = "127.0.0.1"
-			cfg.EventsCoalesceInterval = 0
-			var seed bytes.Buffer
-			require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &seed))
-			if tc.spawnError {
-				writeRestartSession(t, cfg, "fallback")
-			}
-			launched := make(chan struct{}, 1)
-			release := make(chan struct{})
-			restore := stubLaunchSyncWorker(t, func(ctx context.Context, _ config.Config, _ syncWorkerRequest, _ func(workerLine)) (workerResult, error) {
-				launched <- struct{}{}
-				select {
-				case <-release:
-				case <-ctx.Done():
-					return workerResult{}, ctx.Err()
-				}
-				if tc.spawnError {
-					return workerResult{}, fmt.Errorf("%w: test", errWorkerSpawn)
-				}
-				return workerResult{Status: "aborted", Synced: 1}, errors.New("injected worker failure")
-			})
-			t.Cleanup(restore)
-			base := startRestartServe(t, cfg)
-			var scanner *bufio.Scanner
-			if !tc.spawnError {
-				ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-				defer cancel()
-				req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/v1/events", nil)
-				require.NoError(t, err)
-				resp, err := http.DefaultClient.Do(req)
-				require.NoError(t, err)
-				defer resp.Body.Close()
-				scanner = bufio.NewScanner(resp.Body)
-				require.True(t, scanner.Scan())
-				require.Contains(t, scanner.Text(), "events_ready")
-			}
-			close(release)
-			var status string
-			require.Eventually(t, func() bool {
-				status = restartGet(t, base+"/api/v1/sync/status")
-				if tc.spawnError {
-					return strings.Contains(status, `"startup_pending":false`)
-				}
-				return strings.Contains(status, `"startup_pending":true`) && strings.Contains(status, `"aborted":true`)
-			}, 30*time.Second, 100*time.Millisecond)
-			select {
-			case <-launched:
-			default:
-				require.FailNow(t, "worker did not start")
-			}
-			if tc.spawnError {
-				assert.Contains(t, status, `"synced":1`)
-			} else {
-				found := false
-				for scanner.Scan() {
-					if strings.Contains(scanner.Text(), `"scope":"sessions"`) {
-						found = true
-						break
-					}
-				}
-				require.True(t, found, "committed sessions should emit an event: %v", scanner.Err())
-			}
-		})
+	isolateServeTestHome(t)
+	cfg := testConfigWithClaudeFixture(t)
+	cfg.Host = "127.0.0.1"
+	cfg.EventsCoalesceInterval = 0
+	var seed bytes.Buffer
+	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &seed))
+	release := make(chan struct{})
+	restore := stubLaunchSyncWorker(t, func(ctx context.Context, _ config.Config, _ syncWorkerRequest, _ func(workerLine)) (workerResult, error) {
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return workerResult{}, ctx.Err()
+		}
+		return workerResult{}, errors.New("injected worker failure")
+	})
+	t.Cleanup(restore)
+	base := startRestartServe(t, cfg)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/v1/events", nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	scanner := bufio.NewScanner(resp.Body)
+	require.True(t, scanner.Scan())
+	require.Contains(t, scanner.Text(), "events_ready")
+	close(release)
+	require.Eventually(t, func() bool {
+		status := restartGet(t, base+"/api/v1/sync/status")
+		return strings.Contains(status, `"startup_pending":true`) && strings.Contains(status, `"aborted":true`)
+	}, 30*time.Second, 100*time.Millisecond)
+	found := false
+	for scanner.Scan() {
+		if strings.Contains(scanner.Text(), `"scope":"sessions"`) {
+			found = true
+			break
+		}
 	}
+	require.True(t, found, "failed worker should emit an event: %v", scanner.Err())
 }
 
 func TestServeFirstStartDoesNotLaunchPostListenWorker(t *testing.T) {

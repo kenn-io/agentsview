@@ -285,13 +285,9 @@
     try {
       await sessions.renameSession(session.id, name);
     } catch (error) {
-      failRename(error);
+      renameError = error instanceof Error ? error.message : String(error);
+      renaming = true;
     }
-  }
-
-  function failRename(error: unknown) {
-    renameError = error instanceof Error ? error.message : String(error);
-    renaming = true;
   }
 
   async function handleDelete() {
@@ -482,7 +478,7 @@
           }
         }}
       />
-      {#if renameError}<span class="rename-error" role="alert" title={renameError}>{renameError}</span>{/if}
+      {#if renameError}<span class="rename-error" role="alert">{renameError}</span>{/if}
     {:else}
       <a
         class="session-info-link"

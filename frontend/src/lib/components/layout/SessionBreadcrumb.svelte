@@ -159,19 +159,14 @@
   async function submitRename() {
     if (!renaming || !session) return;
     renaming = false;
-    if (renameSessionId !== session.id) return;
     const name = renameValue.trim() || null, id = session.id;
     try {
       await sessions.renameSession(id, name);
     } catch (error) {
-      failRename(id, error);
+      if (id !== session?.id) return;
+      renameError = error instanceof Error ? error.message : String(error);
+      renaming = true;
     }
-  }
-
-  function failRename(id: string, error: unknown) {
-    if (id !== session?.id) return;
-    renameError = error instanceof Error ? error.message : String(error);
-    renaming = true;
   }
 
   function cancelRename() {

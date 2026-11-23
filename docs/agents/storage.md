@@ -39,8 +39,8 @@ Replay admission keeps its immediate transactions, rollback journal, and EXTRA
 synchronous setting.
 
 The startup worker snapshots freshness for digest-capable providers while it
-holds the archive write lock. Ordinary restarts serve saved sessions while the
-worker runs. Later passes query live state.
+holds the archive write lock, before the daemon opens the archive; later passes
+query live state.
 
 A parser upgrade normally requires a full resync. A parser change that needs a
 full resync must build a fresh database, sync source files, copy orphaned

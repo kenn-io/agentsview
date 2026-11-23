@@ -455,6 +455,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 
 		if !skipInitialSync && !startupRebuild {
 			if workerSyncDone || workerAfterListen {
+				// The worker already ran the full startup pass out of process.
 				// Close the worker-to-watcher event gap with a bounded streaming
 				// reconciliation over the currently available watch roots (warm:
 				// the worker persisted skip state into the archive, which the
@@ -466,7 +467,8 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 				//
 				// The reconciliation runs after the HTTP server is listening
 				// and the startup banner is printed: it can take a while on a
-				// large archive. The watcher keeps collecting events and
+				// large archive, and the archive the worker just synced is
+				// fully servable. The watcher keeps collecting events and
 				// startup maintenance keeps waiting until
 				// RecordStartupReconciled fires.
 				completeWorkerStartup = func() {
@@ -485,7 +487,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 							return
 						}
 						workerStartupResult, _ = startupWorkerOutcome(result, err)
-						if emitter != nil && workerResultHasSessionChanges(workerStartupResult) {
+						if emitter != nil {
 							emitter.Emit("sessions")
 						}
 					}
