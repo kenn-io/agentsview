@@ -385,7 +385,7 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 			Content jsontext.Value `json:"content"`
 		}
 		if json.Unmarshal([]byte(input), &payload) != nil {
-			return nil, nil
+			return nil, ctx.Err()
 		}
 		var content string
 		_ = json.Unmarshal(payload.Content, &content)
@@ -409,7 +409,7 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 		WorkingDirectory string         `json:"working_directory"`
 	}
 	if json.Unmarshal([]byte(input), &payload) != nil {
-		return nil, nil
+		return nil, ctx.Err()
 	}
 	dir := payload.Workdir
 	if dir == "" {
@@ -450,7 +450,7 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 func codeModePRLinks(ctx context.Context, input, cwd, remote string) ([]PRLink, error) {
 	ast, err := js.Parse(parse.NewInputString(input), js.Options{})
 	if err != nil {
-		return nil, nil
+		return nil, ctx.Err()
 	}
 	visitor := &codeModeVisitor{ctx: ctx, cwd: cwd, remote: remote}
 	js.Walk(visitor, ast)

@@ -63,7 +63,7 @@ func CommandPRLinks(ctx context.Context, command, remote string, allowBare bool)
 	}
 	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
 	if err != nil {
-		return nil, nil
+		return nil, ctx.Err()
 	}
 	type segment struct {
 		stmt   *syntax.Stmt
