@@ -419,7 +419,7 @@ func clearUsageOnlyTextTx(
 	); err != nil {
 		return fmt.Errorf("clearing usage-only titles for %s: %w", sessionID, err)
 	}
-	if err := retainStructuredAndToolPRLinksTx(tx, sessionID); err != nil {
+	if _, err := tx.Exec(`UPDATE sessions SET pr_links=structured_pr_links WHERE id=?`, sessionID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(
@@ -437,17 +437,6 @@ func clearUsageOnlyTextTx(
 	}
 
 	return clearUsageOnlyConversationTx(tx, sessionID)
-}
-
-func retainStructuredAndToolPRLinksTx(tx transactionQueries, id string) error {
-	var stored, structured, tools string
-	if err := tx.QueryRow(`SELECT pr_links, structured_pr_links, tool_pr_links FROM sessions WHERE id=?`, id).Scan(&stored, &structured, &tools); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil
-		}
-		return err
-	}
-	return writeSessionPromptPRLinksTx(tx, id, stored, parser.CombinePRLinks(DecodePRLinks(structured), DecodePRLinks(tools)))
 }
 
 // settleUsageOnlySessionTx brings an existing session row that predates the
@@ -751,7 +740,7 @@ func compactCopiedSessionsForUsageTx(
 		return fmt.Errorf("listing copied sessions: %w", err)
 	}
 	for _, id := range ids {
-		if err := retainStructuredAndToolPRLinksTx(contextTransaction{ctx: ctx, tx: tx}, id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE sessions SET pr_links=structured_pr_links WHERE id=?`, id); err != nil {
 			return err
 		}
 		if err := clearUsageOnlyConversationTx(contextTransaction{ctx: ctx, tx: tx}, id); err != nil {

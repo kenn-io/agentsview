@@ -62,9 +62,12 @@ func (e *Engine) compareStoredSession(
 	if err != nil {
 		return nil, err
 	}
-	toolLinks, err := db.ToolCallPRLinks(ctx, msgs, prepared.Cwd, remote)
-	if err != nil {
-		return nil, err
+	var toolLinks []db.PRLink
+	if !e.db.ArchiveContent().OmitsToolContent() {
+		toolLinks, err = db.ToolCallPRLinks(ctx, msgs, prepared.Cwd, remote)
+		if err != nil {
+			return nil, err
+		}
 	}
 	prepared.PRLinks = parser.CombinePRLinks(prepared.PRLinks, toolLinks, db.PromptPRLinks(msgs))
 	diffs := compareSessionFields(stored, prepared)

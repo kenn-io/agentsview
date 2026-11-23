@@ -12,7 +12,7 @@ import (
 // context changed.
 func commandPRLinks(ctx context.Context, command, cwd, remote string) ([]PRLink, bool, error) {
 	links, s, err := CommandPRLinksWithContext(ctx, command, cwd, remote, PRShellContext{})
-	return links, s.CheckoutUncertain || s.HostUncertain || s.RepoUncertain, err
+	return links, s.CheckoutUncertain || s.HostUncertain, err
 }
 
 func TestCommandPRLinksCanceled(t *testing.T) {
@@ -66,11 +66,11 @@ EOF`, "", remote, "", false},
 		{`export GH_HOST=example.com`, "", remote, "", true},
 		{`echo GH_REPO`, "", remote, "", false},
 		{`GH_REPO=other/repo gh pr view 42`, "", remote, "https://github.com/other/repo/pull/42", false},
-		{`export GH_REPO=example/other; gh pr view 42`, "", remote, "https://github.com/example/other/pull/42", true},
-		{`export GH_REPO=example/other && gh pr view 42`, "", remote, "https://github.com/example/other/pull/42", true},
-		{`GH_REPO=example/other; export GH_REPO; gh pr view 42`, "", remote, "https://github.com/example/other/pull/42", true},
+		{`export GH_REPO=example/other; gh pr view 42`, "", remote, "", true},
+		{`export GH_REPO=example/other && gh pr view 42`, "", remote, "", true},
+		{`GH_REPO=example/other; export GH_REPO; gh pr view 42`, "", remote, "", true},
 		{`GH_REPO=example/other; gh pr view 42`, "", remote, "", true},
-		{`export GH_REPO=example/other; GH_REPO=example/fork; gh pr view 42`, "", remote, "https://github.com/example/fork/pull/42", true},
+		{`export GH_REPO=example/other; GH_REPO=example/fork; gh pr view 42`, "", remote, "", true},
 		{`export GH_REPO="$REPO"; gh pr view 42`, "", remote, "", true},
 		{`export GH_REPO=example/other; unset GH_REPO; gh pr view 42`, "", remote, "", true},
 		{`(export GH_REPO=example/other); gh pr view 42`, "", remote, "https://github.com/example/repo/pull/42", false},
@@ -79,10 +79,6 @@ EOF`, "", remote, "", false},
 		{`GH_REPO="$REPO" gh pr view 42 -R example/repo`, "", remote, "https://github.com/example/repo/pull/42", false},
 		{`GH_HOST=host.example GH_REPO=other/repo gh pr view 42`, "", remote, "", false},
 		{`GH_REPO=host.example/other/repo gh pr view 42`, "", remote, "https://host.example/other/repo/pull/42", false},
-		{`f() { gh pr view 41 -R example/repo; }; gh pr view 42`, "", remote, "https://github.com/example/repo/pull/42", false},
-		{`f() { cd /other; }; gh pr view 42`, "", remote, "https://github.com/example/repo/pull/42", false},
-		{`f() { export GH_HOST=git.example; }; f; gh pr view 42 -R example/repo`, "", remote, "", true},
-		{`f() { export GH_HOST=git.example; }; f; gh pr view 42 -R git.example/example/repo`, "", remote, "https://git.example/example/repo/pull/42", true},
 		{`cd /other; gh pr view 42 -R example/repo`, "", remote, "https://github.com/example/repo/pull/42", true},
 		{`gh pr comment --body 41 42 -R example/repo`, "", remote, "https://github.com/example/repo/pull/42", false},
 		{`gh pr view --json title 42`, "", remote, "https://github.com/example/repo/pull/42", false},
@@ -100,8 +96,6 @@ EOF`, "", remote, "", false},
 		{`cat <(cd /other && pwd); gh pr view 42`, "", remote, "https://github.com/example/repo/pull/42", false},
 		{`/bin/bash -lc 'gh pr view 42 -R example/repo'`, "", remote, "https://github.com/example/repo/pull/42", false},
 		{`bash -c 'cd /other'; gh pr view 42`, "", remote, "https://github.com/example/repo/pull/42", false},
-		{`bash -c 'git remote set-url origin https://github.com/example/fork.git'; gh pr view 42`, "", remote, "", true},
-		{`bash -c 'gh repo set-default example/fork'; gh pr view 42`, "", remote, "", true},
 		{`bash -c 'export GH_HOST=git.example'; gh pr view 42`, "", remote, "https://github.com/example/repo/pull/42", false},
 		{`GH_REPO=other/repo bash -c 'gh pr view 42'`, "", remote, "https://github.com/other/repo/pull/42", false},
 		{`GH_REPO="$REPO" bash -c 'gh pr view 42'`, "", remote, "", false},

@@ -254,10 +254,8 @@ func writeSessionPromptPRLinksTx(tx transactionQueries, id, stored string, links
 const promptPRLinkCandidateSQL = `role='user' AND (COALESCE(` + sqliteDialogueExprBare + `, content) LIKE '%http://%' OR COALESCE(` + sqliteDialogueExprBare + `, content) LIKE '%https://%')`
 
 func refreshSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id string) error {
-	var stored, structured, storedTools, cwd, remote, previousRepo string
-	var missingInputs, missingShellInputs, missingRepoInputs bool
-	var previousState sql.NullInt64
-	if err := tx.QueryRow(`SELECT pr_links, structured_pr_links, tool_pr_links, COALESCE(cwd,''), `+prLinkRemoteSQL+`, pr_shell_tainted, pr_shell_repo, NOT EXISTS(SELECT 1 FROM tool_calls WHERE session_id=? AND category IN ('Bash','Task')) OR EXISTS(SELECT 1 FROM tool_calls WHERE session_id=? AND category IN ('Bash','Task') AND input_json IS NULL), EXISTS(SELECT 1 FROM tool_calls WHERE session_id=? AND category='Bash' AND input_json IS NULL AND tool_name NOT IN ('exec_command','shell_command','shell','exec')), EXISTS(SELECT 1 FROM tool_calls WHERE session_id=? AND category='Bash' AND input_json IS NULL) FROM sessions WHERE id=?`, id, id, id, id, id, id).Scan(&stored, &structured, &storedTools, &cwd, &remote, &previousState, &previousRepo, &missingInputs, &missingShellInputs, &missingRepoInputs); err != nil {
+	var stored, structured, cwd, remote string
+	if err := tx.QueryRow(`SELECT pr_links, structured_pr_links, COALESCE(cwd,''), `+prLinkRemoteSQL+` FROM sessions WHERE id=?`, id, id).Scan(&stored, &structured, &cwd, &remote); err != nil {
 		return err
 	}
 	rows, err := tx.Query(`SELECT `+selectMessageCols+` FROM messages WHERE session_id=? AND `+promptPRLinkCandidateSQL+` ORDER BY ordinal`, id)
@@ -276,27 +274,7 @@ func refreshSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, i
 	if err != nil {
 		return err
 	}
-	if missingShellInputs {
-		if previousState.Valid {
-			tainted.CheckoutUncertain = tainted.CheckoutUncertain || previousState.Int64&1 != 0
-			tainted.HostUncertain = tainted.HostUncertain || previousState.Int64&2 != 0
-			if previousState.Int64&8 != 0 && !tainted.RepoSet {
-				tainted.Repo, tainted.RepoSet = previousRepo, true
-			}
-		} else {
-			tainted = parser.UncertainPRShell()
-		}
-	}
-	if missingRepoInputs {
-		tainted.RepoUncertain = tainted.RepoUncertain || !previousState.Valid || previousState.Int64&4 != 0
-	}
 	if err := writePRShellTaintTx(tx, id, tainted); err != nil {
-		return err
-	}
-	if missingInputs {
-		tools = parser.CombinePRLinks(DecodePRLinks(storedTools), tools)
-	}
-	if err := writeToolPRLinksTx(tx, id, tools); err != nil {
 		return err
 	}
 	links := parser.CombinePRLinks(DecodePRLinks(structured), PromptPRLinks(messages), tools)
@@ -323,12 +301,12 @@ func appendSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id
 	}
 	var tools []PRLink
 	if hasTools {
-		var cwd, remote, repo, storedTools string
+		var cwd, remote string
 		var state sql.NullInt64
-		if err := tx.QueryRow(`SELECT COALESCE(cwd,''), `+prLinkRemoteSQL+`, pr_shell_tainted, pr_shell_repo, tool_pr_links FROM sessions WHERE id=?`, id, id).Scan(&cwd, &remote, &state, &repo, &storedTools); err != nil {
+		if err := tx.QueryRow(`SELECT COALESCE(cwd,''), `+prLinkRemoteSQL+`, pr_shell_tainted FROM sessions WHERE id=?`, id, id).Scan(&cwd, &remote, &state); err != nil {
 			return err
 		}
-		tainted := parser.PRShellContext{CheckoutUncertain: state.Int64&1 != 0, HostUncertain: state.Int64&2 != 0, RepoUncertain: state.Int64&4 != 0, Repo: repo, RepoSet: state.Int64&8 != 0}
+		tainted := parser.PRShellContext{CheckoutUncertain: state.Int64&1 != 0, HostUncertain: state.Int64&2 != 0}
 		if !state.Valid {
 			_, tainted, err = storedToolCallPRLinksTx(ctx, tx, id, cwd, remote, &firstOrdinal)
 			if err != nil {
@@ -342,9 +320,6 @@ func appendSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id
 		if err := writePRShellTaintTx(tx, id, tainted); err != nil {
 			return err
 		}
-		if err := writeToolPRLinksTx(tx, id, parser.CombinePRLinks(DecodePRLinks(storedTools), tools)); err != nil {
-			return err
-		}
 	}
 	derived := parser.CombinePRLinks(prompts, tools)
 	if len(derived) == 0 {
@@ -355,12 +330,6 @@ func appendSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id
 		return err
 	}
 	return writeSessionPromptPRLinksTx(tx, id, stored, parser.CombinePRLinks(DecodePRLinks(stored), derived))
-}
-
-func writeToolPRLinksTx(tx transactionQueries, id string, links []PRLink) error {
-	encoded := EncodePRLinks(links)
-	_, err := tx.Exec(`UPDATE sessions SET tool_pr_links=? WHERE id=? AND tool_pr_links IS NOT ?`, encoded, id, encoded)
-	return err
 }
 
 // prLinkRemoteSQL prefers the transcript's remote to a single checkout remote.
@@ -477,17 +446,15 @@ func codeModePRLinks(ctx context.Context, input, cwd, remote string, state parse
 	if err != nil {
 		return nil, state, warnSkippedCodeMode()
 	}
-	visitor := &codeModeVisitor{ctx: ctx, cwd: cwd, remote: remote, repoUncertain: state.RepoUncertain}
+	visitor := &codeModeVisitor{ctx: ctx, cwd: cwd, remote: remote}
 	js.Walk(visitor, ast)
-	state.RepoUncertain = visitor.repoUncertain
 	return parser.CombinePRLinks(visitor.links...), state, ctx.Err()
 }
 
 type codeModeVisitor struct {
-	ctx           context.Context
-	cwd, remote   string
-	links         [][]PRLink
-	repoUncertain bool
+	ctx         context.Context
+	cwd, remote string
+	links       [][]PRLink
 }
 
 func (v *codeModeVisitor) Enter(node js.INode) js.IVisitor {
@@ -498,19 +465,6 @@ func (v *codeModeVisitor) Enter(node js.INode) js.IVisitor {
 	call, ok := node.(*js.CallExpr)
 	if !ok {
 		return v
-	}
-	if dot, ok := call.X.(*js.DotExpr); ok && !dot.Optional && dot.Y.String() == "then" && !call.Optional {
-		for _, arg := range call.Args.List {
-			if arg.Rest {
-				continue
-			}
-			switch callback := arg.Value.(type) {
-			case *js.ArrowFunc:
-				js.Walk(v, &callback.Body)
-			case *js.FuncDecl:
-				js.Walk(v, &callback.Body)
-			}
-		}
 	}
 	if len(call.Args.List) != 1 || call.Args.List[0].Rest {
 		return v
@@ -551,9 +505,8 @@ func (v *codeModeVisitor) Enter(node js.INode) js.IVisitor {
 	if !knownDir || dir != "" && !parser.SamePRWorkingDirectory(v.cwd, dir) {
 		remote = ""
 	}
-	if links, state, err := parser.CommandPRLinksWithContext(v.ctx, command, v.cwd, remote, parser.PRShellContext{RepoUncertain: v.repoUncertain}); err == nil {
+	if links, _, err := parser.CommandPRLinksWithContext(v.ctx, command, v.cwd, remote, parser.PRShellContext{}); err == nil {
 		v.links = append(v.links, links)
-		v.repoUncertain = state.RepoUncertain
 	}
 	return v
 }
@@ -614,9 +567,13 @@ func toolCallPRLinksWithShellState(ctx context.Context, messages []Message, cwd,
 			if err := ctx.Err(); err != nil {
 				return nil, tainted, err
 			}
+			if call.Category == "Bash" && call.InputJSON == "" && !independentShell(call.ToolName) {
+				tainted = parser.UncertainPRShell()
+				continue
+			}
 			state := tainted
 			if independentShell(call.ToolName) {
-				state = parser.PRShellContext{RepoUncertain: tainted.RepoUncertain}
+				state = parser.PRShellContext{}
 			}
 			found, changed, err := callPRLinks(ctx, call.Category, call.ToolName, call.InputJSON, cwd, remote, state)
 			if err != nil {
@@ -625,16 +582,13 @@ func toolCallPRLinksWithShellState(ctx context.Context, messages []Message, cwd,
 			lists = append(lists, found)
 			if !independentShell(call.ToolName) {
 				tainted = changed
-			} else {
-				tainted.RepoUncertain = changed.RepoUncertain
 			}
 		}
 	}
 	return parser.CombinePRLinks(lists...), tainted, nil
 }
 
-// pr_shell_tainted stores checkout, host, and repository uncertainty, plus
-// whether GH_REPO is exported. pr_shell_repo stores its last literal value.
+// pr_shell_tainted stores checkout and host uncertainty.
 func writePRShellTaintTx(tx transactionQueries, id string, tainted parser.PRShellContext) error {
 	state := 0
 	if tainted.CheckoutUncertain {
@@ -643,13 +597,7 @@ func writePRShellTaintTx(tx transactionQueries, id string, tainted parser.PRShel
 	if tainted.HostUncertain {
 		state |= 2
 	}
-	if tainted.RepoUncertain {
-		state |= 4
-	}
-	if tainted.RepoSet {
-		state |= 8
-	}
-	_, err := tx.Exec(`UPDATE sessions SET pr_shell_tainted=?, pr_shell_repo=? WHERE id=? AND (pr_shell_tainted IS NOT ? OR pr_shell_repo IS NOT ?)`, state, tainted.Repo, id, state, tainted.Repo)
+	_, err := tx.Exec(`UPDATE sessions SET pr_shell_tainted=? WHERE id=? AND pr_shell_tainted IS NOT ?`, state, id, state)
 	return err
 }
 

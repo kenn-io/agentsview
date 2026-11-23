@@ -67,19 +67,16 @@ func SamePRWorkingDirectory(cwd, dir string) bool {
 type PRShellContext struct {
 	CheckoutUncertain bool
 	HostUncertain     bool
-	RepoUncertain     bool
-	Repo              string
-	RepoSet           bool
 }
 
 // UncertainPRShell is the state after input that cannot be read.
 func UncertainPRShell() PRShellContext {
-	return PRShellContext{CheckoutUncertain: true, HostUncertain: true, RepoUncertain: true, RepoSet: true}
+	return PRShellContext{CheckoutUncertain: true, HostUncertain: true}
 }
 
 // CommandPRLinksWithContext carries shared shell state between tool calls.
 func CommandPRLinksWithContext(ctx context.Context, command, cwd, remote string, state PRShellContext) ([]PRLink, PRShellContext, error) {
-	return commandPRLinksWithContext(ctx, command, cwd, remote, state, state.Repo, state.RepoSet)
+	return commandPRLinksWithContext(ctx, command, cwd, remote, state, "", false)
 }
 
 func commandPRLinksWithContext(ctx context.Context, command, cwd, remote string, state PRShellContext, repo string, repoSet bool) ([]PRLink, PRShellContext, error) {
@@ -87,8 +84,8 @@ func commandPRLinksWithContext(ctx context.Context, command, cwd, remote string,
 	if err != nil {
 		return nil, UncertainPRShell(), nil //nolint:nilerr // Malformed optional shell input leaves the shell context unknown.
 	}
-	w := &prShellWalker{cwd: cwd, remote: remote, state: state, repo: repo, repoSet: repoSet, stdin: map[*syntax.CallExpr]string{}}
-	syntax.Walk(file, func(node syntax.Node) bool { return w.visit(ctx, node) })
+	w := &prShellWalker{cwd: cwd, remote: remote, state: state, stdin: map[*syntax.CallExpr]string{}}
+	syntax.Walk(file, func(node syntax.Node) bool { return w.visit(ctx, node, repo, repoSet) })
 	if w.err != nil {
 		return nil, PRShellContext{}, w.err
 	}
@@ -100,7 +97,6 @@ func commandPRLinksWithContext(ctx context.Context, command, cwd, remote string,
 		}
 		lists = append(lists, links)
 	}
-	w.state.Repo, w.state.RepoSet = w.repo, w.repoSet
 	return CombinePRLinks(lists...), w.state, ctx.Err()
 }
 
@@ -114,56 +110,28 @@ func programName(word string) string {
 
 type prShellScope struct {
 	restore, checkout, host bool
-	conditional             bool
-	repo                    string
-	repoSet                 bool
 }
 
-// prShellWalker follows a shell script in execution order.
 type prShellWalker struct {
-	cwd              string
-	remote           string
-	err              error
-	state            PRShellContext
-	calls            []shellCall
-	scopes           []prShellScope
-	stdin            map[*syntax.CallExpr]string
-	repo             string
-	repoSet          bool
-	functions        map[string]bool
-	conditional      bool
-	conditionalStmts map[*syntax.Stmt]bool
+	cwd, remote string
+	err         error
+	state       PRShellContext
+	calls       []shellCall
+	scopes      []prShellScope
+	stdin       map[*syntax.CallExpr]string
 }
 
-func (w *prShellWalker) visit(ctx context.Context, node syntax.Node) bool {
+func (w *prShellWalker) visit(ctx context.Context, node syntax.Node, repo string, repoSet bool) bool {
 	if node == nil {
 		scope := w.scopes[len(w.scopes)-1]
 		w.scopes = w.scopes[:len(w.scopes)-1]
 		w.leave(scope)
 		return true
 	}
-	if fn, ok := node.(*syntax.FuncDecl); ok {
-		if w.functions == nil {
-			w.functions = make(map[string]bool)
-		}
-		w.functions[fn.Name.Value] = true
-		return false
-	}
-	scope := prShellScope{checkout: w.state.CheckoutUncertain, host: w.state.HostUncertain, repo: w.repo, repoSet: w.repoSet, conditional: w.conditional}
-	switch n := node.(type) {
+	scope := prShellScope{checkout: w.state.CheckoutUncertain, host: w.state.HostUncertain}
+	switch node.(type) {
 	case *syntax.Subshell, *syntax.CmdSubst, *syntax.ProcSubst:
 		scope.restore = true
-	case *syntax.IfClause, *syntax.CaseClause, *syntax.WhileClause, *syntax.ForClause:
-		w.conditional = true
-	case *syntax.Stmt:
-		w.conditional = w.conditional || w.conditionalStmts[n]
-	case *syntax.BinaryCmd:
-		if n.Op == syntax.AndStmt || n.Op == syntax.OrStmt {
-			if w.conditionalStmts == nil {
-				w.conditionalStmts = make(map[*syntax.Stmt]bool)
-			}
-			w.conditionalStmts[n.Y] = true
-		}
 	}
 	w.scopes = append(w.scopes, scope)
 	switch n := node.(type) {
@@ -176,21 +144,19 @@ func (w *prShellWalker) visit(ctx context.Context, node syntax.Node) bool {
 	case *syntax.DeclClause:
 		for _, assignment := range n.Args {
 			if assignment.Name != nil {
-				w.persistEnv(assignment, n.Variant.Value == "export")
+				w.persistEnv(assignment)
 			}
 		}
 	case *syntax.CallExpr:
-		w.callExpr(ctx, n)
+		w.callExpr(ctx, n, repo, repoSet)
 	}
 	return true
 }
 
 // leave ends a scope, restoring the shell state a subshell cannot change.
 func (w *prShellWalker) leave(scope prShellScope) {
-	w.conditional = scope.conditional
 	if scope.restore {
 		w.state.CheckoutUncertain, w.state.HostUncertain = scope.checkout, scope.host
-		w.repo, w.repoSet = scope.repo, scope.repoSet
 	}
 }
 
@@ -211,32 +177,17 @@ func (w *prShellWalker) recordHeredoc(from, to *syntax.Stmt) {
 }
 
 // persistEnv records an environment change that outlasts one command.
-func (w *prShellWalker) persistEnv(assignment *syntax.Assign, exported bool) {
+func (w *prShellWalker) persistEnv(assignment *syntax.Assign) {
 	switch assignment.Name.Value {
 	case "GH_REPO":
 		w.state.CheckoutUncertain = true
-		if w.conditional {
-			w.repo, w.repoSet = "", true
-			return
-		}
-		if assignment.Value != nil {
-			var literal bool
-			w.repo, literal = shellLiteral(assignment.Value.Parts)
-			if !literal {
-				w.repo = ""
-			}
-		}
-		w.repoSet = w.repoSet || exported
 	case "GH_HOST":
 		w.state.HostUncertain = true
 	}
 }
 
-func (w *prShellWalker) callExpr(ctx context.Context, n *syntax.CallExpr) {
-	call := shellCall{HostUncertain: w.state.HostUncertain, Stdin: w.stdin[n], Repo: w.repo, RepoSet: w.repoSet, Tainted: w.repoSet}
-	if !call.RepoSet {
-		call.Repo = ""
-	}
+func (w *prShellWalker) callExpr(ctx context.Context, n *syntax.CallExpr, repo string, repoSet bool) {
+	call := shellCall{HostUncertain: w.state.HostUncertain, Stdin: w.stdin[n], Repo: repo, RepoSet: repoSet}
 	for _, assignment := range n.Assigns {
 		if assignment.Name == nil {
 			continue
@@ -248,7 +199,7 @@ func (w *prShellWalker) callExpr(ctx context.Context, n *syntax.CallExpr) {
 		}
 		call.setEnv(assignment.Name.Value, value, literal)
 		if len(n.Args) == 0 {
-			w.persistEnv(assignment, false)
+			w.persistEnv(assignment)
 		}
 	}
 	for _, word := range n.Args {
@@ -258,15 +209,13 @@ func (w *prShellWalker) callExpr(ctx context.Context, n *syntax.CallExpr) {
 	}
 	call.unwrapEnv()
 	w.applyBuiltin(call)
-	call.Tainted = call.Tainted || w.state.CheckoutUncertain || w.state.RepoUncertain
+	call.Tainted = call.Tainted || w.state.CheckoutUncertain
 	if script, ok := call.shellScript(); ok && w.err == nil {
 		remote := w.remote
 		if call.Tainted {
 			remote = ""
 		}
-		var nested PRShellContext
-		call.Nested, nested, w.err = commandPRLinksWithContext(ctx, script, w.cwd, remote, PRShellContext{HostUncertain: call.HostUncertain, RepoUncertain: w.state.RepoUncertain}, call.Repo, call.RepoSet)
-		w.state.RepoUncertain = w.state.RepoUncertain || nested.RepoUncertain
+		call.Nested, _, w.err = commandPRLinksWithContext(ctx, script, w.cwd, remote, PRShellContext{HostUncertain: call.HostUncertain}, call.Repo, call.RepoSet)
 	}
 	w.calls = append(w.calls, call)
 }
@@ -276,29 +225,11 @@ func (w *prShellWalker) applyBuiltin(call shellCall) {
 	if len(call.Words) == 0 || !call.Literal[0] {
 		return
 	}
-	if w.functions[call.Words[0]] {
-		w.state.CheckoutUncertain, w.state.HostUncertain = true, true
-		return
-	}
 	switch programName(call.Words[0]) {
 	case "cd":
 		w.state.CheckoutUncertain = w.state.CheckoutUncertain || len(call.Words) != 2 || !call.Literal[1] || !SamePRWorkingDirectory(w.cwd, call.Words[1])
 	case "pushd", "popd":
 		w.state.CheckoutUncertain = true
-	case "unset":
-		if slices.Contains(call.Words[1:], "GH_REPO") {
-			w.repo, w.repoSet = "", w.conditional
-		}
-	case "git":
-		for i, word := range call.Words {
-			if word == "remote" && i+1 < len(call.Words) && slices.Contains([]string{"set-url", "add", "remove", "rm", "rename"}, call.Words[i+1]) {
-				w.state.RepoUncertain = true
-			}
-		}
-	case "gh":
-		if len(call.Words) > 2 && call.Words[1] == "repo" && call.Words[2] == "set-default" && !slices.Contains(call.Words[3:], "--view") && !slices.Contains(call.Words[3:], "-v") {
-			w.state.RepoUncertain = true
-		}
 	}
 }
 

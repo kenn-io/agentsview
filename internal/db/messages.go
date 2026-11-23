@@ -1916,7 +1916,7 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 		}
 	}
 	if transcriptChanged {
-		if err := bumpIncrementalTranscriptRevisionTx(ctx, tx, sessionID, msgs, update, db.usageOnlyStorage(), db.ArchiveContent().OmitsToolContent()); err != nil {
+		if err := bumpIncrementalTranscriptRevisionTx(ctx, tx, sessionID, msgs, update, db.usageOnlyStorage()); err != nil {
 			return false, err
 		}
 	}
@@ -2188,11 +2188,6 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 		}
 	}
 	if !db.usageOnlyStorage() {
-		if !db.ArchiveContent().OmitsToolContent() {
-			if err := writeToolPRLinksTx(tx, sessionID, nil); err != nil {
-				return err
-			}
-		}
 		if err := refreshSessionPromptPRLinksTx(ctx, tx, sessionID); err != nil {
 			return err
 		}
@@ -2657,11 +2652,6 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 		}
 	}
 	if !db.usageOnlyStorage() {
-		if !db.ArchiveContent().OmitsToolContent() {
-			if err := writeToolPRLinksTx(tx, sessionID, nil); err != nil {
-				return err
-			}
-		}
 		if err := refreshSessionPromptPRLinksTx(ctx, tx, sessionID); err != nil {
 			return err
 		}
