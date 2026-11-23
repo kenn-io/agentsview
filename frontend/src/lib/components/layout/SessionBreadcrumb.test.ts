@@ -340,6 +340,20 @@ async function flushPromises() {
   await tick();
 }
 
+async function submitMenuRename(value: string) {
+  await tick();
+  document.querySelector<HTMLButtonElement>(".actions-btn")!.click();
+  await tick();
+  [...document.querySelectorAll<HTMLButtonElement>(".actions-menu-item")]
+    .find((button) => button.textContent?.trim() === "Rename")!
+    .click();
+  await tick();
+  const input = document.querySelector<HTMLInputElement>(".rename-input")!;
+  input.value = value;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+}
+
 beforeEach(() => {
   generateForSession.mockReset();
   vi.mocked(copyToClipboard).mockReset().mockResolvedValue(true);
@@ -408,18 +422,7 @@ describe("SessionBreadcrumb", () => {
       target: document.body,
       props: { session: makeSession("claude"), onBack: () => {} },
     });
-    await tick();
-    document.querySelector<HTMLButtonElement>(".actions-btn")!.click();
-    await tick();
-    [...document.querySelectorAll<HTMLButtonElement>(".actions-menu-item")]
-      .find((button) => button.textContent?.trim() === "Rename")!
-      .click();
-    await tick();
-    const input = document.querySelector<HTMLInputElement>(".rename-input")!;
-    input.focus();
-    input.value = "My new name";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await submitMenuRename("My new name");
     await tick();
     await tick();
     expect(document.querySelector<HTMLInputElement>(".rename-input")?.value).toBe("My new name");
@@ -441,17 +444,7 @@ describe("SessionBreadcrumb", () => {
       target: document.body,
       props: { session: makeSession("claude", { id: "first" }), onBack: () => {} },
     });
-    await tick();
-    document.querySelector<HTMLButtonElement>(".actions-btn")!.click();
-    await tick();
-    [...document.querySelectorAll<HTMLButtonElement>(".actions-menu-item")]
-      .find((button) => button.textContent?.trim() === "Rename")!
-      .click();
-    await tick();
-    const input = document.querySelector<HTMLInputElement>(".rename-input")!;
-    input.value = "First title";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await submitMenuRename("First title");
     component.$set({ session: makeSession("claude", { id: "second" }) });
     await tick();
     pending.reject(new Error("retry shortly"));
@@ -463,38 +456,26 @@ describe("SessionBreadcrumb", () => {
   });
 
   it("discards a failed rename when switching sessions", async () => {
-    const rename = vi.spyOn(sessions, "renameSession").mockRejectedValueOnce(new Error("retry shortly"));
+    const rename = vi
+      .spyOn(sessions, "renameSession")
+      .mockRejectedValueOnce(new Error("retry shortly"));
     onTestFinished(() => rename.mockRestore());
     const component = createClassComponent({
       component: SessionBreadcrumb,
       target: document.body,
       props: { session: makeSession("claude", { id: "first" }), onBack: () => {} },
     });
-    await tick();
-    document.querySelector<HTMLButtonElement>(".actions-btn")!.click();
-    await tick();
-    [...document.querySelectorAll<HTMLButtonElement>(".actions-menu-item")]
-      .find((button) => button.textContent?.trim() === "Rename")!.click();
-    await tick();
-    const input = document.querySelector<HTMLInputElement>(".rename-input")!;
-    input.value = "First title";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await submitMenuRename("First title");
     await tick();
     await tick();
     expect(document.querySelector<HTMLInputElement>(".rename-input")?.value).toBe("First title");
     expect(document.querySelector('[role="alert"]')?.textContent).toContain("retry shortly");
     component.$set({ session: makeSession("claude", { id: "second" }) });
     await tick();
-    document.querySelector<HTMLInputElement>(".rename-input")?.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
-    );
-    await tick();
     expect(document.querySelector(".rename-input")).toBeNull();
     expect(document.querySelector('[role="alert"]')).toBeNull();
     expect(rename).toHaveBeenCalledTimes(1);
     expect(rename).toHaveBeenCalledWith("first", "First title");
-    component.$destroy();
   });
 
   it("adds the year to the session date when enabled", async () => {

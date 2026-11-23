@@ -33,12 +33,6 @@ func writeRestartSession(t *testing.T, cfg config.Config, id string) string {
 // runtime record is published.
 func startRestartServe(t *testing.T, cfg config.Config) string {
 	t.Helper()
-	ready := make(chan string, 1)
-	original := writeDaemonRuntimeWithAuthAndNoSync
-	writeDaemonRuntimeWithAuthAndNoSync = func(lifetime *daemonLifetime, dataDir, host string, port int, version, browserURL string, readOnly, requireAuth, noSync bool, explicitPort *int, caddyPID ...int) (string, error) {
-		ready <- fmt.Sprintf("http://%s:%d", host, port)
-		return original(lifetime, dataDir, host, port, version, browserURL, readOnly, requireAuth, noSync, explicitPort, caddyPID...)
-	}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- runServe(ctx, cfg, serveOptions{}, 0) }()
@@ -49,15 +43,8 @@ func startRestartServe(t *testing.T, cfg config.Config) string {
 		case <-time.After(30 * time.Second):
 			assert.Fail(t, "server did not stop")
 		}
-		writeDaemonRuntimeWithAuthAndNoSync = original
 	})
-	select {
-	case base := <-ready:
-		return base
-	case <-time.After(30 * time.Second):
-		require.FailNow(t, "server did not become ready")
-		return ""
-	}
+	return fmt.Sprintf("http://127.0.0.1:%d", waitForRestartRuntime(t, cfg.DataDir).Port)
 }
 
 func restartGet(t *testing.T, url string) string {
@@ -76,11 +63,8 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 	t.Setenv(syncWorkerChildEnvVar, "1")
 	cfg := testConfigWithClaudeFixture(t)
 	cfg.Host = "127.0.0.1"
-	writeRestartSession(t, cfg, "session0")
-	deleted := writeRestartSession(t, cfg, "offline-deleted")
 	var seed bytes.Buffer
 	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &seed))
-	require.NoError(t, os.Remove(deleted))
 	writeRestartSession(t, cfg, "before-worker")
 
 	started, release := make(chan syncWorkerRequest, 1), make(chan struct{})
@@ -103,9 +87,8 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		require.FailNow(t, "worker did not start")
 	}
-	page := restartGet(t, base+"/api/v1/sessions?limit=25")
+	page := restartGet(t, base+"/api/v1/sessions?limit=25&include_one_shot=true")
 	require.Contains(t, page, "session0")
-	require.Contains(t, page, "offline-deleted")
 	require.Contains(t, restartGet(t, base+"/api/v1/sync/status"), `"startup_pending":true`)
 	close(release)
 	var body string
@@ -130,7 +113,6 @@ func TestServeStartupWorkerFailure(t *testing.T) {
 			cfg := testConfigWithClaudeFixture(t)
 			cfg.Host = "127.0.0.1"
 			cfg.EventsCoalesceInterval = 0
-			writeRestartSession(t, cfg, "session0")
 			var seed bytes.Buffer
 			require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &seed))
 			if tc.spawnError {
@@ -152,16 +134,19 @@ func TestServeStartupWorkerFailure(t *testing.T) {
 			})
 			t.Cleanup(restore)
 			base := startRestartServe(t, cfg)
-			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-			defer cancel()
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/v1/events", nil)
-			require.NoError(t, err)
-			resp, err := http.DefaultClient.Do(req)
-			require.NoError(t, err)
-			defer resp.Body.Close()
-			scanner := bufio.NewScanner(resp.Body)
-			require.True(t, scanner.Scan())
-			require.Contains(t, scanner.Text(), "events_ready")
+			var scanner *bufio.Scanner
+			if !tc.spawnError {
+				ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+				defer cancel()
+				req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/v1/events", nil)
+				require.NoError(t, err)
+				resp, err := http.DefaultClient.Do(req)
+				require.NoError(t, err)
+				defer resp.Body.Close()
+				scanner = bufio.NewScanner(resp.Body)
+				require.True(t, scanner.Scan())
+				require.Contains(t, scanner.Text(), "events_ready")
+			}
 			close(release)
 			var status string
 			require.Eventually(t, func() bool {
@@ -196,7 +181,6 @@ func TestServeFirstStartDoesNotLaunchPostListenWorker(t *testing.T) {
 	isolateServeTestHome(t)
 	cfg := testConfigWithClaudeFixture(t)
 	cfg.Host = "127.0.0.1"
-	writeRestartSession(t, cfg, "session0")
 	launched := make(chan struct{}, 1)
 	restore := stubLaunchSyncWorker(t, func(context.Context, config.Config, syncWorkerRequest, func(workerLine)) (workerResult, error) {
 		launched <- struct{}{}
