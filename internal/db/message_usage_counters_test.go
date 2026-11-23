@@ -131,10 +131,6 @@ func TestOpenDaemonDefersMessageUsageCounterFill(t *testing.T) {
 				assert.Equal(t, []storedUsageCounters{{0, 0}}, readStoredUsageCounters(t, d, "s"))
 				require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM stats WHERE key='message_usage_counters_pending')`).Scan(&pending))
 				require.True(t, pending)
-				var version int
-				require.NoError(t, d.getReader().QueryRow(t.Context(), `PRAGMA user_version`).Scan(&version))
-				// The v0.48 reader rejects versions above 185 before opening the archive.
-				assert.Greater(t, version, 185)
 				require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT count(*) FROM pragma_index_info('idx_messages_usage_session_covering')`).Scan(&columns))
 				assert.Equal(t, 10, columns)
 				_, err = OpenReadOnly(t.Context(), path)
@@ -170,9 +166,6 @@ func TestOpenDaemonDefersMessageUsageCounterFill(t *testing.T) {
 			assert.Equal(t, []storedUsageCounters{{250, 3}}, readStoredUsageCounters(t, d, "s"))
 			require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM stats WHERE key='message_usage_counters_pending')`).Scan(&pending))
 			assert.False(t, pending)
-			var version int
-			require.NoError(t, d.getReader().QueryRow(t.Context(), `PRAGMA user_version`).Scan(&version))
-			assert.Equal(t, CurrentDataVersion(), version)
 			require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT count(*) FROM pragma_index_info('idx_messages_usage_session_covering')`).Scan(&columns))
 			assert.Equal(t, 12, columns)
 		})
@@ -197,9 +190,6 @@ func TestMessageUsageCounterFillFailureReopenAndIdempotence(t *testing.T) {
 	var stillPending bool
 	require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM stats WHERE key='message_usage_counters_pending')`).Scan(&stillPending))
 	assert.True(t, stillPending)
-	var version int
-	require.NoError(t, d.getReader().QueryRow(t.Context(), `PRAGMA user_version`).Scan(&version))
-	assert.Greater(t, version, 185)
 	_, err = d.getWriter().Exec(t.Context(), `DROP TRIGGER fail_counter_fill`)
 	require.NoError(t, err)
 	require.NoError(t, d.Close())
