@@ -306,7 +306,7 @@ func appendSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id
 		if err := tx.QueryRow(`SELECT COALESCE(cwd,''), `+prLinkRemoteSQL+`, pr_shell_tainted FROM sessions WHERE id=?`, id, id).Scan(&cwd, &remote, &state); err != nil {
 			return err
 		}
-		tainted := parser.PRShellContext{CheckoutUncertain: state.Int64&1 != 0, HostUncertain: state.Int64&2 != 0}
+		tainted := parser.PRShellContext{CheckoutUncertain: state.Int64&1 != 0, HostUncertain: state.Int64&2 != 0, RepoUncertain: state.Int64&4 != 0}
 		if !state.Valid {
 			_, tainted, err = storedToolCallPRLinksTx(ctx, tx, id, cwd, remote, &firstOrdinal)
 			if err != nil {
@@ -403,7 +403,7 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 		return nil, state, nil
 	}
 	if len(input) > 256*1024 {
-		return nil, parser.PRShellContext{CheckoutUncertain: true, HostUncertain: true}, nil
+		return nil, parser.UncertainPRShell(), nil
 	}
 	if toolName == "exec" && !jsontext.Value(input).IsValid() {
 		links, _, err := codeModePRLinks(ctx, input, cwd, remote)
@@ -434,11 +434,20 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 	return parser.CommandPRLinksWithContext(ctx, command, cwd, remote, state)
 }
 
+var skippedCodeModeWarning sync.Once
+
+// warnSkippedCodeMode reports once that code-mode input could not be read. It
+// leaves the input out of the message because commands can hold private text.
+func warnSkippedCodeMode() error {
+	skippedCodeModeWarning.Do(func() { log.Print("PR links: skipped code-mode input that could not be parsed") })
+	return nil
+}
+
 // codeModePRLinks reads each exec_command independently.
 func codeModePRLinks(ctx context.Context, input, cwd, remote string) ([]PRLink, bool, error) {
 	ast, err := js.Parse(parse.NewInputString(input), js.Options{})
 	if err != nil {
-		return nil, false, nil //nolint:nilerr // Skip malformed optional code-mode input without failing session processing.
+		return nil, false, warnSkippedCodeMode() //nolint:nilerr // Skip malformed optional code-mode input without failing session processing.
 	}
 	visitor := &codeModeVisitor{ctx: ctx, cwd: cwd, remote: remote}
 	js.Walk(visitor, ast)
@@ -595,7 +604,8 @@ func toolCallPRLinksWithShellState(ctx context.Context, messages []Message, cwd,
 	return parser.CombinePRLinks(lists...), tainted, nil
 }
 
-// pr_shell_tainted stores checkout and host uncertainty in bits 0 and 1.
+// pr_shell_tainted stores checkout, host, and repository uncertainty in bits 0,
+// 1, and 2.
 func writePRShellTaintTx(tx transactionQueries, id string, tainted parser.PRShellContext) error {
 	state := 0
 	if tainted.CheckoutUncertain {
@@ -603,6 +613,9 @@ func writePRShellTaintTx(tx transactionQueries, id string, tainted parser.PRShel
 	}
 	if tainted.HostUncertain {
 		state |= 2
+	}
+	if tainted.RepoUncertain {
+		state |= 4
 	}
 	_, err := tx.Exec(`UPDATE sessions SET pr_shell_tainted=? WHERE id=? AND pr_shell_tainted IS NOT ?`, state, id, state)
 	return err
@@ -655,7 +668,7 @@ func (db *DB) upgradeToolPRLinksTx(ctx context.Context, tx *sql.Tx) error {
 	if err != nil || version >= toolPRLinksDataVersion {
 		return err
 	}
-	condition := "id IN (SELECT session_id FROM tool_calls WHERE category IN ('Bash','Task') AND (input_json LIKE '%gh%' OR input_json LIKE '%http%'))"
+	condition := "id IN (SELECT session_id FROM tool_calls WHERE category IN ('Bash','Task') AND (input_json LIKE '%gh%pr%' OR input_json LIKE '%http%'))"
 	if version < promptPRLinksDataVersion && !db.usageOnlyStorage() {
 		// The prompt upgrade already refreshed these sessions, including tools.
 		condition += " AND id NOT IN (SELECT session_id FROM messages WHERE " + promptPRLinkCandidateSQL + ")"

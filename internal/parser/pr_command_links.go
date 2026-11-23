@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -24,6 +25,7 @@ type shellCall struct {
 	HostUncertain bool
 	Repo          string
 	RepoSet       bool
+	Stdin         string
 }
 
 func shellLiteral(parts []syntax.WordPart) (string, bool) {
@@ -60,137 +62,265 @@ func SamePRWorkingDirectory(cwd, dir string) bool {
 }
 
 // PRShellContext records which parts of a shared shell's context are unknown.
+// CheckoutUncertain follows directory changes and clears when the shell
+// returns to the recorded checkout. RepoUncertain is permanent: it covers
+// changes to the repository GitHub CLI targets. Both a subshell's directory
+// change and its host change end with the subshell.
 type PRShellContext struct {
 	CheckoutUncertain bool
 	HostUncertain     bool
+	RepoUncertain     bool
+}
+
+// UncertainPRShell is the state after input that cannot be read.
+func UncertainPRShell() PRShellContext {
+	return PRShellContext{CheckoutUncertain: true, HostUncertain: true, RepoUncertain: true}
+}
+
+// Changed reports whether any part of the shell context is unknown.
+func (s PRShellContext) Changed() bool {
+	return s.CheckoutUncertain || s.HostUncertain || s.RepoUncertain
 }
 
 // CommandPRLinks derives links and reports whether the shell context changed.
 func CommandPRLinks(ctx context.Context, command, cwd, remote string) ([]PRLink, bool, error) {
 	links, state, err := CommandPRLinksWithContext(ctx, command, cwd, remote, PRShellContext{})
-	return links, state.CheckoutUncertain || state.HostUncertain, err
+	return links, state.Changed(), err
 }
 
 // CommandPRLinksWithContext carries shared shell state between tool calls.
 func CommandPRLinksWithContext(ctx context.Context, command, cwd, remote string, state PRShellContext) ([]PRLink, PRShellContext, error) {
 	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
 	if err != nil {
-		return nil, PRShellContext{CheckoutUncertain: true, HostUncertain: true}, nil //nolint:nilerr // Malformed optional shell input leaves the shell context unknown.
+		return nil, UncertainPRShell(), nil //nolint:nilerr // Malformed optional shell input leaves the shell context unknown.
 	}
-	var calls []shellCall
-	tainted, hostUncertain := state.CheckoutUncertain, state.HostUncertain
-	type shellScope struct {
-		restore       bool
-		tainted, host bool
-	}
-	var scopes []shellScope
-	syntax.Walk(file, func(node syntax.Node) bool {
-		if node == nil {
-			scope := scopes[len(scopes)-1]
-			scopes = scopes[:len(scopes)-1]
-			if scope.restore {
-				tainted, hostUncertain = scope.tainted, scope.host
-			}
-			return true
-		}
-		if _, ok := node.(*syntax.FuncDecl); ok {
-			tainted = true
-			hostUncertain = true
-			return false
-		}
-		scope := shellScope{tainted: tainted, host: hostUncertain}
-		switch node.(type) {
-		case *syntax.Subshell, *syntax.CmdSubst, *syntax.ProcSubst:
-			scope.restore = true
-		}
-		scopes = append(scopes, scope)
-		switch n := node.(type) {
-		case *syntax.DeclClause:
-			for _, assignment := range n.Args {
-				if assignment.Name != nil {
-					switch assignment.Name.Value {
-					case "GH_REPO":
-						tainted = true
-					case "GH_HOST":
-						hostUncertain = true
-					}
-				}
-			}
-		case *syntax.CallExpr:
-			call := shellCall{Tainted: tainted, HostUncertain: hostUncertain}
-			for _, assignment := range n.Assigns {
-				if assignment.Name != nil && (assignment.Name.Value == "GH_REPO" || assignment.Name.Value == "GH_HOST") {
-					if assignment.Name.Value == "GH_HOST" {
-						call.HostUncertain = true
-						if len(n.Args) == 0 {
-							hostUncertain = true
-						}
-					} else {
-						call.Tainted = true
-						call.RepoSet = true
-						if assignment.Value != nil {
-							if value, literal := shellLiteral(assignment.Value.Parts); literal {
-								call.Repo = value
-							}
-						}
-						if len(n.Args) == 0 {
-							tainted = true
-						}
-					}
-				}
-			}
-			for _, word := range n.Args {
-				value, literal := shellLiteral(word.Parts)
-				call.Words = append(call.Words, value)
-				call.Literal = append(call.Literal, literal)
-			}
-			if len(call.Words) > 0 && call.Literal[0] {
-				switch path.Base(call.Words[0]) {
-				case "cd":
-					if len(call.Words) != 2 || !call.Literal[1] || !SamePRWorkingDirectory(cwd, call.Words[1]) {
-						tainted = true
-					}
-				case "pushd", "popd", "eval", "source", ".":
-					tainted = true
-				}
-			}
-			call.Tainted = call.Tainted || tainted
-			calls = append(calls, call)
-		}
-		return true
-	})
+	w := &prShellWalker{cwd: cwd, state: state, stdin: map[*syntax.CallExpr]string{}}
+	syntax.Walk(file, w.visit)
 	var lists [][]PRLink
-	for _, call := range calls {
-		if err := ctx.Err(); err != nil {
-			return nil, PRShellContext{}, err
-		}
-		callRemote := remote
-		if call.Tainted {
-			callRemote = ""
-		}
-		lists = append(lists, ghPRCallLinks(ctx, call, callRemote))
-		if len(call.Words) > 0 && call.Literal[0] {
-			switch path.Base(call.Words[0]) {
-			case "sh", "bash", "zsh":
-				for i := 1; i+1 < len(call.Words); i++ {
-					if call.Literal[i] && (call.Words[i] == "-c" || call.Words[i] == "-lc") && call.Literal[i+1] {
-						links, _, err := CommandPRLinksWithContext(ctx, call.Words[i+1], cwd, callRemote, PRShellContext{HostUncertain: call.HostUncertain})
-						if err != nil {
-							return nil, PRShellContext{}, err
-						}
-						lists = append(lists, links)
-						break
-					}
-				}
-			}
-		}
-		links, err := PromptPRLinksContext(ctx, launcherPrompt(call.Words, call.Literal))
+	for _, call := range w.calls {
+		links, nested, err := call.links(ctx, cwd, remote)
 		if err != nil {
 			return nil, PRShellContext{}, err
 		}
+		w.state.RepoUncertain = w.state.RepoUncertain || nested.RepoUncertain
 		lists = append(lists, links)
 	}
-	return CombinePRLinks(lists...), PRShellContext{CheckoutUncertain: tainted, HostUncertain: hostUncertain}, ctx.Err()
+	return CombinePRLinks(lists...), w.state, ctx.Err()
+}
+
+var shellNameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// programName names the program a command word runs, ignoring its directory,
+// case, and Windows executable suffix.
+func programName(word string) string {
+	return strings.TrimSuffix(strings.ToLower(path.Base(strings.ReplaceAll(word, `\`, "/"))), ".exe")
+}
+
+type prShellScope struct {
+	restore, checkout, host bool
+}
+
+// prShellWalker follows a shell script in execution order.
+type prShellWalker struct {
+	cwd    string
+	state  PRShellContext
+	calls  []shellCall
+	scopes []prShellScope
+	stdin  map[*syntax.CallExpr]string
+}
+
+func (w *prShellWalker) visit(node syntax.Node) bool {
+	if node == nil {
+		scope := w.scopes[len(w.scopes)-1]
+		w.scopes = w.scopes[:len(w.scopes)-1]
+		if scope.restore {
+			w.state.CheckoutUncertain, w.state.HostUncertain = scope.checkout, scope.host
+		}
+		return true
+	}
+	if _, ok := node.(*syntax.FuncDecl); ok {
+		w.state.RepoUncertain, w.state.HostUncertain = true, true
+		return false
+	}
+	scope := prShellScope{checkout: w.state.CheckoutUncertain, host: w.state.HostUncertain}
+	switch node.(type) {
+	case *syntax.Subshell, *syntax.CmdSubst, *syntax.ProcSubst:
+		scope.restore = true
+	}
+	w.scopes = append(w.scopes, scope)
+	switch n := node.(type) {
+	case *syntax.Stmt:
+		w.recordHeredoc(n, n)
+	case *syntax.BinaryCmd:
+		if n.Op == syntax.Pipe {
+			w.recordHeredoc(n.X, n.Y)
+		}
+	case *syntax.DeclClause:
+		for _, assignment := range n.Args {
+			if assignment.Name != nil {
+				w.persistEnv(assignment.Name.Value)
+			}
+		}
+	case *syntax.CallExpr:
+		w.callExpr(n)
+	}
+	return true
+}
+
+// recordHeredoc gives a command the literal here-documents of from as input.
+func (w *prShellWalker) recordHeredoc(from, to *syntax.Stmt) {
+	call, ok := to.Cmd.(*syntax.CallExpr)
+	if !ok {
+		return
+	}
+	for _, redirect := range from.Redirs {
+		if redirect.Hdoc == nil {
+			continue
+		}
+		if text, literal := shellLiteral(redirect.Hdoc.Parts); literal {
+			w.stdin[call] += text + "\n"
+		}
+	}
+}
+
+// persistEnv records an environment change that outlasts one command.
+func (w *prShellWalker) persistEnv(name string) {
+	switch name {
+	case "GH_REPO":
+		w.state.RepoUncertain = true
+	case "GH_HOST":
+		w.state.HostUncertain = true
+	}
+}
+
+func (w *prShellWalker) callExpr(n *syntax.CallExpr) {
+	call := shellCall{HostUncertain: w.state.HostUncertain, Stdin: w.stdin[n]}
+	for _, assignment := range n.Assigns {
+		if assignment.Name == nil {
+			continue
+		}
+		var value string
+		literal := assignment.Value == nil
+		if !literal {
+			value, literal = shellLiteral(assignment.Value.Parts)
+		}
+		call.setEnv(assignment.Name.Value, value, literal)
+		if len(n.Args) == 0 {
+			w.persistEnv(assignment.Name.Value)
+		}
+	}
+	for _, word := range n.Args {
+		value, literal := shellLiteral(word.Parts)
+		call.Words = append(call.Words, value)
+		call.Literal = append(call.Literal, literal)
+	}
+	call.unwrapEnv()
+	w.applyBuiltin(call)
+	call.Tainted = call.Tainted || w.state.CheckoutUncertain || w.state.RepoUncertain
+	w.calls = append(w.calls, call)
+}
+
+// applyBuiltin applies a command's effect on the shell that runs it.
+func (w *prShellWalker) applyBuiltin(call shellCall) {
+	if len(call.Words) == 0 || !call.Literal[0] {
+		return
+	}
+	switch programName(call.Words[0]) {
+	case "cd":
+		w.state.CheckoutUncertain = len(call.Words) != 2 || !call.Literal[1] || !SamePRWorkingDirectory(w.cwd, call.Words[1])
+	case "pushd", "popd", "eval", "source", ".":
+		w.state.RepoUncertain = true
+	case "git":
+		w.state.RepoUncertain = w.state.RepoUncertain || call.changesRemote()
+	case "gh":
+		w.state.RepoUncertain = w.state.RepoUncertain || call.setsDefaultRepo()
+	}
+}
+
+// setEnv applies a per-command environment assignment.
+func (c *shellCall) setEnv(name, value string, literal bool) {
+	switch name {
+	case "GH_HOST":
+		c.HostUncertain = true
+	case "GH_REPO":
+		c.Tainted, c.RepoSet, c.Repo = true, true, ""
+		if literal {
+			c.Repo = value
+		}
+	}
+}
+
+// unwrapEnv replaces `env NAME=value command` with the command it runs.
+func (c *shellCall) unwrapEnv() {
+	if len(c.Words) == 0 || !c.Literal[0] || programName(c.Words[0]) != "env" {
+		return
+	}
+	i := 1
+	for ; i < len(c.Words); i++ {
+		name, value, ok := strings.Cut(c.Words[i], "=")
+		if !ok || !shellNameRE.MatchString(name) {
+			break
+		}
+		c.setEnv(name, value, c.Literal[i])
+	}
+	c.Words, c.Literal = c.Words[i:], c.Literal[i:]
+}
+
+// changesRemote reports whether a git command rewrites a remote URL.
+func (c shellCall) changesRemote() bool {
+	for i, word := range c.Words {
+		if word == "remote" && i+1 < len(c.Words) && slices.Contains([]string{"set-url", "add", "remove", "rm", "rename"}, c.Words[i+1]) {
+			return true
+		}
+		if strings.HasPrefix(word, "remote.") && strings.HasSuffix(word, ".url") {
+			return true
+		}
+	}
+	return false
+}
+
+// setsDefaultRepo reports whether gh changes its default repository.
+func (c shellCall) setsDefaultRepo() bool {
+	return len(c.Words) > 2 && c.Words[1] == "repo" && c.Words[2] == "set-default" &&
+		!slices.Contains(c.Words[3:], "--view") && !slices.Contains(c.Words[3:], "-v")
+}
+
+// links derives links from one command and reports shell state it leaves.
+func (c shellCall) links(ctx context.Context, cwd, remote string) ([]PRLink, PRShellContext, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, PRShellContext{}, err
+	}
+	callRemote := remote
+	if c.Tainted {
+		callRemote = ""
+	}
+	lists := [][]PRLink{ghPRCallLinks(ctx, c, callRemote)}
+	var nested PRShellContext
+	if script, ok := c.shellScript(); ok {
+		links, state, err := CommandPRLinksWithContext(ctx, script, cwd, callRemote, PRShellContext{HostUncertain: c.HostUncertain})
+		if err != nil {
+			return nil, PRShellContext{}, err
+		}
+		lists, nested = append(lists, links), state
+	}
+	links, err := PromptPRLinksContext(ctx, c.launcherPrompt())
+	return CombinePRLinks(append(lists, links)...), nested, err
+}
+
+// shellScript returns the script a `sh -c` style command runs.
+func (c shellCall) shellScript() (string, bool) {
+	if len(c.Words) == 0 || !c.Literal[0] {
+		return "", false
+	}
+	switch programName(c.Words[0]) {
+	case "sh", "bash", "zsh":
+		for i := 1; i+1 < len(c.Words); i++ {
+			if c.Literal[i] && (c.Words[i] == "-c" || c.Words[i] == "-lc") && c.Literal[i+1] {
+				return c.Words[i+1], true
+			}
+		}
+	}
+	return "", false
 }
 
 // repoFlag reports whether args[i] is a -R or --repo option, its value, and
@@ -211,13 +341,38 @@ func repoFlag(call shellCall, i int) (string, int, bool) {
 	return "", i, false
 }
 
-func ghPRCallLinks(ctx context.Context, call shellCall, remote string) []PRLink {
+var ghPRValueFlags = map[string]string{
+	"view":     "--json --jq -q --template -t",
+	"diff":     "--color --exclude -e",
+	"checks":   "--interval -i --jq -q --json --template -t",
+	"merge":    "--author-email -A --body -b --body-file -F --match-head-commit --subject -t",
+	"edit":     "--add-assignee --add-label --add-project --add-reviewer --attach --base -B --body -b --body-file -F --milestone -m --remove-assignee --remove-label --remove-milestone --remove-project --remove-reviewer --title -t",
+	"comment":  "--attach --body -b --body-file -F",
+	"review":   "--body -b --body-file -F",
+	"close":    "--comment -c",
+	"reopen":   "--comment -c",
+	"checkout": "--branch -b --worktree",
+	"lock":     "--reason -r",
+	"revert":   "--body -b --body-file -F --title -t",
+	"ready":    "",
+	"unlock":   "",
+
+	"update-branch": "",
+}
+
+// ghPRTarget is the repository and pull request a gh command names.
+type ghPRTarget struct {
+	repo, selector string
+	repoSpecified  bool
+}
+
+// ghPRTargetOf reads a literal `gh pr <action>` command's target.
+func ghPRTargetOf(call shellCall) (ghPRTarget, bool) {
 	args := call.Words
-	if len(args) < 4 || !call.Literal[0] || path.Base(args[0]) != "gh" {
-		return nil
+	if len(args) < 4 || !call.Literal[0] || programName(args[0]) != "gh" {
+		return ghPRTarget{}, false
 	}
-	repo, selector := call.Repo, ""
-	repoSpecified := call.RepoSet
+	target := ghPRTarget{repo: call.Repo, repoSpecified: call.RepoSet}
 	i := 1
 	for i < len(args) && call.Literal[i] {
 		value, last, isRepo := repoFlag(call, i)
@@ -225,81 +380,73 @@ func ghPRCallLinks(ctx context.Context, call shellCall, remote string) []PRLink 
 			break
 		}
 		if last < 0 {
-			return nil
+			return ghPRTarget{}, false
 		}
-		repo, repoSpecified, i = value, true, last+1
+		target.repo, target.repoSpecified, i = value, true, last+1
 	}
 	if i+2 >= len(args) || !call.Literal[i] || !call.Literal[i+1] || args[i] != "pr" {
-		return nil
+		return ghPRTarget{}, false
 	}
 	action := args[i+1]
 	if action == "co" {
 		action = "checkout"
 	}
-	switch action {
-	case "view", "diff", "checks", "merge", "edit", "comment", "review", "ready", "close", "reopen", "checkout", "update-branch", "lock", "unlock", "revert":
-	default:
-		return nil
+	valueFlags, known := ghPRValueFlags[action]
+	if !known {
+		return ghPRTarget{}, false
 	}
-	valueFlags := map[string]string{
-		"view":     "--json --jq -q --template -t",
-		"diff":     "--color --exclude -e",
-		"checks":   "--interval -i --jq -q --json --template -t",
-		"merge":    "--author-email -A --body -b --body-file -F --match-head-commit --subject -t",
-		"edit":     "--add-assignee --add-label --add-project --add-reviewer --attach --base -B --body -b --body-file -F --milestone -m --remove-assignee --remove-label --remove-milestone --remove-project --remove-reviewer --title -t",
-		"comment":  "--attach --body -b --body-file -F",
-		"review":   "--body -b --body-file -F",
-		"close":    "--comment -c",
-		"reopen":   "--comment -c",
-		"checkout": "--branch -b --worktree",
-		"lock":     "--reason -r",
-		"revert":   "--body -b --body-file -F --title -t",
-	}
-	takesValue := strings.Fields(valueFlags[action])
+	takesValue := strings.Fields(valueFlags)
 	for j := i + 2; j < len(args); j++ {
 		if !call.Literal[j] {
 			if strings.HasPrefix(args[j], "-R") || strings.HasPrefix(args[j], "--repo") {
-				return nil
+				return ghPRTarget{}, false
 			}
 			continue
 		}
-		arg := args[j]
 		if value, last, isRepo := repoFlag(call, j); isRepo {
 			if last < 0 {
-				return nil
+				return ghPRTarget{}, false
 			}
-			repo, repoSpecified, j = value, true, last
+			target.repo, target.repoSpecified, j = value, true, last
 			continue
 		}
-		if strings.HasPrefix(arg, "-") {
-			flag, _, attached := strings.Cut(arg, "=")
-			for _, valueFlag := range takesValue {
-				if flag == valueFlag && !attached {
-					j++
-					if j >= len(args) {
-						return nil
-					}
-					break
-				}
+		flag, _, attached := strings.Cut(args[j], "=")
+		switch {
+		case strings.HasPrefix(args[j], "-"):
+			if !attached && slices.Contains(takesValue, flag) {
+				j++
 			}
-			continue
-		}
-		if selector == "" {
-			selector = arg
+			if j >= len(args) {
+				return ghPRTarget{}, false
+			}
+		case target.selector == "":
+			target.selector = args[j]
 		}
 	}
+	return target, true
+}
+
+func ghPRCallLinks(ctx context.Context, call shellCall, remote string) []PRLink {
+	target, ok := ghPRTargetOf(call)
+	if !ok {
+		return nil
+	}
+	selector := target.selector
 	if links, _ := PromptPRLinksContext(ctx, selector); len(links) == 1 && (strings.HasPrefix(selector, "https://") || strings.HasPrefix(selector, "http://")) {
 		return links
 	}
-	number, err := strconv.Atoi(selector)
+	number, err := strconv.Atoi(strings.TrimPrefix(selector, "#"))
 	if err != nil || number <= 0 {
 		return nil
 	}
-	host := "github.com"
+	host, repo := "github.com", target.repo
+	if normalized, ok := export.NormalizeGitRemote(repo); ok && strings.Contains(repo, "://") {
+		repo = normalized
+	}
 	if call.HostUncertain && (repo == "" || len(strings.Split(repo, "/")) != 3) {
 		return nil
 	}
-	if repo == "" && repoSpecified {
+	if repo == "" && target.repoSpecified {
 		return nil
 	}
 	if repo == "" {
@@ -318,60 +465,51 @@ func ghPRCallLinks(ctx context.Context, call shellCall, remote string) []PRLink 
 	return nil
 }
 
-func launcherPrompt(words []string, literal []bool) string {
-	if len(words) == 0 || !literal[0] {
+// launcherPrompt returns the prompt a non-interactive claude or codex command
+// receives, or "" when the command does not run one.
+func (c shellCall) launcherPrompt() string {
+	if len(c.Words) == 0 || !c.Literal[0] {
 		return ""
 	}
-	program := path.Base(words[0])
+	program := programName(c.Words[0])
 	if program != "claude" && program != "codex" {
 		return ""
 	}
-	printMode, execMode := false, false
-	var prompt string
-	endOptions := false
-	for i := 1; i < len(words); i++ {
-		if !literal[i] {
+	printMode, execMode, endOptions := false, false, false
+	var positional []string
+	for i := 1; i < len(c.Words); i++ {
+		if !c.Literal[i] {
 			return ""
 		}
-		arg := words[i]
-		if !endOptions && arg == "--" {
+		arg := c.Words[i]
+		switch {
+		case !endOptions && arg == "--":
 			endOptions = true
-			continue
-		}
-		if endOptions {
-			if prompt == "" {
-				prompt = arg
-			}
-			continue
-		}
-		if arg == "--help" || arg == "-h" || arg == "--version" || arg == "-V" || program == "claude" && arg == "-v" {
+		case endOptions:
+			positional = append(positional, arg)
+		case arg == "--help" || arg == "-h" || arg == "--version" || arg == "-V" || program == "claude" && arg == "-v":
 			return ""
-		}
-		if program == "claude" && (arg == "-p" || arg == "--print") {
+		case program == "claude" && (arg == "-p" || arg == "--print"):
 			printMode = true
-			continue
-		}
-		if program == "codex" && !execMode && (arg == "exec" || arg == "e") {
+		case program == "codex" && !execMode && (arg == "exec" || arg == "e"):
 			execMode = true
-			continue
-		}
-		if strings.HasPrefix(arg, "-") {
-			if !strings.Contains(arg, "=") && launcherValueFlag(program, arg) && i+1 < len(words) {
+		case strings.HasPrefix(arg, "-"):
+			if !strings.Contains(arg, "=") && launcherValueFlag(program, arg) && i+1 < len(c.Words) {
 				i++
 			}
-			continue
-		}
-		if program == "codex" && !execMode {
+		case program == "codex" && !execMode:
 			return ""
-		}
-		if prompt == "" {
-			prompt = arg
+		default:
+			positional = append(positional, arg)
 		}
 	}
-	if program == "claude" && !printMode || program == "codex" && (!execMode || prompt == "resume" || prompt == "fork" || prompt == "review" || prompt == "help") {
+	if program == "claude" && !printMode || program == "codex" && !execMode {
 		return ""
 	}
-	return prompt
+	if len(positional) > 0 && program == "codex" && slices.Contains([]string{"resume", "fork", "review", "help"}, positional[0]) {
+		return ""
+	}
+	return strings.Join(append(positional, c.Stdin), "\n")
 }
 
 func launcherValueFlag(program, flag string) bool {
