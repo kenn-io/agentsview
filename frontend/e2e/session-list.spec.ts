@@ -100,13 +100,19 @@ test.describe("Session list", () => {
     await input.blur();
     await expect(row.getByRole("alert")).toBeVisible();
     await expect(input).toHaveValue("Draft title");
-    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        ),
+    );
     expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
     expect(attempts).toBe(1);
   });
 
   test("a long rename error stays inside the session row", async ({ page }) => {
-    const message = "Startup sync is still running. Please try again shortly when the session is available.";
+    const message =
+      "Startup sync is still running. Please try again shortly when the session is available.";
     await page.route("**/api/v1/sessions/*/rename", (route) =>
       route.fulfill({ status: 503, json: { error: message } }),
     );
@@ -121,7 +127,12 @@ test.describe("Session list", () => {
       const row = element.getBoundingClientRect();
       const input = element.querySelector(".rename-input")!.getBoundingClientRect();
       const error = element.querySelector(".rename-error")!.getBoundingClientRect();
-      return { rowTop: row.top, rowBottom: row.bottom, inputTop: input.top, errorBottom: error.bottom };
+      return {
+        rowTop: row.top,
+        rowBottom: row.bottom,
+        inputTop: input.top,
+        errorBottom: error.bottom,
+      };
     });
     expect(bounds.inputTop).toBeGreaterThanOrEqual(bounds.rowTop);
     expect(bounds.errorBottom).toBeLessThanOrEqual(bounds.rowBottom);
