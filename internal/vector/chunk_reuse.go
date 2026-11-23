@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 
 	kitvec "go.kenn.io/kit/vector"
 )
@@ -92,34 +91,30 @@ func (ix *Index) reuseEncoder(enc kitvec.EncodeFunc, gen reuseGeneration) kitvec
 			hashes[i] = contentHash(text)
 		}
 		hits := make(map[string][]float32)
-		for start := 0; start < len(hashes); start += maxSQLVars - 1 {
-			end := min(start+maxSQLVars-1, len(hashes))
-			args := []any{gen.ordinal}
-			for _, hash := range hashes[start:end] {
-				args = append(args, hash)
+		seen := make(map[string]bool)
+		for _, hash := range hashes {
+			if seen[hash] {
+				continue
 			}
-			placeholders := strings.TrimSuffix(strings.Repeat("?,", end-start), ",")
-			rows, err := ix.db.QueryContext(ctx, `SELECT text_hash, embedding FROM `+ix.spec.reuseTable()+` INDEXED BY `+ix.spec.reuseTable()+`_hash WHERE ordinal = ? AND text_hash IN (`+placeholders+`)`, args...)
-			if err != nil {
-				return nil, err
-			}
-			for rows.Next() {
-				var hash string
+			seen[hash] = true
+			query := `SELECT doc_key, embedding FROM ` + ix.spec.reuseTable() + ` INDEXED BY ` + ix.spec.reuseTable() + `_hash WHERE ordinal = ? AND text_hash = ?`
+			args := []any{gen.ordinal, hash}
+			for {
+				var key string
 				var blob []byte
-				if err := rows.Scan(&hash, &blob); err != nil {
-					rows.Close()
+				err := ix.db.QueryRowContext(ctx, query+` ORDER BY doc_key LIMIT 1`, args...).Scan(&key, &blob)
+				if errors.Is(err, sql.ErrNoRows) {
+					break
+				}
+				if err != nil {
 					return nil, err
 				}
 				if vector, err := validatedStoredEmbeddingBlob(blob, gen.dimension); err == nil {
 					hits[hash] = vector
+					break
 				}
-			}
-			if err := rows.Err(); err != nil {
-				rows.Close()
-				return nil, err
-			}
-			if err := rows.Close(); err != nil {
-				return nil, err
+				query = `SELECT doc_key, embedding FROM ` + ix.spec.reuseTable() + ` INDEXED BY ` + ix.spec.reuseTable() + `_hash WHERE ordinal = ? AND text_hash = ? AND doc_key > ?`
+				args = []any{gen.ordinal, hash, key}
 			}
 		}
 		out := make([][]float32, len(texts))
