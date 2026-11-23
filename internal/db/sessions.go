@@ -400,12 +400,11 @@ type Session struct {
 	Cwd                         string `json:"cwd,omitempty"`
 	GitBranch                   string `json:"git_branch,omitempty"`
 	ProjectAssigned             bool   `json:"project_assigned,omitempty"`
-	// PRLinks lists pull or merge requests from structured records, tool calls,
-	// and retained user prompts. A prompt mention does not establish active work.
+	// PRLinks lists pull or merge requests from structured records and retained
+	// user prompts. A prompt mention does not establish active work.
 	// Always serialized, as [] when empty, so a client merging a fresh
 	// response over a cached one drops cleared values.
-	PRLinks     []PRLink `json:"pr_links" required:"false"`
-	ToolPRLinks []PRLink `json:"-"`
+	PRLinks []PRLink `json:"pr_links" required:"false"`
 	// Labels are user- or tool-supplied tags. They are stored apart from
 	// parsed transcript data, so a reparse or resync never changes them.
 	// Always serialized, as [] when empty, like PRLinks.
@@ -1286,16 +1285,8 @@ func (db *DB) GetArtifactExportSession(
 	if err != nil || s == nil {
 		return s, err
 	}
-	return db.loadArtifactExportPRLinks(ctx, s, id)
-}
-
-func (db *DB) loadArtifactExportPRLinks(ctx context.Context, s *Session, id string) (*Session, error) {
-	var structured, tools string
-	if err := db.getReader().QueryRowContext(ctx, `SELECT structured_pr_links, tool_pr_links FROM sessions WHERE id=?`, id).Scan(&structured, &tools); err != nil {
-		return nil, err
-	}
-	s.PRLinks, s.ToolPRLinks = DecodePRLinks(structured), DecodePRLinks(tools)
-	return s, nil
+	s.PRLinks, err = db.GetSessionStructuredPRLinks(ctx, id)
+	return s, err
 }
 
 func (db *DB) getSessionFullUncoalesced(
@@ -1586,8 +1577,8 @@ const insertSessionSQL = `
 			file_path, file_size, file_mtime,
 			next_ordinal, last_entry_uuid, claude_linear_parse,
 			file_inode, file_device, file_hash,
-			pr_links, structured_pr_links, tool_pr_links, parser_relationship_type
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			pr_links, structured_pr_links, parser_relationship_type
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // insertSessionIfAbsentSQL inserts a session only when its id does not already
 // exist, leaving an existing row untouched.
@@ -1627,7 +1618,6 @@ const upsertSessionBaseSQL = insertSessionSQL + `
 			has_peak_context_tokens = excluded.has_peak_context_tokens,
 			is_automated = excluded.is_automated,
 			termination_status = excluded.termination_status,
-			pr_shell_tainted = CASE WHEN sessions.cwd IS NOT excluded.cwd THEN NULL ELSE sessions.pr_shell_tainted END,
 			cwd = excluded.cwd,
 			git_branch = excluded.git_branch,
 			source_session_id = excluded.source_session_id,
@@ -1701,9 +1691,8 @@ func upsertSessionArgs(s Session) []any {
 		s.FilePath, s.FileSize, s.FileMtime,
 		s.NextOrdinal, s.LastEntryUUID, s.ClaudeLinearParse,
 		s.FileInode, s.FileDevice, s.FileHash,
-		EncodePRLinks(parser.CombinePRLinks(s.PRLinks, s.ToolPRLinks)),
 		EncodePRLinks(s.PRLinks),
-		EncodePRLinks(s.ToolPRLinks),
+		EncodePRLinks(s.PRLinks),
 		s.RelationshipType,
 	}
 }
@@ -1766,8 +1755,8 @@ func (db *DB) upsertSession(ctx context.Context,
 	if err != nil {
 		return result, err
 	}
-	if result.structuredPRLinksChanged && !db.usageOnlyStorage() {
-		if err := refreshSessionPromptPRLinksTx(tx, s.ID); err != nil {
+	if (result.structuredPRLinksChanged || result.cwdChanged) && !db.usageOnlyStorage() {
+		if err := refreshSessionPromptPRLinksTx(ctx, tx, s.ID); err != nil {
 			return result, err
 		}
 	}
@@ -1785,6 +1774,7 @@ func (db *DB) upsertSession(ctx context.Context,
 type sessionUpsertResult struct {
 	inserted                 bool
 	structuredPRLinksChanged bool
+	cwdChanged               bool
 	sourceMissing            bool
 	previousProject          string
 	currentProject           string
@@ -1818,18 +1808,19 @@ func upsertSessionExec(
 	var previousSessionName sql.NullString
 	var previousAutomated bool
 	var previousParent sql.NullString
-	var previousRelationship, previousStructuredPRLinks string
+	var previousRelationship, previousStructuredPRLinks, previousCwd string
 	var deletedAt, sourceMissingAt sql.NullString
 	err = queryRow(ctx,
-		"SELECT project, session_name, deleted_at, source_missing_at, is_automated, parent_session_id, relationship_type, structured_pr_links "+
+		"SELECT project, session_name, deleted_at, source_missing_at, is_automated, parent_session_id, relationship_type, structured_pr_links, cwd "+
 			"FROM sessions WHERE id = ?", s.ID,
 	).Scan(
 		&previousProject, &previousSessionName, &deletedAt, &sourceMissingAt, &previousAutomated,
-		&previousParent, &previousRelationship, &previousStructuredPRLinks,
+		&previousParent, &previousRelationship, &previousStructuredPRLinks, &previousCwd,
 	)
 	result := sessionUpsertResult{
 		inserted:                 errors.Is(err, sql.ErrNoRows),
 		structuredPRLinksChanged: err == nil && previousStructuredPRLinks != EncodePRLinks(s.PRLinks),
+		cwdChanged:               err == nil && previousCwd != s.Cwd,
 		previousProject:          previousProject,
 		currentProject:           s.Project,
 	}
@@ -3007,24 +2998,6 @@ func (db *DB) SetSessionDataVersion(ctx context.Context, id string, version int)
 	return nil
 }
 
-// SetSessionDataVersionWithToolPRLinks commits derived command links with the completed parse version.
-func (db *DB) SetSessionDataVersionWithToolPRLinks(ctx context.Context, id string, version int, links []PRLink) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	tx, err := db.getWriter().Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	if err := setAndRefreshToolPRLinksTx(tx, id, links, true, db.usageOnlyStorage()); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET data_version=?, local_modified_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?`, version, id); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
 // SetSessionDataVersions atomically stamps the parser data_version on every
 // listed session. This is used when several session rows represent one source:
 // either every member becomes current, or all remain eligible for retry.
@@ -3758,40 +3731,53 @@ func (db *DB) UpdateSessionCwd(ctx context.Context, id, cwd string) error {
 func (db *DB) UpdateSessionCwdByIdentity(ctx context.Context,
 	id, path, agent, cwd string,
 ) (bool, error) {
-	return db.updateSessionCwd(ctx,
+	count, err := db.updateSessionCwd(ctx,
 		` WHERE id = ? AND file_path = ? AND agent = ?`,
 		[]any{id, path, agent}, cwd,
 	)
+	return count > 0, err
 }
 
 func (db *DB) updateSessionCwd(ctx context.Context,
 	identityWhere string, identityArgs []any, cwd string,
-) (bool, error) {
+) (int, error) {
 	if err := db.requireWritable(); err != nil {
-		return false, err
+		return 0, err
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	staleVersion := max(CurrentDataVersion()-1, 0)
 	args := append([]any{cwd, staleVersion}, identityArgs...)
-	result, err := db.getWriter().Exec(ctx,
+	tx, err := db.getWriter().Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	rows, err := tx.QueryContext(ctx,
 		`UPDATE sessions SET
 			cwd = ?,
-			pr_shell_tainted = NULL,
 			data_version = MIN(data_version, ?),
 			local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		`+identityWhere+` AND cwd IS NOT ?
-		 AND deleted_at IS NULL`,
+		 AND deleted_at IS NULL RETURNING id`,
 		append(args, cwd)...,
 	)
 	if err != nil {
-		return false, fmt.Errorf("updating session cwd: %w", err)
+		return 0, fmt.Errorf("updating session cwd: %w", err)
 	}
-	rows, err := result.RowsAffected()
+	ids, err := scanStrings(rows)
 	if err != nil {
-		return false, fmt.Errorf("counting session cwd updates: %w", err)
+		return 0, fmt.Errorf("listing session cwd updates: %w", err)
 	}
-	return rows > 0, nil
+	for _, id := range ids {
+		if err := refreshSessionPromptPRLinksTx(ctx, tx, id); err != nil {
+			return 0, fmt.Errorf("refreshing session PR links after cwd update: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return len(ids), nil
 }
 
 // UpdateCwdByAgentPath updates the workspace identity for every active or
@@ -3804,35 +3790,7 @@ func (db *DB) UpdateCwdByAgentPath(ctx context.Context, path, agent, cwd string)
 // UpdateCwdByAgentPathCount returns the number of source rows changed and
 // marks them stale so a later admitted parse can refresh project identity.
 func (db *DB) UpdateCwdByAgentPathCount(ctx context.Context, path, agent, cwd string) (int, error) {
-	if err := db.requireWritable(); err != nil {
-		return 0, err
-	}
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	staleVersion := max(CurrentDataVersion()-1, 0)
-	result, err := db.getWriter().Exec(ctx,
-		`UPDATE sessions SET
-			cwd = ?,
-			pr_shell_tainted = NULL,
-			data_version = MIN(data_version, ?),
-			local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		 WHERE file_path = ? AND agent = ?
-		 AND cwd IS NOT ?
-		 AND deleted_at IS NULL`,
-		cwd, staleVersion, path, agent, cwd,
-	)
-	if err != nil {
-		return 0, fmt.Errorf(
-			"updating cwd for %s/%s: %w", agent, path, err,
-		)
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf(
-			"counting cwd updates for %s/%s: %w", agent, path, err,
-		)
-	}
-	return int(rows), nil
+	return db.updateSessionCwd(ctx, ` WHERE file_path = ? AND agent = ?`, []any{path, agent}, cwd)
 }
 
 // StaleDataVersionAgentPaths returns every (agent, file_path) source identity

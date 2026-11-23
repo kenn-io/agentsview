@@ -60,6 +60,7 @@ EOF`, "", remote, "", false},
 		{`echo GH_REPO`, "", remote, "", false},
 		{`GH_REPO=other/repo gh pr view 42`, "", remote, "https://github.com/other/repo/pull/42", false},
 		{`export GH_REPO=example/other; gh pr view 42`, "", remote, "https://github.com/example/other/pull/42", true},
+		{`export GH_REPO=example/other && gh pr view 42`, "", remote, "https://github.com/example/other/pull/42", true},
 		{`GH_REPO=example/other; export GH_REPO; gh pr view 42`, "", remote, "https://github.com/example/other/pull/42", true},
 		{`GH_REPO=example/other; gh pr view 42`, "", remote, "", true},
 		{`export GH_REPO=example/other; GH_REPO=example/fork; gh pr view 42`, "", remote, "https://github.com/example/fork/pull/42", true},
@@ -165,6 +166,20 @@ func TestLauncherPromptPRLinks(t *testing.T) {
 				urls = append(urls, link.URL)
 			}
 			assert.Equal(t, tt.want, urls)
+		})
+	}
+}
+
+func TestReviewConditionalRepo(t *testing.T) {
+	for _, command := range []string{
+		`if condition; then export GH_REPO=example/one; else export GH_REPO=example/two; fi; gh pr view 42`,
+		`condition && export GH_REPO=example/one; gh pr view 42`,
+		`export GH_REPO=example/one; if condition; then unset GH_REPO; fi; gh pr view 42`,
+	} {
+		t.Run(command, func(t *testing.T) {
+			links, _, err := CommandPRLinks(t.Context(), command, "/repo", "https://github.com/example/repo.git")
+			require.NoError(t, err)
+			assert.Empty(t, links)
 		})
 	}
 }

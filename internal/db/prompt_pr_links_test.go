@@ -362,6 +362,9 @@ func TestToolPRLinksArchiveUpgrade(t *testing.T) {
 				if _, err := tx.ExecContext(t.Context(), `ALTER TABLE sessions DROP COLUMN tool_pr_links`); err != nil {
 					return err
 				}
+				if _, err := tx.ExecContext(t.Context(), `ALTER TABLE sessions DROP COLUMN pr_shell_repo`); err != nil {
+					return err
+				}
 				return writeUserVersion(t.Context(), tx, tc.version)
 			}))
 			require.NoError(t, d.Close())
@@ -705,4 +708,92 @@ func TestToolPRLinksUsageCleanupAndReplacement(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got.PRLinks, 1)
 	assert.Equal(t, 2, got.PRLinks[0].Number)
+}
+
+func TestReviewFilterConditionalRepoAmongSessions(t *testing.T) {
+	d := testDB(t)
+	for _, tc := range []struct{ id, command string }{
+		{"conditional", `if condition; then export GH_REPO=example/one; else export GH_REPO=example/two; fi; gh pr view 42`},
+		{"explicit", `gh pr view 42 -R example/two`},
+	} {
+		s := Session{ID: tc.id, Project: "project", Machine: "local", Agent: "claude", MessageCount: 1}
+		require.NoError(t, d.UpsertSession(t.Context(), s))
+		require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"` + tc.command + `"}`}}}}))
+	}
+	assert.Equal(t, []string{"explicit"}, listSortedIDs(t, d, SessionFilter{PR: PRFilter{Repository: "example/two", Number: 42}}))
+}
+
+func TestReviewSharedShellExportedRepo(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d, err := OpenIsolated(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if d != nil {
+			_ = d.Close()
+		}
+	})
+	s := Session{ID: "shared-export", Project: "project", Machine: "local", Agent: "claude"}
+	require.NoError(t, d.UpsertSession(t.Context(), s))
+	message := func(ordinal int, command string) Message {
+		return Message{SessionID: s.ID, Ordinal: ordinal, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"` + command + `"}`}}}
+	}
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{message(0, "export GH_REPO=example/other")}))
+	require.NoError(t, d.Close())
+	d, err = OpenIsolated(t.Context(), path)
+	require.NoError(t, err)
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{message(1, "gh pr view 42")}))
+	got, err := d.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	require.Len(t, got.PRLinks, 1)
+	assert.Equal(t, "https://github.com/example/other/pull/42", got.PRLinks[0].URL)
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error { return refreshSessionPromptPRLinksTx(t.Context(), tx, s.ID) }))
+	after, err := d.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	assert.Equal(t, got.PRLinks, after.PRLinks)
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `UPDATE tool_calls SET input_json=NULL WHERE session_id=? AND message_id=(SELECT id FROM messages WHERE session_id=? AND ordinal=0)`, s.ID, s.ID)
+		return err
+	}))
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error { return refreshSessionPromptPRLinksTx(t.Context(), tx, s.ID) }))
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{message(2, "gh pr view 43")}))
+	after, err = d.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	require.Len(t, after.PRLinks, 2)
+	assert.Equal(t, "https://github.com/example/other/pull/43", after.PRLinks[1].URL)
+}
+
+func TestScratchCwdChangeConsistent(t *testing.T) {
+	for _, method := range []string{"session", "path", "upsert", "identity", "batch"} {
+		t.Run(method, func(t *testing.T) {
+			d := testDB(t)
+			s := Session{ID: "cwd-rederive", Project: "project", Machine: "local", Agent: "claude", Cwd: "/work/repo", FilePath: new("/sessions/session.jsonl")}
+			require.NoError(t, d.UpsertSession(t.Context(), s))
+			obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://github.com/example/repo.git")
+			require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), obs))
+			require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"cd /work/repo; gh pr view 42"}`}}}}))
+			got, err := d.GetSession(t.Context(), s.ID)
+			require.NoError(t, err)
+			require.Len(t, got.PRLinks, 1)
+			if method == "session" {
+				require.NoError(t, d.UpdateSessionCwd(t.Context(), s.ID, "/work/other"))
+			} else if method == "path" {
+				n, err := d.UpdateCwdByAgentPathCount(t.Context(), *s.FilePath, s.Agent, "/work/other")
+				require.NoError(t, err)
+				require.Equal(t, 1, n)
+			} else if method == "upsert" {
+				s.Cwd = "/work/other"
+				require.NoError(t, d.UpsertSession(t.Context(), s))
+			} else if method == "identity" {
+				s.Cwd = "/work/other"
+				require.NoError(t, d.UpsertSessionWithProjectIdentity(t.Context(), s, obs, ""))
+			} else {
+				s.Cwd = "/work/other"
+				_, err := d.WriteSessionBatchContext(t.Context(), []SessionBatchWrite{{Session: s}})
+				require.NoError(t, err)
+			}
+			got, err = d.GetSession(t.Context(), s.ID)
+			require.NoError(t, err)
+			assert.Empty(t, got.PRLinks)
+		})
+	}
 }
