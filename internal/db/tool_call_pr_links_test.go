@@ -94,3 +94,13 @@ func TestToolCallPRLinksWorkingDirectory(t *testing.T) {
 		})
 	}
 }
+
+func TestToolCallPRLinksSharedShellDirectoryChange(t *testing.T) {
+	for _, command := range []string{`cd /work/other`, `if true; then cd /work/other; fi`} {
+		messages := []db.Message{{ToolCalls: []db.ToolCall{
+			{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"` + command + `"}`},
+			{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr merge 60"}`},
+		}}}
+		assert.Empty(t, toolCallPRLinks(t, messages, "/work/repo", "https://github.com/example/repo.git"))
+	}
+}

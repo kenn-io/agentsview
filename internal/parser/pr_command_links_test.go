@@ -16,14 +16,14 @@ func TestCommandPRLinks(t *testing.T) {
 		{`export GH_HOST=github.com; gh pr view 42 -R example/other`, "https://github.com/example/other/pull/42"},
 		{`echo hi | gh pr diff https://github.com/example/repo/pull/42`, "https://github.com/example/repo/pull/42"},
 		{`gh pr view 42 --body 'a;b'`, "https://github.com/example/repo/pull/42"},
-		{`gh pr view 42 --body "$VAR"`, ""},
+		{`gh pr view 42 --body "$VAR"`, "https://github.com/example/repo/pull/42"},
 		{`export GH_REPO=example/other; gh pr view 42`, ""},
 		{`gh pr view $(echo 42) -R example/repo`, ""},
 		{`gh pr create 42 -R example/repo`, ""},
 		{`gh pr view branch -R example/repo`, ""},
 	} {
 		t.Run(tc.command, func(t *testing.T) {
-			links, err := CommandPRLinks(t.Context(), tc.command, remote)
+			links, err := CommandPRLinks(t.Context(), tc.command, remote, true)
 			require.NoError(t, err)
 			if tc.want == "" {
 				assert.Empty(t, links)
@@ -35,15 +35,21 @@ func TestCommandPRLinks(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	_, err := CommandPRLinks(ctx, "gh pr view 42", remote)
+	_, err := CommandPRLinks(ctx, "gh pr view 42", remote, true)
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
 func TestCommandPRLinksHostAndFlags(t *testing.T) {
 	for _, tc := range []struct{ command, remote, want string }{
+		{`gh pr merge 44 --squash --subject "feat(x): y"`, "https://github.com/example/repo.git", "https://github.com/example/repo/pull/44"},
+		{`gh pr comment 44 --body "Done (see notes)"`, "https://github.com/example/repo.git", "https://github.com/example/repo/pull/44"},
+		{`if gh pr view 42 -R github.com/example/repo; then true; fi`, "", "https://github.com/example/repo/pull/42"},
+		{`if gh pr checks 44; then gh pr merge 44; fi`, "https://github.com/example/repo.git", "https://github.com/example/repo/pull/44"},
+		{`gh pr view 42 -R=github.com/example/repo`, "", "https://github.com/example/repo/pull/42"},
 		{`export GH_HOST=git.example; gh pr view 42 -R example/repo`, "", "https://git.example/example/repo/pull/42"},
 		{`gh pr edit --add-label 99 42`, "https://github.com/example/repo.git", "https://github.com/example/repo/pull/42"},
 		{`gh pr view 42 -R github.com/example/repo`, "", "https://github.com/example/repo/pull/42"},
+		{`gh pr view 42 -R example/other`, "https://github.com/example/repo.git", "https://github.com/example/other/pull/42"},
 		{`GH_HOST=$HOST gh pr view 42 -R github.com/example/repo`, "", "https://github.com/example/repo/pull/42"},
 		{`gh pr view -R example/repo 42`, "https://github.com/example/repo.git", "https://github.com/example/repo/pull/42"},
 		{`echo hello && gh pr view 42`, "https://github.com/example/repo.git", "https://github.com/example/repo/pull/42"},
@@ -53,7 +59,7 @@ func TestCommandPRLinksHostAndFlags(t *testing.T) {
 		{`GH_HOST=git.example gh pr view 42 -R example/repo`, "https://github.com/example/repo.git", ""},
 	} {
 		t.Run(tc.command, func(t *testing.T) {
-			links, err := CommandPRLinks(t.Context(), tc.command, tc.remote)
+			links, err := CommandPRLinks(t.Context(), tc.command, tc.remote, true)
 			require.NoError(t, err)
 			if tc.want == "" {
 				assert.Empty(t, links)
@@ -66,7 +72,7 @@ func TestCommandPRLinksHostAndFlags(t *testing.T) {
 }
 
 func TestCommandPRLinksInlineHostDoesNotPersist(t *testing.T) {
-	links, err := CommandPRLinks(t.Context(), `GH_HOST=git.example gh pr view 42 -R example/repo; gh pr view 43 -R example/repo`, "")
+	links, err := CommandPRLinks(t.Context(), `GH_HOST=git.example gh pr view 42 -R example/repo; gh pr view 43 -R example/repo`, "", true)
 	require.NoError(t, err)
 	require.Len(t, links, 1)
 	assert.Equal(t, "https://git.example/example/repo/pull/42", links[0].URL)

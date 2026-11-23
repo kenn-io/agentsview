@@ -57,7 +57,7 @@ func shellLiteral(parts []syntax.WordPart) (string, bool) {
 }
 
 // CommandPRLinks finds PRs named by direct gh commands in a shell input.
-func CommandPRLinks(ctx context.Context, command, remote string) ([]PRLink, error) {
+func CommandPRLinks(ctx context.Context, command, remote string, allowBare bool) ([]PRLink, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -65,29 +65,72 @@ func CommandPRLinks(ctx context.Context, command, remote string) ([]PRLink, erro
 	if err != nil {
 		return nil, nil
 	}
-	var segments []*syntax.Stmt
-	var collect func(*syntax.Stmt)
-	collect = func(stmt *syntax.Stmt) {
-		if binary, ok := stmt.Cmd.(*syntax.BinaryCmd); ok {
-			collect(binary.X)
-			collect(binary.Y)
-			return
+	type segment struct {
+		stmt   *syntax.Stmt
+		nested bool
+	}
+	var segments []segment
+	var collect func(*syntax.Stmt, bool)
+	var collectIf func(*syntax.IfClause)
+	collectIf = func(clause *syntax.IfClause) {
+		for _, stmt := range clause.Cond {
+			collect(stmt, true)
 		}
-		segments = append(segments, stmt)
+		for _, stmt := range clause.Then {
+			collect(stmt, true)
+		}
+		if clause.Else != nil {
+			collectIf(clause.Else)
+		}
+	}
+	collect = func(stmt *syntax.Stmt, nested bool) {
+		switch cmd := stmt.Cmd.(type) {
+		case *syntax.BinaryCmd:
+			collect(cmd.X, nested)
+			collect(cmd.Y, nested)
+		case *syntax.IfClause:
+			collectIf(cmd)
+		case *syntax.WhileClause:
+			for _, child := range cmd.Cond {
+				collect(child, true)
+			}
+			for _, child := range cmd.Do {
+				collect(child, true)
+			}
+		case *syntax.ForClause:
+			for _, child := range cmd.Do {
+				collect(child, true)
+			}
+		case *syntax.CaseClause:
+			for _, item := range cmd.Items {
+				for _, child := range item.Stmts {
+					collect(child, true)
+				}
+			}
+		case *syntax.Block:
+			for _, child := range cmd.Stmts {
+				collect(child, true)
+			}
+		case *syntax.Subshell:
+			for _, child := range cmd.Stmts {
+				collect(child, true)
+			}
+		default:
+			segments = append(segments, segment{stmt, nested})
+		}
 	}
 	for _, stmt := range file.Stmts {
-		collect(stmt)
+		collect(stmt, false)
 	}
-	remoteHost, remoteRepo, _ := strings.Cut(remote, "/")
+	remoteHost, remoteRepo := "", ""
 	if normalized, ok := export.NormalizeGitRemote(remote); ok {
 		remoteHost, remoteRepo, _ = strings.Cut(normalized, "/")
-	} else {
-		remoteHost, remoteRepo = "", ""
 	}
 	shellHost, shellHostSet, shellHostValid := "", false, true
 	var links [][]PRLink
-	bareSafe := !strings.ContainsAny(command, "$`(") && !strings.Contains(command, "GH_REPO")
-	for _, stmt := range segments {
+	bareSafe := allowBare && !strings.Contains(command, "GH_REPO")
+	for _, segment := range segments {
+		stmt := segment.stmt
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -113,7 +156,12 @@ func CommandPRLinks(ctx context.Context, command, remote string) ([]PRLink, erro
 				for _, a := range decl.Args {
 					recordHost(a)
 				}
-				shellHost, shellHostSet, shellHostValid = host, hostSet, hostValid
+				if segment.nested && hostSet {
+					bareSafe = false
+				}
+				if !segment.nested {
+					shellHost, shellHostSet, shellHostValid = host, hostSet, hostValid
+				}
 			}
 			continue
 		}
@@ -216,16 +264,15 @@ func CommandPRLinks(ctx context.Context, command, remote string) ([]PRLink, erro
 		if !repoPathRE.MatchString(repo) {
 			continue
 		}
-		matchingRemote := remoteRepo != "" && len(CombinePRLinks([]PRLink{{Host: remoteHost, Repository: remoteRepo, Number: number}}, []PRLink{{Host: remoteHost, Repository: repo, Number: number}})) == 1
 		selectedHost := ""
 		if explicitHost != "" {
 			selectedHost = explicitHost
 		} else if hostSet {
 			selectedHost = host
-			if matchingRemote && !strings.EqualFold(host, remoteHost) {
+			if remoteHost != "" && !strings.EqualFold(host, remoteHost) {
 				continue
 			}
-		} else if matchingRemote {
+		} else if remoteHost != "" {
 			selectedHost = remoteHost
 		}
 		if selectedHost == "" {
@@ -236,4 +283,38 @@ func CommandPRLinks(ctx context.Context, command, remote string) ([]PRLink, erro
 		}
 	}
 	return CombinePRLinks(links...), nil
+}
+
+// BashChangesWorkingDirectory reports literal cd commands in a shared Bash call.
+func BashChangesWorkingDirectory(command string) bool {
+	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
+	if err != nil {
+		return false
+	}
+	changed := false
+	syntax.Walk(file, func(node syntax.Node) bool {
+		if changed {
+			return false
+		}
+		switch call := node.(type) {
+		case *syntax.Subshell, *syntax.FuncDecl, *syntax.CmdSubst, *syntax.ProcSubst:
+			return false
+		case *syntax.CallExpr:
+			if len(call.Args) == 0 || len(call.Args) > 2 {
+				return false
+			}
+			name, literal := shellLiteral(call.Args[0].Parts)
+			if !literal || name != "cd" {
+				return false
+			}
+			if len(call.Args) == 1 {
+				changed = true
+				return false
+			}
+			_, changed = shellLiteral(call.Args[1].Parts)
+			return false
+		}
+		return !changed
+	})
+	return changed
 }

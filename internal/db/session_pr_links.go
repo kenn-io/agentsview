@@ -288,7 +288,23 @@ func appendSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id
 	if err := tx.QueryRow(`SELECT COALESCE(cwd,''), `+prLinkRemoteSQL+` FROM sessions WHERE id=?`, id, id).Scan(&cwd, &remote); err != nil {
 		return err
 	}
-	tools, err := ToolCallPRLinks(ctx, messages, cwd, remote)
+	sharedCwdChanged, checked := false, false
+	for _, message := range messages {
+		for _, call := range message.ToolCalls {
+			if call.Category == "Bash" && call.ToolName == "Bash" {
+				sharedCwdChanged, err = priorBashDirectoryChangeTx(tx, id, messages[0].Ordinal)
+				if err != nil {
+					return err
+				}
+				checked = true
+				break
+			}
+		}
+		if checked {
+			break
+		}
+	}
+	tools, err := toolCallPRLinks(ctx, messages, cwd, remote, &sharedCwdChanged)
 	if err != nil {
 		return err
 	}
@@ -354,7 +370,7 @@ func (db *DB) upgradePromptPRLinksTx(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
-func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote string) ([]PRLink, error) {
+func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote string, sharedCwdChanged bool) ([]PRLink, error) {
 	if category == "Task" {
 		var payload struct {
 			Prompt  string         `json:"prompt"`
@@ -396,8 +412,9 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 	if dir == "" {
 		dir = payload.WorkingDirectory
 	}
-	if dir != "" && !samePRWorkingDirectory(cwd, dir) {
-		remote = ""
+	allowBare := !sharedCwdChanged
+	if dir != "" {
+		allowBare = samePRWorkingDirectory(cwd, dir)
 	}
 	var command string
 	if json.Unmarshal(payload.Command, &command) != nil {
@@ -411,7 +428,7 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 	}
 	var lists [][]PRLink
 	for _, command := range payload.Commands {
-		links, err := parser.CommandPRLinks(ctx, command, remote)
+		links, err := parser.CommandPRLinks(ctx, command, remote, allowBare)
 		if err != nil {
 			return nil, err
 		}
@@ -481,7 +498,7 @@ func (v *codeModeVisitor) Enter(node js.INode) js.IVisitor {
 	if !knownDir || dir != "" && !samePRWorkingDirectory(v.cwd, dir) {
 		remote = ""
 	}
-	links, err := parser.CommandPRLinks(v.ctx, command, remote)
+	links, err := parser.CommandPRLinks(v.ctx, command, remote, true)
 	if err == nil {
 		v.links = append(v.links, links)
 	}
@@ -532,53 +549,88 @@ func samePRWorkingDirectory(cwd, dir string) bool {
 
 // ToolCallPRLinks derives links from a transcript's tool calls.
 func ToolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string) ([]PRLink, error) {
+	changed := false
+	return toolCallPRLinks(ctx, messages, cwd, remote, &changed)
+}
+
+func toolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string, sharedCwdChanged *bool) ([]PRLink, error) {
 	var lists [][]PRLink
 	for _, message := range messages {
 		for _, call := range message.ToolCalls {
-			links, err := callPRLinks(ctx, call.Category, call.ToolName, call.InputJSON, cwd, remote)
+			links, err := callPRLinks(ctx, call.Category, call.ToolName, call.InputJSON, cwd, remote, call.ToolName == "Bash" && *sharedCwdChanged)
 			if err != nil {
 				return nil, err
 			}
 			lists = append(lists, links)
+			if call.Category == "Bash" && call.ToolName == "Bash" && bashInputChangesDirectory(call.InputJSON) {
+				*sharedCwdChanged = true
+			}
 		}
 	}
 	return parser.CombinePRLinks(lists...), nil
 }
 
+func bashInputChangesDirectory(input string) bool {
+	if len(input) > 256*1024 {
+		return false
+	}
+	var payload struct {
+		Command string `json:"command"`
+	}
+	return json.Unmarshal([]byte(input), &payload) == nil && parser.BashChangesWorkingDirectory(payload.Command)
+}
+
+func priorBashDirectoryChangeTx(tx transactionQueries, id string, before int) (bool, error) {
+	rows, err := tx.Query(`SELECT t.input_json FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND t.category='Bash' AND t.tool_name='Bash' AND t.input_json IS NOT NULL AND m.ordinal<? ORDER BY m.ordinal,t.id`, id, before)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var input string
+		if err := rows.Scan(&input); err != nil {
+			return false, err
+		}
+		if bashInputChangesDirectory(input) {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
 func storedToolCallPRLinksTx(ctx context.Context, tx transactionQueries, id, cwd, remote string) ([]PRLink, error) {
-	rows, err := tx.Query(`SELECT t.category, t.tool_name, t.input_json FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND t.category IN ('Bash','Task') AND t.input_json IS NOT NULL AND (`+toolPRLinkCandidateSQL+`) ORDER BY m.ordinal, t.id`, id)
+	rows, err := tx.Query(`SELECT t.category, t.tool_name, t.input_json FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND t.category IN ('Bash','Task') AND t.input_json IS NOT NULL ORDER BY m.ordinal, t.id`, id)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var lists [][]PRLink
+	changed := false
 	for rows.Next() {
-		var category, name, input string
-		if err := rows.Scan(&category, &name, &input); err != nil {
+		var call ToolCall
+		if err := rows.Scan(&call.Category, &call.ToolName, &call.InputJSON); err != nil {
 			return nil, err
 		}
-		links, err := callPRLinks(ctx, category, name, input, cwd, remote)
+		links, err := toolCallPRLinks(ctx, []Message{{ToolCalls: []ToolCall{call}}}, cwd, remote, &changed)
 		if err != nil {
 			return nil, err
 		}
 		lists = append(lists, links)
 	}
-	return parser.CombinePRLinks(lists...), rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return parser.CombinePRLinks(lists...), nil
 }
 
 const toolPRLinksDataVersion = 186
-
-// toolPRLinkCandidateSQL matches gh pr commands, including a gh quoted or
-// escaped in the shell, and PR URLs. Escaped paths remain candidates because
-// decoding can reveal a PR route.
-const toolPRLinkCandidateSQL = `input_json LIKE '%gh%pr%' OR input_json LIKE '%g''%h%pr%' OR input_json LIKE '%g\%h%pr%' OR (input_json LIKE '%http%' AND (input_json LIKE '%/pull/%' OR input_json LIKE '%/pulls/%' OR input_json LIKE '%/-/merge_requests/%' OR instr(input_json, '%') > 0 OR instr(input_json, char(92)) > 0))`
 
 func (db *DB) upgradeToolPRLinksTx(ctx context.Context, tx *sql.Tx) error {
 	version, _, err := readUserVersion(ctx, tx)
 	if err != nil || version >= toolPRLinksDataVersion {
 		return err
 	}
-	condition := "id IN (SELECT session_id FROM tool_calls WHERE category IN ('Bash','Task') AND (" + toolPRLinkCandidateSQL + "))"
+	condition := "id IN (SELECT session_id FROM tool_calls WHERE category IN ('Bash','Task') AND input_json IS NOT NULL)"
 	if version < promptPRLinksDataVersion && !db.usageOnlyStorage() {
 		// The prompt upgrade already refreshed these sessions, including tools.
 		condition += " AND id NOT IN (SELECT session_id FROM messages WHERE " + promptPRLinkCandidateSQL + ")"
