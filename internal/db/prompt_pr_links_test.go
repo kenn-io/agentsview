@@ -682,19 +682,20 @@ func TestCwdChangeRefreshesToolPRLinks(t *testing.T) {
 			got, err := d.GetSession(t.Context(), s.ID)
 			require.NoError(t, err)
 			require.Len(t, got.PRLinks, 1)
-			if method == "session" {
+			switch method {
+			case "session":
 				require.NoError(t, d.UpdateSessionCwd(t.Context(), s.ID, "/work/other"))
-			} else if method == "path" {
+			case "path":
 				n, err := d.UpdateCwdByAgentPathCount(t.Context(), *s.FilePath, s.Agent, "/work/other")
 				require.NoError(t, err)
 				require.Equal(t, 1, n)
-			} else if method == "upsert" {
+			case "upsert":
 				s.Cwd = "/work/other"
 				require.NoError(t, d.UpsertSession(t.Context(), s))
-			} else if method == "identity" {
+			case "identity":
 				s.Cwd = "/work/other"
 				require.NoError(t, d.UpsertSessionWithProjectIdentity(t.Context(), s, obs, ""))
-			} else {
+			case "batch":
 				s.Cwd = "/work/other"
 				_, err := d.WriteSessionBatchContext(t.Context(), []SessionBatchWrite{{Session: s}})
 				require.NoError(t, err)
