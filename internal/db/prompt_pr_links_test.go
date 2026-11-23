@@ -718,8 +718,10 @@ func TestToolPRLinksAppendRefreshParity(t *testing.T) {
 		command string
 		want    int
 	}{
-		{"cd /other", 0}, {"export GH_REPO=example/other", 0},
-		{"(cd /other)", 1}, {"(export GH_REPO=example/other)", 1},
+		{"cd /other", 0},
+		{"export GH_REPO=example/other", 0},
+		{"(cd /other)", 1},
+		{"(export GH_REPO=example/other)", 1},
 	} {
 		t.Run(tc.command, func(t *testing.T) {
 			d := testDB(t)

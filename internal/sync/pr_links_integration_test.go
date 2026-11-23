@@ -240,7 +240,8 @@ func TestShellCommandPRFilter(t *testing.T) {
 	for _, tc := range []struct{ id, command string }{
 		{"shell-function", "other() { cd /other; }; gh pr view 42"},
 		{"shell-export", "export GH_REPO=example/other; gh pr view 43"},
-		{"unrelated-a", "echo hello"}, {"unrelated-b", "gh pr view 44 -R example/other"},
+		{"unrelated-a", "echo hello"},
+		{"unrelated-b", "gh pr view 44 -R example/other"},
 	} {
 		env.writeClaudeSession(t, "proj", tc.id+".jsonl", testjsonl.JoinJSONL(
 			testjsonl.ClaudeUserJSON("Work", tsEarly, root),
