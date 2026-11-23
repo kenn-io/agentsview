@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -1058,4 +1059,58 @@ func TestAntigravityCLIT3ContainerSyncsRuntimeCreatedInstance(t *testing.T) {
 	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{dbPath}))
 	msgs = antigravityCLIMessageContents(fetchMessages(t, database, sessionID))
 	assert.Equal(t, []string{"Fix T3 ACP discovery", "Found the container path.", "Follow-up prompt"}, msgs)
+}
+
+func TestAntigravityCLIPartialDiscoverySyncsHealthyStandaloneWhenContainerUnreadable(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("chmod 000 permission test requires non-root unix")
+	}
+	base := t.TempDir()
+	standaloneRoot := filepath.Join(base, ".gemini", "antigravity-cli")
+	container := filepath.Join(base, ".t3", "userdata", "providers", "antigravity")
+
+	const (
+		containerUUID  = "cccccccc-1111-4222-8333-444444444441"
+		standaloneUUID = "cccccccc-1111-4222-8333-444444444442"
+	)
+
+	// Seed an initial container session so we verify an unreadable container
+	// also preserves previously archived sessions without tombstoning them.
+	acpConvDir := filepath.Join(container, "inst1", "antigravity-acp", "conversations")
+	require.NoError(t, os.MkdirAll(acpConvDir, 0o755))
+	createAntigravityCLIDisplayStepDB(t, filepath.Join(acpConvDir, containerUUID+".db"), "Archived container prompt")
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentAntigravityCLI: {standaloneRoot, container},
+		},
+		Machine: "devbox",
+	})
+	t.Cleanup(engine.Close)
+
+	initial := engine.SyncAll(t.Context(), nil)
+	require.Zero(t, initial.Failed)
+	require.Equal(t, 1, initial.Synced)
+
+	// Add a new standalone session while making the container unreadable.
+	standaloneConvDir := filepath.Join(standaloneRoot, "conversations")
+	require.NoError(t, os.MkdirAll(standaloneConvDir, 0o755))
+	createAntigravityCLIDisplayStepDB(t, filepath.Join(standaloneConvDir, standaloneUUID+".db"), "Healthy standalone prompt")
+
+	require.NoError(t, os.Chmod(container, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(container, 0o755) })
+
+	stats := engine.SyncAll(t.Context(), nil)
+	assert.Positive(t, stats.Failed, "unreadable container must still report incomplete discovery")
+	assert.Equal(t, 1, stats.Synced, "healthy standalone session must sync despite unreadable container")
+
+	standaloneMsgs := antigravityCLIMessageContents(fetchMessages(t, database, "antigravity-cli:"+standaloneUUID))
+	assert.Equal(t, []string{"Healthy standalone prompt"}, standaloneMsgs)
+
+	// Previously archived container session must remain intact and untombstoned.
+	archived, err := database.GetSession(t.Context(), "antigravity-cli:"+containerUUID)
+	require.NoError(t, err)
+	require.NotNil(t, archived)
+	assert.Nil(t, archived.SourceMissingAt)
 }

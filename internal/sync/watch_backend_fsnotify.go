@@ -1358,27 +1358,15 @@ func extraCoversDirectory(parts, patterns []string) bool {
 	return false
 }
 
-// extraCoversFiles reports whether parts is a listed extra directory whose
-// files should be reported. An intermediate directory listed only because a
-// longer pattern passes through it does not qualify.
+// extraCoversFiles reports whether parts exactly matches a listed extra
+// directory whose files should be reported. Unlisted intermediate directories
+// traversed only to reach a longer pattern fail the length check and stay
+// quiet; directories explicitly listed in patterns stay visible even when
+// another pattern descends further beneath them.
 func extraCoversFiles(parts, patterns []string) bool {
 	for _, pattern := range patterns {
 		want := extraPatternParts(pattern)
-		if len(want) != len(parts) || !matchExtraPrefix(parts, want) {
-			continue
-		}
-		if extraHasLongerPattern(want, patterns) {
-			continue
-		}
-		return true
-	}
-	return false
-}
-
-func extraHasLongerPattern(prefix, patterns []string) bool {
-	for _, pattern := range patterns {
-		want := extraPatternParts(pattern)
-		if len(want) > len(prefix) && matchExtraPrefix(prefix, want) {
+		if len(want) == len(parts) && matchExtraPrefix(parts, want) {
 			return true
 		}
 	}

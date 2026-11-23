@@ -336,3 +336,94 @@ func TestAntigravityCLIProviderContainerForeignMachineMarksRemoteCwd(t *testing.
 	assert.Equal(t, SourceCwdRemote, source.CwdResolution.State)
 	assert.Empty(t, source.CwdResolution.Path)
 }
+
+func TestAntigravityCLIProviderContainerInstanceNamedCacheOrBrain(t *testing.T) {
+	tests := []struct {
+		name           string
+		instanceName   string
+		nestedAppDir   string
+		conversationID string
+	}{
+		{
+			name:           "nested instance named cache",
+			instanceName:   "cache",
+			nestedAppDir:   "antigravity-acp",
+			conversationID: "77777777-1111-4222-8333-444444444441",
+		},
+		{
+			name:           "nested instance named brain",
+			instanceName:   "brain",
+			nestedAppDir:   "antigravity-acp",
+			conversationID: "77777777-1111-4222-8333-444444444442",
+		},
+		{
+			name:           "direct instance named cache",
+			instanceName:   "cache",
+			conversationID: "77777777-1111-4222-8333-444444444443",
+		},
+		{
+			name:           "direct instance named brain",
+			instanceName:   "brain",
+			conversationID: "77777777-1111-4222-8333-444444444444",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			container := filepath.Join(t.TempDir(), "custom-harness")
+			sessionRoot := filepath.Join(container, tt.instanceName)
+			if tt.nestedAppDir != "" {
+				sessionRoot = filepath.Join(sessionRoot, tt.nestedAppDir)
+			}
+			writeAntigravityCLIProviderFixture(t, sessionRoot, tt.conversationID)
+
+			dbPath := filepath.Join(sessionRoot, "conversations", tt.conversationID+".db")
+			implicitPath := filepath.Join(sessionRoot, "implicit", tt.conversationID+".pb")
+			artifactPath := filepath.Join(sessionRoot, "brain", tt.conversationID, "plan.md")
+			require.NoError(t, os.MkdirAll(filepath.Dir(artifactPath), 0o755))
+			mustWrite(t, artifactPath, []byte("# Plan\n"))
+			transcriptPath := antigravityBrainTranscriptPath(sessionRoot, tt.conversationID)
+			require.NoError(t, os.MkdirAll(filepath.Dir(transcriptPath), 0o755))
+			mustWrite(t, transcriptPath, []byte(`{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"hi"}`+"\n"))
+
+			provider, ok := NewProvider(AgentAntigravityCLI, ProviderConfig{
+				Roots:   []string{container},
+				Machine: "devbox",
+			})
+			require.True(t, ok)
+
+			discovered, err := provider.Discover(t.Context())
+			require.NoError(t, err)
+			assertAntigravityCLISourcePaths(t, discovered, dbPath, implicitPath)
+
+			for _, eventPath := range []string{dbPath + "-wal", artifactPath, transcriptPath} {
+				changed, changeErr := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
+					Path: eventPath, WatchRoot: container, EventKind: "write",
+				})
+				require.NoError(t, changeErr)
+				if eventPath == dbPath+"-wal" {
+					assertAntigravityCLISourcePaths(t, changed, dbPath)
+				} else {
+					assertAntigravityCLISourcePaths(t, changed, dbPath, implicitPath)
+				}
+			}
+
+			relevance := provider.(ChangedPathRelevanceProvider)
+			got, err := relevance.ChangedPathRelevance(t.Context(), ChangedPathRequest{
+				Path: filepath.Join(sessionRoot, AntigravitySummariesDBName+"-shm"), WatchRoot: container, EventKind: "write",
+			})
+			require.NoError(t, err)
+			assert.Equal(t, ChangedPathNonData, got)
+		})
+	}
+
+	// A direct session root containing conversations/ must never be misrouted
+	// as a container even if a brain directory contains unusual child names.
+	directRoot := t.TempDir()
+	const directID = "77777777-1111-4222-8333-444444444449"
+	writeAntigravityCLIProviderFixture(t, directRoot, directID)
+	_, isInstance := antigravityCLIContainerSpec.InstanceRootForPath(
+		directRoot, filepath.Join(directRoot, "brain", "antigravity-acp", "plan.md"),
+	)
+	assert.False(t, isInstance)
+}

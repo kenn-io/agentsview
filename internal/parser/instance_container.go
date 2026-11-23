@@ -47,10 +47,8 @@ func (s InstanceContainerSpec) ExpandRoot(root string) (roots []string, isContai
 	if clean == "" || clean == "." {
 		return nil, false, nil
 	}
-	for _, marker := range s.DirectMarkers {
-		if info, statErr := os.Stat(filepath.Join(clean, marker)); statErr == nil && info.IsDir() {
-			return []string{clean}, false, nil
-		}
+	if s.hasDirectMarker(clean) {
+		return []string{clean}, false, nil
 	}
 
 	known := s.IsKnownContainer != nil && s.IsKnownContainer(clean)
@@ -131,9 +129,10 @@ func (s InstanceContainerSpec) IsContainer(root string) bool {
 }
 
 // InstanceRootForPath maps a changed path beneath a container root directly to
-// its owning leaf session root in O(1) using only path segments, without
-// scanning sibling instances. It returns ("", false) when changedPath belongs
-// directly to containerRoot as a leaf root rather than to a nested instance.
+// its owning leaf session root in O(1) without scanning sibling instances. It
+// returns ("", false) when containerRoot is itself a direct session root
+// (matched via DirectMarkers, consistent with ExpandRoot) or when changedPath
+// belongs directly to containerRoot rather than to a nested instance.
 func (s InstanceContainerSpec) InstanceRootForPath(containerRoot, changedPath string) (string, bool) {
 	cleanRoot := filepath.Clean(containerRoot)
 	rel, ok := relUnder(cleanRoot, filepath.Clean(changedPath))
@@ -144,21 +143,33 @@ func (s InstanceContainerSpec) InstanceRootForPath(containerRoot, changedPath st
 	if len(parts) < 2 {
 		return "", false
 	}
+	if s.hasDirectMarker(cleanRoot) {
+		return "", false
+	}
 	// Single-profile root: <root>/<AppDataDir>/<entry>...
 	if slices.Contains(s.AppDataDirs, parts[0]) {
 		return filepath.Join(cleanRoot, parts[0]), true
 	}
 	// Nested-instance container: <root>/<instance>/<AppDataDir>/<entry>...
 	if len(parts) >= 3 && slices.Contains(s.AppDataDirs, parts[1]) &&
-		!slices.Contains(s.SessionRootEntries, parts[0]) {
+		!slices.Contains(s.DirectMarkers, parts[0]) {
 		return filepath.Join(cleanRoot, parts[0], parts[1]), true
 	}
 	// Direct-instance container: <root>/<instance>/<sessionEntry>...
-	if !slices.Contains(s.SessionRootEntries, parts[0]) &&
+	if !slices.Contains(s.DirectMarkers, parts[0]) &&
 		slices.Contains(s.SessionRootEntries, parts[1]) {
 		return filepath.Join(cleanRoot, parts[0]), true
 	}
 	return "", false
+}
+
+func (s InstanceContainerSpec) hasDirectMarker(cleanRoot string) bool {
+	for _, marker := range s.DirectMarkers {
+		if info, statErr := os.Stat(filepath.Join(cleanRoot, marker)); statErr == nil && info.IsDir() {
+			return true
+		}
+	}
+	return false
 }
 
 func isNonSymlinkDir(path string) (bool, error) {

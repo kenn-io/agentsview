@@ -522,8 +522,10 @@ func (s antigravityCLISourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 // meta-harness container (such as T3 Code's providers/antigravity directory) to
 // the session subdirectories while excluding high-churn generated trees such
 // as brain/<id>/scratch, .system_generated/steps, logs/chunks, builtin, and
-// log. None of the ExtraDirectories entries is a prefix of a longer entry, so
-// fsnotify keeps files visible in every leaf directory listed here.
+// log. Both brain/<id> (for *.md / *.md.metadata.json artifacts) and
+// brain/<id>/.system_generated/logs (for transcript.jsonl) are explicitly
+// listed so files in both stay visible while intermediate directories such as
+// brain/ and .system_generated/ stay quiet.
 func antigravityCLIContainerWatchRoot(root string) WatchRoot {
 	brainLogsSuffix := "brain/*/" + antigravityBrainGeneratedDir + "/" + antigravityBrainLogsDir
 	return WatchRoot{
@@ -531,28 +533,23 @@ func antigravityCLIContainerWatchRoot(root string) WatchRoot {
 		Recursive: true,
 		MaxDepth:  2,
 		ExtraDirectories: []string{
-			// Single-profile root (<root>/antigravity-{acp,cli}/...)
-			"antigravity-acp/conversations",
-			"antigravity-acp/implicit",
-			"antigravity-acp/cache",
-			"antigravity-acp/" + brainLogsSuffix,
-			"antigravity-cli/conversations",
-			"antigravity-cli/implicit",
-			"antigravity-cli/cache",
-			"antigravity-cli/" + brainLogsSuffix,
-			// Direct-instance container (<root>/<instance>/...)
+			// Single-profile (<root>/antigravity-{acp,cli}/...) and
+			// direct-instance (<root>/<instance>/...) containers:
 			"*/conversations",
 			"*/implicit",
 			"*/cache",
+			"*/brain/*",
 			"*/" + brainLogsSuffix,
-			// Nested-instance container (<root>/<instance>/antigravity-{acp,cli}/...)
+			// Nested-instance (<root>/<instance>/antigravity-{acp,cli}/...) containers:
 			"*/antigravity-acp/conversations",
 			"*/antigravity-acp/implicit",
 			"*/antigravity-acp/cache",
+			"*/antigravity-acp/brain/*",
 			"*/antigravity-acp/" + brainLogsSuffix,
 			"*/antigravity-cli/conversations",
 			"*/antigravity-cli/implicit",
 			"*/antigravity-cli/cache",
+			"*/antigravity-cli/brain/*",
 			"*/antigravity-cli/" + brainLogsSuffix,
 		},
 		IncludeGlobs: []string{
@@ -996,9 +993,13 @@ func antigravityCLIProviderCapabilities() Capabilities {
 		},
 		// The fingerprint covers the summary store's workspace and parent,
 		// which change without touching the conversation's own files.
+		// PartialDiscovery lets healthy standalone or sibling-instance roots
+		// keep syncing when another container or instance is unreadable, while
+		// still reporting DiscoveryIncompleteError so nothing is tombstoned.
 		Sync: ProviderSyncSemantics{
 			FingerprintHashInCacheKey:           true,
 			FingerprintHashRequiredForFreshness: true,
+			PartialDiscovery:                    true,
 		},
 	}
 }
