@@ -303,7 +303,7 @@ func appendSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id
 	for _, message := range messages {
 		for _, call := range message.ToolCalls {
 			if dependsOnNewLink && call.Category == "Bash" && isPRShellTool(call.ToolName) {
-				sharedContext, err = priorBashContextChangeTx(ctx, tx, id, messages[0].Ordinal)
+				sharedContext, err = priorBashContextChangeTx(ctx, tx, id, cwd, messages[0].Ordinal)
 				if err != nil {
 					return err
 				}
@@ -459,7 +459,7 @@ func ToolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string
 }
 
 func isPRShellTool(name string) bool {
-	return name == "Bash" || name == "exec_command" || name == "shell_command" || name == "shell" || name == "exec"
+	return name == "Bash" || name == "exec_command" || name == "shell_command" || name == "shell" || name == "exec" || name == "execute_command"
 }
 
 func toolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string, sharedContext *sharedPRContext, depends *[]PRLink) ([]PRLink, error) {
@@ -494,8 +494,8 @@ func toolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string
 	return parser.CombinePRLinks(lists...), nil
 }
 
-func priorBashContextChangeTx(ctx context.Context, tx transactionQueries, id string, before int) (sharedPRContext, error) {
-	rows, err := tx.Query(`SELECT t.tool_name,t.input_json FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND t.category='Bash' AND t.tool_name IN ('Bash','exec_command','shell_command','shell','exec') AND t.input_json IS NOT NULL AND m.ordinal<? ORDER BY m.ordinal,t.id`, id, before)
+func priorBashContextChangeTx(ctx context.Context, tx transactionQueries, id, cwd string, before int) (sharedPRContext, error) {
+	rows, err := tx.Query(`SELECT t.tool_name,t.input_json FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND t.category='Bash' AND t.tool_name IN ('Bash','exec_command','shell_command','shell','exec','execute_command') AND t.input_json IS NOT NULL AND m.ordinal<? ORDER BY m.ordinal,t.id`, id, before)
 	if err != nil {
 		return sharedPRContext{}, err
 	}
@@ -507,7 +507,7 @@ func priorBashContextChangeTx(ctx context.Context, tx transactionQueries, id str
 			return sharedPRContext{}, err
 		}
 		var change sharedPRContext
-		if _, err := callPRLinks(ctx, "Bash", name, input, "", "", sharedPRContext{}, &change, nil); err != nil {
+		if _, err := callPRLinks(ctx, "Bash", name, input, cwd, "", sharedPRContext{}, &change, nil); err != nil {
 			return sharedPRContext{}, err
 		}
 		if name == "Bash" {

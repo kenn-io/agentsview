@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,10 +24,19 @@ func TestCommandPRLinks(t *testing.T) {
 		{`gh pr revert 42 -R example/repo`, "", "https://github.com/example/repo/pull/42"},
 		{`gh pr revert --title revert 42 -R example/repo`, "", "https://github.com/example/repo/pull/42"},
 		{`review() { gh pr view 42 -R example/repo; }; echo ready`, "", ""},
+		{`review() { gh pr view 42 -R example/repo; }; review`, "", "https://github.com/example/repo/pull/42"},
+		{`review() { gh pr view 42; }; review`, remote, "https://github.com/example/repo/pull/42"},
+		{`review() { gh pr view 42; }; GH_REPO=example/other review`, remote, ""},
+		{`review() { gh pr view 42 -R example/repo; }; GH_HOST=git.example review`, remote, ""},
+		{`review() { gh pr view 42 -R github.com/example/repo; }; GH_REPO=example/other review`, remote, "https://github.com/example/repo/pull/42"},
+		{`review() { gh pr view 42; }; cd /other; review`, remote, ""},
+		{`review() { git remote set-url origin https://github.com/example/other.git; gh pr view 42; }; review`, remote, ""},
+		{`review() { review; gh pr view 42 -R github.com/example/repo; }; review`, "", "https://github.com/example/repo/pull/42"},
+		{`gh pr comment 42 -R example/repo --body "$(export GH_HOST=git.example)"`, "", ""},
 		{`git push && gh pr view 42`, remote, "https://github.com/example/repo/pull/42"},
 		{`ls; gh pr view 42`, remote, "https://github.com/example/repo/pull/42"},
 		{`echo $GH_REPO; gh pr view 42`, remote, "https://github.com/example/repo/pull/42"},
-		{`change_repo() { export GH_REPO=example/other; }; gh pr view 42`, remote, ""},
+		{`change_repo() { export GH_REPO=example/other; }; gh pr view 42`, remote, "https://github.com/example/repo/pull/42"},
 		{`if false; then export GH_REPO=example/other; fi; gh pr view 42`, remote, ""},
 		{`change_repo() { export GH_REPO=example/other; }; change_repo; gh pr view 42`, remote, ""},
 		{`if true; then export GH_REPO=example/other; fi; gh pr view 42`, remote, ""},
@@ -131,6 +141,13 @@ func TestCommandPRLinksIncludesBothBranches(t *testing.T) {
 	require.Len(t, links, 2)
 	assert.Equal(t, 45, links[0].Number)
 	assert.Equal(t, 46, links[1].Number)
+}
+
+func TestCommandPRLinksAfterManyCommands(t *testing.T) {
+	links, err := CommandPRLinks(t.Context(), strings.Repeat("true; ", 4097)+"gh pr view 42 -R example/repo", "", true)
+	require.NoError(t, err)
+	require.Len(t, links, 1)
+	assert.Equal(t, 42, links[0].Number)
 }
 
 func TestCommandPRLinksUnsetRepoPreservesEarlierLink(t *testing.T) {

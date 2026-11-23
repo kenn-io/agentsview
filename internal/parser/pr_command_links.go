@@ -81,11 +81,12 @@ func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 	}
 	var links [][]PRLink
 	var dependsOnRemote []PRLink
-	for _, call := range calls {
+	for _, entry := range calls {
+		call := entry.call
 		if err := ctx.Err(); err != nil {
 			return nil, false, false, false, nil, err
 		}
-		bareSafe := allowBare && (!firstRepo.IsValid() || call.End().Offset() < firstRepo.Offset()) && !hasCommandSubstitution(call)
+		bareSafe := allowBare && (firstRepo < 0 || entry.end < firstRepo) && !hasCommandSubstitution(call)
 		host, hostSet, hostValid := "", false, true
 		for _, a := range call.Assigns {
 			if a.Name == nil {
@@ -112,7 +113,7 @@ func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 		if len(words) < 4 || !literal[0] || !literal[1] || !literal[2] || words[0] != "gh" || words[1] != "pr" {
 			continue
 		}
-		callHostUnknown := hostUnknown || firstHost.IsValid() && call.End().Offset() >= firstHost.Offset()
+		callHostUnknown := hostUnknown || firstHost >= 0 && entry.end >= firstHost
 		if words[2] == "co" {
 			words[2] = "checkout"
 		}
@@ -233,62 +234,91 @@ func SamePRWorkingDirectory(cwd, dir string) bool {
 	return cwd != "" && dir != "" && path.Clean(strings.ReplaceAll(cwd, `\`, "/")) == path.Clean(strings.ReplaceAll(dir, `\`, "/"))
 }
 
-func bashChangesRepositoryContext(file *syntax.File, cwd string) (bool, bool, bool, syntax.Pos, syntax.Pos, []*syntax.CallExpr) {
-	type scope struct{ local bool }
+type prShellCall struct {
+	call *syntax.CallExpr
+	end  int
+}
+
+func bashChangesRepositoryContext(file *syntax.File, cwd string) (bool, bool, bool, int, int, []prShellCall) {
+	type scope struct {
+		local bool
+		call  int
+	}
 	type event struct {
-		node  syntax.Node
-		scope scope
+		node            syntax.Node
+		scope           scope
+		assignmentsOnly bool
 	}
 	var events []event
 	var stack []scope
-	functions := make(map[string]bool)
-	var calls []*syntax.CallExpr
-	syntax.Walk(file, func(node syntax.Node) bool {
-		if node == nil {
-			stack = stack[:len(stack)-1]
+	functions := make(map[string]*syntax.Stmt)
+	active := make(map[string]bool)
+	expansions := 0
+	var calls []prShellCall
+	var walk func(syntax.Node)
+	walk = func(root syntax.Node) {
+		syntax.Walk(root, func(node syntax.Node) bool {
+			if node == nil {
+				if call := stack[len(stack)-1].call; call >= 0 {
+					calls[call].end = len(events) - 1
+				}
+				stack = stack[:len(stack)-1]
+				return true
+			}
+			var current scope
+			if len(stack) > 0 {
+				current = stack[len(stack)-1]
+			}
+			current.call = -1
+			switch n := node.(type) {
+			case *syntax.FuncDecl:
+				functions[n.Name.Value] = n.Body
+				return false
+			case *syntax.Subshell, *syntax.CmdSubst, *syntax.ProcSubst:
+				current.local = true
+			case *syntax.CallExpr:
+				if len(n.Args) > 0 {
+					name, literal := shellLiteral(n.Args[0].Parts)
+					if body := functions[name]; literal && body != nil && !active[name] && expansions < 4096 {
+						if len(n.Assigns) > 0 {
+							events = append(events, event{n, current, true})
+						}
+						active[name] = true
+						expansions++
+						walk(body)
+						delete(active, name)
+					}
+				}
+				current.call = len(calls)
+				calls = append(calls, prShellCall{n, len(events)})
+				events = append(events, event{node, current, false})
+			case *syntax.DeclClause:
+				events = append(events, event{node, current, false})
+			}
+			stack = append(stack, current)
 			return true
-		}
-		var current scope
-		if len(stack) > 0 {
-			current = stack[len(stack)-1]
-		}
-		switch n := node.(type) {
-		case *syntax.FuncDecl:
-			functions[n.Name.Value] = true
-			events = append(events, event{node, current})
-			return false
-		case *syntax.Subshell, *syntax.CmdSubst, *syntax.ProcSubst:
-			current.local = true
-		case *syntax.CallExpr:
-			calls = append(calls, n)
-			events = append(events, event{node, current})
-		case *syntax.DeclClause:
-			events = append(events, event{node, current})
-		}
-		stack = append(stack, current)
-		return true
-	})
-	var firstRepo, firstHost syntax.Pos
+		})
+	}
+	walk(file)
+	firstRepo, firstHost := -1, -1
 	var directory, repository, persistent bool
-	record := func(dst *syntax.Pos, pos syntax.Pos) {
-		if !dst.IsValid() || pos.Offset() < dst.Offset() {
-			*dst = pos
+	record := func(dst *int, index int) {
+		if *dst < 0 || index < *dst {
+			*dst = index
 		}
 	}
-	for _, item := range events {
+	for index, item := range events {
 		switch n := item.node.(type) {
-		case *syntax.FuncDecl:
-			record(&firstRepo, n.Pos())
 		case *syntax.DeclClause:
 			for _, a := range n.Args {
 				if a.Name == nil {
 					continue
 				}
 				if a.Name.Value == "GH_REPO" {
-					record(&firstRepo, a.Pos())
+					record(&firstRepo, index)
 				}
 				if a.Name.Value == "GH_HOST" {
-					record(&firstHost, a.Pos())
+					record(&firstHost, index)
 				}
 				if !item.scope.local && (a.Name.Value == "GH_REPO" || a.Name.Value == "GH_HOST") {
 					repository = true
@@ -308,7 +338,7 @@ func bashChangesRepositoryContext(file *syntax.File, cwd string) (bool, bool, bo
 					continue
 				}
 				if a.Name.Value == "GH_REPO" {
-					record(&firstRepo, a.Pos())
+					record(&firstRepo, index)
 				}
 				if a.Name.Value == "GH_HOST" {
 					literalPrefix := false
@@ -316,46 +346,49 @@ func bashChangesRepositoryContext(file *syntax.File, cwd string) (bool, bool, bo
 						_, literalPrefix = shellLiteral(a.Value.Parts)
 					}
 					if !literalPrefix {
-						record(&firstHost, a.Pos())
+						record(&firstHost, index)
 					}
 				}
 				if !item.scope.local && len(words) == 0 && (a.Name.Value == "GH_REPO" || a.Name.Value == "GH_HOST") {
 					repository = true
 				}
 			}
+			if item.assignmentsOnly {
+				continue
+			}
 			dir := ""
 			if name == "cd" && len(n.Args) == 2 {
 				dir = strings.ReplaceAll(words[1], `\`, "/")
-				if dir != "" && !path.IsAbs(dir) && !(len(dir) > 1 && dir[1] == ':') {
+				if dir != "" && !path.IsAbs(dir) && (len(dir) <= 1 || dir[1] != ':') {
 					dir = path.Join(strings.ReplaceAll(cwd, `\`, "/"), dir)
 				}
 			}
 			if (name == "cd" || name == "pushd" || name == "popd") && !SamePRWorkingDirectory(cwd, dir) {
-				record(&firstRepo, n.Pos())
+				record(&firstRepo, index)
 				if !item.scope.local {
 					directory = true
 				}
 			}
-			if name == "eval" || name == "source" || name == "." || functions[name] {
-				record(&firstRepo, n.Pos())
-				record(&firstHost, n.Pos())
+			if name == "eval" || name == "source" || name == "." || functions[name] != nil {
+				record(&firstRepo, index)
+				record(&firstHost, index)
 			}
 			if repositoryMutation(words) {
-				record(&firstRepo, n.Pos())
+				record(&firstRepo, index)
 			}
 			if name == "unset" {
 				for _, word := range words[1:] {
 					if word == "GH_HOST" {
-						record(&firstHost, n.Pos())
+						record(&firstHost, index)
 					}
 				}
 			}
 			if (name == "git" || name == "gh") && repositoryMutation(words) {
 				persistent = true
 			}
-			if !item.scope.local && (repositoryMutation(words) || functions[name] || name == "eval" || name == "source" || name == ".") {
+			if !item.scope.local && (repositoryMutation(words) || functions[name] != nil || name == "eval" || name == "source" || name == ".") {
 				repository = true
-				persistent = persistent || functions[name]
+				persistent = persistent || functions[name] != nil
 			}
 		}
 	}

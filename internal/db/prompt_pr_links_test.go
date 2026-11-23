@@ -464,6 +464,28 @@ func TestToolPRLinksSharedShellDirectoryAppend(t *testing.T) {
 	assert.Equal(t, "https://github.com/example/repo/pull/62", got.PRLinks[0].URL)
 }
 
+func TestToolPRLinksSameDirectoryAppend(t *testing.T) {
+	d := testDB(t)
+	s := Session{ID: "same-directory", Project: "project", Machine: "local", Agent: "claude", Cwd: "/work/repo"}
+	require.NoError(t, d.UpsertSession(t.Context(), s))
+	obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://github.com/example/repo.git")
+	require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), obs))
+	message := func(ordinal int, input string) Message {
+		return Message{SessionID: s.ID, Ordinal: ordinal, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: input}}}
+	}
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{message(0, `{"command":"cd ."}`)}))
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{message(1, `{"command":"gh pr view 42"}`)}))
+	for _, refresh := range []bool{false, true} {
+		if refresh {
+			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error { return refreshSessionPromptPRLinksTx(t.Context(), tx, s.ID) }))
+		}
+		got, err := d.GetSession(t.Context(), s.ID)
+		require.NoError(t, err)
+		require.Len(t, got.PRLinks, 1)
+		assert.Equal(t, "https://github.com/example/repo/pull/42", got.PRLinks[0].URL)
+	}
+}
+
 func TestToolPRLinksSharedShellRepositoryChanges(t *testing.T) {
 	for _, command := range []string{
 		`export GH_REPO=example/other`,
@@ -501,19 +523,23 @@ func TestToolPRLinksSharedShellRepositoryChanges(t *testing.T) {
 }
 
 func TestToolPRLinksExecRepositoryChangeAppend(t *testing.T) {
-	for _, tool := range []string{"exec_command", "shell_command"} {
+	for _, tool := range []string{"exec_command", "shell_command", "execute_command"} {
 		t.Run(tool, func(t *testing.T) {
 			d := testDB(t)
-			s := Session{ID: "exec-repo", Project: "project", Machine: "local", Agent: "codex", Cwd: "/work/repo"}
+			s := Session{ID: "exec-repo", Project: "project", Machine: "local", Agent: "roocode", Cwd: "/work/repo"}
 			require.NoError(t, d.UpsertSession(t.Context(), s))
 			obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://github.com/example/repo.git")
 			require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), obs))
 			message := func(ordinal int, input string) Message {
 				return Message{SessionID: s.ID, Ordinal: ordinal, Role: "assistant", ToolCalls: []ToolCall{{ToolName: tool, Category: "Bash", InputJSON: input}}}
 			}
-			require.NoError(t, d.InsertMessages(t.Context(), []Message{message(0, `{"cmd":"git remote set-url origin https://github.com/example/other.git"}`)}))
-			require.NoError(t, d.InsertMessages(t.Context(), []Message{message(1, `{"cmd":"gh pr view 42"}`)}))
+			require.NoError(t, d.InsertMessages(t.Context(), []Message{message(0, `{"command":"git remote set-url origin https://github.com/example/other.git"}`)}))
+			require.NoError(t, d.InsertMessages(t.Context(), []Message{message(1, `{"command":"gh pr view 42"}`)}))
 			got, err := d.GetSession(t.Context(), s.ID)
+			require.NoError(t, err)
+			assert.Empty(t, got.PRLinks)
+			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error { return refreshSessionPromptPRLinksTx(t.Context(), tx, s.ID) }))
+			got, err = d.GetSession(t.Context(), s.ID)
 			require.NoError(t, err)
 			assert.Empty(t, got.PRLinks)
 		})

@@ -3034,6 +3034,9 @@ schemas keep their existing ordering behavior.
 - **Agentsview:** `internal/parser/roocode.go` and
   `internal/parser/roocode_provider.go`; observed older Roo/Cline message
   variants remain covered by the parser's colocated fixtures.
+- **Shell commands:** Rechecked 2026-11-23 at the pinned commit. The
+  [`execute_command` tool](https://github.com/RooCodeInc/Roo-Code/blob/b867ec9145750d0ae1ff7f02d35406e9bf2a0b16/src/core/tools/ExecuteCommandTool.ts)
+  takes a `command` string and optional `cwd`.
 
 ## Cline CLI (`cline`)
 
