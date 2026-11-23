@@ -3340,7 +3340,7 @@ func (e *Engine) SyncThenRun(
 	defer e.syncMu.Unlock()
 	defer e.clearCurrentProgress()
 	defer func() { e.recordStartupReconciled(ctx, stats, err) }()
-	stats, err = e.syncThenRunLocked(ctx, full, onProgress, work, nil)
+	stats, err = e.syncThenRunLocked(ctx, full, onProgress, work)
 	if err == nil && (stats.Deferred == 0 || stats.ArchiveRebuilt) {
 		// Release while syncMu is still held. A timed fallback that was
 		// already waiting on the mutex can then recheck the gate before it
@@ -3354,9 +3354,10 @@ func (e *Engine) syncThenRunLocked(
 	ctx context.Context,
 	full bool,
 	onProgress ProgressFunc,
-	work func(forceFull bool) error, wave *firstImportWave,
+	work func(forceFull bool) error,
 ) (stats SyncStats, err error) {
 	writeMode := syncWriteDefault
+	wave := firstImportFromContext(ctx)
 	if wave != nil && wave.onWrite != nil {
 		writeMode = syncWriteFirstImport
 	}
@@ -3366,13 +3367,13 @@ func (e *Engine) syncThenRunLocked(
 		if stats.Aborted && ctx.Err() == nil {
 			stats = e.syncAllLocked(
 				ctx, onProgress, time.Time{}, nil,
-				writeMode, true, false, wave,
+				writeMode, true, false,
 			)
 		}
 	} else {
 		stats = e.syncAllLocked(
 			ctx, onProgress, time.Time{}, nil,
-			writeMode, true, false, wave,
+			writeMode, true, false,
 		)
 	}
 	if ctx.Err() != nil {
@@ -3508,7 +3509,7 @@ func (e *Engine) SyncThenRunWithRebuild(
 	} else {
 		stats = e.syncAllLocked(
 			ctx, onProgress, time.Time{}, nil,
-			syncWriteDefault, true, false, nil,
+			syncWriteDefault, true, false,
 		)
 	}
 	if err := ctx.Err(); err != nil {
@@ -3716,12 +3717,6 @@ func (e *Engine) RunStartupMaintenance(
 func (e *Engine) RunStartupSyncFallback(
 	ctx context.Context, onProgress ProgressFunc,
 ) (stats SyncStats, ran bool, err error) {
-	return e.runStartupSyncFallback(ctx, onProgress, nil)
-}
-
-func (e *Engine) runStartupSyncFallback(
-	ctx context.Context, onProgress ProgressFunc, wave *firstImportWave,
-) (stats SyncStats, ran bool, err error) {
 	if e.refuseWriteInForceParse("RunStartupSyncFallback") {
 		return SyncStats{}, false, nil
 	}
@@ -3745,7 +3740,7 @@ func (e *Engine) runStartupSyncFallback(
 		}
 	}
 	stats, err = e.syncThenRunLocked(
-		ctx, false, onProgress, func(bool) error { return nil }, wave,
+		ctx, false, onProgress, func(bool) error { return nil },
 	)
 	// Once the fallback has attempted the skipped startup sync, maintenance
 	// must be allowed to proceed even if that attempt was interrupted.
@@ -4051,7 +4046,7 @@ func (e *Engine) syncAll(
 	defer func() { e.recordStartupReconciled(ctx, stats, ctx.Err()) }()
 	stats = e.syncAllLocked(
 		ctx, onProgress, time.Time{}, nil, syncWriteDefault, true,
-		forceFullParse && !allowCachedFailures, nil,
+		forceFullParse && !allowCachedFailures,
 	)
 	return
 }
@@ -6145,7 +6140,7 @@ func (e *Engine) SyncAllSince(
 	defer e.syncMu.Unlock()
 	defer e.clearCurrentProgress()
 	stats = e.syncAllLocked(
-		ctx, onProgress, since, nil, syncWriteDefault, true, false, nil,
+		ctx, onProgress, since, nil, syncWriteDefault, true, false,
 	)
 	return
 }
@@ -6170,7 +6165,7 @@ func (e *Engine) SyncRootsSince(
 	defer e.clearCurrentProgress()
 	scope := newRootSyncScope(roots)
 	stats = e.syncAllLocked(
-		ctx, onProgress, since, scope, syncWriteDefault, scope == nil, false, nil,
+		ctx, onProgress, since, scope, syncWriteDefault, scope == nil, false,
 	)
 	return
 }
@@ -6257,7 +6252,7 @@ func samePathOrDescendant(path, root string) bool {
 func (e *Engine) syncAllLocked(
 	ctx context.Context, onProgress ProgressFunc, since time.Time,
 	scope *rootSyncScope, writeMode syncWriteMode, recordSyncState bool,
-	forceDiscoveredFiles bool, wave *firstImportWave,
+	forceDiscoveredFiles bool,
 ) (stats SyncStats) {
 	if e.sourceSyncErr != nil && e.archiveStore == nil {
 		return SyncStats{Aborted: true, Warnings: []string{e.sourceSyncErr.Error()}, abortCause: e.sourceSyncErr.Error()}
@@ -6343,6 +6338,7 @@ func (e *Engine) syncAllLocked(
 		}()
 	}
 
+	wave := firstImportFromContext(ctx)
 	if wave != nil && wave.limit > 0 {
 		if err := e.firstImportSelect(ctx, dedupeDiscoveredFiles(all), scope, wave); err != nil {
 			return SyncStats{Aborted: true, Warnings: []string{err.Error()}}
@@ -6531,7 +6527,7 @@ func (e *Engine) syncAllLocked(
 	if scope.includesAny(e.sources().agentDirs[parser.AgentWarp]) {
 		if e.syncProviderDBBackedAgent(
 			ctx, parser.AgentWarp, "warp",
-			writeMode, verbose, scope, &stats, advanceDBProgress, wave,
+			writeMode, verbose, scope, &stats, advanceDBProgress,
 		) {
 			stats.Aborted = true
 			return stats
@@ -6540,7 +6536,7 @@ func (e *Engine) syncAllLocked(
 	if scope.includesAny(e.sources().agentDirs[parser.AgentForge]) {
 		if e.syncProviderDBBackedAgent(
 			ctx, parser.AgentForge, "forge",
-			writeMode, verbose, scope, &stats, advanceDBProgress, wave,
+			writeMode, verbose, scope, &stats, advanceDBProgress,
 		) {
 			stats.Aborted = true
 			return stats
@@ -6549,7 +6545,7 @@ func (e *Engine) syncAllLocked(
 	if scope.includesAny(e.sources().agentDirs[parser.AgentPiebald]) {
 		if e.syncProviderDBBackedAgent(
 			ctx, parser.AgentPiebald, "piebald",
-			writeMode, verbose, scope, &stats, advanceDBProgress, wave,
+			writeMode, verbose, scope, &stats, advanceDBProgress,
 		) {
 			stats.Aborted = true
 			return stats
@@ -6558,7 +6554,7 @@ func (e *Engine) syncAllLocked(
 	if scope.includesAny(e.sources().agentDirs[parser.AgentZCode]) {
 		if e.syncProviderDBBackedAgent(
 			ctx, parser.AgentZCode, "zcode",
-			writeMode, verbose, scope, &stats, advanceDBProgress, wave,
+			writeMode, verbose, scope, &stats, advanceDBProgress,
 		) {
 			stats.Aborted = true
 			return stats
@@ -6567,7 +6563,7 @@ func (e *Engine) syncAllLocked(
 	if scope.includesAny(e.sources().agentDirs[parser.AgentGoose]) {
 		if e.syncProviderDBBackedAgent(
 			ctx, parser.AgentGoose, "goose",
-			writeMode, verbose, scope, &stats, advanceDBProgress, wave,
+			writeMode, verbose, scope, &stats, advanceDBProgress,
 		) {
 			stats.Aborted = true
 			return stats
@@ -6576,7 +6572,7 @@ func (e *Engine) syncAllLocked(
 	if scope.includesAny(e.sources().agentDirs[parser.AgentCrush]) {
 		if e.syncProviderDBBackedAgent(
 			ctx, parser.AgentCrush, "crush",
-			writeMode, verbose, scope, &stats, advanceDBProgress, wave,
+			writeMode, verbose, scope, &stats, advanceDBProgress,
 		) {
 			stats.Aborted = true
 			return stats
@@ -7376,7 +7372,7 @@ func (e *Engine) expandSourceBaselinesByStoredAttribution(
 // current, reproducing the legacy *PendingSessionIDs behavior.
 func (e *Engine) syncProviderDBBacked(
 	ctx context.Context, agent parser.AgentType, scope *rootSyncScope,
-	flush func([]pendingWrite) bool, wave *firstImportWave,
+	flush func([]pendingWrite) bool,
 ) (int, int, error) {
 	roots := make([]string, 0, len(e.sources().agentDirs[agent]))
 	for _, dir := range e.sources().agentDirs[agent] {
@@ -7452,6 +7448,7 @@ func (e *Engine) syncProviderDBBacked(
 		return nil
 	}
 
+	wave := firstImportFromContext(ctx)
 	discovered, sourceFailures := 0, 0
 	piebaldDiscovered := make(map[string]struct{})
 	piebaldPruneRoots := roots
@@ -7629,13 +7626,14 @@ func (e *Engine) syncProviderDBBackedAgent(
 	ctx context.Context, agent parser.AgentType, label string,
 	writeMode syncWriteMode, verbose bool, scope *rootSyncScope,
 	stats *SyncStats,
-	advanceDBProgress func(total, indexedMessages int), wave *firstImportWave,
+	advanceDBProgress func(total, indexedMessages int),
 ) bool {
 	start := time.Now()
 	useWorktreeResolver := agent != parser.AgentPiebald
 	resolveWorktreeProject := e.loadWorktreeProjectResolverContext(ctx)
 	var pendingCount, indexedMessages, written int
 	var writeDuration time.Duration
+	wave := firstImportFromContext(ctx)
 	flush := func(pending []pendingWrite) bool {
 		beforeWrite := written
 		complete := true
@@ -7701,9 +7699,12 @@ func (e *Engine) syncProviderDBBackedAgent(
 		return complete
 	}
 	discovered, sourceFailures, discoveryErr := e.syncProviderDBBacked(
-		ctx, agent, scope, flush, wave,
+		ctx, agent, scope, flush,
 	)
-	// Source processing failures do not make the provider listing incomplete.
+	// First import tracks listing failures separately from source processing failures.
+	if wave == nil {
+		stats.providerFailures += sourceFailures
+	}
 	for range sourceFailures {
 		stats.RecordFailed()
 	}

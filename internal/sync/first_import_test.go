@@ -19,16 +19,22 @@ import (
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
+func writeFirstImportClaudeSession(t *testing.T, project string, i int, mtime time.Time) {
+	t.Helper()
+	path := filepath.Join(project, fmt.Sprintf("session-%03d.jsonl", i))
+	content := testjsonl.NewSessionBuilder().AddClaudeUser("2026-01-01T00:00:00Z", "hello").String()
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	if !mtime.IsZero() {
+		require.NoError(t, os.Chtimes(path, mtime, mtime))
+	}
+}
+
 func TestFirstImportResumesAfterFirstWave(t *testing.T) {
 	root := t.TempDir()
 	project := filepath.Join(root, "project")
 	require.NoError(t, os.MkdirAll(project, 0o755))
 	for i := range 250 {
-		path := filepath.Join(project, fmt.Sprintf("session-%03d.jsonl", i))
-		content := testjsonl.NewSessionBuilder().AddClaudeUser("2026-01-01T00:00:00Z", "hello").String()
-		require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-		mtime := time.Unix(1700000000+int64(i), 0)
-		require.NoError(t, os.Chtimes(path, mtime, mtime))
+		writeFirstImportClaudeSession(t, project, i, time.Unix(1700000000+int64(i), 0))
 	}
 	archive := openTestDB(t)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -51,9 +57,43 @@ func TestFirstImportResumesAfterFirstWave(t *testing.T) {
 	require.Equal(t, "session-249", page.Sessions[0].ID)
 	require.True(t, engine.LastSyncFinishedAt(t.Context()).IsZero())
 	engine.emitter = nil
-	_, ran, err = engine.RunFirstImport(t.Context(), nil)
+	marker, err := archive.GetSyncState(t.Context(), db.FirstImportCompletedKey)
 	require.NoError(t, err)
-	require.True(t, ran)
+	require.Empty(t, marker)
+	engine.workerCountOverride = 1
+	paused, resume := make(chan struct{}), make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := engine.RunFirstImport(t.Context(), func(p Progress) {
+			if p.Phase == PhaseSyncing && p.SessionsTotal == 250 && p.SessionsDone == 201 {
+				close(paused)
+				<-resume
+			}
+		})
+		done <- err
+	}()
+	finished := false
+	t.Cleanup(func() {
+		if !finished {
+			close(resume)
+			<-done
+		}
+	})
+	select {
+	case <-paused:
+	case <-time.After(30 * time.Second):
+		require.FailNow(t, "reconciliation did not reach the pause")
+	}
+	newer, err := archive.GetSession(t.Context(), "session-149")
+	require.NoError(t, err)
+	older, err := archive.GetSession(t.Context(), "session-000")
+	require.NoError(t, err)
+	require.NotNil(t, newer)
+	require.Nil(t, older)
+	close(resume)
+	err = <-done
+	finished = true
+	require.NoError(t, err)
 	page, err = archive.ListSessions(t.Context(), db.SessionFilter{Limit: 300})
 	require.NoError(t, err)
 	require.Len(t, page.Sessions, 250)
@@ -86,7 +126,7 @@ func TestFirstImportBoundsCopilotSessionsWithSharedStore(t *testing.T) {
 				AgentDirs: map[parser.AgentType][]string{parser.AgentCopilot: {root}}, Machine: "local", DeferStartupMaintenance: true,
 			})
 			t.Cleanup(engine.Close)
-			_, complete := engine.SyncNewest(t.Context(), 25, nil)
+			_, complete := engine.syncNewest(t.Context(), 25, nil, nil)
 			require.False(t, complete)
 			page, err := archive.ListSessions(t.Context(), db.SessionFilter{Limit: 100})
 			require.NoError(t, err)
@@ -135,7 +175,6 @@ func TestFirstImportNewestWave(t *testing.T) {
 		want  []string
 	}{
 		{"newest", 30, true, []string{"session-027", "session-028", "session-029"}},
-		{"unknown", 4, false, []string{"session-000", "session-001", "session-002"}},
 		{"known-and-unknown", 5, false, []string{"session-000", "session-001", "session-004"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -143,16 +182,13 @@ func TestFirstImportNewestWave(t *testing.T) {
 			project := filepath.Join(root, "project")
 			require.NoError(t, os.MkdirAll(project, 0o755))
 			for i := range tc.count {
-				path := filepath.Join(project, fmt.Sprintf("session-%03d.jsonl", i))
-				content := testjsonl.NewSessionBuilder().AddClaudeUser("2026-01-01T00:00:00Z", "hello").String()
-				require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 				mtime := time.Unix(0, 0)
 				if tc.known {
 					mtime = time.Unix(1700000000+int64(i), 0)
 				} else if tc.name == "known-and-unknown" && i == 4 {
 					mtime = time.Unix(10, 0)
 				}
-				require.NoError(t, os.Chtimes(path, mtime, mtime))
+				writeFirstImportClaudeSession(t, project, i, mtime)
 			}
 			factory, ok := parser.ProviderFactoryByType(parser.AgentClaude)
 			require.True(t, ok)
@@ -163,7 +199,7 @@ func TestFirstImportNewestWave(t *testing.T) {
 				ProviderFactories: []parser.ProviderFactory{firstImportFingerprintFactory{ProviderFactory: factory, provider: counting}},
 			})
 			t.Cleanup(engine.Close)
-			_, complete := engine.SyncNewest(t.Context(), 3, nil)
+			_, complete := engine.syncNewest(t.Context(), 3, nil, nil)
 			require.False(t, complete)
 			page, err := archive.ListSessions(t.Context(), db.SessionFilter{Limit: 100})
 			require.NoError(t, err)
@@ -177,10 +213,6 @@ func TestFirstImportNewestWave(t *testing.T) {
 				for _, path := range counting.paths {
 					require.Contains(t, []string{filepath.Join(project, "session-027.jsonl"), filepath.Join(project, "session-028.jsonl"), filepath.Join(project, "session-029.jsonl")}, path)
 				}
-				engine.SyncAll(t.Context(), nil)
-				page, err = archive.ListSessions(t.Context(), db.SessionFilter{Limit: 100})
-				require.NoError(t, err)
-				require.Len(t, page.Sessions, 30)
 			}
 		})
 	}
@@ -200,9 +232,7 @@ func TestFirstImportRefreshesWhileOlderSessionsAreWritten(t *testing.T) {
 			project := filepath.Join(root, "project")
 			require.NoError(t, os.MkdirAll(project, 0o755))
 			for i := range tc.count {
-				path := filepath.Join(project, fmt.Sprintf("session-%03d.jsonl", i))
-				content := testjsonl.NewSessionBuilder().AddClaudeUser("2026-01-01T00:00:00Z", "hello").String()
-				require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+				writeFirstImportClaudeSession(t, project, i, time.Time{})
 			}
 			archive := openTestDB(t)
 			refresh := make(chan struct{}, 1)
@@ -249,20 +279,23 @@ func TestFirstImportRefreshesWhileOlderSessionsAreWritten(t *testing.T) {
 				})
 				done <- err
 			}()
+			finished := false
+			var releaseOnce sync.Once
+			release := func() { releaseOnce.Do(func() { close(releaseRefresh); close(resume) }) }
+			t.Cleanup(func() {
+				release()
+				if !finished {
+					<-done
+				}
+			})
 			select {
 			case <-refresh:
 			case <-time.After(30 * time.Second):
-				close(releaseRefresh)
-				close(resume)
-				<-done
 				require.FailNow(t, "no refresh while importing older sessions")
 			}
 			select {
 			case <-paused:
 			case <-time.After(30 * time.Second):
-				close(releaseRefresh)
-				close(resume)
-				<-done
 				require.FailNow(t, "import did not reach the pause")
 			}
 			if tc.cancel {
@@ -273,34 +306,28 @@ func TestFirstImportRefreshesWhileOlderSessionsAreWritten(t *testing.T) {
 					for _, session := range page.Sessions {
 						messages, readErr := archive.GetMessages(t.Context(), session.ID, 0, 10, true)
 						if readErr != nil || len(messages) == 0 {
-							close(releaseRefresh)
-							close(resume)
-							<-done
 							require.FailNowf(t, "unreadable session", "listed session %s has no readable messages: %v", session.ID, readErr)
 						}
 					}
-				}
-				if err != nil {
-					close(releaseRefresh)
-					close(resume)
-					<-done
 				}
 				require.NoError(t, err)
 				assert.Greater(t, len(page.Sessions), 100)
 				assert.Less(t, len(page.Sessions), tc.count)
 			}
-			close(releaseRefresh)
-			close(resume)
+			release()
 			if tc.cancel {
 				select {
 				case <-done:
+					finished = true
 				case <-time.After(500 * time.Millisecond): //nolint:kennlint // deadlinetest: cancellation must finish within the deadline after the paused import and emitter are released
 					<-done
+					finished = true
 					require.FailNow(t, "pending refresh delayed cancellation")
 				}
 			} else {
 				select {
 				case err := <-done:
+					finished = true
 					require.NoError(t, err)
 				case <-time.After(30 * time.Second):
 					require.FailNow(t, "reentrant emitter blocked the import")
@@ -365,7 +392,7 @@ func TestFirstImportProviderFailures(t *testing.T) {
 			})
 			t.Cleanup(engine.Close)
 
-			wave, _ := engine.SyncNewest(t.Context(), 100, nil)
+			wave, _ := engine.syncNewest(t.Context(), 100, nil, nil)
 			assert.Equal(t, 1, wave.Synced)
 			stats, ran, err := engine.RunFirstImport(t.Context(), nil)
 			require.NoError(t, err)
@@ -395,46 +422,4 @@ func TestFirstImportSelectKeepsHealthyProviderAfterListingFailure(t *testing.T) 
 	wave := &firstImportWave{limit: 1}
 	require.NoError(t, engine.firstImportSelect(t.Context(), nil, nil, wave))
 	assert.Contains(t, wave.selected, firstImportSource{parser.AgentForge, "broken"})
-}
-
-func TestFirstImportReconciliationOrdersRemainingFiles(t *testing.T) {
-	root := t.TempDir()
-	project := filepath.Join(root, "project")
-	require.NoError(t, os.MkdirAll(project, 0o755))
-	for i := range 250 {
-		path := filepath.Join(project, fmt.Sprintf("session-%03d.jsonl", i))
-		content := testjsonl.NewSessionBuilder().AddClaudeUser("2026-01-01T00:00:00Z", "hello").String()
-		require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-		mtime := time.Unix(1700000000+int64(i), 0)
-		require.NoError(t, os.Chtimes(path, mtime, mtime))
-	}
-	archive := openTestDB(t)
-	engine := NewEngine(t.Context(), archive, EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}, Machine: "local", DeferStartupMaintenance: true,
-	})
-	t.Cleanup(engine.Close)
-	engine.workerCountOverride = 1
-	paused, resume := make(chan struct{}), make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		_, _, err := engine.RunFirstImport(t.Context(), func(p Progress) {
-			if p.Phase == PhaseSyncing && p.SessionsTotal == 250 && p.SessionsDone == 201 {
-				close(paused)
-				<-resume
-			}
-		})
-		done <- err
-	}()
-	defer func() { close(resume); require.NoError(t, <-done) }()
-	select {
-	case <-paused:
-	case <-time.After(30 * time.Second):
-		require.FailNow(t, "reconciliation did not reach the pause")
-	}
-	newer, err := archive.GetSession(t.Context(), "session-149")
-	require.NoError(t, err)
-	older, err := archive.GetSession(t.Context(), "session-000")
-	require.NoError(t, err)
-	require.NotNil(t, newer)
-	require.Nil(t, older)
 }

@@ -1923,16 +1923,19 @@ func TestSyncProviderDBBackedBaselinesOnlyCompleteSuccessfulSources(t *testing.T
 		configure            func(*baselineDBBackedProvider, string)
 		failWrite            bool
 		wantStaleWrite       bool
+		wantProviderFailures int
 		wantFailedParseCalls int
 	}{
 		{
-			name: "fingerprint failure",
+			name:                 "fingerprint failure",
+			wantProviderFailures: 1,
 			configure: func(provider *baselineDBBackedProvider, failedPath string) {
 				provider.fingerprintErrKey = failedPath
 			},
 		},
 		{
 			name:                 "parse failure",
+			wantProviderFailures: 1,
 			wantFailedParseCalls: 2,
 			configure: func(provider *baselineDBBackedProvider, failedPath string) {
 				provider.parseErrKey = failedPath
@@ -1940,6 +1943,7 @@ func TestSyncProviderDBBackedBaselinesOnlyCompleteSuccessfulSources(t *testing.T
 		},
 		{
 			name:                 "source error",
+			wantProviderFailures: 1,
 			wantStaleWrite:       true,
 			wantFailedParseCalls: 2,
 			configure: func(provider *baselineDBBackedProvider, failedPath string) {
@@ -1953,6 +1957,7 @@ func TestSyncProviderDBBackedBaselinesOnlyCompleteSuccessfulSources(t *testing.T
 		},
 		{
 			name:                 "incomplete result set",
+			wantProviderFailures: 1,
 			wantStaleWrite:       true,
 			wantFailedParseCalls: 2,
 			configure: func(provider *baselineDBBackedProvider, failedPath string) {
@@ -1963,6 +1968,7 @@ func TestSyncProviderDBBackedBaselinesOnlyCompleteSuccessfulSources(t *testing.T
 		},
 		{
 			name:                 "result needs retry",
+			wantProviderFailures: 1,
 			wantStaleWrite:       true,
 			wantFailedParseCalls: 2,
 			configure: func(provider *baselineDBBackedProvider, failedPath string) {
@@ -2048,11 +2054,13 @@ func TestSyncProviderDBBackedBaselinesOnlyCompleteSuccessfulSources(t *testing.T
 				stats := SyncStats{}
 				aborted := engine.syncProviderDBBackedAgent(
 					t.Context(), agent, string(agent), writeMode, false,
-					newRootSyncScope([]string{root}), &stats, func(int, int) {}, nil,
+					newRootSyncScope([]string{root}), &stats, func(int, int) {},
 				)
 
 				assert.False(t, aborted)
 				assert.Equal(t, 1, stats.Failed, "pass %d must report the failed source", pass)
+				assert.Equal(t, tc.wantProviderFailures, stats.providerFailures,
+					"pass %d provider failure count", pass)
 				ownership, err := database.ListActiveSessionSourceOwnershipScopesPage(
 					t.Context(), "local", string(agent),
 					[]db.StoredSourcePathHintScope{{Path: root}},
@@ -2140,7 +2148,7 @@ func TestSyncProviderDBBackedBatchesWarmSourceAttributionLookup(t *testing.T) {
 
 			aborted := engine.syncProviderDBBackedAgent(
 				t.Context(), agent, string(agent), syncWriteBulk, false,
-				newRootSyncScope([]string{root}), &stats, func(int, int) {}, nil,
+				newRootSyncScope([]string{root}), &stats, func(int, int) {},
 			)
 
 			assert.False(t, aborted)
@@ -2206,7 +2214,7 @@ func TestSyncProviderDBBackedBaselinesEveryStoredMachineForSharedSource(
 
 	aborted := engine.syncProviderDBBackedAgent(
 		t.Context(), agent, string(agent), syncWriteBulk, false,
-		newRootSyncScope([]string{root}), &stats, func(int, int) {}, nil,
+		newRootSyncScope([]string{root}), &stats, func(int, int) {},
 	)
 
 	assert.False(t, aborted)
@@ -2278,7 +2286,7 @@ func TestSyncProviderDBBackedAgentFlushesEachSourceBeforeParsingNext(t *testing.
 	aborted := engine.syncProviderDBBackedAgent(
 		t.Context(), parser.AgentWarp, "warp", syncWriteBulk, false,
 		newRootSyncScope([]string{root}), &stats,
-		func(total, _ int) { progressTotal += total }, nil,
+		func(total, _ int) { progressTotal += total },
 	)
 
 	assert.False(t, aborted)

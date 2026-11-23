@@ -56,7 +56,7 @@ func TestVSCodeCopilotGrowingResponsePins(t *testing.T) {
 						require.NoError(t, engine.SyncPathsContext(t.Context(), []string{path}))
 						return
 					}
-					require.Equal(t, 1, engine.syncAllLocked(t.Context(), nil, time.Time{}, nil, tc.mode, true, false, nil).Synced)
+					require.Equal(t, 1, engine.syncAllLocked(t.Context(), nil, time.Time{}, nil, tc.mode, true, false).Synced)
 				}
 				sync()
 				sessionID := string(agent) + ":aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"

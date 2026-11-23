@@ -20,9 +20,11 @@ type firstImportWave struct {
 	onWrite  func()
 }
 
-// SyncNewest imports a bounded first wave without recording a completed sync.
-func (e *Engine) SyncNewest(ctx context.Context, n int, onProgress ProgressFunc) (stats SyncStats, complete bool) {
-	return e.syncNewest(ctx, n, onProgress, nil)
+type firstImportContextKey struct{}
+
+func firstImportFromContext(ctx context.Context) *firstImportWave {
+	wave, _ := ctx.Value(firstImportContextKey{}).(*firstImportWave)
+	return wave
 }
 
 func (e *Engine) syncNewest(ctx context.Context, n int, onProgress ProgressFunc, onWrite func()) (stats SyncStats, complete bool) {
@@ -31,21 +33,11 @@ func (e *Engine) syncNewest(ctx context.Context, n int, onProgress ProgressFunc,
 	}
 	wave := &firstImportWave{limit: n, onWrite: onWrite}
 	e.syncMu.Lock()
-	defer func() { e.notifyFirstImport(stats, onWrite) }()
 	defer e.syncMu.Unlock()
 	defer e.clearCurrentProgress()
-	stats = e.syncAllLocked(ctx, onProgress, time.Time{}, nil, syncWriteFirstImport, false, false, wave)
+	ctx = context.WithValue(ctx, firstImportContextKey{}, wave)
+	stats = e.syncAllLocked(ctx, onProgress, time.Time{}, nil, syncWriteFirstImport, false, false)
 	return stats, !wave.partial
-}
-
-func (e *Engine) notifyFirstImport(stats SyncStats, onWrite func()) {
-	if stats.hasSessionChanges() {
-		if onWrite != nil {
-			onWrite()
-		} else {
-			e.emit("sessions")
-		}
-	}
 }
 
 // RunFirstImport publishes recent sessions before completing startup reconciliation.
@@ -67,7 +59,8 @@ func (e *Engine) RunFirstImport(ctx context.Context, onProgress ProgressFunc) (S
 	if ctx.Err() != nil {
 		return stats, true, ctx.Err()
 	}
-	stats, ran, err := e.runStartupSyncFallback(ctx, onProgress, &firstImportWave{onWrite: onWrite})
+	ctx = context.WithValue(ctx, firstImportContextKey{}, &firstImportWave{onWrite: onWrite})
+	stats, ran, err := e.RunStartupSyncFallback(ctx, onProgress)
 	if ran && err == nil && ctx.Err() == nil && stats.AuthoritativeDiscoveryComplete() {
 		err = e.db.SetSyncState(ctx, db.FirstImportCompletedKey, "1")
 	}
