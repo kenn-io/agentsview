@@ -293,7 +293,7 @@ func TestFirstImportRefreshesWhileOlderSessionsAreWritten(t *testing.T) {
 			if tc.cancel {
 				select {
 				case <-done:
-				case <-time.After(30 * time.Second):
+				case <-time.After(500 * time.Millisecond): //nolint:kennlint // deadlinetest: cancellation must finish within the deadline after the paused import and emitter are released
 					<-done
 					require.FailNow(t, "pending refresh delayed cancellation")
 				}
