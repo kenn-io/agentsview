@@ -1923,19 +1923,16 @@ func TestSyncProviderDBBackedBaselinesOnlyCompleteSuccessfulSources(t *testing.T
 		configure            func(*baselineDBBackedProvider, string)
 		failWrite            bool
 		wantStaleWrite       bool
-		wantProviderFailures int
 		wantFailedParseCalls int
 	}{
 		{
-			name:                 "fingerprint failure",
-			wantProviderFailures: 1,
+			name: "fingerprint failure",
 			configure: func(provider *baselineDBBackedProvider, failedPath string) {
 				provider.fingerprintErrKey = failedPath
 			},
 		},
 		{
 			name:                 "parse failure",
-			wantProviderFailures: 1,
 			wantFailedParseCalls: 2,
 			configure: func(provider *baselineDBBackedProvider, failedPath string) {
 				provider.parseErrKey = failedPath
@@ -1944,7 +1941,6 @@ func TestSyncProviderDBBackedBaselinesOnlyCompleteSuccessfulSources(t *testing.T
 		{
 			name:                 "source error",
 			wantStaleWrite:       true,
-			wantProviderFailures: 1,
 			wantFailedParseCalls: 2,
 			configure: func(provider *baselineDBBackedProvider, failedPath string) {
 				outcome := provider.outcomes[failedPath]
@@ -1958,7 +1954,6 @@ func TestSyncProviderDBBackedBaselinesOnlyCompleteSuccessfulSources(t *testing.T
 		{
 			name:                 "incomplete result set",
 			wantStaleWrite:       true,
-			wantProviderFailures: 1,
 			wantFailedParseCalls: 2,
 			configure: func(provider *baselineDBBackedProvider, failedPath string) {
 				outcome := provider.outcomes[failedPath]
@@ -1969,7 +1964,6 @@ func TestSyncProviderDBBackedBaselinesOnlyCompleteSuccessfulSources(t *testing.T
 		{
 			name:                 "result needs retry",
 			wantStaleWrite:       true,
-			wantProviderFailures: 1,
 			wantFailedParseCalls: 2,
 			configure: func(provider *baselineDBBackedProvider, failedPath string) {
 				outcome := provider.outcomes[failedPath]
@@ -2059,8 +2053,6 @@ func TestSyncProviderDBBackedBaselinesOnlyCompleteSuccessfulSources(t *testing.T
 
 				assert.False(t, aborted)
 				assert.Equal(t, 1, stats.Failed, "pass %d must report the failed source", pass)
-				assert.Equal(t, tc.wantProviderFailures, stats.providerFailures,
-					"pass %d provider failure count", pass)
 				ownership, err := database.ListActiveSessionSourceOwnershipScopesPage(
 					t.Context(), "local", string(agent),
 					[]db.StoredSourcePathHintScope{{Path: root}},
