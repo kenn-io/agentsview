@@ -147,6 +147,16 @@ func TestCodeModePRLinks(t *testing.T) {
 	}
 }
 
+func TestCodeModeRemoteChange(t *testing.T) {
+	messages := []db.Message{{ToolCalls: []db.ToolCall{
+		{ToolName: "exec", Category: "Bash", InputJSON: `await tools.exec_command({cmd:'git remote set-url origin https://github.com/example/other.git'})`},
+		{ToolName: "exec", Category: "Bash", InputJSON: `await tools.exec_command({cmd:'gh pr view 42'}); await tools.exec_command({cmd:'gh pr view 43 -R example/other'})`},
+	}}}
+	links := toolCallPRLinks(t, messages, "/repo", "https://github.com/example/repo.git")
+	require.Len(t, links, 1)
+	assert.Equal(t, "https://github.com/example/other/pull/43", links[0].URL)
+}
+
 func TestCodeModeMalformedWarning(t *testing.T) {
 	const marker = "private-command-marker"
 	if os.Getenv("AGENTSVIEW_TEST_MALFORMED_CODE") == "1" {

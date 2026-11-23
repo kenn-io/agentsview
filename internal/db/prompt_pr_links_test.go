@@ -642,3 +642,35 @@ func TestToolPRLinksAppendRefreshParity(t *testing.T) {
 		})
 	}
 }
+
+func TestRemoteChangeInvalidatesAppendedPRLinks(t *testing.T) {
+	for _, tc := range []struct{ name, tool, key, command string }{
+		{"shared", "Bash", "command", "git remote set-url origin https://github.com/example/other.git"},
+		{"independent", "exec_command", "cmd", "git remote set-url origin https://github.com/example/other.git"},
+		{"default repo", "exec_command", "cmd", "gh repo set-default example/other"},
+		{"function", "exec_command", "cmd", "update() { git remote set-url origin https://github.com/example/other.git; }; update"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			s := Session{ID: "remote-change", Project: "project", Machine: "local", Agent: "claude", Cwd: "/work/repo"}
+			require.NoError(t, d.UpsertSession(t.Context(), s))
+			obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://github.com/example/repo.git")
+			require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), obs))
+			message := func(ordinal int, command string) Message {
+				return Message{SessionID: s.ID, Ordinal: ordinal, Role: "assistant", ToolCalls: []ToolCall{{ToolName: tc.tool, Category: "Bash", InputJSON: `{"` + tc.key + `":"` + command + `"}`}}}
+			}
+			require.NoError(t, d.InsertMessages(t.Context(), []Message{message(0, tc.command)}))
+			require.NoError(t, d.InsertMessages(t.Context(), []Message{message(1, "gh pr view 42")}))
+			require.NoError(t, d.InsertMessages(t.Context(), []Message{message(2, "gh pr view 43 -R example/other")}))
+			got, err := d.GetSession(t.Context(), s.ID)
+			require.NoError(t, err)
+			require.Len(t, got.PRLinks, 1)
+			assert.Equal(t, "https://github.com/example/other/pull/43", got.PRLinks[0].URL)
+			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error { return refreshSessionPromptPRLinksTx(t.Context(), tx, s.ID) }))
+			got, err = d.GetSession(t.Context(), s.ID)
+			require.NoError(t, err)
+			require.Len(t, got.PRLinks, 1)
+			assert.Equal(t, "https://github.com/example/other/pull/43", got.PRLinks[0].URL)
+		})
+	}
+}

@@ -306,7 +306,7 @@ func appendSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id
 		if err := tx.QueryRow(`SELECT COALESCE(cwd,''), `+prLinkRemoteSQL+`, pr_shell_tainted FROM sessions WHERE id=?`, id, id).Scan(&cwd, &remote, &state); err != nil {
 			return err
 		}
-		tainted := parser.PRShellContext{CheckoutUncertain: state.Int64&1 != 0, HostUncertain: state.Int64&2 != 0}
+		tainted := parser.PRShellContext{CheckoutUncertain: state.Int64&1 != 0, HostUncertain: state.Int64&2 != 0, RepoUncertain: state.Int64&4 != 0}
 		if !state.Valid {
 			_, tainted, err = storedToolCallPRLinksTx(ctx, tx, id, cwd, remote, &firstOrdinal)
 			if err != nil {
@@ -447,15 +447,17 @@ func codeModePRLinks(ctx context.Context, input, cwd, remote string, state parse
 	if err != nil {
 		return nil, state, warnSkippedCodeMode()
 	}
-	visitor := &codeModeVisitor{ctx: ctx, cwd: cwd, remote: remote}
+	visitor := &codeModeVisitor{ctx: ctx, cwd: cwd, remote: remote, repoUncertain: state.RepoUncertain}
 	js.Walk(visitor, ast)
+	state.RepoUncertain = visitor.repoUncertain
 	return parser.CombinePRLinks(visitor.links...), state, ctx.Err()
 }
 
 type codeModeVisitor struct {
-	ctx         context.Context
-	cwd, remote string
-	links       [][]PRLink
+	ctx           context.Context
+	cwd, remote   string
+	links         [][]PRLink
+	repoUncertain bool
 }
 
 func (v *codeModeVisitor) Enter(node js.INode) js.IVisitor {
@@ -506,8 +508,9 @@ func (v *codeModeVisitor) Enter(node js.INode) js.IVisitor {
 	if !knownDir || dir != "" && !parser.SamePRWorkingDirectory(v.cwd, dir) {
 		remote = ""
 	}
-	if links, _, err := parser.CommandPRLinksWithContext(v.ctx, command, v.cwd, remote, parser.PRShellContext{}); err == nil {
+	if links, state, err := parser.CommandPRLinksWithContext(v.ctx, command, v.cwd, remote, parser.PRShellContext{RepoUncertain: v.repoUncertain}); err == nil {
 		v.links = append(v.links, links)
+		v.repoUncertain = state.RepoUncertain
 	}
 	return v
 }
@@ -568,13 +571,17 @@ func toolCallPRLinksWithShellState(ctx context.Context, messages []Message, cwd,
 			if err := ctx.Err(); err != nil {
 				return nil, tainted, err
 			}
-			if emptyInputMissing && call.Category == "Bash" && call.InputJSON == "" && !independentShell(call.ToolName) {
-				tainted = parser.UncertainPRShell()
+			if emptyInputMissing && call.Category == "Bash" && call.InputJSON == "" {
+				if independentShell(call.ToolName) {
+					tainted.RepoUncertain = true
+				} else {
+					tainted = parser.UncertainPRShell()
+				}
 				continue
 			}
 			state := tainted
 			if independentShell(call.ToolName) {
-				state = parser.PRShellContext{}
+				state = parser.PRShellContext{RepoUncertain: tainted.RepoUncertain}
 			}
 			found, changed, err := callPRLinks(ctx, call.Category, call.ToolName, call.InputJSON, cwd, remote, state)
 			if err != nil {
@@ -583,13 +590,15 @@ func toolCallPRLinksWithShellState(ctx context.Context, messages []Message, cwd,
 			lists = append(lists, found)
 			if !independentShell(call.ToolName) {
 				tainted = changed
+			} else {
+				tainted.RepoUncertain = changed.RepoUncertain
 			}
 		}
 	}
 	return parser.CombinePRLinks(lists...), tainted, nil
 }
 
-// pr_shell_tainted stores checkout and host uncertainty.
+// pr_shell_tainted stores checkout, host, and remote uncertainty.
 func writePRShellTaintTx(tx transactionQueries, id string, tainted parser.PRShellContext) error {
 	state := 0
 	if tainted.CheckoutUncertain {
@@ -597,6 +606,9 @@ func writePRShellTaintTx(tx transactionQueries, id string, tainted parser.PRShel
 	}
 	if tainted.HostUncertain {
 		state |= 2
+	}
+	if tainted.RepoUncertain {
+		state |= 4
 	}
 	_, err := tx.Exec(`UPDATE sessions SET pr_shell_tainted=? WHERE id=? AND pr_shell_tainted IS NOT ?`, state, id, state)
 	return err
@@ -626,8 +638,12 @@ func storedToolCallPRLinksTx(ctx context.Context, tx transactionQueries, id, cwd
 			return nil, parser.PRShellContext{}, err
 		}
 		if !input.Valid {
-			if category == "Bash" && !independentShell(name) {
-				tainted = parser.UncertainPRShell()
+			if category == "Bash" {
+				if independentShell(name) {
+					tainted.RepoUncertain = true
+				} else {
+					tainted = parser.UncertainPRShell()
+				}
 			}
 			continue
 		}

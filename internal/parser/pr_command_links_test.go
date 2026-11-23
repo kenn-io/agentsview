@@ -12,7 +12,7 @@ import (
 // context changed.
 func commandPRLinks(ctx context.Context, command, cwd, remote string) ([]PRLink, bool, error) {
 	links, s, err := CommandPRLinksWithContext(ctx, command, cwd, remote, PRShellContext{})
-	return links, s.CheckoutUncertain || s.HostUncertain, err
+	return links, s.CheckoutUncertain || s.HostUncertain || s.RepoUncertain, err
 }
 
 func TestCommandPRLinksCanceled(t *testing.T) {
@@ -45,6 +45,11 @@ func TestGHPRCommandLinks(t *testing.T) {
 		changed                    bool
 	}{
 		{`gh pr view 42`, "", remote, "https://github.com/example/repo/pull/42", false},
+		{`git remote set-url origin https://github.com/example/other.git; gh pr view 42`, "", remote, "", true},
+		{`gh repo set-default example/other; gh pr view 42`, "", remote, "", true},
+		{`git remote set-url origin https://github.com/example/other.git; gh pr view 42 -R example/other`, "", remote, "https://github.com/example/other/pull/42", true},
+		{`(git remote set-url origin https://github.com/example/other.git); gh pr view 42`, "", remote, "", true},
+		{`bash -c 'git remote set-url origin https://github.com/example/other.git'; gh pr view 42`, "", remote, "", true},
 		{`gh pr merge 42 -R example/other`, "", remote, "https://github.com/example/other/pull/42", false},
 		{`gh pr co 42 -R example/repo`, "", remote, "https://github.com/example/repo/pull/42", false},
 		{`gh --repo=example/other pr view 42`, "", remote, "https://github.com/example/other/pull/42", false},

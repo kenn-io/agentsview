@@ -67,11 +67,12 @@ func SamePRWorkingDirectory(cwd, dir string) bool {
 type PRShellContext struct {
 	CheckoutUncertain bool
 	HostUncertain     bool
+	RepoUncertain     bool
 }
 
 // UncertainPRShell is the state after input that cannot be read.
 func UncertainPRShell() PRShellContext {
-	return PRShellContext{CheckoutUncertain: true, HostUncertain: true}
+	return PRShellContext{CheckoutUncertain: true, HostUncertain: true, RepoUncertain: true}
 }
 
 // CommandPRLinksWithContext carries shared shell state between tool calls.
@@ -250,13 +251,15 @@ func (w *prShellWalker) callExpr(ctx context.Context, n *syntax.CallExpr) {
 	}
 	call.unwrapEnv()
 	w.applyBuiltin(call)
-	call.Tainted = call.Tainted || w.state.CheckoutUncertain
+	call.Tainted = call.Tainted || w.state.CheckoutUncertain || w.state.RepoUncertain
 	if script, ok := call.shellScript(); ok && w.err == nil {
 		remote := w.remote
 		if call.Tainted {
 			remote = ""
 		}
-		call.Nested, _, w.err = commandPRLinksWithContext(ctx, script, w.cwd, remote, PRShellContext{HostUncertain: call.HostUncertain}, call.Repo, call.RepoSet)
+		var nested PRShellContext
+		call.Nested, nested, w.err = commandPRLinksWithContext(ctx, script, w.cwd, remote, PRShellContext{HostUncertain: call.HostUncertain, RepoUncertain: w.state.RepoUncertain}, call.Repo, call.RepoSet)
+		w.state.RepoUncertain = w.state.RepoUncertain || nested.RepoUncertain
 	}
 	w.calls = append(w.calls, call)
 }
@@ -267,7 +270,7 @@ func (w *prShellWalker) applyBuiltin(call shellCall) {
 		return
 	}
 	if w.functions[call.Words[0]] {
-		w.state.CheckoutUncertain, w.state.HostUncertain = true, true
+		w.state.CheckoutUncertain, w.state.HostUncertain, w.state.RepoUncertain = true, true, true
 		return
 	}
 	switch programName(call.Words[0]) {
@@ -275,6 +278,16 @@ func (w *prShellWalker) applyBuiltin(call shellCall) {
 		w.state.CheckoutUncertain = w.state.CheckoutUncertain || len(call.Words) != 2 || !call.Literal[1] || !SamePRWorkingDirectory(w.cwd, call.Words[1])
 	case "pushd", "popd":
 		w.state.CheckoutUncertain = true
+	case "git":
+		for i, word := range call.Words {
+			if word == "remote" && i+1 < len(call.Words) && call.Literal[i] && call.Literal[i+1] && slices.Contains([]string{"set-url", "add", "remove", "rm", "rename"}, call.Words[i+1]) {
+				w.state.RepoUncertain = true
+			}
+		}
+	case "gh":
+		if len(call.Words) > 2 && call.Literal[1] && call.Literal[2] && call.Words[1] == "repo" && call.Words[2] == "set-default" && !slices.Contains(call.Words[3:], "--view") && !slices.Contains(call.Words[3:], "-v") {
+			w.state.RepoUncertain = true
+		}
 	case "unset":
 		if slices.Contains(call.Words[1:], "GH_REPO") {
 			w.repo, w.repoSet = "", w.conditional
