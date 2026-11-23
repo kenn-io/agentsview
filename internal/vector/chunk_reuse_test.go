@@ -77,21 +77,6 @@ func TestBuildGrowingMessageReusesChunksAndRetry(t *testing.T) {
 	assert.Zero(t, count)
 }
 
-func TestReuseEncoderMapsInvalidChunk(t *testing.T) {
-	ix := openTestIndex(t)
-	gen := reuseGeneration{ordinal: 1, dimension: 3}
-	_, err := ix.db.ExecContext(t.Context(), `INSERT INTO message_vectors_reuse VALUES (?, ?, ?, ?)`, gen.ordinal, "doc", contentHash("hit"), []byte{0, 0, 128, 63, 0, 0, 0, 0, 0, 0, 0, 0})
-	require.NoError(t, err)
-	enc := ix.reuseEncoder(func(_ context.Context, texts []string) ([][]float32, error) {
-		assert.Equal(t, []string{"miss", "bad"}, texts)
-		return nil, &kitvec.InvalidVectorError{Chunk: 1, Component: -1, Reason: "zero"}
-	}, gen)
-	_, err = enc(t.Context(), []string{"hit", "miss", "bad"})
-	var invalid *kitvec.InvalidVectorError
-	require.ErrorAs(t, err, &invalid)
-	assert.Equal(t, 2, invalid.Chunk)
-}
-
 func TestFullRebuildClearsReuseBeforeFailure(t *testing.T) {
 	ix := openTestIndex(t)
 	ix.split = kitvec.SplitOptions{MaxRunes: 10, Overlap: 2}

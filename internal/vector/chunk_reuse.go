@@ -133,12 +133,6 @@ func (ix *Index) reuseEncoder(enc kitvec.EncodeFunc, gen reuseGeneration) kitvec
 		}
 		vectors, err := enc(ctx, misses)
 		if err != nil {
-			var invalid *kitvec.InvalidVectorError
-			if errors.As(err, &invalid) && invalid.Chunk >= 0 && invalid.Chunk < len(positions) {
-				mapped := *invalid
-				mapped.Chunk = positions[invalid.Chunk]
-				return nil, &mapped
-			}
 			return nil, err
 		}
 		if len(vectors) != len(misses) {
