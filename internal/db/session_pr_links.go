@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -430,10 +429,7 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 		dir = payload.WorkingDirectory
 	}
 	if dir != "" {
-		if !filepath.IsAbs(dir) {
-			dir = filepath.Join(cwd, dir)
-		}
-		if cwd == "" || filepath.Clean(dir) != filepath.Clean(cwd) {
+		if !parser.SamePRWorkingDirectory(cwd, dir) {
 			remote = ""
 		}
 	}
@@ -503,10 +499,7 @@ func (v *codeModeVisitor) Enter(node js.INode) js.IVisitor {
 	if !knownDir {
 		remote = ""
 	} else if dir != "" {
-		if !filepath.IsAbs(dir) {
-			dir = filepath.Join(v.cwd, dir)
-		}
-		if v.cwd == "" || filepath.Clean(dir) != filepath.Clean(v.cwd) {
+		if !parser.SamePRWorkingDirectory(v.cwd, dir) {
 			remote = ""
 		}
 	}

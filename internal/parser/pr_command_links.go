@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"path"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -52,6 +51,39 @@ func shellLiteral(parts []syntax.WordPart) (string, bool) {
 	return b.String(), true
 }
 
+// SamePRWorkingDirectory compares paths using the recorded checkout's syntax.
+func SamePRWorkingDirectory(cwd, dir string) bool {
+	if cwd == "" || dir == "" {
+		return false
+	}
+	windows := looksLikeWindowsPath(cwd) || len(cwd) >= 3 && cwd[1] == ':' && cwd[2] == '/'
+	if windows {
+		cwd = strings.ReplaceAll(cwd, `\`, "/")
+		dir = strings.ReplaceAll(dir, `\`, "/")
+		if strings.HasPrefix(dir, "/") && !strings.HasPrefix(dir, "//") {
+			return false
+		}
+		if strings.HasPrefix(dir, "//") || len(dir) >= 2 && dir[1] == ':' {
+			return path.Clean(cwd) == path.Clean(dir)
+		}
+		if strings.HasPrefix(cwd, "//") {
+			parts := strings.SplitN(cwd[2:], "/", 3)
+			if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+				return false
+			}
+			rest := "/"
+			if len(parts) == 3 {
+				rest += parts[2]
+			}
+			return path.Clean(rest) == path.Join(rest, dir)
+		}
+		return path.Clean(cwd[2:]) == path.Join(cwd[2:], dir)
+	} else if path.IsAbs(dir) {
+		return path.Clean(cwd) == path.Clean(dir)
+	}
+	return path.Clean(cwd) == path.Clean(path.Join(cwd, dir))
+}
+
 // CommandPRLinks derives links and reports whether the shell context changed.
 func CommandPRLinks(ctx context.Context, command, cwd, remote string) ([]PRLink, bool, error) {
 	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
@@ -84,16 +116,8 @@ func CommandPRLinks(ctx context.Context, command, cwd, remote string) ([]PRLink,
 			if len(call.Words) > 0 && call.Literal[0] {
 				switch path.Base(call.Words[0]) {
 				case "cd":
-					if len(call.Words) != 2 || !call.Literal[1] || cwd == "" {
+					if len(call.Words) != 2 || !call.Literal[1] || !SamePRWorkingDirectory(cwd, call.Words[1]) {
 						tainted = true
-					} else {
-						dir := call.Words[1]
-						if !filepath.IsAbs(dir) {
-							dir = filepath.Join(cwd, dir)
-						}
-						if filepath.Clean(dir) != filepath.Clean(cwd) {
-							tainted = true
-						}
 					}
 				case "pushd", "popd", "eval", "source", ".":
 					tainted = true

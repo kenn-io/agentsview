@@ -15,6 +15,24 @@ func TestCommandPRLinksCanceled(t *testing.T) {
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
+func TestSamePRWorkingDirectory(t *testing.T) {
+	for _, tc := range []struct {
+		name, cwd, dir string
+		want           bool
+	}{
+		{"posix relative", "/work/repo", "../repo", true},
+		{"posix other", "/work/repo", "/work/other", false},
+		{"windows root", `C:\`, "..", true},
+		{"windows different drive", `C:\work`, `D:\work`, false},
+		{"windows share root", `\\server\share`, "..", true},
+		{"windows share parent", `\\server\share\repo`, "..", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, SamePRWorkingDirectory(tc.cwd, tc.dir))
+		})
+	}
+}
+
 func TestGHPRCommandLinks(t *testing.T) {
 	remote := "https://github.com/example/repo.git"
 	for _, tc := range []struct {
@@ -26,6 +44,9 @@ func TestGHPRCommandLinks(t *testing.T) {
 		{`gh pr co 42 -R example/repo`, "", remote, "https://github.com/example/repo/pull/42", false},
 		{`gh --repo=example/other pr view 42`, "", remote, "https://github.com/example/other/pull/42", false},
 		{`cd /repo && gh pr merge 42`, "/repo", remote, "https://github.com/example/repo/pull/42", false},
+		{`cd 'C:\work\repo' && gh pr view 42`, `C:\work\repo`, remote, "https://github.com/example/repo/pull/42", false},
+		{`cd '..\repo' && gh pr view 42`, `C:\work\repo`, remote, "https://github.com/example/repo/pull/42", false},
+		{`cd 'C:\work\other' && gh pr view 42`, `C:\work\repo`, remote, "", true},
 		{`gh pr view 42; cd /other; gh pr view 43`, "", remote, "https://github.com/example/repo/pull/42", true},
 		{`gh pr diff https://github.com/example/repo/pull/42`, "", "", "https://github.com/example/repo/pull/42", false},
 		{`echo 'gh pr view 42 -R example/repo'`, "", remote, "", false},

@@ -49,6 +49,33 @@ func TestToolCallPRLinksWorkdir(t *testing.T) {
 	}
 }
 
+func TestToolCallPRLinksForeignWorkdir(t *testing.T) {
+	for _, tc := range []struct {
+		name, input string
+		want        bool
+	}{
+		{"same", `{"cmd":"gh pr view 42","workdir":"C:\\work\\repo"}`, true},
+		{"relative", `{"cmd":"gh pr view 42","workdir":"..\\repo"}`, true},
+		{"other", `{"cmd":"gh pr view 42","workdir":"C:\\work\\other"}`, false},
+		{"code mode", `tools.exec_command({cmd:"gh pr view 42",workdir:"C:\\work\\repo"})`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tool := "exec_command"
+			if tc.name == "code mode" {
+				tool = "exec"
+			}
+			messages := []db.Message{{ToolCalls: []db.ToolCall{{ToolName: tool, Category: "Bash", InputJSON: tc.input}}}}
+			links := toolCallPRLinks(t, messages, `C:\work\repo`, "https://github.com/example/repo.git")
+			if tc.want {
+				require.Len(t, links, 1)
+				assert.Equal(t, 42, links[0].Number)
+			} else {
+				assert.Empty(t, links)
+			}
+		})
+	}
+}
+
 func TestToolCallPRLinksContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
