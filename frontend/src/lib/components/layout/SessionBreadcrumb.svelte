@@ -562,8 +562,10 @@
     font-size: 11px;
   }
 
+  /* A 12rem basis keeps the typed title readable when an error sits
+     beside it; the controls wrap instead of squeezing the input. */
   .rename-input {
-    flex: 1;
+    flex: 1 1 12rem;
     min-width: 0;
     font-size: 11px;
     font-weight: 500;

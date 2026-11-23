@@ -478,7 +478,7 @@
           }
         }}
       />
-      {#if renameError}<span class="rename-error" role="alert">{renameError}</span>{/if}
+      {#if renameError}<span class="rename-error" role="alert" title={renameError}>{renameError}</span>{/if}
     {:else}
       <a
         class="session-info-link"
@@ -903,9 +903,17 @@
     color: var(--text-secondary);
   }
 
+  /* The row keeps its fixed height for the virtual list, so the error
+     stays on one line under the input; the full text is in its title. */
   .rename-error {
+    display: block;
+    margin-top: 2px;
     color: var(--accent-red);
     font-size: 11px;
+    line-height: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .rename-input {
