@@ -709,7 +709,7 @@ agentsview serve --public-url https://agents.example.com
 agentsview serve --base-path /agentsview --public-url https://example.com
 ```
 
-On startup, the server:
+The server does the following at startup:
 
 1. Loads or creates `~/.agentsview/sessions.db`.
 1. Runs initial sync across all discovered session directories.
@@ -718,6 +718,10 @@ On startup, the server:
    see [`background_sync_interval`](/docs/configuration/#config-file).
 1. Starts periodic sync every 15 minutes.
 1. Serves the Svelte SPA and REST API.
+
+On ordinary restarts, saved sessions are available while initial sync runs.
+Archive writes may return HTTP 503 with `Retry-After` during that sync; retry
+the write after it finishes.
 
 During a full parser or archive-only preservation rebuild, the daemon serves
 the retained archive with stale warnings. Archive writes return HTTP 503 with

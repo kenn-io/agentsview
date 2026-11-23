@@ -212,13 +212,12 @@ func newServeCommandWithDaemonDeps(deps daemonCommandDeps) *cobra.Command {
 				return nil
 			}
 			return runServeLoop(cmd.Context(), mustLoadConfig(cmd), serveOptions{
-				ReplaceDaemon:            replace,
-				NoSyncExplicit:           cmd.Flags().Changed("no-sync"),
-				SkipInitialSync:          skipInitialSync,
-				StartupWorkerAfterListen: true,
-				BasePath:                 basePath,
-				Pprof:                    pprofEnabled,
-				RestartArgs:              serveRestartArgs(cmd.Flags()),
+				ReplaceDaemon:   replace,
+				NoSyncExplicit:  cmd.Flags().Changed("no-sync"),
+				SkipInitialSync: skipInitialSync,
+				BasePath:        basePath,
+				Pprof:           pprofEnabled,
+				RestartArgs:     serveRestartArgs(cmd.Flags()),
 				ReloadConfig: func() (config.Config, error) {
 					return config.LoadPFlags(cmd.Flags())
 				},

@@ -138,13 +138,12 @@ func warnMissingDirs(dirs []string, label string) {
 }
 
 type serveOptions struct {
-	ReplaceDaemon            bool
-	NoSyncExplicit           bool
-	SkipInitialSync          bool
-	StartupWorkerAfterListen bool
-	BasePath                 string
-	Pprof                    bool
-	RestartArgs              []string
+	ReplaceDaemon   bool
+	NoSyncExplicit  bool
+	SkipInitialSync bool
+	BasePath        string
+	Pprof           bool
+	RestartArgs     []string
 	// ReloadConfig rebuilds the configuration with the same layers and flags
 	// as startup so saved provider settings apply without a restart.
 	ReloadConfig func() (config.Config, error)
@@ -255,7 +254,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			skipInitialSync = !needsResync
 		}
 		_, statErr := os.Stat(cfg.DBPath)
-		workerAfterListen = opts.StartupWorkerAfterListen && !opts.SkipInitialSync && !cfg.NoSync && !archiveOnly && err == nil && !needsResync && statErr == nil
+		workerAfterListen = !opts.SkipInitialSync && !cfg.NoSync && !archiveOnly && err == nil && !needsResync && statErr == nil
 	}
 	if !startupRebuild && !skipInitialSync && !cfg.NoSync && !testing.Testing() && !workerAfterListen {
 		startupProgress.SetPhase("opening database")
@@ -492,6 +491,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 						ctx,
 						reconcileRootPaths(ingestion.Config()),
 						statsFromWorkerResult(workerStartupResult),
+						workerStartupResult.Error,
 						engine.RetainSubagentLinkRetry,
 						engine.ReconcileWatchRoots,
 						ingestion.QueueWatchRetry,
@@ -890,15 +890,21 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		defer extractSched.Stop()
 	}
 
-	// Run the deferred worker-startup gap reconciliation now that the URL
-	// banner is out and every background service is started. It holds the
-	// engine's sync mutex, not this goroutine's defers, so a SIGTERM during
-	// a long reconciliation still unwinds through waitForServerRuntime.
+	// Wait for startup work to stop before closing its engine and archive.
+	var startupDone chan struct{}
 	if completeWorkerStartup != nil {
-		completeWorkerStartup()
+		startupDone = make(chan struct{})
+		go func() {
+			defer close(startupDone)
+			completeWorkerStartup()
+		}()
 	}
 
 	err = waitForServerRuntime(ctx, srv, rt)
+	requestRestart(nil)
+	if startupDone != nil {
+		<-startupDone
+	}
 	if restart, ok := errors.AsType[*foregroundRestartError](context.Cause(ctx)); ok {
 		if err != nil {
 			log.Printf("restart cleanup: %v", err)
@@ -1087,6 +1093,7 @@ func startupWorkerOutcome(result workerResult, err error) (workerResult, bool) {
 	case errors.Is(err, errWorkerSpawn):
 		return workerResult{}, false
 	default:
+		result.Error = err.Error()
 		if result.Status == "" {
 			result.Status = "aborted"
 		}

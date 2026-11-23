@@ -102,7 +102,7 @@ func TestCompleteWorkerStartupReconciliationLogsLifecycle(t *testing.T) {
 			queued := false
 			var recordedErr error
 			completeWorkerStartupReconciliation(
-				t.Context(), tc.roots, syncpkg.SyncStats{}, func(bool) {},
+				t.Context(), tc.roots, syncpkg.SyncStats{}, "", func(bool) {},
 				func(context.Context, []string, bool) error {
 					reconcileCalls++
 					return tc.err
@@ -444,6 +444,24 @@ func TestStartupWorkerRanFailedSurfacedWithoutResync(t *testing.T) {
 	}
 }
 
+func TestStartupWorkerOutcomePreservesFailureCause(t *testing.T) {
+	cause := errors.New("worker output was truncated")
+	restore := stubLaunchSyncWorker(t, func(context.Context, config.Config, syncWorkerRequest, func(workerLine)) (workerResult, error) {
+		return workerResult{}, cause
+	})
+	defer restore()
+	cfg := testConfigWithClaudeFixture(t)
+	result, err := runStartupSyncViaWorker(t.Context(), cfg, newStartupStateWriter(cfg.DataDir, time.Now))
+	require.ErrorIs(t, err, cause)
+	result, done := startupWorkerOutcome(result, err)
+	require.True(t, done)
+	var recorded error
+	completeWorkerStartupReconciliation(t.Context(), nil, statsFromWorkerResult(result), result.Error,
+		func(bool) {}, func(context.Context, []string, bool) error { return nil },
+		func(syncpkg.WatchBatch) {}, func(_ syncpkg.SyncStats, err error) { recorded = err })
+	require.ErrorContains(t, recorded, cause.Error())
+}
+
 func TestStartupWorkerLostResultRetriesParentLinks(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	var initial bytes.Buffer
@@ -496,7 +514,7 @@ func TestStartupWorkerLostResultRetriesParentLinks(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, child)
 	require.Nil(t, child.ParentSessionID)
-	completeWorkerStartupReconciliation(t.Context(), reconcileRootPaths(cfg), statsFromWorkerResult(carried),
+	completeWorkerStartupReconciliation(t.Context(), reconcileRootPaths(cfg), statsFromWorkerResult(carried), carried.Error,
 		engine.RetainSubagentLinkRetry, engine.ReconcileWatchRoots, func(syncpkg.WatchBatch) { assert.Fail(t, "unchanged gap should succeed") },
 		engine.RecordStartupReconciled)
 	child, err = database.GetSession(t.Context(), "startup-child")

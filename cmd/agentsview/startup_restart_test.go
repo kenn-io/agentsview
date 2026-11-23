@@ -81,7 +81,7 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 	defer func() { writeDaemonRuntimeWithAuthAndNoSync = original }()
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- runServe(ctx, cfg, serveOptions{StartupWorkerAfterListen: true}, 0) }()
+	go func() { done <- runServe(ctx, cfg, serveOptions{}, 0) }()
 	defer func() {
 		cancel()
 		select {
@@ -210,7 +210,7 @@ func TestServeRestartSpawnFailureFallsBack(t *testing.T) {
 	defer func() { writeDaemonRuntimeWithAuthAndNoSync = original }()
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- runServe(ctx, cfg, serveOptions{StartupWorkerAfterListen: true}, 0) }()
+	go func() { done <- runServe(ctx, cfg, serveOptions{}, 0) }()
 	defer func() {
 		cancel()
 		select {
@@ -284,7 +284,7 @@ func TestServeRestartFirstStartAndNoSync(t *testing.T) {
 			defer func() { writeDaemonRuntimeWithAuthAndNoSync = original }()
 			ctx, cancel := context.WithCancel(t.Context())
 			done := make(chan error, 1)
-			go func() { done <- runServe(ctx, cfg, serveOptions{StartupWorkerAfterListen: true}, 0) }()
+			go func() { done <- runServe(ctx, cfg, serveOptions{}, 0) }()
 			defer func() {
 				cancel()
 				select {
