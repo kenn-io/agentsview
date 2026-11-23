@@ -270,19 +270,10 @@ func (db *DB) captureJournaledUsageWindow(ctx context.Context, filter UsageFilte
 		if !trusted {
 			return captureUsageQueryFrom(ctx, tx, filter, kind, snapshot)
 		}
-		changes, err := loadSessionJournalChanges(ctx, tx, "usage_session_changes", "usage", zone.revision.Int64, snapshot.ChangeRevision)
-		if err != nil {
-			return err
-		}
-		refreshIDs = append(refreshIDs, changes...)
-		refreshIDs = append(refreshIDs, lost...)
-		slices.Sort(refreshIDs)
-		refreshIDs = slices.Compact(refreshIDs)
 		refresh = *snapshot
-		if err := loadUsageSnapshotSessions(ctx, tx, refreshIDs, filter, false, &refresh); err != nil {
-			return err
-		}
-		if err := refresh.loadUsageEventFingerprints(ctx, tx, refreshIDs); err != nil {
+		var err error
+		refreshIDs, err = captureUsageJournalChanges(ctx, tx, &refresh, filter, zone.revision.Int64, lost)
+		if err != nil {
 			return err
 		}
 		if err := loadUsageSnapshotSessions(ctx, tx, window, filter, true, snapshot); err != nil {
@@ -310,6 +301,25 @@ func (db *DB) captureJournaledUsageWindow(ctx context.Context, filter UsageFilte
 		return nil
 	})
 	return snapshot, refresh, refreshIDs, trusted, err
+}
+
+// captureUsageJournalChanges collects changed and invalidated sessions in the
+// archive snapshot. The returned IDs also include sessions since deleted.
+func captureUsageJournalChanges(ctx context.Context, tx *sql.Tx, snapshot *usageQuerySnapshot, filter UsageFilter, revision int64, lost []string) ([]string, error) {
+	ids, err := loadSessionJournalChanges(ctx, tx, "usage_session_changes", "usage", revision, snapshot.ChangeRevision)
+	if err != nil {
+		return nil, err
+	}
+	ids = append(ids, lost...)
+	slices.Sort(ids)
+	ids = slices.Compact(ids)
+	if err := loadUsageSnapshotSessions(ctx, tx, ids, filter, false, snapshot); err != nil {
+		return nil, err
+	}
+	if err := snapshot.loadUsageEventFingerprints(ctx, tx, ids); err != nil {
+		return nil, err
+	}
+	return ids, nil
 }
 
 func (cache *usageCache) refreshJournaledUsageWindow(ctx context.Context, snapshot *usageQuerySnapshot, refresh usageQuerySnapshot, refreshIDs []string, report func(string)) (map[string]usageRollupInstall, usageRollupRequestTimings, error) {

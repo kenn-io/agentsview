@@ -284,17 +284,8 @@ func (db *DB) captureUsageBackfill(ctx context.Context, cache *usageCache, datab
 			if !trusted {
 				return captureUsageQueryFrom(ctx, tx, filter, usageQueryKindActivity, snapshot)
 			}
-			ids, err := loadSessionJournalChanges(ctx, tx, "usage_session_changes", "usage", lowest, snapshot.ChangeRevision)
+			ids, err := captureUsageJournalChanges(ctx, tx, snapshot, filter, lowest, lost)
 			if err != nil {
-				return err
-			}
-			ids = append(ids, lost...)
-			slices.Sort(ids)
-			ids = slices.Compact(ids)
-			if err := loadUsageSnapshotSessions(ctx, tx, ids, filter, false, snapshot); err != nil {
-				return err
-			}
-			if err := snapshot.loadUsageEventFingerprints(ctx, tx, ids); err != nil {
 				return err
 			}
 			// Preserve deleted IDs so the fill removes their cached facts.
@@ -466,13 +457,15 @@ func (db *DB) runUsageCacheBackfillWithCoverage(
 	if err := cache.sweepDeletionJournal(ctx, db); err != nil {
 		return err
 	}
-	if _, err := cache.incrementalVacuum(
-		ctx, usageCacheVacuumFreelistThreshold, usageCacheVacuumPages,
-	); err != nil {
-		return err
-	}
-	if _, err := cache.db.ExecContext(ctx, `ANALYZE`); err != nil {
-		return fmt.Errorf("analyzing completed usage cache: %w", err)
+	if !delta || len(snapshot.Versions) > 0 {
+		if _, err := cache.incrementalVacuum(
+			ctx, usageCacheVacuumFreelistThreshold, usageCacheVacuumPages,
+		); err != nil {
+			return err
+		}
+		if _, err := cache.db.ExecContext(ctx, `ANALYZE`); err != nil {
+			return fmt.Errorf("analyzing completed usage cache: %w", err)
+		}
 	}
 	if _, err := cache.db.ExecContext(ctx, `
 		UPDATE usage_cache_metadata SET value = ? WHERE key = ?`,

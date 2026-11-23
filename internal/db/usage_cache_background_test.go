@@ -845,6 +845,12 @@ func TestUsageBackfillJournalCapture(t *testing.T) {
 	snapshot, delta := capture()
 	require.True(t, delta)
 	require.Empty(t, snapshot.Sessions)
+	_, err = cache.db.ExecContext(t.Context(), `INSERT INTO sqlite_stat1(tbl, idx, stat) VALUES ('marker', NULL, '1')`)
+	require.NoError(t, err)
+	require.NoError(t, database.runUsageCacheBackfill(t.Context()))
+	var markers int
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT count(*) FROM sqlite_stat1 WHERE tbl = 'marker'`).Scan(&markers))
+	assert.Equal(t, 1, markers)
 	require.NoError(t, database.InsertMessages(t.Context(), []Message{{
 		SessionID: "two", Ordinal: 1, Role: "assistant", Timestamp: "2026-08-11T09:00:00Z", Model: "model",
 		TokenUsage: json.RawMessage(`{"input_tokens":2}`),
@@ -857,6 +863,8 @@ func TestUsageBackfillJournalCapture(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"two": "2026-08-11T09:00:00Z"}, activity)
 	require.NoError(t, database.runUsageCacheBackfill(t.Context()))
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT count(*) FROM sqlite_stat1 WHERE tbl = 'marker'`).Scan(&markers))
+	assert.Zero(t, markers)
 	snapshot, delta = capture()
 	require.True(t, delta)
 	require.Empty(t, snapshot.Sessions)
