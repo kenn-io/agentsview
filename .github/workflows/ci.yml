@@ -194,6 +194,9 @@ jobs:
         run: npm run check:vp
         working-directory: frontend
 
+      - name: Download Go dependencies for API generation
+        run: kit-retry 3 5 go mod download
+
       - name: Type-check (svelte-check)
         run: npm run check
         working-directory: frontend
