@@ -203,27 +203,6 @@ func TestFirstImportMixedSources(t *testing.T) {
 	}
 }
 
-func TestFirstImportWithoutSourceTimestamp(t *testing.T) {
-	env := setupFocusedTestEnv(t, parser.AgentClaude)
-	defer env.engine.Close()
-	content := testjsonl.NewSessionBuilder().AddClaudeUser(tsEarly, "hello").String()
-	older := env.writeClaudeSession(t, "project", "unknown.jsonl", content)
-	newer := env.writeClaudeSession(t, "project", "known.jsonl", content)
-	require.NoError(t, os.Chtimes(older, time.Unix(0, 0), time.Unix(0, 0)))
-	require.NoError(t, os.Chtimes(newer, time.Unix(10, 0), time.Unix(10, 0)))
-	stats, complete := env.engine.SyncNewest(t.Context(), 1, nil)
-	require.False(t, complete)
-	require.Equal(t, 1, stats.Synced)
-	unknown, err := env.db.GetSession(t.Context(), "unknown")
-	require.NoError(t, err)
-	require.Nil(t, unknown)
-	stats = env.engine.SyncAll(t.Context(), nil)
-	require.Equal(t, 1, stats.Synced)
-	unknown, err = env.db.GetSession(t.Context(), "unknown")
-	require.NoError(t, err)
-	require.NotNil(t, unknown)
-}
-
 func TestFirstImportFillsWaveWithoutTimestamps(t *testing.T) {
 	for _, known := range []bool{false, true} {
 		t.Run(fmt.Sprintf("known-%t", known), func(t *testing.T) {

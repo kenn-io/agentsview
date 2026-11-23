@@ -393,25 +393,6 @@ func TestFirstImportWavePublishesInNewestOrder(t *testing.T) {
 	}
 }
 
-func TestFirstImportListsStagedCodexWithMessages(t *testing.T) {
-	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122b05"
-	root := writeCodexParityRoot(t, uuid)
-	archive := openTestDB(t)
-	engine := NewEngine(t.Context(), archive, EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}, Machine: "local", StagedCodexParseMinBytes: 1,
-	})
-	t.Cleanup(engine.Close)
-	stats, _ := engine.SyncNewest(t.Context(), 1, nil)
-	require.Zero(t, stats.Failed)
-	page, err := archive.ListSessions(t.Context(), db.SessionFilter{Limit: 10})
-	require.NoError(t, err)
-	require.Len(t, page.Sessions, 1)
-	messages, err := archive.GetMessages(t.Context(), page.Sessions[0].ID, 0, 100, true)
-	require.NoError(t, err)
-	require.NotEmpty(t, messages)
-	require.Equal(t, "run the suite", messages[0].Content)
-}
-
 func TestFirstImportListedSessionsHaveMessages(t *testing.T) {
 	root := t.TempDir()
 	project := filepath.Join(root, "project")

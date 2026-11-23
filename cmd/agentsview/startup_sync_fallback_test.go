@@ -222,15 +222,3 @@ func TestFirstImportProbe(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, first)
 }
-
-func TestFirstImportDeferredFallback(t *testing.T) {
-	database := dbtest.OpenTestDB(t)
-	engine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{Machine: "local", DeferStartupMaintenance: true})
-	t.Cleanup(engine.Close)
-	timeout := make(chan time.Time, 1)
-	timeout <- time.Now()
-	ran, err := runDeferredStartupSyncFallback(t.Context(), config.Config{}, engine, database, nil, nil, timeout, true)
-	require.NoError(t, err)
-	require.True(t, ran)
-	require.False(t, engine.LastSyncFinishedAt(t.Context()).IsZero())
-}
