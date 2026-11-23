@@ -1162,9 +1162,6 @@ func (db *DB) loadActivityReportUsageCandidatesFrom(
 	lowerBound, upperBound string,
 	restrictToIDs bool,
 ) ([]activityReportUsageCandidate, []export.EffectivePricingRow, *export.PricingResolver, error) {
-	if err := db.waitMessageUsageCounters(ctx); err != nil {
-		return nil, nil, nil, err
-	}
 	pricing, err := db.loadPricingMapFrom(ctx, source)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("loading pricing: %w", err)

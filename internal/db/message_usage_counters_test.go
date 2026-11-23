@@ -116,7 +116,11 @@ func TestOpenDaemonDefersMessageUsageCounterFill(t *testing.T) {
 	readOnly, err := OpenReadOnly(t.Context(), path)
 	require.NoError(t, err)
 	defer readOnly.Close()
-	_, _, _, err = readOnly.loadActivityReportUsageCandidatesFrom(t.Context(), readOnly.getReader(), []string{"s"}, "2020-01-01", "2030-01-01", false)
+	_, err = readOnly.GetDailyUsage(t.Context(), UsageFilter{})
+	require.ErrorIs(t, err, ErrMessageUsageCountersPending)
+	_, err = readOnly.GetSessionUsage(t.Context(), "s", true)
+	require.ErrorIs(t, err, ErrMessageUsageCountersPending)
+	_, err = readOnly.GetTopSessionsByCost(t.Context(), UsageFilter{}, 10)
 	require.ErrorIs(t, err, ErrMessageUsageCountersPending)
 	date := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	_, err = readOnly.ExportReportingDay(t.Context(), ReportingExportOptions{Date: date, Now: date.Add(24 * time.Hour)})
@@ -127,14 +131,20 @@ func TestOpenDaemonDefersMessageUsageCounterFill(t *testing.T) {
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	_, _, _, err = d.loadActivityReportUsageCandidatesFrom(ctx, d.getReader(), []string{"s"}, "2020-01-01", "2030-01-01", false)
+	_, err = d.GetDailyUsage(ctx, UsageFilter{})
 	require.ErrorIs(t, err, context.Canceled)
 
-	done := make(chan error, 1)
+	type dailyResult struct {
+		usage DailyUsageResult
+		err   error
+	}
+	daily := make(chan dailyResult, 1)
 	go func() {
-		_, _, _, err := d.loadActivityReportUsageCandidatesFrom(t.Context(), d.getReader(), []string{"s"}, "2020-01-01", "2030-01-01", false)
-		done <- err
+		usage, err := d.GetDailyUsage(t.Context(), UsageFilter{})
+		daily <- dailyResult{usage, err}
 	}()
+	done := make(chan error, 1)
+	go func() { _, err := d.GetSessionUsage(t.Context(), "s", true); done <- err }()
 	snapshots := make(chan string, 2)
 	reports := make(chan error, 2)
 	go func() {
@@ -145,12 +155,14 @@ func TestOpenDaemonDefersMessageUsageCounterFill(t *testing.T) {
 		_, err := d.ExportReportingDigest(t.Context(), ReportingDigestExportOptions{From: date, To: date, Now: date.Add(24 * time.Hour), afterSnapshot: func() { snapshots <- "digest" }})
 		reports <- err
 	}()
-	dailyGot, err := d.GetDailyUsage(t.Context(), UsageFilter{})
-	require.NoError(t, err)
-	assert.Equal(t, 250, dailyGot.Totals.OutputTokens)
+	select {
+	case result := <-daily:
+		require.FailNow(t, "daily usage returned before fill", "%v", result.err)
+	case <-time.After(50 * time.Millisecond): //nolint:kennlint // deadlinetest: pending fill keeps usage waiting
+	}
 	select {
 	case err := <-done:
-		require.FailNow(t, "activity usage returned before fill", "%v", err)
+		require.FailNow(t, "session usage returned before fill", "%v", err)
 	case <-time.After(50 * time.Millisecond): //nolint:kennlint // deadlinetest: the pending fill keeps activity usage waiting
 	}
 	select {
@@ -159,15 +171,16 @@ func TestOpenDaemonDefersMessageUsageCounterFill(t *testing.T) {
 	case <-time.After(50 * time.Millisecond): //nolint:kennlint // deadlinetest: pending fill keeps reporting snapshots waiting
 	}
 	require.NoError(t, d.RepairMessageFTS(t.Context()))
+	dailyGot := <-daily
+	require.NoError(t, dailyGot.err)
+	assert.Equal(t, 250, dailyGot.usage.Totals.OutputTokens)
 	require.NoError(t, <-done)
 	require.NoError(t, <-reports)
 	require.NoError(t, <-reports)
 	assert.ElementsMatch(t, []string{"day", "digest"}, []string{<-snapshots, <-snapshots})
-	readOnlyAfter, err := OpenReadOnly(t.Context(), path)
+	readOnlyUsage, err := readOnly.GetDailyUsage(t.Context(), UsageFilter{})
 	require.NoError(t, err)
-	_, _, _, err = readOnlyAfter.loadActivityReportUsageCandidatesFrom(t.Context(), readOnlyAfter.getReader(), []string{"s"}, "2020-01-01", "2030-01-01", false)
-	require.NoError(t, err)
-	require.NoError(t, readOnlyAfter.Close())
+	assert.Equal(t, 250, readOnlyUsage.Totals.OutputTokens)
 	assert.Equal(t, []storedUsageCounters{{250, 3}}, readStoredUsageCounters(t, d, "s"))
 	require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM stats WHERE key='message_usage_counters_pending')`).Scan(&pending))
 	assert.False(t, pending)
@@ -177,7 +190,7 @@ func TestOpenDaemonDefersMessageUsageCounterFill(t *testing.T) {
 	defer d.Close()
 	dailyWant, err := d.GetDailyUsage(t.Context(), UsageFilter{})
 	require.NoError(t, err)
-	assert.Equal(t, dailyWant, dailyGot)
+	assert.Equal(t, dailyWant, dailyGot.usage)
 }
 
 func TestReopenFinishesPendingMessageUsageCounters(t *testing.T) {
@@ -272,4 +285,37 @@ func TestUsageCounterReadersDifferBeforeFill(t *testing.T) {
 	for _, name := range []string{"session", "rows", "activity", "day", "digest", "page", "all"} {
 		assert.Equal(t, before[name], after[name], name)
 	}
+}
+
+func TestDailyUsageWaitsWithWarmMemo(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s", "proj")
+	m := asstMsg("s", 0, "reply")
+	m.Model = "claude-sonnet"
+	m.TokenUsage = jsontext.Value(`{"output_tokens":42}`)
+	insertMessages(t, d, m)
+	filter := UsageFilter{}
+	want, err := d.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	_, ok := d.usageKept.Get(UsageSlot(filter, true), d.dailyUsageVersion(t.Context()))
+	require.True(t, ok)
+	_, err = d.getWriter().Exec(t.Context(), `INSERT INTO stats(key, value) VALUES ('message_usage_counters_pending', 1)`)
+	require.NoError(t, err)
+	d.usageCountersReady = make(chan struct{})
+	d.usageCountersPending.Store(true)
+	type result struct {
+		usage DailyUsageResult
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() { got, err := d.GetDailyUsage(t.Context(), filter); done <- result{got, err} }()
+	select {
+	case got := <-done:
+		require.FailNow(t, "warm daily usage returned before fill", "%v", got.err)
+	case <-time.After(50 * time.Millisecond): //nolint:kennlint // deadlinetest: the pending fill keeps the warm reader waiting
+	}
+	require.NoError(t, d.RepairMessageFTS(t.Context()))
+	got := <-done
+	require.NoError(t, got.err)
+	assert.Equal(t, want, got.usage)
 }

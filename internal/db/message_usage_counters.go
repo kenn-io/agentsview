@@ -89,7 +89,15 @@ func (db *DB) waitMessageUsageCounters(ctx context.Context) error {
 		return nil
 	}
 	if db.readOnly {
-		return ErrMessageUsageCountersPending
+		var pending bool
+		if err := db.getReader().QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM stats WHERE key = 'message_usage_counters_pending')`).Scan(&pending); err != nil {
+			return fmt.Errorf("checking message usage counter upgrade: %w", err)
+		}
+		if pending {
+			return ErrMessageUsageCountersPending
+		}
+		db.usageCountersPending.Store(false)
+		return nil
 	}
 	select {
 	case <-db.usageCountersReady:

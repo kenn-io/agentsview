@@ -2151,8 +2151,8 @@ work again after the repair finishes.
 If the substring index is missing, substring searches scan messages until the
 repair finishes. Sessions shows the saved archive while repair runs. Archive
 writes, including startup sync, wait while the repair holds the writer. During
-the message usage counter upgrade, reports that need those counters wait for the
-fill; a read-only command using them asks you to retry after the daemon finishes.
+the message usage counter upgrade, Usage requests wait for the fill; read-only
+Usage commands ask you to retry after the daemon finishes.
 Because the freshness ledger records session IDs rather than old message IDs and
 token content, it cannot remove stale entries for individual replaced or deleted
 messages. Removing the sidecar drops the CJK index but keeps the
