@@ -341,11 +341,19 @@ func ensureCJKFTS(
 	current := tableExists && fingerprintErr == nil && pendingSessions == 0 &&
 		storedFingerprint == simpleFTSRuntimeConfig.fingerprint
 
-	if deferRebuild && !current && !forceRebuild {
-		if err := tx.Commit(); err != nil {
-			return false, fmt.Errorf("committing deferred CJK FTS state: %w", err)
+	if deferRebuild && !current {
+		hasMessages := tableExists
+		if !hasMessages {
+			if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM messages)`).Scan(&hasMessages); err != nil {
+				return false, fmt.Errorf("checking messages for CJK FTS: %w", err)
+			}
 		}
-		return true, nil
+		if hasMessages {
+			if err := tx.Commit(); err != nil {
+				return false, fmt.Errorf("committing deferred CJK FTS state: %w", err)
+			}
+			return true, nil
+		}
 	}
 
 	if forceRebuild || !current {

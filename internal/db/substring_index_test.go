@@ -435,3 +435,24 @@ func TestDaemonOpenDefersSubstringIndexRepair(t *testing.T) {
 	requireSubstringIndexIntact(t, d)
 	assert.Equal(t, before, substringHits(t, d, filter))
 }
+
+func TestDaemonOpenBuildsIndexesForEmptyArchive(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d, err := OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	assert.True(t, d.hasSubstringIndex(t.Context()))
+	if simpleFTSRuntimeConfig.available() {
+		assert.True(t, d.HasCJKFTS(t.Context()))
+	}
+	assert.False(t, d.searchIndexRepairPending.Load())
+	seedSearchSession(t, d, "session", "project", [][2]string{{"user", "中文搜索 needleexample"}})
+	requireSubstringIndexIntact(t, d)
+	assert.Len(t, substringHits(t, d, ContentSearchFilter{Pattern: "needleexample", Limit: 50}), 1)
+	require.NoError(t, d.RepairMessageFTS(t.Context()))
+	if simpleFTSRuntimeConfig.available() {
+		page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "中文搜索", Mode: "fts", Sources: []string{"messages"}, Limit: 20})
+		require.NoError(t, err)
+		assert.Len(t, page.Matches, 1)
+	}
+}

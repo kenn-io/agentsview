@@ -4364,3 +4364,53 @@ func TestServeLifetimesReleaseDebugLog(t *testing.T) {
 		}
 	}
 }
+
+func TestDeferredSearchIndexesHTTP(t *testing.T) {
+	for _, index := range []string{"substring", "cjk"} {
+		t.Run(index, func(t *testing.T) {
+			dir := t.TempDir()
+			cfg := config.Config{Host: "127.0.0.1", DBPath: filepath.Join(dir, "archive.db"), DataDir: dir, ArchiveContent: config.ArchiveContentFull}
+			database, err := db.Open(t.Context(), cfg.DBPath)
+			require.NoError(t, err)
+			if index == "cjk" && !database.HasCJKFTS(t.Context()) {
+				require.NoError(t, database.Close())
+				t.Skip("simple FTS5 runtime is not installed")
+			}
+			dbtest.SeedSession(t, database, "session", "project", func(s *db.Session) {
+				s.UserMessageCount = 2
+				s.StartedAt = new("2025-01-15T10:00:00Z")
+			})
+			require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []db.Message{{SessionID: "session", Role: "user", Content: "中文搜索 needleexample", Timestamp: "2025-01-15T10:00:00Z"}}))
+			require.NoError(t, database.Close())
+			raw, err := sql.Open("sqlite3", cfg.DBPath)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, raw.Close()) })
+			if index == "substring" {
+				_, err = raw.ExecContext(t.Context(), `DROP TRIGGER IF EXISTS messages_trigram_ai; DROP TRIGGER IF EXISTS messages_trigram_ad; DROP TRIGGER IF EXISTS messages_trigram_au; DROP TABLE message_trigram_fts; DROP TABLE thinking_trigram_fts; DROP VIEW message_trigram_source`)
+			} else {
+				_, err = raw.ExecContext(t.Context(), `UPDATE stats SET value='foreign' WHERE key='messages_cjk_fts_fingerprint_v1'`)
+			}
+			require.NoError(t, err)
+			database, err = db.OpenDaemonWithProgress(t.Context(), cfg.DBPath, config.ArchiveContentFull, nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{ArchiveContent: config.ArchiveContentFull})
+			t.Cleanup(engine.Close)
+			ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, nil)
+			t.Cleanup(ingestion.Stop)
+			handler := server.New(cfg, database, engine, server.WithIngestionFreshness(ingestion)).Handler()
+			if index == "cjk" {
+				assert.False(t, database.HasCJKFTS(t.Context()))
+			} else {
+				var exists bool
+				require.NoError(t, raw.QueryRowContext(t.Context(), `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='message_trigram_fts')`).Scan(&exists))
+				assert.False(t, exists)
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0/api/v1/sessions", nil))
+			assert.Equal(t, http.StatusOK, response.Code)
+			assert.Contains(t, response.Body.String(), `"session"`)
+			require.NoError(t, database.RepairMessageFTS(t.Context()))
+		})
+	}
+}

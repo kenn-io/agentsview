@@ -95,7 +95,13 @@ func ensureSubstringIndex(ctx context.Context, w *writerHandle, progress OpenPro
 		return false, nil
 	}
 	if deferBuild {
-		return true, nil
+		var hasMessages bool
+		if err := w.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM messages)`).Scan(&hasMessages); err != nil {
+			return false, fmt.Errorf("checking messages for substring index: %w", err)
+		}
+		if hasMessages {
+			return true, nil
+		}
 	}
 	progress.report("Building substring search index")
 	log.Print("building SQLite substring search index; scanning all messages")
