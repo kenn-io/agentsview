@@ -4666,6 +4666,40 @@ describe("SessionsStore live refresh", () => {
     spy.mockRestore();
   });
 
+  it.each(["sessions", "sync"])(
+    "%s events refresh agent and machine filter options without stats",
+    async (scope) => {
+      let registered!: (e: { scope: string }) => void;
+      const spy = vi.spyOn(events, "subscribe").mockImplementation((fn) => {
+        registered = fn as (e: { scope: string }) => void;
+        return () => {};
+      });
+      api.getAgents
+        .mockResolvedValueOnce({ agents: [{ name: "old-agent", session_count: 1 }] })
+        .mockResolvedValueOnce({ agents: [{ name: "new-agent", session_count: 1 }] });
+      api.getMachines
+        .mockResolvedValueOnce({ machines: ["old-machine"] })
+        .mockResolvedValueOnce({ machines: ["new-machine"] });
+      const sessions = createSessionsStore();
+      const detach = sessions.attachSidebar();
+      try {
+        await Promise.all([sessions.loadAgents(), sessions.loadMachines()]);
+        expect(sessions.agents[0]?.name).toBe("old-agent");
+        expect(sessions.machines).toEqual(["old-machine"]);
+
+        registered({ scope });
+        await vi.waitFor(() => {
+          expect(sessions.agents[0]?.name).toBe("new-agent");
+          expect(sessions.machines).toEqual(["new-machine"]);
+        });
+        expect(api.getStats).not.toHaveBeenCalled();
+      } finally {
+        detach();
+        spy.mockRestore();
+      }
+    },
+  );
+
   it("refetches on the safety-net interval after becoming visible", async () => {
     vi.useFakeTimers();
     const { events } = await import("./events.svelte.js");
