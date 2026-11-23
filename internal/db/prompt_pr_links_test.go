@@ -421,6 +421,48 @@ func TestToolCallPRLinksSkipsSimpleCommands(t *testing.T) {
 	assert.Less(t, optimized, full*0.85)
 }
 
+func TestCodeModeWithoutShellAvoidsParser(t *testing.T) {
+	const input = `text(await tools.clock__curr_time({}));`
+	full := testing.AllocsPerRun(2, func() {
+		for range 100 {
+			_, _, err := codeModePRLinks(t.Context(), input, "", "", parser.PRShellContext{})
+			require.NoError(t, err)
+		}
+	})
+	optimized := testing.AllocsPerRun(2, func() {
+		for range 100 {
+			links, state, err := replayPRLinks(t.Context(), "Bash", "exec", input, "", "", parser.PRShellContext{})
+			require.NoError(t, err)
+			assert.Empty(t, links)
+			assert.Equal(t, parser.PRShellContext{}, state)
+		}
+	})
+	assert.Less(t, optimized, full*0.5)
+	for _, input := range []string{
+		`text(await tools.clock__curr_time({}));`,
+		`await tools.wait({"duration_ms":1000})`,
+		`tools.wait({"text":"exec_command"})`,
+	} {
+		require.True(t, simpleCodeModeWithoutShell(input), input)
+		for bits := range 8 {
+			before := parser.PRShellContext{CheckoutUncertain: bits&1 != 0, HostUncertain: bits&2 != 0, RepoUncertain: bits&4 != 0}
+			links, after, err := codeModePRLinks(t.Context(), input, "", "", before)
+			require.NoError(t, err)
+			assert.Empty(t, links)
+			assert.Equal(t, before, after)
+		}
+	}
+	for _, input := range []string{
+		`tools.exec_command({"cmd":"gh pr view 42"})`,
+		`text(await tools.wait({"value":tools.exec_command({cmd:'pwd'})}))`,
+		`tools.wait({`,
+		`text(await tools.wait({})); broken`,
+		strings.Repeat(" ", 256*1024) + `tools.wait({})`,
+	} {
+		assert.False(t, simpleCodeModeWithoutShell(input), input)
+	}
+}
+
 func TestSimplePRInertCommandParity(t *testing.T) {
 	for _, command := range []string{"pwd", "ls -al /work/repo", "cat README.md", "head -n 10 README.md", "tail -n 10 README.md", "wc -l README.md", "rg pattern src", "echo hello", "go version", "npm install", "curl https://example.com/api", "/usr/bin/python3 script.py", "echo gh pr view 42", "rg -n 'gh pr view 42' src", "echo '$(gh pr view 42)'", `rg "hello world" src`, `echo "a\"b"`} {
 		t.Run(command, func(t *testing.T) {
@@ -692,7 +734,8 @@ func TestToolPRLinksAppendRefreshParity(t *testing.T) {
 				return Message{SessionID: s.ID, Ordinal: ordinal, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"` + command + `"}`}}}
 			}
 			require.NoError(t, d.InsertMessages(t.Context(), []Message{message(0, tc.command)}))
-			require.NoError(t, d.InsertMessages(t.Context(), []Message{message(1, "pwd"), message(2, "gh pr view 42"), message(3, "ls -al")}))
+			codeMode := Message{SessionID: s.ID, Ordinal: 2, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "exec", Category: "Bash", InputJSON: `text(await tools.clock__curr_time({}));`}}}
+			require.NoError(t, d.InsertMessages(t.Context(), []Message{message(1, "pwd"), codeMode, message(3, "gh pr view 42"), message(4, "ls -al")}))
 			before, err := d.GetSession(t.Context(), s.ID)
 			require.NoError(t, err)
 			require.Len(t, before.PRLinks, tc.want)
@@ -704,7 +747,7 @@ func TestToolPRLinksAppendRefreshParity(t *testing.T) {
 			after, err := d.GetSession(t.Context(), s.ID)
 			require.NoError(t, err)
 			assert.Equal(t, before.PRLinks, after.PRLinks)
-			require.NoError(t, d.InsertMessages(t.Context(), []Message{message(4, "gh pr view 43")}))
+			require.NoError(t, d.InsertMessages(t.Context(), []Message{message(5, "gh pr view 43")}))
 			appended, err := d.GetSession(t.Context(), s.ID)
 			require.NoError(t, err)
 			require.Len(t, appended.PRLinks, tc.want*2)

@@ -628,10 +628,37 @@ func simplePRInertCommand(name, input string) bool {
 	return true
 }
 
+// simpleCodeModeWithoutShell recognizes a single tool call with JSON arguments.
+func simpleCodeModeWithoutShell(input string) bool {
+	if len(input) > 256*1024 || strings.ContainsAny(input, "\u2028\u2029") {
+		return false
+	}
+	input = strings.TrimSpace(input)
+	input = strings.TrimSuffix(input, ";")
+	if strings.HasPrefix(input, "text(await ") && strings.HasSuffix(input, ")") {
+		input = strings.TrimSuffix(strings.TrimPrefix(input, "text(await "), ")")
+	} else {
+		input = strings.TrimPrefix(input, "await ")
+	}
+	if !strings.HasPrefix(input, "tools.") || !strings.HasSuffix(input, ")") {
+		return false
+	}
+	name, args, ok := strings.Cut(strings.TrimSuffix(strings.TrimPrefix(input, "tools."), ")"), "(")
+	if !ok || name == "" || name == "exec_command" {
+		return false
+	}
+	for i, c := range name {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '_' || c == '$' || i > 0 && c >= '0' && c <= '9') {
+			return false
+		}
+	}
+	return strings.HasPrefix(args, "{") && strings.HasSuffix(args, "}") && jsontext.Value(args).IsValid()
+}
+
 // replayPRLinks is callPRLinks without the parser for commands that cannot
 // name a PR or change the shell context.
 func replayPRLinks(ctx context.Context, category, toolName, input, cwd, remote string, state parser.PRShellContext) ([]PRLink, parser.PRShellContext, error) {
-	if category == "Bash" && simplePRInertCommand(toolName, input) {
+	if category == "Bash" && (toolName == "exec" && simpleCodeModeWithoutShell(input) || simplePRInertCommand(toolName, input)) {
 		return nil, state, ctx.Err()
 	}
 	return callPRLinks(ctx, category, toolName, input, cwd, remote, state)
