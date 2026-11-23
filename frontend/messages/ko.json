@@ -3149,5 +3149,6 @@
   "getting_started_open_session": "세션 열기",
   "getting_started_search": "기록 검색",
   "getting_started_usage": "토큰 사용량 보기",
-  "getting_started_insights": "인사이트 읽기"
+  "getting_started_insights": "인사이트 읽기",
+  "session_diagnostics_hide": "진단 숨기기"
 }

@@ -3294,5 +3294,6 @@
   "getting_started_open_session": "Abrir una sesión",
   "getting_started_search": "Buscar en tu historial",
   "getting_started_usage": "Ver el uso de tokens",
-  "getting_started_insights": "Leer tus análisis"
+  "getting_started_insights": "Leer tus análisis",
+  "session_diagnostics_hide": "Ocultar diagnósticos"
 }

@@ -3143,5 +3143,6 @@
   "getting_started_open_session": "打开会话",
   "getting_started_search": "搜索历史记录",
   "getting_started_usage": "查看令牌用量",
-  "getting_started_insights": "阅读洞察"
+  "getting_started_insights": "阅读洞察",
+  "session_diagnostics_hide": "隐藏诊断"
 }
