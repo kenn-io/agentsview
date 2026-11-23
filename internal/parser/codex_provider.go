@@ -1047,14 +1047,25 @@ func (s codexSourceSet) discover(
 		if !includeRoot(root) {
 			continue
 		}
-		err := s.discoverEachRoot(ctx, root, func(source SourceRef) error {
+		collect := func(source SourceRef) error {
 			if current, ok := byKey[source.Key]; !ok || (!isS3URI(root) && preferCodexSource(source, current)) {
 				byKey[source.Key] = source
 			}
 			return nil
-		})
-		if err != nil {
-			return nil, err
+		}
+		if !isS3URI(root) {
+			for _, path := range s.discoverSessionPaths(root) {
+				source, ok := s.sourceRef(root, path, true)
+				if !ok {
+					source, ok = s.directPathSource(root, path, true)
+				}
+				if ok {
+					_ = collect(source)
+				}
+			}
+		}
+		if err := s.discoverEachRoot(ctx, root, collect); err != nil && ctx.Err() != nil {
+			return nil, ctx.Err()
 		}
 	}
 	for _, source := range byKey {
@@ -1379,16 +1390,63 @@ func (s codexSourceSet) FindSource(
 	if req.RawSessionID == "" {
 		return SourceRef{}, false, nil
 	}
-	sources, err := s.Discover(ctx)
-	if err != nil {
-		return SourceRef{}, false, err
-	}
-	for _, source := range sources {
-		if source.Key == codexSourceKey(s.agent, req.RawSessionID) {
-			return source, true, nil
+	return s.findSourceByID(ctx, req.RawSessionID)
+}
+
+func (s codexSourceSet) findSourceByID(ctx context.Context, id string) (SourceRef, bool, error) {
+	var best SourceRef
+	found := false
+	for _, root := range s.roots {
+		if err := ctx.Err(); err != nil {
+			return SourceRef{}, false, err
+		}
+		if isS3URI(root) {
+			for _, file := range codexS3PreferredFiles(s3PrefixScan(root, codexS3Scanner())) {
+				source := s3SourceRefFromDiscoveredFile(root, file)
+				if source.Key == codexSourceKey(s.agent, id) {
+					return source, true, nil
+				}
+			}
+			continue
+		}
+		if path := s.findSourceFile(root, id); path != "" {
+			if source, ok := s.sourceRef(root, path, true); ok && (!found || preferCodexSource(source, best)) {
+				best, found = source, true
+			}
 		}
 	}
-	return SourceRef{}, false, nil
+	if found && best.Opaque.(codexSource).Layout == CodexLayoutDated && !isCompressedCodexRolloutPath(best.DisplayPath) {
+		return best, true, nil
+	}
+	for _, root := range s.roots {
+		if isS3URI(root) {
+			continue
+		}
+		err := s.discoverEachRoot(ctx, root, func(source SourceRef) error {
+			if source.Key != codexSourceKey(s.agent, id) {
+				return nil
+			}
+			if isCompressedCodexRolloutPath(source.DisplayPath) {
+				if plain, ok := s.sourceRef(root, codexPlainRolloutPath(source.DisplayPath), true); ok {
+					source = plain
+				}
+			}
+			if !found || preferCodexSource(source, best) {
+				best, found = source, true
+			}
+			if best.Opaque.(codexSource).Layout == CodexLayoutDated && !isCompressedCodexRolloutPath(best.DisplayPath) {
+				return errStopStreamingDiscovery
+			}
+			return nil
+		})
+		if errors.Is(err, errStopStreamingDiscovery) {
+			break
+		}
+		if ctx.Err() != nil {
+			return SourceRef{}, false, ctx.Err()
+		}
+	}
+	return best, found, nil
 }
 
 func (s codexSourceSet) Fingerprint(
@@ -1589,16 +1647,21 @@ func (s codexSourceSet) canonicalSource(
 	if !ok || src.UUID == "" {
 		return source, true, nil
 	}
-	sources, err := s.Discover(ctx)
+	preferred, err := s.preferredKnownRolloutSource(ctx, source)
 	if err != nil {
 		return SourceRef{}, false, err
 	}
-	for _, candidate := range sources {
-		if candidate.Key == source.Key {
-			return candidate, true, nil
-		}
+	if src.Layout == CodexLayoutDated && !isCompressedCodexRolloutPath(preferred.DisplayPath) {
+		return preferred, true, nil
 	}
-	return source, true, nil
+	candidate, found, err := s.findSourceByID(ctx, src.UUID)
+	if err != nil {
+		return SourceRef{}, false, err
+	}
+	if found && preferCodexSource(candidate, preferred) {
+		return candidate, true, nil
+	}
+	return preferred, true, nil
 }
 
 func codexSourceKey(agent AgentType, uuid string) string {

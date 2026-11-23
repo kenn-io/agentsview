@@ -296,3 +296,48 @@ func TestCodexLabeledLegacyReviewAndIndexRefresh(t *testing.T) {
 	require.NotNil(t, session.SessionName)
 	assert.Equal(t, "Updated", *session.SessionName)
 }
+
+func TestCodexLabeledIndexWatchRefresh(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	id := "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+	home := filepath.Join(root, "label", ".codex-run-v1-abc")
+	source := filepath.Join(home, "sessions", "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
+	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_cli_rs", "2026-10-08T12:00:00Z")
+	dbtest.WriteTestFile(t, source, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
+	index := filepath.Join(home, parser.CodexSessionIndexFilename)
+	dbtest.WriteTestFile(t, index, []byte(`{"id":"`+id+`","thread_name":"Old"}`+"\n"))
+	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	updated := make(chan error, 4)
+	watcher, err := NewWatcherWithInterval(0, 0, func(batch WatchBatch) {
+		if len(batch.Paths) > 0 {
+			err := engine.SyncPathsContext(t.Context(), batch.Paths)
+			select {
+			case updated <- err:
+			default:
+			}
+		}
+	}, nil)
+	require.NoError(t, err)
+	_, _, err = watcher.WatchRecursive(root)
+	require.NoError(t, err)
+	watcher.Start()
+	t.Cleanup(watcher.Stop)
+	require.NoError(t, os.WriteFile(index, []byte(`{"id":"`+id+`","thread_name":"New"}`+"\n"), 0o644))
+	timeout := time.After(watcherTestTimeout)
+	for {
+		select {
+		case err := <-updated:
+			require.NoError(t, err)
+			session, err := database.GetSessionFull(t.Context(), "codex:"+id)
+			require.NoError(t, err)
+			if session.SessionName != nil && *session.SessionName == "New" {
+				return
+			}
+		case <-timeout:
+			t.Fatal("watcher did not refresh the index title")
+		}
+	}
+}

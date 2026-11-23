@@ -2530,3 +2530,77 @@ func TestCodexAllSourcePathsForUUIDs(t *testing.T) {
 		assert.ElementsMatch(t, expected[id], paths[id])
 	}
 }
+
+func TestCodexLabeledLookupAvoidsUnrelatedHomes(t *testing.T) {
+	root := t.TempDir()
+	id := "019eb791-cf7d-75c1-8439-9ed74c1229e1"
+	path := writeCodexProviderSession(t, filepath.Join(root, "a", ".codex-run-v1-a", "sessions"), id, "review")
+	for i := range 30 {
+		writeCodexProviderSession(t, filepath.Join(root, fmt.Sprintf("z-%02d", i), ".codex-run-v1-a", "sessions"), fmt.Sprintf("019eb791-cf7d-75c1-8439-%012d", i), "other")
+	}
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	for _, fresh := range []bool{false, true} {
+		t.Run(fmt.Sprintf("fresh_%t", fresh), func(t *testing.T) {
+			visited := 0
+			ctx := withStreamingDirectoryReader(t.Context(), func(ctx context.Context, dir string, yield func(os.DirEntry) error) error {
+				if strings.Contains(dir, string(filepath.Separator)+"z-") {
+					visited++
+				}
+				entries, err := os.ReadDir(dir)
+				if err != nil {
+					return err
+				}
+				for _, entry := range entries {
+					if err := yield(entry); err != nil {
+						return err
+					}
+				}
+				return nil
+			})
+			req := FindSourceRequest{RawSessionID: id}
+			if fresh {
+				req.StoredFilePath = path
+				req.RequireFreshSource = true
+			}
+			source, found, err := provider.FindSource(ctx, req)
+			require.NoError(t, err)
+			require.True(t, found)
+			assert.Equal(t, path, source.DisplayPath)
+			assert.Zero(t, visited)
+		})
+	}
+}
+
+func TestCodexDiscoverKeepsHealthySourcesWhenSiblingUnreadable(t *testing.T) {
+	root := t.TempDir()
+	id := "019eb791-cf7d-75c1-8439-9ed74c1229e1"
+	path := writeCodexProviderSession(t, root, id, "review")
+	broken := filepath.Join(root, "unreadable")
+	require.NoError(t, os.Mkdir(broken, 0o755))
+	ctx := withStreamingDirectoryReader(t.Context(), func(ctx context.Context, dir string, yield func(os.DirEntry) error) error {
+		if dir == broken {
+			return os.ErrPermission
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if err := yield(entry); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(ctx)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, path, sources[0].DisplayPath)
+	source, found, err := provider.FindSource(ctx, FindSourceRequest{RawSessionID: id})
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, path, source.DisplayPath)
+}

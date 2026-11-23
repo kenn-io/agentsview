@@ -348,13 +348,13 @@ func TestCodexAllSourcePathsHideCompressedBesidePlain(t *testing.T) {
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 	lister := provider.(interface {
-		AllSourcePathsForUUID(context.Context, string) []string
+		AllSourcePathsForUUIDs(context.Context, map[string]struct{}) map[string][]string
 	})
 
-	assert.Equal(t, []string{plain}, lister.AllSourcePathsForUUID(t.Context(), compressedThreadA))
+	assert.Equal(t, []string{plain}, lister.AllSourcePathsForUUIDs(t.Context(), map[string]struct{}{compressedThreadA: {}})[compressedThreadA])
 
 	require.NoError(t, os.Remove(plain))
-	assert.Equal(t, []string{compressed}, lister.AllSourcePathsForUUID(t.Context(), compressedThreadA))
+	assert.Equal(t, []string{compressed}, lister.AllSourcePathsForUUIDs(t.Context(), map[string]struct{}{compressedThreadA: {}})[compressedThreadA])
 }
 
 func TestCodexCompressedSiblingHidden(t *testing.T) {
