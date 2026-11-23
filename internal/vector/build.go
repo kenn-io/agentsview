@@ -188,7 +188,7 @@ func (ix *Index) Build(
 	var seed *reuseGeneration
 	if ix.spec.Name == "messages" && !o.FullRebuild && selected == fp {
 		var g reuseGeneration
-		err = ix.db.QueryRowContext(ctx, `SELECT ordinal, dimension FROM `+ix.spec.generationsTable()+` WHERE gen_key = ?`, fp).Scan(&g.ordinal, &g.dimension)
+		g.ordinal, g.dimension, err = ix.generationOrdinalDimension(ctx, fp)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return BuildResult{}, err
 		}

@@ -43,18 +43,22 @@ type repairResult struct {
 
 const repairScanDocumentBatch = 128
 
+func (ix *Index) generationOrdinalDimension(ctx context.Context, fingerprint string) (int64, int, error) {
+	var ordinal int64
+	var dimension int
+	err := ix.db.QueryRowContext(ctx,
+		`SELECT ordinal, dimension FROM `+ix.spec.generationsTable()+` WHERE gen_key = ?`, fingerprint,
+	).Scan(&ordinal, &dimension)
+	return ordinal, dimension, err
+}
+
 // repairInvalidVectors removes target-generation state only for documents
 // containing at least one unusable stored vector. Stamp removal makes those
 // documents pending for the restricted Fill that follows in Build.
 func (ix *Index) repairInvalidVectors(
 	ctx context.Context, fingerprint string,
 ) (repairResult, error) {
-	var ordinal int64
-	var dimension int
-	err := ix.db.QueryRowContext(ctx,
-		`SELECT ordinal, dimension FROM `+ix.spec.generationsTable()+` WHERE gen_key = ?`,
-		fingerprint,
-	).Scan(&ordinal, &dimension)
+	ordinal, dimension, err := ix.generationOrdinalDimension(ctx, fingerprint)
 	if err != nil {
 		return repairResult{}, fmt.Errorf(
 			"lookup generation for invalid vector repair %s: %w", fingerprint, err)

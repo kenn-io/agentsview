@@ -22,6 +22,13 @@ import (
 	kitvec "go.kenn.io/kit/vector"
 )
 
+func TestRepairInvalidVectorsMissingGeneration(t *testing.T) {
+	ix := openTestIndex(t)
+	_, err := ix.repairInvalidVectors(t.Context(), "missing")
+	require.ErrorIs(t, err, sql.ErrNoRows)
+	assert.ErrorContains(t, err, "lookup generation for invalid vector repair missing")
+}
+
 func TestBuildRepairInvalidRegeneratesOnlyAffectedDocuments(t *testing.T) {
 	ix := openTestIndex(t)
 	ix.split = kitvec.SplitOptions{MaxRunes: 5}
