@@ -191,7 +191,7 @@ func testBulkReadEntryPoints(t *testing.T, blocked bool) {
 			return err
 		}, nil, true},
 		{"usage backfill activity", func(ctx context.Context) error {
-			_, err := database.usageBackfillActivity(ctx)
+			_, err := database.usageBackfillActivity(ctx, nil)
 			return err
 		}, nil, false},
 		{"usage extraction", func(ctx context.Context) error {

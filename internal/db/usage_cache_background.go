@@ -315,12 +315,6 @@ func (db *DB) captureUsageBackfill(ctx context.Context, cache *usageCache, datab
 	return snapshot, locations, zones, trusted, nil
 }
 
-func (db *DB) runUsageCacheBackfillPass(
-	ctx context.Context, started time.Time, snapshot usageQuerySnapshot, installSeq int64,
-) error {
-	return db.runUsageCacheBackfillWithCoverage(ctx, started, snapshot, installSeq, nil, nil, false)
-}
-
 func (db *DB) runUsageCacheBackfillWithCoverage(
 	ctx context.Context, started time.Time, snapshot usageQuerySnapshot, installSeq int64,
 	locations []*time.Location, zones []usageZoneCoverage, delta bool,
@@ -340,21 +334,6 @@ func (db *DB) runUsageCacheBackfillWithCoverage(
 		WHERE timezone_name IN ('', 'Local') AND timezone_key != ?`,
 		localIdentity.Key); err != nil {
 		return fmt.Errorf("pruning stale local usage timezones: %w", err)
-	}
-	if locations == nil {
-		locations, err = usageBackfillLocations(ctx, cache, snapshot.location)
-		if err != nil {
-			return err
-		}
-		zones = make([]usageZoneCoverage, len(locations))
-		for i, location := range locations {
-			zones[i], err = readUsageZoneCoverage(ctx, cache.db, usageTimezoneIdentityFor(location, nil).Key)
-			if err != nil {
-				return err
-			}
-			zones[i].installSeq = installSeq
-			zones[i].resetEpoch = snapshot.resetEpoch
-		}
 	}
 	if err := cache.sweepDeletionJournal(ctx, db); err != nil {
 		return err
@@ -567,10 +546,10 @@ func usageBackfillLocations(
 	return locations, nil
 }
 
-func (db *DB) usageBackfillActivity(ctx context.Context, filter ...[]string) (map[string]string, error) {
-	if len(filter) > 0 && filter[0] != nil {
+func (db *DB) usageBackfillActivity(ctx context.Context, ids []string) (map[string]string, error) {
+	if ids != nil {
 		activity := make(map[string]string)
-		for chunk := range slices.Chunk(filter[0], 900) {
+		for chunk := range slices.Chunk(ids, 900) {
 			part, err := db.usageBackfillActivityChunk(ctx, chunk)
 			if err != nil {
 				return nil, err

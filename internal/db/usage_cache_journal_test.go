@@ -535,7 +535,7 @@ func TestUsageJournaledClaimSurvivingInstalls(t *testing.T) {
 						require.NoError(t, cache.fill.deleteNotificationSessions([]string{"session"}, revision, 0))
 					}
 				}
-				require.NoError(t, database.runUsageCacheBackfillPass(t.Context(), time.Now(), snapshot, zone.installSeq))
+				require.NoError(t, runCapturedUsageBackfill(t, database, snapshot, zone.installSeq))
 				require.True(t, resumed.Load(), "resume the captured deletion after the pass installs restored usage")
 				cache.rollup.observer.beforeInstall = nil
 				cache.fill.observer.beforeDeletionSweep = nil
@@ -603,7 +603,7 @@ func TestUsageJournaledBackfillClaimChecksEarlierBatch(t *testing.T) {
 	identity := usageTimezoneIdentityFor(filter.Location(), nil)
 	zone, err := readUsageZoneCoverage(t.Context(), cache.db, identity.Key)
 	require.NoError(t, err)
-	activity, err := database.usageBackfillActivity(t.Context())
+	activity, err := database.usageBackfillActivity(t.Context(), nil)
 	require.NoError(t, err)
 	orderUsageBackfillSnapshot(&snapshot, activity)
 	firstID := snapshot.Versions[0].SessionID
@@ -625,7 +625,7 @@ func TestUsageJournaledBackfillClaimChecksEarlierBatch(t *testing.T) {
 			require.NoError(t, cache.fill.deleteNotificationSessions([]string{firstID}, revision, 0))
 		}
 	}
-	require.NoError(t, database.runUsageCacheBackfillPass(t.Context(), time.Now(), snapshot, zone.installSeq))
+	require.NoError(t, runCapturedUsageBackfill(t, database, snapshot, zone.installSeq))
 	cache.rollup.observer.beforeInstall = nil
 	cache.fill.observer.beforeDeletionSweep = nil
 	require.True(t, resumed.Load(), "resume the deletion after every batch installs")
@@ -911,7 +911,7 @@ func TestUsageJournaledPassUsesCapturedPrices(t *testing.T) {
 			}
 			zone, err := readUsageZoneCoverage(t.Context(), cache.db, usageTimezoneIdentityFor(filter.Location(), nil).Key)
 			require.NoError(t, err)
-			require.NoError(t, database.runUsageCacheBackfillPass(t.Context(), time.Now(), snapshot, zone.installSeq))
+			require.NoError(t, runCapturedUsageBackfill(t, database, snapshot, zone.installSeq))
 			require.True(t, once.Load(), "the pass must build before the catalog can revert")
 			var capturedCost int64
 			require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT SUM(d.estimated_cost_microdollars)
@@ -1071,7 +1071,7 @@ func TestUsageJournaledDelayedBuildAfterPeerInvalidation(t *testing.T) {
 				done := make(chan error, 1)
 				t.Cleanup(func() { unblock(); <-done })
 				go func() {
-					done <- database.runUsageCacheBackfillPass(t.Context(), time.Now(), delayed, zone.installSeq)
+					done <- runCapturedUsageBackfill(t, database, delayed, zone.installSeq)
 					close(done)
 				}()
 				<-held

@@ -43,7 +43,7 @@ func TestUsageCacheBackfillNewestFirstAndResumesInstalledCoverage(t *testing.T) 
 	cache, err := database.usageCache.Generation(
 		t.Context(), snapshot.DatabaseID)
 	require.NoError(t, err)
-	activity, err := database.usageBackfillActivity(t.Context())
+	activity, err := database.usageBackfillActivity(t.Context(), nil)
 	require.NoError(t, err)
 	assert.Equal(t, "2026-08-10T10:00:00Z", activity["new"])
 	assert.Equal(t, "2026-08-05T10:00:00Z", activity["middle"])
@@ -412,8 +412,7 @@ func TestUsageCacheBackfillContinuesWhenSessionIsDeletedDuringRollup(t *testing.
 		deleted <- deleteErr
 	}
 
-	require.NoError(t, database.runUsageCacheBackfillPass(
-		t.Context(), time.Now(), snapshot, 1))
+	require.NoError(t, database.runUsageCacheBackfill(t.Context()))
 	require.NoError(t, <-deleted)
 	assert.Zero(t, usageCacheCount(t, cache, "usage_cached_sessions"))
 	assert.Zero(t, usageCacheCount(t, cache, "usage_rollup_installs"))
@@ -621,6 +620,7 @@ func TestRewarmUsageCacheStopsOldPricesBeforeAllHistoryRead(t *testing.T) {
 			setUsageModelPrice(t, database, "model", 1_000_000)
 			require.NoError(t, database.StartUsageCacheBackfill(t.Context()))
 			require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
+			setUsageModelPrice(t, database, "model", 1_500_000)
 			snapshot, err := database.captureUsageQuery(t.Context(), UsageFilter{}, usageQueryKindToken)
 			require.NoError(t, err)
 			cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
@@ -651,9 +651,6 @@ func TestRewarmUsageCacheStopsOldPricesBeforeAllHistoryRead(t *testing.T) {
 				case <-ctx.Done():
 				}
 			}
-			// Force a full pass so the test can change prices between batches.
-			_, err = cache.db.ExecContext(t.Context(), `UPDATE usage_rollup_timezones SET change_revision = NULL`)
-			require.NoError(t, err)
 			require.NoError(t, database.StartUsageCacheBackfill(ctx))
 			waitUsageNotification(t, arrived)
 			setUsageModelPrice(t, database, "model", refreshedPrice)
@@ -927,4 +924,96 @@ func TestUsageBackfillJournalCapture(t *testing.T) {
 	snapshot, delta = capture()
 	require.False(t, delta)
 	assert.Len(t, snapshot.Sessions, 2)
+}
+
+func TestUsageBackfillCaptureOldestZoneClaim(t *testing.T) {
+	database := testDB(t)
+	seedUsageBatchSessions(t, database, 2, time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC))
+	_, err := database.GetDailyUsage(t.Context(), UsageFilter{Timezone: "Etc/GMT+3"})
+	require.NoError(t, err)
+	require.NoError(t, database.runUsageCacheBackfill(t.Context()))
+	id, err := database.GetDatabaseID(t.Context())
+	require.NoError(t, err)
+	cache, err := database.usageCache.Generation(t.Context(), id)
+	require.NoError(t, err)
+	require.NoError(t, database.InsertMessages(t.Context(), []Message{{
+		SessionID: "batch-000", Ordinal: 1, Role: "assistant", Timestamp: "2026-08-11T09:00:00Z", Model: "model",
+		TokenUsage: json.RawMessage(`{"input_tokens":2}`),
+	}}))
+	current, err := database.captureUsageQuery(t.Context(), UsageFilter{}, usageQueryKindActivity)
+	require.NoError(t, err)
+	location, err := time.LoadLocation("Etc/GMT+3")
+	require.NoError(t, err)
+	_, err = cache.db.ExecContext(t.Context(), `UPDATE usage_rollup_timezones SET change_revision = ? WHERE timezone_key = ?`, current.ChangeRevision, usageTimezoneIdentityFor(location, nil).Key)
+	require.NoError(t, err)
+	snapshot, locations, _, delta, err := database.captureUsageBackfill(t.Context(), cache, id, 0)
+	require.NoError(t, err)
+	require.Len(t, locations, 2)
+	require.True(t, delta)
+	require.Len(t, snapshot.Sessions, 1)
+	assert.Equal(t, "batch-000", snapshot.Sessions[0].ID)
+}
+
+func TestUsageBackfillCaptureExternalSource(t *testing.T) {
+	database := testDB(t)
+	seedUsageSnapshotSession(t, database, "rollup-race", "project-a", "2026-08-10T09:00:00Z", 0, 10, "model-a")
+	id, err := database.GetDatabaseID(t.Context())
+	require.NoError(t, err)
+	source := &changingUsageSource{rollupAccountSource: &rollupAccountSource{database: database, databaseID: id, revision: 10, output: 10}}
+	reader, err := NewUsageCacheReader(t.TempDir(), source)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reader.Close()) })
+	_, err = reader.GetDailyUsage(t.Context(), UsageFilter{})
+	require.NoError(t, err)
+	cache, err := reader.engine.usageCache.Generation(t.Context(), id)
+	require.NoError(t, err)
+	zone, err := readUsageZoneCoverage(t.Context(), cache.db, usageTimezoneIdentityFor((UsageFilter{}).Location(), nil).Key)
+	require.NoError(t, err)
+	require.True(t, zone.revision.Valid)
+	snapshot, _, _, delta, err := reader.engine.captureUsageBackfill(t.Context(), cache, id, 0)
+	require.NoError(t, err)
+	assert.False(t, delta)
+	require.Len(t, snapshot.Sessions, 1)
+	assert.Equal(t, "rollup-race", snapshot.Sessions[0].ID)
+}
+
+func runCapturedUsageBackfill(t *testing.T, database *DB, snapshot usageQuerySnapshot, installSeq int64) error {
+	t.Helper()
+	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
+	require.NoError(t, err)
+	locations, err := usageBackfillLocations(t.Context(), cache, snapshot.location)
+	require.NoError(t, err)
+	zones := make([]usageZoneCoverage, len(locations))
+	for i, location := range locations {
+		zones[i], err = readUsageZoneCoverage(t.Context(), cache.db, usageTimezoneIdentityFor(location, nil).Key)
+		require.NoError(t, err)
+		zones[i].installSeq = installSeq
+		zones[i].resetEpoch = snapshot.resetEpoch
+	}
+	return database.runUsageCacheBackfillWithCoverage(t.Context(), time.Now(), snapshot, installSeq, locations, zones, false)
+}
+
+func TestUsageBackfillAppendSharedIdentity(t *testing.T) {
+	database := testDB(t)
+	for _, id := range []string{"one", "two"} {
+		insertSession(t, database, id, "project", func(session *Session) {
+			session.Agent = "claude"
+		})
+	}
+	require.NoError(t, database.InsertMessages(t.Context(), []Message{{
+		SessionID: "one", Ordinal: 0, Role: "assistant", Timestamp: "2026-08-10T09:00:00Z", Model: "model",
+		TokenUsage: json.RawMessage(`{"input_tokens":10}`), ClaudeMessageID: "shared", ClaudeRequestID: "request",
+	}}))
+	require.NoError(t, database.runUsageCacheBackfill(t.Context()))
+	require.NoError(t, database.InsertMessages(t.Context(), []Message{{
+		SessionID: "two", Ordinal: 0, Role: "assistant", Timestamp: "2026-08-10T09:01:00Z", Model: "model",
+		TokenUsage: json.RawMessage(`{"input_tokens":20}`), ClaudeMessageID: "shared", ClaudeRequestID: "request",
+	}}))
+	require.NoError(t, database.runUsageCacheBackfill(t.Context()))
+	filter := UsageFilter{}
+	got, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	want := getDailyUsageLegacyForRollupTest(t, database, filter)
+	assert.Equal(t, want.Totals, got.Totals)
+	assert.Equal(t, 20, got.Totals.InputTokens)
 }
