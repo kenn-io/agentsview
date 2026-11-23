@@ -93,6 +93,7 @@ func CommandPRLinksWithContext(ctx context.Context, command, cwd, remote string,
 		}
 		if _, ok := node.(*syntax.FuncDecl); ok {
 			tainted = true
+			hostUncertain = true
 			return false
 		}
 		scope := shellScope{tainted: tainted, host: hostUncertain}
