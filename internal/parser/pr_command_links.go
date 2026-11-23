@@ -58,13 +58,25 @@ func shellLiteral(parts []syntax.WordPart) (string, bool) {
 
 // CommandPRLinks finds PRs named by direct gh commands in a shell input.
 func CommandPRLinks(ctx context.Context, command, remote string, allowBare bool) ([]PRLink, error) {
+	links, _, _, _, err := AnalyzePRCommand(ctx, command, remote, allowBare, false)
+	return links, err
+}
+
+// AnalyzePRCommand extracts links and shared shell context from one parse.
+func AnalyzePRCommand(ctx context.Context, command, remote string, allowBare, hostUnknown bool) ([]PRLink, bool, bool, []PRLink, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, false, false, nil, err
+	}
+	candidate := strings.NewReplacer("'", "", `"`, "", `\`, "").Replace(command)
+	if !strings.Contains(candidate, "gh") && !strings.Contains(candidate, "cd") && !strings.Contains(candidate, "pushd") && !strings.Contains(candidate, "popd") && !strings.Contains(candidate, "git") && !strings.Contains(candidate, "GH_") && !strings.Contains(candidate, "()") && !strings.Contains(candidate, "function") {
+		return nil, false, false, nil, nil
 	}
 	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
 	if err != nil {
-		return nil, ctx.Err()
+		return nil, false, false, nil, ctx.Err()
 	}
+	directoryChanged, repositoryChanged, functions := bashChangesRepositoryContext(file, command)
+	var dependsOnRemote []PRLink
 	type segment struct {
 		stmt   *syntax.Stmt
 		nested bool
@@ -122,7 +134,7 @@ func CommandPRLinks(ctx context.Context, command, remote string, allowBare bool)
 	for _, segment := range segments {
 		stmt := segment.stmt
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, false, false, nil, err
 		}
 		host, hostSet, hostValid := shellHost, shellHostSet, shellHostValid
 		recordHost := func(a *syntax.Assign) {
@@ -177,17 +189,26 @@ func CommandPRLinks(ctx context.Context, command, remote string, allowBare bool)
 			continue
 		}
 		if !literal[0] || words[0] != "gh" {
-			if literal[0] && words[0] == "cd" {
+			if literal[0] && (words[0] == "cd" || words[0] == "pushd" || words[0] == "popd") {
 				remoteHost, remoteRepo = "", ""
 			}
-			if words[0] != "echo" {
+			if repositoryMutation(words) {
+				remoteHost, remoteRepo, hostUnknown = "", "", true
+			}
+			if !literal[0] || repositoryMutation(words) || functions[words[0]] {
 				bareSafe = false
 			}
 			continue
 		}
 		if len(words) < 4 || !literal[1] || !literal[2] || words[1] != "pr" {
-			bareSafe = false
+			if repositoryMutation(words) {
+				bareSafe = false
+				remoteHost, remoteRepo, hostUnknown = "", "", true
+			}
 			continue
+		}
+		if words[2] == "co" {
+			words[2] = "checkout"
 		}
 		switch words[2] {
 		case "view", "checkout", "edit", "diff", "checks", "comment", "review", "ready", "merge", "close", "reopen":
@@ -235,7 +256,7 @@ func CommandPRLinks(ctx context.Context, command, remote string, allowBare bool)
 		if strings.HasPrefix(selector, "https://") || strings.HasPrefix(selector, "http://") {
 			found, err := PromptPRLinksContext(ctx, selector)
 			if err != nil {
-				return nil, err
+				return nil, false, false, nil, err
 			}
 			links = append(links, found)
 			continue
@@ -274,14 +295,20 @@ func CommandPRLinks(ctx context.Context, command, remote string, allowBare bool)
 		} else if remoteHost != "" {
 			selectedHost = remoteHost
 		}
+		if selectedHost == "" && specified && !hostUnknown {
+			selectedHost = "github.com"
+		}
 		if selectedHost == "" {
 			continue
 		}
 		if link, ok := NewPRLink(fmt.Sprintf("https://%s/%s/pull/%d", selectedHost, repo, number), repo, number); ok {
 			links = append(links, []PRLink{link})
+			if !specified {
+				dependsOnRemote = append(dependsOnRemote, link)
+			}
 		}
 	}
-	return CombinePRLinks(links...), nil
+	return CombinePRLinks(links...), directoryChanged, repositoryChanged, dependsOnRemote, nil
 }
 
 func hasCommandSubstitution(node syntax.Node) bool {
@@ -310,12 +337,7 @@ func literalCondition(stmts []*syntax.Stmt) (bool, bool) {
 	return word == "true", literal && (word == "true" || word == "false")
 }
 
-// BashChangesRepositoryContext reports shared shell changes that make a recorded remote uncertain.
-func BashChangesRepositoryContext(command string) (bool, bool) {
-	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
-	if err != nil {
-		return false, false
-	}
+func bashChangesRepositoryContext(file *syntax.File, command string) (bool, bool, map[string]bool) {
 	repositoryChanged := strings.Contains(command, "GH_REPO") || strings.Contains(command, "GH_HOST")
 	functions := make(map[string]bool)
 	syntax.Walk(file, func(node syntax.Node) bool {
@@ -340,12 +362,13 @@ func BashChangesRepositoryContext(command string) (bool, bool) {
 				repositoryChanged = true
 				return false
 			}
-			if literal && name == "git" && len(call.Args) > 1 {
-				subcommand, ok := shellLiteral(call.Args[1].Parts)
-				if ok && (subcommand == "config" || subcommand == "remote") {
-					repositoryChanged = true
-					return false
-				}
+			words := make([]string, len(call.Args))
+			for i, arg := range call.Args {
+				words[i], _ = shellLiteral(arg.Parts)
+			}
+			if repositoryMutation(words) {
+				repositoryChanged = true
+				return false
 			}
 		}
 		return !repositoryChanged
@@ -356,20 +379,39 @@ func BashChangesRepositoryContext(command string) (bool, bool) {
 		case *syntax.Subshell, *syntax.FuncDecl, *syntax.CmdSubst, *syntax.ProcSubst:
 			return false
 		case *syntax.CallExpr:
-			if len(call.Args) == 0 || len(call.Args) > 2 {
+			if len(call.Args) == 0 {
 				return false
 			}
 			name, literal := shellLiteral(call.Args[0].Parts)
-			if !literal || name != "cd" {
-				return false
-			}
-			if len(call.Args) == 1 {
+			if literal && (name == "cd" || name == "pushd" || name == "popd") {
 				directoryChanged = true
-			} else {
-				_, directoryChanged = shellLiteral(call.Args[1].Parts)
 			}
 		}
 		return !directoryChanged
 	})
-	return directoryChanged, repositoryChanged
+	return directoryChanged, repositoryChanged, functions
+}
+
+func repositoryMutation(words []string) bool {
+	if len(words) < 2 {
+		return false
+	}
+	if words[0] == "gh" && len(words) >= 3 && words[1] == "repo" && words[2] == "set-default" {
+		return true
+	}
+	if words[0] != "git" {
+		return false
+	}
+	switch words[1] {
+	case "config":
+		for _, word := range words[2:] {
+			if word == "--get" || word == "--get-all" || word == "--list" || word == "-l" {
+				return false
+			}
+		}
+		return len(words) > 3
+	case "remote":
+		return len(words) > 2 && (words[2] == "add" || words[2] == "remove" || words[2] == "rename" || words[2] == "set-url")
+	}
+	return false
 }

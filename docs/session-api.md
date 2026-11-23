@@ -683,8 +683,9 @@ ______________________________________________________________________
 
 Each session's `pr_links` field lists pull requests found in retained user
 prompts, supported `gh pr` commands, child-agent prompts, or structured
-transcript records. Supported actions are `view`, `checkout`, `edit`, `diff`,
-`checks`, `comment`, `review`, `ready`, `merge`, `close`, and `reopen`.
+transcript records. Supported actions are `view`, `checkout` (including `co`),
+`edit`, `diff`, `checks`, `comment`, `review`, `ready`, `merge`, `close`, and
+`reopen`.
 Commands can name a pull request by URL or number. A number can use `-R` or
 `--repo` with `owner/repo` or `host/owner/repo`.
 
@@ -702,10 +703,12 @@ Commands can name a pull request by URL or number. A number can use `-R` or
 AgentsView keeps one link per pull request. A bare number uses the session's
 recorded repository when the command runs in the session's working directory.
 An explicit `owner/repo` uses the recorded remote's host or a literal `GH_HOST`
-in the command. Conflicting or missing host evidence leaves the number unlinked.
-A host-qualified repository or a full PR URL supplies its own host. After a
-Claude Bash call changes directory, later commands need a captured working
-directory that matches the session's directory to use the recorded remote.
+in the command, falling back to `github.com` when neither is available.
+Conflicting host evidence leaves the number unlinked. A host-qualified
+repository or a full PR URL supplies its own host. AgentsView scans retained
+Claude Bash inputs for earlier directory and repository changes when a later
+bare number needs the recorded remote. After a directory change, a captured
+working directory matching the session's directory restores that remote.
 Child-agent prompts link full PR URLs as references. Prompt mentions indicate
 a reference, not work on the pull request. Archives that dropped tool inputs
 cannot recover command or child-prompt links. Push-to-head linking is planned

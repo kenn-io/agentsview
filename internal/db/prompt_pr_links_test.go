@@ -501,6 +501,7 @@ func TestToolPRLinksSharedShellRepositoryChanges(t *testing.T) {
 		`change_repo() { export GH_REPO=example/other; }; change_repo`,
 		`git config remote.origin.url https://github.com/example/other.git`,
 		`git remote set-url origin https://github.com/example/other.git`,
+		`gh repo set-default example/other`,
 		`echo "$(git config remote.origin.url https://github.com/example/other.git)"`,
 	} {
 		t.Run(command, func(t *testing.T) {
