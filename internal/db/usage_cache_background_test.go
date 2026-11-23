@@ -616,6 +616,9 @@ func TestRewarmUsageCacheStopsOldPricesBeforeAllHistoryRead(t *testing.T) {
 				case <-ctx.Done():
 				}
 			}
+			// Force a full pass so the test can change prices between batches.
+			_, err = cache.db.ExecContext(t.Context(), `UPDATE usage_rollup_timezones SET change_revision = NULL`)
+			require.NoError(t, err)
 			require.NoError(t, database.StartUsageCacheBackfill(ctx))
 			waitUsageNotification(t, arrived)
 			setUsageModelPrice(t, database, "model", refreshedPrice)
@@ -816,4 +819,69 @@ func TestUsagePricingDigestChangesWithCommittedPricing(t *testing.T) {
 	after, err := database.UsagePricingDigest(t.Context())
 	require.NoError(t, err)
 	assert.NotEqual(t, before, after)
+}
+
+func TestUsageBackfillJournalCapture(t *testing.T) {
+	database := testDB(t)
+	for _, id := range []string{"one", "two", "three"} {
+		insertSession(t, database, id, "project")
+		require.NoError(t, database.InsertMessages(t.Context(), []Message{{
+			SessionID: id, Ordinal: 0, Role: "assistant", Timestamp: "2026-08-10T09:00:00Z", Model: "model",
+			TokenUsage: json.RawMessage(`{"input_tokens":1}`),
+		}}))
+	}
+	require.NoError(t, database.runUsageCacheBackfill(t.Context()))
+	id, err := database.GetDatabaseID(t.Context())
+	require.NoError(t, err)
+	cache, err := database.usageCache.Generation(t.Context(), id)
+	require.NoError(t, err)
+	capture := func() (usageQuerySnapshot, bool) {
+		var seq int64
+		require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT CAST(value AS INTEGER) FROM usage_cache_metadata WHERE key = ?`, usageCacheMetadataNextRollupRevision).Scan(&seq))
+		snapshot, _, _, delta, err := database.captureUsageBackfill(t.Context(), cache, id, seq)
+		require.NoError(t, err)
+		return snapshot, delta
+	}
+	snapshot, delta := capture()
+	require.True(t, delta)
+	require.Empty(t, snapshot.Sessions)
+	require.NoError(t, database.InsertMessages(t.Context(), []Message{{
+		SessionID: "two", Ordinal: 1, Role: "assistant", Timestamp: "2026-08-11T09:00:00Z", Model: "model",
+		TokenUsage: json.RawMessage(`{"input_tokens":2}`),
+	}}))
+	snapshot, delta = capture()
+	require.True(t, delta)
+	require.Len(t, snapshot.Sessions, 1)
+	assert.Equal(t, "two", snapshot.Sessions[0].ID)
+	activity, err := database.usageBackfillActivity(t.Context(), []string{"two"})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"two": "2026-08-11T09:00:00Z"}, activity)
+	require.NoError(t, database.runUsageCacheBackfill(t.Context()))
+	snapshot, delta = capture()
+	require.True(t, delta)
+	require.Empty(t, snapshot.Sessions)
+	_, err = cache.db.ExecContext(t.Context(), `DELETE FROM usage_rollup_installs WHERE session_id = 'one'`)
+	require.NoError(t, err)
+	snapshot, delta = capture()
+	require.True(t, delta)
+	require.Len(t, snapshot.Sessions, 1)
+	assert.Equal(t, "one", snapshot.Sessions[0].ID)
+	require.NoError(t, database.runUsageCacheBackfill(t.Context()))
+	require.NoError(t, database.DeleteSession(t.Context(), "three"))
+	snapshot, delta = capture()
+	require.True(t, delta)
+	require.Len(t, snapshot.Sessions, 1)
+	assert.Equal(t, "three", snapshot.Sessions[0].ID)
+	require.NoError(t, database.runUsageCacheBackfill(t.Context()))
+	assert.Equal(t, 2, usageCacheCount(t, cache, "usage_cached_sessions"))
+	_, err = cache.db.ExecContext(t.Context(), `UPDATE usage_rollup_timezones SET change_pricing = 'old'`)
+	require.NoError(t, err)
+	snapshot, delta = capture()
+	require.False(t, delta)
+	assert.Len(t, snapshot.Sessions, 2)
+	_, err = cache.db.ExecContext(t.Context(), `UPDATE usage_rollup_timezones SET change_revision = NULL`)
+	require.NoError(t, err)
+	snapshot, delta = capture()
+	require.False(t, delta)
+	assert.Len(t, snapshot.Sessions, 2)
 }

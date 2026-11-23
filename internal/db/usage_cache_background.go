@@ -10,6 +10,7 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/export"
@@ -223,16 +224,115 @@ func (db *DB) runUsageCacheBackfill(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	snapshot, err := db.captureUsageQuery(
-		ctx, UsageFilter{}, usageQueryKindActivity)
+	snapshot, locations, zones, delta, err := db.captureUsageBackfill(ctx, cache, databaseID, installSeq)
 	if err != nil {
 		return err
 	}
-	return db.runUsageCacheBackfillPass(ctx, time.Now(), snapshot, installSeq)
+	return db.runUsageCacheBackfillWithCoverage(ctx, time.Now(), snapshot, installSeq, locations, zones, delta)
+}
+
+// captureUsageBackfill reads cache claims before taking the archive snapshot.
+func (db *DB) captureUsageBackfill(ctx context.Context, cache *usageCache, databaseID string, installSeq int64) (usageQuerySnapshot, []*time.Location, []usageZoneCoverage, bool, error) {
+	filter := UsageFilter{}
+	locations, err := usageBackfillLocations(ctx, cache, filter.Location())
+	if err != nil {
+		return usageQuerySnapshot{}, nil, nil, false, err
+	}
+	tx, err := cache.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return usageQuerySnapshot{}, nil, nil, false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	zones := make([]usageZoneCoverage, len(locations))
+	var lost []string
+	trusted := db.usageSource == nil
+	for i, location := range locations {
+		zones[i], err = readUsageZoneCoverage(ctx, tx, usageTimezoneIdentityFor(location, nil).Key)
+		if err != nil {
+			return usageQuerySnapshot{}, nil, nil, false, err
+		}
+		zone := zones[i]
+		if !zone.revision.Valid || zone.foreignPricing || zone.resetEpoch != zones[0].resetEpoch {
+			trusted = false
+			continue
+		}
+		ids, err := usageSessionsWithoutRollup(ctx, tx, zone.id, -1)
+		if err != nil {
+			return usageQuerySnapshot{}, nil, nil, false, err
+		}
+		lost = append(lost, ids...)
+	}
+	if err := tx.Commit(); err != nil {
+		return usageQuerySnapshot{}, nil, nil, false, err
+	}
+	var snapshot usageQuerySnapshot
+	if db.usageSource != nil {
+		snapshot, err = db.captureUsageQuery(ctx, filter, usageQueryKindActivity)
+	} else {
+		snapshot, err = db.captureUsageSnapshot(ctx, filter, func(ctx context.Context, tx *sql.Tx, snapshot *usageQuerySnapshot) error {
+			if snapshot.DatabaseID != databaseID {
+				return errUsageCacheSourceChanged
+			}
+			lowest := snapshot.ChangeRevision
+			for _, zone := range zones {
+				if !zone.revision.Valid || zone.foreignPricing || zone.resetEpoch != zones[0].resetEpoch || zone.revision.Int64 > snapshot.ChangeRevision || zone.pricing != snapshot.PricingIdentity {
+					trusted = false
+				} else {
+					lowest = min(lowest, zone.revision.Int64)
+				}
+			}
+			if !trusted {
+				return captureUsageQueryFrom(ctx, tx, filter, usageQueryKindActivity, snapshot)
+			}
+			ids, err := loadSessionJournalChanges(ctx, tx, "usage_session_changes", "usage", lowest, snapshot.ChangeRevision)
+			if err != nil {
+				return err
+			}
+			ids = append(ids, lost...)
+			slices.Sort(ids)
+			ids = slices.Compact(ids)
+			if err := loadUsageSnapshotSessions(ctx, tx, ids, filter, false, snapshot); err != nil {
+				return err
+			}
+			if err := snapshot.loadUsageEventFingerprints(ctx, tx, ids); err != nil {
+				return err
+			}
+			// Preserve deleted IDs so the fill removes their cached facts.
+			present := make(map[string]bool, len(snapshot.Sessions))
+			for _, session := range snapshot.Sessions {
+				present[session.ID] = true
+			}
+			for _, id := range ids {
+				if !present[id] {
+					snapshot.Sessions = append(snapshot.Sessions, usageQuerySession{ID: id})
+					snapshot.Versions = append(snapshot.Versions, usageSourceVersion{SessionID: id})
+				}
+			}
+			return loadUsageCursorHighWater(ctx, tx, snapshot)
+		})
+	}
+	if err != nil {
+		return snapshot, nil, nil, false, err
+	}
+	if db.usageSource == nil {
+		snapshot.resetEpoch = zones[0].resetEpoch
+	}
+	for i := range zones {
+		zones[i].installSeq = installSeq
+		zones[i].resetEpoch = snapshot.resetEpoch
+	}
+	return snapshot, locations, zones, trusted, nil
 }
 
 func (db *DB) runUsageCacheBackfillPass(
 	ctx context.Context, started time.Time, snapshot usageQuerySnapshot, installSeq int64,
+) error {
+	return db.runUsageCacheBackfillWithCoverage(ctx, started, snapshot, installSeq, nil, nil, false)
+}
+
+func (db *DB) runUsageCacheBackfillWithCoverage(
+	ctx context.Context, started time.Time, snapshot usageQuerySnapshot, installSeq int64,
+	locations []*time.Location, zones []usageZoneCoverage, delta bool,
 ) error {
 	cache, release, err := db.usageCache.acquireGeneration(ctx, snapshot.DatabaseID)
 	if err != nil {
@@ -250,23 +350,32 @@ func (db *DB) runUsageCacheBackfillPass(
 		localIdentity.Key); err != nil {
 		return fmt.Errorf("pruning stale local usage timezones: %w", err)
 	}
-	locations, err := usageBackfillLocations(ctx, cache, snapshot.location)
-	if err != nil {
-		return err
-	}
-	zones := make([]usageZoneCoverage, len(locations))
-	for i, location := range locations {
-		zones[i], err = readUsageZoneCoverage(ctx, cache.db, usageTimezoneIdentityFor(location, nil).Key)
+	if locations == nil {
+		locations, err = usageBackfillLocations(ctx, cache, snapshot.location)
 		if err != nil {
 			return err
 		}
-		zones[i].installSeq = installSeq
-		zones[i].resetEpoch = snapshot.resetEpoch
+		zones = make([]usageZoneCoverage, len(locations))
+		for i, location := range locations {
+			zones[i], err = readUsageZoneCoverage(ctx, cache.db, usageTimezoneIdentityFor(location, nil).Key)
+			if err != nil {
+				return err
+			}
+			zones[i].installSeq = installSeq
+			zones[i].resetEpoch = snapshot.resetEpoch
+		}
 	}
 	if err := cache.sweepDeletionJournal(ctx, db); err != nil {
 		return err
 	}
-	activity, err := db.usageBackfillActivity(ctx)
+	var ids []string
+	if delta {
+		ids = make([]string, 0, len(snapshot.Sessions))
+		for _, session := range snapshot.Sessions {
+			ids = append(ids, session.ID)
+		}
+	}
+	activity, err := db.usageBackfillActivity(ctx, ids)
 	if err != nil {
 		return err
 	}
@@ -465,27 +574,58 @@ func usageBackfillLocations(
 	return locations, nil
 }
 
-func (db *DB) usageBackfillActivity(ctx context.Context) (map[string]string, error) {
+func (db *DB) usageBackfillActivity(ctx context.Context, filter ...[]string) (map[string]string, error) {
+	if len(filter) > 0 && filter[0] != nil {
+		activity := make(map[string]string)
+		for chunk := range slices.Chunk(filter[0], 900) {
+			part, err := db.usageBackfillActivityChunk(ctx, chunk)
+			if err != nil {
+				return nil, err
+			}
+			for id, timestamp := range part {
+				activity[id] = timestamp
+			}
+		}
+		return activity, nil
+	}
+	return db.usageBackfillActivityChunk(ctx, nil)
+}
+
+func (db *DB) usageBackfillActivityChunk(ctx context.Context, ids []string) (map[string]string, error) {
 	release, err := db.acquireBulkRead(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer release()
+	messageIndex, activityIndex, eventIndex := " INDEXED BY idx_messages_usage_timestamp", " INDEXED BY idx_messages_activity_timestamp", " INDEXED BY idx_usage_events_session"
+	var messageFilter, eventFilter string
+	var args []any
+	if ids != nil {
+		placeholders := make([]string, len(ids))
+		for i, id := range ids {
+			placeholders[i] = "?" + strconv.Itoa(i+1)
+			args = append(args, id)
+		}
+		list := "(" + strings.Join(placeholders, ",") + ")"
+		messageFilter = " AND m.session_id IN " + list
+		eventFilter = " AND ue.session_id IN " + list
+		messageIndex, activityIndex, eventIndex = "", "", ""
+	}
 	rows, err := db.getReader().QueryContext(ctx, `
 		SELECT session_id, MAX(activity_at) FROM (
 			SELECT m.session_id, m.timestamp AS activity_at
-			FROM messages m INDEXED BY idx_messages_usage_timestamp
-			WHERE `+usageMessageSourceEligibility+`
+			FROM messages m`+messageIndex+`
+			WHERE `+usageMessageSourceEligibility+messageFilter+`
 			UNION ALL
 			SELECT m.session_id, m.timestamp AS activity_at
-			FROM messages m INDEXED BY idx_messages_activity_timestamp
-			WHERE m.role = 'assistant' AND m.model != '<synthetic>'
+			FROM messages m`+activityIndex+`
+			WHERE m.role = 'assistant' AND m.model != '<synthetic>'`+messageFilter+`
 			UNION ALL
 			SELECT ue.session_id, ue.occurred_at AS activity_at
-			FROM usage_events ue INDEXED BY idx_usage_events_session
-			WHERE ue.model != ''
+			FROM usage_events ue`+eventIndex+`
+			WHERE ue.model != ''`+eventFilter+`
 		) WHERE activity_at IS NOT NULL AND activity_at != ''
-		GROUP BY session_id`)
+		GROUP BY session_id`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("ordering usage cache backfill: %w", err)
 	}

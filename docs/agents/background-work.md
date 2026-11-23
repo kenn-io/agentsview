@@ -99,7 +99,8 @@ Codex data-loss bug or a merge blocker.
   timezones. On completion, it claims each timezone through its captured
   archive revision, capped by older installs written during the pass. Installs
   from another catalog prevent the claim. A changed claim revision or install
-  boundary prevents replacement.
+  boundary prevents replacement. Once every zone has a trusted claim, the pass
+  captures sessions changed since the oldest claim and invalidated sessions.
 - Served usage requests own timezone recency in
   `usage_rollup_timezones.last_requested_at`, rewriting it at most once a
   minute per zone. Rollup installs stamp only a zone's first row, so
