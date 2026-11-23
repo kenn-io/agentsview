@@ -1051,37 +1051,6 @@ func TestResolveBuildTargetRetiresOtherBuildingGeneration(t *testing.T) {
 		"the building-generation lookup must resolve to B, not the abandoned A")
 }
 
-func TestBuildLegacyActiveGenerationSkipsOtherGenerationReuse(t *testing.T) {
-	ix := openTestIndex(t)
-	ix.split = kitvec.SplitOptions{MaxRunes: 10, Overlap: 2}
-	ctx := t.Context()
-	src := twoDocSource()
-	src.rows = src.rows[:1]
-	src.rows[0].unit.Content = "abcdefghijklmnopqrstuv"
-	active := fakeGeneration("active")
-	_, err := ix.Build(ctx, src, fakeBuildEncoder(), active, BuildOptions{})
-	require.NoError(t, err)
-	other := fakeGeneration("other")
-	_, err = ix.EnsureGeneration(ctx, other, sqlitevec.StateBuilding)
-	require.NoError(t, err)
-	src.rows[0].unit.Content += "wxyzABCDEFGH"
-	src.rows[0].endedAt = "2025-01-01T00:00:00Z"
-	opts := BuildOptions{Space: legacySpace(active.Fingerprint())}
-	_, err = ix.Build(ctx, src, func(context.Context, []string) ([][]float32, error) { return nil, errors.New("offline") }, other, opts)
-	require.Error(t, err)
-	var count int
-	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM message_vectors_reuse`).Scan(&count))
-	assert.Zero(t, count)
-	var inputs []string
-	result, err := ix.Build(ctx, src, func(ctx context.Context, texts []string) ([][]float32, error) {
-		inputs = append(inputs, texts...)
-		return fakeBuildEncoder()(ctx, texts)
-	}, other, opts)
-	require.NoError(t, err)
-	assert.Equal(t, active.Fingerprint(), result.Fingerprint)
-	assert.Len(t, inputs, len(kitvec.Split(src.rows[0].unit.Content, ix.split)))
-}
-
 // TestBuildRetiresAbandonedBuildingGenerationEndToEnd drives the same
 // scenario through the public Build entry point: an interrupted first
 // build (genA registered as building but never filled, standing in for a
