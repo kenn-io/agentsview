@@ -326,6 +326,11 @@ func TestUsageCacheBackfillRewarmsZoneRequestedDuringPass(t *testing.T) {
 	require.NoError(t, err)
 	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
 	require.NoError(t, err)
+	_, err = cache.db.ExecContext(t.Context(), `CREATE TABLE pass_completions (id INTEGER PRIMARY KEY);
+		CREATE TRIGGER record_pass_completion AFTER UPDATE OF value ON usage_cache_metadata
+		WHEN NEW.key = 'backfill_completed_at'
+		BEGIN INSERT INTO pass_completions VALUES (NULL); END`)
+	require.NoError(t, err)
 	held, release := make(chan struct{}), make(chan struct{})
 	unblock := sync.OnceFunc(func() { close(release) })
 	var once sync.Once
@@ -343,11 +348,16 @@ func TestUsageCacheBackfillRewarmsZoneRequestedDuringPass(t *testing.T) {
 		(timezone_key, timezone_name, interval_fingerprint, last_requested_at)
 		VALUES (?, ?, ?, ?)`, identity.Key, identity.Name, identity.IntervalFingerprint, time.Now().UTC().Format(time.RFC3339Nano))
 	require.NoError(t, err)
-	_, trusted, err := database.prepareJournaledUsageWindow(t.Context(), UsageFilter{Timezone: identity.Name}, usageQueryKindToken, false, nil)
-	require.NoError(t, err)
-	require.False(t, trusted)
+	for range 10 {
+		_, trusted, err := database.prepareJournaledUsageWindow(t.Context(), UsageFilter{Timezone: identity.Name}, usageQueryKindToken, false, nil)
+		require.NoError(t, err)
+		require.False(t, trusted)
+	}
 	unblock()
 	require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
+	var completions int
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT count(*) FROM pass_completions`).Scan(&completions))
+	assert.Equal(t, 2, completions, "the request burst queues one follow-up pass")
 
 	zone, err := readUsageZoneCoverage(t.Context(), cache.db, identity.Key)
 	require.NoError(t, err)
