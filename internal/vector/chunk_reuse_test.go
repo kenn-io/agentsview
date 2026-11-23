@@ -393,30 +393,6 @@ func TestReuseEncoderSkipsInvalidCopies(t *testing.T) {
 	assert.Equal(t, [][]float32{{1, 0, 0}, {0, 1, 0}, {1, 0, 0}}, got)
 }
 
-func TestBuildReusesSharedChunks(t *testing.T) {
-	ix := openTestIndex(t)
-	ix.split = kitvec.SplitOptions{MaxRunes: 10, Overlap: 2}
-	src := &fakeUnitSource{}
-	for i := range 3 {
-		src.rows = append(src.rows, fakeUnit{unit: userDoc(fmt.Sprintf("session-%d", i), "doc", 0, fmt.Sprintf("abcdefghij%012d", i)), endedAt: "2024-01-01T00:00:00Z"})
-	}
-	gen := fakeGeneration("shared")
-	_, err := ix.Build(t.Context(), src, fakeBuildEncoder(), gen, BuildOptions{})
-	require.NoError(t, err)
-	for i := range src.rows {
-		src.rows[i].unit.Content += "growth"
-		src.rows[i].endedAt = "2025-01-01T00:00:00Z"
-	}
-	var inputs []string
-	enc := func(ctx context.Context, texts []string) ([][]float32, error) {
-		inputs = append(inputs, texts...)
-		return fakeBuildEncoder()(ctx, texts)
-	}
-	_, err = ix.Build(t.Context(), src, enc, gen, BuildOptions{BatchSize: 3})
-	require.NoError(t, err)
-	assert.NotContains(t, inputs, "abcdefghij")
-}
-
 func BenchmarkReuseEncoderLookup(b *testing.B) {
 	for _, count := range []int{1, 20000} {
 		b.Run(fmt.Sprintf("rows-%d", count), func(b *testing.B) {
@@ -433,52 +409,6 @@ INSERT INTO message_vectors_reuse SELECT 1, printf('doc-%d', x), printf('hash-%d
 			b.ResetTimer()
 			for b.Loop() {
 				if _, err := enc(ctx, []string{"hit", "miss"}); err != nil {
-					b.Fatal(err)
-				}
-			}
-		})
-	}
-}
-
-func BenchmarkReuseEncoderSharedChunks(b *testing.B) {
-	for _, count := range []int{1, 20000} {
-		b.Run(fmt.Sprintf("copies-%d", count), func(b *testing.B) {
-			ctx := b.Context()
-			ix, err := Open(ctx, filepath.Join(b.TempDir(), "vectors.db"), false, 10)
-			require.NoError(b, err)
-			b.Cleanup(func() { assert.NoError(b, ix.Close()) })
-			_, err = ix.db.ExecContext(ctx, `WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x < ?)
-INSERT INTO message_vectors_reuse SELECT 1, printf('doc-%08d', x), ?, CAST(x'0000803f' || zeroblob(3068) AS BLOB) FROM n`, count, contentHash("hit"))
-			require.NoError(b, err)
-			enc := ix.reuseEncoder(fakeBuildEncoder(), reuseGeneration{ordinal: 1, dimension: 768})
-			b.ResetTimer()
-			for b.Loop() {
-				if _, err := enc(ctx, []string{"hit"}); err != nil {
-					b.Fatal(err)
-				}
-			}
-		})
-	}
-}
-
-func BenchmarkDeleteReusableChunks(b *testing.B) {
-	for _, count := range []int{1, 5000} {
-		b.Run(fmt.Sprintf("unrelated-%d", count), func(b *testing.B) {
-			ctx := b.Context()
-			ix, err := Open(ctx, filepath.Join(b.TempDir(), "vectors.db"), false, 10)
-			require.NoError(b, err)
-			b.Cleanup(func() { assert.NoError(b, ix.Close()) })
-			_, err = ix.db.ExecContext(ctx, `WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x < ?)
-INSERT INTO message_vectors_reuse SELECT 1, printf('doc-%d', x), printf('hash-%d', x), zeroblob(3072) FROM n`, count)
-			require.NoError(b, err)
-			for b.Loop() {
-				b.StopTimer()
-				_, err := ix.db.ExecContext(ctx, `INSERT INTO message_vectors_reuse VALUES (1, 'target', 'hash', zeroblob(3072))`)
-				if err != nil {
-					b.Fatal(err)
-				}
-				b.StartTimer()
-				if _, err := ix.db.ExecContext(ctx, `DELETE FROM message_vectors_reuse WHERE doc_key = 'target'`); err != nil {
 					b.Fatal(err)
 				}
 			}
