@@ -156,15 +156,16 @@ func TestForegroundSyncRunnerReconcilesStartup(t *testing.T) {
 
 func TestFirstImportProbe(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sessions.db")
-	first, err := isFirstImport(t.Context(), path)
+	cfg := config.Config{DBPath: path}
+	first, err := isFirstImport(t.Context(), cfg)
 	require.NoError(t, err)
 	require.True(t, first)
 	database := dbtest.OpenTestDBAt(t, path)
-	first, err = isFirstImport(t.Context(), path)
+	first, err = isFirstImport(t.Context(), cfg)
 	require.NoError(t, err)
 	require.True(t, first)
 	require.NoError(t, database.SetSyncState(t.Context(), "last_sync_finished_at", time.Now().UTC().Format(time.RFC3339Nano)))
-	first, err = isFirstImport(t.Context(), path)
+	first, err = isFirstImport(t.Context(), cfg)
 	require.NoError(t, err)
 	require.False(t, first)
 }

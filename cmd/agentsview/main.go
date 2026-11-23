@@ -251,7 +251,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		// Scoped upgrades and schema repairs finish before startup publishes readiness.
 		startupRebuild = err == nil && fullRebuild
 		if err == nil && !needsResync && !cfg.NoSync && !archiveOnly {
-			firstImport, err = isFirstImport(ctx, cfg.DBPath)
+			firstImport, err = isFirstImport(ctx, cfg)
 			if err != nil {
 				log.Printf("checking first import: %v", err)
 			}
@@ -952,13 +952,14 @@ func startDaemonUsageCacheBackfill(
 	}
 }
 
-func isFirstImport(ctx context.Context, path string) (bool, error) {
-	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+func isFirstImport(ctx context.Context, cfg config.Config) (bool, error) {
+	if _, err := os.Stat(cfg.DBPath); errors.Is(err, os.ErrNotExist) {
 		return true, nil
 	} else if err != nil {
 		return false, err
 	}
-	database, err := db.OpenReadOnly(ctx, path)
+	applyClassifierConfig(cfg)
+	database, err := db.OpenReadOnly(ctx, cfg.DBPath)
 	if err != nil {
 		return false, err
 	}

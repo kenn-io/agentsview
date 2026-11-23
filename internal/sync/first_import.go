@@ -173,8 +173,7 @@ func (wave *firstImportWave) earlyDBAgent() parser.AgentType {
 	}
 	for source, rank := range wave.selected {
 		if rank == 0 {
-			switch source.agent {
-			case parser.AgentWarp, parser.AgentForge, parser.AgentPiebald, parser.AgentZCode, parser.AgentGoose, parser.AgentCrush:
+			if slices.Contains([]parser.AgentType{parser.AgentWarp, parser.AgentForge, parser.AgentPiebald, parser.AgentZCode, parser.AgentGoose, parser.AgentCrush}, source.agent) {
 				return source.agent
 			}
 			break

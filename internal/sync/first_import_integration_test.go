@@ -76,7 +76,7 @@ func TestFirstImportWarpPublishesNewestFirst(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		close(provider.resume)
 		<-done
-		t.Fatal("second source did not begin parsing")
+		require.FailNow(t, "second source did not begin parsing")
 	}
 	page, err := env.db.ListSessions(t.Context(), db.SessionFilter{Limit: 10})
 	close(provider.resume)
@@ -130,7 +130,7 @@ func TestFirstImportMixedSourcesPublishNewestFirst(t *testing.T) {
 					case <-time.After(30 * time.Second):
 						close(provider.resume)
 						<-done
-						t.Fatal("limited wave did not finish")
+						require.FailNow(t, "limited wave did not finish")
 					}
 				} else {
 					select {
@@ -138,7 +138,7 @@ func TestFirstImportMixedSourcesPublishNewestFirst(t *testing.T) {
 					case <-time.After(30 * time.Second):
 						close(provider.resume)
 						<-done
-						t.Fatal("older source did not begin parsing")
+						require.FailNow(t, "older source did not begin parsing")
 					}
 				}
 				page, err := env.db.ListSessions(t.Context(), db.SessionFilter{Limit: 10})

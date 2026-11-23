@@ -41,7 +41,7 @@ func TestFirstImportCompletionWithFailedSources(t *testing.T) {
 	require.True(t, ran)
 	require.Positive(t, engine.LastSyncStats().Failed)
 	require.True(t, engine.LastSyncFinishedAt(t.Context()).IsZero())
-	first, err := isFirstImport(t.Context(), cfg.DBPath)
+	first, err := isFirstImport(t.Context(), cfg)
 	require.NoError(t, err)
 	require.False(t, first, "a full pass with source failures should not repeat first-import startup")
 }
@@ -62,7 +62,7 @@ func TestFirstImportInterruptedBeforeFullPass(t *testing.T) {
 	})
 	require.True(t, ran)
 	require.ErrorIs(t, err, context.Canceled)
-	first, err := isFirstImport(t.Context(), cfg.DBPath)
+	first, err := isFirstImport(t.Context(), cfg)
 	require.NoError(t, err)
 	require.True(t, first)
 }
@@ -94,7 +94,7 @@ func TestFirstImportRetriesFailedDiscovery(t *testing.T) {
 	ran, err := runDeferredStartupSyncFallback(t.Context(), cfg, engine, database, nil, nil, timeout, true)
 	require.NoError(t, err)
 	require.True(t, ran)
-	first, err := isFirstImport(t.Context(), cfg.DBPath)
+	first, err := isFirstImport(t.Context(), cfg)
 	require.NoError(t, err)
 	require.True(t, first, "a failed listing must retry the first import")
 }

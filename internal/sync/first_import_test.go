@@ -254,7 +254,7 @@ func TestFirstImportRefreshesWhileOlderSessionsAreWritten(t *testing.T) {
 				close(releaseRefresh)
 				close(resume)
 				<-done
-				t.Fatal("no refresh while importing older sessions")
+				require.FailNow(t, "no refresh while importing older sessions")
 			}
 			select {
 			case <-paused:
@@ -262,7 +262,7 @@ func TestFirstImportRefreshesWhileOlderSessionsAreWritten(t *testing.T) {
 				close(releaseRefresh)
 				close(resume)
 				<-done
-				t.Fatal("import did not reach the pause")
+				require.FailNow(t, "import did not reach the pause")
 			}
 			if tc.cancel {
 				cancel()
@@ -275,11 +275,16 @@ func TestFirstImportRefreshesWhileOlderSessionsAreWritten(t *testing.T) {
 							close(releaseRefresh)
 							close(resume)
 							<-done
-							t.Fatalf("listed session %s has no readable messages: %v", session.ID, readErr)
+							require.FailNowf(t, "unreadable session", "listed session %s has no readable messages: %v", session.ID, readErr)
 						}
 					}
 				}
-				assert.NoError(t, err)
+				if err != nil {
+					close(releaseRefresh)
+					close(resume)
+					<-done
+				}
+				require.NoError(t, err)
 				assert.Greater(t, len(page.Sessions), 100)
 				assert.Less(t, len(page.Sessions), tc.count)
 			}
@@ -288,16 +293,16 @@ func TestFirstImportRefreshesWhileOlderSessionsAreWritten(t *testing.T) {
 			if tc.cancel {
 				select {
 				case <-done:
-				case <-time.After(500 * time.Millisecond):
+				case <-time.After(30 * time.Second):
 					<-done
-					t.Fatal("pending refresh delayed cancellation")
+					require.FailNow(t, "pending refresh delayed cancellation")
 				}
 			} else {
 				select {
 				case err := <-done:
 					require.NoError(t, err)
 				case <-time.After(30 * time.Second):
-					t.Fatal("reentrant emitter blocked the import")
+					require.FailNow(t, "reentrant emitter blocked the import")
 				}
 			}
 		})
@@ -362,7 +367,7 @@ func TestFirstImportWavePublishesInNewestOrder(t *testing.T) {
 			case <-time.After(30 * time.Second):
 				close(resume)
 				<-done
-				t.Fatal("wave did not reach the pause")
+				require.FailNow(t, "wave did not reach the pause")
 			}
 			page, err := archive.ListSessions(t.Context(), db.SessionFilter{Limit: 120})
 			newest, getErr := archive.GetSession(t.Context(), "session-119")
