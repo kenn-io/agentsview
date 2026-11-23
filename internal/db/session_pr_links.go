@@ -457,7 +457,23 @@ func (v *codeModeVisitor) Enter(node js.INode) js.IVisitor {
 		return nil
 	}
 	call, ok := node.(*js.CallExpr)
-	if !ok || len(call.Args.List) != 1 || call.Args.List[0].Rest {
+	if !ok {
+		return v
+	}
+	if dot, ok := call.X.(*js.DotExpr); ok && !dot.Optional && dot.Y.String() == "then" && !call.Optional {
+		for _, arg := range call.Args.List {
+			if arg.Rest {
+				continue
+			}
+			switch callback := arg.Value.(type) {
+			case *js.ArrowFunc:
+				js.Walk(v, &callback.Body)
+			case *js.FuncDecl:
+				js.Walk(v, &callback.Body)
+			}
+		}
+	}
+	if len(call.Args.List) != 1 || call.Args.List[0].Rest {
 		return v
 	}
 	dot, ok := call.X.(*js.DotExpr)
@@ -639,7 +655,12 @@ func (db *DB) upgradeToolPRLinksTx(ctx context.Context, tx *sql.Tx) error {
 	if err != nil || version >= toolPRLinksDataVersion {
 		return err
 	}
-	ids, err := sessionIDsTx(ctx, tx, "id IN (SELECT session_id FROM tool_calls WHERE category IN ('Bash','Task') AND (input_json LIKE '%gh%' OR input_json LIKE '%http%'))")
+	condition := "id IN (SELECT session_id FROM tool_calls WHERE category IN ('Bash','Task') AND (input_json LIKE '%gh%' OR input_json LIKE '%http%'))"
+	if version < promptPRLinksDataVersion && !db.usageOnlyStorage() {
+		// The prompt upgrade already refreshed these sessions, including tools.
+		condition += " AND id NOT IN (SELECT session_id FROM messages WHERE " + promptPRLinkCandidateSQL + ")"
+	}
+	ids, err := sessionIDsTx(ctx, tx, condition)
 	if err != nil {
 		return err
 	}

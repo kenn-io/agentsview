@@ -142,6 +142,7 @@ func TestCodeModePRLinks(t *testing.T) {
 		{"spread", `tools.exec_command({cmd:'gh pr view 42 -R example/repo', ...params})`, nil},
 		{"computed", `tools.exec_command({cmd:'gh pr view 42 -R example/repo', ['cmd']: other})`, nil},
 		{"functions", `function f() { tools.exec_command({cmd:'gh pr view 41'}); } const g = () => tools.exec_command({cmd:'gh pr view 42'}); const o = { f() { tools.exec_command({cmd:'gh pr view 43'}); } };`, nil},
+		{"callbacks", `Promise.resolve().then(() => tools.exec_command({cmd:'gh pr view 41'})); Promise.resolve().then(function () { return tools.exec_command({cmd:'gh pr view 42'}); }); tools.exec_command({cmd:'gh pr view 43'});`, []string{"https://github.com/example/repo/pull/41", "https://github.com/example/repo/pull/42", "https://github.com/example/repo/pull/43"}},
 		{"raw shell", `gh pr view 42 -R example/repo`, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

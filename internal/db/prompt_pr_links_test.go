@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -327,30 +328,38 @@ func TestPromptPRLinksBackfillUsesDialogue(t *testing.T) {
 }
 
 func TestToolPRLinksArchiveUpgrade(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "archive.db")
-	d, err := OpenIsolated(t.Context(), path)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		if d != nil {
-			_ = d.Close()
-		}
-	})
-	s := Session{ID: "tool-upgrade", Project: "project", Machine: "local", Agent: "claude"}
-	require.NoError(t, d.UpsertSession(t.Context(), s))
-	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`}}}}))
-	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links='' WHERE id=?`, s.ID); err != nil {
-			return err
-		}
-		return writeUserVersion(t.Context(), tx, toolPRLinksDataVersion-1)
-	}))
-	require.NoError(t, d.Close())
-	d, err = OpenIsolated(t.Context(), path)
-	require.NoError(t, err)
-	got, err := d.GetSession(t.Context(), s.ID)
-	require.NoError(t, err)
-	require.Len(t, got.PRLinks, 1)
-	assert.Equal(t, "https://github.com/example/repo/pull/42", got.PRLinks[0].URL)
+	for _, version := range []int{promptPRLinksDataVersion - 1, toolPRLinksDataVersion - 1} {
+		t.Run(fmt.Sprint(version), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "archive.db")
+			d, err := OpenIsolated(t.Context(), path)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				if d != nil {
+					_ = d.Close()
+				}
+			})
+			s := Session{ID: "tool-upgrade", Project: "project", Machine: "local", Agent: "claude"}
+			require.NoError(t, d.UpsertSession(t.Context(), s))
+			require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{
+				{SessionID: s.ID, Ordinal: 0, Role: "user", Content: "review https://github.com/example/repo/pull/41"},
+				{SessionID: s.ID, Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`}}},
+			}))
+			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+				if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links='' WHERE id=?`, s.ID); err != nil {
+					return err
+				}
+				return writeUserVersion(t.Context(), tx, version)
+			}))
+			require.NoError(t, d.Close())
+			d, err = OpenIsolated(t.Context(), path)
+			require.NoError(t, err)
+			got, err := d.GetSession(t.Context(), s.ID)
+			require.NoError(t, err)
+			require.Len(t, got.PRLinks, 2)
+			assert.Equal(t, "https://github.com/example/repo/pull/41", got.PRLinks[0].URL)
+			assert.Equal(t, "https://github.com/example/repo/pull/42", got.PRLinks[1].URL)
+		})
+	}
 }
 
 func TestToolPRLinksAppendTracksSharedShell(t *testing.T) {
@@ -555,4 +564,23 @@ func TestToolPRLinksSharedHostState(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got.PRLinks, 1)
 	assert.Equal(t, "https://git.example/example/repo/pull/43", got.PRLinks[0].URL)
+}
+
+func TestPRFilterCommandRepositoryAndCallback(t *testing.T) {
+	d := testDB(t)
+	for _, tc := range []struct{ id, tool, input, filter string }{
+		{"environment", "Bash", `{"command":"GH_REPO=example/repo gh pr view 15"}`, "example/repo#15"},
+		{"callback", "exec", `Promise.resolve().then(() => tools.exec_command({cmd:'gh pr view 13 -R example/repo'})); tools.exec_command({cmd:'gh pr view 14 -R example/repo'});`, "example/repo#13"},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			require.NoError(t, d.UpsertSession(t.Context(), Session{ID: tc.id, Project: "project", Machine: "local", Agent: "claude", MessageCount: 1}))
+			require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: tc.id, Role: "assistant", ToolCalls: []ToolCall{{ToolName: tc.tool, Category: "Bash", InputJSON: tc.input}}}}))
+			filter, err := ParsePRFilter(tc.filter)
+			require.NoError(t, err)
+			page, err := d.ListSessions(t.Context(), SessionFilter{PR: filter})
+			require.NoError(t, err)
+			require.Len(t, page.Sessions, 1)
+			assert.Equal(t, tc.id, page.Sessions[0].ID)
+		})
+	}
 }

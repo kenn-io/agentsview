@@ -22,6 +22,8 @@ type shellCall struct {
 	Literal       []bool
 	Tainted       bool
 	HostUncertain bool
+	Repo          string
+	RepoSet       bool
 }
 
 func shellLiteral(parts []syntax.WordPart) (string, bool) {
@@ -125,6 +127,12 @@ func CommandPRLinksWithContext(ctx context.Context, command, cwd, remote string,
 						}
 					} else {
 						call.Tainted = true
+						call.RepoSet = true
+						if assignment.Value != nil {
+							if value, literal := shellLiteral(assignment.Value.Parts); literal {
+								call.Repo = value
+							}
+						}
 						if len(n.Args) == 0 {
 							tainted = true
 						}
@@ -208,8 +216,8 @@ func ghPRCallLinks(ctx context.Context, call shellCall, remote string) []PRLink 
 	if len(args) < 4 || !call.Literal[0] || path.Base(args[0]) != "gh" {
 		return nil
 	}
-	repo, selector := "", ""
-	repoSpecified := false
+	repo, selector := call.Repo, ""
+	repoSpecified := call.RepoSet
 	i := 1
 	for i < len(args) && call.Literal[i] {
 		value, last, isRepo := repoFlag(call, i)
