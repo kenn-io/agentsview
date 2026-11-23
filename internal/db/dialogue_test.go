@@ -1,6 +1,7 @@
 package db
 
 import (
+	"encoding/json/jsontext"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -436,19 +437,50 @@ func TestRepairMessageFTSWaitsForWriter(t *testing.T) {
 	})
 }
 
-func TestRepairMessageFTSContinuesAfterUsageCounterError(t *testing.T) {
-	d := testDB(t)
-	seedSearchSession(t, d, "session", "project", nil)
-	insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "needle"})
-	require.NoError(t, d.DropFTS(t.Context()))
-	d.messageFTSRepairPending.Store(true)
-	_, err := d.getWriter().Exec(t.Context(), `INSERT INTO stats(key, value) VALUES ('message_usage_counters_pending', 1);
-CREATE TRIGGER fail_usage_fill BEFORE DELETE ON stats WHEN OLD.key='message_usage_counters_pending' BEGIN SELECT RAISE(ABORT, 'injected fill failure'); END`)
-	require.NoError(t, err)
-	d.usageCountersPending.Store(true)
-	require.ErrorContains(t, d.RepairMessageFTS(t.Context()), "injected fill failure")
-	page, err := d.Search(t.Context(), SearchFilter{Query: "needle"})
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-	assert.True(t, d.usageCountersPending.Load())
+func TestRepairMessageFTSUsageCounters(t *testing.T) {
+	t.Run("fill succeeds", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "archive.db")
+		d := testDBAtPath(t, path, "source")
+		insertSession(t, d, "s", "proj")
+		m := asstMsg("s", 0, "reply")
+		m.Model = "claude-sonnet"
+		m.TokenUsage = jsontext.Value(`{"output_tokens":50,"server_tool_use":{"web_search_requests":3}}`)
+		insertMessages(t, d, m)
+		_, err := d.getWriter().Exec(t.Context(), `DROP INDEX idx_messages_usage_session_covering;
+	 ALTER TABLE messages DROP COLUMN usage_output_tokens;
+	 ALTER TABLE messages DROP COLUMN usage_web_search_requests;
+	 CREATE INDEX idx_messages_usage_session_covering ON messages(session_id, ordinal, timestamp, role, model, provider_id, claude_message_id, claude_request_id, token_usage, source_uuid) WHERE token_usage != '' AND model != '' AND model != '<synthetic>';`)
+		require.NoError(t, err)
+		require.NoError(t, d.Close())
+		d, err = OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
+		require.NoError(t, err)
+		defer d.Close()
+		appended := asstMsg("s", 1, "new reply")
+		appended.Model = "claude-sonnet"
+		appended.TokenUsage = jsontext.Value(`{"output_tokens":75,"server_tool_use":{"web_search_requests":2}}`)
+		_, err = d.WriteSessionIncremental(t.Context(), "s", []Message{appended}, IncrementalSessionUpdate{MsgCount: 2, NextOrdinal: 2})
+		require.NoError(t, err)
+		assert.Equal(t, []storedUsageCounters{{0, 0}, {75, 2}}, readStoredUsageCounters(t, d, "s"))
+		var pending bool
+		require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM stats WHERE key='message_usage_counters_pending')`).Scan(&pending))
+		require.True(t, pending)
+		require.NoError(t, d.RepairMessageFTS(t.Context()))
+		assert.Equal(t, []storedUsageCounters{{50, 3}, {75, 2}}, readStoredUsageCounters(t, d, "s"))
+	})
+	t.Run("fill fails", func(t *testing.T) {
+		d := testDB(t)
+		seedSearchSession(t, d, "session", "project", nil)
+		insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "needle"})
+		require.NoError(t, d.DropFTS(t.Context()))
+		d.messageFTSRepairPending.Store(true)
+		_, err := d.getWriter().Exec(t.Context(), `INSERT INTO stats(key, value) VALUES ('message_usage_counters_pending', 1);
+	CREATE TRIGGER fail_usage_fill BEFORE DELETE ON stats WHEN OLD.key='message_usage_counters_pending' BEGIN SELECT RAISE(ABORT, 'injected fill failure'); END`)
+		require.NoError(t, err)
+		d.usageCountersPending.Store(true)
+		require.ErrorContains(t, d.RepairMessageFTS(t.Context()), "injected fill failure")
+		page, err := d.Search(t.Context(), SearchFilter{Query: "needle"})
+		require.NoError(t, err)
+		require.Len(t, page.Results, 1)
+		assert.True(t, d.usageCountersPending.Load())
+	})
 }

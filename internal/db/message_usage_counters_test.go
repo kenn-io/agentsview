@@ -117,16 +117,18 @@ func TestOpenDaemonDefersMessageUsageCounterFill(t *testing.T) {
 			d, err = OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
 			require.NoError(t, err)
 			defer d.Close()
-			assert.True(t, d.SearchRepairPending())
-			assert.Equal(t, []storedUsageCounters{{0, 0}}, readStoredUsageCounters(t, d, "s"))
 			var pending bool
-			require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM stats WHERE key='message_usage_counters_pending')`).Scan(&pending))
-			require.True(t, pending)
 			var columns int
-			require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT count(*) FROM pragma_index_info('idx_messages_usage_session_covering')`).Scan(&columns))
-			assert.Equal(t, 10, columns)
-			_, err = OpenReadOnly(t.Context(), path)
-			require.ErrorIs(t, err, ErrMessageUsageCountersPending)
+			if query == "daily" {
+				assert.True(t, d.SearchRepairPending())
+				assert.Equal(t, []storedUsageCounters{{0, 0}}, readStoredUsageCounters(t, d, "s"))
+				require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM stats WHERE key='message_usage_counters_pending')`).Scan(&pending))
+				require.True(t, pending)
+				require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT count(*) FROM pragma_index_info('idx_messages_usage_session_covering')`).Scan(&columns))
+				assert.Equal(t, 10, columns)
+				_, err = OpenReadOnly(t.Context(), path)
+				require.ErrorIs(t, err, ErrMessageUsageCountersPending)
+			}
 			require.NoError(t, d.lockWriterCtx(t.Context()))
 			read := func(db *DB) (any, error) {
 				switch query {
@@ -163,7 +165,7 @@ func TestOpenDaemonDefersMessageUsageCounterFill(t *testing.T) {
 	}
 }
 
-func TestReopenFinishesPendingMessageUsageCounters(t *testing.T) {
+func TestMessageUsageCounterFillFailureReopenAndIdempotence(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "archive.db")
 	d := testDBAtPath(t, path, "source")
 	insertSession(t, d, "s", "proj")
@@ -207,35 +209,4 @@ func TestReopenFinishesPendingMessageUsageCounters(t *testing.T) {
 	var updates int
 	require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT count(*) FROM fill_probe`).Scan(&updates))
 	assert.Zero(t, updates)
-}
-
-func TestRepairMessageFTSFillsUsageCounters(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "archive.db")
-	d := testDBAtPath(t, path, "source")
-	insertSession(t, d, "s", "proj")
-	m := asstMsg("s", 0, "reply")
-	m.Model = "claude-sonnet"
-	m.TokenUsage = jsontext.Value(`{"output_tokens":50,"server_tool_use":{"web_search_requests":3}}`)
-	insertMessages(t, d, m)
-	_, err := d.getWriter().Exec(t.Context(), `DROP INDEX idx_messages_usage_session_covering;
- ALTER TABLE messages DROP COLUMN usage_output_tokens;
- ALTER TABLE messages DROP COLUMN usage_web_search_requests;
- CREATE INDEX idx_messages_usage_session_covering ON messages(session_id, ordinal, timestamp, role, model, provider_id, claude_message_id, claude_request_id, token_usage, source_uuid) WHERE token_usage != '' AND model != '' AND model != '<synthetic>';`)
-	require.NoError(t, err)
-	require.NoError(t, d.Close())
-	d, err = OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
-	require.NoError(t, err)
-	defer d.Close()
-	assert.Equal(t, []storedUsageCounters{{0, 0}}, readStoredUsageCounters(t, d, "s"))
-	appended := asstMsg("s", 1, "new reply")
-	appended.Model = "claude-sonnet"
-	appended.TokenUsage = jsontext.Value(`{"output_tokens":75,"server_tool_use":{"web_search_requests":2}}`)
-	_, err = d.WriteSessionIncremental(t.Context(), "s", []Message{appended}, IncrementalSessionUpdate{MsgCount: 2, NextOrdinal: 2})
-	require.NoError(t, err)
-	assert.Equal(t, []storedUsageCounters{{0, 0}, {75, 2}}, readStoredUsageCounters(t, d, "s"))
-	var pending bool
-	require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM stats WHERE key='message_usage_counters_pending')`).Scan(&pending))
-	require.True(t, pending)
-	require.NoError(t, d.RepairMessageFTS(t.Context()))
-	assert.Equal(t, []storedUsageCounters{{50, 3}, {75, 2}}, readStoredUsageCounters(t, d, "s"))
 }

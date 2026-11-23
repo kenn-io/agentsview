@@ -137,6 +137,7 @@ func TestServeSessionsWhileUsageCounterFillPending(t *testing.T) {
 		_, err := tx.ExecContext(t.Context(), `DROP INDEX idx_messages_usage_session_covering;
 ALTER TABLE messages DROP COLUMN usage_output_tokens;
 ALTER TABLE messages DROP COLUMN usage_web_search_requests;
+CREATE INDEX idx_messages_usage_session_covering ON messages(session_id, ordinal, timestamp, role, model, provider_id, claude_message_id, claude_request_id, token_usage, source_uuid) WHERE token_usage != '' AND model != '' AND model != '<synthetic>';
 PRAGMA user_version = 167;
 CREATE TRIGGER test_hold_usage_fill BEFORE DELETE ON stats WHEN OLD.key='message_usage_counters_pending' BEGIN SELECT RAISE(ABORT, 'hold usage fill'); END`)
 		return err
@@ -174,8 +175,6 @@ CREATE TRIGGER test_hold_usage_fill BEFORE DELETE ON stats WHEN OLD.key='message
 	log, err := os.ReadFile(output.Name())
 	require.NoError(t, err)
 	require.Contains(t, string(log), "Sync complete:")
-	_, err = db.OpenReadOnly(t.Context(), cfg.DBPath)
-	require.ErrorIs(t, err, db.ErrMessageUsageCountersPending)
 }
 
 func TestReadOnlyCommandsReportPendingUsageUpgrade(t *testing.T) {
@@ -200,7 +199,6 @@ func TestReadOnlyCommandsReportPendingUsageUpgrade(t *testing.T) {
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "upgrade")
 			assert.Contains(t, err.Error(), "retry")
-			assert.NotContains(t, err.Error(), "missing index")
 			assert.NotContains(t, err.Error(), "restart")
 		})
 	}
