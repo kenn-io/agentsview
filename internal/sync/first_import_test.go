@@ -305,6 +305,10 @@ func TestFirstImportProviderFailures(t *testing.T) {
 			path := filepath.Join(root, "project", "healthy.jsonl")
 			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 			require.NoError(t, os.WriteFile(path, []byte(testjsonl.NewSessionBuilder().AddClaudeUser("2026-01-01T00:00:00Z", "hello").String()), 0o600))
+			if listingFailure {
+				writeFirstImportClaudeSession(t, filepath.Dir(path), 0, time.Unix(1, 0))
+				require.NoError(t, os.Chtimes(path, time.Unix(2, 0), time.Unix(2, 0)))
+			}
 			archive := openTestDB(t)
 			provider := &firstImportFailingProvider{parser.ProviderBase{Def: parser.AgentDef{Type: parser.AgentWarp, FileBased: false}}, listingFailure}
 			claude, ok := parser.ProviderFactoryByType(parser.AgentClaude)
@@ -315,6 +319,16 @@ func TestFirstImportProviderFailures(t *testing.T) {
 			})
 			t.Cleanup(engine.Close)
 
+			if listingFailure {
+				_, complete := engine.syncNewest(t.Context(), 1, nil, nil)
+				require.False(t, complete)
+				healthy, err := archive.GetSession(t.Context(), "healthy")
+				require.NoError(t, err)
+				require.NotNil(t, healthy)
+				older, err := archive.GetSession(t.Context(), "session-000")
+				require.NoError(t, err)
+				require.Nil(t, older)
+			}
 			stats, ran, err := engine.RunFirstImport(t.Context(), nil)
 			require.NoError(t, err)
 			require.True(t, ran)
