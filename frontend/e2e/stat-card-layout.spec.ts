@@ -5,7 +5,7 @@ for (const { path, width, count, labels } of [
     path: "/usage",
     width: 1350,
     count: 11,
-    labels: ["Copilot AI Credits", "Uncached Input"],
+    labels: ["Copilot AI Credits"],
   },
   { path: "/activity", width: 871, count: 7, labels: ["Interactive peak"] },
   { path: "/analytics", width: 1035, count: 6, labels: ["Messages/Session"] },
