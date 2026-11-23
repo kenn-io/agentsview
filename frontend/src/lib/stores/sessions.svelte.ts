@@ -1406,6 +1406,11 @@ class SessionsStore {
   }
 
   invalidateFilterCaches() {
+    this.refreshFilterOptions();
+    void sync.loadStats(this.metadataParams);
+  }
+
+  private refreshFilterOptions() {
     this.invalidateProjectCache();
     this.agentsVersion++;
     this.agentsLoaded = false;
@@ -1413,7 +1418,6 @@ class SessionsStore {
     this.resetMachineCatalog();
     void this.loadAgents();
     void this.loadMachines();
-    void sync.loadStats(this.metadataParams);
   }
 
   // Newer metadata can make a previously resolved display name ambiguous.
@@ -1550,7 +1554,7 @@ class SessionsStore {
     }
     if (event.scope === "sessions" || event.scope === "sync") {
       if (event.scope === "sessions") void this.refreshActiveSession();
-      this.invalidateProjectCache();
+      this.refreshFilterOptions();
       this.scheduleIndexRefresh();
       this.bumpActiveSessionUsageVersion();
       this.refreshActiveChildSessions();

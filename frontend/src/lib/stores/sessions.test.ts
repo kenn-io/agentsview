@@ -4636,34 +4636,43 @@ describe("SessionsStore live refresh", () => {
     spy.mockRestore();
   });
 
-  it("sessions events replace cached project filter options", async () => {
-    const { events } = await import("./events.svelte.js");
-    let registered: ((e: { scope: string }) => void) | null = null;
+  it.each(["sessions", "sync"])("%s events refresh filter options without stats", async (scope) => {
+    let registered!: (e: { scope: string }) => void;
     const spy = vi.spyOn(events, "subscribe").mockImplementation((fn) => {
       registered = fn as (e: { scope: string }) => void;
       return () => {};
     });
-
-    vi.mocked(api.getProjects)
-      .mockResolvedValueOnce({
-        projects: [{ name: "old-project", session_count: 1 }],
-      })
-      .mockResolvedValueOnce({
-        projects: [{ name: "new-project", session_count: 1 }],
-      });
+    api.getProjects.mockReset();
+    api.getAgents.mockReset();
+    api.getMachines.mockReset();
+    api.getProjects
+      .mockResolvedValueOnce({ projects: [] })
+      .mockResolvedValueOnce({ projects: [{ name: "project", session_count: 1 }] });
+    api.getAgents
+      .mockResolvedValueOnce({ agents: [] })
+      .mockResolvedValueOnce({ agents: [{ name: "agent", session_count: 1 }] });
+    api.getMachines
+      .mockResolvedValueOnce({ machines: [] })
+      .mockResolvedValueOnce({ machines: ["machine"] });
     const sessions = createSessionsStore();
     const detach = sessions.attachSidebar();
-    await sessions.loadProjects();
-    expect(sessions.projects).toEqual([{ name: "old-project", session_count: 1 }]);
+    try {
+      await Promise.all([sessions.loadProjects(), sessions.loadAgents(), sessions.loadMachines()]);
+      expect(sessions.projects).toEqual([]);
+      expect(sessions.agents).toEqual([]);
+      expect(sessions.machines).toEqual([]);
 
-    registered!({ scope: "sessions" });
-    await vi.waitFor(() => {
-      expect(sessions.projects).toEqual([{ name: "new-project", session_count: 1 }]);
-    });
-    expect(api.getProjects).toHaveBeenCalledTimes(2);
-
-    detach();
-    spy.mockRestore();
+      registered({ scope });
+      await vi.waitFor(() => {
+        expect(sessions.projects).toEqual([{ name: "project", session_count: 1 }]);
+        expect(sessions.agents[0]?.name).toBe("agent");
+        expect(sessions.machines).toEqual(["machine"]);
+      });
+      expect(api.getStats).not.toHaveBeenCalled();
+    } finally {
+      detach();
+      spy.mockRestore();
+    }
   });
 
   it("refetches on the safety-net interval after becoming visible", async () => {
