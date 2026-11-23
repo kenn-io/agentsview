@@ -387,6 +387,9 @@ func ensureCJKFTS(
 		); err != nil {
 			return false, fmt.Errorf("clearing CJK FTS freshness ledger: %w", err)
 		}
+		if _, err := tx.ExecContext(ctx, searchTokenSQL); err != nil {
+			return false, fmt.Errorf("updating CJK FTS search token: %w", err)
+		}
 	}
 
 	if _, err := tx.ExecContext(ctx, schemaCJKFTSTriggers); err != nil {

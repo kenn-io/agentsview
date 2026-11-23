@@ -128,9 +128,6 @@ func (db *DB) RepairMessageFTS(ctx context.Context) error {
 			if _, err := ensureCJKFTS(ctx, w, false, false); err != nil {
 				return struct{}{}, err
 			}
-			if _, err := w.ExecContext(ctx, searchTokenSQL); err != nil {
-				return struct{}{}, err
-			}
 			db.searchIndexRepairPending.Store(false)
 		}
 		return struct{}{}, nil
