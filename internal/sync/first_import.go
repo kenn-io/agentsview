@@ -67,7 +67,7 @@ func (e *Engine) RunFirstImport(ctx context.Context, onProgress ProgressFunc) (S
 		return stats, true, ctx.Err()
 	}
 	stats, ran, err := e.runStartupSyncFallback(ctx, onProgress, &firstImportWave{onWrite: onWrite})
-	if ran && err == nil && ctx.Err() == nil && !stats.Aborted {
+	if ran && err == nil && ctx.Err() == nil && stats.AuthoritativeDiscoveryComplete() {
 		err = e.db.SetSyncState(ctx, db.FirstImportCompletedKey, "1")
 	}
 	return stats, ran, err

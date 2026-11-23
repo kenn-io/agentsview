@@ -66,3 +66,35 @@ func TestFirstImportInterruptedBeforeFullPass(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, first)
 }
+
+type failingDiscoveryProvider struct{ parser.Provider }
+
+func (p failingDiscoveryProvider) Discover(context.Context) ([]parser.SourceRef, error) {
+	return nil, errors.New("listing unavailable")
+}
+
+type failingDiscoveryFactory struct{ parser.ProviderFactory }
+
+func (f failingDiscoveryFactory) NewProvider(cfg parser.ProviderConfig) parser.Provider {
+	return failingDiscoveryProvider{f.ProviderFactory.NewProvider(cfg)}
+}
+
+func TestFirstImportRetriesFailedDiscovery(t *testing.T) {
+	cfg := testConfigWithClaudeFixture(t)
+	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
+	factory, ok := parser.ProviderFactoryByType(parser.AgentClaude)
+	require.True(t, ok)
+	engine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{
+		AgentDirs: cfg.AgentDirs, Machine: "local", DeferStartupMaintenance: true,
+		ProviderFactories: []parser.ProviderFactory{failingDiscoveryFactory{factory}},
+	})
+	t.Cleanup(engine.Close)
+	timeout := make(chan time.Time, 1)
+	timeout <- time.Now()
+	ran, err := runDeferredStartupSyncFallback(t.Context(), cfg, engine, database, nil, nil, timeout, true)
+	require.NoError(t, err)
+	require.True(t, ran)
+	first, err := isFirstImport(t.Context(), cfg.DBPath)
+	require.NoError(t, err)
+	require.True(t, first, "a failed listing must retry the first import")
+}
