@@ -60,6 +60,7 @@ report can still be present with exit 3.
 | 3 | `session usage` / `token-use` found no usage figures, or `serve --check-data-version` found a newer database format. |
 | 4 | Export cursor reset or conversation reconciliation required. |
 | 5 | An exported conversation revision changed. |
+| 6 | `export conversations session` found no record of the session. |
 | 64 | Command syntax, unknown flags, missing arguments, or incompatible CLI flags. |
 | 65 | Malformed flag values or invalid values checked by the CLI. |
 | 69 | A daemon, server, or semantic search index is unavailable. |
@@ -2166,15 +2167,19 @@ agentsview export conversations changes --checkpoint SAVED_CHECKPOINT
 agentsview export conversations changes --tool-summaries
 agentsview export conversations message SESSION_ID MESSAGE_ID \
   --database-id DATABASE_ID --revision REVISION
+agentsview export conversations session SESSION_ID --text-mode visible
 ```
 
+`session` exports one complete session from a single archive snapshot as JSON
+lines; see
+[Read one whole session](/docs/conversation-export/#read-one-whole-session).
 These commands read the local archive and do not send content to another
 system. Pass `--tool-summaries` to include each session's tool call totals and
 skills in the listing; see
 [Session tool summaries](/docs/conversation-export/#session-tool-summaries).
-`message` masks detected secrets by default and marks redacted bodies with
-`redacted: true`; pass `--reveal` to return the stored text unchanged. Existing
-session summary and activity exports stay content-free.
+`message` and `session` mask detected secrets by default and mark redacted
+bodies with `redacted: true`; pass `--reveal` to return the stored text
+unchanged. Existing session summary and activity exports stay content-free.
 
 ______________________________________________________________________
 

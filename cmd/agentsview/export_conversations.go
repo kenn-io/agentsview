@@ -21,14 +21,16 @@ func newExportConversationsCommand() *cobra.Command {
 			"First walk changes, which lists message IDs and revisions without exporting their text. " +
 			"Use cursor to continue an unfinished walk, or checkpoint only after a walk completes. " +
 			"Then request message chunks using the returned session ID, message ID, revision, and database ID; keep the same text mode. " +
+			"To export a whole session from one archive snapshot, use session. " +
 			"These commands emit their own JSON documents without --json. " +
 			"Exit 4: archive reconciliation required. Exit 5: message revision changed.",
 		Example: "  agentsview export conversations changes --text-mode stored --limit 100\n" +
 			"  agentsview export conversations changes --text-mode stored --limit 100 --cursor <cursor>\n" +
-			"  agentsview export conversations message <session-id> <message-id> --text-mode stored --revision <revision> --database-id <database-id> --max-bytes 65536",
+			"  agentsview export conversations message <session-id> <message-id> --text-mode stored --revision <revision> --database-id <database-id> --max-bytes 65536\n" +
+			"  agentsview export conversations session <session-id> --text-mode visible",
 		Args: cobra.NoArgs, SilenceUsage: true,
 	}
-	command.AddCommand(newConversationChangesCommand(), newConversationMessageCommand())
+	command.AddCommand(newConversationChangesCommand(), newConversationMessageCommand(), newConversationSessionCommand())
 	return command
 }
 
@@ -103,6 +105,67 @@ func newConversationMessageCommand() *cobra.Command {
 	command.Flags().IntVar(&options.MaxBytes, "max-bytes", 64*1024, "Maximum message text bytes in this chunk")
 	command.Flags().BoolVar(&options.RevealSecrets, "reveal", false, "Show full secret values (unredacted)")
 	return command
+}
+
+func newConversationSessionCommand() *cobra.Command {
+	var options db.ConversationSessionOptions
+	command := &cobra.Command{
+		Use: "session SESSION_ID", Short: "Write one whole session as JSON lines",
+		Long: "Write one session from a single archive snapshot as JSON lines: " +
+			"a header, the session and message changes in revision order with text chunks after each readable message, and a trailer. " +
+			"The header's revision is the snapshot's archive revision. " +
+			"Every change in the stream is at or below that revision. " +
+			"The trailer gives the message count, including tombstones. " +
+			"If the trailer is missing or the count does not match, discard the stream and read the session again. " +
+			"The command masks detected secrets by default. " +
+			"Pass --reveal to write stored text unchanged. " +
+			"Exit 6: the archive has no record of the session.",
+		Example: "  agentsview export conversations session <session-id> --text-mode visible\n" +
+			"  agentsview export conversations session <session-id> --text-mode visible --tool-summaries --max-bytes 65536",
+		Args: cobra.ExactArgs(1), SilenceUsage: true,
+		RunE: func(command *cobra.Command, args []string) error {
+			if options.MaxBytes < 4 {
+				return errors.New("--max-bytes must be at least 4")
+			}
+			options.SessionID = args[0]
+			encoder := jsontext.NewEncoder(command.OutOrStdout())
+			err := exportConversationSession(command, options, func(record any) error {
+				return json.MarshalEncode(encoder, record)
+			})
+			if err != nil {
+				return writeConversationExportError(command, err)
+			}
+			return nil
+		},
+	}
+	command.Flags().StringVar(&options.TextMode, "text-mode", "stored", "Text selection: stored or visible prose")
+	command.Flags().IntVar(&options.MaxBytes, "max-bytes", 64*1024, "Maximum bytes of message text per chunk record")
+	command.Flags().BoolVar(&options.ToolSummaries, "tool-summaries", false, "Include the session's tool_summary record")
+	command.Flags().BoolVar(&options.RevealSecrets, "reveal", false, "Show full secret values (unredacted)")
+	return command
+}
+
+// exportConversationSession writes one session from the read-only archive,
+// building a cold archive's projection first, as the changes listing does.
+func exportConversationSession(command *cobra.Command, options db.ConversationSessionOptions, write func(any) error) error {
+	database, err := openConversationExportDB(command)
+	if err != nil {
+		return err
+	}
+	err = database.ExportConversationSession(command.Context(), options, write)
+	database.Close()
+	if !errors.Is(err, db.ErrConversationInitializationRequired) {
+		return err
+	}
+	if err := initializeConversationExport(command); err != nil {
+		return fmt.Errorf("initializing conversation export: %w", err)
+	}
+	database, err = openConversationExportDB(command)
+	if err != nil {
+		return err
+	}
+	defer database.Close()
+	return database.ExportConversationSession(command.Context(), options, write)
 }
 
 // exportConversationChanges lists changes from the read-only archive. The first
@@ -207,6 +270,9 @@ func writeConversationExportError(command *cobra.Command, cause error) error {
 	case errors.Is(cause, db.ErrConversationReconciliationRequired):
 		code, result.Error = sessionExportCursorResetExitCode, "reconciliation_required"
 		result.Message = "conversation checkpoint belongs to another archive generation or predates pruned deletions; reconcile from a new changes walk"
+	case errors.Is(cause, db.ErrConversationSessionNotFound):
+		code, result.Error = conversationSessionNotFoundExitCode, "session_not_found"
+		result.Message = "the archive has no record of this session"
 	case errors.Is(cause, db.ErrConversationRevisionChanged):
 		code, result.Error = conversationRevisionChangedExitCode, "revision_changed"
 		result.Message = "this message revision was superseded; read the next changes cycle for its current state"
