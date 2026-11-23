@@ -994,6 +994,7 @@ type DB struct {
 	// Rebuilds reserve attached IDs before their session rows are restored.
 	archiveRebuildProvenance atomic.Pointer[map[string]ArchiveSessionProvenance]
 	messageFTSRepairPending  atomic.Bool
+	searchIndexRepairPending atomic.Bool
 	// writerClosed is set while the writer pool is intentionally closed for a
 	// worker maintenance pass (CloseWriter). It lets write attempts report
 	// ErrWriterClosed instead of the generic read-only error.
@@ -1472,7 +1473,7 @@ func OpenWithProgress(
 	return open(ctx, path, openOptions{backgroundMaintenance: true}, policy, progress)
 }
 
-// OpenDaemonWithProgress defers standard message search repair until the daemon listens.
+// OpenDaemonWithProgress defers search index repair until the daemon listens.
 func OpenDaemonWithProgress(ctx context.Context, path string, policy config.ArchiveContent, progress OpenProgressFunc) (*DB, error) {
 	return open(ctx, path, openOptions{backgroundMaintenance: true, deferMessageFTSRepair: true}, policy, progress)
 }
@@ -1636,7 +1637,7 @@ func open(
 	if err := ctx.Err(); err != nil {
 		return closeOnError(err)
 	}
-	if err := d.migrateColumns(ctx, progress); err != nil {
+	if err := d.migrateColumns(ctx, progress, options.deferMessageFTSRepair); err != nil {
 		return closeOnError(fmt.Errorf("migrating columns: %w", err))
 	}
 	progress.report("Finalizing database setup")
@@ -3486,7 +3487,7 @@ END;
 // migrateColumns adds columns introduced by this branch to databases created
 // by older releases, then runs the data repairs required by a normal writable
 // startup. Schema-only callers use applySchemaColumnMigrations directly.
-func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) error {
+func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc, deferMessageFTSRepair bool) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	w := db.getWriter()
@@ -3540,8 +3541,12 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := ensureSubstringIndex(ctx, w, progress); err != nil {
+	deferred, err := ensureSubstringIndex(ctx, w, progress, deferMessageFTSRepair)
+	if err != nil {
 		return err
+	}
+	if deferred {
+		db.searchIndexRepairPending.Store(true)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -5399,9 +5404,10 @@ func (db *DB) RebuildFTS(ctx context.Context) error {
 	if err := rebuildSubstringIndex(ctx, w); err != nil {
 		return err
 	}
-	if err := ensureCJKFTS(ctx, w, true); err != nil {
+	if _, err := ensureCJKFTS(ctx, w, true, false); err != nil {
 		return fmt.Errorf("rebuild CJK fts index: %w", err)
 	}
+	db.searchIndexRepairPending.Store(false)
 	return nil
 }
 
@@ -5556,7 +5562,7 @@ func (db *DB) HasCJKFTS(ctx context.Context) (available bool) {
 	defer func() {
 		if !available {
 			db.cjkFTSUnavailableLog.Do(func() {
-				log.Print("CJK FTS unavailable or stale; using standard FTS5 until the archive is reopened")
+				log.Print("CJK FTS unavailable or stale; using standard FTS5 unless index repair is pending")
 			})
 		}
 	}()
@@ -5669,8 +5675,12 @@ func (db *DB) init(ctx context.Context, progress OpenProgressFunc, deferMessageF
 		}
 	}
 
-	if err := ensureCJKFTS(ctx, w, false); err != nil {
+	deferred, err := ensureCJKFTS(ctx, w, false, deferMessageFTSRepair)
+	if err != nil {
 		return fmt.Errorf("initializing CJK FTS: %w", err)
+	}
+	if deferred {
+		db.searchIndexRepairPending.Store(true)
 	}
 
 	var recallFTSCount int
@@ -6008,7 +6018,7 @@ func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
 		writer.Close()
 		return fmt.Errorf("configuring reopened wal: %w", err)
 	}
-	if err := installCJKFTSTriggers(writer); err != nil {
+	if err := installCJKFTSTriggers(writer, db.searchIndexRepairPending.Load()); err != nil {
 		writer.Close()
 		return fmt.Errorf("configuring reopened writer: %w", err)
 	}
@@ -6143,7 +6153,7 @@ func (db *DB) ReopenWriter() error {
 		writer.Close()
 		return fmt.Errorf("configuring reopened wal: %w", err)
 	}
-	if err := installCJKFTSTriggers(writer); err != nil {
+	if err := installCJKFTSTriggers(writer, db.searchIndexRepairPending.Load()); err != nil {
 		writer.Close()
 		return fmt.Errorf("configuring reopened writer: %w", err)
 	}

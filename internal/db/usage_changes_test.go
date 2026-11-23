@@ -456,7 +456,7 @@ func TestUsageChangeJournalSurvivesCanceledMigration(t *testing.T) {
 		if progress.Detail == "Adding column excluded_sessions.include_codex_pages" {
 			cancel()
 		}
-	})
+	}, false)
 	require.Error(t, err)
 	require.ErrorIs(t, migrationCtx.Err(), context.Canceled)
 	_, err = other.ExecContext(ctx, `UPDATE sessions SET machine = 'machine-b' WHERE id = 'external'`)
