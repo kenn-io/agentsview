@@ -230,3 +230,30 @@ func TestClineTeamTaskPRFilter(t *testing.T) {
 	require.Len(t, page.Sessions, 1)
 	assert.Equal(t, "cline:team-pr", page.Sessions[0].ID)
 }
+
+func TestShellCommandPRFilter(t *testing.T) {
+	testutil.IsolateGit(t)
+	root := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "config"), []byte("[remote \"origin\"]\n url = https://github.com/example/repo.git\n"), 0o600))
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
+	for _, tc := range []struct{ id, command string }{
+		{"shell-function", "other() { cd /other; }; gh pr view 42"},
+		{"shell-export", "export GH_REPO=example/other; gh pr view 43"},
+		{"unrelated-a", "echo hello"}, {"unrelated-b", "gh pr view 44 -R example/other"},
+	} {
+		env.writeClaudeSession(t, "proj", tc.id+".jsonl", testjsonl.JoinJSONL(
+			testjsonl.ClaudeUserJSON("Work", tsEarly, root),
+			testjsonl.ClaudeAssistantJSON([]map[string]any{{"type": "tool_use", "id": "call", "name": "Bash", "input": map[string]any{"command": tc.command}}}, tsEarlyS1),
+		))
+	}
+	require.Equal(t, 4, env.engine.SyncAll(t.Context(), nil).Synced)
+	for _, tc := range []struct{ filter, id string }{{"example/repo#42", "shell-function"}, {"example/other#43", "shell-export"}} {
+		filter, err := db.ParsePRFilter(tc.filter)
+		require.NoError(t, err)
+		page, err := env.db.ListSessions(t.Context(), db.SessionFilter{PR: filter})
+		require.NoError(t, err)
+		require.Len(t, page.Sessions, 1)
+		assert.Equal(t, tc.id, page.Sessions[0].ID)
+	}
+}
