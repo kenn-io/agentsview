@@ -14,7 +14,6 @@ const mocks = vi.hoisted(() => ({
   generate: vi.fn(),
   load: vi.fn().mockResolvedValue(undefined),
   refreshFilterOptions: vi.fn(),
-  loadProjects: vi.fn(),
   select: vi.fn(),
   selectTask: vi.fn(),
 }));
@@ -38,7 +37,6 @@ const state = vi.hoisted(() => {
       agents: [] as Array<{ name: string; session_count: number }>,
       projects: [],
       refreshFilterOptions: mocks.refreshFilterOptions,
-      loadProjects: mocks.loadProjects,
     },
     store: {
       dateFrom: "2026-07-01",

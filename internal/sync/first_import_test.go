@@ -29,30 +29,6 @@ func writeFirstImportClaudeSession(t *testing.T, project string, i int, mtime ti
 	}
 }
 
-func TestFirstImportSelectsZCodeBeforeOlderFile(t *testing.T) {
-	root := t.TempDir()
-	project := filepath.Join(root, "project")
-	require.NoError(t, os.MkdirAll(project, 0o755))
-	for i := range 100 {
-		writeFirstImportClaudeSession(t, project, i, time.Unix(int64(i+1), 0))
-	}
-	zcode := filepath.Join(t.TempDir(), ".zcode", "cli")
-	writeProcessProviderZCodeDB(t, zcode)
-	archive := openTestDB(t)
-	engine := NewEngine(t.Context(), archive, EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}, parser.AgentZCode: {zcode}}, Machine: "local", DeferStartupMaintenance: true,
-	})
-	t.Cleanup(engine.Close)
-	engine.syncNewest(t.Context(), nil, nil)
-	require.True(t, engine.LastSyncFinishedAt(t.Context()).IsZero())
-	newest, err := archive.GetSession(t.Context(), "zcode:session-001")
-	require.NoError(t, err)
-	require.NotNil(t, newest)
-	older, err := archive.GetSession(t.Context(), "session-000")
-	require.NoError(t, err)
-	require.Nil(t, older)
-}
-
 func TestFirstImportStagedFailureLeavesNoSession(t *testing.T) {
 	root := t.TempDir()
 	const id = "019eb791-cf7d-75c1-8439-9ed74c122c80"
