@@ -2150,7 +2150,8 @@ The first backfill, a changed fingerprint, or any pending session triggers a
 full index rebuild after the daemon starts listening. Until it finishes, CJK
 queries use standard full-text search when its index is available.
 If the substring index is missing, substring searches scan messages until the
-repair finishes, and archive writes wait while the repair holds the writer.
+repair finishes, and archive writes, including startup sync, wait while the
+repair holds the writer.
 Because the freshness ledger records session IDs rather than old message IDs and
 token content, it cannot remove stale entries for individual replaced or deleted
 messages. Removing the sidecar drops the CJK index but keeps the

@@ -344,11 +344,16 @@ func ensureCJKFTS(
 	if deferRebuild && !current {
 		hasMessages := tableExists
 		if !hasMessages {
-			if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM messages)`).Scan(&hasMessages); err != nil {
+			var err error
+			hasMessages, err = archiveHasMessages(ctx, tx)
+			if err != nil {
 				return false, fmt.Errorf("checking messages for CJK FTS: %w", err)
 			}
 		}
 		if hasMessages {
+			if _, err := tx.ExecContext(ctx, "DELETE FROM stats WHERE key = ?", cjkFTSFingerprintStatsKey); err != nil {
+				return false, fmt.Errorf("clearing deferred CJK FTS fingerprint: %w", err)
+			}
 			if err := tx.Commit(); err != nil {
 				return false, fmt.Errorf("committing deferred CJK FTS state: %w", err)
 			}

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/docbank/document/ocr"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -626,6 +627,15 @@ func TestDaemonOpenDefersCJKFTSRepair(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, d.Close()) })
 			assert.False(t, d.HasCJKFTS(t.Context()))
+			var stored string
+			err = d.getReader().QueryRow(t.Context(), "SELECT value FROM stats WHERE key = ?", cjkFTSFingerprintStatsKey).Scan(&stored)
+			require.ErrorIs(t, err, sql.ErrNoRows)
+			if state == "fingerprint" {
+				require.NoError(t, d.Close())
+				d, err = OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
+				require.NoError(t, err)
+				assert.False(t, d.HasCJKFTS(t.Context()))
+			}
 			require.NoError(t, d.CloseWriter())
 			require.NoError(t, d.ReopenWriter())
 			assert.False(t, d.HasCJKFTS(t.Context()))
@@ -635,9 +645,49 @@ func TestDaemonOpenDefersCJKFTSRepair(t *testing.T) {
 			require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key='search_history_token'`).Scan(&after))
 			assert.NotEqual(t, before, after)
 			assert.True(t, d.HasCJKFTS(t.Context()))
+			require.NoError(t, d.getReader().QueryRow(t.Context(), "SELECT value FROM stats WHERE key = ?", cjkFTSFingerprintStatsKey).Scan(&stored))
+			assert.Equal(t, simpleFTSRuntimeConfig.fingerprint, stored)
 			got, err := d.SearchContent(t.Context(), filter)
 			require.NoError(t, err)
 			assert.Equal(t, want.Matches, got.Matches)
 		})
 	}
+}
+
+func TestDeferredCJKRepairSurvivesFingerprintRollback(t *testing.T) {
+	if !simpleFTSRuntimeConfig.available() {
+		t.Skip("simple FTS5 runtime is not installed for this test process")
+	}
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d, err := Open(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if d != nil {
+			_ = d.Close()
+		}
+	})
+	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
+	content := testInlineImageContent()
+	for _, id := range []string{"first", "second", "third"} {
+		insertSession(t, d, id, "project", func(s *Session) { s.UserMessageCount = 2 })
+		require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: id, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	}
+	fingerprint := simpleFTSRuntimeConfig.fingerprint
+	t.Cleanup(func() { simpleFTSRuntimeConfig.fingerprint = fingerprint })
+	require.NoError(t, d.Close())
+	simpleFTSRuntimeConfig.fingerprint = "different-fingerprint"
+	d, err = OpenDaemonWithProgress(ctx, path, config.ArchiveContentFull, nil)
+	require.NoError(t, err)
+	identity, err := ocr.NewIdentity("test", "model", "revision")
+	require.NoError(t, err)
+	require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "中文搜索", false))
+	require.NoError(t, d.Close())
+	simpleFTSRuntimeConfig.fingerprint = fingerprint
+	d, err = OpenDaemonWithProgress(ctx, path, config.ArchiveContentFull, nil)
+	require.NoError(t, err)
+	require.NoError(t, d.RepairMessageFTS(ctx))
+	page, err := d.Search(ctx, SearchFilter{Query: "中文搜索"})
+	require.NoError(t, err)
+	assert.Len(t, page.Results, 3)
 }

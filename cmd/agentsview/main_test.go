@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
+	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
@@ -4365,6 +4366,20 @@ func TestServeLifetimesReleaseDebugLog(t *testing.T) {
 	}
 }
 
+type repairLogNotifier struct {
+	out      io.Writer
+	message  string
+	started  chan struct{}
+	notified atomic.Bool
+}
+
+func (w *repairLogNotifier) Write(p []byte) (int, error) {
+	if strings.Contains(string(p), w.message) && w.notified.CompareAndSwap(false, true) {
+		close(w.started)
+	}
+	return w.out.Write(p)
+}
+
 func TestDeferredSearchIndexesHTTP(t *testing.T) {
 	for _, index := range []string{"substring", "cjk"} {
 		t.Run(index, func(t *testing.T) {
@@ -4380,7 +4395,12 @@ func TestDeferredSearchIndexesHTTP(t *testing.T) {
 				s.UserMessageCount = 2
 				s.StartedAt = new("2025-01-15T10:00:00Z")
 			})
-			require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []db.Message{{SessionID: "session", Role: "user", Content: "中文搜索 needleexample", Timestamp: "2025-01-15T10:00:00Z"}}))
+			messages := make([]db.Message, 1500)
+			content := strings.Repeat("SQLite 中文搜索 needleexample sample ", 100)
+			for i := range messages {
+				messages[i] = db.Message{SessionID: "session", Ordinal: i, Role: "user", Content: content, Timestamp: "2025-01-15T10:00:00Z"}
+			}
+			require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", messages))
 			require.NoError(t, database.Close())
 			raw, err := sql.Open("sqlite3", cfg.DBPath)
 			require.NoError(t, err)
@@ -4406,9 +4426,20 @@ func TestDeferredSearchIndexesHTTP(t *testing.T) {
 				require.NoError(t, raw.QueryRowContext(t.Context(), `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='message_trigram_fts')`).Scan(&exists))
 				assert.False(t, exists)
 			}
-			require.NoError(t, database.CloseWriter())
-			waiting := make(chan struct{})
-			ctx, cancel := context.WithCancel(db.WithWriterWaitNotice(t.Context(), func() { close(waiting) }))
+			message := "building SQLite substring search index"
+			if index == "cjk" {
+				message = "rebuilding CJK FTS index"
+			}
+			probe, err := raw.Conn(t.Context())
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, probe.Close()) })
+			_, err = probe.ExecContext(t.Context(), "PRAGMA busy_timeout = 1")
+			require.NoError(t, err)
+			started := make(chan struct{})
+			oldLog := log.Writer()
+			log.SetOutput(&repairLogNotifier{out: oldLog, message: message, started: started})
+			t.Cleanup(func() { log.SetOutput(oldLog) })
+			ctx, cancel := context.WithCancel(t.Context())
 			done := make(chan error, 1)
 			go func() { done <- database.RepairMessageFTS(ctx) }()
 			finished := false
@@ -4419,18 +4450,44 @@ func TestDeferredSearchIndexesHTTP(t *testing.T) {
 				}
 			})
 			select {
-			case <-waiting:
+			case <-started:
 			case err := <-done:
 				finished = true
-				require.FailNow(t, "repair returned while writer was closed", "%v", err)
+				require.FailNow(t, "repair returned before rebuilding the index", "%v", err)
 			case <-time.After(30 * time.Second):
-				require.FailNow(t, "repair did not wait for the writer")
+				require.FailNow(t, "repair did not start rebuilding the index")
+			}
+			probeCtx, stopProbe := context.WithTimeout(t.Context(), 30*time.Second)
+			defer stopProbe()
+			for {
+				_, err := probe.ExecContext(probeCtx, "BEGIN IMMEDIATE")
+				if err != nil {
+					var sqliteErr sqlite3.Error
+					require.ErrorAs(t, err, &sqliteErr)
+					require.Equal(t, sqlite3.ErrBusy, sqliteErr.Code)
+					break
+				}
+				_, err = probe.ExecContext(probeCtx, "ROLLBACK")
+				require.NoError(t, err)
+				select {
+				case err := <-done:
+					finished = true
+					require.FailNow(t, "repair finished before holding the writer", "%v", err)
+				case <-probeCtx.Done():
+					require.FailNow(t, "repair did not hold the writer")
+				default:
+				}
 			}
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0/api/v1/sessions", nil))
 			assert.Equal(t, http.StatusOK, response.Code)
 			assert.Contains(t, response.Body.String(), `"session"`)
-			require.NoError(t, database.ReopenWriter())
+			select {
+			case err := <-done:
+				finished = true
+				require.FailNow(t, "repair finished before the sessions response", "%v", err)
+			default:
+			}
 			err = <-done
 			finished = true
 			require.NoError(t, err)

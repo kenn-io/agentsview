@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"strings"
@@ -79,6 +80,17 @@ var dropSubstringIndexSQL = []string{
 	"DROP VIEW IF EXISTS message_trigram_source",
 }
 
+func archiveHasMessages(ctx context.Context, q interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}) (bool, error) {
+	rows, err := q.QueryContext(ctx, `SELECT 1 FROM messages LIMIT 1`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	return rows.Next(), rows.Err()
+}
+
 // ensureSubstringIndex builds the substring index once for an archive that
 // lacks it, after column migrations have added thinking_text. The build reads
 // every message body, so a large archive waits for it on the first writable
@@ -95,8 +107,8 @@ func ensureSubstringIndex(ctx context.Context, w *writerHandle, progress OpenPro
 		return false, nil
 	}
 	if deferBuild {
-		var hasMessages bool
-		if err := w.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM messages)`).Scan(&hasMessages); err != nil {
+		hasMessages, err := archiveHasMessages(ctx, w)
+		if err != nil {
 			return false, fmt.Errorf("checking messages for substring index: %w", err)
 		}
 		if hasMessages {
