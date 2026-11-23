@@ -269,7 +269,7 @@ func TestFirstImportPublishesBatchesBeforeReconciliation(t *testing.T) {
 	select {
 	case <-paused:
 	case <-time.After(15 * time.Second):
-		t.Fatal("import did not pause")
+		require.FailNow(t, "import did not pause")
 	}
 	page, err := archive.ListSessions(t.Context(), db.SessionFilter{Limit: 101})
 	require.NoError(t, err)
@@ -284,7 +284,7 @@ func TestFirstImportPublishesBatchesBeforeReconciliation(t *testing.T) {
 	case total := <-paused:
 		require.Equal(t, 101, total)
 	case <-time.After(15 * time.Second):
-		t.Fatal("reconciliation did not start")
+		require.FailNow(t, "reconciliation did not start")
 	}
 	page, err = archive.ListSessions(t.Context(), db.SessionFilter{Limit: 101})
 	require.NoError(t, err)
@@ -306,6 +306,7 @@ func (p firstImportBrokenSource) Parse(ctx context.Context, req parser.ParseRequ
 	}
 	return p.Provider.Parse(ctx, req)
 }
+
 func (p firstImportBrokenSource) DiscoverEach(ctx context.Context, fn func(parser.SourceRef) error) error {
 	return p.Provider.(parser.StreamingDiscoverer).DiscoverEach(ctx, fn)
 }

@@ -3689,7 +3689,7 @@ func (e *Engine) StartupReconciled() bool {
 // completed without cancellation, safety abort, or provider listing failure.
 // Individual parser warnings do not make discovery incomplete.
 func (stats *SyncStats) AuthoritativeDiscoveryComplete() bool {
-	return !stats.Aborted && stats.providerFailures == 0
+	return !stats.Aborted && stats.providerFailures == stats.providerProcessingFailures
 }
 
 // ProcessingComplete reports whether all processed results reached a terminal
@@ -6402,6 +6402,12 @@ func (e *Engine) syncAllLocked(
 		}
 	}
 	fileCount := len(all)
+	nonContainerDiscovered := 0
+	for _, f := range all {
+		if !isOpenCodeFormatContainerSource(f.Agent, f.Path) {
+			nonContainerDiscovered++
+		}
+	}
 	orderedFirstImport := wave != nil
 	if orderedFirstImport {
 		err := e.forEachFirstImportDBFile(ctx, scope, func(file parser.DiscoveredFile) {
@@ -6448,13 +6454,6 @@ func (e *Engine) syncAllLocked(
 		Phase:         PhaseSyncing,
 		SessionsTotal: progressTotal,
 	})
-
-	nonContainerDiscovered := 0
-	for _, f := range all[:fileCount] {
-		if !isOpenCodeFormatContainerSource(f.Agent, f.Path) {
-			nonContainerDiscovered++
-		}
-	}
 
 	tWorkers := time.Now()
 	// Discovery deduplicates sources before their freshness checks and writes.
@@ -7729,7 +7728,7 @@ func (e *Engine) syncProviderDBBackedAgent(
 		ctx, agent, scope, flush,
 	)
 	for range sourceFailures {
-		stats.RecordFailed()
+		stats.recordProviderProcessingFailure()
 	}
 	if discoveryErr != nil {
 		stats.providerFailures++

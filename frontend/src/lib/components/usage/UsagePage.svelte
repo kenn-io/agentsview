@@ -60,6 +60,7 @@
   let mounted = false;
   let unsubEvents: (() => void) | undefined;
   let pendingRefresh = false;
+  let lastRefreshedSignature: string | null = null;
   let visible = $state(!document.hidden);
   let urlInitRan = $state(false);
   let urlWritebackReady = $state(false);
@@ -486,6 +487,8 @@
       if (!ready || !signature || router.route !== "usage" || !mounted) {
         return;
       }
+      if (signature === lastRefreshedSignature) return;
+      lastRefreshedSignature = signature;
       if (!initialFetchDone) {
         initialFetchDone = true;
       }

@@ -63,7 +63,9 @@ describe("QualityPage", () => {
     expect(trigger).not.toBeNull();
     trigger!.click();
     await tick();
-    const option = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((item) => item.textContent?.includes("Codex (1)"));
+    const option = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((item) =>
+      item.textContent?.includes("Codex (1)"),
+    );
     expect(option).toBeDefined();
     option!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
     await tick();
