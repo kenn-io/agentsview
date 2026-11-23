@@ -704,8 +704,8 @@ recorded repository when the command runs in the session's working directory.
 An explicit `owner/repo` uses the recorded remote's host or a literal `GH_HOST`
 in the command. Conflicting or missing host evidence leaves the number unlinked.
 A host-qualified repository or a full PR URL supplies its own host. After a
-Claude Bash call changes directory, later bare numbers need a captured working
-directory that matches the session's directory.
+Claude Bash call changes directory, later commands need a captured working
+directory that matches the session's directory to use the recorded remote.
 Child-agent prompts link full PR URLs as references. Prompt mentions indicate
 a reference, not work on the pull request. Archives that dropped tool inputs
 cannot recover command or child-prompt links. Push-to-head linking is planned

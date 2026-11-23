@@ -508,7 +508,6 @@ func TestToolPRLinksSharedShellDirectoryAppend(t *testing.T) {
 	require.NoError(t, d.InsertMessages(t.Context(), []Message{message(2, `{"command":"gh pr view 61 -R example/other"}`), message(3, `{"command":"gh pr view 62","workdir":"/work/repo"}`)}))
 	got, err = d.GetSession(t.Context(), s.ID)
 	require.NoError(t, err)
-	require.Len(t, got.PRLinks, 2)
-	assert.Equal(t, "https://github.com/example/other/pull/61", got.PRLinks[0].URL)
-	assert.Equal(t, "https://github.com/example/repo/pull/62", got.PRLinks[1].URL)
+	require.Len(t, got.PRLinks, 1)
+	assert.Equal(t, "https://github.com/example/repo/pull/62", got.PRLinks[0].URL)
 }

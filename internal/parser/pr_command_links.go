@@ -76,10 +76,12 @@ func CommandPRLinks(ctx context.Context, command, remote string, allowBare bool)
 		for _, stmt := range clause.Cond {
 			collect(stmt, true)
 		}
-		for _, stmt := range clause.Then {
-			collect(stmt, true)
-		}
-		if clause.Else != nil {
+		result, known := literalCondition(clause.Cond)
+		if known && result {
+			for _, stmt := range clause.Then {
+				collect(stmt, true)
+			}
+		} else if known && clause.Else != nil {
 			collectIf(clause.Else)
 		}
 	}
@@ -94,19 +96,7 @@ func CommandPRLinks(ctx context.Context, command, remote string, allowBare bool)
 			for _, child := range cmd.Cond {
 				collect(child, true)
 			}
-			for _, child := range cmd.Do {
-				collect(child, true)
-			}
-		case *syntax.ForClause:
-			for _, child := range cmd.Do {
-				collect(child, true)
-			}
-		case *syntax.CaseClause:
-			for _, item := range cmd.Items {
-				for _, child := range item.Stmts {
-					collect(child, true)
-				}
-			}
+		case *syntax.ForClause, *syntax.CaseClause:
 		case *syntax.Block:
 			for _, child := range cmd.Stmts {
 				collect(child, true)
@@ -181,6 +171,9 @@ func CommandPRLinks(ctx context.Context, command, remote string, allowBare bool)
 			continue
 		}
 		if !literal[0] || words[0] != "gh" {
+			if literal[0] && words[0] == "cd" {
+				remoteHost, remoteRepo = "", ""
+			}
 			if words[0] != "echo" {
 				bareSafe = false
 			}
@@ -283,6 +276,21 @@ func CommandPRLinks(ctx context.Context, command, remote string, allowBare bool)
 		}
 	}
 	return CombinePRLinks(links...), nil
+}
+
+func literalCondition(stmts []*syntax.Stmt) (bool, bool) {
+	if len(stmts) == 0 {
+		return true, true // else
+	}
+	if len(stmts) != 1 || stmts[0].Negated || len(stmts[0].Redirs) != 0 {
+		return false, false
+	}
+	call, ok := stmts[0].Cmd.(*syntax.CallExpr)
+	if !ok || len(call.Assigns) != 0 || len(call.Args) != 1 {
+		return false, false
+	}
+	word, literal := shellLiteral(call.Args[0].Parts)
+	return word == "true", literal && (word == "true" || word == "false")
 }
 
 // BashChangesWorkingDirectory reports literal cd commands in a shared Bash call.

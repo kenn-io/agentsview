@@ -416,6 +416,9 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 	if dir != "" {
 		allowBare = samePRWorkingDirectory(cwd, dir)
 	}
+	if !allowBare {
+		remote = ""
+	}
 	var command string
 	if json.Unmarshal(payload.Command, &command) != nil {
 		command, _ = argvShellText(input, false)
