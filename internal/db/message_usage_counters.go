@@ -52,6 +52,13 @@ func addMessageUsageCounters(ctx context.Context, w *writerHandle, progress Open
 	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO stats(key, value) VALUES ('message_usage_counters_pending', 1)`); err != nil {
 		return false, err
 	}
+	var version int
+	if err := tx.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
+		return false, err
+	}
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", version|usageCountersPendingVersion)); err != nil {
+		return false, err
+	}
 	if !deferFill {
 		if err := fillMessageUsageCounters(ctx, tx); err != nil {
 			return false, err
@@ -78,7 +85,12 @@ func fillMessageUsageCounters(ctx context.Context, tx *sql.Tx) error {
 		WHERE token_usage != ''`); err != nil {
 		return fmt.Errorf("filling message usage counters: %w", err)
 	}
-	return nil
+	var version int
+	if err := tx.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", version&^usageCountersPendingVersion))
+	return err
 }
 
 // ErrMessageUsageCountersPending asks read-only callers to wait for the upgrade.

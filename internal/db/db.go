@@ -702,6 +702,9 @@ const dataVersion = 185
 
 const archiveOnlyVersionBase = 1 << 20
 
+// usageCountersPendingVersion marks an archive whose deferred fill is incomplete.
+const usageCountersPendingVersion = 1 << 19
+
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
 const toolCallFieldBackfillStatsKey = "tool_call_field_backfill_v1"
@@ -2501,6 +2504,7 @@ func readUserVersion(ctx context.Context, conn interface {
 
 // DecodeUserVersion returns the parser version and permanent archive-only mode.
 func DecodeUserVersion(version int) (int, bool) {
+	version &^= usageCountersPendingVersion
 	if version >= archiveOnlyVersionBase {
 		return version - archiveOnlyVersionBase, true
 	}
@@ -2508,6 +2512,11 @@ func DecodeUserVersion(version int) (int, bool) {
 }
 
 func writeUserVersion(ctx context.Context, tx *sql.Tx, version int) error {
+	var current int
+	if err := tx.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&current); err != nil {
+		return err
+	}
+	version |= current & usageCountersPendingVersion
 	var metadataExists bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'archive_metadata')`).Scan(&metadataExists); err != nil {
 		return err

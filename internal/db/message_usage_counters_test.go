@@ -2,6 +2,7 @@ package db
 
 import (
 	"encoding/json/jsontext"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -31,6 +32,15 @@ func readStoredUsageCounters(t *testing.T, d *DB, sessionID string) []storedUsag
 	}
 	require.NoError(t, rows.Err())
 	return got
+}
+
+func removeMessageUsageCounters(t *testing.T, d *DB) {
+	t.Helper()
+	_, err := d.getWriter().Exec(t.Context(), `DROP INDEX idx_messages_usage_session_covering;
+ ALTER TABLE messages DROP COLUMN usage_output_tokens;
+ ALTER TABLE messages DROP COLUMN usage_web_search_requests;
+ CREATE INDEX idx_messages_usage_session_covering ON messages(session_id, ordinal, timestamp, role, model, provider_id, claude_message_id, claude_request_id, token_usage, source_uuid) WHERE token_usage != '' AND model != '' AND model != '<synthetic>';`)
+	require.NoError(t, err)
 }
 
 func TestOpenFillsMessageUsageCountersOnOlderArchive(t *testing.T) {
@@ -101,11 +111,8 @@ func TestOpenDaemonDefersMessageUsageCounterFill(t *testing.T) {
 			m.Model = "claude-sonnet"
 			m.TokenUsage = jsontext.Value(`{"output_tokens":250,"server_tool_use":{"web_search_requests":3}}`)
 			insertMessages(t, d, m)
-			_, err := d.getWriter().Exec(t.Context(), `DROP INDEX idx_messages_usage_session_covering;
- ALTER TABLE messages DROP COLUMN usage_output_tokens;
- ALTER TABLE messages DROP COLUMN usage_web_search_requests;
- CREATE INDEX idx_messages_usage_session_covering ON messages(session_id, ordinal, timestamp, role, model, provider_id, claude_message_id, claude_request_id, token_usage, source_uuid) WHERE token_usage != '' AND model != '' AND model != '<synthetic>';`)
-			require.NoError(t, err)
+			removeMessageUsageCounters(t, d)
+			var err error
 			require.NoError(t, d.Close())
 			fixture, err := os.ReadFile(path)
 			require.NoError(t, err)
@@ -124,6 +131,10 @@ func TestOpenDaemonDefersMessageUsageCounterFill(t *testing.T) {
 				assert.Equal(t, []storedUsageCounters{{0, 0}}, readStoredUsageCounters(t, d, "s"))
 				require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM stats WHERE key='message_usage_counters_pending')`).Scan(&pending))
 				require.True(t, pending)
+				var version int
+				require.NoError(t, d.getReader().QueryRow(t.Context(), `PRAGMA user_version`).Scan(&version))
+				// The v0.48 reader rejects versions above 185 before opening the archive.
+				assert.Greater(t, version, 185)
 				require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT count(*) FROM pragma_index_info('idx_messages_usage_session_covering')`).Scan(&columns))
 				assert.Equal(t, 10, columns)
 				_, err = OpenReadOnly(t.Context(), path)
@@ -159,6 +170,9 @@ func TestOpenDaemonDefersMessageUsageCounterFill(t *testing.T) {
 			assert.Equal(t, []storedUsageCounters{{250, 3}}, readStoredUsageCounters(t, d, "s"))
 			require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM stats WHERE key='message_usage_counters_pending')`).Scan(&pending))
 			assert.False(t, pending)
+			var version int
+			require.NoError(t, d.getReader().QueryRow(t.Context(), `PRAGMA user_version`).Scan(&version))
+			assert.Equal(t, CurrentDataVersion(), version)
 			require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT count(*) FROM pragma_index_info('idx_messages_usage_session_covering')`).Scan(&columns))
 			assert.Equal(t, 12, columns)
 		})
@@ -172,11 +186,8 @@ func TestMessageUsageCounterFillFailureReopenAndIdempotence(t *testing.T) {
 	m := asstMsg("s", 0, "reply")
 	m.TokenUsage = jsontext.Value(`{"output_tokens":42}`)
 	insertMessages(t, d, m)
-	_, err := d.getWriter().Exec(t.Context(), `DROP INDEX idx_messages_usage_session_covering;
- ALTER TABLE messages DROP COLUMN usage_output_tokens;
- ALTER TABLE messages DROP COLUMN usage_web_search_requests;
- CREATE INDEX idx_messages_usage_session_covering ON messages(session_id, ordinal, timestamp, role, model, provider_id, claude_message_id, claude_request_id, token_usage, source_uuid) WHERE token_usage != '' AND model != '' AND model != '<synthetic>';`)
-	require.NoError(t, err)
+	removeMessageUsageCounters(t, d)
+	var err error
 	require.NoError(t, d.Close())
 	d, err = OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
 	require.NoError(t, err)
@@ -186,6 +197,9 @@ func TestMessageUsageCounterFillFailureReopenAndIdempotence(t *testing.T) {
 	var stillPending bool
 	require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM stats WHERE key='message_usage_counters_pending')`).Scan(&stillPending))
 	assert.True(t, stillPending)
+	var version int
+	require.NoError(t, d.getReader().QueryRow(t.Context(), `PRAGMA user_version`).Scan(&version))
+	assert.Greater(t, version, 185)
 	_, err = d.getWriter().Exec(t.Context(), `DROP TRIGGER fail_counter_fill`)
 	require.NoError(t, err)
 	require.NoError(t, d.Close())
@@ -209,4 +223,40 @@ func TestMessageUsageCounterFillFailureReopenAndIdempotence(t *testing.T) {
 	var updates int
 	require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT count(*) FROM fill_probe`).Scan(&updates))
 	assert.Zero(t, updates)
+}
+
+func TestPendingMessageUsageCountersPreservesDataVersion(t *testing.T) {
+	for _, archiveOnly := range []bool{false, true} {
+		t.Run(fmt.Sprintf("archiveOnly=%t", archiveOnly), func(t *testing.T) {
+			d := testDB(t)
+			removeMessageUsageCounters(t, d)
+			version := 184
+			if archiveOnly {
+				version += archiveOnlyVersionBase
+				_, err := d.getWriter().Exec(t.Context(), `INSERT OR REPLACE INTO archive_metadata(key, value) VALUES ('archive_only', '1')`)
+				require.NoError(t, err)
+			}
+			_, err := d.getWriter().Exec(t.Context(), fmt.Sprintf("PRAGMA user_version = %d", version))
+			require.NoError(t, err)
+			pending, err := addMessageUsageCounters(t.Context(), d.getWriter(), nil, true)
+			require.NoError(t, err)
+			require.True(t, pending)
+			var raw int
+			require.NoError(t, d.getReader().QueryRow(t.Context(), `PRAGMA user_version`).Scan(&raw))
+			assert.Greater(t, raw, 185)
+			decoded, only := DecodeUserVersion(raw)
+			assert.Equal(t, 184, decoded)
+			assert.Equal(t, archiveOnly, only)
+			require.NoError(t, d.setDataVersion(t.Context()))
+			require.NoError(t, d.getReader().QueryRow(t.Context(), `PRAGMA user_version`).Scan(&raw))
+			assert.NotZero(t, raw&usageCountersPendingVersion)
+			d.usageCountersPending.Store(true)
+			require.NoError(t, d.finishUsageCounters(t.Context()))
+			require.NoError(t, d.getReader().QueryRow(t.Context(), `PRAGMA user_version`).Scan(&raw))
+			decoded, only = DecodeUserVersion(raw)
+			assert.Equal(t, CurrentDataVersion(), decoded)
+			assert.Equal(t, archiveOnly, only)
+			assert.Zero(t, raw&usageCountersPendingVersion)
+		})
+	}
 }

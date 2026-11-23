@@ -446,11 +446,8 @@ func TestRepairMessageFTSUsageCounters(t *testing.T) {
 		m.Model = "claude-sonnet"
 		m.TokenUsage = jsontext.Value(`{"output_tokens":50,"server_tool_use":{"web_search_requests":3}}`)
 		insertMessages(t, d, m)
-		_, err := d.getWriter().Exec(t.Context(), `DROP INDEX idx_messages_usage_session_covering;
-	 ALTER TABLE messages DROP COLUMN usage_output_tokens;
-	 ALTER TABLE messages DROP COLUMN usage_web_search_requests;
-	 CREATE INDEX idx_messages_usage_session_covering ON messages(session_id, ordinal, timestamp, role, model, provider_id, claude_message_id, claude_request_id, token_usage, source_uuid) WHERE token_usage != '' AND model != '' AND model != '<synthetic>';`)
-		require.NoError(t, err)
+		removeMessageUsageCounters(t, d)
+		var err error
 		require.NoError(t, d.Close())
 		d, err = OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
 		require.NoError(t, err)
