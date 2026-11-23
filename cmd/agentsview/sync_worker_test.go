@@ -337,8 +337,8 @@ func markArchiveStale(t *testing.T, dbPath string) {
 // handoff, so they must refuse a stale-version archive instead of swapping the
 // file out from under the daemon's still-open reader pool.
 func TestSyncWorkerRefusesResyncForLiveArchiveModes(t *testing.T) {
-	for _, mode := range []string{"sync", "audit"} {
-		t.Run(mode, func(t *testing.T) {
+	for _, request := range []syncWorkerRequest{{Mode: "sync"}, {Mode: "audit"}, {Mode: "startup", LiveArchive: true}} {
+		t.Run(request.Mode, func(t *testing.T) {
 			cfg := testConfigWithClaudeFixture(t)
 			database, err := db.Open(t.Context(), cfg.DBPath)
 			require.NoError(t, err)
@@ -346,13 +346,16 @@ func TestSyncWorkerRefusesResyncForLiveArchiveModes(t *testing.T) {
 			require.Equal(t, 3, engine.SyncAll(t.Context(), nil).Synced)
 			engine.Close()
 			require.NoError(t, database.Close())
+			reader, err := db.OpenReadOnly(t.Context(), cfg.DBPath)
+			require.NoError(t, err)
+			defer reader.Close()
 			markArchiveStale(t, cfg.DBPath)
 
 			before, err := os.Stat(cfg.DBPath)
 			require.NoError(t, err)
 
 			var out bytes.Buffer
-			err = runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: mode}, &out)
+			err = runSyncWorkerContext(t.Context(), cfg, request, &out)
 			require.Error(t, err, "a live-archive worker must refuse a stale archive")
 			require.ErrorContains(t, err, "resync")
 
@@ -367,6 +370,9 @@ func TestSyncWorkerRefusesResyncForLiveArchiveModes(t *testing.T) {
 				"the archive file must not be swapped out from under the daemon")
 			assert.NoFileExists(t, cfg.DBPath+"-resync",
 				"a refused pass must not stage a replacement archive")
+			session, err := reader.GetSession(t.Context(), "session0")
+			require.NoError(t, err)
+			require.NotNil(t, session)
 		})
 	}
 }
@@ -718,7 +724,7 @@ func TestWorkerParentLinkHandoff(t *testing.T) {
 			})
 			defer restore()
 			if tc.mode != "audit" {
-				_, _, err = runWorkerSyncPass(t.Context(), t.Context(), cfg, engine, database, lock, false, false, nil)
+				_, _, err = runWorkerSyncPass(t.Context(), t.Context(), cfg, engine, database, lock, false, nil)
 				require.Zero(t, terminal.Synced)
 			} else {
 				err = runArchiveAudit(t.Context(), cfg, engine, database, lock, em, nil)
@@ -745,7 +751,7 @@ func TestWorkerParentLinkHandoff(t *testing.T) {
 					}
 					switch tc.mode {
 					case "sync":
-						_, _, err = runWorkerSyncPass(ctx, t.Context(), cfg, engine, database, lock, false, false, nil)
+						_, _, err = runWorkerSyncPass(ctx, t.Context(), cfg, engine, database, lock, false, nil)
 					case "audit":
 						err = runArchiveAudit(ctx, cfg, engine, database, lock, em, nil)
 					case "resync-build":

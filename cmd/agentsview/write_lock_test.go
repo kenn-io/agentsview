@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -164,6 +166,56 @@ func TestOpenWriteDBRefusesLiveWritableRuntime(t *testing.T) {
 
 	assertOpenWriteDBRefused(t, cfg, "refusing to write directly",
 		"agentsview daemon stop")
+}
+
+func TestDirectWriteRechecksDaemonAfterLock(t *testing.T) {
+	for _, path := range []string{"open", "classifier", "recovery"} {
+		t.Run(path, func(t *testing.T) {
+			dataDir, cfg := writeDBConfigForTest(t)
+			if path == "classifier" {
+				seedClassifierHash(t, cfg)
+			}
+			manifest := filepath.Join(dataDir, "compact-recovery.json")
+			if path == "recovery" {
+				require.NoError(t, os.WriteFile(manifest, []byte("pending"), 0o600))
+			}
+			original := acquireDirectWriteOwnerLock
+			acquireDirectWriteOwnerLock = func(ctx context.Context, dir string) (*writeOwnerLock, error) {
+				lock, err := original(ctx, dir)
+				if err != nil {
+					return nil, err
+				}
+				_, err = WriteDaemonRuntime(dataDir, "127.0.0.1", 9, "test", false)
+				if err != nil {
+					lock.Close()
+					return nil, err
+				}
+				return lock, nil
+			}
+			t.Cleanup(func() { acquireDirectWriteOwnerLock = original; RemoveDaemonRuntime(dataDir) })
+			var err error
+			switch path {
+			case "open":
+				opened := false
+				_, _, err = openWriteDBWith(t.Context(), cfg, func(context.Context, config.Config) (*db.DB, error) {
+					opened = true
+					return nil, nil
+				})
+				assert.False(t, opened)
+			case "classifier":
+				err = runClassifierRebuild(t.Context(), cfg, &bytes.Buffer{}, false)
+				assert.NotEmpty(t, classifierHashInSQLite(t, cfg.DBPath))
+			case "recovery":
+				_, err = archiveModeAfterRecovery(t.Context(), cfg)
+				content, readErr := os.ReadFile(manifest)
+				require.NoError(t, readErr)
+				assert.Equal(t, "pending", string(content))
+			}
+			require.ErrorContains(t, err, "refusing to write directly")
+			lock := acquireWriteOwnerLockForTest(t, dataDir)
+			require.NoError(t, lock.Close())
+		})
+	}
 }
 
 func TestOpenWriteDBAllowsStartupLockHeldByCurrentServe(t *testing.T) {

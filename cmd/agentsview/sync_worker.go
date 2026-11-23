@@ -67,7 +67,7 @@ type workerResult struct {
 type syncWorkerRequest struct {
 	Mode         string
 	LinksPending bool
-	SoleWriter   bool
+	LiveArchive  bool
 }
 
 // newSyncWorkerCommand registers the hidden self-exec'd worker. The daemon runs
@@ -103,8 +103,8 @@ func newSyncWorkerCommand() *cobra.Command {
 	)
 	cmd.Flags().BoolVar(&request.LinksPending, "links-pending", false,
 		"finish parent linking retained by the daemon")
-	cmd.Flags().BoolVar(&request.SoleWriter, "sole-writer", false,
-		"snapshot freshness while holding exclusive archive ownership")
+	cmd.Flags().BoolVar(&request.LiveArchive, "live-archive", false,
+		"keep an archive with active readers in place")
 	if err := cmd.MarkFlagRequired("mode"); err != nil {
 		panic(err)
 	}
@@ -199,6 +199,11 @@ func runSyncWorkerStartup(
 		Resync: mode == "startup" && database.NeedsResync(),
 	})
 
+	if database.NeedsResync() && (mode != "startup" || request.LiveArchive) {
+		// A replacement would leave the daemon's readers on the old inode.
+		return refuseWorkerResync(mode, emit)
+	}
+
 	// Remove stale temp DB from a prior crashed resync before ResyncAll
 	// stages a fresh one, matching runServe's startup cleanup.
 	cleanResyncTemp(cfg.DBPath)
@@ -206,15 +211,7 @@ func runSyncWorkerStartup(
 	engine := sync.NewEngine(ctx, database, workerEngineConfig(cfg))
 	defer engine.Close()
 	engine.RetainSubagentLinkRetry(request.LinksPending)
-	engine.SetSoleArchiveWriter(mode == "startup" || request.SoleWriter)
-
-	if database.NeedsResync() && mode != "startup" {
-		// A resync would CloseConnections + rename the archive file, but the
-		// daemon's reader pool still points at the old inode and only the writer
-		// is reopened by path afterward. Swapping here would strand readers on a
-		// deleted file; refuse and let the resync-build flow do the swap.
-		return refuseWorkerResync(mode, emit)
-	}
+	engine.SetSoleArchiveWriter(mode == "startup")
 
 	var result workerResult
 	switch {

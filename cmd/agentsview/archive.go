@@ -248,7 +248,7 @@ func archiveModeAfterRecovery(ctx context.Context, cfg config.Config) (bool, err
 		return false, err
 	}
 	if pending {
-		lock, err := acquireWriteOwnerLock(ctx, writeLockDataDir(cfg))
+		lock, err := acquireCheckedWriteOwnerLock(ctx, cfg)
 		if err != nil {
 			return false, err
 		}

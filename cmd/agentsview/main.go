@@ -49,8 +49,7 @@ var (
 	// distribution names who ships this binary, set at link time: a package
 	// manager such as "homebrew", or "kenn" for official direct downloads.
 	// Empty for source builds.
-	distribution                  = ""
-	deferredStartupSyncUsesWorker = !testing.Testing()
+	distribution = ""
 )
 
 const (
@@ -139,12 +138,13 @@ func warnMissingDirs(dirs []string, label string) {
 }
 
 type serveOptions struct {
-	ReplaceDaemon   bool
-	NoSyncExplicit  bool
-	SkipInitialSync bool
-	BasePath        string
-	Pprof           bool
-	RestartArgs     []string
+	ReplaceDaemon            bool
+	NoSyncExplicit           bool
+	SkipInitialSync          bool
+	StartupWorkerAfterListen bool
+	BasePath                 string
+	Pprof                    bool
+	RestartArgs              []string
 	// ReloadConfig rebuilds the configuration with the same layers and flags
 	// as startup so saved provider settings apply without a restart.
 	ReloadConfig func() (config.Config, error)
@@ -233,14 +233,17 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	ctx, requestRestart := context.WithCancelCause(ctx)
 	defer requestRestart(nil)
 
-	// First starts and upgrades run the startup worker before taking the write
-	// lock. Ordinary restarts defer it until after the server starts, using the
-	// existing worker handoff to keep the archive readable during sync.
+	// Run the archive-scale startup sync in a short-lived worker process before
+	// taking the write lock, so its allocation high-water returns to the OS
+	// instead of pinning the daemon. The daemon then opens the DB, starts the
+	// watcher, and closes the worker-to-watcher event gap below. The worker
+	// acquires the write lock the daemon has not taken yet; on any failure the
+	// daemon falls back to its in-process initial sync.
 	var workerStartupResult workerResult
 	workerSyncDone := false
 	startupRebuild := false
 	skipInitialSync := opts.SkipInitialSync
-	immediateStartupSync := false
+	workerAfterListen := false
 	if !cfg.NoSync || archiveOnly {
 		needsResync, fullRebuild, err := db.ArchiveResyncState(ctx, cfg.DBPath)
 		if err != nil && skipInitialSync {
@@ -252,12 +255,9 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			skipInitialSync = !needsResync
 		}
 		_, statErr := os.Stat(cfg.DBPath)
-		if deferRestartStartupSync(err, statErr, needsResync, archiveOnly) {
-			immediateStartupSync = !opts.SkipInitialSync
-			skipInitialSync = true
-		}
+		workerAfterListen = opts.StartupWorkerAfterListen && !opts.SkipInitialSync && !cfg.NoSync && !archiveOnly && err == nil && !needsResync && statErr == nil
 	}
-	if !startupRebuild && !skipInitialSync && !cfg.NoSync && !testing.Testing() {
+	if !startupRebuild && !skipInitialSync && !cfg.NoSync && !testing.Testing() && !workerAfterListen {
 		startupProgress.SetPhase("opening database")
 		result, syncErr := runStartupSyncViaWorker(ctx, cfg, startupProgress)
 		workerStartupResult, workerSyncDone = startupWorkerOutcome(result, syncErr)
@@ -410,7 +410,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			FrictionEnabled:         cfg.Friction.Enabled,
 			Emitter:                 emitter,
 			DeferStartupMaintenance: deferStartupMaintenance(
-				skipInitialSync || startupRebuild, workerSyncDone,
+				skipInitialSync || startupRebuild, workerSyncDone || workerAfterListen,
 			),
 			OnStartupReconciled: func(stats sync.SyncStats, err error) {
 				onStartupReconciled(stats, err)
@@ -454,8 +454,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		}
 
 		if !skipInitialSync && !startupRebuild {
-			if workerSyncDone {
-				// The worker already ran the full startup pass out of process.
+			if workerSyncDone || workerAfterListen {
 				// Close the worker-to-watcher event gap with a bounded streaming
 				// reconciliation over the currently available watch roots (warm:
 				// the worker persisted skip state into the archive, which the
@@ -467,11 +466,28 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 				//
 				// The reconciliation runs after the HTTP server is listening
 				// and the startup banner is printed: it can take a while on a
-				// large archive, and the archive the worker just synced is
-				// fully servable. The watcher keeps collecting events and
+				// large archive. The watcher keeps collecting events and
 				// startup maintenance keeps waiting until
 				// RecordStartupReconciled fires.
 				completeWorkerStartup = func() {
+					if workerAfterListen {
+						if idleTracker != nil {
+							done, ok := idleTracker.BeginWork()
+							if !ok {
+								return
+							}
+							defer done()
+						}
+						result, err := runWorkerWritePass(ctx, ctx, cfg, engine, database, writeLock, "startup", nil)
+						if workerNeverRan(err) {
+							_, _, err = engine.RunStartupSyncFallback(ctx, nil)
+							if err != nil && ctx.Err() == nil {
+								log.Printf("startup sync fallback: %v", err)
+							}
+							return
+						}
+						workerStartupResult, _ = startupWorkerOutcome(result, err)
+					}
 					completeWorkerStartupReconciliation(
 						ctx,
 						reconcileRootPaths(ingestion.Config()),
@@ -834,19 +850,13 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	startDaemonUsageCacheBackfill(ctx, database, idleTracker)
 	if engine != nil && !cfg.NoSync && skipInitialSync {
 		go func() {
-			grace := deferredStartupSyncGracePeriod
-			if immediateStartupSync {
-				grace = 0
-			}
-			timer := time.NewTimer(grace)
+			timer := time.NewTimer(deferredStartupSyncGracePeriod)
 			defer timer.Stop()
 			ran, fallbackErr := runDeferredStartupSyncFallback(
 				ctx, cfg, engine, database, writeLock, idleTracker, timer.C,
 			)
 			if fallbackErr != nil && ctx.Err() == nil {
 				log.Printf("deferred startup sync: %v", fallbackErr)
-			} else if ran && immediateStartupSync {
-				log.Printf("startup sync completed after listening")
 			} else if ran {
 				log.Printf(
 					"deferred startup sync completed after no foreground request arrived",
@@ -941,10 +951,6 @@ func startDaemonUsageCacheBackfill(
 	}
 }
 
-func deferRestartStartupSync(probeErr, statErr error, needsResync, archiveOnly bool) bool {
-	return probeErr == nil && statErr == nil && !needsResync && !archiveOnly
-}
-
 func runDeferredStartupSyncFallback(
 	ctx context.Context,
 	cfg config.Config,
@@ -982,9 +988,9 @@ func runDeferredStartupSyncFallback(
 	// the in-process path; a worker that ran and reported failure is surfaced
 	// without re-running. Both paths acknowledge startup so the watcher leaves
 	// collecting mode.
-	if deferredStartupSyncUsesWorker {
+	if !testing.Testing() {
 		_, ran, err := runWorkerSyncPass(
-			ctx, ctx, cfg, engine, database, lock, true, true, nil,
+			ctx, ctx, cfg, engine, database, lock, true, nil,
 		)
 		if err == nil || !workerNeverRan(err) {
 			return ran, err
@@ -1944,10 +1950,7 @@ func openWriteDBWith(
 	ctx context.Context, cfg config.Config,
 	openArchive func(context.Context, config.Config) (*db.DB, error),
 ) (*db.DB, *writeOwnerLock, error) {
-	if err := rejectLiveWritableDaemonBeforeDirectWrite(cfg); err != nil {
-		return nil, nil, err
-	}
-	lock, err := acquireWriteOwnerLock(ctx, writeLockDataDir(cfg))
+	lock, err := acquireCheckedWriteOwnerLock(ctx, cfg)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1972,6 +1975,22 @@ func openWriteDBWith(
 		return nil, nil, err
 	}
 	return database, lock, nil
+}
+
+var acquireDirectWriteOwnerLock = acquireWriteOwnerLock
+
+func acquireCheckedWriteOwnerLock(ctx context.Context, cfg config.Config) (*writeOwnerLock, error) {
+	if err := rejectLiveWritableDaemonBeforeDirectWrite(cfg); err != nil {
+		return nil, err
+	}
+	lock, err := acquireDirectWriteOwnerLock(ctx, writeLockDataDir(cfg))
+	if err != nil {
+		return nil, err
+	}
+	if err := rejectLiveWritableDaemonBeforeDirectWrite(cfg); err != nil {
+		return nil, errors.Join(err, lock.Close())
+	}
+	return lock, nil
 }
 
 func rejectLiveWritableDaemonBeforeDirectWrite(cfg config.Config) error {

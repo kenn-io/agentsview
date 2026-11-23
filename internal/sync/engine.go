@@ -1480,8 +1480,8 @@ func (e *Engine) Machine() string {
 	return e.machine
 }
 
-// SetSoleArchiveWriter permits a pass-start snapshot while the worker owns
-// the archive write lock and the daemon's writer is closed.
+// SetSoleArchiveWriter permits a pass-start snapshot while the startup worker
+// owns the archive write lock and the daemon has not opened the archive.
 func (e *Engine) SetSoleArchiveWriter(enabled bool) { e.soleArchiveWriter.Store(enabled) }
 
 // SetCheckpointAudit enables or disables the checkpoint-bypassing content
