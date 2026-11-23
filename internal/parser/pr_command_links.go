@@ -11,7 +11,23 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
-var repoPathRE = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+var (
+	repoPathRE = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+	prHostRE   = regexp.MustCompile(`^[A-Za-z0-9.-]+(?::[0-9]+)?$`)
+)
+
+var ghPRValueFlags = map[string]string{
+	"view":     "--json --jq -q --template -t",
+	"diff":     "--color --exclude -e",
+	"checks":   "--interval -i --jq -q --json --template -t",
+	"merge":    "--author-email -A --body -b --body-file -F --match-head-commit --subject -t",
+	"edit":     "--add-assignee --add-label --add-project --add-reviewer --attach --base -B --body -b --body-file -F --milestone -m --remove-assignee --remove-label --remove-project --remove-reviewer --title -t",
+	"comment":  "--attach --body -b --body-file -F",
+	"review":   "--body -b --body-file -F",
+	"close":    "--comment -c",
+	"reopen":   "--comment -c",
+	"checkout": "--branch -b --worktree",
+}
 
 func shellLiteral(parts []syntax.WordPart) (string, bool) {
 	var b strings.Builder
@@ -162,7 +178,7 @@ func CommandPRLinks(ctx context.Context, command, remote string) ([]PRLink, erro
 				specified = true
 				repo = strings.TrimPrefix(word[2:], "=")
 			case strings.HasPrefix(word, "-"):
-				if !strings.Contains(word, "=") && strings.Contains(" --json --jq -q --template -t --body -b --body-file -F --title --base -B --branch --comment -c ", " "+word+" ") {
+				if !strings.Contains(word, "=") && strings.Contains(" "+ghPRValueFlags[words[2]]+" ", " "+word+" ") {
 					i++
 				}
 			case selector == "":
@@ -178,7 +194,7 @@ func CommandPRLinks(ctx context.Context, command, remote string) ([]PRLink, erro
 			continue
 		}
 		number, err := strconv.Atoi(selector)
-		if err != nil || number <= 0 || invalid || !hostValid {
+		if err != nil || number <= 0 || invalid {
 			continue
 		}
 		if !specified {
@@ -187,12 +203,24 @@ func CommandPRLinks(ctx context.Context, command, remote string) ([]PRLink, erro
 			}
 			repo = remoteRepo
 		}
+		explicitHost := ""
+		if specified && strings.Count(repo, "/") == 2 {
+			explicitHost, repo, _ = strings.Cut(repo, "/")
+		}
+		if explicitHost == "" && !hostValid {
+			continue
+		}
+		if explicitHost != "" && !prHostRE.MatchString(explicitHost) {
+			continue
+		}
 		if !repoPathRE.MatchString(repo) {
 			continue
 		}
 		matchingRemote := remoteRepo != "" && len(CombinePRLinks([]PRLink{{Host: remoteHost, Repository: remoteRepo, Number: number}}, []PRLink{{Host: remoteHost, Repository: repo, Number: number}})) == 1
 		selectedHost := ""
-		if hostSet {
+		if explicitHost != "" {
+			selectedHost = explicitHost
+		} else if hostSet {
 			selectedHost = host
 			if matchingRemote && !strings.EqualFold(host, remoteHost) {
 				continue

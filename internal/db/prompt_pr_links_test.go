@@ -337,6 +337,7 @@ func TestToolPRLinksArchiveUpgrade(t *testing.T) {
 		{"prompt upgrade", promptPRLinksDataVersion - 1, "review https://github.com/example/repo/pull/41", "GH_HOST=github.com gh pr view 42 -R example/repo", []string{"https://github.com/example/repo/pull/41", "https://github.com/example/repo/pull/42"}},
 		{"tool upgrade", toolPRLinksDataVersion - 1, "review https://github.com/example/repo/pull/41", "GH_HOST=github.com gh pr view 42 -R example/repo", []string{"https://github.com/example/repo/pull/41", "https://github.com/example/repo/pull/42"}},
 		{"quoted command", toolPRLinksDataVersion - 1, "", "GH_HOST=github.com g''h pr view 43 -R example/repo", []string{"https://github.com/example/repo/pull/43"}},
+		{"option value", toolPRLinksDataVersion - 1, "", "gh pr edit --add-label 99 -R github.com/example/repo 45", []string{"https://github.com/example/repo/pull/45"}},
 		{"unrelated command", toolPRLinksDataVersion - 1, "", "echo high", nil},
 		{"unrelated HTTP command", toolPRLinksDataVersion - 1, "", "curl https://example.com/api", nil},
 		{"task pull", toolPRLinksDataVersion - 1, "", "https://github.com/example/repo/pull/44", []string{"https://github.com/example/repo/pull/44"}},

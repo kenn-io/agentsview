@@ -42,6 +42,9 @@ func TestCommandPRLinks(t *testing.T) {
 func TestCommandPRLinksHostAndFlags(t *testing.T) {
 	for _, tc := range []struct{ command, remote, want string }{
 		{`export GH_HOST=git.example; gh pr view 42 -R example/repo`, "", "https://git.example/example/repo/pull/42"},
+		{`gh pr edit --add-label 99 42`, "https://github.com/example/repo.git", "https://github.com/example/repo/pull/42"},
+		{`gh pr view 42 -R github.com/example/repo`, "", "https://github.com/example/repo/pull/42"},
+		{`GH_HOST=$HOST gh pr view 42 -R github.com/example/repo`, "", "https://github.com/example/repo/pull/42"},
 		{`gh pr view -R example/repo 42`, "https://github.com/example/repo.git", "https://github.com/example/repo/pull/42"},
 		{`echo hello && gh pr view 42`, "https://github.com/example/repo.git", "https://github.com/example/repo/pull/42"},
 		{`gh pr view 42 -R example/repo`, "", ""},
