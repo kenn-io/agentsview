@@ -175,6 +175,12 @@ func (ix *Index) Build(
 		capChanged = !hasCap || storedCap != runCap
 	}
 	full := o.FullRebuild || o.Backstop || firstEver || scopeChanged || corpusChanged || capChanged
+	if scopeChanged {
+		// A failed reconciliation must be retried even if the old scope returns.
+		if err := ix.metaDelete(ctx, scopeIncludeAutomatedKey); err != nil {
+			return BuildResult{}, fmt.Errorf("clearing scope: %w", err)
+		}
+	}
 	if capChanged {
 		// A partial reshape must still reconcile fully if the old cap is restored.
 		if err := ix.metaDelete(ctx, runMaxRunesMetaKey); err != nil {
@@ -223,10 +229,10 @@ func (ix *Index) Build(
 			return BuildResult{}, fmt.Errorf("storing run cap: %w", err)
 		}
 	}
-	if err := ix.setIncludeAutomatedScope(ctx, o.IncludeAutomated); err != nil {
+	if err := ix.metaSet(ctx, scopeAgentsKey, agents); err != nil {
 		return BuildResult{}, err
 	}
-	if err := ix.metaSet(ctx, scopeAgentsKey, agents); err != nil {
+	if err := ix.setIncludeAutomatedScope(ctx, o.IncludeAutomated); err != nil {
 		return BuildResult{}, err
 	}
 	if corpusFingerprint != "" {

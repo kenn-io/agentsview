@@ -501,10 +501,10 @@ agent is in the list (or the list is empty) and it is a human session or
 `include_automated = true`. The after-sync build, the periodic backstop, and
 `embeddings build` all use the configured list; there is no command-line
 override. Changing the list triggers the same full mirror reconciliation on the
-next build: vectors for agents you removed are deleted, so semantic and hybrid
-search stop returning them, and sessions from agents you added are embedded,
-including ones older than the last build. A running daemon picks up the new
-list after it restarts. Keyword search is unaffected, and the list does not
+next build: vectors for agents you removed are deleted, so semantic search stops
+returning them. Hybrid search can still return them through keyword matches.
+Sessions from agents you added are embedded, including ones older than the last
+build. A running daemon picks up the new list after it restarts. Keyword search is unaffected, and the list does not
 apply to the Recall index.
 
 ### Ollama quickstart

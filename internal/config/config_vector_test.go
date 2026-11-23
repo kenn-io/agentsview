@@ -981,3 +981,8 @@ func TestVectorConfigAgents(t *testing.T) {
 	err := loadMinimalErrWithConfig(t, map[string]any{"vector": map[string]any{"agents": []string{"nope"}}})
 	require.ErrorContains(t, err, `unknown agent "nope"`)
 }
+
+func TestVectorConfigAcceptsFreebuffAgent(t *testing.T) {
+	cfg := loadMinimalWithConfig(t, map[string]any{"vector": map[string]any{"agents": []string{"freebuff"}}})
+	assert.Equal(t, []string{"freebuff"}, cfg.Vector.Agents)
+}

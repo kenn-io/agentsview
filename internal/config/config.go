@@ -467,7 +467,7 @@ const DefaultRecallMaxRevisionLag = 256
 // no-op when the section is disabled.
 func (c VectorConfig) Validate() error {
 	for _, agent := range c.Agents {
-		if _, ok := parser.AgentByType(parser.AgentType(agent)); !ok {
+		if _, ok := parser.AgentByType(parser.AgentType(agent)); !ok && parser.AgentType(agent) != parser.AgentFreebuff {
 			return fmt.Errorf("[vector] agents: unknown agent %q", agent)
 		}
 	}
