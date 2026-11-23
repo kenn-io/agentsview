@@ -149,6 +149,7 @@ func TestGHPRCommandReviewCases(t *testing.T) {
 	}{
 		{"remote changed", `git remote set-url origin https://github.com/example/other.git && gh pr view 42`, "", true},
 		{"remote changed in subshell", `(git remote set-url origin https://github.com/example/other.git); gh pr view 42`, "", true},
+		{"subshell repository environment", `(export GH_REPO=other/repo); gh pr view 42`, "https://github.com/example/repo/pull/42", false},
 		{"remote changed explicit repo", `git remote set-url origin https://github.com/example/other.git; gh pr view 42 -R example/repo`, "https://github.com/example/repo/pull/42", true},
 		{"return to checkout", `cd /other && cd /work/repo && gh pr view 42`, "https://github.com/example/repo/pull/42", false},
 		{"return after remote changed", `git remote set-url origin https://github.com/example/other.git; cd /other; cd /work/repo; gh pr view 42`, "", true},

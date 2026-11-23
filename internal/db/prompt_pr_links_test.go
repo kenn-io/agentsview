@@ -648,3 +648,30 @@ func TestToolPRLinksBothShellUncertaintiesSurviveReopen(t *testing.T) {
 	require.Len(t, got.PRLinks, 1)
 	assert.Equal(t, "https://git.example/example/repo/pull/44", got.PRLinks[0].URL)
 }
+
+func TestToolPRLinksArchiveUpgradeQuotedCommand(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d, err := OpenIsolated(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	s := Session{ID: "quoted-command", Project: "project", Machine: "local", Agent: "claude"}
+	require.NoError(t, d.UpsertSession(t.Context(), s))
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"g''h pr view 43 -R example/repo"}`}}}}))
+	before, err := d.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	require.Len(t, before.PRLinks, 1)
+	assert.Equal(t, "https://github.com/example/repo/pull/43", before.PRLinks[0].URL)
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links='' WHERE id=?`, s.ID); err != nil {
+			return err
+		}
+		return writeUserVersion(t.Context(), tx, toolPRLinksDataVersion-1)
+	}))
+	require.NoError(t, d.Close())
+	d, err = OpenIsolated(t.Context(), path)
+	require.NoError(t, err)
+	got, err := d.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	require.Len(t, got.PRLinks, 1)
+	assert.Equal(t, "https://github.com/example/repo/pull/43", got.PRLinks[0].URL)
+}
