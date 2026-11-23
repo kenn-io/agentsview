@@ -251,8 +251,7 @@ func (db *DB) captureUsageBackfill(ctx context.Context, cache *usageCache, datab
 			return usageQuerySnapshot{}, nil, nil, false, err
 		}
 		zone := zones[i]
-		if !zone.revision.Valid || zone.foreignPricing || zone.resetEpoch != zones[0].resetEpoch {
-			trusted = false
+		if !zone.revision.Valid || zone.foreignPricing {
 			continue
 		}
 		ids, err := usageSessionsWithoutRollup(ctx, tx, zone.id, -1)
@@ -274,7 +273,7 @@ func (db *DB) captureUsageBackfill(ctx context.Context, cache *usageCache, datab
 			}
 			lowest := snapshot.ChangeRevision
 			for _, zone := range zones {
-				if !zone.revision.Valid || zone.foreignPricing || zone.resetEpoch != zones[0].resetEpoch || zone.revision.Int64 > snapshot.ChangeRevision || zone.pricing != snapshot.PricingIdentity {
+				if !usageZoneTrusted(zone, snapshot) {
 					trusted = false
 				} else {
 					lowest = min(lowest, zone.revision.Int64)
