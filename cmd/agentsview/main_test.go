@@ -4367,20 +4367,6 @@ func TestServeLifetimesReleaseDebugLog(t *testing.T) {
 	}
 }
 
-type repairLogNotifier struct {
-	out      io.Writer
-	message  string
-	started  chan struct{}
-	notified atomic.Bool
-}
-
-func (w *repairLogNotifier) Write(p []byte) (int, error) {
-	if strings.Contains(string(p), w.message) && w.notified.CompareAndSwap(false, true) {
-		close(w.started)
-	}
-	return w.out.Write(p)
-}
-
 func TestDeferredSearchIndexesHTTP(t *testing.T) {
 	for _, tc := range []struct {
 		index, catchup string
@@ -4447,13 +4433,30 @@ func TestDeferredSearchIndexesHTTP(t *testing.T) {
 			t.Cleanup(func() { require.NoError(t, probe.Close()) })
 			_, err = probe.ExecContext(t.Context(), "PRAGMA busy_timeout = 1")
 			require.NoError(t, err)
-			started := make(chan struct{})
+			started := make(chan struct{}, 1)
 			oldLog := log.Writer()
-			log.SetOutput(&repairLogNotifier{out: oldLog, message: message, started: started})
+			log.SetOutput(observedOutput{Writer: oldLog, observe: func(p []byte) {
+				if strings.Contains(string(p), message) {
+					select {
+					case started <- struct{}{}:
+					default:
+					}
+				}
+			}})
 			t.Cleanup(func() { log.SetOutput(oldLog) })
 			ctx, cancel := context.WithCancel(t.Context())
 			done := make(chan error, 1)
-			go func() { done <- database.RepairMessageFTS(ctx) }()
+			go func() {
+				// The probe may briefly acquire the writer before repair starts.
+				for {
+					err := database.RepairMessageFTS(ctx)
+					var sqliteErr sqlite3.Error
+					if !errors.As(err, &sqliteErr) || sqliteErr.Code != sqlite3.ErrBusy || ctx.Err() != nil {
+						done <- err
+						return
+					}
+				}
+			}()
 			finished := false
 			t.Cleanup(func() {
 				cancel()
@@ -4469,7 +4472,6 @@ func TestDeferredSearchIndexesHTTP(t *testing.T) {
 			case <-time.After(30 * time.Second):
 				require.FailNow(t, "repair did not start rebuilding the index")
 			}
-			time.Sleep(10 * time.Millisecond)
 			probeCtx, stopProbe := context.WithTimeout(t.Context(), 30*time.Second)
 			defer stopProbe()
 			for {
