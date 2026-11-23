@@ -99,7 +99,7 @@ func (ix *Index) reuseEncoder(enc kitvec.EncodeFunc, gen reuseGeneration) kitvec
 				args = append(args, hash)
 			}
 			placeholders := strings.TrimSuffix(strings.Repeat("?,", end-start), ",")
-			rows, err := ix.db.QueryContext(ctx, `SELECT text_hash, embedding FROM `+ix.spec.reuseTable()+` WHERE ordinal = ? AND text_hash IN (`+placeholders+`)`, args...)
+			rows, err := ix.db.QueryContext(ctx, `SELECT text_hash, embedding FROM `+ix.spec.reuseTable()+` INDEXED BY `+ix.spec.reuseTable()+`_hash WHERE ordinal = ? AND text_hash IN (`+placeholders+`)`, args...)
 			if err != nil {
 				return nil, err
 			}

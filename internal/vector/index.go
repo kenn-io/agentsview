@@ -332,6 +332,10 @@ func OpenSpec(
 				db.Close()
 				return nil, fmt.Errorf("creating chunk reuse table: %w", err)
 			}
+			if _, err := db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS `+spec.reuseTable()+`_hash ON `+spec.reuseTable()+` (ordinal, text_hash)`); err != nil {
+				db.Close()
+				return nil, fmt.Errorf("creating chunk reuse index: %w", err)
+			}
 		}
 		if _, err := db.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS `+spec.repairQueueTable()+` (

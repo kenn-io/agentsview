@@ -372,3 +372,45 @@ func TestSplitPersistedChunkBoundaries(t *testing.T) {
 	chunks := kitvec.Split("abc😀efghijklmnop", kitvec.SplitOptions{MaxRunes: 6, Overlap: 2})
 	assert.Equal(t, []kitvec.Chunk{{Index: 0, Text: "abc😀ef"}, {Index: 1, Text: "efghij"}, {Index: 2, Text: "ijklmn"}, {Index: 3, Text: "mnop"}}, chunks)
 }
+
+func TestReuseLookupUsesHashIndex(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := t.Context()
+	_, err := ix.db.ExecContext(ctx, `WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x < 20000)
+INSERT INTO message_vectors_reuse SELECT 1, printf('doc-%d', x), printf('hash-%d', x), x'0000803f0000000000000000' FROM n`)
+	require.NoError(t, err)
+	_, err = ix.db.ExecContext(ctx, `INSERT INTO message_vectors_reuse VALUES (1, 'wanted', ?, x'0000803f0000000000000000')`, contentHash("hit"))
+	require.NoError(t, err)
+	plan := explainVectorPlan(t, ix, `SELECT text_hash, embedding FROM message_vectors_reuse INDEXED BY message_vectors_reuse_hash WHERE ordinal = ? AND text_hash IN (?)`, 1, contentHash("hit"))
+	assert.Contains(t, strings.Join(plan, " "), "ordinal=? AND text_hash=?")
+	enc := ix.reuseEncoder(func(_ context.Context, texts []string) ([][]float32, error) {
+		assert.Equal(t, []string{"miss"}, texts)
+		return [][]float32{{0, 1, 0}}, nil
+	}, reuseGeneration{ordinal: 1, dimension: 3})
+	got, err := enc(ctx, []string{"miss", "hit"})
+	require.NoError(t, err)
+	assert.Equal(t, [][]float32{{0, 1, 0}, {1, 0, 0}}, got)
+}
+
+func BenchmarkReuseEncoderLookup(b *testing.B) {
+	for _, count := range []int{1, 20000} {
+		b.Run(fmt.Sprintf("rows-%d", count), func(b *testing.B) {
+			ctx := b.Context()
+			ix, err := Open(ctx, filepath.Join(b.TempDir(), "vectors.db"), false, 10)
+			require.NoError(b, err)
+			b.Cleanup(func() { assert.NoError(b, ix.Close()) })
+			_, err = ix.db.ExecContext(ctx, `WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x < ?)
+INSERT INTO message_vectors_reuse SELECT 1, printf('doc-%d', x), printf('hash-%d', x), x'0000803f0000000000000000' FROM n`, count)
+			require.NoError(b, err)
+			_, err = ix.db.ExecContext(ctx, `INSERT INTO message_vectors_reuse VALUES (1, 'wanted', ?, x'0000803f0000000000000000')`, contentHash("hit"))
+			require.NoError(b, err)
+			enc := ix.reuseEncoder(fakeBuildEncoder(), reuseGeneration{ordinal: 1, dimension: 3})
+			b.ResetTimer()
+			for b.Loop() {
+				if _, err := enc(ctx, []string{"hit", "miss"}); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
