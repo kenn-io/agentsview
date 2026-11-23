@@ -4,35 +4,37 @@ Your agents already write the raw session data. AgentsView turns it into a
 searchable archive, and turns that archive into answers your agents can use on
 their next run. Nine stops, five minutes.
 
-Updated for [v0.47.0](/docs/changelog/#0470) with the Friction Log, the prompt
-behind any line of code, and one-click search by meaning.
+Updated for [v0.48.0](/docs/changelog/#0480) with Chrome Sync for ChatGPT,
+Gemini Apps, and Grok web, word-order and image-text search, a prompt jump
+picker, and one-command agent setup.
 
 ## 01. Capture every session
 
 The daemon finds session directories for more than 60 agent formats, including
-Claude Code, Codex, Cursor, Copilot, and Gemini, and syncs them into a single
-local SQLite archive with full-text indexes. It keeps watching those
-directories, so the archive stays up to date while you work.
+Claude Code, Codex, Cursor, Copilot, Gemini, and Factory Droid, and syncs them
+into a single local SQLite archive with full-text indexes. It keeps watching
+those directories, so the archive stays up to date while you work.
 [Quick start](/docs/quickstart/).
 
-You can also sync Claude.ai through Chrome or turn on Codex Cloud on one machine
-to bring in chats stored on OpenAI's servers. Muse Code and fx sessions sync
-into the local archive as well.
+You can also sync Claude.ai, ChatGPT, Gemini Apps, and Grok web through Chrome,
+or turn on Codex Cloud on one machine to bring in chats stored on OpenAI's
+servers. Muse Code, Muse Personal, Direct API, and fx sessions sync as well.
 
 ## 02. Browse the full conversation
 
 Read the prompts, responses, reasoning, and tool calls each agent recorded.
-Filter sessions by project, agent, date, and message count, or press
-`Ctrl/Cmd+G` to open a session by ID. From the Resume menu, supported agents,
-including Pi, can pick up where they left off. [Usage guide](/docs/usage/).
+Filter sessions by project, agent, date, and message count, press `Ctrl/Cmd+G`
+to open a session by ID, or press `t` inside a session to search typed prompts
+and jump straight to one. From the Resume menu, supported agents, including Pi,
+can pick up where they left off. [Usage guide](/docs/usage/).
 
 To fix project names, turn on the opt-in
 [project workspace](/docs/data/#enable-the-project-workspace) for folder
 suggestions, transcript previews, and bulk corrections.
 
-Find related work using exact labels and Claude Code pull-request links.
-Launcher links group independently started workers under their manager and fold
-their costs into its total.
+Find related work using exact labels and pull-request links, including pull
+requests named in prompts. Launcher links group independently started workers
+under their manager and fold their costs into its total.
 
 ## 03. Monitor the fleet
 
@@ -64,8 +66,9 @@ each variant has been priced.
 
 Press `Ctrl/Cmd+K` to search, then pick a project and date range in the palette.
 To widen the search without changing the sidebar, select **All Projects**.
-Full-text search matches exact words, and you can turn on search by meaning from
-the palette or Settings to find related ideas and cite the matching
+Full-text search matches words in any order, ranks exact matches first, and can
+index text inside tool-result images; you can also turn on search by meaning
+from the palette or Settings to find related ideas and cite the matching
 conversation. [Search controls](/docs/usage/#command-palette) ·
 [Semantic search](/docs/semantic-search/).
 
@@ -76,7 +79,8 @@ transcripts. Open **Analysis** to inspect Session Vitals, which show measured
 tool execution alongside time that cannot be assigned to a phase, and click any
 activity row to jump to its transcript entry. Open the health badge to view tool
 sequences that trace errors, retries, switches, and recovery back to recorded
-calls with no model charges. [Session intelligence](/docs/session-intelligence/).
+calls with no model charges.
+[Session intelligence](/docs/session-intelligence/).
 
 Tool Usage tracks empty-result, repeat-call, and recovery rates and links
 directly to the contributing sessions. For a model assessment that cites the
@@ -100,9 +104,11 @@ explicit session scope. [Recall reference](/docs/recall/).
 Your agents can also read their own history. The MCP server exposes session
 history as assistant tools, the REST API and CLI serve scripts and hooks, and
 SSE streams live messages. An agent can check what a previous run tried before
-repeating it. Native memory plugins for Claude Code and Codex bundle recall
-instructions, focused search, and session-start refresh.
-[MCP server](/docs/mcp/) · [Session API](/docs/session-api/).
+repeating it. Run
+[`agentsview agent setup`](/docs/commands/#agentsview-agent-setup) to install
+conversation search skills and register the MCP server for Claude Code and Codex
+in one step, or install AgentsView Memory from the Claude Code plugin
+marketplace. [MCP server](/docs/mcp/) · [Session API](/docs/session-api/).
 
 Read-only MCP tools also expose file edits, tool calls, child sessions, Activity
 reports, tool usage, cost comparisons, and offline guide search. To find the

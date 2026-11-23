@@ -16,7 +16,7 @@ the whole loop with screenshots. The pages here explain how to use and maintain
 each feature.
 
 These guides follow `main` and may include changes newer than the latest
-release, **v0.47.0**. Check the [changelog](/docs/changelog/) to see what each
+release, **v0.48.0**. Check the [changelog](/docs/changelog/) to see what each
 release includes.
 
 <p class="hero-actions">

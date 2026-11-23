@@ -4,21 +4,23 @@ Browse, search, and track costs across your AI coding agents. Your session
 archive stays on your machine unless you choose a feature that shares it.
 
 This README and the [documentation](https://agentsview.io/docs/) follow `main`.
-The latest release is **v0.47.0**. Check the
+The latest release is **v0.48.0**. Check the
 [changelog](https://agentsview.io/docs/changelog/) for what it includes.
 
-Version 0.47.0 adds the
-[Friction Log](https://agentsview.io/docs/quality/#friction-log), a daily review
-of corrections, tool errors, and recurring problems that can file Kata issues.
-Find the session and prompt behind a line of code with
-[`agentsview why`](https://agentsview.io/docs/commands/#agentsview-why), and
-turn on [search by meaning](https://agentsview.io/docs/semantic-search/) from
-Settings without editing configuration. Usage and search are much faster on
-large archives. Choose message colors and a color-blind safe chart palette, and
-import Open Interpreter sessions. Commands are now grouped under `source`,
-`report`, `replica`, and `index`; older names still work. The `main` branch also
-supports Muse Personal sessions, collected by an AgentsView that runs on your
-Muse's hosted machine rather than your laptop.
+Version 0.48.0 adds Chrome Sync for
+[ChatGPT, Gemini Apps, and Grok web](https://agentsview.io/docs/chat-import/), a
+[`t` prompt picker](https://agentsview.io/docs/usage/#jump-to-a-prompt),
+word-order full-text search across SQLite and mirrors, optional
+[OCR search for tool-result images](https://agentsview.io/docs/configuration/#image-text),
+and
+[Factory Droid](https://agentsview.io/docs/configuration/#session-discovery),
+[Muse Personal](https://agentsview.io/docs/configuration/#muse-personal), and
+[Direct API](https://agentsview.io/docs/token-usage/#direct-api-sessions)
+support. It also adds
+[`agentsview agent setup`](https://agentsview.io/docs/commands/#agentsview-agent-setup)
+and the Claude Code plugin marketplace, default secret masking in exports, a
+calmer transcript layout with Reading width and Match device theme settings,
+faster startup and reporting, and x86-64-v2 CPU compatibility.
 
 <p align="center">
   <img src="https://agentsview.io/assets/generated/screenshots/dashboard.png" alt="Analytics dashboard" width="720">
@@ -561,11 +563,11 @@ RooCode-derived VS Code extension that wrote per-task JSON under
 
 Local imports use a persisted installation ID, so updates and network changes do
 not split sessions across machine identities. `telemetry-install-id` stores the
-ID. The display label defaults to the current
-hostname; set `local_machine_name` in `config.toml` for a fixed label after a
-daemon restart. Upgrades adopt historical local sessions when the archive has
-saved ownership. Older archives keep historical keys until you select the local
-ones with `agentsview db adopt-machine`; see the
+ID. The display label defaults to the current hostname; set `local_machine_name`
+in `config.toml` for a fixed label after a daemon restart. Upgrades adopt
+historical local sessions when the archive has saved ownership. Older archives
+keep historical keys until you select the local ones with
+`agentsview db adopt-machine`; see the
 [upgrade guide](https://agentsview.io/configuration/#upgrading-historical-machine-keys).
 
 One primary AgentsView instance can ingest native agent session directories

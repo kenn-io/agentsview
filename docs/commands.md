@@ -134,7 +134,7 @@ sync, browser host, and parser child protocols keep their existing launch paths.
 | `token-use ID` (already deprecated)        | `session usage ID --json`                                          |
 
 Keep using `agentsview usage grok <csv>` to import xAI billing files. Its
-deprecation notice names `report usage grok`, which does not exist in 0.47.0.
+deprecation notice names `report usage grok`, which does not exist in 0.48.0.
 
 `session prune` operates on the local archive only and rejects the session
 group's inherited `--server`, `--server-token-file`, `--pg`, `--json`, and
