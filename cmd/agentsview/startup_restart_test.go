@@ -64,6 +64,7 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	cfg.Host = "127.0.0.1"
 	cfg.EventsCoalesceInterval = 0
+	writeRestartSession(t, cfg, "visible-seed")
 	var seed bytes.Buffer
 	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &seed))
 	writeRestartSession(t, cfg, "before-worker")
@@ -88,8 +89,8 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		require.FailNow(t, "worker did not start")
 	}
-	page := restartGet(t, base+"/api/v1/sessions?limit=25&include_one_shot=true")
-	require.Contains(t, page, "session0")
+	page := restartGet(t, base+"/api/v1/sessions/sidebar-index?limit=500")
+	require.Contains(t, page, "visible-seed")
 	require.Contains(t, restartGet(t, base+"/api/v1/sync/status"), `"startup_pending":true`)
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
@@ -110,10 +111,10 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 		}
 	}
 	require.True(t, found, "committed sessions should emit an event: %v", scanner.Err())
-	require.Contains(t, restartGet(t, base+"/api/v1/sessions?limit=25"), "before-worker")
+	require.Contains(t, restartGet(t, base+"/api/v1/sessions/sidebar-index?limit=500"), "before-worker")
 	var body string
 	if !assert.Eventually(t, func() bool {
-		body = restartGet(t, base+"/api/v1/sessions?limit=25")
+		body = restartGet(t, base+"/api/v1/sessions/sidebar-index?limit=500")
 		return strings.Contains(body, "before-worker") && strings.Contains(restartGet(t, base+"/api/v1/sync/status"), `"startup_pending":false`)
 	}, 30*time.Second, 100*time.Millisecond) {
 		t.Logf("last response: %s", body)
