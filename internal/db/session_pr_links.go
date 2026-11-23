@@ -455,6 +455,7 @@ type codeModeVisitor struct {
 	ctx         context.Context
 	cwd, remote string
 	links       [][]PRLink
+	unknown     bool
 }
 
 func (v *codeModeVisitor) Enter(node js.INode) js.IVisitor {
@@ -463,7 +464,7 @@ func (v *codeModeVisitor) Enter(node js.INode) js.IVisitor {
 		return nil
 	}
 	call, ok := node.(*js.CallExpr)
-	if !ok || len(call.Args.List) != 1 || call.Args.List[0].Rest {
+	if !ok {
 		return v
 	}
 	dot, ok := call.X.(*js.DotExpr)
@@ -474,14 +475,20 @@ func (v *codeModeVisitor) Enter(node js.INode) js.IVisitor {
 	if !ok || string(owner.Data) != "tools" {
 		return v
 	}
+	if len(call.Args.List) != 1 || call.Args.List[0].Rest {
+		v.unknown = true
+		return v
+	}
 	object, ok := call.Args.List[0].Value.(*js.ObjectExpr)
 	if !ok {
+		v.unknown = true
 		return v
 	}
 	var command, dir string
 	knownDir := true
 	for _, property := range object.List {
 		if property.Spread || property.Name == nil || property.Name.IsComputed() {
+			v.unknown = true
 			return v
 		}
 		name := strings.Trim(string(property.Name.Literal.Data), "\"'")
@@ -495,13 +502,14 @@ func (v *codeModeVisitor) Enter(node js.INode) js.IVisitor {
 		}
 	}
 	if command == "" {
+		v.unknown = true
 		return v
 	}
 	remote := v.remote
 	if !knownDir || dir != "" && !samePRWorkingDirectory(v.cwd, dir) {
 		remote = ""
 	}
-	links, err := parser.CommandPRLinks(v.ctx, command, remote, true)
+	links, err := parser.CommandPRLinks(v.ctx, command, remote, !v.unknown)
 	if err == nil {
 		v.links = append(v.links, links)
 	}

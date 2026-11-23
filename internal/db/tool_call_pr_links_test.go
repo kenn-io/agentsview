@@ -77,6 +77,23 @@ func TestToolCallPRLinksDynamicCode(t *testing.T) {
 	assert.Empty(t, toolCallPRLinks(t, messages, "", "https://github.com/example/repo.git"))
 }
 
+func TestToolCallPRLinksUnknownCodeCommand(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  int
+	}{
+		{`await tools.exec_command({cmd: value}); await tools.exec_command({cmd: "gh pr view 42"})`, 0},
+		{`await tools.exec_command(value); await tools.exec_command({cmd: "gh pr view 42"})`, 0},
+		{`await tools.exec_command({cmd: value}); await tools.exec_command({cmd: "gh pr view 42 -R example/other"})`, 1},
+		{`await tools.exec_command({cmd: "echo hello"}); await tools.exec_command({cmd: "gh pr view 42"})`, 1},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			messages := []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", ToolName: "exec", InputJSON: tc.input}}}}
+			assert.Len(t, toolCallPRLinks(t, messages, "", "https://github.com/example/repo.git"), tc.want)
+		})
+	}
+}
+
 func TestToolCallPRLinksWorkingDirectory(t *testing.T) {
 	for _, tc := range []struct {
 		input string

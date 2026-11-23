@@ -159,6 +159,9 @@ func CommandPRLinks(ctx context.Context, command, remote string, allowBare bool)
 		if !ok {
 			continue
 		}
+		if hasCommandSubstitution(call) {
+			bareSafe = false
+		}
 		for _, a := range call.Assigns {
 			recordHost(a)
 		}
@@ -276,6 +279,17 @@ func CommandPRLinks(ctx context.Context, command, remote string, allowBare bool)
 		}
 	}
 	return CombinePRLinks(links...), nil
+}
+
+func hasCommandSubstitution(node syntax.Node) bool {
+	found := false
+	syntax.Walk(node, func(node syntax.Node) bool {
+		if _, ok := node.(*syntax.CmdSubst); ok {
+			found = true
+		}
+		return !found
+	})
+	return found
 }
 
 func literalCondition(stmts []*syntax.Stmt) (bool, bool) {

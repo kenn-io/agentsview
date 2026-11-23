@@ -17,6 +17,8 @@ func TestCommandPRLinks(t *testing.T) {
 		{`echo hi | gh pr diff https://github.com/example/repo/pull/42`, "https://github.com/example/repo/pull/42"},
 		{`gh pr view 42 --body 'a;b'`, "https://github.com/example/repo/pull/42"},
 		{`gh pr view 42 --body "$VAR"`, "https://github.com/example/repo/pull/42"},
+		{`gh pr comment 42 --body "$(git config remote.origin.url https://github.com/example/other.git)"`, ""},
+		{`gh pr comment 42 -R example/repo --body "$(git config remote.origin.url https://github.com/example/other.git)"`, "https://github.com/example/repo/pull/42"},
 		{`export GH_REPO=example/other; gh pr view 42`, ""},
 		{`gh pr view $(echo 42) -R example/repo`, ""},
 		{`gh pr create 42 -R example/repo`, ""},
