@@ -312,8 +312,7 @@
 
   onMount(() => {
     seedQualityYoke();
-    sessions.loadProjects();
-    sessions.loadAgents();
+    sessions.refreshFilterOptions();
     initialFetchPending = sessions.machineFilterPending;
     if (!initialFetchPending) fetchQualitySignals();
     unsubEvents = events.subscribeDebounced(() => {

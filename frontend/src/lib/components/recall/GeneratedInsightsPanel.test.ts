@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
   downloadInsightExport: vi.fn().mockResolvedValue(undefined),
   generate: vi.fn(),
   load: vi.fn().mockResolvedValue(undefined),
-  loadAgents: vi.fn(),
+  refreshFilterOptions: vi.fn(),
   loadProjects: vi.fn(),
   select: vi.fn(),
   selectTask: vi.fn(),
@@ -37,7 +37,7 @@ const state = vi.hoisted(() => {
     sessions: {
       agents: [] as Array<{ name: string; session_count: number }>,
       projects: [],
-      loadAgents: mocks.loadAgents,
+      refreshFilterOptions: mocks.refreshFilterOptions,
       loadProjects: mocks.loadProjects,
     },
     store: {

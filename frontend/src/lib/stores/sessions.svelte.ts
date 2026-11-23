@@ -1410,7 +1410,7 @@ class SessionsStore {
     void sync.loadStats(this.metadataParams);
   }
 
-  private refreshFilterOptions() {
+  refreshFilterOptions() {
     this.invalidateProjectCache();
     this.agentsVersion++;
     this.agentsLoaded = false;
@@ -1554,7 +1554,7 @@ class SessionsStore {
     }
     if (event.scope === "sessions" || event.scope === "sync") {
       if (event.scope === "sessions") void this.refreshActiveSession();
-      this.refreshFilterOptions();
+      this.invalidateProjectCache();
       this.scheduleIndexRefresh();
       this.bumpActiveSessionUsageVersion();
       this.refreshActiveChildSessions();
