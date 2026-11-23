@@ -714,9 +714,14 @@ Because Claude Code records these links for the whole transcript, every session
 split from that transcript, such as a rewind's fork, carries them like its name
 and git branch.
 
-Existing hosted sessions gain command links when their source group is projected
-again. Operators can [schedule a reparse](https://agentsview.io/docs/hosted-raw-sync/#reparse-and-rollback)
-of retained inputs. Bare numbers require repository evidence in those inputs.
+Hosted sessions use the repository recorded by each active source. For a bare
+number without an explicit repository, every active source contributing to the
+session must identify the same repository. If a source has no repository or the
+sources disagree, the number does not produce a link.
+
+Older hosted source records can gain repository evidence when their retained
+inputs are reparsed. Operators can [schedule a reparse](https://agentsview.io/docs/hosted-raw-sync/#reparse-and-rollback)
+of retained inputs. A departed source cannot be reparsed until it returns.
 
 To filter by pull request, use `session list --pr` or the `pr` query parameter.
 Pass `owner/repo` for any pull request in that repository, `owner/repo#123` for
