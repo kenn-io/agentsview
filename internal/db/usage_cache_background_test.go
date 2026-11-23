@@ -999,6 +999,7 @@ func TestUsageBackfillAppendSharedIdentity(t *testing.T) {
 		WHERE e.claude_message_id = 'shared' AND e.claude_request_id = 'request'
 		ORDER BY i.session_id`)
 	require.NoError(t, err)
+	defer rows.Close()
 	var sessions []string
 	var tokens []int
 	for rows.Next() {
