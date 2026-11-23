@@ -710,7 +710,7 @@ func TestToolPRLinksUsageCleanupAndReplacement(t *testing.T) {
 	assert.Equal(t, 2, got.PRLinks[0].Number)
 }
 
-func TestReviewFilterConditionalRepoAmongSessions(t *testing.T) {
+func TestPRFilterExcludesUncertainConditionalRepo(t *testing.T) {
 	d := testDB(t)
 	for _, tc := range []struct{ id, command string }{
 		{"conditional", `if condition; then export GH_REPO=example/one; else export GH_REPO=example/two; fi; gh pr view 42`},
@@ -723,7 +723,7 @@ func TestReviewFilterConditionalRepoAmongSessions(t *testing.T) {
 	assert.Equal(t, []string{"explicit"}, listSortedIDs(t, d, SessionFilter{PR: PRFilter{Repository: "example/two", Number: 42}}))
 }
 
-func TestReviewSharedShellExportedRepo(t *testing.T) {
+func TestSharedShellExportedRepoSurvivesAppendAndRefresh(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "archive.db")
 	d, err := OpenIsolated(t.Context(), path)
 	require.NoError(t, err)
@@ -762,7 +762,7 @@ func TestReviewSharedShellExportedRepo(t *testing.T) {
 	assert.Equal(t, "https://github.com/example/other/pull/43", after.PRLinks[1].URL)
 }
 
-func TestScratchCwdChangeConsistent(t *testing.T) {
+func TestCwdChangeRefreshesToolPRLinks(t *testing.T) {
 	for _, method := range []string{"session", "path", "upsert", "identity", "batch"} {
 		t.Run(method, func(t *testing.T) {
 			d := testDB(t)

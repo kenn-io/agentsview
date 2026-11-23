@@ -170,8 +170,9 @@ func TestLauncherPromptPRLinks(t *testing.T) {
 	}
 }
 
-func TestReviewConditionalRepo(t *testing.T) {
+func TestConditionalRepoAssignmentsDoNotSelectBranch(t *testing.T) {
 	for _, command := range []string{
+		`if true; then export GH_REPO=example/one; else export GH_REPO=example/two; fi; gh pr view 42`,
 		`if condition; then export GH_REPO=example/one; else export GH_REPO=example/two; fi; gh pr view 42`,
 		`condition && export GH_REPO=example/one; gh pr view 42`,
 		`export GH_REPO=example/one; if condition; then unset GH_REPO; fi; gh pr view 42`,
