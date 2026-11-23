@@ -41,6 +41,24 @@ func TestPromptPRLinksStoredMessages(t *testing.T) {
 	assert.Equal(t, "https://github.com/o/r/pull/13", got.PRLinks[3].URL)
 }
 
+func TestToolPRLinksExecAndUncalledFunctionFilter(t *testing.T) {
+	d := testDB(t)
+	for _, tc := range []struct{ id, command string }{
+		{"exec", `{"command":"gh pr view 42 -R example/repo"}`},
+		{"function", `{"command":"review() { gh pr view 42 -R example/repo; }; echo ready"}`},
+	} {
+		s := Session{ID: tc.id, Project: "project", Machine: "local", Agent: "muse", MessageCount: 1}
+		require.NoError(t, d.UpsertSession(t.Context(), s))
+		require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "assistant", ToolCalls: []ToolCall{{Category: "Bash", ToolName: "exec", InputJSON: tc.command}}}}))
+	}
+	filter, err := ParsePRFilter("example/repo#42")
+	require.NoError(t, err)
+	page, err := d.ListSessions(t.Context(), SessionFilter{PR: filter})
+	require.NoError(t, err)
+	require.Len(t, page.Sessions, 1)
+	assert.Equal(t, "exec", page.Sessions[0].ID)
+}
+
 func TestPromptPRLinksArchiveUpgrade(t *testing.T) {
 	t.Run("missing column", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "archive.db")

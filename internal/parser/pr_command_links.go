@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"fmt"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -27,6 +28,8 @@ var ghPRValueFlags = map[string]string{
 	"close":    "--comment -c",
 	"reopen":   "--comment -c",
 	"checkout": "--branch -b --worktree",
+	"lock":     "--reason -r",
+	"revert":   "--body -b --body-file -F --title -t",
 }
 
 func shellLiteral(parts []syntax.WordPart) (string, bool) {
@@ -58,12 +61,12 @@ func shellLiteral(parts []syntax.WordPart) (string, bool) {
 
 // CommandPRLinks finds PRs named by direct gh commands in a shell input.
 func CommandPRLinks(ctx context.Context, command, remote string, allowBare bool) ([]PRLink, error) {
-	links, _, _, _, _, err := AnalyzePRCommand(ctx, command, remote, allowBare, false)
+	links, _, _, _, _, err := AnalyzePRCommand(ctx, command, "", remote, allowBare, false)
 	return links, err
 }
 
 // AnalyzePRCommand extracts links and shared shell context from one parse.
-func AnalyzePRCommand(ctx context.Context, command, remote string, allowBare, hostUnknown bool) ([]PRLink, bool, bool, bool, []PRLink, error) {
+func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBare, hostUnknown bool) ([]PRLink, bool, bool, bool, []PRLink, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, false, false, nil, err
 	}
@@ -71,7 +74,7 @@ func AnalyzePRCommand(ctx context.Context, command, remote string, allowBare, ho
 	if err != nil {
 		return nil, false, false, false, nil, ctx.Err()
 	}
-	directoryChanged, repositoryChanged, persistent, firstRepo, firstHost, calls := bashChangesRepositoryContext(file)
+	directoryChanged, repositoryChanged, persistent, firstRepo, firstHost, calls := bashChangesRepositoryContext(file, cwd)
 	remoteHost, remoteRepo := "", ""
 	if normalized, ok := export.NormalizeGitRemote(remote); ok {
 		remoteHost, remoteRepo, _ = strings.Cut(normalized, "/")
@@ -114,7 +117,7 @@ func AnalyzePRCommand(ctx context.Context, command, remote string, allowBare, ho
 			words[2] = "checkout"
 		}
 		switch words[2] {
-		case "view", "checkout", "edit", "diff", "checks", "comment", "review", "ready", "merge", "close", "reopen":
+		case "view", "checkout", "edit", "diff", "checks", "comment", "review", "ready", "merge", "close", "reopen", "update-branch", "lock", "unlock", "revert":
 		default:
 			continue
 		}
@@ -164,7 +167,7 @@ func AnalyzePRCommand(ctx context.Context, command, remote string, allowBare, ho
 			links = append(links, found)
 			continue
 		}
-		number, err := strconv.Atoi(selector)
+		number, err := strconv.Atoi(strings.TrimPrefix(selector, "#"))
 		if err != nil || number <= 0 || invalid {
 			continue
 		}
@@ -225,8 +228,13 @@ func hasCommandSubstitution(node syntax.Node) bool {
 	return found
 }
 
-func bashChangesRepositoryContext(file *syntax.File) (bool, bool, bool, syntax.Pos, syntax.Pos, []*syntax.CallExpr) {
-	type scope struct{ local, function bool }
+// SamePRWorkingDirectory compares recorded checkout paths across platforms.
+func SamePRWorkingDirectory(cwd, dir string) bool {
+	return cwd != "" && dir != "" && path.Clean(strings.ReplaceAll(cwd, `\`, "/")) == path.Clean(strings.ReplaceAll(dir, `\`, "/"))
+}
+
+func bashChangesRepositoryContext(file *syntax.File, cwd string) (bool, bool, bool, syntax.Pos, syntax.Pos, []*syntax.CallExpr) {
+	type scope struct{ local bool }
 	type event struct {
 		node  syntax.Node
 		scope scope
@@ -248,7 +256,7 @@ func bashChangesRepositoryContext(file *syntax.File) (bool, bool, bool, syntax.P
 		case *syntax.FuncDecl:
 			functions[n.Name.Value] = true
 			events = append(events, event{node, current})
-			current.local, current.function = true, true
+			return false
 		case *syntax.Subshell, *syntax.CmdSubst, *syntax.ProcSubst:
 			current.local = true
 		case *syntax.CallExpr:
@@ -315,7 +323,7 @@ func bashChangesRepositoryContext(file *syntax.File) (bool, bool, bool, syntax.P
 					repository = true
 				}
 			}
-			if name == "cd" || name == "pushd" || name == "popd" {
+			if (name == "cd" || name == "pushd" || name == "popd") && !(name == "cd" && len(n.Args) == 2 && SamePRWorkingDirectory(cwd, words[1])) {
 				record(&firstRepo, n.Pos())
 				if !item.scope.local {
 					directory = true
@@ -335,7 +343,7 @@ func bashChangesRepositoryContext(file *syntax.File) (bool, bool, bool, syntax.P
 					}
 				}
 			}
-			if !item.scope.function && (name == "git" || name == "gh") && repositoryMutation(words) {
+			if (name == "git" || name == "gh") && repositoryMutation(words) {
 				persistent = true
 			}
 			if !item.scope.local && (repositoryMutation(words) || functions[name] || name == "eval" || name == "source" || name == ".") {

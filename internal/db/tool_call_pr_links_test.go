@@ -80,6 +80,8 @@ func TestToolCallPRLinksWorkingDirectory(t *testing.T) {
 		{`{"cmd":"GH_HOST=git.example gh pr view 42 -R example/repo","workdir":"/work/other"}`, 1},
 		{`{"cmd":"gh pr view 42","workdir":"/work/./repo"}`, 1},
 		{`{"cmd":"gh pr view 42 -R github.com/example/repo","workdir":"/work/other"}`, 1},
+		{`{"cmd":"cd /work/repo && gh pr view 42"}`, 1},
+		{`{"cmd":"cd /work/other && gh pr view 42"}`, 0},
 		{`{"cmd":"gh pr view https://github.com/example/repo/pull/42","workdir":"/work/other"}`, 1},
 	} {
 		t.Run(tc.input, func(t *testing.T) {
@@ -127,9 +129,13 @@ func TestToolCallPRLinksPlainInputAndRepositoryChanges(t *testing.T) {
 	}
 }
 
-func TestToolCallPRLinksIgnoresCodeMode(t *testing.T) {
-	for _, input := range []string{`tools.exec_command({cmd:"gh pr view 42 -R example/repo"})`, `{"cmd":"gh pr view 42 -R example/repo"}`} {
+func TestToolCallPRLinksExecInputs(t *testing.T) {
+	for _, input := range []string{`tools.exec_command({cmd:"gh pr view 42 -R example/repo"})`, `{"code":"tools.exec_command({cmd:'gh pr view 42 -R example/repo'})"}`} {
 		messages := []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", ToolName: "exec", InputJSON: input}}}}
 		assert.Empty(t, toolCallPRLinks(t, messages, "", ""))
+	}
+	for _, input := range []string{`{"command":"gh pr view 42 -R example/repo"}`, `{"cmd":"gh pr view 42 -R example/repo"}`} {
+		messages := []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", ToolName: "exec", InputJSON: input}}}}
+		assert.Len(t, toolCallPRLinks(t, messages, "", ""), 1)
 	}
 }

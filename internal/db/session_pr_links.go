@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -393,10 +392,10 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 	if category != "Bash" || len(input) > 256*1024 {
 		return nil, ctx.Err()
 	}
-	if toolName == "exec" {
+	plain := !jsontext.Value(input).IsValid()
+	if toolName == "exec" && plain {
 		return nil, ctx.Err()
 	}
-	plain := !jsontext.Value(input).IsValid()
 	var payload struct {
 		Command          jsontext.Value `json:"command"`
 		Cmd              string         `json:"cmd"`
@@ -417,7 +416,7 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 	}
 	allowBare := !sharedContext.directory && !sharedContext.environment && !sharedContext.repository
 	if dir != "" {
-		allowBare = !sharedContext.environment && !sharedContext.repository && samePRWorkingDirectory(cwd, dir)
+		allowBare = !sharedContext.environment && !sharedContext.repository && parser.SamePRWorkingDirectory(cwd, dir)
 	}
 	if !allowBare {
 		remote = ""
@@ -436,7 +435,7 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 	}
 	var lists [][]PRLink
 	for _, command := range payload.Commands {
-		links, directory, repository, persistent, usesRemote, err := parser.AnalyzePRCommand(ctx, command, remote, allowBare, sharedContext.environment || sharedContext.repository)
+		links, directory, repository, persistent, usesRemote, err := parser.AnalyzePRCommand(ctx, command, cwd, remote, allowBare, sharedContext.environment || sharedContext.repository)
 		if change != nil {
 			change.directory = change.directory || directory
 			change.repository = change.repository || persistent
@@ -451,10 +450,6 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 		lists = append(lists, links)
 	}
 	return parser.CombinePRLinks(lists...), nil
-}
-
-func samePRWorkingDirectory(cwd, dir string) bool {
-	return cwd != "" && dir != "" && path.Clean(strings.ReplaceAll(cwd, `\`, "/")) == path.Clean(strings.ReplaceAll(dir, `\`, "/"))
 }
 
 // ToolCallPRLinks derives links from a transcript's tool calls.
