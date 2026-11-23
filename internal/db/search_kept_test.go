@@ -3,6 +3,7 @@
 package db
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -103,7 +104,7 @@ func TestCJKRepairPublishesSearchTokenWithIndex(t *testing.T) {
 	require.Len(t, page.Results, 1)
 	var token string
 	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT value FROM archive_metadata WHERE key='search_history_token'`).Scan(&token))
-	_, err = d.getWriter().ExecContext(ctx, `UPDATE stats SET value='stale' WHERE key=?`, cjkFTSFingerprintStatsKey)
+	_, err = d.getWriter().ExecContext(ctx, `DELETE FROM stats WHERE key=?`, cjkFTSFingerprintStatsKey)
 	require.NoError(t, err)
 	d.searchIndexRepairPending.Store(true)
 	_, err = d.getWriter().ExecContext(ctx, `CREATE TRIGGER fail_search_token BEFORE INSERT ON archive_metadata WHEN NEW.key='search_history_token' BEGIN SELECT RAISE(ABORT, 'token failure'); END`)
@@ -111,8 +112,7 @@ func TestCJKRepairPublishesSearchTokenWithIndex(t *testing.T) {
 	require.ErrorContains(t, d.RepairMessageFTS(ctx), "token failure")
 	require.False(t, d.HasCJKFTS(ctx), "a failed token update must roll back the rebuilt index")
 	var fingerprint, after string
-	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT value FROM stats WHERE key=?`, cjkFTSFingerprintStatsKey).Scan(&fingerprint))
-	require.Equal(t, "stale", fingerprint)
+	require.ErrorIs(t, d.getReader().QueryRowContext(ctx, `SELECT value FROM stats WHERE key=?`, cjkFTSFingerprintStatsKey).Scan(&fingerprint), sql.ErrNoRows)
 	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT value FROM archive_metadata WHERE key='search_history_token'`).Scan(&after))
 	require.Equal(t, token, after)
 	_, err = d.getWriter().ExecContext(ctx, `DROP TRIGGER fail_search_token`)
@@ -124,28 +124,6 @@ func TestCJKRepairPublishesSearchTokenWithIndex(t *testing.T) {
 	require.Len(t, page.Results, 2)
 	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT value FROM archive_metadata WHERE key='search_history_token'`).Scan(&after))
 	require.NotEqual(t, token, after)
-}
-
-func TestSubstringRepairKeepsFullTextSearchPage(t *testing.T) {
-	ctx := t.Context()
-	d := testDB(t)
-	seedSearchSession(t, d, "session", "project", [][2]string{{"user", "needle"}})
-	var loads atomic.Int32
-	d.searchKept.Size = func(SearchPage) int64 { loads.Add(1); return 1 }
-	filter := SearchFilter{Query: "needle"}
-	page, err := d.Search(ctx, filter)
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-	for _, stmt := range dropSubstringIndexSQL {
-		_, err := d.getWriter().ExecContext(ctx, stmt)
-		require.NoError(t, err)
-	}
-	d.searchIndexRepairPending.Store(true)
-	require.NoError(t, d.RepairMessageFTS(ctx))
-	repeat, err := d.Search(ctx, filter)
-	require.NoError(t, err)
-	require.Equal(t, page, repeat)
-	require.EqualValues(t, 1, loads.Load())
 }
 
 func TestSearchKeptFirstMessageEdit(t *testing.T) {

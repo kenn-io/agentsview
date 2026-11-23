@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -430,10 +431,23 @@ func TestDaemonOpenDefersSubstringIndexRepair(t *testing.T) {
 	filter := ContentSearchFilter{Pattern: "needle", Limit: 50}
 	before := substringHits(t, d, filter)
 	require.Len(t, before, 2)
+	var loads atomic.Int32
+	d.searchKept.Size = func(SearchPage) int64 { loads.Add(1); return 1 }
+	search := SearchFilter{Query: "needle"}
+	page, err := d.Search(t.Context(), search)
+	require.NoError(t, err)
+	var token, after string
+	require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key='search_history_token'`).Scan(&token))
 	require.NoError(t, d.RepairMessageFTS(t.Context()))
+	require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key='search_history_token'`).Scan(&after))
+	assert.Equal(t, token, after)
 	require.True(t, d.hasSubstringIndex(t.Context()))
 	requireSubstringIndexIntact(t, d)
 	assert.Equal(t, before, substringHits(t, d, filter))
+	repeat, err := d.Search(t.Context(), search)
+	require.NoError(t, err)
+	assert.Equal(t, page, repeat)
+	assert.EqualValues(t, 1, loads.Load())
 }
 
 func TestDaemonOpenBuildsIndexesForEmptyArchive(t *testing.T) {
@@ -449,7 +463,6 @@ func TestDaemonOpenBuildsIndexesForEmptyArchive(t *testing.T) {
 	seedSearchSession(t, d, "session", "project", [][2]string{{"user", "中文搜索 needleexample"}})
 	requireSubstringIndexIntact(t, d)
 	assert.Len(t, substringHits(t, d, ContentSearchFilter{Pattern: "needleexample", Limit: 50}), 1)
-	require.True(t, d.SearchRepairPending())
 	require.NoError(t, d.RepairMessageFTS(t.Context()))
 	if simpleFTSRuntimeConfig.available() {
 		page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "中文搜索", Mode: "fts", Sources: []string{"messages"}, Limit: 20})

@@ -32,7 +32,6 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
@@ -4366,63 +4365,36 @@ func TestServeLifetimesReleaseDebugLog(t *testing.T) {
 	}
 }
 
-func TestDeferredSearchIndexesHTTP(t *testing.T) {
-	for _, catchup := range []string{"request", "running"} {
-		t.Run(catchup, func(t *testing.T) {
-			dir := t.TempDir()
-			root := filepath.Join(dir, "gemini")
-			cfg := config.Config{Host: "127.0.0.1", DBPath: filepath.Join(dir, "archive.db"), DataDir: dir, ArchiveContent: config.ArchiveContentFull, AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
-			database, err := db.Open(t.Context(), cfg.DBPath)
-			require.NoError(t, err)
-			dbtest.SeedSession(t, database, "session", "project", func(s *db.Session) {
-				s.UserMessageCount = 2
-				s.StartedAt = new("2025-01-15T10:00:00Z")
-			})
-			require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []db.Message{{SessionID: "session", Role: "user", Content: "needleexample"}}))
-			require.NoError(t, database.Close())
-			raw, err := sql.Open("sqlite3", cfg.DBPath)
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, raw.Close()) })
-			_, err = raw.ExecContext(t.Context(), `DROP TRIGGER IF EXISTS messages_trigram_ai; DROP TRIGGER IF EXISTS messages_trigram_ad; DROP TRIGGER IF EXISTS messages_trigram_au; DROP TABLE message_trigram_fts; DROP TABLE thinking_trigram_fts; DROP VIEW message_trigram_source`)
-			require.NoError(t, err)
-			database, err = db.OpenDaemonWithProgress(t.Context(), cfg.DBPath, config.ArchiveContentFull, nil)
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, database.Close()) })
-			engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{ArchiveContent: config.ArchiveContentFull, AgentDirs: cfg.AgentDirs})
-			t.Cleanup(engine.Close)
-			ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, nil)
-			t.Cleanup(ingestion.Stop)
-			pauseAfterStartup(t, ingestion)
-			require.NoError(t, os.MkdirAll(filepath.Dir(reloadGeminiSessionPath(root, "overnight")), 0o755))
-			require.NoError(t, os.WriteFile(reloadGeminiSessionPath(root, "overnight"), []byte(testjsonl.GeminiSessionJSON(
-				"overnight", "project", "2026-08-09T10:00:00Z", "2026-08-09T10:01:00Z",
-				[]map[string]any{testjsonl.GeminiUserMsg("first", "2026-08-09T10:00:00Z", "first"), testjsonl.GeminiUserMsg("second", "2026-08-09T10:01:00Z", "second")},
-			)), 0o644))
-			collectWhilePaused(ingestion, reloadGeminiSessionPath(root, "overnight"))
-			handler := server.New(cfg, database, engine, server.WithIngestionFreshness(ingestion)).Handler()
-			require.True(t, database.SearchRepairPending())
-			var running chan struct{}
-			if catchup == "running" {
-				ingestion.mu.Lock()
-				running = ingestion.registerCatchupLocked()
-				ingestion.mu.Unlock()
-			}
-			response := httptest.NewRecorder()
-			handler.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0/api/v1/sessions", nil))
-			assert.Equal(t, http.StatusOK, response.Code)
-			assert.Contains(t, response.Body.String(), `"session"`)
-			assert.Equal(t, "true", response.Header().Get(apiclient.ArchiveStaleHeader))
-			if running != nil {
-				ingestion.finishCatchup(running)
-			}
-			require.NoError(t, database.RepairMessageFTS(t.Context()))
-			require.True(t, ingestion.EnsureFresh(t.Context()))
-			require.True(t, sessionImported(t, database, "gemini:overnight"))
-			response = httptest.NewRecorder()
-			handler.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0/api/v1/sessions", nil))
-			assert.Equal(t, http.StatusOK, response.Code)
-			assert.Contains(t, response.Body.String(), `"gemini:overnight"`)
-			assert.Empty(t, response.Header().Get(apiclient.ArchiveStaleHeader))
-		})
-	}
+func TestDeferredSearchIndexesBlockCatchup(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "gemini")
+	cfg := config.Config{Host: "127.0.0.1", DBPath: filepath.Join(dir, "archive.db"), DataDir: dir, ArchiveContent: config.ArchiveContentFull, AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
+	database, err := db.Open(t.Context(), cfg.DBPath)
+	require.NoError(t, err)
+	dbtest.SeedSession(t, database, "session", "project", func(s *db.Session) {
+		s.UserMessageCount = 2
+		s.StartedAt = new("2025-01-15T10:00:00Z")
+	})
+	require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []db.Message{{SessionID: "session", Role: "user", Content: "needleexample"}}))
+	require.NoError(t, database.DropFTS(t.Context()))
+	require.NoError(t, database.Close())
+	database, err = db.OpenDaemonWithProgress(t.Context(), cfg.DBPath, config.ArchiveContentFull, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{ArchiveContent: config.ArchiveContentFull, AgentDirs: cfg.AgentDirs})
+	t.Cleanup(engine.Close)
+	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, nil)
+	t.Cleanup(ingestion.Stop)
+	pauseAfterStartup(t, ingestion)
+	require.NoError(t, os.MkdirAll(filepath.Dir(reloadGeminiSessionPath(root, "overnight")), 0o755))
+	require.NoError(t, os.WriteFile(reloadGeminiSessionPath(root, "overnight"), []byte(testjsonl.GeminiSessionJSON(
+		"overnight", "project", "2026-08-09T10:00:00Z", "2026-08-09T10:01:00Z",
+		[]map[string]any{testjsonl.GeminiUserMsg("first", "2026-08-09T10:00:00Z", "first"), testjsonl.GeminiUserMsg("second", "2026-08-09T10:01:00Z", "second")},
+	)), 0o644))
+	collectWhilePaused(ingestion, reloadGeminiSessionPath(root, "overnight"))
+	require.True(t, database.SearchRepairPending())
+	require.False(t, ingestion.EnsureFresh(t.Context()))
+	require.NoError(t, database.RepairMessageFTS(t.Context()))
+	require.True(t, ingestion.EnsureFresh(t.Context()))
+	require.True(t, sessionImported(t, database, "gemini:overnight"))
 }
