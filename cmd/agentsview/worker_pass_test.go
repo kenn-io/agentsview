@@ -914,6 +914,49 @@ func TestRunWorkerSyncPassLockHeldRecheckSkipsDuplicate(t *testing.T) {
 	assert.NoError(t, writeOneSession(t.Context(), database), "writer restored after both passes")
 }
 
+func TestStartupWorkerSkipsWhenForegroundSyncReconciles(t *testing.T) {
+	cfg := testConfigWithClaudeFixture(t)
+	database, lock := openTestWriteDB(t, cfg)
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{})
+	defer engine.Close()
+
+	launches := make(chan syncWorkerRequest, 2)
+	release := make(chan struct{})
+	restore := stubLaunchSyncWorker(t, func(_ context.Context, _ config.Config, req syncWorkerRequest, _ func(workerLine)) (workerResult, error) {
+		launches <- req
+		<-release
+		return workerResult{Status: "ok", Synced: 1, DiscoveryComplete: true}, nil
+	})
+	defer restore()
+
+	foreground := make(chan error, 1)
+	go func() {
+		_, _, err := runWorkerSyncPass(t.Context(), t.Context(), cfg, engine, database, lock, false, nil)
+		foreground <- err
+	}()
+	require.Equal(t, "sync", (<-launches).Mode)
+
+	entered := make(chan struct{})
+	type outcome struct {
+		ran bool
+		err error
+	}
+	startup := make(chan outcome, 1)
+	go func() {
+		_, ran, err := runStartupWorkerWritePass(t.Context(), cfg, engine, database, lock,
+			func(work func() error) error { close(entered); return engine.RunExclusive(work) })
+		startup <- outcome{ran, err}
+	}()
+	<-entered
+	close(release)
+	require.NoError(t, <-foreground)
+	got := <-startup
+	require.NoError(t, got.err)
+	assert.False(t, got.ran)
+	assert.Empty(t, launches)
+	assertWriteOwnerLockHeld(t, cfg.DataDir, "writer lock remains held")
+}
+
 func TestRunWorkerWritePassRecoversLockAfterRequestCancel(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	database, lock := openTestWriteDB(t, cfg)
