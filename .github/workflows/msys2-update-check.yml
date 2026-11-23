@@ -14,6 +14,10 @@ env:
 # If this workflow fails, update the pinned SHA and packages in ci.yml.
 
 on:
+  # Exercise changes to this workflow with updated packages before merging.
+  pull_request:
+    paths:
+      - .github/workflows/msys2-update-check.yml
   schedule:
     - cron: "0 9 * * 1"  # Every Monday at 09:00 UTC
   workflow_dispatch:
