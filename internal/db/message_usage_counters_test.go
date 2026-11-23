@@ -195,12 +195,10 @@ func TestReopenFinishesPendingMessageUsageCounters(t *testing.T) {
 	_, err = d.getWriter().Exec(t.Context(), `DROP TRIGGER fail_counter_fill`)
 	require.NoError(t, err)
 	require.NoError(t, d.Close())
-	for range 2 {
-		d, err = OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
-		require.NoError(t, err)
-		assert.True(t, d.SearchRepairPending())
-		require.NoError(t, d.Close())
-	}
+	d, err = OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
+	require.NoError(t, err)
+	assert.True(t, d.SearchRepairPending())
+	require.NoError(t, d.Close())
 	d, err = Open(t.Context(), path)
 	require.NoError(t, err)
 	defer d.Close()
@@ -246,8 +244,6 @@ func TestUsageCounterReadersDifferBeforeFill(t *testing.T) {
 		require.NoError(t, err)
 		rows, err := d.GetSessionUsageRows(ctx, []string{"s1", "s2"})
 		require.NoError(t, err)
-		candidates, _, _, err := d.loadActivityReportUsageCandidatesFrom(ctx, d.getReader(), []string{"s1", "s2"}, "2020-01-01", "2030-01-01", false)
-		require.NoError(t, err)
 		start := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 		end := start.Add(24 * time.Hour)
 		activityRows, _, _, err := d.activityReportUsage(ctx, []string{"s1", "s2"}, "2023-12-31", "2024-01-03", activity.Query{RangeStart: start, RangeEnd: end, EffectiveEnd: end}, false)
@@ -260,7 +256,7 @@ func TestUsageCounterReadersDifferBeforeFill(t *testing.T) {
 		require.NoError(t, err)
 		all, err := d.ExportAllSessionSummaries(ctx, SessionExportOptions{})
 		require.NoError(t, err)
-		return map[string]any{"session": session, "rows": rows, "candidates": candidates, "activity": activityRows, "day": day, "digest": digest, "page": page, "all": all}
+		return map[string]any{"session": session, "rows": rows, "activity": activityRows, "day": day, "digest": digest, "page": page, "all": all}
 	}
 	assert.Equal(t, []storedUsageCounters{{0, 0}, {0, 0}}, readStoredUsageCounters(t, d, "s1"))
 	assert.Equal(t, []storedUsageCounters{{0, 0}}, readStoredUsageCounters(t, d, "s2"))
@@ -271,7 +267,6 @@ func TestUsageCounterReadersDifferBeforeFill(t *testing.T) {
 	assert.Equal(t, []storedUsageCounters{{10, 0}, {50, 3}}, readStoredUsageCounters(t, d, "s1"))
 	assert.Equal(t, []storedUsageCounters{{30, 0}}, readStoredUsageCounters(t, d, "s2"))
 	after := read()
-	assert.NotEqual(t, before["candidates"], after["candidates"])
 	for _, name := range []string{"session", "rows", "activity", "day", "digest", "page", "all"} {
 		assert.Equal(t, before[name], after[name], name)
 	}

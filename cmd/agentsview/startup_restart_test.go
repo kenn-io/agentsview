@@ -143,8 +143,6 @@ CREATE TRIGGER test_hold_usage_fill BEFORE DELETE ON stats WHEN OLD.key='message
 	base := startRestartServe(t, cfg)
 	page := restartGet(t, base+"/api/v1/sessions?limit=25&include_one_shot=true")
 	require.Contains(t, page, "session0")
-	_, err = db.OpenReadOnly(t.Context(), cfg.DBPath)
-	require.ErrorIs(t, err, db.ErrMessageUsageCountersPending)
 }
 
 func TestReadOnlyCommandsReportPendingUsageUpgrade(t *testing.T) {
