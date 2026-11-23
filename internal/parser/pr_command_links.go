@@ -71,14 +71,7 @@ func AnalyzePRCommand(ctx context.Context, command, remote string, allowBare, ho
 	if err != nil {
 		return nil, false, false, false, nil, ctx.Err()
 	}
-	directoryChanged, repositoryChanged, persistent, firstRepo, firstHost := bashChangesRepositoryContext(file)
-	var calls []*syntax.CallExpr
-	syntax.Walk(file, func(node syntax.Node) bool {
-		if call, ok := node.(*syntax.CallExpr); ok {
-			calls = append(calls, call)
-		}
-		return true
-	})
+	directoryChanged, repositoryChanged, persistent, firstRepo, firstHost, calls := bashChangesRepositoryContext(file)
 	remoteHost, remoteRepo := "", ""
 	if normalized, ok := export.NormalizeGitRemote(remote); ok {
 		remoteHost, remoteRepo, _ = strings.Cut(normalized, "/")
@@ -232,23 +225,50 @@ func hasCommandSubstitution(node syntax.Node) bool {
 	return found
 }
 
-func bashChangesRepositoryContext(file *syntax.File) (bool, bool, bool, syntax.Pos, syntax.Pos) {
-	var firstRepo, firstHost syntax.Pos
-	var directory, repository, persistent bool
-	functions := map[string]bool{}
+func bashChangesRepositoryContext(file *syntax.File) (bool, bool, bool, syntax.Pos, syntax.Pos, []*syntax.CallExpr) {
+	type scope struct{ local, function bool }
+	type event struct {
+		node  syntax.Node
+		scope scope
+	}
+	var events []event
+	var stack []scope
+	functions := make(map[string]bool)
+	var calls []*syntax.CallExpr
 	syntax.Walk(file, func(node syntax.Node) bool {
-		if fn, ok := node.(*syntax.FuncDecl); ok {
-			functions[fn.Name.Value] = true
+		if node == nil {
+			stack = stack[:len(stack)-1]
+			return true
 		}
+		var current scope
+		if len(stack) > 0 {
+			current = stack[len(stack)-1]
+		}
+		switch n := node.(type) {
+		case *syntax.FuncDecl:
+			functions[n.Name.Value] = true
+			events = append(events, event{node, current})
+			current.local, current.function = true, true
+		case *syntax.Subshell, *syntax.CmdSubst, *syntax.ProcSubst:
+			current.local = true
+		case *syntax.CallExpr:
+			calls = append(calls, n)
+			events = append(events, event{node, current})
+		case *syntax.DeclClause:
+			events = append(events, event{node, current})
+		}
+		stack = append(stack, current)
 		return true
 	})
+	var firstRepo, firstHost syntax.Pos
+	var directory, repository, persistent bool
 	record := func(dst *syntax.Pos, pos syntax.Pos) {
 		if !dst.IsValid() || pos.Offset() < dst.Offset() {
 			*dst = pos
 		}
 	}
-	syntax.Walk(file, func(node syntax.Node) bool {
-		switch n := node.(type) {
+	for _, item := range events {
+		switch n := item.node.(type) {
 		case *syntax.FuncDecl:
 			record(&firstRepo, n.Pos())
 		case *syntax.DeclClause:
@@ -261,6 +281,9 @@ func bashChangesRepositoryContext(file *syntax.File) (bool, bool, bool, syntax.P
 				}
 				if a.Name.Value == "GH_HOST" {
 					record(&firstHost, a.Pos())
+				}
+				if !item.scope.local && (a.Name.Value == "GH_REPO" || a.Name.Value == "GH_HOST") {
+					repository = true
 				}
 			}
 		case *syntax.CallExpr:
@@ -288,9 +311,15 @@ func bashChangesRepositoryContext(file *syntax.File) (bool, bool, bool, syntax.P
 						record(&firstHost, a.Pos())
 					}
 				}
+				if !item.scope.local && len(words) == 0 && (a.Name.Value == "GH_REPO" || a.Name.Value == "GH_HOST") {
+					repository = true
+				}
 			}
 			if name == "cd" || name == "pushd" || name == "popd" {
 				record(&firstRepo, n.Pos())
+				if !item.scope.local {
+					directory = true
+				}
 			}
 			if name == "eval" || name == "source" || name == "." || functions[name] {
 				record(&firstRepo, n.Pos())
@@ -306,58 +335,16 @@ func bashChangesRepositoryContext(file *syntax.File) (bool, bool, bool, syntax.P
 					}
 				}
 			}
-		}
-		return true
-	})
-	syntax.Walk(file, func(node syntax.Node) bool {
-		switch n := node.(type) {
-		case *syntax.FuncDecl:
-			return false
-		case *syntax.CallExpr:
-			words := make([]string, len(n.Args))
-			for i, arg := range n.Args {
-				words[i], _ = shellLiteral(arg.Parts)
-			}
-			if len(words) > 0 && (words[0] == "git" || words[0] == "gh") && repositoryMutation(words) {
+			if !item.scope.function && (name == "git" || name == "gh") && repositoryMutation(words) {
 				persistent = true
 			}
-		}
-		return true
-	})
-	syntax.Walk(file, func(node syntax.Node) bool {
-		switch n := node.(type) {
-		case *syntax.Subshell, *syntax.FuncDecl, *syntax.CmdSubst, *syntax.ProcSubst:
-			return false
-		case *syntax.DeclClause:
-			for _, a := range n.Args {
-				if a.Name != nil && (a.Name.Value == "GH_HOST" || a.Name.Value == "GH_REPO") {
-					repository = true
-				}
-			}
-		case *syntax.CallExpr:
-			words := make([]string, len(n.Args))
-			for i, arg := range n.Args {
-				words[i], _ = shellLiteral(arg.Parts)
-			}
-			for _, a := range n.Assigns {
-				if len(words) == 0 && a.Name != nil && (a.Name.Value == "GH_HOST" || a.Name.Value == "GH_REPO") {
-					repository = true
-				}
-			}
-			if len(words) > 0 {
-				name := words[0]
-				if name == "cd" || name == "pushd" || name == "popd" {
-					directory = true
-				}
-				if repositoryMutation(words) || functions[name] || name == "eval" || name == "source" || name == "." {
-					repository = true
-					persistent = persistent || name == "git" || name == "gh" || functions[name]
-				}
+			if !item.scope.local && (repositoryMutation(words) || functions[name] || name == "eval" || name == "source" || name == ".") {
+				repository = true
+				persistent = persistent || functions[name]
 			}
 		}
-		return true
-	})
-	return directory, repository || persistent, persistent, firstRepo, firstHost
+	}
+	return directory, repository || persistent, persistent, firstRepo, firstHost, calls
 }
 
 func repositoryMutation(words []string) bool {
