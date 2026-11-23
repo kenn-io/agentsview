@@ -588,6 +588,15 @@ func simplePRInertCommand(name, input string) bool {
 	}
 }
 
+// replayPRLinks is callPRLinks without the parser for commands that cannot
+// name a PR or change the shell context.
+func replayPRLinks(ctx context.Context, category, toolName, input, cwd, remote string, state parser.PRShellContext) ([]PRLink, parser.PRShellContext, error) {
+	if category == "Bash" && simplePRInertCommand(toolName, input) {
+		return nil, state, ctx.Err()
+	}
+	return callPRLinks(ctx, category, toolName, input, cwd, remote, state)
+}
+
 func toolCallPRLinksWithShellState(ctx context.Context, messages []Message, cwd, remote string, tainted parser.PRShellContext, emptyInputMissing bool) ([]PRLink, parser.PRShellContext, error) {
 	var lists [][]PRLink
 	for _, message := range messages {
@@ -607,7 +616,7 @@ func toolCallPRLinksWithShellState(ctx context.Context, messages []Message, cwd,
 			if independentShell(call.ToolName) {
 				state = parser.PRShellContext{RepoUncertain: tainted.RepoUncertain}
 			}
-			found, changed, err := callPRLinks(ctx, call.Category, call.ToolName, call.InputJSON, cwd, remote, state)
+			found, changed, err := replayPRLinks(ctx, call.Category, call.ToolName, call.InputJSON, cwd, remote, state)
 			if err != nil {
 				return nil, tainted, err
 			}
@@ -668,12 +677,6 @@ func storedToolCallPRLinksTx(ctx context.Context, tx transactionQueries, id, cwd
 				} else {
 					tainted = parser.UncertainPRShell()
 				}
-			}
-			continue
-		}
-		if category == "Bash" && simplePRInertCommand(name, input.String) {
-			if err := ctx.Err(); err != nil {
-				return nil, parser.PRShellContext{}, err
 			}
 			continue
 		}
