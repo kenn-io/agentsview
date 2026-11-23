@@ -638,9 +638,9 @@ func TestDaemonOpenDefersCJKFTSRepair(t *testing.T) {
 			}
 			if state == "fingerprint" {
 				_, err = d.Search(t.Context(), SearchFilter{Query: "中文搜索"})
-				assert.ErrorIs(t, err, errFTSUnavailable)
+				require.ErrorIs(t, err, errFTSUnavailable)
 				_, err = d.SearchContent(t.Context(), filter)
-				assert.ErrorIs(t, err, errFTSUnavailable)
+				require.ErrorIs(t, err, errFTSUnavailable)
 				substring := filter
 				substring.Mode = "substring"
 				content, err := d.SearchContent(t.Context(), substring)
@@ -703,6 +703,7 @@ func TestDaemonOpenDefersCJKFTSWithOnlyImageText(t *testing.T) {
 	require.NoError(t, d.getReader().QueryRow(ctx, "SELECT count(*) FROM messages_cjk_fts WHERE messages_cjk_fts MATCH ?", "中文搜索").Scan(&matches))
 	require.Equal(t, 1, matches)
 }
+
 func TestDeferredCJKRepairSurvivesFingerprintRollback(t *testing.T) {
 	if !simpleFTSRuntimeConfig.available() {
 		t.Skip("simple FTS5 runtime is not installed for this test process")
