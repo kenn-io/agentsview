@@ -958,8 +958,7 @@ func isFirstImport(ctx context.Context, cfg config.Config) (bool, error) {
 	} else if err != nil {
 		return false, err
 	}
-	applyClassifierConfig(cfg)
-	database, err := db.OpenReadOnly(ctx, cfg.DBPath)
+	database, err := openReadOnlyDB(ctx, cfg)
 	if err != nil {
 		return false, err
 	}
