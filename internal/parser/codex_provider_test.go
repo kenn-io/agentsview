@@ -2531,12 +2531,14 @@ func TestCodexAllSourcePathsForUUIDs(t *testing.T) {
 	}
 }
 
-func TestCodexLabeledLookupAvoidsUnrelatedHomes(t *testing.T) {
+func TestCodexLabeledLookupPrunesRunHomes(t *testing.T) {
 	root := t.TempDir()
 	id := "019eb791-cf7d-75c1-8439-9ed74c1229e1"
 	path := writeCodexProviderSession(t, filepath.Join(root, "a", ".codex-run-v1-a", "sessions"), id, "review")
 	for i := range 30 {
-		writeCodexProviderSession(t, filepath.Join(root, fmt.Sprintf("z-%02d", i), ".codex-run-v1-a", "sessions"), fmt.Sprintf("019eb791-cf7d-75c1-8439-%012d", i), "other")
+		home := filepath.Join(root, fmt.Sprintf("z-%02d", i), ".codex-run-v1-a")
+		writeCodexProviderSession(t, filepath.Join(home, "sessions"), fmt.Sprintf("019eb791-cf7d-75c1-8439-%012d", i), "other")
+		require.NoError(t, os.MkdirAll(filepath.Join(home, "irrelevant", "nested"), 0o755))
 	}
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
@@ -2544,15 +2546,15 @@ func TestCodexLabeledLookupAvoidsUnrelatedHomes(t *testing.T) {
 		t.Run(fmt.Sprintf("fresh_%t", fresh), func(t *testing.T) {
 			visited := 0
 			ctx := withStreamingDirectoryReader(t.Context(), func(ctx context.Context, dir string, yield func(os.DirEntry) error) error {
-				if strings.Contains(dir, string(filepath.Separator)+"z-") {
+				if strings.Contains(dir, string(filepath.Separator)+"irrelevant") {
 					visited++
 				}
 				entries, err := os.ReadDir(dir)
 				if err != nil {
 					return err
 				}
-				for _, entry := range entries {
-					if err := yield(entry); err != nil {
+				for i := len(entries) - 1; i >= 0; i-- {
+					if err := yield(entries[i]); err != nil {
 						return err
 					}
 				}
@@ -2570,6 +2572,35 @@ func TestCodexLabeledLookupAvoidsUnrelatedHomes(t *testing.T) {
 			assert.Zero(t, visited)
 		})
 	}
+}
+
+func TestCodexLabeledLookupMatchesDiscoveryForDuplicateUUID(t *testing.T) {
+	root := t.TempDir()
+	id := "019eb791-cf7d-75c1-8439-9ed74c1229e1"
+	first := writeCodexProviderSession(t, filepath.Join(root, "a", ".codex-run-v1-a", "sessions"), id, "review")
+	writeCodexProviderSession(t, filepath.Join(root, "z", ".codex-run-v1-z", "sessions"), id, "review")
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	require.Equal(t, first, sources[0].DisplayPath)
+	ctx := withStreamingDirectoryReader(t.Context(), func(ctx context.Context, dir string, yield func(os.DirEntry) error) error {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return err
+		}
+		for i := len(entries) - 1; i >= 0; i-- {
+			if err := yield(entries[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	source, found, err := provider.FindSource(ctx, FindSourceRequest{RawSessionID: id})
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, sources[0].DisplayPath, source.DisplayPath)
 }
 
 func TestCodexDiscoverKeepsHealthySourcesWhenSiblingUnreadable(t *testing.T) {
@@ -2603,4 +2634,27 @@ func TestCodexDiscoverKeepsHealthySourcesWhenSiblingUnreadable(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.Equal(t, path, source.DisplayPath)
+}
+
+func TestCodexFreshCompressedLabeledLookupDoesNotWalkRoots(t *testing.T) {
+	root := t.TempDir()
+	id := "019eb791-cf7d-75c1-8439-9ed74c1229e1"
+	plain := writeCodexProviderSession(t, filepath.Join(root, "label", ".codex-run-v1-a", "sessions"), id, "review")
+	data, err := os.ReadFile(plain)
+	require.NoError(t, err)
+	compressed := plain + ".zst"
+	require.NoError(t, os.WriteFile(compressed, zstdCompress(t, data), 0o644))
+	require.NoError(t, os.Remove(plain))
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	visited := 0
+	ctx := withStreamingDirectoryReader(t.Context(), func(ctx context.Context, dir string, yield func(os.DirEntry) error) error {
+		visited++
+		return streamDirectoryEntriesDirect(ctx, dir, yield)
+	})
+	source, found, err := provider.FindSource(ctx, FindSourceRequest{StoredFilePath: compressed, RequireFreshSource: true})
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, compressed, source.DisplayPath)
+	assert.Zero(t, visited)
 }

@@ -1415,38 +1415,43 @@ func (s codexSourceSet) findSourceByID(ctx context.Context, id string) (SourceRe
 			}
 		}
 	}
-	if found && best.Opaque.(codexSource).Layout == CodexLayoutDated && !isCompressedCodexRolloutPath(best.DisplayPath) {
-		return best, true, nil
-	}
 	for _, root := range s.roots {
 		if isS3URI(root) {
 			continue
 		}
-		err := s.discoverEachRoot(ctx, root, func(source SourceRef) error {
-			if source.Key != codexSourceKey(s.agent, id) {
-				return nil
-			}
-			if isCompressedCodexRolloutPath(source.DisplayPath) {
-				if plain, ok := s.sourceRef(root, codexPlainRolloutPath(source.DisplayPath), true); ok {
-					source = plain
-				}
-			}
+		_ = s.findLabeledSource(ctx, root, root, id, func(source SourceRef) {
 			if !found || preferCodexSource(source, best) {
 				best, found = source, true
 			}
-			if best.Opaque.(codexSource).Layout == CodexLayoutDated && !isCompressedCodexRolloutPath(best.DisplayPath) {
-				return errStopStreamingDiscovery
-			}
-			return nil
 		})
-		if errors.Is(err, errStopStreamingDiscovery) {
-			break
-		}
 		if ctx.Err() != nil {
 			return SourceRef{}, false, ctx.Err()
 		}
 	}
 	return best, found, nil
+}
+
+// findLabeledSource searches label directories and reads only sessions within each marked home.
+func (s codexSourceSet) findLabeledSource(ctx context.Context, root, dir, id string, yield func(SourceRef)) error {
+	return streamDirectoryEntries(ctx, dir, func(entry os.DirEntry) error {
+		if !entry.IsDir() {
+			return nil
+		}
+		path := filepath.Join(dir, entry.Name())
+		if LabeledCodexHome(root, path) {
+			if transcript := s.findSourceFile(filepath.Join(path, "sessions"), id); transcript != "" {
+				if source, ok := s.sourceRef(root, transcript, true); ok {
+					yield(source)
+				}
+			}
+			return nil
+		}
+		_ = s.findLabeledSource(ctx, root, path, id, yield)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return nil // Other label directories can still be read.
+	})
 }
 
 func (s codexSourceSet) Fingerprint(
@@ -1650,16 +1655,6 @@ func (s codexSourceSet) canonicalSource(
 	preferred, err := s.preferredKnownRolloutSource(ctx, source)
 	if err != nil {
 		return SourceRef{}, false, err
-	}
-	if src.Layout == CodexLayoutDated && !isCompressedCodexRolloutPath(preferred.DisplayPath) {
-		return preferred, true, nil
-	}
-	candidate, found, err := s.findSourceByID(ctx, src.UUID)
-	if err != nil {
-		return SourceRef{}, false, err
-	}
-	if found && preferCodexSource(candidate, preferred) {
-		return candidate, true, nil
 	}
 	return preferred, true, nil
 }
