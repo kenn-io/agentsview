@@ -53,9 +53,18 @@
   let renaming = $state(false);
   let renameValue = $state("");
   let renameError = $state("");
+  let renameSessionId = $state<string | undefined>();
   let renameInput = $state<HTMLInputElement | null>(null);
   let menuBtnEl = $state<HTMLButtonElement | null>(null);
   let menuEl = $state<HTMLDivElement | null>(null);
+
+  $effect(() => {
+    if (renameSessionId && renameSessionId !== session?.id) {
+      renaming = false;
+      renameError = "";
+      renameSessionId = undefined;
+    }
+  });
 
   const openers = new SessionOpeners(() => session);
   const usageStats = new SessionUsage(() => session);
@@ -138,6 +147,7 @@
   function startRename() {
     renameError = "";
     if (!session) return;
+    renameSessionId = session.id;
     renameValue =
       session.display_name
       ?? normalizeMessagePreview(session.first_message)
@@ -150,6 +160,7 @@
   async function submitRename() {
     if (!renaming || !session) return;
     renaming = false;
+    if (renameSessionId !== session.id) return;
     const name = renameValue.trim() || null, id = session.id;
     try {
       await sessions.renameSession(id, name);

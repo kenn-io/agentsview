@@ -490,7 +490,7 @@
           }
         }}
       />
-      {#if renameError}<span class="rename-error" role="alert">{renameError}</span>{/if}
+      {#if renameError}<span class="rename-error" role="alert" title={renameError}>{renameError}</span>{/if}
     {:else}
       <a
         class="session-info-link"
@@ -916,8 +916,13 @@
   }
 
   .rename-error {
+    display: block;
     color: var(--accent-red);
     font-size: 11px;
+    line-height: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .rename-input {

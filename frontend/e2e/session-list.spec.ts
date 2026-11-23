@@ -105,6 +105,29 @@ test.describe("Session list", () => {
     expect(attempts).toBe(1);
   });
 
+  test("a long rename error stays inside the session row", async ({ page }) => {
+    const message = "Startup sync is still running. Please try again shortly when the session is available.";
+    await page.route("**/api/v1/sessions/*/rename", (route) =>
+      route.fulfill({ status: 503, json: { error: message } }),
+    );
+    const row = sp.sessionItems.first();
+    await row.locator(".session-name").dblclick();
+    const input = row.locator(".rename-input");
+    await input.fill("Draft title");
+    await input.press("Enter");
+    const error = row.getByRole("alert");
+    await expect(error).toHaveText(message);
+    const bounds = await row.evaluate((element) => {
+      const row = element.getBoundingClientRect();
+      const input = element.querySelector(".rename-input")!.getBoundingClientRect();
+      const error = element.querySelector(".rename-error")!.getBoundingClientRect();
+      return { rowTop: row.top, rowBottom: row.bottom, inputTop: input.top, errorBottom: error.bottom };
+    });
+    expect(bounds.inputTop).toBeGreaterThanOrEqual(bounds.rowTop);
+    expect(bounds.errorBottom).toBeLessThanOrEqual(bounds.rowBottom);
+    await expect(error).toHaveAttribute("title", message);
+  });
+
   test("sessions load and display", async () => {
     await expect(sp.sessionItems).toHaveCount(TOTAL_SESSIONS);
   });
