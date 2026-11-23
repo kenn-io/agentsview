@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
@@ -106,6 +107,8 @@ func TestSyncWorkerRepairsMessageFTSExceptAtStartup(t *testing.T) {
 			cfg := testConfigWithClaudeFixture(t)
 			database, err := db.Open(t.Context(), cfg.DBPath)
 			require.NoError(t, err)
+			dbtest.SeedSession(t, database, "existing", "project")
+			require.NoError(t, database.ReplaceSessionMessages(t.Context(), "existing", []db.Message{{SessionID: "existing", Role: "user", Content: "existing message"}}))
 			require.NoError(t, database.DropFTS(t.Context()))
 			require.NoError(t, database.Close())
 			raw, err := sql.Open("sqlite3", cfg.DBPath)
