@@ -7,7 +7,6 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/ingest"
-	"go.kenn.io/agentsview/internal/parser"
 )
 
 type importClosureOutcome uint8
@@ -156,8 +155,7 @@ func loadImportedSession(
 			ctx, store, manifestRef, "invalid import session closure",
 		)
 	}
-	write, err := rewriteManifestForImport(ctx, m, messages)
-	return write, importClosureComplete, err
+	return rewriteManifestForImport(m, messages), importClosureComplete, nil
 }
 
 // Artifact transport carries transcript rows but no local asset files, so
@@ -292,15 +290,10 @@ func quarantineImportDependency(
 }
 
 func rewriteManifestForImport(
-	ctx context.Context, m manifest, messages []db.Message,
-) (db.SessionBatchWrite, error) {
+	m manifest, messages []db.Message,
+) db.SessionBatchWrite {
 	importedID := m.Origin + "~" + m.NativeSessionID
 	session := m.Session.dbSession()
-	links, err := db.ToolCallPRLinks(ctx, messages, session.Cwd, "")
-	if err != nil {
-		return db.SessionBatchWrite{}, err
-	}
-	session.ToolPRLinks = parser.CombinePRLinks(session.ToolPRLinks, links)
 	session.ID = importedID
 	session.Machine = m.Origin
 	session.SessionName = m.SessionName
@@ -347,7 +340,7 @@ func rewriteManifestForImport(
 		Signals:         signals,
 		DataVersion:     m.DataVersion,
 		ReplaceMessages: true,
-	}, nil
+	}
 }
 
 func clearImportedSessionSourceState(session *db.Session) {

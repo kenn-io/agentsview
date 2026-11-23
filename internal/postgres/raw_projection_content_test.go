@@ -107,17 +107,13 @@ func TestRawContentRevisionRetainsHiddenSemanticFields(t *testing.T) {
 	})
 }
 
-func TestRawContentRevisionIgnoresTransientDerivedState(t *testing.T) {
+func TestRawContentRevisionIgnoresOnlyRecencyDerivedState(t *testing.T) {
 	p := ingest.PreparedSession{Session: db.Session{EndedAt: new("2026-09-11T12:00:00Z"), MessageCount: 3}, Messages: []db.Message{{Ordinal: 0, Role: "user", Content: "task"}, {Ordinal: 1, Role: "assistant", Content: "working"}, {Ordinal: 2, Role: "user", Content: "continue"}}}
 	p.Signals.Outcome, p.Signals.OutcomeConfidence = "unknown", "low"
 	p.Signals.SignalsPendingSince = new("2026-09-11T12:01:00Z")
 	copyRawSignalFields(&p.Session, p.Signals)
 	first, err := rawContentRevision(p)
 	require.NoError(t, err)
-	p.ToolPRLinks = []db.PRLink{{URL: "https://github.com/example/repo/pull/42", Host: "github.com", Repository: "example/repo", Number: 42}}
-	withLinks, err := rawContentRevision(p)
-	require.NoError(t, err)
-	assert.Equal(t, first, withLinks, "retained derived links preserve capture identity")
 	p.Signals.SignalsPendingSince = new("2026-09-11T12:02:00Z")
 	copyRawSignalFields(&p.Session, p.Signals)
 	second, err := rawContentRevision(p)

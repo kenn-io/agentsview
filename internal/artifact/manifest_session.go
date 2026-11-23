@@ -57,7 +57,6 @@ type manifestSession struct {
 	Cwd                  string      `json:"cwd,omitempty"`
 	GitBranch            string      `json:"git_branch,omitempty"`
 	PRLinks              []db.PRLink `json:"pr_links,omitempty"`
-	ToolPRLinks          []db.PRLink `json:"tool_pr_links,omitempty"`
 	SourceSessionID      string      `json:"source_session_id,omitempty"`
 	SourceVersion        string      `json:"source_version,omitempty"`
 	GroupKey             string      `json:"group_key,omitempty"`
@@ -133,7 +132,6 @@ func manifestSessionFromDB(s db.Session) manifestSession {
 		Cwd:                  s.Cwd,
 		GitBranch:            s.GitBranch,
 		PRLinks:              s.PRLinks,
-		ToolPRLinks:          s.ToolPRLinks,
 		SourceSessionID:      s.SourceSessionID,
 		SourceVersion:        s.SourceVersion,
 		GroupKey:             s.GroupKey,
@@ -197,7 +195,6 @@ func (m manifestSession) dbSession() db.Session {
 		Cwd:                  m.Cwd,
 		GitBranch:            m.GitBranch,
 		PRLinks:              m.PRLinks,
-		ToolPRLinks:          m.ToolPRLinks,
 		SourceSessionID:      m.SourceSessionID,
 		SourceVersion:        m.SourceVersion,
 		GroupKey:             m.GroupKey,

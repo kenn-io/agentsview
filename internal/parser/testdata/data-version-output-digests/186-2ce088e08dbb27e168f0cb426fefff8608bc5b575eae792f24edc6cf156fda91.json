@@ -1,6 +1,7 @@
 {
-  "version": 185,
-  "digest": "89682fd2a97cbd203c7c5f267ba5412db83fdddf828b08af56e9e3f1dc9f8801",
+  "version": 186,
+  "bump": true,
+  "digest": "2ce088e08dbb27e168f0cb426fefff8608bc5b575eae792f24edc6cf156fda91",
   "providers": {
     "aider": {
       "myrepo/.aider.chat.history.md": "bd3361561a4547452dddf33ac27898f2b60e8c305f2ef07ed13ec520f1f51244"
@@ -95,6 +96,9 @@
       "sessions/compaction.transcript.jsonl": "9875550b76073247fcf8f150e92e2fb1f379e1bd59f456c74826adf35aec39c5",
       "sessions/session.transcript.jsonl": "a07493ef4906ec900de84f8c07d7933c9a5b47250fa1912f5628009bb395e702",
       "sessions/tool-session.transcript.jsonl": "1124e4f604404b6b9c7f9e783447965fd634746055723b26b501de76815a5bec"
+    },
+    "factory": {
+      "-home-dev-workspace-demo-app/0f9c1c2e-6f7d-4b3a-9c2e-1a2b3c4d5e6f.jsonl": "bf76bdc7967b3a46d47dfeeb57a3ad8cdb43fb9e86797a83d2d0ec5b6c64acfc"
     },
     "forge": {
       ".forge.db#conv-001": "e94858a2c387f412568d9995b7ac032ed763b12ad216609b725484b24bedf323"

@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -265,30 +264,6 @@ func (e *Engine) tryProviderIncrementalAppend(
 		case parser.IncrementalNoNewData:
 			return nil, nil, nil, nil, time.Time{}, 0, nil, nil, nil
 		default:
-			session := db.Session{Machine: inc.Machine, Cwd: inc.Cwd, Project: inc.Project}
-			remote := e.toolLinkRemote(session, inc.RecordedGitRemote)
-			var messages []db.Message
-			for _, message := range outcome.Messages {
-				calls, err := ingest.ConvertToolCallsContext(ctx, inc.ID, message.ToolCalls)
-				if err != nil {
-					return nil, nil, nil, nil, time.Time{}, 0, nil, nil, err
-				}
-				messages = append(messages, db.Message{ToolCalls: calls})
-			}
-			toolLinks, err := db.ToolCallPRLinks(ctx, messages, inc.Cwd, remote)
-			if err != nil {
-				return nil, nil, nil, nil, time.Time{}, 0, nil, nil, err
-			}
-			if len(toolLinks) > 0 {
-				var encoded string
-				if err := e.db.Reader().QueryRowContext(ctx, `SELECT tool_pr_links FROM sessions WHERE id=?`, inc.ID).Scan(&encoded); err != nil {
-					return nil, nil, nil, nil, time.Time{}, 0, nil, nil, err
-				}
-				stored := db.DecodePRLinks(encoded)
-				if len(parser.CombinePRLinks(stored, toolLinks)) > len(stored) {
-					return nil, nil, nil, nil, time.Time{}, 0, nil, nil, parser.ErrIncrementalNeedsFullParse
-				}
-			}
 			var terminationStatus *string
 			if outcome.TerminationStatus != nil {
 				status := string(*outcome.TerminationStatus)

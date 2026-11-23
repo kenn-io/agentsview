@@ -555,7 +555,13 @@ func exportLoadedSessionToStore(
 	wireSession := manifestSessionFromDB(*sess)
 	wireSession.Machine = origin
 	normalizeManifestSessionLocalState(&wireSession)
-	version := manifestVersionForSession(wireSession, wirePlanUsage != nil || wireCoverage != nil)
+	version := 5
+	if len(wireSession.PRLinks) > 0 {
+		version = manifestPRLinksVersion
+	}
+	if wirePlanUsage != nil || wireCoverage != nil {
+		version = manifestFormatVersion
+	}
 	m := manifest{
 		Version: version, Origin: origin, NativeSessionID: sess.ID,
 		Session: wireSession, SessionName: sess.SessionName,
@@ -1039,17 +1045,4 @@ func validateMessageFitsSegment(
 		)
 	}
 	return nil
-}
-
-func manifestVersionForSession(session manifestSession, hasPlanUsageOrCoverage bool) int {
-	if len(session.ToolPRLinks) > 0 {
-		return manifestFormatVersion
-	}
-	if hasPlanUsageOrCoverage {
-		return manifestPlanUsageVersion
-	}
-	if len(session.PRLinks) > 0 {
-		return manifestPRLinksVersion
-	}
-	return 5
 }

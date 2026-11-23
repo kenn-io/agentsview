@@ -2189,13 +2189,3 @@ func clearArtifactExportQueue(t *testing.T, database *DB) {
 	_, err := database.getWriter().Exec(t.Context(), `UPDATE artifact_export_queue SET pending = 0`)
 	require.NoError(t, err)
 }
-
-func TestArtifactPublicationQueueTracksToolPRLinks(t *testing.T) {
-	database := testDB(t)
-	seedArtifactOrigin(t, database)
-	require.NoError(t, database.UpsertSession(t.Context(), Session{ID: "tool-links", Project: "project", Machine: "local", Agent: "claude"}))
-	clearArtifactExportQueue(t, database)
-	_, err := database.getWriter().Exec(t.Context(), `UPDATE sessions SET tool_pr_links=? WHERE id=?`, `[{"url":"https://github.com/example/repo/pull/42","host":"github.com","repository":"example/repo","number":42}]`, "tool-links")
-	require.NoError(t, err)
-	assert.Equal(t, []string{"tool-links"}, artifactExportQueueIDs(t, database))
-}

@@ -28,7 +28,6 @@ func TestManifestSessionMatchesDBSessionWireFormat(t *testing.T) {
 
 	var sess db.Session
 	populateWireFixture(t, reflect.ValueOf(&sess).Elem(), 1)
-	sess.ToolPRLinks = nil
 	require.Len(t, sess.ParentSessionIDs, 2)
 	require.NotEqual(t, sess.ParentSessionIDs[0], sess.ParentSessionIDs[1])
 
@@ -37,7 +36,6 @@ func TestManifestSessionMatchesDBSessionWireFormat(t *testing.T) {
 	// pointer is load-path-transient (see the manifestSession struct
 	// comment). project_assigned records database-only assignment provenance,
 	// and ParentSessionIDs and SourceMachines describe hosted read context.
-	// ToolPRLinks is excluded from db.Session JSON and tested separately in artifact transfer.
 	// The selected project and scalar ParentSessionID retain their existing wire contracts.
 	reference := sess
 	reference.QualitySignals = nil

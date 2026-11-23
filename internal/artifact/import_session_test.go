@@ -70,8 +70,7 @@ func TestRewriteManifestForImportClearsLocalStateAndPrefixesRelationships(
 		}},
 	}}
 
-	write, err := rewriteManifestForImport(t.Context(), m, messages)
-	require.NoError(t, err)
+	write := rewriteManifestForImport(m, messages)
 	importedID := contractOrigin + "~session"
 	assert.Equal(t, importedID, write.Session.ID)
 	assert.Equal(t, "job-a", write.Session.GroupKey)
@@ -123,7 +122,7 @@ func TestRewriteManifestForImportClearsLocalStateAndPrefixesRelationships(
 	assert.Equal(t, "empty", write.Signals.ToolObservations[0].Outcome)
 	assert.Equal(t, *write.Session.StoredQualitySignals(), write.Signals.QualitySignals)
 	database := testExportDB(t)
-	_, err = database.WriteSessionBatchContext(t.Context(), []db.SessionBatchWrite{write})
+	_, err := database.WriteSessionBatchContext(t.Context(), []db.SessionBatchWrite{write})
 	require.NoError(t, err)
 	stored, err := database.GetAllMessages(t.Context(), importedID)
 	require.NoError(t, err)

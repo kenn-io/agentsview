@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     data_version INTEGER NOT NULL DEFAULT 0,
     cwd TEXT NOT NULL DEFAULT '',
     git_branch TEXT NOT NULL DEFAULT '',
-    -- JSON array of session pull request links; '' when none.
+    -- JSON array of parser-derived pull request links; '' when none.
     pr_links TEXT NOT NULL DEFAULT '',
     structured_pr_links TEXT NOT NULL DEFAULT '',
     source_session_id TEXT NOT NULL DEFAULT '',

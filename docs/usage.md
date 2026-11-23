@@ -493,6 +493,9 @@ combinable filter options:
 
 ![Label and pull request filters](/docs/assets/generated/screenshots/session-label-filters.png)
 
+Pull-request filters also match supported `gh pr` commands and child-agent
+prompts; see [pull request links](/docs/session-api/#pull-request-links).
+
 Label and pull-request filters can find child and automated sessions. The
 sidebar displays the containing tree, and an explicit single-turn exclusion
 still applies. Use [launcher links](/docs/session-api/#agentsview-session-parent)
@@ -517,10 +520,8 @@ costs.
   multiple labels to require all of them. You can create labels through the
   [CLI or API](/docs/session-api/#agentsview-session-label).
 - **Pull request.** Enter `owner/repo#123` and press Enter to find sessions
-  whose retained prompts mention that pull request, whose commands select it,
-  or whose transcript has a structured link. Child-agent prompts count too.
-  Commands in uncertain shell branches do not add links. Archives that omitted
-  tool inputs cannot recover command or child-agent links from those inputs.
+  whose retained prompts mention that pull request or whose transcript has a
+  structured link. A mention does not establish that the session worked on it.
 - **Min Prompts.** Filter to sessions with at least 2, 3, 5, or 10 user
   messages.
 - **Hide single-turn.** Hide sessions with one or fewer user messages (shown by

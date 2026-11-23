@@ -345,7 +345,7 @@ func (db *DB) commitStagedDerivedStateAndCheckpoint(
 	// and prior failed post-processing may still have changed; refresh every
 	// derived projection in one transaction with the checkpoint.
 	if !db.usageOnlyStorage() {
-		if err := refreshSessionPromptPRLinksTx(tx, sessionID); err != nil {
+		if err := refreshSessionPromptPRLinksTx(ctx, tx, sessionID); err != nil {
 			return err
 		}
 	}
@@ -516,7 +516,7 @@ func (db *DB) replaceSessionContentStaged(
 		return err
 	}
 	if !db.usageOnlyStorage() {
-		if err := refreshSessionPromptPRLinksTx(tx, sessionID); err != nil {
+		if err := refreshSessionPromptPRLinksTx(ctx, tx, sessionID); err != nil {
 			return err
 		}
 	}
@@ -778,9 +778,6 @@ func (db *DB) publishStagedSessionMetadataTx(ctx context.Context, tx *sql.Tx, wr
 	}
 	queries := contextTransaction{ctx: ctx, tx: tx}
 	if err := writeSessionBatchMetadataTx(ctx, tx, queries, *write, result); err != nil {
-		return err
-	}
-	if err := setToolPRLinksTx(queries, write.Session.ID, write.Session.ToolPRLinks, true); err != nil {
 		return err
 	}
 	if write.DataVersion > 0 {

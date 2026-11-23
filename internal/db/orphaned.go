@@ -264,7 +264,7 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		}
 		if !d.usageOnlyStorage() {
 			for _, id := range ids {
-				if err := refreshSessionPromptPRLinksTx(tx, id); err != nil {
+				if err := refreshSessionPromptPRLinksTx(ctx, tx, id); err != nil {
 					return nil, fmt.Errorf("refreshing orphaned prompt PR links: %w", err)
 				}
 			}
@@ -436,7 +436,7 @@ func (d *DB) CopyTrashedDataFrom(ctx context.Context, sourcePath string) ([]stri
 	}
 	if !d.usageOnlyStorage() {
 		for _, id := range ids {
-			if err := refreshSessionPromptPRLinksTx(tx, id); err != nil {
+			if err := refreshSessionPromptPRLinksTx(ctx, tx, id); err != nil {
 				return nil, fmt.Errorf("refreshing trashed prompt PR links: %w", err)
 			}
 		}

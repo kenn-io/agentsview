@@ -80,7 +80,7 @@ func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string, dialo
 		if err != nil {
 			return false, err
 		}
-		links := db.EncodePRLinks(parser.CombinePRLinks(payload.Session.PRLinks, promptLinks, toolLinks, payload.ToolPRLinks))
+		links := db.EncodePRLinks(parser.CombinePRLinks(payload.Session.PRLinks, promptLinks, toolLinks))
 		var linksChanged bool
 		err = tx.QueryRowContext(ctx, `WITH prior AS (
  SELECT pr_links FROM sessions WHERE id=$1 FOR UPDATE
@@ -378,7 +378,7 @@ func (s *RawProjectionStore) writePayload(ctx context.Context, tx *sql.Tx, id, g
 	if err != nil {
 		return err
 	}
-	p.Session.PRLinks = parser.CombinePRLinks(p.Session.PRLinks, promptLinks, p.ToolPRLinks, toolLinks)
+	p.Session.PRLinks = parser.CombinePRLinks(p.Session.PRLinks, promptLinks, toolLinks)
 	if err := writePGSession(ctx, tx, p.Session, "raw-projection:"+group, nil, pgSessionWriteOptions{Machine: "hosted", UsageOnly: s.options.Content.ArchiveContent.UsageOnly(), SkipAliases: true}); err != nil {
 		return err
 	}

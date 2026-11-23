@@ -11450,8 +11450,8 @@ func (e *Engine) writeBatchWithOutcomeContext(
 		// succeeded. The pending upsert deliberately does not touch this
 		// column, and source-missing state is cleared only after this
 		// succeeds, so an old current version cannot hide a failed rewrite.
-		if err := e.db.SetSessionDataVersionWithToolPRLinks(ctx,
-			s.ID, dataVersionForWrite(pw), s.ToolPRLinks, replaceMessages && !prepared.keepToolPRLinks,
+		if err := e.db.SetSessionDataVersion(ctx,
+			s.ID, dataVersionForWrite(pw),
 		); err != nil {
 			if ctx.Err() != nil {
 				return outcome
@@ -11603,10 +11603,6 @@ func (e *Engine) prepareSessionNormalizedContext(
 			return preparedSessionWrite{}, sessionWritePreserved, err
 		}
 	}
-	remote := ""
-	if !pw.sourceIdentityUnverified {
-		remote = e.toolLinkRemote(candidate.Session, pw.sess.GitRemote)
-	}
 	history, err := e.reconcileProviderHistoryContext(ctx, candidate)
 	if err != nil {
 		return preparedSessionWrite{}, sessionWritePreserved, err
@@ -11619,26 +11615,10 @@ func (e *Engine) prepareSessionNormalizedContext(
 	if err != nil {
 		return preparedSessionWrite{}, sessionWritePreserved, err
 	}
-	toolLinks, err := db.ToolCallPRLinks(ctx, candidate.Messages, candidate.Session.Cwd, remote)
-	if err != nil {
-		return preparedSessionWrite{}, sessionWritePreserved, err
-	}
 	candidate.Messages, _ = e.projectToolResultImagesForPrepare(candidate.Messages)
 	if err := ctx.Err(); err != nil {
 		return preparedSessionWrite{}, sessionWritePreserved, err
 	}
-	if e.db.ArchiveContent().OmitsToolContent() && (history.Action == ingest.HistoryMerge || forkState != nil && forkState.PreserveHistory) {
-		reader := toolPRLinksReader(e.db)
-		if archived, ok := e.archiveStore.(toolPRLinksReader); ok {
-			reader = archived
-		}
-		stored, err := reader.GetSessionToolPRLinks(ctx, candidate.Session.ID)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return preparedSessionWrite{}, sessionWritePreserved, err
-		}
-		toolLinks = parser.CombinePRLinks(toolLinks, stored)
-	}
-	candidate.Session.ToolPRLinks = toolLinks
 	options := ingest.ContentOptions{
 		BlockedResultCategories: e.blockedResultCategories,
 		ToolResultImages:        e.toolResultImages,
@@ -12463,8 +12443,8 @@ func (e *Engine) writeSessionFullWithResolver(
 
 	// See writeBatch for why data_version is bumped here
 	// rather than inside UpsertSession.
-	if err := e.db.SetSessionDataVersionWithToolPRLinks(ctx,
-		s.ID, dataVersionForWrite(pw), s.ToolPRLinks, !prepared.keepToolPRLinks,
+	if err := e.db.SetSessionDataVersion(ctx,
+		s.ID, dataVersionForWrite(pw),
 	); err != nil {
 		log.Printf(
 			"set data_version for %s: %v", s.ID, err,

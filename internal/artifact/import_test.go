@@ -10,7 +10,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
 )
@@ -1680,79 +1679,4 @@ func recordAllImportEntries(
 			require.NoError(t, coordinator.RecordChanged(t.Context(), entry))
 		}
 	}
-}
-
-func TestArtifactTransferRetainsToolPRLinks(t *testing.T) {
-	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentUsage} {
-		t.Run(string(policy), func(t *testing.T) {
-			source := testExportDB(t)
-			source.SetArchiveContent(policy)
-			link := db.PRLink{URL: "https://github.com/example/repo/pull/42", Host: "github.com", Repository: "example/repo", Number: 42}
-			if policy.UsageOnly() {
-				require.NoError(t, source.UpsertSession(t.Context(), db.Session{ID: "tool-link", Project: "project", Machine: "local", Agent: "claude", MessageCount: 1, ToolPRLinks: []db.PRLink{link}}))
-				require.NoError(t, source.ReplaceSessionMessages(t.Context(), "tool-link", []db.Message{{SessionID: "tool-link", Ordinal: 0, Role: "assistant", Model: "model"}}))
-			} else {
-				seedSession(t, source, "tool-link", "project", func(s *db.Session) { s.ToolPRLinks = []db.PRLink{link} })
-			}
-			store := newTestArtifactStore(t)
-			_, err := ExportToStore(t.Context(), source, store, ExportOptions{Origin: contractOrigin, Full: true})
-			require.NoError(t, err)
-			checkpoint := latestStoreCheckpointForTest(t, store, contractOrigin)
-			ref, err := NewRef(contractOrigin, KindManifests, checkpoint.Sessions[contractOrigin+"~tool-link"]+".json")
-			require.NoError(t, err)
-			published, err := decodeManifestWithLimits(readContractArtifact(t, store, ref), productionArtifactLimits())
-			require.NoError(t, err)
-			assert.Equal(t, 8, published.Version)
-			assert.Empty(t, published.Session.PRLinks)
-			assert.Equal(t, []db.PRLink{link}, published.Session.ToolPRLinks)
-			destination := testDB(t)
-			destination.SetArchiveContent(config.ArchiveContentUsage)
-			coordinator := NewStoreImportCoordinator(destination, store, importLocalOrigin)
-			recordAllImportEntries(t, coordinator, store, contractOrigin)
-			_, err = coordinator.Finalize(t.Context())
-			require.NoError(t, err)
-			id := contractOrigin + "~tool-link"
-			got, err := destination.GetSessionFull(t.Context(), id)
-			require.NoError(t, err)
-			require.NotNil(t, got)
-			assert.Equal(t, []db.PRLink{link}, got.PRLinks)
-			structured, err := destination.GetSessionStructuredPRLinks(t.Context(), id)
-			require.NoError(t, err)
-			assert.Empty(t, structured)
-		})
-	}
-}
-
-func TestArtifactVersion7UsageImportDerivesToolPRLinks(t *testing.T) {
-	source := testExportDB(t)
-	seedSession(t, source, "tool-call", "project")
-	require.NoError(t, source.ReplaceSessionMessages(t.Context(), "tool-call", []db.Message{
-		{SessionID: "tool-call", Ordinal: 0, Role: "user", Content: "hello"},
-		{SessionID: "tool-call", Ordinal: 1, Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`}}},
-	}))
-	require.NoError(t, source.ReplaceSessionPlanUsage(t.Context(), "tool-call", &db.SessionPlanUsage{HasCoverage: true}))
-	store := newTestArtifactStore(t)
-	_, err := ExportToStore(t.Context(), source, store, ExportOptions{Origin: contractOrigin, Full: true})
-	require.NoError(t, err)
-	checkpoint := latestStoreCheckpointForTest(t, store, contractOrigin)
-	ref, err := NewRef(contractOrigin, KindManifests, checkpoint.Sessions[contractOrigin+"~tool-call"]+".json")
-	require.NoError(t, err)
-	published, err := decodeManifestWithLimits(readContractArtifact(t, store, ref), productionArtifactLimits())
-	require.NoError(t, err)
-	assert.Equal(t, 7, published.Version)
-	destination := testDB(t)
-	destination.SetArchiveContent(config.ArchiveContentUsage)
-	coordinator := NewStoreImportCoordinator(destination, store, importLocalOrigin)
-	recordAllImportEntries(t, coordinator, store, contractOrigin)
-	_, err = coordinator.Finalize(t.Context())
-	require.NoError(t, err)
-	id := contractOrigin + "~tool-call"
-	got, err := destination.GetSessionFull(t.Context(), id)
-	require.NoError(t, err)
-	require.NotNil(t, got)
-	require.Len(t, got.PRLinks, 1)
-	assert.Equal(t, "https://github.com/example/repo/pull/42", got.PRLinks[0].URL)
-	structured, err := destination.GetSessionStructuredPRLinks(t.Context(), id)
-	require.NoError(t, err)
-	assert.Empty(t, structured)
 }
