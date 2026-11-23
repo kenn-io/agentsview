@@ -520,7 +520,25 @@ func (v *codeModeVisitor) Enter(node js.INode) js.IVisitor {
 	return v
 }
 
-func (v *codeModeVisitor) Exit(js.INode) {}
+func (v *codeModeVisitor) Exit(node js.INode) {
+	call, ok := node.(*js.CallExpr)
+	if !ok || call.Optional {
+		return
+	}
+	dot, ok := call.X.(*js.DotExpr)
+	if !ok || dot.Optional || dot.Y.String() != "then" {
+		return
+	}
+	// The receiver and arguments have been visited before the callback runs.
+	for _, arg := range call.Args.List {
+		switch callback := arg.Value.(type) {
+		case *js.ArrowFunc:
+			js.Walk(v, &callback.Body)
+		case *js.FuncDecl:
+			js.Walk(v, &callback.Body)
+		}
+	}
+}
 
 func codeModeLiteral(expr js.IExpr) (string, bool) {
 	var literal string
