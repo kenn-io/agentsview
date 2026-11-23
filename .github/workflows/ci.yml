@@ -430,6 +430,15 @@ jobs:
             -e CGO_ENABLED=1 -e GOPROXY=off -e HOME=/tmp -e DEBIAN_FRONTEND=noninteractive \
             -e OUT="$RUNNER_TEMP/agentsview" -e IDS="$(id -u):$(id -g)" \
             "$image" bash -euo pipefail <<'EOF'
+          # The image's default archive.ubuntu.com has served this job at under
+          # 100 kB/s, past the step timeout. Prefer the runner's Azure mirror,
+          # fall back to the default archive, and fetch only the main component,
+          # which holds every package this build installs.
+          printf '%s\tpriority:%s\n' \
+            http://azure.archive.ubuntu.com/ubuntu/ 1 \
+            http://archive.ubuntu.com/ubuntu/ 2 > /etc/apt/mirrors.txt
+          sed -i -E 's#^URIs: .*#URIs: mirror+file:/etc/apt/mirrors.txt#; s#^Components: .*#Components: main#' \
+            /etc/apt/sources.list.d/ubuntu.sources
           for attempt in 1 2 3; do
             if apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev; then break; fi
             [ "$attempt" -lt 3 ] || exit 1
@@ -697,9 +706,18 @@ jobs:
           - name: Simulator
             suite: windows-perfsim
             package: ./cmd/perfsim
-          - name: Database, Parser
-            suite: windows-db-parser
-            package: ./internal/db ./internal/parser
+          - name: Parser
+            suite: windows-parser
+            package: ./internal/parser
+          # Match the update check; the full database suite exceeds 20 minutes.
+          - name: Database A-M
+            suite: windows-db-a-m
+            package: ./internal/db
+            run: &db-test-prefix '^Test[A-M]'
+          - name: Database remaining
+            suite: windows-db-rest
+            package: ./internal/db
+            skip: *db-test-prefix
           # Complementary filters keep every sync test in exactly one job.
           - name: Sync A-R
             suite: windows-sync-a-r
