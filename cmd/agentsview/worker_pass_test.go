@@ -1146,7 +1146,7 @@ func TestSyncWorkerAcquiresWriteLockWhenDaemonYielded(t *testing.T) {
 	t.Cleanup(func() { RemoveDaemonRuntime(dataDir) })
 
 	// The daemon lives but has yielded: writer closed, write lock free.
-	database, lock, err := openWorkerWriteDB(t.Context(), cfg, nil)
+	database, lock, err := openWorkerWriteDB(t.Context(), cfg, false, nil)
 	require.NoError(t, err,
 		"worker must acquire while a yielded daemon still lives")
 	closeWriteDB(database, lock)
@@ -1162,7 +1162,7 @@ func TestSyncWorkerTeardownKeepsWriteOwnerLockWhenCloseFails(t *testing.T) {
 	defer restore()
 	_, cfg := writeDBConfigForTest(t)
 
-	database, lock, err := openWorkerWriteDB(t.Context(), cfg, nil)
+	database, lock, err := openWorkerWriteDB(t.Context(), cfg, false, nil)
 	require.NoError(t, err)
 
 	rows, err := database.Reader().Query(t.Context(), "SELECT 1")
@@ -1188,7 +1188,7 @@ func TestSyncWorkerRefusedWhenDaemonHoldsWriteLock(t *testing.T) {
 	t.Cleanup(func() { RemoveDaemonRuntime(dataDir) })
 	holdWriteOwnerLockForTest(t, dataDir) // daemon has NOT yielded the flock
 
-	_, _, err = openWorkerWriteDB(t.Context(), cfg, nil)
+	_, _, err = openWorkerWriteDB(t.Context(), cfg, false, nil)
 	require.Error(t, err,
 		"worker must be refused while the daemon still holds the write lock")
 	assert.ErrorContains(t, err, "write lock")
