@@ -8,7 +8,7 @@ for (const { path, width, count, labels } of [
     labels: ["Copilot AI Credits", "Uncached Input"],
   },
   { path: "/activity", width: 871, count: 7, labels: ["Interactive peak"] },
-  { path: "/analytics", width: 1035, count: 6, labels: ["Concentration"] },
+  { path: "/analytics", width: 1035, count: 6, labels: ["Messages/Session"] },
 ]) {
   test(`${path} summary cards fit at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });

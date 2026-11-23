@@ -25,10 +25,8 @@
     sub?: string;
     tier?: Tier;
     featured?: boolean;
-    /** 2 lets a long breakdown wrap instead of truncating. The card
-     * reserves two lines whether or not the text needs them, so the
-     * row's height does not change when the breakdown does; very narrow
-     * cards wrap further rather than hide part of it. */
+    /** 2 lets a breakdown wrap and reserves at least two lines. A single-line
+     * sublabel truncates with an ellipsis when it does not fit. */
     subLines?: 1 | 2;
     error?: boolean;
     class?: string;
