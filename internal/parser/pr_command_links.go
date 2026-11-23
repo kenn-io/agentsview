@@ -377,7 +377,7 @@ var ghPRValueFlags = map[string]string{
 	"diff":     "--color --exclude -e",
 	"checks":   "--interval -i --jq -q --json --template -t",
 	"merge":    "--author-email -A --body -b --body-file -F --match-head-commit --subject -t",
-	"edit":     "--add-assignee --add-label --add-project --add-reviewer --attach --base -B --body -b --body-file -F --milestone -m --remove-assignee --remove-label --remove-milestone --remove-project --remove-reviewer --title -t",
+	"edit":     "--add-assignee --add-label --add-project --add-reviewer --attach --base -B --body -b --body-file -F --milestone -m --remove-assignee --remove-label --remove-project --remove-reviewer --title -t",
 	"comment":  "--attach --body -b --body-file -F",
 	"review":   "--body -b --body-file -F",
 	"close":    "--comment -c",
