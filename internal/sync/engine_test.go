@@ -1943,8 +1943,8 @@ func TestSyncProviderDBBackedBaselinesOnlyCompleteSuccessfulSources(t *testing.T
 		},
 		{
 			name:                 "source error",
-			wantProviderFailures: 1,
 			wantStaleWrite:       true,
+			wantProviderFailures: 1,
 			wantFailedParseCalls: 2,
 			configure: func(provider *baselineDBBackedProvider, failedPath string) {
 				outcome := provider.outcomes[failedPath]
@@ -1957,8 +1957,8 @@ func TestSyncProviderDBBackedBaselinesOnlyCompleteSuccessfulSources(t *testing.T
 		},
 		{
 			name:                 "incomplete result set",
-			wantProviderFailures: 1,
 			wantStaleWrite:       true,
+			wantProviderFailures: 1,
 			wantFailedParseCalls: 2,
 			configure: func(provider *baselineDBBackedProvider, failedPath string) {
 				outcome := provider.outcomes[failedPath]
@@ -1968,8 +1968,8 @@ func TestSyncProviderDBBackedBaselinesOnlyCompleteSuccessfulSources(t *testing.T
 		},
 		{
 			name:                 "result needs retry",
-			wantProviderFailures: 1,
 			wantStaleWrite:       true,
+			wantProviderFailures: 1,
 			wantFailedParseCalls: 2,
 			configure: func(provider *baselineDBBackedProvider, failedPath string) {
 				outcome := provider.outcomes[failedPath]

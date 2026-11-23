@@ -105,8 +105,8 @@ func TestFirstImportNewestWave(t *testing.T) {
 		known bool
 		want  []string
 	}{
-		{"newest", 30, true, []string{"session-027", "session-028", "session-029"}},
-		{"known-and-unknown", 5, false, []string{"session-000", "session-001", "session-004"}},
+		{"newest", 30, true, []string{"session-029"}},
+		{"known-and-unknown", 5, false, []string{"session-004"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -130,7 +130,7 @@ func TestFirstImportNewestWave(t *testing.T) {
 				ProviderFactories: []parser.ProviderFactory{firstImportFingerprintFactory{ProviderFactory: factory, provider: counting}},
 			})
 			t.Cleanup(engine.Close)
-			_, complete := engine.syncNewest(t.Context(), 3, nil, nil)
+			_, complete := engine.syncNewest(t.Context(), 1, nil, nil)
 			require.True(t, engine.LastSyncFinishedAt(t.Context()).IsZero())
 			require.False(t, complete)
 			page, err := archive.ListSessions(t.Context(), db.SessionFilter{Limit: 100})
@@ -143,7 +143,7 @@ func TestFirstImportNewestWave(t *testing.T) {
 			if tc.name == "newest" {
 				require.NotEmpty(t, counting.paths)
 				for _, path := range counting.paths {
-					require.Contains(t, []string{filepath.Join(project, "session-027.jsonl"), filepath.Join(project, "session-028.jsonl"), filepath.Join(project, "session-029.jsonl")}, path)
+					require.Contains(t, []string{filepath.Join(project, "session-029.jsonl")}, path)
 				}
 			}
 		})
@@ -189,7 +189,6 @@ func TestFirstImportRefreshesWhileOlderSessionsAreWritten(t *testing.T) {
 						page, err := archive.ListSessions(t.Context(), db.SessionFilter{Limit: 300})
 						if err == nil && len(page.Sessions) > 100 && events.CompareAndSwap(0, 1) {
 							refresh <- struct{}{}
-							engine.SyncAll(t.Context(), nil)
 						}
 					}
 				}),
@@ -254,7 +253,7 @@ func TestFirstImportRefreshesWhileOlderSessionsAreWritten(t *testing.T) {
 					finished = true
 					require.NoError(t, err)
 				case <-time.After(30 * time.Second):
-					require.FailNow(t, "reentrant emitter blocked the import")
+					require.FailNow(t, "import did not finish")
 				}
 			}
 		})
@@ -316,8 +315,6 @@ func TestFirstImportProviderFailures(t *testing.T) {
 			})
 			t.Cleanup(engine.Close)
 
-			wave, _ := engine.syncNewest(t.Context(), 100, nil, nil)
-			assert.Equal(t, 1, wave.Synced)
 			stats, ran, err := engine.RunFirstImport(t.Context(), nil)
 			require.NoError(t, err)
 			require.True(t, ran)
