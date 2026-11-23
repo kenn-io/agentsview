@@ -335,7 +335,7 @@ func TestRunWorkerSyncPassRecordsSyncBookkeeping(t *testing.T) {
 	defer restore()
 
 	stats, ran, err := runWorkerSyncPass(
-		t.Context(), t.Context(), cfg, engine, database, lock, false, nil,
+		t.Context(), t.Context(), cfg, engine, database, lock, false, false, nil,
 	)
 	require.NoError(t, err)
 	assert.True(t, ran)
@@ -708,7 +708,7 @@ func TestRunWorkerSyncPassNoWorkerRecordsNothing(t *testing.T) {
 
 			stats, ran, err := runWorkerSyncPass(
 				t.Context(), t.Context(), cfg, engine,
-				database, passLock, false, nil,
+				database, passLock, false, false, nil,
 			)
 			require.ErrorIs(t, err, tt.wantErrIs)
 			if tt.wantErrText != "" {
@@ -747,7 +747,7 @@ func TestRunWorkerSyncPassNoWorkerRecordsNothing(t *testing.T) {
 			defer restoreRetry()
 			_, ran, err = runWorkerSyncPass(
 				t.Context(), t.Context(), cfg, engine,
-				database, lock, false, nil,
+				database, lock, false, false, nil,
 			)
 			require.NoError(t, err)
 			assert.True(t, ran, "the retry runs the first real worker pass")
@@ -791,7 +791,7 @@ func TestRunWorkerSyncPassWorkerFailureStillRecords(t *testing.T) {
 
 	stats, ran, err := runWorkerSyncPass(
 		t.Context(), t.Context(), cfg, engine, database,
-		lock, false, nil,
+		lock, false, false, nil,
 	)
 	require.ErrorIs(t, err, workerErr)
 	assert.True(t, ran, "a worker that launched and failed still ran")
@@ -881,7 +881,7 @@ func TestRunWorkerSyncPassLockHeldRecheckSkipsDuplicate(t *testing.T) {
 	foreground := make(chan passOutcome, 1)
 	go func() {
 		_, ran, err := runWorkerSyncPass(
-			t.Context(), t.Context(), cfg, engine, database, lock, false, nil,
+			t.Context(), t.Context(), cfg, engine, database, lock, false, false, nil,
 		)
 		foreground <- passOutcome{ran: ran, err: err}
 	}()
@@ -891,7 +891,7 @@ func TestRunWorkerSyncPassLockHeldRecheckSkipsDuplicate(t *testing.T) {
 	deferred := make(chan passOutcome, 1)
 	go func() {
 		_, ran, err := runWorkerSyncPassExclusive(
-			t.Context(), t.Context(), cfg, engine, database, lock, true, nil,
+			t.Context(), t.Context(), cfg, engine, database, lock, true, true, nil,
 			func(work func() error) error { close(exclusiveEntered); return engine.RunExclusive(work) },
 		)
 		deferred <- passOutcome{ran: ran, err: err}

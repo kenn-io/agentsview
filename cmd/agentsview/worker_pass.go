@@ -141,7 +141,7 @@ func runWorkerWritePassExclusive(
 		}
 		var workerErr error
 		result, workerErr = workerWritePassLocked(
-			ctx, recoveryCtx, cfg, engine, database, lock, mode, relayLine,
+			ctx, recoveryCtx, cfg, engine, database, lock, mode, false, relayLine,
 		)
 		return workerErr
 	})
@@ -158,7 +158,8 @@ func runWorkerWritePassExclusive(
 // in-process defer ordering. A failure in which no worker ran — a spawn
 // failure or a pre-launch handoff failure — records nothing and reports
 // ran=false, so the caller's in-process fallback keeps first-attempt
-// semantics.
+// semantics. soleWriter enables the startup freshness snapshot during the
+// handoff, when the daemon's writer is closed.
 func runWorkerSyncPass(
 	ctx context.Context,
 	recoveryCtx context.Context,
@@ -167,10 +168,11 @@ func runWorkerSyncPass(
 	database *db.DB,
 	lock *writeOwnerLock,
 	skipIfReconciled bool,
+	soleWriter bool,
 	onLine func(workerLine),
 ) (stats sync.SyncStats, ran bool, err error) {
 	return runWorkerSyncPassExclusive(
-		ctx, recoveryCtx, cfg, engine, database, lock, skipIfReconciled,
+		ctx, recoveryCtx, cfg, engine, database, lock, skipIfReconciled, soleWriter,
 		onLine, engine.RunExclusive,
 	)
 }
@@ -188,7 +190,7 @@ func runForegroundWorkerSyncPass(
 	onLine func(workerLine),
 ) (stats sync.SyncStats, ran bool, err error) {
 	return runWorkerSyncPassExclusive(
-		ctx, recoveryCtx, cfg, engine, database, lock, false, onLine,
+		ctx, recoveryCtx, cfg, engine, database, lock, false, false, onLine,
 		engine.TryRunExclusive,
 	)
 }
@@ -201,6 +203,7 @@ func runWorkerSyncPassExclusive(
 	database *db.DB,
 	lock *writeOwnerLock,
 	skipIfReconciled bool,
+	soleWriter bool,
 	onLine func(workerLine),
 	runExclusive func(func() error) error,
 ) (stats sync.SyncStats, ran bool, err error) {
@@ -223,7 +226,7 @@ func runWorkerSyncPassExclusive(
 			}
 		}
 		result, workerErr := workerWritePassLocked(
-			ctx, recoveryCtx, cfg, engine, database, lock, "sync", relayLine,
+			ctx, recoveryCtx, cfg, engine, database, lock, "sync", soleWriter, relayLine,
 		)
 		if workerNeverRan(workerErr) {
 			return workerErr
@@ -257,6 +260,7 @@ func workerWritePassLocked(
 	database *db.DB,
 	lock *writeOwnerLock,
 	mode string,
+	soleWriter bool,
 	onLine func(workerLine),
 ) (workerResult, error) {
 	if err := closeWriterForPass(recoveryCtx, database, mode+" pass"); err != nil {
@@ -277,7 +281,7 @@ func workerWritePassLocked(
 		)
 	}
 
-	request := syncWorkerRequest{Mode: mode, LinksPending: engine.PendingSubagentLinksExclusive()}
+	request := syncWorkerRequest{Mode: mode, LinksPending: engine.PendingSubagentLinksExclusive(), SoleWriter: soleWriter}
 	result, workerErr := launchSyncWorker(ctx, cfg, request, onLine)
 	if result.Stats != nil {
 		if (mode == "sync" || mode == "audit") && result.LinkStateKnown {
@@ -522,6 +526,9 @@ func syncWorkerChildArgs(parentArgs []string, request syncWorkerRequest) []strin
 	args := []string{"sync-worker", "--mode", request.Mode}
 	if request.LinksPending {
 		args = append(args, "--links-pending")
+	}
+	if request.SoleWriter {
+		args = append(args, "--sole-writer")
 	}
 	fs := pflag.NewFlagSet("sync-worker-forward", pflag.ContinueOnError)
 	fs.ParseErrorsAllowlist.UnknownFlags = true

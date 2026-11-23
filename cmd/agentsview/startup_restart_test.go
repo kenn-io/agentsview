@@ -38,9 +38,12 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 	writeSession("before-worker")
 
 	started, release, synced, finish := make(chan struct{}), make(chan struct{}), make(chan struct{}), make(chan struct{})
+	requests := make(chan syncWorkerRequest, 1)
+	previous := deferredStartupSyncUsesWorker
 	deferredStartupSyncUsesWorker = true
-	defer func() { deferredStartupSyncUsesWorker = false }()
+	t.Cleanup(func() { deferredStartupSyncUsesWorker = previous })
 	restore := stubLaunchSyncWorker(t, func(ctx context.Context, cfg config.Config, req syncWorkerRequest, _ func(workerLine)) (workerResult, error) {
+		requests <- req
 		close(started)
 		select {
 		case <-release:
@@ -98,6 +101,7 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		t.Fatal("worker did not start")
 	}
+	require.True(t, (<-requests).SoleWriter)
 	get := func(path string) string {
 		t.Helper()
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+path, nil)
@@ -112,14 +116,38 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 	}
 	require.Contains(t, get("/api/v1/sessions?limit=25"), "session0")
 	require.Contains(t, get("/api/v1/sync/status"), `"startup_pending":true`)
+	rename := func() *http.Response {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPatch, base+"/api/v1/sessions/session0/rename", strings.NewReader(`{"display_name":"Renamed"}`))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", base)
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		return resp
+	}
+	resp := rename()
+	require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+	require.NotEmpty(t, resp.Header.Get("Retry-After"))
+	require.NoError(t, resp.Body.Close())
 	close(release)
 	select {
 	case <-synced:
 	case <-time.After(30 * time.Second):
 		t.Fatal("worker did not sync")
 	}
+	require.Contains(t, get("/api/v1/sessions?limit=25"), "before-worker")
+	require.Contains(t, get("/api/v1/sync/status"), `"startup_pending":true`)
 	writeSession("during-worker")
 	close(finish)
+	var renameStatus int
+	require.Eventually(t, func() bool {
+		resp := rename()
+		renameStatus = resp.StatusCode
+		resp.Body.Close()
+		return renameStatus == http.StatusOK
+	}, 30*time.Second, 100*time.Millisecond)
+	require.Contains(t, get("/api/v1/sessions?limit=25"), "Renamed")
 	var body string
 	if !assert.Eventually(t, func() bool {
 		body = get("/api/v1/sessions?limit=25")
@@ -131,21 +159,19 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 
 func TestServeRestartSyncEligibility(t *testing.T) {
 	for _, tc := range []struct {
-		name                                          string
-		probeErr, statErr                             error
-		needsResync, fullRebuild, archiveOnly, noSync bool
-		want                                          bool
+		name                     string
+		probeErr, statErr        error
+		needsResync, archiveOnly bool
+		want                     bool
 	}{
 		{name: "current archive", want: true},
 		{name: "missing archive", statErr: os.ErrNotExist},
 		{name: "probe failed", probeErr: os.ErrPermission},
 		{name: "scoped upgrade or schema repair", needsResync: true},
-		{name: "full rebuild", fullRebuild: true},
 		{name: "archive only", archiveOnly: true},
-		{name: "sync disabled", noSync: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.want, deferRestartStartupSync(tc.probeErr, tc.statErr, tc.needsResync, tc.fullRebuild, tc.archiveOnly, tc.noSync))
+			require.Equal(t, tc.want, deferRestartStartupSync(tc.probeErr, tc.statErr, tc.needsResync, tc.archiveOnly))
 		})
 	}
 }

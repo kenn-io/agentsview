@@ -531,10 +531,11 @@ func TestSyncWorkerChildArgsForwardsServeConfigFlags(t *testing.T) {
 		"serve", "--host", "0.0.0.0", "--port", "9999",
 		"--background", "--pprof",
 	}
-	args := syncWorkerChildArgs(parent, syncWorkerRequest{Mode: "startup"})
+	args := syncWorkerChildArgs(parent, syncWorkerRequest{Mode: "startup", SoleWriter: true})
 
 	require.Equal(t, "sync-worker", args[0])
 	assert.Equal(t, []string{"--mode", "startup"}, args[1:3])
+	assert.Contains(t, args, "--sole-writer")
 	assert.Contains(t, args, "--host=0.0.0.0", "serve config flag forwarded")
 	assert.Contains(t, args, "--port=9999", "serve config flag forwarded")
 	for _, a := range args {
@@ -607,6 +608,15 @@ func TestSyncWorkerRealSpawnEmitsTerminalResult(t *testing.T) {
 	assert.Equal(t, "ok", results[0].Status)
 	assert.True(t, results[0].DiscoveryComplete)
 	assert.Equal(t, 3, results[0].Synced)
+
+	args := append([]string{"-test.run=^TestSyncWorkerMainHelperProcess$", "--"},
+		syncWorkerChildArgs(nil, syncWorkerRequest{Mode: "sync", SoleWriter: true})...)
+	deferred := exec.CommandContext(t.Context(), os.Args[0], args...)
+	deferred.Env = cmd.Env
+	var deferredOut, deferredErr bytes.Buffer
+	deferred.Stdout, deferred.Stderr = &deferredOut, &deferredErr
+	require.NoError(t, deferred.Run(), "deferred worker stderr:\n%s", deferredErr.String())
+	assert.Equal(t, "ok", decodeSingleResult(t, &deferredOut).Status)
 
 	// Exercise the daemon's request argv through the actual CLI. All source
 	// files are unchanged, so only the transferred retry can repair this edge.

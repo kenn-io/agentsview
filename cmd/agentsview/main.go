@@ -252,7 +252,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			skipInitialSync = !needsResync
 		}
 		_, statErr := os.Stat(cfg.DBPath)
-		if deferRestartStartupSync(err, statErr, needsResync, fullRebuild, archiveOnly, cfg.NoSync) {
+		if deferRestartStartupSync(err, statErr, needsResync, archiveOnly) {
 			immediateStartupSync = !opts.SkipInitialSync
 			skipInitialSync = true
 		}
@@ -941,8 +941,8 @@ func startDaemonUsageCacheBackfill(
 	}
 }
 
-func deferRestartStartupSync(probeErr, statErr error, needsResync, fullRebuild, archiveOnly, noSync bool) bool {
-	return probeErr == nil && statErr == nil && !needsResync && !fullRebuild && !archiveOnly && !noSync
+func deferRestartStartupSync(probeErr, statErr error, needsResync, archiveOnly bool) bool {
+	return probeErr == nil && statErr == nil && !needsResync && !archiveOnly
 }
 
 func runDeferredStartupSyncFallback(
@@ -984,7 +984,7 @@ func runDeferredStartupSyncFallback(
 	// collecting mode.
 	if deferredStartupSyncUsesWorker {
 		_, ran, err := runWorkerSyncPass(
-			ctx, ctx, cfg, engine, database, lock, true, nil,
+			ctx, ctx, cfg, engine, database, lock, true, true, nil,
 		)
 		if err == nil || !workerNeverRan(err) {
 			return ran, err

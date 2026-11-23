@@ -718,7 +718,7 @@ func TestWorkerParentLinkHandoff(t *testing.T) {
 			})
 			defer restore()
 			if tc.mode != "audit" {
-				_, _, err = runWorkerSyncPass(t.Context(), t.Context(), cfg, engine, database, lock, false, nil)
+				_, _, err = runWorkerSyncPass(t.Context(), t.Context(), cfg, engine, database, lock, false, false, nil)
 				require.Zero(t, terminal.Synced)
 			} else {
 				err = runArchiveAudit(t.Context(), cfg, engine, database, lock, em, nil)
@@ -745,7 +745,7 @@ func TestWorkerParentLinkHandoff(t *testing.T) {
 					}
 					switch tc.mode {
 					case "sync":
-						_, _, err = runWorkerSyncPass(ctx, t.Context(), cfg, engine, database, lock, false, nil)
+						_, _, err = runWorkerSyncPass(ctx, t.Context(), cfg, engine, database, lock, false, false, nil)
 					case "audit":
 						err = runArchiveAudit(ctx, cfg, engine, database, lock, em, nil)
 					case "resync-build":

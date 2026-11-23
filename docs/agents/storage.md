@@ -43,6 +43,9 @@ holds the archive write lock. On ordinary restarts it runs after the server
 starts; on first starts and upgrades it runs before the archive opens. Later
 passes query live state.
 
+While that worker runs, writes receive a retryable HTTP 503. Retry the write
+after the worker finishes.
+
 A parser upgrade normally requires a full resync. A parser change that needs a
 full resync must build a fresh database, sync source files, copy orphaned
 sessions from the old database, and swap the files atomically. Preserve sessions

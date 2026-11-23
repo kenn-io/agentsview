@@ -67,6 +67,7 @@ type workerResult struct {
 type syncWorkerRequest struct {
 	Mode         string
 	LinksPending bool
+	SoleWriter   bool
 }
 
 // newSyncWorkerCommand registers the hidden self-exec'd worker. The daemon runs
@@ -102,6 +103,8 @@ func newSyncWorkerCommand() *cobra.Command {
 	)
 	cmd.Flags().BoolVar(&request.LinksPending, "links-pending", false,
 		"finish parent linking retained by the daemon")
+	cmd.Flags().BoolVar(&request.SoleWriter, "sole-writer", false,
+		"snapshot freshness while holding exclusive archive ownership")
 	if err := cmd.MarkFlagRequired("mode"); err != nil {
 		panic(err)
 	}
@@ -203,7 +206,7 @@ func runSyncWorkerStartup(
 	engine := sync.NewEngine(ctx, database, workerEngineConfig(cfg))
 	defer engine.Close()
 	engine.RetainSubagentLinkRetry(request.LinksPending)
-	engine.SetSoleArchiveWriter(mode == "startup")
+	engine.SetSoleArchiveWriter(mode == "startup" || request.SoleWriter)
 
 	if database.NeedsResync() && mode != "startup" {
 		// A resync would CloseConnections + rename the archive file, but the
