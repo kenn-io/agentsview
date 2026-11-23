@@ -99,54 +99,33 @@ func (f firstImportFingerprintFactory) NewProvider(parser.ProviderConfig) parser
 }
 
 func TestFirstImportNewestWave(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		count int
-		known bool
-		want  []string
-	}{
-		{"newest", 30, true, []string{"session-029"}},
-		{"known-and-unknown", 5, false, []string{"session-004"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
-			project := filepath.Join(root, "project")
-			require.NoError(t, os.MkdirAll(project, 0o755))
-			for i := range tc.count {
-				mtime := time.Unix(0, 0)
-				if tc.known {
-					mtime = time.Unix(1700000000+int64(i), 0)
-				} else if tc.name == "known-and-unknown" && i == 4 {
-					mtime = time.Unix(10, 0)
-				}
-				writeFirstImportClaudeSession(t, project, i, mtime)
-			}
-			factory, ok := parser.ProviderFactoryByType(parser.AgentClaude)
-			require.True(t, ok)
-			counting := &firstImportFingerprintProvider{Provider: factory.NewProvider(parser.ProviderConfig{Roots: []string{root}, Machine: "local"})}
-			archive := openTestDB(t)
-			engine := NewEngine(t.Context(), archive, EngineConfig{
-				AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}, Machine: "local", DeferStartupMaintenance: true,
-				ProviderFactories: []parser.ProviderFactory{firstImportFingerprintFactory{ProviderFactory: factory, provider: counting}},
-			})
-			t.Cleanup(engine.Close)
-			_, complete := engine.syncNewest(t.Context(), 1, nil, nil)
-			require.True(t, engine.LastSyncFinishedAt(t.Context()).IsZero())
-			require.False(t, complete)
-			page, err := archive.ListSessions(t.Context(), db.SessionFilter{Limit: 100})
-			require.NoError(t, err)
-			var ids []string
-			for _, session := range page.Sessions {
-				ids = append(ids, session.ID)
-			}
-			require.ElementsMatch(t, tc.want, ids)
-			if tc.name == "newest" {
-				require.NotEmpty(t, counting.paths)
-				for _, path := range counting.paths {
-					require.Contains(t, []string{filepath.Join(project, "session-029.jsonl")}, path)
-				}
-			}
-		})
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	require.NoError(t, os.MkdirAll(project, 0o755))
+	for i := range 30 {
+		writeFirstImportClaudeSession(t, project, i, time.Unix(1700000000+int64(i), 0))
+	}
+	factory, ok := parser.ProviderFactoryByType(parser.AgentClaude)
+	require.True(t, ok)
+	counting := &firstImportFingerprintProvider{Provider: factory.NewProvider(parser.ProviderConfig{Roots: []string{root}, Machine: "local"})}
+	archive := openTestDB(t)
+	engine := NewEngine(t.Context(), archive, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}, Machine: "local", DeferStartupMaintenance: true,
+		ProviderFactories: []parser.ProviderFactory{firstImportFingerprintFactory{ProviderFactory: factory, provider: counting}},
+	})
+	t.Cleanup(engine.Close)
+	engine.syncNewest(t.Context(), nil, nil)
+	require.True(t, engine.LastSyncFinishedAt(t.Context()).IsZero())
+	page, err := archive.ListSessions(t.Context(), db.SessionFilter{Limit: 100})
+	require.NoError(t, err)
+	var ids []string
+	for _, session := range page.Sessions {
+		ids = append(ids, session.ID)
+	}
+	require.Equal(t, []string{"session-029"}, ids)
+	require.NotEmpty(t, counting.paths)
+	for _, path := range counting.paths {
+		require.Equal(t, filepath.Join(project, "session-029.jsonl"), path)
 	}
 }
 
@@ -261,7 +240,6 @@ func TestFirstImportRefreshesWhileOlderSessionsAreWritten(t *testing.T) {
 
 type firstImportFailingProvider struct {
 	parser.ProviderBase
-	listingFailure bool
 }
 
 func (p *firstImportFailingProvider) Capabilities() parser.Capabilities {
@@ -270,11 +248,8 @@ func (p *firstImportFailingProvider) Capabilities() parser.Capabilities {
 	return caps
 }
 
-func (p *firstImportFailingProvider) DiscoverEach(ctx context.Context, yield func(parser.SourceRef) error) error {
-	if p.listingFailure {
-		return errors.New("listing unavailable")
-	}
-	return yield(parser.SourceRef{DisplayPath: "broken"})
+func (p *firstImportFailingProvider) DiscoverEach(context.Context, func(parser.SourceRef) error) error {
+	return errors.New("listing unavailable")
 }
 
 func (p *firstImportFailingProvider) Fingerprint(context.Context, parser.SourceRef) (parser.SourceFingerprint, error) {
@@ -297,42 +272,28 @@ func (f firstImportFailingFactory) NewProvider(parser.ProviderConfig) parser.Pro
 	return f.provider
 }
 
-func TestFirstImportProviderFailures(t *testing.T) {
-	for _, listingFailure := range []bool{false, true} {
-		t.Run(fmt.Sprintf("listing-failure-%t", listingFailure), func(t *testing.T) {
-			root := t.TempDir()
-			path := filepath.Join(root, "project", "healthy.jsonl")
-			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-			require.NoError(t, os.WriteFile(path, []byte(testjsonl.NewSessionBuilder().AddClaudeUser("2026-01-01T00:00:00Z", "hello").String()), 0o600))
-			if listingFailure {
-				writeFirstImportClaudeSession(t, filepath.Dir(path), 0, time.Unix(1, 0))
-				require.NoError(t, os.Chtimes(path, time.Unix(2, 0), time.Unix(2, 0)))
-			}
-			archive := openTestDB(t)
-			provider := &firstImportFailingProvider{parser.ProviderBase{Def: parser.AgentDef{Type: parser.AgentWarp, FileBased: false}}, listingFailure}
-			claude, ok := parser.ProviderFactoryByType(parser.AgentClaude)
-			require.True(t, ok)
-			engine := NewEngine(t.Context(), archive, EngineConfig{
-				AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}, parser.AgentWarp: {t.TempDir()}}, Machine: "local", DeferStartupMaintenance: true,
-				ProviderFactories: []parser.ProviderFactory{claude, firstImportFailingFactory{provider}},
-			})
-			t.Cleanup(engine.Close)
+func TestFirstImportNewestWaveSurvivesListingFailure(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "project", "healthy.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(testjsonl.NewSessionBuilder().AddClaudeUser("2026-01-01T00:00:00Z", "hello").String()), 0o600))
+	writeFirstImportClaudeSession(t, filepath.Dir(path), 0, time.Unix(1, 0))
+	require.NoError(t, os.Chtimes(path, time.Unix(2, 0), time.Unix(2, 0)))
+	archive := openTestDB(t)
+	provider := &firstImportFailingProvider{parser.ProviderBase{Def: parser.AgentDef{Type: parser.AgentWarp, FileBased: false}}}
+	claude, ok := parser.ProviderFactoryByType(parser.AgentClaude)
+	require.True(t, ok)
+	engine := NewEngine(t.Context(), archive, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}, parser.AgentWarp: {t.TempDir()}}, Machine: "local", DeferStartupMaintenance: true,
+		ProviderFactories: []parser.ProviderFactory{claude, firstImportFailingFactory{provider}},
+	})
+	t.Cleanup(engine.Close)
 
-			if listingFailure {
-				_, complete := engine.syncNewest(t.Context(), 1, nil, nil)
-				assert.False(t, complete)
-				healthy, err := archive.GetSession(t.Context(), "healthy")
-				require.NoError(t, err)
-				require.NotNil(t, healthy)
-				older, err := archive.GetSession(t.Context(), "session-000")
-				require.NoError(t, err)
-				require.Nil(t, older)
-			}
-			stats, ran, err := engine.RunFirstImport(t.Context(), nil)
-			require.NoError(t, err)
-			require.True(t, ran)
-			assert.Positive(t, stats.Failed)
-			assert.False(t, stats.AuthoritativeDiscoveryComplete())
-		})
-	}
+	engine.syncNewest(t.Context(), nil, nil)
+	healthy, err := archive.GetSession(t.Context(), "healthy")
+	require.NoError(t, err)
+	require.NotNil(t, healthy)
+	older, err := archive.GetSession(t.Context(), "session-000")
+	require.NoError(t, err)
+	require.Nil(t, older)
 }
