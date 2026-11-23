@@ -13,6 +13,7 @@ on:
     paths:
       - ".github/workflows/cjk-fts.yml"
       - "Makefile"
+      - "cmd/agentsview/**"
       - "internal/**"
       - "docs/*.go"
       - "docs/*.md"
@@ -27,6 +28,7 @@ on:
     paths:
       - ".github/workflows/cjk-fts.yml"
       - "Makefile"
+      - "cmd/agentsview/**"
       - "internal/**"
       - "docs/*.go"
       - "docs/*.md"
