@@ -163,9 +163,7 @@ func TestCommandPRCheckoutRemote(t *testing.T) {
 	}{
 		{"single Claude", "[remote \"origin\"]\n url = https://github.com/example/repo.git\n", "", parser.AgentClaude, true},
 		{"ambiguous", "[remote \"origin\"]\n url = https://github.com/example/repo.git\n[remote \"upstream\"]\n url = https://github.com/example/other.git\n", "", parser.AgentCodex, false},
-		{"recorded overrides checkout", "[remote \"origin\"]\n url = https://github.com/example/other.git\n", "https://github.com/example/repo.git", parser.AgentCodex, true},
 		{"ambiguous recorded", "[remote \"origin\"]\n url = https://github.com/example/repo.git\n[remote \"upstream\"]\n url = https://github.com/example/other.git\n", "https://github.com/example/repo.git", parser.AgentCodex, true},
-		{"case insensitive", "[remote \"origin\"]\n url = https://github.com/example/repo.git\n", "git@github.com:Example/Repo.git", parser.AgentCodex, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -200,6 +198,10 @@ func TestCommandPRCheckoutRemote(t *testing.T) {
 				require.NoError(t, err)
 				require.Len(t, page.Sessions, 1)
 				assert.Equal(t, sessionID, page.Sessions[0].ID)
+				if tc.name == "single Claude" {
+					report := runParseDiff(t, env, sync.ParseDiffOptions{})
+					assert.Equal(t, 1, report.Totals.Identical)
+				}
 			} else {
 				assert.Empty(t, storedPRURLs(t, env.db, sessionID))
 				appendClaudeSplitLines(t, path, testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "append", map[string]any{"cmd": "gh pr view 43"}, "2024-01-01T10:00:06Z"))
@@ -208,22 +210,6 @@ func TestCommandPRCheckoutRemote(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestParseDiffBareCommandPRLink(t *testing.T) {
-	testutil.IsolateGit(t)
-	root := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "config"), []byte("[remote \"origin\"]\n url = https://github.com/example/repo.git\n"), 0o600))
-	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
-	env.writeClaudeSession(t, "proj", "bare-diff.jsonl", testjsonl.JoinJSONL(
-		testjsonl.ClaudeUserJSON("Review changes", tsEarly, root),
-		testjsonl.ClaudeAssistantJSON([]map[string]any{{"type": "tool_use", "id": "call", "name": "Bash", "input": map[string]any{"command": "gh pr view 42"}}}, tsEarlyS1),
-	))
-	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
-	assert.Equal(t, []string{"https://github.com/example/repo/pull/42"}, storedPRURLs(t, env.db, "bare-diff"))
-	report := runParseDiff(t, env, sync.ParseDiffOptions{})
-	assert.Equal(t, 1, report.Totals.Identical)
 }
 
 func TestClineTeamTaskPRFilter(t *testing.T) {

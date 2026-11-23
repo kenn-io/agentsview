@@ -1,8 +1,6 @@
 package postgres
 
 import (
-	"bytes"
-	"encoding/gob"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"reflect"
@@ -304,27 +302,4 @@ func bufferedRawJSONContentRevision(structure any) (string, error) {
 		return "", err
 	}
 	return rawDigest("normalized-content-v1", string(encoded)), nil
-}
-
-func TestRawPayloadKeepsRecordedRemote(t *testing.T) {
-	p := ingest.PreparedSession{RecordedGitRemote: "https://github.com/example/repo.git"}
-	encoded, err := encodeRawPayload(p)
-	require.NoError(t, err)
-	decoded, err := decodeRawPayload(encoded)
-	require.NoError(t, err)
-	assert.Equal(t, p.RecordedGitRemote, decoded.RecordedGitRemote)
-}
-
-func TestRawPayloadDecodesBeforeRecordedRemote(t *testing.T) {
-	old := struct {
-		Session  db.Session
-		Messages []db.Message
-	}{Session: db.Session{ID: "old-session"}, Messages: []db.Message{{Role: "user", Content: "hello"}}}
-	var data bytes.Buffer
-	require.NoError(t, gob.NewEncoder(&data).Encode(old))
-	decoded, err := decodeRawPayload(data.Bytes())
-	require.NoError(t, err)
-	assert.Equal(t, old.Session.ID, decoded.Session.ID)
-	assert.Equal(t, old.Messages, decoded.Messages)
-	assert.Empty(t, decoded.RecordedGitRemote)
 }

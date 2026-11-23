@@ -94,6 +94,27 @@ EOF`, "", remote, "", false},
 		{`echo $(export GH_HOST=git.example); gh pr view 42`, "", remote, "https://github.com/example/repo/pull/42", false},
 		{`cat <(export GH_HOST=git.example); gh pr view 42`, "", remote, "https://github.com/example/repo/pull/42", false},
 		{`export GH_HOST=git.example; bash -c 'gh pr view 42 -R example/repo'`, "", remote, "", true},
+		{`git remote set-url origin https://github.com/example/other.git && gh pr view 42`, "/work/repo", remote, "", true},
+		{`(git remote set-url origin https://github.com/example/other.git); gh pr view 42`, "/work/repo", remote, "", true},
+		{`(export GH_REPO=other/repo); gh pr view 42`, "/work/repo", remote, "https://github.com/example/repo/pull/42", false},
+		{`git remote set-url origin https://github.com/example/other.git; gh pr view 42 -R example/repo`, "/work/repo", remote, "https://github.com/example/repo/pull/42", true},
+		{`cd /other && cd /work/repo && gh pr view 42`, "/work/repo", remote, "https://github.com/example/repo/pull/42", false},
+		{`git remote set-url origin https://github.com/example/other.git; cd /other; cd /work/repo; gh pr view 42`, "/work/repo", remote, "", true},
+		{`env gh pr view 42 -R example/repo`, "/work/repo", remote, "https://github.com/example/repo/pull/42", false},
+		{`env GH_REPO=example/repo gh pr view 42`, "/work/repo", remote, "https://github.com/example/repo/pull/42", false},
+		{`env GH_HOST=git.example gh pr view 42 -R example/repo`, "/work/repo", remote, "", false},
+		{`env GH_HOST=git.example gh pr view 42 -R git.example/example/repo`, "/work/repo", remote, "https://git.example/example/repo/pull/42", false},
+		{`gh repo set-default example/other && gh pr view 42`, "/work/repo", remote, "", true},
+		{`(gh repo set-default example/other); gh pr view 42`, "/work/repo", remote, "", true},
+		{`gh repo set-default example/other; gh pr view 42 -R example/repo`, "/work/repo", remote, "https://github.com/example/repo/pull/42", true},
+		{`gh repo set-default example/other; GH_REPO=example/repo gh pr view 42`, "/work/repo", remote, "https://github.com/example/repo/pull/42", true},
+		{`gh repo set-default --view; gh pr view 42`, "/work/repo", remote, "https://github.com/example/repo/pull/42", false},
+		{`gh repo set-default -v; gh pr view 42`, "/work/repo", remote, "https://github.com/example/repo/pull/42", false},
+		{`gh.exe pr view 42 -R example/repo`, "/work/repo", remote, "https://github.com/example/repo/pull/42", false},
+		{`GH.EXE pr view 42 -R example/repo`, "/work/repo", remote, "https://github.com/example/repo/pull/42", false},
+		{`gh pr view 42 -R https://github.com/example/repo`, "/work/repo", remote, "https://github.com/example/repo/pull/42", false},
+		{`c''d /other; gh pr view 42`, "/work/repo", remote, "", true},
+		{`gh pr view 42`, "", "git@github.com:Example/Repo.git", "https://github.com/Example/Repo/pull/42", false},
 	} {
 		t.Run(tc.command, func(t *testing.T) {
 			links, changed, err := CommandPRLinks(t.Context(), tc.command, tc.cwd, tc.remote)
@@ -127,6 +148,8 @@ func TestLauncherPromptPRLinks(t *testing.T) {
 		{`codex exec --output-schema https://github.com/example/repo/pull/7 'hello'`, nil},
 		{`codex -m model exec -C /tmp 'review https://github.com/example/repo/pull/8'`, []string{"https://github.com/example/repo/pull/8"}},
 		{`codex exec resume https://github.com/example/repo/pull/9`, []string{"https://github.com/example/repo/pull/9"}},
+		{`claude --allowedTools Bash -p 'Review https://github.com/example/repo/pull/42'`, []string{"https://github.com/example/repo/pull/42"}},
+		{"cat <<'EOF' | claude -p\nReview https://github.com/example/repo/pull/42\nEOF", []string{"https://github.com/example/repo/pull/42"}},
 	}
 	for _, tt := range launcherTests {
 		t.Run(tt.command, func(t *testing.T) {
@@ -137,60 +160,6 @@ func TestLauncherPromptPRLinks(t *testing.T) {
 				urls = append(urls, link.URL)
 			}
 			assert.Equal(t, tt.want, urls)
-		})
-	}
-}
-
-func TestGHPRCommandReviewCases(t *testing.T) {
-	const remote = "https://github.com/example/repo.git"
-	for _, tc := range []struct {
-		name, command, want string
-		changed             bool
-	}{
-		{"remote changed", `git remote set-url origin https://github.com/example/other.git && gh pr view 42`, "", true},
-		{"remote changed in subshell", `(git remote set-url origin https://github.com/example/other.git); gh pr view 42`, "", true},
-		{"subshell repository environment", `(export GH_REPO=other/repo); gh pr view 42`, "https://github.com/example/repo/pull/42", false},
-		{"remote changed explicit repo", `git remote set-url origin https://github.com/example/other.git; gh pr view 42 -R example/repo`, "https://github.com/example/repo/pull/42", true},
-		{"return to checkout", `cd /other && cd /work/repo && gh pr view 42`, "https://github.com/example/repo/pull/42", false},
-		{"return after remote changed", `git remote set-url origin https://github.com/example/other.git; cd /other; cd /work/repo; gh pr view 42`, "", true},
-		{"env wrapper", `env gh pr view 42 -R example/repo`, "https://github.com/example/repo/pull/42", false},
-		{"env repo", `env GH_REPO=example/repo gh pr view 42`, "https://github.com/example/repo/pull/42", false},
-		{"env host unknown", `env GH_HOST=git.example gh pr view 42 -R example/repo`, "", false},
-		{"env host qualified", `env GH_HOST=git.example gh pr view 42 -R git.example/example/repo`, "https://git.example/example/repo/pull/42", false},
-		{"default changed", `gh repo set-default example/other && gh pr view 42`, "", true},
-		{"default in subshell", `(gh repo set-default example/other); gh pr view 42`, "", true},
-		{"default explicit repo", `gh repo set-default example/other; gh pr view 42 -R example/repo`, "https://github.com/example/repo/pull/42", true},
-		{"default repo env", `gh repo set-default example/other; GH_REPO=example/repo gh pr view 42`, "https://github.com/example/repo/pull/42", true},
-		{"default viewed", `gh repo set-default --view; gh pr view 42`, "https://github.com/example/repo/pull/42", false},
-		{"default viewed short flag", `gh repo set-default -v; gh pr view 42`, "https://github.com/example/repo/pull/42", false},
-		{"windows executable", `gh.exe pr view 42 -R example/repo`, "https://github.com/example/repo/pull/42", false},
-		{"windows executable case", `GH.EXE pr view 42 -R example/repo`, "https://github.com/example/repo/pull/42", false},
-		{"repository URL", `gh pr view 42 -R https://github.com/example/repo`, "https://github.com/example/repo/pull/42", false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			links, changed, err := CommandPRLinks(t.Context(), tc.command, "/work/repo", remote)
-			require.NoError(t, err)
-			assert.Equal(t, tc.changed, changed)
-			if tc.want == "" {
-				assert.Empty(t, links)
-			} else if assert.Len(t, links, 1) {
-				assert.Equal(t, tc.want, links[0].URL)
-			}
-		})
-	}
-}
-
-func TestLauncherPromptReviewCases(t *testing.T) {
-	for _, tc := range []struct{ name, command string }{
-		{"allowed tools", `claude --allowedTools Bash -p 'Review https://github.com/example/repo/pull/42'`},
-		{"piped prompt", "cat <<'EOF' | claude -p\nReview https://github.com/example/repo/pull/42\nEOF"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			links, _, err := CommandPRLinks(t.Context(), tc.command, "", "")
-			require.NoError(t, err)
-			if assert.Len(t, links, 1) {
-				assert.Equal(t, "https://github.com/example/repo/pull/42", links[0].URL)
-			}
 		})
 	}
 }

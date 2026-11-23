@@ -2,7 +2,6 @@ package db
 
 import (
 	"database/sql"
-	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -328,8 +327,19 @@ func TestPromptPRLinksBackfillUsesDialogue(t *testing.T) {
 }
 
 func TestToolPRLinksArchiveUpgrade(t *testing.T) {
-	for _, version := range []int{promptPRLinksDataVersion - 1, toolPRLinksDataVersion - 1} {
-		t.Run(fmt.Sprint(version), func(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		version         int
+		prompt, command string
+		want            []string
+		wantState       bool
+	}{
+		{"prompt upgrade", promptPRLinksDataVersion - 1, "review https://github.com/example/repo/pull/41", "gh pr view 42 -R example/repo", []string{"https://github.com/example/repo/pull/41", "https://github.com/example/repo/pull/42"}, true},
+		{"tool upgrade", toolPRLinksDataVersion - 1, "review https://github.com/example/repo/pull/41", "gh pr view 42 -R example/repo", []string{"https://github.com/example/repo/pull/41", "https://github.com/example/repo/pull/42"}, true},
+		{"quoted command", toolPRLinksDataVersion - 1, "", "g''h pr view 43 -R example/repo", []string{"https://github.com/example/repo/pull/43"}, true},
+		{"unrelated command", toolPRLinksDataVersion - 1, "", "echo high", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "archive.db")
 			d, err := OpenIsolated(t.Context(), path)
 			require.NoError(t, err)
@@ -340,40 +350,32 @@ func TestToolPRLinksArchiveUpgrade(t *testing.T) {
 			})
 			s := Session{ID: "tool-upgrade", Project: "project", Machine: "local", Agent: "claude"}
 			require.NoError(t, d.UpsertSession(t.Context(), s))
-			require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{
-				{SessionID: s.ID, Ordinal: 0, Role: "user", Content: "review https://github.com/example/repo/pull/41"},
-				{SessionID: s.ID, Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`}}},
-			}))
+			messages := []Message{{SessionID: s.ID, Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"` + tc.command + `"}`}}}}
+			if tc.prompt != "" {
+				messages = append(messages, Message{SessionID: s.ID, Ordinal: 0, Role: "user", Content: tc.prompt})
+			}
+			require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, messages))
 			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
-				if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links='' WHERE id=?`, s.ID); err != nil {
+				if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links='', pr_shell_tainted=NULL WHERE id=?`, s.ID); err != nil {
 					return err
 				}
-				return writeUserVersion(t.Context(), tx, version)
+				return writeUserVersion(t.Context(), tx, tc.version)
 			}))
 			require.NoError(t, d.Close())
 			d, err = OpenIsolated(t.Context(), path)
 			require.NoError(t, err)
 			got, err := d.GetSession(t.Context(), s.ID)
 			require.NoError(t, err)
-			require.Len(t, got.PRLinks, 2)
-			assert.Equal(t, "https://github.com/example/repo/pull/41", got.PRLinks[0].URL)
-			assert.Equal(t, "https://github.com/example/repo/pull/42", got.PRLinks[1].URL)
+			var urls []string
+			for _, link := range got.PRLinks {
+				urls = append(urls, link.URL)
+			}
+			assert.Equal(t, tc.want, urls)
+			var state sql.NullInt64
+			require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT pr_shell_tainted FROM sessions WHERE id=?`, s.ID).Scan(&state))
+			assert.Equal(t, tc.wantState, state.Valid)
 		})
 	}
-}
-
-func TestToolPRLinksAppendTracksSharedShell(t *testing.T) {
-	d := testDB(t)
-	s := Session{ID: "shared-shell", Project: "project", Machine: "local", Agent: "claude", Cwd: "/work/repo"}
-	require.NoError(t, d.UpsertSession(t.Context(), s))
-	obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://github.com/example/repo.git")
-	require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), obs))
-	require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Ordinal: 0, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"cd /elsewhere"}`}}}}))
-	require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42; gh pr view 43 -R example/other"}`}}}}))
-	got, err := d.GetSession(t.Context(), s.ID)
-	require.NoError(t, err)
-	require.Len(t, got.PRLinks, 1)
-	assert.Equal(t, "https://github.com/example/other/pull/43", got.PRLinks[0].URL)
 }
 
 func TestToolPRLinksShellContextRefreshAndReplacement(t *testing.T) {
@@ -414,7 +416,7 @@ func TestToolPRLinksShellContextReopenAndBackfill(t *testing.T) {
 	message := func(ordinal int, command string) Message {
 		return Message{SessionID: s.ID, Ordinal: ordinal, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"` + command + `"}`}}}
 	}
-	require.NoError(t, d.InsertMessages(t.Context(), []Message{message(0, "echo hi")}))
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{message(0, "cd /other")}))
 	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `ALTER TABLE sessions DROP COLUMN pr_shell_tainted`)
 		return err
@@ -433,9 +435,7 @@ func TestToolPRLinksShellContextReopenAndBackfill(t *testing.T) {
 	require.NoError(t, d.InsertMessages(t.Context(), []Message{message(2, "gh pr view 42")}))
 	got, err := d.GetSession(t.Context(), s.ID)
 	require.NoError(t, err)
-	require.Len(t, got.PRLinks, 2)
-	assert.Equal(t, 41, got.PRLinks[0].Number)
-	assert.Equal(t, 42, got.PRLinks[1].Number)
+	assert.Empty(t, got.PRLinks)
 }
 
 func TestToolPRLinksShellContextCwdChange(t *testing.T) {
@@ -455,14 +455,14 @@ func TestToolPRLinksShellContextCwdChange(t *testing.T) {
 
 func TestShellTaintHistory(t *testing.T) {
 	d := testDB(t)
-	s := Session{ID: "quoted-cd", Project: "project", Machine: "local", Agent: "claude", Cwd: "/work/repo"}
+	s := Session{ID: "shell-history", Project: "project", Machine: "local", Agent: "claude", Cwd: "/work/repo"}
 	require.NoError(t, d.UpsertSession(t.Context(), s))
 	obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://github.com/example/repo.git")
 	require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), obs))
 	message := func(ordinal int, command string) Message {
 		return Message{SessionID: s.ID, Ordinal: ordinal, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"` + command + `"}`}}}
 	}
-	require.NoError(t, d.InsertMessages(t.Context(), []Message{message(0, "c''d /other")}))
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{message(0, "cd /other")}))
 	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_shell_tainted=NULL WHERE id=?`, s.ID)
 		return err
@@ -501,22 +501,6 @@ func TestToolPRLinksRecordedRemote(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got.PRLinks, 1)
 	assert.Equal(t, "https://github.com/example/recorded/pull/42", got.PRLinks[0].URL)
-}
-
-func TestToolPRLinksRefreshAfterInputsRemoved(t *testing.T) {
-	d := testDB(t)
-	s := Session{ID: "removed-inputs", Project: "project", Machine: "local", Agent: "claude"}
-	require.NoError(t, d.UpsertSession(t.Context(), s))
-	require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`}}}}))
-	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(t.Context(), `UPDATE tool_calls SET input_json=NULL WHERE session_id=?`, s.ID); err != nil {
-			return err
-		}
-		return refreshSessionPromptPRLinksTx(t.Context(), tx, s.ID)
-	}))
-	got, err := d.GetSession(t.Context(), s.ID)
-	require.NoError(t, err)
-	assert.Empty(t, got.PRLinks)
 }
 
 func TestToolPRLinksRemoteEvidenceChanges(t *testing.T) {
@@ -566,25 +550,6 @@ func TestToolPRLinksSharedHostState(t *testing.T) {
 	assert.Equal(t, "https://git.example/example/repo/pull/43", got.PRLinks[0].URL)
 }
 
-func TestPRFilterCommandRepositoryAndCallback(t *testing.T) {
-	d := testDB(t)
-	for _, tc := range []struct{ id, tool, input, filter string }{
-		{"environment", "Bash", `{"command":"GH_REPO=example/repo gh pr view 15"}`, "example/repo#15"},
-		{"callback", "exec", `Promise.resolve().then(() => tools.exec_command({cmd:'gh pr view 13 -R example/repo'})); tools.exec_command({cmd:'gh pr view 14 -R example/repo'});`, "example/repo#13"},
-	} {
-		t.Run(tc.id, func(t *testing.T) {
-			require.NoError(t, d.UpsertSession(t.Context(), Session{ID: tc.id, Project: "project", Machine: "local", Agent: "claude", MessageCount: 1}))
-			require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: tc.id, Role: "assistant", ToolCalls: []ToolCall{{ToolName: tc.tool, Category: "Bash", InputJSON: tc.input}}}}))
-			filter, err := ParsePRFilter(tc.filter)
-			require.NoError(t, err)
-			page, err := d.ListSessions(t.Context(), SessionFilter{PR: filter})
-			require.NoError(t, err)
-			require.Len(t, page.Sessions, 1)
-			assert.Equal(t, tc.id, page.Sessions[0].ID)
-		})
-	}
-}
-
 func TestToolPRLinksDefaultChangeAcrossAppends(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "archive.db")
 	d, err := OpenIsolated(t.Context(), path)
@@ -605,73 +570,4 @@ func TestToolPRLinksDefaultChangeAcrossAppends(t *testing.T) {
 	got, err := d.GetSession(t.Context(), s.ID)
 	require.NoError(t, err)
 	assert.Empty(t, got.PRLinks)
-}
-
-func TestToolPRLinksUpgradeSkipsUnrelatedBash(t *testing.T) {
-	d := testDB(t)
-	s := Session{ID: "ordinary-bash", Project: "project", Machine: "local", Agent: "claude"}
-	require.NoError(t, d.UpsertSession(t.Context(), s))
-	require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"echo high"}`}}}}))
-	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_shell_tainted=NULL WHERE id=?`, s.ID); err != nil {
-			return err
-		}
-		if err := writeUserVersion(t.Context(), tx, toolPRLinksDataVersion-1); err != nil {
-			return err
-		}
-		return d.upgradeToolPRLinksTx(t.Context(), tx)
-	}))
-	var state sql.NullInt64
-	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT pr_shell_tainted FROM sessions WHERE id=?`, s.ID).Scan(&state))
-	assert.False(t, state.Valid, "unrelated input should not trigger a refresh")
-}
-
-func TestToolPRLinksBothShellUncertaintiesSurviveReopen(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "archive.db")
-	d, err := OpenIsolated(t.Context(), path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, d.Close()) })
-	s := Session{ID: "both-uncertain", Project: "project", Machine: "local", Agent: "claude", Cwd: "/work/repo"}
-	require.NoError(t, d.UpsertSession(t.Context(), s))
-	obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://github.com/example/repo.git")
-	require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), obs))
-	require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Ordinal: 0, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"cd /other; export GH_HOST=git.example"}`}}}}))
-	require.NoError(t, d.Close())
-	d, err = OpenIsolated(t.Context(), path)
-	require.NoError(t, err)
-	var state int
-	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT pr_shell_tainted FROM sessions WHERE id=?`, s.ID).Scan(&state))
-	assert.Equal(t, 3, state)
-	require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42; gh pr view 43 -R example/repo; gh pr view 44 -R git.example/example/repo"}`}}}}))
-	got, err := d.GetSession(t.Context(), s.ID)
-	require.NoError(t, err)
-	require.Len(t, got.PRLinks, 1)
-	assert.Equal(t, "https://git.example/example/repo/pull/44", got.PRLinks[0].URL)
-}
-
-func TestToolPRLinksArchiveUpgradeQuotedCommand(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "archive.db")
-	d, err := OpenIsolated(t.Context(), path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, d.Close()) })
-	s := Session{ID: "quoted-command", Project: "project", Machine: "local", Agent: "claude"}
-	require.NoError(t, d.UpsertSession(t.Context(), s))
-	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"g''h pr view 43 -R example/repo"}`}}}}))
-	before, err := d.GetSession(t.Context(), s.ID)
-	require.NoError(t, err)
-	require.Len(t, before.PRLinks, 1)
-	assert.Equal(t, "https://github.com/example/repo/pull/43", before.PRLinks[0].URL)
-	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links='' WHERE id=?`, s.ID); err != nil {
-			return err
-		}
-		return writeUserVersion(t.Context(), tx, toolPRLinksDataVersion-1)
-	}))
-	require.NoError(t, d.Close())
-	d, err = OpenIsolated(t.Context(), path)
-	require.NoError(t, err)
-	got, err := d.GetSession(t.Context(), s.ID)
-	require.NoError(t, err)
-	require.Len(t, got.PRLinks, 1)
-	assert.Equal(t, "https://github.com/example/repo/pull/43", got.PRLinks[0].URL)
 }

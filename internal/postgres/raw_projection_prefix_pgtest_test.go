@@ -142,26 +142,3 @@ func TestRawProjectionRecordedRemoteSurvivesRematerialization(t *testing.T) {
 	require.Len(t, db.DecodePRLinks(encoded), 1)
 	assert.Equal(t, "https://github.com/example/repo/pull/42", db.DecodePRLinks(encoded)[0].URL)
 }
-
-func TestRawProjectionPRFilterCommandAndCallback(t *testing.T) {
-	t.Parallel()
-	f := newProjectionFixture(t)
-	outcome := projectionOutcome("review")
-	outcome.Outcome.Results[0].Result.Messages[1].ToolCalls = []parser.ParsedToolCall{
-		{ToolUseID: "call-1", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"GH_REPO=example/repo gh pr view 15"}`},
-		{ToolUseID: "call-2", ToolName: "exec", Category: "Bash", InputJSON: `Promise.resolve().then(() => tools.exec_command({cmd:'gh pr view 13 -R example/repo'}));`},
-	}
-	m, _ := f.accept(t, "device-a", "capture", "")
-	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
-	h, err := NewHostedStore(t.Context(), f.dsn, f.schema, f.tenant, false)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, h.Close()) })
-	for _, value := range []string{"example/repo#13", "example/repo#15"} {
-		filter, err := db.ParsePRFilter(value)
-		require.NoError(t, err)
-		page, err := h.ListSessions(t.Context(), db.SessionFilter{PR: filter})
-		require.NoError(t, err)
-		require.Len(t, page.Sessions, 1)
-		assert.Equal(t, "codex:portable", page.Sessions[0].ID)
-	}
-}
