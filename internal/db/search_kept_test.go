@@ -3,6 +3,7 @@
 package db
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -83,6 +84,46 @@ func TestSearchKeptCJKAvailability(t *testing.T) {
 	_, err = d.Search(ctx, filter)
 	require.NoError(t, err)
 	require.EqualValues(t, 3, loads.Load())
+}
+
+func TestCJKRepairPublishesSearchTokenWithIndex(t *testing.T) {
+	if !simpleFTSRuntimeConfig.available() {
+		t.Skip("simple FTS runtime is not installed")
+	}
+	ctx := t.Context()
+	d := testDB(t)
+	for _, id := range []string{"first", "second"} {
+		seedSearchSession(t, d, id, "project", [][2]string{{"user", "法国的首都是巴黎。"}})
+	}
+	_, err := d.getWriter().ExecContext(ctx, `INSERT INTO messages_cjk_fts(messages_cjk_fts, rowid, rendered, content)
+ SELECT 'delete', id, content, COALESCE(dialogue_text, content) FROM messages WHERE session_id='second'`)
+	require.NoError(t, err)
+	filter := SearchFilter{Query: "巴黎"}
+	page, err := d.Search(ctx, filter)
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	var token string
+	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT value FROM archive_metadata WHERE key='search_history_token'`).Scan(&token))
+	_, err = d.getWriter().ExecContext(ctx, `DELETE FROM stats WHERE key=?`, cjkFTSFingerprintStatsKey)
+	require.NoError(t, err)
+	d.searchIndexRepairPending.Store(true)
+	_, err = d.getWriter().ExecContext(ctx, `CREATE TRIGGER fail_search_token BEFORE INSERT ON archive_metadata WHEN NEW.key='search_history_token' BEGIN SELECT RAISE(ABORT, 'token failure'); END`)
+	require.NoError(t, err)
+	require.ErrorContains(t, d.RepairMessageFTS(ctx), "token failure")
+	require.False(t, d.HasCJKFTS(ctx), "a failed token update must roll back the rebuilt index")
+	var fingerprint, after string
+	require.ErrorIs(t, d.getReader().QueryRowContext(ctx, `SELECT value FROM stats WHERE key=?`, cjkFTSFingerprintStatsKey).Scan(&fingerprint), sql.ErrNoRows)
+	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT value FROM archive_metadata WHERE key='search_history_token'`).Scan(&after))
+	require.Equal(t, token, after)
+	_, err = d.getWriter().ExecContext(ctx, `DROP TRIGGER fail_search_token`)
+	require.NoError(t, err)
+	require.NoError(t, d.RepairMessageFTS(ctx))
+	require.True(t, d.HasCJKFTS(ctx))
+	page, err = d.Search(ctx, filter)
+	require.NoError(t, err)
+	require.Len(t, page.Results, 2)
+	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT value FROM archive_metadata WHERE key='search_history_token'`).Scan(&after))
+	require.NotEqual(t, token, after)
 }
 
 func TestSearchKeptFirstMessageEdit(t *testing.T) {

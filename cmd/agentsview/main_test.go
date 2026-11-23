@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
@@ -47,6 +48,90 @@ import (
 
 type cursorSecretRecorder struct {
 	secret []byte
+}
+
+func TestRepairMessageFTSRecoversAfterFailure(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "archive.db")
+		database, err := db.Open(t.Context(), path)
+		require.NoError(t, err)
+		require.NoError(t, database.DropFTS(t.Context()))
+		require.NoError(t, database.Close())
+		database, err = db.OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, database.Close()) })
+		raw, err := sql.Open("sqlite3", path)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, raw.Close()) })
+		_, err = raw.ExecContext(t.Context(), `CREATE TRIGGER fail_search_repair BEFORE INSERT ON stats WHEN NEW.key='message_search_corpus_version' BEGIN SELECT RAISE(ABORT, 'repair failed'); END`)
+		require.NoError(t, err)
+		failed, resume, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		go func() {
+			defer close(done)
+			repairMessageFTS(t.Context(), nil, func(ctx context.Context) error {
+				err := database.RepairMessageFTS(ctx)
+				if err != nil {
+					close(failed)
+					<-resume
+				}
+				return err
+			})
+		}()
+		<-failed
+		assert.False(t, database.HasFTS(t.Context()))
+		_, err = raw.ExecContext(t.Context(), `DROP TRIGGER fail_search_repair`)
+		require.NoError(t, err)
+		close(resume)
+		<-done
+		assert.True(t, database.HasFTS(t.Context()))
+	})
+}
+
+func TestRepairMessageFTSRetryStopsOnCancellation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		var attempts atomic.Int32
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			repairMessageFTS(ctx, nil, func(context.Context) error {
+				attempts.Add(1)
+				return errors.New("repair failed")
+			})
+		}()
+		synctest.Wait()
+		cancel()
+		<-done
+		assert.EqualValues(t, 1, attempts.Load())
+	})
+}
+
+func TestDeferredMessageFTSHTTP(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Config{Host: "127.0.0.1", DBPath: filepath.Join(dir, "archive.db"), DataDir: dir, ArchiveContent: config.ArchiveContentFull}
+	database, err := db.Open(t.Context(), cfg.DBPath)
+	require.NoError(t, err)
+	for id, content := range map[string]string{"first": "searchneedle deploy window", "second": "searchneedle deploy during the window"} {
+		dbtest.SeedSession(t, database, id, "project", func(s *db.Session) {
+			s.MessageCount = 2
+			s.UserMessageCount = 2
+			s.StartedAt = new("2025-01-15T10:00:00Z")
+		})
+		require.NoError(t, database.ReplaceSessionMessages(t.Context(), id, []db.Message{{SessionID: id, Role: "user", Content: content, Timestamp: "2025-01-15T10:00:00Z"}}))
+	}
+	require.NoError(t, database.DropFTS(t.Context()))
+	require.NoError(t, database.Close())
+	database, err = openDBWithOpener(t.Context(), cfg, db.OpenDaemonWithProgress, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	handler := server.New(cfg, database, nil).Handler()
+	get := func(path string) *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0"+path, nil))
+		return response
+	}
+	assert.Equal(t, http.StatusNotImplemented, get("/api/v1/search?q=searchneedle").Code)
+	assert.Equal(t, http.StatusInternalServerError, get("/api/v1/search/content?pattern=deploy%20window").Code)
 }
 
 type usageCacheBackfillRecorder struct {
@@ -4278,4 +4363,38 @@ func TestServeLifetimesReleaseDebugLog(t *testing.T) {
 			require.NoError(t, os.Remove(moved))
 		}
 	}
+}
+
+func TestDeferredSearchIndexesBlockCatchup(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "gemini")
+	cfg := config.Config{Host: "127.0.0.1", DBPath: filepath.Join(dir, "archive.db"), DataDir: dir, ArchiveContent: config.ArchiveContentFull, AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
+	database, err := db.Open(t.Context(), cfg.DBPath)
+	require.NoError(t, err)
+	dbtest.SeedSession(t, database, "session", "project", func(s *db.Session) {
+		s.UserMessageCount = 2
+		s.StartedAt = new("2025-01-15T10:00:00Z")
+	})
+	require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []db.Message{{SessionID: "session", Role: "user", Content: "needleexample"}}))
+	require.NoError(t, database.DropFTS(t.Context()))
+	require.NoError(t, database.Close())
+	database, err = db.OpenDaemonWithProgress(t.Context(), cfg.DBPath, config.ArchiveContentFull, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{ArchiveContent: config.ArchiveContentFull, AgentDirs: cfg.AgentDirs})
+	t.Cleanup(engine.Close)
+	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, nil)
+	t.Cleanup(ingestion.Stop)
+	pauseAfterStartup(t, ingestion)
+	require.NoError(t, os.MkdirAll(filepath.Dir(reloadGeminiSessionPath(root, "overnight")), 0o755))
+	require.NoError(t, os.WriteFile(reloadGeminiSessionPath(root, "overnight"), []byte(testjsonl.GeminiSessionJSON(
+		"overnight", "project", "2026-08-09T10:00:00Z", "2026-08-09T10:01:00Z",
+		[]map[string]any{testjsonl.GeminiUserMsg("first", "2026-08-09T10:00:00Z", "first"), testjsonl.GeminiUserMsg("second", "2026-08-09T10:01:00Z", "second")},
+	)), 0o644))
+	collectWhilePaused(ingestion, reloadGeminiSessionPath(root, "overnight"))
+	require.True(t, database.SearchRepairPending())
+	require.False(t, ingestion.EnsureFresh(t.Context()))
+	require.NoError(t, database.RepairMessageFTS(t.Context()))
+	require.True(t, ingestion.EnsureFresh(t.Context()))
+	require.True(t, sessionImported(t, database, "gemini:overnight"))
 }

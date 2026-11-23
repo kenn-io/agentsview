@@ -83,20 +83,29 @@ var dropSubstringIndexSQL = []string{
 // lacks it, after column migrations have added thinking_text. The build reads
 // every message body, so a large archive waits for it on the first writable
 // open after an upgrade. Builds without FTS5 keep scanning bodies.
-func ensureSubstringIndex(ctx context.Context, w *writerHandle, progress OpenProgressFunc) error {
+func ensureSubstringIndex(ctx context.Context, w *writerHandle, progress OpenProgressFunc, deferBuild bool) (bool, error) {
 	var available, exists bool
 	if err := w.QueryRowContext(ctx,
 		`SELECT EXISTS(SELECT 1 FROM pragma_module_list WHERE name = 'fts5'),
 			EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='message_trigram_fts')`,
 	).Scan(&available, &exists); err != nil {
-		return fmt.Errorf("checking substring index: %w", err)
+		return false, fmt.Errorf("checking substring index: %w", err)
 	}
 	if !available || exists {
-		return nil
+		return false, nil
+	}
+	if deferBuild {
+		var hasMessages bool
+		if err := w.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM messages)`).Scan(&hasMessages); err != nil {
+			return false, fmt.Errorf("checking messages for substring index: %w", err)
+		}
+		if hasMessages {
+			return true, nil
+		}
 	}
 	progress.report("Building substring search index")
-	log.Print("building SQLite substring search index; startup waits for the message scan to finish")
-	return rebuildSubstringIndex(ctx, w)
+	log.Print("building SQLite substring search index; scanning all messages")
+	return false, rebuildSubstringIndex(ctx, w)
 }
 
 // rebuildSubstringIndex replaces the index, its triggers, and its contents in

@@ -5,7 +5,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
+
+	"go.kenn.io/agentsview/internal/config"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -409,4 +412,61 @@ func TestTermsSearchScansWhenImportDropsIndexMidSearch(t *testing.T) {
 	require.Len(t, page.Matches, 1)
 	assert.Equal(t, "message", page.Matches[0].Location)
 	assert.Equal(t, 0, page.Matches[0].Ordinal)
+}
+
+func TestDaemonOpenDefersSubstringIndexRepair(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d := testDBAtPath(t, path, "source")
+	seedSearchSession(t, d, "session", "project", [][2]string{{"user", "needle before repair"}})
+	for _, stmt := range dropSubstringIndexSQL {
+		_, err := d.getWriter().Exec(t.Context(), stmt)
+		require.NoError(t, err)
+	}
+	require.NoError(t, d.Close())
+	d, err := OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	require.False(t, d.hasSubstringIndex(t.Context()))
+	seedSearchSession(t, d, "new", "project", [][2]string{{"user", "needle after open"}})
+	filter := ContentSearchFilter{Pattern: "needle", Limit: 50}
+	before := substringHits(t, d, filter)
+	require.Len(t, before, 2)
+	var loads atomic.Int32
+	d.searchKept.Size = func(SearchPage) int64 { loads.Add(1); return 1 }
+	search := SearchFilter{Query: "needle"}
+	page, err := d.Search(t.Context(), search)
+	require.NoError(t, err)
+	var token, after string
+	require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key='search_history_token'`).Scan(&token))
+	require.NoError(t, d.RepairMessageFTS(t.Context()))
+	require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key='search_history_token'`).Scan(&after))
+	assert.Equal(t, token, after)
+	require.True(t, d.hasSubstringIndex(t.Context()))
+	requireSubstringIndexIntact(t, d)
+	assert.Equal(t, before, substringHits(t, d, filter))
+	repeat, err := d.Search(t.Context(), search)
+	require.NoError(t, err)
+	assert.Equal(t, page, repeat)
+	assert.EqualValues(t, 1, loads.Load())
+}
+
+func TestDaemonOpenBuildsIndexesForEmptyArchive(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d, err := OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	assert.True(t, d.hasSubstringIndex(t.Context()))
+	if simpleFTSRuntimeConfig.available() {
+		assert.True(t, d.HasCJKFTS(t.Context()))
+	}
+	assert.False(t, d.searchIndexRepairPending.Load())
+	seedSearchSession(t, d, "session", "project", [][2]string{{"user", "中文搜索 needleexample"}})
+	requireSubstringIndexIntact(t, d)
+	assert.Len(t, substringHits(t, d, ContentSearchFilter{Pattern: "needleexample", Limit: 50}), 1)
+	require.NoError(t, d.RepairMessageFTS(t.Context()))
+	if simpleFTSRuntimeConfig.available() {
+		page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "中文搜索", Mode: "fts", Sources: []string{"messages"}, Limit: 20})
+		require.NoError(t, err)
+		assert.Len(t, page.Matches, 1)
+	}
 }

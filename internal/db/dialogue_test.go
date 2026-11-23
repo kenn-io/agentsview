@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"testing/synctest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -95,11 +96,9 @@ END`,
 				_, err := d.getWriter().Exec(t.Context(), "DROP TRIGGER messages_au;"+tc.trigger)
 				require.NoError(t, err)
 			}
-			var details []string
-			err = refreshDialogueFTS(t.Context(), d.getWriter(), func(progress OpenProgress) {
-				details = append(details, progress.Detail)
-			})
+			needsRepair, err := refreshDialogueFTS(t.Context(), d.getWriter())
 			require.NoError(t, err)
+			assert.Equal(t, tc.rebuild, needsRepair)
 			if tc.trigger != "" {
 				var triggerAfter string
 				require.NoError(t, d.getReader().QueryRow(t.Context(), "SELECT sql FROM sqlite_master WHERE name = 'messages_au'").Scan(&triggerAfter))
@@ -109,13 +108,9 @@ END`,
 					assert.Equal(t, tc.trigger, triggerAfter, "preserve the newer build's trigger")
 				}
 			}
-			var marker string
-			require.NoError(t, d.getReader().QueryRow(t.Context(), "SELECT value FROM stats WHERE key = ?", searchCorpusVersionStatsKey).Scan(&marker))
-			if tc.rebuild {
-				assert.Contains(t, details, "Updating full-text search")
-				assert.Equal(t, searchCorpusVersion, marker)
-			} else {
-				assert.Empty(t, details)
+			if !tc.rebuild {
+				var marker string
+				require.NoError(t, d.getReader().QueryRow(t.Context(), "SELECT value FROM stats WHERE key = ?", searchCorpusVersionStatsKey).Scan(&marker))
 				assert.Equal(t, tc.marker, marker)
 			}
 		})
@@ -131,9 +126,9 @@ func TestDialogueFTSRefreshImageText(t *testing.T) {
  DROP VIEW message_search_content;
  CREATE VIEW message_search_content AS SELECT id, session_id, content AS rendered, COALESCE(dialogue_text, content) AS content FROM messages;`)
 	require.NoError(t, err)
-	var details []string
-	require.NoError(t, refreshDialogueFTS(t.Context(), d.getWriter(), func(progress OpenProgress) { details = append(details, progress.Detail) }))
-	require.Empty(t, details)
+	needsRepair, err := refreshDialogueFTS(t.Context(), d.getWriter())
+	require.NoError(t, err)
+	require.False(t, needsRepair)
 	_, err = d.getWriter().Exec(t.Context(), `INSERT INTO image_text_cache(id,image_hash,processor,provider,model,revision,text) VALUES(-1,'hash','processor','provider','model','revision','oldneedle')`)
 	require.NoError(t, err)
 	_, err = d.getWriter().Exec(t.Context(), `UPDATE image_text_cache SET text='newneedle' WHERE id=-1`)
@@ -324,4 +319,119 @@ func TestProjectionOnlyReparsePreservesTranscriptFreshness(t *testing.T) {
 		assert.Equal(t, "friction-current", frictionVersion)
 		assert.Equal(t, "2026-05-01T10:00:00Z", modified)
 	}
+}
+
+func TestDaemonOpenDefersMessageFTSRepair(t *testing.T) {
+	for _, state := range []string{"missing", "stale", "current"} {
+		t.Run(state, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "archive.db")
+			d := testDBAtPath(t, path, "source")
+			seedSearchSession(t, d, "session", "project", nil)
+			insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "needle deploy window"})
+			if state == "missing" {
+				require.NoError(t, d.DropFTS(t.Context()))
+			}
+			if state == "stale" {
+				_, err := d.getWriter().Exec(t.Context(), `DROP TRIGGER messages_ai; DROP TRIGGER messages_ad; DROP TRIGGER messages_au; DROP TABLE messages_fts;
+ CREATE VIRTUAL TABLE messages_fts USING fts5(content, content='messages', content_rowid='id');
+ UPDATE stats SET value='0' WHERE key='message_search_corpus_version'`)
+				require.NoError(t, err)
+			}
+			require.NoError(t, d.Close())
+			d, err := OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, d.Close()) })
+			assert.Equal(t, state == "current", d.HasFTS(t.Context()))
+			if state != "current" {
+				filter := ContentSearchFilter{Pattern: "deploy window", Limit: 50, Sources: []string{"messages"}}
+				_, err := d.SearchContent(t.Context(), filter)
+				require.ErrorIs(t, err, errFTSUnavailable)
+				filter.Pattern = `"deploy window"`
+				page, err := d.SearchContent(t.Context(), filter)
+				require.NoError(t, err)
+				require.Len(t, page.Matches, 1)
+				assert.Equal(t, "session", page.Matches[0].SessionID)
+			}
+			var tokenBefore, tokenAfter string
+			require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key='search_history_token'`).Scan(&tokenBefore))
+			require.NoError(t, d.RepairMessageFTS(t.Context()))
+			require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key='search_history_token'`).Scan(&tokenAfter))
+			if state == "current" {
+				assert.Equal(t, tokenBefore, tokenAfter)
+			}
+			assert.True(t, d.HasFTS(t.Context()))
+			content, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "deploy window", Limit: 50, Sources: []string{"messages"}})
+			require.NoError(t, err)
+			require.Len(t, content.Matches, 1)
+			assert.Equal(t, "session", content.Matches[0].SessionID)
+			page, err := d.Search(t.Context(), SearchFilter{Query: "needle"})
+			require.NoError(t, err)
+			assert.Len(t, page.Results, 1)
+		})
+	}
+}
+
+func TestRepairMessageFTSInvalidatesSavedSearchPage(t *testing.T) {
+	t.Run("deferred rebuild", func(t *testing.T) {
+		d := testDB(t)
+		seedSearchSession(t, d, "session", "project", nil)
+		insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "needle"})
+		page, err := d.Search(t.Context(), SearchFilter{Query: "needle"})
+		require.NoError(t, err)
+		require.Len(t, page.Results, 1)
+		require.NoError(t, prepareMessageFTSRepair(t.Context(), d.getWriter()))
+		d.messageFTSRepairPending.Store(true)
+		_, err = d.getWriter().Exec(t.Context(), `UPDATE messages SET content='other' WHERE session_id='session'`)
+		require.NoError(t, err)
+		require.NoError(t, d.RepairMessageFTS(t.Context()))
+		page, err = d.Search(t.Context(), SearchFilter{Query: "needle"})
+		require.NoError(t, err)
+		assert.Empty(t, page.Results)
+	})
+	t.Run("worker handoff", func(t *testing.T) {
+		d := testDB(t)
+		seedSearchSession(t, d, "first", "project", nil)
+		seedSearchSession(t, d, "second", "project", nil)
+		insertMessages(t, d, Message{SessionID: "first", Role: "user", Content: "needle"})
+		insertMessages(t, d, Message{SessionID: "second", Role: "user", Content: "needle"})
+		_, err := d.getWriter().Exec(t.Context(), `INSERT INTO messages_fts(messages_fts, rowid, rendered, content)
+ SELECT 'delete', id, content, COALESCE(dialogue_text, content) FROM messages WHERE session_id='second'`)
+		require.NoError(t, err)
+		filter := SearchFilter{Query: "needle"}
+		page, err := d.Search(t.Context(), filter)
+		require.NoError(t, err)
+		require.Len(t, page.Results, 1)
+		require.NoError(t, prepareMessageFTSRepair(t.Context(), d.getWriter()))
+		d.messageFTSRepairPending.Store(true)
+		require.NoError(t, d.CloseWriter())
+		worker, err := Open(t.Context(), d.Path())
+		require.NoError(t, err)
+		require.NoError(t, worker.Close())
+		require.NoError(t, d.ReopenWriter())
+		require.False(t, d.HasFTS(t.Context()))
+		require.NoError(t, d.RepairMessageFTS(t.Context()))
+		page, err = d.Search(t.Context(), filter)
+		require.NoError(t, err)
+		require.Len(t, page.Results, 2)
+	})
+}
+
+func TestRepairMessageFTSWaitsForWriter(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		d := testDB(t)
+		require.NoError(t, d.DropFTS(t.Context()))
+		d.messageFTSRepairPending.Store(true)
+		require.NoError(t, d.CloseWriter())
+		result := make(chan error, 1)
+		go func() { result <- d.RepairMessageFTS(t.Context()) }()
+		synctest.Wait()
+		select {
+		case err := <-result:
+			require.FailNow(t, "repair returned while the writer was closed", "error: %v", err)
+		default:
+		}
+		require.NoError(t, d.ReopenWriter())
+		require.NoError(t, <-result)
+		assert.True(t, d.HasFTS(t.Context()))
+	})
 }

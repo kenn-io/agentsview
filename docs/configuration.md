@@ -2147,7 +2147,12 @@ highlight the segmented matches, while highlighting inside an opened transcript
 uses the original query and may miss separated Chinese words.
 
 The first backfill, a changed fingerprint, or any pending session triggers a
-full index rebuild before startup finishes, and AgentsView logs that wait.
+full index rebuild after the daemon starts listening. Until it finishes, CJK
+full-text searches return the "full-text search is unavailable" error. They
+work again after the repair finishes.
+If the substring index is missing, substring searches scan messages until the
+repair finishes. Sessions shows the saved archive while repair runs. Archive
+writes, including startup sync, wait while the repair holds the writer.
 Because the freshness ledger records session IDs rather than old message IDs and
 token content, it cannot remove stale entries for individual replaced or deleted
 messages. Removing the sidecar drops the CJK index but keeps the
