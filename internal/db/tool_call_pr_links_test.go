@@ -118,11 +118,18 @@ func TestToolCallPRLinksSharedShellDirectoryChange(t *testing.T) {
 		}}}
 		assert.Empty(t, toolCallPRLinks(t, messages, "/work/repo", "https://github.com/example/repo.git"))
 	}
-	for _, command := range []string{`git push`, `git config --get remote.origin.url`, `git remote -v`, `echo $GH_REPO`, `gh repo set-default --view`} {
+	for _, command := range []string{`git push`, `git config --get remote.origin.url`, `git remote -v`, `echo $GH_REPO`, `gh repo set-default --view`, `change_repo() { export GH_REPO=example/other; }`, `if false; then export GH_REPO=example/other; fi`} {
 		messages := []db.Message{{ToolCalls: []db.ToolCall{
 			{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"` + command + `"}`},
 			{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr merge 60"}`},
 		}}}
 		assert.Len(t, toolCallPRLinks(t, messages, "/work/repo", "https://github.com/example/repo.git"), 1, command)
+	}
+	for _, command := range []string{`change_repo() { export GH_REPO=example/other; }; change_repo`, `if true; then export GH_REPO=example/other; fi`} {
+		messages := []db.Message{{ToolCalls: []db.ToolCall{
+			{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"` + command + `"}`},
+			{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr merge 60"}`},
+		}}}
+		assert.Empty(t, toolCallPRLinks(t, messages, "/work/repo", "https://github.com/example/repo.git"), command)
 	}
 }

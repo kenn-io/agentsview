@@ -344,53 +344,70 @@ func bashChangesRepositoryContext(file *syntax.File) (bool, bool, bool, map[stri
 		if fn, ok := node.(*syntax.FuncDecl); ok {
 			functions[fn.Name.Value] = true
 		}
-		if assign, ok := node.(*syntax.Assign); ok && assign.Name != nil && assign.Name.Value == "GH_REPO" {
-			repoAssignment = true
-		}
 		return true
 	})
-	syntax.Walk(file, func(node syntax.Node) bool {
-		if repositoryChanged {
-			return false
-		}
-		switch call := node.(type) {
-		case *syntax.FuncDecl:
-			return false
-		case *syntax.DeclClause:
-			if call.Variant.Value == "export" {
-				for _, arg := range call.Args {
-					if arg.Name != nil && (arg.Name.Value == "GH_REPO" || arg.Name.Value == "GH_HOST") {
-						repositoryChanged = true
+	var walk func(syntax.Node)
+	walk = func(root syntax.Node) {
+		syntax.Walk(root, func(node syntax.Node) bool {
+			switch call := node.(type) {
+			case *syntax.FuncDecl:
+				return false
+			case *syntax.IfClause:
+				for _, stmt := range call.Cond {
+					walk(stmt)
+				}
+				result, known := literalCondition(call.Cond)
+				if !known || result {
+					for _, stmt := range call.Then {
+						walk(stmt)
 					}
 				}
-			}
-		case *syntax.CallExpr:
-			if len(call.Args) == 0 {
-				for _, assign := range call.Assigns {
-					if assign.Name != nil && (assign.Name.Value == "GH_REPO" || assign.Name.Value == "GH_HOST") {
-						repositoryChanged = true
+				if (!known || !result) && call.Else != nil {
+					walk(call.Else)
+				}
+				return false
+			case *syntax.Assign:
+				if call.Name != nil && call.Name.Value == "GH_REPO" {
+					repoAssignment = true
+				}
+			case *syntax.DeclClause:
+				if call.Variant.Value == "export" {
+					for _, arg := range call.Args {
+						if arg.Name != nil && (arg.Name.Value == "GH_REPO" || arg.Name.Value == "GH_HOST") {
+							repositoryChanged = true
+						}
 					}
 				}
+			case *syntax.CallExpr:
+				if len(call.Args) == 0 {
+					for _, assign := range call.Assigns {
+						if assign.Name != nil && (assign.Name.Value == "GH_REPO" || assign.Name.Value == "GH_HOST") {
+							repositoryChanged = true
+							repoAssignment = repoAssignment || assign.Name.Value == "GH_REPO"
+						}
+					}
+				}
+				if len(call.Args) == 0 {
+					return false
+				}
+				name, literal := shellLiteral(call.Args[0].Parts)
+				if literal && functions[name] {
+					repositoryChanged = true
+					return false
+				}
+				words := make([]string, len(call.Args))
+				for i, arg := range call.Args {
+					words[i], _ = shellLiteral(arg.Parts)
+				}
+				if repositoryMutation(words) {
+					repositoryChanged = true
+					return false
+				}
 			}
-			if len(call.Args) == 0 {
-				return false
-			}
-			name, literal := shellLiteral(call.Args[0].Parts)
-			if literal && functions[name] {
-				repositoryChanged = true
-				return false
-			}
-			words := make([]string, len(call.Args))
-			for i, arg := range call.Args {
-				words[i], _ = shellLiteral(arg.Parts)
-			}
-			if repositoryMutation(words) {
-				repositoryChanged = true
-				return false
-			}
-		}
-		return !repositoryChanged
-	})
+			return true
+		})
+	}
+	walk(file)
 	directoryChanged := false
 	syntax.Walk(file, func(node syntax.Node) bool {
 		switch call := node.(type) {
