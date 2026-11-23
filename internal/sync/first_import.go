@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"log"
 	"slices"
 	"strings"
 	"time"
@@ -130,7 +131,10 @@ func (e *Engine) firstImportSelect(ctx context.Context, files []parser.Discovere
 			candidates = append(candidates, firstImportCandidate{firstImportSource{agent, providerDiscoveredPath(source)}, max(source.DiscoveryMTimeNS, 0)})
 			return ctx.Err()
 		}); err != nil {
-			return err
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			log.Printf("sync %s first import discovery: %v", agent, err)
 		}
 	}
 	wave.partial = len(candidates) > wave.limit

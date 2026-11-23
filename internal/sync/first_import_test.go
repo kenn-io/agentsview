@@ -388,3 +388,88 @@ func TestFirstImportWavePublishesInNewestOrder(t *testing.T) {
 		})
 	}
 }
+
+type firstImportFailingProvider struct {
+	parser.ProviderBase
+	listingFailure bool
+}
+
+func (p *firstImportFailingProvider) Capabilities() parser.Capabilities {
+	caps := p.ProviderBase.Capabilities()
+	caps.Source.StreamingDiscovery = parser.CapabilitySupported
+	return caps
+}
+
+func (p *firstImportFailingProvider) DiscoverEach(ctx context.Context, yield func(parser.SourceRef) error) error {
+	if p.listingFailure {
+		return fmt.Errorf("listing unavailable")
+	}
+	return yield(parser.SourceRef{DisplayPath: "broken"})
+}
+
+func (p *firstImportFailingProvider) Fingerprint(context.Context, parser.SourceRef) (parser.SourceFingerprint, error) {
+	return parser.SourceFingerprint{}, fmt.Errorf("source unavailable")
+}
+
+func (p *firstImportFailingProvider) Parse(context.Context, parser.ParseRequest) (parser.ParseOutcome, error) {
+	return parser.ParseOutcome{}, nil
+}
+
+type firstImportFailingFactory struct{ provider *firstImportFailingProvider }
+
+func (f firstImportFailingFactory) Definition() parser.AgentDef { return f.provider.Definition() }
+func (f firstImportFailingFactory) Capabilities() parser.Capabilities {
+	return f.provider.Capabilities()
+}
+func (f firstImportFailingFactory) NewProvider(parser.ProviderConfig) parser.Provider {
+	return f.provider
+}
+
+func TestFirstImportProviderFailures(t *testing.T) {
+	for _, listingFailure := range []bool{false, true} {
+		t.Run(fmt.Sprintf("listing-failure-%t", listingFailure), func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "project", "healthy.jsonl")
+			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+			require.NoError(t, os.WriteFile(path, []byte(testjsonl.NewSessionBuilder().AddClaudeUser("2026-01-01T00:00:00Z", "hello").String()), 0o600))
+			archive := openTestDB(t)
+			provider := &firstImportFailingProvider{ProviderBase: parser.ProviderBase{Def: parser.AgentDef{Type: parser.AgentWarp, FileBased: false}}, listingFailure: listingFailure}
+			claude, ok := parser.ProviderFactoryByType(parser.AgentClaude)
+			require.True(t, ok)
+			engine := NewEngine(t.Context(), archive, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}, parser.AgentWarp: {t.TempDir()}}, Machine: "local", DeferStartupMaintenance: true,
+				ProviderFactories: []parser.ProviderFactory{claude, firstImportFailingFactory{provider}},
+			})
+			t.Cleanup(engine.Close)
+
+			wave, _ := engine.SyncNewest(t.Context(), 100, nil)
+			assert.Equal(t, 1, wave.Synced)
+			stats, ran, err := engine.RunFirstImport(t.Context(), nil)
+			require.NoError(t, err)
+			require.True(t, ran)
+			assert.Positive(t, stats.Failed)
+			assert.Equal(t, !listingFailure, stats.AuthoritativeDiscoveryComplete())
+			marker, err := archive.GetSyncState(t.Context(), db.FirstImportCompletedKey)
+			require.NoError(t, err)
+			if listingFailure {
+				assert.Empty(t, marker)
+			} else {
+				assert.Equal(t, "1", marker)
+			}
+		})
+	}
+}
+
+func TestFirstImportSelectKeepsHealthyProviderAfterListingFailure(t *testing.T) {
+	archive := openTestDB(t)
+	failed := &firstImportFailingProvider{ProviderBase: parser.ProviderBase{Def: parser.AgentDef{Type: parser.AgentWarp, FileBased: false}}, listingFailure: true}
+	healthy := &firstImportFailingProvider{ProviderBase: parser.ProviderBase{Def: parser.AgentDef{Type: parser.AgentForge, FileBased: false}}}
+	engine := NewEngine(t.Context(), archive, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentWarp: {t.TempDir()}, parser.AgentForge: {t.TempDir()}}, Machine: "local",
+		ProviderFactories: []parser.ProviderFactory{firstImportFailingFactory{failed}, firstImportFailingFactory{healthy}},
+	})
+	t.Cleanup(engine.Close)
+	wave := &firstImportWave{limit: 1}
+	require.NoError(t, engine.firstImportSelect(t.Context(), nil, nil, wave))
+	assert.Contains(t, wave.selected, firstImportSource{parser.AgentForge, "broken"})
+}

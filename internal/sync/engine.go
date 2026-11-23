@@ -7696,7 +7696,7 @@ func (e *Engine) syncProviderDBBackedAgent(
 	discovered, sourceFailures, discoveryErr := e.syncProviderDBBacked(
 		ctx, agent, scope, flush, wave,
 	)
-	stats.providerFailures += sourceFailures
+	// Source processing failures do not make the provider listing incomplete.
 	for range sourceFailures {
 		stats.RecordFailed()
 	}
