@@ -2,6 +2,8 @@ package vector
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -298,27 +300,37 @@ func TestBuildReuseMixedDocuments(t *testing.T) {
 	ix := openTestIndex(t)
 	ix.split = kitvec.SplitOptions{MaxRunes: 10, Overlap: 2}
 	src := &fakeUnitSource{}
-	for i, id := range []string{"grow", "shrink", "edit", "unchanged"} {
-		src.rows = append(src.rows, fakeUnit{unit: userDoc("session", id, i, "abcdefghijklmnopqrstuv"), endedAt: "2024-01-01T00:00:00Z"})
+	for i, doc := range []struct{ id, content string }{
+		{"grow", "abcdefghijklmnopqrstuv"},
+		{"shrink", "ABCDEFGHIJKLMNOPQRSTUV"},
+		{"edit", "0123456789abcdefghijkl"},
+		{"unchanged", "!@#$%^&*()_+-=[]{}|;:,"},
+	} {
+		src.rows = append(src.rows, fakeUnit{unit: userDoc("session", doc.id, i, doc.content), endedAt: "2024-01-01T00:00:00Z"})
 	}
 	gen := fakeGeneration("mixed")
+	var inputs []string
 	enc := func(_ context.Context, texts []string) ([][]float32, error) {
+		inputs = append(inputs, texts...)
 		vectors := make([][]float32, len(texts))
 		for i, text := range texts {
-			vectors[i] = []float32{float32(len(text)), float32(text[0]), float32(text[len(text)-1])}
+			hash := sha256.Sum256([]byte(text))
+			vectors[i] = []float32{float32(binary.LittleEndian.Uint32(hash[0:4]) & 0xffffff), float32(binary.LittleEndian.Uint32(hash[4:8]) & 0xffffff), float32(binary.LittleEndian.Uint32(hash[8:12]) & 0xffffff)}
 		}
 		return vectors, nil
 	}
 	_, err := ix.Build(ctx, src, enc, gen, BuildOptions{})
 	require.NoError(t, err)
 	src.rows[0].unit.Content += "wxyzABCDEFGH"
-	src.rows[1].unit.Content = "abcdefghijklm"
-	src.rows[2].unit.Content = "abcdefghijXlmnopqrstuv"
+	src.rows[1].unit.Content = "ABCDEFGHIJKLM"
+	src.rows[2].unit.Content = "0123456789Xbcdefghijkl"
 	for i := range src.rows {
 		src.rows[i].endedAt = "2025-01-01T00:00:00Z"
 	}
+	inputs = nil
 	_, err = ix.Build(ctx, src, enc, gen, BuildOptions{BatchSize: 3})
 	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"qrstuvwxyz", "yzABCDEFGH", "IJKLM", "89Xbcdefgh"}, inputs)
 	fresh := openTestIndex(t)
 	fresh.split = ix.split
 	_, err = fresh.Build(ctx, src, enc, gen, BuildOptions{BatchSize: 3})
