@@ -993,6 +993,8 @@ type DB struct {
 	archiveContent atomic.Int32
 	// Rebuilds reserve attached IDs before their session rows are restored.
 	archiveRebuildProvenance atomic.Pointer[map[string]ArchiveSessionProvenance]
+	usageCountersPending     atomic.Bool
+	usageCountersReady       chan struct{}
 	messageFTSRepairPending  atomic.Bool
 	searchIndexRepairPending atomic.Bool
 	// writerClosed is set while the writer pool is intentionally closed for a
@@ -1473,7 +1475,7 @@ func OpenWithProgress(
 	return open(ctx, path, openOptions{backgroundMaintenance: true}, policy, progress)
 }
 
-// OpenDaemonWithProgress defers search index repair until the daemon listens.
+// OpenDaemonWithProgress defers usage counter fill and search index repair until the daemon listens.
 func OpenDaemonWithProgress(ctx context.Context, path string, policy config.ArchiveContent, progress OpenProgressFunc) (*DB, error) {
 	return open(ctx, path, openOptions{backgroundMaintenance: true, deferMessageFTSRepair: true}, policy, progress)
 }
@@ -2128,6 +2130,12 @@ func OpenReadOnly(ctx context.Context, path string) (*DB, error) {
 		usageCache: newUsageCacheManager(path),
 		usageKept:  newDailyUsageMemo(),
 	}
+	var usageCountersPending bool
+	if err := reader.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM stats WHERE key = 'message_usage_counters_pending')`).Scan(&usageCountersPending); err != nil {
+		reader.Close()
+		return nil, fmt.Errorf("checking message usage counter upgrade: %w", err)
+	}
+	db.usageCountersPending.Store(usageCountersPending)
 	db.dataStale.Store(dataStale)
 	db.usageCache.attachArchive(db)
 	db.reader.Store(reader)
@@ -2589,7 +2597,7 @@ func schemaColumnMigrations() []schemaColumnMigration {
 		},
 		{
 			"sessions", "structured_pr_links",
-			"ALTER TABLE sessions ADD COLUMN structured_pr_links TEXT NOT NULL DEFAULT ''; UPDATE sessions SET structured_pr_links=pr_links",
+			"ALTER TABLE sessions ADD COLUMN structured_pr_links TEXT NOT NULL DEFAULT ''; UPDATE sessions SET structured_pr_links=pr_links WHERE pr_links != ''",
 		},
 		{"excluded_sessions", "file_path", "ALTER TABLE excluded_sessions ADD COLUMN file_path TEXT"},
 		{
@@ -3519,8 +3527,13 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc, def
 	if err := addDialogueIsContent(ctx, w, progress); err != nil {
 		return err
 	}
-	if err := addMessageUsageCounters(ctx, w, progress); err != nil {
+	pending, err := addMessageUsageCounters(ctx, w, progress, deferMessageFTSRepair)
+	if err != nil {
 		return err
+	}
+	if pending {
+		db.usageCountersReady = make(chan struct{})
+		db.usageCountersPending.Store(true)
 	}
 	if _, err := w.ExecContext(ctx, artifactSessionQueueTriggerCreatesSQL); err != nil {
 		return fmt.Errorf("installing artifact session queue triggers: %w", err)

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
@@ -119,6 +121,31 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 	}, 30*time.Second, 100*time.Millisecond) {
 		t.Logf("last response: %s", body)
 	}
+}
+
+func TestServeSessionsWhileUsageCounterFillPending(t *testing.T) {
+	isolateServeTestHome(t)
+	cfg := testConfigWithClaudeFixture(t)
+	cfg.Host, cfg.NoSync = "127.0.0.1", true
+	var seed bytes.Buffer
+	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &seed))
+	database, err := db.Open(t.Context(), cfg.DBPath)
+	require.NoError(t, err)
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `INSERT INTO stats(key, value) VALUES ('message_usage_counters_pending', 1);
+CREATE TRIGGER test_hold_usage_fill BEFORE DELETE ON stats WHEN OLD.key='message_usage_counters_pending' BEGIN SELECT RAISE(ABORT, 'hold usage fill'); END`)
+		return err
+	}))
+	require.NoError(t, database.Close())
+	base := startRestartServe(t, cfg)
+	page := restartGet(t, base+"/api/v1/sessions?limit=25&include_one_shot=true")
+	require.Contains(t, page, "session0")
+	readOnly, err := db.OpenReadOnly(t.Context(), cfg.DBPath)
+	require.NoError(t, err)
+	defer readOnly.Close()
+	var pending bool
+	require.NoError(t, readOnly.Reader().QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM stats WHERE key='message_usage_counters_pending')`).Scan(&pending))
+	require.True(t, pending)
 }
 
 func TestServeStartupWorkerFailure(t *testing.T) {

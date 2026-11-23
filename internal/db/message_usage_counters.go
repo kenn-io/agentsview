@@ -2,8 +2,9 @@ package db
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
-	"log"
 
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
@@ -20,47 +21,80 @@ func storedMessageUsageCounters(tokenUsage string) (outputTokens, webSearchReque
 	return parsed.OutputTokens, parsed.WebSearchRequests
 }
 
-// addMessageUsageCounters adds the stored usage counter columns and fills them
-// for every existing message. Both happen in one transaction, so the columns'
-// presence means the fill finished. No trigger watches these columns, so the
-// UPDATE leaves the full-text indexes and usage generations alone.
-func addMessageUsageCounters(ctx context.Context, w *writerHandle, progress OpenProgressFunc) error {
-	var present bool
-	if err := w.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pragma_table_info('messages')
-		WHERE name = 'usage_web_search_requests')`).Scan(&present); err != nil {
-		return fmt.Errorf("probing messages.usage_web_search_requests: %w", err)
+// addMessageUsageCounters adds the columns and records any deferred fill.
+func addMessageUsageCounters(ctx context.Context, w *writerHandle, progress OpenProgressFunc, deferFill bool) (bool, error) {
+	var present, pending bool
+	if err := w.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pragma_table_info('messages') WHERE name = 'usage_web_search_requests')`).Scan(&present); err != nil {
+		return false, fmt.Errorf("probing message usage counters: %w", err)
 	}
-	if present {
-		return nil
+	if err := w.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM stats WHERE key = 'message_usage_counters_pending')`).Scan(&pending); err != nil {
+		return false, err
+	}
+	if present && !pending {
+		return false, nil
 	}
 	progress.report("Storing message usage counters")
 	tx, err := w.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("starting message usage counter migration: %w", err)
+		return false, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	for _, statement := range []string{
-		"ALTER TABLE messages ADD COLUMN usage_output_tokens INTEGER NOT NULL DEFAULT 0",
-		"ALTER TABLE messages ADD COLUMN usage_web_search_requests INTEGER NOT NULL DEFAULT 0",
-	} {
-		if _, err := tx.ExecContext(ctx, statement); err != nil {
-			return fmt.Errorf("adding message usage counters: %w", err)
+	if !present {
+		for _, statement := range []string{
+			"ALTER TABLE messages ADD COLUMN usage_output_tokens INTEGER NOT NULL DEFAULT 0",
+			"ALTER TABLE messages ADD COLUMN usage_web_search_requests INTEGER NOT NULL DEFAULT 0",
+		} {
+			if _, err := tx.ExecContext(ctx, statement); err != nil {
+				return false, fmt.Errorf("adding message usage counters: %w", err)
+			}
 		}
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE messages
-		SET usage_output_tokens = agentsview_usage_output_tokens(token_usage),
-			usage_web_search_requests = agentsview_usage_web_search_requests(token_usage)
-		WHERE token_usage != ''`)
-	if err != nil {
-		return fmt.Errorf("filling message usage counters: %w", err)
+	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO stats(key, value) VALUES ('message_usage_counters_pending', 1)`); err != nil {
+		return false, err
 	}
-	filled, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("counting filled message usage counters: %w", err)
+	if !deferFill {
+		if err := fillMessageUsageCounters(ctx, tx); err != nil {
+			return false, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("committing message usage counter migration: %w", err)
+		return false, err
 	}
-	log.Printf("migration: added message usage counter columns; filled %d messages", filled)
+	return deferFill, nil
+}
+
+func fillMessageUsageCounters(ctx context.Context, tx *sql.Tx) error {
+	result, err := tx.ExecContext(ctx, `DELETE FROM stats WHERE key = 'message_usage_counters_pending'`)
+	if err != nil {
+		return err
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil || deleted == 0 {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE messages
+		SET usage_output_tokens = agentsview_usage_output_tokens(token_usage),
+			usage_web_search_requests = agentsview_usage_web_search_requests(token_usage)
+		WHERE token_usage != ''`); err != nil {
+		return fmt.Errorf("filling message usage counters: %w", err)
+	}
 	return nil
+}
+
+// ErrMessageUsageCountersPending indicates that a writable process must finish the upgrade.
+var ErrMessageUsageCountersPending = errors.New("archive upgrade is still running; retry once the daemon finishes")
+
+func (db *DB) waitMessageUsageCounters(ctx context.Context) error {
+	if !db.usageCountersPending.Load() {
+		return nil
+	}
+	if db.readOnly {
+		return ErrMessageUsageCountersPending
+	}
+	select {
+	case <-db.usageCountersReady:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

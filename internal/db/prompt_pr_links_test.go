@@ -52,11 +52,16 @@ func TestPromptPRLinksArchiveUpgrade(t *testing.T) {
 		require.True(t, ok)
 		s := Session{ID: "archived", Project: "project", Machine: "local", Agent: "chatgpt", PRLinks: []PRLink{link}}
 		require.NoError(t, d.UpsertSession(t.Context(), s))
+		insertSession(t, d, "empty1", "project")
+		insertSession(t, d, "empty2", "project")
 		require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
 			if _, err := tx.ExecContext(t.Context(), artifactSessionQueueTriggerDropsSQL); err != nil {
 				return err
 			}
 			if _, err := tx.ExecContext(t.Context(), `ALTER TABLE sessions DROP COLUMN structured_pr_links`); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(t.Context(), `CREATE TABLE session_update_probe(id TEXT); CREATE TRIGGER session_update_probe_trigger AFTER UPDATE OF structured_pr_links ON sessions BEGIN INSERT INTO session_update_probe VALUES (NEW.id); END`); err != nil {
 				return err
 			}
 			return writeUserVersion(t.Context(), tx, promptPRLinksDataVersion-1)
@@ -67,6 +72,11 @@ func TestPromptPRLinksArchiveUpgrade(t *testing.T) {
 		structured, err := d.GetSessionStructuredPRLinks(t.Context(), s.ID)
 		require.NoError(t, err)
 		assert.Equal(t, []PRLink{link}, structured)
+		var count int
+		require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT COUNT(*) FROM session_update_probe WHERE id IN ('empty1', 'empty2')`).Scan(&count))
+		assert.Zero(t, count)
+		require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT COUNT(*) FROM session_update_probe WHERE id = 'archived'`).Scan(&count))
+		assert.Equal(t, 1, count)
 	})
 	// An interrupted open can leave the archive at the old version after adding the column.
 	t.Run("interrupted upgrade", func(t *testing.T) {
