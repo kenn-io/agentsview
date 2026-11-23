@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"go.kenn.io/agentsview/internal/config"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -409,4 +411,27 @@ func TestTermsSearchScansWhenImportDropsIndexMidSearch(t *testing.T) {
 	require.Len(t, page.Matches, 1)
 	assert.Equal(t, "message", page.Matches[0].Location)
 	assert.Equal(t, 0, page.Matches[0].Ordinal)
+}
+
+func TestDaemonOpenDefersSubstringIndexRepair(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d := testDBAtPath(t, path, "source")
+	seedSearchSession(t, d, "session", "project", [][2]string{{"user", "needle before repair"}})
+	for _, stmt := range dropSubstringIndexSQL {
+		_, err := d.getWriter().Exec(t.Context(), stmt)
+		require.NoError(t, err)
+	}
+	require.NoError(t, d.Close())
+	d, err := OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	require.False(t, d.hasSubstringIndex(t.Context()))
+	seedSearchSession(t, d, "new", "project", [][2]string{{"user", "needle after open"}})
+	filter := ContentSearchFilter{Pattern: "needle", Limit: 50}
+	before := substringHits(t, d, filter)
+	require.Len(t, before, 2)
+	require.NoError(t, d.RepairMessageFTS(t.Context()))
+	require.True(t, d.hasSubstringIndex(t.Context()))
+	requireSubstringIndexIntact(t, d)
+	assert.Equal(t, before, substringHits(t, d, filter))
 }

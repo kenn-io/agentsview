@@ -129,6 +129,7 @@ func TestDeferredMessageFTSHTTP(t *testing.T) {
 		handler.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0"+path, nil))
 		return response
 	}
+	assert.Equal(t, http.StatusOK, get("/api/v1/sessions").Code)
 	assert.Equal(t, http.StatusNotImplemented, get("/api/v1/search?q=searchneedle").Code)
 	assert.Equal(t, http.StatusInternalServerError, get("/api/v1/search/content?pattern=deploy%20window").Code)
 }

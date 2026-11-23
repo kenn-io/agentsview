@@ -249,11 +249,11 @@ type cjkFTSTransactor interface {
 // loaded extension and dictionaries. The table, complete backfill, fingerprint,
 // and connection-local maintenance triggers become visible together.
 func ensureCJKFTS(
-	ctx context.Context, conn cjkFTSTransactor, forceRebuild bool,
-) error {
+	ctx context.Context, conn cjkFTSTransactor, forceRebuild, deferRebuild bool,
+) (bool, error) {
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("beginning CJK FTS transaction: %w", err)
+		return false, fmt.Errorf("beginning CJK FTS transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -266,7 +266,7 @@ func ensureCJKFTS(
 		"sessions_cjk_pending_ad",
 	} {
 		if _, err := tx.ExecContext(ctx, "DROP TRIGGER IF EXISTS "+trigger); err != nil {
-			return fmt.Errorf("dropping CJK FTS trigger %s: %w", trigger, err)
+			return false, fmt.Errorf("dropping CJK FTS trigger %s: %w", trigger, err)
 		}
 	}
 
@@ -276,7 +276,7 @@ func ensureCJKFTS(
 			SELECT 1 FROM sqlite_master
 			WHERE type = 'table' AND name = 'messages_cjk_fts'
 		)`).Scan(&tableExists); err != nil {
-		return fmt.Errorf("checking CJK FTS table: %w", err)
+		return false, fmt.Errorf("checking CJK FTS table: %w", err)
 	}
 
 	var pendingTableExists bool
@@ -286,7 +286,7 @@ func ensureCJKFTS(
 			WHERE type = 'table'
 			  AND name = 'messages_cjk_fts_pending_sessions'
 		)`).Scan(&pendingTableExists); err != nil {
-		return fmt.Errorf("checking CJK FTS freshness ledger table: %w", err)
+		return false, fmt.Errorf("checking CJK FTS freshness ledger table: %w", err)
 	}
 
 	trackFreshness := simpleFTSRuntimeConfig.available() ||
@@ -295,39 +295,39 @@ func ensureCJKFTS(
 		if _, err := tx.ExecContext(
 			ctx, "DELETE FROM stats WHERE key = ?", cjkFTSFingerprintStatsKey,
 		); err != nil {
-			return fmt.Errorf("clearing orphaned CJK FTS fingerprint: %w", err)
+			return false, fmt.Errorf("clearing orphaned CJK FTS fingerprint: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("committing disabled CJK FTS state: %w", err)
+			return false, fmt.Errorf("committing disabled CJK FTS state: %w", err)
 		}
-		return nil
+		return false, nil
 	}
 
 	if _, err := tx.ExecContext(ctx, schemaCJKFTSPendingSessions); err != nil {
-		return fmt.Errorf("installing CJK FTS freshness ledger: %w", err)
+		return false, fmt.Errorf("installing CJK FTS freshness ledger: %w", err)
 	}
 	var pendingSessions int
 	if err := tx.QueryRowContext(ctx,
 		"SELECT count(*) FROM messages_cjk_fts_pending_sessions",
 	).Scan(&pendingSessions); err != nil {
-		return fmt.Errorf("checking CJK FTS freshness ledger: %w", err)
+		return false, fmt.Errorf("checking CJK FTS freshness ledger: %w", err)
 	}
 
 	if !simpleFTSRuntimeConfig.available() {
 		if tableExists {
 			if _, err := tx.ExecContext(ctx, "DROP TABLE messages_cjk_fts"); err != nil {
-				return fmt.Errorf("dropping unavailable CJK FTS: %w", err)
+				return false, fmt.Errorf("dropping unavailable CJK FTS: %w", err)
 			}
 		}
 		if _, err := tx.ExecContext(
 			ctx, "DELETE FROM stats WHERE key = ?", cjkFTSFingerprintStatsKey,
 		); err != nil {
-			return fmt.Errorf("clearing CJK FTS fingerprint: %w", err)
+			return false, fmt.Errorf("clearing CJK FTS fingerprint: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("committing CJK FTS removal: %w", err)
+			return false, fmt.Errorf("committing CJK FTS removal: %w", err)
 		}
-		return nil
+		return false, nil
 	}
 
 	var storedFingerprint string
@@ -336,25 +336,32 @@ func ensureCJKFTS(
 		cjkFTSFingerprintStatsKey,
 	).Scan(&storedFingerprint)
 	if fingerprintErr != nil && !errors.Is(fingerprintErr, sql.ErrNoRows) {
-		return fmt.Errorf("reading CJK FTS fingerprint: %w", fingerprintErr)
+		return false, fmt.Errorf("reading CJK FTS fingerprint: %w", fingerprintErr)
 	}
 	current := tableExists && fingerprintErr == nil && pendingSessions == 0 &&
 		storedFingerprint == simpleFTSRuntimeConfig.fingerprint
 
+	if deferRebuild && !current && !forceRebuild {
+		if err := tx.Commit(); err != nil {
+			return false, fmt.Errorf("committing deferred CJK FTS state: %w", err)
+		}
+		return true, nil
+	}
+
 	if forceRebuild || !current {
-		log.Print("rebuilding CJK FTS index; startup waits for the full message scan to finish")
+		log.Print("rebuilding CJK FTS index; scanning all messages")
 		if tableExists {
 			if _, err := tx.ExecContext(ctx, "DROP TABLE messages_cjk_fts"); err != nil {
-				return fmt.Errorf("dropping stale CJK FTS: %w", err)
+				return false, fmt.Errorf("dropping stale CJK FTS: %w", err)
 			}
 		}
 		if _, err := tx.ExecContext(ctx, schemaCJKFTS); err != nil {
-			return fmt.Errorf("creating CJK FTS: %w", err)
+			return false, fmt.Errorf("creating CJK FTS: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx,
 			"INSERT INTO messages_cjk_fts(messages_cjk_fts) VALUES('rebuild')",
 		); err != nil {
-			return fmt.Errorf("backfilling CJK FTS: %w", err)
+			return false, fmt.Errorf("backfilling CJK FTS: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO stats (key, value) VALUES (?, ?)
@@ -362,24 +369,25 @@ func ensureCJKFTS(
 			cjkFTSFingerprintStatsKey,
 			simpleFTSRuntimeConfig.fingerprint,
 		); err != nil {
-			return fmt.Errorf("storing CJK FTS fingerprint: %w", err)
+			return false, fmt.Errorf("storing CJK FTS fingerprint: %w", err)
 		}
 		if _, err := tx.ExecContext(
 			ctx, "DELETE FROM messages_cjk_fts_pending_sessions",
 		); err != nil {
-			return fmt.Errorf("clearing CJK FTS freshness ledger: %w", err)
+			return false, fmt.Errorf("clearing CJK FTS freshness ledger: %w", err)
 		}
 	}
 
 	if _, err := tx.ExecContext(ctx, schemaCJKFTSTriggers); err != nil {
-		return fmt.Errorf("installing CJK FTS triggers: %w", err)
+		return false, fmt.Errorf("installing CJK FTS triggers: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("committing CJK FTS transaction: %w", err)
+		return false, fmt.Errorf("committing CJK FTS transaction: %w", err)
 	}
-	return nil
+	return false, nil
 }
 
-func installCJKFTSTriggers(conn *sql.DB) error {
-	return ensureCJKFTS(context.Background(), conn, false)
+func installCJKFTSTriggers(conn *sql.DB, deferRebuild bool) error {
+	_, err := ensureCJKFTS(context.Background(), conn, false, deferRebuild)
+	return err
 }

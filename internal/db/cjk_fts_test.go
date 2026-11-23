@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 
+	"go.kenn.io/agentsview/internal/config"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -598,4 +600,44 @@ func TestCJKFTSSurvivesCompaction(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, page.Matches, "Chinese search still returns after compaction")
 	assert.Equal(t, "compact-cn", page.Matches[0].SessionID)
+}
+
+func TestDaemonOpenDefersCJKFTSRepair(t *testing.T) {
+	if !simpleFTSRuntimeConfig.available() {
+		t.Skip("simple FTS5 runtime is not installed for this test process")
+	}
+	for _, state := range []string{"fingerprint", "ledger"} {
+		t.Run(state, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "archive.db")
+			d := testDBAtPath(t, path, "source")
+			seedSearchSession(t, d, "chinese", "project", [][2]string{{"user", "请验证中文搜索功能"}})
+			filter := ContentSearchFilter{Pattern: "中文搜索", Mode: "fts", Sources: []string{"messages"}, Limit: 20}
+			want, err := d.SearchContent(t.Context(), filter)
+			require.NoError(t, err)
+			require.NotEmpty(t, want.Matches)
+			if state == "fingerprint" {
+				_, err = d.getWriter().Exec(t.Context(), "UPDATE stats SET value = 'foreign' WHERE key = ?", cjkFTSFingerprintStatsKey)
+			} else {
+				_, err = d.getWriter().Exec(t.Context(), "INSERT INTO messages_cjk_fts_pending_sessions(session_id, generation) VALUES ('chinese', 1)")
+			}
+			require.NoError(t, err)
+			require.NoError(t, d.Close())
+			d, err = OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, d.Close()) })
+			assert.False(t, d.HasCJKFTS(t.Context()))
+			require.NoError(t, d.CloseWriter())
+			require.NoError(t, d.ReopenWriter())
+			assert.False(t, d.HasCJKFTS(t.Context()))
+			var before, after string
+			require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key='search_history_token'`).Scan(&before))
+			require.NoError(t, d.RepairMessageFTS(t.Context()))
+			require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key='search_history_token'`).Scan(&after))
+			assert.NotEqual(t, before, after)
+			assert.True(t, d.HasCJKFTS(t.Context()))
+			got, err := d.SearchContent(t.Context(), filter)
+			require.NoError(t, err)
+			assert.Equal(t, want.Matches, got.Matches)
+		})
+	}
 }

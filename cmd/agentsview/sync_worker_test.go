@@ -108,12 +108,23 @@ func TestSyncWorkerRepairsMessageFTSExceptAtStartup(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, database.DropFTS(t.Context()))
 			require.NoError(t, database.Close())
+			raw, err := sql.Open("sqlite3", cfg.DBPath)
+			require.NoError(t, err)
+			_, err = raw.ExecContext(t.Context(), `DROP TRIGGER IF EXISTS messages_trigram_ai; DROP TRIGGER IF EXISTS messages_trigram_ad; DROP TRIGGER IF EXISTS messages_trigram_au; DROP TABLE IF EXISTS message_trigram_fts; DROP TABLE IF EXISTS thinking_trigram_fts; DROP VIEW IF EXISTS message_trigram_source`)
+			require.NoError(t, err)
+			require.NoError(t, raw.Close())
 			var out bytes.Buffer
 			require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: mode}, &out))
 			database, err = db.OpenReadOnly(t.Context(), cfg.DBPath)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, database.Close()) })
 			assert.Equal(t, mode != "startup", database.HasFTS(t.Context()))
+			raw, err = sql.Open("sqlite3", cfg.DBPath)
+			require.NoError(t, err)
+			defer raw.Close()
+			var exists bool
+			require.NoError(t, raw.QueryRowContext(t.Context(), `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'message_trigram_fts')`).Scan(&exists))
+			assert.Equal(t, mode != "startup", exists)
 		})
 	}
 }

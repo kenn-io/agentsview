@@ -88,9 +88,9 @@ func prepareMessageFTSRepair(ctx context.Context, w *writerHandle) error {
 	return tx.Commit()
 }
 
-// RepairMessageFTS rebuilds a deferred standard message index. Writers wait while it holds db.mu.
+// RepairMessageFTS rebuilds deferred search indexes. Writers wait while it holds db.mu.
 func (db *DB) RepairMessageFTS(ctx context.Context) error {
-	if !db.messageFTSRepairPending.Load() {
+	if !db.messageFTSRepairPending.Load() && !db.searchIndexRepairPending.Load() {
 		return nil
 	}
 	_, err := RetryAcrossHandoff(ctx, db, func() (struct{}, error) {
@@ -102,18 +102,32 @@ func (db *DB) RepairMessageFTS(ctx context.Context) error {
 			return struct{}{}, ErrWriterClosed
 		}
 		w := db.getWriter()
-		var exists bool
-		if err := w.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages_fts')`).Scan(&exists); err != nil {
-			return struct{}{}, err
-		}
-		if !exists {
-			if err := rebuildMessageFTS(ctx, w, nil, true); err != nil {
+		if db.messageFTSRepairPending.Load() {
+			var exists bool
+			if err := w.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages_fts')`).Scan(&exists); err != nil {
 				return struct{}{}, err
 			}
-		} else if _, err := w.ExecContext(ctx, searchTokenSQL); err != nil {
-			return struct{}{}, err
+			if !exists {
+				if err := rebuildMessageFTS(ctx, w, nil, true); err != nil {
+					return struct{}{}, err
+				}
+			} else if _, err := w.ExecContext(ctx, searchTokenSQL); err != nil {
+				return struct{}{}, err
+			}
+			db.messageFTSRepairPending.Store(false)
 		}
-		db.messageFTSRepairPending.Store(false)
+		if db.searchIndexRepairPending.Load() {
+			if _, err := ensureSubstringIndex(ctx, w, nil, false); err != nil {
+				return struct{}{}, err
+			}
+			if _, err := ensureCJKFTS(ctx, w, false, false); err != nil {
+				return struct{}{}, err
+			}
+			if _, err := w.ExecContext(ctx, searchTokenSQL); err != nil {
+				return struct{}{}, err
+			}
+			db.searchIndexRepairPending.Store(false)
+		}
 		return struct{}{}, nil
 	})
 	return err
