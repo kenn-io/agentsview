@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -338,6 +339,12 @@ func TestToolPRLinksArchiveUpgrade(t *testing.T) {
 		{"tool upgrade", toolPRLinksDataVersion - 1, "review https://github.com/example/repo/pull/41", "gh pr view 42 -R example/repo", []string{"https://github.com/example/repo/pull/41", "https://github.com/example/repo/pull/42"}, true},
 		{"quoted command", toolPRLinksDataVersion - 1, "", "g''h pr view 43 -R example/repo", []string{"https://github.com/example/repo/pull/43"}, true},
 		{"unrelated command", toolPRLinksDataVersion - 1, "", "echo high", nil, false},
+		{"unrelated HTTP command", toolPRLinksDataVersion - 1, "", "curl https://example.com/api", nil, false},
+		{"task pull", toolPRLinksDataVersion - 1, "", "https://github.com/example/repo/pull/44", []string{"https://github.com/example/repo/pull/44"}, true},
+		{"task pulls", toolPRLinksDataVersion - 1, "", "https://code.example/example/repo/pulls/45", []string{"https://code.example/example/repo/pulls/45"}, true},
+		{"task merge request", toolPRLinksDataVersion - 1, "", "https://git.example/example/repo/-/merge_requests/46", []string{"https://git.example/example/repo/-/merge_requests/46"}, true},
+		{"task encoded route", toolPRLinksDataVersion - 1, "", "https://github.com/example/repo/%70ull/47", []string{"https://github.com/example/repo/pull/47"}, true},
+		{"task JSON escaped route", toolPRLinksDataVersion - 1, "", `https://github.com/example/repo/\u0070ull/48`, []string{"https://github.com/example/repo/pull/48"}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "archive.db")
@@ -350,7 +357,11 @@ func TestToolPRLinksArchiveUpgrade(t *testing.T) {
 			})
 			s := Session{ID: "tool-upgrade", Project: "project", Machine: "local", Agent: "claude"}
 			require.NoError(t, d.UpsertSession(t.Context(), s))
-			messages := []Message{{SessionID: s.ID, Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"` + tc.command + `"}`}}}}
+			category, field := "Bash", "command"
+			if strings.HasPrefix(tc.name, "task ") {
+				category, field = "Task", "prompt"
+			}
+			messages := []Message{{SessionID: s.ID, Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{ToolName: category, Category: category, InputJSON: `{"` + field + `":"` + tc.command + `"}`}}}}
 			if tc.prompt != "" {
 				messages = append(messages, Message{SessionID: s.ID, Ordinal: 0, Role: "user", Content: tc.prompt})
 			}

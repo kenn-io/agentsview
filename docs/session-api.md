@@ -705,13 +705,18 @@ AgentsView keeps one link per pull request. A bare PR number uses a repository
 named by `-R`, `--repo`, or a literal `GH_REPO` set unconditionally in the
 same shell command.
 Otherwise, it links when the session has a single known checkout remote and no
-earlier command changed the directory or GitHub settings. Archives that omitted
-tool inputs cannot recover links from those inputs. A prompt link tells you only
+earlier command changed the directory or GitHub settings. This assumes no
+unrecorded GitHub CLI repository override. Archives that omitted tool inputs
+cannot recover links from those inputs. A prompt link tells you only
 that the prompt mentioned the pull request, not that the session worked on it.
 Claude Code also includes `pr-link` entries in its transcripts.
 Because Claude Code records these links for the whole transcript, every session
 split from that transcript, such as a rewind's fork, carries them like its name
 and git branch.
+
+Existing hosted sessions gain command links when their source group is projected
+again. Operators can [schedule a reparse](/docs/hosted-raw-sync/#reparse-and-rollback)
+of retained inputs. Bare numbers require repository evidence in those inputs.
 
 To filter by pull request, use `session list --pr` or the `pr` query parameter.
 Pass `owner/repo` for any pull request in that repository, `owner/repo#123` for

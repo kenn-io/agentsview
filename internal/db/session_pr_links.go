@@ -664,8 +664,9 @@ func storedToolCallPRLinksTx(ctx context.Context, tx transactionQueries, id, cwd
 const toolPRLinksDataVersion = 186
 
 // toolPRLinkCandidateSQL matches gh pr commands, including a gh quoted or
-// escaped in the shell, and URLs.
-const toolPRLinkCandidateSQL = `input_json LIKE '%gh%pr%' OR input_json LIKE '%g''%h%pr%' OR input_json LIKE '%g\%h%pr%' OR input_json LIKE '%http%'`
+// escaped in the shell, and PR URLs. Escaped paths remain candidates because
+// decoding can reveal a PR route.
+const toolPRLinkCandidateSQL = `input_json LIKE '%gh%pr%' OR input_json LIKE '%g''%h%pr%' OR input_json LIKE '%g\%h%pr%' OR (input_json LIKE '%http%' AND (input_json LIKE '%/pull/%' OR input_json LIKE '%/pulls/%' OR input_json LIKE '%/-/merge_requests/%' OR instr(input_json, '%') > 0 OR instr(input_json, char(92)) > 0))`
 
 func (db *DB) upgradeToolPRLinksTx(ctx context.Context, tx *sql.Tx) error {
 	version, _, err := readUserVersion(ctx, tx)
