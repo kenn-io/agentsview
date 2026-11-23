@@ -501,11 +501,10 @@ func TestSyncWorkerChildArgsForwardsServeConfigFlags(t *testing.T) {
 		"serve", "--host", "0.0.0.0", "--port", "9999",
 		"--background", "--pprof",
 	}
-	args := syncWorkerChildArgs(parent, syncWorkerRequest{Mode: "startup", LiveArchive: true})
+	args := syncWorkerChildArgs(parent, syncWorkerRequest{Mode: "startup"})
 
 	require.Equal(t, "sync-worker", args[0])
 	assert.Equal(t, []string{"--mode", "startup"}, args[1:3])
-	assert.Contains(t, args, "--live-archive")
 	assert.Contains(t, args, "--host=0.0.0.0", "serve config flag forwarded")
 	assert.Contains(t, args, "--port=9999", "serve config flag forwarded")
 	for _, a := range args {

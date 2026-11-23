@@ -285,9 +285,9 @@
   async function submitRename() {
     if (!renaming) return;
     renaming = false;
-    const name = renameValue.trim() || null, id = session.id;
+    const name = renameValue.trim() || null;
     try {
-      await sessions.renameSession(id, name);
+      await sessions.renameSession(session.id, name);
     } catch (error) {
       failRename(error);
     }

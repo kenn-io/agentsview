@@ -337,8 +337,8 @@ func markArchiveStale(t *testing.T, dbPath string) {
 // handoff, so they must refuse a stale-version archive instead of swapping the
 // file out from under the daemon's still-open reader pool.
 func TestSyncWorkerRefusesResyncForLiveArchiveModes(t *testing.T) {
-	for _, request := range []syncWorkerRequest{{Mode: "sync"}, {Mode: "audit"}, {Mode: "startup", LiveArchive: true}} {
-		t.Run(request.Mode, func(t *testing.T) {
+	for _, mode := range []string{"sync", "audit"} {
+		t.Run(mode, func(t *testing.T) {
 			cfg := testConfigWithClaudeFixture(t)
 			database, err := db.Open(t.Context(), cfg.DBPath)
 			require.NoError(t, err)
@@ -352,7 +352,7 @@ func TestSyncWorkerRefusesResyncForLiveArchiveModes(t *testing.T) {
 			require.NoError(t, err)
 
 			var out bytes.Buffer
-			err = runSyncWorkerContext(t.Context(), cfg, request, &out)
+			err = runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: mode}, &out)
 			require.Error(t, err, "a live-archive worker must refuse a stale archive")
 			require.ErrorContains(t, err, "resync")
 

@@ -299,7 +299,7 @@ func workerWritePassLocked(
 		)
 	}
 
-	request := syncWorkerRequest{Mode: mode, LinksPending: engine.PendingSubagentLinksExclusive(), LiveArchive: true}
+	request := syncWorkerRequest{Mode: mode, LinksPending: engine.PendingSubagentLinksExclusive()}
 	result, workerErr := launchSyncWorker(ctx, cfg, request, onLine)
 	if result.Stats != nil {
 		if (mode == "sync" || mode == "audit") && result.LinkStateKnown {
@@ -544,9 +544,6 @@ func syncWorkerChildArgs(parentArgs []string, request syncWorkerRequest) []strin
 	args := []string{"sync-worker", "--mode", request.Mode}
 	if request.LinksPending {
 		args = append(args, "--links-pending")
-	}
-	if request.LiveArchive {
-		args = append(args, "--live-archive")
 	}
 	fs := pflag.NewFlagSet("sync-worker-forward", pflag.ContinueOnError)
 	fs.ParseErrorsAllowlist.UnknownFlags = true

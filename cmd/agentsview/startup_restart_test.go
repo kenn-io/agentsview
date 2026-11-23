@@ -82,7 +82,7 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 	require.NoError(t, os.Remove(deleted))
 	writeRestartSession(t, cfg, "before-worker")
 
-	started, release, synced, finish := make(chan syncWorkerRequest, 1), make(chan struct{}), make(chan struct{}), make(chan struct{})
+	started, release := make(chan syncWorkerRequest, 1), make(chan struct{})
 	restore := stubLaunchSyncWorker(t, func(ctx context.Context, cfg config.Config, req syncWorkerRequest, _ func(workerLine)) (workerResult, error) {
 		started <- req
 		select {
@@ -92,21 +92,13 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 		}
 		var out bytes.Buffer
 		err := runSyncWorkerContext(ctx, cfg, req, &out)
-		result := decodeSingleResult(t, &out)
-		close(synced)
-		select {
-		case <-finish:
-		case <-ctx.Done():
-			return result, ctx.Err()
-		}
-		return result, err
+		return decodeSingleResult(t, &out), err
 	})
 	t.Cleanup(restore)
 	base := startRestartServe(t, cfg)
 	select {
 	case request := <-started:
 		require.Equal(t, "startup", request.Mode)
-		require.True(t, request.LiveArchive)
 	case <-time.After(30 * time.Second):
 		require.FailNow(t, "worker did not start")
 	}
@@ -115,21 +107,13 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 	require.Contains(t, page, "offline-deleted")
 	require.Contains(t, restartGet(t, base+"/api/v1/sync/status"), `"startup_pending":true`)
 	close(release)
-	select {
-	case <-synced:
-	case <-time.After(30 * time.Second):
-		require.FailNow(t, "worker did not sync")
-	}
-	writeRestartSession(t, cfg, "during-worker")
-	close(finish)
 	var body string
 	if !assert.Eventually(t, func() bool {
 		body = restartGet(t, base+"/api/v1/sessions?limit=25")
-		return strings.Contains(body, "before-worker") && strings.Contains(body, "during-worker") && strings.Contains(restartGet(t, base+"/api/v1/sync/status"), `"startup_pending":false`)
+		return strings.Contains(body, "before-worker") && strings.Contains(restartGet(t, base+"/api/v1/sync/status"), `"startup_pending":false`)
 	}, 30*time.Second, 100*time.Millisecond) {
 		t.Logf("last response: %s", body)
 	}
-
 }
 
 func TestServeStartupWorkerFailure(t *testing.T) {

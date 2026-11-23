@@ -158,8 +158,11 @@ func (db *DB) dashboardParts(ctx context.Context, f AnalyticsFilter) ([]dashboar
 		return nil, nil, false, nil
 	}
 	identity, err := db.GetDatabaseID(ctx)
-	if err != nil || identity == "" {
+	if err != nil {
 		return nil, nil, false, err
+	}
+	if identity == "" {
+		return nil, nil, false, nil
 	}
 	release, err := db.acquireBulkRead(ctx)
 	if err != nil {

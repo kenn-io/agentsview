@@ -59,11 +59,7 @@
   let menuEl = $state<HTMLDivElement | null>(null);
 
   $effect(() => {
-    if (renameSessionId && renameSessionId !== session?.id) {
-      renaming = false;
-      renameError = "";
-      renameSessionId = undefined;
-    }
+    if (renameSessionId && renameSessionId !== session?.id) renaming = false;
   });
 
   const openers = new SessionOpeners(() => session);
@@ -160,7 +156,6 @@
   async function submitRename() {
     if (!renaming || !session) return;
     renaming = false;
-    if (renameSessionId !== session.id) return;
     const name = renameValue.trim() || null, id = session.id;
     try {
       await sessions.renameSession(id, name);

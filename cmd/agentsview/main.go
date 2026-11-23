@@ -894,21 +894,15 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		defer extractSched.Stop()
 	}
 
-	// Wait for startup work to stop before closing its engine and archive.
-	var startupDone chan struct{}
+	// Run the deferred worker-startup gap reconciliation now that the URL
+	// banner is out and every background service is started. It holds the
+	// engine's sync mutex, not this goroutine's defers, so a SIGTERM during
+	// a long reconciliation still unwinds through waitForServerRuntime.
 	if completeWorkerStartup != nil {
-		startupDone = make(chan struct{})
-		go func() {
-			defer close(startupDone)
-			completeWorkerStartup()
-		}()
+		completeWorkerStartup()
 	}
 
 	err = waitForServerRuntime(ctx, srv, rt)
-	requestRestart(nil)
-	if startupDone != nil {
-		<-startupDone
-	}
 	if restart, ok := errors.AsType[*foregroundRestartError](context.Cause(ctx)); ok {
 		if err != nil {
 			log.Printf("restart cleanup: %v", err)
