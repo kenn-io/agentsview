@@ -18,7 +18,6 @@ workflows:
         - 'actions/setup-python@v7.1.0'
         - 'actions/upload-artifact@v7.0.2'
         - 'astral-sh/setup-uv@v10.3.3'
-        - 'kenn-io/actions@a75fd176648b63e41d3db03d942ef101a69e0e50'
         - 'kenn-io/actions@main'
         - 'kenn-io/kit@v0.58.1'
         - 'msys2/setup-msys2@v2.33.0'
@@ -117,21 +116,15 @@ dependencies:
         commit: 'sha1-df2a88e9fe4098bad09cb42c3dec7187f15861fc'
         owner_id: 1940490
         repo_id: 260749683
-    'kenn-io/actions@a75fd176648b63e41d3db03d942ef101a69e0e50':
+    'kenn-io/actions@main':
         ref: 'main'
         commit: 'sha1-a75fd176648b63e41d3db03d942ef101a69e0e50'
         owner_id: 259885253
         repo_id: 1427332808
         uses:
-            - 'actions/setup-node@v7.1.0'
-    'kenn-io/actions@main':
-        ref: 'main'
-        commit: 'sha1-91872e6fe12293b93dd00abc6b668658063ed3c6'
-        owner_id: 259885253
-        repo_id: 1427332808
-        uses:
             - 'actions/checkout@v7.0.1'
             - 'actions/setup-go@v7.0.0'
+            - 'actions/setup-node@v7.1.0'
             - 'step-security/paths-filter@v4.0.3'
     'kenn-io/kit@v0.58.1':
         ref: 'v0.58.1'
