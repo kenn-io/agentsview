@@ -15,6 +15,8 @@ func TestCommandPRLinks(t *testing.T) {
 		{`gh pr co 42 -R example/repo`, "", "https://github.com/example/repo/pull/42"},
 		{`git push && gh pr view 42`, remote, "https://github.com/example/repo/pull/42"},
 		{`ls; gh pr view 42`, remote, "https://github.com/example/repo/pull/42"},
+		{`echo $GH_REPO; gh pr view 42`, remote, "https://github.com/example/repo/pull/42"},
+		{`gh repo set-default --view; gh pr view 42`, remote, "https://github.com/example/repo/pull/42"},
 		{`gh repo set-default example/other; gh pr view 42`, remote, ""},
 		{`gh repo set-default example/other; gh pr view 42 -R example/repo`, remote, ""},
 		{`cd repo && gh pr view 42`, remote, ""},

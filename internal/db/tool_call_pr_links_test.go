@@ -118,7 +118,7 @@ func TestToolCallPRLinksSharedShellDirectoryChange(t *testing.T) {
 		}}}
 		assert.Empty(t, toolCallPRLinks(t, messages, "/work/repo", "https://github.com/example/repo.git"))
 	}
-	for _, command := range []string{`git push`, `git config --get remote.origin.url`, `git remote -v`} {
+	for _, command := range []string{`git push`, `git config --get remote.origin.url`, `git remote -v`, `echo $GH_REPO`, `gh repo set-default --view`} {
 		messages := []db.Message{{ToolCalls: []db.ToolCall{
 			{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"` + command + `"}`},
 			{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr merge 60"}`},

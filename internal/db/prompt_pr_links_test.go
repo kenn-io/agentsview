@@ -518,6 +518,7 @@ func TestToolPRLinksSharedShellRepositoryChanges(t *testing.T) {
 			require.NoError(t, d.InsertMessages(t.Context(), []Message{message(0, string(input))}))
 			require.NoError(t, d.InsertMessages(t.Context(), []Message{message(1, `{"command":"gh pr view 42"}`)}))
 			require.NoError(t, d.InsertMessages(t.Context(), []Message{message(2, `{"command":"gh pr view 43","workdir":"/work/repo"}`)}))
+			require.NoError(t, d.InsertMessages(t.Context(), []Message{message(3, `{"command":"gh pr view 44 -R example/repo"}`)}))
 			got, err := d.GetSession(t.Context(), s.ID)
 			require.NoError(t, err)
 			assert.Empty(t, got.PRLinks)

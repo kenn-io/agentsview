@@ -75,7 +75,7 @@ func AnalyzePRCommand(ctx context.Context, command, remote string, allowBare, ho
 	if err != nil {
 		return nil, false, false, nil, ctx.Err()
 	}
-	directoryChanged, repositoryChanged, functions := bashChangesRepositoryContext(file, command)
+	directoryChanged, repositoryChanged, repoAssignment, functions := bashChangesRepositoryContext(file)
 	var dependsOnRemote []PRLink
 	type segment struct {
 		stmt   *syntax.Stmt
@@ -130,7 +130,7 @@ func AnalyzePRCommand(ctx context.Context, command, remote string, allowBare, ho
 	}
 	shellHost, shellHostSet, shellHostValid := "", false, true
 	var links [][]PRLink
-	bareSafe := allowBare && !strings.Contains(command, "GH_REPO")
+	bareSafe := allowBare && !repoAssignment
 	for _, segment := range segments {
 		stmt := segment.stmt
 		if err := ctx.Err(); err != nil {
@@ -303,7 +303,7 @@ func AnalyzePRCommand(ctx context.Context, command, remote string, allowBare, ho
 		}
 		if link, ok := NewPRLink(fmt.Sprintf("https://%s/%s/pull/%d", selectedHost, repo, number), repo, number); ok {
 			links = append(links, []PRLink{link})
-			if !specified {
+			if !specified || (explicitHost == "" && !hostSet) {
 				dependsOnRemote = append(dependsOnRemote, link)
 			}
 		}
@@ -337,12 +337,15 @@ func literalCondition(stmts []*syntax.Stmt) (bool, bool) {
 	return word == "true", literal && (word == "true" || word == "false")
 }
 
-func bashChangesRepositoryContext(file *syntax.File, command string) (bool, bool, map[string]bool) {
-	repositoryChanged := strings.Contains(command, "GH_REPO") || strings.Contains(command, "GH_HOST")
+func bashChangesRepositoryContext(file *syntax.File) (bool, bool, bool, map[string]bool) {
+	repositoryChanged, repoAssignment := false, false
 	functions := make(map[string]bool)
 	syntax.Walk(file, func(node syntax.Node) bool {
 		if fn, ok := node.(*syntax.FuncDecl); ok {
 			functions[fn.Name.Value] = true
+		}
+		if assign, ok := node.(*syntax.Assign); ok && assign.Name != nil && assign.Name.Value == "GH_REPO" {
+			repoAssignment = true
 		}
 		return true
 	})
@@ -353,7 +356,22 @@ func bashChangesRepositoryContext(file *syntax.File, command string) (bool, bool
 		switch call := node.(type) {
 		case *syntax.FuncDecl:
 			return false
+		case *syntax.DeclClause:
+			if call.Variant.Value == "export" {
+				for _, arg := range call.Args {
+					if arg.Name != nil && (arg.Name.Value == "GH_REPO" || arg.Name.Value == "GH_HOST") {
+						repositoryChanged = true
+					}
+				}
+			}
 		case *syntax.CallExpr:
+			if len(call.Args) == 0 {
+				for _, assign := range call.Assigns {
+					if assign.Name != nil && (assign.Name.Value == "GH_REPO" || assign.Name.Value == "GH_HOST") {
+						repositoryChanged = true
+					}
+				}
+			}
 			if len(call.Args) == 0 {
 				return false
 			}
@@ -389,14 +407,26 @@ func bashChangesRepositoryContext(file *syntax.File, command string) (bool, bool
 		}
 		return !directoryChanged
 	})
-	return directoryChanged, repositoryChanged, functions
+	return directoryChanged, repositoryChanged, repoAssignment, functions
 }
 
 func repositoryMutation(words []string) bool {
 	if len(words) < 2 {
 		return false
 	}
+	if words[0] == "unset" {
+		for _, word := range words[1:] {
+			if word == "GH_REPO" || word == "GH_HOST" {
+				return true
+			}
+		}
+	}
 	if words[0] == "gh" && len(words) >= 3 && words[1] == "repo" && words[2] == "set-default" {
+		for _, word := range words[3:] {
+			if word == "--view" || word == "-v" {
+				return false
+			}
+		}
 		return true
 	}
 	if words[0] != "git" {
