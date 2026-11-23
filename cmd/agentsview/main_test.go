@@ -4406,11 +4406,34 @@ func TestDeferredSearchIndexesHTTP(t *testing.T) {
 				require.NoError(t, raw.QueryRowContext(t.Context(), `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='message_trigram_fts')`).Scan(&exists))
 				assert.False(t, exists)
 			}
+			require.NoError(t, database.CloseWriter())
+			waiting := make(chan struct{})
+			ctx, cancel := context.WithCancel(db.WithWriterWaitNotice(t.Context(), func() { close(waiting) }))
+			done := make(chan error, 1)
+			go func() { done <- database.RepairMessageFTS(ctx) }()
+			finished := false
+			t.Cleanup(func() {
+				cancel()
+				if !finished {
+					<-done
+				}
+			})
+			select {
+			case <-waiting:
+			case err := <-done:
+				finished = true
+				require.FailNow(t, "repair returned while writer was closed", "%v", err)
+			case <-time.After(30 * time.Second):
+				require.FailNow(t, "repair did not wait for the writer")
+			}
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0/api/v1/sessions", nil))
 			assert.Equal(t, http.StatusOK, response.Code)
 			assert.Contains(t, response.Body.String(), `"session"`)
-			require.NoError(t, database.RepairMessageFTS(t.Context()))
+			require.NoError(t, database.ReopenWriter())
+			err = <-done
+			finished = true
+			require.NoError(t, err)
 		})
 	}
 }
