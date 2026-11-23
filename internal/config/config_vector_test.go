@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/kit/embedlocal"
 )
 
@@ -985,4 +986,16 @@ func TestVectorConfigAgents(t *testing.T) {
 func TestVectorConfigAcceptsFreebuffAgent(t *testing.T) {
 	cfg := loadMinimalWithConfig(t, map[string]any{"vector": map[string]any{"agents": []string{"freebuff"}}})
 	assert.Equal(t, []string{"freebuff"}, cfg.Vector.Agents)
+}
+
+func TestVectorConfigAcceptsStoredAgents(t *testing.T) {
+	for _, def := range parser.Registry {
+		for _, agent := range parser.ProviderStoredAgents(def.Type) {
+			t.Run(string(agent), func(t *testing.T) {
+				cfg := validVectorConfig()
+				cfg.Agents = []string{string(agent)}
+				require.NoError(t, cfg.Validate())
+			})
+		}
+	}
 }

@@ -333,7 +333,8 @@ Two settings define the embeddable universe, and a session must pass both:
   journaled-session rescans use the same list. It is stored as `scope_agents`:
   the list sorted, deduplicated, and comma-joined. A missing key reads as the
   empty list, so an upgraded store with no list configured forces no rescan.
-  Only the message store applies the list; the Recall store ignores it.
+  Only the local message store applies the list; the Recall store and hosted
+  PostgreSQL embeddings ignore it.
 
 Changing either value forces a full mirror *reconciliation*, not a re-embed: it
 inserts or removes rows (and their vectors) to match the new scope, but
