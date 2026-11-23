@@ -47,7 +47,7 @@ func TestToolPRLinksExecAndUncalledFunctionFilter(t *testing.T) {
 		{"exec", `{"command":"gh pr view 42 -R example/repo"}`},
 		{"function", `{"command":"review() { gh pr view 42 -R example/repo; }; echo ready"}`},
 	} {
-		s := Session{ID: tc.id, Project: "project", Machine: "local", Agent: "muse", MessageCount: 1}
+		s := Session{ID: tc.id, Project: "project", Machine: "local", Agent: "openclaw", MessageCount: 1}
 		require.NoError(t, d.UpsertSession(t.Context(), s))
 		require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "assistant", ToolCalls: []ToolCall{{Category: "Bash", ToolName: "exec", InputJSON: tc.command}}}}))
 	}

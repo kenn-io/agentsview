@@ -323,7 +323,14 @@ func bashChangesRepositoryContext(file *syntax.File, cwd string) (bool, bool, bo
 					repository = true
 				}
 			}
-			if (name == "cd" || name == "pushd" || name == "popd") && !(name == "cd" && len(n.Args) == 2 && SamePRWorkingDirectory(cwd, words[1])) {
+			dir := ""
+			if name == "cd" && len(n.Args) == 2 {
+				dir = strings.ReplaceAll(words[1], `\`, "/")
+				if dir != "" && !path.IsAbs(dir) && !(len(dir) > 1 && dir[1] == ':') {
+					dir = path.Join(strings.ReplaceAll(cwd, `\`, "/"), dir)
+				}
+			}
+			if (name == "cd" || name == "pushd" || name == "popd") && !SamePRWorkingDirectory(cwd, dir) {
 				record(&firstRepo, n.Pos())
 				if !item.scope.local {
 					directory = true

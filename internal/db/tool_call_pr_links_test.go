@@ -81,6 +81,9 @@ func TestToolCallPRLinksWorkingDirectory(t *testing.T) {
 		{`{"cmd":"gh pr view 42","workdir":"/work/./repo"}`, 1},
 		{`{"cmd":"gh pr view 42 -R github.com/example/repo","workdir":"/work/other"}`, 1},
 		{`{"cmd":"cd /work/repo && gh pr view 42"}`, 1},
+		{`{"cmd":"cd . && gh pr view 42"}`, 1},
+		{`{"cmd":"cd ../repo && gh pr view 42"}`, 1},
+		{`{"cmd":"cd ../other && gh pr view 42"}`, 0},
 		{`{"cmd":"cd /work/other && gh pr view 42"}`, 0},
 		{`{"cmd":"gh pr view https://github.com/example/repo/pull/42","workdir":"/work/other"}`, 1},
 	} {
