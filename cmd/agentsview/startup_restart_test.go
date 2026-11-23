@@ -144,7 +144,35 @@ CREATE TRIGGER test_hold_usage_fill BEFORE DELETE ON stats WHEN OLD.key='message
 	page := restartGet(t, base+"/api/v1/sessions?limit=25&include_one_shot=true")
 	require.Contains(t, page, "session0")
 	_, err = db.OpenReadOnly(t.Context(), cfg.DBPath)
-	require.True(t, db.IsSchemaUpgradeRequired(err))
+	require.ErrorIs(t, err, db.ErrMessageUsageCountersPending)
+}
+
+func TestReadOnlyCommandsReportPendingUsageUpgrade(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.db")
+	database, err := db.Open(t.Context(), path)
+	require.NoError(t, err)
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `INSERT INTO stats(key, value) VALUES ('message_usage_counters_pending', 1)`)
+		return err
+	}))
+	require.NoError(t, database.Close())
+	cfg := config.Config{DBPath: path}
+	for name, open := range map[string]func(context.Context, config.Config) (*db.DB, error){
+		"read-only": openReadOnlyDB,
+		"export":    openExportReadOnlyDB,
+	} {
+		t.Run(name, func(t *testing.T) {
+			reader, err := open(t.Context(), cfg)
+			if reader != nil {
+				defer reader.Close()
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "upgrade")
+			assert.Contains(t, err.Error(), "retry")
+			assert.NotContains(t, err.Error(), "missing index")
+			assert.NotContains(t, err.Error(), "restart")
+		})
+	}
 }
 
 func TestServeStartupWorkerFailure(t *testing.T) {

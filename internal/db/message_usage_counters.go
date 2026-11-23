@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"go.kenn.io/agentsview/internal/usagefacts"
@@ -79,6 +80,9 @@ func fillMessageUsageCounters(ctx context.Context, tx *sql.Tx) error {
 	}
 	return nil
 }
+
+// ErrMessageUsageCountersPending asks read-only callers to wait for the upgrade.
+var ErrMessageUsageCountersPending = errors.New("archive upgrade is still running; retry after the daemon finishes")
 
 // finishUsageCounters fills the deferred counters before widening the usage index.
 func (db *DB) finishUsageCounters(ctx context.Context) error {

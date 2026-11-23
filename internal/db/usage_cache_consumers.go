@@ -667,5 +667,8 @@ func (db *DB) GetUsageMatchingSessionCount(
 func (db *DB) GetSessionUsage(
 	ctx context.Context, sessionID string, includeBreakdown bool,
 ) (*SessionUsage, error) {
+	if err := db.finishUsageCounters(ctx); err != nil {
+		return nil, err
+	}
 	return db.getSessionUsageLegacy(ctx, sessionID, includeBreakdown)
 }

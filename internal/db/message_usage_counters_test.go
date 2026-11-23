@@ -94,7 +94,7 @@ func TestLateMessageUsageStoresUsageCounters(t *testing.T) {
 }
 
 func TestOpenDaemonDefersMessageUsageCounterFill(t *testing.T) {
-	for _, query := range []string{"daily", "top", "count"} {
+	for _, query := range []string{"daily", "top", "count", "session"} {
 		t.Run(query, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "archive.db")
 			d := testDBAtPath(t, path, "source")
@@ -128,7 +128,7 @@ func TestOpenDaemonDefersMessageUsageCounterFill(t *testing.T) {
 			require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT count(*) FROM pragma_index_info('idx_messages_usage_session_covering')`).Scan(&columns))
 			assert.Equal(t, 10, columns)
 			_, err = OpenReadOnly(t.Context(), path)
-			require.True(t, IsSchemaUpgradeRequired(err))
+			require.ErrorIs(t, err, ErrMessageUsageCountersPending)
 			require.NoError(t, d.lockWriterCtx(t.Context()))
 			ctx, cancel := context.WithCancel(t.Context())
 			cancel()
@@ -139,6 +139,8 @@ func TestOpenDaemonDefersMessageUsageCounterFill(t *testing.T) {
 					return db.GetDailyUsage(t.Context(), UsageFilter{})
 				case "top":
 					return db.GetTopSessionsByCost(t.Context(), UsageFilter{}, 10)
+				case "session":
+					return db.GetSessionUsage(t.Context(), "s", true)
 				default:
 					return db.GetUsageSessionCounts(t.Context(), UsageFilter{})
 				}

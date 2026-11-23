@@ -2349,7 +2349,7 @@ func checkReadOnlySchemaCompatibility(ctx context.Context, conn *sql.DB) error {
 		return fmt.Errorf("checking message usage counter upgrade: %w", err)
 	}
 	if pending {
-		return &SchemaUpgradeRequiredError{Index: "idx_messages_usage_session_covering"}
+		return ErrMessageUsageCountersPending
 	}
 	for _, index := range []string{
 		"idx_messages_usage_timestamp",
