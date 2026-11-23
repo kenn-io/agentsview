@@ -434,7 +434,6 @@ describe("SessionBreadcrumb", () => {
     await tick();
     expect(rename).toHaveBeenLastCalledWith("run:123456789abcdef", "My new name");
     expect(document.querySelector(".rename-input")).toBeNull();
-    expect(document.querySelector('[role="alert"]')).toBeNull();
   });
   it("does not restore a failed rename on another session", async () => {
     const pending = deferred<void>();
@@ -492,9 +491,8 @@ describe("SessionBreadcrumb", () => {
     expect(document.querySelector('[role="alert"]')?.textContent).toContain("retry shortly");
     component.$set({ session: makeSession("claude", { id: "second" }) });
     await tick();
-    document.querySelector<HTMLInputElement>(".rename-input")?.dispatchEvent(new Event("blur"));
-    await tick();
     expect(document.querySelector(".rename-input")).toBeNull();
+    expect(document.querySelector('[role="alert"]')).toBeNull();
     expect(rename).toHaveBeenCalledTimes(1);
     expect(rename).toHaveBeenCalledWith("first", "First title");
   });

@@ -2000,20 +2000,32 @@ func TestStartFileWatcherSuppressesPendingPollingWhenLifecycleIsOwned(t *testing
 }
 
 func TestStartupReconciliationHandlerCheckpointsBeforeOpeningDispatch(t *testing.T) {
-	ctx := t.Context()
-	order := make([]string, 0, 2)
-	handler := newStartupReconciliationHandler(
-		ctx,
-		func(got context.Context) error {
-			assert.Equal(t, ctx, got)
-			order = append(order, "checkpoint")
-			return nil
-		},
-		func() { order = append(order, "open") },
-	)
+	for _, tc := range []struct {
+		name  string
+		stats agentsync.SyncStats
+		err   error
+		want  []string
+	}{
+		{name: "complete", want: []string{"checkpoint", "open"}},
+		{name: "aborted", stats: agentsync.SyncStats{Aborted: true}, err: errors.New("startup failed"), want: []string{"open"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			order := make([]string, 0, 2)
+			handler := newStartupReconciliationHandler(
+				ctx,
+				func(got context.Context) error {
+					assert.Equal(t, ctx, got)
+					order = append(order, "checkpoint")
+					return nil
+				},
+				func() { order = append(order, "open") },
+			)
 
-	handler(agentsync.SyncStats{}, nil)
-	assert.Equal(t, []string{"checkpoint", "open"}, order)
+			handler(tc.stats, tc.err)
+			assert.Equal(t, tc.want, order)
+		})
+	}
 }
 
 func TestInitialSyncWatcherStartupOwnerReconciles(t *testing.T) {

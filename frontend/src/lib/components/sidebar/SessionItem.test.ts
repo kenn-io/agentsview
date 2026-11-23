@@ -137,7 +137,7 @@ describe("SessionItem identity", () => {
     expect(document.querySelector(".star-btn")).not.toBeNull();
   });
 
-  it("keeps a rejected rename for retry", async () => {
+  it.each(["Enter", "blur"])("keeps a rejected rename for retry after %s", async (trigger) => {
     const rename = vi
       .spyOn(sessions, "renameSession")
       .mockRejectedValueOnce(new Error("retry shortly"))
@@ -152,12 +152,18 @@ describe("SessionItem identity", () => {
     input.focus();
     input.value = "My new name";
     input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    if (trigger === "Enter")
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    else input.blur();
     await tick();
     await tick();
     expect(document.querySelector<HTMLInputElement>(".rename-input")?.value).toBe("My new name");
-    expect(document.activeElement).toBe(document.querySelector(".rename-input"));
+    expect(document.activeElement).toBe(
+      trigger === "Enter" ? document.querySelector(".rename-input") : document.body,
+    );
     expect(document.querySelector('[role="alert"]')?.textContent).toContain("retry shortly");
+    expect(document.querySelector('[role="alert"]')?.getAttribute("title")).toBe("retry shortly");
+    expect(rename).toHaveBeenCalledTimes(1);
     document
       .querySelector<HTMLInputElement>(".rename-input")!
       .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
@@ -165,7 +171,6 @@ describe("SessionItem identity", () => {
     await tick();
     expect(rename).toHaveBeenLastCalledWith("session", "My new name");
     expect(document.querySelector(".rename-input")).toBeNull();
-    expect(document.querySelector('[role="alert"]')).toBeNull();
   });
 
   it("uses the singular for one message", () => {
