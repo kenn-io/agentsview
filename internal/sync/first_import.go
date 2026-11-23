@@ -102,31 +102,11 @@ func (e *Engine) firstImportSelect(ctx context.Context, files []parser.Discovere
 		mtime := discoveredFileOrderingMtime(ctx, file)
 		candidates = append(candidates, firstImportCandidate{firstImportSource{file.Agent, file.Path}, max(mtime, 0)})
 	}
-	for _, agent := range []parser.AgentType{parser.AgentWarp, parser.AgentForge, parser.AgentPiebald, parser.AgentZCode, parser.AgentGoose, parser.AgentCrush} {
-		var roots []string
-		for _, root := range e.sources().agentDirs[agent] {
-			if root != "" && scope.includes(root) {
-				roots = append(roots, root)
-			}
-		}
-		factory := e.sources().providerFactories[agent]
-		if len(roots) == 0 || factory == nil {
-			continue
-		}
-		provider := factory.NewProvider(parser.ProviderConfig{Roots: roots, Machine: e.machine, SourceMachines: e.sources().sourceMachines[agent]})
-		discoverer, ok := provider.(parser.StreamingDiscoverer)
-		if !ok || provider.Capabilities().Source.StreamingDiscovery != parser.CapabilitySupported {
-			continue
-		}
-		if err := discoverer.DiscoverEach(ctx, func(source parser.SourceRef) error {
-			candidates = append(candidates, firstImportCandidate{firstImportSource{agent, providerDiscoveredPath(source)}, max(source.DiscoveryMTimeNS, 0)})
-			return ctx.Err()
-		}); err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			log.Printf("sync %s first import discovery: %v", agent, err)
-		}
+	err := e.forEachFirstImportDBFile(ctx, scope, func(file parser.DiscoveredFile) {
+		candidates = append(candidates, firstImportCandidate{firstImportSource{file.Agent, file.Path}, max(file.ProviderSource.DiscoveryMTimeNS, 0)})
+	})
+	if err != nil {
+		return err
 	}
 	wave.partial = len(candidates) > wave.limit
 	slices.SortFunc(candidates, func(a, b firstImportCandidate) int {
@@ -147,6 +127,36 @@ func (e *Engine) firstImportSelect(ctx context.Context, files []parser.Discovere
 			break
 		}
 		wave.selected[candidate.source] = struct{}{}
+	}
+	return nil
+}
+
+func (e *Engine) forEachFirstImportDBFile(ctx context.Context, scope *rootSyncScope, visit func(parser.DiscoveredFile)) error {
+	for _, agent := range []parser.AgentType{parser.AgentWarp, parser.AgentForge, parser.AgentPiebald, parser.AgentZCode, parser.AgentGoose, parser.AgentCrush} {
+		var roots []string
+		for _, root := range e.sources().agentDirs[agent] {
+			if root != "" && scope.includes(root) {
+				roots = append(roots, root)
+			}
+		}
+		factory := e.sources().providerFactories[agent]
+		if len(roots) == 0 || factory == nil {
+			continue
+		}
+		provider := factory.NewProvider(parser.ProviderConfig{Roots: roots, Machine: e.machine, SourceMachines: e.sources().sourceMachines[agent]})
+		discoverer, ok := provider.(parser.StreamingDiscoverer)
+		if !ok || provider.Capabilities().Source.StreamingDiscovery != parser.CapabilitySupported {
+			continue
+		}
+		if err := discoverer.DiscoverEach(ctx, func(source parser.SourceRef) error {
+			visit(parser.DiscoveredFile{Agent: agent, Path: providerDiscoveredPath(source), ProviderSource: &source, ProviderProcess: true})
+			return ctx.Err()
+		}); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			log.Printf("sync %s first import discovery: %v", agent, err)
+		}
 	}
 	return nil
 }

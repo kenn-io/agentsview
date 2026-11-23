@@ -6401,6 +6401,16 @@ func (e *Engine) syncAllLocked(
 			all[i].ForceParse = true
 		}
 	}
+	fileCount := len(all)
+	orderedFirstImport := wave != nil && wave.limit == 0
+	if orderedFirstImport {
+		err := e.forEachFirstImportDBFile(ctx, scope, func(file parser.DiscoveredFile) {
+			all = append(all, file)
+		})
+		if err != nil {
+			return SyncStats{Aborted: true, Warnings: []string{err.Error()}}
+		}
+	}
 
 	verbose := onProgress == nil
 
@@ -6436,7 +6446,7 @@ func (e *Engine) syncAllLocked(
 	})
 
 	nonContainerDiscovered := 0
-	for _, f := range all {
+	for _, f := range all[:fileCount] {
 		if !isOpenCodeFormatContainerSource(f.Agent, f.Path) {
 			nonContainerDiscovered++
 		}
@@ -6456,6 +6466,7 @@ func (e *Engine) syncAllLocked(
 		options.afterWrite = wave.onWrite
 	}
 	stats = e.collectAndBatchWithOptions(ctx, e.startWorkers(ctx, all), len(all), progressTotal, onProgress, writeMode, options)
+	stats.filesDiscovered = fileCount
 	if err := e.finishCodexParentInventoryBatch(ctx, &stats); err != nil {
 		log.Printf("%v", err)
 	}
@@ -6505,10 +6516,16 @@ func (e *Engine) syncAllLocked(
 		SessionsDone:    stats.filesDiscovered,
 		MessagesIndexed: stats.messagesIndexed,
 	}
+	if orderedFirstImport {
+		dbProgress.SessionsDone = progressTotal
+	}
 
 	advanceDBProgress := func(total, indexedMessages int) {
 		if total == 0 {
 			return
+		}
+		if orderedFirstImport {
+			total = 0
 		}
 		progressTotal += total
 		dbProgress.SessionsTotal = progressTotal
@@ -7757,6 +7774,9 @@ func (e *Engine) startWorkers(
 	// watcher sync needs one worker and one result slot, not a
 	// CPU-scaled pool with page-sized buffers of grown syncJob values.
 	workers := min(e.workerCount(), max(len(files), 1))
+	if wave := firstImportFromContext(ctx); wave != nil && wave.limit == 0 {
+		workers = 1
+	}
 	buffer := min(max(workers*2, 1), max(len(files), 1))
 
 	jobs := make(chan parser.DiscoveredFile, buffer)
