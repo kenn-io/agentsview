@@ -275,15 +275,15 @@ func (db *DB) captureJournaledUsageWindow(ctx context.Context, filter UsageFilte
 		if !trusted {
 			return captureUsageQueryFrom(ctx, tx, filter, kind, snapshot)
 		}
-		refresh = *snapshot
-		var err error
-		refreshIDs, err = loadSessionJournalChanges(ctx, tx, "usage_session_changes", "usage", zone.revision.Int64, snapshot.ChangeRevision)
+		changes, err := loadSessionJournalChanges(ctx, tx, "usage_session_changes", "usage", zone.revision.Int64, snapshot.ChangeRevision)
 		if err != nil {
 			return err
 		}
+		refreshIDs = append(refreshIDs, changes...)
 		refreshIDs = append(refreshIDs, lost...)
 		slices.Sort(refreshIDs)
 		refreshIDs = slices.Compact(refreshIDs)
+		refresh = *snapshot
 		if err := loadUsageSnapshotSessions(ctx, tx, refreshIDs, filter, false, &refresh); err != nil {
 			return err
 		}

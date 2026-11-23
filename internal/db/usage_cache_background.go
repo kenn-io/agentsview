@@ -298,9 +298,6 @@ func (db *DB) captureUsageBackfill(ctx context.Context, cache *usageCache, datab
 	if err != nil {
 		return snapshot, nil, nil, false, err
 	}
-	if db.usageSource == nil {
-		snapshot.resetEpoch = zones[0].resetEpoch
-	}
 	for i := range zones {
 		zones[i].installSeq = installSeq
 		zones[i].resetEpoch = snapshot.resetEpoch
