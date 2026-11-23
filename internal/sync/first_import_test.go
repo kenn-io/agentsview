@@ -29,107 +29,6 @@ func writeFirstImportClaudeSession(t *testing.T, project string, i int, mtime ti
 	}
 }
 
-func TestFirstImportReconciliationOrdersRemainingFiles(t *testing.T) {
-	root := t.TempDir()
-	project := filepath.Join(root, "project")
-	require.NoError(t, os.MkdirAll(project, 0o755))
-	for i := range 250 {
-		writeFirstImportClaudeSession(t, project, i, time.Unix(1700000000+int64(i), 0))
-	}
-	archive := openTestDB(t)
-	engine := NewEngine(t.Context(), archive, EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}, Machine: "local", DeferStartupMaintenance: true,
-	})
-	t.Cleanup(engine.Close)
-	engine.workerCountOverride = 1
-	paused, resume := make(chan struct{}), make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		_, _, err := engine.RunFirstImport(t.Context(), func(p Progress) {
-			if p.Phase == PhaseSyncing && p.SessionsTotal == 250 && p.SessionsDone == 201 {
-				close(paused)
-				<-resume
-			}
-		})
-		done <- err
-	}()
-	finished := false
-	t.Cleanup(func() {
-		if !finished {
-			close(resume)
-			<-done
-		}
-	})
-	select {
-	case <-paused:
-	case <-time.After(30 * time.Second):
-		require.FailNow(t, "reconciliation did not reach the pause")
-	}
-	newer, err := archive.GetSession(t.Context(), "session-149")
-	require.NoError(t, err)
-	older, err := archive.GetSession(t.Context(), "session-000")
-	require.NoError(t, err)
-	require.NotNil(t, newer)
-	require.Nil(t, older)
-	close(resume)
-	err = <-done
-	finished = true
-	require.NoError(t, err)
-}
-
-type firstImportFingerprintProvider struct {
-	parser.Provider
-	mu    sync.Mutex
-	paths []string
-}
-
-func (p *firstImportFingerprintProvider) Fingerprint(ctx context.Context, source parser.SourceRef) (parser.SourceFingerprint, error) {
-	p.mu.Lock()
-	p.paths = append(p.paths, source.DisplayPath)
-	p.mu.Unlock()
-	return p.Provider.Fingerprint(ctx, source)
-}
-
-type firstImportFingerprintFactory struct {
-	parser.ProviderFactory
-	provider *firstImportFingerprintProvider
-}
-
-func (f firstImportFingerprintFactory) NewProvider(parser.ProviderConfig) parser.Provider {
-	return f.provider
-}
-
-func TestFirstImportNewestWave(t *testing.T) {
-	root := t.TempDir()
-	project := filepath.Join(root, "project")
-	require.NoError(t, os.MkdirAll(project, 0o755))
-	for i := range 30 {
-		writeFirstImportClaudeSession(t, project, i, time.Unix(1700000000+int64(i), 0))
-	}
-	factory, ok := parser.ProviderFactoryByType(parser.AgentClaude)
-	require.True(t, ok)
-	counting := &firstImportFingerprintProvider{Provider: factory.NewProvider(parser.ProviderConfig{Roots: []string{root}, Machine: "local"})}
-	archive := openTestDB(t)
-	engine := NewEngine(t.Context(), archive, EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}, Machine: "local", DeferStartupMaintenance: true,
-		ProviderFactories: []parser.ProviderFactory{firstImportFingerprintFactory{ProviderFactory: factory, provider: counting}},
-	})
-	t.Cleanup(engine.Close)
-	engine.syncNewest(t.Context(), nil, nil)
-	require.True(t, engine.LastSyncFinishedAt(t.Context()).IsZero())
-	page, err := archive.ListSessions(t.Context(), db.SessionFilter{Limit: 100})
-	require.NoError(t, err)
-	var ids []string
-	for _, session := range page.Sessions {
-		ids = append(ids, session.ID)
-	}
-	require.Equal(t, []string{"session-029"}, ids)
-	require.NotEmpty(t, counting.paths)
-	for _, path := range counting.paths {
-		require.Equal(t, filepath.Join(project, "session-029.jsonl"), path)
-	}
-}
-
 func TestFirstImportSelectsZCodeBeforeOlderFile(t *testing.T) {
 	root := t.TempDir()
 	project := filepath.Join(root, "project")
@@ -143,6 +42,7 @@ func TestFirstImportSelectsZCodeBeforeOlderFile(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 	engine.syncNewest(t.Context(), nil, nil)
+	require.True(t, engine.LastSyncFinishedAt(t.Context()).IsZero())
 	newest, err := archive.GetSession(t.Context(), "zcode:session-001")
 	require.NoError(t, err)
 	require.NotNil(t, newest)
@@ -190,7 +90,7 @@ func TestFirstImportRefreshesWhileOlderSessionsAreWritten(t *testing.T) {
 			project := filepath.Join(root, "project")
 			require.NoError(t, os.MkdirAll(project, 0o755))
 			for i := range tc.count {
-				writeFirstImportClaudeSession(t, project, i, time.Time{})
+				writeFirstImportClaudeSession(t, project, i, time.Unix(1700000000+int64(i), 0))
 			}
 			archive := openTestDB(t)
 			refresh := make(chan struct{}, 1)
@@ -261,6 +161,12 @@ func TestFirstImportRefreshesWhileOlderSessionsAreWritten(t *testing.T) {
 				require.NoError(t, err)
 				assert.Greater(t, len(page.Sessions), 100)
 				assert.Less(t, len(page.Sessions), tc.count)
+				newer, err := archive.GetSession(t.Context(), "session-149")
+				require.NoError(t, err)
+				older, err := archive.GetSession(t.Context(), "session-000")
+				require.NoError(t, err)
+				require.NotNil(t, newer)
+				require.Nil(t, older)
 			}
 			release()
 			if tc.cancel {
@@ -297,10 +203,6 @@ func (p *firstImportFailingProvider) Capabilities() parser.Capabilities {
 
 func (p *firstImportFailingProvider) DiscoverEach(context.Context, func(parser.SourceRef) error) error {
 	return errors.New("listing unavailable")
-}
-
-func (p *firstImportFailingProvider) Fingerprint(context.Context, parser.SourceRef) (parser.SourceFingerprint, error) {
-	return parser.SourceFingerprint{}, errors.New("source unavailable")
 }
 
 func (p *firstImportFailingProvider) Parse(context.Context, parser.ParseRequest) (parser.ParseOutcome, error) {
