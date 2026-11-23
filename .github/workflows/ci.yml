@@ -194,6 +194,9 @@ jobs:
         run: npm run check:vp
         working-directory: frontend
 
+      - name: Download Go dependencies for API generation
+        run: kit-retry 3 5 go mod download
+
       - name: Type-check (svelte-check)
         run: npm run check
         working-directory: frontend
@@ -544,7 +547,13 @@ jobs:
 
       - name: Run archive, CLI, signing, and volume identity tests (macOS)
         if: runner.os == 'macOS'
-        run: go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "./internal/db ./internal/rawcapture ./internal/requestsign ./cmd/agentsview ./internal/volumeid" -- -tags "fts5" -count=1 -timeout=10m
+        run: |
+          go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "./internal/db ./internal/rawcapture ./internal/requestsign ./internal/volumeid" -- -tags "fts5" -count=1 -timeout=10m
+          # The full CLI suite can exceed its package timer before parallel tests start.
+          # Use the same complementary name groups as Windows, keeping every test.
+          cli_prefix='^Test[A-P]'
+          go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}-cli-a-p.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-cli-a-p-reruns.txt --packages "./cmd/agentsview" -- -tags "fts5" -run "$cli_prefix" -count=1 -timeout=10m
+          go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}-cli-rest.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-cli-rest-reruns.txt --packages "./cmd/agentsview" -- -tags "fts5" -skip "$cli_prefix" -count=1 -timeout=10m
         env:
           CGO_ENABLED: "1"
 
@@ -563,7 +572,9 @@ jobs:
         uses: actions/upload-artifact@v7.0.2
         with:
           name: gotestsum-${{ matrix.suite }}-attempt-${{ github.run_attempt }}
-          path: gotestsum/${{ matrix.suite }}.json
+          path: |
+            gotestsum/${{ matrix.suite }}.json
+            gotestsum/${{ matrix.suite }}-cli-*.json
           retention-days: 14
           if-no-files-found: ignore
 
