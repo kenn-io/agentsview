@@ -553,6 +553,43 @@ func TestToolPRLinksSharedHostState(t *testing.T) {
 	assert.Equal(t, "https://git.example/example/repo/pull/43", got.PRLinks[0].URL)
 }
 
+func TestToolPRLinksDefaultRepoAcrossIndependentShells(t *testing.T) {
+	d := testDB(t)
+	s := Session{ID: "default-repo", Project: "project", Machine: "local", Agent: "codex", Cwd: "/work/repo"}
+	require.NoError(t, d.UpsertSession(t.Context(), s))
+	obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://github.com/example/repo.git")
+	require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), obs))
+	message := func(ordinal int, command string) Message {
+		return Message{SessionID: s.ID, Ordinal: ordinal, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "exec_command", Category: "Bash", InputJSON: `{"cmd":"` + command + `"}`}}}
+	}
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{message(0, "gh repo set-default example/fork")}))
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{message(1, "gh pr view 42")}))
+	got, err := d.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	assert.Empty(t, got.PRLinks)
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error { return refreshSessionPromptPRLinksTx(t.Context(), tx, s.ID) }))
+	got, err = d.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	assert.Empty(t, got.PRLinks)
+}
+
+func TestToolPRLinksIncrementalReplacementRemovesLastCall(t *testing.T) {
+	d := testDB(t)
+	s := Session{ID: "replace-tools", Project: "project", Machine: "local", Agent: "claude"}
+	require.NoError(t, d.UpsertSession(t.Context(), s))
+	message := Message{SessionID: s.ID, Ordinal: 0, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`}}}
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{message}))
+	got, err := d.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	require.Len(t, got.PRLinks, 1)
+	replacement := Message{SessionID: s.ID, Ordinal: 0, Role: "assistant", Content: "Done"}
+	_, err = d.WriteSessionIncremental(t.Context(), s.ID, []Message{replacement}, IncrementalSessionUpdate{ReplaceFromOrdinal: new(0)})
+	require.NoError(t, err)
+	got, err = d.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	assert.Empty(t, got.PRLinks)
+}
+
 func TestToolPRLinksSurviveArchiveProjection(t *testing.T) {
 	for _, policy := range []config.ArchiveContent{config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
 		t.Run(string(policy), func(t *testing.T) {

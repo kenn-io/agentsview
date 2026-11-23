@@ -1916,7 +1916,7 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 		}
 	}
 	if transcriptChanged {
-		if err := bumpIncrementalTranscriptRevisionTx(ctx, tx, sessionID, msgs, update, db.usageOnlyStorage()); err != nil {
+		if err := bumpIncrementalTranscriptRevisionTx(ctx, tx, sessionID, msgs, update, db.usageOnlyStorage(), db.ArchiveContent().OmitsToolContent()); err != nil {
 			return false, err
 		}
 	}

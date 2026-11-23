@@ -67,16 +67,17 @@ func SamePRWorkingDirectory(cwd, dir string) bool {
 type PRShellContext struct {
 	CheckoutUncertain bool
 	HostUncertain     bool
+	RepoUncertain     bool
 }
 
 // UncertainPRShell is the state after input that cannot be read.
 func UncertainPRShell() PRShellContext {
-	return PRShellContext{CheckoutUncertain: true, HostUncertain: true}
+	return PRShellContext{CheckoutUncertain: true, HostUncertain: true, RepoUncertain: true}
 }
 
 // Changed reports whether any part of the shell context is unknown.
 func (s PRShellContext) Changed() bool {
-	return s.CheckoutUncertain || s.HostUncertain
+	return s.CheckoutUncertain || s.HostUncertain || s.RepoUncertain
 }
 
 // CommandPRLinks derives links and reports whether the shell context changed.
@@ -122,13 +123,14 @@ type prShellScope struct {
 
 // prShellWalker follows a shell script in execution order.
 type prShellWalker struct {
-	cwd     string
-	state   PRShellContext
-	calls   []shellCall
-	scopes  []prShellScope
-	stdin   map[*syntax.CallExpr]string
-	repo    string
-	repoSet bool
+	cwd       string
+	state     PRShellContext
+	calls     []shellCall
+	scopes    []prShellScope
+	stdin     map[*syntax.CallExpr]string
+	repo      string
+	repoSet   bool
+	functions map[string]bool
 }
 
 func (w *prShellWalker) visit(node syntax.Node) bool {
@@ -137,6 +139,13 @@ func (w *prShellWalker) visit(node syntax.Node) bool {
 		w.scopes = w.scopes[:len(w.scopes)-1]
 		w.leave(scope)
 		return true
+	}
+	if fn, ok := node.(*syntax.FuncDecl); ok {
+		if w.functions == nil {
+			w.functions = make(map[string]bool)
+		}
+		w.functions[fn.Name.Value] = true
+		return false
 	}
 	scope := prShellScope{checkout: w.state.CheckoutUncertain, host: w.state.HostUncertain}
 	switch node.(type) {
@@ -219,7 +228,7 @@ func (w *prShellWalker) callExpr(n *syntax.CallExpr) {
 	}
 	call.unwrapEnv()
 	w.applyBuiltin(call)
-	call.Tainted = call.Tainted || w.state.CheckoutUncertain
+	call.Tainted = call.Tainted || w.state.CheckoutUncertain || w.state.RepoUncertain
 	w.calls = append(w.calls, call)
 }
 
@@ -228,11 +237,21 @@ func (w *prShellWalker) applyBuiltin(call shellCall) {
 	if len(call.Words) == 0 || !call.Literal[0] {
 		return
 	}
+	if w.functions[call.Words[0]] {
+		w.state.CheckoutUncertain, w.state.HostUncertain = true, true
+		return
+	}
 	switch programName(call.Words[0]) {
 	case "cd":
 		w.state.CheckoutUncertain = w.state.CheckoutUncertain || len(call.Words) != 2 || !call.Literal[1] || !SamePRWorkingDirectory(w.cwd, call.Words[1])
 	case "pushd", "popd":
 		w.state.CheckoutUncertain = true
+	case "eval", "source", ".":
+		w.state.CheckoutUncertain, w.state.HostUncertain = true, true
+	case "gh":
+		if len(call.Words) > 2 && call.Words[1] == "repo" && call.Words[2] == "set-default" && !slices.Contains(call.Words[3:], "--view") && !slices.Contains(call.Words[3:], "-v") {
+			w.state.RepoUncertain = true
+		}
 	}
 }
 
@@ -456,9 +475,32 @@ func (c *shellCall) launcherPrompt() string {
 	}
 	var prompt []string
 	for i := 1; i < len(c.Words); i++ {
-		if c.Literal[i] {
-			prompt = append(prompt, c.Words[i])
+		if !c.Literal[i] {
+			continue
 		}
+		arg := c.Words[i]
+		if arg == "--help" || arg == "-h" {
+			return ""
+		}
+		if program == "codex" && arg == "resume" {
+			i++
+			continue
+		}
+		if strings.HasPrefix(arg, "-") {
+			if !strings.Contains(arg, "=") && launcherValueFlag(program, arg) {
+				i++
+			}
+			continue
+		}
+		prompt = append(prompt, arg)
 	}
 	return strings.Join(append(prompt, c.Stdin), "\n")
+}
+
+func launcherValueFlag(program, flag string) bool {
+	switch flag {
+	case "-m", "--model", "-c", "--config", "--settings", "--output-format", "--permission-mode", "--resume", "-r", "--output-schema", "--output-last-message", "-o", "-C", "--cd", "--add-dir", "--system-prompt", "--append-system-prompt", "--allowedTools":
+		return true
+	}
+	return program == "codex" && (flag == "-p" || flag == "--profile" || flag == "-s" || flag == "--sandbox")
 }
