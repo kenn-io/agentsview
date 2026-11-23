@@ -6439,16 +6439,12 @@ func (e *Engine) syncAllLocked(
 	if e.soleArchiveWriter.Load() {
 		ctx = e.withSourceFreshnessSnapshot(ctx, all)
 	}
-	results := e.startFirstImportWorkers(ctx, firstImportFiles(all, wave), wave)
-	options := firstImportBatchOptions(wave)
-	stats = e.collectAndBatchWithOptions(
-		ctx, results, len(all), progressTotal, onProgress, writeMode, options,
-	)
+	stats = e.collectFirstImport(ctx, all, progressTotal, onProgress, writeMode, scope, wave)
 	if err := e.finishCodexParentInventoryBatch(ctx, &stats); err != nil {
 		log.Printf("%v", err)
 	}
 	stats.logRetrySummary("sync")
-	stats.providerFailures = providerFailures
+	stats.providerFailures += providerFailures
 	for range providerFailures {
 		stats.RecordFailed()
 	}
@@ -6525,7 +6521,7 @@ func (e *Engine) syncAllLocked(
 	// provider-authoritative DB-backed providers: a shared SQLite DB hosts every
 	// session, so the provider facade enumerates sources and parses only the
 	// changed ones.
-	if scope.includesAny(e.sources().agentDirs[parser.AgentWarp]) {
+	if scope.includesAny(e.sources().agentDirs[parser.AgentWarp]) && wave.runDBPhase(parser.AgentWarp) {
 		if e.syncProviderDBBackedAgent(
 			ctx, parser.AgentWarp, "warp",
 			writeMode, verbose, scope, &stats, advanceDBProgress, wave,
@@ -6534,7 +6530,7 @@ func (e *Engine) syncAllLocked(
 			return stats
 		}
 	}
-	if scope.includesAny(e.sources().agentDirs[parser.AgentForge]) {
+	if scope.includesAny(e.sources().agentDirs[parser.AgentForge]) && wave.runDBPhase(parser.AgentForge) {
 		if e.syncProviderDBBackedAgent(
 			ctx, parser.AgentForge, "forge",
 			writeMode, verbose, scope, &stats, advanceDBProgress, wave,
@@ -6543,7 +6539,7 @@ func (e *Engine) syncAllLocked(
 			return stats
 		}
 	}
-	if scope.includesAny(e.sources().agentDirs[parser.AgentPiebald]) {
+	if scope.includesAny(e.sources().agentDirs[parser.AgentPiebald]) && wave.runDBPhase(parser.AgentPiebald) {
 		if e.syncProviderDBBackedAgent(
 			ctx, parser.AgentPiebald, "piebald",
 			writeMode, verbose, scope, &stats, advanceDBProgress, wave,
@@ -6552,7 +6548,7 @@ func (e *Engine) syncAllLocked(
 			return stats
 		}
 	}
-	if scope.includesAny(e.sources().agentDirs[parser.AgentZCode]) {
+	if scope.includesAny(e.sources().agentDirs[parser.AgentZCode]) && wave.runDBPhase(parser.AgentZCode) {
 		if e.syncProviderDBBackedAgent(
 			ctx, parser.AgentZCode, "zcode",
 			writeMode, verbose, scope, &stats, advanceDBProgress, wave,
@@ -6561,7 +6557,7 @@ func (e *Engine) syncAllLocked(
 			return stats
 		}
 	}
-	if scope.includesAny(e.sources().agentDirs[parser.AgentGoose]) {
+	if scope.includesAny(e.sources().agentDirs[parser.AgentGoose]) && wave.runDBPhase(parser.AgentGoose) {
 		if e.syncProviderDBBackedAgent(
 			ctx, parser.AgentGoose, "goose",
 			writeMode, verbose, scope, &stats, advanceDBProgress, wave,
@@ -6570,7 +6566,7 @@ func (e *Engine) syncAllLocked(
 			return stats
 		}
 	}
-	if scope.includesAny(e.sources().agentDirs[parser.AgentCrush]) {
+	if scope.includesAny(e.sources().agentDirs[parser.AgentCrush]) && wave.runDBPhase(parser.AgentCrush) {
 		if e.syncProviderDBBackedAgent(
 			ctx, parser.AgentCrush, "crush",
 			writeMode, verbose, scope, &stats, advanceDBProgress, wave,
@@ -7455,7 +7451,7 @@ func (e *Engine) syncProviderDBBacked(
 	if agent == parser.AgentPiebald {
 		piebaldPruneRoots = piebaldAuthoritativeRoots(roots, os.Stat)
 	}
-	err := discoverer.DiscoverEach(ctx, func(source parser.SourceRef) error {
+	err := firstImportDiscoverEach(ctx, discoverer, agent, wave, func(source parser.SourceRef) error {
 		discovered++
 		if agent == parser.AgentPiebald {
 			if key, _, ok := piebaldFailureSourcePaths(source); ok {
