@@ -26,6 +26,7 @@ type shellCall struct {
 	Repo          string
 	RepoSet       bool
 	Stdin         string
+	Nested        []PRLink
 }
 
 func shellLiteral(parts []syntax.WordPart) (string, bool) {
@@ -96,11 +97,14 @@ func commandPRLinksWithContext(ctx context.Context, command, cwd, remote string,
 	if err != nil {
 		return nil, UncertainPRShell(), nil //nolint:nilerr // Malformed optional shell input leaves the shell context unknown.
 	}
-	w := &prShellWalker{cwd: cwd, state: state, repo: repo, repoSet: repoSet, stdin: map[*syntax.CallExpr]string{}}
-	syntax.Walk(file, w.visit)
+	w := &prShellWalker{cwd: cwd, remote: remote, state: state, repo: repo, repoSet: repoSet, stdin: map[*syntax.CallExpr]string{}}
+	syntax.Walk(file, func(node syntax.Node) bool { return w.visit(ctx, node) })
+	if w.err != nil {
+		return nil, PRShellContext{}, w.err
+	}
 	var lists [][]PRLink
 	for _, call := range w.calls {
-		links, err := call.links(ctx, cwd, remote)
+		links, err := call.links(ctx, remote)
 		if err != nil {
 			return nil, PRShellContext{}, err
 		}
@@ -124,6 +128,8 @@ type prShellScope struct {
 // prShellWalker follows a shell script in execution order.
 type prShellWalker struct {
 	cwd       string
+	remote    string
+	err       error
 	state     PRShellContext
 	calls     []shellCall
 	scopes    []prShellScope
@@ -133,7 +139,7 @@ type prShellWalker struct {
 	functions map[string]bool
 }
 
-func (w *prShellWalker) visit(node syntax.Node) bool {
+func (w *prShellWalker) visit(ctx context.Context, node syntax.Node) bool {
 	if node == nil {
 		scope := w.scopes[len(w.scopes)-1]
 		w.scopes = w.scopes[:len(w.scopes)-1]
@@ -167,7 +173,7 @@ func (w *prShellWalker) visit(node syntax.Node) bool {
 			}
 		}
 	case *syntax.CallExpr:
-		w.callExpr(n)
+		w.callExpr(ctx, n)
 	}
 	return true
 }
@@ -205,7 +211,7 @@ func (w *prShellWalker) persistEnv(name string) {
 	}
 }
 
-func (w *prShellWalker) callExpr(n *syntax.CallExpr) {
+func (w *prShellWalker) callExpr(ctx context.Context, n *syntax.CallExpr) {
 	call := shellCall{HostUncertain: w.state.HostUncertain, Stdin: w.stdin[n], Repo: w.repo, RepoSet: w.repoSet, Tainted: w.repoSet}
 	for _, assignment := range n.Assigns {
 		if assignment.Name == nil {
@@ -229,6 +235,15 @@ func (w *prShellWalker) callExpr(n *syntax.CallExpr) {
 	call.unwrapEnv()
 	w.applyBuiltin(call)
 	call.Tainted = call.Tainted || w.state.CheckoutUncertain || w.state.RepoUncertain
+	if script, ok := call.shellScript(); ok && w.err == nil {
+		remote := w.remote
+		if call.Tainted {
+			remote = ""
+		}
+		var nested PRShellContext
+		call.Nested, nested, w.err = commandPRLinksWithContext(ctx, script, w.cwd, remote, PRShellContext{HostUncertain: call.HostUncertain, RepoUncertain: w.state.RepoUncertain}, call.Repo, call.RepoSet)
+		w.state.RepoUncertain = w.state.RepoUncertain || nested.RepoUncertain
+	}
 	w.calls = append(w.calls, call)
 }
 
@@ -248,6 +263,12 @@ func (w *prShellWalker) applyBuiltin(call shellCall) {
 		w.state.CheckoutUncertain = true
 	case "eval", "source", ".":
 		w.state.CheckoutUncertain, w.state.HostUncertain = true, true
+	case "git":
+		for i, word := range call.Words {
+			if word == "remote" && i+1 < len(call.Words) && slices.Contains([]string{"set-url", "add", "remove", "rm", "rename"}, call.Words[i+1]) {
+				w.state.RepoUncertain = true
+			}
+		}
 	case "gh":
 		if len(call.Words) > 2 && call.Words[1] == "repo" && call.Words[2] == "set-default" && !slices.Contains(call.Words[3:], "--view") && !slices.Contains(call.Words[3:], "-v") {
 			w.state.RepoUncertain = true
@@ -285,7 +306,7 @@ func (c *shellCall) unwrapEnv() {
 }
 
 // links derives links from one command.
-func (c *shellCall) links(ctx context.Context, cwd, remote string) ([]PRLink, error) {
+func (c *shellCall) links(ctx context.Context, remote string) ([]PRLink, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -293,14 +314,7 @@ func (c *shellCall) links(ctx context.Context, cwd, remote string) ([]PRLink, er
 	if c.Tainted {
 		callRemote = ""
 	}
-	lists := [][]PRLink{ghPRCallLinks(ctx, *c, callRemote)}
-	if script, ok := c.shellScript(); ok {
-		links, _, err := commandPRLinksWithContext(ctx, script, cwd, callRemote, PRShellContext{HostUncertain: c.HostUncertain}, c.Repo, c.RepoSet)
-		if err != nil {
-			return nil, err
-		}
-		lists = append(lists, links)
-	}
+	lists := [][]PRLink{ghPRCallLinks(ctx, *c, callRemote), c.Nested}
 	links, err := PromptPRLinksContext(ctx, c.launcherPrompt())
 	return CombinePRLinks(append(lists, links)...), err
 }

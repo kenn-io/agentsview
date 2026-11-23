@@ -573,6 +573,22 @@ func TestToolPRLinksDefaultRepoAcrossIndependentShells(t *testing.T) {
 	assert.Empty(t, got.PRLinks)
 }
 
+func TestToolPRLinksNestedRemoteChangeAcrossIndependentShells(t *testing.T) {
+	d := testDB(t)
+	s := Session{ID: "nested-remote", Project: "project", Machine: "local", Agent: "codex", Cwd: "/work/repo"}
+	require.NoError(t, d.UpsertSession(t.Context(), s))
+	obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://github.com/example/repo.git")
+	require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), obs))
+	message := func(ordinal int, command string) Message {
+		return Message{SessionID: s.ID, Ordinal: ordinal, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "exec_command", Category: "Bash", InputJSON: `{"cmd":"` + command + `"}`}}}
+	}
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{message(0, "bash -c 'git remote set-url origin https://github.com/example/fork.git'")}))
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{message(1, "gh pr view 42")}))
+	got, err := d.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	assert.Empty(t, got.PRLinks)
+}
+
 func TestToolPRLinksIncrementalReplacementRemovesLastCall(t *testing.T) {
 	d := testDB(t)
 	s := Session{ID: "replace-tools", Project: "project", Machine: "local", Agent: "claude"}
