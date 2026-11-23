@@ -84,8 +84,10 @@ func TestCompleteWorkerStartupReconciliationLogsLifecycle(t *testing.T) {
 		err         error
 		wantOutcome string
 		wantQueued  bool
+		workerError string
 	}{
 		{name: "no roots", wantOutcome: "completed"},
+		{name: "worker failure", workerError: "worker output was truncated", wantOutcome: "failed"},
 		{
 			name:        "failed reconciliation",
 			roots:       []string{"/sessions"},
@@ -102,7 +104,7 @@ func TestCompleteWorkerStartupReconciliationLogsLifecycle(t *testing.T) {
 			queued := false
 			var recordedErr error
 			completeWorkerStartupReconciliation(
-				t.Context(), tc.roots, syncpkg.SyncStats{}, "", func(bool) {},
+				t.Context(), tc.roots, syncpkg.SyncStats{}, tc.workerError, func(bool) {},
 				func(context.Context, []string, bool) error {
 					reconcileCalls++
 					return tc.err
@@ -119,7 +121,14 @@ func TestCompleteWorkerStartupReconciliationLogsLifecycle(t *testing.T) {
 			assert.Contains(t, output, "outcome="+tc.wantOutcome)
 			assert.Equal(t, len(tc.roots) > 0, reconcileCalls > 0)
 			assert.Equal(t, tc.wantQueued, queued)
-			assert.Equal(t, tc.err, recordedErr)
+			if tc.err != nil {
+				assert.ErrorIs(t, recordedErr, tc.err)
+			} else if tc.workerError == "" {
+				assert.NoError(t, recordedErr)
+			}
+			if tc.workerError != "" {
+				assert.ErrorContains(t, recordedErr, tc.workerError)
+			}
 		})
 	}
 }
@@ -357,6 +366,7 @@ func TestStartupWorkerOutcomeDiscriminatesSpawnFromRanFailed(t *testing.T) {
 		wantDone    bool
 		wantAborted bool
 		wantSynced  int
+		wantError   string
 	}{
 		{
 			name:       "completed",
@@ -380,6 +390,7 @@ func TestStartupWorkerOutcomeDiscriminatesSpawnFromRanFailed(t *testing.T) {
 			wantDone:    true,
 			wantAborted: true,
 			wantSynced:  1,
+			wantError:   "startup worker pass reported aborted",
 		},
 		{
 			name:        "ran and failed with unusable result is synthesized",
@@ -387,6 +398,7 @@ func TestStartupWorkerOutcomeDiscriminatesSpawnFromRanFailed(t *testing.T) {
 			err:         errors.New("startup worker emitted 0 terminal results"),
 			wantDone:    true,
 			wantAborted: true,
+			wantError:   "startup worker emitted 0 terminal results",
 		},
 	}
 	for _, tc := range tests {
@@ -397,6 +409,7 @@ func TestStartupWorkerOutcomeDiscriminatesSpawnFromRanFailed(t *testing.T) {
 				// A spawn failure discards the result and falls back in process.
 				return
 			}
+			assert.Equal(t, tc.wantError, got.Error)
 			stats := statsFromWorkerResult(got)
 			assert.Equal(t, tc.wantAborted, stats.Aborted)
 			assert.Equal(t, tc.wantSynced, stats.Synced)
@@ -442,24 +455,6 @@ func TestStartupWorkerRanFailedSurfacedWithoutResync(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		require.FailNow(t, "dispatch did not open after ran-and-failed handshake")
 	}
-}
-
-func TestStartupWorkerOutcomePreservesFailureCause(t *testing.T) {
-	cause := errors.New("worker output was truncated")
-	restore := stubLaunchSyncWorker(t, func(context.Context, config.Config, syncWorkerRequest, func(workerLine)) (workerResult, error) {
-		return workerResult{}, cause
-	})
-	defer restore()
-	cfg := testConfigWithClaudeFixture(t)
-	result, err := runStartupSyncViaWorker(t.Context(), cfg, newStartupStateWriter(cfg.DataDir, time.Now))
-	require.ErrorIs(t, err, cause)
-	result, done := startupWorkerOutcome(result, err)
-	require.True(t, done)
-	var recorded error
-	completeWorkerStartupReconciliation(t.Context(), nil, statsFromWorkerResult(result), result.Error,
-		func(bool) {}, func(context.Context, []string, bool) error { return nil },
-		func(syncpkg.WatchBatch) {}, func(_ syncpkg.SyncStats, err error) { recorded = err })
-	require.ErrorContains(t, recorded, cause.Error())
 }
 
 func TestStartupWorkerLostResultRetriesParentLinks(t *testing.T) {
@@ -549,10 +544,11 @@ func TestSyncWorkerChildArgsForwardsServeConfigFlags(t *testing.T) {
 		"serve", "--host", "0.0.0.0", "--port", "9999",
 		"--background", "--pprof",
 	}
-	args := syncWorkerChildArgs(parent, syncWorkerRequest{Mode: "startup"})
+	args := syncWorkerChildArgs(parent, syncWorkerRequest{Mode: "startup", LiveArchive: true})
 
 	require.Equal(t, "sync-worker", args[0])
 	assert.Equal(t, []string{"--mode", "startup"}, args[1:3])
+	assert.Contains(t, args, "--live-archive")
 	assert.Contains(t, args, "--host=0.0.0.0", "serve config flag forwarded")
 	assert.Contains(t, args, "--port=9999", "serve config flag forwarded")
 	for _, a := range args {

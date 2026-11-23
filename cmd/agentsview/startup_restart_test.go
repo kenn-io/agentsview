@@ -160,29 +160,6 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 	require.Nil(t, missing.DeletedAt)
 }
 
-func TestStartupWorkerKeepsLiveArchiveReaders(t *testing.T) {
-	cfg := testConfigWithClaudeFixture(t)
-	var seed bytes.Buffer
-	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &seed))
-	reader, err := db.OpenReadOnly(t.Context(), cfg.DBPath)
-	require.NoError(t, err)
-	defer reader.Close()
-	markArchiveStale(t, cfg.DBPath)
-	before, err := os.Stat(cfg.DBPath)
-	require.NoError(t, err)
-	request := syncWorkerRequest{Mode: "startup", LiveArchive: true}
-	assert.Contains(t, syncWorkerChildArgs(nil, request), "--live-archive")
-	var out bytes.Buffer
-	err = runSyncWorkerContext(t.Context(), cfg, request, &out)
-	require.ErrorContains(t, err, "resync")
-	after, err := os.Stat(cfg.DBPath)
-	require.NoError(t, err)
-	assert.True(t, os.SameFile(before, after))
-	session, err := reader.GetSession(t.Context(), "session0")
-	require.NoError(t, err)
-	require.NotNil(t, session)
-}
-
 func TestServeRestartSpawnFailureFallsBack(t *testing.T) {
 	isolateServeTestHome(t)
 	cfg := testConfigWithClaudeFixture(t)
@@ -210,35 +187,22 @@ func TestServeRestartSpawnFailureFallsBack(t *testing.T) {
 	}, 5*time.Second, 100*time.Millisecond)
 }
 
-func TestServeRestartFirstStartAndNoSync(t *testing.T) {
-	for _, noSync := range []bool{false, true} {
-		name := "first start"
-		if noSync {
-			name = "no sync"
-		}
-		t.Run(name, func(t *testing.T) {
-			isolateServeTestHome(t)
-			cfg := testConfigWithClaudeFixture(t)
-			cfg.Host = "127.0.0.1"
-			cfg.NoSync = noSync
-			writeRestartSession(t, cfg, "session0")
-			if noSync {
-				var out bytes.Buffer
-				require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &out))
-			}
-			launched := make(chan struct{}, 1)
-			restore := stubLaunchSyncWorker(t, func(context.Context, config.Config, syncWorkerRequest, func(workerLine)) (workerResult, error) {
-				launched <- struct{}{}
-				return workerResult{}, fmt.Errorf("unexpected worker")
-			})
-			t.Cleanup(restore)
-			base := startRestartServe(t, cfg)
-			require.Contains(t, restartGet(t, base+"/api/v1/sessions?limit=25"), "session0")
-			select {
-			case <-launched:
-				t.Fatal("post-listen worker ran")
-			default:
-			}
-		})
+func TestServeFirstStart(t *testing.T) {
+	isolateServeTestHome(t)
+	cfg := testConfigWithClaudeFixture(t)
+	cfg.Host = "127.0.0.1"
+	writeRestartSession(t, cfg, "session0")
+	launched := make(chan struct{}, 1)
+	restore := stubLaunchSyncWorker(t, func(context.Context, config.Config, syncWorkerRequest, func(workerLine)) (workerResult, error) {
+		launched <- struct{}{}
+		return workerResult{}, fmt.Errorf("unexpected worker")
+	})
+	t.Cleanup(restore)
+	base := startRestartServe(t, cfg)
+	require.Contains(t, restartGet(t, base+"/api/v1/sessions?limit=25"), "session0")
+	select {
+	case <-launched:
+		t.Fatal("post-listen worker ran")
+	default:
 	}
 }
