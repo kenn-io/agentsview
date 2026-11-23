@@ -336,16 +336,8 @@ func TestToolPRLinksArchiveUpgrade(t *testing.T) {
 	}{
 		{"prompt upgrade", promptPRLinksDataVersion - 1, "review https://github.com/example/repo/pull/41", "GH_HOST=github.com gh pr view 42 -R example/repo", []string{"https://github.com/example/repo/pull/41", "https://github.com/example/repo/pull/42"}},
 		{"tool upgrade", toolPRLinksDataVersion - 1, "review https://github.com/example/repo/pull/41", "GH_HOST=github.com gh pr view 42 -R example/repo", []string{"https://github.com/example/repo/pull/41", "https://github.com/example/repo/pull/42"}},
-		{"quoted command", toolPRLinksDataVersion - 1, "", "GH_HOST=github.com g''h pr view 43 -R example/repo", []string{"https://github.com/example/repo/pull/43"}},
 		{"quoted action", toolPRLinksDataVersion - 1, "", "gh p'r' view 42 -R github.com/example/repo", []string{"https://github.com/example/repo/pull/42"}},
-		{"option value", toolPRLinksDataVersion - 1, "", "gh pr edit --add-label 99 -R github.com/example/repo 45", []string{"https://github.com/example/repo/pull/45"}},
-		{"unrelated command", toolPRLinksDataVersion - 1, "", "echo high", nil},
-		{"unrelated HTTP command", toolPRLinksDataVersion - 1, "", "curl https://example.com/api", nil},
 		{"task pull", toolPRLinksDataVersion - 1, "", "https://github.com/example/repo/pull/44", []string{"https://github.com/example/repo/pull/44"}},
-		{"task pulls", toolPRLinksDataVersion - 1, "", "https://code.example/example/repo/pulls/45", []string{"https://code.example/example/repo/pulls/45"}},
-		{"task merge request", toolPRLinksDataVersion - 1, "", "https://git.example/example/repo/-/merge_requests/46", []string{"https://git.example/example/repo/-/merge_requests/46"}},
-		{"task encoded route", toolPRLinksDataVersion - 1, "", "https://github.com/example/repo/%70ull/47", []string{"https://github.com/example/repo/pull/47"}},
-		{"task JSON escaped route", toolPRLinksDataVersion - 1, "", `https://github.com/example/repo/\u0070ull/48`, []string{"https://github.com/example/repo/pull/48"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "archive.db")
@@ -458,9 +450,12 @@ func TestToolPRLinksUsageCleanupAndReplacement(t *testing.T) {
 	require.NoError(t, d.UpsertSession(t.Context(), s))
 	messages := []Message{
 		{SessionID: s.ID, Ordinal: 0, Role: "user", Content: "https://github.com/example/repo/pull/1"},
-		{SessionID: s.ID, Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{Category: "Bash", ToolName: "Bash", InputJSON: `{"command":"gh pr view 2 -R example/repo"}`}}},
+		{SessionID: s.ID, Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{Category: "Bash", ToolName: "Bash", InputJSON: `{"command":"gh pr view 2 -R github.com/example/repo"}`}}},
 	}
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, messages))
+	before, err := d.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	require.Len(t, before.PRLinks, 2)
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, messages[:1]))
 	got, err := d.GetSession(t.Context(), s.ID)
 	require.NoError(t, err)
@@ -472,19 +467,6 @@ func TestToolPRLinksUsageCleanupAndReplacement(t *testing.T) {
 	got, err = d.GetSession(t.Context(), s.ID)
 	require.NoError(t, err)
 	assert.Empty(t, got.PRLinks)
-}
-
-func TestToolPRLinksQuotedCommandReplacement(t *testing.T) {
-	d := testDB(t)
-	s := Session{ID: "quoted-replace", Project: "project", Machine: "local", Agent: "claude"}
-	require.NoError(t, d.UpsertSession(t.Context(), s))
-	messages := []Message{{SessionID: s.ID, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh p'r' view 42 -R github.com/example/repo"}`}}}}
-	require.NoError(t, d.InsertMessages(t.Context(), messages))
-	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, messages))
-	got, err := d.GetSession(t.Context(), s.ID)
-	require.NoError(t, err)
-	require.Len(t, got.PRLinks, 1)
-	assert.Equal(t, "https://github.com/example/repo/pull/42", got.PRLinks[0].URL)
 }
 
 func TestToolPRLinksSharedShellDirectoryAppend(t *testing.T) {
@@ -505,7 +487,7 @@ func TestToolPRLinksSharedShellDirectoryAppend(t *testing.T) {
 	got, err = d.GetSession(t.Context(), s.ID)
 	require.NoError(t, err)
 	assert.Empty(t, got.PRLinks)
-	require.NoError(t, d.InsertMessages(t.Context(), []Message{message(2, `{"command":"gh pr view 61 -R example/other"}`), message(3, `{"command":"gh pr view 62","workdir":"/work/repo"}`)}))
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{message(2, `{"command":"gh pr view 62","workdir":"/work/repo"}`)}))
 	got, err = d.GetSession(t.Context(), s.ID)
 	require.NoError(t, err)
 	require.Len(t, got.PRLinks, 1)

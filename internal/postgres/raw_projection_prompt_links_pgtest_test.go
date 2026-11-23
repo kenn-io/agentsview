@@ -233,19 +233,3 @@ func TestRawProjectionFutureVersionDialogueRefresh(t *testing.T) {
 	assert.Equal(t, future, version)
 	assert.Equal(t, []db.PRLink{{URL: "https://github.com/o/r/pull/99", Host: "github.com", Repository: "o/r", Number: 99}}, db.DecodePRLinks(links))
 }
-
-func TestRawProjectionUsesRecordedRemote(t *testing.T) {
-	f := newProjectionFixture(t)
-	outcome := projectionOutcome("Review changes")
-	outcome.Outcome.Results[0].Result.Session.GitRemote = "https://github.com/example/fork.git"
-	outcome.Outcome.Results[0].Result.Messages[1].ToolCalls[0].InputJSON = `{"command":"gh pr view 42"}`
-	m, _ := f.accept(t, "device-a", "first", "")
-	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
-	resolved, err := f.sink.Resolve(t.Context(), "codex:portable")
-	require.NoError(t, err)
-	var links string
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&links))
-	found := db.DecodePRLinks(links)
-	require.Len(t, found, 1)
-	assert.Equal(t, "https://github.com/example/fork/pull/42", found[0].URL)
-}

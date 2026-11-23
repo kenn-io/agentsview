@@ -289,9 +289,13 @@ func appendSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id
 		return err
 	}
 	sharedCwdChanged, checked := false, false
+	tools, err := toolCallPRLinks(ctx, messages, cwd, remote, &sharedCwdChanged)
+	if err != nil {
+		return err
+	}
 	for _, message := range messages {
 		for _, call := range message.ToolCalls {
-			if call.Category == "Bash" && call.ToolName == "Bash" {
+			if len(tools) > 0 && call.Category == "Bash" && call.ToolName == "Bash" {
 				sharedCwdChanged, err = priorBashDirectoryChangeTx(tx, id, messages[0].Ordinal)
 				if err != nil {
 					return err
@@ -304,9 +308,11 @@ func appendSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id
 			break
 		}
 	}
-	tools, err := toolCallPRLinks(ctx, messages, cwd, remote, &sharedCwdChanged)
-	if err != nil {
-		return err
+	if checked && sharedCwdChanged {
+		tools, err = toolCallPRLinks(ctx, messages, cwd, remote, &sharedCwdChanged)
+		if err != nil {
+			return err
+		}
 	}
 	derived := parser.CombinePRLinks(prompts, tools)
 	if len(derived) == 0 {

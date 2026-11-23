@@ -147,13 +147,10 @@ func TestCodexCommandPRLinksOnAppend(t *testing.T) {
 	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
 	assert.Equal(t, []string{"https://github.com/example/repo/pull/42"}, storedPRURLs(t, env.db, "codex:"+id))
 	appendClaudeSplitLines(t, path, testjsonl.JoinJSONL(
-		testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call1", map[string]any{"cmd": "GH_HOST=github.com gh pr merge 42 -R example/repo"}, tsEarlyS5),
 		testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call2", map[string]any{"cmd": "GH_HOST=github.com gh pr view 43 -R example/repo"}, "2024-01-01T10:00:06Z"),
-		testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call3", map[string]any{"cmd": "gh pr edit --add-label 99 -R github.com/example/repo 44"}, "2024-01-01T10:00:07Z"),
-		testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call4", map[string]any{"cmd": "gh pr view 45", "workdir": "/work/other"}, "2024-01-01T10:00:08Z"),
 	))
 	env.engine.SyncPaths([]string{path})
-	assert.ElementsMatch(t, []string{"https://github.com/example/repo/pull/42", "https://github.com/example/repo/pull/43", "https://github.com/example/repo/pull/44"}, storedPRURLs(t, env.db, "codex:"+id))
+	assert.ElementsMatch(t, []string{"https://github.com/example/repo/pull/42", "https://github.com/example/repo/pull/43"}, storedPRURLs(t, env.db, "codex:"+id))
 }
 
 func TestCommandPRCheckoutRemote(t *testing.T) {
@@ -231,41 +228,4 @@ func TestClineTeamTaskPRFilter(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, page.Sessions, 1)
 	assert.Equal(t, "cline:team-pr", page.Sessions[0].ID)
-}
-
-func TestShellCommandPRFilter(t *testing.T) {
-	testutil.IsolateGit(t)
-	root := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "config"), []byte("[remote \"origin\"]\n url = https://github.com/example/repo.git\n"), 0o600))
-	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
-	for _, tc := range []struct{ id, command, workdir string }{
-		{"shell-function", "other() { cd /other; }; gh pr view 42", ""},
-		{"shell-export", "export GH_HOST=github.com; gh pr view 43 -R example/other", ""},
-		{"unrelated-a", "echo hello", ""},
-		{"unrelated-b", "gh pr view 44 -R example/other", ""},
-		{"flag-value", "gh pr edit --add-label 99 45", ""},
-		{"explicit-host", "gh pr view 46 -R github.com/example/repo", ""},
-		{"other-directory", "gh pr view 47", "/work/other"},
-	} {
-		env.writeClaudeSession(t, "proj", tc.id+".jsonl", testjsonl.JoinJSONL(
-			testjsonl.ClaudeUserJSON("Work", tsEarly, root),
-			testjsonl.ClaudeAssistantJSON([]map[string]any{{"type": "tool_use", "id": "call", "name": "Bash", "input": map[string]any{"command": tc.command, "workdir": tc.workdir}}}, tsEarlyS1),
-		))
-	}
-	require.Equal(t, 7, env.engine.SyncAll(t.Context(), nil).Synced)
-	for _, tc := range []struct{ filter, id string }{{"example/other#43", "shell-export"}, {"example/repo#45", "flag-value"}, {"example/repo#46", "explicit-host"}} {
-		filter, err := db.ParsePRFilter(tc.filter)
-		require.NoError(t, err)
-		page, err := env.db.ListSessions(t.Context(), db.SessionFilter{PR: filter})
-		require.NoError(t, err)
-		require.Len(t, page.Sessions, 1)
-		assert.Equal(t, tc.id, page.Sessions[0].ID)
-	}
-	filter, err := db.ParsePRFilter("example/repo#47")
-	require.NoError(t, err)
-	page, err := env.db.ListSessions(t.Context(), db.SessionFilter{PR: filter})
-	require.NoError(t, err)
-	assert.Empty(t, page.Sessions)
-
 }

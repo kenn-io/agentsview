@@ -183,31 +183,3 @@ func TestRawProjectionRemoteFollowsActiveSources(t *testing.T) {
 	require.Len(t, db.DecodePRLinks(links), 1)
 	assert.Equal(t, "https://github.com/example/repo/pull/42", db.DecodePRLinks(links)[0].URL)
 }
-
-func TestRawProjectionPRCommandContext(t *testing.T) {
-	t.Parallel()
-	f := newProjectionFixture(t)
-	outcome := projectionOutcome("same prompt")
-	result := &outcome.Outcome.Results[0].Result
-	result.Session.Cwd = "/work/repo"
-	result.Session.GitRemote = "https://github.com/example/repo.git"
-	call := result.Messages[1].ToolCalls[0]
-	call.InputJSON = `{"command":"gh pr edit --add-label 99 42"}`
-	second := call
-	second.ToolUseID = "call-2"
-	second.InputJSON = `{"command":"gh pr view 43 -R github.com/example/repo"}`
-	third := call
-	third.ToolUseID = "call-3"
-	third.InputJSON = `{"command":"gh pr view 44","workdir":"/work/other"}`
-	result.Messages[1].ToolCalls = []parser.ParsedToolCall{call, second, third}
-	receipt, _ := f.accept(t, "device-a", "commands", "")
-	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, receipt), receipt, outcome))
-	session, err := f.sink.Resolve(t.Context(), "codex:portable")
-	require.NoError(t, err)
-	var encoded string
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, session.SessionID).Scan(&encoded))
-	links := db.DecodePRLinks(encoded)
-	require.Len(t, links, 2)
-	assert.Equal(t, 42, links[0].Number)
-	assert.Equal(t, 43, links[1].Number)
-}

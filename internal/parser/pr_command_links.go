@@ -145,6 +145,9 @@ func CommandPRLinks(ctx context.Context, command, remote string, allowBare bool)
 			if decl.Variant.Value == "export" {
 				for _, a := range decl.Args {
 					recordHost(a)
+					if len(stmt.Redirs) > 0 && a.Name != nil && a.Name.Value == "GH_HOST" {
+						hostValid = false
+					}
 				}
 				if segment.nested && hostSet {
 					bareSafe = false

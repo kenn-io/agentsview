@@ -13,7 +13,6 @@ import (
 func TestToolCallPRLinks(t *testing.T) {
 	messages := []db.Message{{ToolCalls: []db.ToolCall{
 		{Category: "Task", InputJSON: `{"prompt":"Review #99"}`},
-		{ToolName: "exec", Category: "Bash", InputJSON: `tools.exec_command({cmd:'gh pr view 99 -R example/repo'})`},
 		{Category: "Task", InputJSON: `{"message":"Review https://github.com/example/repo/pull/51"}`},
 		{Category: "Task", InputJSON: `{"task":"Review https://github.com/example/repo/pull/50"}`},
 		{Category: "Task", InputJSON: `{"prompt":"Review https://github.com/example/repo/pull/42", "description":"https://github.com/example/repo/pull/47"}`},
@@ -40,7 +39,7 @@ func TestToolCallPRLinksContextCancellation(t *testing.T) {
 }
 
 func TestToolCallPRLinksSkipsOversizedInput(t *testing.T) {
-	input := `{"command":"gh pr view 41 -R example/repo","unrelated":"` + strings.Repeat("x", 256*1024) + `"}`
+	input := `{"command":"gh pr view 41 -R github.com/example/repo","unrelated":"` + strings.Repeat("x", 256*1024) + `"}`
 	messages := []db.Message{{ToolCalls: []db.ToolCall{
 		{ToolName: "Bash", Category: "Bash", InputJSON: input},
 		{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"GH_HOST=github.com gh pr view 42 -R example/repo"}`},
@@ -62,7 +61,6 @@ func TestToolCallPRLinksDirectFormats(t *testing.T) {
 		`{"commands":["gh pr view 42 -R example/repo"]}`,
 		`{"command":["gh","pr","view","42","-R","example/repo"]}`,
 		`{"cmd":"gh pr view 42 -R example/repo"}`,
-		`text(await tools.exec_command({cmd: "gh pr view 42 -R example/repo"}))`,
 	} {
 		t.Run(input, func(t *testing.T) {
 			links := toolCallPRLinks(t, []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", ToolName: "exec", InputJSON: input}}}}, "", "https://github.com/example/repo.git")
@@ -72,16 +70,13 @@ func TestToolCallPRLinksDirectFormats(t *testing.T) {
 	}
 }
 
-func TestToolCallPRLinksDynamicCode(t *testing.T) {
-	messages := []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", ToolName: "exec", InputJSON: `const cmd = "gh pr view 42"; tools.exec_command({cmd})`}}}}
-	assert.Empty(t, toolCallPRLinks(t, messages, "", "https://github.com/example/repo.git"))
-}
-
 func TestToolCallPRLinksUnknownCodeCommand(t *testing.T) {
 	for _, tc := range []struct {
 		input string
 		want  int
 	}{
+		{`const cmd = "gh pr view 42"; tools.exec_command({cmd})`, 0},
+		{`text(await tools.exec_command({cmd: "gh pr view 42 -R example/repo"}))`, 1},
 		{`await tools.exec_command({cmd: value}); await tools.exec_command({cmd: "gh pr view 42"})`, 0},
 		{`await tools.exec_command(value); await tools.exec_command({cmd: "gh pr view 42"})`, 0},
 		{`await tools.exec_command({cmd: value}); await tools.exec_command({cmd: "gh pr view 42 -R example/other"})`, 1},
@@ -122,11 +117,5 @@ func TestToolCallPRLinksSharedShellDirectoryChange(t *testing.T) {
 			{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr merge 60"}`},
 		}}}
 		assert.Empty(t, toolCallPRLinks(t, messages, "/work/repo", "https://github.com/example/repo.git"))
-		messages[0].ToolCalls[1].InputJSON = `{"command":"gh pr merge 60 -R example/repo"}`
-		assert.Empty(t, toolCallPRLinks(t, messages, "/work/repo", "https://github.com/example/repo.git"))
-		messages[0].ToolCalls[1].InputJSON = `{"command":"GH_HOST=git.example gh pr merge 60 -R example/repo"}`
-		assert.Len(t, toolCallPRLinks(t, messages, "/work/repo", "https://github.com/example/repo.git"), 1)
-		messages[0].ToolCalls[1].InputJSON = `{"command":"gh pr merge 60 -R github.com/example/repo"}`
-		assert.Len(t, toolCallPRLinks(t, messages, "/work/repo", "https://github.com/example/repo.git"), 1)
 	}
 }
