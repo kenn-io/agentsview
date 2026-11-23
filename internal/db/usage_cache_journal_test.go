@@ -603,7 +603,7 @@ func TestUsageJournaledBackfillClaimChecksEarlierBatch(t *testing.T) {
 	identity := usageTimezoneIdentityFor(filter.Location(), nil)
 	zone, err := readUsageZoneCoverage(t.Context(), cache.db, identity.Key)
 	require.NoError(t, err)
-	activity, err := database.usageBackfillActivity(t.Context(), nil)
+	activity, err := database.usageBackfillActivity(t.Context())
 	require.NoError(t, err)
 	orderUsageBackfillSnapshot(&snapshot, activity)
 	firstID := snapshot.Versions[0].SessionID

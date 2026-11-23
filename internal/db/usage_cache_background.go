@@ -10,7 +10,6 @@ import (
 	"slices"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/export"
@@ -333,18 +332,13 @@ func (db *DB) runUsageCacheBackfillWithCoverage(
 	if err := cache.sweepDeletionJournal(ctx, db); err != nil {
 		return err
 	}
-	var ids []string
-	if delta {
-		ids = make([]string, 0, len(snapshot.Sessions))
-		for _, session := range snapshot.Sessions {
-			ids = append(ids, session.ID)
+	if !delta {
+		activity, err := db.usageBackfillActivity(ctx)
+		if err != nil {
+			return err
 		}
+		orderUsageBackfillSnapshot(&snapshot, activity)
 	}
-	activity, err := db.usageBackfillActivity(ctx, ids)
-	if err != nil {
-		return err
-	}
-	orderUsageBackfillSnapshot(&snapshot, activity)
 	resolver := export.NewPricingResolver(snapshot.PricingRows)
 	covered, deleted := 0, 0
 	var dailyRows, exceptionGroups, exceptionRows int64
@@ -431,7 +425,7 @@ func (db *DB) runUsageCacheBackfillWithCoverage(
 	if err := cache.sweepDeletionJournal(ctx, db); err != nil {
 		return err
 	}
-	if !delta || len(snapshot.Versions) > 0 {
+	if !delta {
 		if _, err := cache.incrementalVacuum(
 			ctx, usageCacheVacuumFreelistThreshold, usageCacheVacuumPages,
 		); err != nil {
@@ -541,58 +535,27 @@ func usageBackfillLocations(
 	return locations, nil
 }
 
-func (db *DB) usageBackfillActivity(ctx context.Context, ids []string) (map[string]string, error) {
-	if ids != nil {
-		activity := make(map[string]string)
-		for chunk := range slices.Chunk(ids, 900) {
-			part, err := db.usageBackfillActivityChunk(ctx, chunk)
-			if err != nil {
-				return nil, err
-			}
-			for id, timestamp := range part {
-				activity[id] = timestamp
-			}
-		}
-		return activity, nil
-	}
-	return db.usageBackfillActivityChunk(ctx, nil)
-}
-
-func (db *DB) usageBackfillActivityChunk(ctx context.Context, ids []string) (map[string]string, error) {
+func (db *DB) usageBackfillActivity(ctx context.Context) (map[string]string, error) {
 	release, err := db.acquireBulkRead(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer release()
-	messageIndex, activityIndex, eventIndex := " INDEXED BY idx_messages_usage_timestamp", " INDEXED BY idx_messages_activity_timestamp", " INDEXED BY idx_usage_events_session"
-	var messageFilter, eventFilter string
-	var args []any
-	if ids != nil {
-		placeholders := make([]string, len(ids))
-		for i, id := range ids {
-			placeholders[i] = "?" + strconv.Itoa(i+1)
-			args = append(args, id)
-		}
-		list := "(" + strings.Join(placeholders, ",") + ")"
-		messageFilter = " AND m.session_id IN " + list
-		eventFilter = " AND ue.session_id IN " + list
-		messageIndex, activityIndex, eventIndex = "", "", ""
-	}
 	rows, err := db.getReader().QueryContext(ctx, `
 		SELECT session_id, MAX(activity_at) FROM (
 			SELECT m.session_id, m.timestamp AS activity_at
-			FROM messages m`+messageIndex+`
-			WHERE `+usageMessageSourceEligibility+messageFilter+`
+			FROM messages m INDEXED BY idx_messages_usage_timestamp
+			WHERE `+usageMessageSourceEligibility+`
 			UNION ALL
 			SELECT m.session_id, m.timestamp AS activity_at
-			FROM messages m`+activityIndex+`
-			WHERE m.role = 'assistant' AND m.model != '<synthetic>'`+messageFilter+`
+			FROM messages m INDEXED BY idx_messages_activity_timestamp
+			WHERE m.role = 'assistant' AND m.model != '<synthetic>'
 			UNION ALL
 			SELECT ue.session_id, ue.occurred_at AS activity_at
-			FROM usage_events ue`+eventIndex+`
-			WHERE ue.model != ''`+eventFilter+`
+			FROM usage_events ue INDEXED BY idx_usage_events_session
+			WHERE ue.model != ''
 		) WHERE activity_at IS NOT NULL AND activity_at != ''
-		GROUP BY session_id`, args...)
+		GROUP BY session_id`)
 	if err != nil {
 		return nil, fmt.Errorf("ordering usage cache backfill: %w", err)
 	}
