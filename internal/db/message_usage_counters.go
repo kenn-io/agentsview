@@ -97,9 +97,6 @@ func (db *DB) finishUsageCounters(ctx context.Context) error {
 		if db.writerClosed.Load() {
 			return struct{}{}, ErrWriterClosed
 		}
-		if !db.usageCountersPending.Load() {
-			return struct{}{}, nil
-		}
 		w := db.getWriter()
 		tx, err := w.BeginTx(ctx, nil)
 		if err != nil {
