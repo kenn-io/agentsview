@@ -703,3 +703,40 @@ func TestDaemonOpenDefersCJKFTSWithOnlyImageText(t *testing.T) {
 	require.NoError(t, d.getReader().QueryRow(ctx, "SELECT count(*) FROM messages_cjk_fts WHERE messages_cjk_fts MATCH ?", "中文搜索").Scan(&matches))
 	require.Equal(t, 1, matches)
 }
+func TestDeferredCJKRepairSurvivesFingerprintRollback(t *testing.T) {
+	if !simpleFTSRuntimeConfig.available() {
+		t.Skip("simple FTS5 runtime is not installed for this test process")
+	}
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d, err := Open(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if d != nil {
+			_ = d.Close()
+		}
+	})
+	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
+	content := testInlineImageContent()
+	for _, id := range []string{"first", "second", "third"} {
+		insertSession(t, d, id, "project", func(s *Session) { s.UserMessageCount = 2 })
+		require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: id, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	}
+	fingerprint := simpleFTSRuntimeConfig.fingerprint
+	t.Cleanup(func() { simpleFTSRuntimeConfig.fingerprint = fingerprint })
+	require.NoError(t, d.Close())
+	simpleFTSRuntimeConfig.fingerprint = "different-fingerprint"
+	d, err = OpenDaemonWithProgress(ctx, path, config.ArchiveContentFull, nil)
+	require.NoError(t, err)
+	identity, err := ocr.NewIdentity("test", "model", "revision")
+	require.NoError(t, err)
+	require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "中文搜索", false))
+	require.NoError(t, d.Close())
+	simpleFTSRuntimeConfig.fingerprint = fingerprint
+	d, err = OpenDaemonWithProgress(ctx, path, config.ArchiveContentFull, nil)
+	require.NoError(t, err)
+	require.NoError(t, d.RepairMessageFTS(ctx))
+	page, err := d.Search(ctx, SearchFilter{Query: "中文搜索"})
+	require.NoError(t, err)
+	assert.Len(t, page.Results, 3)
+}
