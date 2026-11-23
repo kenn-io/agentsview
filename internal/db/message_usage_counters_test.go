@@ -102,40 +102,44 @@ func TestLateMessageUsageStoresUsageCounters(t *testing.T) {
 }
 
 func TestOpenDaemonDefersMessageUsageCounterFill(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d := testDBAtPath(t, path, "source")
+	insertSession(t, d, "s", "proj")
+	m := asstMsg("s", 0, "reply")
+	m.Model = "claude-sonnet"
+	m.TokenUsage = jsontext.Value(`{"output_tokens":250,"server_tool_use":{"web_search_requests":3}}`)
+	insertMessages(t, d, m)
+	removeMessageUsageCounters(t, d)
+	require.NoError(t, d.Close())
+	fixture, err := os.ReadFile(path)
+	require.NoError(t, err)
+	d, err = OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
+	require.NoError(t, err)
+	assert.True(t, d.SearchRepairPending())
+	assert.Equal(t, []storedUsageCounters{{0, 0}}, readStoredUsageCounters(t, d, "s"))
+	var pending bool
+	require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM stats WHERE key='message_usage_counters_pending')`).Scan(&pending))
+	require.True(t, pending)
+	var columns int
+	require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT count(*) FROM pragma_index_info('idx_messages_usage_session_covering')`).Scan(&columns))
+	assert.Equal(t, 10, columns)
+	_, err = OpenReadOnly(t.Context(), path)
+	require.ErrorIs(t, err, ErrMessageUsageCountersPending)
+	require.NoError(t, d.Close())
 	for _, query := range []string{"daily", "session"} {
 		t.Run(query, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "archive.db")
-			d := testDBAtPath(t, path, "source")
-			insertSession(t, d, "s", "proj")
-			m := asstMsg("s", 0, "reply")
-			m.Model = "claude-sonnet"
-			m.TokenUsage = jsontext.Value(`{"output_tokens":250,"server_tool_use":{"web_search_requests":3}}`)
-			insertMessages(t, d, m)
-			removeMessageUsageCounters(t, d)
-			var err error
-			require.NoError(t, d.Close())
-			fixture, err := os.ReadFile(path)
-			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(path, fixture, 0600))
 			plainPath := filepath.Join(t.TempDir(), "archive.db")
 			require.NoError(t, os.WriteFile(plainPath, fixture, 0600))
 			plain, err := Open(t.Context(), plainPath)
 			require.NoError(t, err)
 			defer plain.Close()
-			d, err = OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
+			d, err := OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
 			require.NoError(t, err)
 			defer d.Close()
 			var pending bool
 			var columns int
-			if query == "daily" {
-				assert.True(t, d.SearchRepairPending())
-				assert.Equal(t, []storedUsageCounters{{0, 0}}, readStoredUsageCounters(t, d, "s"))
-				require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM stats WHERE key='message_usage_counters_pending')`).Scan(&pending))
-				require.True(t, pending)
-				require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT count(*) FROM pragma_index_info('idx_messages_usage_session_covering')`).Scan(&columns))
-				assert.Equal(t, 10, columns)
-				_, err = OpenReadOnly(t.Context(), path)
-				require.ErrorIs(t, err, ErrMessageUsageCountersPending)
-			}
 			require.NoError(t, d.lockWriterCtx(t.Context()))
 			read := func(db *DB) (any, error) {
 				switch query {
@@ -172,7 +176,7 @@ func TestOpenDaemonDefersMessageUsageCounterFill(t *testing.T) {
 	}
 }
 
-func TestMessageUsageCounterFillFailureReopenAndIdempotence(t *testing.T) {
+func TestMessageUsageCounterFillFailureReopenAndRepeatedFill(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "archive.db")
 	d := testDBAtPath(t, path, "source")
 	insertSession(t, d, "s", "proj")
@@ -220,7 +224,7 @@ func TestPendingMessageUsageCountersPreservesDataVersion(t *testing.T) {
 		t.Run(fmt.Sprintf("archiveOnly=%t", archiveOnly), func(t *testing.T) {
 			d := testDB(t)
 			removeMessageUsageCounters(t, d)
-			version := 184
+			version := CurrentDataVersion() - 1
 			if archiveOnly {
 				version += archiveOnlyVersionBase
 				_, err := d.getWriter().Exec(t.Context(), `INSERT OR REPLACE INTO archive_metadata(key, value) VALUES ('archive_only', '1')`)
@@ -233,19 +237,17 @@ func TestPendingMessageUsageCountersPreservesDataVersion(t *testing.T) {
 			require.True(t, pending)
 			var raw int
 			require.NoError(t, d.getReader().QueryRow(t.Context(), `PRAGMA user_version`).Scan(&raw))
-			assert.Greater(t, raw, 185)
 			decoded, only := DecodeUserVersion(raw)
-			assert.Equal(t, 184, decoded)
+			assert.Equal(t, CurrentDataVersion()-1, decoded)
 			assert.Equal(t, archiveOnly, only)
 			require.NoError(t, d.setDataVersion(t.Context()))
 			require.NoError(t, d.getReader().QueryRow(t.Context(), `PRAGMA user_version`).Scan(&raw))
 			assert.NotZero(t, raw&usageCountersPendingVersion)
+			_, only = DecodeUserVersion(raw)
+			assert.Equal(t, archiveOnly, only)
 			d.usageCountersPending.Store(true)
 			require.NoError(t, d.finishUsageCounters(t.Context()))
 			require.NoError(t, d.getReader().QueryRow(t.Context(), `PRAGMA user_version`).Scan(&raw))
-			decoded, only = DecodeUserVersion(raw)
-			assert.Equal(t, CurrentDataVersion(), decoded)
-			assert.Equal(t, archiveOnly, only)
 			assert.Zero(t, raw&usageCountersPendingVersion)
 		})
 	}

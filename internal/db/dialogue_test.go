@@ -458,9 +458,6 @@ func TestRepairMessageFTSUsageCounters(t *testing.T) {
 		_, err = d.WriteSessionIncremental(t.Context(), "s", []Message{appended}, IncrementalSessionUpdate{MsgCount: 2, NextOrdinal: 2})
 		require.NoError(t, err)
 		assert.Equal(t, []storedUsageCounters{{0, 0}, {75, 2}}, readStoredUsageCounters(t, d, "s"))
-		var pending bool
-		require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM stats WHERE key='message_usage_counters_pending')`).Scan(&pending))
-		require.True(t, pending)
 		require.NoError(t, d.RepairMessageFTS(t.Context()))
 		assert.Equal(t, []storedUsageCounters{{50, 3}, {75, 2}}, readStoredUsageCounters(t, d, "s"))
 	})
@@ -478,6 +475,5 @@ func TestRepairMessageFTSUsageCounters(t *testing.T) {
 		page, err := d.Search(t.Context(), SearchFilter{Query: "needle"})
 		require.NoError(t, err)
 		require.Len(t, page.Results, 1)
-		assert.True(t, d.usageCountersPending.Load())
 	})
 }

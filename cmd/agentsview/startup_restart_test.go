@@ -172,9 +172,10 @@ CREATE TRIGGER test_hold_usage_fill BEFORE DELETE ON stats WHEN OLD.key='message
 	base := fmt.Sprintf("http://127.0.0.1:%d", runtime.Port)
 	page := restartGet(t, base+"/api/v1/sessions?limit=25&include_one_shot=true")
 	require.Contains(t, page, "session0")
-	log, err := os.ReadFile(output.Name())
-	require.NoError(t, err)
-	require.Contains(t, string(log), "Sync complete:")
+	require.Eventually(t, func() bool {
+		log, err := os.ReadFile(output.Name())
+		return err == nil && strings.Contains(string(log), "Sync complete:") && strings.Contains(restartGet(t, base+"/api/v1/sync/status"), `"startup_pending":false`)
+	}, 30*time.Second, 100*time.Millisecond)
 }
 
 func TestReadOnlyCommandsReportPendingUsageUpgrade(t *testing.T) {
@@ -196,10 +197,7 @@ func TestReadOnlyCommandsReportPendingUsageUpgrade(t *testing.T) {
 			if reader != nil {
 				defer reader.Close()
 			}
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "upgrade")
-			assert.Contains(t, err.Error(), "retry")
-			assert.NotContains(t, err.Error(), "restart")
+			require.ErrorIs(t, err, db.ErrMessageUsageCountersPending)
 		})
 	}
 }
