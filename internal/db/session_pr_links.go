@@ -565,6 +565,37 @@ func independentShell(name string) bool {
 	return name == "exec_command" || name == "shell_command" || name == "shell" || name == "exec"
 }
 
+// simpleShellArguments accepts only a sequence of literal shell arguments.
+func simpleShellArguments(args string) bool {
+	var quote byte
+	for i := 0; i < len(args); i++ {
+		c := args[i]
+		if c < 32 && c != '\t' {
+			return false
+		}
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			} else if quote == '"' && (c == '$' || c == '`') {
+				return false
+			} else if quote == '"' && c == '\\' {
+				i++
+				if i == len(args) || args[i] < 32 {
+					return false
+				}
+			}
+			continue
+		}
+		switch c {
+		case '\'', '"':
+			quote = c
+		case '\n', '\r', '\\', '$', '`', '|', '&', ';', '<', '>', '(', ')', '{', '}', '[', ']', '*', '?', '#', '~':
+			return false
+		}
+	}
+	return quote == 0
+}
+
 // simplePRInertCommand recognizes literal commands that cannot name a PR or
 // alter the shell context tracked by the PR parser. Keep its exclusions aligned
 // with prShellWalker and shellCall's link and nested shell handling.
@@ -572,21 +603,25 @@ func simplePRInertCommand(name, input string) bool {
 	if name == "exec" || len(input) > 256*1024 || !jsontext.Value(input).IsValid() {
 		return false
 	}
-	command := shellCommandText(input)
-	for _, c := range command {
+	command := strings.TrimLeft(shellCommandText(input), " \t")
+	end := strings.IndexAny(command, " \t")
+	if end < 0 {
+		end = len(command)
+	}
+	first := command[:end]
+	for _, c := range first {
 		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune(" _./:-=", c)) {
 			return false
 		}
 	}
-	words := strings.Fields(command)
-	if len(words) == 0 || strings.Contains(words[0], "=") || strings.HasPrefix(words[0], "-") {
+	if first == "" || strings.Contains(first, "=") || strings.HasPrefix(first, "-") || !simpleShellArguments(command[end:]) {
 		return false
 	}
-	switch words[0] {
+	switch first {
 	case "if", "then", "else", "elif", "fi", "case", "esac", "for", "select", "while", "until", "do", "done", "in", "function", "time", "coproc", "export", "declare", "local", "typeset", "readonly":
 		return false
 	}
-	switch strings.TrimSuffix(strings.ToLower(path.Base(words[0])), ".exe") {
+	switch strings.TrimSuffix(strings.ToLower(path.Base(first)), ".exe") {
 	case "gh", "git", "cd", "pushd", "popd", "unset", "env", "sh", "bash", "zsh", "claude", "codex":
 		return false
 	}

@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -393,7 +394,7 @@ func TestToolPRLinksArchiveUpgrade(t *testing.T) {
 }
 
 func TestToolCallPRLinksSkipsSimpleCommands(t *testing.T) {
-	const input = `{"command":"go version"}`
+	const input = `{"command":"rg -n 'example' src"}`
 	d := testDB(t)
 	s := Session{ID: "simple-commands", Project: "project", Machine: "local", Agent: "claude"}
 	require.NoError(t, d.UpsertSession(t.Context(), s))
@@ -421,9 +422,9 @@ func TestToolCallPRLinksSkipsSimpleCommands(t *testing.T) {
 }
 
 func TestSimplePRInertCommandParity(t *testing.T) {
-	for _, command := range []string{"pwd", "ls -al /work/repo", "cat README.md", "head -n 10 README.md", "tail -n 10 README.md", "wc -l README.md", "rg pattern src", "echo hello", "go version", "npm install", "curl https://example.com/api", "/usr/bin/python3 script.py", "echo gh pr view 42"} {
+	for _, command := range []string{"pwd", "ls -al /work/repo", "cat README.md", "head -n 10 README.md", "tail -n 10 README.md", "wc -l README.md", "rg pattern src", "echo hello", "go version", "npm install", "curl https://example.com/api", "/usr/bin/python3 script.py", "echo gh pr view 42", "rg -n 'gh pr view 42' src", "echo '$(gh pr view 42)'", `rg "hello world" src`, `echo "a\"b"`} {
 		t.Run(command, func(t *testing.T) {
-			input := `{"command":"` + command + `"}`
+			input := `{"command":` + strconv.Quote(command) + `}`
 			require.True(t, simplePRInertCommand("Bash", input))
 			for state := range 8 {
 				before := parser.PRShellContext{CheckoutUncertain: state&1 != 0, HostUncertain: state&2 != 0, RepoUncertain: state&4 != 0}
@@ -434,7 +435,7 @@ func TestSimplePRInertCommandParity(t *testing.T) {
 			}
 		})
 	}
-	for _, input := range []string{`{"command":"echo $(gh pr view 42)"}`, `{"command":"pwd; cd /other"}`, `{"command":"git remote set-url origin example"}`, `{"command":"/usr/bin/GH.exe pr view 42"}`, `{"command":"claude review"}`, `{"command":"codex exec review"}`, `{"command":"sh -c script"}`, `{"command":"env GH_REPO=x gh pr view 42"}`, `{"command":"GH_REPO=example/repo"}`, `{"command":"export GH_HOST=example"}`, `{"command":"if true"}`, `{"command":"for"}`, `{"command":"pwd`, ""} {
+	for _, input := range []string{`{"command":"echo $(gh pr view 42)"}`, `{"command":"echo 'unclosed"}`, `{"command":"echo \"$HOME\""}`, `{"command":"pwd; cd /other"}`, `{"command":"git remote set-url origin example"}`, `{"command":"/usr/bin/GH.exe pr view 42"}`, `{"command":"claude review"}`, `{"command":"codex exec review"}`, `{"command":"sh -c script"}`, `{"command":"env GH_REPO=x gh pr view 42"}`, `{"command":"GH_REPO=example/repo"}`, `{"command":"export GH_HOST=example"}`, `{"command":"if true"}`, `{"command":"for"}`, `{"command":"pwd`, ""} {
 		assert.False(t, simplePRInertCommand("Bash", input), input)
 	}
 	assert.False(t, simplePRInertCommand("Bash", `{"command":"echo `+strings.Repeat("x", 256*1024)+`"}`))
