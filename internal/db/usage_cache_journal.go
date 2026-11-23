@@ -20,6 +20,11 @@ type usageZoneCoverage struct {
 	foreignPricing              bool
 }
 
+func usageZoneTrusted(zone usageZoneCoverage, snapshot *usageQuerySnapshot) bool {
+	return zone.revision.Valid && !zone.foreignPricing &&
+		zone.revision.Int64 <= snapshot.ChangeRevision && zone.pricing == snapshot.PricingIdentity
+}
+
 func readUsageZoneCoverage(ctx context.Context, q sessionExportQuerier, key string) (usageZoneCoverage, error) {
 	var zone usageZoneCoverage
 	err := q.QueryRowContext(ctx, `
@@ -266,7 +271,7 @@ func (db *DB) captureJournaledUsageWindow(ctx context.Context, filter UsageFilte
 		if snapshot.DatabaseID != databaseID {
 			return errUsageCacheSourceChanged
 		}
-		trusted = zone.revision.Int64 <= snapshot.ChangeRevision && snapshot.PricingIdentity == zone.pricing
+		trusted = usageZoneTrusted(zone, snapshot)
 		if !trusted {
 			return captureUsageQueryFrom(ctx, tx, filter, kind, snapshot)
 		}
