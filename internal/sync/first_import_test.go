@@ -154,6 +154,9 @@ func TestFirstImportRefreshesWhileOlderSessionsAreWritten(t *testing.T) {
 			case <-time.After(30 * time.Second):
 				require.FailNow(t, "import did not reach the pause")
 			}
+			marker, err := archive.GetSyncState(t.Context(), "first_import_pending")
+			require.NoError(t, err)
+			require.Equal(t, "1", marker)
 			if tc.cancel {
 				cancel()
 			} else {
@@ -186,6 +189,13 @@ func TestFirstImportRefreshesWhileOlderSessionsAreWritten(t *testing.T) {
 				case <-time.After(30 * time.Second):
 					require.FailNow(t, "import did not finish")
 				}
+			}
+			marker, err = archive.GetSyncState(t.Context(), "first_import_pending")
+			require.NoError(t, err)
+			if tc.cancel {
+				assert.Equal(t, "1", marker)
+			} else {
+				assert.Empty(t, marker)
 			}
 		})
 	}

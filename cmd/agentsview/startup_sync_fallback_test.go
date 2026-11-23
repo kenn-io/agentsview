@@ -85,6 +85,7 @@ func TestRunDeferredStartupSyncFallbackSkipsWhenAlreadyReconciled(t *testing.T) 
 func TestForegroundSyncRunnerReconcilesStartup(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
+	require.NoError(t, database.SetSyncState(t.Context(), "first_import_pending", "1"))
 	opened := make(chan struct{}, 1)
 	engine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{
 		AgentDirs:               cfg.AgentDirs,
@@ -108,6 +109,9 @@ func TestForegroundSyncRunnerReconcilesStartup(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, 3, stats.Synced, "foreground runner syncs the fixture archive")
+	marker, err := database.GetSyncState(t.Context(), "first_import_pending")
+	require.NoError(t, err)
+	assert.Empty(t, marker)
 	assert.True(t, engine.StartupReconciled(),
 		"foreground sync must reconcile startup")
 	select {
@@ -128,6 +132,11 @@ func TestFirstImportProbe(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, first)
 	require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "saved", Agent: "claude", Machine: "local"}))
+	require.NoError(t, database.SetSyncState(t.Context(), "first_import_pending", "1"))
+	first, err = isFirstImport(t.Context(), cfg)
+	require.NoError(t, err)
+	require.True(t, first, "an interrupted first import resumes without blocking startup")
+	require.NoError(t, database.DeleteSyncState(t.Context(), "first_import_pending"))
 	first, err = isFirstImport(t.Context(), cfg)
 	require.NoError(t, err)
 	require.False(t, first)

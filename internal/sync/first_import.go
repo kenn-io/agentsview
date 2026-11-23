@@ -12,6 +12,9 @@ import (
 
 const firstImportWaveSize = 1
 
+// FirstImportPendingKey records an interrupted or ongoing initial import.
+const FirstImportPendingKey = "first_import_pending"
+
 type firstImportWave struct {
 	limit    int
 	selected map[firstImportSource]struct{}
@@ -40,6 +43,9 @@ func (e *Engine) syncNewest(ctx context.Context, onProgress ProgressFunc, onWrit
 
 // RunFirstImport publishes recent sessions before completing startup reconciliation.
 func (e *Engine) RunFirstImport(ctx context.Context, onProgress ProgressFunc) (SyncStats, bool, error) {
+	if err := e.db.SetSyncState(ctx, FirstImportPendingKey, "1"); err != nil {
+		return SyncStats{}, false, err
+	}
 	refresh := make(chan struct{}, 1)
 	done := make(chan struct{})
 	go e.emitFirstImportRefreshes(ctx, refresh, done)
@@ -55,7 +61,11 @@ func (e *Engine) RunFirstImport(ctx context.Context, onProgress ProgressFunc) (S
 		return stats, true, ctx.Err()
 	}
 	ctx = context.WithValue(ctx, firstImportContextKey{}, &firstImportWave{onWrite: onWrite})
-	return e.RunStartupSyncFallback(ctx, onProgress)
+	stats, ran, err := e.RunStartupSyncFallback(ctx, onProgress)
+	if err == nil && ran && stats.ProcessingComplete() {
+		err = e.db.DeleteSyncState(ctx, FirstImportPendingKey)
+	}
+	return stats, ran, err
 }
 
 func (e *Engine) emitFirstImportRefreshes(ctx context.Context, refresh <-chan struct{}, done chan<- struct{}) {

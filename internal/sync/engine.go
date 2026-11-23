@@ -3590,6 +3590,15 @@ func (e *Engine) recordStartupReconciled(
 	if !startupReconciliationSucceeded(ctx, stats, err) {
 		return
 	}
+	if stats.ProcessingComplete() {
+		pending, markerErr := e.db.GetSyncState(ctx, FirstImportPendingKey)
+		if markerErr == nil && pending == "1" {
+			markerErr = e.db.DeleteSyncState(ctx, FirstImportPendingKey)
+		}
+		if markerErr != nil {
+			log.Printf("clearing first import marker: %v", markerErr)
+		}
+	}
 	e.startupReconciledOnce.Do(func() {
 		if e.startupReconciledReady != nil {
 			close(e.startupReconciledReady)

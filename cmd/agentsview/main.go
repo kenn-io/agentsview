@@ -311,6 +311,11 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			RemoveDaemonRuntime(runtimeRecordDataDir)
 		}
 	}()
+	if firstImport {
+		if err := database.SetSyncState(ctx, sync.FirstImportPendingKey, "1"); err != nil {
+			fatal("recording first import: %v", err)
+		}
+	}
 
 	if archiveOnly && database.NeedsResync() && !startupRebuild {
 		// The engine disables every provider for an archive-only database and
@@ -963,6 +968,10 @@ func isFirstImport(ctx context.Context, cfg config.Config) (bool, error) {
 		return false, err
 	}
 	defer database.Close()
+	pending, err := database.GetSyncState(ctx, sync.FirstImportPendingKey)
+	if err != nil || pending == "1" {
+		return pending == "1", err
+	}
 	var exists bool
 	err = database.Reader().QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM sessions)").Scan(&exists)
 	return !exists, err
