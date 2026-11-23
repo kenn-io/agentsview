@@ -284,20 +284,15 @@ func (db *DB) captureUsageBackfill(ctx context.Context, cache *usageCache, datab
 			if !trusted {
 				return captureUsageQueryFrom(ctx, tx, filter, usageQueryKindActivity, snapshot)
 			}
-			ids, err := captureUsageJournalChanges(ctx, tx, snapshot, filter, lowest, lost)
+			ids, err := loadSessionJournalChanges(ctx, tx, "usage_session_changes", "usage", lowest, snapshot.ChangeRevision)
 			if err != nil {
 				return err
 			}
-			// Preserve deleted IDs so the fill removes their cached facts.
-			present := make(map[string]bool, len(snapshot.Sessions))
-			for _, session := range snapshot.Sessions {
-				present[session.ID] = true
-			}
-			for _, id := range ids {
-				if !present[id] {
-					snapshot.Sessions = append(snapshot.Sessions, usageQuerySession{ID: id})
-					snapshot.Versions = append(snapshot.Versions, usageSourceVersion{SessionID: id})
-				}
+			// Filling a changed session can invalidate an unchanged dedup peer.
+			// A full capture lets the pass rebuild both before claiming coverage.
+			if len(ids) > 0 || len(lost) > 0 {
+				trusted = false
+				return captureUsageQueryFrom(ctx, tx, filter, usageQueryKindActivity, snapshot)
 			}
 			return loadUsageCursorHighWater(ctx, tx, snapshot)
 		})

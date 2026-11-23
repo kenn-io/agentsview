@@ -888,9 +888,8 @@ func TestUsageBackfillJournalCapture(t *testing.T) {
 		TokenUsage: json.RawMessage(`{"input_tokens":2}`),
 	}}))
 	snapshot, delta = capture()
-	require.True(t, delta)
-	require.Len(t, snapshot.Sessions, 1)
-	assert.Equal(t, "two", snapshot.Sessions[0].ID)
+	require.False(t, delta)
+	require.Len(t, snapshot.Sessions, 3)
 	activity, err := database.usageBackfillActivity(t.Context(), []string{"two"})
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"two": "2026-08-11T09:00:00Z"}, activity)
@@ -903,15 +902,13 @@ func TestUsageBackfillJournalCapture(t *testing.T) {
 	_, err = cache.db.ExecContext(t.Context(), `DELETE FROM usage_rollup_installs WHERE session_id = 'one'`)
 	require.NoError(t, err)
 	snapshot, delta = capture()
-	require.True(t, delta)
-	require.Len(t, snapshot.Sessions, 1)
-	assert.Equal(t, "one", snapshot.Sessions[0].ID)
+	require.False(t, delta)
+	require.Len(t, snapshot.Sessions, 3)
 	require.NoError(t, database.runUsageCacheBackfill(t.Context()))
 	require.NoError(t, database.DeleteSession(t.Context(), "three"))
 	snapshot, delta = capture()
-	require.True(t, delta)
-	require.Len(t, snapshot.Sessions, 1)
-	assert.Equal(t, "three", snapshot.Sessions[0].ID)
+	require.False(t, delta)
+	require.Len(t, snapshot.Sessions, 2)
 	require.NoError(t, database.runUsageCacheBackfill(t.Context()))
 	assert.Equal(t, 2, usageCacheCount(t, cache, "usage_cached_sessions"))
 	_, err = cache.db.ExecContext(t.Context(), `UPDATE usage_rollup_timezones SET change_pricing = 'old'`)
@@ -949,9 +946,8 @@ func TestUsageBackfillCaptureOldestZoneClaim(t *testing.T) {
 	snapshot, locations, _, delta, err := database.captureUsageBackfill(t.Context(), cache, id, 0)
 	require.NoError(t, err)
 	require.Len(t, locations, 2)
-	require.True(t, delta)
-	require.Len(t, snapshot.Sessions, 1)
-	assert.Equal(t, "batch-000", snapshot.Sessions[0].ID)
+	require.False(t, delta)
+	require.Len(t, snapshot.Sessions, 2)
 }
 
 func TestUsageBackfillCaptureExternalSource(t *testing.T) {
@@ -1005,11 +1001,42 @@ func TestUsageBackfillAppendSharedIdentity(t *testing.T) {
 		TokenUsage: json.RawMessage(`{"input_tokens":10}`), ClaudeMessageID: "shared", ClaudeRequestID: "request",
 	}}))
 	require.NoError(t, database.runUsageCacheBackfill(t.Context()))
+	id, err := database.GetDatabaseID(t.Context())
+	require.NoError(t, err)
+	cache, err := database.usageCache.Generation(t.Context(), id)
+	require.NoError(t, err)
+	var originalTokens int
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT r.input_tokens
+		FROM usage_daily_rollups r JOIN usage_rollup_installs i ON i.id = r.rollup_install_id
+		WHERE i.session_id = 'one'`).Scan(&originalTokens))
+	require.Equal(t, 10, originalTokens)
 	require.NoError(t, database.InsertMessages(t.Context(), []Message{{
 		SessionID: "two", Ordinal: 0, Role: "assistant", Timestamp: "2026-08-10T09:01:00Z", Model: "model",
 		TokenUsage: json.RawMessage(`{"input_tokens":20}`), ClaudeMessageID: "shared", ClaudeRequestID: "request",
 	}}))
 	require.NoError(t, database.runUsageCacheBackfill(t.Context()))
+	// Read the installed rows before a foreground query can repair the cache.
+	rows, err := cache.db.QueryContext(t.Context(), `SELECT i.session_id, e.input_tokens
+		FROM usage_rollup_exceptions e JOIN usage_rollup_installs i ON i.id = e.rollup_install_id
+		WHERE e.claude_message_id = 'shared' AND e.claude_request_id = 'request'
+		ORDER BY i.session_id`)
+	require.NoError(t, err)
+	var sessions []string
+	var tokens []int
+	for rows.Next() {
+		var session string
+		var count int
+		require.NoError(t, rows.Scan(&session, &count))
+		sessions = append(sessions, session)
+		tokens = append(tokens, count)
+	}
+	require.NoError(t, rows.Err())
+	require.NoError(t, rows.Close())
+	assert.Equal(t, []string{"one", "two"}, sessions)
+	assert.Equal(t, []int{10, 20}, tokens)
+	var invalidations int
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT count(*) FROM usage_rollup_invalidations`).Scan(&invalidations))
+	assert.Zero(t, invalidations)
 	filter := UsageFilter{}
 	got, err := database.GetDailyUsage(t.Context(), filter)
 	require.NoError(t, err)
