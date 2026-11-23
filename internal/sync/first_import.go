@@ -11,7 +11,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-const firstImportWaveSize = 100
+const firstImportWaveSize = 1
 
 type firstImportWave struct {
 	limit    int
@@ -104,9 +104,9 @@ type firstImportCandidate struct {
 
 func (e *Engine) firstImportSelect(ctx context.Context, files []parser.DiscoveredFile, scope *rootSyncScope, wave *firstImportWave) error {
 	candidates := make([]firstImportCandidate, 0, len(files))
-	mtimes := sortDiscoveredFilesByMtime(ctx, files)
 	for _, file := range files {
-		candidates = append(candidates, firstImportCandidate{firstImportSource{file.Agent, file.Path}, max(mtimes[file.Path], 0)})
+		mtime := discoveredFileOrderingMtime(ctx, file)
+		candidates = append(candidates, firstImportCandidate{firstImportSource{file.Agent, file.Path}, max(mtime, 0)})
 	}
 	for _, agent := range []parser.AgentType{parser.AgentWarp, parser.AgentForge, parser.AgentPiebald, parser.AgentZCode, parser.AgentGoose, parser.AgentCrush} {
 		var roots []string

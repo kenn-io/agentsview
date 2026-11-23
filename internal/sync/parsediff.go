@@ -375,18 +375,10 @@ func sortAndLimitParseDiffFiles(ctx context.Context,
 	return files, cutPaths, limited
 }
 
-func sortDiscoveredFilesByMtime(ctx context.Context, files []parser.DiscoveredFile) map[string]int64 {
+func sortDiscoveredFilesByMtime(ctx context.Context, files []parser.DiscoveredFile) {
 	mtimes := make(map[string]int64, len(files))
 	for _, f := range files {
-		if m, ok := parseDiffDiscoveryMtime(f); ok {
-			mtimes[f.Path] = m
-			continue
-		}
-		m, err := discoveredFileMtime(ctx, f)
-		if err != nil {
-			m = 0
-		}
-		mtimes[f.Path] = m
+		mtimes[f.Path] = discoveredFileOrderingMtime(ctx, f)
 	}
 	sort.SliceStable(files, func(i, j int) bool {
 		mi, mj := mtimes[files[i].Path], mtimes[files[j].Path]
@@ -395,8 +387,17 @@ func sortDiscoveredFilesByMtime(ctx context.Context, files []parser.DiscoveredFi
 		}
 		return files[i].Path < files[j].Path
 	})
+}
 
-	return mtimes
+func discoveredFileOrderingMtime(ctx context.Context, file parser.DiscoveredFile) int64 {
+	if mtime, ok := parseDiffDiscoveryMtime(file); ok {
+		return mtime
+	}
+	mtime, err := discoveredFileMtime(ctx, file)
+	if err != nil {
+		return 0
+	}
+	return mtime
 }
 
 // parseDiffDiscoveryMtime returns a per-source mtime captured at provider

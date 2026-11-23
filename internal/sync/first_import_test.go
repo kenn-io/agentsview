@@ -47,8 +47,8 @@ func TestFirstImportResumesAfterFirstWave(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	page, err := archive.ListSessions(t.Context(), db.SessionFilter{Limit: 300})
 	require.NoError(t, err)
-	require.NotEmpty(t, page.Sessions)
-	require.LessOrEqual(t, len(page.Sessions), 100)
+	require.Len(t, page.Sessions, 1)
+	require.Equal(t, "session-249", page.Sessions[0].ID)
 	require.True(t, engine.LastSyncFinishedAt(t.Context()).IsZero())
 	engine.emitter = nil
 	_, ran, err = engine.RunFirstImport(t.Context(), nil)
@@ -418,7 +418,7 @@ func TestFirstImportReconciliationOrdersRemainingFiles(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		_, _, err := engine.RunFirstImport(t.Context(), func(p Progress) {
-			if p.Phase == PhaseSyncing && p.SessionsTotal == 250 && p.SessionsDone == 200 {
+			if p.Phase == PhaseSyncing && p.SessionsTotal == 250 && p.SessionsDone == 201 {
 				close(paused)
 				<-resume
 			}
