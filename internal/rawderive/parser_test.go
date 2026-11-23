@@ -1808,3 +1808,30 @@ func TestProviderParserHostedCodexSkillNameStaysLexical(t *testing.T) {
 	require.Len(t, out.Outcome.Results[0].Result.Messages[0].ToolCalls, 1)
 	assert.Empty(t, out.Outcome.Results[0].Result.Messages[0].ToolCalls[0].SkillName)
 }
+
+func TestProviderParserHostedCodexLabeledRun(t *testing.T) {
+	root := t.TempDir()
+	const id = "11111111-1111-4111-8111-111111111111"
+	home := filepath.Join(root, "experiment", "case", ".codex-run-v1-abc")
+	path := filepath.Join(home, "sessions", "2026", "01", "01", "rollout-"+id+".jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	content := testjsonl.JoinJSONL(testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_cli_rs", "2026-01-01T10:00:00Z"), testjsonl.CodexMsgJSON("user", "review", "2026-01-01T10:00:01Z"))
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(home, parser.CodexSessionIndexFilename), []byte(`{"id":"`+id+`","thread_name":"Review title"}`+"\n"), 0o644))
+	provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	manifest, objects := manifestFromCapturePlan(t, parser.AgentCodex, provider, sources[0])
+	materialized, err := (Materializer{Store: &materializerStore{objects: objects}, BaseDir: t.TempDir(), MaxTotalBytes: 1 << 20}).Materialize(t.Context(), manifest)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, materialized.Cleanup()) })
+	dispatch, err := NewProviderParser(parser.ProviderFactories(), "hosted-worker")
+	require.NoError(t, err)
+	parsed, err := dispatch.Parse(t.Context(), manifest, materialized)
+	require.NoError(t, err)
+	require.Len(t, parsed.Outcome.Results, 1)
+	assert.Equal(t, "experiment/case", parsed.Outcome.Results[0].Result.Session.Project)
+	assert.Equal(t, "Review title", parsed.Outcome.Results[0].Result.Session.SessionName)
+}

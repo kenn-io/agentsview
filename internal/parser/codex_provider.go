@@ -450,6 +450,20 @@ func (p *codexProvider) Fingerprint(
 	return p.sources.Fingerprint(ctx, source)
 }
 
+func (p *codexProvider) parentRoots(path string) []string {
+	roots := slices.Clone(p.sources.roots)
+	for _, root := range p.sources.roots {
+		if CodexSourceLabel(root, path) != "" {
+			sessions := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(path))))
+			if !slices.Contains(roots, sessions) {
+				roots = append(roots, sessions)
+			}
+			break
+		}
+	}
+	return roots
+}
+
 func (p *codexProvider) PlanRawCapture(
 	ctx context.Context,
 	source SourceRef,
@@ -467,7 +481,7 @@ func (p *codexProvider) PlanRawCapture(
 	}
 	captureRoot := filepath.Clean(src.Root)
 	indexPath := codexSessionIndexPath(src.Path)
-	if indexPath != "" {
+	if indexPath != "" && CodexSourceLabel(src.Root, src.Path) == "" {
 		// The provider reads this named sibling as session metadata, so raw
 		// capture widens only far enough to preserve the same parse inputs.
 		captureRoot = filepath.Dir(indexPath)
@@ -492,7 +506,7 @@ func (p *codexProvider) PlanRawCapture(
 			)
 		}
 		seen := map[string]bool{resolvedSource: true}
-		for _, root := range p.sources.roots {
+		for _, root := range p.parentRoots(src.Path) {
 			if err := ctx.Err(); err != nil {
 				return RawCapturePlan{}, err
 			}
@@ -547,7 +561,7 @@ func (p *codexProvider) PlanRawCapture(
 			if i > 0 {
 				logical = fmt.Sprintf("alias-homes/%d/%s", i, CodexSessionIndexFilename)
 			}
-			if p.Config.StableSourceSnapshots && rawCapturePathWithin(captureRoot, candidate) {
+			if (p.Config.StableSourceSnapshots || CodexSourceLabel(src.Root, src.Path) != "") && rawCapturePathWithin(captureRoot, candidate) {
 				// Materialized aliases already have custody paths. Keep their
 				// original ordinals even when missing indexes left gaps.
 				rel, err := filepath.Rel(captureRoot, candidate)
@@ -1001,7 +1015,7 @@ func (s codexSourceSet) discoverEachRoot(
 		// Reuse that result instead of issuing another lstat per rollout.
 		source, ok := s.sourceRef(root, path, false)
 		if !ok {
-			if _, _, supported := CodexSessionPathInfo(root, path); supported {
+			if _, _, supported := CodexSessionPathInfo(root, path); supported || CodexSessionUUIDFromFilename(entry.Name()) != "" {
 				source, ok = s.directPathSource(root, path, false)
 			}
 		}
@@ -1025,38 +1039,14 @@ func (s codexSourceSet) discover(
 		if !includeRoot(root) {
 			continue
 		}
-		if strings.HasPrefix(root, "s3://") {
-			// s3:// roots have no local layout to walk: enumerate the objects
-			// directly and carry each one's durable metadata in the Opaque
-			// payload. Each object is its own session keyed by URI, so the
-			// live-over-archived preference (which inspects a local codexSource
-			// layout) does not apply here; only a compressed object beside its
-			// plain one is folded into it.
-			if !s.ownsCodexSidecars() {
-				continue
-			}
-			for _, file := range codexS3PreferredFiles(s3PrefixScan(root, codexS3Scanner())) {
-				source := s3SourceRefFromDiscoveredFile(root, file)
-				if _, ok := byKey[source.Key]; ok {
-					continue
-				}
+		err := s.discoverEachRoot(ctx, root, func(source SourceRef) error {
+			if current, ok := byKey[source.Key]; !ok || (!isS3URI(root) && preferCodexSource(source, current)) {
 				byKey[source.Key] = source
 			}
-			continue
-		}
-		for _, path := range s.discoverSessionPaths(root) {
-			source, ok := s.sourceRef(root, path, true)
-			if !ok {
-				source, ok = s.directPathSource(root, path, true)
-			}
-			if !ok {
-				continue
-			}
-			if current, ok := byKey[source.Key]; ok &&
-				!preferCodexSource(source, current) {
-				continue
-			}
-			byKey[source.Key] = source
+			return nil
+		})
+		if err != nil {
+			return nil, err
 		}
 	}
 	for _, source := range byKey {
@@ -1381,13 +1371,13 @@ func (s codexSourceSet) FindSource(
 	if req.RawSessionID == "" {
 		return SourceRef{}, false, nil
 	}
-	for _, root := range s.roots {
-		path := s.findSourceFile(root, req.RawSessionID)
-		if path == "" {
-			continue
-		}
-		if source, ok := s.sourceRef(root, path, true); ok {
-			return s.canonicalSource(ctx, source)
+	sources, err := s.Discover(ctx)
+	if err != nil {
+		return SourceRef{}, false, err
+	}
+	for _, source := range sources {
+		if source.Key == codexSourceKey(s.agent, req.RawSessionID) {
+			return source, true, nil
 		}
 	}
 	return SourceRef{}, false, nil
@@ -1579,29 +1569,16 @@ func (s codexSourceSet) canonicalSource(
 	if !ok || src.UUID == "" {
 		return source, true, nil
 	}
-	var best SourceRef
-	foundExisting := false
-	for _, root := range s.roots {
-		if err := ctx.Err(); err != nil {
-			return SourceRef{}, false, err
-		}
-		path := s.findSourceFile(root, src.UUID)
-		if path == "" {
-			continue
-		}
-		candidate, ok := s.sourceRef(root, path, true)
-		if !ok {
-			continue
-		}
-		if !foundExisting || preferCodexSource(candidate, best) {
-			best = candidate
-			foundExisting = true
+	sources, err := s.Discover(ctx)
+	if err != nil {
+		return SourceRef{}, false, err
+	}
+	for _, candidate := range sources {
+		if candidate.Key == source.Key {
+			return candidate, true, nil
 		}
 	}
-	if !foundExisting {
-		return source, true, nil
-	}
-	return best, true, nil
+	return source, true, nil
 }
 
 func codexSourceKey(agent AgentType, uuid string) string {

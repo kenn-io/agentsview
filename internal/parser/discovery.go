@@ -846,6 +846,9 @@ func CodexSessionPathInfo(root, path string) (CodexLayout, string, bool) {
 		return CodexLayoutUnknown, "", false
 	}
 	parts := strings.Split(rel, sep)
+	if len(parts) >= 7 && CodexSourceLabel(root, path) != "" {
+		parts = parts[len(parts)-4:]
+	}
 	switch len(parts) {
 	case 1:
 		if !isCodexSessionFilename(parts[0]) {
@@ -865,6 +868,21 @@ func CodexSessionPathInfo(root, path string) (CodexLayout, string, bool) {
 	default:
 		return CodexLayoutUnknown, "", false
 	}
+}
+
+// CodexSourceLabel returns the label preceding a marked Codex run home.
+func CodexSourceLabel(root, path string) string {
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	n := len(parts)
+	if n < 7 || !strings.HasPrefix(parts[n-6], ".codex-run-v1-") || parts[n-5] != "sessions" ||
+		!IsDigits(parts[n-4]) || !IsDigits(parts[n-3]) || !IsDigits(parts[n-2]) || !isCodexSessionFilename(parts[n-1]) {
+		return ""
+	}
+	return filepath.ToSlash(filepath.Join(parts[:n-6]...))
 }
 
 // walkCodexDayDirs traverses a Codex sessions directory with

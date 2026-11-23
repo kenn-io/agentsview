@@ -1954,7 +1954,7 @@ func (p *codexProvider) parentTurnResolver(
 	return func(parentID string) (map[string]struct{}, bool) {
 		var paths []string
 		hasOriginal := false
-		for _, root := range p.sources.roots {
+		for _, root := range p.parentRoots(childPath) {
 			if ctx.Err() != nil {
 				return nil, false
 			}
@@ -2305,6 +2305,17 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 	if !sessionNamePresent && sessionName == "" && b.firstMessage == "" &&
 		b.relationshipType == RelSubagent {
 		sessionName = codexAgentPathLeaf(b.agentPath)
+	}
+
+	if p.spec.agent == AgentCodex {
+		for _, root := range p.sources.roots {
+			if !isS3URI(root) {
+				if label := CodexSourceLabel(root, path); label != "" {
+					b.project, b.gitRemote = label, ""
+					break
+				}
+			}
+		}
 	}
 
 	sess := &ParsedSession{
