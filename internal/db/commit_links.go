@@ -188,8 +188,16 @@ func commitCommandText(input string) string {
 	if strings.Contains(literal, "${") {
 		return ""
 	}
-	decoded, _ := decodeJSLiteral(literal)
-	return decoded
+	var decoded strings.Builder
+	for rest := literal[1 : len(literal)-1]; rest != ""; {
+		r, _, tail, err := strconv.UnquoteChar(rest, literal[0])
+		if err != nil {
+			return ""
+		}
+		decoded.WriteRune(r)
+		rest = tail
+	}
+	return decoded.String()
 }
 
 type commitCall struct {
@@ -1016,17 +1024,4 @@ func quoteArgv(args []string) string {
 		args[i] = shellquote.POSIX(arg)
 	}
 	return strings.Join(args, " ")
-}
-
-func shellCommandText(input string) string {
-	if command, ok := argvShellText(input, false); ok {
-		return command
-	}
-	var payload struct {
-		Commands []string `json:"commands"`
-	}
-	if json.Unmarshal([]byte(input), &payload) == nil && payload.Commands != nil {
-		return strings.Join(payload.Commands, "\n")
-	}
-	return commitCommandText(input)
 }

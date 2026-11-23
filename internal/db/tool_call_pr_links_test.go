@@ -43,7 +43,7 @@ func TestToolCallPRLinksSkipsOversizedInput(t *testing.T) {
 	input := `{"command":"gh pr view 41 -R example/repo","unrelated":"` + strings.Repeat("x", 256*1024) + `"}`
 	messages := []db.Message{{ToolCalls: []db.ToolCall{
 		{ToolName: "Bash", Category: "Bash", InputJSON: input},
-		{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`},
+		{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"GH_HOST=github.com gh pr view 42 -R example/repo"}`},
 	}}}
 	links := toolCallPRLinks(t, messages, "", "")
 	require.Len(t, links, 1)
@@ -55,4 +55,24 @@ func toolCallPRLinks(t *testing.T, messages []db.Message, cwd, remote string) []
 	links, err := db.ToolCallPRLinks(t.Context(), messages, cwd, remote)
 	require.NoError(t, err)
 	return links
+}
+
+func TestToolCallPRLinksDirectFormats(t *testing.T) {
+	for _, input := range []string{
+		`{"commands":["gh pr view 42 -R example/repo"]}`,
+		`{"command":["gh","pr","view","42","-R","example/repo"]}`,
+		`{"cmd":"gh pr view 42 -R example/repo"}`,
+		`text(await tools.exec_command({cmd: "gh pr view 42 -R example/repo"}))`,
+	} {
+		t.Run(input, func(t *testing.T) {
+			links := toolCallPRLinks(t, []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", ToolName: "exec", InputJSON: input}}}}, "", "https://github.com/example/repo.git")
+			require.Len(t, links, 1)
+			assert.Equal(t, 42, links[0].Number)
+		})
+	}
+}
+
+func TestToolCallPRLinksDynamicCode(t *testing.T) {
+	messages := []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", ToolName: "exec", InputJSON: `const cmd = "gh pr view 42"; tools.exec_command({cmd})`}}}}
+	assert.Empty(t, toolCallPRLinks(t, messages, "", "https://github.com/example/repo.git"))
 }

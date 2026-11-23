@@ -147,8 +147,8 @@ func TestCodexCommandPRLinksOnAppend(t *testing.T) {
 	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
 	assert.Equal(t, []string{"https://github.com/example/repo/pull/42"}, storedPRURLs(t, env.db, "codex:"+id))
 	appendClaudeSplitLines(t, path, testjsonl.JoinJSONL(
-		testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call1", map[string]any{"cmd": "gh pr merge 42 -R example/repo"}, tsEarlyS5),
-		testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call2", map[string]any{"cmd": "gh pr view 43 -R example/repo"}, "2024-01-01T10:00:06Z"),
+		testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call1", map[string]any{"cmd": "GH_HOST=github.com gh pr merge 42 -R example/repo"}, tsEarlyS5),
+		testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call2", map[string]any{"cmd": "GH_HOST=github.com gh pr view 43 -R example/repo"}, "2024-01-01T10:00:06Z"),
 	))
 	env.engine.SyncPaths([]string{path})
 	assert.ElementsMatch(t, []string{"https://github.com/example/repo/pull/42", "https://github.com/example/repo/pull/43"}, storedPRURLs(t, env.db, "codex:"+id))
@@ -239,7 +239,7 @@ func TestShellCommandPRFilter(t *testing.T) {
 	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 	for _, tc := range []struct{ id, command string }{
 		{"shell-function", "other() { cd /other; }; gh pr view 42"},
-		{"shell-export", "echo hello; gh pr view 43 -R example/other"},
+		{"shell-export", "export GH_HOST=github.com; gh pr view 43 -R example/other"},
 		{"unrelated-a", "echo hello"},
 		{"unrelated-b", "gh pr view 44 -R example/other"},
 	} {

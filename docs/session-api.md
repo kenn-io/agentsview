@@ -699,12 +699,14 @@ Commands can name a pull request by URL or number. A number can use `-R` or
 ]
 ```
 
-AgentsView keeps one link per pull request. A single command with a bare
-number uses the session's repository evidence. Compound shell commands link
-only when they name a PR URL or use `-R` or `--repo`. Child-agent prompts link
-full PR URLs as references. Prompt mentions indicate a reference, not work on
-the pull request. Archives that dropped tool inputs cannot recover command or
-child-prompt links. Push-to-head linking is planned for slice 2.
+AgentsView keeps one link per pull request. A bare number uses the session's
+recorded repository. An explicit `owner/repo` needs a matching recorded remote
+or a literal `GH_HOST` in the command to supply its host. Conflicting or missing
+host evidence leaves the number unlinked. A full PR URL supplies its own host.
+Child-agent prompts link full PR URLs as references. Prompt mentions indicate
+a reference, not work on the pull request. Archives that dropped tool inputs
+cannot recover command or child-prompt links. Push-to-head linking is planned
+for slice 2.
 
 Claude Code also includes `pr-link` entries in its transcripts. Every session
 split from that transcript carries them like its name and git branch.

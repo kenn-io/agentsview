@@ -334,9 +334,9 @@ func TestToolPRLinksArchiveUpgrade(t *testing.T) {
 		prompt, command string
 		want            []string
 	}{
-		{"prompt upgrade", promptPRLinksDataVersion - 1, "review https://github.com/example/repo/pull/41", "gh pr view 42 -R example/repo", []string{"https://github.com/example/repo/pull/41", "https://github.com/example/repo/pull/42"}},
-		{"tool upgrade", toolPRLinksDataVersion - 1, "review https://github.com/example/repo/pull/41", "gh pr view 42 -R example/repo", []string{"https://github.com/example/repo/pull/41", "https://github.com/example/repo/pull/42"}},
-		{"quoted command", toolPRLinksDataVersion - 1, "", "g''h pr view 43 -R example/repo", []string{"https://github.com/example/repo/pull/43"}},
+		{"prompt upgrade", promptPRLinksDataVersion - 1, "review https://github.com/example/repo/pull/41", "GH_HOST=github.com gh pr view 42 -R example/repo", []string{"https://github.com/example/repo/pull/41", "https://github.com/example/repo/pull/42"}},
+		{"tool upgrade", toolPRLinksDataVersion - 1, "review https://github.com/example/repo/pull/41", "GH_HOST=github.com gh pr view 42 -R example/repo", []string{"https://github.com/example/repo/pull/41", "https://github.com/example/repo/pull/42"}},
+		{"quoted command", toolPRLinksDataVersion - 1, "", "GH_HOST=github.com g''h pr view 43 -R example/repo", []string{"https://github.com/example/repo/pull/43"}},
 		{"unrelated command", toolPRLinksDataVersion - 1, "", "echo high", nil},
 		{"unrelated HTTP command", toolPRLinksDataVersion - 1, "", "curl https://example.com/api", nil},
 		{"task pull", toolPRLinksDataVersion - 1, "", "https://github.com/example/repo/pull/44", []string{"https://github.com/example/repo/pull/44"}},
@@ -437,7 +437,7 @@ func TestToolPRLinksIncrementalReplacementRemovesLastCall(t *testing.T) {
 	d := testDB(t)
 	s := Session{ID: "replace-tools", Project: "project", Machine: "local", Agent: "claude"}
 	require.NoError(t, d.UpsertSession(t.Context(), s))
-	message := Message{SessionID: s.ID, Ordinal: 0, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`}}}
+	message := Message{SessionID: s.ID, Ordinal: 0, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"GH_HOST=github.com gh pr view 42 -R example/repo"}`}}}
 	require.NoError(t, d.InsertMessages(t.Context(), []Message{message}))
 	got, err := d.GetSession(t.Context(), s.ID)
 	require.NoError(t, err)

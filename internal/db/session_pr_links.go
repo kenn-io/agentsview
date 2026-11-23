@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/tdewolff/parse/v2"
+	"github.com/tdewolff/parse/v2/js"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -351,7 +353,7 @@ func (db *DB) upgradePromptPRLinksTx(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
-func callPRLinks(ctx context.Context, category, input, remote string) ([]PRLink, error) {
+func callPRLinks(ctx context.Context, category, toolName, input, remote string) ([]PRLink, error) {
 	if category == "Task" {
 		var payload struct {
 			Prompt  string         `json:"prompt"`
@@ -369,17 +371,118 @@ func callPRLinks(ctx context.Context, category, input, remote string) ([]PRLink,
 	if category != "Bash" || len(input) > 256*1024 {
 		return nil, ctx.Err()
 	}
+	if !jsontext.Value(input).IsValid() {
+		if toolName == "exec" {
+			return codeModePRLinks(ctx, input, remote)
+		}
+		return nil, nil
+	}
 	var payload struct {
-		Command string `json:"command"`
-		Cmd     string `json:"cmd"`
+		Command  jsontext.Value `json:"command"`
+		Cmd      string         `json:"cmd"`
+		Commands []string       `json:"commands"`
 	}
 	if json.Unmarshal([]byte(input), &payload) != nil {
 		return nil, nil
 	}
-	if payload.Command == "" {
-		payload.Command = payload.Cmd
+	var command string
+	if json.Unmarshal(payload.Command, &command) != nil {
+		command, _ = argvShellText(input, false)
 	}
-	return parser.CommandPRLinks(ctx, payload.Command, remote)
+	if command == "" {
+		command = payload.Cmd
+	}
+	if command != "" {
+		payload.Commands = append(payload.Commands, command)
+	}
+	var lists [][]PRLink
+	for _, command := range payload.Commands {
+		links, err := parser.CommandPRLinks(ctx, command, remote)
+		if err != nil {
+			return nil, err
+		}
+		lists = append(lists, links)
+	}
+	return parser.CombinePRLinks(lists...), nil
+}
+
+// codeModePRLinks reads literal commands passed directly to tools.exec_command.
+func codeModePRLinks(ctx context.Context, input, remote string) ([]PRLink, error) {
+	ast, err := js.Parse(parse.NewInputString(input), js.Options{})
+	if err != nil {
+		return nil, nil
+	}
+	visitor := &codeModeVisitor{ctx: ctx, remote: remote}
+	js.Walk(visitor, ast)
+	return parser.CombinePRLinks(visitor.links...), ctx.Err()
+}
+
+type codeModeVisitor struct {
+	ctx    context.Context
+	remote string
+	links  [][]PRLink
+}
+
+func (v *codeModeVisitor) Enter(node js.INode) js.IVisitor {
+	switch node.(type) {
+	case *js.FuncDecl, *js.ArrowFunc, *js.MethodDecl:
+		return nil
+	}
+	call, ok := node.(*js.CallExpr)
+	if !ok || len(call.Args.List) != 1 || call.Args.List[0].Rest {
+		return v
+	}
+	dot, ok := call.X.(*js.DotExpr)
+	if !ok || dot.Optional || dot.Y.String() != "exec_command" {
+		return v
+	}
+	owner, ok := dot.X.(*js.Var)
+	if !ok || string(owner.Data) != "tools" {
+		return v
+	}
+	object, ok := call.Args.List[0].Value.(*js.ObjectExpr)
+	if !ok {
+		return v
+	}
+	for _, property := range object.List {
+		if property.Spread || property.Name == nil || property.Name.IsComputed() {
+			return v
+		}
+		name := strings.Trim(string(property.Name.Literal.Data), "\"'")
+		if name != "cmd" && name != "command" {
+			continue
+		}
+		command, literal := codeModeLiteral(property.Value)
+		if !literal {
+			return v
+		}
+		links, err := parser.CommandPRLinks(v.ctx, command, v.remote)
+		if err == nil {
+			v.links = append(v.links, links)
+		}
+		return v
+	}
+	return v
+}
+func (v *codeModeVisitor) Exit(js.INode) {}
+
+func codeModeLiteral(expr js.IExpr) (string, bool) {
+	var literal string
+	switch value := expr.(type) {
+	case *js.LiteralExpr:
+		if value.TokenType != js.StringToken {
+			return "", false
+		}
+		literal = string(value.Data)
+	case *js.TemplateExpr:
+		if value.Tag != nil || len(value.List) != 0 {
+			return "", false
+		}
+		literal = string(value.Tail)
+	default:
+		return "", false
+	}
+	return decodeJSLiteral(literal)
 }
 
 func decodeJSLiteral(literal string) (string, bool) {
@@ -405,7 +508,7 @@ func ToolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string
 	var lists [][]PRLink
 	for _, message := range messages {
 		for _, call := range message.ToolCalls {
-			links, err := callPRLinks(ctx, call.Category, call.InputJSON, remote)
+			links, err := callPRLinks(ctx, call.Category, call.ToolName, call.InputJSON, remote)
 			if err != nil {
 				return nil, err
 			}
@@ -416,18 +519,18 @@ func ToolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string
 }
 
 func storedToolCallPRLinksTx(ctx context.Context, tx transactionQueries, id, cwd, remote string) ([]PRLink, error) {
-	rows, err := tx.Query(`SELECT t.category, t.input_json FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND t.category IN ('Bash','Task') AND t.input_json IS NOT NULL AND (`+toolPRLinkCandidateSQL+`) ORDER BY m.ordinal, t.id`, id)
+	rows, err := tx.Query(`SELECT t.category, t.tool_name, t.input_json FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND t.category IN ('Bash','Task') AND t.input_json IS NOT NULL AND (`+toolPRLinkCandidateSQL+`) ORDER BY m.ordinal, t.id`, id)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var lists [][]PRLink
 	for rows.Next() {
-		var category, input string
-		if err := rows.Scan(&category, &input); err != nil {
+		var category, name, input string
+		if err := rows.Scan(&category, &name, &input); err != nil {
 			return nil, err
 		}
-		links, err := callPRLinks(ctx, category, input, remote)
+		links, err := callPRLinks(ctx, category, name, input, remote)
 		if err != nil {
 			return nil, err
 		}
