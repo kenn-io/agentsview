@@ -1,0 +1,2 @@
+{"type":"session_meta","timestamp":"2026-01-01T10:00:00Z","payload":{"id":"55555555-5555-4555-8555-555555555555","cwd":"/work/project","originator":"codex_exec","git":{"repository_url":"https://example.com/team/project.git"}}}
+{"type":"response_item","timestamp":"2026-01-01T10:00:01Z","payload":{"role":"user","content":[{"type":"input_text","text":"Review this change"}]}}

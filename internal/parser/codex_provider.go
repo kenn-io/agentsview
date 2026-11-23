@@ -396,28 +396,35 @@ func (p *codexProvider) FindSource(
 // uses the full set so an mtime cutoff can judge each copy independently. A
 // compressed copy beside its plain file is left out: the plain file is the one
 // Codex appends to, so no cutoff may choose the compressed one over it.
-func (p *codexProvider) AllSourcePathsForUUID(uuid string) []string {
+func (p *codexProvider) AllSourcePathsForUUID(ctx context.Context, uuid string) []string {
 	if uuid == "" {
 		return nil
 	}
 	seen := make(map[string]struct{})
 	var paths []string
 	for _, root := range p.sources.roots {
-		for _, path := range p.sources.discoverSessionPaths(root) {
+		if isS3URI(root) {
+			continue
+		}
+		_ = p.sources.discoverEachRoot(ctx, root, func(source SourceRef) error {
+			path := source.DisplayPath
 			if CodexSessionUUIDFromFilename(filepath.Base(path)) != uuid {
-				continue
+				return nil
+			}
+			if _, _, supported := CodexSessionPathInfo(root, path); !supported {
+				return nil
 			}
 			clean := filepath.Clean(path)
 			if _, ok := seen[clean]; ok {
-				continue
+				return nil
 			}
-			if isCompressedCodexRolloutPath(clean) &&
-				IsRegularFile(codexPlainRolloutPath(clean)) {
-				continue
+			if isCompressedCodexRolloutPath(clean) && IsRegularFile(codexPlainRolloutPath(clean)) {
+				return nil
 			}
 			seen[clean] = struct{}{}
 			paths = append(paths, path)
-		}
+			return nil
+		})
 	}
 	return paths
 }

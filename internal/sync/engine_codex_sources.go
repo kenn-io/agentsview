@@ -468,9 +468,9 @@ func preferNewestCodexDiscoveredFile(
 // twice. Each agent is expanded against its own roots and re-added under its own
 // identity: a fork's UUID must not be resolved through the Codex provider.
 func (e *Engine) expandCodexProviderDuplicates(
-	files []parser.DiscoveredFile, scope *rootSyncScope,
+	ctx context.Context, files []parser.DiscoveredFile, scope *rootSyncScope,
 ) []parser.DiscoveredFile {
-	pathers := make(map[parser.AgentType]func(string) []string)
+	pathers := make(map[parser.AgentType]func(context.Context, string) []string)
 	seen := make(map[string]struct{}, len(files))
 	for _, f := range files {
 		seen[string(f.Agent)+"\x00"+filepath.Clean(f.Path)] = struct{}{}
@@ -492,7 +492,7 @@ func (e *Engine) expandCodexProviderDuplicates(
 		if uuid == "" {
 			continue
 		}
-		for _, dup := range pather(uuid) {
+		for _, dup := range pather(ctx, uuid) {
 			key := string(f.Agent) + "\x00" + filepath.Clean(dup)
 			if _, ok := seen[key]; ok {
 				continue
@@ -518,7 +518,7 @@ func (e *Engine) expandCodexProviderDuplicates(
 // root.
 func (e *Engine) codexUUIDPathLister(
 	agent parser.AgentType, scope *rootSyncScope,
-) func(string) []string {
+) func(context.Context, string) []string {
 	factory, ok := e.sources().providerFactories[agent]
 	if !ok || factory == nil {
 		return nil
@@ -539,7 +539,7 @@ func (e *Engine) codexUUIDPathLister(
 		SourceMachines: e.sources().sourceMachines[agent],
 	})
 	lister, ok := provider.(interface {
-		AllSourcePathsForUUID(string) []string
+		AllSourcePathsForUUID(context.Context, string) []string
 	})
 	if !ok {
 		return nil

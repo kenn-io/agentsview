@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -346,12 +347,14 @@ func TestCodexAllSourcePathsHideCompressedBesidePlain(t *testing.T) {
 		zstdCompress(t, []byte(content)))
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	lister := provider.(interface{ AllSourcePathsForUUID(string) []string })
+	lister := provider.(interface {
+		AllSourcePathsForUUID(context.Context, string) []string
+	})
 
-	assert.Equal(t, []string{plain}, lister.AllSourcePathsForUUID(compressedThreadA))
+	assert.Equal(t, []string{plain}, lister.AllSourcePathsForUUID(t.Context(), compressedThreadA))
 
 	require.NoError(t, os.Remove(plain))
-	assert.Equal(t, []string{compressed}, lister.AllSourcePathsForUUID(compressedThreadA))
+	assert.Equal(t, []string{compressed}, lister.AllSourcePathsForUUID(t.Context(), compressedThreadA))
 }
 
 func TestCodexCompressedSiblingHidden(t *testing.T) {

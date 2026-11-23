@@ -249,3 +249,23 @@ func TestCodexLabeledRunKeepsProjectThroughResyncAndMapping(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "mapped", session.Project)
 }
+
+func TestSyncAllSinceCodexFindsChangedLabeledDuplicate(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	const id = "f6a7b8c9-6789-0123-def0-345678901234"
+	content := testjsonl.NewSessionBuilder().AddCodexMeta("2026-01-01T10:00:00Z", id, "/work/project", "user").AddCodexMessage("2026-01-01T10:00:01Z", "user", "review").String()
+	name := "rollout-2026-05-04T02-10-04-" + id + ".jsonl"
+	older := filepath.Join(root, "exp", "case", ".codex-run-v1-a", "sessions", "2026", "05", "04", name)
+	newer := filepath.Join(root, "exp", "case", ".codex-run-v1-b", "sessions", "2026", "05", "04", name)
+	dbtest.WriteTestFile(t, older, []byte(content))
+	dbtest.WriteTestFile(t, newer, []byte(content))
+	oldTime, newTime, cutoff := time.Now().Add(-2*time.Hour), time.Now().Add(-30*time.Minute), time.Now().Add(-time.Hour)
+	require.NoError(t, os.Chtimes(older, oldTime, oldTime))
+	require.NoError(t, os.Chtimes(newer, newTime, newTime))
+	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
+	t.Cleanup(engine.Close)
+	stats := engine.SyncAllSince(t.Context(), cutoff, nil)
+	require.Equal(t, 1, stats.Synced)
+	assert.Equal(t, newer, database.GetSessionFilePath(t.Context(), "codex:"+id))
+}
