@@ -33,7 +33,9 @@ func TestFirstImportSelectsZCodeBeforeOlderFile(t *testing.T) {
 	root := t.TempDir()
 	project := filepath.Join(root, "project")
 	require.NoError(t, os.MkdirAll(project, 0o755))
-	writeFirstImportClaudeSession(t, project, 0, time.Unix(1, 0))
+	for i := range 100 {
+		writeFirstImportClaudeSession(t, project, i, time.Unix(int64(i+1), 0))
+	}
 	zcode := filepath.Join(t.TempDir(), ".zcode", "cli")
 	writeProcessProviderZCodeDB(t, zcode)
 	archive := openTestDB(t)
@@ -232,8 +234,10 @@ func TestFirstImportNewestWaveSurvivesListingFailure(t *testing.T) {
 	path := filepath.Join(root, "project", "healthy.jsonl")
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	require.NoError(t, os.WriteFile(path, []byte(testjsonl.NewSessionBuilder().AddClaudeUser("2026-01-01T00:00:00Z", "hello").String()), 0o600))
-	writeFirstImportClaudeSession(t, filepath.Dir(path), 0, time.Unix(1, 0))
-	require.NoError(t, os.Chtimes(path, time.Unix(2, 0), time.Unix(2, 0)))
+	for i := range 100 {
+		writeFirstImportClaudeSession(t, filepath.Dir(path), i, time.Unix(int64(i+1), 0))
+	}
+	require.NoError(t, os.Chtimes(path, time.Unix(101, 0), time.Unix(101, 0)))
 	archive := openTestDB(t)
 	warp, ok := parser.ProviderFactoryByType(parser.AgentWarp)
 	require.True(t, ok)

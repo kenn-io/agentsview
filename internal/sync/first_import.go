@@ -10,7 +10,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-const firstImportWaveSize = 1
+const firstImportWaveSize = 100
 
 // FirstImportPendingKey records an interrupted or ongoing initial import.
 const FirstImportPendingKey = "first_import_pending"

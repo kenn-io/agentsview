@@ -6402,10 +6402,14 @@ func (e *Engine) syncAllLocked(
 		}
 	}
 	fileCount := len(all)
-	orderedFirstImport := wave != nil && wave.limit == 0
+	orderedFirstImport := wave != nil
 	if orderedFirstImport {
 		err := e.forEachFirstImportDBFile(ctx, scope, func(file parser.DiscoveredFile) {
-			all = append(all, file)
+			if !wave.partial {
+				all = append(all, file)
+			} else if _, ok := wave.selected[firstImportSource{file.Agent, file.Path}]; ok {
+				all = append(all, file)
+			}
 		})
 		if err != nil {
 			return SyncStats{Aborted: true, Warnings: []string{err.Error()}}
@@ -6460,9 +6464,7 @@ func (e *Engine) syncAllLocked(
 	}
 	options := collectAndBatchOptions{}
 	if wave != nil {
-		if wave.limit == 0 {
-			sortDiscoveredFilesByMtime(ctx, all)
-		}
+		sortDiscoveredFilesByMtime(ctx, all)
 		options.afterWrite = wave.onWrite
 	}
 	stats = e.collectAndBatchWithOptions(ctx, e.startWorkers(ctx, all), len(all), progressTotal, onProgress, writeMode, options)
@@ -7774,7 +7776,7 @@ func (e *Engine) startWorkers(
 	// watcher sync needs one worker and one result slot, not a
 	// CPU-scaled pool with page-sized buffers of grown syncJob values.
 	workers := min(e.workerCount(), max(len(files), 1))
-	if wave := firstImportFromContext(ctx); wave != nil && wave.limit == 0 {
+	if firstImportFromContext(ctx) != nil {
 		workers = 1
 	}
 	buffer := min(max(workers*2, 1), max(len(files), 1))
