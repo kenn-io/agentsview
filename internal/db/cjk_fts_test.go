@@ -384,7 +384,7 @@ func TestCJKFTSRebuildsAfterLegacyWriter(t *testing.T) {
 	log.SetOutput(&output)
 	t.Cleanup(func() { log.SetOutput(previousWriter) })
 	require.NoError(t, d.Reopen())
-	assert.Contains(t, output.String(), "rebuilding CJK FTS index; startup waits")
+	assert.Contains(t, output.String(), "rebuilding CJK FTS index; scanning all messages")
 	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "旧版本写入",
 		Mode:    "fts",
