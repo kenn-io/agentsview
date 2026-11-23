@@ -499,7 +499,10 @@
     // The Agent dropdown reads sessions.agents, which is otherwise loaded
     // lazily by the sidebar filter control; a direct /usage visit needs it too.
     sessions.loadAgents();
-    unsubEvents = events.subscribe(() => usage.markNewData());
+    unsubEvents = events.subscribe((event) => {
+      if (event.scope === "sessions" || event.scope === "sync") sessions.refreshFilterOptions();
+      usage.markNewData();
+    });
     tick().then(() => {
       urlWritebackReady = true;
     });

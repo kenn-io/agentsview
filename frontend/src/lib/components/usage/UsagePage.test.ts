@@ -164,6 +164,45 @@ afterEach(() => {
 });
 
 describe("UsagePage refresh behavior", () => {
+  it.each(["sessions", "sync"] as const)(
+    "refreshes open filter choices on %s events",
+    async (scope) => {
+      let imported = false;
+      vi.spyOn(MetadataService, "getApiV1Agents").mockImplementation(async () => ({
+        agents: imported
+          ? [{ name: "codex", session_count: 1 }]
+          : [{ name: "claude", session_count: 1 }],
+      }));
+      vi.spyOn(MetadataService, "getApiV1Machines").mockImplementation(async () => ({
+        machines: imported ? ["new-machine"] : ["old-machine"],
+        machine_labels: {},
+        machine_aliases: {},
+      }));
+      vi.spyOn(sessions, "loadProjects").mockResolvedValue();
+      const stats = vi.spyOn(sync, "loadStats").mockResolvedValue();
+      vi.spyOn(usage, "fetchAll").mockResolvedValue();
+      const subscription = vi.spyOn(events, "subscribe").mockReturnValue(() => {});
+      sessions.invalidateFilterCaches();
+      await Promise.all([sessions.loadAgents(), sessions.loadMachines()]);
+      stats.mockClear();
+      router.route = "usage";
+      component = mount(UsagePage, { target: document.body });
+      await flushEffects();
+      document.querySelector<HTMLButtonElement>('button[aria-label="Filters"]')!.click();
+      await flushEffects();
+      expect(document.body.textContent).toContain("old-machine");
+      expect(document.body.textContent).toContain("Claude");
+
+      imported = true;
+      subscription.mock.calls.at(-1)![0]({ scope });
+      await vi.waitFor(() => {
+        expect(document.body.textContent).toContain("new-machine");
+        expect(document.body.textContent).toContain("Codex");
+      });
+      expect(stats).not.toHaveBeenCalled();
+    },
+  );
+
   function visibility() {
     let hidden = false;
     vi.spyOn(document, "hidden", "get").mockImplementation(() => hidden);
