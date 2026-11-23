@@ -2416,6 +2416,10 @@ func TestCodexLabeledRunDiscoveryAndParse(t *testing.T) {
 	assert.Equal(t, "experiment/sessions/case", outcome.Results[0].Result.Session.Project)
 	assert.Empty(t, outcome.Results[0].Result.Session.GitRemote)
 	assert.Equal(t, "Labeled title", outcome.Results[0].Result.Session.SessionName)
+	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: index, EventKind: "write"})
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, path, changed[0].DisplayPath)
 	plan, err := provider.(RawCaptureProvider).PlanRawCapture(t.Context(), found)
 	require.NoError(t, err)
 	assert.Equal(t, root, plan.CaptureRoot)
@@ -2490,5 +2494,39 @@ func TestCodexLabeledDiscoveryMatchesChangedPaths(t *testing.T) {
 			want = "exp/case"
 		}
 		assert.Equal(t, want, outcome.Results[0].Result.Session.Project)
+	}
+}
+
+func TestCodexRejectsUnknownRunHome(t *testing.T) {
+	root := t.TempDir()
+	id := "019eb791-cf7d-75c1-8439-9ed74c1229e1"
+	known := writeCodexProviderSession(t, filepath.Join(root, "label", ".codex-run-v1-a", "sessions"), id, "known")
+	future := writeCodexProviderSession(t, filepath.Join(root, "label", ".codex-run-v2-a", "sessions"), "019eb791-cf7d-75c1-8439-9ed74c1229e2", "future")
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, known, sources[0].DisplayPath)
+	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: future, EventKind: "write"})
+	require.NoError(t, err)
+	assert.Empty(t, changed)
+}
+
+func TestCodexAllSourcePathsForUUIDs(t *testing.T) {
+	root := t.TempDir()
+	ids := []string{"019eb791-cf7d-75c1-8439-9ed74c1229e1", "019eb791-cf7d-75c1-8439-9ed74c1229e2"}
+	expected := make(map[string][]string)
+	for _, id := range ids {
+		for _, label := range []string{"first", "second"} {
+			path := writeCodexProviderSession(t, filepath.Join(root, label, ".codex-run-v1-a", "sessions"), id, "review")
+			expected[id] = append(expected[id], path)
+		}
+	}
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	paths := provider.(*codexProvider).AllSourcePathsForUUIDs(t.Context(), map[string]struct{}{ids[0]: {}, ids[1]: {}})
+	for _, id := range ids {
+		assert.ElementsMatch(t, expected[id], paths[id])
 	}
 }

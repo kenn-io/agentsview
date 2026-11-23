@@ -269,3 +269,30 @@ func TestSyncAllSinceCodexFindsChangedLabeledDuplicate(t *testing.T) {
 	require.Equal(t, 1, stats.Synced)
 	assert.Equal(t, newer, database.GetSessionFilePath(t.Context(), "codex:"+id))
 }
+
+func TestCodexLabeledLegacyReviewAndIndexRefresh(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	id := "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+	home := filepath.Join(root, "experiment", "case", ".codex-run-v1-abc")
+	source := filepath.Join(home, "sessions", "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
+	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z")
+	dbtest.WriteTestFile(t, source, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
+	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	page, err := database.ListSessions(t.Context(), db.SessionFilter{Project: "experiment/case", Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, page.Sessions, 1)
+	page, err = database.ListSessions(t.Context(), db.SessionFilter{Project: "experiment/case", ExcludeAutomated: true, Limit: 10})
+	require.NoError(t, err)
+	assert.Empty(t, page.Sessions)
+	index := filepath.Join(home, parser.CodexSessionIndexFilename)
+	dbtest.WriteTestFile(t, index, []byte(`{"id":"`+id+`","thread_name":"Updated"}`+"\n"))
+	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{index}))
+	session, err := database.GetSessionFull(t.Context(), "codex:"+id)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	require.NotNil(t, session.SessionName)
+	assert.Equal(t, "Updated", *session.SessionName)
+}

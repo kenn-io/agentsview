@@ -206,6 +206,8 @@ func (e *Engine) classifyCodexIndexPath(ctx context.Context,
 		}
 		if slices.Contains(e.codexMetadata().IndexFiles(agDir), path) {
 			sessionRoots = append(sessionRoots, agDir)
+		} else if parser.LabeledCodexHome(agDir, filepath.Dir(path)) {
+			sessionRoots = append(sessionRoots, filepath.Join(filepath.Dir(path), "sessions"))
 		}
 	}
 	if len(sessionRoots) == 0 {
@@ -470,7 +472,21 @@ func preferNewestCodexDiscoveredFile(
 func (e *Engine) expandCodexProviderDuplicates(
 	ctx context.Context, files []parser.DiscoveredFile, scope *rootSyncScope,
 ) []parser.DiscoveredFile {
-	pathers := make(map[parser.AgentType]func(context.Context, string) []string)
+	pathers := make(map[parser.AgentType]map[string][]string)
+	ids := make(map[parser.AgentType]map[string]struct{})
+	for _, f := range files {
+		if !isCodexFormatAgent(f.Agent) {
+			continue
+		}
+		uuid := parser.CodexSessionUUIDFromFilename(filepath.Base(f.Path))
+		if uuid == "" {
+			continue
+		}
+		if ids[f.Agent] == nil {
+			ids[f.Agent] = make(map[string]struct{})
+		}
+		ids[f.Agent][uuid] = struct{}{}
+	}
 	seen := make(map[string]struct{}, len(files))
 	for _, f := range files {
 		seen[string(f.Agent)+"\x00"+filepath.Clean(f.Path)] = struct{}{}
@@ -482,7 +498,9 @@ func (e *Engine) expandCodexProviderDuplicates(
 		}
 		pather, resolved := pathers[f.Agent]
 		if !resolved {
-			pather = e.codexUUIDPathLister(f.Agent, scope)
+			if lister := e.codexUUIDPathLister(f.Agent, scope); lister != nil {
+				pather = lister(ctx, ids[f.Agent])
+			}
 			pathers[f.Agent] = pather
 		}
 		if pather == nil {
@@ -492,7 +510,7 @@ func (e *Engine) expandCodexProviderDuplicates(
 		if uuid == "" {
 			continue
 		}
-		for _, dup := range pather(ctx, uuid) {
+		for _, dup := range pather[uuid] {
 			key := string(f.Agent) + "\x00" + filepath.Clean(dup)
 			if _, ok := seen[key]; ok {
 				continue
@@ -518,7 +536,7 @@ func (e *Engine) expandCodexProviderDuplicates(
 // root.
 func (e *Engine) codexUUIDPathLister(
 	agent parser.AgentType, scope *rootSyncScope,
-) func(context.Context, string) []string {
+) func(context.Context, map[string]struct{}) map[string][]string {
 	factory, ok := e.sources().providerFactories[agent]
 	if !ok || factory == nil {
 		return nil
@@ -539,10 +557,10 @@ func (e *Engine) codexUUIDPathLister(
 		SourceMachines: e.sources().sourceMachines[agent],
 	})
 	lister, ok := provider.(interface {
-		AllSourcePathsForUUID(context.Context, string) []string
+		AllSourcePathsForUUIDs(context.Context, map[string]struct{}) map[string][]string
 	})
 	if !ok {
 		return nil
 	}
-	return lister.AllSourcePathsForUUID
+	return lister.AllSourcePathsForUUIDs
 }

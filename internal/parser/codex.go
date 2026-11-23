@@ -2312,6 +2312,9 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 			if !isS3URI(root) {
 				if label := CodexSourceLabel(root, path); label != "" {
 					b.project, b.gitRemote = label, ""
+					if b.sessionKind == SessionKindNonInteractive && parentSessionID == "" {
+						b.sessionKind = SessionKindRoborev
+					}
 					break
 				}
 			}

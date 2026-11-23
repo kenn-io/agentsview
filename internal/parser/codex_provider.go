@@ -389,26 +389,27 @@ func (p *codexProvider) FindSource(
 	return p.sources.FindSource(ctx, req)
 }
 
-// AllSourcePathsForUUID returns every on-disk Codex transcript path under the
-// provider's roots whose filename carries the given session UUID, without the
+// AllSourcePathsForUUIDs returns on-disk Codex transcript paths under the
+// provider's roots for the given session UUIDs, without the
 // live-over-archived deduplication Discover applies. A UUID can exist as both a
 // live dated copy and a flat archived copy under the same root; the sync engine
 // uses the full set so an mtime cutoff can judge each copy independently. A
 // compressed copy beside its plain file is left out: the plain file is the one
 // Codex appends to, so no cutoff may choose the compressed one over it.
-func (p *codexProvider) AllSourcePathsForUUID(ctx context.Context, uuid string) []string {
-	if uuid == "" {
+func (p *codexProvider) AllSourcePathsForUUIDs(ctx context.Context, uuids map[string]struct{}) map[string][]string {
+	if len(uuids) == 0 {
 		return nil
 	}
 	seen := make(map[string]struct{})
-	var paths []string
+	paths := make(map[string][]string)
 	for _, root := range p.sources.roots {
 		if isS3URI(root) {
 			continue
 		}
 		_ = p.sources.discoverEachRoot(ctx, root, func(source SourceRef) error {
 			path := source.DisplayPath
-			if CodexSessionUUIDFromFilename(filepath.Base(path)) != uuid {
+			uuid := CodexSessionUUIDFromFilename(filepath.Base(path))
+			if _, ok := uuids[uuid]; !ok {
 				return nil
 			}
 			if _, _, supported := CodexSessionPathInfo(root, path); !supported {
@@ -422,7 +423,7 @@ func (p *codexProvider) AllSourcePathsForUUID(ctx context.Context, uuid string) 
 				return nil
 			}
 			seen[clean] = struct{}{}
-			paths = append(paths, path)
+			paths[uuid] = append(paths[uuid], path)
 			return nil
 		})
 	}
@@ -1465,6 +1466,18 @@ func (s codexSourceSet) sourcesForIndexPath(
 		return nil, err
 	}
 	indexDir := filepath.Dir(indexPath)
+	for _, root := range s.roots {
+		if LabeledCodexHome(root, indexDir) {
+			var sources []SourceRef
+			err := s.discoverEachRoot(ctx, filepath.Join(indexDir, "sessions"), func(source SourceRef) error {
+				if labeled, ok := s.sourceRef(root, source.DisplayPath, false); ok {
+					sources = append(sources, labeled)
+				}
+				return nil
+			})
+			return sources, err
+		}
+	}
 	return s.discover(ctx, func(root string) bool {
 		return slices.Contains(s.metadata.dirs(root), indexDir)
 	})
@@ -1505,7 +1518,7 @@ func (s codexSourceSet) directPathSource(
 ) (SourceRef, bool) {
 	root = filepath.Clean(root)
 	path = filepath.Clean(path)
-	if !hasCodexRolloutSuffix(path) || !pathUnderRoot(root, path) {
+	if !hasCodexRolloutSuffix(path) || !pathUnderRoot(root, path) || unknownCodexRunHome(root, path) {
 		return SourceRef{}, false
 	}
 	if requireRegular && !IsRegularFile(path) {
