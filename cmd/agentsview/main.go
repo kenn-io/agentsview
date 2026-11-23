@@ -963,18 +963,9 @@ func isFirstImport(ctx context.Context, cfg config.Config) (bool, error) {
 		return false, err
 	}
 	defer database.Close()
-	raw, err := database.GetSyncState(ctx, "last_sync_finished_at")
-	if err != nil {
-		return false, err
-	}
-	if !db.ParseSyncStateTime(raw).IsZero() {
-		return false, nil
-	}
-	completed, err := database.GetSyncState(ctx, db.FirstImportCompletedKey)
-	if err != nil {
-		return false, err
-	}
-	return completed != "1", nil
+	var exists bool
+	err = database.Reader().QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM sessions)").Scan(&exists)
+	return !exists, err
 }
 
 func runDeferredStartupSyncFallback(

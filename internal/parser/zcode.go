@@ -183,7 +183,7 @@ func forEachZCodeSessionMeta(
 			continue
 		}
 		observeStreamingDiscoveryBuffer(ctx, 1)
-		mtime, err := zcodeSessionActivityMtime(ctx, db, row)
+		mtime, err := zcodeSessionFileMtime(ctx, dbPath, db, row)
 		if err != nil {
 			return err
 		}
@@ -944,7 +944,9 @@ func zcodeUsageTime(raw string) time.Time {
 	return zcodeParseTime(raw)
 }
 
-func zcodeSessionActivityMtime(ctx context.Context, db *sql.DB, row zcodeSessionRow) (int64, error) {
+func zcodeSessionFileMtime(
+	ctx context.Context, dbPath string, db *sql.DB, row zcodeSessionRow,
+) (int64, error) {
 	maxMtime := zcodeTimeUnixNano(zcodeRowUpdatedAt(row))
 	usageMtime, err := zcodeMaxUsageMtime(ctx, db, row.id)
 	if err == nil {
@@ -952,16 +954,12 @@ func zcodeSessionActivityMtime(ctx context.Context, db *sql.DB, row zcodeSession
 	} else if ctx.Err() != nil {
 		return 0, ctx.Err()
 	}
-	return maxMtime, nil
-}
-
-func zcodeSessionFileMtime(ctx context.Context, dbPath string, db *sql.DB, row zcodeSessionRow) (int64, error) {
-	maxMtime, err := zcodeSessionActivityMtime(ctx, db, row)
-	if err != nil {
-		return 0, err
-	}
-	// The -shm index is excluded because readers rewrite it. The main file
-	// and journal carry content changes that session timestamps can miss.
+	// Usage read failures belong to per-session parsing, not discovery of the
+	// whole container. Preserve the session and physical database mtimes.
+	// The -shm index is excluded on purpose: readers rewrite it, this
+	// provider's own read connection included, so folding its mtime into the
+	// fingerprint made every scan report the whole container as changed.
+	// Content changes always touch the main file or the -wal sibling.
 	if physicalMtime, err := sqliteDBCompositeMtime(dbPath, sqliteDBJournalSuffixes); err == nil {
 		maxMtime = max(maxMtime, physicalMtime)
 	}

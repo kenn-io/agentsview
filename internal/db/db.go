@@ -6188,12 +6188,6 @@ const (
 	deleteSyncStateQuery = "DELETE FROM pg_sync_state WHERE key = ?"
 )
 
-// ParseSyncStateTime parses a persisted sync timestamp, returning zero for an invalid value.
-func ParseSyncStateTime(raw string) time.Time {
-	t, _ := time.Parse(time.RFC3339Nano, raw)
-	return t
-}
-
 // GetSyncState reads a value from the pg_sync_state table.
 func (db *DB) GetSyncState(ctx context.Context, key string) (string, error) {
 	return scanSyncState(db.getReader().QueryRow(ctx, getSyncStateQuery, key))
@@ -6207,9 +6201,6 @@ func scanSyncState(row *sql.Row) (string, error) {
 	}
 	return value, err
 }
-
-// FirstImportCompletedKey records that the first full import traversed the archive.
-const FirstImportCompletedKey = "first_import_completed"
 
 // SetSyncState writes a value to the pg_sync_state table.
 func (db *DB) SetSyncState(ctx context.Context, key, value string) error {

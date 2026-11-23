@@ -3297,7 +3297,11 @@ func (e *Engine) syncStateTime(ctx context.Context, key string) time.Time {
 	if err != nil || raw == "" {
 		return time.Time{}
 	}
-	return db.ParseSyncStateTime(raw)
+	t, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }
 
 func (e *Engine) lockSyncWithProgress(onProgress ProgressFunc) {
@@ -7701,10 +7705,7 @@ func (e *Engine) syncProviderDBBackedAgent(
 	discovered, sourceFailures, discoveryErr := e.syncProviderDBBacked(
 		ctx, agent, scope, flush,
 	)
-	// First import tracks listing failures separately from source processing failures.
-	if wave == nil {
-		stats.providerFailures += sourceFailures
-	}
+	stats.providerFailures += sourceFailures
 	for range sourceFailures {
 		stats.RecordFailed()
 	}
@@ -11141,7 +11142,7 @@ func (e *Engine) writeBatchWithOutcomeContext(
 		return outcome
 	}
 	if writeMode == syncWriteBulk || writeMode == syncWriteFirstImport || e.discardWritesOnCancel {
-		return e.writeBatchBulkWithOutcomeContext(ctx, batch, forceReplace, writeMode == syncWriteFirstImport)
+		return e.writeBatchBulkWithOutcomeContext(ctx, batch, forceReplace)
 	}
 	resolveWorktreeProject := e.loadWorktreeProjectResolverContext(ctx)
 	for i, pw := range batch {
@@ -11158,7 +11159,7 @@ func (e *Engine) writeBatchWithOutcomeContext(
 			// Keep contributing paths and content in the same transaction.
 			version := e.db.GetSessionDataVersion(ctx, applyIDPrefixToID(e.idPrefix, pw.sess.ID))
 			stale := version > 0 && version < db.CurrentDataVersion()
-			written := e.writeBatchBulkWithOutcomeContext(ctx, batch[i:i+1], forceReplace || stale, false)
+			written := e.writeBatchBulkWithOutcomeContext(ctx, batch[i:i+1], forceReplace || stale)
 			outcome.writtenSessions += written.writtenSessions
 			outcome.writtenMessages += written.writtenMessages
 			outcome.failedSessions += written.failedSessions
@@ -11930,12 +11931,12 @@ func (e *Engine) writeBatchBulkWithOutcome(
 	batch []pendingWrite, forceReplace bool,
 ) writeBatchOutcome {
 	return e.writeBatchBulkWithOutcomeContext(
-		context.Background(), batch, forceReplace, false,
+		context.Background(), batch, forceReplace,
 	)
 }
 
 func (e *Engine) writeBatchBulkWithOutcomeContext(
-	ctx context.Context, batch []pendingWrite, forceReplace bool, atomicStaged bool,
+	ctx context.Context, batch []pendingWrite, forceReplace bool,
 ) writeBatchOutcome {
 	outcome := writeBatchOutcome{
 		written:  make([]bool, len(batch)),
@@ -11974,7 +11975,7 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 			outcome.failedSessions++
 			return outcome
 		}
-		if pw.staged != nil && (atomicStaged || provenance != nil || prepared.codexForkState != nil) {
+		if pw.staged != nil && (provenance != nil || prepared.codexForkState != nil) {
 			err := e.writeAttachedStaged(ctx, prepared, pw, provenance)
 			if err != nil {
 				if isIntentionalSessionSkip(err) {
@@ -12306,7 +12307,7 @@ func (e *Engine) writeSessionFullWithResolver(
 		return err
 	}
 	if claudeSources != nil || pw.sess.CodexFork != nil {
-		outcome := e.writeBatchBulkWithOutcomeContext(ctx, []pendingWrite{pw}, true, false)
+		outcome := e.writeBatchBulkWithOutcomeContext(ctx, []pendingWrite{pw}, true)
 		if outcome.err != nil {
 			return outcome.err
 		}

@@ -332,14 +332,7 @@ func TestFirstImportProviderFailures(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, ran)
 			assert.Positive(t, stats.Failed)
-			assert.Equal(t, !listingFailure, stats.AuthoritativeDiscoveryComplete())
-			marker, err := archive.GetSyncState(t.Context(), db.FirstImportCompletedKey)
-			require.NoError(t, err)
-			if listingFailure {
-				assert.Empty(t, marker)
-			} else {
-				assert.Equal(t, "1", marker)
-			}
+			assert.False(t, stats.AuthoritativeDiscoveryComplete())
 		})
 	}
 }

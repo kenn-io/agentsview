@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -60,11 +59,7 @@ func (e *Engine) RunFirstImport(ctx context.Context, onProgress ProgressFunc) (S
 		return stats, true, ctx.Err()
 	}
 	ctx = context.WithValue(ctx, firstImportContextKey{}, &firstImportWave{onWrite: onWrite})
-	stats, ran, err := e.RunStartupSyncFallback(ctx, onProgress)
-	if ran && err == nil && ctx.Err() == nil && stats.AuthoritativeDiscoveryComplete() {
-		err = e.db.SetSyncState(ctx, db.FirstImportCompletedKey, "1")
-	}
-	return stats, ran, err
+	return e.RunStartupSyncFallback(ctx, onProgress)
 }
 
 func (e *Engine) emitFirstImportRefreshes(ctx context.Context, refresh <-chan struct{}, done chan<- struct{}) {
@@ -101,7 +96,7 @@ func (e *Engine) firstImportSelect(ctx context.Context, files []parser.Discovere
 		mtime := discoveredFileOrderingMtime(ctx, file)
 		candidates = append(candidates, firstImportCandidate{firstImportSource{file.Agent, file.Path}, max(mtime, 0)})
 	}
-	for _, agent := range []parser.AgentType{parser.AgentWarp, parser.AgentForge, parser.AgentPiebald, parser.AgentZCode, parser.AgentGoose, parser.AgentCrush} {
+	for _, agent := range []parser.AgentType{parser.AgentWarp, parser.AgentForge, parser.AgentPiebald, parser.AgentGoose, parser.AgentCrush} {
 		var roots []string
 		for _, root := range e.sources().agentDirs[agent] {
 			if root != "" && scope.includes(root) {

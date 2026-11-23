@@ -1124,22 +1124,3 @@ func TestZCodeSystemMessagesAreMarkedSystem(t *testing.T) {
 	assert.Equal(t, RoleSystem, result.Messages[0].Role)
 	assert.True(t, result.Messages[0].IsSystem)
 }
-
-func TestZCodeDiscoveryUsesSessionActivity(t *testing.T) {
-	fixture := newZCodeTestFixture(t)
-	fixture.insertSession(t, "z-old", "/tmp/old", "old", 1700000000000, 1700000000000, "", "")
-	fixture.insertSession(t, "a-new", "/tmp/new", "new", 1700000000000, 1700000100000, "", "")
-	provider, ok := NewProvider(AgentZCode, ProviderConfig{Roots: []string{fixture.CLIRoot}})
-	require.True(t, ok)
-	stream := provider.(StreamingDiscoverer)
-	var sources []SourceRef
-	require.NoError(t, stream.DiscoverEach(t.Context(), func(source SourceRef) error {
-		sources = append(sources, source)
-		return nil
-	}))
-	require.Len(t, sources, 2)
-	require.Less(t, sources[0].DiscoveryMTimeNS, sources[1].DiscoveryMTimeNS)
-	fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
-	require.NoError(t, err)
-	require.Greater(t, fingerprint.MTimeNS, sources[0].DiscoveryMTimeNS)
-}

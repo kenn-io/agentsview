@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
@@ -126,13 +127,7 @@ func TestFirstImportProbe(t *testing.T) {
 	first, err = isFirstImport(t.Context(), cfg)
 	require.NoError(t, err)
 	require.True(t, first)
-	require.NoError(t, database.SetSyncState(t.Context(), "first_import_completed", "1"))
-	first, err = isFirstImport(t.Context(), cfg)
-	require.NoError(t, err)
-	require.False(t, first)
-	cfg.DBPath = filepath.Join(t.TempDir(), "sessions.db")
-	database = dbtest.OpenTestDBAt(t, cfg.DBPath)
-	require.NoError(t, database.SetSyncState(t.Context(), "last_sync_finished_at", time.Now().UTC().Format(time.RFC3339Nano)))
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "saved", Agent: "claude", Machine: "local"}))
 	first, err = isFirstImport(t.Context(), cfg)
 	require.NoError(t, err)
 	require.False(t, first)
