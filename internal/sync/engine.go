@@ -7665,9 +7665,7 @@ func (e *Engine) syncProviderDBBackedAgent(
 	resolveWorktreeProject := e.loadWorktreeProjectResolverContext(ctx)
 	var pendingCount, indexedMessages, written int
 	var writeDuration time.Duration
-	wave := firstImportFromContext(ctx)
 	flush := func(pending []pendingWrite) bool {
-		beforeWrite := written
 		complete := true
 		pendingCount += len(pending)
 		for _, pw := range pending {
@@ -7725,9 +7723,6 @@ func (e *Engine) syncProviderDBBackedAgent(
 			}
 		}
 		writeDuration += time.Since(tWrite)
-		if wave != nil && wave.onWrite != nil && written > beforeWrite {
-			wave.onWrite()
-		}
 		return complete
 	}
 	discovered, sourceFailures, discoveryErr := e.syncProviderDBBacked(

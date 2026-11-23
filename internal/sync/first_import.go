@@ -30,9 +30,6 @@ func firstImportFromContext(ctx context.Context) *firstImportWave {
 }
 
 func (e *Engine) syncNewest(ctx context.Context, onProgress ProgressFunc, onWrite func()) SyncStats {
-	if e.refuseWriteInForceParse("SyncNewest") {
-		return SyncStats{}
-	}
 	wave := &firstImportWave{limit: firstImportWaveSize, onWrite: onWrite}
 	e.syncMu.Lock()
 	defer e.syncMu.Unlock()
@@ -61,11 +58,7 @@ func (e *Engine) RunFirstImport(ctx context.Context, onProgress ProgressFunc) (S
 		return stats, true, ctx.Err()
 	}
 	ctx = context.WithValue(ctx, firstImportContextKey{}, &firstImportWave{onWrite: onWrite})
-	stats, ran, err := e.RunStartupSyncFallback(ctx, onProgress)
-	if err == nil && ran && stats.ProcessingComplete() {
-		err = e.db.DeleteSyncState(ctx, FirstImportPendingKey)
-	}
-	return stats, ran, err
+	return e.RunStartupSyncFallback(ctx, onProgress)
 }
 
 func (e *Engine) emitFirstImportRefreshes(ctx context.Context, refresh <-chan struct{}, done chan<- struct{}) {
