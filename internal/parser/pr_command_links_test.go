@@ -105,6 +105,7 @@ func TestCommandPRLinksContextChanges(t *testing.T) {
 		`if true; then export GH_HOST=git.example; fi; gh pr view 42 -R example/repo`,
 		`(cd /work/other); gh pr view 42`,
 		`if false; then cd /work/other; fi; gh pr view 42`,
+		`unset GH_REPO; gh pr view 42`,
 		`GH_HOST=git.example; gh pr view 42 -R example/repo`,
 		`true || export GH_HOST=git.example; gh pr view 42 -R example/repo`,
 	} {
@@ -122,4 +123,11 @@ func TestCommandPRLinksIncludesBothBranches(t *testing.T) {
 	require.Len(t, links, 2)
 	assert.Equal(t, 45, links[0].Number)
 	assert.Equal(t, 46, links[1].Number)
+}
+
+func TestCommandPRLinksUnsetRepoPreservesEarlierLink(t *testing.T) {
+	links, err := CommandPRLinks(t.Context(), `gh pr view 41; unset GH_REPO; gh pr view 42`, "https://github.com/example/repo.git", true)
+	require.NoError(t, err)
+	require.Len(t, links, 1)
+	assert.Equal(t, 41, links[0].Number)
 }
