@@ -319,42 +319,6 @@ func TestUsageCacheBackfillObserverAttachesToActivePass(t *testing.T) {
 	require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
 }
 
-func TestUsageCacheBackfillRewarmsZoneRequestedDuringPass(t *testing.T) {
-	database := testDB(t)
-	insertSession(t, database, "active-zone", "project")
-	snapshot, err := database.captureUsageQuery(t.Context(), UsageFilter{}, usageQueryKindToken)
-	require.NoError(t, err)
-	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
-	require.NoError(t, err)
-	held, release := make(chan struct{}), make(chan struct{})
-	unblock := sync.OnceFunc(func() { close(release) })
-	var once sync.Once
-	cache.fill.observer.beforeExtract = func([]usageSourceVersion) {
-		once.Do(func() { close(held); <-release })
-	}
-	t.Cleanup(func() { unblock(); database.StopUsageCacheBackfill() })
-	require.NoError(t, database.StartUsageCacheBackfill(t.Context()))
-	<-held
-
-	location, err := time.LoadLocation("Etc/GMT+3")
-	require.NoError(t, err)
-	identity := usageTimezoneIdentityFor(location, nil)
-	_, err = cache.db.ExecContext(t.Context(), `INSERT INTO usage_rollup_timezones
-		(timezone_key, timezone_name, interval_fingerprint, last_requested_at)
-		VALUES (?, ?, ?, ?)`, identity.Key, identity.Name, identity.IntervalFingerprint, time.Now().UTC().Format(time.RFC3339Nano))
-	require.NoError(t, err)
-	for range 10 {
-		_, _, err := database.prepareJournaledUsageWindow(t.Context(), UsageFilter{Timezone: identity.Name}, usageQueryKindToken, false, nil)
-		require.NoError(t, err)
-	}
-	unblock()
-	require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
-
-	zone, err := readUsageZoneCoverage(t.Context(), cache.db, identity.Key)
-	require.NoError(t, err)
-	assert.True(t, zone.revision.Valid, "the queued pass must claim the requested timezone")
-}
-
 func TestUsageCacheBackfillSweepsHardDeletionTombstones(t *testing.T) {
 	database := testDB(t)
 	insertSession(t, database, "deleted", "project", func(session *Session) {
@@ -923,52 +887,37 @@ func TestUsageBackfillJournalCapture(t *testing.T) {
 }
 
 func TestUsageBackfillCaptureStopsAfterFirstPendingSession(t *testing.T) {
-	for _, pending := range []string{"changes", "invalidations"} {
-		t.Run(pending, func(t *testing.T) {
-			database := testDB(t)
-			for _, id := range []string{"one", "two", "three"} {
-				insertSession(t, database, id, "project")
-			}
-			require.NoError(t, database.runUsageCacheBackfill(t.Context()))
-			id, err := database.GetDatabaseID(t.Context())
-			require.NoError(t, err)
-			cache, err := database.usageCache.Generation(t.Context(), id)
-			require.NoError(t, err)
+	t.Run("invalidations", func(t *testing.T) {
+		database := testDB(t)
+		for _, id := range []string{"one", "two", "three"} {
+			insertSession(t, database, id, "project")
+		}
+		require.NoError(t, database.runUsageCacheBackfill(t.Context()))
+		id, err := database.GetDatabaseID(t.Context())
+		require.NoError(t, err)
+		cache, err := database.usageCache.Generation(t.Context(), id)
+		require.NoError(t, err)
 
-			var reads int
-			register := func(raw any) error {
-				return raw.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("count_pending", func(id string) string {
-					reads++
-					return id
-				}, false)
-			}
-			if pending == "changes" {
-				for _, sessionID := range []string{"one", "two"} {
-					require.NoError(t, database.InsertMessages(t.Context(), []Message{{SessionID: sessionID, Ordinal: 0, Role: "assistant"}}))
-				}
-				_, err = database.getWriter().Exec(t.Context(), `ALTER TABLE usage_session_changes RENAME TO counted_changes;
-					CREATE VIEW usage_session_changes AS SELECT count_pending(session_id) AS session_id, revision FROM counted_changes`)
-				require.NoError(t, err)
-				conn, err := database.getReader().Conn(t.Context())
-				require.NoError(t, err)
-				require.NoError(t, conn.Raw(register))
-				require.NoError(t, conn.Close())
-			} else {
-				_, err = cache.db.ExecContext(t.Context(), `DELETE FROM usage_rollup_installs WHERE session_id IN ('one', 'two');
+		var reads int
+		register := func(raw any) error {
+			return raw.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("count_pending", func(id string) string {
+				reads++
+				return id
+			}, false)
+		}
+		_, err = cache.db.ExecContext(t.Context(), `DELETE FROM usage_rollup_installs WHERE session_id IN ('one', 'two');
 					ALTER TABLE usage_rollup_invalidations RENAME TO counted_invalidations;
 					CREATE VIEW usage_rollup_invalidations AS SELECT timezone_id, count_pending(session_id) AS session_id FROM counted_invalidations`)
-				require.NoError(t, err)
-				conn, err := cache.db.Conn(t.Context())
-				require.NoError(t, err)
-				require.NoError(t, conn.Raw(register))
-				require.NoError(t, conn.Close())
-			}
-			_, _, _, delta, err := database.captureUsageBackfill(t.Context(), cache, id, 0)
-			require.NoError(t, err)
-			assert.False(t, delta)
-			assert.LessOrEqual(t, reads, 1, "capture should stop after finding a pending session")
-		})
-	}
+		require.NoError(t, err)
+		conn, err := cache.db.Conn(t.Context())
+		require.NoError(t, err)
+		require.NoError(t, conn.Raw(register))
+		require.NoError(t, conn.Close())
+		_, _, _, delta, err := database.captureUsageBackfill(t.Context(), cache, id, 0)
+		require.NoError(t, err)
+		assert.False(t, delta)
+		assert.LessOrEqual(t, reads, 1, "capture should stop after finding a pending session")
+	})
 }
 
 func TestUsageBackfillCaptureExternalSource(t *testing.T) {

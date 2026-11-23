@@ -174,7 +174,7 @@ func (db *DB) prepareJournaledUsageWindow(ctx context.Context, filter UsageFilte
 		for _, location := range locations {
 			if usageTimezoneIdentityFor(location, nil).Key == identity.Key {
 				// The pass belongs to the archive; StopUsageCacheBackfill joins it.
-				return db.startUsageCacheBackfill(context.Background(), true)
+				return db.startUsageCacheBackfill(context.Background(), false)
 			}
 		}
 		return nil
