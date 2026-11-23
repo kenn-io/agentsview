@@ -88,9 +88,14 @@ func prepareMessageFTSRepair(ctx context.Context, w *writerHandle) error {
 	return tx.Commit()
 }
 
+// SearchRepairPending reports whether deferred search index repair is owed.
+func (db *DB) SearchRepairPending() bool {
+	return db.messageFTSRepairPending.Load() || db.searchIndexRepairPending.Load()
+}
+
 // RepairMessageFTS rebuilds deferred search indexes. Writers wait while it holds db.mu.
 func (db *DB) RepairMessageFTS(ctx context.Context) error {
-	if !db.messageFTSRepairPending.Load() && !db.searchIndexRepairPending.Load() {
+	if !db.SearchRepairPending() {
 		return nil
 	}
 	_, err := RetryAcrossHandoff(ctx, db, func() (struct{}, error) {

@@ -32,6 +32,7 @@ import (
 	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
@@ -4381,10 +4382,14 @@ func (w *repairLogNotifier) Write(p []byte) (int, error) {
 }
 
 func TestDeferredSearchIndexesHTTP(t *testing.T) {
-	for _, index := range []string{"substring", "cjk"} {
-		t.Run(index, func(t *testing.T) {
+	for _, tc := range []struct {
+		index, catchup string
+	}{{"substring", "request"}, {"substring", "running"}, {"cjk", "request"}, {"cjk", "running"}} {
+		t.Run(tc.index+"/"+tc.catchup, func(t *testing.T) {
+			index := tc.index
 			dir := t.TempDir()
-			cfg := config.Config{Host: "127.0.0.1", DBPath: filepath.Join(dir, "archive.db"), DataDir: dir, ArchiveContent: config.ArchiveContentFull}
+			root := filepath.Join(dir, "gemini")
+			cfg := config.Config{Host: "127.0.0.1", DBPath: filepath.Join(dir, "archive.db"), DataDir: dir, ArchiveContent: config.ArchiveContentFull, AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}}}
 			database, err := db.Open(t.Context(), cfg.DBPath)
 			require.NoError(t, err)
 			if index == "cjk" && !database.HasCJKFTS(t.Context()) {
@@ -4414,10 +4419,17 @@ func TestDeferredSearchIndexesHTTP(t *testing.T) {
 			database, err = db.OpenDaemonWithProgress(t.Context(), cfg.DBPath, config.ArchiveContentFull, nil)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, database.Close()) })
-			engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{ArchiveContent: config.ArchiveContentFull})
+			engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{ArchiveContent: config.ArchiveContentFull, AgentDirs: cfg.AgentDirs})
 			t.Cleanup(engine.Close)
 			ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, nil)
 			t.Cleanup(ingestion.Stop)
+			pauseAfterStartup(t, ingestion)
+			require.NoError(t, os.MkdirAll(filepath.Dir(reloadGeminiSessionPath(root, "overnight")), 0o755))
+			require.NoError(t, os.WriteFile(reloadGeminiSessionPath(root, "overnight"), []byte(testjsonl.GeminiSessionJSON(
+				"overnight", "project", "2026-08-09T10:00:00Z", "2026-08-09T10:01:00Z",
+				[]map[string]any{testjsonl.GeminiUserMsg("first", "2026-08-09T10:00:00Z", "first"), testjsonl.GeminiUserMsg("second", "2026-08-09T10:01:00Z", "second")},
+			)), 0o644))
+			collectWhilePaused(ingestion, reloadGeminiSessionPath(root, "overnight"))
 			handler := server.New(cfg, database, engine, server.WithIngestionFreshness(ingestion)).Handler()
 			if index == "cjk" {
 				assert.False(t, database.HasCJKFTS(t.Context()))
@@ -4457,6 +4469,7 @@ func TestDeferredSearchIndexesHTTP(t *testing.T) {
 			case <-time.After(30 * time.Second):
 				require.FailNow(t, "repair did not start rebuilding the index")
 			}
+			time.Sleep(10 * time.Millisecond)
 			probeCtx, stopProbe := context.WithTimeout(t.Context(), 30*time.Second)
 			defer stopProbe()
 			for {
@@ -4478,10 +4491,23 @@ func TestDeferredSearchIndexesHTTP(t *testing.T) {
 				default:
 				}
 			}
+			if tc.catchup == "running" {
+				go ingestion.EnsureFresh(t.Context())
+				require.Eventually(t, func() bool {
+					ingestion.mu.Lock()
+					defer ingestion.mu.Unlock()
+					return ingestion.catchup != nil
+				}, time.Second, time.Millisecond)
+			}
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0/api/v1/sessions", nil))
 			assert.Equal(t, http.StatusOK, response.Code)
 			assert.Contains(t, response.Body.String(), `"session"`)
+			assert.Equal(t, "true", response.Header().Get(apiclient.ArchiveStaleHeader))
+			ingestion.mu.Lock()
+			catchupDone := ingestion.catchup
+			ingestion.mu.Unlock()
+			require.NotNil(t, catchupDone)
 			select {
 			case err := <-done:
 				finished = true
@@ -4491,6 +4517,17 @@ func TestDeferredSearchIndexesHTTP(t *testing.T) {
 			err = <-done
 			finished = true
 			require.NoError(t, err)
+			select {
+			case <-catchupDone:
+			case <-time.After(30 * time.Second):
+				require.FailNow(t, "catch-up did not finish")
+			}
+			require.True(t, sessionImported(t, database, "gemini:overnight"))
+			response = httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0/api/v1/sessions", nil))
+			assert.Equal(t, http.StatusOK, response.Code)
+			assert.Contains(t, response.Body.String(), `"gemini:overnight"`)
+			assert.Empty(t, response.Header().Get(apiclient.ArchiveStaleHeader))
 		})
 	}
 }

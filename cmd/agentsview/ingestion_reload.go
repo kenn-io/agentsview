@@ -262,7 +262,8 @@ func (d *daemonIngestion) Suspend() {
 // pause, and while the background interval is holding changes back it syncs
 // them first. Readers share one catch-up and its wait deadline. Each read
 // also holds the live interval for readHold, so the watcher syncs later
-// changes in the background and the reads that follow do not wait.
+// changes in the background and the reads that follow do not wait. Readers
+// do not wait for catch-up while search index repair is pending.
 func (d *daemonIngestion) EnsureFresh(ctx context.Context) bool {
 	finish, ok := d.idleTracker.BeginWork()
 	if !ok {
@@ -295,6 +296,9 @@ func (d *daemonIngestion) EnsureFresh(ctx context.Context) bool {
 	d.mu.Unlock()
 	if !started {
 		finish()
+	}
+	if d.database.SearchRepairPending() {
+		return false
 	}
 	waitCtx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
