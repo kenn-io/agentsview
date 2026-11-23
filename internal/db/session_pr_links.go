@@ -663,12 +663,16 @@ func storedToolCallPRLinksTx(ctx context.Context, tx transactionQueries, id, cwd
 
 const toolPRLinksDataVersion = 186
 
+// toolPRLinkCandidateSQL matches gh pr commands, including a gh quoted or
+// escaped in the shell, and URLs.
+const toolPRLinkCandidateSQL = `input_json LIKE '%gh%pr%' OR input_json LIKE '%g''%h%pr%' OR input_json LIKE '%g\%h%pr%' OR input_json LIKE '%http%'`
+
 func (db *DB) upgradeToolPRLinksTx(ctx context.Context, tx *sql.Tx) error {
 	version, _, err := readUserVersion(ctx, tx)
 	if err != nil || version >= toolPRLinksDataVersion {
 		return err
 	}
-	condition := "id IN (SELECT session_id FROM tool_calls WHERE category IN ('Bash','Task') AND (input_json LIKE '%gh%pr%' OR input_json LIKE '%http%'))"
+	condition := "id IN (SELECT session_id FROM tool_calls WHERE category IN ('Bash','Task') AND (" + toolPRLinkCandidateSQL + "))"
 	if version < promptPRLinksDataVersion && !db.usageOnlyStorage() {
 		// The prompt upgrade already refreshed these sessions, including tools.
 		condition += " AND id NOT IN (SELECT session_id FROM messages WHERE " + promptPRLinkCandidateSQL + ")"

@@ -94,7 +94,7 @@ func CommandPRLinksWithContext(ctx context.Context, command, cwd, remote string,
 	if err != nil {
 		return nil, UncertainPRShell(), nil //nolint:nilerr // Malformed optional shell input leaves the shell context unknown.
 	}
-	w := &prShellWalker{cwd: cwd, state: state, stdin: map[*syntax.CallExpr]string{}}
+	w := &prShellWalker{cwd: cwd, state: state, configRepo: state.RepoUncertain, stdin: map[*syntax.CallExpr]string{}}
 	syntax.Walk(file, w.visit)
 	var lists [][]PRLink
 	for _, call := range w.calls {
@@ -117,7 +117,7 @@ func programName(word string) string {
 }
 
 type prShellScope struct {
-	restore, checkout, host bool
+	restore, checkout, host, repo bool
 }
 
 // prShellWalker follows a shell script in execution order.
@@ -127,22 +127,23 @@ type prShellWalker struct {
 	calls  []shellCall
 	scopes []prShellScope
 	stdin  map[*syntax.CallExpr]string
+	// configRepo records repository configuration changes, which outlast a
+	// subshell. Environment changes such as GH_REPO end with it.
+	configRepo bool
 }
 
 func (w *prShellWalker) visit(node syntax.Node) bool {
 	if node == nil {
 		scope := w.scopes[len(w.scopes)-1]
 		w.scopes = w.scopes[:len(w.scopes)-1]
-		if scope.restore {
-			w.state.CheckoutUncertain, w.state.HostUncertain = scope.checkout, scope.host
-		}
+		w.leave(scope)
 		return true
 	}
 	if _, ok := node.(*syntax.FuncDecl); ok {
-		w.state.RepoUncertain, w.state.HostUncertain = true, true
+		w.configRepo, w.state.RepoUncertain, w.state.HostUncertain = true, true, true
 		return false
 	}
-	scope := prShellScope{checkout: w.state.CheckoutUncertain, host: w.state.HostUncertain}
+	scope := prShellScope{checkout: w.state.CheckoutUncertain, host: w.state.HostUncertain, repo: w.state.RepoUncertain}
 	switch node.(type) {
 	case *syntax.Subshell, *syntax.CmdSubst, *syntax.ProcSubst:
 		scope.restore = true
@@ -165,6 +166,21 @@ func (w *prShellWalker) visit(node syntax.Node) bool {
 		w.callExpr(n)
 	}
 	return true
+}
+
+// leave ends a scope, restoring the shell state a subshell cannot change.
+func (w *prShellWalker) leave(scope prShellScope) {
+	if scope.restore {
+		w.state.CheckoutUncertain, w.state.HostUncertain = scope.checkout, scope.host
+		w.state.RepoUncertain = scope.repo || w.configRepo
+	}
+}
+
+// persistRepo records a repository configuration change that outlasts a
+// subshell.
+func (w *prShellWalker) persistRepo(changed bool) {
+	w.configRepo = w.configRepo || changed
+	w.state.RepoUncertain = w.state.RepoUncertain || changed
 }
 
 // recordHeredoc gives a command the literal here-documents of from as input.
@@ -229,11 +245,11 @@ func (w *prShellWalker) applyBuiltin(call shellCall) {
 	case "cd":
 		w.state.CheckoutUncertain = len(call.Words) != 2 || !call.Literal[1] || !SamePRWorkingDirectory(w.cwd, call.Words[1])
 	case "pushd", "popd", "eval", "source", ".":
-		w.state.RepoUncertain = true
+		w.persistRepo(true)
 	case "git":
-		w.state.RepoUncertain = w.state.RepoUncertain || call.changesRemote()
+		w.persistRepo(call.changesRemote())
 	case "gh":
-		w.state.RepoUncertain = w.state.RepoUncertain || call.setsDefaultRepo()
+		w.persistRepo(call.setsDefaultRepo())
 	}
 }
 
