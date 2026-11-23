@@ -392,6 +392,55 @@ func TestToolPRLinksArchiveUpgrade(t *testing.T) {
 	}
 }
 
+func TestToolCallPRLinksSkipsSimpleCommands(t *testing.T) {
+	const input = `{"command":"pwd"}`
+	d := testDB(t)
+	s := Session{ID: "simple-commands", Project: "project", Machine: "local", Agent: "claude"}
+	require.NoError(t, d.UpsertSession(t.Context(), s))
+	messages := []Message{{SessionID: s.ID, Role: "assistant"}}
+	for range 100 {
+		messages[0].ToolCalls = append(messages[0].ToolCalls, ToolCall{ToolName: "Bash", Category: "Bash", InputJSON: input})
+	}
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, messages))
+	tx, err := d.getWriter().BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, tx.Rollback()) })
+	full := testing.AllocsPerRun(2, func() {
+		for range 100 {
+			_, _, err := callPRLinks(t.Context(), "Bash", "Bash", input, "/work/repo", "", parser.PRShellContext{})
+			require.NoError(t, err)
+		}
+	})
+	optimized := testing.AllocsPerRun(2, func() {
+		links, state, err := storedToolCallPRLinksTx(t.Context(), contextTransaction{ctx: t.Context(), tx: tx}, s.ID, "/work/repo", "", nil)
+		require.NoError(t, err)
+		assert.Empty(t, links)
+		assert.Equal(t, parser.PRShellContext{}, state)
+	})
+	assert.Less(t, optimized, full*0.85)
+}
+
+func TestSimplePRInertCommandParity(t *testing.T) {
+	for _, command := range []string{"pwd", "ls -al /work/repo", "cat README.md", "head -n 10 README.md", "tail -n 10 README.md", "wc -l README.md", "rg pattern src", "echo hello"} {
+		t.Run(command, func(t *testing.T) {
+			input := `{"command":"` + command + `"}`
+			require.True(t, simplePRInertCommand("Bash", input))
+			for state := range 8 {
+				before := parser.PRShellContext{CheckoutUncertain: state&1 != 0, HostUncertain: state&2 != 0, RepoUncertain: state&4 != 0}
+				links, after, err := callPRLinks(t.Context(), "Bash", "Bash", input, "/work/repo", "https://github.com/example/repo.git", before)
+				require.NoError(t, err)
+				assert.Empty(t, links)
+				assert.Equal(t, before, after)
+			}
+		})
+	}
+	for _, input := range []string{`{"command":"echo $(gh pr view 42)"}`, `{"command":"pwd; cd /other"}`, `{"command":"git remote set-url origin example"}`, `{"command":"pwd`, ""} {
+		assert.False(t, simplePRInertCommand("Bash", input), input)
+	}
+	assert.False(t, simplePRInertCommand("Bash", `{"command":"echo `+strings.Repeat("x", 256*1024)+`"}`))
+	assert.False(t, simplePRInertCommand("exec", `{"command":"pwd"}`))
+}
+
 func TestToolPRLinksShellContextRefreshAndReplacement(t *testing.T) {
 	d := testDB(t)
 	s := Session{ID: "refresh-shell", Project: "project", Machine: "local", Agent: "claude", Cwd: "/work/repo"}
@@ -642,14 +691,26 @@ func TestToolPRLinksAppendRefreshParity(t *testing.T) {
 				return Message{SessionID: s.ID, Ordinal: ordinal, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"` + command + `"}`}}}
 			}
 			require.NoError(t, d.InsertMessages(t.Context(), []Message{message(0, tc.command)}))
-			require.NoError(t, d.InsertMessages(t.Context(), []Message{message(1, "gh pr view 42")}))
+			require.NoError(t, d.InsertMessages(t.Context(), []Message{message(1, "pwd"), message(2, "gh pr view 42"), message(3, "ls -al")}))
 			before, err := d.GetSession(t.Context(), s.ID)
 			require.NoError(t, err)
 			require.Len(t, before.PRLinks, tc.want)
+			var oldState, newState sql.NullInt64
+			require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT pr_shell_tainted FROM sessions WHERE id=?`, s.ID).Scan(&oldState))
 			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error { return refreshSessionPromptPRLinksTx(t.Context(), tx, s.ID) }))
+			require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT pr_shell_tainted FROM sessions WHERE id=?`, s.ID).Scan(&newState))
+			assert.Equal(t, oldState, newState)
 			after, err := d.GetSession(t.Context(), s.ID)
 			require.NoError(t, err)
 			assert.Equal(t, before.PRLinks, after.PRLinks)
+			require.NoError(t, d.InsertMessages(t.Context(), []Message{message(4, "gh pr view 43")}))
+			appended, err := d.GetSession(t.Context(), s.ID)
+			require.NoError(t, err)
+			require.Len(t, appended.PRLinks, tc.want*2)
+			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error { return refreshSessionPromptPRLinksTx(t.Context(), tx, s.ID) }))
+			after, err = d.GetSession(t.Context(), s.ID)
+			require.NoError(t, err)
+			assert.Equal(t, appended.PRLinks, after.PRLinks)
 		})
 	}
 }

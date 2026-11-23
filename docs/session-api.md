@@ -715,7 +715,7 @@ split from that transcript, such as a rewind's fork, carries them like its name
 and git branch.
 
 Existing hosted sessions gain command links when their source group is projected
-again. Operators can [schedule a reparse](/docs/hosted-raw-sync/#reparse-and-rollback)
+again. Operators can [schedule a reparse](https://agentsview.io/docs/hosted-raw-sync/#reparse-and-rollback)
 of retained inputs. Bare numbers require repository evidence in those inputs.
 
 To filter by pull request, use `session list --pr` or the `pr` query parameter.

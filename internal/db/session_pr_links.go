@@ -564,6 +564,30 @@ func independentShell(name string) bool {
 	return name == "exec_command" || name == "shell_command" || name == "shell" || name == "exec"
 }
 
+// simplePRInertCommand recognizes literal commands that cannot name a PR or
+// alter the shell context tracked by the PR parser.
+func simplePRInertCommand(name, input string) bool {
+	if name == "exec" || len(input) > 256*1024 || !jsontext.Value(input).IsValid() {
+		return false
+	}
+	command := shellCommandText(input)
+	for _, c := range command {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune(" _./:-=", c)) {
+			return false
+		}
+	}
+	words := strings.Fields(command)
+	if len(words) == 0 {
+		return false
+	}
+	switch words[0] {
+	case "pwd", "ls", "cat", "head", "tail", "wc", "rg", "echo":
+		return true
+	default:
+		return false
+	}
+}
+
 func toolCallPRLinksWithShellState(ctx context.Context, messages []Message, cwd, remote string, tainted parser.PRShellContext, emptyInputMissing bool) ([]PRLink, parser.PRShellContext, error) {
 	var lists [][]PRLink
 	for _, message := range messages {
@@ -644,6 +668,12 @@ func storedToolCallPRLinksTx(ctx context.Context, tx transactionQueries, id, cwd
 				} else {
 					tainted = parser.UncertainPRShell()
 				}
+			}
+			continue
+		}
+		if category == "Bash" && simplePRInertCommand(name, input.String) {
+			if err := ctx.Err(); err != nil {
+				return nil, parser.PRShellContext{}, err
 			}
 			continue
 		}
