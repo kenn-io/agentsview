@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -126,7 +127,8 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 func TestServeSessionsWhileUsageCounterFillPending(t *testing.T) {
 	isolateServeTestHome(t)
 	cfg := testConfigWithClaudeFixture(t)
-	cfg.Host, cfg.NoSync = "127.0.0.1", true
+	t.Setenv("AGENTSVIEW_DATA_DIR", cfg.DataDir)
+	require.NoError(t, os.WriteFile(filepath.Join(cfg.DataDir, "config.toml"), []byte(fmt.Sprintf("[agents.claude]\ndirs = [%q]\n", cfg.AgentDirs[parser.AgentClaude][0])), 0o600))
 	var seed bytes.Buffer
 	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &seed))
 	database, err := db.Open(t.Context(), cfg.DBPath)
@@ -140,9 +142,40 @@ CREATE TRIGGER test_hold_usage_fill BEFORE DELETE ON stats WHEN OLD.key='message
 		return err
 	}))
 	require.NoError(t, database.Close())
-	base := startRestartServe(t, cfg)
+	needsResync, _, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
+	require.NoError(t, err)
+	require.True(t, needsResync)
+	output, err := os.CreateTemp(t.TempDir(), "server-output-*")
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, output.Close()) })
+	ctx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
+	t.Cleanup(cancel)
+	cmd := exec.CommandContext(ctx, os.Args[0], "serve", "--host=127.0.0.1", "--port=0", "--no-browser", "--no-update-check", "--require-auth=false")
+	cmd.Stdout, cmd.Stderr = output, output
+	configureRestartTestProcess(cmd)
+	require.NoError(t, cmd.Start())
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	t.Cleanup(func() {
+		ctx, stop := context.WithTimeout(context.WithoutCancel(t.Context()), 30*time.Second)
+		defer stop()
+		_, err := stopWritableDaemonsForUpdate(ctx, config.Config{DataDir: cfg.DataDir})
+		assert.NoError(t, err)
+		select {
+		case <-done:
+		case <-ctx.Done():
+			assert.Fail(t, "foreground server did not stop")
+		}
+	})
+	runtime := waitForRestartRuntime(t, cfg.DataDir)
+	base := fmt.Sprintf("http://127.0.0.1:%d", runtime.Port)
 	page := restartGet(t, base+"/api/v1/sessions?limit=25&include_one_shot=true")
 	require.Contains(t, page, "session0")
+	log, err := os.ReadFile(output.Name())
+	require.NoError(t, err)
+	require.Contains(t, string(log), "Sync complete:")
+	_, err = db.OpenReadOnly(t.Context(), cfg.DBPath)
+	require.ErrorIs(t, err, db.ErrMessageUsageCountersPending)
 }
 
 func TestReadOnlyCommandsReportPendingUsageUpgrade(t *testing.T) {
