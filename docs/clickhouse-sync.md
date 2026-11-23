@@ -78,6 +78,9 @@ empty, the mirror uses `agentsview`.
 Add `compress=lz4` to compress native-protocol transfers. This setting is
 independent of the codecs ClickHouse uses to compress columns on disk.
 
+The ClickHouse user needs grants on the mirror database and on three system
+tables. See [Required grants](#required-grants) before the first push.
+
 Sessions keep their source installation ID. `local_machine_name` supplies the
 display label after a daemon restart and the next push. The optional
 `[clickhouse].machine_name` defaults to the installation ID and only supplies a
@@ -216,13 +219,14 @@ Reads keep working during the merge, though they compete with it for CPU and
 disk. ClickHouse starts the merge only when the disk has free space for twice
 the size of the table it merges; otherwise, the push logs the refusal.
 
-The push role needs the `OPTIMIZE` grant on the mirror database and
-`SELECT ON system.parts`. Without them, the push logs
+Compaction needs the `OPTIMIZE` grant on the mirror database, which
+`GRANT ALL ON <database>.*` includes. Without it, the push logs
 `skipped compacting the rewritten tables` with the server's error and still
-succeeds; reads stay correct, but they slow down as older copies pile up. To
-grant them, run `GRANT OPTIMIZE ON <database>.* TO <push_user>` and
-`GRANT SELECT ON system.parts TO <push_user>`, or add the matching `<query>`
-lines to an XML-managed user's `<grants>`.
+succeeds; reads stay correct, but they slow down as older copies pile up. A push
+role granted less than `ALL` needs
+`GRANT OPTIMIZE ON <database>.* TO <push_user>`, or the matching `<query>` line
+in an XML-managed user's `<grants>`. Compaction also reads `system.parts`, which
+every push needs; see [Required grants](#required-grants).
 
 #### Automatic push watcher
 
@@ -531,7 +535,9 @@ machines appear in a single unified view.
 
 On startup, `clickhouse serve` applies the current schema if its ClickHouse role
 can create tables. If the role is read-only, it skips that step and falls back
-to the schema compatibility check.
+to the schema compatibility check. Serve also treats a role that lacks a
+system-table grant the schema step reads as read-only, so it skips the upgrade
+without saying why; see [Required grants](#required-grants).
 
 The first push or serve after upgrading to this schema also fills two derived
 tables before serving: `usage_messages` and `terminal_event_snapshots`. The
@@ -554,26 +560,10 @@ not matter for it.
 
 #### Required system-table permissions
 
-Schema setup needs `SELECT ON system.projections` to inspect the prepared usage
-projections. This applies to `clickhouse push` and to `clickhouse serve` when
-its role can create tables. Without that grant, setup fails with
-`reading prepared usage projections` and an access-denied error. An
-administrator must run `GRANT SELECT ON system.projections TO <schema_user>`.
-For an XML-managed user, add `<query>GRANT SELECT ON system.projections</query>`
-to its `<grants>` and run `SYSTEM RELOAD USERS`. A read-only serve role does not
-need this grant; run a push with the schema-capable role first.
-
-The serve role also needs `GRANT SELECT ON system.parts`. Before rescanning, the
-Activity report checks whether the mirror changed by hashing the active parts of
-its source tables. With the default server setting
-`select_from_system_db_requires_grant`, a role granted only
-`SELECT ON <database>.*` can read `system.columns` but not `system.parts`, and
-`serve` refuses to start with an error naming the missing grant. An
-administrator must grant it to the serve user. For XML-managed users, add
-`<query>GRANT SELECT ON system.parts</query>` to that user's `<grants>` in the
-deployment configuration and run `SYSTEM RELOAD USERS`. SQL `GRANT` cannot
-modify XML-managed users, and schema upgrades cannot grant a permission the
-application account lacks.
+Every serve role needs `GRANT SELECT ON system.parts`. A serve role that can
+create tables also needs the system-table grants the schema step reads.
+[Required grants](#required-grants) lists each grant, the role that needs it,
+and what fails without it.
 
 `clickhouse serve` caches the Activity report of each past day a client opens on
 disk, so reopening it is fast, including after a restart. Days no one opens are
@@ -656,6 +646,68 @@ only to the effective default target and do not rewrite every named
 `clickhouse serve` and `clickhouse service` always use the effective default
 target. In named-target mode, set `default_clickhouse` to choose which target
 those long-running commands use.
+
+### Required grants
+
+The push role creates and upgrades the mirror schema and writes sessions, so it
+needs full access to the mirror database. The serve role can be read-only.
+
+Both roles also read ClickHouse system tables. With the server's default
+`select_from_system_db_requires_grant` setting, a user granted only
+`<database>.*` can read `system.tables` and `system.columns` but no other system
+table. Each table below needs its own `GRANT SELECT`.
+
+| Grant                                    | Push role | Serve role                   | Used for                                                                 |
+| ---------------------------------------- | --------- | ---------------------------- | ------------------------------------------------------------------------ |
+| `ALL ON <database>.*`                    | Required  | Only to upgrade the schema   | Schema setup and writes; includes `OPTIMIZE` for compaction              |
+| `SELECT ON <database>.*`                 | Via `ALL` | Required                     | Reading the mirror                                                       |
+| `SELECT ON system.parts`                 | Required  | Required                     | Push: pricing Cursor usage and compaction. Serve: Activity report checks |
+| `SELECT ON system.projections`           | Required  | Only if it can create tables | Schema setup: checking the prepared usage projections                    |
+| `SELECT ON system.data_skipping_indices` | Required  | Only if it can create tables | Schema setup: checking skipping indexes, since 0.48.0                    |
+
+For a SQL-managed push user, run each grant on its own line:
+
+```sql
+GRANT ALL ON <database>.* TO <push_user>;
+GRANT SELECT ON system.parts TO <push_user>;
+GRANT SELECT ON system.projections TO <push_user>;
+GRANT SELECT ON system.data_skipping_indices TO <push_user>;
+```
+
+A read-only serve user needs only `GRANT SELECT ON <database>.*` and
+`GRANT SELECT ON system.parts`.
+
+SQL `GRANT` cannot modify a user defined in the server's XML configuration, and
+a schema upgrade cannot grant a permission the account lacks. For an XML-managed
+user, add the grants to its `<grants>` element and run `SYSTEM RELOAD USERS`:
+
+```xml
+<grants>
+    <query>GRANT ALL ON agentsview.*</query>
+    <query>GRANT SELECT ON system.parts</query>
+    <query>GRANT SELECT ON system.projections</query>
+    <query>GRANT SELECT ON system.data_skipping_indices</query>
+</grants>
+```
+
+Replace `agentsview` with your mirror database name.
+
+A missing grant shows up as a `Not enough privileges` error that names it:
+
+- **Push without a schema grant.** Every push fails in the schema step, before
+  it sends any session, with `reading clickhouse skipping indexes` or
+  `reading prepared usage projections`. The schema upgrade never finishes.
+- **Push without `system.parts`.** Every push fails with
+  `reading clickhouse cursor pricing parts`.
+- **Serve without `system.parts`.** `serve` refuses to start with
+  `clickhouse Activity reports require SELECT ON system.parts`.
+- **Serve that can create tables but lacks a schema grant.** `serve` treats the
+  role as read-only and skips the upgrade without logging the error. If the
+  mirror's schema is behind, `serve` then fails the compatibility check with a
+  message such as
+  `clickhouse model_pricing comes from an older agentsview version`, which asks
+  you to run a push. If pushes also fail, fix the push role's grants first. The
+  serve message does not mention them.
 
 ### Transport security
 
