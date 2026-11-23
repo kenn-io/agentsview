@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -157,11 +158,8 @@ func (db *DB) dashboardParts(ctx context.Context, f AnalyticsFilter) ([]dashboar
 		return nil, nil, false, nil
 	}
 	identity, err := db.GetDatabaseID(ctx)
-	if err != nil {
+	if err != nil || identity == "" {
 		return nil, nil, false, err
-	}
-	if identity == "" {
-		return nil, nil, false, nil
 	}
 	release, err := db.acquireBulkRead(ctx)
 	if err != nil {
@@ -170,6 +168,9 @@ func (db *DB) dashboardParts(ctx context.Context, f AnalyticsFilter) ([]dashboar
 	sessions, versions, err := db.dashboardSessions(ctx, f)
 	release()
 	if err != nil {
+		if errors.Is(err, ErrWriterClosed) {
+			err = nil // Tool generations cannot be stamped now; use the direct query.
+		}
 		return nil, nil, false, err
 	}
 	filter, err := json.Marshal(f, json.Deterministic(true))

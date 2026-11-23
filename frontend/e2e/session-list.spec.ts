@@ -87,6 +87,24 @@ test.describe("Session list", () => {
     await sp.goto();
   });
 
+  test("a failed rename on blur does not steal focus", async ({ page }) => {
+    let attempts = 0;
+    await page.route("**/api/v1/sessions/*/rename", async (route) => {
+      attempts++;
+      await route.fulfill({ status: 503, json: { message: "retry shortly" } });
+    });
+    const row = sp.sessionItems.first();
+    await row.locator(".session-name").dblclick();
+    const input = row.locator(".rename-input");
+    await input.fill("Draft title");
+    await input.blur();
+    await expect(row.getByRole("alert")).toBeVisible();
+    await expect(input).toHaveValue("Draft title");
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
+    expect(attempts).toBe(1);
+  });
+
   test("sessions load and display", async () => {
     await expect(sp.sessionItems).toHaveCount(TOTAL_SESSIONS);
   });

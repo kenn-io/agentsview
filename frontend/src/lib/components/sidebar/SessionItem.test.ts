@@ -149,12 +149,14 @@ describe("SessionItem identity", () => {
       .dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
     await tick();
     const input = document.querySelector<HTMLInputElement>(".rename-input")!;
+    input.focus();
     input.value = "My new name";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await tick();
     await tick();
     expect(document.querySelector<HTMLInputElement>(".rename-input")?.value).toBe("My new name");
+    expect(document.activeElement).toBe(document.querySelector(".rename-input"));
     expect(document.querySelector('[role="alert"]')?.textContent).toContain("retry shortly");
     document
       .querySelector<HTMLInputElement>(".rename-input")!
@@ -164,6 +166,48 @@ describe("SessionItem identity", () => {
     expect(rename).toHaveBeenLastCalledWith("session", "My new name");
     expect(document.querySelector(".rename-input")).toBeNull();
     expect(document.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("does not restore a failed rename on another session", async () => {
+    let reject!: (error: Error) => void;
+    const pending = new Promise<void>((_, rejectPromise) => { reject = rejectPromise; });
+    const rename = vi.spyOn(sessions, "renameSession").mockReturnValueOnce(pending);
+    onTestFinished(() => rename.mockRestore());
+    const instance = createClassComponent({ component: SessionItem, target: document.body, props: { session: { ...baseSession, id: "first" } } });
+    onTestFinished(() => instance.$destroy());
+    flushSync();
+    document.querySelector<HTMLElement>(".session-name")!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    await tick();
+    const input = document.querySelector<HTMLInputElement>(".rename-input")!;
+    input.value = "First title";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    instance.$set({ session: { ...baseSession, id: "second" } });
+    await tick();
+    reject(new Error("retry shortly"));
+    await tick();
+    await tick();
+    expect(document.querySelector(".rename-input")).toBeNull();
+    expect(rename).toHaveBeenCalledTimes(1);
+    expect(rename).toHaveBeenCalledWith("first", "First title");
+  });
+
+  it("keeps focus outside a rejected rename submitted on blur", async () => {
+    const rename = vi.spyOn(sessions, "renameSession").mockRejectedValue(new Error("retry shortly"));
+    onTestFinished(() => rename.mockRestore());
+    mountSession();
+    document.querySelector<HTMLElement>(".session-name")!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    await tick();
+    const input = document.querySelector<HTMLInputElement>(".rename-input")!;
+    input.focus();
+    const other = document.createElement("button");
+    document.body.append(other);
+    other.focus();
+    await tick();
+    await tick();
+    expect(rename).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(other);
+    expect(document.querySelector<HTMLInputElement>(".rename-input")).not.toBeNull();
   });
 
   it("uses the singular for one message", () => {

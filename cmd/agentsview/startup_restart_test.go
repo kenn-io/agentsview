@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -47,7 +48,7 @@ func startRestartServe(t *testing.T, cfg config.Config) string {
 		select {
 		case <-done:
 		case <-time.After(30 * time.Second):
-			t.Error("server did not stop")
+			assert.Fail(t, "server did not stop")
 		}
 		writeDaemonRuntimeWithAuthAndNoSync = original
 	})
@@ -55,7 +56,7 @@ func startRestartServe(t *testing.T, cfg config.Config) string {
 	case base := <-ready:
 		return base
 	case <-time.After(30 * time.Second):
-		t.Fatal("server did not become ready")
+		require.FailNow(t, "server did not become ready")
 		return ""
 	}
 }
@@ -109,15 +110,18 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 		require.Equal(t, "startup", request.Mode)
 		require.True(t, request.LiveArchive)
 	case <-time.After(30 * time.Second):
-		t.Fatal("worker did not start")
+		require.FailNow(t, "worker did not start")
 	}
 	page := restartGet(t, base+"/api/v1/sessions?limit=25")
 	require.Contains(t, page, "session0")
 	require.Contains(t, page, "offline-deleted")
 	require.Contains(t, restartGet(t, base+"/api/v1/sync/status"), `"startup_pending":true`)
+	for _, panel := range []string{"activity", "hour-of-week", "velocity"} {
+		restartGet(t, base+"/api/v1/analytics/"+panel+"?timezone=America%2FChicago&from=2026-01-01&to=2026-12-31")
+	}
 	eventsReq, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/events", nil)
 	require.NoError(t, err)
-	events, err := http.DefaultClient.Do(eventsReq)
+	events, err := http.DefaultClient.Do(eventsReq) //nolint:bodyclose // The event stream is closed after the assertions.
 	require.NoError(t, err)
 	defer events.Body.Close()
 	eventSeen := make(chan struct{})
@@ -134,14 +138,14 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 	select {
 	case <-synced:
 	case <-time.After(30 * time.Second):
-		t.Fatal("worker did not sync")
+		require.FailNow(t, "worker did not sync")
 	}
 	writeRestartSession(t, cfg, "during-worker")
 	close(finish)
 	select {
 	case <-eventSeen:
 	case <-time.After(30 * time.Second):
-		t.Fatal("startup sync did not notify the session list")
+		require.FailNow(t, "startup sync did not notify the session list")
 	}
 	var body string
 	if !assert.Eventually(t, func() bool {
@@ -158,6 +162,51 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 	require.NotNil(t, missing)
 	require.NotNil(t, missing.SourceMissingAt)
 	require.Nil(t, missing.DeletedAt)
+}
+
+func TestServeRestartWorkerFailureRestoresWrites(t *testing.T) {
+	isolateServeTestHome(t)
+	cfg := testConfigWithClaudeFixture(t)
+	cfg.Host = "127.0.0.1"
+	writeRestartSession(t, cfg, "session0")
+	var seed bytes.Buffer
+	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &seed))
+	started, release := make(chan struct{}), make(chan struct{})
+	restore := stubLaunchSyncWorker(t, func(ctx context.Context, _ config.Config, _ syncWorkerRequest, _ func(workerLine)) (workerResult, error) {
+		close(started)
+		select {
+		case <-release:
+			return workerResult{Status: "aborted"}, errors.New("injected worker failure")
+		case <-ctx.Done():
+			return workerResult{}, ctx.Err()
+		}
+	})
+	t.Cleanup(restore)
+	base := startRestartServe(t, cfg)
+	select {
+	case <-started:
+	case <-time.After(30 * time.Second):
+		require.FailNow(t, "worker did not start")
+	}
+	require.Contains(t, restartGet(t, base+"/api/v1/sessions?limit=25"), "session0")
+	rename := func() *http.Response {
+		t.Helper()
+		resp, err := restartTestRequest(t, http.MethodPatch, base+"/api/v1/sessions/session0/rename", `{"display_name":"Renamed"}`, "")
+		require.NoError(t, err)
+		return resp
+	}
+	resp := rename()
+	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+	assert.NotEmpty(t, resp.Header.Get("Retry-After"))
+	require.NoError(t, resp.Body.Close())
+	close(release)
+	require.Eventually(t, func() bool {
+		status := restartGet(t, base+"/api/v1/sync/status")
+		return strings.Contains(status, `"startup_pending":true`) && strings.Contains(status, `"aborted":true`)
+	}, 30*time.Second, 100*time.Millisecond)
+	resp = rename()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	require.NoError(t, resp.Body.Close())
 }
 
 func TestServeRestartSpawnFailureFallsBack(t *testing.T) {
@@ -195,14 +244,14 @@ func TestServeFirstStart(t *testing.T) {
 	launched := make(chan struct{}, 1)
 	restore := stubLaunchSyncWorker(t, func(context.Context, config.Config, syncWorkerRequest, func(workerLine)) (workerResult, error) {
 		launched <- struct{}{}
-		return workerResult{}, fmt.Errorf("unexpected worker")
+		return workerResult{}, errors.New("unexpected worker")
 	})
 	t.Cleanup(restore)
 	base := startRestartServe(t, cfg)
 	require.Contains(t, restartGet(t, base+"/api/v1/sessions?limit=25"), "session0")
 	select {
 	case <-launched:
-		t.Fatal("post-listen worker ran")
+		require.FailNow(t, "post-listen worker ran")
 	default:
 	}
 }

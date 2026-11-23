@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import DocbankStatus from "../content/DocbankStatus.svelte";
   import {
     ChartColumnIcon,
@@ -149,13 +150,24 @@
   async function submitRename() {
     if (!renaming || !session) return;
     renaming = false;
-    const name = renameValue.trim() || null;
+    const name = renameValue.trim() || null, id = session.id;
     try {
-      await sessions.renameSession(session.id, name);
+      await sessions.renameSession(id, name);
     } catch (error) {
-      renameError = error instanceof Error ? error.message : String(error);
-      renaming = true;
+      failRename(id, error);
     }
+  }
+
+  function failRename(id: string, error: unknown) {
+    if (id !== session?.id) return;
+    renameError = error instanceof Error ? error.message : String(error);
+    renaming = true;
+  }
+
+  async function submitRenameFromKey() {
+    await submitRename();
+    await tick();
+    renameInput?.focus();
   }
 
   function cancelRename() {
@@ -361,7 +373,7 @@
       bind:value={renameValue}
       bind:this={renameInput}
       onkeydown={(e) => {
-        if (e.key === "Enter") submitRename();
+        if (e.key === "Enter") submitRenameFromKey();
         if (e.key === "Escape") cancelRename();
       }}
       onblur={submitRename}

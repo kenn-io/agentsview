@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { flushSync } from "svelte";
   import { m } from "../../i18n/index.js";
   import { getSessionStatus } from "../../stores/sessionStatus.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
@@ -275,19 +276,33 @@
       ?? "";
     renaming = true;
     closeContextMenu();
-    requestAnimationFrame(() => renameInput?.select());
+    requestAnimationFrame(() => {
+      renameInput?.focus();
+      renameInput?.select();
+    });
   }
 
   async function submitRename() {
     if (!renaming) return;
     renaming = false;
-    const name = renameValue.trim() || null;
+    const name = renameValue.trim() || null, id = session.id;
     try {
-      await sessions.renameSession(session.id, name);
+      await sessions.renameSession(id, name);
     } catch (error) {
-      renameError = error instanceof Error ? error.message : String(error);
-      renaming = true;
+      failRename(id, error);
     }
+  }
+
+  function failRename(id: string, error: unknown) {
+    if (id !== session.id) return;
+    renameError = error instanceof Error ? error.message : String(error);
+    renaming = true;
+  }
+
+  async function submitRenameFromKey() {
+    await submitRename();
+    flushSync();
+    renameInput?.focus();
   }
 
   async function handleDelete() {
@@ -459,18 +474,16 @@
 
   <div class="session-info">
     {#if renaming}
-      <!-- svelte-ignore a11y_autofocus -->
       <input
         bind:this={renameInput}
         bind:value={renameValue}
         class="rename-input"
-        autofocus
         onclick={(e) => e.stopPropagation()}
         onblur={submitRename}
         onkeydown={(e) => {
           if (e.key === "Enter") {
             e.stopPropagation();
-            submitRename();
+            submitRenameFromKey();
           }
           if (e.key === "Escape") {
             e.stopPropagation();
