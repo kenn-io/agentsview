@@ -972,7 +972,10 @@ func isFirstImport(ctx context.Context, cfg config.Config) (bool, error) {
 		return false, nil
 	}
 	completed, err := database.GetSyncState(ctx, db.FirstImportCompletedKey)
-	return completed != "1", err
+	if err != nil {
+		return false, err
+	}
+	return completed != "1", nil
 }
 
 func runDeferredStartupSyncFallback(

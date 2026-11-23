@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -322,13 +323,13 @@ func (p *firstImportFailingProvider) Capabilities() parser.Capabilities {
 
 func (p *firstImportFailingProvider) DiscoverEach(ctx context.Context, yield func(parser.SourceRef) error) error {
 	if p.listingFailure {
-		return fmt.Errorf("listing unavailable")
+		return errors.New("listing unavailable")
 	}
 	return yield(parser.SourceRef{DisplayPath: "broken"})
 }
 
 func (p *firstImportFailingProvider) Fingerprint(context.Context, parser.SourceRef) (parser.SourceFingerprint, error) {
-	return parser.SourceFingerprint{}, fmt.Errorf("source unavailable")
+	return parser.SourceFingerprint{}, errors.New("source unavailable")
 }
 
 func (p *firstImportFailingProvider) Parse(context.Context, parser.ParseRequest) (parser.ParseOutcome, error) {
@@ -338,9 +339,11 @@ func (p *firstImportFailingProvider) Parse(context.Context, parser.ParseRequest)
 type firstImportFailingFactory struct{ provider *firstImportFailingProvider }
 
 func (f firstImportFailingFactory) Definition() parser.AgentDef { return f.provider.Definition() }
+
 func (f firstImportFailingFactory) Capabilities() parser.Capabilities {
 	return f.provider.Capabilities()
 }
+
 func (f firstImportFailingFactory) NewProvider(parser.ProviderConfig) parser.Provider {
 	return f.provider
 }
@@ -353,7 +356,7 @@ func TestFirstImportProviderFailures(t *testing.T) {
 			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 			require.NoError(t, os.WriteFile(path, []byte(testjsonl.NewSessionBuilder().AddClaudeUser("2026-01-01T00:00:00Z", "hello").String()), 0o600))
 			archive := openTestDB(t)
-			provider := &firstImportFailingProvider{ProviderBase: parser.ProviderBase{Def: parser.AgentDef{Type: parser.AgentWarp, FileBased: false}}, listingFailure: listingFailure}
+			provider := &firstImportFailingProvider{parser.ProviderBase{Def: parser.AgentDef{Type: parser.AgentWarp, FileBased: false}}, listingFailure}
 			claude, ok := parser.ProviderFactoryByType(parser.AgentClaude)
 			require.True(t, ok)
 			engine := NewEngine(t.Context(), archive, EngineConfig{
@@ -382,8 +385,8 @@ func TestFirstImportProviderFailures(t *testing.T) {
 
 func TestFirstImportSelectKeepsHealthyProviderAfterListingFailure(t *testing.T) {
 	archive := openTestDB(t)
-	failed := &firstImportFailingProvider{ProviderBase: parser.ProviderBase{Def: parser.AgentDef{Type: parser.AgentWarp, FileBased: false}}, listingFailure: true}
-	healthy := &firstImportFailingProvider{ProviderBase: parser.ProviderBase{Def: parser.AgentDef{Type: parser.AgentForge, FileBased: false}}}
+	failed := &firstImportFailingProvider{parser.ProviderBase{Def: parser.AgentDef{Type: parser.AgentWarp, FileBased: false}}, true}
+	healthy := &firstImportFailingProvider{parser.ProviderBase{Def: parser.AgentDef{Type: parser.AgentForge, FileBased: false}}, false}
 	engine := NewEngine(t.Context(), archive, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentWarp: {t.TempDir()}, parser.AgentForge: {t.TempDir()}}, Machine: "local",
 		ProviderFactories: []parser.ProviderFactory{firstImportFailingFactory{failed}, firstImportFailingFactory{healthy}},
@@ -392,4 +395,46 @@ func TestFirstImportSelectKeepsHealthyProviderAfterListingFailure(t *testing.T) 
 	wave := &firstImportWave{limit: 1}
 	require.NoError(t, engine.firstImportSelect(t.Context(), nil, nil, wave))
 	assert.Contains(t, wave.selected, firstImportSource{parser.AgentForge, "broken"})
+}
+
+func TestFirstImportReconciliationOrdersRemainingFiles(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	require.NoError(t, os.MkdirAll(project, 0o755))
+	for i := range 250 {
+		path := filepath.Join(project, fmt.Sprintf("session-%03d.jsonl", i))
+		content := testjsonl.NewSessionBuilder().AddClaudeUser("2026-01-01T00:00:00Z", "hello").String()
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+		mtime := time.Unix(1700000000+int64(i), 0)
+		require.NoError(t, os.Chtimes(path, mtime, mtime))
+	}
+	archive := openTestDB(t)
+	engine := NewEngine(t.Context(), archive, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}, Machine: "local", DeferStartupMaintenance: true,
+	})
+	t.Cleanup(engine.Close)
+	engine.workerCountOverride = 1
+	paused, resume := make(chan struct{}), make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := engine.RunFirstImport(t.Context(), func(p Progress) {
+			if p.Phase == PhaseSyncing && p.SessionsTotal == 250 && p.SessionsDone == 200 {
+				close(paused)
+				<-resume
+			}
+		})
+		done <- err
+	}()
+	defer func() { close(resume); require.NoError(t, <-done) }()
+	select {
+	case <-paused:
+	case <-time.After(30 * time.Second):
+		require.FailNow(t, "reconciliation did not reach the pause")
+	}
+	newer, err := archive.GetSession(t.Context(), "session-149")
+	require.NoError(t, err)
+	older, err := archive.GetSession(t.Context(), "session-000")
+	require.NoError(t, err)
+	require.NotNil(t, newer)
+	require.Nil(t, older)
 }

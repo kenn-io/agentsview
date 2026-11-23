@@ -362,6 +362,20 @@ func (e *Engine) resolveParseDiffAgents(
 func sortAndLimitParseDiffFiles(ctx context.Context,
 	files []parser.DiscoveredFile, limit int,
 ) ([]parser.DiscoveredFile, map[string]bool, bool) {
+	sortDiscoveredFilesByMtime(ctx, files)
+	cutPaths := map[string]bool{}
+	limited := false
+	if limit > 0 && len(files) > limit {
+		limited = true
+		for _, f := range files[limit:] {
+			cutPaths[parseDiffSourceKey(f.Agent, f.Path)] = true
+		}
+		files = files[:limit]
+	}
+	return files, cutPaths, limited
+}
+
+func sortDiscoveredFilesByMtime(ctx context.Context, files []parser.DiscoveredFile) map[string]int64 {
 	mtimes := make(map[string]int64, len(files))
 	for _, f := range files {
 		if m, ok := parseDiffDiscoveryMtime(f); ok {
@@ -382,16 +396,7 @@ func sortAndLimitParseDiffFiles(ctx context.Context,
 		return files[i].Path < files[j].Path
 	})
 
-	cutPaths := map[string]bool{}
-	limited := false
-	if limit > 0 && len(files) > limit {
-		limited = true
-		for _, f := range files[limit:] {
-			cutPaths[parseDiffSourceKey(f.Agent, f.Path)] = true
-		}
-		files = files[:limit]
-	}
-	return files, cutPaths, limited
+	return mtimes
 }
 
 // parseDiffDiscoveryMtime returns a per-source mtime captured at provider

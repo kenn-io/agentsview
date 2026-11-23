@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -97,4 +98,24 @@ func TestFirstImportRetriesFailedDiscovery(t *testing.T) {
 	first, err := isFirstImport(t.Context(), cfg)
 	require.NoError(t, err)
 	require.True(t, first, "a failed listing must retry the first import")
+}
+
+func TestFirstImportCompletionReadError(t *testing.T) {
+	cfg := testConfigWithClaudeFixture(t)
+	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
+	require.NoError(t, database.Close())
+	raw, err := sql.Open("sqlite3", cfg.DBPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
+	_, err = raw.ExecContext(t.Context(), `
+		ALTER TABLE pg_sync_state RENAME TO first_import_test_state;
+		INSERT INTO first_import_test_state (key, value) VALUES ('first_import_completed', '1');
+		CREATE VIEW pg_sync_state AS SELECT key,
+			CASE WHEN key = 'first_import_completed' THEN abs(-9223372036854775808) ELSE value END AS value
+			FROM first_import_test_state;
+	`)
+	require.NoError(t, err)
+	first, err := isFirstImport(t.Context(), cfg)
+	require.Error(t, err)
+	require.False(t, first)
 }

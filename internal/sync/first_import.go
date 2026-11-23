@@ -104,12 +104,9 @@ type firstImportCandidate struct {
 
 func (e *Engine) firstImportSelect(ctx context.Context, files []parser.DiscoveredFile, scope *rootSyncScope, wave *firstImportWave) error {
 	candidates := make([]firstImportCandidate, 0, len(files))
+	mtimes := sortDiscoveredFilesByMtime(ctx, files)
 	for _, file := range files {
-		mtime, ok := parseDiffDiscoveryMtime(file)
-		if !ok {
-			mtime, _ = discoveredFileMtime(ctx, file)
-		}
-		candidates = append(candidates, firstImportCandidate{firstImportSource{file.Agent, file.Path}, max(mtime, 0)})
+		candidates = append(candidates, firstImportCandidate{firstImportSource{file.Agent, file.Path}, max(mtimes[file.Path], 0)})
 	}
 	for _, agent := range []parser.AgentType{parser.AgentWarp, parser.AgentForge, parser.AgentPiebald, parser.AgentZCode, parser.AgentGoose, parser.AgentCrush} {
 		var roots []string

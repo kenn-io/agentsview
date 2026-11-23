@@ -6441,6 +6441,9 @@ func (e *Engine) syncAllLocked(
 	}
 	options := collectAndBatchOptions{}
 	if wave != nil {
+		if wave.limit == 0 {
+			sortDiscoveredFilesByMtime(ctx, all)
+		}
 		options.afterWrite = wave.onWrite
 	}
 	stats = e.collectAndBatchWithOptions(ctx, e.startWorkers(ctx, all), len(all), progressTotal, onProgress, writeMode, options)
