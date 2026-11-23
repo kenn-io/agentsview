@@ -121,12 +121,9 @@ func TestCompleteWorkerStartupReconciliationLogsLifecycle(t *testing.T) {
 			assert.Contains(t, output, "outcome="+tc.wantOutcome)
 			assert.Equal(t, len(tc.roots) > 0, reconcileCalls > 0)
 			assert.Equal(t, tc.wantQueued, queued)
-			if tc.err != nil {
-				require.ErrorIs(t, recordedErr, tc.err)
-			} else if tc.workerError == "" {
-				require.NoError(t, recordedErr)
-			}
-			if tc.workerError != "" {
+			if tc.workerError == "" {
+				assert.Equal(t, tc.err, recordedErr)
+			} else {
 				assert.ErrorContains(t, recordedErr, tc.workerError)
 			}
 		})

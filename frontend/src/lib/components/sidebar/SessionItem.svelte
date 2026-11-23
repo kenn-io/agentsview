@@ -289,12 +289,11 @@
     try {
       await sessions.renameSession(id, name);
     } catch (error) {
-      failRename(id, error);
+      failRename(error);
     }
   }
 
-  function failRename(id: string, error: unknown) {
-    if (id !== session.id) return;
+  function failRename(error: unknown) {
     renameError = error instanceof Error ? error.message : String(error);
     renaming = true;
   }

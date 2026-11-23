@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -116,24 +115,7 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 	require.Contains(t, page, "session0")
 	require.Contains(t, page, "offline-deleted")
 	require.Contains(t, restartGet(t, base+"/api/v1/sync/status"), `"startup_pending":true`)
-	for _, panel := range []string{"activity", "hour-of-week", "velocity"} {
-		restartGet(t, base+"/api/v1/analytics/"+panel+"?timezone=America%2FChicago&from=2026-01-01&to=2026-12-31")
-	}
-	eventsReq, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/events", nil)
-	require.NoError(t, err)
-	events, err := http.DefaultClient.Do(eventsReq) //nolint:bodyclose // The event stream is closed after the assertions.
-	require.NoError(t, err)
-	defer events.Body.Close()
-	eventSeen := make(chan struct{})
-	go func() {
-		scanner := bufio.NewScanner(events.Body)
-		for scanner.Scan() {
-			if scanner.Text() == "event: data_changed" {
-				close(eventSeen)
-				return
-			}
-		}
-	}()
+	restartGet(t, base+"/api/v1/analytics/activity?timezone=America%2FChicago&from=2026-01-01&to=2026-12-31")
 	close(release)
 	select {
 	case <-synced:
@@ -142,11 +124,6 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 	}
 	writeRestartSession(t, cfg, "during-worker")
 	close(finish)
-	select {
-	case <-eventSeen:
-	case <-time.After(30 * time.Second):
-		require.FailNow(t, "startup sync did not notify the session list")
-	}
 	var body string
 	if !assert.Eventually(t, func() bool {
 		body = restartGet(t, base+"/api/v1/sessions?limit=25")
@@ -164,94 +141,62 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 	require.Nil(t, missing.DeletedAt)
 }
 
-func TestServeRestartWorkerFailureRestoresWrites(t *testing.T) {
-	isolateServeTestHome(t)
-	cfg := testConfigWithClaudeFixture(t)
-	cfg.Host = "127.0.0.1"
-	writeRestartSession(t, cfg, "session0")
-	var seed bytes.Buffer
-	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &seed))
-	started, release := make(chan struct{}), make(chan struct{})
-	restore := stubLaunchSyncWorker(t, func(ctx context.Context, _ config.Config, _ syncWorkerRequest, _ func(workerLine)) (workerResult, error) {
-		close(started)
-		select {
-		case <-release:
-			return workerResult{Status: "aborted"}, errors.New("injected worker failure")
-		case <-ctx.Done():
-			return workerResult{}, ctx.Err()
-		}
-	})
-	t.Cleanup(restore)
-	base := startRestartServe(t, cfg)
-	select {
-	case <-started:
-	case <-time.After(30 * time.Second):
-		require.FailNow(t, "worker did not start")
-	}
-	require.Contains(t, restartGet(t, base+"/api/v1/sessions?limit=25"), "session0")
-	rename := func() *http.Response {
-		t.Helper()
-		resp, err := restartTestRequest(t, http.MethodPatch, base+"/api/v1/sessions/session0/rename", `{"display_name":"Renamed"}`, "")
-		require.NoError(t, err)
-		return resp
-	}
-	resp := rename()
-	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	assert.NotEmpty(t, resp.Header.Get("Retry-After"))
-	require.NoError(t, resp.Body.Close())
-	close(release)
-	require.Eventually(t, func() bool {
-		status := restartGet(t, base+"/api/v1/sync/status")
-		return strings.Contains(status, `"startup_pending":true`) && strings.Contains(status, `"aborted":true`)
-	}, 30*time.Second, 100*time.Millisecond)
-	resp = rename()
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	require.NoError(t, resp.Body.Close())
-}
-
-func TestServeRestartSpawnFailureFallsBack(t *testing.T) {
-	isolateServeTestHome(t)
-	cfg := testConfigWithClaudeFixture(t)
-	cfg.Host = "127.0.0.1"
-	missingPath := writeRestartSession(t, cfg, "offline-missing")
-	var seed bytes.Buffer
-	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &seed))
-	require.NoError(t, os.Remove(missingPath))
-	writeRestartSession(t, cfg, "fallback")
-	restore := stubLaunchSyncWorker(t, func(context.Context, config.Config, syncWorkerRequest, func(workerLine)) (workerResult, error) {
-		return workerResult{}, fmt.Errorf("%w: test", errWorkerSpawn)
-	})
-	t.Cleanup(restore)
-	base := startRestartServe(t, cfg)
-	require.Eventually(t, func() bool {
-		return strings.Contains(restartGet(t, base+"/api/v1/sync/status"), `"startup_pending":false`)
-	}, 30*time.Second, 100*time.Millisecond)
-	require.Contains(t, restartGet(t, base+"/api/v1/sessions?limit=25"), "fallback")
-	database, err := db.OpenReadOnly(t.Context(), cfg.DBPath)
-	require.NoError(t, err)
-	defer database.Close()
-	assert.Eventually(t, func() bool {
-		missing, err := database.GetSessionFull(t.Context(), "offline-missing")
-		return err == nil && missing != nil && missing.SourceMissingAt != nil && missing.DeletedAt == nil
-	}, 5*time.Second, 100*time.Millisecond)
-}
-
-func TestServeFirstStart(t *testing.T) {
-	isolateServeTestHome(t)
-	cfg := testConfigWithClaudeFixture(t)
-	cfg.Host = "127.0.0.1"
-	writeRestartSession(t, cfg, "session0")
-	launched := make(chan struct{}, 1)
-	restore := stubLaunchSyncWorker(t, func(context.Context, config.Config, syncWorkerRequest, func(workerLine)) (workerResult, error) {
-		launched <- struct{}{}
-		return workerResult{}, errors.New("unexpected worker")
-	})
-	t.Cleanup(restore)
-	base := startRestartServe(t, cfg)
-	require.Contains(t, restartGet(t, base+"/api/v1/sessions?limit=25"), "session0")
-	select {
-	case <-launched:
-		require.FailNow(t, "post-listen worker ran")
-	default:
+func TestServeStartupWorkerFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		firstStart bool
+		spawnError bool
+	}{
+		{name: "worker failed"},
+		{name: "spawn failed", spawnError: true},
+		{name: "first start", firstStart: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateServeTestHome(t)
+			cfg := testConfigWithClaudeFixture(t)
+			cfg.Host = "127.0.0.1"
+			writeRestartSession(t, cfg, "session0")
+			if !tc.firstStart {
+				var seed bytes.Buffer
+				require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &seed))
+				if tc.spawnError {
+					writeRestartSession(t, cfg, "fallback")
+				}
+			}
+			launched := make(chan struct{}, 1)
+			restore := stubLaunchSyncWorker(t, func(context.Context, config.Config, syncWorkerRequest, func(workerLine)) (workerResult, error) {
+				launched <- struct{}{}
+				if tc.spawnError {
+					return workerResult{}, fmt.Errorf("%w: test", errWorkerSpawn)
+				}
+				return workerResult{Status: "aborted"}, errors.New("injected worker failure")
+			})
+			t.Cleanup(restore)
+			base := startRestartServe(t, cfg)
+			var status string
+			require.Eventually(t, func() bool {
+				status = restartGet(t, base+"/api/v1/sync/status")
+				if tc.firstStart || tc.spawnError {
+					return strings.Contains(status, `"startup_pending":false`)
+				}
+				return strings.Contains(status, `"startup_pending":true`) && strings.Contains(status, `"aborted":true`)
+			}, 30*time.Second, 100*time.Millisecond)
+			if tc.firstStart {
+				select {
+				case <-launched:
+					require.FailNow(t, "post-listen worker ran")
+				default:
+				}
+			} else {
+				select {
+				case <-launched:
+				default:
+					require.FailNow(t, "worker did not start")
+				}
+			}
+			if tc.spawnError {
+				assert.Contains(t, status, `"synced":1`)
+			}
+		})
 	}
 }

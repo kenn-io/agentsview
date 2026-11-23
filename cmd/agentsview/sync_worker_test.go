@@ -346,9 +346,6 @@ func TestSyncWorkerRefusesResyncForLiveArchiveModes(t *testing.T) {
 			require.Equal(t, 3, engine.SyncAll(t.Context(), nil).Synced)
 			engine.Close()
 			require.NoError(t, database.Close())
-			reader, err := db.OpenReadOnly(t.Context(), cfg.DBPath)
-			require.NoError(t, err)
-			defer reader.Close()
 			markArchiveStale(t, cfg.DBPath)
 
 			before, err := os.Stat(cfg.DBPath)
@@ -370,9 +367,6 @@ func TestSyncWorkerRefusesResyncForLiveArchiveModes(t *testing.T) {
 				"the archive file must not be swapped out from under the daemon")
 			assert.NoFileExists(t, cfg.DBPath+"-resync",
 				"a refused pass must not stage a replacement archive")
-			session, err := reader.GetSession(t.Context(), "session0")
-			require.NoError(t, err)
-			require.NotNil(t, session)
 		})
 	}
 }

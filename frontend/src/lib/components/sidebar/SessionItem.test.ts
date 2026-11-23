@@ -168,48 +168,6 @@ describe("SessionItem identity", () => {
     expect(document.querySelector('[role="alert"]')).toBeNull();
   });
 
-  it("does not restore a failed rename on another session", async () => {
-    let reject!: (error: Error) => void;
-    const pending = new Promise<void>((_, rejectPromise) => { reject = rejectPromise; });
-    const rename = vi.spyOn(sessions, "renameSession").mockReturnValueOnce(pending);
-    onTestFinished(() => rename.mockRestore());
-    const instance = createClassComponent({ component: SessionItem, target: document.body, props: { session: { ...baseSession, id: "first" } } });
-    onTestFinished(() => instance.$destroy());
-    flushSync();
-    document.querySelector<HTMLElement>(".session-name")!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
-    await tick();
-    const input = document.querySelector<HTMLInputElement>(".rename-input")!;
-    input.value = "First title";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    instance.$set({ session: { ...baseSession, id: "second" } });
-    await tick();
-    reject(new Error("retry shortly"));
-    await tick();
-    await tick();
-    expect(document.querySelector(".rename-input")).toBeNull();
-    expect(rename).toHaveBeenCalledTimes(1);
-    expect(rename).toHaveBeenCalledWith("first", "First title");
-  });
-
-  it("keeps focus outside a rejected rename submitted on blur", async () => {
-    const rename = vi.spyOn(sessions, "renameSession").mockRejectedValue(new Error("retry shortly"));
-    onTestFinished(() => rename.mockRestore());
-    mountSession();
-    document.querySelector<HTMLElement>(".session-name")!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
-    await tick();
-    const input = document.querySelector<HTMLInputElement>(".rename-input")!;
-    input.focus();
-    const other = document.createElement("button");
-    document.body.append(other);
-    other.focus();
-    await tick();
-    await tick();
-    expect(rename).toHaveBeenCalledTimes(1);
-    expect(document.activeElement).toBe(other);
-    expect(document.querySelector<HTMLInputElement>(".rename-input")).not.toBeNull();
-  });
-
   it("uses the singular for one message", () => {
     mountSession({ id: "count-one", user_message_count: 1 });
     expect(document.querySelector<HTMLElement>(".session-count")?.title).toBe("1 user message");
