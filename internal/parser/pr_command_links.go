@@ -68,46 +68,45 @@ func CommandPRLinks(ctx context.Context, command, remote string) ([]PRLink, erro
 	} else {
 		remoteHost, remoteRepo = "", ""
 	}
-	host, hostSet, hostValid := "", false, true
-	recordHost := func(a *syntax.Assign) {
-		if a.Name == nil || a.Name.Value != "GH_HOST" {
-			return
-		}
-		hostSet = true
-		if a.Value == nil {
-			hostValid = false
-			return
-		}
-		value, ok := shellLiteral(a.Value.Parts)
-		if !ok || value == "" || (host != "" && !strings.EqualFold(host, value)) {
-			hostValid = false
-			return
-		}
-		host = value
-	}
-	for _, stmt := range segments {
-		switch call := stmt.Cmd.(type) {
-		case *syntax.CallExpr:
-			for _, a := range call.Assigns {
-				recordHost(a)
-			}
-		case *syntax.DeclClause:
-			if call.Variant.Value == "export" {
-				for _, a := range call.Args {
-					recordHost(a)
-				}
-			}
-		}
-	}
+	shellHost, shellHostSet, shellHostValid := "", false, true
 	var links [][]PRLink
 	bareSafe := !strings.ContainsAny(command, "$`(") && !strings.Contains(command, "GH_REPO")
 	for _, stmt := range segments {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+		host, hostSet, hostValid := shellHost, shellHostSet, shellHostValid
+		recordHost := func(a *syntax.Assign) {
+			if a.Name == nil || a.Name.Value != "GH_HOST" {
+				return
+			}
+			hostSet = true
+			if a.Value == nil {
+				hostValid = false
+				return
+			}
+			value, ok := shellLiteral(a.Value.Parts)
+			if !ok || value == "" || (host != "" && !strings.EqualFold(host, value)) {
+				hostValid = false
+				return
+			}
+			host = value
+		}
+		if decl, ok := stmt.Cmd.(*syntax.DeclClause); ok {
+			if decl.Variant.Value == "export" {
+				for _, a := range decl.Args {
+					recordHost(a)
+				}
+				shellHost, shellHostSet, shellHostValid = host, hostSet, hostValid
+			}
+			continue
+		}
 		call, ok := stmt.Cmd.(*syntax.CallExpr)
 		if !ok {
 			continue
+		}
+		for _, a := range call.Assigns {
+			recordHost(a)
 		}
 		words := make([]string, len(call.Args))
 		literal := make([]bool, len(call.Args))

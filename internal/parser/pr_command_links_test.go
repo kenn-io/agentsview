@@ -45,6 +45,8 @@ func TestCommandPRLinksHostAndFlags(t *testing.T) {
 		{`gh pr view -R example/repo 42`, "https://github.com/example/repo.git", "https://github.com/example/repo/pull/42"},
 		{`echo hello && gh pr view 42`, "https://github.com/example/repo.git", "https://github.com/example/repo/pull/42"},
 		{`gh pr view 42 -R example/repo`, "", ""},
+		{`gh pr view 42 -R example/repo; export GH_HOST=git.example`, "", ""},
+		{`gh pr view 42 -R example/repo; export GH_HOST=git.example`, "https://github.com/example/repo.git", "https://github.com/example/repo/pull/42"},
 		{`GH_HOST=git.example gh pr view 42 -R example/repo`, "https://github.com/example/repo.git", ""},
 	} {
 		t.Run(tc.command, func(t *testing.T) {
@@ -58,4 +60,11 @@ func TestCommandPRLinksHostAndFlags(t *testing.T) {
 			assert.Equal(t, tc.want, links[0].URL)
 		})
 	}
+}
+
+func TestCommandPRLinksInlineHostDoesNotPersist(t *testing.T) {
+	links, err := CommandPRLinks(t.Context(), `GH_HOST=git.example gh pr view 42 -R example/repo; gh pr view 43 -R example/repo`, "")
+	require.NoError(t, err)
+	require.Len(t, links, 1)
+	assert.Equal(t, "https://git.example/example/repo/pull/42", links[0].URL)
 }
