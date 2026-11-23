@@ -326,9 +326,8 @@ INSERT INTO message_vectors_reuse SELECT 1, printf('doc-%d', x), printf('hash-%d
 			enc := ix.reuseEncoder(fakeBuildEncoder(), reuseGeneration{ordinal: 1, dimension: 3})
 			b.ResetTimer()
 			for b.Loop() {
-				if _, err := enc(ctx, []string{"hit", "miss"}); err != nil {
-					b.Fatal(err)
-				}
+				_, err := enc(ctx, []string{"hit", "miss"})
+				require.NoError(b, err)
 			}
 		})
 	}

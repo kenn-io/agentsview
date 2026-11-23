@@ -61,22 +61,20 @@ func (ix *Index) seedReuse(ctx context.Context, gen reuseGeneration, key, old, h
 	if err != nil {
 		return fmt.Errorf("read chunks for reuse: %w", err)
 	}
+	defer rows.Close()
 	var blobs [][]byte
 	for rows.Next() {
 		var index int
 		var blob []byte
 		if err := rows.Scan(&index, &blob); err != nil {
-			rows.Close()
 			return err
 		}
 		if len(blobs) >= len(chunks) || chunks[len(blobs)].Index != index {
-			rows.Close()
 			return nil
 		}
 		blobs = append(blobs, blob)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
 		return err
 	}
 	if err := rows.Close(); err != nil {
@@ -89,7 +87,7 @@ func (ix *Index) seedReuse(ctx context.Context, gen reuseGeneration, key, old, h
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	for i, chunk := range chunks {
 		h := contentHash(chunk.Text)
 		if !wanted[h] {
