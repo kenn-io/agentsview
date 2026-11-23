@@ -438,8 +438,7 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 		return nil, parser.UncertainPRShell(), nil
 	}
 	if toolName == "exec" && !jsontext.Value(input).IsValid() {
-		links, err := codeModePRLinks(ctx, input, cwd, remote)
-		return links, state, err
+		return codeModePRLinks(ctx, input, cwd, remote, state)
 	}
 	var payload struct {
 		Workdir          string `json:"workdir"`
@@ -474,20 +473,22 @@ func warnSkippedCodeMode() error {
 }
 
 // codeModePRLinks reads each exec_command independently.
-func codeModePRLinks(ctx context.Context, input, cwd, remote string) ([]PRLink, error) {
+func codeModePRLinks(ctx context.Context, input, cwd, remote string, state parser.PRShellContext) ([]PRLink, parser.PRShellContext, error) {
 	ast, err := js.Parse(parse.NewInputString(input), js.Options{})
 	if err != nil {
-		return nil, warnSkippedCodeMode()
+		return nil, state, warnSkippedCodeMode()
 	}
-	visitor := &codeModeVisitor{ctx: ctx, cwd: cwd, remote: remote}
+	visitor := &codeModeVisitor{ctx: ctx, cwd: cwd, remote: remote, repoUncertain: state.RepoUncertain}
 	js.Walk(visitor, ast)
-	return parser.CombinePRLinks(visitor.links...), ctx.Err()
+	state.RepoUncertain = visitor.repoUncertain
+	return parser.CombinePRLinks(visitor.links...), state, ctx.Err()
 }
 
 type codeModeVisitor struct {
-	ctx         context.Context
-	cwd, remote string
-	links       [][]PRLink
+	ctx           context.Context
+	cwd, remote   string
+	links         [][]PRLink
+	repoUncertain bool
 }
 
 func (v *codeModeVisitor) Enter(node js.INode) js.IVisitor {
@@ -551,8 +552,9 @@ func (v *codeModeVisitor) Enter(node js.INode) js.IVisitor {
 	if !knownDir || dir != "" && !parser.SamePRWorkingDirectory(v.cwd, dir) {
 		remote = ""
 	}
-	if links, _, err := parser.CommandPRLinks(v.ctx, command, v.cwd, remote); err == nil {
+	if links, state, err := parser.CommandPRLinksWithContext(v.ctx, command, v.cwd, remote, parser.PRShellContext{RepoUncertain: v.repoUncertain}); err == nil {
 		v.links = append(v.links, links)
+		v.repoUncertain = state.RepoUncertain
 	}
 	return v
 }

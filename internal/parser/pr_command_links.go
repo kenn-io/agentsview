@@ -123,6 +123,8 @@ func programName(word string) string {
 
 type prShellScope struct {
 	restore, checkout, host bool
+	repo                    string
+	repoSet                 bool
 }
 
 // prShellWalker follows a shell script in execution order.
@@ -153,7 +155,7 @@ func (w *prShellWalker) visit(ctx context.Context, node syntax.Node) bool {
 		w.functions[fn.Name.Value] = true
 		return false
 	}
-	scope := prShellScope{checkout: w.state.CheckoutUncertain, host: w.state.HostUncertain}
+	scope := prShellScope{checkout: w.state.CheckoutUncertain, host: w.state.HostUncertain, repo: w.repo, repoSet: w.repoSet}
 	switch node.(type) {
 	case *syntax.Subshell, *syntax.CmdSubst, *syntax.ProcSubst:
 		scope.restore = true
@@ -169,7 +171,7 @@ func (w *prShellWalker) visit(ctx context.Context, node syntax.Node) bool {
 	case *syntax.DeclClause:
 		for _, assignment := range n.Args {
 			if assignment.Name != nil {
-				w.persistEnv(assignment.Name.Value)
+				w.persistEnv(assignment, n.Variant.Value == "export")
 			}
 		}
 	case *syntax.CallExpr:
@@ -182,6 +184,7 @@ func (w *prShellWalker) visit(ctx context.Context, node syntax.Node) bool {
 func (w *prShellWalker) leave(scope prShellScope) {
 	if scope.restore {
 		w.state.CheckoutUncertain, w.state.HostUncertain = scope.checkout, scope.host
+		w.repo, w.repoSet = scope.repo, scope.repoSet
 	}
 }
 
@@ -202,10 +205,18 @@ func (w *prShellWalker) recordHeredoc(from, to *syntax.Stmt) {
 }
 
 // persistEnv records an environment change that outlasts one command.
-func (w *prShellWalker) persistEnv(name string) {
-	switch name {
+func (w *prShellWalker) persistEnv(assignment *syntax.Assign, exported bool) {
+	switch assignment.Name.Value {
 	case "GH_REPO":
 		w.state.CheckoutUncertain = true
+		if assignment.Value != nil {
+			var literal bool
+			w.repo, literal = shellLiteral(assignment.Value.Parts)
+			if !literal {
+				w.repo = ""
+			}
+		}
+		w.repoSet = w.repoSet || exported
 	case "GH_HOST":
 		w.state.HostUncertain = true
 	}
@@ -213,6 +224,9 @@ func (w *prShellWalker) persistEnv(name string) {
 
 func (w *prShellWalker) callExpr(ctx context.Context, n *syntax.CallExpr) {
 	call := shellCall{HostUncertain: w.state.HostUncertain, Stdin: w.stdin[n], Repo: w.repo, RepoSet: w.repoSet, Tainted: w.repoSet}
+	if !call.RepoSet {
+		call.Repo = ""
+	}
 	for _, assignment := range n.Assigns {
 		if assignment.Name == nil {
 			continue
@@ -224,7 +238,7 @@ func (w *prShellWalker) callExpr(ctx context.Context, n *syntax.CallExpr) {
 		}
 		call.setEnv(assignment.Name.Value, value, literal)
 		if len(n.Args) == 0 {
-			w.persistEnv(assignment.Name.Value)
+			w.persistEnv(assignment, false)
 		}
 	}
 	for _, word := range n.Args {
@@ -263,6 +277,10 @@ func (w *prShellWalker) applyBuiltin(call shellCall) {
 		w.state.CheckoutUncertain = true
 	case "eval", "source", ".":
 		w.state.CheckoutUncertain, w.state.HostUncertain = true, true
+	case "unset":
+		if slices.Contains(call.Words[1:], "GH_REPO") {
+			w.repo, w.repoSet = "", false
+		}
 	case "git":
 		for i, word := range call.Words {
 			if word == "remote" && i+1 < len(call.Words) && slices.Contains([]string{"set-url", "add", "remove", "rm", "rename"}, call.Words[i+1]) {

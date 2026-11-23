@@ -135,6 +135,7 @@ func TestCodeModePRLinks(t *testing.T) {
 		{"computed", `tools.exec_command({cmd:'gh pr view 42 -R example/repo', ['cmd']: other})`, nil},
 		{"functions", `function f() { tools.exec_command({cmd:'gh pr view 41'}); } const g = () => tools.exec_command({cmd:'gh pr view 42'}); const o = { f() { tools.exec_command({cmd:'gh pr view 43'}); } };`, nil},
 		{"callbacks", `Promise.resolve().then(() => tools.exec_command({cmd:'gh pr view 41'})); Promise.resolve().then(function () { return tools.exec_command({cmd:'gh pr view 42'}); }); tools.exec_command({cmd:'gh pr view 43'});`, []string{"https://github.com/example/repo/pull/41", "https://github.com/example/repo/pull/42", "https://github.com/example/repo/pull/43"}},
+		{"remote change", `await tools.exec_command({cmd:'git remote set-url origin https://github.com/example/fork.git'}); await tools.exec_command({cmd:'gh pr view 42'});`, nil},
 		{"windows workdir", `tools.exec_command({cmd:"gh pr view 42",workdir:"C:\\work\\repo"})`, []string{"https://github.com/example/repo/pull/42"}},
 		{"raw shell", `gh pr view 42 -R example/repo`, nil},
 	} {
@@ -152,6 +153,14 @@ func TestCodeModePRLinks(t *testing.T) {
 			assert.Equal(t, tc.want, urls)
 		})
 	}
+}
+
+func TestCodeModePRLinksAcrossCalls(t *testing.T) {
+	messages := []db.Message{{ToolCalls: []db.ToolCall{
+		{ToolName: "exec", Category: "Bash", InputJSON: `await tools.exec_command({cmd:'git remote set-url origin https://github.com/example/fork.git'})`},
+		{ToolName: "exec", Category: "Bash", InputJSON: `await tools.exec_command({cmd:'gh pr view 42'})`},
+	}}}
+	assert.Empty(t, toolCallPRLinks(t, messages, "/repo", "https://github.com/example/repo.git"))
 }
 
 func TestCodeModeMalformedWarning(t *testing.T) {
