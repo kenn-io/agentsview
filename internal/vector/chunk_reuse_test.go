@@ -348,6 +348,8 @@ func TestDeleteMirrorDocumentRemovesOnlyItsReuse(t *testing.T) {
 	var key string
 	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT doc_key FROM message_vectors_reuse`).Scan(&key))
 	assert.Equal(t, "b", key)
+	plan := explainVectorPlan(t, ix, `DELETE FROM message_vectors_reuse WHERE doc_key = ?`, "a")
+	assert.Contains(t, strings.Join(plan, " "), "message_vectors_reuse_doc (doc_key=?)")
 }
 
 func TestSplitPersistedChunkBoundaries(t *testing.T) {
@@ -452,6 +454,31 @@ INSERT INTO message_vectors_reuse SELECT 1, printf('doc-%08d', x), ?, CAST(x'000
 			b.ResetTimer()
 			for b.Loop() {
 				if _, err := enc(ctx, []string{"hit"}); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkDeleteReusableChunks(b *testing.B) {
+	for _, count := range []int{1, 5000} {
+		b.Run(fmt.Sprintf("unrelated-%d", count), func(b *testing.B) {
+			ctx := b.Context()
+			ix, err := Open(ctx, filepath.Join(b.TempDir(), "vectors.db"), false, 10)
+			require.NoError(b, err)
+			b.Cleanup(func() { assert.NoError(b, ix.Close()) })
+			_, err = ix.db.ExecContext(ctx, `WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x < ?)
+INSERT INTO message_vectors_reuse SELECT 1, printf('doc-%d', x), printf('hash-%d', x), zeroblob(3072) FROM n`, count)
+			require.NoError(b, err)
+			for b.Loop() {
+				b.StopTimer()
+				_, err := ix.db.ExecContext(ctx, `INSERT INTO message_vectors_reuse VALUES (1, 'target', 'hash', zeroblob(3072))`)
+				if err != nil {
+					b.Fatal(err)
+				}
+				b.StartTimer()
+				if _, err := ix.db.ExecContext(ctx, `DELETE FROM message_vectors_reuse WHERE doc_key = 'target'`); err != nil {
 					b.Fatal(err)
 				}
 			}

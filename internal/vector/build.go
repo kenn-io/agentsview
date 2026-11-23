@@ -176,29 +176,19 @@ func (ix *Index) Build(
 		}
 	}
 	fp := gen.Fingerprint()
+	selected, activeMatches, err := ix.selectBuildTarget(ctx, fp, o.Space)
+	if err != nil {
+		return BuildResult{}, err
+	}
 	if full {
 		if err := ix.clearCompletedCorpusRevision(ctx, fp); err != nil {
 			return BuildResult{}, err
 		}
 	}
 	var seed *reuseGeneration
-	if ix.spec.Name == "messages" && !o.FullRebuild {
-		active, hasActive, err := ix.ActiveFingerprint(ctx)
-		if err != nil {
-			return BuildResult{}, err
-		}
-		legacyMatch := false
-		if hasActive && active != fp && len(o.Space.Legacy) > 0 {
-			legacyMatch, err = o.Space.Matches(active)
-			if err != nil {
-				return BuildResult{}, fmt.Errorf("matching active generation: %w", err)
-			}
-		}
+	if ix.spec.Name == "messages" && !o.FullRebuild && selected == fp {
 		var g reuseGeneration
-		err = sql.ErrNoRows
-		if !legacyMatch {
-			err = ix.db.QueryRowContext(ctx, `SELECT ordinal, dimension FROM `+ix.spec.generationsTable()+` WHERE gen_key = ?`, fp).Scan(&g.ordinal, &g.dimension)
-		}
+		err = ix.db.QueryRowContext(ctx, `SELECT ordinal, dimension FROM `+ix.spec.generationsTable()+` WHERE gen_key = ?`, fp).Scan(&g.ordinal, &g.dimension)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return BuildResult{}, err
 		}
@@ -236,7 +226,7 @@ func (ix *Index) Build(
 		}
 	}
 
-	target, wasBuilding, err := ix.resolveBuildTarget(ctx, gen, fp, o.Space, o.FullRebuild)
+	target, wasBuilding, err := ix.resolveBuildTarget(ctx, gen, selected, activeMatches, o.FullRebuild)
 	if err != nil {
 		return BuildResult{}, err
 	}
@@ -247,7 +237,7 @@ func (ix *Index) Build(
 		return result, err
 	}
 
-	if seed != nil && target == fp {
+	if seed != nil {
 		enc = ix.reuseEncoder(enc, *seed)
 	}
 	wrapped, finish := ix.wrapProgress(enc, total, o.Progress)
@@ -461,22 +451,8 @@ func (ix *Index) noWatermarkYet(ctx context.Context) (bool, error) {
 	return watermark == "", nil
 }
 
-// resolveBuildTarget decides which generation fingerprint Build should fill
-// and whether it is a newly (or still) building generation that should be
-// auto-activated once it fully covers the mirror. See the package's build
-// brief for the exact decision table.
-//
-// FullRebuild resets the target generation whenever it already exists —
-// active, building, or retired — not only when it happens to be the active
-// one: a fingerprint that already exists as a retired (or still building)
-// generation carries stamps and vectors from its earlier life, and without
-// a reset EnsureGeneration would reuse them, letting Fill skip every
-// document and silently reactivate stale embeddings instead of performing
-// the requested full rebuild.
-func (ix *Index) resolveBuildTarget(
-	ctx context.Context, gen kitvec.Generation, fp string,
-	space embedmodel.Descriptor, fullRebuild bool,
-) (target string, wasBuilding bool, err error) {
+// selectBuildTarget picks the active matching generation or the new fingerprint.
+func (ix *Index) selectBuildTarget(ctx context.Context, fp string, space embedmodel.Descriptor) (string, bool, error) {
 	active, hasActive, err := ix.ActiveFingerprint(ctx)
 	if err != nil {
 		return "", false, err
@@ -487,9 +463,19 @@ func (ix *Index) resolveBuildTarget(
 			return "", false, fmt.Errorf("matching active generation: %w", err)
 		}
 	}
-
 	if activeMatches {
-		fp = active
+		return active, true, nil
+	}
+	return fp, false, nil
+}
+
+// resolveBuildTarget prepares the selected generation and resets it for a full
+// rebuild, including when the generation was previously retired.
+func (ix *Index) resolveBuildTarget(
+	ctx context.Context, gen kitvec.Generation, fp string,
+	activeMatches, fullRebuild bool,
+) (target string, wasBuilding bool, err error) {
+	if activeMatches {
 		if fullRebuild {
 			if err := ix.markActiveFullRebuildPending(ctx, fp); err != nil {
 				return "", false, err
