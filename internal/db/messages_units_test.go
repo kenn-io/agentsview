@@ -21,7 +21,7 @@ func scanUnits(
 	t.Helper()
 	var got []EmbeddableUnit
 	maxEnded, err := d.ScanEmbeddableUnits(
-		t.Context(), since, includeAutomated, UncappedRunRunes,
+		t.Context(), since, includeAutomated, nil, UncappedRunRunes,
 		func(u EmbeddableUnit) error {
 			got = append(got, u)
 			return nil
@@ -63,7 +63,7 @@ func TestScanEmbeddableUnitsRunCap(t *testing.T) {
 				insertMessages(t, d, msg)
 			}
 			var units []EmbeddableUnit
-			_, err := d.ScanEmbeddableUnits(t.Context(), "", true, 6, func(u EmbeddableUnit) error {
+			_, err := d.ScanEmbeddableUnits(t.Context(), "", true, nil, 6, func(u EmbeddableUnit) error {
 				units = append(units, u)
 				return nil
 			})
@@ -91,7 +91,7 @@ func TestScanEmbeddableUnitsRunCap(t *testing.T) {
 			}
 			insertMessages(t, d, Message{SessionID: sid, Ordinal: len(tt.contents), Role: "assistant", Content: "tail", Timestamp: tsHour1})
 			var after []EmbeddableUnit
-			_, err = d.ScanEmbeddableUnits(t.Context(), "", true, 6, func(u EmbeddableUnit) error {
+			_, err = d.ScanEmbeddableUnits(t.Context(), "", true, nil, 6, func(u EmbeddableUnit) error {
 				after = append(after, u)
 				return nil
 			})
@@ -774,4 +774,25 @@ func TestScanEmbeddableUnitsSessionChangeClosesOpenRun(t *testing.T) {
 	assert.Equal(t, 1, got[0].OrdinalEnd)
 	assert.Equal(t, "sess-b", got[1].SessionID)
 	assert.Equal(t, 0, got[1].Ordinal)
+}
+
+func TestScanEmbeddableUnitsAgents(t *testing.T) {
+	d := testDB(t)
+	for _, agent := range []string{"claude", "codex"} {
+		insertSession(t, d, agent, "project", func(s *Session) { s.Agent = agent })
+		insertMessages(t, d, Message{SessionID: agent, Role: "user", Content: agent + " text", SourceUUID: agent})
+	}
+	for _, since := range []string{"", "2020-01-01T00:00:00Z"} {
+		var got []string
+		_, err := d.ScanEmbeddableUnits(t.Context(), since, false, []string{"claude"}, UncappedRunRunes, func(u EmbeddableUnit) error { got = append(got, u.SessionID); return nil })
+		require.NoError(t, err)
+		assert.Equal(t, []string{"claude"}, got)
+	}
+	err := d.ScanEmbeddableUnitsForSession(t.Context(), "codex", false, []string{"claude"}, UncappedRunRunes, func(EmbeddableUnit) error { t.Error("excluded session returned"); return nil })
+	require.NoError(t, err)
+	got, _ := scanUnits(t, d, "", false)
+	assert.Len(t, got, 2)
+	page, err := d.Search(t.Context(), SearchFilter{Query: "codex"})
+	require.NoError(t, err)
+	assert.Len(t, page.Results, 1)
 }

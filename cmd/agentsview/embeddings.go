@@ -552,8 +552,12 @@ func countEmbeddingStoreUnits(
 		return 0, err
 	}
 	var n int
+	var agents []string
+	if store != vector.RecallIndexSpec().Name {
+		agents = cfg.Vector.Agents
+	}
 	if _, err := source.ScanEmbeddableUnits(
-		ctx, "", includeAutomated, vector.RunMaxRunes(cfg.Vector.Embeddings.MaxInputChars), func(db.EmbeddableUnit) error {
+		ctx, "", includeAutomated, agents, vector.RunMaxRunes(cfg.Vector.Embeddings.MaxInputChars), func(db.EmbeddableUnit) error {
 			n++
 			return nil
 		},
@@ -608,7 +612,7 @@ type recallEmbeddingSource struct {
 }
 
 func (s recallEmbeddingSource) ScanEmbeddableUnits(
-	ctx context.Context, since string, _ bool, _ int,
+	ctx context.Context, since string, _ bool, _ []string, _ int,
 	fn func(db.EmbeddableUnit) error,
 ) (string, error) {
 	return s.db.ScanRecallEmbeddingUnits(
@@ -656,7 +660,7 @@ func embeddingManager(
 	if store != vector.RecallIndexSpec().Name {
 		gen := vectorGeneration(cfg.Vector.Embeddings)
 		target := vector.BuildTarget{
-			Source: database, Generation: gen,
+			Source: database, Generation: gen, Agents: cfg.Vector.Agents,
 			Space: vectorSpace(cfg.Vector.Embeddings, gen),
 		}
 		return vector.NewResolvingManager(

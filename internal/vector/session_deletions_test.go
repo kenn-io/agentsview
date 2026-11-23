@@ -97,21 +97,21 @@ func TestRefreshRunsFullReconciliationWhenJournalMovesBackwards(t *testing.T) {
 	seedEndedSession(t, archive, "earlier", "earlier content", "2024-01-02T00:00:00Z")
 	seedEndedSession(t, archive, "gone", "gone content", "2024-01-01T00:00:00Z")
 	ix := openTestIndex(t)
-	_, err := ix.Refresh(ctx, archive, true, false)
+	_, err := ix.Refresh(ctx, archive, true, false, nil)
 	require.NoError(t, err)
 
 	// Advance the stored cursor past zero through an ordinary deletion.
 	removed, err := archive.DeleteParserExcludedSessions(ctx, []string{"earlier"})
 	require.NoError(t, err)
 	require.Equal(t, 1, removed)
-	_, err = ix.Refresh(ctx, archive, false, false)
+	_, err = ix.Refresh(ctx, archive, false, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, []string{"gone", "kept"}, mirrorSessionIDs(t, ix))
 
 	removed, err = archive.DeleteParserExcludedSessions(ctx, []string{"gone"})
 	require.NoError(t, err)
 	require.Equal(t, 1, removed)
-	_, err = ix.Refresh(ctx, &rewoundJournalSource{DB: archive, revision: 0}, false, false)
+	_, err = ix.Refresh(ctx, &rewoundJournalSource{DB: archive, revision: 0}, false, false, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"kept"}, mirrorSessionIDs(t, ix))
@@ -124,7 +124,7 @@ func TestRefreshRunsFullReconciliationForNewArchiveIdentity(t *testing.T) {
 	seedEndedSession(t, original, "kept", "kept content", "2024-01-03T00:00:00Z")
 	seedEndedSession(t, original, "gone", "gone content", "2024-01-01T00:00:00Z")
 	ix := openTestIndex(t)
-	_, err := ix.Refresh(ctx, original, true, false)
+	_, err := ix.Refresh(ctx, original, true, false, nil)
 	require.NoError(t, err)
 	stored, err := original.SessionDeletionPublicationRevision(ctx)
 	require.NoError(t, err)
@@ -138,7 +138,7 @@ func TestRefreshRunsFullReconciliationForNewArchiveIdentity(t *testing.T) {
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, revision, stored)
 
-	_, err = ix.Refresh(ctx, replacement, false, false)
+	_, err = ix.Refresh(ctx, replacement, false, false, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"kept"}, mirrorSessionIDs(t, ix))
@@ -152,20 +152,20 @@ func TestRefreshDeletionSnapshotCannotRemoveRestoredSession(t *testing.T) {
 	seed("restored", "old content", "2024-01-01T00:00:00Z")
 	seed("retained", "retained content", "2024-01-03T00:00:00Z")
 	ix := openTestIndex(t)
-	_, err := ix.Refresh(t.Context(), archive, true, false)
+	_, err := ix.Refresh(t.Context(), archive, true, false, nil)
 	require.NoError(t, err)
 	removed, err := archive.DeleteParserExcludedSessions(t.Context(), []string{"restored"})
 	require.NoError(t, err)
 	require.Equal(t, 1, removed)
 	source := &restoredSessionSource{DB: archive, restore: func() { seed("restored", "restored content", "2024-01-01T00:00:00Z") }}
-	_, err = ix.Refresh(t.Context(), source, false, false)
+	_, err = ix.Refresh(t.Context(), source, false, false, nil)
 	require.NoError(t, err)
 	assert.Nil(t, source.restore, "the restore must occur after capturing the real journal tombstone")
 	var content string
 	err = ix.db.QueryRowContext(t.Context(), `SELECT content FROM vector_messages WHERE session_id = 'restored'`).Scan(&content)
 	require.NoError(t, err)
 	assert.Equal(t, "restored content", content)
-	_, err = ix.Refresh(t.Context(), source, false, false)
+	_, err = ix.Refresh(t.Context(), source, false, false, nil)
 	require.NoError(t, err)
 	var count int
 	require.NoError(t, ix.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM vector_messages`).Scan(&count))
@@ -184,7 +184,7 @@ func TestRefreshReconcilesStaleDocumentsWhenRestoreRacesIncrementalScan(t *testi
 	seed("retained", []db.Message{dbtest.UserMsg("retained", 0, "retained content")}, "2024-01-03T00:00:00Z")
 
 	ix := openTestIndex(t)
-	_, err := ix.Refresh(t.Context(), archive, true, false)
+	_, err := ix.Refresh(t.Context(), archive, true, false, nil)
 	require.NoError(t, err)
 	removed, err := archive.DeleteParserExcludedSessions(t.Context(), []string{"restored"})
 	require.NoError(t, err)
@@ -195,7 +195,7 @@ func TestRefreshReconcilesStaleDocumentsWhenRestoreRacesIncrementalScan(t *testi
 	source := &restoredSessionSource{DB: archive, restore: func() {
 		seed("restored", []db.Message{dbtest.UserMsg("restored", 0, "restored content")}, "2024-01-04T00:00:00Z")
 	}}
-	_, err = ix.Refresh(t.Context(), source, false, false)
+	_, err = ix.Refresh(t.Context(), source, false, false, nil)
 	require.NoError(t, err)
 	assert.Nil(t, source.restore, "the restore must occur after capturing the deletion revision")
 
@@ -218,7 +218,7 @@ func TestRefreshRescansRestoredSessionBehindWatermark(t *testing.T) {
 	seed("retained", "retained content", "2024-01-03T00:00:00Z")
 
 	ix := openTestIndex(t)
-	_, err := ix.Refresh(t.Context(), archive, true, false)
+	_, err := ix.Refresh(t.Context(), archive, true, false, nil)
 	require.NoError(t, err)
 	watermark, err := ix.refreshWatermark(t.Context())
 	require.NoError(t, err)
@@ -227,13 +227,13 @@ func TestRefreshRescansRestoredSessionBehindWatermark(t *testing.T) {
 	removed, err := archive.DeleteParserExcludedSessions(t.Context(), []string{"restored"})
 	require.NoError(t, err)
 	require.Equal(t, 1, removed)
-	_, err = ix.Refresh(t.Context(), archive, false, false)
+	_, err = ix.Refresh(t.Context(), archive, false, false, nil)
 	require.NoError(t, err)
 
 	// Re-insertion publishes a deleted=0 journal entry, but its old ended_at
 	// remains behind the watermark established by the retained session.
 	seed("restored", "restored content", "2024-01-01T00:00:00Z")
-	_, err = ix.Refresh(t.Context(), archive, false, false)
+	_, err = ix.Refresh(t.Context(), archive, false, false, nil)
 	require.NoError(t, err)
 
 	var content string
@@ -250,7 +250,7 @@ func TestRefreshJournalSkipsSessionVisitedByWatermarkScan(t *testing.T) {
 	seedEndedSession(t, archive, "restored", "original content", "2024-01-01T00:00:00Z")
 	seedEndedSession(t, archive, "retained", "retained content", "2024-01-03T00:00:00Z")
 	ix := openTestIndex(t)
-	_, err := ix.Refresh(ctx, archive, true, false)
+	_, err := ix.Refresh(ctx, archive, true, false, nil)
 	require.NoError(t, err)
 
 	removed, err := archive.DeleteParserExcludedSessions(ctx, []string{"restored"})
@@ -267,7 +267,7 @@ func TestRefreshJournalSkipsSessionVisitedByWatermarkScan(t *testing.T) {
 			s.EndedAt = new("2024-01-04T00:00:00Z")
 		})
 	}}
-	stats, err := ix.Refresh(ctx, source, false, false)
+	stats, err := ix.Refresh(ctx, source, false, false, nil)
 	require.NoError(t, err)
 	assert.Nil(t, source.restore, "the journal must list the restored session")
 	assert.Equal(t, 2, stats.Upserted)
@@ -286,7 +286,7 @@ func TestRefreshReconcilesRestoredSessionBeforeDeletionIsConsumed(t *testing.T) 
 	seed("retained", []db.Message{dbtest.UserMsg("retained", 0, "retained content")}, "2024-01-03T00:00:00Z")
 
 	ix := openTestIndex(t)
-	_, err := ix.Refresh(t.Context(), archive, true, false)
+	_, err := ix.Refresh(t.Context(), archive, true, false, nil)
 	require.NoError(t, err)
 	removed, err := archive.DeleteParserExcludedSessions(t.Context(), []string{"restored"})
 	require.NoError(t, err)
@@ -295,7 +295,7 @@ func TestRefreshReconcilesRestoredSessionBeforeDeletionIsConsumed(t *testing.T) 
 	// Re-insertion overwrites the journal row with deleted=0 before the
 	// incremental refresh consumes the earlier deletion revision.
 	seed("restored", []db.Message{dbtest.UserMsg("restored", 0, "restored content")}, "2024-01-01T00:00:00Z")
-	_, err = ix.Refresh(t.Context(), archive, false, false)
+	_, err = ix.Refresh(t.Context(), archive, false, false, nil)
 	require.NoError(t, err)
 
 	var count int

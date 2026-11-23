@@ -38,7 +38,7 @@ type fakeUnit struct {
 }
 
 func (f *fakeUnitSource) ScanEmbeddableUnits(
-	_ context.Context, since string, includeAutomated bool, _ int,
+	_ context.Context, since string, includeAutomated bool, _ []string, _ int,
 	fn func(db.EmbeddableUnit) error,
 ) (string, error) {
 	f.gotSince = since
@@ -165,7 +165,7 @@ func TestRefreshInitialFullInsertsRowsWithCorrectDocKeys(t *testing.T) {
 		{unit: userDoc("s1", "", 1, "world"), endedAt: "2024-01-01T00:00:01Z"},
 	}}
 
-	stats, err := ix.Refresh(ctx, src, true, true)
+	stats, err := ix.Refresh(ctx, src, true, true, nil)
 	require.NoError(t, err)
 	assert.Equal(t, RefreshStats{Upserted: 2, Deleted: 0, Unchanged: 0}, stats)
 
@@ -201,7 +201,7 @@ func TestRefreshRunRowPersistsUnitColumns(t *testing.T) {
 		{unit: run, endedAt: "2024-01-01T00:00:01Z"},
 	}}
 
-	stats, err := ix.Refresh(ctx, src, true, true)
+	stats, err := ix.Refresh(ctx, src, true, true, nil)
 	require.NoError(t, err)
 	assert.Equal(t, RefreshStats{Upserted: 2, Deleted: 0, Unchanged: 0}, stats)
 	assert.Equal(t, []string{"r:s1:a1", "u:s1:u0"}, mirrorDocKeys(t, ix))
@@ -239,7 +239,7 @@ func TestRefreshRunWithoutSourceUUIDFallsBackToOrdinalKey(t *testing.T) {
 		},
 	}}
 
-	_, err := ix.Refresh(ctx, src, true, true)
+	_, err := ix.Refresh(ctx, src, true, true, nil)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"ro:s1:4"}, mirrorDocKeys(t, ix))
 }
@@ -251,13 +251,13 @@ func TestRefreshContentChangeUpdatesHash(t *testing.T) {
 	src := &fakeUnitSource{rows: []fakeUnit{
 		{unit: userDoc("s1", "u1", 0, "hello"), endedAt: "2024-01-01T00:00:00Z"},
 	}}
-	_, err := ix.Refresh(ctx, src, true, true)
+	_, err := ix.Refresh(ctx, src, true, true, nil)
 	require.NoError(t, err)
 	before, ok := readMirrorRow(t, ix, "u:s1:u1")
 	require.True(t, ok)
 
 	src.rows[0].unit.Content = "goodbye"
-	stats, err := ix.Refresh(ctx, src, true, true)
+	stats, err := ix.Refresh(ctx, src, true, true, nil)
 	require.NoError(t, err)
 	assert.Equal(t, RefreshStats{Upserted: 1, Deleted: 0, Unchanged: 0}, stats)
 
@@ -288,7 +288,7 @@ func TestRefreshTrailingAppendKeepsRunDocKeyAndReembedsOnlyIt(t *testing.T) {
 			endedAt: "2024-01-01T00:00:01Z",
 		},
 	}}
-	_, err := ix.Refresh(ctx, src, true, true)
+	_, err := ix.Refresh(ctx, src, true, true, nil)
 	require.NoError(t, err)
 
 	gen := kitvec.Generation{Model: "fake-model", Dimensions: 3}
@@ -311,7 +311,7 @@ func TestRefreshTrailingAppendKeepsRunDocKeyAndReembedsOnlyIt(t *testing.T) {
 	})
 	src.rows[0].endedAt = "2024-01-02T00:00:00Z"
 
-	stats, err := ix.Refresh(ctx, src, true, true)
+	stats, err := ix.Refresh(ctx, src, true, true, nil)
 	require.NoError(t, err)
 	assert.Equal(t, RefreshStats{Upserted: 1, Deleted: 0, Unchanged: 1}, stats)
 	assert.ElementsMatch(t, []string{"r:s1:a1", "r:s2:b1"}, mirrorDocKeys(t, ix))
@@ -355,7 +355,7 @@ func TestRefreshMidRunUserSplitCreatesSecondHalfUnderNewKey(t *testing.T) {
 			endedAt: "2024-01-01T00:00:00Z",
 		},
 	}}
-	_, err := ix.Refresh(ctx, src, true, true)
+	_, err := ix.Refresh(ctx, src, true, true, nil)
 	require.NoError(t, err)
 	before, ok := readMirrorRow(t, ix, "r:s1:a0")
 	require.True(t, ok)
@@ -375,7 +375,7 @@ func TestRefreshMidRunUserSplitCreatesSecondHalfUnderNewKey(t *testing.T) {
 		},
 	}
 
-	stats, err := ix.Refresh(ctx, src, true, true)
+	stats, err := ix.Refresh(ctx, src, true, true, nil)
 	require.NoError(t, err)
 	assert.Zero(t, stats.Deleted, "a split rewrites and adds rows; nothing vanishes")
 	assert.Equal(t, []string{"r:s1:a0", "r:s1:a3", "u:s1:u2"}, mirrorDocKeys(t, ix))
@@ -412,7 +412,7 @@ func TestRefreshRunReplacingVanishedRunSlotEvictsVectorsBeforeRow(t *testing.T) 
 			endedAt: "2024-01-01T00:00:00Z",
 		},
 	}}
-	_, err := ix.Refresh(ctx, src, true, true)
+	_, err := ix.Refresh(ctx, src, true, true, nil)
 	require.NoError(t, err)
 
 	gen := kitvec.Generation{Model: "fake-model", Dimensions: 3}
@@ -435,7 +435,7 @@ func TestRefreshRunReplacingVanishedRunSlotEvictsVectorsBeforeRow(t *testing.T) 
 			endedAt: "2024-01-02T00:00:00Z",
 		},
 	}
-	stats, err := ix.Refresh(ctx, src, true, true)
+	stats, err := ix.Refresh(ctx, src, true, true, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.Deleted, "the vanished run is evicted exactly once")
 	assert.Equal(t, []string{"r:s1:b2"}, mirrorDocKeys(t, ix))
@@ -460,7 +460,7 @@ func TestRefreshOrdinalShiftOnUUIDRowKeepsHashStampSurvives(t *testing.T) {
 	src := &fakeUnitSource{rows: []fakeUnit{
 		{unit: userDoc("s1", "u1", 0, "hello"), endedAt: "2024-01-01T00:00:00Z"},
 	}}
-	_, err := ix.Refresh(ctx, src, true, true)
+	_, err := ix.Refresh(ctx, src, true, true, nil)
 	require.NoError(t, err)
 
 	gen := kitvec.Generation{Model: "fake-model", Dimensions: 3}
@@ -476,7 +476,7 @@ func TestRefreshOrdinalShiftOnUUIDRowKeepsHashStampSurvives(t *testing.T) {
 	// the stamp (keyed by doc_key + revision) is not invalidated.
 	src.rows[0].unit.Ordinal = 3
 	src.rows[0].unit.OrdinalEnd = 3
-	stats, err := ix.Refresh(ctx, src, true, true)
+	stats, err := ix.Refresh(ctx, src, true, true, nil)
 	require.NoError(t, err)
 	assert.Equal(t, RefreshStats{Upserted: 0, Deleted: 0, Unchanged: 1}, stats)
 
@@ -501,7 +501,7 @@ func TestRefreshOrdinalShiftOntoStaleLegacySlotEvictsIt(t *testing.T) {
 		{unit: userDoc("s1", "", 3, "legacy"), endedAt: "2024-01-01T00:00:00Z"},
 		{unit: userDoc("s1", "u1", 0, "hello"), endedAt: "2024-01-01T00:00:00Z"},
 	}}
-	_, err := ix.Refresh(ctx, src, true, true)
+	_, err := ix.Refresh(ctx, src, true, true, nil)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"o:s1:3", "u:s1:u1"}, mirrorDocKeys(t, ix))
 
@@ -517,7 +517,7 @@ func TestRefreshOrdinalShiftOntoStaleLegacySlotEvictsIt(t *testing.T) {
 	// The u1 unit's ordinal now shifts onto the legacy row's slot.
 	src.rows[1].unit.Ordinal = 3
 	src.rows[1].unit.OrdinalEnd = 3
-	stats, err := ix.Refresh(ctx, src, true, true)
+	stats, err := ix.Refresh(ctx, src, true, true, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.Deleted, "legacy slot occupant evicted")
 
@@ -551,7 +551,7 @@ func TestRefreshFullDeletesVanishedIdentitiesAndVectors(t *testing.T) {
 		{unit: userDoc("s1", "u1", 0, "hello"), endedAt: "2024-01-01T00:00:00Z"},
 		{unit: userDoc("s1", "u2", 1, "world"), endedAt: "2024-01-01T00:00:01Z"},
 	}}
-	_, err := ix.Refresh(ctx, src, true, true)
+	_, err := ix.Refresh(ctx, src, true, true, nil)
 	require.NoError(t, err)
 
 	gen := kitvec.Generation{Model: "fake-model", Dimensions: 3}
@@ -570,7 +570,7 @@ func TestRefreshFullDeletesVanishedIdentitiesAndVectors(t *testing.T) {
 
 	// u2's unit vanishes from the archive.
 	src.rows = src.rows[:1]
-	stats, err := ix.Refresh(ctx, src, true, true)
+	stats, err := ix.Refresh(ctx, src, true, true, nil)
 	require.NoError(t, err)
 	assert.Equal(t, RefreshStats{Upserted: 0, Deleted: 1, Unchanged: 1}, stats)
 
@@ -606,7 +606,7 @@ func TestRefreshFullEvictionOfVanishedOccupantCountsDeletedOnce(t *testing.T) {
 		{unit: userDoc("s1", "", 3, "legacy"), endedAt: "2024-01-01T00:00:00Z"},
 		{unit: userDoc("s1", "u1", 0, "hello"), endedAt: "2024-01-01T00:00:00Z"},
 	}}
-	_, err := ix.Refresh(ctx, src, true, true)
+	_, err := ix.Refresh(ctx, src, true, true, nil)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"o:s1:3", "u:s1:u1"}, mirrorDocKeys(t, ix))
 
@@ -627,7 +627,7 @@ func TestRefreshFullEvictionOfVanishedOccupantCountsDeletedOnce(t *testing.T) {
 	src.rows = []fakeUnit{
 		{unit: userDoc("s1", "u1", 3, "hello"), endedAt: "2024-01-01T00:00:00Z"},
 	}
-	stats, err := ix.Refresh(ctx, src, true, true)
+	stats, err := ix.Refresh(ctx, src, true, true, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.Deleted,
 		"vanished, slot-evicted occupant must be counted exactly once")
@@ -654,14 +654,14 @@ func TestRefreshIncrementalUsesWatermark(t *testing.T) {
 	src := &fakeUnitSource{rows: []fakeUnit{
 		{unit: userDoc("s1", "u1", 0, "hello"), endedAt: "2024-01-01T00:00:00Z"},
 	}}
-	_, err := ix.Refresh(ctx, src, true, true)
+	_, err := ix.Refresh(ctx, src, true, true, nil)
 	require.NoError(t, err)
 	assert.Empty(t, src.gotSince, "full refresh should scan from the beginning")
 
 	src.rows = append(src.rows, fakeUnit{
 		unit: userDoc("s2", "u2", 0, "later"), endedAt: "2024-01-02T00:00:00Z",
 	})
-	stats, err := ix.Refresh(ctx, src, false, true)
+	stats, err := ix.Refresh(ctx, src, false, true, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "2024-01-01T00:00:00Z", src.gotSince,
 		"incremental refresh should scan from the stored watermark")
@@ -714,7 +714,7 @@ func TestRefreshDuplicateSourceUUIDGetsStableOccurrenceKeys(t *testing.T) {
 		{unit: userDoc("s1", "dup", 1, "second"), endedAt: "2024-01-01T00:00:01Z"},
 	}}
 
-	stats, err := ix.Refresh(ctx, src, true, true)
+	stats, err := ix.Refresh(ctx, src, true, true, nil)
 	require.NoError(t, err)
 	assert.Equal(t, RefreshStats{Upserted: 2, Deleted: 0, Unchanged: 0}, stats)
 
@@ -738,7 +738,7 @@ func TestRefreshDuplicateSourceUUIDGetsStableOccurrenceKeys(t *testing.T) {
 	// A second refresh must reproduce the same occurrence keys in the same
 	// scan order, or the stamped doc would appear to vanish and be
 	// re-embedded on every resync.
-	stats, err = ix.Refresh(ctx, src, true, true)
+	stats, err = ix.Refresh(ctx, src, true, true, nil)
 	require.NoError(t, err)
 	assert.Equal(t, RefreshStats{Upserted: 0, Deleted: 0, Unchanged: 2}, stats,
 		"stable keys across refreshes mean no churn")
@@ -774,7 +774,7 @@ func TestRefreshDuplicateRunFirstMessageUUIDGetsOccurrenceSuffixes(t *testing.T)
 		},
 	}}
 
-	stats, err := ix.Refresh(ctx, src, true, true)
+	stats, err := ix.Refresh(ctx, src, true, true, nil)
 	require.NoError(t, err)
 	assert.Equal(t, RefreshStats{Upserted: 4, Deleted: 0, Unchanged: 0}, stats)
 	assert.Equal(t, []string{"o:s1:3", "r:s1:dup#2", "r:s1:dup#3", "u:s1:dup"},
@@ -782,7 +782,7 @@ func TestRefreshDuplicateRunFirstMessageUUIDGetsOccurrenceSuffixes(t *testing.T)
 		"occurrence suffixes must be assigned in (session_id, ordinal) scan order")
 
 	// A second refresh must reproduce the exact same keys.
-	stats, err = ix.Refresh(ctx, src, true, true)
+	stats, err = ix.Refresh(ctx, src, true, true, nil)
 	require.NoError(t, err)
 	assert.Equal(t, RefreshStats{Upserted: 0, Deleted: 0, Unchanged: 4}, stats,
 		"occurrence-suffixed run keys must be stable across refreshes")
@@ -805,7 +805,7 @@ func TestRefreshCascadingOrdinalShiftReinsertsEvictedKeysWithoutLosingCoverage(t
 		{unit: userDoc("s1", "u1", 1, "one"), endedAt: "2024-01-01T00:00:01Z"},
 		{unit: userDoc("s1", "u2", 2, "two"), endedAt: "2024-01-01T00:00:02Z"},
 	}}
-	_, err := ix.Refresh(ctx, src, true, true)
+	_, err := ix.Refresh(ctx, src, true, true, nil)
 	require.NoError(t, err)
 
 	gen := kitvec.Generation{Model: "fake-model", Dimensions: 3}
@@ -829,7 +829,7 @@ func TestRefreshCascadingOrdinalShiftReinsertsEvictedKeysWithoutLosingCoverage(t
 		src.rows[i].unit.OrdinalEnd++
 	}
 
-	stats, err := ix.Refresh(ctx, src, true, true)
+	stats, err := ix.Refresh(ctx, src, true, true, nil)
 	require.NoError(t, err)
 	assert.Zero(t, stats.Deleted, "cascaded rows are reinserted in-scan, not genuinely removed")
 
@@ -959,7 +959,7 @@ func TestRefreshReadOnlyIndexRejected(t *testing.T) {
 	require.NoError(t, err)
 	defer ro.Close()
 
-	_, err = ro.Refresh(ctx, &fakeUnitSource{}, true, true)
+	_, err = ro.Refresh(ctx, &fakeUnitSource{}, true, true, nil)
 	require.Error(t, err)
 }
 
@@ -981,7 +981,7 @@ func TestRefreshParkedLeftoverFromInterruptedRunDoesNotCollide(t *testing.T) {
 		{unit: userDoc("s1", "u1", 0, "hello"), endedAt: "2024-01-01T00:00:00Z"},
 		{unit: userDoc("s1", "u2", 5, "world"), endedAt: "2024-01-01T00:00:00Z"},
 	}}
-	_, err := ix.Refresh(ctx, src, true, true)
+	_, err := ix.Refresh(ctx, src, true, true, nil)
 	require.NoError(t, err)
 
 	// Simulate the interrupted run's leftover: u2 parked at -1.
@@ -992,7 +992,7 @@ func TestRefreshParkedLeftoverFromInterruptedRunDoesNotCollide(t *testing.T) {
 	// eviction parking in the same session; u2 is rescanned and self-heals.
 	src.rows[1].unit.Ordinal = 9
 	src.rows[1].unit.OrdinalEnd = 9
-	stats, err := ix.Refresh(ctx, src, true, true)
+	stats, err := ix.Refresh(ctx, src, true, true, nil)
 	require.NoError(t, err, "a parked leftover must not collide with new parking")
 	assert.Equal(t, 1, stats.Deleted, "the evicted legacy occupant is finalized")
 

@@ -58,6 +58,7 @@ type BuildOptions struct {
 	// than the refresh watermark are picked up. It does not force a re-embed
 	// of documents that stay in scope.
 	IncludeAutomated bool
+	Agents           []string
 	// BatchSize is the encode batch size (config batch_size).
 	BatchSize int
 	// ModelContextTokens is the maximum tokens accepted for one input.
@@ -148,7 +149,12 @@ func (ix *Index) Build(
 	// in-scope automated sessions older than the watermark) get resolved,
 	// then setIncludeAutomatedScope below stamps the key so every later
 	// build compares against a real stored scope again.
-	scopeChanged := !hasScope || storedScope != o.IncludeAutomated
+	storedAgents, _, err := ix.metaGet(ctx, scopeAgentsKey)
+	if err != nil {
+		return BuildResult{}, err
+	}
+	agents := normalizedAgents(o.Agents)
+	scopeChanged := !hasScope || storedScope != o.IncludeAutomated || storedAgents != agents
 	corpusFingerprint := gen.Params[CorpusFingerprintParam]
 	storedCorpusFingerprint, hasCorpusFingerprint, err := ix.metaGet(
 		ctx, corpusFingerprintMetaKey,
@@ -208,7 +214,7 @@ func (ix *Index) Build(
 	if o.Progress != nil {
 		o.Progress(BuildProgress{Phase: "scanning"})
 	}
-	refreshStats, err := ix.refresh(ctx, src, full, o.IncludeAutomated, seed)
+	refreshStats, err := ix.refresh(ctx, src, full, o.IncludeAutomated, o.Agents, seed)
 	if err != nil {
 		return BuildResult{}, err
 	}
@@ -218,6 +224,9 @@ func (ix *Index) Build(
 		}
 	}
 	if err := ix.setIncludeAutomatedScope(ctx, o.IncludeAutomated); err != nil {
+		return BuildResult{}, err
+	}
+	if err := ix.metaSet(ctx, scopeAgentsKey, agents); err != nil {
 		return BuildResult{}, err
 	}
 	if corpusFingerprint != "" {

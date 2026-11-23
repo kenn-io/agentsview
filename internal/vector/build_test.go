@@ -74,7 +74,7 @@ type failingRefreshSource struct {
 }
 
 func (s failingRefreshSource) ScanEmbeddableUnits(
-	_ context.Context, _ string, _ bool, _ int,
+	_ context.Context, _ string, _ bool, _ []string, _ int,
 	fn func(db.EmbeddableUnit) error,
 ) (string, error) {
 	if err := fn(s.unit); err != nil {
@@ -1063,7 +1063,7 @@ func TestBuildRetiresAbandonedBuildingGenerationEndToEnd(t *testing.T) {
 	src := twoDocSource()
 
 	genA := fakeGeneration("model-a")
-	_, err := ix.Refresh(ctx, src, true, true)
+	_, err := ix.Refresh(ctx, src, true, true, nil)
 	require.NoError(t, err)
 	fpA, err := ix.EnsureGeneration(ctx, genA, sqlitevec.StateBuilding)
 	require.NoError(t, err)
@@ -1141,4 +1141,47 @@ func TestBuildActiveFingerprintEarlyReturnRetiresAbandonedBuildingGeneration(t *
 	_, ok, err := ix.BuildingFingerprint(ctx)
 	require.NoError(t, err)
 	assert.False(t, ok, "no generation should remain in state building")
+}
+
+type agentScopeSource struct {
+	*db.DB
+	since string
+}
+
+func (s *agentScopeSource) ScanEmbeddableUnits(ctx context.Context, since string, includeAutomated bool, agents []string, maxRunRunes int, fn func(db.EmbeddableUnit) error) (string, error) {
+	s.since = since
+	return s.DB.ScanEmbeddableUnits(ctx, since, includeAutomated, agents, maxRunRunes, fn)
+}
+
+func TestBuildAgentScopeReconciles(t *testing.T) {
+	ctx := t.Context()
+	archive := dbtest.OpenTestDB(t)
+	for _, item := range []struct{ agent, ended string }{{"claude", "2024-01-02T00:00:00Z"}, {"codex", "2024-01-01T00:00:00Z"}} {
+		dbtest.SeedSessionWithMessages(t, archive, item.agent, "project", []db.Message{dbtest.UserMsg(item.agent, 0, item.agent+" text")}, func(s *db.Session) { s.Agent = item.agent; s.EndedAt = new(item.ended) })
+	}
+	ix := openTestIndex(t)
+	gen := fakeGeneration("fake-model")
+	source := &agentScopeSource{DB: archive}
+	build := func(agents []string) BuildResult {
+		result, err := ix.Build(ctx, source, fakeBuildEncoder(), gen, BuildOptions{Agents: agents})
+		require.NoError(t, err)
+		return result
+	}
+	build([]string{"claude"})
+	assert.Equal(t, []string{"claude"}, mirrorSessionIDs(t, ix))
+	assert.Equal(t, 1, build(nil).Fill.Documents)
+	assert.Equal(t, []string{"claude", "codex"}, mirrorSessionIDs(t, ix))
+	build([]string{"claude"})
+	assert.Equal(t, []string{"claude"}, mirrorSessionIDs(t, ix))
+	hits, err := ix.Search(ctx, fakeBuildEncoder(), "text", 10)
+	require.NoError(t, err)
+	require.Len(t, hits, 1)
+	build([]string{"claude", "codex"})
+	build([]string{"codex", "claude", "codex"})
+	assert.NotEmpty(t, source.since)
+	build(nil)
+	require.NoError(t, ix.metaDelete(ctx, scopeAgentsKey))
+	build(nil)
+	assert.NotEmpty(t, source.since)
+	assert.Equal(t, "claude,codex", normalizedAgents([]string{"codex", "claude", "codex"}))
 }

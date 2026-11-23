@@ -972,3 +972,12 @@ func requireAPIKey(t *testing.T, server interface{ APIKey() (string, error) }) s
 	require.NoError(t, err)
 	return key
 }
+
+func TestVectorConfigAgents(t *testing.T) {
+	for _, agents := range [][]string{nil, {}, {"claude", "codex"}} {
+		cfg := loadMinimalWithConfig(t, map[string]any{"vector": map[string]any{"agents": agents}})
+		assert.Equal(t, agents, cfg.Vector.Agents)
+	}
+	err := loadMinimalErrWithConfig(t, map[string]any{"vector": map[string]any{"agents": []string{"nope"}}})
+	require.ErrorContains(t, err, `unknown agent "nope"`)
+}

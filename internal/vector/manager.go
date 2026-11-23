@@ -210,6 +210,7 @@ type EncoderSet struct {
 // build pass. Resolving it per pass lets a long-lived manager follow a source
 // corpus whose own active generation can change at runtime.
 type BuildTarget struct {
+	Agents         []string
 	Source         UnitSource
 	Generation     kitvec.Generation
 	CorpusRevision string
@@ -486,6 +487,7 @@ func (m *Manager) runBuild(
 		Backstop:           req.Backstop,
 		RepairInvalid:      req.RepairInvalid,
 		IncludeAutomated:   req.IncludeAutomated,
+		Agents:             target.Agents,
 		BatchSize:          me.Settings.BatchSize,
 		ModelContextTokens: me.Settings.ModelContextTokens,
 		MaxBatchTokens:     me.Settings.MaxBatchTokens,

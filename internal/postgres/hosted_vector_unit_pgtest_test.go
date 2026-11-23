@@ -33,7 +33,7 @@ func TestHostedVectorUnitParity(t *testing.T) {
 		require.NoError(t, err)
 	}
 	var local, pg []db.EmbeddableUnit
-	_, err = sqlite.ScanEmbeddableUnits(t.Context(), "", false, 512, func(u db.EmbeddableUnit) error { local = append(local, u); return nil })
+	_, err = sqlite.ScanEmbeddableUnits(t.Context(), "", false, nil, 512, func(u db.EmbeddableUnit) error { local = append(local, u); return nil })
 	require.NoError(t, err)
 	require.NotEmpty(t, local)
 	require.NoError(t, scanHostedUnits(t.Context(), f.runtime, "parity", false, 512, func(u db.EmbeddableUnit) error { pg = append(pg, u); return nil }))
