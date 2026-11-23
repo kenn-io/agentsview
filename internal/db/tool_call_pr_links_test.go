@@ -55,7 +55,7 @@ func TestToolCallPRLinksForeignWorkdir(t *testing.T) {
 		want        bool
 	}{
 		{"same", `{"cmd":"gh pr view 42","workdir":"C:\\work\\repo"}`, true},
-		{"relative", `{"cmd":"gh pr view 42","workdir":"..\\repo"}`, true},
+		{"relative", `{"cmd":"gh pr view 42","workdir":"..\\repo"}`, false},
 		{"other", `{"cmd":"gh pr view 42","workdir":"C:\\work\\other"}`, false},
 		{"code mode", `tools.exec_command({cmd:"gh pr view 42",workdir:"C:\\work\\repo"})`, true},
 	} {
@@ -139,6 +139,9 @@ func TestCodeModePRLinks(t *testing.T) {
 			"text(await tools.exec_command({cmd:'gh pr co 42 -R example/other',workdir:'/other'}));\n" +
 			"text(await tools.exec_command({cmd:'gh pr view 43',workdir:'/other'}));\n" +
 			"tools.exec_command({cmd:tools.exec_command({cmd:'gh pr view 44'})});", []string{"https://github.com/example/repo/pull/41", "https://github.com/example/other/pull/42", "https://github.com/example/repo/pull/44"}},
+		{"spread", `tools.exec_command({cmd:'gh pr view 42 -R example/repo', ...params})`, nil},
+		{"computed", `tools.exec_command({cmd:'gh pr view 42 -R example/repo', ['cmd']: other})`, nil},
+		{"functions", `function f() { tools.exec_command({cmd:'gh pr view 41'}); } const g = () => tools.exec_command({cmd:'gh pr view 42'}); const o = { f() { tools.exec_command({cmd:'gh pr view 43'}); } };`, nil},
 		{"raw shell", `gh pr view 42 -R example/repo`, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

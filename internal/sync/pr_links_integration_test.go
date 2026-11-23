@@ -163,6 +163,7 @@ func TestCommandPRCheckoutRemote(t *testing.T) {
 	}{
 		{"single Claude", "[remote \"origin\"]\n url = https://github.com/example/repo.git\n", "", parser.AgentClaude, true},
 		{"ambiguous", "[remote \"origin\"]\n url = https://github.com/example/repo.git\n[remote \"upstream\"]\n url = https://github.com/example/other.git\n", "", parser.AgentCodex, false},
+		{"recorded overrides checkout", "[remote \"origin\"]\n url = https://github.com/example/other.git\n", "https://github.com/example/repo.git", parser.AgentCodex, true},
 		{"ambiguous recorded", "[remote \"origin\"]\n url = https://github.com/example/repo.git\n[remote \"upstream\"]\n url = https://github.com/example/other.git\n", "https://github.com/example/repo.git", parser.AgentCodex, true},
 		{"case insensitive", "[remote \"origin\"]\n url = https://github.com/example/repo.git\n", "git@github.com:Example/Repo.git", parser.AgentCodex, true},
 	} {

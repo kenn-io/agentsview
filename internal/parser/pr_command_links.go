@@ -18,9 +18,10 @@ var (
 )
 
 type shellCall struct {
-	Words   []string
-	Literal []bool
-	Tainted bool
+	Words         []string
+	Literal       []bool
+	Tainted       bool
+	HostUncertain bool
 }
 
 func shellLiteral(parts []syntax.WordPart) (string, bool) {
@@ -53,61 +54,65 @@ func shellLiteral(parts []syntax.WordPart) (string, bool) {
 
 // SamePRWorkingDirectory compares paths using the recorded checkout's syntax.
 func SamePRWorkingDirectory(cwd, dir string) bool {
-	if cwd == "" || dir == "" {
-		return false
-	}
-	windows := looksLikeWindowsPath(cwd) || len(cwd) >= 3 && cwd[1] == ':' && cwd[2] == '/'
-	if windows {
-		cwd = strings.ReplaceAll(cwd, `\`, "/")
-		dir = strings.ReplaceAll(dir, `\`, "/")
-		if strings.HasPrefix(dir, "/") && !strings.HasPrefix(dir, "//") {
-			return false
-		}
-		if strings.HasPrefix(dir, "//") || len(dir) >= 2 && dir[1] == ':' {
-			return path.Clean(cwd) == path.Clean(dir)
-		}
-		if strings.HasPrefix(cwd, "//") {
-			parts := strings.SplitN(cwd[2:], "/", 3)
-			if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
-				return false
-			}
-			rest := "/"
-			if len(parts) == 3 {
-				rest += parts[2]
-			}
-			return path.Clean(rest) == path.Join(rest, dir)
-		}
-		return path.Clean(cwd[2:]) == path.Join(cwd[2:], dir)
-	} else if path.IsAbs(dir) {
-		return path.Clean(cwd) == path.Clean(dir)
-	}
-	return path.Clean(cwd) == path.Clean(path.Join(cwd, dir))
+	return cwd != "" && dir != "" && path.Clean(strings.ReplaceAll(cwd, `\`, "/")) == path.Clean(strings.ReplaceAll(dir, `\`, "/"))
 }
 
 // CommandPRLinks derives links and reports whether the shell context changed.
 func CommandPRLinks(ctx context.Context, command, cwd, remote string) ([]PRLink, bool, error) {
+	return commandPRLinks(ctx, command, cwd, remote, false)
+}
+
+func commandPRLinks(ctx context.Context, command, cwd, remote string, hostUncertain bool) ([]PRLink, bool, error) {
 	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
 	if err != nil {
 		return nil, true, nil //nolint:nilerr // Malformed optional shell input leaves the shell context unknown.
 	}
 	var calls []shellCall
 	tainted := false
+	type shellScope struct {
+		restore bool
+		tainted bool
+	}
+	var scopes []shellScope
 	syntax.Walk(file, func(node syntax.Node) bool {
-		switch n := node.(type) {
-		case *syntax.FuncDecl:
+		if node == nil {
+			scope := scopes[len(scopes)-1]
+			scopes = scopes[:len(scopes)-1]
+			if scope.restore {
+				tainted = scope.tainted
+			}
+			return true
+		}
+		if _, ok := node.(*syntax.FuncDecl); ok {
 			tainted = true
 			return false
-		case *syntax.Assign:
-			if n.Name != nil && (n.Name.Value == "GH_REPO" || n.Name.Value == "GH_HOST") {
-				tainted = true
-			}
-		case *syntax.CallExpr:
-			for _, assignment := range n.Assigns {
+		}
+		scope := shellScope{tainted: tainted}
+		switch node.(type) {
+		case *syntax.Subshell, *syntax.CmdSubst, *syntax.ProcSubst:
+			scope.restore = true
+		}
+		scopes = append(scopes, scope)
+		switch n := node.(type) {
+		case *syntax.DeclClause:
+			for _, assignment := range n.Args {
 				if assignment.Name != nil && (assignment.Name.Value == "GH_REPO" || assignment.Name.Value == "GH_HOST") {
 					tainted = true
 				}
 			}
-			var call shellCall
+		case *syntax.CallExpr:
+			call := shellCall{Tainted: tainted, HostUncertain: hostUncertain}
+			for _, assignment := range n.Assigns {
+				if assignment.Name != nil && (assignment.Name.Value == "GH_REPO" || assignment.Name.Value == "GH_HOST") {
+					call.Tainted = true
+					if assignment.Name.Value == "GH_HOST" {
+						call.HostUncertain = true
+					}
+					if len(n.Args) == 0 {
+						tainted = true
+					}
+				}
+			}
 			for _, word := range n.Args {
 				value, literal := shellLiteral(word.Parts)
 				call.Words = append(call.Words, value)
@@ -121,16 +126,9 @@ func CommandPRLinks(ctx context.Context, command, cwd, remote string) ([]PRLink,
 					}
 				case "pushd", "popd", "eval", "source", ".":
 					tainted = true
-				case "unset":
-					for _, arg := range call.Words[1:] {
-						name, _, _ := strings.Cut(arg, "=")
-						if name == "GH_REPO" || name == "GH_HOST" {
-							tainted = true
-						}
-					}
 				}
 			}
-			call.Tainted = tainted
+			call.Tainted = call.Tainted || tainted
 			calls = append(calls, call)
 		}
 		return true
@@ -145,6 +143,21 @@ func CommandPRLinks(ctx context.Context, command, cwd, remote string) ([]PRLink,
 			callRemote = ""
 		}
 		lists = append(lists, ghPRCallLinks(ctx, call, callRemote))
+		if len(call.Words) > 0 && call.Literal[0] {
+			switch path.Base(call.Words[0]) {
+			case "sh", "bash", "zsh":
+				for i := 1; i+1 < len(call.Words); i++ {
+					if call.Literal[i] && (call.Words[i] == "-c" || call.Words[i] == "-lc") && call.Literal[i+1] {
+						links, _, err := commandPRLinks(ctx, call.Words[i+1], cwd, callRemote, call.HostUncertain)
+						if err != nil {
+							return nil, false, err
+						}
+						lists = append(lists, links)
+						break
+					}
+				}
+			}
+		}
 		links, err := PromptPRLinksContext(ctx, launcherPrompt(call.Words, call.Literal))
 		if err != nil {
 			return nil, false, err
@@ -219,7 +232,7 @@ func ghPRCallLinks(ctx context.Context, call shellCall, remote string) []PRLink 
 	takesValue := strings.Fields(valueFlags[action])
 	for j := i + 2; j < len(args); j++ {
 		if !call.Literal[j] {
-			if selector == "" {
+			if strings.HasPrefix(args[j], "-R") || strings.HasPrefix(args[j], "--repo") {
 				return nil
 			}
 			continue
@@ -257,6 +270,9 @@ func ghPRCallLinks(ctx context.Context, call shellCall, remote string) []PRLink 
 		return nil
 	}
 	host := "github.com"
+	if call.HostUncertain && (repo == "" || len(strings.Split(repo, "/")) != 3) {
+		return nil
+	}
 	if repo == "" && repoSpecified {
 		return nil
 	}
@@ -284,58 +300,11 @@ func launcherPrompt(words []string, literal []bool) string {
 	if program != "claude" && program != "codex" {
 		return ""
 	}
-	printMode, execMode := false, false
-	var prompt string
-	endOptions := false
+	var wordsToScan []string
 	for i := 1; i < len(words); i++ {
-		if !literal[i] {
-			return ""
-		}
-		arg := words[i]
-		if !endOptions && arg == "--" {
-			endOptions = true
-			continue
-		}
-		if endOptions {
-			if prompt == "" {
-				prompt = arg
-			}
-			continue
-		}
-		if arg == "--help" || arg == "-h" || arg == "--version" || arg == "-V" || program == "claude" && arg == "-v" {
-			return ""
-		}
-		if program == "claude" && (arg == "-p" || arg == "--print") {
-			printMode = true
-			continue
-		}
-		if program == "codex" && !execMode && (arg == "exec" || arg == "e") {
-			execMode = true
-			continue
-		}
-		if strings.HasPrefix(arg, "-") {
-			if !strings.Contains(arg, "=") && launcherValueFlag(program, arg) && i+1 < len(words) {
-				i++
-			}
-			continue
-		}
-		if program == "codex" && !execMode {
-			return ""
-		}
-		if prompt == "" {
-			prompt = arg
+		if literal[i] {
+			wordsToScan = append(wordsToScan, words[i])
 		}
 	}
-	if program == "claude" && !printMode || program == "codex" && (!execMode || prompt == "resume" || prompt == "fork" || prompt == "review" || prompt == "help") {
-		return ""
-	}
-	return prompt
-}
-
-func launcherValueFlag(program, flag string) bool {
-	switch flag {
-	case "-m", "--model", "-c", "--config", "--settings", "--output-format", "--permission-mode", "--resume", "-r", "--output-schema", "--output-last-message", "-o", "-C", "--cd", "--add-dir", "--system-prompt", "--append-system-prompt":
-		return true
-	}
-	return program == "codex" && (flag == "-p" || flag == "--profile" || flag == "-s" || flag == "--sandbox")
+	return strings.Join(wordsToScan, "\n")
 }
