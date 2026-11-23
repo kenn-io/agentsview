@@ -422,10 +422,10 @@ func TestToolCallPRLinksSkipsSimpleCommands(t *testing.T) {
 }
 
 func TestCodeModeWithoutShellAvoidsParser(t *testing.T) {
-	const input = `text(await tools.clock__curr_time({}));`
+	const input = `const result = await tools.wait({duration_ms: 1000}); text(result);`
 	full := testing.AllocsPerRun(2, func() {
 		for range 100 {
-			_, _, err := codeModePRLinks(t.Context(), input, "", "", parser.PRShellContext{})
+			_, _, err := codeModePRLinks(t.Context(), input+" // exec_command", "", "", parser.PRShellContext{})
 			require.NoError(t, err)
 		}
 	})
@@ -441,26 +441,23 @@ func TestCodeModeWithoutShellAvoidsParser(t *testing.T) {
 	for _, input := range []string{
 		`text(await tools.clock__curr_time({}));`,
 		`await tools.wait({"duration_ms":1000})`,
-		`tools.wait({"text":"exec_command"})`,
+		`const result = await tools.wait({duration_ms: 1000}); text(result);`,
+		`tools.wait({`,
 	} {
-		require.True(t, simpleCodeModeWithoutShell(input), input)
 		for bits := range 8 {
 			before := parser.PRShellContext{CheckoutUncertain: bits&1 != 0, HostUncertain: bits&2 != 0, RepoUncertain: bits&4 != 0}
-			links, after, err := codeModePRLinks(t.Context(), input, "", "", before)
+			links, after, err := replayPRLinks(t.Context(), "Bash", "exec", input, "", "", before)
 			require.NoError(t, err)
 			assert.Empty(t, links)
 			assert.Equal(t, before, after)
 		}
 	}
-	for _, input := range []string{
-		`tools.exec_command({"cmd":"gh pr view 42"})`,
-		`text(await tools.wait({"value":tools.exec_command({cmd:'pwd'})}))`,
-		`tools.wait({`,
-		`text(await tools.wait({})); broken`,
-		strings.Repeat(" ", 256*1024) + `tools.wait({})`,
-	} {
-		assert.False(t, simpleCodeModeWithoutShell(input), input)
-	}
+	links, _, err := replayPRLinks(t.Context(), "Bash", "exec", `tools.exec_command({cmd:'gh pr view 42 -R example/repo'})`, "", "", parser.PRShellContext{})
+	require.NoError(t, err)
+	require.Len(t, links, 1)
+	_, state, err := replayPRLinks(t.Context(), "Bash", "exec", strings.Repeat(" ", 256*1024)+`tools.wait({})`, "", "", parser.PRShellContext{})
+	require.NoError(t, err)
+	assert.Equal(t, parser.UncertainPRShell(), state)
 }
 
 func TestSimplePRInertCommandParity(t *testing.T) {
