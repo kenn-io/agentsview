@@ -1357,10 +1357,8 @@ To collect your Muse Personal sessions:
    curl -fsSL https://agentsview.io/install.sh | bash
    ```
 
-   The installer fetches the latest release. Release 0.47.0 and earlier cannot
-   read Muse Personal sessions. Support is on `main` and ships in the first
-   release that lists it in the [changelog](/docs/changelog/); until then, the
-   installed CLI finds no Muse Personal sessions.
+   The installer fetches the latest release. Muse Personal requires 0.48.0 or
+   later.
 
 1. Ask your Muse to run `agentsview source sync` on that machine. AgentsView
    reads `~/agents/agent-<uuid>/sessions/<session-uuid>.jsonl` under your
@@ -2379,8 +2377,8 @@ Change detection tracks file size, mtime, inode, and device to validate
 incremental parses more reliably, and a pool of 8 workers processes files in parallel
 during sync.
 
-On `main` (not yet released), shared JSONL discovery can isolate an inaccessible
-file or subtree when the provider supports scoped traversal. A dangling symlink
+Shared JSONL discovery can isolate an inaccessible file or subtree when the
+provider supports scoped traversal. A dangling symlink
 stays incomplete, while retries inspect only the unfinished scope; archived
 sessions beneath that scope stay available, and unrelated session changes keep
 importing. Restoring access lets the retained retry finish without a daemon
