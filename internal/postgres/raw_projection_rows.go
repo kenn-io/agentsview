@@ -162,7 +162,7 @@ func publishRawRevision(ctx context.Context, tx *sql.Tx, identityChanged bool, c
 
 // materializeGroup requires the caller to hold the group's row lock. It
 // returns the embedding changes for the caller to pass to publishRawRevision.
-func (s *RawProjectionStore) materializeGroup(ctx context.Context, tx *sql.Tx, group string, fresh map[string][]byte) ([]rawEmbeddingChange, error) {
+func (s *RawProjectionStore) materializeGroup(ctx context.Context, tx *sql.Tx, group string, fresh map[string][]byte, refreshLinks bool) ([]rawEmbeddingChange, error) {
 	if err := reconcileRawPrefixes(ctx, tx, group); err != nil {
 		return nil, err
 	}
@@ -248,8 +248,10 @@ func (s *RawProjectionStore) materializeGroup(ctx context.Context, tx *sql.Tx, g
 			changes = append(changes, rawEmbeddingChange{session: c.id, revision: c.revision, action: action})
 		}
 	}
-	if _, err := syncSelectedRawPRLinks(ctx, tx, group, nil, true); err != nil {
-		return nil, err
+	if refreshLinks {
+		if _, err := syncSelectedRawPRLinks(ctx, tx, group, nil, true); err != nil {
+			return nil, err
+		}
 	}
 	return changes, nil
 }

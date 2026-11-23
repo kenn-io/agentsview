@@ -288,15 +288,15 @@ func appendSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id
 	if err := tx.QueryRow(`SELECT COALESCE(cwd,''), `+prLinkRemoteSQL+` FROM sessions WHERE id=?`, id, id).Scan(&cwd, &remote); err != nil {
 		return err
 	}
-	sharedCwdChanged, checked := false, false
-	tools, err := toolCallPRLinks(ctx, messages, cwd, remote, &sharedCwdChanged)
+	sharedContext, checked := sharedPRContext{}, false
+	tools, err := toolCallPRLinks(ctx, messages, cwd, remote, &sharedContext)
 	if err != nil {
 		return err
 	}
 	for _, message := range messages {
 		for _, call := range message.ToolCalls {
 			if len(tools) > 0 && call.Category == "Bash" && call.ToolName == "Bash" {
-				sharedCwdChanged, err = priorBashDirectoryChangeTx(tx, id, messages[0].Ordinal)
+				sharedContext, err = priorBashContextChangeTx(tx, id, messages[0].Ordinal)
 				if err != nil {
 					return err
 				}
@@ -308,8 +308,8 @@ func appendSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id
 			break
 		}
 	}
-	if checked && sharedCwdChanged {
-		tools, err = toolCallPRLinks(ctx, messages, cwd, remote, &sharedCwdChanged)
+	if checked && (sharedContext.directory || sharedContext.repository) {
+		tools, err = toolCallPRLinks(ctx, messages, cwd, remote, &sharedContext)
 		if err != nil {
 			return err
 		}
@@ -376,7 +376,9 @@ func (db *DB) upgradePromptPRLinksTx(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
-func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote string, sharedCwdChanged bool) ([]PRLink, error) {
+type sharedPRContext struct{ directory, repository bool }
+
+func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote string, sharedContext sharedPRContext) ([]PRLink, error) {
 	if category == "Task" {
 		var payload struct {
 			Prompt  string         `json:"prompt"`
@@ -418,9 +420,9 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 	if dir == "" {
 		dir = payload.WorkingDirectory
 	}
-	allowBare := !sharedCwdChanged
+	allowBare := !sharedContext.directory && !sharedContext.repository
 	if dir != "" {
-		allowBare = samePRWorkingDirectory(cwd, dir)
+		allowBare = !sharedContext.repository && samePRWorkingDirectory(cwd, dir)
 	}
 	if !allowBare {
 		remote = ""
@@ -566,53 +568,64 @@ func samePRWorkingDirectory(cwd, dir string) bool {
 
 // ToolCallPRLinks derives links from a transcript's tool calls.
 func ToolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string) ([]PRLink, error) {
-	changed := false
+	changed := sharedPRContext{}
 	return toolCallPRLinks(ctx, messages, cwd, remote, &changed)
 }
 
-func toolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string, sharedCwdChanged *bool) ([]PRLink, error) {
+func toolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string, sharedContext *sharedPRContext) ([]PRLink, error) {
 	var lists [][]PRLink
 	for _, message := range messages {
 		for _, call := range message.ToolCalls {
-			links, err := callPRLinks(ctx, call.Category, call.ToolName, call.InputJSON, cwd, remote, call.ToolName == "Bash" && *sharedCwdChanged)
+			state := sharedPRContext{}
+			if call.ToolName == "Bash" {
+				state = *sharedContext
+			}
+			links, err := callPRLinks(ctx, call.Category, call.ToolName, call.InputJSON, cwd, remote, state)
 			if err != nil {
 				return nil, err
 			}
 			lists = append(lists, links)
-			if call.Category == "Bash" && call.ToolName == "Bash" && bashInputChangesDirectory(call.InputJSON) {
-				*sharedCwdChanged = true
+			if call.Category == "Bash" && call.ToolName == "Bash" {
+				change := bashInputChangesContext(call.InputJSON)
+				sharedContext.directory = sharedContext.directory || change.directory
+				sharedContext.repository = sharedContext.repository || change.repository
 			}
 		}
 	}
 	return parser.CombinePRLinks(lists...), nil
 }
 
-func bashInputChangesDirectory(input string) bool {
+func bashInputChangesContext(input string) sharedPRContext {
 	if len(input) > 256*1024 {
-		return false
+		return sharedPRContext{}
 	}
 	var payload struct {
 		Command string `json:"command"`
 	}
-	return json.Unmarshal([]byte(input), &payload) == nil && parser.BashChangesWorkingDirectory(payload.Command)
+	if json.Unmarshal([]byte(input), &payload) != nil {
+		return sharedPRContext{}
+	}
+	directory, repository := parser.BashChangesRepositoryContext(payload.Command)
+	return sharedPRContext{directory, repository}
 }
 
-func priorBashDirectoryChangeTx(tx transactionQueries, id string, before int) (bool, error) {
+func priorBashContextChangeTx(tx transactionQueries, id string, before int) (sharedPRContext, error) {
 	rows, err := tx.Query(`SELECT t.input_json FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND t.category='Bash' AND t.tool_name='Bash' AND t.input_json IS NOT NULL AND m.ordinal<? ORDER BY m.ordinal,t.id`, id, before)
 	if err != nil {
-		return false, err
+		return sharedPRContext{}, err
 	}
 	defer rows.Close()
+	var result sharedPRContext
 	for rows.Next() {
 		var input string
 		if err := rows.Scan(&input); err != nil {
-			return false, err
+			return sharedPRContext{}, err
 		}
-		if bashInputChangesDirectory(input) {
-			return true, nil
-		}
+		change := bashInputChangesContext(input)
+		result.directory = result.directory || change.directory
+		result.repository = result.repository || change.repository
 	}
-	return false, rows.Err()
+	return result, rows.Err()
 }
 
 func storedToolCallPRLinksTx(ctx context.Context, tx transactionQueries, id, cwd, remote string) ([]PRLink, error) {
@@ -622,7 +635,7 @@ func storedToolCallPRLinksTx(ctx context.Context, tx transactionQueries, id, cwd
 	}
 	defer rows.Close()
 	var lists [][]PRLink
-	changed := false
+	changed := sharedPRContext{}
 	for rows.Next() {
 		var call ToolCall
 		if err := rows.Scan(&call.Category, &call.ToolName, &call.InputJSON); err != nil {

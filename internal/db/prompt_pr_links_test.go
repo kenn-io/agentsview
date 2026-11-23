@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -492,4 +493,38 @@ func TestToolPRLinksSharedShellDirectoryAppend(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got.PRLinks, 1)
 	assert.Equal(t, "https://github.com/example/repo/pull/62", got.PRLinks[0].URL)
+}
+
+func TestToolPRLinksSharedShellRepositoryChanges(t *testing.T) {
+	for _, command := range []string{
+		`export GH_REPO=example/other`,
+		`export GH_HOST=git.example`,
+		`change_repo() { export GH_REPO=example/other; }; change_repo`,
+		`git config remote.origin.url https://github.com/example/other.git`,
+		`git remote set-url origin https://github.com/example/other.git`,
+		`echo "$(git config remote.origin.url https://github.com/example/other.git)"`,
+	} {
+		t.Run(command, func(t *testing.T) {
+			d := testDB(t)
+			s := Session{ID: "shared-shell-repo", Project: "project", Machine: "local", Agent: "claude", Cwd: "/work/repo"}
+			require.NoError(t, d.UpsertSession(t.Context(), s))
+			obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://github.com/example/repo.git")
+			require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), obs))
+			input, err := json.Marshal(map[string]string{"command": command})
+			require.NoError(t, err)
+			message := func(ordinal int, input string) Message {
+				return Message{SessionID: s.ID, Ordinal: ordinal, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: input}}}
+			}
+			require.NoError(t, d.InsertMessages(t.Context(), []Message{message(0, string(input))}))
+			require.NoError(t, d.InsertMessages(t.Context(), []Message{message(1, `{"command":"gh pr view 42"}`)}))
+			require.NoError(t, d.InsertMessages(t.Context(), []Message{message(2, `{"command":"gh pr view 43","workdir":"/work/repo"}`)}))
+			got, err := d.GetSession(t.Context(), s.ID)
+			require.NoError(t, err)
+			assert.Empty(t, got.PRLinks)
+			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error { return refreshSessionPromptPRLinksTx(t.Context(), tx, s.ID) }))
+			got, err = d.GetSession(t.Context(), s.ID)
+			require.NoError(t, err)
+			assert.Empty(t, got.PRLinks)
+		})
+	}
 }

@@ -365,7 +365,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			if !changed && !remoteChanged[group] && !staleFrictionGroups[group] {
 				continue
 			}
-			changes, err := s.materializeGroup(ctx, tx, group, fresh)
+			changes, err := s.materializeGroup(ctx, tx, group, fresh, true)
 			if err != nil {
 				return err
 			}

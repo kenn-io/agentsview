@@ -310,17 +310,48 @@ func literalCondition(stmts []*syntax.Stmt) (bool, bool) {
 	return word == "true", literal && (word == "true" || word == "false")
 }
 
-// BashChangesWorkingDirectory reports literal cd commands in a shared Bash call.
-func BashChangesWorkingDirectory(command string) bool {
+// BashChangesRepositoryContext reports shared shell changes that make a recorded remote uncertain.
+func BashChangesRepositoryContext(command string) (bool, bool) {
 	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
 	if err != nil {
-		return false
+		return false, false
 	}
-	changed := false
+	repositoryChanged := strings.Contains(command, "GH_REPO") || strings.Contains(command, "GH_HOST")
+	functions := make(map[string]bool)
 	syntax.Walk(file, func(node syntax.Node) bool {
-		if changed {
+		if fn, ok := node.(*syntax.FuncDecl); ok {
+			functions[fn.Name.Value] = true
+		}
+		return true
+	})
+	syntax.Walk(file, func(node syntax.Node) bool {
+		if repositoryChanged {
 			return false
 		}
+		switch call := node.(type) {
+		case *syntax.FuncDecl:
+			return false
+		case *syntax.CallExpr:
+			if len(call.Args) == 0 {
+				return false
+			}
+			name, literal := shellLiteral(call.Args[0].Parts)
+			if literal && functions[name] {
+				repositoryChanged = true
+				return false
+			}
+			if literal && name == "git" && len(call.Args) > 1 {
+				subcommand, ok := shellLiteral(call.Args[1].Parts)
+				if ok && (subcommand == "config" || subcommand == "remote") {
+					repositoryChanged = true
+					return false
+				}
+			}
+		}
+		return !repositoryChanged
+	})
+	directoryChanged := false
+	syntax.Walk(file, func(node syntax.Node) bool {
 		switch call := node.(type) {
 		case *syntax.Subshell, *syntax.FuncDecl, *syntax.CmdSubst, *syntax.ProcSubst:
 			return false
@@ -333,13 +364,12 @@ func BashChangesWorkingDirectory(command string) bool {
 				return false
 			}
 			if len(call.Args) == 1 {
-				changed = true
-				return false
+				directoryChanged = true
+			} else {
+				_, directoryChanged = shellLiteral(call.Args[1].Parts)
 			}
-			_, changed = shellLiteral(call.Args[1].Parts)
-			return false
 		}
-		return !changed
+		return !directoryChanged
 	})
-	return changed
+	return directoryChanged, repositoryChanged
 }
