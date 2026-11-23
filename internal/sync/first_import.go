@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -65,7 +66,11 @@ func (e *Engine) RunFirstImport(ctx context.Context, onProgress ProgressFunc) (S
 	if ctx.Err() != nil {
 		return stats, true, ctx.Err()
 	}
-	return e.runStartupSyncFallback(ctx, onProgress, &firstImportWave{onWrite: onWrite})
+	stats, ran, err := e.runStartupSyncFallback(ctx, onProgress, &firstImportWave{onWrite: onWrite})
+	if ran && err == nil && ctx.Err() == nil && !stats.Aborted {
+		err = e.db.SetSyncState(ctx, db.FirstImportCompletedKey, "1")
+	}
+	return stats, ran, err
 }
 
 func (e *Engine) emitFirstImportRefreshes(ctx context.Context, refresh <-chan struct{}, done chan<- struct{}) {

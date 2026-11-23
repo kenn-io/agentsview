@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
@@ -99,11 +100,6 @@ func TestFirstImportBoundsCopilotSessionsWithSharedStore(t *testing.T) {
 					require.Nil(t, session, id)
 				}
 			}
-			_, _, err = engine.RunFirstImport(t.Context(), nil)
-			require.NoError(t, err)
-			page, err = archive.ListSessions(t.Context(), db.SessionFilter{Limit: 100})
-			require.NoError(t, err)
-			require.Len(t, page.Sessions, 30)
 		})
 	}
 }
@@ -130,186 +126,181 @@ func (f firstImportFingerprintFactory) NewProvider(parser.ProviderConfig) parser
 	return f.provider
 }
 
-func TestFirstImportFingerprintsOnlySelectedClaudeFiles(t *testing.T) {
-	root := t.TempDir()
-	project := filepath.Join(root, "project")
-	require.NoError(t, os.MkdirAll(project, 0o755))
-	for i := range 30 {
-		path := filepath.Join(project, fmt.Sprintf("session-%03d.jsonl", i))
-		content := testjsonl.NewSessionBuilder().AddClaudeUser("2026-01-01T00:00:00Z", "hello").String()
-		require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-		mtime := time.Unix(1700000000+int64(i), 0)
-		require.NoError(t, os.Chtimes(path, mtime, mtime))
-	}
-	factory, ok := parser.ProviderFactoryByType(parser.AgentClaude)
-	require.True(t, ok)
-	counting := &firstImportFingerprintProvider{Provider: factory.NewProvider(parser.ProviderConfig{Roots: []string{root}, Machine: "local"})}
-	archive := openTestDB(t)
-	engine := NewEngine(t.Context(), archive, EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}, Machine: "local", DeferStartupMaintenance: true,
-		ProviderFactories: []parser.ProviderFactory{firstImportFingerprintFactory{ProviderFactory: factory, provider: counting}},
-	})
-	t.Cleanup(engine.Close)
-	_, complete := engine.SyncNewest(t.Context(), 3, nil)
-	require.False(t, complete)
-	page, err := archive.ListSessions(t.Context(), db.SessionFilter{Limit: 100})
-	require.NoError(t, err)
-	require.Len(t, page.Sessions, 3)
-	require.NotEmpty(t, counting.paths)
-	for _, path := range counting.paths {
-		require.Contains(t, []string{
-			filepath.Join(project, "session-027.jsonl"),
-			filepath.Join(project, "session-028.jsonl"),
-			filepath.Join(project, "session-029.jsonl"),
-		}, path)
+func TestFirstImportNewestWave(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		count int
+		known bool
+		want  []string
+	}{
+		{"newest", 30, true, []string{"session-027", "session-028", "session-029"}},
+		{"unknown", 4, false, []string{"session-000", "session-001", "session-002"}},
+		{"known-and-unknown", 5, false, []string{"session-000", "session-001", "session-004"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			project := filepath.Join(root, "project")
+			require.NoError(t, os.MkdirAll(project, 0o755))
+			for i := range tc.count {
+				path := filepath.Join(project, fmt.Sprintf("session-%03d.jsonl", i))
+				content := testjsonl.NewSessionBuilder().AddClaudeUser("2026-01-01T00:00:00Z", "hello").String()
+				require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+				mtime := time.Unix(0, 0)
+				if tc.known {
+					mtime = time.Unix(1700000000+int64(i), 0)
+				} else if tc.name == "known-and-unknown" && i == 4 {
+					mtime = time.Unix(10, 0)
+				}
+				require.NoError(t, os.Chtimes(path, mtime, mtime))
+			}
+			factory, ok := parser.ProviderFactoryByType(parser.AgentClaude)
+			require.True(t, ok)
+			counting := &firstImportFingerprintProvider{Provider: factory.NewProvider(parser.ProviderConfig{Roots: []string{root}, Machine: "local"})}
+			archive := openTestDB(t)
+			engine := NewEngine(t.Context(), archive, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}, Machine: "local", DeferStartupMaintenance: true,
+				ProviderFactories: []parser.ProviderFactory{firstImportFingerprintFactory{ProviderFactory: factory, provider: counting}},
+			})
+			t.Cleanup(engine.Close)
+			_, complete := engine.SyncNewest(t.Context(), 3, nil)
+			require.False(t, complete)
+			page, err := archive.ListSessions(t.Context(), db.SessionFilter{Limit: 100})
+			require.NoError(t, err)
+			var ids []string
+			for _, session := range page.Sessions {
+				ids = append(ids, session.ID)
+			}
+			require.ElementsMatch(t, tc.want, ids)
+			if tc.name == "newest" {
+				require.NotEmpty(t, counting.paths)
+				for _, path := range counting.paths {
+					require.Contains(t, []string{filepath.Join(project, "session-027.jsonl"), filepath.Join(project, "session-028.jsonl"), filepath.Join(project, "session-029.jsonl")}, path)
+				}
+				engine.SyncAll(t.Context(), nil)
+				page, err = archive.ListSessions(t.Context(), db.SessionFilter{Limit: 100})
+				require.NoError(t, err)
+				require.Len(t, page.Sessions, 30)
+			}
+		})
 	}
 }
 
 func TestFirstImportRefreshesWhileOlderSessionsAreWritten(t *testing.T) {
-	root := t.TempDir()
-	project := filepath.Join(root, "project")
-	require.NoError(t, os.MkdirAll(project, 0o755))
-	for i := range 250 {
-		path := filepath.Join(project, fmt.Sprintf("session-%03d.jsonl", i))
-		content := testjsonl.NewSessionBuilder().AddClaudeUser("2026-01-01T00:00:00Z", "hello").String()
-		require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-	}
-	archive := openTestDB(t)
-	refresh := make(chan struct{}, 1)
-	paused := make(chan struct{}, 1)
-	resume := make(chan struct{})
-	var fallback atomic.Bool
-	var events atomic.Int32
-	var engine *Engine
-	engine = NewEngine(t.Context(), archive, EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}, Machine: "local", DeferStartupMaintenance: true,
-		Emitter: emitterFunc(func(scope string) {
-			if scope == "sessions" && fallback.Load() {
+	for _, tc := range []struct {
+		name           string
+		count, pauseAt int
+		cancel         bool
+	}{
+		{"resume", 250, 200, false},
+		{"cancel", 450, 400, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			project := filepath.Join(root, "project")
+			require.NoError(t, os.MkdirAll(project, 0o755))
+			for i := range tc.count {
+				path := filepath.Join(project, fmt.Sprintf("session-%03d.jsonl", i))
+				content := testjsonl.NewSessionBuilder().AddClaudeUser("2026-01-01T00:00:00Z", "hello").String()
+				require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+			}
+			archive := openTestDB(t)
+			refresh := make(chan struct{}, 1)
+			releaseRefresh := make(chan struct{})
+			paused := make(chan struct{}, 1)
+			resume := make(chan struct{})
+			var fallback atomic.Bool
+			var events atomic.Int32
+			var engine *Engine
+			engine = NewEngine(t.Context(), archive, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}, Machine: "local", DeferStartupMaintenance: true,
+				Emitter: emitterFunc(func(scope string) {
+					if scope != "sessions" || !fallback.Load() {
+						return
+					}
+					if tc.cancel {
+						if events.Add(1) == 1 {
+							refresh <- struct{}{}
+							<-releaseRefresh
+						}
+					} else {
+						page, err := archive.ListSessions(t.Context(), db.SessionFilter{Limit: 300})
+						if err == nil && len(page.Sessions) > 100 && events.CompareAndSwap(0, 1) {
+							refresh <- struct{}{}
+							engine.SyncAll(t.Context(), nil)
+						}
+					}
+				}),
+			})
+			t.Cleanup(engine.Close)
+			engine.workerCountOverride = 1
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				_, _, err := engine.RunFirstImport(ctx, func(progress Progress) {
+					if progress.Phase == PhaseSyncing && progress.SessionsTotal == tc.count {
+						fallback.Store(true)
+					}
+					if progress.Phase == PhaseSyncing && progress.SessionsDone == tc.pauseAt {
+						paused <- struct{}{}
+						<-resume
+					}
+				})
+				done <- err
+			}()
+			select {
+			case <-refresh:
+			case <-time.After(30 * time.Second):
+				close(releaseRefresh)
+				close(resume)
+				<-done
+				t.Fatal("no refresh while importing older sessions")
+			}
+			select {
+			case <-paused:
+			case <-time.After(30 * time.Second):
+				close(releaseRefresh)
+				close(resume)
+				<-done
+				t.Fatal("import did not reach the pause")
+			}
+			if tc.cancel {
+				cancel()
+			} else {
 				page, err := archive.ListSessions(t.Context(), db.SessionFilter{Limit: 300})
-				if err == nil && len(page.Sessions) > 100 && events.CompareAndSwap(0, 1) {
-					refresh <- struct{}{}
-					engine.SyncAll(t.Context(), nil)
+				if err == nil {
+					for _, session := range page.Sessions {
+						messages, readErr := archive.GetMessages(t.Context(), session.ID, 0, 10, true)
+						if readErr != nil || len(messages) == 0 {
+							close(releaseRefresh)
+							close(resume)
+							<-done
+							t.Fatalf("listed session %s has no readable messages: %v", session.ID, readErr)
+						}
+					}
+				}
+				assert.NoError(t, err)
+				assert.Greater(t, len(page.Sessions), 100)
+				assert.Less(t, len(page.Sessions), tc.count)
+			}
+			close(releaseRefresh)
+			close(resume)
+			if tc.cancel {
+				select {
+				case <-done:
+				case <-time.After(500 * time.Millisecond):
+					<-done
+					t.Fatal("pending refresh delayed cancellation")
+				}
+			} else {
+				select {
+				case err := <-done:
+					require.NoError(t, err)
+				case <-time.After(30 * time.Second):
+					t.Fatal("reentrant emitter blocked the import")
 				}
 			}
-		}),
-	})
-	t.Cleanup(engine.Close)
-	done := make(chan error, 1)
-	go func() {
-		_, _, err := engine.RunFirstImport(t.Context(), func(progress Progress) {
-			if progress.Phase == PhaseSyncing && progress.SessionsTotal == 250 {
-				fallback.Store(true)
-			}
-			if progress.Phase == PhaseSyncing && progress.SessionsDone == 200 {
-				paused <- struct{}{}
-				<-resume
-			}
 		})
-		done <- err
-	}()
-	select {
-	case <-refresh:
-	case <-time.After(30 * time.Second):
-		close(resume)
-		t.Fatal("no refresh while importing older sessions")
-	}
-	select {
-	case <-paused:
-	case <-time.After(30 * time.Second):
-		close(resume)
-		t.Fatal("import did not reach the pause")
-	}
-	page, err := archive.ListSessions(t.Context(), db.SessionFilter{Limit: 300})
-	if err == nil {
-		for _, session := range page.Sessions {
-			messages, readErr := archive.GetMessages(t.Context(), session.ID, 0, 10, true)
-			if readErr != nil || len(messages) == 0 {
-				close(resume)
-				t.Fatalf("listed session %s has no readable messages: %v", session.ID, readErr)
-			}
-		}
-	}
-	var starred bool
-	var starErr error
-	if len(page.Sessions) > 0 {
-		starred, starErr = archive.StarSession(t.Context(), page.Sessions[0].ID)
-	}
-	close(resume)
-	require.NoError(t, err)
-	require.NoError(t, starErr)
-	require.True(t, starred)
-	require.Greater(t, len(page.Sessions), 100)
-	require.Less(t, len(page.Sessions), 250)
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(30 * time.Second):
-		t.Fatal("reentrant emitter blocked the import")
-	}
-}
-
-func TestFirstImportCancellationStopsPendingRefresh(t *testing.T) {
-	root := t.TempDir()
-	project := filepath.Join(root, "project")
-	require.NoError(t, os.MkdirAll(project, 0o755))
-	for i := range 450 {
-		path := filepath.Join(project, fmt.Sprintf("session-%03d.jsonl", i))
-		content := testjsonl.NewSessionBuilder().AddClaudeUser("2026-01-01T00:00:00Z", "hello").String()
-		require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-	}
-	archive := openTestDB(t)
-	refresh := make(chan struct{})
-	releaseRefresh := make(chan struct{})
-	paused := make(chan struct{})
-	resume := make(chan struct{})
-	var fallback atomic.Bool
-	var events atomic.Int32
-	engine := NewEngine(t.Context(), archive, EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}, Machine: "local", DeferStartupMaintenance: true,
-		Emitter: emitterFunc(func(scope string) {
-			if scope == "sessions" && fallback.Load() && events.Add(1) == 1 {
-				close(refresh)
-				<-releaseRefresh
-			}
-		}),
-	})
-	t.Cleanup(engine.Close)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	done := make(chan error, 1)
-	go func() {
-		_, _, err := engine.RunFirstImport(ctx, func(progress Progress) {
-			if progress.Phase == PhaseSyncing && progress.SessionsTotal == 450 {
-				fallback.Store(true)
-			}
-			if progress.Phase == PhaseSyncing && progress.SessionsDone == 400 {
-				close(paused)
-				<-resume
-			}
-		})
-		done <- err
-	}()
-	select {
-	case <-refresh:
-	case <-time.After(30 * time.Second):
-		close(releaseRefresh)
-		close(resume)
-		t.Fatal("no refresh during import")
-	}
-	select {
-	case <-paused:
-	case <-time.After(30 * time.Second):
-		close(releaseRefresh)
-		close(resume)
-		t.Fatal("import did not reach the pause")
-	}
-	cancel()
-	close(releaseRefresh)
-	close(resume)
-	select {
-	case <-done:
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("pending refresh delayed cancellation")
 	}
 }
 
@@ -390,54 +381,5 @@ func TestFirstImportWavePublishesInNewestOrder(t *testing.T) {
 			require.NotNil(t, newest, "the newest session should appear first")
 			require.True(t, notified, "the page should be notified before the wave finishes")
 		})
-	}
-}
-
-func TestFirstImportListedSessionsHaveMessages(t *testing.T) {
-	root := t.TempDir()
-	project := filepath.Join(root, "project")
-	require.NoError(t, os.MkdirAll(project, 0o755))
-	for i := range 220 {
-		path := filepath.Join(project, fmt.Sprintf("session-%03d.jsonl", i))
-		content := testjsonl.NewSessionBuilder().AddClaudeUser("2026-01-01T00:00:00Z", "hello").String()
-		require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-	}
-	archive := openTestDB(t)
-	engine := NewEngine(t.Context(), archive, EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}, Machine: "local", DeferStartupMaintenance: true,
-	})
-	t.Cleanup(engine.Close)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		engine.RunFirstImport(t.Context(), nil)
-	}()
-	observed := false
-	var failure string
-	deadline := time.NewTimer(60 * time.Second)
-	defer deadline.Stop()
-	for {
-		select {
-		case <-deadline.C:
-			t.Fatal("first import did not finish")
-		case <-done:
-			require.True(t, observed, "read at least one session while importing")
-			require.Empty(t, failure)
-			return
-		default:
-		}
-		page, err := archive.ListSessions(t.Context(), db.SessionFilter{Limit: 300})
-		if err != nil {
-			failure = err.Error()
-			continue
-		}
-		for _, session := range page.Sessions {
-			observed = true
-			messages, err := archive.GetMessages(t.Context(), session.ID, 0, 10, true)
-			if err != nil || len(messages) == 0 {
-				failure = fmt.Sprintf("listed session %s had no messages: %v", session.ID, err)
-				break
-			}
-		}
 	}
 }

@@ -6208,6 +6208,9 @@ func scanSyncState(row *sql.Row) (string, error) {
 	return value, err
 }
 
+// FirstImportCompletedKey records that the first full import traversed the archive.
+const FirstImportCompletedKey = "first_import_completed"
+
 // SetSyncState writes a value to the pg_sync_state table.
 func (db *DB) SetSyncState(ctx context.Context, key, value string) error {
 	if err := db.lockWriterCtx(ctx); err != nil {

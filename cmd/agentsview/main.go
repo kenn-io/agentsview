@@ -967,7 +967,11 @@ func isFirstImport(ctx context.Context, path string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return db.ParseSyncStateTime(raw).IsZero(), nil
+	if !db.ParseSyncStateTime(raw).IsZero() {
+		return false, nil
+	}
+	completed, err := database.GetSyncState(ctx, db.FirstImportCompletedKey)
+	return completed != "1", err
 }
 
 func runDeferredStartupSyncFallback(

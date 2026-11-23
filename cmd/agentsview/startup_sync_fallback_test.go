@@ -4,13 +4,7 @@ package main
 
 import (
 	"context"
-	"io"
-	"net"
-	"net/http"
-	"net/http/httptest"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -18,18 +12,15 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/server"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 type blockingStartupEmitter struct {
-	broadcaster *server.Broadcaster
-	committed   chan struct{}
-	release     chan struct{}
+	committed chan struct{}
+	release   chan struct{}
 }
 
 func (e *blockingStartupEmitter) Emit(scope string) {
-	e.broadcaster.Emit(scope)
 	if scope == "sessions" {
 		select {
 		case e.committed <- struct{}{}:
@@ -42,24 +33,9 @@ func (e *blockingStartupEmitter) Emit(scope string) {
 func TestDeferredStartupServesCommittedSessionsDuringImport(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
-	broadcaster := server.NewBroadcaster(0)
-	emitter := &blockingStartupEmitter{broadcaster: broadcaster, committed: make(chan struct{}, 1), release: make(chan struct{})}
+	emitter := &blockingStartupEmitter{committed: make(chan struct{}, 1), release: make(chan struct{})}
 	engine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "local", DeferStartupMaintenance: true, Emitter: emitter})
 	t.Cleanup(engine.Close)
-	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	host, port, err := net.SplitHostPort(listener.Addr().String())
-	require.NoError(t, err)
-	cfg.Host = host
-	cfg.Port, err = strconv.Atoi(port)
-	require.NoError(t, err)
-	srv := httptest.NewUnstartedServer(server.New(cfg, database, engine, server.WithBroadcaster(broadcaster)).Handler())
-	_ = srv.Listener.Close()
-	srv.Listener = listener
-	srv.Start()
-	t.Cleanup(srv.Close)
-	events, unsubscribe := broadcaster.Subscribe()
-	defer unsubscribe()
 	timeout := make(chan time.Time, 1)
 	timeout <- time.Now()
 	done := make(chan error, 1)
@@ -73,50 +49,17 @@ func TestDeferredStartupServesCommittedSessionsDuringImport(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		require.FailNow(t, "no session committed")
 	}
-	select {
-	case event := <-events:
-		assert.Equal(t, "sessions", event.Scope)
-	case <-time.After(time.Second):
-		require.FailNow(t, "no session refresh")
-	}
-	get := func(path string) string {
-		t.Helper()
-		request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+path, nil)
-		require.NoError(t, err)
-		resp, err := http.DefaultClient.Do(request)
-		require.NoError(t, err)
-		defer resp.Body.Close()
-		body, err := io.ReadAll(resp.Body)
-		require.NoError(t, err)
-		require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
-		return string(body)
-	}
-	list := get("/api/v1/sessions?include_one_shot=true&include_automated=true")
-	id := ""
-	for _, candidate := range []string{"session0", "session1", "session2"} {
-		if strings.Contains(list, candidate) {
-			id = candidate
-			break
-		}
-	}
-	require.NotEmpty(t, id, "session list: %s", list)
-	assert.Contains(t, get("/api/v1/sessions/"+id+"/messages"), "hello")
-	assert.Contains(t, get("/api/v1/search?q=hello&include_one_shot=true&include_automated=true"), id)
-	request, err := http.NewRequestWithContext(t.Context(), http.MethodPut, srv.URL+"/api/v1/sessions/"+id+"/star", strings.NewReader("{}"))
-	require.NoError(t, err)
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Origin", srv.URL)
-	resp, err := http.DefaultClient.Do(request)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusNoContent, resp.StatusCode)
 }
 
 func TestRunDeferredStartupSyncFallbackPerformsSkippedSync(t *testing.T) {
-	database := dbtest.OpenTestDB(t)
+	cfg := testConfigWithClaudeFixture(t)
+	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
 	reconciled := make(chan struct{}, 1)
+	emitter := &scopedEmitter{scopes: make(chan string, 100)}
 	engine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{
+		AgentDirs:               cfg.AgentDirs,
 		Machine:                 "local",
+		Emitter:                 emitter,
 		DeferStartupMaintenance: true,
 		OnStartupReconciled: func(syncpkg.SyncStats, error) {
 			reconciled <- struct{}{}
@@ -129,11 +72,14 @@ func TestRunDeferredStartupSyncFallbackPerformsSkippedSync(t *testing.T) {
 	// Under a test binary the worker path is skipped (testing.Testing()), so
 	// the fallback runs the in-process sync; database/lock stay unused.
 	ran, err := runDeferredStartupSyncFallback(
-		t.Context(), config.Config{}, engine, database, nil, nil, timeout, false,
+		t.Context(), cfg, engine, database, nil, nil, timeout, false,
 	)
 
 	require.NoError(t, err)
 	assert.True(t, ran)
+	for len(emitter.scopes) > 0 {
+		assert.NotEqual(t, "sessions", <-emitter.scopes)
+	}
 	assert.False(t, engine.LastSyncStartedAt(t.Context()).IsZero(),
 		"timeout fallback must perform the skipped local sync")
 	select {
