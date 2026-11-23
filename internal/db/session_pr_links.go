@@ -406,7 +406,7 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 		return nil, parser.UncertainPRShell(), nil
 	}
 	if toolName == "exec" && !jsontext.Value(input).IsValid() {
-		links, _, err := codeModePRLinks(ctx, input, cwd, remote)
+		links, err := codeModePRLinks(ctx, input, cwd, remote)
 		return links, state, err
 	}
 	var payload struct {
@@ -422,10 +422,8 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 	if dir == "" {
 		dir = payload.WorkingDirectory
 	}
-	if dir != "" {
-		if !parser.SamePRWorkingDirectory(cwd, dir) {
-			remote = ""
-		}
+	if dir != "" && !parser.SamePRWorkingDirectory(cwd, dir) {
+		remote = ""
 	}
 	command := shellCommandText(input)
 	if command == "" && !jsontext.Value(input).IsValid() && (toolName == "exec_command" || toolName == "shell_command") {
@@ -444,14 +442,14 @@ func warnSkippedCodeMode() error {
 }
 
 // codeModePRLinks reads each exec_command independently.
-func codeModePRLinks(ctx context.Context, input, cwd, remote string) ([]PRLink, bool, error) {
+func codeModePRLinks(ctx context.Context, input, cwd, remote string) ([]PRLink, error) {
 	ast, err := js.Parse(parse.NewInputString(input), js.Options{})
 	if err != nil {
-		return nil, false, warnSkippedCodeMode() //nolint:nilerr // Skip malformed optional code-mode input without failing session processing.
+		return nil, warnSkippedCodeMode() //nolint:nilerr // Skip malformed optional code-mode input without failing session processing.
 	}
 	visitor := &codeModeVisitor{ctx: ctx, cwd: cwd, remote: remote}
 	js.Walk(visitor, ast)
-	return parser.CombinePRLinks(visitor.links...), false, ctx.Err()
+	return parser.CombinePRLinks(visitor.links...), ctx.Err()
 }
 
 type codeModeVisitor struct {
@@ -518,12 +516,8 @@ func (v *codeModeVisitor) Enter(node js.INode) js.IVisitor {
 		return v
 	}
 	remote := v.remote
-	if !knownDir {
+	if !knownDir || dir != "" && !parser.SamePRWorkingDirectory(v.cwd, dir) {
 		remote = ""
-	} else if dir != "" {
-		if !parser.SamePRWorkingDirectory(v.cwd, dir) {
-			remote = ""
-		}
 	}
 	if links, _, err := parser.CommandPRLinks(v.ctx, command, v.cwd, remote); err == nil {
 		v.links = append(v.links, links)
@@ -624,7 +618,7 @@ func writePRShellTaintTx(tx transactionQueries, id string, tainted parser.PRShel
 // A NULL state is initialized once from retained history. New appends then
 // advance it without reading earlier tool calls again.
 func storedToolCallPRLinksTx(ctx context.Context, tx transactionQueries, id, cwd, remote string, before *int) ([]PRLink, parser.PRShellContext, error) {
-	query := `SELECT t.tool_name, t.category, t.input_json FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND (t.category='Bash' OR (t.category='Task' AND t.input_json LIKE '%http%'))`
+	query := `SELECT t.tool_name, t.category, COALESCE(t.input_json,'') FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND (t.category='Bash' OR (t.category='Task' AND t.input_json LIKE '%http%'))`
 	args := []any{id}
 	if before != nil {
 		query += ` AND m.ordinal < ?`
@@ -639,15 +633,11 @@ func storedToolCallPRLinksTx(ctx context.Context, tx transactionQueries, id, cwd
 	var lists [][]PRLink
 	tainted := parser.PRShellContext{}
 	for rows.Next() {
-		var name, category string
-		var input sql.NullString
+		var name, category, input string
 		if err := rows.Scan(&name, &category, &input); err != nil {
 			return nil, parser.PRShellContext{}, err
 		}
-		if !input.Valid {
-			continue
-		}
-		messages := []Message{{ToolCalls: []ToolCall{{ToolName: name, Category: category, InputJSON: input.String}}}}
+		messages := []Message{{ToolCalls: []ToolCall{{ToolName: name, Category: category, InputJSON: input}}}}
 		links, next, err := toolCallPRLinksWithShellState(ctx, messages, cwd, remote, tainted)
 		if err != nil {
 			return nil, parser.PRShellContext{}, err

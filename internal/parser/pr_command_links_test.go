@@ -114,7 +114,7 @@ func TestLauncherPromptPRLinks(t *testing.T) {
 		command string
 		want    []string
 	}{
-		{`claude --help https://github.com/example/repo/pull/1`, nil},
+		{`claude --help https://github.com/example/repo/pull/1`, []string{"https://github.com/example/repo/pull/1"}},
 		{`claude --model "$MODEL" -p 'review https://github.com/example/repo/pull/11'`, []string{"https://github.com/example/repo/pull/11"}},
 		{`claude -p "$PROMPT"`, nil},
 		{`codex -m "$MODEL" exec 'review https://github.com/example/repo/pull/12'`, []string{"https://github.com/example/repo/pull/12"}},
@@ -122,11 +122,11 @@ func TestLauncherPromptPRLinks(t *testing.T) {
 		{`claude --print 'review https://github.com/example/repo/pull/3'`, []string{"https://github.com/example/repo/pull/3"}},
 		{`claude --resume https://github.com/example/repo/pull/10 -p hello`, nil},
 		{`claude -p 'review https://github.com/example/repo/pull/4; report'`, []string{"https://github.com/example/repo/pull/4"}},
-		{`codex --help https://github.com/example/repo/pull/5`, nil},
-		{`codex exec --help https://github.com/example/repo/pull/6`, nil},
+		{`codex --help https://github.com/example/repo/pull/5`, []string{"https://github.com/example/repo/pull/5"}},
+		{`codex exec --help https://github.com/example/repo/pull/6`, []string{"https://github.com/example/repo/pull/6"}},
 		{`codex exec --output-schema https://github.com/example/repo/pull/7 'hello'`, nil},
 		{`codex -m model exec -C /tmp 'review https://github.com/example/repo/pull/8'`, []string{"https://github.com/example/repo/pull/8"}},
-		{`codex exec resume https://github.com/example/repo/pull/9`, nil},
+		{`codex exec resume https://github.com/example/repo/pull/9`, []string{"https://github.com/example/repo/pull/9"}},
 	}
 	for _, tt := range launcherTests {
 		t.Run(tt.command, func(t *testing.T) {

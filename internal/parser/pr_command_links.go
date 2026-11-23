@@ -481,8 +481,8 @@ func ghPRCallLinks(ctx context.Context, call shellCall, remote string) []PRLink 
 	return nil
 }
 
-// launcherPrompt returns the prompt a non-interactive claude or codex command
-// receives, or "" when the command does not run one.
+// launcherPrompt returns the literal arguments and piped input of a claude or
+// codex command, skipping option values.
 func (c shellCall) launcherPrompt() string {
 	if len(c.Words) == 0 || !c.Literal[0] {
 		return ""
@@ -491,41 +491,20 @@ func (c shellCall) launcherPrompt() string {
 	if program != "claude" && program != "codex" {
 		return ""
 	}
-	printMode, execMode, endOptions := false, false, false
-	var positional []string
+	var prompt []string
 	for i := 1; i < len(c.Words); i++ {
-		if !c.Literal[i] {
-			return ""
-		}
 		arg := c.Words[i]
 		switch {
-		case !endOptions && arg == "--":
-			endOptions = true
-		case endOptions:
-			positional = append(positional, arg)
-		case arg == "--help" || arg == "-h" || arg == "--version" || arg == "-V" || program == "claude" && arg == "-v":
-			return ""
-		case program == "claude" && (arg == "-p" || arg == "--print"):
-			printMode = true
-		case program == "codex" && !execMode && (arg == "exec" || arg == "e"):
-			execMode = true
+		case !c.Literal[i]:
 		case strings.HasPrefix(arg, "-"):
-			if !strings.Contains(arg, "=") && launcherValueFlag(program, arg) && i+1 < len(c.Words) {
+			if !strings.Contains(arg, "=") && launcherValueFlag(program, arg) {
 				i++
 			}
-		case program == "codex" && !execMode:
-			return ""
 		default:
-			positional = append(positional, arg)
+			prompt = append(prompt, arg)
 		}
 	}
-	if program == "claude" && !printMode || program == "codex" && !execMode {
-		return ""
-	}
-	if len(positional) > 0 && program == "codex" && slices.Contains([]string{"resume", "fork", "review", "help"}, positional[0]) {
-		return ""
-	}
-	return strings.Join(append(positional, c.Stdin), "\n")
+	return strings.Join(append(prompt, c.Stdin), "\n")
 }
 
 func launcherValueFlag(program, flag string) bool {
