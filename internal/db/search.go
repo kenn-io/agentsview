@@ -428,7 +428,7 @@ func (db *DB) Search(
 		f.Limit = DefaultSearchLimit
 	}
 	cjk := containsCJK(f.Query) && db.HasCJKFTS(ctx)
-	if db.readOnly {
+	if db.readOnly || (!cjk && db.searchIndexRepairPending.Load() && containsCJK(f.Query)) {
 		return db.search(ctx, f, cjk)
 	}
 	key := fmt.Sprintf("%s|%t", f.Slot(), cjk)
