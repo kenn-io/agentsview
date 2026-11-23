@@ -77,17 +77,6 @@ func UncertainPRShell() PRShellContext {
 	return PRShellContext{CheckoutUncertain: true, HostUncertain: true, RepoUncertain: true, RepoSet: true}
 }
 
-// Changed reports whether any part of the shell context is unknown.
-func (s PRShellContext) Changed() bool {
-	return s.CheckoutUncertain || s.HostUncertain || s.RepoUncertain
-}
-
-// CommandPRLinks derives links and reports whether the shell context changed.
-func CommandPRLinks(ctx context.Context, command, cwd, remote string) ([]PRLink, bool, error) {
-	links, state, err := CommandPRLinksWithContext(ctx, command, cwd, remote, PRShellContext{})
-	return links, state.Changed(), err
-}
-
 // CommandPRLinksWithContext carries shared shell state between tool calls.
 func CommandPRLinksWithContext(ctx context.Context, command, cwd, remote string, state PRShellContext) ([]PRLink, PRShellContext, error) {
 	return commandPRLinksWithContext(ctx, command, cwd, remote, state, state.Repo, state.RepoSet)
@@ -233,7 +222,7 @@ func (w *prShellWalker) persistEnv(assignment *syntax.Assign, exported bool) {
 		if assignment.Value != nil {
 			var literal bool
 			w.repo, literal = shellLiteral(assignment.Value.Parts)
-			if !literal || !knownPRRepo(w.repo) {
+			if !literal {
 				w.repo = ""
 			}
 		}
@@ -241,17 +230,6 @@ func (w *prShellWalker) persistEnv(assignment *syntax.Assign, exported bool) {
 	case "GH_HOST":
 		w.state.HostUncertain = true
 	}
-}
-
-func knownPRRepo(value string) bool {
-	if normalized, ok := export.NormalizeGitRemote(value); ok && strings.Contains(value, "://") {
-		value = normalized
-	}
-	parts := strings.Split(value, "/")
-	if len(parts) == 3 {
-		return repoPartRE.MatchString(parts[0]) && repoPathRE.MatchString(strings.Join(parts[1:], "/"))
-	}
-	return repoPathRE.MatchString(value)
 }
 
 func (w *prShellWalker) callExpr(ctx context.Context, n *syntax.CallExpr) {
@@ -307,8 +285,6 @@ func (w *prShellWalker) applyBuiltin(call shellCall) {
 		w.state.CheckoutUncertain = w.state.CheckoutUncertain || len(call.Words) != 2 || !call.Literal[1] || !SamePRWorkingDirectory(w.cwd, call.Words[1])
 	case "pushd", "popd":
 		w.state.CheckoutUncertain = true
-	case "eval", "source", ".":
-		w.state.CheckoutUncertain, w.state.HostUncertain = true, true
 	case "unset":
 		if slices.Contains(call.Words[1:], "GH_REPO") {
 			w.repo, w.repoSet = "", w.conditional

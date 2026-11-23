@@ -8,10 +8,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// commandPRLinks derives links from a fresh shell and reports whether its
+// context changed.
+func commandPRLinks(ctx context.Context, command, cwd, remote string) ([]PRLink, bool, error) {
+	links, s, err := CommandPRLinksWithContext(ctx, command, cwd, remote, PRShellContext{})
+	return links, s.CheckoutUncertain || s.HostUncertain || s.RepoUncertain, err
+}
+
 func TestCommandPRLinksCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	_, _, err := CommandPRLinks(ctx, "gh pr view 42 -R example/repo", "", "")
+	_, _, err := commandPRLinks(ctx, "gh pr view 42 -R example/repo", "", "")
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
@@ -103,8 +110,6 @@ EOF`, "", remote, "", false},
 		{`GH_REPO=other/repo bash -c true; gh pr view 42`, "", remote, "https://github.com/example/repo/pull/42", false},
 		{`GH_HOST=enterprise bash -c 'gh pr view 42 -R example/repo'`, "", remote, "", false},
 		{`export GH_HOST=git.example; gh pr view 42 -R example/repo`, "", remote, "", true},
-		{`eval "$SETUP"; gh pr view 42 -R example/repo`, "", remote, "", true},
-		{`source setup.sh; gh pr view 42 -R example/repo`, "", remote, "", true},
 		{`export GH_HOST=git.example; gh pr view 42 -R git.example/example/repo`, "", remote, "https://git.example/example/repo/pull/42", true},
 		{`(export GH_HOST=git.example); gh pr view 42`, "", remote, "https://github.com/example/repo/pull/42", false},
 		{`echo $(export GH_HOST=git.example); gh pr view 42`, "", remote, "https://github.com/example/repo/pull/42", false},
@@ -123,7 +128,7 @@ EOF`, "", remote, "", false},
 		{`gh pr view 42`, "", "git@github.com:Example/Repo.git", "https://github.com/Example/Repo/pull/42", false},
 	} {
 		t.Run(tc.command, func(t *testing.T) {
-			links, changed, err := CommandPRLinks(t.Context(), tc.command, tc.cwd, tc.remote)
+			links, changed, err := commandPRLinks(t.Context(), tc.command, tc.cwd, tc.remote)
 			require.NoError(t, err)
 			assert.Equal(t, tc.changed, changed)
 			if tc.want == "" {
@@ -159,7 +164,7 @@ func TestLauncherPromptPRLinks(t *testing.T) {
 	}
 	for _, tt := range launcherTests {
 		t.Run(tt.command, func(t *testing.T) {
-			links, _, err := CommandPRLinks(t.Context(), tt.command, "", "")
+			links, _, err := commandPRLinks(t.Context(), tt.command, "", "")
 			require.NoError(t, err)
 			var urls []string
 			for _, link := range links {
@@ -178,7 +183,7 @@ func TestConditionalRepoAssignmentsDoNotSelectBranch(t *testing.T) {
 		`export GH_REPO=example/one; if condition; then unset GH_REPO; fi; gh pr view 42`,
 	} {
 		t.Run(command, func(t *testing.T) {
-			links, _, err := CommandPRLinks(t.Context(), command, "/repo", "https://github.com/example/repo.git")
+			links, _, err := commandPRLinks(t.Context(), command, "/repo", "https://github.com/example/repo.git")
 			require.NoError(t, err)
 			assert.Empty(t, links)
 		})

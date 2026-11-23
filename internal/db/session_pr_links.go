@@ -323,9 +323,9 @@ func appendSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id
 	}
 	var tools []PRLink
 	if hasTools {
-		var cwd, remote, repo string
+		var cwd, remote, repo, storedTools string
 		var state sql.NullInt64
-		if err := tx.QueryRow(`SELECT COALESCE(cwd,''), `+prLinkRemoteSQL+`, pr_shell_tainted, pr_shell_repo FROM sessions WHERE id=?`, id, id).Scan(&cwd, &remote, &state, &repo); err != nil {
+		if err := tx.QueryRow(`SELECT COALESCE(cwd,''), `+prLinkRemoteSQL+`, pr_shell_tainted, pr_shell_repo, tool_pr_links FROM sessions WHERE id=?`, id, id).Scan(&cwd, &remote, &state, &repo, &storedTools); err != nil {
 			return err
 		}
 		tainted := parser.PRShellContext{CheckoutUncertain: state.Int64&1 != 0, HostUncertain: state.Int64&2 != 0, RepoUncertain: state.Int64&4 != 0, Repo: repo, RepoSet: state.Int64&8 != 0}
@@ -340,10 +340,6 @@ func appendSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id
 			return err
 		}
 		if err := writePRShellTaintTx(tx, id, tainted); err != nil {
-			return err
-		}
-		var storedTools string
-		if err := tx.QueryRow(`SELECT tool_pr_links FROM sessions WHERE id=?`, id).Scan(&storedTools); err != nil {
 			return err
 		}
 		if err := writeToolPRLinksTx(tx, id, parser.CombinePRLinks(DecodePRLinks(storedTools), tools)); err != nil {
