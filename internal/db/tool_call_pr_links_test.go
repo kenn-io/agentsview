@@ -87,7 +87,7 @@ func TestToolCallPRLinksSkipsOversizedInput(t *testing.T) {
 	input := `{"cmd":"gh pr view 41 -R example/repo","unrelated":"` + strings.Repeat("x", 256*1024) + `"}`
 	messages := []db.Message{{ToolCalls: []db.ToolCall{
 		{ToolName: "Bash", Category: "Bash", InputJSON: input},
-		{ToolName: "Bash", Category: "Bash", InputJSON: `{"cmd":"gh pr view 42 -R example/repo"}`},
+		{ToolName: "Bash", Category: "Bash", InputJSON: `{"cmd":"gh pr view 42 -R github.com/example/repo"}`},
 	}}}
 	links := toolCallPRLinks(t, messages, "", "")
 	require.Len(t, links, 1)

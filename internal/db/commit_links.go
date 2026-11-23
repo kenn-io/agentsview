@@ -188,16 +188,8 @@ func commitCommandText(input string) string {
 	if strings.Contains(literal, "${") {
 		return ""
 	}
-	var decoded strings.Builder
-	for rest := literal[1 : len(literal)-1]; rest != ""; {
-		r, _, tail, err := strconv.UnquoteChar(rest, literal[0])
-		if err != nil {
-			return ""
-		}
-		decoded.WriteRune(r)
-		rest = tail
-	}
-	return decoded.String()
+	decoded, _ := decodeJSLiteral(literal)
+	return decoded
 }
 
 type commitCall struct {

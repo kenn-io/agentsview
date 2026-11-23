@@ -57,21 +57,29 @@ func SamePRWorkingDirectory(cwd, dir string) bool {
 	return cwd != "" && dir != "" && path.Clean(strings.ReplaceAll(cwd, `\`, "/")) == path.Clean(strings.ReplaceAll(dir, `\`, "/"))
 }
 
-// CommandPRLinks derives links and reports whether the shell context changed.
-func CommandPRLinks(ctx context.Context, command, cwd, remote string) ([]PRLink, bool, error) {
-	return commandPRLinks(ctx, command, cwd, remote, false)
+// PRShellContext records which parts of a shared shell's context are unknown.
+type PRShellContext struct {
+	CheckoutUncertain bool
+	HostUncertain     bool
 }
 
-func commandPRLinks(ctx context.Context, command, cwd, remote string, hostUncertain bool) ([]PRLink, bool, error) {
+// CommandPRLinks derives links and reports whether the shell context changed.
+func CommandPRLinks(ctx context.Context, command, cwd, remote string) ([]PRLink, bool, error) {
+	links, state, err := CommandPRLinksWithContext(ctx, command, cwd, remote, PRShellContext{})
+	return links, state.CheckoutUncertain || state.HostUncertain, err
+}
+
+// CommandPRLinksWithContext carries shared shell state between tool calls.
+func CommandPRLinksWithContext(ctx context.Context, command, cwd, remote string, state PRShellContext) ([]PRLink, PRShellContext, error) {
 	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
 	if err != nil {
-		return nil, true, nil //nolint:nilerr // Malformed optional shell input leaves the shell context unknown.
+		return nil, PRShellContext{CheckoutUncertain: true, HostUncertain: true}, nil //nolint:nilerr // Malformed optional shell input leaves the shell context unknown.
 	}
 	var calls []shellCall
-	tainted := false
+	tainted, hostUncertain := state.CheckoutUncertain, state.HostUncertain
 	type shellScope struct {
-		restore bool
-		tainted bool
+		restore       bool
+		tainted, host bool
 	}
 	var scopes []shellScope
 	syntax.Walk(file, func(node syntax.Node) bool {
@@ -79,7 +87,7 @@ func commandPRLinks(ctx context.Context, command, cwd, remote string, hostUncert
 			scope := scopes[len(scopes)-1]
 			scopes = scopes[:len(scopes)-1]
 			if scope.restore {
-				tainted = scope.tainted
+				tainted, hostUncertain = scope.tainted, scope.host
 			}
 			return true
 		}
@@ -87,7 +95,7 @@ func commandPRLinks(ctx context.Context, command, cwd, remote string, hostUncert
 			tainted = true
 			return false
 		}
-		scope := shellScope{tainted: tainted}
+		scope := shellScope{tainted: tainted, host: hostUncertain}
 		switch node.(type) {
 		case *syntax.Subshell, *syntax.CmdSubst, *syntax.ProcSubst:
 			scope.restore = true
@@ -96,20 +104,29 @@ func commandPRLinks(ctx context.Context, command, cwd, remote string, hostUncert
 		switch n := node.(type) {
 		case *syntax.DeclClause:
 			for _, assignment := range n.Args {
-				if assignment.Name != nil && (assignment.Name.Value == "GH_REPO" || assignment.Name.Value == "GH_HOST") {
-					tainted = true
+				if assignment.Name != nil {
+					switch assignment.Name.Value {
+					case "GH_REPO":
+						tainted = true
+					case "GH_HOST":
+						hostUncertain = true
+					}
 				}
 			}
 		case *syntax.CallExpr:
 			call := shellCall{Tainted: tainted, HostUncertain: hostUncertain}
 			for _, assignment := range n.Assigns {
 				if assignment.Name != nil && (assignment.Name.Value == "GH_REPO" || assignment.Name.Value == "GH_HOST") {
-					call.Tainted = true
 					if assignment.Name.Value == "GH_HOST" {
 						call.HostUncertain = true
-					}
-					if len(n.Args) == 0 {
-						tainted = true
+						if len(n.Args) == 0 {
+							hostUncertain = true
+						}
+					} else {
+						call.Tainted = true
+						if len(n.Args) == 0 {
+							tainted = true
+						}
 					}
 				}
 			}
@@ -136,7 +153,7 @@ func commandPRLinks(ctx context.Context, command, cwd, remote string, hostUncert
 	var lists [][]PRLink
 	for _, call := range calls {
 		if err := ctx.Err(); err != nil {
-			return nil, false, err
+			return nil, PRShellContext{}, err
 		}
 		callRemote := remote
 		if call.Tainted {
@@ -148,9 +165,9 @@ func commandPRLinks(ctx context.Context, command, cwd, remote string, hostUncert
 			case "sh", "bash", "zsh":
 				for i := 1; i+1 < len(call.Words); i++ {
 					if call.Literal[i] && (call.Words[i] == "-c" || call.Words[i] == "-lc") && call.Literal[i+1] {
-						links, _, err := commandPRLinks(ctx, call.Words[i+1], cwd, callRemote, call.HostUncertain)
+						links, _, err := CommandPRLinksWithContext(ctx, call.Words[i+1], cwd, callRemote, PRShellContext{HostUncertain: call.HostUncertain})
 						if err != nil {
-							return nil, false, err
+							return nil, PRShellContext{}, err
 						}
 						lists = append(lists, links)
 						break
@@ -160,11 +177,11 @@ func commandPRLinks(ctx context.Context, command, cwd, remote string, hostUncert
 		}
 		links, err := PromptPRLinksContext(ctx, launcherPrompt(call.Words, call.Literal))
 		if err != nil {
-			return nil, false, err
+			return nil, PRShellContext{}, err
 		}
 		lists = append(lists, links)
 	}
-	return CombinePRLinks(lists...), tainted, ctx.Err()
+	return CombinePRLinks(lists...), PRShellContext{CheckoutUncertain: tainted, HostUncertain: hostUncertain}, ctx.Err()
 }
 
 // repoFlag reports whether args[i] is a -R or --repo option, its value, and
@@ -300,11 +317,58 @@ func launcherPrompt(words []string, literal []bool) string {
 	if program != "claude" && program != "codex" {
 		return ""
 	}
-	var wordsToScan []string
+	printMode, execMode := false, false
+	var prompt string
+	endOptions := false
 	for i := 1; i < len(words); i++ {
-		if literal[i] {
-			wordsToScan = append(wordsToScan, words[i])
+		if !literal[i] {
+			return ""
+		}
+		arg := words[i]
+		if !endOptions && arg == "--" {
+			endOptions = true
+			continue
+		}
+		if endOptions {
+			if prompt == "" {
+				prompt = arg
+			}
+			continue
+		}
+		if arg == "--help" || arg == "-h" || arg == "--version" || arg == "-V" || program == "claude" && arg == "-v" {
+			return ""
+		}
+		if program == "claude" && (arg == "-p" || arg == "--print") {
+			printMode = true
+			continue
+		}
+		if program == "codex" && !execMode && (arg == "exec" || arg == "e") {
+			execMode = true
+			continue
+		}
+		if strings.HasPrefix(arg, "-") {
+			if !strings.Contains(arg, "=") && launcherValueFlag(program, arg) && i+1 < len(words) {
+				i++
+			}
+			continue
+		}
+		if program == "codex" && !execMode {
+			return ""
+		}
+		if prompt == "" {
+			prompt = arg
 		}
 	}
-	return strings.Join(wordsToScan, "\n")
+	if program == "claude" && !printMode || program == "codex" && (!execMode || prompt == "resume" || prompt == "fork" || prompt == "review" || prompt == "help") {
+		return ""
+	}
+	return prompt
+}
+
+func launcherValueFlag(program, flag string) bool {
+	switch flag {
+	case "-m", "--model", "-c", "--config", "--settings", "--output-format", "--permission-mode", "--resume", "-r", "--output-schema", "--output-last-message", "-o", "-C", "--cd", "--add-dir", "--system-prompt", "--append-system-prompt":
+		return true
+	}
+	return program == "codex" && (flag == "-p" || flag == "--profile" || flag == "-s" || flag == "--sandbox")
 }

@@ -238,8 +238,8 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 				}
 			}
 		}
-		if decision.Action != ingest.HistoryPreserve {
-			prepared.RecordedGitRemote = export.WithRecordedGitRemote(export.ProjectIdentityObservation{}, c.Parsed.Session.GitRemote).GitRemote
+		if remote := export.WithRecordedGitRemote(export.ProjectIdentityObservation{}, c.Parsed.Session.GitRemote).GitRemote; remote != "" {
+			prepared.RecordedGitRemote = remote
 		}
 		prepared.Signals = ingest.RefreshSignalRecencyAt(prepared.Session, prepared.Messages, prepared.Signals, s.options.Now())
 		revision, err := rawContentRevision(prepared)
@@ -260,10 +260,26 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		if err != nil {
 			return err
 		}
-		// Reuse only bytes inserted by this transaction. Conflicts retain
-		// their stored payload and mutable derived state.
+		// Keep transcript content intact while retaining new repository evidence.
 		if count == 1 {
 			fresh[sessionID] = payload
+		} else if prepared.RecordedGitRemote != "" {
+			retained, err := loadRawPayload(ctx, tx, sessionID)
+			if err != nil {
+				return err
+			}
+			if retained.RecordedGitRemote != prepared.RecordedGitRemote {
+				retained.RecordedGitRemote = prepared.RecordedGitRemote
+				updated, err := encodeRawPayload(retained)
+				if err != nil {
+					return err
+				}
+				if _, err := tx.ExecContext(ctx, `UPDATE raw_content_revisions SET payload=$2 WHERE session_id=$1`, sessionID, updated); err != nil {
+					return err
+				}
+				dialogueChanges = append(dialogueChanges, sessionID)
+				derivedChanged = true
+			}
 		}
 		dialogueChanged, err := syncRawDialogue(ctx, tx, sessionID, prepared.Messages)
 		if err != nil {

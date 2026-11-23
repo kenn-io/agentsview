@@ -222,8 +222,9 @@ func rawCanonicalValue(v reflect.Value, field string) (any, error) {
 				(v.Type() == rawSessionType && f.Name == "SourceMachines") ||
 				f.Name == "ToolObservations" || f.Name == "ObservedOutcome" || f.Name == "ObservedRepeat" || f.Name == "SequenceEnding" ||
 				(v.Type() == reflect.TypeFor[db.Session]() && f.Name == "GroupKey" && v.Field(i).IsZero()) ||
+				(v.Type() == reflect.TypeFor[ingest.PreparedSession]() && f.Name == "RecordedGitRemote") ||
 				(v.Type() == reflect.TypeFor[ingest.PreparedSession]() &&
-					(f.Name == "PlanUsage" || f.Name == "SessionTotal" || f.Name == "RecordedGitRemote") && v.Field(i).IsZero()) {
+					(f.Name == "PlanUsage" || f.Name == "SessionTotal") && v.Field(i).IsZero()) {
 				continue
 			}
 			// Session fields added after normalized-content-v1 was recorded
