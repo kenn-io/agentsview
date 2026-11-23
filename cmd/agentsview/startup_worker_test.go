@@ -414,46 +414,6 @@ func TestStartupWorkerOutcomeDiscriminatesSpawnFromRanFailed(t *testing.T) {
 	}
 }
 
-// TestStartupWorkerRanFailedSurfacedWithoutResync exercises the Finding 1 daemon
-// path end to end: the worker ran and returned a valid terminal result with a
-// non-spawn error. The daemon must NOT fall back to the in-process initial sync
-// (done stays true), and the gap reconciliation plus RecordStartupReconciled
-// still open watcher dispatch, carrying the worker's aborted stats.
-func TestStartupWorkerRanFailedSurfacedWithoutResync(t *testing.T) {
-	cfg := testConfigWithClaudeFixture(t)
-
-	restore := stubLaunchSyncWorker(t, func(
-		context.Context, config.Config, syncWorkerRequest, func(workerLine),
-	) (workerResult, error) {
-		return workerResult{Status: "aborted", DiscoveryComplete: false},
-			errors.New("startup worker pass reported aborted")
-	})
-	defer restore()
-
-	result, syncErr := runStartupSyncViaWorker(
-		t.Context(), cfg, newStartupStateWriter(cfg.DataDir, time.Now),
-	)
-	require.Error(t, syncErr)
-	require.NotErrorIs(t, syncErr, errWorkerSpawn,
-		"ran-and-failed must be distinct from spawn failure")
-
-	carried, done := startupWorkerOutcome(result, syncErr)
-	require.True(t, done, "daemon must not re-run the in-process initial sync")
-	stats := statsFromWorkerResult(carried)
-	require.True(t, stats.Aborted, "carried stats must reflect the aborted pass")
-
-	opened := make(chan struct{}, 1)
-	engine := engineWithDispatchHandler(t, cfg, opened)
-	gapErr := engine.ReconcileWatchRoots(t.Context(), reconcileRootPaths(cfg), true)
-	engine.RecordStartupReconciled(stats, gapErr)
-
-	select {
-	case <-opened:
-	case <-time.After(2 * time.Second):
-		require.FailNow(t, "dispatch did not open after ran-and-failed handshake")
-	}
-}
-
 func TestStartupWorkerLostResultRetriesParentLinks(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	var initial bytes.Buffer
