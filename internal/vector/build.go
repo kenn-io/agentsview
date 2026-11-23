@@ -183,8 +183,22 @@ func (ix *Index) Build(
 	}
 	var seed *reuseGeneration
 	if ix.spec.Name == "messages" && !o.FullRebuild {
+		active, hasActive, err := ix.ActiveFingerprint(ctx)
+		if err != nil {
+			return BuildResult{}, err
+		}
+		legacyMatch := false
+		if hasActive && active != fp && len(o.Space.Legacy) > 0 {
+			legacyMatch, err = o.Space.Matches(active)
+			if err != nil {
+				return BuildResult{}, fmt.Errorf("matching active generation: %w", err)
+			}
+		}
 		var g reuseGeneration
-		err := ix.db.QueryRowContext(ctx, `SELECT ordinal, dimension FROM `+ix.spec.generationsTable()+` WHERE gen_key = ?`, fp).Scan(&g.ordinal, &g.dimension)
+		err = sql.ErrNoRows
+		if !legacyMatch {
+			err = ix.db.QueryRowContext(ctx, `SELECT ordinal, dimension FROM `+ix.spec.generationsTable()+` WHERE gen_key = ?`, fp).Scan(&g.ordinal, &g.dimension)
+		}
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return BuildResult{}, err
 		}

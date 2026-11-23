@@ -328,7 +328,7 @@ func OpenSpec(
 	}
 	if !readOnly {
 		if spec.Name == "messages" {
-			if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS `+spec.reuseTable()+` (ordinal INTEGER NOT NULL, text_hash TEXT NOT NULL, embedding BLOB NOT NULL, PRIMARY KEY (ordinal, text_hash)) WITHOUT ROWID`); err != nil {
+			if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS `+spec.reuseTable()+` (ordinal INTEGER NOT NULL, doc_key TEXT NOT NULL, text_hash TEXT NOT NULL, embedding BLOB NOT NULL, PRIMARY KEY (ordinal, doc_key, text_hash)) WITHOUT ROWID`); err != nil {
 				db.Close()
 				return nil, fmt.Errorf("creating chunk reuse table: %w", err)
 			}

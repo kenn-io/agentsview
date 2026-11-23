@@ -341,25 +341,30 @@ func decodeFloat32Blob(b []byte) ([]float32, error) {
 }
 
 func validateStoredEmbeddingBlob(blob []byte, dimension int) error {
+	_, err := validatedStoredEmbeddingBlob(blob, dimension)
+	return err
+}
+
+func validatedStoredEmbeddingBlob(blob []byte, dimension int) ([]float32, error) {
 	vector, err := decodeFloat32Blob(blob)
 	if err != nil {
-		return fmt.Errorf("invalid embedding byte length: %w", err)
+		return nil, fmt.Errorf("invalid embedding byte length: %w", err)
 	}
 	if len(vector) != dimension {
-		return fmt.Errorf("invalid embedding dimension: got %d, want %d", len(vector), dimension)
+		return nil, fmt.Errorf("invalid embedding dimension: got %d, want %d", len(vector), dimension)
 	}
 	var squaredNorm float64
 	for component, value := range vector {
 		f := float64(value)
 		if math.IsNaN(f) || math.IsInf(f, 0) {
-			return fmt.Errorf("invalid embedding: non-finite component %d", component)
+			return nil, fmt.Errorf("invalid embedding: non-finite component %d", component)
 		}
 		squaredNorm += f * f
 	}
 	if squaredNorm == 0 {
-		return errors.New("invalid embedding: zero norm")
+		return nil, errors.New("invalid embedding: zero norm")
 	}
-	return nil
+	return vector, nil
 }
 
 // repairStore restricts kit's fill loop to the documents found by the repair

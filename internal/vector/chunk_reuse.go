@@ -68,16 +68,21 @@ func (ix *Index) seedReuse(ctx context.Context, gen reuseGeneration, key, old, h
 	if len(blobs) != len(chunks) {
 		return nil
 	}
+	tx, err := ix.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 	for i, chunk := range chunks {
 		h := contentHash(chunk.Text)
-		if !wanted[h] || validateStoredEmbeddingBlob(blobs[i], gen.dimension) != nil {
+		if !wanted[h] {
 			continue
 		}
-		if _, err := ix.db.ExecContext(ctx, `INSERT OR IGNORE INTO `+ix.spec.reuseTable()+` (ordinal, text_hash, embedding) VALUES (?, ?, ?)`, gen.ordinal, h, blobs[i]); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO `+ix.spec.reuseTable()+` (ordinal, doc_key, text_hash, embedding) VALUES (?, ?, ?, ?)`, gen.ordinal, key, h, blobs[i]); err != nil {
 			return fmt.Errorf("save chunk for reuse: %w", err)
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (ix *Index) reuseEncoder(enc kitvec.EncodeFunc, gen reuseGeneration) kitvec.EncodeFunc {
@@ -105,8 +110,8 @@ func (ix *Index) reuseEncoder(enc kitvec.EncodeFunc, gen reuseGeneration) kitvec
 					rows.Close()
 					return nil, err
 				}
-				if validateStoredEmbeddingBlob(blob, gen.dimension) == nil {
-					hits[hash], _ = decodeFloat32Blob(blob)
+				if vector, err := validatedStoredEmbeddingBlob(blob, gen.dimension); err == nil {
+					hits[hash] = vector
 				}
 			}
 			if err := rows.Err(); err != nil {
