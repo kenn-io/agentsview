@@ -529,47 +529,6 @@ func TestStartupWorkerLostResultRetriesParentLinks(t *testing.T) {
 		"the successful repair must not cause repeated idle linking")
 }
 
-func TestStartupFallbackRetainsPendingLinksForGap(t *testing.T) {
-	cfg := testConfigWithClaudeFixture(t)
-	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
-	for _, id := range []string{"startup-parent", "startup-child"} {
-		require.NoError(t, database.UpsertSession(t.Context(), db.Session{
-			ID: id, Agent: "zencoder", Project: "project", Machine: "local",
-			RelationshipType: "continuation",
-		}))
-	}
-	require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{
-		SessionID: "startup-parent", Ordinal: 0, Role: "assistant", Content: "spawn child",
-		HasToolUse: true, ToolCalls: []db.ToolCall{{
-			ToolUseID: "spawn", ToolName: "Task", SubagentSessionID: "startup-child",
-		}},
-	}}))
-	raw, err := sql.Open("sqlite3", cfg.DBPath)
-	require.NoError(t, err)
-	defer raw.Close()
-	_, err = raw.ExecContext(t.Context(), `CREATE TRIGGER fail_fallback_link
-		BEFORE UPDATE OF parent_session_id ON sessions WHEN NEW.id = 'startup-child'
-		BEGIN SELECT RAISE(FAIL, 'injected fallback link failure'); END`)
-	require.NoError(t, err)
-	engine := syncpkg.NewEngine(t.Context(), database, workerEngineConfig(cfg))
-	defer engine.Close()
-	stats, ran, err := engine.RunStartupSyncFallback(t.Context(), nil)
-	require.NoError(t, err)
-	require.True(t, ran)
-	require.Positive(t, stats.Failed)
-	require.True(t, engine.PendingSubagentLinks())
-	_, err = raw.ExecContext(t.Context(), `DROP TRIGGER fail_fallback_link`)
-	require.NoError(t, err)
-	completeWorkerStartupReconciliation(t.Context(), reconcileRootPaths(cfg), statsFromWorkerResult(workerResult{}), "",
-		engine.RetainSubagentLinkRetry, engine.ReconcileWatchRoots, func(syncpkg.WatchBatch) { assert.Fail(t, "gap should succeed") },
-		func(syncpkg.SyncStats, error) {})
-	child, err := database.GetSession(t.Context(), "startup-child")
-	require.NoError(t, err)
-	require.NotNil(t, child)
-	assert.Equal(t, new("startup-parent"), child.ParentSessionID)
-	assert.False(t, engine.PendingSubagentLinks())
-}
-
 func TestStatsFromWorkerResultMapsDiscoveryOntoAborted(t *testing.T) {
 	complete := statsFromWorkerResult(workerResult{
 		Status: "ok", Synced: 5, Skipped: 1, Failed: 0, DiscoveryComplete: true,
@@ -590,11 +549,10 @@ func TestSyncWorkerChildArgsForwardsServeConfigFlags(t *testing.T) {
 		"serve", "--host", "0.0.0.0", "--port", "9999",
 		"--background", "--pprof",
 	}
-	args := syncWorkerChildArgs(parent, syncWorkerRequest{Mode: "startup", LiveArchive: true})
+	args := syncWorkerChildArgs(parent, syncWorkerRequest{Mode: "startup"})
 
 	require.Equal(t, "sync-worker", args[0])
 	assert.Equal(t, []string{"--mode", "startup"}, args[1:3])
-	assert.Contains(t, args, "--live-archive")
 	assert.Contains(t, args, "--host=0.0.0.0", "serve config flag forwarded")
 	assert.Contains(t, args, "--port=9999", "serve config flag forwarded")
 	for _, a := range args {
@@ -619,7 +577,7 @@ func TestSyncWorkerRealSpawnEmitsTerminalResult(t *testing.T) {
 		os.Args[0],
 		"-test.run=^TestSyncWorkerMainHelperProcess$",
 		"--",
-		"sync-worker", "--mode", "startup", "--live-archive",
+		"sync-worker", "--mode", "startup",
 	)
 	// Minimal, isolated env so no developer/CI agent directory is scanned.
 	// os.UserHomeDir reads HOME on Unix but USERPROFILE on Windows, so the

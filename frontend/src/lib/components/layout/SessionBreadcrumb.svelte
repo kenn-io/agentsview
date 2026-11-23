@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { tick } from "svelte";
   import DocbankStatus from "../content/DocbankStatus.svelte";
   import {
     ChartColumnIcon,
@@ -150,15 +149,12 @@
   async function submitRename() {
     if (!renaming || !session) return;
     renaming = false;
-    renameError = "";
     const name = renameValue.trim() || null;
     try {
       await sessions.renameSession(session.id, name);
     } catch (error) {
       renameError = error instanceof Error ? error.message : String(error);
       renaming = true;
-      await tick();
-      renameInput?.focus();
     }
   }
 

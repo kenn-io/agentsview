@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { tick } from "svelte";
   import { m } from "../../i18n/index.js";
   import { getSessionStatus } from "../../stores/sessionStatus.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
@@ -282,15 +281,12 @@
   async function submitRename() {
     if (!renaming) return;
     renaming = false;
-    renameError = "";
     const name = renameValue.trim() || null;
     try {
       await sessions.renameSession(session.id, name);
     } catch (error) {
       renameError = error instanceof Error ? error.message : String(error);
       renaming = true;
-      await tick();
-      renameInput?.focus();
     }
   }
 

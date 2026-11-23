@@ -471,13 +471,11 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 				completeWorkerStartup = func() {
 					recordStartup := engine.RecordStartupReconciled
 					if workerAfterListen {
-						if idleTracker != nil {
-							done, ok := idleTracker.BeginWork()
-							if !ok {
-								return
-							}
-							defer done()
+						done, ok := idleTracker.BeginWork()
+						if !ok {
+							return
 						}
+						defer done()
 						result, ran, err := runStartupWorkerWritePass(ctx, cfg, engine, database, writeLock, engine.RunExclusive)
 						if !ran && err == nil {
 							// Foreground sync recorded startup; still reconcile
@@ -1963,7 +1961,10 @@ func openWriteDBWith(
 	ctx context.Context, cfg config.Config,
 	openArchive func(context.Context, config.Config) (*db.DB, error),
 ) (*db.DB, *writeOwnerLock, error) {
-	lock, err := acquireCheckedWriteOwnerLock(ctx, cfg)
+	if err := rejectLiveWritableDaemonBeforeDirectWrite(cfg); err != nil {
+		return nil, nil, err
+	}
+	lock, err := acquireWriteOwnerLock(ctx, writeLockDataDir(cfg))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1988,22 +1989,6 @@ func openWriteDBWith(
 		return nil, nil, err
 	}
 	return database, lock, nil
-}
-
-var acquireDirectWriteOwnerLock = acquireWriteOwnerLock
-
-func acquireCheckedWriteOwnerLock(ctx context.Context, cfg config.Config) (*writeOwnerLock, error) {
-	if err := rejectLiveWritableDaemonBeforeDirectWrite(cfg); err != nil {
-		return nil, err
-	}
-	lock, err := acquireDirectWriteOwnerLock(ctx, writeLockDataDir(cfg))
-	if err != nil {
-		return nil, err
-	}
-	if err := rejectLiveWritableDaemonBeforeDirectWrite(cfg); err != nil {
-		return nil, errors.Join(err, lock.Close())
-	}
-	return lock, nil
 }
 
 func rejectLiveWritableDaemonBeforeDirectWrite(cfg config.Config) error {

@@ -116,7 +116,11 @@ func runClassifierRebuild(
 		fmt.Fprintf(out, "  - %s\n", p)
 	}
 
-	writeLock, err := acquireCheckedWriteOwnerLock(ctx, cfg)
+	if err := rejectLiveWritableDaemonBeforeDirectWrite(cfg); err != nil {
+		return fmt.Errorf("checking SQLite write ownership: %w", err)
+	}
+
+	writeLock, err := acquireWriteOwnerLock(ctx, writeLockDataDir(cfg))
 	if err != nil {
 		return fmt.Errorf("acquiring SQLite write-owner lock: %w", err)
 	}

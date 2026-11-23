@@ -163,6 +163,7 @@ describe("SessionItem identity", () => {
     await tick();
     expect(rename).toHaveBeenLastCalledWith("session", "My new name");
     expect(document.querySelector(".rename-input")).toBeNull();
+    expect(document.querySelector('[role="alert"]')).toBeNull();
   });
 
   it("uses the singular for one message", () => {

@@ -430,6 +430,7 @@ describe("SessionBreadcrumb", () => {
     await tick();
     expect(rename).toHaveBeenLastCalledWith("run:123456789abcdef", "My new name");
     expect(document.querySelector(".rename-input")).toBeNull();
+    expect(document.querySelector('[role="alert"]')).toBeNull();
   });
   it("adds the year to the session date when enabled", async () => {
     const dateSpy = vi
