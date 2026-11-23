@@ -26,24 +26,20 @@ func firstImportFromContext(ctx context.Context) *firstImportWave {
 	return wave
 }
 
-func (e *Engine) syncNewest(ctx context.Context, n int, onProgress ProgressFunc, onWrite func()) (stats SyncStats, complete bool) {
+func (e *Engine) syncNewest(ctx context.Context, onProgress ProgressFunc, onWrite func()) SyncStats {
 	if e.refuseWriteInForceParse("SyncNewest") {
-		return stats, false
+		return SyncStats{}
 	}
-	wave := &firstImportWave{limit: n, onWrite: onWrite}
+	wave := &firstImportWave{limit: firstImportWaveSize, onWrite: onWrite}
 	e.syncMu.Lock()
 	defer e.syncMu.Unlock()
 	defer e.clearCurrentProgress()
 	ctx = context.WithValue(ctx, firstImportContextKey{}, wave)
-	stats = e.syncAllLocked(ctx, onProgress, time.Time{}, nil, syncWriteFirstImport, false, false)
-	return stats, !wave.partial
+	return e.syncAllLocked(ctx, onProgress, time.Time{}, nil, syncWriteFirstImport, false, false)
 }
 
 // RunFirstImport publishes recent sessions before completing startup reconciliation.
 func (e *Engine) RunFirstImport(ctx context.Context, onProgress ProgressFunc) (SyncStats, bool, error) {
-	if e.StartupReconciled() {
-		return SyncStats{}, false, nil
-	}
 	refresh := make(chan struct{}, 1)
 	done := make(chan struct{})
 	go e.emitFirstImportRefreshes(ctx, refresh, done)
@@ -54,7 +50,7 @@ func (e *Engine) RunFirstImport(ctx context.Context, onProgress ProgressFunc) (S
 		default:
 		}
 	}
-	stats, _ := e.syncNewest(ctx, firstImportWaveSize, onProgress, onWrite)
+	stats := e.syncNewest(ctx, onProgress, onWrite)
 	if ctx.Err() != nil {
 		return stats, true, ctx.Err()
 	}
