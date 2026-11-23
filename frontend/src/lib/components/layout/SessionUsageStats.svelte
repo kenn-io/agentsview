@@ -298,8 +298,14 @@
 
   /* Usage menus open from plain figures; a dotted underline marks them as
      triggers without adding a chip. */
+  /* The block padding grows the hit box to 24px around the 16px line,
+     mostly downward to stay clear of the header row above; the negative
+     margin keeps the figure's footprint. */
   .usage-breakdown-trigger {
     list-style: none;
+    line-height: 16px;
+    padding-block: 2px 6px;
+    margin-block: -2px -6px;
     cursor: pointer;
     text-decoration: underline dotted;
     text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
@@ -321,7 +327,8 @@
     position: absolute;
     top: 100%;
     right: 0;
-    margin-top: 4px;
+    /* Clears the trigger's hit box, which reaches 6px below its line. */
+    margin-top: 6px;
     width: min(460px, calc(100vw - 24px));
     max-height: 260px;
     overflow: auto;
@@ -407,9 +414,10 @@
       text-overflow: ellipsis;
     }
 
+    /* Inline only: the block padding keeps the 24px hit box. */
     .usage-breakdown-trigger {
       font-size: 9px;
-      padding: 1px 4px;
+      padding-inline: 4px;
     }
 
     .usage-breakdown-menu {

@@ -67,6 +67,17 @@
   }
 </script>
 
+{#snippet bucketContent(bucket: DistributionBucket)}
+  <span class="bar-label">{bucket.label}</span>
+  <span class="bar-track" aria-hidden="true">
+    <span
+      class="bar-fill"
+      style="width: {barWidth(bucket)}"
+    ></span>
+  </span>
+  <span class="bar-count">{formatCount(bucket.count)}</span>
+{/snippet}
+
 <div class="shape-container">
   <div class="shape-header">
     <h3 class="chart-title">{m.analytics_session_shape_title()}</h3>
@@ -92,22 +103,19 @@
   {#if activeBuckets.length > 0}
     <div class="bar-chart">
       {#each activeBuckets as bucket}
-        <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div
-          class="bar-row"
-          class:clickable={activeView === "length" && bucket.count > 0}
-          onclick={() => handleBucketClick(bucket)}
-        >
-          <span class="bar-label">{bucket.label}</span>
-          <div class="bar-track">
-            <div
-              class="bar-fill"
-              style="width: {barWidth(bucket)}"
-            ></div>
+        {#if activeView === "length" && bucket.count > 0}
+          <button
+            type="button"
+            class="bar-row clickable"
+            onclick={() => handleBucketClick(bucket)}
+          >
+            {@render bucketContent(bucket)}
+          </button>
+        {:else}
+          <div class="bar-row">
+            {@render bucketContent(bucket)}
           </div>
-          <span class="bar-count">{formatCount(bucket.count)}</span>
-        </div>
+        {/if}
       {/each}
     </div>
     {#if analytics.sessionShape}
@@ -182,6 +190,7 @@
 
   .bar-row {
     display: flex;
+    width: 100%;
     align-items: center;
     gap: 8px;
     padding: 2px 4px;
@@ -206,6 +215,7 @@
   }
 
   .bar-track {
+    display: block;
     flex: 1;
     height: 16px;
     background: var(--bg-inset);
@@ -214,6 +224,7 @@
   }
 
   .bar-fill {
+    display: block;
     height: 100%;
     background: var(--accent-blue, #3b82f6);
     border-radius: var(--radius-sm);

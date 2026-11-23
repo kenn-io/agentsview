@@ -3,7 +3,7 @@
   import { contrastRatio, mixHexColors, parseHexColor, WCAG_AA_TEXT } from "@kenn-io/kit-ui";
   import { Treemap as LayerTreemap } from "layerchart/hierarchy";
   import { hierarchy } from "d3-hierarchy";
-  import { m } from "../../i18n/index.js";
+  import { getLocale, m } from "../../i18n/index.js";
   import type { SeriesStyle } from "@kenn-io/kit-ui/utils/palette";
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
   import { ui } from "../../stores/ui.svelte.js";
@@ -18,7 +18,10 @@
     value: number;
     style: Pick<SeriesStyle, "color" | "fill">;
     meta?: string;
+    // Hover text and name for a tile that cannot be selected.
     title?: string;
+    // Description of what clicking a selectable tile does.
+    hint?: string;
     selected?: boolean;
     dimmed?: boolean;
   }
@@ -85,6 +88,13 @@
     return { fill, ink: TILE_INK };
   }
 
+  // The name leads with the visible label, then the value and share the
+  // tile draws when it has room.
+  function tileName(tile: TreemapItem): string {
+    const parts = [tile.label, formatValue(tile.value), tile.meta].filter((part): part is string => !!part);
+    return new Intl.ListFormat(getLocale(), { type: "unit", style: "short" }).format(parts);
+  }
+
   function handleKey(e: KeyboardEvent, id: string) {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
@@ -92,6 +102,29 @@
     }
   }
 </script>
+
+{#snippet tileBody(tile: TreemapItem, node: { x0: number; y0: number }, tileWidth: number, tileHeight: number)}
+  {@const large = tileWidth > 60 && tileHeight > 40}
+  {@const medium = tileWidth > 40 && tileHeight > 20}
+  <Group x={node.x0} y={node.y0}>
+    <Rect
+      width={tileWidth}
+      height={tileHeight}
+      rx={3}
+      fill={seriesPaint(uid, tile.style)}
+    />
+    {#if large}
+      {@const fontSize = treemapLabelSize(tile.value, total, tileHeight, labelScale)}
+      <Text value={tile.label} x={6} y={fontSize + 5} width={tileWidth - 12} truncate class="tile-label" style={`font-size: ${fontSize}px`} />
+      <Text value={formatValue(tile.value)} x={6} y={fontSize + 19} width={tileWidth - 12} truncate class="tile-value" />
+      {#if tile.meta}
+        <Text value={tile.meta} x={6} y={fontSize + 31} width={tileWidth - 12} truncate class="tile-meta" />
+      {/if}
+    {:else if medium}
+      <Text value={tile.label} x={4} y={14} width={tileWidth - 8} truncate class="tile-label-sm" />
+    {/if}
+  </Group>
+{/snippet}
 
 <div class="treemap-container" bind:clientWidth={measuredWidth}>
   <Chart width={chartWidth} {height} padding={0}>
@@ -103,49 +136,47 @@
             {@const tile = node.data as TreemapItem}
             {@const tileWidth = node.x1 - node.x0}
             {@const tileHeight = node.y1 - node.y0}
-            {@const large = tileWidth > 60 && tileHeight > 40}
-            {@const medium = tileWidth > 40 && tileHeight > 20}
             {@const clipId = `${uid}-tile-${index}`}
             <clipPath id={clipId}>
               <rect x={node.x0} y={node.y0} width={tileWidth} height={tileHeight} />
             </clipPath>
-            <!-- svelte-ignore a11y_no_noninteractive_tabindex (Only selectable tiles receive a button role and tab stop.) -->
-            <g
-              class="tile"
-              class:dimmed={tile.dimmed}
-              class:patterned={tile.style.fill !== "solid"}
-              style:--tile-color={tile.style.color}
-              style:--tile-fill={tilePaint(tile.style.color)?.fill}
-              style:--tile-ink={tilePaint(tile.style.color)?.ink}
-              clip-path={`url(#${clipId})`}
-              tabindex={onSelect ? 0 : undefined}
-              role={onSelect ? "button" : undefined}
-              aria-pressed={onSelect ? tile.selected ?? false : undefined}
-              aria-label={onSelect ? tile.title ?? m.usage_click_to_focus({ label: tile.label }) : undefined}
-              onclick={onSelect ? (event) => { if (event.detail < 2 || !onOpen) onSelect(tile.id); } : undefined}
-              ondblclick={onOpen ? () => onOpen(tile.id) : undefined}
-              onkeydown={onSelect ? (event) => handleKey(event, tile.id) : undefined}
-            >
-              <title>{tile.title ?? m.usage_click_to_focus({ label: tile.label })}</title>
-              <Group x={node.x0} y={node.y0}>
-                <Rect
-                  width={tileWidth}
-                  height={tileHeight}
-                  rx={3}
-                  fill={seriesPaint(uid, tile.style)}
-                />
-                {#if large}
-                  {@const fontSize = treemapLabelSize(tile.value, total, tileHeight, labelScale)}
-                  <Text value={tile.label} x={6} y={fontSize + 5} width={tileWidth - 12} truncate class="tile-label" style={`font-size: ${fontSize}px`} />
-                  <Text value={formatValue(tile.value)} x={6} y={fontSize + 19} width={tileWidth - 12} truncate class="tile-value" />
-                  {#if tile.meta}
-                    <Text value={tile.meta} x={6} y={fontSize + 31} width={tileWidth - 12} truncate class="tile-meta" />
-                  {/if}
-                {:else if medium}
-                  <Text value={tile.label} x={4} y={14} width={tileWidth - 8} truncate class="tile-label-sm" />
-                {/if}
-              </Group>
-            </g>
+            {#if onSelect}
+              <!-- The name comes from <title>, not aria-label: it starts with
+                   the visible label even when the tile truncates it or
+                   draws it as separate text runs. -->
+              <g
+                class="tile selectable"
+                class:dimmed={tile.dimmed}
+                class:patterned={tile.style.fill !== "solid"}
+                style:--tile-color={tile.style.color}
+                style:--tile-fill={tilePaint(tile.style.color)?.fill}
+                style:--tile-ink={tilePaint(tile.style.color)?.ink}
+                clip-path={`url(#${clipId})`}
+                tabindex="0"
+                role="button"
+                aria-pressed={tile.selected ?? false}
+                onclick={(event) => { if (event.detail < 2 || !onOpen) onSelect(tile.id); }}
+                ondblclick={onOpen ? () => onOpen(tile.id) : undefined}
+                onkeydown={(event) => handleKey(event, tile.id)}
+              >
+                <title>{tileName(tile)}</title>
+                <desc>{tile.hint ?? m.usage_click_to_focus({ label: tile.label })}</desc>
+                {@render tileBody(tile, node, tileWidth, tileHeight)}
+              </g>
+            {:else}
+              <g
+                class="tile"
+                class:dimmed={tile.dimmed}
+                class:patterned={tile.style.fill !== "solid"}
+                style:--tile-color={tile.style.color}
+                style:--tile-fill={tilePaint(tile.style.color)?.fill}
+                style:--tile-ink={tilePaint(tile.style.color)?.ink}
+                clip-path={`url(#${clipId})`}
+              >
+                <title>{tile.title ?? tileName(tile)}</title>
+                {@render tileBody(tile, node, tileWidth, tileHeight)}
+              </g>
+            {/if}
           {/each}
         {/snippet}
       </LayerTreemap>
@@ -180,11 +211,11 @@
     opacity: 0.35;
   }
 
-  .treemap-container :global(.tile[role="button"]) {
+  .treemap-container :global(.tile.selectable) {
     cursor: pointer;
   }
 
-  .treemap-container :global(.tile[role="button"]:hover rect) {
+  .treemap-container :global(.tile.selectable:hover rect) {
     opacity: 0.92;
   }
 

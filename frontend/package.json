@@ -37,6 +37,7 @@
     "shiki": "4.5.0"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.14.0",
     "@inlang/paraglide-js": "^3.0.0",
     "@inlang/plugin-m-function-matcher": "^2.2.9",
     "@inlang/plugin-message-format": "^4.4.0",

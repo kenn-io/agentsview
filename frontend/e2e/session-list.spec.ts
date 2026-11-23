@@ -79,6 +79,23 @@ test("session previews hide a leading system-reminder envelope", async ({ page }
   }
 });
 
+for (const showYear of [false, true]) {
+  test(`double-clicking a session title starts a rename (year in dates: ${showYear})`, async ({
+    page,
+  }) => {
+    // With the year shown, the title row uses display: contents; the title
+    // must still sit above the row's stretched session link.
+    await page.addInitScript(
+      (value) => localStorage.setItem("agentsview-always-show-year", value),
+      String(showYear),
+    );
+    const sp = new SessionsPage(page);
+    await sp.goto();
+    await sp.sessionItems.first().locator(".session-name").dblclick();
+    await expect(sp.sessionItems.first().locator(".rename-input")).toBeFocused();
+  });
+}
+
 test.describe("Session list", () => {
   let sp: SessionsPage;
 
@@ -113,7 +130,7 @@ test.describe("Session list", () => {
     await expect(sessionWithMessages).toHaveClass(/active/);
     await expect(sp.sessionItems).toHaveCount(TOTAL_SESSIONS);
 
-    await sessionWithMessages.focus();
+    await sessionWithMessages.locator(".session-info-link").focus();
     const activeSessionBefore = await sessionWithMessages.getAttribute("data-session-id");
     await page.keyboard.press("ArrowDown");
     await expect(page.locator('.session-item[aria-current="page"]')).not.toHaveAttribute(

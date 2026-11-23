@@ -148,6 +148,14 @@ describe("TopSkills", () => {
     // even though this is the only (and so the largest) skill shown.
     const fill = document.querySelector<HTMLElement>(".bar-fill");
     expect(fill!.style.width).toBe("77.8%");
+    // The share the tooltip shows on hover is the bar's accessible name.
+    const bar = fill!.closest('[role="img"]')!;
+    bar.dispatchEvent(new MouseEvent("mouseenter"));
+    await tick();
+    expect(bar.getAttribute("aria-label")).toBe(
+      document.querySelector(".tooltip")?.textContent?.trim(),
+    );
+    expect(bar.getAttribute("aria-label")).toContain("77.8%");
     await unmount(component);
   });
 

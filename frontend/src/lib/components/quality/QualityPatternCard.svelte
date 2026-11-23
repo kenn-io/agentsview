@@ -115,12 +115,13 @@
         class="driver-row"
         class:active={selectedSignalId === driver.id}
         type="button"
-        aria-label={`${driver.label}: ${totalLabel}, ${sessionsLabel}, ${outcomeLabel}`}
         onclick={() => onselectsignal(String(driver.id))}
       >
         <span>{driver.label}</span>
         <strong>{totalLabel}</strong>
-        <em>{formatCount(driver.sessions)}</em>
+        <!-- The column headers are hidden from screen readers, so the
+             session count carries its noun for them. -->
+        <em><span aria-hidden="true">{formatCount(driver.sessions)}</span><span class="kit-sr-only">{sessionsLabel}</span></em>
         <small>{outcomeLabel}</small>
       </button>
     {/each}
@@ -275,7 +276,7 @@
     background: var(--bg-surface-hover);
   }
 
-  .driver-row span {
+  .driver-row > span {
     color: var(--text-secondary);
     min-width: 0;
     overflow: hidden;

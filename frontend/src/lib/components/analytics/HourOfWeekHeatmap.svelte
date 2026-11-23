@@ -91,17 +91,20 @@
     const rect = (
       e.currentTarget as SVGElement
     ).getBoundingClientRect();
-    const h = hour.toString().padStart(2, "0");
     tooltip = {
       x: rect.left + rect.width / 2,
       y: rect.top - 4,
-      text: m.analytics_hour_of_week_tooltip({
-        day,
-        hour: h,
-        count: value,
-        countLabel: formatCount(value),
-      }),
+      text: cellLabel(day, hour, value),
     };
+  }
+
+  function cellLabel(day: string, hour: number, value: number): string {
+    return m.analytics_hour_of_week_tooltip({
+      day,
+      hour: hour.toString().padStart(2, "0"),
+      count: value,
+      countLabel: formatCount(value),
+    });
   }
 
   function handleCellLeave() {
@@ -196,6 +199,9 @@
                 class={`how-cell${isDimmed(row.dayIdx, cell.hour) ? " dimmed" : ""}`}
                 role="button"
                 tabindex={0}
+                aria-label={cellLabel(row.day, cell.hour, cell.value)}
+                aria-pressed={analytics.selectedDow === row.dayIdx &&
+                  analytics.selectedHour === cell.hour}
                 onmouseenter={(event) =>
                   handleCellHover(event, row.day, cell.hour, cell.value)}
                 onmouseleave={handleCellLeave}

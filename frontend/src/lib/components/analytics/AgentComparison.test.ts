@@ -4,6 +4,7 @@ import { mount, tick, unmount } from "svelte";
 import { analytics } from "../../stores/analytics.svelte.js";
 import { AnalyticsService } from "../../api/generated/index.js";
 import { makeSummary, makeVelocity, makeTools } from "../../test-support/analytics.js";
+import { router } from "../../stores/router.svelte.js";
 import AgentComparison from "./AgentComparison.svelte";
 
 let component: ReturnType<typeof mount> | undefined;
@@ -53,3 +54,30 @@ it.each(["summary", "velocity", "tools"] as const)(
     }
   },
 );
+
+it("opens an agent's sessions from its row button while cells keep their headers", async () => {
+  const nav = vi.spyOn(router, "navigateToSessions").mockReturnValue(true);
+  const summary = {
+    ...makeSummary(),
+    agents: { claude: { sessions: 3, messages: 30 }, codex: { sessions: 4, messages: 40 } },
+  };
+  Object.assign(analytics, { summary, velocity: makeVelocity(), tools: makeTools() });
+  component = mount(AgentComparison, { target: document.body });
+  await tick();
+
+  const table = document.querySelector('[role="table"]')!;
+  expect(table.getAttribute("aria-labelledby")).toBeTruthy();
+  expect(document.getElementById(table.getAttribute("aria-labelledby")!)?.textContent).toBe(
+    "Agent comparison",
+  );
+  const headers = [...table.querySelectorAll('[role="columnheader"]')];
+  const rows = [...table.querySelectorAll('[role="row"]')].slice(1);
+  expect(rows).toHaveLength(2);
+  expect(rows[0]!.querySelectorAll('[role="cell"]')).toHaveLength(headers.length);
+
+  const codex = [...table.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent === "codex",
+  )!;
+  codex.click();
+  expect(nav).toHaveBeenCalledExactlyOnceWith({ agent: "codex" });
+});

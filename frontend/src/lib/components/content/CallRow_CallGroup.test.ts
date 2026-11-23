@@ -232,12 +232,14 @@ describe("CallGroup", () => {
       "ls -la",
     ]);
 
-    const rows = document.querySelectorAll<HTMLElement>('.call[role="button"]');
+    // Each row's body is a native button, so Enter and Space activate it
+    // through the browser's own click.
+    const rows = document.querySelectorAll<HTMLButtonElement>(".call button.call-body");
     expect(rows).toHaveLength(3);
+    expect([...rows].map((row) => row.type)).toEqual(["button", "button", "button"]);
     rows[0]!.click();
-    rows[1]!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    rows[2]!.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
-    expect(onCallClick.mock.calls).toEqual([[calls[0]], [calls[1]], [calls[2]]]);
+    rows[2]!.click();
+    expect(onCallClick.mock.calls).toEqual([[calls[0]], [calls[2]]]);
 
     unmount(c);
   });
@@ -275,7 +277,7 @@ describe("CallGroup", () => {
 
     // No interactive chevron buttons should render even though one
     // of the calls is a sub-agent.
-    expect(html).not.toContain("<button");
+    expect(document.querySelector("button.chev")).toBeNull();
     // Both rows should render as the spacer variant.
     const spacers = html.match(/\bchev\b[^"]*\bspacer\b/g) ?? [];
     expect(spacers.length).toBe(2);
