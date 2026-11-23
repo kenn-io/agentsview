@@ -63,6 +63,7 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 	t.Setenv(syncWorkerChildEnvVar, "1")
 	cfg := testConfigWithClaudeFixture(t)
 	cfg.Host = "127.0.0.1"
+	cfg.EventsCoalesceInterval = 0
 	var seed bytes.Buffer
 	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &seed))
 	writeRestartSession(t, cfg, "before-worker")
@@ -90,7 +91,26 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 	page := restartGet(t, base+"/api/v1/sessions?limit=25&include_one_shot=true")
 	require.Contains(t, page, "session0")
 	require.Contains(t, restartGet(t, base+"/api/v1/sync/status"), `"startup_pending":true`)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/v1/events", nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	scanner := bufio.NewScanner(resp.Body)
+	require.True(t, scanner.Scan())
+	require.Contains(t, scanner.Text(), "events_ready")
 	close(release)
+	found := false
+	for scanner.Scan() {
+		if strings.Contains(scanner.Text(), `"scope":"sessions"`) {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "committed sessions should emit an event: %v", scanner.Err())
+	require.Contains(t, restartGet(t, base+"/api/v1/sessions?limit=25"), "before-worker")
 	var body string
 	if !assert.Eventually(t, func() bool {
 		body = restartGet(t, base+"/api/v1/sessions?limit=25")
