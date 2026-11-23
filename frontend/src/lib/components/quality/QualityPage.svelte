@@ -310,14 +310,17 @@
     return selected;
   }
 
+  function refreshAfterEvent() {
+    sessions.refreshFilterOptions();
+    fetchQualitySignals();
+  }
+
   onMount(() => {
     seedQualityYoke();
     sessions.refreshFilterOptions();
     initialFetchPending = sessions.machineFilterPending;
     if (!initialFetchPending) fetchQualitySignals();
-    unsubEvents = events.subscribeDebounced(() => {
-      fetchQualitySignals();
-    });
+    unsubEvents = events.subscribeDebounced(refreshAfterEvent);
   });
 
   $effect(() => {

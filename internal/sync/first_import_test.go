@@ -233,4 +233,130 @@ func TestFirstImportNewestWaveSurvivesListingFailure(t *testing.T) {
 	older, err := archive.GetSession(t.Context(), "session-000")
 	require.NoError(t, err)
 	require.Nil(t, older)
+	_, _, err = engine.RunFirstImport(t.Context(), nil)
+	require.NoError(t, err)
+	marker, err := archive.GetSyncState(t.Context(), "first_import_pending")
+	require.NoError(t, err)
+	require.Equal(t, "1", marker)
+}
+
+func TestFirstImportPublishesBatchesBeforeReconciliation(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	require.NoError(t, os.MkdirAll(project, 0o755))
+	for i := range 101 {
+		writeFirstImportClaudeSession(t, project, i, time.Unix(1700000000+int64(i), 0))
+	}
+	archive := openTestDB(t)
+	engine := NewEngine(t.Context(), archive, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}, Machine: "local", DeferStartupMaintenance: true})
+	t.Cleanup(engine.Close)
+	paused := make(chan int, 1)
+	resume := make(chan struct{})
+	done := make(chan struct{})
+	started := time.Now()
+	go func() {
+		defer close(done)
+		stage := 0
+		_, _, _ = engine.RunFirstImport(t.Context(), func(p Progress) {
+			if p.Phase == PhaseSyncing && ((stage == 0 && p.SessionsDone == 10) || (stage == 1 && p.SessionsTotal == 101 && p.SessionsDone == 0)) {
+				stage++
+				paused <- p.SessionsTotal
+				<-resume
+			}
+		})
+	}()
+	t.Cleanup(func() { close(resume); <-done })
+	select {
+	case <-paused:
+	case <-time.After(15 * time.Second):
+		t.Fatal("import did not pause")
+	}
+	page, err := archive.ListSessions(t.Context(), db.SessionFilter{Limit: 101})
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(page.Sessions), 10)
+	require.Less(t, len(page.Sessions), 100)
+	messages, err := archive.GetMessages(t.Context(), "session-100", 0, 100, true)
+	require.NoError(t, err)
+	require.NotEmpty(t, messages)
+	t.Logf("first 10 sessions readable after %s", time.Since(started))
+	resume <- struct{}{}
+	select {
+	case total := <-paused:
+		require.Equal(t, 101, total)
+	case <-time.After(15 * time.Second):
+		t.Fatal("reconciliation did not start")
+	}
+	page, err = archive.ListSessions(t.Context(), db.SessionFilter{Limit: 101})
+	require.NoError(t, err)
+	require.Len(t, page.Sessions, 100)
+	t.Logf("100 newest sessions readable after %s", time.Since(started))
+	oldest, err := archive.GetSession(t.Context(), "session-000")
+	require.NoError(t, err)
+	require.Nil(t, oldest)
+}
+
+type firstImportBrokenSource struct {
+	parser.Provider
+	broken *atomic.Bool
+}
+
+func (p firstImportBrokenSource) Parse(ctx context.Context, req parser.ParseRequest) (parser.ParseOutcome, error) {
+	if p.broken.Load() {
+		return parser.ParseOutcome{}, errors.New("source unavailable")
+	}
+	return p.Provider.Parse(ctx, req)
+}
+func (p firstImportBrokenSource) DiscoverEach(ctx context.Context, fn func(parser.SourceRef) error) error {
+	return p.Provider.(parser.StreamingDiscoverer).DiscoverEach(ctx, fn)
+}
+
+type firstImportBrokenFactory struct {
+	parser.ProviderFactory
+	broken *atomic.Bool
+}
+
+func (f firstImportBrokenFactory) NewProvider(c parser.ProviderConfig) parser.Provider {
+	return firstImportBrokenSource{f.ProviderFactory.NewProvider(c), f.broken}
+}
+
+func TestFirstImportClearsMarkerAfterSourceFailure(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	require.NoError(t, os.MkdirAll(project, 0o755))
+	writeFirstImportClaudeSession(t, project, 1, time.Now())
+	zcode := filepath.Join(t.TempDir(), ".zcode", "cli")
+	writeProcessProviderZCodeDB(t, zcode)
+	archive := openTestDB(t)
+	claude, ok := parser.ProviderFactoryByType(parser.AgentClaude)
+	require.True(t, ok)
+	factory, ok := parser.ProviderFactoryByType(parser.AgentZCode)
+	require.True(t, ok)
+	var broken atomic.Bool
+	broken.Store(true)
+	config := EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}, parser.AgentZCode: {zcode}}, Machine: "local", DeferStartupMaintenance: true, ProviderFactories: []parser.ProviderFactory{claude, firstImportBrokenFactory{factory, &broken}}}
+	engine := NewEngine(t.Context(), archive, config)
+	var markerDuringImport string
+	stats, _, err := engine.RunFirstImport(t.Context(), func(p Progress) {
+		if p.Phase == PhaseSyncing && markerDuringImport == "" {
+			markerDuringImport, _ = archive.GetSyncState(t.Context(), "first_import_pending")
+		}
+	})
+	require.NoError(t, err)
+	require.Equal(t, "1", markerDuringImport)
+	require.Positive(t, stats.Failed)
+	healthy, err := archive.GetSession(t.Context(), "session-001")
+	require.NoError(t, err)
+	require.NotNil(t, healthy)
+	marker, err := archive.GetSyncState(t.Context(), "first_import_pending")
+	require.NoError(t, err)
+	require.Empty(t, marker)
+	engine.Close()
+	broken.Store(false)
+	restarted := NewEngine(t.Context(), archive, config)
+	t.Cleanup(restarted.Close)
+	_, _, err = restarted.RunStartupSyncFallback(t.Context(), nil)
+	require.NoError(t, err)
+	repaired, err := archive.GetSession(t.Context(), "zcode:session-001")
+	require.NoError(t, err)
+	require.NotNil(t, repaired)
 }

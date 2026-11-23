@@ -3587,23 +3587,23 @@ func (e *Engine) recordStartupReconciled(
 			close(e.startupAttemptReady)
 		}
 	})
-	if !startupReconciliationSucceeded(ctx, stats, err) {
+	if err != nil || ctx.Err() != nil || !stats.AuthoritativeDiscoveryComplete() {
 		return
 	}
-	if stats.ProcessingComplete() {
-		pending, markerErr := e.db.GetSyncState(ctx, FirstImportPendingKey)
-		if markerErr == nil && pending == "1" {
-			markerErr = e.db.DeleteSyncState(ctx, FirstImportPendingKey)
-		}
-		if markerErr != nil {
-			log.Printf("clearing first import marker: %v", markerErr)
-		}
+	pending, markerErr := e.db.GetSyncState(ctx, FirstImportPendingKey)
+	if markerErr == nil && pending == "1" {
+		markerErr = e.db.DeleteSyncState(ctx, FirstImportPendingKey)
 	}
-	e.startupReconciledOnce.Do(func() {
-		if e.startupReconciledReady != nil {
-			close(e.startupReconciledReady)
-		}
-	})
+	if markerErr != nil {
+		log.Printf("clearing first import marker: %v", markerErr)
+	}
+	if startupReconciliationSucceeded(ctx, stats, err) {
+		e.startupReconciledOnce.Do(func() {
+			if e.startupReconciledReady != nil {
+				close(e.startupReconciledReady)
+			}
+		})
+	}
 }
 
 func startupReconciliationSucceeded(
@@ -7728,7 +7728,6 @@ func (e *Engine) syncProviderDBBackedAgent(
 	discovered, sourceFailures, discoveryErr := e.syncProviderDBBacked(
 		ctx, agent, scope, flush,
 	)
-	stats.providerFailures += sourceFailures
 	for range sourceFailures {
 		stats.RecordFailed()
 	}
@@ -7879,6 +7878,15 @@ func (e *Engine) collectAndBatch(
 		ctx, results, total, progressTotal, onProgress, writeMode,
 		collectAndBatchOptions{},
 	)
+}
+
+// pendingBatchLimit flushes the first-import wave in small batches so
+// recent sessions become readable before the full wave completes.
+func pendingBatchLimit(ctx context.Context) int {
+	if wave := firstImportFromContext(ctx); wave != nil && wave.limit > 0 {
+		return 10
+	}
+	return batchSize
 }
 
 type collectAndBatchOptions struct {
@@ -8763,7 +8771,7 @@ func (e *Engine) collectAndBatchWithOptions(
 					sourceFingerprint: r.sourceFingerprint,
 				})
 			}
-			if len(pending) >= batchSize ||
+			if len(pending) >= pendingBatchLimit(ctx) ||
 				(archiveRetention &&
 					pendingRetentionBytes >= pendingRetentionLimit) ||
 				(!archiveRetention && (budget.underPressure() ||
