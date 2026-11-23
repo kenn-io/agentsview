@@ -342,15 +342,13 @@ func ensureCJKFTS(
 		storedFingerprint == simpleFTSRuntimeConfig.fingerprint
 
 	if deferRebuild && !current {
-		hasMessages := tableExists
-		if !hasMessages {
-			var err error
-			hasMessages, err = archiveHasMessages(ctx, tx)
-			if err != nil {
-				return false, fmt.Errorf("checking messages for CJK FTS: %w", err)
+		hasContent := tableExists
+		if !hasContent {
+			if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM message_search_content)").Scan(&hasContent); err != nil {
+				return false, fmt.Errorf("checking content for CJK FTS: %w", err)
 			}
 		}
-		if hasMessages {
+		if hasContent {
 			if _, err := tx.ExecContext(ctx, "DELETE FROM stats WHERE key = ?", cjkFTSFingerprintStatsKey); err != nil {
 				return false, fmt.Errorf("clearing deferred CJK FTS fingerprint: %w", err)
 			}
