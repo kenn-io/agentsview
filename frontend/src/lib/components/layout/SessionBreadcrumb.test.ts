@@ -398,6 +398,39 @@ afterEach(() => {
 });
 
 describe("SessionBreadcrumb", () => {
+  it("keeps a rejected rename for retry", async () => {
+    const rename = vi
+      .spyOn(sessions, "renameSession")
+      .mockRejectedValueOnce(new Error("retry shortly"))
+      .mockResolvedValueOnce(undefined);
+    onTestFinished(() => rename.mockRestore());
+    mount(SessionBreadcrumb, {
+      target: document.body,
+      props: { session: makeSession("claude"), onBack: () => {} },
+    });
+    await tick();
+    document.querySelector<HTMLButtonElement>(".actions-btn")!.click();
+    await tick();
+    [...document.querySelectorAll<HTMLButtonElement>(".actions-menu-item")]
+      .find((button) => button.textContent?.trim() === "Rename")!
+      .click();
+    await tick();
+    const input = document.querySelector<HTMLInputElement>(".rename-input")!;
+    input.value = "My new name";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await tick();
+    await tick();
+    expect(document.querySelector<HTMLInputElement>(".rename-input")?.value).toBe("My new name");
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain("retry shortly");
+    document
+      .querySelector<HTMLInputElement>(".rename-input")!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await tick();
+    await tick();
+    expect(rename).toHaveBeenLastCalledWith("run:123456789abcdef", "My new name");
+    expect(document.querySelector(".rename-input")).toBeNull();
+  });
   it("adds the year to the session date when enabled", async () => {
     const dateSpy = vi
       .spyOn(Date.prototype, "toLocaleDateString")

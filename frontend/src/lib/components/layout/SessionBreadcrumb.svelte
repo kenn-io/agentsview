@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import DocbankStatus from "../content/DocbankStatus.svelte";
   import {
     ChartColumnIcon,
@@ -51,6 +52,7 @@
   let menuOpen = $state(false);
   let renaming = $state(false);
   let renameValue = $state("");
+  let renameError = $state("");
   let renameInput = $state<HTMLInputElement | null>(null);
   let menuBtnEl = $state<HTMLButtonElement | null>(null);
   let menuEl = $state<HTMLDivElement | null>(null);
@@ -134,6 +136,7 @@
   }
 
   function startRename() {
+    renameError = "";
     if (!session) return;
     renameValue =
       session.display_name
@@ -147,11 +150,15 @@
   async function submitRename() {
     if (!renaming || !session) return;
     renaming = false;
+    renameError = "";
     const name = renameValue.trim() || null;
     try {
       await sessions.renameSession(session.id, name);
-    } catch {
-      // name reverts in UI
+    } catch (error) {
+      renameError = error instanceof Error ? error.message : String(error);
+      renaming = true;
+      await tick();
+      renameInput?.focus();
     }
   }
 
@@ -363,6 +370,7 @@
       }}
       onblur={submitRename}
     />
+    {#if renameError}<span class="rename-error" role="alert">{renameError}</span>{/if}
   {:else}
     <span class="breadcrumb-current">
       {session?.display_name ?? session?.project ?? ""}
@@ -540,6 +548,11 @@
     text-overflow: ellipsis;
     flex: 1;
     min-width: 0;
+  }
+
+  .rename-error {
+    color: var(--accent-red);
+    font-size: 11px;
   }
 
   .rename-input {

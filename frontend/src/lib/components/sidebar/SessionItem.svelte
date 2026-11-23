@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import { m } from "../../i18n/index.js";
   import { getSessionStatus } from "../../stores/sessionStatus.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
@@ -197,6 +198,7 @@
   // Rename state
   let renaming = $state(false);
   let renameValue = $state("");
+  let renameError = $state("");
   let renameInput: HTMLInputElement | undefined = $state(undefined);
 
   function mountOverlay(node: HTMLElement) {
@@ -267,6 +269,7 @@
   }
 
   function startRename() {
+    renameError = "";
     renameValue =
       session.display_name
       ?? normalizeMessagePreview(sessions.view(session).first_message)
@@ -279,11 +282,15 @@
   async function submitRename() {
     if (!renaming) return;
     renaming = false;
+    renameError = "";
     const name = renameValue.trim() || null;
     try {
       await sessions.renameSession(session.id, name);
-    } catch {
-      // silently fail
+    } catch (error) {
+      renameError = error instanceof Error ? error.message : String(error);
+      renaming = true;
+      await tick();
+      renameInput?.focus();
     }
   }
 
@@ -475,6 +482,7 @@
           }
         }}
       />
+      {#if renameError}<span class="rename-error" role="alert">{renameError}</span>{/if}
     {:else}
       <a
         class="session-info-link"
@@ -897,6 +905,11 @@
   .compact .session-name {
     font-size: 11px;
     color: var(--text-secondary);
+  }
+
+  .rename-error {
+    color: var(--accent-red);
+    font-size: 11px;
   }
 
   .rename-input {

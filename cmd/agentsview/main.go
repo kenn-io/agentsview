@@ -489,7 +489,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 							if err != nil && ctx.Err() == nil {
 								log.Printf("startup sync fallback: %v", err)
 							}
-							return
+							recordStartup = func(sync.SyncStats, error) {}
 						}
 						workerStartupResult, _ = startupWorkerOutcome(result, err)
 					}

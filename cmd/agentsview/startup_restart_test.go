@@ -192,8 +192,12 @@ func TestServeRestartSpawnFailureFallsBack(t *testing.T) {
 	isolateServeTestHome(t)
 	cfg := testConfigWithClaudeFixture(t)
 	cfg.Host = "127.0.0.1"
+	missingPath := filepath.Join(cfg.AgentDirs[parser.AgentClaude][0], "-home-proj0", "offline-missing.jsonl")
+	missingContent := testjsonl.NewSessionBuilder().AddClaudeUser("2026-01-02T00:00:00Z", "offline-missing").AddClaudeAssistant("2026-01-02T00:00:01Z", "reply").AddClaudeUser("2026-01-02T00:00:02Z", "follow up").String()
+	require.NoError(t, os.WriteFile(missingPath, []byte(missingContent), 0o644))
 	var seed bytes.Buffer
 	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &seed))
+	require.NoError(t, os.Remove(missingPath))
 	path := filepath.Join(cfg.AgentDirs[parser.AgentClaude][0], "-home-proj0", "fallback.jsonl")
 	content := testjsonl.NewSessionBuilder().AddClaudeUser("2026-01-02T00:00:00Z", "fallback").AddClaudeAssistant("2026-01-02T00:00:01Z", "reply").AddClaudeUser("2026-01-02T00:00:02Z", "follow up").String()
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
@@ -249,6 +253,13 @@ func TestServeRestartSpawnFailureFallsBack(t *testing.T) {
 		}
 		return true
 	}, 30*time.Second, 100*time.Millisecond)
+	database, err := db.OpenReadOnly(t.Context(), cfg.DBPath)
+	require.NoError(t, err)
+	defer database.Close()
+	assert.Eventually(t, func() bool {
+		missing, err := database.GetSessionFull(t.Context(), "offline-missing")
+		return err == nil && missing != nil && missing.SourceMissingAt != nil && missing.DeletedAt == nil
+	}, 5*time.Second, 100*time.Millisecond)
 }
 
 func TestServeRestartFirstStartAndNoSync(t *testing.T) {
