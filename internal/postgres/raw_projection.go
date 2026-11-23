@@ -268,7 +268,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			if err != nil {
 				return err
 			}
-			if retained.RecordedGitRemote != prepared.RecordedGitRemote {
+			if retained.RecordedGitRemote == "" {
 				retained.RecordedGitRemote = prepared.RecordedGitRemote
 				updated, err := encodeRawPayload(retained)
 				if err != nil {

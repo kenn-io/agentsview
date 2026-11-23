@@ -359,6 +359,9 @@ func TestToolPRLinksArchiveUpgrade(t *testing.T) {
 				if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links='', pr_shell_tainted=NULL WHERE id=?`, s.ID); err != nil {
 					return err
 				}
+				if _, err := tx.ExecContext(t.Context(), `ALTER TABLE sessions DROP COLUMN tool_pr_links`); err != nil {
+					return err
+				}
 				return writeUserVersion(t.Context(), tx, tc.version)
 			}))
 			require.NoError(t, d.Close())
@@ -550,24 +553,78 @@ func TestToolPRLinksSharedHostState(t *testing.T) {
 	assert.Equal(t, "https://git.example/example/repo/pull/43", got.PRLinks[0].URL)
 }
 
-func TestToolPRLinksDefaultChangeAcrossAppends(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "archive.db")
-	d, err := OpenIsolated(t.Context(), path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, d.Close()) })
-	s := Session{ID: "default-repo", Project: "project", Machine: "local", Agent: "claude", Cwd: "/work/repo"}
-	require.NoError(t, d.UpsertSession(t.Context(), s))
-	obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://github.com/example/repo.git")
-	require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), obs))
-	message := func(ordinal int, input string) Message {
-		return Message{SessionID: s.ID, Ordinal: ordinal, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: input}}}
+func TestToolPRLinksSurviveArchiveProjection(t *testing.T) {
+	for _, policy := range []config.ArchiveContent{config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
+		t.Run(string(policy), func(t *testing.T) {
+			source := testDB(t)
+			s := Session{ID: "archive-tools", Project: "project", Machine: "local", Agent: "claude"}
+			require.NoError(t, source.UpsertSession(t.Context(), s))
+			messages := []Message{
+				{SessionID: s.ID, Ordinal: 0, Role: "user", Content: "https://github.com/example/repo/pull/1"},
+				{SessionID: s.ID, Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{
+					{Category: "Bash", ToolName: "Bash", InputJSON: `{"command":"gh pr view 2 -R example/repo"}`},
+					{Category: "Task", ToolName: "Task", InputJSON: `{"prompt":"Review https://github.com/example/repo/pull/3"}`},
+				}},
+			}
+			require.NoError(t, source.ReplaceSessionMessages(t.Context(), s.ID, messages))
+			// An archive written before tool links had their own field still has
+			// enough input to derive them before the content policy removes it.
+			_, err := source.getWriter().ExecContext(t.Context(), `UPDATE sessions SET tool_pr_links='' WHERE id=?`, s.ID)
+			require.NoError(t, err)
+			dest := testDB(t)
+			dest.SetArchiveContent(policy)
+			_, err = dest.CopyOrphanedDataFrom(t.Context(), source.Path())
+			require.NoError(t, err)
+			got, err := dest.GetSession(t.Context(), s.ID)
+			require.NoError(t, err)
+			var numbers []int
+			for _, link := range got.PRLinks {
+				numbers = append(numbers, link.Number)
+			}
+			if policy == config.ArchiveContentUsage {
+				assert.Equal(t, []int{2, 3}, numbers)
+			} else {
+				assert.Equal(t, []int{1, 2, 3}, numbers)
+				require.NoError(t, dest.Update(t.Context(), func(tx *sql.Tx) error { return refreshSessionPromptPRLinksTx(t.Context(), tx, s.ID) }))
+				got, err = dest.GetSession(t.Context(), s.ID)
+				require.NoError(t, err)
+				assert.Len(t, got.PRLinks, 3)
+			}
+			require.NoError(t, dest.UpsertSession(t.Context(), s))
+			got, err = dest.GetSession(t.Context(), s.ID)
+			require.NoError(t, err)
+			numbers = nil
+			for _, link := range got.PRLinks {
+				numbers = append(numbers, link.Number)
+			}
+			if policy == config.ArchiveContentUsage {
+				assert.Equal(t, []int{2, 3}, numbers)
+			} else {
+				assert.Equal(t, []int{1, 2, 3}, numbers)
+			}
+		})
 	}
-	require.NoError(t, d.InsertMessages(t.Context(), []Message{message(0, `{"command":"gh repo set-default example/other"}`)}))
-	require.NoError(t, d.Close())
-	d, err = OpenIsolated(t.Context(), path)
-	require.NoError(t, err)
-	require.NoError(t, d.InsertMessages(t.Context(), []Message{message(1, `{"command":"gh pr view 42"}`)}))
+}
+
+func TestToolPRLinksUsageCleanupAndReplacement(t *testing.T) {
+	d := testDB(t)
+	s := Session{ID: "cleanup-tools", Project: "project", Machine: "local", Agent: "claude"}
+	require.NoError(t, d.UpsertSession(t.Context(), s))
+	messages := []Message{
+		{SessionID: s.ID, Ordinal: 0, Role: "user", Content: "https://github.com/example/repo/pull/1"},
+		{SessionID: s.ID, Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{Category: "Bash", ToolName: "Bash", InputJSON: `{"command":"gh pr view 2 -R example/repo"}`}}},
+	}
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, messages))
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, messages[:1]))
 	got, err := d.GetSession(t.Context(), s.ID)
 	require.NoError(t, err)
-	assert.Empty(t, got.PRLinks)
+	require.Len(t, got.PRLinks, 1)
+	assert.Equal(t, 1, got.PRLinks[0].Number)
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, messages))
+	d.SetArchiveContent(config.ArchiveContentUsage)
+	require.NoError(t, d.UpsertSession(t.Context(), s))
+	got, err = d.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	require.Len(t, got.PRLinks, 1)
+	assert.Equal(t, 2, got.PRLinks[0].Number)
 }

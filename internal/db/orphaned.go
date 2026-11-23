@@ -257,6 +257,13 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 				return nil, err
 			}
 		}
+		if d.ArchiveContent().OmitsToolContent() {
+			for _, id := range ids {
+				if err := refreshSessionPromptPRLinksTx(ctx, tx, id); err != nil {
+					return nil, fmt.Errorf("indexing orphaned PR links before projection: %w", err)
+				}
+			}
+		}
 		if err := applyArchiveContentToCopiedSessionsTx(
 			ctx, tx, "_orphaned_ids", d.ArchiveContent(), sourceVersion,
 		); err != nil {
@@ -427,6 +434,13 @@ func (d *DB) CopyTrashedDataFrom(ctx context.Context, sourcePath string) ([]stri
 	if !oldDBHasColumn(ctx, tx, "sessions", "structured_pr_links") {
 		if _, err := tx.ExecContext(ctx, `UPDATE sessions SET structured_pr_links=pr_links WHERE id IN (SELECT id FROM _trashed_ids)`); err != nil {
 			return nil, err
+		}
+	}
+	if d.ArchiveContent().OmitsToolContent() {
+		for _, id := range ids {
+			if err := refreshSessionPromptPRLinksTx(ctx, tx, id); err != nil {
+				return nil, fmt.Errorf("indexing trashed PR links before projection: %w", err)
+			}
 		}
 	}
 	if err := applyArchiveContentToCopiedSessionsTx(

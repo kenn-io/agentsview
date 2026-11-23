@@ -2601,6 +2601,7 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"ALTER TABLE sessions ADD COLUMN structured_pr_links TEXT NOT NULL DEFAULT ''; UPDATE sessions SET structured_pr_links=pr_links",
 		},
 		{"sessions", "pr_shell_tainted", "ALTER TABLE sessions ADD COLUMN pr_shell_tainted INTEGER"},
+		{"sessions", "tool_pr_links", "ALTER TABLE sessions ADD COLUMN tool_pr_links TEXT NOT NULL DEFAULT ''"},
 		{"excluded_sessions", "file_path", "ALTER TABLE excluded_sessions ADD COLUMN file_path TEXT"},
 		{
 			"sessions", "trash_includes_codex_pages",

@@ -419,7 +419,7 @@ func clearUsageOnlyTextTx(
 	); err != nil {
 		return fmt.Errorf("clearing usage-only titles for %s: %w", sessionID, err)
 	}
-	if err := resetUsageOnlyPRLinksTx(tx, sessionID); err != nil {
+	if err := retainStructuredAndToolPRLinksTx(tx, sessionID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(
@@ -437,6 +437,14 @@ func clearUsageOnlyTextTx(
 	}
 
 	return clearUsageOnlyConversationTx(tx, sessionID)
+}
+
+func retainStructuredAndToolPRLinksTx(tx transactionQueries, id string) error {
+	var stored, structured, tools string
+	if err := tx.QueryRow(`SELECT pr_links, structured_pr_links, tool_pr_links FROM sessions WHERE id=?`, id).Scan(&stored, &structured, &tools); err != nil {
+		return err
+	}
+	return writeSessionPromptPRLinksTx(tx, id, stored, parser.CombinePRLinks(DecodePRLinks(structured), DecodePRLinks(tools)))
 }
 
 // settleUsageOnlySessionTx brings an existing session row that predates the
@@ -516,10 +524,6 @@ func applyArchiveContentToCopiedSessionsTx(
 			return err
 		}
 	}
-	// Derive tool links before the policy below drops copied tool inputs.
-	if err := backfillCopiedToolPRLinksTx(ctx, tx, tempIDsTable, sourceVersion, policy.UsageOnly()); err != nil {
-		return err
-	}
 	switch policy {
 	case config.ArchiveContentFull:
 		// Skip unchanged projections only when the source already carries
@@ -552,33 +556,6 @@ func applyArchiveContentToCopiedSessionsTx(
 		return err
 	}
 	return applyConversationPolicyGapsTx(ctx, tx, where)
-}
-
-func backfillCopiedToolPRLinksTx(ctx context.Context, tx *sql.Tx, idsTable string, sourceVersion int, usageOnly bool) error {
-	if sourceVersion >= toolPRLinksDataVersion {
-		return nil
-	}
-	ids, err := sessionIDsTx(ctx, tx, "id IN (SELECT id FROM "+idsTable+") AND id IN (SELECT session_id FROM tool_calls WHERE category IN ('Bash','Task'))")
-	if err != nil {
-		return err
-	}
-	hasRecorded := sourceVersion >= projectIdentitySourceSnapshotDataVersion && oldDBHasTable(ctx, tx, "session_project_identity_snapshots") && oldDBHasColumn(ctx, tx, "session_project_identity_snapshots", "recorded_git_remote")
-	for _, id := range ids {
-		remote := ""
-		if hasRecorded {
-			if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(p.recorded_git_remote),'') FROM `+idsTable+` copied LEFT JOIN old_db.session_project_identity_snapshots p ON p.session_id=copied.source_id WHERE copied.id=?`, id).Scan(&remote); err != nil {
-				return err
-			}
-		}
-		links, err := storedToolCallPRLinksTx(ctx, tx, id, remote)
-		if err != nil {
-			return err
-		}
-		if err := setAndRefreshToolPRLinksTx(tx, id, links, false, usageOnly); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // toolOutputMarkerDataVersion is the first data version whose parsers mark
@@ -771,7 +748,7 @@ func compactCopiedSessionsForUsageTx(
 		return fmt.Errorf("listing copied sessions: %w", err)
 	}
 	for _, id := range ids {
-		if err := resetUsageOnlyPRLinksTx(contextTransaction{ctx: ctx, tx: tx}, id); err != nil {
+		if err := retainStructuredAndToolPRLinksTx(contextTransaction{ctx: ctx, tx: tx}, id); err != nil {
 			return err
 		}
 		if err := clearUsageOnlyConversationTx(contextTransaction{ctx: ctx, tx: tx}, id); err != nil {

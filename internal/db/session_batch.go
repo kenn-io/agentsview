@@ -649,10 +649,15 @@ func (db *DB) writeOneSessionBatchTx(
 	}
 	if !usageOnly {
 		if replaceMessages || completed > 0 || upsertResult.structuredPRLinksChanged {
-			if err := setAndRefreshToolPRLinksTx(queries, write.Session.ID, write.Session.ToolPRLinks, replaceMessages, false); err != nil {
+			if replaceMessages && !db.ArchiveContent().OmitsToolContent() {
+				if err := writeToolPRLinksTx(queries, write.Session.ID, nil); err != nil {
+					return 0, err
+				}
+			}
+			if err := refreshSessionPromptPRLinksTx(ctx, queries, write.Session.ID); err != nil {
 				return 0, err
 			}
-		} else if err := appendSessionPRLinksWithToolsTx(queries, write.Session.ID, msgs, write.Session.ToolPRLinks); err != nil {
+		} else if err := appendSessionPromptPRLinksTx(ctx, queries, write.Session.ID, msgs); err != nil {
 			return 0, err
 		}
 	}
@@ -691,7 +696,7 @@ func (db *DB) writeOneSessionBatchTx(
 		}
 	}
 	if usageOnly {
-		if err := clearUsageOnlyTextAndStorePRLinksTx(queries, write.Session.ID, write.Session.ToolPRLinks, replaceMessages); err != nil {
+		if err := clearUsageOnlyTextTx(queries, write.Session.ID); err != nil {
 			return 0, err
 		}
 	} else if err := updateSessionAutomationFromMessagesTx(

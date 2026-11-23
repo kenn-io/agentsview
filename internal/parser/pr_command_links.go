@@ -62,24 +62,21 @@ func SamePRWorkingDirectory(cwd, dir string) bool {
 }
 
 // PRShellContext records which parts of a shared shell's context are unknown.
-// CheckoutUncertain follows directory changes and clears when the shell
-// returns to the recorded checkout. RepoUncertain is permanent: it covers
-// changes to the repository GitHub CLI targets. Both a subshell's directory
-// change and its host change end with the subshell.
+// CheckoutUncertain follows directory and repository environment changes.
+// A subshell's directory and host changes end with the subshell.
 type PRShellContext struct {
 	CheckoutUncertain bool
 	HostUncertain     bool
-	RepoUncertain     bool
 }
 
 // UncertainPRShell is the state after input that cannot be read.
 func UncertainPRShell() PRShellContext {
-	return PRShellContext{CheckoutUncertain: true, HostUncertain: true, RepoUncertain: true}
+	return PRShellContext{CheckoutUncertain: true, HostUncertain: true}
 }
 
 // Changed reports whether any part of the shell context is unknown.
 func (s PRShellContext) Changed() bool {
-	return s.CheckoutUncertain || s.HostUncertain || s.RepoUncertain
+	return s.CheckoutUncertain || s.HostUncertain
 }
 
 // CommandPRLinks derives links and reports whether the shell context changed.
@@ -90,19 +87,22 @@ func CommandPRLinks(ctx context.Context, command, cwd, remote string) ([]PRLink,
 
 // CommandPRLinksWithContext carries shared shell state between tool calls.
 func CommandPRLinksWithContext(ctx context.Context, command, cwd, remote string, state PRShellContext) ([]PRLink, PRShellContext, error) {
+	return commandPRLinksWithContext(ctx, command, cwd, remote, state, "", false)
+}
+
+func commandPRLinksWithContext(ctx context.Context, command, cwd, remote string, state PRShellContext, repo string, repoSet bool) ([]PRLink, PRShellContext, error) {
 	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
 	if err != nil {
 		return nil, UncertainPRShell(), nil //nolint:nilerr // Malformed optional shell input leaves the shell context unknown.
 	}
-	w := &prShellWalker{cwd: cwd, state: state, configRepo: state.RepoUncertain, stdin: map[*syntax.CallExpr]string{}}
+	w := &prShellWalker{cwd: cwd, state: state, repo: repo, repoSet: repoSet, stdin: map[*syntax.CallExpr]string{}}
 	syntax.Walk(file, w.visit)
 	var lists [][]PRLink
 	for _, call := range w.calls {
-		links, nested, err := call.links(ctx, cwd, remote)
+		links, err := call.links(ctx, cwd, remote)
 		if err != nil {
 			return nil, PRShellContext{}, err
 		}
-		w.state.RepoUncertain = w.state.RepoUncertain || nested.RepoUncertain
 		lists = append(lists, links)
 	}
 	return CombinePRLinks(lists...), w.state, ctx.Err()
@@ -117,19 +117,18 @@ func programName(word string) string {
 }
 
 type prShellScope struct {
-	restore, checkout, host, repo bool
+	restore, checkout, host bool
 }
 
 // prShellWalker follows a shell script in execution order.
 type prShellWalker struct {
-	cwd    string
-	state  PRShellContext
-	calls  []shellCall
-	scopes []prShellScope
-	stdin  map[*syntax.CallExpr]string
-	// configRepo records repository configuration changes, which outlast a
-	// subshell. Environment changes such as GH_REPO end with it.
-	configRepo bool
+	cwd     string
+	state   PRShellContext
+	calls   []shellCall
+	scopes  []prShellScope
+	stdin   map[*syntax.CallExpr]string
+	repo    string
+	repoSet bool
 }
 
 func (w *prShellWalker) visit(node syntax.Node) bool {
@@ -139,11 +138,7 @@ func (w *prShellWalker) visit(node syntax.Node) bool {
 		w.leave(scope)
 		return true
 	}
-	if _, ok := node.(*syntax.FuncDecl); ok {
-		w.configRepo, w.state.RepoUncertain, w.state.HostUncertain = true, true, true
-		return false
-	}
-	scope := prShellScope{checkout: w.state.CheckoutUncertain, host: w.state.HostUncertain, repo: w.state.RepoUncertain}
+	scope := prShellScope{checkout: w.state.CheckoutUncertain, host: w.state.HostUncertain}
 	switch node.(type) {
 	case *syntax.Subshell, *syntax.CmdSubst, *syntax.ProcSubst:
 		scope.restore = true
@@ -172,15 +167,7 @@ func (w *prShellWalker) visit(node syntax.Node) bool {
 func (w *prShellWalker) leave(scope prShellScope) {
 	if scope.restore {
 		w.state.CheckoutUncertain, w.state.HostUncertain = scope.checkout, scope.host
-		w.state.RepoUncertain = scope.repo || w.configRepo
 	}
-}
-
-// persistRepo records a repository configuration change that outlasts a
-// subshell.
-func (w *prShellWalker) persistRepo(changed bool) {
-	w.configRepo = w.configRepo || changed
-	w.state.RepoUncertain = w.state.RepoUncertain || changed
 }
 
 // recordHeredoc gives a command the literal here-documents of from as input.
@@ -203,14 +190,14 @@ func (w *prShellWalker) recordHeredoc(from, to *syntax.Stmt) {
 func (w *prShellWalker) persistEnv(name string) {
 	switch name {
 	case "GH_REPO":
-		w.state.RepoUncertain = true
+		w.state.CheckoutUncertain = true
 	case "GH_HOST":
 		w.state.HostUncertain = true
 	}
 }
 
 func (w *prShellWalker) callExpr(n *syntax.CallExpr) {
-	call := shellCall{HostUncertain: w.state.HostUncertain, Stdin: w.stdin[n]}
+	call := shellCall{HostUncertain: w.state.HostUncertain, Stdin: w.stdin[n], Repo: w.repo, RepoSet: w.repoSet, Tainted: w.repoSet}
 	for _, assignment := range n.Assigns {
 		if assignment.Name == nil {
 			continue
@@ -232,7 +219,7 @@ func (w *prShellWalker) callExpr(n *syntax.CallExpr) {
 	}
 	call.unwrapEnv()
 	w.applyBuiltin(call)
-	call.Tainted = call.Tainted || w.state.CheckoutUncertain || w.state.RepoUncertain
+	call.Tainted = call.Tainted || w.state.CheckoutUncertain
 	w.calls = append(w.calls, call)
 }
 
@@ -243,13 +230,9 @@ func (w *prShellWalker) applyBuiltin(call shellCall) {
 	}
 	switch programName(call.Words[0]) {
 	case "cd":
-		w.state.CheckoutUncertain = len(call.Words) != 2 || !call.Literal[1] || !SamePRWorkingDirectory(w.cwd, call.Words[1])
-	case "pushd", "popd", "eval", "source", ".":
-		w.persistRepo(true)
-	case "git":
-		w.persistRepo(call.changesRemote())
-	case "gh":
-		w.persistRepo(call.setsDefaultRepo())
+		w.state.CheckoutUncertain = w.state.CheckoutUncertain || len(call.Words) != 2 || !call.Literal[1] || !SamePRWorkingDirectory(w.cwd, call.Words[1])
+	case "pushd", "popd":
+		w.state.CheckoutUncertain = true
 	}
 }
 
@@ -282,49 +265,29 @@ func (c *shellCall) unwrapEnv() {
 	c.Words, c.Literal = c.Words[i:], c.Literal[i:]
 }
 
-// changesRemote reports whether a git command rewrites a remote URL.
-func (c shellCall) changesRemote() bool {
-	for i, word := range c.Words {
-		if word == "remote" && i+1 < len(c.Words) && slices.Contains([]string{"set-url", "add", "remove", "rm", "rename"}, c.Words[i+1]) {
-			return true
-		}
-		if strings.HasPrefix(word, "remote.") && strings.HasSuffix(word, ".url") {
-			return true
-		}
-	}
-	return false
-}
-
-// setsDefaultRepo reports whether gh changes its default repository.
-func (c shellCall) setsDefaultRepo() bool {
-	return len(c.Words) > 2 && c.Words[1] == "repo" && c.Words[2] == "set-default" &&
-		!slices.Contains(c.Words[3:], "--view") && !slices.Contains(c.Words[3:], "-v")
-}
-
-// links derives links from one command and reports shell state it leaves.
-func (c shellCall) links(ctx context.Context, cwd, remote string) ([]PRLink, PRShellContext, error) {
+// links derives links from one command.
+func (c *shellCall) links(ctx context.Context, cwd, remote string) ([]PRLink, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, PRShellContext{}, err
+		return nil, err
 	}
 	callRemote := remote
 	if c.Tainted {
 		callRemote = ""
 	}
-	lists := [][]PRLink{ghPRCallLinks(ctx, c, callRemote)}
-	var nested PRShellContext
+	lists := [][]PRLink{ghPRCallLinks(ctx, *c, callRemote)}
 	if script, ok := c.shellScript(); ok {
-		links, state, err := CommandPRLinksWithContext(ctx, script, cwd, callRemote, PRShellContext{HostUncertain: c.HostUncertain})
+		links, _, err := commandPRLinksWithContext(ctx, script, cwd, callRemote, PRShellContext{HostUncertain: c.HostUncertain}, c.Repo, c.RepoSet)
 		if err != nil {
-			return nil, PRShellContext{}, err
+			return nil, err
 		}
-		lists, nested = append(lists, links), state
+		lists = append(lists, links)
 	}
 	links, err := PromptPRLinksContext(ctx, c.launcherPrompt())
-	return CombinePRLinks(append(lists, links)...), nested, err
+	return CombinePRLinks(append(lists, links)...), err
 }
 
 // shellScript returns the script a `sh -c` style command runs.
-func (c shellCall) shellScript() (string, bool) {
+func (c *shellCall) shellScript() (string, bool) {
 	if len(c.Words) == 0 || !c.Literal[0] {
 		return "", false
 	}
@@ -482,8 +445,8 @@ func ghPRCallLinks(ctx context.Context, call shellCall, remote string) []PRLink 
 }
 
 // launcherPrompt returns the literal arguments and piped input of a claude or
-// codex command, skipping option values.
-func (c shellCall) launcherPrompt() string {
+// codex command.
+func (c *shellCall) launcherPrompt() string {
 	if len(c.Words) == 0 || !c.Literal[0] {
 		return ""
 	}
@@ -493,24 +456,9 @@ func (c shellCall) launcherPrompt() string {
 	}
 	var prompt []string
 	for i := 1; i < len(c.Words); i++ {
-		arg := c.Words[i]
-		switch {
-		case !c.Literal[i]:
-		case strings.HasPrefix(arg, "-"):
-			if !strings.Contains(arg, "=") && launcherValueFlag(program, arg) {
-				i++
-			}
-		default:
-			prompt = append(prompt, arg)
+		if c.Literal[i] {
+			prompt = append(prompt, c.Words[i])
 		}
 	}
 	return strings.Join(append(prompt, c.Stdin), "\n")
-}
-
-func launcherValueFlag(program, flag string) bool {
-	switch flag {
-	case "-m", "--model", "-c", "--config", "--settings", "--output-format", "--permission-mode", "--resume", "-r", "--output-schema", "--output-last-message", "-o", "-C", "--cd", "--add-dir", "--system-prompt", "--append-system-prompt":
-		return true
-	}
-	return program == "codex" && (flag == "-p" || flag == "--profile" || flag == "-s" || flag == "--sandbox")
 }

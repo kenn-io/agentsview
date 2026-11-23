@@ -131,6 +131,15 @@ func TestRawProjectionRecordedRemoteSurvivesRematerialization(t *testing.T) {
 	decoded, err := decodeRawPayload(payload)
 	require.NoError(t, err)
 	assert.Equal(t, "https://github.com/example/repo.git", decoded.RecordedGitRemote)
+	other := projectionOutcome("same prompt")
+	other.Outcome.Results[0].Result.Messages[1].ToolCalls[0].InputJSON = `{"command":"gh pr view 42"}`
+	other.Outcome.Results[0].Result.Session.GitRemote = "https://github.com/example/other.git"
+	d, _ := f.accept(t, "device-d", "other", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, d), d, other))
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT payload FROM raw_content_revisions WHERE session_id=$1`, current.SessionID).Scan(&payload))
+	decoded, err = decodeRawPayload(payload)
+	require.NoError(t, err)
+	assert.Equal(t, "https://github.com/example/repo.git", decoded.RecordedGitRemote)
 	_, err = f.runtime.ExecContext(t.Context(), rawSourceProofDetachSQL, current.SessionID)
 	require.NoError(t, err)
 	_, err = f.runtime.ExecContext(t.Context(), `DELETE FROM sessions WHERE id=$1`, current.SessionID)

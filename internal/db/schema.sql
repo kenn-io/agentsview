@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     -- JSON array of session pull request links; '' when none.
     pr_links TEXT NOT NULL DEFAULT '',
     structured_pr_links TEXT NOT NULL DEFAULT '',
+    tool_pr_links TEXT NOT NULL DEFAULT '',
     -- SQLite-only derived shell context; NULL requires initialization.
     pr_shell_tainted INTEGER,
     source_session_id TEXT NOT NULL DEFAULT '',
