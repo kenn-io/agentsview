@@ -17,7 +17,6 @@ func TestRawTranscriptPrefixRequiresCompleteRowAgreement(t *testing.T) {
 		matches bool
 	}{
 		{"append", func(p *ingest.PreparedSession) { p.Session.MessageCount = 2; p.Session.EndedAt = new("later") }, true},
-		{"recorded remote added", func(p *ingest.PreparedSession) { p.RecordedGitRemote = "https://github.com/example/repo.git" }, true},
 		{"changed message", func(p *ingest.PreparedSession) { p.Messages[0].Content = "different" }, false},
 		{"changed usage", func(p *ingest.PreparedSession) { p.Messages[0].OutputTokens = 3; p.Messages[0].HasOutputTokens = true }, false},
 		{"changed title", func(p *ingest.PreparedSession) { p.Session.SessionName = new("renamed") }, false},

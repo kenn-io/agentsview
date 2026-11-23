@@ -63,28 +63,9 @@ func TestToolCallPRLinksDirectFormats(t *testing.T) {
 		`{"cmd":"gh pr view 42 -R example/repo"}`,
 	} {
 		t.Run(input, func(t *testing.T) {
-			links := toolCallPRLinks(t, []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", ToolName: "exec", InputJSON: input}}}}, "", "https://github.com/example/repo.git")
+			links := toolCallPRLinks(t, []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", ToolName: "exec_command", InputJSON: input}}}}, "", "https://github.com/example/repo.git")
 			require.Len(t, links, 1)
 			assert.Equal(t, 42, links[0].Number)
-		})
-	}
-}
-
-func TestToolCallPRLinksUnknownCodeCommand(t *testing.T) {
-	for _, tc := range []struct {
-		input string
-		want  int
-	}{
-		{`const cmd = "gh pr view 42"; tools.exec_command({cmd})`, 0},
-		{`text(await tools.exec_command({cmd: "gh pr view 42 -R example/repo"}))`, 1},
-		{`await tools.exec_command({cmd: value}); await tools.exec_command({cmd: "gh pr view 42"})`, 0},
-		{`await tools.exec_command(value); await tools.exec_command({cmd: "gh pr view 42"})`, 0},
-		{`await tools.exec_command({cmd: value}); await tools.exec_command({cmd: "gh pr view 42 -R example/other"})`, 1},
-		{`await tools.exec_command({cmd: "echo hello"}); await tools.exec_command({cmd: "gh pr view 42"})`, 1},
-	} {
-		t.Run(tc.input, func(t *testing.T) {
-			messages := []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", ToolName: "exec", InputJSON: tc.input}}}}
-			assert.Len(t, toolCallPRLinks(t, messages, "", "https://github.com/example/repo.git"), tc.want)
 		})
 	}
 }
@@ -97,14 +78,12 @@ func TestToolCallPRLinksWorkingDirectory(t *testing.T) {
 		{`{"cmd":"gh pr view 42","workdir":"/work/other"}`, 0},
 		{`{"cmd":"gh pr view 42 -R example/repo","workdir":"/work/other"}`, 1},
 		{`{"cmd":"GH_HOST=git.example gh pr view 42 -R example/repo","workdir":"/work/other"}`, 1},
-		{`tools.exec_command({cmd:"gh pr view 42",workdir:"/work/other"})`, 0},
-		{`tools.exec_command({cmd:"gh pr view 42",workdir:dir})`, 0},
 		{`{"cmd":"gh pr view 42","workdir":"/work/./repo"}`, 1},
 		{`{"cmd":"gh pr view 42 -R github.com/example/repo","workdir":"/work/other"}`, 1},
 		{`{"cmd":"gh pr view https://github.com/example/repo/pull/42","workdir":"/work/other"}`, 1},
 	} {
 		t.Run(tc.input, func(t *testing.T) {
-			links := toolCallPRLinks(t, []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", ToolName: "exec", InputJSON: tc.input}}}}, "/work/repo", "https://github.com/example/repo.git")
+			links := toolCallPRLinks(t, []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", ToolName: "exec_command", InputJSON: tc.input}}}}, "/work/repo", "https://github.com/example/repo.git")
 			assert.Len(t, links, tc.want)
 		})
 	}
@@ -118,7 +97,7 @@ func TestToolCallPRLinksSharedShellDirectoryChange(t *testing.T) {
 		}}}
 		assert.Empty(t, toolCallPRLinks(t, messages, "/work/repo", "https://github.com/example/repo.git"))
 	}
-	for _, command := range []string{`git push`, `git config --get remote.origin.url`, `git remote -v`, `echo $GH_REPO`, `gh repo set-default --view`, `change_repo() { export GH_REPO=example/other; }`, `if false; then export GH_REPO=example/other; fi`} {
+	for _, command := range []string{`git push`, `git config --get remote.origin.url`, `git remote -v`, `echo $GH_REPO`, `gh repo set-default --view`, `change_repo() { export GH_REPO=example/other; }`} {
 		messages := []db.Message{{ToolCalls: []db.ToolCall{
 			{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"` + command + `"}`},
 			{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr merge 60"}`},
@@ -131,5 +110,26 @@ func TestToolCallPRLinksSharedShellDirectoryChange(t *testing.T) {
 			{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr merge 60"}`},
 		}}}
 		assert.Empty(t, toolCallPRLinks(t, messages, "/work/repo", "https://github.com/example/repo.git"), command)
+	}
+}
+
+func TestToolCallPRLinksPlainInputAndRepositoryChanges(t *testing.T) {
+	unknown := []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", ToolName: "custom_shell", InputJSON: `gh pr view 42 -R github.com/example/repo`}}}}
+	assert.Len(t, toolCallPRLinks(t, unknown, "", ""), 1)
+	for _, tool := range []string{"shell_command", "exec_command"} {
+		t.Run(tool, func(t *testing.T) {
+			call := func(input string) db.ToolCall { return db.ToolCall{Category: "Bash", ToolName: tool, InputJSON: input} }
+			links := toolCallPRLinks(t, []db.Message{{ToolCalls: []db.ToolCall{call(`gh pr view 42 -R github.com/example/repo`)}}}, "", "")
+			assert.Len(t, links, 1)
+			messages := []db.Message{{ToolCalls: []db.ToolCall{call(`{"command":"git remote set-url origin https://github.com/example/other.git"}`), call(`{"command":"gh pr view 42"}`)}}}
+			assert.Empty(t, toolCallPRLinks(t, messages, "/work/repo", "https://github.com/example/repo.git"))
+		})
+	}
+}
+
+func TestToolCallPRLinksIgnoresCodeMode(t *testing.T) {
+	for _, input := range []string{`tools.exec_command({cmd:"gh pr view 42 -R example/repo"})`, `{"cmd":"gh pr view 42 -R example/repo"}`} {
+		messages := []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", ToolName: "exec", InputJSON: input}}}}
+		assert.Empty(t, toolCallPRLinks(t, messages, "", ""))
 	}
 }

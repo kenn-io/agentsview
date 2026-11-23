@@ -648,7 +648,7 @@ func (db *DB) writeOneSessionBatchTx(
 		}
 	}
 	if !usageOnly {
-		if replaceMessages || completed > 0 || upsertResult.structuredPRLinksChanged || upsertResult.cwdChanged {
+		if replaceMessages || completed > 0 || upsertResult.structuredPRLinksChanged {
 			if err := refreshSessionPromptPRLinksTx(ctx, queries, write.Session.ID); err != nil {
 				return 0, err
 			}

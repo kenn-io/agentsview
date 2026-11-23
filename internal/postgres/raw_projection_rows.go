@@ -4,11 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"reflect"
-	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/parser"
@@ -39,8 +37,8 @@ func rawGroupHasStaleFriction(
 
 // syncSelectedRawPRLinks refreshes materialized revisions selected by active
 // branches, including longer retained captures whose source has departed.
-func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string, dialogueChanges []string, force bool) (bool, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT b.session_id,s.data_version FROM raw_session_branches b JOIN sessions s ON s.id=b.session_id WHERE b.group_id=$1 AND b.active AND NOT COALESCE(`+rawBranchExclusionSQL("b", "")+`,false) AND ($4 OR s.data_version<$2 OR b.session_id=ANY($3::text[]))`, group, db.CurrentDataVersion(), dialogueChanges, force)
+func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string, dialogueChanges []string) (bool, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT b.session_id,s.data_version FROM raw_session_branches b JOIN sessions s ON s.id=b.session_id WHERE b.group_id=$1 AND b.active AND (s.data_version<$2 OR b.session_id=ANY($3::text[]))`, group, db.CurrentDataVersion(), dialogueChanges)
 	if err != nil {
 		return false, err
 	}
@@ -68,15 +66,11 @@ func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string, dialo
 		if err != nil {
 			return false, err
 		}
-		remote, err := selectedRawRemote(ctx, tx, id)
-		if err != nil {
-			return false, err
-		}
 		promptLinks, err := db.PromptPRLinksContext(ctx, payload.Messages)
 		if err != nil {
 			return false, err
 		}
-		toolLinks, err := db.ToolCallPRLinks(ctx, payload.Messages, payload.Session.Cwd, remote)
+		toolLinks, err := db.ToolCallPRLinks(ctx, payload.Messages, payload.Session.Cwd, "")
 		if err != nil {
 			return false, err
 		}
@@ -96,42 +90,6 @@ SELECT COALESCE((SELECT links_changed FROM updated),false)`, id, links, db.Curre
 		changed = changed || linksChanged
 	}
 	return changed, nil
-}
-
-// selectedRawRemote uses repository evidence from active, visible sources.
-func selectedRawRemote(ctx context.Context, tx *sql.Tx, id string) (string, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT b.prior_payload FROM raw_session_branches b WHERE b.session_id=$1 AND b.active AND NOT COALESCE(`+rawBranchExclusionSQL("b", "")+`,false) ORDER BY b.branch_id`, id)
-	if err != nil {
-		return "", err
-	}
-	defer rows.Close()
-	remote, normalized := "", ""
-	for rows.Next() {
-		var encoded []byte
-		if err := rows.Scan(&encoded); err != nil {
-			return "", err
-		}
-		p, err := decodeRawPayload(encoded)
-		if err != nil {
-			return "", err
-		}
-		if p.RecordedGitRemote == "" {
-			return "", nil
-		}
-		value, ok := export.NormalizeGitRemote(p.RecordedGitRemote)
-		if !ok {
-			return "", nil
-		}
-		if normalized != "" {
-			oldHost, oldRepo, _ := strings.Cut(normalized, "/")
-			host, repo, _ := strings.Cut(value, "/")
-			if len(parser.CombinePRLinks([]parser.PRLink{{Host: oldHost, Repository: oldRepo, Number: 1}}, []parser.PRLink{{Host: host, Repository: repo, Number: 1}})) != 1 {
-				return "", nil
-			}
-		}
-		remote, normalized = p.RecordedGitRemote, value
-	}
-	return remote, rows.Err()
 }
 
 // rawEmbeddingChange is a physical session whose embeddings must follow a
@@ -162,7 +120,7 @@ func publishRawRevision(ctx context.Context, tx *sql.Tx, identityChanged bool, c
 
 // materializeGroup requires the caller to hold the group's row lock. It
 // returns the embedding changes for the caller to pass to publishRawRevision.
-func (s *RawProjectionStore) materializeGroup(ctx context.Context, tx *sql.Tx, group string, fresh map[string][]byte, refreshLinks bool) ([]rawEmbeddingChange, error) {
+func (s *RawProjectionStore) materializeGroup(ctx context.Context, tx *sql.Tx, group string, fresh map[string][]byte) ([]rawEmbeddingChange, error) {
 	if err := reconcileRawPrefixes(ctx, tx, group); err != nil {
 		return nil, err
 	}
@@ -246,11 +204,6 @@ func (s *RawProjectionStore) materializeGroup(ctx context.Context, tx *sql.Tx, g
 		}
 		if !exists || action == "remove" {
 			changes = append(changes, rawEmbeddingChange{session: c.id, revision: c.revision, action: action})
-		}
-	}
-	if refreshLinks {
-		if _, err := syncSelectedRawPRLinks(ctx, tx, group, nil, true); err != nil {
-			return nil, err
 		}
 	}
 	return changes, nil
@@ -376,7 +329,7 @@ func (s *RawProjectionStore) writePayload(ctx context.Context, tx *sql.Tx, id, g
 	if err != nil {
 		return err
 	}
-	toolLinks, err := db.ToolCallPRLinks(ctx, p.Messages, p.Session.Cwd, p.RecordedGitRemote)
+	toolLinks, err := db.ToolCallPRLinks(ctx, p.Messages, p.Session.Cwd, "")
 	if err != nil {
 		return err
 	}

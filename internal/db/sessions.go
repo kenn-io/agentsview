@@ -1755,7 +1755,7 @@ func (db *DB) upsertSession(ctx context.Context,
 	if err != nil {
 		return result, err
 	}
-	if (result.structuredPRLinksChanged || result.cwdChanged) && !db.usageOnlyStorage() {
+	if result.structuredPRLinksChanged && !db.usageOnlyStorage() {
 		if err := refreshSessionPromptPRLinksTx(ctx, tx, s.ID); err != nil {
 			return result, err
 		}
@@ -1774,7 +1774,6 @@ func (db *DB) upsertSession(ctx context.Context,
 type sessionUpsertResult struct {
 	inserted                 bool
 	structuredPRLinksChanged bool
-	cwdChanged               bool
 	sourceMissing            bool
 	previousProject          string
 	currentProject           string
@@ -1808,19 +1807,18 @@ func upsertSessionExec(
 	var previousSessionName sql.NullString
 	var previousAutomated bool
 	var previousParent sql.NullString
-	var previousRelationship, previousStructuredPRLinks, previousCwd string
+	var previousRelationship, previousStructuredPRLinks string
 	var deletedAt, sourceMissingAt sql.NullString
 	err = queryRow(ctx,
-		"SELECT project, session_name, deleted_at, source_missing_at, is_automated, parent_session_id, relationship_type, structured_pr_links, cwd "+
+		"SELECT project, session_name, deleted_at, source_missing_at, is_automated, parent_session_id, relationship_type, structured_pr_links "+
 			"FROM sessions WHERE id = ?", s.ID,
 	).Scan(
 		&previousProject, &previousSessionName, &deletedAt, &sourceMissingAt, &previousAutomated,
-		&previousParent, &previousRelationship, &previousStructuredPRLinks, &previousCwd,
+		&previousParent, &previousRelationship, &previousStructuredPRLinks,
 	)
 	result := sessionUpsertResult{
 		inserted:                 errors.Is(err, sql.ErrNoRows),
 		structuredPRLinksChanged: err == nil && previousStructuredPRLinks != EncodePRLinks(s.PRLinks),
-		cwdChanged:               err == nil && previousCwd != s.Cwd,
 		previousProject:          previousProject,
 		currentProject:           s.Project,
 	}
@@ -3731,53 +3729,39 @@ func (db *DB) UpdateSessionCwd(ctx context.Context, id, cwd string) error {
 func (db *DB) UpdateSessionCwdByIdentity(ctx context.Context,
 	id, path, agent, cwd string,
 ) (bool, error) {
-	count, err := db.updateSessionCwd(ctx,
+	return db.updateSessionCwd(ctx,
 		` WHERE id = ? AND file_path = ? AND agent = ?`,
 		[]any{id, path, agent}, cwd,
 	)
-	return count > 0, err
 }
 
 func (db *DB) updateSessionCwd(ctx context.Context,
 	identityWhere string, identityArgs []any, cwd string,
-) (int, error) {
+) (bool, error) {
 	if err := db.requireWritable(); err != nil {
-		return 0, err
+		return false, err
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	staleVersion := max(CurrentDataVersion()-1, 0)
 	args := append([]any{cwd, staleVersion}, identityArgs...)
-	tx, err := db.getWriter().Begin(ctx)
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	rows, err := tx.QueryContext(ctx,
+	result, err := db.getWriter().Exec(ctx,
 		`UPDATE sessions SET
 			cwd = ?,
 			data_version = MIN(data_version, ?),
 			local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		`+identityWhere+` AND cwd IS NOT ?
-		 AND deleted_at IS NULL RETURNING id`,
+		 AND deleted_at IS NULL`,
 		append(args, cwd)...,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("updating session cwd: %w", err)
+		return false, fmt.Errorf("updating session cwd: %w", err)
 	}
-	ids, err := scanStrings(rows)
+	rows, err := result.RowsAffected()
 	if err != nil {
-		return 0, fmt.Errorf("listing session cwd updates: %w", err)
+		return false, fmt.Errorf("counting session cwd updates: %w", err)
 	}
-	for _, id := range ids {
-		if err := refreshSessionPromptPRLinksTx(ctx, tx, id); err != nil {
-			return 0, fmt.Errorf("refreshing session PR links after cwd update: %w", err)
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return 0, err
-	}
-	return len(ids), nil
+	return rows > 0, nil
 }
 
 // UpdateCwdByAgentPath updates the workspace identity for every active or
@@ -3790,7 +3774,34 @@ func (db *DB) UpdateCwdByAgentPath(ctx context.Context, path, agent, cwd string)
 // UpdateCwdByAgentPathCount returns the number of source rows changed and
 // marks them stale so a later admitted parse can refresh project identity.
 func (db *DB) UpdateCwdByAgentPathCount(ctx context.Context, path, agent, cwd string) (int, error) {
-	return db.updateSessionCwd(ctx, ` WHERE file_path = ? AND agent = ?`, []any{path, agent}, cwd)
+	if err := db.requireWritable(); err != nil {
+		return 0, err
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	staleVersion := max(CurrentDataVersion()-1, 0)
+	result, err := db.getWriter().Exec(ctx,
+		`UPDATE sessions SET
+			cwd = ?,
+			data_version = MIN(data_version, ?),
+			local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		 WHERE file_path = ? AND agent = ?
+		 AND cwd IS NOT ?
+		 AND deleted_at IS NULL`,
+		cwd, staleVersion, path, agent, cwd,
+	)
+	if err != nil {
+		return 0, fmt.Errorf(
+			"updating cwd for %s/%s: %w", agent, path, err,
+		)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf(
+			"counting cwd updates for %s/%s: %w", agent, path, err,
+		)
+	}
+	return int(rows), nil
 }
 
 // StaleDataVersionAgentPaths returns every (agent, file_path) source identity

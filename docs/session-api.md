@@ -701,14 +701,14 @@ Commands can name a pull request by URL or number. A number can use `-R` or
 ```
 
 AgentsView keeps one link per pull request. A bare number uses the session's
-recorded repository when the command runs in the session's working directory.
-An explicit `owner/repo` uses the recorded remote's host or a literal `GH_HOST`
-in the command, falling back to `github.com` when neither is available.
-Conflicting host evidence leaves the number unlinked. A host-qualified
-repository or a full PR URL supplies its own host. AgentsView scans retained
-Claude Bash inputs for earlier directory and repository changes when a later
-bare number needs the recorded remote. After a directory change, a captured
-working directory matching the session's directory restores that remote.
+single checkout remote when the command runs in the session's working directory.
+An explicit `owner/repo` uses the checkout remote's host or a literal `GH_HOST`
+in the command, falling back to `github.com` when neither is available. A
+host-qualified repository or a full PR URL supplies its own host. AgentsView
+scans retained Claude Bash inputs for earlier directory and repository changes
+when a later bare number needs the checkout remote. After a directory change, a
+captured working directory matching the session's directory restores that
+remote. Hosted sessions link commands with an explicit repository or URL.
 Child-agent prompts link full PR URLs as references. Prompt mentions indicate
 a reference, not work on the pull request. Archives that dropped tool inputs
 cannot recover command or child-prompt links. Push-to-head linking is planned

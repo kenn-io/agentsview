@@ -853,7 +853,7 @@ func (db *DB) upsertSessionWithProjectIdentity(ctx context.Context,
 	if err != nil {
 		return sessionUpsertResult{}, err
 	}
-	if (result.structuredPRLinksChanged || result.cwdChanged) && !db.usageOnlyStorage() {
+	if result.structuredPRLinksChanged && !db.usageOnlyStorage() {
 		if err := refreshSessionPromptPRLinksTx(ctx, tx, s.ID); err != nil {
 			return result, err
 		}
@@ -907,12 +907,6 @@ func upsertProjectIdentityObservationWithSnapshotProjectTxContext(
 	if err != nil {
 		return err
 	}
-	var oldRemote string
-	if normalized.SessionID != "" {
-		if err := tx.QueryRowContext(ctx, `SELECT `+prLinkRemoteSQL, normalized.SessionID).Scan(&oldRemote); err != nil {
-			return err
-		}
-	}
 	normalized, err = attributeRepositoryObservationTx(ctx, tx, normalized, snapshotProject)
 	if err != nil {
 		return err
@@ -935,21 +929,6 @@ func upsertProjectIdentityObservationWithSnapshotProjectTxContext(
 		allowSnapshotProjectCorrection,
 	); err != nil {
 		return err
-	}
-	if normalized.SessionID != "" {
-		var remote string
-		if err := tx.QueryRowContext(ctx, `SELECT `+prLinkRemoteSQL, normalized.SessionID).Scan(&remote); err != nil {
-			return err
-		}
-		if remote != oldRemote {
-			var hasTools bool
-			if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tool_calls WHERE session_id=? AND category IN ('Bash','Task') AND input_json IS NOT NULL)`, normalized.SessionID).Scan(&hasTools); err != nil {
-				return err
-			}
-			if hasTools {
-				return refreshSessionPromptPRLinksTx(ctx, tx, normalized.SessionID)
-			}
-		}
 	}
 	return nil
 }

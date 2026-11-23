@@ -58,158 +58,65 @@ func shellLiteral(parts []syntax.WordPart) (string, bool) {
 
 // CommandPRLinks finds PRs named by direct gh commands in a shell input.
 func CommandPRLinks(ctx context.Context, command, remote string, allowBare bool) ([]PRLink, error) {
-	links, _, _, _, err := AnalyzePRCommand(ctx, command, remote, allowBare, false)
+	links, _, _, _, _, err := AnalyzePRCommand(ctx, command, remote, allowBare, false)
 	return links, err
 }
 
 // AnalyzePRCommand extracts links and shared shell context from one parse.
-func AnalyzePRCommand(ctx context.Context, command, remote string, allowBare, hostUnknown bool) ([]PRLink, bool, bool, []PRLink, error) {
+func AnalyzePRCommand(ctx context.Context, command, remote string, allowBare, hostUnknown bool) ([]PRLink, bool, bool, bool, []PRLink, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, false, false, nil, err
-	}
-	candidate := strings.NewReplacer("'", "", `"`, "", `\`, "").Replace(command)
-	if !strings.Contains(candidate, "gh") && !strings.Contains(candidate, "cd") && !strings.Contains(candidate, "pushd") && !strings.Contains(candidate, "popd") && !strings.Contains(candidate, "git") && !strings.Contains(candidate, "GH_") && !strings.Contains(candidate, "()") && !strings.Contains(candidate, "function") {
-		return nil, false, false, nil, nil
+		return nil, false, false, false, nil, err
 	}
 	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
 	if err != nil {
-		return nil, false, false, nil, ctx.Err()
+		return nil, false, false, false, nil, ctx.Err()
 	}
-	directoryChanged, repositoryChanged, firstRepoAssignment, functions := bashChangesRepositoryContext(file)
-	var dependsOnRemote []PRLink
-	type segment struct {
-		stmt   *syntax.Stmt
-		nested bool
-	}
-	var segments []segment
-	var collect func(*syntax.Stmt, bool)
-	var collectIf func(*syntax.IfClause)
-	collectIf = func(clause *syntax.IfClause) {
-		for _, stmt := range clause.Cond {
-			collect(stmt, true)
+	directoryChanged, repositoryChanged, persistent, firstRepo, firstHost := bashChangesRepositoryContext(file)
+	var calls []*syntax.CallExpr
+	syntax.Walk(file, func(node syntax.Node) bool {
+		if call, ok := node.(*syntax.CallExpr); ok {
+			calls = append(calls, call)
 		}
-		result, known := literalCondition(clause.Cond)
-		if known && result {
-			for _, stmt := range clause.Then {
-				collect(stmt, true)
-			}
-		} else if known && clause.Else != nil {
-			collectIf(clause.Else)
-		}
-	}
-	collect = func(stmt *syntax.Stmt, nested bool) {
-		switch cmd := stmt.Cmd.(type) {
-		case *syntax.BinaryCmd:
-			collect(cmd.X, nested)
-			collect(cmd.Y, nested)
-		case *syntax.IfClause:
-			collectIf(cmd)
-		case *syntax.WhileClause:
-			for _, child := range cmd.Cond {
-				collect(child, true)
-			}
-		case *syntax.ForClause, *syntax.CaseClause:
-		case *syntax.Block:
-			for _, child := range cmd.Stmts {
-				collect(child, true)
-			}
-		case *syntax.Subshell:
-			for _, child := range cmd.Stmts {
-				collect(child, true)
-			}
-		default:
-			segments = append(segments, segment{stmt, nested})
-		}
-	}
-	for _, stmt := range file.Stmts {
-		collect(stmt, false)
-	}
+		return true
+	})
 	remoteHost, remoteRepo := "", ""
 	if normalized, ok := export.NormalizeGitRemote(remote); ok {
 		remoteHost, remoteRepo, _ = strings.Cut(normalized, "/")
 	}
-	shellHost, shellHostSet, shellHostValid := "", false, true
 	var links [][]PRLink
-	bareSafe := allowBare
-	for _, segment := range segments {
-		stmt := segment.stmt
-		if firstRepoAssignment.IsValid() && firstRepoAssignment.Offset() < stmt.End().Offset() {
-			bareSafe = false
-		}
+	var dependsOnRemote []PRLink
+	for _, call := range calls {
 		if err := ctx.Err(); err != nil {
-			return nil, false, false, nil, err
+			return nil, false, false, false, nil, err
 		}
-		host, hostSet, hostValid := shellHost, shellHostSet, shellHostValid
-		recordHost := func(a *syntax.Assign) {
-			if a.Name == nil || a.Name.Value != "GH_HOST" {
-				return
-			}
-			hostSet = true
-			if a.Value == nil {
-				hostValid = false
-				return
-			}
-			value, ok := shellLiteral(a.Value.Parts)
-			if !ok || value == "" || (host != "" && !strings.EqualFold(host, value)) {
-				hostValid = false
-				return
-			}
-			host = value
-		}
-		if decl, ok := stmt.Cmd.(*syntax.DeclClause); ok {
-			if decl.Variant.Value == "export" {
-				for _, a := range decl.Args {
-					recordHost(a)
-					if len(stmt.Redirs) > 0 && a.Name != nil && a.Name.Value == "GH_HOST" {
-						hostValid = false
-					}
-				}
-				if segment.nested && hostSet {
-					bareSafe = false
-				}
-				if !segment.nested {
-					shellHost, shellHostSet, shellHostValid = host, hostSet, hostValid
-				}
-			}
-			continue
-		}
-		call, ok := stmt.Cmd.(*syntax.CallExpr)
-		if !ok {
-			continue
-		}
-		if hasCommandSubstitution(call) {
-			bareSafe = false
-		}
+		bareSafe := allowBare && (!firstRepo.IsValid() || call.End().Offset() < firstRepo.Offset()) && !hasCommandSubstitution(call)
+		host, hostSet, hostValid := "", false, true
 		for _, a := range call.Assigns {
-			recordHost(a)
+			if a.Name == nil {
+				continue
+			}
+			if a.Name.Value == "GH_REPO" {
+				bareSafe = false
+			}
+			if a.Name.Value == "GH_HOST" {
+				hostSet = true
+				if a.Value == nil {
+					hostValid = false
+				} else {
+					host, hostValid = shellLiteral(a.Value.Parts)
+					hostValid = hostValid && host != ""
+				}
+			}
 		}
 		words := make([]string, len(call.Args))
 		literal := make([]bool, len(call.Args))
 		for i, word := range call.Args {
 			words[i], literal[i] = shellLiteral(word.Parts)
 		}
-		if len(words) == 0 {
+		if len(words) < 4 || !literal[0] || !literal[1] || !literal[2] || words[0] != "gh" || words[1] != "pr" {
 			continue
 		}
-		if !literal[0] || words[0] != "gh" {
-			if literal[0] && (words[0] == "cd" || words[0] == "pushd" || words[0] == "popd") {
-				remoteHost, remoteRepo = "", ""
-			}
-			if repositoryMutation(words) {
-				remoteHost, remoteRepo, hostUnknown = "", "", true
-			}
-			if !literal[0] || repositoryMutation(words) || functions[words[0]] {
-				bareSafe = false
-			}
-			continue
-		}
-		if len(words) < 4 || !literal[1] || !literal[2] || words[1] != "pr" {
-			if repositoryMutation(words) {
-				bareSafe = false
-				remoteHost, remoteRepo, hostUnknown = "", "", true
-			}
-			continue
-		}
+		callHostUnknown := hostUnknown || firstHost.IsValid() && call.End().Offset() >= firstHost.Offset()
 		if words[2] == "co" {
 			words[2] = "checkout"
 		}
@@ -259,7 +166,7 @@ func AnalyzePRCommand(ctx context.Context, command, remote string, allowBare, ho
 		if strings.HasPrefix(selector, "https://") || strings.HasPrefix(selector, "http://") {
 			found, err := PromptPRLinksContext(ctx, selector)
 			if err != nil {
-				return nil, false, false, nil, err
+				return nil, false, false, false, nil, err
 			}
 			links = append(links, found)
 			continue
@@ -292,13 +199,13 @@ func AnalyzePRCommand(ctx context.Context, command, remote string, allowBare, ho
 			selectedHost = explicitHost
 		} else if hostSet {
 			selectedHost = host
-			if remoteHost != "" && !strings.EqualFold(host, remoteHost) {
+			if !specified && remoteHost != "" && !strings.EqualFold(host, remoteHost) {
 				continue
 			}
-		} else if remoteHost != "" {
+		} else if remoteHost != "" && !callHostUnknown {
 			selectedHost = remoteHost
 		}
-		if selectedHost == "" && specified && !hostUnknown {
+		if selectedHost == "" && specified && !callHostUnknown {
 			selectedHost = "github.com"
 		}
 		if selectedHost == "" {
@@ -311,7 +218,7 @@ func AnalyzePRCommand(ctx context.Context, command, remote string, allowBare, ho
 			}
 		}
 	}
-	return CombinePRLinks(links...), directoryChanged, repositoryChanged, dependsOnRemote, nil
+	return CombinePRLinks(links...), directoryChanged, repositoryChanged, persistent, dependsOnRemote, nil
 }
 
 func hasCommandSubstitution(node syntax.Node) bool {
@@ -325,117 +232,132 @@ func hasCommandSubstitution(node syntax.Node) bool {
 	return found
 }
 
-func literalCondition(stmts []*syntax.Stmt) (bool, bool) {
-	if len(stmts) == 0 {
-		return true, true // else
-	}
-	if len(stmts) != 1 || stmts[0].Negated || len(stmts[0].Redirs) != 0 {
-		return false, false
-	}
-	call, ok := stmts[0].Cmd.(*syntax.CallExpr)
-	if !ok || len(call.Assigns) != 0 || len(call.Args) != 1 {
-		return false, false
-	}
-	word, literal := shellLiteral(call.Args[0].Parts)
-	return word == "true", literal && (word == "true" || word == "false")
-}
-
-func bashChangesRepositoryContext(file *syntax.File) (bool, bool, syntax.Pos, map[string]bool) {
-	repositoryChanged := false
-	var firstRepoAssignment syntax.Pos
-	recordRepoAssignment := func(pos syntax.Pos) {
-		if !firstRepoAssignment.IsValid() || pos.Offset() < firstRepoAssignment.Offset() {
-			firstRepoAssignment = pos
-		}
-	}
-	functions := make(map[string]bool)
+func bashChangesRepositoryContext(file *syntax.File) (bool, bool, bool, syntax.Pos, syntax.Pos) {
+	var firstRepo, firstHost syntax.Pos
+	var directory, repository, persistent bool
+	functions := map[string]bool{}
 	syntax.Walk(file, func(node syntax.Node) bool {
 		if fn, ok := node.(*syntax.FuncDecl); ok {
 			functions[fn.Name.Value] = true
 		}
 		return true
 	})
-	var walk func(syntax.Node)
-	walk = func(root syntax.Node) {
-		syntax.Walk(root, func(node syntax.Node) bool {
-			switch call := node.(type) {
-			case *syntax.FuncDecl:
-				return false
-			case *syntax.IfClause:
-				for _, stmt := range call.Cond {
-					walk(stmt)
-				}
-				result, known := literalCondition(call.Cond)
-				if !known || result {
-					for _, stmt := range call.Then {
-						walk(stmt)
-					}
-				}
-				if (!known || !result) && call.Else != nil {
-					walk(call.Else)
-				}
-				return false
-			case *syntax.Assign:
-				if call.Name != nil && call.Name.Value == "GH_REPO" {
-					recordRepoAssignment(call.Pos())
-				}
-			case *syntax.DeclClause:
-				if call.Variant.Value == "export" {
-					for _, arg := range call.Args {
-						if arg.Name != nil && (arg.Name.Value == "GH_REPO" || arg.Name.Value == "GH_HOST") {
-							repositoryChanged = true
-						}
-					}
-				}
-			case *syntax.CallExpr:
-				if len(call.Args) == 0 {
-					for _, assign := range call.Assigns {
-						if assign.Name != nil && (assign.Name.Value == "GH_REPO" || assign.Name.Value == "GH_HOST") {
-							repositoryChanged = true
-							if assign.Name.Value == "GH_REPO" {
-								recordRepoAssignment(assign.Pos())
-							}
-						}
-					}
-				}
-				if len(call.Args) == 0 {
-					return false
-				}
-				name, literal := shellLiteral(call.Args[0].Parts)
-				if literal && functions[name] {
-					repositoryChanged = true
-					return false
-				}
-				words := make([]string, len(call.Args))
-				for i, arg := range call.Args {
-					words[i], _ = shellLiteral(arg.Parts)
-				}
-				if repositoryMutation(words) {
-					repositoryChanged = true
-					return false
-				}
-			}
-			return true
-		})
+	record := func(dst *syntax.Pos, pos syntax.Pos) {
+		if !dst.IsValid() || pos.Offset() < dst.Offset() {
+			*dst = pos
+		}
 	}
-	walk(file)
-	directoryChanged := false
 	syntax.Walk(file, func(node syntax.Node) bool {
-		switch call := node.(type) {
-		case *syntax.Subshell, *syntax.FuncDecl, *syntax.CmdSubst, *syntax.ProcSubst:
-			return false
-		case *syntax.CallExpr:
-			if len(call.Args) == 0 {
-				return false
+		switch n := node.(type) {
+		case *syntax.FuncDecl:
+			record(&firstRepo, n.Pos())
+		case *syntax.DeclClause:
+			for _, a := range n.Args {
+				if a.Name == nil {
+					continue
+				}
+				if a.Name.Value == "GH_REPO" {
+					record(&firstRepo, a.Pos())
+				}
+				if a.Name.Value == "GH_HOST" {
+					record(&firstHost, a.Pos())
+				}
 			}
-			name, literal := shellLiteral(call.Args[0].Parts)
-			if literal && (name == "cd" || name == "pushd" || name == "popd") {
-				directoryChanged = true
+		case *syntax.CallExpr:
+			words := make([]string, len(n.Args))
+			for i, arg := range n.Args {
+				words[i], _ = shellLiteral(arg.Parts)
+			}
+			name := ""
+			if len(words) > 0 {
+				name = words[0]
+			}
+			for _, a := range n.Assigns {
+				if a.Name == nil {
+					continue
+				}
+				if a.Name.Value == "GH_REPO" {
+					record(&firstRepo, a.Pos())
+				}
+				if a.Name.Value == "GH_HOST" {
+					literalPrefix := false
+					if name == "gh" && len(words) > 1 && words[1] == "pr" && a.Value != nil {
+						_, literalPrefix = shellLiteral(a.Value.Parts)
+					}
+					if !literalPrefix {
+						record(&firstHost, a.Pos())
+					}
+				}
+			}
+			if name == "cd" || name == "pushd" || name == "popd" {
+				record(&firstRepo, n.Pos())
+			}
+			if name == "eval" || name == "source" || name == "." || functions[name] {
+				record(&firstRepo, n.Pos())
+				record(&firstHost, n.Pos())
+			}
+			if repositoryMutation(words) {
+				record(&firstRepo, n.Pos())
+			}
+			if name == "unset" {
+				for _, word := range words[1:] {
+					if word == "GH_HOST" {
+						record(&firstHost, n.Pos())
+					}
+				}
 			}
 		}
-		return !directoryChanged
+		return true
 	})
-	return directoryChanged, repositoryChanged, firstRepoAssignment, functions
+	syntax.Walk(file, func(node syntax.Node) bool {
+		switch n := node.(type) {
+		case *syntax.FuncDecl:
+			return false
+		case *syntax.CallExpr:
+			words := make([]string, len(n.Args))
+			for i, arg := range n.Args {
+				words[i], _ = shellLiteral(arg.Parts)
+			}
+			if len(words) > 0 && (words[0] == "git" || words[0] == "gh") && repositoryMutation(words) {
+				persistent = true
+			}
+		}
+		return true
+	})
+	syntax.Walk(file, func(node syntax.Node) bool {
+		switch n := node.(type) {
+		case *syntax.Subshell, *syntax.FuncDecl, *syntax.CmdSubst, *syntax.ProcSubst:
+			return false
+		case *syntax.DeclClause:
+			for _, a := range n.Args {
+				if a.Name != nil && (a.Name.Value == "GH_HOST" || a.Name.Value == "GH_REPO") {
+					repository = true
+				}
+			}
+		case *syntax.CallExpr:
+			words := make([]string, len(n.Args))
+			for i, arg := range n.Args {
+				words[i], _ = shellLiteral(arg.Parts)
+			}
+			for _, a := range n.Assigns {
+				if len(words) == 0 && a.Name != nil && (a.Name.Value == "GH_HOST" || a.Name.Value == "GH_REPO") {
+					repository = true
+				}
+			}
+			if len(words) > 0 {
+				name := words[0]
+				if name == "cd" || name == "pushd" || name == "popd" {
+					directory = true
+				}
+				if repositoryMutation(words) || functions[name] || name == "eval" || name == "source" || name == "." {
+					repository = true
+					persistent = persistent || name == "git" || name == "gh" || functions[name]
+				}
+			}
+		}
+		return true
+	})
+	return directory, repository || persistent, persistent, firstRepo, firstHost
 }
 
 func repositoryMutation(words []string) bool {

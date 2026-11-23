@@ -27,11 +27,9 @@ type Candidate struct {
 
 // PreparedSession is the complete normalized content graph ready for storage.
 type PreparedSession struct {
-	// RecordedGitRemote is the provider-recorded repository for hosted derivation.
-	RecordedGitRemote string
-	Session           db.Session
-	Messages          []db.Message
-	UsageEvents       []db.UsageEvent
+	Session     db.Session
+	Messages    []db.Message
+	UsageEvents []db.UsageEvent
 	// PlanUsage is the session's plan usage and live-capture coverage
 	// row; nil when the parser reported neither.
 	PlanUsage *db.SessionPlanUsage

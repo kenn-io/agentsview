@@ -58,9 +58,13 @@ func (e *Engine) compareStoredSession(
 	if err != nil {
 		return nil, err
 	}
-	remote, err := e.db.SessionPRLinkRemote(ctx, stored.ID)
+	snapshots, err := e.db.ListSessionProjectIdentitySnapshotsByID(ctx, []string{stored.ID})
 	if err != nil {
 		return nil, err
+	}
+	var remote string
+	if snapshot := snapshots[stored.ID]; snapshot.RemoteCandidateCount == 1 {
+		remote = snapshot.GitRemote
 	}
 	var toolLinks []db.PRLink
 	if !e.db.ArchiveContent().OmitsToolContent() {
@@ -310,7 +314,10 @@ func appendSessionMetadataDiffs(
 	// Pull request links are never incremental-append history: an appended
 	// record that would change them forces a full parse, so any difference
 	// is real drift.
-	if sv, pv := db.EncodePRLinks(stored.PRLinks), db.EncodePRLinks(prepared.PRLinks); sv != pv {
+	storedLinks := parser.CombinePRLinks(stored.PRLinks)
+	preparedLinks := parser.CombinePRLinks(prepared.PRLinks)
+	if len(storedLinks) != len(preparedLinks) || len(parser.CombinePRLinks(storedLinks, preparedLinks)) != len(storedLinks) {
+		sv, pv := db.EncodePRLinks(stored.PRLinks), db.EncodePRLinks(prepared.PRLinks)
 		diffs = append(diffs, FieldDiff{
 			Field:  FieldPRLinks,
 			Stored: stringutil.TruncateRunes(renderNullableScalar(sv), maxRenderedValueRunes, "..."),
