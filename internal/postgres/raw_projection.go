@@ -267,6 +267,8 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		if err != nil {
 			return err
 		}
+		// Reuse only bytes inserted by this transaction. Conflicts retain
+		// their stored payload and mutable derived state.
 		if count == 1 {
 			fresh[sessionID] = payload
 		}

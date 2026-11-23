@@ -1007,21 +1007,18 @@ func argvShellText(input string, gitOnly bool) (string, bool) {
 		}
 		args[0] = "git"
 	}
-	command := quoteArgv(args)
-	if gitOnly {
-		if match := commitInvocationRE.FindStringIndex(command); match != nil && match[0] != 0 {
-			return "", true
-		}
-	}
-	return command, true
-}
-
-func quoteArgv(args []string) string {
+	// Argv words are never tilde-expanded, so a leading tilde names a relative path.
 	for i, arg := range args {
 		if strings.HasPrefix(arg, "~") {
 			arg = "./" + arg
 		}
 		args[i] = shellquote.POSIX(arg)
 	}
-	return strings.Join(args, " ")
+	command := strings.Join(args, " ")
+	if gitOnly {
+		if match := commitInvocationRE.FindStringIndex(command); match != nil && match[0] != 0 {
+			return "", true
+		}
+	}
+	return command, true
 }

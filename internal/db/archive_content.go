@@ -419,7 +419,7 @@ func clearUsageOnlyTextTx(
 	); err != nil {
 		return fmt.Errorf("clearing usage-only titles for %s: %w", sessionID, err)
 	}
-	if _, err := tx.Exec(`UPDATE sessions SET pr_links=structured_pr_links WHERE id=?`, sessionID); err != nil {
+	if _, err := tx.Exec(`UPDATE sessions SET pr_links=structured_pr_links, local_modified_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND pr_links IS NOT structured_pr_links`, sessionID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(
@@ -718,7 +718,7 @@ func compactCopiedSessionsForUsageTx(
 			UPDATE sessions
 			SET first_message = NULL, display_name = NULL,
 			    session_name = NULL, secret_leak_count = 0,
-			    secrets_rules_version = ''
+			    secrets_rules_version = '', pr_links = structured_pr_links
 			WHERE id` + inCopied},
 		{"pin notes", `
 			UPDATE pinned_messages SET note = NULL
@@ -740,9 +740,6 @@ func compactCopiedSessionsForUsageTx(
 		return fmt.Errorf("listing copied sessions: %w", err)
 	}
 	for _, id := range ids {
-		if _, err := tx.ExecContext(ctx, `UPDATE sessions SET pr_links=structured_pr_links WHERE id=?`, id); err != nil {
-			return err
-		}
 		if err := clearUsageOnlyConversationTx(contextTransaction{ctx: ctx, tx: tx}, id); err != nil {
 			return err
 		}
