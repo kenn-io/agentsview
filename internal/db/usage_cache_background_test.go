@@ -319,6 +319,41 @@ func TestUsageCacheBackfillObserverAttachesToActivePass(t *testing.T) {
 	require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
 }
 
+func TestUsageCacheBackfillRewarmsZoneRequestedDuringPass(t *testing.T) {
+	database := testDB(t)
+	insertSession(t, database, "active-zone", "project")
+	snapshot, err := database.captureUsageQuery(t.Context(), UsageFilter{}, usageQueryKindToken)
+	require.NoError(t, err)
+	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
+	require.NoError(t, err)
+	held, release := make(chan struct{}), make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	var once sync.Once
+	cache.fill.observer.beforeExtract = func([]usageSourceVersion) {
+		once.Do(func() { close(held); <-release })
+	}
+	t.Cleanup(func() { unblock(); database.StopUsageCacheBackfill() })
+	require.NoError(t, database.StartUsageCacheBackfill(t.Context()))
+	<-held
+
+	location, err := time.LoadLocation("Etc/GMT+3")
+	require.NoError(t, err)
+	identity := usageTimezoneIdentityFor(location, nil)
+	_, err = cache.db.ExecContext(t.Context(), `INSERT INTO usage_rollup_timezones
+		(timezone_key, timezone_name, interval_fingerprint, last_requested_at)
+		VALUES (?, ?, ?, ?)`, identity.Key, identity.Name, identity.IntervalFingerprint, time.Now().UTC().Format(time.RFC3339Nano))
+	require.NoError(t, err)
+	_, trusted, err := database.prepareJournaledUsageWindow(t.Context(), UsageFilter{Timezone: identity.Name}, usageQueryKindToken, false, nil)
+	require.NoError(t, err)
+	require.False(t, trusted)
+	unblock()
+	require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
+
+	zone, err := readUsageZoneCoverage(t.Context(), cache.db, identity.Key)
+	require.NoError(t, err)
+	assert.True(t, zone.revision.Valid, "the queued pass must claim the requested timezone")
+}
+
 func TestUsageCacheBackfillSweepsHardDeletionTombstones(t *testing.T) {
 	database := testDB(t)
 	insertSession(t, database, "deleted", "project", func(session *Session) {
