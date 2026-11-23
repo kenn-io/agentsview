@@ -327,9 +327,11 @@ func OpenSpec(
 		return nil, fmt.Errorf("opening vector store: %w", err)
 	}
 	if !readOnly {
-		if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS `+spec.reuseTable()+` (ordinal INTEGER NOT NULL, text_hash TEXT NOT NULL, embedding BLOB NOT NULL, PRIMARY KEY (ordinal, text_hash)) WITHOUT ROWID`); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("creating chunk reuse table: %w", err)
+		if spec.Name == "messages" {
+			if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS `+spec.reuseTable()+` (ordinal INTEGER NOT NULL, text_hash TEXT NOT NULL, embedding BLOB NOT NULL, PRIMARY KEY (ordinal, text_hash)) WITHOUT ROWID`); err != nil {
+				db.Close()
+				return nil, fmt.Errorf("creating chunk reuse table: %w", err)
+			}
 		}
 		if _, err := db.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS `+spec.repairQueueTable()+` (

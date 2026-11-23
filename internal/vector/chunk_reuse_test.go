@@ -12,6 +12,29 @@ import (
 	kitvec "go.kenn.io/kit/vector"
 )
 
+func TestRecallBuildDoesNotUseChunkReuse(t *testing.T) {
+	ctx := t.Context()
+	ix := openSpecT(t, filepath.Join(t.TempDir(), "vectors.db"), RecallIndexSpec(), false)
+	var count int
+	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, ix.spec.reuseTable()).Scan(&count))
+	assert.Zero(t, count)
+
+	gen := fakeGeneration("recall")
+	_, err := ix.Build(ctx, twoDocSource(), fakeBuildEncoder(), gen, BuildOptions{})
+	require.NoError(t, err)
+	_, err = ix.Build(ctx, twoDocSource(), fakeBuildEncoder(), gen, BuildOptions{FullRebuild: true})
+	require.NoError(t, err)
+
+	_, err = ix.db.ExecContext(ctx, `CREATE TABLE `+ix.spec.reuseTable()+` (value TEXT); INSERT INTO `+ix.spec.reuseTable()+` VALUES ('retained')`)
+	require.NoError(t, err)
+	_, err = ix.Build(ctx, twoDocSource(), fakeBuildEncoder(), gen, BuildOptions{FullRebuild: true})
+	require.NoError(t, err)
+	_, err = ix.Build(ctx, twoDocSource(), fakeBuildEncoder(), gen, BuildOptions{})
+	require.NoError(t, err)
+	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+ix.spec.reuseTable()).Scan(&count))
+	assert.Equal(t, 1, count)
+}
+
 func TestBuildGrowingMessageReusesChunksAndRetry(t *testing.T) {
 	ix := openTestIndex(t)
 	ix.split = kitvec.SplitOptions{MaxRunes: 10, Overlap: 2}

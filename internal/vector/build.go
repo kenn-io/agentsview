@@ -192,7 +192,7 @@ func (ix *Index) Build(
 			seed = &g
 		}
 	}
-	if o.FullRebuild {
+	if ix.spec.Name == "messages" && o.FullRebuild {
 		if err := ix.clearReuse(ctx); err != nil {
 			return BuildResult{}, err
 		}
@@ -262,8 +262,10 @@ func (ix *Index) Build(
 		return result, fillErr
 	}
 
-	if err := ix.clearReuse(ctx); err != nil {
-		return result, err
+	if ix.spec.Name == "messages" {
+		if err := ix.clearReuse(ctx); err != nil {
+			return result, err
+		}
 	}
 
 	activated, err := ix.maybeActivate(ctx, target, wasBuilding)
