@@ -109,13 +109,7 @@ const previousGoClient =
 // Use go.mod so generation shares the application's pinned dependencies and cache.
 run(
   "go",
-  [
-    "tool",
-    "oapi-codegen",
-    "--config",
-    "internal/apiclient/generate.yaml",
-    "openapi.yaml",
-  ],
+  ["tool", "oapi-codegen", "--config", "internal/apiclient/generate.yaml", "openapi.yaml"],
   { cwd: repoRoot },
 );
 // The generator still emits the v1 import and an ambiguous tool name.
