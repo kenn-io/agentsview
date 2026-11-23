@@ -255,8 +255,9 @@ const promptPRLinkCandidateSQL = `role='user' AND (COALESCE(` + sqliteDialogueEx
 
 func refreshSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id string) error {
 	var stored, structured, storedTools, cwd, remote string
-	var missingInputs bool
-	if err := tx.QueryRow(`SELECT pr_links, structured_pr_links, tool_pr_links, COALESCE(cwd,''), `+prLinkRemoteSQL+`, NOT EXISTS(SELECT 1 FROM tool_calls WHERE session_id=? AND category IN ('Bash','Task')) OR EXISTS(SELECT 1 FROM tool_calls WHERE session_id=? AND category IN ('Bash','Task') AND input_json IS NULL) FROM sessions WHERE id=?`, id, id, id, id).Scan(&stored, &structured, &storedTools, &cwd, &remote, &missingInputs); err != nil {
+	var missingInputs, missingShellInputs bool
+	var previousState sql.NullInt64
+	if err := tx.QueryRow(`SELECT pr_links, structured_pr_links, tool_pr_links, COALESCE(cwd,''), `+prLinkRemoteSQL+`, pr_shell_tainted, NOT EXISTS(SELECT 1 FROM tool_calls WHERE session_id=? AND category IN ('Bash','Task')) OR EXISTS(SELECT 1 FROM tool_calls WHERE session_id=? AND category IN ('Bash','Task') AND input_json IS NULL), EXISTS(SELECT 1 FROM tool_calls WHERE session_id=? AND category='Bash' AND input_json IS NULL AND tool_name NOT IN ('exec_command','shell_command','shell','exec')) FROM sessions WHERE id=?`, id, id, id, id, id).Scan(&stored, &structured, &storedTools, &cwd, &remote, &previousState, &missingInputs, &missingShellInputs); err != nil {
 		return err
 	}
 	rows, err := tx.Query(`SELECT `+selectMessageCols+` FROM messages WHERE session_id=? AND `+promptPRLinkCandidateSQL+` ORDER BY ordinal`, id)
@@ -274,6 +275,14 @@ func refreshSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, i
 	tools, tainted, err := storedToolCallPRLinksTx(ctx, tx, id, cwd, remote, nil)
 	if err != nil {
 		return err
+	}
+	if missingShellInputs {
+		if previousState.Valid {
+			tainted.CheckoutUncertain = tainted.CheckoutUncertain || previousState.Int64&1 != 0
+			tainted.HostUncertain = tainted.HostUncertain || previousState.Int64&2 != 0
+		} else {
+			tainted = parser.UncertainPRShell()
+		}
 	}
 	if err := writePRShellTaintTx(tx, id, tainted); err != nil {
 		return err

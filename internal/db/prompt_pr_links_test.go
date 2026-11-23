@@ -606,6 +606,31 @@ func TestToolPRLinksSurviveArchiveProjection(t *testing.T) {
 	}
 }
 
+func TestToolPRLinksProjectionPreservesShellContext(t *testing.T) {
+	source := testDB(t)
+	s := Session{ID: "shell-projection", Project: "project", Machine: "local", Agent: "claude", Cwd: "/work/repo"}
+	require.NoError(t, source.UpsertSession(t.Context(), s))
+	obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://github.com/example/repo.git")
+	require.NoError(t, source.UpsertProjectIdentityObservation(t.Context(), obs))
+	message := func(ordinal int, command string) Message {
+		return Message{SessionID: s.ID, Ordinal: ordinal, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"` + command + `"}`}}}
+	}
+	require.NoError(t, source.InsertMessages(t.Context(), []Message{message(0, "export GH_HOST=git.example; cd /other")}))
+	dest := testDB(t)
+	dest.SetArchiveContent(config.ArchiveContentTranscripts)
+	_, err := dest.CopyOrphanedDataFrom(t.Context(), source.Path())
+	require.NoError(t, err)
+	var state int
+	require.NoError(t, dest.getReader().QueryRowContext(t.Context(), `SELECT pr_shell_tainted FROM sessions WHERE id=?`, s.ID).Scan(&state))
+	assert.Equal(t, 3, state)
+	require.NoError(t, dest.Update(t.Context(), func(tx *sql.Tx) error {
+		return appendSessionPromptPRLinksTx(t.Context(), tx, s.ID, []Message{message(1, "gh pr view 42; gh pr view 43 -R example/repo")})
+	}))
+	got, err := dest.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	assert.Empty(t, got.PRLinks)
+}
+
 func TestToolPRLinksUsageCleanupAndReplacement(t *testing.T) {
 	d := testDB(t)
 	s := Session{ID: "cleanup-tools", Project: "project", Machine: "local", Agent: "claude"}
