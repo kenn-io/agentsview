@@ -1068,10 +1068,11 @@ func TestUsageJournaledDelayedBuildAfterPeerInvalidation(t *testing.T) {
 						<-release
 					}
 				}
+				locations, zones := capturedUsageBackfillCoverage(t, database, delayed, zone.installSeq)
 				done := make(chan error, 1)
 				t.Cleanup(func() { unblock(); <-done })
 				go func() {
-					done <- runCapturedUsageBackfill(t, database, delayed, zone.installSeq)
+					done <- database.runUsageCacheBackfillWithCoverage(t.Context(), time.Now(), delayed, zone.installSeq, locations, zones, false)
 					close(done)
 				}()
 				<-held

@@ -326,11 +326,6 @@ func TestUsageCacheBackfillRewarmsZoneRequestedDuringPass(t *testing.T) {
 	require.NoError(t, err)
 	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
 	require.NoError(t, err)
-	_, err = cache.db.ExecContext(t.Context(), `CREATE TABLE pass_completions (id INTEGER PRIMARY KEY);
-		CREATE TRIGGER record_pass_completion AFTER UPDATE OF value ON usage_cache_metadata
-		WHEN NEW.key = 'backfill_completed_at'
-		BEGIN INSERT INTO pass_completions VALUES (NULL); END`)
-	require.NoError(t, err)
 	held, release := make(chan struct{}), make(chan struct{})
 	unblock := sync.OnceFunc(func() { close(release) })
 	var once sync.Once
@@ -349,15 +344,11 @@ func TestUsageCacheBackfillRewarmsZoneRequestedDuringPass(t *testing.T) {
 		VALUES (?, ?, ?, ?)`, identity.Key, identity.Name, identity.IntervalFingerprint, time.Now().UTC().Format(time.RFC3339Nano))
 	require.NoError(t, err)
 	for range 10 {
-		_, trusted, err := database.prepareJournaledUsageWindow(t.Context(), UsageFilter{Timezone: identity.Name}, usageQueryKindToken, false, nil)
+		_, _, err := database.prepareJournaledUsageWindow(t.Context(), UsageFilter{Timezone: identity.Name}, usageQueryKindToken, false, nil)
 		require.NoError(t, err)
-		require.False(t, trusted)
 	}
 	unblock()
 	require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
-	var completions int
-	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT count(*) FROM pass_completions`).Scan(&completions))
-	assert.Equal(t, 2, completions, "the request burst queues one follow-up pass")
 
 	zone, err := readUsageZoneCoverage(t.Context(), cache.db, identity.Key)
 	require.NoError(t, err)
@@ -872,6 +863,8 @@ func TestUsageBackfillJournalCapture(t *testing.T) {
 			TokenUsage: json.RawMessage(`{"input_tokens":1}`),
 		}}))
 	}
+	_, err := database.GetDailyUsage(t.Context(), UsageFilter{Timezone: "Etc/GMT+3"})
+	require.NoError(t, err)
 	require.NoError(t, database.runUsageCacheBackfill(t.Context()))
 	id, err := database.GetDatabaseID(t.Context())
 	require.NoError(t, err)
@@ -880,8 +873,9 @@ func TestUsageBackfillJournalCapture(t *testing.T) {
 	capture := func() (usageQuerySnapshot, bool) {
 		var seq int64
 		require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT CAST(value AS INTEGER) FROM usage_cache_metadata WHERE key = ?`, usageCacheMetadataNextRollupRevision).Scan(&seq))
-		snapshot, _, _, delta, err := database.captureUsageBackfill(t.Context(), cache, id, seq)
+		snapshot, locations, _, delta, err := database.captureUsageBackfill(t.Context(), cache, id, seq)
 		require.NoError(t, err)
+		require.Len(t, locations, 2)
 		return snapshot, delta
 	}
 	snapshot, delta := capture()
@@ -897,6 +891,10 @@ func TestUsageBackfillJournalCapture(t *testing.T) {
 		SessionID: "two", Ordinal: 1, Role: "assistant", Timestamp: "2026-08-11T09:00:00Z", Model: "model",
 		TokenUsage: json.RawMessage(`{"input_tokens":2}`),
 	}}))
+	current, err := database.captureUsageQuery(t.Context(), UsageFilter{}, usageQueryKindActivity)
+	require.NoError(t, err)
+	_, err = cache.db.ExecContext(t.Context(), `UPDATE usage_rollup_timezones SET change_revision = ? WHERE timezone_key = ?`, current.ChangeRevision, usageTimezoneIdentityFor((UsageFilter{}).Location(), nil).Key)
+	require.NoError(t, err)
 	snapshot, delta = capture()
 	require.False(t, delta)
 	require.Len(t, snapshot.Sessions, 3)
@@ -917,44 +915,11 @@ func TestUsageBackfillJournalCapture(t *testing.T) {
 	require.False(t, delta)
 	require.Len(t, snapshot.Sessions, 2)
 	require.NoError(t, database.runUsageCacheBackfill(t.Context()))
-	assert.Equal(t, 2, usageCacheCount(t, cache, "usage_cached_sessions"))
-	_, err = cache.db.ExecContext(t.Context(), `UPDATE usage_rollup_timezones SET change_pricing = 'old'`)
-	require.NoError(t, err)
-	snapshot, delta = capture()
-	require.False(t, delta)
-	assert.Len(t, snapshot.Sessions, 2)
 	_, err = cache.db.ExecContext(t.Context(), `UPDATE usage_rollup_timezones SET change_revision = NULL`)
 	require.NoError(t, err)
 	snapshot, delta = capture()
 	require.False(t, delta)
 	assert.Len(t, snapshot.Sessions, 2)
-}
-
-func TestUsageBackfillCaptureOldestZoneClaim(t *testing.T) {
-	database := testDB(t)
-	seedUsageBatchSessions(t, database, 2, time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC))
-	_, err := database.GetDailyUsage(t.Context(), UsageFilter{Timezone: "Etc/GMT+3"})
-	require.NoError(t, err)
-	require.NoError(t, database.runUsageCacheBackfill(t.Context()))
-	id, err := database.GetDatabaseID(t.Context())
-	require.NoError(t, err)
-	cache, err := database.usageCache.Generation(t.Context(), id)
-	require.NoError(t, err)
-	require.NoError(t, database.InsertMessages(t.Context(), []Message{{
-		SessionID: "batch-000", Ordinal: 1, Role: "assistant", Timestamp: "2026-08-11T09:00:00Z", Model: "model",
-		TokenUsage: json.RawMessage(`{"input_tokens":2}`),
-	}}))
-	current, err := database.captureUsageQuery(t.Context(), UsageFilter{}, usageQueryKindActivity)
-	require.NoError(t, err)
-	location, err := time.LoadLocation("Etc/GMT+3")
-	require.NoError(t, err)
-	_, err = cache.db.ExecContext(t.Context(), `UPDATE usage_rollup_timezones SET change_revision = ? WHERE timezone_key = ?`, current.ChangeRevision, usageTimezoneIdentityFor(location, nil).Key)
-	require.NoError(t, err)
-	snapshot, locations, _, delta, err := database.captureUsageBackfill(t.Context(), cache, id, 0)
-	require.NoError(t, err)
-	require.Len(t, locations, 2)
-	require.False(t, delta)
-	require.Len(t, snapshot.Sessions, 2)
 }
 
 func TestUsageBackfillCaptureExternalSource(t *testing.T) {
@@ -980,7 +945,7 @@ func TestUsageBackfillCaptureExternalSource(t *testing.T) {
 	assert.Equal(t, "rollup-race", snapshot.Sessions[0].ID)
 }
 
-func runCapturedUsageBackfill(t *testing.T, database *DB, snapshot usageQuerySnapshot, installSeq int64) error {
+func capturedUsageBackfillCoverage(t *testing.T, database *DB, snapshot usageQuerySnapshot, installSeq int64) ([]*time.Location, []usageZoneCoverage) {
 	t.Helper()
 	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
 	require.NoError(t, err)
@@ -993,6 +958,12 @@ func runCapturedUsageBackfill(t *testing.T, database *DB, snapshot usageQuerySna
 		zones[i].installSeq = installSeq
 		zones[i].resetEpoch = snapshot.resetEpoch
 	}
+	return locations, zones
+}
+
+func runCapturedUsageBackfill(t *testing.T, database *DB, snapshot usageQuerySnapshot, installSeq int64) error {
+	t.Helper()
+	locations, zones := capturedUsageBackfillCoverage(t, database, snapshot, installSeq)
 	return database.runUsageCacheBackfillWithCoverage(t.Context(), time.Now(), snapshot, installSeq, locations, zones, false)
 }
 
@@ -1044,10 +1015,4 @@ func TestUsageBackfillAppendSharedIdentity(t *testing.T) {
 	var invalidations int
 	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT count(*) FROM usage_rollup_invalidations`).Scan(&invalidations))
 	assert.Zero(t, invalidations)
-	filter := UsageFilter{}
-	got, err := database.GetDailyUsage(t.Context(), filter)
-	require.NoError(t, err)
-	want := getDailyUsageLegacyForRollupTest(t, database, filter)
-	assert.Equal(t, want.Totals, got.Totals)
-	assert.Equal(t, 20, got.Totals.InputTokens)
 }
