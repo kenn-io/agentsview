@@ -5562,7 +5562,7 @@ func (db *DB) HasCJKFTS(ctx context.Context) (available bool) {
 	defer func() {
 		if !available {
 			db.cjkFTSUnavailableLog.Do(func() {
-				log.Print("CJK FTS unavailable or stale; using standard FTS5")
+				log.Print("CJK FTS unavailable or stale; using standard FTS5 unless index repair is pending")
 			})
 		}
 	}()

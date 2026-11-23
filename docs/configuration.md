@@ -2148,7 +2148,8 @@ uses the original query and may miss separated Chinese words.
 
 The first backfill, a changed fingerprint, or any pending session triggers a
 full index rebuild after the daemon starts listening. Until it finishes, CJK
-queries use standard full-text search when its index is available.
+full-text searches return the "full-text search is unavailable" error. They
+work again after the repair finishes.
 If the substring index is missing, substring searches scan messages until the
 repair finishes. Sessions shows the saved archive while repair runs. Archive
 writes, including startup sync, wait while the repair holds the writer.
