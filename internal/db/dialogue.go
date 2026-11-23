@@ -98,9 +98,7 @@ func (db *DB) RepairMessageFTS(ctx context.Context) error {
 	if !db.SearchRepairPending() {
 		return nil
 	}
-	if err := db.finishUsageCounters(ctx); err != nil {
-		return err
-	}
+	fillErr := db.finishUsageCounters(ctx)
 	_, err := RetryAcrossHandoff(ctx, db, func() (struct{}, error) {
 		if err := db.lockWriterCtx(ctx); err != nil {
 			return struct{}{}, err
@@ -135,5 +133,5 @@ func (db *DB) RepairMessageFTS(ctx context.Context) error {
 		}
 		return struct{}{}, nil
 	})
-	return err
+	return errors.Join(fillErr, err)
 }

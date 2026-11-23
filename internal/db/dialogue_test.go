@@ -435,3 +435,20 @@ func TestRepairMessageFTSWaitsForWriter(t *testing.T) {
 		assert.True(t, d.HasFTS(t.Context()))
 	})
 }
+
+func TestRepairMessageFTSContinuesAfterUsageCounterError(t *testing.T) {
+	d := testDB(t)
+	seedSearchSession(t, d, "session", "project", nil)
+	insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "needle"})
+	require.NoError(t, d.DropFTS(t.Context()))
+	d.messageFTSRepairPending.Store(true)
+	_, err := d.getWriter().Exec(t.Context(), `INSERT INTO stats(key, value) VALUES ('message_usage_counters_pending', 1);
+CREATE TRIGGER fail_usage_fill BEFORE DELETE ON stats WHEN OLD.key='message_usage_counters_pending' BEGIN SELECT RAISE(ABORT, 'injected fill failure'); END`)
+	require.NoError(t, err)
+	d.usageCountersPending.Store(true)
+	require.ErrorContains(t, d.RepairMessageFTS(t.Context()), "injected fill failure")
+	page, err := d.Search(t.Context(), SearchFilter{Query: "needle"})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	assert.True(t, d.usageCountersPending.Load())
+}
