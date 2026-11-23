@@ -38,9 +38,19 @@ jobs:
             timeout: 27
             package: ./cmd/agentsview
             skip: '^Test[A-P]'
-          - name: Capture, Database, Parser
+          - name: Capture, Parser
             timeout: 38
-            package: ./internal/capture ./internal/db ./internal/parser
+            package: ./internal/capture ./internal/parser
+          # The full database suite exceeds the per-package timeout on Windows.
+          # Complementary filters run every test on exactly one runner.
+          - name: Database A-M
+            timeout: 38
+            package: ./internal/db
+            run: '^Test[A-M]'
+          - name: Database remaining
+            timeout: 38
+            package: ./internal/db
+            skip: '^Test[A-M]'
           # Match normal Windows CI; complementary filters cover every sync test.
           - name: Sync A-R
             timeout: 27

@@ -686,9 +686,18 @@ jobs:
           - name: Simulator
             suite: windows-perfsim
             package: ./cmd/perfsim
-          - name: Database, Parser
-            suite: windows-db-parser
-            package: ./internal/db ./internal/parser
+          - name: Parser
+            suite: windows-parser
+            package: ./internal/parser
+          # Match the update check; the full database suite exceeds 20 minutes.
+          - name: Database A-M
+            suite: windows-db-a-m
+            package: ./internal/db
+            run: &db-test-prefix '^Test[A-M]'
+          - name: Database remaining
+            suite: windows-db-rest
+            package: ./internal/db
+            skip: *db-test-prefix
           # Complementary filters keep every sync test in exactly one job.
           - name: Sync A-R
             suite: windows-sync-a-r
