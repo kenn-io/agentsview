@@ -6439,12 +6439,16 @@ func (e *Engine) syncAllLocked(
 	if e.soleArchiveWriter.Load() {
 		ctx = e.withSourceFreshnessSnapshot(ctx, all)
 	}
-	stats = e.collectFirstImport(ctx, all, progressTotal, onProgress, writeMode, scope, wave)
+	options := collectAndBatchOptions{}
+	if wave != nil {
+		options.afterWrite = wave.onWrite
+	}
+	stats = e.collectAndBatchWithOptions(ctx, e.startWorkers(ctx, all), len(all), progressTotal, onProgress, writeMode, options)
 	if err := e.finishCodexParentInventoryBatch(ctx, &stats); err != nil {
 		log.Printf("%v", err)
 	}
 	stats.logRetrySummary("sync")
-	stats.providerFailures += providerFailures
+	stats.providerFailures = providerFailures
 	for range providerFailures {
 		stats.RecordFailed()
 	}
@@ -6521,7 +6525,7 @@ func (e *Engine) syncAllLocked(
 	// provider-authoritative DB-backed providers: a shared SQLite DB hosts every
 	// session, so the provider facade enumerates sources and parses only the
 	// changed ones.
-	if scope.includesAny(e.sources().agentDirs[parser.AgentWarp]) && wave.runDBPhase(parser.AgentWarp) {
+	if scope.includesAny(e.sources().agentDirs[parser.AgentWarp]) {
 		if e.syncProviderDBBackedAgent(
 			ctx, parser.AgentWarp, "warp",
 			writeMode, verbose, scope, &stats, advanceDBProgress, wave,
@@ -6530,7 +6534,7 @@ func (e *Engine) syncAllLocked(
 			return stats
 		}
 	}
-	if scope.includesAny(e.sources().agentDirs[parser.AgentForge]) && wave.runDBPhase(parser.AgentForge) {
+	if scope.includesAny(e.sources().agentDirs[parser.AgentForge]) {
 		if e.syncProviderDBBackedAgent(
 			ctx, parser.AgentForge, "forge",
 			writeMode, verbose, scope, &stats, advanceDBProgress, wave,
@@ -6539,7 +6543,7 @@ func (e *Engine) syncAllLocked(
 			return stats
 		}
 	}
-	if scope.includesAny(e.sources().agentDirs[parser.AgentPiebald]) && wave.runDBPhase(parser.AgentPiebald) {
+	if scope.includesAny(e.sources().agentDirs[parser.AgentPiebald]) {
 		if e.syncProviderDBBackedAgent(
 			ctx, parser.AgentPiebald, "piebald",
 			writeMode, verbose, scope, &stats, advanceDBProgress, wave,
@@ -6548,7 +6552,7 @@ func (e *Engine) syncAllLocked(
 			return stats
 		}
 	}
-	if scope.includesAny(e.sources().agentDirs[parser.AgentZCode]) && wave.runDBPhase(parser.AgentZCode) {
+	if scope.includesAny(e.sources().agentDirs[parser.AgentZCode]) {
 		if e.syncProviderDBBackedAgent(
 			ctx, parser.AgentZCode, "zcode",
 			writeMode, verbose, scope, &stats, advanceDBProgress, wave,
@@ -6557,7 +6561,7 @@ func (e *Engine) syncAllLocked(
 			return stats
 		}
 	}
-	if scope.includesAny(e.sources().agentDirs[parser.AgentGoose]) && wave.runDBPhase(parser.AgentGoose) {
+	if scope.includesAny(e.sources().agentDirs[parser.AgentGoose]) {
 		if e.syncProviderDBBackedAgent(
 			ctx, parser.AgentGoose, "goose",
 			writeMode, verbose, scope, &stats, advanceDBProgress, wave,
@@ -6566,7 +6570,7 @@ func (e *Engine) syncAllLocked(
 			return stats
 		}
 	}
-	if scope.includesAny(e.sources().agentDirs[parser.AgentCrush]) && wave.runDBPhase(parser.AgentCrush) {
+	if scope.includesAny(e.sources().agentDirs[parser.AgentCrush]) {
 		if e.syncProviderDBBackedAgent(
 			ctx, parser.AgentCrush, "crush",
 			writeMode, verbose, scope, &stats, advanceDBProgress, wave,
@@ -7451,7 +7455,7 @@ func (e *Engine) syncProviderDBBacked(
 	if agent == parser.AgentPiebald {
 		piebaldPruneRoots = piebaldAuthoritativeRoots(roots, os.Stat)
 	}
-	err := firstImportDiscoverEach(ctx, discoverer, agent, wave, func(source parser.SourceRef) error {
+	err := discoverer.DiscoverEach(ctx, func(source parser.SourceRef) error {
 		discovered++
 		if agent == parser.AgentPiebald {
 			if key, _, ok := piebaldFailureSourcePaths(source); ok {
@@ -7735,21 +7739,10 @@ func (e *Engine) startWorkers(
 	ctx context.Context,
 	files []parser.DiscoveredFile,
 ) <-chan syncJob {
-	return e.startWorkersLimited(ctx, files, e.workerCount())
-}
-
-func (e *Engine) startFirstImportWorkers(ctx context.Context, files []parser.DiscoveredFile, wave *firstImportWave) <-chan syncJob {
-	if wave != nil && wave.limit > 0 {
-		return e.startWorkersLimited(ctx, files, 1)
-	}
-	return e.startWorkers(ctx, files)
-}
-
-func (e *Engine) startWorkersLimited(ctx context.Context, files []parser.DiscoveredFile, limit int) <-chan syncJob {
 	// Cap fan-out and channel buffers by the batch: a single-path
 	// watcher sync needs one worker and one result slot, not a
 	// CPU-scaled pool with page-sized buffers of grown syncJob values.
-	workers := min(limit, max(len(files), 1))
+	workers := min(e.workerCount(), max(len(files), 1))
 	buffer := min(max(workers*2, 1), max(len(files), 1))
 
 	jobs := make(chan parser.DiscoveredFile, buffer)
@@ -7860,25 +7853,6 @@ func (e *Engine) collectAndBatch(
 type collectAndBatchOptions struct {
 	observeResult func(syncJob)
 	afterWrite    func()
-	batchLimit    int
-}
-
-func firstImportBatchOptions(wave *firstImportWave) collectAndBatchOptions {
-	options := collectAndBatchOptions{batchLimit: batchSize}
-	if wave != nil {
-		options.afterWrite = wave.onWrite
-		if wave.limit > 0 {
-			options.batchLimit = 10
-		}
-	}
-	return options
-}
-
-func (options collectAndBatchOptions) limit() int {
-	if options.batchLimit > 0 {
-		return options.batchLimit
-	}
-	return batchSize
 }
 
 func (e *Engine) collectAndBatchWithOptions(
@@ -8758,7 +8732,7 @@ func (e *Engine) collectAndBatchWithOptions(
 					sourceFingerprint: r.sourceFingerprint,
 				})
 			}
-			if len(pending) >= options.limit() ||
+			if len(pending) >= batchSize ||
 				(archiveRetention &&
 					pendingRetentionBytes >= pendingRetentionLimit) ||
 				(!archiveRetention && (budget.underPressure() ||

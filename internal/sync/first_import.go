@@ -15,7 +15,7 @@ const firstImportWaveSize = 100
 
 type firstImportWave struct {
 	limit    int
-	selected map[firstImportSource]int
+	selected map[firstImportSource]struct{}
 	partial  bool
 	onWrite  func()
 }
@@ -150,84 +150,12 @@ func (e *Engine) firstImportSelect(ctx context.Context, files []parser.Discovere
 		}
 		return strings.Compare(a.source.path, b.source.path)
 	})
-	wave.selected = make(map[firstImportSource]int, min(len(candidates), wave.limit))
+	wave.selected = make(map[firstImportSource]struct{}, min(len(candidates), wave.limit))
 	for _, candidate := range candidates {
 		if len(wave.selected) >= wave.limit {
 			break
 		}
-		if _, exists := wave.selected[candidate.source]; !exists {
-			wave.selected[candidate.source] = len(wave.selected)
-		}
-	}
-	return nil
-}
-
-func firstImportFiles(files []parser.DiscoveredFile, wave *firstImportWave) []parser.DiscoveredFile {
-	if wave != nil && wave.limit > 0 {
-		slices.SortStableFunc(files, func(a, b parser.DiscoveredFile) int {
-			return wave.selected[firstImportSource{a.Agent, a.Path}] - wave.selected[firstImportSource{b.Agent, b.Path}]
-		})
-	}
-	return files
-}
-
-func (wave *firstImportWave) earlyDBAgent() parser.AgentType {
-	if wave == nil || wave.limit == 0 {
-		return ""
-	}
-	for source, rank := range wave.selected {
-		if rank == 0 {
-			switch source.agent {
-			case parser.AgentWarp, parser.AgentForge, parser.AgentPiebald, parser.AgentZCode, parser.AgentGoose, parser.AgentCrush:
-				return source.agent
-			default:
-				return ""
-			}
-		}
-	}
-	return ""
-}
-
-func (wave *firstImportWave) runDBPhase(agent parser.AgentType) bool {
-	return wave.earlyDBAgent() != agent
-}
-
-func (e *Engine) collectFirstImport(ctx context.Context, files []parser.DiscoveredFile, total int, onProgress ProgressFunc, mode syncWriteMode, scope *rootSyncScope, wave *firstImportWave) SyncStats {
-	var early SyncStats
-	if agent := wave.earlyDBAgent(); agent != "" {
-		early.Aborted = e.syncProviderDBBackedAgent(ctx, agent, string(agent), mode, onProgress == nil, scope, &early, func(_ int, messages int) {
-			early.messagesIndexed += messages
-		}, wave)
-	}
-	results := e.startFirstImportWorkers(ctx, firstImportFiles(files, wave), wave)
-	stats := e.collectAndBatchWithOptions(ctx, results, len(files), total, onProgress, mode, firstImportBatchOptions(wave))
-	stats.Merge(early)
-	stats.providerFailures += early.providerFailures
-	return stats
-}
-
-func firstImportDiscoverEach(ctx context.Context, discoverer parser.StreamingDiscoverer, agent parser.AgentType, wave *firstImportWave, yield func(parser.SourceRef) error) error {
-	if wave == nil || wave.limit == 0 {
-		return discoverer.DiscoverEach(ctx, yield)
-	}
-	selected := make([]parser.SourceRef, 0, wave.limit)
-	err := discoverer.DiscoverEach(ctx, func(source parser.SourceRef) error {
-		if _, ok := wave.selected[firstImportSource{agent, providerDiscoveredPath(source)}]; !ok {
-			return yield(source)
-		}
-		selected = append(selected, source)
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	slices.SortStableFunc(selected, func(a, b parser.SourceRef) int {
-		return wave.selected[firstImportSource{agent, providerDiscoveredPath(a)}] - wave.selected[firstImportSource{agent, providerDiscoveredPath(b)}]
-	})
-	for _, source := range selected {
-		if err := yield(source); err != nil {
-			return err
-		}
+		wave.selected[candidate.source] = struct{}{}
 	}
 	return nil
 }
