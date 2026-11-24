@@ -1417,7 +1417,7 @@ func (s codexSourceSet) FindSource(
 				source, ok = s.directPathSource(root, path, true)
 			}
 			if ok {
-				if !req.RequireFreshSource || (req.PreferStoredSource && s.agent != AgentCodex) {
+				if !req.RequireFreshSource || (req.PreferStoredSource && (s.agent != AgentCodex || req.RawSessionID == "")) {
 					return source, true, nil
 				}
 				preferred, found, err := s.canonicalSource(ctx, source)

@@ -1981,6 +1981,26 @@ func TestCodexProviderFindSourcePinsExactArchivedDuplicate(t *testing.T) {
 	assert.Equal(t, livePath, found.DisplayPath)
 }
 
+func TestCodexProviderFindSourcePathOnlyKeepsStoredOrdinaryCopy(t *testing.T) {
+	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e6"
+	base := t.TempDir()
+	ordinary, logs := filepath.Join(base, "ordinary"), filepath.Join(base, "logs")
+	stored := writeCodexProviderSession(t, ordinary, id, "ordinary")
+	labeled := writeCodexProviderSession(t, filepath.Join(logs, "team", ".codex-run-v1-a", "sessions"), id, "labeled")
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{ordinary, logs}})
+	require.True(t, ok)
+	req := FindSourceRequest{StoredFilePath: stored, RequireFreshSource: true, PreferStoredSource: true}
+	found, ok, err := provider.FindSource(t.Context(), req)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, stored, found.DisplayPath)
+	req.RawSessionID = id
+	found, ok, err = provider.FindSource(t.Context(), req)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, labeled, found.DisplayPath)
+}
+
 func TestCodexProviderFindSourcePreferStoredSourceKeepsArchivedDuplicate(t *testing.T) {
 	base := t.TempDir()
 	liveRoot := filepath.Join(base, "sessions")
