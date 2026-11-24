@@ -165,7 +165,7 @@ func MessageIndexSpec() IndexSpec {
 		VectorsPrefix:          "message_vectors",
 		MirrorDDL:              messageMirrorDDL,
 		MirrorSchemaVersion:    "5",
-		UpgradableFrom:         []string{"3"},
+		UpgradableFrom:         []string{"3", "4"},
 	}
 }
 
