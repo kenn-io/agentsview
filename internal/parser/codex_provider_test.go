@@ -2412,7 +2412,7 @@ func TestCodexLabeledRunDiscoveryAndParse(t *testing.T) {
 	assert.Empty(t, outcome.Results[0].Result.Session.GitRemote)
 }
 
-func TestCodexRootLabeledRunDiscoveryAndParse(t *testing.T) {
+func TestCodexDotLabeledRunDiscoveryAndParse(t *testing.T) {
 	root := t.TempDir()
 	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
 	home := filepath.Join(root, ".codex-run-v1-abc")
