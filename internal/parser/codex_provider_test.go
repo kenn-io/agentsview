@@ -2448,7 +2448,7 @@ func TestCodexDiscoveryLinkedRollout(t *testing.T) {
 	require.NoError(t, os.Symlink(t.TempDir(), filepath.Join(day, "rollout-2026-10-08T12-00-00-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jsonl")))
 	require.NoError(t, os.Symlink(filepath.Join(root, "missing"), filepath.Join(day, "rollout-2026-10-08T12-00-00-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.jsonl")))
 	socket := filepath.Join(t.TempDir(), "socket")
-	listener, err := net.Listen("unix", socket)
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", socket)
 	if err == nil {
 		t.Cleanup(func() { _ = listener.Close() })
 		require.NoError(t, os.Symlink(socket, filepath.Join(day, "rollout-2026-10-08T12-00-00-cccccccc-cccc-4ccc-8ccc-cccccccccccc.jsonl")))

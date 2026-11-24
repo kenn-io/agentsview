@@ -1015,7 +1015,7 @@ func (s codexSourceSet) discoverEachRoot(
 		if includeLinks && (runtime.GOOS == "windows" || entry.Type()&os.ModeSymlink != 0) {
 			info, err := os.Stat(path)
 			if err != nil || !info.Mode().IsRegular() {
-				return nil
+				return nil //nolint:nilerr // Skip unavailable or non-regular rollout targets.
 			}
 		} else if !entry.Type().IsRegular() || runtime.GOOS == "windows" && !IsRegularFile(path) {
 			return nil
