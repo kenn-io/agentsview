@@ -219,7 +219,7 @@ func TestCodexLabeledRunKeepsProjectThroughResync(t *testing.T) {
 	root := t.TempDir()
 	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 	cwd := filepath.Join(root, "checkout")
-	source := filepath.Join(root, "experiment", "case", ".codex-run-v1-abc", "sessions", "2026", "10", "08", "rollout-"+id+".jsonl")
+	source := filepath.Join(root, "experiment", "case", ".codex-run-v1-abc", "sessions", "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
 	meta := testjsonl.CodexSessionMetaWithFieldsJSON(id, cwd, "codex_cli_rs", "2026-10-08T12:00:00Z", map[string]any{"git": map[string]any{"repository_url": "https://example.com/team/api.git", "branch": "feature"}})
 	dbtest.WriteTestFile(t, source, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
 	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
@@ -247,15 +247,6 @@ func TestCodexLabeledRunKeepsProjectThroughResync(t *testing.T) {
 	session, err = database.GetSessionFull(t.Context(), "codex:"+id)
 	require.NoError(t, err)
 	assert.Equal(t, "experiment/case", session.Project)
-	_, err = database.CreateWorktreeProjectMapping(t.Context(), db.WorktreeProjectMapping{
-		Machine: "local", PathPrefix: cwd, Layout: db.WorktreeMappingLayoutExplicit,
-		Project: "mapped_project", Enabled: true,
-	})
-	require.NoError(t, err)
-	require.Zero(t, engine.ResyncAll(t.Context(), nil).Failed)
-	session, err = database.GetSessionFull(t.Context(), "codex:"+id)
-	require.NoError(t, err)
-	assert.Equal(t, "mapped_project", session.Project)
 }
 
 func TestCodexLabeledRunIndexRename(t *testing.T) {

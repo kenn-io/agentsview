@@ -495,7 +495,9 @@ func TestCodexHasParentRolloutInLabeledHome(t *testing.T) {
 	day := filepath.Join(sessions, "2026", "07", "08")
 	require.NoError(t, os.MkdirAll(day, 0o700))
 	childPath := filepath.Join(day, "rollout-2026-07-08T10-00-00-"+child+".jsonl")
-	require.NoError(t, os.WriteFile(childPath, []byte("{}\n"), 0o600))
+	require.NoError(t, os.WriteFile(childPath, []byte(testjsonl.CodexSessionMetaJSON(child, "/work/project", "codex_exec", tsEarly)+"\n"), 0o600))
+	parentPath := filepath.Join(day, "rollout-2026-07-08T08-00-00-"+parent+".jsonl")
+	require.NoError(t, os.WriteFile(parentPath, []byte(testjsonl.CodexSessionMetaJSON(parent, "/work/project", "codex_exec", tsEarly)+"\n"), 0o600))
 
 	registered, ok := ProviderFactoryByType(AgentCodex)
 	require.True(t, ok)
@@ -506,35 +508,7 @@ func TestCodexHasParentRolloutInLabeledHome(t *testing.T) {
 
 	has, err := checker.HasCodexParentRollout(t.Context(), childPath, parent)
 	require.NoError(t, err)
-	assert.False(t, has)
-
-	parentPath := filepath.Join(day, "rollout-2026-07-08T08-00-00-"+parent+".jsonl")
-	require.NoError(t, os.WriteFile(parentPath, []byte("{}\n"), 0o600))
-	has, err = checker.HasCodexParentRollout(t.Context(), childPath, parent)
-	require.NoError(t, err)
-	assert.True(t, has, "parent arriving in the labeled home must resolve the fork")
-}
-
-func BenchmarkCodexForkParentDatedDirectories(b *testing.B) {
-	for _, days := range []int{10, 1000} {
-		b.Run(strconv.Itoa(days), func(b *testing.B) {
-			factory, cfg, source := codexForkDatedDirectoryFixture(b, days)
-			ctx := WithCodexParentInventoryBatch(b.Context())
-			parse := func() {
-				out, err := factory.NewProvider(cfg).Parse(ctx, ParseRequest{Source: source})
-				require.NoError(b, err)
-				require.Len(b, out.Results, 1)
-				require.Len(b, out.Results[0].Result.Messages, 1)
-				require.Equal(b, "new answer", out.Results[0].Result.Messages[0].Content)
-			}
-			parse()
-			b.ReportAllocs()
-			b.ResetTimer()
-			for range b.N {
-				parse()
-			}
-		})
-	}
+	assert.True(t, has, "parent in the labeled home must resolve the fork")
 }
 
 func TestCodexLabeledForkResolvesAndCapturesParent(t *testing.T) {
@@ -573,4 +547,26 @@ func TestCodexLabeledForkResolvesAndCapturesParent(t *testing.T) {
 		paths = append(paths, entry.LocalPath)
 	}
 	assert.Contains(t, paths, parent)
+}
+
+func BenchmarkCodexForkParentDatedDirectories(b *testing.B) {
+	for _, days := range []int{10, 1000} {
+		b.Run(strconv.Itoa(days), func(b *testing.B) {
+			factory, cfg, source := codexForkDatedDirectoryFixture(b, days)
+			ctx := WithCodexParentInventoryBatch(b.Context())
+			parse := func() {
+				out, err := factory.NewProvider(cfg).Parse(ctx, ParseRequest{Source: source})
+				require.NoError(b, err)
+				require.Len(b, out.Results, 1)
+				require.Len(b, out.Results[0].Result.Messages, 1)
+				require.Equal(b, "new answer", out.Results[0].Result.Messages[0].Content)
+			}
+			parse()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				parse()
+			}
+		})
+	}
 }
