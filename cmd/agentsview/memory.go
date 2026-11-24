@@ -138,8 +138,6 @@ func runMemorySessionStartCommand(
 				"AGENTSVIEW_DISABLE_AUTO_SYNC=1")
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(cmd.Context(), memorySessionStartTimeout)
-	defer cancel()
 	// A hosted reader has no archive of its own to record the launcher in.
 	if hook && memorySessionStartMode(strings.TrimSpace(mode)) != memoryModeHostedReader {
 		defer func() {
@@ -166,6 +164,10 @@ func runMemorySessionStartCommand(
 		}
 		req.ServerToken = token
 	}
+	ctx, cancel := context.WithTimeout(
+		cmd.Context(), memorySessionStartTimeout,
+	)
+	defer cancel()
 	return runMemorySessionStart(ctx, req)
 }
 

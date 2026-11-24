@@ -294,8 +294,9 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 }
 
 // recordLaunchParent retries a busy archive or an unreachable daemon until
-// the hook's deadline, since no later event writes the link. It gives up at
-// once on a link the archive rejects or a read-only backend.
+// the hook's deadline, and a Codex index not yet written for two seconds,
+// since no later event writes the link. It gives up at once on a link the
+// archive rejects or a read-only backend.
 func recordLaunchParent(ctx context.Context, cmd *cobra.Command, childID, home, launcher, native string) error {
 	delay := launchParentRetryDelay
 	missingDeadline := time.Now().Add(2 * time.Second)
@@ -304,17 +305,13 @@ func recordLaunchParent(ctx context.Context, cmd *cobra.Command, childID, home, 
 		var err error
 		if parentID == "" {
 			parentID, err = launcherArchiveID(ctx, home, launcher, native)
-		}
-		if err != nil && parentID == "" {
-			if errors.Is(err, os.ErrNotExist) || errors.Is(err, sql.ErrNoRows) {
-				if time.Now().After(missingDeadline) {
-					return nil
-				}
-			} else {
-				var sqliteErr sqlite3.Error
-				if !errors.As(err, &sqliteErr) || (sqliteErr.Code != sqlite3.ErrBusy && sqliteErr.Code != sqlite3.ErrLocked) {
-					return err
-				}
+			missing := errors.Is(err, os.ErrNotExist) || errors.Is(err, sql.ErrNoRows)
+			if missing && time.Now().After(missingDeadline) {
+				return nil
+			}
+			var sqliteErr sqlite3.Error
+			if err != nil && !missing && (!errors.As(err, &sqliteErr) || (sqliteErr.Code != sqlite3.ErrBusy && sqliteErr.Code != sqlite3.ErrLocked)) {
+				return err
 			}
 		}
 		if err == nil && parentID != "" {
@@ -323,14 +320,7 @@ func recordLaunchParent(ctx context.Context, cmd *cobra.Command, childID, home, 
 		if err == nil || errors.Is(err, db.ErrSessionExternalParentInvalid) || errors.Is(err, db.ErrReadOnly) {
 			return err
 		}
-		wait := delay
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, sql.ErrNoRows) {
-			wait = min(wait, time.Until(missingDeadline))
-			if wait <= 0 {
-				return nil
-			}
-		}
-		timer := time.NewTimer(wait)
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
 			timer.Stop()

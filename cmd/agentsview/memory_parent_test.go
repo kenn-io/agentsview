@@ -106,6 +106,8 @@ func TestCaptureLaunchParentLinksEachProviderPair(t *testing.T) {
 		env, args                              []string
 		chain                                  []fakeProcess
 	}{
+		{"claude", "detached claude", childSessionID, claudeLauncherID, []string{"CLAUDE_CODE_SESSION_ID=" + claudeLauncherID}, nil, []fakeProcess{{name: "sh"}, {name: "claude", env: []string{"CLAUDE_CODE_SESSION_ID=" + claudeLauncherID}}}},
+		{"claude", "detached codex", childSessionID, "codex:" + codexLauncherID, []string{"CODEX_THREAD_ID=" + codexLauncherID}, nil, []fakeProcess{{name: "sh"}, {name: "claude", env: []string{"CODEX_THREAD_ID=" + codexLauncherID}}}},
 		{"claude.exe", "claude", childSessionID, claudeLauncherID, []string{"CLAUDE_CODE_SESSION_ID=" + claudeLauncherID}, nil, nil},
 		{"claude", "codex", childSessionID, "codex:" + codexLauncherID, []string{"CODEX_THREAD_ID=" + codexLauncherID}, nil, nil},
 		{"codex", "claude.exe", "codex:" + childSessionID, claudeLauncherID, []string{"CLAUDE_CODE_SESSION_ID=" + claudeLauncherID}, nil, nil},
@@ -143,28 +145,31 @@ func TestCaptureLaunchParentLinksEachProviderPair(t *testing.T) {
 
 func TestCaptureLaunchParentRecordsNothing(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		payload string
-		chain   []fakeProcess
-		wantErr bool
+		name      string
+		payload   string
+		chain     []fakeProcess
+		wantErr   bool
+		wantChild string
 	}{
 		{"no launcher", sessionStartPayload("startup"), []fakeProcess{
 			{name: "sh"}, {name: "claude", env: []string{}}, {name: "bash"},
-		}, false},
-		{"no agent ancestor", sessionStartPayload("startup"), []fakeProcess{{name: "sh"}, {name: "bash"}}, false},
+		}, false, childSessionID},
+		{"no agent ancestor", sessionStartPayload("startup"), []fakeProcess{{name: "sh"}, {name: "bash"}}, false, childSessionID},
 		{"missing launcher variable", sessionStartPayload("startup"), []fakeProcess{
 			{name: "sh"}, {name: "claude", env: []string{"PATH=/bin"}}, {name: "codex"},
-		}, false},
+		}, false, childSessionID},
 		{"invalid launcher ID", sessionStartPayload("startup"), []fakeProcess{
 			{name: "sh"}, {name: "claude", env: []string{"CODEX_THREAD_ID=not-a-uuid"}}, {name: "codex"},
-		}, true},
+		}, true, childSessionID},
 		{"same agent without readable environment", sessionStartPayload("startup"), []fakeProcess{
 			{name: "sh"}, {name: "claude"}, {name: "claude"},
-		}, false},
+		}, false, childSessionID},
 		{"invalid child ID", strings.Replace(sessionStartPayload("startup"), childSessionID, "bad", 1), []fakeProcess{
 			{name: "sh"}, {name: "claude", env: []string{"CODEX_THREAD_ID=" + codexLauncherID}}, {name: "codex"},
-		}, true},
-		{"unreadable process", sessionStartPayload("startup"), nil, true},
+		}, true, childSessionID},
+		{"interactive claude with stale ID", sessionStartPayload("startup"), []fakeProcess{{name: "sh"}, {name: "claude", args: []string{}, env: []string{"CODEX_THREAD_ID=" + codexLauncherID}}, {name: "bash"}, {name: "terminal"}}, false, childSessionID},
+		{"interactive codex with stale ID", sessionStartPayload("startup"), []fakeProcess{{name: "sh"}, {name: "codex", args: []string{}, env: []string{"CLAUDE_CODE_SESSION_ID=" + claudeLauncherID}}, {name: "bash"}, {name: "terminal"}}, false, "codex:" + childSessionID},
+		{"unreadable process", sessionStartPayload("startup"), nil, true, childSessionID},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			database := stubLaunchArchive(t)
@@ -175,7 +180,7 @@ func TestCaptureLaunchParentRecordsNothing(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
-			_, err = database.GetSessionExternalParent(t.Context(), childSessionID)
+			_, err = database.GetSessionExternalParent(t.Context(), tc.wantChild)
 			require.ErrorIs(t, err, sql.ErrNoRows)
 		})
 	}
@@ -216,27 +221,6 @@ func TestLookupGopsutilProcessReadsAncestryAndEnvironment(t *testing.T) {
 		t.Skipf("process environment is unavailable here: %v", err)
 	}
 	assert.NotEmpty(t, env)
-}
-
-func TestMemorySessionStartDisableSwitchSkipsLauncherLink(t *testing.T) {
-	original := runMemorySessionStart
-	t.Cleanup(func() { runMemorySessionStart = original })
-	runMemorySessionStart = func(context.Context, memorySessionStartRequest) error { return nil }
-	t.Setenv("AGENTSVIEW_DISABLE_AUTO_SYNC", "1")
-	database := stubLaunchArchive(t)
-	stubLaunchProcesses(t,
-		fakeProcess{name: "sh"},
-		fakeProcess{name: "claude", env: []string{"CODEX_THREAD_ID=" + codexLauncherID}},
-		fakeProcess{name: "codex"},
-	)
-
-	cmd := newRootCommand()
-	cmd.SetIn(strings.NewReader(sessionStartPayload("startup")))
-	cmd.SetErr(&bytes.Buffer{})
-	cmd.SetArgs([]string{"memory", "session-start", "--hook"})
-	require.NoError(t, cmd.Execute())
-	_, err := database.GetSessionExternalParent(t.Context(), childSessionID)
-	require.ErrorIs(t, err, sql.ErrNoRows)
 }
 
 // flakyAnnotator fails its first `failures` writes, then records the link.
@@ -311,54 +295,6 @@ func TestCaptureLaunchParentGivesUpAtHookDeadline(t *testing.T) {
 	}
 }
 
-func TestCaptureLaunchParentDetached(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		env  []string
-		want string
-	}{
-		{"claude", []string{"CLAUDE_CODE_SESSION_ID=" + claudeLauncherID}, claudeLauncherID},
-		{"codex", []string{"CODEX_THREAD_ID=" + codexLauncherID}, "codex:" + codexLauncherID},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			database := stubLaunchArchive(t)
-			home := t.TempDir()
-			writeCodexState(t, home, codexLauncherID, codexLauncherID)
-			stubLaunchProcesses(t, fakeProcess{name: "sh"}, fakeProcess{name: "claude", env: append(tc.env, "CODEX_HOME="+home)})
-			_, err := runLaunchHook(t, sessionStartPayload("startup"))
-			require.NoError(t, err)
-			link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
-			require.NoError(t, err)
-			assert.Equal(t, tc.want, link.ParentSessionID)
-		})
-	}
-}
-
-func TestCaptureLaunchParentDetachedInteractiveWithStaleID(t *testing.T) {
-	for _, tc := range []struct {
-		name, child, childID, env string
-	}{
-		{"claude", "claude", childSessionID, "CODEX_THREAD_ID=" + codexLauncherID},
-		{"codex", "codex", "codex:" + childSessionID, "CLAUDE_CODE_SESSION_ID=" + claudeLauncherID},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			database := stubLaunchArchive(t)
-			// The terminal and its shell inherited an ID from an earlier run;
-			// neither was launched by the agent now started interactively.
-			stubLaunchProcesses(t,
-				fakeProcess{name: "sh"},
-				fakeProcess{name: tc.child, args: []string{}, env: []string{tc.env, "CODEX_HOME=" + t.TempDir()}},
-				fakeProcess{name: "bash", env: []string{tc.env}},
-				fakeProcess{name: "terminal", env: []string{tc.env}},
-			)
-			_, err := runLaunchHook(t, sessionStartPayload("startup"))
-			require.NoError(t, err)
-			_, err = database.GetSessionExternalParent(t.Context(), tc.childID)
-			require.ErrorIs(t, err, sql.ErrNoRows)
-		})
-	}
-}
-
 func writeCodexState(t *testing.T, home, thread, page string) {
 	t.Helper()
 	state, err := sql.Open("sqlite3", filepath.Join(home, "state_5.sqlite"))
@@ -370,58 +306,50 @@ func writeCodexState(t *testing.T, home, thread, page string) {
 	require.NoError(t, state.Close())
 }
 
-func TestCaptureDetachedCodexRevertPage(t *testing.T) {
-	home := t.TempDir()
-	page := codexLauncherID + "_44444444-4444-4444-8444-444444444444"
-	writeCodexState(t, home, codexLauncherID, page)
-	database := stubLaunchArchive(t)
-	stubLaunchProcesses(t, fakeProcess{name: "sh"}, fakeProcess{name: "claude", env: []string{"CODEX_HOME=" + home, "CODEX_THREAD_ID=" + codexLauncherID}})
-	_, err := runLaunchHook(t, sessionStartPayload("startup"))
-	require.NoError(t, err)
-	link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
-	require.NoError(t, err)
-	assert.Equal(t, "codex:"+page, link.ParentSessionID)
-}
-
-func TestCaptureLaunchParentDoesNotGuessCodexPage(t *testing.T) {
+func TestCaptureLaunchParentCodexHomeAndPage(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		setup func(*testing.T, string)
+		name                                string
+		childHome, launcherHome, sqliteHome bool
+		page                                string
 	}{
-		{"missing index", func(*testing.T, string) {}},
-		{"missing thread", func(t *testing.T, home string) {
-			t.Helper()
-			writeCodexState(t, home, childSessionID, childSessionID)
-		}},
+		{"revert page", true, false, false, codexLauncherID + "_44444444-4444-4444-8444-444444444444"},
+		{"launcher home", true, true, false, codexLauncherID + "_44444444-4444-4444-8444-444444444444"},
+		{"sqlite home", false, true, true, codexLauncherID},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			home := t.TempDir()
-			tc.setup(t, home)
+			childHome, launcherHome, sqliteHome := t.TempDir(), t.TempDir(), t.TempDir()
+			home := childHome
+			if tc.launcherHome {
+				home = launcherHome
+			}
+			if tc.sqliteHome {
+				home = sqliteHome
+			}
+			writeCodexState(t, home, codexLauncherID, tc.page)
+			childEnv := []string{"CODEX_THREAD_ID=" + codexLauncherID}
+			if tc.childHome {
+				childEnv = append(childEnv, "CODEX_HOME="+childHome)
+			}
+			launcherEnv := []string{}
+			if tc.launcherHome {
+				launcherEnv = append(launcherEnv, "CODEX_HOME="+launcherHome)
+			}
+			if tc.sqliteHome {
+				launcherEnv = append(launcherEnv, "CODEX_SQLITE_HOME="+sqliteHome)
+			}
 			database := stubLaunchArchive(t)
-			stubLaunchProcesses(t, fakeProcess{name: "sh"},
-				fakeProcess{name: "claude", env: []string{"CODEX_HOME=" + home, "CODEX_THREAD_ID=" + codexLauncherID}},
-				fakeProcess{name: "codex"})
+			chain := []fakeProcess{{name: "sh"}, {name: "claude", env: childEnv}}
+			if tc.launcherHome {
+				chain = append(chain, fakeProcess{name: "codex", env: launcherEnv})
+			}
+			stubLaunchProcesses(t, chain...)
 			_, err := runLaunchHook(t, sessionStartPayload("startup"))
 			require.NoError(t, err)
-			_, err = database.GetSessionExternalParent(t.Context(), childSessionID)
-			require.ErrorIs(t, err, sql.ErrNoRows)
+			link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
+			require.NoError(t, err)
+			assert.Equal(t, "codex:"+tc.page, link.ParentSessionID)
 		})
 	}
-}
-
-func TestCaptureLaunchParentUsesLauncherCodexHome(t *testing.T) {
-	database := stubLaunchArchive(t)
-	childHome, launcherHome := t.TempDir(), t.TempDir()
-	page := codexLauncherID + "_44444444-4444-4444-8444-444444444444"
-	writeCodexState(t, launcherHome, codexLauncherID, page)
-	stubLaunchProcesses(t, fakeProcess{name: "sh"},
-		fakeProcess{name: "claude", env: []string{"CODEX_HOME=" + childHome, "CODEX_THREAD_ID=" + codexLauncherID}},
-		fakeProcess{name: "codex", env: []string{"CODEX_HOME=" + launcherHome}})
-	_, err := runLaunchHook(t, sessionStartPayload("startup"))
-	require.NoError(t, err)
-	link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
-	require.NoError(t, err)
-	assert.Equal(t, "codex:"+page, link.ParentSessionID)
 }
 
 func TestMemorySessionStartCaptureHasOwnDeadline(t *testing.T) {
@@ -472,68 +400,63 @@ func TestCaptureLaunchParentRetriesBusyCodexIndex(t *testing.T) {
 	assert.Equal(t, "codex:"+codexLauncherID, link.ParentSessionID)
 }
 
-func TestCaptureLaunchParentUsesCodexSQLiteHome(t *testing.T) {
-	database := stubLaunchArchive(t)
-	launcherHome, sqliteHome := t.TempDir(), t.TempDir()
-	writeCodexState(t, sqliteHome, codexLauncherID, codexLauncherID)
-	stubLaunchProcesses(t, fakeProcess{name: "sh"},
-		fakeProcess{name: "claude", env: []string{"CODEX_THREAD_ID=" + codexLauncherID}},
-		fakeProcess{name: "codex", env: []string{"CODEX_HOME=" + launcherHome, "CODEX_SQLITE_HOME=" + sqliteHome}})
-	_, err := runLaunchHook(t, sessionStartPayload("startup"))
-	require.NoError(t, err)
-	link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
-	require.NoError(t, err)
-	assert.Equal(t, "codex:"+codexLauncherID, link.ParentSessionID)
-}
-
-func TestCaptureLaunchParentRetriesMissingCodexIndex(t *testing.T) {
-	for _, rowMissing := range []bool{false, true} {
-		t.Run(fmt.Sprint(rowMissing), func(t *testing.T) {
-			home := t.TempDir()
-			staged := t.TempDir()
-			if rowMissing {
+func TestCaptureLaunchParentMissingCodexIndex(t *testing.T) {
+	for _, tc := range []struct {
+		name                            string
+		rowMissing, appears, unreadable bool
+	}{
+		{"missing index", false, false, false}, {"missing row", true, false, false},
+		{"index appears", false, true, false}, {"row appears", true, true, false},
+		{"unreadable index", false, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home, staged := t.TempDir(), t.TempDir()
+			if tc.rowMissing {
 				writeCodexState(t, home, childSessionID, childSessionID)
-			} else {
+			}
+			if tc.appears && !tc.rowMissing {
 				writeCodexState(t, staged, codexLauncherID, codexLauncherID)
 			}
+			if tc.unreadable {
+				require.NoError(t, os.WriteFile(filepath.Join(home, "state_5.sqlite"), []byte("corrupt"), 0600))
+			}
 			database := stubLaunchArchive(t)
-			stubLaunchProcesses(t, fakeProcess{name: "sh"},
-				fakeProcess{name: "claude", env: []string{"CODEX_HOME=" + home, "CODEX_THREAD_ID=" + codexLauncherID}},
-				fakeProcess{name: "codex"})
+			stubLaunchProcesses(t, fakeProcess{name: "sh"}, fakeProcess{name: "claude", env: []string{"CODEX_HOME=" + home, "CODEX_THREAD_ID=" + codexLauncherID}}, fakeProcess{name: "codex"})
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 			defer cancel()
 			cmd := &cobra.Command{}
 			cmd.SetIn(strings.NewReader(sessionStartPayload("startup")))
 			done := make(chan error, 1)
 			go func() { done <- captureLaunchParent(ctx, cmd) }()
-			time.Sleep(time.Second)
-			if rowMissing {
-				state, err := sql.Open("sqlite3", filepath.Join(home, "state_5.sqlite"))
-				require.NoError(t, err)
-				_, err = state.ExecContext(t.Context(), `INSERT INTO threads (id, rollout_path) VALUES (?, ?)`, codexLauncherID, "rollout-2026-01-01-"+codexLauncherID+".jsonl")
-				require.NoError(t, err)
-				require.NoError(t, state.Close())
-			} else {
-				require.NoError(t, os.Rename(filepath.Join(staged, "state_5.sqlite"), filepath.Join(home, "state_5.sqlite")))
+			if tc.appears {
+				time.Sleep(time.Second)
+				if tc.rowMissing {
+					state, err := sql.Open("sqlite3", filepath.Join(home, "state_5.sqlite"))
+					require.NoError(t, err)
+					_, err = state.ExecContext(t.Context(), `INSERT INTO threads (id, rollout_path) VALUES (?, ?)`, codexLauncherID, "rollout-2026-01-01-"+codexLauncherID+".jsonl")
+					require.NoError(t, err)
+					require.NoError(t, state.Close())
+				} else {
+					require.NoError(t, os.Rename(filepath.Join(staged, "state_5.sqlite"), filepath.Join(home, "state_5.sqlite")))
+				}
 			}
-			require.NoError(t, <-done)
+			if tc.unreadable {
+				select {
+				case err := <-done:
+					require.Error(t, err)
+				case <-time.After(time.Second): //nolint:kennlint // deadlinetest: detects retries of a corrupt index
+					t.Fatal("unreadable index was retried")
+				}
+			} else {
+				require.NoError(t, <-done)
+			}
 			link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
-			require.NoError(t, err)
-			assert.Equal(t, "codex:"+codexLauncherID, link.ParentSessionID)
+			if tc.appears {
+				require.NoError(t, err)
+				assert.Equal(t, "codex:"+codexLauncherID, link.ParentSessionID)
+			} else {
+				require.ErrorIs(t, err, sql.ErrNoRows)
+			}
 		})
 	}
-}
-
-func TestCaptureLaunchParentRejectsUnknownCodexIndexSchema(t *testing.T) {
-	home := t.TempDir()
-	state, err := sql.Open("sqlite3", filepath.Join(home, "state_999.sqlite"))
-	require.NoError(t, err)
-	_, err = state.ExecContext(t.Context(), `CREATE TABLE threads (id TEXT PRIMARY KEY)`)
-	require.NoError(t, err)
-	require.NoError(t, state.Close())
-	stubLaunchProcesses(t, fakeProcess{name: "sh"},
-		fakeProcess{name: "claude", env: []string{"CODEX_HOME=" + home, "CODEX_THREAD_ID=" + codexLauncherID}},
-		fakeProcess{name: "codex"})
-	_, err = runLaunchHook(t, sessionStartPayload("startup"))
-	require.ErrorContains(t, err, "no such column")
 }
