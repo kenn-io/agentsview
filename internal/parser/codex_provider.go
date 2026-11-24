@@ -1422,25 +1422,27 @@ func (s codexSourceSet) FindSource(
 		}
 	}
 	var best SourceRef
+	var walkErr error
 	found := false
 	for _, root := range s.roots {
-		if isS3URI(root) {
-			continue
-		}
-		_ = s.findLabeledSource(ctx, root, root, req.RawSessionID, func(source SourceRef) {
-			if !found || preferCodexSource(source, best) {
-				best, found = source, true
-			}
-		})
+		walkErr = errors.Join(walkErr, s.findLabeledSource(
+			ctx, root, root, req.RawSessionID, func(source SourceRef) {
+				if !found || preferCodexSource(source, best) {
+					best, found = source, true
+				}
+			}))
 		if err := ctx.Err(); err != nil {
 			return SourceRef{}, false, err
 		}
 	}
-	return best, found, nil
+	return best, found, walkErr
 }
 
 // findLabeledSource searches label directories and reads only sessions within each marked home.
 func (s codexSourceSet) findLabeledSource(ctx context.Context, root, dir, id string, yield func(SourceRef)) error {
+	if isS3URI(root) {
+		return nil
+	}
 	return s.walkLabeledHomes(ctx, root, dir, func(home string) {
 		if transcript := s.findSourceFile(filepath.Join(home, "sessions"), id); transcript != "" {
 			if source, ok := s.sourceRef(root, transcript, true); ok {
@@ -1450,8 +1452,8 @@ func (s codexSourceSet) findLabeledSource(ctx context.Context, root, dir, id str
 	})
 }
 
-func (s codexSourceSet) walkLabeledHomes(ctx context.Context, root, dir string, yield func(string)) error {
-	return streamDirectoryEntries(ctx, dir, func(entry os.DirEntry) error {
+func (s codexSourceSet) walkLabeledHomes(ctx context.Context, root, dir string, yield func(string)) (walkErr error) {
+	err := streamDirectoryEntries(ctx, dir, func(entry os.DirEntry) error {
 		if !entry.IsDir() {
 			return nil
 		}
@@ -1460,12 +1462,10 @@ func (s codexSourceSet) walkLabeledHomes(ctx context.Context, root, dir string, 
 			yield(path)
 			return nil
 		}
-		_ = s.walkLabeledHomes(ctx, root, path, yield)
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		return nil
+		walkErr = errors.Join(walkErr, s.walkLabeledHomes(ctx, root, path, yield))
+		return ctx.Err()
 	})
+	return errors.Join(walkErr, err)
 }
 
 func (s codexSourceSet) Fingerprint(

@@ -2504,7 +2504,9 @@ func TestCodexFreshCompressedLabeledLookupDoesNotWalkRoots(t *testing.T) {
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 	visited := 0
-	ctx := withStreamingDirectoryReader(t.Context(), func(ctx context.Context, dir string, yield func(os.DirEntry) error) error {
+	ctx := withStreamingDirectoryReader(t.Context(), func(
+		ctx context.Context, dir string, yield func(os.DirEntry) error,
+	) error {
 		visited++
 		return streamDirectoryEntriesDirect(ctx, dir, yield)
 	})
@@ -2616,4 +2618,23 @@ func TestCodexDiscoverKeepsHealthySourcesWhenSiblingUnreadable(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	assert.Equal(t, path, sources[0].DisplayPath)
+}
+
+func TestCodexLabeledLookupReportsUnreadableDirectory(t *testing.T) {
+	root := t.TempDir()
+	broken := filepath.Join(root, "label")
+	require.NoError(t, os.Mkdir(broken, 0o755))
+	ctx := withStreamingDirectoryReader(t.Context(), func(ctx context.Context, dir string, yield func(os.DirEntry) error) error {
+		if dir == broken {
+			return os.ErrPermission
+		}
+		return streamDirectoryEntriesDirect(ctx, dir, yield)
+	})
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	_, found, err := provider.FindSource(ctx, FindSourceRequest{
+		RawSessionID: "019eb791-cf7d-75c1-8439-9ed74c1229e1",
+	})
+	assert.False(t, found)
+	assert.ErrorIs(t, err, os.ErrPermission)
 }
