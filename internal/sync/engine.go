@@ -6321,15 +6321,6 @@ func (e *Engine) syncAllLocked(
 	if ctx.Err() != nil {
 		return SyncStats{Aborted: true}
 	}
-	if scope == nil {
-		var finishLabels func(context.Context, *SyncStats)
-		var err error
-		ctx, finishLabels, err = e.prepareCodexLabelRoots(ctx)
-		if err != nil {
-			return SyncStats{Aborted: true, Warnings: []string{err.Error()}, abortCause: err.Error()}
-		}
-		defer func() { finishLabels(ctx, &stats) }()
-	}
 	e.invalidateNativeTitleCache(nil)
 	ctx, closeProviderCache, err := e.withProviderFingerprintCache(ctx, nil)
 	if err != nil {
@@ -6415,15 +6406,6 @@ func (e *Engine) syncAllLocked(
 		}
 		if wave.partial {
 			since = time.Unix(0, 1)
-		}
-	}
-
-	if ctx.Value(codexLabelRootsPendingKey{}) != nil {
-		for i := range all {
-			if all[i].Agent == parser.AgentCodex && parser.CodexMarkedRunPath(all[i].Path) {
-				all[i].ForceParse = true
-				all[i].ForceFullParse = true
-			}
 		}
 	}
 
@@ -11018,8 +11000,7 @@ func (e *Engine) preserveUnavailableSourceProjects(
 	indexes := make(map[string][]int)
 	ids := make([]string, 0, len(batch))
 	for i := range batch {
-		if batch[i].sourceProjectResolved ||
-			(ctx.Value(codexLabelRootsPendingKey{}) != nil && batch[i].sess.Agent == parser.AgentCodex && parser.CodexMarkedRunPath(batch[i].sess.File.Path)) {
+		if batch[i].sourceProjectResolved {
 			continue
 		}
 		sess := batch[i].sess

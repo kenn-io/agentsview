@@ -389,7 +389,14 @@ func (p *codexProvider) FindSource(
 	return p.sources.FindSource(ctx, req)
 }
 
-// AllSourcePathsForUUIDs lists each requested UUID's on-disk copies in one walk.
+// AllSourcePathsForUUIDs returns, for each requested session UUID, every
+// on-disk Codex transcript path under the provider's roots whose filename
+// carries it, without the live-over-archived deduplication Discover applies. A
+// UUID can exist as both a live dated copy and a flat archived copy under the
+// same root; the sync engine uses the full set so an mtime cutoff can judge each
+// copy independently. A compressed copy beside its plain file is left out: the
+// plain file is the one Codex appends to, so no cutoff may choose the
+// compressed one over it. One walk serves every requested UUID.
 func (p *codexProvider) AllSourcePathsForUUIDs(uuids []string) map[string][]string {
 	paths := make(map[string][]string, len(uuids))
 	for _, uuid := range uuids {
@@ -408,7 +415,8 @@ func (p *codexProvider) AllSourcePathsForUUIDs(uuids []string) map[string][]stri
 			if _, ok := seen[clean]; ok {
 				continue
 			}
-			if isCompressedCodexRolloutPath(clean) && IsRegularFile(codexPlainRolloutPath(clean)) {
+			if isCompressedCodexRolloutPath(clean) &&
+				IsRegularFile(codexPlainRolloutPath(clean)) {
 				continue
 			}
 			seen[clean] = struct{}{}
@@ -1039,7 +1047,6 @@ func (s codexSourceSet) discover(
 	includeRoot func(string) bool,
 ) ([]SourceRef, error) {
 	var sources []SourceRef
-	var incomplete error
 	byKey := make(map[string]SourceRef)
 	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
@@ -1067,26 +1074,20 @@ func (s codexSourceSet) discover(
 			}
 			continue
 		}
-		if _, err := os.Stat(root); errors.Is(err, os.ErrNotExist) {
-			continue
-		}
 		if err := s.discoverEachRoot(ctx, root, func(source SourceRef) error {
 			if current, ok := byKey[source.Key]; !ok || preferCodexSource(source, current) {
 				byKey[source.Key] = source
 			}
 			return nil
-		}); err != nil {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-			incomplete = errors.Join(incomplete, err)
+		}); err != nil && ctx.Err() != nil {
+			return nil, ctx.Err()
 		}
 	}
 	for _, source := range byKey {
 		sources = append(sources, source)
 	}
 	sortJSONLSources(sources)
-	return sources, incomplete
+	return sources, nil
 }
 
 // discoverSessionPaths finds all Codex JSONL session file paths under
@@ -1483,30 +1484,14 @@ func (s codexSourceSet) pathFromSource(source SourceRef) (string, bool) {
 	return "", false
 }
 
-func (s codexSourceSet) sourcesForIndexPath(ctx context.Context, indexPath string) ([]SourceRef, error) {
-	return s.discoverIndexSources(ctx, indexPath)
-}
-
-func (s codexSourceSet) discoverIndexSources(ctx context.Context, indexPath string) ([]SourceRef, error) {
-	indexDir := filepath.Dir(indexPath)
-	if strings.HasPrefix(filepath.Base(indexDir), ".codex-run-v1-") {
-		for _, root := range s.roots {
-			if isS3URI(root) || !isWithinRoot(root, indexDir) || filepath.Clean(indexDir) == filepath.Clean(root) {
-				continue
-			}
-			sessions := filepath.Join(indexDir, "sessions")
-			if _, err := os.Stat(sessions); errors.Is(err, os.ErrNotExist) {
-				return nil, nil
-			}
-			scoped := s
-			scoped.roots = []string{sessions}
-			sources, err := scoped.discover(ctx, func(string) bool { return true })
-			for i, source := range sources {
-				sources[i], _ = s.sourceRef(root, source.DisplayPath, true)
-			}
-			return sources, err
-		}
+func (s codexSourceSet) sourcesForIndexPath(
+	ctx context.Context,
+	indexPath string,
+) ([]SourceRef, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
+	indexDir := filepath.Dir(indexPath)
 	return s.discover(ctx, func(root string) bool {
 		return slices.Contains(s.metadata.dirs(root), indexDir)
 	})
@@ -1752,7 +1737,6 @@ func codexProviderCapabilities() Capabilities {
 			Model:                CapabilitySupported,
 		},
 		Sync: ProviderSyncSemantics{
-			PartialDiscovery:                    true,
 			FingerprintHashInCacheKey:           true,
 			FingerprintHashRequiredForFreshness: true,
 			SkipCacheFreshWithoutStoredRow:      true,

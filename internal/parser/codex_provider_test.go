@@ -2427,26 +2427,6 @@ func TestCodexFreshLookupPrefersSuppliedLabeledSource(t *testing.T) {
 	assert.Equal(t, path, source.DisplayPath)
 }
 
-func TestCodexDiscoveryReportsUnreadableDirectory(t *testing.T) {
-	root := t.TempDir()
-	blocked := filepath.Join(root, "blocked")
-	writeCodexProviderSession(t, filepath.Join(blocked, ".codex-run-v1-a", "sessions"), "11111111-1111-4111-8111-111111111111", "blocked")
-	writeCodexProviderSession(t, filepath.Join(root, "available", ".codex-run-v1-b", "sessions"), "22222222-2222-4222-8222-222222222222", "available")
-	require.NoError(t, os.Chmod(blocked, 0))
-	t.Cleanup(func() { require.NoError(t, os.Chmod(blocked, 0o755)) })
-	if _, err := os.ReadDir(blocked); err == nil {
-		t.Skip("directory permissions do not block reads")
-	}
-	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root, filepath.Join(root, "missing")}})
-	require.True(t, ok)
-	sources, err := provider.Discover(t.Context())
-	require.ErrorIs(t, err, os.ErrPermission)
-	var incomplete DiscoveryIncompleteError
-	require.ErrorAs(t, err, &incomplete)
-	require.Len(t, sources, 1)
-	assert.Contains(t, sources[0].DisplayPath, "available")
-}
-
 func TestCodexDotLabeledRuns(t *testing.T) {
 	root := t.TempDir()
 	for i, id := range []string{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"} {
@@ -2463,20 +2443,4 @@ func TestCodexDotLabeledRuns(t *testing.T) {
 		require.Len(t, parsed.Results, 1)
 		assert.Equal(t, ".", parsed.Results[0].Result.Session.Project)
 	}
-}
-
-func TestCodexLabeledIndexChange(t *testing.T) {
-	root := t.TempDir()
-	var paths []string
-	for i, id := range []string{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"} {
-		home := filepath.Join(root, "label", fmt.Sprintf(".codex-run-v1-%d", i))
-		paths = append(paths, writeCodexProviderSession(t, filepath.Join(home, "sessions"), id, "prompt"))
-		require.NoError(t, os.WriteFile(filepath.Join(home, CodexSessionIndexFilename), []byte(fmt.Sprintf("{\"id\":%q,\"thread_name\":\"title\"}\n", id)), 0o600))
-	}
-	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	index := filepath.Join(root, "label", ".codex-run-v1-0", CodexSessionIndexFilename)
-	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: index, EventKind: "write", WatchRoot: root})
-	require.NoError(t, err)
-	assert.Equal(t, []string{paths[0]}, sourceDisplayPaths(changed))
 }
