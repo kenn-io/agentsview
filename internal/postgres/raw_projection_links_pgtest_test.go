@@ -254,12 +254,14 @@ func TestHostedCrossSourcePluralOwnersRemainContextual(t *testing.T) {
 	}
 	require.Len(t, parentIDs, 2)
 	require.NotEmpty(t, childSession.SessionID)
+	assert.ElementsMatch(t, parentIDs, childSession.ParentSessionIDs)
+	assert.False(t, childSession.IsLaunched)
 	launchers, err := (activityReportBackend{Store: h.physical}).ActivityReportLaunchers(t.Context(), sessions, selected, activity.Query{})
 	require.NoError(t, err)
-	assert.ElementsMatch(t, parentIDs, launchers.Waiting[childSession.SessionID])
+	assert.Empty(t, launchers.Waiting[childSession.SessionID])
 	launchers, err = (activityReportBackend{Store: h.physical}).ActivityReportLaunchers(t.Context(), []activity.SessionMeta{childSession}, selected, activity.Query{})
 	require.NoError(t, err)
-	assert.ElementsMatch(t, parentIDs, launchers.Waiting[childSession.SessionID])
+	assert.Empty(t, launchers.Waiting[childSession.SessionID])
 	for _, parent := range conflict.Variants {
 		children, err := h.GetChildSessions(t.Context(), parent)
 		require.NoError(t, err)

@@ -70,6 +70,9 @@ func ResolveLaunchers(ctx context.Context, runs []SessionMeta, selected map[stri
 	}
 	result := Launchers{Waiting: make(map[string][]string), Examined: slices.Sorted(maps.Keys(examined))}
 	for _, run := range runs {
+		if !run.IsLaunched {
+			continue
+		}
 		pending := []string{run.SessionID}
 		seen := map[string]bool{}
 		for len(pending) > 0 {

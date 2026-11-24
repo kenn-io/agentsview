@@ -339,7 +339,7 @@ func (s *Store) endedActivityReportKey(
 	}
 	runs := make([]activity.SessionMeta, 0, len(parents))
 	for _, id := range parents {
-		runs = append(runs, activity.SessionMeta{SessionID: "\x00" + id, IsSubagent: true, ParentSessionIDs: []string{id}})
+		runs = append(runs, activity.SessionMeta{SessionID: "\x00" + id, IsSubagent: true, IsLaunched: true, ParentSessionIDs: []string{id}})
 	}
 	launchers, versions, err := s.activityReportLaunchers(ctx, filter, runs, nil)
 	if err != nil {
@@ -519,6 +519,7 @@ func (s *Store) activityReportSessions(
 		}
 		if parent != "" {
 			m.ParentSessionIDs = []string{parent}
+			m.IsLaunched = true
 		}
 		m.StartedAt = formatDBTime(startedAt)
 		m.EndedAt = formatDBTime(endedAt)

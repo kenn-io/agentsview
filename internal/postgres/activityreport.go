@@ -488,8 +488,12 @@ func (s *Store) activityReportSessions(
 func (s *Store) activityReportSessionsWhere(ctx context.Context, f db.AnalyticsFilter, rangeStartUTC, rangeEndUTC string, only []string, onlySubagents, loadParents bool) ([]activity.SessionMeta, []string, error) {
 	pb := &paramBuilder{}
 	where := buildAnalyticsWhereWithDate(f, "", pb, false, "s.id", s.sessionDialect())
+	launched := `s.relationship_type = 'subagent' AND COALESCE(s.parent_session_id, '') <> '' AND COALESCE(s.parser_parent_session_id, '') = '' AND NOT EXISTS (SELECT 1 FROM tool_calls tc WHERE tc.subagent_session_id = s.id AND tc.session_id <> s.id)`
+	if s.hostedRelations {
+		launched += ` AND s.provenance_kind = 'legacy'`
+	}
 	if onlySubagents {
-		where += " AND s.relationship_type = 'subagent'"
+		where += " AND (" + launched + ")"
 	}
 	lower := pb.add(rangeStartUTC)
 	upper := pb.add(rangeEndUTC)
@@ -509,7 +513,8 @@ func (s *Store) activityReportSessionsWhere(ctx context.Context, f db.AnalyticsF
 		s.started_at,
 		s.ended_at,
 		s.is_automated,
-		s.relationship_type = 'subagent' AS is_subagent
+		s.relationship_type = 'subagent' AS is_subagent,
+		(` + launched + `) AS is_launched
 	FROM sessions s
 	WHERE ` + where + `
 		AND (COALESCE(s.ended_at,
@@ -541,7 +546,7 @@ func (s *Store) activityReportSessionsWhere(ctx context.Context, f db.AnalyticsF
 		var startedAt, endedAt sql.NullTime
 		if err := rows.Scan(
 			&m.SessionID, &m.Title, &m.Project, &m.Agent,
-			&m.Machine, &startedAt, &endedAt, &m.IsAutomated, &m.IsSubagent,
+			&m.Machine, &startedAt, &endedAt, &m.IsAutomated, &m.IsSubagent, &m.IsLaunched,
 		); err != nil {
 			return nil, nil, fmt.Errorf(
 				"scanning activity report session: %w", err)

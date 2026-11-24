@@ -44,6 +44,7 @@ type SessionMeta struct {
 	EndedAt          string // RFC3339 or ""
 	IsAutomated      bool   // automation flag, independent of delegation
 	IsSubagent       bool   // delegation takes precedence over automation
+	IsLaunched       bool   // eligible to extend a launcher's activity
 	ParentSessionIDs []string
 }
 

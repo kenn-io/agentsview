@@ -626,8 +626,9 @@ func (db *DB) activityReportSessionsFrom(
 
 func (db *DB) activityReportSessionsFromWhere(ctx context.Context, q sessionExportQuerier, f AnalyticsFilter, rangeStartUTC, rangeEndUTC string, onlySubagents bool) ([]activity.SessionMeta, []string, error) {
 	where, args := activityReportSessionSelectionWhere(f, rangeStartUTC, rangeEndUTC)
+	launched := `EXISTS (SELECT 1 FROM session_external_parents ep WHERE ep.session_id = s.id AND ep.parent_session_id = s.parent_session_id AND s.relationship_type = 'subagent' AND COALESCE(s.parser_parent_session_id, '') = '' AND NOT ` + spawnEdgeExistsSQL("s") + `)`
 	if onlySubagents {
-		where += " AND s.relationship_type = 'subagent'"
+		where += " AND " + launched
 	}
 
 	// Each Title candidate is NULLIF'd independently (not a nested
@@ -644,6 +645,7 @@ func (db *DB) activityReportSessionsFromWhere(ctx context.Context, q sessionExpo
 		COALESCE(s.ended_at, ''),
 		s.is_automated,
 		s.relationship_type = 'subagent',
+		` + launched + `,
 		CASE WHEN s.relationship_type = 'subagent' THEN COALESCE(s.parent_session_id, '') ELSE '' END
 	FROM sessions s
 	WHERE ` + where
@@ -662,7 +664,7 @@ func (db *DB) activityReportSessionsFromWhere(ctx context.Context, q sessionExpo
 		var parent string
 		if err := rows.Scan(
 			&s.SessionID, &s.Title, &s.Project, &s.Agent,
-			&s.Machine, &s.StartedAt, &s.EndedAt, &s.IsAutomated, &s.IsSubagent, &parent,
+			&s.Machine, &s.StartedAt, &s.EndedAt, &s.IsAutomated, &s.IsSubagent, &s.IsLaunched, &parent,
 		); err != nil {
 			return nil, nil, fmt.Errorf(
 				"scanning activity report session: %w", err)

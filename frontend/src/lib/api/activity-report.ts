@@ -5,16 +5,6 @@ import {
   type GetApiV1ActivityReportParams,
 } from "./generated/index";
 import { consumeEvents } from "./client.js";
-import { m } from "../i18n/index.js";
-
-const ACTIVITY_REPORT_SCHEMA_VERSION = 9;
-
-function validateActivityReport(report: Report): Report {
-  if (report?.schema_version !== ACTIVITY_REPORT_SCHEMA_VERSION) {
-    throw new Error(m.activity_report_load_failed());
-  }
-  return report;
-}
 
 export interface ActivityReportProgress {
   phase: "loading_sessions" | "loading_usage" | "scanning_activity" | "finalizing" | "done";
@@ -60,9 +50,9 @@ export async function fetchActivityReport(
       },
       "Activity report stream ended without a report event",
     );
-    return validateActivityReport(report);
+    return report;
   }
-  return validateActivityReport((await res.json()) as Report);
+  return (await res.json()) as Report;
 }
 
 export async function fetchActivitySessions(
@@ -82,6 +72,5 @@ export async function fetchActivitySessions(
     },
     { signal },
   );
-  if (page.report) validateActivityReport(page.report);
   return page;
 }

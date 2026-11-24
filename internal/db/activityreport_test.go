@@ -1887,6 +1887,26 @@ func TestActivityReportFilteredRunsKeepMatchingLauncherActive(t *testing.T) {
 	}
 }
 
+func TestActivityReportNativeSubagentDoesNotExtendLauncher(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "root", "project-a", func(s *Session) {
+		s.StartedAt = Ptr("2026-06-15T10:00:00Z")
+		s.EndedAt = Ptr("2026-06-15T10:02:00Z")
+	})
+	insertSession(t, d, "native", "project-a", func(s *Session) {
+		s.StartedAt = Ptr("2026-06-16T10:00:00Z")
+		s.EndedAt = Ptr("2026-06-16T10:04:00Z")
+		s.ParentSessionID = Ptr("root")
+		s.RelationshipType = "subagent"
+	})
+	seedMessage(t, d, "native", 1, "user", "2026-06-16T10:00:00Z", "")
+	seedMessage(t, d, "native", 2, "assistant", "2026-06-16T10:04:00Z", "")
+	report, err := d.GetActivityReport(t.Context(), AnalyticsFilter{Timezone: "UTC"}, dayQuery(t, "2026-06-16", "UTC"))
+	require.NoError(t, err)
+	assert.Zero(t, report.InteractivePeak.Agents)
+	assert.Equal(t, 1, report.Peak.Agents)
+}
+
 func TestActivityReportEvidenceReadsOnlySubagents(t *testing.T) {
 	d := testDB(t)
 	for _, id := range []string{"root", "child"} {

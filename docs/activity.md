@@ -112,6 +112,8 @@ nested runs and runs that continue after the session's last message. The combine
 peak and bucket maximum include that waiting session.
 The launcher must match the Project, Agent, Machine, and Automation filters. A
 linked run can keep it active even when the run is excluded by those filters.
+ClickHouse does not retain the origin of parent links, so it also counts a
+waiting session while a linked native subagent is active.
 Agent-minutes, cost, session counts, the sessions table, and bucket membership
 continue to use each session's own activity. Reporting exports use each session's
 own activity for concurrency as well.
