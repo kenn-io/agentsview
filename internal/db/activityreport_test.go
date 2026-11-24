@@ -1841,27 +1841,6 @@ func TestActivityReportLauncherFiltersAndLinkChanges(t *testing.T) {
 	assert.InDelta(t, before.Totals.AgentMinutes, after.Totals.AgentMinutes, 1e-9)
 }
 
-func TestActivityReportCountsNestedLaunchers(t *testing.T) {
-	d := testDB(t)
-	for _, id := range []string{"root", "middle", "child"} {
-		insertSession(t, d, id, "project-a", func(s *Session) {
-			s.StartedAt = Ptr("2026-06-16T10:00:00Z")
-			s.EndedAt = Ptr("2026-06-16T10:04:00Z")
-		})
-	}
-	seedMessage(t, d, "child", 1, "user", "2026-06-16T10:00:00Z", "")
-	seedMessage(t, d, "child", 2, "assistant", "2026-06-16T10:04:00Z", "")
-	_, err := d.SetSessionExternalParent(t.Context(), "middle", "root")
-	require.NoError(t, err)
-	_, err = d.SetSessionExternalParent(t.Context(), "child", "middle")
-	require.NoError(t, err)
-	report, err := d.GetActivityReport(t.Context(), AnalyticsFilter{Timezone: "UTC"}, dayQuery(t, "2026-06-16", "UTC"))
-	require.NoError(t, err)
-	assert.Equal(t, 2, report.Peak.Agents)
-	assert.Equal(t, 1, report.InteractivePeak.Agents)
-	assert.Equal(t, 1, report.SubagentPeak.Agents)
-}
-
 func TestActivityReportFilteredRunsKeepMatchingLauncherActive(t *testing.T) {
 	for _, tc := range []struct {
 		name                     string

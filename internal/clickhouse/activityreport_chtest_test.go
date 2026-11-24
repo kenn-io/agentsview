@@ -295,7 +295,7 @@ func TestEndedActivityReportKeyTracksLauncher(t *testing.T) {
 	assert.NotEqual(t, before, key())
 }
 
-func TestClickHouseActivityReportKeptHiddenRunLink(t *testing.T) {
+func TestClickHouseGetActivityReportKeptHiddenRunLink(t *testing.T) {
 	t.Parallel()
 	store, syncer, local := newPushedStore(t)
 	ctx := t.Context()
