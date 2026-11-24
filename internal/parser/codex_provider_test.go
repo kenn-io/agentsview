@@ -2411,6 +2411,6 @@ func TestCodexLabeledRunDiscoveryAndParse(t *testing.T) {
 	assert.Equal(t, "experiment/case", outcome.Results[0].Result.Session.Project)
 	assert.Empty(t, outcome.Results[0].Result.Session.GitRemote)
 	assert.Equal(t, "experiment/case", CodexSourceLabel(root, path))
-	assert.Empty(t, CodexSourceLabel(filepath.Join(home, "sessions"), path))
+	assert.Equal(t, SessionKindNonInteractive, outcome.Results[0].Result.Session.SessionKind)
 	assert.Equal(t, "..x", CodexSourceLabel(root, filepath.Join(root, "..x", ".codex-run-v1-abc", "sessions", "2026", "01", "01", filepath.Base(path))))
 }
