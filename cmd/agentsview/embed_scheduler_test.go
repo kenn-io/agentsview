@@ -1959,7 +1959,11 @@ func TestEmbedSchedulerFiltersAgents(t *testing.T) {
 	dataDir := t.TempDir()
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
 	seed := func(id, agent string) {
-		dbtest.SeedSessionWithMessages(t, database, id, "project", []db.Message{dbtest.UserMsg(id, 0, id+" text")}, func(s *db.Session) { s.Agent = agent })
+		dbtest.SeedSessionWithMessages(t, database, id, "project",
+			[]db.Message{dbtest.UserMsg(id, 0, id+" text")},
+			func(s *db.Session) {
+				s.Agent = agent
+			})
 	}
 	seed("claude-one", "claude")
 	seed("codex-one", "codex")
@@ -1987,11 +1991,19 @@ func TestEmbedSchedulerFiltersAgents(t *testing.T) {
 	go scheduler.run(t.Context(), ticks)
 	defer scheduler.Stop()
 	scheduler.Notify()
-	waitForSchedulerCondition(t, func() bool { mu.Lock(); defer mu.Unlock(); return len(encoded) == 1 }, "after-sync build did not encode")
+	waitForSchedulerCondition(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(encoded) == 1
+	}, "after-sync build did not encode")
 	seed("claude-two", "claude")
 	seed("codex-two", "codex")
 	ticks <- time.Now()
-	waitForSchedulerCondition(t, func() bool { mu.Lock(); defer mu.Unlock(); return len(encoded) == 2 }, "backstop build did not encode")
+	waitForSchedulerCondition(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(encoded) == 2
+	}, "backstop build did not encode")
 	mu.Lock()
 	defer mu.Unlock()
 	assert.Contains(t, encoded[0], "claude-one text")
