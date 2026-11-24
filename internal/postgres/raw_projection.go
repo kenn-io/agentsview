@@ -161,7 +161,6 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		}
 		previous, exists := priorByGroup[group]
 		var old ingest.PreparedSession
-		var originalPRLinks []db.PRLink
 		var history *ingest.PriorSession
 		if exists {
 			metadata, decodeErr := decodeRawPayload(previous.Payload)
@@ -179,7 +178,6 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			if loadErr != nil {
 				return loadErr
 			}
-			originalPRLinks = payload.Session.PRLinks
 			payload.Session = old.Session
 			old = payload
 			oldLoaded = true
@@ -241,32 +239,29 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			}
 		}
 		prepared.Signals = ingest.RefreshSignalRecencyAt(prepared.Session, prepared.Messages, prepared.Signals, s.options.Now())
-		identityPayload := prepared
-		if decision.Action == ingest.HistoryPreserve {
-			identityPayload.Session.PRLinks = originalPRLinks
-		}
-		revision, err := rawContentRevision(identityPayload)
+		revision, err := rawContentRevision(prepared)
 		if err != nil {
 			return err
 		}
-		payload, err := encodeRawPayload(identityPayload)
+		payload, err := encodeRawPayload(prepared)
 		if err != nil {
 			return err
-		}
-		if decision.Action != ingest.HistoryPreserve && !s.options.Content.ArchiveContent.UsageOnly() {
-			promptLinks, err := db.PromptPRLinksContext(ctx, prepared.Messages)
-			if err != nil {
-				return err
-			}
-			toolLinks, err := db.ToolCallPRLinks(ctx, prepared.Messages, prepared.Session.Cwd, "")
-			if err != nil {
-				return err
-			}
-			prepared.Session.PRLinks = parser.CombinePRLinks(prepared.Session.PRLinks, promptLinks, toolLinks)
 		}
 		sessionID := "raw-row-" + rawDigest("row-v1", group, revision)
 		if decision.Action != ingest.HistoryPreserve {
-			freshLinks[sessionID] = prepared.Session.PRLinks
+			links := prepared.Session.PRLinks
+			if !s.options.Content.ArchiveContent.UsageOnly() {
+				promptLinks, err := db.PromptPRLinksContext(ctx, prepared.Messages)
+				if err != nil {
+					return err
+				}
+				toolLinks, err := db.ToolCallPRLinks(ctx, prepared.Messages, prepared.Session.Cwd, "")
+				if err != nil {
+					return err
+				}
+				links = parser.CombinePRLinks(links, promptLinks, toolLinks)
+			}
+			freshLinks[sessionID] = links
 		}
 		branchID := rawDigest("branch-v1", group, source)
 		inserted, err := tx.ExecContext(ctx, `INSERT INTO raw_content_revisions(session_id,group_id,content_revision,payload) VALUES($1,$2,$3,$4) ON CONFLICT(session_id) DO NOTHING`, sessionID, group, revision, payload)
