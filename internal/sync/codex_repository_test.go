@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"database/sql"
 	"os"
 	"path/filepath"
@@ -245,4 +246,90 @@ func TestCodexLabeledRunKeepsProjectThroughResyncAndMapping(t *testing.T) {
 	session, err = database.GetSessionFull(t.Context(), "codex:"+id)
 	require.NoError(t, err)
 	assert.Equal(t, "mapped", session.Project)
+}
+
+func TestCodexLabeledProjectChangesWithRoots(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	checkout := filepath.Join(root, "checkout")
+	require.NoError(t, os.MkdirAll(filepath.Join(checkout, ".git"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(checkout, ".git", "config"), []byte("[remote \"origin\"]\nurl = https://example.com/team/api.git\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(checkout, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644))
+	const id = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+	sessions := filepath.Join(root, "label", ".codex-run-v1-a", "sessions")
+	path := filepath.Join(sessions, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
+	meta := testjsonl.CodexSessionMetaWithFieldsJSON(id, checkout, "codex_cli_rs", "2026-10-08T12:00:00Z", map[string]any{"git": map[string]any{"repository_url": "https://example.com/team/api.git"}})
+	dbtest.WriteTestFile(t, path, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
+	config := EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {sessions}}}
+	engine := NewEngine(t.Context(), database, config)
+	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+	engine.Close()
+	require.NoError(t, os.Remove(filepath.Join(checkout, ".git", "config")))
+	require.NoError(t, os.Remove(filepath.Join(checkout, ".git", "HEAD")))
+	require.NoError(t, os.Remove(filepath.Join(checkout, ".git")))
+	require.NoError(t, os.Remove(checkout))
+	const ordinaryID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	ordinary := filepath.Join(root, "rollout-"+ordinaryID+".jsonl")
+	ordinaryMeta := testjsonl.CodexSessionMetaJSON(ordinaryID, "/work/other", "codex_cli_rs", "2026-10-08T12:00:00Z")
+	dbtest.WriteTestFile(t, ordinary, []byte(ordinaryMeta+"\n"+testjsonl.CodexMsgJSON("user", "hello", "2026-10-08T12:00:01Z")+"\n"))
+	config.AgentDirs[parser.AgentCodex] = []string{root}
+	engine = NewEngine(t.Context(), database, config)
+	var oldMarker, marker string
+	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key = ?`, codexLabelRootsKey).Scan(&oldMarker))
+	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{path}))
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	assert.True(t, engine.SyncAll(cancelled, nil).Aborted)
+	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key = ?`, codexLabelRootsKey).Scan(&marker))
+	assert.Equal(t, oldMarker, marker)
+	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key = ?`, codexLabelRootsKey).Scan(&marker))
+	assert.NotEqual(t, oldMarker, marker)
+	session, err := database.GetSessionFull(t.Context(), "codex:"+id)
+	require.NoError(t, err)
+	require.Equal(t, "label", session.Project)
+	assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
+	engine.Close()
+	config.AgentDirs[parser.AgentCodex] = []string{sessions}
+	engine = NewEngine(t.Context(), database, config)
+	t.Cleanup(engine.Close)
+	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+	session, err = database.GetSessionFull(t.Context(), "codex:"+id)
+	require.NoError(t, err)
+	assert.Equal(t, "checkout", session.Project)
+
+	const assignedID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+	const mappedID = "ffffffff-ffff-4fff-8fff-ffffffffffff"
+	for _, siblingID := range []string{assignedID, mappedID} {
+		siblingPath := filepath.Join(sessions, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+siblingID+".jsonl")
+		siblingMeta := testjsonl.CodexSessionMetaJSON(siblingID, checkout, "codex_cli_rs", "2026-10-08T12:00:00Z")
+		dbtest.WriteTestFile(t, siblingPath, []byte(siblingMeta+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
+	}
+	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+	_, err = database.AssignSessionProject(t.Context(), "codex:"+assignedID, "assigned")
+	require.NoError(t, err)
+	_, err = database.CreateWorktreeProjectMapping(t.Context(), db.WorktreeProjectMapping{Machine: "local", PathPrefix: checkout, Project: "mapped", Enabled: true})
+	require.NoError(t, err)
+	engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
+	stats := engine.SyncAll(t.Context(), nil)
+	require.Zero(t, stats.Failed)
+	assert.Equal(t, 3, stats.Synced)
+	for id, project := range map[string]string{assignedID: "assigned", mappedID: "mapped"} {
+		session, err = database.GetSessionFull(t.Context(), "codex:"+id)
+		require.NoError(t, err)
+		assert.Equal(t, project, session.Project)
+	}
+	assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
+	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key = ?`, codexLabelRootsKey).Scan(&oldMarker))
+	engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root, filepath.Join(root, "unavailable")}}})
+	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key = ?`, codexLabelRootsKey).Scan(&marker))
+	assert.Equal(t, oldMarker, marker)
+	engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {sessions}}})
+	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+	for id, project := range map[string]string{assignedID: "assigned", mappedID: "mapped"} {
+		session, err = database.GetSessionFull(t.Context(), "codex:"+id)
+		require.NoError(t, err)
+		assert.Equal(t, project, session.Project)
+	}
 }

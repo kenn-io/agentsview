@@ -4066,10 +4066,12 @@ func (e *Engine) syncAll(
 	}()
 	defer e.clearCurrentProgress()
 	defer func() { e.recordStartupReconciled(ctx, stats, ctx.Err()) }()
+	ctx, finishLabels := e.prepareCodexLabelRoots(ctx)
 	stats = e.syncAllLocked(
 		ctx, onProgress, time.Time{}, nil, syncWriteDefault, true,
 		forceFullParse && !allowCachedFailures,
 	)
+	finishLabels(ctx, &stats)
 	return
 }
 
@@ -6444,6 +6446,13 @@ func (e *Engine) syncAllLocked(
 		all = dedupeDiscoveredFiles(all)
 	}
 	all = e.dedupeClaudeDiscoveredFiles(ctx, all)
+	if ctx.Value(codexLabelRootsPendingKey{}) != nil {
+		for i := range all {
+			if all[i].Agent == parser.AgentCodex && parser.CodexMarkedRunPath(all[i].Path) {
+				all[i].ForceFullParse = true
+			}
+		}
+	}
 	if forceDiscoveredFiles {
 		for i := range all {
 			all[i].ForceParse = true
@@ -11000,7 +11009,8 @@ func (e *Engine) preserveUnavailableSourceProjects(
 	indexes := make(map[string][]int)
 	ids := make([]string, 0, len(batch))
 	for i := range batch {
-		if batch[i].sourceProjectResolved {
+		if batch[i].sourceProjectResolved || e.hasCodexSourceLabel(batch[i].sess) ||
+			(ctx.Value(codexLabelRootsPendingKey{}) != nil && batch[i].sess.Agent == parser.AgentCodex && parser.CodexMarkedRunPath(batch[i].sess.File.Path)) {
 			continue
 		}
 		sess := batch[i].sess
