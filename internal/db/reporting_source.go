@@ -217,54 +217,42 @@ func (src reportingExportSource) forDate(
 	date, end time.Time,
 ) reportingDaySource {
 	startBound, endBound := reportingRangeStringBounds(date, end)
-	selectedSessions := make([]activity.SessionMeta, 0, len(src.activitySessions))
-	activityIDs := make([]string, 0, len(src.activitySessions))
-	selected := make(map[string]struct{}, len(src.activitySessions))
-	for _, candidate := range src.activitySessions {
-		eligible := candidate.effectiveEnd >= startBound
-		if !eligible && candidate.terminalTimestamp >= startBound {
-			eligible = true
-		}
-		if !eligible || candidate.effectiveStart >= endBound {
-			continue
-		}
-		selectedSessions = append(selectedSessions, candidate.meta)
-		activityIDs = append(activityIDs, candidate.meta.SessionID)
+	selectedSessions := filterReportingRows(src.activitySessions, func(candidate *reportingSourceSession) bool {
+		eligible := candidate.effectiveEnd >= startBound || candidate.terminalTimestamp >= startBound
+		return eligible && candidate.effectiveStart < endBound
+	})
+	activitySessions := make([]activity.SessionMeta, len(selectedSessions))
+	activityIDs := make([]string, len(selectedSessions))
+	selected := make(map[string]struct{}, len(selectedSessions))
+	for i, candidate := range selectedSessions {
+		activitySessions[i] = candidate.meta
+		activityIDs[i] = candidate.meta.SessionID
 		selected[candidate.meta.SessionID] = struct{}{}
 	}
 
-	activityEvents := make([]activity.ActivityEvent, 0, len(src.activityEvents))
-	for _, event := range src.activityEvents {
-		if _, ok := selected[event.SessionID]; ok {
-			activityEvents = append(activityEvents, event)
-		}
-	}
+	activityEvents := filterReportingRows(src.activityEvents, func(event *activity.ActivityEvent) bool {
+		_, ok := selected[event.SessionID]
+		return ok
+	})
 
 	lowerBound := PaddedUTCBound(date.Format(time.RFC3339), -14)
 	upperBound := PaddedUTCBound(end.Format(time.RFC3339), 14)
-	usageCandidates := make([]activityReportUsageCandidate, 0, len(src.usageCandidates))
-	usageIDs := make(map[string]struct{}, len(src.usageCandidates))
-	for _, candidate := range src.usageCandidates {
-		if candidate.scan.ts < lowerBound || candidate.scan.ts > upperBound {
-			continue
-		}
-		usageCandidates = append(usageCandidates, candidate)
-		if candidate.scan.sessionID != "" {
-			usageIDs[candidate.scan.sessionID] = struct{}{}
+	usageCandidates := filterReportingRows(src.usageCandidates, func(candidate *activityReportUsageCandidate) bool {
+		return candidate.scan.ts >= lowerBound && candidate.scan.ts <= upperBound
+	})
+	usageIDs := make(map[string]struct{}, len(usageCandidates))
+	for i := range usageCandidates {
+		if id := usageCandidates[i].scan.sessionID; id != "" {
+			usageIDs[id] = struct{}{}
 		}
 	}
-	usageSessions := make([]activity.SessionMeta, 0, len(src.usageSessions))
-	for _, session := range src.usageSessions {
-		if _, ok := usageIDs[session.SessionID]; ok {
-			usageSessions = append(usageSessions, session)
-		}
-	}
-	standaloneUsage := make([]activity.UsageRow, 0, len(src.standaloneUsage))
-	for _, row := range src.standaloneUsage {
-		if row.Timestamp >= lowerBound && row.Timestamp <= upperBound {
-			standaloneUsage = append(standaloneUsage, row)
-		}
-	}
+	usageSessions := filterReportingRows(src.usageSessions, func(session *activity.SessionMeta) bool {
+		_, ok := usageIDs[session.SessionID]
+		return ok
+	})
+	standaloneUsage := filterReportingRows(src.standaloneUsage, func(row *activity.UsageRow) bool {
+		return row.Timestamp >= lowerBound && row.Timestamp <= upperBound
+	})
 	var accountUsage []reportingAccountRow
 	for _, row := range src.accountUsage {
 		if !row.at.Before(date) && row.at.Before(end) {
@@ -272,18 +260,16 @@ func (src reportingExportSource) forDate(
 		}
 	}
 
-	allSessions := mergeReportingSessions(selectedSessions, usageSessions)
+	allSessions := mergeReportingSessions(activitySessions, usageSessions)
 	labels := activity.ProjectLabels(allSessions)
 	labelSet := make(map[string]struct{}, len(labels))
 	for _, label := range labels {
 		labelSet[label] = struct{}{}
 	}
-	observations := make([]export.ProjectIdentityObservation, 0, len(src.projectObservations))
-	for _, observation := range src.projectObservations {
-		if _, ok := labelSet[observation.Project]; ok {
-			observations = append(observations, observation)
-		}
-	}
+	observations := filterReportingRows(src.projectObservations, func(observation *export.ProjectIdentityObservation) bool {
+		_, ok := labelSet[observation.Project]
+		return ok
+	})
 	projects := export.BuildProjectsMapWithScope(
 		labels, observations, src.archiveScope,
 	)
@@ -303,7 +289,7 @@ func (src reportingExportSource) forDate(
 		localMachineID:   src.localMachineID,
 		machineAliases:   src.machineAliases,
 		archiveID:        src.archiveScope.ArchiveID,
-		activitySessions: selectedSessions,
+		activitySessions: activitySessions,
 		activityIDs:      activityIDs,
 		activityEvents:   activityEvents,
 		usageSessions:    usageSessions,
@@ -315,6 +301,26 @@ func (src reportingExportSource) forDate(
 		projects:         projects,
 		references:       references,
 	}
+}
+
+// filterReportingRows copies the rows that keep accepts into a slice with no
+// spare capacity. A digest calls forDate once per date over source rows loaded
+// for the whole range, so sizing each date's copy by the source would allocate
+// about the range's rows for every date and multiply the digest's peak memory.
+func filterReportingRows[T any](rows []T, keep func(*T) bool) []T {
+	count := 0
+	for i := range rows {
+		if keep(&rows[i]) {
+			count++
+		}
+	}
+	out := make([]T, 0, count)
+	for i := range rows {
+		if keep(&rows[i]) {
+			out = append(out, rows[i])
+		}
+	}
+	return out
 }
 
 func reportingRangeStringBounds(start, end time.Time) (string, string) {
