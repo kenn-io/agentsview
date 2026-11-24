@@ -33,6 +33,7 @@
   "app_auth_placeholder": "인증 토큰 붙여넣기",
   "app_auth_authenticate": "인증",
   "app_auth_disconnect_reset": "연결 해제 및 재설정",
+  "session_delete_failed": "휴지통으로 이동할 수 없습니다: {reason}",
   "app_undo_session_deleted": "세션이 삭제되었습니다",
   "app_undo_undo": "실행 취소",
   "nav_toggle_sidebar": "사이드바 전환",

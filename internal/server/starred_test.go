@@ -57,7 +57,7 @@ func TestStarSessionReturns503WhileWriterClosed(t *testing.T) {
 			w := te.requestJSON(t, tc.method, tc.path, `{}`)
 			require.Equal(t, http.StatusServiceUnavailable, w.Code, w.Body.String())
 			assert.Equal(t, "5", w.Header().Get("Retry-After"))
-			assert.Contains(t, w.Body.String(), "archive is briefly read-only for a maintenance pass; retry shortly")
+			assert.Contains(t, w.Body.String(), "archive is read-only for a maintenance pass; retry after it finishes")
 		})
 	}
 }

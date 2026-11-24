@@ -18,6 +18,7 @@ import { router } from "./router.svelte.js";
 import { events } from "./events.svelte.js";
 import { ApiError } from "../api/runtime.js";
 import { rollingRange } from "../utils/dates.js";
+import { dismissFlash, getFlashMessage } from "@kenn-io/kit-ui";
 
 const api = vi.hoisted(() => ({
   listSessions: vi.fn(),
@@ -215,6 +216,24 @@ beforeEach(() => {
 
 describe("SessionsStore", () => {
   let sessions: ReturnType<typeof createSessionsStore>;
+
+  it.each(["single", "batch"])("shows a failed %s delete and keeps the selection", async (kind) => {
+    const store = createSessionsStore();
+    store.selectedIds = new Set(["saved"]);
+    const error = new ApiError(503, "archive is read-only; retry after maintenance");
+    if (kind === "single") api.deleteSession.mockRejectedValueOnce(error);
+    else api.batchDeleteSessions.mockRejectedValueOnce(error);
+    try {
+      await expect(
+        kind === "single" ? store.deleteSession("saved") : store.batchDeleteSessions(["saved"]),
+      ).rejects.toBe(error);
+      expect(getFlashMessage()).toContain("archive is read-only; retry after maintenance");
+      expect(store.selectedIds.has("saved")).toBe(true);
+      expect(store.recentlyDeleted).toHaveLength(0);
+    } finally {
+      dismissFlash();
+    }
+  });
 
   beforeEach(() => {
     vi.restoreAllMocks();

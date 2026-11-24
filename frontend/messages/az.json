@@ -35,6 +35,7 @@
   "app_auth_placeholder": "Kimliyi təsdiqləmə tokenini yapışdır",
   "app_auth_authenticate": "Kimliyi təsdiqlə",
   "app_auth_disconnect_reset": "Əlaqəni kəs və sıfırla",
+  "session_delete_failed": "Zibil qutusuna köçürmək mümkün olmadı: {reason}",
   "app_undo_session_deleted": "Sessiya silindi",
   "app_undo_undo": "Geri al",
   "nav_toggle_sidebar": "Yan paneli göstər/gizlət",

@@ -33,6 +33,7 @@
   "app_auth_placeholder": "貼上 auth token",
   "app_auth_authenticate": "驗證",
   "app_auth_disconnect_reset": "中斷並重置",
+  "session_delete_failed": "無法移至垃圾桶：{reason}",
   "app_undo_session_deleted": "對話已刪除",
   "app_undo_undo": "復原",
   "nav_toggle_sidebar": "切換側邊欄",

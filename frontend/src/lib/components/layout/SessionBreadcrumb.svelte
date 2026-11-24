@@ -40,6 +40,7 @@
   import { ui } from "../../stores/ui.svelte.js";
   import TranscriptControls from "./TranscriptControls.svelte";
   import { m } from "../../i18n/index.js";
+  import { failureMessage } from "../../utils/failure.js";
   import SessionPromptPicker from "./SessionPromptPicker.svelte";
 
   interface Props {
@@ -52,6 +53,8 @@
   let menuOpen = $state(false);
   let renaming = $state(false);
   let renameValue = $state("");
+  let renameError = $state("");
+  let renameSessionId = $state<string | undefined>();
   let renameInput = $state<HTMLInputElement | null>(null);
   let gradeBtnEl = $state<HTMLButtonElement | null>(null);
   async function hideDiagnostics() {
@@ -61,6 +64,14 @@
   }
   let menuBtnEl = $state<HTMLButtonElement | null>(null);
   let menuEl = $state<HTMLDivElement | null>(null);
+
+  $effect(() => {
+    if (renameSessionId && renameSessionId !== session?.id) {
+      renaming = false;
+      renameError = "";
+      renameSessionId = undefined;
+    }
+  });
 
   const openers = new SessionOpeners(() => session);
   const usageStats = new SessionUsage(() => session);
@@ -141,7 +152,9 @@
   }
 
   function startRename() {
+    renameError = "";
     if (!session) return;
+    renameSessionId = session.id;
     renameValue =
       session.display_name
       ?? normalizeMessagePreview(session.first_message)
@@ -154,11 +167,13 @@
   async function submitRename() {
     if (!renaming || !session) return;
     renaming = false;
-    const name = renameValue.trim() || null;
+    const name = renameValue.trim() || null, id = session.id;
     try {
-      await sessions.renameSession(session.id, name);
-    } catch {
-      // name reverts in UI
+      await sessions.renameSession(id, name);
+    } catch (error) {
+      if (id !== session?.id) return;
+      renameError = failureMessage(error);
+      renaming = true;
     }
   }
 
@@ -370,6 +385,7 @@
       }}
       onblur={submitRename}
     />
+    {#if renameError}<span class="rename-error" role="alert">{renameError}</span>{/if}
   {:else}
     <span class="breadcrumb-current">
       {session?.display_name ?? session?.project ?? ""}
@@ -550,8 +566,15 @@
     min-width: 0;
   }
 
+  .rename-error {
+    color: var(--accent-red);
+    font-size: 11px;
+  }
+
+  /* A 12rem basis keeps the typed title readable when an error sits
+     beside it; the controls wrap instead of squeezing the input. */
   .rename-input {
-    flex: 1;
+    flex: 1 1 12rem;
     min-width: 0;
     font-size: 11px;
     font-weight: 500;

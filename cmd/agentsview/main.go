@@ -243,6 +243,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	workerSyncDone := false
 	startupRebuild := false
 	skipInitialSync := opts.SkipInitialSync
+	workerAfterListen := false
 	firstImport := false
 	if !cfg.NoSync || archiveOnly {
 		needsResync, fullRebuild, err := db.ArchiveResyncState(ctx, cfg.DBPath)
@@ -263,8 +264,9 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		if skipInitialSync {
 			skipInitialSync = !needsResync
 		}
+		workerAfterListen = !skipInitialSync && !cfg.NoSync && !archiveOnly && err == nil && !needsResync
 	}
-	if !startupRebuild && !skipInitialSync && !cfg.NoSync && !testing.Testing() {
+	if !startupRebuild && !skipInitialSync && !cfg.NoSync && !testing.Testing() && !workerAfterListen {
 		startupProgress.SetPhase("opening database")
 		result, syncErr := runStartupSyncViaWorker(ctx, cfg, startupProgress)
 		workerStartupResult, workerSyncDone = startupWorkerOutcome(result, syncErr)
@@ -417,7 +419,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			FrictionEnabled:         cfg.Friction.Enabled,
 			Emitter:                 emitter,
 			DeferStartupMaintenance: deferStartupMaintenance(
-				skipInitialSync || startupRebuild, workerSyncDone,
+				skipInitialSync || startupRebuild, workerSyncDone || workerAfterListen,
 			),
 			OnStartupReconciled: func(stats sync.SyncStats, err error) {
 				onStartupReconciled(stats, err)
@@ -461,7 +463,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		}
 
 		if !skipInitialSync && !startupRebuild {
-			if workerSyncDone {
+			if workerSyncDone || workerAfterListen {
 				// The worker already ran the full startup pass out of process.
 				// Close the worker-to-watcher event gap with a bounded streaming
 				// reconciliation over the currently available watch roots (warm:
@@ -479,6 +481,26 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 				// startup maintenance keeps waiting until
 				// RecordStartupReconciled fires.
 				completeWorkerStartup = func() {
+					if workerAfterListen {
+						done, ok := idleTracker.BeginWork()
+						if !ok {
+							return
+						}
+						defer done()
+						result, err := runWorkerWritePass(ctx, ctx, cfg, engine, database, writeLock, "startup", nil)
+						if workerNeverRan(err) {
+							_, _, err = engine.RunStartupSyncFallback(ctx, nil)
+							if err != nil && ctx.Err() == nil {
+								log.Printf("startup sync fallback: %v", err)
+							}
+							return
+						}
+						workerStartupResult, _ = startupWorkerOutcome(result, err)
+						if err != nil && emitter != nil {
+							// A failed worker may have committed before losing its result.
+							emitter.Emit("sync")
+						}
+					}
 					completeWorkerStartupReconciliation(
 						ctx,
 						reconcileRootPaths(ingestion.Config()),

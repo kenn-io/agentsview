@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -169,6 +170,10 @@ func (db *DB) dashboardParts(ctx context.Context, f AnalyticsFilter) ([]dashboar
 	}
 	sessions, versions, err := db.dashboardSessions(ctx, f)
 	release()
+	if errors.Is(err, ErrWriterClosed) {
+		// The maintenance worker owns the writer; direct reads can still use the reader.
+		return nil, nil, false, nil
+	}
 	if err != nil {
 		return nil, nil, false, err
 	}

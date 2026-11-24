@@ -33,6 +33,7 @@
   "app_auth_placeholder": "Collez le token d'authentification",
   "app_auth_authenticate": "S'authentifier",
   "app_auth_disconnect_reset": "Déconnecter et réinitialiser",
+  "session_delete_failed": "Impossible de déplacer vers la corbeille : {reason}",
   "app_undo_session_deleted": "Session supprimée",
   "app_undo_undo": "Annuler",
   "nav_toggle_sidebar": "Afficher/masquer la barre latérale",

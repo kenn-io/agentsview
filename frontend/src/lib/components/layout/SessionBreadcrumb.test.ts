@@ -340,6 +340,20 @@ async function flushPromises() {
   await tick();
 }
 
+async function submitMenuRename(value: string) {
+  await tick();
+  document.querySelector<HTMLButtonElement>(".actions-btn")!.click();
+  await tick();
+  [...document.querySelectorAll<HTMLButtonElement>(".actions-menu-item")]
+    .find((button) => button.textContent?.trim() === "Rename")!
+    .click();
+  await tick();
+  const input = document.querySelector<HTMLInputElement>(".rename-input")!;
+  input.value = value;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+}
+
 beforeEach(() => {
   generateForSession.mockReset();
   vi.mocked(copyToClipboard).mockReset().mockResolvedValue(true);
@@ -398,6 +412,49 @@ afterEach(() => {
 });
 
 describe("SessionBreadcrumb", () => {
+  it("keeps a rejected rename for retry", async () => {
+    const rename = vi
+      .spyOn(sessions, "renameSession")
+      .mockRejectedValueOnce(new Error("retry shortly"))
+      .mockResolvedValueOnce(undefined);
+    onTestFinished(() => rename.mockRestore());
+    mount(SessionBreadcrumb, {
+      target: document.body,
+      props: { session: makeSession("claude"), onBack: () => {} },
+    });
+    await submitMenuRename("My new name");
+    await tick();
+    await tick();
+    expect(document.querySelector<HTMLInputElement>(".rename-input")?.value).toBe("My new name");
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain("retry shortly");
+    document
+      .querySelector<HTMLInputElement>(".rename-input")!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await tick();
+    await tick();
+    expect(rename).toHaveBeenLastCalledWith("run:123456789abcdef", "My new name");
+    expect(document.querySelector(".rename-input")).toBeNull();
+  });
+  it("does not restore a failed rename on another session", async () => {
+    const pending = deferred<void>();
+    const rename = vi.spyOn(sessions, "renameSession").mockReturnValueOnce(pending.promise);
+    onTestFinished(() => rename.mockRestore());
+    const component = createClassComponent({
+      component: SessionBreadcrumb,
+      target: document.body,
+      props: { session: makeSession("claude", { id: "first" }), onBack: () => {} },
+    });
+    await submitMenuRename("First title");
+    component.$set({ session: makeSession("claude", { id: "second" }) });
+    await tick();
+    pending.reject(new Error("retry shortly"));
+    await tick();
+    await tick();
+    expect(document.querySelector(".rename-input")).toBeNull();
+    expect(rename).toHaveBeenCalledTimes(1);
+    expect(rename).toHaveBeenCalledWith("first", "First title");
+  });
+
   it("adds the year to the session date when enabled", async () => {
     const dateSpy = vi
       .spyOn(Date.prototype, "toLocaleDateString")
