@@ -277,6 +277,9 @@ func refreshSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, i
 }
 
 func appendSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id string, messages []Message) error {
+	if len(messages) == 0 {
+		return nil
+	}
 	prompts, err := PromptPRLinksContext(ctx, messages)
 	if err != nil {
 		return err
