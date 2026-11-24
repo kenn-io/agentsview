@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -1618,9 +1619,9 @@ func isHermesInflightRestatement(displayMetadata string) bool {
 }
 
 func lastHermesStateTimestamp(msgs []hermesStateMessage) time.Time {
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if !isHermesInflightRestatement(msgs[i].displayMetadata) {
-			return msgs[i].timestamp
+	for _, msg := range slices.Backward(msgs) {
+		if !isHermesInflightRestatement(msg.displayMetadata) {
+			return msg.timestamp
 		}
 	}
 	return time.Time{}

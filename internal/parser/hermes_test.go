@@ -2718,5 +2718,5 @@ func TestHermesDisplayMetadataChangeUpdatesFingerprintAndParse(t *testing.T) {
 	afterOut, err := provider.parseStateMember(t.Context(), src, "", "local", fpAfter)
 	require.NoError(t, err)
 	require.Len(t, afterOut.Results, 1)
-	assert.Equal(t, beforeCount-1, len(afterOut.Results[0].Result.Messages))
+	assert.Len(t, afterOut.Results[0].Result.Messages, beforeCount-1)
 }
