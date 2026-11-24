@@ -6506,7 +6506,7 @@ func TestSyncAllSinceCodexKeepsChangedArchivedDuplicate(t *testing.T) {
 		t.Run(layout, func(t *testing.T) {
 			env := setupTestEnv(t)
 			uuid := "f6a7b8c9-6789-0123-def0-345678901234"
-			content := testjsonl.NewSessionBuilder().AddCodexMeta(tsEarly, uuid, "/home/user/code/api", "user").AddCodexMessage(tsEarlyS1, "user", "Sync changed archive").String()
+			content := testjsonl.NewSessionBuilder().AddCodexMeta(tsEarly, uuid, "/work/project", "user").AddCodexMessage(tsEarlyS1, "user", "Sync changed archive").String()
 			var older, newer string
 			if layout == "archived" {
 				older = env.writeCodexSession(t, filepath.Join("2026", "05", "04"), "rollout-2026-05-04T02-10-04-"+uuid+".jsonl", content)
