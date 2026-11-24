@@ -337,6 +337,10 @@ func OpenSpec(
 				db.Close()
 				return nil, fmt.Errorf("creating chunk text index: %w", err)
 			}
+			if _, err := db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS `+spec.chunkTextTable()+`_doc ON `+spec.chunkTextTable()+` (doc_key)`); err != nil {
+				db.Close()
+				return nil, fmt.Errorf("creating chunk text document index: %w", err)
+			}
 
 			if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS `+spec.reuseTable()+` (ordinal INTEGER NOT NULL, doc_key TEXT NOT NULL, text_hash TEXT NOT NULL, embedding BLOB NOT NULL, PRIMARY KEY (ordinal, doc_key, text_hash)) WITHOUT ROWID`); err != nil {
 				db.Close()

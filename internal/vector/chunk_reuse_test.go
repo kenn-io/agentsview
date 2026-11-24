@@ -718,3 +718,9 @@ func TestBuildRetryClearsPreviouslySavedEmptyReuse(t *testing.T) {
 	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT count(*) FROM message_vectors_reuse WHERE ordinal = 1 AND doc_key = ?`, key).Scan(&count))
 	assert.Zero(t, count)
 }
+
+func TestChunkTextDeleteUsesDocumentIndex(t *testing.T) {
+	ix := openTestIndex(t)
+	plan := explainVectorPlan(t, ix, `DELETE FROM message_vectors_chunk_text WHERE doc_key = ?`, "u:s1:u1")
+	assert.Contains(t, strings.Join(plan, " "), "message_vectors_chunk_text_doc (doc_key=?)")
+}
