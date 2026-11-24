@@ -243,4 +243,13 @@ func TestCodexLabeledRunKeepsProjectThroughResync(t *testing.T) {
 	session, err = database.GetSessionFull(t.Context(), "codex:"+id)
 	require.NoError(t, err)
 	assert.Equal(t, "experiment/case", session.Project)
+	_, err = database.CreateWorktreeProjectMapping(t.Context(), db.WorktreeProjectMapping{
+		Machine: "local", PathPrefix: cwd, Layout: db.WorktreeMappingLayoutExplicit,
+		Project: "mapped_project", Enabled: true,
+	})
+	require.NoError(t, err)
+	require.Zero(t, engine.ResyncAll(t.Context(), nil).Failed)
+	session, err = database.GetSessionFull(t.Context(), "codex:"+id)
+	require.NoError(t, err)
+	assert.Equal(t, "mapped_project", session.Project)
 }
