@@ -210,6 +210,7 @@ type EncoderSet struct {
 // build pass. Resolving it per pass lets a long-lived manager follow a source
 // corpus whose own active generation can change at runtime.
 type BuildTarget struct {
+	// Agents limits message scans to these agent IDs; an empty list includes all.
 	Agents         []string
 	Source         UnitSource
 	Generation     kitvec.Generation

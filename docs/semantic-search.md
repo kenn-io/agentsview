@@ -493,7 +493,7 @@ that stayed in scope and unchanged.
 embedding work for every other agent. For example, `agents = ["claude"]` embeds
 only Claude Code sessions. An empty or omitted list embeds every agent. Names
 are the agent IDs AgentsView stores on each session, such as `claude` or
-`codex`. An unknown name fails config load with
+`codex`. When vector search is enabled, an unknown name fails config load with
 `[vector] agents: unknown agent "<name>"`, so a typo never empties the index.
 
 `agents` combines with `include_automated`: a session is embedded only when its
@@ -502,10 +502,9 @@ agent is in the list (or the list is empty) and it is a human session or
 `embeddings build` all use the configured list; there is no command-line
 override. Changing the list triggers the same full mirror reconciliation on the
 next build: vectors for agents you removed are deleted, so semantic search stops
-returning them. Hybrid search can still return them through keyword matches.
-Sessions from agents you added are embedded, including ones older than the last
-build. A running daemon picks up the new list after it restarts. Keyword search
-is unaffected. The list does not apply to the Recall index or hosted PostgreSQL
+returning them. Sessions from agents you added are embedded, including ones
+older than the last build. A running daemon picks up the new list after it
+restarts. Keyword search is unaffected. The list does not apply to the Recall index or hosted PostgreSQL
 embeddings.
 
 ### Ollama quickstart

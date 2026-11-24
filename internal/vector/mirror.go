@@ -768,8 +768,8 @@ func (ix *Index) Clear(ctx context.Context) error {
 
 const scopeAgentsKey = "scope_agents"
 
-func normalizedAgents(agents []string) string {
+func normalizedAgents(agents []string) []string {
 	sorted := slices.Clone(agents)
 	slices.Sort(sorted)
-	return strings.Join(slices.Compact(sorted), ",")
+	return slices.Compact(sorted)
 }

@@ -1145,11 +1145,13 @@ func TestBuildActiveFingerprintEarlyReturnRetiresAbandonedBuildingGeneration(t *
 
 type agentScopeSource struct {
 	*db.DB
-	since string
+	since  string
+	agents []string
 }
 
 func (s *agentScopeSource) ScanEmbeddableUnits(ctx context.Context, since string, includeAutomated bool, agents []string, maxRunRunes int, fn func(db.EmbeddableUnit) error) (string, error) {
 	s.since = since
+	s.agents = slices.Clone(agents)
 	return s.DB.ScanEmbeddableUnits(ctx, since, includeAutomated, agents, maxRunRunes, fn)
 }
 
@@ -1178,12 +1180,12 @@ func TestBuildAgentScopeReconciles(t *testing.T) {
 	require.Len(t, hits, 1)
 	build([]string{"claude", "codex"})
 	build([]string{"codex", "claude", "codex"})
+	assert.Equal(t, []string{"claude", "codex"}, source.agents)
 	assert.NotEmpty(t, source.since)
 	build(nil)
 	require.NoError(t, ix.metaDelete(ctx, scopeAgentsKey))
 	build(nil)
 	assert.NotEmpty(t, source.since)
-	assert.Equal(t, "claude,codex", normalizedAgents([]string{"codex", "claude", "codex"}))
 }
 
 func TestBuildAgentScopeFailureThenRestore(t *testing.T) {

@@ -1195,9 +1195,8 @@ func runUnit(members []unitRow) EmbeddableUnit {
 
 // embeddableUnitsQuery builds the embeddable-unit scan statement. A scoped
 // scan takes agent arguments first, then sessionID, then agent arguments and
-// since for an incremental scan. The
-// query always emits rows in (session_id, ordinal) order, which unitReducer
-// depends on.
+// since for an incremental scan. The query emits rows in (session_id, ordinal)
+// order, which unitReducer depends on.
 func embeddableUnitsQuery(since, sessionID string, includeAutomated bool, agents []string) string {
 	preds := []string{
 		"m.role IN ('user', 'assistant')",

@@ -552,12 +552,8 @@ func countEmbeddingStoreUnits(
 		return 0, err
 	}
 	var n int
-	var agents []string
-	if store != vector.RecallIndexSpec().Name {
-		agents = cfg.Vector.Agents
-	}
 	if _, err := source.ScanEmbeddableUnits(
-		ctx, "", includeAutomated, agents, vector.RunMaxRunes(cfg.Vector.Embeddings.MaxInputChars), func(db.EmbeddableUnit) error {
+		ctx, "", includeAutomated, cfg.Vector.Agents, vector.RunMaxRunes(cfg.Vector.Embeddings.MaxInputChars), func(db.EmbeddableUnit) error {
 			n++
 			return nil
 		},

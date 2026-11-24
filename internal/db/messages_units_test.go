@@ -782,11 +782,17 @@ func TestScanEmbeddableUnitsAgents(t *testing.T) {
 		insertSession(t, d, agent, "project", func(s *Session) { s.Agent = agent })
 		insertMessages(t, d, Message{SessionID: agent, Role: "user", Content: agent + " text", SourceUUID: agent})
 	}
+	insertSession(t, d, "auto", "project", func(s *Session) { s.Agent = "claude"; s.IsAutomated = true })
+	insertMessages(t, d, Message{SessionID: "auto", Role: "user", Content: "automated text", SourceUUID: "auto"})
 	for _, since := range []string{"", "2020-01-01T00:00:00Z"} {
 		var got []string
 		_, err := d.ScanEmbeddableUnits(t.Context(), since, false, []string{"claude"}, UncappedRunRunes, func(u EmbeddableUnit) error { got = append(got, u.SessionID); return nil })
 		require.NoError(t, err)
 		assert.Equal(t, []string{"claude"}, got)
+		got = nil
+		_, err = d.ScanEmbeddableUnits(t.Context(), since, true, []string{"claude"}, UncappedRunRunes, func(u EmbeddableUnit) error { got = append(got, u.SessionID); return nil })
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []string{"auto", "claude"}, got)
 	}
 	err := d.ScanEmbeddableUnitsForSession(t.Context(), "codex", false, []string{"claude"}, UncappedRunRunes, func(EmbeddableUnit) error { t.Error("excluded session returned"); return nil })
 	require.NoError(t, err)

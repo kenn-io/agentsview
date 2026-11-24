@@ -181,8 +181,9 @@ type VectorConfig struct {
 	// archive's index with content that search already hides by default.
 	// `embeddings build --include-automated` can override this for a
 	// one-off build; see that flag's help for the scheduled-build caveat.
-	IncludeAutomated bool     `toml:"include_automated" json:"include_automated"`
-	Agents           []string `toml:"agents" json:"agents,omitempty"`
+	IncludeAutomated bool `toml:"include_automated" json:"include_automated"`
+	// Agents limits local message embeddings to these session agent IDs. An empty list includes all agents.
+	Agents []string `toml:"agents" json:"agents,omitempty"`
 	// RecallMaxRevisionLag is how many Recall corpus revisions the Recall
 	// vector index may trail the corpus and still answer vector and hybrid
 	// queries. Every insert, delete, or text edit of an accepted Recall entry
@@ -466,15 +467,15 @@ const DefaultRecallMaxRevisionLag = 256
 // Validate checks the vector config for internal consistency. It is a
 // no-op when the section is disabled.
 func (c VectorConfig) Validate() error {
+	if !c.Enabled {
+		return nil
+	}
 	for _, agent := range c.Agents {
 		if !slices.ContainsFunc(parser.Registry, func(def parser.AgentDef) bool {
 			return slices.Contains(parser.ProviderStoredAgents(def.Type), parser.AgentType(agent))
 		}) {
 			return fmt.Errorf("[vector] agents: unknown agent %q", agent)
 		}
-	}
-	if !c.Enabled {
-		return nil
 	}
 	if c.RecallMaxRevisionLag < 0 {
 		return fmt.Errorf(
