@@ -228,6 +228,23 @@ func TestSearchKeptDiskPages(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, page, repeat)
 	require.Zero(t, loads)
+	var id, token string
+	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT
+		(SELECT value FROM archive_metadata WHERE key = ?),
+		(SELECT value FROM archive_metadata WHERE key = 'search_history_token')`, archiveMetadataDatabaseIDKey).Scan(&id, &token))
+	oldPage, err := json.Marshal(SearchPage{Results: []SearchResult{{SessionID: "old"}}})
+	require.NoError(t, err)
+	normalized := filter
+	normalized.Limit = DefaultSearchLimit
+	require.True(t, d.trendsDisk.Put("search|"+normalized.Slot()+"|false", fmt.Sprintf("%s|%s|", id, token), oldPage))
+	require.NoError(t, d.Close())
+	d = openSearchArchive(t, path)
+	loads = 0
+	d.afterSearchRead = func() { loads++ }
+	repeat, err = d.Search(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, page, repeat)
+	require.Equal(t, 1, loads)
 	require.NoError(t, d.Close())
 
 	// Restoring the archive can repeat revision counts from the saved page.
@@ -252,7 +269,7 @@ func TestSearchKeptDiskPages(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, hookErr)
 	require.Len(t, page.Results, 1)
-	normalized := filter
+	normalized = filter
 	normalized.Limit = DefaultSearchLimit
 	_, ok := d.searchKept.Get(normalized.Slot()+"|false", version)
 	require.False(t, ok)
@@ -312,25 +329,4 @@ func TestSearchKeptHistoryToken(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestSearchKeptRejectsOldRanking(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	d := testDB(t)
-	ctx := t.Context()
-	insertSession(t, d, "session", "project")
-	insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "needle"})
-	var id, token string
-	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT
-		(SELECT value FROM archive_metadata WHERE key = ?),
-		(SELECT value FROM archive_metadata WHERE key = 'search_history_token')`, archiveMetadataDatabaseIDKey).Scan(&id, &token))
-	filter := SearchFilter{Query: "needle", Limit: 1}
-	oldPage, err := json.Marshal(SearchPage{Results: []SearchResult{{SessionID: "old"}}})
-	require.NoError(t, err)
-	d.trendsPartsDisk()
-	require.True(t, d.trendsDisk.Put("search|"+filter.Slot()+"|false", fmt.Sprintf("%s|%s|", id, token), oldPage))
-	page, err := d.Search(ctx, filter)
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-	require.Equal(t, "session", page.Results[0].SessionID)
 }
