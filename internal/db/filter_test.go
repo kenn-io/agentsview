@@ -1837,10 +1837,17 @@ func TestSidebarShowsLaunchedAutomatedRun(t *testing.T) {
 	})
 	_, err := d.SetSessionExternalParent(t.Context(), "run", "launcher")
 	require.NoError(t, err)
+	for _, id := range []string{"run", "native"} {
+		_, err = d.SetSessionLabels(t.Context(), id, []string{"ticket=example"})
+		require.NoError(t, err)
+	}
 	for _, limit := range []int{0, 1} {
 		index, err := d.GetSidebarSessionIndex(t.Context(), SessionFilter{ExcludeAutomated: true, Limit: limit})
 		require.NoError(t, err)
 		requireSidebarIndexIDs(t, index.Sessions, []string{"launcher", "run"})
+		index, err = d.GetSidebarSessionIndex(t.Context(), SessionFilter{ExcludeAutomated: true, Labels: []string{"ticket=example"}, Limit: limit})
+		require.NoError(t, err)
+		requireSidebarIndexIDs(t, index.Sessions, []string{"launcher", "run", "native"})
 		index, err = d.GetSidebarSessionIndex(t.Context(), SessionFilter{ExcludeAutomated: true, AutomatedFilterSet: true, Limit: limit})
 		require.NoError(t, err)
 		requireSidebarIndexIDs(t, index.Sessions, []string{"launcher"})

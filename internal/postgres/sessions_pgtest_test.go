@@ -99,7 +99,11 @@ func TestSidebarIncludesAutomatedLaunchChild(t *testing.T) {
 			for _, row := range index.Sessions {
 				ids = append(ids, row.ID)
 			}
-			assert.ElementsMatch(t, []string{"launcher", "worker"}, ids, "limit %d, labels %v", limit, labels)
+			want := []string{"launcher", "worker"}
+			if len(labels) > 0 {
+				want = append(want, "native")
+			}
+			assert.ElementsMatch(t, want, ids, "limit %d, labels %v", limit, labels)
 			assert.Equal(t, 1, index.Total, "limit %d, labels %v", limit, labels)
 		}
 	}
