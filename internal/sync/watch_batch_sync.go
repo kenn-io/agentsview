@@ -162,6 +162,11 @@ func watchBatchReconciliationError(
 	cause error, paths, roots []string, full, lostEvents bool,
 ) error {
 	deferOnly := watchBatchDeferOnlyError(cause)
+	// When discovery and reconciliation finished cleanly and only deferred
+	// individual sources remain, the lost-events recovery pass is complete.
+	// Keeping LostEvents=true on a defer-only retry would re-enter forced
+	// overflow recovery and clear the caches that let deferred forks settle.
+	retryLostEvents := lostEvents && !deferOnly
 	scopedPaths, hasScopedPaths := errors.AsType[interface {
 		error
 		interface{ ReconciliationRetryPaths() []string }
@@ -193,20 +198,20 @@ func watchBatchReconciliationError(
 	overflowed := hasOverflow && overflow.ReconciliationRetryOverflow()
 	if overflowed && len(retryPaths) == 0 && len(retryRoots) == 0 {
 		return &watchBatchApplyError{cause: cause, retry: WatchBatch{
-			FullSync: true, LostEvents: lostEvents,
+			FullSync: true, LostEvents: retryLostEvents,
 		}, deferOnly: deferOnly}
 	}
 	if len(retryPaths) > 0 || len(retryRoots) > 0 {
 		return &watchBatchApplyError{cause: cause, retry: WatchBatch{
-			Paths: retryPaths, ReconcileRoots: retryRoots, LostEvents: lostEvents,
+			Paths: retryPaths, ReconcileRoots: retryRoots, LostEvents: retryLostEvents,
 		}, deferOnly: deferOnly}
 	}
 	if full {
 		return &watchBatchApplyError{cause: cause, retry: WatchBatch{
-			FullSync: true, LostEvents: lostEvents,
+			FullSync: true, LostEvents: retryLostEvents,
 		}, deferOnly: deferOnly}
 	}
-	retry := WatchBatch{FullSync: full, LostEvents: lostEvents}
+	retry := WatchBatch{FullSync: full, LostEvents: retryLostEvents}
 	if !full && !hasScopedRoots {
 		retry.ReconcileRoots = append([]string(nil), roots...)
 	}

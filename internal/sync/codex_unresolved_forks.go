@@ -384,15 +384,16 @@ func (e *Engine) appendWaitingCodexForkPaths(ctx context.Context, paths []string
 		if _, dup := seenParent[key]; dup {
 			continue
 		}
-		seenParent[key] = struct{}{}
 		waiters := e.unresolvedCodexForks.waitersForParent(ctx, e.db, key)
 		if len(waiters) == 0 {
+			seenParent[key] = struct{}{}
 			continue
 		}
 		info, err := os.Stat(p)
 		if err != nil || info.IsDir() {
 			continue
 		}
+		seenParent[key] = struct{}{}
 		for _, waiter := range waiters {
 			e.unresolvedCodexForks.invalidate(waiter)
 			childPath := waiter.path

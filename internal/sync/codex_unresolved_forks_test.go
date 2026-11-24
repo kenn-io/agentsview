@@ -635,3 +635,102 @@ func TestIsSettledUnresolvedCodexForkOnlyErrorRejectsUnsettledDeferrals(t *testi
 	engine.unresolvedCodexForks.invalidate(verifiedSourceKey{agent: parser.AgentCodex, path: trackedPath})
 	assert.False(t, engine.isSettledUnresolvedCodexForkOnlyError(trackedErr))
 }
+
+func TestDeferOnlyLostEventsRetryClearsLostEventsFlag(t *testing.T) {
+	// Simulate an overflowed defer-only reconciliation error during LostEvents
+	// recovery (e.g. > 256 unresolved Codex forks). The retry batch must clear
+	// LostEvents so the follow-up pass runs normal reconciliation and settles
+	// instead of re-entering forced overflow recovery forever.
+	root := filepath.Join(t.TempDir(), "codex")
+	cause := &incompleteReconciliationError{
+		deferred:  257,
+		roots:     []string{root},
+		paths:     []string{filepath.Join(root, "fork.jsonl")},
+		overflow:  true,
+		deferOnly: true,
+	}
+	err := watchBatchReconciliationError(cause, nil, []string{root}, true, true)
+	var retry interface{ WatchRetryBatch() WatchBatch }
+	require.ErrorAs(t, err, &retry)
+	assert.False(t, retry.WatchRetryBatch().LostEvents,
+		"defer-only retry after lost-events recovery must not re-force overflow recovery")
+	assert.Equal(t, []string{root}, retry.WatchRetryBatch().ReconcileRoots)
+
+	// Hard failures during LostEvents recovery must preserve LostEvents=true.
+	hardCause := &incompleteReconciliationError{
+		failures:  1,
+		deferred:  257,
+		roots:     []string{root},
+		overflow:  true,
+		deferOnly: false,
+	}
+	hardErr := watchBatchReconciliationError(hardCause, nil, []string{root}, true, true)
+	require.ErrorAs(t, hardErr, &retry)
+	assert.True(t, retry.WatchRetryBatch().LostEvents,
+		"non-defer-only failure must keep LostEvents=true for retry")
+}
+
+func TestAppendWaitingCodexForkPathsHandlesRemovedParentBeforeReplacement(t *testing.T) {
+	requirePollChangeTimes(t)
+	const parent = "ffffffff-ffff-4fff-8fff-ffffffffffff"
+	const child = "019f45ee-6666-4666-8666-666666666666"
+	const childID = "codex:" + child
+	const ts = "2026-07-08T10:00:00Z"
+
+	liveRoot := t.TempDir()
+	archivedRoot := t.TempDir()
+	childPath := filepath.Join(liveRoot, "2026", "07", "08", "rollout-2026-07-08T11-00-00-"+child+".jsonl")
+	removedParentPath := filepath.Join(liveRoot, "2026", "07", "08", "rollout-2026-07-08T09-00-00-"+parent+".jsonl")
+	replacementParentPath := filepath.Join(archivedRoot, "rollout-2026-07-08T09-00-00-"+parent+".jsonl.zst")
+
+	writeCodexRolloutFile(t, childPath, testjsonl.JoinJSONL(
+		testjsonl.CodexForkedSessionMetaJSON(child, parent, "/work/project", "user", ts),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "parent-turn", ts),
+		testjsonl.CodexMsgJSON("assistant", "replayed parent answer", ts),
+		testjsonl.CodexTokenCountJSON(ts, 100, 40, 0),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", ts),
+		testjsonl.CodexMsgJSON("assistant", "child answer", ts),
+		testjsonl.CodexTokenCountJSON(ts, 20, 9, 0),
+	), false)
+
+	database := openTestDB(t)
+	engine := NewEngine(t.Context(), database, EngineConfig{
+		AgentDirs:                         map[parser.AgentType][]string{parser.AgentCodex: {liveRoot, archivedRoot}},
+		Machine:                           "local",
+		DisableFilesystemProjectDiscovery: true,
+	})
+	t.Cleanup(engine.Close)
+
+	// Record and settle the orphan fork.
+	_, firstErr := engine.SyncWatchBatchThenRun(
+		t.Context(), WatchBatch{Paths: []string{childPath}}, nil, nil,
+	)
+	require.Error(t, firstErr)
+	_, secondErr := engine.SyncWatchBatchThenRun(
+		t.Context(), WatchBatch{Paths: []string{childPath}}, nil, nil,
+	)
+	require.NoError(t, secondErr)
+
+	// Write only the replacement parent file; pass the removed path first in
+	// the same changed-path batch as the replacement path.
+	writeCodexRolloutFile(t, replacementParentPath, testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(parent, "/work/project", "user", ts),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "parent-turn", ts),
+		testjsonl.CodexMsgJSON("assistant", "replayed parent answer", ts),
+		testjsonl.CodexTokenCountJSON(ts, 100, 40, 0),
+	), true)
+
+	_, wakeErr := engine.SyncWatchBatchThenRun(
+		t.Context(),
+		WatchBatch{Paths: []string{removedParentPath, replacementParentPath}},
+		nil, nil,
+	)
+	require.NoError(t, wakeErr)
+	assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), childID),
+		"nonexistent parent path earlier in the batch must not block wake-up from its replacement")
+	assert.Equal(t, []string{"child answer"}, messageContents(t, database, childID))
+	usage, err := database.GetSessionUsage(t.Context(), childID, true)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.Equal(t, 9, usage.TotalOutputTokens)
+}
