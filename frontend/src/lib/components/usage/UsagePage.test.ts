@@ -164,6 +164,22 @@ afterEach(() => {
 });
 
 describe("UsagePage refresh behavior", () => {
+  it.each(["sessions", "sync"] as const)("refreshes filter choices on %s events", async (scope) => {
+    const refresh = vi.spyOn(sessions, "refreshFilterOptions").mockResolvedValue();
+    const stats = vi.spyOn(sync, "loadStats").mockResolvedValue();
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    const subscription = vi.spyOn(events, "subscribe").mockReturnValue(() => {});
+    router.route = "usage";
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+    refresh.mockClear();
+    stats.mockClear();
+
+    subscription.mock.calls.at(-1)![0]({ scope });
+    expect(refresh).toHaveBeenCalled();
+    expect(stats).not.toHaveBeenCalled();
+  });
+
   function visibility() {
     let hidden = false;
     vi.spyOn(document, "hidden", "get").mockImplementation(() => hidden);
@@ -260,6 +276,43 @@ describe("UsagePage refresh behavior", () => {
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(requests).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps an in-flight usage read when an event reloads an unchanged machine", async () => {
+    const catalog = {
+      machines: ["id-a"],
+      resolved_machines: ["id-a"],
+      machine_labels: {},
+      machine_aliases: {},
+    };
+    const machines = vi.spyOn(MetadataService, "getApiV1Machines").mockResolvedValue(catalog);
+    const savedFilters = sessions.filters;
+    try {
+      router.params = { machine: "id-a" };
+      sessions.initFromParams(router.params);
+      await sessions.loadMachines();
+      const { requests, emit } = await mountLiveUsage();
+      const pending = Promise.withResolvers<UsageSummaryResponse>();
+      requests.mockReturnValueOnce(pending.promise);
+      document.querySelector<HTMLButtonElement>('button[aria-label="Refresh usage data"]')!.click();
+      await flushEffects();
+      expect(requests).toHaveBeenCalledTimes(2);
+      const signal = requests.mock.calls[1]![1]!.signal;
+      const metadata = Promise.withResolvers<typeof catalog>();
+      machines.mockReturnValueOnce(metadata.promise);
+      emit({ scope: "sessions" });
+      await flushEffects();
+      metadata.resolve(catalog);
+      await flushEffects();
+      expect(signal?.aborted).toBe(false);
+      expect(requests).toHaveBeenCalledTimes(2);
+      sessions.filters.agent = "codex";
+      await flushEffects();
+      expect(requests).toHaveBeenCalledTimes(3);
+      pending.resolve(usageSummaryWithUnsupported());
+    } finally {
+      sessions.filters = savedFilters;
+    }
   });
 
   it("starts a refresh immediately when the button is clicked", async () => {

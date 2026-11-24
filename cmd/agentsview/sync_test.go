@@ -140,6 +140,9 @@ func isolateCLISources(t *testing.T, root string) {
 			t.Setenv(def.DefaultRootEnvVar, filepath.Join(root, "empty-root", string(def.Type)))
 		}
 	}
+	for _, envVar := range config.MetaHarnessEnvVars() {
+		t.Setenv(envVar, "")
+	}
 }
 
 func isolateDirectCLISources(t *testing.T) {

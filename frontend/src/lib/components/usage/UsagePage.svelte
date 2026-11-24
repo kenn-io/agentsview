@@ -60,6 +60,7 @@
   let mounted = false;
   let unsubEvents: (() => void) | undefined;
   let pendingRefresh = false;
+  let lastRefreshedSignature: string | null = null;
   let visible = $state(!document.hidden);
   let urlInitRan = $state(false);
   let urlWritebackReady = $state(false);
@@ -486,6 +487,8 @@
       if (!ready || !signature || router.route !== "usage" || !mounted) {
         return;
       }
+      if (signature === lastRefreshedSignature) return;
+      lastRefreshedSignature = signature;
       if (!initialFetchDone) {
         initialFetchDone = true;
       }
@@ -499,7 +502,10 @@
     // The Agent dropdown reads sessions.agents, which is otherwise loaded
     // lazily by the sidebar filter control; a direct /usage visit needs it too.
     sessions.loadAgents();
-    unsubEvents = events.subscribe(() => usage.markNewData());
+    unsubEvents = events.subscribe((event) => {
+      if (event.scope === "sessions" || event.scope === "sync") sessions.refreshFilterOptions();
+      usage.markNewData();
+    });
     tick().then(() => {
       urlWritebackReady = true;
     });

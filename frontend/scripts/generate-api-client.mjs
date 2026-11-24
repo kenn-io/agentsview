@@ -106,15 +106,10 @@ writeFileSync(specPath, spec);
 const goClientPath = join(repoRoot, "internal/apiclient/client.gen.go");
 const previousGoClient =
   verifyGenerated && existsSync(goClientPath) ? readFileSync(goClientPath, "utf8") : null;
+// Use go.mod so generation shares the application's pinned dependencies and cache.
 run(
   "go",
-  [
-    "run",
-    "github.com/doordash-oss/oapi-codegen-dd/v3/cmd/oapi-codegen@v3.76.5",
-    "--config",
-    "internal/apiclient/generate.yaml",
-    "openapi.yaml",
-  ],
+  ["tool", "oapi-codegen", "--config", "internal/apiclient/generate.yaml", "openapi.yaml"],
   { cwd: repoRoot },
 );
 // The generator still emits the v1 import and an ambiguous tool name.

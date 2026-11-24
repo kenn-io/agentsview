@@ -221,6 +221,12 @@ func contentHash(content string) string {
 func (ix *Index) Refresh(
 	ctx context.Context, src UnitSource, full, includeAutomated bool,
 ) (RefreshStats, error) {
+	return ix.refresh(ctx, src, full, includeAutomated, nil)
+}
+
+func (ix *Index) refresh(
+	ctx context.Context, src UnitSource, full, includeAutomated bool, seed *reuseGeneration,
+) (RefreshStats, error) {
 	if err := ix.requireWritable(); err != nil {
 		return RefreshStats{}, err
 	}
@@ -302,7 +308,7 @@ func (ix *Index) Refresh(
 			}
 			return nil
 		}
-		unchanged, evictedKeys, err := ix.upsertMirrorRow(ctx, key, u, &sentinel)
+		unchanged, evictedKeys, err := ix.upsertMirrorRow(ctx, key, u, &sentinel, seed)
 		if err != nil {
 			return fmt.Errorf("upserting mirror row %s: %w", key, err)
 		}
@@ -402,6 +408,11 @@ func (ix *Index) Refresh(
 }
 
 func (ix *Index) deleteMirrorDocument(ctx context.Context, key string) (bool, error) {
+	if ix.spec.Name == "messages" {
+		if _, err := ix.db.ExecContext(ctx, `DELETE FROM `+ix.spec.reuseTable()+` WHERE doc_key = ?`, key); err != nil {
+			return false, fmt.Errorf("deleting reusable chunks for %s: %w", key, err)
+		}
+	}
 	if err := ix.store.DeleteVectors(ctx, key); err != nil {
 		return false, fmt.Errorf("deleting vectors for %s: %w", key, err)
 	}
@@ -429,7 +440,7 @@ func (ix *Index) deleteMirrorDocument(ctx context.Context, key string) (bool, er
 // is a per-Refresh-call counter evictSlotOccupant uses to park a displaced
 // row at a unique negative ordinal; see evictSlotOccupant.
 func (ix *Index) upsertMirrorRow(
-	ctx context.Context, key string, u db.EmbeddableUnit, sentinel *int,
+	ctx context.Context, key string, u db.EmbeddableUnit, sentinel *int, seed *reuseGeneration,
 ) (unchanged bool, evicted []string, err error) {
 	evicted, err = ix.evictSlotOccupant(ctx, key, u.SessionID, u.Ordinal, sentinel)
 	if err != nil {
@@ -437,15 +448,21 @@ func (ix *Index) upsertMirrorRow(
 	}
 
 	var existingHash sql.NullString
+	var oldContent sql.NullString
+	hash := contentHash(u.Content)
 	err = ix.db.QueryRowContext(ctx,
-		`SELECT content_hash FROM `+ix.spec.DocsTable+` WHERE doc_key = ?`, key,
-	).Scan(&existingHash)
+		`SELECT content_hash, CASE WHEN ? AND content_hash != ? THEN content END FROM `+ix.spec.DocsTable+` WHERE doc_key = ?`, seed != nil, hash, key,
+	).Scan(&existingHash, &oldContent)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return false, evicted, fmt.Errorf("reading existing content hash: %w", err)
 	}
 
-	hash := contentHash(u.Content)
 	unchanged = existingHash.Valid && existingHash.String == hash
+	if seed != nil && existingHash.Valid && !unchanged {
+		if err := ix.seedReuse(ctx, *seed, key, oldContent.String, existingHash.String, u.Content); err != nil {
+			return false, evicted, err
+		}
+	}
 
 	offsets, err := marshalOffsets(u.Offsets)
 	if err != nil {
@@ -607,16 +624,8 @@ func (ix *Index) finalizeEvictions(ctx context.Context, evicted map[string]struc
 		if ordinal >= 0 {
 			continue // reinserted under its own doc_key later in the same scan
 		}
-		if err := ix.store.DeleteVectors(ctx, key); err != nil {
-			return deleted, fmt.Errorf("deleting evicted vectors for %s: %w", key, err)
-		}
-		if err := ix.deleteRepairTargets(ctx, key); err != nil {
+		if _, err := ix.deleteMirrorDocument(ctx, key); err != nil {
 			return deleted, err
-		}
-		if _, err := ix.db.ExecContext(ctx,
-			`DELETE FROM `+ix.spec.DocsTable+` WHERE doc_key = ?`, key,
-		); err != nil {
-			return deleted, fmt.Errorf("deleting evicted mirror row %s: %w", key, err)
 		}
 		deleted++
 	}
@@ -692,16 +701,8 @@ func (ix *Index) reconcileDeletions(
 	rows.Close()
 
 	for _, key := range vanished {
-		if err := ix.store.DeleteVectors(ctx, key); err != nil {
-			return 0, fmt.Errorf("deleting vectors for %s: %w", key, err)
-		}
-		if err := ix.deleteRepairTargets(ctx, key); err != nil {
+		if _, err := ix.deleteMirrorDocument(ctx, key); err != nil {
 			return 0, err
-		}
-		if _, err := ix.db.ExecContext(ctx,
-			`DELETE FROM `+ix.spec.DocsTable+` WHERE doc_key = ?`, key,
-		); err != nil {
-			return 0, fmt.Errorf("deleting mirror row %s: %w", key, err)
 		}
 	}
 	return len(vanished), nil

@@ -241,7 +241,7 @@ func TestUsageCacheBackfillPrunesStaleLocalTimezones(t *testing.T) {
 			snapshot.location = tt.local
 			zone, err := readUsageZoneCoverage(t.Context(), cache.db, usageTimezoneIdentityFor(snapshot.location, nil).Key)
 			require.NoError(t, err)
-			require.NoError(t, database.runUsageCacheBackfillPass(t.Context(), time.Now(), snapshot, zone.installSeq))
+			require.NoError(t, runCapturedUsageBackfill(t, database, snapshot, zone.installSeq))
 			locations, err := usageBackfillLocations(t.Context(), cache, tt.local)
 			require.NoError(t, err)
 

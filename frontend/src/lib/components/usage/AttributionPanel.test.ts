@@ -413,22 +413,20 @@ describe("AttributionPanel colors", () => {
     unmount(component);
   });
 
-  it("offers the label scale only in treemap view and applies the choice", async () => {
+  it("offers the tile scale only in treemap view and resizes the tiles", async () => {
     usage.summary = summaryWithAgents(["claude", "codex"]);
     usage.mode = "cost";
     usage.toggles.attribution.groupBy = "agent";
     usage.toggles.attribution.view = "treemap";
-    usage.setAttributionLabelScale("linear");
+    usage.setAttributionTileScale("linear");
 
     const component = mountPanel();
     await tick();
     const scaleGroup = () =>
-      document.querySelector<HTMLElement>('[role="group"][aria-label="Label size scale"]');
-    const labelSizes = () =>
-      [...document.querySelectorAll<SVGTextElement>(".tile-label")].map(
-        (label) => label.style.fontSize,
-      );
-    const linearSizes = labelSizes();
+      document.querySelector<HTMLElement>('[role="group"][aria-label="Tile size scale"]');
+    const tileWidths = () =>
+      [...document.querySelectorAll("clipPath rect")].map((rect) => rect.getAttribute("width"));
+    const linearWidths = tileWidths();
 
     const log = [...scaleGroup()!.querySelectorAll("button")].find(
       (button) => button.textContent?.trim() === "Log",
@@ -436,14 +434,14 @@ describe("AttributionPanel colors", () => {
     log.click();
     await tick();
 
-    expect(usage.toggles.attribution.labelScale).toBe("log");
+    expect(usage.toggles.attribution.tileScale).toBe("log");
     expect(log.getAttribute("aria-pressed")).toBe("true");
-    expect(labelSizes()).not.toEqual(linearSizes);
+    expect(tileWidths()).not.toEqual(linearWidths);
 
     usage.setAttributionView("list");
     await tick();
     expect(scaleGroup()).toBeNull();
-    usage.setAttributionLabelScale("sqrt");
+    usage.setAttributionTileScale("linear");
     unmount(component);
   });
 

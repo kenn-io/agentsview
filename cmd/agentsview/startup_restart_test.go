@@ -17,7 +17,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
+	syncpkg "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
@@ -126,6 +129,7 @@ func TestServeStartupWorkerFailure(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	cfg.Host = "127.0.0.1"
 	cfg.EventsCoalesceInterval = 0
+	writeRestartSession(t, cfg, "visible-seed")
 	var seed bytes.Buffer
 	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &seed))
 	release := make(chan struct{})
@@ -164,10 +168,14 @@ func TestServeStartupWorkerFailure(t *testing.T) {
 	require.True(t, found, "failed worker should emit an event: %v", scanner.Err())
 }
 
-func TestServeFirstStartDoesNotLaunchPostListenWorker(t *testing.T) {
+func TestServeResumesFirstImportWithoutStartupWorker(t *testing.T) {
 	isolateServeTestHome(t)
 	cfg := testConfigWithClaudeFixture(t)
 	cfg.Host = "127.0.0.1"
+	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "saved", Agent: "claude", Machine: "local"}))
+	require.NoError(t, database.SetSyncState(t.Context(), syncpkg.FirstImportPendingKey, "1"))
+	require.NoError(t, database.Close())
 	launched := make(chan struct{}, 1)
 	restore := stubLaunchSyncWorker(t, func(context.Context, config.Config, syncWorkerRequest, func(workerLine)) (workerResult, error) {
 		launched <- struct{}{}
@@ -180,7 +188,7 @@ func TestServeFirstStartDoesNotLaunchPostListenWorker(t *testing.T) {
 	}, 30*time.Second, 100*time.Millisecond)
 	select {
 	case <-launched:
-		require.FailNow(t, "post-listen worker ran")
+		require.FailNow(t, "startup worker ran during first import")
 	default:
 	}
 }

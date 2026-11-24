@@ -12272,3 +12272,28 @@ func countSessionFileHashReads(t *testing.T, archive *db.DB) *atomic.Int32 {
 	require.NoError(t, conn.Close())
 	return reads
 }
+
+func TestDBBackedProcessingFailureCountsWithoutLosingDiscovery(t *testing.T) {
+	const agent parser.AgentType = "baseline-db-backed"
+	root := t.TempDir()
+	path := filepath.Join(root, "failed.db")
+	provider := &baselineDBBackedProvider{
+		Def:         parser.AgentDef{Type: agent},
+		Caps:        parser.Capabilities{Source: parser.SourceCapabilities{StreamingDiscovery: parser.CapabilitySupported}},
+		sources:     []parser.SourceRef{{Provider: agent, Key: path, DisplayPath: path, FingerprintKey: path}},
+		parseErrKey: path, fingerprintCalls: make(map[string]int), parseCalls: make(map[string]int),
+	}
+	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local",
+		ProviderFactories: []parser.ProviderFactory{baselineDBBackedFactory{provider: provider}},
+	})
+	t.Cleanup(engine.Close)
+	stats := SyncStats{}
+	aborted := engine.syncProviderDBBackedAgent(t.Context(), agent, string(agent), syncWriteDefault, false, newRootSyncScope([]string{root}), &stats, func(int, int) {})
+	require.False(t, aborted)
+	require.Equal(t, 1, stats.Failed)
+	require.Equal(t, 1, stats.providerFailures)
+	require.True(t, stats.AuthoritativeDiscoveryComplete())
+	stats.providerFailures++
+	require.False(t, stats.AuthoritativeDiscoveryComplete())
+}

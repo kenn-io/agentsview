@@ -70,11 +70,19 @@ func (p *antigravityCLIProvider) ChangedPathRelevance(
 		return ChangedPathUnclassified, err
 	}
 	for _, root := range p.sources.roots {
-		if req.WatchRoot != "" && !antigravityCLIWatchRootMatches(root, req.WatchRoot) {
+		sessionRoot := root
+		if instanceRoot, ok := antigravityCLIContainerSpec.InstanceRootForPath(root, req.Path); ok {
+			sessionRoot = instanceRoot
+			if req.WatchRoot != "" && !samePath(root, req.WatchRoot) &&
+				!antigravityCLIWatchRootMatches(sessionRoot, req.WatchRoot) {
+				continue
+			}
+		} else if req.WatchRoot != "" && !antigravityCLIWatchRootMatches(root, req.WatchRoot) {
 			continue
 		}
-		rel, ok := relUnder(root, filepath.Clean(req.Path))
-		if ok && antigravityConversationIndexPath(rel) {
+		rel, ok := relUnder(sessionRoot, filepath.Clean(req.Path))
+		if ok && (antigravityConversationIndexPath(rel) ||
+			rel == AntigravitySummariesDBName+"-shm") {
 			return ChangedPathNonData, nil
 		}
 	}
@@ -198,6 +206,60 @@ func antigravityRemoteRoots(cfg ProviderConfig) map[string]bool {
 	return roots
 }
 
+var antigravityCLIContainerSpec = InstanceContainerSpec{
+	Agent:         AgentAntigravityCLI,
+	DirectMarkers: []string{"conversations", "implicit"},
+	AppDataDirs:   []string{"antigravity-acp", "antigravity-cli"},
+	SessionRootEntries: []string{
+		"conversations",
+		"implicit",
+		"brain",
+		"cache",
+		"history.jsonl",
+		AntigravitySummariesDBName,
+		AntigravitySummariesDBName + "-wal",
+		AntigravitySummariesDBName + "-shm",
+	},
+	IsKnownContainer: isKnownAntigravityCLIContainer,
+}
+
+// isKnownAntigravityCLIContainer recognizes meta-harness Antigravity provider
+// container paths such as ~/.t3/userdata/providers/antigravity even before any
+// instance subdirectories exist, so live watching catches the first session.
+func isKnownAntigravityCLIContainer(root string) bool {
+	clean := filepath.Clean(root)
+	return filepath.Base(clean) == "antigravity" &&
+		filepath.Base(filepath.Dir(clean)) == "providers"
+}
+
+// ExpandAntigravityCLIRoot resolves a configured Antigravity CLI root into its
+// concrete leaf session root(s), expanding meta-harness instance containers
+// (such as T3 Code's providers/antigravity directory) into per-instance roots.
+func ExpandAntigravityCLIRoot(root string) ([]string, error) {
+	roots, _, err := antigravityCLIContainerSpec.ExpandRoot(root)
+	return roots, err
+}
+
+func (s antigravityCLISourceSet) expandedRoots() ([]string, error) {
+	var roots []string
+	var expandErr error
+	seen := make(map[string]struct{}, len(s.roots))
+	for _, root := range s.roots {
+		expanded, _, err := antigravityCLIContainerSpec.ExpandRoot(root)
+		if err != nil {
+			expandErr = errors.Join(expandErr, err)
+		}
+		for _, candidate := range expanded {
+			if _, dup := seen[candidate]; dup {
+				continue
+			}
+			seen[candidate] = struct{}{}
+			roots = append(roots, candidate)
+		}
+	}
+	return roots, expandErr
+}
+
 func antigravityRemoteRoot(remoteRoots map[string]bool, root string) bool {
 	clean := filepath.Clean(root)
 	if remoteRoots[clean] {
@@ -207,6 +269,9 @@ func antigravityRemoteRoot(remoteRoots map[string]bool, root string) bool {
 		if samePath(configured, clean) {
 			return true
 		}
+		if _, inside := relUnder(configured, clean); inside {
+			return true
+		}
 	}
 	return false
 }
@@ -214,7 +279,8 @@ func antigravityRemoteRoot(remoteRoots map[string]bool, root string) bool {
 func (s antigravityCLISourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 	var sources []SourceRef
 	seen := make(map[string]struct{})
-	for _, root := range s.roots {
+	roots, expandErr := s.expandedRoots()
+	for _, root := range roots {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -231,70 +297,114 @@ func (s antigravityCLISourceSet) Discover(ctx context.Context) ([]SourceRef, err
 		}
 	}
 	sortJSONLSources(sources)
+	if expandErr != nil {
+		return sources, incompleteDiscoveryError(
+			AgentAntigravityCLI, "expand container root", expandErr,
+		)
+	}
 	return sources, nil
 }
 
 func (s antigravityCLISourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
-	for _, root := range s.roots {
+	roots, incompleteErr := s.expandedRoots()
+	for _, root := range roots {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		projects, err := newDiscoveryDiskMapForContext(ctx)
+		rootIncomplete, err := s.discoverRootEach(ctx, root, yield)
 		if err != nil {
 			return err
 		}
-		if err := projects.loadJSONL(
-			ctx, filepath.Join(root, "history.jsonl"), "conversationId", "workspace",
-		); err != nil {
-			return errors.Join(err, projects.close())
-		}
-		for id, workspace := range antigravityProjectMapFromLastConversations(
-			filepath.Join(root, "cache", "last_conversations.json"),
-		) {
-			if err := projects.put(ctx, id, workspace, true); err != nil {
-				return errors.Join(err, projects.close())
-			}
-		}
-		// Matches buildAntigravityCLIProjectMap: the summary store only
-		// fills conversations the history and cache leave unmapped.
-		for id, summary := range loadAntigravitySummaries(ctx, root).byID {
-			if summary.workspace == "" {
-				continue
-			}
-			if err := projects.put(ctx, id, summary.workspace, false); err != nil {
-				return errors.Join(err, projects.close())
-			}
-		}
-		for _, subdir := range []string{"conversations", "implicit"} {
-			dir := filepath.Join(root, subdir)
-			err := streamDirectoryEntries(ctx, dir, func(entry os.DirEntry) error {
-				if entry.IsDir() {
-					return nil
-				}
-				_, ext, ok := antigravityCLIPathID(entry.Name())
-				if !ok || subdir == "implicit" && ext != ".pb" {
-					return nil
-				}
-				path := filepath.Join(dir, entry.Name())
-				rawID, ok := antigravityCLISessionIDForPath(root, path)
-				if !ok {
-					return nil
-				}
-				project, _, err := projects.get(ctx, strings.TrimPrefix(rawID, antigravityImplicitTag))
-				if err != nil {
-					return err
-				}
-				return yield(s.newSourceRef(root, path, rawID, project, project))
-			})
-			if err != nil {
-				return errors.Join(err, projects.close())
-			}
-		}
-		if err := projects.close(); err != nil {
-			return err
+		if rootIncomplete != nil {
+			incompleteErr = errors.Join(incompleteErr, rootIncomplete)
 		}
 	}
+	if incompleteErr != nil {
+		return incompleteDiscoveryError(
+			AgentAntigravityCLI, "discover antigravity cli roots", incompleteErr,
+		)
+	}
 	return nil
+}
+
+func (s antigravityCLISourceSet) discoverRootEach(
+	ctx context.Context,
+	root string,
+	yield func(SourceRef) error,
+) (rootIncomplete error, fatalErr error) {
+	projects, err := newDiscoveryDiskMapForContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := projects.close(); closeErr != nil && fatalErr == nil {
+			fatalErr = closeErr
+		}
+	}()
+
+	if err := projects.loadJSONL(
+		ctx, filepath.Join(root, "history.jsonl"), "conversationId", "workspace",
+	); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		rootIncomplete = errors.Join(rootIncomplete, err)
+	}
+	for id, workspace := range antigravityProjectMapFromLastConversations(
+		filepath.Join(root, "cache", "last_conversations.json"),
+	) {
+		if err := projects.put(ctx, id, workspace, true); err != nil {
+			return nil, err
+		}
+	}
+	// Matches buildAntigravityCLIProjectMap: the summary store only
+	// fills conversations the history and cache leave unmapped.
+	for id, summary := range loadAntigravitySummaries(ctx, root).byID {
+		if summary.workspace == "" {
+			continue
+		}
+		if err := projects.put(ctx, id, summary.workspace, false); err != nil {
+			return nil, err
+		}
+	}
+	for _, subdir := range []string{"conversations", "implicit"} {
+		dir := filepath.Join(root, subdir)
+		var callbackErr error
+		err := streamDirectoryEntries(ctx, dir, func(entry os.DirEntry) error {
+			if entry.IsDir() {
+				return nil
+			}
+			_, ext, ok := antigravityCLIPathID(entry.Name())
+			if !ok || subdir == "implicit" && ext != ".pb" {
+				return nil
+			}
+			path := filepath.Join(dir, entry.Name())
+			rawID, ok := antigravityCLISessionIDForPath(root, path)
+			if !ok {
+				return nil
+			}
+			project, _, err := projects.get(ctx, strings.TrimPrefix(rawID, antigravityImplicitTag))
+			if err != nil {
+				callbackErr = err
+				return err
+			}
+			if err := yield(s.newSourceRef(root, path, rawID, project, project)); err != nil {
+				callbackErr = err
+				return err
+			}
+			return nil
+		})
+		if callbackErr != nil {
+			return nil, callbackErr
+		}
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			rootIncomplete = errors.Join(rootIncomplete, err)
+		}
+	}
+	return rootIncomplete, nil
 }
 
 // discoverSessions enumerates conversations/*.db, conversations/*.pb, and
@@ -391,6 +501,10 @@ func (s antigravityCLISourceSet) findSourceFile(root, id string) string {
 func (s antigravityCLISourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 	roots := make([]WatchRoot, 0, len(s.roots)*5)
 	for _, root := range s.roots {
+		if antigravityCLIContainerSpec.IsContainer(root) {
+			roots = append(roots, antigravityCLIContainerWatchRoot(root))
+			continue
+		}
 		roots = append(roots,
 			// brain/<id>/*.md and the plaintext transcript at
 			// brain/<id>/.system_generated/logs/transcript.jsonl are parsed.
@@ -437,6 +551,57 @@ func (s antigravityCLISourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 	return WatchPlan{Roots: roots}, nil
 }
 
+// antigravityCLIContainerWatchRoot bounds recursive watching under a
+// meta-harness container (such as T3 Code's providers/antigravity directory) to
+// the session subdirectories while excluding high-churn generated trees such
+// as brain/<id>/scratch, .system_generated/steps, logs/chunks, builtin, and
+// log. Both brain/<id> (for *.md / *.md.metadata.json artifacts) and
+// brain/<id>/.system_generated/logs (for transcript.jsonl) are explicitly
+// listed so files in both stay visible while intermediate directories such as
+// brain/ and .system_generated/ stay quiet.
+func antigravityCLIContainerWatchRoot(root string) WatchRoot {
+	brainLogsSuffix := "brain/*/" + antigravityBrainGeneratedDir + "/" + antigravityBrainLogsDir
+	return WatchRoot{
+		Path:      root,
+		Recursive: true,
+		MaxDepth:  1,
+		ExtraDirectories: []string{
+			// Single-profile (<root>/antigravity-{acp,cli}/...) and
+			// direct-instance (<root>/<instance>/...) containers:
+			"*/conversations",
+			"*/implicit",
+			"*/cache",
+			"*/brain/*",
+			"*/" + brainLogsSuffix,
+			// Nested-instance (<root>/<instance>/antigravity-{acp,cli}/...) containers:
+			"*/antigravity-acp",
+			"*/antigravity-acp/conversations",
+			"*/antigravity-acp/implicit",
+			"*/antigravity-acp/cache",
+			"*/antigravity-acp/brain/*",
+			"*/antigravity-acp/" + brainLogsSuffix,
+			"*/antigravity-cli",
+			"*/antigravity-cli/conversations",
+			"*/antigravity-cli/implicit",
+			"*/antigravity-cli/cache",
+			"*/antigravity-cli/brain/*",
+			"*/antigravity-cli/" + brainLogsSuffix,
+		},
+		IncludeGlobs: []string{
+			"*.db",
+			"*.db-wal",
+			"*.pb",
+			"*.trajectory.json",
+			"*.md",
+			"*.md.metadata.json",
+			antigravityBrainTranscriptName,
+			"history.jsonl",
+			"last_conversations.json",
+		},
+		DebounceKey: string(AgentAntigravityCLI) + ":container:" + root,
+	}
+}
+
 func (s antigravityCLISourceSet) SourcesForChangedPath(
 	ctx context.Context,
 	req ChangedPathRequest,
@@ -445,10 +610,17 @@ func (s antigravityCLISourceSet) SourcesForChangedPath(
 		return nil, err
 	}
 	for _, root := range s.roots {
-		if req.WatchRoot != "" && !antigravityCLIWatchRootMatches(root, req.WatchRoot) {
+		sessionRoot := root
+		if instanceRoot, ok := antigravityCLIContainerSpec.InstanceRootForPath(root, req.Path); ok {
+			sessionRoot = instanceRoot
+			if req.WatchRoot != "" && !samePath(root, req.WatchRoot) &&
+				!antigravityCLIWatchRootMatches(sessionRoot, req.WatchRoot) {
+				continue
+			}
+		} else if req.WatchRoot != "" && !antigravityCLIWatchRootMatches(root, req.WatchRoot) {
 			continue
 		}
-		if sources := s.sourcesForChangedPath(root, req); len(sources) > 0 {
+		if sources := s.sourcesForChangedPath(sessionRoot, req); len(sources) > 0 {
 			return sources, nil
 		}
 	}
@@ -462,13 +634,22 @@ func (s antigravityCLISourceSet) FindSource(
 	if err := ctx.Err(); err != nil {
 		return SourceRef{}, false, err
 	}
+	roots, expandErr := s.expandedRoots()
+	notFound := func() (SourceRef, bool, error) {
+		if expandErr != nil {
+			return SourceRef{}, false, incompleteDiscoveryError(
+				AgentAntigravityCLI, "expand container root", expandErr,
+			)
+		}
+		return SourceRef{}, false, nil
+	}
 	freshStoredSource := req.RequireFreshSource &&
 		(req.StoredFilePath != "" || req.FingerprintKey != "")
 	for _, path := range []string{req.StoredFilePath, req.FingerprintKey} {
 		if path == "" {
 			continue
 		}
-		for _, root := range s.roots {
+		for _, root := range roots {
 			if source, ok := s.storedSourceRef(
 				root, path, req.RawSessionID, req.RequireFreshSource,
 			); ok {
@@ -477,13 +658,13 @@ func (s antigravityCLISourceSet) FindSource(
 		}
 	}
 	if freshStoredSource {
-		return SourceRef{}, false, nil
+		return notFound()
 	}
 	if req.RawSessionID == "" {
-		return SourceRef{}, false, nil
+		return notFound()
 	}
 	projects := make(map[string]map[string]string)
-	for _, root := range s.roots {
+	for _, root := range roots {
 		path := s.findSourceFile(root, req.RawSessionID)
 		if path == "" {
 			continue
@@ -498,7 +679,7 @@ func (s antigravityCLISourceSet) FindSource(
 			return source, true, nil
 		}
 	}
-	return SourceRef{}, false, nil
+	return notFound()
 }
 
 func (s antigravityCLISourceSet) Fingerprint(
@@ -543,8 +724,9 @@ func (s antigravityCLISourceSet) sourceFromRef(
 			return *src, true
 		}
 	}
+	roots, _ := s.expandedRoots()
 	for _, candidate := range []string{source.DisplayPath, source.FingerprintKey, source.Key} {
-		for _, root := range s.roots {
+		for _, root := range roots {
 			if ref, ok := s.sourceRef(root, candidate, source.ProjectHint, true); ok {
 				src := ref.Opaque.(antigravityCLISource)
 				return src, true
@@ -846,9 +1028,13 @@ func antigravityCLIProviderCapabilities() Capabilities {
 		},
 		// The fingerprint covers the summary store's workspace and parent,
 		// which change without touching the conversation's own files.
+		// PartialDiscovery lets healthy standalone or sibling-instance roots
+		// keep syncing when another container or instance is unreadable, while
+		// still reporting DiscoveryIncompleteError so nothing is tombstoned.
 		Sync: ProviderSyncSemantics{
 			FingerprintHashInCacheKey:           true,
 			FingerprintHashRequiredForFreshness: true,
+			PartialDiscovery:                    true,
 		},
 	}
 }

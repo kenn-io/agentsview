@@ -223,16 +223,91 @@ func (db *DB) runUsageCacheBackfill(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	snapshot, err := db.captureUsageQuery(
-		ctx, UsageFilter{}, usageQueryKindActivity)
+	snapshot, locations, zones, delta, err := db.captureUsageBackfill(ctx, cache, databaseID, installSeq)
 	if err != nil {
 		return err
 	}
-	return db.runUsageCacheBackfillPass(ctx, time.Now(), snapshot, installSeq)
+	return db.runUsageCacheBackfillWithCoverage(ctx, time.Now(), snapshot, installSeq, locations, zones, delta)
 }
 
-func (db *DB) runUsageCacheBackfillPass(
+// captureUsageBackfill reads cache claims before taking the archive snapshot.
+func (db *DB) captureUsageBackfill(ctx context.Context, cache *usageCache, databaseID string, installSeq int64) (usageQuerySnapshot, []*time.Location, []usageZoneCoverage, bool, error) {
+	filter := UsageFilter{}
+	locations, err := usageBackfillLocations(ctx, cache, filter.Location())
+	if err != nil {
+		return usageQuerySnapshot{}, nil, nil, false, err
+	}
+	tx, err := cache.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return usageQuerySnapshot{}, nil, nil, false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	zones := make([]usageZoneCoverage, len(locations))
+	var lost bool
+	trusted := db.usageSource == nil
+	for i, location := range locations {
+		zones[i], err = readUsageZoneCoverage(ctx, tx, usageTimezoneIdentityFor(location, nil).Key)
+		if err != nil {
+			return usageQuerySnapshot{}, nil, nil, false, err
+		}
+		zone := zones[i]
+		if lost || !zone.revision.Valid || zone.foreignPricing {
+			continue
+		}
+		ids, err := usageSessionsWithoutRollup(ctx, tx, zone.id, 1)
+		if err != nil {
+			return usageQuerySnapshot{}, nil, nil, false, err
+		}
+		lost = len(ids) > 0
+	}
+	if err := tx.Commit(); err != nil {
+		return usageQuerySnapshot{}, nil, nil, false, err
+	}
+	var snapshot usageQuerySnapshot
+	if db.usageSource != nil {
+		snapshot, err = db.captureUsageQuery(ctx, filter, usageQueryKindActivity)
+	} else {
+		snapshot, err = db.captureUsageSnapshot(ctx, filter, func(ctx context.Context, tx *sql.Tx, snapshot *usageQuerySnapshot) error {
+			if snapshot.DatabaseID != databaseID {
+				return errUsageCacheSourceChanged
+			}
+			lowest := snapshot.ChangeRevision
+			for _, zone := range zones {
+				if !usageZoneTrusted(zone, snapshot) {
+					trusted = false
+				} else {
+					lowest = min(lowest, zone.revision.Int64)
+				}
+			}
+			if !trusted {
+				return captureUsageQueryFrom(ctx, tx, filter, usageQueryKindActivity, snapshot)
+			}
+			var changed bool
+			if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM usage_session_changes WHERE revision > ? AND revision <= ?)`, lowest, snapshot.ChangeRevision).Scan(&changed); err != nil {
+				return err
+			}
+			// Filling a changed session can invalidate an unchanged dedup peer.
+			// A full capture lets the pass rebuild both before claiming coverage.
+			if changed || lost {
+				trusted = false
+				return captureUsageQueryFrom(ctx, tx, filter, usageQueryKindActivity, snapshot)
+			}
+			return loadUsageCursorHighWater(ctx, tx, snapshot)
+		})
+	}
+	if err != nil {
+		return snapshot, nil, nil, false, err
+	}
+	for i := range zones {
+		zones[i].installSeq = installSeq
+		zones[i].resetEpoch = snapshot.resetEpoch
+	}
+	return snapshot, locations, zones, trusted, nil
+}
+
+func (db *DB) runUsageCacheBackfillWithCoverage(
 	ctx context.Context, started time.Time, snapshot usageQuerySnapshot, installSeq int64,
+	locations []*time.Location, zones []usageZoneCoverage, delta bool,
 ) error {
 	cache, release, err := db.usageCache.acquireGeneration(ctx, snapshot.DatabaseID)
 	if err != nil {
@@ -250,27 +325,16 @@ func (db *DB) runUsageCacheBackfillPass(
 		localIdentity.Key); err != nil {
 		return fmt.Errorf("pruning stale local usage timezones: %w", err)
 	}
-	locations, err := usageBackfillLocations(ctx, cache, snapshot.location)
-	if err != nil {
-		return err
-	}
-	zones := make([]usageZoneCoverage, len(locations))
-	for i, location := range locations {
-		zones[i], err = readUsageZoneCoverage(ctx, cache.db, usageTimezoneIdentityFor(location, nil).Key)
-		if err != nil {
-			return err
-		}
-		zones[i].installSeq = installSeq
-		zones[i].resetEpoch = snapshot.resetEpoch
-	}
 	if err := cache.sweepDeletionJournal(ctx, db); err != nil {
 		return err
 	}
-	activity, err := db.usageBackfillActivity(ctx)
-	if err != nil {
-		return err
+	if !delta {
+		activity, err := db.usageBackfillActivity(ctx)
+		if err != nil {
+			return err
+		}
+		orderUsageBackfillSnapshot(&snapshot, activity)
 	}
-	orderUsageBackfillSnapshot(&snapshot, activity)
 	resolver := export.NewPricingResolver(snapshot.PricingRows)
 	covered, deleted := 0, 0
 	var dailyRows, exceptionGroups, exceptionRows int64
@@ -357,13 +421,15 @@ func (db *DB) runUsageCacheBackfillPass(
 	if err := cache.sweepDeletionJournal(ctx, db); err != nil {
 		return err
 	}
-	if _, err := cache.incrementalVacuum(
-		ctx, usageCacheVacuumFreelistThreshold, usageCacheVacuumPages,
-	); err != nil {
-		return err
-	}
-	if _, err := cache.db.ExecContext(ctx, `ANALYZE`); err != nil {
-		return fmt.Errorf("analyzing completed usage cache: %w", err)
+	if !delta {
+		if _, err := cache.incrementalVacuum(
+			ctx, usageCacheVacuumFreelistThreshold, usageCacheVacuumPages,
+		); err != nil {
+			return err
+		}
+		if _, err := cache.db.ExecContext(ctx, `ANALYZE`); err != nil {
+			return fmt.Errorf("analyzing completed usage cache: %w", err)
+		}
 	}
 	if _, err := cache.db.ExecContext(ctx, `
 		UPDATE usage_cache_metadata SET value = ? WHERE key = ?`,

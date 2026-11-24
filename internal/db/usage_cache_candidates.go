@@ -127,6 +127,10 @@ func captureUsageQueryFrom(ctx context.Context, tx *sql.Tx, filter UsageFilter, 
 		return err
 	}
 	snapshot.Intervals = usageQueryIntervals(filter)
+	return loadUsageCursorHighWater(ctx, tx, snapshot)
+}
+
+func loadUsageCursorHighWater(ctx context.Context, tx *sql.Tx, snapshot *usageQuerySnapshot) error {
 	var hasCursorTable bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(
 	SELECT 1 FROM sqlite_master

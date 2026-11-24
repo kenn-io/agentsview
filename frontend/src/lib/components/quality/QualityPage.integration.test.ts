@@ -18,9 +18,8 @@ const mocks = vi.hoisted(() => ({
   copyToClipboard: vi.fn().mockResolvedValue(true),
   downloadInsightExport: vi.fn().mockResolvedValue(undefined),
   deleteItem: vi.fn(),
-  loadAgents: vi.fn(),
   loadInsights: vi.fn(),
-  loadProjects: vi.fn(),
+  refreshFilterOptions: vi.fn(),
   navigateToSession: vi.fn(),
   watchEvents: vi.fn(() => ({ close() {} })),
 }));
@@ -109,8 +108,7 @@ vi.mock("../../stores/sessions.svelte.js", () => ({
       includeAutomated: true,
     },
     projects: [],
-    loadAgents: mocks.loadAgents,
-    loadProjects: mocks.loadProjects,
+    refreshFilterOptions: mocks.refreshFilterOptions,
     navigateToSession: mocks.navigateToSession,
   },
 }));

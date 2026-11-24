@@ -7,6 +7,7 @@ import { analytics } from "../../stores/analytics.svelte.js";
 import { insights } from "../../stores/insights.svelte.js";
 import { router } from "../../stores/router.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
+import { events } from "../../stores/events.svelte.js";
 import { MetadataService } from "../../api/generated/index.js";
 import { sync } from "../../stores/sync.svelte.js";
 
@@ -38,6 +39,38 @@ describe("QualityPage", () => {
     router.params = {};
     sync.serverVersion = null;
     vi.restoreAllMocks();
+  });
+
+  it("adds newly imported agents to the filter without remounting", async () => {
+    let onEvent: ((event: { scope: "sessions" }) => void) | undefined;
+    vi.spyOn(events, "subscribeDebounced").mockImplementation((listener) => {
+      onEvent = listener;
+      return () => {};
+    });
+    let imported = false;
+    vi.spyOn(sessions, "loadProjects").mockResolvedValue();
+    vi.spyOn(sessions, "loadMachines").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockImplementation(async () => {
+      sessions.agents = imported ? [{ name: "codex", session_count: 1 }] : [];
+    });
+    component = mount(QualityPage, { target: document.body });
+    await tick();
+    imported = true;
+    onEvent!({ scope: "sessions" });
+    await tick();
+    await tick();
+    const trigger = document.querySelector<HTMLButtonElement>('[title="Filter insights by agent"]');
+    expect(trigger).not.toBeNull();
+    trigger!.click();
+    await tick();
+    const option = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((item) =>
+      item.textContent?.includes("Codex (1)"),
+    );
+    expect(option).toBeDefined();
+    option!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    await tick();
+    expect(analytics.agent).toBe("codex");
+    analytics.agent = "";
   });
 
   it("loads quality once with the already-selected machine from a label deep link", async () => {

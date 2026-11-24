@@ -197,7 +197,6 @@
   // Rename state
   let renaming = $state(false);
   let renameValue = $state("");
-  let renameError = $state("");
   let renameInput: HTMLInputElement | undefined = $state(undefined);
 
   function mountOverlay(node: HTMLElement) {
@@ -268,7 +267,6 @@
   }
 
   function startRename() {
-    renameError = "";
     renameValue =
       session.display_name
       ?? normalizeMessagePreview(sessions.view(session).first_message)
@@ -284,9 +282,8 @@
     const name = renameValue.trim() || null;
     try {
       await sessions.renameSession(session.id, name);
-    } catch (error) {
-      renameError = error instanceof Error ? error.message : String(error);
-      renaming = true;
+    } catch {
+      // silently fail
     }
   }
 
@@ -478,7 +475,6 @@
           }
         }}
       />
-      {#if renameError}<span class="rename-error" role="alert" title={renameError}>{renameError}</span>{/if}
     {:else}
       <a
         class="session-info-link"
@@ -901,19 +897,6 @@
   .compact .session-name {
     font-size: 11px;
     color: var(--text-secondary);
-  }
-
-  /* The row keeps its fixed height for the virtual list, so the error
-     stays on one line under the input; the full text is in its title. */
-  .rename-error {
-    display: block;
-    margin-top: 2px;
-    color: var(--accent-red);
-    font-size: 11px;
-    line-height: 13px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 
   .rename-input {

@@ -145,6 +145,7 @@ func (s IndexSpec) generationsTable() string { return s.VectorsPrefix + "_genera
 func (s IndexSpec) stampsTable() string      { return s.VectorsPrefix + "_stamps" }
 func (s IndexSpec) chunksTable() string      { return s.VectorsPrefix + "_chunks" }
 func (s IndexSpec) repairQueueTable() string { return s.VectorsPrefix + "_repair_queue" }
+func (s IndexSpec) reuseTable() string       { return s.VectorsPrefix + "_reuse" }
 
 // MessageIndexSpec is the conversation-message embedding store. Its table
 // names and metadata keys predate IndexSpec.
@@ -326,6 +327,20 @@ func OpenSpec(
 		return nil, fmt.Errorf("opening vector store: %w", err)
 	}
 	if !readOnly {
+		if spec.Name == "messages" {
+			if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS `+spec.reuseTable()+` (ordinal INTEGER NOT NULL, doc_key TEXT NOT NULL, text_hash TEXT NOT NULL, embedding BLOB NOT NULL, PRIMARY KEY (ordinal, doc_key, text_hash)) WITHOUT ROWID`); err != nil {
+				db.Close()
+				return nil, fmt.Errorf("creating chunk reuse table: %w", err)
+			}
+			if _, err := db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS `+spec.reuseTable()+`_hash ON `+spec.reuseTable()+` (ordinal, text_hash)`); err != nil {
+				db.Close()
+				return nil, fmt.Errorf("creating chunk reuse index: %w", err)
+			}
+			if _, err := db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS `+spec.reuseTable()+`_doc ON `+spec.reuseTable()+` (doc_key)`); err != nil {
+				db.Close()
+				return nil, fmt.Errorf("creating chunk reuse document index: %w", err)
+			}
+		}
 		if _, err := db.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS `+spec.repairQueueTable()+` (
     ordinal INTEGER NOT NULL,
