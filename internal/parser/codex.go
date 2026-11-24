@@ -2310,11 +2310,9 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 
 	if p.spec.agent == AgentCodex {
 		for _, root := range p.sources.roots {
-			if !isS3URI(root) {
-				if label := CodexSourceLabel(root, path); label != "" {
-					b.project, b.gitRemote = label, ""
-					break
-				}
+			if label := CodexSourceLabel(root, path); label != "" {
+				b.project, b.gitRemote = label, ""
+				break
 			}
 		}
 	}

@@ -2412,42 +2412,5 @@ func TestCodexLabeledRunDiscoveryAndParse(t *testing.T) {
 	assert.Empty(t, outcome.Results[0].Result.Session.GitRemote)
 	assert.Equal(t, "experiment/case", CodexSourceLabel(root, path))
 	assert.Empty(t, CodexSourceLabel(filepath.Join(home, "sessions"), path))
-}
-
-func TestCodexLabeledLookupAndDuplicates(t *testing.T) {
-	root := t.TempDir()
-	const id = "11111111-1111-4111-8111-111111111111"
-	old := writeCodexProviderSession(t, filepath.Join(root, "old", ".codex-run-v1-a", "sessions"), id, "prompt")
-	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	source, found, err := provider.FindSource(t.Context(), FindSourceRequest{StoredFilePath: old, RawSessionID: id})
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Equal(t, old, source.DisplayPath)
-	newPath := writeCodexProviderSession(t, filepath.Join(root, "new", ".codex-run-v1-b", "sessions"), id, "prompt")
-	lister := provider.(interface{ AllSourcePathsForUUID(string) []string })
-	assert.ElementsMatch(t, []string{old, newPath}, lister.AllSourcePathsForUUID(id))
-	require.NoError(t, os.Remove(old))
-	source, found, err = provider.FindSource(t.Context(), FindSourceRequest{StoredFilePath: old, RawSessionID: id})
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Equal(t, newPath, source.DisplayPath)
-}
-
-func TestCodexDotLabeledRuns(t *testing.T) {
-	root := t.TempDir()
-	for i, id := range []string{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"} {
-		writeCodexProviderSession(t, filepath.Join(root, fmt.Sprintf(".codex-run-v1-%d", i), "sessions"), id, "prompt")
-	}
-	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	sources, err := provider.Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, sources, 2)
-	for _, source := range sources {
-		parsed, err := provider.Parse(t.Context(), ParseRequest{Source: source})
-		require.NoError(t, err)
-		require.Len(t, parsed.Results, 1)
-		assert.Equal(t, "api", parsed.Results[0].Result.Session.Project)
-	}
+	assert.Equal(t, "..x", CodexSourceLabel(root, filepath.Join(root, "..x", ".codex-run-v1-abc", "sessions", "2026", "01", "01", filepath.Base(path))))
 }

@@ -846,7 +846,7 @@ func CodexSessionPathInfo(root, path string) (CodexLayout, string, bool) {
 		return CodexLayoutUnknown, "", false
 	}
 	parts := strings.Split(rel, sep)
-	if codexMarkedRunParts(parts) {
+	if len(parts) >= 6 && strings.HasPrefix(parts[len(parts)-6], ".codex-run-v1-") && parts[len(parts)-5] == "sessions" {
 		parts = parts[len(parts)-4:]
 	}
 	switch len(parts) {
@@ -857,7 +857,7 @@ func CodexSessionPathInfo(root, path string) (CodexLayout, string, bool) {
 		return CodexLayoutArchivedFlat,
 			CodexSessionUUIDFromFilename(parts[0]), true
 	case 4:
-		if !codexDatedParts(parts) {
+		if !IsDigits(parts[0]) || !IsDigits(parts[1]) || !IsDigits(parts[2]) || !isCodexSessionFilename(parts[3]) {
 			return CodexLayoutUnknown, "", false
 		}
 		return CodexLayoutDated,
@@ -867,35 +867,21 @@ func CodexSessionPathInfo(root, path string) (CodexLayout, string, bool) {
 	}
 }
 
-func codexMarkedRunParts(parts []string) bool {
-	n := len(parts)
-	return n >= 6 && strings.HasPrefix(parts[n-6], ".codex-run-v1-") && parts[n-5] == "sessions"
-}
-
-func codexDatedParts(parts []string) bool {
-	return len(parts) == 4 && IsDigits(parts[0]) && IsDigits(parts[1]) && IsDigits(parts[2]) && isCodexSessionFilename(parts[3])
-}
-
-// CodexMarkedRunPath reports a dated rollout inside a marked run home.
-func CodexMarkedRunPath(path string) bool {
-	parts := strings.Split(filepath.Clean(path), string(filepath.Separator))
-	return codexMarkedRunParts(parts) && codexDatedParts(parts[len(parts)-4:])
-}
-
 // CodexSourceLabel returns the label preceding a marked Codex run home.
 func CodexSourceLabel(root, path string) string {
-	if !CodexMarkedRunPath(path) {
-		return ""
-	}
 	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return ""
 	}
 	parts := strings.Split(rel, string(filepath.Separator))
-	if len(parts) <= 6 {
+	n := len(parts)
+	if n <= 6 || !strings.HasPrefix(parts[n-6], ".codex-run-v1-") || parts[n-5] != "sessions" {
 		return ""
 	}
-	return filepath.ToSlash(filepath.Clean(filepath.Join(parts[:len(parts)-6]...)))
+	if _, _, ok := CodexSessionPathInfo(root, path); !ok {
+		return ""
+	}
+	return filepath.ToSlash(filepath.Join(parts[:n-6]...))
 }
 
 // walkCodexDayDirs traverses a Codex sessions directory with
