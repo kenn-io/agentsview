@@ -409,7 +409,7 @@ func hasFTSColumnFilter(query string) bool {
 // Search performs FTS5 full-text search across messages, grouped by session,
 // plus a LIKE-based search on session display names and first messages.
 //
-// Results come from two branches joined with UNION ALL:
+// Results come from three branches joined with UNION ALL:
 //
 //  1. FTS branch — message content matches. ROW_NUMBER() picks the single
 //     best-ranked message per session (rank ASC, ordinal ASC, rowid ASC),
