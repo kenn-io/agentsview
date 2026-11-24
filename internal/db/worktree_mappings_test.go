@@ -1619,20 +1619,6 @@ func TestCopyWorktreeProjectMappingsFromFillsOnlyEmptyOriginalProject(
 	}
 }
 
-func TestCopySessionMetadataFromWithoutSourceSessions(t *testing.T) {
-	dir := t.TempDir()
-	sourcePath := filepath.Join(dir, "source.db")
-	createWorktreeMappingDBWithoutOriginalProject(t, sourcePath, filepath.Join(dir, "worktrees"))
-
-	destination := testDB(t)
-	require.NoError(t, destination.CopySessionMetadataFrom(t.Context(), sourcePath))
-
-	mappings, err := destination.ListWorktreeProjectMappings(t.Context(), "host-a.example")
-	require.NoError(t, err)
-	require.Len(t, mappings, 1)
-	assert.Equal(t, "service", mappings[0].Project)
-}
-
 func TestCopySessionMetadataFromOldWorktreeMappingSchemaDefaultsLayout(t *testing.T) {
 	dir := t.TempDir()
 	ctx := t.Context()

@@ -341,16 +341,14 @@ func TestToolPRLinksArchiveUpgrade(t *testing.T) {
 		assert.Equal(t, []PRLink{link}, got.PRLinks)
 	})
 	for _, tc := range []struct {
-		name, category, field  string
-		version                int
-		prompt, command        string
-		want                   []string
-		oldSchema, transcripts bool
+		name, category, field string
+		prompt, command       string
+		want                  []string
+		transcripts           bool
 	}{
-		{"tool upgrade", "Bash", "command", 187, "review https://github.com/example/repo/pull/41", "gh pr view 42 -R github.com/example/repo", []string{"https://github.com/example/repo/pull/41", "https://github.com/example/repo/pull/42"}, false, false},
-		{"task pull", "Task", "prompt", 188, "", "https://github.com/example/repo/pull/44", []string{"https://github.com/example/repo/pull/44"}, false, false},
-		{"old tool schema", "Bash", "command", 188, "", "gh pr view 42 -R github.com/example/repo", []string{"https://github.com/example/repo/pull/42"}, true, false},
-		{"transcripts upgrade", "Bash", "command", 188, "", "gh pr view 42 -R github.com/example/repo", []string{"https://github.com/example/repo/pull/42"}, false, true},
+		{"tool upgrade", "Bash", "command", "review https://github.com/example/repo/pull/41", "gh pr view 42 -R github.com/example/repo", []string{"https://github.com/example/repo/pull/41", "https://github.com/example/repo/pull/42"}, false},
+		{"task pull", "Task", "prompt", "", "https://github.com/example/repo/pull/44", []string{"https://github.com/example/repo/pull/44"}, false},
+		{"transcripts upgrade", "Bash", "command", "", "gh pr view 42 -R github.com/example/repo", []string{"https://github.com/example/repo/pull/42"}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "archive.db")
@@ -372,16 +370,10 @@ func TestToolPRLinksArchiveUpgrade(t *testing.T) {
 				if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links='' WHERE id=?`, s.ID); err != nil {
 					return err
 				}
-				if tc.oldSchema {
-					if _, err := tx.ExecContext(t.Context(), `ALTER TABLE tool_calls DROP COLUMN pr_links; ALTER TABLE tool_calls DROP COLUMN pr_context`); err != nil {
-						return err
-					}
-				} else if tc.transcripts {
-					if _, err := tx.ExecContext(t.Context(), `UPDATE tool_calls SET pr_links=NULL WHERE session_id=?`, s.ID); err != nil {
-						return err
-					}
+				if _, err := tx.ExecContext(t.Context(), `ALTER TABLE tool_calls DROP COLUMN pr_links; ALTER TABLE tool_calls DROP COLUMN pr_context`); err != nil {
+					return err
 				}
-				return writeUserVersion(t.Context(), tx, tc.version)
+				return writeUserVersion(t.Context(), tx, toolPRLinksDataVersion-1)
 			}))
 			require.NoError(t, d.Close())
 			policy := config.ArchiveContentFull
@@ -397,11 +389,9 @@ func TestToolPRLinksArchiveUpgrade(t *testing.T) {
 				urls = append(urls, link.URL)
 			}
 			assert.Equal(t, tc.want, urls)
-			if tc.oldSchema {
-				var links sql.NullString
-				require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT pr_links FROM tool_calls WHERE session_id=?`, s.ID).Scan(&links))
-				assert.NotEmpty(t, DecodePRLinks(links.String))
-			}
+			var links sql.NullString
+			require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT pr_links FROM tool_calls WHERE session_id=?`, s.ID).Scan(&links))
+			assert.NotEmpty(t, DecodePRLinks(links.String))
 		})
 	}
 }

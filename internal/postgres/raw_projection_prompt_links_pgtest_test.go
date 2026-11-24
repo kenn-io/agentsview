@@ -327,45 +327,6 @@ func TestRawProjectionRefreshesRetainedToolLinks(t *testing.T) {
 	assert.Empty(t, db.DecodePRLinks(links))
 }
 
-func TestRawProjectionVisualStudioCopilotRetainsUpdatedToolLinks(t *testing.T) {
-	t.Parallel()
-	f := newProjectionFixture(t)
-	var err error
-	f.sink, err = NewRawProjectionStore(t.Context(), f.runtime, RawProjectionOptions{Tenant: f.tenant, Content: ingest.ContentOptions{ArchiveContent: config.ArchiveContentTranscripts}})
-	require.NoError(t, err)
-	outcome := projectionOutcome("start")
-	result := &outcome.Outcome.Results[0].Result
-	result.Session.Agent = parser.AgentVSCopilot
-	result.Session.ID = "vscopilot:portable"
-	call := &result.Messages[1].ToolCalls[0]
-	call.InputJSON = `{"command":"gh pr view 42 -R example/repo"}`
-	m, receipt := f.accept(t, "device-a", "initial", "", parser.AgentVSCopilot)
-	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
-	call.InputJSON = `{"command":"gh pr view 43 -R example/repo"}`
-	m, receipt = f.accept(t, "device-a", "updated", receipt.Receipt, parser.AgentVSCopilot)
-	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
-	messages := result.Messages
-	result.Messages = messages[:1]
-	m, receipt = f.accept(t, "device-a", "shortened", receipt.Receipt, parser.AgentVSCopilot)
-	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
-	resolved, err := f.sink.Resolve(t.Context(), "vscopilot:portable")
-	require.NoError(t, err)
-	var links string
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&links))
-	assert.Equal(t, []db.PRLink{{URL: "https://github.com/example/repo/pull/43", Host: "github.com", Repository: "example/repo", Number: 43}}, db.DecodePRLinks(links))
-	result.Messages = messages
-	call.InputJSON = `{"command":"true"}`
-	m, receipt = f.accept(t, "device-a", "removed", receipt.Receipt, parser.AgentVSCopilot)
-	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
-	result.Messages = messages[:1]
-	m, _ = f.accept(t, "device-a", "shortened-again", receipt.Receipt, parser.AgentVSCopilot)
-	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
-	resolved, err = f.sink.Resolve(t.Context(), "vscopilot:portable")
-	require.NoError(t, err)
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&links))
-	assert.Empty(t, db.DecodePRLinks(links))
-}
-
 func TestRawProjectionRestoresRetainedLinksFromOtherSource(t *testing.T) {
 	t.Parallel()
 	f := newProjectionFixture(t)

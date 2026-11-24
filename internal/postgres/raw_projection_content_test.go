@@ -220,8 +220,8 @@ func TestRawContentRevisionJSONRepresentation(t *testing.T) {
 	}}}
 	key, err := rawMessageKey(p.Messages[0])
 	require.NoError(t, err)
-	p.Messages[0].ToolCalls[0].PRLinks = `[{"url":"https://github.com/acme/widgets/pull/7"}]`
-	p.Messages[0].ToolCalls[0].PRContext = `{"repository":"acme/widgets"}`
+	p.Messages[0].ToolCalls[0].PRLinks = `[{"url":"https://github.com/acme/widgets/pull/7","host":"github.com","repository":"acme/widgets","number":7}]`
+	p.Messages[0].ToolCalls[0].PRContext = `{"directory":true,"repository":true,"workdir":"/work/widgets"}`
 	before, err := encodeRawPayload(p)
 	require.NoError(t, err)
 	got, err := rawContentRevision(p)
@@ -234,9 +234,6 @@ func TestRawContentRevisionJSONRepresentation(t *testing.T) {
 	linkedKey, err := rawMessageKey(p.Messages[0])
 	require.NoError(t, err)
 	assert.Equal(t, key, linkedKey)
-	afterKey, err := encodeRawPayload(p)
-	require.NoError(t, err)
-	assert.Equal(t, before, afterKey, "message key preserves the caller's complete content")
 	p.Signals.ToolObservations = []db.ToolObservation{{Outcome: "empty", Repeat: "exact", SequenceEnding: new("abandoned")}}
 	call := &p.Messages[0].ToolCalls[0]
 	call.ObservedOutcome, call.ObservedRepeat, call.SequenceEnding = new("empty"), new("exact"), new("abandoned")

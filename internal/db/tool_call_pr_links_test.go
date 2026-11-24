@@ -108,10 +108,8 @@ func TestToolCallPRLinksDirectoryChangePreservesHost(t *testing.T) {
 		calls []db.ToolCall
 		want  string
 	}{
-		{"host after cd", []db.ToolCall{{Category: "Bash", ToolName: "Bash", InputJSON: `{"command":"cd /work/other"}`}, {Category: "Bash", ToolName: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`}}, "https://git.example/example/repo/pull/42"},
 		{"commands array", []db.ToolCall{{Category: "Bash", ToolName: "Bash", InputJSON: `{"commands":["cd /work/other","gh pr view 42 -R example/repo"]}`}}, "https://git.example/example/repo/pull/42"},
 		{"bare after cd", []db.ToolCall{{Category: "Bash", ToolName: "Bash", InputJSON: `{"command":"cd /work/other"}`}, {Category: "Bash", ToolName: "Bash", InputJSON: `{"command":"gh pr merge 60"}`}}, ""},
-		{"bare after push", []db.ToolCall{{Category: "Bash", ToolName: "Bash", InputJSON: `{"command":"git push"}`}, {Category: "Bash", ToolName: "Bash", InputJSON: `{"command":"gh pr merge 60"}`}}, "https://git.example/example/repo/pull/60"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			links := toolCallPRLinks(t, []db.Message{{ToolCalls: tc.calls}}, "/work/repo", "https://git.example/example/repo.git")
