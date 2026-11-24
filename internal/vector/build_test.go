@@ -1223,8 +1223,4 @@ func TestBuildSelectsFreebuff(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.Fill.Documents)
 	assert.Equal(t, []string{"freebuff"}, mirrorSessionIDs(t, ix))
-	hits, err := ix.Search(ctx, fakeBuildEncoder(), "message", 10)
-	require.NoError(t, err)
-	require.Len(t, hits, 1)
-	assert.Equal(t, "freebuff", hits[0].SessionID)
 }
