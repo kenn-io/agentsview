@@ -340,6 +340,65 @@ func TestDecodeContent(t *testing.T) {
 	}
 }
 
+func TestDecodeContent_ToolResultImages(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "anthropic base64 image only",
+			raw:  `[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAEC"}}]`,
+			want: `[{"image_url":"data:image/png;base64,AAEC","type":"input_image"}]`,
+		},
+		{
+			name: "anthropic text and base64 image preserve block order",
+			raw:  `[{"type":"text","text":"before"},{"type":"image","source":{"type":"base64","media_type":"Image/JPEG; charset=binary","data":" /9j/ "}},{"type":"result","result":"after"}]`,
+			want: `[{"text":"before","type":"text"},{"image_url":"data:image/jpeg;base64,/9j/","type":"input_image"},{"text":"after","type":"text"}]`,
+		},
+		{
+			name: "openai input_image array keeps text-only summary",
+			raw:  `[{"type":"text","text":"before"},{"type":"input_image","image_url":"data:image/png;base64,AAEC"},{"type":"text","text":"after"}]`,
+			want: "beforeafter",
+		},
+		{
+			name: "url image source stays ignored",
+			raw:  `[{"type":"image","source":{"type":"url","url":"https://example.com/a.png"}}]`,
+			want: "",
+		},
+		{
+			name: "non-image media type with text preserves plain text",
+			raw:  `[{"type":"text","text":"ok"},{"type":"image","source":{"type":"base64","media_type":"text/plain","data":"aGk="}}]`,
+			want: "ok",
+		},
+		{
+			name: "empty base64 data stays ignored",
+			raw:  `[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"   "}}]`,
+			want: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, DecodeContent(tt.raw))
+		})
+	}
+}
+
+func TestExtractTextContent_AnthropicToolResultImage(t *testing.T) {
+	content := `[{
+		"type":"tool_result",
+		"tool_use_id":"toolu_img_1",
+		"content":[
+			{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAEC"}}
+		]
+	}]`
+	_, _, _, _, _, _, trs := ExtractTextContent(t.Context(), gjson.Parse(content))
+	require.Len(t, trs, 1)
+	decoded := DecodeContent(trs[0].ContentRaw)
+	assert.Equal(t, `[{"image_url":"data:image/png;base64,AAEC","type":"input_image"}]`, decoded)
+	assert.Equal(t, len(decoded), trs[0].ContentLength)
+}
+
 func TestExtractTextContent_IflowToolResult(t *testing.T) {
 	// iFlow tool results use an object with nested output.
 	content := `[{

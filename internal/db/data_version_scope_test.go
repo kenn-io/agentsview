@@ -34,6 +34,46 @@ func TestHermesCompactionUpgradeScopes(t *testing.T) {
 		ScopedDataVersionProviders(186, 187))
 }
 
+func TestToolResultImageDecodeUpgradeScopes(t *testing.T) {
+	assert.ElementsMatch(t, []parser.AgentType{
+		parser.AgentClaude,
+		parser.AgentCowork,
+		parser.AgentQoder,
+		parser.AgentIcodemate,
+		parser.AgentOpenClaude,
+		parser.AgentAmp,
+		parser.AgentCursor,
+		parser.AgentFactory,
+		parser.AgentIflow,
+		parser.AgentOpenClaw,
+		parser.AgentQClaw,
+		parser.AgentDevin,
+		parser.AgentOpenHands,
+		parser.AgentZCode,
+		parser.AgentPi,
+		parser.AgentOMP,
+		parser.AgentOMO,
+		parser.AgentPrimeAgent,
+		parser.AgentStepCode,
+		parser.AgentDirectAPI,
+		parser.AgentTau,
+		parser.AgentCommandCode,
+		parser.AgentQwen,
+		parser.AgentQwenPaw,
+		parser.AgentGemini,
+		parser.AgentGoose,
+		parser.AgentGrok,
+		parser.AgentFx,
+		parser.AgentCline,
+		parser.AgentZencoder,
+		parser.AgentWorkBuddy,
+		parser.AgentDeepSeekTUI,
+		parser.AgentKiro,
+		parser.AgentCodebuff,
+		parser.AgentPositAssistant,
+	}, ScopedDataVersionProviders(188, 189))
+}
+
 func TestCommitLinkUpgradeScope(t *testing.T) {
 	d := testDB(t)
 	for _, agent := range []string{"codex", "claude"} {
