@@ -195,7 +195,7 @@ func (s *Store) BuildActivityReportArtifacts(
 	}
 	var memoKey string
 	if !q.Partial {
-		memoKey, _, err = s.endedActivityReportKey(ctx, f, keyWhere, keyArgs, rangeStartUTC, rangeEndUTC)
+		memoKey, err = s.endedActivityReportKey(ctx, f, keyWhere, keyArgs, rangeStartUTC, rangeEndUTC)
 		if err != nil {
 			return activity.CandidateArtifacts{}, err
 		}
@@ -303,7 +303,7 @@ func (s *Store) checkedActivityReport(selection, fingerprint string, onDisk bool
 // usage in the range leaves the key, and the kept report, in place.
 func (s *Store) endedActivityReportKey(
 	ctx context.Context, filter db.AnalyticsFilter, candidateWhere string, candidateArgs []any, lowerBound, upperBound string,
-) (string, *activity.Launchers, error) {
+) (string, error) {
 	// The candidate sessions are named by their push versions, which name
 	// the messages and tool events their pairing reads. Two independent
 	// hash sums and the count identify the set without listing it. The read
@@ -321,7 +321,7 @@ func (s *Store) endedActivityReportKey(
 	}()
 	key, err := s.endedActivityReportRowsKey(ctx, lowerBound, upperBound)
 	if err := errors.Join(err, <-candidatesRead); err != nil || key == "" {
-		return "", nil, err
+		return "", err
 	}
 	runs := make([]activity.SessionMeta, 0, len(parents))
 	for _, id := range parents {
@@ -329,7 +329,7 @@ func (s *Store) endedActivityReportKey(
 	}
 	launchers, versions, err := s.activityReportLaunchers(ctx, filter, runs, nil)
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
 	data := fmt.Appendf(nil, "%s|%s|%d", key, candidates.hash, candidates.count)
 	for _, id := range launchers.Examined {
@@ -340,7 +340,7 @@ func (s *Store) endedActivityReportKey(
 		}
 	}
 	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:]), &launchers, nil
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // endedActivityReportRowsKey identifies everything but the candidate

@@ -28,7 +28,7 @@ type ConcurrentUsageBackend interface {
 	ActivityReportSecondRead() (release func(), ok bool)
 }
 
-// EvidenceBackend supplies runs whose own session is excluded by report filters.
+// EvidenceBackend supplies subagent runs that may be excluded by report filters.
 type EvidenceBackend interface {
 	ActivityReportEvidence(context.Context, Query) ([]SessionMeta, error)
 }
@@ -50,7 +50,7 @@ func BuildReportArtifacts(
 			return CandidateArtifacts{}, Progress{}, err
 		}
 		evidence = slices.DeleteFunc(evidence, func(session SessionMeta) bool {
-			return selected[session.SessionID] || !session.IsSubagent
+			return selected[session.SessionID]
 		})
 	}
 	var ancestors Launchers

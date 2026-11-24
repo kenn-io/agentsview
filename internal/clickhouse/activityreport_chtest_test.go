@@ -276,7 +276,7 @@ func TestEndedActivityReportKeyTracksLauncher(t *testing.T) {
 	start, end := activityReportRangeBoundsUTC(q)
 	where, args := clickActivityReportCandidateWhere(f, start, end)
 	key := func() string {
-		value, _, err := store.endedActivityReportKey(ctx, f, where, args, start, end)
+		value, err := store.endedActivityReportKey(ctx, f, where, args, start, end)
 		require.NoError(t, err)
 		require.NotEmpty(t, value)
 		return value
