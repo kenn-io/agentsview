@@ -5,6 +5,16 @@ import {
   type GetApiV1ActivityReportParams,
 } from "./generated/index";
 import { consumeEvents } from "./client.js";
+import { m } from "../i18n/index.js";
+
+const ACTIVITY_REPORT_SCHEMA_VERSION = 9;
+
+function validateActivityReport(report: Report): Report {
+  if (report?.schema_version !== ACTIVITY_REPORT_SCHEMA_VERSION) {
+    throw new Error(m.activity_report_load_failed());
+  }
+  return report;
+}
 
 export interface ActivityReportProgress {
   phase: "loading_sessions" | "loading_usage" | "scanning_activity" | "finalizing" | "done";
@@ -41,7 +51,7 @@ export async function fetchActivityReport(
   headers.set("Accept", "text/event-stream, application/json");
   const res = await ActivityService.getApiV1ActivityReport(query, { headers, signal });
   if (res.headers.get("Content-Type")?.includes("text/event-stream")) {
-    return consumeEvents<Report>(
+    const report = await consumeEvents<Report>(
       res,
       ({ event, data }) => {
         if (event === "progress") onProgress?.(JSON.parse(data));
@@ -50,8 +60,9 @@ export async function fetchActivityReport(
       },
       "Activity report stream ended without a report event",
     );
+    return validateActivityReport(report);
   }
-  return (await res.json()) as Report;
+  return validateActivityReport((await res.json()) as Report);
 }
 
 export async function fetchActivitySessions(
@@ -59,7 +70,7 @@ export async function fetchActivitySessions(
   options: ActivitySessionPageOptions,
   signal?: AbortSignal,
 ): Promise<ActivityReportSessionsResponse> {
-  return ActivityService.getApiV1ActivityReportByReportIdSessions(
+  const page = await ActivityService.getApiV1ActivityReportByReportIdSessions(
     { reportId: reportID },
     {
       limit: options.limit,
@@ -71,4 +82,6 @@ export async function fetchActivitySessions(
     },
     { signal },
   );
+  if (page.report) validateActivityReport(page.report);
+  return page;
 }

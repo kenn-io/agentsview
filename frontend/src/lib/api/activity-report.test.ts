@@ -28,7 +28,7 @@ describe("activity report API", () => {
       .mockResolvedValue(
         streamResponse([
           'event: progress\ndata: {"phase":"loading_sessions","processed":12}\n\n',
-          'event: report\ndata: {"report_id":"signed","sessions_total":301}\n\n',
+          'event: report\ndata: {"schema_version":9,"report_id":"signed","sessions_total":301}\n\n',
         ]),
       );
     vi.stubGlobal("fetch", fetchMock);
@@ -45,6 +45,75 @@ describe("activity report API", () => {
     const [url, init] = fetchMock.mock.calls[0]!;
     expect(String(url)).toContain("/api/v1/activity/report?preset=month");
     expect((init.headers as Headers).get("Accept")).toBe("text/event-stream, application/json");
+  });
+
+  it.each(["json", "stream"])("rejects an unsupported %s report", async (transport) => {
+    const body = '{"schema_version":10,"report_id":"signed"}';
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          transport === "stream"
+            ? streamResponse([`event: report\ndata: ${body}\n\n`])
+            : new Response(body, { headers: { "Content-Type": "application/json" } }),
+        ),
+    );
+
+    await expect(fetchActivityReport({ preset: "month" })).rejects.toThrow();
+  });
+
+  it("accepts the supported JSON report and rejects a missing version", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('{"schema_version":9,"report_id":"signed"}'))
+      .mockResolvedValueOnce(new Response('{"report_id":"signed"}'));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(fetchActivityReport({ preset: "month" })).resolves.toMatchObject({
+      report_id: "signed",
+    });
+    await expect(fetchActivityReport({ preset: "month" })).rejects.toThrow();
+  });
+
+  it("rejects an unsupported replacement report in a session page", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            report_id: "signed",
+            sessions: [],
+            total: 0,
+            refresh_required: true,
+            report: { schema_version: 10 },
+          }),
+          { headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+
+    await expect(fetchActivitySessions("signed", {})).rejects.toThrow();
+  });
+
+  it("accepts a supported replacement report in a session page", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            report_id: "signed",
+            sessions: [],
+            total: 0,
+            refresh_required: true,
+            report: { schema_version: 9 },
+          }),
+          { headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+    await expect(fetchActivitySessions("signed", {})).resolves.toMatchObject({
+      report: { schema_version: 9 },
+    });
   });
 
   it("requests a deterministic server page with bucket range and sort state", async () => {
