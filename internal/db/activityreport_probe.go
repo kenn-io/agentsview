@@ -22,11 +22,10 @@ func (db *DB) ActivityReportSourceProbe(
 			COALESCE((SELECT MAX(updated_at) FROM genai_pricing), '')
 		),
 		COALESCE((SELECT CAST(value AS INTEGER) FROM archive_metadata
-			WHERE key = ?), 0),
-		COALESCE((SELECT CAST(value AS INTEGER) FROM archive_metadata WHERE key = 'usage_change_revision'), 0)`, archiveMetadataProjectIdentityRevisionKey).Scan(
+			WHERE key = ?), 0)`, archiveMetadataProjectIdentityRevisionKey).Scan(
 		&probe.SessionCount, &probe.MaxSessionModified, &probe.MaxDataVersion,
 		&probe.MaxMessageID, &probe.MaxUsageID, &probe.MaxPricingUpdated,
-		&probe.ProjectIdentityGeneration, &probe.SessionChangeRevision,
+		&probe.ProjectIdentityGeneration,
 	)
 	if err != nil {
 		return activity.SourceProbe{}, fmt.Errorf("probing activity report source: %w", err)

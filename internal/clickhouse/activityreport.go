@@ -236,6 +236,8 @@ func (s *Store) BuildActivityReportArtifacts(
 				for _, parent := range session.ParentSessionIDs {
 					waiting[session.SessionID] = append(waiting[session.SessionID], resolvedLaunchers.Waiting["\x00"+parent]...)
 				}
+				slices.Sort(waiting[session.SessionID])
+				waiting[session.SessionID] = slices.Compact(waiting[session.SessionID])
 			}
 		}
 		resolvedLaunchers.Waiting = waiting

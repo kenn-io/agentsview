@@ -769,26 +769,3 @@ func TestActivityReportSessionPageRefreshesAfterIdentityOnlyChange(t *testing.T)
 	require.NotNil(t, project.Identity,
 		"replacement report must carry refreshed project identity metadata")
 }
-
-func TestActivityReportRefreshesAfterParentLinkOnly(t *testing.T) {
-	te := setup(t)
-	seedActivityReportFixture(t, te)
-	child, err := te.db.GetSession(t.Context(), "d1")
-	require.NoError(t, err)
-	require.NotNil(t, child)
-	child.RelationshipType = "subagent"
-	require.NoError(t, te.db.UpsertSession(t.Context(), *child))
-	path := "/api/v1/activity/report?preset=day&date=" + activityDate + "&timezone=UTC"
-	response := te.get(t, path)
-	assertStatus(t, response, http.StatusOK)
-	report := decode[activity.Report](t, response)
-	child.ParentSessionID = new("d2")
-	require.NoError(t, te.db.UpsertSession(t.Context(), *child))
-	page := te.get(t, "/api/v1/activity/report/"+report.ReportID+"/sessions?limit=1")
-	assertStatus(t, page, http.StatusOK)
-	var refreshed struct {
-		RefreshRequired bool `json:"refresh_required"`
-	}
-	require.NoError(t, json.Unmarshal(page.Body.Bytes(), &refreshed))
-	assert.True(t, refreshed.RefreshRequired)
-}
