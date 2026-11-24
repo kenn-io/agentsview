@@ -1412,17 +1412,19 @@ func (s codexSourceSet) FindSource(
 			continue
 		}
 		for _, root := range s.roots {
-			if source, ok := s.sourceRef(root, path, true); ok {
-				if !req.RequireFreshSource || req.PreferStoredSource {
-					return source, true, nil
-				}
-				return s.canonicalSource(ctx, source)
+			source, ok := s.sourceRef(root, path, true)
+			if !ok {
+				source, ok = s.directPathSource(root, path, true)
 			}
-			if source, ok := s.directPathSource(root, path, true); ok {
-				if !req.RequireFreshSource || req.PreferStoredSource {
+			if ok {
+				if !req.RequireFreshSource || (req.PreferStoredSource && s.agent != AgentCodex) {
 					return source, true, nil
 				}
-				return s.canonicalSource(ctx, source)
+				preferred, found, err := s.canonicalSource(ctx, source)
+				if err != nil || !found || !req.PreferStoredSource || codexSourceRank(preferred).Class != 0 {
+					return preferred, found, err
+				}
+				return source, true, nil
 			}
 		}
 	}
