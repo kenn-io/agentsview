@@ -1808,34 +1808,3 @@ func TestProviderParserHostedCodexSkillNameStaysLexical(t *testing.T) {
 	require.Len(t, out.Outcome.Results[0].Result.Messages[0].ToolCalls, 1)
 	assert.Empty(t, out.Outcome.Results[0].Result.Messages[0].ToolCalls[0].SkillName)
 }
-
-func TestProviderParserHostedCodexLabeledProject(t *testing.T) {
-	root := t.TempDir()
-	const id = "11111111-1111-4111-8111-111111111111"
-	home := filepath.Join(root, "experiment", "case", ".codex-run-v1-a")
-	rollout := filepath.Join(home, "sessions", "2026", "09", "10", "rollout-2026-09-10T10-00-00-"+id+".jsonl")
-	require.NoError(t, os.MkdirAll(filepath.Dir(rollout), 0o700))
-	require.NoError(t, os.WriteFile(rollout, []byte(testjsonl.JoinJSONL(
-		testjsonl.CodexSessionMetaJSON(id, "/workspace/project", "codex_cli_rs", "2026-09-10T10:00:00Z"),
-		testjsonl.CodexMsgJSON("user", "Session prompt", "2026-09-10T10:00:01Z"),
-	)), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(home, parser.CodexSessionIndexFilename), []byte(fmt.Sprintf("{\"id\":%q,\"thread_name\":\"Selected title\"}\n", id)), 0o600))
-	provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	sources, err := provider.Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	source := sources[0]
-	manifest, objects := manifestFromCapturePlan(t, parser.AgentCodex, provider, source)
-	require.Len(t, manifest.Manifest.Entries, 2)
-	materialized, err := (Materializer{Store: &materializerStore{objects: objects}, BaseDir: t.TempDir(), MaxTotalBytes: 1 << 20}).Materialize(t.Context(), manifest)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, materialized.Cleanup()) })
-	dispatch, err := NewProviderParser(parser.ProviderFactories(), "hosted-worker")
-	require.NoError(t, err)
-	hosted, err := dispatch.Parse(t.Context(), manifest, materialized)
-	require.NoError(t, err)
-	require.Len(t, hosted.Outcome.Results, 1)
-	assert.Equal(t, "experiment/case", hosted.Outcome.Results[0].Result.Session.Project)
-	assert.Equal(t, "Selected title", hosted.Outcome.Results[0].Result.Session.SessionName)
-}

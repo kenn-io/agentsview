@@ -9,7 +9,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -225,7 +224,7 @@ func (p *codexProvider) DiscoverRawCaptureSourcesEach(
 		if isS3URI(root) {
 			continue
 		}
-		err := p.sources.discoverEachRoot(ctx, root, false, func(source SourceRef) error {
+		err := p.sources.discoverEachRoot(ctx, root, func(source SourceRef) error {
 			if isCompressedCodexRolloutPath(source.DisplayPath) &&
 				IsRegularFile(codexPlainRolloutPath(source.DisplayPath)) {
 				return nil
@@ -454,8 +453,7 @@ func (p *codexProvider) Fingerprint(
 // parentRoots includes the labeled home that owns a discovered child.
 func (p *codexProvider) parentRoots(path string) []string {
 	for _, root := range p.sources.roots {
-		if CodexSourceLabel(root, path) != "" {
-			sessions := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(path))))
+		if _, sessions := codexLabeledSession(root, path); sessions != "" {
 			return append(slices.Clone(p.sources.roots), sessions)
 		}
 	}
@@ -970,7 +968,7 @@ func (s codexSourceSet) ownsCodexSidecars() bool {
 }
 
 func (s codexSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
-	return s.discover(ctx, func(string) bool { return true })
+	return s.discover(ctx, func(string) bool { return true }, true)
 }
 
 func (s codexSourceSet) DiscoverEach(
@@ -980,7 +978,7 @@ func (s codexSourceSet) DiscoverEach(
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := s.discoverEachRoot(ctx, root, false, yield); err != nil {
+		if err := s.discoverEachRoot(ctx, root, yield); err != nil {
 			return err
 		}
 	}
@@ -990,7 +988,6 @@ func (s codexSourceSet) DiscoverEach(
 func (s codexSourceSet) discoverEachRoot(
 	ctx context.Context,
 	root string,
-	includeLinks bool,
 	yield func(SourceRef) error,
 ) error {
 	if strings.HasPrefix(root, "s3://") {
@@ -1008,18 +1005,11 @@ func (s codexSourceSet) discoverEachRoot(
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if !isCodexSessionFilename(entry.Name()) {
+		if !isCodexSessionFilename(entry.Name()) || !entry.Type().IsRegular() {
 			return nil
 		}
-		// Windows directory entries can omit a symlink's reparse tag.
-		if includeLinks && (runtime.GOOS == "windows" || entry.Type()&os.ModeSymlink != 0) {
-			info, err := os.Stat(path)
-			if err != nil || !info.Mode().IsRegular() {
-				return nil //nolint:nilerr // Skip unavailable or non-regular rollout targets.
-			}
-		} else if !entry.Type().IsRegular() || runtime.GOOS == "windows" && !IsRegularFile(path) {
-			return nil
-		}
+		// ReadDir already classified the entry without following symlinks.
+		// Reuse that result instead of issuing another lstat per rollout.
 		source, ok := s.sourceRef(root, path, false)
 		if !ok {
 			if _, _, supported := CodexSessionPathInfo(root, path); supported {
@@ -1036,6 +1026,7 @@ func (s codexSourceSet) discoverEachRoot(
 func (s codexSourceSet) discover(
 	ctx context.Context,
 	includeRoot func(string) bool,
+	withLabeled bool,
 ) ([]SourceRef, error) {
 	var sources []SourceRef
 	byKey := make(map[string]SourceRef)
@@ -1065,13 +1056,41 @@ func (s codexSourceSet) discover(
 			}
 			continue
 		}
-		if err := s.discoverEachRoot(ctx, root, true, func(source SourceRef) error {
-			if current, ok := byKey[source.Key]; !ok || preferCodexSource(source, current) {
-				byKey[source.Key] = source
+		paths := s.discoverSessionPaths(root)
+		if withLabeled {
+			err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+				if err != nil {
+					return nil
+				}
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if entry.IsDir() && strings.HasPrefix(entry.Name(), ".codex-run-v1-") {
+					paths = append(paths, s.discoverSessionPaths(filepath.Join(path, "sessions"))...)
+					return filepath.SkipDir
+				}
+				return nil
+			})
+			if err != nil && ctx.Err() != nil {
+				return nil, ctx.Err()
 			}
-			return nil
-		}); err != nil && ctx.Err() != nil {
-			return nil, ctx.Err()
+		}
+		for _, path := range paths {
+			info, err := os.Stat(path)
+			if err != nil || !info.Mode().IsRegular() {
+				continue
+			}
+			source, ok := s.sourceRef(root, path, false)
+			if !ok {
+				source, ok = s.directPathSource(root, path, false)
+			}
+			if !ok {
+				continue
+			}
+			if current, ok := byKey[source.Key]; ok && !preferCodexSource(source, current) {
+				continue
+			}
+			byKey[source.Key] = source
 		}
 	}
 	for _, source := range byKey {
@@ -1490,18 +1509,24 @@ func (s codexSourceSet) sourcesForIndexPath(
 	}
 	return s.discover(ctx, func(root string) bool {
 		return slices.Contains(s.metadata.dirs(root), indexDir)
-	})
+	}, false)
 }
 
 func (s codexSourceSet) discoverEachSessions(ctx context.Context, root, sessions string) ([]SourceRef, error) {
 	var sources []SourceRef
-	err := s.discoverEachRoot(ctx, sessions, true, func(source SourceRef) error {
-		if ref, ok := s.sourceRef(root, source.DisplayPath, false); ok {
+	for _, path := range s.discoverSessionPaths(sessions) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		info, err := os.Stat(path)
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		if ref, ok := s.sourceRef(root, path, false); ok {
 			sources = append(sources, ref)
 		}
-		return nil
-	})
-	return sources, err
+	}
+	return sources, nil
 }
 
 func (s codexSourceSet) sourceRef(

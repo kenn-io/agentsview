@@ -93,8 +93,9 @@ func (r *repositoryProjectResolver) name(ctx context.Context, remote string) (re
 		}
 	}
 	base := parser.NormalizeName(path.Base(remote))
-	rows, err := r.tx.QueryContext(ctx, `SELECT DISTINCT project, repository_path, worktree_relationship, recorded_git_remote
-		FROM session_project_identity_snapshots WHERE normalized_remote = ? AND remote_resolution = 'resolved'`, remote)
+	rows, err := r.tx.QueryContext(ctx, `SELECT DISTINCT snap.project, snap.repository_path, snap.worktree_relationship, snap.recorded_git_remote, s.agent, COALESCE(s.file_path, '')
+		FROM session_project_identity_snapshots snap JOIN sessions s ON s.id = snap.session_id
+		WHERE snap.normalized_remote = ? AND snap.remote_resolution = 'resolved'`, remote)
 	if err != nil {
 		return name, err
 	}
@@ -102,10 +103,13 @@ func (r *repositoryProjectResolver) name(ctx context.Context, remote string) (re
 	aliases := map[string]bool{}
 	exact := false
 	for rows.Next() {
-		var project, root, recorded string
+		var project, root, recorded, agent, sourcePath string
 		var relationship export.WorktreeRelationship
-		if err := rows.Scan(&project, &root, &relationship, &recorded); err != nil {
+		if err := rows.Scan(&project, &root, &relationship, &recorded, &agent, &sourcePath); err != nil {
 			return name, err
+		}
+		if codexProjectIsSourceLabel(agent, sourcePath, project) {
+			continue
 		}
 		if recorded != "" {
 			if sourceRemote, ok := export.NormalizeGitRemote(recorded); !ok || sourceRemote != remote {

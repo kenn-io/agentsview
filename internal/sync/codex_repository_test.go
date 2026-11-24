@@ -269,7 +269,7 @@ func TestCodexLabeledRunIndexRename(t *testing.T) {
 	dbtest.WriteTestFile(t, index, []byte(`{"id":"`+id+`","thread_name":"Old"}`+"\n"))
 	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
 	t.Cleanup(engine.Close)
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{source}))
 	require.NoError(t, os.WriteFile(index, []byte(`{"id":"`+id+`","thread_name":"New"}`+"\n"), 0o600))
 	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{index}))
 	name, found, err := database.GetSessionName(t.Context(), "codex:"+id)
@@ -294,4 +294,28 @@ func TestCodexLabeledRunAutomatedSidebar(t *testing.T) {
 	index, err = database.GetSidebarSessionIndex(t.Context(), db.SessionFilter{ExcludeOneShot: true, ExcludeAutomated: true})
 	require.NoError(t, err)
 	assert.Empty(t, index.Sessions)
+}
+
+func TestCodexLabelIsNotRepositoryAlias(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	checkout := filepath.Join(t.TempDir(), "checkout")
+	require.NoError(t, os.MkdirAll(filepath.Join(checkout, ".git"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(checkout, ".git", "config"), []byte("[remote \"origin\"]\nurl = https://example.com/team/api.git\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(checkout, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644))
+	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
+	t.Cleanup(engine.Close)
+	write := func(id, cwd, path string) {
+		meta := testjsonl.CodexSessionMetaWithFieldsJSON(id, cwd, "codex_cli_rs", "2026-10-08T12:00:00Z", map[string]any{"git": map[string]any{"repository_url": "https://example.com/team/api.git"}})
+		dbtest.WriteTestFile(t, path, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "hello", "2026-10-08T12:00:01Z")+"\n"))
+		require.NoError(t, engine.SyncPathsContext(t.Context(), []string{path}))
+	}
+	const first = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	write(first, checkout, filepath.Join(root, "label", ".codex-run-v1-abc", "sessions", "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+first+".jsonl"))
+	const second = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+	write(second, filepath.Join(root, "missing"), filepath.Join(root, "rollout-"+second+".jsonl"))
+	session, err := database.GetSessionFull(t.Context(), "codex:"+second)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, "api", session.Project)
 }

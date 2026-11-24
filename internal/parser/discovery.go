@@ -846,8 +846,11 @@ func CodexSessionPathInfo(root, path string) (CodexLayout, string, bool) {
 		return CodexLayoutUnknown, "", false
 	}
 	parts := strings.Split(rel, sep)
-	if len(parts) >= 6 && strings.HasPrefix(parts[len(parts)-6], ".codex-run-v1-") && parts[len(parts)-5] == "sessions" {
-		parts = parts[len(parts)-4:]
+	if n := len(parts); n >= 6 && parts[n-5] == "sessions" {
+		home := filepath.Join(append([]string{root}, parts[:n-5]...)...)
+		if _, sessions := codexLabeledHome(root, home); sessions != "" {
+			parts = parts[n-4:]
+		}
 	}
 	switch len(parts) {
 	case 1:
@@ -870,28 +873,46 @@ func CodexSessionPathInfo(root, path string) (CodexLayout, string, bool) {
 	}
 }
 
-// CodexSourceLabel returns the label preceding a marked Codex run home.
-func CodexSourceLabel(root, path string) string {
-	if _, _, ok := CodexSessionPathInfo(root, path); !ok {
-		return ""
+// codexLabeledHome identifies a marked home within root.
+func codexLabeledHome(root, home string) (string, string) {
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(home))
+	if err != nil || !filepath.IsLocal(rel) || !strings.HasPrefix(filepath.Base(home), ".codex-run-v1-") {
+		return "", ""
 	}
-	rel, _ := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+	label := filepath.ToSlash(filepath.Dir(rel))
+	return label, filepath.Join(home, "sessions")
+}
+
+func codexLabeledSession(root, path string) (string, string) {
+	if _, _, ok := CodexSessionPathInfo(root, path); !ok {
+		return "", ""
+	}
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+	if err != nil {
+		return "", ""
+	}
 	parts := strings.Split(rel, string(filepath.Separator))
 	n := len(parts)
-	if n < 6 || !strings.HasPrefix(parts[n-6], ".codex-run-v1-") || parts[n-5] != "sessions" {
-		return ""
+	if n < 6 || parts[n-5] != "sessions" {
+		return "", ""
 	}
-	return filepath.ToSlash(filepath.Clean(filepath.Join(parts[:n-6]...)))
+	home := filepath.Join(append([]string{root}, parts[:n-5]...)...)
+	return codexLabeledHome(root, home)
+}
+
+// CodexSourceLabel returns the label preceding a marked Codex run home.
+func CodexSourceLabel(root, path string) string {
+	label, _ := codexLabeledSession(root, path)
+	return label
 }
 
 // CodexLabeledIndexSessions returns the sessions directory for a marked run's index.
 func CodexLabeledIndexSessions(root, indexPath string) string {
-	home := filepath.Dir(indexPath)
-	rel, err := filepath.Rel(root, home)
-	if err != nil || !filepath.IsLocal(rel) || !strings.HasPrefix(filepath.Base(home), ".codex-run-v1-") || filepath.Base(indexPath) != CodexSessionIndexFilename {
+	if filepath.Base(indexPath) != CodexSessionIndexFilename {
 		return ""
 	}
-	return filepath.Join(home, "sessions")
+	_, sessions := codexLabeledHome(root, filepath.Dir(indexPath))
+	return sessions
 }
 
 // walkCodexDayDirs traverses a Codex sessions directory with
