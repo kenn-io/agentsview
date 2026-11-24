@@ -70,7 +70,10 @@ type MirrorDelta struct {
 	Total     int
 	// codexIndexes lists the local paths of Codex session indexes that the
 	// sync will replace or delete.
-	codexIndexes []string
+	codexIndexes []string // sqliteEntries holds the manifest entries of SQLite snapshot targets
+	// (Hermes state.db and friends), captured while the manifest streams so
+	// a changed database can be refreshed with sqlite3_rsync.
+	sqliteEntries []ManifestEntry
 }
 
 // Close removes any temporary files the lists moved to.
