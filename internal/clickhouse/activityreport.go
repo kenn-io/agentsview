@@ -195,7 +195,7 @@ func (s *Store) BuildActivityReportArtifacts(
 	}
 	var memoKey string
 	if !q.Partial {
-		memoKey, err = s.endedActivityReportKey(ctx, f, keyWhere, keyArgs, rangeStartUTC, rangeEndUTC)
+		memoKey, resolvedLaunchers, err = s.endedActivityReportKey(ctx, f, keyWhere, keyArgs, rangeStartUTC, rangeEndUTC)
 		if err != nil {
 			return activity.CandidateArtifacts{}, err
 		}
@@ -223,14 +223,25 @@ func (s *Store) BuildActivityReportArtifacts(
 	for _, id := range ids {
 		selected[id] = true
 	}
-	launchers, _, err := s.activityReportLaunchers(ctx, f, append(slices.Clone(sessions), evidence...), selected)
-	if err != nil {
-		return activity.CandidateArtifacts{}, err
+	if resolvedLaunchers == nil {
+		launchers, _, err := s.activityReportLaunchers(ctx, f, append(slices.Clone(sessions), evidence...), selected)
+		if err != nil {
+			return activity.CandidateArtifacts{}, err
+		}
+		resolvedLaunchers = &launchers
+	} else {
+		// The key resolves one synthetic run per parent; share it among its children.
+		waiting := make(map[string][]string)
+		for _, session := range append(slices.Clone(sessions), evidence...) {
+			if session.IsSubagent && session.ParentSessionID != "" {
+				waiting[session.SessionID] = resolvedLaunchers.Waiting["\x00"+session.ParentSessionID]
+			}
+		}
+		resolvedLaunchers.Waiting = waiting
 	}
-	resolvedLaunchers = &launchers
 	sweepIDs := slices.Clone(ids)
 	for _, session := range evidence {
-		if !selected[session.SessionID] && len(launchers.Waiting[session.SessionID]) > 0 {
+		if !selected[session.SessionID] && len(resolvedLaunchers.Waiting[session.SessionID]) > 0 {
 			sweepIDs = append(sweepIDs, session.SessionID)
 			versions[session.SessionID] = evidenceVersions[session.SessionID]
 		}
@@ -303,7 +314,7 @@ func (s *Store) checkedActivityReport(selection, fingerprint string, onDisk bool
 // usage in the range leaves the key, and the kept report, in place.
 func (s *Store) endedActivityReportKey(
 	ctx context.Context, filter db.AnalyticsFilter, candidateWhere string, candidateArgs []any, lowerBound, upperBound string,
-) (string, error) {
+) (string, *activity.Launchers, error) {
 	// The candidate sessions are named by their push versions, which name
 	// the messages and tool events their pairing reads. Two independent
 	// hash sums and the count identify the set without listing it. The read
@@ -321,7 +332,7 @@ func (s *Store) endedActivityReportKey(
 	}()
 	key, err := s.endedActivityReportRowsKey(ctx, lowerBound, upperBound)
 	if err := errors.Join(err, <-candidatesRead); err != nil || key == "" {
-		return "", err
+		return "", nil, err
 	}
 	runs := make([]activity.SessionMeta, 0, len(parents))
 	for _, id := range parents {
@@ -329,7 +340,7 @@ func (s *Store) endedActivityReportKey(
 	}
 	launchers, versions, err := s.activityReportLaunchers(ctx, filter, runs, nil)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	data := fmt.Appendf(nil, "%s|%s|%d", key, candidates.hash, candidates.count)
 	for _, id := range launchers.Examined {
@@ -340,7 +351,7 @@ func (s *Store) endedActivityReportKey(
 		}
 	}
 	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:]), nil
+	return hex.EncodeToString(sum[:]), &launchers, nil
 }
 
 // endedActivityReportRowsKey identifies everything but the candidate
