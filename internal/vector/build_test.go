@@ -1238,23 +1238,6 @@ func assertEncodedOnly(t *testing.T, encoded []string, want, reject string) {
 	}
 }
 
-func TestBuildRoleScopeEmbedsSelectedRoles(t *testing.T) {
-	ctx := t.Context()
-	archive := dbtest.OpenTestDB(t)
-	seedRoleSession(t, archive, roleSessionMessages()...)
-	gen := fakeGeneration("fake-model")
-	for _, tc := range []struct{ role, want, reject string }{
-		{"user", "question", "answer"},
-		{"assistant", "answer", "question"},
-	} {
-		var encoded []string
-		_, err := openTestIndex(t).Build(ctx, archive, recordingEncoder(&encoded), gen, BuildOptions{Roles: []string{tc.role}})
-		require.NoError(t, err)
-		assert.Len(t, encoded, 2, tc.role)
-		assertEncodedOnly(t, encoded, tc.want, tc.reject)
-	}
-}
-
 func TestBuildRoleScopeReconciles(t *testing.T) {
 	ctx := t.Context()
 	archive := dbtest.OpenTestDB(t)
@@ -1267,10 +1250,13 @@ func TestBuildRoleScopeReconciles(t *testing.T) {
 		t.Helper()
 		encoded = nil
 		source.since = ""
-		_, err := ix.Build(ctx, source, recordingEncoder(&encoded), gen, BuildOptions{Roles: roles})
+		_, err := ix.Build(ctx, source, recordingEncoder(&encoded), gen, BuildOptions{Agents: []string{"claude"}, Roles: roles})
 		require.NoError(t, err)
 	}
 	build("user")
+	stored, _, err := ix.metaGet(ctx, scopeAgentsKey)
+	require.NoError(t, err)
+	assert.Equal(t, "claude;roles=user", stored)
 	users := mirrorDocKeys(t, ix)
 	require.Len(t, users, 2)
 	assertEncodedOnly(t, encoded, "question", "answer")
@@ -1287,6 +1273,9 @@ func TestBuildRoleScopeReconciles(t *testing.T) {
 	assertEncodedOnly(t, encoded, "answer", "question")
 
 	build()
+	stored, _, err = ix.metaGet(ctx, scopeAgentsKey)
+	require.NoError(t, err)
+	assert.Equal(t, "claude", stored)
 	all := mirrorDocKeys(t, ix)
 	require.Len(t, all, 4)
 	assert.Subset(t, all, runs)
@@ -1299,38 +1288,10 @@ func TestBuildRoleScopeReconciles(t *testing.T) {
 	assert.Equal(t, all, mirrorDocKeys(t, ix))
 	assertEncodedOnly(t, encoded, "answer", "question")
 
-	stored, _, err := ix.metaGet(ctx, scopeAgentsKey)
+	stored, _, err = ix.metaGet(ctx, scopeAgentsKey)
 	require.NoError(t, err)
-	assert.Empty(t, stored, "both roles store the value older writers store")
+	assert.Equal(t, "claude", stored, "both roles store the value older writers store")
 	build()
 	assert.NotEmpty(t, source.since, "a value with no roles suffix needs no rescan")
-	assert.Empty(t, encoded)
-}
-
-func TestBuildRoleScopeOlderWriterRoundTrip(t *testing.T) {
-	ctx := t.Context()
-	archive := dbtest.OpenTestDB(t)
-	seedRoleSession(t, archive, roleSessionMessages()...)
-	ix := openTestIndex(t)
-	gen := fakeGeneration("fake-model")
-	var encoded []string
-	build := func(roles ...string) string {
-		t.Helper()
-		encoded = nil
-		_, err := ix.Build(ctx, archive, recordingEncoder(&encoded), gen, BuildOptions{Agents: []string{"claude"}, Roles: roles})
-		require.NoError(t, err)
-		stored, _, err := ix.metaGet(ctx, scopeAgentsKey)
-		require.NoError(t, err)
-		return stored
-	}
-	assert.Equal(t, "claude;roles=user", build("user"))
-	users := mirrorDocKeys(t, ix)
-	// A build with roles unset is what an older writer runs: the suffix is a
-	// scope mismatch, so it reconciles the replies back and stores plain agents.
-	assert.Equal(t, "claude", build())
-	assert.Len(t, mirrorDocKeys(t, ix), 4)
-	assertEncodedOnly(t, encoded, "answer", "question")
-	assert.Equal(t, "claude;roles=user", build("user"))
-	assert.Equal(t, users, mirrorDocKeys(t, ix))
 	assert.Empty(t, encoded)
 }

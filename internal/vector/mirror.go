@@ -227,8 +227,7 @@ func (ix *Index) Refresh(
 }
 
 func (ix *Index) refresh(
-	ctx context.Context, src UnitSource, full, includeAutomated bool,
-	agents, roles []string, seed *reuseGeneration,
+	ctx context.Context, src UnitSource, full, includeAutomated bool, agents, roles []string, seed *reuseGeneration,
 ) (RefreshStats, error) {
 	if err := ix.requireWritable(); err != nil {
 		return RefreshStats{}, err

@@ -333,11 +333,11 @@ Versions without `roles` ignore the setting and embed both roles. Only the
 local message store applies either list; Recall and hosted PostgreSQL embeddings
 ignore them.
 
-Changing any of these values triggers a full mirror *reconciliation*. It
-inserts or removes rows to match the new scope, while unchanged in-scope
-documents keep their existing stamps. `include_automated` can change in config
-or via the one-off `--include-automated` flag; `agents` and `roles` come only
-from config.
+Changing any of these values forces a full mirror *reconciliation*, not a re-embed:
+it inserts or removes rows to match the new scope, but documents that stay in
+scope and are unchanged keep their existing stamps. `include_automated` can
+change in config or via the one-off `--include-automated` flag; `agents` and `roles` come
+only from config.
 
 The run cap is stored as `run_max_runes` in the store's metadata. A missing or
 changed cap forces one full reconciliation, including idle sessions older than

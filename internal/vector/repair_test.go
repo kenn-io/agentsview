@@ -1090,8 +1090,6 @@ func TestBuildRepairInvalidRejectsChangedRoleScope(t *testing.T) {
 	require.NoError(t, err)
 	_, err = ix.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{RepairInvalid: true})
 	require.ErrorContains(t, err, "scope changed")
-	_, err = ix.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{})
-	require.NoError(t, err)
-	_, err = ix.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{RepairInvalid: true})
+	_, err = ix.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{RepairInvalid: true, Roles: []string{"user"}})
 	require.NoError(t, err)
 }

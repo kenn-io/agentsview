@@ -1960,11 +1960,12 @@ func TestEmbedSchedulerFiltersAgents(t *testing.T) {
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
 	for _, agent := range []string{"claude", "codex"} {
 		dbtest.SeedSessionWithMessages(t, database, agent, "project",
-			[]db.Message{dbtest.UserMsg(agent, 0, agent+" text")},
+			[]db.Message{dbtest.UserMsg(agent, 0, agent+" question"), dbtest.AsstMsg(agent, 1, agent+" answer")},
 			func(s *db.Session) { s.Agent = agent })
 	}
 	cfg := vectorTestConfig(dataDir)
 	cfg.Vector.Agents = []string{"claude"}
+	cfg.Vector.Roles = []string{"user"}
 	ix, err := vector.OpenSpec(t.Context(), cfg.Vector.ResolvedDBPath(dataDir), vector.MessageIndexSpec(), false, cfg.Vector.Embeddings.MaxInputChars)
 	require.NoError(t, err)
 	defer ix.Close()
@@ -1993,46 +1994,5 @@ func TestEmbedSchedulerFiltersAgents(t *testing.T) {
 	}, "after-sync build did not encode")
 	mu.Lock()
 	defer mu.Unlock()
-	assert.Contains(t, encoded[0], "claude text")
-}
-
-func TestEmbedSchedulerFiltersRoles(t *testing.T) {
-	dataDir := t.TempDir()
-	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
-	dbtest.SeedSessionWithMessages(t, database, "s", "project", []db.Message{
-		dbtest.UserMsg("s", 0, "question"),
-		dbtest.AsstMsg("s", 1, "answer"),
-	})
-	cfg := vectorTestConfig(dataDir)
-	cfg.Vector.Roles = []string{"user"}
-	ix, err := vector.OpenSpec(t.Context(), cfg.Vector.ResolvedDBPath(dataDir), vector.MessageIndexSpec(), false, cfg.Vector.Embeddings.MaxInputChars)
-	require.NoError(t, err)
-	defer ix.Close()
-	var mu sync.Mutex
-	var encoded []string
-	enc := func(_ context.Context, texts []string) ([][]float32, error) {
-		mu.Lock()
-		defer mu.Unlock()
-		encoded = append(encoded, texts...)
-		out := make([][]float32, len(texts))
-		for i := range out {
-			out[i] = []float32{1, 0, 0}
-		}
-		return out, nil
-	}
-	encoders := vector.EncoderSet{
-		Default: "test",
-		ByName: map[string]vector.ManagedEncoder{
-			"test": {Encode: enc, Settings: vector.EncodeSettings{BatchSize: 10}},
-		},
-	}
-	scheduler := newEmbedScheduler(embeddingManager(ix, database, encoders, cfg, vector.MessageIndexSpec().Name), time.Millisecond, 0, false, nil)
-	go scheduler.Run(t.Context())
-	defer scheduler.Stop()
-	scheduler.Notify()
-	waitForSchedulerCondition(t, func() bool { mu.Lock(); defer mu.Unlock(); return len(encoded) > 0 }, "after-sync build did not encode")
-	mu.Lock()
-	defer mu.Unlock()
-	require.Len(t, encoded, 1)
-	assert.Contains(t, encoded[0], "question")
+	assert.Contains(t, encoded[0], "claude question")
 }

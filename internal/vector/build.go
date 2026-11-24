@@ -159,8 +159,7 @@ func (ix *Index) Build(
 	agents := normalizedAgents(o.Agents)
 	roles := normalizedRoles(o.Roles)
 	scopeAgents := scopeValue(agents, roles)
-	scopeChanged := !hasScope || storedScope != o.IncludeAutomated ||
-		storedAgents != scopeAgents
+	scopeChanged := !hasScope || storedScope != o.IncludeAutomated || storedAgents != scopeAgents
 	corpusFingerprint := gen.Params[CorpusFingerprintParam]
 	storedCorpusFingerprint, hasCorpusFingerprint, err := ix.metaGet(
 		ctx, corpusFingerprintMetaKey,
@@ -180,8 +179,7 @@ func (ix *Index) Build(
 		}
 		capChanged = !hasCap || storedCap != runCap
 	}
-	full := o.FullRebuild || o.Backstop || firstEver || scopeChanged ||
-		corpusChanged || capChanged
+	full := o.FullRebuild || o.Backstop || firstEver || scopeChanged || corpusChanged || capChanged
 	if scopeChanged {
 		// A failed reconciliation must be retried even if the old scope returns.
 		if err := ix.metaDelete(ctx, scopeIncludeAutomatedKey); err != nil {
