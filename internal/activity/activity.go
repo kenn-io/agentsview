@@ -34,17 +34,17 @@ type Params struct {
 
 // SessionMeta is one candidate session whose window intersects the day.
 type SessionMeta struct {
-	SessionID       string
-	Title           string
-	Project         string
-	ProjectKey      string // optional canonical key for joint export grouping
-	Agent           string
-	Machine         string
-	StartedAt       string // RFC3339 or ""
-	EndedAt         string // RFC3339 or ""
-	IsAutomated     bool   // automation flag, independent of delegation
-	IsSubagent      bool   // delegation takes precedence over automation
-	ParentSessionID string
+	SessionID        string
+	Title            string
+	Project          string
+	ProjectKey       string // optional canonical key for joint export grouping
+	Agent            string
+	Machine          string
+	StartedAt        string // RFC3339 or ""
+	EndedAt          string // RFC3339 or ""
+	IsAutomated      bool   // automation flag, independent of delegation
+	IsSubagent       bool   // delegation takes precedence over automation
+	ParentSessionIDs []string
 }
 
 // ActivityEvent is one timestamped message (backends send only timestamped rows).

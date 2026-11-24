@@ -103,8 +103,12 @@ func (b activityReportBackend) ActivityReportLaunchers(ctx context.Context, sess
 		var result []activity.Launcher
 		for rows.Next() {
 			var row activity.Launcher
-			if err := rows.Scan(&row.ID, &row.IsAutomated, &row.IsSubagent, &row.ParentSessionID, &row.MatchesFilter); err != nil {
+			var parent string
+			if err := rows.Scan(&row.ID, &row.IsAutomated, &row.IsSubagent, &parent, &row.MatchesFilter); err != nil {
 				return nil, err
+			}
+			if parent != "" {
+				row.ParentSessionIDs = []string{parent}
 			}
 			result = append(result, row)
 		}
@@ -655,12 +659,16 @@ func (db *DB) activityReportSessionsFromWhere(ctx context.Context, q sessionExpo
 	var ids []string
 	for rows.Next() {
 		var s activity.SessionMeta
+		var parent string
 		if err := rows.Scan(
 			&s.SessionID, &s.Title, &s.Project, &s.Agent,
-			&s.Machine, &s.StartedAt, &s.EndedAt, &s.IsAutomated, &s.IsSubagent, &s.ParentSessionID,
+			&s.Machine, &s.StartedAt, &s.EndedAt, &s.IsAutomated, &s.IsSubagent, &parent,
 		); err != nil {
 			return nil, nil, fmt.Errorf(
 				"scanning activity report session: %w", err)
+		}
+		if parent != "" {
+			s.ParentSessionIDs = []string{parent}
 		}
 		sessions = append(sessions, s)
 		ids = append(ids, s.SessionID)

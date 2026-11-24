@@ -98,11 +98,15 @@ func (s *Store) activityReportLaunchers(ctx context.Context, filter db.Analytics
 		var result []activity.Launcher
 		for rows.Next() {
 			var row activity.Launcher
+			var parent string
 			var version uint64
-			if err := rows.Scan(&row.ID, &row.IsAutomated, &row.IsSubagent, &row.ParentSessionID, &row.MatchesFilter, &version); err != nil {
+			if err := rows.Scan(&row.ID, &row.IsAutomated, &row.IsSubagent, &parent, &row.MatchesFilter, &version); err != nil {
 				return nil, err
 			}
 			versions[row.ID] = version
+			if parent != "" {
+				row.ParentSessionIDs = []string{parent}
+			}
 			result = append(result, row)
 		}
 		return result, rows.Err()
@@ -228,8 +232,10 @@ func (s *Store) BuildActivityReportArtifacts(
 		// The key resolves one synthetic run per parent; share it among its children.
 		waiting := make(map[string][]string)
 		for _, session := range append(slices.Clone(sessions), evidence...) {
-			if session.IsSubagent && session.ParentSessionID != "" {
-				waiting[session.SessionID] = resolvedLaunchers.Waiting["\x00"+session.ParentSessionID]
+			if session.IsSubagent {
+				for _, parent := range session.ParentSessionIDs {
+					waiting[session.SessionID] = append(waiting[session.SessionID], resolvedLaunchers.Waiting["\x00"+parent]...)
+				}
 			}
 		}
 		resolvedLaunchers.Waiting = waiting
@@ -331,7 +337,7 @@ func (s *Store) endedActivityReportKey(
 	}
 	runs := make([]activity.SessionMeta, 0, len(parents))
 	for _, id := range parents {
-		runs = append(runs, activity.SessionMeta{SessionID: "\x00" + id, IsSubagent: true, ParentSessionID: id})
+		runs = append(runs, activity.SessionMeta{SessionID: "\x00" + id, IsSubagent: true, ParentSessionIDs: []string{id}})
 	}
 	launchers, versions, err := s.activityReportLaunchers(ctx, filter, runs, nil)
 	if err != nil {
@@ -500,13 +506,17 @@ func (s *Store) activityReportSessions(
 	for rows.Next() {
 		var m activity.SessionMeta
 		var startedAt, endedAt any
+		var parent string
 		var version uint64
 		if err := rows.Scan(
 			&m.SessionID, &m.Title, &m.Project, &m.Agent,
-			&m.Machine, &startedAt, &endedAt, &m.IsAutomated, &m.IsSubagent, &m.ParentSessionID, &version,
+			&m.Machine, &startedAt, &endedAt, &m.IsAutomated, &m.IsSubagent, &parent, &version,
 		); err != nil {
 			return nil, nil, nil, fmt.Errorf(
 				"scanning clickhouse activity report session: %w", err)
+		}
+		if parent != "" {
+			m.ParentSessionIDs = []string{parent}
 		}
 		m.StartedAt = formatDBTime(startedAt)
 		m.EndedAt = formatDBTime(endedAt)

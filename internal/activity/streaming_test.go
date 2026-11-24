@@ -307,8 +307,8 @@ func TestWaitingLauncherAfterOwnInterval(t *testing.T) {
 			p.Bucket = BucketSpec{Unit: BucketMinute, NominalSeconds: 300}
 			p.Waiting = map[string][]string{"child": {"parent"}, "child2": {"parent"}}
 			sessions := []SessionMeta{
-				{SessionID: "child", IsSubagent: true, ParentSessionID: "parent"},
-				{SessionID: "child2", IsSubagent: true, ParentSessionID: "parent"},
+				{SessionID: "child", IsSubagent: true, ParentSessionIDs: []string{"parent"}},
+				{SessionID: "child2", IsSubagent: true, ParentSessionIDs: []string{"parent"}},
 			}
 			candidates := []IntervalCandidate{
 				{SessionID: "child", Start: mustStart(t, "2026-06-16T10:01:00Z"), End: mustStart(t, "2026-06-16T10:09:00Z")},

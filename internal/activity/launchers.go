@@ -8,11 +8,11 @@ import (
 
 // Launcher describes an ancestor and whether it passes the report filters.
 type Launcher struct {
-	ID              string
-	IsAutomated     bool
-	IsSubagent      bool
-	ParentSessionID string
-	MatchesFilter   bool
+	ID               string
+	IsAutomated      bool
+	IsSubagent       bool
+	ParentSessionIDs []string
+	MatchesFilter    bool
 }
 
 type Launchers struct {
@@ -25,9 +25,9 @@ func ResolveLaunchers(ctx context.Context, runs []SessionMeta, selected map[stri
 	rows := make(map[string]Launcher, len(runs))
 	var pending []string
 	for _, run := range runs {
-		rows[run.SessionID] = Launcher{ID: run.SessionID, IsAutomated: run.IsAutomated, IsSubagent: run.IsSubagent, ParentSessionID: run.ParentSessionID, MatchesFilter: selected[run.SessionID]}
-		if run.IsSubagent && run.ParentSessionID != "" {
-			pending = append(pending, run.ParentSessionID)
+		rows[run.SessionID] = Launcher{ID: run.SessionID, IsAutomated: run.IsAutomated, IsSubagent: run.IsSubagent, ParentSessionIDs: run.ParentSessionIDs, MatchesFilter: selected[run.SessionID]}
+		if run.IsSubagent {
+			pending = append(pending, run.ParentSessionIDs...)
 		}
 	}
 	examined := make(map[string]struct{})
@@ -48,7 +48,7 @@ func ResolveLaunchers(ctx context.Context, runs []SessionMeta, selected map[stri
 		for _, id := range ids {
 			if row, ok := rows[id]; ok {
 				if row.IsSubagent {
-					pending = append(pending, row.ParentSessionID)
+					pending = append(pending, row.ParentSessionIDs...)
 				}
 			} else {
 				missing = append(missing, id)
@@ -64,26 +64,33 @@ func ResolveLaunchers(ctx context.Context, runs []SessionMeta, selected map[stri
 		for _, row := range loaded {
 			rows[row.ID] = row
 			if row.IsSubagent {
-				pending = append(pending, row.ParentSessionID)
+				pending = append(pending, row.ParentSessionIDs...)
 			}
 		}
 	}
 	result := Launchers{Waiting: make(map[string][]string), Examined: slices.Sorted(maps.Keys(examined))}
 	for _, run := range runs {
-		current := rows[run.SessionID]
-		seen := map[string]bool{run.SessionID: true}
-		for current.IsSubagent && current.ParentSessionID != "" && !seen[current.ParentSessionID] {
-			id := current.ParentSessionID
-			seen[id] = true
-			var ok bool
-			current, ok = rows[id]
-			if !ok {
-				break
+		pending := []string{run.SessionID}
+		seen := map[string]bool{}
+		for len(pending) > 0 {
+			id := pending[len(pending)-1]
+			pending = pending[:len(pending)-1]
+			if seen[id] {
+				continue
 			}
-			if current.MatchesFilter && !current.IsSubagent && !current.IsAutomated {
+			seen[id] = true
+			current, ok := rows[id]
+			if !ok {
+				continue
+			}
+			if id != run.SessionID && current.MatchesFilter && !current.IsSubagent && !current.IsAutomated {
 				result.Waiting[run.SessionID] = append(result.Waiting[run.SessionID], id)
 			}
+			if current.IsSubagent {
+				pending = append(pending, current.ParentSessionIDs...)
+			}
 		}
+		slices.Sort(result.Waiting[run.SessionID])
 	}
 	return result, nil
 }
