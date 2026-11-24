@@ -560,6 +560,9 @@ func exportLoadedSessionToStore(
 		version = manifestPRLinksVersion
 	}
 	if wirePlanUsage != nil || wireCoverage != nil {
+		version = manifestPlanUsageVersion
+	}
+	if slices.ContainsFunc(messages, messageHasToolPRLinks) {
 		version = manifestFormatVersion
 	}
 	m := manifest{
@@ -647,9 +650,9 @@ func exportMessageSegmentsToStore(
 	var hasher hash.Hash
 	var segmentBytes int64
 	// versionOffsets locates each record's version digit in the spool so a
-	// segment can move from v4 to v5 once a record carries dialogue_text.
+	// segment can move from v4 to the version required by its records.
 	var versionOffsets []int64
-	segmentHasDialogue := false
+	segmentVersion := messageSegmentPreDialogueVersion
 	segmentMessages := 0
 	segmentNested := nestedCollectionCounts{}
 	defer func() {
@@ -670,7 +673,7 @@ func exportMessageSegmentsToStore(
 		hasher = sha256.New()
 		segmentBytes = 0
 		versionOffsets = versionOffsets[:0]
-		segmentHasDialogue = false
+		segmentVersion = messageSegmentPreDialogueVersion
 		segmentMessages = 0
 		segmentNested = nestedCollectionCounts{}
 		return nil
@@ -681,8 +684,8 @@ func exportMessageSegmentsToStore(
 				"manifest segment reference limit exceeded for %s: limit %d",
 				sessionID, limits.manifestSegments)
 		}
-		if segmentHasDialogue {
-			version := []byte(strconv.Itoa(messageSegmentFormatVersion))
+		if segmentVersion > messageSegmentPreDialogueVersion {
+			version := []byte(strconv.Itoa(segmentVersion))
 			for _, offset := range versionOffsets {
 				if _, err := spool.WriteAt(version, offset); err != nil {
 					return fmt.Errorf("setting artifact segment version: %w", err)
@@ -781,7 +784,12 @@ func exportMessageSegmentsToStore(
 			)
 		}
 		versionOffsets = append(versionOffsets, segmentBytes+int64(len(data)-len("}\n")-1))
-		segmentHasDialogue = segmentHasDialogue || message.DialogueText != nil
+		if message.DialogueText != nil && segmentVersion < messageSegmentDialogueVersion {
+			segmentVersion = messageSegmentDialogueVersion
+		}
+		if messageHasToolPRLinks(message) {
+			segmentVersion = messageSegmentFormatVersion
+		}
 		if _, err := io.MultiWriter(spool, hasher).Write(data); err != nil {
 			return nil, fmt.Errorf("writing artifact segment spool: %w", err)
 		}

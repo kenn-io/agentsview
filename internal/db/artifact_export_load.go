@@ -8,6 +8,8 @@ import (
 	"math"
 	"sort"
 	"strings"
+
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 // ErrArtifactExportLimit identifies a deterministic session-shape violation
@@ -190,7 +192,7 @@ func attachArtifactNestedCollectionsTx(
 		SELECT id, message_id, session_id, tool_name, category,
 			tool_use_id, input_json, skill_name,
 			result_content_length, result_content, subagent_session_id,
-			file_path, call_index
+			file_path, call_index, COALESCE(pr_links, ''), COALESCE(pr_context, '')
 		FROM tool_calls
 		WHERE session_id = ?
 		LIMIT ?`, sessionID, limits.SessionToolCalls+1)
@@ -211,7 +213,7 @@ func attachArtifactNestedCollectionsTx(
 			&row.call.ToolName, &row.call.Category,
 			&toolUseID, &inputJSON, &skillName,
 			&resultLen, &resultContent, &subagentSessionID,
-			&filePath, &callIndex,
+			&filePath, &callIndex, &row.call.PRLinks, &row.call.PRContext,
 		); err != nil {
 			_ = rows.Close()
 			return fmt.Errorf("scanning bounded artifact tool call: %w", err)
@@ -257,14 +259,19 @@ func attachArtifactNestedCollectionsTx(
 	}
 	sort.Slice(toolCalls, func(i, j int) bool {
 		if toolCalls[i].call.MessageID != toolCalls[j].call.MessageID {
-			return toolCalls[i].call.MessageID < toolCalls[j].call.MessageID
+			return messageByID[toolCalls[i].call.MessageID] < messageByID[toolCalls[j].call.MessageID]
 		}
 		if toolCalls[i].call.CallIndex != toolCalls[j].call.CallIndex {
 			return toolCalls[i].call.CallIndex < toolCalls[j].call.CallIndex
 		}
 		return toolCalls[i].rowID < toolCalls[j].rowID
 	})
+	var shared sharedPRContext
 	for _, row := range toolCalls {
+		change, _ := decodePRContext(row.call.PRContext)
+		links, _ := parser.ResolveRetainedPRLinks(DecodePRLinks(row.call.PRLinks), "", false, shared.repository || change.repository)
+		row.call.PRLinks = EncodePRLinks(links)
+		shared.add(change.directory, change.repository)
 		if messageIndex, ok := messageByID[row.call.MessageID]; ok {
 			messages[messageIndex].ToolCalls = append(
 				messages[messageIndex].ToolCalls, row.call,

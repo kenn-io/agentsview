@@ -42,20 +42,24 @@ const (
 	// integer-microdollar cost objects. Manifest v3 adds the optional
 	// session_kind provenance field. Manifest v4 adds the optional
 	// provider_id billing field on usage events. Manifest v5 adds session group_key,
-	// v6 adds session pr_links, and v7 adds plan_usage and capture_coverage.
+	// v6 adds session pr_links, v7 adds plan_usage and capture_coverage,
+	// and v8 references segments with retained tool-call PR links.
 	// Older manifests decode with missing fields empty. Export writes the
 	// lowest version that holds the session's fields.
 	manifestPRLinksVersion   = 6
-	manifestFormatVersion    = 7
+	manifestPlanUsageVersion = 7
+	manifestFormatVersion    = 8
 	manifestMinDecodeVersion = 2
 	// Segment v2 adds the optional prompt_source provenance field on
 	// message records. Segment v3 adds the optional provider_id billing
 	// field. Segment v4 adds reasoning_effort, and v5 adds dialogue_text
-	// and ranges that reconstruct it from content.
+	// and ranges that reconstruct it from content. Segment v6 adds retained
+	// tool-call PR links.
 	// Earlier segments still decode with missing fields empty. Export writes
 	// the lowest version that holds every record in the segment.
 	messageSegmentPreDialogueVersion = 4
-	messageSegmentFormatVersion      = 5
+	messageSegmentDialogueVersion    = 5
+	messageSegmentFormatVersion      = 6
 	messageSegmentMinDecodeVersion   = 1
 	metadataEventFormatVersion       = 1
 )
@@ -258,6 +262,7 @@ type segmentToolCall struct {
 	Category            string               `json:"category,omitempty"`
 	ToolUseID           string               `json:"tool_use_id,omitempty"`
 	InputJSON           string               `json:"input_json,omitempty"`
+	PRLinks             []db.PRLink          `json:"pr_links,omitempty"`
 	FilePath            string               `json:"file_path,omitempty"`
 	SkillName           string               `json:"skill_name,omitempty"`
 	ResultContentLength int                  `json:"result_content_length,omitempty"`
@@ -322,6 +327,9 @@ func ValidateRawSource(raw *RawSourceRef) error {
 func encodeSegment(msgs []db.Message) ([]byte, error) {
 	version := messageSegmentPreDialogueVersion
 	if slices.ContainsFunc(msgs, func(msg db.Message) bool { return msg.DialogueText != nil }) {
+		version = messageSegmentDialogueVersion
+	}
+	if slices.ContainsFunc(msgs, messageHasToolPRLinks) {
 		version = messageSegmentFormatVersion
 	}
 	var buf bytes.Buffer
@@ -335,6 +343,10 @@ func encodeSegment(msgs []db.Message) ([]byte, error) {
 		buf.Write(data)
 	}
 	return buf.Bytes(), nil
+}
+
+func messageHasToolPRLinks(msg db.Message) bool {
+	return slices.ContainsFunc(msg.ToolCalls, func(call db.ToolCall) bool { return len(db.DecodePRLinks(call.PRLinks)) > 0 })
 }
 
 // Limit range overhead and fall back to literal dialogue for fragmented text.
@@ -415,6 +427,7 @@ func segmentMessageFromDB(msg db.Message) segmentMessage {
 				Category:            call.Category,
 				ToolUseID:           call.ToolUseID,
 				InputJSON:           call.InputJSON,
+				PRLinks:             db.DecodePRLinks(call.PRLinks),
 				FilePath:            call.FilePath,
 				SkillName:           call.SkillName,
 				ResultContentLength: call.ResultContentLength,

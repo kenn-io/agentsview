@@ -2229,6 +2229,7 @@ func TestExportRoundTripsSessionQualitySignals(t *testing.T) {
 func TestExportMessageSegmentVersions(t *testing.T) {
 	plain := db.Message{Role: "user", Content: "ordinary"}
 	prompt := db.Message{Ordinal: 1, Role: "user", Content: "prompt", DialogueText: new("prompt")}
+	linked := db.Message{Ordinal: 2, Role: "assistant", ToolCalls: []db.ToolCall{{PRLinks: db.EncodePRLinks([]db.PRLink{{URL: "https://github.com/example/repo/pull/5", Host: "github.com", Repository: "example/repo", Number: 5}})}}}
 	for _, tc := range []struct {
 		name            string
 		messages        []db.Message
@@ -2247,6 +2248,12 @@ func TestExportMessageSegmentVersions(t *testing.T) {
 			messages: []db.Message{plain, prompt},
 			want:     [][]db.Message{{plain, prompt}},
 			versions: []string{`"v":5`},
+		},
+		{
+			name:     "retained links raise every record to v6",
+			messages: []db.Message{prompt, linked},
+			want:     [][]db.Message{{prompt, linked}},
+			versions: []string{`"v":6`},
 		},
 		{
 			name:            "version follows each segment",

@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 func decodeManifestWithLimits(data []byte, limits artifactLimits) (manifest, error) {
@@ -184,7 +185,7 @@ func decodePreflightedSegment(preflight segmentPreflight) ([]db.Message, error) 
 			return nil, fmt.Errorf("decoding message segment: %w", err)
 		}
 		if len(record.DialogueRanges) > 0 {
-			if record.Version < messageSegmentFormatVersion || len(record.DialogueRanges) > maxDialogueRanges || record.DialogueText != nil || record.DialogueIsContent {
+			if record.Version < messageSegmentDialogueVersion || len(record.DialogueRanges) > maxDialogueRanges || record.DialogueText != nil || record.DialogueIsContent {
 				return nil, errors.New("invalid dialogue ranges")
 			}
 			var text strings.Builder
@@ -404,11 +405,18 @@ func (m segmentMessage) dbMessage() db.Message {
 	if len(m.ToolCalls) > 0 {
 		msg.ToolCalls = make([]db.ToolCall, len(m.ToolCalls))
 		for i, call := range m.ToolCalls {
+			var links []db.PRLink
+			for _, link := range call.PRLinks {
+				if normalized, ok := parser.NewPRLink(link.URL, link.Repository, link.Number); ok {
+					links = append(links, normalized)
+				}
+			}
 			msg.ToolCalls[i] = db.ToolCall{
 				ToolName:            call.ToolName,
 				Category:            call.Category,
 				ToolUseID:           call.ToolUseID,
 				InputJSON:           call.InputJSON,
+				PRLinks:             db.EncodePRLinks(parser.CombinePRLinks(links)),
 				FilePath:            call.FilePath,
 				SkillName:           call.SkillName,
 				ResultContentLength: call.ResultContentLength,
