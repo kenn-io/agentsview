@@ -2443,6 +2443,59 @@ func TestCodexLabeledRunOverlappingRootsAndLookup(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, outcome.Results, 1)
 		assert.Equal(t, "team/case", outcome.Results[0].Result.Session.Project)
+		plan, supported, err := ResolveRawCapturePlan(t.Context(), provider, found)
+		require.NoError(t, err)
+		require.True(t, supported)
+		assert.Equal(t, root, plan.ConfiguredRoot)
+		assert.Equal(t, root, plan.CaptureRoot)
+		materialized := t.TempDir()
+		for _, entry := range plan.Entries {
+			data, err := os.ReadFile(entry.LocalPath)
+			require.NoError(t, err)
+			dest := filepath.Join(materialized, filepath.FromSlash(entry.Path))
+			require.NoError(t, os.MkdirAll(filepath.Dir(dest), 0o755))
+			require.NoError(t, os.WriteFile(dest, data, 0o644))
+		}
+		hosted, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{materialized}})
+		require.True(t, ok)
+		sources, err := hosted.Discover(t.Context())
+		require.NoError(t, err)
+		require.Len(t, sources, 1)
+		parsed, err := hosted.Parse(t.Context(), ParseRequest{Source: sources[0]})
+		require.NoError(t, err)
+		require.Len(t, parsed.Results, 1)
+		assert.Equal(t, "team/case", parsed.Results[0].Result.Session.Project)
+	}
+}
+
+func TestCodexLabeledAndOrdinaryNewestCopy(t *testing.T) {
+	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
+	root := t.TempDir()
+	ordinary := filepath.Join(root, "ordinary")
+	logs := filepath.Join(root, "logs")
+	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", tsEarly)
+	content := testjsonl.JoinJSONL(meta, testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1))
+	paths := []string{
+		writeCodexProviderSessionContent(t, ordinary, id, content),
+		writeCodexProviderSessionContent(t, filepath.Join(logs, "team", "case", ".codex-run-v1-abc", "sessions"), id, content),
+	}
+	for _, roots := range [][]string{{ordinary, logs}, {logs, ordinary}} {
+		provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: roots})
+		require.True(t, ok)
+		for i, path := range paths {
+			newer := time.Now().Add(time.Duration(i+1) * time.Hour)
+			older := newer.Add(-time.Hour)
+			require.NoError(t, os.Chtimes(paths[1-i], older, older))
+			require.NoError(t, os.Chtimes(path, newer, newer))
+			sources, err := provider.Discover(t.Context())
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
+			assert.Equal(t, path, sources[0].DisplayPath)
+			found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: id})
+			require.NoError(t, err)
+			require.True(t, ok)
+			assert.Equal(t, path, found.DisplayPath)
+		}
 	}
 }
 

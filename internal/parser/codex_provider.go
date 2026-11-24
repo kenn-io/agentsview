@@ -475,9 +475,13 @@ func (p *codexProvider) PlanRawCapture(
 	if !ok || src.Root == "" || src.Path == "" || isS3URI(src.Root) {
 		return RawCapturePlan{}, invalidRawCapturePlan("codex source is not a local discovered transcript")
 	}
-	captureRoot := filepath.Clean(src.Root)
+	configuredRoot := filepath.Clean(src.Root)
+	if root, _ := codexLabelRoot(p.sources.roots, src.Path); root != "" {
+		configuredRoot = filepath.Clean(root)
+	}
+	captureRoot := configuredRoot
 	indexPath := codexSessionIndexPath(src.Path)
-	if indexPath != "" && CodexSourceLabel(src.Root, src.Path) == "" {
+	if indexPath != "" && CodexSourceLabelForRoots(p.sources.roots, src.Path) == "" {
 		// The provider reads this named sibling as session metadata, so raw
 		// capture widens only far enough to preserve the same parse inputs.
 		captureRoot = filepath.Dir(indexPath)
@@ -557,7 +561,7 @@ func (p *codexProvider) PlanRawCapture(
 			if i > 0 {
 				logical = fmt.Sprintf("alias-homes/%d/%s", i, CodexSessionIndexFilename)
 			}
-			if (p.Config.StableSourceSnapshots || i == 0 && CodexSourceLabel(src.Root, src.Path) != "") &&
+			if (p.Config.StableSourceSnapshots || i == 0 && CodexSourceLabelForRoots(p.sources.roots, src.Path) != "") &&
 				rawCapturePathWithin(captureRoot, candidate) {
 				// Materialized aliases already have custody paths. Keep their
 				// original ordinals even when missing indexes left gaps.
@@ -586,7 +590,7 @@ func (p *codexProvider) PlanRawCapture(
 		}
 	}
 	return RawCapturePlan{
-		ConfiguredRoot: src.Root,
+		ConfiguredRoot: configuredRoot,
 		CaptureRoot:    captureRoot,
 		SourceKey:      source.Key,
 		Entries:        entries,
@@ -1421,27 +1425,7 @@ func (s codexSourceSet) FindSource(
 	if req.RawSessionID == "" {
 		return SourceRef{}, false, nil
 	}
-	for _, root := range s.roots {
-		path := s.findSourceFile(root, req.RawSessionID)
-		if path == "" {
-			continue
-		}
-		if source, ok := s.sourceRef(root, path, true); ok {
-			return s.canonicalSource(ctx, source)
-		}
-	}
-	for _, root := range s.roots {
-		dirs, err := labeledSessionDirs(ctx, root)
-		if err != nil {
-			return SourceRef{}, false, err
-		}
-		for _, dir := range dirs {
-			if source, ok := s.sourceRef(root, s.findSourceFile(dir, req.RawSessionID), true); ok {
-				return s.canonicalSource(ctx, source)
-			}
-		}
-	}
-	return SourceRef{}, false, nil
+	return s.findCanonicalSource(ctx, req.RawSessionID)
 }
 
 func (s codexSourceSet) Fingerprint(
@@ -1644,22 +1628,29 @@ func (s codexSourceSet) canonicalSource(
 	if !ok || src.UUID == "" {
 		return source, true, nil
 	}
+	best, found, err := s.findCanonicalSource(ctx, src.UUID)
+	if err != nil || found {
+		return best, found, err
+	}
+	return source, true, nil
+}
+
+func (s codexSourceSet) findCanonicalSource(ctx context.Context, uuid string) (SourceRef, bool, error) {
+	if !IsValidSessionID(uuid) {
+		return SourceRef{}, false, nil
+	}
 	var best SourceRef
 	foundExisting := false
 	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
 			return SourceRef{}, false, err
 		}
-		var dirs []string
-		if CodexSourceLabel(src.Root, src.Path) != "" {
-			var err error
-			dirs, err = labeledSessionDirs(ctx, root)
-			if err != nil {
-				return SourceRef{}, false, err
-			}
+		dirs, err := labeledSessionDirs(ctx, root)
+		if err != nil {
+			return SourceRef{}, false, err
 		}
 		for _, dir := range append([]string{root}, dirs...) {
-			path := s.findSourceFile(dir, src.UUID)
+			path := s.findSourceFile(dir, uuid)
 			candidate, ok := s.sourceRef(root, path, true)
 			if ok && (!foundExisting || preferCodexSource(candidate, best)) {
 				best = candidate
@@ -1667,10 +1658,7 @@ func (s codexSourceSet) canonicalSource(
 			}
 		}
 	}
-	if !foundExisting {
-		return source, true, nil
-	}
-	return best, true, nil
+	return best, foundExisting, nil
 }
 
 func codexSourceKey(agent AgentType, uuid string) string {
@@ -1696,7 +1684,7 @@ func preferCodexSource(candidate, current SourceRef) bool {
 	curr := current.Opaque.(codexSource)
 	_, candSessions := codexLabeledSession(cand.Root, cand.Path)
 	_, currSessions := codexLabeledSession(curr.Root, curr.Path)
-	if candSessions != "" && currSessions != "" && candSessions != currSessions {
+	if (candSessions != "" || currSessions != "") && candSessions != currSessions {
 		candInfo, candErr := os.Stat(cand.Path)
 		currInfo, currErr := os.Stat(curr.Path)
 		if candErr == nil && currErr == nil && !candInfo.ModTime().Equal(currInfo.ModTime()) {
