@@ -166,7 +166,6 @@ func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 		selectedHost := ""
 		if explicitHost != "" {
 			selectedHost = explicitHost
-
 		} else if remoteHost != "" && !callHostUnknown {
 			selectedHost = remoteHost
 		}
