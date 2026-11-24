@@ -64,12 +64,51 @@ func (db *DB) GetActivityReport(
 
 type activityReportBackend struct {
 	*DB
+	filter                 AnalyticsFilter
 	lowerBound, upperBound string
 	read                   *[]string
 	counted                *activityReportCounted
 	usage                  activityUsageWindow
 	keptUsage              *activityKeptUsage
 	usageResult            *activityKeptUsage
+}
+
+func (b activityReportBackend) ActivityReportLaunchers(ctx context.Context, sessions []activity.SessionMeta, q activity.Query) (activity.Launchers, error) {
+	var parents []string
+	for _, session := range sessions {
+		if session.IsSubagent && session.ParentSessionID != "" {
+			parents = append(parents, session.ParentSessionID)
+		}
+	}
+	if len(parents) == 0 {
+		return activity.Launchers{}, nil
+	}
+	where, args := b.filter.buildWhereWithDate("", false, "s.id")
+	result, err := activity.ResolveLaunchers(ctx, parents, func(ctx context.Context, ids []string) ([]activity.Launcher, error) {
+		encoded, err := json.Marshal(ids)
+		if err != nil {
+			return nil, err
+		}
+		queryArgs := append(slices.Clone(args), string(encoded))
+		rows, err := b.getReader().QueryContext(ctx, `SELECT s.id, s.is_automated, s.relationship_type = 'subagent', CASE WHEN s.relationship_type = 'subagent' THEN COALESCE(s.parent_session_id, '') ELSE '' END, CASE WHEN (`+where+`) THEN 1 ELSE 0 END FROM sessions s WHERE s.id IN (SELECT value FROM json_each(?)) AND s.deleted_at IS NULL`, queryArgs...)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var result []activity.Launcher
+		for rows.Next() {
+			var row activity.Launcher
+			if err := rows.Scan(&row.ID, &row.IsAutomated, &row.IsSubagent, &row.ParentSessionID, &row.Counted); err != nil {
+				return nil, err
+			}
+			result = append(result, row)
+		}
+		return result, rows.Err()
+	})
+	if err == nil && b.read != nil && !q.Partial {
+		*b.read = append(*b.read, result.Examined...)
+	}
+	return result, err
 }
 
 // activityReportCounted holds the counted messages of the build's sessions,
@@ -245,8 +284,8 @@ func (db *DB) BuildActivityReportArtifacts(
 	}
 	backend := activityReportBackend{
 		keptUsage: cachedUsage, usageResult: usageResult,
-		read:       readSet,
-		DB:         db,
+		read: readSet,
+		DB:   db, filter: f,
 		lowerBound: lowerBound, upperBound: upperBound,
 		counted: &activityReportCounted{},
 		usage:   usage,
@@ -588,7 +627,8 @@ func (db *DB) activityReportSessionsFrom(
 		COALESCE(s.started_at, ''),
 		COALESCE(s.ended_at, ''),
 		s.is_automated,
-		s.relationship_type = 'subagent'
+		s.relationship_type = 'subagent',
+		CASE WHEN s.relationship_type = 'subagent' THEN COALESCE(s.parent_session_id, '') ELSE '' END
 	FROM sessions s
 	WHERE ` + where
 
@@ -605,7 +645,7 @@ func (db *DB) activityReportSessionsFrom(
 		var s activity.SessionMeta
 		if err := rows.Scan(
 			&s.SessionID, &s.Title, &s.Project, &s.Agent,
-			&s.Machine, &s.StartedAt, &s.EndedAt, &s.IsAutomated, &s.IsSubagent,
+			&s.Machine, &s.StartedAt, &s.EndedAt, &s.IsAutomated, &s.IsSubagent, &s.ParentSessionID,
 		); err != nil {
 			return nil, nil, fmt.Errorf(
 				"scanning activity report session: %w", err)

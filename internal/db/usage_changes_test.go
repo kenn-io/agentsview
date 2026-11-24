@@ -123,6 +123,11 @@ func TestUsageChangeJournal(t *testing.T) {
 					s.SessionName = new("Agent title")
 					require.NoError(t, d.UpsertSession(ctx, s))
 				}},
+				{"parent link", func(t *testing.T, s Session) {
+					t.Helper()
+					s.ParentSessionID = new("parent")
+					require.NoError(t, d.UpsertSession(ctx, s))
+				}},
 				{"relationship", func(t *testing.T, s Session) {
 					t.Helper()
 					s.RelationshipType = "subagent"
@@ -231,6 +236,9 @@ func TestUsageChangeJournal(t *testing.T) {
 				}
 				t.Run(tc.name, func(t *testing.T) {
 					s := Session{ID: tc.name, Project: "project-a", Machine: "machine-a", Agent: "claude", StartedAt: new("2026-07-01T10:00:00Z")}
+					if tc.name == "parent link" {
+						s.RelationshipType = "subagent"
+					}
 					before, err := d.UsageChangeRevision(ctx)
 					require.NoError(t, err)
 					if tc.name == "atomic sync insert" {

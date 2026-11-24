@@ -257,3 +257,40 @@ func TestActivityReportUsageHandlesOversizedClaudeSnapshotKeys(t *testing.T) {
 	}
 	assert.NotContains(t, wantBySession, peerID)
 }
+
+func TestEndedActivityReportKeyTracksLauncher(t *testing.T) {
+	t.Parallel()
+	store, syncer, local := newPushedStore(t)
+	ctx := t.Context()
+	parent := fixtureSession("launcher-key-parent", "project-a", "parent", "2026-06-12T10:00:00Z", 1)
+	child := fixtureSession("launcher-key-child", "project-a", "child", "2026-06-14T10:00:00Z", 1)
+	child.RelationshipType = "subagent"
+	child.ParentSessionID = &parent.ID
+	require.NoError(t, local.UpsertSession(ctx, parent))
+	require.NoError(t, local.UpsertSession(ctx, child))
+	_, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-06-14", Timezone: "UTC"}, time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	f := db.AnalyticsFilter{Timezone: "UTC", IncludeSubagents: true, IncludeForks: true}
+	start, end := activityReportRangeBoundsUTC(q)
+	where, args := clickActivityReportCandidateWhere(f, start, end)
+	key := func() string {
+		value, _, err := store.endedActivityReportKey(ctx, f, where, args, start, end)
+		require.NoError(t, err)
+		require.NotEmpty(t, value)
+		return value
+	}
+	before := key()
+	unrelated := fixtureSession("launcher-key-unrelated", "project-a", "other", "2026-06-12T10:00:00Z", 0)
+	require.NoError(t, local.UpsertSession(ctx, unrelated))
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, before, key())
+	parent.IsAutomated = true
+	require.NoError(t, local.UpsertSession(ctx, parent))
+	require.NoError(t, local.BumpLocalModifiedAt(ctx, parent.ID))
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.NotEqual(t, before, key())
+}

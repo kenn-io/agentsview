@@ -36,6 +36,10 @@ func TestActivitySourceProbeCachePreservesFreshness(t *testing.T) {
 	for _, id := range []string{"probe-cold", "probe-warm"} {
 		got, err := store.ActivityReportSourceProbe(chdriver.Context(ctx, chdriver.WithQueryID(id)))
 		require.NoError(t, err)
+		require.NotEmpty(t, got.SessionRowsFingerprint)
+		if want.SessionRowsFingerprint == "" {
+			want.SessionRowsFingerprint = got.SessionRowsFingerprint
+		}
 		require.Equal(t, want, got)
 	}
 	_, err := conn.ExecContext(ctx, `SYSTEM FLUSH LOGS query_log`)
@@ -62,10 +66,43 @@ func TestActivitySourceProbeCachePreservesFreshness(t *testing.T) {
 	} {
 		_, err = conn.ExecContext(ctx, step.sql)
 		require.NoError(t, err)
-		for range 2 {
+		for read := range 2 {
 			got, probeErr := store.ActivityReportSourceProbe(ctx)
 			require.NoError(t, probeErr)
+			if step.want.MaxDataVersion != want.MaxDataVersion && read == 0 {
+				require.NotEqual(t, want.SessionRowsFingerprint, got.SessionRowsFingerprint)
+				want.SessionRowsFingerprint = got.SessionRowsFingerprint
+				want.MaxDataVersion = step.want.MaxDataVersion
+			}
+			step.want.SessionRowsFingerprint = want.SessionRowsFingerprint
 			require.Equal(t, step.want, got, step.sql)
 		}
 	}
+}
+
+func TestActivitySourceProbeSessionLinkPushAndMerge(t *testing.T) {
+	t.Parallel()
+	dsn, database := chtest.FreshDatabase(t)
+	conn := chtest.Open(t, dsn, database)
+	ctx := t.Context()
+	require.NoError(t, EnsureSchemaOn(ctx, conn))
+	store := newTestStore(t, conn, Target{URL: dsn, Database: database})
+	_, err := conn.ExecContext(ctx, `SYSTEM STOP MERGES sessions`)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, `INSERT INTO sessions (id,push_version,data_version,local_modified_at,parent_session_id) VALUES ('child',1,1,'2026-01-10 00:00:00','old')`)
+	require.NoError(t, err)
+	before, err := store.ActivityReportSourceProbe(ctx)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, `INSERT INTO sessions (id,push_version,data_version,local_modified_at,parent_session_id) VALUES ('child',2,1,'2026-01-10 00:00:00','new')`)
+	require.NoError(t, err)
+	after, err := store.ActivityReportSourceProbe(ctx)
+	require.NoError(t, err)
+	require.NotEqual(t, before.SessionRowsFingerprint, after.SessionRowsFingerprint)
+	_, err = conn.ExecContext(ctx, `SYSTEM START MERGES sessions`)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, `OPTIMIZE TABLE sessions FINAL`)
+	require.NoError(t, err)
+	merged, err := store.ActivityReportSourceProbe(ctx)
+	require.NoError(t, err)
+	require.Equal(t, after, merged)
 }

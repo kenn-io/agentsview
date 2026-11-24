@@ -1805,3 +1805,64 @@ func TestGetActivityReport_ManySessionsWithinSQLiteVarLimit(t *testing.T) {
 	assert.Positive(t, r.Totals.OutputTokens,
 		"usage aggregated across all id chunks")
 }
+
+func TestGetActivityReportCountsQuietLauncherWaitingOnLinkedRuns(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "launcher", "project-a", func(s *Session) {
+		s.StartedAt = Ptr("2026-06-15T10:00:00Z")
+		s.EndedAt = Ptr("2026-06-15T10:02:00Z")
+	})
+	insertSession(t, d, "run", "project-a", func(s *Session) {
+		s.StartedAt = Ptr("2026-06-16T10:00:00Z")
+		s.EndedAt = Ptr("2026-06-16T10:04:00Z")
+	})
+	seedMessage(t, d, "run", 1, "user", "2026-06-16T10:00:00Z", "")
+	seedMessage(t, d, "run", 2, "assistant", "2026-06-16T10:04:00Z", "")
+	q := dayQuery(t, "2026-06-16", "UTC")
+	filter := AnalyticsFilter{Timezone: "UTC"}
+	before, err := d.GetActivityReport(t.Context(), filter, q)
+	require.NoError(t, err)
+	_, err = d.SetSessionExternalParent(t.Context(), "run", "launcher")
+	require.NoError(t, err)
+	after, err := d.GetActivityReport(t.Context(), filter, q)
+	require.NoError(t, err)
+	assert.Equal(t, 1, after.InteractivePeak.Agents)
+	assert.Equal(t, 2, after.Peak.Agents)
+	assert.InDelta(t, before.Totals.AgentMinutes, after.Totals.AgentMinutes, 1e-9)
+	assert.Equal(t, before.Totals.Cost, after.Totals.Cost)
+	assert.NotContains(t, reportSessionIDs(after.BySession), "launcher")
+}
+
+func TestActivityReportLauncherFiltersAndLinkChanges(t *testing.T) {
+	d := testDB(t)
+	for _, tc := range []struct{ id, project string }{{"visible", "project-a"}, {"hidden", "project-b"}} {
+		insertSession(t, d, tc.id, tc.project, func(s *Session) {
+			s.StartedAt = Ptr("2026-06-15T10:00:00Z")
+			s.EndedAt = Ptr("2026-06-15T10:02:00Z")
+		})
+	}
+	insertSession(t, d, "run", "project-a", func(s *Session) {
+		s.StartedAt = Ptr("2026-06-16T10:00:00Z")
+		s.EndedAt = Ptr("2026-06-16T10:04:00Z")
+	})
+	seedMessage(t, d, "run", 1, "user", "2026-06-16T10:00:00Z", "")
+	seedMessage(t, d, "run", 2, "assistant", "2026-06-16T10:04:00Z", "")
+	_, err := d.SetSessionExternalParent(t.Context(), "run", "visible")
+	require.NoError(t, err)
+	q := dayQuery(t, "2026-06-16", "UTC")
+	filter := AnalyticsFilter{Timezone: "UTC", Project: "project-a"}
+	beforeProbe, err := d.ActivityReportSourceProbe(t.Context())
+	require.NoError(t, err)
+	before, err := d.GetActivityReport(t.Context(), filter, q)
+	require.NoError(t, err)
+	assert.Equal(t, 1, before.InteractivePeak.Agents)
+	_, err = d.SetSessionExternalParent(t.Context(), "run", "hidden")
+	require.NoError(t, err)
+	afterProbe, err := d.ActivityReportSourceProbe(t.Context())
+	require.NoError(t, err)
+	assert.NotEqual(t, beforeProbe, afterProbe)
+	after, err := d.GetActivityReport(t.Context(), filter, q)
+	require.NoError(t, err)
+	assert.Zero(t, after.InteractivePeak.Agents)
+	assert.InDelta(t, before.Totals.AgentMinutes, after.Totals.AgentMinutes, 1e-9)
+}

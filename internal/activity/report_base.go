@@ -33,6 +33,14 @@ func BuildReportArtifacts(
 	ctx context.Context, backend ReportBackend, sessions []SessionMeta,
 	ids []string, q Query, onProgress ProgressFunc, aggregationLabel string,
 ) (CandidateArtifacts, Progress, error) {
+	var ancestors Launchers
+	if launchers, ok := backend.(LauncherBackend); ok {
+		var err error
+		ancestors, err = launchers.ActivityReportLaunchers(ctx, sessions, q)
+		if err != nil {
+			return CandidateArtifacts{}, Progress{}, err
+		}
+	}
 	var usage []UsageRow
 	var pricing *export.PricingBlock
 	var usageErr error
@@ -75,6 +83,7 @@ func BuildReportArtifacts(
 		Partial:       q.Partial,
 		GapCapSeconds: q.GapCapSeconds,
 		Bucket:        q.Bucket,
+		Launchers:     ancestors,
 	}
 	scanning := func() {
 		ReportProgress(onProgress, Progress{

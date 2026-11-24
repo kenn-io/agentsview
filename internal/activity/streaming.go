@@ -4,6 +4,7 @@ import (
 	"container/heap"
 	"context"
 	"fmt"
+	"maps"
 	"sort"
 	"time"
 )
@@ -303,9 +304,35 @@ func buildIntervalArtifacts(
 		}
 	}
 	kindBy := sessionKinds(sessions)
+	ancestors := make(map[string][]string, len(sessions))
+	links := make(map[string]Launcher, len(sessions)+len(p.Launchers.Rows))
+	maps.Copy(links, p.Launchers.Rows)
+	for _, session := range sessions {
+		links[session.SessionID] = Launcher{ID: session.SessionID, IsAutomated: session.IsAutomated, IsSubagent: session.IsSubagent, ParentSessionID: session.ParentSessionID, Counted: true}
+	}
+	sweepKinds := make(map[string]sessionKind, len(links))
+	for id, link := range links {
+		sweepKinds[id] = (SessionMeta{IsSubagent: link.IsSubagent, IsAutomated: link.IsAutomated}).kind()
+	}
+	for _, session := range sessions {
+		seen := map[string]bool{session.SessionID: true}
+		current := links[session.SessionID]
+		for current.IsSubagent && current.ParentSessionID != "" && !seen[current.ParentSessionID] {
+			id := current.ParentSessionID
+			seen[id] = true
+			var ok bool
+			current, ok = links[id]
+			if !ok {
+				break
+			}
+			if current.Counted {
+				ancestors[session.SessionID] = append(ancestors[session.SessionID], id)
+			}
+		}
+	}
 	state := candidateSweep{
 		report: &report, windows: windows, effectiveEnd: p.EffectiveEnd,
-		last: p.RangeStart, kindBy: kindBy,
+		last: p.RangeStart, kindBy: sweepKinds, ancestors: ancestors, waiting: make(map[string]int),
 		sessionEnds: make(map[string]time.Time),
 	}
 	heap.Init(&state.ends)
@@ -471,6 +498,8 @@ type candidateSweep struct {
 	windows      []BucketWindow
 	effectiveEnd time.Time
 	kindBy       map[string]sessionKind
+	ancestors    map[string][]string
+	waiting      map[string]int
 	ends         activeCandidateHeap
 	sessionEnds  map[string]time.Time
 	bucket       int
@@ -505,14 +534,16 @@ func (s *candidateSweep) advance(target time.Time) {
 				continue
 			}
 			delete(s.sessionEnds, ended.sessionID)
-			s.live--
-			switch ended.kind {
-			case subagentSession:
-				s.liveSub--
-			case automatedSession:
-				s.liveAuto--
-			default:
-				s.liveInter--
+			if s.waiting[ended.sessionID] == 0 {
+				s.changeCount(ended.sessionID, -1)
+			}
+			for _, id := range s.ancestors[ended.sessionID] {
+				s.waiting[id]--
+				if s.waiting[id] == 0 {
+					if _, live := s.sessionEnds[id]; !live {
+						s.changeCount(id, -1)
+					}
+				}
 			}
 		}
 		for s.bucket < len(s.windows) && s.windows[s.bucket].End.Equal(next) {
@@ -541,20 +572,34 @@ func (s *candidateSweep) open(iv interval) {
 	heap.Push(&s.ends, activeCandidateEnd{
 		sessionID: iv.sessionID, end: iv.end, kind: kind,
 	})
-	s.live++
-	switch kind {
-	case subagentSession:
-		s.liveSub++
-	case automatedSession:
-		s.liveAuto++
-	default:
-		s.liveInter++
+	if s.waiting[iv.sessionID] == 0 {
+		s.changeCount(iv.sessionID, 1)
+	}
+	for _, id := range s.ancestors[iv.sessionID] {
+		if s.waiting[id] == 0 {
+			if _, live := s.sessionEnds[id]; !live {
+				s.changeCount(id, 1)
+			}
+		}
+		s.waiting[id]++
 	}
 	recordPeak(&s.report.Peak, s.live, iv.start)
 	recordPeak(&s.report.InteractivePeak, s.liveInter, iv.start)
 	recordPeak(&s.report.SubagentPeak, s.liveSub, iv.start)
 	recordPeak(&s.report.AutomatedPeak, s.liveAuto, iv.start)
 	s.recordBucketPeak()
+}
+
+func (s *candidateSweep) changeCount(id string, delta int) {
+	s.live += delta
+	switch s.kindBy[id] {
+	case subagentSession:
+		s.liveSub += delta
+	case automatedSession:
+		s.liveAuto += delta
+	default:
+		s.liveInter += delta
+	}
 }
 
 func recordPeak(peak *Peak, count int, at time.Time) {

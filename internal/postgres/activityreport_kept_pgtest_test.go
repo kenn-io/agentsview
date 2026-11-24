@@ -376,3 +376,32 @@ func TestPGActivityReportKeptJournalRecreated(t *testing.T) {
 	ensureUsageChangeJournalPG(t.Context(), syncer.pg)
 	require.Empty(t, pgKeptBuild(t, store, f, q, true).Sessions)
 }
+
+func TestPGActivityReportKeptLauncherChange(t *testing.T) {
+	t.Parallel()
+	local, syncer, store := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "parent", "project-a", "2026-06-12")
+	pgKeptSession(t, local, "past", "project-a", "2026-06-14")
+	child, err := local.GetSession(t.Context(), "past")
+	require.NoError(t, err)
+	child.RelationshipType = "subagent"
+	child.ParentSessionID = new("parent")
+	require.NoError(t, local.UpsertSession(t.Context(), *child))
+	pgKeptPush(t, syncer, false)
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC", Project: "project-a", IncludeSubagents: true}
+	before := pgKeptBuild(t, store, f, q, true)
+	assert.Equal(t, 1, before.Report.InteractivePeak.Agents)
+	pgKeptBuild(t, store, f, q, false)
+	parent, err := local.GetSession(t.Context(), "parent")
+	require.NoError(t, err)
+	parent.IsAutomated = true
+	require.NoError(t, local.UpsertSession(t.Context(), *parent))
+	require.NoError(t, local.BumpLocalModifiedAt(t.Context(), parent.ID))
+	pgKeptPush(t, syncer, false)
+	after := pgKeptBuild(t, store, f, q, true)
+	assert.Zero(t, after.Report.InteractivePeak.Agents)
+	assert.Equal(t, 1, after.Report.AutomatedPeak.Agents)
+	store.runtimeState().activityKept.DeleteSlots(func(string) bool { return true })
+	store.runtimeState().activityInputs.DeleteSlots(func(string) bool { return true })
+	requirePGKeptEqual(t, after, pgKeptBuild(t, store, f, q, true))
+}

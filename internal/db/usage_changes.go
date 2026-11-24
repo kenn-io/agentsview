@@ -90,7 +90,7 @@ func usageChangeJournalSQL() (string, string) {
 		}
 	}
 	add("trg_sessions_usage_change_insert", "INSERT", "sessions", "", "NEW.id", false)
-	columns := []string{"transcript_revision", "started_at", "deleted_at", "project", "agent", "machine", "git_branch", "group_key", "is_automated", "user_message_count", "ended_at", "termination_status", "display_name", "session_name", "relationship_type", "message_count", "created_at"}
+	columns := []string{"transcript_revision", "started_at", "deleted_at", "project", "agent", "machine", "git_branch", "group_key", "is_automated", "user_message_count", "ended_at", "termination_status", "display_name", "session_name", "relationship_type", "parent_session_id", "message_count", "created_at"}
 	changes := make([]string, len(columns))
 	for i, column := range columns {
 		changes[i] = "OLD." + column + " IS NOT NEW." + column

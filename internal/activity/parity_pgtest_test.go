@@ -888,3 +888,27 @@ func assertDayMinuteFixtureSanity(t *testing.T, r activity.Report) {
 	require.InDelta(t, 1.0, *bySession["parity-tool-boundary"].AgentMinutes, 1e-9,
 		"post-range completion closes the final in-range message")
 }
+
+func TestWaitingLauncherParityAcrossBackends(t *testing.T) {
+	ctx := t.Context()
+	local := seedParitySQLite(t)
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{
+		paritySessionWrite(parityFixtureSession{id: "quiet-launcher", project: "waiting", events: []parityEvent{{role: "user", ts: "2026-06-13T10:00:00Z"}, {role: "assistant", ts: "2026-06-13T10:02:00Z"}}}),
+		paritySessionWrite(parityFixtureSession{id: "linked-run", project: "waiting", relationship: "subagent", parent: "quiet-launcher", events: []parityEvent{{role: "user", ts: "2026-06-14T10:00:00Z"}, {role: "assistant", ts: "2026-06-14T10:04:00Z"}}}),
+	})
+	require.NoError(t, err)
+	var pgStore *postgresstore.Store
+	if os.Getenv("TEST_PG_URL") != "" {
+		pgStore = pushParityPostgres(t, ctx, local, len(parityFixture())+2)
+	}
+	chStore := pushParityClickHouse(t, ctx, local, len(parityFixture())+2)
+	if pgStore == nil && chStore == nil {
+		t.Skip("no mirror configured")
+	}
+	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: parityDate, Timezone: "UTC"}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	report := assertParityForCase(t, ctx, q, db.AnalyticsFilter{Timezone: "UTC", Project: "waiting"}, local, pgStore, chStore)
+	assert.Equal(t, 1, report.InteractivePeak.Agents)
+	assert.Equal(t, 2, report.Peak.Agents)
+	assert.Equal(t, 1, report.Totals.Sessions)
+}
