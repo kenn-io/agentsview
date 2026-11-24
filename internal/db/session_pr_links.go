@@ -375,24 +375,45 @@ func (c *sharedPRContext) add(directory, repository bool) {
 	c.repository = c.repository || repository
 }
 
-const (
-	prContextDirectory = 1 << iota
-	prContextRepository
-)
-
-// bits encodes the context for storage on a tool call.
-func (c sharedPRContext) bits() (bits int) {
-	if c.directory {
-		bits |= prContextDirectory
-	}
-	if c.repository {
-		bits |= prContextRepository
-	}
-	return bits
+// retainedPRContext is the stored form of a tool call's pr_context: the shell
+// state the call changes, and the working directory it named, which a bare
+// pull request number resolves against once the session's checkout is known.
+type retainedPRContext struct {
+	Directory  bool   `json:"directory,omitzero"`
+	Repository bool   `json:"repository,omitzero"`
+	Workdir    string `json:"workdir,omitzero"`
 }
 
-func prContextFromBits(bits int) sharedPRContext {
-	return sharedPRContext{directory: bits&prContextDirectory != 0, repository: bits&prContextRepository != 0}
+// encodePRContext returns the stored text of a call's context, or the empty
+// string when it holds nothing. The workdir matters only to retained links.
+func encodePRContext(change sharedPRContext, workdir string, links []PRLink) string {
+	if len(links) == 0 {
+		workdir = ""
+	}
+	context := retainedPRContext{change.directory, change.repository, workdir}
+	if context == (retainedPRContext{}) {
+		return ""
+	}
+	b, _ := json.Marshal(context)
+	return string(b)
+}
+
+func decodePRContext(text string) (change sharedPRContext, workdir string) {
+	var context retainedPRContext
+	if text != "" {
+		_ = json.Unmarshal([]byte(text), &context)
+	}
+	return sharedPRContext{directory: context.Directory, repository: context.Repository}, context.Workdir
+}
+
+// bareLinksAllowed reports whether a bare pull request number names the
+// session's repository: a call's own workdir must be the session checkout,
+// and otherwise no earlier command may have changed directory or repository.
+func bareLinksAllowed(workdir, cwd string, shared sharedPRContext) bool {
+	if workdir != "" {
+		return !shared.repository && parser.SamePRWorkingDirectory(cwd, workdir)
+	}
+	return !shared.directory && !shared.repository
 }
 
 func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote string, sharedContext sharedPRContext, change *sharedPRContext, depends *[]PRLink) ([]PRLink, error) {
@@ -411,10 +432,7 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 	if !ok {
 		return nil, ctx.Err()
 	}
-	allowBare := !sharedContext.directory && !sharedContext.repository
-	if dir := parser.ToolInputWorkdir(input); dir != "" {
-		allowBare = !sharedContext.repository && parser.SamePRWorkingDirectory(cwd, dir)
-	}
+	allowBare := bareLinksAllowed(parser.ToolInputWorkdir(input), cwd, sharedContext)
 	var lists [][]PRLink
 	for _, command := range commands {
 		links, directory, repository, persistent, usesRemote, err := parser.AnalyzePRCommand(ctx, command, cwd, remote, allowBare, sharedContext.repository)
@@ -540,30 +558,50 @@ func toolCallPRStates(ctx context.Context, messages []Message, cwd, remote strin
 // call whose input the archive dropped resolves the links and state it kept.
 func callPRStateIn(ctx context.Context, call ToolCall, cwd, remote string, state sharedPRContext, depends *[]PRLink) (callPRState, error) {
 	if call.InputJSON == "" {
-		links, usesRemote := parser.ResolveRetainedPRLinks(DecodePRLinks(call.PRLinks), remote, !state.directory && !state.repository, state.repository)
-		if depends != nil {
-			*depends = append(*depends, usesRemote...)
-		}
-		return callPRState{links, prContextFromBits(call.PRContext)}, nil
+		return retainedCallPRState(call, cwd, remote, state, depends), nil
 	}
 	var change sharedPRContext
 	links, err := callPRLinks(ctx, call.Category, call.ToolName, call.InputJSON, cwd, remote, state, &change, depends)
 	return callPRState{links, change}, err
 }
 
+// retainedCallPRState resolves the links and state a call kept after its
+// input was dropped, under the shell state before it.
+func retainedCallPRState(call ToolCall, cwd, remote string, state sharedPRContext, depends *[]PRLink) callPRState {
+	change, workdir := decodePRContext(call.PRContext)
+	links, usesRemote := parser.ResolveRetainedPRLinks(DecodePRLinks(call.PRLinks), remote, bareLinksAllowed(workdir, cwd, state), state.repository)
+	if depends != nil {
+		*depends = append(*depends, usesRemote...)
+	}
+	return callPRState{links, change}
+}
+
 // retainedCallPRLinks derives what a call's input names before any session
 // context applies, so it stays valid whatever the session records later. A
-// command that depends on the session's remote keeps a placeholder for it.
-func retainedCallPRLinks(call ToolCall) (links string, bits int) {
+// command that depends on the session's remote keeps a placeholder for it,
+// and one that names a workdir keeps it, analyzed as the session checkout, for
+// a bare number to resolve against.
+func retainedCallPRLinks(call ToolCall) (links, prContext string) {
 	if call.InputJSON == "" || (call.Category != "Bash" && call.Category != "Task") {
 		return call.PRLinks, call.PRContext
 	}
 	var change sharedPRContext
-	found, err := callPRLinks(context.Background(), call.Category, call.ToolName, call.InputJSON, "", parser.RetainedPRRemote, sharedPRContext{}, &change, nil)
-	if err != nil {
-		return "", 0
+	workdir := parser.ToolInputWorkdir(call.InputJSON)
+	// A background context never cancels, so the analysis cannot fail.
+	found, _ := callPRLinks(context.Background(), call.Category, call.ToolName, call.InputJSON, workdir, parser.RetainedPRRemote, sharedPRContext{}, &change, nil)
+	return EncodePRLinks(found), encodePRContext(change, workdir, found)
+}
+
+// retainCopiedToolPRLinksTx keeps the PR metadata of copied sessions before
+// their inputs are dropped.
+func retainCopiedToolPRLinksTx(ctx context.Context, tx *sql.Tx, tempIDsTable string) error {
+	ids, err := sessionIDsTx(ctx, tx, "id IN (SELECT id FROM "+tempIDsTable+")")
+	for _, id := range ids {
+		if err = retainStoredToolPRLinksTx(contextTransaction{ctx: ctx, tx: tx}, id); err != nil {
+			break
+		}
 	}
-	return EncodePRLinks(found), change.bits()
+	return err
 }
 
 // storedToolCall is a stored tool call and the row it came from.
@@ -575,7 +613,7 @@ type storedToolCall struct {
 // storedToolCallsTx lists a session's stored shell and delegation calls in
 // order, as far as the ordinal, that hold an input or retained PR metadata.
 func storedToolCallsTx(tx transactionQueries, id string, before int) ([]storedToolCall, error) {
-	rows, err := tx.Query(`SELECT t.id, t.category, t.tool_name, COALESCE(t.input_json,''), COALESCE(t.pr_links,''), COALESCE(t.pr_context,0) FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND t.category IN ('Bash','Task') AND (t.input_json IS NOT NULL OR t.pr_links IS NOT NULL OR t.pr_context IS NOT NULL) AND m.ordinal<? ORDER BY m.ordinal, t.id`, id, before)
+	rows, err := tx.Query(`SELECT t.id, t.category, t.tool_name, COALESCE(t.input_json,''), COALESCE(t.pr_links,''), COALESCE(t.pr_context,'') FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND t.category IN ('Bash','Task') AND (t.input_json IS NOT NULL OR t.pr_links IS NOT NULL OR t.pr_context IS NOT NULL) AND m.ordinal<? ORDER BY m.ordinal, t.id`, id, before)
 	if err != nil {
 		return nil, err
 	}
@@ -616,8 +654,8 @@ func retainStoredToolPRLinksTx(tx transactionQueries, id string) error {
 		return err
 	}
 	for _, s := range stored {
-		links, bits := retainedCallPRLinks(s.call)
-		if _, err := tx.Exec(`UPDATE tool_calls SET pr_links=?, pr_context=? WHERE id=?`, nilIfEmpty(links), NilIfZero(bits), s.rowID); err != nil {
+		links, prContext := retainedCallPRLinks(s.call)
+		if _, err := tx.Exec(`UPDATE tool_calls SET pr_links=?, pr_context=? WHERE id=?`, nilIfEmpty(links), nilIfEmpty(prContext), s.rowID); err != nil {
 			return err
 		}
 	}

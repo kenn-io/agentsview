@@ -100,7 +100,7 @@ type ToolCall struct {
 	// before session context applied, and PRContext the shell state it
 	// changed. Both are kept when the archive policy drops that input.
 	PRLinks   string `json:"-"`
-	PRContext int    `json:"-"`
+	PRContext string `json:"-"`
 }
 
 // ToolResult holds a tool_result content block for pairing.
@@ -1402,7 +1402,7 @@ func insertToolCallsChunkTx(
 			nilIfEmpty(tc.ResultContent),
 			nilIfEmpty(tc.SubagentSessionID),
 			nilIfEmpty(tc.FilePath),
-			tc.CallIndex, tc.ObservedOutcome, tc.ObservedRepeat, tc.SequenceEnding, nilIfEmpty(tc.PRLinks), NilIfZero(tc.PRContext),
+			tc.CallIndex, tc.ObservedOutcome, tc.ObservedRepeat, tc.SequenceEnding, nilIfEmpty(tc.PRLinks), nilIfEmpty(tc.PRContext),
 		)
 	}
 	query := `
@@ -3268,7 +3268,7 @@ func attachToolCallsBatch(
 		SELECT message_id, session_id, tool_name, category,
 			tool_use_id, input_json, skill_name,
 			result_content_length, %s, subagent_session_id,
-			file_path, call_index, observed_outcome, observed_repeat, sequence_ending, COALESCE(pr_links, ''), COALESCE(pr_context, 0)
+			file_path, call_index, observed_outcome, observed_repeat, sequence_ending, COALESCE(pr_links, ''), COALESCE(pr_context, '')
 		FROM tool_calls
 		WHERE message_id IN (%s)
 		ORDER BY message_id, call_index`,
