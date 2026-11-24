@@ -507,3 +507,41 @@ func BenchmarkCodexForkParentDatedDirectories(b *testing.B) {
 		})
 	}
 }
+
+func TestCodexLabeledForkResolvesAndCapturesParent(t *testing.T) {
+	root := t.TempDir()
+	sessions := filepath.Join(root, "label", ".codex-run-v1-a", "sessions", "2026", "09", "01")
+	require.NoError(t, os.MkdirAll(sessions, 0o755))
+	parent := filepath.Join(sessions, "rollout-2026-09-01T10-00-00-"+revertThread+".jsonl")
+	child := filepath.Join(sessions, "rollout-2026-09-01T11-00-00-"+revertOther+".jsonl")
+	require.NoError(t, os.WriteFile(parent, []byte(testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(revertThread, "/work/project", "user", tsEarly),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "head-turn", tsEarly),
+	)), 0o600))
+	require.NoError(t, os.WriteFile(child, []byte(testjsonl.JoinJSONL(
+		testjsonl.CodexForkedSessionMetaJSON(revertOther, revertThread, "/work/project", "user", tsEarly),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "head-turn", tsEarly),
+		testjsonl.CodexMsgJSON("assistant", "copied answer", tsEarly),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", tsEarlyS1),
+		testjsonl.CodexMsgJSON("assistant", "new answer", tsEarlyS1),
+	)), 0o600))
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	source, ok := provider.(interface {
+		SourceRefForPath(string) (SourceRef, bool)
+	}).SourceRefForPath(child)
+	require.True(t, ok)
+	out, err := provider.Parse(t.Context(), ParseRequest{Source: source})
+	require.NoError(t, err)
+	require.Len(t, out.Results, 1)
+	require.Len(t, out.Results[0].Result.Messages, 1)
+	assert.Equal(t, "new answer", out.Results[0].Result.Messages[0].Content)
+	plan, supported, err := ResolveRawCapturePlan(t.Context(), provider, source)
+	require.NoError(t, err)
+	require.True(t, supported)
+	var paths []string
+	for _, entry := range plan.Entries {
+		paths = append(paths, entry.LocalPath)
+	}
+	assert.Contains(t, paths, parent)
+}

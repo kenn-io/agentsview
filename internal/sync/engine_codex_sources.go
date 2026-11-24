@@ -470,7 +470,20 @@ func preferNewestCodexDiscoveredFile(
 func (e *Engine) expandCodexProviderDuplicates(
 	files []parser.DiscoveredFile, scope *rootSyncScope,
 ) []parser.DiscoveredFile {
-	pathers := make(map[parser.AgentType]func(string) []string)
+	uuids := make(map[parser.AgentType][]string)
+	for _, f := range files {
+		if isCodexFormatAgent(f.Agent) {
+			if uuid := parser.CodexSessionUUIDFromFilename(filepath.Base(f.Path)); uuid != "" {
+				uuids[f.Agent] = append(uuids[f.Agent], uuid)
+			}
+		}
+	}
+	paths := make(map[parser.AgentType]map[string][]string)
+	for agent, ids := range uuids {
+		if lister := e.codexUUIDPathLister(agent, scope); lister != nil {
+			paths[agent] = lister(ids)
+		}
+	}
 	seen := make(map[string]struct{}, len(files))
 	for _, f := range files {
 		seen[string(f.Agent)+"\x00"+filepath.Clean(f.Path)] = struct{}{}
@@ -480,19 +493,11 @@ func (e *Engine) expandCodexProviderDuplicates(
 		if !isCodexFormatAgent(f.Agent) {
 			continue
 		}
-		pather, resolved := pathers[f.Agent]
-		if !resolved {
-			pather = e.codexUUIDPathLister(f.Agent, scope)
-			pathers[f.Agent] = pather
-		}
-		if pather == nil {
-			continue
-		}
 		uuid := parser.CodexSessionUUIDFromFilename(filepath.Base(f.Path))
 		if uuid == "" {
 			continue
 		}
-		for _, dup := range pather(uuid) {
+		for _, dup := range paths[f.Agent][uuid] {
 			key := string(f.Agent) + "\x00" + filepath.Clean(dup)
 			if _, ok := seen[key]; ok {
 				continue
@@ -518,7 +523,7 @@ func (e *Engine) expandCodexProviderDuplicates(
 // root.
 func (e *Engine) codexUUIDPathLister(
 	agent parser.AgentType, scope *rootSyncScope,
-) func(string) []string {
+) func([]string) map[string][]string {
 	factory, ok := e.sources().providerFactories[agent]
 	if !ok || factory == nil {
 		return nil
@@ -539,10 +544,10 @@ func (e *Engine) codexUUIDPathLister(
 		SourceMachines: e.sources().sourceMachines[agent],
 	})
 	lister, ok := provider.(interface {
-		AllSourcePathsForUUID(string) []string
+		AllSourcePathsForUUIDs([]string) map[string][]string
 	})
 	if !ok {
 		return nil
 	}
-	return lister.AllSourcePathsForUUID
+	return lister.AllSourcePathsForUUIDs
 }

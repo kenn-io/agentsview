@@ -389,34 +389,30 @@ func (p *codexProvider) FindSource(
 	return p.sources.FindSource(ctx, req)
 }
 
-// AllSourcePathsForUUID returns every on-disk Codex transcript path under the
-// provider's roots whose filename carries the given session UUID, without the
-// live-over-archived deduplication Discover applies. A UUID can exist as both a
-// live dated copy and a flat archived copy under the same root; the sync engine
-// uses the full set so an mtime cutoff can judge each copy independently. A
-// compressed copy beside its plain file is left out: the plain file is the one
-// Codex appends to, so no cutoff may choose the compressed one over it.
-func (p *codexProvider) AllSourcePathsForUUID(uuid string) []string {
-	if uuid == "" {
-		return nil
+// AllSourcePathsForUUIDs lists each requested UUID's on-disk copies in one walk.
+func (p *codexProvider) AllSourcePathsForUUIDs(uuids []string) map[string][]string {
+	paths := make(map[string][]string, len(uuids))
+	for _, uuid := range uuids {
+		if uuid != "" {
+			paths[uuid] = nil
+		}
 	}
 	seen := make(map[string]struct{})
-	var paths []string
 	for _, root := range p.sources.roots {
 		for _, path := range p.sources.discoverSessionPaths(root) {
-			if CodexSessionUUIDFromFilename(filepath.Base(path)) != uuid {
+			uuid := CodexSessionUUIDFromFilename(filepath.Base(path))
+			if _, wanted := paths[uuid]; !wanted {
 				continue
 			}
 			clean := filepath.Clean(path)
 			if _, ok := seen[clean]; ok {
 				continue
 			}
-			if isCompressedCodexRolloutPath(clean) &&
-				IsRegularFile(codexPlainRolloutPath(clean)) {
+			if isCompressedCodexRolloutPath(clean) && IsRegularFile(codexPlainRolloutPath(clean)) {
 				continue
 			}
 			seen[clean] = struct{}{}
-			paths = append(paths, path)
+			paths[uuid] = append(paths[uuid], path)
 		}
 	}
 	return paths
@@ -448,6 +444,25 @@ func (p *codexProvider) Fingerprint(
 	source SourceRef,
 ) (SourceFingerprint, error) {
 	return p.sources.Fingerprint(ctx, source)
+}
+
+// parentRoots includes the labeled home that owns a discovered child.
+func (p *codexProvider) parentRoots(path string) []string {
+	roots := p.sources.roots
+	for _, root := range roots {
+		if CodexSourceLabel(root, path) == "" {
+			continue
+		}
+		sessions := path
+		for range 4 {
+			sessions = filepath.Dir(sessions)
+		}
+		if !slices.Contains(roots, sessions) {
+			roots = append(slices.Clone(roots), sessions)
+		}
+		break
+	}
+	return roots
 }
 
 func (p *codexProvider) PlanRawCapture(
@@ -492,7 +507,7 @@ func (p *codexProvider) PlanRawCapture(
 			)
 		}
 		seen := map[string]bool{resolvedSource: true}
-		for _, root := range p.sources.roots {
+		for _, root := range p.parentRoots(src.Path) {
 			if err := ctx.Err(); err != nil {
 				return RawCapturePlan{}, err
 			}

@@ -344,14 +344,19 @@ func TestCodexAllSourcePathsHideCompressedBesidePlain(t *testing.T) {
 	plain := writeFileIn(t, day, compressedDayPrefix+compressedThreadA+".jsonl", []byte(content))
 	compressed := writeFileIn(t, day, compressedDayPrefix+compressedThreadA+".jsonl.zst",
 		zstdCompress(t, []byte(content)))
+	other := writeFileIn(t, day, compressedDayPrefix+compressedThreadB+".jsonl", []byte(codexRolloutContent(compressedThreadB, "other")))
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	lister := provider.(interface{ AllSourcePathsForUUID(string) []string })
+	lister := provider.(interface {
+		AllSourcePathsForUUIDs([]string) map[string][]string
+	})
 
-	assert.Equal(t, []string{plain}, lister.AllSourcePathsForUUID(compressedThreadA))
+	paths := lister.AllSourcePathsForUUIDs([]string{compressedThreadA, compressedThreadB})
+	assert.Equal(t, []string{plain}, paths[compressedThreadA])
+	assert.Equal(t, []string{other}, paths[compressedThreadB])
 
 	require.NoError(t, os.Remove(plain))
-	assert.Equal(t, []string{compressed}, lister.AllSourcePathsForUUID(compressedThreadA))
+	assert.Equal(t, []string{compressed}, lister.AllSourcePathsForUUIDs([]string{compressedThreadA})[compressedThreadA])
 }
 
 func TestCodexCompressedSiblingHidden(t *testing.T) {
