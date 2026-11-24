@@ -91,12 +91,30 @@ func WriteArchive(ctx context.Context, w io.Writer, targets TargetSet) error {
 	return nil
 }
 
+// sqliteSnapshotTempRoot picks where a state.db snapshot is staged. A snapshot is
+// as large as the source database, and the default /tmp is often a small tmpfs, so
+// without an explicit TMPDIR it goes under the user cache dir. "" means os.TempDir.
+func sqliteSnapshotTempRoot() string {
+	if os.Getenv("TMPDIR") != "" {
+		return ""
+	}
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Join(cache, "agentsview", "tmp")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return ""
+	}
+	return dir
+}
+
 func writeSQLiteStateDBSnapshot(ctx context.Context, tw *tar.Writer, stateDB string) error {
 	_, modTime, exists := sqliteSnapshotIdentity(ctx, stateDB)
 	if !exists {
 		return nil
 	}
-	tmpDir, err := os.MkdirTemp("", "agentsview-sqlite-snapshot-*")
+	tmpDir, err := os.MkdirTemp(sqliteSnapshotTempRoot(), "agentsview-sqlite-snapshot-*")
 	if err != nil {
 		return fmt.Errorf("create sqlite snapshot dir: %w", err)
 	}
