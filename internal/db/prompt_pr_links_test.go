@@ -471,6 +471,9 @@ func TestToolPRLinksSharedShellDirectoryAppend(t *testing.T) {
 		{"environment change", "claude", "Bash", "export GH_REPO=example/other", false},
 		{"codex repository change", "codex", "exec_command", "git remote set-url origin https://github.com/example/other.git", false},
 		{"roo repository change", "roocode", "execute_command", "git remote set-url origin https://github.com/example/other.git", false},
+		{"run command repository change", "gemini", "run_command", "git remote set-url origin https://github.com/example/other.git", false},
+		{"run commands repository change", "cline", "run_commands", "git remote set-url origin https://github.com/example/other.git", false},
+		{"run shell repository change", "gemini", "run_shell_command", "git remote set-url origin https://github.com/example/other.git", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
@@ -491,6 +494,12 @@ func TestToolPRLinksSharedShellDirectoryAppend(t *testing.T) {
 				require.Len(t, got.PRLinks, 1)
 				assert.Equal(t, "https://github.com/example/repo/pull/42", got.PRLinks[0].URL)
 			} else {
+				assert.Empty(t, got.PRLinks)
+			}
+			if strings.HasPrefix(tc.name, "run ") {
+				require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error { return refreshSessionPromptPRLinksTx(t.Context(), tx, s.ID) }))
+				got, err = d.GetSession(t.Context(), s.ID)
+				require.NoError(t, err)
 				assert.Empty(t, got.PRLinks)
 			}
 			if tc.name == "directory change" {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -68,7 +69,7 @@ func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 	if err != nil {
 		return nil, false, false, false, nil, ctx.Err()
 	}
-	directoryChanged, repositoryChanged, persistent, firstRepo, firstHost, calls := bashChangesRepositoryContext(file, cwd)
+	directoryChanged, repositoryChanged, persistent, repoEnv, hostEnv, calls := bashChangesRepositoryContext(file, cwd)
 	remoteHost, remoteRepo := "", ""
 	if normalized, ok := export.NormalizeGitRemote(remote); ok {
 		remoteHost, remoteRepo, _ = strings.Cut(normalized, "/")
@@ -80,32 +81,8 @@ func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 		if err := ctx.Err(); err != nil {
 			return nil, false, false, false, nil, err
 		}
-		bareSafe := allowBare && (firstRepo < 0 || entry.end < firstRepo) && !hasCommandSubstitution(call)
-		host, hostSet, hostValid := "", false, true
-		envRepo, envRepoSet, envRepoValid := "", false, false
-		for _, a := range append(append([]*syntax.Assign(nil), entry.assigns...), call.Assigns...) {
-			if a.Name == nil {
-				continue
-			}
-			if a.Name.Value == "GH_REPO" {
-				bareSafe = false
-				envRepoSet = true
-				if a.Value != nil {
-					envRepo, envRepoValid = shellLiteral(a.Value.Parts)
-				} else {
-					envRepo, envRepoValid = "", false
-				}
-			}
-			if a.Name.Value == "GH_HOST" {
-				hostSet = true
-				if a.Value == nil {
-					hostValid = false
-				} else {
-					host, hostValid = shellLiteral(a.Value.Parts)
-					hostValid = hostValid && host != ""
-				}
-			}
-		}
+		bareSafe := allowBare && (repoEnv.first < 0 || entry.end < repoEnv.first) && !hasCommandSubstitution(call)
+		env := callEnvAssigns(entry, repoEnv, hostEnv)
 		words := make([]string, len(call.Args))
 		literal := make([]bool, len(call.Args))
 		for i, word := range call.Args {
@@ -114,7 +91,7 @@ func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 		if len(words) < 4 || !literal[0] || !literal[1] || !literal[2] || words[0] != "gh" || words[1] != "pr" {
 			continue
 		}
-		callHostUnknown := hostUnknown || firstHost >= 0 && entry.end >= firstHost
+		callHostUnknown := hostUnknown || hostEnv.first >= 0 && entry.end >= hostEnv.first
 		if words[2] == "co" {
 			words[2] = "checkout"
 		}
@@ -174,11 +151,11 @@ func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 			continue
 		}
 		if !specified {
-			if envRepoSet {
-				if !envRepoValid {
+			if env.repoSet {
+				if !env.repoValid {
 					continue
 				}
-				repo, specified = envRepo, true
+				repo, specified = env.repo, true
 			} else if !bareSafe {
 				continue
 			} else {
@@ -189,7 +166,7 @@ func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 		if specified && strings.Count(repo, "/") == 2 {
 			explicitHost, repo, _ = strings.Cut(repo, "/")
 		}
-		if explicitHost == "" && !hostValid {
+		if explicitHost == "" && !env.hostValid {
 			continue
 		}
 		if explicitHost != "" && !prHostRE.MatchString(explicitHost) {
@@ -201,9 +178,9 @@ func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 		selectedHost := ""
 		if explicitHost != "" {
 			selectedHost = explicitHost
-		} else if hostSet {
-			selectedHost = host
-			if !specified && remoteHost != "" && !strings.EqualFold(host, remoteHost) {
+		} else if env.hostSet {
+			selectedHost = env.host
+			if !specified && remoteHost != "" && !strings.EqualFold(env.host, remoteHost) {
 				continue
 			}
 		} else if remoteHost != "" && !callHostUnknown {
@@ -217,7 +194,7 @@ func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 		}
 		if link, ok := NewPRLink(fmt.Sprintf("https://%s/%s/pull/%d", selectedHost, repo, number), repo, number); ok {
 			links = append(links, []PRLink{link})
-			if !specified || (explicitHost == "" && !hostSet) {
+			if !specified || (explicitHost == "" && !env.hostSet) {
 				dependsOnRemote = append(dependsOnRemote, link)
 			}
 		}
@@ -242,24 +219,99 @@ func SamePRWorkingDirectory(cwd, dir string) bool {
 }
 
 type prShellCall struct {
-	call    *syntax.CallExpr
-	end     int
-	assigns []*syntax.Assign
+	call                 *syntax.CallExpr
+	end                  int
+	assigns              []*syntax.Assign
+	repoSince, hostSince int
 }
 
-func bashChangesRepositoryContext(file *syntax.File, cwd string) (bool, bool, bool, int, int, []prShellCall) {
-	type scope struct {
-		local   bool
-		call    int
-		assigns []*syntax.Assign
+// prEnvTrack records the first event that may alter a variable's meaning and
+// every event that changes it.
+type prEnvTrack struct {
+	first   int
+	changes []int
+}
+
+func (t *prEnvTrack) record(index int, change bool) {
+	if t.first < 0 || index < t.first {
+		t.first = index
 	}
+	if change {
+		t.changes = append(t.changes, index)
+	}
+}
+
+func (t prEnvTrack) changedBetween(since, through int) bool {
+	i := sort.SearchInts(t.changes, since)
+	return i < len(t.changes) && t.changes[i] <= through
+}
+
+type prShellScope struct {
+	local                bool
+	call                 int
+	assigns              []*syntax.Assign
+	repoSince, hostSince int
+}
+
+func childPRScope(parent prShellScope, assigns []*syntax.Assign, local bool, at int) prShellScope {
+	child := prShellScope{local: local, call: -1, assigns: append(append([]*syntax.Assign(nil), parent.assigns...), assigns...), repoSince: parent.repoSince, hostSince: parent.hostSince}
+	for _, a := range assigns {
+		if a.Name != nil && a.Name.Value == "GH_REPO" {
+			child.repoSince = at
+		}
+		if a.Name != nil && a.Name.Value == "GH_HOST" {
+			child.hostSince = at
+		}
+	}
+	return child
+}
+
+type prEnvAssigns struct {
+	repo, host                             string
+	repoSet, repoValid, hostSet, hostValid bool
+}
+
+// callEnvAssigns resolves the GH_REPO and GH_HOST a call sees, dropping an
+// inherited value that an expanded shell changed before the call.
+func callEnvAssigns(entry prShellCall, repoEnv, hostEnv prEnvTrack) prEnvAssigns {
+	env := prEnvAssigns{hostValid: true}
+	for group, assigns := range [][]*syntax.Assign{entry.assigns, entry.call.Assigns} {
+		if group == 1 {
+			env.repoValid = env.repoValid && !(env.repoSet && repoEnv.changedBetween(entry.repoSince, entry.end))
+			env.hostValid = env.hostValid && !(env.hostSet && hostEnv.changedBetween(entry.hostSince, entry.end))
+		}
+		for _, a := range assigns {
+			if a.Name == nil {
+				continue
+			}
+			if a.Name.Value == "GH_REPO" {
+				env.repoSet = true
+				env.repo, env.repoValid = "", false
+				if a.Value != nil {
+					env.repo, env.repoValid = shellLiteral(a.Value.Parts)
+				}
+			}
+			if a.Name.Value == "GH_HOST" {
+				env.hostSet = true
+				env.host, env.hostValid = "", false
+				if a.Value != nil {
+					env.host, env.hostValid = shellLiteral(a.Value.Parts)
+					env.hostValid = env.hostValid && env.host != ""
+				}
+			}
+		}
+	}
+	return env
+}
+
+func bashChangesRepositoryContext(file *syntax.File, cwd string) (bool, bool, bool, prEnvTrack, prEnvTrack, []prShellCall) {
 	type event struct {
 		node      syntax.Node
-		scope     scope
+		scope     prShellScope
 		uncertain bool
 	}
 	var events []event
-	var stack []scope
+	var stack []prShellScope
 	functions := make(map[string]*syntax.Stmt)
 	active := make(map[string]bool)
 	expansions := 0
@@ -284,7 +336,7 @@ func bashChangesRepositoryContext(file *syntax.File, cwd string) (bool, bool, bo
 				}
 				remaining -= cost
 			}
-			var current scope
+			var current prShellScope
 			if len(stack) > 0 {
 				current = stack[len(stack)-1]
 			}
@@ -306,7 +358,7 @@ func bashChangesRepositoryContext(file *syntax.File, cwd string) (bool, bool, bo
 							uncertain = true
 						} else if nested, err := syntax.NewParser().Parse(strings.NewReader(script), ""); err == nil {
 							remaining -= len(script)
-							child := scope{local: true, call: -1, assigns: append(append([]*syntax.Assign(nil), current.assigns...), n.Assigns...)}
+							child := childPRScope(current, n.Assigns, true, len(events))
 							stack = append(stack, child)
 							expansions++
 							walk(nested, true)
@@ -321,7 +373,7 @@ func bashChangesRepositoryContext(file *syntax.File, cwd string) (bool, bool, bo
 						if expansions >= 4096 || remaining == 0 {
 							uncertain = true
 						} else {
-							child := scope{local: current.local, call: -1, assigns: append(append([]*syntax.Assign(nil), current.assigns...), n.Assigns...)}
+							child := childPRScope(current, n.Assigns, current.local, len(events))
 							stack = append(stack, child)
 							active[name] = true
 							expansions++
@@ -333,7 +385,7 @@ func bashChangesRepositoryContext(file *syntax.File, cwd string) (bool, bool, bo
 					}
 				}
 				current.call = len(calls)
-				calls = append(calls, prShellCall{n, len(events), current.assigns})
+				calls = append(calls, prShellCall{n, len(events), current.assigns, current.repoSince, current.hostSince})
 				events = append(events, event{node, current, uncertain})
 			case *syntax.DeclClause:
 				events = append(events, event{node, current, false})
@@ -343,17 +395,12 @@ func bashChangesRepositoryContext(file *syntax.File, cwd string) (bool, bool, bo
 		})
 	}
 	walk(file, false)
-	firstRepo, firstHost := -1, -1
+	repoEnv, hostEnv := prEnvTrack{first: -1}, prEnvTrack{first: -1}
 	var directory, repository, persistent bool
-	record := func(dst *int, index int) {
-		if *dst < 0 || index < *dst {
-			*dst = index
-		}
-	}
 	for index, item := range events {
 		if item.uncertain {
-			record(&firstRepo, index)
-			record(&firstHost, index)
+			repoEnv.record(index, true)
+			hostEnv.record(index, true)
 			repository, persistent = true, true
 		}
 		switch n := item.node.(type) {
@@ -363,10 +410,10 @@ func bashChangesRepositoryContext(file *syntax.File, cwd string) (bool, bool, bo
 					continue
 				}
 				if a.Name.Value == "GH_REPO" {
-					record(&firstRepo, index)
+					repoEnv.record(index, true)
 				}
 				if a.Name.Value == "GH_HOST" {
-					record(&firstHost, index)
+					hostEnv.record(index, true)
 				}
 				if !item.scope.local && (a.Name.Value == "GH_REPO" || a.Name.Value == "GH_HOST") {
 					repository = true
@@ -386,7 +433,7 @@ func bashChangesRepositoryContext(file *syntax.File, cwd string) (bool, bool, bo
 					continue
 				}
 				if a.Name.Value == "GH_REPO" && len(words) == 0 {
-					record(&firstRepo, index)
+					repoEnv.record(index, true)
 				}
 				if a.Name.Value == "GH_HOST" {
 					literalPrefix := false
@@ -394,7 +441,7 @@ func bashChangesRepositoryContext(file *syntax.File, cwd string) (bool, bool, bo
 						_, literalPrefix = shellLiteral(a.Value.Parts)
 					}
 					if !literalPrefix {
-						record(&firstHost, index)
+						hostEnv.record(index, len(words) == 0)
 					}
 				}
 				if !item.scope.local && len(words) == 0 && (a.Name.Value == "GH_REPO" || a.Name.Value == "GH_HOST") {
@@ -409,22 +456,25 @@ func bashChangesRepositoryContext(file *syntax.File, cwd string) (bool, bool, bo
 				}
 			}
 			if (name == "cd" || name == "pushd" || name == "popd") && !SamePRWorkingDirectory(cwd, dir) {
-				record(&firstRepo, index)
+				repoEnv.record(index, false)
 				if !item.scope.local {
 					directory = true
 				}
 			}
 			if name == "eval" || name == "source" || name == "." || functions[name] != nil {
-				record(&firstRepo, index)
-				record(&firstHost, index)
+				repoEnv.record(index, true)
+				hostEnv.record(index, true)
 			}
 			if repositoryMutation(words) {
-				record(&firstRepo, index)
+				repoEnv.record(index, false)
 			}
 			if name == "unset" {
 				for _, word := range words[1:] {
+					if word == "GH_REPO" {
+						repoEnv.record(index, true)
+					}
 					if word == "GH_HOST" {
-						record(&firstHost, index)
+						hostEnv.record(index, true)
 					}
 				}
 			}
@@ -437,7 +487,7 @@ func bashChangesRepositoryContext(file *syntax.File, cwd string) (bool, bool, bo
 			}
 		}
 	}
-	return directory, repository || persistent, persistent, firstRepo, firstHost, calls
+	return directory, repository || persistent, persistent, repoEnv, hostEnv, calls
 }
 
 func repositoryMutation(words []string) bool {
@@ -459,29 +509,52 @@ func repositoryMutation(words []string) bool {
 		}
 		return true
 	}
-	if words[0] != "git" {
+	return words[0] == "git" && gitRepositoryMutation(words[1:])
+}
+
+// gitRepositoryMutation reports whether git's subcommand, after its global
+// options, can change a repository's remotes or branches.
+func gitRepositoryMutation(words []string) bool {
+	i := 0
+	for i < len(words) && strings.HasPrefix(words[i], "-") {
+		option := words[i]
+		i++
+		switch option {
+		case "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix":
+			if i >= len(words) {
+				return true
+			}
+			i++
+		}
+	}
+	if i >= len(words) {
 		return false
 	}
-	switch words[1] {
+	words = words[i:]
+	switch words[0] {
 	case "config":
-		write := false
-		for _, word := range words[2:] {
-			if word == "--get" || word == "--get-all" || word == "--list" || word == "-l" {
-				return false
-			}
-			if word == "--add" || word == "--replace-all" || word == "--unset" || word == "--unset-all" || word == "--rename-section" || word == "--remove-section" || word == "set" || word == "unset" {
-				write = true
-			}
-		}
-		for i, word := range words[2:] {
-			key := strings.ToLower(word)
-			if strings.HasPrefix(key, "remote.") || strings.HasPrefix(key, "branch.") || strings.HasPrefix(key, "url.") {
-				return write || i+3 < len(words)
-			}
-		}
-		return false
+		return gitConfigMutation(words[1:])
 	case "remote":
-		return len(words) > 2 && (words[2] == "add" || words[2] == "remove" || words[2] == "rename" || words[2] == "set-url")
+		return len(words) > 1 && (words[1] == "add" || words[1] == "remove" || words[1] == "rename" || words[1] == "set-url")
+	}
+	return false
+}
+
+func gitConfigMutation(args []string) bool {
+	write := false
+	for _, word := range args {
+		if word == "--get" || word == "--get-all" || word == "--list" || word == "-l" {
+			return false
+		}
+		if word == "--add" || word == "--replace-all" || word == "--unset" || word == "--unset-all" || word == "--rename-section" || word == "--remove-section" || word == "set" || word == "unset" {
+			write = true
+		}
+	}
+	for i, word := range args {
+		key := strings.ToLower(word)
+		if strings.HasPrefix(key, "remote.") || strings.HasPrefix(key, "branch.") || strings.HasPrefix(key, "url.") {
+			return write || i+1 < len(args)
+		}
 	}
 	return false
 }
