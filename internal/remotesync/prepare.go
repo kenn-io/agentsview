@@ -474,6 +474,9 @@ func (hs RemoteSync) prepare(
 	if err := validateTargetSetPaths(targets); err != nil {
 		return nil, err
 	}
+	if err := hs.DB.RecordRemoteMachineOrigin(ctx, hs.Host, targets.InstallationID); err != nil {
+		return nil, fmt.Errorf("record origin of %s: %w", hs.Host, err)
+	}
 	prepared := &PreparedRemote{
 		sync:                      hs,
 		targets:                   targets,

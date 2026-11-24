@@ -105,6 +105,14 @@ directory. Changing `host` creates a new namespace and can duplicate sessions
 from the same machine, while reusing it for a different machine can reuse stale
 cached state. If the same logical machine moves, changing only `url` is fine.
 
+Sessions keep `host` as their machine name. When the remote's AgentsView
+reports its installation identity, per-machine reporting exports
+(`agentsview export hour --by-machine`) and the change stream name those
+sessions by that identity instead. The remote's own archive uses the same
+identity, so a consumer that receives exports from both can tell they describe
+the same machine and count its activity once. A remote running an older
+AgentsView reports no identity, and its sessions keep `host` in exports too.
+
 The daemon on the remote machine must bind to a non-loopback interface by
 setting `host = "0.0.0.0"` with `require_auth = true` in its `config.toml`, or
 every sync fails with a connection-refused error. See
