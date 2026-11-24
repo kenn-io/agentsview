@@ -36,5 +36,5 @@ export function documentTitle({
     };
     label = labels[route]();
   }
-  return `${label} · AgentsView`;
+  return `${label} · Agentic HQ`;
 }

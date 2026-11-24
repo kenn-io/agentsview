@@ -1,4 +1,15 @@
-# agentsview
+# All-in-One Agentic HQ
+
+A local dashboard for reviewing coding-agent sessions across projects. This
+edition builds on [AgentsView](https://github.com/kenn-io/agentsview) and
+retains its [MIT license](LICENSE).
+
+The web interface identifies this edition as **Agentic HQ**. To run that
+interface, build from this checkout using the development instructions below.
+The installers, releases, and documentation linked below are maintained by
+the upstream project.
+
+## About AgentsView
 
 Browse, search, and track costs across your AI coding agents. Your session
 archive stays on your machine unless you choose a feature that shares it.
