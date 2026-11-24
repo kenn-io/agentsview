@@ -540,3 +540,47 @@ func TestBuildSharedChunkSurvivesRejectedDocument(t *testing.T) {
 	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT count(*) FROM message_vectors_chunks WHERE doc_key = ?`, unitDocKey(src.rows[1].unit, map[string]int{})).Scan(&count))
 	assert.Positive(t, count)
 }
+
+func TestChunkTextIgnoresPointerAfterVectorSaveFailure(t *testing.T) {
+	ctx := t.Context()
+	ix := openTestIndex(t)
+	src := twoDocSource()
+	src.rows = src.rows[:1]
+	src.rows[0].unit.Content = "old text"
+	gen := fakeGeneration("failed-vector-save")
+	_, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{})
+	require.NoError(t, err)
+	key := unitDocKey(src.rows[0].unit, map[string]int{})
+	content := "new text"
+	revision := contentHash(content)
+	_, err = ix.db.ExecContext(ctx, `UPDATE vector_messages SET content = ?, content_hash = ? WHERE doc_key = ?`, content, revision, key)
+	require.NoError(t, err)
+	_, err = ix.db.ExecContext(ctx, `CREATE TRIGGER fail_vector_save BEFORE INSERT ON message_vectors_chunks BEGIN SELECT RAISE(ABORT, 'vector save failed'); END`)
+	require.NoError(t, err)
+	store := &reuseCompletingStore{repairQueueCompletingStore: &repairQueueCompletingStore{Store: ix.store, db: ix.db, spec: ix.spec}, ix: ix, ordinal: 1}
+	vectors := []kitvec.ChunkVector{{ChunkIndex: 0, Vector: kitvec.Vector{0, 1, 0}}}
+	err = store.SaveVectors(ctx, gen.Fingerprint(), key, revision, vectors)
+	require.ErrorContains(t, err, "vector save failed")
+	var pointerRevision, stampRevision string
+	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT revision FROM message_vectors_chunk_text WHERE ordinal = 1 AND doc_key = ?`, key).Scan(&pointerRevision))
+	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT revision FROM message_vectors_stamps WHERE ordinal = 1 AND doc_key = ?`, key).Scan(&stampRevision))
+	assert.Equal(t, revision, pointerRevision)
+	assert.NotEqual(t, pointerRevision, stampRevision)
+	calls := 0
+	enc := ix.reuseEncoder(func(_ context.Context, texts []string) ([][]float32, error) {
+		calls++
+		assert.Equal(t, []string{content}, texts)
+		return [][]float32{{0, 0, 1}}, nil
+	}, reuseGeneration{ordinal: 1, dimension: 3})
+	got, err := enc(ctx, []string{content})
+	require.NoError(t, err)
+	assert.Equal(t, [][]float32{{0, 0, 1}}, got)
+	assert.Equal(t, 1, calls)
+	_, err = ix.db.ExecContext(ctx, `DROP TRIGGER fail_vector_save`)
+	require.NoError(t, err)
+	require.NoError(t, store.SaveVectors(ctx, gen.Fingerprint(), key, revision, vectors))
+	got, err = enc(ctx, []string{content})
+	require.NoError(t, err)
+	assert.Equal(t, [][]float32{{0, 1, 0}}, got)
+	assert.Equal(t, 1, calls)
+}
