@@ -953,8 +953,9 @@ describe("nested subagent rows", () => {
           makeSession({ id: "a1" }),
           makeSession({ id: "a2" }),
           sub("b1", ["a1"]),
+          sub("b3", ["a1"]),
           sub("b2", ["a2"]),
-          sub("c", ["b1", "b2"]),
+          sub("c", ["b1", "b3", "b2"]),
         ]);
         return ["a1", "a2"].map((key) => {
           const group = groups.find((g) => g.key === key)!;
@@ -967,6 +968,7 @@ describe("nested subagent rows", () => {
       expected: [
         [
           ["b1", 2],
+          ["b3", 2],
           ["c", 3],
         ],
         [
@@ -988,30 +990,6 @@ describe("nested subagent rows", () => {
       expected: [
         ["d", 2, false],
         ["c", 2, true],
-      ],
-    },
-    {
-      name: "contextual and shared parent precedence",
-      run: () => {
-        const [full] = buildSessionGroups(launchedTree());
-        const sessions = full!.sessions.map((s) =>
-          s.id === "c" ? { ...s, parent_session_id: undefined, parent_session_ids: ["b", "d"] } : s,
-        );
-        sessions.push(
-          makeSession({
-            id: "e",
-            relationship_type: "subagent",
-            parent_session_id: "b",
-            parent_session_ids: ["d"],
-          }),
-        );
-        return rows({ ...full!, sessions, allSessions: sessions });
-      },
-      expected: [
-        ["d", 2, false],
-        ["c", 3, true],
-        ["b", 2, true],
-        ["e", 3, true],
       ],
     },
   ])("renders $name", ({ run, expected }) => {

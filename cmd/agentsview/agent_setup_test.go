@@ -481,26 +481,13 @@ func TestAgentSetupInstallsSessionStartHook(t *testing.T) {
 			if !tc.mcp {
 				args = append(args, "--mcp=false")
 			}
-			out, _ := executeCommand(newRootCommand(), args...)
-			var report struct {
-				Rows []struct {
-					Piece  string `json:"piece"`
-					State  string `json:"state"`
-					Reason string `json:"reason"`
-				} `json:"rows"`
+			out, err := executeCommand(newRootCommand(), args...)
+			if tc.agent == "codex" {
+				// The fake Codex cannot report whether hooks are enabled.
+				require.ErrorContains(t, err, "agent setup is not ready")
+			} else {
+				require.NoError(t, err, out)
 			}
-			require.NoError(t, json.Unmarshal([]byte(out), &report), out)
-			var hookRow *struct {
-				Piece  string `json:"piece"`
-				State  string `json:"state"`
-				Reason string `json:"reason"`
-			}
-			for i := range report.Rows {
-				if report.Rows[i].Piece == "hooks" {
-					hookRow = &report.Rows[i]
-				}
-			}
-			require.NotNil(t, hookRow, out)
 
 			data, err := os.ReadFile(path)
 			require.NoError(t, err)

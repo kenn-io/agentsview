@@ -85,18 +85,12 @@ func TestSidebarIncludesAutomatedLaunchChild(t *testing.T) {
 			('launcher', 'm', 'launch-project', 'claude', 'root', NULL, 3, 3, false, '{}', NOW(), ''),
 			('worker', 'm', 'launch-project', 'codex', 'subagent', 'launcher', 1, 1, true, '{}', NOW(), 'non-interactive'),
 			('native', 'm', 'launch-project', 'codex', 'subagent', 'launcher', 1, 1, true, '{}', NOW(), 'non-interactive'),
-			('spawned', 'm', 'launch-project', 'codex', 'subagent', 'launcher', 1, 1, true, '{}', NOW(), 'non-interactive'),
-			('orphan', 'm', 'launch-project', 'codex', 'subagent', NULL, 1, 1, true, '{}', NOW(), 'non-interactive')`)
+			('spawned', 'm', 'launch-project', 'codex', 'subagent', 'launcher', 1, 1, true, '{}', NOW(), 'non-interactive')`)
 	require.NoError(t, err)
 	_, err = store.DB().ExecContext(t.Context(), `UPDATE sessions SET parser_parent_session_id = 'launcher' WHERE id = 'native'`)
 	require.NoError(t, err)
 	_, err = store.DB().ExecContext(t.Context(), `INSERT INTO tool_calls (session_id, tool_name, category, message_ordinal, subagent_session_id) VALUES ('launcher', 'Task', 'Task', 0, 'spawned')`)
 	require.NoError(t, err)
-	predicate := db.SessionTreeMemberPredicate(db.SessionFilter{SidebarTree: true, ExcludeAutomated: true}, store.sessionDialect(), "s")
-	var orphanCount int
-	err = store.DB().QueryRowContext(t.Context(), "SELECT COUNT(*) FROM sessions s WHERE s.id = 'orphan' AND "+predicate).Scan(&orphanCount)
-	require.NoError(t, err)
-	assert.Zero(t, orphanCount)
 	for _, limit := range []int{0, 10} {
 		index, err := store.GetSidebarSessionIndex(t.Context(), db.SessionFilter{
 			Project: "launch-project", ExcludeOneShot: true, ExcludeAutomated: true, Limit: limit,

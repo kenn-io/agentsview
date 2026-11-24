@@ -1829,21 +1829,22 @@ func TestSidebarShowsLaunchedAutomatedRun(t *testing.T) {
 	insertSession(t, d, "native", "proj", func(s *Session) {
 		s.FirstMessage = new("You are a code reviewer. Review the code.")
 		s.ParentSessionID = new("launcher")
-		s.ParserParentSessionID = new("launcher")
 		s.RelationshipType = "subagent"
 		s.Entrypoint = "sdk-cli"
 		s.MessageCount = 2
 		s.UserMessageCount = 1
 	})
-	insertSession(t, d, "unattributed", "proj", func(s *Session) {
+	insertSession(t, d, "spawned", "proj", func(s *Session) {
 		s.FirstMessage = new("You are a code reviewer. Review the code.")
-		s.ParentSessionID = new("launcher")
-		s.RelationshipType = "subagent"
 		s.Entrypoint = "sdk-cli"
 		s.MessageCount = 2
 		s.UserMessageCount = 1
 	})
-	_, err := d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET parser_parent_session_id = NULL WHERE id = 'unattributed'`)
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{{
+		SessionID: "launcher", Ordinal: 0, Role: "assistant", Content: "spawn", HasToolUse: true,
+		ToolCalls: []ToolCall{{ToolName: "Agent", Category: "Task", SubagentSessionID: "spawned"}},
+	}}))
+	_, err := d.LinkSubagentSessionsForSessions(t.Context(), []string{"launcher"})
 	require.NoError(t, err)
 	_, err = d.SetSessionExternalParent(t.Context(), "run", "launcher")
 	require.NoError(t, err)

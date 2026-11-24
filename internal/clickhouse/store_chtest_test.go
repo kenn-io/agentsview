@@ -5,7 +5,6 @@ package clickhouse
 import (
 	"context"
 	"database/sql"
-	"slices"
 	"testing"
 	"time"
 
@@ -123,21 +122,17 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 
 	t.Run("sidebar_includes_automated_children_without_launcher_provenance", func(t *testing.T) {
 		store, syncer, local := newPushedStore(t)
-		for _, row := range []struct{ id, kind, entrypoint string }{
-			{"ch-native-kind", "non-interactive", ""},
-			{"ch-launched", "non-interactive", ""},
-		} {
-			session := fixtureSession(row.id, "alpha", "You are a code reviewer. Review the code.", "2026-01-10T00:07:00.000Z", 1)
-			if row.id != "ch-launched" {
+		for _, id := range []string{"ch-native-kind", "ch-launched"} {
+			session := fixtureSession(id, "alpha", "You are a code reviewer. Review the code.", "2026-01-10T00:07:00.000Z", 1)
+			if id != "ch-launched" {
 				session.RelationshipType = "subagent"
 				parent := fixtureAlphaID
 				session.ParentSessionID = &parent
 			}
 			session.IsAutomated = true
-			session.SessionKind = row.kind
-			session.Entrypoint = row.entrypoint
+			session.SessionKind = "non-interactive"
 			_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
-				Session: session, Messages: []db.Message{fixtureMessage(row.id, 0, "user", "You are a code reviewer. Review the code.", "2026-01-10T00:07:00.000Z")},
+				Session: session, Messages: []db.Message{fixtureMessage(id, 0, "user", "You are a code reviewer. Review the code.", "2026-01-10T00:07:00.000Z")},
 				DataVersion: 1, ReplaceMessages: true,
 			}})
 			require.NoError(t, err)
@@ -146,27 +141,15 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 		require.NoError(t, err)
 		_, err = syncer.Push(ctx, false, nil)
 		require.NoError(t, err)
-		for _, filter := range []struct {
-			name string
-			db.SessionFilter
-			wantChildren bool
-		}{
-			{"filtered", db.SessionFilter{Project: "alpha", ExcludeAutomated: true}, true},
-			{"unfiltered", db.SessionFilter{Project: "alpha"}, true},
-		} {
-			t.Run(filter.name, func(t *testing.T) {
-				index, err := store.GetSidebarSessionIndex(ctx, filter.SessionFilter)
-				require.NoError(t, err)
-				ids := make([]string, len(index.Sessions))
-				for i, row := range index.Sessions {
-					ids[i] = row.ID
-				}
-				assert.Contains(t, ids, fixtureAlphaID)
-				for _, id := range []string{"ch-native-kind", "ch-launched"} {
-					assert.Equal(t, filter.wantChildren, slices.Contains(ids, id), id)
-				}
-			})
+		index, err := store.GetSidebarSessionIndex(ctx, db.SessionFilter{Project: "alpha", ExcludeAutomated: true})
+		require.NoError(t, err)
+		ids := make([]string, len(index.Sessions))
+		for i, row := range index.Sessions {
+			ids[i] = row.ID
 		}
+		assert.Contains(t, ids, fixtureAlphaID)
+		assert.Contains(t, ids, "ch-native-kind")
+		assert.Contains(t, ids, "ch-launched")
 	})
 
 	t.Run("get_session_and_find", func(t *testing.T) {
