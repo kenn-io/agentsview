@@ -326,3 +326,42 @@ func TestRawProjectionRefreshesRetainedToolLinks(t *testing.T) {
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, retained.SessionID).Scan(&links))
 	assert.Empty(t, db.DecodePRLinks(links))
 }
+
+func TestRawProjectionRestoresRetainedLinksFromOtherSource(t *testing.T) {
+	t.Parallel()
+	f := newProjectionFixture(t)
+	var err error
+	f.sink, err = NewRawProjectionStore(t.Context(), f.runtime, RawProjectionOptions{Tenant: f.tenant, Content: ingest.ContentOptions{ArchiveContent: config.ArchiveContentTranscripts}})
+	require.NoError(t, err)
+	long := projectionOutcome("start")
+	call := &long.Outcome.Results[0].Result.Messages[1].ToolCalls[0]
+	call.InputJSON = `{"command":"gh pr view 42 -R example/repo"}`
+	m, receipt := f.accept(t, "device-a", "long-initial", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, long))
+	call.InputJSON = `{"command":"gh pr view 43 -R example/repo"}`
+	m, _ = f.accept(t, "device-a", "long-updated", receipt.Receipt)
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, long))
+	retained, err := f.sink.Resolve(t.Context(), "codex:portable")
+	require.NoError(t, err)
+	var links string
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, retained.SessionID).Scan(&links))
+	want := []db.PRLink{{URL: "https://github.com/example/repo/pull/43", Host: "github.com", Repository: "example/repo", Number: 43}}
+	require.Equal(t, want, db.DecodePRLinks(links))
+	// Recreate the longer capture while a different source publishes its prefix.
+	_, err = f.runtime.ExecContext(t.Context(), rawSourceProofDetachSQL, retained.SessionID)
+	require.NoError(t, err)
+	_, err = f.runtime.ExecContext(t.Context(), `DELETE FROM sessions WHERE id=$1`, retained.SessionID)
+	require.NoError(t, err)
+	short := projectionOutcome("start")
+	short.Outcome.Results[0].Result.Messages = short.Outcome.Results[0].Result.Messages[:1]
+	other, _ := f.accept(t, "device-b", "short", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, other), other, short))
+	restored, err := f.sink.Resolve(t.Context(), "codex:portable")
+	require.NoError(t, err)
+	require.Equal(t, retained.SessionID, restored.SessionID)
+	var shortCapture string
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT captured_session_id FROM raw_session_branches WHERE manifest_id=$1`, other.ManifestID).Scan(&shortCapture))
+	assert.NotEqual(t, restored.SessionID, shortCapture)
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, restored.SessionID).Scan(&links))
+	assert.Equal(t, want, db.DecodePRLinks(links))
+}
