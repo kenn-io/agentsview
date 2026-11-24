@@ -108,7 +108,7 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 	close(release)
 	found := false
 	for scanner.Scan() {
-		if strings.Contains(scanner.Text(), `"scope":"sessions"`) {
+		if strings.Contains(scanner.Text(), `"scope":"sync"`) {
 			found = true
 			break
 		}
@@ -126,24 +126,36 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 
 func TestServeStartupWorkerFailure(t *testing.T) {
 	isolateServeTestHome(t)
+	t.Setenv(syncWorkerChildEnvVar, "1")
 	cfg := testConfigWithClaudeFixture(t)
 	cfg.Host = "127.0.0.1"
 	cfg.EventsCoalesceInterval = 0
-	writeRestartSession(t, cfg, "visible-seed")
+	path := writeRestartSession(t, cfg, "visible-seed")
 	var seed bytes.Buffer
 	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &seed))
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	require.NoError(t, err)
+	_, err = f.WriteString(testjsonl.NewSessionBuilder().AddClaudeUser("2026-01-02T00:00:03Z", "partial-commit").String())
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
 	release := make(chan struct{})
-	restore := stubLaunchSyncWorker(t, func(ctx context.Context, _ config.Config, _ syncWorkerRequest, _ func(workerLine)) (workerResult, error) {
+	restore := stubLaunchSyncWorker(t, func(ctx context.Context, cfg config.Config, req syncWorkerRequest, _ func(workerLine)) (workerResult, error) {
 		select {
 		case <-release:
 		case <-ctx.Done():
 			return workerResult{}, ctx.Err()
 		}
+		var out bytes.Buffer
+		if err := runSyncWorkerContext(ctx, cfg, req, &out); err != nil {
+			return workerResult{}, err
+		}
 		return workerResult{}, errors.New("injected worker failure")
 	})
 	t.Cleanup(restore)
 	base := startRestartServe(t, cfg)
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	messagesURL := base + "/api/v1/sessions/visible-seed/messages"
+	require.NotContains(t, restartGet(t, messagesURL), "partial-commit")
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/v1/events", nil)
 	require.NoError(t, err)
@@ -160,12 +172,51 @@ func TestServeStartupWorkerFailure(t *testing.T) {
 	}, 30*time.Second, 100*time.Millisecond)
 	found := false
 	for scanner.Scan() {
-		if strings.Contains(scanner.Text(), `"scope":"sessions"`) {
+		if strings.Contains(scanner.Text(), `"scope":"sync"`) {
 			found = true
 			break
 		}
 	}
-	require.True(t, found, "failed worker should emit an event: %v", scanner.Err())
+	require.True(t, found, "failed worker should invalidate session details: %v", scanner.Err())
+	require.Contains(t, restartGet(t, messagesURL), "partial-commit")
+}
+
+func TestServeStartupWorkerWithoutChangesDoesNotEmitSessions(t *testing.T) {
+	isolateServeTestHome(t)
+	cfg := testConfigWithClaudeFixture(t)
+	cfg.Host = "127.0.0.1"
+	cfg.EventsCoalesceInterval = 0
+	writeRestartSession(t, cfg, "visible-seed")
+	var seed bytes.Buffer
+	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &seed))
+	release := make(chan struct{})
+	restore := stubLaunchSyncWorker(t, func(ctx context.Context, _ config.Config, _ syncWorkerRequest, _ func(workerLine)) (workerResult, error) {
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return workerResult{}, ctx.Err()
+		}
+		return workerResult{Status: "ok", DiscoveryComplete: true}, nil
+	})
+	t.Cleanup(restore)
+	base := startRestartServe(t, cfg)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/v1/events", nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	scanner := bufio.NewScanner(resp.Body)
+	require.True(t, scanner.Scan())
+	require.Contains(t, scanner.Text(), "events_ready")
+	close(release)
+	require.Eventually(t, func() bool {
+		return strings.Contains(restartGet(t, base+"/api/v1/sync/status"), `"startup_pending":false`)
+	}, 2*time.Second, 100*time.Millisecond)
+	for scanner.Scan() {
+		assert.NotContains(t, scanner.Text(), `"scope":"sessions"`)
+	}
 }
 
 func TestServeResumesFirstImportWithoutStartupWorker(t *testing.T) {

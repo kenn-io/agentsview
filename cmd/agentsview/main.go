@@ -496,8 +496,9 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 							return
 						}
 						workerStartupResult, _ = startupWorkerOutcome(result, err)
-						if emitter != nil {
-							emitter.Emit("sessions")
+						if err != nil && emitter != nil {
+							// A failed worker may have committed before losing its result.
+							emitter.Emit("sync")
 						}
 					}
 					completeWorkerStartupReconciliation(
