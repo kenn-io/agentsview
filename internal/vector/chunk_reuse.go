@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"sync"
 
 	kitvec "go.kenn.io/kit/vector"
 )
@@ -22,8 +21,6 @@ type reuseCompletingStore struct {
 	*repairQueueCompletingStore
 	ix      *Index
 	ordinal int64
-	mu      sync.Mutex
-	saved   []string
 }
 
 func (s *reuseCompletingStore) SaveVectors(ctx context.Context, gen, doc string, revision any, vectors []kitvec.ChunkVector) error {
@@ -54,11 +51,6 @@ func (s *reuseCompletingStore) SaveVectors(ctx context.Context, gen, doc string,
 	}
 	if err := s.repairQueueCompletingStore.SaveVectors(ctx, gen, doc, revision, vectors); err != nil {
 		return err
-	}
-	if s.ix.spec.Name == "messages" && vectors != nil {
-		s.mu.Lock()
-		s.saved = append(s.saved, doc)
-		s.mu.Unlock()
 	}
 	return nil
 }

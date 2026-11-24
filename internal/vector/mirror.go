@@ -775,6 +775,11 @@ func (ix *Index) Clear(ctx context.Context) error {
 	if _, err := ix.reconcileDeletions(ctx, nil, "", nil); err != nil {
 		return err
 	}
+	if ix.spec.Name == "messages" {
+		if _, err := ix.db.ExecContext(ctx, `DELETE FROM `+ix.spec.reuseTable()); err != nil {
+			return fmt.Errorf("clearing reusable chunks: %w", err)
+		}
+	}
 	return ix.metaDelete(ctx, refreshWatermarkKey)
 }
 

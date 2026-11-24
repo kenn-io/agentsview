@@ -302,13 +302,36 @@ func (ix *Index) Build(
 			return result, err
 		}
 		defer tx.Rollback()
-		for _, key := range reuseStore.saved {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM `+ix.spec.reuseTable()+` WHERE ordinal = ? AND NOT EXISTS (SELECT 1 FROM `+ix.spec.DocsTable+` d WHERE d.doc_key = `+ix.spec.reuseTable()+`.doc_key)`, ordinal); err != nil {
+			return result, err
+		}
+		// A previous fill can save documents before a later document fails. On
+		// retry those completed documents are no longer passed to SaveVectors.
+		rows, err := tx.QueryContext(ctx, `SELECT DISTINCT d.doc_key, d.content, EXISTS (SELECT 1 FROM `+ix.spec.chunksTable()+` c WHERE c.ordinal = ? AND c.doc_key = d.doc_key) FROM `+ix.spec.reuseTable()+` r JOIN `+ix.spec.DocsTable+` d ON d.doc_key = r.doc_key JOIN `+ix.spec.stampsTable()+` s ON s.ordinal = r.ordinal AND s.doc_key = r.doc_key AND s.revision = d.content_hash WHERE r.ordinal = ?`, ordinal, ordinal)
+		if err != nil {
+			return result, err
+		}
+		var completed []string
+		for rows.Next() {
+			var key, content string
+			var hasChunks bool
+			if err := rows.Scan(&key, &content, &hasChunks); err != nil {
+				rows.Close()
+				return result, err
+			}
+			if hasChunks || len(kitvec.Split(content, ix.split)) == 0 {
+				completed = append(completed, key)
+			}
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return result, err
+		}
+		for _, key := range completed {
 			if _, err := tx.ExecContext(ctx, `DELETE FROM `+ix.spec.reuseTable()+` WHERE ordinal = ? AND doc_key = ?`, ordinal, key); err != nil {
 				return result, err
 			}
-		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM `+ix.spec.reuseTable()+` WHERE ordinal = ? AND NOT EXISTS (SELECT 1 FROM `+ix.spec.DocsTable+` d WHERE d.doc_key = `+ix.spec.reuseTable()+`.doc_key)`, ordinal); err != nil {
-			return result, err
 		}
 		if err := tx.Commit(); err != nil {
 			return result, err

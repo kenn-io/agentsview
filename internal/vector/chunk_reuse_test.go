@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -604,7 +605,6 @@ func TestChunkTextStaleSaveReturnsErrStale(t *testing.T) {
 	var revision string
 	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT revision FROM message_vectors_chunk_text WHERE ordinal = 1 AND doc_key = ?`, key).Scan(&revision))
 	assert.Equal(t, oldRevision, revision)
-	assert.Empty(t, store.saved)
 }
 
 func TestChunkTextBackfillPageQueryPlan(t *testing.T) {
@@ -616,4 +616,86 @@ func TestChunkTextBackfillPageQueryPlan(t *testing.T) {
 	assert.Contains(t, joined, "SEARCH c EXISTS USING COVERING INDEX message_vectors_chunks_by_doc (doc_key=? AND ordinal=?)")
 	assert.Contains(t, joined, "SEARCH t USING PRIMARY KEY (ordinal=? AND doc_key=?)")
 	assert.NotContains(t, joined, "TEMP B-TREE")
+}
+
+func TestClearRemovesAllReuseIncludingOrphans(t *testing.T) {
+	ctx := t.Context()
+	ix := openTestIndex(t)
+	src := twoDocSource()
+	src.rows = src.rows[:1]
+	_, err := ix.Build(ctx, src, fakeBuildEncoder(), fakeGeneration("clear-reuse"), BuildOptions{})
+	require.NoError(t, err)
+	key := unitDocKey(src.rows[0].unit, map[string]int{})
+	_, err = ix.db.ExecContext(ctx, `INSERT INTO message_vectors_reuse VALUES (1, ?, 'a', x'0000803f0000000000000000'), (2, 'orphan', 'b', x'0000803f0000000000000000')`, key)
+	require.NoError(t, err)
+	require.NoError(t, ix.Clear(ctx))
+	var count int
+	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT count(*) FROM message_vectors_reuse`).Scan(&count))
+	assert.Zero(t, count)
+}
+
+func TestBuildRetryClearsPreviouslySavedReuse(t *testing.T) {
+	ctx := t.Context()
+	ix := openTestIndex(t)
+	src := &fakeUnitSource{rows: []fakeUnit{
+		{unit: userDoc("s", "a", 0, "old first"), endedAt: "2024-01-01T00:00:00Z"},
+		{unit: userDoc("s", "b", 1, "old second"), endedAt: "2024-01-01T00:00:00Z"},
+	}}
+	gen := fakeGeneration("retry-cleanup")
+	_, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{BatchSize: 1})
+	require.NoError(t, err)
+	src.rows[0].unit.Content = "new first"
+	src.rows[1].unit.Content = "new second"
+	for i := range src.rows {
+		src.rows[i].endedAt = "2025-01-01T00:00:00Z"
+	}
+	fail := func(ctx context.Context, texts []string) ([][]float32, error) {
+		if slices.Contains(texts, "new second") {
+			return nil, errors.New("offline")
+		}
+		return fakeBuildEncoder()(ctx, texts)
+	}
+	_, err = ix.Build(ctx, src, fail, gen, BuildOptions{BatchSize: 1})
+	require.Error(t, err)
+	key := unitDocKey(src.rows[0].unit, map[string]int{})
+	var count int
+	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT count(*) FROM message_vectors_reuse WHERE ordinal = 1 AND doc_key = ?`, key).Scan(&count))
+	require.Positive(t, count)
+	var inputs []string
+	enc := func(ctx context.Context, texts []string) ([][]float32, error) {
+		inputs = append(inputs, texts...)
+		return fakeBuildEncoder()(ctx, texts)
+	}
+	_, err = ix.Build(ctx, src, enc, gen, BuildOptions{BatchSize: 1})
+	require.NoError(t, err)
+	assert.NotContains(t, inputs, "new first")
+	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT count(*) FROM message_vectors_reuse WHERE ordinal = 1 AND doc_key = ?`, key).Scan(&count))
+	assert.Zero(t, count)
+}
+
+func TestBuildRetryClearsPreviouslySavedEmptyReuse(t *testing.T) {
+	ctx := t.Context()
+	ix := openTestIndex(t)
+	src := &fakeUnitSource{rows: []fakeUnit{
+		{unit: userDoc("s", "a", 0, "old first"), endedAt: "2024-01-01T00:00:00Z"},
+		{unit: userDoc("s", "b", 1, "old second"), endedAt: "2024-01-01T00:00:00Z"},
+	}}
+	gen := fakeGeneration("retry-empty-cleanup")
+	_, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{BatchSize: 1})
+	require.NoError(t, err)
+	src.rows[0].unit.Content = "\u200b \n"
+	src.rows[1].unit.Content = "new second"
+	for i := range src.rows {
+		src.rows[i].endedAt = "2025-01-01T00:00:00Z"
+	}
+	_, err = ix.Build(ctx, src, func(context.Context, []string) ([][]float32, error) { return nil, errors.New("offline") }, gen, BuildOptions{BatchSize: 1})
+	require.Error(t, err)
+	key := unitDocKey(src.rows[0].unit, map[string]int{})
+	var count int
+	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT count(*) FROM message_vectors_reuse WHERE ordinal = 1 AND doc_key = ?`, key).Scan(&count))
+	require.Positive(t, count)
+	_, err = ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{BatchSize: 1})
+	require.NoError(t, err)
+	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT count(*) FROM message_vectors_reuse WHERE ordinal = 1 AND doc_key = ?`, key).Scan(&count))
+	assert.Zero(t, count)
 }
