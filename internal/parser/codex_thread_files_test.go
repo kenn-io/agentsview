@@ -486,6 +486,35 @@ func TestCodexHasParentRollout(t *testing.T) {
 	assert.False(t, has, "child rollout must not satisfy its own parent lookup")
 }
 
+func TestCodexHasParentRolloutInLabeledHome(t *testing.T) {
+	const parent = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	const child = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+
+	root := t.TempDir()
+	sessions := filepath.Join(root, "experiment", "case", ".codex-run-v1-abc", "sessions")
+	day := filepath.Join(sessions, "2026", "07", "08")
+	require.NoError(t, os.MkdirAll(day, 0o700))
+	childPath := filepath.Join(day, "rollout-2026-07-08T10-00-00-"+child+".jsonl")
+	require.NoError(t, os.WriteFile(childPath, []byte("{}\n"), 0o600))
+
+	registered, ok := ProviderFactoryByType(AgentCodex)
+	require.True(t, ok)
+	factory := newCodexProviderFactory(registered.Definition())
+	cfg := ProviderConfig{Roots: []string{root}}
+	t.Cleanup(func() { factory.(*codexProviderFactory).threadFiles.invalidate([]string{root, sessions}) })
+	checker := factory.NewProvider(cfg).(CodexParentRolloutChecker)
+
+	has, err := checker.HasCodexParentRollout(t.Context(), childPath, parent)
+	require.NoError(t, err)
+	assert.False(t, has)
+
+	parentPath := filepath.Join(day, "rollout-2026-07-08T08-00-00-"+parent+".jsonl")
+	require.NoError(t, os.WriteFile(parentPath, []byte("{}\n"), 0o600))
+	has, err = checker.HasCodexParentRollout(t.Context(), childPath, parent)
+	require.NoError(t, err)
+	assert.True(t, has, "parent arriving in the labeled home must resolve the fork")
+}
+
 func BenchmarkCodexForkParentDatedDirectories(b *testing.B) {
 	for _, days := range []int{10, 1000} {
 		b.Run(strconv.Itoa(days), func(b *testing.B) {

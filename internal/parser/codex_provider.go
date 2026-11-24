@@ -1217,7 +1217,7 @@ func (p *codexProvider) HasCodexParentRollout(
 	}
 	ctx = p.parentInventoryContext(ctx)
 	cleanChild := filepath.Clean(childPath)
-	for _, root := range p.sources.roots {
+	for _, root := range p.parentRoots(childPath) {
 		if err := ctx.Err(); err != nil {
 			return false, err
 		}
