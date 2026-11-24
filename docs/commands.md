@@ -2501,7 +2501,9 @@ shows the MCP commands to run by hand, and `--mcp=false` installs or checks
 the skill without inspecting or changing the MCP entry.
 
 The SessionStart hook refreshes memory and links runs to their launching
-session. Codex requires you to trust a new hook in `/hooks`.
+session. If a detached run carries both Claude Code and Codex session IDs and
+the hook cannot identify its launcher, it leaves the run unlinked. Codex
+requires you to trust a new hook in `/hooks`.
 
 Setup registers `agentsview mcp --profile memory` without server flags. To use
 a remote archive, set `AGENTSVIEW_MEMORY_SERVER` or `AGENTSVIEW_MEMORY_PG`
@@ -2572,8 +2574,8 @@ PostgreSQL read target without starting a local archive or claiming to refresh
 hosted data.
 
 Every mode returns within 1.9 seconds and does not wait for archive-scale
-work. To skip only this automatic request while keeping explicit sync commands
-and searches working, set `AGENTSVIEW_DISABLE_AUTO_SYNC=1`. Restart a
+work. Set `AGENTSVIEW_DISABLE_AUTO_SYNC=1` to skip the automatic request and
+launcher links. Explicit sync commands and searches still work. Restart a
 contributor owner started by an older binary once so it advertises the
 lifecycle wake endpoint. Contributor wake works on macOS and Linux, while
 Windows contributors stay on the watcher's normal event and interval cadence.

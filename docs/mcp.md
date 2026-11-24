@@ -178,7 +178,7 @@ The memory profile's tool list is about 23 KB, and the same test holds it under
 | Route                       | Clients               | What you get                                                                                             | When to use it                                                                                                                                                |
 | --------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Plugin                      | Claude Code           | Recall skill, search agent, memory-profile server, and SessionStart sync hook; updates through `/plugin` | Use the complete memory package in Claude Code.                                                                                                               |
-| `agentsview agent setup`    | Claude Code and Codex | Recall skill, Claude search agent, and memory-profile `agentsview` server; no hook                       | Set up memory for installed clients. Use `--agent claude` or `--agent codex` to select one, and `--check` to inspect setup.                                   |
+| `agentsview agent setup`    | Claude Code and Codex | Recall skill, Claude search agent, memory-profile server, and SessionStart hook                          | Set up memory for installed clients. Use `--agent claude` or `--agent codex` to select one, and `--check` to inspect setup.                                   |
 | Plain MCP entry             | MCP clients           | Full or memory-profile tools only                                                                        | Use the [Quick Start](#quick-start) entry for tools without a recall skill guiding proactive search.                                                          |
 | `agentsview skills install` | Claude Code and Codex | Skill and Claude search agent only                                                                       | Install a skill with `--project` or `--server` and register a server named `agentsview` yourself. See the [CLI reference](/docs/commands/#agentsview-skills). |
 
@@ -562,11 +562,11 @@ either `--server` or `--pg`. That mode only checks the selected read endpoint
 and never starts a local archive or reports that the remote corpus was
 refreshed. Contributor wake delivery currently works on macOS and Linux.
 
-To skip this automatic lifecycle request, set `AGENTSVIEW_DISABLE_AUTO_SYNC=1`.
-Explicit `agentsview source sync` commands and existing-history searches keep
-working. A disabled or failed lifecycle request never changes archive data, and
-the package hook is responsible for reporting any failure without blocking your
-agent session.
+Set `AGENTSVIEW_DISABLE_AUTO_SYNC=1` to skip the automatic lifecycle request
+and launcher links. Explicit `agentsview source sync` commands and searches
+still work. A detached run carrying both Claude Code and Codex session IDs stays
+unlinked if the hook cannot identify its launcher. A failed hook reports the
+error without blocking your agent session.
 
 If you set `AGENTSVIEW_NO_DAEMON=1` to stop general CLI commands from
 auto-starting the daemon, avoid local MCP mode for that archive. Instead, start
