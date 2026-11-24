@@ -172,9 +172,11 @@ func launcherArchiveID(ctx context.Context, env map[string]string, agent string)
 	}
 	id, err := storedSessionID(agent, native)
 	if err == nil && agent == "codex" {
-		if key := codexIndexedPage(ctx, env, native); key != "" {
-			id = "codex:" + key
+		key := codexIndexedPage(ctx, env, native)
+		if key == "" {
+			return "", nil
 		}
+		id = "codex:" + key
 	}
 	return id, err
 }

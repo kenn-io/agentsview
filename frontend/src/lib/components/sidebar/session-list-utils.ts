@@ -1,5 +1,5 @@
 import type { SessionGroup, SessionGroupInput } from "../../stores/sessionGroups.js";
-import { sessionAncestryMatcher, sessionAncestryMatches } from "../../utils/session-ancestry.js";
+import { sessionAncestryMatcher } from "../../utils/session-ancestry.js";
 
 export const ITEM_HEIGHT = 42;
 // A row showing years carries its timestamp on a third line.
@@ -144,16 +144,21 @@ export function subagentDescendantMatcher(
  * nest under its own descendant stays at the root too.
  */
 function subagentTree(subagents: SessionGroupInput[]): Map<string, SessionGroupInput[]> {
+  const byId = new Map<string, SessionGroupInput>();
+  for (const s of subagents) {
+    if (!byId.has(s.id)) byId.set(s.id, s);
+  }
   const parentOf = new Map<string, string>();
   for (const s of subagents) {
-    // The walk visits only rows in `subagents`, so the first row it
-    // reaches past `s` is the visible direct parent it would follow.
     let parent = "";
-    sessionAncestryMatches(s, subagents, (row) => {
-      if (row.id === s.id) return false;
-      parent = row.id;
-      return true;
-    });
+    const parents = s.parent_session_id ? [s.parent_session_id] : (s.parent_session_ids ?? []);
+    for (let i = parents.length - 1; i >= 0; i--) {
+      const candidate = byId.get(parents[i]!);
+      if (candidate && candidate.id !== s.id) {
+        parent = candidate.id;
+        break;
+      }
+    }
     for (let id = parent; id; id = parentOf.get(id) ?? "") {
       if (id === s.id) {
         parent = "";

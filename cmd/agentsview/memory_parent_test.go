@@ -125,7 +125,9 @@ func TestCaptureLaunchParentLinksEachProviderPair(t *testing.T) {
 			if chain == nil {
 				chain = []fakeProcess{{name: "sh"}, {name: tc.child, env: tc.env, args: tc.args}, {name: "bash"}, {name: tc.launcher}}
 			}
-			chain[1].env = append(chain[1].env, "CODEX_HOME="+t.TempDir())
+			home := t.TempDir()
+			writeCodexState(t, home, codexLauncherID, codexLauncherID)
+			chain[1].env = append(chain[1].env, "CODEX_HOME="+home)
 			stubLaunchProcesses(t, chain...)
 			stderr, err := runLaunchHook(t, sessionStartPayload("startup"))
 			require.NoError(t, err, stderr)
@@ -180,9 +182,11 @@ func TestCaptureLaunchParentRecordsNothing(t *testing.T) {
 
 func TestCaptureLaunchParentKeepsClearedLinkAfterLaterEvents(t *testing.T) {
 	database := stubLaunchArchive(t)
+	home := t.TempDir()
+	writeCodexState(t, home, codexLauncherID, codexLauncherID)
 	stubLaunchProcesses(t,
 		fakeProcess{name: "sh"},
-		fakeProcess{name: "claude", env: []string{"CODEX_THREAD_ID=" + codexLauncherID, "CODEX_HOME=" + t.TempDir()}},
+		fakeProcess{name: "claude", env: []string{"CODEX_THREAD_ID=" + codexLauncherID, "CODEX_HOME=" + home}},
 		fakeProcess{name: "codex"},
 	)
 	_, err := runLaunchHook(t, sessionStartPayload("startup"))
@@ -274,6 +278,7 @@ func TestCaptureLaunchParentGivesUpAtHookDeadline(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
+			writeCodexState(t, home, codexLauncherID, codexLauncherID)
 			synctest.Test(t, func(t *testing.T) {
 				annotator := &flakyAnnotator{failures: tc.failures, err: tc.err}
 				stubFlakyLaunchArchive(t, annotator)
@@ -316,7 +321,9 @@ func TestCaptureLaunchParentDetached(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			database := stubLaunchArchive(t)
-			stubLaunchProcesses(t, fakeProcess{name: "sh"}, fakeProcess{name: "claude", env: append(tc.env, "CODEX_HOME="+t.TempDir())})
+			home := t.TempDir()
+			writeCodexState(t, home, codexLauncherID, codexLauncherID)
+			stubLaunchProcesses(t, fakeProcess{name: "sh"}, fakeProcess{name: "claude", env: append(tc.env, "CODEX_HOME="+home)})
 			_, err := runLaunchHook(t, sessionStartPayload("startup"))
 			require.NoError(t, err)
 			link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
@@ -361,12 +368,14 @@ func TestCaptureLaunchParentDetachedPendingMixedProviders(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			database := stubLaunchArchive(t)
+			home := t.TempDir()
+			writeCodexState(t, home, codexLauncherID, codexLauncherID)
 			if tc.intermediate != "" {
 				_, err := database.SetSessionExternalParent(t.Context(), tc.intermediate, tc.outer)
 				require.NoError(t, err)
 			}
 			stubLaunchProcesses(t, fakeProcess{name: "sh"}, fakeProcess{name: tc.child, env: []string{
-				"CODEX_HOME=" + t.TempDir(),
+				"CODEX_HOME=" + home,
 				"CLAUDE_CODE_SESSION_ID=" + claudeLauncherID,
 				"CODEX_THREAD_ID=" + codexLauncherID,
 			}})
@@ -420,4 +429,32 @@ func TestCaptureDetachedCodexRevertPage(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "codex:"+page, link.ParentSessionID)
 
+}
+
+func TestCaptureLaunchParentDoesNotGuessCodexPage(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(*testing.T, string)
+	}{
+		{"missing index", func(*testing.T, string) {}},
+		{"invalid index", func(t *testing.T, home string) {
+			require.NoError(t, os.WriteFile(filepath.Join(home, "state_5.sqlite"), []byte("invalid"), 0o600))
+		}},
+		{"missing thread", func(t *testing.T, home string) {
+			writeCodexState(t, home, childSessionID, childSessionID)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			tc.setup(t, home)
+			database := stubLaunchArchive(t)
+			stubLaunchProcesses(t, fakeProcess{name: "sh"},
+				fakeProcess{name: "claude", env: []string{"CODEX_HOME=" + home, "CODEX_THREAD_ID=" + codexLauncherID}},
+				fakeProcess{name: "codex"})
+			_, err := runLaunchHook(t, sessionStartPayload("startup"))
+			require.NoError(t, err)
+			_, err = database.GetSessionExternalParent(t.Context(), childSessionID)
+			require.ErrorIs(t, err, sql.ErrNoRows)
+		})
+	}
 }

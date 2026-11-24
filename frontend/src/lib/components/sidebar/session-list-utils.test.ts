@@ -979,4 +979,52 @@ describe("nested subagent rows", () => {
       ["c", 2, true],
     ]);
   });
+
+  it("preserves contextual and shared parent precedence", () => {
+    const [full] = buildSessionGroups(launchedTree());
+    const sessions = full!.sessions.map((s) =>
+      s.id === "c" ? { ...s, parent_session_id: undefined, parent_session_ids: ["b", "d"] } : s,
+    );
+    sessions.push(
+      makeSession({
+        id: "e",
+        relationship_type: "subagent",
+        parent_session_id: "b",
+        parent_session_ids: ["d"],
+      }),
+    );
+    const group: SessionGroup = { ...full!, sessions, allSessions: sessions };
+    expect(rows(group)).toEqual([
+      ["d", 2, false],
+      ["c", 3, true],
+      ["b", 2, true],
+      ["e", 3, true],
+    ]);
+  });
+
+  it("expands a large group with bounded parent lookups", () => {
+    const [full] = buildSessionGroups(launchedTree());
+    let idReads = 0;
+    const runs = Array.from({ length: 500 }, (_, i) => {
+      const id = `run-${i}`;
+      const session = makeSession({
+        id,
+        parent_session_id: i === 499 ? "a" : "run-499",
+        relationship_type: "subagent",
+      });
+      Object.defineProperty(session, "id", {
+        get: () => {
+          idReads++;
+          return id;
+        },
+      });
+      return session;
+    });
+    const sessions = [makeSession({ id: "a" }), ...runs];
+    const group: SessionGroup = { ...full!, sessions, allSessions: sessions };
+    const result = rows(group);
+    expect(result).toHaveLength(500);
+    expect(result[0]).toEqual(["run-499", 2, true]);
+    expect(idReads).toBeLessThan(500 * 50);
+  });
 });
