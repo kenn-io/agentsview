@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
 	"testing"
 
 	"github.com/mattn/go-sqlite3"
@@ -12,7 +13,7 @@ import (
 
 func TestStagedPublishWithinSQLiteVariableLimit(t *testing.T) {
 	for _, count := range []int{58, 59, 501} {
-		t.Run(fmt.Sprint(count), func(t *testing.T) {
+		t.Run(strconv.Itoa(count), func(t *testing.T) {
 			d := testDB(t)
 			insertSession(t, d, "s1", "project-a")
 			conn, err := d.getWriter().Conn(t.Context())
