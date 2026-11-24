@@ -66,6 +66,36 @@ func selectPRHost(explicitHost, remoteHost string, specified, hostUnknown bool) 
 	return ""
 }
 
+// gh flags differ by subcommand, including short flags that take a value in
+// one command and are boolean in another. Unknown flags are ambiguous.
+func prCommandFlag(command, flag string) (takesValue, ok bool) {
+	flags := map[string][2]string{
+		"view":          {"-q --jq --json -t --template", "-c --comments -w --web"},
+		"checkout":      {"-b --branch --worktree", "--detach -f --force --recurse-submodules"},
+		"edit":          {"--add-assignee --add-label --add-project --add-reviewer --attach -B --base -b --body -F --body-file -m --milestone --remove-assignee --remove-label --remove-project --remove-reviewer -t --title", "--remove-milestone"},
+		"diff":          {"--color -e --exclude", "--allow-escape-sequences --name-only --patch -w --web"},
+		"checks":        {"-i --interval -q --jq --json -t --template", "--fail-fast --required --watch -w --web"},
+		"comment":       {"--attach -b --body -F --body-file", "--create-if-none --delete-last --edit-last -e --editor -w --web --yes"},
+		"review":        {"-b --body -F --body-file", "-a --approve -c --comment -r --request-changes"},
+		"ready":         {"", "--undo"},
+		"merge":         {"-A --author-email -b --body -F --body-file --match-head-commit -t --subject", "--admin --auto -d --delete-branch --disable-auto -m --merge -r --rebase -s --squash"},
+		"close":         {"-c --comment", "-d --delete-branch"},
+		"reopen":        {"-c --comment", ""},
+		"update-branch": {"", "--rebase"},
+		"lock":          {"-r --reason", ""},
+		"unlock":        {"", ""},
+		"revert":        {"-b --body -F --body-file -t --title", "-d --draft"},
+	}
+	for kind, list := range flags[command] {
+		for _, name := range strings.Fields(list) {
+			if flag == name {
+				return kind == 0, true
+			}
+		}
+	}
+	return false, false
+}
+
 // AnalyzePRCommand extracts links and shared shell context from one parse.
 func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBare, hostUnknown bool) ([]PRLink, bool, bool, bool, []PRLink, error) {
 	if err := ctx.Err(); err != nil {
@@ -125,7 +155,20 @@ func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 				specified = true
 				repo = strings.TrimPrefix(word[2:], "=")
 			case strings.HasPrefix(word, "-"):
-				invalid = true
+				flag, _, attached := strings.Cut(word, "=")
+				if !strings.HasPrefix(flag, "--") && len(flag) > 2 {
+					flag, attached = flag[:2], true
+				}
+				takesValue, ok := prCommandFlag(words[2], flag)
+				if !ok || (attached && !takesValue) {
+					invalid = true
+				} else if takesValue && !attached {
+					if i+1 >= len(words) || !literal[i+1] {
+						invalid = true
+					} else {
+						i++
+					}
+				}
 			case selector == "":
 				selector = word
 			}
