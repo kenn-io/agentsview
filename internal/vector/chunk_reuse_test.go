@@ -68,7 +68,7 @@ func TestBuildChunkReuse(t *testing.T) {
 			if mode == "legacy active" {
 				var count int
 				require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM message_vectors_reuse`).Scan(&count))
-				assert.Zero(t, count)
+				assert.Positive(t, count)
 			}
 			if mode == "full rebuild" {
 				_, err = ix.Build(ctx, src, fail, gen, BuildOptions{FullRebuild: true})
@@ -93,7 +93,7 @@ func TestBuildChunkReuse(t *testing.T) {
 			chunks := kitvec.Split(src.rows[0].unit.Content, ix.split)
 			var expected []string
 			for i, chunk := range chunks {
-				if i >= 2 || mode == "full rebuild" || mode == "mismatched chunks" || mode == "legacy active" {
+				if i >= 2 || mode == "full rebuild" || (mode == "mismatched chunks" && i == 1) {
 					expected = append(expected, chunk.Text)
 				}
 			}
@@ -261,18 +261,16 @@ func TestBuildReuseMixedDocuments(t *testing.T) {
 	assert.Equal(t, read(fresh), read(ix))
 }
 
-func TestDeleteMirrorDocumentRemovesOnlyItsReuse(t *testing.T) {
+func TestDeleteMirrorDocumentRetainsReuse(t *testing.T) {
 	ix := openTestIndex(t)
 	ctx := t.Context()
 	_, err := ix.db.ExecContext(ctx, `INSERT INTO message_vectors_reuse VALUES (1, 'a', 'hash', x'0000803f0000000000000000'), (1, 'b', 'hash', x'0000803f0000000000000000')`)
 	require.NoError(t, err)
-	_, err = ix.deleteMirrorDocument(ctx, "a")
+	_, err = ix.deleteMirrorDocument(ctx, "a", nil)
 	require.NoError(t, err)
-	var key string
-	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT doc_key FROM message_vectors_reuse`).Scan(&key))
-	assert.Equal(t, "b", key)
-	plan := explainVectorPlan(t, ix, `DELETE FROM message_vectors_reuse WHERE doc_key = ?`, "a")
-	assert.Contains(t, strings.Join(plan, " "), "message_vectors_reuse_doc (doc_key=?)")
+	var count int
+	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT count(*) FROM message_vectors_reuse`).Scan(&count))
+	assert.Equal(t, 2, count)
 }
 
 func TestSplitPersistedChunkBoundaries(t *testing.T) {
@@ -286,7 +284,9 @@ func TestSplitPersistedChunkBoundaries(t *testing.T) {
 func TestReuseEncoder(t *testing.T) {
 	ix := openTestIndex(t)
 	ctx := t.Context()
-	_, err := ix.db.ExecContext(ctx, `INSERT INTO message_vectors_reuse VALUES (1, 'a', ?, zeroblob(12)), (1, 'b', ?, x'0000803f0000000000000000'), (1, 'a', ?, zeroblob(12))`, contentHash("hit"), contentHash("hit"), contentHash("miss"))
+	_, err := ix.EnsureGeneration(ctx, fakeGeneration("test"), "building")
+	require.NoError(t, err)
+	_, err = ix.db.ExecContext(ctx, `INSERT INTO message_vectors_reuse VALUES (1, 'a', ?, zeroblob(12)), (1, 'b', ?, x'0000803f0000000000000000'), (1, 'a', ?, zeroblob(12))`, contentHash("hit"), contentHash("hit"), contentHash("miss"))
 	require.NoError(t, err)
 	gen := reuseGeneration{ordinal: 1, dimension: 3}
 	t.Run("invalid copies and misses", func(t *testing.T) {
@@ -294,9 +294,9 @@ func TestReuseEncoder(t *testing.T) {
 			assert.Equal(t, []string{"miss"}, texts)
 			return [][]float32{{0, 1, 0}}, nil
 		}, gen)
-		got, err := enc(ctx, []string{"hit", "miss", "hit"})
+		got, err := enc(ctx, []string{"hit", "miss", "hit", "miss"})
 		require.NoError(t, err)
-		assert.Equal(t, [][]float32{{1, 0, 0}, {0, 1, 0}, {1, 0, 0}}, got)
+		assert.Equal(t, [][]float32{{1, 0, 0}, {0, 1, 0}, {1, 0, 0}, {0, 1, 0}}, got)
 	})
 	t.Run("all hits and wrong count", func(t *testing.T) {
 		enc := ix.reuseEncoder(func(_ context.Context, texts []string) ([][]float32, error) {
@@ -318,6 +318,8 @@ func BenchmarkReuseEncoderLookup(b *testing.B) {
 			ix, err := Open(ctx, filepath.Join(b.TempDir(), "vectors.db"), false, 10)
 			require.NoError(b, err)
 			b.Cleanup(func() { assert.NoError(b, ix.Close()) })
+			_, err = ix.EnsureGeneration(ctx, fakeGeneration("benchmark"), "building")
+			require.NoError(b, err)
 			_, err = ix.db.ExecContext(ctx, `WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x < ?)
 INSERT INTO message_vectors_reuse SELECT 1, printf('doc-%d', x), printf('hash-%d', x), x'0000803f0000000000000000' FROM n`, count)
 			require.NoError(b, err)
@@ -331,4 +333,210 @@ INSERT INTO message_vectors_reuse SELECT 1, printf('doc-%d', x), printf('hash-%d
 			}
 		})
 	}
+}
+
+func TestBuildReusesIndexedChunksAcrossDocuments(t *testing.T) {
+	for _, backfill := range []bool{false, true} {
+		t.Run(fmt.Sprintf("backfill=%t", backfill), func(t *testing.T) {
+			ctx := t.Context()
+			ix := openTestIndex(t)
+			ix.split = kitvec.SplitOptions{MaxRunes: 10, Overlap: 2}
+			src := twoDocSource()
+			src.rows = src.rows[:1]
+			src.rows[0].unit.Content = "abcdefghijklmnopqrstuv"
+			gen := fakeGeneration("cross-document")
+			_, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{})
+			require.NoError(t, err)
+			if backfill {
+				_, err = ix.db.ExecContext(ctx, `DELETE FROM message_vectors_chunk_text`)
+				require.NoError(t, err)
+				require.NoError(t, ix.metaDelete(ctx, chunkTextMarker+"1"))
+			}
+			src.rows = append(src.rows, fakeUnit{unit: userDoc("other", "new", 0, "abcdefghijZZZZZZZZZZ"), endedAt: "2025-01-01T00:00:00Z"})
+			var inputs []string
+			enc := func(ctx context.Context, texts []string) ([][]float32, error) {
+				inputs = append(inputs, texts...)
+				return fakeBuildEncoder()(ctx, texts)
+			}
+			_, err = ix.Build(ctx, src, enc, gen, BuildOptions{BatchSize: 1})
+			require.NoError(t, err)
+			assert.NotContains(t, inputs, "abcdefghij")
+			assert.Contains(t, inputs, "ijZZZZZZZZ")
+		})
+	}
+}
+
+func TestBuildReusesDeletedDocument(t *testing.T) {
+	ctx := t.Context()
+	ix := openTestIndex(t)
+	ix.split = kitvec.SplitOptions{MaxRunes: 10, Overlap: 2}
+	src := twoDocSource()
+	src.rows = src.rows[:1]
+	src.rows[0].unit.Content = "abcdefghijklmnopqrstuv"
+	gen := fakeGeneration("deleted-donor")
+	_, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{})
+	require.NoError(t, err)
+	src.rows = []fakeUnit{{unit: userDoc("other", "new", 0, "abcdefghijklmnopqrstuv"), endedAt: "2025-01-01T00:00:00Z"}}
+	var inputs []string
+	enc := func(ctx context.Context, texts []string) ([][]float32, error) {
+		inputs = append(inputs, texts...)
+		return fakeBuildEncoder()(ctx, texts)
+	}
+	_, err = ix.Build(ctx, src, enc, gen, BuildOptions{Backstop: true, BatchSize: 1})
+	require.NoError(t, err)
+	assert.Empty(t, inputs)
+}
+
+func TestChunkTextBackfillResumesAndStopsScanning(t *testing.T) {
+	ctx := t.Context()
+	ix := openTestIndex(t)
+	src := &fakeUnitSource{}
+	for i := range 101 {
+		src.rows = append(src.rows, fakeUnit{unit: userDoc("session", fmt.Sprintf("doc-%03d", i), i, fmt.Sprintf("message %03d", i)), endedAt: "2024-01-01T00:00:00Z"})
+	}
+	gen := fakeGeneration("backfill")
+	_, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{})
+	require.NoError(t, err)
+	_, err = ix.db.ExecContext(ctx, `DELETE FROM message_vectors_chunk_text`)
+	require.NoError(t, err)
+	require.NoError(t, ix.metaDelete(ctx, chunkTextMarker+"1"))
+	_, err = ix.db.ExecContext(ctx, `CREATE TRIGGER fail_backfill BEFORE INSERT ON message_vectors_chunk_text WHEN NEW.doc_key LIKE '%doc-100' BEGIN SELECT RAISE(ABORT, 'test failure'); END`)
+	require.NoError(t, err)
+	require.Error(t, ix.backfillChunkText(ctx, 1))
+	_, marked, err := ix.metaGet(ctx, chunkTextMarker+"1")
+	require.NoError(t, err)
+	assert.False(t, marked)
+	var count int
+	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT count(*) FROM message_vectors_chunk_text`).Scan(&count))
+	assert.Equal(t, 100, count)
+	_, err = ix.db.ExecContext(ctx, `DROP TRIGGER fail_backfill`)
+	require.NoError(t, err)
+	require.NoError(t, ix.backfillChunkText(ctx, 1))
+	_, marked, err = ix.metaGet(ctx, chunkTextMarker+"1")
+	require.NoError(t, err)
+	assert.True(t, marked)
+	_, err = ix.db.ExecContext(ctx, `DELETE FROM message_vectors_chunk_text`)
+	require.NoError(t, err)
+	require.NoError(t, ix.backfillChunkText(ctx, 1))
+	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT count(*) FROM message_vectors_chunk_text`).Scan(&count))
+	assert.Zero(t, count)
+	require.NoError(t, ix.resetGeneration(ctx, gen.Fingerprint()))
+	_, marked, err = ix.metaGet(ctx, chunkTextMarker+"1")
+	require.NoError(t, err)
+	assert.False(t, marked)
+}
+
+func TestBuildKeepsOtherProfileReuse(t *testing.T) {
+	ctx := t.Context()
+	ix := openTestIndex(t)
+	ix.split = kitvec.SplitOptions{MaxRunes: 10, Overlap: 2}
+	src := twoDocSource()
+	src.rows = src.rows[:1]
+	src.rows[0].unit.Content = "abcdefghijklmnopqrstuv"
+	a, b := fakeGeneration("profile-a"), fakeGeneration("profile-b")
+	_, err := ix.Build(ctx, src, fakeBuildEncoder(), a, BuildOptions{})
+	require.NoError(t, err)
+	src.rows[0].unit.Content += "wxyz"
+	src.rows[0].endedAt = "2025-01-01T00:00:00Z"
+	fail := func(context.Context, []string) ([][]float32, error) { return nil, errors.New("offline") }
+	_, err = ix.Build(ctx, src, fail, a, BuildOptions{})
+	require.Error(t, err)
+	var before int
+	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT count(*) FROM message_vectors_reuse WHERE ordinal = 1`).Scan(&before))
+	require.Positive(t, before)
+	_, err = ix.Build(ctx, src, fakeBuildEncoder(), b, BuildOptions{})
+	require.NoError(t, err)
+	_, err = ix.Build(ctx, src, fakeBuildEncoder(), b, BuildOptions{FullRebuild: true})
+	require.NoError(t, err)
+	var after int
+	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT count(*) FROM message_vectors_reuse WHERE ordinal = 1`).Scan(&after))
+	assert.Equal(t, before, after)
+	_, marked, err := ix.metaGet(ctx, chunkTextMarker+"1")
+	require.NoError(t, err)
+	assert.True(t, marked)
+	var inputs []string
+	enc := func(ctx context.Context, texts []string) ([][]float32, error) {
+		inputs = append(inputs, texts...)
+		return fakeBuildEncoder()(ctx, texts)
+	}
+	_, err = ix.Build(ctx, src, enc, a, BuildOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"qrstuvwxyz"}, inputs)
+}
+
+func TestChunkTextPointerWriteFailureRetries(t *testing.T) {
+	ctx := t.Context()
+	ix := openTestIndex(t)
+	src := twoDocSource()
+	src.rows = src.rows[:1]
+	gen := fakeGeneration("pointer-failure")
+	_, err := ix.db.ExecContext(ctx, `CREATE TRIGGER fail_pointer BEFORE INSERT ON message_vectors_chunk_text BEGIN SELECT RAISE(ABORT, 'test failure'); END`)
+	require.NoError(t, err)
+	_, err = ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{})
+	require.Error(t, err)
+	pending, err := ix.countPending(ctx, gen.Fingerprint())
+	require.NoError(t, err)
+	assert.Positive(t, pending)
+	_, err = ix.db.ExecContext(ctx, `DROP TRIGGER fail_pointer`)
+	require.NoError(t, err)
+	_, err = ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{})
+	require.NoError(t, err)
+	pending, err = ix.countPending(ctx, gen.Fingerprint())
+	require.NoError(t, err)
+	assert.Zero(t, pending)
+}
+
+func TestChunkTextIgnoresStaleRevision(t *testing.T) {
+	ctx := t.Context()
+	ix := openTestIndex(t)
+	src := twoDocSource()
+	src.rows = src.rows[:1]
+	src.rows[0].unit.Content = "shared text"
+	gen := fakeGeneration("stale-pointer")
+	_, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{})
+	require.NoError(t, err)
+	_, err = ix.db.ExecContext(ctx, `UPDATE message_vectors_chunk_text SET revision = 'stale'`)
+	require.NoError(t, err)
+	src.rows = append(src.rows, fakeUnit{unit: userDoc("other", "new", 0, "shared text"), endedAt: "2025-01-01T00:00:00Z"})
+	var inputs []string
+	enc := func(ctx context.Context, texts []string) ([][]float32, error) {
+		inputs = append(inputs, texts...)
+		return fakeBuildEncoder()(ctx, texts)
+	}
+	_, err = ix.Build(ctx, src, enc, gen, BuildOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"shared text"}, inputs)
+}
+
+func TestChunkTextLookupUsesHashIndex(t *testing.T) {
+	ix := openTestIndex(t)
+	_, err := ix.EnsureGeneration(t.Context(), fakeGeneration("plan"), "building")
+	require.NoError(t, err)
+	plan := explainVectorPlan(t, ix, `SELECT v.embedding FROM message_vectors_chunk_text t INDEXED BY message_vectors_chunk_text_hash JOIN message_vectors_stamps s ON s.ordinal = t.ordinal AND s.doc_key = t.doc_key AND s.revision = t.revision JOIN message_vectors_chunks c ON c.ordinal = t.ordinal AND c.doc_key = t.doc_key AND c.chunk_index = t.chunk_index JOIN message_vectors_v1 v ON v.rowid = c.vec_rowid WHERE t.ordinal = ? AND t.text_hash = ?`, 1, "hash")
+	assert.Contains(t, fmt.Sprint(plan), "message_vectors_chunk_text_hash (ordinal=? AND text_hash=?)")
+}
+
+func TestBuildSharedChunkSurvivesRejectedDocument(t *testing.T) {
+	ctx := t.Context()
+	ix := openTestIndex(t)
+	ix.split = kitvec.SplitOptions{MaxRunes: 10, Overlap: 2}
+	src := &fakeUnitSource{rows: []fakeUnit{
+		{unit: userDoc("session", "a", 0, "abcdefghijBADBADBAD"), endedAt: "2024-01-01T00:00:00Z"},
+		{unit: userDoc("session", "b", 1, "abcdefghijGOODGOOD"), endedAt: "2024-01-01T00:00:00Z"},
+	}}
+	gen := fakeGeneration("rejected-shared")
+	enc := func(ctx context.Context, texts []string) ([][]float32, error) {
+		for _, text := range texts {
+			if strings.Contains(text, "BAD") {
+				return nil, &embedclient.APIError{StatusCode: http.StatusBadRequest, Reason: embedclient.ReasonInputTooLong}
+			}
+		}
+		return fakeBuildEncoder()(ctx, texts)
+	}
+	result, err := ix.Build(ctx, src, enc, gen, BuildOptions{BatchSize: 10})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Fill.Skipped)
+	var count int
+	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT count(*) FROM message_vectors_chunks WHERE doc_key = ?`, unitDocKey(src.rows[1].unit, map[string]int{})).Scan(&count))
+	assert.Positive(t, count)
 }

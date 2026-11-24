@@ -201,9 +201,9 @@ func (ix *Index) Build(
 		}
 	}
 	var seed *reuseGeneration
-	if ix.spec.Name == "messages" && !o.FullRebuild && selected == fp {
+	if ix.spec.Name == "messages" && !o.FullRebuild {
 		var g reuseGeneration
-		g.ordinal, g.dimension, err = ix.generationOrdinalDimension(ctx, fp)
+		g.ordinal, g.dimension, err = ix.generationOrdinalDimension(ctx, selected)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return BuildResult{}, err
 		}
@@ -211,11 +211,7 @@ func (ix *Index) Build(
 			seed = &g
 		}
 	}
-	if ix.spec.Name == "messages" && o.FullRebuild {
-		if err := ix.clearReuse(ctx); err != nil {
-			return BuildResult{}, err
-		}
-	}
+
 	// Report the scanning phase before the mirror refresh: on a large archive
 	// the refresh (and the pending count below) can run for a while with no
 	// chunk totals yet, and without a phase report a progress consumer can
@@ -250,6 +246,21 @@ func (ix *Index) Build(
 	}
 	result := BuildResult{Fingerprint: target, Refresh: refreshStats}
 
+	var ordinal int64
+	if ix.spec.Name == "messages" {
+		var dimension int
+		ordinal, dimension, err = ix.generationOrdinalDimension(ctx, target)
+		if err != nil {
+			return result, err
+		}
+		if !o.FullRebuild {
+			seed = &reuseGeneration{ordinal: ordinal, dimension: dimension}
+			if err := ix.backfillChunkText(ctx, ordinal); err != nil {
+				return result, err
+			}
+		}
+	}
+
 	total, err := ix.countPending(ctx, target)
 	if err != nil {
 		return result, err
@@ -264,7 +275,8 @@ func (ix *Index) Build(
 		db:    ix.db,
 		spec:  ix.spec,
 	}
-	fillStats, fillErr := kitvec.Fill[string, string](ctx, &reuseCompletingStore{fillStore}, target, wrapped,
+	reuseStore := &reuseCompletingStore{repairQueueCompletingStore: fillStore, ix: ix, ordinal: ordinal}
+	fillStats, fillErr := kitvec.Fill[string, string](ctx, reuseStore, target, wrapped,
 		kitvec.WithFillSplit[string](ix.split),
 		kitvec.WithFillBatch[string](o.EncodeBatchOptions()...),
 		kitvec.WithFillConcurrency[string](o.Concurrency),
@@ -282,6 +294,25 @@ func (ix *Index) Build(
 	result.Fill = fillStats
 	if fillErr != nil {
 		return result, fillErr
+	}
+
+	if ix.spec.Name == "messages" {
+		tx, err := ix.db.BeginTx(ctx, nil)
+		if err != nil {
+			return result, err
+		}
+		defer tx.Rollback()
+		for _, key := range reuseStore.saved {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM `+ix.spec.reuseTable()+` WHERE ordinal = ? AND doc_key = ?`, ordinal, key); err != nil {
+				return result, err
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM `+ix.spec.reuseTable()+` WHERE ordinal = ? AND NOT EXISTS (SELECT 1 FROM `+ix.spec.DocsTable+` d WHERE d.doc_key = `+ix.spec.reuseTable()+`.doc_key)`, ordinal); err != nil {
+			return result, err
+		}
+		if err := tx.Commit(); err != nil {
+			return result, err
+		}
 	}
 
 	activated, err := ix.maybeActivate(ctx, target, wasBuilding)
@@ -700,6 +731,17 @@ func (ix *Index) resetGeneration(ctx context.Context, fp string) error {
 		`SELECT ordinal FROM `+ix.spec.generationsTable()+` WHERE gen_key = ?`, fp,
 	).Scan(&ordinal); err != nil {
 		return fmt.Errorf("lookup generation ordinal for fingerprint %s: %w", fp, err)
+	}
+
+	if ix.spec.Name == "messages" {
+		for _, table := range []string{ix.spec.chunkTextTable(), ix.spec.reuseTable()} {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE ordinal = ?`, ordinal); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM `+ix.spec.MetaTable+` WHERE key = ?`, chunkTextMarker+strconv.FormatInt(ordinal, 10)); err != nil {
+			return err
+		}
 	}
 
 	vecTable := fmt.Sprintf("%s_v%d", ix.spec.VectorsPrefix, ordinal)
