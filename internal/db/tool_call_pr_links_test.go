@@ -58,6 +58,13 @@ func TestToolCallPRLinksCodeMode(t *testing.T) {
 	}
 }
 
+func TestToolCallPRLinksPlainTextCommand(t *testing.T) {
+	messages := []db.Message{{ToolCalls: []db.ToolCall{{ToolName: "shell", Category: "Bash", InputJSON: `gh pr view 42 -R example/repo`}}}}
+	links := toolCallPRLinks(t, messages, "", "")
+	require.Len(t, links, 1)
+	assert.Equal(t, "https://github.com/example/repo/pull/42", links[0].URL)
+}
+
 func TestToolCallPRLinksNestedRemoteChange(t *testing.T) {
 	calls := []db.ToolCall{
 		{Category: "Bash", ToolName: "Bash", InputJSON: `{"command":"bash -lc 'git remote set-url origin https://github.com/example/other.git'"}`},
