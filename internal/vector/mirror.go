@@ -8,6 +8,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -69,7 +70,7 @@ func inPlaceholders(keys []string) (string, []any) {
 // *db.DB): the stream of embedding-unit documents — individual user
 // messages and runs of contiguous assistant messages.
 type UnitSource interface {
-	ScanEmbeddableUnits(ctx context.Context, since string, includeAutomated bool, maxRunRunes int,
+	ScanEmbeddableUnits(ctx context.Context, since string, includeAutomated bool, agents []string, maxRunRunes int,
 		fn func(db.EmbeddableUnit) error) (string, error)
 }
 
@@ -80,7 +81,7 @@ type sessionJournalSource interface {
 	GetDatabaseID(context.Context) (string, error)
 	SessionDeletionPublicationRevision(context.Context) (int64, error)
 	LoadSessionDeletionChanges(context.Context, int64, int64) ([]string, error)
-	ScanEmbeddableUnitsForSession(context.Context, string, bool, int, func(db.EmbeddableUnit) error) error
+	ScanEmbeddableUnitsForSession(context.Context, string, bool, []string, int, func(db.EmbeddableUnit) error) error
 }
 
 const (
@@ -219,13 +220,13 @@ func contentHash(content string) string {
 // before the scan. The watermark advances to the opaque value returned by
 // the source after a successful scan.
 func (ix *Index) Refresh(
-	ctx context.Context, src UnitSource, full, includeAutomated bool,
+	ctx context.Context, src UnitSource, full, includeAutomated bool, agents []string,
 ) (RefreshStats, error) {
-	return ix.refresh(ctx, src, full, includeAutomated, nil)
+	return ix.refresh(ctx, src, full, includeAutomated, agents, nil)
 }
 
 func (ix *Index) refresh(
-	ctx context.Context, src UnitSource, full, includeAutomated bool, seed *reuseGeneration,
+	ctx context.Context, src UnitSource, full, includeAutomated bool, agents []string, seed *reuseGeneration,
 ) (RefreshStats, error) {
 	if err := ix.requireWritable(); err != nil {
 		return RefreshStats{}, err
@@ -325,7 +326,7 @@ func (ix *Index) refresh(
 		return nil
 	}
 	runCap := RunMaxRunes(ix.split.MaxRunes)
-	nextWatermark, err := src.ScanEmbeddableUnits(ctx, since, includeAutomated, runCap, visitUnit)
+	nextWatermark, err := src.ScanEmbeddableUnits(ctx, since, includeAutomated, agents, runCap, visitUnit)
 	if err != nil {
 		return RefreshStats{}, fmt.Errorf("scanning embeddable units: %w", err)
 	}
@@ -337,7 +338,7 @@ func (ix *Index) refresh(
 		if _, ok := visited[id]; ok {
 			continue
 		}
-		if err := journal.ScanEmbeddableUnitsForSession(ctx, id, includeAutomated, runCap, visitUnit); err != nil {
+		if err := journal.ScanEmbeddableUnitsForSession(ctx, id, includeAutomated, agents, runCap, visitUnit); err != nil {
 			return RefreshStats{}, fmt.Errorf("rescanning journaled session %s: %w", id, err)
 		}
 	}
@@ -763,4 +764,10 @@ func (ix *Index) Clear(ctx context.Context) error {
 		return err
 	}
 	return ix.metaDelete(ctx, refreshWatermarkKey)
+}
+
+const scopeAgentsKey = "scope_agents"
+
+func normalizedAgents(agents []string) []string {
+	return slices.Compact(db.SortedCopy(agents))
 }

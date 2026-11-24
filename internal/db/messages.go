@@ -957,7 +957,7 @@ type UnitOffset struct {
 // the run first, so every member of one run shares a single is_sidechain
 // value.
 func (db *DB) ScanEmbeddableUnits(
-	ctx context.Context, since string, includeAutomated bool, maxRunRunes int,
+	ctx context.Context, since string, includeAutomated bool, agents []string, maxRunRunes int,
 	fn func(EmbeddableUnit) error,
 ) (maxEnded string, err error) {
 	release, err := db.acquireBulkRead(ctx)
@@ -966,37 +966,39 @@ func (db *DB) ScanEmbeddableUnits(
 	}
 	defer release()
 
-	return db.scanEmbeddableUnits(ctx, since, "", includeAutomated, maxRunRunes, fn)
+	return db.scanEmbeddableUnits(ctx, since, "", includeAutomated, agents, maxRunRunes, fn)
 }
 
 // ScanEmbeddableUnitsForSession streams all embeddable units for one session,
 // without applying an ended_at watermark. maxRunRunes has the same meaning
 // as in ScanEmbeddableUnits.
 func (db *DB) ScanEmbeddableUnitsForSession(
-	ctx context.Context, sessionID string, includeAutomated bool, maxRunRunes int,
+	ctx context.Context, sessionID string, includeAutomated bool, agents []string, maxRunRunes int,
 	fn func(EmbeddableUnit) error,
 ) error {
 	if sessionID == "" {
 		return errors.New("session ID is required")
 	}
-	_, err := db.scanEmbeddableUnits(ctx, "", sessionID, includeAutomated, maxRunRunes, fn)
+	_, err := db.scanEmbeddableUnits(ctx, "", sessionID, includeAutomated, agents, maxRunRunes, fn)
 	return err
 }
 
 func (db *DB) scanEmbeddableUnits(
-	ctx context.Context, since, sessionID string, includeAutomated bool, maxRunRunes int,
+	ctx context.Context, since, sessionID string, includeAutomated bool, agents []string, maxRunRunes int,
 	fn func(EmbeddableUnit) error,
 ) (maxEnded string, err error) {
+	_, agentArgs := InPlaceholders(agents)
 	args := make([]any, 0, 2)
 	if sessionID != "" {
 		args = append(args, sessionID)
 	}
+	args = append(args, agentArgs...)
 	if since != "" {
 		args = append(args, since)
 	}
 
 	rows, err := db.getReader().QueryContext(
-		ctx, embeddableUnitsQuery(since, sessionID, includeAutomated), args...)
+		ctx, embeddableUnitsQuery(since, sessionID, includeAutomated, agents), args...)
 	if err != nil {
 		return "", fmt.Errorf("scanning embeddable units: %w", err)
 	}
@@ -1192,10 +1194,10 @@ func runUnit(members []unitRow) EmbeddableUnit {
 }
 
 // embeddableUnitsQuery builds the embeddable-unit scan statement. A scoped
-// scan takes sessionID first; an incremental scan takes since after it. The
-// query always emits rows in (session_id, ordinal) order, which unitReducer
-// depends on.
-func embeddableUnitsQuery(since, sessionID string, includeAutomated bool) string {
+// scan takes sessionID first, then any agent arguments; an incremental scan
+// takes since last. The query emits rows in (session_id, ordinal) order, which
+// unitReducer depends on.
+func embeddableUnitsQuery(since, sessionID string, includeAutomated bool, agents []string) string {
 	preds := []string{
 		"m.role IN ('user', 'assistant')",
 		"m.is_system = 0",
@@ -1207,6 +1209,10 @@ func embeddableUnitsQuery(since, sessionID string, includeAutomated bool) string
 	}
 	if sessionID != "" {
 		preds = append(preds, "m.session_id = ?")
+	}
+	if since == "" && len(agents) > 0 {
+		placeholders, _ := InPlaceholders(agents)
+		preds = append(preds, "s.agent IN "+placeholders)
 	}
 	sessionJoin := "JOIN"
 	if since != "" {
@@ -1222,7 +1228,7 @@ func embeddableUnitsQuery(since, sessionID string, includeAutomated bool) string
 		FROM messages m
 		` + sessionJoin + ` sessions s ON s.id = m.session_id
 		WHERE ` + strings.Join(preds, "\n\t\t  AND ") + `
-		` + sinceSessionScopeClause(since, includeAutomated) + `
+		` + sinceSessionScopeClause(since, includeAutomated, agents) + `
 		ORDER BY m.session_id, m.ordinal`
 }
 
@@ -1263,11 +1269,15 @@ func embeddableUnitsQuery(since, sessionID string, includeAutomated bool) string
 // the same way via NULLIF(s.ended_at, ""): without it, "" is neither NULL
 // nor >= since, so a changed legacy session would never be rescanned again
 // once any watermark exists.
-func sinceSessionScopeClause(since string, includeAutomated bool) string {
+func sinceSessionScopeClause(since string, includeAutomated bool, agents []string) string {
 	if since == "" {
 		return ""
 	}
 	preds := []string{"es.deleted_at IS NULL"}
+	if len(agents) > 0 {
+		placeholders, _ := InPlaceholders(agents)
+		preds = append(preds, "es.agent IN "+placeholders)
+	}
 	if !includeAutomated {
 		preds = append(preds, SQLiteQueryDialect().AutomatedScopePredicate("human", "es.is_automated"))
 	}

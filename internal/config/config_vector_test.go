@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/kit/embedlocal"
 )
 
@@ -971,4 +972,26 @@ func requireAPIKey(t *testing.T, server interface{ APIKey() (string, error) }) s
 	key, err := server.APIKey()
 	require.NoError(t, err)
 	return key
+}
+
+func TestVectorConfigAgents(t *testing.T) {
+	for _, agents := range [][]string{{}, {"claude", "codex"}} {
+		cfg := loadMinimalWithConfig(t, map[string]any{"vector": map[string]any{"agents": agents}})
+		assert.Equal(t, agents, cfg.Vector.Agents)
+	}
+	disabled := loadMinimalWithConfig(t, map[string]any{"vector": map[string]any{"agents": []string{"nope"}}})
+	assert.Equal(t, []string{"nope"}, disabled.Vector.Agents)
+	err := loadMinimalErrWithConfig(t, map[string]any{"vector": map[string]any{"enabled": true, "agents": []string{"nope"}}})
+	require.ErrorContains(t, err, `unknown agent "nope"`)
+	t.Run("stored agents", func(t *testing.T) {
+		for _, def := range parser.Registry {
+			for _, agent := range parser.ProviderStoredAgents(def.Type) {
+				t.Run(string(agent), func(t *testing.T) {
+					cfg := validVectorConfig()
+					cfg.Agents = []string{string(agent)}
+					require.NoError(t, cfg.Validate())
+				})
+			}
+		}
+	})
 }

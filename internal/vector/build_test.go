@@ -74,7 +74,7 @@ type failingRefreshSource struct {
 }
 
 func (s failingRefreshSource) ScanEmbeddableUnits(
-	_ context.Context, _ string, _ bool, _ int,
+	_ context.Context, _ string, _ bool, _ []string, _ int,
 	fn func(db.EmbeddableUnit) error,
 ) (string, error) {
 	if err := fn(s.unit); err != nil {
@@ -1063,7 +1063,7 @@ func TestBuildRetiresAbandonedBuildingGenerationEndToEnd(t *testing.T) {
 	src := twoDocSource()
 
 	genA := fakeGeneration("model-a")
-	_, err := ix.Refresh(ctx, src, true, true)
+	_, err := ix.Refresh(ctx, src, true, true, nil)
 	require.NoError(t, err)
 	fpA, err := ix.EnsureGeneration(ctx, genA, sqlitevec.StateBuilding)
 	require.NoError(t, err)
@@ -1141,4 +1141,74 @@ func TestBuildActiveFingerprintEarlyReturnRetiresAbandonedBuildingGeneration(t *
 	_, ok, err := ix.BuildingFingerprint(ctx)
 	require.NoError(t, err)
 	assert.False(t, ok, "no generation should remain in state building")
+}
+
+type agentScopeSource struct {
+	*db.DB
+	since  string
+	agents []string
+}
+
+func (s *agentScopeSource) ScanEmbeddableUnits(ctx context.Context, since string, includeAutomated bool, agents []string, maxRunRunes int, fn func(db.EmbeddableUnit) error) (string, error) {
+	s.since = since
+	s.agents = slices.Clone(agents)
+	return s.DB.ScanEmbeddableUnits(ctx, since, includeAutomated, agents, maxRunRunes, fn)
+}
+
+func TestBuildAgentScopeReconciles(t *testing.T) {
+	ctx := t.Context()
+	archive := dbtest.OpenTestDB(t)
+	for _, item := range []struct{ agent, ended string }{{"claude", "2024-01-02T00:00:00Z"}, {"codex", "2024-01-01T00:00:00Z"}} {
+		dbtest.SeedSessionWithMessages(t, archive, item.agent, "project", []db.Message{dbtest.UserMsg(item.agent, 0, item.agent+" text")}, func(s *db.Session) { s.Agent = item.agent; s.EndedAt = new(item.ended) })
+	}
+	ix := openTestIndex(t)
+	gen := fakeGeneration("fake-model")
+	source := &agentScopeSource{DB: archive}
+	build := func(agents []string) BuildResult {
+		result, err := ix.Build(ctx, source, fakeBuildEncoder(), gen, BuildOptions{Agents: agents})
+		require.NoError(t, err)
+		return result
+	}
+	build([]string{"claude"})
+	assert.Equal(t, []string{"claude"}, mirrorSessionIDs(t, ix))
+	assert.Equal(t, 1, build(nil).Fill.Documents)
+	assert.Equal(t, []string{"claude", "codex"}, mirrorSessionIDs(t, ix))
+	build([]string{"claude"})
+	assert.Equal(t, []string{"claude"}, mirrorSessionIDs(t, ix))
+	build([]string{"claude", "codex"})
+	build([]string{"codex", "claude", "codex"})
+	assert.Equal(t, []string{"claude", "codex"}, source.agents)
+	assert.NotEmpty(t, source.since)
+	build(nil)
+	require.NoError(t, ix.metaDelete(ctx, scopeAgentsKey))
+	source.since = ""
+	build(nil)
+	assert.NotEmpty(t, source.since)
+}
+
+func TestBuildAgentScopeFailureThenRestore(t *testing.T) {
+	ctx := t.Context()
+	archive := dbtest.OpenTestDB(t)
+	for _, item := range []struct{ id, agent, ended string }{
+		{"a-old", "claude", "2024-01-01T00:00:00Z"},
+		{"b-old", "claude", "2024-01-02T00:00:00Z"},
+		{"c-new", "codex", "2024-01-03T00:00:00Z"},
+	} {
+		dbtest.SeedSessionWithMessages(t, archive, item.id, "project", []db.Message{dbtest.UserMsg(item.id, 0, item.id)}, func(s *db.Session) { s.Agent = item.agent; s.EndedAt = new(item.ended) })
+	}
+	ix := openTestIndex(t)
+	gen := fakeGeneration("fake-model")
+	build := func(agent string) error {
+		_, err := ix.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{Agents: []string{agent}})
+		return err
+	}
+	require.NoError(t, build("claude"))
+	_, err := ix.db.ExecContext(ctx, `CREATE TRIGGER fail_scope_delete BEFORE DELETE ON vector_messages WHEN OLD.session_id = 'b-old' BEGIN SELECT RAISE(FAIL, 'injected failure'); END`)
+	require.NoError(t, err)
+	require.ErrorContains(t, build("codex"), "injected failure")
+	assert.NotContains(t, mirrorSessionIDs(t, ix), "a-old")
+	_, err = ix.db.ExecContext(ctx, `DROP TRIGGER fail_scope_delete`)
+	require.NoError(t, err)
+	require.NoError(t, build("claude"))
+	assert.Equal(t, []string{"a-old", "b-old"}, mirrorSessionIDs(t, ix))
 }
