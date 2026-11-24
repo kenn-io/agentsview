@@ -3653,7 +3653,7 @@ schemas keep their existing ordering behavior.
   system row (`[Skill: NAME]\nBODY\n[/Skill]`, source UUID
   `<entry id>:skill`) and a user row with the trimmed args, or `/skill:NAME`
   when there are none (source UUID `<entry id>`). Non-matching text is
-  unchanged. Data version 184 reparses Pi, OMP, OMO, StepCode, Direct API,
+  unchanged. Data version 188 reparses Pi, OMP, OMO, StepCode, Direct API,
   and Prime Agent in place.
 - **Agentsview:** `internal/parser/pi.go` and `internal/parser/pi_provider.go`;
   alternate branches remain in the file but only the active ancestry is a
