@@ -1,6 +1,7 @@
 package db
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json/jsontext"
@@ -376,18 +377,7 @@ func (c *sharedPRContext) add(directory, repository bool) {
 
 func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote string, sharedContext sharedPRContext, change *sharedPRContext, depends *[]PRLink) ([]PRLink, error) {
 	if category == "Task" {
-		var payload struct {
-			Prompt  string         `json:"prompt"`
-			Task    string         `json:"task"`
-			Message string         `json:"message"`
-			Content jsontext.Value `json:"content"`
-		}
-		if json.Unmarshal([]byte(input), &payload) != nil {
-			return nil, ctx.Err()
-		}
-		var content string
-		_ = json.Unmarshal(payload.Content, &content)
-		return parser.PromptPRLinksContext(ctx, payload.Prompt+"\n"+payload.Message+"\n"+payload.Task+"\n"+content)
+		return taskPRLinks(ctx, input)
 	}
 	if category != "Bash" || len(input) > 256*1024 {
 		change.add(false, true)
@@ -397,32 +387,16 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 	if toolName == "exec" && plain {
 		return nil, ctx.Err()
 	}
-	var payload struct {
-		Command  jsontext.Value `json:"command"`
-		Cmd      string         `json:"cmd"`
-		Commands []string       `json:"commands"`
-	}
-	if !plain && json.Unmarshal([]byte(input), &payload) != nil {
+	commands, ok := shellInputCommands(input, plain)
+	if !ok {
 		return nil, ctx.Err()
 	}
 	allowBare := !sharedContext.directory && !sharedContext.repository
 	if dir := parser.ToolInputWorkdir(input); dir != "" {
 		allowBare = !sharedContext.repository && parser.SamePRWorkingDirectory(cwd, dir)
 	}
-	var command string
-	if plain {
-		command = input
-	} else if json.Unmarshal(payload.Command, &command) != nil {
-		command, _ = argvShellText(input, false)
-	}
-	if command == "" {
-		command = payload.Cmd
-	}
-	if command != "" {
-		payload.Commands = append(payload.Commands, command)
-	}
 	var lists [][]PRLink
-	for _, command := range payload.Commands {
+	for _, command := range commands {
 		links, directory, repository, persistent, usesRemote, err := parser.AnalyzePRCommand(ctx, command, cwd, remote, allowBare, sharedContext.repository)
 		change.add(directory, persistent)
 		if depends != nil {
@@ -440,6 +414,54 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 	return parser.CombinePRLinks(lists...), nil
 }
 
+// taskPRLinks finds links in the prompt fields of a delegated task, including
+// each agent a spawn names, and ignores its descriptions.
+func taskPRLinks(ctx context.Context, input string) ([]PRLink, error) {
+	var payload struct {
+		Prompt  string         `json:"prompt"`
+		Task    string         `json:"task"`
+		Message string         `json:"message"`
+		Content jsontext.Value `json:"content"`
+		Agents  []struct {
+			Prompt string `json:"prompt"`
+		} `json:"agents"`
+	}
+	if json.Unmarshal([]byte(input), &payload) != nil {
+		return nil, ctx.Err()
+	}
+	var content string
+	_ = json.Unmarshal(payload.Content, &content)
+	text := []string{payload.Prompt, payload.Message, payload.Task, content}
+	for _, agent := range payload.Agents {
+		text = append(text, agent.Prompt)
+	}
+	return parser.PromptPRLinksContext(ctx, strings.Join(text, "\n"))
+}
+
+// shellInputCommands lists the commands a shell tool input names. ok is false
+// when the input is structured but does not parse.
+func shellInputCommands(input string, plain bool) (commands []string, ok bool) {
+	var payload struct {
+		Command     jsontext.Value `json:"command"`
+		Cmd         string         `json:"cmd"`
+		CommandLine string         `json:"commandLine"`
+		Commands    []string       `json:"commands"`
+	}
+	if !plain && json.Unmarshal([]byte(input), &payload) != nil {
+		return nil, false
+	}
+	var command string
+	if plain {
+		command = input
+	} else if json.Unmarshal(payload.Command, &command) != nil {
+		command, _ = argvShellText(input, false)
+	}
+	if command = cmp.Or(command, payload.Cmd, payload.CommandLine); command != "" {
+		payload.Commands = append(payload.Commands, command)
+	}
+	return payload.Commands, true
+}
+
 // ToolCallPRLinks derives links from a transcript's tool calls.
 func ToolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string) ([]PRLink, error) {
 	changed := sharedPRContext{}
@@ -447,6 +469,14 @@ func ToolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string
 }
 
 func toolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string, sharedContext *sharedPRContext, depends *[]PRLink) ([]PRLink, error) {
+	lists, err := toolCallPRLinkLists(ctx, messages, cwd, remote, sharedContext, depends)
+	return parser.CombinePRLinks(lists...), err
+}
+
+// toolCallPRLinkLists derives the links of each tool call in order, carrying
+// shell state from call to call. A call whose input the archive dropped
+// yields the links it kept.
+func toolCallPRLinkLists(ctx context.Context, messages []Message, cwd, remote string, sharedContext *sharedPRContext, depends *[]PRLink) ([][]PRLink, error) {
 	var lists [][]PRLink
 	for _, message := range messages {
 		for _, call := range message.ToolCalls {
@@ -459,6 +489,9 @@ func toolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string
 			if err != nil {
 				return nil, err
 			}
+			if call.InputJSON == "" {
+				links = DecodePRLinks(call.PRLinks)
+			}
 			lists = append(lists, links)
 			if call.Category == "Bash" {
 				if call.ToolName == "Bash" {
@@ -468,12 +501,32 @@ func toolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string
 			}
 		}
 	}
-	return parser.CombinePRLinks(lists...), nil
+	return lists, nil
+}
+
+// retainedToolPRLinks encodes the links each call names, indexed by message
+// and call, for archives that drop tool input. It needs no repository context,
+// so a command that names no repository keeps no link.
+func retainedToolPRLinks(messages []Message) [][]string {
+	retained := make([][]string, len(messages))
+	for i, message := range messages {
+		retained[i] = make([]string, len(message.ToolCalls))
+	}
+	lists, err := toolCallPRLinkLists(context.Background(), messages, "", "", &sharedPRContext{}, nil)
+	if err != nil {
+		return retained
+	}
+	for i := range retained {
+		for j := range retained[i] {
+			retained[i][j], lists = EncodePRLinks(lists[0]), lists[1:]
+		}
+	}
+	return retained
 }
 
 // storedToolCallPRLinksTx replays stored calls before an ordinal, leaving their shell changes in state.
 func storedToolCallPRLinksTx(ctx context.Context, tx transactionQueries, id, cwd, remote string, before int, state *sharedPRContext) ([]PRLink, error) {
-	rows, err := tx.Query(`SELECT t.category, t.tool_name, t.input_json FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND t.category IN ('Bash','Task') AND t.input_json IS NOT NULL AND m.ordinal<? ORDER BY m.ordinal, t.id`, id, before)
+	rows, err := tx.Query(`SELECT t.category, t.tool_name, COALESCE(t.input_json,''), COALESCE(t.pr_links,'') FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND t.category IN ('Bash','Task') AND (t.input_json IS NOT NULL OR t.pr_links IS NOT NULL) AND m.ordinal<? ORDER BY m.ordinal, t.id`, id, before)
 	if err != nil {
 		return nil, err
 	}
@@ -481,7 +534,7 @@ func storedToolCallPRLinksTx(ctx context.Context, tx transactionQueries, id, cwd
 	var lists [][]PRLink
 	for rows.Next() {
 		var call ToolCall
-		if err := rows.Scan(&call.Category, &call.ToolName, &call.InputJSON); err != nil {
+		if err := rows.Scan(&call.Category, &call.ToolName, &call.InputJSON, &call.PRLinks); err != nil {
 			return nil, err
 		}
 		links, err := toolCallPRLinks(ctx, []Message{{ToolCalls: []ToolCall{call}}}, cwd, remote, state, nil)

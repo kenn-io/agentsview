@@ -3077,6 +3077,10 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"ALTER TABLE tool_calls ADD COLUMN call_index INTEGER",
 		},
 		{
+			"tool_calls", "pr_links",
+			"ALTER TABLE tool_calls ADD COLUMN pr_links TEXT",
+		},
+		{
 			"worktree_project_mappings", "layout",
 			"ALTER TABLE worktree_project_mappings ADD COLUMN layout TEXT NOT NULL DEFAULT 'explicit'",
 		},

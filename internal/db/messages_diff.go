@@ -121,9 +121,8 @@ func toolCallRowEqual(a, b ToolCall) bool {
 		a.SkillName == b.SkillName &&
 		a.ResultContentLength == b.ResultContentLength &&
 		a.ResultContent == b.ResultContent &&
-		a.SubagentSessionID == b.SubagentSessionID &&
-		a.FilePath == b.FilePath &&
-		a.CallIndex == b.CallIndex
+		a.SubagentSessionID == b.SubagentSessionID && a.FilePath == b.FilePath &&
+		a.CallIndex == b.CallIndex && a.PRLinks == b.PRLinks
 }
 
 type messageDiffUpdate struct {

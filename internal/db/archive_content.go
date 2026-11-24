@@ -178,7 +178,7 @@ func transcriptMessages(messages []Message) []Message {
 	if messages == nil {
 		return nil
 	}
-	stored := slices.Clone(messages)
+	stored, retained := slices.Clone(messages), retainedToolPRLinks(messages)
 	for i := range stored {
 		if isToolOutputRow(stored[i]) {
 			stored[i].Content = ""
@@ -202,22 +202,29 @@ func transcriptMessages(messages []Message) []Message {
 				stored[i].DialogueText = &redacted
 			}
 		}
-		calls := slices.Clone(stored[i].ToolCalls)
-		for j := range calls {
-			calls[j].InputJSON = ""
-			calls[j].ResultContent = ""
-			if len(calls[j].ResultEvents) == 0 {
-				continue
-			}
-			events := slices.Clone(calls[j].ResultEvents)
-			for k := range events {
-				events[k].Content = ""
-			}
-			calls[j].ResultEvents = events
-		}
-		stored[i].ToolCalls = calls
+		stored[i].ToolCalls = withoutToolPayloads(stored[i].ToolCalls, retained[i])
 	}
 	return stored
+}
+
+// withoutToolPayloads clones calls without their input, result text, or
+// event content, keeping the pull request links each input named.
+func withoutToolPayloads(calls []ToolCall, retainedLinks []string) []ToolCall {
+	calls = slices.Clone(calls)
+	for j := range calls {
+		calls[j].InputJSON = ""
+		calls[j].PRLinks = retainedLinks[j]
+		calls[j].ResultContent = ""
+		if len(calls[j].ResultEvents) == 0 {
+			continue
+		}
+		events := slices.Clone(calls[j].ResultEvents)
+		for k := range events {
+			events[k].Content = ""
+		}
+		calls[j].ResultEvents = events
+	}
+	return calls
 }
 
 // redactToolUseRenderings rewrites the tool call summaries that parsers
