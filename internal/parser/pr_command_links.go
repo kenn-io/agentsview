@@ -17,21 +17,6 @@ var (
 	prHostRE   = regexp.MustCompile(`^[A-Za-z0-9.-]+(?::[0-9]+)?$`)
 )
 
-var ghPRValueFlags = map[string]string{
-	"view":     "--json --jq -q --template -t",
-	"diff":     "--color --exclude -e",
-	"checks":   "--interval -i --jq -q --json --template -t",
-	"merge":    "--author-email -A --body -b --body-file -F --match-head-commit --subject -t",
-	"edit":     "--add-assignee --add-label --add-project --add-reviewer --attach --base -B --body -b --body-file -F --milestone -m --remove-assignee --remove-label --remove-project --remove-reviewer --title -t",
-	"comment":  "--attach --body -b --body-file -F",
-	"review":   "--body -b --body-file -F",
-	"close":    "--comment -c",
-	"reopen":   "--comment -c",
-	"checkout": "--branch -b --worktree",
-	"lock":     "--reason -r",
-	"revert":   "--body -b --body-file -F --title -t",
-}
-
 func shellLiteral(parts []syntax.WordPart) (string, bool) {
 	var b strings.Builder
 	for _, part := range parts {
@@ -57,139 +42,6 @@ func shellLiteral(parts []syntax.WordPart) (string, bool) {
 		}
 	}
 	return b.String(), true
-}
-
-func shellLiteralPrefix(parts []syntax.WordPart) (string, bool) {
-	var prefix strings.Builder
-	for _, part := range parts {
-		if quoted, ok := part.(*syntax.DblQuoted); ok && !quoted.Dollar {
-			value, complete := shellLiteralPrefix(quoted.Parts)
-			prefix.WriteString(value)
-			if !complete {
-				return prefix.String(), false
-			}
-			continue
-		}
-		value, complete := shellLiteral([]syntax.WordPart{part})
-		prefix.WriteString(value)
-		if !complete {
-			return prefix.String(), false
-		}
-	}
-	return prefix.String(), true
-}
-
-func shellExpansionQuoted(word *syntax.Word) bool {
-	for _, part := range word.Parts {
-		switch v := part.(type) {
-		case *syntax.Lit, *syntax.SglQuoted:
-		case *syntax.DblQuoted:
-			safe := true
-			syntax.Walk(v, func(node syntax.Node) bool {
-				if p, ok := node.(*syntax.ParamExp); ok && (p.Param != nil && p.Param.Value == "@" || p.Index != nil || p.Names != 0) {
-					safe = false
-				}
-				return safe
-			})
-			if !safe {
-				return false
-			}
-		default:
-			return false
-		}
-	}
-	return true
-}
-
-func unwrapPRCommand(args []*syntax.Word) ([]*syntax.Word, bool) {
-	unknown := false
-	for len(args) > 1 {
-		name, ok := shellLiteral(args[0].Parts)
-		if !ok {
-			break
-		}
-		switch name {
-		case "nohup":
-			args = args[1:]
-		case "env":
-			args = args[1:]
-			for len(args) > 0 {
-				word, literal := shellLiteral(args[0].Parts)
-				if !literal {
-					return nil, true
-				}
-				if word == "--" {
-					args = args[1:]
-					break
-				}
-				key, _, assigned := strings.Cut(word, "=")
-				if !assigned {
-					break
-				}
-				unknown = unknown || key == "GH_HOST" || key == "GH_REPO"
-				args = args[1:]
-			}
-		case "timeout":
-			args = args[1:]
-			for len(args) > 0 {
-				word, literal := shellLiteral(args[0].Parts)
-				if !literal {
-					return nil, true
-				}
-				if word == "--" {
-					args = args[1:]
-					break
-				}
-				if !strings.HasPrefix(word, "-") {
-					break
-				}
-				args = args[1:]
-				switch {
-				case word == "-k" || word == "--kill-after" || word == "-s" || word == "--signal":
-					if len(args) == 0 {
-						return nil, true
-					}
-					args = args[1:]
-				case word == "--foreground" || word == "--preserve-status" || word == "-v" || word == "--verbose",
-					strings.HasPrefix(word, "--signal="), strings.HasPrefix(word, "--kill-after="),
-					strings.HasPrefix(word, "-s") && len(word) > 2, strings.HasPrefix(word, "-k") && len(word) > 2:
-				default:
-					return nil, true
-				}
-			}
-			if len(args) == 0 {
-				return nil, true
-			}
-			args = args[1:]
-		default:
-			return args, unknown
-		}
-	}
-	return args, unknown
-}
-
-// hoistPRRepoFlags moves leading -R/--repo flags after the gh pr subcommand so
-// they parse like flags written after it.
-func hoistPRRepoFlags(args []*syntax.Word) []*syntax.Word {
-	pr := 1
-	for pr < len(args) {
-		word, ok := shellLiteral(args[pr].Parts)
-		if !ok {
-			break
-		}
-		if word == "-R" || word == "--repo" {
-			pr += 2
-		} else if strings.HasPrefix(word, "-R") && len(word) > 2 || strings.HasPrefix(word, "--repo=") {
-			pr++
-		} else {
-			break
-		}
-	}
-	if pr > 1 && pr+1 < len(args) {
-		ordered := append([]*syntax.Word{args[0], args[pr], args[pr+1]}, args[1:pr]...)
-		return append(ordered, args[pr+2:]...)
-	}
-	return args
 }
 
 func shellWords(args []*syntax.Word) ([]string, []bool) {
@@ -234,17 +86,13 @@ func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 		if err := ctx.Err(); err != nil {
 			return nil, false, false, false, nil, err
 		}
-		args, wrapperUnknown := unwrapPRCommand(entry.call.Args)
-		if args == nil {
-			continue
-		}
-		bareSafe := allowBare && !entry.directory && !entry.repository && !wrapperUnknown
-		args = hoistPRRepoFlags(args)
+		args := entry.call.Args
+		bareSafe := allowBare && !entry.directory && !entry.repository
 		words, literal := shellWords(args)
 		if len(words) < 4 || !literal[0] || !literal[1] || !literal[2] || words[0] != "gh" || words[1] != "pr" {
 			continue
 		}
-		callHostUnknown := hostUnknown || entry.repository || wrapperUnknown
+		callHostUnknown := hostUnknown || entry.repository
 		if words[2] == "co" {
 			words[2] = "checkout"
 		}
@@ -257,14 +105,6 @@ func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 		specified, invalid := false, false
 		for i := 3; i < len(words); i++ {
 			if !literal[i] {
-				prefix, _ := shellLiteralPrefix(args[i].Parts)
-				flag, _, attached := strings.Cut(prefix, "=")
-				if shellExpansionQuoted(args[i]) && (attached || len(flag) == 2 && strings.HasPrefix(flag, "-")) && strings.Contains(" "+ghPRValueFlags[words[2]]+" ", " "+flag+" ") {
-					continue
-				}
-				if i > 3 && words[i-1] == "--body" && shellExpansionQuoted(args[i]) {
-					continue
-				}
 				invalid = true
 				continue
 			}
@@ -285,15 +125,13 @@ func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 				specified = true
 				repo = strings.TrimPrefix(word[2:], "=")
 			case strings.HasPrefix(word, "-"):
-				if !strings.Contains(word, "=") && strings.Contains(" "+ghPRValueFlags[words[2]]+" ", " "+word+" ") {
-					i++
-					if i < len(words) && !literal[i] && !shellExpansionQuoted(args[i]) {
-						invalid = true
-					}
-				}
+				invalid = true
 			case selector == "":
 				selector = word
 			}
+		}
+		if invalid {
+			continue
 		}
 		if strings.HasPrefix(selector, "https://") || strings.HasPrefix(selector, "http://") {
 			found, err := PromptPRLinksContext(ctx, selector)
@@ -368,7 +206,7 @@ func bashChangesRepositoryContext(file *syntax.File) (bool, bool, []prShellCall)
 			}
 		case *syntax.CallExpr:
 			callDirectory, callRepository := directory, repository
-			args, _ := unwrapPRCommand(n.Args)
+			args := n.Args
 			if len(args) > 0 {
 				name, _ := shellLiteral(args[0].Parts)
 				if name == "gh" {

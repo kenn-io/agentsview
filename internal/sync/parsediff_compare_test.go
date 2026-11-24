@@ -38,10 +38,6 @@ func pdBaseSession() db.Session {
 }
 
 func TestCompareSessionFields(t *testing.T) {
-	first, ok := parser.NewPRLink("https://github.com/example/repo/pull/1", "example/repo", 1)
-	require.True(t, ok)
-	second, ok := parser.NewPRLink("https://github.com/example/repo/pull/2", "example/repo", 2)
-	require.True(t, ok)
 	type want struct {
 		field         string
 		stored        string
@@ -56,11 +52,6 @@ func TestCompareSessionFields(t *testing.T) {
 	}{
 		{
 			name: "identical sessions produce no diffs",
-		},
-		{
-			name:     "PR link order does not change the session",
-			stored:   func(s *db.Session) { s.PRLinks = []db.PRLink{first, second} },
-			prepared: func(s *db.Session) { s.PRLinks = []db.PRLink{second, first} },
 		},
 		{
 			name:   "message count drift",
@@ -2625,6 +2616,8 @@ func TestCompareStoredSessionToolLinksByArchiveContent(t *testing.T) {
 			prepared, msgs, verdict := e.prepareSessionWrite(pw, nil)
 			require.Equal(t, sessionWriteOK, verdict)
 			stored := pdFetchStored(t, d, prepared.ID)
+			require.Len(t, stored.PRLinks, 1)
+			assert.Equal(t, 42, stored.PRLinks[0].Number)
 			diffs, err := e.compareStoredSession(t.Context(), stored, prepared, msgs, nil)
 			require.NoError(t, err)
 			for _, diff := range diffs {

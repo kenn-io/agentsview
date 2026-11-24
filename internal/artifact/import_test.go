@@ -34,7 +34,13 @@ func TestArtifactImportRetainsToolPRLinks(t *testing.T) {
 	exported, err := ExportToStore(t.Context(), source, store, ExportOptions{Origin: contractOrigin, Full: true})
 	require.NoError(t, err)
 	require.Equal(t, 1, exported.ExportedSessions)
-	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts} {
+	checkpoint := latestStoreCheckpointForTest(t, store, contractOrigin)
+	ref, err := NewRef(contractOrigin, KindManifests, checkpoint.Sessions[contractOrigin+"~one"]+".json")
+	require.NoError(t, err)
+	manifest, err := decodeManifestWithLimits(readContractArtifact(t, store, ref), productionArtifactLimits())
+	require.NoError(t, err)
+	assert.Equal(t, 8, manifest.Version)
+	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
 		t.Run(string(policy), func(t *testing.T) {
 			destination := testDB(t)
 			destination.SetArchiveContent(policy)
@@ -46,15 +52,16 @@ func TestArtifactImportRetainsToolPRLinks(t *testing.T) {
 			session, err := destination.GetSessionFull(t.Context(), contractOrigin+"~one")
 			require.NoError(t, err)
 			require.NotNil(t, session)
-			require.Len(t, session.PRLinks, 2)
+			require.Len(t, session.PRLinks, 3)
 			assert.Equal(t, 5, session.PRLinks[0].Number)
 			assert.Equal(t, 6, session.PRLinks[1].Number)
+			assert.Equal(t, 8, session.PRLinks[2].Number)
 			messages, err := destination.GetMessages(t.Context(), session.ID, 0, 10, true)
 			require.NoError(t, err)
 			require.NoError(t, destination.ReplaceSessionMessages(t.Context(), session.ID, messages))
 			session, err = destination.GetSessionFull(t.Context(), session.ID)
 			require.NoError(t, err)
-			assert.Len(t, session.PRLinks, 2)
+			assert.Len(t, session.PRLinks, 3)
 		})
 	}
 }

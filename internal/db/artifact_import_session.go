@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 // ArtifactImportedSessionResult reports whether an import replaced normalized
@@ -75,6 +77,13 @@ func (db *DB) applyArtifactImportedSession(
 	write, err := sanitizeSessionBatchWriteContext(ctx, write)
 	if err != nil {
 		return result, err
+	}
+	if db.usageOnlyStorage() {
+		links, err := ToolCallPRLinks(ctx, write.Messages, "", "")
+		if err != nil {
+			return result, err
+		}
+		write.Session.PRLinks = parser.CombinePRLinks(write.Session.PRLinks, links)
 	}
 	write.Messages = db.projectSessionBatchMessages(write)
 	write.Session, write.Messages = db.sessionAndMessagesForStorage(

@@ -68,7 +68,7 @@ const (
 	// 999-variable limit so binaries built against older SQLite
 	// versions still work.
 	messageInsertRowsPerStmt         = 31  // 32 params per row
-	toolCallInsertRowsPerStmt        = 58  // 17 params per row
+	toolCallInsertRowsPerStmt        = 62  // 16 params per row
 	toolResultEventInsertRowsPerStmt = 70  // 14 params per row
 	toolCallAgentStateRowsPerStmt    = 142 // 7 params per row
 )
@@ -96,11 +96,8 @@ type ToolCall struct {
 	// content for this call. It is consumed by the storage projection and
 	// never persisted.
 	Rendering string `json:"-"`
-	// PRLinks holds the encoded pull request links the call's input named
-	// before session context applied, and PRContext the shell state it
-	// changed. Both are kept when the archive policy drops that input.
-	PRLinks   string `json:"-"`
-	PRContext string `json:"-"`
+	// PRLinks holds links retained when the archive drops the call's input.
+	PRLinks string `json:"-"`
 }
 
 // ToolResult holds a tool_result content block for pairing.
@@ -1390,7 +1387,7 @@ func multiRowPlaceholders(rows, cols int) string {
 func insertToolCallsChunkTx(
 	tx transactionQueries, calls []ToolCall,
 ) error {
-	args := make([]any, 0, len(calls)*17)
+	args := make([]any, 0, len(calls)*16)
 	for _, tc := range calls {
 		args = append(args,
 			tc.MessageID, tc.SessionID,
@@ -1402,7 +1399,7 @@ func insertToolCallsChunkTx(
 			nilIfEmpty(tc.ResultContent),
 			nilIfEmpty(tc.SubagentSessionID),
 			nilIfEmpty(tc.FilePath),
-			tc.CallIndex, tc.ObservedOutcome, tc.ObservedRepeat, tc.SequenceEnding, nilIfEmpty(tc.PRLinks), nilIfEmpty(tc.PRContext),
+			tc.CallIndex, tc.ObservedOutcome, tc.ObservedRepeat, tc.SequenceEnding, nilIfEmpty(tc.PRLinks),
 		)
 	}
 	query := `
@@ -1410,8 +1407,8 @@ func insertToolCallsChunkTx(
 			(message_id, session_id, tool_name, category,
 			 tool_use_id, input_json, skill_name,
 			 result_content_length, result_content, subagent_session_id,
-			 file_path, call_index, observed_outcome, observed_repeat, sequence_ending, pr_links, pr_context)
-		VALUES ` + multiRowPlaceholders(len(calls), 17)
+			 file_path, call_index, observed_outcome, observed_repeat, sequence_ending, pr_links)
+		VALUES ` + multiRowPlaceholders(len(calls), 16)
 	if _, err := tx.Exec(query, args...); err != nil {
 		return fmt.Errorf(
 			"inserting tool_calls batch (%d rows): %w",
@@ -1633,6 +1630,9 @@ func (db *DB) insertMessages(ctx context.Context,
 	for _, sessionID := range sessionIDs {
 		var err error
 		if db.usageOnlyStorage() {
+			if err := retainUsageToolPRLinksTx(ctx, tx, sessionID, messagesForSession(rawMessages, sessionID)); err != nil {
+				return err
+			}
 			err = updateUsageOnlyAutomationTx(
 				tx, sessionID, messagesForSession(rawMessages, sessionID),
 			)
@@ -1850,6 +1850,11 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 	defer func() { _ = tx.Rollback() }()
 	if err := db.checkArchiveSessionProvenanceTx(ctx, tx, SessionBatchWrite{Session: Session{ID: sessionID}}); err != nil {
 		return false, err
+	}
+	if db.usageOnlyStorage() {
+		if err := retainUsageToolPRLinksTx(ctx, tx, sessionID, rawMessages); err != nil {
+			return false, err
+		}
 	}
 
 	var replaced *messageRangeTotals
@@ -2173,6 +2178,11 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 	}
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 
+	if db.usageOnlyStorage() {
+		if err := retainUsageToolPRLinksTx(ctx, tx, sessionID, rawMessages); err != nil {
+			return err
+		}
+	}
 	if err := reconcileReplacedConversationTx(tx, sessionID, msgs, plan, useDiff, db.usageOnlyStorage()); err != nil {
 		return err
 	}
@@ -2633,6 +2643,11 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 	}
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 
+	if db.usageOnlyStorage() {
+		if err := retainUsageToolPRLinksTx(ctx, tx, sessionID, rawMessages); err != nil {
+			return err
+		}
+	}
 	if err := reconcileReplacedConversationTx(tx, sessionID, msgs, plan, useDiff, db.usageOnlyStorage()); err != nil {
 		return err
 	}
@@ -3268,7 +3283,7 @@ func attachToolCallsBatch(
 		SELECT message_id, session_id, tool_name, category,
 			tool_use_id, input_json, skill_name,
 			result_content_length, %s, subagent_session_id,
-			file_path, call_index, observed_outcome, observed_repeat, sequence_ending, COALESCE(pr_links, ''), COALESCE(pr_context, '')
+			file_path, call_index, observed_outcome, observed_repeat, sequence_ending, COALESCE(pr_links, '')
 		FROM tool_calls
 		WHERE message_id IN (%s)
 		ORDER BY message_id, call_index`,
@@ -3292,7 +3307,7 @@ func attachToolCallsBatch(
 			&tc.ToolName, &tc.Category,
 			&toolUseID, &inputJSON, &skillName,
 			&resultLen, &resultContent, &subagentSessionID,
-			&filePath, &callIndex, &tc.ObservedOutcome, &tc.ObservedRepeat, &tc.SequenceEnding, &tc.PRLinks, &tc.PRContext,
+			&filePath, &callIndex, &tc.ObservedOutcome, &tc.ObservedRepeat, &tc.SequenceEnding, &tc.PRLinks,
 		); err != nil {
 			return fmt.Errorf("scanning tool_call: %w", err)
 		}
@@ -4382,7 +4397,7 @@ func resolveToolCalls(
 				SubagentSessionID: tc.SubagentSessionID,
 				FilePath:          tc.FilePath,
 				CallIndex:         callIdx,
-				ObservedOutcome:   tc.ObservedOutcome, ObservedRepeat: tc.ObservedRepeat, SequenceEnding: tc.SequenceEnding, PRLinks: tc.PRLinks, PRContext: tc.PRContext,
+				ObservedOutcome:   tc.ObservedOutcome, ObservedRepeat: tc.ObservedRepeat, SequenceEnding: tc.SequenceEnding, PRLinks: tc.PRLinks,
 			})
 		}
 	}

@@ -1742,6 +1742,11 @@ func (db *DB) upsertSession(ctx context.Context,
 	if err := db.checkArchiveSessionProvenanceTx(ctx, tx, SessionBatchWrite{Session: s}); err != nil {
 		return sessionUpsertResult{}, err
 	}
+	if db.usageOnlyStorage() {
+		if err := mergeUsagePRLinksTx(ctx, tx, &s); err != nil {
+			return sessionUpsertResult{}, err
+		}
+	}
 
 	result, err := upsertSessionExec(
 		ctx,

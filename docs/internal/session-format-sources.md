@@ -3034,9 +3034,6 @@ schemas keep their existing ordering behavior.
 - **Agentsview:** `internal/parser/roocode.go` and
   `internal/parser/roocode_provider.go`; observed older Roo/Cline message
   variants remain covered by the parser's colocated fixtures.
-- **Shell commands:** Rechecked 2026-11-23 at the pinned commit. The
-  [`execute_command` tool](https://github.com/RooCodeInc/Roo-Code/blob/b867ec9145750d0ae1ff7f02d35406e9bf2a0b16/src/core/tools/ExecuteCommandTool.ts)
-  takes a `command` string and optional `cwd`.
 
 ## Cline CLI (`cline`)
 
@@ -4245,10 +4242,6 @@ schemas keep their existing ordering behavior.
   unsupported.
 - **Agentsview:** `internal/parser/openclaw.go` and
   `internal/parser/openclaw_sqlite.go`.
-- **Shell commands:** Rechecked 2026-11-23 at the pinned commit. The
-  [`exec` tool](https://github.com/openclaw/openclaw/blob/40d31f34813c2a01284b097c0d0d785fbb173400/src/agents/bash-tools.exec.ts)
-  accepts a `command` string. `TestToolCallPRLinksDirectFormats`
-  covers extracting PR links from it.
 - **Source selection (rechecked 2026-09-27):** Isolated duplicate-file fixtures
   verify that discovery and session-ID lookup select the same legacy copy
   across configured roots: live files before archives, then the newer copy.

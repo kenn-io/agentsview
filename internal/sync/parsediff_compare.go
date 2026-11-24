@@ -314,10 +314,7 @@ func appendSessionMetadataDiffs(
 	// Pull request links are never incremental-append history: an appended
 	// record that would change them forces a full parse, so any difference
 	// is real drift.
-	storedLinks := parser.CombinePRLinks(stored.PRLinks)
-	preparedLinks := parser.CombinePRLinks(prepared.PRLinks)
-	if len(storedLinks) != len(preparedLinks) || len(parser.CombinePRLinks(storedLinks, preparedLinks)) != len(storedLinks) {
-		sv, pv := db.EncodePRLinks(stored.PRLinks), db.EncodePRLinks(prepared.PRLinks)
+	if sv, pv := db.EncodePRLinks(stored.PRLinks), db.EncodePRLinks(prepared.PRLinks); sv != pv {
 		diffs = append(diffs, FieldDiff{
 			Field:  FieldPRLinks,
 			Stored: stringutil.TruncateRunes(renderNullableScalar(sv), maxRenderedValueRunes, "..."),

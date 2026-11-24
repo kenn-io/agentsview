@@ -472,7 +472,6 @@ func loadRawPayloadBytes(ctx context.Context, tx *sql.Tx, id string, payload []b
 					break
 				}
 				p.Messages[i].ToolCalls[j].PRLinks = state.ToolPRLinks[i][j].Links
-				p.Messages[i].ToolCalls[j].PRContext = state.ToolPRLinks[i][j].Context
 			}
 		}
 	}

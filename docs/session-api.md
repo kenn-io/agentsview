@@ -688,8 +688,8 @@ child-agent prompts, or structured transcript records. Supported actions are
 `review`, `ready`, `merge`, `close`, `reopen`, `update-branch`, `lock`,
 `unlock`, and `revert`. A command names its pull request by URL or number,
 optionally with `-R` or `--repo` set to `owner/repo` or `host/owner/repo`
-before `pr` or after the action. A command whose selector or repository comes
-from a variable or substitution links nothing.
+after the action. A command whose selector or repository comes from a variable
+or substitution, or which contains another flag, links nothing.
 
 ```json
 "pr_links": [
@@ -704,46 +704,15 @@ from a variable or substitution links nothing.
 
 AgentsView keeps one link per pull request.
 
-Shell commands are read from a tool input's `command` string or argv array (a
-`sh`, `bash`, or `zsh` array with `-c` or `-lc` contributes its script), `cmd`,
-`commands` list, or plain-text input. Function bodies and scripts nested inside
-a command, such as `bash -c '...'`, are skipped. Codex code-mode `exec` input
-is JavaScript and isn't scanned as shell command text. Literal `env`
-assignments and the `timeout` and `nohup` wrappers are recognized.
-
-AgentsView reads shell statements in source order, including both sides of a
-branch:
-
-- A `cd`, `pushd`, or `popd` marks the directory as changed for later commands.
-- Setting, exporting, or unsetting `GH_REPO` or `GH_HOST` (including a
-  `GH_HOST=x gh ...` prefix), changing git remotes or `remote.*`, `branch.*`,
-  or `url.*` config, running `gh repo set-default`, `eval`, `source`, or `.`,
-  or calling a function the command declares marks the repository as changed.
-- A repository change applies to later commands and every later shell call in
-  the session. A directory change carries forward only across Claude `Bash`
-  calls, which share one shell.
-
-What a command can link depends on its selector:
-
-- A full PR URL, or a number with `-R host/owner/repo`, always links with the
-  host it names.
-- A number with a host-less `-R owner/repo` links only when no repository
-  change applies. It uses the checkout remote's host, or `github.com` when
-  there is none.
-- A bare number links only in a local archive, when the session has a single
-  checkout remote and no directory or repository change applies. A call that
-  records its own working directory links a bare number only when that
-  directory is the session's.
-- Hosted sessions have no checkout remote, so they link only full URLs and
-  explicit repositories, with host-less repositories on `github.com`. Bare
-  numbers never link there.
-
-A shell tool input larger than 256 KB is not read and counts as a repository
-change for later calls. Child-agent prompts link full PR URLs as references:
-a mention, not proof of work on the pull request. A transcript-only archive
-keeps each call's links and shell changes when it drops the input, except a
-bare number in a call that records its own working directory. An archive that
-dropped inputs earlier cannot recover command or child-prompt links.
+Shell tool calls name a pull request by URL, number with `-R owner/repo`, or
+number in a session with one known checkout remote. Child-agent prompt URLs
+are references and do not establish that the session worked on the pull request.
+Transcript-only archives retain explicitly named links when they discard tool
+inputs, but lose shell state from earlier calls. Usage-only archives retain
+links named in new tool inputs as historical references; later writes do not
+remove them. Archives that discarded inputs before this feature cannot recover
+those links. Hosted sessions and imported archives do not resolve bare numbers
+against a checkout remote.
 
 Claude Code also includes `pr-link` entries in its transcripts. Every session
 split from that transcript carries them like its name and git branch.

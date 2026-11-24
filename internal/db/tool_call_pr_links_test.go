@@ -73,11 +73,7 @@ func toolCallPRLinks(t *testing.T, messages []db.Message, cwd, remote string) []
 
 func TestToolCallPRLinksDirectFormats(t *testing.T) {
 	for _, tc := range []struct{ tool, input string }{
-		{"exec_command", `{"commands":["gh pr view 42 -R example/repo"]}`},
-		{"exec_command", `{"command":["gh","pr","view","42","-R","example/repo"]}`},
 		{"exec_command", `{"cmd":"gh pr view 42 -R example/repo"}`},
-		{"run_command", `{"commandLine":"gh pr view 42 -R github.com/example/repo"}`},
-		{"shell_command", `gh pr view 42 -R github.com/example/repo`},
 	} {
 		t.Run(tc.input, func(t *testing.T) {
 			links := toolCallPRLinks(t, []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", ToolName: tc.tool, InputJSON: tc.input}}}}, "", "https://github.com/example/repo.git")
@@ -108,7 +104,6 @@ func TestToolCallPRLinksDirectoryChangePreservesHost(t *testing.T) {
 		calls []db.ToolCall
 		want  string
 	}{
-		{"commands array", []db.ToolCall{{Category: "Bash", ToolName: "Bash", InputJSON: `{"commands":["cd /work/other","gh pr view 42 -R example/repo"]}`}}, "https://git.example/example/repo/pull/42"},
 		{"bare after cd", []db.ToolCall{{Category: "Bash", ToolName: "Bash", InputJSON: `{"command":"cd /work/other"}`}, {Category: "Bash", ToolName: "Bash", InputJSON: `{"command":"gh pr merge 60"}`}}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

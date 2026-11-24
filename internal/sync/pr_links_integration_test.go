@@ -176,7 +176,7 @@ func TestCommandPRCheckoutRemote(t *testing.T) {
 				sessionID = "checkout-pr"
 				path = env.writeClaudeSession(t, "proj", sessionID+".jsonl", testjsonl.JoinJSONL(
 					testjsonl.ClaudeUserJSON("Finish the work", tsEarly, root),
-					testjsonl.ClaudeAssistantJSON([]map[string]any{{"type": "tool_use", "id": "call", "name": "Bash", "input": map[string]any{"command": "gh pr view 42 --json title"}}}, tsEarlyS1),
+					testjsonl.ClaudeAssistantJSON([]map[string]any{{"type": "tool_use", "id": "call", "name": "Bash", "input": map[string]any{"command": "gh pr view 42"}}}, tsEarlyS1),
 				))
 			} else {
 				sessionID = "codex:" + id

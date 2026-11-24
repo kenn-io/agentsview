@@ -212,7 +212,7 @@ func transcriptMessages(messages []Message) []Message {
 func withoutToolPayloads(calls []ToolCall) []ToolCall {
 	calls = slices.Clone(calls)
 	for j := range calls {
-		calls[j].PRLinks, calls[j].PRContext = retainedCallPRLinks(calls[j])
+		calls[j].PRLinks = retainedCallPRLinks(calls[j])
 		calls[j].InputJSON = ""
 		calls[j].ResultContent = ""
 		if len(calls[j].ResultEvents) == 0 {
@@ -709,7 +709,7 @@ func compactCopiedSessionsForUsageTx(
 		{"delegation tool calls", `
 			UPDATE tool_calls
 			SET observed_outcome = NULL, observed_repeat = NULL, sequence_ending = NULL, tool_name = 'subagent', category = 'Task',
-			    input_json = NULL, pr_links = NULL, pr_context = NULL, skill_name = NULL,
+			    input_json = NULL, pr_links = NULL, skill_name = NULL,
 			    result_content_length = NULL, result_content = NULL,
 			    file_path = NULL
 			WHERE session_id` + inCopied},

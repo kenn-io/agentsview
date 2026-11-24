@@ -9,6 +9,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 // SessionBatchWrite is one full session rewrite for a bulk
@@ -67,8 +68,15 @@ func (db *DB) projectSessionBatchMessages(write SessionBatchWrite) []Message {
 }
 
 // storageSessionBatchWrite applies the archive's image, content, and usage-only policies to a sanitized write before the transaction writes it.
-func (db *DB) storageSessionBatchWrite(write SessionBatchWrite) SessionBatchWrite {
+func (db *DB) storageSessionBatchWrite(ctx context.Context, write SessionBatchWrite) (SessionBatchWrite, error) {
 	write.Messages = db.projectSessionBatchMessages(write)
+	if db.usageOnlyStorage() {
+		links, err := ToolCallPRLinks(ctx, write.Messages, "", "")
+		if err != nil {
+			return write, err
+		}
+		write.Session.PRLinks = parser.CombinePRLinks(write.Session.PRLinks, links)
+	}
 	if db.ArchiveContent().OmitsToolContent() {
 		write.Signals.ToolObservations = []ToolObservation{}
 		write.Checkpoint, write.CheckpointBlobs = nil, nil
@@ -79,7 +87,31 @@ func (db *DB) storageSessionBatchWrite(write SessionBatchWrite) SessionBatchWrit
 		write.Findings = nil
 		write.SkipSignalUpdates = false
 	}
-	return write
+	return write, nil
+}
+
+func retainUsageToolPRLinksTx(ctx context.Context, tx *sql.Tx, sessionID string, messages []Message) error {
+	links, err := ToolCallPRLinks(ctx, messages, "", "")
+	if err != nil || len(links) == 0 {
+		return err
+	}
+	var stored string
+	if err := tx.QueryRowContext(ctx, `SELECT structured_pr_links FROM sessions WHERE id=?`, sessionID).Scan(&stored); err != nil {
+		return err
+	}
+	encoded := EncodePRLinks(parser.CombinePRLinks(DecodePRLinks(stored), links))
+	_, err = tx.ExecContext(ctx, `UPDATE sessions SET structured_pr_links=?, pr_links=? WHERE id=?`, encoded, encoded, sessionID)
+	return err
+}
+
+func mergeUsagePRLinksTx(ctx context.Context, tx *sql.Tx, session *Session) error {
+	var stored string
+	err := tx.QueryRowContext(ctx, `SELECT structured_pr_links FROM sessions WHERE id=?`, session.ID).Scan(&stored)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	session.PRLinks = parser.CombinePRLinks(DecodePRLinks(stored), session.PRLinks)
+	return nil
 }
 
 // SessionWouldShortenError reports a rejected message-count decrease.
@@ -186,7 +218,10 @@ func (db *DB) WriteSessionBatchContext(
 		if err != nil {
 			return result, err
 		}
-		write = db.storageSessionBatchWrite(write)
+		write, err = db.storageSessionBatchWrite(ctx, write)
+		if err != nil {
+			return result, err
+		}
 		savepoint := fmt.Sprintf("session_batch_%d", i)
 		if _, err := ctxTx.Exec("SAVEPOINT " + savepoint); err != nil {
 			return result, fmt.Errorf(
@@ -279,7 +314,9 @@ func (db *DB) WriteSessionBatchAtomic(ctx context.Context,
 		sanitized, err := sanitizeSessionBatchWriteContext(ctx, write)
 		var messagesWritten int
 		if err == nil {
-			write = db.storageSessionBatchWrite(sanitized)
+			write, err = db.storageSessionBatchWrite(ctx, sanitized)
+		}
+		if err == nil {
 			messagesWritten, err = db.writeOneSessionBatchTx(
 				ctx, tx, tx,
 				write,
@@ -912,6 +949,11 @@ func messagesAfterOrdinal(msgs []Message, maxOrd int) []Message {
 func (db *DB) upsertSessionBatchTx(ctx context.Context, tx *sql.Tx, write SessionBatchWrite) (sessionUpsertResult, error) {
 	if err := db.checkArchiveSessionProvenanceTx(ctx, tx, write); err != nil {
 		return sessionUpsertResult{}, err
+	}
+	if db.usageOnlyStorage() {
+		if err := mergeUsagePRLinksTx(ctx, tx, &write.Session); err != nil {
+			return sessionUpsertResult{}, err
+		}
 	}
 
 	upsertResult, err := upsertSessionExec(

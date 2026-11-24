@@ -22,14 +22,14 @@ type rawRecencyState struct {
 }
 
 type rawToolPRLinks struct {
-	Links, Context string
+	Links string
 }
 
 func publishRawToolPRLinks(ctx context.Context, tx *sql.Tx, id string, messages []db.Message) error {
 	links := make([][]rawToolPRLinks, len(messages))
 	for i, message := range messages {
 		for _, call := range message.ToolCalls {
-			links[i] = append(links[i], rawToolPRLinks{call.PRLinks, call.PRContext})
+			links[i] = append(links[i], rawToolPRLinks{call.PRLinks})
 		}
 	}
 	data, err := json.Marshal(links)

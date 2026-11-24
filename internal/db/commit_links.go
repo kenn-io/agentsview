@@ -167,9 +167,38 @@ func commitRepository(input, cwd string) string {
 	return cwd
 }
 
-// commitArgv rejects non-git argv so argument text is never mistaken for a commit.
+// commitArgv returns an argv command's shell text. A git argv that does not
+// start with a commit invocation returns none, since later matches are argument text.
 func commitArgv(input string) (string, bool) {
-	return argvShellText(input, true)
+	var payload struct {
+		Command []string `json:"command"`
+	}
+	if json.Unmarshal([]byte(input), &payload) != nil || payload.Command == nil {
+		return "", false
+	}
+	args := payload.Command
+	if len(args) == 0 {
+		return "", true
+	}
+	program := path.Base(strings.ReplaceAll(args[0], `\`, "/"))
+	if len(args) >= 3 && (program == "sh" || program == "bash" || program == "zsh") && (args[1] == "-c" || args[1] == "-lc") {
+		return args[2], true
+	}
+	if program != "git" && !strings.EqualFold(program, "git.exe") {
+		return "", true
+	}
+	args[0] = "git"
+	for i, arg := range args {
+		if strings.HasPrefix(arg, "~") {
+			arg = "./" + arg
+		}
+		args[i] = shellquote.POSIX(arg)
+	}
+	command := strings.Join(args, " ")
+	if match := commitInvocationRE.FindStringIndex(command); match != nil && match[0] != 0 {
+		return "", true
+	}
+	return command, true
 }
 
 func commitCommandText(input string) string {
@@ -984,41 +1013,4 @@ func sessionCommitLinkRows(ctx context.Context, q messageRowsQuerier, owners, wh
 		out = append(out, r)
 	}
 	return out, rows.Err()
-}
-
-func argvShellText(input string, gitOnly bool) (string, bool) {
-	var payload struct {
-		Command []string `json:"command"`
-	}
-	if json.Unmarshal([]byte(input), &payload) != nil || payload.Command == nil {
-		return "", false
-	}
-	args := payload.Command
-	if len(args) == 0 {
-		return "", true
-	}
-	program := path.Base(strings.ReplaceAll(args[0], `\`, "/"))
-	if len(args) >= 3 && (program == "sh" || program == "bash" || program == "zsh") && (args[1] == "-c" || args[1] == "-lc") {
-		return args[2], true
-	}
-	if gitOnly {
-		if program != "git" && !strings.EqualFold(program, "git.exe") {
-			return "", true
-		}
-		args[0] = "git"
-	}
-	// Argv words are never tilde-expanded, so a leading tilde names a relative path.
-	for i, arg := range args {
-		if strings.HasPrefix(arg, "~") {
-			arg = "./" + arg
-		}
-		args[i] = shellquote.POSIX(arg)
-	}
-	command := strings.Join(args, " ")
-	if gitOnly {
-		if match := commitInvocationRE.FindStringIndex(command); match != nil && match[0] != 0 {
-			return "", true
-		}
-	}
-	return command, true
 }

@@ -370,7 +370,7 @@ func TestToolPRLinksArchiveUpgrade(t *testing.T) {
 				if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links='' WHERE id=?`, s.ID); err != nil {
 					return err
 				}
-				if _, err := tx.ExecContext(t.Context(), `ALTER TABLE tool_calls DROP COLUMN pr_links; ALTER TABLE tool_calls DROP COLUMN pr_context`); err != nil {
+				if _, err := tx.ExecContext(t.Context(), `ALTER TABLE tool_calls DROP COLUMN pr_links`); err != nil {
 					return err
 				}
 				return writeUserVersion(t.Context(), tx, toolPRLinksDataVersion-1)
@@ -389,32 +389,18 @@ func TestToolPRLinksArchiveUpgrade(t *testing.T) {
 				urls = append(urls, link.URL)
 			}
 			assert.Equal(t, tc.want, urls)
-			var links sql.NullString
-			require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT pr_links FROM tool_calls WHERE session_id=?`, s.ID).Scan(&links))
-			assert.NotEmpty(t, DecodePRLinks(links.String))
 		})
 	}
 }
 
 func TestToolPRLinksTranscriptsStorage(t *testing.T) {
-	for _, tc := range []struct {
-		name, route string
-		recorded    bool
-	}{{"insert", "insert", false}, {"incremental", "incremental", false}, {"replace", "replace", false}, {"batch", "batch", false}, {"recorded remote", "insert", true}} {
+	for _, tc := range []struct{ name, route string }{{"insert", "insert"}, {"incremental", "incremental"}, {"replace", "replace"}, {"batch", "batch"}} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
 			d.SetArchiveContent(config.ArchiveContentTranscripts)
 			s := Session{ID: "transcripts", Project: "project", Machine: "local", Agent: "claude"}
-			if tc.recorded {
-				s.Cwd = "/work/repo"
-			}
 			require.NoError(t, d.UpsertSession(t.Context(), s))
 			input := `{"command":"gh pr view 42 -R github.com/example/repo"}`
-			if tc.recorded {
-				obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://github.com/example/repo.git")
-				require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), obs))
-				input = `{"command":"gh pr view 42"}`
-			}
 			message := Message{SessionID: s.ID, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: input}}}
 			switch tc.route {
 			case "insert":
@@ -448,63 +434,13 @@ func TestToolPRLinksTranscriptsStorage(t *testing.T) {
 	}
 }
 
-func TestStagedReplacementRetainsToolPRContext(t *testing.T) {
-	d := testDB(t)
-	d.SetArchiveContent(config.ArchiveContentTranscripts)
-	s := Session{ID: "staged-context", Project: "project", Machine: "local", Agent: "claude"}
-	require.NoError(t, d.UpsertSession(t.Context(), s))
-	msg := Message{SessionID: s.ID, Role: "assistant", ToolCalls: []ToolCall{
-		{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"cd /other"}`},
-		{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R github.com/example/repo"}`},
-	}}
-	require.NoError(t, d.InsertMessages(t.Context(), []Message{msg}))
-	stored, err := d.GetAllMessages(t.Context(), s.ID)
-	require.NoError(t, err)
-	stored[0].Content = "updated"
-	path := d.Path()
-	require.NoError(t, d.Close())
-	d, err = OpenIsolated(t.Context(), path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, d.Close()) })
-	require.NoError(t, d.WriteSessionBatchStaged(t.Context(), SessionBatchWrite{Session: s, Messages: stored, ReplaceMessages: true}, newScratchStagedResults(t), nil, nil))
-	stored, err = d.GetAllMessages(t.Context(), s.ID)
-	require.NoError(t, err)
-	assert.NotEmpty(t, stored[0].ToolCalls[0].PRContext)
-	assert.NotEmpty(t, stored[0].ToolCalls[1].PRLinks)
-	got, err := d.GetSession(t.Context(), s.ID)
-	require.NoError(t, err)
-	require.Len(t, got.PRLinks, 1)
-	assert.Equal(t, "https://github.com/example/repo/pull/42", got.PRLinks[0].URL)
-}
-
-func TestToolPRLinksTranscriptsContextAcrossWrites(t *testing.T) {
-	d := testDB(t)
-	d.SetArchiveContent(config.ArchiveContentTranscripts)
-	s := Session{ID: "transcripts-context", Project: "project", Machine: "local", Agent: "claude"}
-	require.NoError(t, d.UpsertSession(t.Context(), s))
-	message := func(ordinal int, command string) Message {
-		input, err := json.Marshal(map[string]string{"command": command})
-		require.NoError(t, err)
-		return Message{SessionID: s.ID, Ordinal: ordinal, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: string(input)}}}
-	}
-	require.NoError(t, d.InsertMessages(t.Context(), []Message{message(0, "export GH_HOST=git.example.com")}))
-	require.NoError(t, d.InsertMessages(t.Context(), []Message{message(1, "gh pr view 42 -R example/repo")}))
-	got, err := d.GetSession(t.Context(), s.ID)
-	require.NoError(t, err)
-	assert.Empty(t, got.PRLinks)
-	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error { return refreshSessionPromptPRLinksTx(t.Context(), tx, s.ID) }))
-	got, err = d.GetSession(t.Context(), s.ID)
-	require.NoError(t, err)
-	assert.Empty(t, got.PRLinks)
-}
-
 func TestToolPRLinksCopyOldArchiveToTranscripts(t *testing.T) {
 	source := testDB(t)
 	s := Session{ID: "copy-old", Project: "project", Machine: "local", Agent: "claude"}
 	require.NoError(t, source.UpsertSession(t.Context(), s))
 	require.NoError(t, source.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R github.com/example/repo"}`}}}}))
 	require.NoError(t, source.Update(t.Context(), func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(t.Context(), `ALTER TABLE tool_calls DROP COLUMN pr_links; ALTER TABLE tool_calls DROP COLUMN pr_context`); err != nil {
+		if _, err := tx.ExecContext(t.Context(), `ALTER TABLE tool_calls DROP COLUMN pr_links`); err != nil {
 			return err
 		}
 		return writeUserVersion(t.Context(), tx, toolPRLinksDataVersion-1)
@@ -628,7 +564,7 @@ func TestToolPRLinksRebuildRetainsCheckout(t *testing.T) {
 			for _, id := range []string{"orphan", "trashed"} {
 				var encoded string
 				require.NoError(t, dest.getReader().QueryRowContext(ctx, `SELECT pr_links FROM sessions WHERE id=?`, id).Scan(&encoded))
-				if policy.UsageOnly() {
+				if policy != config.ArchiveContentFull {
 					assert.Empty(t, DecodePRLinks(encoded))
 				} else {
 					require.Len(t, DecodePRLinks(encoded), 1)

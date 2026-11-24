@@ -668,7 +668,6 @@ func replaceSessionMessagesTxStaged(
 				FilePath:          m.ToolCalls[callIdx].FilePath,
 				CallIndex:         callIdx,
 				PRLinks:           m.ToolCalls[callIdx].PRLinks,
-				PRContext:         m.ToolCalls[callIdx].PRContext,
 			}
 			occurrence := callOccurrences[tc.ToolUseID]
 			callOccurrences[tc.ToolUseID] = occurrence + 1
@@ -761,7 +760,10 @@ func (db *DB) WriteSessionBatchStaged(ctx context.Context, write SessionBatchWri
 	if err != nil {
 		return err
 	}
-	write = db.storageSessionBatchWrite(sanitized)
+	write, err = db.storageSessionBatchWrite(ctx, sanitized)
+	if err != nil {
+		return err
+	}
 	if err := db.replaceSessionContentStaged(ctx, write.Session.ID, write.Messages, staged, blocked, signals,
 		write.Checkpoint, write.CheckpointBlobs, &write); err != nil {
 		return err
