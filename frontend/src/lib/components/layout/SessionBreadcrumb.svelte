@@ -8,6 +8,7 @@
     LinkIcon,
     SearchIcon,
   } from "../../icons.js";
+  import { tick } from "svelte";
   import { MediaQuery } from "svelte/reactivity";
   import type { Session } from "../../api/types.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
@@ -52,6 +53,12 @@
   let renaming = $state(false);
   let renameValue = $state("");
   let renameInput = $state<HTMLInputElement | null>(null);
+  let gradeBtnEl = $state<HTMLButtonElement | null>(null);
+  async function hideDiagnostics() {
+    ui.signalPanelOpen = false;
+    await tick();
+    (gradeBtnEl?.getClientRects().length ? gradeBtnEl : menuBtnEl)?.focus();
+  }
   let menuBtnEl = $state<HTMLButtonElement | null>(null);
   let menuEl = $state<HTMLDivElement | null>(null);
 
@@ -458,6 +465,7 @@
           {#if session.health_grade}
             <button
               class="grade-badge"
+              bind:this={gradeBtnEl}
               style:--grade-ink={gradeStyle.text}
               onclick={() => ui.toggleSignalPanel()}
               title={m.session_breadcrumb_session_health_and_tool_sequences()}
@@ -493,7 +501,7 @@
 <DocbankStatus />
 
 {#if ui.signalPanelOpen && session}
-  <SessionSignalPanels {session} />
+  <SessionSignalPanels {session} onclose={hideDiagnostics} />
 {/if}
 
 <style>

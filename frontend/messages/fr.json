@@ -3294,5 +3294,6 @@
   "getting_started_open_session": "Ouvrir une session",
   "getting_started_search": "Rechercher dans votre historique",
   "getting_started_usage": "Voir votre utilisation des jetons",
-  "getting_started_insights": "Lire vos analyses"
+  "getting_started_insights": "Lire vos analyses",
+  "session_diagnostics_hide": "Masquer les diagnostics"
 }

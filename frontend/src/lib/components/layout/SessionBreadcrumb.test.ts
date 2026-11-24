@@ -3109,3 +3109,52 @@ describe("SessionBreadcrumb", () => {
     });
   });
 });
+
+describe("diagnostics close action", () => {
+  it.each(["B", undefined])(
+    "closes without toggling and returns focus for grade %s",
+    async (health_grade) => {
+      const session = makeSession("claude", { health_grade, outcome: "unknown" });
+      showMessages(session.id, "revision-1");
+      let pendingSignal: AbortSignal | undefined;
+      sessionsService.getApiV1SessionsByIdToolSequences.mockImplementation((_args, options) => {
+        pendingSignal = options.signal;
+        return new Promise(() => {});
+      });
+      ui.signalPanelOpen = true;
+      mount(SessionBreadcrumb, { target: document.body, props: { session, onBack() {} } });
+      await vi.waitFor(() => expect(pendingSignal).toBeDefined());
+      const close = [...document.querySelectorAll("button")].find(
+        (b) => b.textContent?.trim() === "Hide diagnostics",
+      )!;
+      expect(close).toBeDefined();
+      expect(document.querySelector(".signal-panel .friction-findings")).not.toBeNull();
+      // jsdom has no layout; the mounted breadcrumb controls are visible in a browser.
+      const rects = vi
+        .spyOn(HTMLElement.prototype, "getClientRects")
+        .mockReturnValue([{}] as unknown as DOMRectList);
+      onTestFinished(() => rects.mockRestore());
+      close.focus();
+      close.click();
+      close.click();
+      await tick();
+      expect(ui.signalPanelOpen).toBe(false);
+      expect(document.querySelector(".signal-panel")).toBeNull();
+      expect(document.querySelector(".tool-sequences-panel")).toBeNull();
+      expect(pendingSignal!.aborted).toBe(true);
+      await vi.waitFor(() =>
+        expect(document.activeElement).toBe(
+          document.querySelector(health_grade ? ".grade-badge" : ".actions-btn"),
+        ),
+      );
+      // A stale control cannot reopen the stack after unmount either.
+      close.click();
+      await tick();
+      expect(ui.signalPanelOpen).toBe(false);
+      ui.toggleSignalPanel();
+      await tick();
+      expect(document.querySelector(".signal-panel")).not.toBeNull();
+      expect(sessionsService.getApiV1SessionsByIdToolSequences).toHaveBeenCalledTimes(2);
+    },
+  );
+});

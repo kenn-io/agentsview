@@ -3268,5 +3268,6 @@
   "getting_started_open_session": "Open a session",
   "getting_started_search": "Search your history",
   "getting_started_usage": "See your token use",
-  "getting_started_insights": "Read your insights"
+  "getting_started_insights": "Read your insights",
+  "session_diagnostics_hide": "Hide diagnostics"
 }

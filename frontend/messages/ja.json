@@ -3217,5 +3217,6 @@
   "getting_started_open_session": "セッションを開く",
   "getting_started_search": "履歴を検索",
   "getting_started_usage": "トークン使用量を見る",
-  "getting_started_insights": "インサイトを読む"
+  "getting_started_insights": "インサイトを読む",
+  "session_diagnostics_hide": "診断を非表示"
 }

@@ -3146,5 +3146,6 @@
   "getting_started_open_session": "開啟工作階段",
   "getting_started_search": "搜尋歷史記錄",
   "getting_started_usage": "查看權杖用量",
-  "getting_started_insights": "閱讀洞察"
+  "getting_started_insights": "閱讀洞察",
+  "session_diagnostics_hide": "隱藏診斷"
 }
