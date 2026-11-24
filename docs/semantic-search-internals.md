@@ -328,9 +328,9 @@ Two settings define the embeddable universe, and a session must pass both:
 - `include_automated` decides whether automated sessions are in scope. It is
   stored in `vector_meta` as `scope_include_automated`.
 - `[vector] agents` limits scope to sessions whose `sessions.agent` is in the
-  list; an empty list means every agent. The scan adds `s.agent IN (…)` to the
-  main predicates and `es.agent IN (…)` to the `since` session subquery, and
-  journaled-session rescans use the same list. It is stored as `scope_agents`:
+  list; an empty list means every agent. Full and session scans filter `s.agent`;
+  incremental scans filter `es.agent` in the `since` session subquery.
+  Journaled-session rescans use the same list. It is stored as `scope_agents`:
   the list sorted, deduplicated, and comma-joined. A missing key reads as the
   empty list, so an upgraded store with no list configured forces no rescan.
   Only the local message store applies the list; the Recall store and hosted

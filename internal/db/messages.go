@@ -988,7 +988,10 @@ func (db *DB) scanEmbeddableUnits(
 	fn func(EmbeddableUnit) error,
 ) (maxEnded string, err error) {
 	_, agentArgs := InPlaceholders(agents)
-	args := append([]any(nil), agentArgs...)
+	var args []any
+	if since == "" {
+		args = append(args, agentArgs...)
+	}
 	if sessionID != "" {
 		args = append(args, sessionID)
 	}
@@ -1194,8 +1197,8 @@ func runUnit(members []unitRow) EmbeddableUnit {
 }
 
 // embeddableUnitsQuery builds the embeddable-unit scan statement. A scoped
-// scan takes agent arguments first, then sessionID, then agent arguments and
-// since for an incremental scan. The query emits rows in (session_id, ordinal)
+// scan takes agent arguments and an optional session ID; an incremental scan
+// takes an optional session ID, agent arguments, and since. The query emits rows in (session_id, ordinal)
 // order, which unitReducer depends on.
 func embeddableUnitsQuery(since, sessionID string, includeAutomated bool, agents []string) string {
 	preds := []string{
@@ -1207,7 +1210,7 @@ func embeddableUnitsQuery(since, sessionID string, includeAutomated bool, agents
 	if !includeAutomated {
 		preds = append(preds, SQLiteQueryDialect().AutomatedScopePredicate("human", "s.is_automated"))
 	}
-	if len(agents) > 0 {
+	if since == "" && len(agents) > 0 {
 		placeholders, _ := InPlaceholders(agents)
 		preds = append(preds, "s.agent IN "+placeholders)
 	}

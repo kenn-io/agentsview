@@ -182,7 +182,8 @@ type VectorConfig struct {
 	// `embeddings build --include-automated` can override this for a
 	// one-off build; see that flag's help for the scheduled-build caveat.
 	IncludeAutomated bool `toml:"include_automated" json:"include_automated"`
-	// Agents limits local message embeddings to these session agent IDs. An empty list includes all agents.
+	// Agents limits local message embeddings to these session agent IDs.
+	// An empty list includes all agents.
 	Agents []string `toml:"agents" json:"agents,omitempty"`
 	// RecallMaxRevisionLag is how many Recall corpus revisions the Recall
 	// vector index may trail the corpus and still answer vector and hybrid

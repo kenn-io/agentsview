@@ -233,10 +233,12 @@ func TestEmbeddableUnitsQueryPlanDrivesFromSessionsWhenSinceIsSet(t *testing.T) 
 	tests := []struct {
 		name             string
 		since            string
+		agents           []string
 		includeAutomated bool
 		wantScanMessages bool
 	}{
 		{name: "SinceSetHumanScope", since: tsHour1, wantScanMessages: false},
+		{name: "SinceSetAgentScope", since: tsHour1, agents: []string{"claude"}, wantScanMessages: false},
 		{
 			name: "SinceSetIncludingAutomated", since: tsHour1,
 			includeAutomated: true, wantScanMessages: false,
@@ -246,11 +248,14 @@ func TestEmbeddableUnitsQueryPlanDrivesFromSessionsWhenSinceIsSet(t *testing.T) 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var args []any
+			for _, agent := range tt.agents {
+				args = append(args, agent)
+			}
 			if tt.since != "" {
 				args = append(args, tt.since)
 			}
 			plan := explainQueryPlan(t, d,
-				embeddableUnitsQuery(tt.since, "", tt.includeAutomated, nil), args...)
+				embeddableUnitsQuery(tt.since, "", tt.includeAutomated, tt.agents), args...)
 			joined := strings.Join(plan, "\n")
 
 			scansMessages := false
