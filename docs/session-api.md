@@ -687,9 +687,9 @@ child-agent prompts, or structured transcript records. Supported actions are
 `view`, `checkout` (including `co`), `edit`, `diff`, `checks`, `comment`,
 `review`, `ready`, `merge`, `close`, `reopen`, `update-branch`, `lock`,
 `unlock`, and `revert`. A command names its pull request by URL or number,
-optionally with `-R` or `--repo` set to `owner/repo` or `host/owner/repo`. A
-command whose selector or repository comes from a variable or substitution
-links nothing.
+optionally with `-R` or `--repo` set to `owner/repo` or `host/owner/repo`
+before `pr` or after the action. A command whose selector or repository comes
+from a variable or substitution links nothing.
 
 ```json
 "pr_links": [
@@ -708,16 +708,18 @@ Shell commands are read from a tool input's `command` string or argv array (a
 `sh`, `bash`, or `zsh` array with `-c` or `-lc` contributes its script), `cmd`,
 `commands` list, or plain-text input. Function bodies and scripts nested inside
 a command, such as `bash -c '...'`, are skipped. Codex code-mode `exec` input
-is JavaScript and isn't scanned as shell command text.
+is JavaScript and isn't scanned as shell command text. Literal `env`
+assignments and the `timeout` and `nohup` wrappers are recognized.
 
-Each command is checked as a whole, without following order or branches:
+AgentsView reads shell statements in source order, including both sides of a
+branch:
 
-- A `cd`, `pushd`, or `popd` anywhere in it marks the directory as changed.
+- A `cd`, `pushd`, or `popd` marks the directory as changed for later commands.
 - Setting, exporting, or unsetting `GH_REPO` or `GH_HOST` (including a
   `GH_HOST=x gh ...` prefix), changing git remotes or `remote.*`, `branch.*`,
   or `url.*` config, running `gh repo set-default`, `eval`, `source`, or `.`,
   or calling a function the command declares marks the repository as changed.
-- A repository change applies to that command and every later shell call in
+- A repository change applies to later commands and every later shell call in
   the session. A directory change carries forward only across Claude `Bash`
   calls, which share one shell.
 

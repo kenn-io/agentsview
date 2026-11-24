@@ -101,6 +101,73 @@ func shellExpansionQuoted(word *syntax.Word) bool {
 	return true
 }
 
+func unwrapPRCommand(args []*syntax.Word) ([]*syntax.Word, bool) {
+	unknown := false
+	for len(args) > 1 {
+		name, ok := shellLiteral(args[0].Parts)
+		if !ok {
+			break
+		}
+		switch name {
+		case "nohup":
+			args = args[1:]
+		case "env":
+			args = args[1:]
+			for len(args) > 0 {
+				word, literal := shellLiteral(args[0].Parts)
+				if !literal {
+					return nil, true
+				}
+				if word == "--" {
+					args = args[1:]
+					break
+				}
+				key, _, assigned := strings.Cut(word, "=")
+				if !assigned {
+					break
+				}
+				unknown = unknown || key == "GH_HOST" || key == "GH_REPO"
+				args = args[1:]
+			}
+		case "timeout":
+			args = args[1:]
+			for len(args) > 0 {
+				word, literal := shellLiteral(args[0].Parts)
+				if !literal {
+					return nil, true
+				}
+				if word == "--" {
+					args = args[1:]
+					break
+				}
+				if !strings.HasPrefix(word, "-") {
+					break
+				}
+				args = args[1:]
+				switch {
+				case word == "-k" || word == "--kill-after" || word == "-s" || word == "--signal":
+					if len(args) == 0 {
+						return nil, true
+					}
+					args = args[1:]
+				case word == "--foreground" || word == "--preserve-status" || word == "-v" || word == "--verbose",
+					strings.HasPrefix(word, "--signal="), strings.HasPrefix(word, "--kill-after="),
+					strings.HasPrefix(word, "-s") && len(word) > 2, strings.HasPrefix(word, "-k") && len(word) > 2:
+				default:
+					return nil, true
+				}
+			}
+			if len(args) == 0 {
+				return nil, true
+			}
+			args = args[1:]
+		default:
+			return args, unknown
+		}
+	}
+	return args, unknown
+}
+
 // AnalyzePRCommand extracts links and shared shell context from one parse.
 func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBare, hostUnknown bool) ([]PRLink, bool, bool, bool, []PRLink, error) {
 	if err := ctx.Err(); err != nil {
@@ -117,20 +184,42 @@ func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 	}
 	var links [][]PRLink
 	var dependsOnRemote []PRLink
-	for _, call := range calls {
+	for _, entry := range calls {
 		if err := ctx.Err(); err != nil {
 			return nil, false, false, false, nil, err
 		}
-		bareSafe := allowBare && !directoryChanged && !repositoryChanged
-		words := make([]string, len(call.Args))
-		literal := make([]bool, len(call.Args))
-		for i, word := range call.Args {
+		args, wrapperUnknown := unwrapPRCommand(entry.call.Args)
+		if args == nil {
+			continue
+		}
+		bareSafe := allowBare && !entry.directory && !entry.repository && !wrapperUnknown
+		pr := 1
+		for pr < len(args) {
+			word, ok := shellLiteral(args[pr].Parts)
+			if !ok {
+				break
+			}
+			if word == "-R" || word == "--repo" {
+				pr += 2
+			} else if strings.HasPrefix(word, "-R") && len(word) > 2 || strings.HasPrefix(word, "--repo=") {
+				pr++
+			} else {
+				break
+			}
+		}
+		if pr > 1 && pr+1 < len(args) {
+			ordered := append([]*syntax.Word{args[0], args[pr], args[pr+1]}, args[1:pr]...)
+			args = append(ordered, args[pr+2:]...)
+		}
+		words := make([]string, len(args))
+		literal := make([]bool, len(args))
+		for i, word := range args {
 			words[i], literal[i] = shellLiteral(word.Parts)
 		}
 		if len(words) < 4 || !literal[0] || !literal[1] || !literal[2] || words[0] != "gh" || words[1] != "pr" {
 			continue
 		}
-		callHostUnknown := hostUnknown || repositoryChanged
+		callHostUnknown := hostUnknown || entry.repository || wrapperUnknown
 		if words[2] == "co" {
 			words[2] = "checkout"
 		}
@@ -143,12 +232,12 @@ func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 		specified, invalid := false, false
 		for i := 3; i < len(words); i++ {
 			if !literal[i] {
-				prefix, _ := shellLiteralPrefix(call.Args[i].Parts)
+				prefix, _ := shellLiteralPrefix(args[i].Parts)
 				flag, _, attached := strings.Cut(prefix, "=")
-				if shellExpansionQuoted(call.Args[i]) && (attached || len(flag) == 2 && strings.HasPrefix(flag, "-")) && strings.Contains(" "+ghPRValueFlags[words[2]]+" ", " "+flag+" ") {
+				if shellExpansionQuoted(args[i]) && (attached || len(flag) == 2 && strings.HasPrefix(flag, "-")) && strings.Contains(" "+ghPRValueFlags[words[2]]+" ", " "+flag+" ") {
 					continue
 				}
-				if i > 3 && words[i-1] == "--body" && shellExpansionQuoted(call.Args[i]) {
+				if i > 3 && words[i-1] == "--body" && shellExpansionQuoted(args[i]) {
 					continue
 				}
 				invalid = true
@@ -173,7 +262,7 @@ func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 			case strings.HasPrefix(word, "-"):
 				if !strings.Contains(word, "=") && strings.Contains(" "+ghPRValueFlags[words[2]]+" ", " "+word+" ") {
 					i++
-					if i < len(words) && !literal[i] && !shellExpansionQuoted(call.Args[i]) {
+					if i < len(words) && !literal[i] && !shellExpansionQuoted(args[i]) {
 						invalid = true
 					}
 				}
@@ -236,7 +325,12 @@ func SamePRWorkingDirectory(cwd, dir string) bool {
 	return cwd != "" && dir != "" && path.Clean(strings.ReplaceAll(cwd, `\`, "/")) == path.Clean(strings.ReplaceAll(dir, `\`, "/"))
 }
 
-func bashChangesRepositoryContext(file *syntax.File) (bool, bool, []*syntax.CallExpr) {
+type prShellCall struct {
+	call                  *syntax.CallExpr
+	directory, repository bool
+}
+
+func bashChangesRepositoryContext(file *syntax.File) (bool, bool, []prShellCall) {
 	functions := make(map[string]bool)
 	syntax.Walk(file, func(node syntax.Node) bool {
 		if fn, ok := node.(*syntax.FuncDecl); ok {
@@ -246,7 +340,7 @@ func bashChangesRepositoryContext(file *syntax.File) (bool, bool, []*syntax.Call
 		return true
 	})
 	var directory, repository bool
-	var calls []*syntax.CallExpr
+	var calls []prShellCall
 	syntax.Walk(file, func(node syntax.Node) bool {
 		switch n := node.(type) {
 		case *syntax.FuncDecl:
@@ -256,36 +350,60 @@ func bashChangesRepositoryContext(file *syntax.File) (bool, bool, []*syntax.Call
 				repository = true
 			}
 		case *syntax.CallExpr:
-			calls = append(calls, n)
-			words := make([]string, len(n.Args))
-			for i, arg := range n.Args {
-				words[i], _ = shellLiteral(arg.Parts)
-			}
-			for len(words) > 1 && (words[0] == "command" || words[0] == "builtin") {
-				wrapper := words[0]
-				words = words[1:]
-				if wrapper == "command" {
-					for len(words) > 0 && strings.HasPrefix(words[0], "-") && words[0] != "--" {
-						flags := strings.TrimPrefix(words[0], "-")
-						if flags == "" || strings.Trim(flags, "p") != "" {
-							break
+			callDirectory, callRepository := directory, repository
+			args, _ := unwrapPRCommand(n.Args)
+			if len(args) > 0 {
+				name, _ := shellLiteral(args[0].Parts)
+				if name == "gh" {
+					syntax.Walk(n, func(child syntax.Node) bool {
+						if a, ok := child.(*syntax.Assign); ok && a.Name != nil && (a.Name.Value == "GH_REPO" || a.Name.Value == "GH_HOST") {
+							callRepository = true
 						}
-						words = words[1:]
-					}
-				}
-				if len(words) > 0 && words[0] == "--" {
-					words = words[1:]
+						if inner, ok := child.(*syntax.CallExpr); ok && inner != n {
+							dir, repo := shellCallChangesPRContext(inner, functions)
+							callDirectory = callDirectory || dir
+							callRepository = callRepository || repo
+						}
+						return true
+					})
 				}
 			}
-			if len(words) > 0 {
-				name := words[0]
-				directory = directory || name == "cd" || name == "pushd" || name == "popd"
-				repository = repository || name == "eval" || name == "source" || name == "." || functions[name] || repositoryMutation(words)
-			}
+			calls = append(calls, prShellCall{n, callDirectory, callRepository})
+			dir, repo := shellCallChangesPRContext(n, functions)
+			directory = directory || dir
+			repository = repository || repo
 		}
 		return true
 	})
 	return directory, repository, calls
+}
+
+func shellCallChangesPRContext(call *syntax.CallExpr, functions map[string]bool) (bool, bool) {
+	words := make([]string, len(call.Args))
+	for i, arg := range call.Args {
+		words[i], _ = shellLiteral(arg.Parts)
+	}
+	for len(words) > 1 && (words[0] == "command" || words[0] == "builtin") {
+		wrapper := words[0]
+		words = words[1:]
+		if wrapper == "command" {
+			for len(words) > 0 && strings.HasPrefix(words[0], "-") && words[0] != "--" {
+				flags := strings.TrimPrefix(words[0], "-")
+				if flags == "" || strings.Trim(flags, "p") != "" {
+					break
+				}
+				words = words[1:]
+			}
+		}
+		if len(words) > 0 && words[0] == "--" {
+			words = words[1:]
+		}
+	}
+	if len(words) == 0 {
+		return false, false
+	}
+	name := words[0]
+	return name == "cd" || name == "pushd" || name == "popd", name == "eval" || name == "source" || name == "." || functions[name] || repositoryMutation(words)
 }
 
 func repositoryMutation(words []string) bool {
