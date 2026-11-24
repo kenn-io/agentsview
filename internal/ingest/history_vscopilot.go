@@ -299,6 +299,9 @@ func VisualStudioCopilotMessageHasArchiveUpdate(parsed, stored db.Message) bool 
 		return true
 	}
 	_, projected := db.ProjectSessionForStoragePolicy(db.Session{}, []db.Message{p, stored}, config.ArchiveContentTranscripts)
+	if projected == nil {
+		return visualStudioCopilotToolCallsHaveArchiveUpdate(p.ToolCalls, stored.ToolCalls)
+	}
 	for i := 0; i < len(projected[0].ToolCalls) && i < len(projected[1].ToolCalls); i++ {
 		current, previous := projected[0].ToolCalls[i], projected[1].ToolCalls[i]
 		if current.PRLinks != previous.PRLinks || current.PRContext != previous.PRContext {
