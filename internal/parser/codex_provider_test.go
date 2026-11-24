@@ -2446,3 +2446,37 @@ func TestCodexDiscoveryReportsUnreadableDirectory(t *testing.T) {
 	require.Len(t, sources, 1)
 	assert.Contains(t, sources[0].DisplayPath, "available")
 }
+
+func TestCodexDotLabeledRuns(t *testing.T) {
+	root := t.TempDir()
+	for i, id := range []string{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"} {
+		writeCodexProviderSession(t, filepath.Join(root, fmt.Sprintf(".codex-run-v1-%d", i), "sessions"), id, "prompt")
+	}
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 2)
+	for _, source := range sources {
+		parsed, err := provider.Parse(t.Context(), ParseRequest{Source: source})
+		require.NoError(t, err)
+		require.Len(t, parsed.Results, 1)
+		assert.Equal(t, ".", parsed.Results[0].Result.Session.Project)
+	}
+}
+
+func TestCodexLabeledIndexChange(t *testing.T) {
+	root := t.TempDir()
+	var paths []string
+	for i, id := range []string{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"} {
+		home := filepath.Join(root, "label", fmt.Sprintf(".codex-run-v1-%d", i))
+		paths = append(paths, writeCodexProviderSession(t, filepath.Join(home, "sessions"), id, "prompt"))
+		require.NoError(t, os.WriteFile(filepath.Join(home, CodexSessionIndexFilename), []byte(fmt.Sprintf("{\"id\":%q,\"thread_name\":\"title\"}\n", id)), 0o600))
+	}
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	index := filepath.Join(root, "label", ".codex-run-v1-0", CodexSessionIndexFilename)
+	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: index, EventKind: "write", WatchRoot: root})
+	require.NoError(t, err)
+	assert.Equal(t, []string{paths[0]}, sourceDisplayPaths(changed))
+}

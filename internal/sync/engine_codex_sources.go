@@ -199,15 +199,7 @@ func (e *Engine) classifyCodexIndexPath(ctx context.Context,
 	if filepath.Base(path) != parser.CodexSessionIndexFilename {
 		return nil
 	}
-	var sessionRoots []string
-	for _, agDir := range e.sources().agentDirs[parser.AgentCodex] {
-		if agDir == "" {
-			continue
-		}
-		if slices.Contains(e.codexMetadata().IndexFiles(agDir), path) {
-			sessionRoots = append(sessionRoots, agDir)
-		}
-	}
+	sessionRoots := e.codexIndexSessionRoots(path)
 	if len(sessionRoots) == 0 {
 		return nil
 	}
@@ -228,6 +220,23 @@ func (e *Engine) classifyCodexIndexPath(ctx context.Context,
 		}
 	}
 	return out
+}
+
+func (e *Engine) codexIndexSessionRoots(path string) []string {
+	var roots []string
+	home := filepath.Dir(path)
+	for _, root := range e.sources().agentDirs[parser.AgentCodex] {
+		if root == "" || strings.HasPrefix(root, "s3://") {
+			continue
+		}
+		if slices.Contains(e.codexMetadata().IndexFiles(root), path) {
+			roots = append(roots, root)
+		}
+		if strings.HasPrefix(filepath.Base(home), ".codex-run-v1-") && filepath.Clean(home) != filepath.Clean(root) && pathWithinRoot(home, root) {
+			roots = append(roots, filepath.Join(home, "sessions"))
+		}
+	}
+	return roots
 }
 
 // codexIndexRenamedRawIDs lists the raw session ids of one index entry whose

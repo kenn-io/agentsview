@@ -1483,14 +1483,30 @@ func (s codexSourceSet) pathFromSource(source SourceRef) (string, bool) {
 	return "", false
 }
 
-func (s codexSourceSet) sourcesForIndexPath(
-	ctx context.Context,
-	indexPath string,
-) ([]SourceRef, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
+func (s codexSourceSet) sourcesForIndexPath(ctx context.Context, indexPath string) ([]SourceRef, error) {
+	return s.discoverIndexSources(ctx, indexPath)
+}
+
+func (s codexSourceSet) discoverIndexSources(ctx context.Context, indexPath string) ([]SourceRef, error) {
 	indexDir := filepath.Dir(indexPath)
+	if strings.HasPrefix(filepath.Base(indexDir), ".codex-run-v1-") {
+		for _, root := range s.roots {
+			if isS3URI(root) || !isWithinRoot(root, indexDir) || filepath.Clean(indexDir) == filepath.Clean(root) {
+				continue
+			}
+			sessions := filepath.Join(indexDir, "sessions")
+			if _, err := os.Stat(sessions); errors.Is(err, os.ErrNotExist) {
+				return nil, nil
+			}
+			scoped := s
+			scoped.roots = []string{sessions}
+			sources, err := scoped.discover(ctx, func(string) bool { return true })
+			for i, source := range sources {
+				sources[i], _ = s.sourceRef(root, source.DisplayPath, true)
+			}
+			return sources, err
+		}
+	}
 	return s.discover(ctx, func(root string) bool {
 		return slices.Contains(s.metadata.dirs(root), indexDir)
 	})
