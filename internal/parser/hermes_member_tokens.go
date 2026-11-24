@@ -213,25 +213,9 @@ func hermesStoreTracksRewrites(ctx context.Context, conn *sql.DB) (bool, error) 
 	if err := rows.Err(); err != nil {
 		return false, err
 	}
-	cols, err := readHermesMessageColumns(ctx, conn)
-	if err != nil {
-		return false, err
-	}
-	required := []string{
-		"role", "content", "tool_call_id", "tool_calls",
-		"reasoning", "reasoning_content", "reasoning_details",
-		"codex_reasoning_items", "codex_message_items",
-	}
-	if cols.hasActive {
-		required = append(required, "active")
-	}
-	if cols.hasDisplayOrder {
-		required = append(required, "display_order")
-	}
-	if cols.hasDisplayMetadata {
-		required = append(required, "display_metadata")
-	}
-	for _, column := range required {
+	// Member tokens hash active, display_order, and display_metadata directly,
+	// so only columns the token cannot see need a revision trigger.
+	for _, column := range []string{"role", "content", "tool_call_id", "tool_calls", "reasoning", "reasoning_content", "reasoning_details", "codex_reasoning_items", "codex_message_items"} {
 		if !covered[column] {
 			return false, nil
 		}

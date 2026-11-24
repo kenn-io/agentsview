@@ -348,21 +348,9 @@ func TestHermesMemberCompactionColumnsSchemaGateAndTokens(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	// Existing triggers cover display_metadata, but do not cover active or
-	// display_order, so hermesStoreTracksRewrites must fail closed.
+	// No trigger covers active or display_order. The member token hashes
+	// those columns, so the store still qualifies for token-based freshness.
 	tracks, err := hermesStoreTracksRewrites(t.Context(), c)
-	require.NoError(t, err)
-	assert.False(t, tracks)
-
-	_, err = c.ExecContext(t.Context(), `
-		CREATE TRIGGER messages_compaction_revision_update
-		AFTER UPDATE OF active,display_order ON messages
-		BEGIN
-			UPDATE sessions SET transcript_revision = transcript_revision + 1 WHERE id = new.session_id;
-		END;
-	`)
-	require.NoError(t, err)
-	tracks, err = hermesStoreTracksRewrites(t.Context(), c)
 	require.NoError(t, err)
 	assert.True(t, tracks)
 
