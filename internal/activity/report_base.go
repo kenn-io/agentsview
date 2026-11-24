@@ -28,15 +28,40 @@ type ConcurrentUsageBackend interface {
 	ActivityReportSecondRead() (release func(), ok bool)
 }
 
+// EvidenceBackend supplies runs whose own session is excluded by report filters.
+type EvidenceBackend interface {
+	ActivityReportEvidence(context.Context, Query) ([]SessionMeta, []string, error)
+}
+
 // BuildReportArtifacts assembles a report and returns the emitted completion event.
 func BuildReportArtifacts(
 	ctx context.Context, backend ReportBackend, sessions []SessionMeta,
 	ids []string, q Query, onProgress ProgressFunc, aggregationLabel string,
 ) (CandidateArtifacts, Progress, error) {
+	var evidence []SessionMeta
+	sweepIDs := ids
+	if source, ok := backend.(EvidenceBackend); ok {
+		var err error
+		evidence, sweepIDs, err = source.ActivityReportEvidence(ctx, q)
+		if err != nil {
+			return CandidateArtifacts{}, Progress{}, err
+		}
+		selected := make(map[string]bool, len(ids))
+		for _, id := range ids {
+			selected[id] = true
+		}
+		evidence = slices.DeleteFunc(evidence, func(session SessionMeta) bool {
+			return selected[session.SessionID] || !session.IsSubagent
+		})
+		sweepIDs = slices.Clone(ids)
+		for _, session := range evidence {
+			sweepIDs = append(sweepIDs, session.SessionID)
+		}
+	}
 	var ancestors Launchers
 	if launchers, ok := backend.(LauncherBackend); ok {
 		var err error
-		ancestors, err = launchers.ActivityReportLaunchers(ctx, sessions, q)
+		ancestors, err = launchers.ActivityReportLaunchers(ctx, append(slices.Clone(sessions), evidence...), q)
 		if err != nil {
 			return CandidateArtifacts{}, Progress{}, err
 		}
@@ -84,6 +109,7 @@ func BuildReportArtifacts(
 		GapCapSeconds: q.GapCapSeconds,
 		Bucket:        q.Bucket,
 		Launchers:     ancestors,
+		Evidence:      evidence,
 	}
 	scanning := func() {
 		ReportProgress(onProgress, Progress{
@@ -100,7 +126,7 @@ func BuildReportArtifacts(
 	var artifacts CandidateArtifacts
 	var err error
 	if runs, ok := backend.(RunSourceBackend); ok {
-		source := runs.ActivityReportRunSource(ids, q)
+		source := runs.ActivityReportRunSource(sweepIDs, q)
 		artifacts, err = BuildRunArtifactsWithSurvivorUsage(readCtx, params, sessions, func(
 			ctx context.Context, yield func(Run) error,
 		) error {
@@ -111,7 +137,7 @@ func BuildReportArtifacts(
 			})
 		}, loadUsage)
 	} else {
-		source := backend.ActivityReportCandidateSource(ids, q)
+		source := backend.ActivityReportCandidateSource(sweepIDs, q)
 		artifacts, err = BuildCandidateArtifactsFromSourceWithSurvivorUsage(readCtx, params, sessions, func(
 			ctx context.Context, yield func(IntervalCandidate) error,
 		) error {

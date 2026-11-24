@@ -340,7 +340,6 @@ func TestWaitingLauncherChains(t *testing.T) {
 		{name: "filtered ancestor", child: SessionMeta{SessionID: "child", IsSubagent: true, ParentSessionID: "middle"}, launchers: map[string]Launcher{"middle": {ID: "middle", IsSubagent: true, ParentSessionID: "root"}, "root": {ID: "root", Counted: true}}, interactive: 1, subagent: 1},
 		{name: "missing", child: SessionMeta{SessionID: "child", IsSubagent: true, ParentSessionID: "missing"}, interactive: 0, subagent: 1},
 		{name: "cycle", child: SessionMeta{SessionID: "child", IsSubagent: true, ParentSessionID: "middle"}, launchers: map[string]Launcher{"middle": {ID: "middle", IsSubagent: true, ParentSessionID: "child", Counted: true}}, interactive: 0, subagent: 2},
-		{name: "fork", child: SessionMeta{SessionID: "child", ParentSessionID: "root"}, launchers: map[string]Launcher{"root": {ID: "root", Counted: true}}, interactive: 1, subagent: 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p.Launchers.Rows = tc.launchers

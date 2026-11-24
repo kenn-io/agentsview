@@ -29,6 +29,7 @@ type Params struct {
 	GapCapSeconds float64
 	Bucket        BucketSpec
 	Launchers     Launchers
+	Evidence      []SessionMeta
 }
 
 // SessionMeta is one candidate session whose window intersects the day.

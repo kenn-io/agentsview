@@ -111,7 +111,8 @@ A session also counts in its own class while a subagent it launched is active,
 including nested runs and runs that continue after the session's last message.
 The launcher must match the Project, Agent, Machine, and Automation filters.
 Agent-minutes, cost, session counts, the sessions table, and bucket membership
-continue to use each session's own activity.
+continue to use each session's own activity. Reporting exports use each session's
+own activity for concurrency as well.
 
 To see how often you send prompts, switch the chart to **User messages**. To see
 agent output, switch to **Assistant messages**. Both views count timestamped

@@ -405,3 +405,25 @@ func TestPGActivityReportKeptLauncherChange(t *testing.T) {
 	store.runtimeState().activityInputs.DeleteSlots(func(string) bool { return true })
 	requirePGKeptEqual(t, after, pgKeptBuild(t, store, f, q, true))
 }
+
+func TestPGActivityReportKeptHiddenRunLink(t *testing.T) {
+	t.Parallel()
+	local, syncer, store := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "parent", "project-a", "2026-06-12")
+	pgKeptSession(t, local, "child", "project-a", "2026-06-14")
+	child, err := local.GetSession(t.Context(), "child")
+	require.NoError(t, err)
+	child.Agent = "codex"
+	require.NoError(t, local.UpsertSession(t.Context(), *child))
+	pgKeptPush(t, syncer, false)
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC", Agent: "claude"}
+	assert.Zero(t, pgKeptBuild(t, store, f, q, true).Report.Peak.Agents)
+	pgKeptBuild(t, store, f, q, false)
+	_, err = local.SetSessionExternalParent(t.Context(), "child", "parent")
+	require.NoError(t, err)
+	pgKeptPush(t, syncer, false)
+	after := pgKeptBuild(t, store, f, q, true)
+	assert.Equal(t, 1, after.Report.InteractivePeak.Agents)
+	assert.Empty(t, after.Sessions)
+	assert.Zero(t, after.Report.Totals.AgentMinutes)
+}

@@ -892,9 +892,11 @@ func assertDayMinuteFixtureSanity(t *testing.T, r activity.Report) {
 func TestWaitingLauncherParityAcrossBackends(t *testing.T) {
 	ctx := t.Context()
 	local := seedParitySQLite(t)
+	child := paritySessionWrite(parityFixtureSession{id: "linked-run", project: "waiting", relationship: "subagent", parent: "quiet-launcher", events: []parityEvent{{role: "user", ts: "2026-06-14T10:00:00Z"}, {role: "assistant", ts: "2026-06-14T10:04:00Z"}}})
+	child.Session.Agent = "codex"
 	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{
 		paritySessionWrite(parityFixtureSession{id: "quiet-launcher", project: "waiting", events: []parityEvent{{role: "user", ts: "2026-06-13T10:00:00Z"}, {role: "assistant", ts: "2026-06-13T10:02:00Z"}}}),
-		paritySessionWrite(parityFixtureSession{id: "linked-run", project: "waiting", relationship: "subagent", parent: "quiet-launcher", events: []parityEvent{{role: "user", ts: "2026-06-14T10:00:00Z"}, {role: "assistant", ts: "2026-06-14T10:04:00Z"}}}),
+		child,
 	})
 	require.NoError(t, err)
 	var pgStore *postgresstore.Store
@@ -911,4 +913,9 @@ func TestWaitingLauncherParityAcrossBackends(t *testing.T) {
 	assert.Equal(t, 1, report.InteractivePeak.Agents)
 	assert.Equal(t, 2, report.Peak.Agents)
 	assert.Equal(t, 1, report.Totals.Sessions)
+	filtered := assertParityForCase(t, ctx, q, db.AnalyticsFilter{Timezone: "UTC", Project: "waiting", Agent: "claude"}, local, pgStore, chStore)
+	assert.Equal(t, 1, filtered.InteractivePeak.Agents)
+	assert.Equal(t, 1, filtered.Peak.Agents)
+	assert.Zero(t, filtered.Totals.Sessions)
+	assert.Zero(t, filtered.Totals.AgentMinutes)
 }

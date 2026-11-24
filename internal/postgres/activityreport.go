@@ -56,6 +56,19 @@ type activityReportBackend struct {
 	counted                *[]pgActivityCountedMessage
 }
 
+func (b activityReportBackend) ActivityReportEvidence(ctx context.Context, q activity.Query) ([]activity.SessionMeta, []string, error) {
+	start, end := db.ActivityReportInstantBoundsUTC(q)
+	sessions, ids, err := b.activityReportSessions(ctx, db.AnalyticsFilter{Timezone: b.filter.Timezone, IncludeSubagents: true, IncludeForks: true}, start, end, nil)
+	if err == nil && b.read != nil && !q.Partial {
+		for _, session := range sessions {
+			if session.IsSubagent {
+				b.read[session.SessionID] = struct{}{}
+			}
+		}
+	}
+	return sessions, ids, err
+}
+
 func (b activityReportBackend) ActivityReportLaunchers(ctx context.Context, sessions []activity.SessionMeta, q activity.Query) (activity.Launchers, error) {
 	var parents []string
 	for _, session := range sessions {
@@ -151,7 +164,14 @@ func (b activityReportBackend) ActivityReportMessageCounts(
 	ctx context.Context, ids []string, q activity.Query, artifacts *activity.CandidateArtifacts,
 ) error {
 	counts := activity.NewMessageAccumulator(q, artifacts)
+	selected := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		selected[id] = true
+	}
 	for _, message := range *b.counted {
+		if !selected[message.sessionID] {
+			continue
+		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}

@@ -1866,3 +1866,69 @@ func TestActivityReportLauncherFiltersAndLinkChanges(t *testing.T) {
 	assert.Zero(t, after.InteractivePeak.Agents)
 	assert.InDelta(t, before.Totals.AgentMinutes, after.Totals.AgentMinutes, 1e-9)
 }
+
+func TestActivityReportCountsNestedLaunchers(t *testing.T) {
+	d := testDB(t)
+	for _, id := range []string{"root", "middle", "child"} {
+		insertSession(t, d, id, "project-a", func(s *Session) {
+			s.StartedAt = Ptr("2026-06-16T10:00:00Z")
+			s.EndedAt = Ptr("2026-06-16T10:04:00Z")
+		})
+	}
+	seedMessage(t, d, "child", 1, "user", "2026-06-16T10:00:00Z", "")
+	seedMessage(t, d, "child", 2, "assistant", "2026-06-16T10:04:00Z", "")
+	_, err := d.SetSessionExternalParent(t.Context(), "middle", "root")
+	require.NoError(t, err)
+	_, err = d.SetSessionExternalParent(t.Context(), "child", "middle")
+	require.NoError(t, err)
+	report, err := d.GetActivityReport(t.Context(), AnalyticsFilter{Timezone: "UTC"}, dayQuery(t, "2026-06-16", "UTC"))
+	require.NoError(t, err)
+	assert.Equal(t, 3, report.Peak.Agents)
+	assert.Equal(t, 1, report.InteractivePeak.Agents)
+	assert.Equal(t, 2, report.SubagentPeak.Agents)
+}
+
+func TestActivityReportFilteredRunsKeepMatchingLauncherActive(t *testing.T) {
+	for _, tc := range []struct {
+		name                     string
+		filter                   AnalyticsFilter
+		childAgent, childProject string
+		automated                bool
+	}{
+		{name: "agent", filter: AnalyticsFilter{Agent: "claude"}, childAgent: "codex", childProject: "project-a"},
+		{name: "project", filter: AnalyticsFilter{Project: "project-a"}, childAgent: "claude", childProject: "project-b"},
+		{name: "automation", filter: AnalyticsFilter{ExcludeAutomated: true}, childAgent: "claude", childProject: "project-a", automated: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "parent", "project-a", func(s *Session) {
+				s.Agent = "claude"
+				s.StartedAt = Ptr("2026-06-15T10:00:00Z")
+				s.EndedAt = Ptr("2026-06-15T10:02:00Z")
+			})
+			insertSession(t, d, "child", tc.childProject, func(s *Session) {
+				s.Agent = tc.childAgent
+				s.IsAutomated = tc.automated
+				s.StartedAt = Ptr("2026-06-16T10:00:00Z")
+				s.EndedAt = Ptr("2026-06-16T10:04:00Z")
+			})
+			seedMessage(t, d, "child", 1, "user", "2026-06-16T10:00:00Z", "")
+			seedMessage(t, d, "child", 2, "assistant", "2026-06-16T10:04:00Z", "")
+			tc.filter.Timezone = "UTC"
+			q := dayQuery(t, "2026-06-16", "UTC")
+			before, err := d.GetActivityReport(t.Context(), tc.filter, q)
+			require.NoError(t, err)
+			assert.Zero(t, before.Peak.Agents)
+			_, err = d.SetSessionExternalParent(t.Context(), "child", "parent")
+			require.NoError(t, err)
+			report, err := d.GetActivityReport(t.Context(), tc.filter, q)
+			require.NoError(t, err)
+			assert.Equal(t, 1, report.InteractivePeak.Agents)
+			assert.Equal(t, 1, report.Peak.Agents)
+			assert.Empty(t, report.BySession)
+			assert.Zero(t, report.Totals.AgentMinutes)
+			assert.Zero(t, report.Totals.ActiveMinutes)
+			assert.Zero(t, report.Totals.Sessions)
+		})
+	}
+}

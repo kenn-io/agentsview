@@ -515,6 +515,10 @@ func reportingHoursFromMachineSource(
 		if export.IsJointReportingSchema(schemaVersion) {
 			aggregate = activity.AggregateCandidatesWithJointActivity
 		}
+		reportSessions := slices.Clone(sessions)
+		for i := range reportSessions {
+			reportSessions[i].ParentSessionID = ""
+		}
 		report, aggregateErr := aggregate(ctx, activity.Params{
 			RangeStart:    hourStart,
 			RangeEnd:      hourEnd,
@@ -522,7 +526,7 @@ func reportingHoursFromMachineSource(
 			EffectiveEnd:  hourEnd,
 			GapCapSeconds: query.GapCapSeconds,
 			Bucket:        query.Bucket,
-		}, append([]activity.SessionMeta(nil), sessions...), candidates, activityUsage)
+		}, reportSessions, candidates, activityUsage)
 		if aggregateErr != nil {
 			return nil, fmt.Errorf(
 				"aggregate reporting hour %s: %w",

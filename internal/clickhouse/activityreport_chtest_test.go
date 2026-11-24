@@ -294,3 +294,38 @@ func TestEndedActivityReportKeyTracksLauncher(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEqual(t, before, key())
 }
+
+func TestClickHouseActivityReportKeptHiddenRunLink(t *testing.T) {
+	t.Parallel()
+	store, syncer, local := newPushedStore(t)
+	ctx := t.Context()
+	parent := fixtureSession("hidden-link-parent", "hidden-link", "parent", "2026-06-12T10:00:00Z", 1)
+	child := fixtureSession("hidden-link-child", "hidden-link", "child", "2026-06-14T10:00:00Z", 2)
+	child.Agent = "codex"
+	child.EndedAt = new("2026-06-14T10:04:00Z")
+	require.NoError(t, local.UpsertSession(ctx, parent))
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+		Session: child, Messages: []db.Message{
+			fixtureMessage(child.ID, 0, "user", "question", "2026-06-14T10:00:00Z"),
+			fixtureMessage(child.ID, 1, "assistant", "answer", "2026-06-14T10:04:00Z"),
+		}, DataVersion: db.CurrentDataVersion(), ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-06-14", Timezone: "UTC"}, time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	f := db.AnalyticsFilter{Timezone: "UTC", Project: "hidden-link", Agent: "claude"}
+	before, err := store.GetActivityReport(ctx, f, q)
+	require.NoError(t, err)
+	assert.Zero(t, before.Peak.Agents)
+	_, err = local.SetSessionExternalParent(ctx, child.ID, parent.ID)
+	require.NoError(t, err)
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	after, err := store.GetActivityReport(ctx, f, q)
+	require.NoError(t, err)
+	assert.Equal(t, 1, after.InteractivePeak.Agents)
+	assert.Empty(t, after.BySession)
+	assert.Zero(t, after.Totals.AgentMinutes)
+}

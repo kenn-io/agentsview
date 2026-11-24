@@ -73,6 +73,19 @@ type activityReportBackend struct {
 	usageResult            *activityKeptUsage
 }
 
+func (b activityReportBackend) ActivityReportEvidence(ctx context.Context, q activity.Query) ([]activity.SessionMeta, []string, error) {
+	start, end := activityReportRangeBoundsUTC(q)
+	sessions, ids, err := b.activityReportSessions(ctx, AnalyticsFilter{Timezone: b.filter.Timezone, IncludeSubagents: true, IncludeForks: true}, start, end)
+	if err == nil && b.read != nil && !q.Partial {
+		for _, session := range sessions {
+			if session.IsSubagent {
+				*b.read = append(*b.read, session.SessionID)
+			}
+		}
+	}
+	return sessions, ids, err
+}
+
 func (b activityReportBackend) ActivityReportLaunchers(ctx context.Context, sessions []activity.SessionMeta, q activity.Query) (activity.Launchers, error) {
 	var parents []string
 	for _, session := range sessions {

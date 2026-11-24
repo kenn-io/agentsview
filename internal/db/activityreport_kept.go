@@ -134,14 +134,15 @@ func (db *DB) keptActivityChangesValid(ctx context.Context, oldRevision int64, r
 		rangeStartUTC, rangeEndUTC := activityReportRangeBoundsUTC(q)
 		usageLowerBound := PaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
 		usageUpperBound := PaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
-		where, args := activityReportSessionSelectionWhere(
-			filter, rangeStartUTC, rangeEndUTC,
-		)
+		where, args := activityReportSessionSelectionWhere(filter, rangeStartUTC, rangeEndUTC)
+		evidenceWhere, evidenceArgs := activityReportSessionSelectionWhere(AnalyticsFilter{Timezone: filter.Timezone, IncludeSubagents: true, IncludeForks: true}, rangeStartUTC, rangeEndUTC)
+		where = "(" + where + ") OR ((" + evidenceWhere + ") AND s.relationship_type = 'subagent')"
+		args = append(args, evidenceArgs...)
 		args = append(args, string(changedJSON))
 		var eligible bool
 		err = db.getReader().QueryRowContext(ctx, `SELECT EXISTS (
 			SELECT 1 FROM sessions s
-			WHERE `+where+`
+			WHERE (`+where+`)
 				AND s.id IN (SELECT value FROM json_each(?)))`, args...).Scan(&eligible)
 		if err != nil {
 			return false, fmt.Errorf("checking kept activity session changes: %w", err)
