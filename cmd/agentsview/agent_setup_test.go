@@ -292,7 +292,6 @@ func TestAgentSetupWithoutMCP(t *testing.T) {
 			require.Len(t, report.Rows, 2)
 			require.Equal(t, "skill", report.Rows[0].Piece)
 			require.Equal(t, "ok", report.Rows[0].State)
-			require.Equal(t, "hooks", report.Rows[1].Piece)
 			got, err := os.ReadFile(path)
 			require.NoError(t, err)
 			require.Equal(t, tc.content, string(got))

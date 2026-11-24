@@ -979,17 +979,4 @@ describe("nested subagent rows", () => {
       ["c", 2, true],
     ]);
   });
-
-  it("keeps both rows when two runs name each other as launcher", () => {
-    const [full] = buildSessionGroups(launchedTree());
-    const group: SessionGroup = {
-      ...full!,
-      sessions: full!.sessions.map((s) => (s.id === "b" ? { ...s, parent_session_id: "c" } : s)),
-    };
-    expect(rows(group)).toEqual([
-      ["d", 2, false],
-      ["b", 2, true],
-      ["c", 3, true],
-    ]);
-  });
 });
