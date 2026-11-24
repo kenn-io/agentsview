@@ -2501,11 +2501,10 @@ shows the MCP commands to run by hand, and `--mcp=false` installs or checks
 the skill without inspecting or changing the MCP entry.
 
 The SessionStart hook refreshes memory and links runs to their launching
-session. Codex launchers using a separate `sqlite_home` in `config.toml` may remain
-unlinked; `CODEX_SQLITE_HOME` is supported. An interactive command whose arguments
-contain `exec`, `e`, `-p`, or `--print` can be mistaken for a launched run.
-ClickHouse sidebars hide automated launched runs when automated sessions are
-filtered out because the mirror does not store launcher provenance. Codex
+session. Codex launchers support `sqlite_home` in `config.toml` and
+`CODEX_SQLITE_HOME`.
+ClickHouse sidebars may also show native automated subagents under a parent
+because the mirror does not store launcher provenance. Codex
 requires you to trust a new hook in `/hooks`.
 
 Setup registers `agentsview mcp --profile memory` without server flags. To use
@@ -2576,8 +2575,10 @@ existing debounce, credentials, embedding work, and push cadence.
 PostgreSQL read target without starting a local archive or claiming to refresh
 hosted data.
 
-Every mode returns within 1.9 seconds and does not wait for archive-scale
-work. Set `AGENTSVIEW_DISABLE_AUTO_SYNC=1` to skip the automatic request and
+The refresh returns within 1.9 seconds and does not wait for archive-scale
+work. With `--hook`, recording a launcher link can take another 6 seconds.
+The hook records links only at startup, so resuming a run does not restore a
+missing link. Set `AGENTSVIEW_DISABLE_AUTO_SYNC=1` to skip the automatic request and
 launcher links. Explicit sync commands and searches still work. Restart a
 contributor owner started by an older binary once so it advertises the
 lifecycle wake endpoint. Contributor wake works on macOS and Linux, while

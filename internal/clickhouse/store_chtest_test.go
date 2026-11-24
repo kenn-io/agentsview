@@ -121,15 +121,18 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 		assert.ElementsMatch(t, []string{fixtureAlphaID, fixtureChildID}, ids)
 	})
 
-	t.Run("sidebar_hides_automated_children_without_launcher_provenance", func(t *testing.T) {
+	t.Run("sidebar_includes_automated_children_without_launcher_provenance", func(t *testing.T) {
 		store, syncer, local := newPushedStore(t)
 		for _, row := range []struct{ id, kind, entrypoint string }{
 			{"ch-native-kind", "non-interactive", ""},
+			{"ch-launched", "non-interactive", ""},
 		} {
 			session := fixtureSession(row.id, "alpha", "You are a code reviewer. Review the code.", "2026-01-10T00:07:00.000Z", 1)
-			session.RelationshipType = "subagent"
-			parent := fixtureAlphaID
-			session.ParentSessionID = &parent
+			if row.id != "ch-launched" {
+				session.RelationshipType = "subagent"
+				parent := fixtureAlphaID
+				session.ParentSessionID = &parent
+			}
 			session.IsAutomated = true
 			session.SessionKind = row.kind
 			session.Entrypoint = row.entrypoint
@@ -139,14 +142,16 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 			}})
 			require.NoError(t, err)
 		}
-		_, err := syncer.Push(ctx, false, nil)
+		_, err := local.SetSessionExternalParent(ctx, "ch-launched", fixtureAlphaID)
+		require.NoError(t, err)
+		_, err = syncer.Push(ctx, false, nil)
 		require.NoError(t, err)
 		for _, filter := range []struct {
 			name string
 			db.SessionFilter
 			wantChildren bool
 		}{
-			{"filtered", db.SessionFilter{Project: "alpha", ExcludeAutomated: true}, false},
+			{"filtered", db.SessionFilter{Project: "alpha", ExcludeAutomated: true}, true},
 			{"unfiltered", db.SessionFilter{Project: "alpha"}, true},
 		} {
 			t.Run(filter.name, func(t *testing.T) {
@@ -157,7 +162,7 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 					ids[i] = row.ID
 				}
 				assert.Contains(t, ids, fixtureAlphaID)
-				for _, id := range []string{"ch-native-kind"} {
+				for _, id := range []string{"ch-native-kind", "ch-launched"} {
 					assert.Equal(t, filter.wantChildren, slices.Contains(ids, id), id)
 				}
 			})

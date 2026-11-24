@@ -138,16 +138,6 @@ func runMemorySessionStartCommand(
 				"AGENTSVIEW_DISABLE_AUTO_SYNC=1")
 		return nil
 	}
-	// A hosted reader has no archive of its own to record the launcher in.
-	if hook && memorySessionStartMode(strings.TrimSpace(mode)) != memoryModeHostedReader {
-		defer func() {
-			captureCtx, captureCancel := context.WithTimeout(cmd.Context(), 6*time.Second)
-			defer captureCancel()
-			if err := captureLaunchParent(captureCtx, cmd); err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "agentsview memory hook: launcher link: %v\n", err)
-			}
-		}()
-	}
 	req := memorySessionStartRequest{
 		Mode:   memorySessionStartMode(strings.TrimSpace(mode)),
 		Target: strings.TrimSpace(target),
@@ -156,6 +146,16 @@ func runMemorySessionStartCommand(
 	}
 	if err := req.validate(strings.TrimSpace(serverTokenFile) != ""); err != nil {
 		return err
+	}
+	// A hosted reader has no archive of its own to record the launcher in.
+	if hook && req.Mode != memoryModeHostedReader {
+		defer func() {
+			captureCtx, captureCancel := context.WithTimeout(cmd.Context(), 6*time.Second)
+			defer captureCancel()
+			if err := captureLaunchParent(captureCtx, cmd); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "agentsview memory hook: launcher link: %v\n", err)
+			}
+		}()
 	}
 	if req.Server != "" {
 		token, err := explicitServerToken(cmd)

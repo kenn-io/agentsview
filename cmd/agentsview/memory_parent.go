@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/mattn/go-sqlite3"
 	"github.com/shirou/gopsutil/v4/process"
 	"github.com/spf13/cobra"
@@ -87,12 +88,32 @@ func oneShotRun(ctx context.Context, p launchProcess, agent string) bool {
 	if err != nil {
 		return false
 	}
-	for _, arg := range args {
+	for i := 1; i < len(args); i++ {
+		arg := args[i]
 		if arg == "--" {
 			return false
 		}
 		if agent == "codex" && (arg == "exec" || arg == "e") || agent == "claude" && (arg == "-p" || arg == "--print") {
 			return true
+		}
+		if !strings.HasPrefix(arg, "-") {
+			if agent == "codex" {
+				return false
+			}
+			continue
+		}
+		if !strings.Contains(arg, "=") {
+			if agent == "codex" {
+				switch arg {
+				case "-C", "--cd", "-c", "--config", "-m", "--model", "-p", "--profile", "-s", "--sandbox", "-a", "--ask-for-approval", "-i", "--image", "--add-dir", "--enable", "--disable", "--remote", "--remote-auth-token-env", "--local-provider":
+					i++
+				}
+			} else {
+				switch arg {
+				case "--model", "--add-dir", "--append-system-prompt", "--append-system-prompt-file", "--system-prompt", "--system-prompt-file", "--agent", "--agents", "--settings", "--setting-sources", "--session-id", "--permission-mode", "--output-format", "--input-format", "--json-schema", "--effort", "--fallback-model", "--name", "-n", "--max-budget-usd", "--mcp-config", "--plugin-dir", "--tools", "--allowedTools", "--allowed-tools", "--disallowedTools", "--disallowed-tools":
+					i++
+				}
+			}
 		}
 	}
 	return false
@@ -260,9 +281,26 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 			launcherEnv = values
 		}
 	}
-	home := launcherEnv["CODEX_SQLITE_HOME"]
+	home := launcherEnv["CODEX_HOME"]
 	if home == "" {
-		home = launcherEnv["CODEX_HOME"]
+		if userHome, err := os.UserHomeDir(); err == nil {
+			home = filepath.Join(userHome, ".codex")
+		}
+	}
+	sqliteHome := launcherEnv["CODEX_SQLITE_HOME"]
+	if launcher == "codex" && home != "" {
+		var config struct {
+			SQLiteHome string `toml:"sqlite_home"`
+		}
+		if _, err := toml.DecodeFile(filepath.Join(home, "config.toml"), &config); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if config.SQLiteHome != "" {
+			sqliteHome = config.SQLiteHome
+		}
+	}
+	if sqliteHome != "" {
+		home = sqliteHome
 	}
 
 	data, err := readHookInput(ctx, cmd.InOrStdin())
@@ -287,21 +325,17 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 }
 
 // recordLaunchParent retries a busy archive or an unreachable daemon until
-// the hook's deadline, and a Codex index not yet written for two seconds,
+// the hook's deadline, including a Codex index not yet written,
 // since no later event writes the link. It gives up at once on a link the
 // archive rejects or a read-only backend.
 func recordLaunchParent(ctx context.Context, cmd *cobra.Command, childID, home, launcher, native string) error {
 	delay := launchParentRetryDelay
-	missingDeadline := time.Now().Add(2 * time.Second)
 	var parentID string
 	for {
 		var err error
 		if parentID == "" {
 			parentID, err = launcherArchiveID(ctx, home, launcher, native)
 			missing := errors.Is(err, os.ErrNotExist) || errors.Is(err, sql.ErrNoRows)
-			if missing && time.Now().After(missingDeadline) {
-				return nil
-			}
 			sqliteErr, isSQLite := errors.AsType[sqlite3.Error](err)
 			if err != nil && !missing && (!isSQLite || (sqliteErr.Code != sqlite3.ErrBusy && sqliteErr.Code != sqlite3.ErrLocked)) {
 				return err
@@ -317,6 +351,9 @@ func recordLaunchParent(ctx context.Context, cmd *cobra.Command, childID, home, 
 		select {
 		case <-ctx.Done():
 			timer.Stop()
+			if errors.Is(err, os.ErrNotExist) || errors.Is(err, sql.ErrNoRows) {
+				return nil
+			}
 			return err
 		case <-timer.C:
 		}
