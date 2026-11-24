@@ -1076,18 +1076,15 @@ func (s codexSourceSet) discover(
 			}
 		}
 		for _, path := range paths {
-			info, err := os.Stat(path)
-			if err != nil || !info.Mode().IsRegular() {
-				continue
-			}
-			source, ok := s.sourceRef(root, path, false)
+			source, ok := s.sourceRef(root, path, true)
 			if !ok {
-				source, ok = s.directPathSource(root, path, false)
+				source, ok = s.directPathSource(root, path, true)
 			}
 			if !ok {
 				continue
 			}
-			if current, ok := byKey[source.Key]; ok && !preferCodexSource(source, current) {
+			if current, ok := byKey[source.Key]; ok &&
+				!preferCodexSource(source, current) {
 				continue
 			}
 			byKey[source.Key] = source
@@ -1504,29 +1501,21 @@ func (s codexSourceSet) sourcesForIndexPath(
 	indexDir := filepath.Dir(indexPath)
 	for _, root := range s.roots {
 		if sessions := CodexLabeledIndexSessions(root, indexPath); sessions != "" {
-			return s.discoverEachSessions(ctx, root, sessions)
+			var sources []SourceRef
+			for _, path := range s.discoverSessionPaths(sessions) {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				if ref, ok := s.sourceRef(root, path, true); ok {
+					sources = append(sources, ref)
+				}
+			}
+			return sources, nil
 		}
 	}
 	return s.discover(ctx, func(root string) bool {
 		return slices.Contains(s.metadata.dirs(root), indexDir)
 	}, false)
-}
-
-func (s codexSourceSet) discoverEachSessions(ctx context.Context, root, sessions string) ([]SourceRef, error) {
-	var sources []SourceRef
-	for _, path := range s.discoverSessionPaths(sessions) {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		info, err := os.Stat(path)
-		if err != nil || !info.Mode().IsRegular() {
-			continue
-		}
-		if ref, ok := s.sourceRef(root, path, false); ok {
-			sources = append(sources, ref)
-		}
-	}
-	return sources, nil
 }
 
 func (s codexSourceSet) sourceRef(
