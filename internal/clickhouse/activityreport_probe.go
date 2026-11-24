@@ -99,9 +99,14 @@ func (s *Store) readActivitySourceProbe(ctx context.Context) (activity.SourcePro
 	if err != nil {
 		return activity.SourceProbe{}, err
 	}
-	if err := s.queryRowContext(ctx, `SELECT hex(SHA256(toString(tuple(count(), sumWithOverflow(sipHash64(id, push_version)), sumWithOverflow(cityHash64(id, push_version)))))) FROM sessions`).Scan(&probe.SessionRowsFingerprint); err != nil {
+	version, ok, err := s.usageRowsVersion(ctx, []string{"sessions"}, "")
+	if err != nil {
 		return activity.SourceProbe{}, fmt.Errorf("probing session versions: %w", err)
 	}
+	if !ok {
+		return activity.SourceProbe{}, errors.New("probing session versions: could not establish a stable version")
+	}
+	probe.SessionRowsFingerprint = version
 	if ready {
 		// Count and sum row hashes so merges and row ordering do not change the
 		// fingerprint, while duplicate rows still contribute to it.

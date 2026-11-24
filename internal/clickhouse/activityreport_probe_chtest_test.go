@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/activity"
@@ -95,4 +96,27 @@ func TestActivitySourceProbeCachePreservesFreshness(t *testing.T) {
 	merged, err := store.ActivityReportSourceProbe(ctx)
 	require.NoError(t, err)
 	require.Equal(t, after, merged)
+}
+
+func TestActivitySourceProbeTracksIncrementalSessions(t *testing.T) {
+	t.Parallel()
+	dsn, database := chtest.FreshDatabase(t)
+	conn := chtest.Open(t, dsn, database)
+	ctx := t.Context()
+	require.NoError(t, EnsureSchemaOn(ctx, conn))
+	store := newTestStore(t, conn, Target{URL: dsn, Database: database})
+	_, err := conn.ExecContext(ctx, `SYSTEM STOP MERGES sessions`)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, `INSERT INTO sessions (id,push_version) SELECT toString(number),1 FROM numbers(10000)`)
+	require.NoError(t, err)
+	beforeQueries, _ := identityQueryCounts(t, store)
+	before, err := store.ActivityReportSourceProbe(ctx)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, `INSERT INTO sessions (id,push_version) VALUES ('0',2)`)
+	require.NoError(t, err)
+	after, err := store.ActivityReportSourceProbe(chdriver.Context(ctx, chdriver.WithQueryID("probe-incremental")))
+	require.NoError(t, err)
+	assert.NotEqual(t, before.SessionRowsFingerprint, after.SessionRowsFingerprint)
+	afterQueries, _ := identityQueryCounts(t, store)
+	assert.Greater(t, afterQueries, beforeQueries)
 }
