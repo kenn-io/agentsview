@@ -2202,6 +2202,7 @@ func (d *DB) CopySessionMetadataFrom(
 		if err != nil {
 			return fmt.Errorf("listing sessions for PR link refresh: %w", err)
 		}
+		defer rows.Close()
 		var ids []string
 		for rows.Next() {
 			var id string
