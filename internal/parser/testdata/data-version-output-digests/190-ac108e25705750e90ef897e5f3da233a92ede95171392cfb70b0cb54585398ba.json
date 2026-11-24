@@ -1,0 +1,295 @@
+{
+  "version": 190,
+  "bump": true,
+  "digest": "ac108e25705750e90ef897e5f3da233a92ede95171392cfb70b0cb54585398ba",
+  "providers": {
+    "aider": {
+      "myrepo/.aider.chat.history.md": "bd3361561a4547452dddf33ac27898f2b60e8c305f2ef07ed13ec520f1f51244"
+    },
+    "amp": {
+      "T-019ca26f-aaaa-bbbb-cccc-dddddddddddd.json": "b30fb977e184dd2e696e67dad12de693df5ccb1f14e14232fb864f973665f641"
+    },
+    "antigravity": {
+      "conversations/aaaa1111-bbbb-cccc-dddd-eeeeeeeeeeee.db": "c39e2bd16d68277da0f7c117072d9f7160ecd5d9dbac3081a6a78e96fb77a224",
+      "conversations/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.db": "3a1612c266b6e540dd0d77fa13ad2a38b29c31b44db5377600cf617ba7a81c5d",
+      "conversations/cccccccc-dddd-eeee-ffff-000000000000.db": "7c73d609202d51ddc4235656908d608f55f109e8290339d8bd44257c9d3a021f"
+    },
+    "antigravity-cli": {
+      "conversations/aaaa1111-bbbb-cccc-dddd-eeeeeeeeeeee.db": "e5d6e5e84c3477a2241a573125edaa8a41ba62b6dc7a2d4a1bf01ee08898a01c",
+      "conversations/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.db": "c86adbd1233ec45932dd37624f4a3033ad1784af72442594807a028bf54cbc9b",
+      "conversations/bbbbbbbb-cccc-dddd-eeee-ffffffffffff.db": "c9765a2707dd1b529d638a445797c26b8687b654b9e57e85c554e7cd48eaf502",
+      "conversations/cccccccc-dddd-eeee-ffff-000000000000.db": "8f4b868094be7001592805e336c90e95541b4b16e2e110f6bcbb054d62720929",
+      "implicit/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.pb": "87b78741598f2126e69571d0fb5b3983a209f7830b566b745ad9b04e538f1914"
+    },
+    "augure-code": {
+      "2026/09/07/rollout-2026-09-07T14-02-01-3f2b1c9a-7d51-4e0a-9b2f-1c8a4d5e6f70.jsonl": "29e54818395a6a5cdd68c339ddb138fd73f419aa2ae27b71314d44c8e4f90722"
+    },
+    "augure-desktop": {
+      "state.db#20260910_075655_ca54ab": "43ec8c9faee91d0bc6399a60772f7f1d99d53f520a651378278f4a85de8a8b73"
+    },
+    "claude": {
+      "project/blank_thinking_usage.jsonl": "e8f97440900860bb4043ff5512014f616abc26e90685b7832b6410f38a7839ca",
+      "project/channel_messages.jsonl": "df525196022382249e02ff15cee899b5a0fbffc2064b16a01003c3fbe0129508",
+      "project/channel_rewind.jsonl": "2d0cc9167f18e9b7bc329181d77faf23e848eafff6eff4b42df116bd8385b9c6",
+      "project/cost_state.jsonl": "561b77fdfab7ee222467fcd25519fd37b2b1b1cb6ff7abb4668100b77a519f4e",
+      "project/peer_nonmeta_rewind.jsonl": "30dbb5e4c1fba21e275328038d5d5eba5ba2b1527cbd18cd7d009f914bf608a3",
+      "project/queued_peer_messages.jsonl": "06b2ae413dc739670f30723aae9fb7624458906216f2b7fd344f17ad13b44550",
+      "project/queued_system_messages.jsonl": "277812cd4e5b279e35287a9987dce0b70ce9f20cef53a6bc1166fa7edc13c47e",
+      "project/system_messages.jsonl": "cf7bc00193638a357dba7f39947969c6aa7f27d2bc9222cdf10d6148992eae1c",
+      "project/tool_call_pending.jsonl": "8d49cbad7ad4ea9356882211919b7bc35f715ac200937543c8035f0cfeb4dc84",
+      "project/usage_peer_conversation.jsonl": "042c5bd106d57edd53544bee56fde9c7edc6d4c4cec905a8595a04c5f84be80f",
+      "project/usage_probe.jsonl": "579cfd986159667a5a6cec957bf0fd8339598b47cfbff08a6ee1542986c4b78e",
+      "project/valid_session.jsonl": "c779fd613c4d248fce856e2595fa531bd3c6b1f4bd0d91a80ffe147590a36639",
+      "project/websearch.jsonl": "35b75d2368d70e873288390fcde0013d48e96a76260f29cccc6284de63f99d6a"
+    },
+    "cline": {
+      "data/sessions/sample_session/sample_session.json": "bd423413ace83d088aae24963b6917e29a7828ceac6c335ab61d9e5d6698f55b"
+    },
+    "codebuddy": {
+      "history/ws_test/conv_001/index.json": "4e30238c75a836d607aa18d27a08c7dfcd19b2d7bc7a402a5046c28ec30c42eb"
+    },
+    "codebuff": {
+      "project/chats/2026-07-15T20-01-32.065Z/chat-messages.json": "f9d2c0fa0c1351c7295e0a7d38b55444d10b61622780652c1ef2ae2db3a021e9"
+    },
+    "codex": {
+      "2025/01/01/rollout-2025-01-01T00-00-00-22222222-2222-4222-8222-222222222222.jsonl": "8dccfa56de10a17ee1fb2a7e8f2f913299fb19e79b2085e4a957068b5f90fd2c",
+      "2026/06/11/rollout-2026-06-11T12-44-06-3f2b1c9a-7d51-4e0a-9b2f-1c8a4d5e6f70.jsonl": "f9c874220bbb76a99e1e77496e1b92e5432dea39d8bdc1111f2dc6f3a95304dd",
+      "2026/09/01/rollout-2026-09-01T10-00-00-11111111-1111-4111-8111-111111111111.jsonl": "f79a239f7a288c6ec0a684eb411aeee8a2588ca6c122f5cefd8d8e8b33691d20",
+      "2026/09/01/rollout-2026-09-01T10-00-00-44444444-4444-4444-8444-444444444444.jsonl": "738230dce2a01d71d94c690c5d75c5ee7d7969ed415ed4ed1764cfc3eb4deab7"
+    },
+    "codex-cloud": {
+      "account-key/thread-a.jsonl.zstd": "6a70e1f9798f2811916d69997b00c3416f3b9b4de80001515900ac546c733d48"
+    },
+    "commandcode": {
+      "project/sess_123.jsonl": "80af2198e1071d045343088fe31aa82827a1adeda9c861e60ecdb74181092d97"
+    },
+    "copilot": {
+      "session-state/session.jsonl": "4633156989326cf4a50b1d96c7658bb51c3adbad0b9978d5a56c5be51f765b26"
+    },
+    "cortex": {
+      "11111111-2222-3333-4444-555555555555.json": "e432490f58df16f7114788ad33edcefe8c09e3dcd4a7c9bb135ab43e7d57f860"
+    },
+    "cowork": {
+      "org/ws/local_50000000-0000-4000-8000-000000000001/.claude/projects/-sessions-demo/c0000000-0000-4000-8000-000000000001.jsonl": "4ab727a502134ee3703374e5ec6f09be6cfd128ef6f383ac5535edc5130e0e50",
+      "org/ws/local_50000000-0000-4000-8000-000000000001/.claude/projects/-sessions-demo/c0000000-0000-4000-8000-000000000001/subagents/agent-0000000000000001.jsonl": "1a88ca2a8b2d7a5e2f04ad820d975f221bb076d63c826c84bc60d9d08aaddc00"
+    },
+    "crush": {
+      "crush.db#session": "05d0bc4662551f823c0f798a10006f9bd46d4138920cc71816bfd72385a815c6"
+    },
+    "cursor": {
+      "project/agent-transcripts/session.jsonl": "aa408c1e3f34ab64e63372e6368a31de9070016fd6dccbcfa8aa27e34b0c4081"
+    },
+    "cursor-ide": {
+      "state.vscdb": "c47959407202b335ae75b4568f5f1ba87ae9c47109cfa2ced99ad5687b148db3"
+    },
+    "deepseek-harness": {
+      "--workspace-example--/watch-id/session.v4.jsonl": "a8229525f515e159c54db806d802295df1e30f663eea26acb7c1db3fa832ca39"
+    },
+    "deepseek-tui": {
+      "session_123.json": "429160303569b957041e54bd6f92ab766d496772c524ae3acd2eb6992aad2abc"
+    },
+    "devin": {
+      "cli/sessions.db#session-123": "cb3ca8e4ef2fe27e07ff9ebfddc255ed887ac940ce17b56fe02d4e67d9eec3cb"
+    },
+    "direct-api": {
+      "0e4ba1a2-6f43-4c47-9c35-4d1f2c3b8a10.jsonl": "efd1b4274a16100bef3a30eaa76f2ff1642ba5852c440fc63302ce50916d8d30"
+    },
+    "evener": {
+      "sessions/compaction.transcript.jsonl": "9875550b76073247fcf8f150e92e2fb1f379e1bd59f456c74826adf35aec39c5",
+      "sessions/session.transcript.jsonl": "a07493ef4906ec900de84f8c07d7933c9a5b47250fa1912f5628009bb395e702",
+      "sessions/tool-session.transcript.jsonl": "19e465be96d7a630be18d36855691bf31c6081e97a7ec31462894a6edc89b814"
+    },
+    "factory": {
+      "-home-dev-workspace-demo-app/0f9c1c2e-6f7d-4b3a-9c2e-1a2b3c4d5e6f.jsonl": "260449172b4c401c5036c1ec76212c4bc9ebcfc9c33e507b60f5f82a2fdb8c33"
+    },
+    "forge": {
+      ".forge.db#conv-001": "ac7ea3b010074e9eaf570fb1beff098d568b3d53c5fea04e48754849031c3053"
+    },
+    "fx": {
+      "child-session/events.jsonl": "a7cfd3fd959c3a3a080dbf0ece48abe9489ebc5b9197a2ea48e64680bcb0ffb0",
+      "parent-session/events.jsonl": "4f101116cad8460a9ffda1f662c1e098cabc412c9bb8c7307e9709364a918c8c"
+    },
+    "gemini": {
+      "tmp/project/chats/session-2026-06-19T12-00-session.json": "505b7aeee8cde81ff6d5c9b52a9c9b43d16151d779b461c456e8d1f909d5d2bd"
+    },
+    "goose": {
+      "data/sessions/sessions.db#child": "b41722787fc2895f83ae6c644d79dcce8877e5f4e94175c0bd16d26eb87ebf7b"
+    },
+    "gptme": {
+      "2026-06-13-write-hello-world/conversation.jsonl": "36c9bcc15f21b94bbd9519ad67982e5e7b0d4daa8fb3d7ea32d3f4bbeb27497c"
+    },
+    "grok": {
+      "%2Fworkspace%2Fgrok-worktrees%2Fparser-audit/019f6000-0000-7000-8000-000000000001/summary.json": "2576528fa8cfad8190c19828f2a48b5c9639bf09bd9e8c0f6855f518582195fc"
+    },
+    "hermes": {
+      "session.jsonl": "853293856c1e16a3764fd9f810d2c3c9d82e04faf035278633df702f4651cc98"
+    },
+    "icodemate": {
+      "icodemate.db#ses_f78ee770effebwbWXea2fzwUIu": "2bcde5c7b1ef6f4f2421c8752903eeeeeb102e59973f4475de6d823d03dbafb9",
+      "icodemate.db#ses_f78f34fafffeIugr4PB2oXkVD0": "f564bff121db0a1bc51960838b81dd894aac635c13a17bdc4ef83e355468a400",
+      "icodemate.db#ses_f78f36bd6ffeTXo4UWv9dIETyI": "68f69bf80d3135b65481d43c88e9c0e5f8d3bfd5cc38f912bd1e98943ce4e791"
+    },
+    "iflow": {
+      "project/session-5de701fc-7454-4858-a249-95cac4fd3b51.jsonl": "5aa11315b321d84b2543d5285433fb67cc5631e54135f2a2e9cb8b17a448ee68"
+    },
+    "junie": {
+      "session-260101-120000-abcd/events.jsonl": "65628f43a5e135d06d7f1a504b159d12a7edca828c40f55d183b6b3e74a11f60"
+    },
+    "kilo": {
+      "kilo.db#ses_f78ee770effebwbWXea2fzwUIu": "1a4fae0a5a32b753c87ba95ba9c02ca2ecb1cea4e520e04c8b331cbf328c4998",
+      "kilo.db#ses_f78f34fafffeIugr4PB2oXkVD0": "baffb01cce6aae67944688c636f5d68c103f466731fe945d5edcd06d7a9817a8",
+      "kilo.db#ses_f78f36bd6ffeTXo4UWv9dIETyI": "76d5063f46bbd29d80001622b649857a9ab3f918f181ce2f5d0a879ae4a1ead2"
+    },
+    "kilo-legacy": {
+      "tasks/session/task_metadata.json": "919d925cb06d1a9177935caefe54a11c1e9c3ddbd4cd4fd015ef52254041f6ba"
+    },
+    "kimi": {
+      "abc123/uuid-1/wire.jsonl": "044736b2d05a8832ba398b3bd52a7164fc4cf4f3b38d4d9962e2222d63ecf9b6"
+    },
+    "kimi-work": {
+      "wd_agentsview_e901f41e2366/conv-3fac68340656963a67a35ba9/agents/main/wire.jsonl": "427c62b4003d9d1f0d869d669333b2872c99e02e6af4f47108ae6d1a49877ac3"
+    },
+    "kiro": {
+      "data.sqlite3": "14d549a006579ea8a830699cd208a3f48bb14920236ee346afe320156a1cf448",
+      "session.jsonl": "1d433ddb08e170453e227a1952d28ab05c32d63252bd5f921349b6e895b24028"
+    },
+    "kiro-ide": {
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.chat": "6e71821edefa0b1e2917a7a384de0decc81f1d69a3c7bc934389f1217d884735",
+      "workspace-sessions/encoded-workspace/session.json": "e1697ab6f53b6189b6e73b1133c28f80d0a86a65fd9c505964e777e74b418725"
+    },
+    "mimocode": {
+      "mimocode.db#ses_f78ee770effebwbWXea2fzwUIu": "fc68dd2cd0f1fabea2f8039bffa1ef3cf9534c984f0b02bf720278e9fef405a7",
+      "mimocode.db#ses_f78f34fafffeIugr4PB2oXkVD0": "f3c18804840dda1eebed832aee5a153df89cd3ec5b7af158e280cbd918db0930",
+      "mimocode.db#ses_f78f36bd6ffeTXo4UWv9dIETyI": "499b9fc00bff8dbc56a6127b131732e0bc9a6aa0f89b3febbe6a26cdf9eec068"
+    },
+    "muse": {
+      "2026/09/10/0199a1b2-6c3d-7e4f-8a5b-000000000001/session.jsonl": "5e71a8de8d75e16de1060a4b6015378aa573f6eefbb97dd4c660633e77f1af7e",
+      "2026/09/10/0199a1b2-6c3d-7e4f-8a5b-000000000001/subagent/0199a1b2-6c3d-7e4f-8a5b-000000000002/session.jsonl": "f7da4a6012606cadc16e5b383db2d248fe09e36ac1f2406c7f3fd19314c7003b"
+    },
+    "muse-personal": {
+      "agent-11111111-2222-4333-8444-555555555555/sessions/11111111-2222-4333-8444-555555555555.jsonl": "362736aeec0c797e4741f30c5ba3dad9018705564ec49da79002b27a594ed8ae",
+      "agent-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee/sessions/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee.jsonl": "032397c4a6f9285abf4cedd79ce213cf5ca3c4df0252b4daa8e5f359e5815f97"
+    },
+    "omnigent": {
+      "chat.db": "286bce2a9794054f2e8fc800fb73cd5b64b1f571eb3591cd2444dfde60c8f700"
+    },
+    "omo": {
+      "encoded-cwd/session-123.jsonl": "1f822152b8128d0305dc4889a37e8ef64bbeb74857f0aaf7bd0e933fe5218e21"
+    },
+    "omp": {
+      "encoded-cwd/session-omp.jsonl": "4eca217dc30c125acc0b7c65dbb3a3aa0fe7117cfe273017882364524d834472"
+    },
+    "open-interpreter": {
+      "2026/11/05/rollout-2026-11-05T19-12-21-01a1ad20-5c4f-7010-9529-8716a3356361.jsonl": "4be6751fc073bb85262babc0ea4b925e34fab438039c29cbf9d2f83c884d2ec8"
+    },
+    "openclaude": {
+      "project/blank_thinking_usage.jsonl": "e985006781346d0a0c66f977fc5d45bc77567ea01f3af86dec5b984959a77f0e",
+      "project/channel_messages.jsonl": "9a0680adf6e26883e45334275a0587001593d3096436cf058fce2a1ec2bf46f7",
+      "project/tool_call_pending.jsonl": "4cd52132fc23d5ed0a4fb7d9928669b9fc40bcd102f1185c687fd6a0c9cbc2d0",
+      "project/usage_peer_conversation.jsonl": "d08c72bf203daa7515b26a389386eb997a5b850444a7c24848eb007a4c1ef40f",
+      "project/valid_session.jsonl": "3b2d9d28b1f539fa824777c9892d30842a764f6de325c7611400356cbdfeeb8e",
+      "project/websearch.jsonl": "b62cb2faedf1c176ba8bd3be48960e67ebca099f791597b42d3126208b9b5706"
+    },
+    "openclaw": {
+      "main/sessions/abc-123.jsonl": "a754093c911519b163a1b1ae5be746281ebe39ba2f268e99ee4180ff187b708f"
+    },
+    "opencode": {
+      "opencode-reasoning.db#ses_reason": "199628f9cb4149d862a74653f0c8fd7c93f1d41bda4c23112cc594a1323094a9",
+      "opencode.db#ses_f78ee770effebwbWXea2fzwUIu": "729a7c543fe4d76b8a3779183908926796609f1f9a7527eae8a233f87e2f6a3e",
+      "opencode.db#ses_f78f34fafffeIugr4PB2oXkVD0": "b4dbd0645084b432d1ef7bf002c6835b0f4ecca9528cd10f51b3459c6c2bbb6e",
+      "opencode.db#ses_f78f36bd6ffeTXo4UWv9dIETyI": "409be895a2985d8a0d8020d3c033c7d99aebc474ac49c3af5f50e7a231a740b2"
+    },
+    "opencodereview": {
+      "project/11111111-1111-4111-8111-111111111111.jsonl": "f939f12e4f2de31c139a6634be7bb907b7e74bab492ff7f372ae0a15cec6c61a"
+    },
+    "openhands": {
+      "086c7ecf6cb746b69fbcb900358d1247": "ad61a04206410749a6dc276cfc109f4a1b368a6b174547174680775bfcb33501"
+    },
+    "pi": {
+      "encoded-cwd/session-123.jsonl": "7f6663c7276290a31df7b33878f935d215301fb58ea9b1ffe067d14f7acba87e",
+      "encoded-cwd/session-skill.jsonl": "06df753dca7648035fa5efdff07923be5c58289bbf292621d5dfb5ca4e5e5da4"
+    },
+    "piebald": {
+      "app.db#42": "ffbeda0207de417553a1f22f56bc1a317bedb9c2eb1b3ef8ea79824069142793",
+      "app.db#7": "58657dfee75f3d09a0f81e68da9c77ee880d2bdfac2b72563989a4a97e41cd0b",
+      "app.db#99": "784c1d5d7ff78c6571188dda0233b9e647dc277555c73dce5126d7276972f5c1"
+    },
+    "poolside": {
+      "trajectories/trajectory-standalone_tools.ndjson": "2c2944f0884f0daf8030320d643985cad7d0ddd27f1050850be05bfb8043b03e",
+      "trajectories/trajectory-standalone_usage.ndjson": "86381e1ef1eedec823dbe1e17b629a869ab59d75161c4655553d9332344dbfe9"
+    },
+    "posit-assistant": {
+      "a1b2c3d4/11111111/conversation.json": "f5e833332a48e06dc65caab06466484f937b445f6a5acd8168e7c89a589986b4",
+      "a1b2c3d4/11111111/subagents/22222222/conversation.json": "68c94ad1da5b7257d3aee189e318ed46aac4cb28360c205be1f2b24006cbf954",
+      "default/33333333/conversation.json": "7a76dd209d65c615e0078fd0ba8f6059993c10dca687850f865e862890cf4fa1"
+    },
+    "positron": {
+      "workspaceStorage/workspace-hash/chatSessions/session.json": "c45dbd740e1e88672b808241994a55f57ee072701e73217c3de4918eab800145"
+    },
+    "prime-agent": {
+      "019c1111-file.jsonl": "8415d68c337165f49e4e9dccb32dd64117ece22aa48e6f29eaffe1f598e3a7a8",
+      "session.jsonl": "6ea244110343f4a4cc8ddaa0136dac60091c92fbc35d0f737645bcf3a3d908e9"
+    },
+    "qclaw": {
+      "main/sessions/abc-123.jsonl": "87b9c867dbc1149e2806d93cac3c513abffb19ec415b4fb22a5324b49fc99914"
+    },
+    "qoder": {
+      "project/11111111-1111-4111-8111-111111111111.jsonl": "5ee2e692af7cc59f27b4efcfc8c4eca81de6c1c7c5b1073588e31ce5a36b0d91"
+    },
+    "qwen": {
+      "project/chats/session-123.jsonl": "6071fc5086276d4b05d16ebb4325cf1fc96e7e7688be9b5bab8075066c05ce16"
+    },
+    "qwenpaw": {
+      "default/sessions/default_1.json": "ab0c0217c2dcf155cb1a6f01cdb05892f095675d4f0dddc5c9dbcf2ed46df96f"
+    },
+    "reasonix": {
+      "projects/project/sessions/session-123.jsonl": "598d0417f6636d610c327681f9e39cde04dfd373b8682b743e2641bf78e109d4"
+    },
+    "roocode": {
+      "tasks/test-task-tools/history_item.json": "136b6fcaefd81edb79c61abb6fc35f44949abc13edcce16a717abf41f7cb2642"
+    },
+    "shelley": {
+      "shelley.db": "d563306bc6f3a1fe95cdc8a90fe987496aa48339a5a1d64cc136668d99629fe3"
+    },
+    "stepcode": {
+      "project/2026-09-01T12-00-00-000Z_0199e4c2-1111-2222-3333-444455556666.jsonl": "229101141a2df4610dd023a5b488b450a0c6400579912a0288aff4ccf3548a66"
+    },
+    "tau": {
+      "project/session.jsonl": "11ced7c8ce3bddd246dce0705550dfaf07715d814144738634bf3a259ceade00"
+    },
+    "trae": {
+      "workspaceStorage/hash/state.vscdb": "049b15d62f82ef12c5d7c8fe3384fe16e7e57279e2d8567240df2e7083f45e80"
+    },
+    "traex": {
+      "2026/06/11/rollout-2026-06-11T12-44-06-3f2b1c9a-7d51-4e0a-9b2f-1c8a4d5e6f70.jsonl": "958a7b037a85bffe06c04bf971e5766a8959f13a9acf1f526b585948bfce8565",
+      "2026/08/01/rollout-2026-08-01T18-07-04-019fbcca-9fd4-7d20-83dc-0762b2f839b3.jsonl": "c95acde7f34e117df49c404f62e920972dce54bed51a0653bb11cc33c5b5b1f9"
+    },
+    "vibe": {
+      "session_20260613_123456_abc123def/messages.jsonl": "78df2ad61cfa3da8157aa28ad5e88450d476c767ae877e5f7e1a6faee6a512b5"
+    },
+    "visualstudio-copilot": {
+      "20260612T194439_257709a3_VSGitHubCopilot_traces.jsonl#4a8f63f6-7626-4416-a874-fc7bd2c3f005": "9c791081b7e39fec3946cea05b33683e14b92e9b24e55788ab2e72ee0010a468"
+    },
+    "vscode-copilot": {
+      "workspaceStorage/workspace-hash/chatSessions/session.json": "e78fcb57719cdefe340df35fe5a24422ce9a46c86a70524df07c71769c9bf3a2"
+    },
+    "warp": {
+      "warp.sqlite#conv-001": "31c1f15301b247bd7d90e93547eb05231d9459d68a3b43a2e7d6886a8067efdc"
+    },
+    "windsurf": {
+      "workspaceStorage/workspace-hash/state.vscdb#session-1": "0d2e706b88d692934c1929fe1fccc2efe5677856cfe9c2f4954d3ad9170b944e"
+    },
+    "workbuddy": {
+      "proj/11111111-1111-4111-8111-111111111111.jsonl": "0e5b8ecdf354eddabfc63c165f67665b0696f84c81fcbec0ab01fc2865d9e850"
+    },
+    "zcode": {
+      "db/db.sqlite#session-tools": "1302860f847d17ecf9e970e66f2e6498bac80a2b1181c310420fdfb7f3740528"
+    },
+    "zed": {
+      "threads/threads.db": "77e26e11d0eae084acd9c88d588687cabfe4b5ea74d980695fbdf06c8d3a1262"
+    },
+    "zencoder": {
+      "abc-def-123.jsonl": "229ea6a103ff846e92165d257d321e0fef1be245a806f2f1a08356f0f2e08792"
+    }
+  }
+}
