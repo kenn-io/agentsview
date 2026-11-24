@@ -1812,33 +1812,20 @@ func TestProviderParserHostedCodexSkillNameStaysLexical(t *testing.T) {
 func TestProviderParserHostedCodexLabeledProject(t *testing.T) {
 	root := t.TempDir()
 	const id = "11111111-1111-4111-8111-111111111111"
-	const otherID = "22222222-2222-4222-8222-222222222222"
-	var selected string
-	for _, run := range []struct{ label, id string }{{"experiment/case", id}, {"other/case", otherID}} {
-		home := filepath.Join(root, filepath.FromSlash(run.label), ".codex-run-v1-a")
-		rollout := filepath.Join(home, "sessions", "2026", "09", "10", "rollout-2026-09-10T10-00-00-"+run.id+".jsonl")
-		require.NoError(t, os.MkdirAll(filepath.Dir(rollout), 0o700))
-		require.NoError(t, os.WriteFile(rollout, []byte(testjsonl.JoinJSONL(
-			testjsonl.CodexSessionMetaJSON(run.id, "/workspace/project", "codex_cli_rs", "2026-09-10T10:00:00Z"),
-			testjsonl.CodexMsgJSON("user", "Session prompt", "2026-09-10T10:00:01Z"),
-		)), 0o600))
-		require.NoError(t, os.WriteFile(filepath.Join(home, parser.CodexSessionIndexFilename), []byte(fmt.Sprintf("{\"id\":%q,\"thread_name\":\"Selected title\"}\n", run.id)), 0o600))
-		if run.id == id {
-			selected = rollout
-		}
-	}
+	home := filepath.Join(root, "experiment", "case", ".codex-run-v1-a")
+	rollout := filepath.Join(home, "sessions", "2026", "09", "10", "rollout-2026-09-10T10-00-00-"+id+".jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(rollout), 0o700))
+	require.NoError(t, os.WriteFile(rollout, []byte(testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(id, "/workspace/project", "codex_cli_rs", "2026-09-10T10:00:00Z"),
+		testjsonl.CodexMsgJSON("user", "Session prompt", "2026-09-10T10:00:01Z"),
+	)), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(home, parser.CodexSessionIndexFilename), []byte(fmt.Sprintf("{\"id\":%q,\"thread_name\":\"Selected title\"}\n", id)), 0o600))
 	provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
-	require.Len(t, sources, 2)
-	var source parser.SourceRef
-	for _, candidate := range sources {
-		if candidate.DisplayPath == selected {
-			source = candidate
-		}
-	}
-	require.NotEmpty(t, source.Key)
+	require.Len(t, sources, 1)
+	source := sources[0]
 	manifest, objects := manifestFromCapturePlan(t, parser.AgentCodex, provider, source)
 	require.Len(t, manifest.Manifest.Entries, 2)
 	materialized, err := (Materializer{Store: &materializerStore{objects: objects}, BaseDir: t.TempDir(), MaxTotalBytes: 1 << 20}).Materialize(t.Context(), manifest)

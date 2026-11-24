@@ -452,25 +452,13 @@ func (p *codexProvider) Fingerprint(
 
 // parentRoots includes the labeled home that owns a discovered child.
 func (p *codexProvider) parentRoots(path string) []string {
-	roots := p.sources.roots
-	labeled := false
-	for _, root := range roots {
+	for _, root := range p.sources.roots {
 		if CodexSourceLabel(root, path) != "" {
-			labeled = true
-			break
+			sessions := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(path))))
+			return append(slices.Clone(p.sources.roots), sessions)
 		}
 	}
-	if !labeled {
-		return roots
-	}
-	sessions := path
-	for range 4 {
-		sessions = filepath.Dir(sessions)
-	}
-	if !slices.Contains(roots, sessions) {
-		roots = append(slices.Clone(roots), sessions)
-	}
-	return roots
+	return p.sources.roots
 }
 
 func (p *codexProvider) PlanRawCapture(
@@ -567,17 +555,11 @@ func (p *codexProvider) PlanRawCapture(
 			// is captured under a distinct logical path so parse inputs
 			// that came from another home travel with the transcript.
 			logical := CodexSessionIndexFilename
-			if i == 0 && CodexSourceLabel(src.Root, src.Path) != "" && rawCapturePathWithin(captureRoot, candidate) {
-				rel, err := filepath.Rel(captureRoot, candidate)
-				if err != nil {
-					return RawCapturePlan{}, invalidRawCapturePlan("resolve Codex session index: %s", rawCaptureFilesystemError(err))
-				}
-				logical = filepath.ToSlash(rel)
-			}
 			if i > 0 {
 				logical = fmt.Sprintf("alias-homes/%d/%s", i, CodexSessionIndexFilename)
 			}
-			if p.Config.StableSourceSnapshots && rawCapturePathWithin(captureRoot, candidate) {
+			if (p.Config.StableSourceSnapshots || i == 0 && CodexSourceLabel(src.Root, src.Path) != "") &&
+				rawCapturePathWithin(captureRoot, candidate) {
 				// Materialized aliases already have custody paths. Keep their
 				// original ordinals even when missing indexes left gaps.
 				rel, err := filepath.Rel(captureRoot, candidate)

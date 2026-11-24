@@ -857,7 +857,10 @@ func CodexSessionPathInfo(root, path string) (CodexLayout, string, bool) {
 		return CodexLayoutArchivedFlat,
 			CodexSessionUUIDFromFilename(parts[0]), true
 	case 4:
-		if !IsDigits(parts[0]) || !IsDigits(parts[1]) || !IsDigits(parts[2]) || !isCodexSessionFilename(parts[3]) {
+		if !IsDigits(parts[0]) || !IsDigits(parts[1]) || !IsDigits(parts[2]) {
+			return CodexLayoutUnknown, "", false
+		}
+		if !isCodexSessionFilename(parts[3]) {
 			return CodexLayoutUnknown, "", false
 		}
 		return CodexLayoutDated,
@@ -869,16 +872,13 @@ func CodexSessionPathInfo(root, path string) (CodexLayout, string, bool) {
 
 // CodexSourceLabel returns the label preceding a marked Codex run home.
 func CodexSourceLabel(root, path string) string {
-	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if _, _, ok := CodexSessionPathInfo(root, path); !ok {
 		return ""
 	}
+	rel, _ := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
 	parts := strings.Split(rel, string(filepath.Separator))
 	n := len(parts)
 	if n <= 6 || !strings.HasPrefix(parts[n-6], ".codex-run-v1-") || parts[n-5] != "sessions" {
-		return ""
-	}
-	if _, _, ok := CodexSessionPathInfo(root, path); !ok {
 		return ""
 	}
 	return filepath.ToSlash(filepath.Join(parts[:n-6]...))
