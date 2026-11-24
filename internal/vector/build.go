@@ -61,7 +61,8 @@ type BuildOptions struct {
 	IncludeAutomated bool
 	// Agents limits message scans to these agent IDs; an empty list includes all.
 	Agents []string
-	Roles  []string
+	// Roles limits message scans to these roles; an empty list includes both.
+	Roles []string
 	// BatchSize is the encode batch size (config batch_size).
 	BatchSize int
 	// ModelContextTokens is the maximum tokens accepted for one input.

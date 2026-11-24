@@ -219,6 +219,7 @@ func contentHash(content string) string {
 // successful refresh it stores the journal revision and archive id captured
 // before the scan. The watermark advances to the opaque value returned by
 // the source after a successful scan.
+// Refresh includes both user and assistant roles; Build applies role scope.
 func (ix *Index) Refresh(
 	ctx context.Context, src UnitSource, full, includeAutomated bool, agents []string,
 ) (RefreshStats, error) {

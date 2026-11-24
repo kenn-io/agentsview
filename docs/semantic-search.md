@@ -513,6 +513,9 @@ the index on the next build while keeping unchanged in-scope embeddings. The
 daemon reads the new value after it restarts. Keyword search, Recall embeddings,
 and hosted PostgreSQL embeddings ignore this setting.
 
+Upgrading from a version with the previous message index clears the local
+index once. The next build recreates it; your session archive is unchanged.
+
 ### Ollama quickstart
 
 ```bash

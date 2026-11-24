@@ -552,9 +552,12 @@ func countEmbeddingStoreUnits(
 		return 0, err
 	}
 	var n int
+	filterRoles := store != vector.RecallIndexSpec().Name
+	maxRunes := vector.RunMaxRunes(cfg.Vector.Embeddings.MaxInputChars)
 	if _, err := source.ScanEmbeddableUnits(
-		ctx, "", includeAutomated, cfg.Vector.Agents, vector.RunMaxRunes(cfg.Vector.Embeddings.MaxInputChars), func(u db.EmbeddableUnit) error {
-			if store == vector.RecallIndexSpec().Name || vector.UnitKindIncluded(cfg.Vector.Roles, u.Kind) {
+		ctx, "", includeAutomated, cfg.Vector.Agents, maxRunes,
+		func(u db.EmbeddableUnit) error {
+			if !filterRoles || vector.UnitKindIncluded(cfg.Vector.Roles, u.Kind) {
 				n++
 			}
 			return nil
