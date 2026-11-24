@@ -2410,6 +2410,11 @@ func TestCodexLabeledRunDiscoveryAndParse(t *testing.T) {
 	require.Len(t, outcome.Results, 1)
 	assert.Equal(t, "experiment/case", outcome.Results[0].Result.Session.Project)
 	assert.Empty(t, outcome.Results[0].Result.Session.GitRemote)
+	index := filepath.Join(home, CodexSessionIndexFilename)
+	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: index, EventKind: "write"})
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, path, changed[0].DisplayPath)
 }
 
 func TestCodexDotLabeledRunDiscoveryAndParse(t *testing.T) {
@@ -2427,4 +2432,26 @@ func TestCodexDotLabeledRunDiscoveryAndParse(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 	assert.Equal(t, ".", outcome.Results[0].Result.Session.Project)
+}
+
+func TestCodexDiscoveryLinkedRollout(t *testing.T) {
+	root := t.TempDir()
+	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
+	target := writeCodexProviderSessionContent(t, t.TempDir(), id, testjsonl.JoinJSONL(testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", tsEarly), testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1)))
+	day := filepath.Join(root, "2026", "10", "08")
+	require.NoError(t, os.MkdirAll(day, 0o755))
+	link := filepath.Join(day, filepath.Base(target))
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, link, sources[0].DisplayPath)
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	assert.Equal(t, "codex:"+id, outcome.Results[0].Result.Session.ID)
 }

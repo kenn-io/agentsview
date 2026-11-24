@@ -1006,11 +1006,10 @@ func (s codexSourceSet) discoverEachRoot(
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if !isCodexSessionFilename(entry.Name()) || !entry.Type().IsRegular() {
+		if !isCodexSessionFilename(entry.Name()) || entry.IsDir() {
 			return nil
 		}
-		// ReadDir already classified the entry without following symlinks.
-		// Reuse that result instead of issuing another lstat per rollout.
+		// Match the existing discovery behavior for linked rollouts.
 		source, ok := s.sourceRef(root, path, false)
 		if !ok {
 			if _, _, supported := CodexSessionPathInfo(root, path); supported {
@@ -1474,9 +1473,25 @@ func (s codexSourceSet) sourcesForIndexPath(
 		return nil, err
 	}
 	indexDir := filepath.Dir(indexPath)
+	for _, root := range s.roots {
+		if sessions := CodexLabeledIndexSessions(root, indexPath); sessions != "" {
+			return s.discoverEachSessions(ctx, root, sessions)
+		}
+	}
 	return s.discover(ctx, func(root string) bool {
 		return slices.Contains(s.metadata.dirs(root), indexDir)
 	})
+}
+
+func (s codexSourceSet) discoverEachSessions(ctx context.Context, root, sessions string) ([]SourceRef, error) {
+	var sources []SourceRef
+	err := s.discoverEachRoot(ctx, sessions, func(source SourceRef) error {
+		if ref, ok := s.sourceRef(root, source.DisplayPath, false); ok {
+			sources = append(sources, ref)
+		}
+		return nil
+	})
+	return sources, err
 }
 
 func (s codexSourceSet) sourceRef(

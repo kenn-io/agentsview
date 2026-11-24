@@ -884,6 +884,16 @@ func CodexSourceLabel(root, path string) string {
 	return filepath.ToSlash(filepath.Clean(filepath.Join(parts[:n-6]...)))
 }
 
+// CodexLabeledIndexSessions returns the sessions directory for a marked run's index.
+func CodexLabeledIndexSessions(root, indexPath string) string {
+	home := filepath.Dir(indexPath)
+	rel, err := filepath.Rel(root, home)
+	if err != nil || !filepath.IsLocal(rel) || !strings.HasPrefix(filepath.Base(home), ".codex-run-v1-") || filepath.Base(indexPath) != CodexSessionIndexFilename {
+		return ""
+	}
+	return filepath.Join(home, "sessions")
+}
+
 // walkCodexDayDirs traverses a Codex sessions directory with
 // year/month/day structure, calling fn for each valid day directory.
 // fn returns false to stop traversal.
