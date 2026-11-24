@@ -1635,7 +1635,7 @@ func TestRemoteHostSyncFuncDispatchesHTTPTransport(t *testing.T) {
 	assert.Equal(t, "https://test-host.example.test", called.URL)
 }
 
-func TestRemoteHostSyncFuncForcesFullWhenDatabaseNeedsResync(t *testing.T) {
+func TestRemoteHostSyncFuncDoesNotForceFullWhenDatabaseNeedsResync(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	database, err := db.Open(t.Context(), dbPath)
 	require.NoError(t, err)
@@ -1656,7 +1656,7 @@ func TestRemoteHostSyncFuncForcesFullWhenDatabaseNeedsResync(t *testing.T) {
 		Machine:   "local",
 	})
 
-	var gotFull bool
+	gotFull := true
 	syncFn := remoteHostSyncFunc(
 		t.Context(),
 		config.Config{},
@@ -1675,7 +1675,135 @@ func TestRemoteHostSyncFuncForcesFullWhenDatabaseNeedsResync(t *testing.T) {
 	_, err = syncFn()
 
 	require.NoError(t, err)
-	assert.True(t, gotFull, "scheduled remote sync should force full when DB needs resync")
+	assert.False(t, gotFull,
+		"scheduled remote sync should let per-host version tracking rebuild without forcing explicit-full")
+}
+
+func TestCollectorOnlyScheduledRemoteSyncDoesNotLoopFullAfterUpgrade(t *testing.T) {
+	remoteAgentDir := t.TempDir()
+	projDir := filepath.Join(remoteAgentDir, "-home-proj")
+	require.NoError(t, os.MkdirAll(projDir, 0o755))
+	sessionFile := filepath.Join(projDir, "remote-sess.jsonl")
+	require.NoError(t, os.WriteFile(sessionFile, []byte(testjsonl.NewSessionBuilder().
+		AddClaudeUser("2026-01-01T00:00:00Z", "hello from remote").
+		AddClaudeAssistant("2026-01-01T00:00:01Z", "hi from remote").
+		String()), 0o644))
+
+	remoteDataDir := t.TempDir()
+	remoteDB, err := db.Open(t.Context(), filepath.Join(remoteDataDir, "sessions.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, remoteDB.Close()) })
+
+	remoteCfg := config.Config{
+		Host:      "127.0.0.1",
+		DataDir:   remoteDataDir,
+		AuthToken: "remote-token",
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {remoteAgentDir},
+		},
+	}
+	var manifestRequests, archiveRequests atomic.Int32
+	remoteHandler := server.New(remoteCfg, remoteDB, nil).Handler()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/remote-sync/manifest":
+			manifestRequests.Add(1)
+		case "/api/v1/remote-sync/archive":
+			archiveRequests.Add(1)
+		}
+		remoteHandler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(ts.Close)
+
+	collectorDataDir := t.TempDir()
+	collectorCfg := config.Config{
+		DataDir:        collectorDataDir,
+		DBPath:         filepath.Join(collectorDataDir, "sessions.db"),
+		InstallationID: "0123456789abcdef0123456789abcdef",
+		RemoteHosts: []config.RemoteHost{{
+			Host:      "remote-box",
+			Transport: config.RemoteTransportHTTP,
+			URL:       ts.URL,
+			Token:     "remote-token",
+		}},
+	}
+	database, err := db.Open(t.Context(), collectorCfg.DBPath)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if database != nil {
+			require.NoError(t, database.Close())
+		}
+	})
+	engine1 := agentsync.NewEngine(t.Context(), database, workerEngineConfig(collectorCfg))
+
+	var lastStats remotesync.SyncStats
+	newSyncFn := func(targetDB *db.DB, runner remoteSyncExclusiveRunner) func() (int, error) {
+		return remoteHostSyncFunc(
+			t.Context(), collectorCfg, targetDB, runner, collectorCfg.RemoteHosts[0],
+			func(
+				ctx context.Context, cfg config.Config, d *db.DB,
+				rh config.RemoteHost, full bool,
+			) (remotesync.SyncStats, error) {
+				stats, err := runRemoteSyncTransportWithCleanup(ctx, cfg, d, rh, full, false)
+				lastStats = stats
+				return stats, err
+			},
+		)
+	}
+
+	syncFn := newSyncFn(database, engine1)
+	synced, err := syncFn()
+	require.NoError(t, err)
+	assert.Equal(t, 1, synced)
+	assert.Equal(t, int32(1), manifestRequests.Load())
+	assert.Equal(t, int32(1), archiveRequests.Load())
+
+	// Simulate an upgrade bumping the archive data version.
+	engine1.Close()
+	require.NoError(t, database.Close())
+	database = nil
+	markArchiveStale(t, collectorCfg.DBPath)
+
+	database, err = db.Open(t.Context(), collectorCfg.DBPath)
+	require.NoError(t, err)
+	require.True(t, database.NeedsResync())
+	require.NoError(t, database.SetRemoteImportDataVersion(t.Context(), "remote-box", 1))
+	engine := agentsync.NewEngine(t.Context(), database, workerEngineConfig(collectorCfg))
+	t.Cleanup(engine.Close)
+
+	// Even before a local resync clears NeedsResync(), scheduled remote syncs
+	// must NOT force explicit-full or re-download unchanged archives.
+	syncFn = newSyncFn(database, engine)
+	_, err = syncFn()
+	require.NoError(t, err)
+	assert.Equal(t, remotesync.FullImportDataRebuild, lastStats.FullReason)
+	assert.Equal(t, int32(1), archiveRequests.Load(),
+		"upgraded remote sync must reuse its local mirror instead of re-downloading")
+
+	// A second tick before NeedsResync() clears stays incremental.
+	_, err = syncFn()
+	require.NoError(t, err)
+	assert.Empty(t, lastStats.FullReason)
+	assert.Equal(t, int32(1), archiveRequests.Load())
+
+	// Collector-only local resync clears NeedsResync() and keeps remote rows.
+	resyncStats := engine.ResyncAll(t.Context(), nil)
+	require.False(t, resyncStats.Aborted)
+	assert.True(t, resyncStats.ArchiveRebuilt)
+	assert.False(t, database.NeedsResync())
+	assert.Equal(t, 1, resyncStats.OrphanedCopied)
+
+	// First tick after DB replacement rebuilds from the local mirror once.
+	_, err = syncFn()
+	require.NoError(t, err)
+	assert.Equal(t, remotesync.FullImportDataRebuild, lastStats.FullReason)
+	assert.Equal(t, int32(1), archiveRequests.Load())
+
+	// Next tick returns to incremental mode with zero full-rebuild work.
+	_, err = syncFn()
+	require.NoError(t, err)
+	assert.Empty(t, lastStats.FullReason)
+	assert.Equal(t, int32(1), archiveRequests.Load())
 }
 
 func TestStartRemoteHostSync_TracksRemoteWorkForIdleReaper(t *testing.T) {

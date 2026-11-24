@@ -230,6 +230,10 @@ func importEngineConfig(
 	}
 }
 
+// HostIDPrefix returns the session ID prefix used to namespace sessions
+// imported from host.
+func HostIDPrefix(host string) string { return rebuildIDPrefix(host) }
+
 func rebuildIDPrefix(host string) string { return host + "~" }
 
 func loadImportSkipCache(ctx context.Context,
