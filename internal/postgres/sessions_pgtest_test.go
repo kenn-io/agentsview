@@ -83,8 +83,8 @@ func TestSidebarIncludesAutomatedLaunchChild(t *testing.T) {
 			 message_count, user_message_count, is_automated, labels, created_at, session_kind)
 		VALUES
 			('launcher', 'm', 'launch-project', 'claude', 'root', NULL, 3, 3, false, '{}', NOW(), ''),
-			('worker', 'm', 'launch-project', 'codex', 'subagent', 'launcher', 1, 1, true, '{ticket=example}', NOW(), 'non-interactive'),
-			('native', 'm', 'launch-project', 'codex', 'subagent', 'launcher', 1, 1, true, '{ticket=example}', NOW(), 'non-interactive'),
+			('worker', 'm', 'launch-project', 'codex', 'subagent', 'launcher', 1, 1, true, '{}', NOW(), 'non-interactive'),
+			('native', 'm', 'launch-project', 'codex', 'subagent', 'launcher', 1, 1, true, '{}', NOW(), 'non-interactive'),
 			('spawned', 'm', 'launch-project', 'codex', 'subagent', 'launcher', 1, 1, true, '{}', NOW(), 'non-interactive'),
 			('orphan', 'm', 'launch-project', 'codex', 'subagent', NULL, 1, 1, true, '{}', NOW(), 'non-interactive')`)
 	require.NoError(t, err)

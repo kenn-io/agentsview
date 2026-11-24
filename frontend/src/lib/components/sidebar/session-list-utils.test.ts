@@ -931,16 +931,19 @@ describe("nested subagent rows", () => {
       .map((item) => [item.session!.id, item.depth, item.isLastChild]);
   }
 
-  it("renders each run under its launcher at its depth", () => {
-    const [group] = buildSessionGroups(launchedTree());
-    expect(rows(group!)).toEqual([
-      ["d", 2, false],
-      ["b", 2, true],
-      ["c", 3, true],
-    ]);
-  });
-
   it.each([
+    {
+      name: "each run under its launcher at its depth",
+      run: () => {
+        const [group] = buildSessionGroups(launchedTree());
+        return rows(group!);
+      },
+      expected: [
+        ["d", 2, false],
+        ["b", 2, true],
+        ["c", 3, true],
+      ],
+    },
     {
       name: "a shared run under the launcher each group shows",
       run: () => {

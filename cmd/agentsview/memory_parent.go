@@ -9,10 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -170,25 +168,13 @@ func launcherArchiveID(ctx context.Context, home, agent, native string) (string,
 	return native, nil
 }
 
-// storedSessionID validates a native ID and adds the agent's archive prefix.
+// storedSessionID adds the agent's archive prefix to a native ID.
 func storedSessionID(agent, id string) (string, error) {
-	session, err := gittrailer.Discover(func(name string) string {
-		switch name {
-		case "AGENTSVIEW_SESSION_AGENT":
-			return agent
-		case "AGENTSVIEW_SESSION_ID":
-			return id
-		}
-		return ""
-	})
-	if err != nil {
-		return "", err
-	}
 	def, ok := parser.AgentByType(parser.AgentType(agent))
 	if !ok {
 		return "", fmt.Errorf("unknown agent %q", agent)
 	}
-	return def.IDPrefix + session.ID, nil
+	return def.IDPrefix + id, nil
 }
 
 type sessionStartCapture struct {
@@ -203,15 +189,10 @@ func (c *sessionStartCapture) SessionStart(
 	return agenthook.SessionStartOutput{}, nil
 }
 
-// readHookInput returns stdin, or nil when stdin is a terminal. A harness
-// closes stdin after writing the payload; the deadline covers one that
-// doesn't, and the abandoned read ends with the process.
+// readHookInput returns stdin. A harness closes stdin after writing the
+// payload; the deadline covers one that doesn't, and the abandoned read ends
+// with the process.
 func readHookInput(ctx context.Context, r io.Reader) ([]byte, error) {
-	if f, ok := r.(*os.File); ok {
-		if info, err := f.Stat(); err == nil && info.Mode()&os.ModeCharDevice != 0 {
-			return nil, nil
-		}
-	}
 	type result struct {
 		data []byte
 		err  error
@@ -353,36 +334,5 @@ func codexIndexedPage(ctx context.Context, home, thread string) (string, error) 
 	if home == "" {
 		return "", nil
 	}
-	paths, _ := filepath.Glob(filepath.Join(home, "state_*.sqlite"))
-	latest := -1
-	var state string
-	for _, path := range paths {
-		name := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(path), "state_"), ".sqlite")
-		version, err := strconv.Atoi(name)
-		if err == nil && version > latest {
-			latest, state = version, path
-		}
-	}
-	if state == "" {
-		return "", os.ErrNotExist
-	}
-	path := filepath.ToSlash(state)
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-	uri := (&url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro&_busy_timeout=1000"}).String()
-	conn, err := sql.Open("sqlite3", uri)
-	if err != nil {
-		return "", err
-	}
-	defer conn.Close()
-	var rollout string
-	if err := conn.QueryRowContext(ctx, "SELECT rollout_path FROM threads WHERE id = ?", thread).Scan(&rollout); err != nil {
-		return "", err
-	}
-	key := parser.CodexSessionUUIDFromPath(rollout)
-	if parser.CodexThreadIDFromSessionKey(key) != thread {
-		return "", nil
-	}
-	return key, nil
+	return parser.CodexIndexedSessionKey(ctx, home, thread)
 }

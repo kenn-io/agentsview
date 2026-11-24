@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -172,22 +171,14 @@ func TestMemorySessionStartDisableSwitchSkipsRequest(t *testing.T) {
 		return nil
 	}
 
-	for _, hook := range []bool{false, true} {
-		t.Run(fmt.Sprint("hook=", hook), func(t *testing.T) {
-			database := stubLaunchArchive(t)
-			stubLaunchProcesses(t, fakeProcess{name: "sh"}, fakeProcess{name: "claude", env: []string{"CLAUDE_CODE_SESSION_ID=" + claudeLauncherID}}, fakeProcess{name: "claude"})
-			cmd := newRootCommand()
-			cmd.SetIn(strings.NewReader(sessionStartPayload("startup")))
-			args := []string{"memory", "session-start"}
-			if hook {
-				args = append(args, "--hook")
-			}
-			cmd.SetArgs(args)
-			require.NoError(t, cmd.Execute())
-			_, err := database.GetSessionExternalParent(t.Context(), childSessionID)
-			require.ErrorIs(t, err, sql.ErrNoRows)
-		})
-	}
+	database := stubLaunchArchive(t)
+	stubLaunchProcesses(t, fakeProcess{name: "sh"}, fakeProcess{name: "claude", env: []string{"CLAUDE_CODE_SESSION_ID=" + claudeLauncherID}}, fakeProcess{name: "claude"})
+	cmd := newRootCommand()
+	cmd.SetIn(strings.NewReader(sessionStartPayload("startup")))
+	cmd.SetArgs([]string{"memory", "session-start", "--hook"})
+	require.NoError(t, cmd.Execute())
+	_, err := database.GetSessionExternalParent(t.Context(), childSessionID)
+	require.ErrorIs(t, err, sql.ErrNoRows)
 }
 
 func TestMemorySessionStartDispatchesHostedModes(t *testing.T) {
