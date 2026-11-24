@@ -254,17 +254,20 @@ func bashChangesRepositoryContext(file *syntax.File, cwd string) (bool, bool, bo
 		assigns []*syntax.Assign
 	}
 	type event struct {
-		node  syntax.Node
-		scope scope
+		node      syntax.Node
+		scope     scope
+		uncertain bool
 	}
 	var events []event
 	var stack []scope
 	functions := make(map[string]*syntax.Stmt)
 	active := make(map[string]bool)
 	expansions := 0
+	// Bound the combined traversal and parsing work from expanded shell bodies.
+	remaining := 100000
 	var calls []prShellCall
-	var walk func(syntax.Node)
-	walk = func(root syntax.Node) {
+	var walk func(syntax.Node, bool)
+	walk = func(root syntax.Node, expanded bool) {
 		syntax.Walk(root, func(node syntax.Node) bool {
 			if node == nil {
 				if call := stack[len(stack)-1].call; call >= 0 {
@@ -272,6 +275,14 @@ func bashChangesRepositoryContext(file *syntax.File, cwd string) (bool, bool, bo
 				}
 				stack = stack[:len(stack)-1]
 				return true
+			}
+			if expanded {
+				cost := 1 + int(node.End().Offset()-node.Pos().Offset())
+				if cost > remaining {
+					remaining = 0
+					return false
+				}
+				remaining -= cost
 			}
 			var current scope
 			if len(stack) > 0 {
@@ -285,43 +296,53 @@ func bashChangesRepositoryContext(file *syntax.File, cwd string) (bool, bool, bo
 			case *syntax.Subshell, *syntax.CmdSubst, *syntax.ProcSubst:
 				current.local = true
 			case *syntax.CallExpr:
-				if len(n.Args) >= 3 && expansions < 4096 {
+				uncertain := false
+				if len(n.Args) >= 3 {
 					name, nameOK := shellLiteral(n.Args[0].Parts)
 					option, optionOK := shellLiteral(n.Args[1].Parts)
 					script, scriptOK := shellLiteral(n.Args[2].Parts)
 					if nameOK && optionOK && scriptOK && (path.Base(name) == "bash" || path.Base(name) == "sh") && (option == "-c" || option == "-lc") {
-						if nested, err := syntax.NewParser().Parse(strings.NewReader(script), ""); err == nil {
+						if expansions >= 4096 || len(script) > remaining {
+							uncertain = true
+						} else if nested, err := syntax.NewParser().Parse(strings.NewReader(script), ""); err == nil {
+							remaining -= len(script)
 							child := scope{local: true, call: -1, assigns: append(append([]*syntax.Assign(nil), current.assigns...), n.Assigns...)}
 							stack = append(stack, child)
 							expansions++
-							walk(nested)
+							walk(nested, true)
 							stack = stack[:len(stack)-1]
+							uncertain = remaining == 0
 						}
 					}
 				}
 				if len(n.Args) > 0 {
 					name, literal := shellLiteral(n.Args[0].Parts)
-					if body := functions[name]; literal && body != nil && !active[name] && expansions < 4096 {
-						child := scope{local: current.local, call: -1, assigns: append(append([]*syntax.Assign(nil), current.assigns...), n.Assigns...)}
-						stack = append(stack, child)
-						active[name] = true
-						expansions++
-						walk(body)
-						delete(active, name)
-						stack = stack[:len(stack)-1]
+					if body := functions[name]; literal && body != nil && !active[name] {
+						if expansions >= 4096 || remaining == 0 {
+							uncertain = true
+						} else {
+							child := scope{local: current.local, call: -1, assigns: append(append([]*syntax.Assign(nil), current.assigns...), n.Assigns...)}
+							stack = append(stack, child)
+							active[name] = true
+							expansions++
+							walk(body, true)
+							delete(active, name)
+							stack = stack[:len(stack)-1]
+							uncertain = uncertain || remaining == 0
+						}
 					}
 				}
 				current.call = len(calls)
 				calls = append(calls, prShellCall{n, len(events), current.assigns})
-				events = append(events, event{node, current})
+				events = append(events, event{node, current, uncertain})
 			case *syntax.DeclClause:
-				events = append(events, event{node, current})
+				events = append(events, event{node, current, false})
 			}
 			stack = append(stack, current)
 			return true
 		})
 	}
-	walk(file)
+	walk(file, false)
 	firstRepo, firstHost := -1, -1
 	var directory, repository, persistent bool
 	record := func(dst *int, index int) {
@@ -330,6 +351,11 @@ func bashChangesRepositoryContext(file *syntax.File, cwd string) (bool, bool, bo
 		}
 	}
 	for index, item := range events {
+		if item.uncertain {
+			record(&firstRepo, index)
+			record(&firstHost, index)
+			repository, persistent = true, true
+		}
 		switch n := item.node.(type) {
 		case *syntax.DeclClause:
 			for _, a := range n.Args {

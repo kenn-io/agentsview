@@ -530,8 +530,11 @@ func (db *DB) upgradeToolPRLinksTx(ctx context.Context, tx *sql.Tx) error {
 	if err != nil || version >= toolPRLinksDataVersion {
 		return err
 	}
+	if db.usageOnlyStorage() {
+		return nil
+	}
 	condition := "id IN (SELECT session_id FROM tool_calls WHERE category IN ('Bash','Task') AND input_json IS NOT NULL)"
-	if version < promptPRLinksDataVersion && !db.usageOnlyStorage() {
+	if version < promptPRLinksDataVersion {
 		// The prompt upgrade already refreshed these sessions, including tools.
 		condition += " AND id NOT IN (SELECT session_id FROM messages WHERE " + promptPRLinkCandidateSQL + ")"
 	}

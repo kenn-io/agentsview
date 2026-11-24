@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -149,4 +150,22 @@ func TestCommandPRLinks(t *testing.T) {
 func commandPRLinks(ctx context.Context, command, remote string, allowBare bool) ([]PRLink, error) {
 	links, _, _, _, _, err := AnalyzePRCommand(ctx, command, "", remote, allowBare, false)
 	return links, err
+}
+
+func TestCommandPRLinksBoundsExpandedShellWork(t *testing.T) {
+	command := `heavy() { ` + strings.Repeat(`:; `, 1000) + `}; target() { gh pr view 42 -R github.com/example/repo; }; ` + strings.Repeat(`heavy; `, 100) + `target; gh pr view 44; gh pr view 43 -R github.com/example/repo`
+	links, err := commandPRLinks(t.Context(), command, "https://github.com/example/repo.git", true)
+	require.NoError(t, err)
+	require.Len(t, links, 1)
+	assert.Equal(t, 43, links[0].Number)
+	command = `heavy() { printf '` + strings.Repeat(`x`, 20000) + `'; }; target() { gh pr view 42 -R github.com/example/repo; }; ` + strings.Repeat(`heavy; `, 10) + `target; gh pr view 43 -R github.com/example/repo`
+	links, err = commandPRLinks(t.Context(), command, "", true)
+	require.NoError(t, err)
+	require.Len(t, links, 1)
+	assert.Equal(t, 43, links[0].Number)
+	command = `bash -c '` + strings.Repeat(`:;`, 50001) + `git remote set-url origin https://github.com/example/other.git'; gh pr view 42; gh pr view 43 -R github.com/example/repo`
+	links, err = commandPRLinks(t.Context(), command, "https://github.com/example/repo.git", true)
+	require.NoError(t, err)
+	require.Len(t, links, 1)
+	assert.Equal(t, 43, links[0].Number)
 }

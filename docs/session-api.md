@@ -684,8 +684,8 @@ ______________________________________________________________________
 Each session's `pr_links` field lists pull requests found in retained user
 prompts, supported `gh pr` commands, child-agent prompts, or structured
 transcript records. Supported actions are `view`, `checkout` (including `co`),
-`edit`, `diff`, `checks`, `comment`, `review`, `ready`, `merge`, `close`, and
-`reopen`.
+`edit`, `diff`, `checks`, `comment`, `review`, `ready`, `merge`, `close`,
+`reopen`, `update-branch`, `lock`, `unlock`, and `revert`.
 Commands can name a pull request by URL or number. A number can use `-R` or
 `--repo` with `owner/repo` or `host/owner/repo`.
 
@@ -704,8 +704,10 @@ AgentsView keeps one link per pull request. A bare number uses the session's
 single checkout remote when the command runs in the session's working directory.
 An explicit `owner/repo` uses the checkout remote's host or a literal `GH_HOST`
 in the command, falling back to `github.com` when neither is available. A
-host-qualified repository or a full PR URL supplies its own host. AgentsView
-scans retained Claude Bash inputs for earlier directory and repository changes
+host-qualified repository or a full PR URL supplies its own host. Large shell
+commands or scripts may reach the parsing limit and yield incomplete links.
+AgentsView scans retained Claude
+Bash inputs for earlier directory and repository changes
 when a later bare number needs the checkout remote. After a directory change, a
 captured working directory matching the session's directory restores that
 remote. Hosted sessions link commands with an explicit repository or URL.
