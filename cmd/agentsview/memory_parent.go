@@ -288,6 +288,8 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 		if _, err := toml.DecodeFile(filepath.Join(home, "config.toml"), &config); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
+		var profile, sqliteOverride string
+		var hasSQLiteOverride bool
 		if launcherProcess.Cmdline != nil {
 			args, err := launcherProcess.Cmdline(ctx)
 			if err != nil {
@@ -300,6 +302,17 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 				}
 				var override string
 				switch {
+				case arg == "-p" || arg == "--profile":
+					if i+1 < len(args) {
+						i++
+						profile = args[i]
+					}
+				case strings.HasPrefix(arg, "--profile="):
+					profile = strings.TrimPrefix(arg, "--profile=")
+				case strings.HasPrefix(arg, "-p="):
+					profile = strings.TrimPrefix(arg, "-p=")
+				case strings.HasPrefix(arg, "-p"):
+					profile = strings.TrimPrefix(arg, "-p")
 				case arg == "-c" || arg == "--config":
 					if i+1 < len(args) {
 						i++
@@ -314,11 +327,26 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 				}
 				key, value, found := strings.Cut(override, "=")
 				if found && strings.TrimSpace(key) == "sqlite_home" {
-					if _, err := toml.Decode(override, &config); err != nil {
-						config.SQLiteHome = strings.TrimSpace(value)
+					var parsed struct {
+						SQLiteHome string `toml:"sqlite_home"`
 					}
+					if _, err := toml.Decode(override, &parsed); err != nil {
+						parsed.SQLiteHome = strings.TrimSpace(value)
+					}
+					sqliteOverride, hasSQLiteOverride = parsed.SQLiteHome, true
 				}
 			}
+		}
+		if profile != "" {
+			if strings.Trim(profile, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != "" {
+				return fmt.Errorf("invalid Codex profile name %q", profile)
+			}
+			if _, err := toml.DecodeFile(filepath.Join(home, profile+".config.toml"), &config); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+		}
+		if hasSQLiteOverride {
+			config.SQLiteHome = sqliteOverride
 		}
 		if config.SQLiteHome != "" {
 			// Codex resolves a relative config path against its home.

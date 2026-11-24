@@ -43,14 +43,13 @@ func TestCodexIndexedSessionKey(t *testing.T) {
 	}
 }
 
-func TestCodexIndexedSessionKeyIgnoresFutureIndex(t *testing.T) {
+func TestCodexIndexedSessionKeyRejectsFutureIndex(t *testing.T) {
 	home := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(home, "state_999.sqlite"), nil, 0o600))
 	_, err := CodexIndexedSessionKey(t.Context(), home, "thread")
-	require.ErrorIs(t, err, os.ErrNotExist)
+	require.ErrorContains(t, err, "unsupported Codex state index")
 	const thread = "22222222-2222-4222-8222-222222222222"
 	testutil.WriteCodexState(t, home, "state_5.sqlite", thread, thread)
-	got, err := CodexIndexedSessionKey(t.Context(), home, thread)
-	require.NoError(t, err)
-	assert.Equal(t, thread, got)
+	_, err = CodexIndexedSessionKey(t.Context(), home, thread)
+	require.ErrorContains(t, err, "unsupported Codex state index")
 }

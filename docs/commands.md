@@ -2502,8 +2502,9 @@ the skill without inspecting or changing the MCP entry.
 
 The SessionStart hook refreshes memory and links runs to their launching
 session on Linux and Windows. Parent linking on macOS is unverified. Codex
-launchers support `sqlite_home` in `config.toml` or a `-c` override, and
-`CODEX_SQLITE_HOME`. Codex requires you to trust a new hook in `/hooks`.
+launchers support `sqlite_home` in `config.toml`, a selected profile, or a
+`-c` override, and `CODEX_SQLITE_HOME`. Codex requires you to trust a new hook
+in `/hooks`.
 
 In a ClickHouse sidebar, native automated subagents may also appear under a
 parent because the mirror does not store launcher provenance.

@@ -395,6 +395,45 @@ func TestCaptureLaunchParentCodexConfigOverride(t *testing.T) {
 	assert.Equal(t, "codex:"+page, link.ParentSessionID)
 }
 
+func TestCaptureLaunchParentCodexProfile(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		args     func(string) []string
+		override bool
+	}{
+		{"profile", func(string) []string { return []string{"--profile", "work"} }, false},
+		{"short profile", func(string) []string { return []string{"-pwork"} }, false},
+		{"override before profile", func(home string) []string {
+			return []string{"-c", fmt.Sprintf("sqlite_home=%q", home), "--profile=work"}
+		}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home, profileHome, overrideHome := t.TempDir(), t.TempDir(), t.TempDir()
+			profilePage := codexLauncherID + "_44444444-4444-4444-8444-444444444444"
+			overridePage := codexLauncherID + "_55555555-5555-4555-8555-555555555555"
+			writeCodexState(t, home, codexLauncherID, codexLauncherID)
+			writeCodexState(t, profileHome, codexLauncherID, profilePage)
+			writeCodexState(t, overrideHome, codexLauncherID, overridePage)
+			require.NoError(t, os.WriteFile(filepath.Join(home, "work.config.toml"), fmt.Appendf(nil, "sqlite_home = %q\n", profileHome), 0o600))
+			database := stubLaunchArchive(t)
+			stubLaunchProcesses(t,
+				fakeProcess{name: "sh"},
+				fakeProcess{name: "claude", env: []string{"CODEX_THREAD_ID=" + codexLauncherID}},
+				fakeProcess{name: "codex", env: []string{"CODEX_HOME=" + home}, args: tc.args(overrideHome)},
+			)
+			_, err := runLaunchHook(t, sessionStartPayload("startup"))
+			require.NoError(t, err)
+			link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
+			require.NoError(t, err)
+			want := profilePage
+			if tc.override {
+				want = overridePage
+			}
+			assert.Equal(t, "codex:"+want, link.ParentSessionID)
+		})
+	}
+}
+
 func TestCaptureLaunchParentCodexSQLiteHomePaths(t *testing.T) {
 	for _, tc := range []struct {
 		name            string
