@@ -1851,6 +1851,7 @@ func TestActivityReportFilteredRunsKeepMatchingLauncherActive(t *testing.T) {
 		{name: "agent", filter: AnalyticsFilter{Agent: "claude"}, childAgent: "codex", childProject: "project-a"},
 		{name: "project", filter: AnalyticsFilter{Project: "project-a"}, childAgent: "claude", childProject: "project-b"},
 		{name: "automation", filter: AnalyticsFilter{ExcludeAutomated: true}, childAgent: "claude", childProject: "project-a", automated: true},
+		{name: "human scope", filter: AnalyticsFilter{AutomatedScope: "human"}, childAgent: "claude", childProject: "project-a", automated: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)

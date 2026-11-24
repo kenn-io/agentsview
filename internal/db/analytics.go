@@ -136,7 +136,8 @@ type AnalyticsFilter struct {
 // ActivityNeedsEvidence reports whether a filter can hide a linked run.
 func (f AnalyticsFilter) ActivityNeedsEvidence() bool {
 	return len(CSVFilterValues(f.Machine)) > 0 || f.Project != "" || f.GitBranch != "" ||
-		len(CSVFilterValues(f.Agent)) > 0 || f.ExcludeInteractive || f.ExcludeAutomated
+		len(CSVFilterValues(f.Agent)) > 0 || f.ExcludeInteractive || f.ExcludeAutomated ||
+		f.AutomatedScope == "human" || f.AutomatedScope == "automated"
 }
 
 // TrendsSessionFilter keeps session-level filters for Trends candidate selection.
