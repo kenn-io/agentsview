@@ -451,8 +451,7 @@ func taskPRLinks(ctx context.Context, input string) ([]PRLink, error) {
 // structured but does not parse.
 func shellInputCommands(input string) (commands []string, ok bool) {
 	if !jsontext.Value(input).IsValid() {
-		command := commitCommandText(input)
-		return []string{command}, command != ""
+		return textShellCommands(input)
 	}
 	var payload struct {
 		Command  jsontext.Value `json:"command"`
@@ -470,6 +469,18 @@ func shellInputCommands(input string) (commands []string, ok bool) {
 		return payload.Commands, true
 	}
 	return []string{payload.Cmd}, true
+}
+
+// textShellCommands reads input that is not JSON: code-mode text names its one
+// literal command, and anything else is shell text. Text shaped like
+// structured JSON that does not parse is rejected.
+func textShellCommands(input string) ([]string, bool) {
+	if commitToolCallRE.MatchString(input) {
+		command := commitCommandText(input)
+		return []string{command}, command != ""
+	}
+	text := strings.TrimSpace(input)
+	return []string{input}, text != "" && text[0] != '{' && text[0] != '['
 }
 
 // commandValue decodes a command given as shell text or as an argv list.
