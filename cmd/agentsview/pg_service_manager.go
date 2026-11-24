@@ -102,6 +102,7 @@ func serviceRuntimeEnvVars(kind serviceKind) []string {
 			vars = append(vars, def.DefaultRootEnvVar)
 		}
 	}
+	vars = append(vars, config.MetaHarnessEnvVars()...)
 	return vars
 }
 

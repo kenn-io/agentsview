@@ -1271,26 +1271,11 @@ func (b *fsnotifyBackend) shouldDropEvent(path string) bool {
 // directory rather than an intermediate directory on the way to one.
 func (b *fsnotifyBackend) filesVisibleIn(dir, root string) bool {
 	root = filepath.Clean(root)
-	dir = filepath.Clean(dir)
 	b.depthMu.RLock()
 	limit := b.rootDepths[root]
 	patterns := b.rootExtraDirs[root]
 	b.depthMu.RUnlock()
-	if limit <= 0 {
-		return true
-	}
-	rel, err := filepath.Rel(root, dir)
-	if err != nil || rel == "." {
-		return true
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return false
-	}
-	parts := strings.Split(rel, string(filepath.Separator))
-	if len(parts) <= limit {
-		return true
-	}
-	return extraCoversFiles(parts, patterns)
+	return watchDepthFilesVisibleIn(dir, root, limit, patterns)
 }
 
 // shouldExcludeForRoot reports whether a directory under root stays unwatched,
@@ -1327,87 +1312,7 @@ func (b *fsnotifyBackend) beyondRootDepth(path, root string, slack int) bool {
 	limit := b.rootDepths[root]
 	patterns := b.rootExtraDirs[root]
 	b.depthMu.RUnlock()
-	if limit <= 0 {
-		return false
-	}
-	rel, err := filepath.Rel(root, filepath.Clean(path))
-	if err != nil || rel == "." || rel == ".." ||
-		strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return false
-	}
-	parts := strings.Split(rel, string(filepath.Separator))
-	if len(parts) <= limit+slack {
-		return false
-	}
-	if extraCoversDirectory(parts, patterns) {
-		return false
-	}
-	return slack <= 0 || len(parts) < 2 ||
-		!extraCoversFiles(parts[:len(parts)-1], patterns)
-}
-
-// extraCoversDirectory reports whether parts is a listed extra directory or
-// an intermediate directory on the way to one.
-func extraCoversDirectory(parts, patterns []string) bool {
-	for _, pattern := range patterns {
-		want := extraPatternParts(pattern)
-		if matchExtraPrefix(parts, want) {
-			return true
-		}
-	}
-	return false
-}
-
-// extraCoversFiles reports whether parts is a listed extra directory whose
-// files should be reported. An intermediate directory listed only because a
-// longer pattern passes through it does not qualify.
-func extraCoversFiles(parts, patterns []string) bool {
-	for _, pattern := range patterns {
-		want := extraPatternParts(pattern)
-		if len(want) != len(parts) || !matchExtraPrefix(parts, want) {
-			continue
-		}
-		if extraHasLongerPattern(want, patterns) {
-			continue
-		}
-		return true
-	}
-	return false
-}
-
-func extraHasLongerPattern(prefix, patterns []string) bool {
-	for _, pattern := range patterns {
-		want := extraPatternParts(pattern)
-		if len(want) > len(prefix) && matchExtraPrefix(prefix, want) {
-			return true
-		}
-	}
-	return false
-}
-
-func extraPatternParts(pattern string) []string {
-	if pattern == "" {
-		return nil
-	}
-	parts := strings.Split(pattern, "/")
-	if slices.Contains(parts, "") {
-		return nil
-	}
-	return parts
-}
-
-// matchExtraPrefix reports whether parts equals want or a proper prefix of
-// want. "*" matches one directory name.
-func matchExtraPrefix(parts, want []string) bool {
-	if len(want) == 0 || len(parts) == 0 || len(parts) > len(want) {
-		return false
-	}
-	for i := range parts {
-		if want[i] != "*" && want[i] != parts[i] {
-			return false
-		}
-	}
-	return true
+	return watchDepthBeyond(path, root, limit, patterns, slack)
 }
 
 func (b *fsnotifyBackend) shouldEnumerateCreatedSubtree(root, path string) bool {
