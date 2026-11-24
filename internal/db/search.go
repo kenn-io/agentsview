@@ -465,7 +465,7 @@ func (db *DB) searchVersion(ctx context.Context, cjk bool) string {
 	if cjk {
 		fingerprint = simpleFTSRuntimeConfig.fingerprint
 	}
-	return fmt.Sprintf("%s|%s|%s", id, token, fingerprint)
+	return fmt.Sprintf("rank-v1|%s|%s|%s", id, token, fingerprint)
 }
 
 func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage, error) {
@@ -536,8 +536,7 @@ func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage,
 
 	// Relevance pages come from a walk over the matches in rank order when
 	// it can stop early; see walkSearchRanks. Recency pages rank every match
-	// inside the query, and so do project and date filters: most matches
-	// fall outside them, so the walk would read nearly all of them.
+	// inside the query.
 	// The walk and the page query share one snapshot: a sync that edits a
 	// walked message between them would leave its snippet NULL.
 	tx, err := db.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
@@ -547,7 +546,7 @@ func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage,
 	defer func() { _ = tx.Rollback() }()
 	var walk *searchRankWalk
 	floor := int64(math.MinInt64)
-	if f.Sort != "recency" && f.Project == "" && f.DateFrom == "" && f.DateTo == "" {
+	if f.Sort != "recency" {
 		floor, err = searchTierFloor(ctx, tx, ftsQuery.table, innerWhereSQL, ftsArgs)
 		if err != nil {
 			return SearchPage{}, err

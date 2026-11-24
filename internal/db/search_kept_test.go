@@ -4,6 +4,8 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -310,4 +312,25 @@ func TestSearchKeptHistoryToken(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSearchKeptRejectsOldRanking(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "session", "project")
+	insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "needle"})
+	var id, token string
+	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT
+		(SELECT value FROM archive_metadata WHERE key = ?),
+		(SELECT value FROM archive_metadata WHERE key = 'search_history_token')`, archiveMetadataDatabaseIDKey).Scan(&id, &token))
+	filter := SearchFilter{Query: "needle", Limit: 1}
+	oldPage, err := json.Marshal(SearchPage{Results: []SearchResult{{SessionID: "old"}}})
+	require.NoError(t, err)
+	d.trendsPartsDisk()
+	require.True(t, d.trendsDisk.Put("search|"+filter.Slot()+"|false", fmt.Sprintf("%s|%s|", id, token), oldPage))
+	page, err := d.Search(ctx, filter)
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	require.Equal(t, "session", page.Results[0].SessionID)
 }

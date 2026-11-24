@@ -88,21 +88,20 @@ func TestSearchRankWalkTiers(t *testing.T) {
 	_, err = tx.ExecContext(ctx, `
 	INSERT INTO sessions(id,project) VALUES ('session-0','proj'),('session-1','proj'),('session-2','proj'),('session-3','proj'),('session-4','proj'),('session-5','proj'),('session-6','proj'),('title','proj'),('boundary','proj'),('eligible','proj'),('eligible-old','proj'),('eligible-edge','proj'),('deleted','proj'),('image','proj'),('message-0','proj'),('message-1','proj'),('message-2','proj');
  UPDATE sessions SET first_message='tiers title' WHERE id='title';
+ UPDATE sessions SET started_at='2026-06-15T00:00:00Z', ended_at='2026-06-15T01:00:00Z';
  UPDATE sessions SET deleted_at='2026-01-01' WHERE id='deleted';
  INSERT INTO messages(session_id,ordinal,role,content) VALUES
- ('session-0',0,'user','tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers'),
- ('session-1',0,'user','tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers'),
- ('session-2',0,'user','tiers filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler');
+ ('session-0',0,'user','boundaryword tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers'),
+ ('session-1',0,'user','boundaryword tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers'),
+ ('session-2',0,'user','boundaryword tiers filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler');
  WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<65532)
- INSERT INTO messages(session_id,ordinal,role,content) SELECT 'session-6',i,'user','tiers filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler' FROM n;
+ INSERT INTO messages(session_id,ordinal,role,content) SELECT 'session-6',i,'user','boundaryword tiers filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler' FROM n;
  INSERT INTO messages(session_id,ordinal,role,content) VALUES
- ('session-3',0,'user','tiers filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler'),
+ ('session-3',0,'user','boundaryword tiers filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler'),
  ('session-4',0,'user','tiers filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler'),
  ('session-5',0,'user','tiers filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler'),
  ('session-6',0,'user','tiers filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler'),
  ('title',0,'user','other');
- WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<65535)
- INSERT INTO messages(session_id,ordinal,role,content) SELECT 'boundary',i,'user','boundaryword' FROM n;
 	INSERT INTO messages(session_id,ordinal,role,content) VALUES ('eligible-old',0,'user','eligibleword eligibleword eligibleword eligibleword eligibleword');
 	WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<4)
  INSERT INTO messages(session_id,ordinal,role,content) SELECT 'eligible',i,'user','eligibleword' FROM n;
@@ -150,6 +149,17 @@ func TestSearchRankWalkTiers(t *testing.T) {
 				}
 			}
 			assert.Equal(t, "title", results[7].SessionID)
+		}
+	})
+	t.Run("filtered tiers", func(t *testing.T) {
+		for _, filter := range []SearchFilter{
+			{Query: "tiers", Limit: 1, Project: "proj"},
+			{Query: "tiers", Limit: 1, DateFrom: "2026-06-01", DateTo: "2026-06-30"},
+		} {
+			page, err := d.Search(ctx, filter)
+			require.NoError(t, err)
+			require.Len(t, page.Results, 1)
+			assert.Contains(t, []string{"session-3", "session-4", "session-5", "session-6"}, page.Results[0].SessionID)
 		}
 	})
 	t.Run("boundary", func(t *testing.T) {
