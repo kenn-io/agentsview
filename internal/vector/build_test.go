@@ -1181,6 +1181,7 @@ func TestBuildAgentScopeReconciles(t *testing.T) {
 	assert.NotEmpty(t, source.since)
 	build(nil)
 	require.NoError(t, ix.metaDelete(ctx, scopeAgentsKey))
+	source.since = ""
 	build(nil)
 	assert.NotEmpty(t, source.since)
 }
