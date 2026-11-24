@@ -683,11 +683,18 @@ func TestToolPRLinksSharedShellDirectoryAppend(t *testing.T) {
 }
 
 func TestTranscriptToolPRLinksPreservesDirectoryChange(t *testing.T) {
-	_, messages := ProjectSessionForStoragePolicy(Session{}, []Message{{ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"cd /work/other"}`}}}}, config.ArchiveContentTranscripts)
-	messages = append(messages, Message{ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42"}`}}})
+	_, messages := ProjectSessionForStoragePolicy(Session{}, []Message{{ToolCalls: []ToolCall{
+		{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"cd /work/other"}`},
+		{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42"}`},
+		{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 43 -R github.com/example/repo"}`},
+	}}}, config.ArchiveContentTranscripts)
+	for _, call := range messages[0].ToolCalls {
+		assert.Empty(t, call.InputJSON)
+	}
 	links, err := ToolCallPRLinks(t.Context(), messages, "/work/repo", "https://github.com/example/repo.git")
 	require.NoError(t, err)
-	assert.Empty(t, links)
+	require.Len(t, links, 1)
+	assert.Equal(t, "https://github.com/example/repo/pull/43", links[0].URL)
 }
 
 func TestCommandPRRecordedRemoteRepair(t *testing.T) {

@@ -107,7 +107,9 @@ func TestToolCallPRLinksBareNumberAfterDirectoryChange(t *testing.T) {
 	calls := []db.ToolCall{
 		{Category: "Bash", ToolName: "Bash", InputJSON: `{"command":"cd /work/other"}`},
 		{Category: "Bash", ToolName: "Bash", InputJSON: `{"command":"gh pr merge 60"}`},
+		{Category: "Bash", ToolName: "Bash", InputJSON: `{"command":"gh pr view 61 -R github.com/example/repo"}`},
 	}
 	links := toolCallPRLinks(t, []db.Message{{ToolCalls: calls}}, "/work/repo", "https://git.example/example/repo.git")
-	assert.Empty(t, links)
+	require.Len(t, links, 1)
+	assert.Equal(t, "https://github.com/example/repo/pull/61", links[0].URL)
 }
