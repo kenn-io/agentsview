@@ -41,6 +41,31 @@ func TestToolCallPRLinksCommandArray(t *testing.T) {
 	assert.Equal(t, 43, links[1].Number)
 }
 
+func TestToolCallPRLinksCodeMode(t *testing.T) {
+	for _, tc := range []struct{ name, input, want string }{
+		{"explicit repository", `text(await tools.exec_command({cmd:"gh pr view 42 -R example/repo"}))`, "https://github.com/example/repo/pull/42"},
+		{"bare number in another directory", `text(await tools.exec_command({cmd:"gh pr view 42",workdir:"/other"}))`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			links := toolCallPRLinks(t, []db.Message{{ToolCalls: []db.ToolCall{{ToolName: "exec", Category: "Bash", InputJSON: tc.input}}}}, "/work/repo", "https://github.com/example/repo.git")
+			if tc.want == "" {
+				assert.Empty(t, links)
+				return
+			}
+			require.Len(t, links, 1)
+			assert.Equal(t, tc.want, links[0].URL)
+		})
+	}
+}
+
+func TestToolCallPRLinksNestedRemoteChange(t *testing.T) {
+	calls := []db.ToolCall{
+		{Category: "Bash", ToolName: "Bash", InputJSON: `{"command":"bash -lc 'git remote set-url origin https://github.com/example/other.git'"}`},
+		{Category: "Bash", ToolName: "Bash", InputJSON: `{"command":"gh pr view 42"}`},
+	}
+	assert.Empty(t, toolCallPRLinks(t, []db.Message{{ToolCalls: calls}}, "/work/repo", "https://github.com/example/repo.git"))
+}
+
 func TestToolCallPRLinksWrappedCommands(t *testing.T) {
 	for _, tc := range []struct{ input, want string }{
 		{`{"command":"command gh pr view 41 -R example/repo"}`, "https://github.com/example/repo/pull/41"},

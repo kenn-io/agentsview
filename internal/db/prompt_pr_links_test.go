@@ -588,6 +588,23 @@ func TestTranscriptToolPRLinksCheckoutRemote(t *testing.T) {
 	assert.Equal(t, "https://git.example/example/other/pull/42", got.PRLinks[0].URL)
 }
 
+func TestTranscriptToolPRLinksSameRepositoryDifferentHosts(t *testing.T) {
+	d := testDB(t)
+	d.SetArchiveContent(config.ArchiveContentTranscripts)
+	s := Session{ID: "checkout-hosts", Project: "project", Machine: "local", Agent: "claude", Cwd: "/work/repo"}
+	require.NoError(t, d.UpsertSession(t.Context(), s))
+	obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://git.example/example/repo.git")
+	require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), obs))
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "assistant", ToolCalls: []ToolCall{{
+		ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo; gh pr view 42 -R github.com/example/repo"}`,
+	}}}}))
+	got, err := d.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	require.Len(t, got.PRLinks, 2)
+	assert.Equal(t, "https://git.example/example/repo/pull/42", got.PRLinks[0].URL)
+	assert.Equal(t, "https://github.com/example/repo/pull/42", got.PRLinks[1].URL)
+}
+
 func TestUsageToolPRLinksCheckoutHost(t *testing.T) {
 	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentUsage} {
 		t.Run(string(policy), func(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -16,6 +17,31 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/docbank/document/ocr"
 )
+
+func TestUsageArchiveCopyRetainsCheckoutHost(t *testing.T) {
+	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts} {
+		t.Run(string(policy), func(t *testing.T) {
+			source := testDB(t)
+			source.SetArchiveContent(policy)
+			s := Session{ID: "orphan", Project: "project", Machine: "local", Agent: "claude", Cwd: "/work/repo"}
+			require.NoError(t, source.UpsertSession(t.Context(), s))
+			obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://git.example/example/repo.git")
+			require.NoError(t, source.UpsertProjectIdentityObservation(t.Context(), obs))
+			require.NoError(t, source.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Role: "assistant", ToolCalls: []ToolCall{{
+				ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`,
+			}}}}))
+			dest := testDB(t)
+			dest.SetArchiveContent(config.ArchiveContentUsage)
+			_, err := dest.CopyOrphanedDataFrom(t.Context(), source.Path())
+			require.NoError(t, err)
+			require.NoError(t, dest.CopySessionMetadataFrom(t.Context(), source.Path()))
+			got, err := dest.GetSession(t.Context(), s.ID)
+			require.NoError(t, err)
+			require.Len(t, got.PRLinks, 1)
+			assert.Equal(t, "https://git.example/example/repo/pull/42", got.PRLinks[0].URL)
+		})
+	}
+}
 
 func TestOpenUsageOnlyPreservesStoredAutomationClassification(t *testing.T) {
 	for name, reopen := range map[string]func(context.Context, string, config.ArchiveContent) (*DB, error){

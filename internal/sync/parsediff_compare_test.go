@@ -2626,3 +2626,40 @@ func TestCompareStoredSessionToolLinksByArchiveContent(t *testing.T) {
 		})
 	}
 }
+
+func TestCompareStoredSessionPromptAndCommandLinks(t *testing.T) {
+	for _, appendPrompt := range []bool{false, true} {
+		name := "full sync"
+		if appendPrompt {
+			name = "incremental append"
+		}
+		t.Run(name, func(t *testing.T) {
+			d := openTestDB(t)
+			e := NewEngine(t.Context(), d, EngineConfig{Machine: "test-machine"})
+			pw := pdToolSession("pd-pr-links")
+			pw.msgs[1].ToolCalls[1].InputJSON = `{"command":"gh pr view 42 -R example/repo"}`
+			pw.msgs[2].IsSystem = false
+			pw.msgs[2].Content = "Review https://github.com/example/repo/pull/43"
+			pw.msgs[2].ContentLength = len(pw.msgs[2].Content)
+			initial := pw
+			if appendPrompt {
+				initial.msgs = pw.msgs[:2]
+			}
+			written, _, failed, _ := e.writeBatch([]pendingWrite{initial}, syncWriteBulk, false)
+			require.Equal(t, 1, written)
+			require.Zero(t, failed)
+			prepared, msgs, verdict := e.prepareSessionWrite(pw, nil)
+			require.Equal(t, sessionWriteOK, verdict)
+			if appendPrompt {
+				require.NoError(t, d.InsertMessages(t.Context(), msgs[2:]))
+			}
+			stored := pdFetchStored(t, d, prepared.ID)
+			require.Len(t, stored.PRLinks, 2)
+			diffs, err := e.compareStoredSession(t.Context(), stored, prepared, msgs, nil)
+			require.NoError(t, err)
+			for _, diff := range diffs {
+				assert.NotEqual(t, FieldPRLinks, diff.Field)
+			}
+		})
+	}
+}

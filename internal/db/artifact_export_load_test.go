@@ -209,6 +209,19 @@ func TestLoadArtifactExportDataCardinalityBoundaries(t *testing.T) {
 }
 
 func TestLoadArtifactExportDataRawByteBoundaries(t *testing.T) {
+	t.Run("retained PR links", func(t *testing.T) {
+		database := artifactExportLoadTestDB(t)
+		require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []Message{{
+			SessionID: "session", ToolCalls: []ToolCall{{ToolName: "Bash"}},
+		}}))
+		metadata := `{"links":[{"url":"https://github.com/example/repo/pull/42","host":"github.com","repository":"example/repo","number":42}]}`
+		_, err := database.getWriter().Exec(t.Context(), `UPDATE tool_calls SET pr_links=? WHERE session_id='session'`, metadata)
+		require.NoError(t, err)
+		limits := smallArtifactExportLoadLimits()
+		limits.MessageBytes = 50
+		_, err = database.LoadArtifactExportData(t.Context(), "session", limits)
+		require.ErrorIs(t, err, ErrArtifactExportLimit)
+	})
 	t.Run("prompt dialogue bytes", func(t *testing.T) {
 		database := artifactExportLoadTestDB(t)
 		content := strings.Repeat("x", 600)
