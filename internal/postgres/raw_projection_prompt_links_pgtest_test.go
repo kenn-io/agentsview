@@ -10,7 +10,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawderive"
 )
@@ -245,5 +247,38 @@ func TestRawProjectionCommandPRLinks(t *testing.T) {
 	require.NoError(t, err)
 	var links string
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&links))
+	assert.Equal(t, []db.PRLink{{URL: "https://github.com/example/repo/pull/43", Host: "github.com", Repository: "example/repo", Number: 43}}, db.DecodePRLinks(links))
+}
+
+func TestRawProjectionRefreshesRetainedToolLinks(t *testing.T) {
+	f := newProjectionFixture(t)
+	var err error
+	f.sink, err = NewRawProjectionStore(t.Context(), f.runtime, RawProjectionOptions{Tenant: f.tenant, Content: ingest.ContentOptions{ArchiveContent: config.ArchiveContentTranscripts}})
+	require.NoError(t, err)
+	outcome := projectionOutcome("start")
+	result := &outcome.Outcome.Results[0].Result
+	result.Session.Agent = parser.AgentRooCode
+	result.Session.ID = "roocode:portable"
+	result.Messages[1].ToolCalls[0].InputJSON = `{"command":"gh pr view 42 -R example/repo"}`
+	m, receipt := f.accept(t, "device-a", "initial", "", parser.AgentRooCode)
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
+	before, err := f.sink.Resolve(t.Context(), "roocode:portable")
+	require.NoError(t, err)
+	result.Messages[1].ToolCalls[0].InputJSON = `{"command":"gh pr view 43 -R example/repo"}`
+	m, receipt = f.accept(t, "device-a", "updated", receipt.Receipt, parser.AgentRooCode)
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
+	after, err := f.sink.Resolve(t.Context(), "roocode:portable")
+	require.NoError(t, err)
+	assert.Equal(t, before.SessionID, after.SessionID)
+	var links string
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, after.SessionID).Scan(&links))
+	assert.Equal(t, []db.PRLink{{URL: "https://github.com/example/repo/pull/43", Host: "github.com", Repository: "example/repo", Number: 43}}, db.DecodePRLinks(links))
+	result.Messages = nil
+	m, _ = f.accept(t, "device-a", "shortened", receipt.Receipt, parser.AgentRooCode)
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
+	retained, err := f.sink.Resolve(t.Context(), "roocode:portable")
+	require.NoError(t, err)
+	assert.Equal(t, before.SessionID, retained.SessionID)
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, retained.SessionID).Scan(&links))
 	assert.Equal(t, []db.PRLink{{URL: "https://github.com/example/repo/pull/43", Host: "github.com", Repository: "example/repo", Number: 43}}, db.DecodePRLinks(links))
 }

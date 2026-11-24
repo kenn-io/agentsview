@@ -664,3 +664,37 @@ func TestCommandPRRecordedRemoteRepair(t *testing.T) {
 	require.Len(t, got.PRLinks, 1)
 	assert.Equal(t, "https://github.com/example/repo/pull/42", got.PRLinks[0].URL)
 }
+
+func TestToolPRLinksRebuildRetainsCheckout(t *testing.T) {
+	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
+		t.Run(string(policy), func(t *testing.T) {
+			ctx := t.Context()
+			source := testDB(t)
+			for _, id := range []string{"orphan", "trashed"} {
+				s := Session{ID: id, Project: "project", Machine: "local", Agent: "claude", Cwd: "/work/repo"}
+				require.NoError(t, source.UpsertSession(ctx, s))
+				obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: id, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://git.example/example/repo.git")
+				require.NoError(t, source.UpsertProjectIdentityObservation(ctx, obs))
+				require.NoError(t, source.InsertMessages(ctx, []Message{{SessionID: id, Role: "assistant", ToolCalls: []ToolCall{{Category: "Bash", ToolName: "Bash", InputJSON: `{"command":"gh pr view 42"}`}}}}))
+			}
+			require.NoError(t, source.SoftDeleteSession(ctx, "trashed"))
+			dest := testDB(t)
+			dest.SetArchiveContent(policy)
+			_, err := dest.CopyTrashedDataFrom(ctx, source.Path())
+			require.NoError(t, err)
+			_, err = dest.CopyOrphanedDataFrom(ctx, source.Path())
+			require.NoError(t, err)
+			require.NoError(t, dest.CopySessionMetadataFrom(ctx, source.Path()))
+			for _, id := range []string{"orphan", "trashed"} {
+				var encoded string
+				require.NoError(t, dest.getReader().QueryRowContext(ctx, `SELECT pr_links FROM sessions WHERE id=?`, id).Scan(&encoded))
+				if policy.UsageOnly() {
+					assert.Empty(t, DecodePRLinks(encoded))
+				} else {
+					require.Len(t, DecodePRLinks(encoded), 1)
+					assert.Equal(t, "https://git.example/example/repo/pull/42", DecodePRLinks(encoded)[0].URL)
+				}
+			}
+		})
+	}
+}

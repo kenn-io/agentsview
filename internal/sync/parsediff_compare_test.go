@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/money"
@@ -2609,4 +2610,26 @@ func TestStripVirtualSourceSuffixVisualStudioCopilot(t *testing.T) {
 	)
 	assert.Equal(t, tracePath, stripVirtualSourceSuffix(virtual),
 		"the conversation suffix must strip to the physical trace path")
+}
+
+func TestCompareStoredSessionToolLinksByArchiveContent(t *testing.T) {
+	for _, policy := range []config.ArchiveContent{config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
+		t.Run(string(policy), func(t *testing.T) {
+			d := openTestDB(t)
+			e := NewEngine(t.Context(), d, EngineConfig{Machine: "test-machine", ArchiveContent: policy})
+			pw := pdToolSession("pd-tool-links")
+			pw.msgs[1].ToolCalls[1].InputJSON = `{"command":"gh pr view 42 -R example/repo"}`
+			written, _, failed, _ := e.writeBatch([]pendingWrite{pw}, syncWriteBulk, false)
+			require.Equal(t, 1, written)
+			require.Zero(t, failed)
+			prepared, msgs, verdict := e.prepareSessionWrite(pw, nil)
+			require.Equal(t, sessionWriteOK, verdict)
+			stored := pdFetchStored(t, d, prepared.ID)
+			diffs, err := e.compareStoredSession(t.Context(), stored, prepared, msgs, nil)
+			require.NoError(t, err)
+			for _, diff := range diffs {
+				assert.NotEqual(t, FieldPRLinks, diff.Field)
+			}
+		})
+	}
 }

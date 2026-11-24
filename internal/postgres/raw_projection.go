@@ -152,6 +152,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 	changed := false
 	derivedChanged := false
 	fresh := make(map[string][]byte)
+	freshLinks := make(map[string][]db.PRLink)
 	dialogueChanges := make([]string, 0)
 	for _, group := range ordered {
 		c, ok := candidates[group]
@@ -160,6 +161,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		}
 		previous, exists := priorByGroup[group]
 		var old ingest.PreparedSession
+		var originalPRLinks []db.PRLink
 		var history *ingest.PriorSession
 		if exists {
 			metadata, decodeErr := decodeRawPayload(previous.Payload)
@@ -177,6 +179,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			if loadErr != nil {
 				return loadErr
 			}
+			originalPRLinks = payload.Session.PRLinks
 			payload.Session = old.Session
 			old = payload
 			oldLoaded = true
@@ -238,16 +241,34 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			}
 		}
 		prepared.Signals = ingest.RefreshSignalRecencyAt(prepared.Session, prepared.Messages, prepared.Signals, s.options.Now())
-		revision, err := rawContentRevision(prepared)
+		identityPayload := prepared
+		if decision.Action == ingest.HistoryPreserve {
+			identityPayload.Session.PRLinks = originalPRLinks
+		}
+		revision, err := rawContentRevision(identityPayload)
 		if err != nil {
 			return err
+		}
+		payload, err := encodeRawPayload(identityPayload)
+		if err != nil {
+			return err
+		}
+		if decision.Action != ingest.HistoryPreserve && !s.options.Content.ArchiveContent.UsageOnly() {
+			promptLinks, err := db.PromptPRLinksContext(ctx, prepared.Messages)
+			if err != nil {
+				return err
+			}
+			toolLinks, err := db.ToolCallPRLinks(ctx, prepared.Messages, prepared.Session.Cwd, "")
+			if err != nil {
+				return err
+			}
+			prepared.Session.PRLinks = parser.CombinePRLinks(prepared.Session.PRLinks, promptLinks, toolLinks)
 		}
 		sessionID := "raw-row-" + rawDigest("row-v1", group, revision)
-		branchID := rawDigest("branch-v1", group, source)
-		payload, err := encodeRawPayload(prepared)
-		if err != nil {
-			return err
+		if decision.Action != ingest.HistoryPreserve {
+			freshLinks[sessionID] = prepared.Session.PRLinks
 		}
+		branchID := rawDigest("branch-v1", group, source)
 		inserted, err := tx.ExecContext(ctx, `INSERT INTO raw_content_revisions(session_id,group_id,content_revision,payload) VALUES($1,$2,$3,$4) ON CONFLICT(session_id) DO NOTHING`, sessionID, group, revision, payload)
 		if err != nil {
 			return err
@@ -329,7 +350,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		}
 	}
 	for _, group := range ordered {
-		linksChanged, err := syncSelectedRawPRLinks(ctx, tx, group, dialogueChanges)
+		linksChanged, err := syncSelectedRawPRLinks(ctx, tx, group, dialogueChanges, freshLinks)
 		if err != nil {
 			return err
 		}

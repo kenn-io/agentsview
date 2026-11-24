@@ -67,7 +67,7 @@ func (e *Engine) compareStoredSession(
 		remote = snapshot.GitRemote
 	}
 	var toolLinks []db.PRLink
-	if !e.db.ArchiveContent().OmitsToolContent() {
+	if !e.db.ArchiveContent().UsageOnly() {
 		toolLinks, err = db.ToolCallPRLinks(ctx, msgs, prepared.Cwd, remote)
 		if err != nil {
 			return nil, err

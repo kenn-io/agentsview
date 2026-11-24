@@ -2197,6 +2197,32 @@ func (d *DB) CopySessionMetadataFrom(
 		}
 	}
 
+	if !d.usageOnlyStorage() {
+		rows, err := tx.QueryContext(ctx, `SELECT s.id FROM main.sessions s JOIN old_db.sessions old ON old.id=s.id WHERE EXISTS (SELECT 1 FROM main.tool_calls t WHERE t.session_id=s.id AND t.category IN ('Bash','Task'))`)
+		if err != nil {
+			return fmt.Errorf("listing sessions for PR link refresh: %w", err)
+		}
+		var ids []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return err
+			}
+			ids = append(ids, id)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		rows.Close()
+		for _, id := range ids {
+			if err := refreshSessionPromptPRLinksTx(ctx, tx, id); err != nil {
+				return fmt.Errorf("refreshing copied session PR links: %w", err)
+			}
+		}
+	}
+
 	if d.usageOnlyStorage() {
 		// Pin notes are free text, which a usage archive does not store.
 		if _, err := tx.ExecContext(ctx,

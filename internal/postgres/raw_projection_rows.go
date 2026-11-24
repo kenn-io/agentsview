@@ -37,8 +37,12 @@ func rawGroupHasStaleFriction(
 
 // syncSelectedRawPRLinks refreshes materialized revisions selected by active
 // branches, including longer retained captures whose source has departed.
-func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string, dialogueChanges []string) (bool, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT b.session_id,s.data_version FROM raw_session_branches b JOIN sessions s ON s.id=b.session_id WHERE b.group_id=$1 AND b.active AND (s.data_version<$2 OR b.session_id=ANY($3::text[]))`, group, db.CurrentDataVersion(), dialogueChanges)
+func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string, dialogueChanges []string, freshLinks map[string][]db.PRLink) (bool, error) {
+	freshIDs := make([]string, 0, len(freshLinks))
+	for id := range freshLinks {
+		freshIDs = append(freshIDs, id)
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT b.session_id,s.data_version FROM raw_session_branches b JOIN sessions s ON s.id=b.session_id WHERE b.group_id=$1 AND b.active AND (s.data_version<$2 OR b.session_id=ANY($3::text[]) OR b.session_id=ANY($4::text[]))`, group, db.CurrentDataVersion(), dialogueChanges, freshIDs)
 	if err != nil {
 		return false, err
 	}
@@ -62,19 +66,23 @@ func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string, dialo
 	}
 	changed := false
 	for _, id := range ids {
-		payload, err := loadRawPayload(ctx, tx, id)
-		if err != nil {
-			return false, err
+		links, fresh := freshLinks[id]
+		if !fresh {
+			payload, err := loadRawPayload(ctx, tx, id)
+			if err != nil {
+				return false, err
+			}
+			promptLinks, err := db.PromptPRLinksContext(ctx, payload.Messages)
+			if err != nil {
+				return false, err
+			}
+			toolLinks, err := db.ToolCallPRLinks(ctx, payload.Messages, payload.Session.Cwd, "")
+			if err != nil {
+				return false, err
+			}
+			links = parser.CombinePRLinks(payload.Session.PRLinks, promptLinks, toolLinks)
 		}
-		promptLinks, err := db.PromptPRLinksContext(ctx, payload.Messages)
-		if err != nil {
-			return false, err
-		}
-		toolLinks, err := db.ToolCallPRLinks(ctx, payload.Messages, payload.Session.Cwd, "")
-		if err != nil {
-			return false, err
-		}
-		links := db.EncodePRLinks(parser.CombinePRLinks(payload.Session.PRLinks, promptLinks, toolLinks))
+		encoded := db.EncodePRLinks(links)
 		var linksChanged bool
 		err = tx.QueryRowContext(ctx, `WITH prior AS (
  SELECT pr_links FROM sessions WHERE id=$1 FOR UPDATE
@@ -83,7 +91,7 @@ func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string, dialo
  FROM prior WHERE id=$1 AND (sessions.pr_links IS DISTINCT FROM $2 OR data_version<$3)
  RETURNING prior.pr_links IS DISTINCT FROM $2 AS links_changed
 )
-SELECT COALESCE((SELECT links_changed FROM updated),false)`, id, links, db.CurrentDataVersion()).Scan(&linksChanged)
+SELECT COALESCE((SELECT links_changed FROM updated),false)`, id, encoded, db.CurrentDataVersion()).Scan(&linksChanged)
 		if err != nil {
 			return false, err
 		}

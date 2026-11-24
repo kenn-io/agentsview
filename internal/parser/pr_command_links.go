@@ -121,10 +121,15 @@ func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 		specified, invalid := false, false
 		for i := 3; i < len(words); i++ {
 			if !literal[i] {
+				prefix, _ := shellLiteralPrefix(call.Args[i].Parts)
+				flag, _, attached := strings.Cut(prefix, "=")
+				if (attached || len(flag) == 2 && strings.HasPrefix(flag, "-")) && strings.Contains(" "+ghPRValueFlags[words[2]]+" ", " "+flag+" ") {
+					continue
+				}
 				if selector == "" {
 					invalid = true
 				}
-				if prefix, _ := shellLiteralPrefix(call.Args[i].Parts); strings.HasPrefix(prefix, "-R") || strings.HasPrefix(prefix, "--repo") {
+				if strings.HasPrefix(prefix, "-R") || strings.HasPrefix(prefix, "--repo") {
 					invalid = true
 				}
 				continue
@@ -232,6 +237,9 @@ func bashChangesRepositoryContext(file *syntax.File) (bool, bool, []*syntax.Call
 			words := make([]string, len(n.Args))
 			for i, arg := range n.Args {
 				words[i], _ = shellLiteral(arg.Parts)
+			}
+			for len(words) > 1 && (words[0] == "command" || words[0] == "builtin") {
+				words = words[1:]
 			}
 			if len(words) > 0 {
 				name := words[0]
