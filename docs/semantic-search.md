@@ -504,8 +504,8 @@ override. Changing the list triggers the same full mirror reconciliation on the
 next build: vectors for agents you removed are deleted, so semantic search stops
 returning them. Sessions from agents you added are embedded, including ones
 older than the last build. A running daemon picks up the new list after it
-restarts. Keyword search is unaffected. The list does not apply to the Recall index or hosted PostgreSQL
-embeddings.
+restarts. Keyword search is unaffected. The list does not apply to the Recall
+index or hosted PostgreSQL embeddings.
 
 ### Ollama quickstart
 
