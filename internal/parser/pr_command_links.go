@@ -251,12 +251,14 @@ func analyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 		args := unwrapPRCommand(entry.call.Args)
 		bareSafe := allowBare && !entry.directory && !entry.repository
 		if inner, ok := shellCommand(args); ok && depth < 8 {
-			found, _, _, _, dependencies, err := analyzePRCommand(ctx, inner, cwd, remote, bareSafe, hostUnknown || entry.repository, depth+1)
+			found, _, nested, _, dependencies, err := analyzePRCommand(ctx, inner, cwd, remote, bareSafe, hostUnknown || entry.repository, depth+1)
 			if err != nil {
 				return nil, false, false, false, nil, err
 			}
 			links = append(links, found)
 			dependsOnRemote = append(dependsOnRemote, dependencies...)
+			// A nested shell's remote change outlives it; its directory change does not.
+			repositoryChanged, allowBare, hostUnknown = repositoryChanged || nested, allowBare && !nested, hostUnknown || nested
 			continue
 		}
 		args = ghPRArgs(args)
@@ -357,14 +359,8 @@ func analyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 			}
 			repo = remoteRepo
 		}
-		explicitHost := ""
-		if specified && strings.Count(repo, "/") == 2 {
-			explicitHost, repo, _ = strings.Cut(repo, "/")
-		}
-		if explicitHost != "" && !prHostRE.MatchString(explicitHost) {
-			continue
-		}
-		if !repoPathRE.MatchString(repo) {
+		explicitHost, repo, valid := splitPRRepository(repo, specified)
+		if !valid {
 			continue
 		}
 		selectedHost := selectPRHost(explicitHost, remoteHost, specified, callHostUnknown)
@@ -379,6 +375,15 @@ func analyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 		}
 	}
 	return CombinePRLinks(links...), directoryChanged, repositoryChanged, repositoryChanged, dependsOnRemote, nil
+}
+
+// splitPRRepository separates an explicit host from a -R repository and
+// reports whether both parts are well formed.
+func splitPRRepository(repo string, specified bool) (host, name string, valid bool) {
+	if specified && strings.Count(repo, "/") == 2 {
+		host, repo, _ = strings.Cut(repo, "/")
+	}
+	return host, repo, (host == "" || prHostRE.MatchString(host)) && repoPathRE.MatchString(repo)
 }
 
 // SamePRWorkingDirectory compares recorded checkout paths across platforms.

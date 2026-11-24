@@ -401,7 +401,8 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 	if !ok {
 		return nil, ctx.Err()
 	}
-	allowBare := bareLinksAllowed(parser.ToolInputWorkdir(input), cwd, sharedContext)
+	// Code-mode text carries no workdir the shell state could be checked against.
+	allowBare := jsontext.Value(input).IsValid() && bareLinksAllowed(parser.ToolInputWorkdir(input), cwd, sharedContext)
 	var lists [][]PRLink
 	for _, command := range commands {
 		links, directory, repository, persistent, usesRemote, err := parser.AnalyzePRCommand(ctx, command, cwd, remote, allowBare, sharedContext.repository)
@@ -445,9 +446,14 @@ func taskPRLinks(ctx context.Context, input string) ([]PRLink, error) {
 	return parser.PromptPRLinksContext(ctx, strings.Join(text, "\n"))
 }
 
-// shellInputCommands lists the commands a shell tool input names. ok is false
-// when the input is structured but does not parse.
+// shellInputCommands lists the commands a shell tool input names. Code-mode
+// text names its one literal command. ok is false when the input is
+// structured but does not parse.
 func shellInputCommands(input string) (commands []string, ok bool) {
+	if !jsontext.Value(input).IsValid() {
+		command := commitCommandText(input)
+		return []string{command}, command != ""
+	}
 	var payload struct {
 		Command  jsontext.Value `json:"command"`
 		Cmd      string         `json:"cmd"`
@@ -457,23 +463,29 @@ func shellInputCommands(input string) (commands []string, ok bool) {
 		return nil, false
 	}
 	if len(payload.Command) > 0 && string(payload.Command) != "null" {
-		var command string
-		if json.Unmarshal(payload.Command, &command) == nil {
-			return []string{command}, true
-		}
-		var argv []string
-		if json.Unmarshal(payload.Command, &argv) != nil || len(argv) == 0 {
-			return nil, false
-		}
-		for i, arg := range argv {
-			argv[i] = shellquote.POSIX(arg)
-		}
-		return []string{strings.Join(argv, " ")}, true
+		command, ok := commandValue(payload.Command)
+		return []string{command}, ok
 	}
 	if payload.Commands != nil {
 		return payload.Commands, true
 	}
 	return []string{payload.Cmd}, true
+}
+
+// commandValue decodes a command given as shell text or as an argv list.
+func commandValue(raw jsontext.Value) (string, bool) {
+	var command string
+	if json.Unmarshal(raw, &command) == nil {
+		return command, true
+	}
+	var argv []string
+	if json.Unmarshal(raw, &argv) != nil || len(argv) == 0 {
+		return "", false
+	}
+	for i, arg := range argv {
+		argv[i] = shellquote.POSIX(arg)
+	}
+	return strings.Join(argv, " "), true
 }
 
 // ToolCallPRLinks derives links from a transcript's tool calls.
@@ -570,28 +582,54 @@ func retainedPRLinksIn(retained retainedPRState, remote string, state sharedPRCo
 			links = append(links, link)
 			continue
 		}
-		if state.repository {
-			continue
-		}
 		host := remoteHost
 		if host == "" {
 			host = "github.com"
 		}
-		if resolved, ok := parser.NewPRLink(fmt.Sprintf("https://%s/%s/pull/%d", host, link.Repository, link.Number), link.Repository, link.Number); ok {
+		if resolved, ok := parser.NewPRLink(fmt.Sprintf("https://%s/%s/pull/%d", host, link.Repository, link.Number), link.Repository, link.Number); ok && !state.repository {
 			if depends != nil {
 				*depends = append(*depends, resolved)
 			}
 			links = append(links, resolved)
 		}
+		if retained.Explicit[link.URL] {
+			links = append(links, link)
+		}
 	}
 	return links
 }
 
+// retainedPRState holds what a call named without its input. Depends marks a
+// link whose host a hostless reference took from the checkout; Explicit marks
+// such a link that a reference naming that host also produced.
 type retainedPRState struct {
-	Links   []PRLink        `json:"links,omitempty"`
-	Depends map[string]bool `json:"depends,omitempty"`
-	Dir     bool            `json:"directory,omitempty"`
-	Repo    bool            `json:"repository,omitempty"`
+	Links    []PRLink        `json:"links,omitempty"`
+	Depends  map[string]bool `json:"depends,omitempty"`
+	Explicit map[string]bool `json:"explicit,omitempty"`
+	Dir      bool            `json:"directory,omitempty"`
+	Repo     bool            `json:"repository,omitempty"`
+}
+
+// markDepends records which of a call's links the checkout decides. Resolving
+// the call again with no usable host leaves only the references naming one.
+func (r *retainedPRState) markDepends(call ToolCall, depends []PRLink) {
+	if len(depends) == 0 {
+		return
+	}
+	var ignored sharedPRContext
+	explicit, _ := callPRLinks(context.Background(), call.Category, call.ToolName, call.InputJSON, "", "", sharedPRContext{repository: true}, &ignored, nil)
+	r.Depends = make(map[string]bool, len(depends))
+	for _, link := range depends {
+		r.Depends[link.URL] = true
+	}
+	for _, link := range explicit {
+		if r.Depends[link.URL] {
+			if r.Explicit == nil {
+				r.Explicit = make(map[string]bool)
+			}
+			r.Explicit[link.URL] = true
+		}
+	}
 }
 
 // retainedCallPRLinks retains selectors and shell changes without the input.
@@ -606,12 +644,7 @@ func retainedCallPRLinks(call ToolCall) string {
 		return ""
 	}
 	retained := retainedPRState{Links: found, Dir: change.directory, Repo: change.repository}
-	if len(depends) > 0 {
-		retained.Depends = make(map[string]bool, len(depends))
-		for _, link := range depends {
-			retained.Depends[link.URL] = true
-		}
-	}
+	retained.markDepends(call, depends)
 	encoded, _ := json.Marshal(retained)
 	return string(encoded)
 }
