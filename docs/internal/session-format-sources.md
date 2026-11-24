@@ -3134,10 +3134,10 @@ schemas keep their existing ordering behavior.
   An unfiltered sync uses member-filtered responses to match accounts and
   records the matched account and unfiltered fetch completion time in separate
   columns. Events absent from that unfiltered fetch wait for a later sync. A
-  later empty poll replaces an earlier covered account-hour with zero usage. Archives with
-  account stamps require data version 185 or newer. The event's original
-  `user_id`, `user_email`, and dedup key remain unchanged. Reporting schema 7
-  exports event identities and account poll times for cross-archive
+  later empty poll replaces an earlier covered account-hour with zero usage.
+  Archives with account stamps require data version 185 or newer. The event's
+  original `user_id`, `user_email`, and dedup key remain unchanged. Reporting
+  schema 7 exports event identities and account poll times for cross-archive
   reconciliation and includes the conversation ID when available.
 
 - **Dialogue projection:** Reverified 2026-10-17 against the JSONL parser and

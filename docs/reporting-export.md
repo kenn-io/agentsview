@@ -24,12 +24,13 @@ Digest ranges are inclusive, require both `--from` and `--to`, and accept at
 most 31 dates.
 
 By default, `hour`, `day`, and `digest` use schema version 3, and you can also
-pass `--schema-version 5` for joint cells or `--schema-version 7 --by-machine`
-for Cursor account usage. Schema 6 also supports account usage. Versions 1, 2, and 4 are no longer available. Any
-unsupported schema version fails before the command opens the archive or writes
-output. If your integration is pinned to version 1 or 2, update it to version 3;
-if it is pinned to version 4, update it to version 5. In either case, refresh
-your saved digests.
+pass `--schema-version 5` for joint cells or `--schema-version 6 --by-machine`
+for Cursor account usage, or `--schema-version 7 --by-machine` for Cursor event
+evidence. Versions 1, 2, and 4 are no longer available. Any unsupported schema
+version fails before the command opens the archive or writes output. If your
+integration is pinned to version 1 or 2, update it to version 3; if it is
+pinned to version 4, update it to version 5. In either case, refresh your saved
+digests.
 
 When a command succeeds, it writes exactly one canonical JSON document followed by one
 newline to stdout, and sends diagnostics to stderr. A malformed or future

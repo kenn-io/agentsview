@@ -343,7 +343,7 @@ func reportingHoursFromSource(
 			hours[i].Machines[machine] = part
 		}
 	}
-	if len(projectKeys) == 0 && schemaVersion == export.ReportingAccountSchemaVersion {
+	if len(projectKeys) == 0 {
 		type accountHour struct {
 			account string
 			index   int
@@ -826,18 +826,18 @@ func (db *DB) reportingStandaloneUsageCandidatesFrom(
 		if err := rows.Scan(fields...); err != nil {
 			return nil, fmt.Errorf("scanning standalone reporting usage: %w", err)
 		}
+		setStandaloneUsageFields(&row, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens)
 		if schemaVersion == export.ReportingCursorSchemaVersion && row.Agent == "cursor" {
 			if micros.Valid && micros.Int64 >= query.RangeStart.UnixMicro() && micros.Int64 < query.RangeEnd.UnixMicro() {
 				at := time.UnixMicro(micros.Int64).UTC()
 				ledger.cursorEvents = append(ledger.cursorEvents, reportingCursorEventRow{at: at, event: export.ReportingCursorEvent{
 					At: at.Format(time.RFC3339Nano), Key: row.UsageDedupKey, Model: row.Model,
-					InputTokens: int64(max(inputTokens, 0)), OutputTokens: int64(max(outputTokens, 0)),
-					CacheWriteTokens: int64(max(cacheCreationTokens, 0)), CacheReadTokens: int64(max(cacheReadTokens, 0)),
+					InputTokens: int64(row.InputTokens), OutputTokens: int64(row.OutputTokens),
+					CacheWriteTokens: int64(row.CacheCreationTokens), CacheReadTokens: int64(row.CacheReadTokens),
 					Cost: row.Cost, Account: account, PolledAt: polledAt, ConversationID: conversationID,
 				}})
 			}
 		}
-		setStandaloneUsageFields(&row, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens)
 		loaded = append(loaded, row)
 	}
 	if err := rows.Err(); err != nil {
