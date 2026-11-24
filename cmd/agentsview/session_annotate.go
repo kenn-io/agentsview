@@ -120,13 +120,13 @@ func newSessionParentCommand() *cobra.Command {
 func resolveSessionAnnotator(
 	cmd *cobra.Command,
 ) (service.SessionAnnotator, func(), error) {
-	return resolveSessionAnnotatorContext(cmd.Context(), cmd)
+	return resolveSessionAnnotatorContext(cmd.Context(), cmd, false)
 }
 
 func resolveSessionAnnotatorContext(
-	ctx context.Context, cmd *cobra.Command,
+	ctx context.Context, cmd *cobra.Command, fresh bool,
 ) (service.SessionAnnotator, func(), error) {
-	svc, cleanup, err := resolveWritableServiceWithIntent(ctx, cmd, false)
+	svc, cleanup, err := resolveWritableServiceWithIntent(ctx, cmd, fresh)
 	if err != nil {
 		return nil, nil, err
 	}

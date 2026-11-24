@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
@@ -77,16 +78,11 @@ func stubLaunchArchive(t *testing.T) *db.DB {
 	t.Helper()
 	database := dbtest.OpenTestDB(t)
 	original := resolveLaunchAnnotator
-	originalOpen := openLaunchParentArchive
 	t.Cleanup(func() {
 		resolveLaunchAnnotator = original
-		openLaunchParentArchive = originalOpen
 	})
 	resolveLaunchAnnotator = func(context.Context, *cobra.Command) (service.SessionAnnotator, func(), error) {
 		return service.NewDirectBackend(database, nil).(service.SessionAnnotator), func() {}, nil
-	}
-	openLaunchParentArchive = func(ctx context.Context, _ *cobra.Command) (*db.DB, error) {
-		return db.OpenReadOnly(ctx, database.Path())
 	}
 	return database
 }
@@ -363,54 +359,6 @@ func TestCaptureLaunchParentDetachedInteractiveWithStaleID(t *testing.T) {
 	}
 }
 
-func TestCaptureLaunchParentDetachedPendingMixedProviders(t *testing.T) {
-	for _, tc := range []struct {
-		name, child, intermediate, outer, wantChild string
-	}{
-		{"codex intermediate", "claude", "codex:" + codexLauncherID, claudeLauncherID, childSessionID},
-		{"claude intermediate", "codex", claudeLauncherID, "codex:" + codexLauncherID, "codex:" + childSessionID},
-		{"ambiguous", "claude", "", "", childSessionID},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			database := stubLaunchArchive(t)
-			home := t.TempDir()
-			writeCodexState(t, home, codexLauncherID, codexLauncherID)
-			if tc.intermediate != "" {
-				_, err := database.SetSessionExternalParent(t.Context(), tc.intermediate, tc.outer)
-				require.NoError(t, err)
-			}
-			stubLaunchProcesses(t, fakeProcess{name: "sh"}, fakeProcess{name: tc.child, env: []string{
-				"CODEX_HOME=" + home,
-				"CLAUDE_CODE_SESSION_ID=" + claudeLauncherID,
-				"CODEX_THREAD_ID=" + codexLauncherID,
-			}})
-			_, err := runLaunchHook(t, sessionStartPayload("startup"))
-			require.NoError(t, err)
-			link, err := database.GetSessionExternalParent(t.Context(), tc.wantChild)
-			if tc.intermediate == "" {
-				require.ErrorIs(t, err, sql.ErrNoRows)
-				return
-			}
-			require.NoError(t, err)
-			assert.Equal(t, tc.intermediate, link.ParentSessionID)
-		})
-	}
-}
-
-func TestOpenLocalLaunchParentArchive(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
-	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
-	_, err := database.SetSessionExternalParent(t.Context(), "codex:"+codexLauncherID, claudeLauncherID)
-	require.NoError(t, err)
-	archive, err := openLocalLaunchParentArchive(t.Context(), &cobra.Command{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, archive.Close()) })
-	link, err := archive.GetSessionExternalParent(t.Context(), "codex:"+codexLauncherID)
-	require.NoError(t, err)
-	assert.Equal(t, claudeLauncherID, link.ParentSessionID)
-}
-
 func writeCodexState(t *testing.T, home, thread, page string) {
 	t.Helper()
 	state, err := sql.Open("sqlite3", filepath.Join(home, "state_5.sqlite"))
@@ -441,10 +389,6 @@ func TestCaptureLaunchParentDoesNotGuessCodexPage(t *testing.T) {
 		setup func(*testing.T, string)
 	}{
 		{"missing index", func(*testing.T, string) {}},
-		{"invalid index", func(t *testing.T, home string) {
-			t.Helper()
-			require.NoError(t, os.WriteFile(filepath.Join(home, "state_5.sqlite"), []byte("invalid"), 0o600))
-		}},
 		{"missing thread", func(t *testing.T, home string) {
 			t.Helper()
 			writeCodexState(t, home, childSessionID, childSessionID)
@@ -463,4 +407,67 @@ func TestCaptureLaunchParentDoesNotGuessCodexPage(t *testing.T) {
 			require.ErrorIs(t, err, sql.ErrNoRows)
 		})
 	}
+}
+
+func TestCaptureLaunchParentUsesLauncherCodexHome(t *testing.T) {
+	database := stubLaunchArchive(t)
+	childHome, launcherHome := t.TempDir(), t.TempDir()
+	page := codexLauncherID + "_44444444-4444-4444-8444-444444444444"
+	writeCodexState(t, launcherHome, codexLauncherID, page)
+	stubLaunchProcesses(t, fakeProcess{name: "sh"},
+		fakeProcess{name: "claude", env: []string{"CODEX_HOME=" + childHome, "CODEX_THREAD_ID=" + codexLauncherID}},
+		fakeProcess{name: "codex", env: []string{"CODEX_HOME=" + launcherHome}})
+	_, err := runLaunchHook(t, sessionStartPayload("startup"))
+	require.NoError(t, err)
+	link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
+	require.NoError(t, err)
+	assert.Equal(t, "codex:"+page, link.ParentSessionID)
+}
+
+func TestMemorySessionStartCaptureHasOwnDeadline(t *testing.T) {
+	original := runMemorySessionStart
+	t.Cleanup(func() { runMemorySessionStart = original })
+	runMemorySessionStart = func(ctx context.Context, _ memorySessionStartRequest) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	database := stubLaunchArchive(t)
+	stubLaunchProcesses(t, fakeProcess{name: "sh"},
+		fakeProcess{name: "claude", env: []string{"CLAUDE_CODE_SESSION_ID=" + claudeLauncherID}},
+		fakeProcess{name: "claude"})
+	cmd := newRootCommand()
+	cmd.SetIn(strings.NewReader(sessionStartPayload("startup")))
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"memory", "session-start", "--hook"})
+	_ = cmd.Execute()
+	link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
+	require.NoError(t, err)
+	assert.Equal(t, claudeLauncherID, link.ParentSessionID)
+}
+
+func TestCaptureLaunchParentRetriesBusyCodexIndex(t *testing.T) {
+	home := t.TempDir()
+	writeCodexState(t, home, codexLauncherID, codexLauncherID)
+	state, err := sql.Open("sqlite3", filepath.Join(home, "state_5.sqlite"))
+	require.NoError(t, err)
+	defer state.Close()
+	_, err = state.ExecContext(t.Context(), "BEGIN EXCLUSIVE")
+	require.NoError(t, err)
+	database := stubLaunchArchive(t)
+	stubLaunchProcesses(t, fakeProcess{name: "sh"},
+		fakeProcess{name: "claude", env: []string{"CODEX_HOME=" + home, "CODEX_THREAD_ID=" + codexLauncherID}},
+		fakeProcess{name: "codex"})
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	cmd := &cobra.Command{}
+	cmd.SetIn(strings.NewReader(sessionStartPayload("startup")))
+	done := make(chan error, 1)
+	go func() { done <- captureLaunchParent(ctx, cmd) }()
+	time.Sleep(2 * time.Second)
+	_, err = state.ExecContext(t.Context(), "COMMIT")
+	require.NoError(t, err)
+	require.NoError(t, <-done)
+	link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
+	require.NoError(t, err)
+	assert.Equal(t, "codex:"+codexLauncherID, link.ParentSessionID)
 }

@@ -2501,9 +2501,7 @@ shows the MCP commands to run by hand, and `--mcp=false` installs or checks
 the skill without inspecting or changing the MCP entry.
 
 The SessionStart hook refreshes memory and links runs to their launching
-session. If a detached run carries both Claude Code and Codex session IDs and
-the hook cannot identify its launcher, it leaves the run unlinked. Codex
-requires you to trust a new hook in `/hooks`.
+session. Codex requires you to trust a new hook in `/hooks`.
 
 Setup registers `agentsview mcp --profile memory` without server flags. To use
 a remote archive, set `AGENTSVIEW_MEMORY_SERVER` or `AGENTSVIEW_MEMORY_PG`

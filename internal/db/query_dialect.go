@@ -822,7 +822,17 @@ func SessionTreeMemberPredicate(
 	pred := sessionAlias + ".message_count > 0 AND " + sessionAlias + ".deleted_at IS NULL"
 	if scope := dialect.AutomatedScopePredicate(NormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated), sessionAlias+".is_automated"); scope != "" {
 		if f.SidebarTree && f.ExcludeAutomated && !f.AutomatedFilterSet && f.AutomatedScope == "" {
-			scope = "(" + scope + " OR (" + sessionAlias + ".relationship_type = 'subagent' AND (" + sessionAlias + ".session_kind = 'non-interactive' OR " + sessionAlias + ".entrypoint = 'sdk-cli')))"
+			linked := sessionAlias + ".relationship_type = 'subagent' AND "
+			if dialect.name == "clickhouse" {
+				linked += "(" + sessionAlias + ".session_kind = 'non-interactive' OR " + sessionAlias + ".entrypoint = 'sdk-cli')"
+			} else {
+				comparison := "tc.session_id IS NOT tc.subagent_session_id"
+				if dialect.name == "postgres" {
+					comparison = "tc.session_id IS DISTINCT FROM tc.subagent_session_id"
+				}
+				linked += "COALESCE(" + sessionAlias + ".parser_parent_session_id, '') = '' AND NOT EXISTS (SELECT 1 FROM tool_calls tc WHERE tc.subagent_session_id = " + sessionAlias + ".id AND " + comparison + ")"
+			}
+			scope = "(" + scope + " OR (" + linked + "))"
 		}
 		pred += " AND " + scope
 	}

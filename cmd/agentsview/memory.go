@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -143,19 +142,13 @@ func runMemorySessionStartCommand(
 	defer cancel()
 	// A hosted reader has no archive of its own to record the launcher in.
 	if hook && memorySessionStartMode(strings.TrimSpace(mode)) != memoryModeHostedReader {
-		capture := func() {
-			if err := captureLaunchParent(ctx, cmd); err != nil {
+		defer func() {
+			captureCtx, captureCancel := context.WithTimeout(cmd.Context(), 6*time.Second)
+			defer captureCancel()
+			if err := captureLaunchParent(captureCtx, cmd); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "agentsview memory hook: launcher link: %v\n", err)
 			}
-		}
-		if memorySessionStartMode(strings.TrimSpace(mode)) == memoryModeLocal {
-			// Let the daemon open the archive before parent capture can write it.
-			defer capture()
-		} else {
-			var wg sync.WaitGroup
-			wg.Go(capture)
-			defer wg.Wait()
-		}
+		}()
 	}
 	req := memorySessionStartRequest{
 		Mode:   memorySessionStartMode(strings.TrimSpace(mode)),

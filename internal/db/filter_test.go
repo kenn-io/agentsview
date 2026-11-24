@@ -1826,6 +1826,15 @@ func TestSidebarShowsLaunchedAutomatedRun(t *testing.T) {
 		s.MessageCount = 2
 		s.UserMessageCount = 1
 	})
+	insertSession(t, d, "native", "proj", func(s *Session) {
+		s.FirstMessage = new("You are a code reviewer. Review the code.")
+		s.ParentSessionID = new("launcher")
+		s.ParserParentSessionID = new("launcher")
+		s.RelationshipType = "subagent"
+		s.Entrypoint = "sdk-cli"
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+	})
 	_, err := d.SetSessionExternalParent(t.Context(), "run", "launcher")
 	require.NoError(t, err)
 	for _, limit := range []int{0, 1} {
