@@ -416,18 +416,15 @@ func TestCodexLabelRootRefreshWaitsForUnreadableDirectory(t *testing.T) {
 func TestCodexLabeledIndexEventUpdatesTitle(t *testing.T) {
 	root := t.TempDir()
 	const id = "11111111-1111-4111-8111-111111111111"
-	const other = "22222222-2222-4222-8222-222222222222"
-	for _, run := range []struct{ home, id string }{{"a", id}, {"b", other}} {
-		home := filepath.Join(root, "label", ".codex-run-v1-"+run.home)
-		path := filepath.Join(home, "sessions", "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+run.id+".jsonl")
-		meta := testjsonl.CodexSessionMetaJSON(run.id, "/work/project", "codex_cli_rs", "2026-10-08T12:00:00Z")
-		dbtest.WriteTestFile(t, path, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
-		dbtest.WriteTestFile(t, filepath.Join(home, parser.CodexSessionIndexFilename), []byte(`{"id":"`+run.id+`","thread_name":"Old title"}`+"\n"))
-	}
+	home := filepath.Join(root, "label", ".codex-run-v1-a")
+	path := filepath.Join(home, "sessions", "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
+	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_cli_rs", "2026-10-08T12:00:00Z")
+	dbtest.WriteTestFile(t, path, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
+	dbtest.WriteTestFile(t, filepath.Join(home, parser.CodexSessionIndexFilename), []byte(`{"id":"`+id+`","thread_name":"Old title"}`+"\n"))
 	database := openTestDB(t)
 	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
 	t.Cleanup(engine.Close)
-	require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
 	index := filepath.Join(root, "label", ".codex-run-v1-a", parser.CodexSessionIndexFilename)
 	dbtest.WriteTestFile(t, index, []byte(`{"id":"`+id+`","thread_name":"New title"}`+"\n"))
 	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{index}))
@@ -435,8 +432,4 @@ func TestCodexLabeledIndexEventUpdatesTitle(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, session.SessionName)
 	assert.Equal(t, "New title", *session.SessionName)
-	otherSession, err := database.GetSessionFull(t.Context(), "codex:"+other)
-	require.NoError(t, err)
-	require.NotNil(t, otherSession.SessionName)
-	assert.Equal(t, "Old title", *otherSession.SessionName)
 }

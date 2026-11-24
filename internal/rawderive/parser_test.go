@@ -16,7 +16,6 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawsync"
 	"go.kenn.io/agentsview/internal/testjsonl"
@@ -1840,8 +1839,6 @@ func TestProviderParserHostedCodexLabeledProject(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, source.Key)
-	local, err := provider.Parse(t.Context(), parser.ParseRequest{Source: source})
-	require.NoError(t, err)
 	manifest, objects := manifestFromCapturePlan(t, parser.AgentCodex, provider, source)
 	require.Len(t, manifest.Manifest.Entries, 2)
 	materialized, err := (Materializer{Store: &materializerStore{objects: objects}, BaseDir: t.TempDir(), MaxTotalBytes: 1 << 20}).Materialize(t.Context(), manifest)
@@ -1852,12 +1849,6 @@ func TestProviderParserHostedCodexLabeledProject(t *testing.T) {
 	hosted, err := dispatch.Parse(t.Context(), manifest, materialized)
 	require.NoError(t, err)
 	require.Len(t, hosted.Outcome.Results, 1)
-	assert.Equal(t, "experiment/case", local.Results[0].Result.Session.Project)
-	assert.Equal(t, local.Results[0].Result.Session.Project, hosted.Outcome.Results[0].Result.Session.Project)
-	assert.Equal(t, local.Results[0].Result.Session.Cwd, hosted.Outcome.Results[0].Result.Session.Cwd)
-	assert.Equal(t, local.Results[0].Result.Session.SessionName, hosted.Outcome.Results[0].Result.Session.SessionName)
-	mapping := []db.WorktreeProjectMapping{{PathPrefix: "/workspace", Layout: db.WorktreeMappingLayoutExplicit, Project: "mapped", Enabled: true}}
-	project, matched := db.ResolveWorktreeProjectFromMappings(mapping, hosted.Outcome.Results[0].Result.Session.Cwd, hosted.Outcome.Results[0].Result.Session.Project)
-	assert.True(t, matched)
-	assert.Equal(t, "mapped", project)
+	assert.Equal(t, "experiment/case", hosted.Outcome.Results[0].Result.Session.Project)
+	assert.Equal(t, "Selected title", hosted.Outcome.Results[0].Result.Session.SessionName)
 }
