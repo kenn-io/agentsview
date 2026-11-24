@@ -357,6 +357,31 @@ func TestCaptureLaunchParentDetached(t *testing.T) {
 	}
 }
 
+func TestCaptureLaunchParentDetachedInteractiveWithStaleID(t *testing.T) {
+	for _, tc := range []struct {
+		name, child, childID, env string
+	}{
+		{"claude", "claude", childSessionID, "CODEX_THREAD_ID=" + codexLauncherID},
+		{"codex", "codex", "codex:" + childSessionID, "CLAUDE_CODE_SESSION_ID=" + claudeLauncherID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			database := stubLaunchArchive(t)
+			// The terminal and its shell inherited an ID from an earlier run;
+			// neither was launched by the agent now started interactively.
+			stubLaunchProcesses(t,
+				fakeProcess{name: "sh"},
+				fakeProcess{name: tc.child, env: []string{tc.env, "CODEX_HOME=" + t.TempDir()}},
+				fakeProcess{name: "bash", env: []string{tc.env}},
+				fakeProcess{name: "terminal", env: []string{tc.env}},
+			)
+			_, err := runLaunchHook(t, sessionStartPayload("startup"))
+			require.NoError(t, err)
+			_, err = database.GetSessionExternalParent(t.Context(), tc.childID)
+			require.ErrorIs(t, err, sql.ErrNoRows)
+		})
+	}
+}
+
 func TestCaptureLaunchParentDetachedMixedProviders(t *testing.T) {
 	for _, tc := range []struct {
 		name, child, intermediate, outer, wantChild string
