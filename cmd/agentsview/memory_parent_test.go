@@ -36,6 +36,7 @@ type fakeProcess struct {
 	// one-shot (-p or exec); set it to an empty slice for an interactive run.
 	args []string
 	env  []string
+	cwd  string
 }
 
 func stubLaunchProcesses(t *testing.T, chain ...fakeProcess) {
@@ -64,7 +65,7 @@ func stubLaunchProcesses(t *testing.T, chain ...fakeProcess) {
 				return []string{p.name, "exec"}, nil
 			}
 			return []string{p.name}, nil
-		}, Environ: func(context.Context) ([]string, error) {
+		}, Cwd: func(context.Context) (string, error) { return p.cwd, nil }, Environ: func(context.Context) ([]string, error) {
 			if p.env == nil {
 				return nil, errors.New("environment unavailable")
 			}
@@ -321,6 +322,9 @@ func TestCaptureLaunchParentCodexHomeAndPage(t *testing.T) {
 			if tc.sqliteHome {
 				launcherEnv = append(launcherEnv, "CODEX_SQLITE_HOME="+sqliteHome)
 			}
+			if tc.configHome {
+				launcherEnv = append(launcherEnv, "CODEX_SQLITE_HOME="+childHome)
+			}
 			database := stubLaunchArchive(t)
 			chain := []fakeProcess{{name: "sh"}, {name: "claude", env: childEnv}}
 			if tc.launcherHome {
@@ -334,6 +338,57 @@ func TestCaptureLaunchParentCodexHomeAndPage(t *testing.T) {
 			assert.Equal(t, "codex:"+tc.page, link.ParentSessionID)
 		})
 	}
+}
+
+func TestCaptureLaunchParentCodexConfigOverride(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args func(string, string) []string
+	}{
+		{"short", func(_, selected string) []string { return []string{"-c", "sqlite_home=" + selected} }},
+		{"long", func(_, selected string) []string {
+			return []string{"--config", "sqlite_home=" + fmt.Sprintf("%q", selected)}
+		}},
+		{"equals", func(_, selected string) []string { return []string{"--config=sqlite_home='" + selected + "'"} }},
+		{"short attached", func(_, selected string) []string { return []string{"-csqlite_home=" + selected} }},
+		{"last wins", func(first, selected string) []string {
+			return []string{"-c", "sqlite_home=" + first, "-c", "sqlite_home=" + selected}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			configHome, envHome, selectedHome := t.TempDir(), t.TempDir(), t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(configHome, "config.toml"), fmt.Appendf(nil, "sqlite_home = %q\n", configHome), 0o600))
+			writeCodexState(t, selectedHome, codexLauncherID, codexLauncherID)
+			database := stubLaunchArchive(t)
+			stubLaunchProcesses(t, fakeProcess{name: "sh"},
+				fakeProcess{name: "claude", env: []string{"CODEX_THREAD_ID=" + codexLauncherID}},
+				fakeProcess{name: "codex", env: []string{"CODEX_HOME=" + configHome, "CODEX_SQLITE_HOME=" + envHome}, args: tc.args(envHome, selectedHome)})
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			cmd := &cobra.Command{}
+			cmd.SetIn(strings.NewReader(sessionStartPayload("startup")))
+			require.NoError(t, captureLaunchParent(ctx, cmd))
+			link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
+			require.NoError(t, err)
+			assert.Equal(t, "codex:"+codexLauncherID, link.ParentSessionID)
+		})
+	}
+}
+
+func TestCaptureLaunchParentRelativeCodexSQLiteHome(t *testing.T) {
+	launcherHome, cwd := t.TempDir(), t.TempDir()
+	sqliteHome := filepath.Join(cwd, "state")
+	require.NoError(t, os.Mkdir(sqliteHome, 0o700))
+	writeCodexState(t, sqliteHome, codexLauncherID, codexLauncherID)
+	database := stubLaunchArchive(t)
+	stubLaunchProcesses(t, fakeProcess{name: "sh"},
+		fakeProcess{name: "claude", env: []string{"CODEX_THREAD_ID=" + codexLauncherID}},
+		fakeProcess{name: "codex", env: []string{"CODEX_HOME=" + launcherHome}, cwd: cwd, args: []string{"-c", "sqlite_home=state"}})
+	_, err := runLaunchHook(t, sessionStartPayload("startup"))
+	require.NoError(t, err)
+	link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
+	require.NoError(t, err)
+	assert.Equal(t, "codex:"+codexLauncherID, link.ParentSessionID)
 }
 
 func TestMemorySessionStartCaptureHasOwnDeadline(t *testing.T) {

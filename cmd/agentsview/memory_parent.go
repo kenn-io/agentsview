@@ -42,6 +42,7 @@ type launchProcess struct {
 	PPID    int32
 	Cmdline func(context.Context) ([]string, error)
 	Environ func(context.Context) ([]string, error)
+	Cwd     func(context.Context) (string, error)
 }
 
 var (
@@ -64,7 +65,51 @@ func lookupGopsutilProcess(ctx context.Context, pid int32) (launchProcess, error
 	if err != nil {
 		return launchProcess{}, err
 	}
-	return launchProcess{Name: name, PPID: ppid, Cmdline: p.CmdlineSliceWithContext, Environ: p.EnvironWithContext}, nil
+	return launchProcess{Name: name, PPID: ppid, Cmdline: p.CmdlineSliceWithContext, Environ: p.EnvironWithContext, Cwd: p.CwdWithContext}, nil
+}
+
+// codexSQLiteOverride reads the last CLI override, using Codex's TOML-or-string parsing.
+func codexSQLiteOverride(ctx context.Context, p launchProcess) (string, error) {
+	if p.Cmdline == nil {
+		return "", nil
+	}
+	args, err := p.Cmdline(ctx)
+	if err != nil {
+		return "", err
+	}
+	var home string
+	for i := 1; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			break
+		}
+		var override string
+		switch {
+		case arg == "-c" || arg == "--config":
+			if i+1 == len(args) {
+				break
+			}
+			i++
+			override = args[i]
+		case strings.HasPrefix(arg, "--config="):
+			override = strings.TrimPrefix(arg, "--config=")
+		case strings.HasPrefix(arg, "-c") && len(arg) > 2:
+			override = strings.TrimPrefix(strings.TrimPrefix(arg, "-c"), "=")
+		}
+		key, value, ok := strings.Cut(override, "=")
+		if !ok || strings.TrimSpace(key) != "sqlite_home" {
+			continue
+		}
+		var parsed struct{ Value any }
+		if _, err := toml.Decode("value = "+value, &parsed); err != nil {
+			home = value
+		} else if path, ok := parsed.Value.(string); ok {
+			home = path
+		} else {
+			return "", fmt.Errorf("sqlite_home override must be a string")
+		}
+	}
+	return home, nil
 }
 
 // processAgent names the agent a process runs, or "" for any other process.
@@ -298,8 +343,29 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 		if config.SQLiteHome != "" {
 			sqliteHome = config.SQLiteHome
 		}
+		override, err := codexSQLiteOverride(ctx, launcherProcess)
+		if err != nil {
+			return err
+		}
+		if override != "" {
+			sqliteHome = override
+		}
 	}
 	if sqliteHome != "" {
+		if !filepath.IsAbs(sqliteHome) {
+			process := launcherProcess
+			if process.Cwd == nil {
+				process = child
+			}
+			if process.Cwd == nil {
+				return nil
+			}
+			cwd, err := process.Cwd(ctx)
+			if err != nil {
+				return err
+			}
+			sqliteHome = filepath.Join(cwd, sqliteHome)
+		}
 		home = sqliteHome
 	}
 
