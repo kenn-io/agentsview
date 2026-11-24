@@ -282,7 +282,7 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 		if home == "" {
 			return nil
 		}
-		sqliteHome := launcherEnv["CODEX_SQLITE_HOME"]
+		sqliteHome := strings.TrimSpace(launcherEnv["CODEX_SQLITE_HOME"])
 		var config struct {
 			SQLiteHome string `toml:"sqlite_home"`
 		}
@@ -360,6 +360,22 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 		if hasSQLiteOverride {
 			config.SQLiteHome = sqliteOverride
 		}
+		launcherDir := func() (string, error) {
+			if filepath.IsAbs(cd) {
+				return cd, nil
+			}
+			if launcherProcess.Cwd == nil {
+				return "", errors.New("Codex launcher directory unavailable")
+			}
+			cwd, err := launcherProcess.Cwd(ctx)
+			if err != nil {
+				return "", err
+			}
+			if !filepath.IsAbs(cwd) {
+				return "", errors.New("Codex launcher directory unavailable")
+			}
+			return filepath.Join(cwd, cd), nil
+		}
 		if config.SQLiteHome != "" {
 			if sqliteHome, err = pathutil.ExpandHome(config.SQLiteHome); err != nil {
 				return err
@@ -367,25 +383,19 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 			if !filepath.IsAbs(sqliteHome) {
 				base := home
 				if hasSQLiteOverride {
-					if launcherProcess.Cwd != nil && !filepath.IsAbs(cd) {
-						cwd, err := launcherProcess.Cwd(ctx)
-						if err != nil {
-							return err
-						}
-						if cwd != "" {
-							base = cwd
-						}
-					}
-					if cd != "" {
-						if filepath.IsAbs(cd) {
-							base = cd
-						} else {
-							base = filepath.Join(base, cd)
-						}
+					base, err = launcherDir()
+					if err != nil {
+						return err
 					}
 				}
 				sqliteHome = filepath.Join(base, sqliteHome)
 			}
+		} else if sqliteHome != "" && !filepath.IsAbs(sqliteHome) {
+			base, err := launcherDir()
+			if err != nil {
+				return err
+			}
+			sqliteHome = filepath.Join(base, sqliteHome)
 		}
 		if sqliteHome != "" {
 			home = sqliteHome

@@ -437,12 +437,14 @@ func TestCaptureLaunchParentCodexProfile(t *testing.T) {
 
 func TestCaptureLaunchParentCodexRelativeOverride(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		args []string
-		dir  string
+		name, env string
+		args      []string
+		dir       string
 	}{
-		{"cwd", []string{"-c", "sqlite_home=state"}, "state"},
-		{"cd", []string{"--cd", "project", "-c", "sqlite_home=state"}, filepath.Join("project", "state")},
+		{"config cwd", "", []string{"-c", "sqlite_home=state"}, "state"},
+		{"config cd", "", []string{"--cd", "project", "-c", "sqlite_home=state"}, filepath.Join("project", "state")},
+		{"environment cwd", " state ", []string{}, "state"},
+		{"environment cd", "state", []string{"-C", "project"}, filepath.Join("project", "state")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home, cwd := t.TempDir(), t.TempDir()
@@ -455,7 +457,7 @@ func TestCaptureLaunchParentCodexRelativeOverride(t *testing.T) {
 			stubLaunchProcesses(t,
 				fakeProcess{name: "sh"},
 				fakeProcess{name: "claude", env: []string{"CODEX_THREAD_ID=" + codexLauncherID}},
-				fakeProcess{name: "codex", env: []string{"CODEX_HOME=" + home}, cwd: cwd, args: tc.args},
+				fakeProcess{name: "codex", env: []string{"CODEX_HOME=" + home, "CODEX_SQLITE_HOME=" + tc.env}, cwd: cwd, args: tc.args},
 			)
 			_, err := runLaunchHook(t, sessionStartPayload("startup"))
 			require.NoError(t, err)
@@ -464,6 +466,19 @@ func TestCaptureLaunchParentCodexRelativeOverride(t *testing.T) {
 			assert.Equal(t, "codex:"+page, link.ParentSessionID)
 		})
 	}
+}
+
+func TestCaptureLaunchParentCodexRelativeHomeWithoutLauncherDirectory(t *testing.T) {
+	home := t.TempDir()
+	database := stubLaunchArchive(t)
+	stubLaunchProcesses(t,
+		fakeProcess{name: "sh"},
+		fakeProcess{name: "claude", env: []string{"CODEX_THREAD_ID=" + codexLauncherID, "CODEX_HOME=" + home, "CODEX_SQLITE_HOME=state"}},
+	)
+	_, err := runLaunchHook(t, sessionStartPayload("startup"))
+	require.ErrorContains(t, err, "launcher directory unavailable")
+	_, err = database.GetSessionExternalParent(t.Context(), childSessionID)
+	require.ErrorIs(t, err, sql.ErrNoRows)
 }
 
 func TestCaptureLaunchParentCodexSQLiteHomePaths(t *testing.T) {
