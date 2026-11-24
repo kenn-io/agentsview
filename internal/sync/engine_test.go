@@ -12297,4 +12297,3 @@ func TestDBBackedProcessingFailureCountsWithoutLosingDiscovery(t *testing.T) {
 	stats.providerFailures++
 	require.False(t, stats.AuthoritativeDiscoveryComplete())
 }
-

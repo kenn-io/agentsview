@@ -11628,7 +11628,7 @@ func (e *Engine) prepareSessionNormalizedContext(
 	if err != nil {
 		return preparedSessionWrite{}, sessionWritePreserved, err
 	}
-	prepared := preparedSessionWrite{PreparedSession: rows, codexForkState: forkState, stagedToolKeys: stagedToolKeys, keepToolPRLinks: history.Action == ingest.HistoryMerge || forkState != nil && forkState.PreserveHistory}
+	prepared := preparedSessionWrite{PreparedSession: rows, codexForkState: forkState, stagedToolKeys: stagedToolKeys}
 	if forkState != nil {
 		// Totals describe the sanitized message and independent event rows that
 		// will be committed. Session-summary events are not additive usage.
@@ -12153,7 +12153,6 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 			SkipSignalUpdates:       e.disableSignalRecompute,
 			DataVersion:             dataVersionForWrite(pw),
 			ReplaceMessages:         replaceMessages,
-			PreserveToolPRLinks:     prepared.keepToolPRLinks,
 			Checkpoint:              checkpoint,
 			CheckpointBlobs:         checkpointBlobs,
 			ClaudeSubagentSources:   claudeSources,
