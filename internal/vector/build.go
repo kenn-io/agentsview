@@ -132,6 +132,19 @@ func (ix *Index) Build(
 		return BuildResult{}, errors.New("repair-invalid and backstop are mutually exclusive")
 	}
 	if o.RepairInvalid {
+		if ix.spec.Name == "messages" {
+			storedAgents, hasAgents, err := ix.metaGet(ctx, scopeAgentsKey)
+			if err != nil {
+				return BuildResult{Fingerprint: gen.Fingerprint()}, err
+			}
+			_, hasScope, err := ix.metaGet(ctx, scopeIncludeAutomatedKey)
+			if err != nil {
+				return BuildResult{Fingerprint: gen.Fingerprint()}, err
+			}
+			if storedAgents != strings.Join(normalizedAgents(o.Agents), ",") || (hasAgents && !hasScope) {
+				return BuildResult{Fingerprint: gen.Fingerprint()}, errors.New("agent scope changed; run an embeddings build before repairing invalid vectors")
+			}
+		}
 		return ix.buildInvalidRepair(ctx, enc, gen, o)
 	}
 
@@ -311,19 +324,6 @@ func (ix *Index) buildInvalidRepair(
 ) (BuildResult, error) {
 	target := gen.Fingerprint()
 	result := BuildResult{Fingerprint: target}
-	if ix.spec.Name == "messages" {
-		storedAgents, hasAgents, err := ix.metaGet(ctx, scopeAgentsKey)
-		if err != nil {
-			return result, err
-		}
-		_, hasScope, err := ix.metaGet(ctx, scopeIncludeAutomatedKey)
-		if err != nil {
-			return result, err
-		}
-		if storedAgents != strings.Join(normalizedAgents(o.Agents), ",") || (hasAgents && !hasScope) {
-			return result, errors.New("agent scope changed; run an embeddings build before repairing invalid vectors")
-		}
-	}
 	if o.Progress != nil {
 		o.Progress(BuildProgress{Phase: "scanning"})
 	}
