@@ -157,6 +157,37 @@ func TestCodexCommandPRLinksOnAppend(t *testing.T) {
 	assert.ElementsMatch(t, []string{"https://github.com/example/repo/pull/42", "https://github.com/example/repo/pull/43"}, storedPRURLs(t, env.db, "codex:"+id))
 }
 
+func TestCodexUsagePRLinksCheckoutHost(t *testing.T) {
+	testutil.IsolateGit(t)
+	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentUsage} {
+		for _, source := range []string{"recorded", "checkout"} {
+			t.Run(string(policy)+"/"+source, func(t *testing.T) {
+				env := setupSingleAgentTestEnv(t, parser.AgentCodex)
+				env.db.SetArchiveContent(policy)
+				const id = "01900000-0000-7000-8000-000000000091"
+				root := t.TempDir()
+				fields := map[string]any{}
+				if source == "recorded" {
+					fields["git"] = map[string]any{"repository_url": "https://git.example/example/repo.git"}
+				} else {
+					require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o700))
+					require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "config"), []byte("[remote \"origin\"]\n url = https://git.example/example/repo.git\n"), 0o600))
+				}
+				path := env.writeCodexSession(t, filepath.Join("2024", "01", "15"), "rollout-20240115-"+id+".jsonl", testjsonl.JoinJSONL(
+					testjsonl.CodexSessionMetaWithFieldsJSON(id, root, "user", tsEarly, fields),
+					testjsonl.CodexMsgJSON("user", "Review changes", tsEarlyS1),
+					testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call1", map[string]any{"cmd": "gh pr view 42 -R example/repo"}, tsEarlyS5),
+				))
+				require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+				assert.Equal(t, []string{"https://git.example/example/repo/pull/42"}, storedPRURLs(t, env.db, "codex:"+id))
+				appendClaudeSplitLines(t, path, testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call2", map[string]any{"cmd": "gh pr view 43 -R example/repo"}, "2024-01-01T10:00:06Z"))
+				env.engine.SyncPaths([]string{path})
+				assert.Equal(t, []string{"https://git.example/example/repo/pull/42", "https://git.example/example/repo/pull/43"}, storedPRURLs(t, env.db, "codex:"+id))
+			})
+		}
+	}
+}
+
 func TestCodexCommandPRLinksOnSync(t *testing.T) {
 	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
 	cases := []struct{ id, command, url string }{

@@ -11624,6 +11624,11 @@ func (e *Engine) prepareSessionNormalizedContext(
 		ToolResultImages:        e.toolResultImages,
 		ArchiveContent:          e.db.ArchiveContent(),
 	}
+	if options.ArchiveContent.UsageOnly() {
+		if obs, ok := e.projectIdentityObservationForWrite(pw, candidate.Session); ok && obs.RemoteCandidateCount == 1 {
+			options.CheckoutRemote = obs.GitRemote
+		}
+	}
 	rows, err := ingest.FinalizeRows(ctx, candidate, options)
 	if err != nil {
 		return preparedSessionWrite{}, sessionWritePreserved, err

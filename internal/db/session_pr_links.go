@@ -370,7 +370,7 @@ func (db *DB) upgradePromptPRLinksTx(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
-type sharedPRContext struct{ directory, repository bool }
+type sharedPRContext struct{ directory, repository, noBare bool }
 
 func (c *sharedPRContext) add(directory, repository bool) {
 	c.directory = c.directory || directory
@@ -381,6 +381,9 @@ func (c *sharedPRContext) add(directory, repository bool) {
 // session's repository: a call's own workdir must be the session checkout,
 // and otherwise no earlier command may have changed directory or repository.
 func bareLinksAllowed(workdir, cwd string, shared sharedPRContext) bool {
+	if shared.noBare {
+		return false
+	}
 	if workdir != "" {
 		return !shared.repository && parser.SamePRWorkingDirectory(cwd, workdir)
 	}
@@ -485,6 +488,13 @@ func ToolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string
 	return toolCallPRLinks(ctx, messages, cwd, remote, &changed, nil)
 }
 
+// ToolCallPRLinksForUsage uses a known host without inferring bare numbers
+// after earlier shell state has been discarded.
+func ToolCallPRLinksForUsage(ctx context.Context, messages []Message, remote string) ([]PRLink, error) {
+	changed := sharedPRContext{noBare: true}
+	return toolCallPRLinks(ctx, messages, "", remote, &changed, nil)
+}
+
 func toolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string, sharedContext *sharedPRContext, depends *[]PRLink) ([]PRLink, error) {
 	states, err := toolCallPRStates(ctx, messages, cwd, remote, sharedContext, depends)
 	return states.links(), err
@@ -513,7 +523,7 @@ func toolCallPRStates(ctx context.Context, messages []Message, cwd, remote strin
 	var states callPRStates
 	for _, message := range messages {
 		for _, call := range message.ToolCalls {
-			state := sharedPRContext{repository: sharedContext.repository}
+			state := sharedPRContext{repository: sharedContext.repository, noBare: sharedContext.noBare}
 			if call.ToolName == "Bash" {
 				state = *sharedContext
 			}

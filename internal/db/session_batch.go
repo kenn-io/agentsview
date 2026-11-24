@@ -70,8 +70,19 @@ func (db *DB) projectSessionBatchMessages(write SessionBatchWrite) []Message {
 // storageSessionBatchWrite applies the archive's image, content, and usage-only policies to a sanitized write before the transaction writes it.
 func (db *DB) storageSessionBatchWrite(ctx context.Context, write SessionBatchWrite) (SessionBatchWrite, error) {
 	write.Messages = db.projectSessionBatchMessages(write)
-	if db.usageOnlyStorage() {
-		links, err := ToolCallPRLinks(ctx, write.Messages, "", "")
+	if db.usageOnlyStorage() && hasToolCalls(write.Messages) {
+		remote := ""
+		if write.IdentityObservation.Project != "" {
+			if write.IdentityObservation.RemoteCandidateCount == 1 {
+				remote = write.IdentityObservation.GitRemote
+			}
+		} else {
+			err := db.getReader().QueryRowContext(ctx, `SELECT `+checkoutRemoteSQL, write.Session.ID).Scan(&remote)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return write, err
+			}
+		}
+		links, err := ToolCallPRLinksForUsage(ctx, write.Messages, remote)
 		if err != nil {
 			return write, err
 		}
@@ -90,8 +101,24 @@ func (db *DB) storageSessionBatchWrite(ctx context.Context, write SessionBatchWr
 	return write, nil
 }
 
+func hasToolCalls(messages []Message) bool {
+	for _, message := range messages {
+		if len(message.ToolCalls) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func retainUsageToolPRLinksTx(ctx context.Context, tx *sql.Tx, sessionID string, messages []Message) error {
-	links, err := ToolCallPRLinks(ctx, messages, "", "")
+	if !hasToolCalls(messages) {
+		return nil
+	}
+	var remote string
+	if err := tx.QueryRowContext(ctx, `SELECT `+checkoutRemoteSQL, sessionID).Scan(&remote); err != nil {
+		return err
+	}
+	links, err := ToolCallPRLinksForUsage(ctx, messages, remote)
 	if err != nil || len(links) == 0 {
 		return err
 	}

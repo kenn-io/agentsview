@@ -15,6 +15,7 @@ type ContentOptions struct {
 	BlockedResultCategories map[string]bool
 	ToolResultImages        config.ToolResultImages
 	ArchiveContent          config.ArchiveContent
+	CheckoutRemote          string
 }
 
 // Candidate is normalized parser output before caller-owned identity,
@@ -157,7 +158,7 @@ func finalize(
 	validation = addValidationStats(validation, usageValidation)
 	session.RelationshipType = db.SessionRelationship(session)
 	if options.ArchiveContent.UsageOnly() {
-		links, err := db.ToolCallPRLinks(ctx, messages, "", "")
+		links, err := db.ToolCallPRLinksForUsage(ctx, messages, options.CheckoutRemote)
 		if err != nil {
 			return PreparedSession{}, err
 		}
