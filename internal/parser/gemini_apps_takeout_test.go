@@ -550,8 +550,8 @@ func TestParseGeminiAppsTimestampUsesExplicitZones(t *testing.T) {
 			require.Len(t, match, 2)
 			_, err := parseGeminiAppsTimestamp(match[0], match[1], time.UTC)
 			require.ErrorContains(t, err, "unsupported")
-			assert.ErrorContains(t, err, strings.ToUpper(zone))
-			assert.ErrorContains(t, err, "TZ")
+			require.ErrorContains(t, err, strings.ToUpper(zone))
+			require.ErrorContains(t, err, "TZ")
 		})
 	}
 }

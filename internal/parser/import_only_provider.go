@@ -38,7 +38,7 @@ func importOnlyContentCapabilities(agent AgentType) ContentCapabilities {
 	case AgentGrokWeb:
 		caps.Model = CapabilitySupported
 	default:
-		// Gemini Apps activity records hold only the prompt.
+		// Gemini Apps Takeout and Sync records carry only prompt and reply text.
 	}
 	return caps
 }

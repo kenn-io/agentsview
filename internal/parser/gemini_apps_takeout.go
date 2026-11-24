@@ -213,9 +213,12 @@ func planGeminiAppsCell(cell *html.Node, host *time.Location) (bool, ParseResult
 	if content == nil {
 		return false, ParseResult{}, errors.New("activity record has no content cell")
 	}
-	var children []*html.Node
+	children := make([]*html.Node, 0)
 	for child := content.FirstChild; child != nil; child = child.NextSibling {
 		children = append(children, child)
+	}
+	if len(children) == 0 {
+		return false, ParseResult{}, nil
 	}
 	lines := geminiAppsLines(children)
 	if len(lines) == 0 || !geminiAppsIsPrompted(geminiAppsRender(children[lines[0][0]:lines[0][1]])) {
@@ -226,18 +229,18 @@ func planGeminiAppsCell(cell *html.Node, host *time.Location) (bool, ParseResult
 	// Nothing in the markup tells the two apart, so a record with more than
 	// one candidate is counted as an error instead of guessing.
 	stampLine := -1
-	var match []string
+	var stampText, stampZone string
 	texts := make([]string, len(lines))
 	for i, line := range lines {
 		texts[i] = normalizeMetadata(geminiAppsRender(children[line[0]:line[1]]))
 		if i == 0 {
 			continue
 		}
-		if m := geminiAppsTimestampLineRE.FindStringSubmatch(texts[i]); m != nil {
+		if m := geminiAppsTimestampLineRE.FindStringSubmatch(texts[i]); len(m) >= 2 {
 			if stampLine >= 0 {
 				return false, ParseResult{}, errors.New("prompted activity record has more than one timestamp line")
 			}
-			stampLine, match = i, m
+			stampLine, stampText, stampZone = i, m[0], m[1]
 		}
 	}
 	if stampLine < 0 {
@@ -250,7 +253,7 @@ func planGeminiAppsCell(cell *html.Node, host *time.Location) (bool, ParseResult
 		}
 		return false, ParseResult{}, errors.New("prompted activity record has no timestamp line")
 	}
-	ts, err := parseGeminiAppsTimestamp(match[0], match[1], host)
+	ts, err := parseGeminiAppsTimestamp(stampText, stampZone, host)
 	if err != nil {
 		return false, ParseResult{}, geminiAppsUnsupportedError{err}
 	}
