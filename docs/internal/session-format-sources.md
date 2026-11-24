@@ -1109,8 +1109,9 @@ fixtures retain this field; missing identities remain source-local.
   Its `sqlite_home` configuration chooses the database directory, falling back
   to `CODEX_SQLITE_HOME` and then `CODEX_HOME`
   ([config_toml.rs](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/config/src/config_toml.rs)).
-  The launcher hook uses the same lookup to identify the current page; it reads
-  the launcher's environment and root `config.toml` setting.
+  To identify the current page, the launcher hook reads the launcher's
+  environment, root `config.toml` setting, and command-line `-c` overrides.
+  It rejects state index versions newer than 5.
   Resume and thread lookup take the thread id and open its newest file
   ([list.rs](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/rollout/src/list.rs#L1602-L1616)).
   A reported archive written by Codex `0.153.4` and `0.155.0-alpha.16.3`

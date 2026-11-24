@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -25,6 +26,9 @@ func CodexIndexedSessionKey(ctx context.Context, home, thread string) (string, e
 	}
 	if state == "" {
 		return "", os.ErrNotExist
+	}
+	if latest > 5 {
+		return "", fmt.Errorf("unsupported Codex state index version %d", latest)
 	}
 	conn, err := openSQLiteReadOnly(state, sqliteReadOptions{busyTimeoutMS: 1000})
 	if err != nil {

@@ -21,6 +21,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/testutil"
 )
 
 const (
@@ -328,13 +329,7 @@ func TestCaptureLaunchParentWriteRetryPolicy(t *testing.T) {
 
 func writeCodexState(t *testing.T, home, thread, page string) {
 	t.Helper()
-	state, err := sql.Open("sqlite3", filepath.Join(home, "state_5.sqlite"))
-	require.NoError(t, err)
-	_, err = state.ExecContext(t.Context(), `CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL)`)
-	require.NoError(t, err)
-	_, err = state.ExecContext(t.Context(), `INSERT INTO threads (id, rollout_path) VALUES (?, ?)`, thread, "rollout-2026-01-01-"+page+".jsonl")
-	require.NoError(t, err)
-	require.NoError(t, state.Close())
+	testutil.WriteCodexState(t, home, "state_5.sqlite", thread, page)
 }
 
 func TestCaptureLaunchParentCodexHomeAndPage(t *testing.T) {
@@ -380,6 +375,24 @@ func TestCaptureLaunchParentCodexHomeAndPage(t *testing.T) {
 			assert.Equal(t, "codex:"+tc.page, link.ParentSessionID)
 		})
 	}
+}
+
+func TestCaptureLaunchParentCodexConfigOverride(t *testing.T) {
+	home, state := t.TempDir(), t.TempDir()
+	page := codexLauncherID + "_44444444-4444-4444-8444-444444444444"
+	writeCodexState(t, home, codexLauncherID, codexLauncherID)
+	writeCodexState(t, state, codexLauncherID, page)
+	database := stubLaunchArchive(t)
+	stubLaunchProcesses(t,
+		fakeProcess{name: "sh"},
+		fakeProcess{name: "claude", env: []string{"CODEX_THREAD_ID=" + codexLauncherID}},
+		fakeProcess{name: "codex", env: []string{"CODEX_HOME=" + home}, args: []string{"-c", fmt.Sprintf("sqlite_home=%q", state)}},
+	)
+	_, err := runLaunchHook(t, sessionStartPayload("startup"))
+	require.NoError(t, err)
+	link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
+	require.NoError(t, err)
+	assert.Equal(t, "codex:"+page, link.ParentSessionID)
 }
 
 func TestCaptureLaunchParentCodexSQLiteHomePaths(t *testing.T) {

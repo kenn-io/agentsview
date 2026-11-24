@@ -132,12 +132,6 @@ func runMemorySessionStartCommand(
 	if strings.TrimSpace(pluginRoot) != "" {
 		reportMemoryPluginConflicts(cmd.ErrOrStderr(), pluginRoot)
 	}
-	if os.Getenv("AGENTSVIEW_DISABLE_AUTO_SYNC") == "1" {
-		fmt.Fprintln(cmd.ErrOrStderr(),
-			"agentsview memory: automatic sync disabled by "+
-				"AGENTSVIEW_DISABLE_AUTO_SYNC=1")
-		return nil
-	}
 	req := memorySessionStartRequest{
 		Mode:   memorySessionStartMode(strings.TrimSpace(mode)),
 		Target: strings.TrimSpace(target),
@@ -156,6 +150,12 @@ func runMemorySessionStartCommand(
 				fmt.Fprintf(cmd.ErrOrStderr(), "agentsview memory hook: launcher link: %v\n", err)
 			}
 		}()
+	}
+	if os.Getenv("AGENTSVIEW_DISABLE_AUTO_SYNC") == "1" {
+		fmt.Fprintln(cmd.ErrOrStderr(),
+			"agentsview memory: automatic sync disabled by "+
+				"AGENTSVIEW_DISABLE_AUTO_SYNC=1")
+		return nil
 	}
 	if req.Server != "" {
 		token, err := explicitServerToken(cmd)

@@ -288,6 +288,38 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 		if _, err := toml.DecodeFile(filepath.Join(home, "config.toml"), &config); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
+		if launcherProcess.Cmdline != nil {
+			args, err := launcherProcess.Cmdline(ctx)
+			if err != nil {
+				return err
+			}
+			for i := 1; i < len(args); i++ {
+				arg := args[i]
+				if arg == "--" {
+					break
+				}
+				var override string
+				switch {
+				case arg == "-c" || arg == "--config":
+					if i+1 < len(args) {
+						i++
+						override = args[i]
+					}
+				case strings.HasPrefix(arg, "--config="):
+					override = strings.TrimPrefix(arg, "--config=")
+				case strings.HasPrefix(arg, "-c="):
+					override = strings.TrimPrefix(arg, "-c=")
+				case strings.HasPrefix(arg, "-c"):
+					override = strings.TrimPrefix(arg, "-c")
+				}
+				key, value, found := strings.Cut(override, "=")
+				if found && strings.TrimSpace(key) == "sqlite_home" {
+					if _, err := toml.Decode(override, &config); err != nil {
+						config.SQLiteHome = strings.TrimSpace(value)
+					}
+				}
+			}
+		}
 		if config.SQLiteHome != "" {
 			// Codex resolves a relative config path against its home.
 			if sqliteHome, err = pathutil.ExpandHome(config.SQLiteHome); err != nil {

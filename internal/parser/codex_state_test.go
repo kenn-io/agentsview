@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/testutil"
 )
 
 func TestCodexIndexedSessionKey(t *testing.T) {
@@ -27,17 +29,8 @@ func TestCodexIndexedSessionKey(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
 			if !tc.missing {
-				for _, file := range []string{"state_2.sqlite", "state_10.sqlite"} {
-					conn, err := sql.Open("sqlite3", filepath.Join(home, file))
-					require.NoError(t, err)
-					_, err = conn.ExecContext(t.Context(), `CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL)`)
-					require.NoError(t, err)
-					if file == "state_10.sqlite" {
-						_, err = conn.ExecContext(t.Context(), `INSERT INTO threads VALUES (?, ?)`, tc.row, "rollout-2026-01-01-"+tc.rollout+".jsonl")
-						require.NoError(t, err)
-					}
-					require.NoError(t, conn.Close())
-				}
+				testutil.WriteCodexState(t, home, "state_2.sqlite", thread, thread)
+				testutil.WriteCodexState(t, home, "state_5.sqlite", tc.row, tc.rollout)
 			}
 			got, err := CodexIndexedSessionKey(t.Context(), home, thread)
 			if tc.wantErr != nil {
@@ -48,4 +41,11 @@ func TestCodexIndexedSessionKey(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCodexIndexedSessionKeyRejectsFutureIndex(t *testing.T) {
+	home := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(home, "state_999.sqlite"), nil, 0o600))
+	_, err := CodexIndexedSessionKey(t.Context(), home, "thread")
+	require.ErrorContains(t, err, "unsupported Codex state index version 999")
 }

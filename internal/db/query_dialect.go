@@ -831,11 +831,11 @@ func SessionTreeMemberPredicate(
 				if dialect.name != "sqlite" {
 					linked += "COALESCE(" + sessionAlias + ".parent_session_id, '') <> '' AND "
 				}
-				comparison := "tc.session_id IS NOT tc.subagent_session_id"
+				comparison := "IS NOT"
 				if dialect.name == "postgres" {
-					comparison = "tc.session_id IS DISTINCT FROM tc.subagent_session_id"
+					comparison = "IS DISTINCT FROM"
 				}
-				linked += "COALESCE(" + sessionAlias + ".parser_parent_session_id, '') = '' AND NOT EXISTS (SELECT 1 FROM tool_calls tc WHERE tc.subagent_session_id = " + sessionAlias + ".id AND " + comparison + ")"
+				linked += "COALESCE(" + sessionAlias + ".parser_parent_session_id, '') = '' AND NOT " + spawnEdgeExistsDialectSQL(sessionAlias, comparison)
 				if dialect.name == "sqlite" {
 					linked += " AND EXISTS (SELECT 1 FROM session_external_parents ep WHERE ep.session_id = " + sessionAlias + ".id AND ep.parent_session_id = " + sessionAlias + ".parent_session_id)"
 				}

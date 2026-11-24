@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -177,8 +176,12 @@ func TestMemorySessionStartDisableSwitchSkipsRequest(t *testing.T) {
 	cmd.SetIn(strings.NewReader(sessionStartPayload("startup")))
 	cmd.SetArgs([]string{"memory", "session-start", "--hook"})
 	require.NoError(t, cmd.Execute())
-	_, err := database.GetSessionExternalParent(t.Context(), childSessionID)
-	require.ErrorIs(t, err, sql.ErrNoRows)
+	link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
+	require.NoError(t, err)
+	assert.Equal(t, claudeLauncherID, link.ParentSessionID)
+
+	_, err = executeCommand(newRootCommand(), "memory", "session-start", "--mode", "invalid")
+	require.ErrorContains(t, err, "unknown --mode")
 }
 
 func TestMemorySessionStartDispatchesHostedModes(t *testing.T) {
