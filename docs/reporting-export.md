@@ -24,8 +24,8 @@ Digest ranges are inclusive, require both `--from` and `--to`, and accept at
 most 31 dates.
 
 By default, `hour`, `day`, and `digest` use schema version 3, and you can also
-pass `--schema-version 5` for joint cells or `--schema-version 6 --by-machine`
-for Cursor account usage. Versions 1, 2, and 4 are no longer available. Any
+pass `--schema-version 5` for joint cells or `--schema-version 7 --by-machine`
+for Cursor account usage. Schema 6 also supports account usage. Versions 1, 2, and 4 are no longer available. Any
 unsupported schema version fails before the command opens the archive or writes
 output. If your integration is pinned to version 1 or 2, update it to version 3;
 if it is pinned to version 4, update it to version 5. In either case, refresh
@@ -85,6 +85,13 @@ machine ID starting with `cursor-account:` or `machine:`, while schema 5 and the
 change stream keep the original IDs. If your reports mix schemas 5 and 6, those
 machines have different IDs and can be counted twice. Use the same schema
 version across reporters.
+
+Schema 7 puts older-poll usage in `cursor-release:<user_id>` instead of
+`archive:<archive_id>`. For each account and hour, choose the newest
+`cursor-account:<user_id>` snapshot and include the release part from that same
+archive, if present. Sum all archive parts separately. Schemas 5 and 6 lack
+the information needed to reconcile overlapping account usage this way.
+Schema 7 also hashes machine IDs starting with `cursor-release:`.
 
 Your downstream integration can pick one snapshot per originating machine and
 UTC hour before summing totals. Dropping an entire overlapping archive would

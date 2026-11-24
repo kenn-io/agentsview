@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 )
 
@@ -138,11 +139,19 @@ func TestCursorAccountReporting(t *testing.T) {
 	assert.EqualValues(t, 15, hour.Machines["archive:archive-a"].Usage.Totals.OutputTokens)
 	assert.NotContains(t, hour.Machines, "cursor-account:77")
 	assert.EqualValues(t, 65, hour.Usage.Totals.OutputTokens)
+	opts.SchemaVersion = 7
+	current, err := d.ExportReportingDay(ctx, opts)
+	require.NoError(t, err)
+	assert.EqualValues(t, 5, current.Hours[10].Machines["archive:archive-a"].Usage.Totals.OutputTokens)
+	assert.EqualValues(t, 10, current.Hours[10].Machines["cursor-release:12"].Usage.Totals.OutputTokens)
+	assert.Empty(t, current.Hours[10].Machines["cursor-release:12"].PolledAt)
+	assert.EqualValues(t, 65, current.Hours[10].Usage.Totals.OutputTokens)
 	opts.ProjectKeys = []string{"other"}
 	scoped, err := d.ExportReportingDay(ctx, opts)
 	require.NoError(t, err)
 	assert.NotContains(t, scoped.Hours[10].Machines, "cursor-account:12")
 	assert.NotContains(t, scoped.Hours[10].Machines, "cursor-account:34")
+	assert.NotContains(t, scoped.Hours[10].Machines, "cursor-release:12")
 	opts.ProjectKeys = nil
 	opts.SchemaVersion = 5
 	legacy, err := d.ExportReportingDay(ctx, opts)
@@ -161,4 +170,96 @@ func TestCursorAccountReporting(t *testing.T) {
 	assert.Zero(t, empty.Usage.Totals.OutputTokens)
 	assert.Equal(t, "2026-07-29T04:00:00.000000Z", empty.PolledAt)
 	assert.EqualValues(t, 35, day.Hours[10].Machines["archive:archive-a"].Usage.Totals.OutputTokens)
+	opts.SchemaVersion = 7
+	day, err = d.ExportReportingDay(ctx, opts)
+	require.NoError(t, err)
+	assert.Zero(t, day.Hours[10].Machines["cursor-account:12"].Usage.Totals.OutputTokens)
+	assert.EqualValues(t, 30, day.Hours[10].Machines["cursor-release:12"].Usage.Totals.OutputTokens)
+	assert.EqualValues(t, 65, day.Hours[10].Usage.Totals.OutputTokens)
+}
+
+func TestCursorAccountOverlappingArchivesCountOnce(t *testing.T) {
+	start := time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC)
+	poll := start.Add(24 * time.Hour)
+	events := []CursorUsageEvent{
+		{OccurredAt: "2026-07-28T10:01:00Z", Model: "a", OutputTokens: 10},
+		{OccurredAt: "2026-07-28T10:02:00Z", Model: "b", OutputTokens: 20},
+		{OccurredAt: "2026-07-28T10:03:00Z", Model: "c", OutputTokens: 40},
+	}
+	for _, tc := range []struct {
+		name    string
+		empty   bool
+		aNewest bool
+	}{
+		{"partial", false, false}, {"empty newest", true, true}, {"empty older", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			archives := []*DB{testDB(t), testDB(t)}
+			for i, d := range archives {
+				ctx := t.Context()
+				require.NoError(t, d.ConfigureArtifactLocalMachine(ctx, []string{"host-a", "host-b"}[i]))
+				_, err := d.rawWriter().ExecContext(ctx, `INSERT INTO archive_metadata(key,value) VALUES ('archive_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, []string{"a", "b"}[i])
+				require.NoError(t, err)
+				require.NoError(t, d.InsertCursorUsageEvents(ctx, events))
+				keys := []string{CursorUsageEventDedupKey(events[0]), CursorUsageEventDedupKey(events[1])}
+				require.NoError(t, d.RecordCursorAccountPoll(ctx, map[string][]string{"12": keys, "34": {CursorUsageEventDedupKey(events[2])}}, poll, []CursorAccountHour{{UserID: "12", Start: start}, {UserID: "34", Start: start}}))
+				if i == 0 {
+					if tc.empty {
+						keys = nil
+					} else {
+						keys = keys[1:]
+					}
+					when := poll.Add(time.Hour)
+					if tc.aNewest {
+						when = poll.Add(3 * time.Hour)
+					}
+					require.NoError(t, d.RecordCursorAccountPoll(ctx, map[string][]string{"12": keys}, when, []CursorAccountHour{{UserID: "12", Start: start}}))
+				} else {
+					require.NoError(t, d.RecordCursorAccountPoll(ctx, map[string][]string{"12": keys}, poll.Add(2*time.Hour), []CursorAccountHour{{UserID: "12", Start: start}}))
+				}
+			}
+			for _, version := range []int{6, 7} {
+				var hours []export.ReportingHour
+				for _, d := range archives {
+					day, err := d.ExportReportingDay(t.Context(), ReportingExportOptions{Date: start.Truncate(24 * time.Hour), Now: poll.Add(24 * time.Hour), SchemaVersion: version, ByMachine: true})
+					require.NoError(t, err)
+					hours = append(hours, day.Hours[10])
+				}
+				winners := map[string]int{}
+				var total int64
+				for i, hour := range hours {
+					for id, part := range hour.Machines {
+						if strings.HasPrefix(id, "archive:") {
+							total += part.Usage.Totals.OutputTokens
+						}
+						if strings.HasPrefix(id, "cursor-account:") {
+							old, ok := winners[id]
+							if !ok || part.PolledAt > hours[old].Machines[id].PolledAt {
+								winners[id] = i
+							}
+						}
+					}
+				}
+				for id, i := range winners {
+					total += hours[i].Machines[id].Usage.Totals.OutputTokens
+					total += hours[i].Machines["cursor-release:"+strings.TrimPrefix(id, "cursor-account:")].Usage.Totals.OutputTokens
+				}
+				want := int64(70)
+				if version == 6 && !tc.aNewest {
+					if tc.empty {
+						want = 100
+					} else {
+						want = 80
+					}
+				}
+				assert.Equal(t, want, total, "schema %d", version)
+			}
+		})
+	}
+}
+
+func TestCursorAccountReleaseMachineID(t *testing.T) {
+	source := reportingDaySource{localMachineID: "cursor-release:12"}
+	assert.NotEqual(t, "cursor-release:12", source.machineID("local", 7))
+	assert.Equal(t, "cursor-release:12", source.machineID("local", 6))
 }

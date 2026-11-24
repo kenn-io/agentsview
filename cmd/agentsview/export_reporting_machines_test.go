@@ -76,7 +76,7 @@ func TestExportReportingCursorAccountHour(t *testing.T) {
 	require.NoError(t, database.RecordCursorAccountPoll(t.Context(), map[string][]string{"12": {db.CursorUsageEventDedupKey(event)}}, time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), []db.CursorAccountHour{{UserID: "12", Start: time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC)}}))
 	require.NoError(t, database.Close())
 	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
-	out, _, err := executeExportSessionsCommand(newExportReportingTestRoot(now), "export", "hour", "--schema-version", "6", "--by-machine", "2026-07-28-10")
+	out, _, err := executeExportSessionsCommand(newExportReportingTestRoot(now), "export", "hour", "--schema-version", "7", "--by-machine", "2026-07-28-10")
 	require.NoError(t, err)
 	var result struct {
 		Machines map[string]any `json:"machines"`

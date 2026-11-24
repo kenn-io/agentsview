@@ -21,6 +21,8 @@ const (
 	ReportingJointSchemaVersion = 5
 	// ReportingAccountSchemaVersion adds Cursor account usage parts.
 	ReportingAccountSchemaVersion = 6
+	// ReportingReleaseSchemaVersion separates older Cursor account usage.
+	ReportingReleaseSchemaVersion = 7
 )
 
 // IsSupportedReportingSchemaVersion reports whether reporting exports can
@@ -31,7 +33,12 @@ func IsSupportedReportingSchemaVersion(version int) bool {
 
 // IsJointReportingSchema reports whether the schema includes joint activity.
 func IsJointReportingSchema(version int) bool {
-	return version == ReportingJointSchemaVersion || version == ReportingAccountSchemaVersion
+	return version == ReportingJointSchemaVersion || IsAccountReportingSchema(version)
+}
+
+// IsAccountReportingSchema reports whether the schema includes account parts.
+func IsAccountReportingSchema(version int) bool {
+	return version == ReportingAccountSchemaVersion || version == ReportingReleaseSchemaVersion
 }
 
 // ReportingHour is one immutable UTC-hour export. Digest identifies the

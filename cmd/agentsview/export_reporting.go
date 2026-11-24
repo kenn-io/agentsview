@@ -238,7 +238,7 @@ func bindReportingSchemaVersion(command *cobra.Command) *int {
 		version,
 		"schema-version",
 		export.ReportingSchemaVersion,
-		fmt.Sprintf("Reporting export schema version (%d, %d, or %d)", export.ReportingSchemaVersion, export.ReportingJointSchemaVersion, export.ReportingAccountSchemaVersion),
+		fmt.Sprintf("Reporting export schema version (%d, %d, %d, or %d)", export.ReportingSchemaVersion, export.ReportingJointSchemaVersion, export.ReportingAccountSchemaVersion, export.ReportingReleaseSchemaVersion),
 	)
 	return version
 }
@@ -246,7 +246,7 @@ func bindReportingSchemaVersion(command *cobra.Command) *int {
 func bindReportingProjectKeys(command *cobra.Command) *[]string {
 	keys := new([]string)
 	command.Flags().StringArrayVar(keys, "project-key", nil,
-		"Limit the complete export to an archive project key (repeatable; schema 5)")
+		"Limit the complete export to an archive project key (repeatable; schema 5 or later)")
 	return keys
 }
 

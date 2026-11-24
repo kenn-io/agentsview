@@ -9,6 +9,7 @@ import (
 	"math"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/activity"
@@ -68,8 +69,8 @@ func (db *DB) ExportReportingDay(
 			"unsupported reporting schema version %d", schemaVersion,
 		)
 	}
-	if schemaVersion == export.ReportingAccountSchemaVersion && !opts.ByMachine {
-		return export.ReportingDay{}, errors.New("reporting schema 6 requires --by-machine")
+	if export.IsAccountReportingSchema(schemaVersion) && !opts.ByMachine {
+		return export.ReportingDay{}, errors.New("reporting schemas 6 and 7 require --by-machine")
 	}
 	if err := export.ValidateReportingProjectScope(schemaVersion, opts.ProjectKeys); err != nil {
 		return export.ReportingDay{}, err
@@ -107,8 +108,8 @@ func (db *DB) ExportReportingDay(
 	if err != nil {
 		return export.ReportingDay{}, err
 	}
-	if schemaVersion == export.ReportingAccountSchemaVersion {
-		if err := db.loadReportingAccountUsage(ctx, tx, date, date.Add(time.Duration(hourCount)*time.Hour), &source); err != nil {
+	if export.IsAccountReportingSchema(schemaVersion) {
+		if err := db.loadReportingAccountUsage(ctx, tx, date, date.Add(time.Duration(hourCount)*time.Hour), schemaVersion, &source); err != nil {
 			return export.ReportingDay{}, err
 		}
 	}
@@ -162,8 +163,8 @@ func (db *DB) ExportReportingDigest(
 			"unsupported reporting schema version %d", schemaVersion,
 		)
 	}
-	if schemaVersion == export.ReportingAccountSchemaVersion && !opts.ByMachine {
-		return nil, errors.New("reporting schema 6 requires --by-machine")
+	if export.IsAccountReportingSchema(schemaVersion) && !opts.ByMachine {
+		return nil, errors.New("reporting schemas 6 and 7 require --by-machine")
 	}
 	if err := export.ValidateReportingProjectScope(schemaVersion, opts.ProjectKeys); err != nil {
 		return nil, err
@@ -231,8 +232,8 @@ func (db *DB) ExportReportingDigest(
 	if err != nil {
 		return nil, err
 	}
-	if schemaVersion == export.ReportingAccountSchemaVersion {
-		if err := db.loadReportingAccountUsage(ctx, tx, from, unionEnd, &source); err != nil {
+	if export.IsAccountReportingSchema(schemaVersion) {
+		if err := db.loadReportingAccountUsage(ctx, tx, from, unionEnd, schemaVersion, &source); err != nil {
 			return nil, err
 		}
 	}
@@ -345,8 +346,9 @@ func reportingHoursFromSource(
 	}
 	if len(projectKeys) == 0 {
 		type accountHour struct {
-			account string
-			index   int
+			account  string
+			index    int
+			released bool
 		}
 		groups := map[accountHour][]activity.UsageRow{}
 		polled := map[accountHour]string{}
@@ -355,7 +357,7 @@ func reportingHoursFromSource(
 			if !ok {
 				continue
 			}
-			key := accountHour{row.account, index}
+			key := accountHour{row.account, index, row.released}
 			if !row.empty {
 				groups[key] = append(groups[key], row.usage)
 			} else if _, ok := groups[key]; !ok {
@@ -371,7 +373,9 @@ func reportingHoursFromSource(
 			if err != nil {
 				return nil, err
 			}
-			part.PolledAt = polled[key]
+			if !key.released {
+				part.PolledAt = polled[key]
+			}
 			part.Usage, part.HasData, err = reportingUsageForHour(start, start.Add(time.Hour), rows, nil, nil)
 			if err != nil {
 				return nil, err
@@ -380,7 +384,11 @@ func reportingHoursFromSource(
 			if err != nil {
 				return nil, err
 			}
-			hours[key.index].Machines[key.account] = part
+			account := key.account
+			if key.released {
+				account = cursorReleasePrefix + strings.TrimPrefix(account, cursorAccountPrefix)
+			}
+			hours[key.index].Machines[account] = part
 		}
 	}
 	for i := range hours {
@@ -686,7 +694,7 @@ type reportingAccountRow struct {
 	usage             activity.UsageRow
 	account, polledAt string
 	at                time.Time
-	empty             bool
+	empty, released   bool
 }
 
 const reportingCursorHour = `(agentsview_timestamp_unix_micro(occurred_at) / 3600000000 - (agentsview_timestamp_unix_micro(occurred_at) < 0 AND agentsview_timestamp_unix_micro(occurred_at) % 3600000000 != 0)) * 3600`
@@ -697,7 +705,7 @@ const reportingEmptyCursorPollsQuery = `SELECT account_user_id, hour_start, poll
 		WHERE hour_start >= ? AND hour_start < ? AND NOT EXISTS (
 			SELECT 1 FROM cursor_usage_events WHERE agent='cursor' AND account_user_id = poll.account_user_id AND occurred_at >= strftime('%Y-%m-%dT%H:%M:%SZ', poll.hour_start - 1, 'unixepoch') AND occurred_at < strftime('%Y-%m-%dT%H:%M:%SZ', poll.hour_start + 3601, 'unixepoch') AND ` + reportingCursorHour + ` = poll.hour_start AND account_polled_at >= poll.polled_at)`
 
-func (db *DB) loadReportingAccountUsage(ctx context.Context, tx *sql.Tx, start, end time.Time, source *reportingExportSource) error {
+func (db *DB) loadReportingAccountUsage(ctx context.Context, tx *sql.Tx, start, end time.Time, schemaVersion int, source *reportingExportSource) error {
 	var exists bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='cursor_usage_events')`).Scan(&exists); err != nil {
 		return err
@@ -705,10 +713,14 @@ func (db *DB) loadReportingAccountUsage(ctx context.Context, tx *sql.Tx, start, 
 	if !exists || !start.Before(end) {
 		return nil
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT occurred_at, agentsview_timestamp_unix_micro(occurred_at), COALESCE(NULLIF(model, ''), '<unknown>'), input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, charged_microdollars, dedup_key, account_user_id, account_polled_at FROM (
+	filter := ` WHERE account_polled_at = latest_poll AND account_polled_at >= COALESCE((SELECT polled_at FROM cursor_account_polls WHERE account_user_id = event.account_user_id AND hour_start = ` + reportingCursorHour + `),'')`
+	if schemaVersion == export.ReportingReleaseSchemaVersion {
+		filter = ""
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT occurred_at, agentsview_timestamp_unix_micro(occurred_at), COALESCE(NULLIF(model, ''), '<unknown>'), input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, charged_microdollars, dedup_key, account_user_id, account_polled_at, max(latest_poll, COALESCE((SELECT polled_at FROM cursor_account_polls WHERE account_user_id = event.account_user_id AND hour_start = `+reportingCursorHour+`),'')) FROM (
 		SELECT *, max(account_polled_at) OVER (`+reportingCursorPollWindow+`) AS latest_poll FROM cursor_usage_events
 		WHERE agent = 'cursor' AND account_user_id != '' AND account_polled_at != '' AND occurred_at >= ? AND occurred_at < ? AND agentsview_timestamp_unix_micro(occurred_at) >= ? AND agentsview_timestamp_unix_micro(occurred_at) < ?)
-		AS event WHERE account_polled_at = latest_poll AND account_polled_at >= COALESCE((SELECT polled_at FROM cursor_account_polls WHERE account_user_id = event.account_user_id AND hour_start = `+reportingCursorHour+`),'')`,
+		AS event`+filter,
 		start.Add(-time.Second).UTC().Format(time.RFC3339Nano), end.Add(time.Second).UTC().Format(time.RFC3339Nano), start.UnixMicro(), end.UnixMicro())
 	if err != nil {
 		return fmt.Errorf("querying Cursor account usage: %w", err)
@@ -719,9 +731,12 @@ func (db *DB) loadReportingAccountUsage(ctx context.Context, tx *sql.Tx, start, 
 		var r reportingAccountRow
 		var input, output, write, read int
 		var occurredMicros int64
-		if err := rows.Scan(&r.usage.Timestamp, &occurredMicros, &r.usage.Model, &input, &output, &write, &read, &r.usage.Cost, &r.usage.UsageDedupKey, &r.account, &r.polledAt); err != nil {
+		var latest string
+		if err := rows.Scan(&r.usage.Timestamp, &occurredMicros, &r.usage.Model, &input, &output, &write, &read, &r.usage.Cost, &r.usage.UsageDedupKey, &r.account, &r.polledAt, &latest); err != nil {
 			return err
 		}
+		r.released = r.polledAt < latest
+		r.polledAt = latest
 		r.account = cursorAccountPrefix + r.account
 		r.at = time.UnixMicro(occurredMicros).UTC()
 		r.usage.Agent = "cursor"
@@ -782,7 +797,9 @@ func (db *DB) reportingStandaloneUsageCandidatesFrom(
 	)
 	source := `SELECT * FROM cursor_usage_events WHERE occurred_at >= ? AND occurred_at <= ?`
 	accountFilter := ""
-	if schemaVersion == export.ReportingAccountSchemaVersion {
+	if schemaVersion == export.ReportingReleaseSchemaVersion {
+		accountFilter = " WHERE NOT (agent = 'cursor' AND account_user_id != '' AND account_polled_at != '')"
+	} else if export.IsAccountReportingSchema(schemaVersion) {
 		source = `SELECT *, max(account_polled_at) OVER (` + reportingCursorPollWindow + `) AS latest_poll FROM cursor_usage_events WHERE occurred_at >= ? AND occurred_at <= ?`
 		accountFilter = " WHERE NOT (agent = 'cursor' AND account_user_id != '' AND account_polled_at != '' AND account_polled_at = latest_poll AND account_polled_at >= COALESCE((SELECT polled_at FROM cursor_account_polls WHERE account_user_id = event.account_user_id AND hour_start = " + reportingCursorHour + "),''))"
 	}

@@ -22,7 +22,7 @@ func ParseReportingBucket(version int, value string) (time.Duration, error) {
 		return DefaultReportingBucket, nil
 	}
 	if !IsJointReportingSchema(version) {
-		return 0, errors.New("bucket selection requires reporting schema 5")
+		return 0, errors.New("bucket selection requires reporting schema 5 or later")
 	}
 	bucket, err := time.ParseDuration(value)
 	if err != nil {
@@ -41,7 +41,7 @@ func validateReportingBucketDuration(bucket time.Duration) error {
 func reportingBucketDuration(version, seconds int) (time.Duration, error) {
 	if !IsJointReportingSchema(version) {
 		if seconds != 0 {
-			return 0, errors.New("bucket_seconds requires reporting schema 5")
+			return 0, errors.New("bucket_seconds requires reporting schema 5 or later")
 		}
 		return DefaultReportingBucket, nil
 	}
@@ -92,7 +92,7 @@ type ReportingCellPricing struct {
 // ValidateReportingProjectScope checks the scope before a caller opens SQLite.
 func ValidateReportingProjectScope(version int, keys []string) error {
 	if len(keys) > 0 && !IsJointReportingSchema(version) {
-		return errors.New("project scope requires reporting schema 5")
+		return errors.New("project scope requires reporting schema 5 or later")
 	}
 	for _, key := range keys {
 		if strings.TrimSpace(key) == "" {
@@ -105,12 +105,12 @@ func ValidateReportingProjectScope(version int, keys []string) error {
 func normalizeReportingJoint(hour ReportingHour) (*ReportingJoint, error) {
 	if !IsJointReportingSchema(hour.SchemaVersion) {
 		if hour.Joint != nil {
-			return nil, errors.New("joint cells require reporting schema 5")
+			return nil, errors.New("joint cells require reporting schema 5 or later")
 		}
 		return nil, nil
 	}
 	if hour.Joint == nil {
-		return nil, errors.New("reporting schema 5 requires joint cells")
+		return nil, errors.New("reporting schemas 5 and later require joint cells")
 	}
 	joint := *hour.Joint
 	if joint.Projects == nil {
