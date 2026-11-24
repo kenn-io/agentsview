@@ -409,8 +409,10 @@ func TestCaptureLaunchParentMissingCodexIndex(t *testing.T) {
 		name                            string
 		rowMissing, appears, unreadable bool
 	}{
-		{"missing index", false, false, false}, {"missing row", true, false, false},
-		{"index appears", false, true, false}, {"row appears", true, true, false},
+		{"missing index", false, false, false},
+		{"missing row", true, false, false},
+		{"index appears", false, true, false},
+		{"row appears", true, true, false},
 		{"unreadable index", false, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -422,7 +424,7 @@ func TestCaptureLaunchParentMissingCodexIndex(t *testing.T) {
 				writeCodexState(t, staged, codexLauncherID, codexLauncherID)
 			}
 			if tc.unreadable {
-				require.NoError(t, os.WriteFile(filepath.Join(home, "state_5.sqlite"), []byte("corrupt"), 0600))
+				require.NoError(t, os.WriteFile(filepath.Join(home, "state_5.sqlite"), []byte("corrupt"), 0o600))
 			}
 			database := stubLaunchArchive(t)
 			stubLaunchProcesses(t, fakeProcess{name: "sh"}, fakeProcess{name: "claude", env: []string{"CODEX_HOME=" + home, "CODEX_THREAD_ID=" + codexLauncherID}}, fakeProcess{name: "codex"})
@@ -452,7 +454,7 @@ func TestCaptureLaunchParentMissingCodexIndex(t *testing.T) {
 				select {
 				case err := <-done:
 					require.Error(t, err)
-				case <-time.After(time.Second): //nolint:kennlint // deadlinetest: detects retries of a corrupt index
+				case <-time.After(time.Second):
 					require.FailNow(t, "unreadable index was retried")
 				}
 			} else {
