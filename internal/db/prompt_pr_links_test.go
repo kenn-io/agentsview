@@ -375,8 +375,8 @@ func TestToolPRLinksArchiveUpgrade(t *testing.T) {
 		prompt, command string
 		want            []string
 	}{
-		{"prompt upgrade", promptPRLinksDataVersion - 1, "review https://github.com/example/repo/pull/41", "GH_HOST=github.com gh pr view 42 -R example/repo", []string{"https://github.com/example/repo/pull/41", "https://github.com/example/repo/pull/42"}},
-		{"tool upgrade", toolPRLinksDataVersion - 1, "review https://github.com/example/repo/pull/41", "GH_HOST=github.com gh pr view 42 -R example/repo", []string{"https://github.com/example/repo/pull/41", "https://github.com/example/repo/pull/42"}},
+		{"prompt upgrade", promptPRLinksDataVersion - 1, "review https://github.com/example/repo/pull/41", "gh pr view 42 -R github.com/example/repo", []string{"https://github.com/example/repo/pull/41", "https://github.com/example/repo/pull/42"}},
+		{"tool upgrade", toolPRLinksDataVersion - 1, "review https://github.com/example/repo/pull/41", "gh pr view 42 -R github.com/example/repo", []string{"https://github.com/example/repo/pull/41", "https://github.com/example/repo/pull/42"}},
 		{"task pull", toolPRLinksDataVersion - 1, "", "https://github.com/example/repo/pull/44", []string{"https://github.com/example/repo/pull/44"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

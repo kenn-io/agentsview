@@ -392,6 +392,7 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 		return parser.PromptPRLinksContext(ctx, payload.Prompt+"\n"+payload.Message+"\n"+payload.Task+"\n"+content)
 	}
 	if category != "Bash" || len(input) > 256*1024 {
+		change.add(false, false, true, true)
 		return nil, ctx.Err()
 	}
 	plain := !jsontext.Value(input).IsValid()
@@ -406,9 +407,8 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 	if !plain && json.Unmarshal([]byte(input), &payload) != nil {
 		return nil, ctx.Err()
 	}
-	dir := parser.ToolInputWorkdir(input)
 	allowBare := !sharedContext.directory && !sharedContext.environment && !sharedContext.repository
-	if dir != "" {
+	if dir := parser.ToolInputWorkdir(input); dir != "" {
 		allowBare = !sharedContext.environment && !sharedContext.repository && parser.SamePRWorkingDirectory(cwd, dir)
 	}
 	if !allowBare {
@@ -537,12 +537,7 @@ func (db *DB) upgradeToolPRLinksTx(ctx context.Context, tx *sql.Tx) error {
 	if db.usageOnlyStorage() {
 		return nil
 	}
-	condition := "id IN (SELECT session_id FROM tool_calls WHERE category IN ('Bash','Task') AND input_json IS NOT NULL)"
-	if version < promptPRLinksDataVersion {
-		// The prompt upgrade already refreshed these sessions, including tools.
-		condition += " AND id NOT IN (SELECT session_id FROM messages WHERE " + promptPRLinkCandidateSQL + ")"
-	}
-	ids, err := sessionIDsTx(ctx, tx, condition)
+	ids, err := sessionIDsTx(ctx, tx, "id IN (SELECT session_id FROM tool_calls WHERE category IN ('Bash','Task') AND input_json IS NOT NULL)")
 	if err != nil {
 		return err
 	}
