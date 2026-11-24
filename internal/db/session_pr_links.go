@@ -389,6 +389,19 @@ func bareLinksAllowed(workdir, cwd string, shared sharedPRContext) bool {
 	return !shared.directory && !shared.repository
 }
 
+// inputWorkdir returns the directory a call's input names: its structured
+// workdir or a code-mode literal's, resolved without the session cwd so an
+// absent workdir stays empty. Raw shell text names none.
+func inputWorkdir(input string) string {
+	if jsontext.Value(input).IsValid() {
+		return parser.ToolInputWorkdir(input)
+	}
+	if commitToolCallRE.MatchString(input) {
+		return commitRepository(input, "")
+	}
+	return ""
+}
+
 func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote string, sharedContext sharedPRContext, change *sharedPRContext, depends *[]PRLink) ([]PRLink, error) {
 	if category == "Task" {
 		return taskPRLinks(ctx, input)
@@ -401,8 +414,8 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 	if !ok {
 		return nil, ctx.Err()
 	}
-	// Code-mode text carries no workdir the shell state could be checked against.
-	allowBare := jsontext.Value(input).IsValid() && bareLinksAllowed(parser.ToolInputWorkdir(input), cwd, sharedContext)
+	// Raw shell text has no workdir; code-mode text may name one.
+	allowBare := bareLinksAllowed(inputWorkdir(input), cwd, sharedContext)
 	var lists [][]PRLink
 	for _, command := range commands {
 		links, directory, repository, persistent, usesRemote, err := parser.AnalyzePRCommand(ctx, command, cwd, remote, allowBare, sharedContext.repository)
