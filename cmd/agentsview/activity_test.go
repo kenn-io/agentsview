@@ -265,7 +265,9 @@ func TestFetchHTTPActivityReportRejectsUnknownSchema(t *testing.T) {
 }
 
 func TestFetchHTTPActivityReportRejectsUnknownSavedSchema(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v1/activity/report/report/sessions", r.URL.Path)
+		assert.Equal(t, "true", r.URL.Query().Get("include_report"))
 		w.Header().Set("Content-Type", "application/json")
 		_, err := fmt.Fprintf(w, `{"report_id":"report","sessions":[],"total":0,"report":{"schema_version":%d}}`, export.ActivityReportSchemaVersion+1)
 		assert.NoError(t, err)
@@ -273,7 +275,7 @@ func TestFetchHTTPActivityReportRejectsUnknownSavedSchema(t *testing.T) {
 	t.Cleanup(server.Close)
 	_, err := fetchHTTPActivityReport(t.Context(), transport{URL: server.URL}, "", ActivityReportConfig{SessionsReportID: "report"})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "schema")
+	assert.EqualError(t, err, fmt.Sprintf("unsupported activity report schema %d (expected %d)", export.ActivityReportSchemaVersion+1, export.ActivityReportSchemaVersion))
 }
 
 func TestFetchHTTPActivityReportContinuesRequestedGeneration(t *testing.T) {

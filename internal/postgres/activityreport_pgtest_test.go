@@ -111,6 +111,27 @@ func TestPGActivityReportSourceProbeUsesMirrorSchema(t *testing.T) {
 		"identity-only mirror updates must change the Activity probe")
 }
 
+func TestPGActivityReportSourceProbeChangesOnParentLink(t *testing.T) {
+	t.Parallel()
+	local, syncer, store := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "parent-a", "project-a", "2026-06-12")
+	pgKeptSession(t, local, "parent-b", "project-a", "2026-06-12")
+	pgKeptSession(t, local, "child", "project-a", "2026-06-14")
+	_, err := local.SetSessionExternalParent(t.Context(), "child", "parent-a")
+	require.NoError(t, err)
+	pgKeptPush(t, syncer, false)
+	before, err := store.ActivityReportSourceProbe(t.Context())
+	require.NoError(t, err)
+	_, err = local.SetSessionExternalParent(t.Context(), "child", "parent-b")
+	require.NoError(t, err)
+	pgKeptPush(t, syncer, false)
+	after, err := store.ActivityReportSourceProbe(t.Context())
+	require.NoError(t, err)
+	assert.NotEqual(t, before.MaxSessionModified, after.MaxSessionModified)
+	after.MaxSessionModified = before.MaxSessionModified
+	assert.Equal(t, before, after)
+}
+
 // The probe reports the newest pricing time across model prices and the
 // GenAI document, so a change to either refreshes open Activity reports. A
 // table without a time does not hide the other's.
