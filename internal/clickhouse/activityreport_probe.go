@@ -57,6 +57,24 @@ func (s *Store) ActivityReportSourceProbe(
 	if err != nil {
 		return activity.SourceProbe{}, err
 	}
+	version, ok, err := s.usageRowsVersion(ctx, []string{"sessions"}, "")
+	if err != nil {
+		return activity.SourceProbe{}, fmt.Errorf("probing session versions: %w", err)
+	}
+	if !ok {
+		// The parts moved or the tracker failed. Read the live rows once and
+		// leave the probe uncached because the snapshot no longer names them.
+		spec := sessionsFinalTable
+		spec.fields = ""
+		rows, err := s.readFinalRows(ctx, &finalRows{spec: spec}, nil, false)
+		if err != nil {
+			return activity.SourceProbe{}, fmt.Errorf("probing session versions: %w", err)
+		}
+		identity := (&finalRows{count: rows.count, sum: rows.sum}).identity()
+		probe.SessionRowsFingerprint = tableValuesFingerprint([]string{"sessions"}, func(string) string { return identity })
+		return probe, nil
+	}
+	probe.SessionRowsFingerprint = version
 	s.probeCache.mu.Lock()
 	s.probeCache.fingerprint, s.probeCache.probe = fingerprint, probe
 	s.probeCache.mu.Unlock()
@@ -99,14 +117,6 @@ func (s *Store) readActivitySourceProbe(ctx context.Context) (activity.SourcePro
 	if err != nil {
 		return activity.SourceProbe{}, err
 	}
-	version, ok, err := s.usageRowsVersion(ctx, []string{"sessions"}, "")
-	if err != nil {
-		return activity.SourceProbe{}, fmt.Errorf("probing session versions: %w", err)
-	}
-	if !ok {
-		return activity.SourceProbe{}, errors.New("probing session versions: could not establish a stable version")
-	}
-	probe.SessionRowsFingerprint = version
 	if ready {
 		// Count and sum row hashes so merges and row ordering do not change the
 		// fingerprint, while duplicate rows still contribute to it.

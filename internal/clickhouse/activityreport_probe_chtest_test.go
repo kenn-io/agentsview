@@ -120,3 +120,32 @@ func TestActivitySourceProbeTracksIncrementalSessions(t *testing.T) {
 	afterQueries, _ := identityQueryCounts(t, store)
 	assert.Greater(t, afterQueries, beforeQueries)
 }
+
+func TestActivitySourceProbeFallsBackWhenSessionPartsMove(t *testing.T) {
+	t.Parallel()
+	dsn, database := chtest.FreshDatabase(t)
+	conn := chtest.Open(t, dsn, database)
+	ctx := t.Context()
+	require.NoError(t, EnsureSchemaOn(ctx, conn))
+	store := newTestStore(t, conn, Target{URL: dsn, Database: database})
+	_, err := conn.ExecContext(ctx, `INSERT INTO sessions (id,push_version) VALUES ('run',1)`)
+	require.NoError(t, err)
+	moved := false
+	store.afterTrackerReads = func() {
+		if !moved {
+			moved = true
+			_, err := conn.ExecContext(ctx, `INSERT INTO sessions (id,push_version) VALUES ('run',2)`)
+			require.NoError(t, err)
+		}
+	}
+	fallback, err := store.ActivityReportSourceProbe(ctx)
+	require.NoError(t, err)
+	require.True(t, moved)
+	assert.NotEmpty(t, fallback.SessionRowsFingerprint)
+	assert.Empty(t, store.probeCache.fingerprint)
+	store.afterTrackerReads = nil
+	stable, err := store.ActivityReportSourceProbe(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, fallback.SessionRowsFingerprint, stable.SessionRowsFingerprint)
+	assert.NotEmpty(t, store.probeCache.fingerprint)
+}
