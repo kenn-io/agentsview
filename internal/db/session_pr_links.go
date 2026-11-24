@@ -308,7 +308,7 @@ func appendSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id
 		if err != nil {
 			return err
 		}
-		if sharedContext.directory || sharedContext.environment || sharedContext.repository {
+		if sharedContext.directory || sharedContext.repository {
 			tools, err = toolCallPRLinks(ctx, messages, cwd, remote, &sharedContext, nil)
 			if err != nil {
 				return err
@@ -366,13 +366,12 @@ func (db *DB) upgradePromptPRLinksTx(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
-type sharedPRContext struct{ directory, environment, repository bool }
+type sharedPRContext struct{ directory, repository bool }
 
-func (c *sharedPRContext) add(shell, directory, repository, persistent bool) {
+func (c *sharedPRContext) add(directory, repository bool) {
 	if c != nil {
 		c.directory = c.directory || directory
-		c.repository = c.repository || persistent
-		c.environment = c.environment || shell && repository && !persistent
+		c.repository = c.repository || repository
 	}
 }
 
@@ -392,7 +391,7 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 		return parser.PromptPRLinksContext(ctx, payload.Prompt+"\n"+payload.Message+"\n"+payload.Task+"\n"+content)
 	}
 	if category != "Bash" || len(input) > 256*1024 {
-		change.add(false, false, true, true)
+		change.add(false, true)
 		return nil, ctx.Err()
 	}
 	plain := !jsontext.Value(input).IsValid()
@@ -407,9 +406,9 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 	if !plain && json.Unmarshal([]byte(input), &payload) != nil {
 		return nil, ctx.Err()
 	}
-	allowBare := !sharedContext.directory && !sharedContext.environment && !sharedContext.repository
+	allowBare := !sharedContext.directory && !sharedContext.repository
 	if dir := parser.ToolInputWorkdir(input); dir != "" {
-		allowBare = !sharedContext.environment && !sharedContext.repository && parser.SamePRWorkingDirectory(cwd, dir)
+		allowBare = !sharedContext.repository && parser.SamePRWorkingDirectory(cwd, dir)
 	}
 	var command string
 	if plain {
@@ -425,8 +424,8 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 	}
 	var lists [][]PRLink
 	for _, command := range payload.Commands {
-		links, directory, repository, persistent, usesRemote, err := parser.AnalyzePRCommand(ctx, command, cwd, remote, allowBare, sharedContext.environment || sharedContext.repository)
-		change.add(toolName == "Bash", directory, repository, persistent)
+		links, directory, repository, persistent, usesRemote, err := parser.AnalyzePRCommand(ctx, command, cwd, remote, allowBare, sharedContext.repository)
+		change.add(directory, persistent)
 		if depends != nil {
 			*depends = append(*depends, usesRemote...)
 		}
@@ -471,7 +470,6 @@ func toolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string
 			if call.Category == "Bash" {
 				if call.ToolName == "Bash" {
 					sharedContext.directory = sharedContext.directory || change.directory
-					sharedContext.environment = sharedContext.environment || change.environment
 				}
 				sharedContext.repository = sharedContext.repository || change.repository
 			}
