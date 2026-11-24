@@ -265,16 +265,6 @@ func (e *Engine) codexIndexRenamedRawIDs(ctx context.Context,
 func (e *Engine) codexIndexSourceForRawID(ctx context.Context,
 	sessionRoots []string, rawID string,
 ) (parser.DiscoveredFile, bool) {
-	stored := e.db.GetSessionFilePath(ctx, e.idPrefix+"codex:"+rawID)
-	for _, root := range sessionRoots {
-		if _, uuid, ok := parser.CodexSessionPathInfo(root, stored); ok && uuid == rawID && parser.IsRegularFile(stored) {
-			return parser.DiscoveredFile{
-				Path: stored, Agent: parser.AgentCodex,
-				Machine:         e.machineForPath(parser.AgentCodex, stored),
-				ProviderProcess: true, ProviderSource: e.codexPinnedProviderSource(parser.AgentCodex, stored),
-			}, true
-		}
-	}
 	var candidates []parser.DiscoveredFile
 	for _, root := range sessionRoots {
 		if src := e.codexSourceFileForUUID(ctx, root, rawID); src != "" {

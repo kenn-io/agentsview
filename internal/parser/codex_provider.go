@@ -26,6 +26,7 @@ var (
 	_ RawCaptureSourceProvider          = (*codexProvider)(nil)
 	_ StreamingRawCaptureSourceProvider = (*codexProvider)(nil)
 	_ ReconciliationSourceResolver      = (*codexProvider)(nil)
+	_ ReconciliationSourceRanker        = (*codexProvider)(nil)
 )
 
 // codexProviderSpec parameterizes the one shared Codex-format provider
@@ -183,6 +184,13 @@ func (p *codexProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 
 func (p *codexProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
 	return p.sources.DiscoverEach(ctx, yield)
+}
+
+func (p *codexProvider) ReconciliationSourceRank(source SourceRef) ReconciliationSourceRank {
+	if p.spec.agent != AgentCodex {
+		return ReconciliationSourceRank{}
+	}
+	return codexSourceRank(source)
 }
 
 // SourceForReconciliation allows a rollout restored after discovery to use
@@ -476,12 +484,9 @@ func (p *codexProvider) PlanRawCapture(
 		return RawCapturePlan{}, invalidRawCapturePlan("codex source is not a local discovered transcript")
 	}
 	configuredRoot := filepath.Clean(src.Root)
-	if root, _ := codexLabelRoot(p.sources.roots, src.Path); root != "" {
-		configuredRoot = filepath.Clean(root)
-	}
 	captureRoot := configuredRoot
 	indexPath := codexSessionIndexPath(src.Path)
-	if indexPath != "" && CodexSourceLabelForRoots(p.sources.roots, src.Path) == "" {
+	if indexPath != "" && CodexSourceLabel(src.Root, src.Path) == "" {
 		// The provider reads this named sibling as session metadata, so raw
 		// capture widens only far enough to preserve the same parse inputs.
 		captureRoot = filepath.Dir(indexPath)
@@ -561,7 +566,7 @@ func (p *codexProvider) PlanRawCapture(
 			if i > 0 {
 				logical = fmt.Sprintf("alias-homes/%d/%s", i, CodexSessionIndexFilename)
 			}
-			if (p.Config.StableSourceSnapshots || i == 0 && CodexSourceLabelForRoots(p.sources.roots, src.Path) != "") &&
+			if (p.Config.StableSourceSnapshots || i == 0 && CodexSourceLabel(src.Root, src.Path) != "") &&
 				rawCapturePathWithin(captureRoot, candidate) {
 				// Materialized aliases already have custody paths. Keep their
 				// original ordinals even when missing indexes left gaps.
@@ -1536,6 +1541,11 @@ func (s codexSourceSet) sourceRef(
 	if requireRegular && !IsRegularFile(path) {
 		return SourceRef{}, false
 	}
+	if s.agent == AgentCodex {
+		if outer, _ := codexLabelRoot(s.roots, path); outer != "" {
+			root = outer
+		}
+	}
 	return SourceRef{
 		Provider:       s.agent,
 		Key:            codexSourceKey(s.agent, uuid),
@@ -1675,27 +1685,41 @@ func CodexSourceKey(agent AgentType, uuid string) string {
 	return codexSourceKey(agent, uuid)
 }
 
-// preferCodexSource reports whether candidate should replace current as the
-// copy of one session. Labeled copies win over ordinary ones; among distinct
-// labeled homes the newest wins. Ordinary copies retain layout precedence.
+func codexSourceRank(source SourceRef) ReconciliationSourceRank {
+	src, ok := source.Opaque.(codexSource)
+	if !ok {
+		return ReconciliationSourceRank{}
+	}
+	if CodexSourceLabel(src.Root, src.Path) != "" {
+		path := src.Path
+		if plain := codexPlainRolloutPath(path); IsRegularFile(plain) {
+			path = plain
+		}
+		var recency int64
+		if info, err := os.Stat(path); err == nil {
+			recency = info.ModTime().UnixNano()
+		}
+		return ReconciliationSourceRank{Class: 2, Recency: recency, Path: src.Path}
+	}
+	if !isCompressedCodexRolloutPath(src.Path) {
+		return ReconciliationSourceRank{Class: 1}
+	}
+	return ReconciliationSourceRank{}
+}
+
+// preferCodexSource ranks labeled copies by recency and keeps ordinary layout precedence.
 func preferCodexSource(candidate, current SourceRef) bool {
 	cand := candidate.Opaque.(codexSource)
 	curr := current.Opaque.(codexSource)
-	candLabel, candSessions := codexLabeledSession(cand.Root, cand.Path)
-	currLabel, currSessions := codexLabeledSession(curr.Root, curr.Path)
-	if cand.Path == curr.Path {
-		return len(candLabel) > len(currLabel)
-	}
-	if (candSessions != "") != (currSessions != "") {
-		return candSessions != ""
-	}
-	if candSessions != "" && currSessions != "" && candSessions != currSessions {
-		candInfo, candErr := os.Stat(cand.Path)
-		currInfo, currErr := os.Stat(curr.Path)
-		if candErr == nil && currErr == nil && !candInfo.ModTime().Equal(currInfo.ModTime()) {
-			return candInfo.ModTime().After(currInfo.ModTime())
+	candRank, currRank := codexSourceRank(candidate), codexSourceRank(current)
+	if candRank.Class == 2 || currRank.Class == 2 {
+		if candRank.Class != currRank.Class {
+			return candRank.Class > currRank.Class
 		}
-		return candidate.DisplayPath < current.DisplayPath
+		if candRank.Recency != currRank.Recency {
+			return candRank.Recency > currRank.Recency
+		}
+		return candRank.Path < currRank.Path
 	}
 	if cand.Layout != curr.Layout {
 		return cand.Layout == CodexLayoutDated

@@ -296,6 +296,68 @@ func TestCodexLabeledRunNewestCopyOnSync(t *testing.T) {
 	}
 }
 
+func TestCodexLabeledCopySurvivesOrdinaryUpdate(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	ordinary, logs := filepath.Join(root, "ordinary"), filepath.Join(root, "logs")
+	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	name := "rollout-2026-10-08T12-00-00-" + id + ".jsonl"
+	paths := []string{filepath.Join(ordinary, "2026", "10", "08", name), filepath.Join(logs, "a", ".codex-run-v1-abc", "sessions", "2026", "10", "08", name), filepath.Join(logs, "b", ".codex-run-v1-abc", "sessions", "2026", "10", "08", name)}
+	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z")
+	for i, path := range paths {
+		dbtest.WriteTestFile(t, path, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", []string{"ordinary", "a", "b"}[i], "2026-10-08T12:00:01Z")+"\n"))
+		mtime := time.Now().Add(time.Duration(i) * time.Hour)
+		require.NoError(t, os.Chtimes(path, mtime, mtime))
+	}
+	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {ordinary, logs}}})
+	t.Cleanup(engine.Close)
+	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+	for step, index := range []int{0, 1} {
+		file, err := os.OpenFile(paths[index], os.O_APPEND|os.O_WRONLY, 0o600)
+		require.NoError(t, err)
+		_, err = file.WriteString(testjsonl.CodexMsgJSON("assistant", "update", "2026-10-08T12:00:02Z") + "\n")
+		require.NoError(t, err)
+		require.NoError(t, file.Close())
+		mtime := time.Now().Add(time.Duration(step+3) * time.Hour)
+		require.NoError(t, os.Chtimes(paths[index], mtime, mtime))
+		require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[index]}))
+		want := []int{2, 1}[step]
+		session, err := database.GetSessionFull(t.Context(), "codex:"+id)
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		assert.Equal(t, []string{"", "a", "b"}[want], session.Project)
+		require.NotNil(t, session.FilePath)
+		assert.Equal(t, paths[want], *session.FilePath)
+		messages, err := database.GetMessages(t.Context(), "codex:"+id, 0, 100, true)
+		require.NoError(t, err)
+		require.NotEmpty(t, messages)
+		assert.Equal(t, []string{"", "a", "b"}[want], messages[0].Content)
+	}
+}
+
+func TestReconcileCodexLabeledCopyWins(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	ordinary, logs := filepath.Join(root, "ordinary"), filepath.Join(root, "logs")
+	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	name := "rollout-2026-10-08T12-00-00-" + id + ".jsonl"
+	paths := []string{filepath.Join(ordinary, "2026", "10", "08", name), filepath.Join(logs, "a", ".codex-run-v1-abc", "sessions", "2026", "10", "08", name), filepath.Join(logs, "b", ".codex-run-v1-abc", "sessions", "2026", "10", "08", name)}
+	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z")
+	for i, path := range paths {
+		dbtest.WriteTestFile(t, path, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", []string{"ordinary", "a", "b"}[i], "2026-10-08T12:00:01Z")+"\n"))
+		mtime := time.Now().Add(time.Duration(i) * time.Hour)
+		require.NoError(t, os.Chtimes(path, mtime, mtime))
+	}
+	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {ordinary, logs}}})
+	t.Cleanup(engine.Close)
+	require.NoError(t, engine.ReconcileWatchRoots(t.Context(), []string{ordinary, logs}, false))
+	assert.Equal(t, paths[2], database.GetSessionFilePath(t.Context(), "codex:"+id))
+	messages, err := database.GetMessages(t.Context(), "codex:"+id, 0, 100, true)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "b", messages[0].Content)
+}
+
 func TestCodexLabeledAndOrdinaryNewestCopyOnSync(t *testing.T) {
 	root := t.TempDir()
 	ordinary, logs := filepath.Join(root, "ordinary"), filepath.Join(root, "logs")

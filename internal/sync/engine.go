@@ -5603,7 +5603,7 @@ func (e *Engine) reconciliationCandidate(ctx context.Context,
 	} else if !claudeFormat && !isCodexFormatAgent(agent) && agent != parser.AgentOpenClaw {
 		preference1 = configuredRootPreference(statPath, roots)
 	}
-	if ranker, ok := provider.(parser.ReconciliationSourceRanker); ok {
+	if ranker, ok := provider.(parser.ReconciliationSourceRanker); ok && (!isCodexFormatAgent(agent) || agent == parser.AgentCodex && !isS3SourcePath(path)) {
 		rank := ranker.ReconciliationSourceRank(source)
 		if agent == parser.AgentKiro {
 			preference1 = rank.Class
@@ -9500,10 +9500,12 @@ func (e *Engine) storedSourceRanksHigher(
 	if err != nil || !found {
 		return false, err
 	}
-	return reconciliationSourceRankLower(
-		ranker.ReconciliationSourceRank(candidate),
-		ranker.ReconciliationSourceRank(stored),
-	), nil
+	candidateRank := ranker.ReconciliationSourceRank(candidate)
+	storedRank := ranker.ReconciliationSourceRank(stored)
+	if provider.Definition().Type == parser.AgentCodex && candidateRank.Class < 2 && storedRank.Class < 2 {
+		return false, nil
+	}
+	return reconciliationSourceRankLower(candidateRank, storedRank), nil
 }
 
 func (e *Engine) providerSourceLowerRanked(

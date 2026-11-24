@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/assert"
@@ -156,6 +157,34 @@ func TestCodexPlainRolloutWinsOverCompressedSibling(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, compressed, found.DisplayPath)
+}
+
+func TestCodexLabeledCompressionUsesPlainCopyTime(t *testing.T) {
+	root := t.TempDir()
+	content := codexRolloutContent(compressedThreadA, "copy")
+	a := codexDayDir(filepath.Join(root, "a", ".codex-run-v1-a", "sessions"))
+	b := codexDayDir(filepath.Join(root, "b", ".codex-run-v1-b", "sessions"))
+	name := compressedDayPrefix + compressedThreadA + ".jsonl"
+	plain := writeFileIn(t, a, name, []byte(content))
+	compressed := writeFileIn(t, a, name+".zst", zstdCompress(t, []byte(content)))
+	newer := writeFileIn(t, b, name, []byte(content))
+	for i, path := range []string{plain, newer, compressed} {
+		mtime := time.Now().Add(time.Duration(i) * time.Hour)
+		require.NoError(t, os.Chtimes(path, mtime, mtime))
+	}
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, newer, sources[0].DisplayPath)
+	ranker := provider.(ReconciliationSourceRanker)
+	source := provider.(*codexProvider).sources
+	plainRef, ok := source.sourceRef(root, plain, true)
+	require.True(t, ok)
+	compressedRef, ok := source.sourceRef(root, compressed, true)
+	require.True(t, ok)
+	assert.Equal(t, ranker.ReconciliationSourceRank(plainRef).Recency, ranker.ReconciliationSourceRank(compressedRef).Recency)
 }
 
 // TestCodexParseCompressedRolloutMatchesPlain: the compressed file parses to
