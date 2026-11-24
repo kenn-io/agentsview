@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -85,11 +86,14 @@ func newMemorySessionStartCommand() *cobra.Command {
 		Short: "Update session memory when a session starts",
 		Long: "Queue a local refresh, ask a hosted contributor to sync, " +
 			"or check a hosted reader. The command returns " +
-			"within two seconds without waiting for the refresh to finish.",
+			"within two seconds without waiting for the refresh to finish. " +
+			"With --hook, it also reads the agent's SessionStart input and, " +
+			"for a new Claude Code or Codex session started by another one, " +
+			"records the launcher as its parent.",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			err := runMemorySessionStartCommand(cmd, pluginRoot)
+			err := runMemorySessionStartCommand(cmd, pluginRoot, hook)
 			if hook && err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "agentsview memory hook: %v\n", err)
 				return nil
@@ -115,12 +119,26 @@ func newMemorySessionStartCommand() *cobra.Command {
 }
 
 func runMemorySessionStartCommand(
-	cmd *cobra.Command, pluginRoot string,
+	cmd *cobra.Command, pluginRoot string, hook bool,
 ) error {
 	if err := applyMemorySessionEnv(cmd); err != nil {
 		return err
 	}
 	mode, _ := cmd.Flags().GetString("mode")
+	// A hosted reader has no archive of its own to record the launcher in.
+	if hook && memorySessionStartMode(strings.TrimSpace(mode)) != memoryModeHostedReader {
+		ctx, cancel := context.WithTimeout(cmd.Context(), memorySessionStartTimeout)
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			if err := captureLaunchParent(ctx, cmd); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "agentsview memory hook: launcher link: %v\n", err)
+			}
+		})
+		defer func() {
+			wg.Wait()
+			cancel()
+		}()
+	}
 	target, _ := cmd.Flags().GetString("target")
 	server, _ := cmd.Flags().GetString("server")
 	serverTokenFile, _ := cmd.Flags().GetString("server-token-file")

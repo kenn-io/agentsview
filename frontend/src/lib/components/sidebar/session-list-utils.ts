@@ -36,7 +36,7 @@ export interface DisplayItem {
   session?: SessionGroupInput;
   /** True when this is a child session inside an expanded group. */
   isChild?: boolean;
-  /** Nesting depth: 0 = root, 1 = child/team-group, 2 = teammate. */
+  /** Nesting depth: 0 = root, 1 = child/team-group, 2+ = teammate or nested subagent. */
   depth?: number;
   /** True when this is the last sibling at its depth level. */
   isLastChild?: boolean;
@@ -135,6 +135,45 @@ export function subagentDescendantMatcher(
   groupSessions: SessionGroupInput[],
 ): (session: SessionGroupInput) => boolean {
   return sessionAncestryMatcher(groupSessions, isSubagent);
+}
+
+function parentOf(s: SessionGroupInput): string | undefined {
+  return s.parent_session_id ?? s.parent_session_ids?.[0] ?? undefined;
+}
+
+/**
+ * Map each subagent's nearest visible subagent ancestor ("" for the
+ * group root) to its children, keeping the input's sibling order. The
+ * ancestry walk uses the unfiltered pool so a hidden parent passes its
+ * children up to the next visible ancestor.
+ */
+function subagentTree(
+  subagents: SessionGroupInput[],
+  pool: SessionGroupInput[],
+): Map<string, SessionGroupInput[]> {
+  const visible = new Set(subagents.map((s) => s.id));
+  const byId = new Map(pool.map((s) => [s.id, s]));
+  const childrenOf = new Map<string, SessionGroupInput[]>();
+  for (const s of subagents) {
+    let parent = "";
+    const seen = new Set([s.id]);
+    for (let id = parentOf(s); id && !seen.has(id);) {
+      if (visible.has(id)) {
+        parent = id;
+        break;
+      }
+      seen.add(id);
+      const next = byId.get(id);
+      id = next ? parentOf(next) : undefined;
+    }
+    let list = childrenOf.get(parent);
+    if (!list) {
+      list = [];
+      childrenOf.set(parent, list);
+    }
+    list.push(s);
+  }
+  return childrenOf;
 }
 
 /**
@@ -257,23 +296,29 @@ function emitGroupItems(
     depth1Idx++;
 
     if (subExpanded) {
-      for (let i = 0; i < subagents.length; i++) {
-        const s = subagents[i]!;
-        items.push({
-          id: `child:${g.key}:${s.id}`,
-          type: "session",
-          label,
-          count: 0,
-          group: g,
-          session: s,
-          isChild: true,
-          depth: 2,
-          isLastChild: i === subagents.length - 1,
-          height: childHeight,
-          top: y.value,
-        });
-        y.value += childHeight;
-      }
+      const childrenOf = subagentTree(subagents, ancestryPool);
+      const emit = (parentId: string, depth: number) => {
+        const siblings = childrenOf.get(parentId) ?? [];
+        for (let i = 0; i < siblings.length; i++) {
+          const s = siblings[i]!;
+          items.push({
+            id: `child:${g.key}:${s.id}`,
+            type: "session",
+            label,
+            count: 0,
+            group: g,
+            session: s,
+            isChild: true,
+            depth,
+            isLastChild: i === siblings.length - 1,
+            height: childHeight,
+            top: y.value,
+          });
+          y.value += childHeight;
+          emit(s.id, depth + 1);
+        }
+      };
+      emit("", 2);
     }
   }
 

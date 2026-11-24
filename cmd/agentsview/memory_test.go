@@ -91,6 +91,7 @@ func TestMemorySessionStartHookReportsFailureWithoutBlocking(t *testing.T) {
 	) error {
 		return errors.New("remote unavailable")
 	}
+	stubLaunchProcesses(t)
 
 	cmd := newRootCommand()
 	var stderr bytes.Buffer

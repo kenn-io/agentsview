@@ -802,6 +802,26 @@ the launcher's total. The response also includes `session_found` and `applied`.
   its own ancestor returns HTTP 400. Clearing an absent link succeeds without
   changing the session.
 
+#### Runs launched from Claude Code and Codex
+
+When a Claude Code or Codex session starts `claude -p` or `codex exec`, the new
+run's SessionStart hook records the launching session as its parent. The run
+appears under its launcher in the sidebar's Subagents group, and
+`get_child_sessions` on the launcher returns it. A run started by a run nests
+under that run.
+
+- The hook comes from
+  [`agentsview agent setup`](commands.md#agentsview-agent-setup) or the
+  AgentsView memory plugin. Codex runs only hooks you have reviewed in its
+  `/hooks` view.
+- The link is recorded when the run starts, so a run that exits before sync
+  still appears under its launcher once both sessions sync.
+- Only a fresh start records a link. Resuming, clearing, or compacting a
+  session never restores a link you removed with `--clear`.
+- The hook finds the launcher from process ancestry and the launcher's
+  `CLAUDE_CODE_SESSION_ID` or `CODEX_THREAD_ID` variable. A launcher run
+  through a wrapper process, such as `node`, is not recognized.
+
 ______________________________________________________________________
 
 ### `agentsview session watch`

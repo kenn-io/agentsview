@@ -905,3 +905,52 @@ describe("selectPrimaryId", () => {
     expect(selectPrimaryId([a, b], "key")).toBe("b");
   });
 });
+
+describe("nested subagent rows", () => {
+  // A launches B and D; B launches C. D is the most recent sibling.
+  function launchedTree(): Session[] {
+    const sub = (id: string, parent: string, ended: string) =>
+      makeSession({
+        id,
+        parent_session_id: parent,
+        relationship_type: "subagent",
+        ended_at: ended,
+      });
+    return [
+      makeSession({ id: "a" }),
+      sub("b", "a", "2025-01-02T00:00:00Z"),
+      sub("c", "b", "2025-01-02T01:00:00Z"),
+      sub("d", "a", "2025-01-03T00:00:00Z"),
+    ];
+  }
+
+  function rows(group: SessionGroup) {
+    const expanded = new Set(["a", "subagent:a"]);
+    return buildDisplayItems([group], [], "none", new Set(), expanded)
+      .filter((item) => item.isChild)
+      .map((item) => [item.session!.id, item.depth, item.isLastChild]);
+  }
+
+  it("renders each run under its launcher at its depth", () => {
+    const [group] = buildSessionGroups(launchedTree());
+    expect(rows(group!)).toEqual([
+      ["d", 2, false],
+      ["b", 2, true],
+      ["c", 3, true],
+    ]);
+  });
+
+  it("moves a child to its nearest visible ancestor when a filter hides its parent", () => {
+    const all = launchedTree();
+    const [full] = buildSessionGroups(all);
+    const group: SessionGroup = {
+      ...full!,
+      sessions: full!.sessions.filter((s) => s.id !== "b"),
+      allSessions: full!.sessions,
+    };
+    expect(rows(group)).toEqual([
+      ["d", 2, false],
+      ["c", 2, true],
+    ]);
+  });
+});

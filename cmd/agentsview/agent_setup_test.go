@@ -11,6 +11,8 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/kit/agentsetup"
+
 	"go.kenn.io/agentsview/internal/skills"
 )
 
@@ -287,9 +289,10 @@ func TestAgentSetupWithoutMCP(t *testing.T) {
 				} `json:"rows"`
 			}
 			require.NoError(t, json.Unmarshal([]byte(out), &report))
-			require.Len(t, report.Rows, 1)
+			require.Len(t, report.Rows, 2)
 			require.Equal(t, "skill", report.Rows[0].Piece)
 			require.Equal(t, "ok", report.Rows[0].State)
+			require.Equal(t, "hooks", report.Rows[1].Piece)
 			got, err := os.ReadFile(path)
 			require.NoError(t, err)
 			require.Equal(t, tc.content, string(got))
@@ -326,7 +329,7 @@ func TestAgentSetupWithoutMCPWriteErrorAfterRefusal(t *testing.T) {
 		} `json:"rows"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(out), &report), out)
-	require.Len(t, report.Rows, 1)
+	require.Len(t, report.Rows, 2)
 	require.Contains(t, report.Rows[0].Reason, "skills: write "+license)
 	require.NotContains(t, report.Rows[0].NextStep, "--force")
 }
@@ -347,7 +350,7 @@ func TestAgentSetupWithoutMCPFormatJSON(t *testing.T) {
 		} `json:"rows"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(out), &report), out)
-	require.Len(t, report.Rows, 1)
+	require.Len(t, report.Rows, 2)
 	require.Equal(t, "claude", report.Rows[0].Agent)
 	require.Equal(t, "skill", report.Rows[0].Piece)
 	require.Equal(t, "agentsview agent setup --mcp=false --agent claude", report.Rows[0].NextStep)
@@ -399,7 +402,7 @@ func TestAgentSetupWithoutMCPTwoAgentsPartialFailure(t *testing.T) {
 		} `json:"rows"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(out), &report), out)
-	require.Len(t, report.Rows, 2)
+	require.Len(t, report.Rows, 4)
 	require.Equal(t, "claude", report.Rows[0].Agent)
 	require.Equal(t, "failed", report.Rows[0].State)
 	require.Equal(t, "skill files were edited", report.Rows[0].Reason)
@@ -408,8 +411,8 @@ func TestAgentSetupWithoutMCPTwoAgentsPartialFailure(t *testing.T) {
 	require.Equal(t, "agentsview", args[0])
 	out, err = executeCommand(newRootCommand(), args[1:]...)
 	require.NoError(t, err, out)
-	require.Equal(t, "codex", report.Rows[1].Agent)
-	require.Equal(t, "ok", report.Rows[1].State)
+	require.Equal(t, "codex", report.Rows[2].Agent)
+	require.Equal(t, "ok", report.Rows[2].State)
 	_, err = os.Stat(filepath.Join(skills.TargetDir(skills.HarnessAgents, home), skillFileName))
 	require.NoError(t, err)
 	data, err = os.ReadFile(claudeConfig)
@@ -418,4 +421,90 @@ func TestAgentSetupWithoutMCPTwoAgentsPartialFailure(t *testing.T) {
 	data, err = os.ReadFile(codexConfig)
 	require.NoError(t, err)
 	require.Equal(t, codexEntry, string(data))
+}
+
+func TestAgentSetupInstallsSessionStartHook(t *testing.T) {
+	for _, tc := range []struct {
+		agent, config, existing string
+		mcp                     bool
+	}{
+		{"claude", ".claude/settings.json", `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"user-hook"}]}]}}`, true},
+		{"claude", ".claude/settings.json", `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"user-hook"}]}]}}`, false},
+		{"codex", ".codex/hooks.json", `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"user-hook"}]}]}}`, true},
+		{"codex", ".codex/hooks.json", `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"user-hook"}]}]}}`, false},
+	} {
+		t.Run(fmt.Sprintf("%s mcp=%t", tc.agent, tc.mcp), func(t *testing.T) {
+			home := t.TempDir()
+			setDoctorMemoryTestEnvironment(t, home)
+			setupHooks = agentsetup.Hooks
+			fakeAgent(t, tc.agent, "")
+			name := "agentsview"
+			if runtime.GOOS == "windows" {
+				name += ".exe"
+			}
+			require.NoError(t, os.WriteFile(filepath.Join(os.Getenv("PATH"), name), []byte("#!/bin/sh\n"), 0o755))
+			path := filepath.Join(home, tc.config)
+			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+			require.NoError(t, os.WriteFile(path, []byte(tc.existing), 0o600))
+
+			args := []string{"agent", "setup", "--agent", tc.agent, "--json"}
+			if !tc.mcp {
+				args = append(args, "--mcp=false")
+			}
+			out, _ := executeCommand(newRootCommand(), args...)
+			var report struct {
+				Rows []struct {
+					Piece  string `json:"piece"`
+					State  string `json:"state"`
+					Reason string `json:"reason"`
+				} `json:"rows"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(out), &report), out)
+			var hookRow *struct {
+				Piece  string `json:"piece"`
+				State  string `json:"state"`
+				Reason string `json:"reason"`
+			}
+			for i := range report.Rows {
+				if report.Rows[i].Piece == "hooks" {
+					hookRow = &report.Rows[i]
+				}
+			}
+			require.NotNil(t, hookRow, out)
+			if tc.agent == "claude" {
+				require.Equal(t, "ok", hookRow.State, out)
+			} else {
+				// The fake Codex can't answer the trust check, and setup
+				// passes on kit's report rather than claiming the hook runs.
+				require.Equal(t, "unknown", hookRow.State, out)
+				require.NotEmpty(t, hookRow.Reason)
+			}
+
+			data, err := os.ReadFile(path)
+			require.NoError(t, err)
+			var config struct {
+				Hooks map[string][]struct {
+					Hooks []map[string]any `json:"hooks"`
+				} `json:"hooks"`
+			}
+			require.NoError(t, json.Unmarshal(data, &config), string(data))
+			var commands []string
+			for _, group := range config.Hooks["SessionStart"] {
+				for _, hook := range group.Hooks {
+					command, _ := hook["command"].(string)
+					if hookArgs, ok := hook["args"].([]any); ok {
+						var commandSb496 strings.Builder
+						for _, arg := range hookArgs {
+							commandSb496.WriteString(" " + fmt.Sprint(arg))
+						}
+						command += commandSb496.String()
+					}
+					commands = append(commands, command)
+				}
+			}
+			require.Contains(t, commands, "user-hook")
+			require.Len(t, commands, 2, string(data))
+			require.Contains(t, strings.Join(commands, "\n"), "agentsview memory session-start --hook")
+		})
+	}
 }

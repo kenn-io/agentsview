@@ -2487,8 +2487,8 @@ ______________________________________________________________________
 
 ### `agentsview agent setup`
 
-Install the conversation search skill and focused MCP profile for installed
-Claude Code and Codex clients:
+Install the conversation search skill, a SessionStart hook, and the focused
+MCP profile for installed Claude Code and Codex clients:
 
 ```bash
 agentsview agent setup [--agent claude|codex]... [--check] [--force] [--mcp=false] [--print] [--format json]
@@ -2499,6 +2499,14 @@ Setup refuses to replace a different `agentsview` MCP entry unless you pass
 entry and overwrite edited skill files. `--check` makes no changes, `--print`
 shows the MCP commands to run by hand, and `--mcp=false` installs or checks
 the skill without inspecting or changing the MCP entry.
+
+The hook runs `agentsview memory session-start --hook` when a session starts.
+It refreshes memory and links a `claude -p` or `codex exec` run to the session
+that started it; see
+[runs launched from Claude Code and Codex](session-api.md#runs-launched-from-claude-code-and-codex).
+Setup adds the hook beside your own hooks, with or without `--mcp=false`.
+Codex reports a new hook as untrusted until you review it in `/hooks`, and
+setup shows that state.
 
 Setup registers `agentsview mcp --profile memory` without server flags. To use
 a remote archive, set `AGENTSVIEW_MEMORY_SERVER` or `AGENTSVIEW_MEMORY_PG`
