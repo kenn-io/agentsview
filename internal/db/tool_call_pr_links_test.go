@@ -49,6 +49,15 @@ func TestToolCallPRLinksSkipsOversizedInput(t *testing.T) {
 	assert.Equal(t, 42, links[0].Number)
 }
 
+func TestToolCallPRLinksOversizedRepositoryChange(t *testing.T) {
+	input := `{"command":"git remote set-url origin https://github.com/example/other.git","unrelated":"` + strings.Repeat("x", 256*1024) + `"}`
+	messages := []db.Message{{ToolCalls: []db.ToolCall{
+		{ToolName: "Bash", Category: "Bash", InputJSON: input},
+		{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42"}`},
+	}}}
+	assert.Empty(t, toolCallPRLinks(t, messages, "/work/repo", "https://github.com/example/repo.git"))
+}
+
 func toolCallPRLinks(t *testing.T, messages []db.Message, cwd, remote string) []db.PRLink {
 	t.Helper()
 	links, err := db.ToolCallPRLinks(t.Context(), messages, cwd, remote)
