@@ -123,7 +123,7 @@ func TestDialogueUpgradeReparsesClassifiedProviders(t *testing.T) {
 	const completedVersion = 145
 	path := filepath.Join(t.TempDir(), "archive.db")
 	d := testDBAtPath(t, path, "completed Codex upgrade")
-	for _, agent := range []string{"codex", "pi", "goose"} {
+	for _, agent := range []string{"codex", "pi", "vibe"} {
 		insertSession(t, d, agent, "project", func(s *Session) { s.Agent = agent })
 		require.NoError(t, d.SetSessionDataVersion(t.Context(), agent, completedVersion))
 	}
@@ -136,7 +136,7 @@ func TestDialogueUpgradeReparsesClassifiedProviders(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
 	assert.False(t, reopened.NeedsResync())
-	assert.Equal(t, CurrentDataVersion(), reopened.GetSessionDataVersion(t.Context(), "goose"))
+	assert.Equal(t, CurrentDataVersion(), reopened.GetSessionDataVersion(t.Context(), "vibe"))
 	assert.Equal(t, completedVersion, reopened.GetSessionDataVersion(t.Context(), "codex"))
 	assert.Equal(t, completedVersion, reopened.GetSessionDataVersion(t.Context(), "pi"))
 }
