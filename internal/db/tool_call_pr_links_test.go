@@ -31,6 +31,18 @@ func TestToolCallPRLinks(t *testing.T) {
 	}
 }
 
+func TestToolCallPRLinksSpawnAgents(t *testing.T) {
+	messages := []db.Message{{ToolCalls: []db.ToolCall{{
+		ToolName: "spawn_agents", Category: "Task",
+		InputJSON: `{"agents":[{"prompt":"Review https://github.com/example/repo/pull/42"},{"prompt":"Review https://github.com/example/repo/pull/43 and https://github.com/example/repo/pull/42","description":"https://github.com/example/repo/pull/44"}]}`,
+	}}}}
+	links := toolCallPRLinks(t, messages, "", "")
+	if assert.Len(t, links, 2) {
+		assert.Equal(t, 42, links[0].Number)
+		assert.Equal(t, 43, links[1].Number)
+	}
+}
+
 func TestToolCallPRLinksContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
