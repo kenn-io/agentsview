@@ -169,6 +169,41 @@ describe("MessagesStore", () => {
     expect(messages.loadError).toBeNull();
   });
 
+  it("keeps loadError stable during background transient reload and lets retryLoad preempt it", async () => {
+    vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 2));
+    let bgSignal: AbortSignal | undefined;
+    let bgStarted!: () => void;
+    const bgInFlight = new Promise<void>((resolve) => {
+      bgStarted = resolve;
+    });
+    vi.mocked(api.getMessages)
+      .mockRejectedValueOnce(new ApiError(500, "injected read failure"))
+      .mockImplementationOnce(
+        (_id: string, _params: unknown, opts?: { signal?: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            bgSignal = opts?.signal;
+            bgStarted();
+            opts?.signal?.addEventListener("abort", () => {
+              reject(new DOMException("aborted", "AbortError"));
+            });
+          }),
+      )
+      .mockResolvedValueOnce(makeMessagesResponse([makeMessage(0), makeMessage(1)]));
+
+    await messages.loadSession("s1");
+    await bgInFlight;
+
+    expect(messages.loadError).toBe("injected read failure");
+    expect(messages.loading).toBe(false);
+
+    await messages.retryLoad();
+
+    expect(bgSignal?.aborted).toBe(true);
+    expect(messages.messages.map((m) => m.ordinal)).toEqual([0, 1]);
+    expect(messages.loadError).toBeNull();
+    expect(messages.loading).toBe(false);
+  });
+
   it("reports a failed older page and retries that page", async () => {
     vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 3_001));
     vi.mocked(api.getMessages).mockResolvedValueOnce(
