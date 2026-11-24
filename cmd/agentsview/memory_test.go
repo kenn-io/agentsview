@@ -388,3 +388,28 @@ func TestPostMemoryRefreshTargetsAuthenticatedQueueRoute(t *testing.T) {
 		t.Context(), server.URL+"/memory-base/", "test-token",
 	))
 }
+
+func TestMemoryHookStartsLocalOwnerBeforeCapturingParent(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		original := runMemorySessionStart
+		t.Cleanup(func() { runMemorySessionStart = original })
+		stubLaunchProcesses(t)
+		lookup := lookupLaunchProcess
+		var captured atomic.Bool
+		lookupLaunchProcess = func(ctx context.Context, pid int32) (launchProcess, error) {
+			captured.Store(true)
+			return lookup(ctx, pid)
+		}
+		runMemorySessionStart = func(context.Context, memorySessionStartRequest) error {
+			synctest.Wait()
+			assert.False(t, captured.Load(), "parent capture must wait for local owner startup")
+			return nil
+		}
+		cmd := newRootCommand()
+		cmd.SetIn(bytes.NewReader(nil))
+		cmd.SetErr(&bytes.Buffer{})
+		cmd.SetArgs([]string{"memory", "session-start", "--hook"})
+		require.NoError(t, cmd.Execute())
+		assert.True(t, captured.Load())
+	})
+}
