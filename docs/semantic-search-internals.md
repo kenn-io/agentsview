@@ -321,19 +321,21 @@ or periodic retry. The document is attempted again only when its content changes
 (a new `content_hash`), a full rebuild clears the generation's stamps, or a
 config change creates a generation with a new fingerprint.
 
-### Scope (`include_automated`, `agents`)
+### Scope (`include_automated`, `agents`, `roles`)
 
 Whether automated sessions are in the embeddable universe is stored in
 `vector_meta` (`scope_include_automated`). The `[vector] agents` list is stored
 as `scope_agents`, sorted, deduplicated, and comma-joined. A missing key reads as
-an empty list, so an upgrade forces no rescan. Only the local message store
-applies the list; Recall and hosted PostgreSQL embeddings ignore it.
+an empty list, so an upgrade forces no rescan. The `[vector] roles` list is
+stored the same way as `scope_roles`, empty when it names both roles. Only the
+local message store applies either list; Recall and hosted PostgreSQL embeddings
+ignore them.
 
-Changing either value forces a full mirror *reconciliation*, not a re-embed:
-it inserts or removes rows to match the new scope, but documents that stay in
-scope and are unchanged keep their existing stamps. `include_automated` can
-change in config or via the one-off `--include-automated` flag; `agents` comes
-only from config.
+Changing any of these values triggers a full mirror *reconciliation*. It
+inserts or removes rows to match the new scope, while unchanged in-scope
+documents keep their existing stamps. `include_automated` can change in config
+or via the one-off `--include-automated` flag; `agents` and `roles` come only
+from config.
 
 The run cap is stored as `run_max_runes` in the store's metadata. A missing or
 changed cap forces one full reconciliation, including idle sessions older than
@@ -462,9 +464,10 @@ uniform. The HTTP response serializes `db.ContentMatch` directly; the MCP
   lexical output must not flicker with index state.
 
 Derived and embedded spans differ for capped assistant runs, sessions excluded
-from the build (`include_automated = false` or omitted from `agents`), and
-messages newer than the last mirror refresh. There is deliberately no
-provenance discriminator field on the wire — the mode implies it.
+from the build (`include_automated = false` or omitted from `agents`), messages
+whose role is omitted from `roles`, and messages newer than the last mirror
+refresh. There is deliberately no provenance discriminator field on the wire —
+the mode implies it.
 
 Hybrid unit-less rows (FTS hits whose message resolves to no mirror unit) are
 classified **before** scope filtering and the RRF merge, so `scope` exclusion,
