@@ -118,7 +118,7 @@ func prCommandFlag(command, flag string) (takesValue, ok bool) {
 		"revert":        {"-b --body -F --body-file -t --title", "-d --draft"},
 	}
 	for kind, list := range flags[command] {
-		for _, name := range strings.Fields(list) {
+		for name := range strings.FieldsSeq(list) {
 			if flag == name {
 				return kind == 0, true
 			}
@@ -260,6 +260,9 @@ func analyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 			continue
 		}
 		args = ghPRArgs(args)
+		if args == nil {
+			continue
+		}
 		words, literal := shellWords(args)
 		if len(words) < 4 || !literal[0] || !literal[1] || !literal[2] || words[0] != "gh" || words[1] != "pr" {
 			continue

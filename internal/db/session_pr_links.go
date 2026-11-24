@@ -542,11 +542,11 @@ func toolCallPRStates(ctx context.Context, messages []Message, cwd, remote strin
 func callPRStateIn(ctx context.Context, call ToolCall, cwd, remote string, state sharedPRContext, depends *[]PRLink) (callPRState, error) {
 	if call.InputJSON == "" {
 		var retained retainedPRState
-		if call.PRLinks == "" || json.Unmarshal([]byte(call.PRLinks), &retained) != nil {
-			return callPRState{}, nil
+		if call.PRLinks != "" && json.Unmarshal([]byte(call.PRLinks), &retained) == nil {
+			links := retainedPRLinksIn(retained, remote, state, depends)
+			return callPRState{links: links, change: sharedPRContext{directory: retained.Dir, repository: retained.Repo}}, nil
 		}
-		links := retainedPRLinksIn(retained, remote, state, depends)
-		return callPRState{links: links, change: sharedPRContext{directory: retained.Dir, repository: retained.Repo}}, nil
+		return callPRState{}, nil
 	}
 	var change sharedPRContext
 	links, err := callPRLinks(ctx, call.Category, call.ToolName, call.InputJSON, cwd, remote, state, &change, depends)
