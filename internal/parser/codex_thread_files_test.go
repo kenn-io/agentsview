@@ -442,6 +442,50 @@ func TestCodexForkInventoryBatchDoesNotAllocatePerUnchangedDirectory(t *testing.
 	assert.Less(t, allocations[1], 2*allocations[0], "warm forks must not stat unrelated dated directories")
 }
 
+func TestCodexHasParentRollout(t *testing.T) {
+	const parent = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	const child = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	const rollout = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+
+	liveRoot := t.TempDir()
+	archivedRoot := t.TempDir()
+	childPath := filepath.Join(liveRoot, "2026", "07", "08", "rollout-2026-07-08T10-00-00-"+child+".jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(childPath), 0o700))
+	require.NoError(t, os.WriteFile(childPath, []byte("{}\n"), 0o600))
+
+	registered, ok := ProviderFactoryByType(AgentCodex)
+	require.True(t, ok)
+	factory := newCodexProviderFactory(registered.Definition())
+	cfg := ProviderConfig{Roots: []string{liveRoot, archivedRoot}}
+	t.Cleanup(func() { factory.(*codexProviderFactory).threadFiles.invalidate(cfg.Roots) })
+	provider := factory.NewProvider(cfg)
+	checker, ok := provider.(CodexParentRolloutChecker)
+	require.True(t, ok)
+
+	has, err := checker.HasCodexParentRollout(t.Context(), childPath, parent)
+	require.NoError(t, err)
+	assert.False(t, has, "missing parent must report false")
+
+	// A revert page alone cannot identify turns copied from the original rollout.
+	pagePath := filepath.Join(archivedRoot, "rollout-2026-07-08T09-00-00-"+parent+"_"+rollout+".jsonl")
+	require.NoError(t, os.WriteFile(pagePath, []byte("{}\n"), 0o600))
+	has, err = checker.HasCodexParentRollout(t.Context(), childPath, parent)
+	require.NoError(t, err)
+	assert.False(t, has, "revert page alone must not count as the original parent rollout")
+
+	// A compressed original rollout in archived_sessions resolves the parent.
+	compressedParent := filepath.Join(archivedRoot, "rollout-2026-07-08T08-00-00-"+parent+".jsonl.zst")
+	require.NoError(t, os.WriteFile(compressedParent, []byte("zst"), 0o600))
+	has, err = checker.HasCodexParentRollout(t.Context(), childPath, parent)
+	require.NoError(t, err)
+	assert.True(t, has, "compressed original rollout must resolve parent presence")
+
+	// A child path must never resolve itself as its own parent.
+	has, err = checker.HasCodexParentRollout(t.Context(), childPath, child)
+	require.NoError(t, err)
+	assert.False(t, has, "child rollout must not satisfy its own parent lookup")
+}
+
 func BenchmarkCodexForkParentDatedDirectories(b *testing.B) {
 	for _, days := range []int{10, 1000} {
 		b.Run(strconv.Itoa(days), func(b *testing.B) {

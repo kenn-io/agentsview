@@ -1521,20 +1521,36 @@ func (w *Watcher) loop() {
 				log.Printf("watcher callback: %v", result.err)
 				wasEmpty := w.eventSink.PendingEmpty()
 				olderRetryWaiting := !w.eventSink.RetryEmpty()
+				deferOnly := callbackErrorDeferOnly(result.err)
+				if deferOnly {
+					// Discovery and root reconciliation completed cleanly; only
+					// individual deferred sources remain to retry. Acknowledge
+					// lifecycle tokens so native watch recovery can finish and
+					// release fallback polling.
+					for _, token := range result.batch.lifecycleTokens {
+						token.gate.acknowledgeLifecycle(token.generation)
+					}
+				}
 				retryRetained := false
 				if retry, ok := callbackRetryBatch(result.err); ok {
-					retry.lifecycleTokens = append(
-						[]backendLifecycleToken(nil), result.batch.lifecycleTokens...,
-					)
+					if !deferOnly {
+						retry.lifecycleTokens = append(
+							[]backendLifecycleToken(nil), result.batch.lifecycleTokens...,
+						)
+					}
 					w.eventSink.RetainRetry(retry)
 					retryRetained = true
 				} else {
+					var lifecycleTokens []backendLifecycleToken
+					if !deferOnly {
+						lifecycleTokens = result.batch.lifecycleTokens
+					}
 					switch {
 					case result.batch.FullSync:
 						w.eventSink.RetainRetry(WatchBatch{
 							FullSync:        true,
 							LostEvents:      result.batch.LostEvents,
-							lifecycleTokens: result.batch.lifecycleTokens,
+							lifecycleTokens: lifecycleTokens,
 						})
 						retryRetained = true
 					case renameBatchNeedsFullRetry(result.batch.Renames):
@@ -1543,14 +1559,14 @@ func (w *Watcher) loop() {
 						w.eventSink.RetainRetry(WatchBatch{
 							FullSync:        true,
 							LostEvents:      result.batch.LostEvents,
-							lifecycleTokens: result.batch.lifecycleTokens,
+							lifecycleTokens: lifecycleTokens,
 						})
 						retryRetained = true
 					case len(result.batch.ReconcileRoots) > 0:
 						w.eventSink.RetainRetry(WatchBatch{
 							ReconcileRoots:  result.batch.ReconcileRoots,
 							LostEvents:      result.batch.LostEvents,
-							lifecycleTokens: result.batch.lifecycleTokens,
+							lifecycleTokens: lifecycleTokens,
 						})
 						retryRetained = true
 					}
@@ -1656,6 +1672,10 @@ func (w *Watcher) accumulateBackendEvent(event backendEvent) {
 			Path: root, Root: root, Op: backendOpReconcileRootChange,
 		})
 	}
+}
+
+func callbackErrorDeferOnly(err error) bool {
+	return watchBatchDeferOnlyError(err)
 }
 
 func callbackRetryBatch(err error) (WatchBatch, bool) {

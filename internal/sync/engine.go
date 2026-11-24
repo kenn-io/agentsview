@@ -503,7 +503,8 @@ type Engine struct {
 	// start of each ReconcileProviderRootsGrouped group; nil in production.
 	groupedReconcileGroupHook func(index int)
 	// pollScans holds the metadata snapshots polling compares between passes.
-	pollScans pollScanState
+	pollScans            pollScanState
+	unresolvedCodexForks unresolvedCodexForkTracker
 	// claudeProjectSessionFiles is an observability seam for cardinality tests
 	// around duplicate-session discovery.
 	claudeProjectSessionFiles func(string) []parser.DiscoveredFile
@@ -1644,6 +1645,8 @@ func (e *Engine) syncChangedPathsLocked(
 	})
 	ctx = parser.WithProjectRootMemo(ctx)
 	ctx = parser.WithCodexParentInventoryBatch(ctx)
+	ctx = withSettleUnresolvedCodexForks(ctx)
+	paths = e.appendWaitingCodexForkPaths(ctx, paths)
 	e.invalidateNativeTitleCache(paths)
 	summary := e.beginChangedPathPass(paths)
 	prepared := e.prepareChangedPathSync(ctx, paths)
@@ -1761,6 +1764,11 @@ func (e *Engine) applyChangedPathSyncLocked(
 		tombstoned, tombstoneErr = e.tombstoneMissingWatchSourcesLocked(
 			ctx, prepared.missingPaths, nil,
 		)
+		if tombstoneErr == nil {
+			for _, missing := range prepared.missingPaths {
+				e.unresolvedCodexForks.forgetPath(missing)
+			}
+		}
 	}
 	if ctx.Err() == nil {
 		e.persistSkipCache(ctx)
@@ -3077,6 +3085,7 @@ func (e *Engine) ResetCachesAfterSwap(ctx context.Context) error {
 	e.clearTrustedSQLiteContainers()
 	e.clearTrustedOpenCodeStorageSessions()
 	e.clearVerifiedSources()
+	e.unresolvedCodexForks.clear()
 	e.clearPiebaldFailureMemo()
 	return e.ReloadSkipCache(ctx)
 }
@@ -4155,8 +4164,17 @@ type ProviderRootsGroup struct {
 func (e *Engine) ReconcileProviderRootsGrouped(
 	ctx context.Context, groups []ProviderRootsGroup,
 ) error {
+	_, _, err := e.reconcileProviderRootsGroupedWithOutcomes(ctx, groups)
+	return err
+}
+
+func (e *Engine) reconcileProviderRootsGroupedWithOutcomes(
+	ctx context.Context, groups []ProviderRootsGroup,
+) ([]error, error, error) {
 	deferredCtx := context.WithValue(ctx, deferPassEpilogueContextKey{}, true)
+	groupErrs := make([]error, len(groups))
 	var errs []error
+	var epilogueErr error
 	changed := false
 	func() {
 		e.syncMu.Lock()
@@ -4190,7 +4208,9 @@ func (e *Engine) ReconcileProviderRootsGrouped(
 			if agent == "" {
 				agent = "unscoped"
 			}
-			errs = append(errs, fmt.Errorf("reconcile %s roots: %w", agent, err))
+			wrapped := fmt.Errorf("reconcile %s roots: %w", agent, err)
+			groupErrs[i] = wrapped
+			errs = append(errs, wrapped)
 		}
 		// A canceled batch skips the epilogue entirely: linking and skip-cache
 		// persistence are not context-aware, and shutdown must not block on
@@ -4198,17 +4218,20 @@ func (e *Engine) ReconcileProviderRootsGrouped(
 		// persist on the next clean pass; the returned error keeps the batch
 		// from being mistaken for a completed one.
 		if err := ctx.Err(); err != nil {
-			errs = append(errs, fmt.Errorf(
+			epilogueErr = fmt.Errorf(
 				"grouped reconciliation epilogue skipped: %w", err,
-			))
+			)
+			errs = append(errs, epilogueErr)
 			return
 		}
 		if linkEligible {
 			linked, err := e.linkSubagentSessions(ctx)
 			if err != nil {
-				errs = append(errs, fmt.Errorf(
+				linkErr := fmt.Errorf(
 					"link subagent sessions after grouped reconciliation: %w", err,
-				))
+				)
+				epilogueErr = errors.Join(epilogueErr, linkErr)
+				errs = append(errs, linkErr)
 			} else if linked > 0 {
 				// The repair runs after per-group stats are folded into
 				// changed. A parent-only update still has to refresh clients.
@@ -4218,9 +4241,11 @@ func (e *Engine) ReconcileProviderRootsGrouped(
 		if repairEligible {
 			repaired, err := e.db.RepairQueuedSubagentParentsContext(ctx, nil)
 			if err != nil {
-				errs = append(errs, fmt.Errorf(
+				repairErr := fmt.Errorf(
 					"repair queued subagent parents after grouped reconciliation: %w", err,
-				))
+				)
+				epilogueErr = errors.Join(epilogueErr, repairErr)
+				errs = append(errs, repairErr)
 			} else if repaired > 0 {
 				changed = true
 			}
@@ -4238,7 +4263,7 @@ func (e *Engine) ReconcileProviderRootsGrouped(
 	if changed {
 		e.emit("sessions")
 	}
-	return errors.Join(errs...)
+	return groupErrs, epilogueErr, errors.Join(errs...)
 }
 
 func (e *Engine) reconcileScopedWatchRoots(
@@ -4292,9 +4317,20 @@ func (e *Engine) reconcileScopedWatchRootsLocked(
 		})
 		return SyncStats{}, 0, passEpilogueEligibility{}, nil
 	}
-	stats, metrics, tombstoned, eligibility, err := e.reconcileWatchRootsStreamedLocked(
+	stats, metrics, tombstoned, eligibility, wakePaths, err := e.reconcileWatchRootsStreamedLocked(
 		ctx, plans, fullCoverage, force, onProgress,
 	)
+	if len(wakePaths) > 0 && ctx.Err() == nil && !stats.Aborted {
+		wakeStats, wakeTombstoned, wakeErr := e.syncChangedPathsLocked(ctx, wakePaths)
+		var merged SyncStats
+		mergeReconciliationSyncStats(&merged, stats)
+		mergeReconciliationSyncStats(&merged, wakeStats)
+		stats = merged
+		tombstoned += wakeTombstoned
+		if wakeErr != nil {
+			err = errors.Join(err, wakeErr)
+		}
+	}
 	metrics.ExcludedRemoteRoots = excludedRemoteRoots
 	complete := err == nil && ctx.Err() == nil && !stats.Aborted &&
 		stats.ProcessingComplete()
@@ -4468,10 +4504,10 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 	fullCoverage, force bool, onProgress ProgressFunc,
 ) (
 	stats SyncStats, metrics ReconciliationMetrics, tombstoned int,
-	eligibility passEpilogueEligibility, retErr error,
+	eligibility passEpilogueEligibility, wakePaths []string, retErr error,
 ) {
 	if err := ctx.Err(); err != nil {
-		return SyncStats{Aborted: true}, metrics, 0, eligibility, err
+		return SyncStats{Aborted: true}, metrics, 0, eligibility, nil, err
 	}
 	ctx = e.parsePolicyContext(ctx)
 	if force {
@@ -4496,10 +4532,11 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 	ctx, closeProviderCache, err := parser.WithReconciliationCache(ctx)
 	if err != nil {
 		stats.Aborted = true
-		return stats, metrics, 0, eligibility, err
+		return stats, metrics, 0, eligibility, nil, err
 	}
 	ctx = parser.WithProjectRootMemo(ctx)
 	ctx = parser.WithCodexParentInventoryBatch(ctx)
+	ctx = withSettleUnresolvedCodexForks(ctx)
 	// Share S3 Codex parent downloads across every reconciliation page.
 	ctx, closeS3ParentCache := withS3CodexParentCache(ctx)
 	defer closeS3ParentCache()
@@ -4517,7 +4554,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 	spool, err := e.reconciliationSpoolFactory(ctx, e.db.Path())
 	if err != nil {
 		stats.Aborted = true
-		return stats, metrics, 0, eligibility, err
+		return stats, metrics, 0, eligibility, nil, err
 	}
 	cleaned := false
 	defer func() {
@@ -4529,7 +4566,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 	preContainerStates := e.capturePlannedSQLiteContainerStates(plans, fullCoverage)
 	if err := e.prepareSQLiteContainerVerification(ctx, preContainerStates); err != nil {
 		stats.Aborted = true
-		return stats, metrics, 0, eligibility, err
+		return stats, metrics, 0, eligibility, nil, err
 	}
 	e.beginStreamingSQLiteContainerPass(preContainerStates)
 	defer func() {
@@ -4554,7 +4591,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 			err = errors.Join(err, cleanupErr)
 		}
 		cleaned = true
-		return stats, metrics, 0, eligibility, err
+		return stats, metrics, 0, eligibility, nil, err
 	}
 	e.finishStreamingSQLiteContainerDiscovery()
 	authoritativeProviders := make(map[parser.AgentType]struct{}, len(completedScopes))
@@ -4577,7 +4614,15 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 			)
 		}()
 	}
-	var cursor reconciliationCursor
+	var (
+		cursor          reconciliationCursor
+		reconciledRoots []string
+		seenWake        map[string]struct{}
+	)
+	if !fullCoverage && e.pathRewriter == nil {
+		reconciledRoots = reconciledCodexRoots(plans)
+		seenWake = make(map[string]struct{})
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			stats.Aborted = true
@@ -4603,6 +4648,9 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 			break
 		}
 		runtimeMetrics.rehydrated(len(files))
+		if seenWake != nil {
+			e.collectCrossRootWaitingCodexForks(ctx, files, reconciledRoots, seenWake, &wakePaths)
+		}
 		if verifiedPass != 0 {
 			e.markVerifiedDiscoveredSources(files)
 		}
@@ -4820,7 +4868,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 	}
 	cleaned = true
 	tombstoned += stats.Tombstoned
-	return stats, metrics, tombstoned, eligibility, retErr
+	return stats, metrics, tombstoned, eligibility, wakePaths, retErr
 }
 
 func (e *Engine) tombstoneCompletedReconciliationScopesLocked(
@@ -8241,6 +8289,7 @@ func (e *Engine) collectAndBatchWithOptions(
 				pending, outcome.writtenSessions, outcome.failedSessions,
 				outcome.cwdFiltered,
 			)
+			e.recordUnresolvedCodexForksAfterWrite(pending, outcome.written)
 			stats.cwdFilteredSessions += outcome.cwdFiltered
 			progress.MessagesIndexed += outcome.writtenMessages
 			stats.messagesIndexed = progress.MessagesIndexed
@@ -8719,6 +8768,10 @@ func (e *Engine) collectAndBatchWithOptions(
 					sourceCwdStored:         r.sourceCwdStored,
 					sourceCwdStoredOK:       r.sourceCwdStoredOK,
 					sourceCompletionSkipped: sourceCompletionSkipped[applyIDPrefixToID(e.idPrefix, pr.Session.ID)],
+					verifiedCapture:         r.verifiedCapture,
+					verifiedMtime:           r.verifiedMtime,
+					verifiedStateOK:         r.verifiedStateOK,
+					unresolvedForkEpoch:     r.unresolvedForkEpoch,
 				}
 				if i == 0 && (atomicDAG || r.providerStatHash != nil) {
 					// Claude-compatible providers can emit several DAG branches
@@ -10663,6 +10716,10 @@ type pendingWrite struct {
 	sourceCwdResolution parser.SourceCwdResolution
 	sourceCwdStored     string
 	sourceCwdStoredOK   bool
+	verifiedCapture     verifiedSourceCapture
+	verifiedMtime       int64
+	verifiedStateOK     bool
+	unresolvedForkEpoch uint64
 }
 
 type sessionWriteIdentityReader interface {
@@ -12261,6 +12318,7 @@ func (e *Engine) writeSessionFullWithResolver(
 		if !outcome.written[0] {
 			return errSessionPreserved
 		}
+		e.recordUnresolvedCodexForksAfterWrite([]pendingWrite{pw}, outcome.written)
 		return nil
 	}
 	prepared, verdict, err := e.prepareSessionNormalizedContext(

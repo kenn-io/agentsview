@@ -66,3 +66,45 @@ func TestCodexForkProvenanceFailureRollsBackContent(t *testing.T) {
 		})
 	}
 }
+
+func TestListUnresolvedCodexForkSources(t *testing.T) {
+	database := testDB(t)
+	unresolvedPath := filepath.Join(t.TempDir(), "unresolved.jsonl")
+	resolvedPath := filepath.Join(t.TempDir(), "resolved.jsonl")
+	trashedPath := filepath.Join(t.TempDir(), "trashed.jsonl")
+
+	writes := []SessionBatchWrite{
+		{
+			Session:        Session{ID: "codex:unresolved", Agent: "codex", Project: "project", Machine: "local", FilePath: &unresolvedPath},
+			DataVersion:    CurrentDataVersion() - 1,
+			CodexForkState: &CodexForkState{ParentID: "parent-a"},
+		},
+		{
+			Session:        Session{ID: "codex:resolved", Agent: "codex", Project: "project", Machine: "local", FilePath: &resolvedPath},
+			DataVersion:    CurrentDataVersion(),
+			CodexForkState: &CodexForkState{ParentID: "parent-b", ParentKnown: true},
+		},
+		{
+			Session:        Session{ID: "codex:trashed", Agent: "codex", Project: "project", Machine: "local", FilePath: &trashedPath},
+			DataVersion:    CurrentDataVersion() - 1,
+			CodexForkState: &CodexForkState{ParentID: "parent-c"},
+		},
+		{
+			Session:        Session{ID: "codex:no-path", Agent: "codex", Project: "project", Machine: "local"},
+			DataVersion:    CurrentDataVersion() - 1,
+			CodexForkState: &CodexForkState{ParentID: "parent-d"},
+		},
+	}
+	res, err := database.WriteSessionBatchContext(t.Context(), writes)
+	require.NoError(t, err)
+	require.Equal(t, len(writes), res.WrittenSessions)
+	require.NoError(t, database.SoftDeleteSession(t.Context(), "codex:trashed"))
+
+	got, err := database.ListUnresolvedCodexForkSources(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, []UnresolvedCodexForkSource{{
+		Agent:    "codex",
+		FilePath: unresolvedPath,
+		ParentID: "parent-a",
+	}}, got)
+}

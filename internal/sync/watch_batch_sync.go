@@ -93,12 +93,15 @@ type watchBatchPlan struct {
 }
 
 type watchBatchApplyError struct {
-	cause error
-	retry WatchBatch
+	cause     error
+	retry     WatchBatch
+	deferOnly bool
 }
 
-func (e *watchBatchApplyError) Error() string { return e.cause.Error() }
-func (e *watchBatchApplyError) Unwrap() error { return e.cause }
+func (e *watchBatchApplyError) Error() string                      { return e.cause.Error() }
+func (e *watchBatchApplyError) Unwrap() error                      { return e.cause }
+func (e *watchBatchApplyError) ReconciliationRetryDeferOnly() bool { return e.deferOnly }
+
 func (e *watchBatchApplyError) WatchRetryBatch() WatchBatch {
 	retry := e.retry
 	retry.Paths = append([]string(nil), retry.Paths...)
@@ -107,21 +110,63 @@ func (e *watchBatchApplyError) WatchRetryBatch() WatchBatch {
 }
 
 func watchBatchDeferOnlyError(err error) bool {
-	_, hasPaths := errors.AsType[interface {
-		error
-		interface{ ReconciliationRetryPaths() []string }
-	}](err)
-	deferOnly, hasDeferOnly := errors.AsType[interface {
-		error
-		interface{ ReconciliationRetryDeferOnly() bool }
-	}](err)
-	return hasPaths && hasDeferOnly &&
-		deferOnly.ReconciliationRetryDeferOnly()
+	if err == nil {
+		return false
+	}
+	pending := []error{err}
+	matched := false
+	for len(pending) > 0 {
+		next := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if next == nil {
+			continue
+		}
+		if _, isApply := next.(interface{ WatchRetryBatch() WatchBatch }); isApply {
+			deferOnly, ok := next.(interface{ ReconciliationRetryDeferOnly() bool })
+			if !ok || !deferOnly.ReconciliationRetryDeferOnly() {
+				return false
+			}
+			matched = true
+			continue
+		}
+		if joined, ok := next.(interface{ Unwrap() []error }); ok {
+			children := joined.Unwrap()
+			if len(children) == 0 {
+				return false
+			}
+			pending = append(pending, children...)
+			continue
+		}
+		if _, hasPaths := next.(interface{ ReconciliationRetryPaths() []string }); hasPaths {
+			deferOnly, ok := next.(interface{ ReconciliationRetryDeferOnly() bool })
+			if !ok || !deferOnly.ReconciliationRetryDeferOnly() {
+				return false
+			}
+			matched = true
+			continue
+		}
+		if wrapped, ok := next.(interface{ Unwrap() error }); ok {
+			cause := wrapped.Unwrap()
+			if cause == nil {
+				return false
+			}
+			pending = append(pending, cause)
+			continue
+		}
+		return false
+	}
+	return matched
 }
 
 func watchBatchReconciliationError(
 	cause error, paths, roots []string, full, lostEvents bool,
 ) error {
+	deferOnly := watchBatchDeferOnlyError(cause)
+	// When discovery and reconciliation finished cleanly and only deferred
+	// individual sources remain, the lost-events recovery pass is complete.
+	// Keeping LostEvents=true on a defer-only retry would re-enter forced
+	// overflow recovery and clear the caches that let deferred forks settle.
+	retryLostEvents := lostEvents && !deferOnly
 	scopedPaths, hasScopedPaths := errors.AsType[interface {
 		error
 		interface{ ReconciliationRetryPaths() []string }
@@ -153,24 +198,24 @@ func watchBatchReconciliationError(
 	overflowed := hasOverflow && overflow.ReconciliationRetryOverflow()
 	if overflowed && len(retryPaths) == 0 && len(retryRoots) == 0 {
 		return &watchBatchApplyError{cause: cause, retry: WatchBatch{
-			FullSync: true, LostEvents: lostEvents,
-		}}
+			FullSync: true, LostEvents: retryLostEvents,
+		}, deferOnly: deferOnly}
 	}
 	if len(retryPaths) > 0 || len(retryRoots) > 0 {
 		return &watchBatchApplyError{cause: cause, retry: WatchBatch{
-			Paths: retryPaths, ReconcileRoots: retryRoots, LostEvents: lostEvents,
-		}}
+			Paths: retryPaths, ReconcileRoots: retryRoots, LostEvents: retryLostEvents,
+		}, deferOnly: deferOnly}
 	}
 	if full {
 		return &watchBatchApplyError{cause: cause, retry: WatchBatch{
-			FullSync: true, LostEvents: lostEvents,
-		}}
+			FullSync: true, LostEvents: retryLostEvents,
+		}, deferOnly: deferOnly}
 	}
-	retry := WatchBatch{FullSync: full, LostEvents: lostEvents}
+	retry := WatchBatch{FullSync: full, LostEvents: retryLostEvents}
 	if !full && !hasScopedRoots {
 		retry.ReconcileRoots = append([]string(nil), roots...)
 	}
-	return &watchBatchApplyError{cause: cause, retry: retry}
+	return &watchBatchApplyError{cause: cause, retry: retry, deferOnly: deferOnly}
 }
 
 func composeWatchBatchErrors(phases ...error) error {
@@ -188,9 +233,13 @@ func composeWatchBatchErrors(phases ...error) error {
 	}
 	combined := WatchBatch{}
 	var preparationSet bool
+	allDeferOnly := true
 	causes := make([]error, 0, len(present))
 	for _, phase := range present {
 		causes = append(causes, phase)
+		if !watchBatchDeferOnlyError(phase) {
+			allDeferOnly = false
+		}
 		retry, hasRetry := errors.AsType[interface {
 			error
 			interface{ WatchRetryBatch() WatchBatch }
@@ -218,7 +267,11 @@ func composeWatchBatchErrors(phases ...error) error {
 		combined.Paths = watchDeduplicateStrings(combined.Paths)
 		combined.ReconcileRoots = watchDeduplicateStrings(combined.ReconcileRoots)
 	}
-	return &watchBatchApplyError{cause: errors.Join(causes...), retry: combined}
+	return &watchBatchApplyError{
+		cause:     errors.Join(causes...),
+		retry:     combined,
+		deferOnly: allDeferOnly,
+	}
 }
 
 func planWatchBatch(ctx context.Context,
