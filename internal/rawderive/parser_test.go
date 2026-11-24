@@ -550,6 +550,47 @@ func manifestFromCapturePlan(
 	return parserTestManifest(t, agent, plan.SourceKey, entries), objects
 }
 
+func TestCodexRawCapturePreferredCopyMaterializes(t *testing.T) {
+	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e5"
+	root := t.TempDir()
+	logs, other := filepath.Join(root, "logs"), filepath.Join(root, "other")
+	name := "rollout-2026-06-11T12-44-06-" + id + ".jsonl"
+	paths := []string{
+		filepath.Join(logs, "2026", "06", "11", name),
+		filepath.Join(logs, "a", ".codex-run-v1-a", "sessions", "2026", "06", "11", name),
+		filepath.Join(logs, "b", ".codex-run-v1-b", "sessions", "2026", "06", "11", name),
+	}
+	for i, path := range paths {
+		content := testjsonl.JoinJSONL(testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-06-11T12:44:06Z"), testjsonl.CodexMsgJSON("user", []string{"ordinary", "a", "b"}[i], "2026-06-11T12:44:07Z"))
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+		mtime := time.Now().Add(time.Duration([]int{3, 2, 1}[i]) * time.Hour)
+		require.NoError(t, os.Chtimes(path, mtime, mtime))
+	}
+	require.NoError(t, os.MkdirAll(other, 0o755))
+	for _, roots := range [][]string{{logs, other}, {other, logs}} {
+		provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{Roots: roots})
+		require.True(t, ok)
+		discovery, err := parser.DiscoverRawCaptureSources(t.Context(), provider)
+		require.NoError(t, err)
+		require.True(t, discovery.Complete)
+		require.Len(t, discovery.Sources, 1)
+		assert.Equal(t, paths[1], discovery.Sources[0].DisplayPath)
+		manifest, objects := manifestFromCapturePlan(t, parser.AgentCodex, provider, discovery.Sources[0])
+		materialized, err := (Materializer{Store: &materializerStore{objects: objects}, BaseDir: t.TempDir(), MaxTotalBytes: 1 << 20}).Materialize(t.Context(), manifest)
+		require.NoError(t, err)
+		t.Cleanup(func() { assert.NoError(t, materialized.Cleanup()) })
+		dispatch, err := NewProviderParser(parser.ProviderFactories(), "hosted-worker")
+		require.NoError(t, err)
+		parsed, err := dispatch.Parse(t.Context(), manifest, materialized)
+		require.NoError(t, err)
+		require.Len(t, parsed.Outcome.Results, 1)
+		assert.Equal(t, "a", parsed.Outcome.Results[0].Result.Session.Project)
+		require.Len(t, parsed.Outcome.Results[0].Result.Messages, 1)
+		assert.Equal(t, "a", parsed.Outcome.Results[0].Result.Messages[0].Content)
+	}
+}
+
 func TestProviderParserHostedParseMatchesLocalBackgroundForkLineage(t *testing.T) {
 	t.Parallel()
 	clientRoot := t.TempDir()

@@ -222,10 +222,20 @@ func (p *codexProvider) SourceForReconciliation(
 func (p *codexProvider) DiscoverRawCaptureSourcesEach(
 	ctx context.Context,
 	yield func(SourceRef) error,
-) (bool, error) {
+) (complete bool, resultErr error) {
 	ctx = withRawCaptureStreamingTraversal(ctx)
+	index, err := newDiscoveryDiskMapForContext(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer func() {
+		if err := index.close(); err != nil {
+			complete = false
+			resultErr = errors.Join(resultErr, err)
+		}
+	}()
 	var incomplete error
-	for index, root := range p.sources.roots {
+	for indexRoot, root := range p.sources.roots {
 		if err := ReportRawCaptureDiscoveryProgress(ctx); err != nil {
 			return false, err
 		}
@@ -237,18 +247,29 @@ func (p *codexProvider) DiscoverRawCaptureSourcesEach(
 				IsRegularFile(codexPlainRolloutPath(source.DisplayPath)) {
 				return nil
 			}
-			// The first root accepting this layout owns the physical file for
-			// the whole pass, including across audit batches. Checking roots
-			// avoids retaining a set that grows with the transcript archive.
-			for _, previous := range p.sources.roots[:index] {
-				if isS3URI(previous) {
-					continue
+			for _, previous := range p.sources.roots[:indexRoot] {
+				if !isS3URI(previous) {
+					if _, _, supported := CodexSessionPathInfo(previous, source.DisplayPath); supported {
+						return nil
+					}
 				}
-				if _, _, supported := CodexSessionPathInfo(previous, source.DisplayPath); supported {
+			}
+			src := source.Opaque.(codexSource)
+			key := src.Root + "\x00" + source.Key
+			path, found, err := index.get(ctx, key)
+			if err != nil {
+				return err
+			}
+			if found {
+				current, ok := p.sources.sourceRef(src.Root, path, false)
+				if !ok {
+					current, ok = p.sources.directPathSource(src.Root, path, false)
+				}
+				if ok && !preferCodexSource(source, current) {
 					return nil
 				}
 			}
-			return yield(source)
+			return index.put(ctx, key, source.DisplayPath, true)
 		})
 		if err == nil {
 			continue
@@ -261,6 +282,23 @@ func (p *codexProvider) DiscoverRawCaptureSourcesEach(
 			return false, err
 		}
 		incomplete = errors.Join(incomplete, rootErr)
+	}
+	err = index.forEach(ctx, func(key, path string) error {
+		root, _, ok := strings.Cut(key, "\x00")
+		if !ok {
+			return errors.New("invalid Codex raw discovery identity")
+		}
+		source, ok := p.sources.sourceRef(root, path, true)
+		if !ok {
+			source, ok = p.sources.directPathSource(root, path, true)
+		}
+		if !ok {
+			return incompleteDiscoveryError(p.Def.Type, "Codex source changed during discovery", os.ErrNotExist)
+		}
+		return yield(source)
+	})
+	if err != nil {
+		return false, err
 	}
 	return incomplete == nil, incomplete
 }
@@ -297,6 +335,26 @@ func (p *codexProvider) RawCaptureSourcesForChangedPath(
 			source, ok = p.sources.directPathSource(root, req.Path, true)
 		}
 		if ok {
+			for _, candidate := range p.sources.roots {
+				if _, _, supported := CodexSessionPathInfo(candidate, req.Path); supported {
+					if owner, found := p.sources.sourceRef(candidate, req.Path, true); found {
+						source = owner
+					}
+					break
+				}
+			}
+			src := source.Opaque.(codexSource)
+			if src.UUID != "" {
+				scoped := p.sources
+				scoped.roots = []string{src.Root}
+				preferred, found, err := scoped.findCanonicalSource(ctx, src.UUID)
+				if err != nil {
+					return nil, err
+				}
+				if found {
+					source = preferred
+				}
+			}
 			return []SourceRef{source}, nil
 		}
 	}

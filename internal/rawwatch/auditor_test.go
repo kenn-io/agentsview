@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1206,7 +1207,7 @@ func TestAuditorBoundedCapturesPhysicalDuplicates(t *testing.T) {
 	assert.Equal(t, filepath.Base(preferredPath), latest.Entries[0].Path)
 }
 
-func TestAuditorFullCapturesPhysicalCodexDuplicatesWithinRoot(t *testing.T) {
+func TestAuditorFullCapturesPreferredCodexDuplicateWithinRoot(t *testing.T) {
 	base := t.TempDir()
 	root := filepath.Join(base, "sessions")
 	uuid := "019eb791-cf7d-75c1-8439-9ed74c1229e5"
@@ -1226,6 +1227,8 @@ func TestAuditorFullCapturesPhysicalCodexDuplicatesWithinRoot(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		livePath, []byte(metadata+`{"copy":"live"}`+"\n"), 0o600,
 	))
+	require.NoError(t, os.Chtimes(archivedPath, time.Unix(100, 0), time.Unix(100, 0)))
+	require.NoError(t, os.Chtimes(livePath, time.Unix(200, 0), time.Unix(200, 0)))
 	provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{
 		Roots: []string{root},
 	})
@@ -1244,8 +1247,8 @@ func TestAuditorFullCapturesPhysicalCodexDuplicatesWithinRoot(t *testing.T) {
 		AuditProviderFull(t.Context(), provider)
 	require.NoError(t, err)
 	require.True(t, result.Complete)
-	require.Equal(t, 2, result.Visited)
-	require.Equal(t, 2, result.Captured)
+	require.Equal(t, 1, result.Visited)
+	require.Equal(t, 1, result.Captured)
 	configured, err := store.ResolveConfiguredRoot(
 		t.Context(), parser.AgentCodex, root,
 	)
@@ -1258,7 +1261,7 @@ func TestAuditorFullCapturesPhysicalCodexDuplicatesWithinRoot(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Len(t, latest.Entries, 1)
-	assert.NotEmpty(t, latest.Entries[0].Path)
+	assert.Equal(t, "sessions/2026/06/11/"+filepath.Base(livePath), latest.Entries[0].Path)
 }
 
 type unpacedDuplicateAuditProvider struct {
