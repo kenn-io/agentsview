@@ -606,3 +606,14 @@ func TestChunkTextStaleSaveReturnsErrStale(t *testing.T) {
 	assert.Equal(t, oldRevision, revision)
 	assert.Empty(t, store.saved)
 }
+
+func TestChunkTextBackfillPageQueryPlan(t *testing.T) {
+	ix := openTestIndex(t)
+	plan := explainVectorPlan(t, ix, ix.backfillChunkTextPageQuery(), "", 1, 1, 1)
+	joined := strings.Join(plan, "\n")
+	assert.Contains(t, joined, "SEARCH d USING INDEX sqlite_autoindex_vector_messages_1 (doc_key>?)")
+	assert.Contains(t, joined, "SEARCH s EXISTS USING INDEX sqlite_autoindex_message_vectors_stamps_1 (ordinal=? AND doc_key=?)")
+	assert.Contains(t, joined, "SEARCH c EXISTS USING COVERING INDEX message_vectors_chunks_by_doc (doc_key=? AND ordinal=?)")
+	assert.Contains(t, joined, "SEARCH t USING PRIMARY KEY (ordinal=? AND doc_key=?)")
+	assert.NotContains(t, joined, "TEMP B-TREE")
+}

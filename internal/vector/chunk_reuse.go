@@ -193,6 +193,10 @@ func (ix *Index) reuseEncoder(enc kitvec.EncodeFunc, gen reuseGeneration) kitvec
 	}
 }
 
+func (ix *Index) backfillChunkTextPageQuery() string {
+	return `SELECT d.doc_key, d.content, d.content_hash FROM ` + ix.spec.DocsTable + ` d WHERE d.doc_key > ? AND EXISTS (SELECT 1 FROM ` + ix.spec.stampsTable() + ` s WHERE s.ordinal = ? AND s.doc_key = d.doc_key AND s.revision = d.content_hash) AND EXISTS (SELECT 1 FROM ` + ix.spec.chunksTable() + ` c WHERE c.ordinal = ? AND c.doc_key = d.doc_key) AND NOT EXISTS (SELECT 1 FROM ` + ix.spec.chunkTextTable() + ` t WHERE t.ordinal = ? AND t.doc_key = d.doc_key) ORDER BY d.doc_key LIMIT 100`
+}
+
 func (ix *Index) backfillChunkText(ctx context.Context, ordinal int64) error {
 	marker := chunkTextMarker + strconv.FormatInt(ordinal, 10)
 	_, done, err := ix.metaGet(ctx, marker)
@@ -201,7 +205,7 @@ func (ix *Index) backfillChunkText(ctx context.Context, ordinal int64) error {
 	}
 	after := ""
 	for {
-		rows, err := ix.db.QueryContext(ctx, `SELECT d.doc_key, d.content, d.content_hash FROM `+ix.spec.DocsTable+` d JOIN `+ix.spec.stampsTable()+` s ON s.doc_key = d.doc_key AND s.ordinal = ? AND s.revision = d.content_hash WHERE d.doc_key > ? AND EXISTS (SELECT 1 FROM `+ix.spec.chunksTable()+` c WHERE c.ordinal = ? AND c.doc_key = d.doc_key) AND NOT EXISTS (SELECT 1 FROM `+ix.spec.chunkTextTable()+` t WHERE t.ordinal = ? AND t.doc_key = d.doc_key) ORDER BY d.doc_key LIMIT 100`, ordinal, after, ordinal, ordinal)
+		rows, err := ix.db.QueryContext(ctx, ix.backfillChunkTextPageQuery(), after, ordinal, ordinal, ordinal)
 		if err != nil {
 			return err
 		}
