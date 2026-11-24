@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -341,29 +342,33 @@ func (db *DB) GetSessionStructuredPRLinks(ctx context.Context, id string) ([]PRL
 // links found in retained prompts.
 const promptPRLinksDataVersion = 184
 
-// upgradePromptPRLinksTx indexes stored prompts in the transaction that raises
-// the archive to promptPRLinksDataVersion. An older binary may have rewritten
-// pr_links without structured_pr_links since the column was added, so the
-// structured column is refreshed first. Doing both with the version change
-// means an archive an older binary still accepts never holds prompt links.
-func (db *DB) upgradePromptPRLinksTx(ctx context.Context, tx *sql.Tx) error {
+// upgradePRLinksTx copies legacy structured links and refreshes each candidate once.
+// Older binaries may have rewritten pr_links without updating structured_pr_links.
+// Copy and refresh in the version transaction so old archives never hold derived links.
+func (db *DB) upgradePRLinksTx(ctx context.Context, tx *sql.Tx) error {
 	version, _, err := readUserVersion(ctx, tx)
-	if err != nil || version >= promptPRLinksDataVersion {
+	if err != nil || version >= toolPRLinksDataVersion {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET structured_pr_links=pr_links WHERE structured_pr_links IS NOT pr_links`); err != nil {
-		return fmt.Errorf("copying structured PR links: %w", err)
+	if version < promptPRLinksDataVersion {
+		if _, err := tx.ExecContext(ctx, `UPDATE sessions SET structured_pr_links=pr_links WHERE structured_pr_links IS NOT pr_links`); err != nil {
+			return fmt.Errorf("copying structured PR links: %w", err)
+		}
 	}
 	if db.usageOnlyStorage() {
 		return nil
 	}
-	ids, err := sessionIDsTx(ctx, tx, "id IN (SELECT session_id FROM messages WHERE "+promptPRLinkCandidateSQL+")")
+	candidate := "id IN (SELECT session_id FROM tool_calls WHERE category IN ('Bash','Task') AND input_json IS NOT NULL)"
+	if version < promptPRLinksDataVersion {
+		candidate += " OR id IN (SELECT session_id FROM messages WHERE " + promptPRLinkCandidateSQL + ")"
+	}
+	ids, err := sessionIDsTx(ctx, tx, candidate)
 	if err != nil {
 		return err
 	}
 	for _, id := range ids {
-		if err := refreshSessionPromptPRLinksTx(ctx, tx, id); err != nil {
-			return fmt.Errorf("backfilling prompt PR links: %w", err)
+		if err := refreshSessionPromptPRLinksTx(ctx, contextTransaction{ctx: ctx, tx: tx}, id); err != nil {
+			return fmt.Errorf("backfilling PR links: %w", err)
 		}
 	}
 	return nil
@@ -414,11 +419,13 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 	if !ok {
 		return nil, ctx.Err()
 	}
-	// Raw shell text has no workdir; code-mode text may name one.
 	allowBare := bareLinksAllowed(inputWorkdir(input), cwd, sharedContext)
 	var lists [][]PRLink
 	for _, command := range commands {
-		links, directory, repository, persistent, usesRemote, err := parser.AnalyzePRCommand(ctx, command, cwd, remote, allowBare, sharedContext.repository)
+		if command.codeMode {
+			allowBare = bareLinksAllowed(command.workdir, cwd, sharedContext)
+		}
+		links, directory, repository, persistent, usesRemote, err := parser.AnalyzePRCommand(ctx, command.text, cwd, remote, allowBare, sharedContext.repository)
 		change.add(directory, persistent)
 		if depends != nil {
 			*depends = append(*depends, usesRemote...)
@@ -459,41 +466,53 @@ func taskPRLinks(ctx context.Context, input string) ([]PRLink, error) {
 	return parser.PromptPRLinksContext(ctx, strings.Join(text, "\n"))
 }
 
-// shellInputCommands lists the commands a shell tool input names. Code-mode
-// text names its one literal command. ok is false when the input is
-// structured but does not parse.
-func shellInputCommands(input string) (commands []string, ok bool) {
+type prShellCommand struct {
+	text, workdir string
+	codeMode      bool
+}
+
+// codeModeShellCallRE matches literal object arguments to code-mode tool calls.
+var codeModeShellCallRE = regexp.MustCompile("\\btools\\.\\w+\\s*\\(\\s*\\{(?:[^{}\"'`]|\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|`(?:\\\\.|[^`\\\\])*`)*\\}")
+
+// shellInputCommands lists literal commands in a shell tool input.
+func shellInputCommands(input string) ([]prShellCommand, bool) {
 	if !jsontext.Value(input).IsValid() {
-		return textShellCommands(input)
+		if commitToolCallRE.MatchString(input) {
+			var commands []prShellCommand
+			for _, call := range codeModeShellCallRE.FindAllString(input, -1) {
+				if command := commitCommandText(call); command != "" {
+					commands = append(commands, prShellCommand{text: command, workdir: commitRepository(call, ""), codeMode: true})
+				}
+			}
+			return commands, len(commands) > 0
+		}
+		text := strings.TrimSpace(input)
+		return []prShellCommand{{text: input}}, text != "" && text[0] != '{' && text[0] != '['
 	}
 	var payload struct {
-		Command  jsontext.Value `json:"command"`
-		Cmd      string         `json:"cmd"`
-		Commands []string       `json:"commands"`
+		Command     jsontext.Value `json:"command"`
+		CommandLine string         `json:"CommandLine"`
+		Cmd         string         `json:"cmd"`
+		Commands    []string       `json:"commands"`
 	}
 	if json.Unmarshal([]byte(input), &payload) != nil {
 		return nil, false
 	}
 	if len(payload.Command) > 0 && string(payload.Command) != "null" {
 		command, ok := commandValue(payload.Command)
-		return []string{command}, ok
+		return []prShellCommand{{text: command}}, ok
+	}
+	if payload.CommandLine != "" {
+		return []prShellCommand{{text: payload.CommandLine}}, true
 	}
 	if payload.Commands != nil {
-		return payload.Commands, true
+		commands := make([]prShellCommand, len(payload.Commands))
+		for i, command := range payload.Commands {
+			commands[i].text = command
+		}
+		return commands, true
 	}
-	return []string{payload.Cmd}, true
-}
-
-// textShellCommands reads input that is not JSON: code-mode text names its one
-// literal command, and anything else is shell text. Text shaped like
-// structured JSON that does not parse is rejected.
-func textShellCommands(input string) ([]string, bool) {
-	if commitToolCallRE.MatchString(input) {
-		command := commitCommandText(input)
-		return []string{command}, command != ""
-	}
-	text := strings.TrimSpace(input)
-	return []string{input}, text != "" && text[0] != '{' && text[0] != '['
+	return []prShellCommand{{text: payload.Cmd}}, true
 }
 
 // commandValue decodes a command given as shell text or as an argv list.
@@ -765,23 +784,3 @@ func retainStoredToolPRLinksTx(tx transactionQueries, id string) error {
 }
 
 const toolPRLinksDataVersion = 190
-
-func (db *DB) upgradeToolPRLinksTx(ctx context.Context, tx *sql.Tx) error {
-	version, _, err := readUserVersion(ctx, tx)
-	if err != nil || version >= toolPRLinksDataVersion {
-		return err
-	}
-	if db.usageOnlyStorage() {
-		return nil
-	}
-	ids, err := sessionIDsTx(ctx, tx, "id IN (SELECT session_id FROM tool_calls WHERE category IN ('Bash','Task') AND input_json IS NOT NULL)")
-	if err != nil {
-		return err
-	}
-	for _, id := range ids {
-		if err := refreshSessionPromptPRLinksTx(ctx, contextTransaction{ctx: ctx, tx: tx}, id); err != nil {
-			return fmt.Errorf("backfilling tool PR links: %w", err)
-		}
-	}
-	return nil
-}

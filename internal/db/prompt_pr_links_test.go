@@ -396,6 +396,52 @@ func TestPromptPRLinksBackfillUsesDialogue(t *testing.T) {
 	assert.Equal(t, 1, pending)
 }
 
+func TestPRLinksUpgradeRefreshesEachSessionOnce(t *testing.T) {
+	d := testDB(t)
+	for _, tc := range []struct {
+		id           string
+		prompt, tool bool
+	}{
+		{"prompt", true, false}, {"tool", false, true}, {"overlap", true, true}, {"counted", true, true},
+	} {
+		require.NoError(t, d.UpsertSession(t.Context(), Session{ID: tc.id, Project: "project", Machine: "local", Agent: "claude"}))
+		var messages []Message
+		if tc.prompt {
+			messages = append(messages, Message{SessionID: tc.id, Ordinal: 0, Role: "user", Content: "https://github.com/example/repo/pull/41"})
+		}
+		if tc.tool {
+			messages = append(messages, Message{SessionID: tc.id, Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`}}})
+		}
+		require.NoError(t, d.ReplaceSessionMessages(t.Context(), tc.id, messages))
+	}
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links='', structured_pr_links='';
+			CREATE TABLE refresh_count (n INTEGER);
+			INSERT INTO refresh_count VALUES (0);
+			CREATE TRIGGER count_refresh AFTER UPDATE OF pr_links ON sessions WHEN NEW.id='counted' BEGIN
+				UPDATE refresh_count SET n=n+1;
+				UPDATE sessions SET pr_links='' WHERE id=NEW.id AND (SELECT n FROM refresh_count)=1;
+			END;`)
+		if err != nil {
+			return err
+		}
+		return writeUserVersion(t.Context(), tx, promptPRLinksDataVersion-1)
+	}))
+	require.NoError(t, d.setDataVersion(t.Context()))
+	var count int
+	require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT n FROM refresh_count`).Scan(&count))
+	assert.Equal(t, 1, count)
+	for id, want := range map[string][]int{"prompt": {41}, "tool": {42}, "overlap": {41, 42}} {
+		got, err := d.GetSession(t.Context(), id)
+		require.NoError(t, err)
+		var numbers []int
+		for _, link := range got.PRLinks {
+			numbers = append(numbers, link.Number)
+		}
+		assert.Equal(t, want, numbers, id)
+	}
+}
+
 func TestToolPRLinksArchiveUpgrade(t *testing.T) {
 	t.Run("usage-only", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "archive.db")

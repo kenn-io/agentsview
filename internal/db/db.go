@@ -5603,10 +5603,7 @@ func (db *DB) HasCJKFTS(ctx context.Context) (available bool) {
 
 func (db *DB) setDataVersion(ctx context.Context) error {
 	return db.Update(ctx, func(tx *sql.Tx) error {
-		if err := db.upgradePromptPRLinksTx(ctx, tx); err != nil {
-			return err
-		}
-		if err := db.upgradeToolPRLinksTx(ctx, tx); err != nil {
+		if err := db.upgradePRLinksTx(ctx, tx); err != nil {
 			return err
 		}
 		return advanceDataVersion(ctx, tx, dataVersion)
