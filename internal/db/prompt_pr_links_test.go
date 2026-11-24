@@ -592,7 +592,6 @@ func TestToolPRLinksTranscriptsUpgradeRetainsLinks(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got.PRLinks, 1)
 	assert.Equal(t, 42, got.PRLinks[0].Number)
-
 }
 
 func TestToolPRLinksReplacementPreservesPrompt(t *testing.T) {
