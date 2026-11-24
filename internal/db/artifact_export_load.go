@@ -61,6 +61,7 @@ const artifactToolCallRawBytesSQL = `
 	length(CAST(category AS BLOB)) +
 	length(CAST(COALESCE(tool_use_id, '') AS BLOB)) +
 	length(CAST(COALESCE(input_json, '') AS BLOB)) +
+	length(CAST(COALESCE(pr_links, '') AS BLOB)) +
 	length(CAST(COALESCE(skill_name, '') AS BLOB)) +
 	length(CAST(COALESCE(result_content, '') AS BLOB)) +
 	length(CAST(COALESCE(subagent_session_id, '') AS BLOB)) +

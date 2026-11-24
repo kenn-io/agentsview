@@ -30,6 +30,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
 	"sort"
 	"strconv"
 	"strings"
@@ -311,10 +312,16 @@ func appendSessionMetadataDiffs(
 	diffs = appendScalarSessionDiff(
 		diffs, FieldGitBranch, agent, stored.GitBranch, prepared.GitBranch,
 	)
-	// Pull request links are never incremental-append history: an appended
-	// record that would change them forces a full parse, so any difference
-	// is real drift.
-	if sv, pv := db.EncodePRLinks(stored.PRLinks), db.EncodePRLinks(prepared.PRLinks); sv != pv {
+	// Incremental writes can store links in a different order from a full parse.
+	storedLinks, parsedLinks := make(map[db.PRLink]int), make(map[db.PRLink]int)
+	for _, link := range stored.PRLinks {
+		storedLinks[link]++
+	}
+	for _, link := range prepared.PRLinks {
+		parsedLinks[link]++
+	}
+	if !maps.Equal(storedLinks, parsedLinks) {
+		sv, pv := db.EncodePRLinks(stored.PRLinks), db.EncodePRLinks(prepared.PRLinks)
 		diffs = append(diffs, FieldDiff{
 			Field:  FieldPRLinks,
 			Stored: stringutil.TruncateRunes(renderNullableScalar(sv), maxRenderedValueRunes, "..."),
