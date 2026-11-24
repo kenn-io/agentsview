@@ -2643,11 +2643,6 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 	}
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 
-	if db.usageOnlyStorage() {
-		if err := retainUsageToolPRLinksTx(ctx, tx, sessionID, rawMessages); err != nil {
-			return err
-		}
-	}
 	if err := reconcileReplacedConversationTx(tx, sessionID, msgs, plan, useDiff, db.usageOnlyStorage()); err != nil {
 		return err
 	}

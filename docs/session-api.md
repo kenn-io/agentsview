@@ -702,20 +702,21 @@ or substitution, or which contains another flag, links nothing.
 ]
 ```
 
-AgentsView keeps one link per pull request.
+AgentsView keeps one link per pull request. When a link comes from a prompt, it
+tells you only that the prompt mentioned the pull request, not that the session
+worked on it. Claude Code also includes `pr-link` entries in its transcripts.
+Because Claude Code records these links for the whole transcript, every session
+split from that transcript, such as a rewind's fork, carries them like its name
+and git branch.
 
-Shell tool calls name a pull request by URL, number with `-R owner/repo`, or
-number in a session with one known checkout remote. Child-agent prompt URLs
-are references and do not establish that the session worked on the pull request.
+Bare numbers require one known checkout remote. Child-agent prompt URLs are
+references and do not establish that the session worked on the pull request.
 Transcript-only archives retain explicitly named links when they discard tool
 inputs, but lose shell state from earlier calls. Usage-only archives retain
 links named in new tool inputs as historical references; later writes do not
 remove them. Archives that discarded inputs before this feature cannot recover
 those links. Hosted sessions and imported archives do not resolve bare numbers
 against a checkout remote.
-
-Claude Code also includes `pr-link` entries in its transcripts. Every session
-split from that transcript carries them like its name and git branch.
 
 To filter by pull request, use `session list --pr` or the `pr` query parameter.
 Pass `owner/repo` for any pull request in that repository, `owner/repo#123` for

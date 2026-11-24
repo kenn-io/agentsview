@@ -188,6 +188,7 @@ func commitArgv(input string) (string, bool) {
 		return "", true
 	}
 	args[0] = "git"
+	// Argv words are never tilde-expanded, so a leading tilde names a relative path.
 	for i, arg := range args {
 		if strings.HasPrefix(arg, "~") {
 			arg = "./" + arg

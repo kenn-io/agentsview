@@ -543,6 +543,27 @@ func retainCopiedToolPRLinksTx(ctx context.Context, tx *sql.Tx, tempIDsTable str
 	return err
 }
 
+func retainCopiedUsageToolPRLinksTx(ctx context.Context, tx *sql.Tx, tempIDsTable string) error {
+	ids, err := sessionIDsTx(ctx, tx, "id IN (SELECT id FROM "+tempIDsTable+")")
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		stored, err := storedToolCallsTx(contextTransaction{ctx: ctx, tx: tx}, id, math.MaxInt)
+		if err != nil {
+			return err
+		}
+		message := Message{ToolCalls: make([]ToolCall, len(stored))}
+		for i, call := range stored {
+			message.ToolCalls[i] = call.call
+		}
+		if err := retainUsageToolPRLinksTx(ctx, tx, id, []Message{message}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // storedToolCall is a stored tool call and the row it came from.
 type storedToolCall struct {
 	rowID int64

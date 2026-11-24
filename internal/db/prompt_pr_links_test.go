@@ -221,6 +221,39 @@ func TestPromptPRLinksUsageOrphanCopy(t *testing.T) {
 	}
 }
 
+func TestToolPRLinksCopiedToUsageArchive(t *testing.T) {
+	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts} {
+		t.Run(string(policy), func(t *testing.T) {
+			source := testDB(t)
+			source.SetArchiveContent(policy)
+			for _, id := range []string{"orphan", "trashed"} {
+				s := Session{ID: id, Project: "project", Machine: "local", Agent: "claude"}
+				require.NoError(t, source.UpsertSession(t.Context(), s))
+				require.NoError(t, source.InsertMessages(t.Context(), []Message{{
+					SessionID: id, Role: "assistant", ToolCalls: []ToolCall{
+						{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`},
+						{ToolName: "Task", Category: "Task", InputJSON: `{"prompt":"Review https://github.com/example/repo/pull/43"}`},
+					},
+				}}))
+			}
+			require.NoError(t, source.SoftDeleteSession(t.Context(), "trashed"))
+			dest := testDB(t)
+			dest.SetArchiveContent(config.ArchiveContentUsage)
+			_, err := dest.CopyTrashedDataFrom(t.Context(), source.Path())
+			require.NoError(t, err)
+			_, err = dest.CopyOrphanedDataFrom(t.Context(), source.Path())
+			require.NoError(t, err)
+			for _, id := range []string{"orphan", "trashed"} {
+				links, err := dest.GetSessionStructuredPRLinks(t.Context(), id)
+				require.NoError(t, err)
+				require.Len(t, links, 2)
+				assert.Equal(t, 42, links[0].Number)
+				assert.Equal(t, 43, links[1].Number)
+			}
+		})
+	}
+}
+
 func TestPromptPRLinksStructuredChanges(t *testing.T) {
 	d := testDB(t)
 	first, ok := parser.NewPRLink("https://github.com/o/r/pull/1", "o/r", 1)

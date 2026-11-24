@@ -539,6 +539,9 @@ func applyArchiveContentToCopiedSessionsTx(
 		if _, err := tx.ExecContext(ctx, `DELETE FROM commit_links WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)`); err != nil {
 			return err
 		}
+		if err := retainCopiedUsageToolPRLinksTx(ctx, tx, tempIDsTable); err != nil {
+			return err
+		}
 		err = compactCopiedSessionsForUsageTx(ctx, tx, tempIDsTable)
 	}
 	if err != nil {

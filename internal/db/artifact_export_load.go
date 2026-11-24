@@ -257,7 +257,7 @@ func attachArtifactNestedCollectionsTx(
 	}
 	sort.Slice(toolCalls, func(i, j int) bool {
 		if toolCalls[i].call.MessageID != toolCalls[j].call.MessageID {
-			return messageByID[toolCalls[i].call.MessageID] < messageByID[toolCalls[j].call.MessageID]
+			return toolCalls[i].call.MessageID < toolCalls[j].call.MessageID
 		}
 		if toolCalls[i].call.CallIndex != toolCalls[j].call.CallIndex {
 			return toolCalls[i].call.CallIndex < toolCalls[j].call.CallIndex
