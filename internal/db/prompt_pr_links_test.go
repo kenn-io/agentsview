@@ -132,6 +132,28 @@ func TestPromptPRLinksUsagePolicyWithRetainedHistory(t *testing.T) {
 	assert.Empty(t, got.PRLinks)
 }
 
+func TestPromptPRLinksPendingProjectIdentityUpsertRetainsUsageOnlyLinks(t *testing.T) {
+	d := testDB(t)
+	d.SetArchiveContent(config.ArchiveContentUsage)
+	link, ok := parser.NewPRLink("https://github.com/o/r/pull/42", "o/r", 42)
+	require.True(t, ok)
+	s := Session{ID: "identity-update", Project: "old-project", Machine: "local", Agent: "claude", PRLinks: []PRLink{link}}
+	require.NoError(t, d.UpsertSession(t.Context(), s))
+
+	updated := s
+	updated.Project = "new-project"
+	updated.PRLinks = nil
+	obs := export.ProjectIdentityObservation{SessionID: s.ID, Project: updated.Project, Machine: s.Machine}
+	sourceMissing, err := d.UpsertSessionPendingContentWithProjectIdentity(t.Context(), updated, obs, "")
+	require.NoError(t, err)
+	assert.False(t, sourceMissing)
+
+	got, err := d.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	assert.Equal(t, updated.Project, got.Project)
+	assert.Equal(t, []PRLink{link}, got.PRLinks)
+}
+
 func TestPromptPRLinksBatchAndStagedDialogueReplacement(t *testing.T) {
 	for _, method := range []string{"single", "batch", "staged", "content"} {
 		t.Run(method, func(t *testing.T) {
