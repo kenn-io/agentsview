@@ -273,6 +273,8 @@ func TestRawProjectionRefreshesRetainedToolLinks(t *testing.T) {
 	var links string
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, after.SessionID).Scan(&links))
 	assert.Equal(t, []db.PRLink{{URL: "https://github.com/example/repo/pull/43", Host: "github.com", Repository: "example/repo", Number: 43}}, db.DecodePRLinks(links))
+	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET data_version=$2 WHERE id=$1`, after.SessionID, db.CurrentDataVersion()-1)
+	require.NoError(t, err)
 	result.Messages = nil
 	m, _ = f.accept(t, "device-a", "shortened", receipt.Receipt, parser.AgentRooCode)
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
