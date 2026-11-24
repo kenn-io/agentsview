@@ -424,6 +424,46 @@ func TestToolPRLinksIncrementalReplacementRemovesLastCall(t *testing.T) {
 	assert.Empty(t, got.PRLinks)
 }
 
+func TestToolPRLinksTranscriptsStorage(t *testing.T) {
+	for _, route := range []string{"insert", "incremental", "replace", "batch"} {
+		t.Run(route, func(t *testing.T) {
+			d := testDB(t)
+			d.SetArchiveContent(config.ArchiveContentTranscripts)
+			s := Session{ID: "transcripts", Project: "project", Machine: "local", Agent: "claude"}
+			require.NoError(t, d.UpsertSession(t.Context(), s))
+			message := Message{SessionID: s.ID, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R github.com/example/repo"}`}}}
+			switch route {
+			case "insert":
+				require.NoError(t, d.InsertMessages(t.Context(), []Message{message}))
+			case "incremental":
+				_, err := d.WriteSessionIncremental(t.Context(), s.ID, []Message{message}, IncrementalSessionUpdate{})
+				require.NoError(t, err)
+			case "replace":
+				require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{message}))
+			case "batch":
+				_, err := d.WriteSessionBatchContext(t.Context(), []SessionBatchWrite{{Session: s, Messages: []Message{message}, ReplaceMessages: true}})
+				require.NoError(t, err)
+			}
+			got, err := d.GetSession(t.Context(), s.ID)
+			require.NoError(t, err)
+			stored, err := d.GetAllMessages(t.Context(), s.ID)
+			require.NoError(t, err)
+			require.Len(t, stored, 1)
+			require.Len(t, stored[0].ToolCalls, 1)
+			assert.Empty(t, stored[0].ToolCalls[0].InputJSON)
+			require.Len(t, got.PRLinks, 1)
+			assert.Equal(t, 42, got.PRLinks[0].Number)
+			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+				return refreshSessionPromptPRLinksTx(t.Context(), tx, s.ID)
+			}))
+			got, err = d.GetSession(t.Context(), s.ID)
+			require.NoError(t, err)
+			require.Len(t, got.PRLinks, 1)
+			assert.Equal(t, 42, got.PRLinks[0].Number)
+		})
+	}
+}
+
 func TestToolPRLinksUsageCleanupAndReplacement(t *testing.T) {
 	d := testDB(t)
 	s := Session{ID: "cleanup-tools", Project: "project", Machine: "local", Agent: "claude"}

@@ -43,6 +43,17 @@ func TestToolCallPRLinksSpawnAgents(t *testing.T) {
 	}
 }
 
+func TestToolCallPRLinksAntigravityCommand(t *testing.T) {
+	messages := []db.Message{{ToolCalls: []db.ToolCall{{
+		ToolName: "run_command", Category: "Bash",
+		InputJSON: `{"commandLine":"gh pr view 42 -R github.com/example/repo"}`,
+	}}}}
+	links := toolCallPRLinks(t, messages, "", "")
+	if assert.Len(t, links, 1) {
+		assert.Equal(t, 42, links[0].Number)
+	}
+}
+
 func TestToolCallPRLinksContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
