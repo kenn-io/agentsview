@@ -2504,8 +2504,8 @@ The SessionStart hook refreshes memory and links runs to their launching
 session. Codex launchers using a separate `sqlite_home` in `config.toml` may remain
 unlinked; `CODEX_SQLITE_HOME` is supported. An interactive command whose arguments
 contain `exec`, `e`, `-p`, or `--print` can be mistaken for a launched run.
-ClickHouse sidebars can also show native automated subagents because
-the mirror does not store which parent links came from the parser. Codex
+ClickHouse sidebars hide automated launched runs when automated sessions are
+filtered out because the mirror does not store launcher provenance. Codex
 requires you to trust a new hook in `/hooks`.
 
 Setup registers `agentsview mcp --profile memory` without server flags. To use

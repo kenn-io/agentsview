@@ -821,17 +821,18 @@ func SessionTreeMemberPredicate(
 	f = f.withSelectionDefaults(f.HasAnnotationFilter())
 	pred := sessionAlias + ".message_count > 0 AND " + sessionAlias + ".deleted_at IS NULL"
 	if scope := dialect.AutomatedScopePredicate(NormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated), sessionAlias+".is_automated"); scope != "" {
-		if f.SidebarTree && f.ExcludeAutomated && !f.AutomatedFilterSet && f.AutomatedScope == "" {
+		if dialect.name != "clickhouse" && f.SidebarTree && f.ExcludeAutomated && !f.AutomatedFilterSet && f.AutomatedScope == "" {
 			linked := sessionAlias + ".relationship_type = 'subagent' AND "
-			if dialect.name == "clickhouse" {
-				// ClickHouse does not store parser parent provenance, so this also includes native automated children.
-				linked += "(" + sessionAlias + ".session_kind = 'non-interactive' OR " + sessionAlias + ".entrypoint = 'sdk-cli')"
-			} else {
-				comparison := "tc.session_id IS NOT tc.subagent_session_id"
-				if dialect.name == "postgres" {
-					comparison = "tc.session_id IS DISTINCT FROM tc.subagent_session_id"
-				}
-				linked += "COALESCE(" + sessionAlias + ".parser_parent_session_id, '') = '' AND NOT EXISTS (SELECT 1 FROM tool_calls tc WHERE tc.subagent_session_id = " + sessionAlias + ".id AND " + comparison + ")"
+			if dialect.name != "sqlite" {
+				linked += "COALESCE(" + sessionAlias + ".parent_session_id, '') <> '' AND "
+			}
+			comparison := "tc.session_id IS NOT tc.subagent_session_id"
+			if dialect.name == "postgres" {
+				comparison = "tc.session_id IS DISTINCT FROM tc.subagent_session_id"
+			}
+			linked += "COALESCE(" + sessionAlias + ".parser_parent_session_id, '') = '' AND NOT EXISTS (SELECT 1 FROM tool_calls tc WHERE tc.subagent_session_id = " + sessionAlias + ".id AND " + comparison + ")"
+			if dialect.name == "sqlite" {
+				linked += " AND EXISTS (SELECT 1 FROM session_external_parents ep WHERE ep.session_id = " + sessionAlias + ".id AND ep.parent_session_id = " + sessionAlias + ".parent_session_id)"
 			}
 			scope = "(" + scope + " OR (" + linked + "))"
 		}

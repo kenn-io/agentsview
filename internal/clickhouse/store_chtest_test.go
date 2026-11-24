@@ -5,6 +5,7 @@ package clickhouse
 import (
 	"context"
 	"database/sql"
+	"slices"
 	"testing"
 	"time"
 
@@ -65,13 +66,15 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 	t.Run("stats_counts_orphans_without_parented_continuation", func(t *testing.T) {
 		store, syncer, local := newPushedStore(t)
 		orphanID := "ch-orphan-child"
-		orphan := fixtureSession(orphanID, "alpha", "orphan first", "2026-01-10T00:06:00.000Z", 1)
+		orphan := fixtureSession(orphanID, "alpha", "You are a code reviewer. Review the code.", "2026-01-10T00:06:00.000Z", 1)
 		orphan.RelationshipType = "subagent"
 		orphan.ParentSessionID = nil
+		orphan.IsAutomated = true
+		orphan.SessionKind = "non-interactive"
 		_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
 			Session: orphan,
 			Messages: []db.Message{
-				fixtureMessage(orphanID, 0, "user", "orphan first", "2026-01-10T00:06:00.000Z"),
+				fixtureMessage(orphanID, 0, "user", "You are a code reviewer. Review the code.", "2026-01-10T00:06:00.000Z"),
 			},
 			DataVersion:     1,
 			ReplaceMessages: true,
@@ -94,6 +97,20 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 		}
 		_, err = syncer.Push(ctx, false, nil)
 		require.NoError(t, err)
+		predicate := db.SessionTreeMemberPredicate(db.SessionFilter{SidebarTree: true, ExcludeAutomated: true}, db.ClickHouseQueryDialect(), "s")
+		var automated bool
+		var relationship, kind string
+		var parent sql.NullString
+		err = store.DB().QueryRowContext(ctx, "SELECT is_automated, relationship_type, session_kind, parent_session_id FROM sessions WHERE id = ?", orphanID).Scan(&automated, &relationship, &kind, &parent)
+		require.NoError(t, err)
+		require.True(t, automated)
+		require.Equal(t, "subagent", relationship)
+		require.Equal(t, "non-interactive", kind)
+		require.False(t, parent.Valid)
+		var orphanCount int
+		err = store.DB().QueryRowContext(ctx, "SELECT COUNT(*) FROM sessions s WHERE s.id = ? AND "+predicate, orphanID).Scan(&orphanCount)
+		require.NoError(t, err)
+		assert.Zero(t, orphanCount)
 		stats, err := store.GetStats(ctx, false, false)
 		require.NoError(t, err)
 		assert.Equal(t, 4, stats.SessionCount)
@@ -118,6 +135,50 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 			ids[i] = row.ID
 		}
 		assert.ElementsMatch(t, []string{fixtureAlphaID, fixtureChildID}, ids)
+	})
+
+	t.Run("sidebar_hides_automated_children_without_launcher_provenance", func(t *testing.T) {
+		store, syncer, local := newPushedStore(t)
+		for _, row := range []struct{ id, kind, entrypoint string }{
+			{"ch-native-kind", "non-interactive", ""},
+			{"ch-native-entrypoint", "", "sdk-cli"},
+		} {
+			session := fixtureSession(row.id, "alpha", "You are a code reviewer. Review the code.", "2026-01-10T00:07:00.000Z", 1)
+			session.RelationshipType = "subagent"
+			parent := fixtureAlphaID
+			session.ParentSessionID = &parent
+			session.IsAutomated = true
+			session.SessionKind = row.kind
+			session.Entrypoint = row.entrypoint
+			_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+				Session: session, Messages: []db.Message{fixtureMessage(row.id, 0, "user", "You are a code reviewer. Review the code.", "2026-01-10T00:07:00.000Z")},
+				DataVersion: 1, ReplaceMessages: true,
+			}})
+			require.NoError(t, err)
+		}
+		_, err := syncer.Push(ctx, false, nil)
+		require.NoError(t, err)
+		for _, filter := range []struct {
+			name string
+			db.SessionFilter
+			wantChildren bool
+		}{
+			{"filtered", db.SessionFilter{Project: "alpha", ExcludeAutomated: true}, false},
+			{"unfiltered", db.SessionFilter{Project: "alpha"}, true},
+		} {
+			t.Run(filter.name, func(t *testing.T) {
+				index, err := store.GetSidebarSessionIndex(ctx, filter.SessionFilter)
+				require.NoError(t, err)
+				ids := make([]string, len(index.Sessions))
+				for i, row := range index.Sessions {
+					ids[i] = row.ID
+				}
+				assert.Contains(t, ids, fixtureAlphaID)
+				for _, id := range []string{"ch-native-kind", "ch-native-entrypoint"} {
+					assert.Equal(t, filter.wantChildren, slices.Contains(ids, id), id)
+				}
+			})
+		}
 	})
 
 	t.Run("get_session_and_find", func(t *testing.T) {
