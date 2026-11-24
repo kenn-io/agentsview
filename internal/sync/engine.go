@@ -6793,6 +6793,10 @@ func (e *Engine) filterFilesByMtime(
 		var sourceCwd sourceCwdDecision
 		sourceCwdParticipating := false
 		if f.ProviderSource != nil {
+			if e.codexLabelNeedsRefresh(ctx, *f.ProviderSource, e.machineForFile(f)) {
+				out = append(out, f)
+				continue
+			}
 			sourceCwd = e.sourceCwdDecision(ctx, *f.ProviderSource)
 			sourceCwdParticipating = sourceCwdParticipates(
 				sourceCwd.resolution,

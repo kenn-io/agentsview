@@ -13,6 +13,32 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
+func (e *Engine) codexLabelNeedsRefresh(ctx context.Context, source parser.SourceRef, machine string) bool {
+	if source.Provider != parser.AgentCodex {
+		return false
+	}
+	path := providerDiscoveredPath(source)
+	label := ""
+	for _, root := range e.sources().agentDirs[parser.AgentCodex] {
+		if label = parser.CodexSourceLabel(root, path); label != "" {
+			break
+		}
+	}
+	if label == "" {
+		return false
+	}
+	lookupPath := e.sourceCwdLookupPath(source)
+	project, ok := e.db.GetProjectByAgentPath(ctx, lookupPath, string(parser.AgentCodex))
+	if !ok || project == label {
+		return false
+	}
+	cwd, _ := e.db.GetCwdByAgentPath(ctx, lookupPath, string(parser.AgentCodex))
+	if mapped, ok := e.loadWorktreeProjectResolverContext(ctx)(machine, cwd, label); ok {
+		label = mapped
+	}
+	return project != label
+}
+
 // shouldSkipCodexFingerprint reproduces the legacy shouldSkipCodex decision in
 // terms of a provider SourceFingerprint. For Codex, fingerprint MTimeNS folds
 // in session_index.jsonl via CodexEffectiveMtime; TraeX uses the transcript
