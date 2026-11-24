@@ -306,72 +306,105 @@ func (s antigravityCLISourceSet) Discover(ctx context.Context) ([]SourceRef, err
 }
 
 func (s antigravityCLISourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
-	roots, expandErr := s.expandedRoots()
+	roots, incompleteErr := s.expandedRoots()
 	for _, root := range roots {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		projects, err := newDiscoveryDiskMapForContext(ctx)
+		rootIncomplete, err := s.discoverRootEach(ctx, root, yield)
 		if err != nil {
 			return err
 		}
-		if err := projects.loadJSONL(
-			ctx, filepath.Join(root, "history.jsonl"), "conversationId", "workspace",
-		); err != nil {
-			return errors.Join(err, projects.close())
-		}
-		for id, workspace := range antigravityProjectMapFromLastConversations(
-			filepath.Join(root, "cache", "last_conversations.json"),
-		) {
-			if err := projects.put(ctx, id, workspace, true); err != nil {
-				return errors.Join(err, projects.close())
-			}
-		}
-		// Matches buildAntigravityCLIProjectMap: the summary store only
-		// fills conversations the history and cache leave unmapped.
-		for id, summary := range loadAntigravitySummaries(ctx, root).byID {
-			if summary.workspace == "" {
-				continue
-			}
-			if err := projects.put(ctx, id, summary.workspace, false); err != nil {
-				return errors.Join(err, projects.close())
-			}
-		}
-		for _, subdir := range []string{"conversations", "implicit"} {
-			dir := filepath.Join(root, subdir)
-			err := streamDirectoryEntries(ctx, dir, func(entry os.DirEntry) error {
-				if entry.IsDir() {
-					return nil
-				}
-				_, ext, ok := antigravityCLIPathID(entry.Name())
-				if !ok || subdir == "implicit" && ext != ".pb" {
-					return nil
-				}
-				path := filepath.Join(dir, entry.Name())
-				rawID, ok := antigravityCLISessionIDForPath(root, path)
-				if !ok {
-					return nil
-				}
-				project, _, err := projects.get(ctx, strings.TrimPrefix(rawID, antigravityImplicitTag))
-				if err != nil {
-					return err
-				}
-				return yield(s.newSourceRef(root, path, rawID, project, project))
-			})
-			if err != nil {
-				return errors.Join(err, projects.close())
-			}
-		}
-		if err := projects.close(); err != nil {
-			return err
+		if rootIncomplete != nil {
+			incompleteErr = errors.Join(incompleteErr, rootIncomplete)
 		}
 	}
-	if expandErr != nil {
+	if incompleteErr != nil {
 		return incompleteDiscoveryError(
-			AgentAntigravityCLI, "expand container root", expandErr,
+			AgentAntigravityCLI, "discover antigravity cli roots", incompleteErr,
 		)
 	}
 	return nil
+}
+
+func (s antigravityCLISourceSet) discoverRootEach(
+	ctx context.Context,
+	root string,
+	yield func(SourceRef) error,
+) (rootIncomplete error, fatalErr error) {
+	projects, err := newDiscoveryDiskMapForContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := projects.close(); closeErr != nil && fatalErr == nil {
+			fatalErr = closeErr
+		}
+	}()
+
+	if err := projects.loadJSONL(
+		ctx, filepath.Join(root, "history.jsonl"), "conversationId", "workspace",
+	); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		rootIncomplete = errors.Join(rootIncomplete, err)
+	}
+	for id, workspace := range antigravityProjectMapFromLastConversations(
+		filepath.Join(root, "cache", "last_conversations.json"),
+	) {
+		if err := projects.put(ctx, id, workspace, true); err != nil {
+			return nil, err
+		}
+	}
+	// Matches buildAntigravityCLIProjectMap: the summary store only
+	// fills conversations the history and cache leave unmapped.
+	for id, summary := range loadAntigravitySummaries(ctx, root).byID {
+		if summary.workspace == "" {
+			continue
+		}
+		if err := projects.put(ctx, id, summary.workspace, false); err != nil {
+			return nil, err
+		}
+	}
+	for _, subdir := range []string{"conversations", "implicit"} {
+		dir := filepath.Join(root, subdir)
+		var callbackErr error
+		err := streamDirectoryEntries(ctx, dir, func(entry os.DirEntry) error {
+			if entry.IsDir() {
+				return nil
+			}
+			_, ext, ok := antigravityCLIPathID(entry.Name())
+			if !ok || subdir == "implicit" && ext != ".pb" {
+				return nil
+			}
+			path := filepath.Join(dir, entry.Name())
+			rawID, ok := antigravityCLISessionIDForPath(root, path)
+			if !ok {
+				return nil
+			}
+			project, _, err := projects.get(ctx, strings.TrimPrefix(rawID, antigravityImplicitTag))
+			if err != nil {
+				callbackErr = err
+				return err
+			}
+			if err := yield(s.newSourceRef(root, path, rawID, project, project)); err != nil {
+				callbackErr = err
+				return err
+			}
+			return nil
+		})
+		if callbackErr != nil {
+			return nil, callbackErr
+		}
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			rootIncomplete = errors.Join(rootIncomplete, err)
+		}
+	}
+	return rootIncomplete, nil
 }
 
 // discoverSessions enumerates conversations/*.db, conversations/*.pb, and
@@ -531,7 +564,7 @@ func antigravityCLIContainerWatchRoot(root string) WatchRoot {
 	return WatchRoot{
 		Path:      root,
 		Recursive: true,
-		MaxDepth:  2,
+		MaxDepth:  1,
 		ExtraDirectories: []string{
 			// Single-profile (<root>/antigravity-{acp,cli}/...) and
 			// direct-instance (<root>/<instance>/...) containers:
@@ -541,11 +574,13 @@ func antigravityCLIContainerWatchRoot(root string) WatchRoot {
 			"*/brain/*",
 			"*/" + brainLogsSuffix,
 			// Nested-instance (<root>/<instance>/antigravity-{acp,cli}/...) containers:
+			"*/antigravity-acp",
 			"*/antigravity-acp/conversations",
 			"*/antigravity-acp/implicit",
 			"*/antigravity-acp/cache",
 			"*/antigravity-acp/brain/*",
 			"*/antigravity-acp/" + brainLogsSuffix,
+			"*/antigravity-cli",
 			"*/antigravity-cli/conversations",
 			"*/antigravity-cli/implicit",
 			"*/antigravity-cli/cache",

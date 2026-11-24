@@ -1,7 +1,9 @@
 package parser
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -184,8 +186,10 @@ func TestAntigravityCLIProviderContainerWatchPlanAndRelevance(t *testing.T) {
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, container, plan.Roots[0].Path)
 	assert.True(t, plan.Roots[0].Recursive)
-	assert.Equal(t, 2, plan.Roots[0].MaxDepth)
+	assert.Equal(t, 1, plan.Roots[0].MaxDepth)
+	assert.Contains(t, plan.Roots[0].ExtraDirectories, "*/antigravity-acp")
 	assert.Contains(t, plan.Roots[0].ExtraDirectories, "*/antigravity-acp/conversations")
+	assert.Contains(t, plan.Roots[0].ExtraDirectories, "*/antigravity-acp/brain/*")
 	assert.Contains(t, plan.Roots[0].ExtraDirectories, "*/antigravity-acp/brain/*/.system_generated/logs")
 
 	const id = "22222222-3333-4444-5555-666666666666"
@@ -426,4 +430,70 @@ func TestAntigravityCLIProviderContainerInstanceNamedCacheOrBrain(t *testing.T) 
 		directRoot, filepath.Join(directRoot, "brain", "antigravity-acp", "plan.md"),
 	)
 	assert.False(t, isInstance)
+}
+
+func TestAntigravityCLIProviderContainerDiscoverEachContinuesPastUnreadableInstance(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("chmod 000 permission test requires non-root unix")
+	}
+	base := t.TempDir()
+	container := filepath.Join(base, ".t3", "userdata", "providers", "antigravity")
+
+	const (
+		blockedID = "88888888-1111-4222-8333-444444444441"
+		healthyID = "88888888-1111-4222-8333-444444444442"
+	)
+
+	// Place the unreadable instance lexicographically before the healthy
+	// sibling. Because the parent profile directory stays readable, ExpandRoot
+	// returns both roots and DiscoverEach encounters EACCES on the first root.
+	blockedACP := filepath.Join(container, "aaa-blocked", "antigravity-acp")
+	healthyACP := filepath.Join(container, "zzz-healthy", "antigravity-acp")
+	writeAntigravityCLIProviderFixture(t, blockedACP, blockedID)
+	writeAntigravityCLIProviderFixture(t, healthyACP, healthyID)
+
+	require.NoError(t, os.Chmod(blockedACP, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(blockedACP, 0o755) })
+
+	provider, ok := NewProvider(AgentAntigravityCLI, ProviderConfig{
+		Roots:   []string{container},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+	streamer := provider.(StreamingDiscoverer)
+
+	var streamed []string
+	err := streamer.DiscoverEach(t.Context(), func(ref SourceRef) error {
+		streamed = append(streamed, ref.DisplayPath)
+		return nil
+	})
+	var incomplete DiscoveryIncompleteError
+	require.ErrorAs(t, err, &incomplete, "unreadable instance must surface DiscoveryIncompleteError")
+	assert.ElementsMatch(t, []string{
+		filepath.Join(healthyACP, "conversations", healthyID+".db"),
+		filepath.Join(healthyACP, "conversations", healthyID+".pb"),
+		filepath.Join(healthyACP, "implicit", healthyID+".pb"),
+	}, streamed, "healthy later sibling must still be yielded")
+
+	// Callback errors stop immediately and propagate verbatim (not wrapped as
+	// DiscoveryIncompleteError).
+	stopErr := errors.New("consumer stopped")
+	var beforeStop int
+	err = streamer.DiscoverEach(t.Context(), func(SourceRef) error {
+		beforeStop++
+		return stopErr
+	})
+	require.ErrorIs(t, err, stopErr)
+	_, isIncomplete := errors.AsType[DiscoveryIncompleteError](err)
+	assert.False(t, isIncomplete, "callback error must not be disguised as DiscoveryIncompleteError")
+	assert.Equal(t, 1, beforeStop)
+
+	// Context cancellation stops immediately.
+	canceledCtx, cancel := context.WithCancel(t.Context())
+	cancel()
+	err = streamer.DiscoverEach(canceledCtx, func(SourceRef) error {
+		require.Fail(t, "yield should not run on canceled context")
+		return nil
+	})
+	require.ErrorIs(t, err, context.Canceled)
 }

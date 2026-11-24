@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/fsevents"
+	"go.kenn.io/agentsview/internal/parser"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -757,6 +758,115 @@ func TestDarwinWatcherMostSpecificRecursiveRootOwnsRename(t *testing.T) {
 	assert.Equal(t, backendEvent{
 		Path: renamedPath, Root: nested, Op: backendOpRename, ItemType: backendItemFile,
 	}, sink.event)
+}
+
+type recordingDirectSink struct {
+	events     []backendEvent
+	meaningful bool
+}
+
+func (s *recordingDirectSink) TryAccumulate(fn func(func(backendEvent) bool) bool) bool {
+	s.meaningful = fn(func(ev backendEvent) bool {
+		s.events = append(s.events, ev)
+		return true
+	})
+	return true
+}
+
+func (*recordingDirectSink) RetainAuthoritative(backendLifecycleToken) {}
+
+type noopDarwinStream struct{}
+
+func (noopDarwinStream) Start() error { return nil }
+func (noopDarwinStream) Close() error { return nil }
+
+func TestDarwinWatchBackendConsumeFSEventsEnforcesMaxDepthAndExtraDirectories(t *testing.T) {
+	const id = "66666666-7777-8888-9999-aaaaaaaaaaaa"
+	container := filepath.Join(t.TempDir(), ".t3", "userdata", "providers", "antigravity")
+	require.NoError(t, os.MkdirAll(container, 0o755))
+
+	provider, ok := parser.NewProvider(parser.AgentAntigravityCLI, parser.ProviderConfig{
+		Roots: []string{container},
+	})
+	require.True(t, ok)
+	plan, err := provider.WatchPlan(t.Context())
+	require.NoError(t, err)
+	require.Len(t, plan.Roots, 1)
+
+	sink := &recordingDirectSink{}
+	var captured func([]fsevents.Event)
+	backend := &darwinWatchBackend{
+		sink:    sink,
+		streams: make(map[string]darwinStream),
+		logical: make(map[string]*darwinLogicalRoot),
+		shallow: make(map[string]int),
+		newStream: func(_ string, cb func([]fsevents.Event)) (darwinStream, error) {
+			captured = cb
+			return noopDarwinStream{}, nil
+		},
+	}
+	backend.nativeOpen.Store(true)
+	backend.roots.Store(&darwinRootSnapshot{})
+
+	results := backend.RegisterRoots([]WatchRoot{{
+		Path:             plan.Roots[0].Path,
+		Recursive:        plan.Roots[0].Recursive,
+		MaxDepth:         plan.Roots[0].MaxDepth,
+		ExtraDirectories: plan.Roots[0].ExtraDirectories,
+		Exists:           true,
+	}}, 1)
+	require.Len(t, results, 1)
+	require.NoError(t, results[0].Err)
+	require.NotNil(t, captured)
+
+	instanceDir := filepath.Join(container, "insthash")
+	acp := filepath.Join(instanceDir, "antigravity-acp")
+	brainSession := filepath.Join(acp, "brain", id)
+	generated := filepath.Join(brainSession, ".system_generated")
+	logsDir := filepath.Join(generated, "logs")
+
+	kept := []fsevents.Event{
+		{Path: instanceDir, Flags: fseventFlagItemCreated | fseventFlagItemIsDir},
+		{Path: filepath.Join(acp, "conversations", id+".db-wal"), Flags: fseventFlagItemModified | fseventFlagItemIsFile},
+		{Path: filepath.Join(brainSession, "plan.md"), Flags: fseventFlagItemModified | fseventFlagItemIsFile},
+		{Path: filepath.Join(brainSession, "plan.md.metadata.json"), Flags: fseventFlagItemRemoved | fseventFlagItemIsFile},
+		{Path: filepath.Join(logsDir, "transcript.jsonl"), Flags: fseventFlagItemModified | fseventFlagItemIsFile},
+	}
+	dropped := []fsevents.Event{
+		{Path: filepath.Join(acp, "log"), Flags: fseventFlagItemCreated | fseventFlagItemIsDir},
+		{Path: filepath.Join(acp, "log", "agent.log"), Flags: fseventFlagItemModified | fseventFlagItemIsFile},
+		{Path: filepath.Join(acp, "builtin", "skills", "guide.md"), Flags: fseventFlagItemModified | fseventFlagItemIsFile},
+		{Path: filepath.Join(brainSession, "scratch", "note.md"), Flags: fseventFlagItemModified | fseventFlagItemIsFile},
+		{Path: filepath.Join(generated, "noise.txt"), Flags: fseventFlagItemModified | fseventFlagItemIsFile},
+		{Path: filepath.Join(generated, "steps", "001.json"), Flags: fseventFlagItemModified | fseventFlagItemIsFile},
+		{Path: filepath.Join(logsDir, "chunks", "001.bin"), Flags: fseventFlagItemModified | fseventFlagItemIsFile},
+	}
+
+	// Excluded subtree events alone must not mark delivery meaningful.
+	captured(dropped)
+	assert.False(t, sink.meaningful)
+	assert.Empty(t, sink.events)
+
+	// Mixed delivery forwards only the permitted instance, conversation,
+	// artifact, and transcript events.
+	captured(append(append([]fsevents.Event(nil), dropped...), kept...))
+	assert.True(t, sink.meaningful)
+	gotPaths := make([]string, 0, len(sink.events))
+	for _, ev := range sink.events {
+		gotPaths = append(gotPaths, ev.Path)
+	}
+	wantPaths := make([]string, 0, len(kept))
+	for _, ev := range kept {
+		wantPaths = append(wantPaths, filepath.Clean(ev.Path))
+	}
+	assert.Equal(t, wantPaths, gotPaths)
+
+	// Created-subtree filtering honors the same bounds.
+	assert.True(t, backend.includeCreatedSubtreePath(container, filepath.Join(brainSession, "plan.md"), false))
+	assert.True(t, backend.includeCreatedSubtreePath(container, filepath.Join(logsDir, "transcript.jsonl"), false))
+	assert.False(t, backend.includeCreatedSubtreePath(container, filepath.Join(acp, "log"), true))
+	assert.False(t, backend.includeCreatedSubtreePath(container, filepath.Join(acp, "log", "agent.log"), false))
+	assert.False(t, backend.includeCreatedSubtreePath(container, filepath.Join(generated, "steps"), true))
 }
 
 func TestDarwinWatcherNestedShallowRootDoesNotShadowRecursiveStream(t *testing.T) {

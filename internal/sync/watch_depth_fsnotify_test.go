@@ -232,9 +232,8 @@ func TestFSNotifyBackendAntigravityCLIContainerWatchPlan(t *testing.T) {
 	const id = "66666666-7777-8888-9999-aaaaaaaaaaaa"
 
 	layouts := []struct {
-		name         string
-		setupRoot    func(t *testing.T, base string) (container string, parentChain []string, sessionRoot string)
-		extraIgnored func(sessionRoot string) []string
+		name      string
+		setupRoot func(t *testing.T, base string) (container string, parentChain []string, sessionRoot string)
 	}{
 		{
 			name: "nested instance container (T3 Code)",
@@ -245,9 +244,6 @@ func TestFSNotifyBackendAntigravityCLIContainerWatchPlan(t *testing.T) {
 				instance := filepath.Join(container, "insthash")
 				acp := filepath.Join(instance, "antigravity-acp")
 				return container, []string{instance, acp}, acp
-			},
-			extraIgnored: func(sessionRoot string) []string {
-				return []string{filepath.Join(sessionRoot, "log"), filepath.Join(sessionRoot, "builtin")}
 			},
 		},
 		{
@@ -260,9 +256,6 @@ func TestFSNotifyBackendAntigravityCLIContainerWatchPlan(t *testing.T) {
 				instance := filepath.Join(container, "work")
 				return container, []string{instance}, instance
 			},
-			extraIgnored: func(sessionRoot string) []string {
-				return nil
-			},
 		},
 		{
 			name: "single profile container",
@@ -272,9 +265,6 @@ func TestFSNotifyBackendAntigravityCLIContainerWatchPlan(t *testing.T) {
 				acp := filepath.Join(container, "antigravity-acp")
 				require.NoError(t, os.MkdirAll(acp, 0o755))
 				return container, nil, acp
-			},
-			extraIgnored: func(sessionRoot string) []string {
-				return nil
 			},
 		},
 	}
@@ -315,11 +305,13 @@ func TestFSNotifyBackendAntigravityCLIContainerWatchPlan(t *testing.T) {
 				assert.Contains(t, backend.watcher.WatchList(), dir)
 			}
 
-			ignoredDirs := append([]string{
+			ignoredDirs := []string{
+				filepath.Join(sessionRoot, "log"),
+				filepath.Join(sessionRoot, "builtin"),
 				filepath.Join(brainSession, "scratch"),
 				filepath.Join(generated, "steps"),
 				filepath.Join(logsDir, "chunks"),
-			}, tc.extraIgnored(sessionRoot)...)
+			}
 			for _, ignored := range ignoredDirs {
 				require.NoError(t, os.Mkdir(ignored, 0o755))
 				_, excluded := backend.watchCreatedPath(ignored)
