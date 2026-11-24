@@ -28,6 +28,7 @@ func TestArtifactImportRetainsToolPRLinks(t *testing.T) {
 			{ToolName: "Task", Category: "Task", ToolUseID: "call-2", InputJSON: `{"prompt":"Review https://github.com/example/repo/pull/6"}`},
 			{ToolName: "Bash", Category: "Bash", ToolUseID: "call-3", InputJSON: `{"command":"GH_HOST=git.example.com gh pr view 7 -R example/repo"}`},
 			{ToolName: "Bash", Category: "Bash", ToolUseID: "call-4", InputJSON: `{"command":"gh pr view 8 -R example/repo"}`},
+			{ToolName: "shell", Category: "Bash", ToolUseID: "call-5", InputJSON: `{"command":["bash","-lc","gh -R example/repo pr view 9"]}`},
 		},
 	}}))
 	store := newTestArtifactStore(t)
@@ -52,16 +53,17 @@ func TestArtifactImportRetainsToolPRLinks(t *testing.T) {
 			session, err := destination.GetSessionFull(t.Context(), contractOrigin+"~one")
 			require.NoError(t, err)
 			require.NotNil(t, session)
-			require.Len(t, session.PRLinks, 3)
+			require.Len(t, session.PRLinks, 4)
 			assert.Equal(t, 5, session.PRLinks[0].Number)
 			assert.Equal(t, 6, session.PRLinks[1].Number)
 			assert.Equal(t, 8, session.PRLinks[2].Number)
+			assert.Equal(t, 9, session.PRLinks[3].Number)
 			messages, err := destination.GetMessages(t.Context(), session.ID, 0, 10, true)
 			require.NoError(t, err)
 			require.NoError(t, destination.ReplaceSessionMessages(t.Context(), session.ID, messages))
 			session, err = destination.GetSessionFull(t.Context(), session.ID)
 			require.NoError(t, err)
-			assert.Len(t, session.PRLinks, 3)
+			assert.Len(t, session.PRLinks, 4)
 		})
 	}
 }

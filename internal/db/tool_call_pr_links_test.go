@@ -41,6 +41,23 @@ func TestToolCallPRLinksCommandArray(t *testing.T) {
 	assert.Equal(t, 43, links[1].Number)
 }
 
+func TestToolCallPRLinksWrappedCommands(t *testing.T) {
+	for _, tc := range []struct{ input, want string }{
+		{`{"command":"command gh pr view 41 -R example/repo"}`, "https://github.com/example/repo/pull/41"},
+		{`{"command":"gh -R example/repo pr view 42"}`, "https://github.com/example/repo/pull/42"},
+		{`{"command":["bash","-lc","gh pr view 43 -R example/repo"]}`, "https://github.com/example/repo/pull/43"},
+		{`{"command":"bash -lc 'gh pr view 44 -R example/repo'"}`, "https://github.com/example/repo/pull/44"},
+		{`{"cmd":"timeout 60 gh pr checks 45 -R example/repo --watch"}`, "https://github.com/example/repo/pull/45"},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			messages := []db.Message{{ToolCalls: []db.ToolCall{{ToolName: "shell", Category: "Bash", InputJSON: tc.input}}}}
+			links := toolCallPRLinks(t, messages, "", "")
+			require.Len(t, links, 1)
+			assert.Equal(t, tc.want, links[0].URL)
+		})
+	}
+}
+
 func TestToolCallPRLinksOversizedInput(t *testing.T) {
 	for _, tc := range []struct {
 		name, first, second, cwd, remote string

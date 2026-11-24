@@ -132,8 +132,109 @@ type PRLinkDependency struct {
 	Bare bool
 }
 
+// unwrapPRCommand removes execution wrappers whose arguments have fixed roles.
+func unwrapPRCommand(args []*syntax.Word) []*syntax.Word {
+	for len(args) > 0 {
+		words, literal := shellWords(args)
+		if !literal[0] {
+			return nil
+		}
+		switch words[0] {
+		case "command":
+			i := 1
+			for i < len(words) && literal[i] && words[i] == "-p" {
+				i++
+			}
+			if i < len(words) && literal[i] && words[i] == "--" {
+				i++
+			}
+			args = args[i:]
+		case "timeout":
+			i := 1
+			for i < len(words) && literal[i] && strings.HasPrefix(words[i], "-") {
+				flag := words[i]
+				i++
+				switch flag {
+				case "--":
+					goto duration
+				case "-k", "--kill-after", "-s", "--signal":
+					i++
+				case "--foreground", "--preserve-status", "-v", "--verbose":
+				default:
+					if !strings.HasPrefix(flag, "--kill-after=") && !strings.HasPrefix(flag, "--signal=") {
+						return nil
+					}
+				}
+			}
+		duration:
+			if i >= len(words) || !literal[i] || words[i] == "" {
+				return nil
+			}
+			args = args[i+1:]
+		default:
+			return args
+		}
+	}
+	return nil
+}
+
+// ghPRArgs moves inherited repository flags after the PR action.
+func ghPRArgs(args []*syntax.Word) []*syntax.Word {
+	words, literal := shellWords(args)
+	if len(words) == 0 || !literal[0] || words[0] != "gh" {
+		return nil
+	}
+	i := 1
+	for i < len(words) && literal[i] && strings.HasPrefix(words[i], "-") {
+		switch {
+		case words[i] == "-R" || words[i] == "--repo":
+			i += 2
+		case strings.HasPrefix(words[i], "-R") && len(words[i]) > 2, strings.HasPrefix(words[i], "--repo="):
+			i++
+		default:
+			return nil
+		}
+	}
+	if i+1 >= len(args) || !literal[i] || !literal[i+1] || words[i] != "pr" {
+		return nil
+	}
+	result := append([]*syntax.Word{args[0], args[i], args[i+1]}, args[1:i]...)
+	return append(result, args[i+2:]...)
+}
+
+func shellCommand(args []*syntax.Word) (string, bool) {
+	words, literal := shellWords(args)
+	if len(words) < 3 || !literal[0] {
+		return "", false
+	}
+	switch path.Base(words[0]) {
+	case "sh", "bash", "zsh":
+	default:
+		return "", false
+	}
+	for i := 1; i < len(words); i++ {
+		if !literal[i] || !strings.HasPrefix(words[i], "-") || strings.HasPrefix(words[i], "--") {
+			return "", false
+		}
+		if strings.Contains(words[i][1:], "n") {
+			return "", false
+		}
+		if strings.Contains(words[i][1:], "c") {
+			if i+1 < len(words) && literal[i+1] {
+				return words[i+1], true
+			}
+			return "", false
+		}
+	}
+	return "", false
+}
+
 // AnalyzePRCommand extracts links and shared shell context from one parse.
 func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBare, hostUnknown bool) ([]PRLink, bool, bool, bool, []PRLinkDependency, error) {
+	return analyzePRCommand(ctx, command, cwd, remote, allowBare, hostUnknown, 0)
+}
+
+func analyzePRCommand(ctx context.Context, command, cwd, remote string, allowBare, hostUnknown bool, depth int) ([]PRLink, bool, bool, bool, []PRLinkDependency, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, false, false, nil, err
 	}
@@ -152,8 +253,18 @@ func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 		if err := ctx.Err(); err != nil {
 			return nil, false, false, false, nil, err
 		}
-		args := entry.call.Args
+		args := unwrapPRCommand(entry.call.Args)
 		bareSafe := allowBare && !entry.directory && !entry.repository
+		if inner, ok := shellCommand(args); ok && depth < 8 {
+			found, _, _, _, dependencies, err := analyzePRCommand(ctx, inner, cwd, remote, bareSafe, hostUnknown || entry.repository, depth+1)
+			if err != nil {
+				return nil, false, false, false, nil, err
+			}
+			links = append(links, found)
+			dependsOnRemote = append(dependsOnRemote, dependencies...)
+			continue
+		}
+		args = ghPRArgs(args)
 		words, literal := shellWords(args)
 		if len(words) < 4 || !literal[0] || !literal[1] || !literal[2] || words[0] != "gh" || words[1] != "pr" {
 			continue
@@ -309,10 +420,10 @@ func bashChangesRepositoryContext(file *syntax.File) (bool, bool, []prShellCall)
 				}
 			}
 			callDirectory, callRepository := directory, repository
-			args := n.Args
+			args := unwrapPRCommand(n.Args)
 			if len(args) > 0 {
 				name, _ := shellLiteral(args[0].Parts)
-				if name == "gh" {
+				if name == "gh" || path.Base(name) == "bash" || path.Base(name) == "sh" || path.Base(name) == "zsh" {
 					syntax.Walk(n, func(child syntax.Node) bool {
 						if a, ok := child.(*syntax.Assign); ok && a.Name != nil && (a.Name.Value == "GH_REPO" || a.Name.Value == "GH_HOST") {
 							callRepository = true
@@ -337,8 +448,9 @@ func bashChangesRepositoryContext(file *syntax.File) (bool, bool, []prShellCall)
 }
 
 func shellCallChangesPRContext(call *syntax.CallExpr, functions map[string]bool) (bool, bool) {
-	words := make([]string, len(call.Args))
-	for i, arg := range call.Args {
+	args := unwrapPRCommand(call.Args)
+	words := make([]string, len(args))
+	for i, arg := range args {
 		words[i], _ = shellLiteral(arg.Parts)
 	}
 	for len(words) > 1 && (words[0] == "command" || words[0] == "builtin") {

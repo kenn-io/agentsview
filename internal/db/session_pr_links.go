@@ -16,6 +16,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/shellquote"
 )
 
 // PRLink is a pull or merge request named in a structured record or retained
@@ -451,15 +452,26 @@ func taskPRLinks(ctx context.Context, input string) ([]PRLink, error) {
 // when the input is structured but does not parse.
 func shellInputCommands(input string) (commands []string, ok bool) {
 	var payload struct {
-		Command  string   `json:"command"`
-		Cmd      string   `json:"cmd"`
-		Commands []string `json:"commands"`
+		Command  jsontext.Value `json:"command"`
+		Cmd      string         `json:"cmd"`
+		Commands []string       `json:"commands"`
 	}
 	if json.Unmarshal([]byte(input), &payload) != nil {
 		return nil, false
 	}
-	if payload.Command != "" {
-		return []string{payload.Command}, true
+	if len(payload.Command) > 0 && string(payload.Command) != "null" {
+		var command string
+		if json.Unmarshal(payload.Command, &command) == nil {
+			return []string{command}, true
+		}
+		var argv []string
+		if json.Unmarshal(payload.Command, &argv) != nil || len(argv) == 0 {
+			return nil, false
+		}
+		for i, arg := range argv {
+			argv[i] = shellquote.POSIX(arg)
+		}
+		return []string{strings.Join(argv, " ")}, true
 	}
 	if payload.Commands != nil {
 		return payload.Commands, true

@@ -247,14 +247,14 @@ func TestRawProjectionFutureVersionDialogueRefresh(t *testing.T) {
 }
 
 func TestRawProjectionCommandPRLinks(t *testing.T) {
-	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentUsage} {
+	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
 		t.Run(string(policy), func(t *testing.T) {
 			f := newProjectionFixture(t)
 			var err error
 			f.sink, err = NewRawProjectionStore(t.Context(), f.runtime, RawProjectionOptions{Tenant: f.tenant, Content: ingest.ContentOptions{ArchiveContent: policy}})
 			require.NoError(t, err)
 			outcome := projectionOutcome("start")
-			outcome.Outcome.Results[0].Result.Messages[1].ToolCalls[0].InputJSON = `{"command":"gh pr view 43 -R example/repo"}`
+			outcome.Outcome.Results[0].Result.Messages[1].ToolCalls[0].InputJSON = `{"command":["bash","-lc","gh -R example/repo pr view 43"]}`
 			m, _ := f.accept(t, "device-a", "initial", "")
 			require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
 			resolved, err := f.sink.Resolve(t.Context(), "codex:portable")

@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
@@ -174,6 +175,50 @@ func TestCodexCommandPRLinksOnSync(t *testing.T) {
 	require.Equal(t, 4, env.engine.SyncAll(t.Context(), nil).Synced)
 	for _, tc := range cases {
 		assert.Equal(t, []string{tc.url}, storedPRURLs(t, env.db, "codex:"+tc.id))
+	}
+}
+
+func TestCodexWrappedCommandPRFilter(t *testing.T) {
+	cases := []struct {
+		id, name string
+		input    map[string]any
+		number   int
+	}{
+		{"01900000-0000-7000-8000-000000000041", "exec_command", map[string]any{"cmd": "command gh pr view 41 -R example/repo"}, 41},
+		{"01900000-0000-7000-8000-000000000042", "exec_command", map[string]any{"cmd": "gh -R example/repo pr view 42"}, 42},
+		{"01900000-0000-7000-8000-000000000043", "shell", map[string]any{"command": []string{"bash", "-lc", "gh pr view 43 -R example/repo"}}, 43},
+		{"01900000-0000-7000-8000-000000000044", "shell", map[string]any{"command": "bash -lc 'gh pr view 44 -R example/repo'"}, 44},
+		{"01900000-0000-7000-8000-000000000045", "exec_command", map[string]any{"cmd": "timeout 60 gh pr checks 45 -R example/repo --watch"}, 45},
+	}
+	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts} {
+		t.Run(string(policy), func(t *testing.T) {
+			env := setupSingleAgentTestEnv(t, parser.AgentCodex)
+			env.db.SetArchiveContent(policy)
+			for _, tc := range cases {
+				env.writeCodexSession(t, filepath.Join("2024", "01", "15"), "rollout-20240115-"+tc.id+".jsonl", testjsonl.JoinJSONL(
+					testjsonl.CodexSessionMetaWithFieldsJSON(tc.id, t.TempDir(), "user", tsEarly, nil),
+					testjsonl.CodexMsgJSON("user", "Review changes", tsEarlyS1),
+					testjsonl.CodexFunctionCallWithCallIDJSON(tc.name, "call", tc.input, tsEarlyS5),
+				))
+			}
+			require.Equal(t, len(cases), env.engine.SyncAll(t.Context(), nil).Synced)
+			for _, tc := range cases {
+				id := "codex:" + tc.id
+				page, err := env.db.ListSessions(t.Context(), db.SessionFilter{PR: db.PRFilter{Repository: "example/repo", Number: tc.number}})
+				require.NoError(t, err)
+				require.Len(t, page.Sessions, 1)
+				assert.Equal(t, id, page.Sessions[0].ID)
+				if policy == config.ArchiveContentTranscripts {
+					messages, err := env.db.GetAllMessages(t.Context(), id)
+					require.NoError(t, err)
+					for _, message := range messages {
+						for _, call := range message.ToolCalls {
+							assert.Empty(t, call.InputJSON)
+						}
+					}
+				}
+			}
+		})
 	}
 }
 
