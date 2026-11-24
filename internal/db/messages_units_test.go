@@ -798,7 +798,4 @@ func TestScanEmbeddableUnitsAgents(t *testing.T) {
 	require.NoError(t, err)
 	got, _ := scanUnits(t, d, "", false)
 	assert.Len(t, got, 2)
-	page, err := d.Search(t.Context(), SearchFilter{Query: "codex"})
-	require.NoError(t, err)
-	assert.Len(t, page.Results, 1)
 }

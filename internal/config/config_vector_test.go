@@ -983,16 +983,15 @@ func TestVectorConfigAgents(t *testing.T) {
 	assert.Equal(t, []string{"nope"}, disabled.Vector.Agents)
 	err := loadMinimalErrWithConfig(t, map[string]any{"vector": map[string]any{"enabled": true, "agents": []string{"nope"}}})
 	require.ErrorContains(t, err, `unknown agent "nope"`)
-}
-
-func TestVectorConfigAcceptsStoredAgents(t *testing.T) {
-	for _, def := range parser.Registry {
-		for _, agent := range parser.ProviderStoredAgents(def.Type) {
-			t.Run(string(agent), func(t *testing.T) {
-				cfg := validVectorConfig()
-				cfg.Agents = []string{string(agent)}
-				require.NoError(t, cfg.Validate())
-			})
+	t.Run("stored agents", func(t *testing.T) {
+		for _, def := range parser.Registry {
+			for _, agent := range parser.ProviderStoredAgents(def.Type) {
+				t.Run(string(agent), func(t *testing.T) {
+					cfg := validVectorConfig()
+					cfg.Agents = []string{string(agent)}
+					require.NoError(t, cfg.Validate())
+				})
+			}
 		}
-	}
+	})
 }

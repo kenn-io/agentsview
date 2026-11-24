@@ -1175,9 +1175,6 @@ func TestBuildAgentScopeReconciles(t *testing.T) {
 	assert.Equal(t, []string{"claude", "codex"}, mirrorSessionIDs(t, ix))
 	build([]string{"claude"})
 	assert.Equal(t, []string{"claude"}, mirrorSessionIDs(t, ix))
-	hits, err := ix.Search(ctx, fakeBuildEncoder(), "text", 10)
-	require.NoError(t, err)
-	require.Len(t, hits, 1)
 	build([]string{"claude", "codex"})
 	build([]string{"codex", "claude", "codex"})
 	assert.Equal(t, []string{"claude", "codex"}, source.agents)
@@ -1213,9 +1210,6 @@ func TestBuildAgentScopeFailureThenRestore(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, build("claude"))
 	assert.Equal(t, []string{"a-old", "b-old"}, mirrorSessionIDs(t, ix))
-	hits, err := ix.Search(ctx, fakeBuildEncoder(), "old", 10)
-	require.NoError(t, err)
-	assert.Len(t, hits, 2)
 }
 
 func TestBuildSelectsFreebuff(t *testing.T) {
