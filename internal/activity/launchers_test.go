@@ -10,7 +10,7 @@ import (
 
 func TestResolveLaunchers(t *testing.T) {
 	var calls [][]string
-	got, err := ResolveLaunchers(t.Context(), []string{"b", "missing", "b"}, func(_ context.Context, ids []string) ([]Launcher, error) {
+	got, err := ResolveLaunchers(t.Context(), []SessionMeta{{SessionID: "child", IsSubagent: true, ParentSessionID: "b"}, {SessionID: "other", IsSubagent: true, ParentSessionID: "missing"}}, nil, func(_ context.Context, ids []string) ([]Launcher, error) {
 		calls = append(calls, ids)
 		switch ids[0] {
 		case "b":
@@ -23,17 +23,59 @@ func TestResolveLaunchers(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, [][]string{{"b", "missing"}, {"a"}}, calls)
 	assert.Equal(t, []string{"a", "b", "missing"}, got.Examined)
-	require.Len(t, got.Rows, 2)
+	assert.Empty(t, got.Waiting)
 }
 
 func TestResolveLaunchersCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	called := false
-	_, err := ResolveLaunchers(ctx, []string{"parent"}, func(context.Context, []string) ([]Launcher, error) {
+	_, err := ResolveLaunchers(ctx, []SessionMeta{{SessionID: "child", IsSubagent: true, ParentSessionID: "parent"}}, nil, func(context.Context, []string) ([]Launcher, error) {
 		called = true
 		return nil, nil
 	})
 	require.ErrorIs(t, err, context.Canceled)
 	assert.False(t, called)
+}
+
+func TestResolveLaunchersUsesKnownRunsAndCountsInteractiveAncestors(t *testing.T) {
+	runs := []SessionMeta{
+		{SessionID: "root"},
+		{SessionID: "middle", IsSubagent: true, ParentSessionID: "root"},
+		{SessionID: "child", IsSubagent: true, ParentSessionID: "middle"},
+	}
+	got, err := ResolveLaunchers(t.Context(), runs, map[string]bool{"root": true, "child": true}, func(context.Context, []string) ([]Launcher, error) {
+		require.FailNow(t, "known ancestors must not be loaded again")
+		return nil, nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"root"}, got.Waiting["child"])
+	assert.Equal(t, []string{"root"}, got.Waiting["middle"])
+	assert.Equal(t, []string{"middle", "root"}, got.Examined)
+}
+
+func TestResolveLaunchersSkipsNonInteractiveAndCycles(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		runs []SessionMeta
+		want []string
+	}{
+		{name: "automated", runs: []SessionMeta{{SessionID: "parent", IsAutomated: true}, {SessionID: "run", IsSubagent: true, ParentSessionID: "parent"}}},
+		{name: "nested", runs: []SessionMeta{{SessionID: "root"}, {SessionID: "middle", IsSubagent: true, ParentSessionID: "root"}, {SessionID: "run", IsSubagent: true, ParentSessionID: "middle"}}, want: []string{"root"}},
+		{name: "cycle", runs: []SessionMeta{{SessionID: "middle", IsSubagent: true, ParentSessionID: "run"}, {SessionID: "run", IsSubagent: true, ParentSessionID: "middle"}}},
+		{name: "fork", runs: []SessionMeta{{SessionID: "root"}, {SessionID: "run", ParentSessionID: "root"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			selected := make(map[string]bool)
+			for _, run := range tc.runs {
+				selected[run.SessionID] = true
+			}
+			got, err := ResolveLaunchers(t.Context(), tc.runs, selected, func(context.Context, []string) ([]Launcher, error) {
+				require.FailNow(t, "unexpected ancestor lookup")
+				return nil, nil
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got.Waiting["run"])
+		})
+	}
 }

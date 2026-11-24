@@ -4,8 +4,6 @@ import (
 	"container/heap"
 	"context"
 	"fmt"
-	"maps"
-	"slices"
 	"sort"
 	"time"
 )
@@ -305,42 +303,9 @@ func buildIntervalArtifacts(
 		}
 	}
 	kindBy := sessionKinds(sessions)
-	selected := make(map[string]bool, len(sessions))
-	for _, session := range sessions {
-		selected[session.SessionID] = true
-	}
-	ancestors := make(map[string][]string, len(sessions))
-	links := make(map[string]Launcher, len(sessions)+len(p.Launchers.Rows))
-	maps.Copy(links, p.Launchers.Rows)
-	for _, session := range p.Evidence {
-		links[session.SessionID] = Launcher{ID: session.SessionID, IsAutomated: session.IsAutomated, IsSubagent: session.IsSubagent, ParentSessionID: session.ParentSessionID, Counted: selected[session.SessionID]}
-	}
-	for _, session := range sessions {
-		links[session.SessionID] = Launcher{ID: session.SessionID, IsAutomated: session.IsAutomated, IsSubagent: session.IsSubagent, ParentSessionID: session.ParentSessionID, Counted: true}
-	}
-	sweepKinds := make(map[string]sessionKind, len(links))
-	for id, link := range links {
-		sweepKinds[id] = (SessionMeta{IsSubagent: link.IsSubagent, IsAutomated: link.IsAutomated}).kind()
-	}
-	for _, session := range append(slices.Clone(sessions), p.Evidence...) {
-		seen := map[string]bool{session.SessionID: true}
-		current := links[session.SessionID]
-		for current.IsSubagent && current.ParentSessionID != "" && !seen[current.ParentSessionID] {
-			id := current.ParentSessionID
-			seen[id] = true
-			var ok bool
-			current, ok = links[id]
-			if !ok {
-				break
-			}
-			if current.Counted {
-				ancestors[session.SessionID] = append(ancestors[session.SessionID], id)
-			}
-		}
-	}
 	state := candidateSweep{
 		report: &report, windows: windows, effectiveEnd: p.EffectiveEnd,
-		last: p.RangeStart, kindBy: sweepKinds, ancestors: ancestors, selected: selected, waiting: make(map[string]int),
+		last: p.RangeStart, kindBy: kindBy,
 		sessionEnds: make(map[string]time.Time),
 	}
 	heap.Init(&state.ends)
@@ -351,6 +316,7 @@ func buildIntervalArtifacts(
 		membership: make(map[string]BucketMembership),
 		buckets:    make([]minuteSum, len(windows)),
 	}
+	ownEnd := make(map[string]time.Time)
 	var previousStart time.Time
 	err := each(func(iv interval) error {
 		if !previousStart.IsZero() && iv.start.Before(previousStart) {
@@ -362,20 +328,36 @@ func buildIntervalArtifacts(
 		}
 		previousStart = iv.start
 		state.advance(iv.start)
-		if previousEnd, ok := state.sessionEnds[iv.sessionID]; ok {
-			if !iv.end.After(previousEnd) {
+		sweep := func(part interval) {
+			if end, ok := state.sessionEnds[part.sessionID]; ok {
+				if part.end.After(end) {
+					part.start = end
+					state.extend(part)
+				}
+			} else {
+				state.open(part)
+			}
+		}
+		if !p.Evidence[iv.sessionID] {
+			sweep(iv)
+		}
+		for _, id := range p.Waiting[iv.sessionID] {
+			part := iv
+			part.sessionID = id
+			sweep(part)
+		}
+		if p.Evidence[iv.sessionID] {
+			return nil
+		}
+		if end := ownEnd[iv.sessionID]; end.After(iv.start) {
+			if !iv.end.After(end) {
 				return nil
 			}
-			iv.start = previousEnd
-			state.extend(iv)
-		} else {
-			state.open(iv)
+			iv.start = end
 		}
+		ownEnd[iv.sessionID] = iv.end
 		if iv.tail.Before(iv.start) {
 			iv.tail = iv.start
-		}
-		if !selected[iv.sessionID] {
-			return nil
 		}
 		fold.add(iv)
 		if joint != nil {
@@ -509,15 +491,11 @@ type candidateSweep struct {
 	windows      []BucketWindow
 	effectiveEnd time.Time
 	kindBy       map[string]sessionKind
-	ancestors    map[string][]string
-	selected     map[string]bool
-	waiting      map[string]int
 	ends         activeCandidateHeap
 	sessionEnds  map[string]time.Time
 	bucket       int
 	last         time.Time
 	live         int
-	ownLive      int
 	liveAuto     int
 	liveInter    int
 	liveSub      int
@@ -547,19 +525,14 @@ func (s *candidateSweep) advance(target time.Time) {
 				continue
 			}
 			delete(s.sessionEnds, ended.sessionID)
-			if s.selected[ended.sessionID] {
-				s.ownLive--
-			}
-			if s.selected[ended.sessionID] && s.waiting[ended.sessionID] == 0 {
-				s.changeCount(ended.sessionID, -1)
-			}
-			for _, id := range s.ancestors[ended.sessionID] {
-				s.waiting[id]--
-				if s.waiting[id] == 0 {
-					if _, live := s.sessionEnds[id]; !live {
-						s.changeCount(id, -1)
-					}
-				}
+			s.live--
+			switch ended.kind {
+			case subagentSession:
+				s.liveSub--
+			case automatedSession:
+				s.liveAuto--
+			default:
+				s.liveInter--
 			}
 		}
 		for s.bucket < len(s.windows) && s.windows[s.bucket].End.Equal(next) {
@@ -574,7 +547,7 @@ func (s *candidateSweep) advance(target time.Time) {
 }
 
 func (s *candidateSweep) accrue(target time.Time) {
-	if target.After(s.last) && s.ownLive > 0 {
+	if target.After(s.last) && s.live > 0 {
 		s.active += target.Sub(s.last)
 	}
 	if target.After(s.last) {
@@ -585,40 +558,23 @@ func (s *candidateSweep) accrue(target time.Time) {
 func (s *candidateSweep) open(iv interval) {
 	kind := s.kindBy[iv.sessionID]
 	s.sessionEnds[iv.sessionID] = iv.end
-	if s.selected[iv.sessionID] {
-		s.ownLive++
-	}
 	heap.Push(&s.ends, activeCandidateEnd{
 		sessionID: iv.sessionID, end: iv.end, kind: kind,
 	})
-	if s.selected[iv.sessionID] && s.waiting[iv.sessionID] == 0 {
-		s.changeCount(iv.sessionID, 1)
-	}
-	for _, id := range s.ancestors[iv.sessionID] {
-		if s.waiting[id] == 0 {
-			if _, live := s.sessionEnds[id]; !live {
-				s.changeCount(id, 1)
-			}
-		}
-		s.waiting[id]++
+	s.live++
+	switch kind {
+	case subagentSession:
+		s.liveSub++
+	case automatedSession:
+		s.liveAuto++
+	default:
+		s.liveInter++
 	}
 	recordPeak(&s.report.Peak, s.live, iv.start)
 	recordPeak(&s.report.InteractivePeak, s.liveInter, iv.start)
 	recordPeak(&s.report.SubagentPeak, s.liveSub, iv.start)
 	recordPeak(&s.report.AutomatedPeak, s.liveAuto, iv.start)
 	s.recordBucketPeak()
-}
-
-func (s *candidateSweep) changeCount(id string, delta int) {
-	s.live += delta
-	switch s.kindBy[id] {
-	case subagentSession:
-		s.liveSub += delta
-	case automatedSession:
-		s.liveAuto += delta
-	default:
-		s.liveInter += delta
-	}
 }
 
 func recordPeak(peak *Peak, count int, at time.Time) {

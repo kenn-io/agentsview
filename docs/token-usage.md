@@ -1123,7 +1123,8 @@ costs and custom pricing overrides; consumers must not treat v5 and v6 costs as
 interchangeable. The two transitional releases must not be treated as
 v1-compatible. The commands do not provide an earlier-version output mode.
 Consumers should require the expected `schema_version` and ignore unknown
-additive fields.
+additive fields. Activity report version 9 counts interactive launchers while
+their runs work; the hourly reporting schemas retain their existing accounting.
 
 | Change                                                                                | Requires `schema_version` bump? |
 | ------------------------------------------------------------------------------------- | ------------------------------- |

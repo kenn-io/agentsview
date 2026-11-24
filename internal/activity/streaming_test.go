@@ -296,6 +296,7 @@ func normalizeReportMinutes(report Report) Report {
 
 func TestWaitingLauncherCountsAsInteractive(t *testing.T) {
 	p := baseParams(t, "2026-06-16", "UTC")
+	p.Waiting = map[string][]string{"child": {"parent"}, "child2": {"parent"}}
 	sessions := []SessionMeta{
 		{SessionID: "parent"},
 		{SessionID: "child", IsSubagent: true, ParentSessionID: "parent"},
@@ -320,6 +321,7 @@ func TestWaitingLauncherCountsAsInteractive(t *testing.T) {
 	without := append([]SessionMeta(nil), sessions...)
 	without[1].ParentSessionID = ""
 	without[2].ParentSessionID = ""
+	p.Waiting = nil
 	baseline, err := BuildCandidateArtifacts(t.Context(), p, without, candidates, nil)
 	require.NoError(t, err)
 	assert.Equal(t, baseline.Report.Totals, got.Report.Totals)
@@ -327,33 +329,10 @@ func TestWaitingLauncherCountsAsInteractive(t *testing.T) {
 	assert.Equal(t, baseline.Membership, got.Membership)
 }
 
-func TestWaitingLauncherChains(t *testing.T) {
-	p := baseParams(t, "2026-06-16", "UTC")
-	candidate := IntervalCandidate{SessionID: "child", Start: mustStart(t, "2026-06-16T10:00:00Z"), End: mustStart(t, "2026-06-16T10:04:00Z")}
-	for _, tc := range []struct {
-		name                  string
-		child                 SessionMeta
-		launchers             map[string]Launcher
-		interactive, subagent int
-	}{
-		{name: "nested", child: SessionMeta{SessionID: "child", IsSubagent: true, ParentSessionID: "middle"}, launchers: map[string]Launcher{"middle": {ID: "middle", IsSubagent: true, ParentSessionID: "root", Counted: true}, "root": {ID: "root", Counted: true}}, interactive: 1, subagent: 2},
-		{name: "filtered ancestor", child: SessionMeta{SessionID: "child", IsSubagent: true, ParentSessionID: "middle"}, launchers: map[string]Launcher{"middle": {ID: "middle", IsSubagent: true, ParentSessionID: "root"}, "root": {ID: "root", Counted: true}}, interactive: 1, subagent: 1},
-		{name: "missing", child: SessionMeta{SessionID: "child", IsSubagent: true, ParentSessionID: "missing"}, interactive: 0, subagent: 1},
-		{name: "cycle", child: SessionMeta{SessionID: "child", IsSubagent: true, ParentSessionID: "middle"}, launchers: map[string]Launcher{"middle": {ID: "middle", IsSubagent: true, ParentSessionID: "child", Counted: true}}, interactive: 0, subagent: 2},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			p.Launchers.Rows = tc.launchers
-			got, err := BuildCandidateArtifacts(t.Context(), p, []SessionMeta{tc.child}, []IntervalCandidate{candidate}, nil)
-			require.NoError(t, err)
-			assert.Equal(t, tc.interactive, got.Report.InteractivePeak.Agents)
-			assert.Equal(t, tc.subagent, got.Report.SubagentPeak.Agents)
-		})
-	}
-}
-
 func TestWaitingLauncherAfterOwnInterval(t *testing.T) {
 	p := baseParams(t, "2026-06-16", "UTC")
 	p.Bucket = BucketSpec{Unit: BucketMinute, NominalSeconds: 300}
+	p.Waiting = map[string][]string{"child": {"parent"}, "child2": {"parent"}}
 	sessions := []SessionMeta{
 		{SessionID: "parent"},
 		{SessionID: "child", IsSubagent: true, ParentSessionID: "parent"},
@@ -378,4 +357,50 @@ func TestWaitingLauncherAfterOwnInterval(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 2, matched)
+}
+
+func TestWaitingLauncherKeepsOwnMinutesDuringOverlap(t *testing.T) {
+	p := baseParams(t, "2026-06-16", "UTC")
+	p.Waiting = map[string][]string{"child": {"parent"}}
+	sessions := []SessionMeta{{SessionID: "parent"}, {SessionID: "child", IsSubagent: true}}
+	candidates := []IntervalCandidate{
+		{SessionID: "child", Start: mustStart(t, "2026-06-16T10:00:00Z"), End: mustStart(t, "2026-06-16T10:04:00Z")},
+		{SessionID: "parent", Start: mustStart(t, "2026-06-16T10:02:00Z"), End: mustStart(t, "2026-06-16T10:03:00Z")},
+	}
+	got, err := BuildCandidateArtifacts(t.Context(), p, sessions, candidates, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 2, got.Report.Peak.Agents)
+	assert.InDelta(t, 5, got.Report.Totals.AgentMinutes, 1e-9)
+	for _, row := range got.Sessions {
+		if row.SessionID == "parent" {
+			require.NotNil(t, row.AgentMinutes)
+			assert.InDelta(t, 1, *row.AgentMinutes, 1e-9)
+			return
+		}
+	}
+	require.FailNow(t, "parent session missing")
+}
+
+func TestWaitingLauncherFortyMinutesAcrossThreeRuns(t *testing.T) {
+	p := baseParams(t, "2026-06-16", "UTC")
+	p.Waiting = map[string][]string{"run-a": {"parent"}, "run-b": {"parent"}, "run-c": {"parent"}}
+	sessions := []SessionMeta{{SessionID: "run-a", IsSubagent: true}, {SessionID: "run-b", IsSubagent: true}, {SessionID: "run-c", IsSubagent: true}}
+	start := mustStart(t, "2026-06-16T10:00:00Z")
+	var candidates []IntervalCandidate
+	for minute := 0; minute < 40; minute += 5 {
+		for _, session := range sessions {
+			candidates = append(candidates, IntervalCandidate{SessionID: session.SessionID, Start: start.Add(time.Duration(minute) * time.Minute), End: start.Add(time.Duration(minute+5) * time.Minute)})
+		}
+	}
+	got, err := BuildCandidateArtifacts(t.Context(), p, sessions, candidates, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, got.Report.InteractivePeak.Agents)
+	assert.Equal(t, 4, got.Report.Peak.Agents)
+	assert.InDelta(t, 120, got.Report.Totals.AgentMinutes, 1e-9)
+	p.Waiting = nil
+	baseline, err := BuildCandidateArtifacts(t.Context(), p, sessions, candidates, nil)
+	require.NoError(t, err)
+	assert.Equal(t, baseline.Report.Totals, got.Report.Totals)
+	assert.Equal(t, baseline.Sessions, got.Sessions)
+	assert.Equal(t, baseline.Membership, got.Membership)
 }

@@ -73,24 +73,18 @@ func (b activityReportBackend) ActivityReportEvidence(_ context.Context, _ activ
 	return b.evidence, nil
 }
 
-func (b activityReportBackend) ActivityReportLaunchers(ctx context.Context, sessions []activity.SessionMeta, _ activity.Query) (activity.Launchers, error) {
+func (b activityReportBackend) ActivityReportLaunchers(ctx context.Context, sessions []activity.SessionMeta, selected map[string]bool, _ activity.Query) (activity.Launchers, error) {
 	if b.launchers != nil {
 		return *b.launchers, nil
 	}
-	var parents []string
-	for _, session := range sessions {
-		if session.IsSubagent && session.ParentSessionID != "" {
-			parents = append(parents, session.ParentSessionID)
-		}
-	}
-	result, _, err := b.activityReportLaunchers(ctx, b.filter, parents)
+	result, _, err := b.activityReportLaunchers(ctx, b.filter, sessions, selected)
 	return result, err
 }
 
-func (s *Store) activityReportLaunchers(ctx context.Context, filter db.AnalyticsFilter, parents []string) (activity.Launchers, map[string]uint64, error) {
+func (s *Store) activityReportLaunchers(ctx context.Context, filter db.AnalyticsFilter, runs []activity.SessionMeta, selected map[string]bool) (activity.Launchers, map[string]uint64, error) {
 	versions := make(map[string]uint64)
 	where, args := chBuildAnalyticsWhere(filter, "COALESCE(s.started_at, s.created_at)", "s.", false, false)
-	result, err := activity.ResolveLaunchers(ctx, parents, func(ctx context.Context, ids []string) ([]activity.Launcher, error) {
+	result, err := activity.ResolveLaunchers(ctx, runs, selected, func(ctx context.Context, ids []string) ([]activity.Launcher, error) {
 		table, err := ext.NewTable("activity_launcher_ids", ext.Column("id", "String"))
 		if err != nil {
 			return nil, err
@@ -201,7 +195,7 @@ func (s *Store) BuildActivityReportArtifacts(
 	}
 	var memoKey string
 	if !q.Partial {
-		memoKey, resolvedLaunchers, err = s.endedActivityReportKey(ctx, f, keyWhere, keyArgs, rangeStartUTC, rangeEndUTC)
+		memoKey, _, err = s.endedActivityReportKey(ctx, f, keyWhere, keyArgs, rangeStartUTC, rangeEndUTC)
 		if err != nil {
 			return activity.CandidateArtifacts{}, err
 		}
@@ -218,20 +212,30 @@ func (s *Store) BuildActivityReportArtifacts(
 		return activity.CandidateArtifacts{}, err
 	}
 	var evidence []activity.SessionMeta
-	sweepIDs := slices.Clone(ids)
+	var evidenceVersions map[string]uint64
 	if f.ActivityNeedsEvidence() {
-		var evidenceVersions map[string]uint64
 		evidence, _, evidenceVersions, err = s.activityReportSessions(ctx, evidenceWhere, evidenceArgs, memoKey == "")
 		if err != nil {
 			return activity.CandidateArtifacts{}, err
 		}
-		for _, session := range evidence {
-			if _, ok := versions[session.SessionID]; !ok {
-				sweepIDs = append(sweepIDs, session.SessionID)
-				versions[session.SessionID] = evidenceVersions[session.SessionID]
-			}
+	}
+	selected := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		selected[id] = true
+	}
+	launchers, _, err := s.activityReportLaunchers(ctx, f, append(slices.Clone(sessions), evidence...), selected)
+	if err != nil {
+		return activity.CandidateArtifacts{}, err
+	}
+	resolvedLaunchers = &launchers
+	sweepIDs := slices.Clone(ids)
+	for _, session := range evidence {
+		if !selected[session.SessionID] && len(launchers.Waiting[session.SessionID]) > 0 {
+			sweepIDs = append(sweepIDs, session.SessionID)
+			versions[session.SessionID] = evidenceVersions[session.SessionID]
 		}
 	}
+
 	// Send the already selected IDs as native data instead of repeating discovery.
 	table, err := ext.NewTable("activity_candidate_ids", ext.Column("id", "String"))
 	if err != nil {
@@ -319,7 +323,11 @@ func (s *Store) endedActivityReportKey(
 	if err := errors.Join(err, <-candidatesRead); err != nil || key == "" {
 		return "", nil, err
 	}
-	launchers, versions, err := s.activityReportLaunchers(ctx, filter, parents)
+	runs := make([]activity.SessionMeta, 0, len(parents))
+	for _, id := range parents {
+		runs = append(runs, activity.SessionMeta{SessionID: "\x00" + id, IsSubagent: true, ParentSessionID: id})
+	}
+	launchers, versions, err := s.activityReportLaunchers(ctx, filter, runs, nil)
 	if err != nil {
 		return "", nil, err
 	}

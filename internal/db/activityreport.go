@@ -87,18 +87,9 @@ func (b activityReportBackend) ActivityReportEvidence(ctx context.Context, q act
 	return sessions, err
 }
 
-func (b activityReportBackend) ActivityReportLaunchers(ctx context.Context, sessions []activity.SessionMeta, q activity.Query) (activity.Launchers, error) {
-	var parents []string
-	for _, session := range sessions {
-		if session.IsSubagent && session.ParentSessionID != "" {
-			parents = append(parents, session.ParentSessionID)
-		}
-	}
-	if len(parents) == 0 {
-		return activity.Launchers{}, nil
-	}
+func (b activityReportBackend) ActivityReportLaunchers(ctx context.Context, sessions []activity.SessionMeta, selected map[string]bool, q activity.Query) (activity.Launchers, error) {
 	where, args := b.filter.buildWhereWithDate("", false, "s.id")
-	result, err := activity.ResolveLaunchers(ctx, parents, func(ctx context.Context, ids []string) ([]activity.Launcher, error) {
+	result, err := activity.ResolveLaunchers(ctx, sessions, selected, func(ctx context.Context, ids []string) ([]activity.Launcher, error) {
 		encoded, err := json.Marshal(ids)
 		if err != nil {
 			return nil, err

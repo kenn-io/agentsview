@@ -1,12 +1,12 @@
 {
-  "schema_version": 8,
+  "schema_version": 9,
   "pricing": {
     "source": "fetched",
     "table_version": "2026-07-03T12:00:00Z",
     "latest_row_updated_at": "2026-07-03T12:00:00Z",
     "custom_override_count": 0,
-    "effective_row_count": 2646,
-    "digest": "sha256:af577891e94196df3507c7ef627fcd60c3618d6808b960819d0967921f741533",
+    "effective_row_count": 4016,
+    "digest": "sha256:78829a90c349e298a3f8ead9211e68fd39c6717f2d794876bcf5009b80e96390",
     "cost_source": "mixed",
     "fallback": {
       "used": false,
@@ -114,6 +114,9 @@
       "start": "2026-07-03T10:00:00Z",
       "end": "2026-07-03T11:00:00Z",
       "max_agents": 1,
+      "max_interactive_agents": 1,
+      "max_subagent_agents": 0,
+      "max_automated_agents": 0,
       "agent_minutes": 3,
       "user_messages": 2,
       "assistant_messages": 2,
@@ -122,17 +125,17 @@
       "cost": {
         "microdollars": 4760
       },
+      "subagent_at_peak": 0,
       "automated_at_peak": 0,
-      "interactive_at_peak": 1,
-      "max_interactive_agents": 1,
-      "max_subagent_agents": 0,
-      "max_automated_agents": 0,
-      "subagent_at_peak": 0
+      "interactive_at_peak": 1
     },
     {
       "start": "2026-07-03T11:00:00Z",
       "end": "2026-07-03T12:00:00Z",
       "max_agents": 1,
+      "max_interactive_agents": 1,
+      "max_subagent_agents": 0,
+      "max_automated_agents": 0,
       "agent_minutes": 3,
       "user_messages": 2,
       "assistant_messages": 2,
@@ -141,17 +144,17 @@
       "cost": {
         "microdollars": 12500
       },
+      "subagent_at_peak": 0,
       "automated_at_peak": 0,
-      "interactive_at_peak": 1,
-      "max_interactive_agents": 1,
-      "max_subagent_agents": 0,
-      "max_automated_agents": 0,
-      "subagent_at_peak": 0
+      "interactive_at_peak": 1
     },
     {
       "start": "2026-07-03T12:00:00Z",
       "end": "2026-07-03T13:00:00Z",
       "max_agents": 0,
+      "max_interactive_agents": 0,
+      "max_subagent_agents": 0,
+      "max_automated_agents": 0,
       "agent_minutes": 0,
       "user_messages": 0,
       "assistant_messages": 0,
@@ -160,17 +163,26 @@
       "cost": {
         "microdollars": 0
       },
+      "subagent_at_peak": 0,
       "automated_at_peak": 0,
-      "interactive_at_peak": 0,
-      "max_interactive_agents": 0,
-      "max_subagent_agents": 0,
-      "max_automated_agents": 0,
-      "subagent_at_peak": 0
+      "interactive_at_peak": 0
     }
   ],
   "peak": {
     "agents": 1,
     "at": "2026-07-03T10:00:00Z"
+  },
+  "interactive_peak": {
+    "agents": 1,
+    "at": "2026-07-03T10:00:00Z"
+  },
+  "subagent_peak": {
+    "agents": 0,
+    "at": null
+  },
+  "automated_peak": {
+    "agents": 0,
+    "at": null
   },
   "totals": {
     "active_minutes": 6,
@@ -186,19 +198,19 @@
     },
     "automated_agent_minutes": 0,
     "interactive_agent_minutes": 6,
+    "subagent_agent_minutes": 0,
     "automated_cost": {
       "microdollars": 0
     },
     "interactive_cost": {
       "microdollars": 17260
     },
-    "automated_sessions": 0,
-    "interactive_sessions": 2,
-    "subagent_sessions": 0,
-    "subagent_agent_minutes": 0,
     "subagent_cost": {
       "microdollars": 0
-    }
+    },
+    "automated_sessions": 0,
+    "interactive_sessions": 2,
+    "subagent_sessions": 0
   },
   "by_project": [
     {
@@ -210,13 +222,13 @@
       },
       "automated_agent_minutes": 0,
       "interactive_agent_minutes": 3,
+      "subagent_agent_minutes": 0,
       "automated_cost": {
         "microdollars": 0
       },
       "interactive_cost": {
         "microdollars": 12500
       },
-      "subagent_agent_minutes": 0,
       "subagent_cost": {
         "microdollars": 0
       }
@@ -230,13 +242,13 @@
       },
       "automated_agent_minutes": 0,
       "interactive_agent_minutes": 3,
+      "subagent_agent_minutes": 0,
       "automated_cost": {
         "microdollars": 0
       },
       "interactive_cost": {
         "microdollars": 4760
       },
-      "subagent_agent_minutes": 0,
       "subagent_cost": {
         "microdollars": 0
       }
@@ -251,13 +263,13 @@
       },
       "automated_agent_minutes": 0,
       "interactive_agent_minutes": 3,
+      "subagent_agent_minutes": 0,
       "automated_cost": {
         "microdollars": 0
       },
       "interactive_cost": {
         "microdollars": 4760
       },
-      "subagent_agent_minutes": 0,
       "subagent_cost": {
         "microdollars": 0
       }
@@ -270,13 +282,13 @@
       },
       "automated_agent_minutes": 0,
       "interactive_agent_minutes": 3,
+      "subagent_agent_minutes": 0,
       "automated_cost": {
         "microdollars": 0
       },
       "interactive_cost": {
         "microdollars": 12500
       },
-      "subagent_agent_minutes": 0,
       "subagent_cost": {
         "microdollars": 0
       }
@@ -291,13 +303,13 @@
       },
       "automated_agent_minutes": 0,
       "interactive_agent_minutes": 3,
+      "subagent_agent_minutes": 0,
       "automated_cost": {
         "microdollars": 0
       },
       "interactive_cost": {
         "microdollars": 12500
       },
-      "subagent_agent_minutes": 0,
       "subagent_cost": {
         "microdollars": 0
       }
@@ -310,13 +322,13 @@
       },
       "automated_agent_minutes": 0,
       "interactive_agent_minutes": 3,
+      "subagent_agent_minutes": 0,
       "automated_cost": {
         "microdollars": 0
       },
       "interactive_cost": {
         "microdollars": 4760
       },
-      "subagent_agent_minutes": 0,
       "subagent_cost": {
         "microdollars": 0
       }
@@ -366,17 +378,5 @@
       "is_subagent": false
     }
   ],
-  "sessions_total": 2,
-  "interactive_peak": {
-    "agents": 1,
-    "at": "2026-07-03T10:00:00Z"
-  },
-  "subagent_peak": {
-    "agents": 0,
-    "at": null
-  },
-  "automated_peak": {
-    "agents": 0,
-    "at": null
-  }
+  "sessions_total": 2
 }

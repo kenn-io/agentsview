@@ -100,3 +100,14 @@ func TestActivitySessionCursorRejectsTheReportTokenVersion(t *testing.T) {
 	cursor.Version = activitySessionCursorVersion
 	assert.True(t, validActivitySessionCursor(cursor, "digest"))
 }
+
+func TestActivityReportRejectsPreviousSchemaTokens(t *testing.T) {
+	selection, err := resolveActivitySelection(activitySelectionInput{Preset: "day", Date: "2026-06-14", Timezone: "UTC"}, time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	payload := newActivityReportTokenPayload(selection, "digest")
+	payload.Schema = 8
+	_, err = payload.selection()
+	require.Error(t, err)
+	cursor := activitySessionCursorPayload{Version: activitySessionCursorVersion, Schema: 8, Digest: "digest"}
+	assert.False(t, validActivitySessionCursor(cursor, "digest"))
+}

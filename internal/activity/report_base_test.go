@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -272,4 +273,31 @@ func TestBuildReportArtifactsConcurrentCancellation(t *testing.T) {
 			assert.Equal(t, 1, releases)
 		})
 	}
+}
+
+type evidenceReportBackend struct {
+	*reportBackendFixture
+	swept []string
+}
+
+func (b *evidenceReportBackend) ActivityReportEvidence(context.Context, Query) ([]SessionMeta, error) {
+	return []SessionMeta{{SessionID: "linked", IsSubagent: true}, {SessionID: "unrelated", IsSubagent: true}}, nil
+}
+
+func (b *evidenceReportBackend) ActivityReportLaunchers(_ context.Context, _ []SessionMeta, _ map[string]bool, _ Query) (Launchers, error) {
+	return Launchers{Waiting: map[string][]string{"linked": {"s"}}}, nil
+}
+
+func (b *evidenceReportBackend) ActivityReportCandidateSource(ids []string, _ Query) CandidateSource {
+	b.swept = slices.Clone(ids)
+	return func(_ context.Context, _ func(IntervalCandidate) error) error { return nil }
+}
+
+func TestBuildReportArtifactsSkipsUnrelatedEvidence(t *testing.T) {
+	q, err := ResolveQuery(QueryInput{Preset: "day", Date: "2026-06-16", Timezone: "UTC"}, fixedNow(t))
+	require.NoError(t, err)
+	backend := &evidenceReportBackend{reportBackendFixture: &reportBackendFixture{t: t, q: q, ids: []string{"s"}}}
+	_, _, err = BuildReportArtifacts(t.Context(), backend, []SessionMeta{{SessionID: "s", Project: "project-a"}}, []string{"s"}, q, nil, "aggregate")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"s", "linked"}, backend.swept)
 }

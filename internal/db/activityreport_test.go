@@ -1856,6 +1856,10 @@ func TestActivityReportLauncherFiltersAndLinkChanges(t *testing.T) {
 	before, err := d.GetActivityReport(t.Context(), filter, q)
 	require.NoError(t, err)
 	assert.Equal(t, 1, before.InteractivePeak.Agents)
+	require.NoError(t, d.DeleteSession(t.Context(), "visible"))
+	deleted, err := d.GetActivityReport(t.Context(), filter, q)
+	require.NoError(t, err)
+	assert.Equal(t, 1, deleted.Peak.Agents)
 	_, err = d.SetSessionExternalParent(t.Context(), "run", "hidden")
 	require.NoError(t, err)
 	afterProbe, err := d.ActivityReportSourceProbe(t.Context())
@@ -1883,9 +1887,9 @@ func TestActivityReportCountsNestedLaunchers(t *testing.T) {
 	require.NoError(t, err)
 	report, err := d.GetActivityReport(t.Context(), AnalyticsFilter{Timezone: "UTC"}, dayQuery(t, "2026-06-16", "UTC"))
 	require.NoError(t, err)
-	assert.Equal(t, 3, report.Peak.Agents)
+	assert.Equal(t, 2, report.Peak.Agents)
 	assert.Equal(t, 1, report.InteractivePeak.Agents)
-	assert.Equal(t, 2, report.SubagentPeak.Agents)
+	assert.Equal(t, 1, report.SubagentPeak.Agents)
 }
 
 func TestActivityReportFilteredRunsKeepMatchingLauncherActive(t *testing.T) {
@@ -1927,7 +1931,7 @@ func TestActivityReportFilteredRunsKeepMatchingLauncherActive(t *testing.T) {
 			assert.Equal(t, 1, report.Peak.Agents)
 			assert.Empty(t, report.BySession)
 			assert.Zero(t, report.Totals.AgentMinutes)
-			assert.Zero(t, report.Totals.ActiveMinutes)
+			assert.InDelta(t, 4, report.Totals.ActiveMinutes, 1e-9)
 			assert.Zero(t, report.Totals.Sessions)
 		})
 	}
@@ -1955,4 +1959,24 @@ func TestActivityReportEvidenceReadsOnlySubagents(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, sessions, 1)
 	assert.Equal(t, "child", sessions[0].SessionID)
+}
+
+func TestActivityReportIgnoresNonSubagentParentLink(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "parent", "project-a", func(s *Session) {
+		s.StartedAt = Ptr("2026-06-15T10:00:00Z")
+		s.EndedAt = Ptr("2026-06-15T10:02:00Z")
+	})
+	insertSession(t, d, "fork", "project-a", func(s *Session) {
+		s.StartedAt = Ptr("2026-06-16T10:00:00Z")
+		s.EndedAt = Ptr("2026-06-16T10:04:00Z")
+		s.ParentSessionID = Ptr("parent")
+		s.RelationshipType = "fork"
+	})
+	seedMessage(t, d, "fork", 1, "user", "2026-06-16T10:00:00Z", "")
+	seedMessage(t, d, "fork", 2, "assistant", "2026-06-16T10:04:00Z", "")
+	report, err := d.GetActivityReport(t.Context(), AnalyticsFilter{Timezone: "UTC"}, dayQuery(t, "2026-06-16", "UTC"))
+	require.NoError(t, err)
+	assert.Equal(t, 1, report.Peak.Agents)
+	assert.Equal(t, 1, report.InteractivePeak.Agents)
 }

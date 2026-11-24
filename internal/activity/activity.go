@@ -28,8 +28,8 @@ type Params struct {
 	Partial       bool
 	GapCapSeconds float64
 	Bucket        BucketSpec
-	Launchers     Launchers
-	Evidence      []SessionMeta
+	Waiting       map[string][]string
+	Evidence      map[string]bool
 }
 
 // SessionMeta is one candidate session whose window intersects the day.

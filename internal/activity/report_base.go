@@ -38,32 +38,35 @@ func BuildReportArtifacts(
 	ctx context.Context, backend ReportBackend, sessions []SessionMeta,
 	ids []string, q Query, onProgress ProgressFunc, aggregationLabel string,
 ) (CandidateArtifacts, Progress, error) {
+	selected := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		selected[id] = true
+	}
 	var evidence []SessionMeta
-	sweepIDs := ids
 	if source, ok := backend.(EvidenceBackend); ok {
 		var err error
 		evidence, err = source.ActivityReportEvidence(ctx, q)
 		if err != nil {
 			return CandidateArtifacts{}, Progress{}, err
 		}
-		selected := make(map[string]bool, len(ids))
-		for _, id := range ids {
-			selected[id] = true
-		}
 		evidence = slices.DeleteFunc(evidence, func(session SessionMeta) bool {
 			return selected[session.SessionID] || !session.IsSubagent
 		})
-		sweepIDs = slices.Clone(ids)
-		for _, session := range evidence {
-			sweepIDs = append(sweepIDs, session.SessionID)
-		}
 	}
 	var ancestors Launchers
 	if launchers, ok := backend.(LauncherBackend); ok {
 		var err error
-		ancestors, err = launchers.ActivityReportLaunchers(ctx, append(slices.Clone(sessions), evidence...), q)
+		ancestors, err = launchers.ActivityReportLaunchers(ctx, append(slices.Clone(sessions), evidence...), selected, q)
 		if err != nil {
 			return CandidateArtifacts{}, Progress{}, err
+		}
+	}
+	sweepIDs := slices.Clone(ids)
+	hidden := make(map[string]bool)
+	for _, run := range evidence {
+		if len(ancestors.Waiting[run.SessionID]) > 0 {
+			sweepIDs = append(sweepIDs, run.SessionID)
+			hidden[run.SessionID] = true
 		}
 	}
 	var usage []UsageRow
@@ -108,8 +111,8 @@ func BuildReportArtifacts(
 		Partial:       q.Partial,
 		GapCapSeconds: q.GapCapSeconds,
 		Bucket:        q.Bucket,
-		Launchers:     ancestors,
-		Evidence:      evidence,
+		Waiting:       ancestors.Waiting,
+		Evidence:      hidden,
 	}
 	scanning := func() {
 		ReportProgress(onProgress, Progress{
