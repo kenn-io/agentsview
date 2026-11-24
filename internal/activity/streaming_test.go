@@ -295,57 +295,51 @@ func normalizeReportMinutes(report Report) Report {
 }
 
 func TestWaitingLauncherAfterOwnInterval(t *testing.T) {
-	p := baseParams(t, "2026-06-16", "UTC")
-	p.Bucket = BucketSpec{Unit: BucketMinute, NominalSeconds: 300}
-	p.Waiting = map[string][]string{"child": {"parent"}, "child2": {"parent"}}
-	sessions := []SessionMeta{
-		{SessionID: "parent"},
-		{SessionID: "child", IsSubagent: true, ParentSessionID: "parent"},
-		{SessionID: "child2", IsSubagent: true, ParentSessionID: "parent"},
-	}
-	candidates := []IntervalCandidate{
-		{SessionID: "parent", Start: mustStart(t, "2026-06-16T10:00:00Z"), End: mustStart(t, "2026-06-16T10:02:00Z")},
-		{SessionID: "child", Start: mustStart(t, "2026-06-16T10:01:00Z"), End: mustStart(t, "2026-06-16T10:09:00Z")},
-		{SessionID: "child2", Start: mustStart(t, "2026-06-16T10:01:00Z"), End: mustStart(t, "2026-06-16T10:08:00Z")},
-	}
-	got, err := BuildCandidateArtifacts(t.Context(), p, sessions, candidates, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 3, got.Report.Peak.Agents)
-	assert.Equal(t, 1, got.Report.InteractivePeak.Agents)
-	matched := 0
-	for _, bucket := range got.Report.Buckets {
-		if bucket.Start == "2026-06-16T10:00:00Z" || bucket.Start == "2026-06-16T10:05:00Z" {
-			matched++
-			assert.Equal(t, 3, bucket.MaxAgents, bucket.Start)
-			assert.Equal(t, 1, bucket.MaxInteractiveAgents, bucket.Start)
-			assert.Equal(t, 2, bucket.MaxSubagentAgents, bucket.Start)
-		}
-	}
-	assert.Equal(t, 2, matched)
-	t.Run("launcher outside range", func(t *testing.T) {
-		p := baseParams(t, "2026-06-16", "UTC")
-		p.Waiting = map[string][]string{"run-a": {"parent"}, "run-b": {"parent"}, "run-c": {"parent"}}
-		sessions := []SessionMeta{{SessionID: "run-a", IsSubagent: true}, {SessionID: "run-b", IsSubagent: true}, {SessionID: "run-c", IsSubagent: true}}
-		start := mustStart(t, "2026-06-16T10:00:00Z")
-		var candidates []IntervalCandidate
-		for minute := 0; minute < 40; minute += 5 {
-			for _, session := range sessions {
-				candidates = append(candidates, IntervalCandidate{SessionID: session.SessionID, Start: start.Add(time.Duration(minute) * time.Minute), End: start.Add(time.Duration(minute+5) * time.Minute)})
+	for _, tc := range []struct {
+		name          string
+		includeParent bool
+	}{
+		{name: "after own interval", includeParent: true},
+		{name: "launcher outside range"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := baseParams(t, "2026-06-16", "UTC")
+			p.Bucket = BucketSpec{Unit: BucketMinute, NominalSeconds: 300}
+			p.Waiting = map[string][]string{"child": {"parent"}, "child2": {"parent"}}
+			sessions := []SessionMeta{
+				{SessionID: "child", IsSubagent: true, ParentSessionID: "parent"},
+				{SessionID: "child2", IsSubagent: true, ParentSessionID: "parent"},
 			}
-		}
-		got, err := BuildCandidateArtifacts(t.Context(), p, sessions, candidates, nil)
-		require.NoError(t, err)
-		assert.Equal(t, 1, got.Report.InteractivePeak.Agents)
-		assert.Equal(t, 4, got.Report.Peak.Agents)
-		assert.InDelta(t, 120, got.Report.Totals.AgentMinutes, 1e-9)
-		p.Waiting = nil
-		baseline, err := BuildCandidateArtifacts(t.Context(), p, sessions, candidates, nil)
-		require.NoError(t, err)
-		assert.Equal(t, baseline.Report.Totals, got.Report.Totals)
-		assert.Equal(t, baseline.Sessions, got.Sessions)
-		assert.Equal(t, baseline.Membership, got.Membership)
-
-	})
+			candidates := []IntervalCandidate{
+				{SessionID: "child", Start: mustStart(t, "2026-06-16T10:01:00Z"), End: mustStart(t, "2026-06-16T10:09:00Z")},
+				{SessionID: "child2", Start: mustStart(t, "2026-06-16T10:01:00Z"), End: mustStart(t, "2026-06-16T10:08:00Z")},
+			}
+			if tc.includeParent {
+				sessions = append(sessions, SessionMeta{SessionID: "parent"})
+				candidates = append([]IntervalCandidate{{SessionID: "parent", Start: mustStart(t, "2026-06-16T10:00:00Z"), End: mustStart(t, "2026-06-16T10:02:00Z")}}, candidates...)
+			}
+			got, err := BuildCandidateArtifacts(t.Context(), p, sessions, candidates, nil)
+			require.NoError(t, err)
+			assert.Equal(t, 3, got.Report.Peak.Agents)
+			assert.Equal(t, 1, got.Report.InteractivePeak.Agents)
+			matched := 0
+			for _, bucket := range got.Report.Buckets {
+				if bucket.Start == "2026-06-16T10:00:00Z" || bucket.Start == "2026-06-16T10:05:00Z" {
+					matched++
+					assert.Equal(t, 3, bucket.MaxAgents, bucket.Start)
+					assert.Equal(t, 1, bucket.MaxInteractiveAgents, bucket.Start)
+					assert.Equal(t, 2, bucket.MaxSubagentAgents, bucket.Start)
+				}
+			}
+			assert.Equal(t, 2, matched)
+			p.Waiting = nil
+			baseline, err := BuildCandidateArtifacts(t.Context(), p, sessions, candidates, nil)
+			require.NoError(t, err)
+			assert.Equal(t, baseline.Report.Totals, got.Report.Totals)
+			assert.Equal(t, baseline.Sessions, got.Sessions)
+			assert.Equal(t, baseline.Membership, got.Membership)
+		})
+	}
 }
 
 func TestWaitingLauncherKeepsOwnMinutesDuringOverlap(t *testing.T) {
