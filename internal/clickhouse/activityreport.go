@@ -227,7 +227,8 @@ func (s *Store) endedActivityReportKey(
 	var candidates activityCandidateDigest
 	candidatesRead := make(chan error, 1)
 	go func() {
-		err := s.queryRowContext(ctx, `SELECT `+chActivityCandidateDigestSQL+` FROM sessions s WHERE `+candidateWhere, candidateArgs...).Scan(&candidates.hash, &candidates.count)
+		err := s.queryRowContext(ctx, `SELECT `+chActivityCandidateDigestSQL+`
+			FROM sessions s WHERE `+candidateWhere, candidateArgs...).Scan(&candidates.hash, &candidates.count)
 		if err != nil {
 			err = fmt.Errorf("reading activity candidate sessions: %w", err)
 		}
@@ -237,8 +238,7 @@ func (s *Store) endedActivityReportKey(
 	if err := errors.Join(err, <-candidatesRead); err != nil || key == "" {
 		return "", err
 	}
-	data := fmt.Appendf(nil, "%s|%s|%d", key, candidates.hash, candidates.count)
-	sum := sha256.Sum256(data)
+	sum := sha256.Sum256(fmt.Appendf(nil, "%s|%s|%d", key, candidates.hash, candidates.count))
 	return hex.EncodeToString(sum[:]), nil
 }
 

@@ -41,7 +41,7 @@ export async function fetchActivityReport(
   headers.set("Accept", "text/event-stream, application/json");
   const res = await ActivityService.getApiV1ActivityReport(query, { headers, signal });
   if (res.headers.get("Content-Type")?.includes("text/event-stream")) {
-    const report = await consumeEvents<Report>(
+    return consumeEvents<Report>(
       res,
       ({ event, data }) => {
         if (event === "progress") onProgress?.(JSON.parse(data));
@@ -50,7 +50,6 @@ export async function fetchActivityReport(
       },
       "Activity report stream ended without a report event",
     );
-    return report;
   }
   return (await res.json()) as Report;
 }
@@ -60,7 +59,7 @@ export async function fetchActivitySessions(
   options: ActivitySessionPageOptions,
   signal?: AbortSignal,
 ): Promise<ActivityReportSessionsResponse> {
-  const page = await ActivityService.getApiV1ActivityReportByReportIdSessions(
+  return ActivityService.getApiV1ActivityReportByReportIdSessions(
     { reportId: reportID },
     {
       limit: options.limit,
@@ -72,5 +71,4 @@ export async function fetchActivitySessions(
     },
     { signal },
   );
-  return page;
 }
