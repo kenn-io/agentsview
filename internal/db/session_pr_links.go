@@ -496,7 +496,7 @@ func storedToolCallPRLinksTx(ctx context.Context, tx transactionQueries, id, cwd
 	return parser.CombinePRLinks(lists...), nil
 }
 
-const toolPRLinksDataVersion = 186
+const toolPRLinksDataVersion = 188
 
 func (db *DB) upgradeToolPRLinksTx(ctx context.Context, tx *sql.Tx) error {
 	version, _, err := readUserVersion(ctx, tx)
