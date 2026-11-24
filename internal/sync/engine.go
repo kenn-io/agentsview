@@ -6323,7 +6323,11 @@ func (e *Engine) syncAllLocked(
 	}
 	if scope == nil {
 		var finishLabels func(context.Context, *SyncStats)
-		ctx, finishLabels = e.prepareCodexLabelRoots(ctx)
+		var err error
+		ctx, finishLabels, err = e.prepareCodexLabelRoots(ctx)
+		if err != nil {
+			return SyncStats{Aborted: true, Warnings: []string{err.Error()}, abortCause: err.Error()}
+		}
 		defer func() { finishLabels(ctx, &stats) }()
 	}
 	e.invalidateNativeTitleCache(nil)

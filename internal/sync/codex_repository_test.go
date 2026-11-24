@@ -324,6 +324,7 @@ func TestCodexLabeledProjectChangesWithRoots(t *testing.T) {
 	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
 	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key = ?`, codexLabelRootsKey).Scan(&marker))
 	assert.Equal(t, oldMarker, marker)
+	assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
 	engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {sessions}}})
 	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
 	for id, project := range map[string]string{assignedID: "assigned", mappedID: "mapped"} {
@@ -358,4 +359,29 @@ func TestCodexLabelRootsRefreshDuringOrdinarySync(t *testing.T) {
 	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key = ?`, codexLabelRootsKey).Scan(&marker))
 	assert.NotEqual(t, oldMarker, marker)
 	assert.Zero(t, engine.SyncAllSince(t.Context(), time.Now().Add(time.Hour), nil).Synced)
+}
+
+func TestCodexLabelRootsUnavailableAndUnknownMarker(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	missing := filepath.Join(root, "missing")
+	const id = "12345678-1234-4234-8234-123456789abc"
+	path := filepath.Join(root, "label", ".codex-run-v1-a", "sessions", "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
+	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_cli_rs", "2026-10-08T12:00:00Z")
+	dbtest.WriteTestFile(t, path, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
+	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root, missing}}})
+	t.Cleanup(engine.Close)
+	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+	assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
+	require.NoError(t, os.MkdirAll(missing, 0o755))
+	assert.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `UPDATE archive_metadata SET value = ? WHERE key = ?`, `["v2"]`, codexLabelRootsKey)
+		return err
+	}))
+	assert.True(t, engine.SyncAll(t.Context(), nil).Aborted)
+	var marker string
+	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key = ?`, codexLabelRootsKey).Scan(&marker))
+	assert.Equal(t, `["v2"]`, marker)
 }
