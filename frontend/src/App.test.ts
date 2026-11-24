@@ -1493,7 +1493,7 @@ function message(ordinal: number, role: Message["role"], isSystem = false) {
   return {
     kind: "message" as const,
     ordinals: [ordinal],
-    message: { role, is_system: isSystem } as Message,
+    message: { ordinal, role, is_system: isSystem } as Message,
   };
 }
 
@@ -1514,6 +1514,19 @@ describe("findUserPromptOrdinal", () => {
     expect(findUserPromptOrdinal(items, 99, 1, true)).toBe(1);
     expect(findUserPromptOrdinal(items, 99, -1, true)).toBe(4);
     expect(findUserPromptOrdinal(items.slice(1, 3), 2, 1, true)).toBeUndefined();
+  });
+
+  it("treats a merged skill card as one stop at its prompt ordinal", () => {
+    const merged = {
+      kind: "message" as const,
+      ordinals: [5, 6],
+      skill: { id: 5, ordinal: 5, role: "user", is_system: true } as Message,
+      message: { id: 6, ordinal: 6, role: "user", is_system: false } as Message,
+    };
+    const withSkill = [message(1, "user"), merged, message(9, "user")];
+    expect(findUserPromptOrdinal(withSkill, 6, 1, true)).toBe(9);
+    expect(findUserPromptOrdinal(withSkill, 6, -1, true)).toBe(1);
+    expect(findUserPromptOrdinal(withSkill, 9, -1, true)).toBe(6);
   });
 
   it("keeps chronological directions when newest-first reorders rows", () => {

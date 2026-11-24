@@ -2,6 +2,8 @@ import { describe, it, expect } from "vite-plus/test";
 import type { DbMessage as Message } from "../api/generated/index.js";
 import {
   isPromptMessage,
+  isSkillInvocationMessage,
+  isSystemBoundaryMessage,
   isSystemMessage,
   normalizeMessagePreview,
   previewMessage,
@@ -273,6 +275,34 @@ describe("previewMessage", () => {
       text: "<system-reminder>ctx</system-reminder>",
       isShell: true,
     });
+  });
+});
+
+describe("skill invocation rows", () => {
+  const skillRow = msg({
+    role: "user",
+    content: "[Skill: review]\nReferences are relative to /skills/review.\n[/Skill]",
+    is_system: true,
+    source_type: "system",
+    source_subtype: "skill_invocation",
+  });
+
+  it("is visible, not a boundary card, and not a prompt", () => {
+    expect(isSkillInvocationMessage(skillRow)).toBe(true);
+    expect(isSystemMessage(skillRow)).toBe(false);
+    expect(isSystemBoundaryMessage(skillRow)).toBe(false);
+    expect(isPromptMessage(skillRow)).toBe(false);
+  });
+
+  it("does not match the subtype on a message that is not system-flagged", () => {
+    const typed = msg({ content: "typed", source_subtype: "skill_invocation" });
+    expect(isSkillInvocationMessage(typed)).toBe(false);
+  });
+
+  it("still hides an unknown system subtype", () => {
+    const unknown = msg({ is_system: true, source_subtype: "mystery_subtype" });
+    expect(isSystemMessage(unknown)).toBe(true);
+    expect(isSkillInvocationMessage(unknown)).toBe(false);
   });
 });
 

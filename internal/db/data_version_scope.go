@@ -76,6 +76,7 @@ var dataVersionScopes = map[int][]parser.AgentType{
 	185:                         {}, // Account stamps are written by the next usage sync; nothing to reparse.
 	186:                         {parser.AgentAntigravity, parser.AgentAntigravityCLI},
 	187:                         {parser.AgentHermes, parser.AgentAugureDesktop},
+	188:                         {parser.AgentPi, parser.AgentOMP, parser.AgentOMO, parser.AgentStepCode, parser.AgentDirectAPI, parser.AgentPrimeAgent},
 }
 
 // firstScopedDataVersion is the oldest version that may be declared. Released

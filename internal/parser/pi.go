@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -188,24 +189,26 @@ func parsePiLikeSession(
 			switch role {
 			case "user":
 				sourceParentUUID := resolveVisibleAncestor(parentID)
-				msg := parsePiUserMessage(
+				rows := parsePiUserMessages(
 					line, ordinal, entryID, sourceParentUUID,
 				)
-				if msg == nil {
-					continue
+				for _, row := range rows {
+					if !row.IsSystem {
+						if firstMessage == "" && row.Content != "" {
+							firstMessage = truncate(
+								strings.ReplaceAll(row.Content, "\n", " "),
+								300,
+							)
+						}
+						userCount++
+					}
+					messages = append(messages, row)
+					ordinal++
 				}
-				if firstMessage == "" && msg.Content != "" {
-					firstMessage = truncate(
-						strings.ReplaceAll(msg.Content, "\n", " "),
-						300,
-					)
-				}
-				messages = append(messages, *msg)
 				if entryID != "" {
-					visibleAncestorByID[entryID] = entryID
+					// Later entries parent onto the last emitted row.
+					visibleAncestorByID[entryID] = rows[len(rows)-1].SourceUUID
 				}
-				ordinal++
-				userCount++
 
 			case "assistant":
 				sourceParentUUID := resolveVisibleAncestor(parentID)
@@ -430,39 +433,96 @@ func primeParentSessionID(childPath, persistedPath string) string {
 	return strings.TrimSuffix(base, filepath.Ext(base))
 }
 
-// parsePiUserMessage parses a message entry with role="user".
-// Returns nil if the entry is malformed.
-func parsePiUserMessage(
-	line string, ordinal int, sourceUUID, sourceParentUUID string,
-) *ParsedMessage {
-	content := gjson.Get(line, "message.content")
+// piSkillExpansionRE matches the user message Pi builds when it expands
+// a "/skill:NAME args" command. It mirrors Pi's own parser: group 1 is
+// the skill name, group 2 the skill file location, group 3 the skill
+// content (including the "References are relative to" line), and group
+// 4 the optional user message that followed the command.
+var piSkillExpansionRE = regexp.MustCompile(
+	`^<skill name="([^"]+)" location="([^"]+)">\n` +
+		`((?s:.*?))\n</skill>(?:\n\n((?s:.+)))?$`,
+)
 
-	var text string
+// piUserText returns the text of a user message entry. Array content
+// joins its non-empty text blocks with newlines.
+func piUserText(line string) string {
+	content := gjson.Get(line, "message.content")
 	if content.Type == gjson.String {
-		text = content.Str
-	} else if content.IsArray() {
-		var parts []string
-		content.ForEach(func(_, block gjson.Result) bool {
-			if block.Get("type").Str == "text" {
-				if t := block.Get("text").Str; t != "" {
-					parts = append(parts, t)
-				}
+		return content.Str
+	}
+	if !content.IsArray() {
+		return ""
+	}
+	var parts []string
+	content.ForEach(func(_, block gjson.Result) bool {
+		if block.Get("type").Str == "text" {
+			if t := block.Get("text").Str; t != "" {
+				parts = append(parts, t)
 			}
-			return true
-		})
-		text = strings.Join(parts, "\n")
+		}
+		return true
+	})
+	return strings.Join(parts, "\n")
+}
+
+// parsePiUserMessages parses a message entry with role="user" into the
+// rows it produces. A skill expansion yields a skill_invocation system
+// row followed by a user row holding the text the user typed: the
+// command arguments, or "/skill:NAME" when there were none. Any other
+// message yields a single user row.
+func parsePiUserMessages(
+	line string, ordinal int, sourceUUID, sourceParentUUID string,
+) []ParsedMessage {
+	text := piUserText(line)
+	m := piSkillExpansionRE.FindStringSubmatch(text)
+	if m == nil {
+		return []ParsedMessage{
+			newPiUserMessage(
+				line, ordinal, text, sourceUUID, sourceParentUUID,
+			),
+		}
 	}
 
-	ts := piTimestamp(line)
+	skillName := m[1]
+	userText := strings.TrimSpace(m[4])
+	if userText == "" {
+		userText = "/skill:" + skillName
+	}
+	skillUUID := ""
+	if sourceUUID != "" {
+		skillUUID = sourceUUID + ":skill"
+	}
+	skillContent := "[Skill: " + skillName + "]\n" + m[3] + "\n[/Skill]"
+	return []ParsedMessage{
+		{
+			Ordinal:          ordinal,
+			Role:             RoleUser,
+			Content:          skillContent,
+			Timestamp:        piTimestamp(line),
+			IsSystem:         true,
+			ContentLength:    len(skillContent),
+			SourceType:       "system",
+			SourceSubtype:    "skill_invocation",
+			SourceUUID:       skillUUID,
+			SourceParentUUID: sourceParentUUID,
+		},
+		newPiUserMessage(
+			line, ordinal+1, userText, sourceUUID, skillUUID,
+		),
+	}
+}
 
-	return &ParsedMessage{
+func newPiUserMessage(
+	line string, ordinal int, text, sourceUUID, sourceParentUUID string,
+) ParsedMessage {
+	return ParsedMessage{
 		Ordinal:          ordinal,
 		Role:             RoleUser,
 		SourceType:       "user",
 		SourceUUID:       sourceUUID,
 		SourceParentUUID: sourceParentUUID,
 		Content:          text,
-		Timestamp:        ts,
+		Timestamp:        piTimestamp(line),
 		ContentLength:    len(text),
 	}
 }
