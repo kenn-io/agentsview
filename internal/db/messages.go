@@ -988,15 +988,12 @@ func (db *DB) scanEmbeddableUnits(
 	fn func(EmbeddableUnit) error,
 ) (maxEnded string, err error) {
 	_, agentArgs := InPlaceholders(agents)
-	var args []any
-	if since == "" {
-		args = append(args, agentArgs...)
-	}
+	args := make([]any, 0, 2)
 	if sessionID != "" {
 		args = append(args, sessionID)
 	}
+	args = append(args, agentArgs...)
 	if since != "" {
-		args = append(args, agentArgs...)
 		args = append(args, since)
 	}
 
@@ -1197,9 +1194,9 @@ func runUnit(members []unitRow) EmbeddableUnit {
 }
 
 // embeddableUnitsQuery builds the embeddable-unit scan statement. A scoped
-// scan takes agent arguments and an optional session ID; an incremental scan
-// takes an optional session ID, agent arguments, and since. The query emits rows in (session_id, ordinal)
-// order, which unitReducer depends on.
+// scan takes sessionID first, then any agent arguments; an incremental scan
+// takes since last. The query emits rows in (session_id, ordinal) order, which
+// unitReducer depends on.
 func embeddableUnitsQuery(since, sessionID string, includeAutomated bool, agents []string) string {
 	preds := []string{
 		"m.role IN ('user', 'assistant')",
@@ -1210,12 +1207,12 @@ func embeddableUnitsQuery(since, sessionID string, includeAutomated bool, agents
 	if !includeAutomated {
 		preds = append(preds, SQLiteQueryDialect().AutomatedScopePredicate("human", "s.is_automated"))
 	}
+	if sessionID != "" {
+		preds = append(preds, "m.session_id = ?")
+	}
 	if since == "" && len(agents) > 0 {
 		placeholders, _ := InPlaceholders(agents)
 		preds = append(preds, "s.agent IN "+placeholders)
-	}
-	if sessionID != "" {
-		preds = append(preds, "m.session_id = ?")
 	}
 	sessionJoin := "JOIN"
 	if since != "" {

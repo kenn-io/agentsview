@@ -323,26 +323,17 @@ config change creates a generation with a new fingerprint.
 
 ### Scope (`include_automated`, `agents`)
 
-Two settings define the embeddable universe, and a session must pass both:
+Whether automated sessions are in the embeddable universe is stored in
+`vector_meta` (`scope_include_automated`). The `[vector] agents` list is stored
+as `scope_agents`, sorted, deduplicated, and comma-joined. A missing key reads as
+an empty list, so an upgrade forces no rescan. Only the local message store
+applies the list; Recall and hosted PostgreSQL embeddings ignore it.
 
-- `include_automated` decides whether automated sessions are in scope. It is
-  stored in `vector_meta` as `scope_include_automated`.
-- `[vector] agents` limits scope to sessions whose `sessions.agent` is in the
-  list; an empty list means every agent. Full and session scans filter `s.agent`;
-  incremental scans filter `es.agent` in the `since` session subquery.
-  Journaled-session rescans use the same list. It is stored as `scope_agents`:
-  the list sorted, deduplicated, and comma-joined. A missing key reads as the
-  empty list, so an upgraded store with no list configured forces no rescan.
-  Only the local message store applies the list; the Recall store and hosted
-  PostgreSQL embeddings ignore it.
-
-Changing either value forces a full mirror *reconciliation*, not a re-embed: it
-inserts or removes rows (and their vectors) to match the new scope, but
-documents that stay in scope and are unchanged keep their existing stamps. Both
-keys are stamped after the refresh succeeds. `include_automated` can change in
-config or via the one-off `--include-automated` flag; `agents` comes only from
-config, through the manager's `BuildTarget`, so no build entry point can omit it
-and flip the store between scopes.
+Changing either value forces a full mirror *reconciliation*, not a re-embed:
+it inserts or removes rows to match the new scope, but documents that stay in
+scope and are unchanged keep their existing stamps. `include_automated` can
+change in config or via the one-off `--include-automated` flag; `agents` comes
+only from config.
 
 The run cap is stored as `run_max_runes` in the store's metadata. A missing or
 changed cap forces one full reconciliation, including idle sessions older than
