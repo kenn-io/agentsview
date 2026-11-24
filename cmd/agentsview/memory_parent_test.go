@@ -65,9 +65,16 @@ func stubLaunchArchive(t *testing.T) *db.DB {
 	t.Helper()
 	database := dbtest.OpenTestDB(t)
 	original := resolveLaunchAnnotator
-	t.Cleanup(func() { resolveLaunchAnnotator = original })
+	originalOpen := openLaunchParentArchive
+	t.Cleanup(func() {
+		resolveLaunchAnnotator = original
+		openLaunchParentArchive = originalOpen
+	})
 	resolveLaunchAnnotator = func(context.Context, *cobra.Command) (service.SessionAnnotator, func(), error) {
 		return service.NewDirectBackend(database, nil).(service.SessionAnnotator), func() {}, nil
+	}
+	openLaunchParentArchive = func(ctx context.Context, _ *cobra.Command) (*db.DB, error) {
+		return db.OpenReadOnly(ctx, database.Path())
 	}
 	return database
 }
@@ -375,6 +382,45 @@ func TestCaptureLaunchParentDetachedMixedProviders(t *testing.T) {
 			assert.Equal(t, tc.intermediate, link.ParentSessionID)
 		})
 	}
+}
+
+func TestCaptureLaunchParentDetachedPendingMixedProviders(t *testing.T) {
+	for _, tc := range []struct {
+		name, child, intermediate, outer, wantChild string
+	}{
+		{"codex intermediate", "claude", "codex:" + codexLauncherID, claudeLauncherID, childSessionID},
+		{"claude intermediate", "codex", claudeLauncherID, "codex:" + codexLauncherID, "codex:" + childSessionID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			database := stubLaunchArchive(t)
+			_, err := database.SetSessionExternalParent(t.Context(), tc.intermediate, tc.outer)
+			require.NoError(t, err)
+			stubLaunchProcesses(t, fakeProcess{name: "sh"}, fakeProcess{name: tc.child, env: []string{
+				"CODEX_HOME=" + t.TempDir(),
+				"CLAUDE_CODE_SESSION_ID=" + claudeLauncherID,
+				"CODEX_THREAD_ID=" + codexLauncherID,
+			}})
+			_, err = runLaunchHook(t, sessionStartPayload("startup"))
+			require.NoError(t, err)
+			link, err := database.GetSessionExternalParent(t.Context(), tc.wantChild)
+			require.NoError(t, err)
+			assert.Equal(t, tc.intermediate, link.ParentSessionID)
+		})
+	}
+}
+
+func TestOpenLocalLaunchParentArchive(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+	_, err := database.SetSessionExternalParent(t.Context(), "codex:"+codexLauncherID, claudeLauncherID)
+	require.NoError(t, err)
+	archive, err := openLocalLaunchParentArchive(t.Context(), &cobra.Command{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, archive.Close()) })
+	link, err := archive.GetSessionExternalParent(t.Context(), "codex:"+codexLauncherID)
+	require.NoError(t, err)
+	assert.Equal(t, claudeLauncherID, link.ParentSessionID)
 }
 
 func TestCaptureLaunchParentDetachedMixedProvidersRevertPage(t *testing.T) {

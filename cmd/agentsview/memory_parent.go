@@ -20,10 +20,10 @@ import (
 	"github.com/spf13/cobra"
 	"go.kenn.io/kit/agenthook"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/gittrailer"
 	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/service"
 )
 
 const (
@@ -45,9 +45,18 @@ type launchProcess struct {
 }
 
 var (
-	lookupLaunchProcess    = lookupGopsutilProcess
-	resolveLaunchAnnotator = resolveSessionAnnotatorContext
+	lookupLaunchProcess     = lookupGopsutilProcess
+	resolveLaunchAnnotator  = resolveSessionAnnotatorContext
+	openLaunchParentArchive = openLocalLaunchParentArchive
 )
+
+func openLocalLaunchParentArchive(ctx context.Context, cmd *cobra.Command) (*db.DB, error) {
+	cfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeLocal)
+	if err != nil {
+		return nil, err
+	}
+	return db.OpenReadOnly(ctx, cfg.DBPath)
+}
 
 func lookupGopsutilProcess(ctx context.Context, pid int32) (launchProcess, error) {
 	p, err := process.NewProcessWithContext(ctx, pid)
@@ -291,24 +300,28 @@ func detachedLauncherParent(ctx context.Context, cmd *cobra.Command, child, pare
 		}
 		ids = append(ids, id)
 	}
-	annotator, cleanup, err := resolveLaunchAnnotator(ctx, cmd)
+	archive, err := openLaunchParentArchive(ctx, cmd)
 	if err != nil {
 		return "", err
 	}
-	defer cleanup()
-	reader, ok := annotator.(interface {
-		Get(context.Context, string) (*service.SessionDetail, error)
-	})
-	if !ok {
-		return "", nil
-	}
+	defer archive.Close()
 	var found string
 	for i, id := range ids {
-		session, err := reader.Get(ctx, id)
+		session, err := archive.GetSession(ctx, id)
 		if err != nil {
 			return "", err
 		}
-		if session != nil && session.ParentSessionID != nil && *session.ParentSessionID == ids[1-i] {
+		parentID := ""
+		if session != nil && session.ParentSessionID != nil {
+			parentID = *session.ParentSessionID
+		} else {
+			link, err := archive.GetSessionExternalParent(ctx, id)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return "", err
+			}
+			parentID = link.ParentSessionID
+		}
+		if parentID == ids[1-i] {
 			if found != "" {
 				return "", nil
 			}
