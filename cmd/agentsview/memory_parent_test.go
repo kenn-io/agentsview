@@ -350,6 +350,60 @@ func TestCaptureLaunchParentDetached(t *testing.T) {
 	}
 }
 
+func TestCaptureLaunchParentDetachedMixedProviders(t *testing.T) {
+	for _, tc := range []struct {
+		name, child, intermediate, outer, wantChild string
+	}{
+		{"codex intermediate", "claude", "codex:" + codexLauncherID, claudeLauncherID, childSessionID},
+		{"claude intermediate", "codex", claudeLauncherID, "codex:" + codexLauncherID, "codex:" + childSessionID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			database := stubLaunchArchive(t)
+			dbtest.SeedSession(t, database, tc.outer, "proj")
+			dbtest.SeedSession(t, database, tc.intermediate, "proj")
+			_, err := database.SetSessionExternalParent(t.Context(), tc.intermediate, tc.outer)
+			require.NoError(t, err)
+			stubLaunchProcesses(t, fakeProcess{name: "sh"}, fakeProcess{name: tc.child, env: []string{
+				"CODEX_HOME=" + t.TempDir(),
+				"CLAUDE_CODE_SESSION_ID=" + claudeLauncherID,
+				"CODEX_THREAD_ID=" + codexLauncherID,
+			}})
+			_, err = runLaunchHook(t, sessionStartPayload("startup"))
+			require.NoError(t, err)
+			link, err := database.GetSessionExternalParent(t.Context(), tc.wantChild)
+			require.NoError(t, err)
+			assert.Equal(t, tc.intermediate, link.ParentSessionID)
+		})
+	}
+}
+
+func TestCaptureLaunchParentDetachedMixedProvidersRevertPage(t *testing.T) {
+	home := t.TempDir()
+	state, err := sql.Open("sqlite3", filepath.Join(home, "state_5.sqlite"))
+	require.NoError(t, err)
+	_, err = state.ExecContext(t.Context(), `CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL)`)
+	require.NoError(t, err)
+	page := codexLauncherID + "_44444444-4444-4444-8444-444444444444"
+	_, err = state.ExecContext(t.Context(), `INSERT INTO threads VALUES (?, ?)`, codexLauncherID, "rollout-2026-01-01-"+page+".jsonl")
+	require.NoError(t, err)
+	require.NoError(t, state.Close())
+	database := stubLaunchArchive(t)
+	dbtest.SeedSession(t, database, claudeLauncherID, "proj")
+	dbtest.SeedSession(t, database, "codex:"+page, "proj")
+	_, err = database.SetSessionExternalParent(t.Context(), "codex:"+page, claudeLauncherID)
+	require.NoError(t, err)
+	stubLaunchProcesses(t, fakeProcess{name: "sh"}, fakeProcess{name: "claude", env: []string{
+		"CODEX_HOME=" + home,
+		"CLAUDE_CODE_SESSION_ID=" + claudeLauncherID,
+		"CODEX_THREAD_ID=" + codexLauncherID,
+	}})
+	_, err = runLaunchHook(t, sessionStartPayload("startup"))
+	require.NoError(t, err)
+	link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
+	require.NoError(t, err)
+	assert.Equal(t, "codex:"+page, link.ParentSessionID)
+}
+
 func TestCaptureLaunchParentUsesCodexRevertPage(t *testing.T) {
 	database := stubLaunchArchive(t)
 	rollout := "44444444-4444-4444-8444-444444444444"

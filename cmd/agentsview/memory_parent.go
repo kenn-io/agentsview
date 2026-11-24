@@ -23,6 +23,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/gittrailer"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/service"
 )
 
 const (
@@ -196,6 +197,7 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 	if childAgent == "" {
 		return err
 	}
+	ambiguous := false
 	if launcher == "" {
 		if child.Environ == nil {
 			return err
@@ -211,10 +213,12 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 		}
 		claude := vars["CLAUDE_CODE_SESSION_ID"] != ""
 		codex := vars["CODEX_THREAD_ID"] != "" || vars["CODEX_SESSION_ID"] != ""
-		if claude == codex {
+		if !claude && !codex {
 			return nil
 		}
-		if claude {
+		if claude && codex {
+			ambiguous = true
+		} else if claude {
 			launcher = "claude"
 		} else {
 			launcher = "codex"
@@ -235,10 +239,6 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 	if in == nil || in.Source != agenthook.SessionSourceStartup || in.AgentID != "" {
 		return nil
 	}
-	parentID, err := launcherSessionID(ctx, child, launcher)
-	if err != nil || parentID == "" {
-		return err
-	}
 	childID, err := storedSessionID(childAgent, in.SessionID)
 	if err != nil {
 		return err
@@ -249,17 +249,73 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 			childID = "codex:" + key
 		}
 	}
-	nativeParentID := parentID
-	if parentID, err = storedSessionID(launcher, parentID); err != nil {
-		return err
-	}
-	if launcher == "codex" {
-		if key := codexLauncherPage(ctx, child, parent, nativeParentID); key != "" {
-			parentID = "codex:" + key
+	parentID := ""
+	if ambiguous {
+		parentID, err = detachedLauncherParent(ctx, cmd, child, parent)
+	} else {
+		var nativeID string
+		nativeID, err = launcherSessionID(ctx, child, launcher)
+		if err == nil && nativeID != "" {
+			parentID, err = storedSessionID(launcher, nativeID)
+			if err == nil && launcher == "codex" {
+				if key := codexLauncherPage(ctx, child, parent, nativeID); key != "" {
+					parentID = "codex:" + key
+				}
+			}
 		}
+	}
+	if err != nil || parentID == "" {
+		return err
 	}
 
 	return recordLaunchParent(ctx, cmd, childID, parentID)
+}
+
+// detachedLauncherParent selects the candidate whose archived parent is the
+// other candidate. Without that relationship the environment is ambiguous.
+func detachedLauncherParent(ctx context.Context, cmd *cobra.Command, child, parent launchProcess) (string, error) {
+	ids := make([]string, 0, 2)
+	for _, agent := range []string{"claude", "codex"} {
+		native, err := launcherSessionID(ctx, child, agent)
+		if err != nil || native == "" {
+			return "", err
+		}
+		id, err := storedSessionID(agent, native)
+		if err != nil {
+			return "", err
+		}
+		if agent == "codex" {
+			if key := codexLauncherPage(ctx, child, parent, native); key != "" {
+				id = "codex:" + key
+			}
+		}
+		ids = append(ids, id)
+	}
+	annotator, cleanup, err := resolveLaunchAnnotator(ctx, cmd)
+	if err != nil {
+		return "", err
+	}
+	defer cleanup()
+	reader, ok := annotator.(interface {
+		Get(context.Context, string) (*service.SessionDetail, error)
+	})
+	if !ok {
+		return "", nil
+	}
+	var found string
+	for i, id := range ids {
+		session, err := reader.Get(ctx, id)
+		if err != nil {
+			return "", err
+		}
+		if session != nil && session.ParentSessionID != nil && *session.ParentSessionID == ids[1-i] {
+			if found != "" {
+				return "", nil
+			}
+			found = id
+		}
+	}
+	return found, nil
 }
 
 // recordLaunchParent retries a busy archive or an unreachable daemon until
