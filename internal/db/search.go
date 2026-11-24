@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strconv"
@@ -408,10 +409,11 @@ func hasFTSColumnFilter(query string) bool {
 // Search performs FTS5 full-text search across messages, grouped by session,
 // plus a LIKE-based search on session display names and first messages.
 //
-// Results come from two branches joined with UNION ALL:
+// Results come from three branches joined with UNION ALL:
 //
 //  1. FTS branch — message content matches. ROW_NUMBER() picks the single
-//     best-ranked message per session (rank ASC, ordinal ASC, rowid ASC).
+//     best-ranked message per session (rank ASC, ordinal ASC, rowid ASC),
+//     within the first tier when a broad relevance search sets one.
 //     After pagination, a rowid lookup with MATCH builds each snippet without
 //     segment duplicates. Ordinal is the matched message's ordinal (≥ 0).
 //
@@ -463,7 +465,7 @@ func (db *DB) searchVersion(ctx context.Context, cjk bool) string {
 	if cjk {
 		fingerprint = simpleFTSRuntimeConfig.fingerprint
 	}
-	return fmt.Sprintf("%s|%s|%s", id, token, fingerprint)
+	return fmt.Sprintf("rank-v1|%s|%s|%s", id, token, fingerprint)
 }
 
 func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage, error) {
@@ -534,8 +536,7 @@ func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage,
 
 	// Relevance pages come from a walk over the matches in rank order when
 	// it can stop early; see walkSearchRanks. Recency pages rank every match
-	// inside the query, and so do project and date filters: most matches
-	// fall outside them, so the walk would read nearly all of them.
+	// inside the query.
 	// The walk and the page query share one snapshot: a sync that edits a
 	// walked message between them would leave its snippet NULL.
 	tx, err := db.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
@@ -544,11 +545,23 @@ func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage,
 	}
 	defer func() { _ = tx.Rollback() }()
 	var walk *searchRankWalk
-	if f.Sort != "recency" && f.Project == "" && f.DateFrom == "" && f.DateTo == "" {
-		walk, err = walkSearchRanks(ctx, tx, ftsQuery.table, innerWhereSQL, ftsArgs, f.Cursor+f.Limit+1)
+	floor := int64(math.MinInt64)
+	if f.Sort != "recency" {
+		floor, err = searchTierFloor(ctx, tx, ftsQuery.table, innerWhereSQL, ftsArgs)
 		if err != nil {
 			return SearchPage{}, err
 		}
+		walk, err = walkSearchRanks(ctx, tx, ftsQuery.table, innerWhereSQL, ftsArgs, f.Cursor+f.Limit+1, floor)
+		if err != nil {
+			return SearchPage{}, err
+		}
+	}
+	bestTier, rowTier, imageTier, nameTier := "0", "0", "0", "0"
+	if floor != math.MinInt64 {
+		tier := fmt.Sprintf("CASE WHEN %%s >= %d THEN 0 ELSE 1 END", floor)
+		bestTier, rowTier = fmt.Sprintf(tier, "messages_fts.rowid"), fmt.Sprintf(tier, "best.best_rowid")
+		imageTier, nameTier = "1", "2"
+		orderBy = "tier ASC, " + orderBy
 	}
 
 	args := ftsArgs
@@ -560,7 +573,7 @@ func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage,
 						rank AS best_rank,
 						ROW_NUMBER() OVER (
 							PARTITION BY m2.session_id
-							ORDER BY rank ASC, m2.ordinal ASC,
+							ORDER BY ` + bestTier + ` ASC, rank ASC, m2.ordinal ASC,
 								messages_fts.rowid ASC
 						) AS rn
 					FROM messages_fts
@@ -594,11 +607,11 @@ func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage,
 			SELECT s.id,s.project,s.agent,s.machine,
 			 COALESCE(s.display_name,s.session_name,s.first_message,'') AS name,
 			 COALESCE(s.ended_at,s.started_at,'') AS session_ended_at,
-			 im.ordinal,NULL,c.rowid,NULL,messages_fts.rank,0
+			 im.ordinal,NULL,c.rowid,NULL,messages_fts.rank,0,%s AS tier
 			 FROM messages_fts JOIN image_text_cache c ON c.rowid=messages_fts.rowid AND c.succeeded=1
 			 %s
 			 JOIN sessions s ON s.id=o.session_id
-			 WHERE messages_fts MATCH ? AND s.deleted_at IS NULL AND %s %s`, imageOccurrenceSQL, imageVisibilitySQL, nameProjectClause)
+			 WHERE messages_fts MATCH ? AND s.deleted_at IS NULL AND %s %s`, imageTier, imageOccurrenceSQL, imageVisibilitySQL, nameProjectClause)
 	nameBranchSQL := ""
 	if includeNames {
 		args = append(args, likePattern)        // CASE COALESCE(display_name,session_name) LIKE
@@ -623,7 +636,8 @@ func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage,
 					ELSE COALESCE(s.display_name, s.session_name, s.first_message, '')
 				END AS snippet,
 				0.0 AS rank,
-				0 AS match_pos
+				0 AS match_pos,
+				%s AS tier
 			FROM sessions s
 			WHERE (COALESCE(s.display_name, s.session_name) LIKE ? ESCAPE '\'
 				OR s.first_message LIKE ? ESCAPE '\')
@@ -637,7 +651,7 @@ func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage,
 				%s
 				AND s.id NOT IN (
 					%s
-				)`, nameProjectClause, ftsSessionsSQL)
+				)`, nameTier, nameProjectClause, ftsSessionsSQL)
 	}
 	args = append(args, f.Limit+1, f.Cursor) // LIMIT / OFFSET
 	args = append(args, f.Query, f.Query)    // paged image and message snippet MATCH
@@ -648,8 +662,8 @@ func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage,
 	query := fmt.Sprintf(`
 		%spage AS MATERIALIZED (
 		SELECT session_id, project, agent, machine, name,
-			session_ended_at, ordinal, best_rowid, image_rowid, snippet, rank, match_pos
-		FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY rank, image_rowid IS NOT NULL, ordinal, image_rowid) AS rn FROM (
+			session_ended_at, ordinal, best_rowid, image_rowid, snippet, rank, match_pos, tier
+		FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY tier, rank, image_rowid IS NOT NULL, ordinal, image_rowid) AS rn FROM (
 			-- FTS branch: message content matches
 			SELECT m.session_id, s.project, s.agent, s.machine,
 				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
@@ -657,7 +671,8 @@ func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage,
 				best.best_ordinal AS ordinal, best.best_rowid, NULL AS image_rowid,
 				NULL AS snippet,
 				best.best_rank AS rank,
-				%s AS match_pos
+				%s AS match_pos,
+				%s AS tier
 			FROM (
 				%s
 			) AS best
@@ -681,6 +696,7 @@ func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage,
 		ORDER BY %s`,
 		withSQL,
 		matchPosSQL,
+		rowTier,
 		bestSQL,
 		imageBranchSQL,
 		nameBranchSQL,

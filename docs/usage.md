@@ -1070,7 +1070,13 @@ single long session dominates the list. Full text also matches session display
 names and first messages, so you can find sessions by title.
 
 In Full text mode, use the sort toggle in the palette header to switch between
-**Relevance** (best matches first) and **Recency** (newest sessions first).
+**Relevance** and **Recency** (newest sessions first). Relevance ranks matches
+within each group by how well they fit the query. When a SQLite search,
+including one narrowed by project or date, has more than 65,536 message
+matches, Relevance first shows sessions with a match among the 65,536 most
+recently stored ones, then older message and image-text matches, then
+session-name matches. SQLite falls back to full ranking when that newest tier
+cannot fill a requested page or when paging goes beyond it.
 Semantic and Hybrid use their backend rankings, so the toggle is hidden in those
 modes.
 
