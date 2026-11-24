@@ -45,7 +45,7 @@ func TestRsyncSQLiteSnapshotsReplacesArchiveFetchForStateDB(t *testing.T) {
 		{Path: stateDB, Size: int64(len("new pages")), MtimeNS: mtime.UnixNano()},
 		{Path: other, Size: 3, MtimeNS: mtime.UnixNano()},
 	}}
-	hs := RemoteSync{Host: "mbp", Source: rsyncFakeSource{}}
+	hs := RemoteSync{Host: "devbox", Source: rsyncFakeSource{}}
 
 	left := hs.rsyncSQLiteSnapshots(t.Context(), targets, []string{stateDB, other}, manifest, mirror)
 
@@ -71,7 +71,7 @@ func TestRsyncSQLiteSnapshotsFallsBackToArchiveOnFailure(t *testing.T) {
 	const stateDB = "/srv/agent/.hermes/state.db"
 	targets := TargetSet{Dirs: map[parser.AgentType][]string{parser.AgentHermes: {stateDB}}}
 	manifest := Manifest{Files: []ManifestEntry{{Path: stateDB, Size: 1, MtimeNS: 1}}}
-	hs := RemoteSync{Host: "mbp", Source: rsyncFakeSource{}}
+	hs := RemoteSync{Host: "devbox", Source: rsyncFakeSource{}}
 	left := hs.rsyncSQLiteSnapshots(context.Background(), targets, []string{stateDB}, manifest, t.TempDir())
 	assert.Equal(t, []string{stateDB}, left)
 }
@@ -81,7 +81,7 @@ func TestRsyncSQLiteSnapshotsNeedsCapableSource(t *testing.T) {
 	const stateDB = "/srv/agent/.hermes/state.db"
 	targets := TargetSet{Dirs: map[parser.AgentType][]string{parser.AgentHermes: {stateDB}}}
 	manifest := Manifest{Files: []ManifestEntry{{Path: stateDB, Size: 1, MtimeNS: 1}}}
-	hs := RemoteSync{Host: "mbp"} // e.g. the HTTP source: no rsync origin
+	hs := RemoteSync{Host: "devbox"} // e.g. the HTTP source: no rsync origin
 	left := hs.rsyncSQLiteSnapshots(context.Background(), targets, []string{stateDB}, manifest, t.TempDir())
 	assert.Equal(t, []string{stateDB}, left)
 }
