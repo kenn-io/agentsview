@@ -262,7 +262,17 @@ func bashChangesRepositoryContext(file *syntax.File) (bool, bool, []*syntax.Call
 				words[i], _ = shellLiteral(arg.Parts)
 			}
 			for len(words) > 1 && (words[0] == "command" || words[0] == "builtin") {
+				wrapper := words[0]
 				words = words[1:]
+				if wrapper == "command" {
+					for len(words) > 0 && strings.HasPrefix(words[0], "-") && words[0] != "--" {
+						flags := strings.TrimPrefix(words[0], "-")
+						if flags == "" || strings.Trim(flags, "p") != "" {
+							break
+						}
+						words = words[1:]
+					}
+				}
 				if len(words) > 0 && words[0] == "--" {
 					words = words[1:]
 				}

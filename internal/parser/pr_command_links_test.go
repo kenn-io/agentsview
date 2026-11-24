@@ -28,6 +28,8 @@ func TestCommandPRLinks(t *testing.T) {
 		{`gh pr view --repo="$OTHER" 42`, remote, ""},
 		{`command cd /other && gh pr view 42`, remote, ""},
 		{`command -- cd /other && gh pr view 42`, remote, ""},
+		{`command -p cd /other && gh pr view 42`, remote, ""},
+		{`command -v cd && gh pr view 42`, remote, "https://github.com/example/repo/pull/42"},
 		{`builtin cd /other && gh pr view 42`, remote, ""},
 		{`gh pr co 42 -R example/repo`, "", "https://github.com/example/repo/pull/42"},
 		{`gh pr view '#42' -R example/repo`, "", "https://github.com/example/repo/pull/42"},
