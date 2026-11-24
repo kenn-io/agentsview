@@ -23,6 +23,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/gittrailer"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/pathutil"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -341,7 +342,13 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 			return err
 		}
 		if config.SQLiteHome != "" {
-			sqliteHome = config.SQLiteHome
+			sqliteHome, err = pathutil.ExpandHome(config.SQLiteHome)
+			if err != nil {
+				return err
+			}
+			if !filepath.IsAbs(sqliteHome) {
+				sqliteHome = filepath.Join(home, sqliteHome)
+			}
 		}
 		override, err := codexSQLiteOverride(ctx, launcherProcess)
 		if err != nil {
@@ -352,6 +359,10 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 		}
 	}
 	if sqliteHome != "" {
+		sqliteHome, err = pathutil.ExpandHome(sqliteHome)
+		if err != nil {
+			return err
+		}
 		if !filepath.IsAbs(sqliteHome) {
 			process := launcherProcess
 			if process.Cwd == nil {

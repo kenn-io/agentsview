@@ -391,6 +391,60 @@ func TestCaptureLaunchParentRelativeCodexSQLiteHome(t *testing.T) {
 	assert.Equal(t, "codex:"+codexLauncherID, link.ParentSessionID)
 }
 
+func TestCaptureLaunchParentCodexSQLiteHomePaths(t *testing.T) {
+	for _, tc := range []struct {
+		name, source string
+		tilde        bool
+	}{
+		{"config relative to Codex home", "config", false},
+		{"environment relative to working directory", "env", false},
+		{"override relative to working directory", "override", false},
+		{"config home shorthand", "config", true},
+		{"environment home shorthand", "env", true},
+		{"override home shorthand", "override", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			codexHome, cwd, userHome := t.TempDir(), t.TempDir(), t.TempDir()
+			t.Setenv("HOME", userHome)
+			t.Setenv("USERPROFILE", userHome)
+			base := cwd
+			if tc.source == "config" {
+				base = codexHome
+			}
+			path := "state"
+			if tc.tilde {
+				path = filepath.Join("~", "state")
+				base = userHome
+			}
+			state := filepath.Join(base, "state")
+			require.NoError(t, os.Mkdir(state, 0o700))
+			writeCodexState(t, state, codexLauncherID, codexLauncherID)
+			env := []string{"CODEX_HOME=" + codexHome}
+			args := []string{}
+			switch tc.source {
+			case "config":
+				require.NoError(t, os.WriteFile(filepath.Join(codexHome, "config.toml"), fmt.Appendf(nil, "sqlite_home = %q\n", path), 0o600))
+			case "env":
+				env = append(env, "CODEX_SQLITE_HOME="+path)
+			case "override":
+				args = []string{"-c", "sqlite_home=" + path}
+			}
+			database := stubLaunchArchive(t)
+			stubLaunchProcesses(t, fakeProcess{name: "sh"},
+				fakeProcess{name: "claude", env: []string{"CODEX_THREAD_ID=" + codexLauncherID}},
+				fakeProcess{name: "codex", env: env, cwd: cwd, args: args})
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			cmd := &cobra.Command{}
+			cmd.SetIn(strings.NewReader(sessionStartPayload("startup")))
+			require.NoError(t, captureLaunchParent(ctx, cmd))
+			link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
+			require.NoError(t, err)
+			assert.Equal(t, "codex:"+codexLauncherID, link.ParentSessionID)
+		})
+	}
+}
+
 func TestMemorySessionStartCaptureHasOwnDeadline(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		original := runMemorySessionStart
