@@ -15,5 +15,6 @@ export interface RemotesyncArchiveRequest {
   extra_files?: string[];
   files?: RemotesyncArchiveRequestFiles;
   forbidden_roots?: string[];
+  installation_id?: string;
   provider_extra_files?: RemotesyncArchiveRequestProviderExtraFiles;
 }

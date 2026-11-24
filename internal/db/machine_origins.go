@@ -22,8 +22,11 @@ const MachineOriginKeyPrefix = "machine_origin:"
 // remote, keeps the host name. So does this archive's own identity, which a
 // host cannot claim.
 func (db *DB) RecordRemoteMachineOrigin(ctx context.Context, host, identity string) error {
-	if host == "" || host == "local" || config.ValidateInstallationID(identity) != nil {
+	if host == "" || host == "local" {
 		return nil
+	}
+	if err := config.ValidateInstallationID(identity); err != nil {
+		return nil //nolint:nilerr // An older remote sends no identity; its sessions keep the host name.
 	}
 	return db.Update(ctx, func(tx *sql.Tx) error {
 		var local, existing string
