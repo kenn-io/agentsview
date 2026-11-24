@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -116,7 +117,10 @@ func TestCaptureLaunchParentLinksEachProviderPair(t *testing.T) {
 		{"closest codex", childSessionID, "codex:" + codexLauncherID, []fakeProcess{
 			{name: "sh"},
 			{name: "claude", env: []string{"CLAUDE_CODE_SESSION_ID=" + claudeLauncherID, "CODEX_THREAD_ID=" + codexLauncherID}},
-			{name: "bash"}, {name: "codex"}, {name: "bash"}, {name: "claude"},
+			{name: "bash"},
+			{name: "codex"},
+			{name: "bash"},
+			{name: "claude"},
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -183,6 +187,37 @@ func TestCaptureLaunchParentRecordsNothing(t *testing.T) {
 			}
 			_, err = database.GetSessionExternalParent(t.Context(), tc.wantChild)
 			require.ErrorIs(t, err, sql.ErrNoRows)
+		})
+	}
+}
+
+func TestCaptureLaunchParentWithoutCodexHome(t *testing.T) {
+	homeEnv := "HOME"
+	if runtime.GOOS == "windows" {
+		homeEnv = "USERPROFILE"
+	}
+	t.Setenv(homeEnv, "")
+	for _, tc := range []struct {
+		name, launcher, sessionEnv string
+		wantLink                   bool
+	}{
+		{"codex", "codex", "CODEX_THREAD_ID=" + codexLauncherID, false},
+		{"claude", "claude", "CLAUDE_CODE_SESSION_ID=" + claudeLauncherID, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			database := stubLaunchArchive(t)
+			stubLaunchProcesses(t, fakeProcess{name: "sh"},
+				fakeProcess{name: "claude", env: []string{tc.sessionEnv}},
+				fakeProcess{name: tc.launcher, env: []string{"CODEX_HOME=~"}})
+			_, err := runLaunchHook(t, sessionStartPayload("startup"))
+			require.NoError(t, err)
+			link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
+			if tc.wantLink {
+				require.NoError(t, err)
+				assert.Equal(t, claudeLauncherID, link.ParentSessionID)
+			} else {
+				require.ErrorIs(t, err, sql.ErrNoRows)
+			}
 		})
 	}
 }

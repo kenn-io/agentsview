@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 	"go.kenn.io/kit/agenthook"
 
+	"go.kenn.io/agentsview/internal/codexcloud"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/gittrailer"
 	"go.kenn.io/agentsview/internal/parser"
@@ -43,7 +44,6 @@ type launchProcess struct {
 	PPID    int32
 	Cmdline func(context.Context) ([]string, error)
 	Environ func(context.Context) ([]string, error)
-	Cwd     func(context.Context) (string, error)
 }
 
 var (
@@ -66,51 +66,7 @@ func lookupGopsutilProcess(ctx context.Context, pid int32) (launchProcess, error
 	if err != nil {
 		return launchProcess{}, err
 	}
-	return launchProcess{Name: name, PPID: ppid, Cmdline: p.CmdlineSliceWithContext, Environ: p.EnvironWithContext, Cwd: p.CwdWithContext}, nil
-}
-
-// codexSQLiteOverride reads the last CLI override, using Codex's TOML-or-string parsing.
-func codexSQLiteOverride(ctx context.Context, p launchProcess) (string, error) {
-	if p.Cmdline == nil {
-		return "", nil
-	}
-	args, err := p.Cmdline(ctx)
-	if err != nil {
-		return "", err
-	}
-	var home string
-	for i := 1; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--" {
-			break
-		}
-		var override string
-		switch {
-		case arg == "-c" || arg == "--config":
-			if i+1 == len(args) {
-				break
-			}
-			i++
-			override = args[i]
-		case strings.HasPrefix(arg, "--config="):
-			override = strings.TrimPrefix(arg, "--config=")
-		case strings.HasPrefix(arg, "-c") && len(arg) > 2:
-			override = strings.TrimPrefix(strings.TrimPrefix(arg, "-c"), "=")
-		}
-		key, value, ok := strings.Cut(override, "=")
-		if !ok || strings.TrimSpace(key) != "sqlite_home" {
-			continue
-		}
-		var parsed struct{ Value any }
-		if _, err := toml.Decode("value = "+value, &parsed); err != nil {
-			home = value
-		} else if path, ok := parsed.Value.(string); ok {
-			home = path
-		} else {
-			return "", fmt.Errorf("sqlite_home override must be a string")
-		}
-	}
-	return home, nil
+	return launchProcess{Name: name, PPID: ppid, Cmdline: p.CmdlineSliceWithContext, Environ: p.EnvironWithContext}, nil
 }
 
 // processAgent names the agent a process runs, or "" for any other process.
@@ -226,7 +182,7 @@ func launcherSessionID(env map[string]string, launcher string) (string, error) {
 
 func launcherArchiveID(ctx context.Context, home, agent, native string) (string, error) {
 	if agent == "codex" {
-		key, err := codexIndexedPage(ctx, home, native)
+		key, err := parser.CodexIndexedSessionKey(ctx, home, native)
 		if err != nil || key == "" {
 			return "", err
 		}
@@ -235,25 +191,13 @@ func launcherArchiveID(ctx context.Context, home, agent, native string) (string,
 	return native, nil
 }
 
-// storedSessionID validates a native ID and adds the agent's archive prefix.
+// storedSessionID adds the agent's archive prefix to a native ID.
 func storedSessionID(agent, id string) (string, error) {
-	session, err := gittrailer.Discover(func(name string) string {
-		switch name {
-		case "AGENTSVIEW_SESSION_AGENT":
-			return agent
-		case "AGENTSVIEW_SESSION_ID":
-			return id
-		}
-		return ""
-	})
-	if err != nil {
-		return "", err
-	}
 	def, ok := parser.AgentByType(parser.AgentType(agent))
 	if !ok {
 		return "", fmt.Errorf("unknown agent %q", agent)
 	}
-	return def.IDPrefix + session.ID, nil
+	return def.IDPrefix + id, nil
 }
 
 type sessionStartCapture struct {
@@ -327,14 +271,17 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 			launcherEnv = values
 		}
 	}
-	home := launcherEnv["CODEX_HOME"]
-	if home == "" {
-		if userHome, err := os.UserHomeDir(); err == nil {
-			home = filepath.Join(userHome, ".codex")
-		}
+	userHome, _ := os.UserHomeDir()
+	homes := codexcloud.DiscoverHomes(func(name string) string { return launcherEnv[name] }, userHome, nil)
+	var home string
+	if len(homes) > 0 {
+		home = homes[0]
 	}
-	sqliteHome := launcherEnv["CODEX_SQLITE_HOME"]
-	if launcher == "codex" && home != "" {
+	if launcher == "codex" {
+		if home == "" {
+			return nil
+		}
+		sqliteHome := launcherEnv["CODEX_SQLITE_HOME"]
 		var config struct {
 			SQLiteHome string `toml:"sqlite_home"`
 		}
@@ -342,42 +289,17 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 			return err
 		}
 		if config.SQLiteHome != "" {
-			sqliteHome, err = pathutil.ExpandHome(config.SQLiteHome)
-			if err != nil {
+			// Codex resolves a relative config path against its home.
+			if sqliteHome, err = pathutil.ExpandHome(config.SQLiteHome); err != nil {
 				return err
 			}
 			if !filepath.IsAbs(sqliteHome) {
 				sqliteHome = filepath.Join(home, sqliteHome)
 			}
 		}
-		override, err := codexSQLiteOverride(ctx, launcherProcess)
-		if err != nil {
-			return err
+		if sqliteHome != "" {
+			home = sqliteHome
 		}
-		if override != "" {
-			sqliteHome = override
-		}
-	}
-	if sqliteHome != "" {
-		sqliteHome, err = pathutil.ExpandHome(sqliteHome)
-		if err != nil {
-			return err
-		}
-		if !filepath.IsAbs(sqliteHome) {
-			process := launcherProcess
-			if process.Cwd == nil {
-				process = child
-			}
-			if process.Cwd == nil {
-				return nil
-			}
-			cwd, err := process.Cwd(ctx)
-			if err != nil {
-				return err
-			}
-			sqliteHome = filepath.Join(cwd, sqliteHome)
-		}
-		home = sqliteHome
 	}
 
 	data, err := readHookInput(ctx, cmd.InOrStdin())
@@ -448,17 +370,4 @@ func writeLaunchParent(ctx context.Context, cmd *cobra.Command, childID, parentI
 		return fmt.Errorf("recording launcher: %w", err)
 	}
 	return nil
-}
-
-// codexIndexedPage reads the current rollout from Codex's thread index.
-func codexIndexedPage(ctx context.Context, home, thread string) (string, error) {
-	if home == "" {
-		if userHome, err := os.UserHomeDir(); err == nil {
-			home = filepath.Join(userHome, ".codex")
-		}
-	}
-	if home == "" {
-		return "", nil
-	}
-	return parser.CodexIndexedSessionKey(ctx, home, thread)
 }

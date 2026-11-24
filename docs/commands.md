@@ -2501,8 +2501,8 @@ shows the MCP commands to run by hand, and `--mcp=false` installs or checks
 the skill without inspecting or changing the MCP entry.
 
 The SessionStart hook refreshes memory and links runs to their launching
-session. Codex launchers support `sqlite_home` in `config.toml` or a `-c`
-override, and `CODEX_SQLITE_HOME`.
+session. Codex launchers support `sqlite_home` in `config.toml` and
+`CODEX_SQLITE_HOME`.
 ClickHouse sidebars may also show native automated subagents under a parent
 because the mirror does not store launcher provenance. Codex
 requires you to trust a new hook in `/hooks`.
