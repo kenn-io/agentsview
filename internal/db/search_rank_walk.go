@@ -3,8 +3,35 @@ package db
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 )
+
+var searchTierMatches = 1 << 16
+
+// searchTierFloor returns the last row in the first tier when another match
+// exists. Smaller result sets retain the original global ordering.
+func searchTierFloor(ctx context.Context, q messageRowsQuerier, table, matchSQL string, args []any) (int64, error) {
+	query := strings.ReplaceAll(`SELECT rowid FROM messages_fts WHERE `+matchSQL+` ORDER BY rowid DESC LIMIT 2 OFFSET ?`, "messages_fts", table)
+	rows, err := q.QueryContext(ctx, query, append(append([]any{}, args...), searchTierMatches-1)...)
+	if err != nil {
+		return 0, fmt.Errorf("finding search tier: %w", err)
+	}
+	defer rows.Close()
+	floor := int64(math.MinInt64)
+	if rows.Next() {
+		if err := rows.Scan(&floor); err != nil {
+			return 0, fmt.Errorf("scanning search tier: %w", err)
+		}
+		if !rows.Next() {
+			floor = math.MinInt64
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("reading search tier: %w", err)
+	}
+	return floor, nil
+}
 
 // searchRankWalkMaxSessions bounds the sessions a walk binds into the page
 // query, four parameters each, well under SQLite's 32,766-parameter limit.
@@ -47,14 +74,11 @@ type searchRankWalk struct {
 // walkSearchRanks reads the eligible message matches in rank order and
 // stops once it has seen need sessions and every match tied with the rank
 // at which it saw the last of them. Every session whose best match ranks
-// at or below that boundary then has its best match among the rows read,
-// and every other session ranks after them, so the first need sessions of
-// the full ordering are among the walk's sessions. FTS5 sorts all matches
-// by rank before the first row, but joins each match to its message and
-// session only as the walk pulls it. The walk returns nil when it reaches
-// more sessions than the page query can bind or reads too many matches.
+// at or below that boundary then has its best match among the rows read.
+// The floor limits a broad search to its first tier. The walk returns nil
+// when that tier cannot fill the page or it exceeds its session or row bounds.
 func walkSearchRanks(
-	ctx context.Context, q messageRowsQuerier, table, innerWhereSQL string, ftsArgs []any, need int,
+	ctx context.Context, q messageRowsQuerier, table, innerWhereSQL string, ftsArgs []any, need int, floor int64,
 ) (*searchRankWalk, error) {
 	if need > searchRankWalkMaxSessions {
 		return nil, nil
@@ -63,9 +87,9 @@ func walkSearchRanks(
 		FROM messages_fts
 		JOIN messages m2 ON messages_fts.rowid = m2.id
 		JOIN sessions s2 ON m2.session_id = s2.id
-		WHERE `+innerWhereSQL+`
+		WHERE `+innerWhereSQL+` AND messages_fts.rowid >= ?
 		ORDER BY rank`, "messages_fts", table)
-	rows, err := q.QueryContext(ctx, query, ftsArgs...)
+	rows, err := q.QueryContext(ctx, query, append(append([]any{}, ftsArgs...), floor)...)
 	if err != nil {
 		return nil, fmt.Errorf("ranking search matches: %w", err)
 	}
@@ -75,7 +99,7 @@ func walkSearchRanks(
 	var boundary float64
 	maxRows := need * searchRankWalkRowsPerSession
 	for read := 0; rows.Next(); read++ {
-		if read == maxRows {
+		if floor == math.MinInt64 && read == maxRows {
 			return nil, nil
 		}
 		var m searchBestMatch
@@ -104,6 +128,12 @@ func walkSearchRanks(
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("reading ranked search matches: %w", err)
+	}
+	if floor != math.MinInt64 {
+		if len(walk.best) < need {
+			return nil, nil
+		}
+		walk.complete = false
 	}
 	return walk, nil
 }
