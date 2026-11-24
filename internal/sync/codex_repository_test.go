@@ -214,7 +214,7 @@ func TestCodexIncrementalAppendKeepsRecordedRepository(t *testing.T) {
 	}
 }
 
-func TestCodexLabeledRunKeepsProjectThroughResync(t *testing.T) {
+func TestCodexLabeledRunResyncAndExplicitWorktreeMappingWins(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()
 	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
@@ -247,6 +247,15 @@ func TestCodexLabeledRunKeepsProjectThroughResync(t *testing.T) {
 	session, err = database.GetSessionFull(t.Context(), "codex:"+id)
 	require.NoError(t, err)
 	assert.Equal(t, "experiment/case", session.Project)
+	_, err = database.CreateWorktreeProjectMapping(t.Context(), db.WorktreeProjectMapping{
+		Machine: "local", PathPrefix: cwd, Layout: db.WorktreeMappingLayoutExplicit,
+		Project: "mapped_project", Enabled: true,
+	})
+	require.NoError(t, err)
+	require.Zero(t, engine.ResyncAll(t.Context(), nil).Failed)
+	session, err = database.GetSessionFull(t.Context(), "codex:"+id)
+	require.NoError(t, err)
+	assert.Equal(t, "mapped_project", session.Project)
 }
 
 func TestCodexLabeledRunIndexRename(t *testing.T) {
