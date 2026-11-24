@@ -761,7 +761,7 @@ func (db *DB) upsertProjectIdentityObservationWithSnapshotProject(
 	}
 	defer func() { _ = tx.Rollback() }()
 	if err := upsertProjectIdentityObservationWithSnapshotProjectTxContext(
-		ctx, tx, obs, snapshotProject, false, allowSnapshotProjectCorrection,
+		ctx, tx, obs, snapshotProject, false, allowSnapshotProjectCorrection, !db.usageOnlyStorage(),
 	); err != nil {
 		return err
 	}
@@ -865,7 +865,7 @@ func (db *DB) upsertSessionWithProjectIdentity(ctx context.Context,
 	}
 	if obs.Project != "" {
 		if err := upsertProjectIdentityObservationWithSnapshotProjectTxContext(
-			ctx, tx, obs, snapshotProject, result.inserted, true,
+			ctx, tx, obs, snapshotProject, result.inserted, true, !db.usageOnlyStorage(),
 		); err != nil {
 			return sessionUpsertResult{}, err
 		}
@@ -889,13 +889,45 @@ func upsertProjectIdentityObservationTxContext(
 	ctx context.Context,
 	tx *sql.Tx,
 	obs export.ProjectIdentityObservation,
+	refreshLinks bool,
 ) error {
 	return upsertProjectIdentityObservationWithSnapshotProjectTxContext(
-		ctx, tx, obs, obs.Project, false, false,
+		ctx, tx, obs, obs.Project, false, false, refreshLinks,
 	)
 }
 
 func upsertProjectIdentityObservationWithSnapshotProjectTxContext(
+	ctx context.Context,
+	tx *sql.Tx,
+	obs export.ProjectIdentityObservation,
+	snapshotProject string,
+	sessionInserted bool,
+	allowSnapshotProjectCorrection bool,
+	refreshLinks bool,
+) error {
+	refreshLinks = refreshLinks && !sessionInserted && obs.SessionID != ""
+	var previous string
+	if refreshLinks {
+		if err := tx.QueryRowContext(ctx, `SELECT `+checkoutRemoteSQL, obs.SessionID).Scan(&previous); err != nil {
+			return err
+		}
+	}
+	if err := writeProjectIdentityObservationTx(ctx, tx, obs, snapshotProject, sessionInserted, allowSnapshotProjectCorrection); err != nil {
+		return err
+	}
+	if refreshLinks {
+		var current string
+		if err := tx.QueryRowContext(ctx, `SELECT `+checkoutRemoteSQL, obs.SessionID).Scan(&current); err != nil {
+			return err
+		}
+		if previous != current {
+			return refreshSessionPromptPRLinksTx(ctx, contextTransaction{ctx: ctx, tx: tx}, obs.SessionID)
+		}
+	}
+	return nil
+}
+
+func writeProjectIdentityObservationTx(
 	ctx context.Context,
 	tx *sql.Tx,
 	obs export.ProjectIdentityObservation,

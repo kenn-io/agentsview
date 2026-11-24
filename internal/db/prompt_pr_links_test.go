@@ -131,6 +131,8 @@ func TestPromptPRLinksUsagePolicyWithRetainedHistory(t *testing.T) {
 	require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Role: "user", Content: "https://github.com/o/r/pull/42"}}))
 	d.SetArchiveContent(config.ArchiveContentUsage)
 	require.NoError(t, d.UpsertSession(t.Context(), s))
+	obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: "/work/repo", ObservedAt: time.Now().UTC()}, "https://github.com/example/repo.git")
+	require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), obs))
 	got, err := d.GetSession(t.Context(), s.ID)
 	require.NoError(t, err)
 	assert.Empty(t, got.PRLinks)
