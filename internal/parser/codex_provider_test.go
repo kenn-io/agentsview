@@ -2462,33 +2462,29 @@ func TestCodexLabeledRunOverlappingRootsAndLookup(t *testing.T) {
 	}
 }
 
-func TestCodexLabeledAndOrdinaryNewestCopy(t *testing.T) {
+func TestCodexLabeledCopyBeatsNewerOrdinary(t *testing.T) {
 	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
 	root := t.TempDir()
 	ordinary := filepath.Join(root, "ordinary")
 	logs := filepath.Join(root, "logs")
 	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", tsEarly)
 	content := testjsonl.JoinJSONL(meta, testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1))
-	paths := []string{
-		writeCodexProviderSessionContent(t, ordinary, id, content),
-		writeCodexProviderSessionContent(t, filepath.Join(logs, "team", "case", ".codex-run-v1-abc", "sessions"), id, content),
-	}
+	stored := writeCodexProviderSessionContent(t, ordinary, id, content)
+	labeled := writeCodexProviderSessionContent(t, filepath.Join(logs, "team", "case", ".codex-run-v1-abc", "sessions"), id, content)
+	newer := time.Now().Add(time.Hour)
+	require.NoError(t, os.Chtimes(stored, newer, newer))
 	for _, roots := range [][]string{{ordinary, logs}, {logs, ordinary}} {
 		provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: roots})
 		require.True(t, ok)
-		for i, path := range paths {
-			newer := time.Now().Add(time.Duration(i+1) * time.Hour)
-			older := newer.Add(-time.Hour)
-			require.NoError(t, os.Chtimes(paths[1-i], older, older))
-			require.NoError(t, os.Chtimes(path, newer, newer))
-			sources, err := provider.Discover(t.Context())
-			require.NoError(t, err)
-			require.Len(t, sources, 1)
-			assert.Equal(t, paths[1], sources[0].DisplayPath)
-			found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: id})
+		sources, err := provider.Discover(t.Context())
+		require.NoError(t, err)
+		require.Len(t, sources, 1)
+		assert.Equal(t, labeled, sources[0].DisplayPath)
+		for _, req := range []FindSourceRequest{{RawSessionID: id}, {RawSessionID: id, StoredFilePath: stored, RequireFreshSource: true, PreferStoredSource: true}} {
+			found, ok, err := provider.FindSource(t.Context(), req)
 			require.NoError(t, err)
 			require.True(t, ok)
-			assert.Equal(t, paths[1], found.DisplayPath)
+			assert.Equal(t, labeled, found.DisplayPath)
 		}
 	}
 }
