@@ -2411,3 +2411,20 @@ func TestCodexLabeledRunDiscoveryAndParse(t *testing.T) {
 	assert.Equal(t, "experiment/case", outcome.Results[0].Result.Session.Project)
 	assert.Empty(t, outcome.Results[0].Result.Session.GitRemote)
 }
+
+func TestCodexRootLabeledRunDiscoveryAndParse(t *testing.T) {
+	root := t.TempDir()
+	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
+	home := filepath.Join(root, ".codex-run-v1-abc")
+	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", tsEarly)
+	writeCodexProviderSessionContent(t, filepath.Join(home, "sessions"), id, testjsonl.JoinJSONL(meta, testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1)))
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	assert.Equal(t, ".", outcome.Results[0].Result.Session.Project)
+}

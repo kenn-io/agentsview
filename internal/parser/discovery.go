@@ -878,10 +878,10 @@ func CodexSourceLabel(root, path string) string {
 	rel, _ := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
 	parts := strings.Split(rel, string(filepath.Separator))
 	n := len(parts)
-	if n <= 6 || !strings.HasPrefix(parts[n-6], ".codex-run-v1-") || parts[n-5] != "sessions" {
+	if n < 6 || !strings.HasPrefix(parts[n-6], ".codex-run-v1-") || parts[n-5] != "sessions" {
 		return ""
 	}
-	return filepath.ToSlash(filepath.Join(parts[:n-6]...))
+	return filepath.ToSlash(filepath.Clean(filepath.Join(parts[:n-6]...)))
 }
 
 // walkCodexDayDirs traverses a Codex sessions directory with
