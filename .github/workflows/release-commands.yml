@@ -1,5 +1,10 @@
 name: Released commands
 
+env:
+  # Reusable workflows do not inherit the caller's environment variables.
+  # Fall back to the module source when the Go proxy fails, including HTTP/2 errors.
+  GOPROXY: "https://proxy.golang.org|direct"
+
 on:
   workflow_call:
   release:
