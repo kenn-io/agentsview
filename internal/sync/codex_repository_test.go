@@ -2,7 +2,6 @@ package sync
 
 import (
 	"database/sql"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -246,109 +245,4 @@ func TestCodexLabeledRunKeepsProjectThroughResyncAndMapping(t *testing.T) {
 	session, err = database.GetSessionFull(t.Context(), "codex:"+id)
 	require.NoError(t, err)
 	assert.Equal(t, "mapped", session.Project)
-}
-
-func TestCodexLabeledLegacyReviewAndIndexRefresh(t *testing.T) {
-	database := openTestDB(t)
-	root := t.TempDir()
-	id := "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
-	home := filepath.Join(root, "experiment", "case", ".codex-run-v1-abc")
-	source := filepath.Join(home, "sessions", "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
-	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z")
-	dbtest.WriteTestFile(t, source, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
-	index := filepath.Join(home, parser.CodexSessionIndexFilename)
-	dbtest.WriteTestFile(t, index, []byte(`{"id":"`+id+`","thread_name":"Original"}`+"\n"))
-	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
-	t.Cleanup(engine.Close)
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	updated := make(chan error, 4)
-	watcher, err := NewWatcherWithInterval(0, 0, func(batch WatchBatch) {
-		if len(batch.Paths) > 0 {
-			err := engine.SyncPathsContext(t.Context(), batch.Paths)
-			select {
-			case updated <- err:
-			default:
-			}
-		}
-	}, nil)
-	require.NoError(t, err)
-	_, _, err = watcher.WatchRecursive(root)
-	require.NoError(t, err)
-	watcher.Start()
-	t.Cleanup(watcher.Stop)
-	require.NoError(t, os.WriteFile(index, []byte(`{"id":"`+id+`","thread_name":"Updated"}`+"\n"), 0o644))
-	timeout := time.After(watcherTestTimeout)
-	for {
-		select {
-		case err := <-updated:
-			require.NoError(t, err)
-			session, err := database.GetSessionFull(t.Context(), "codex:"+id)
-			require.NoError(t, err)
-			if session.SessionName != nil && *session.SessionName == "Updated" {
-				return
-			}
-		case <-timeout:
-			require.FailNow(t, "watcher did not refresh the index title")
-		}
-	}
-}
-
-func TestCodexLabeledProjectsRefreshWhenRootChanges(t *testing.T) {
-	for _, restart := range []bool{false, true} {
-		t.Run(fmt.Sprintf("restart_%t", restart), func(t *testing.T) {
-			database := openTestDB(t)
-			root := t.TempDir()
-			var oldRoots []string
-			ids := []string{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"}
-			_, err := database.CreateWorktreeProjectMapping(t.Context(), db.WorktreeProjectMapping{Machine: "local", PathPrefix: "/work/mapped", Project: "mapped", Enabled: true})
-			require.NoError(t, err)
-			for i, id := range ids {
-				sessions := filepath.Join(root, "experiment", fmt.Sprintf("case%d", i), ".codex-run-v1-a", "sessions")
-				oldRoots = append(oldRoots, sessions)
-				path := filepath.Join(sessions, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
-				cwd := "/work/project"
-				if i == 2 {
-					cwd = "/work/mapped"
-				}
-				meta := testjsonl.CodexSessionMetaJSON(id, cwd, "codex_exec", "2026-10-08T12:00:00Z")
-				dbtest.WriteTestFile(t, path, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
-			}
-			config := EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: oldRoots}}
-			engine := NewEngine(t.Context(), database, config)
-			require.Equal(t, len(ids), engine.SyncAll(t.Context(), nil).Synced)
-			for i, id := range ids {
-				session, err := database.GetSessionFull(t.Context(), "codex:"+id)
-				require.NoError(t, err)
-				require.NotNil(t, session)
-				expected := "project"
-				if i == 2 {
-					expected = "mapped"
-				}
-				assert.Equal(t, expected, session.Project)
-			}
-			if restart {
-				engine.Close()
-				config.AgentDirs = map[parser.AgentType][]string{parser.AgentCodex: {root}}
-				engine = NewEngine(t.Context(), database, config)
-			} else {
-				engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
-			}
-			t.Cleanup(engine.Close)
-			if restart {
-				engine.SyncAllSince(t.Context(), time.Now().Add(time.Hour), nil)
-			} else {
-				engine.SyncAll(t.Context(), nil)
-			}
-			for i, id := range ids {
-				session, err := database.GetSessionFull(t.Context(), "codex:"+id)
-				require.NoError(t, err)
-				require.NotNil(t, session)
-				expected := fmt.Sprintf("experiment/case%d", i)
-				if i == 2 {
-					expected = "mapped"
-				}
-				assert.Equal(t, expected, session.Project)
-			}
-		})
-	}
 }

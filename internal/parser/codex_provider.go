@@ -389,48 +389,35 @@ func (p *codexProvider) FindSource(
 	return p.sources.FindSource(ctx, req)
 }
 
-// AllSourcePathsForUUIDs returns on-disk Codex transcript paths under the
-// provider's roots for the given session UUIDs, without the
+// AllSourcePathsForUUID returns every on-disk Codex transcript path under the
+// provider's roots whose filename carries the given session UUID, without the
 // live-over-archived deduplication Discover applies. A UUID can exist as both a
 // live dated copy and a flat archived copy under the same root; the sync engine
 // uses the full set so an mtime cutoff can judge each copy independently. A
 // compressed copy beside its plain file is left out: the plain file is the one
 // Codex appends to, so no cutoff may choose the compressed one over it.
-func (p *codexProvider) AllSourcePathsForUUIDs(ctx context.Context, uuids map[string]struct{}) map[string][]string {
-	if len(uuids) == 0 {
+func (p *codexProvider) AllSourcePathsForUUID(uuid string) []string {
+	if uuid == "" {
 		return nil
 	}
 	seen := make(map[string]struct{})
-	paths := make(map[string][]string)
+	var paths []string
 	for _, root := range p.sources.roots {
-		if isS3URI(root) {
-			continue
-		}
-		collect := func(sessions string) {
-			for _, path := range p.sources.discoverSessionPaths(ctx, sessions) {
-				if ctx.Err() != nil {
-					return
-				}
-				uuid := CodexSessionUUIDFromFilename(filepath.Base(path))
-				if _, ok := uuids[uuid]; !ok {
-					continue
-				}
-				if _, _, ok := CodexSessionPathInfo(root, path); !ok {
-					continue
-				}
-				clean := filepath.Clean(path)
-				if _, ok := seen[clean]; ok {
-					continue
-				}
-				if isCompressedCodexRolloutPath(clean) && IsRegularFile(codexPlainRolloutPath(clean)) {
-					continue
-				}
-				seen[clean] = struct{}{}
-				paths[uuid] = append(paths[uuid], path)
+		for _, path := range p.sources.discoverSessionPaths(root) {
+			if CodexSessionUUIDFromFilename(filepath.Base(path)) != uuid {
+				continue
 			}
+			clean := filepath.Clean(path)
+			if _, ok := seen[clean]; ok {
+				continue
+			}
+			if isCompressedCodexRolloutPath(clean) &&
+				IsRegularFile(codexPlainRolloutPath(clean)) {
+				continue
+			}
+			seen[clean] = struct{}{}
+			paths = append(paths, path)
 		}
-		collect(root)
-		_ = p.sources.walkLabeledHomes(ctx, root, root, func(home string) { collect(filepath.Join(home, "sessions")) })
 	}
 	return paths
 }
@@ -463,20 +450,6 @@ func (p *codexProvider) Fingerprint(
 	return p.sources.Fingerprint(ctx, source)
 }
 
-func (p *codexProvider) parentRoots(path string) []string {
-	roots := slices.Clone(p.sources.roots)
-	for _, root := range p.sources.roots {
-		if CodexSourceLabel(root, path) != "" {
-			sessions := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(path))))
-			if !slices.Contains(roots, sessions) {
-				roots = append(roots, sessions)
-			}
-			break
-		}
-	}
-	return roots
-}
-
 func (p *codexProvider) PlanRawCapture(
 	ctx context.Context,
 	source SourceRef,
@@ -494,7 +467,7 @@ func (p *codexProvider) PlanRawCapture(
 	}
 	captureRoot := filepath.Clean(src.Root)
 	indexPath := codexSessionIndexPath(src.Path)
-	if indexPath != "" && CodexSourceLabel(src.Root, src.Path) == "" {
+	if indexPath != "" {
 		// The provider reads this named sibling as session metadata, so raw
 		// capture widens only far enough to preserve the same parse inputs.
 		captureRoot = filepath.Dir(indexPath)
@@ -519,7 +492,7 @@ func (p *codexProvider) PlanRawCapture(
 			)
 		}
 		seen := map[string]bool{resolvedSource: true}
-		for _, root := range p.parentRoots(src.Path) {
+		for _, root := range p.sources.roots {
 			if err := ctx.Err(); err != nil {
 				return RawCapturePlan{}, err
 			}
@@ -574,7 +547,7 @@ func (p *codexProvider) PlanRawCapture(
 			if i > 0 {
 				logical = fmt.Sprintf("alias-homes/%d/%s", i, CodexSessionIndexFilename)
 			}
-			if (p.Config.StableSourceSnapshots || CodexSourceLabel(src.Root, src.Path) != "") && rawCapturePathWithin(captureRoot, candidate) {
+			if p.Config.StableSourceSnapshots && rawCapturePathWithin(captureRoot, candidate) {
 				// Materialized aliases already have custody paths. Keep their
 				// original ordinals even when missing indexes left gaps.
 				rel, err := filepath.Rel(captureRoot, candidate)
@@ -1092,20 +1065,14 @@ func (s codexSourceSet) discover(
 // sessionsDir, covering both the standard year/month/day layout and a flat
 // archived directory. Paths are returned sorted for deterministic discovery,
 // matching the behavior the package-level entrypoint provided before the fold.
-func (s codexSourceSet) discoverSessionPaths(ctx context.Context, sessionsDir string) []string {
+func (s codexSourceSet) discoverSessionPaths(sessionsDir string) []string {
 	var paths []string
-	if ctx.Err() != nil {
-		return nil
-	}
 
 	entries, err := os.ReadDir(sessionsDir)
 	if err != nil {
 		return nil
 	}
 	for _, entry := range entries {
-		if ctx.Err() != nil {
-			return paths
-		}
 		if entry.IsDir() {
 			continue
 		}
@@ -1116,9 +1083,6 @@ func (s codexSourceSet) discoverSessionPaths(ctx context.Context, sessionsDir st
 	}
 
 	walkCodexDayDirs(sessionsDir, func(dayPath string) bool {
-		if ctx.Err() != nil {
-			return false
-		}
 		dayEntries, err := os.ReadDir(dayPath)
 		if err != nil {
 			return true
@@ -1421,51 +1385,7 @@ func (s codexSourceSet) FindSource(
 			return s.canonicalSource(ctx, source)
 		}
 	}
-	var best SourceRef
-	var walkErr error
-	found := false
-	for _, root := range s.roots {
-		walkErr = errors.Join(walkErr, s.findLabeledSource(
-			ctx, root, root, req.RawSessionID, func(source SourceRef) {
-				if !found || preferCodexSource(source, best) {
-					best, found = source, true
-				}
-			}))
-		if err := ctx.Err(); err != nil {
-			return SourceRef{}, false, err
-		}
-	}
-	return best, found, walkErr
-}
-
-// findLabeledSource searches label directories and reads only sessions within each marked home.
-func (s codexSourceSet) findLabeledSource(ctx context.Context, root, dir, id string, yield func(SourceRef)) error {
-	if isS3URI(root) {
-		return nil
-	}
-	return s.walkLabeledHomes(ctx, root, dir, func(home string) {
-		if transcript := s.findSourceFile(filepath.Join(home, "sessions"), id); transcript != "" {
-			if source, ok := s.sourceRef(root, transcript, true); ok {
-				yield(source)
-			}
-		}
-	})
-}
-
-func (s codexSourceSet) walkLabeledHomes(ctx context.Context, root, dir string, yield func(string)) (walkErr error) {
-	err := streamDirectoryEntries(ctx, dir, func(entry os.DirEntry) error {
-		if !entry.IsDir() {
-			return nil
-		}
-		path := filepath.Join(dir, entry.Name())
-		if LabeledCodexHome(root, path) {
-			yield(path)
-			return nil
-		}
-		walkErr = errors.Join(walkErr, s.walkLabeledHomes(ctx, root, path, yield))
-		return ctx.Err()
-	})
-	return errors.Join(walkErr, err)
+	return SourceRef{}, false, nil
 }
 
 func (s codexSourceSet) Fingerprint(
@@ -1654,8 +1574,7 @@ func (s codexSourceSet) canonicalSource(
 	if !ok || src.UUID == "" {
 		return source, true, nil
 	}
-	var best SourceRef
-	foundExisting := false
+	best := source
 	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
 			return SourceRef{}, false, err
@@ -1668,13 +1587,9 @@ func (s codexSourceSet) canonicalSource(
 		if !ok {
 			continue
 		}
-		if !foundExisting || preferCodexSource(candidate, best) {
+		if preferCodexSource(candidate, best) {
 			best = candidate
-			foundExisting = true
 		}
-	}
-	if !foundExisting {
-		return source, true, nil
 	}
 	return best, true, nil
 }

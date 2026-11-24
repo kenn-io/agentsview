@@ -1,9 +1,0 @@
-{
-  "version": 185,
-  "digest": "e1978e15900c38e90b288243b87fe63dcd8d5230416357023f7195134a7f2b42",
-  "providers": {
-    "codex": {
-      "experiment/case/.codex-run-v1-fixture/sessions/2026/01/01/rollout-2026-01-01T10-00-00-55555555-5555-4555-8555-555555555555.jsonl": "35da158ca3a3b554562a5837f30b592efa39ad201d810e9a1dd3e46963ec21be"
-    }
-  }
-}

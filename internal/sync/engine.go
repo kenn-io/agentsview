@@ -6434,7 +6434,7 @@ func (e *Engine) syncAllLocked(
 		// sees each copy's real mtime; the quick-sync dedupe below then keeps
 		// the newest surviving duplicate before falling back to normal layout
 		// preference.
-		all = e.expandCodexProviderDuplicates(ctx, all, scope)
+		all = e.expandCodexProviderDuplicates(all, scope)
 		all = e.filterQuickSyncFiles(ctx, all, since)
 	}
 
@@ -6793,10 +6793,6 @@ func (e *Engine) filterFilesByMtime(
 		var sourceCwd sourceCwdDecision
 		sourceCwdParticipating := false
 		if f.ProviderSource != nil {
-			if e.codexLabelNeedsRefresh(ctx, *f.ProviderSource, e.machineForFile(f)) {
-				out = append(out, f)
-				continue
-			}
 			sourceCwd = e.sourceCwdDecision(ctx, *f.ProviderSource)
 			sourceCwdParticipating = sourceCwdParticipates(
 				sourceCwd.resolution,

@@ -13,32 +13,6 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-func (e *Engine) codexLabelNeedsRefresh(ctx context.Context, source parser.SourceRef, machine string) bool {
-	if source.Provider != parser.AgentCodex {
-		return false
-	}
-	path := providerDiscoveredPath(source)
-	label := ""
-	for _, root := range e.sources().agentDirs[parser.AgentCodex] {
-		if label = parser.CodexSourceLabel(root, path); label != "" {
-			break
-		}
-	}
-	if label == "" {
-		return false
-	}
-	lookupPath := e.sourceCwdLookupPath(source)
-	project, ok := e.db.GetProjectByAgentPath(ctx, lookupPath, string(parser.AgentCodex))
-	if !ok || project == label {
-		return false
-	}
-	cwd, _ := e.db.GetCwdByAgentPath(ctx, lookupPath, string(parser.AgentCodex))
-	if mapped, ok := e.loadWorktreeProjectResolverContext(ctx)(machine, cwd, label); ok {
-		label = mapped
-	}
-	return project != label
-}
-
 // shouldSkipCodexFingerprint reproduces the legacy shouldSkipCodex decision in
 // terms of a provider SourceFingerprint. For Codex, fingerprint MTimeNS folds
 // in session_index.jsonl via CodexEffectiveMtime; TraeX uses the transcript
@@ -232,8 +206,6 @@ func (e *Engine) classifyCodexIndexPath(ctx context.Context,
 		}
 		if slices.Contains(e.codexMetadata().IndexFiles(agDir), path) {
 			sessionRoots = append(sessionRoots, agDir)
-		} else if parser.LabeledCodexHome(agDir, filepath.Dir(path)) {
-			sessionRoots = append(sessionRoots, filepath.Join(filepath.Dir(path), "sessions"))
 		}
 	}
 	if len(sessionRoots) == 0 {
@@ -496,23 +468,9 @@ func preferNewestCodexDiscoveredFile(
 // twice. Each agent is expanded against its own roots and re-added under its own
 // identity: a fork's UUID must not be resolved through the Codex provider.
 func (e *Engine) expandCodexProviderDuplicates(
-	ctx context.Context, files []parser.DiscoveredFile, scope *rootSyncScope,
+	files []parser.DiscoveredFile, scope *rootSyncScope,
 ) []parser.DiscoveredFile {
-	pathers := make(map[parser.AgentType]map[string][]string)
-	ids := make(map[parser.AgentType]map[string]struct{})
-	for _, f := range files {
-		if !isCodexFormatAgent(f.Agent) {
-			continue
-		}
-		uuid := parser.CodexSessionUUIDFromFilename(filepath.Base(f.Path))
-		if uuid == "" {
-			continue
-		}
-		if ids[f.Agent] == nil {
-			ids[f.Agent] = make(map[string]struct{})
-		}
-		ids[f.Agent][uuid] = struct{}{}
-	}
+	pathers := make(map[parser.AgentType]func(string) []string)
 	seen := make(map[string]struct{}, len(files))
 	for _, f := range files {
 		seen[string(f.Agent)+"\x00"+filepath.Clean(f.Path)] = struct{}{}
@@ -524,9 +482,7 @@ func (e *Engine) expandCodexProviderDuplicates(
 		}
 		pather, resolved := pathers[f.Agent]
 		if !resolved {
-			if lister := e.codexUUIDPathLister(f.Agent, scope); lister != nil {
-				pather = lister(ctx, ids[f.Agent])
-			}
+			pather = e.codexUUIDPathLister(f.Agent, scope)
 			pathers[f.Agent] = pather
 		}
 		if pather == nil {
@@ -536,7 +492,7 @@ func (e *Engine) expandCodexProviderDuplicates(
 		if uuid == "" {
 			continue
 		}
-		for _, dup := range pather[uuid] {
+		for _, dup := range pather(uuid) {
 			key := string(f.Agent) + "\x00" + filepath.Clean(dup)
 			if _, ok := seen[key]; ok {
 				continue
@@ -562,7 +518,7 @@ func (e *Engine) expandCodexProviderDuplicates(
 // root.
 func (e *Engine) codexUUIDPathLister(
 	agent parser.AgentType, scope *rootSyncScope,
-) func(context.Context, map[string]struct{}) map[string][]string {
+) func(string) []string {
 	factory, ok := e.sources().providerFactories[agent]
 	if !ok || factory == nil {
 		return nil
@@ -583,10 +539,10 @@ func (e *Engine) codexUUIDPathLister(
 		SourceMachines: e.sources().sourceMachines[agent],
 	})
 	lister, ok := provider.(interface {
-		AllSourcePathsForUUIDs(context.Context, map[string]struct{}) map[string][]string
+		AllSourcePathsForUUID(string) []string
 	})
 	if !ok {
 		return nil
 	}
-	return lister.AllSourcePathsForUUIDs
+	return lister.AllSourcePathsForUUID
 }

@@ -870,15 +870,6 @@ func CodexSessionPathInfo(root, path string) (CodexLayout, string, bool) {
 	}
 }
 
-// LabeledCodexHome reports a marked run home beneath a configured root.
-func LabeledCodexHome(root, home string) bool {
-	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(home))
-	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return false
-	}
-	return filepath.Dir(rel) != "." && strings.HasPrefix(filepath.Base(rel), ".codex-run-v1-")
-}
-
 // CodexSourceLabel returns the label preceding a marked Codex run home.
 func CodexSourceLabel(root, path string) string {
 	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))

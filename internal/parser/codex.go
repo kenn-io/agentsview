@@ -1954,7 +1954,7 @@ func (p *codexProvider) parentTurnResolver(
 	return func(parentID string) (map[string]struct{}, bool) {
 		var paths []string
 		hasOriginal := false
-		for _, root := range p.parentRoots(childPath) {
+		for _, root := range p.sources.roots {
 			if ctx.Err() != nil {
 				return nil, false
 			}
@@ -2312,9 +2312,6 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 			if !isS3URI(root) {
 				if label := CodexSourceLabel(root, path); label != "" {
 					b.project, b.gitRemote = label, ""
-					if b.sessionKind == SessionKindNonInteractive && parentSessionID == "" {
-						b.sessionKind = SessionKindRoborev
-					}
 					break
 				}
 			}

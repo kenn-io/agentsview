@@ -706,11 +706,11 @@ func (e *Engine) processProviderFile(
 		cwdAgent = file.Agent
 	}
 	explicitForce := e.forceParseBypassesCache(file) || file.ForceFullParse
-	forceMetadataParse := cwdDecision.forceParse || e.codexLabelNeedsRefresh(ctx, source, machine)
+	forceSourceCwdParse := cwdDecision.forceParse
 	var piebaldFailure piebaldFailureLookup
 	if file.Agent == parser.AgentPiebald {
 		var found bool
-		piebaldFailure, found = e.preparePiebaldFailure(ctx, source, explicitForce || forceMetadataParse)
+		piebaldFailure, found = e.preparePiebaldFailure(ctx, source, explicitForce || forceSourceCwdParse)
 		if found {
 			if piebaldFailure.err != nil {
 				return processResult{
@@ -719,7 +719,7 @@ func (e *Engine) processProviderFile(
 			}
 			if piebaldFailure.retry {
 				file.ForceParse = true
-				forceMetadataParse = true
+				forceSourceCwdParse = true
 			}
 		}
 	}
@@ -748,7 +748,7 @@ func (e *Engine) processProviderFile(
 			return skipRes, true
 		}
 	}
-	if !forceMetadataParse && !codexForceFullParse &&
+	if !forceSourceCwdParse && !codexForceFullParse &&
 		!codexProvenUnchanged && !codexAuditDeepVerify &&
 		verifiedStateOK && verifiedFresh {
 		if e.verifiedProviderSourceFreshInDB(ctx,
@@ -815,7 +815,7 @@ func (e *Engine) processProviderFile(
 	// even when a coarse clock gives it the original's timestamps;
 	// either breaks the digest and falls through to the content-verified
 	// gates.
-	if !forceMetadataParse && !codexForceFullParse &&
+	if !forceSourceCwdParse && !codexForceFullParse &&
 		!codexProvenUnchanged && !codexAuditDeepVerify {
 		if freshMTime, fresh := e.providerSourceFreshBeforeFingerprint(
 			ctx, source, file, preParseStatHash,
@@ -835,7 +835,7 @@ func (e *Engine) processProviderFile(
 	// warm-sweep behavior while still proving appends before any full content
 	// fingerprint read. Audit mode deliberately bypasses this optimization and
 	// takes the authoritative full-parse path below.
-	if isCodexFormatAgent(file.Agent) && !codexAuditDeepVerify && !forceMetadataParse {
+	if isCodexFormatAgent(file.Agent) && !codexAuditDeepVerify {
 		cpResult, cpErr := e.codexCheckpointFingerprint(ctx, source, file)
 		if cpErr != nil {
 			log.Printf("codex checkpoint %s: %v", file.Path, cpErr)
@@ -868,7 +868,7 @@ func (e *Engine) processProviderFile(
 	// companion touch invalidated); without the stamp those rows would
 	// re-hash on every fresh process forever, since a skip never writes.
 	sourceForceReplace := false
-	if !forceMetadataParse && !codexForceFullParse &&
+	if !forceSourceCwdParse && !codexForceFullParse &&
 		!codexProvenUnchanged && !codexAuditDeepVerify {
 		if mtime, fresh, forceReplace, contentVerified := e.providerSingleSessionFresh(
 			ctx, provider, source, file,
@@ -900,7 +900,7 @@ func (e *Engine) processProviderFile(
 	// did not change, so skip before Fingerprint pays the per-session child
 	// lookup; a child-only edit this cannot see is reconciled by the next
 	// full-discovery pass, whose digest comparison still catches it.
-	if !forceMetadataParse && !codexForceFullParse &&
+	if !forceSourceCwdParse && !codexForceFullParse &&
 		!codexProvenUnchanged && !codexAuditDeepVerify {
 		if freshMtime, fresh := e.watermarkOnlySQLiteSourceFresh(ctx,
 			source, file,
@@ -931,7 +931,7 @@ func (e *Engine) processProviderFile(
 
 	// Claude keeps its existing freshness gates and uses only proven appends.
 	// As for Codex, bytes before the tail anchor are trusted as append-only.
-	if file.Agent == parser.AgentClaude && !sourceForceReplace && !forceMetadataParse {
+	if file.Agent == parser.AgentClaude && !sourceForceReplace && !forceSourceCwdParse {
 		if cpResult, err := e.codexCheckpointFingerprint(ctx, source, file); err == nil && cpResult.decision == codexCheckpointAppend {
 			fingerprint = cpResult.fingerprint
 			codexCheckpoint = cpResult.checkpoint
@@ -1030,7 +1030,7 @@ func (e *Engine) processProviderFile(
 		file, source, fingerprint, providerSemantics,
 	)
 	cacheSkip := e.shouldCacheSkip(file)
-	if cacheSkip && !forceMetadataParse &&
+	if cacheSkip && !forceSourceCwdParse &&
 		!e.forceParseBypassesCache(file) &&
 		!codexForceFullParse && !codexAuditDeepVerify {
 		e.skipMu.RLock()
@@ -1125,7 +1125,7 @@ func (e *Engine) processProviderFile(
 			}
 		}
 	}
-	if cacheSkip && !forceMetadataParse && e.shouldSkipProviderSource(ctx,
+	if cacheSkip && !forceSourceCwdParse && e.shouldSkipProviderSource(ctx,
 		file, source, fingerprint, providerSemantics,
 	) {
 		return processResult{
@@ -1148,7 +1148,7 @@ func (e *Engine) processProviderFile(
 		// The audit content-hashes the full source below and repairs only
 		// on mismatch; never tail-apply against a prefix it cannot prove.
 		incRes = processResult{}
-	} else if !forceMetadataParse {
+	} else if !forceSourceCwdParse {
 		incRes, incOK = e.tryProviderIncrementalAppend(
 			ctx, provider, source, file, fingerprint,
 			codexSeed, codexFullHash, codexHashState, codexCheckpoint,
@@ -1216,7 +1216,7 @@ func (e *Engine) processProviderFile(
 	// invalidate a matching full-source hash. In particular, device numbers
 	// can change across boots without changing the transcript.
 	// A fingerprint awaiting its parse-derived hash cannot prove freshness.
-	if !forceMetadataParse && !e.forceParseRequested(file) &&
+	if !forceSourceCwdParse && !e.forceParseRequested(file) &&
 		(!incForceReplace || codexForceFullParse && fingerprint.Hash != "") {
 		dbFresh, metadataVerified := e.providerSourceFreshnessByDB(ctx,
 			file, fingerprint, providerSemantics,
@@ -1273,7 +1273,7 @@ func (e *Engine) processProviderFile(
 	// every routine sync.
 	memberForceParseRequested := e.forceParse || e.forceFullParse || file.ForceParse ||
 		fileForceFullParse
-	if !forceMetadataParse && !incForceReplace && !memberForceParseRequested &&
+	if !forceSourceCwdParse && !incForceReplace && !memberForceParseRequested &&
 		e.providerSourceUnchangedInDB(
 			ctx, source, fingerprint, providerSemantics, preParseStatHash,
 		) {
@@ -1288,7 +1288,7 @@ func (e *Engine) processProviderFile(
 	failureIdentity, failureIdentityOK := e.sourceFailureCacheIdentity(file, fingerprint)
 	if failureIdentityOK {
 		cacheFile := file
-		forceFailureRefresh := forceMetadataParse
+		forceFailureRefresh := forceSourceCwdParse
 		if piebaldFailure.retry && !explicitForce && !cwdDecision.forceParse {
 			// Internal retry intent bypasses archive freshness, but an unchanged
 			// durable failure still skips. Explicit refreshes bypass both.

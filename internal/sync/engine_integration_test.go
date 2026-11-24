@@ -6502,31 +6502,44 @@ func TestSyncPathsCodexPrefersLivePathOverArchived(t *testing.T) {
 }
 
 func TestSyncAllSinceCodexKeepsChangedArchivedDuplicate(t *testing.T) {
-	for _, layout := range []string{"archived", "labeled"} {
-		t.Run(layout, func(t *testing.T) {
-			env := setupTestEnv(t)
-			uuid := "f6a7b8c9-6789-0123-def0-345678901234"
-			content := testjsonl.NewSessionBuilder().AddCodexMeta(tsEarly, uuid, "/work/project", "user").AddCodexMessage(tsEarlyS1, "user", "Sync changed archive").String()
-			var older, newer string
-			if layout == "archived" {
-				older = env.writeCodexSession(t, filepath.Join("2026", "05", "04"), "rollout-2026-05-04T02-10-04-"+uuid+".jsonl", content)
-				newer = env.writeSession(t, env.codexDir, "rollout-2026-05-04T14-31-58-"+uuid+".jsonl", content)
-			} else {
-				name := "rollout-2026-05-04T02-10-04-" + uuid + ".jsonl"
-				older = env.writeCodexSession(t, filepath.Join("exp", "case", ".codex-run-v1-a", "sessions", "2026", "05", "04"), name, content)
-				newer = env.writeCodexSession(t, filepath.Join("exp", "case", ".codex-run-v1-b", "sessions", "2026", "05", "04"), name, content)
-			}
-			oldTime, newTime, cutoff := time.Now().Add(-2*time.Hour), time.Now().Add(-30*time.Minute), time.Now().Add(-time.Hour)
-			require.NoError(t, os.Chtimes(older, oldTime, oldTime))
-			require.NoError(t, os.Chtimes(newer, newTime, newTime))
-			stats := env.engine.SyncAllSince(t.Context(), cutoff, nil)
-			require.Equal(t, 1, stats.Synced)
-			sess, err := env.db.GetSession(t.Context(), "codex:"+uuid)
-			require.NoError(t, err)
-			require.NotNil(t, sess)
-			assert.Equal(t, newer, env.db.GetSessionFilePath(t.Context(), "codex:"+uuid))
-		})
-	}
+	env := setupTestEnv(t)
+
+	uuid := "f6a7b8c9-6789-0123-def0-345678901234"
+	content := testjsonl.NewSessionBuilder().
+		AddCodexMeta(
+			tsEarly, uuid,
+			"/home/user/code/api", "user",
+		).
+		AddCodexMessage(tsEarlyS1, "user", "Sync changed archive").
+		String()
+
+	livePath := env.writeCodexSession(
+		t,
+		filepath.Join("2026", "05", "04"),
+		"rollout-2026-05-04T02-10-04-"+uuid+".jsonl",
+		content,
+	)
+	archivedPath := env.writeSession(
+		t, env.codexDir,
+		"rollout-2026-05-04T14-31-58-"+uuid+".jsonl",
+		content,
+	)
+
+	oldTime := time.Now().Add(-2 * time.Hour)
+	newTime := time.Now().Add(-30 * time.Minute)
+	cutoff := time.Now().Add(-1 * time.Hour)
+	require.NoError(t, os.Chtimes(livePath, oldTime, oldTime), "chtimes live")
+	require.NoError(t, os.Chtimes(archivedPath, newTime, newTime), "chtimes archived")
+
+	stats := env.engine.SyncAllSince(t.Context(), cutoff, nil)
+	require.Equal(t, 1, stats.Synced, "SyncAllSince synced = %d, want 1", stats.Synced)
+
+	sess, err := env.db.GetSession(
+		t.Context(), "codex:"+uuid,
+	)
+	require.NoError(t, err, "GetSession")
+	require.NotNil(t, sess, "expected archived Codex session to sync")
+	assert.Equal(t, archivedPath, env.db.GetSessionFilePath(t.Context(), "codex:"+uuid))
 }
 
 func TestSyncAllSinceCodexRefreshesSessionNameFromIndex(t *testing.T) {
