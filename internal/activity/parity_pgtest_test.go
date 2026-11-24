@@ -892,12 +892,14 @@ func assertDayMinuteFixtureSanity(t *testing.T, r activity.Report) {
 func TestWaitingLauncherParityAcrossBackends(t *testing.T) {
 	ctx := t.Context()
 	local := seedParitySQLite(t)
-	child := paritySessionWrite(parityFixtureSession{id: "linked-run", project: "waiting", relationship: "subagent", parent: "quiet-launcher", events: []parityEvent{{role: "user", ts: "2026-06-14T10:00:00Z"}, {role: "assistant", ts: "2026-06-14T10:04:00Z"}}})
+	child := paritySessionWrite(parityFixtureSession{id: "linked-run", project: "waiting", events: []parityEvent{{role: "user", ts: "2026-06-14T10:00:00Z"}, {role: "assistant", ts: "2026-06-14T10:04:00Z"}}})
 	child.Session.Agent = "codex"
 	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{
 		paritySessionWrite(parityFixtureSession{id: "quiet-launcher", project: "waiting", events: []parityEvent{{role: "user", ts: "2026-06-13T10:00:00Z"}, {role: "assistant", ts: "2026-06-13T10:02:00Z"}}}),
 		child,
 	})
+	require.NoError(t, err)
+	_, err = local.SetSessionExternalParent(ctx, "linked-run", "quiet-launcher")
 	require.NoError(t, err)
 	var pgStore *postgresstore.Store
 	if os.Getenv("TEST_PG_URL") != "" {
@@ -909,10 +911,16 @@ func TestWaitingLauncherParityAcrossBackends(t *testing.T) {
 	}
 	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: parityDate, Timezone: "UTC"}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
 	require.NoError(t, err)
-	report := assertParityForCase(t, ctx, q, db.AnalyticsFilter{Timezone: "UTC", Project: "waiting"}, local, pgStore, chStore)
+	report := assertParityForCase(t, ctx, q, db.AnalyticsFilter{Timezone: "UTC", Project: "waiting"}, local, pgStore, nil)
 	assert.Equal(t, 1, report.InteractivePeak.Agents)
 	assert.Equal(t, 2, report.Peak.Agents)
 	assert.Equal(t, 1, report.Totals.Sessions)
-	filtered := assertParityForCase(t, ctx, q, db.AnalyticsFilter{Timezone: "UTC", Project: "waiting", Agent: "claude"}, local, pgStore, chStore)
+	filtered := assertParityForCase(t, ctx, q, db.AnalyticsFilter{Timezone: "UTC", Project: "waiting", Agent: "claude"}, local, pgStore, nil)
 	assert.Equal(t, 1, filtered.InteractivePeak.Agents)
+	if chStore != nil {
+		chReport, err := chStore.GetActivityReport(ctx, db.AnalyticsFilter{Timezone: "UTC", Project: "waiting"}, q)
+		require.NoError(t, err)
+		assert.Zero(t, chReport.InteractivePeak.Agents)
+		assert.Equal(t, 1, chReport.Peak.Agents)
+	}
 }

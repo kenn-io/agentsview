@@ -60,58 +60,10 @@ func (s *Store) GetActivityReport(
 
 type activityReportBackend struct {
 	*Store
-	launchers     *activity.Launchers
 	candidates    chSessionSet
 	rangeStartUTC string
 	rangeEndUTC   string
 	pairing       *activityReportPairing
-	evidence      []activity.SessionMeta
-}
-
-func (b activityReportBackend) ActivityReportEvidence(_ context.Context, _ activity.Query) ([]activity.SessionMeta, error) {
-	return b.evidence, nil
-}
-
-func (b activityReportBackend) ActivityReportLaunchers(_ context.Context, _ []activity.SessionMeta, _ map[string]bool, _ activity.Query) (activity.Launchers, error) {
-	return *b.launchers, nil
-}
-
-func (s *Store) activityReportLaunchers(ctx context.Context, filter db.AnalyticsFilter, runs []activity.SessionMeta, selected map[string]bool) (activity.Launchers, map[string]uint64, error) {
-	versions := make(map[string]uint64)
-	where, args := chBuildAnalyticsWhere(filter, "COALESCE(s.started_at, s.created_at)", "s.", false, false)
-	result, err := activity.ResolveLaunchers(ctx, runs, selected, func(ctx context.Context, ids []string) ([]activity.Launcher, error) {
-		table, err := ext.NewTable("activity_launcher_ids", ext.Column("id", "String"))
-		if err != nil {
-			return nil, err
-		}
-		for _, id := range ids {
-			if err := table.Append(id); err != nil {
-				return nil, err
-			}
-		}
-		ctx = chdriver.Context(ctx, chdriver.WithExternalTable(table))
-		rows, err := s.queryContext(ctx, `SELECT s.id, s.is_automated, s.relationship_type = 'subagent', if(s.relationship_type = 'subagent', ifNull(s.parent_session_id, ''), ''), (`+where+`), s.push_version FROM sessions s WHERE s.id IN (SELECT id FROM activity_launcher_ids) AND s.deleted_at IS NULL`, args...)
-		if err != nil {
-			return nil, err
-		}
-		defer rows.Close()
-		var result []activity.Launcher
-		for rows.Next() {
-			var row activity.Launcher
-			var parent string
-			var version uint64
-			if err := rows.Scan(&row.ID, &row.IsAutomated, &row.IsSubagent, &parent, &row.MatchesFilter, &version); err != nil {
-				return nil, err
-			}
-			versions[row.ID] = version
-			if parent != "" {
-				row.ParentSessionIDs = []string{parent}
-			}
-			result = append(result, row)
-		}
-		return result, rows.Err()
-	})
-	return result, versions, err
 }
 
 // ActivityReportSecondRead lets usage run beside the sweep. Pairing already
@@ -160,7 +112,6 @@ func (s *Store) BuildActivityReportArtifacts(
 	// An ended range whose kept report was checked against these exact
 	// parts needs no further read.
 	var selection, fingerprint string
-	var resolvedLaunchers *activity.Launchers
 	// Only the reports of ended days a client opens are kept on disk. Every
 	// open refreshes the file's modification time, and a sweep removes the
 	// files no client opened for activityReportUnopened.
@@ -183,18 +134,9 @@ func (s *Store) BuildActivityReportArtifacts(
 	// effective end with every request and is always built. The key is taken
 	// before any read the report depends on, so a push that lands after it
 	// makes the next request miss.
-	keyWhere, keyArgs := candidateWhere, candidateArgs
-	var evidenceWhere string
-	var evidenceArgs []any
-	if f.ActivityNeedsEvidence() {
-		evidenceWhere, evidenceArgs = clickActivityReportCandidateWhere(db.AnalyticsFilter{Timezone: f.Timezone, IncludeSubagents: true, IncludeForks: true}, rangeStartUTC, rangeEndUTC)
-		evidenceWhere = "(" + evidenceWhere + ") AND s.relationship_type = 'subagent'"
-		keyWhere = "(" + candidateWhere + ") OR (" + evidenceWhere + ")"
-		keyArgs = append(slices.Clone(candidateArgs), evidenceArgs...)
-	}
 	var memoKey string
 	if !q.Partial {
-		memoKey, resolvedLaunchers, err = s.endedActivityReportKey(ctx, f, keyWhere, keyArgs, rangeStartUTC, rangeEndUTC)
+		memoKey, err = s.endedActivityReportKey(ctx, candidateWhere, candidateArgs, rangeStartUTC, rangeEndUTC)
 		if err != nil {
 			return activity.CandidateArtifacts{}, err
 		}
@@ -210,46 +152,6 @@ func (s *Store) BuildActivityReportArtifacts(
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
 	}
-	var evidence []activity.SessionMeta
-	var evidenceVersions map[string]uint64
-	if f.ActivityNeedsEvidence() {
-		evidence, _, evidenceVersions, err = s.activityReportSessions(ctx, evidenceWhere, evidenceArgs, memoKey == "")
-		if err != nil {
-			return activity.CandidateArtifacts{}, err
-		}
-	}
-	selected := make(map[string]bool, len(ids))
-	for _, id := range ids {
-		selected[id] = true
-	}
-	if resolvedLaunchers == nil {
-		launchers, _, err := s.activityReportLaunchers(ctx, f, append(slices.Clone(sessions), evidence...), selected)
-		if err != nil {
-			return activity.CandidateArtifacts{}, err
-		}
-		resolvedLaunchers = &launchers
-	} else {
-		// The key resolves one synthetic run per parent; share it among its children.
-		waiting := make(map[string][]string)
-		for _, session := range append(slices.Clone(sessions), evidence...) {
-			if session.IsSubagent {
-				for _, parent := range session.ParentSessionIDs {
-					waiting[session.SessionID] = append(waiting[session.SessionID], resolvedLaunchers.Waiting["\x00"+parent]...)
-				}
-				slices.Sort(waiting[session.SessionID])
-				waiting[session.SessionID] = slices.Compact(waiting[session.SessionID])
-			}
-		}
-		resolvedLaunchers.Waiting = waiting
-	}
-	sweepIDs := slices.Clone(ids)
-	for _, session := range evidence {
-		if !selected[session.SessionID] && len(resolvedLaunchers.Waiting[session.SessionID]) > 0 {
-			sweepIDs = append(sweepIDs, session.SessionID)
-			versions[session.SessionID] = evidenceVersions[session.SessionID]
-		}
-	}
-
 	// Send the already selected IDs as native data instead of repeating discovery.
 	table, err := ext.NewTable("activity_candidate_ids", ext.Column("id", "String"))
 	if err != nil {
@@ -270,10 +172,10 @@ func (s *Store) BuildActivityReportArtifacts(
 	// set, so pair while usage loads instead of serializing the two stages.
 	pairCtx, cancelPairs := context.WithCancel(ctx)
 	defer cancelPairs()
-	pairs := s.startActivityReportPairs(pairCtx, sweepIDs, versions, q)
+	pairs := s.startActivityReportPairs(pairCtx, ids, versions, q)
 	backend := activityReportBackend{
-		Store: s, launchers: resolvedLaunchers, candidates: candidates,
-		rangeStartUTC: rangeStartUTC, rangeEndUTC: rangeEndUTC, pairing: pairs, evidence: evidence,
+		Store: s, candidates: candidates,
+		rangeStartUTC: rangeStartUTC, rangeEndUTC: rangeEndUTC, pairing: pairs,
 	}
 	artifacts, done, err := activity.BuildReportArtifacts(
 		ctx, backend, sessions, ids, q, onProgress, "aggregating clickhouse activity report")
@@ -316,18 +218,16 @@ func (s *Store) checkedActivityReport(selection, fingerprint string, onDisk bool
 // whichever session they belong to, so a push that touches no session with
 // usage in the range leaves the key, and the kept report, in place.
 func (s *Store) endedActivityReportKey(
-	ctx context.Context, filter db.AnalyticsFilter, candidateWhere string, candidateArgs []any, lowerBound, upperBound string,
-) (string, *activity.Launchers, error) {
+	ctx context.Context, candidateWhere string, candidateArgs []any, lowerBound, upperBound string,
+) (string, error) {
 	// The candidate sessions are named by their push versions, which name
 	// the messages and tool events their pairing reads. Two independent
 	// hash sums and the count identify the set without listing it. The read
 	// depends on nothing below, so it runs while they do.
 	var candidates activityCandidateDigest
-	var parents []string
 	candidatesRead := make(chan error, 1)
 	go func() {
-		err := s.queryRowContext(ctx, `SELECT `+chActivityCandidateDigestSQL+`, groupUniqArrayIf(ifNull(s.parent_session_id, ''), s.relationship_type = 'subagent' AND ifNull(s.parent_session_id, '') != '')
-			FROM sessions s WHERE `+candidateWhere, candidateArgs...).Scan(&candidates.hash, &candidates.count, &parents)
+		err := s.queryRowContext(ctx, `SELECT `+chActivityCandidateDigestSQL+` FROM sessions s WHERE `+candidateWhere, candidateArgs...).Scan(&candidates.hash, &candidates.count)
 		if err != nil {
 			err = fmt.Errorf("reading activity candidate sessions: %w", err)
 		}
@@ -335,26 +235,11 @@ func (s *Store) endedActivityReportKey(
 	}()
 	key, err := s.endedActivityReportRowsKey(ctx, lowerBound, upperBound)
 	if err := errors.Join(err, <-candidatesRead); err != nil || key == "" {
-		return "", nil, err
-	}
-	runs := make([]activity.SessionMeta, 0, len(parents))
-	for _, id := range parents {
-		runs = append(runs, activity.SessionMeta{SessionID: "\x00" + id, IsSubagent: true, IsLaunched: true, ParentSessionIDs: []string{id}})
-	}
-	launchers, versions, err := s.activityReportLaunchers(ctx, filter, runs, nil)
-	if err != nil {
-		return "", nil, err
+		return "", err
 	}
 	data := fmt.Appendf(nil, "%s|%s|%d", key, candidates.hash, candidates.count)
-	for _, id := range launchers.Examined {
-		if version, ok := versions[id]; ok {
-			data = fmt.Appendf(data, "|%s@%d", id, version)
-		} else {
-			data = fmt.Appendf(data, "|%s@-", id)
-		}
-	}
 	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:]), &launchers, nil
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // endedActivityReportRowsKey identifies everything but the candidate
@@ -490,7 +375,6 @@ func (s *Store) activityReportSessions(
 		s.ended_at,
 		s.is_automated AS is_automated,
 		s.relationship_type = 'subagent' AS is_subagent,
-		if(s.relationship_type = 'subagent', ifNull(s.parent_session_id, ''), ''),
 		s.push_version
 	FROM sessions s
 	WHERE ` + where
@@ -508,18 +392,13 @@ func (s *Store) activityReportSessions(
 	for rows.Next() {
 		var m activity.SessionMeta
 		var startedAt, endedAt any
-		var parent string
 		var version uint64
 		if err := rows.Scan(
 			&m.SessionID, &m.Title, &m.Project, &m.Agent,
-			&m.Machine, &startedAt, &endedAt, &m.IsAutomated, &m.IsSubagent, &parent, &version,
+			&m.Machine, &startedAt, &endedAt, &m.IsAutomated, &m.IsSubagent, &version,
 		); err != nil {
 			return nil, nil, nil, fmt.Errorf(
 				"scanning clickhouse activity report session: %w", err)
-		}
-		if parent != "" {
-			m.ParentSessionIDs = []string{parent}
-			m.IsLaunched = true
 		}
 		m.StartedAt = formatDBTime(startedAt)
 		m.EndedAt = formatDBTime(endedAt)
