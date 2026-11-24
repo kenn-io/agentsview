@@ -224,7 +224,9 @@ describe("SessionsStore", () => {
     if (kind === "single") api.deleteSession.mockRejectedValueOnce(error);
     else api.batchDeleteSessions.mockRejectedValueOnce(error);
     try {
-      await expect(kind === "single" ? store.deleteSession("saved") : store.batchDeleteSessions(["saved"])).rejects.toBe(error);
+      await expect(
+        kind === "single" ? store.deleteSession("saved") : store.batchDeleteSessions(["saved"]),
+      ).rejects.toBe(error);
       expect(getFlashMessage()).toContain("archive is read-only; retry after maintenance");
       expect(store.selectedIds.has("saved")).toBe(true);
       expect(store.recentlyDeleted).toHaveLength(0);
