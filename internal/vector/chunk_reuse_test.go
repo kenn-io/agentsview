@@ -622,14 +622,33 @@ func TestClearRemovesAllReuseIncludingOrphans(t *testing.T) {
 	ctx := t.Context()
 	ix := openTestIndex(t)
 	src := twoDocSource()
-	src.rows = src.rows[:1]
-	_, err := ix.Build(ctx, src, fakeBuildEncoder(), fakeGeneration("clear-reuse"), BuildOptions{})
+	a, b := fakeGeneration("clear-a"), fakeGeneration("clear-b")
+	_, err := ix.Build(ctx, src, fakeBuildEncoder(), a, BuildOptions{})
 	require.NoError(t, err)
-	key := unitDocKey(src.rows[0].unit, map[string]int{})
-	_, err = ix.db.ExecContext(ctx, `INSERT INTO message_vectors_reuse VALUES (1, ?, 'a', x'0000803f0000000000000000'), (2, 'orphan', 'b', x'0000803f0000000000000000')`, key)
+	_, err = ix.Build(ctx, src, fakeBuildEncoder(), b, BuildOptions{})
 	require.NoError(t, err)
-	require.NoError(t, ix.Clear(ctx))
+	first := unitDocKey(src.rows[0].unit, map[string]int{})
+	second := unitDocKey(src.rows[1].unit, map[string]int{})
+	fail := func(context.Context, []string) ([][]float32, error) { return nil, errors.New("offline") }
+	src.rows[0].unit.Content = "changed first"
+	src.rows[0].endedAt = "2025-01-01T00:00:00Z"
+	_, err = ix.Build(ctx, src, fail, a, BuildOptions{BatchSize: 1})
+	require.Error(t, err)
+	src.rows[1].unit.Content = "changed second"
+	src.rows[1].endedAt = "2026-01-01T00:00:00Z"
+	_, err = ix.Build(ctx, src, fail, b, BuildOptions{BatchSize: 1})
+	require.Error(t, err)
+	src.rows = src.rows[1:]
+	_, err = ix.Build(ctx, src, fail, b, BuildOptions{Backstop: true, BatchSize: 1})
+	require.Error(t, err)
 	var count int
+	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT count(*) FROM message_vectors_reuse WHERE ordinal = 1 AND doc_key = ? AND text_hash = ?`, first, contentHash("hello")).Scan(&count))
+	require.Equal(t, 1, count)
+	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT count(*) FROM message_vectors_reuse WHERE ordinal = 2 AND doc_key = ? AND text_hash = ?`, second, contentHash("world")).Scan(&count))
+	require.Equal(t, 1, count)
+	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT count(*) FROM vector_messages WHERE doc_key = ?`, first).Scan(&count))
+	require.Zero(t, count)
+	require.NoError(t, ix.Clear(ctx))
 	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT count(*) FROM message_vectors_reuse`).Scan(&count))
 	assert.Zero(t, count)
 }
