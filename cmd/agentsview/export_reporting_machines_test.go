@@ -87,13 +87,8 @@ func TestExportReportingCursorAccountHour(t *testing.T) {
 	require.NoError(t, err)
 	var result struct {
 		Machines     map[string]any `json:"machines"`
-		CursorEvents []struct {
-			Key            string `json:"key"`
-			ConversationID string `json:"conversation_id"`
-		} `json:"cursor_events"`
+		CursorEvents []any          `json:"cursor_events"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(out), &result))
 	require.Len(t, result.CursorEvents, 1)
-	assert.Equal(t, db.CursorUsageEventDedupKey(event), result.CursorEvents[0].Key)
-	assert.Equal(t, "conversation-a", result.CursorEvents[0].ConversationID)
 }

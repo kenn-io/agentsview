@@ -97,6 +97,18 @@ func TestAccountUsageAgentMigrationPreservesCursorRows(t *testing.T) {
 	assert.Empty(t, conversation)
 }
 
+func TestAccountUsageReadOnlyRequiresConversationColumn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d := testDBAtPath(t, path, "migration")
+	_, err := d.rawWriter().ExecContext(t.Context(), `ALTER TABLE cursor_usage_events DROP COLUMN conversation_id`)
+	require.NoError(t, err)
+	require.NoError(t, d.Close())
+	_, err = OpenReadOnly(t.Context(), path)
+	require.Error(t, err)
+	assert.True(t, IsSchemaUpgradeRequired(err))
+	assert.ErrorContains(t, err, "cursor_usage_events.conversation_id")
+}
+
 func TestAccountUsageUsesBaseRatesForCacheSavings(t *testing.T) {
 	d := testDB(t)
 	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{

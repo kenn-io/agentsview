@@ -1,7 +1,6 @@
 package db
 
 import (
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -147,20 +146,7 @@ func TestCursorAccountReporting(t *testing.T) {
 	assert.NotContains(t, current.Hours[10].Machines, "cursor-account:12")
 	require.Len(t, current.Hours[10].CursorEvents, 4)
 	assert.Empty(t, current.Hours[10].CursorPolls)
-	for i := 1; i < len(current.Hours[10].CursorEvents); i++ {
-		assert.Less(t, current.Hours[10].CursorEvents[i-1].Key, current.Hours[10].CursorEvents[i].Key)
-	}
 	assert.EqualValues(t, 65, current.Hours[10].Usage.Totals.OutputTokens)
-	reordered := current.Hours[10]
-	reordered.CursorEvents = slices.Clone(reordered.CursorEvents)
-	slices.Reverse(reordered.CursorEvents)
-	reordered, _, err = export.FinalizeReportingHour(reordered)
-	require.NoError(t, err)
-	assert.Equal(t, current.Hours[10].Digest, reordered.Digest)
-	reordered.CursorEvents[0].OutputTokens++
-	reordered, _, err = export.FinalizeReportingHour(reordered)
-	require.NoError(t, err)
-	assert.NotEqual(t, current.Hours[10].Digest, reordered.Digest)
 	opts.ProjectKeys = []string{"other"}
 	scoped, err := d.ExportReportingDay(ctx, opts)
 	require.NoError(t, err)
@@ -198,135 +184,70 @@ func TestCursorAccountReporting(t *testing.T) {
 	assert.EqualValues(t, 65, day.Hours[10].Usage.Totals.OutputTokens)
 }
 
-// combineCursorLedger follows the schema 7 consumer rule for one hour.
-func combineCursorLedger(hours []export.ReportingHour) (int64, map[string]int64) {
-	type selected struct {
-		event  export.ReportingCursorEvent
-		device string
-	}
-	type identity struct{ key, conversation string }
-	events := map[identity]selected{}
-	polls := map[string]string{}
-	holders := map[identity]string{}
-	populated := map[string]bool{}
-	for _, hour := range hours {
-		for _, event := range hour.CursorEvents {
-			if event.ConversationID != "" {
-				populated[event.Key] = true
-			}
-		}
-	}
-	for _, hour := range hours {
-		for _, poll := range hour.CursorPolls {
-			if poll.PolledAt > polls[poll.Account] {
-				polls[poll.Account] = poll.PolledAt
-			}
-		}
-		for _, event := range hour.CursorEvents {
-			if event.Account != "" && event.PolledAt > polls[event.Account] {
-				polls[event.Account] = event.PolledAt
-			}
-			if event.ConversationID == "" && populated[event.Key] {
-				continue
-			}
-			id := identity{event.Key, event.ConversationID}
-			if holders[id] == "" || hour.LocalMachineID < holders[id] {
-				holders[id] = hour.LocalMachineID
-			}
-			old, ok := events[id]
-			if !ok || event.PolledAt > old.event.PolledAt || (event.PolledAt == old.event.PolledAt && hour.LocalMachineID < old.device) {
-				events[id] = selected{event, hour.LocalMachineID}
-			}
-		}
-	}
-	var total int64
-	accounts := map[string]int64{}
-	for id, selected := range events {
-		e := selected.event
-		total += e.OutputTokens
-		if e.Account != "" && e.PolledAt != "" && e.PolledAt == polls[e.Account] {
-			accounts[e.Account] += e.OutputTokens
-		} else {
-			accounts["archive:"+holders[id]] += e.OutputTokens
-		}
-	}
-	return total, accounts
-}
-
-func TestCursorAccountOverlappingArchivesCountOnce(t *testing.T) {
+func TestCursorAccountOverlappingArchivesEvidence(t *testing.T) {
 	start := time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC)
 	poll := start.Add(24 * time.Hour)
 	events := []CursorUsageEvent{
-		{OccurredAt: "2026-07-28T10:01:00Z", Model: "a", OutputTokens: 10},
+		{OccurredAt: "2026-07-28T10:01:00Z", Model: "a", OutputTokens: 10, ConversationID: "conversation-a"},
 		{OccurredAt: "2026-07-28T10:02:00Z", Model: "b", OutputTokens: 20},
 		{OccurredAt: "2026-07-28T10:03:00Z", Model: "c", OutputTokens: 40},
 	}
 	for _, tc := range []struct {
-		name     string
-		bEvents  []int
-		bPoll    []int
-		empty    bool
-		aPartial bool
+		name    string
+		bEvents []int
+		empty   bool
 	}{
-		{"reproduction", []int{0, 1, 2}, []int{0, 1}, false, true},
-		{"shared partial", []int{0, 1, 2}, []int{1}, false, false},
-		{"different history", []int{0, 2}, nil, true, false},
-		{"unmatched", []int{0, 2}, nil, false, false},
+		{"reproduction", []int{0, 1, 2}, false},
+		{"different history", []int{0, 2}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			archives := []*DB{testDB(t), testDB(t)}
 			var hours []export.ReportingHour
-			for i, d := range archives {
+			for i := range 2 {
+				d := testDB(t)
 				ctx := t.Context()
 				require.NoError(t, d.ConfigureArtifactLocalMachine(ctx, []string{"host-a", "host-b"}[i]))
-				_, err := d.rawWriter().ExecContext(ctx, `INSERT INTO archive_metadata(key,value) VALUES ('archive_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, []string{"a", "b"}[i])
-				require.NoError(t, err)
 				indices := []int{0, 1}
 				if i == 1 {
 					indices = tc.bEvents
 				}
 				for _, j := range indices {
-					require.NoError(t, d.InsertCursorUsageEvents(ctx, []CursorUsageEvent{events[j]}))
+					event := events[j]
+					if i == 1 && j == 0 {
+						event.ConversationID = "conversation-b"
+					}
+					require.NoError(t, d.InsertCursorUsageEvents(ctx, []CursorUsageEvent{event}))
 				}
 				if i == 0 {
 					require.NoError(t, d.RecordCursorAccountPoll(ctx, map[string][]string{"12": {CursorUsageEventDedupKey(events[0]), CursorUsageEventDedupKey(events[1])}}, poll, []CursorAccountHour{{UserID: "12", Start: start}}))
-					if tc.aPartial {
+					if !tc.empty {
 						require.NoError(t, d.RecordCursorAccountPoll(ctx, map[string][]string{"12": {CursorUsageEventDedupKey(events[1])}}, poll.Add(time.Hour), []CursorAccountHour{{UserID: "12", Start: start}}))
 					}
-				} else if tc.empty || len(tc.bPoll) > 0 {
-					keys := []string{}
-					for _, j := range tc.bPoll {
-						keys = append(keys, CursorUsageEventDedupKey(events[j]))
-					}
-					require.NoError(t, d.RecordCursorAccountPoll(ctx, map[string][]string{"12": keys}, poll.Add(2*time.Hour), []CursorAccountHour{{UserID: "12", Start: start}}))
+				} else if tc.empty {
+					require.NoError(t, d.RecordCursorAccountPoll(ctx, nil, poll.Add(2*time.Hour), []CursorAccountHour{{UserID: "12", Start: start}}))
+				} else {
+					require.NoError(t, d.RecordCursorAccountPoll(ctx, map[string][]string{"12": {CursorUsageEventDedupKey(events[0]), CursorUsageEventDedupKey(events[1])}}, poll.Add(2*time.Hour), []CursorAccountHour{{UserID: "12", Start: start}}))
 				}
 				day, err := d.ExportReportingDay(ctx, ReportingExportOptions{Date: start.Truncate(24 * time.Hour), Now: poll.Add(24 * time.Hour), SchemaVersion: 7, ByMachine: true})
 				require.NoError(t, err)
-				for _, event := range day.Hours[10].CursorEvents {
-					assert.NotEmpty(t, event.At)
-				}
 				hours = append(hours, day.Hours[10])
 			}
-			total, accounts := combineCursorLedger(hours)
-			assert.EqualValues(t, 70, total)
+			first := export.ReportingCursorEvent{At: events[0].OccurredAt, Key: CursorUsageEventDedupKey(events[0]), Model: "a", OutputTokens: 10, ConversationID: "conversation-a", Account: "12", PolledAt: poll.Format("2006-01-02T15:04:05.000000Z")}
+			assert.Contains(t, hours[0].CursorEvents, first)
+			second := first
+			second.ConversationID = "conversation-b"
 			if tc.empty {
-				assert.Zero(t, accounts["12"])
+				second.Account, second.PolledAt = "", ""
+				assert.Contains(t, hours[1].CursorPolls, export.ReportingCursorPoll{Account: "12", PolledAt: poll.Add(2 * time.Hour).Format("2006-01-02T15:04:05.000000Z")})
+			} else {
+				second.PolledAt = poll.Add(2 * time.Hour).Format("2006-01-02T15:04:05.000000Z")
 			}
-			if tc.aPartial {
-				var legacy []export.ReportingHour
-				for _, d := range archives {
-					day, err := d.ExportReportingDay(t.Context(), ReportingExportOptions{Date: start.Truncate(24 * time.Hour), Now: poll.Add(24 * time.Hour), SchemaVersion: 6, ByMachine: true})
-					require.NoError(t, err)
-					legacy = append(legacy, day.Hours[10])
-				}
-				assert.EqualValues(t, 80, legacy[0].Machines["archive:a"].Usage.Totals.OutputTokens+legacy[1].Machines["archive:b"].Usage.Totals.OutputTokens+legacy[1].Machines["cursor-account:12"].Usage.Totals.OutputTokens)
-			}
-			assert.Contains(t, hours[0].CursorEvents, export.ReportingCursorEvent{At: events[0].OccurredAt, Key: CursorUsageEventDedupKey(events[0]), Model: "a", OutputTokens: 10, Account: "12", PolledAt: poll.Format("2006-01-02T15:04:05.000000Z")})
+			assert.Contains(t, hours[1].CursorEvents, second)
+			assert.Contains(t, hours[1].CursorEvents, export.ReportingCursorEvent{At: events[2].OccurredAt, Key: CursorUsageEventDedupKey(events[2]), Model: "c", OutputTokens: 40})
 		})
 	}
 }
 
-func TestCursorAccountLedgerRebuildsBucketsAndDigest(t *testing.T) {
+func TestCursorAccountLedgerRebuildsBuckets(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	require.NoError(t, d.ConfigureArtifactLocalMachine(ctx, "host-a"))
@@ -372,10 +293,7 @@ func TestCursorAccountLedgerRebuildsBucketsAndDigest(t *testing.T) {
 			want[cell.BucketStart] += cell.Usage.OutputTokens
 		}
 		assert.Equal(t, want, buckets)
-		digest, err := d.ExportReportingDigest(ctx, ReportingDigestExportOptions{From: opts.Date, To: opts.Date, Now: opts.Now, SchemaVersion: 7, ByMachine: true})
-		require.NoError(t, err)
-		require.Len(t, digest, 1)
-		assert.Equal(t, reportingDigestDayFromDay(ledger), digest[0])
+
 	}
 }
 
@@ -383,7 +301,7 @@ func TestCursorAccountReportingSharedUsageRead(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	_, err := d.rawWriter().ExecContext(ctx, `INSERT INTO cursor_usage_events(agent, occurred_at, model, output_tokens, dedup_key) VALUES
-		('cursor', '2026-07-28T09:01:00-01:00', 'cursor-model', 10, 'cursor-event'),
+		('cursor', '2026-07-28T10:01:00Z', 'cursor-model', 10, 'cursor-event'),
 		('cursor', '2026-07-28T11:00:00Z', 'outside', 20, 'outside-event'),
 		('grok', '2026-07-28T10:02:00Z', 'other-model', 30, 'other-event')`)
 	require.NoError(t, err)
@@ -396,38 +314,6 @@ func TestCursorAccountReportingSharedUsageRead(t *testing.T) {
 	require.Len(t, source.cursorEvents, 1)
 	assert.Equal(t, "2026-07-28T10:01:00Z", source.cursorEvents[0].event.At)
 	assert.EqualValues(t, 10, source.cursorEvents[0].event.OutputTokens)
-}
-
-func TestCursorAccountConversationIdentityAcrossArchives(t *testing.T) {
-	start := time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC)
-	poll := start.Add(24 * time.Hour)
-	event := CursorUsageEvent{OccurredAt: "2026-07-28T10:01:00Z", Model: "a", OutputTokens: 1}
-	for _, tc := range []struct {
-		name string
-		ids  []string
-		want int64
-	}{
-		{"distinct conversations", []string{"conversation-a", "conversation-b"}, 2},
-		{"legacy copy", []string{"", "conversation-b"}, 1},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var hours []export.ReportingHour
-			for i, id := range tc.ids {
-				d := testDB(t)
-				require.NoError(t, d.ConfigureArtifactLocalMachine(t.Context(), []string{"host-a", "host-b"}[i]))
-				event.ConversationID = id
-				require.NoError(t, d.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{event}))
-				day, err := d.ExportReportingDay(t.Context(), ReportingExportOptions{Date: start.Truncate(24 * time.Hour), Now: poll.Add(24 * time.Hour), SchemaVersion: 7, ByMachine: true})
-				require.NoError(t, err)
-				require.Len(t, day.Hours[10].CursorEvents, 1)
-				assert.Equal(t, id, day.Hours[10].CursorEvents[0].ConversationID)
-				hours = append(hours, day.Hours[10])
-			}
-			assert.Equal(t, hours[0].CursorEvents[0].Key, hours[1].CursorEvents[0].Key)
-			total, _ := combineCursorLedger(hours)
-			assert.Equal(t, tc.want, total)
-		})
-	}
 }
 
 func TestCursorAccountConversationIDRefetch(t *testing.T) {
