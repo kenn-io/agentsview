@@ -43,8 +43,27 @@ func listHermesMemberTokens(ctx context.Context, conn *sql.DB, id string, yield 
 	if err != nil {
 		return err
 	}
+	cols, err := readHermesMessageColumns(ctx, conn)
+	if err != nil {
+		return err
+	}
 	checksums := make(map[string]hash.Hash)
-	query := `SELECT session_id, id, timestamp, COALESCE(finish_reason, '') FROM messages`
+	activeExpr := "1"
+	if cols.hasActive {
+		activeExpr = "active"
+	}
+	displayOrderExpr := "NULL"
+	if cols.hasDisplayOrder {
+		displayOrderExpr = "display_order"
+	}
+	displayMetadataExpr := "''"
+	if cols.hasDisplayMetadata {
+		displayMetadataExpr = "COALESCE(display_metadata, '')"
+	}
+	query := fmt.Sprintf(
+		`SELECT session_id, id, timestamp, COALESCE(finish_reason, ''), %s, %s, %s FROM messages`,
+		activeExpr, displayOrderExpr, displayMetadataExpr,
+	)
 	var messageArgs []any
 	if id != "" {
 		query += ` WHERE session_id = ?`
@@ -58,8 +77,11 @@ func listHermesMemberTokens(ctx context.Context, conn *sql.DB, id string, yield 
 	defer messageRows.Close()
 	for messageRows.Next() {
 		var sid string
-		var messageID, timestamp, finish any
-		if err := messageRows.Scan(&sid, &messageID, &timestamp, &finish); err != nil {
+		var messageID, timestamp, finish, active, displayOrder, displayMetadata any
+		if err := messageRows.Scan(
+			&sid, &messageID, &timestamp, &finish,
+			&active, &displayOrder, &displayMetadata,
+		); err != nil {
 			return err
 		}
 		h := checksums[sid]
@@ -67,7 +89,15 @@ func listHermesMemberTokens(ctx context.Context, conn *sql.DB, id string, yield 
 			h = sha256.New()
 			checksums[sid] = h
 		}
-		fmt.Fprintf(h, "%T:%q\x00%T:%q\x00%T:%q\x00", messageID, fmt.Sprint(messageID), timestamp, fmt.Sprint(timestamp), finish, fmt.Sprint(finish))
+		fmt.Fprintf(
+			h, "%T:%q\x00%T:%q\x00%T:%q\x00%T:%q\x00%T:%q\x00%T:%q\x00",
+			messageID, fmt.Sprint(messageID),
+			timestamp, fmt.Sprint(timestamp),
+			finish, fmt.Sprint(finish),
+			active, fmt.Sprint(active),
+			displayOrder, fmt.Sprint(displayOrder),
+			displayMetadata, fmt.Sprint(displayMetadata),
+		)
 	}
 	err = messageRows.Err()
 	messageRows.Close()
@@ -183,6 +213,8 @@ func hermesStoreTracksRewrites(ctx context.Context, conn *sql.DB) (bool, error) 
 	if err := rows.Err(); err != nil {
 		return false, err
 	}
+	// Member tokens hash active, display_order, and display_metadata directly,
+	// so only columns the token cannot see need a revision trigger.
 	for _, column := range []string{"role", "content", "tool_call_id", "tool_calls", "reasoning", "reasoning_content", "reasoning_details", "codex_reasoning_items", "codex_message_items"} {
 		if !covered[column] {
 			return false, nil

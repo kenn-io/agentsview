@@ -389,6 +389,11 @@ func (p *hermesProvider) parseStateMember(
 	if err != nil {
 		return ParseOutcome{}, err
 	}
+	hasArchived, err := hermesSessionHasArchivedMessages(ctx, conn, src.SessionID)
+	if err != nil {
+		return ParseOutcome{}, err
+	}
+	ss.hasArchivedMessages = hasArchived
 	result, ok := buildHermesStateResult(
 		ss, messages, filepath.Join(filepath.Dir(src.StateDB), "sessions"),
 		src.StateDB, project, machine,
@@ -1482,13 +1487,18 @@ func hermesStateDBHasReadableSession(
 	if !readable.scanned || readable.malformed {
 		return false, nil
 	}
-	timestampRows, err := conn.QueryContext(ctx, hermesStateMessageTimestampsQuery, rawID)
+	cols, err := readHermesMessageColumns(ctx, conn)
+	if err != nil {
+		return false, fmt.Errorf("inspect hermes messages for %s: %w", rawID, err)
+	}
+	timestampRows, err := conn.QueryContext(ctx, hermesStateMessageTimestampsQueryString(cols), rawID)
 	if err != nil {
 		return false, fmt.Errorf("query hermes messages for %s: %w", rawID, err)
 	}
 	readable, err = hermesRowsScanCleanly(ctx, timestampRows, func(rows *sql.Rows) error {
 		var ts float64
-		return rows.Scan(&ts)
+		var displayOrder sql.NullInt64
+		return rows.Scan(&ts, &displayOrder)
 	})
 	if err != nil {
 		return false, fmt.Errorf("query hermes messages for %s: %w", rawID, err)
@@ -2203,6 +2213,14 @@ func addHermesStateSessionFingerprint(
 	}
 	if err := json.MarshalWrite(h, ss.modelUsage); err != nil {
 		return err
+	}
+	for _, hm := range messages {
+		if _, err := fmt.Fprintf(
+			h, "display-meta\x00%t\x00%d\x00%q\x00",
+			hm.displayOrder.Valid, hm.displayOrder.Int64, hm.displayMetadata,
+		); err != nil {
+			return err
+		}
 	}
 	return encodeHermesStateSessionJSONL(h, ss, messages)
 }

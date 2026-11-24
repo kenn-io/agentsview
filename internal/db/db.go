@@ -701,7 +701,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (186: normalize Antigravity model display names and effort suffixes into base
 // model slugs plus messages.reasoning_effort. Re-parse Antigravity and
 // Antigravity CLI sources in place; source and session identities are unchanged.)
-const dataVersion = 186
+// (187: re-parse compacted Hermes state.db sessions to exclude archived/hidden
+// rows and preserve display_order without losing companion suppression.)
+const dataVersion = 187
 
 const archiveOnlyVersionBase = 1 << 20
 
