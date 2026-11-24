@@ -70,6 +70,38 @@ func TestSessionFilterIncludesEmptyForProjectMapping(t *testing.T) {
 	}
 }
 
+func TestSidebarIncludesAutomatedLaunchChild(t *testing.T) {
+	t.Parallel()
+	pgURL := testPGStoreURL(t)
+	ensureStoreSchema(t, pgURL)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { store.Close() })
+	_, err = store.DB().ExecContext(t.Context(), `
+		INSERT INTO sessions
+			(id, machine, project, agent, relationship_type, parent_session_id,
+			 message_count, user_message_count, is_automated, labels, created_at, session_kind)
+		VALUES
+			('launcher', 'm', 'launch-project', 'claude', 'root', NULL, 3, 3, false, '{}', NOW(), ''),
+			('worker', 'm', 'launch-project', 'codex', 'subagent', 'launcher', 1, 1, true, '{ticket=example}', NOW(), 'non-interactive')`)
+	require.NoError(t, err)
+	for _, limit := range []int{0, 10} {
+		for _, labels := range [][]string{nil, {"ticket=example"}} {
+			index, err := store.GetSidebarSessionIndex(t.Context(), db.SessionFilter{
+				Project: "launch-project", ExcludeOneShot: true, ExcludeAutomated: true,
+				Labels: labels, Limit: limit,
+			})
+			require.NoError(t, err)
+			ids := make([]string, 0, len(index.Sessions))
+			for _, row := range index.Sessions {
+				ids = append(ids, row.ID)
+			}
+			assert.ElementsMatch(t, []string{"launcher", "worker"}, ids, "limit %d, labels %v", limit, labels)
+			assert.Equal(t, 1, index.Total, "limit %d, labels %v", limit, labels)
+		}
+	}
+}
+
 func TestListSessionsDateFilterIncludesOverlappingSessions(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGStoreURL(t)
