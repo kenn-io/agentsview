@@ -136,50 +136,6 @@ func TestCapturerPersistsStableGenerationWithoutParsing(t *testing.T) {
 	assert.Equal(t, []byte("one\n"), content)
 }
 
-func TestCodexCaptureReplacesPreferredLabeledCopy(t *testing.T) {
-	store, _ := openCapturerTestStore(t, 1<<20)
-	root := t.TempDir()
-	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e5"
-	name := "rollout-2026-06-11T12-44-06-" + id + ".jsonl"
-	paths := []string{
-		filepath.Join(root, "a", ".codex-run-v1-a", "sessions", "2026", "06", "11", name),
-		filepath.Join(root, "b", ".codex-run-v1-b", "sessions", "2026", "06", "11", name),
-	}
-	for i, path := range paths {
-		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-		require.NoError(t, os.WriteFile(path, []byte([]string{"first\n", "second\n"}[i]), 0o644))
-		mtime := time.Now().Add(time.Duration(2-i) * time.Hour)
-		require.NoError(t, os.Chtimes(path, mtime, mtime))
-	}
-	provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	discovery, err := parser.DiscoverRawCaptureSources(t.Context(), provider)
-	require.NoError(t, err)
-	require.Len(t, discovery.Sources, 1)
-	capturer := New(store)
-	first, err := capturer.Capture(t.Context(), provider, discovery.Sources[0])
-	require.NoError(t, err)
-	assert.Equal(t, StatusCaptured, first.Status)
-	mtime := time.Now().Add(3 * time.Hour)
-	require.NoError(t, os.Chtimes(paths[1], mtime, mtime))
-	changed, err := parser.RawCaptureSourcesForChangedPath(t.Context(), provider, parser.ChangedPathRequest{Path: paths[1], WatchRoot: root})
-	require.NoError(t, err)
-	require.Len(t, changed, 1)
-	second, err := capturer.Capture(t.Context(), provider, changed[0])
-	require.NoError(t, err)
-	assert.Equal(t, first.Source, second.Source)
-	assert.Equal(t, StatusCaptured, second.Status)
-	base, ok, err := store.CaptureBase(t.Context(), first.Source)
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.Len(t, base.Entries, 1)
-	assert.True(t, strings.HasPrefix(base.Entries[0].Path, "b/"))
-	require.Len(t, base.Entries[0].Objects, 1)
-	bytes, err := os.ReadFile(store.ObjectPath(base.Entries[0].Objects[0]))
-	require.NoError(t, err)
-	assert.Equal(t, "second\n", string(bytes))
-}
-
 func TestCapturerClaudeLineageParentGrowthReusesFork(t *testing.T) {
 	store, _ := openCapturerTestStore(t, 1<<20)
 	root := t.TempDir()

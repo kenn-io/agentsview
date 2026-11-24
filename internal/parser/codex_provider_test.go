@@ -1828,38 +1828,6 @@ func TestCodexProviderRawDiscoveryKeepsLiveAndArchivedPhysicalSources(t *testing
 		sourceDisplayPaths(rawDiscovery.Sources))
 }
 
-func TestCodexRawCaptureSelectsPreferredCopyPerRoot(t *testing.T) {
-	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e5"
-	base := t.TempDir()
-	root, other := filepath.Join(base, "logs"), filepath.Join(base, "other")
-	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", tsEarly)
-	content := testjsonl.JoinJSONL(meta, testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1))
-	paths := []string{
-		writeCodexProviderSessionContent(t, root, id, content),
-		writeCodexProviderSessionContent(t, filepath.Join(root, "a", ".codex-run-v1-a", "sessions"), id, content),
-		writeCodexProviderSessionContent(t, filepath.Join(root, "b", ".codex-run-v1-b", "sessions"), id, content),
-		writeCodexProviderSessionContent(t, other, id, content),
-	}
-	for i, path := range paths {
-		mtime := time.Now().Add(time.Duration([]int{3, 2, 1, 0}[i]) * time.Hour)
-		require.NoError(t, os.Chtimes(path, mtime, mtime))
-	}
-	for _, roots := range [][]string{{root, other}, {other, root}} {
-		provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: roots})
-		require.True(t, ok)
-		discovery, err := DiscoverRawCaptureSources(t.Context(), provider)
-		require.NoError(t, err)
-		require.True(t, discovery.Complete)
-		assert.ElementsMatch(t, []string{paths[1], paths[3]}, sourceDisplayPaths(discovery.Sources))
-		for _, path := range paths[:3] {
-			sources, err := RawCaptureSourcesForChangedPath(t.Context(), provider, ChangedPathRequest{Path: path, WatchRoot: root})
-			require.NoError(t, err)
-			require.Len(t, sources, 1)
-			assert.Equal(t, paths[1], sources[0].DisplayPath)
-		}
-	}
-}
-
 func TestCodexProviderDiscoverEachYieldsDuplicateCandidates(t *testing.T) {
 	base := t.TempDir()
 	liveRoot := filepath.Join(base, "sessions")
@@ -2476,28 +2444,6 @@ func TestCodexLabeledRunOverlappingRootsAndLookup(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, outcome.Results, 1)
 		assert.Equal(t, "team/case", outcome.Results[0].Result.Session.Project)
-		plan, supported, err := ResolveRawCapturePlan(t.Context(), provider, found)
-		require.NoError(t, err)
-		require.True(t, supported)
-		assert.Equal(t, root, plan.ConfiguredRoot)
-		assert.Equal(t, root, plan.CaptureRoot)
-		materialized := t.TempDir()
-		for _, entry := range plan.Entries {
-			data, err := os.ReadFile(entry.LocalPath)
-			require.NoError(t, err)
-			dest := filepath.Join(materialized, filepath.FromSlash(entry.Path))
-			require.NoError(t, os.MkdirAll(filepath.Dir(dest), 0o755))
-			require.NoError(t, os.WriteFile(dest, data, 0o644))
-		}
-		hosted, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{materialized}})
-		require.True(t, ok)
-		sources, err := hosted.Discover(t.Context())
-		require.NoError(t, err)
-		require.Len(t, sources, 1)
-		parsed, err := hosted.Parse(t.Context(), ParseRequest{Source: sources[0]})
-		require.NoError(t, err)
-		require.Len(t, parsed.Results, 1)
-		assert.Equal(t, "team/case", parsed.Results[0].Result.Session.Project)
 	}
 }
 

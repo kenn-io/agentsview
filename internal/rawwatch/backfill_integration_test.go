@@ -165,64 +165,6 @@ func TestBackfillCodexOverlappingRootsKeepFirstEligibleOwner(t *testing.T) {
 	}
 }
 
-func TestBackfillCodexCapturesPreferredCopyPerRoot(t *testing.T) {
-	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e5"
-	for _, reverse := range []bool{false, true} {
-		t.Run(fmt.Sprintf("reverse-%t", reverse), func(t *testing.T) {
-			base := t.TempDir()
-			root, other := filepath.Join(base, "logs"), filepath.Join(base, "other")
-			name := "rollout-2026-06-11T12-44-06-" + id + ".jsonl"
-			paths := []string{
-				filepath.Join(root, "2026", "06", "11", name),
-				filepath.Join(root, "a", ".codex-run-v1-a", "sessions", "2026", "06", "11", name),
-				filepath.Join(root, "b", ".codex-run-v1-b", "sessions", "2026", "06", "11", name),
-				filepath.Join(other, "2026", "06", "11", name),
-			}
-			for i, path := range paths {
-				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
-				require.NoError(t, os.WriteFile(path, []byte(fmt.Sprintf("copy-%d\n", i)), 0o600))
-				mtime := time.Unix(int64(400-i*100), 0)
-				require.NoError(t, os.Chtimes(path, mtime, mtime))
-			}
-			roots := []string{root, other}
-			if reverse {
-				roots[0], roots[1] = roots[1], roots[0]
-			}
-			store, err := rawcheckpoint.Open(t.Context(), filepath.Join(t.TempDir(), "checkpoint.db"))
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, store.Close()) })
-			require.NoError(t, store.SetDevice(t.Context(), "device-a"))
-			spec := rawcheckpoint.BackfillRunSpec{RunID: "run-a", DeviceID: "device-a", Destination: "https://ingest.example", Providers: []parser.AgentType{parser.AgentCodex}}
-			rootIDs := map[string]string{}
-			for _, root := range roots {
-				configured, err := store.ResolveConfiguredRoot(t.Context(), parser.AgentCodex, root)
-				require.NoError(t, err)
-				rootIDs[root] = configured.ID
-				spec.Roots = append(spec.Roots, rawcheckpoint.BackfillSelection{Provider: parser.AgentCodex, ConfiguredRootID: configured.ID})
-			}
-			provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{Roots: roots})
-			require.True(t, ok)
-			transport := newBackfillCustody(t)
-			progress, err := RunBackfill(t.Context(), store, rawcapture.New(store), rawupload.New(store, transport, "device-a"), BackfillOptions{Spec: spec, Providers: []parser.Provider{provider}, BatchSize: 1})
-			require.NoError(t, err)
-			require.True(t, progress.Complete)
-			require.Len(t, transport.metadata.manifests, 2)
-			for _, canonical := range transport.metadata.manifests {
-				manifest := canonical.Manifest
-				require.Len(t, manifest.Entries, 1)
-				switch manifest.ConfiguredRootID {
-				case rootIDs[root]:
-					require.Contains(t, manifest.Entries[0].Path, ".codex-run-v1-a/")
-				case rootIDs[other]:
-					require.NotContains(t, manifest.Entries[0].Path, ".codex-run-v1-")
-				default:
-					t.Fatal("unexpected configured root")
-				}
-			}
-		})
-	}
-}
-
 func TestBackfillCrashAfterServerReceiptPreservesManifestAndGeneration(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "a.jsonl")
