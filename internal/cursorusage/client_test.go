@@ -176,3 +176,19 @@ func TestListUsageEventsRejectsNonNumericUserID(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `invalid Cursor user ID "user_123"`)
 }
+
+func TestParseUsageEventConversationID(t *testing.T) {
+	for _, tc := range []struct {
+		payload string
+		want    string
+	}{
+		{`{"timestamp":"2026-07-28T10:00:00Z","conversationId":" conversation-a "}`, "conversation-a"},
+		{`{"timestamp":"2026-07-28T10:00:00Z"}`, ""},
+	} {
+		var raw rawUsageEvent
+		require.NoError(t, json.Unmarshal([]byte(tc.payload), &raw))
+		event, err := parseUsageEvent(raw)
+		require.NoError(t, err)
+		assert.Equal(t, tc.want, event.ConversationID)
+	}
+}

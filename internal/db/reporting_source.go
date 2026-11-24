@@ -67,7 +67,7 @@ func (db *DB) loadReportingExportSource(
 	ctx context.Context,
 	tx *sql.Tx,
 	start, end time.Time,
-	schemaVersion int, includeCursor bool,
+	schemaVersion int,
 ) (reportingExportSource, error) {
 	source := reportingExportSource{
 		activityEvents:  []activity.ActivityEvent{},
@@ -135,7 +135,7 @@ func (db *DB) loadReportingExportSource(
 		return source, err
 	}
 	standaloneUsage, err := db.reportingStandaloneUsageCandidatesFrom(
-		ctx, tx, query, schemaVersion, includeCursor, &source,
+		ctx, tx, query, schemaVersion, &source,
 	)
 	if err != nil {
 		return source, err

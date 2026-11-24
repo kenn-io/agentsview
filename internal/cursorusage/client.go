@@ -88,6 +88,7 @@ type TokenUsage struct {
 
 // UsageEvent is a parsed Cursor usage event.
 type UsageEvent struct {
+	ConversationID string
 	Timestamp      time.Time
 	Model          string
 	Kind           string
@@ -460,6 +461,7 @@ func (e usageEventsEnvelope) usageEvents() []rawUsageEvent {
 }
 
 type rawUsageEvent struct {
+	ConversationID string         `json:"conversationId"`
 	Timestamp      string         `json:"timestamp"`
 	Model          string         `json:"model"`
 	Kind           string         `json:"kind"`
@@ -492,9 +494,10 @@ func parseUsageEvent(raw rawUsageEvent) (UsageEvent, error) {
 		return UsageEvent{}, fmt.Errorf("parsing Cursor token fee: %w", err)
 	}
 	return UsageEvent{
-		Timestamp: t,
-		Model:     strings.TrimSpace(raw.Model),
-		Kind:      strings.TrimSpace(raw.Kind),
+		ConversationID: strings.TrimSpace(raw.ConversationID),
+		Timestamp:      t,
+		Model:          strings.TrimSpace(raw.Model),
+		Kind:           strings.TrimSpace(raw.Kind),
 		TokenUsage: TokenUsage{
 			InputTokens:      raw.TokenUsage.InputTokens,
 			OutputTokens:     raw.TokenUsage.OutputTokens,

@@ -1753,6 +1753,10 @@ func (d *DB) CopySessionMetadataFrom(
 		if oldDBHasColumn(ctx, tx, "cursor_usage_events", "account_user_id") {
 			accountID, polledAt = "account_user_id", "account_polled_at"
 		}
+		conversationID := "''"
+		if oldDBHasColumn(ctx, tx, "cursor_usage_events", "conversation_id") {
+			conversationID = "conversation_id"
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO main.cursor_usage_events (
 				agent,
@@ -1760,14 +1764,14 @@ func (d *DB) CopySessionMetadataFrom(
 				input_tokens, output_tokens,
 				cache_write_tokens, cache_read_tokens,
 				charged_microdollars, cursor_token_fee_microdollars,
-				user_id, user_email, is_headless, dedup_key, account_user_id, account_polled_at
+				user_id, user_email, is_headless, dedup_key, account_user_id, account_polled_at, conversation_id
 			)
 			SELECT `+agentColumn+`,
 				occurred_at, model, kind,
 				input_tokens, output_tokens,
 				cache_write_tokens, cache_read_tokens,
 				charged_microdollars, cursor_token_fee_microdollars,
-				user_id, user_email, is_headless, dedup_key, `+accountID+`, `+polledAt+`
+				user_id, user_email, is_headless, dedup_key, `+accountID+`, `+polledAt+`, `+conversationID+`
 			FROM old_db.cursor_usage_events
 			ORDER BY occurred_at, id`); err != nil {
 			return fmt.Errorf("copying cursor usage events: %w", err)

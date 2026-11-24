@@ -20,13 +20,6 @@ type reportingCursorPollRow struct {
 }
 
 func loadReportingCursorPolls(ctx context.Context, tx *sql.Tx, start, end time.Time) ([]reportingCursorPollRow, error) {
-	var exists bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='cursor_usage_events')`).Scan(&exists); err != nil {
-		return nil, err
-	}
-	if !exists || !start.Before(end) {
-		return nil, nil
-	}
 	polls, err := tx.QueryContext(ctx, reportingEmptyCursorPollsQuery, start.Unix(), end.Unix())
 	if err != nil {
 		return nil, fmt.Errorf("querying Cursor reporting polls: %w", err)

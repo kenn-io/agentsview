@@ -45,6 +45,7 @@ func IsAccountReportingSchema(version int) bool {
 
 // ReportingCursorEvent identifies one Cursor billing event across archives.
 type ReportingCursorEvent struct {
+	ConversationID   string      `json:"conversation_id,omitempty"`
 	At               string      `json:"at"`
 	Key              string      `json:"key"`
 	Model            string      `json:"model"`
@@ -255,9 +256,6 @@ func FinalizeReportingHour(hour ReportingHour) (ReportingHour, []byte, error) {
 			"unsupported reporting schema version %d", hour.SchemaVersion,
 		)
 	}
-	if hour.SchemaVersion != ReportingCursorSchemaVersion && (len(hour.CursorEvents) > 0 || len(hour.CursorPolls) > 0) {
-		return ReportingHour{}, nil, fmt.Errorf("Cursor ledger requires reporting schema %d", ReportingCursorSchemaVersion)
-	}
 	hourStart, err := parseReportingHour(hour.Period)
 	if err != nil {
 		return ReportingHour{}, nil, err
@@ -397,7 +395,12 @@ func parseReportingHour(value string) (time.Time, error) {
 func normalizeReportingHour(hour ReportingHour) ReportingHour {
 	hour.CursorEvents = slices.Clone(hour.CursorEvents)
 	hour.CursorPolls = slices.Clone(hour.CursorPolls)
-	slices.SortFunc(hour.CursorEvents, func(a, b ReportingCursorEvent) int { return strings.Compare(a.Key, b.Key) })
+	slices.SortFunc(hour.CursorEvents, func(a, b ReportingCursorEvent) int {
+		if c := strings.Compare(a.Key, b.Key); c != 0 {
+			return c
+		}
+		return strings.Compare(a.ConversationID, b.ConversationID)
+	})
 	slices.SortFunc(hour.CursorPolls, func(a, b ReportingCursorPoll) int { return strings.Compare(a.Account, b.Account) })
 	hour.Activity.Buckets = cloneOrEmpty(hour.Activity.Buckets)
 	hour.Activity.ByModel = cloneOrEmpty(hour.Activity.ByModel)

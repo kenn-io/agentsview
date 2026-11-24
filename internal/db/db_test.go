@@ -866,6 +866,7 @@ func TestUpgradeExportSchemaInPlaceOnlyAddsExportIdentitySchema(t *testing.T) {
 		DROP INDEX idx_cursor_usage_events_account_time;
 		ALTER TABLE cursor_usage_events DROP COLUMN account_user_id;
 		ALTER TABLE cursor_usage_events DROP COLUMN account_polled_at;
+		ALTER TABLE cursor_usage_events DROP COLUMN conversation_id;
 		DROP TABLE session_project_identity_snapshots;
 	`)
 	requireNoError(t, err, "prepare schema-only upgrade fixture")
@@ -912,11 +913,12 @@ func TestUpgradeExportSchemaInPlaceOnlyAddsExportIdentitySchema(t *testing.T) {
 	`).Scan(&metadataCount), "read initialized export metadata")
 	assert.Equal(t, 3, metadataCount)
 	var tokens int
-	var account, stamp string
-	require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT output_tokens, account_user_id, account_polled_at FROM cursor_usage_events WHERE model='a'`).Scan(&tokens, &account, &stamp))
+	var account, stamp, conversation string
+	require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT output_tokens, account_user_id, account_polled_at, conversation_id FROM cursor_usage_events WHERE model='a'`).Scan(&tokens, &account, &stamp, &conversation))
 	assert.Equal(t, 7, tokens)
 	assert.Empty(t, account)
 	assert.Empty(t, stamp)
+	assert.Empty(t, conversation)
 	require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'cursor_account_polls'`).Scan(&tableCount))
 	assert.Equal(t, 1, tableCount)
 	require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_cursor_account_polls_hour'`).Scan(&tableCount))
@@ -5667,15 +5669,16 @@ func TestCopySessionMetadataFrom_PreservesCursorUsageEvents(t *testing.T) {
 		require.NoError(t, src.Close())
 		raw, err := sql.Open("sqlite3", path)
 		require.NoError(t, err)
-		_, err = raw.ExecContext(ctx, `DROP INDEX idx_cursor_usage_events_account_time; ALTER TABLE cursor_usage_events DROP COLUMN account_user_id; ALTER TABLE cursor_usage_events DROP COLUMN account_polled_at; DROP TABLE cursor_account_polls`)
+		_, err = raw.ExecContext(ctx, `DROP INDEX idx_cursor_usage_events_account_time; ALTER TABLE cursor_usage_events DROP COLUMN account_user_id; ALTER TABLE cursor_usage_events DROP COLUMN account_polled_at; ALTER TABLE cursor_usage_events DROP COLUMN conversation_id; DROP TABLE cursor_account_polls`)
 		require.NoError(t, err)
 		require.NoError(t, raw.Close())
 		dst := testDB(t)
 		require.NoError(t, dst.CopySessionMetadataFrom(ctx, path))
-		var account, polled string
-		require.NoError(t, dst.Reader().QueryRowContext(ctx, `SELECT account_user_id, account_polled_at FROM cursor_usage_events WHERE dedup_key=?`, CursorUsageEventDedupKey(event)).Scan(&account, &polled))
+		var account, polled, conversation string
+		require.NoError(t, dst.Reader().QueryRowContext(ctx, `SELECT account_user_id, account_polled_at, conversation_id FROM cursor_usage_events WHERE dedup_key=?`, CursorUsageEventDedupKey(event)).Scan(&account, &polled, &conversation))
 		assert.Empty(t, account)
 		assert.Empty(t, polled)
+		assert.Empty(t, conversation)
 	})
 
 	dir := t.TempDir()
@@ -5685,6 +5688,7 @@ func TestCopySessionMetadataFrom_PreservesCursorUsageEvents(t *testing.T) {
 	srcDB := testDBAtPath(t, srcPath, "src")
 	events := []CursorUsageEvent{
 		{
+			ConversationID:   "conversation-a",
 			OccurredAt:       "2026-05-14T10:05:00Z",
 			Model:            "claude-4.6-opus-high-thinking",
 			Kind:             "USAGE_EVENT_KIND_USAGE_BASED",
@@ -5743,6 +5747,9 @@ func TestCopySessionMetadataFrom_PreservesCursorUsageEvents(t *testing.T) {
 		"final metadata copy should preserve cursor usage rows verbatim")
 	var account, polled string
 	require.NoError(t, dstDB.Reader().QueryRowContext(ctx, `SELECT account_user_id, account_polled_at FROM cursor_usage_events WHERE dedup_key=?`, CursorUsageEventDedupKey(events[0])).Scan(&account, &polled))
+	var conversation string
+	require.NoError(t, dstDB.Reader().QueryRowContext(ctx, `SELECT conversation_id FROM cursor_usage_events WHERE dedup_key=?`, CursorUsageEventDedupKey(events[0])).Scan(&conversation))
+	assert.Equal(t, "conversation-a", conversation)
 	assert.Equal(t, "12", account)
 	assert.Equal(t, "2026-05-16T00:00:00.000000Z", polled)
 	require.NoError(t, dstDB.Reader().QueryRowContext(ctx, `SELECT account_user_id, polled_at FROM cursor_account_polls`).Scan(&account, &polled))
