@@ -540,6 +540,7 @@ func (d *DB) CopySyncStateFrom(ctx context.Context, sourcePath string) error {
 			   OR key LIKE 'artifact\_%' ESCAPE '\'
 			   OR key LIKE 'machine\_label:%' ESCAPE '\'
 			   OR key LIKE 'machine\_alias:%' ESCAPE '\'
+			   OR key LIKE 'machine\_origin:%' ESCAPE '\'
 			   OR key = ?`, subagentParentRepairQueueStateKey); err != nil {
 			return fmt.Errorf("copying sync state: %w", err)
 		}

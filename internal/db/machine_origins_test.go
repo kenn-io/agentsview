@@ -1,6 +1,8 @@
 package db
 
 import (
+	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -87,4 +89,94 @@ func TestRemoteMachineOriginRepublishesHostSessions(t *testing.T) {
 
 	require.NoError(t, d.RecordRemoteMachineOrigin(ctx, "devbox", "00000000000000000000000000000001"))
 	assert.Greater(t, revision("devbox~a"), first)
+}
+
+// Readers page the change stream by revision. Republishing more sessions
+// than one page holds must still deliver each of them exactly once.
+func TestRemoteMachineOriginRepublishesAcrossChangeStreamPages(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	require.NoError(t, d.ConfigureArtifactLocalMachine(ctx, testLocalInstallation))
+	_, err := d.EnsureConversationExportInitialized(ctx)
+	require.NoError(t, err)
+	const hostSessions = MaxSessionLimit + 7
+	for i := range hostSessions {
+		require.NoError(t, d.UpsertSession(ctx, Session{
+			ID: fmt.Sprintf("devbox~%04d", i), Project: "project", Machine: "devbox", Agent: "claude",
+		}))
+	}
+	var cache ChangeStreamUsageCache
+	cursor := ""
+	for {
+		batch, err := d.ReadChangeStream(ctx, cursor, &cache)
+		require.NoError(t, err)
+		cursor = batch.To
+		if !batch.More {
+			break
+		}
+	}
+
+	require.NoError(t, d.RecordRemoteMachineOrigin(ctx, "devbox", testRemoteInstallation))
+
+	delivered := map[string]int{}
+	for {
+		batch, err := d.ReadChangeStream(ctx, cursor, &cache)
+		require.NoError(t, err)
+		for _, session := range batch.Sessions {
+			delivered[session.SessionID]++
+			require.NotNil(t, session.MachineID)
+			assert.Equal(t, testRemoteInstallation, *session.MachineID)
+		}
+		cursor = batch.To
+		if !batch.More {
+			break
+		}
+	}
+	assert.Len(t, delivered, hostSessions)
+	for id, count := range delivered {
+		assert.Equal(t, 1, count, id)
+	}
+}
+
+// A full resync or archive rebuild replaces the database. The recorded
+// origins must survive it, or the host's activity reverts to its host name
+// until the host can be synced again.
+func TestRemoteMachineOriginSurvivesDatabaseReplacement(t *testing.T) {
+	tests := []struct {
+		name string
+		copy func(context.Context, *DB, string) error
+	}{
+		{"full resync", func(ctx context.Context, d *DB, source string) error { return d.CopySyncStateFrom(ctx, source) }},
+		{"archive rebuild", func(ctx context.Context, d *DB, source string) error {
+			return d.CopyAttachedArchiveStateFrom(ctx, source)
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := t.Context()
+			source := testDB(t)
+			require.NoError(t, source.ConfigureArtifactLocalMachine(ctx, testLocalInstallation))
+			require.NoError(t, source.RecordRemoteMachineOrigin(ctx, "devbox", testRemoteInstallation))
+
+			replacement := testDB(t)
+			require.NoError(t, tt.copy(ctx, replacement, source.Path()))
+			_, err := replacement.rawWriter().ExecContext(ctx, `
+				INSERT INTO sessions(id,project,machine,agent,message_count,started_at,ended_at) VALUES
+				('devbox~a','project','devbox','claude',2,'2026-07-28T10:00:00Z','2026-07-28T10:02:00Z');
+				INSERT INTO messages(session_id,ordinal,role,content,timestamp,model) VALUES
+				('devbox~a',0,'user','start','2026-07-28T10:00:00Z',''),
+				('devbox~a',1,'assistant','end','2026-07-28T10:02:00Z','model-a')`)
+			require.NoError(t, err)
+
+			day, err := replacement.ExportReportingDay(ctx, ReportingExportOptions{
+				Date:          time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
+				Now:           time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC),
+				SchemaVersion: 5,
+				ByMachine:     true,
+			})
+			require.NoError(t, err)
+			assert.Contains(t, day.Hours[10].Machines, testRemoteInstallation)
+			assert.NotContains(t, day.Hours[10].Machines, "devbox")
+		})
+	}
 }

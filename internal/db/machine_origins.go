@@ -42,19 +42,24 @@ func (db *DB) RecordRemoteMachineOrigin(ctx context.Context, host, identity stri
 			return fmt.Errorf("recording machine origin: %w", err)
 		}
 		// The change stream names each session's origin, so publish the host's
-		// sessions again under the new one.
+		// sessions again under the new one. Each gets its own revision, as the
+		// triggers give each changed row: readers page by revision, so rows
+		// sharing one would be skipped at a page boundary.
 		if _, err := tx.ExecContext(ctx, `INSERT INTO archive_metadata(key, value)
-			VALUES ('conversation_publication_revision', '1')
-			ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1`); err != nil {
+			VALUES ('conversation_publication_revision', '0') ON CONFLICT(key) DO NOTHING`); err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO conversation_session_changes(session_id, revision, deleted)
-			SELECT s.id, CAST(m.value AS INTEGER), s.deleted_at IS NOT NULL
+		if _, err := tx.ExecContext(ctx, `INSERT INTO conversation_session_changes(session_id, revision, deleted)
+			SELECT s.id, CAST(m.value AS INTEGER) + ROW_NUMBER() OVER (ORDER BY s.id), s.deleted_at IS NOT NULL
 			FROM sessions s, archive_metadata m
 			WHERE s.machine = ? AND m.key = 'conversation_publication_revision'
-			ON CONFLICT(session_id) DO UPDATE SET revision = excluded.revision, deleted = excluded.deleted`, host)
-		if err != nil {
+			ON CONFLICT(session_id) DO UPDATE SET revision = excluded.revision, deleted = excluded.deleted`, host); err != nil {
 			return fmt.Errorf("republishing sessions from %s: %w", host, err)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE archive_metadata
+			SET value = CAST(value AS INTEGER) + (SELECT count(*) FROM sessions WHERE machine = ?)
+			WHERE key = 'conversation_publication_revision'`, host); err != nil {
+			return err
 		}
 		return nil
 	})
