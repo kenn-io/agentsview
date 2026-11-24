@@ -682,12 +682,14 @@ ______________________________________________________________________
 ### Pull request links
 
 Each session's `pr_links` field lists pull requests found in retained user
-prompts, supported `gh pr` commands, child-agent prompts, or structured
-transcript records. Supported actions are `view`, `checkout` (including `co`),
-`edit`, `diff`, `checks`, `comment`, `review`, `ready`, `merge`, `close`,
-`reopen`, `update-branch`, `lock`, `unlock`, and `revert`.
-Commands can name a pull request by URL or number. A number can use `-R` or
-`--repo` with `owner/repo` or `host/owner/repo`.
+prompts, literal `gh pr` commands in shell tool calls, full PR URLs in
+child-agent prompts, or structured transcript records. Supported actions are
+`view`, `checkout` (including `co`), `edit`, `diff`, `checks`, `comment`,
+`review`, `ready`, `merge`, `close`, `reopen`, `update-branch`, `lock`,
+`unlock`, and `revert`. A command names its pull request by URL or number,
+optionally with `-R` or `--repo` set to `owner/repo` or `host/owner/repo`. A
+command whose selector or repository comes from a variable or substitution
+links nothing.
 
 ```json
 "pr_links": [
@@ -700,21 +702,44 @@ Commands can name a pull request by URL or number. A number can use `-R` or
 ]
 ```
 
-AgentsView keeps one link per pull request. A bare number uses the session's
-single checkout remote when the command runs in the session's working directory.
-An explicit `owner/repo` uses the checkout remote's host or a literal `GH_HOST`
-in the command, falling back to `github.com` when neither is available. A
-host-qualified repository or a full PR URL supplies its own host. Large shell
-commands or scripts may reach the parsing limit and yield incomplete links.
-AgentsView scans retained Claude
-Bash inputs for earlier directory and repository changes
-when a later bare number needs the checkout remote. After a directory change, a
-captured working directory matching the session's directory restores that
-remote. Hosted sessions link commands with an explicit repository or URL.
-Child-agent prompts link full PR URLs as references. Prompt mentions indicate
-a reference, not work on the pull request. Archives that dropped tool inputs
-cannot recover command or child-prompt links. Push-to-head linking is planned
-for slice 2.
+AgentsView keeps one link per pull request.
+
+Shell commands are read from a tool input's `command` string or argv array (a
+`sh`, `bash`, or `zsh` array with `-c` or `-lc` contributes its script), `cmd`,
+`commands` list, or plain-text input. Function bodies and scripts nested inside
+a command, such as `bash -c '...'`, are skipped. Codex code-mode `exec` input
+is JavaScript and isn't scanned as shell command text.
+
+Each command is checked as a whole, without following order or branches:
+
+- A `cd`, `pushd`, or `popd` anywhere in it marks the directory as changed.
+- Setting, exporting, or unsetting `GH_REPO` or `GH_HOST` (including a
+  `GH_HOST=x gh ...` prefix), changing git remotes or `remote.*`, `branch.*`,
+  or `url.*` config, running `gh repo set-default`, `eval`, `source`, or `.`,
+  or calling a function the command declares marks the repository as changed.
+- A repository change applies to that command and every later shell call in
+  the session. A directory change carries forward only across Claude `Bash`
+  calls, which share one shell.
+
+What a command can link depends on its selector:
+
+- A full PR URL, or a number with `-R host/owner/repo`, always links with the
+  host it names.
+- A number with a host-less `-R owner/repo` links only when no repository
+  change applies. It uses the checkout remote's host, or `github.com` when
+  there is none.
+- A bare number links only in a local archive, when the session has a single
+  checkout remote and no directory or repository change applies. A call that
+  records its own working directory links a bare number only when that
+  directory is the session's.
+- Hosted sessions have no checkout remote, so they link only full URLs and
+  explicit repositories, with host-less repositories on `github.com`. Bare
+  numbers never link there.
+
+A shell tool input larger than 256 KB is not read and counts as a repository
+change for later calls. Child-agent prompts link full PR URLs as references:
+a mention, not proof of work on the pull request. Archives that dropped tool
+inputs cannot recover command or child-prompt links.
 
 Claude Code also includes `pr-link` entries in its transcripts. Every session
 split from that transcript carries them like its name and git branch.
