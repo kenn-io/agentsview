@@ -1321,20 +1321,19 @@ fixtures retain this field; missing identities remain source-local.
   pair defines the parent edge. `thread_source` is a legacy fallback, and
   `session_id` identifies the root or tree rather than the parent.
 
-- **Home directory files (observed 2026-11-15, codex-cli 0.167.0):** Besides
-  the transcript roots, `session_index.jsonl`, and `history.jsonl`, a local
-  Codex home held Codex's own SQLite databases with their `-wal` and `-shm`
-  files (`logs_2.sqlite`, `state_5.sqlite`, `goals_1.sqlite`,
-  `memories_1.sqlite`, `queue_1.sqlite`), lock files such as
-  `session_index.jsonl.lock` and `auth.json.lock`, `installation_id`,
-  configuration, caches, and tool directories. Watching the directory showed
-  the log, state, and memory databases, lock files, and `installation_id`
-  changing constantly with no session activity. Agentsview watches the home
-  directory without recursion only for the title index, so its Codex provider
-  classifies every other direct child as non-data, except a transcript root.
-  `history.jsonl` is non-data for the watch because the live-activity poller
-  reads it on its own schedule.
-  Observational evidence from one installation, not a pinned-source
+- **Home directory files (observed 2026-11-15, codex-cli 0.167.0):** Besides the
+  transcript roots, `session_index.jsonl`, and `history.jsonl`, a local Codex
+  home held Codex's own SQLite databases with their `-wal` and `-shm` files
+  (`logs_2.sqlite`, `state_5.sqlite`, `goals_1.sqlite`, `memories_1.sqlite`,
+  `queue_1.sqlite`), lock files such as `session_index.jsonl.lock` and
+  `auth.json.lock`, `installation_id`, configuration, caches, and tool
+  directories. Watching the directory showed the log, state, and memory
+  databases, lock files, and `installation_id` changing constantly with no
+  session activity. Agentsview watches the home directory without recursion
+  only for the title index, so its Codex provider classifies every other
+  direct child as non-data, except a transcript root. `history.jsonl` is
+  non-data for the watch because the live-activity poller reads it on its own
+  schedule. Observational evidence from one installation, not a pinned-source
   guarantee.
 
 - **Launch classification (reverified 2026-10-08):**
@@ -2083,23 +2082,24 @@ fixtures retain this field; missing identities remain source-local.
   no schema; RPC names and positions can change with any web app build.
 - **Chrome Sync requests:** `internal/importer/browser_requests/gemini-apps.txt`
   names the two RPCs with `chat` and `cursor` parameters. The server never
-  sends a request body. `frontend/chrome-extension/gemini_fetch.js` builds each
-  RPC's `f.req` argument from those parameters inside the page, adds the
-  page's `SNlM0e` request token, and posts through `pageFetch`. The token never
-  leaves the page. Signed-out pages have no token, which reads as HTTP 401.
+  sends a request body. `frontend/chrome-extension/gemini_fetch.js` builds
+  each RPC's `f.req` argument from those parameters inside the page, adds the
+  page's `SNlM0e` request token, and posts through `pageFetch`. The token
+  never leaves the page. Signed-out pages have no token, which reads as HTTP
+  401\.
 - **Pending replies:** A newest turn with no reply text, including a turn with
-  only an attachment, is written but its freshness is not recorded, so the next
-  Sync fetches it again. This applies only while the chat's list update time
-  is within 24 hours of the current time
+  only an attachment, is written but its freshness is not recorded, so the
+  next Sync fetches it again. This applies only while the chat's list update
+  time is within 24 hours of the current time
   (`TestSyncGeminiRefetchesReplyInProgress`,
-  `TestSyncGeminiRefetchesAttachmentOnlyTurn`,
-  `TestSyncGeminiPendingWindow`).
+  `TestSyncGeminiRefetchesAttachmentOnlyTurn`, `TestSyncGeminiPendingWindow`).
 - **Identities and history:** User rows carry the turn's response ID and reply
   rows the shown draft ID as source identities. Appends and completed replies
   keep message IDs and pins (`TestSyncGeminiKeepsPinsInPlace`). Another draft,
   a regenerated reply, or a shorter chat replaces the chat and keeps the
   previous version in Trash, also when the stored text is equal
-  (`TestSyncGeminiIncrementalAndHistory`, `TestSyncGeminiDraftSwitchKeepsHistory`,
+  (`TestSyncGeminiIncrementalAndHistory`,
+  `TestSyncGeminiDraftSwitchKeepsHistory`,
   `TestSyncGeminiSameTextDraftSwitchKeepsPins`). Under usage-only storage, a
   chat with fewer messages than stored also keeps a Trash copy when its stored
   replies still match as a prefix
@@ -2160,13 +2160,13 @@ fixtures retain this field; missing identities remain source-local.
   with text that has no descendant with text. Failed regenerations are empty,
   so they never end the shown branch (`TestParseGrokWebConversation`,
   `TestSyncGrokCapturedPages`).
-- **Pending replies:** A chat with an entry in `inflightResponses`, a
-  `partial` response that ends the shown branch, or an empty `partial` reply
-  directly below the end of the shown branch is written but its freshness is
-  not recorded, so the next Sync fetches it again. A chat with an empty
-  `partial` reply below an earlier response of the shown branch is pending
-  too while that reply is newer than the end of the shown branch, because that
-  is how a regeneration looks while Grok writes it. An older one is a failed
+- **Pending replies:** A chat with an entry in `inflightResponses`, a `partial`
+  response that ends the shown branch, or an empty `partial` reply directly
+  below the end of the shown branch is written but its freshness is not
+  recorded, so the next Sync fetches it again. A chat with an empty `partial`
+  reply below an earlier response of the shown branch is pending too while
+  that reply is newer than the end of the shown branch, because that is how a
+  regeneration looks while Grok writes it. An older one is a failed
   regeneration the chat has moved past, and one below a branch no longer shown
   does not count. A `partial` response with later turns below it on the shown
   branch is finished history and does not count either. The capture holds a
@@ -2182,8 +2182,8 @@ fixtures retain this field; missing identities remain source-local.
   (`TestSyncGrokStops`).
 - **Identities and history:** Each message carries its `responseId` as the
   source identity. Appends and completed replies keep message IDs and pins
-  (`TestSyncGrokIncrementalAndHistory`, `TestSyncGrokCompletionFillsModel`).
-  A changed shown branch replaces the chat and keeps the previous version in
+  (`TestSyncGrokIncrementalAndHistory`, `TestSyncGrokCompletionFillsModel`). A
+  changed shown branch replaces the chat and keeps the previous version in
   Trash, also when the new branch repeats the stored text.
 - **Chrome Sync evidence limits:** The branch rule was checked on two chats.
   Earlier turns were not rendered by the virtualized page, so the rule is
@@ -2194,9 +2194,9 @@ fixtures retain this field; missing identities remain source-local.
   and 287 KB. Whether `modifyTime` moves when a reply completes is unverified;
   the 24-hour pending bound keeps a reply that never completes from being
   fetched forever. Reasoning steps, attachments, images, search results, and
-  workspaces are not imported. The live probe predates the 2026-11-17 move onto
-  the shared Sync runner; the move was verified with synthetic tests and the
-  sanitized captures only.
+  workspaces are not imported. The live probe predates the 2026-11-17 move
+  onto the shared Sync runner; the move was verified with synthetic tests and
+  the sanitized captures only.
 
 ## Grok Build (`grok`)
 
@@ -3085,19 +3085,21 @@ schemas keep their existing ordering behavior.
 
 ## Cursor (`cursor`)
 
-- **Team usage:** The [Admin API](https://cursor.com/docs/account/teams/admin-api)
-  documents numeric user IDs in paginated daily usage data and as a filter for
-  usage events; its usage-event example does not include a user ID. An
-  unfiltered sync uses member-filtered responses to match accounts and records
-  the matched account and unfiltered fetch completion time in separate columns.
-  Events absent from that unfiltered fetch wait for a later sync.
-  A later empty poll replaces an earlier covered account-hour with zero usage.
-  Archives with account stamps require data version 185 or newer. The event's original `user_id`, `user_email`, and dedup key
-  remain unchanged.
+- **Team usage:** The
+  [Admin API](https://cursor.com/docs/account/teams/admin-api) documents
+  numeric user IDs in paginated daily usage data and as a filter for usage
+  events; its usage-event example does not include a user ID. An unfiltered sync
+  uses member-filtered responses to match accounts and records the matched
+  account and unfiltered fetch completion time in separate columns. Events
+  absent from that unfiltered fetch wait for a later sync. A later empty poll
+  replaces an earlier covered account-hour with zero usage. Archives with
+  account stamps require data version 185 or newer. The event's original
+  `user_id`, `user_email`, and dedup key remain unchanged.
 
 - **Dialogue projection:** Reverified 2026-10-17 against the JSONL parser and
   shared block fixtures. Assistant text and thinking blocks remain separate.
   Cursor IDE uses a different parser.
+
 - **Format:** Legacy text and newer JSONL transcripts under per-project
   `agent-transcripts` directories in three layouts: flat (`<id>.ext`), nested
   (`<id>/<id>.ext`), and subagent (`<parent>/subagents/<id>.ext`), where a
@@ -3108,17 +3110,21 @@ schemas keep their existing ordering behavior.
   and `latestRootBlobId`. The selected root's protobuf field-8 turn index
   supplies assistant reasoning and producer epoch-millisecond timestamps;
   field-1 system/context blobs are not transcript messages.
+
 - **Turn timestamps:** Cursor user messages can carry a leading metadata tag in
   the form
   `<timestamp>Weekday, Mon D, YYYY, H:MM AM|PM (UTC±H[:MM])</timestamp>`
   immediately before `<user_query>`. Agentsview parses the explicit offset and
   stores a UTC instant with zero seconds and nanoseconds. The source has
   minute precision, so the encoded `:00` does not provide second precision.
+
 - **Session bounds:** Agentsview uses the earliest and latest usable tagged user
   turns. A transcript with no usable tag retains the file modification time
   for both bounds. The latest user turn gives a lower bound for assistant
   completion because the Cursor format supplies no assistant completion time.
+
 - **Evidence:** `documentation`.
+
 - **Upstream:** Cursor's first-party
   [history documentation](https://docs.cursor.com/en/agent/chat/history)
   confirms local chat persistence and the separate SQLite history index.
@@ -3137,6 +3143,7 @@ schemas keep their existing ordering behavior.
   that captured producer version. Its main database was a 4096-byte header
   while schema and rows lived in `store.db-wal`, so the reader must keep the
   WAL attached.
+
 - **Legacy result evidence (rechecked 2026-09-09):**
   [Issue #1627](https://github.com/kenn-io/agentsview/issues/1627), based on
   read-only inspection of live transcripts on 2026-09-04, reports discarded
@@ -3155,6 +3162,7 @@ schemas keep their existing ordering behavior.
   regression also exercises incremental S3 sync from data version 101 with an
   unchanged object, verifying recovered output and a skipped fetch on the next
   pass. This uses synthetic input, not additional format evidence.
+
 - **Subagent evidence:** The subagent layout comes from direct inspection of a
   live local `~/.cursor/projects` tree (macOS, 2026-09-04): a delegating
   session records a `Subagent` `tool_use` block whose input carries
@@ -3170,9 +3178,11 @@ schemas keep their existing ordering behavior.
   [agent-sessions](https://github.com/jazzyalex/agent-sessions/blob/7a3f1f402ed9a2cf6c47aa04c1ed87a0c35fa391/AgentSessions/Services/CursorSessionParser.swift)
   and
   [cc_transcript_viewer](https://github.com/tim-hua-01/cc_transcript_viewer/blob/4157ac3575c4c0e9d742048f494be7ee10c589fc/cursor_parser.py).
+
 - **Usage and cost:** The consumed text/JSONL transcripts have no reliable
   per-message token, cache, reasoning, credit, or monetary-cost fields. The
   captured store adds no priced usage fields consumed by agentsview.
+
 - **Agentsview:** `internal/parser/cursor.go`,
   `internal/parser/cursor_paths.go`, and `internal/parser/cursor_provider.go`;
   workspace identity uses a filesystem-backed unique-match resolver, while
@@ -3203,6 +3213,7 @@ schemas keep their existing ordering behavior.
   unavailable, missing store tables or columns, and recovery after access
   failures for cached or newly observed stores. A custom root fixture keeps
   reasoning from sibling live stores out of archived transcripts.
+
 - **Duplicate transcripts:** Reverified 2026-09-10 with local parser and sync
   fixtures: a child filename can appear under multiple parents. Changed-path
   and stored-path lookup compare that filename across the project, using the
@@ -4333,13 +4344,12 @@ schemas keep their existing ordering behavior.
   `internal/importer/browser_requests/claude-ai.txt`;
   `internal/importer/testdata/browser_paths/claude-ai.txt` lists the exact
   paths Go builds, and the extension tests accept each one. Lists use `data`
-  and `has_more`
-  and include active, archived, and starred chats. Details select
-  `current_leaf_message_uuid` and follow string `parent_message_uuid` links to
-  the root sentinel `00000000-0000-4000-8000-000000000000`. Message text comes
-  from `content[].text` and thinking blocks. Malformed selected paths and
-  mismatched conversation UUIDs fail before writes. Exports preserve their
-  original message order.
+  and `has_more` and include active, archived, and starred chats. Details
+  select `current_leaf_message_uuid` and follow string `parent_message_uuid`
+  links to the root sentinel `00000000-0000-4000-8000-000000000000`. Message
+  text comes from `content[].text` and thinking blocks. Malformed selected
+  paths and mismatched conversation UUIDs fail before writes. Exports preserve
+  their original message order.
 - **Chrome transport:** Reverified 2026-10-09 against the canonical request file
   and reconstructed fixtures in `TestChromeHostSyncPrivateReplies`. Native
   messaging sends replies through a private Unix socket to the server; Chrome
@@ -4348,19 +4358,18 @@ schemas keep their existing ordering behavior.
   MiB; oversized serialized replies become status 413. Protocol revision 2
   covers encoding and request shapes. The server requires revision 2 on every
   reply; the extension does not check the request revision and stamps each
-  reply with its own.
-  Revision 2 (2026-11-17) adds a `platform` field to each request. An
-  extension that does not know the platform replies `unsupported: true`; the
-  server fails only that request with the update message and keeps the
-  connection, checked by `TestChromeHostUnsupportedPlatformReply`. A revision
-  1 extension still answers with revision 1, so the server disconnects and
-  asks for the same update.
-  `TestChromeHostLocalOnly` refuses remote-auth, bind-all, and forwarded
-  requests before Chrome fetches. `TestChromeHostIncompatibleReply` checks
-  mismatched replies during organization, list, and detail fetches before
-  status or body consumption without imports. Sync cancels on compatibility
-  errors and returns `chrome_host_update_required`. Recovery is to
-  restart AgentsView if upgraded, rerun setup, reload the extension, then
+  reply with its own. Revision 2 (2026-11-17) adds a `platform` field to each
+  request. An extension that does not know the platform replies
+  `unsupported: true`; the server fails only that request with the update
+  message and keeps the connection, checked by
+  `TestChromeHostUnsupportedPlatformReply`. A revision 1 extension still
+  answers with revision 1, so the server disconnects and asks for the same
+  update. `TestChromeHostLocalOnly` refuses remote-auth, bind-all, and
+  forwarded requests before Chrome fetches. `TestChromeHostIncompatibleReply`
+  checks mismatched replies during organization, list, and detail fetches
+  before status or body consumption without imports. Sync cancels on
+  compatibility errors and returns `chrome_host_update_required`. Recovery is
+  to restart AgentsView if upgraded, rerun setup, reload the extension, then
   Sync. `TestClaudeAIChromeStatus` verifies live connection status through the
   local-only GET route. Registration is per OS user; the last setup wins.
   `TestChromeHostKeepsLiveConnection` checks that a second profile is rejected
@@ -4368,12 +4377,11 @@ schemas keep their existing ordering behavior.
   against the Unix socket test. The worker tests refuse unknown platforms with
   `unsupported` and disallowed paths with an error before touching tabs, and
   stamp every reply with the worker's own revision whatever revision the
-  request carried.
-  `TestChromeSyncResults` checks the generated CLI operation with a base path,
-  Origin, bearer token, partial summaries, and pre-stream error messages,
-  including `chrome_host_required` and `chrome_sync_running`. These codes and
-  `browser_sync_auth_required` replaced the `claude_ai_` codes on 2026-11-17;
-  `claude_ai_config_invalid` is unchanged.
+  request carried. `TestChromeSyncResults` checks the generated CLI operation
+  with a base path, Origin, bearer token, partial summaries, and pre-stream
+  error messages, including `chrome_host_required` and `chrome_sync_running`.
+  These codes and `browser_sync_auth_required` replaced the `claude_ai_` codes
+  on 2026-11-17; `claude_ai_config_invalid` is unchanged.
 - **Freshness:** Sync stores an FNV-64a hash of the list's `updated_at`, visible
   leaf, stored message count, transcript revision, title, and end time in
   `provider_freshness`, keyed by `claude-ai` and session ID.
@@ -4406,9 +4414,8 @@ schemas keep their existing ordering behavior.
   [Sync Claude.ai chats](https://agentsview.io/docs/chat-import/#sync-claudeai-chats)
   for failure handling. Organization responses must decode to an array; null
   and other shapes fail. Organization and list failures, cancellation, and an
-  empty page with `has_more: true` stop Sync. Null, absent, and
-  root-sentinel list leaves skip detail fetches; malformed leaves count as
-  errors.
+  empty page with `has_more: true` stop Sync. Null, absent, and root-sentinel
+  list leaves skip detail fetches; malformed leaves count as errors.
 - **Observed 2026-10-07:** Authenticated Team and personal account checks found
   `current_leaf_message_uuid` on list items and byte-identical list and detail
   `updated_at` values with microseconds. Branch switches changed the leaf
@@ -4425,10 +4432,10 @@ schemas keep their existing ordering behavior.
   like zip import on main, stores text and thinking blocks only. Signed-out
   organization, list, and detail requests returned HTTP 403 with
   `error.details.error_code` equal to `account_session_invalid`.
-- **Observed 2026-11-13:** A contributor's live Sync runs found about five
-  list items per run with no `current_leaf_message_uuid` field at all. They
-  have no message tree to fetch, so Sync skips them like a null leaf. No
-  fixture captures them; the list-leaf test covers the absent case.
+- **Observed 2026-11-13:** A contributor's live Sync runs found about five list
+  items per run with no `current_leaf_message_uuid` field at all. They have no
+  message tree to fetch, so Sync skips them like a null leaf. No fixture
+  captures them; the list-leaf test covers the absent case.
 - **Evidence limits:** Existing selected-path and Sync fixtures cover these
   shapes. Multiple chat organizations, web-search blocks, unanswered final
   prompts, and tree fields in official exports still need live verification.
@@ -4584,29 +4591,30 @@ schemas keep their existing ordering behavior.
 - **Lists:** The
   [txcript ChatGPT format notes](https://github.com/skillsynchq/txcript/blob/main/docs/formats/chatgpt.md),
   checked 2026-10-17, document separate active (`is_archived=false`) and
-  archived (`is_archived=true`) lists. Sync pages both lists every run, checked
-  by `TestSyncChatGPTPagesActiveAndArchivedLists`.
+  archived (`is_archived=true`) lists. Sync pages both lists every run,
+  checked by `TestSyncChatGPTPagesActiveAndArchivedLists`.
 - **Detail format:** The
   [conversation export format notes](https://github.com/ThierryAbalea/chatgpt-conversation-export/blob/main/docs/format.md),
-  checked 2026-10-17, describe a newer flat `messages` array with `page_info`
-  pagination. Sync does not parse it. A detail without a `mapping` object or
-  without both `conversation_id` and `id` counts as one failed chat toward the
-  two-failures stop, and the run then reports that AgentsView needs an update
-  (`TestSyncChatGPTUnsupportedFormatCountsTowardDetailStop`,
+  checked 2026-10-17, describe a newer flat `messages` array with
+  `page_info` pagination. Sync does not parse it. A detail without a `mapping`
+  object or without both `conversation_id` and `id` counts as one failed chat
+  toward the two-failures stop, and the run then reports that AgentsView needs
+  an update (`TestSyncChatGPTUnsupportedFormatCountsTowardDetailStop`,
   `TestSyncChatGPTSingleUnsupportedDetail`). A detail that parses to no
   messages records freshness and is not fetched again until the list timestamp
   changes (`TestSyncChatGPTEmptyConversationFreshness`, 2026-11-17). Before
   2026-11-17 such chats were fetched on every run.
 - **Identities and history:** The parser stores each user message's ChatGPT ID
-  and parent ID as source identities, for ZIP imports and Sync alike. Assistant
-  rows merge several nodes and carry no source identity, so a regenerated reply
-  with identical text keeps pins matched by role, text, and occurrence rank. Sync fills
-  missing identities and models in place; ZIP re-imports do not
-  (`TestImportChatGPTReimportLegacyRows`). A turn whose stored and incoming IDs
-  differ is an edit. Appends, completed tool results, and extended text keep
-  message IDs and pins. Edits, regenerations, and shorter chats replace the
-  chat and keep the previous version in Trash under full, transcripts, and
-  usage storage (`TestSyncChatGPTAppendFreshnessAndBranchChanges`,
+  and parent ID as source identities, for ZIP imports and Sync alike.
+  Assistant rows merge several nodes and carry no source identity, so a
+  regenerated reply with identical text keeps pins matched by role, text, and
+  occurrence rank. Sync fills missing identities and models in place; ZIP
+  re-imports do not (`TestImportChatGPTReimportLegacyRows`). A turn whose
+  stored and incoming IDs differ is an edit. Appends, completed tool results,
+  and extended text keep message IDs and pins. Edits, regenerations, and
+  shorter chats replace the chat and keep the previous version in Trash under
+  full, transcripts, and usage storage
+  (`TestSyncChatGPTAppendFreshnessAndBranchChanges`,
   `TestSyncChatGPTReplacesShorterBranchAndPreservesLostPins`,
   `TestSyncChatGPTBackfillsLegacyIdentityBeforeReplacingEditedTurn`,
   `TestSyncChatGPTUsageArchiveShorterBranchKeepsTrashedCopy`). Since
@@ -4618,14 +4626,14 @@ schemas keep their existing ordering behavior.
   `TestSyncChatGPTUpdatesRetainedModelAndCachesFreshness`,
   `TestSyncChatGPTUsageArchiveFillsModelWithUnchangedTimestamp`).
 - **Images and start time:** Browser details carry no asset identity, so images
-  show as `[image unavailable]`. Sync keeps a ZIP-imported upload on a user turn
-  whose position, role, timestamp, sanitized surrounding text, and saved IDs
-  (when present) match (`TestSyncChatGPTZipImageReconciliation`). Generated
-  images become placeholders even when unchanged, so the first Sync of a chat
-  with a ZIP-imported generated image replaces it and keeps the original in
-  Trash. When detail
-  `create_time` is null or absent, Sync keeps the stored start time or uses
-  the first dated message (`TestSyncChatGPTMissingCreateTime`).
+  show as `[image unavailable]`. Sync keeps a ZIP-imported upload on a user
+  turn whose position, role, timestamp, sanitized surrounding text, and saved
+  IDs (when present) match (`TestSyncChatGPTZipImageReconciliation`).
+  Generated images become placeholders even when unchanged, so the first Sync
+  of a chat with a ZIP-imported generated image replaces it and keeps the
+  original in Trash. When detail `create_time` is null or absent, Sync keeps
+  the stored start time or uses the first dated message
+  (`TestSyncChatGPTMissingCreateTime`).
 - **ChatGPT Sync errors:** Before streaming, `chrome_host_required` reports a
   disconnected host and `chrome_sync_running` an active Chrome Sync. Stream
   errors use `browser_sync_auth_required` for an HTTP 401 and
@@ -5332,11 +5340,12 @@ schemas keep their existing ordering behavior.
   `internal/parser/antigravity_proto.go`,
   `internal/parser/antigravity_brain_transcript.go`, and
   `internal/parser/antigravity_provider.go`; field decoding is deliberately
-  marked as reverse engineering. [agentsview#3135](https://github.com/kenn-io/agentsview/issues/3135)
-  reports `USER_INPUT` field 19 → 3 → 1 as typed text and
-  19 → 3 → 2 → 27 → 1 → 2 as the skill expansion; the parser prefers the typed
-  text, checked only against a synthetic CLI fixture. The brain transcript needs no such decoding:
-  it is line-delimited JSON with named fields, verified 2026-09-26 against
+  marked as reverse engineering.
+  [agentsview#3135](https://github.com/kenn-io/agentsview/issues/3135) reports
+  `USER_INPUT` field 19 → 3 → 1 as typed text and 19 → 3 → 2 → 27 → 1 → 2 as
+  the skill expansion; the parser prefers the typed text, checked only against
+  a synthetic CLI fixture. The brain transcript needs no such decoding: it is
+  line-delimited JSON with named fields, verified 2026-09-26 against
   transcripts two Antigravity builds wrote, and it is read as untrusted
   structured input. Rechecked 2026-09-29 with synthetic transcripts through
   the parser and SQLite sync: read failures preserve archived messages, and
@@ -5444,12 +5453,21 @@ schemas keep their existing ordering behavior.
   variant such as `gemini-3.7-flash-exp-b`. The matching
   `ExecutorMetadata.last_step_idx` range carries the effort-qualified model at
   `cascade_config.planner_config.model_name` (fields 10, 1, and 28).
-  Agentsview normalizes observed serving canary suffixes (such as `-exp-b`)
-  against the covering executor model, while preserving distinct product
-  models ending in generic `-exp` (such as `gemini-2.0-flash-exp`).
-  `ChatModelMetadata.model_display_name` (field 21) remains the complete label
-  when present. Agentsview avoids double counting and catalog-prices usage. No
-  provider USD cost is consumed.
+  Reverified 2026-11-23 against local Antigravity CLI conversation databases:
+  `ChatModelMetadata.model_display_name` (field 21) records human display
+  labels with parenthesized reasoning levels such as `Gemini 4 Neon (High)`,
+  `Gemini 4 Neon (Low)`, and `Gemini 3.5 Flash (High)`, while `response_model`
+  (field 19) records `gemini-4-neon` for Gemini 4 Neon and internal serving
+  aliases (`gemini-3-flash-a`, `gemini-default`) for Gemini 3.5 Flash.
+  Agentsview normalizes display labels and effort-qualified slugs into a base
+  model slug (`gemini-4-neon`, `gemini-3.5-flash`, `gemini-3.7-flash`) and
+  stores the reasoning level (`high`, `low`, `medium`, `minimal`, `xhigh`,
+  `max`, `thinking`) in `messages.reasoning_effort`. Observed serving canary
+  suffixes (such as `-exp-b`) still normalize against the covering executor
+  model while preserving distinct product models ending in generic `-exp`
+  (such as `gemini-2.0-flash-exp`). Data version 186 reparses existing
+  `antigravity` and `antigravity-cli` sources in place. Agentsview avoids
+  double counting and catalog-prices usage. No provider USD cost is consumed.
 - **Prompt envelope (checked 2026-11-01):** The brain transcript reported in
   [agentsview#2548](https://github.com/kenn-io/agentsview/issues/2548) wraps
   CLI prompts in `<USER_REQUEST>` alongside injected `<ADDITIONAL_METADATA>`
@@ -5511,9 +5529,9 @@ schemas keep their existing ordering behavior.
   `$T3CODE_HOME/userdata/providers/antigravity` (default
   `~/.t3/userdata/providers/antigravity`) as a default container root for
   `antigravity-cli` and expands per-instance roots dynamically across both T3
-  Code and user-configured meta-harness containers (`internal/config/meta_harnesses.go`,
-  `internal/parser/instance_container.go`, and
-  `internal/parser/antigravity_cli_provider.go`). Evidence remains
+  Code and user-configured meta-harness containers
+  (`internal/config/meta_harnesses.go`, `internal/parser/instance_container.go`,
+  and `internal/parser/antigravity_cli_provider.go`). Evidence remains
   `no-public-source`.
 
 ## iFlow CLI (`iflow`)
@@ -6562,18 +6580,19 @@ schemas keep their existing ordering behavior.
 ## Muse Personal (`muse-personal`)
 
 - **Format:** Meta's personal assistant writes version-1 transcripts under
-  `~/agents/agent-<uuid>/sessions/<session-uuid>.jsonl`, with an optional sibling
-  `sessions.json` index. This is a different product and persistence format from
-  Muse Code. The first record is `session_header` with `version`, `session_id`,
-  `agent_id` and RFC 3339 `created_at`. Each `item` has a non-negative integer
-  `seq`, open-ended `source`, RFC 3339 `created_at` and typed `item`. Supported
-  variants are `message`, `message_parts`, `thinking`, `commentary_text`,
-  `function_call` and `function_call_output`. Output `metadata` is an optional
-  JSON string. `compaction_checkpoint.created_at` is integer Unix epoch seconds;
-  its summary is visible and its nested `details_json` history is opaque.
-  The version-1 index has a `sessions` array with identity, timestamps, transcript
-  path, sequence-space counts and optional context-window snapshots. Unknown
-  index keys are ignored. Its `transcript_path` is never a filesystem authority.
+  `~/agents/agent-<uuid>/sessions/<session-uuid>.jsonl`, with an optional
+  sibling `sessions.json` index. This is a different product and persistence
+  format from Muse Code. The first record is `session_header` with `version`,
+  `session_id`, `agent_id` and RFC 3339 `created_at`. Each `item` has a
+  non-negative integer `seq`, open-ended `source`, RFC 3339 `created_at` and
+  typed `item`. Supported variants are `message`, `message_parts`, `thinking`,
+  `commentary_text`, `function_call` and `function_call_output`. Output
+  `metadata` is an optional JSON string. `compaction_checkpoint.created_at` is
+  integer Unix epoch seconds; its summary is visible and its nested
+  `details_json` history is opaque. The version-1 index has a `sessions` array
+  with identity, timestamps, transcript path, sequence-space counts and
+  optional context-window snapshots. Unknown index keys are ignored. Its
+  `transcript_path` is never a filesystem authority.
 - **Evidence:** `no-public-source`.
 - **Upstream:** Meta documentation was checked 2026-11-02. Searches of Meta's
   public product and developer documentation did not locate this persistence
@@ -6581,47 +6600,50 @@ schemas keep their existing ordering behavior.
   personal assistant only; it is not format evidence. Muse Code's public SDK
   schema does not describe these files. Shapes were independently checked
   against two private byte-preserved native captures on 2026-11-02: 7 and 92
-  items, 1 and 27 call/output pairs, and one compaction. These captures are not
-  repository fixtures. `internal/parser/testdata/muse_personal/` contains only
-  developer-authored synthetic examples; their six transcript/index SHA-256
-  hashes were checked against the synthetic source packet on 2026-11-02.
-  The captures confirmed out-of-order physical writes for late finalized
-  thinking, output records without metadata and additional unknown index keys.
-- **Usage and cost:** None emitted. `context_window_usage` is a context snapshot,
-  not per-message usage. Internal `model_id` is not exposed as a public model
-  name. Titles, parent links and chat/subagent classification remain unknown.
+  items, 1 and 27 call/output pairs, and one compaction. These captures are
+  not repository fixtures. `internal/parser/testdata/muse_personal/` contains
+  only developer-authored synthetic examples; their six transcript/index
+  SHA-256 hashes were checked against the synthetic source packet on
+  2026-11-02. The captures confirmed out-of-order physical writes for late
+  finalized thinking, output records without metadata and additional unknown
+  index keys.
+- **Usage and cost:** None emitted. `context_window_usage` is a context
+  snapshot, not per-message usage. Internal `model_id` is not exposed as a
+  public model name. Titles, parent links and chat/subagent classification
+  remain unknown.
 - **Agentsview:** `internal/parser/muse_personal.go` and
   `internal/parser/muse_personal_provider.go` require UUID layout and matching
-  version-1 header identity. Recognized future transcript versions and duplicate
-  session identities leave discovery incomplete so they cannot authorize raw
-  custody tombstones. Sessions use `muse-personal:<session_id>`.
+  version-1 header identity. Recognized future transcript versions and
+  duplicate session identities leave discovery incomplete so they cannot
+  authorize raw custody tombstones. Sessions use `muse-personal:<session_id>`.
   Visible assistant commentary participates in dialogue search and export.
-  Items are sorted by sequence before pairing; ties keep physical order.
-  Only byte-identical same-sequence records are deduplicated. A checkpoint is
+  Items are sorted by sequence before pairing; ties keep physical order. Only
+  byte-identical same-sequence records are deduplicated. A checkpoint is
   anchored after the highest preceding physical item sequence; it does not
   replay nested history or discard previous rows. Outputs attach only to a
   unique preceding unmatched call ID; sequential reuse works, ambiguity leaves
-  outputs unpaired. Source/sequence occurrence provenance distinguishes retained
-  rows. Unknown variants retain a bounded sanitized type marker even when their
-  body fields have unfamiliar JSON shapes; their bodies stay raw-only. Unknown
-  records accept the RFC3339 and integer epoch-second timestamp shapes already
-  used by known records. Null or invalid record timestamps count as malformed.
-  File parts retain inert recorded references. Thinking signatures,
-  output metadata, checkpoint details and context snapshots stay in raw custody.
-  An unterminated final line defers publication. Raw capture includes the original
-  transcript and regular index, even when the index version cannot enrich the
-  session. Reverified against synthetic fixtures on 2026-11-10: index freshness
-  uses the matching session ID, agent ID and normalized creation instant, with
-  update timestamps in row order (the first eligible row extends end time).
-  Each verified index generation is decoded once per sync pass. Arrival, edits
-  and removal refresh only affected session projections; unrelated fields,
-  whitespace and sibling rows do not force replacement. The complete index
-  remains in raw custody, including malformed or opaque bytes. Local and
-  hosted parsing use the same provider; logical hosted paths remain stable
-  across generations. Nonregular transcripts are rejected before opening;
-  unreadable owned directories and observed cancellation cannot authorize a
-  complete discovery or replacement. An unfinished header also defers parsing
-  and makes discovery nonauthoritative until the rewrite completes.
+  outputs unpaired. Source/sequence occurrence provenance distinguishes
+  retained rows. Unknown variants retain a bounded sanitized type marker even
+  when their body fields have unfamiliar JSON shapes; their bodies stay
+  raw-only. Unknown records accept the RFC3339 and integer epoch-second
+  timestamp shapes already used by known records. Null or invalid record
+  timestamps count as malformed. File parts retain inert recorded references.
+  Thinking signatures, output metadata, checkpoint details and context snapshots
+  stay in raw custody. An unterminated final line defers publication. Raw
+  capture includes the original transcript and regular index, even when the
+  index version cannot enrich the session. Reverified against synthetic
+  fixtures on 2026-11-10: index freshness uses the matching session ID, agent
+  ID and normalized creation instant, with update timestamps in row order (the
+  first eligible row extends end time). Each verified index generation is
+  decoded once per sync pass. Arrival, edits and removal refresh only affected
+  session projections; unrelated fields, whitespace and sibling rows do not
+  force replacement. The complete index remains in raw custody, including
+  malformed or opaque bytes. Local and hosted parsing use the same provider;
+  logical hosted paths remain stable across generations. Nonregular
+  transcripts are rejected before opening; unreadable owned directories and
+  observed cancellation cannot authorize a complete discovery or replacement.
+  An unfinished header also defers parsing and makes discovery nonauthoritative
+  until the rewrite completes.
 
 [evener-source-1]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/transcript/transcript.go
 [evener-source-2]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/turn.go

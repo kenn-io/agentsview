@@ -698,7 +698,10 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (183: prefer structured Antigravity user prompts over skill expansions.)
 // (184: prevent older binaries from overwriting prompt-derived PR links.)
 // (185: prevent older binaries from clearing Cursor account usage stamps on reparse.)
-const dataVersion = 185
+// (186: normalize Antigravity model display names and effort suffixes into base
+// model slugs plus messages.reasoning_effort. Re-parse Antigravity and
+// Antigravity CLI sources in place; source and session identities are unchanged.)
+const dataVersion = 186
 
 const archiveOnlyVersionBase = 1 << 20
 

@@ -570,6 +570,9 @@ func applyAntigravityBrainStepMetadata(
 			if msg.Model == "" && dbMsg.Model != "" {
 				msg.Model = dbMsg.Model
 			}
+			if msg.ReasoningEffort == "" && dbMsg.ReasoningEffort != "" {
+				msg.ReasoningEffort = dbMsg.ReasoningEffort
+			}
 			if !msg.HasContextTokens && dbMsg.HasContextTokens {
 				msg.ContextTokens = dbMsg.ContextTokens
 				msg.HasContextTokens = true
@@ -2042,7 +2045,8 @@ func extractAgyGeneratorUsage(
 		if stepIndex, ok := maxAntigravityStepIndex(gen.StepIndices); ok {
 			executorModel = executorModelForStep(executors, stepIndex)
 		}
-		model = resolveAntigravityModelName(model, executorModel, false)
+		var effort string
+		model, effort = resolveAntigravityModel("", model, executorModel)
 
 		// Find the planner message this generation produced.
 		var targetMsg *ParsedMessage
@@ -2083,6 +2087,9 @@ func extractAgyGeneratorUsage(
 			!targetMsg.HasOutputTokens {
 			if model != "" {
 				targetMsg.Model = model
+			}
+			if effort != "" {
+				targetMsg.ReasoningEffort = effort
 			}
 			targetMsg.ContextTokens = input + cacheRead
 			targetMsg.OutputTokens = output
