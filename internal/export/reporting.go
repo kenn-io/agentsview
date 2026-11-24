@@ -43,10 +43,9 @@ func IsAccountReportingSchema(version int) bool {
 	return version == ReportingAccountSchemaVersion || version == ReportingCursorSchemaVersion
 }
 
-// ReportingHour is one immutable UTC-hour export. Digest identifies the
-// canonical document body with the derived Digest field omitted.
 // ReportingCursorEvent identifies one Cursor billing event across archives.
 type ReportingCursorEvent struct {
+	At               string      `json:"at"`
 	Key              string      `json:"key"`
 	Model            string      `json:"model"`
 	InputTokens      int64       `json:"input_tokens"`
@@ -64,6 +63,8 @@ type ReportingCursorPoll struct {
 	PolledAt string `json:"polled_at"`
 }
 
+// ReportingHour is one immutable UTC-hour export. Digest identifies the
+// canonical document body with the derived Digest field omitted.
 type ReportingHour struct {
 	CursorEvents   []ReportingCursorEvent   `json:"cursor_events,omitempty"`
 	CursorPolls    []ReportingCursorPoll    `json:"cursor_polls,omitempty"`
@@ -253,6 +254,9 @@ func FinalizeReportingHour(hour ReportingHour) (ReportingHour, []byte, error) {
 		return ReportingHour{}, nil, fmt.Errorf(
 			"unsupported reporting schema version %d", hour.SchemaVersion,
 		)
+	}
+	if hour.SchemaVersion != ReportingCursorSchemaVersion && (len(hour.CursorEvents) > 0 || len(hour.CursorPolls) > 0) {
+		return ReportingHour{}, nil, fmt.Errorf("Cursor ledger requires reporting schema %d", ReportingCursorSchemaVersion)
 	}
 	hourStart, err := parseReportingHour(hour.Period)
 	if err != nil {

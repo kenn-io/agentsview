@@ -203,3 +203,17 @@ func quietReportingHourFixture(period string) ReportingHour {
 		},
 	}
 }
+
+func TestFinalizeReportingHourRejectsCursorLedgerOnOlderSchemas(t *testing.T) {
+	for _, version := range []int{5, 6} {
+		for _, hour := range []ReportingHour{
+			{CursorEvents: []ReportingCursorEvent{{Key: "event"}}},
+			{CursorPolls: []ReportingCursorPoll{{Account: "account"}}},
+		} {
+			hour.SchemaVersion = version
+			hour.Period = "2026-07-28T10:00:00Z"
+			_, _, err := FinalizeReportingHour(hour)
+			require.Error(t, err)
+		}
+	}
+}

@@ -88,9 +88,10 @@ version across reporters.
 
 Schema 7 reports Cursor billing events in each hour's `cursor_events` list and
 account poll times in `cursor_polls`. Events carry a stable `key`, model, token
-counts, cost in microdollars, account ID, and poll time. Polls carry an account
-ID and the newest poll time observed for that account and hour, including empty
-polls. Both lists are sorted by key or account and omitted when empty. Scoped
+counts, cost in microdollars, account ID, poll time, and `at`, the event time in
+UTC RFC3339Nano. A poll is listed when it is newer than every event for that
+account and hour. The newest poll is the maximum of the event poll times and
+listed polls, including completed empty polls. Both lists are sorted by key or account and omitted when empty. Scoped
 exports omit them. Cursor events remain in the whole-hour total but are omitted
 from machine parts. Other standalone usage stays in the archive part.
 
@@ -100,8 +101,9 @@ lowest source device ID. Credit its account only when its stamp matches the
 newest poll for that account across all sources. Otherwise count it under the
 archive of the lowest-ID device holding the event. This keeps unique events from
 older archives and counts shared events once, including after an empty poll.
-Schemas 5 and 6 lack the event identities needed for this reconciliation. Use
-one schema version across reporters. Schema 7 uses the same machine ID hashing
+Consumers must implement this reconciliation to count shared events once.
+Schemas 5 and 6 lack the event identities needed for it. Use one schema version
+across reporters. Schema 7 uses the same machine ID hashing
 as schema 6.
 
 Your downstream integration can pick one snapshot per originating machine and

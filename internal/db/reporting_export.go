@@ -112,7 +112,7 @@ func (db *DB) ExportReportingDay(
 			return export.ReportingDay{}, err
 		}
 	}
-	if schemaVersion == export.ReportingCursorSchemaVersion {
+	if schemaVersion == export.ReportingCursorSchemaVersion && len(opts.ProjectKeys) == 0 {
 		if err := db.loadReportingCursorLedger(ctx, tx, date, date.Add(time.Duration(hourCount)*time.Hour), &source); err != nil {
 			return export.ReportingDay{}, err
 		}
@@ -241,7 +241,7 @@ func (db *DB) ExportReportingDigest(
 			return nil, err
 		}
 	}
-	if schemaVersion == export.ReportingCursorSchemaVersion {
+	if schemaVersion == export.ReportingCursorSchemaVersion && len(opts.ProjectKeys) == 0 {
 		if err := db.loadReportingCursorLedger(ctx, tx, from, unionEnd, &source); err != nil {
 			return nil, err
 		}
@@ -453,7 +453,10 @@ func reportingHoursFromMachineSource(
 			standaloneUsage = append(standaloneUsage, row.usage)
 		}
 		for _, row := range source.cursorEvents {
-			standaloneUsage = append(standaloneUsage, row.usage)
+			e := row.event
+			usageRow := activity.UsageRow{Timestamp: e.At, Model: e.Model, Agent: "cursor", UsageDedupKey: e.Key, Cost: e.Cost}
+			setStandaloneUsageFields(&usageRow, int(e.InputTokens), int(e.OutputTokens), int(e.CacheWriteTokens), int(e.CacheReadTokens))
+			standaloneUsage = append(standaloneUsage, usageRow)
 		}
 	}
 	usage := append(
