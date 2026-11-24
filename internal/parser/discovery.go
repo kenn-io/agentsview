@@ -846,6 +846,12 @@ func CodexSessionPathInfo(root, path string) (CodexLayout, string, bool) {
 		return CodexLayoutUnknown, "", false
 	}
 	parts := strings.Split(rel, sep)
+	if n := len(parts); n >= 6 && parts[n-5] == "sessions" {
+		home := filepath.Join(append([]string{root}, parts[:n-5]...)...)
+		if _, sessions := codexLabeledHome(root, home); sessions != "" {
+			parts = parts[n-4:]
+		}
+	}
 	switch len(parts) {
 	case 1:
 		if !isCodexSessionFilename(parts[0]) {
@@ -865,6 +871,48 @@ func CodexSessionPathInfo(root, path string) (CodexLayout, string, bool) {
 	default:
 		return CodexLayoutUnknown, "", false
 	}
+}
+
+// codexLabeledHome identifies a marked home within root.
+func codexLabeledHome(root, home string) (string, string) {
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(home))
+	if err != nil || !filepath.IsLocal(rel) || !strings.HasPrefix(filepath.Base(home), ".codex-run-v1-") {
+		return "", ""
+	}
+	label := filepath.ToSlash(filepath.Dir(rel))
+	return label, filepath.Join(home, "sessions")
+}
+
+func codexLabeledSession(root, path string) (string, string) {
+	if _, _, ok := CodexSessionPathInfo(root, path); !ok {
+		return "", ""
+	}
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+	if err != nil {
+		return "", ""
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	n := len(parts)
+	if n < 6 || parts[n-5] != "sessions" {
+		return "", ""
+	}
+	home := filepath.Join(append([]string{root}, parts[:n-5]...)...)
+	return codexLabeledHome(root, home)
+}
+
+// CodexSourceLabel returns the label preceding a marked Codex run home.
+func CodexSourceLabel(root, path string) string {
+	label, _ := codexLabeledSession(root, path)
+	return label
+}
+
+// CodexLabeledIndexSessions returns the sessions directory for a marked run's index.
+func CodexLabeledIndexSessions(root, indexPath string) string {
+	if filepath.Base(indexPath) != CodexSessionIndexFilename {
+		return ""
+	}
+	_, sessions := codexLabeledHome(root, filepath.Dir(indexPath))
+	return sessions
 }
 
 // walkCodexDayDirs traverses a Codex sessions directory with

@@ -450,6 +450,16 @@ func (p *codexProvider) Fingerprint(
 	return p.sources.Fingerprint(ctx, source)
 }
 
+// parentRoots includes the labeled home that owns a discovered child.
+func (p *codexProvider) parentRoots(path string) []string {
+	for _, root := range p.sources.roots {
+		if _, sessions := codexLabeledSession(root, path); sessions != "" {
+			return append(slices.Clone(p.sources.roots), sessions)
+		}
+	}
+	return p.sources.roots
+}
+
 func (p *codexProvider) PlanRawCapture(
 	ctx context.Context,
 	source SourceRef,
@@ -467,7 +477,7 @@ func (p *codexProvider) PlanRawCapture(
 	}
 	captureRoot := filepath.Clean(src.Root)
 	indexPath := codexSessionIndexPath(src.Path)
-	if indexPath != "" {
+	if indexPath != "" && CodexSourceLabel(src.Root, src.Path) == "" {
 		// The provider reads this named sibling as session metadata, so raw
 		// capture widens only far enough to preserve the same parse inputs.
 		captureRoot = filepath.Dir(indexPath)
@@ -492,7 +502,7 @@ func (p *codexProvider) PlanRawCapture(
 			)
 		}
 		seen := map[string]bool{resolvedSource: true}
-		for _, root := range p.sources.roots {
+		for _, root := range p.parentRoots(src.Path) {
 			if err := ctx.Err(); err != nil {
 				return RawCapturePlan{}, err
 			}
@@ -547,7 +557,8 @@ func (p *codexProvider) PlanRawCapture(
 			if i > 0 {
 				logical = fmt.Sprintf("alias-homes/%d/%s", i, CodexSessionIndexFilename)
 			}
-			if p.Config.StableSourceSnapshots && rawCapturePathWithin(captureRoot, candidate) {
+			if (p.Config.StableSourceSnapshots || i == 0 && CodexSourceLabel(src.Root, src.Path) != "") &&
+				rawCapturePathWithin(captureRoot, candidate) {
 				// Materialized aliases already have custody paths. Keep their
 				// original ordinals even when missing indexes left gaps.
 				rel, err := filepath.Rel(captureRoot, candidate)
@@ -957,7 +968,7 @@ func (s codexSourceSet) ownsCodexSidecars() bool {
 }
 
 func (s codexSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
-	return s.discover(ctx, func(string) bool { return true })
+	return s.discover(ctx, func(string) bool { return true }, true)
 }
 
 func (s codexSourceSet) DiscoverEach(
@@ -1015,6 +1026,7 @@ func (s codexSourceSet) discoverEachRoot(
 func (s codexSourceSet) discover(
 	ctx context.Context,
 	includeRoot func(string) bool,
+	withLabeled bool,
 ) ([]SourceRef, error) {
 	var sources []SourceRef
 	byKey := make(map[string]SourceRef)
@@ -1044,7 +1056,26 @@ func (s codexSourceSet) discover(
 			}
 			continue
 		}
-		for _, path := range s.discoverSessionPaths(root) {
+		paths := s.discoverSessionPaths(root)
+		if withLabeled {
+			err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+				if err != nil {
+					return nil //nolint:nilerr // Discovery skips unreadable paths and keeps available sessions.
+				}
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if entry.IsDir() && strings.HasPrefix(entry.Name(), ".codex-run-v1-") {
+					paths = append(paths, s.discoverSessionPaths(filepath.Join(path, "sessions"))...)
+					return filepath.SkipDir
+				}
+				return nil
+			})
+			if err != nil && ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+		}
+		for _, path := range paths {
 			source, ok := s.sourceRef(root, path, true)
 			if !ok {
 				source, ok = s.directPathSource(root, path, true)
@@ -1186,7 +1217,7 @@ func (p *codexProvider) HasCodexParentRollout(
 	}
 	ctx = p.parentInventoryContext(ctx)
 	cleanChild := filepath.Clean(childPath)
-	for _, root := range p.sources.roots {
+	for _, root := range p.parentRoots(childPath) {
 		if err := ctx.Err(); err != nil {
 			return false, err
 		}
@@ -1468,9 +1499,23 @@ func (s codexSourceSet) sourcesForIndexPath(
 		return nil, err
 	}
 	indexDir := filepath.Dir(indexPath)
+	for _, root := range s.roots {
+		if sessions := CodexLabeledIndexSessions(root, indexPath); sessions != "" {
+			var sources []SourceRef
+			for _, path := range s.discoverSessionPaths(sessions) {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				if ref, ok := s.sourceRef(root, path, true); ok {
+					sources = append(sources, ref)
+				}
+			}
+			return sources, nil
+		}
+	}
 	return s.discover(ctx, func(root string) bool {
 		return slices.Contains(s.metadata.dirs(root), indexDir)
-	})
+	}, false)
 }
 
 func (s codexSourceSet) sourceRef(

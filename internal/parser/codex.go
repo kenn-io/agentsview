@@ -1951,10 +1951,11 @@ func (p *codexProvider) parentTurnResolver(
 	ctx context.Context, childPath string,
 ) codexParentTurnResolver {
 	ctx = p.parentInventoryContext(ctx)
+	roots := p.parentRoots(childPath)
 	return func(parentID string) (map[string]struct{}, bool) {
 		var paths []string
 		hasOriginal := false
-		for _, root := range p.sources.roots {
+		for _, root := range roots {
 			if ctx.Err() != nil {
 				return nil, false
 			}
@@ -1977,7 +1978,7 @@ func (p *codexProvider) parentTurnResolver(
 		if !hasOriginal {
 			// The original can return within the same filesystem timestamp
 			// tick. Let the next parse rediscover it instead of caching absence.
-			p.sources.threadFiles.invalidate(p.sources.roots)
+			p.sources.threadFiles.invalidate(roots)
 			return nil, false
 		}
 		files := make([]codexParentTurnCacheKey, 0, len(paths))
@@ -2305,6 +2306,18 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 	if !sessionNamePresent && sessionName == "" && b.firstMessage == "" &&
 		b.relationshipType == RelSubagent {
 		sessionName = codexAgentPathLeaf(b.agentPath)
+	}
+
+	if p.spec.agent == AgentCodex {
+		for _, root := range p.sources.roots {
+			if label := CodexSourceLabel(root, path); label != "" {
+				b.project = label
+				if b.sessionKind == SessionKindNonInteractive && b.relationshipType == "" {
+					b.sessionKind = SessionKindRoborev
+				}
+				break
+			}
+		}
 	}
 
 	sess := &ParsedSession{

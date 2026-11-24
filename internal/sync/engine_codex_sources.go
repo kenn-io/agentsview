@@ -206,6 +206,8 @@ func (e *Engine) classifyCodexIndexPath(ctx context.Context,
 		}
 		if slices.Contains(e.codexMetadata().IndexFiles(agDir), path) {
 			sessionRoots = append(sessionRoots, agDir)
+		} else if sessions := parser.CodexLabeledIndexSessions(agDir, path); sessions != "" {
+			sessionRoots = append(sessionRoots, sessions)
 		}
 	}
 	if len(sessionRoots) == 0 {
