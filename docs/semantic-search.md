@@ -59,6 +59,7 @@ To use an explicit model or endpoint, configure the recipe and named servers in
 enabled = true                    # default false; everything below is opt-in
 # db_path defaults to <data_dir>/vectors.db
 include_automated = false         # default; automated sessions (e.g. roborev) are not embedded -- set true to include
+agents = []                       # default; empty embeds every agent -- e.g. ["claude"] embeds only Claude Code sessions
 recall_max_revision_lag = 256     # default; Recall corpus revisions the Recall index may trail and still serve (0 = exact)
 
 [vector.embeddings]
@@ -488,6 +489,24 @@ reconciliation on the next build. AgentsView removes now-out-of-scope rows and
 their vectors or picks up newly-in-scope sessions without re-embedding documents
 that stayed in scope and unchanged.
 
+`agents` limits the session index to the listed agents, so a build skips the
+embedding work for every other agent. For example, `agents = ["claude"]` embeds
+only Claude Code sessions. An empty or omitted list embeds every agent. Names
+are the agent IDs AgentsView stores on each session, such as `claude` or
+`codex`. An unknown name fails config load with
+`[vector] agents: unknown agent "<name>"`, so a typo never empties the index.
+
+`agents` combines with `include_automated`: a session is embedded only when its
+agent is in the list (or the list is empty) and it is a human session or
+`include_automated = true`. The after-sync build, the periodic backstop, and
+`embeddings build` all use the configured list; there is no command-line
+override. Changing the list triggers the same full mirror reconciliation on the
+next build: vectors for agents you removed are deleted, so semantic and hybrid
+search stop returning them, and sessions from agents you added are embedded,
+including ones older than the last build. A running daemon picks up the new
+list after it restarts. Keyword search is unaffected, and the list does not
+apply to the Recall index.
+
 ### Ollama quickstart
 
 ```bash
@@ -884,8 +903,8 @@ What the range *means* depends on the search mode:
   spans the whole stretch of assistant messages. Lexical citations therefore
   need no vector index and never change with index state. Derived and embedded
   spans differ for assistant runs the index split into capped pieces, sessions
-  excluded from the build (`include_automated = false`), and messages newer
-  than the last index refresh.
+  excluded from the build (`include_automated = false` or an `agents` list
+  that omits their agent), and messages newer than the last index refresh.
 
 Lexical row cardinality is unchanged: substring, regex, and FTS still return one
 row per matching source row with the same snippets, and the range and lineage
