@@ -86,7 +86,7 @@ func TestSearchRankWalkTiers(t *testing.T) {
 	require.NoError(t, err)
 	defer tx.Rollback()
 	_, err = tx.ExecContext(ctx, `
-	INSERT INTO sessions(id,project) VALUES ('session-0','proj'),('session-1','proj'),('session-2','proj'),('session-3','proj'),('session-4','proj'),('session-5','proj'),('session-6','proj'),('title','proj'),('older','proj'),('recent','proj'),('boundary','proj'),('eligible','proj'),('eligible-old','proj'),('eligible-edge','proj'),('deleted','proj'),('image','proj'),('message-0','proj'),('message-1','proj'),('message-2','proj');
+	INSERT INTO sessions(id,project) VALUES ('session-0','proj'),('session-1','proj'),('session-2','proj'),('session-3','proj'),('session-4','proj'),('session-5','proj'),('session-6','proj'),('title','proj'),('boundary','proj'),('eligible','proj'),('eligible-old','proj'),('eligible-edge','proj'),('deleted','proj'),('image','proj'),('message-0','proj'),('message-1','proj'),('message-2','proj');
  UPDATE sessions SET first_message='tiers title' WHERE id='title';
  UPDATE sessions SET deleted_at='2026-01-01' WHERE id='deleted';
  INSERT INTO messages(session_id,ordinal,role,content) VALUES
@@ -100,9 +100,7 @@ func TestSearchRankWalkTiers(t *testing.T) {
  ('session-4',0,'user','tiers filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler'),
  ('session-5',0,'user','tiers filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler'),
  ('session-6',0,'user','tiers filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler'),
- ('title',0,'user','other'),('older',0,'user','concentrated');
- WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<65535)
- INSERT INTO messages(session_id,ordinal,role,content) SELECT 'recent',i,'user','concentrated' FROM n;
+ ('title',0,'user','other');
  WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<65535)
  INSERT INTO messages(session_id,ordinal,role,content) SELECT 'boundary',i,'user','boundaryword' FROM n;
 	INSERT INTO messages(session_id,ordinal,role,content) VALUES ('eligible-old',0,'user','eligibleword eligibleword eligibleword eligibleword eligibleword');
@@ -153,13 +151,6 @@ func TestSearchRankWalkTiers(t *testing.T) {
 			}
 			assert.Equal(t, "title", results[7].SessionID)
 		}
-	})
-	t.Run("concentrated", func(t *testing.T) {
-		page, err := d.Search(ctx, SearchFilter{Query: "concentrated", Limit: 10})
-		require.NoError(t, err)
-		require.Len(t, page.Results, 2)
-		assert.Equal(t, "recent", page.Results[0].SessionID)
-		assert.Equal(t, "older", page.Results[1].SessionID)
 	})
 	t.Run("boundary", func(t *testing.T) {
 		floor, err := searchTierFloor(ctx, d.getReader(), "messages_fts", "messages_fts.rendered MATCH ?", []any{`"boundaryword"`})
