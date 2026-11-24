@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"go.kenn.io/kit/agenthook"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/postgres"
@@ -130,7 +131,7 @@ func runMemorySessionStartCommand(
 	pg, _ := cmd.Flags().GetBool("pg")
 
 	if strings.TrimSpace(pluginRoot) != "" {
-		reportMemoryPluginConflicts(cmd.ErrOrStderr(), pluginRoot)
+		reportMemoryPluginConflicts(cmd.Context(), cmd.ErrOrStderr(), pluginRoot)
 	}
 	req := memorySessionStartRequest{
 		Mode:   memorySessionStartMode(strings.TrimSpace(mode)),
@@ -211,11 +212,14 @@ func applyMemorySessionEnv(cmd *cobra.Command) error {
 	return nil
 }
 
-func reportMemoryPluginConflicts(out io.Writer, pluginRoot string) {
+func reportMemoryPluginConflicts(ctx context.Context, out io.Writer, pluginRoot string) {
 	if _, err := os.Stat(filepath.Join(pluginRoot, "skills",
 		"agentsview-finding-history", "SKILL.md")); err != nil {
 		fmt.Fprintf(out, "agentsview memory: plugin skill unavailable: %v\n", err)
 		return
+	}
+	if hooks, err := agenthook.Check(ctx, agenthook.AgentClaude, sessionStartHookOptions()); err == nil && hooks.HookCount > 0 && hooks.State != agenthook.CheckDisabled {
+		fmt.Fprintln(out, "agentsview memory: standalone SessionStart hook found in Claude settings; remove it to avoid duplicate refreshes")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {

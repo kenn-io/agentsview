@@ -181,6 +181,67 @@ func launcherSessionID(env map[string]string, launcher string) (string, error) {
 	return session.ID, nil
 }
 
+// detachedLauncher selects a launcher only when archived parent chains place
+// one inherited session below the other.
+func detachedLauncher(ctx context.Context, cmd *cobra.Command, env map[string]string) (string, error) {
+	claude, err := launcherSessionID(env, "claude")
+	if err != nil || claude == "" {
+		return "", err
+	}
+	thread, err := launcherSessionID(env, "codex")
+	if err != nil || thread == "" {
+		return "", err
+	}
+	annotator, cleanup, err := resolveLaunchAnnotator(ctx, cmd)
+	if err != nil {
+		return "", err
+	}
+	defer cleanup()
+	reader, ok := annotator.(service.SessionService)
+	if !ok {
+		return "", nil
+	}
+	ancestor := func(child string, matches func(string) bool) (bool, error) {
+		seen := map[string]bool{}
+		for range launcherAncestryLimit {
+			if matches(child) {
+				return true, nil
+			}
+			if seen[child] {
+				return false, nil
+			}
+			seen[child] = true
+			session, err := reader.Get(ctx, child)
+			if err != nil {
+				return false, err
+			}
+			if session == nil || session.ParentSessionID == nil || *session.ParentSessionID == "" {
+				return false, nil
+			}
+			child = *session.ParentSessionID
+		}
+		return false, nil
+	}
+	claudeDescends, err := ancestor(claude, func(id string) bool {
+		key, found := strings.CutPrefix(id, "codex:")
+		return found && parser.CodexThreadIDFromSessionKey(key) == thread
+	})
+	if err != nil {
+		return "", err
+	}
+	codexDescends, err := ancestor("codex:"+thread, func(id string) bool { return id == claude })
+	if err != nil {
+		return "", err
+	}
+	if claudeDescends == codexDescends {
+		return "", nil
+	}
+	if claudeDescends {
+		return "claude", nil
+	}
+	return "codex", nil
+}
+
 func launcherArchiveID(ctx context.Context, home, agent, native string) (string, error) {
 	if agent == "codex" {
 		key, err := parser.CodexIndexedSessionKey(ctx, home, native)
@@ -253,10 +314,14 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 	if launcher == "" {
 		claude := env["CLAUDE_CODE_SESSION_ID"] != ""
 		codex := env["CODEX_THREAD_ID"] != "" || env["CODEX_SESSION_ID"] != ""
-		if claude == codex {
+		if claude && codex {
+			launcher, err = detachedLauncher(ctx, cmd, env)
+			if err != nil || launcher == "" {
+				return err
+			}
+		} else if !claude && !codex {
 			return nil
-		}
-		if claude {
+		} else if claude {
 			launcher = "claude"
 		} else {
 			launcher = "codex"
@@ -424,9 +489,8 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 }
 
 // recordLaunchParent retries a busy archive or an unreachable daemon until
-// the hook's deadline, including a Codex index not yet written,
-// since no later event writes the link. It gives up at once on a link the
-// archive rejects or a read-only backend.
+// the hook's deadline. When the Codex index is missing or newer than this
+// reader, the thread ID remains a valid thread-level parent.
 func recordLaunchParent(ctx context.Context, cmd *cobra.Command, childID, home, launcher, native string) error {
 	delay := launchParentRetryDelay
 	var parentID string
@@ -434,9 +498,11 @@ func recordLaunchParent(ctx context.Context, cmd *cobra.Command, childID, home, 
 		var err error
 		if parentID == "" {
 			parentID, err = launcherArchiveID(ctx, home, launcher, native)
-			missing := errors.Is(err, os.ErrNotExist) || errors.Is(err, sql.ErrNoRows)
+			if launcher == "codex" && (errors.Is(err, os.ErrNotExist) || errors.Is(err, sql.ErrNoRows) || errors.Is(err, parser.ErrUnsupportedCodexStateIndex)) {
+				parentID, err = "codex:"+native, nil
+			}
 			sqliteErr, isSQLite := errors.AsType[sqlite3.Error](err)
-			if err != nil && !missing && (!isSQLite || (sqliteErr.Code != sqlite3.ErrBusy && sqliteErr.Code != sqlite3.ErrLocked)) {
+			if err != nil && (!isSQLite || (sqliteErr.Code != sqlite3.ErrBusy && sqliteErr.Code != sqlite3.ErrLocked)) {
 				return err
 			}
 		}
@@ -450,9 +516,6 @@ func recordLaunchParent(ctx context.Context, cmd *cobra.Command, childID, home, 
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			if errors.Is(err, os.ErrNotExist) || errors.Is(err, sql.ErrNoRows) {
-				return nil
-			}
 			return err
 		case <-timer.C:
 		}

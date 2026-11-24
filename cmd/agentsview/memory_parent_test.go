@@ -145,6 +145,59 @@ func TestCaptureLaunchParentLinksEachProviderPair(t *testing.T) {
 	}
 }
 
+func TestCaptureLaunchParentDetachedMixedAncestry(t *testing.T) {
+	for _, tc := range []struct {
+		name, child, parent, want string
+		pageParent                bool
+	}{
+		{"claude nearer", "claude", "codex", claudeLauncherID, false},
+		{"codex nearer", "claude", "claude", "codex:" + codexLauncherID, false},
+		{"codex child from claude", "codex", "codex", claudeLauncherID, false},
+		{"codex child from codex", "codex", "claude", "codex:" + codexLauncherID, false},
+		{"unrelated", "claude", "", "", false},
+		{"claude nearer after revert", "claude", "codex", claudeLauncherID, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			writeCodexState(t, home, codexLauncherID, codexLauncherID)
+			database := stubLaunchArchive(t)
+			for _, s := range []db.Session{
+				{ID: claudeLauncherID, Agent: "claude", Project: "example", Machine: "example"},
+				{ID: "codex:" + codexLauncherID, Agent: "codex", Project: "example", Machine: "example"},
+			} {
+				require.NoError(t, database.UpsertSession(t.Context(), s))
+			}
+			codexParent := "codex:" + codexLauncherID
+			if tc.pageParent {
+				codexParent += "_44444444-4444-4444-8444-444444444444"
+				require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: codexParent, Agent: "codex", Project: "example", Machine: "example"}))
+			}
+			switch tc.parent {
+			case "claude":
+				_, err := database.SetSessionExternalParent(t.Context(), "codex:"+codexLauncherID, claudeLauncherID)
+				require.NoError(t, err)
+			case "codex":
+				_, err := database.SetSessionExternalParent(t.Context(), claudeLauncherID, codexParent)
+				require.NoError(t, err)
+			}
+			stubLaunchProcesses(t, fakeProcess{name: "sh"}, fakeProcess{name: tc.child, env: []string{"CLAUDE_CODE_SESSION_ID=" + claudeLauncherID, "CODEX_THREAD_ID=" + codexLauncherID, "CODEX_HOME=" + home}})
+			_, err := runLaunchHook(t, sessionStartPayload("startup"))
+			require.NoError(t, err)
+			child := childSessionID
+			if tc.child == "codex" {
+				child = "codex:" + child
+			}
+			link, err := database.GetSessionExternalParent(t.Context(), child)
+			if tc.want == "" {
+				require.ErrorIs(t, err, sql.ErrNoRows)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tc.want, link.ParentSessionID)
+			}
+		})
+	}
+}
+
 func TestCaptureLaunchParentRecordsNothing(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -564,18 +617,18 @@ func TestMemorySessionStartInvalidModeDoesNotCapture(t *testing.T) {
 
 func TestCaptureLaunchParentCodexIndexRetry(t *testing.T) {
 	for _, tc := range []struct {
-		name                                    string
-		rowMissing, appears, unreadable, locked bool
+		name                                             string
+		rowMissing, unreadable, locked, newer, migration bool
 	}{
-		{"missing index", false, false, false, false},
-		{"missing row", true, false, false, false},
-		{"index appears", false, true, false, false},
-		{"row appears", true, true, false, false},
-		{"unreadable index", false, false, true, false},
-		{"locked index", false, false, false, true},
+		{"missing index", false, false, false, false, false},
+		{"missing row", true, false, false, false, false},
+		{"unreadable index", false, true, false, false, false},
+		{"locked index", false, false, true, false, false},
+		{"newer index", false, false, false, true, false},
+		{"newer migration", false, false, false, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			home, staged := t.TempDir(), t.TempDir()
+			home := t.TempDir()
 			var locked *sql.DB
 			if tc.locked {
 				writeCodexState(t, home, codexLauncherID, codexLauncherID)
@@ -589,11 +642,20 @@ func TestCaptureLaunchParentCodexIndexRetry(t *testing.T) {
 			if tc.rowMissing {
 				writeCodexState(t, home, childSessionID, childSessionID)
 			}
-			if tc.appears && !tc.rowMissing {
-				writeCodexState(t, staged, codexLauncherID, codexLauncherID)
-			}
 			if tc.unreadable {
 				require.NoError(t, os.WriteFile(filepath.Join(home, "state_5.sqlite"), []byte("corrupt"), 0o600))
+			}
+			if tc.newer {
+				writeCodexState(t, home, codexLauncherID, codexLauncherID+"_44444444-4444-4444-8444-444444444444")
+				require.NoError(t, os.WriteFile(filepath.Join(home, "state_6.sqlite"), nil, 0o600))
+			}
+			if tc.migration {
+				writeCodexState(t, home, codexLauncherID, codexLauncherID+"_44444444-4444-4444-8444-444444444444")
+				state, err := sql.Open("sqlite3", filepath.Join(home, "state_5.sqlite"))
+				require.NoError(t, err)
+				_, err = state.ExecContext(t.Context(), "INSERT INTO _sqlx_migrations VALUES (55)")
+				require.NoError(t, err)
+				require.NoError(t, state.Close())
 			}
 			synctest.Test(t, func(t *testing.T) {
 				database := stubLaunchArchive(t)
@@ -613,34 +675,22 @@ func TestCaptureLaunchParentCodexIndexRetry(t *testing.T) {
 					_, err := locked.ExecContext(t.Context(), "COMMIT")
 					require.NoError(t, err)
 				}
-				if tc.appears {
+				if !tc.locked {
 					select {
 					case err := <-done:
-						require.FailNow(t, "capture returned before index appeared", "%v", err)
-					case <-time.After(3 * time.Second):
-					}
-					if tc.rowMissing {
-						state, err := sql.Open("sqlite3", filepath.Join(home, "state_5.sqlite"))
-						require.NoError(t, err)
-						_, err = state.ExecContext(t.Context(), `INSERT INTO threads (id, rollout_path) VALUES (?, ?)`, codexLauncherID, "rollout-2026-01-01-"+codexLauncherID+".jsonl")
-						require.NoError(t, err)
-						require.NoError(t, state.Close())
-					} else {
-						require.NoError(t, os.Rename(filepath.Join(staged, "state_5.sqlite"), filepath.Join(home, "state_5.sqlite")))
-					}
-				}
-				if tc.unreadable {
-					select {
-					case err := <-done:
-						require.Error(t, err)
+						if tc.unreadable {
+							require.Error(t, err)
+						} else {
+							require.NoError(t, err)
+						}
 					case <-time.After(time.Second):
-						require.FailNow(t, "unreadable index was retried")
+						require.FailNow(t, "missing or unreadable index was retried")
 					}
 				} else {
 					require.NoError(t, <-done)
 				}
 				link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
-				if tc.appears || tc.locked {
+				if !tc.unreadable {
 					require.NoError(t, err)
 					assert.Equal(t, "codex:"+codexLauncherID, link.ParentSessionID)
 				} else {

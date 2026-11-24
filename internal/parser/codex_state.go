@@ -2,12 +2,16 @@ package parser
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 )
+
+// ErrUnsupportedCodexStateIndex marks a newer index or schema migration.
+var ErrUnsupportedCodexStateIndex = errors.New("unsupported Codex state index")
 
 // CodexIndexedSessionKey reads a thread's current rollout from the supported
 // state_5.sqlite thread index in a Codex home and returns its session key.
@@ -25,7 +29,7 @@ func CodexIndexedSessionKey(ctx context.Context, home, thread string) (string, e
 		}
 		version, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(name, "state_"), ".sqlite"))
 		if err == nil && version > 5 {
-			return "", fmt.Errorf("unsupported Codex state index %s", name)
+			return "", fmt.Errorf("%w %s", ErrUnsupportedCodexStateIndex, name)
 		}
 	}
 	state := filepath.Join(home, "state_5.sqlite")
@@ -44,7 +48,7 @@ func CodexIndexedSessionKey(ctx context.Context, home, thread string) (string, e
 		return "", err
 	}
 	if version > 54 {
-		return "", fmt.Errorf("unsupported Codex state migration %d", version)
+		return "", fmt.Errorf("%w: unsupported Codex state migration %d", ErrUnsupportedCodexStateIndex, version)
 	}
 	var rollout string
 	if err := conn.QueryRowContext(ctx, "SELECT rollout_path FROM threads WHERE id = ?", thread).Scan(&rollout); err != nil {

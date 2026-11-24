@@ -47,10 +47,12 @@ func TestCodexIndexedSessionKeyRejectsFutureIndex(t *testing.T) {
 	home := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(home, "state_999.sqlite"), nil, 0o600))
 	_, err := CodexIndexedSessionKey(t.Context(), home, "thread")
+	require.ErrorIs(t, err, ErrUnsupportedCodexStateIndex)
 	require.ErrorContains(t, err, "unsupported Codex state index")
 	const thread = "22222222-2222-4222-8222-222222222222"
 	testutil.WriteCodexState(t, home, "state_5.sqlite", thread, thread)
 	_, err = CodexIndexedSessionKey(t.Context(), home, thread)
+	require.ErrorIs(t, err, ErrUnsupportedCodexStateIndex)
 	require.ErrorContains(t, err, "unsupported Codex state index")
 }
 
@@ -64,5 +66,6 @@ func TestCodexIndexedSessionKeyRejectsFutureMigration(t *testing.T) {
 	_, err = state.ExecContext(t.Context(), `INSERT INTO _sqlx_migrations VALUES (55)`)
 	require.NoError(t, err)
 	_, err = CodexIndexedSessionKey(t.Context(), home, thread)
+	require.ErrorIs(t, err, ErrUnsupportedCodexStateIndex)
 	require.ErrorContains(t, err, "unsupported Codex state migration 55")
 }
