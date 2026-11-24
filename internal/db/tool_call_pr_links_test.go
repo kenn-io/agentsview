@@ -65,6 +65,20 @@ func TestToolCallPRLinksPlainTextCommand(t *testing.T) {
 	assert.Equal(t, "https://github.com/example/repo/pull/42", links[0].URL)
 }
 
+func TestToolCallPRLinksBareNumberWithSessionRemote(t *testing.T) {
+	for _, tc := range []struct{ name, tool, input, want string }{
+		{"plain text", "shell", `gh pr view 42`, "https://github.com/example/repo/pull/42"},
+		{"code mode matching directory", "exec", `text(await tools.exec_command({cmd:"gh pr view 43",workdir:"/work/repo"}))`, "https://github.com/example/repo/pull/43"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			messages := []db.Message{{ToolCalls: []db.ToolCall{{ToolName: tc.tool, Category: "Bash", InputJSON: tc.input}}}}
+			links := toolCallPRLinks(t, messages, "/work/repo", "https://github.com/example/repo.git")
+			require.Len(t, links, 1)
+			assert.Equal(t, tc.want, links[0].URL)
+		})
+	}
+}
+
 func TestToolCallPRLinksNestedRemoteChange(t *testing.T) {
 	calls := []db.ToolCall{
 		{Category: "Bash", ToolName: "Bash", InputJSON: `{"command":"bash -lc 'git remote set-url origin https://github.com/example/other.git'"}`},
