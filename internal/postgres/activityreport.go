@@ -270,8 +270,9 @@ func (s *Store) BuildActivityReportArtifacts(
 		inputs:        inputs,
 		pricing:       pricing,
 		pricingDigest: pricingDigest,
-		Store:         s, filter: f,
-		lowerBound: lowerBound, upperBound: upperBound,
+		Store:         s,
+		filter:        f,
+		lowerBound:    lowerBound, upperBound: upperBound,
 	}
 	var reportBackend activity.ReportBackend = backend
 	if inputs != nil {

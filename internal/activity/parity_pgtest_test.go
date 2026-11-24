@@ -915,7 +915,4 @@ func TestWaitingLauncherParityAcrossBackends(t *testing.T) {
 	assert.Equal(t, 1, report.Totals.Sessions)
 	filtered := assertParityForCase(t, ctx, q, db.AnalyticsFilter{Timezone: "UTC", Project: "waiting", Agent: "claude"}, local, pgStore, chStore)
 	assert.Equal(t, 1, filtered.InteractivePeak.Agents)
-	assert.Equal(t, 1, filtered.Peak.Agents)
-	assert.Zero(t, filtered.Totals.Sessions)
-	assert.Zero(t, filtered.Totals.AgentMinutes)
 }

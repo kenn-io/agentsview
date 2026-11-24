@@ -293,8 +293,9 @@ func (db *DB) BuildActivityReportArtifacts(
 	}
 	backend := activityReportBackend{
 		keptUsage: cachedUsage, usageResult: usageResult,
-		read: readSet,
-		DB:   db, filter: f,
+		read:       readSet,
+		DB:         db,
+		filter:     f,
 		lowerBound: lowerBound, upperBound: upperBound,
 		counted: &activityReportCounted{},
 		usage:   usage,

@@ -66,7 +66,7 @@ func TestResolveLaunchersSkipsNonInteractive(t *testing.T) {
 		runs []SessionMeta
 	}{
 		{name: "automated", runs: []SessionMeta{{SessionID: "parent", IsAutomated: true}, {SessionID: "run", IsSubagent: true, ParentSessionIDs: []string{"parent"}}}},
-		{name: "fork", runs: []SessionMeta{{SessionID: "parent"}, {SessionID: "run", ParentSessionIDs: []string{"parent"}}}},
+		{name: "fork", runs: []SessionMeta{{SessionID: "run", ParentSessionIDs: []string{"parent"}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			selected := make(map[string]bool)

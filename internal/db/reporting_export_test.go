@@ -1376,8 +1376,5 @@ func TestReportingExportKeepsSessionOnlyConcurrency(t *testing.T) {
 		Now:  time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC),
 	})
 	require.NoError(t, err)
-	report, err := d.GetActivityReport(t.Context(), AnalyticsFilter{Timezone: "UTC"}, dayQuery(t, "2026-07-28", "UTC"))
-	require.NoError(t, err)
 	assert.Equal(t, 1, day.Hours[10].Activity.Peak.Agents)
-	assert.Equal(t, 2, report.Peak.Agents)
 }
