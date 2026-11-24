@@ -6966,6 +6966,8 @@ components:
           items:
             type: string
           type: array
+        installation_id:
+          type: string
         provider_extra_files:
           additionalProperties:
             items:
@@ -7045,6 +7047,8 @@ components:
           items:
             type: string
           type: array
+        installation_id:
+          type: string
         provider_extra_files:
           additionalProperties:
             items:

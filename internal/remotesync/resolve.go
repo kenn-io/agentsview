@@ -188,6 +188,7 @@ func ResolveTargets(ctx context.Context, cfg config.Config) (TargetSet, error) {
 		Dirs: dirs, Files: files, ProviderExtraFiles: providerExtraFiles,
 		CodexIndexFiles: codexIndexFiles,
 		ForbiddenRoots:  forbiddenRoots,
+		InstallationID:  cfg.InstallationID,
 	}), nil
 }
 

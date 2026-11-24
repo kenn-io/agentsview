@@ -78,6 +78,10 @@ type TargetSet struct {
 	// The files are transported through ProviderExtraFiles.
 	CodexIndexFiles map[string][]string `json:"codex_index_files,omitempty"`
 	ForbiddenRoots  []string            `json:"forbidden_roots,omitempty"`
+	// InstallationID is the serving archive's installation identity. The
+	// collector reports the host's sessions under it, so both archives name
+	// the same originating machine. Older remotes omit it.
+	InstallationID string `json:"installation_id,omitempty"`
 }
 
 // AllExtraFiles returns shared and provider-owned curated files without

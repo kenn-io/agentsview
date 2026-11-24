@@ -31211,6 +31211,7 @@ type RemotesyncArchiveRequest struct {
 	ExtraFiles         []string                `json:"extra_files,omitempty"`
 	Files              map[string][]string     `json:"files,omitempty"`
 	ForbiddenRoots     []string                `json:"forbidden_roots,omitempty"`
+	InstallationID     *string                 `json:"installation_id,omitempty"`
 	ProviderExtraFiles map[string][]string     `json:"provider_extra_files,omitempty"`
 }
 
@@ -31282,6 +31283,7 @@ type RemotesyncTargetSet struct {
 	ExtraFiles         []string            `json:"extra_files,omitempty"`
 	Files              map[string][]string `json:"files,omitempty"`
 	ForbiddenRoots     []string            `json:"forbidden_roots,omitempty"`
+	InstallationID     *string             `json:"installation_id,omitempty"`
 	ProviderExtraFiles map[string][]string `json:"provider_extra_files,omitempty"`
 }
 
