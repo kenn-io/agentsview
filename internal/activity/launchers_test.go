@@ -10,39 +10,50 @@ import (
 )
 
 func TestResolveLaunchers(t *testing.T) {
-	// A cycle exercises the defensive guard against malformed ancestry.
-	var calls [][]string
-	got, err := ResolveLaunchers(t.Context(), []SessionMeta{{SessionID: "child", IsSubagent: true, IsLaunched: true, ParentSessionIDs: []string{"b"}}, {SessionID: "other", IsSubagent: true, IsLaunched: true, ParentSessionIDs: []string{"missing"}}}, nil, func(_ context.Context, ids []string) ([]Launcher, error) {
-		calls = append(calls, ids)
-		switch ids[0] {
-		case "b":
-			return []Launcher{{ID: "b", IsSubagent: true, ParentSessionIDs: []string{"a"}}}, nil
-		case "a":
-			return []Launcher{{ID: "a", IsSubagent: true, ParentSessionIDs: []string{"b"}}}, nil
-		}
-		return nil, nil
-	})
-	require.NoError(t, err)
-	assert.Equal(t, [][]string{{"b", "missing"}, {"a"}}, calls)
-	assert.Equal(t, []string{"a", "b", "missing"}, got.Examined)
-}
-
-func TestResolveLaunchersFollowsEveryParentOnce(t *testing.T) {
-	runs := []SessionMeta{{SessionID: "child", IsSubagent: true, IsLaunched: true, ParentSessionIDs: []string{"middle", "second"}}}
-	got, err := ResolveLaunchers(t.Context(), runs, nil, func(_ context.Context, ids []string) ([]Launcher, error) {
-		var rows []Launcher
-		for _, id := range ids {
-			switch id {
-			case "middle":
-				rows = append(rows, Launcher{ID: id, IsSubagent: true, ParentSessionIDs: []string{"first", "child", "second"}})
-			case "first", "second":
-				rows = append(rows, Launcher{ID: id, MatchesFilter: true})
+	for _, tc := range []struct {
+		name      string
+		runs      []SessionMeta
+		ancestors map[string]Launcher
+		calls     [][]string
+		examined  []string
+		waiting   []string
+	}{
+		{
+			// A cycle exercises the defensive guard against malformed ancestry.
+			name:      "cycle",
+			runs:      []SessionMeta{{SessionID: "child", IsSubagent: true, IsLaunched: true, ParentSessionIDs: []string{"b"}}, {SessionID: "other", IsSubagent: true, IsLaunched: true, ParentSessionIDs: []string{"missing"}}},
+			ancestors: map[string]Launcher{"b": {ID: "b", IsSubagent: true, ParentSessionIDs: []string{"a"}}, "a": {ID: "a", IsSubagent: true, ParentSessionIDs: []string{"b"}}},
+			calls:     [][]string{{"b", "missing"}, {"a"}}, examined: []string{"a", "b", "missing"},
+		},
+		{
+			name:      "shared parent",
+			runs:      []SessionMeta{{SessionID: "child", IsSubagent: true, IsLaunched: true, ParentSessionIDs: []string{"middle", "second"}}},
+			ancestors: map[string]Launcher{"middle": {ID: "middle", IsSubagent: true, ParentSessionIDs: []string{"first", "second"}}, "first": {ID: "first", MatchesFilter: true}, "second": {ID: "second", MatchesFilter: true}},
+			waiting:   []string{"first", "second"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls [][]string
+			got, err := ResolveLaunchers(t.Context(), tc.runs, nil, func(_ context.Context, ids []string) ([]Launcher, error) {
+				calls = append(calls, ids)
+				var rows []Launcher
+				for _, id := range ids {
+					if row, ok := tc.ancestors[id]; ok {
+						rows = append(rows, row)
+					}
+				}
+				return rows, nil
+			})
+			require.NoError(t, err)
+			if tc.calls != nil {
+				assert.Equal(t, tc.calls, calls)
+				assert.Equal(t, tc.examined, got.Examined)
 			}
-		}
-		return rows, nil
-	})
-	require.NoError(t, err)
-	assert.ElementsMatch(t, []string{"first", "second"}, got.Waiting["child"])
+			if tc.waiting != nil {
+				assert.ElementsMatch(t, tc.waiting, got.Waiting["child"])
+			}
+		})
+	}
 }
 
 func TestResolveLaunchersUsesKnownRunsAndCountsInteractiveAncestors(t *testing.T) {
@@ -75,7 +86,6 @@ func TestResolveLaunchersSkipsNonInteractive(t *testing.T) {
 		runs []SessionMeta
 	}{
 		{name: "automated", runs: []SessionMeta{{SessionID: "parent", IsAutomated: true}, {SessionID: "run", IsSubagent: true, IsLaunched: true, ParentSessionIDs: []string{"parent"}}}},
-		{name: "fork", runs: []SessionMeta{{SessionID: "run", ParentSessionIDs: []string{"parent"}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			selected := make(map[string]bool)

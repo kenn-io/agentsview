@@ -382,11 +382,8 @@ func TestPGActivityReportKeptLauncherChange(t *testing.T) {
 	local, syncer, store := newUsageJournalFixture(t)
 	pgKeptSession(t, local, "parent", "project-a", "2026-06-12")
 	pgKeptSession(t, local, "past", "project-a", "2026-06-14")
-	child, err := local.GetSession(t.Context(), "past")
+	_, err := local.SetSessionExternalParent(t.Context(), "past", "parent")
 	require.NoError(t, err)
-	child.RelationshipType = "subagent"
-	child.ParentSessionID = new("parent")
-	require.NoError(t, local.UpsertSession(t.Context(), *child))
 	pgKeptPush(t, syncer, false)
 	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC", Project: "project-a", IncludeSubagents: true}
 	before := pgKeptBuild(t, store, f, q, true)

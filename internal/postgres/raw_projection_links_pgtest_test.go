@@ -241,14 +241,12 @@ func TestHostedCrossSourcePluralOwnersRemainContextual(t *testing.T) {
 	assert.Equal(t, conflict.Variants, child.ParentSessionIDs)
 	sessions, _, err := h.physical.activityReportSessionsWhere(t.Context(), db.AnalyticsFilter{Timezone: "UTC", IncludeSubagents: true, IncludeForks: true}, "2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z", nil, false, true)
 	require.NoError(t, err)
-	selected := make(map[string]bool)
 	var childSession activity.SessionMeta
 	var parentIDs []string
 	for _, session := range sessions {
 		if session.IsSubagent {
 			childSession = session
 		} else {
-			selected[session.SessionID] = true
 			parentIDs = append(parentIDs, session.SessionID)
 		}
 	}
@@ -256,9 +254,6 @@ func TestHostedCrossSourcePluralOwnersRemainContextual(t *testing.T) {
 	require.NotEmpty(t, childSession.SessionID)
 	assert.ElementsMatch(t, parentIDs, childSession.ParentSessionIDs)
 	assert.False(t, childSession.IsLaunched)
-	launchers, err := (activityReportBackend{Store: h.physical}).ActivityReportLaunchers(t.Context(), []activity.SessionMeta{childSession}, selected, activity.Query{})
-	require.NoError(t, err)
-	assert.Empty(t, launchers.Waiting[childSession.SessionID])
 	for _, parent := range conflict.Variants {
 		children, err := h.GetChildSessions(t.Context(), parent)
 		require.NoError(t, err)

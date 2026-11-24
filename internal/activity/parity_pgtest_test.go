@@ -901,13 +901,7 @@ func TestWaitingLauncherParityAcrossBackends(t *testing.T) {
 	require.NoError(t, err)
 	_, err = local.SetSessionExternalParent(ctx, "linked-run", "quiet-launcher")
 	require.NoError(t, err)
-	var pgStore *postgresstore.Store
-	if os.Getenv("TEST_PG_URL") != "" {
-		pgStore = pushParityPostgres(t, ctx, local, len(parityFixture())+2)
-	}
-	if pgStore == nil {
-		t.Skip("no mirror configured")
-	}
+	pgStore := pushParityPostgres(t, ctx, local, len(parityFixture())+2)
 	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: parityDate, Timezone: "UTC"}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
 	require.NoError(t, err)
 	report := assertParityForCase(t, ctx, q, db.AnalyticsFilter{Timezone: "UTC", Project: "waiting"}, local, pgStore, nil)
@@ -916,5 +910,4 @@ func TestWaitingLauncherParityAcrossBackends(t *testing.T) {
 	assert.Equal(t, 1, report.Totals.Sessions)
 	filtered := assertParityForCase(t, ctx, q, db.AnalyticsFilter{Timezone: "UTC", Project: "waiting", Agent: "claude"}, local, pgStore, nil)
 	assert.Equal(t, 1, filtered.InteractivePeak.Agents)
-
 }
