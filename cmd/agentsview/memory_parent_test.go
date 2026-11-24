@@ -145,59 +145,6 @@ func TestCaptureLaunchParentLinksEachProviderPair(t *testing.T) {
 	}
 }
 
-func TestCaptureLaunchParentDetachedMixedAncestry(t *testing.T) {
-	for _, tc := range []struct {
-		name, child, parent, want string
-		pageParent                bool
-	}{
-		{"claude nearer", "claude", "codex", claudeLauncherID, false},
-		{"codex nearer", "claude", "claude", "codex:" + codexLauncherID, false},
-		{"codex child from claude", "codex", "codex", claudeLauncherID, false},
-		{"codex child from codex", "codex", "claude", "codex:" + codexLauncherID, false},
-		{"unrelated", "claude", "", "", false},
-		{"claude nearer after revert", "claude", "codex", claudeLauncherID, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			home := t.TempDir()
-			writeCodexState(t, home, codexLauncherID, codexLauncherID)
-			database := stubLaunchArchive(t)
-			for _, s := range []db.Session{
-				{ID: claudeLauncherID, Agent: "claude", Project: "example", Machine: "example"},
-				{ID: "codex:" + codexLauncherID, Agent: "codex", Project: "example", Machine: "example"},
-			} {
-				require.NoError(t, database.UpsertSession(t.Context(), s))
-			}
-			codexParent := "codex:" + codexLauncherID
-			if tc.pageParent {
-				codexParent += "_44444444-4444-4444-8444-444444444444"
-				require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: codexParent, Agent: "codex", Project: "example", Machine: "example"}))
-			}
-			switch tc.parent {
-			case "claude":
-				_, err := database.SetSessionExternalParent(t.Context(), "codex:"+codexLauncherID, claudeLauncherID)
-				require.NoError(t, err)
-			case "codex":
-				_, err := database.SetSessionExternalParent(t.Context(), claudeLauncherID, codexParent)
-				require.NoError(t, err)
-			}
-			stubLaunchProcesses(t, fakeProcess{name: "sh"}, fakeProcess{name: tc.child, env: []string{"CLAUDE_CODE_SESSION_ID=" + claudeLauncherID, "CODEX_THREAD_ID=" + codexLauncherID, "CODEX_HOME=" + home}})
-			_, err := runLaunchHook(t, sessionStartPayload("startup"))
-			require.NoError(t, err)
-			child := childSessionID
-			if tc.child == "codex" {
-				child = "codex:" + child
-			}
-			link, err := database.GetSessionExternalParent(t.Context(), child)
-			if tc.want == "" {
-				require.ErrorIs(t, err, sql.ErrNoRows)
-			} else {
-				require.NoError(t, err)
-				assert.Equal(t, tc.want, link.ParentSessionID)
-			}
-		})
-	}
-}
-
 func TestCaptureLaunchParentRecordsNothing(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -208,6 +155,9 @@ func TestCaptureLaunchParentRecordsNothing(t *testing.T) {
 	}{
 		{"no launcher", sessionStartPayload("startup"), []fakeProcess{
 			{name: "sh"}, {name: "claude", env: []string{}}, {name: "bash"},
+		}, false, childSessionID},
+		{"detached mixed ancestry", sessionStartPayload("startup"), []fakeProcess{
+			{name: "sh"}, {name: "claude", env: []string{"CLAUDE_CODE_SESSION_ID=" + claudeLauncherID, "CODEX_THREAD_ID=" + codexLauncherID}},
 		}, false, childSessionID},
 		{"no agent ancestor", sessionStartPayload("startup"), []fakeProcess{{name: "sh"}, {name: "bash"}}, false, childSessionID},
 		{"missing launcher variable", sessionStartPayload("startup"), []fakeProcess{
@@ -653,7 +603,7 @@ func TestCaptureLaunchParentCodexIndexRetry(t *testing.T) {
 				writeCodexState(t, home, codexLauncherID, codexLauncherID+"_44444444-4444-4444-8444-444444444444")
 				state, err := sql.Open("sqlite3", filepath.Join(home, "state_5.sqlite"))
 				require.NoError(t, err)
-				_, err = state.ExecContext(t.Context(), "INSERT INTO _sqlx_migrations VALUES (55)")
+				_, err = state.ExecContext(t.Context(), "INSERT INTO _sqlx_migrations VALUES (65)")
 				require.NoError(t, err)
 				require.NoError(t, state.Close())
 			}

@@ -42,12 +42,12 @@ func CodexIndexedSessionKey(ctx context.Context, home, thread string) (string, e
 	}
 	defer conn.Close()
 	// The index filename does not change for each SQLx schema migration.
-	// Codex revision 6b9826e includes migrations through version 54.
+	// Codex revision 0adee0d includes migrations through version 64.
 	var version int
 	if err := conn.QueryRowContext(ctx, "SELECT COALESCE(MAX(version), 0) FROM _sqlx_migrations").Scan(&version); err != nil {
 		return "", err
 	}
-	if version > 54 {
+	if version > 64 {
 		return "", fmt.Errorf("%w: unsupported Codex state migration %d", ErrUnsupportedCodexStateIndex, version)
 	}
 	var rollout string

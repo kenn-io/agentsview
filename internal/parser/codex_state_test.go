@@ -59,13 +59,19 @@ func TestCodexIndexedSessionKeyRejectsFutureIndex(t *testing.T) {
 func TestCodexIndexedSessionKeyRejectsFutureMigration(t *testing.T) {
 	home := t.TempDir()
 	const thread = "22222222-2222-4222-8222-222222222222"
-	testutil.WriteCodexState(t, home, "state_5.sqlite", thread, thread)
+	const page = thread + "_44444444-4444-4444-8444-444444444444"
+	testutil.WriteCodexState(t, home, "state_5.sqlite", thread, page)
 	state, err := sql.Open("sqlite3", filepath.Join(home, "state_5.sqlite"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = state.Close() })
-	_, err = state.ExecContext(t.Context(), `INSERT INTO _sqlx_migrations VALUES (55)`)
+	_, err = state.ExecContext(t.Context(), `INSERT INTO _sqlx_migrations VALUES (64)`)
+	require.NoError(t, err)
+	got, err := CodexIndexedSessionKey(t.Context(), home, thread)
+	require.NoError(t, err)
+	assert.Equal(t, page, got)
+	_, err = state.ExecContext(t.Context(), `INSERT INTO _sqlx_migrations VALUES (65)`)
 	require.NoError(t, err)
 	_, err = CodexIndexedSessionKey(t.Context(), home, thread)
 	require.ErrorIs(t, err, ErrUnsupportedCodexStateIndex)
-	require.ErrorContains(t, err, "unsupported Codex state migration 55")
+	require.ErrorContains(t, err, "unsupported Codex state migration 65")
 }
