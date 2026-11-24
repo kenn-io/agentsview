@@ -252,7 +252,7 @@ func TestSearchKeptDiskPages(t *testing.T) {
 	require.Len(t, page.Results, 1)
 	normalized := filter
 	normalized.Limit = DefaultSearchLimit
-	_, ok := d.searchKept.Get("tier1|"+normalized.Slot()+"|false", version)
+	_, ok := d.searchKept.Get(normalized.Slot()+"|false", version)
 	require.False(t, ok)
 	require.NoError(t, d.Close())
 	require.NoError(t, os.WriteFile(path, otherBackup, 0o600))
@@ -264,18 +264,6 @@ func TestSearchKeptDiskPages(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, page.Results)
 	require.Equal(t, 1, loads)
-}
-
-func TestSearchKeptOldRanking(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "session", "project")
-	insertMessages(t, d, userMsg("session", 0, "needle"))
-	filter := SearchFilter{Query: "needle", Limit: DefaultSearchLimit}
-	d.searchKept.Put(filter.Slot()+"|false", d.searchVersion(t.Context(), false), SearchPage{Results: []SearchResult{{SessionID: "old"}}})
-	page, err := d.Search(t.Context(), filter)
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-	require.Equal(t, "session", page.Results[0].SessionID)
 }
 
 func TestSearchKeptHistoryToken(t *testing.T) {

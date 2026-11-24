@@ -69,6 +69,7 @@ func (m searchBestMatch) before(o searchBestMatch) bool {
 type searchRankWalk struct {
 	best     []searchBestMatch
 	complete bool
+	tierOnly bool
 }
 
 // walkSearchRanks reads the eligible message matches in rank order and
@@ -76,7 +77,8 @@ type searchRankWalk struct {
 // at which it saw the last of them. Every session whose best match ranks
 // at or below that boundary then has its best match among the rows read.
 // The floor limits a broad search to its first tier. The walk returns nil
-// when that tier cannot fill the page or it exceeds its session or row bounds.
+// when that tier cannot fill the page or an unbounded walk exceeds its limits.
+// If a tier has too many sessions to bind, tierOnly asks the page query to rank it.
 func walkSearchRanks(
 	ctx context.Context, q messageRowsQuerier, table, innerWhereSQL string, ftsArgs []any, need int, floor int64,
 ) (*searchRankWalk, error) {
@@ -113,6 +115,9 @@ func walkSearchRanks(
 		i, ok := index[m.sessionID]
 		if !ok {
 			if len(walk.best) == searchRankWalkMaxSessions {
+				if floor != math.MinInt64 {
+					return &searchRankWalk{tierOnly: true}, nil
+				}
 				return nil, nil
 			}
 			index[m.sessionID] = len(walk.best)

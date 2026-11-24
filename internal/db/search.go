@@ -412,8 +412,8 @@ func hasFTSColumnFilter(query string) bool {
 // Results come from three branches joined with UNION ALL:
 //
 //  1. FTS branch — message content matches. Broad unfiltered relevance searches
-//     rank the most recently indexed matches first. ROW_NUMBER() picks the
-//     best match per session within that order.
+//     rank the tier with the highest message row IDs first. ROW_NUMBER() picks
+//     the best match per session within that order.
 //     After pagination, a rowid lookup with MATCH builds each snippet without
 //     segment duplicates. Ordinal is the matched message's ordinal (≥ 0).
 //
@@ -433,7 +433,7 @@ func (db *DB) Search(
 	if db.readOnly || (!cjk && db.searchIndexRepairPending.Load() && containsCJK(f.Query)) {
 		return db.search(ctx, f, cjk)
 	}
-	key := fmt.Sprintf("tier1|%s|%t", f.Slot(), cjk)
+	key := fmt.Sprintf("%s|%t", f.Slot(), cjk)
 	version := db.searchVersion(ctx, cjk)
 	if version == "" {
 		return db.search(ctx, f, cjk)
@@ -575,6 +575,9 @@ func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage,
 	}
 
 	args := ftsArgs
+	if walk != nil && walk.tierOnly {
+		innerWhereSQL += fmt.Sprintf(" AND messages_fts.rowid >= %d", floor)
+	}
 	withSQL := `WITH best_rows AS MATERIALIZED (SELECT session_id, best_rowid, best_ordinal, best_rank
 				FROM (
 					SELECT m2.session_id,
@@ -598,7 +601,9 @@ func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage,
 	var ftsSessionsArgs []any
 	includeNames := true
 	if walk != nil {
-		withSQL, args = walk.bestRowsSQL()
+		if !walk.tierOnly {
+			withSQL, args = walk.bestRowsSQL()
+		}
 		// Name rows rank after every message and image match.
 		includeNames = walk.complete
 	}

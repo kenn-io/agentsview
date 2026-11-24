@@ -178,6 +178,33 @@ func TestSearchRankWalkDeepPage(t *testing.T) {
 	assert.Equal(t, 4103, page.NextCursor)
 }
 
+func TestSearchRankWalkTiedTierOverSessionLimit(t *testing.T) {
+	original := searchTierMatches
+	searchTierMatches = 4100
+	t.Cleanup(func() { searchTierMatches = original })
+	d := testDB(t)
+	ctx := t.Context()
+	_, err := d.getWriter().ExecContext(ctx, `
+		WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<4100)
+		INSERT INTO sessions(id, project) SELECT printf('s%04d', i), 'proj' FROM n;
+		WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<4100)
+		INSERT INTO messages(session_id, ordinal, role, content) SELECT printf('s%04d', i), 0, 'user', 'needle' FROM n;`)
+	require.NoError(t, err)
+	floor, err := searchTierFloor(ctx, d.getReader(), "messages_fts", "messages_fts.rendered MATCH ?", []any{`"needle"`})
+	require.NoError(t, err)
+	assert.Greater(t, floor, int64(math.MinInt64))
+	walk, err := walkSearchRanks(ctx, d.getReader(), "messages_fts", "messages_fts.rendered MATCH ?", []any{`"needle"`}, 3, floor)
+	require.NoError(t, err)
+	require.NotNil(t, walk, "a tied tier must not fall back to ranking the whole archive")
+	assert.True(t, walk.tierOnly)
+	page, err := d.Search(ctx, SearchFilter{Query: "needle", Limit: 2})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 2)
+	assert.Equal(t, "s0001", page.Results[0].SessionID)
+	assert.Equal(t, "s0002", page.Results[1].SessionID)
+	assert.Equal(t, 2, page.NextCursor)
+}
+
 func TestSearchRankWalkImageTier(t *testing.T) {
 	original := searchTierMatches
 	searchTierMatches = 2
