@@ -43,11 +43,11 @@ func TestToolCallPRLinksCommandArray(t *testing.T) {
 
 func TestToolCallPRLinksCodeMode(t *testing.T) {
 	for _, tc := range []struct{ name, input, want string }{
-		{"explicit repository", `text(await tools.exec_command({cmd:"gh pr view 42 -R example/repo"}))`, "https://github.com/example/repo/pull/42"},
+		{"explicit repository", `text(await tools.exec_command({cmd:"gh pr view 42 -R user-a/project-a"}))`, "https://github.com/user-a/project-a/pull/42"},
 		{"bare number in another directory", `text(await tools.exec_command({cmd:"gh pr view 42",workdir:"/other"}))`, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			links := toolCallPRLinks(t, []db.Message{{ToolCalls: []db.ToolCall{{ToolName: "exec", Category: "Bash", InputJSON: tc.input}}}}, "/work/repo", "https://github.com/example/repo.git")
+			links := toolCallPRLinks(t, []db.Message{{ToolCalls: []db.ToolCall{{ToolName: "exec", Category: "Bash", InputJSON: tc.input}}}}, "/work/repo", "https://github.com/user-a/project-a.git")
 			if tc.want == "" {
 				assert.Empty(t, links)
 				return
@@ -63,8 +63,8 @@ func TestToolCallPRLinksRecordedCommands(t *testing.T) {
 		name, tool, input string
 		want              []int
 	}{
-		{"antigravity", "run_command", `{"CommandLine":"gh pr view 42 -R example/repo"}`, []int{42}},
-		{"code mode batch", "exec", `text(await tools.exec_command({cmd:"gh pr view 42 -R example/repo"})); text(await tools.exec_command({cmd:"gh pr view 43 -R example/repo"}))`, []int{42, 43}},
+		{"antigravity", "run_command", `{"CommandLine":"gh pr view 42 -R user-a/project-a"}`, []int{42}},
+		{"code mode batch", "exec", `text(await tools.exec_command({cmd:"gh pr view 42 -R user-a/project-a"})); text(await tools.exec_command({cmd:"gh pr view 43 -R user-a/project-a"}))`, []int{42, 43}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			links := toolCallPRLinks(t, []db.Message{{ToolCalls: []db.ToolCall{{ToolName: tc.tool, Category: "Bash", InputJSON: tc.input}}}}, "", "")
@@ -79,26 +79,26 @@ func TestToolCallPRLinksRecordedCommands(t *testing.T) {
 
 func TestToolCallPRLinksCodeModeBatchWorkdirs(t *testing.T) {
 	input := `text(await tools.exec_command({cmd:"gh pr view 41",workdir:"/other"})); text(await tools.exec_command({cmd:"gh pr view 42",workdir:"/work/repo"})); text(await tools.exec_command({cmd:dynamic,workdir:"/work/repo"}))`
-	links := toolCallPRLinks(t, []db.Message{{ToolCalls: []db.ToolCall{{ToolName: "exec", Category: "Bash", InputJSON: input}}}}, "/work/repo", "https://github.com/example/repo.git")
+	links := toolCallPRLinks(t, []db.Message{{ToolCalls: []db.ToolCall{{ToolName: "exec", Category: "Bash", InputJSON: input}}}}, "/work/repo", "https://github.com/user-a/project-a.git")
 	require.Len(t, links, 1)
 	assert.Equal(t, 42, links[0].Number)
 }
 
 func TestToolCallPRLinksPlainTextCommand(t *testing.T) {
-	messages := []db.Message{{ToolCalls: []db.ToolCall{{ToolName: "shell", Category: "Bash", InputJSON: `gh pr view 42 -R example/repo`}}}}
+	messages := []db.Message{{ToolCalls: []db.ToolCall{{ToolName: "shell", Category: "Bash", InputJSON: `gh pr view 42 -R user-a/project-a`}}}}
 	links := toolCallPRLinks(t, messages, "", "")
 	require.Len(t, links, 1)
-	assert.Equal(t, "https://github.com/example/repo/pull/42", links[0].URL)
+	assert.Equal(t, "https://github.com/user-a/project-a/pull/42", links[0].URL)
 }
 
 func TestToolCallPRLinksBareNumberWithSessionRemote(t *testing.T) {
 	for _, tc := range []struct{ name, tool, input, want string }{
-		{"plain text", "shell", `gh pr view 42`, "https://github.com/example/repo/pull/42"},
-		{"code mode matching directory", "exec", `text(await tools.exec_command({cmd:"gh pr view 43",workdir:"/work/repo"}))`, "https://github.com/example/repo/pull/43"},
+		{"plain text", "shell", `gh pr view 42`, "https://github.com/user-a/project-a/pull/42"},
+		{"code mode matching directory", "exec", `text(await tools.exec_command({cmd:"gh pr view 43",workdir:"/work/repo"}))`, "https://github.com/user-a/project-a/pull/43"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			messages := []db.Message{{ToolCalls: []db.ToolCall{{ToolName: tc.tool, Category: "Bash", InputJSON: tc.input}}}}
-			links := toolCallPRLinks(t, messages, "/work/repo", "https://github.com/example/repo.git")
+			links := toolCallPRLinks(t, messages, "/work/repo", "https://github.com/user-a/project-a.git")
 			require.Len(t, links, 1)
 			assert.Equal(t, tc.want, links[0].URL)
 		})
@@ -107,10 +107,10 @@ func TestToolCallPRLinksBareNumberWithSessionRemote(t *testing.T) {
 
 func TestToolCallPRLinksNestedRemoteChange(t *testing.T) {
 	calls := []db.ToolCall{
-		{Category: "Bash", ToolName: "Bash", InputJSON: `{"command":"bash -lc 'git remote set-url origin https://github.com/example/other.git'"}`},
+		{Category: "Bash", ToolName: "Bash", InputJSON: `{"command":"bash -lc 'git remote set-url origin https://github.com/user-b/project-b.git'"}`},
 		{Category: "Bash", ToolName: "Bash", InputJSON: `{"command":"gh pr view 42"}`},
 	}
-	assert.Empty(t, toolCallPRLinks(t, []db.Message{{ToolCalls: calls}}, "/work/repo", "https://github.com/example/repo.git"))
+	assert.Empty(t, toolCallPRLinks(t, []db.Message{{ToolCalls: calls}}, "/work/repo", "https://github.com/user-a/project-a.git"))
 }
 
 func TestToolCallPRLinksWrappedCommands(t *testing.T) {

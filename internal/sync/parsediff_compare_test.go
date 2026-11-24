@@ -2637,9 +2637,9 @@ func TestCompareStoredSessionPromptAndCommandLinks(t *testing.T) {
 			d := openTestDB(t)
 			e := NewEngine(t.Context(), d, EngineConfig{Machine: "test-machine"})
 			pw := pdToolSession("pd-pr-links")
-			pw.msgs[1].ToolCalls[1].InputJSON = `{"command":"gh pr view 42 -R example/repo"}`
+			pw.msgs[1].ToolCalls[1].InputJSON = `{"command":"gh pr view 42 -R user-a/project-a"}`
 			pw.msgs[2].IsSystem = false
-			pw.msgs[2].Content = "Review https://github.com/example/repo/pull/43"
+			pw.msgs[2].Content = "Review https://github.com/user-a/project-a/pull/43"
 			pw.msgs[2].ContentLength = len(pw.msgs[2].Content)
 			initial := pw
 			if appendPrompt {

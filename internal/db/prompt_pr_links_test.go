@@ -407,10 +407,10 @@ func TestPRLinksUpgradeRefreshesEachSessionOnce(t *testing.T) {
 		require.NoError(t, d.UpsertSession(t.Context(), Session{ID: tc.id, Project: "project", Machine: "local", Agent: "claude"}))
 		var messages []Message
 		if tc.prompt {
-			messages = append(messages, Message{SessionID: tc.id, Ordinal: 0, Role: "user", Content: "https://github.com/example/repo/pull/41"})
+			messages = append(messages, Message{SessionID: tc.id, Ordinal: 0, Role: "user", Content: "https://github.com/user-a/project-a/pull/41"})
 		}
 		if tc.tool {
-			messages = append(messages, Message{SessionID: tc.id, Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`}}})
+			messages = append(messages, Message{SessionID: tc.id, Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R user-a/project-a"}`}}})
 		}
 		require.NoError(t, d.ReplaceSessionMessages(t.Context(), tc.id, messages))
 	}
@@ -639,16 +639,16 @@ func TestTranscriptToolPRLinksSameRepositoryDifferentHosts(t *testing.T) {
 	d.SetArchiveContent(config.ArchiveContentTranscripts)
 	s := Session{ID: "checkout-hosts", Project: "project", Machine: "local", Agent: "claude", Cwd: "/work/repo"}
 	require.NoError(t, d.UpsertSession(t.Context(), s))
-	obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://git.example/example/repo.git")
+	obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://git.example/user-a/project-a.git")
 	require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), obs))
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "assistant", ToolCalls: []ToolCall{{
-		ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo; gh pr view 42 -R github.com/example/repo"}`,
+		ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R user-a/project-a; gh pr view 42 -R github.com/user-a/project-a"}`,
 	}}}}))
 	got, err := d.GetSession(t.Context(), s.ID)
 	require.NoError(t, err)
 	require.Len(t, got.PRLinks, 2)
-	assert.Equal(t, "https://git.example/example/repo/pull/42", got.PRLinks[0].URL)
-	assert.Equal(t, "https://github.com/example/repo/pull/42", got.PRLinks[1].URL)
+	assert.Equal(t, "https://git.example/user-a/project-a/pull/42", got.PRLinks[0].URL)
+	assert.Equal(t, "https://github.com/user-a/project-a/pull/42", got.PRLinks[1].URL)
 }
 
 func TestUsageToolPRLinksCheckoutHost(t *testing.T) {

@@ -25,10 +25,10 @@ func TestUsageArchiveCopyRetainsCheckoutHost(t *testing.T) {
 			source.SetArchiveContent(policy)
 			s := Session{ID: "orphan", Project: "project", Machine: "local", Agent: "claude", Cwd: "/work/repo"}
 			require.NoError(t, source.UpsertSession(t.Context(), s))
-			obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://git.example/example/repo.git")
+			obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://git.example/user-a/project-a.git")
 			require.NoError(t, source.UpsertProjectIdentityObservation(t.Context(), obs))
 			require.NoError(t, source.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Role: "assistant", ToolCalls: []ToolCall{{
-				ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`,
+				ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R user-a/project-a"}`,
 			}}}}))
 			dest := testDB(t)
 			dest.SetArchiveContent(config.ArchiveContentUsage)
@@ -38,7 +38,7 @@ func TestUsageArchiveCopyRetainsCheckoutHost(t *testing.T) {
 			got, err := dest.GetSession(t.Context(), s.ID)
 			require.NoError(t, err)
 			require.Len(t, got.PRLinks, 1)
-			assert.Equal(t, "https://git.example/example/repo/pull/42", got.PRLinks[0].URL)
+			assert.Equal(t, "https://git.example/user-a/project-a/pull/42", got.PRLinks[0].URL)
 		})
 	}
 }
