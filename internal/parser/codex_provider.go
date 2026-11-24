@@ -1169,6 +1169,50 @@ func (s codexSourceSet) findSourceFile(sessionsDir, sessionID string) string {
 	return archived
 }
 
+// CodexParentRolloutChecker reports whether the original rollout for a Codex
+// fork's replay parent currently exists under the provider's roots.
+type CodexParentRolloutChecker interface {
+	HasCodexParentRollout(ctx context.Context, childPath, parentID string) (bool, error)
+}
+
+func (p *codexProvider) HasCodexParentRollout(
+	ctx context.Context, childPath, parentID string,
+) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if parentID == "" || !IsValidSessionID(parentID) {
+		return false, nil
+	}
+	ctx = p.parentInventoryContext(ctx)
+	cleanChild := filepath.Clean(childPath)
+	for _, root := range p.sources.roots {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		if isS3URI(root) {
+			// S3 parents live outside local directory inventories; let the
+			// full parse hydrate and resolve them.
+			return true, nil
+		}
+		parentPaths, err := p.sources.findThreadSourceFiles(ctx, root, parentID)
+		if err != nil {
+			return false, err
+		}
+		p.sources.threadFiles.recordParent(
+			ctx, root, parentID, parentPaths,
+			CodexParentInventorySource{Agent: p.spec.agent, Path: childPath},
+		)
+		for _, path := range parentPaths {
+			if filepath.Clean(path) != cleanChild &&
+				CodexSessionUUIDFromFilename(filepath.Base(path)) == parentID {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
 // findThreadSourceFiles returns every rollout of a thread under sessionsDir,
 // live or archived: its own file and each revert page (<thread>_<rollout>).
 func (s codexSourceSet) findThreadSourceFiles(ctx context.Context, sessionsDir, threadID string) ([]string, error) {

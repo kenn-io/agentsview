@@ -96,4 +96,5 @@ func (e *Engine) ReconfigureSources(cfg SourceConfig) {
 	e.providerWatchRootsMu.Lock()
 	clear(e.providerWatchRoots)
 	e.providerWatchRootsMu.Unlock()
+	e.unresolvedCodexForks.clear()
 }

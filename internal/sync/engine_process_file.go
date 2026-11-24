@@ -136,9 +136,13 @@ type processResult struct {
 	// the write path, which promotes it once the session's batch is
 	// confirmed fully written (see opencode_storage_gate.go). Empty for
 	// everything else.
-	storageTrustPath  string
-	storageTrustState string
-	storageTrustSnap  storageTrustSnapshot
+	storageTrustPath    string
+	storageTrustState   string
+	storageTrustSnap    storageTrustSnapshot
+	verifiedCapture     verifiedSourceCapture
+	verifiedMtime       int64
+	verifiedStateOK     bool
+	unresolvedForkEpoch uint64
 	// retentionLease bounds the memory retained by this result's parsed data.
 	// It is acquired at the parse seams (provider parse, incremental parse,
 	// legacy/S3 parse) and only ever set on a result carrying parsed data; skip
@@ -734,7 +738,16 @@ func (e *Engine) processProviderFile(
 	codexAuditDeepVerify := e.checkpointAudit.Load() &&
 		isCodexFormatAgent(file.Agent)
 	var codexUnchangedMtime int64
+	unresolvedForkEpoch := e.unresolvedCodexForks.currentEpoch()
 	verifiedCapture, verifiedMtime, verifiedFresh, verifiedStateOK := e.verifiedProviderSourceState(provider, source, file)
+	if isCodexFormatAgent(file.Agent) && !explicitForce && !forceSourceCwdParse &&
+		!codexAuditDeepVerify && verifiedStateOK {
+		if skipRes, ok := e.unresolvedCodexForkSkip(
+			ctx, provider, file, verifiedCapture, verifiedMtime,
+		); ok {
+			return skipRes, true
+		}
+	}
 	if !forceSourceCwdParse && !codexForceFullParse &&
 		!codexProvenUnchanged && !codexAuditDeepVerify &&
 		verifiedStateOK && verifiedFresh {
@@ -1672,6 +1685,10 @@ func (e *Engine) processProviderFile(
 		sourceCwdResolution:      cwdDecision.resolution,
 		sourceCwdStored:          cwdDecision.storedCwd,
 		sourceCwdStoredOK:        cwdDecision.storedOK,
+		verifiedCapture:          verifiedCapture,
+		verifiedMtime:            verifiedMtime,
+		verifiedStateOK:          verifiedStateOK,
+		unresolvedForkEpoch:      unresolvedForkEpoch,
 	}
 	if (file.Agent == parser.AgentOmnigent ||
 		file.Agent == parser.AgentCursorIDE) && cacheSkip && cleanCache &&

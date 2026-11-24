@@ -194,15 +194,37 @@ func (e *Engine) PollProviderRootsGrouped(
 		}
 		if err := e.syncPollScanPaths(ctx, changed[key]); err != nil {
 			errs = append(errs, fmt.Errorf("%s %s: %w", key.agent, key.root, err))
+			if watchBatchDeferOnlyError(err) {
+				// Every changed file was processed; only a deferred fork retry
+				// remains. Keeping the snapshot avoids re-syncing unchanged
+				// siblings while still detecting the parent when it arrives.
+				state.keep(map[pollScanKey][]pollScanRow{key: afterSync[key]})
+			}
 			continue
 		}
 		state.keep(map[pollScanKey][]pollScanRow{key: afterSync[key]})
 	}
 	if len(reconcile) > 0 {
-		if err := e.ReconcileProviderRootsGrouped(ctx, reconcile); err != nil {
+		groupErrs, epilogueErr, err := e.reconcileProviderRootsGroupedWithOutcomes(ctx, reconcile)
+		if err != nil {
 			errs = append(errs, err)
-		} else {
-			state.keep(afterRecon)
+		}
+		if epilogueErr == nil && ctx.Err() == nil {
+			keep := make(map[pollScanKey][]pollScanRow, len(afterRecon))
+			for i, group := range reconcile {
+				if groupErrs[i] != nil && !watchBatchDeferOnlyError(groupErrs[i]) {
+					continue
+				}
+				for _, root := range group.Roots {
+					key := pollScanKey{group.Agent, filepath.Clean(root)}
+					if rows, ok := afterRecon[key]; ok {
+						keep[key] = rows
+					}
+				}
+			}
+			if len(keep) > 0 {
+				state.keep(keep)
+			}
 		}
 	}
 	return errors.Join(errs...)
