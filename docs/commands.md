@@ -2501,7 +2501,9 @@ shows the MCP commands to run by hand, and `--mcp=false` installs or checks
 the skill without inspecting or changing the MCP entry.
 
 The SessionStart hook refreshes memory and links runs to their launching
-session. Codex requires you to trust a new hook in `/hooks`.
+session. ClickHouse sidebars can also show native automated subagents because
+the mirror does not store which parent links came from the parser. Codex
+requires you to trust a new hook in `/hooks`.
 
 Setup registers `agentsview mcp --profile memory` without server flags. To use
 a remote archive, set `AGENTSVIEW_MEMORY_SERVER` or `AGENTSVIEW_MEMORY_PG`

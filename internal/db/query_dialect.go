@@ -824,6 +824,7 @@ func SessionTreeMemberPredicate(
 		if f.SidebarTree && f.ExcludeAutomated && !f.AutomatedFilterSet && f.AutomatedScope == "" {
 			linked := sessionAlias + ".relationship_type = 'subagent' AND "
 			if dialect.name == "clickhouse" {
+				// ClickHouse does not store parser parent provenance, so this also includes native automated children.
 				linked += "(" + sessionAlias + ".session_kind = 'non-interactive' OR " + sessionAlias + ".entrypoint = 'sdk-cli')"
 			} else {
 				comparison := "tc.session_id IS NOT tc.subagent_session_id"
