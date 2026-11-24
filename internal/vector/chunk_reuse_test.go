@@ -262,16 +262,20 @@ func TestBuildReuseMixedDocuments(t *testing.T) {
 	assert.Equal(t, read(fresh), read(ix))
 }
 
-func TestDeleteMirrorDocumentRetainsReuse(t *testing.T) {
+func TestDeleteMirrorDocumentClearsReuse(t *testing.T) {
 	ix := openTestIndex(t)
 	ctx := t.Context()
-	_, err := ix.db.ExecContext(ctx, `INSERT INTO message_vectors_reuse VALUES (1, 'a', 'hash', x'0000803f0000000000000000'), (1, 'b', 'hash', x'0000803f0000000000000000')`)
+	a := unitDocKey(userDoc("s", "a", 0, "first"), map[string]int{})
+	b := unitDocKey(userDoc("s", "b", 1, "second"), map[string]int{})
+	_, err := ix.db.ExecContext(ctx, `INSERT INTO message_vectors_reuse VALUES (1, ?, ?, x'0000803f0000000000000000'), (1, ?, ?, x'0000803f0000000000000000')`, a, contentHash("first"), b, contentHash("second"))
 	require.NoError(t, err)
-	_, err = ix.deleteMirrorDocument(ctx, "a", nil)
+	_, err = ix.deleteMirrorDocument(ctx, a)
 	require.NoError(t, err)
-	var count int
-	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT count(*) FROM message_vectors_reuse`).Scan(&count))
-	assert.Equal(t, 2, count)
+	var key string
+	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT doc_key FROM message_vectors_reuse`).Scan(&key))
+	assert.Equal(t, b, key)
+	plan := explainVectorPlan(t, ix, `DELETE FROM message_vectors_reuse WHERE doc_key = ?`, a)
+	assert.Contains(t, strings.Join(plan, " "), "message_vectors_reuse_doc (doc_key=?)")
 }
 
 func TestSplitPersistedChunkBoundaries(t *testing.T) {
@@ -367,7 +371,7 @@ func TestBuildReusesIndexedChunksAcrossDocuments(t *testing.T) {
 	}
 }
 
-func TestBuildReusesDeletedDocument(t *testing.T) {
+func TestBuildDoesNotReuseDeletedDocument(t *testing.T) {
 	ctx := t.Context()
 	ix := openTestIndex(t)
 	ix.split = kitvec.SplitOptions{MaxRunes: 10, Overlap: 2}
@@ -385,7 +389,7 @@ func TestBuildReusesDeletedDocument(t *testing.T) {
 	}
 	_, err = ix.Build(ctx, src, enc, gen, BuildOptions{Backstop: true, BatchSize: 1})
 	require.NoError(t, err)
-	assert.Empty(t, inputs)
+	assert.Equal(t, []string{"abcdefghij", "ijklmnopqr", "qrstuv"}, inputs)
 }
 
 func TestChunkTextBackfillResumesAndStopsScanning(t *testing.T) {
@@ -638,9 +642,9 @@ func TestClearRemovesAllReuseIncludingOrphans(t *testing.T) {
 	src.rows[1].endedAt = "2026-01-01T00:00:00Z"
 	_, err = ix.Build(ctx, src, fail, b, BuildOptions{BatchSize: 1})
 	require.Error(t, err)
-	src.rows = src.rows[1:]
-	_, err = ix.Build(ctx, src, fail, b, BuildOptions{Backstop: true, BatchSize: 1})
-	require.Error(t, err)
+	// An older build could leave reuse rows after a document disappeared.
+	_, err = ix.db.ExecContext(ctx, `DELETE FROM vector_messages WHERE doc_key = ?`, first)
+	require.NoError(t, err)
 	var count int
 	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT count(*) FROM message_vectors_reuse WHERE ordinal = 1 AND doc_key = ? AND text_hash = ?`, first, contentHash("hello")).Scan(&count))
 	require.Equal(t, 1, count)
@@ -723,4 +727,46 @@ func TestChunkTextDeleteUsesDocumentIndex(t *testing.T) {
 	ix := openTestIndex(t)
 	plan := explainVectorPlan(t, ix, `DELETE FROM message_vectors_chunk_text WHERE doc_key = ?`, "u:s1:u1")
 	assert.Contains(t, strings.Join(plan, " "), "message_vectors_chunk_text_doc (doc_key=?)")
+}
+
+func TestDeleteRemovesReuseFromOtherProfile(t *testing.T) {
+	ctx := t.Context()
+	ix := openTestIndex(t)
+	src := twoDocSource()
+	a, b := fakeGeneration("delete-a"), fakeGeneration("delete-b")
+	_, err := ix.Build(ctx, src, fakeBuildEncoder(), a, BuildOptions{})
+	require.NoError(t, err)
+	_, err = ix.Build(ctx, src, fakeBuildEncoder(), b, BuildOptions{})
+	require.NoError(t, err)
+	key := unitDocKey(src.rows[0].unit, map[string]int{})
+	src.rows[0].unit.Content = "changed first"
+	src.rows[0].endedAt = "2025-01-01T00:00:00Z"
+	_, err = ix.Build(ctx, src, func(context.Context, []string) ([][]float32, error) { return nil, errors.New("offline") }, a, BuildOptions{BatchSize: 1})
+	require.Error(t, err)
+	var count int
+	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT count(*) FROM message_vectors_reuse WHERE ordinal = 1 AND doc_key = ?`, key).Scan(&count))
+	require.Positive(t, count)
+	src.rows = src.rows[1:]
+	_, err = ix.Build(ctx, src, fakeBuildEncoder(), b, BuildOptions{Backstop: true})
+	require.NoError(t, err)
+	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT count(*) FROM message_vectors_reuse WHERE doc_key = ?`, key).Scan(&count))
+	assert.Zero(t, count)
+}
+
+func TestDeleteOnlyBuildDoesNotSeedReuse(t *testing.T) {
+	ctx := t.Context()
+	ix := openTestIndex(t)
+	src := &fakeUnitSource{}
+	for i := range 20 {
+		src.rows = append(src.rows, fakeUnit{unit: userDoc("session", fmt.Sprintf("doc-%03d", i), i, fmt.Sprintf("message %03d", i)), endedAt: "2024-01-01T00:00:00Z"})
+	}
+	gen := fakeGeneration("delete-only")
+	_, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{})
+	require.NoError(t, err)
+	src.rows = nil
+	_, err = ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{Backstop: true})
+	require.NoError(t, err)
+	var count int
+	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT count(*) FROM message_vectors_reuse`).Scan(&count))
+	assert.Zero(t, count)
 }

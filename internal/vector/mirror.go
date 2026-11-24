@@ -300,7 +300,7 @@ func (ix *Index) refresh(
 	visitUnit := func(u db.EmbeddableUnit) error {
 		key := unitDocKey(u, occurrences)
 		if u.Deleted {
-			deleted, err := ix.deleteMirrorDocument(ctx, key, seed)
+			deleted, err := ix.deleteMirrorDocument(ctx, key)
 			if err != nil {
 				return fmt.Errorf("deleting tombstoned mirror row %s: %w", key, err)
 			}
@@ -353,7 +353,7 @@ func (ix *Index) refresh(
 	// already-absent key on its own (see its doc comment), so this ordering
 	// and that guard together make Refresh's accounting robust regardless
 	// of which pass would otherwise see the row first.
-	finalized, err := ix.finalizeEvictions(ctx, evicted, seed)
+	finalized, err := ix.finalizeEvictions(ctx, evicted)
 	if err != nil {
 		return RefreshStats{}, err
 	}
@@ -367,14 +367,14 @@ func (ix *Index) refresh(
 		visited[id] = struct{}{}
 	}
 	if full {
-		deleted, err := ix.reconcileDeletions(ctx, seen, "", seed)
+		deleted, err := ix.reconcileDeletions(ctx, seen, "")
 		if err != nil {
 			return RefreshStats{}, err
 		}
 		stats.Deleted += deleted
 	} else {
 		for id := range visited {
-			deleted, err := ix.reconcileDeletions(ctx, seen, id, seed)
+			deleted, err := ix.reconcileDeletions(ctx, seen, id)
 			if err != nil {
 				return RefreshStats{}, err
 			}
@@ -408,20 +408,11 @@ func (ix *Index) refresh(
 	return stats, nil
 }
 
-func (ix *Index) deleteMirrorDocument(ctx context.Context, key string, seed *reuseGeneration) (bool, error) {
-	if seed != nil {
-		var content, hash string
-		err := ix.db.QueryRowContext(ctx, `SELECT content, content_hash FROM `+ix.spec.DocsTable+` WHERE doc_key = ?`, key).Scan(&content, &hash)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return false, err
-		}
-		if err == nil {
-			if err := ix.seedReuse(ctx, *seed, key, content, hash); err != nil {
-				return false, err
-			}
-		}
-	}
+func (ix *Index) deleteMirrorDocument(ctx context.Context, key string) (bool, error) {
 	if ix.spec.Name == "messages" {
+		if _, err := ix.db.ExecContext(ctx, `DELETE FROM `+ix.spec.reuseTable()+` WHERE doc_key = ?`, key); err != nil {
+			return false, fmt.Errorf("deleting reusable chunks for %s: %w", key, err)
+		}
 		if _, err := ix.db.ExecContext(ctx, `DELETE FROM `+ix.spec.chunkTextTable()+` WHERE doc_key = ?`, key); err != nil {
 			return false, err
 		}
@@ -615,7 +606,7 @@ func (ix *Index) evictSlotOccupant(
 // call order — an evicted key that never reappears in the scan is also
 // absent from seen, so without this guard reconcileDeletions would delete
 // the row once and finalizeEvictions would count deleting it again.
-func (ix *Index) finalizeEvictions(ctx context.Context, evicted map[string]struct{}, seed *reuseGeneration) (int, error) {
+func (ix *Index) finalizeEvictions(ctx context.Context, evicted map[string]struct{}) (int, error) {
 	if len(evicted) == 0 {
 		return 0, nil
 	}
@@ -637,7 +628,7 @@ func (ix *Index) finalizeEvictions(ctx context.Context, evicted map[string]struc
 		if ordinal >= 0 {
 			continue // reinserted under its own doc_key later in the same scan
 		}
-		if _, err := ix.deleteMirrorDocument(ctx, key, seed); err != nil {
+		if _, err := ix.deleteMirrorDocument(ctx, key); err != nil {
 			return deleted, err
 		}
 		deleted++
@@ -685,7 +676,7 @@ func (ix *Index) currentOrdinals(ctx context.Context, keys []string) (map[string
 // doc_key was not seen in a full scan. A non-empty sessionID limits it to
 // that session, which the caller must have scanned whole.
 func (ix *Index) reconcileDeletions(
-	ctx context.Context, seen map[string]struct{}, sessionID string, seed *reuseGeneration,
+	ctx context.Context, seen map[string]struct{}, sessionID string,
 ) (int, error) {
 	query, args := `SELECT doc_key FROM `+ix.spec.DocsTable, []any(nil)
 	if sessionID != "" {
@@ -714,7 +705,7 @@ func (ix *Index) reconcileDeletions(
 	rows.Close()
 
 	for _, key := range vanished {
-		if _, err := ix.deleteMirrorDocument(ctx, key, seed); err != nil {
+		if _, err := ix.deleteMirrorDocument(ctx, key); err != nil {
 			return 0, err
 		}
 	}
@@ -772,7 +763,7 @@ func (ix *Index) Clear(ctx context.Context) error {
 	if err := ix.requireWritable(); err != nil {
 		return err
 	}
-	if _, err := ix.reconcileDeletions(ctx, nil, "", nil); err != nil {
+	if _, err := ix.reconcileDeletions(ctx, nil, ""); err != nil {
 		return err
 	}
 	if ix.spec.Name == "messages" {
