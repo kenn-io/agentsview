@@ -706,7 +706,7 @@ func (e *Engine) processProviderFile(
 		cwdAgent = file.Agent
 	}
 	explicitForce := e.forceParseBypassesCache(file) || file.ForceFullParse
-	forceSourceCwdParse := cwdDecision.forceParse || (ctx.Value(codexLabelRootsPendingKey{}) != nil && file.Agent == parser.AgentCodex && parser.CodexMarkedRunPath(file.Path))
+	forceSourceCwdParse := cwdDecision.forceParse
 	var piebaldFailure piebaldFailureLookup
 	if file.Agent == parser.AgentPiebald {
 		var found bool

@@ -6452,16 +6452,7 @@ func (e *Engine) syncAllLocked(
 		all = e.filterQuickSyncFiles(ctx, all, since)
 	}
 
-	if quickSyncCutoff && ctx.Value(codexLabelRootsPendingKey{}) != nil {
-		all = dedupeDiscoveredFilesByPreference(all, func(candidate, current parser.DiscoveredFile) bool {
-			markedCandidate := candidate.Agent == parser.AgentCodex && candidate.ForceFullParse && parser.CodexMarkedRunPath(candidate.Path)
-			markedCurrent := current.Agent == parser.AgentCodex && current.ForceFullParse && parser.CodexMarkedRunPath(current.Path)
-			if markedCandidate != markedCurrent {
-				return markedCandidate
-			}
-			return preferNewestCodexDiscoveredFile(candidate, current)
-		})
-	} else if quickSyncCutoff {
+	if quickSyncCutoff {
 		all = dedupeDiscoveredFilesPreferNewestCodex(all)
 	} else {
 		all = dedupeDiscoveredFiles(all)
@@ -11023,7 +11014,7 @@ func (e *Engine) preserveUnavailableSourceProjects(
 	indexes := make(map[string][]int)
 	ids := make([]string, 0, len(batch))
 	for i := range batch {
-		if batch[i].sourceProjectResolved || e.hasCodexSourceLabel(batch[i].sess) ||
+		if batch[i].sourceProjectResolved ||
 			(ctx.Value(codexLabelRootsPendingKey{}) != nil && batch[i].sess.Agent == parser.AgentCodex && parser.CodexMarkedRunPath(batch[i].sess.File.Path)) {
 			continue
 		}

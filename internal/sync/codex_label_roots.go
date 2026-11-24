@@ -17,18 +17,6 @@ const codexLabelRootsKey = "codex_label_roots"
 
 type codexLabelRootsPendingKey struct{}
 
-func (e *Engine) hasCodexSourceLabel(session parser.ParsedSession) bool {
-	if session.Agent != parser.AgentCodex {
-		return false
-	}
-	for _, root := range e.sources().agentDirs[parser.AgentCodex] {
-		if !strings.HasPrefix(root, "s3://") && parser.CodexSourceLabel(root, session.File.Path) != "" {
-			return true
-		}
-	}
-	return false
-}
-
 func (e *Engine) prepareCodexLabelRoots(ctx context.Context) (context.Context, func(context.Context, *SyncStats)) {
 	roots := []string{"v1"}
 	for _, root := range e.sources().agentDirs[parser.AgentCodex] {
@@ -54,18 +42,6 @@ func (e *Engine) prepareCodexLabelRoots(ctx context.Context) (context.Context, f
 		}
 		for _, root := range roots[1:] {
 			if info, err := os.Stat(root); err != nil || !info.IsDir() {
-				return
-			}
-		}
-		// Ordinary discovery keeps readable siblings when a directory fails.
-		// The marker needs a complete walk before it can acknowledge this pass.
-		factory := e.sources().providerFactories[parser.AgentCodex]
-		if factory == nil && len(roots) > 1 {
-			return
-		}
-		if factory != nil {
-			provider := factory.NewProvider(parser.ProviderConfig{Roots: roots[1:]})
-			if walk, ok := provider.(parser.StreamingDiscoverer); !ok || walk.DiscoverEach(ctx, func(parser.SourceRef) error { return nil }) != nil {
 				return
 			}
 		}
