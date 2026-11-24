@@ -122,13 +122,13 @@ func TestCommandPRLinks(t *testing.T) {
 }
 
 func commandPRLinks(ctx context.Context, command, remote string, allowBare bool) ([]PRLink, error) {
-	links, _, _, _, _, err := AnalyzePRCommand(ctx, command, "", remote, allowBare, false)
+	links, _, _, _, err := AnalyzePRCommand(ctx, command, "", remote, allowBare, false)
 	return links, err
 }
 
 func TestAnalyzePRCommandNestedRemoteChange(t *testing.T) {
 	command := `bash -lc 'git remote set-url origin https://github.com/user-b/project-b.git'`
-	_, _, repositoryChanged, _, _, err := AnalyzePRCommand(t.Context(), command, "", "https://github.com/user-a/project-a.git", true, false)
+	_, _, repositoryChanged, _, err := AnalyzePRCommand(t.Context(), command, "", "https://github.com/user-a/project-a.git", true, false)
 	require.NoError(t, err)
 	assert.True(t, repositoryChanged)
 

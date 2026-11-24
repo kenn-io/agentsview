@@ -225,17 +225,17 @@ func shellCommand(args []*syntax.Word) (string, bool) {
 }
 
 // AnalyzePRCommand extracts links and shared shell context from one parse.
-func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBare, hostUnknown bool) ([]PRLink, bool, bool, bool, []PRLink, error) {
+func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBare, hostUnknown bool) ([]PRLink, bool, bool, []PRLink, error) {
 	return analyzePRCommand(ctx, command, cwd, remote, allowBare, hostUnknown, 0)
 }
 
-func analyzePRCommand(ctx context.Context, command, cwd, remote string, allowBare, hostUnknown bool, depth int) ([]PRLink, bool, bool, bool, []PRLink, error) {
+func analyzePRCommand(ctx context.Context, command, cwd, remote string, allowBare, hostUnknown bool, depth int) ([]PRLink, bool, bool, []PRLink, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, false, false, false, nil, err
+		return nil, false, false, nil, err
 	}
 	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
 	if err != nil {
-		return nil, false, false, false, nil, ctx.Err()
+		return nil, false, false, nil, ctx.Err()
 	}
 	directoryChanged, repositoryChanged, calls := bashChangesRepositoryContext(file)
 	remoteHost, remoteRepo := "", ""
@@ -246,14 +246,14 @@ func analyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 	var dependsOnRemote []PRLink
 	for _, entry := range calls {
 		if err := ctx.Err(); err != nil {
-			return nil, false, false, false, nil, err
+			return nil, false, false, nil, err
 		}
 		args := unwrapPRCommand(entry.call.Args)
 		bareSafe := allowBare && !entry.directory && !entry.repository
 		if inner, ok := shellCommand(args); ok && depth < 8 {
-			found, _, nested, _, dependencies, err := analyzePRCommand(ctx, inner, cwd, remote, bareSafe, hostUnknown || entry.repository, depth+1)
+			found, _, nested, dependencies, err := analyzePRCommand(ctx, inner, cwd, remote, bareSafe, hostUnknown || entry.repository, depth+1)
 			if err != nil {
-				return nil, false, false, false, nil, err
+				return nil, false, false, nil, err
 			}
 			links = append(links, found)
 			dependsOnRemote = append(dependsOnRemote, dependencies...)
@@ -344,7 +344,7 @@ func analyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 		if strings.HasPrefix(selector, "https://") || strings.HasPrefix(selector, "http://") {
 			found, err := PromptPRLinksContext(ctx, selector)
 			if err != nil {
-				return nil, false, false, false, nil, err
+				return nil, false, false, nil, err
 			}
 			links = append(links, found)
 			continue
@@ -374,7 +374,7 @@ func analyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 			}
 		}
 	}
-	return CombinePRLinks(links...), directoryChanged, repositoryChanged, repositoryChanged, dependsOnRemote, nil
+	return CombinePRLinks(links...), directoryChanged, repositoryChanged, dependsOnRemote, nil
 }
 
 // splitPRRepository separates an explicit host from a -R repository and

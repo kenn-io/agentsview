@@ -534,7 +534,10 @@ func applyArchiveContentToCopiedSessionsTx(
 		if _, err := tx.ExecContext(ctx, `DELETE FROM commit_links WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)`); err != nil {
 			return err
 		}
-		err = dropCopiedTranscriptContentTx(ctx, tx, tempIDsTable)
+		if err := retainCopiedToolPRLinksTx(ctx, tx, tempIDsTable); err != nil {
+			return err
+		}
+		err = dropCopiedToolContentTx(ctx, tx, tempIDsTable)
 	case config.ArchiveContentUsage:
 		if _, err := tx.ExecContext(ctx, `DELETE FROM commit_links WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)`); err != nil {
 			return err
@@ -565,17 +568,6 @@ func applyArchiveContentToCopiedSessionsTx(
 // in db.go). Sessions parsed earlier and never re-parsed, because their
 // source files are gone, carry no marker.
 const toolOutputMarkerDataVersion = 105
-
-// dropCopiedTranscriptContentTx projects copied sessions onto the transcripts
-// policy, keeping the PR links their inputs named.
-func dropCopiedTranscriptContentTx(
-	ctx context.Context, tx *sql.Tx, tempIDsTable string,
-) error {
-	if err := retainCopiedToolPRLinksTx(ctx, tx, tempIDsTable); err != nil {
-		return err
-	}
-	return dropCopiedToolContentTx(ctx, tx, tempIDsTable)
-}
 
 func dropCopiedToolContentTx(
 	ctx context.Context, tx *sql.Tx, tempIDsTable string,

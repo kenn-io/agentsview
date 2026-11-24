@@ -394,19 +394,6 @@ func bareLinksAllowed(workdir, cwd string, shared sharedPRContext) bool {
 	return !shared.directory && !shared.repository
 }
 
-// inputWorkdir returns the directory a call's input names: its structured
-// workdir or a code-mode literal's, resolved without the session cwd so an
-// absent workdir stays empty. Raw shell text names none.
-func inputWorkdir(input string) string {
-	if jsontext.Value(input).IsValid() {
-		return parser.ToolInputWorkdir(input)
-	}
-	if commitToolCallRE.MatchString(input) {
-		return commitRepository(input, "")
-	}
-	return ""
-}
-
 func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote string, sharedContext sharedPRContext, change *sharedPRContext, depends *[]PRLink) ([]PRLink, error) {
 	if category == "Task" {
 		return taskPRLinks(ctx, input)
@@ -419,14 +406,14 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 	if !ok {
 		return nil, ctx.Err()
 	}
-	allowBare := bareLinksAllowed(inputWorkdir(input), cwd, sharedContext)
+	allowBare := bareLinksAllowed(parser.ToolInputWorkdir(input), cwd, sharedContext)
 	var lists [][]PRLink
 	for _, command := range commands {
 		if command.codeMode {
 			allowBare = bareLinksAllowed(command.workdir, cwd, sharedContext)
 		}
-		links, directory, repository, persistent, usesRemote, err := parser.AnalyzePRCommand(ctx, command.text, cwd, remote, allowBare, sharedContext.repository)
-		change.add(directory, persistent)
+		links, directory, repository, usesRemote, err := parser.AnalyzePRCommand(ctx, command.text, cwd, remote, allowBare, sharedContext.repository)
+		change.add(directory, repository)
 		if depends != nil {
 			*depends = append(*depends, usesRemote...)
 		}
@@ -544,11 +531,6 @@ func ToolCallPRLinksForUsage(ctx context.Context, messages []Message, remote str
 	return toolCallPRLinks(ctx, messages, "", remote, &changed, nil)
 }
 
-func toolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string, sharedContext *sharedPRContext, depends *[]PRLink) ([]PRLink, error) {
-	states, err := toolCallPRStates(ctx, messages, cwd, remote, sharedContext, depends)
-	return states.links(), err
-}
-
 // callPRState is what one tool call adds: the links it names and the shell
 // state it changes for later calls.
 type callPRState struct {
@@ -556,20 +538,8 @@ type callPRState struct {
 	change sharedPRContext
 }
 
-type callPRStates []callPRState
-
-func (states callPRStates) links() []PRLink {
-	lists := make([][]PRLink, len(states))
-	for i, state := range states {
-		lists[i] = state.links
-	}
-	return parser.CombinePRLinks(lists...)
-}
-
-// toolCallPRStates derives each tool call's state in order, carrying shell
-// state from call to call.
-func toolCallPRStates(ctx context.Context, messages []Message, cwd, remote string, sharedContext *sharedPRContext, depends *[]PRLink) (callPRStates, error) {
-	var states callPRStates
+func toolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string, sharedContext *sharedPRContext, depends *[]PRLink) ([]PRLink, error) {
+	var lists [][]PRLink
 	for _, message := range messages {
 		for _, call := range message.ToolCalls {
 			state := sharedPRContext{repository: sharedContext.repository, noBare: sharedContext.noBare}
@@ -580,7 +550,7 @@ func toolCallPRStates(ctx context.Context, messages []Message, cwd, remote strin
 			if err != nil {
 				return nil, err
 			}
-			states = append(states, callState)
+			lists = append(lists, callState.links)
 			if call.Category == "Bash" {
 				if call.ToolName == "Bash" {
 					sharedContext.directory = sharedContext.directory || callState.change.directory
@@ -589,7 +559,7 @@ func toolCallPRStates(ctx context.Context, messages []Message, cwd, remote strin
 			}
 		}
 	}
-	return states, nil
+	return parser.CombinePRLinks(lists...), nil
 }
 
 // callPRStateIn derives one call's state under the shell state before it. A
@@ -756,15 +726,11 @@ func storedToolCallPRLinksTx(ctx context.Context, tx transactionQueries, id, cwd
 	if err != nil {
 		return nil, err
 	}
-	var lists [][]PRLink
+	var calls []ToolCall
 	for _, s := range stored {
-		links, err := toolCallPRLinks(ctx, []Message{{ToolCalls: []ToolCall{s.call}}}, cwd, remote, state, nil)
-		if err != nil {
-			return nil, err
-		}
-		lists = append(lists, links)
+		calls = append(calls, s.call)
 	}
-	return parser.CombinePRLinks(lists...), nil
+	return toolCallPRLinks(ctx, []Message{{ToolCalls: calls}}, cwd, remote, state, nil)
 }
 
 // retainStoredToolPRLinksTx keeps the PR metadata of a session's stored calls
