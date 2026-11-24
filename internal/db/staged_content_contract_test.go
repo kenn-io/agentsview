@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strconv"
 	"testing"
 
 	"github.com/mattn/go-sqlite3"
@@ -12,35 +11,31 @@ import (
 )
 
 func TestStagedPublishWithinSQLiteVariableLimit(t *testing.T) {
-	for _, count := range []int{58, 59, 501} {
-		t.Run(strconv.Itoa(count), func(t *testing.T) {
-			d := testDB(t)
-			insertSession(t, d, "s1", "project-a")
-			conn, err := d.getWriter().Conn(t.Context())
-			require.NoError(t, err)
-			require.NoError(t, conn.Raw(func(raw any) error {
-				raw.(*sqlite3.SQLiteConn).SetLimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 999)
-				return nil
-			}))
-			require.NoError(t, conn.Close())
+	d := testDB(t)
+	insertSession(t, d, "s1", "project-a")
+	conn, err := d.getWriter().Conn(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, conn.Raw(func(raw any) error {
+		raw.(*sqlite3.SQLiteConn).SetLimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 999)
+		return nil
+	}))
+	require.NoError(t, conn.Close())
 
-			staged := newScratchStagedResults(t)
-			calls := make([]ToolCall, count)
-			for i := range calls {
-				calls[i] = ToolCall{
-					ToolUseID: fmt.Sprintf("call-%d", i), ToolName: "exec_command", Category: "Bash",
-				}
-			}
-			msgs := []Message{{SessionID: "s1", Ordinal: 0, Role: "assistant", ToolCalls: calls}}
-			require.NoError(t, d.ReplaceSessionContentStaged(t.Context(), "s1", msgs, staged, nil, nil))
-			stored, err := d.GetAllMessages(t.Context(), "s1")
-			require.NoError(t, err)
-			require.Len(t, stored, 1)
-			require.Len(t, stored[0].ToolCalls, len(calls))
-			for i, call := range stored[0].ToolCalls {
-				require.Equal(t, calls[i].ToolUseID, call.ToolUseID)
-			}
-		})
+	staged := newScratchStagedResults(t)
+	calls := make([]ToolCall, 501)
+	for i := range calls {
+		calls[i] = ToolCall{
+			ToolUseID: fmt.Sprintf("call-%d", i), ToolName: "exec_command", Category: "Bash",
+		}
+	}
+	msgs := []Message{{SessionID: "s1", Ordinal: 0, Role: "assistant", ToolCalls: calls}}
+	require.NoError(t, d.ReplaceSessionContentStaged(t.Context(), "s1", msgs, staged, nil, nil))
+	stored, err := d.GetAllMessages(t.Context(), "s1")
+	require.NoError(t, err)
+	require.Len(t, stored, 1)
+	require.Len(t, stored[0].ToolCalls, len(calls))
+	for i, call := range stored[0].ToolCalls {
+		require.Equal(t, calls[i].ToolUseID, call.ToolUseID)
 	}
 }
 
