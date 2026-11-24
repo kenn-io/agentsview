@@ -384,3 +384,30 @@ func TestCursorAccountLedgerThreeArchives(t *testing.T) {
 	assert.EqualValues(t, 60, total)
 	assert.Equal(t, map[string]int64{"12": 10, "34": 30, "archive:a": 20}, attribution)
 }
+
+func TestCursorAccountReportingSharedUsageRead(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	_, err := d.rawWriter().ExecContext(ctx, `INSERT INTO cursor_usage_events(agent, occurred_at, model, output_tokens, dedup_key) VALUES
+		('cursor', '2026-07-28T09:01:00-01:00', 'cursor-model', 10, 'cursor-event'),
+		('cursor', '2026-07-28T11:00:00Z', 'outside', 20, 'outside-event'),
+		('grok', '2026-07-28T10:02:00Z', 'other-model', 30, 'other-event')`)
+	require.NoError(t, err)
+	start := time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC)
+	tx, err := d.getReader().BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+	for _, includeCursor := range []bool{true, false} {
+		source, err := d.loadReportingExportSource(ctx, tx, start, start.Add(time.Hour), 7, includeCursor)
+		require.NoError(t, err)
+		require.Len(t, source.standaloneUsage, 1)
+		assert.Equal(t, "grok", source.standaloneUsage[0].Agent)
+		if includeCursor {
+			require.Len(t, source.cursorEvents, 1)
+			assert.Equal(t, "2026-07-28T10:01:00Z", source.cursorEvents[0].event.At)
+			assert.EqualValues(t, 10, source.cursorEvents[0].event.OutputTokens)
+		} else {
+			assert.Empty(t, source.cursorEvents)
+		}
+	}
+}

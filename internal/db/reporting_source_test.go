@@ -174,7 +174,7 @@ func TestReportingDigestPreservesTerminalEventEligibility(t *testing.T) {
 		t.Context(), tx,
 		time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
 		time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC),
-		export.ReportingSchemaVersion,
+		export.ReportingSchemaVersion, true,
 	)
 	require.NoError(t, err)
 	day := source.forDate(

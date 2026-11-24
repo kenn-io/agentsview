@@ -41,7 +41,7 @@ func TestReportingHoursMatchPerHourPairing(t *testing.T) {
 					tx, err := d.getReader().BeginTx(t.Context(), &sql.TxOptions{ReadOnly: true})
 					require.NoError(t, err)
 					defer func() { _ = tx.Rollback() }()
-					source, err := d.loadReportingExportSource(t.Context(), tx, date, end, variant.schema)
+					source, err := d.loadReportingExportSource(t.Context(), tx, date, end, variant.schema, true)
 					require.NoError(t, err)
 					require.NoError(t, tx.Commit())
 					return source.forDate(date, end)

@@ -102,7 +102,7 @@ func (db *DB) ExportReportingDay(
 	}
 
 	source, err := db.loadReportingExportSource(
-		ctx, tx, date, date.Add(time.Duration(hourCount)*time.Hour), schemaVersion,
+		ctx, tx, date, date.Add(time.Duration(hourCount)*time.Hour), schemaVersion, len(opts.ProjectKeys) == 0,
 	)
 	if err != nil {
 		return export.ReportingDay{}, err
@@ -113,7 +113,7 @@ func (db *DB) ExportReportingDay(
 		}
 	}
 	if schemaVersion == export.ReportingCursorSchemaVersion && len(opts.ProjectKeys) == 0 {
-		if err := db.loadReportingCursorLedger(ctx, tx, date, date.Add(time.Duration(hourCount)*time.Hour), &source); err != nil {
+		if err := db.loadReportingCursorPolls(ctx, tx, date, date.Add(time.Duration(hourCount)*time.Hour), &source); err != nil {
 			return export.ReportingDay{}, err
 		}
 	}
@@ -231,7 +231,7 @@ func (db *DB) ExportReportingDigest(
 		opts.afterSnapshot()
 	}
 	source, err := db.loadReportingExportSource(
-		ctx, tx, from, unionEnd, schemaVersion,
+		ctx, tx, from, unionEnd, schemaVersion, len(opts.ProjectKeys) == 0,
 	)
 	if err != nil {
 		return nil, err
@@ -242,7 +242,7 @@ func (db *DB) ExportReportingDigest(
 		}
 	}
 	if schemaVersion == export.ReportingCursorSchemaVersion && len(opts.ProjectKeys) == 0 {
-		if err := db.loadReportingCursorLedger(ctx, tx, from, unionEnd, &source); err != nil {
+		if err := db.loadReportingCursorPolls(ctx, tx, from, unionEnd, &source); err != nil {
 			return nil, err
 		}
 	}
@@ -785,7 +785,7 @@ func (db *DB) loadReportingAccountUsage(ctx context.Context, tx *sql.Tx, start, 
 func (db *DB) reportingStandaloneUsageCandidatesFrom(
 	ctx context.Context,
 	tx *sql.Tx,
-	query activity.Query, schemaVersion int,
+	query activity.Query, schemaVersion int, includeCursor bool, source *reportingExportSource,
 ) ([]activity.UsageRow, error) {
 	var tableExists int
 	err := tx.QueryRowContext(
@@ -808,20 +808,26 @@ func (db *DB) reportingStandaloneUsageCandidatesFrom(
 	upperBound := PaddedUTCBound(
 		query.RangeEnd.UTC().Format(time.RFC3339), 14,
 	)
-	source := `SELECT * FROM cursor_usage_events WHERE occurred_at >= ? AND occurred_at <= ?`
+	querySource := `SELECT * FROM cursor_usage_events WHERE occurred_at >= ? AND occurred_at <= ?`
 	accountFilter := ""
 	if schemaVersion == export.ReportingCursorSchemaVersion {
-		accountFilter = " WHERE agent != 'cursor'"
+		if !includeCursor {
+			accountFilter = " WHERE agent != 'cursor'"
+		}
 	} else if export.IsAccountReportingSchema(schemaVersion) {
-		source = `SELECT *, max(account_polled_at) OVER (` + reportingCursorPollWindow + `) AS latest_poll FROM cursor_usage_events WHERE occurred_at >= ? AND occurred_at <= ?`
+		querySource = `SELECT *, max(account_polled_at) OVER (` + reportingCursorPollWindow + `) AS latest_poll FROM cursor_usage_events WHERE occurred_at >= ? AND occurred_at <= ?`
 		accountFilter = " WHERE NOT (agent = 'cursor' AND account_user_id != '' AND account_polled_at != '' AND account_polled_at = latest_poll AND account_polled_at >= COALESCE((SELECT polled_at FROM cursor_account_polls WHERE account_user_id = event.account_user_id AND hour_start = " + reportingCursorHour + "),''))"
+	}
+	ledgerColumns := ""
+	if schemaVersion == export.ReportingCursorSchemaVersion && includeCursor {
+		ledgerColumns = ", account_user_id, account_polled_at, agentsview_timestamp_unix_micro(occurred_at)"
 	}
 	rows, err := tx.QueryContext(ctx, `
 		SELECT agent, occurred_at, COALESCE(NULLIF(model, ''), '<unknown>'),
 			input_tokens, output_tokens,
 			cache_write_tokens, cache_read_tokens,
-			charged_microdollars, dedup_key
-		FROM (`+source+`) AS event`+accountFilter,
+			charged_microdollars, dedup_key`+ledgerColumns+`
+		FROM (`+querySource+`) AS event`+accountFilter,
 		lowerBound, upperBound,
 	)
 	if err != nil {
@@ -834,20 +840,26 @@ func (db *DB) reportingStandaloneUsageCandidatesFrom(
 		var row activity.UsageRow
 		var inputTokens, outputTokens int
 		var cacheCreationTokens, cacheReadTokens int
-		if err := rows.Scan(
-			&row.Agent,
-			&row.Timestamp,
-			&row.Model,
-			&inputTokens,
-			&outputTokens,
-			&cacheCreationTokens,
-			&cacheReadTokens,
-			&row.Cost,
-			&row.UsageDedupKey,
-		); err != nil {
-			return nil, fmt.Errorf(
-				"scanning standalone reporting usage: %w", err,
-			)
+		fields := []any{&row.Agent, &row.Timestamp, &row.Model, &inputTokens, &outputTokens, &cacheCreationTokens, &cacheReadTokens, &row.Cost, &row.UsageDedupKey}
+		var account, polledAt string
+		var micros sql.NullInt64
+		if schemaVersion == export.ReportingCursorSchemaVersion && includeCursor {
+			fields = append(fields, &account, &polledAt, &micros)
+		}
+		if err := rows.Scan(fields...); err != nil {
+			return nil, fmt.Errorf("scanning standalone reporting usage: %w", err)
+		}
+		if schemaVersion == export.ReportingCursorSchemaVersion && includeCursor && row.Agent == "cursor" {
+			if micros.Valid && micros.Int64 >= query.RangeStart.UnixMicro() && micros.Int64 < query.RangeEnd.UnixMicro() {
+				at := time.UnixMicro(micros.Int64).UTC()
+				source.cursorEvents = append(source.cursorEvents, reportingCursorEventRow{at: at, event: export.ReportingCursorEvent{
+					At: at.Format(time.RFC3339Nano), Key: row.UsageDedupKey, Model: row.Model,
+					InputTokens: int64(max(inputTokens, 0)), OutputTokens: int64(max(outputTokens, 0)),
+					CacheWriteTokens: int64(max(cacheCreationTokens, 0)), CacheReadTokens: int64(max(cacheReadTokens, 0)),
+					Cost: row.Cost, Account: account, PolledAt: polledAt,
+				}})
+			}
+			continue
 		}
 		setStandaloneUsageFields(&row, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens)
 		loaded = append(loaded, row)
