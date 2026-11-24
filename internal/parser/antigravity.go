@@ -695,7 +695,7 @@ func (r *antigravityStepLoadResult) appendGenMetadataUsage(
 	decoded bool,
 	executorModel string,
 ) ParsedMessage {
-	genModel := resolveAntigravityGenerationModel(data, executorModel)
+	genModel, genEffort := resolveAntigravityGenerationModel(data, executorModel)
 	block, okUsage := extractTokenUsage(data)
 	if okUsage {
 		// ModelUsageStats.input_tokens is uncached input,
@@ -730,6 +730,9 @@ func (r *antigravityStepLoadResult) appendGenMetadataUsage(
 	}
 	if genModel != "" {
 		msg.Model = genModel
+	}
+	if genEffort != "" {
+		msg.ReasoningEffort = genEffort
 	}
 	return msg
 }
@@ -883,22 +886,25 @@ func tokenBlockFrom(fs []agProtoField) (agTokenBlock, bool) {
 	return block, true
 }
 
-// extractModelName prefers ChatModelMetadata.model_display_name and falls back
-// to ChatModelMetadata.response_model.
+// extractModelName returns the raw model label from gen_metadata, preferring
+// ChatModelMetadata.model_display_name and falling back to response_model.
 func extractModelName(data []byte) string {
-	model, _ := extractAntigravityGenerationModel(data)
-	return model
+	displayName, responseModel := extractAntigravityGenerationModels(data)
+	if displayName != "" {
+		return displayName
+	}
+	return responseModel
 }
 
-func extractAntigravityGenerationModel(data []byte) (string, bool) {
+func extractAntigravityGenerationModels(data []byte) (displayName, responseModel string) {
 	fields, err := agProtoParse(data)
 	if err != nil {
-		return "", false
+		return "", ""
 	}
 	if chatModel, ok := extractAntigravityChatModel(fields); ok {
-		return extractAntigravityChatModelName(chatModel)
+		return extractAntigravityChatModelNames(chatModel)
 	}
-	return extractLegacyAntigravityGenerationModel(fields)
+	return extractLegacyAntigravityGenerationModels(fields)
 }
 
 func extractAntigravityChatModel(
@@ -928,17 +934,15 @@ func extractAntigravityChatModel(
 	return nil, false
 }
 
-func extractAntigravityChatModelName(
+func extractAntigravityChatModelNames(
 	fields []agProtoField,
-) (string, bool) {
-	if model := extractModelNameField(
-		fields, agChatModelMetadataModelDisplayNameField,
-	); model != "" {
-		return model, true
-	}
+) (displayName, responseModel string) {
 	return extractModelNameField(
-		fields, agChatModelMetadataResponseModelField,
-	), false
+			fields, agChatModelMetadataModelDisplayNameField,
+		),
+		extractModelNameField(
+			fields, agChatModelMetadataResponseModelField,
+		)
 }
 
 func extractModelNameField(fields []agProtoField, fieldNumber int) string {
@@ -953,20 +957,18 @@ func extractModelNameField(fields []agProtoField, fieldNumber int) string {
 	return model
 }
 
-// extractLegacyAntigravityGenerationModel preserves the recursive decoder for
+// extractLegacyAntigravityGenerationModels preserves the recursive decoder for
 // older persisted records that do not contain
 // CortexStepGeneratorMetadata.chat_model.
-func extractLegacyAntigravityGenerationModel(
+func extractLegacyAntigravityGenerationModels(
 	fields []agProtoField,
-) (string, bool) {
-	if model := extractModelNameFromFields(
-		fields, agChatModelMetadataModelDisplayNameField,
-	); model != "" {
-		return model, true
-	}
+) (displayName, responseModel string) {
 	return extractModelNameFromFields(
-		fields, agChatModelMetadataResponseModelField,
-	), false
+			fields, agChatModelMetadataModelDisplayNameField,
+		),
+		extractModelNameFromFields(
+			fields, agChatModelMetadataResponseModelField,
+		)
 }
 
 func extractModelNameFromFields(
@@ -992,48 +994,191 @@ func extractModelNameFromFields(
 	return ""
 }
 
+// antigravityEffortLevels maps recognized Antigravity reasoning-effort labels
+// (from parenthesized display names like "(High)" or hyphenated slugs like
+// "-high") to their normalized lowercase reasoning_effort values.
+var antigravityEffortLevels = map[string]string{
+	"minimal":  "minimal",
+	"low":      "low",
+	"medium":   "medium",
+	"high":     "high",
+	"xhigh":    "xhigh",
+	"max":      "max",
+	"thinking": "thinking",
+}
+
 func resolveAntigravityGenerationModel(
 	data []byte, executorModel string,
-) string {
-	generationModel, hasDisplayLabel := extractAntigravityGenerationModel(data)
-	return resolveAntigravityModelName(
-		generationModel, executorModel, hasDisplayLabel,
-	)
+) (model, effort string) {
+	displayName, responseModel := extractAntigravityGenerationModels(data)
+	return resolveAntigravityModel(displayName, responseModel, executorModel)
 }
 
-// resolveAntigravityModelName reconciles the model reported by downstream LLM
-// RPC generation metadata with the user's intended effort-qualified model from
-// the covering executor range.
+// resolveAntigravityModel normalizes Antigravity generation metadata into a
+// canonical base model slug and a separate reasoning effort value.
 //
-// Antigravity CLI does not record reasoning effort in generation metadata
-// (field 19 response_model), recording only the base model slug or an internal
-// serving canary identifier (e.g. "gemini-3.7-flash-exp-b"). The effort
-// qualification (-low, -medium, -high) is recorded only in the covering
-// ExecutorMetadata. If the generation model matches the executor's base model
-// after stripping known experimental serving variants, the effort-qualified
-// executor model is returned so dashboard usage accounting is not fragmented.
-// If hasDisplayLabel is true or the models do not match, generationModel is
-// preserved unchanged.
-func resolveAntigravityModelName(
-	generationModel, executorModel string, hasDisplayLabel bool,
-) string {
-	if hasDisplayLabel || executorModel == "" {
-		return generationModel
+// Antigravity stores human display labels with parenthesized reasoning levels
+// in ChatModelMetadata.model_display_name (field 21, e.g.
+// "Gemini 4 Neon (High)", "Gemini 4 Neon (Low)", "Gemini 3.5 Flash (High)"),
+// wire or serving identifiers in ChatModelMetadata.response_model (field 19,
+// e.g. "gemini-4-neon", "gemini-3-flash-a", "gemini-3.7-flash-exp-b"), and
+// effort-qualified slugs in ExecutorMetadata (field 28, e.g.
+// "gemini-4-neon-high", "gemini-3.7-flash-high").
+//
+// Storing the base model slug in model and the reasoning level in
+// reasoning_effort keeps all effort levels of one model grouped together in
+// usage reports while preserving the recorded effort alongside the model badge.
+func resolveAntigravityModel(
+	displayName, responseModel, executorModel string,
+) (string, string) {
+	if displayName != "" {
+		return resolveAntigravityDisplayModel(displayName, responseModel, executorModel)
 	}
-	normalizedGeneration := stripAntigravityExperimentalVariant(generationModel)
-	if antigravityBaseModel(executorModel) == normalizedGeneration {
-		return executorModel
+	if responseModel == "" {
+		return "", ""
 	}
-	return generationModel
+	if base, effort, ok := splitAntigravityDisplayEffort(responseModel); ok {
+		return slugifyAntigravityDisplayModel(base, true), effort
+	}
+	if strings.ContainsAny(responseModel, " \t") {
+		model := slugifyAntigravityDisplayModel(responseModel, false)
+		return model, executorEffortForModel(model, executorModel)
+	}
+	respBase, respEffort := splitAntigravitySlugEffort(responseModel)
+	if respEffort != "" {
+		return respBase, respEffort
+	}
+	if executorModel == "" {
+		return responseModel, ""
+	}
+	execBase, execEffort := splitAntigravitySlugEffort(executorModel)
+	normalizedResp := stripAntigravityExperimentalVariant(responseModel)
+	if execBase != "" && execBase == normalizedResp {
+		return execBase, execEffort
+	}
+	return responseModel, ""
 }
 
-func antigravityBaseModel(model string) string {
-	for _, suffix := range []string{"-low", "-medium", "-high"} {
-		if base, ok := strings.CutSuffix(model, suffix); ok {
-			return base
+func resolveAntigravityDisplayModel(
+	displayName, responseModel, executorModel string,
+) (string, string) {
+	base, effort, stripped := splitAntigravityDisplayEffort(displayName)
+	model := slugifyAntigravityDisplayModel(base, stripped)
+	if effort == "" {
+		model, effort = splitAntigravitySlugEffort(model)
+	}
+	if responseModel != "" {
+		respBase, respEffort := splitAntigravitySlugEffort(responseModel)
+		if antigravitySameModelKey(model, respBase) {
+			model = respBase
+			if effort == "" {
+				effort = respEffort
+			}
+		} else if !stripped && antigravitySameModelKey(displayName, respBase) {
+			model = respBase
+			if effort == "" {
+				effort = respEffort
+			}
 		}
 	}
-	return model
+	if effort == "" {
+		effort = executorEffortForModel(model, executorModel)
+	}
+	return model, effort
+}
+
+func splitAntigravityDisplayEffort(s string) (base, effort string, ok bool) {
+	trimmed := strings.TrimSpace(s)
+	if !strings.HasSuffix(trimmed, ")") {
+		return s, "", false
+	}
+	open := strings.LastIndex(trimmed, "(")
+	if open <= 0 {
+		return s, "", false
+	}
+	inside := strings.ToLower(strings.TrimSpace(trimmed[open+1 : len(trimmed)-1]))
+	effort, known := antigravityEffortLevels[inside]
+	if !known {
+		return s, "", false
+	}
+	base = strings.TrimSpace(trimmed[:open])
+	if !isPlausibleModelName(base) {
+		return s, "", false
+	}
+	return base, effort, true
+}
+
+func splitAntigravitySlugEffort(model string) (base, effort string) {
+	if strings.ContainsAny(model, " \t") {
+		return model, ""
+	}
+	idx := strings.LastIndex(model, "-")
+	if idx <= 0 {
+		return model, ""
+	}
+	effort, ok := antigravityEffortLevels[strings.ToLower(model[idx+1:])]
+	if !ok {
+		return model, ""
+	}
+	base = model[:idx]
+	if !isPlausibleModelName(base) {
+		return model, ""
+	}
+	return base, effort
+}
+
+func slugifyAntigravityDisplayModel(base string, hadEffort bool) string {
+	fields := strings.Fields(base)
+	if len(fields) == 0 {
+		return base
+	}
+	if len(fields) == 1 && !hadEffort {
+		return base
+	}
+	for _, field := range fields {
+		for _, r := range field {
+			if !isAntigravitySlugRune(r) {
+				return base
+			}
+		}
+	}
+	return strings.ToLower(strings.Join(fields, "-"))
+}
+
+func isAntigravitySlugRune(r rune) bool {
+	return (r >= 'a' && r <= 'z') ||
+		(r >= 'A' && r <= 'Z') ||
+		(r >= '0' && r <= '9') ||
+		r == '.' || r == '-' || r == '_' || r == '/'
+}
+
+func antigravitySameModelKey(a, b string) bool {
+	ka := antigravityCanonicalModelKey(a)
+	return ka != "" && ka == antigravityCanonicalModelKey(b)
+}
+
+func antigravityCanonicalModelKey(s string) string {
+	var sb strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			sb.WriteRune(r)
+		}
+	}
+	return sb.String()
+}
+
+func executorEffortForModel(model, executorModel string) string {
+	if model == "" || executorModel == "" {
+		return ""
+	}
+	execBase, execEffort := splitAntigravitySlugEffort(executorModel)
+	if execEffort == "" {
+		return ""
+	}
+	if antigravitySameModelKey(model, execBase) {
+		return execEffort
+	}
+	return ""
 }
 
 // stripAntigravityExperimentalVariant strips internal backend serving

@@ -2539,7 +2539,7 @@ func TestAntigravityCLISidecarRescueKeepsGenMetadataUsage(t *testing.T) {
 
 	// gen_metadata usage must survive even though no DB step decoded.
 	require.Len(t, usageEvents, 1)
-	assert.Equal(t, "Test Gemini 3.5", usageEvents[0].Model)
+	assert.Equal(t, "test-gemini-3.5", usageEvents[0].Model)
 	assert.Equal(t, 2400, usageEvents[0].InputTokens)
 	assert.Equal(t, 180, usageEvents[0].OutputTokens)
 	assert.Equal(t, 0, usageEvents[0].ReasoningTokens, "reasoning not available in gen_metadata")
@@ -2771,16 +2771,19 @@ func TestAntigravityCLISidecarModelUsesCoveringExecutorEffort(t *testing.T) {
 		name                  string
 		executorLastStepIndex int
 		wantModel             string
+		wantEffort            string
 	}{
 		{
-			name:                  "covered serving variant gains executor effort",
+			name:                  "covered serving variant normalizes to base slug with executor effort",
 			executorLastStepIndex: 1,
-			wantModel:             "gemini-3.7-flash-high",
+			wantModel:             "gemini-3.7-flash",
+			wantEffort:            "high",
 		},
 		{
 			name:                  "step outside executor range preserves serving variant",
 			executorLastStepIndex: 0,
 			wantModel:             "gemini-3.7-flash-exp-b",
+			wantEffort:            "",
 		},
 	}
 
@@ -2825,6 +2828,7 @@ func TestAntigravityCLISidecarModelUsesCoveringExecutorEffort(t *testing.T) {
 			assert.False(t, status.NeedsRetry)
 			require.Len(t, msgs, 2)
 			assert.Equal(t, tt.wantModel, msgs[1].Model)
+			assert.Equal(t, tt.wantEffort, msgs[1].ReasoningEffort)
 			assert.Equal(t, 1500, msgs[1].ContextTokens)
 			assert.Equal(t, 77, msgs[1].OutputTokens)
 
@@ -3123,7 +3127,7 @@ func TestAntigravityTokenUsage(t *testing.T) {
 	require.Len(t, msgs, 2)
 	assert.Equal(t, RoleUser, msgs[0].Role)
 	assert.Equal(t, RoleAssistant, msgs[1].Role)
-	assert.Equal(t, "Test Gemini 3.5", msgs[1].Model)
+	assert.Equal(t, "test-gemini-3.5", msgs[1].Model)
 	assert.Equal(t, 2400, msgs[1].ContextTokens)
 	assert.Equal(t, 180, msgs[1].OutputTokens)
 	assert.True(t, msgs[1].HasContextTokens)
@@ -3132,7 +3136,7 @@ func TestAntigravityTokenUsage(t *testing.T) {
 	// 2. Verify usage events
 	require.Len(t, usageEvents, 1)
 	assert.Equal(t, "generation", usageEvents[0].Source)
-	assert.Equal(t, "Test Gemini 3.5", usageEvents[0].Model)
+	assert.Equal(t, "test-gemini-3.5", usageEvents[0].Model)
 	assert.Equal(t, 2400, usageEvents[0].InputTokens)
 	assert.Equal(t, 180, usageEvents[0].OutputTokens)
 	assert.Equal(t, 0, usageEvents[0].ReasoningTokens, "reasoning not available in gen_metadata")
@@ -3151,20 +3155,23 @@ func TestAntigravityCLIGenerationMetadataMapsToPlannerStepAndExecutorModel(t *te
 		modelField      int
 		executorModel   string
 		wantModel       string
+		wantEffort      string
 	}{
 		{
-			name:            "base slug gains executor effort",
+			name:            "base slug records executor effort separately",
 			generationModel: "gemini-3.7-flash",
 			modelField:      agChatModelMetadataResponseModelField,
 			executorModel:   "gemini-3.7-flash-high",
-			wantModel:       "gemini-3.7-flash-high",
+			wantModel:       "gemini-3.7-flash",
+			wantEffort:      "high",
 		},
 		{
-			name:            "experimental serving variant gains executor effort",
+			name:            "experimental serving variant normalizes to base slug with executor effort",
 			generationModel: "gemini-3.7-flash-exp-b",
 			modelField:      agChatModelMetadataResponseModelField,
 			executorModel:   "gemini-3.7-flash-high",
-			wantModel:       "gemini-3.7-flash-high",
+			wantModel:       "gemini-3.7-flash",
+			wantEffort:      "high",
 		},
 		{
 			name:            "different executor base is ignored",
@@ -3172,20 +3179,23 @@ func TestAntigravityCLIGenerationMetadataMapsToPlannerStepAndExecutorModel(t *te
 			modelField:      agChatModelMetadataResponseModelField,
 			executorModel:   "gemini-3.7-flash-high",
 			wantModel:       "claude-sonnet-4-6",
+			wantEffort:      "",
 		},
 		{
-			name:            "display label stays authoritative",
+			name:            "display label effort stays authoritative over executor effort",
 			generationModel: "Gemini 3.7 Flash (High)",
 			modelField:      agChatModelMetadataModelDisplayNameField,
 			executorModel:   "gemini-3.7-flash-medium",
-			wantModel:       "Gemini 3.7 Flash (High)",
+			wantModel:       "gemini-3.7-flash",
+			wantEffort:      "high",
 		},
 		{
-			name:            "empty executor preserves generation model",
+			name:            "empty executor splits generation effort suffix",
 			generationModel: "gemini-3.7-flash-high",
 			modelField:      agChatModelMetadataResponseModelField,
 			executorModel:   "",
-			wantModel:       "gemini-3.7-flash-high",
+			wantModel:       "gemini-3.7-flash",
+			wantEffort:      "high",
 		},
 		{
 			name:            "mismatched executor preserves experimental generation model",
@@ -3193,13 +3203,15 @@ func TestAntigravityCLIGenerationMetadataMapsToPlannerStepAndExecutorModel(t *te
 			modelField:      agChatModelMetadataResponseModelField,
 			executorModel:   "claude-sonnet-4-6",
 			wantModel:       "gemini-3.7-flash-exp-b",
+			wantEffort:      "",
 		},
 		{
-			name:            "conflicting generation effort is preserved",
+			name:            "conflicting generation effort stays authoritative over executor",
 			generationModel: "gemini-3.7-flash-low",
 			modelField:      agChatModelMetadataResponseModelField,
 			executorModel:   "gemini-3.7-flash-high",
-			wantModel:       "gemini-3.7-flash-low",
+			wantModel:       "gemini-3.7-flash",
+			wantEffort:      "low",
 		},
 		{
 			name:            "generic exp model is preserved rather than treated as serving alias",
@@ -3207,6 +3219,7 @@ func TestAntigravityCLIGenerationMetadataMapsToPlannerStepAndExecutorModel(t *te
 			modelField:      agChatModelMetadataResponseModelField,
 			executorModel:   "gemini-2.0-flash-high",
 			wantModel:       "gemini-2.0-flash-exp",
+			wantEffort:      "",
 		},
 	}
 
@@ -3276,6 +3289,7 @@ func TestAntigravityCLIGenerationMetadataMapsToPlannerStepAndExecutorModel(t *te
 			require.NoError(t, err)
 			require.Len(t, msgs, 2)
 			assert.Equal(t, tt.wantModel, msgs[1].Model)
+			assert.Equal(t, tt.wantEffort, msgs[1].ReasoningEffort)
 			assert.Equal(t, 2400, msgs[1].ContextTokens)
 			assert.Equal(t, 180, msgs[1].OutputTokens)
 
@@ -3288,6 +3302,114 @@ func TestAntigravityCLIGenerationMetadataMapsToPlannerStepAndExecutorModel(t *te
 			)
 			require.NoError(t, err)
 			assert.Equal(t, int64(1779000100), occurredAt.Unix())
+		})
+	}
+}
+
+func TestResolveAntigravityModel(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name          string
+		displayName   string
+		responseModel string
+		executorModel string
+		wantModel     string
+		wantEffort    string
+	}{
+		{
+			name:          "Gemini 4 Neon High with matching response_model and executor",
+			displayName:   "Gemini 4 Neon (High)",
+			responseModel: "gemini-4-neon",
+			executorModel: "gemini-4-neon-high",
+			wantModel:     "gemini-4-neon",
+			wantEffort:    "high",
+		},
+		{
+			name:          "Gemini 4 Neon Low with matching response_model and executor",
+			displayName:   "Gemini 4 Neon (Low)",
+			responseModel: "gemini-4-neon",
+			executorModel: "gemini-4-neon-low",
+			wantModel:     "gemini-4-neon",
+			wantEffort:    "low",
+		},
+		{
+			name:          "Gemini 4 Neon High without response_model",
+			displayName:   "Gemini 4 Neon (High)",
+			executorModel: "gemini-4-neon-high",
+			wantModel:     "gemini-4-neon",
+			wantEffort:    "high",
+		},
+		{
+			name:          "Gemini 4 Neon without parens uses matching executor effort",
+			displayName:   "Gemini 4 Neon",
+			responseModel: "gemini-4-neon",
+			executorModel: "gemini-4-neon-medium",
+			wantModel:     "gemini-4-neon",
+			wantEffort:    "medium",
+		},
+		{
+			name:          "Gemini 3.5 Flash High ignores internal serving response_model",
+			displayName:   "Gemini 3.5 Flash (High)",
+			responseModel: "gemini-3-flash-a",
+			executorModel: "gemini-3-flash-agent",
+			wantModel:     "gemini-3.5-flash",
+			wantEffort:    "high",
+		},
+		{
+			name:          "Gemini 3.5 Flash High ignores gemini-default response_model",
+			displayName:   "Gemini 3.5 Flash (High)",
+			responseModel: "gemini-default",
+			executorModel: "gemini-3-flash-agent",
+			wantModel:     "gemini-3.5-flash",
+			wantEffort:    "high",
+		},
+		{
+			name:          "Claude display label adopts canonical hyphenated response_model",
+			displayName:   "Claude Opus 4.6 (Thinking)",
+			responseModel: "claude-opus-4-6",
+			wantModel:     "claude-opus-4-6",
+			wantEffort:    "thinking",
+		},
+		{
+			name:          "non-effort parenthesized suffix adopts matching response_model",
+			displayName:   "Gemini 3 Pro (Preview)",
+			responseModel: "gemini-3-pro-preview",
+			wantModel:     "gemini-3-pro-preview",
+			wantEffort:    "",
+		},
+		{
+			name:        "non-effort parenthesized suffix preserved when response_model absent",
+			displayName: "Gemini 3 Pro (Preview)",
+			wantModel:   "Gemini 3 Pro (Preview)",
+			wantEffort:  "",
+		},
+		{
+			name:          "sidecar display name without field 21 normalizes cleanly",
+			responseModel: "Gemini 4 Neon (Minimal)",
+			wantModel:     "gemini-4-neon",
+			wantEffort:    "minimal",
+		},
+		{
+			name:          "placeholder model preserved verbatim",
+			responseModel: "MODEL_PLACEHOLDER_M20",
+			wantModel:     "MODEL_PLACEHOLDER_M20",
+			wantEffort:    "",
+		},
+		{
+			name:        "letterless base before parens is not stripped",
+			displayName: "123 (High)",
+			wantModel:   "123 (High)",
+			wantEffort:  "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			gotModel, gotEffort := resolveAntigravityModel(
+				tt.displayName, tt.responseModel, tt.executorModel,
+			)
+			assert.Equal(t, tt.wantModel, gotModel)
+			assert.Equal(t, tt.wantEffort, gotEffort)
 		})
 	}
 }
@@ -3571,7 +3693,7 @@ func TestAntigravityZeroMessageKeepsUsageEvents(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, msgs)
 	require.Len(t, usageEvents, 1, "usage events must survive zero-message parses")
-	assert.Equal(t, "Test Gemini 3.5", usageEvents[0].Model)
+	assert.Equal(t, "test-gemini-3.5", usageEvents[0].Model)
 	assert.Equal(t, 180, sess.TotalOutputTokens)
 	assert.Equal(t, 2400, sess.PeakContextTokens)
 }
@@ -3835,12 +3957,12 @@ func TestAntigravityTokenUsageDynamicField(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, msgs, 2)
-	assert.Equal(t, "Test Gemini 3.5 Flash", msgs[1].Model)
+	assert.Equal(t, "test-gemini-3.5-flash", msgs[1].Model)
 	assert.Equal(t, 5000, msgs[1].ContextTokens)
 	assert.Equal(t, 400, msgs[1].OutputTokens)
 
 	require.Len(t, usageEvents, 1)
-	assert.Equal(t, "Test Gemini 3.5 Flash", usageEvents[0].Model)
+	assert.Equal(t, "test-gemini-3.5-flash", usageEvents[0].Model)
 	assert.Equal(t, 5000, usageEvents[0].InputTokens)
 	assert.Equal(t, 400, usageEvents[0].OutputTokens)
 	assert.Equal(t, 0, usageEvents[0].ReasoningTokens, "reasoning not available in gen_metadata")

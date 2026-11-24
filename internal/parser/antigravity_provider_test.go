@@ -1497,7 +1497,7 @@ func TestAntigravityCLIBrainTranscriptAndFailClosed(t *testing.T) {
 			require.Len(t, res.Messages, 2)
 			assert.Equal(t, TranscriptFidelityFull, res.Session.TranscriptFidelity)
 			assert.True(t, res.Messages[1].HasThinking)
-			assert.Equal(t, "Test Gemini 3.5", res.Messages[1].Model)
+			assert.Equal(t, "test-gemini-3.5", res.Messages[1].Model)
 			assert.Equal(t, 2400, res.Messages[1].ContextTokens)
 			assert.Equal(t, 180, res.Messages[1].OutputTokens)
 			require.Len(t, res.UsageEvents, 1)
@@ -1806,7 +1806,7 @@ func TestAntigravityBrainTranscriptGenMetadataTargetsModelEntry(t *testing.T) {
 			assert.Equal(t, "Check deployment", msgs[0].Content, "brain transcript is selected")
 			for i, m := range msgs {
 				if i == tc.wantModelIdx {
-					assert.Equal(t, "Test Gemini 3.5", m.Model)
+					assert.Equal(t, "test-gemini-3.5", m.Model)
 					assert.Equal(t, 180, m.OutputTokens)
 					continue
 				}
@@ -1818,4 +1818,45 @@ func TestAntigravityBrainTranscriptGenMetadataTargetsModelEntry(t *testing.T) {
 			assert.Equal(t, tc.wantOccurred, usageEvents[0].OccurredAt)
 		})
 	}
+}
+
+func TestAntigravityBrainTranscriptTransfersNormalizedModelAndReasoningEffort(t *testing.T) {
+	const id = "99999999-aaaa-bbbb-cccc-eeeeeeeeeeee"
+	transcript := `{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","created_at":"2026-11-23T10:00:00Z","content":"First turn"}` + "\n" +
+		`{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","created_at":"2026-11-23T10:00:05Z","content":"High reply"}` + "\n" +
+		`{"step_index":2,"source":"USER_EXPLICIT","type":"USER_INPUT","created_at":"2026-11-23T10:01:00Z","content":"Second turn"}` + "\n" +
+		`{"step_index":3,"source":"MODEL","type":"PLANNER_RESPONSE","created_at":"2026-11-23T10:01:05Z","content":"Low reply"}` + "\n"
+
+	path := antigravityCLIBrainFixture{
+		setupDB: func(t *testing.T, db *sql.DB) {
+			t.Helper()
+			mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (0, 14, ?)`,
+				antigravityTestStepPayload(1779000000, "First turn"))
+			mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (1, 15, X'00')`)
+			mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (2, 14, ?)`,
+				antigravityTestStepPayload(1779000060, "Second turn"))
+			mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (3, 15, X'00')`)
+			mustExec(t, db, `CREATE TABLE gen_metadata (idx integer, data blob, size integer, PRIMARY KEY (idx))`)
+			genHigh := createAntigravityMockGenMetadataForSteps(
+				t, 2400, 180, 0, "Gemini 4 Neon (High)", agChatModelMetadataModelDisplayNameField, 1,
+			)
+			genLow := createAntigravityMockGenMetadataForSteps(
+				t, 1200, 90, 0, "Gemini 4 Neon (Low)", agChatModelMetadataModelDisplayNameField, 3,
+			)
+			mustExec(t, db, `INSERT INTO gen_metadata (idx, data, size) VALUES (0, ?, ?)`, genHigh, len(genHigh))
+			mustExec(t, db, `INSERT INTO gen_metadata (idx, data, size) VALUES (1, ?, ?)`, genLow, len(genLow))
+		},
+		transcript: transcript,
+	}.write(t, id)
+
+	_, msgs, usageEvents, _, err := parseAntigravityCLITestSessionWithStatus(t, path, "", "devbox")
+	require.NoError(t, err)
+	require.Len(t, msgs, 4)
+	assert.Equal(t, "gemini-4-neon", msgs[1].Model)
+	assert.Equal(t, "high", msgs[1].ReasoningEffort)
+	assert.Equal(t, "gemini-4-neon", msgs[3].Model)
+	assert.Equal(t, "low", msgs[3].ReasoningEffort)
+	require.Len(t, usageEvents, 2)
+	assert.Equal(t, "gemini-4-neon", usageEvents[0].Model)
+	assert.Equal(t, "gemini-4-neon", usageEvents[1].Model)
 }
