@@ -2902,8 +2902,15 @@ func TestBackgroundServeFailureIncludesCurrentLaunchOutput(t *testing.T) {
 					"-test.run=^TestBackgroundServeFailureIncludesCurrentLaunchOutput$")
 				child.Env = append(os.Environ(), childEnv+"=1")
 				child.Stderr = logFile
-				err = child.Start()
-				return child, logPath, err
+				stdout, err := child.StdoutPipe()
+				require.NoError(t, err)
+				require.NoError(t, child.Start())
+				// EOF means the helper has exited and written its error. Wait here
+				// so process startup cannot race the caller's readiness timeout.
+				// The caller still owns child.Wait and collects the exit error.
+				_, err = io.Copy(io.Discard, stdout)
+				require.NoError(t, err)
+				return child, logPath, nil
 			}
 			oldEnsure, oldRun := startServeBackgroundProcessForEnsure, startServeBackgroundProcessForRun
 			startServeBackgroundProcessForEnsure, startServeBackgroundProcessForRun = start, start
