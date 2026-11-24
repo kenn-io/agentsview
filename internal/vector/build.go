@@ -132,20 +132,7 @@ func (ix *Index) Build(
 		return BuildResult{}, errors.New("repair-invalid and backstop are mutually exclusive")
 	}
 	if o.RepairInvalid {
-		if ix.spec.Name == "messages" {
-			storedAgents, hasAgents, err := ix.metaGet(ctx, scopeAgentsKey)
-			if err != nil {
-				return BuildResult{Fingerprint: gen.Fingerprint()}, err
-			}
-			_, hasScope, err := ix.metaGet(ctx, scopeIncludeAutomatedKey)
-			if err != nil {
-				return BuildResult{Fingerprint: gen.Fingerprint()}, err
-			}
-			if storedAgents != strings.Join(normalizedAgents(o.Agents), ",") || (hasAgents && !hasScope) {
-				return BuildResult{Fingerprint: gen.Fingerprint()}, errors.New("agent scope changed; run an embeddings build before repairing invalid vectors")
-			}
-		}
-		return ix.buildInvalidRepair(ctx, enc, gen, o)
+		return ix.repairWithScope(ctx, enc, gen, o)
 	}
 
 	firstEver, err := ix.noWatermarkYet(ctx)
@@ -313,6 +300,25 @@ func (ix *Index) Build(
 		}
 	}
 	return result, nil
+}
+
+func (ix *Index) repairWithScope(
+	ctx context.Context, enc kitvec.EncodeFunc, gen kitvec.Generation, o BuildOptions,
+) (BuildResult, error) {
+	if ix.spec.Name == "messages" {
+		storedAgents, hasAgents, err := ix.metaGet(ctx, scopeAgentsKey)
+		if err != nil {
+			return BuildResult{Fingerprint: gen.Fingerprint()}, err
+		}
+		_, hasScope, err := ix.metaGet(ctx, scopeIncludeAutomatedKey)
+		if err != nil {
+			return BuildResult{Fingerprint: gen.Fingerprint()}, err
+		}
+		if storedAgents != strings.Join(normalizedAgents(o.Agents), ",") || (hasAgents && !hasScope) {
+			return BuildResult{Fingerprint: gen.Fingerprint()}, errors.New("agent scope changed; run an embeddings build before repairing invalid vectors")
+		}
+	}
+	return ix.buildInvalidRepair(ctx, enc, gen, o)
 }
 
 // buildInvalidRepair is separate from the ordinary build path so repair cannot
