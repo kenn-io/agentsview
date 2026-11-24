@@ -167,28 +167,19 @@ func watchBatchReconciliationError(
 	// Keeping LostEvents=true on a defer-only retry would re-enter forced
 	// overflow recovery and clear the caches that let deferred forks settle.
 	retryLostEvents := lostEvents && !deferOnly
-	scopedPaths, hasScopedPaths := errors.AsType[interface {
-		error
-		interface{ ReconciliationRetryPaths() []string }
-	}](cause)
+	scopedPaths, hasScopedPaths, scopedRoots, hasScopedRoots := reconciliationRetryScope(cause)
 	var retryPaths []string
 	if hasScopedPaths {
-		retryPaths = watchDeduplicateStrings(scopedPaths.ReconciliationRetryPaths())
+		retryPaths = watchDeduplicateStrings(scopedPaths)
 		hasScopedPaths = len(retryPaths) > 0
 	}
 	if !hasScopedPaths {
 		retryPaths = watchDeduplicateStrings(paths)
 	}
-	scoped, hasScoped := errors.AsType[interface {
-		error
-		interface{ ReconciliationRetryRoots() []string }
-	}](cause)
 	var retryRoots []string
-	hasScopedRoots := hasScoped
 	if hasScopedRoots {
-		retryRoots = watchDeduplicateStrings(scoped.ReconciliationRetryRoots())
-	}
-	if !hasScopedRoots {
+		retryRoots = watchDeduplicateStrings(scopedRoots)
+	} else {
 		retryRoots = watchDeduplicateStrings(roots)
 	}
 	overflow, hasOverflow := errors.AsType[interface {
@@ -216,6 +207,46 @@ func watchBatchReconciliationError(
 		retry.ReconcileRoots = append([]string(nil), roots...)
 	}
 	return &watchBatchApplyError{cause: cause, retry: retry, deferOnly: deferOnly}
+}
+
+// reconciliationRetryScope gathers retry paths and roots from every scoped
+// reconciliation error in err's tree. A scoped reconciliation can join its own
+// error with the one from waking forks, and each carries its own sources.
+func reconciliationRetryScope(err error) (
+	paths []string, hasPaths bool, roots []string, hasRoots bool,
+) {
+	pending := []error{err}
+	for len(pending) > 0 {
+		next := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if next == nil {
+			continue
+		}
+		scopedPaths, isPaths := next.(interface{ ReconciliationRetryPaths() []string })
+		scopedRoots, isRoots := next.(interface{ ReconciliationRetryRoots() []string })
+		if isPaths {
+			paths = append(paths, scopedPaths.ReconciliationRetryPaths()...)
+			hasPaths = true
+		}
+		if isRoots {
+			roots = append(roots, scopedRoots.ReconciliationRetryRoots()...)
+			hasRoots = true
+		}
+		if isPaths || isRoots {
+			continue
+		}
+		{
+			var wrapped interface{ Unwrap() []error }
+			var wrapped1 interface{ Unwrap() error }
+			switch {
+			case errors.As(next, &wrapped):
+				pending = append(pending, wrapped.Unwrap()...)
+			case errors.As(next, &wrapped1):
+				pending = append(pending, wrapped1.Unwrap())
+			}
+		}
+	}
+	return paths, hasPaths, roots, hasRoots
 }
 
 func composeWatchBatchErrors(phases ...error) error {

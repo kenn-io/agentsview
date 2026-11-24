@@ -294,23 +294,31 @@ func TestPollProviderRootsGroupedSettlesOrphanCodexForksAndPreservesHealthySnaps
 		{Agent: parser.AgentCodex, Roots: []string{codexRoot}},
 	}
 
-	// Pass 1: reconciles both groups once; codex reports the initial deferred forks,
-	// yet both roots keep their metadata snapshots.
+	// Pass 1: reconciles both groups once and codex reports the initial
+	// deferred forks. Only the healthy claude group keeps its snapshot: the
+	// forks were written but their parents were not yet checked, so a parent
+	// that merely failed to read must stay eligible for the next poll.
 	err := f.engine.PollProviderRootsGrouped(t.Context(), groups, false)
 	require.Error(t, err)
 	assert.True(t, watchBatchDeferOnlyError(err))
 	require.EqualValues(t, 2, f.reconciled.Load())
 
-	// Pass 2 (nothing changed): metadata scan finds zero changes, reconciles zero
-	// groups, and returns nil.
+	// Pass 2: codex reconciles once more, confirms every parent is absent, and
+	// settles all 8 unchanged forks without a deferred error.
 	require.NoError(t, f.engine.PollProviderRootsGrouped(t.Context(), groups, false))
-	assert.EqualValues(t, 2, f.reconciled.Load(),
+	assert.EqualValues(t, 3, f.reconciled.Load(),
+		"only the group with unverified forks may reconcile again")
+
+	// Pass 3 (nothing changed): metadata scan finds zero changes, reconciles
+	// zero groups, and returns nil.
+	require.NoError(t, f.engine.PollProviderRootsGrouped(t.Context(), groups, false))
+	assert.EqualValues(t, 3, f.reconciled.Load(),
 		"subsequent polls must not re-reconcile unchanged roots when only orphan forks exist")
 
 	// Authoritative pass (e.g. pending release): settles all 8 unchanged orphan forks
 	// and succeeds without reporting deferred errors.
 	require.NoError(t, f.engine.PollProviderRootsGrouped(t.Context(), groups, true))
-	assert.EqualValues(t, 4, f.reconciled.Load())
+	assert.EqualValues(t, 5, f.reconciled.Load())
 
 	// Parent rollout finally arrives on disk: next poll detects only the new parent
 	// file via metadata scan (zero full reconciliations) and resolves all 8 forks.
@@ -323,7 +331,7 @@ func TestPollProviderRootsGroupedSettlesOrphanCodexForksAndPreservesHealthySnaps
 	), true)
 
 	require.NoError(t, f.engine.PollProviderRootsGrouped(t.Context(), groups, false))
-	assert.EqualValues(t, 4, f.reconciled.Load(),
+	assert.EqualValues(t, 5, f.reconciled.Load(),
 		"parent arrival must sync via metadata diff without reconciling the whole root")
 	for i, child := range forkIDs {
 		id := "codex:" + child
@@ -557,10 +565,12 @@ func TestPollProviderRootsGroupedWakesCrossRootCodexForkDuringScopedReconciliati
 	})
 	groups := []ProviderRootsGroup{{Agent: parser.AgentCodex, Roots: []string{liveRoot, archivedRoot}}}
 
-	// Pass 1: discovers both roots, stores unresolved fork in liveRoot, keeps snapshots.
+	// Pass 1 discovers both roots and stores the unresolved fork in liveRoot;
+	// pass 2 confirms its parent is absent, settles it, and keeps snapshots.
 	err := f.engine.PollProviderRootsGrouped(t.Context(), groups, false)
 	require.Error(t, err)
-	assert.True(t, f.engine.isSettledUnresolvedCodexForkOnlyError(err))
+	assert.True(t, watchBatchDeferOnlyError(err))
+	require.NoError(t, f.engine.PollProviderRootsGrouped(t.Context(), groups, false))
 	assert.Equal(t, []string{"replayed parent answer", "child answer"}, messageContents(t, f.database, childID))
 
 	// Simultaneously add parent rollout to archivedRoot AND remove transientPath
@@ -583,57 +593,6 @@ func TestPollProviderRootsGroupedWakesCrossRootCodexForkDuringScopedReconciliati
 	require.NoError(t, err)
 	require.NotNil(t, usage)
 	assert.Equal(t, 7, usage.TotalOutputTokens)
-}
-
-func TestIsSettledUnresolvedCodexForkOnlyErrorRejectsUnsettledDeferrals(t *testing.T) {
-	database := openTestDB(t)
-	engine := NewEngine(t.Context(), database, EngineConfig{
-		Machine:                           "local",
-		DisableFilesystemProjectDiscovery: true,
-	})
-	t.Cleanup(engine.Close)
-
-	// A defer-only retry for a path not tracked in unresolvedCodexForks (for
-	// example, a fork invalidated by finishCodexParentInventoryBatch after a
-	// parent revert page appeared, or a non-Codex deferred source) must NOT
-	// keep poll snapshots.
-	untracked := &incompleteReconciliationError{
-		deferred:  1,
-		paths:     []string{"/tmp/codex-parent-inventory-changed.jsonl"},
-		deferOnly: true,
-	}
-	assert.True(t, watchBatchDeferOnlyError(untracked))
-	assert.False(t, engine.isSettledUnresolvedCodexForkOnlyError(untracked))
-
-	// Overflowed defer-only retries must also avoid keeping snapshots on pass 1.
-	const trackedPath = "/tmp/tracked-orphan-fork.jsonl"
-	engine.unresolvedCodexForks.record(
-		verifiedSourceKey{agent: parser.AgentCodex, path: trackedPath},
-		verifiedSourceSignature{size: 10, mtime: 100},
-		engine.unresolvedCodexForks.currentEpoch(),
-		"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-		"codex:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-		100,
-	)
-	trackedErr := &incompleteReconciliationError{
-		deferred:  1,
-		paths:     []string{trackedPath},
-		deferOnly: true,
-	}
-	assert.True(t, engine.isSettledUnresolvedCodexForkOnlyError(trackedErr))
-
-	overflowErr := &incompleteReconciliationError{
-		deferred:  2,
-		paths:     []string{trackedPath},
-		overflow:  true,
-		deferOnly: true,
-	}
-	assert.False(t, engine.isSettledUnresolvedCodexForkOnlyError(overflowErr))
-
-	// Invalidating the fork (as finishCodexParentInventoryBatch does when a
-	// parent revert page appears mid-batch) immediately rejects snapshot reuse.
-	engine.unresolvedCodexForks.invalidate(verifiedSourceKey{agent: parser.AgentCodex, path: trackedPath})
-	assert.False(t, engine.isSettledUnresolvedCodexForkOnlyError(trackedErr))
 }
 
 func TestDeferOnlyLostEventsRetryClearsLostEventsFlag(t *testing.T) {
@@ -733,4 +692,77 @@ func TestAppendWaitingCodexForkPathsHandlesRemovedParentBeforeReplacement(t *tes
 	require.NoError(t, err)
 	require.NotNil(t, usage)
 	assert.Equal(t, 9, usage.TotalOutputTokens)
+}
+
+func TestScopedReconciliationWakesWaitingForkInSiblingDirectory(t *testing.T) {
+	requirePollChangeTimes(t)
+	const parent = "abababab-abab-4bab-8bab-abababababab"
+	const child = "019f46ff-7777-4777-8777-777777777777"
+	const childID = "codex:" + child
+	const ts = "2026-07-08T10:00:00Z"
+
+	root := t.TempDir()
+	childPath := filepath.Join(root, "2026", "07", "07", "rollout-2026-07-07T11-00-00-"+child+".jsonl")
+	writeCodexRolloutFile(t, childPath, testjsonl.JoinJSONL(
+		testjsonl.CodexForkedSessionMetaJSON(child, parent, "/work/project", "user", ts),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "parent-turn", ts),
+		testjsonl.CodexMsgJSON("assistant", "replayed parent answer", ts),
+		testjsonl.CodexTokenCountJSON(ts, 100, 40, 0),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", ts),
+		testjsonl.CodexMsgJSON("assistant", "child answer", ts),
+		testjsonl.CodexTokenCountJSON(ts, 20, 3, 0),
+	), false)
+
+	database := openTestDB(t)
+	engine := NewEngine(t.Context(), database, EngineConfig{
+		AgentDirs:                         map[parser.AgentType][]string{parser.AgentCodex: {root}},
+		Machine:                           "local",
+		DisableFilesystemProjectDiscovery: true,
+	})
+	t.Cleanup(engine.Close)
+
+	_, err := engine.SyncWatchBatchThenRun(t.Context(), WatchBatch{Paths: []string{childPath}}, nil, nil)
+	require.Error(t, err)
+	_, err = engine.SyncWatchBatchThenRun(t.Context(), WatchBatch{Paths: []string{childPath}}, nil, nil)
+	require.NoError(t, err)
+
+	// The parent arrives in another dated directory, and the watcher reports
+	// only that directory for reconciliation.
+	parentDir := filepath.Join(root, "2026", "07", "08")
+	writeCodexRolloutFile(t, filepath.Join(parentDir, "rollout-2026-07-08T09-00-00-"+parent+".jsonl"), testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(parent, "/work/project", "user", ts),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "parent-turn", ts),
+		testjsonl.CodexMsgJSON("assistant", "replayed parent answer", ts),
+		testjsonl.CodexTokenCountJSON(ts, 100, 40, 0),
+	), false)
+	_, err = engine.SyncWatchBatchThenRun(t.Context(), WatchBatch{ReconcileRoots: []string{parentDir}}, nil, nil)
+	require.NoError(t, err)
+
+	assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), childID),
+		"a waiting fork outside the reconciled directory must wake when its parent appears")
+	assert.Equal(t, []string{"child answer"}, messageContents(t, database, childID))
+}
+
+func TestWatchBatchReconciliationErrorRetriesEveryJoinedSource(t *testing.T) {
+	// A scoped reconciliation joins its own deferral with the deferral from
+	// syncing woken forks. The retry must keep the sources of both.
+	reconcileErr := &incompleteReconciliationError{
+		deferred:  1,
+		paths:     []string{"/codex/a.jsonl"},
+		roots:     []string{"/codex/archived"},
+		deferOnly: true,
+	}
+	wakeErr := &incompleteReconciliationError{
+		deferred:  1,
+		paths:     []string{"/codex/b.jsonl"},
+		deferOnly: true,
+	}
+	err := watchBatchReconciliationError(
+		errors.Join(reconcileErr, wakeErr), nil, []string{"/codex/archived"}, false, false,
+	)
+	var retry interface{ WatchRetryBatch() WatchBatch }
+	require.ErrorAs(t, err, &retry)
+	assert.ElementsMatch(t, []string{"/codex/a.jsonl", "/codex/b.jsonl"}, retry.WatchRetryBatch().Paths)
+	assert.Equal(t, []string{"/codex/archived"}, retry.WatchRetryBatch().ReconcileRoots)
+	assert.True(t, watchBatchDeferOnlyError(err))
 }

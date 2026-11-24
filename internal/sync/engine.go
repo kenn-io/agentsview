@@ -4615,12 +4615,10 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 		}()
 	}
 	var (
-		cursor          reconciliationCursor
-		reconciledRoots []string
-		seenWake        map[string]struct{}
+		cursor   reconciliationCursor
+		seenWake map[string]struct{}
 	)
 	if !fullCoverage && e.pathRewriter == nil {
-		reconciledRoots = reconciledCodexRoots(plans)
 		seenWake = make(map[string]struct{})
 	}
 	for {
@@ -4649,7 +4647,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 		}
 		runtimeMetrics.rehydrated(len(files))
 		if seenWake != nil {
-			e.collectCrossRootWaitingCodexForks(ctx, files, reconciledRoots, seenWake, &wakePaths)
+			e.collectWaitingCodexForks(ctx, files, seenWake, &wakePaths)
 		}
 		if verifiedPass != 0 {
 			e.markVerifiedDiscoveredSources(files)
