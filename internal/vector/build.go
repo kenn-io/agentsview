@@ -180,7 +180,8 @@ func (ix *Index) Build(
 		}
 		capChanged = !hasCap || storedCap != runCap
 	}
-	full := o.FullRebuild || o.Backstop || firstEver || scopeChanged || corpusChanged || capChanged
+	full := o.FullRebuild || o.Backstop || firstEver || scopeChanged ||
+		corpusChanged || capChanged
 	if scopeChanged {
 		// A failed reconciliation must be retried even if the old scope returns.
 		if err := ix.metaDelete(ctx, scopeIncludeAutomatedKey); err != nil {

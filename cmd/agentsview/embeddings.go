@@ -664,8 +664,11 @@ func embeddingManager(
 	if store != vector.RecallIndexSpec().Name {
 		gen := vectorGeneration(cfg.Vector.Embeddings)
 		target := vector.BuildTarget{
-			Source: database, Generation: gen, Agents: cfg.Vector.Agents, Roles: cfg.Vector.Roles,
-			Space: vectorSpace(cfg.Vector.Embeddings, gen),
+			Source:     database,
+			Generation: gen,
+			Agents:     cfg.Vector.Agents,
+			Roles:      cfg.Vector.Roles,
+			Space:      vectorSpace(cfg.Vector.Embeddings, gen),
 		}
 		return vector.NewResolvingManager(
 			ix, encoders, gen,

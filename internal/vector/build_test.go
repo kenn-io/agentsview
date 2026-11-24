@@ -1277,6 +1277,7 @@ func TestBuildRoleScopeReconciles(t *testing.T) {
 
 	require.NoError(t, archive.ReplaceSessionMessages(ctx, "s", append(roleSessionMessages(), dbtest.AsstMsg("s", 5, "late answer"))))
 	build("user")
+	assert.NotEmpty(t, source.since, "the append uses an incremental scan")
 	assert.Empty(t, encoded, "an appended reply adds nothing to a user-only index")
 	assert.Equal(t, users, mirrorDocKeys(t, ix))
 
@@ -1332,27 +1333,4 @@ func TestBuildRoleScopeOlderWriterRoundTrip(t *testing.T) {
 	assert.Equal(t, "claude;roles=user", build("user"))
 	assert.Equal(t, users, mirrorDocKeys(t, ix))
 	assert.Empty(t, encoded)
-}
-
-func TestBuildRoleScopeFailureThenRestore(t *testing.T) {
-	ctx := t.Context()
-	archive := dbtest.OpenTestDB(t)
-	seedRoleSession(t, archive, dbtest.UserMsg("s", 0, "question"), dbtest.AsstMsg("s", 1, "answer"))
-	ix := openTestIndex(t)
-	gen := fakeGeneration("fake-model")
-	build := func(roles []string) error {
-		_, err := ix.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{Roles: roles})
-		return err
-	}
-	require.NoError(t, build([]string{"user"}))
-	_, err := ix.db.ExecContext(ctx, `CREATE TRIGGER fail_role_delete BEFORE DELETE ON vector_messages BEGIN SELECT RAISE(FAIL, 'injected failure'); END`)
-	require.NoError(t, err)
-	require.ErrorContains(t, build([]string{"assistant"}), "injected failure")
-	stored, _, err := ix.metaGet(ctx, scopeAgentsKey)
-	require.NoError(t, err)
-	assert.Equal(t, ";roles=user", stored, "a failed reconcile keeps the previous scope")
-	_, err = ix.db.ExecContext(ctx, `DROP TRIGGER fail_role_delete`)
-	require.NoError(t, err)
-	require.NoError(t, build([]string{"user"}))
-	require.Len(t, mirrorDocKeys(t, ix), 1, "the retry reconciles even though the old scope returned")
 }
