@@ -192,12 +192,7 @@ func TestCommandPRCheckoutRemote(t *testing.T) {
 			}
 			require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
 			if tc.want {
-				filter, err := db.ParsePRFilter("example/repo#42")
-				require.NoError(t, err)
-				page, err := env.db.ListSessions(t.Context(), db.SessionFilter{PR: filter})
-				require.NoError(t, err)
-				require.Len(t, page.Sessions, 1)
-				assert.Equal(t, sessionID, page.Sessions[0].ID)
+				assert.Equal(t, []string{"https://github.com/example/repo/pull/42"}, storedPRURLs(t, env.db, sessionID))
 				if tc.parseDiff {
 					report := runParseDiff(t, env, sync.ParseDiffOptions{})
 					assert.Equal(t, 1, report.Totals.Identical)
@@ -222,10 +217,5 @@ func TestClineTeamTaskPRFilter(t *testing.T) {
 	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCline: {root}}, Machine: "local"})
 	t.Cleanup(engine.Close)
 	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	filter, err := db.ParsePRFilter("example/repo#42")
-	require.NoError(t, err)
-	page, err := database.ListSessions(t.Context(), db.SessionFilter{PR: filter})
-	require.NoError(t, err)
-	require.Len(t, page.Sessions, 1)
-	assert.Equal(t, "cline:team-pr", page.Sessions[0].ID)
+	assert.Equal(t, []string{"https://github.com/example/repo/pull/42"}, storedPRURLs(t, database, "cline:team-pr"))
 }

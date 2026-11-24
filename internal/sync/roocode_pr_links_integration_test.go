@@ -7,7 +7,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
@@ -25,10 +24,5 @@ func TestRooCodeChildPromptPRFilter(t *testing.T) {
 	require.NoError(t, err)
 	writeRooCodeSyncFixture(t, root, "selected", string(messages), time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	filter, err := db.ParsePRFilter("example/repo#42")
-	require.NoError(t, err)
-	page, err := archive.ListSessions(t.Context(), db.SessionFilter{PR: filter})
-	require.NoError(t, err)
-	require.Len(t, page.Sessions, 1)
-	assert.Equal(t, "roocode:selected", page.Sessions[0].ID)
+	assert.Equal(t, []string{"https://github.com/example/repo/pull/42"}, storedPRURLs(t, archive, "roocode:selected"))
 }

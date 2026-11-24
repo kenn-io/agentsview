@@ -285,7 +285,7 @@ func appendSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id
 	if err := tx.QueryRow(`SELECT COALESCE(cwd,''), `+checkoutRemoteSQL+` FROM sessions WHERE id=?`, id, id).Scan(&cwd, &remote); err != nil {
 		return err
 	}
-	sharedContext, checked := sharedPRContext{}, false
+	sharedContext := sharedPRContext{}
 	var depends []PRLink
 	tools, err := toolCallPRLinks(ctx, messages, cwd, remote, &sharedContext, &depends)
 	if err != nil {
@@ -299,26 +299,17 @@ func appendSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id
 		return err
 	}
 	storedLinks := DecodePRLinks(stored)
-	dependsOnNewLink := len(parser.CombinePRLinks(storedLinks, depends)) > len(parser.CombinePRLinks(storedLinks))
-	for _, message := range messages {
-		for _, call := range message.ToolCalls {
-			if dependsOnNewLink && call.Category == "Bash" && isPRShellTool(call.ToolName) {
-				sharedContext, err = priorBashContextChangeTx(ctx, tx, id, cwd, messages[0].Ordinal)
-				if err != nil {
-					return err
-				}
-				checked = true
-				break
-			}
-		}
-		if checked {
-			break
-		}
-	}
-	if checked && (sharedContext.directory || sharedContext.environment || sharedContext.repository) {
-		tools, err = toolCallPRLinks(ctx, messages, cwd, remote, &sharedContext, nil)
+	// Only shell calls add to depends, so a new remote-dependent link implies one ran.
+	if len(parser.CombinePRLinks(storedLinks, depends)) > len(parser.CombinePRLinks(storedLinks)) {
+		sharedContext, err = priorBashContextChangeTx(ctx, tx, id, cwd, messages[0].Ordinal)
 		if err != nil {
 			return err
+		}
+		if sharedContext.directory || sharedContext.environment || sharedContext.repository {
+			tools, err = toolCallPRLinks(ctx, messages, cwd, remote, &sharedContext, nil)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	derived := parser.CombinePRLinks(prompts, tools)
@@ -397,23 +388,14 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 		return nil, ctx.Err()
 	}
 	var payload struct {
-		Command          jsontext.Value `json:"command"`
-		Cmd              string         `json:"cmd"`
-		Commands         []string       `json:"commands"`
-		Workdir          string         `json:"workdir"`
-		Cwd              string         `json:"cwd"`
-		WorkingDirectory string         `json:"working_directory"`
+		Command  jsontext.Value `json:"command"`
+		Cmd      string         `json:"cmd"`
+		Commands []string       `json:"commands"`
 	}
 	if !plain && json.Unmarshal([]byte(input), &payload) != nil {
 		return nil, ctx.Err()
 	}
-	dir := payload.Workdir
-	if dir == "" {
-		dir = payload.Cwd
-	}
-	if dir == "" {
-		dir = payload.WorkingDirectory
-	}
+	dir := parser.ToolInputWorkdir(input)
 	allowBare := !sharedContext.directory && !sharedContext.environment && !sharedContext.repository
 	if dir != "" {
 		allowBare = !sharedContext.environment && !sharedContext.repository && parser.SamePRWorkingDirectory(cwd, dir)
@@ -502,19 +484,13 @@ func priorBashContextChangeTx(ctx context.Context, tx transactionQueries, id, cw
 	defer rows.Close()
 	var result sharedPRContext
 	for rows.Next() {
-		var name, input string
-		if err := rows.Scan(&name, &input); err != nil {
+		call := ToolCall{Category: "Bash"}
+		if err := rows.Scan(&call.ToolName, &call.InputJSON); err != nil {
 			return sharedPRContext{}, err
 		}
-		var change sharedPRContext
-		if _, err := callPRLinks(ctx, "Bash", name, input, cwd, "", sharedPRContext{}, &change, nil); err != nil {
+		if _, err := toolCallPRLinks(ctx, []Message{{ToolCalls: []ToolCall{call}}}, cwd, "", &result, nil); err != nil {
 			return sharedPRContext{}, err
 		}
-		if name == "Bash" {
-			result.directory = result.directory || change.directory
-			result.environment = result.environment || change.environment
-		}
-		result.repository = result.repository || change.repository
 	}
 	return result, rows.Err()
 }

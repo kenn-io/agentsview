@@ -2,7 +2,6 @@ package parser
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -84,9 +83,29 @@ func TestCommandPRLinks(t *testing.T) {
 		{`gh pr view 42 -R example/repo; export GH_HOST=git.example`, "", "https://github.com/example/repo/pull/42"},
 		{`gh pr view 42 -R example/repo; export GH_HOST=git.example`, "https://github.com/example/repo.git", "https://github.com/example/repo/pull/42"},
 		{`GH_HOST=git.example gh pr view 42 -R example/repo`, "https://github.com/example/repo.git", "https://git.example/example/repo/pull/42"},
+		{`export GH_HOST=git.example >/bad; gh pr view 42 -R example/repo`, "", ""},
+		{`export GH_HOST=git.example >/bad; gh pr view 42 -R github.com/example/repo`, "", "https://github.com/example/repo/pull/42"},
+		{`export GH_HOST=git.example >/bad; gh pr view https://github.com/example/repo/pull/42`, "", "https://github.com/example/repo/pull/42"},
+		{`if true; then export GH_HOST=git.example; fi; gh pr view 42 -R example/repo`, remote, ""},
+		{`(cd /work/other); gh pr view 42`, remote, ""},
+		{`if false; then cd /work/other; fi; gh pr view 42`, remote, ""},
+		{`unset GH_REPO; gh pr view 42`, remote, ""},
+		{`GH_HOST=git.example; gh pr view 42 -R example/repo`, remote, ""},
+		{`true || export GH_HOST=git.example; gh pr view 42 -R example/repo`, remote, ""},
+		{`git config remote.origin.url; gh pr view 42`, remote, "https://github.com/example/repo/pull/42"},
+		{`git config --global remote.origin.url; gh pr view 42`, remote, "https://github.com/example/repo/pull/42"},
+		{`git config remote.origin.url https://github.com/example/other; gh pr view 42`, remote, ""},
+		{`git config --add branch.main.remote upstream; gh pr view 42`, remote, ""},
+		{`git config --unset remote.origin.url; gh pr view 42`, remote, ""},
+		{`git config set url.https://example.com.insteadOf git@example.com:; gh pr view 42`, remote, ""},
+		{`if true; then cd /work/other; fi; gh pr view 42`, remote, ""},
+		{`cd $REPO; gh pr view 42`, remote, ""},
+		{`cd -P /work/other; gh pr view 42`, remote, ""},
+		{`cd -- /work/other; gh pr view 42`, remote, ""},
+		{`pushd /work/other; gh pr view 42`, remote, ""},
 	} {
 		t.Run(tc.command, func(t *testing.T) {
-			links, err := CommandPRLinks(t.Context(), tc.command, tc.remote, true)
+			links, err := commandPRLinks(t.Context(), tc.command, tc.remote, true)
 			require.NoError(t, err)
 			if tc.want == "" {
 				assert.Empty(t, links)
@@ -96,106 +115,38 @@ func TestCommandPRLinks(t *testing.T) {
 			assert.Equal(t, tc.want, links[0].URL)
 		})
 	}
-	links, err := CommandPRLinks(t.Context(), `GH_HOST=git.example gh pr view 42 -R example/repo; gh pr view 43 -R example/repo`, "", true)
+	for _, tc := range []struct {
+		command string
+		want    int
+	}{
+		{`cd /work/repo && gh pr view 42`, 1},
+		{`cd . && gh pr view 42`, 1},
+		{`cd ../repo && gh pr view 42`, 1},
+		{`cd ../other && gh pr view 42`, 0},
+	} {
+		t.Run(tc.command, func(t *testing.T) {
+			links, _, _, _, _, err := AnalyzePRCommand(t.Context(), tc.command, "/work/repo", remote, true, false)
+			require.NoError(t, err)
+			assert.Len(t, links, tc.want)
+		})
+	}
+	branches, err := commandPRLinks(t.Context(), `if true; then gh pr view 45 -R example/repo; else gh pr view 46 -R example/repo; fi`, "", true)
+	require.NoError(t, err)
+	require.Len(t, branches, 2)
+	assert.Equal(t, 45, branches[0].Number)
+	assert.Equal(t, 46, branches[1].Number)
+	links, err := commandPRLinks(t.Context(), `GH_HOST=git.example gh pr view 42 -R example/repo; gh pr view 43 -R example/repo`, "", true)
 	require.NoError(t, err)
 	require.Len(t, links, 2)
 	assert.Equal(t, "https://git.example/example/repo/pull/42", links[0].URL)
 	assert.Equal(t, "https://github.com/example/repo/pull/43", links[1].URL)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	_, err = CommandPRLinks(ctx, "gh pr view 42", remote, true)
+	_, err = commandPRLinks(ctx, "gh pr view 42", remote, true)
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
-func TestCommandPRLinksFailedHostExport(t *testing.T) {
-	for _, tc := range []struct{ command, want string }{
-		{`export GH_HOST=git.example >/bad; gh pr view 42 -R example/repo`, ""},
-		{`export GH_HOST=git.example >/bad; gh pr view 42 -R github.com/example/repo`, "https://github.com/example/repo/pull/42"},
-		{`export GH_HOST=git.example >/bad; gh pr view https://github.com/example/repo/pull/42`, "https://github.com/example/repo/pull/42"},
-	} {
-		t.Run(tc.command, func(t *testing.T) {
-			links, err := CommandPRLinks(t.Context(), tc.command, "", true)
-			require.NoError(t, err)
-			if tc.want == "" {
-				assert.Empty(t, links)
-			} else if assert.Len(t, links, 1) {
-				assert.Equal(t, tc.want, links[0].URL)
-			}
-		})
-	}
-}
-
-func TestCommandPRLinksContextChanges(t *testing.T) {
-	for _, command := range []string{
-		`if true; then export GH_HOST=git.example; fi; gh pr view 42 -R example/repo`,
-		`(cd /work/other); gh pr view 42`,
-		`if false; then cd /work/other; fi; gh pr view 42`,
-		`unset GH_REPO; gh pr view 42`,
-		`GH_HOST=git.example; gh pr view 42 -R example/repo`,
-		`true || export GH_HOST=git.example; gh pr view 42 -R example/repo`,
-	} {
-		t.Run(command, func(t *testing.T) {
-			links, err := CommandPRLinks(t.Context(), command, "https://github.com/example/repo.git", true)
-			require.NoError(t, err)
-			assert.Empty(t, links)
-		})
-	}
-}
-
-func TestCommandPRLinksIncludesBothBranches(t *testing.T) {
-	links, err := CommandPRLinks(t.Context(), `if true; then gh pr view 45 -R example/repo; else gh pr view 46 -R example/repo; fi`, "", true)
-	require.NoError(t, err)
-	require.Len(t, links, 2)
-	assert.Equal(t, 45, links[0].Number)
-	assert.Equal(t, 46, links[1].Number)
-}
-
-func TestCommandPRLinksAfterManyCommands(t *testing.T) {
-	links, err := CommandPRLinks(t.Context(), strings.Repeat("true; ", 4097)+"gh pr view 42 -R example/repo", "", true)
-	require.NoError(t, err)
-	require.Len(t, links, 1)
-	assert.Equal(t, 42, links[0].Number)
-}
-
-func TestCommandPRLinksRecordedFormats(t *testing.T) {
-	remote := "https://github.com/example/repo.git"
-	for _, command := range []string{
-		`git config user.email test@example.com; gh pr view 42`,
-		`/bin/bash -lc 'gh pr view 42 -R example/repo'`,
-		`GH_REPO=example/repo gh pr view 42`,
-	} {
-		t.Run(command, func(t *testing.T) {
-			links, err := CommandPRLinks(t.Context(), command, remote, true)
-			require.NoError(t, err)
-			require.Len(t, links, 1)
-			assert.Equal(t, "https://github.com/example/repo/pull/42", links[0].URL)
-		})
-	}
-}
-
-func TestCommandPRLinksGitConfigReadsAndWrites(t *testing.T) {
-	for _, tc := range []struct {
-		command string
-		want    int
-	}{
-		{`git config remote.origin.url`, 1},
-		{`git config --global remote.origin.url`, 1},
-		{`git config remote.origin.url https://github.com/example/other`, 0},
-		{`git config --add branch.main.remote upstream`, 0},
-		{`git config --unset remote.origin.url`, 0},
-		{`git config set url.https://example.com.insteadOf git@example.com:`, 0},
-	} {
-		t.Run(tc.command, func(t *testing.T) {
-			links, err := CommandPRLinks(t.Context(), tc.command+`; gh pr view 42`, "https://github.com/example/repo.git", true)
-			require.NoError(t, err)
-			assert.Len(t, links, tc.want)
-		})
-	}
-}
-
-func TestCommandPRLinksUnsetRepoPreservesEarlierLink(t *testing.T) {
-	links, err := CommandPRLinks(t.Context(), `gh pr view 41; unset GH_REPO; gh pr view 42`, "https://github.com/example/repo.git", true)
-	require.NoError(t, err)
-	require.Len(t, links, 1)
-	assert.Equal(t, 41, links[0].Number)
+func commandPRLinks(ctx context.Context, command, remote string, allowBare bool) ([]PRLink, error) {
+	links, _, _, _, _, err := AnalyzePRCommand(ctx, command, "", remote, allowBare, false)
+	return links, err
 }

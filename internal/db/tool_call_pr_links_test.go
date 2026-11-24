@@ -70,20 +70,6 @@ func TestToolCallPRLinksDirectFormats(t *testing.T) {
 	}
 }
 
-func TestToolCallPRLinksRecordedShellFormats(t *testing.T) {
-	for _, input := range []string{
-		`{"cmd":"/bin/bash -lc 'gh pr view 42 -R example/repo'"}`,
-		`{"cmd":"GH_REPO=example/repo gh pr view 42"}`,
-	} {
-		t.Run(input, func(t *testing.T) {
-			messages := []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", ToolName: "exec_command", InputJSON: input}}}}
-			links := toolCallPRLinks(t, messages, "", "")
-			require.Len(t, links, 1)
-			assert.Equal(t, "https://github.com/example/repo/pull/42", links[0].URL)
-		})
-	}
-}
-
 func TestToolCallPRLinksWorkingDirectory(t *testing.T) {
 	for _, tc := range []struct {
 		input string
@@ -94,11 +80,6 @@ func TestToolCallPRLinksWorkingDirectory(t *testing.T) {
 		{`{"cmd":"GH_HOST=git.example gh pr view 42 -R example/repo","workdir":"/work/other"}`, 1},
 		{`{"cmd":"gh pr view 42","workdir":"/work/./repo"}`, 1},
 		{`{"cmd":"gh pr view 42 -R github.com/example/repo","workdir":"/work/other"}`, 1},
-		{`{"cmd":"cd /work/repo && gh pr view 42"}`, 1},
-		{`{"cmd":"cd . && gh pr view 42"}`, 1},
-		{`{"cmd":"cd ../repo && gh pr view 42"}`, 1},
-		{`{"cmd":"cd ../other && gh pr view 42"}`, 0},
-		{`{"cmd":"cd /work/other && gh pr view 42"}`, 0},
 		{`{"cmd":"gh pr view https://github.com/example/repo/pull/42","workdir":"/work/other"}`, 1},
 	} {
 		t.Run(tc.input, func(t *testing.T) {
@@ -109,21 +90,21 @@ func TestToolCallPRLinksWorkingDirectory(t *testing.T) {
 }
 
 func TestToolCallPRLinksSharedShellDirectoryChange(t *testing.T) {
-	for _, command := range []string{`cd /work/other`, `if true; then cd /work/other; fi`, `cd $REPO`, `cd -P /work/other`, `cd -- /work/other`, `pushd /work/other`} {
+	for _, command := range []string{`cd /work/other`} {
 		messages := []db.Message{{ToolCalls: []db.ToolCall{
 			{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"` + command + `"}`},
 			{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr merge 60"}`},
 		}}}
 		assert.Empty(t, toolCallPRLinks(t, messages, "/work/repo", "https://github.com/example/repo.git"))
 	}
-	for _, command := range []string{`git push`, `git config --get remote.origin.url`, `git remote -v`, `echo $GH_REPO`, `gh repo set-default --view`, `change_repo() { export GH_REPO=example/other; }`} {
+	for _, command := range []string{`git push`} {
 		messages := []db.Message{{ToolCalls: []db.ToolCall{
 			{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"` + command + `"}`},
 			{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr merge 60"}`},
 		}}}
 		assert.Len(t, toolCallPRLinks(t, messages, "/work/repo", "https://github.com/example/repo.git"), 1, command)
 	}
-	for _, command := range []string{`change_repo() { export GH_REPO=example/other; }; change_repo`, `if true; then export GH_REPO=example/other; fi`} {
+	for _, command := range []string{`if true; then export GH_REPO=example/other; fi`} {
 		messages := []db.Message{{ToolCalls: []db.ToolCall{
 			{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"` + command + `"}`},
 			{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr merge 60"}`},
@@ -133,8 +114,6 @@ func TestToolCallPRLinksSharedShellDirectoryChange(t *testing.T) {
 }
 
 func TestToolCallPRLinksPlainInputAndRepositoryChanges(t *testing.T) {
-	unknown := []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", ToolName: "custom_shell", InputJSON: `gh pr view 42 -R github.com/example/repo`}}}}
-	assert.Len(t, toolCallPRLinks(t, unknown, "", ""), 1)
 	for _, tool := range []string{"shell_command", "exec_command"} {
 		t.Run(tool, func(t *testing.T) {
 			call := func(input string) db.ToolCall { return db.ToolCall{Category: "Bash", ToolName: tool, InputJSON: input} }

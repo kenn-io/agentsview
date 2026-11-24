@@ -59,12 +59,6 @@ func shellLiteral(parts []syntax.WordPart) (string, bool) {
 	return b.String(), true
 }
 
-// CommandPRLinks finds PRs named by direct gh commands in a shell input.
-func CommandPRLinks(ctx context.Context, command, remote string, allowBare bool) ([]PRLink, error) {
-	links, _, _, _, _, err := AnalyzePRCommand(ctx, command, "", remote, allowBare, false)
-	return links, err
-}
-
 // AnalyzePRCommand extracts links and shared shell context from one parse.
 func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBare, hostUnknown bool) ([]PRLink, bool, bool, bool, []PRLink, error) {
 	if err := ctx.Err(); err != nil {
