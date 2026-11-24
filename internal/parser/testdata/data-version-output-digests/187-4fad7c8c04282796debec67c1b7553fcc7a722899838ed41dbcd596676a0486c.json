@@ -1,7 +1,7 @@
 {
-  "version": 186,
+  "version": 187,
   "bump": true,
-  "digest": "2ce088e08dbb27e168f0cb426fefff8608bc5b575eae792f24edc6cf156fda91",
+  "digest": "4fad7c8c04282796debec67c1b7553fcc7a722899838ed41dbcd596676a0486c",
   "providers": {
     "aider": {
       "myrepo/.aider.chat.history.md": "bd3361561a4547452dddf33ac27898f2b60e8c305f2ef07ed13ec520f1f51244"
@@ -11,12 +11,14 @@
     },
     "antigravity": {
       "conversations/aaaa1111-bbbb-cccc-dddd-eeeeeeeeeeee.db": "c100a86d92787bf0dc5496d49779dc293d6afa0f4feeab68f61d514f72e01fff",
-      "conversations/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.db": "3a1612c266b6e540dd0d77fa13ad2a38b29c31b44db5377600cf617ba7a81c5d"
+      "conversations/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.db": "3a1612c266b6e540dd0d77fa13ad2a38b29c31b44db5377600cf617ba7a81c5d",
+      "conversations/cccccccc-dddd-eeee-ffff-000000000000.db": "7c73d609202d51ddc4235656908d608f55f109e8290339d8bd44257c9d3a021f"
     },
     "antigravity-cli": {
       "conversations/aaaa1111-bbbb-cccc-dddd-eeeeeeeeeeee.db": "a8f662e398636c855f5465ead715340f65f412043314c954176e0a6be6c1b77d",
       "conversations/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.db": "c86adbd1233ec45932dd37624f4a3033ad1784af72442594807a028bf54cbc9b",
       "conversations/bbbbbbbb-cccc-dddd-eeee-ffffffffffff.db": "c9765a2707dd1b529d638a445797c26b8687b654b9e57e85c554e7cd48eaf502",
+      "conversations/cccccccc-dddd-eeee-ffff-000000000000.db": "8f4b868094be7001592805e336c90e95541b4b16e2e110f6bcbb054d62720929",
       "implicit/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.pb": "87b78741598f2126e69571d0fb5b3983a209f7830b566b745ad9b04e538f1914"
     },
     "augure-code": {
