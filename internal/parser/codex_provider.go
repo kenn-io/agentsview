@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -224,7 +225,7 @@ func (p *codexProvider) DiscoverRawCaptureSourcesEach(
 		if isS3URI(root) {
 			continue
 		}
-		err := p.sources.discoverEachRoot(ctx, root, func(source SourceRef) error {
+		err := p.sources.discoverEachRoot(ctx, root, false, func(source SourceRef) error {
 			if isCompressedCodexRolloutPath(source.DisplayPath) &&
 				IsRegularFile(codexPlainRolloutPath(source.DisplayPath)) {
 				return nil
@@ -979,7 +980,7 @@ func (s codexSourceSet) DiscoverEach(
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := s.discoverEachRoot(ctx, root, yield); err != nil {
+		if err := s.discoverEachRoot(ctx, root, false, yield); err != nil {
 			return err
 		}
 	}
@@ -989,6 +990,7 @@ func (s codexSourceSet) DiscoverEach(
 func (s codexSourceSet) discoverEachRoot(
 	ctx context.Context,
 	root string,
+	includeLinks bool,
 	yield func(SourceRef) error,
 ) error {
 	if strings.HasPrefix(root, "s3://") {
@@ -1009,12 +1011,13 @@ func (s codexSourceSet) discoverEachRoot(
 		if !isCodexSessionFilename(entry.Name()) {
 			return nil
 		}
-		if entry.Type()&os.ModeSymlink != 0 {
+		// Windows directory entries can omit a symlink's reparse tag.
+		if includeLinks && (runtime.GOOS == "windows" || entry.Type()&os.ModeSymlink != 0) {
 			info, err := os.Stat(path)
 			if err != nil || !info.Mode().IsRegular() {
 				return nil
 			}
-		} else if !entry.Type().IsRegular() {
+		} else if !entry.Type().IsRegular() || runtime.GOOS == "windows" && !IsRegularFile(path) {
 			return nil
 		}
 		source, ok := s.sourceRef(root, path, false)
@@ -1062,7 +1065,7 @@ func (s codexSourceSet) discover(
 			}
 			continue
 		}
-		if err := s.discoverEachRoot(ctx, root, func(source SourceRef) error {
+		if err := s.discoverEachRoot(ctx, root, true, func(source SourceRef) error {
 			if current, ok := byKey[source.Key]; !ok || preferCodexSource(source, current) {
 				byKey[source.Key] = source
 			}
@@ -1492,7 +1495,7 @@ func (s codexSourceSet) sourcesForIndexPath(
 
 func (s codexSourceSet) discoverEachSessions(ctx context.Context, root, sessions string) ([]SourceRef, error) {
 	var sources []SourceRef
-	err := s.discoverEachRoot(ctx, sessions, func(source SourceRef) error {
+	err := s.discoverEachRoot(ctx, sessions, true, func(source SourceRef) error {
 		if ref, ok := s.sourceRef(root, source.DisplayPath, false); ok {
 			sources = append(sources, ref)
 		}
