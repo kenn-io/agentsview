@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -2409,7 +2410,7 @@ func TestCodexLabeledRunDiscoveryAndParse(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 	assert.Equal(t, "experiment/case", outcome.Results[0].Result.Session.Project)
-	assert.Empty(t, outcome.Results[0].Result.Session.GitRemote)
+	assert.Equal(t, "https://example.com/team/project.git", outcome.Results[0].Result.Session.GitRemote)
 	index := filepath.Join(home, CodexSessionIndexFilename)
 	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: index, EventKind: "write"})
 	require.NoError(t, err)
@@ -2443,6 +2444,14 @@ func TestCodexDiscoveryLinkedRollout(t *testing.T) {
 	link := filepath.Join(day, filepath.Base(target))
 	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
+	}
+	require.NoError(t, os.Symlink(t.TempDir(), filepath.Join(day, "rollout-2026-10-08T12-00-00-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jsonl")))
+	require.NoError(t, os.Symlink(filepath.Join(root, "missing"), filepath.Join(day, "rollout-2026-10-08T12-00-00-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.jsonl")))
+	socket := filepath.Join(t.TempDir(), "socket")
+	listener, err := net.Listen("unix", socket)
+	if err == nil {
+		t.Cleanup(func() { _ = listener.Close() })
+		require.NoError(t, os.Symlink(socket, filepath.Join(day, "rollout-2026-10-08T12-00-00-cccccccc-cccc-4ccc-8ccc-cccccccccccc.jsonl")))
 	}
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)

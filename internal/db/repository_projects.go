@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"path/filepath"
 	"slices"
+	"strings"
 
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
@@ -136,11 +138,31 @@ func (r *repositoryProjectResolver) name(ctx context.Context, remote string) (re
 
 type repositoryProjectCandidate struct {
 	worktreeMappingSessionUpdate
-	remote string
+	remote, agent, sourcePath string
+}
+
+func codexProjectIsSourceLabel(agent, sourcePath, project string) bool {
+	if agent != string(parser.AgentCodex) || project == "" {
+		return false
+	}
+	sourcePath = strings.ReplaceAll(sourcePath, `\`, "/")
+	marker := strings.LastIndex(sourcePath, "/.codex-run-v1-")
+	if marker < 0 {
+		return false
+	}
+	root := sourcePath[:marker]
+	if project != "." {
+		suffix := "/" + project
+		if !strings.HasSuffix(root, suffix) {
+			return false
+		}
+		root = strings.TrimSuffix(root, suffix) + "/"
+	}
+	return parser.CodexSourceLabel(filepath.FromSlash(root), filepath.FromSlash(sourcePath)) == project
 }
 
 func repositoryProjectCandidates(ctx context.Context, tx *sql.Tx, sessionID, project string) ([]repositoryProjectCandidate, error) {
-	query := `SELECT s.id, s.machine, s.cwd, s.project, snap.recorded_git_remote
+	query := `SELECT s.id, s.machine, s.cwd, s.project, snap.recorded_git_remote, s.agent, COALESCE(s.file_path, '')
 		FROM sessions s JOIN session_project_identity_snapshots snap ON snap.session_id = s.id
 		WHERE s.deleted_at IS NULL AND s.project = snap.project
 		AND snap.recorded_git_remote != ''
@@ -164,7 +186,7 @@ func repositoryProjectCandidates(ctx context.Context, tx *sql.Tx, sessionID, pro
 	for rows.Next() {
 		var c repositoryProjectCandidate
 		var raw string
-		if err := rows.Scan(&c.id, &c.machine, &c.cwd, &c.currentProject, &raw); err != nil {
+		if err := rows.Scan(&c.id, &c.machine, &c.cwd, &c.currentProject, &raw, &c.agent, &c.sourcePath); err != nil {
 			return nil, err
 		}
 		// Producer evidence wins over a possibly unrelated repository on the
@@ -178,6 +200,9 @@ func repositoryProjectCandidates(ctx context.Context, tx *sql.Tx, sessionID, pro
 }
 
 func (r *repositoryProjectResolver) resolve(ctx context.Context, c repositoryProjectCandidate) (repositoryProjectName, bool, error) {
+	if codexProjectIsSourceLabel(c.agent, c.sourcePath, c.currentProject) {
+		return repositoryProjectName{}, false, nil
+	}
 	mappings, ok := r.mappings[c.machine]
 	if !ok {
 		var err error
@@ -222,12 +247,12 @@ func attributeRepositoryObservationTx(ctx context.Context, tx *sql.Tx, obs expor
 		return obs, nil
 	}
 	c := repositoryProjectCandidate{remote: remote}
-	err := tx.QueryRowContext(ctx, `SELECT s.id, s.machine, s.cwd, s.project FROM sessions s
+	err := tx.QueryRowContext(ctx, `SELECT s.id, s.machine, s.cwd, s.project, s.agent, COALESCE(s.file_path, '') FROM sessions s
 		WHERE s.id = ? AND s.project = ? AND s.deleted_at IS NULL
 		AND NOT EXISTS (SELECT 1 FROM session_project_identity_snapshots snap
 			WHERE snap.session_id = s.id AND snap.worktree_relationship NOT IN ('', 'unknown'))
 		AND NOT EXISTS (SELECT 1 FROM session_project_assignments a WHERE a.session_id = s.id)`,
-		obs.SessionID, sourceProject).Scan(&c.id, &c.machine, &c.cwd, &c.currentProject)
+		obs.SessionID, sourceProject).Scan(&c.id, &c.machine, &c.cwd, &c.currentProject, &c.agent, &c.sourcePath)
 	if errors.Is(err, sql.ErrNoRows) {
 		return obs, nil
 	}

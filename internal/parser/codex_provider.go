@@ -1006,10 +1006,17 @@ func (s codexSourceSet) discoverEachRoot(
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if !isCodexSessionFilename(entry.Name()) || entry.IsDir() {
+		if !isCodexSessionFilename(entry.Name()) {
 			return nil
 		}
-		// Match the existing discovery behavior for linked rollouts.
+		if entry.Type()&os.ModeSymlink != 0 {
+			info, err := os.Stat(path)
+			if err != nil || !info.Mode().IsRegular() {
+				return nil
+			}
+		} else if !entry.Type().IsRegular() {
+			return nil
+		}
 		source, ok := s.sourceRef(root, path, false)
 		if !ok {
 			if _, _, supported := CodexSessionPathInfo(root, path); supported {
