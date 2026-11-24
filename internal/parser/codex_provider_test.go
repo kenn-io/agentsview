@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -2548,8 +2549,8 @@ func reverseDirectoryReader(ctx context.Context, visit func(string)) context.Con
 		if err != nil {
 			return err
 		}
-		for i := len(entries) - 1; i >= 0; i-- {
-			if err := yield(entries[i]); err != nil {
+		for _, entry := range slices.Backward(entries) {
+			if err := yield(entry); err != nil {
 				return err
 			}
 		}

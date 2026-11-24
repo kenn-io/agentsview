@@ -288,7 +288,7 @@ func TestCodexLabeledLegacyReviewAndIndexRefresh(t *testing.T) {
 				return
 			}
 		case <-timeout:
-			t.Fatal("watcher did not refresh the index title")
+			require.FailNow(t, "watcher did not refresh the index title")
 		}
 	}
 }
