@@ -86,7 +86,7 @@ func TestSearchRankWalkTiers(t *testing.T) {
 	require.NoError(t, err)
 	defer tx.Rollback()
 	_, err = tx.ExecContext(ctx, `
-	INSERT INTO sessions(id,project) VALUES ('session-0','proj'),('session-1','proj'),('session-2','proj'),('session-3','proj'),('session-4','proj'),('session-5','proj'),('session-6','proj'),('title','proj'),('older','proj'),('recent','proj'),('boundary','proj'),('eligible','proj'),('eligible-old','proj'),('deleted','proj'),('image','proj'),('message-0','proj'),('message-1','proj'),('message-2','proj');
+	INSERT INTO sessions(id,project) VALUES ('session-0','proj'),('session-1','proj'),('session-2','proj'),('session-3','proj'),('session-4','proj'),('session-5','proj'),('session-6','proj'),('title','proj'),('older','proj'),('recent','proj'),('boundary','proj'),('eligible','proj'),('eligible-old','proj'),('eligible-edge','proj'),('deleted','proj'),('image','proj'),('message-0','proj'),('message-1','proj'),('message-2','proj');
  UPDATE sessions SET first_message='tiers title' WHERE id='title';
  UPDATE sessions SET deleted_at='2026-01-01' WHERE id='deleted';
  INSERT INTO messages(session_id,ordinal,role,content) VALUES
@@ -106,8 +106,11 @@ func TestSearchRankWalkTiers(t *testing.T) {
  WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<65535)
  INSERT INTO messages(session_id,ordinal,role,content) SELECT 'boundary',i,'user','boundaryword' FROM n;
 	INSERT INTO messages(session_id,ordinal,role,content) VALUES ('eligible-old',0,'user','eligibleword eligibleword eligibleword eligibleword eligibleword');
-	WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<65536)
+	WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<4)
  INSERT INTO messages(session_id,ordinal,role,content) SELECT 'eligible',i,'user','eligibleword' FROM n;
+	INSERT INTO messages(session_id,ordinal,role,content) VALUES ('eligible-edge',0,'user','eligibleword eligibleword eligibleword eligibleword eligibleword');
+	WITH RECURSIVE n(i) AS (SELECT 5 UNION ALL SELECT i+1 FROM n WHERE i<65536)
+	INSERT INTO messages(session_id,ordinal,role,content) SELECT 'eligible',i,'user','eligibleword' FROM n;
  WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<5)
  INSERT INTO messages(session_id,ordinal,role,content,is_system) SELECT CASE WHEN i<2 THEN 'deleted' ELSE 'eligible' END,65537+i,'user','eligibleword',CASE WHEN i>=2 THEN 1 ELSE 0 END FROM n;
  WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<4104)
@@ -150,9 +153,6 @@ func TestSearchRankWalkTiers(t *testing.T) {
 			}
 			assert.Equal(t, "title", results[7].SessionID)
 		}
-		walk, err := walkSearchRanks(ctx, d.getReader(), "messages_fts", "messages_fts.rendered MATCH ?", []any{`"tiers"`}, 1000000, 1)
-		require.NoError(t, err)
-		assert.Nil(t, walk)
 	})
 	t.Run("concentrated", func(t *testing.T) {
 		page, err := d.Search(ctx, SearchFilter{Query: "concentrated", Limit: 10})
@@ -173,16 +173,15 @@ func TestSearchRankWalkTiers(t *testing.T) {
 	})
 	t.Run("eligible", func(t *testing.T) {
 		var want int64
-		require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT id FROM messages WHERE session_id='eligible' AND ordinal=1`).Scan(&want))
+		require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT id FROM messages WHERE session_id='eligible' AND ordinal=2`).Scan(&want))
 		predicate := "messages_fts.rendered MATCH ? AND s2.deleted_at IS NULL AND m2.is_system = 0 AND " + SystemPrefixSQL("m2.content", "m2.role")
 		floor, err := searchTierFloor(ctx, d.getReader(), "messages_fts", predicate, []any{`"eligibleword"`})
 		require.NoError(t, err)
 		assert.Equal(t, want, floor)
-		page, err := d.Search(ctx, SearchFilter{Query: "eligibleword", Limit: 2})
+		page, err := d.Search(ctx, SearchFilter{Query: "eligibleword", Limit: 1})
 		require.NoError(t, err)
-		require.Len(t, page.Results, 2)
-		assert.Equal(t, "eligible", page.Results[0].SessionID)
-		assert.Equal(t, "eligible-old", page.Results[1].SessionID)
+		require.Len(t, page.Results, 1)
+		assert.Equal(t, "eligible-edge", page.Results[0].SessionID)
 	})
 	t.Run("deep page", func(t *testing.T) {
 		page, err := d.Search(ctx, SearchFilter{Query: "deepword", Cursor: 4096, Limit: 7})

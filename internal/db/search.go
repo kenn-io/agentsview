@@ -409,11 +409,11 @@ func hasFTSColumnFilter(query string) bool {
 // Search performs FTS5 full-text search across messages, grouped by session,
 // plus a LIKE-based search on session display names and first messages.
 //
-// Results come from three branches joined with UNION ALL:
+// Results come from two branches joined with UNION ALL:
 //
-//  1. FTS branch — message content matches. Broad unfiltered relevance searches
-//     rank the tier with the highest message row IDs first. ROW_NUMBER() picks
-//     the best match per session within that order.
+//  1. FTS branch — message content matches. ROW_NUMBER() picks the single
+//     best-ranked message per session (rank ASC, ordinal ASC, rowid ASC),
+//     within the first tier when a broad relevance search sets one.
 //     After pagination, a rowid lookup with MATCH builds each snippet without
 //     segment duplicates. Ordinal is the matched message's ordinal (≥ 0).
 //
@@ -552,26 +552,17 @@ func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage,
 		if err != nil {
 			return SearchPage{}, err
 		}
-		need := searchRankWalkMaxSessions + 1
-		if f.Cursor >= 0 && f.Cursor <= searchRankWalkMaxSessions-f.Limit-1 {
-			need = f.Cursor + f.Limit + 1
-		}
-		walk, err = walkSearchRanks(ctx, tx, ftsQuery.table, innerWhereSQL, ftsArgs, need, floor)
+		walk, err = walkSearchRanks(ctx, tx, ftsQuery.table, innerWhereSQL, ftsArgs, f.Cursor+f.Limit+1, floor)
 		if err != nil {
 			return SearchPage{}, err
 		}
 	}
-	messageTier, imageTier, nameTier := "0", "0", "0"
+	bestTier, rowTier, imageTier, nameTier := "0", "0", "0", "0"
 	if floor != math.MinInt64 {
-		messageTier = fmt.Sprintf("CASE WHEN %%s >= %d THEN 0 ELSE 1 END", floor)
+		tier := fmt.Sprintf("CASE WHEN %%s >= %d THEN 0 ELSE 1 END", floor)
+		bestTier, rowTier = fmt.Sprintf(tier, "messages_fts.rowid"), fmt.Sprintf(tier, "best.best_rowid")
 		imageTier, nameTier = "1", "2"
 		orderBy = "tier ASC, " + orderBy
-	}
-	bestTier := messageTier
-	rowTier := messageTier
-	if floor != math.MinInt64 {
-		bestTier = fmt.Sprintf(messageTier, "messages_fts.rowid")
-		rowTier = fmt.Sprintf(messageTier, "best.best_rowid")
 	}
 
 	args := ftsArgs

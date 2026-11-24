@@ -1071,9 +1071,8 @@ names and first messages, so you can find sessions by title.
 
 In Full text mode, use the sort toggle in the palette header to switch between
 **Relevance** (best matches first) and **Recency** (newest sessions first).
-For unfiltered SQLite searches with more than 65,536 matching indexed entries,
-Relevance ranks matches from messages stored most recently first, followed by
-other message matches and image-text matches together.
+Relevance in unfiltered SQLite searches with over 65,536 message matches ranks
+the most recently stored ones first, then older message and image-text matches.
 Semantic and Hybrid use their backend rankings, so the toggle is hidden in those
 modes.
 

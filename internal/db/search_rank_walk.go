@@ -9,11 +9,11 @@ import (
 
 const searchTierMatches = 1 << 16
 
-// searchTierFloor returns the last row in the first tier when another match
-// exists. Smaller result sets retain the original global ordering.
+// searchTierFloor returns the lowest rowid of the newest searchTierMatches
+// eligible matches when older ones exist. Smaller result sets keep one tier.
 func searchTierFloor(ctx context.Context, q messageRowsQuerier, table, innerWhereSQL string, args []any) (int64, error) {
-	query := strings.ReplaceAll(`SELECT messages_fts.rowid FROM messages_fts JOIN messages m2 ON messages_fts.rowid = m2.id JOIN sessions s2 ON m2.session_id = s2.id WHERE `+innerWhereSQL+` ORDER BY messages_fts.rowid DESC LIMIT 2 OFFSET ?`, "messages_fts", table)
-	rows, err := q.QueryContext(ctx, query, append(append([]any{}, args...), searchTierMatches-1)...)
+	query := strings.ReplaceAll(`SELECT messages_fts.rowid FROM messages_fts JOIN messages m2 ON messages_fts.rowid = m2.id JOIN sessions s2 ON m2.session_id = s2.id WHERE `+innerWhereSQL+` ORDER BY messages_fts.rowid DESC LIMIT 1 OFFSET ?`, "messages_fts", table)
+	rows, err := q.QueryContext(ctx, query, append(append([]any{}, args...), searchTierMatches)...)
 	if err != nil {
 		return 0, fmt.Errorf("finding search tier: %w", err)
 	}
@@ -23,9 +23,7 @@ func searchTierFloor(ctx context.Context, q messageRowsQuerier, table, innerWher
 		if err := rows.Scan(&floor); err != nil {
 			return 0, fmt.Errorf("scanning search tier: %w", err)
 		}
-		if !rows.Next() {
-			floor = math.MinInt64
-		}
+		floor++
 	}
 	if err := rows.Err(); err != nil {
 		return 0, fmt.Errorf("reading search tier: %w", err)
@@ -74,9 +72,14 @@ type searchRankWalk struct {
 // walkSearchRanks reads the eligible message matches in rank order and
 // stops once it has seen need sessions and every match tied with the rank
 // at which it saw the last of them. Every session whose best match ranks
-// at or below that boundary then has its best match among the rows read.
-// The floor limits a broad search to its first tier. The walk returns nil
-// when that tier cannot fill the page or the walk exceeds its limits.
+// at or below that boundary then has its best match among the rows read,
+// and every other session ranks after them, so the first need sessions of
+// the full ordering are among the walk's sessions. FTS5 sorts all matches
+// by rank before the first row, but joins each match to its message and
+// session only as the walk pulls it. The walk returns nil when it reaches
+// more sessions than the page query can bind or reads too many matches.
+// A floor limits the walk to the first tier; it returns nil if that tier
+// cannot fill the page.
 func walkSearchRanks(
 	ctx context.Context, q messageRowsQuerier, table, innerWhereSQL string, ftsArgs []any, need int, floor int64,
 ) (*searchRankWalk, error) {
