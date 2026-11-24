@@ -38,6 +38,7 @@ type fakeProcess struct {
 	// one-shot (-p or exec); set it to an empty slice for an interactive run.
 	args []string
 	env  []string
+	cwd  string
 }
 
 func stubLaunchProcesses(t *testing.T, chain ...fakeProcess) {
@@ -55,7 +56,7 @@ func stubLaunchProcesses(t *testing.T, chain ...fakeProcess) {
 		if i == len(chain)-1 {
 			next = 1
 		}
-		return launchProcess{Name: p.name, PPID: next, Cmdline: func(context.Context) ([]string, error) {
+		return launchProcess{Name: p.name, PPID: next, Cwd: func(context.Context) (string, error) { return p.cwd, nil }, Cmdline: func(context.Context) ([]string, error) {
 			if p.args != nil {
 				return append([]string{p.name}, p.args...), nil
 			}
@@ -430,6 +431,37 @@ func TestCaptureLaunchParentCodexProfile(t *testing.T) {
 				want = overridePage
 			}
 			assert.Equal(t, "codex:"+want, link.ParentSessionID)
+		})
+	}
+}
+
+func TestCaptureLaunchParentCodexRelativeOverride(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		dir  string
+	}{
+		{"cwd", []string{"-c", "sqlite_home=state"}, "state"},
+		{"cd", []string{"--cd", "project", "-c", "sqlite_home=state"}, filepath.Join("project", "state")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home, cwd := t.TempDir(), t.TempDir()
+			state := filepath.Join(cwd, tc.dir)
+			require.NoError(t, os.MkdirAll(state, 0o700))
+			page := codexLauncherID + "_44444444-4444-4444-8444-444444444444"
+			writeCodexState(t, home, codexLauncherID, codexLauncherID)
+			writeCodexState(t, state, codexLauncherID, page)
+			database := stubLaunchArchive(t)
+			stubLaunchProcesses(t,
+				fakeProcess{name: "sh"},
+				fakeProcess{name: "claude", env: []string{"CODEX_THREAD_ID=" + codexLauncherID}},
+				fakeProcess{name: "codex", env: []string{"CODEX_HOME=" + home}, cwd: cwd, args: tc.args},
+			)
+			_, err := runLaunchHook(t, sessionStartPayload("startup"))
+			require.NoError(t, err)
+			link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
+			require.NoError(t, err)
+			assert.Equal(t, "codex:"+page, link.ParentSessionID)
 		})
 	}
 }

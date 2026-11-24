@@ -44,6 +44,7 @@ type launchProcess struct {
 	PPID    int32
 	Cmdline func(context.Context) ([]string, error)
 	Environ func(context.Context) ([]string, error)
+	Cwd     func(context.Context) (string, error)
 }
 
 var (
@@ -66,7 +67,7 @@ func lookupGopsutilProcess(ctx context.Context, pid int32) (launchProcess, error
 	if err != nil {
 		return launchProcess{}, err
 	}
-	return launchProcess{Name: name, PPID: ppid, Cmdline: p.CmdlineSliceWithContext, Environ: p.EnvironWithContext}, nil
+	return launchProcess{Name: name, PPID: ppid, Cmdline: p.CmdlineSliceWithContext, Environ: p.EnvironWithContext, Cwd: p.CwdWithContext}, nil
 }
 
 // processAgent names the agent a process runs, or "" for any other process.
@@ -288,7 +289,7 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 		if _, err := toml.DecodeFile(filepath.Join(home, "config.toml"), &config); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		var profile, sqliteOverride string
+		var profile, sqliteOverride, cd string
 		var hasSQLiteOverride bool
 		if launcherProcess.Cmdline != nil {
 			args, err := launcherProcess.Cmdline(ctx)
@@ -302,6 +303,17 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 				}
 				var override string
 				switch {
+				case arg == "-C" || arg == "--cd":
+					if i+1 < len(args) {
+						i++
+						cd = args[i]
+					}
+				case strings.HasPrefix(arg, "--cd="):
+					cd = strings.TrimPrefix(arg, "--cd=")
+				case strings.HasPrefix(arg, "-C="):
+					cd = strings.TrimPrefix(arg, "-C=")
+				case strings.HasPrefix(arg, "-C"):
+					cd = strings.TrimPrefix(arg, "-C")
 				case arg == "-p" || arg == "--profile":
 					if i+1 < len(args) {
 						i++
@@ -349,12 +361,30 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 			config.SQLiteHome = sqliteOverride
 		}
 		if config.SQLiteHome != "" {
-			// Codex resolves a relative config path against its home.
 			if sqliteHome, err = pathutil.ExpandHome(config.SQLiteHome); err != nil {
 				return err
 			}
 			if !filepath.IsAbs(sqliteHome) {
-				sqliteHome = filepath.Join(home, sqliteHome)
+				base := home
+				if hasSQLiteOverride {
+					if launcherProcess.Cwd != nil && !filepath.IsAbs(cd) {
+						cwd, err := launcherProcess.Cwd(ctx)
+						if err != nil {
+							return err
+						}
+						if cwd != "" {
+							base = cwd
+						}
+					}
+					if cd != "" {
+						if filepath.IsAbs(cd) {
+							base = cd
+						} else {
+							base = filepath.Join(base, cd)
+						}
+					}
+				}
+				sqliteHome = filepath.Join(base, sqliteHome)
 			}
 		}
 		if sqliteHome != "" {
