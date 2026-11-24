@@ -73,11 +73,14 @@ func TestAccountUsageAgentMigrationPreservesCursorRows(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, d.Close()) })
 	event := CursorUsageEvent{OccurredAt: "2026-11-04T13:00:00Z", Model: "model-a", InputTokens: 12, DedupKey: "cursor:item"}
 	require.NoError(t, d.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{event}))
-	_, err := d.rawWriter().ExecContext(t.Context(), "DROP INDEX idx_cursor_usage_events_account_time")
-	require.NoError(t, err)
-	_, err = d.rawWriter().ExecContext(t.Context(), "ALTER TABLE cursor_usage_events DROP COLUMN agent; ALTER TABLE cursor_usage_events DROP COLUMN conversation_id")
+	_, err := d.rawWriter().ExecContext(t.Context(), "ALTER TABLE cursor_usage_events DROP COLUMN conversation_id")
 	require.NoError(t, err)
 	require.NoError(t, d.Close())
+	_, err = OpenReadOnly(t.Context(), path)
+	require.Error(t, err)
+	assert.True(t, IsSchemaUpgradeRequired(err))
+	assert.ErrorContains(t, err, "cursor_usage_events.conversation_id")
+	execRawSQLite(t, path, "DROP INDEX idx_cursor_usage_events_account_time; ALTER TABLE cursor_usage_events DROP COLUMN agent")
 	_, err = OpenReadOnly(t.Context(), path)
 	require.Error(t, err)
 	assert.True(t, IsSchemaUpgradeRequired(err))
@@ -95,18 +98,6 @@ func TestAccountUsageAgentMigrationPreservesCursorRows(t *testing.T) {
 	var conversation string
 	require.NoError(t, migrated.Reader().QueryRowContext(t.Context(), `SELECT conversation_id FROM cursor_usage_events`).Scan(&conversation))
 	assert.Empty(t, conversation)
-}
-
-func TestAccountUsageReadOnlyRequiresConversationColumn(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "archive.db")
-	d := testDBAtPath(t, path, "migration")
-	_, err := d.rawWriter().ExecContext(t.Context(), `ALTER TABLE cursor_usage_events DROP COLUMN conversation_id`)
-	require.NoError(t, err)
-	require.NoError(t, d.Close())
-	_, err = OpenReadOnly(t.Context(), path)
-	require.Error(t, err)
-	assert.True(t, IsSchemaUpgradeRequired(err))
-	assert.ErrorContains(t, err, "cursor_usage_events.conversation_id")
 }
 
 func TestAccountUsageUsesBaseRatesForCacheSavings(t *testing.T) {
