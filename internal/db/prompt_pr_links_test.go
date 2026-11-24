@@ -423,7 +423,7 @@ func TestToolPRLinksIncrementalReplacementRemovesLastCall(t *testing.T) {
 	d := testDB(t)
 	s := Session{ID: "replace-tools", Project: "project", Machine: "local", Agent: "claude"}
 	require.NoError(t, d.UpsertSession(t.Context(), s))
-	message := Message{SessionID: s.ID, Ordinal: 0, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"GH_HOST=github.com gh pr view 42 -R example/repo"}`}}}
+	message := Message{SessionID: s.ID, Ordinal: 0, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R github.com/example/repo"}`}}}
 	require.NoError(t, d.InsertMessages(t.Context(), []Message{message}))
 	got, err := d.GetSession(t.Context(), s.ID)
 	require.NoError(t, err)

@@ -42,7 +42,7 @@ func TestToolCallPRLinksSkipsOversizedInput(t *testing.T) {
 	input := `{"command":"gh pr view 41 -R github.com/example/repo","unrelated":"` + strings.Repeat("x", 256*1024) + `"}`
 	messages := []db.Message{{ToolCalls: []db.ToolCall{
 		{ToolName: "Bash", Category: "Bash", InputJSON: input},
-		{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"GH_HOST=github.com gh pr view 42 -R example/repo"}`},
+		{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R github.com/example/repo"}`},
 	}}}
 	links := toolCallPRLinks(t, messages, "", "")
 	require.Len(t, links, 1)
@@ -86,7 +86,7 @@ func TestToolCallPRLinksWorkingDirectory(t *testing.T) {
 	}{
 		{`{"cmd":"gh pr view 42","workdir":"/work/other"}`, 0},
 		{`{"cmd":"gh pr view 42 -R example/repo","workdir":"/work/other"}`, 1},
-		{`{"cmd":"GH_HOST=git.example gh pr view 42 -R example/repo","workdir":"/work/other"}`, 1},
+		{`{"cmd":"gh pr view 42 -R git.example/example/repo","workdir":"/work/other"}`, 1},
 		{`{"cmd":"gh pr view 42","workdir":"/work/./repo"}`, 1},
 		{`{"cmd":"gh pr view 42 -R github.com/example/repo","workdir":"/work/other"}`, 1},
 		{`{"cmd":"gh pr view https://github.com/example/repo/pull/42","workdir":"/work/other"}`, 1},
