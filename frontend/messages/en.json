@@ -33,6 +33,7 @@
   "app_auth_placeholder": "Paste auth token",
   "app_auth_authenticate": "Authenticate",
   "app_auth_disconnect_reset": "Disconnect and reset",
+  "session_delete_failed": "Could not move to trash: {reason}",
   "app_undo_session_deleted": "Session deleted",
   "app_undo_undo": "Undo",
   "nav_toggle_sidebar": "Toggle sidebar",

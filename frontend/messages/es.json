@@ -35,6 +35,7 @@
   "app_auth_placeholder": "Pega el token de autenticación",
   "app_auth_authenticate": "Autenticar",
   "app_auth_disconnect_reset": "Desconectar y restablecer",
+  "session_delete_failed": "No se pudo mover a la papelera: {reason}",
   "app_undo_session_deleted": "Sesión eliminada",
   "app_undo_undo": "Deshacer",
   "nav_toggle_sidebar": "Mostrar u ocultar la barra lateral",

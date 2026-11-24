@@ -33,6 +33,7 @@
   "app_auth_placeholder": "認証トークンを貼り付けます",
   "app_auth_authenticate": "認証する",
   "app_auth_disconnect_reset": "切断してリセットする",
+  "session_delete_failed": "ゴミ箱に移動できませんでした: {reason}",
   "app_undo_session_deleted": "セッションが削除されました",
   "app_undo_undo": "元に戻す",
   "nav_toggle_sidebar": "サイドバーの切り替え",

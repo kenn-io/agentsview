@@ -1,4 +1,6 @@
 import { SvelteMap } from "svelte/reactivity";
+import { showFlash } from "@kenn-io/kit-ui";
+import { m } from "../i18n/index.js";
 import { failureMessage } from "../utils/failure.js";
 import type { DataChangedEvent } from "../api/client.js";
 import {
@@ -1350,7 +1352,12 @@ class SessionsStore {
   }
 
   async deleteSession(id: string) {
-    await SessionsService.deleteApiV1SessionsById({ id });
+    try {
+      await SessionsService.deleteApiV1SessionsById({ id });
+    } catch (err) {
+      showFlash(m.session_delete_failed({ reason: failureMessage(err) }), { tone: "danger" });
+      throw err;
+    }
     if (this.activeSessionId === id) {
       this.setActiveSession(null);
     }
@@ -1361,7 +1368,12 @@ class SessionsStore {
 
   async batchDeleteSessions(ids: string[]) {
     if (ids.length === 0) return;
-    await SessionsService.postApiV1SessionsBatchDelete({ session_ids: ids });
+    try {
+      await SessionsService.postApiV1SessionsBatchDelete({ session_ids: ids });
+    } catch (err) {
+      showFlash(m.session_delete_failed({ reason: failureMessage(err) }), { tone: "danger" });
+      throw err;
+    }
     const idSet = new Set(ids);
     if (this.activeSessionId && idSet.has(this.activeSessionId)) {
       this.setActiveSession(null);
