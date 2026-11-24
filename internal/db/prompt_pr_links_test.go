@@ -451,7 +451,7 @@ func TestToolPRLinksArchiveUpgrade(t *testing.T) {
 }
 
 func TestToolPRLinksArchiveStorage(t *testing.T) {
-	for _, policy := range []config.ArchiveContent{config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
+	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
 		t.Run(string(policy), func(t *testing.T) {
 			d := testDB(t)
 			d.SetArchiveContent(policy)
@@ -485,7 +485,7 @@ func TestToolPRLinksArchiveStorage(t *testing.T) {
 				}
 				assert.Equal(t, want, numbers)
 			}
-			for i, input := range []string{`{"command":"gh pr view 5 -R example/repo"}`, `{"command":"gh pr view 6 -R example/repo"}`} {
+			for i, input := range []string{`{"command":"gh pr comment --body \"$BODY\" 5 -R example/repo"}`, `{"command":"gh pr view 6 -R example/repo --future value"}`} {
 				_, err := d.WriteSessionBatchContext(t.Context(), []SessionBatchWrite{{Session: session, Messages: []Message{message(i, "Bash", "Bash", input)}, ReplaceMessages: i == 0}})
 				require.NoError(t, err)
 			}

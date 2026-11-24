@@ -147,10 +147,34 @@ func TestCodexCommandPRLinksOnAppend(t *testing.T) {
 	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
 	assert.Equal(t, []string{"https://github.com/example/repo/pull/42"}, storedPRURLs(t, env.db, "codex:"+id))
 	appendClaudeSplitLines(t, path, testjsonl.JoinJSONL(
-		testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call2", map[string]any{"cmd": "gh pr view 43 -R github.com/example/repo"}, "2024-01-01T10:00:06Z"),
+		testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call2", map[string]any{"cmd": `gh pr comment --body "$BODY" 43 -R github.com/example/repo`}, "2024-01-01T10:00:06Z"),
 	))
 	env.engine.SyncPaths([]string{path})
+	sess, err := env.db.GetSessionFull(t.Context(), "codex:"+id)
+	require.NoError(t, err)
+	require.True(t, sess.LastWriteIncremental)
 	assert.ElementsMatch(t, []string{"https://github.com/example/repo/pull/42", "https://github.com/example/repo/pull/43"}, storedPRURLs(t, env.db, "codex:"+id))
+}
+
+func TestCodexCommandPRLinksOnSync(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
+	cases := []struct{ id, command, url string }{
+		{"01900000-0000-7000-8000-000000000011", "gh pr view 11 -R example/repo --json title", "https://github.com/example/repo/pull/11"},
+		{"01900000-0000-7000-8000-000000000012", "gh pr merge 12 -R example/repo --squash", "https://github.com/example/repo/pull/12"},
+		{"01900000-0000-7000-8000-000000000013", "gh pr comment https://github.com/example/repo/pull/13 --body done", "https://github.com/example/repo/pull/13"},
+		{"01900000-0000-7000-8000-000000000014", "gh pr view 14 -R example/repo", "https://github.com/example/repo/pull/14"},
+	}
+	for _, tc := range cases {
+		env.writeCodexSession(t, filepath.Join("2024", "01", "15"), "rollout-20240115-"+tc.id+".jsonl", testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaWithFieldsJSON(tc.id, t.TempDir(), "user", tsEarly, nil),
+			testjsonl.CodexMsgJSON("user", "Review changes", tsEarlyS1),
+			testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call", map[string]any{"cmd": tc.command}, tsEarlyS5),
+		))
+	}
+	require.Equal(t, 4, env.engine.SyncAll(t.Context(), nil).Synced)
+	for _, tc := range cases {
+		assert.Equal(t, []string{tc.url}, storedPRURLs(t, env.db, "codex:"+tc.id))
+	}
 }
 
 func TestCommandPRCheckoutRemote(t *testing.T) {

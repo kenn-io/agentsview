@@ -53,6 +53,37 @@ func shellWords(args []*syntax.Word) ([]string, []bool) {
 	return words, literal
 }
 
+// quotedValue stays one argument when it contains a simple shell variable.
+func quotedValue(word *syntax.Word) bool {
+	for _, part := range word.Parts {
+		switch p := part.(type) {
+		case *syntax.Lit:
+			if strings.ContainsAny(p.Value, "*?[~") {
+				return false
+			}
+		case *syntax.SglQuoted:
+		case *syntax.DblQuoted:
+			if p.Dollar {
+				return false
+			}
+			for _, inner := range p.Parts {
+				switch v := inner.(type) {
+				case *syntax.Lit:
+				case *syntax.ParamExp:
+					if v.Param == nil || v.Param.Value == "@" || v.Param.Value == "*" || v.Index != nil || v.Exp != nil || v.Repl != nil || v.Slice != nil || v.NestedParam != nil {
+						return false
+					}
+				default:
+					return false
+				}
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func selectPRHost(explicitHost, remoteHost string, specified, hostUnknown bool) string {
 	if explicitHost != "" {
 		return explicitHost
@@ -135,6 +166,16 @@ func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 		specified, invalid := false, false
 		for i := 3; i < len(words); i++ {
 			if !literal[i] {
+				// An attached, quoted value cannot add shell arguments.
+				if len(args[i].Parts) > 1 && quotedValue(args[i]) {
+					if prefix, ok := args[i].Parts[0].(*syntax.Lit); ok {
+						flag, _, attached := strings.Cut(prefix.Value, "=")
+						takesValue, known := prCommandFlag(words[2], flag)
+						if attached && known && takesValue {
+							continue
+						}
+					}
+				}
 				invalid = true
 				continue
 			}
@@ -160,10 +201,18 @@ func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 					flag, attached = flag[:2], true
 				}
 				takesValue, ok := prCommandFlag(words[2], flag)
-				if !ok || (attached && !takesValue) {
+				if !ok && selector != "" {
+					// An unknown option may consume a later repository flag.
+					for j := i + 1; j < len(words); j++ {
+						if !literal[j] || words[j] == "--repo" || strings.HasPrefix(words[j], "--repo=") || strings.HasPrefix(words[j], "-R") {
+							invalid = true
+						}
+					}
+					i = len(words)
+				} else if !ok || (attached && !takesValue) {
 					invalid = true
 				} else if takesValue && !attached {
-					if i+1 >= len(words) || !literal[i+1] {
+					if i+1 >= len(words) || (!literal[i+1] && !quotedValue(args[i+1])) {
 						invalid = true
 					} else {
 						i++
