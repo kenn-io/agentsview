@@ -1700,9 +1700,6 @@ func codexSourceRank(source SourceRef) ReconciliationSourceRank {
 		}
 		return ReconciliationSourceRank{Class: 2, Recency: recency, Path: src.Path}
 	}
-	if !isCompressedCodexRolloutPath(src.Path) {
-		return ReconciliationSourceRank{Class: 1}
-	}
 	return ReconciliationSourceRank{}
 }
 

@@ -5609,7 +5609,11 @@ func (e *Engine) reconciliationCandidate(ctx context.Context,
 			preference1 = rank.Class
 			preference2 = configuredRootPreferenceForSource(source, statPath, roots)
 			preference3 = rank.Recency
-		} else {
+		} else if agent == parser.AgentCodex && rank.Class != 0 {
+			preference1 = rank.Class
+			preference2 = rank.Class
+			preference3 = rank.Recency
+		} else if agent != parser.AgentCodex {
 			preference2 = rank.Class
 			preference3 = rank.Recency
 		}
@@ -9500,12 +9504,10 @@ func (e *Engine) storedSourceRanksHigher(
 	if err != nil || !found {
 		return false, err
 	}
-	candidateRank := ranker.ReconciliationSourceRank(candidate)
-	storedRank := ranker.ReconciliationSourceRank(stored)
-	if provider.Definition().Type == parser.AgentCodex && candidateRank.Class < 2 && storedRank.Class < 2 {
-		return false, nil
-	}
-	return reconciliationSourceRankLower(candidateRank, storedRank), nil
+	return reconciliationSourceRankLower(
+		ranker.ReconciliationSourceRank(candidate),
+		ranker.ReconciliationSourceRank(stored),
+	), nil
 }
 
 func (e *Engine) providerSourceLowerRanked(
