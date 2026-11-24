@@ -309,8 +309,8 @@ func recordLaunchParent(ctx context.Context, cmd *cobra.Command, childID, home, 
 			if missing && time.Now().After(missingDeadline) {
 				return nil
 			}
-			var sqliteErr sqlite3.Error
-			if err != nil && !missing && (!errors.As(err, &sqliteErr) || (sqliteErr.Code != sqlite3.ErrBusy && sqliteErr.Code != sqlite3.ErrLocked)) {
+			sqliteErr, isSQLite := errors.AsType[sqlite3.Error](err)
+			if err != nil && !missing && (!isSQLite || (sqliteErr.Code != sqlite3.ErrBusy && sqliteErr.Code != sqlite3.ErrLocked)) {
 				return err
 			}
 		}

@@ -391,7 +391,11 @@ func TestCaptureLaunchParentRetriesBusyCodexIndex(t *testing.T) {
 	cmd.SetIn(strings.NewReader(sessionStartPayload("startup")))
 	done := make(chan error, 1)
 	go func() { done <- captureLaunchParent(ctx, cmd) }()
-	time.Sleep(2 * time.Second)
+	select {
+	case err := <-done:
+		require.FailNow(t, "capture returned while index was locked", "%v", err)
+	case <-time.After(2 * time.Second):
+	}
 	_, err = state.ExecContext(t.Context(), "COMMIT")
 	require.NoError(t, err)
 	require.NoError(t, <-done)
@@ -429,7 +433,11 @@ func TestCaptureLaunchParentMissingCodexIndex(t *testing.T) {
 			done := make(chan error, 1)
 			go func() { done <- captureLaunchParent(ctx, cmd) }()
 			if tc.appears {
-				time.Sleep(time.Second)
+				select {
+				case err := <-done:
+					require.FailNow(t, "capture returned before index appeared", "%v", err)
+				case <-time.After(time.Second):
+				}
 				if tc.rowMissing {
 					state, err := sql.Open("sqlite3", filepath.Join(home, "state_5.sqlite"))
 					require.NoError(t, err)
@@ -445,7 +453,7 @@ func TestCaptureLaunchParentMissingCodexIndex(t *testing.T) {
 				case err := <-done:
 					require.Error(t, err)
 				case <-time.After(time.Second): //nolint:kennlint // deadlinetest: detects retries of a corrupt index
-					t.Fatal("unreadable index was retried")
+					require.FailNow(t, "unreadable index was retried")
 				}
 			} else {
 				require.NoError(t, <-done)
