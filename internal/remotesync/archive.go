@@ -3,6 +3,7 @@ package remotesync
 import (
 	"archive/tar"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -208,10 +209,19 @@ func windsurfArchiveModTime(info os.FileInfo, dbPath string) time.Time {
 	return mtime
 }
 
+// isSkippableArchiveError reports filesystem errors on a source entry that
+// indicate it vanished or cannot be read by the daemon user. Skipping
+// permission errors alongside ENOENT prevents one unreadable file from
+// failing every delta or full archive transfer for the host.
+func isSkippableArchiveError(err error) bool {
+	return os.IsNotExist(err) || os.IsPermission(err) ||
+		errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission)
+}
+
 func writeOptionalArchiveFile(tw *tar.Writer, path string) error {
 	info, err := os.Lstat(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if isSkippableArchiveError(err) {
 			return nil
 		}
 		return fmt.Errorf("stat archive path %q: %w", path, err)
@@ -240,7 +250,7 @@ func writeArchivePath(
 	}
 	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
-			if os.IsNotExist(err) {
+			if os.IsNotExist(err) || (path != root && isSkippableArchiveError(err)) {
 				return nil
 			}
 			return err
@@ -253,7 +263,7 @@ func writeArchivePath(
 		}
 		info, err := entry.Info()
 		if err != nil {
-			if os.IsNotExist(err) {
+			if isSkippableArchiveError(err) {
 				return nil
 			}
 			return err
@@ -274,7 +284,7 @@ func writeArchiveFile(tw *tar.Writer, path string, info os.FileInfo) error {
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if isSkippableArchiveError(err) {
 			return nil
 		}
 		return err
@@ -282,7 +292,7 @@ func writeArchiveFile(tw *tar.Writer, path string, info os.FileInfo) error {
 	defer file.Close()
 	info, err = file.Stat()
 	if err != nil {
-		if os.IsNotExist(err) {
+		if isSkippableArchiveError(err) {
 			return nil
 		}
 		return err
@@ -370,10 +380,11 @@ func writeArchiveHeader(
 
 // WriteArchiveFiles streams a tar containing exactly the given files,
 // each confined to one of allowedRoots. Entries that vanished since
-// the client's manifest diff, symlinks, and non-regular files are
-// skipped silently: deletions race live agents and are reconciled by
-// the next manifest. writeArchivePath is unsuitable here because it
-// fails on a missing root.
+// the client's manifest diff, unreadable entries (os.ErrPermission),
+// symlinks, and non-regular files are skipped silently: deletions race
+// live agents and are reconciled by the next manifest, and a single
+// unreadable file must not block every transfer for the host.
+// writeArchivePath is unsuitable here because it fails on a missing root.
 //
 // The allowed-target re-resolution is defense in depth: callers validate
 // the file list before reaching here, but the path handed to the
@@ -416,7 +427,7 @@ func writeArchiveFiles(
 		}
 		info, err := os.Lstat(local)
 		if err != nil {
-			if os.IsNotExist(err) {
+			if isSkippableArchiveError(err) {
 				continue
 			}
 			return fmt.Errorf("stat archive file %q: %w", local, err)

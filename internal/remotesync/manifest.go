@@ -29,9 +29,10 @@ type Manifest struct {
 }
 
 // BuildManifest walks the target dirs and extra files and returns a
-// manifest of regular files, sorted by path. Symlinks and special
-// files are excluded, matching WriteArchive. Missing roots and extra
-// files are tolerated: sync races against live agents deleting files.
+// manifest of regular files, sorted by path. Symlinks, special files,
+// and unreadable child entries are excluded, matching WriteArchive and
+// WriteArchiveFiles. Missing roots and extra files are tolerated: sync
+// races against live agents deleting files.
 //
 // Sanitized file-scoped agents (Windsurf) are rejected: their raw
 // directory tree differs from the sanitized subset WriteArchive
@@ -69,13 +70,19 @@ func BuildManifest(ctx context.Context, targets TargetSet) (Manifest, error) {
 		}
 		info, err := os.Lstat(path)
 		if err != nil {
-			if os.IsNotExist(err) {
+			if isSkippableArchiveError(err) {
 				return nil
 			}
 			return fmt.Errorf("stat manifest file %q: %w", path, err)
 		}
 		if info.Mode().IsRegular() {
-			add(path, info)
+			readable, readErr := archiveFileReadable(path)
+			if readErr != nil {
+				return fmt.Errorf("check manifest file %q: %w", path, readErr)
+			}
+			if readable {
+				add(path, info)
+			}
 		}
 		return nil
 	}
@@ -168,13 +175,19 @@ func manifestWalk(
 	}
 	if !info.IsDir() {
 		if info.Mode().IsRegular() {
-			add(root, info)
+			readable, readErr := archiveFileReadable(root)
+			if readErr != nil {
+				return fmt.Errorf("check manifest file %q: %w", root, readErr)
+			}
+			if readable {
+				add(root, info)
+			}
 		}
 		return nil
 	}
 	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
-			if os.IsNotExist(err) {
+			if os.IsNotExist(err) || (path != root && isSkippableArchiveError(err)) {
 				return nil
 			}
 			return err
@@ -187,7 +200,7 @@ func manifestWalk(
 		}
 		info, err := entry.Info()
 		if err != nil {
-			if os.IsNotExist(err) {
+			if isSkippableArchiveError(err) {
 				return nil
 			}
 			return err
@@ -195,7 +208,26 @@ func manifestWalk(
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 			return nil
 		}
+		readable, readErr := archiveFileReadable(path)
+		if readErr != nil {
+			return fmt.Errorf("check manifest file %q: %w", path, readErr)
+		}
+		if !readable {
+			return nil
+		}
 		add(path, info)
 		return nil
 	})
+}
+
+func probeOpenReadable(path string) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if isSkippableArchiveError(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	_ = f.Close()
+	return true, nil
 }
