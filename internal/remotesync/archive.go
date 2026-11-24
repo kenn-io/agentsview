@@ -248,9 +248,10 @@ func writeArchivePath(
 	if !info.IsDir() {
 		return writeFile(root, info)
 	}
+	cleanRoot := filepath.Clean(root)
 	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
-			if os.IsNotExist(err) || (path != root && isSkippableArchiveError(err)) {
+			if os.IsNotExist(err) || (filepath.Clean(path) != cleanRoot && isSkippableArchiveError(err)) {
 				return nil
 			}
 			return err
@@ -263,7 +264,10 @@ func writeArchivePath(
 		}
 		info, err := entry.Info()
 		if err != nil {
-			if isSkippableArchiveError(err) {
+			// Lstat on a direct child fails with EACCES only when root itself
+			// lacks search (+x) permission (e.g. mode 0400), so fail the root
+			// rather than returning an empty archive.
+			if os.IsNotExist(err) || (filepath.Clean(filepath.Dir(path)) != cleanRoot && isSkippableArchiveError(err)) {
 				return nil
 			}
 			return err

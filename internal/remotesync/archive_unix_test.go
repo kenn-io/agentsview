@@ -44,17 +44,20 @@ func TestUnreadableArchiveMembersAndChildDirsAreSkipped(t *testing.T) {
 	healthyDir := filepath.Join(root, "-proj-a")
 	unreadableFileDir := filepath.Join(root, "-proj-b", "memory")
 	lockedSubdir := filepath.Join(root, "-proj-locked")
-	for _, dir := range []string{healthyDir, unreadableFileDir, lockedSubdir} {
+	nonSearchSubdir := filepath.Join(root, "-proj-read-only-no-exec")
+	for _, dir := range []string{healthyDir, unreadableFileDir, lockedSubdir, nonSearchSubdir} {
 		require.NoError(t, os.MkdirAll(dir, 0o755))
 	}
 
 	healthy := filepath.Join(healthyDir, "session.jsonl")
 	secretFile := filepath.Join(unreadableFileDir, "dysync-troubleshooting.md")
 	lockedChild := filepath.Join(lockedSubdir, "secret.jsonl")
+	nonSearchChild := filepath.Join(nonSearchSubdir, "hidden.jsonl")
 	extraUnreadable := filepath.Join(root, "extra-unreadable.jsonl")
 	require.NoError(t, os.WriteFile(healthy, []byte("healthy session"), 0o644))
 	require.NoError(t, os.WriteFile(secretFile, []byte("root-only note"), 0o644))
 	require.NoError(t, os.WriteFile(lockedChild, []byte("locked child"), 0o644))
+	require.NoError(t, os.WriteFile(nonSearchChild, []byte("non-search child"), 0o644))
 	require.NoError(t, os.WriteFile(extraUnreadable, []byte("locked extra"), 0o644))
 
 	require.NoError(t, os.Chmod(secretFile, 0o000))
@@ -63,6 +66,8 @@ func TestUnreadableArchiveMembersAndChildDirsAreSkipped(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(extraUnreadable, 0o644) })
 	require.NoError(t, os.Chmod(lockedSubdir, 0o000))
 	t.Cleanup(func() { _ = os.Chmod(lockedSubdir, 0o755) })
+	require.NoError(t, os.Chmod(nonSearchSubdir, 0o400))
+	t.Cleanup(func() { _ = os.Chmod(nonSearchSubdir, 0o755) })
 
 	targets := TargetSet{
 		Dirs:       map[parser.AgentType][]string{parser.AgentClaude: {root}},
@@ -79,6 +84,7 @@ func TestUnreadableArchiveMembersAndChildDirsAreSkipped(t *testing.T) {
 	assert.Equal(t, []byte("healthy session"), fullEntries[archiveNameForTest(t, healthy)])
 	assert.NotContains(t, fullEntries, archiveNameForTest(t, secretFile))
 	assert.NotContains(t, fullEntries, archiveNameForTest(t, lockedChild))
+	assert.NotContains(t, fullEntries, archiveNameForTest(t, nonSearchChild))
 	assert.NotContains(t, fullEntries, archiveNameForTest(t, extraUnreadable))
 
 	var mixedDelta bytes.Buffer
@@ -111,17 +117,27 @@ func TestBuildManifestAndWriteArchiveFailOnUnreadableRoot(t *testing.T) {
 		t.Skip("root bypasses directory permissions")
 	}
 
-	root := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(root, "session.jsonl"), []byte("x"), 0o644))
-	require.NoError(t, os.Chmod(root, 0o000))
-	t.Cleanup(func() { _ = os.Chmod(root, 0o755) })
+	for _, tc := range []struct {
+		name string
+		mode os.FileMode
+	}{
+		{name: "mode 0000 no read or search", mode: 0o000},
+		{name: "mode 0400 read without search", mode: 0o400},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(root, "session.jsonl"), []byte("x"), 0o644))
+			require.NoError(t, os.Chmod(root, tc.mode))
+			t.Cleanup(func() { _ = os.Chmod(root, 0o755) })
 
-	targets := TargetSet{Dirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}}
+			targets := TargetSet{Dirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}}
 
-	_, err := BuildManifest(t.Context(), targets)
-	require.ErrorIs(t, err, os.ErrPermission)
+			_, err := BuildManifest(t.Context(), targets)
+			require.ErrorIs(t, err, os.ErrPermission)
 
-	var buf bytes.Buffer
-	err = WriteArchive(t.Context(), &buf, targets)
-	require.ErrorIs(t, err, os.ErrPermission)
+			var buf bytes.Buffer
+			err = WriteArchive(t.Context(), &buf, targets)
+			require.ErrorIs(t, err, os.ErrPermission)
+		})
+	}
 }
