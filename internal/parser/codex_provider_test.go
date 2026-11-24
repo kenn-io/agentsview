@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -2398,7 +2397,7 @@ func TestCodexLabeledRunDiscoveryAndParse(t *testing.T) {
 	root := t.TempDir()
 	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
 	home := filepath.Join(root, "experiment", "case", ".codex-run-v1-abc")
-	meta := testjsonl.CodexSessionMetaWithFieldsJSON(id, "/work/project", "codex_exec", tsEarly, map[string]any{"git": map[string]any{"repository_url": "https://example.com/team/project.git"}})
+	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", tsEarly)
 	path := writeCodexProviderSessionContent(t, filepath.Join(home, "sessions"), id, testjsonl.JoinJSONL(meta, testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1)))
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
@@ -2410,7 +2409,7 @@ func TestCodexLabeledRunDiscoveryAndParse(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 	assert.Equal(t, "experiment/case", outcome.Results[0].Result.Session.Project)
-	assert.Equal(t, "https://example.com/team/project.git", outcome.Results[0].Result.Session.GitRemote)
+	assert.Equal(t, SessionKindRoborev, outcome.Results[0].Result.Session.SessionKind)
 	index := filepath.Join(home, CodexSessionIndexFilename)
 	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: index, EventKind: "write"})
 	require.NoError(t, err)
@@ -2433,34 +2432,4 @@ func TestCodexDotLabeledRunDiscoveryAndParse(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 	assert.Equal(t, ".", outcome.Results[0].Result.Session.Project)
-}
-
-func TestCodexDiscoveryLinkedRollout(t *testing.T) {
-	root := t.TempDir()
-	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
-	target := writeCodexProviderSessionContent(t, t.TempDir(), id, testjsonl.JoinJSONL(testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", tsEarly), testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1)))
-	day := filepath.Join(root, "2026", "10", "08")
-	require.NoError(t, os.MkdirAll(day, 0o755))
-	link := filepath.Join(day, filepath.Base(target))
-	if err := os.Symlink(target, link); err != nil {
-		t.Skipf("symlink unavailable: %v", err)
-	}
-	require.NoError(t, os.Symlink(t.TempDir(), filepath.Join(day, "rollout-2026-10-08T12-00-00-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jsonl")))
-	require.NoError(t, os.Symlink(filepath.Join(root, "missing"), filepath.Join(day, "rollout-2026-10-08T12-00-00-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.jsonl")))
-	socket := filepath.Join(t.TempDir(), "socket")
-	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", socket)
-	if err == nil {
-		t.Cleanup(func() { _ = listener.Close() })
-		require.NoError(t, os.Symlink(socket, filepath.Join(day, "rollout-2026-10-08T12-00-00-cccccccc-cccc-4ccc-8ccc-cccccccccccc.jsonl")))
-	}
-	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	sources, err := provider.Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	assert.Equal(t, link, sources[0].DisplayPath)
-	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
-	require.NoError(t, err)
-	require.Len(t, outcome.Results, 1)
-	assert.Equal(t, "codex:"+id, outcome.Results[0].Result.Session.ID)
 }

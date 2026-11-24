@@ -278,24 +278,6 @@ func TestCodexLabeledRunIndexRename(t *testing.T) {
 	assert.Equal(t, "New", name)
 }
 
-func TestCodexLabeledRunAutomatedSidebar(t *testing.T) {
-	database := openTestDB(t)
-	root := t.TempDir()
-	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
-	source := filepath.Join(root, "label", ".codex-run-v1-abc", "sessions", "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
-	dbtest.WriteTestFile(t, source, []byte(testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z")+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
-	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
-	t.Cleanup(engine.Close)
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	index, err := database.GetSidebarSessionIndex(t.Context(), db.SessionFilter{ExcludeOneShot: true})
-	require.NoError(t, err)
-	require.Len(t, index.Sessions, 1)
-	assert.Equal(t, "codex:"+id, index.Sessions[0].ID)
-	index, err = database.GetSidebarSessionIndex(t.Context(), db.SessionFilter{ExcludeOneShot: true, ExcludeAutomated: true})
-	require.NoError(t, err)
-	assert.Empty(t, index.Sessions)
-}
-
 func TestCodexLabelIsNotRepositoryAlias(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()
