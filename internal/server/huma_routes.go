@@ -517,7 +517,7 @@ func writerClosedError(stale bool) error {
 
 func writerClosedResponse(appendHeader func(string, string), stale bool) *apiResponseError {
 	appendHeader("Retry-After", writerClosedRetryAfterSeconds)
-	message := "archive is briefly read-only for a maintenance pass; retry shortly"
+	message := "archive is read-only for a maintenance pass; retry after it finishes"
 	if stale {
 		message = "archive is read-only while it rebuilds"
 	}
