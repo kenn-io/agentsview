@@ -238,36 +238,13 @@ func TestCodexLabeledRunKeepsProjectThroughResyncAndMapping(t *testing.T) {
 	session, err = database.GetSessionFull(t.Context(), "codex:"+id)
 	require.NoError(t, err)
 	assert.Equal(t, "experiment/case", session.Project)
-	require.Zero(t, engine.ResyncAll(t.Context(), nil).Failed)
-	session, err = database.GetSessionFull(t.Context(), "codex:"+id)
-	require.NoError(t, err)
-	assert.Equal(t, "experiment/case", session.Project)
+	assert.True(t, session.LastWriteIncremental)
 	_, err = database.CreateWorktreeProjectMapping(t.Context(), db.WorktreeProjectMapping{Machine: "local", PathPrefix: cwd, Project: "mapped", Enabled: true})
 	require.NoError(t, err)
 	require.Zero(t, engine.ResyncAll(t.Context(), nil).Failed)
 	session, err = database.GetSessionFull(t.Context(), "codex:"+id)
 	require.NoError(t, err)
 	assert.Equal(t, "mapped", session.Project)
-}
-
-func TestSyncAllSinceCodexFindsChangedLabeledDuplicate(t *testing.T) {
-	database := openTestDB(t)
-	root := t.TempDir()
-	const id = "f6a7b8c9-6789-0123-def0-345678901234"
-	content := testjsonl.NewSessionBuilder().AddCodexMeta("2026-01-01T10:00:00Z", id, "/work/project", "user").AddCodexMessage("2026-01-01T10:00:01Z", "user", "review").String()
-	name := "rollout-2026-05-04T02-10-04-" + id + ".jsonl"
-	older := filepath.Join(root, "exp", "case", ".codex-run-v1-a", "sessions", "2026", "05", "04", name)
-	newer := filepath.Join(root, "exp", "case", ".codex-run-v1-b", "sessions", "2026", "05", "04", name)
-	dbtest.WriteTestFile(t, older, []byte(content))
-	dbtest.WriteTestFile(t, newer, []byte(content))
-	oldTime, newTime, cutoff := time.Now().Add(-2*time.Hour), time.Now().Add(-30*time.Minute), time.Now().Add(-time.Hour)
-	require.NoError(t, os.Chtimes(older, oldTime, oldTime))
-	require.NoError(t, os.Chtimes(newer, newTime, newTime))
-	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
-	t.Cleanup(engine.Close)
-	stats := engine.SyncAllSince(t.Context(), cutoff, nil)
-	require.Equal(t, 1, stats.Synced)
-	assert.Equal(t, newer, database.GetSessionFilePath(t.Context(), "codex:"+id))
 }
 
 func TestCodexLabeledLegacyReviewAndIndexRefresh(t *testing.T) {
@@ -278,35 +255,8 @@ func TestCodexLabeledLegacyReviewAndIndexRefresh(t *testing.T) {
 	source := filepath.Join(home, "sessions", "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
 	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z")
 	dbtest.WriteTestFile(t, source, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
-	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
-	t.Cleanup(engine.Close)
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	page, err := database.ListSessions(t.Context(), db.SessionFilter{Project: "experiment/case", Limit: 10})
-	require.NoError(t, err)
-	require.Len(t, page.Sessions, 1)
-	page, err = database.ListSessions(t.Context(), db.SessionFilter{Project: "experiment/case", ExcludeAutomated: true, Limit: 10})
-	require.NoError(t, err)
-	assert.Empty(t, page.Sessions)
 	index := filepath.Join(home, parser.CodexSessionIndexFilename)
-	dbtest.WriteTestFile(t, index, []byte(`{"id":"`+id+`","thread_name":"Updated"}`+"\n"))
-	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{index}))
-	session, err := database.GetSessionFull(t.Context(), "codex:"+id)
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	require.NotNil(t, session.SessionName)
-	assert.Equal(t, "Updated", *session.SessionName)
-}
-
-func TestCodexLabeledIndexWatchRefresh(t *testing.T) {
-	database := openTestDB(t)
-	root := t.TempDir()
-	id := "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
-	home := filepath.Join(root, "label", ".codex-run-v1-abc")
-	source := filepath.Join(home, "sessions", "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
-	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_cli_rs", "2026-10-08T12:00:00Z")
-	dbtest.WriteTestFile(t, source, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
-	index := filepath.Join(home, parser.CodexSessionIndexFilename)
-	dbtest.WriteTestFile(t, index, []byte(`{"id":"`+id+`","thread_name":"Old"}`+"\n"))
+	dbtest.WriteTestFile(t, index, []byte(`{"id":"`+id+`","thread_name":"Original"}`+"\n"))
 	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
 	t.Cleanup(engine.Close)
 	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
@@ -325,7 +275,7 @@ func TestCodexLabeledIndexWatchRefresh(t *testing.T) {
 	require.NoError(t, err)
 	watcher.Start()
 	t.Cleanup(watcher.Stop)
-	require.NoError(t, os.WriteFile(index, []byte(`{"id":"`+id+`","thread_name":"New"}`+"\n"), 0o644))
+	require.NoError(t, os.WriteFile(index, []byte(`{"id":"`+id+`","thread_name":"Updated"}`+"\n"), 0o644))
 	timeout := time.After(watcherTestTimeout)
 	for {
 		select {
@@ -333,7 +283,7 @@ func TestCodexLabeledIndexWatchRefresh(t *testing.T) {
 			require.NoError(t, err)
 			session, err := database.GetSessionFull(t.Context(), "codex:"+id)
 			require.NoError(t, err)
-			if session.SessionName != nil && *session.SessionName == "New" {
+			if session.SessionName != nil && *session.SessionName == "Updated" {
 				return
 			}
 		case <-timeout:

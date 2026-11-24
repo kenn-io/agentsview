@@ -73,7 +73,7 @@ func parseCodexTestSessionFrom(
 func discoverCodexTestSessions(t *testing.T, root string) []DiscoveredFile {
 	t.Helper()
 	provider := newCodexTestProvider(t, root)
-	paths := provider.sources.discoverSessionPaths(root)
+	paths := provider.sources.discoverSessionPaths(t.Context(), root)
 	if len(paths) == 0 {
 		return nil
 	}

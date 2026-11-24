@@ -406,26 +406,31 @@ func (p *codexProvider) AllSourcePathsForUUIDs(ctx context.Context, uuids map[st
 		if isS3URI(root) {
 			continue
 		}
-		_ = p.sources.discoverEachRoot(ctx, root, func(source SourceRef) error {
-			path := source.DisplayPath
-			uuid := CodexSessionUUIDFromFilename(filepath.Base(path))
-			if _, ok := uuids[uuid]; !ok {
-				return nil
+		collect := func(sessions string) {
+			for _, path := range p.sources.discoverSessionPaths(ctx, sessions) {
+				if ctx.Err() != nil {
+					return
+				}
+				uuid := CodexSessionUUIDFromFilename(filepath.Base(path))
+				if _, ok := uuids[uuid]; !ok {
+					continue
+				}
+				if _, _, ok := CodexSessionPathInfo(root, path); !ok {
+					continue
+				}
+				clean := filepath.Clean(path)
+				if _, ok := seen[clean]; ok {
+					continue
+				}
+				if isCompressedCodexRolloutPath(clean) && IsRegularFile(codexPlainRolloutPath(clean)) {
+					continue
+				}
+				seen[clean] = struct{}{}
+				paths[uuid] = append(paths[uuid], path)
 			}
-			if _, _, supported := CodexSessionPathInfo(root, path); !supported {
-				return nil
-			}
-			clean := filepath.Clean(path)
-			if _, ok := seen[clean]; ok {
-				return nil
-			}
-			if isCompressedCodexRolloutPath(clean) && IsRegularFile(codexPlainRolloutPath(clean)) {
-				return nil
-			}
-			seen[clean] = struct{}{}
-			paths[uuid] = append(paths[uuid], path)
-			return nil
-		})
+		}
+		collect(root)
+		_ = p.sources.walkLabeledHomes(ctx, root, root, func(home string) { collect(filepath.Join(home, "sessions")) })
 	}
 	return paths
 }
@@ -1023,7 +1028,7 @@ func (s codexSourceSet) discoverEachRoot(
 		// Reuse that result instead of issuing another lstat per rollout.
 		source, ok := s.sourceRef(root, path, false)
 		if !ok {
-			if _, _, supported := CodexSessionPathInfo(root, path); supported || CodexSessionUUIDFromFilename(entry.Name()) != "" {
+			if _, _, supported := CodexSessionPathInfo(root, path); supported {
 				source, ok = s.directPathSource(root, path, false)
 			}
 		}
@@ -1047,24 +1052,32 @@ func (s codexSourceSet) discover(
 		if !includeRoot(root) {
 			continue
 		}
-		collect := func(source SourceRef) error {
-			if current, ok := byKey[source.Key]; !ok || (!isS3URI(root) && preferCodexSource(source, current)) {
+		if strings.HasPrefix(root, "s3://") {
+			// s3:// roots have no local layout to walk: enumerate the objects
+			// directly and carry each one's durable metadata in the Opaque
+			// payload. Each object is its own session keyed by URI, so the
+			// live-over-archived preference (which inspects a local codexSource
+			// layout) does not apply here; only a compressed object beside its
+			// plain one is folded into it.
+			if !s.ownsCodexSidecars() {
+				continue
+			}
+			for _, file := range codexS3PreferredFiles(s3PrefixScan(root, codexS3Scanner())) {
+				source := s3SourceRefFromDiscoveredFile(root, file)
+				if _, ok := byKey[source.Key]; ok {
+					continue
+				}
+				byKey[source.Key] = source
+			}
+			continue
+		}
+		// An unreadable subdirectory leaves the rest of the walk's sources.
+		if err := s.discoverEachRoot(ctx, root, func(source SourceRef) error {
+			if current, ok := byKey[source.Key]; !ok || preferCodexSource(source, current) {
 				byKey[source.Key] = source
 			}
 			return nil
-		}
-		if !isS3URI(root) {
-			for _, path := range s.discoverSessionPaths(root) {
-				source, ok := s.sourceRef(root, path, true)
-				if !ok {
-					source, ok = s.directPathSource(root, path, true)
-				}
-				if ok {
-					_ = collect(source)
-				}
-			}
-		}
-		if err := s.discoverEachRoot(ctx, root, collect); err != nil && ctx.Err() != nil {
+		}); err != nil && ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
 	}
@@ -1079,14 +1092,20 @@ func (s codexSourceSet) discover(
 // sessionsDir, covering both the standard year/month/day layout and a flat
 // archived directory. Paths are returned sorted for deterministic discovery,
 // matching the behavior the package-level entrypoint provided before the fold.
-func (s codexSourceSet) discoverSessionPaths(sessionsDir string) []string {
+func (s codexSourceSet) discoverSessionPaths(ctx context.Context, sessionsDir string) []string {
 	var paths []string
+	if ctx.Err() != nil {
+		return nil
+	}
 
 	entries, err := os.ReadDir(sessionsDir)
 	if err != nil {
 		return nil
 	}
 	for _, entry := range entries {
+		if ctx.Err() != nil {
+			return paths
+		}
 		if entry.IsDir() {
 			continue
 		}
@@ -1097,6 +1116,9 @@ func (s codexSourceSet) discoverSessionPaths(sessionsDir string) []string {
 	}
 
 	walkCodexDayDirs(sessionsDir, func(dayPath string) bool {
+		if ctx.Err() != nil {
+			return false
+		}
 		dayEntries, err := os.ReadDir(dayPath)
 		if err != nil {
 			return true
@@ -1390,42 +1412,28 @@ func (s codexSourceSet) FindSource(
 	if req.RawSessionID == "" {
 		return SourceRef{}, false, nil
 	}
-	return s.findSourceByID(ctx, req.RawSessionID)
-}
-
-func (s codexSourceSet) findSourceByID(ctx context.Context, id string) (SourceRef, bool, error) {
+	for _, root := range s.roots {
+		path := s.findSourceFile(root, req.RawSessionID)
+		if path == "" {
+			continue
+		}
+		if source, ok := s.sourceRef(root, path, true); ok {
+			return s.canonicalSource(ctx, source)
+		}
+	}
 	var best SourceRef
 	found := false
 	for _, root := range s.roots {
-		if err := ctx.Err(); err != nil {
-			return SourceRef{}, false, err
-		}
-		if isS3URI(root) {
-			for _, file := range codexS3PreferredFiles(s3PrefixScan(root, codexS3Scanner())) {
-				source := s3SourceRefFromDiscoveredFile(root, file)
-				if source.Key == codexSourceKey(s.agent, id) {
-					return source, true, nil
-				}
-			}
-			continue
-		}
-		if path := s.findSourceFile(root, id); path != "" {
-			if source, ok := s.sourceRef(root, path, true); ok && (!found || preferCodexSource(source, best)) {
-				best, found = source, true
-			}
-		}
-	}
-	for _, root := range s.roots {
 		if isS3URI(root) {
 			continue
 		}
-		_ = s.findLabeledSource(ctx, root, root, id, func(source SourceRef) {
+		_ = s.findLabeledSource(ctx, root, root, req.RawSessionID, func(source SourceRef) {
 			if !found || preferCodexSource(source, best) {
 				best, found = source, true
 			}
 		})
-		if ctx.Err() != nil {
-			return SourceRef{}, false, ctx.Err()
+		if err := ctx.Err(); err != nil {
+			return SourceRef{}, false, err
 		}
 	}
 	return best, found, nil
@@ -1433,24 +1441,30 @@ func (s codexSourceSet) findSourceByID(ctx context.Context, id string) (SourceRe
 
 // findLabeledSource searches label directories and reads only sessions within each marked home.
 func (s codexSourceSet) findLabeledSource(ctx context.Context, root, dir, id string, yield func(SourceRef)) error {
+	return s.walkLabeledHomes(ctx, root, dir, func(home string) {
+		if transcript := s.findSourceFile(filepath.Join(home, "sessions"), id); transcript != "" {
+			if source, ok := s.sourceRef(root, transcript, true); ok {
+				yield(source)
+			}
+		}
+	})
+}
+
+func (s codexSourceSet) walkLabeledHomes(ctx context.Context, root, dir string, yield func(string)) error {
 	return streamDirectoryEntries(ctx, dir, func(entry os.DirEntry) error {
 		if !entry.IsDir() {
 			return nil
 		}
 		path := filepath.Join(dir, entry.Name())
 		if LabeledCodexHome(root, path) {
-			if transcript := s.findSourceFile(filepath.Join(path, "sessions"), id); transcript != "" {
-				if source, ok := s.sourceRef(root, transcript, true); ok {
-					yield(source)
-				}
-			}
+			yield(path)
 			return nil
 		}
-		_ = s.findLabeledSource(ctx, root, path, id, yield)
+		_ = s.walkLabeledHomes(ctx, root, path, yield)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return nil // Other label directories can still be read.
+		return nil
 	})
 }
 
@@ -1529,18 +1543,6 @@ func (s codexSourceSet) sourcesForIndexPath(
 		return nil, err
 	}
 	indexDir := filepath.Dir(indexPath)
-	for _, root := range s.roots {
-		if LabeledCodexHome(root, indexDir) {
-			var sources []SourceRef
-			err := s.discoverEachRoot(ctx, filepath.Join(indexDir, "sessions"), func(source SourceRef) error {
-				if labeled, ok := s.sourceRef(root, source.DisplayPath, false); ok {
-					sources = append(sources, labeled)
-				}
-				return nil
-			})
-			return sources, err
-		}
-	}
 	return s.discover(ctx, func(root string) bool {
 		return slices.Contains(s.metadata.dirs(root), indexDir)
 	})
@@ -1581,7 +1583,7 @@ func (s codexSourceSet) directPathSource(
 ) (SourceRef, bool) {
 	root = filepath.Clean(root)
 	path = filepath.Clean(path)
-	if !hasCodexRolloutSuffix(path) || !pathUnderRoot(root, path) || unknownCodexRunHome(root, path) {
+	if !hasCodexRolloutSuffix(path) || !pathUnderRoot(root, path) {
 		return SourceRef{}, false
 	}
 	if requireRegular && !IsRegularFile(path) {
@@ -1652,11 +1654,29 @@ func (s codexSourceSet) canonicalSource(
 	if !ok || src.UUID == "" {
 		return source, true, nil
 	}
-	preferred, err := s.preferredKnownRolloutSource(ctx, source)
-	if err != nil {
-		return SourceRef{}, false, err
+	var best SourceRef
+	foundExisting := false
+	for _, root := range s.roots {
+		if err := ctx.Err(); err != nil {
+			return SourceRef{}, false, err
+		}
+		path := s.findSourceFile(root, src.UUID)
+		if path == "" {
+			continue
+		}
+		candidate, ok := s.sourceRef(root, path, true)
+		if !ok {
+			continue
+		}
+		if !foundExisting || preferCodexSource(candidate, best) {
+			best = candidate
+			foundExisting = true
+		}
 	}
-	return preferred, true, nil
+	if !foundExisting {
+		return source, true, nil
+	}
+	return best, true, nil
 }
 
 func codexSourceKey(agent AgentType, uuid string) string {

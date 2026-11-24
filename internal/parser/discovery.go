@@ -879,24 +879,6 @@ func LabeledCodexHome(root, home string) bool {
 	return filepath.Dir(rel) != "." && strings.HasPrefix(filepath.Base(rel), ".codex-run-v1-")
 }
 
-func unknownCodexRunHome(root, path string) bool {
-	rel, err := filepath.Rel(root, path)
-	if err != nil {
-		return false
-	}
-	parts := strings.Split(rel, string(filepath.Separator))
-	n := len(parts)
-	if n < 6 || parts[n-5] != "sessions" {
-		return false
-	}
-	version, found := strings.CutPrefix(parts[n-6], ".codex-run-v")
-	if !found {
-		return false
-	}
-	version, _, found = strings.Cut(version, "-")
-	return found && IsDigits(version) && version != "1"
-}
-
 // CodexSourceLabel returns the label preceding a marked Codex run home.
 func CodexSourceLabel(root, path string) string {
 	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
