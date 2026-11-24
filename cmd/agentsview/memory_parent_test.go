@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -115,11 +116,15 @@ func TestCaptureLaunchParentLinksEachProviderPair(t *testing.T) {
 		{"codex.exe", "codex", "codex:" + childSessionID, "codex:" + codexLauncherID, []string{"CODEX_SESSION_ID=" + codexLauncherID}, nil, nil},
 		{"codex", "claude", "codex:" + childSessionID, claudeLauncherID, []string{"CLAUDE_CODE_SESSION_ID=" + claudeLauncherID}, []string{"e", "x"}, nil},
 		{"claude", "codex", childSessionID, "codex:" + codexLauncherID, nil, nil, []fakeProcess{
-			{name: "sh"}, {name: "claude", env: []string{"CLAUDE_CODE_SESSION_ID=" + claudeLauncherID, "CODEX_THREAD_ID=" + codexLauncherID}},
-			{name: "bash"}, {name: "codex"}, {name: "bash"}, {name: "claude"},
+			{name: "sh"},
+			{name: "claude", env: []string{"CLAUDE_CODE_SESSION_ID=" + claudeLauncherID, "CODEX_THREAD_ID=" + codexLauncherID}},
+			{name: "bash"},
+			{name: "codex"},
+			{name: "bash"},
+			{name: "claude"},
 		}},
 	} {
-		t.Run(tc.child+" from "+tc.launcher+fmt.Sprint(tc.args)+fmt.Sprint(len(tc.chain)), func(t *testing.T) {
+		t.Run(tc.child+" from "+tc.launcher+fmt.Sprint(tc.args)+strconv.Itoa(len(tc.chain)), func(t *testing.T) {
 			database := stubLaunchArchive(t)
 			chain := tc.chain
 			if chain == nil {
@@ -428,7 +433,6 @@ func TestCaptureDetachedCodexRevertPage(t *testing.T) {
 	link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
 	require.NoError(t, err)
 	assert.Equal(t, "codex:"+page, link.ParentSessionID)
-
 }
 
 func TestCaptureLaunchParentDoesNotGuessCodexPage(t *testing.T) {
@@ -438,9 +442,11 @@ func TestCaptureLaunchParentDoesNotGuessCodexPage(t *testing.T) {
 	}{
 		{"missing index", func(*testing.T, string) {}},
 		{"invalid index", func(t *testing.T, home string) {
+			t.Helper()
 			require.NoError(t, os.WriteFile(filepath.Join(home, "state_5.sqlite"), []byte("invalid"), 0o600))
 		}},
 		{"missing thread", func(t *testing.T, home string) {
+			t.Helper()
 			writeCodexState(t, home, childSessionID, childSessionID)
 		}},
 	} {

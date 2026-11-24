@@ -55,6 +55,7 @@ func openLocalLaunchParentArchive(ctx context.Context, cmd *cobra.Command) (*db.
 	if err != nil {
 		return nil, err
 	}
+	applyClassifierConfig(cfg)
 	return db.OpenReadOnly(ctx, cfg.DBPath)
 }
 
@@ -297,7 +298,7 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	parentID := ""
+	var parentID string
 	if ambiguous {
 		parentID, err = detachedLauncherParent(ctx, cmd, env)
 	} else {
