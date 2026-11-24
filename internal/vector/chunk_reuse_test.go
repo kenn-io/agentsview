@@ -275,7 +275,7 @@ func TestDeleteMirrorDocumentRemovesOnlyItsReuse(t *testing.T) {
 	require.NoError(t, err)
 	_, err = ix.db.ExecContext(ctx, `INSERT INTO message_vectors_reuse VALUES (1, ?, ?, x'0000803f0000000000000000'), (2, ?, ?, x'0000803f0000000000000000'), (1, ?, ?, x'0000803f0000000000000000')`, a, contentHash("first"), a, contentHash("first"), b, contentHash("second"))
 	require.NoError(t, err)
-	_, err = ix.deleteMirrorDocument(ctx, a)
+	_, err = ix.deleteMirrorDocument(ctx, a, nil)
 	require.NoError(t, err)
 	var key string
 	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT doc_key FROM message_vectors_reuse`).Scan(&key))
@@ -565,5 +565,85 @@ func TestBuildRetryClearsPreviouslySavedReuse(t *testing.T) {
 	_, err = ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{BatchSize: 1})
 	require.NoError(t, err)
 	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT count(*) FROM message_vectors_reuse WHERE ordinal = 1 AND doc_key = ?`, key).Scan(&count))
+	assert.Zero(t, count)
+}
+
+func TestBuildReusesRekeyedDocument(t *testing.T) {
+	for _, retry := range []bool{false, true} {
+		t.Run(fmt.Sprintf("retry=%t", retry), func(t *testing.T) {
+			ctx := t.Context()
+			ix := openTestIndex(t)
+			ix.split = kitvec.SplitOptions{MaxRunes: 10, Overlap: 2}
+			src := twoDocSource()
+			src.rows = src.rows[:1]
+			src.rows[0].unit.Content = "abcdefghijklmnopqrstuv"
+			gen := fakeGeneration("rekey")
+			_, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{BatchSize: 1})
+			require.NoError(t, err)
+			src.rows[0].unit.SourceUUID = "replacement"
+			src.rows[0].endedAt = "2025-01-01T00:00:00Z"
+			if retry {
+				src.rows[0].unit.Content = "abcdefghijZZZZZZZZZZ"
+			}
+			var inputs []string
+			enc := func(ctx context.Context, texts []string) ([][]float32, error) {
+				inputs = append(inputs, texts...)
+				if retry && strings.Contains(texts[0], "Z") {
+					return nil, errors.New("offline")
+				}
+				return fakeBuildEncoder()(ctx, texts)
+			}
+			_, err = ix.Build(ctx, src, enc, gen, BuildOptions{BatchSize: 1})
+			if !retry {
+				require.NoError(t, err)
+				assert.Empty(t, inputs)
+				return
+			}
+			require.Error(t, err)
+			assert.Equal(t, []string{"ijZZZZZZZZ"}, inputs)
+			inputs = nil
+			_, err = ix.Build(ctx, src, func(ctx context.Context, texts []string) ([][]float32, error) {
+				inputs = append(inputs, texts...)
+				return fakeBuildEncoder()(ctx, texts)
+			}, gen, BuildOptions{BatchSize: 1})
+			require.NoError(t, err)
+			assert.Equal(t, []string{"ijZZZZZZZZ", "ZZZZ"}, inputs)
+			var count int
+			require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT count(*) FROM message_vectors_reuse WHERE ordinal = 1`).Scan(&count))
+			assert.Zero(t, count)
+		})
+	}
+}
+
+func TestChunkTextBackfillRejectsUnknownVersion(t *testing.T) {
+	ctx := t.Context()
+	ix := openTestIndex(t)
+	require.NoError(t, ix.metaSet(ctx, chunkTextMarker+"1", "future"))
+	err := ix.backfillChunkText(ctx, 1)
+	require.ErrorContains(t, err, "future")
+	value, ok, err := ix.metaGet(ctx, chunkTextMarker+"1")
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, "future", value)
+}
+
+func TestClearRemovesRekeyedDonorsAfterFailedBuild(t *testing.T) {
+	ctx := t.Context()
+	ix := openTestIndex(t)
+	src := twoDocSource()
+	src.rows = src.rows[:1]
+	gen := fakeGeneration("clear-rekey")
+	_, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{})
+	require.NoError(t, err)
+	src.rows[0].unit.SourceUUID = "replacement"
+	src.rows[0].unit.Content = "different text"
+	src.rows[0].endedAt = "2025-01-01T00:00:00Z"
+	_, err = ix.Build(ctx, src, func(context.Context, []string) ([][]float32, error) { return nil, errors.New("offline") }, gen, BuildOptions{})
+	require.Error(t, err)
+	var count int
+	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT count(*) FROM message_vectors_reuse`).Scan(&count))
+	require.Positive(t, count)
+	require.NoError(t, ix.Clear(ctx))
+	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT count(*) FROM message_vectors_reuse`).Scan(&count))
 	assert.Zero(t, count)
 }

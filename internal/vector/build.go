@@ -301,6 +301,9 @@ func (ix *Index) Build(
 			return result, err
 		}
 		defer func() { _ = tx.Rollback() }()
+		if _, err := tx.ExecContext(ctx, `DELETE FROM `+ix.spec.reuseTable()+` WHERE ordinal = ? AND NOT EXISTS (SELECT 1 FROM `+ix.spec.DocsTable+` d WHERE d.doc_key = `+ix.spec.reuseTable()+`.doc_key)`, ordinal); err != nil {
+			return result, err
+		}
 		// A previous fill can save documents before a later document fails. On
 		// retry those completed documents are no longer passed to SaveVectors.
 		rows, err := tx.QueryContext(ctx, `SELECT DISTINCT d.doc_key, d.content, EXISTS (SELECT 1 FROM `+ix.spec.chunksTable()+` c WHERE c.ordinal = ? AND c.doc_key = d.doc_key) FROM `+ix.spec.reuseTable()+` r JOIN `+ix.spec.DocsTable+` d ON d.doc_key = r.doc_key JOIN `+ix.spec.stampsTable()+` s ON s.ordinal = r.ordinal AND s.doc_key = r.doc_key AND s.revision = d.content_hash WHERE r.ordinal = ?`, ordinal, ordinal)

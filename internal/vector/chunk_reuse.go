@@ -15,7 +15,10 @@ type reuseGeneration struct {
 	dimension int
 }
 
-const chunkTextMarker = "chunk_text_backfill:"
+const (
+	chunkTextMarker        = "chunk_text_backfill:"
+	chunkTextFormatVersion = "1"
+)
 
 type reuseCompletingStore struct {
 	*repairQueueCompletingStore
@@ -193,9 +196,15 @@ func (ix *Index) backfillChunkTextPageQuery() string {
 
 func (ix *Index) backfillChunkText(ctx context.Context, ordinal int64) error {
 	marker := chunkTextMarker + strconv.FormatInt(ordinal, 10)
-	_, done, err := ix.metaGet(ctx, marker)
-	if err != nil || done {
+	version, done, err := ix.metaGet(ctx, marker)
+	if err != nil {
 		return err
+	}
+	if done {
+		if version != chunkTextFormatVersion {
+			return fmt.Errorf("unsupported chunk text format %q", version)
+		}
+		return nil
 	}
 	after := ""
 	for {
@@ -248,5 +257,5 @@ func (ix *Index) backfillChunkText(ctx context.Context, ordinal int64) error {
 		}
 		after = docs[len(docs)-1].key
 	}
-	return ix.metaSet(ctx, marker, "1")
+	return ix.metaSet(ctx, marker, chunkTextFormatVersion)
 }
