@@ -235,15 +235,14 @@ func reconciliationRetryScope(err error) (
 		if isPaths || isRoots {
 			continue
 		}
-		{
-			var wrapped interface{ Unwrap() []error }
-			var wrapped1 interface{ Unwrap() error }
-			switch {
-			case errors.As(next, &wrapped):
-				pending = append(pending, wrapped.Unwrap()...)
-			case errors.As(next, &wrapped1):
-				pending = append(pending, wrapped1.Unwrap())
-			}
+		// Walk one level at a time; errors.As would skip intermediate
+		// wrappers that may carry their own scope.
+		if joined, ok := next.(interface{ Unwrap() []error }); ok {
+			pending = append(pending, joined.Unwrap()...)
+			continue
+		}
+		if wrapped, ok := next.(interface{ Unwrap() error }); ok {
+			pending = append(pending, wrapped.Unwrap())
 		}
 	}
 	return paths, hasPaths, roots, hasRoots

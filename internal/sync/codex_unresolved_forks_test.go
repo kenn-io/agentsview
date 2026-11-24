@@ -702,9 +702,16 @@ func TestScopedReconciliationWakesWaitingForkInSiblingDirectory(t *testing.T) {
 	const ts = "2026-07-08T10:00:00Z"
 
 	root := t.TempDir()
+	// The fork's cwd sits inside a local Git repository. With filesystem
+	// project discovery disabled, waking the fork must keep the lexical
+	// project instead of probing the repository.
+	repo := filepath.Join(t.TempDir(), "host-repo")
+	cwd := filepath.Join(repo, "nested-app")
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".git"), 0o700))
+	require.NoError(t, os.MkdirAll(cwd, 0o700))
 	childPath := filepath.Join(root, "2026", "07", "07", "rollout-2026-07-07T11-00-00-"+child+".jsonl")
 	writeCodexRolloutFile(t, childPath, testjsonl.JoinJSONL(
-		testjsonl.CodexForkedSessionMetaJSON(child, parent, "/work/project", "user", ts),
+		testjsonl.CodexForkedSessionMetaJSON(child, parent, cwd, "user", ts),
 		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "parent-turn", ts),
 		testjsonl.CodexMsgJSON("assistant", "replayed parent answer", ts),
 		testjsonl.CodexTokenCountJSON(ts, 100, 40, 0),
@@ -721,10 +728,13 @@ func TestScopedReconciliationWakesWaitingForkInSiblingDirectory(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 
-	_, err := engine.SyncWatchBatchThenRun(t.Context(), WatchBatch{Paths: []string{childPath}}, nil, nil)
-	require.Error(t, err)
-	_, err = engine.SyncWatchBatchThenRun(t.Context(), WatchBatch{Paths: []string{childPath}}, nil, nil)
+	// SyncPathsContext applies the engine's parse policy, so the stored
+	// project is the lexical one the wake must keep.
+	require.Error(t, engine.SyncPathsContext(t.Context(), []string{childPath}))
+	stored, err := database.GetSession(t.Context(), childID)
 	require.NoError(t, err)
+	require.NotNil(t, stored)
+	lexicalProject := stored.Project
 
 	// The parent arrives in another dated directory, and the watcher reports
 	// only that directory for reconciliation.
@@ -741,6 +751,57 @@ func TestScopedReconciliationWakesWaitingForkInSiblingDirectory(t *testing.T) {
 	assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), childID),
 		"a waiting fork outside the reconciled directory must wake when its parent appears")
 	assert.Equal(t, []string{"child answer"}, messageContents(t, database, childID))
+	woken, err := database.GetSession(t.Context(), childID)
+	require.NoError(t, err)
+	require.NotNil(t, woken)
+	assert.Equal(t, lexicalProject, woken.Project,
+		"waking a fork must apply the same project discovery policy as other parses")
+}
+
+func TestScopedReconciliationWithWokenForkKeepsAnomalies(t *testing.T) {
+	requirePollChangeTimes(t)
+	const parent = "cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd"
+	const child = "019f47aa-8888-4888-8888-888888888888"
+	const ts = "2026-07-08T10:00:00Z"
+
+	root := t.TempDir()
+	childPath := filepath.Join(root, "2026", "07", "07", "rollout-2026-07-07T11-00-00-"+child+".jsonl")
+	writeCodexRolloutFile(t, childPath, testjsonl.JoinJSONL(
+		testjsonl.CodexForkedSessionMetaJSON(child, parent, "/work/project", "user", ts),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", ts),
+		testjsonl.CodexMsgJSON("assistant", "child answer", ts),
+	), false)
+	database := openTestDB(t)
+	engine := NewEngine(t.Context(), database, EngineConfig{
+		AgentDirs:                         map[parser.AgentType][]string{parser.AgentCodex: {root}},
+		Machine:                           "local",
+		DisableFilesystemProjectDiscovery: true,
+	})
+	t.Cleanup(engine.Close)
+	_, err := engine.SyncWatchBatchThenRun(t.Context(), WatchBatch{Paths: []string{childPath}}, nil, nil)
+	require.Error(t, err)
+
+	// The reconciled directory holds the arriving parent and an unrelated
+	// rollout with a malformed line, so the pass reports a parser anomaly
+	// while it wakes the fork.
+	parentDir := filepath.Join(root, "2026", "07", "08")
+	writeCodexRolloutFile(t, filepath.Join(parentDir, "rollout-2026-07-08T09-00-00-"+parent+".jsonl"), testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(parent, "/work/project", "user", ts),
+		testjsonl.CodexMsgJSON("assistant", "parent answer", ts),
+	), false)
+	const noisyID = "efefefef-efef-4fef-8fef-efefefefefef"
+	writeCodexRolloutFile(t, filepath.Join(parentDir, "rollout-2026-07-08T10-00-00-"+noisyID+".jsonl"), testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(noisyID, "/work/project", "user", ts),
+		"{not json",
+		testjsonl.CodexMsgJSON("assistant", "noisy answer", ts),
+	), false)
+
+	stats, err := engine.SyncWatchBatchThenRun(t.Context(), WatchBatch{ReconcileRoots: []string{parentDir}}, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), "codex:"+child),
+		"the fork must wake in the same pass")
+	assert.Equal(t, 1, stats.Anomalies.MalformedLinesTotal,
+		"waking forks must not erase the reconciliation pass's anomalies")
 }
 
 func TestWatchBatchReconciliationErrorRetriesEveryJoinedSource(t *testing.T) {

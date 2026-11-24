@@ -4321,10 +4321,18 @@ func (e *Engine) reconcileScopedWatchRootsLocked(
 		ctx, plans, fullCoverage, force, onProgress,
 	)
 	if len(wakePaths) > 0 && ctx.Err() == nil && !stats.Aborted {
-		wakeStats, wakeTombstoned, wakeErr := e.syncChangedPathsLocked(ctx, wakePaths)
+		wakeStats, wakeTombstoned, wakeErr := e.syncChangedPathsLocked(
+			e.parsePolicyContext(ctx), wakePaths,
+		)
 		var merged SyncStats
 		mergeReconciliationSyncStats(&merged, stats)
 		mergeReconciliationSyncStats(&merged, wakeStats)
+		// The merge helper skips these, but both phases must report them.
+		merged.Anomalies.merge(stats.Anomalies)
+		merged.Anomalies.merge(wakeStats.Anomalies)
+		merged.providerFailures = stats.providerFailures + wakeStats.providerFailures
+		merged.providerProcessingFailures = stats.providerProcessingFailures +
+			wakeStats.providerProcessingFailures
 		stats = merged
 		tombstoned += wakeTombstoned
 		if wakeErr != nil {
