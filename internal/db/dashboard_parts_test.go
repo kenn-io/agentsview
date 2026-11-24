@@ -429,3 +429,49 @@ func TestDashboardPartsMemoRespectsSizeLimit(t *testing.T) {
 		assert.NotEmpty(t, parts)
 	})
 }
+
+func TestDashboardPartsFallsBackWhenWriterClosed(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "s", "project", func(s *Session) {
+		s.StartedAt = new("2024-06-01T09:00:00Z")
+		s.MessageCount = 2
+	})
+	assistant := asstMsgAt("s", 1, "answer", "2024-06-01T09:01:00Z")
+	assistant.ToolCalls = []ToolCall{{SessionID: "s", ToolName: "Read", Category: "Read"}}
+	insertMessages(t, d, userMsgAt("s", 0, "hello", "2024-06-01T09:00:00Z"), assistant)
+	_, err := d.getWriter().ExecContext(ctx, `UPDATE sessions SET tools_generation = NULL WHERE id = 's'`)
+	require.NoError(t, err)
+	f := AnalyticsFilter{Timezone: "UTC"}
+
+	// Record the direct reads without building dashboard parts or stamping the dirty session.
+	d.readOnly = true
+	activity, err := d.GetAnalyticsActivity(ctx, f, "day")
+	require.NoError(t, err)
+	hours, err := d.GetAnalyticsHourOfWeek(ctx, f)
+	require.NoError(t, err)
+	velocity, err := d.GetAnalyticsVelocity(ctx, f)
+	require.NoError(t, err)
+	d.readOnly = false
+	require.Len(t, activity.Series, 1)
+	assert.Equal(t, 2, activity.Series[0].Messages)
+	assert.Equal(t, 1, activity.Series[0].ToolCalls)
+	require.NoError(t, d.CloseWriter())
+
+	t.Run("activity", func(t *testing.T) {
+		got, err := d.GetAnalyticsActivity(ctx, f, "day")
+		require.NoError(t, err)
+		assert.Equal(t, activity, got)
+	})
+	t.Run("hour of week", func(t *testing.T) {
+		got, err := d.GetAnalyticsHourOfWeek(ctx, f)
+		require.NoError(t, err)
+		assert.Equal(t, hours, got)
+	})
+	t.Run("velocity", func(t *testing.T) {
+		got, err := d.GetAnalyticsVelocity(ctx, f)
+		require.NoError(t, err)
+		assert.Equal(t, velocity, got)
+	})
+}
