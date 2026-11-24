@@ -68,7 +68,7 @@ const (
 	// 999-variable limit so binaries built against older SQLite
 	// versions still work.
 	messageInsertRowsPerStmt         = 31  // 32 params per row
-	toolCallInsertRowsPerStmt        = 66  // 15 params per row
+	toolCallInsertRowsPerStmt        = 58  // 17 params per row
 	toolResultEventInsertRowsPerStmt = 70  // 14 params per row
 	toolCallAgentStateRowsPerStmt    = 142 // 7 params per row
 )
