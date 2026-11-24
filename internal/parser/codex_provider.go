@@ -1060,7 +1060,7 @@ func (s codexSourceSet) discover(
 		if withLabeled {
 			err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 				if err != nil {
-					return nil
+					return nil //nolint:nilerr // Discovery skips unreadable paths and keeps available sessions.
 				}
 				if err := ctx.Err(); err != nil {
 					return err
