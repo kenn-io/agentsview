@@ -168,6 +168,52 @@ func unwrapPRCommand(args []*syntax.Word) ([]*syntax.Word, bool) {
 	return args, unknown
 }
 
+// hoistPRRepoFlags moves leading -R/--repo flags after the gh pr subcommand so
+// they parse like flags written after it.
+func hoistPRRepoFlags(args []*syntax.Word) []*syntax.Word {
+	pr := 1
+	for pr < len(args) {
+		word, ok := shellLiteral(args[pr].Parts)
+		if !ok {
+			break
+		}
+		if word == "-R" || word == "--repo" {
+			pr += 2
+		} else if strings.HasPrefix(word, "-R") && len(word) > 2 || strings.HasPrefix(word, "--repo=") {
+			pr++
+		} else {
+			break
+		}
+	}
+	if pr > 1 && pr+1 < len(args) {
+		ordered := append([]*syntax.Word{args[0], args[pr], args[pr+1]}, args[1:pr]...)
+		return append(ordered, args[pr+2:]...)
+	}
+	return args
+}
+
+func shellWords(args []*syntax.Word) ([]string, []bool) {
+	words := make([]string, len(args))
+	literal := make([]bool, len(args))
+	for i, word := range args {
+		words[i], literal[i] = shellLiteral(word.Parts)
+	}
+	return words, literal
+}
+
+func selectPRHost(explicitHost, remoteHost string, specified, hostUnknown bool) string {
+	if explicitHost != "" {
+		return explicitHost
+	}
+	if remoteHost != "" && !hostUnknown {
+		return remoteHost
+	}
+	if specified && !hostUnknown {
+		return "github.com"
+	}
+	return ""
+}
+
 // AnalyzePRCommand extracts links and shared shell context from one parse.
 func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBare, hostUnknown bool) ([]PRLink, bool, bool, bool, []PRLink, error) {
 	if err := ctx.Err(); err != nil {
@@ -193,29 +239,8 @@ func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 			continue
 		}
 		bareSafe := allowBare && !entry.directory && !entry.repository && !wrapperUnknown
-		pr := 1
-		for pr < len(args) {
-			word, ok := shellLiteral(args[pr].Parts)
-			if !ok {
-				break
-			}
-			if word == "-R" || word == "--repo" {
-				pr += 2
-			} else if strings.HasPrefix(word, "-R") && len(word) > 2 || strings.HasPrefix(word, "--repo=") {
-				pr++
-			} else {
-				break
-			}
-		}
-		if pr > 1 && pr+1 < len(args) {
-			ordered := append([]*syntax.Word{args[0], args[pr], args[pr+1]}, args[1:pr]...)
-			args = append(ordered, args[pr+2:]...)
-		}
-		words := make([]string, len(args))
-		literal := make([]bool, len(args))
-		for i, word := range args {
-			words[i], literal[i] = shellLiteral(word.Parts)
-		}
+		args = hoistPRRepoFlags(args)
+		words, literal := shellWords(args)
 		if len(words) < 4 || !literal[0] || !literal[1] || !literal[2] || words[0] != "gh" || words[1] != "pr" {
 			continue
 		}
@@ -298,15 +323,7 @@ func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 		if !repoPathRE.MatchString(repo) {
 			continue
 		}
-		selectedHost := ""
-		if explicitHost != "" {
-			selectedHost = explicitHost
-		} else if remoteHost != "" && !callHostUnknown {
-			selectedHost = remoteHost
-		}
-		if selectedHost == "" && specified && !callHostUnknown {
-			selectedHost = "github.com"
-		}
+		selectedHost := selectPRHost(explicitHost, remoteHost, specified, callHostUnknown)
 		if selectedHost == "" {
 			continue
 		}
