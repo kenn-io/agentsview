@@ -769,7 +769,5 @@ func (ix *Index) Clear(ctx context.Context) error {
 const scopeAgentsKey = "scope_agents"
 
 func normalizedAgents(agents []string) []string {
-	sorted := slices.Clone(agents)
-	slices.Sort(sorted)
-	return slices.Compact(sorted)
+	return slices.Compact(db.SortedCopy(agents))
 }

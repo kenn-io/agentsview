@@ -665,7 +665,8 @@ you want automated sessions embedded on every build, set
 
 `--repair-invalid` targets the existing generation whose fingerprint matches
 your current embedding configuration, and it fails without writing if that
-generation does not exist. It does not accept a generation ID. The command scans
+generation does not exist. After changing `agents`, run an ordinary build before
+repairing invalid vectors. It does not accept a generation ID. The command scans
 stored documents with a revision-current generation stamp in bounded batches and
 checks for malformed byte length, a length that differs from the generation's
 declared dimension, missing referenced vector rows, duplicate, missing, or

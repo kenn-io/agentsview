@@ -18,6 +18,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/kit/embedclient"
 	kitvec "go.kenn.io/kit/vector"
 )
@@ -1039,4 +1041,41 @@ func buildWithoutResult(
 
 func fmtInt64(value int64) string {
 	return strconv.FormatInt(value, 10)
+}
+
+func TestBuildRepairInvalidRejectsChangedAgentScope(t *testing.T) {
+	ctx := t.Context()
+	archive := dbtest.OpenTestDB(t)
+	for _, agent := range []string{"claude", "codex"} {
+		dbtest.SeedSessionWithMessages(t, archive, agent, "project", []db.Message{dbtest.UserMsg(agent, 0, agent+" message")}, func(s *db.Session) { s.Agent = agent })
+	}
+	ix := openTestIndex(t)
+	gen := fakeGeneration("active-model")
+	_, err := ix.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{})
+	require.NoError(t, err)
+	ordinal, err := ix.ordinalForFingerprint(ctx, gen.Fingerprint())
+	require.NoError(t, err)
+	changed, err := ix.db.ExecContext(ctx, `UPDATE message_vectors_v`+fmtInt64(ordinal)+` SET embedding = ? WHERE rowid = (SELECT c.vec_rowid FROM message_vectors_chunks c JOIN vector_messages m ON m.doc_key = c.doc_key WHERE c.ordinal = ? AND m.session_id = 'codex')`, make([]byte, 12), ordinal)
+	require.NoError(t, err)
+	rows, err := changed.RowsAffected()
+	require.NoError(t, err)
+	require.EqualValues(t, 1, rows)
+	var encoded []string
+	enc := func(_ context.Context, texts []string) ([][]float32, error) {
+		encoded = append(encoded, texts...)
+		return fakeBuildEncoder()(ctx, texts)
+	}
+	_, err = ix.Build(ctx, archive, enc, gen, BuildOptions{RepairInvalid: true, Agents: []string{"claude"}})
+	assert.Empty(t, encoded)
+	require.ErrorContains(t, err, "run an embeddings build")
+	_, err = ix.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{Agents: []string{"claude"}})
+	require.NoError(t, err)
+	_, err = ix.Build(ctx, archive, enc, gen, BuildOptions{RepairInvalid: true, Agents: []string{"claude"}})
+	require.NoError(t, err)
+	assert.Empty(t, encoded)
+	assert.Equal(t, []string{"claude"}, mirrorSessionIDs(t, ix))
+	require.NoError(t, ix.metaDelete(ctx, scopeIncludeAutomatedKey))
+	_, err = ix.Build(ctx, archive, enc, gen, BuildOptions{RepairInvalid: true, Agents: []string{"claude"}})
+	require.ErrorContains(t, err, "run an embeddings build")
+	assert.Empty(t, encoded)
 }
