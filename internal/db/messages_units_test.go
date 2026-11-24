@@ -794,7 +794,7 @@ func TestScanEmbeddableUnitsAgents(t *testing.T) {
 		require.NoError(t, err)
 		assert.ElementsMatch(t, []string{"auto", "claude"}, got)
 	}
-	err := d.ScanEmbeddableUnitsForSession(t.Context(), "codex", false, []string{"claude"}, UncappedRunRunes, func(EmbeddableUnit) error { t.Error("excluded session returned"); return nil })
+	err := d.ScanEmbeddableUnitsForSession(t.Context(), "codex", false, []string{"claude"}, UncappedRunRunes, func(EmbeddableUnit) error { assert.Fail(t, "excluded session returned"); return nil })
 	require.NoError(t, err)
 	got, _ := scanUnits(t, d, "", false)
 	assert.Len(t, got, 2)
