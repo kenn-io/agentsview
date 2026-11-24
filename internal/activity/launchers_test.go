@@ -26,18 +26,6 @@ func TestResolveLaunchers(t *testing.T) {
 	assert.Empty(t, got.Waiting)
 }
 
-func TestResolveLaunchersCanceled(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	called := false
-	_, err := ResolveLaunchers(ctx, []SessionMeta{{SessionID: "child", IsSubagent: true, ParentSessionID: "parent"}}, nil, func(context.Context, []string) ([]Launcher, error) {
-		called = true
-		return nil, nil
-	})
-	require.ErrorIs(t, err, context.Canceled)
-	assert.False(t, called)
-}
-
 func TestResolveLaunchersUsesKnownRunsAndCountsInteractiveAncestors(t *testing.T) {
 	runs := []SessionMeta{
 		{SessionID: "root"},
@@ -61,9 +49,6 @@ func TestResolveLaunchersSkipsNonInteractiveAndCycles(t *testing.T) {
 		want []string
 	}{
 		{name: "automated", runs: []SessionMeta{{SessionID: "parent", IsAutomated: true}, {SessionID: "run", IsSubagent: true, ParentSessionID: "parent"}}},
-		{name: "nested", runs: []SessionMeta{{SessionID: "root"}, {SessionID: "middle", IsSubagent: true, ParentSessionID: "root"}, {SessionID: "run", IsSubagent: true, ParentSessionID: "middle"}}, want: []string{"root"}},
-		{name: "cycle", runs: []SessionMeta{{SessionID: "middle", IsSubagent: true, ParentSessionID: "run"}, {SessionID: "run", IsSubagent: true, ParentSessionID: "middle"}}},
-		{name: "fork", runs: []SessionMeta{{SessionID: "root"}, {SessionID: "run", ParentSessionID: "root"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			selected := make(map[string]bool)

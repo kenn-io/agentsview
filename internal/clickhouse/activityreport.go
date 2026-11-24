@@ -60,7 +60,6 @@ func (s *Store) GetActivityReport(
 
 type activityReportBackend struct {
 	*Store
-	filter        db.AnalyticsFilter
 	launchers     *activity.Launchers
 	candidates    chSessionSet
 	rangeStartUTC string
@@ -73,12 +72,8 @@ func (b activityReportBackend) ActivityReportEvidence(_ context.Context, _ activ
 	return b.evidence, nil
 }
 
-func (b activityReportBackend) ActivityReportLaunchers(ctx context.Context, sessions []activity.SessionMeta, selected map[string]bool, _ activity.Query) (activity.Launchers, error) {
-	if b.launchers != nil {
-		return *b.launchers, nil
-	}
-	result, _, err := b.activityReportLaunchers(ctx, b.filter, sessions, selected)
-	return result, err
+func (b activityReportBackend) ActivityReportLaunchers(_ context.Context, _ []activity.SessionMeta, _ map[string]bool, _ activity.Query) (activity.Launchers, error) {
+	return *b.launchers, nil
 }
 
 func (s *Store) activityReportLaunchers(ctx context.Context, filter db.AnalyticsFilter, runs []activity.SessionMeta, selected map[string]bool) (activity.Launchers, map[string]uint64, error) {
@@ -269,7 +264,7 @@ func (s *Store) BuildActivityReportArtifacts(
 	defer cancelPairs()
 	pairs := s.startActivityReportPairs(pairCtx, sweepIDs, versions, q)
 	backend := activityReportBackend{
-		Store: s, filter: f, launchers: resolvedLaunchers, candidates: candidates,
+		Store: s, launchers: resolvedLaunchers, candidates: candidates,
 		rangeStartUTC: rangeStartUTC, rangeEndUTC: rangeEndUTC, pairing: pairs, evidence: evidence,
 	}
 	artifacts, done, err := activity.BuildReportArtifacts(

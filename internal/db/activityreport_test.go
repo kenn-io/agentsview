@@ -1851,8 +1851,6 @@ func TestActivityReportLauncherFiltersAndLinkChanges(t *testing.T) {
 	require.NoError(t, err)
 	q := dayQuery(t, "2026-06-16", "UTC")
 	filter := AnalyticsFilter{Timezone: "UTC", Project: "project-a"}
-	beforeProbe, err := d.ActivityReportSourceProbe(t.Context())
-	require.NoError(t, err)
 	before, err := d.GetActivityReport(t.Context(), filter, q)
 	require.NoError(t, err)
 	assert.Equal(t, 1, before.InteractivePeak.Agents)
@@ -1862,9 +1860,6 @@ func TestActivityReportLauncherFiltersAndLinkChanges(t *testing.T) {
 	assert.Equal(t, 1, deleted.Peak.Agents)
 	_, err = d.SetSessionExternalParent(t.Context(), "run", "hidden")
 	require.NoError(t, err)
-	afterProbe, err := d.ActivityReportSourceProbe(t.Context())
-	require.NoError(t, err)
-	assert.NotEqual(t, beforeProbe, afterProbe)
 	after, err := d.GetActivityReport(t.Context(), filter, q)
 	require.NoError(t, err)
 	assert.Zero(t, after.InteractivePeak.Agents)

@@ -23,16 +23,14 @@ type Launchers struct {
 // ResolveLaunchers loads unknown ancestors and finds interactive launchers for each run.
 func ResolveLaunchers(ctx context.Context, runs []SessionMeta, selected map[string]bool, load func(context.Context, []string) ([]Launcher, error)) (Launchers, error) {
 	rows := make(map[string]Launcher, len(runs))
+	var pending []string
 	for _, run := range runs {
 		rows[run.SessionID] = Launcher{ID: run.SessionID, IsAutomated: run.IsAutomated, IsSubagent: run.IsSubagent, ParentSessionID: run.ParentSessionID, Counted: selected[run.SessionID]}
-	}
-	examined := make(map[string]struct{})
-	pending := make([]string, 0, len(runs))
-	for _, run := range runs {
 		if run.IsSubagent && run.ParentSessionID != "" {
 			pending = append(pending, run.ParentSessionID)
 		}
 	}
+	examined := make(map[string]struct{})
 	for len(pending) > 0 {
 		var ids []string
 		for _, id := range pending {
@@ -59,10 +57,6 @@ func ResolveLaunchers(ctx context.Context, runs []SessionMeta, selected map[stri
 		if len(missing) == 0 {
 			continue
 		}
-		if err := ctx.Err(); err != nil {
-			return Launchers{}, err
-		}
-		slices.Sort(missing)
 		loaded, err := load(ctx, missing)
 		if err != nil {
 			return Launchers{}, err

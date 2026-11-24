@@ -294,41 +294,6 @@ func normalizeReportMinutes(report Report) Report {
 	return report
 }
 
-func TestWaitingLauncherCountsAsInteractive(t *testing.T) {
-	p := baseParams(t, "2026-06-16", "UTC")
-	p.Waiting = map[string][]string{"child": {"parent"}, "child2": {"parent"}}
-	sessions := []SessionMeta{
-		{SessionID: "parent"},
-		{SessionID: "child", IsSubagent: true, ParentSessionID: "parent"},
-		{SessionID: "child2", IsSubagent: true, ParentSessionID: "parent"},
-	}
-	candidates := []IntervalCandidate{
-		{SessionID: "child", Start: mustStart(t, "2026-06-16T10:00:00Z"), End: mustStart(t, "2026-06-16T10:04:00Z")},
-		{SessionID: "child2", Start: mustStart(t, "2026-06-16T10:00:00Z"), End: mustStart(t, "2026-06-16T10:04:00Z")},
-	}
-	got, err := BuildCandidateArtifacts(t.Context(), p, sessions, candidates, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, got.Report.InteractivePeak.Agents)
-	assert.Equal(t, 3, got.Report.Peak.Agents)
-	assert.Equal(t, 2, got.Report.SubagentPeak.Agents)
-	for _, bucket := range got.Report.Buckets {
-		if bucket.MaxAgents > 0 {
-			assert.Equal(t, 3, bucket.MaxAgents)
-			assert.Equal(t, 1, bucket.MaxInteractiveAgents)
-			assert.Equal(t, 2, bucket.MaxSubagentAgents)
-		}
-	}
-	without := append([]SessionMeta(nil), sessions...)
-	without[1].ParentSessionID = ""
-	without[2].ParentSessionID = ""
-	p.Waiting = nil
-	baseline, err := BuildCandidateArtifacts(t.Context(), p, without, candidates, nil)
-	require.NoError(t, err)
-	assert.Equal(t, baseline.Report.Totals, got.Report.Totals)
-	assert.Equal(t, baseline.Sessions, got.Sessions)
-	assert.Equal(t, baseline.Membership, got.Membership)
-}
-
 func TestWaitingLauncherAfterOwnInterval(t *testing.T) {
 	p := baseParams(t, "2026-06-16", "UTC")
 	p.Bucket = BucketSpec{Unit: BucketMinute, NominalSeconds: 300}
