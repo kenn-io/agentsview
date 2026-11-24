@@ -818,6 +818,10 @@ under that run.
   still appears under its launcher once both sessions sync.
 - Only a fresh start records a link. Resuming, clearing, or compacting a
   session never restores a link you removed with `--clear`.
+- If the archive is busy or the daemon is unreachable, the hook retries until
+  its two-second limit, then lets the session start without the link.
+- `AGENTSVIEW_DISABLE_AUTO_SYNC=1` turns off linking along with the memory
+  refresh.
 - The hook finds the launcher from process ancestry and the launcher's
   `CLAUDE_CODE_SESSION_ID` or `CODEX_THREAD_ID` variable. A launcher run
   through a wrapper process, such as `node`, is not recognized.

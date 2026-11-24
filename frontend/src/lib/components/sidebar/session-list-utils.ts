@@ -137,15 +137,19 @@ export function subagentDescendantMatcher(
   return sessionAncestryMatcher(groupSessions, isSubagent);
 }
 
-function parentOf(s: SessionGroupInput): string | undefined {
-  return s.parent_session_id ?? s.parent_session_ids?.[0] ?? undefined;
+function parentsOf(s: SessionGroupInput): string[] {
+  const ids = s.parent_session_id ? [s.parent_session_id] : [];
+  for (const id of s.parent_session_ids ?? []) if (!ids.includes(id)) ids.push(id);
+  return ids;
 }
 
 /**
  * Map each subagent's nearest visible subagent ancestor ("" for the
  * group root) to its children, keeping the input's sibling order. The
- * ancestry walk uses the unfiltered pool so a hidden parent passes its
- * children up to the next visible ancestor.
+ * walk checks every parent of a run, so a run shared by two launchers
+ * nests under whichever one this group shows, and it uses the
+ * unfiltered pool so a hidden parent passes its children up to the
+ * next visible ancestor.
  */
 function subagentTree(
   subagents: SessionGroupInput[],
@@ -157,14 +161,20 @@ function subagentTree(
   for (const s of subagents) {
     let parent = "";
     const seen = new Set([s.id]);
-    for (let id = parentOf(s); id && !seen.has(id);) {
-      if (visible.has(id)) {
-        parent = id;
-        break;
+    let level = parentsOf(s);
+    while (level.length && !parent) {
+      const next: string[] = [];
+      for (const id of level) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+        if (visible.has(id)) {
+          parent = id;
+          break;
+        }
+        const row = byId.get(id);
+        if (row) next.push(...parentsOf(row));
       }
-      seen.add(id);
-      const next = byId.get(id);
-      id = next ? parentOf(next) : undefined;
+      level = next;
     }
     let list = childrenOf.get(parent);
     if (!list) {

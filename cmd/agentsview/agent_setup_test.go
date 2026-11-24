@@ -508,3 +508,31 @@ func TestAgentSetupInstallsSessionStartHook(t *testing.T) {
 		})
 	}
 }
+
+func TestAgentSetupLeavesSessionStartHookToEnabledMemoryPlugin(t *testing.T) {
+	home := t.TempDir()
+	setDoctorMemoryTestEnvironment(t, home)
+	setupHooks = agentsetup.Hooks
+	fakeAgent(t, "claude", "")
+	settings := `{"enabledPlugins":{"agentsview-memory@agentsview":true}}`
+	path := filepath.Join(home, ".claude", "settings.json")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, []byte(settings), 0o600))
+
+	out, _ := executeCommand(newRootCommand(), "agent", "setup", "--agent", "claude", "--mcp=false", "--json")
+	var report struct {
+		Rows []struct {
+			Piece  string `json:"piece"`
+			State  string `json:"state"`
+			Reason string `json:"reason"`
+		} `json:"rows"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &report), out)
+	require.Len(t, report.Rows, 2, out)
+	require.Equal(t, "hooks", report.Rows[1].Piece)
+	require.Equal(t, "ok", report.Rows[1].State)
+	require.Contains(t, report.Rows[1].Reason, "agentsview-memory plugin")
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, settings, string(data))
+}

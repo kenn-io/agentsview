@@ -2505,6 +2505,8 @@ It refreshes memory and links a `claude -p` or `codex exec` run to the session
 that started it; see
 [runs launched from Claude Code and Codex](session-api.md#runs-launched-from-claude-code-and-codex).
 Setup adds the hook beside your own hooks, with or without `--mcp=false`.
+When the AgentsView memory plugin is enabled in Claude Code, setup leaves the
+hook to the plugin, so the command runs once per session start.
 Codex reports a new hook as untrusted until you review it in `/hooks`, and
 setup shows that state.
 

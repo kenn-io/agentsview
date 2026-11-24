@@ -5,15 +5,18 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/shirou/gopsutil/v4/process"
 	"github.com/spf13/cobra"
 	"go.kenn.io/kit/agenthook"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/gittrailer"
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -23,6 +26,9 @@ const (
 	// hook shell, child agent, its wrapper, the launcher's shell, launcher.
 	launcherAncestryLimit  = 32
 	launcherHookInputLimit = 1 << 20
+
+	launchParentRetryDelay    = 100 * time.Millisecond
+	launchParentRetryMaxDelay = 400 * time.Millisecond
 )
 
 // launchProcess is the part of a process the launcher walk reads.
@@ -219,6 +225,31 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 	if parentID, err = storedSessionID(launcher, parentID); err != nil {
 		return err
 	}
+	return recordLaunchParent(ctx, cmd, childID, parentID)
+}
+
+// recordLaunchParent retries a busy archive or an unreachable daemon until
+// the hook's deadline, since no later event writes the link. It gives up at
+// once on a link the archive rejects or a read-only backend.
+func recordLaunchParent(ctx context.Context, cmd *cobra.Command, childID, parentID string) error {
+	delay := launchParentRetryDelay
+	for {
+		err := writeLaunchParent(ctx, cmd, childID, parentID)
+		if err == nil || errors.Is(err, db.ErrSessionExternalParentInvalid) || errors.Is(err, db.ErrReadOnly) {
+			return err
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return err
+		case <-timer.C:
+		}
+		delay = min(2*delay, launchParentRetryMaxDelay)
+	}
+}
+
+func writeLaunchParent(ctx context.Context, cmd *cobra.Command, childID, parentID string) error {
 	annotator, cleanup, err := resolveLaunchAnnotator(ctx, cmd)
 	if err != nil {
 		return err

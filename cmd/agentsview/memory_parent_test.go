@@ -9,6 +9,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
@@ -214,4 +216,107 @@ func TestLookupGopsutilProcessReadsAncestryAndEnvironment(t *testing.T) {
 		t.Skipf("process environment is unavailable here: %v", err)
 	}
 	assert.NotEmpty(t, env)
+}
+
+func TestMemorySessionStartDisableSwitchSkipsLauncherLink(t *testing.T) {
+	original := runMemorySessionStart
+	t.Cleanup(func() { runMemorySessionStart = original })
+	runMemorySessionStart = func(context.Context, memorySessionStartRequest) error { return nil }
+	t.Setenv("AGENTSVIEW_DISABLE_AUTO_SYNC", "1")
+	database := stubLaunchArchive(t)
+	stubLaunchProcesses(t,
+		fakeProcess{name: "sh"},
+		fakeProcess{name: "claude", env: []string{"CODEX_THREAD_ID=" + codexLauncherID}},
+		fakeProcess{name: "codex"},
+	)
+
+	cmd := newRootCommand()
+	cmd.SetIn(strings.NewReader(sessionStartPayload("startup")))
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"memory", "session-start", "--hook"})
+	require.NoError(t, cmd.Execute())
+	_, err := database.GetSessionExternalParent(t.Context(), childSessionID)
+	require.ErrorIs(t, err, sql.ErrNoRows)
+}
+
+// flakyAnnotator fails its first `failures` writes, then records the link.
+type flakyAnnotator struct {
+	service.SessionAnnotator
+	failures, calls int
+	err             error
+	child, parent   string
+}
+
+func (a *flakyAnnotator) SetSessionParent(_ context.Context, id, parentID string) (*db.SessionExternalParent, error) {
+	a.calls++
+	if a.calls <= a.failures {
+		return nil, a.err
+	}
+	a.child, a.parent = id, parentID
+	return &db.SessionExternalParent{SessionID: id, ParentSessionID: parentID}, nil
+}
+
+func stubFlakyLaunchArchive(t *testing.T, annotator *flakyAnnotator) {
+	t.Helper()
+	original := resolveLaunchAnnotator
+	t.Cleanup(func() { resolveLaunchAnnotator = original })
+	resolveLaunchAnnotator = func(context.Context, *cobra.Command) (service.SessionAnnotator, func(), error) {
+		return annotator, func() {}, nil
+	}
+}
+
+func TestCaptureLaunchParentRetriesTransientWriteFailure(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		annotator := &flakyAnnotator{failures: 2, err: errors.New("database is locked")}
+		stubFlakyLaunchArchive(t, annotator)
+		stubLaunchProcesses(t,
+			fakeProcess{name: "sh"},
+			fakeProcess{name: "claude", env: []string{"CODEX_THREAD_ID=" + codexLauncherID}},
+			fakeProcess{name: "codex"},
+		)
+		ctx, cancel := context.WithTimeout(t.Context(), memorySessionStartTimeout)
+		defer cancel()
+		cmd := &cobra.Command{}
+		cmd.SetIn(strings.NewReader(sessionStartPayload("startup")))
+		require.NoError(t, captureLaunchParent(ctx, cmd))
+		assert.Equal(t, 3, annotator.calls)
+		assert.Equal(t, childSessionID, annotator.child)
+		assert.Equal(t, "codex:"+codexLauncherID, annotator.parent)
+	})
+}
+
+func TestCaptureLaunchParentGivesUpAtHookDeadline(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		err     error
+		retries bool
+	}{
+		{"unavailable writer", errors.New("connection refused"), true},
+		{"rejected link", fmt.Errorf("%w: cycle", db.ErrSessionExternalParentInvalid), false},
+		{"read-only backend", db.ErrReadOnly, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				annotator := &flakyAnnotator{failures: 1 << 30, err: tc.err}
+				stubFlakyLaunchArchive(t, annotator)
+				stubLaunchProcesses(t,
+					fakeProcess{name: "sh"},
+					fakeProcess{name: "claude", env: []string{"CODEX_THREAD_ID=" + codexLauncherID}},
+					fakeProcess{name: "codex"},
+				)
+				ctx, cancel := context.WithTimeout(t.Context(), memorySessionStartTimeout)
+				defer cancel()
+				cmd := &cobra.Command{}
+				cmd.SetIn(strings.NewReader(sessionStartPayload("startup")))
+				start := time.Now()
+				require.ErrorIs(t, captureLaunchParent(ctx, cmd), tc.err)
+				assert.LessOrEqual(t, time.Since(start), memorySessionStartTimeout)
+				if tc.retries {
+					assert.Greater(t, annotator.calls, 1)
+				} else {
+					assert.Equal(t, 1, annotator.calls)
+				}
+			})
+		})
+	}
 }

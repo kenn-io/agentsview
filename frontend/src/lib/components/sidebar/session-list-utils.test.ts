@@ -940,6 +940,33 @@ describe("nested subagent rows", () => {
     ]);
   });
 
+  it("nests a run shared by two launchers under the launcher each group shows", () => {
+    const sub = (id: string, parents: string[]) =>
+      makeSession({ id, parent_session_ids: parents, relationship_type: "subagent" });
+    const groups = buildSessionGroups([
+      makeSession({ id: "a1" }),
+      makeSession({ id: "a2" }),
+      sub("b1", ["a1"]),
+      sub("b2", ["a2"]),
+      sub("c", ["b1", "b2"]),
+    ]);
+    const nested = (key: string) => {
+      const group = groups.find((g) => g.key === key)!;
+      const expanded = new Set([key, `subagent:${key}`]);
+      return buildDisplayItems([group], [], "none", new Set(), expanded)
+        .filter((item) => item.isChild)
+        .map((item) => [item.session!.id, item.depth]);
+    };
+    expect(nested("a1")).toEqual([
+      ["b1", 2],
+      ["c", 3],
+    ]);
+    expect(nested("a2")).toEqual([
+      ["b2", 2],
+      ["c", 3],
+    ]);
+  });
+
   it("moves a child to its nearest visible ancestor when a filter hides its parent", () => {
     const all = launchedTree();
     const [full] = buildSessionGroups(all);

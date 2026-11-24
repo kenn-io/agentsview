@@ -125,20 +125,6 @@ func runMemorySessionStartCommand(
 		return err
 	}
 	mode, _ := cmd.Flags().GetString("mode")
-	// A hosted reader has no archive of its own to record the launcher in.
-	if hook && memorySessionStartMode(strings.TrimSpace(mode)) != memoryModeHostedReader {
-		ctx, cancel := context.WithTimeout(cmd.Context(), memorySessionStartTimeout)
-		var wg sync.WaitGroup
-		wg.Go(func() {
-			if err := captureLaunchParent(ctx, cmd); err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "agentsview memory hook: launcher link: %v\n", err)
-			}
-		})
-		defer func() {
-			wg.Wait()
-			cancel()
-		}()
-	}
 	target, _ := cmd.Flags().GetString("target")
 	server, _ := cmd.Flags().GetString("server")
 	serverTokenFile, _ := cmd.Flags().GetString("server-token-file")
@@ -152,6 +138,20 @@ func runMemorySessionStartCommand(
 			"agentsview memory: automatic sync disabled by "+
 				"AGENTSVIEW_DISABLE_AUTO_SYNC=1")
 		return nil
+	}
+	// A hosted reader has no archive of its own to record the launcher in.
+	if hook && memorySessionStartMode(strings.TrimSpace(mode)) != memoryModeHostedReader {
+		ctx, cancel := context.WithTimeout(cmd.Context(), memorySessionStartTimeout)
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			if err := captureLaunchParent(ctx, cmd); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "agentsview memory hook: launcher link: %v\n", err)
+			}
+		})
+		defer func() {
+			wg.Wait()
+			cancel()
+		}()
 	}
 	req := memorySessionStartRequest{
 		Mode:   memorySessionStartMode(strings.TrimSpace(mode)),
