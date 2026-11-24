@@ -738,8 +738,10 @@ What a command can link depends on its selector:
 
 A shell tool input larger than 256 KB is not read and counts as a repository
 change for later calls. Child-agent prompts link full PR URLs as references:
-a mention, not proof of work on the pull request. Archives that dropped tool
-inputs cannot recover command or child-prompt links.
+a mention, not proof of work on the pull request. A transcript-only archive
+keeps each call's links and shell changes when it drops the input, except a
+bare number in a call that records its own working directory. An archive that
+dropped inputs earlier cannot recover command or child-prompt links.
 
 Claude Code also includes `pr-link` entries in its transcripts. Every session
 split from that transcript carries them like its name and git branch.

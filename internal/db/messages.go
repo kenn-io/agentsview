@@ -96,9 +96,11 @@ type ToolCall struct {
 	// content for this call. It is consumed by the storage projection and
 	// never persisted.
 	Rendering string `json:"-"`
-	// PRLinks holds the encoded pull request links the call's input named,
-	// kept when the archive policy drops that input.
-	PRLinks string `json:"-"`
+	// PRLinks holds the encoded pull request links the call's input named
+	// before session context applied, and PRContext the shell state it
+	// changed. Both are kept when the archive policy drops that input.
+	PRLinks   string `json:"-"`
+	PRContext int    `json:"-"`
 }
 
 // ToolResult holds a tool_result content block for pairing.
@@ -1388,7 +1390,7 @@ func multiRowPlaceholders(rows, cols int) string {
 func insertToolCallsChunkTx(
 	tx transactionQueries, calls []ToolCall,
 ) error {
-	args := make([]any, 0, len(calls)*16)
+	args := make([]any, 0, len(calls)*17)
 	for _, tc := range calls {
 		args = append(args,
 			tc.MessageID, tc.SessionID,
@@ -1400,7 +1402,7 @@ func insertToolCallsChunkTx(
 			nilIfEmpty(tc.ResultContent),
 			nilIfEmpty(tc.SubagentSessionID),
 			nilIfEmpty(tc.FilePath),
-			tc.CallIndex, tc.ObservedOutcome, tc.ObservedRepeat, tc.SequenceEnding, nilIfEmpty(tc.PRLinks),
+			tc.CallIndex, tc.ObservedOutcome, tc.ObservedRepeat, tc.SequenceEnding, nilIfEmpty(tc.PRLinks), NilIfZero(tc.PRContext),
 		)
 	}
 	query := `
@@ -1408,8 +1410,8 @@ func insertToolCallsChunkTx(
 			(message_id, session_id, tool_name, category,
 			 tool_use_id, input_json, skill_name,
 			 result_content_length, result_content, subagent_session_id,
-			 file_path, call_index, observed_outcome, observed_repeat, sequence_ending, pr_links)
-		VALUES ` + multiRowPlaceholders(len(calls), 16)
+			 file_path, call_index, observed_outcome, observed_repeat, sequence_ending, pr_links, pr_context)
+		VALUES ` + multiRowPlaceholders(len(calls), 17)
 	if _, err := tx.Exec(query, args...); err != nil {
 		return fmt.Errorf(
 			"inserting tool_calls batch (%d rows): %w",
@@ -3266,7 +3268,7 @@ func attachToolCallsBatch(
 		SELECT message_id, session_id, tool_name, category,
 			tool_use_id, input_json, skill_name,
 			result_content_length, %s, subagent_session_id,
-			file_path, call_index, observed_outcome, observed_repeat, sequence_ending, COALESCE(pr_links, '')
+			file_path, call_index, observed_outcome, observed_repeat, sequence_ending, COALESCE(pr_links, ''), COALESCE(pr_context, 0)
 		FROM tool_calls
 		WHERE message_id IN (%s)
 		ORDER BY message_id, call_index`,
@@ -3290,7 +3292,7 @@ func attachToolCallsBatch(
 			&tc.ToolName, &tc.Category,
 			&toolUseID, &inputJSON, &skillName,
 			&resultLen, &resultContent, &subagentSessionID,
-			&filePath, &callIndex, &tc.ObservedOutcome, &tc.ObservedRepeat, &tc.SequenceEnding, &tc.PRLinks,
+			&filePath, &callIndex, &tc.ObservedOutcome, &tc.ObservedRepeat, &tc.SequenceEnding, &tc.PRLinks, &tc.PRContext,
 		); err != nil {
 			return fmt.Errorf("scanning tool_call: %w", err)
 		}
@@ -4380,7 +4382,7 @@ func resolveToolCalls(
 				SubagentSessionID: tc.SubagentSessionID,
 				FilePath:          tc.FilePath,
 				CallIndex:         callIdx,
-				ObservedOutcome:   tc.ObservedOutcome, ObservedRepeat: tc.ObservedRepeat, SequenceEnding: tc.SequenceEnding, PRLinks: tc.PRLinks,
+				ObservedOutcome:   tc.ObservedOutcome, ObservedRepeat: tc.ObservedRepeat, SequenceEnding: tc.SequenceEnding, PRLinks: tc.PRLinks, PRContext: tc.PRContext,
 			})
 		}
 	}

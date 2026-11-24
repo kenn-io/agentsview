@@ -178,7 +178,7 @@ func transcriptMessages(messages []Message) []Message {
 	if messages == nil {
 		return nil
 	}
-	stored, retained := slices.Clone(messages), retainedToolPRLinks(messages)
+	stored := slices.Clone(messages)
 	for i := range stored {
 		if isToolOutputRow(stored[i]) {
 			stored[i].Content = ""
@@ -202,18 +202,18 @@ func transcriptMessages(messages []Message) []Message {
 				stored[i].DialogueText = &redacted
 			}
 		}
-		stored[i].ToolCalls = withoutToolPayloads(stored[i].ToolCalls, retained[i])
+		stored[i].ToolCalls = withoutToolPayloads(stored[i].ToolCalls)
 	}
 	return stored
 }
 
 // withoutToolPayloads clones calls without their input, result text, or
 // event content, keeping the pull request links each input named.
-func withoutToolPayloads(calls []ToolCall, retainedLinks []string) []ToolCall {
+func withoutToolPayloads(calls []ToolCall) []ToolCall {
 	calls = slices.Clone(calls)
 	for j := range calls {
+		calls[j].PRLinks, calls[j].PRContext = retainedCallPRLinks(calls[j])
 		calls[j].InputJSON = ""
-		calls[j].PRLinks = retainedLinks[j]
 		calls[j].ResultContent = ""
 		if len(calls[j].ResultEvents) == 0 {
 			continue
@@ -698,7 +698,7 @@ func compactCopiedSessionsForUsageTx(
 		{"delegation tool calls", `
 			UPDATE tool_calls
 			SET observed_outcome = NULL, observed_repeat = NULL, sequence_ending = NULL, tool_name = 'subagent', category = 'Task',
-			    input_json = NULL, skill_name = NULL,
+			    input_json = NULL, pr_links = NULL, pr_context = NULL, skill_name = NULL,
 			    result_content_length = NULL, result_content = NULL,
 			    file_path = NULL
 			WHERE session_id` + inCopied},

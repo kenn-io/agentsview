@@ -375,6 +375,26 @@ func (c *sharedPRContext) add(directory, repository bool) {
 	c.repository = c.repository || repository
 }
 
+const (
+	prContextDirectory = 1 << iota
+	prContextRepository
+)
+
+// bits encodes the context for storage on a tool call.
+func (c sharedPRContext) bits() (bits int) {
+	if c.directory {
+		bits |= prContextDirectory
+	}
+	if c.repository {
+		bits |= prContextRepository
+	}
+	return bits
+}
+
+func prContextFromBits(bits int) sharedPRContext {
+	return sharedPRContext{directory: bits&prContextDirectory != 0, repository: bits&prContextRepository != 0}
+}
+
 func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote string, sharedContext sharedPRContext, change *sharedPRContext, depends *[]PRLink) ([]PRLink, error) {
 	if category == "Task" {
 		return taskPRLinks(ctx, input)
@@ -469,84 +489,139 @@ func ToolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string
 }
 
 func toolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string, sharedContext *sharedPRContext, depends *[]PRLink) ([]PRLink, error) {
-	lists, err := toolCallPRLinkLists(ctx, messages, cwd, remote, sharedContext, depends)
-	return parser.CombinePRLinks(lists...), err
+	states, err := toolCallPRStates(ctx, messages, cwd, remote, sharedContext, depends)
+	return states.links(), err
 }
 
-// toolCallPRLinkLists derives the links of each tool call in order, carrying
-// shell state from call to call. A call whose input the archive dropped
-// yields the links it kept.
-func toolCallPRLinkLists(ctx context.Context, messages []Message, cwd, remote string, sharedContext *sharedPRContext, depends *[]PRLink) ([][]PRLink, error) {
-	var lists [][]PRLink
+// callPRState is what one tool call adds: the links it names and the shell
+// state it changes for later calls.
+type callPRState struct {
+	links  []PRLink
+	change sharedPRContext
+}
+
+type callPRStates []callPRState
+
+func (states callPRStates) links() []PRLink {
+	lists := make([][]PRLink, len(states))
+	for i, state := range states {
+		lists[i] = state.links
+	}
+	return parser.CombinePRLinks(lists...)
+}
+
+// toolCallPRStates derives each tool call's state in order, carrying shell
+// state from call to call.
+func toolCallPRStates(ctx context.Context, messages []Message, cwd, remote string, sharedContext *sharedPRContext, depends *[]PRLink) (callPRStates, error) {
+	var states callPRStates
 	for _, message := range messages {
 		for _, call := range message.ToolCalls {
 			state := sharedPRContext{repository: sharedContext.repository}
 			if call.ToolName == "Bash" {
 				state = *sharedContext
 			}
-			var change sharedPRContext
-			links, err := callPRLinks(ctx, call.Category, call.ToolName, call.InputJSON, cwd, remote, state, &change, depends)
+			callState, err := callPRStateIn(ctx, call, cwd, remote, state, depends)
 			if err != nil {
 				return nil, err
 			}
-			if call.InputJSON == "" {
-				links = DecodePRLinks(call.PRLinks)
-			}
-			lists = append(lists, links)
+			states = append(states, callState)
 			if call.Category == "Bash" {
 				if call.ToolName == "Bash" {
-					sharedContext.directory = sharedContext.directory || change.directory
+					sharedContext.directory = sharedContext.directory || callState.change.directory
 				}
-				sharedContext.repository = sharedContext.repository || change.repository
+				sharedContext.repository = sharedContext.repository || callState.change.repository
 			}
 		}
 	}
-	return lists, nil
+	return states, nil
 }
 
-// retainedToolPRLinks encodes the links each call names, indexed by message
-// and call, for archives that drop tool input. It needs no repository context,
-// so a command that names no repository keeps no link.
-func retainedToolPRLinks(messages []Message) [][]string {
-	retained := make([][]string, len(messages))
-	for i, message := range messages {
-		retained[i] = make([]string, len(message.ToolCalls))
-	}
-	lists, err := toolCallPRLinkLists(context.Background(), messages, "", "", &sharedPRContext{}, nil)
-	if err != nil {
-		return retained
-	}
-	for i := range retained {
-		for j := range retained[i] {
-			retained[i][j], lists = EncodePRLinks(lists[0]), lists[1:]
+// callPRStateIn derives one call's state under the shell state before it. A
+// call whose input the archive dropped resolves the links and state it kept.
+func callPRStateIn(ctx context.Context, call ToolCall, cwd, remote string, state sharedPRContext, depends *[]PRLink) (callPRState, error) {
+	if call.InputJSON == "" {
+		links, usesRemote := parser.ResolveRetainedPRLinks(DecodePRLinks(call.PRLinks), remote, !state.directory && !state.repository, state.repository)
+		if depends != nil {
+			*depends = append(*depends, usesRemote...)
 		}
+		return callPRState{links, prContextFromBits(call.PRContext)}, nil
 	}
-	return retained
+	var change sharedPRContext
+	links, err := callPRLinks(ctx, call.Category, call.ToolName, call.InputJSON, cwd, remote, state, &change, depends)
+	return callPRState{links, change}, err
 }
 
-// storedToolCallPRLinksTx replays stored calls before an ordinal, leaving their shell changes in state.
-func storedToolCallPRLinksTx(ctx context.Context, tx transactionQueries, id, cwd, remote string, before int, state *sharedPRContext) ([]PRLink, error) {
-	rows, err := tx.Query(`SELECT t.category, t.tool_name, COALESCE(t.input_json,''), COALESCE(t.pr_links,'') FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND t.category IN ('Bash','Task') AND (t.input_json IS NOT NULL OR t.pr_links IS NOT NULL) AND m.ordinal<? ORDER BY m.ordinal, t.id`, id, before)
+// retainedCallPRLinks derives what a call's input names before any session
+// context applies, so it stays valid whatever the session records later. A
+// command that depends on the session's remote keeps a placeholder for it.
+func retainedCallPRLinks(call ToolCall) (links string, bits int) {
+	if call.InputJSON == "" || (call.Category != "Bash" && call.Category != "Task") {
+		return call.PRLinks, call.PRContext
+	}
+	var change sharedPRContext
+	found, err := callPRLinks(context.Background(), call.Category, call.ToolName, call.InputJSON, "", parser.RetainedPRRemote, sharedPRContext{}, &change, nil)
+	if err != nil {
+		return "", 0
+	}
+	return EncodePRLinks(found), change.bits()
+}
+
+// storedToolCall is a stored tool call and the row it came from.
+type storedToolCall struct {
+	rowID int64
+	call  ToolCall
+}
+
+// storedToolCallsTx lists a session's stored shell and delegation calls in
+// order, as far as the ordinal, that hold an input or retained PR metadata.
+func storedToolCallsTx(tx transactionQueries, id string, before int) ([]storedToolCall, error) {
+	rows, err := tx.Query(`SELECT t.id, t.category, t.tool_name, COALESCE(t.input_json,''), COALESCE(t.pr_links,''), COALESCE(t.pr_context,0) FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND t.category IN ('Bash','Task') AND (t.input_json IS NOT NULL OR t.pr_links IS NOT NULL OR t.pr_context IS NOT NULL) AND m.ordinal<? ORDER BY m.ordinal, t.id`, id, before)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var lists [][]PRLink
+	var calls []storedToolCall
 	for rows.Next() {
-		var call ToolCall
-		if err := rows.Scan(&call.Category, &call.ToolName, &call.InputJSON, &call.PRLinks); err != nil {
+		var stored storedToolCall
+		if err := rows.Scan(&stored.rowID, &stored.call.Category, &stored.call.ToolName, &stored.call.InputJSON, &stored.call.PRLinks, &stored.call.PRContext); err != nil {
 			return nil, err
 		}
-		links, err := toolCallPRLinks(ctx, []Message{{ToolCalls: []ToolCall{call}}}, cwd, remote, state, nil)
+		calls = append(calls, stored)
+	}
+	return calls, rows.Err()
+}
+
+// storedToolCallPRLinksTx replays stored calls before an ordinal, leaving their shell changes in state.
+func storedToolCallPRLinksTx(ctx context.Context, tx transactionQueries, id, cwd, remote string, before int, state *sharedPRContext) ([]PRLink, error) {
+	stored, err := storedToolCallsTx(tx, id, before)
+	if err != nil {
+		return nil, err
+	}
+	var lists [][]PRLink
+	for _, s := range stored {
+		links, err := toolCallPRLinks(ctx, []Message{{ToolCalls: []ToolCall{s.call}}}, cwd, remote, state, nil)
 		if err != nil {
 			return nil, err
 		}
 		lists = append(lists, links)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
 	return parser.CombinePRLinks(lists...), nil
+}
+
+// retainStoredToolPRLinksTx keeps the PR metadata of a session's stored calls
+// that still hold an input, so a later refresh survives dropping it.
+func retainStoredToolPRLinksTx(tx transactionQueries, id string) error {
+	stored, err := storedToolCallsTx(tx, id, math.MaxInt)
+	if err != nil {
+		return err
+	}
+	for _, s := range stored {
+		links, bits := retainedCallPRLinks(s.call)
+		if _, err := tx.Exec(`UPDATE tool_calls SET pr_links=?, pr_context=? WHERE id=?`, nilIfEmpty(links), NilIfZero(bits), s.rowID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 const toolPRLinksDataVersion = 188
@@ -564,9 +639,16 @@ func (db *DB) upgradeToolPRLinksTx(ctx context.Context, tx *sql.Tx) error {
 		return err
 	}
 	for _, id := range ids {
-		if err := refreshSessionPromptPRLinksTx(ctx, contextTransaction{ctx: ctx, tx: tx}, id); err != nil {
+		if err := retainAndRefreshToolPRLinksTx(ctx, contextTransaction{ctx: ctx, tx: tx}, id); err != nil {
 			return fmt.Errorf("backfilling tool PR links: %w", err)
 		}
 	}
 	return nil
+}
+
+func retainAndRefreshToolPRLinksTx(ctx context.Context, tx transactionQueries, id string) error {
+	if err := retainStoredToolPRLinksTx(tx, id); err != nil {
+		return err
+	}
+	return refreshSessionPromptPRLinksTx(ctx, tx, id)
 }

@@ -399,7 +399,8 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     observed_outcome TEXT,
     observed_repeat TEXT,
     sequence_ending TEXT,
-    pr_links TEXT
+    pr_links TEXT,
+    pr_context INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_tool_calls_session

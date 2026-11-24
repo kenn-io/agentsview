@@ -2694,7 +2694,7 @@ func copySessionDataForIDs(
 		toolCallCols = append(toolCallCols, "call_index")
 		toolCallSelect = append(toolCallSelect, "NULL")
 	}
-	for _, column := range []string{"observed_outcome", "observed_repeat", "sequence_ending", "pr_links"} {
+	for _, column := range []string{"observed_outcome", "observed_repeat", "sequence_ending", "pr_links", "pr_context"} {
 		toolCallCols = append(toolCallCols, column)
 		if oldDBHasColumn(ctx, tx, "tool_calls", column) {
 			toolCallSelect = append(toolCallSelect, "otc."+column)
