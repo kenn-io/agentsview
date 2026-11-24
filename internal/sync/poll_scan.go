@@ -194,10 +194,11 @@ func (e *Engine) PollProviderRootsGrouped(
 		}
 		if err := e.syncPollScanPaths(ctx, changed[key]); err != nil {
 			errs = append(errs, fmt.Errorf("%s %s: %w", key.agent, key.root, err))
-			if watchBatchDeferOnlyError(err) {
-				// Every changed file was processed; only a deferred fork retry
-				// remains. Keeping the snapshot avoids re-syncing unchanged
-				// siblings while still detecting the parent when it arrives.
+			if e.isSettledUnresolvedCodexForkOnlyError(err) {
+				// Every changed file was processed; only tracked unresolved
+				// Codex forks whose parents are verified absent remain. Keeping
+				// the snapshot avoids re-syncing unchanged siblings while still
+				// detecting the parent when it arrives.
 				state.keep(map[pollScanKey][]pollScanRow{key: afterSync[key]})
 			}
 			continue
@@ -212,7 +213,7 @@ func (e *Engine) PollProviderRootsGrouped(
 		if epilogueErr == nil && ctx.Err() == nil {
 			keep := make(map[pollScanKey][]pollScanRow, len(afterRecon))
 			for i, group := range reconcile {
-				if groupErrs[i] != nil && !watchBatchDeferOnlyError(groupErrs[i]) {
+				if groupErrs[i] != nil && !e.isSettledUnresolvedCodexForkOnlyError(groupErrs[i]) {
 					continue
 				}
 				for _, root := range group.Roots {

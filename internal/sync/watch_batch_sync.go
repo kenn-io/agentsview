@@ -110,19 +110,52 @@ func (e *watchBatchApplyError) WatchRetryBatch() WatchBatch {
 }
 
 func watchBatchDeferOnlyError(err error) bool {
-	if applyErr, ok := errors.AsType[*watchBatchApplyError](err); ok {
-		return applyErr.deferOnly
+	if err == nil {
+		return false
 	}
-	_, hasPaths := errors.AsType[interface {
-		error
-		interface{ ReconciliationRetryPaths() []string }
-	}](err)
-	deferOnly, hasDeferOnly := errors.AsType[interface {
-		error
-		interface{ ReconciliationRetryDeferOnly() bool }
-	}](err)
-	return hasPaths && hasDeferOnly &&
-		deferOnly.ReconciliationRetryDeferOnly()
+	pending := []error{err}
+	matched := false
+	for len(pending) > 0 {
+		next := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if next == nil {
+			continue
+		}
+		if _, isApply := next.(interface{ WatchRetryBatch() WatchBatch }); isApply {
+			deferOnly, ok := next.(interface{ ReconciliationRetryDeferOnly() bool })
+			if !ok || !deferOnly.ReconciliationRetryDeferOnly() {
+				return false
+			}
+			matched = true
+			continue
+		}
+		if joined, ok := next.(interface{ Unwrap() []error }); ok {
+			children := joined.Unwrap()
+			if len(children) == 0 {
+				return false
+			}
+			pending = append(pending, children...)
+			continue
+		}
+		if _, hasPaths := next.(interface{ ReconciliationRetryPaths() []string }); hasPaths {
+			deferOnly, ok := next.(interface{ ReconciliationRetryDeferOnly() bool })
+			if !ok || !deferOnly.ReconciliationRetryDeferOnly() {
+				return false
+			}
+			matched = true
+			continue
+		}
+		if wrapped, ok := next.(interface{ Unwrap() error }); ok {
+			cause := wrapped.Unwrap()
+			if cause == nil {
+				return false
+			}
+			pending = append(pending, cause)
+			continue
+		}
+		return false
+	}
+	return matched
 }
 
 func watchBatchReconciliationError(

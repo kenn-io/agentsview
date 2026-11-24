@@ -4317,9 +4317,20 @@ func (e *Engine) reconcileScopedWatchRootsLocked(
 		})
 		return SyncStats{}, 0, passEpilogueEligibility{}, nil
 	}
-	stats, metrics, tombstoned, eligibility, err := e.reconcileWatchRootsStreamedLocked(
+	stats, metrics, tombstoned, eligibility, wakePaths, err := e.reconcileWatchRootsStreamedLocked(
 		ctx, plans, fullCoverage, force, onProgress,
 	)
+	if len(wakePaths) > 0 && ctx.Err() == nil && !stats.Aborted {
+		wakeStats, wakeTombstoned, wakeErr := e.syncChangedPathsLocked(ctx, wakePaths)
+		var merged SyncStats
+		mergeReconciliationSyncStats(&merged, stats)
+		mergeReconciliationSyncStats(&merged, wakeStats)
+		stats = merged
+		tombstoned += wakeTombstoned
+		if wakeErr != nil {
+			err = errors.Join(err, wakeErr)
+		}
+	}
 	metrics.ExcludedRemoteRoots = excludedRemoteRoots
 	complete := err == nil && ctx.Err() == nil && !stats.Aborted &&
 		stats.ProcessingComplete()
@@ -4493,10 +4504,10 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 	fullCoverage, force bool, onProgress ProgressFunc,
 ) (
 	stats SyncStats, metrics ReconciliationMetrics, tombstoned int,
-	eligibility passEpilogueEligibility, retErr error,
+	eligibility passEpilogueEligibility, wakePaths []string, retErr error,
 ) {
 	if err := ctx.Err(); err != nil {
-		return SyncStats{Aborted: true}, metrics, 0, eligibility, err
+		return SyncStats{Aborted: true}, metrics, 0, eligibility, nil, err
 	}
 	ctx = e.parsePolicyContext(ctx)
 	if force {
@@ -4521,7 +4532,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 	ctx, closeProviderCache, err := parser.WithReconciliationCache(ctx)
 	if err != nil {
 		stats.Aborted = true
-		return stats, metrics, 0, eligibility, err
+		return stats, metrics, 0, eligibility, nil, err
 	}
 	ctx = parser.WithProjectRootMemo(ctx)
 	ctx = parser.WithCodexParentInventoryBatch(ctx)
@@ -4543,7 +4554,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 	spool, err := e.reconciliationSpoolFactory(ctx, e.db.Path())
 	if err != nil {
 		stats.Aborted = true
-		return stats, metrics, 0, eligibility, err
+		return stats, metrics, 0, eligibility, nil, err
 	}
 	cleaned := false
 	defer func() {
@@ -4555,7 +4566,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 	preContainerStates := e.capturePlannedSQLiteContainerStates(plans, fullCoverage)
 	if err := e.prepareSQLiteContainerVerification(ctx, preContainerStates); err != nil {
 		stats.Aborted = true
-		return stats, metrics, 0, eligibility, err
+		return stats, metrics, 0, eligibility, nil, err
 	}
 	e.beginStreamingSQLiteContainerPass(preContainerStates)
 	defer func() {
@@ -4580,7 +4591,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 			err = errors.Join(err, cleanupErr)
 		}
 		cleaned = true
-		return stats, metrics, 0, eligibility, err
+		return stats, metrics, 0, eligibility, nil, err
 	}
 	e.finishStreamingSQLiteContainerDiscovery()
 	authoritativeProviders := make(map[parser.AgentType]struct{}, len(completedScopes))
@@ -4603,7 +4614,15 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 			)
 		}()
 	}
-	var cursor reconciliationCursor
+	var (
+		cursor          reconciliationCursor
+		reconciledRoots []string
+		seenWake        map[string]struct{}
+	)
+	if !fullCoverage && e.pathRewriter == nil {
+		reconciledRoots = reconciledCodexRoots(plans)
+		seenWake = make(map[string]struct{})
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			stats.Aborted = true
@@ -4629,6 +4648,9 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 			break
 		}
 		runtimeMetrics.rehydrated(len(files))
+		if seenWake != nil {
+			e.collectCrossRootWaitingCodexForks(ctx, files, reconciledRoots, seenWake, &wakePaths)
+		}
 		if verifiedPass != 0 {
 			e.markVerifiedDiscoveredSources(files)
 		}
@@ -4846,7 +4868,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 	}
 	cleaned = true
 	tombstoned += stats.Tombstoned
-	return stats, metrics, tombstoned, eligibility, retErr
+	return stats, metrics, tombstoned, eligibility, wakePaths, retErr
 }
 
 func (e *Engine) tombstoneCompletedReconciliationScopesLocked(

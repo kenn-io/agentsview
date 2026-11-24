@@ -44,6 +44,7 @@ type unresolvedCodexForkTracker struct {
 	mu              gosync.Mutex
 	epoch           uint64
 	settled         map[verifiedSourceKey]unresolvedCodexForkEntry
+	settledPaths    map[string]int
 	waitersByParent map[string]map[verifiedSourceKey]struct{}
 	waitersLoaded   bool
 }
@@ -82,8 +83,15 @@ func (t *unresolvedCodexForkTracker) record(
 	if epoch != t.epoch {
 		return
 	}
-	if prev, ok := t.settled[key]; ok && prev.parentID != parentID {
-		t.removeWaiterLocked(prev.parentID, key)
+	if prev, ok := t.settled[key]; ok {
+		if prev.parentID != parentID {
+			t.removeWaiterLocked(prev.parentID, key)
+		}
+	} else {
+		if t.settledPaths == nil {
+			t.settledPaths = make(map[string]int)
+		}
+		t.settledPaths[key.path]++
 	}
 	if t.settled == nil {
 		t.settled = make(map[verifiedSourceKey]unresolvedCodexForkEntry)
@@ -97,6 +105,30 @@ func (t *unresolvedCodexForkTracker) record(
 	t.addWaiterLocked(parentID, key)
 }
 
+func (t *unresolvedCodexForkTracker) deleteSettledLocked(key verifiedSourceKey) (unresolvedCodexForkEntry, bool) {
+	entry, ok := t.settled[key]
+	if !ok {
+		return unresolvedCodexForkEntry{}, false
+	}
+	delete(t.settled, key)
+	if count := t.settledPaths[key.path]; count <= 1 {
+		delete(t.settledPaths, key.path)
+	} else {
+		t.settledPaths[key.path] = count - 1
+	}
+	return entry, true
+}
+
+func (t *unresolvedCodexForkTracker) hasSettledPath(path string) bool {
+	if path == "" {
+		return false
+	}
+	clean := filepath.Clean(path)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.settledPaths[clean] > 0
+}
+
 func (t *unresolvedCodexForkTracker) resolve(agent parser.AgentType, path string) {
 	if agent == "" || path == "" {
 		return
@@ -104,9 +136,8 @@ func (t *unresolvedCodexForkTracker) resolve(agent parser.AgentType, path string
 	key := verifiedSourceKey{agent: agent, path: filepath.Clean(path)}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if entry, ok := t.settled[key]; ok {
+	if entry, ok := t.deleteSettledLocked(key); ok {
 		t.removeWaiterLocked(entry.parentID, key)
-		delete(t.settled, key)
 		return
 	}
 	for parentID, waiters := range t.waitersByParent {
@@ -123,7 +154,7 @@ func (t *unresolvedCodexForkTracker) invalidate(key verifiedSourceKey) {
 	key.path = filepath.Clean(key.path)
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	delete(t.settled, key)
+	t.deleteSettledLocked(key)
 }
 
 func (t *unresolvedCodexForkTracker) forgetPath(path string) {
@@ -136,7 +167,7 @@ func (t *unresolvedCodexForkTracker) forgetPath(path string) {
 	for key, entry := range t.settled {
 		if key.path == clean {
 			t.removeWaiterLocked(entry.parentID, key)
-			delete(t.settled, key)
+			t.deleteSettledLocked(key)
 		}
 	}
 	for parentID, waiters := range t.waitersByParent {
@@ -153,6 +184,7 @@ func (t *unresolvedCodexForkTracker) clear() {
 	defer t.mu.Unlock()
 	t.epoch++
 	t.settled = nil
+	t.settledPaths = nil
 	t.waitersByParent = nil
 	t.waitersLoaded = false
 }
@@ -379,4 +411,143 @@ func (e *Engine) appendWaitingCodexForkPaths(ctx context.Context, paths []string
 	combined = append(combined, paths...)
 	combined = append(combined, extra...)
 	return combined
+}
+
+// isSettledUnresolvedCodexForkOnlyError reports whether every error branch in
+// err is a non-overflow defer-only retry whose paths are all tracked as
+// unresolved Codex forks with verified missing parents. Only those errors are
+// safe to keep poll metadata snapshots across, because parent arrival wakes the
+// waiting forks; parent-inventory changes and non-Codex deferred retries must
+// still be retried by polling.
+func (e *Engine) isSettledUnresolvedCodexForkOnlyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	pending := []error{err}
+	matched := false
+	for len(pending) > 0 {
+		next := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if next == nil {
+			continue
+		}
+		if _, isApply := next.(interface{ WatchRetryBatch() WatchBatch }); isApply {
+			deferOnly, ok := next.(interface{ ReconciliationRetryDeferOnly() bool })
+			if !ok || !deferOnly.ReconciliationRetryDeferOnly() {
+				return false
+			}
+			wrapped, ok := next.(interface{ Unwrap() error })
+			if !ok {
+				return false
+			}
+			cause := wrapped.Unwrap()
+			if cause == nil {
+				return false
+			}
+			pending = append(pending, cause)
+			continue
+		}
+		if joined, ok := next.(interface{ Unwrap() []error }); ok {
+			children := joined.Unwrap()
+			if len(children) == 0 {
+				return false
+			}
+			pending = append(pending, children...)
+			continue
+		}
+		if retryPaths, hasPaths := next.(interface{ ReconciliationRetryPaths() []string }); hasPaths {
+			deferOnly, ok := next.(interface{ ReconciliationRetryDeferOnly() bool })
+			if !ok || !deferOnly.ReconciliationRetryDeferOnly() {
+				return false
+			}
+			if overflow, ok := next.(interface{ ReconciliationRetryOverflow() bool }); ok && overflow.ReconciliationRetryOverflow() {
+				return false
+			}
+			paths := retryPaths.ReconciliationRetryPaths()
+			if len(paths) == 0 {
+				return false
+			}
+			for _, p := range paths {
+				if !e.unresolvedCodexForks.hasSettledPath(p) {
+					return false
+				}
+			}
+			matched = true
+			continue
+		}
+		if wrapped, ok := next.(interface{ Unwrap() error }); ok {
+			cause := wrapped.Unwrap()
+			if cause == nil {
+				return false
+			}
+			pending = append(pending, cause)
+			continue
+		}
+		return false
+	}
+	return matched
+}
+
+func reconciledCodexRoots(plans []providerReconciliationPlan) []string {
+	var roots []string
+	for _, p := range plans {
+		if !isCodexFormatAgent(p.agent) {
+			continue
+		}
+		for _, scope := range p.plan.Scopes {
+			for _, r := range scope.TraversalRoots {
+				if r != "" {
+					roots = append(roots, filepath.Clean(r))
+				}
+			}
+		}
+		for _, r := range p.requestRoots {
+			if r != "" {
+				roots = append(roots, filepath.Clean(r))
+			}
+		}
+	}
+	return roots
+}
+
+// collectCrossRootWaitingCodexForks records any waiting unresolved Codex fork
+// located outside reconciledRoots whose missing parent rollout was discovered
+// in files during a scoped reconciliation pass.
+func (e *Engine) collectCrossRootWaitingCodexForks(
+	ctx context.Context,
+	files []parser.DiscoveredFile,
+	reconciledRoots []string,
+	seen map[string]struct{},
+	wakePaths *[]string,
+) {
+	if e.pathRewriter != nil {
+		return
+	}
+	for _, f := range files {
+		if !isCodexFormatAgent(f.Agent) {
+			continue
+		}
+		key := parser.CodexSessionUUIDFromFilename(filepath.Base(f.Path))
+		if key == "" || key != parser.CodexThreadIDFromSessionKey(key) {
+			continue
+		}
+		waiters := e.unresolvedCodexForks.waitersForParent(ctx, e.db, key)
+		if len(waiters) == 0 {
+			continue
+		}
+		for _, waiter := range waiters {
+			if changedPathWithinAnyRoot(waiter.path, reconciledRoots) {
+				continue
+			}
+			e.unresolvedCodexForks.invalidate(waiter)
+			if _, dup := seen[waiter.path]; dup {
+				continue
+			}
+			if _, err := os.Stat(waiter.path); err != nil {
+				continue
+			}
+			seen[waiter.path] = struct{}{}
+			*wakePaths = append(*wakePaths, waiter.path)
+		}
+	}
 }

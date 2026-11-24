@@ -446,3 +446,192 @@ func TestUnresolvedCodexForkScalingAndDeletionCleanup(t *testing.T) {
 		})
 	}
 }
+
+func TestPollProviderRootsGroupedDoesNotKeepSnapshotOnMixedPageErrors(t *testing.T) {
+	requirePollChangeTimes(t)
+	const parent = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+	const child = "019f43cc-4444-4444-8444-444444444444"
+	const ts = "2026-07-08T10:00:00Z"
+
+	// Direct check: errors.Join combining a defer-only error and a hard error
+	// must never be classified as defer-only.
+	deferErr := &incompleteReconciliationError{
+		deferred:  1,
+		paths:     []string{"/tmp/fork.jsonl"},
+		deferOnly: true,
+	}
+	joined := fmt.Errorf("sync changed polled paths: %w", errors.Join(deferErr, errors.New("disk read failed")))
+	assert.False(t, watchBatchDeferOnlyError(joined))
+
+	// End-to-end multi-page poll (> pollScanPageSize changed files):
+	// page 1 contains an unresolved Codex fork (defer-only), while page 2
+	// contains an unreadable rollout file (hard error). PollProviderRootsGrouped
+	// must NOT keep afterSync, so once the unreadable file recovers it is
+	// picked up on the next poll.
+	codexRoot := t.TempDir()
+	f := newPollScanFixture(t, map[parser.AgentType][]string{
+		parser.AgentCodex: {codexRoot},
+	})
+	group := ProviderRootsGroup{Agent: parser.AgentCodex, Roots: []string{codexRoot}}
+	// Seed an initial empty snapshot so the next poll takes the syncPollScanPaths path.
+	require.NoError(t, f.engine.PollProviderRootsGrouped(t.Context(), []ProviderRootsGroup{group}, false))
+
+	// Create 1 orphan fork plus pollScanPageSize healthy files and 1 unreadable
+	// file sorting onto page 2.
+	orphanPath := filepath.Join(codexRoot, "2026", "07", "08", "rollout-2026-07-08T00-00-00-"+child+".jsonl")
+	writeCodexRolloutFile(t, orphanPath, testjsonl.JoinJSONL(
+		testjsonl.CodexForkedSessionMetaJSON(child, parent, "/work/project", "user", ts),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "parent-turn", ts),
+		testjsonl.CodexMsgJSON("assistant", "parent answer", ts),
+		testjsonl.CodexTokenCountJSON(ts, 100, 40, 0),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", ts),
+		testjsonl.CodexMsgJSON("assistant", "child answer", ts),
+		testjsonl.CodexTokenCountJSON(ts, 20, 5, 0),
+	), false)
+	for i := range pollScanPageSize {
+		id := fmt.Sprintf("11111111-1111-4111-8111-%012d", i)
+		p := filepath.Join(codexRoot, "2026", "07", "08", fmt.Sprintf("rollout-2026-07-08T01-%02d-%02d-%s.jsonl", i/60, i%60, id))
+		writeCodexRolloutFile(t, p, testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON(id, "/work/project", "user", ts),
+			testjsonl.CodexMsgJSON("assistant", "ok", ts),
+		), false)
+	}
+	const failingID = "99999999-9999-4999-8999-999999999999"
+	failingPath := filepath.Join(codexRoot, "2026", "07", "09", "rollout-2026-07-09T23-59-59-"+failingID+".jsonl")
+	writeCodexRolloutFile(t, failingPath, testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(failingID, "/work/project", "user", ts),
+		testjsonl.CodexMsgJSON("assistant", "recovered session", ts),
+	), false)
+	require.NoError(t, os.Chmod(failingPath, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(failingPath, 0o600) })
+	if _, err := os.ReadFile(failingPath); err == nil {
+		t.Skip("running as root bypasses chmod 0000 read failure")
+	}
+
+	err := f.engine.PollProviderRootsGrouped(t.Context(), []ProviderRootsGroup{group}, false)
+	require.Error(t, err)
+	assert.False(t, watchBatchDeferOnlyError(err))
+	key := pollScanKey{parser.AgentCodex, filepath.Clean(codexRoot)}
+	f.engine.pollScans.mu.Lock()
+	snapshotLen := len(f.engine.pollScans.snapshots[key])
+	f.engine.pollScans.mu.Unlock()
+	assert.Zero(t, snapshotLen,
+		"mixed defer-only and hard page errors must not advance the poll snapshot")
+
+	// Fix the unreadable file and confirm the next poll syncs it.
+	require.NoError(t, os.Chmod(failingPath, 0o600))
+	require.NoError(t, f.engine.PollProviderRootsGrouped(t.Context(), []ProviderRootsGroup{group}, false))
+	assert.Equal(t, []string{"recovered session"}, messageContents(t, f.database, "codex:"+failingID),
+		"previously failed page-2 session must sync after error clears")
+}
+
+func TestPollProviderRootsGroupedWakesCrossRootCodexForkDuringScopedReconciliation(t *testing.T) {
+	requirePollChangeTimes(t)
+	const parent = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+	const child = "019f44dd-5555-4555-8555-555555555555"
+	const transient = "22222222-2222-4222-8222-222222222222"
+	const childID = "codex:" + child
+	const ts = "2026-07-08T10:00:00Z"
+
+	liveRoot := t.TempDir()
+	archivedRoot := t.TempDir()
+
+	childPath := filepath.Join(liveRoot, "2026", "07", "08", "rollout-2026-07-08T11-00-00-"+child+".jsonl")
+	writeCodexRolloutFile(t, childPath, testjsonl.JoinJSONL(
+		testjsonl.CodexForkedSessionMetaJSON(child, parent, "/work/project", "user", ts),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "parent-turn", ts),
+		testjsonl.CodexMsgJSON("assistant", "replayed parent answer", ts),
+		testjsonl.CodexTokenCountJSON(ts, 100, 40, 0),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", ts),
+		testjsonl.CodexMsgJSON("assistant", "child answer", ts),
+		testjsonl.CodexTokenCountJSON(ts, 20, 7, 0),
+	), false)
+	transientPath := filepath.Join(archivedRoot, "rollout-2026-07-08T08-00-00-"+transient+".jsonl")
+	writeCodexRolloutFile(t, transientPath, testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(transient, "/work/project", "user", ts),
+		testjsonl.CodexMsgJSON("assistant", "ephemeral", ts),
+	), false)
+
+	f := newPollScanFixture(t, map[parser.AgentType][]string{
+		parser.AgentCodex: {liveRoot, archivedRoot},
+	})
+	groups := []ProviderRootsGroup{{Agent: parser.AgentCodex, Roots: []string{liveRoot, archivedRoot}}}
+
+	// Pass 1: discovers both roots, stores unresolved fork in liveRoot, keeps snapshots.
+	err := f.engine.PollProviderRootsGrouped(t.Context(), groups, false)
+	require.Error(t, err)
+	assert.True(t, f.engine.isSettledUnresolvedCodexForkOnlyError(err))
+	assert.Equal(t, []string{"replayed parent answer", "child answer"}, messageContents(t, f.database, childID))
+
+	// Simultaneously add parent rollout to archivedRoot AND remove transientPath
+	// from archivedRoot so PollProviderRootsGrouped runs scoped reconciliation
+	// on archivedRoot only (while liveRoot has zero changes).
+	parentPath := filepath.Join(archivedRoot, "rollout-2026-07-08T09-00-00-"+parent+".jsonl")
+	writeCodexRolloutFile(t, parentPath, testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(parent, "/work/project", "user", ts),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "parent-turn", ts),
+		testjsonl.CodexMsgJSON("assistant", "replayed parent answer", ts),
+		testjsonl.CodexTokenCountJSON(ts, 100, 40, 0),
+	), false)
+	require.NoError(t, os.Remove(transientPath))
+
+	require.NoError(t, f.engine.PollProviderRootsGrouped(t.Context(), groups, false))
+	assert.Equal(t, db.CurrentDataVersion(), f.database.GetSessionDataVersion(t.Context(), childID),
+		"cross-root waiting fork in liveRoot must resolve when parent appears during scoped archivedRoot reconciliation")
+	assert.Equal(t, []string{"child answer"}, messageContents(t, f.database, childID))
+	usage, err := f.database.GetSessionUsage(t.Context(), childID, true)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.Equal(t, 7, usage.TotalOutputTokens)
+}
+
+func TestIsSettledUnresolvedCodexForkOnlyErrorRejectsUnsettledDeferrals(t *testing.T) {
+	database := openTestDB(t)
+	engine := NewEngine(t.Context(), database, EngineConfig{
+		Machine:                           "local",
+		DisableFilesystemProjectDiscovery: true,
+	})
+	t.Cleanup(engine.Close)
+
+	// A defer-only retry for a path not tracked in unresolvedCodexForks (for
+	// example, a fork invalidated by finishCodexParentInventoryBatch after a
+	// parent revert page appeared, or a non-Codex deferred source) must NOT
+	// keep poll snapshots.
+	untracked := &incompleteReconciliationError{
+		deferred:  1,
+		paths:     []string{"/tmp/codex-parent-inventory-changed.jsonl"},
+		deferOnly: true,
+	}
+	assert.True(t, watchBatchDeferOnlyError(untracked))
+	assert.False(t, engine.isSettledUnresolvedCodexForkOnlyError(untracked))
+
+	// Overflowed defer-only retries must also avoid keeping snapshots on pass 1.
+	const trackedPath = "/tmp/tracked-orphan-fork.jsonl"
+	engine.unresolvedCodexForks.record(
+		verifiedSourceKey{agent: parser.AgentCodex, path: trackedPath},
+		verifiedSourceSignature{size: 10, mtime: 100},
+		engine.unresolvedCodexForks.currentEpoch(),
+		"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+		"codex:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+		100,
+	)
+	trackedErr := &incompleteReconciliationError{
+		deferred:  1,
+		paths:     []string{trackedPath},
+		deferOnly: true,
+	}
+	assert.True(t, engine.isSettledUnresolvedCodexForkOnlyError(trackedErr))
+
+	overflowErr := &incompleteReconciliationError{
+		deferred:  2,
+		paths:     []string{trackedPath},
+		overflow:  true,
+		deferOnly: true,
+	}
+	assert.False(t, engine.isSettledUnresolvedCodexForkOnlyError(overflowErr))
+
+	// Invalidating the fork (as finishCodexParentInventoryBatch does when a
+	// parent revert page appears mid-batch) immediately rejects snapshot reuse.
+	engine.unresolvedCodexForks.invalidate(verifiedSourceKey{agent: parser.AgentCodex, path: trackedPath})
+	assert.False(t, engine.isSettledUnresolvedCodexForkOnlyError(trackedErr))
+}
