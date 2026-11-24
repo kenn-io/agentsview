@@ -2197,7 +2197,7 @@ func (d *DB) CopySessionMetadataFrom(
 		}
 	}
 
-	if !d.usageOnlyStorage() {
+	if !d.usageOnlyStorage() && oldDBHasTable(ctx, tx, "sessions") {
 		rows, err := tx.QueryContext(ctx, `SELECT s.id FROM main.sessions s JOIN old_db.sessions old ON old.id=s.id WHERE EXISTS (SELECT 1 FROM main.tool_calls t WHERE t.session_id=s.id AND t.category IN ('Bash','Task'))`)
 		if err != nil {
 			return fmt.Errorf("listing sessions for PR link refresh: %w", err)
