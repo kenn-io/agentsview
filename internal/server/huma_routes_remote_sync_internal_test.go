@@ -1151,3 +1151,77 @@ func TestRemoteSyncTransfersRejectUnsupportedMethods(t *testing.T) {
 		}
 	}
 }
+
+func assertRemoteSyncSkipsUnreadableFileOverHTTP(
+	t *testing.T, claudeRoot, healthyPath, unreadablePath string,
+) {
+	t.Helper()
+	dir := t.TempDir()
+	serverDB := dbtest.OpenTestDBAt(t, filepath.Join(dir, "server.db"))
+	srv := New(config.Config{
+		Host:      "127.0.0.1",
+		Port:      8080,
+		DataDir:   dir,
+		DBPath:    filepath.Join(dir, "server.db"),
+		AuthToken: "remote-token",
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {claudeRoot},
+		},
+	}, serverDB, nil)
+	handler := currentRemoteSyncHandler(srv.Handler())
+
+	targets := remotesync.TargetSet{Dirs: map[parser.AgentType][]string{parser.AgentClaude: {claudeRoot}}}
+
+	// Direct delta POST requesting only the unreadable file returns 200 with an empty tar (not 500).
+	payload, err := json.Marshal(remotesync.ArchiveRequest{
+		TargetSet:  targets,
+		DeltaFiles: []string{unreadablePath},
+	})
+	require.NoError(t, err)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/remote-sync/archive", bytes.NewReader(payload))
+	req.Header.Set("Authorization", "Bearer remote-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	tr := tar.NewReader(bytes.NewReader(w.Body.Bytes()))
+	_, err = tr.Next()
+	assert.Equal(t, io.EOF, err, "unreadable delta entry must stream an empty tar")
+
+	// Mixed delta POST requesting both unreadable and healthy files returns 200 with the healthy session.
+	mixedPayload, err := json.Marshal(remotesync.ArchiveRequest{
+		TargetSet:  targets,
+		DeltaFiles: []string{unreadablePath, healthyPath},
+	})
+	require.NoError(t, err)
+	mixedReq := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/remote-sync/archive", bytes.NewReader(mixedPayload))
+	mixedReq.Header.Set("Authorization", "Bearer remote-token")
+	mixedReq.Header.Set("Content-Type", "application/json")
+	mixedW := httptest.NewRecorder()
+	handler.ServeHTTP(mixedW, mixedReq)
+	require.Equal(t, http.StatusOK, mixedW.Code, "body: %s", mixedW.Body.String())
+	mixedEntries := tarEntries(t, mixedW.Body.Bytes())
+	assert.Len(t, mixedEntries, 1)
+
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	clientDataDir := t.TempDir()
+	clientDB := dbtest.OpenTestDBAt(t, filepath.Join(clientDataDir, "client.db"))
+	stats, err := (remotesync.RemoteSync{
+		Host:    "nas-host",
+		Source:  remotesync.HTTPSource{URL: ts.URL, Token: "remote-token"},
+		DataDir: clientDataDir,
+		DB:      clientDB,
+	}).Run(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.SessionsTotal)
+
+	secondStats, err := (remotesync.RemoteSync{
+		Host:    "nas-host",
+		Source:  remotesync.HTTPSource{URL: ts.URL, Token: "remote-token"},
+		DataDir: clientDataDir,
+		DB:      clientDB,
+	}).Run(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 0, secondStats.SessionsSynced)
+}
