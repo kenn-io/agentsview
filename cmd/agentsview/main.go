@@ -929,7 +929,7 @@ func repairMessageFTS(ctx context.Context, idleTracker *server.IdleTracker, repa
 		err := repair(ctx)
 		done()
 		if err != nil && ctx.Err() == nil {
-			log.Printf("search index repair: %v", err)
+			log.Printf("archive repair: %v", err)
 		}
 		return struct{}{}, err
 	}, backoff.WithBackOff(policy), backoff.WithMaxElapsedTime(0))

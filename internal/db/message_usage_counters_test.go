@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"encoding/json/jsontext"
 	"fmt"
 	"os"
@@ -12,6 +13,50 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 )
+
+func TestCancelledUsageRequestDoesNotCancelCounterFill(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d := testDBAtPath(t, path, "source")
+	insertSession(t, d, "s", "proj")
+	m := asstMsg("s", 0, "reply")
+	m.Model = "claude-sonnet"
+	m.TokenUsage = jsontext.Value(`{"output_tokens":42}`)
+	insertMessages(t, d, m)
+	removeMessageUsageCounters(t, d)
+	require.NoError(t, d.Close())
+	d, err := OpenDaemonWithProgress(t.Context(), path, config.ArchiveContentFull, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	require.NoError(t, d.lockWriterCtx(t.Context()))
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { _, err := d.GetSessionUsage(ctx, "s", true); done <- err }()
+	select {
+	case err := <-done:
+		d.mu.Unlock()
+		require.FailNow(t, "usage returned before fill", "%v", err)
+	case <-time.After(50 * time.Millisecond): //nolint:kennlint // deadlinetest: writer lock holds the fill
+	}
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+	d.usageCountersMu.Lock()
+	fill := d.usageCountersFill
+	d.usageCountersMu.Unlock()
+	d.mu.Unlock()
+	require.NotNil(t, fill)
+	<-fill.done
+	require.NoError(t, fill.err)
+	assert.Equal(t, []storedUsageCounters{{42, 0}}, readStoredUsageCounters(t, d, "s"))
+}
+
+func TestUsageIndexReplacementFailurePreservesIndex(t *testing.T) {
+	d := testDB(t)
+	err := ensureIndexColumnsLocked(t.Context(), d.getWriter(), "idx_messages_usage_session_covering", []string{"different"}, "CREATE INDEX invalid SQL")
+	require.Error(t, err)
+	var present bool
+	require.NoError(t, d.getReader().QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_messages_usage_session_covering')`).Scan(&present))
+	assert.True(t, present)
+}
 
 type storedUsageCounters struct {
 	outputTokens, webSearchRequests int64

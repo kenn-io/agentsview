@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
@@ -96,11 +97,56 @@ func fillMessageUsageCounters(ctx context.Context, tx *sql.Tx) error {
 // ErrMessageUsageCountersPending asks read-only callers to wait for the upgrade.
 var ErrMessageUsageCountersPending = errors.New("archive upgrade is still running; retry after the daemon finishes")
 
-// finishUsageCounters fills the deferred counters before widening the usage index.
+type usageCountersFill struct {
+	done   chan struct{}
+	cancel context.CancelFunc
+	err    error
+}
+
+// finishUsageCounters waits for the shared fill without tying it to a request.
 func (db *DB) finishUsageCounters(ctx context.Context) error {
 	if !db.usageCountersPending.Load() {
 		return nil
 	}
+	db.usageCountersMu.Lock()
+	fill := db.usageCountersFill
+	if fill == nil {
+		// Archive work belongs to the database, not a request. Bound it so a
+		// stuck fill cannot retain a writer indefinitely.
+		fillCtx, cancel := context.WithTimeout(context.Background(), time.Hour)
+		fill = &usageCountersFill{done: make(chan struct{}), cancel: cancel}
+		db.usageCountersFill = fill
+		go func() {
+			fill.err = db.runUsageCountersFill(fillCtx)
+			cancel()
+			db.usageCountersMu.Lock()
+			db.usageCountersFill = nil
+			close(fill.done)
+			db.usageCountersMu.Unlock()
+		}()
+	}
+	db.usageCountersMu.Unlock()
+	select {
+	case <-fill.done:
+		return fill.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (db *DB) stopUsageCountersFill() {
+	db.usageCountersMu.Lock()
+	fill := db.usageCountersFill
+	if fill != nil {
+		fill.cancel()
+	}
+	db.usageCountersMu.Unlock()
+	if fill != nil {
+		<-fill.done
+	}
+}
+
+func (db *DB) runUsageCountersFill(ctx context.Context) error {
 	_, err := RetryAcrossHandoff(ctx, db, func() (struct{}, error) {
 		if err := db.lockWriterCtx(ctx); err != nil {
 			return struct{}{}, err

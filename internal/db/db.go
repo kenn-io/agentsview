@@ -997,6 +997,8 @@ type DB struct {
 	// Rebuilds reserve attached IDs before their session rows are restored.
 	archiveRebuildProvenance atomic.Pointer[map[string]ArchiveSessionProvenance]
 	usageCountersPending     atomic.Bool
+	usageCountersMu          sync.Mutex
+	usageCountersFill        *usageCountersFill
 	messageFTSRepairPending  atomic.Bool
 	searchIndexRepairPending atomic.Bool
 	// writerClosed is set while the writer pool is intentionally closed for a
@@ -4555,13 +4557,21 @@ func ensureIndexColumnsLocked(ctx context.Context,
 				name,
 			)
 		}
-		if _, err := w.Exec(ctx,
+		tx, err := w.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tx.Rollback() }()
+		if _, err := tx.ExecContext(ctx,
 			`DROP INDEX IF EXISTS `+name,
 		); err != nil {
 			return fmt.Errorf("dropping stale index %s: %w", name, err)
 		}
-		if _, err := w.Exec(ctx, ddl); err != nil {
+		if _, err := tx.ExecContext(ctx, ddl); err != nil {
 			return fmt.Errorf("creating index %s: %w", name, err)
+		}
+		if err := tx.Commit(); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -5776,6 +5786,7 @@ func (db *DB) CloseContext(ctx context.Context) error {
 		ctx, cancel = context.WithTimeout(ctx, closeDrainTimeout)
 		defer cancel()
 	}
+	db.stopUsageCountersFill()
 	db.StopUsageCacheBackfill()
 	var cacheErr error
 	if db.usageCache != nil {
@@ -5858,6 +5869,7 @@ func (db *DB) CloseConnections(ctx context.Context) error {
 	if db.readOnly {
 		return ErrReadOnly
 	}
+	db.stopUsageCountersFill()
 	db.StopUsageCacheBackfill()
 	db.stopWALCheckpointLoop()
 	db.mu.Lock()
@@ -6118,6 +6130,7 @@ func (db *DB) CloseWriter() error {
 	if db.readOnly {
 		return ErrReadOnly
 	}
+	db.stopUsageCountersFill()
 	db.stopWALCheckpointLoop()
 	db.mu.Lock()
 	defer db.mu.Unlock()

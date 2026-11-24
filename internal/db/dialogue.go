@@ -99,6 +99,9 @@ func (db *DB) RepairMessageFTS(ctx context.Context) error {
 		return nil
 	}
 	fillErr := db.finishUsageCounters(ctx)
+	if fillErr != nil {
+		fillErr = fmt.Errorf("message usage counter fill: %w", fillErr)
+	}
 	_, err := RetryAcrossHandoff(ctx, db, func() (struct{}, error) {
 		if err := db.lockWriterCtx(ctx); err != nil {
 			return struct{}{}, err
