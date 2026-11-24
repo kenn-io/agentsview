@@ -30,6 +30,9 @@ func (s *reuseCompletingStore) SaveVectors(ctx context.Context, gen, doc string,
 	if s.ix.spec.Name == "messages" && vectors != nil {
 		var content string
 		if err := s.db.QueryRowContext(ctx, `SELECT content FROM `+s.spec.DocsTable+` WHERE doc_key = ? AND content_hash = ?`, doc, revision).Scan(&content); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return s.repairQueueCompletingStore.SaveVectors(ctx, gen, doc, revision, vectors)
+			}
 			return err
 		}
 		tx, err := s.db.BeginTx(ctx, nil)

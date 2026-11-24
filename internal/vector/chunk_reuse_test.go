@@ -584,3 +584,25 @@ func TestChunkTextIgnoresPointerAfterVectorSaveFailure(t *testing.T) {
 	assert.Equal(t, [][]float32{{0, 1, 0}}, got)
 	assert.Equal(t, 1, calls)
 }
+
+func TestChunkTextStaleSaveReturnsErrStale(t *testing.T) {
+	ctx := t.Context()
+	ix := openTestIndex(t)
+	src := twoDocSource()
+	src.rows = src.rows[:1]
+	src.rows[0].unit.Content = "old text"
+	gen := fakeGeneration("stale-save")
+	_, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{})
+	require.NoError(t, err)
+	key := unitDocKey(src.rows[0].unit, map[string]int{})
+	oldRevision := contentHash(src.rows[0].unit.Content)
+	_, err = ix.db.ExecContext(ctx, `UPDATE vector_messages SET content = ?, content_hash = ? WHERE doc_key = ?`, "new text", contentHash("new text"), key)
+	require.NoError(t, err)
+	store := &reuseCompletingStore{repairQueueCompletingStore: &repairQueueCompletingStore{Store: ix.store, db: ix.db, spec: ix.spec}, ix: ix, ordinal: 1}
+	err = store.SaveVectors(ctx, gen.Fingerprint(), key, oldRevision, []kitvec.ChunkVector{{ChunkIndex: 0, Vector: kitvec.Vector{1, 0, 0}}})
+	require.ErrorIs(t, err, kitvec.ErrStale)
+	var revision string
+	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT revision FROM message_vectors_chunk_text WHERE ordinal = 1 AND doc_key = ?`, key).Scan(&revision))
+	assert.Equal(t, oldRevision, revision)
+	assert.Empty(t, store.saved)
+}
