@@ -335,41 +335,6 @@ func assertUsageOnlyStoredSession(
 	assert.Equal(t, wantOrdinals, ordinals)
 }
 
-func TestUsageArchiveRetainsToolPRLinksAcrossAppends(t *testing.T) {
-	database := testDB(t)
-	database.SetArchiveContent(config.ArchiveContentUsage)
-	session := Session{ID: "usage-links", Project: "project", Agent: "claude", Machine: "local"}
-	for i, input := range []string{`{"command":"gh pr view 5 -R example/repo"}`, `{"command":"gh pr view 6 -R example/repo"}`} {
-		_, err := database.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{{
-			Session: session, Messages: []Message{{SessionID: session.ID, Ordinal: i, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: input}}}},
-		}})
-		require.NoError(t, err)
-	}
-	stored, err := database.GetSessionFull(t.Context(), session.ID)
-	require.NoError(t, err)
-	require.NotNil(t, stored)
-	require.Len(t, stored.PRLinks, 2)
-	assert.Equal(t, 5, stored.PRLinks[0].Number)
-	assert.Equal(t, 6, stored.PRLinks[1].Number)
-	require.NoError(t, database.ReplaceSessionMessages(t.Context(), session.ID, []Message{{SessionID: session.ID, Ordinal: 0, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Task", Category: "Task", InputJSON: `{"prompt":"Review https://github.com/example/repo/pull/7"}`}}}}))
-	stored, err = database.GetSessionFull(t.Context(), session.ID)
-	require.NoError(t, err)
-	require.Len(t, stored.PRLinks, 3)
-	assert.Equal(t, 7, stored.PRLinks[2].Number)
-	require.NoError(t, database.InsertMessages(t.Context(), []Message{{SessionID: session.ID, Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 8 -R example/repo"}`}}}}))
-	_, err = database.WriteSessionIncremental(t.Context(), session.ID, []Message{{SessionID: session.ID, Ordinal: 2, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 9 -R example/repo"}`}}}}, IncrementalSessionUpdate{})
-	require.NoError(t, err)
-	stored, err = database.GetSessionFull(t.Context(), session.ID)
-	require.NoError(t, err)
-	require.Len(t, stored.PRLinks, 5)
-	assert.Equal(t, 8, stored.PRLinks[3].Number)
-	assert.Equal(t, 9, stored.PRLinks[4].Number)
-	require.NoError(t, database.UpsertSession(t.Context(), session))
-	stored, err = database.GetSessionFull(t.Context(), session.ID)
-	require.NoError(t, err)
-	assert.Len(t, stored.PRLinks, 5)
-}
-
 func TestTranscriptsArchiveContentKeepsTextAndDropsToolPayloads(t *testing.T) {
 	database := testDB(t)
 	database.SetArchiveContent(config.ArchiveContentTranscripts)

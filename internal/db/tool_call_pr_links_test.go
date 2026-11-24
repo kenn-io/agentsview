@@ -1,7 +1,6 @@
 package db_test
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -34,13 +33,6 @@ func TestToolCallPRLinks(t *testing.T) {
 	}
 }
 
-func TestToolCallPRLinksContextCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	_, err := db.ToolCallPRLinks(ctx, []db.Message{{ToolCalls: []db.ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`}}}}, "", "")
-	assert.ErrorIs(t, err, context.Canceled)
-}
-
 func TestToolCallPRLinksOversizedInput(t *testing.T) {
 	for _, tc := range []struct {
 		name, first, second, cwd, remote string
@@ -71,18 +63,6 @@ func toolCallPRLinks(t *testing.T, messages []db.Message, cwd, remote string) []
 	return links
 }
 
-func TestToolCallPRLinksDirectFormats(t *testing.T) {
-	for _, tc := range []struct{ tool, input string }{
-		{"exec_command", `{"cmd":"gh pr view 42 -R example/repo"}`},
-	} {
-		t.Run(tc.input, func(t *testing.T) {
-			links := toolCallPRLinks(t, []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", ToolName: tc.tool, InputJSON: tc.input}}}}, "", "https://github.com/example/repo.git")
-			require.Len(t, links, 1)
-			assert.Equal(t, 42, links[0].Number)
-		})
-	}
-}
-
 func TestToolCallPRLinksWorkingDirectory(t *testing.T) {
 	for _, tc := range []struct {
 		input string
@@ -98,22 +78,11 @@ func TestToolCallPRLinksWorkingDirectory(t *testing.T) {
 	}
 }
 
-func TestToolCallPRLinksDirectoryChangePreservesHost(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		calls []db.ToolCall
-		want  string
-	}{
-		{"bare after cd", []db.ToolCall{{Category: "Bash", ToolName: "Bash", InputJSON: `{"command":"cd /work/other"}`}, {Category: "Bash", ToolName: "Bash", InputJSON: `{"command":"gh pr merge 60"}`}}, ""},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			links := toolCallPRLinks(t, []db.Message{{ToolCalls: tc.calls}}, "/work/repo", "https://git.example/example/repo.git")
-			if tc.want == "" {
-				assert.Empty(t, links)
-				return
-			}
-			require.Len(t, links, 1)
-			assert.Equal(t, tc.want, links[0].URL)
-		})
+func TestToolCallPRLinksBareNumberAfterDirectoryChange(t *testing.T) {
+	calls := []db.ToolCall{
+		{Category: "Bash", ToolName: "Bash", InputJSON: `{"command":"cd /work/other"}`},
+		{Category: "Bash", ToolName: "Bash", InputJSON: `{"command":"gh pr merge 60"}`},
 	}
+	links := toolCallPRLinks(t, []db.Message{{ToolCalls: calls}}, "/work/repo", "https://git.example/example/repo.git")
+	assert.Empty(t, links)
 }

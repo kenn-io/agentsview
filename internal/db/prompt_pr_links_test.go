@@ -127,8 +127,6 @@ func TestPromptPRLinksUsagePolicyWithRetainedHistory(t *testing.T) {
 	require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Role: "user", Content: "https://github.com/o/r/pull/42"}}))
 	d.SetArchiveContent(config.ArchiveContentUsage)
 	require.NoError(t, d.UpsertSession(t.Context(), s))
-	obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: "/work/repo", ObservedAt: time.Now().UTC()}, "https://github.com/example/repo.git")
-	require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), obs))
 	got, err := d.GetSession(t.Context(), s.ID)
 	require.NoError(t, err)
 	assert.Empty(t, got.PRLinks)
@@ -221,34 +219,60 @@ func TestPromptPRLinksUsageOrphanCopy(t *testing.T) {
 	}
 }
 
-func TestToolPRLinksCopiedToUsageArchive(t *testing.T) {
-	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts} {
-		t.Run(string(policy), func(t *testing.T) {
+func TestToolPRLinksCopiedArchives(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		source, destination config.ArchiveContent
+		checkout            bool
+	}{
+		{"full to usage", config.ArchiveContentFull, config.ArchiveContentUsage, false},
+		{"transcripts to usage", config.ArchiveContentTranscripts, config.ArchiveContentUsage, false},
+		{"checkout remote", config.ArchiveContentFull, config.ArchiveContentFull, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			source := testDB(t)
-			source.SetArchiveContent(policy)
+			source.SetArchiveContent(tc.source)
 			for _, id := range []string{"orphan", "trashed"} {
 				s := Session{ID: id, Project: "project", Machine: "local", Agent: "claude"}
+				if tc.checkout {
+					s.Cwd = "/work/repo"
+				}
 				require.NoError(t, source.UpsertSession(t.Context(), s))
-				require.NoError(t, source.InsertMessages(t.Context(), []Message{{
-					SessionID: id, Role: "assistant", ToolCalls: []ToolCall{
-						{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`},
-						{ToolName: "Task", Category: "Task", InputJSON: `{"prompt":"Review https://github.com/example/repo/pull/43"}`},
-					},
-				}}))
+				calls := []ToolCall{
+					{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`},
+					{ToolName: "Task", Category: "Task", InputJSON: `{"prompt":"Review https://github.com/example/repo/pull/43"}`},
+				}
+				if tc.checkout {
+					obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: id, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://git.example/example/repo.git")
+					require.NoError(t, source.UpsertProjectIdentityObservation(t.Context(), obs))
+					calls = []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42"}`}}
+				}
+				require.NoError(t, source.InsertMessages(t.Context(), []Message{{SessionID: id, Role: "assistant", ToolCalls: calls}}))
 			}
 			require.NoError(t, source.SoftDeleteSession(t.Context(), "trashed"))
 			dest := testDB(t)
-			dest.SetArchiveContent(config.ArchiveContentUsage)
+			dest.SetArchiveContent(tc.destination)
 			_, err := dest.CopyTrashedDataFrom(t.Context(), source.Path())
 			require.NoError(t, err)
 			_, err = dest.CopyOrphanedDataFrom(t.Context(), source.Path())
 			require.NoError(t, err)
+			if tc.checkout {
+				require.NoError(t, dest.CopySessionMetadataFrom(t.Context(), source.Path()))
+			}
 			for _, id := range []string{"orphan", "trashed"} {
-				links, err := dest.GetSessionStructuredPRLinks(t.Context(), id)
-				require.NoError(t, err)
-				require.Len(t, links, 2)
-				assert.Equal(t, 42, links[0].Number)
-				assert.Equal(t, 43, links[1].Number)
+				if tc.checkout {
+					var encoded string
+					require.NoError(t, dest.getReader().QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=?`, id).Scan(&encoded))
+					links := DecodePRLinks(encoded)
+					require.Len(t, links, 1)
+					assert.Equal(t, "https://git.example/example/repo/pull/42", links[0].URL)
+				} else {
+					links, err := dest.GetSessionStructuredPRLinks(t.Context(), id)
+					require.NoError(t, err)
+					require.Len(t, links, 2)
+					assert.Equal(t, 42, links[0].Number)
+					assert.Equal(t, 43, links[1].Number)
+				}
 			}
 		})
 	}
@@ -426,43 +450,63 @@ func TestToolPRLinksArchiveUpgrade(t *testing.T) {
 	}
 }
 
-func TestToolPRLinksTranscriptsStorage(t *testing.T) {
-	for _, tc := range []struct{ name, route string }{{"insert", "insert"}, {"incremental", "incremental"}, {"replace", "replace"}, {"batch", "batch"}} {
-		t.Run(tc.name, func(t *testing.T) {
+func TestToolPRLinksArchiveStorage(t *testing.T) {
+	for _, policy := range []config.ArchiveContent{config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
+		t.Run(string(policy), func(t *testing.T) {
 			d := testDB(t)
-			d.SetArchiveContent(config.ArchiveContentTranscripts)
-			s := Session{ID: "transcripts", Project: "project", Machine: "local", Agent: "claude"}
-			require.NoError(t, d.UpsertSession(t.Context(), s))
-			input := `{"command":"gh pr view 42 -R github.com/example/repo"}`
-			message := Message{SessionID: s.ID, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: input}}}
-			switch tc.route {
-			case "insert":
-				require.NoError(t, d.InsertMessages(t.Context(), []Message{message}))
-			case "incremental":
-				_, err := d.WriteSessionIncremental(t.Context(), s.ID, []Message{message}, IncrementalSessionUpdate{})
+			d.SetArchiveContent(policy)
+			session := Session{ID: "links", Project: "project", Agent: "claude", Machine: "local"}
+			require.NoError(t, d.UpsertSession(t.Context(), session))
+			message := func(ordinal int, tool, category, input string) Message {
+				return Message{SessionID: session.ID, Ordinal: ordinal, Role: "assistant", ToolCalls: []ToolCall{{ToolName: tool, Category: category, InputJSON: input}}}
+			}
+			check := func(want []int) {
+				t.Helper()
+				if policy == config.ArchiveContentTranscripts {
+					stored, err := d.GetAllMessages(t.Context(), session.ID)
+					require.NoError(t, err)
+					require.NotEmpty(t, stored)
+					for _, msg := range stored {
+						require.NotEmpty(t, msg.ToolCalls)
+						for _, call := range msg.ToolCalls {
+							assert.Empty(t, call.InputJSON)
+						}
+					}
+					require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+						return refreshSessionPromptPRLinksTx(t.Context(), tx, session.ID)
+					}))
+				}
+				stored, err := d.GetSessionFull(t.Context(), session.ID)
 				require.NoError(t, err)
-			case "replace":
-				require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{message}))
-			case "batch":
-				_, err := d.WriteSessionBatchContext(t.Context(), []SessionBatchWrite{{Session: s, Messages: []Message{message}, ReplaceMessages: true}})
+				require.NotNil(t, stored)
+				numbers := make([]int, len(stored.PRLinks))
+				for i, link := range stored.PRLinks {
+					numbers[i] = link.Number
+				}
+				assert.Equal(t, want, numbers)
+			}
+			for i, input := range []string{`{"command":"gh pr view 5 -R example/repo"}`, `{"command":"gh pr view 6 -R example/repo"}`} {
+				_, err := d.WriteSessionBatchContext(t.Context(), []SessionBatchWrite{{Session: session, Messages: []Message{message(i, "Bash", "Bash", input)}, ReplaceMessages: i == 0}})
 				require.NoError(t, err)
 			}
-			got, err := d.GetSession(t.Context(), s.ID)
+			check([]int{5, 6})
+			require.NoError(t, d.ReplaceSessionMessages(t.Context(), session.ID, []Message{message(0, "Task", "Task", `{"prompt":"Review https://github.com/example/repo/pull/7"}`)}))
+			want := []int{7}
+			if policy.UsageOnly() {
+				want = []int{5, 6, 7}
+			}
+			check(want)
+			require.NoError(t, d.InsertMessages(t.Context(), []Message{message(1, "Bash", "Bash", `{"command":"gh pr view 8 -R example/repo"}`)}))
+			want = append(want, 8)
+			check(want)
+			_, err := d.WriteSessionIncremental(t.Context(), session.ID, []Message{message(2, "Bash", "Bash", `{"command":"gh pr view 9 -R example/repo"}`)}, IncrementalSessionUpdate{})
 			require.NoError(t, err)
-			stored, err := d.GetAllMessages(t.Context(), s.ID)
-			require.NoError(t, err)
-			require.Len(t, stored, 1)
-			require.Len(t, stored[0].ToolCalls, 1)
-			assert.Empty(t, stored[0].ToolCalls[0].InputJSON)
-			require.Len(t, got.PRLinks, 1)
-			assert.Equal(t, "https://github.com/example/repo/pull/42", got.PRLinks[0].URL)
-			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
-				return refreshSessionPromptPRLinksTx(t.Context(), tx, s.ID)
-			}))
-			got, err = d.GetSession(t.Context(), s.ID)
-			require.NoError(t, err)
-			require.Len(t, got.PRLinks, 1)
-			assert.Equal(t, "https://github.com/example/repo/pull/42", got.PRLinks[0].URL)
+			want = append(want, 9)
+			check(want)
+			if policy.UsageOnly() {
+				require.NoError(t, d.UpsertSession(t.Context(), session))
+				check(want)
+			}
 		})
 	}
 }
@@ -542,15 +586,11 @@ func TestToolPRLinksSharedShellDirectoryAppend(t *testing.T) {
 				return Message{SessionID: s.ID, Ordinal: ordinal, Role: "assistant", ToolCalls: []ToolCall{{ToolName: tc.tool, Category: "Bash", InputJSON: input}}}
 			}
 			require.NoError(t, d.InsertMessages(t.Context(), []Message{message(0, string(input))}))
-			require.NoError(t, d.InsertMessages(t.Context(), []Message{message(1, `{"command":"gh pr view 42"}`)}))
-			got, err := d.GetSession(t.Context(), s.ID)
-			require.NoError(t, err)
-			assert.Empty(t, got.PRLinks)
-			require.NoError(t, d.InsertMessages(t.Context(), []Message{message(2, tc.finalInput)}))
+			require.NoError(t, d.InsertMessages(t.Context(), []Message{message(1, tc.finalInput)}))
 			if tc.refresh {
 				require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error { return refreshSessionPromptPRLinksTx(t.Context(), tx, s.ID) }))
 			}
-			got, err = d.GetSession(t.Context(), s.ID)
+			got, err := d.GetSession(t.Context(), s.ID)
 			require.NoError(t, err)
 			require.Len(t, got.PRLinks, 1)
 			assert.Equal(t, tc.finalURL, got.PRLinks[0].URL)
@@ -572,38 +612,4 @@ func TestCommandPRRecordedRemoteRepair(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got.PRLinks, 1)
 	assert.Equal(t, "https://github.com/example/repo/pull/42", got.PRLinks[0].URL)
-}
-
-func TestToolPRLinksRebuildRetainsCheckout(t *testing.T) {
-	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
-		t.Run(string(policy), func(t *testing.T) {
-			ctx := t.Context()
-			source := testDB(t)
-			for _, id := range []string{"orphan", "trashed"} {
-				s := Session{ID: id, Project: "project", Machine: "local", Agent: "claude", Cwd: "/work/repo"}
-				require.NoError(t, source.UpsertSession(ctx, s))
-				obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: id, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://git.example/example/repo.git")
-				require.NoError(t, source.UpsertProjectIdentityObservation(ctx, obs))
-				require.NoError(t, source.InsertMessages(ctx, []Message{{SessionID: id, Role: "assistant", ToolCalls: []ToolCall{{Category: "Bash", ToolName: "Bash", InputJSON: `{"command":"gh pr view 42"}`}}}}))
-			}
-			require.NoError(t, source.SoftDeleteSession(ctx, "trashed"))
-			dest := testDB(t)
-			dest.SetArchiveContent(policy)
-			_, err := dest.CopyTrashedDataFrom(ctx, source.Path())
-			require.NoError(t, err)
-			_, err = dest.CopyOrphanedDataFrom(ctx, source.Path())
-			require.NoError(t, err)
-			require.NoError(t, dest.CopySessionMetadataFrom(ctx, source.Path()))
-			for _, id := range []string{"orphan", "trashed"} {
-				var encoded string
-				require.NoError(t, dest.getReader().QueryRowContext(ctx, `SELECT pr_links FROM sessions WHERE id=?`, id).Scan(&encoded))
-				if policy != config.ArchiveContentFull {
-					assert.Empty(t, DecodePRLinks(encoded))
-				} else {
-					require.Len(t, DecodePRLinks(encoded), 1)
-					assert.Equal(t, "https://git.example/example/repo/pull/42", DecodePRLinks(encoded)[0].URL)
-				}
-			}
-		})
-	}
 }
