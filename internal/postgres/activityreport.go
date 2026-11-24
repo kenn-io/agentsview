@@ -56,17 +56,18 @@ type activityReportBackend struct {
 	counted                *[]pgActivityCountedMessage
 }
 
-func (b activityReportBackend) ActivityReportEvidence(ctx context.Context, q activity.Query) ([]activity.SessionMeta, []string, error) {
+func (b activityReportBackend) ActivityReportEvidence(ctx context.Context, q activity.Query) ([]activity.SessionMeta, error) {
+	if !b.filter.ActivityNeedsEvidence() {
+		return nil, nil
+	}
 	start, end := db.ActivityReportInstantBoundsUTC(q)
-	sessions, ids, err := b.activityReportSessions(ctx, db.AnalyticsFilter{Timezone: b.filter.Timezone, IncludeSubagents: true, IncludeForks: true}, start, end, nil)
+	sessions, _, err := b.activityReportSessionsWhere(ctx, db.AnalyticsFilter{Timezone: b.filter.Timezone, IncludeSubagents: true, IncludeForks: true}, start, end, nil, true)
 	if err == nil && b.read != nil && !q.Partial {
 		for _, session := range sessions {
-			if session.IsSubagent {
-				b.read[session.SessionID] = struct{}{}
-			}
+			b.read[session.SessionID] = struct{}{}
 		}
 	}
-	return sessions, ids, err
+	return sessions, err
 }
 
 func (b activityReportBackend) ActivityReportLaunchers(ctx context.Context, sessions []activity.SessionMeta, q activity.Query) (activity.Launchers, error) {
@@ -477,8 +478,15 @@ func (s *Store) activityReportSessions(
 	ctx context.Context, f db.AnalyticsFilter, rangeStartUTC, rangeEndUTC string,
 	only []string,
 ) ([]activity.SessionMeta, []string, error) {
+	return s.activityReportSessionsWhere(ctx, f, rangeStartUTC, rangeEndUTC, only, false)
+}
+
+func (s *Store) activityReportSessionsWhere(ctx context.Context, f db.AnalyticsFilter, rangeStartUTC, rangeEndUTC string, only []string, onlySubagents bool) ([]activity.SessionMeta, []string, error) {
 	pb := &paramBuilder{}
 	where := buildAnalyticsWhereWithDate(f, "", pb, false, "s.id", s.sessionDialect())
+	if onlySubagents {
+		where += " AND s.relationship_type = 'subagent'"
+	}
 	lower := pb.add(rangeStartUTC)
 	upper := pb.add(rangeEndUTC)
 	if only != nil {

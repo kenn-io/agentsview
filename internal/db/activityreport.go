@@ -73,17 +73,18 @@ type activityReportBackend struct {
 	usageResult            *activityKeptUsage
 }
 
-func (b activityReportBackend) ActivityReportEvidence(ctx context.Context, q activity.Query) ([]activity.SessionMeta, []string, error) {
+func (b activityReportBackend) ActivityReportEvidence(ctx context.Context, q activity.Query) ([]activity.SessionMeta, error) {
+	if !b.filter.ActivityNeedsEvidence() {
+		return nil, nil
+	}
 	start, end := activityReportRangeBoundsUTC(q)
-	sessions, ids, err := b.activityReportSessions(ctx, AnalyticsFilter{Timezone: b.filter.Timezone, IncludeSubagents: true, IncludeForks: true}, start, end)
+	sessions, _, err := b.activityReportSessionsFromWhere(ctx, b.getReader(), AnalyticsFilter{Timezone: b.filter.Timezone, IncludeSubagents: true, IncludeForks: true}, start, end, true)
 	if err == nil && b.read != nil && !q.Partial {
 		for _, session := range sessions {
-			if session.IsSubagent {
-				*b.read = append(*b.read, session.SessionID)
-			}
+			*b.read = append(*b.read, session.SessionID)
 		}
 	}
-	return sessions, ids, err
+	return sessions, err
 }
 
 func (b activityReportBackend) ActivityReportLaunchers(ctx context.Context, sessions []activity.SessionMeta, q activity.Query) (activity.Launchers, error) {
@@ -625,7 +626,14 @@ func (db *DB) activityReportSessionsFrom(
 	f AnalyticsFilter,
 	rangeStartUTC, rangeEndUTC string,
 ) ([]activity.SessionMeta, []string, error) {
+	return db.activityReportSessionsFromWhere(ctx, q, f, rangeStartUTC, rangeEndUTC, false)
+}
+
+func (db *DB) activityReportSessionsFromWhere(ctx context.Context, q sessionExportQuerier, f AnalyticsFilter, rangeStartUTC, rangeEndUTC string, onlySubagents bool) ([]activity.SessionMeta, []string, error) {
 	where, args := activityReportSessionSelectionWhere(f, rangeStartUTC, rangeEndUTC)
+	if onlySubagents {
+		where += " AND s.relationship_type = 'subagent'"
+	}
 
 	// Each Title candidate is NULLIF'd independently (not a nested
 	// COALESCE-then-NULLIF) so an empty display_name cannot mask a real

@@ -62,13 +62,10 @@ func (s *Store) keptActivityReport(ctx context.Context, selection, version strin
 		if err != nil || len(ids) > 0 {
 			return kept.Report{}, through, false, err
 		}
-		evidence, _, err := s.activityReportSessions(ctx, db.AnalyticsFilter{Timezone: f.Timezone, IncludeSubagents: true, IncludeForks: true}, rangeStart, rangeEnd, changed)
-		if err != nil {
-			return kept.Report{}, through, false, err
-		}
-		for _, session := range evidence {
-			if session.IsSubagent {
-				return kept.Report{}, through, false, nil
+		if f.ActivityNeedsEvidence() {
+			_, evidenceIDs, err := s.activityReportSessionsWhere(ctx, db.AnalyticsFilter{Timezone: f.Timezone, IncludeSubagents: true, IncludeForks: true}, rangeStart, rangeEnd, changed, true)
+			if err != nil || len(evidenceIDs) > 0 {
+				return kept.Report{}, through, false, err
 			}
 		}
 		var overlaps bool

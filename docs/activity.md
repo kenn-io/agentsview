@@ -109,7 +109,8 @@ the right gives the combined peak for the range. Interactive concurrency counts
 overlapping human-facing conversations and does not measure human attention.
 A session also counts in its own class while a subagent it launched is active,
 including nested runs and runs that continue after the session's last message.
-The launcher must match the Project, Agent, Machine, and Automation filters.
+The launcher must match the Project, Agent, Machine, and Automation filters. A
+linked run can keep it active even when the run is excluded by those filters.
 Agent-minutes, cost, session counts, the sessions table, and bucket membership
 continue to use each session's own activity. Reporting exports use each session's
 own activity for concurrency as well.

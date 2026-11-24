@@ -30,7 +30,7 @@ type ConcurrentUsageBackend interface {
 
 // EvidenceBackend supplies runs whose own session is excluded by report filters.
 type EvidenceBackend interface {
-	ActivityReportEvidence(context.Context, Query) ([]SessionMeta, []string, error)
+	ActivityReportEvidence(context.Context, Query) ([]SessionMeta, error)
 }
 
 // BuildReportArtifacts assembles a report and returns the emitted completion event.
@@ -42,7 +42,7 @@ func BuildReportArtifacts(
 	sweepIDs := ids
 	if source, ok := backend.(EvidenceBackend); ok {
 		var err error
-		evidence, sweepIDs, err = source.ActivityReportEvidence(ctx, q)
+		evidence, err = source.ActivityReportEvidence(ctx, q)
 		if err != nil {
 			return CandidateArtifacts{}, Progress{}, err
 		}

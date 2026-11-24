@@ -133,6 +133,15 @@ type AnalyticsFilter struct {
 	IncludeForks bool
 }
 
+// ActivityNeedsEvidence reports whether a filter can hide a linked run.
+func (f AnalyticsFilter) ActivityNeedsEvidence() bool {
+	return len(CSVFilterValues(f.Machine)) > 0 || f.Project != "" || f.GitBranch != "" ||
+		len(CSVFilterValues(f.Agent)) > 0 || len(CSVFilterValues(f.Model)) > 0 ||
+		f.MinUserMessages > 0 || f.ExcludeOneShot || f.ExcludeInteractive ||
+		NormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated) != "all" ||
+		f.ActiveSince != "" || f.Termination != ""
+}
+
 // TrendsSessionFilter keeps session-level filters for Trends candidate selection.
 func (f AnalyticsFilter) TrendsSessionFilter() AnalyticsFilter {
 	f.From, f.To, f.Model = "", "", ""

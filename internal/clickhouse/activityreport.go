@@ -67,11 +67,10 @@ type activityReportBackend struct {
 	rangeEndUTC   string
 	pairing       *activityReportPairing
 	evidence      []activity.SessionMeta
-	evidenceIDs   []string
 }
 
-func (b activityReportBackend) ActivityReportEvidence(_ context.Context, _ activity.Query) ([]activity.SessionMeta, []string, error) {
-	return b.evidence, b.evidenceIDs, nil
+func (b activityReportBackend) ActivityReportEvidence(_ context.Context, _ activity.Query) ([]activity.SessionMeta, error) {
+	return b.evidence, nil
 }
 
 func (b activityReportBackend) ActivityReportLaunchers(ctx context.Context, sessions []activity.SessionMeta, _ activity.Query) (activity.Launchers, error) {
@@ -191,12 +190,18 @@ func (s *Store) BuildActivityReportArtifacts(
 	// effective end with every request and is always built. The key is taken
 	// before any read the report depends on, so a push that lands after it
 	// makes the next request miss.
-	evidenceWhere, evidenceArgs := clickActivityReportCandidateWhere(db.AnalyticsFilter{Timezone: f.Timezone, IncludeSubagents: true, IncludeForks: true}, rangeStartUTC, rangeEndUTC)
-	evidenceWhere = "(" + candidateWhere + ") OR ((" + evidenceWhere + ") AND s.relationship_type = 'subagent')"
-	evidenceArgs = append(slices.Clone(candidateArgs), evidenceArgs...)
+	keyWhere, keyArgs := candidateWhere, candidateArgs
+	var evidenceWhere string
+	var evidenceArgs []any
+	if f.ActivityNeedsEvidence() {
+		evidenceWhere, evidenceArgs = clickActivityReportCandidateWhere(db.AnalyticsFilter{Timezone: f.Timezone, IncludeSubagents: true, IncludeForks: true}, rangeStartUTC, rangeEndUTC)
+		evidenceWhere = "(" + evidenceWhere + ") AND s.relationship_type = 'subagent'"
+		keyWhere = "(" + candidateWhere + ") OR (" + evidenceWhere + ")"
+		keyArgs = append(slices.Clone(candidateArgs), evidenceArgs...)
+	}
 	var memoKey string
 	if !q.Partial {
-		memoKey, resolvedLaunchers, err = s.endedActivityReportKey(ctx, f, evidenceWhere, evidenceArgs, rangeStartUTC, rangeEndUTC)
+		memoKey, resolvedLaunchers, err = s.endedActivityReportKey(ctx, f, keyWhere, keyArgs, rangeStartUTC, rangeEndUTC)
 		if err != nil {
 			return activity.CandidateArtifacts{}, err
 		}
@@ -208,13 +213,24 @@ func (s *Store) BuildActivityReportArtifacts(
 	}
 	// A kept report answers its range until a push changes the listing's
 	// parts, so its listing would never be read again.
-	sessions, ids, _, err := s.activityReportSessions(ctx, candidateWhere, candidateArgs, memoKey == "")
+	sessions, ids, versions, err := s.activityReportSessions(ctx, candidateWhere, candidateArgs, memoKey == "")
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
 	}
-	evidence, evidenceIDs, evidenceVersions, err := s.activityReportSessions(ctx, evidenceWhere, evidenceArgs, memoKey == "")
-	if err != nil {
-		return activity.CandidateArtifacts{}, err
+	var evidence []activity.SessionMeta
+	sweepIDs := slices.Clone(ids)
+	if f.ActivityNeedsEvidence() {
+		var evidenceVersions map[string]uint64
+		evidence, _, evidenceVersions, err = s.activityReportSessions(ctx, evidenceWhere, evidenceArgs, memoKey == "")
+		if err != nil {
+			return activity.CandidateArtifacts{}, err
+		}
+		for _, session := range evidence {
+			if _, ok := versions[session.SessionID]; !ok {
+				sweepIDs = append(sweepIDs, session.SessionID)
+				versions[session.SessionID] = evidenceVersions[session.SessionID]
+			}
+		}
 	}
 	// Send the already selected IDs as native data instead of repeating discovery.
 	table, err := ext.NewTable("activity_candidate_ids", ext.Column("id", "String"))
@@ -236,10 +252,10 @@ func (s *Store) BuildActivityReportArtifacts(
 	// set, so pair while usage loads instead of serializing the two stages.
 	pairCtx, cancelPairs := context.WithCancel(ctx)
 	defer cancelPairs()
-	pairs := s.startActivityReportPairs(pairCtx, evidenceIDs, evidenceVersions, q)
+	pairs := s.startActivityReportPairs(pairCtx, sweepIDs, versions, q)
 	backend := activityReportBackend{
 		Store: s, filter: f, launchers: resolvedLaunchers, candidates: candidates,
-		rangeStartUTC: rangeStartUTC, rangeEndUTC: rangeEndUTC, pairing: pairs, evidence: evidence, evidenceIDs: evidenceIDs,
+		rangeStartUTC: rangeStartUTC, rangeEndUTC: rangeEndUTC, pairing: pairs, evidence: evidence,
 	}
 	artifacts, done, err := activity.BuildReportArtifacts(
 		ctx, backend, sessions, ids, q, onProgress, "aggregating clickhouse activity report")

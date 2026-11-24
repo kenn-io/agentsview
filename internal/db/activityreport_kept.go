@@ -135,9 +135,11 @@ func (db *DB) keptActivityChangesValid(ctx context.Context, oldRevision int64, r
 		usageLowerBound := PaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
 		usageUpperBound := PaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
 		where, args := activityReportSessionSelectionWhere(filter, rangeStartUTC, rangeEndUTC)
-		evidenceWhere, evidenceArgs := activityReportSessionSelectionWhere(AnalyticsFilter{Timezone: filter.Timezone, IncludeSubagents: true, IncludeForks: true}, rangeStartUTC, rangeEndUTC)
-		where = "(" + where + ") OR ((" + evidenceWhere + ") AND s.relationship_type = 'subagent')"
-		args = append(args, evidenceArgs...)
+		if filter.ActivityNeedsEvidence() {
+			evidenceWhere, evidenceArgs := activityReportSessionSelectionWhere(AnalyticsFilter{Timezone: filter.Timezone, IncludeSubagents: true, IncludeForks: true}, rangeStartUTC, rangeEndUTC)
+			where = "(" + where + ") OR ((" + evidenceWhere + ") AND s.relationship_type = 'subagent')"
+			args = append(args, evidenceArgs...)
+		}
 		args = append(args, string(changedJSON))
 		var eligible bool
 		err = db.getReader().QueryRowContext(ctx, `SELECT EXISTS (
