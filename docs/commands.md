@@ -2579,8 +2579,8 @@ hosted data.
 The refresh returns within 1.9 seconds and does not wait for archive-scale
 work. With `--hook`, recording a launcher link can take another 6 seconds.
 The hook records links only at startup, so resuming a run does not restore a
-missing link. Set `AGENTSVIEW_DISABLE_AUTO_SYNC=1` to skip the automatic request and
-launcher links. Explicit sync commands and searches still work. Restart a
+missing link. Set `AGENTSVIEW_DISABLE_AUTO_SYNC=1` to skip the automatic request.
+Launcher links, explicit sync commands, and searches still work. Restart a
 contributor owner started by an older binary once so it advertises the
 lifecycle wake endpoint. Contributor wake works on macOS and Linux, while
 Windows contributors stay on the watcher's normal event and interval cadence.
