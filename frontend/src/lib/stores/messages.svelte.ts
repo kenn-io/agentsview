@@ -263,7 +263,12 @@ export class MessagesStore {
     this.loadError = null;
     if (kind === "older") return this.loadOlder();
     if (kind === "history") return this.ensureHistoryLoaded();
-    return this.messages.length === 0 ? this.loadSession(id) : this.reload();
+    if (this.messages.length === 0) {
+      this.cancelInFlight();
+      this.cancelledSessionId = null;
+      return this.loadSession(id);
+    }
+    return this.reload();
   }
 
   clear() {
@@ -961,15 +966,20 @@ export class MessagesStore {
     messageCountHint?: number,
   ): Promise<boolean> {
     clearContentCaches();
-    this.loading = true;
-    const owner = ++this.loadingOwner;
+    // Keep a visible failure alert (and its Retry button) mounted while a
+    // background transient reload runs instead of swapping it for a spinner.
+    const showLoading = this.loadError === null;
+    const owner = showLoading ? ++this.loadingOwner : 0;
+    if (showLoading) this.loading = true;
     try {
       return messageCountHint !== undefined && messageCountHint > FULL_SESSION_MESSAGE_THRESHOLD
         ? await this.loadProgressively(id, signal)
         : await this.loadAllMessages(id, signal, messageCountHint);
     } finally {
-      if (this.sessionId === id && this.loadingOwner === owner) {
-        this.loading = false;
+      if (this.sessionId === id) {
+        if (showLoading && this.loadingOwner === owner) {
+          this.loading = false;
+        }
         this.updateStableMainModelInfo();
       }
     }
