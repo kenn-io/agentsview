@@ -301,7 +301,7 @@ func (ix *Index) Build(
 		if err != nil {
 			return result, err
 		}
-		defer tx.Rollback()
+		defer func() { _ = tx.Rollback() }()
 		if _, err := tx.ExecContext(ctx, `DELETE FROM `+ix.spec.reuseTable()+` WHERE ordinal = ? AND NOT EXISTS (SELECT 1 FROM `+ix.spec.DocsTable+` d WHERE d.doc_key = `+ix.spec.reuseTable()+`.doc_key)`, ordinal); err != nil {
 			return result, err
 		}
@@ -311,21 +311,19 @@ func (ix *Index) Build(
 		if err != nil {
 			return result, err
 		}
+		defer rows.Close()
 		var completed []string
 		for rows.Next() {
 			var key, content string
 			var hasChunks bool
 			if err := rows.Scan(&key, &content, &hasChunks); err != nil {
-				rows.Close()
 				return result, err
 			}
 			if hasChunks || len(kitvec.Split(content, ix.split)) == 0 {
 				completed = append(completed, key)
 			}
 		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
+		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 			return result, err
 		}
 		for _, key := range completed {

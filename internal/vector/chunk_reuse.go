@@ -36,7 +36,7 @@ func (s *reuseCompletingStore) SaveVectors(ctx context.Context, gen, doc string,
 		if err != nil {
 			return err
 		}
-		defer tx.Rollback()
+		defer func() { _ = tx.Rollback() }()
 		if _, err = tx.ExecContext(ctx, `DELETE FROM `+s.spec.chunkTextTable()+` WHERE ordinal = ? AND doc_key = ?`, s.ordinal, doc); err != nil {
 			return err
 		}
@@ -137,7 +137,7 @@ func (ix *Index) reuseEncoder(enc kitvec.EncodeFunc, gen reuseGeneration) kitvec
 				for rows.Next() {
 					var blob []byte
 					if err := rows.Scan(&blob); err != nil {
-						rows.Close()
+						_ = rows.Close() //nolint:kennlint // sqlclosecheck: close before the next lookup.
 						return nil, err
 					}
 					if vector, err := validatedStoredEmbeddingBlob(blob, gen.dimension); err == nil {
@@ -145,9 +145,7 @@ func (ix *Index) reuseEncoder(enc kitvec.EncodeFunc, gen reuseGeneration) kitvec
 						break
 					}
 				}
-				err = rows.Err()
-				rows.Close()
-				if err != nil {
+				if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 					return nil, err
 				}
 				if _, ok := hits[hash]; ok {
@@ -210,14 +208,12 @@ func (ix *Index) backfillChunkText(ctx context.Context, ordinal int64) error {
 		for rows.Next() {
 			var d doc
 			if err := rows.Scan(&d.key, &d.content, &d.revision); err != nil {
-				rows.Close()
+				_ = rows.Close() //nolint:kennlint // sqlclosecheck: close before the next page.
 				return err
 			}
 			docs = append(docs, d)
 		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
+		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 			return err
 		}
 		if len(docs) == 0 {
@@ -229,7 +225,7 @@ func (ix *Index) backfillChunkText(ctx context.Context, ordinal int64) error {
 		}
 		stmt, err := tx.PrepareContext(ctx, `INSERT INTO `+ix.spec.chunkTextTable()+` (ordinal, doc_key, chunk_index, revision, text_hash) VALUES (?, ?, ?, ?, ?)`)
 		if err != nil {
-			tx.Rollback()
+			_ = tx.Rollback()
 			return err
 		}
 		for _, d := range docs {
@@ -242,9 +238,9 @@ func (ix *Index) backfillChunkText(ctx context.Context, ordinal int64) error {
 				break
 			}
 		}
-		stmt.Close()
-		if err != nil {
-			tx.Rollback()
+		closeErr := stmt.Close() //nolint:kennlint // sqlclosecheck: close before committing each page.
+		if err = errors.Join(err, closeErr); err != nil {
+			_ = tx.Rollback()
 			return err
 		}
 		if err = tx.Commit(); err != nil {
