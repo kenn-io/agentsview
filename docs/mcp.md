@@ -564,9 +564,7 @@ refreshed. Contributor wake delivery currently works on macOS and Linux.
 
 Set `AGENTSVIEW_DISABLE_AUTO_SYNC=1` to skip the automatic lifecycle request
 and launcher links. Explicit `agentsview source sync` commands and searches
-still work. A detached run carrying both Claude Code and Codex session IDs stays
-unlinked if the hook cannot identify its launcher. A failed hook reports the
-error without blocking your agent session.
+still work. A failed hook reports the error without blocking your agent session.
 
 If you set `AGENTSVIEW_NO_DAEMON=1` to stop general CLI commands from
 auto-starting the daemon, avoid local MCP mode for that archive. Instead, start
