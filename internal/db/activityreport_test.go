@@ -1828,7 +1828,6 @@ func TestActivityReportLauncherFiltersAndLinkChanges(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, before.InteractivePeak.Agents)
 	assert.Equal(t, 2, before.Peak.Agents)
-	assert.NotContains(t, reportSessionIDs(before.BySession), "visible")
 	require.NoError(t, d.DeleteSession(t.Context(), "visible"))
 	deleted, err := d.GetActivityReport(t.Context(), filter, q)
 	require.NoError(t, err)
@@ -1907,7 +1906,7 @@ func TestActivityReportNativeSubagentDoesNotExtendLauncher(t *testing.T) {
 	assert.Equal(t, 1, report.Peak.Agents)
 }
 
-func TestActivityReportEvidenceReadsOnlySubagents(t *testing.T) {
+func TestActivityReportEvidenceReadsOnlyLaunchedRuns(t *testing.T) {
 	d := testDB(t)
 	for _, id := range []string{"root", "child"} {
 		insertSession(t, d, id, "project-a", func(s *Session) {

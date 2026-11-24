@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json/v2"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -199,8 +198,7 @@ func TestActivityReport_UsesDiscoveredDaemon(t *testing.T) {
 	ts := daemonRouteTestServer(t, map[string]http.HandlerFunc{
 		"/api/v1/activity/report": func(w http.ResponseWriter, r *http.Request) {
 			gotQuery = r.URL.Query()
-			writeJSONResponse(w, fmt.Sprintf(`{
-				"schema_version":%d,
+			writeJSONResponse(w, `{
 				"timezone":"UTC",
 				"range_start":"2026-06-16T00:00:00Z",
 				"range_end":"2026-06-17T00:00:00Z",
@@ -217,7 +215,7 @@ func TestActivityReport_UsesDiscoveredDaemon(t *testing.T) {
 				"by_agent":[],
 				"by_session":[],
 				"intervals":[]
-			}`, export.ActivityReportSchemaVersion))
+			}`)
 		},
 	})
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
@@ -239,49 +237,13 @@ func TestActivityReport_UsesDiscoveredDaemon(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(dataDir, "sessions.db"))
 }
 
-func TestFetchHTTPActivityReportPassesThroughSchema(t *testing.T) {
-	for _, contentType := range []string{"application/json", "text/event-stream"} {
-		t.Run(contentType, func(t *testing.T) {
-			mux := http.NewServeMux()
-			mux.HandleFunc("/api/v1/activity/report", func(w http.ResponseWriter, _ *http.Request) {
-				w.Header().Set("Content-Type", contentType)
-				body := fmt.Sprintf(`{"schema_version":%d,"report_id":"report"}`, export.ActivityReportSchemaVersion+1)
-				if contentType == "text/event-stream" {
-					body = "event: report\ndata: " + body + "\n\n"
-				}
-				_, err := w.Write([]byte(body))
-				assert.NoError(t, err)
-			})
-			server := httptest.NewServer(mux)
-			t.Cleanup(server.Close)
-			report, err := fetchHTTPActivityReport(t.Context(), transport{URL: server.URL}, "", ActivityReportConfig{})
-			require.NoError(t, err)
-			assert.Equal(t, export.ActivityReportSchemaVersion+1, report.SchemaVersion)
-		})
-	}
-}
-
-func TestFetchHTTPActivityReportPassesThroughSavedSchema(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/api/v1/activity/report/report/sessions", r.URL.Path)
-		assert.Equal(t, "true", r.URL.Query().Get("include_report"))
-		w.Header().Set("Content-Type", "application/json")
-		_, err := fmt.Fprintf(w, `{"report_id":"report","sessions":[],"total":0,"report":{"schema_version":%d}}`, export.ActivityReportSchemaVersion+1)
-		assert.NoError(t, err)
-	}))
-	t.Cleanup(server.Close)
-	report, err := fetchHTTPActivityReport(t.Context(), transport{URL: server.URL}, "", ActivityReportConfig{SessionsReportID: "report"})
-	require.NoError(t, err)
-	assert.Equal(t, export.ActivityReportSchemaVersion+1, report.SchemaVersion)
-}
-
 func TestFetchHTTPActivityReportContinuesRequestedGeneration(t *testing.T) {
 	reportRequests := 0
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/activity/report", func(w http.ResponseWriter, _ *http.Request) {
 		reportRequests++
 		if !assert.NoError(t, json.MarshalWrite(w, activity.Report{
-			SchemaVersion: export.ActivityReportSchemaVersion, ReportID: "fresh-report", Timezone: "UTC",
+			ReportID: "fresh-report", Timezone: "UTC",
 		})) {
 			return
 		}
@@ -300,7 +262,7 @@ func TestFetchHTTPActivityReportContinuesRequestedGeneration(t *testing.T) {
 				"sessions":  []activity.SessionRow{{SessionID: "continued"}},
 				"total":     2,
 				"report": activity.Report{
-					SchemaVersion: export.ActivityReportSchemaVersion, ReportID: "original-report", Timezone: "UTC",
+					ReportID: "original-report", Timezone: "UTC",
 					BySession:     []activity.SessionRow{{SessionID: "continued"}},
 					SessionsTotal: 2,
 				},
@@ -332,7 +294,7 @@ func TestActivityReportCommandCursorInheritsNonDefaultPagingFlags(t *testing.T) 
 	queries := make(chan url.Values, 2)
 	pageResponse := func(sessionID, nextCursor string) string {
 		report := activity.Report{
-			SchemaVersion: export.ActivityReportSchemaVersion, ReportID: "saved-report", Timezone: "UTC",
+			ReportID: "saved-report", Timezone: "UTC",
 			BySession:     []activity.SessionRow{{SessionID: sessionID}},
 			SessionsTotal: 2, SessionsNextCursor: nextCursor,
 		}

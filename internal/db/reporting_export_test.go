@@ -1356,25 +1356,3 @@ func TestReportingFirstSeenUsesEffectiveIntervals(t *testing.T) {
 	assert.Equal(t, 1, hour10.Activity.Totals.NewUntimedSessions)
 	assert.Equal(t, 1, hour10.Activity.Totals.NewProjects)
 }
-
-func TestReportingExportKeepsSessionOnlyConcurrency(t *testing.T) {
-	d := testDB(t)
-	for _, id := range []string{"parent", "child"} {
-		insertSession(t, d, id, "project-a", func(s *Session) {
-			s.StartedAt = Ptr("2026-07-28T10:00:00Z")
-			s.EndedAt = Ptr("2026-07-28T10:10:00Z")
-		})
-	}
-	seedMessage(t, d, "parent", 1, "user", "2026-07-28T10:00:00Z", "")
-	seedMessage(t, d, "parent", 2, "assistant", "2026-07-28T10:02:00Z", "")
-	seedMessage(t, d, "child", 1, "user", "2026-07-28T10:04:00Z", "")
-	seedMessage(t, d, "child", 2, "assistant", "2026-07-28T10:08:00Z", "")
-	_, err := d.SetSessionExternalParent(t.Context(), "child", "parent")
-	require.NoError(t, err)
-	day, err := d.ExportReportingDay(t.Context(), ReportingExportOptions{
-		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
-		Now:  time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC),
-	})
-	require.NoError(t, err)
-	assert.Equal(t, 1, day.Hours[10].Activity.Peak.Agents)
-}

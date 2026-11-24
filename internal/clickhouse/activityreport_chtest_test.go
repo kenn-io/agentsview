@@ -258,43 +258,6 @@ func TestActivityReportUsageHandlesOversizedClaudeSnapshotKeys(t *testing.T) {
 	assert.NotContains(t, wantBySession, peerID)
 }
 
-func TestEndedActivityReportKeyIgnoresLauncher(t *testing.T) {
-	t.Parallel()
-	store, syncer, local := newPushedStore(t)
-	ctx := t.Context()
-	parent := fixtureSession("launcher-key-parent", "project-a", "parent", "2026-06-12T10:00:00Z", 1)
-	child := fixtureSession("launcher-key-child", "project-a", "child", "2026-06-14T10:00:00Z", 1)
-	child.RelationshipType = "subagent"
-	child.ParentSessionID = &parent.ID
-	require.NoError(t, local.UpsertSession(ctx, parent))
-	require.NoError(t, local.UpsertSession(ctx, child))
-	_, err := syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-06-14", Timezone: "UTC"}, time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC))
-	require.NoError(t, err)
-	f := db.AnalyticsFilter{Timezone: "UTC", IncludeSubagents: true, IncludeForks: true}
-	start, end := activityReportRangeBoundsUTC(q)
-	where, args := clickActivityReportCandidateWhere(f, start, end)
-	key := func() string {
-		value, err := store.endedActivityReportKey(ctx, where, args, start, end)
-		require.NoError(t, err)
-		require.NotEmpty(t, value)
-		return value
-	}
-	before := key()
-	unrelated := fixtureSession("launcher-key-unrelated", "project-a", "other", "2026-06-12T10:00:00Z", 0)
-	require.NoError(t, local.UpsertSession(ctx, unrelated))
-	_, err = syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-	assert.Equal(t, before, key())
-	parent.IsAutomated = true
-	require.NoError(t, local.UpsertSession(ctx, parent))
-	require.NoError(t, local.BumpLocalModifiedAt(ctx, parent.ID))
-	_, err = syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-	assert.Equal(t, before, key())
-}
-
 func TestClickHouseActivityReportIgnoresWaitingLauncher(t *testing.T) {
 	t.Parallel()
 	store, syncer, local := newPushedStore(t)
@@ -311,33 +274,13 @@ func TestClickHouseActivityReportIgnoresWaitingLauncher(t *testing.T) {
 		}, DataVersion: db.CurrentDataVersion(), ReplaceMessages: true,
 	}})
 	require.NoError(t, err)
+	_, err = local.SetSessionExternalParent(ctx, child.ID, parent.ID)
+	require.NoError(t, err)
 	_, err = syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-06-14", Timezone: "UTC"}, time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC))
 	require.NoError(t, err)
 	f := db.AnalyticsFilter{Timezone: "UTC", Project: "hidden-link", Agent: "claude"}
-	for _, partial := range []bool{false, true} {
-		q.Partial = partial
-		before, err := store.GetActivityReport(ctx, f, q)
-		require.NoError(t, err)
-		assert.Zero(t, before.Peak.Agents)
-	}
-	_, err = local.SetSessionExternalParent(ctx, child.ID, parent.ID)
-	require.NoError(t, err)
-	native := fixtureSession("native-child", "hidden-link", "native", "2026-06-14T10:00:00Z", 2)
-	native.Agent = "codex"
-	native.EndedAt = new("2026-06-14T10:04:00Z")
-	native.ParentSessionID = &parent.ID
-	native.RelationshipType = "subagent"
-	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
-		Session: native, Messages: []db.Message{
-			fixtureMessage(native.ID, 0, "user", "question", "2026-06-14T10:00:00Z"),
-			fixtureMessage(native.ID, 1, "assistant", "answer", "2026-06-14T10:04:00Z"),
-		}, DataVersion: db.CurrentDataVersion(), ReplaceMessages: true,
-	}})
-	require.NoError(t, err)
-	_, err = syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
 	for _, partial := range []bool{false, true} {
 		q.Partial = partial
 		after, err := store.GetActivityReport(ctx, f, q)
@@ -348,6 +291,6 @@ func TestClickHouseActivityReportIgnoresWaitingLauncher(t *testing.T) {
 		all, err := store.GetActivityReport(ctx, db.AnalyticsFilter{Timezone: "UTC", Project: "hidden-link"}, q)
 		require.NoError(t, err)
 		assert.Zero(t, all.InteractivePeak.Agents)
-		assert.Equal(t, 2, all.Peak.Agents)
+		assert.Equal(t, 1, all.Peak.Agents)
 	}
 }

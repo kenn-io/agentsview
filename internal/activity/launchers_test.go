@@ -2,6 +2,7 @@ package activity
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -45,19 +46,27 @@ func TestResolveLaunchersFollowsEveryParentOnce(t *testing.T) {
 }
 
 func TestResolveLaunchersUsesKnownRunsAndCountsInteractiveAncestors(t *testing.T) {
-	runs := []SessionMeta{
-		{SessionID: "root"},
-		{SessionID: "middle", IsSubagent: true, IsLaunched: true, ParentSessionIDs: []string{"root"}},
-		{SessionID: "child", IsSubagent: true, IsLaunched: true, ParentSessionIDs: []string{"middle"}},
+	for _, launched := range []bool{true, false} {
+		t.Run(fmt.Sprintf("middle launched=%t", launched), func(t *testing.T) {
+			runs := []SessionMeta{
+				{SessionID: "root"},
+				{SessionID: "middle", IsSubagent: true, IsLaunched: launched, ParentSessionIDs: []string{"root"}},
+				{SessionID: "child", IsSubagent: true, IsLaunched: true, ParentSessionIDs: []string{"middle"}},
+			}
+			got, err := ResolveLaunchers(t.Context(), runs, map[string]bool{"root": true, "child": true}, func(context.Context, []string) ([]Launcher, error) {
+				require.FailNow(t, "known ancestors must not be loaded again")
+				return nil, nil
+			})
+			require.NoError(t, err)
+			assert.Equal(t, []string{"root"}, got.Waiting["child"])
+			if launched {
+				assert.Equal(t, []string{"root"}, got.Waiting["middle"])
+			} else {
+				assert.Empty(t, got.Waiting["middle"])
+			}
+			assert.Equal(t, []string{"middle", "root"}, got.Examined)
+		})
 	}
-	got, err := ResolveLaunchers(t.Context(), runs, map[string]bool{"root": true, "child": true}, func(context.Context, []string) ([]Launcher, error) {
-		require.FailNow(t, "known ancestors must not be loaded again")
-		return nil, nil
-	})
-	require.NoError(t, err)
-	assert.Equal(t, []string{"root"}, got.Waiting["child"])
-	assert.Equal(t, []string{"root"}, got.Waiting["middle"])
-	assert.Equal(t, []string{"middle", "root"}, got.Examined)
 }
 
 func TestResolveLaunchersSkipsNonInteractive(t *testing.T) {
@@ -65,7 +74,7 @@ func TestResolveLaunchersSkipsNonInteractive(t *testing.T) {
 		name string
 		runs []SessionMeta
 	}{
-		{name: "automated", runs: []SessionMeta{{SessionID: "parent", IsAutomated: true}, {SessionID: "run", IsSubagent: true, ParentSessionIDs: []string{"parent"}}}},
+		{name: "automated", runs: []SessionMeta{{SessionID: "parent", IsAutomated: true}, {SessionID: "run", IsSubagent: true, IsLaunched: true, ParentSessionIDs: []string{"parent"}}}},
 		{name: "fork", runs: []SessionMeta{{SessionID: "run", ParentSessionIDs: []string{"parent"}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -81,19 +90,4 @@ func TestResolveLaunchersSkipsNonInteractive(t *testing.T) {
 			assert.Empty(t, got.Waiting["run"])
 		})
 	}
-}
-
-func TestResolveLaunchersTraversesNativeAncestorsWithoutCountingThem(t *testing.T) {
-	runs := []SessionMeta{
-		{SessionID: "root"},
-		{SessionID: "native", IsSubagent: true, ParentSessionIDs: []string{"root"}},
-		{SessionID: "launched", IsSubagent: true, IsLaunched: true, ParentSessionIDs: []string{"native"}},
-	}
-	got, err := ResolveLaunchers(t.Context(), runs, map[string]bool{"root": true}, func(context.Context, []string) ([]Launcher, error) {
-		require.FailNow(t, "known ancestors must not be loaded again")
-		return nil, nil
-	})
-	require.NoError(t, err)
-	assert.Empty(t, got.Waiting["native"])
-	assert.Equal(t, []string{"root"}, got.Waiting["launched"])
 }

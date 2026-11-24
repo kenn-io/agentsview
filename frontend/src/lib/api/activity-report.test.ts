@@ -28,7 +28,7 @@ describe("activity report API", () => {
       .mockResolvedValue(
         streamResponse([
           'event: progress\ndata: {"phase":"loading_sessions","processed":12}\n\n',
-          'event: report\ndata: {"schema_version":9,"report_id":"signed","sessions_total":301}\n\n',
+          'event: report\ndata: {"report_id":"signed","sessions_total":301}\n\n',
         ]),
       );
     vi.stubGlobal("fetch", fetchMock);
@@ -45,49 +45,6 @@ describe("activity report API", () => {
     const [url, init] = fetchMock.mock.calls[0]!;
     expect(String(url)).toContain("/api/v1/activity/report?preset=month");
     expect((init.headers as Headers).get("Accept")).toBe("text/event-stream, application/json");
-  });
-
-  it.each([
-    { transport: "json", body: '{"schema_version":9,"report_id":"signed"}' },
-    { transport: "json", body: '{"schema_version":10,"report_id":"signed"}' },
-    { transport: "stream", body: '{"schema_version":10,"report_id":"signed"}' },
-    { transport: "json", body: '{"report_id":"signed"}' },
-  ])("passes through a $transport report", async ({ transport, body }) => {
-    vi.stubGlobal(
-      "fetch",
-      vi
-        .fn()
-        .mockResolvedValue(
-          transport === "stream"
-            ? streamResponse([`event: report\ndata: ${body}\n\n`])
-            : new Response(body, { headers: { "Content-Type": "application/json" } }),
-        ),
-    );
-    const report = fetchActivityReport({ preset: "month" });
-    await expect(report).resolves.toMatchObject(JSON.parse(body));
-  });
-
-  it.each([
-    { version: 9 },
-    { version: 10 },
-  ])("passes through replacement report schema $version", async ({ version }) => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(
-          JSON.stringify({
-            report_id: "signed",
-            sessions: [],
-            total: 0,
-            refresh_required: true,
-            report: { schema_version: version },
-          }),
-          { headers: { "Content-Type": "application/json" } },
-        ),
-      ),
-    );
-    const page = fetchActivitySessions("signed", {});
-    await expect(page).resolves.toMatchObject({ report: { schema_version: version } });
   });
 
   it("requests a deterministic server page with bucket range and sort state", async () => {
