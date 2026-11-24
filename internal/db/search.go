@@ -548,7 +548,7 @@ func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage,
 	var walk *searchRankWalk
 	floor := int64(math.MinInt64)
 	if f.Sort != "recency" && f.Project == "" && f.DateFrom == "" && f.DateTo == "" {
-		floor, err = searchTierFloor(ctx, tx, ftsQuery.table, matchSQL, []any{f.Query})
+		floor, err = searchTierFloor(ctx, tx, ftsQuery.table, innerWhereSQL, ftsArgs)
 		if err != nil {
 			return SearchPage{}, err
 		}
@@ -575,9 +575,6 @@ func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage,
 	}
 
 	args := ftsArgs
-	if walk != nil && walk.tierOnly {
-		innerWhereSQL += fmt.Sprintf(" AND messages_fts.rowid >= %d", floor)
-	}
 	withSQL := `WITH best_rows AS MATERIALIZED (SELECT session_id, best_rowid, best_ordinal, best_rank
 				FROM (
 					SELECT m2.session_id,
@@ -601,9 +598,7 @@ func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage,
 	var ftsSessionsArgs []any
 	includeNames := true
 	if walk != nil {
-		if !walk.tierOnly {
-			withSQL, args = walk.bestRowsSQL()
-		}
+		withSQL, args = walk.bestRowsSQL()
 		// Name rows rank after every message and image match.
 		includeNames = walk.complete
 	}

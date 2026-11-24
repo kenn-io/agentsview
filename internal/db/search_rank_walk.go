@@ -7,12 +7,12 @@ import (
 	"strings"
 )
 
-var searchTierMatches = 1 << 16
+const searchTierMatches = 1 << 16
 
 // searchTierFloor returns the last row in the first tier when another match
 // exists. Smaller result sets retain the original global ordering.
-func searchTierFloor(ctx context.Context, q messageRowsQuerier, table, matchSQL string, args []any) (int64, error) {
-	query := strings.ReplaceAll(`SELECT rowid FROM messages_fts WHERE `+matchSQL+` ORDER BY rowid DESC LIMIT 2 OFFSET ?`, "messages_fts", table)
+func searchTierFloor(ctx context.Context, q messageRowsQuerier, table, innerWhereSQL string, args []any) (int64, error) {
+	query := strings.ReplaceAll(`SELECT messages_fts.rowid FROM messages_fts JOIN messages m2 ON messages_fts.rowid = m2.id JOIN sessions s2 ON m2.session_id = s2.id WHERE `+innerWhereSQL+` ORDER BY messages_fts.rowid DESC LIMIT 2 OFFSET ?`, "messages_fts", table)
 	rows, err := q.QueryContext(ctx, query, append(append([]any{}, args...), searchTierMatches-1)...)
 	if err != nil {
 		return 0, fmt.Errorf("finding search tier: %w", err)
@@ -69,7 +69,6 @@ func (m searchBestMatch) before(o searchBestMatch) bool {
 type searchRankWalk struct {
 	best     []searchBestMatch
 	complete bool
-	tierOnly bool
 }
 
 // walkSearchRanks reads the eligible message matches in rank order and
@@ -77,8 +76,7 @@ type searchRankWalk struct {
 // at which it saw the last of them. Every session whose best match ranks
 // at or below that boundary then has its best match among the rows read.
 // The floor limits a broad search to its first tier. The walk returns nil
-// when that tier cannot fill the page or an unbounded walk exceeds its limits.
-// If a tier has too many sessions to bind, tierOnly asks the page query to rank it.
+// when that tier cannot fill the page or the walk exceeds its limits.
 func walkSearchRanks(
 	ctx context.Context, q messageRowsQuerier, table, innerWhereSQL string, ftsArgs []any, need int, floor int64,
 ) (*searchRankWalk, error) {
@@ -115,9 +113,6 @@ func walkSearchRanks(
 		i, ok := index[m.sessionID]
 		if !ok {
 			if len(walk.best) == searchRankWalkMaxSessions {
-				if floor != math.MinInt64 {
-					return &searchRankWalk{tierOnly: true}, nil
-				}
 				return nil, nil
 			}
 			index[m.sessionID] = len(walk.best)

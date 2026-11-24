@@ -80,157 +80,131 @@ func TestSearchRankWalkMatchesFullRanking(t *testing.T) {
 }
 
 func TestSearchRankWalkTiers(t *testing.T) {
-	original := searchTierMatches
-	searchTierMatches = 4
-	t.Cleanup(func() { searchTierMatches = original })
 	d := testDB(t)
 	ctx := t.Context()
-	for i := range 7 {
-		id := fmt.Sprintf("session-%d", i)
-		insertSession(t, d, id, "proj")
-		content := "needle " + strings.Repeat("filler ", 20)
-		if i < 2 {
-			content = strings.Repeat("needle ", 20)
-		}
-		insertMessages(t, d, userMsg(id, 0, content))
-	}
-	insertSession(t, d, "title", "proj", func(s *Session) { s.FirstMessage = new("needle title") })
-	insertMessages(t, d, userMsg("title", 0, "other"))
-	for _, limit := range []int{1, 2, 7} {
-		var results []SearchResult
-		for cursor := 0; ; cursor += limit {
-			page, err := d.Search(ctx, SearchFilter{Query: "needle", Limit: limit, Cursor: cursor})
-			require.NoError(t, err)
-			results = append(results, page.Results...)
-			if page.NextCursor == 0 {
-				break
-			}
-		}
-		require.Len(t, results, 8)
-		seen := map[string]bool{}
-		for i, result := range results {
-			assert.False(t, seen[result.SessionID])
-			seen[result.SessionID] = true
-			if i < 4 {
-				assert.Contains(t, []string{"session-3", "session-4", "session-5", "session-6"}, result.SessionID)
-			}
-		}
-		assert.Equal(t, "title", results[7].SessionID)
-	}
-	walk, err := walkSearchRanks(ctx, d.getReader(), "messages_fts", "messages_fts.rendered MATCH ?", []any{`"needle"`}, 1000000, 1)
+	tx, err := d.getWriter().BeginTx(ctx, nil)
 	require.NoError(t, err)
-	assert.Nil(t, walk)
-}
-
-func TestSearchRankWalkConcentratedTier(t *testing.T) {
-	original := searchTierMatches
-	searchTierMatches = 4
-	t.Cleanup(func() { searchTierMatches = original })
-	d := testDB(t)
-	insertSession(t, d, "older", "proj")
-	insertMessages(t, d, userMsg("older", 0, "needle"))
-	insertSession(t, d, "recent", "proj")
-	for i := range 5 {
-		insertMessages(t, d, userMsg("recent", i, "needle"))
-	}
-	page, err := d.Search(t.Context(), SearchFilter{Query: "needle", Limit: 10})
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, `
+	INSERT INTO sessions(id,project) VALUES ('session-0','proj'),('session-1','proj'),('session-2','proj'),('session-3','proj'),('session-4','proj'),('session-5','proj'),('session-6','proj'),('title','proj'),('older','proj'),('recent','proj'),('boundary','proj'),('eligible','proj'),('eligible-old','proj'),('deleted','proj'),('image','proj'),('message-0','proj'),('message-1','proj'),('message-2','proj');
+ UPDATE sessions SET first_message='tiers title' WHERE id='title';
+ UPDATE sessions SET deleted_at='2026-01-01' WHERE id='deleted';
+ INSERT INTO messages(session_id,ordinal,role,content) VALUES
+ ('session-0',0,'user','tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers'),
+ ('session-1',0,'user','tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers tiers'),
+ ('session-2',0,'user','tiers filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler');
+ WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<65532)
+ INSERT INTO messages(session_id,ordinal,role,content) SELECT 'session-6',i,'user','tiers filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler' FROM n;
+ INSERT INTO messages(session_id,ordinal,role,content) VALUES
+ ('session-3',0,'user','tiers filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler'),
+ ('session-4',0,'user','tiers filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler'),
+ ('session-5',0,'user','tiers filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler'),
+ ('session-6',0,'user','tiers filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler'),
+ ('title',0,'user','other'),('older',0,'user','concentrated');
+ WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<65535)
+ INSERT INTO messages(session_id,ordinal,role,content) SELECT 'recent',i,'user','concentrated' FROM n;
+ WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<65535)
+ INSERT INTO messages(session_id,ordinal,role,content) SELECT 'boundary',i,'user','boundaryword' FROM n;
+	INSERT INTO messages(session_id,ordinal,role,content) VALUES ('eligible-old',0,'user','eligibleword eligibleword eligibleword eligibleword eligibleword');
+	WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<65536)
+ INSERT INTO messages(session_id,ordinal,role,content) SELECT 'eligible',i,'user','eligibleword' FROM n;
+ WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<5)
+ INSERT INTO messages(session_id,ordinal,role,content,is_system) SELECT CASE WHEN i<2 THEN 'deleted' ELSE 'eligible' END,65537+i,'user','eligibleword',CASE WHEN i>=2 THEN 1 ELSE 0 END FROM n;
+ WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<4104)
+ INSERT INTO sessions(id,project) SELECT printf('s%04d',i),'proj' FROM n;
+ WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<4100)
+ INSERT INTO messages(session_id,ordinal,role,content) SELECT printf('s%04d',i),0,'user','deepword' FROM n;
+ WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<65532)
+ INSERT INTO messages(session_id,ordinal,role,content) SELECT 's4104',i,'user','deepword' FROM n;
+ WITH RECURSIVE n(i) AS (SELECT 4101 UNION ALL SELECT i+1 FROM n WHERE i<4104)
+ INSERT INTO messages(session_id,ordinal,role,content) SELECT printf('s%04d',i),0,'user','deepword' FROM n;
+ INSERT INTO messages(session_id,ordinal,role,content) VALUES ('image',0,'user','other'),('message-0',0,'user','imageword');
+ WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<65534)
+ INSERT INTO messages(session_id,ordinal,role,content) SELECT 'message-2',i,'user','imageword' FROM n;
+ INSERT INTO messages(session_id,ordinal,role,content) VALUES ('message-1',0,'user','imageword'),('message-2',0,'user','imageword');
+ INSERT INTO tool_calls(message_id,session_id,tool_name,category) SELECT id,'image','tool','other' FROM messages WHERE session_id='image';
+ INSERT INTO image_text_cache(id,image_hash,processor,provider,model,revision,text,succeeded) VALUES(-1,'hash','processor','provider','model','revision','imageword imageword imageword',1);
+ INSERT INTO image_text_occurrences(session_id,call_id,image_index,image_hash) SELECT 'image',id,0,'hash' FROM tool_calls WHERE session_id='image';`)
 	require.NoError(t, err)
-	require.Len(t, page.Results, 2)
-	assert.Equal(t, "recent", page.Results[0].SessionID)
-	assert.Equal(t, "older", page.Results[1].SessionID)
-}
+	require.NoError(t, tx.Commit())
 
-func TestSearchRankWalkTierBoundary(t *testing.T) {
-	original := searchTierMatches
-	searchTierMatches = 4
-	t.Cleanup(func() { searchTierMatches = original })
-	d := testDB(t)
-	insertSession(t, d, "session", "proj")
-	for i := range 5 {
-		insertMessages(t, d, userMsg("session", i, "needle"))
-		floor, err := searchTierFloor(t.Context(), d.getReader(), "messages_fts", "messages_fts.rendered MATCH ?", []any{`"needle"`})
+	t.Run("pages", func(t *testing.T) {
+		for _, limit := range []int{1, 2, 7} {
+			var results []SearchResult
+			for cursor := 0; ; cursor += limit {
+				page, err := d.Search(ctx, SearchFilter{Query: "tiers", Limit: limit, Cursor: cursor})
+				require.NoError(t, err)
+				results = append(results, page.Results...)
+				if page.NextCursor == 0 {
+					break
+				}
+			}
+			require.Len(t, results, 8)
+			seen := map[string]bool{}
+			for i, result := range results {
+				assert.False(t, seen[result.SessionID])
+				seen[result.SessionID] = true
+				if i < 4 {
+					assert.Contains(t, []string{"session-3", "session-4", "session-5", "session-6"}, result.SessionID)
+				}
+			}
+			assert.Equal(t, "title", results[7].SessionID)
+		}
+		walk, err := walkSearchRanks(ctx, d.getReader(), "messages_fts", "messages_fts.rendered MATCH ?", []any{`"tiers"`}, 1000000, 1)
 		require.NoError(t, err)
-		if i < 4 {
-			assert.Equal(t, int64(math.MinInt64), floor)
-		} else {
-			assert.Greater(t, floor, int64(math.MinInt64))
+		assert.Nil(t, walk)
+	})
+	t.Run("concentrated", func(t *testing.T) {
+		page, err := d.Search(ctx, SearchFilter{Query: "concentrated", Limit: 10})
+		require.NoError(t, err)
+		require.Len(t, page.Results, 2)
+		assert.Equal(t, "recent", page.Results[0].SessionID)
+		assert.Equal(t, "older", page.Results[1].SessionID)
+	})
+	t.Run("boundary", func(t *testing.T) {
+		floor, err := searchTierFloor(ctx, d.getReader(), "messages_fts", "messages_fts.rendered MATCH ?", []any{`"boundaryword"`})
+		require.NoError(t, err)
+		assert.Equal(t, int64(math.MinInt64), floor)
+		_, err = d.getWriter().ExecContext(ctx, `INSERT INTO messages(session_id,ordinal,role,content) VALUES ('boundary',65536,'user','boundaryword')`)
+		require.NoError(t, err)
+		floor, err = searchTierFloor(ctx, d.getReader(), "messages_fts", "messages_fts.rendered MATCH ?", []any{`"boundaryword"`})
+		require.NoError(t, err)
+		assert.Greater(t, floor, int64(math.MinInt64))
+	})
+	t.Run("eligible", func(t *testing.T) {
+		var want int64
+		require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT id FROM messages WHERE session_id='eligible' AND ordinal=1`).Scan(&want))
+		predicate := "messages_fts.rendered MATCH ? AND s2.deleted_at IS NULL AND m2.is_system = 0 AND " + SystemPrefixSQL("m2.content", "m2.role")
+		floor, err := searchTierFloor(ctx, d.getReader(), "messages_fts", predicate, []any{`"eligibleword"`})
+		require.NoError(t, err)
+		assert.Equal(t, want, floor)
+		page, err := d.Search(ctx, SearchFilter{Query: "eligibleword", Limit: 2})
+		require.NoError(t, err)
+		require.Len(t, page.Results, 2)
+		assert.Equal(t, "eligible", page.Results[0].SessionID)
+		assert.Equal(t, "eligible-old", page.Results[1].SessionID)
+	})
+	t.Run("deep page", func(t *testing.T) {
+		page, err := d.Search(ctx, SearchFilter{Query: "deepword", Cursor: 4096, Limit: 7})
+		require.NoError(t, err)
+		require.Len(t, page.Results, 7)
+		for i, result := range page.Results {
+			assert.Equal(t, fmt.Sprintf("s%04d", 4092+i), result.SessionID)
 		}
-	}
-}
-
-func TestSearchRankWalkDeepPage(t *testing.T) {
-	original := searchTierMatches
-	searchTierMatches = 4
-	t.Cleanup(func() { searchTierMatches = original })
-	d := testDB(t)
-	_, err := d.getWriter().ExecContext(t.Context(), `
-		WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<4104)
-		INSERT INTO sessions(id, project) SELECT printf('s%04d', i), 'proj' FROM n;
-		WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<4104)
-		INSERT INTO messages(session_id, ordinal, role, content) SELECT printf('s%04d', i), 0, 'user', 'needle' FROM n;`)
-	require.NoError(t, err)
-	page, err := d.Search(t.Context(), SearchFilter{Query: "needle", Cursor: 4096, Limit: 7})
-	require.NoError(t, err)
-	require.Len(t, page.Results, 7)
-	for i, result := range page.Results {
-		assert.Equal(t, fmt.Sprintf("s%04d", 4092+i), result.SessionID)
-	}
-	assert.Equal(t, 4103, page.NextCursor)
-}
-
-func TestSearchRankWalkTiedTierOverSessionLimit(t *testing.T) {
-	original := searchTierMatches
-	searchTierMatches = 4100
-	t.Cleanup(func() { searchTierMatches = original })
-	d := testDB(t)
-	ctx := t.Context()
-	_, err := d.getWriter().ExecContext(ctx, `
-		WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<4100)
-		INSERT INTO sessions(id, project) SELECT printf('s%04d', i), 'proj' FROM n;
-		WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<4100)
-		INSERT INTO messages(session_id, ordinal, role, content) SELECT printf('s%04d', i), 0, 'user', 'needle' FROM n;`)
-	require.NoError(t, err)
-	floor, err := searchTierFloor(ctx, d.getReader(), "messages_fts", "messages_fts.rendered MATCH ?", []any{`"needle"`})
-	require.NoError(t, err)
-	assert.Greater(t, floor, int64(math.MinInt64))
-	walk, err := walkSearchRanks(ctx, d.getReader(), "messages_fts", "messages_fts.rendered MATCH ?", []any{`"needle"`}, 3, floor)
-	require.NoError(t, err)
-	require.NotNil(t, walk, "a tied tier must not fall back to ranking the whole archive")
-	assert.True(t, walk.tierOnly)
-	page, err := d.Search(ctx, SearchFilter{Query: "needle", Limit: 2})
-	require.NoError(t, err)
-	require.Len(t, page.Results, 2)
-	assert.Equal(t, "s0001", page.Results[0].SessionID)
-	assert.Equal(t, "s0002", page.Results[1].SessionID)
-	assert.Equal(t, 2, page.NextCursor)
-}
-
-func TestSearchRankWalkImageTier(t *testing.T) {
-	original := searchTierMatches
-	searchTierMatches = 2
-	t.Cleanup(func() { searchTierMatches = original })
-	d := testDB(t)
-	insertSession(t, d, "image", "proj")
-	insertMessages(t, d, userMsg("image", 0, "other"))
-	_, err := d.getWriter().ExecContext(t.Context(), `
-		INSERT INTO tool_calls(message_id,session_id,tool_name,category)
-		SELECT id,'image','tool','other' FROM messages WHERE session_id='image';
-		INSERT INTO image_text_cache(id,image_hash,processor,provider,model,revision,text,succeeded)
-		VALUES(-1,'hash','processor','provider','model','revision','needle needle needle',1);
-		INSERT INTO image_text_occurrences(session_id,call_id,image_index,image_hash)
-		SELECT 'image',id,0,'hash' FROM tool_calls WHERE session_id='image';`)
-	require.NoError(t, err)
-	for i := range 3 {
-		id := fmt.Sprintf("message-%d", i)
-		insertSession(t, d, id, "proj")
-		insertMessages(t, d, userMsg(id, 0, "needle"))
-	}
-	page, err := d.Search(t.Context(), SearchFilter{Query: "needle", Limit: 1})
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-	assert.Contains(t, []string{"message-1", "message-2"}, page.Results[0].SessionID)
-	page, err = d.Search(t.Context(), SearchFilter{Query: "needle", Limit: 10})
-	require.NoError(t, err)
-	require.Len(t, page.Results, 4)
-	assert.Contains(t, []string{page.Results[2].SessionID, page.Results[3].SessionID}, "image")
+		assert.Equal(t, 4103, page.NextCursor)
+	})
+	t.Run("image tier", func(t *testing.T) {
+		page, err := d.Search(ctx, SearchFilter{Query: "imageword", Limit: 1})
+		require.NoError(t, err)
+		require.Len(t, page.Results, 1)
+		assert.Equal(t, "message-1", page.Results[0].SessionID)
+		page, err = d.Search(ctx, SearchFilter{Query: "imageword", Limit: 10})
+		require.NoError(t, err)
+		require.Len(t, page.Results, 4)
+		var ids []string
+		for _, result := range page.Results {
+			ids = append(ids, result.SessionID)
+		}
+		assert.Equal(t, []string{"message-1", "message-2", "image", "message-0"}, ids)
+	})
 }
