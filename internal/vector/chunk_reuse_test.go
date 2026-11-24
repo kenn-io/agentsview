@@ -513,7 +513,7 @@ func TestChunkTextLookupUsesHashIndex(t *testing.T) {
 	ix := openTestIndex(t)
 	_, err := ix.EnsureGeneration(t.Context(), fakeGeneration("plan"), "building")
 	require.NoError(t, err)
-	plan := explainVectorPlan(t, ix, `SELECT v.embedding FROM message_vectors_chunk_text t INDEXED BY message_vectors_chunk_text_hash JOIN message_vectors_stamps s ON s.ordinal = t.ordinal AND s.doc_key = t.doc_key AND s.revision = t.revision JOIN message_vectors_chunks c ON c.ordinal = t.ordinal AND c.doc_key = t.doc_key AND c.chunk_index = t.chunk_index JOIN message_vectors_v1 v ON v.rowid = c.vec_rowid WHERE t.ordinal = ? AND t.text_hash = ?`, 1, "hash")
+	plan := explainVectorPlan(t, ix, ix.chunkTextLookupQuery(1), 1, "hash")
 	assert.Contains(t, fmt.Sprint(plan), "message_vectors_chunk_text_hash (ordinal=? AND text_hash=?)")
 }
 

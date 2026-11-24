@@ -108,6 +108,10 @@ func (ix *Index) seedReuse(ctx context.Context, gen reuseGeneration, key, old, h
 	return tx.Commit()
 }
 
+func (ix *Index) chunkTextLookupQuery(ordinal int64) string {
+	return `SELECT v.embedding FROM ` + ix.spec.chunkTextTable() + ` t INDEXED BY ` + ix.spec.chunkTextTable() + `_hash JOIN ` + ix.spec.stampsTable() + ` s ON s.ordinal = t.ordinal AND s.doc_key = t.doc_key AND s.revision = t.revision JOIN ` + ix.spec.chunksTable() + ` c ON c.ordinal = t.ordinal AND c.doc_key = t.doc_key AND c.chunk_index = t.chunk_index JOIN ` + fmt.Sprintf("%s_v%d", ix.spec.VectorsPrefix, ordinal) + ` v ON v.rowid = c.vec_rowid WHERE t.ordinal = ? AND t.text_hash = ?`
+}
+
 func (ix *Index) reuseEncoder(enc kitvec.EncodeFunc, gen reuseGeneration) kitvec.EncodeFunc {
 	return func(ctx context.Context, texts []string) ([][]float32, error) {
 		hashes := make([]string, len(texts))
@@ -123,7 +127,7 @@ func (ix *Index) reuseEncoder(enc kitvec.EncodeFunc, gen reuseGeneration) kitvec
 			seen[hash] = true
 			queries := []string{
 				`SELECT embedding FROM ` + ix.spec.reuseTable() + ` INDEXED BY ` + ix.spec.reuseTable() + `_hash WHERE ordinal = ? AND text_hash = ?`,
-				`SELECT v.embedding FROM ` + ix.spec.chunkTextTable() + ` t INDEXED BY ` + ix.spec.chunkTextTable() + `_hash JOIN ` + ix.spec.stampsTable() + ` s ON s.ordinal = t.ordinal AND s.doc_key = t.doc_key AND s.revision = t.revision JOIN ` + ix.spec.chunksTable() + ` c ON c.ordinal = t.ordinal AND c.doc_key = t.doc_key AND c.chunk_index = t.chunk_index JOIN ` + fmt.Sprintf("%s_v%d", ix.spec.VectorsPrefix, gen.ordinal) + ` v ON v.rowid = c.vec_rowid WHERE t.ordinal = ? AND t.text_hash = ?`,
+				ix.chunkTextLookupQuery(gen.ordinal),
 			}
 			for _, query := range queries {
 				rows, err := ix.db.QueryContext(ctx, query, gen.ordinal, hash)
