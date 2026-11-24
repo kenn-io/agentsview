@@ -43,18 +43,22 @@ type repairResult struct {
 
 const repairScanDocumentBatch = 128
 
+func (ix *Index) generationOrdinalDimension(ctx context.Context, fingerprint string) (int64, int, error) {
+	var ordinal int64
+	var dimension int
+	err := ix.db.QueryRowContext(ctx,
+		`SELECT ordinal, dimension FROM `+ix.spec.generationsTable()+` WHERE gen_key = ?`, fingerprint,
+	).Scan(&ordinal, &dimension)
+	return ordinal, dimension, err
+}
+
 // repairInvalidVectors removes target-generation state only for documents
 // containing at least one unusable stored vector. Stamp removal makes those
 // documents pending for the restricted Fill that follows in Build.
 func (ix *Index) repairInvalidVectors(
 	ctx context.Context, fingerprint string,
 ) (repairResult, error) {
-	var ordinal int64
-	var dimension int
-	err := ix.db.QueryRowContext(ctx,
-		`SELECT ordinal, dimension FROM `+ix.spec.generationsTable()+` WHERE gen_key = ?`,
-		fingerprint,
-	).Scan(&ordinal, &dimension)
+	ordinal, dimension, err := ix.generationOrdinalDimension(ctx, fingerprint)
 	if err != nil {
 		return repairResult{}, fmt.Errorf(
 			"lookup generation for invalid vector repair %s: %w", fingerprint, err)
@@ -341,25 +345,30 @@ func decodeFloat32Blob(b []byte) ([]float32, error) {
 }
 
 func validateStoredEmbeddingBlob(blob []byte, dimension int) error {
+	_, err := validatedStoredEmbeddingBlob(blob, dimension)
+	return err
+}
+
+func validatedStoredEmbeddingBlob(blob []byte, dimension int) ([]float32, error) {
 	vector, err := decodeFloat32Blob(blob)
 	if err != nil {
-		return fmt.Errorf("invalid embedding byte length: %w", err)
+		return nil, fmt.Errorf("invalid embedding byte length: %w", err)
 	}
 	if len(vector) != dimension {
-		return fmt.Errorf("invalid embedding dimension: got %d, want %d", len(vector), dimension)
+		return nil, fmt.Errorf("invalid embedding dimension: got %d, want %d", len(vector), dimension)
 	}
 	var squaredNorm float64
 	for component, value := range vector {
 		f := float64(value)
 		if math.IsNaN(f) || math.IsInf(f, 0) {
-			return fmt.Errorf("invalid embedding: non-finite component %d", component)
+			return nil, fmt.Errorf("invalid embedding: non-finite component %d", component)
 		}
 		squaredNorm += f * f
 	}
 	if squaredNorm == 0 {
-		return errors.New("invalid embedding: zero norm")
+		return nil, errors.New("invalid embedding: zero norm")
 	}
-	return nil
+	return vector, nil
 }
 
 // repairStore restricts kit's fill loop to the documents found by the repair

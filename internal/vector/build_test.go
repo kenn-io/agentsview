@@ -1026,7 +1026,7 @@ func TestResolveBuildTargetRetiresOtherBuildingGeneration(t *testing.T) {
 	require.NoError(t, err)
 
 	genB := fakeGeneration("model-b")
-	target, wasBuilding, err := ix.resolveBuildTarget(ctx, genB, genB.Fingerprint(), embedmodel.Descriptor{}, false)
+	target, wasBuilding, err := ix.resolveBuildTarget(ctx, genB, genB.Fingerprint(), false, false)
 	require.NoError(t, err)
 	assert.True(t, wasBuilding)
 	assert.Equal(t, genB.Fingerprint(), target)
