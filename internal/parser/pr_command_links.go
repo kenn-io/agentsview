@@ -127,11 +127,6 @@ func prCommandFlag(command, flag string) (takesValue, ok bool) {
 	return false, false
 }
 
-type PRLinkDependency struct {
-	Link PRLink
-	Bare bool
-}
-
 // unwrapPRCommand removes execution wrappers whose arguments have fixed roles.
 func unwrapPRCommand(args []*syntax.Word) []*syntax.Word {
 	for len(args) > 0 {
@@ -230,11 +225,11 @@ func shellCommand(args []*syntax.Word) (string, bool) {
 }
 
 // AnalyzePRCommand extracts links and shared shell context from one parse.
-func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBare, hostUnknown bool) ([]PRLink, bool, bool, bool, []PRLinkDependency, error) {
+func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBare, hostUnknown bool) ([]PRLink, bool, bool, bool, []PRLink, error) {
 	return analyzePRCommand(ctx, command, cwd, remote, allowBare, hostUnknown, 0)
 }
 
-func analyzePRCommand(ctx context.Context, command, cwd, remote string, allowBare, hostUnknown bool, depth int) ([]PRLink, bool, bool, bool, []PRLinkDependency, error) {
+func analyzePRCommand(ctx context.Context, command, cwd, remote string, allowBare, hostUnknown bool, depth int) ([]PRLink, bool, bool, bool, []PRLink, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, false, false, nil, err
 	}
@@ -248,7 +243,7 @@ func analyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 		remoteHost, remoteRepo, _ = strings.Cut(normalized, "/")
 	}
 	var links [][]PRLink
-	var dependsOnRemote []PRLinkDependency
+	var dependsOnRemote []PRLink
 	for _, entry := range calls {
 		if err := ctx.Err(); err != nil {
 			return nil, false, false, false, nil, err
@@ -376,7 +371,7 @@ func analyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 		if link, ok := NewPRLink(fmt.Sprintf("https://%s/%s/pull/%d", selectedHost, repo, number), repo, number); ok {
 			links = append(links, []PRLink{link})
 			if !specified || explicitHost == "" {
-				dependsOnRemote = append(dependsOnRemote, PRLinkDependency{Link: link, Bare: !specified})
+				dependsOnRemote = append(dependsOnRemote, link)
 			}
 		}
 	}

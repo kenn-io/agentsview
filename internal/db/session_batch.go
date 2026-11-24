@@ -71,18 +71,7 @@ func (db *DB) projectSessionBatchMessages(write SessionBatchWrite) []Message {
 func (db *DB) storageSessionBatchWrite(ctx context.Context, write SessionBatchWrite) (SessionBatchWrite, error) {
 	write.Messages = db.projectSessionBatchMessages(write)
 	if db.usageOnlyStorage() && hasToolCalls(write.Messages) {
-		remote := ""
-		if write.IdentityObservation.Project != "" {
-			if write.IdentityObservation.RemoteCandidateCount == 1 {
-				remote = write.IdentityObservation.GitRemote
-			}
-		} else {
-			err := db.getReader().QueryRowContext(ctx, `SELECT `+checkoutRemoteSQL, write.Session.ID).Scan(&remote)
-			if err != nil && !errors.Is(err, sql.ErrNoRows) {
-				return write, err
-			}
-		}
-		links, err := ToolCallPRLinksForUsage(ctx, write.Messages, remote)
+		links, err := ToolCallPRLinksForUsage(ctx, write.Messages, "")
 		if err != nil {
 			return write, err
 		}
