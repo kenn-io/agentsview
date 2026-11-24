@@ -2,13 +2,10 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -131,18 +128,7 @@ func setupItems(agent string, force, withMCP bool) ([]agentsetup.Item, error) {
 		},
 	}
 	hooks := setupHooks(agent, sessionStartHookOptions())
-	if agent == "claude" && claudeMemoryPluginEnabled(home) {
-		hooks = agentsetup.Item{
-			Name: "hooks",
-			Check: func(context.Context) (agentsetup.Status, error) {
-				return agentsetup.Status{
-					State:  agentsetup.StateOK,
-					Reason: "the agentsview-memory plugin runs the SessionStart hook",
-				}, nil
-			},
-			Install: func(context.Context) error { return nil },
-		}
-	}
+
 	if !withMCP {
 		return []agentsetup.Item{skill, hooks}, nil
 	}
@@ -183,32 +169,6 @@ func sessionStartHookOptions() agenthook.InstallOptions {
 }
 
 var setupHooks = agentsetup.Hooks
-
-// claudeMemoryPluginEnabled reports whether Claude Code has the
-// agentsview-memory plugin enabled. Its hook already runs the SessionStart
-// command, so a standalone hook would run it twice.
-func claudeMemoryPluginEnabled(home string) bool {
-	dir := os.Getenv("CLAUDE_CONFIG_DIR")
-	if dir == "" {
-		dir = filepath.Join(home, ".claude")
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "settings.json"))
-	if err != nil {
-		return false
-	}
-	var settings struct {
-		EnabledPlugins map[string]bool `json:"enabledPlugins"`
-	}
-	if json.Unmarshal(data, &settings) != nil {
-		return false
-	}
-	for id, enabled := range settings.EnabledPlugins {
-		if enabled && strings.HasPrefix(id, "agentsview-memory@") {
-			return true
-		}
-	}
-	return false
-}
 
 func setupMCP(agent string) agentsetup.Item {
 	return agentsetup.MCP(agent, "agentsview", memoryMCPServer())

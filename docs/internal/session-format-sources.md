@@ -155,19 +155,6 @@ evidence; they do not establish whether a tool helped the task.
 
 ## Claude Code (`claude`)
 
-- **Launcher environment and SessionStart input (observed 2026-11-23):** On
-  Linux with Claude Code 2.1.330 and Codex 0.171.0, a `claude -p` started from
-  a Codex session ran as a process named `claude.exe`. Its starting
-  environment held the Codex launcher's `CODEX_THREAD_ID` and, from the Claude
-  session above that, `CLAUDE_CODE_SESSION_ID`; Claude set its own ID only in
-  its tool shells. The Codex process started from Claude held that Claude
-  session's `CLAUDE_CODE_SESSION_ID`. A `claude -p` given a SessionStart hook
-  through `--settings` delivered `session_id` and `source: "startup"` on
-  stdin, and `agentsview memory session-start --hook` linked it to the
-  launching Claude session. The
-  [hooks documentation](https://code.claude.com/docs/en/hooks) documents
-  `session_id` and `source`. See `cmd/agentsview/memory_parent.go`.
-
 - **Modified-time refresh without a write (observed 2026-11-15):** On a machine
   running Claude Code 2.1.325, four transcripts of open sessions received new
   modified times exactly 3,600 seconds apart while their size and SHA-256
@@ -783,14 +770,6 @@ fixtures retain this field; missing identities remain source-local.
 
 ## Codex (`codex`)
 
-- **SessionStart hook input (checked 2026-11-23):** The
-  [hooks documentation](https://developers.openai.com/codex/hooks) defines
-  `session_id` and `source` for SessionStart, and kit's `agenthook` requires
-  `source` for Codex. Codex ignored a SessionStart hook passed with
-  `codex exec -c hooks...`, so the Codex-child path was not run against a real
-  Codex hook; unit tests cover it. See the Claude Code launcher entry above for
-  the observed environment.
-
 - **Reasoning, compaction, and usage repeats (checked 2026-11-11 at
   `87b7bdbf2efb9cb6fb15d821ef535061012c0138`):** The pinned
   [response schema](https://github.com/openai/codex/blob/87b7bdbf2efb9cb6fb15d821ef535061012c0138/codex-rs/protocol/src/models.rs)
@@ -1121,6 +1100,9 @@ fixtures retain this field; missing identities remain source-local.
   for the day of the undo, and archiving moves every file of the thread into
   `archived_sessions/`
   ([archive_thread.rs](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/thread-store/src/local/archive_thread.rs#L42-L113)).
+  The state database's `threads.rollout_path` points to the current rollout;
+  revert replaces it after persisting the new page
+  ([revert_thread.rs](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/thread-store/src/local/revert_thread.rs#L783-L799)).
   Resume and thread lookup take the thread id and open its newest file
   ([list.rs](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/rollout/src/list.rs#L1602-L1616)).
   A reported archive written by Codex `0.153.4` and `0.155.0-alpha.16.3`

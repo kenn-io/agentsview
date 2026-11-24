@@ -967,9 +967,8 @@ describe("nested subagent rows", () => {
     ]);
   });
 
-  it("moves a child to its nearest visible ancestor when a filter hides its parent", () => {
-    const all = launchedTree();
-    const [full] = buildSessionGroups(all);
+  it("keeps a run at the group root when a filter hides its launcher", () => {
+    const [full] = buildSessionGroups(launchedTree());
     const group: SessionGroup = {
       ...full!,
       sessions: full!.sessions.filter((s) => s.id !== "b"),
@@ -978,6 +977,19 @@ describe("nested subagent rows", () => {
     expect(rows(group)).toEqual([
       ["d", 2, false],
       ["c", 2, true],
+    ]);
+  });
+
+  it("keeps both rows when two runs name each other as launcher", () => {
+    const [full] = buildSessionGroups(launchedTree());
+    const group: SessionGroup = {
+      ...full!,
+      sessions: full!.sessions.map((s) => (s.id === "b" ? { ...s, parent_session_id: "c" } : s)),
+    };
+    expect(rows(group)).toEqual([
+      ["d", 2, false],
+      ["b", 2, true],
+      ["c", 3, true],
     ]);
   });
 });

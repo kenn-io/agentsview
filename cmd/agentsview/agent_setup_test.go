@@ -509,11 +509,16 @@ func TestAgentSetupInstallsSessionStartHook(t *testing.T) {
 	}
 }
 
-func TestAgentSetupLeavesSessionStartHookToEnabledMemoryPlugin(t *testing.T) {
+func TestAgentSetupInstallsSessionStartHookWithEnabledMemoryPlugin(t *testing.T) {
 	home := t.TempDir()
 	setDoctorMemoryTestEnvironment(t, home)
 	setupHooks = agentsetup.Hooks
 	fakeAgent(t, "claude", "")
+	name := "agentsview"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(os.Getenv("PATH"), name), []byte("#!/bin/sh\n"), 0755))
 	settings := `{"enabledPlugins":{"agentsview-memory@agentsview":true}}`
 	path := filepath.Join(home, ".claude", "settings.json")
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
@@ -531,8 +536,19 @@ func TestAgentSetupLeavesSessionStartHookToEnabledMemoryPlugin(t *testing.T) {
 	require.Len(t, report.Rows, 2, out)
 	require.Equal(t, "hooks", report.Rows[1].Piece)
 	require.Equal(t, "ok", report.Rows[1].State)
-	require.Contains(t, report.Rows[1].Reason, "agentsview-memory plugin")
+
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
-	require.Equal(t, settings, string(data))
+	require.Contains(t, string(data), "agentsview memory session-start --hook")
+	require.Contains(t, string(data), "agentsview-memory@agentsview")
+	var config map[string]any
+	require.NoError(t, json.Unmarshal(data, &config))
+	config["disableAllHooks"] = true
+	data, err = json.Marshal(config)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, data, 0600))
+	out, _ = executeCommand(newRootCommand(), "agent", "setup", "--agent", "claude", "--mcp=false", "--check", "--json")
+	require.NoError(t, json.Unmarshal([]byte(out), &report), out)
+	require.Len(t, report.Rows, 2, out)
+	require.NotEqual(t, "ok", report.Rows[1].State, out)
 }

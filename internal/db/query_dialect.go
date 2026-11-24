@@ -821,6 +821,9 @@ func SessionTreeMemberPredicate(
 	f = f.withSelectionDefaults(f.HasAnnotationFilter())
 	pred := sessionAlias + ".message_count > 0 AND " + sessionAlias + ".deleted_at IS NULL"
 	if scope := dialect.AutomatedScopePredicate(NormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated), sessionAlias+".is_automated"); scope != "" {
+		if f.SidebarTree && f.ExcludeAutomated && !f.AutomatedFilterSet && f.AutomatedScope == "" {
+			scope = "(" + scope + " OR (" + sessionAlias + ".relationship_type = 'subagent' AND (" + sessionAlias + ".session_kind = 'non-interactive' OR " + sessionAlias + ".entrypoint = 'sdk-cli')))"
+		}
 		pred += " AND " + scope
 	}
 	if f.OneShotFilterSet && f.ExcludeOneShot && f.HasAnnotationFilter() {

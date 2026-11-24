@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
 
+	"github.com/shirou/gopsutil/v4/process"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -30,8 +32,9 @@ const (
 // fakeProcess is one row of a stand-in process table. The walk starts at
 // this test's parent PID, which plays the hook's shell.
 type fakeProcess struct {
-	name string
-	env  []string
+	name  string
+	env   []string
+	files []process.OpenFilesStat
 }
 
 func stubLaunchProcesses(t *testing.T, chain ...fakeProcess) {
@@ -49,7 +52,7 @@ func stubLaunchProcesses(t *testing.T, chain ...fakeProcess) {
 		if i == len(chain)-1 {
 			next = 1
 		}
-		return launchProcess{Name: p.name, PPID: next, Environ: func(context.Context) ([]string, error) {
+		return launchProcess{Name: p.name, PPID: next, OpenFiles: func(context.Context) ([]process.OpenFilesStat, error) { return p.files, nil }, Environ: func(context.Context) ([]string, error) {
 			if p.env == nil {
 				return nil, errors.New("environment unavailable")
 			}
@@ -319,4 +322,90 @@ func TestCaptureLaunchParentGivesUpAtHookDeadline(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestCaptureLaunchParentDetached(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		env  []string
+		want string
+	}{
+		{"claude", []string{"CLAUDE_CODE_SESSION_ID=" + claudeLauncherID}, claudeLauncherID},
+		{"codex", []string{"CODEX_THREAD_ID=" + codexLauncherID}, "codex:" + codexLauncherID},
+		{"ambiguous", []string{"CLAUDE_CODE_SESSION_ID=" + claudeLauncherID, "CODEX_THREAD_ID=" + codexLauncherID}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			database := stubLaunchArchive(t)
+			stubLaunchProcesses(t, fakeProcess{name: "sh"}, fakeProcess{name: "claude", env: tc.env})
+			_, err := runLaunchHook(t, sessionStartPayload("startup"))
+			require.NoError(t, err)
+			link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
+			if tc.want == "" {
+				require.ErrorIs(t, err, sql.ErrNoRows)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, link.ParentSessionID)
+		})
+	}
+}
+
+func TestCaptureLaunchParentUsesCodexRevertPage(t *testing.T) {
+	database := stubLaunchArchive(t)
+	rollout := "44444444-4444-4444-8444-444444444444"
+	page := codexLauncherID + "_" + rollout
+	stubLaunchProcesses(t, fakeProcess{name: "sh"}, fakeProcess{name: "claude", env: []string{"CODEX_THREAD_ID=" + codexLauncherID}}, fakeProcess{name: "codex", files: []process.OpenFilesStat{{Path: "rollout-2026-01-01-" + page + ".jsonl"}}})
+	_, err := runLaunchHook(t, sessionStartPayload("startup"))
+	require.NoError(t, err)
+	link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
+	require.NoError(t, err)
+	assert.Equal(t, "codex:"+page, link.ParentSessionID)
+	dbtest.SeedSession(t, database, "codex:"+page, "proj")
+	dbtest.SeedSession(t, database, childSessionID, "proj")
+	children, err := database.GetChildSessions(t.Context(), "codex:"+page)
+	require.NoError(t, err)
+	require.Len(t, children, 1)
+	assert.Equal(t, childSessionID, children[0].ID)
+}
+
+func TestCaptureDetachedCodexRevertPage(t *testing.T) {
+	home := t.TempDir()
+	state, err := sql.Open("sqlite3", filepath.Join(home, "state_5.sqlite"))
+	require.NoError(t, err)
+	_, err = state.ExecContext(t.Context(), `CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL)`)
+	require.NoError(t, err)
+	page := codexLauncherID + "_44444444-4444-4444-8444-444444444444"
+	_, err = state.ExecContext(t.Context(), `INSERT INTO threads (id, rollout_path) VALUES (?, ?)`, codexLauncherID, "rollout-2026-01-01-"+page+".jsonl")
+	require.NoError(t, err)
+	require.NoError(t, state.Close())
+	database := stubLaunchArchive(t)
+	stubLaunchProcesses(t, fakeProcess{name: "sh"}, fakeProcess{name: "claude", env: []string{"CODEX_HOME=" + home, "CODEX_THREAD_ID=" + codexLauncherID}})
+	_, err = runLaunchHook(t, sessionStartPayload("startup"))
+	require.NoError(t, err)
+	link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
+	require.NoError(t, err)
+	assert.Equal(t, "codex:"+page, link.ParentSessionID)
+	dbtest.SeedSession(t, database, "codex:"+page, "proj")
+	dbtest.SeedSession(t, database, childSessionID, "proj")
+	children, err := database.GetChildSessions(t.Context(), "codex:"+page)
+	require.NoError(t, err)
+	require.Len(t, children, 1)
+	assert.Equal(t, childSessionID, children[0].ID)
+}
+
+func TestCodexLauncherPagePrefersCurrentIndex(t *testing.T) {
+	home := t.TempDir()
+	state, err := sql.Open("sqlite3", filepath.Join(home, "state_5.sqlite"))
+	require.NoError(t, err)
+	_, err = state.ExecContext(t.Context(), `CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL)`)
+	require.NoError(t, err)
+	page := codexLauncherID + "_44444444-4444-4444-8444-444444444444"
+	_, err = state.ExecContext(t.Context(), `INSERT INTO threads VALUES (?, ?)`, codexLauncherID, "rollout-2026-01-01-"+page+".jsonl")
+	require.NoError(t, err)
+	require.NoError(t, state.Close())
+	child := launchProcess{Environ: func(context.Context) ([]string, error) { return []string{"CODEX_HOME=" + home}, nil }}
+	parent := launchProcess{OpenFiles: func(context.Context) ([]process.OpenFilesStat, error) {
+		return []process.OpenFilesStat{{Path: "rollout-2026-01-01-" + codexLauncherID + ".jsonl"}}, nil
+	}}
+	assert.Equal(t, page, codexLauncherPage(t.Context(), child, parent, codexLauncherID))
 }

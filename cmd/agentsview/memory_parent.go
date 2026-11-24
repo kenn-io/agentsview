@@ -5,10 +5,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,9 +37,10 @@ const (
 
 // launchProcess is the part of a process the launcher walk reads.
 type launchProcess struct {
-	Name    string
-	PPID    int32
-	Environ func(context.Context) ([]string, error)
+	Name      string
+	PPID      int32
+	Environ   func(context.Context) ([]string, error)
+	OpenFiles func(context.Context) ([]process.OpenFilesStat, error)
 }
 
 var (
@@ -56,7 +61,7 @@ func lookupGopsutilProcess(ctx context.Context, pid int32) (launchProcess, error
 	if err != nil {
 		return launchProcess{}, err
 	}
-	return launchProcess{Name: name, PPID: ppid, Environ: p.EnvironWithContext}, nil
+	return launchProcess{Name: name, PPID: ppid, Environ: p.EnvironWithContext, OpenFiles: p.OpenFilesWithContext}, nil
 }
 
 // processAgent names the agent a process runs, or "" for any other process.
@@ -79,41 +84,35 @@ var launcherVariables = map[string][]string{
 
 // launchAgents finds the agent running this hook and the agent that started
 // it. The child's environment is what the launcher's shell passed to it.
-func launchAgents(ctx context.Context, pid int32) (child launchProcess, childAgent, launcher string, err error) {
+func launchAgents(ctx context.Context, pid int32) (child, parent launchProcess, childAgent, launcher string, err error) {
 	for range launcherAncestryLimit {
 		if pid <= 1 {
 			break
 		}
 		p, err := lookupLaunchProcess(ctx, pid)
 		if err != nil {
-			return launchProcess{}, "", "", err
+			return child, parent, childAgent, "", err
 		}
 		if agent := processAgent(p.Name); agent != "" {
 			if childAgent == "" {
 				child, childAgent = p, agent
 			} else {
-				return child, childAgent, agent, nil
+				return child, p, childAgent, agent, nil
 			}
 		}
 		pid = p.PPID
 	}
-	return launchProcess{}, "", "", nil
+	return child, parent, childAgent, "", nil
 }
 
 // launcherSessionID reads the launcher's session ID from the child's starting
-// environment. Without it, the hook's own environment works only when the
-// agents differ, since an agent overwrites its own variable for its hooks.
-func launcherSessionID(ctx context.Context, child launchProcess, childAgent, launcher string) (string, error) {
+// environment, before the child supplies its own ID to the hook.
+func launcherSessionID(ctx context.Context, child launchProcess, launcher string) (string, error) {
 	var env []string
 	if child.Environ != nil {
 		env, _ = child.Environ(ctx)
 	}
 	values := map[string]string{}
-	if env == nil && childAgent != launcher {
-		for _, name := range launcherVariables[launcher] {
-			values[name] = os.Getenv(name)
-		}
-	}
 	for _, entry := range env {
 		name, value, _ := strings.Cut(entry, "=")
 		for _, wanted := range launcherVariables[launcher] {
@@ -193,13 +192,35 @@ func readHookInput(ctx context.Context, r io.Reader) ([]byte, error) {
 // with no agent launcher, and only on startup, so a resume or clear cannot
 // restore a link the user removed.
 func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
-	child, childAgent, launcher, err := launchAgents(ctx, int32(os.Getppid()))
-	if err != nil {
-		return fmt.Errorf("reading process ancestry: %w", err)
+	child, parent, childAgent, launcher, err := launchAgents(ctx, int32(os.Getppid()))
+	if childAgent == "" {
+		return err
 	}
 	if launcher == "" {
-		return nil
+		if child.Environ == nil {
+			return err
+		}
+		env, envErr := child.Environ(ctx)
+		if envErr != nil {
+			return envErr
+		}
+		vars := map[string]string{}
+		for _, entry := range env {
+			key, value, _ := strings.Cut(entry, "=")
+			vars[key] = value
+		}
+		claude := vars["CLAUDE_CODE_SESSION_ID"] != ""
+		codex := vars["CODEX_THREAD_ID"] != "" || vars["CODEX_SESSION_ID"] != ""
+		if claude == codex {
+			return nil
+		}
+		if claude {
+			launcher = "claude"
+		} else {
+			launcher = "codex"
+		}
 	}
+
 	data, err := readHookInput(ctx, cmd.InOrStdin())
 	if err != nil || len(data) == 0 {
 		return err
@@ -214,7 +235,7 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 	if in == nil || in.Source != agenthook.SessionSourceStartup || in.AgentID != "" {
 		return nil
 	}
-	parentID, err := launcherSessionID(ctx, child, childAgent, launcher)
+	parentID, err := launcherSessionID(ctx, child, launcher)
 	if err != nil || parentID == "" {
 		return err
 	}
@@ -222,9 +243,22 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
+	if childAgent == "codex" {
+		key := parser.CodexSessionUUIDFromPath(in.TranscriptPath)
+		if key != "" && parser.CodexThreadIDFromSessionKey(key) == in.SessionID {
+			childID = "codex:" + key
+		}
+	}
+	nativeParentID := parentID
 	if parentID, err = storedSessionID(launcher, parentID); err != nil {
 		return err
 	}
+	if launcher == "codex" {
+		if key := codexLauncherPage(ctx, child, parent, nativeParentID); key != "" {
+			parentID = "codex:" + key
+		}
+	}
+
 	return recordLaunchParent(ctx, cmd, childID, parentID)
 }
 
@@ -259,4 +293,85 @@ func writeLaunchParent(ctx context.Context, cmd *cobra.Command, childID, parentI
 		return fmt.Errorf("recording launcher: %w", err)
 	}
 	return nil
+}
+
+// codexLauncherPage reads the current rollout from Codex's thread index,
+// or from the launcher's open files when the index is unavailable.
+func codexLauncherPage(ctx context.Context, child, parent launchProcess, thread string) string {
+	if key := codexIndexedPage(ctx, child, thread); key != "" {
+		return key
+	}
+
+	if parent.OpenFiles != nil {
+		files, _ := parent.OpenFiles(ctx)
+		found := ""
+		for _, file := range files {
+			key := parser.CodexSessionUUIDFromPath(file.Path)
+			if key == "" || parser.CodexThreadIDFromSessionKey(key) != thread {
+				continue
+			}
+			if found != "" && found != key {
+				found = ""
+				break
+			}
+			found = key
+		}
+		if found != "" {
+			return found
+		}
+	}
+	return ""
+}
+
+func codexIndexedPage(ctx context.Context, child launchProcess, thread string) string {
+	var home string
+	if child.Environ != nil {
+		env, _ := child.Environ(ctx)
+		for _, entry := range env {
+			if key, value, ok := strings.Cut(entry, "="); ok && key == "CODEX_HOME" {
+				home = value
+				break
+			}
+		}
+	}
+	if home == "" {
+		if userHome, err := os.UserHomeDir(); err == nil {
+			home = filepath.Join(userHome, ".codex")
+		}
+	}
+	if home == "" {
+		return ""
+	}
+	paths, _ := filepath.Glob(filepath.Join(home, "state_*.sqlite"))
+	latest := -1
+	var state string
+	for _, path := range paths {
+		name := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(path), "state_"), ".sqlite")
+		version, err := strconv.Atoi(name)
+		if err == nil && version > latest {
+			latest, state = version, path
+		}
+	}
+	if state == "" {
+		return ""
+	}
+	path := filepath.ToSlash(state)
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	uri := (&url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro&_busy_timeout=100"}).String()
+	conn, err := sql.Open("sqlite3", uri)
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+	var rollout string
+	if err := conn.QueryRowContext(ctx, "SELECT rollout_path FROM threads WHERE id = ?", thread).Scan(&rollout); err != nil {
+		return ""
+	}
+	key := parser.CodexSessionUUIDFromPath(rollout)
+	if parser.CodexThreadIDFromSessionKey(key) != thread {
+		return ""
+	}
+	return key
 }
