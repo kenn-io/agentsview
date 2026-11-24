@@ -1213,51 +1213,131 @@ func TestBuildAgentScopeFailureThenRestore(t *testing.T) {
 	assert.Equal(t, []string{"a-old", "b-old"}, mirrorSessionIDs(t, ix))
 }
 
+func seedRoleSession(t *testing.T, archive *db.DB, msgs ...db.Message) {
+	t.Helper()
+	dbtest.SeedSessionWithMessages(t, archive, "s", "project", msgs, func(s *db.Session) {
+		s.Agent = "claude"
+		s.EndedAt = new("2024-01-01T00:00:00Z")
+	})
+}
+
+func roleSessionMessages() []db.Message {
+	return []db.Message{
+		dbtest.UserMsg("s", 0, "first question"), dbtest.AsstMsg("s", 1, "first answer"),
+		dbtest.AsstMsg("s", 2, "more answer"), dbtest.UserMsg("s", 3, "second question"),
+		dbtest.AsstMsg("s", 4, "second answer"),
+	}
+}
+
+func assertEncodedOnly(t *testing.T, encoded []string, want, reject string) {
+	t.Helper()
+	require.NotEmpty(t, encoded)
+	for _, text := range encoded {
+		assert.Contains(t, text, want)
+		assert.NotContains(t, text, reject)
+	}
+}
+
+func TestBuildRoleScopeEmbedsSelectedRoles(t *testing.T) {
+	ctx := t.Context()
+	archive := dbtest.OpenTestDB(t)
+	seedRoleSession(t, archive, roleSessionMessages()...)
+	gen := fakeGeneration("fake-model")
+	for _, tc := range []struct{ role, want, reject string }{
+		{"user", "question", "answer"},
+		{"assistant", "answer", "question"},
+	} {
+		var encoded []string
+		_, err := openTestIndex(t).Build(ctx, archive, recordingEncoder(&encoded), gen, BuildOptions{Roles: []string{tc.role}})
+		require.NoError(t, err)
+		assert.Len(t, encoded, 2, tc.role)
+		assertEncodedOnly(t, encoded, tc.want, tc.reject)
+	}
+}
+
 func TestBuildRoleScopeReconciles(t *testing.T) {
 	ctx := t.Context()
 	archive := dbtest.OpenTestDB(t)
-	dbtest.SeedSessionWithMessages(t, archive, "s", "project", []db.Message{
-		dbtest.UserMsg("s", 0, "first question"), dbtest.AsstMsg("s", 1, "first answer"),
-		dbtest.AsstMsg("s", 2, "more answer"), dbtest.UserMsg("s", 3, "second question"), dbtest.AsstMsg("s", 4, "second answer"),
-	}, func(s *db.Session) { s.EndedAt = new("2024-01-01T00:00:00Z") })
+	seedRoleSession(t, archive, roleSessionMessages()...)
 	ix := openTestIndex(t)
 	source := &agentScopeSource{DB: archive}
 	gen := fakeGeneration("fake-model")
-	build := func(roles []string, backstop bool) BuildResult {
-		result, err := ix.Build(ctx, source, fakeBuildEncoder(), gen, BuildOptions{Roles: roles, Backstop: backstop})
+	var encoded []string
+	build := func(roles ...string) {
+		t.Helper()
+		encoded = nil
+		source.since = ""
+		_, err := ix.Build(ctx, source, recordingEncoder(&encoded), gen, BuildOptions{Roles: roles})
 		require.NoError(t, err)
-		return result
 	}
-	assert.Equal(t, 2, build([]string{"user"}, false).Fill.Documents)
+	build("user")
 	users := mirrorDocKeys(t, ix)
 	require.Len(t, users, 2)
-	assert.Zero(t, build([]string{"user"}, true).Fill.Documents)
-	assert.Equal(t, 2, build(nil, false).Fill.Documents)
-	all := mirrorDocKeys(t, ix)
-	require.Len(t, all, 4)
-	for _, key := range users {
-		assert.Contains(t, all, key)
-	}
-	assert.Zero(t, build([]string{"assistant"}, false).Fill.Documents)
+	assertEncodedOnly(t, encoded, "question", "answer")
+
+	require.NoError(t, archive.ReplaceSessionMessages(ctx, "s", append(roleSessionMessages(), dbtest.AsstMsg("s", 5, "late answer"))))
+	build("user")
+	assert.Empty(t, encoded, "an appended reply adds nothing to a user-only index")
+	assert.Equal(t, users, mirrorDocKeys(t, ix))
+
+	build("assistant")
 	runs := mirrorDocKeys(t, ix)
 	require.Len(t, runs, 2)
-	assert.Equal(t, 2, build([]string{"user", "assistant"}, false).Fill.Documents)
+	assertEncodedOnly(t, encoded, "answer", "question")
+
+	build()
+	all := mirrorDocKeys(t, ix)
+	require.Len(t, all, 4)
+	assert.Subset(t, all, runs)
+	assertEncodedOnly(t, encoded, "question", "answer")
+
+	build("user")
+	assert.Equal(t, users, mirrorDocKeys(t, ix))
+	assert.Empty(t, encoded, "prompts kept across scope changes are not re-embedded")
+	build("assistant", "user", "assistant")
 	assert.Equal(t, all, mirrorDocKeys(t, ix))
-	build([]string{"assistant", "user", "assistant"}, false)
-	assert.NotEmpty(t, source.since)
-	require.NoError(t, ix.metaDelete(ctx, scopeRolesKey))
-	build(nil, false)
-	assert.NotEmpty(t, source.since)
-	build([]string{"user"}, false)
-	require.NoError(t, archive.ReplaceSessionMessages(ctx, "s", []db.Message{dbtest.AsstMsg("s", 0, "answer only")}))
-	build([]string{"user"}, false)
-	assert.Empty(t, mirrorDocKeys(t, ix))
+	assertEncodedOnly(t, encoded, "answer", "question")
+
+	stored, _, err := ix.metaGet(ctx, scopeAgentsKey)
+	require.NoError(t, err)
+	assert.Empty(t, stored, "both roles store the value older writers store")
+	build()
+	assert.NotEmpty(t, source.since, "a value with no roles suffix needs no rescan")
+	assert.Empty(t, encoded)
+}
+
+func TestBuildRoleScopeOlderWriterRoundTrip(t *testing.T) {
+	ctx := t.Context()
+	archive := dbtest.OpenTestDB(t)
+	seedRoleSession(t, archive, roleSessionMessages()...)
+	ix := openTestIndex(t)
+	gen := fakeGeneration("fake-model")
+	var encoded []string
+	build := func(roles ...string) string {
+		t.Helper()
+		encoded = nil
+		_, err := ix.Build(ctx, archive, recordingEncoder(&encoded), gen, BuildOptions{Agents: []string{"claude"}, Roles: roles})
+		require.NoError(t, err)
+		stored, _, err := ix.metaGet(ctx, scopeAgentsKey)
+		require.NoError(t, err)
+		return stored
+	}
+	assert.Equal(t, "claude;roles=user", build("user"))
+	users := mirrorDocKeys(t, ix)
+	// A build with roles unset is what an older writer runs: the suffix is a
+	// scope mismatch, so it reconciles the replies back and stores plain agents.
+	assert.Equal(t, "claude", build())
+	assert.Len(t, mirrorDocKeys(t, ix), 4)
+	assertEncodedOnly(t, encoded, "answer", "question")
+	assert.Equal(t, "claude;roles=user", build("user"))
+	assert.Equal(t, users, mirrorDocKeys(t, ix))
+	assert.Empty(t, encoded)
 }
 
 func TestBuildRoleScopeFailureThenRestore(t *testing.T) {
 	ctx := t.Context()
 	archive := dbtest.OpenTestDB(t)
-	dbtest.SeedSessionWithMessages(t, archive, "s", "project", []db.Message{dbtest.UserMsg("s", 0, "question"), dbtest.AsstMsg("s", 1, "answer")})
+	seedRoleSession(t, archive, dbtest.UserMsg("s", 0, "question"), dbtest.AsstMsg("s", 1, "answer"))
 	ix := openTestIndex(t)
 	gen := fakeGeneration("fake-model")
 	build := func(roles []string) error {
@@ -1268,8 +1348,11 @@ func TestBuildRoleScopeFailureThenRestore(t *testing.T) {
 	_, err := ix.db.ExecContext(ctx, `CREATE TRIGGER fail_role_delete BEFORE DELETE ON vector_messages BEGIN SELECT RAISE(FAIL, 'injected failure'); END`)
 	require.NoError(t, err)
 	require.ErrorContains(t, build([]string{"assistant"}), "injected failure")
+	stored, _, err := ix.metaGet(ctx, scopeAgentsKey)
+	require.NoError(t, err)
+	assert.Equal(t, ";roles=user", stored, "a failed reconcile keeps the previous scope")
 	_, err = ix.db.ExecContext(ctx, `DROP TRIGGER fail_role_delete`)
 	require.NoError(t, err)
 	require.NoError(t, build([]string{"user"}))
-	require.Len(t, mirrorDocKeys(t, ix), 1)
+	require.Len(t, mirrorDocKeys(t, ix), 1, "the retry reconciles even though the old scope returned")
 }

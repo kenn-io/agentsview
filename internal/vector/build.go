@@ -8,7 +8,6 @@ import (
 	"log"
 	"slices"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -158,14 +157,10 @@ func (ix *Index) Build(
 		return BuildResult{}, err
 	}
 	agents := normalizedAgents(o.Agents)
-	scopeAgents := strings.Join(agents, ",")
-	storedRoles, _, err := ix.metaGet(ctx, scopeRolesKey)
-	if err != nil {
-		return BuildResult{}, err
-	}
 	roles := normalizedRoles(o.Roles)
-	scopeRoles := strings.Join(roles, ",")
-	scopeChanged := !hasScope || storedScope != o.IncludeAutomated || storedAgents != scopeAgents || storedRoles != scopeRoles
+	scopeAgents := scopeValue(agents, roles)
+	scopeChanged := !hasScope || storedScope != o.IncludeAutomated ||
+		storedAgents != scopeAgents
 	corpusFingerprint := gen.Params[CorpusFingerprintParam]
 	storedCorpusFingerprint, hasCorpusFingerprint, err := ix.metaGet(
 		ctx, corpusFingerprintMetaKey,
@@ -241,9 +236,6 @@ func (ix *Index) Build(
 		}
 	}
 	if err := ix.metaSet(ctx, scopeAgentsKey, scopeAgents); err != nil {
-		return BuildResult{}, err
-	}
-	if err := ix.metaSet(ctx, scopeRolesKey, scopeRoles); err != nil {
 		return BuildResult{}, err
 	}
 	if err := ix.setIncludeAutomatedScope(ctx, o.IncludeAutomated); err != nil {
@@ -325,11 +317,8 @@ func (ix *Index) repairWithScope(
 		if err != nil {
 			return BuildResult{Fingerprint: gen.Fingerprint()}, err
 		}
-		storedRoles, _, err := ix.metaGet(ctx, scopeRolesKey)
-		if err != nil {
-			return BuildResult{Fingerprint: gen.Fingerprint()}, err
-		}
-		if storedAgents != strings.Join(normalizedAgents(o.Agents), ",") || storedRoles != strings.Join(normalizedRoles(o.Roles), ",") || (hasAgents && !hasScope) {
+		scope := scopeValue(normalizedAgents(o.Agents), normalizedRoles(o.Roles))
+		if storedAgents != scope || (hasAgents && !hasScope) {
 			return BuildResult{Fingerprint: gen.Fingerprint()}, errors.New("scope changed; run an embeddings build before repairing invalid vectors")
 		}
 	}

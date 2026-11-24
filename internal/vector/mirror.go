@@ -771,7 +771,6 @@ func (ix *Index) Clear(ctx context.Context) error {
 }
 
 const scopeAgentsKey = "scope_agents"
-const scopeRolesKey = "scope_roles"
 
 func normalizedAgents(agents []string) []string {
 	return slices.Compact(db.SortedCopy(agents))
@@ -783,6 +782,17 @@ func normalizedRoles(roles []string) []string {
 		return nil
 	}
 	return roles
+}
+
+// scopeValue is the stored scope_agents value. Restricted roles append a
+// ";roles=" suffix, so with roles unset the value matches older writers and an
+// older writer that sees the suffix reconciles back to both roles.
+func scopeValue(agents, roles []string) string {
+	value := strings.Join(agents, ",")
+	if len(roles) > 0 {
+		value += ";roles=" + strings.Join(roles, ",")
+	}
+	return value
 }
 
 // UnitKindIncluded reports whether the selected roles include an embedding unit.

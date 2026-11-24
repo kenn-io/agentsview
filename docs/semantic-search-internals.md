@@ -326,8 +326,11 @@ config change creates a generation with a new fingerprint.
 Whether automated sessions are in the embeddable universe is stored in
 `vector_meta` (`scope_include_automated`). The `[vector] agents` list is stored
 as `scope_agents`, sorted, deduplicated, and comma-joined. A missing key reads as
-an empty list, so an upgrade forces no rescan. The `[vector] roles` list is
-stored the same way as `scope_roles`, empty when it names both roles. Only the
+an empty list, so an upgrade forces no rescan. A `[vector] roles` list that
+names one role appends `;roles=<role>` to the `scope_agents` value; with both
+roles or none, the value has no suffix and matches what older versions store.
+An older version that finds the suffix sees a changed scope and reconciles back
+to both roles, and the next build of this version reconciles again. Only the
 local message store applies either list; Recall and hosted PostgreSQL embeddings
 ignore them.
 

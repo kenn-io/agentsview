@@ -526,7 +526,7 @@ func TestMirrorSchemaVersionV3UpgradesInPlace(t *testing.T) {
 	version, ok, err := upgraded.metaGet(ctx, mirrorSchemaVersionKey)
 	require.NoError(t, err)
 	assert.True(t, ok)
-	assert.Equal(t, "5", version)
+	assert.Equal(t, "4", version)
 	active, ok, err := upgraded.ActiveFingerprint(ctx)
 	require.NoError(t, err)
 	assert.True(t, ok)
@@ -543,107 +543,6 @@ func TestMirrorSchemaVersionV3UpgradesInPlace(t *testing.T) {
 	assert.Equal(t, gen.Fingerprint(), result.Fingerprint)
 	assert.Equal(t, 5, result.Fill.Documents, "only the split assistant run re-embeds")
 	assertRunCapPieces(t, upgraded, 6)
-}
-
-func TestMirrorSchemaVersionV5UpgradesV4AndRejectsOlderReader(t *testing.T) {
-	ctx := t.Context()
-	archive := dbtest.OpenTestDB(t)
-	track := func(ix **Index) {
-		t.Cleanup(func() {
-			if *ix != nil {
-				require.NoError(t, (*ix).Close())
-				*ix = nil
-			}
-		})
-	}
-	for _, session := range []struct {
-		id, ended string
-	}{
-		{"older", "2024-01-01T00:00:00Z"},
-		{"newer", "2024-02-01T00:00:00Z"},
-	} {
-		dbtest.SeedSessionWithMessages(t, archive, session.id, "project", []db.Message{
-			dbtest.UserMsg(session.id, 0, "question"),
-			dbtest.AsstMsg(session.id, 1, "answer"),
-		}, func(s *db.Session) { s.EndedAt = new(session.ended) })
-	}
-	path := filepath.Join(t.TempDir(), "vectors.db")
-	v4 := MessageIndexSpec()
-	v4.MirrorSchemaVersion = "4"
-	v4.UpgradableFrom = []string{"3"}
-	legacy, err := OpenSpec(ctx, path, v4, false, 4000)
-	require.NoError(t, err)
-	track(&legacy)
-	gen := fakeGeneration("fake-model")
-	_, err = legacy.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{})
-	require.NoError(t, err)
-	assert.Len(t, mirrorDocKeys(t, legacy), 4)
-	before, err := legacy.Search(ctx, fakeBuildEncoder(), "question", 10)
-	require.NoError(t, err)
-	require.NotEmpty(t, before)
-	require.NoError(t, legacy.Close())
-	legacy = nil
-
-	current, err := Open(ctx, path, false, 4000)
-	require.NoError(t, err)
-	track(&current)
-	version, ok, err := current.metaGet(ctx, mirrorSchemaVersionKey)
-	require.NoError(t, err)
-	assert.True(t, ok)
-	assert.Equal(t, "5", version)
-	assert.Len(t, mirrorDocKeys(t, current), 4, "v5 must retain version-4 documents")
-	after, err := current.Search(ctx, fakeBuildEncoder(), "question", 10)
-	require.NoError(t, err)
-	assert.Equal(t, before, after, "the default upgrade must preserve existing search results")
-	pending, err := current.countPending(ctx, gen.Fingerprint())
-	require.NoError(t, err)
-	assert.Zero(t, pending, "existing embeddings stay current")
-
-	result, err := current.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{Roles: []string{"user"}})
-	require.NoError(t, err)
-	assert.Zero(t, result.Fill.Documents, "kept prompts do not need re-embedding")
-	assert.Len(t, mirrorDocKeys(t, current), 2, "role scope removes only assistant documents")
-	require.NoError(t, current.Close())
-	current = nil
-
-	legacyReader, err := OpenSpec(ctx, path, v4, true, 4000)
-	require.NoError(t, err)
-	track(&legacyReader)
-	_, err = legacyReader.Search(ctx, fakeBuildEncoder(), "question", 10)
-	assert.ErrorIs(t, err, ErrMirrorVersionMismatch)
-	require.NoError(t, legacyReader.Close())
-	legacyReader = nil
-
-	legacyWriter, err := OpenSpec(ctx, path, v4, false, 4000)
-	require.NoError(t, err)
-	track(&legacyWriter)
-	assert.Empty(t, mirrorDocKeys(t, legacyWriter), "a v4 writer resets a v5 index")
-	_, err = legacyWriter.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{Backstop: true})
-	require.NoError(t, err)
-	assert.Len(t, mirrorDocKeys(t, legacyWriter), 4)
-	require.NoError(t, legacyWriter.metaDelete(ctx, scopeRolesKey), "a v4 writer does not know role scope")
-	require.NoError(t, legacyWriter.Close())
-	legacyWriter = nil
-
-	current, err = Open(ctx, path, false, 4000)
-	require.NoError(t, err)
-	result, err = current.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{Roles: []string{"user"}})
-	require.NoError(t, err)
-	assert.Zero(t, result.Fill.Documents, "the v5 return keeps prompts from the v4 backstop")
-	assert.Len(t, mirrorDocKeys(t, current), 2, "the missing role scope forces reconciliation")
-
-	dbtest.SeedSessionWithMessages(t, archive, "latest", "project", []db.Message{
-		dbtest.UserMsg("latest", 0, "new question"),
-		dbtest.AsstMsg("latest", 1, "new answer"),
-	}, func(s *db.Session) { s.EndedAt = new("2024-03-01T00:00:00Z") })
-	_, err = current.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{Roles: []string{"user"}})
-	require.NoError(t, err)
-	assert.Len(t, mirrorDocKeys(t, current), 3, "the later incremental build keeps only user documents")
-	for _, key := range mirrorDocKeys(t, current) {
-		assert.NotContains(t, key, "ro:")
-	}
-	require.NoError(t, current.Close())
-	current = nil
 }
 
 // TestMirrorSchemaVersionReadOnlyMismatchSearchReturnsSentinel covers the

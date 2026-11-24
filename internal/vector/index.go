@@ -154,8 +154,7 @@ func (s IndexSpec) reuseTable() string       { return s.VectorsPrefix + "_reuse"
 // held one row per message; "3" switched document identity to run-grouped
 // units (one row per user message or per run of contiguous assistant
 // messages) with no DDL change; "4" caps assistant runs and upgrades "3"
-// in place; "5" stores role-scoped indexes, which readers before "5" cannot
-// safely interpret.
+// in place.
 func MessageIndexSpec() IndexSpec {
 	return IndexSpec{
 		Name:                   "messages",
@@ -164,8 +163,8 @@ func MessageIndexSpec() IndexSpec {
 		MetaTable:              "vector_meta",
 		VectorsPrefix:          "message_vectors",
 		MirrorDDL:              messageMirrorDDL,
-		MirrorSchemaVersion:    "5",
-		UpgradableFrom:         []string{"3", "4"},
+		MirrorSchemaVersion:    "4",
+		UpgradableFrom:         []string{"3"},
 	}
 }
 

@@ -674,11 +674,11 @@ your current embedding configuration, and it fails without writing if that
 generation does not exist. After changing `agents` or `roles`, run an ordinary
 build before repairing invalid vectors. It does not accept a generation ID. The
 command scans stored documents with a revision-current generation stamp in
-bounded batches and checks for malformed byte length, a length that differs
-from the generation's declared dimension, missing referenced vector rows,
-duplicate, missing, or unexpected chunk indices, non-finite components, and
-zero norm. Documents that are already pending because their content changed
-are left for an ordinary build. If any chunk is invalid, AgentsView invalidates that document's
+bounded batches and checks for malformed byte length, a length that differs from
+the generation's declared dimension, missing referenced vector rows, duplicate,
+missing, or unexpected chunk indices, non-finite components, and zero norm.
+Documents that are already pending because their content changed are left for an
+ordinary build. If any chunk is invalid, AgentsView invalidates that document's
 target-generation chunks and stamp, then runs a repair-only fill restricted to
 the affected document keys. Each bounded invalidation transaction queues its
 targets before removing old data, so an interrupted scan can resume without
