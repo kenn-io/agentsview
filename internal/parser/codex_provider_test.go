@@ -2414,20 +2414,24 @@ func TestCodexLabeledRunDiscoveryAndParse(t *testing.T) {
 	assert.Empty(t, CodexSourceLabel(filepath.Join(home, "sessions"), path))
 }
 
-func TestCodexLabeledIndexChangedPath(t *testing.T) {
+func TestCodexLabeledLookupAndDuplicates(t *testing.T) {
 	root := t.TempDir()
-	var indexes, paths []string
-	for _, id := range []string{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"} {
-		home := filepath.Join(root, id, ".codex-run-v1-a")
-		paths = append(paths, writeCodexProviderSession(t, filepath.Join(home, "sessions"), id, "prompt"))
-		indexes = append(indexes, filepath.Join(home, CodexSessionIndexFilename))
-	}
+	const id = "11111111-1111-4111-8111-111111111111"
+	old := writeCodexProviderSession(t, filepath.Join(root, "old", ".codex-run-v1-a", "sessions"), id, "prompt")
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	sources, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: indexes[0]})
+	source, found, err := provider.FindSource(t.Context(), FindSourceRequest{StoredFilePath: old, RawSessionID: id})
 	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	assert.Equal(t, paths[0], sources[0].DisplayPath)
+	require.True(t, found)
+	assert.Equal(t, old, source.DisplayPath)
+	newPath := writeCodexProviderSession(t, filepath.Join(root, "new", ".codex-run-v1-b", "sessions"), id, "prompt")
+	lister := provider.(interface{ AllSourcePathsForUUID(string) []string })
+	assert.ElementsMatch(t, []string{old, newPath}, lister.AllSourcePathsForUUID(id))
+	require.NoError(t, os.Remove(old))
+	source, found, err = provider.FindSource(t.Context(), FindSourceRequest{StoredFilePath: old, RawSessionID: id})
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, newPath, source.DisplayPath)
 }
 
 func TestCodexDotLabeledRuns(t *testing.T) {

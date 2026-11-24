@@ -846,7 +846,7 @@ func CodexSessionPathInfo(root, path string) (CodexLayout, string, bool) {
 		return CodexLayoutUnknown, "", false
 	}
 	parts := strings.Split(rel, sep)
-	if len(parts) >= 6 && strings.HasPrefix(parts[len(parts)-6], ".codex-run-v1-") && parts[len(parts)-5] == "sessions" {
+	if codexMarkedRunParts(parts) {
 		parts = parts[len(parts)-4:]
 	}
 	switch len(parts) {
@@ -857,10 +857,7 @@ func CodexSessionPathInfo(root, path string) (CodexLayout, string, bool) {
 		return CodexLayoutArchivedFlat,
 			CodexSessionUUIDFromFilename(parts[0]), true
 	case 4:
-		if !IsDigits(parts[0]) || !IsDigits(parts[1]) || !IsDigits(parts[2]) {
-			return CodexLayoutUnknown, "", false
-		}
-		if !isCodexSessionFilename(parts[3]) {
+		if !codexDatedParts(parts) {
 			return CodexLayoutUnknown, "", false
 		}
 		return CodexLayoutDated,
@@ -870,12 +867,19 @@ func CodexSessionPathInfo(root, path string) (CodexLayout, string, bool) {
 	}
 }
 
+func codexMarkedRunParts(parts []string) bool {
+	n := len(parts)
+	return n >= 6 && strings.HasPrefix(parts[n-6], ".codex-run-v1-") && parts[n-5] == "sessions"
+}
+
+func codexDatedParts(parts []string) bool {
+	return len(parts) == 4 && IsDigits(parts[0]) && IsDigits(parts[1]) && IsDigits(parts[2]) && isCodexSessionFilename(parts[3])
+}
+
 // CodexMarkedRunPath reports a dated rollout inside a marked run home.
 func CodexMarkedRunPath(path string) bool {
 	parts := strings.Split(filepath.Clean(path), string(filepath.Separator))
-	n := len(parts)
-	return n >= 6 && strings.HasPrefix(parts[n-6], ".codex-run-v1-") && parts[n-5] == "sessions" &&
-		IsDigits(parts[n-4]) && IsDigits(parts[n-3]) && IsDigits(parts[n-2]) && isCodexSessionFilename(parts[n-1])
+	return codexMarkedRunParts(parts) && codexDatedParts(parts[len(parts)-4:])
 }
 
 // CodexSourceLabel returns the label preceding a marked Codex run home.

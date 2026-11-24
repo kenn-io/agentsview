@@ -1083,107 +1083,40 @@ func (s codexSourceSet) discover(
 	return sources, nil
 }
 
-// discoverSessionPaths finds all Codex JSONL session file paths under
-// sessionsDir, covering both the standard year/month/day layout and a flat
-// archived directory. Paths are returned sorted for deterministic discovery,
-// matching the behavior the package-level entrypoint provided before the fold.
-func (s codexSourceSet) discoverSessionPaths(sessionsDir string) []string {
+// discoverSessionPaths lists supported rollouts under a configured root.
+func (s codexSourceSet) discoverSessionPaths(root string) []string {
 	var paths []string
-
-	entries, err := os.ReadDir(sessionsDir)
-	if err != nil {
+	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return nil
+		}
+		if _, _, ok := CodexSessionPathInfo(root, path); ok {
+			paths = append(paths, path)
+		}
 		return nil
-	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		if !isCodexSessionFilename(entry.Name()) {
-			continue
-		}
-		paths = append(paths, filepath.Join(sessionsDir, entry.Name()))
-	}
-
-	walkCodexDayDirs(sessionsDir, func(dayPath string) bool {
-		dayEntries, err := os.ReadDir(dayPath)
-		if err != nil {
-			return true
-		}
-		for _, sf := range dayEntries {
-			if sf.IsDir() {
-				continue
-			}
-			if !isCodexSessionFilename(sf.Name()) {
-				continue
-			}
-			paths = append(paths, filepath.Join(dayPath, sf.Name()))
-		}
-		return true
 	})
-
-	slices.Sort(paths)
 	return paths
 }
 
-// findSourceFile resolves a Codex session file by UUID under sessionsDir.
-// It prefers the standard year/month/day live path when present, then falls
-// back to a flat archived directory entry, matching the lookup precedence the
-// package-level entrypoint provided before the fold.
-func (s codexSourceSet) findSourceFile(sessionsDir, sessionID string) string {
+// findSourceFile prefers a dated rollout to an archived rollout.
+func (s codexSourceSet) findSourceFile(root, sessionID string) string {
 	if !IsValidSessionID(sessionID) {
 		return ""
 	}
-
-	var archived string
-	entries, err := os.ReadDir(sessionsDir)
-	if err == nil {
-		for _, f := range entries {
-			if f.IsDir() {
-				continue
-			}
-			name := f.Name()
-			if !isCodexSessionFilename(name) {
-				continue
-			}
-			if extractUUIDFromRollout(name) != sessionID {
-				continue
-			}
-			candidate := filepath.Join(sessionsDir, name)
-			if archived == "" || preferCodexRolloutPath(candidate, archived) {
-				archived = candidate
-			}
+	var best string
+	var bestLayout CodexLayout
+	for _, path := range s.discoverSessionPaths(root) {
+		layout, uuid, ok := CodexSessionPathInfo(root, path)
+		if !ok || uuid != sessionID {
+			continue
+		}
+		if best == "" || layout == CodexLayoutDated && bestLayout != CodexLayoutDated ||
+			layout == bestLayout && (filepath.Dir(path) < filepath.Dir(best) ||
+				filepath.Dir(path) == filepath.Dir(best) && preferCodexRolloutPath(path, best)) {
+			best, bestLayout = path, layout
 		}
 	}
-
-	var live string
-	walkCodexDayDirs(sessionsDir, func(dayPath string) bool {
-		dayEntries, err := os.ReadDir(dayPath)
-		if err != nil {
-			return true
-		}
-		for _, f := range dayEntries {
-			if f.IsDir() {
-				continue
-			}
-			name := f.Name()
-			if !isCodexSessionFilename(name) {
-				continue
-			}
-			if extractUUIDFromRollout(name) != sessionID {
-				continue
-			}
-			candidate := filepath.Join(dayPath, name)
-			if live == "" || preferCodexRolloutPath(candidate, live) {
-				live = candidate
-			}
-		}
-		// The first day directory holding the session has both its forms.
-		return live == ""
-	})
-	if live != "" {
-		return live
-	}
-	return archived
+	return best
 }
 
 // CodexParentRolloutChecker reports whether the original rollout for a Codex
@@ -1485,19 +1418,6 @@ func (s codexSourceSet) sourcesForIndexPath(
 		return nil, err
 	}
 	indexDir := filepath.Dir(indexPath)
-	if strings.HasPrefix(filepath.Base(indexDir), ".codex-run-v1-") {
-		for _, root := range s.roots {
-			if pathUnderRoot(root, indexDir) {
-				var sources []SourceRef
-				for _, path := range s.discoverSessionPaths(filepath.Join(indexDir, "sessions")) {
-					if source, ok := s.sourceRef(root, path, true); ok {
-						sources = append(sources, source)
-					}
-				}
-				return sources, nil
-			}
-		}
-	}
 	return s.discover(ctx, func(root string) bool {
 		return slices.Contains(s.metadata.dirs(root), indexDir)
 	})
