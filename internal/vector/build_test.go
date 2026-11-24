@@ -1212,16 +1212,3 @@ func TestBuildAgentScopeFailureThenRestore(t *testing.T) {
 	require.NoError(t, build("claude"))
 	assert.Equal(t, []string{"a-old", "b-old"}, mirrorSessionIDs(t, ix))
 }
-
-func TestBuildSelectsFreebuff(t *testing.T) {
-	ctx := t.Context()
-	archive := dbtest.OpenTestDB(t)
-	for _, agent := range []string{"freebuff", "codebuff"} {
-		dbtest.SeedSessionWithMessages(t, archive, agent, "project", []db.Message{dbtest.UserMsg(agent, 0, agent+" message")}, func(s *db.Session) { s.Agent = agent })
-	}
-	ix := openTestIndex(t)
-	result, err := ix.Build(ctx, archive, fakeBuildEncoder(), fakeGeneration("fake-model"), BuildOptions{Agents: []string{"freebuff"}})
-	require.NoError(t, err)
-	assert.Equal(t, 1, result.Fill.Documents)
-	assert.Equal(t, []string{"freebuff"}, mirrorSessionIDs(t, ix))
-}

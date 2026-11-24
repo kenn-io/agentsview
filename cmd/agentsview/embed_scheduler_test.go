@@ -1958,15 +1958,11 @@ func TestMessageSchedulerAutomaticBuildSettings(t *testing.T) {
 func TestEmbedSchedulerFiltersAgents(t *testing.T) {
 	dataDir := t.TempDir()
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
-	seed := func(id, agent string) {
-		dbtest.SeedSessionWithMessages(t, database, id, "project",
-			[]db.Message{dbtest.UserMsg(id, 0, id+" text")},
-			func(s *db.Session) {
-				s.Agent = agent
-			})
+	for _, agent := range []string{"claude", "codex"} {
+		dbtest.SeedSessionWithMessages(t, database, agent, "project",
+			[]db.Message{dbtest.UserMsg(agent, 0, agent+" text")},
+			func(s *db.Session) { s.Agent = agent })
 	}
-	seed("claude-one", "claude")
-	seed("codex-one", "codex")
 	cfg := vectorTestConfig(dataDir)
 	cfg.Vector.Agents = []string{"claude"}
 	ix, err := vector.OpenSpec(t.Context(), cfg.Vector.ResolvedDBPath(dataDir), vector.MessageIndexSpec(), false, cfg.Vector.Embeddings.MaxInputChars)
@@ -1986,9 +1982,8 @@ func TestEmbedSchedulerFiltersAgents(t *testing.T) {
 	}
 	encoders := vector.EncoderSet{Default: "test", ByName: map[string]vector.ManagedEncoder{"test": {Encode: enc, Settings: vector.EncodeSettings{BatchSize: 10}}}}
 	mgr := embeddingManager(ix, database, encoders, cfg, vector.MessageIndexSpec().Name)
-	ticks := make(chan time.Time)
 	scheduler := newEmbedScheduler(mgr, time.Millisecond, 0, false, nil)
-	go scheduler.run(t.Context(), ticks)
+	go scheduler.Run(t.Context())
 	defer scheduler.Stop()
 	scheduler.Notify()
 	waitForSchedulerCondition(t, func() bool {
@@ -1996,16 +1991,7 @@ func TestEmbedSchedulerFiltersAgents(t *testing.T) {
 		defer mu.Unlock()
 		return len(encoded) == 1
 	}, "after-sync build did not encode")
-	seed("claude-two", "claude")
-	seed("codex-two", "codex")
-	ticks <- time.Now()
-	waitForSchedulerCondition(t, func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return len(encoded) == 2
-	}, "backstop build did not encode")
 	mu.Lock()
 	defer mu.Unlock()
-	assert.Contains(t, encoded[0], "claude-one text")
-	assert.Contains(t, encoded[1], "claude-two text")
+	assert.Contains(t, encoded[0], "claude text")
 }

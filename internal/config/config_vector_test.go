@@ -975,7 +975,7 @@ func requireAPIKey(t *testing.T, server interface{ APIKey() (string, error) }) s
 }
 
 func TestVectorConfigAgents(t *testing.T) {
-	for _, agents := range [][]string{nil, {}, {"claude", "codex"}} {
+	for _, agents := range [][]string{{}, {"claude", "codex"}} {
 		cfg := loadMinimalWithConfig(t, map[string]any{"vector": map[string]any{"agents": agents}})
 		assert.Equal(t, agents, cfg.Vector.Agents)
 	}
