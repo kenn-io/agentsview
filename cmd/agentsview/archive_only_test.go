@@ -176,15 +176,15 @@ func TestArchiveOnlyConfigOnlyBackgroundStart(t *testing.T) {
 	require.NoError(t, stopDaemonProcess(result.Runtime.Record, 5*time.Second))
 }
 
-// ordinaryImportInputs writes one valid export per import type. The ChatGPT
-// export includes an image, so a successful import also writes an asset.
+// ordinaryImportInputs writes valid exports for archive-only import refusal
+// checks. The ChatGPT export includes an image, so a successful import also
+// writes an asset.
 func ordinaryImportInputs(t *testing.T) map[string]string {
 	t.Helper()
 	root := t.TempDir()
 	claudeAI := filepath.Join(root, "claude-ai", "conversations.json")
 	chatGPT := filepath.Join(root, "chatgpt")
-	gemini := filepath.Join(root, "gemini-apps")
-	for _, dir := range []string{filepath.Dir(claudeAI), chatGPT, gemini} {
+	for _, dir := range []string{filepath.Dir(claudeAI), chatGPT} {
 		require.NoError(t, os.MkdirAll(dir, 0o700))
 	}
 	require.NoError(t, os.WriteFile(claudeAI, []byte(`[{"uuid":"archive-import","name":"Import",`+
@@ -194,11 +194,7 @@ func ordinaryImportInputs(t *testing.T) map[string]string {
 	for name, data := range testjsonl.ChatGPTImageExport() {
 		require.NoError(t, os.WriteFile(filepath.Join(chatGPT, name), []byte(data), 0o600))
 	}
-	require.NoError(t, os.WriteFile(filepath.Join(gemini, "activity.html"), []byte(`<!doctype html>
-<html><head><title>My Activity History</title></head><body>
-<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Prompted</p><p>Jan 2, 2025, 3:04:05 PM EDT</p></div><div class="content-cell"><p>first prompt</p><p>first answer</p></div></div>
-</body></html>`), 0o600))
-	return map[string]string{"claude-ai": claudeAI, "chatgpt": chatGPT, "gemini-apps": gemini}
+	return map[string]string{"claude-ai": claudeAI, "chatgpt": chatGPT}
 }
 
 // archiveImportState captures what an import could change: session rows and
