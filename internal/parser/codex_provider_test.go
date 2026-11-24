@@ -2425,3 +2425,47 @@ func TestCodexLabeledRunDiscoveryAndParse(t *testing.T) {
 		})
 	}
 }
+
+func TestCodexLabeledRunOverlappingRootsAndLookup(t *testing.T) {
+	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
+	root := t.TempDir()
+	inner := filepath.Join(root, "team")
+	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", tsEarly)
+	path := writeCodexProviderSessionContent(t, filepath.Join(inner, "case", ".codex-run-v1-abc", "sessions"), id, testjsonl.JoinJSONL(meta, testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1)))
+	for _, roots := range [][]string{{root, inner}, {inner, root}} {
+		provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: roots})
+		require.True(t, ok)
+		found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: id})
+		require.NoError(t, err)
+		require.True(t, ok)
+		assert.Equal(t, path, found.DisplayPath)
+		outcome, err := provider.Parse(t.Context(), ParseRequest{Source: found})
+		require.NoError(t, err)
+		require.Len(t, outcome.Results, 1)
+		assert.Equal(t, "team/case", outcome.Results[0].Result.Session.Project)
+	}
+}
+
+func TestCodexLabeledRunNewestCopy(t *testing.T) {
+	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
+	root := t.TempDir()
+	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", tsEarly)
+	var paths []string
+	for _, label := range []string{"a", "b"} {
+		paths = append(paths, writeCodexProviderSessionContent(t, filepath.Join(root, label, ".codex-run-v1-abc", "sessions"), id, testjsonl.JoinJSONL(meta, testjsonl.CodexMsgJSON("user", label, tsEarlyS1))))
+	}
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	for i := range paths {
+		newer := time.Now().Add(time.Duration(i+1) * time.Hour)
+		require.NoError(t, os.Chtimes(paths[i], newer, newer))
+		sources, err := provider.Discover(t.Context())
+		require.NoError(t, err)
+		require.Len(t, sources, 1)
+		assert.Equal(t, paths[i], sources[0].DisplayPath)
+		found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: id})
+		require.NoError(t, err)
+		require.True(t, ok)
+		assert.Equal(t, paths[i], found.DisplayPath)
+	}
+}

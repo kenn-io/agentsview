@@ -906,6 +906,17 @@ func CodexSourceLabel(root, path string) string {
 	return label
 }
 
+// CodexSourceLabelForRoots uses the outermost matching root for the label.
+func CodexSourceLabelForRoots(roots []string, path string) string {
+	var label string
+	for _, root := range roots {
+		if candidate := CodexSourceLabel(root, path); len(candidate) > len(label) {
+			label = candidate
+		}
+	}
+	return label
+}
+
 // CodexLabeledIndexSessions returns the sessions directory for a marked run's index.
 func CodexLabeledIndexSessions(root, indexPath string) string {
 	if filepath.Base(indexPath) != CodexSessionIndexFilename {

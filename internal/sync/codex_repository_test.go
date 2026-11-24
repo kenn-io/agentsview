@@ -258,6 +258,44 @@ func TestCodexLabeledRunResyncAndExplicitWorktreeMappingWins(t *testing.T) {
 	assert.Equal(t, "mapped_project", session.Project)
 }
 
+func TestCodexLabeledRunNewestCopyOnSync(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	var paths []string
+	for _, label := range []string{"a", "b"} {
+		path := filepath.Join(root, label, ".codex-run-v1-abc", "sessions", "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
+		meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z")
+		dbtest.WriteTestFile(t, path, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", label, "2026-10-08T12:00:01Z")+"\n"))
+		paths = append(paths, path)
+	}
+	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
+	t.Cleanup(engine.Close)
+	for i, index := range []int{0, 1, 0} {
+		path := paths[index]
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+		require.NoError(t, err)
+		_, err = f.WriteString(testjsonl.CodexMsgJSON("assistant", "update", "2026-10-08T12:00:02Z") + "\n")
+		require.NoError(t, err)
+		require.NoError(t, f.Close())
+		newer := time.Now().Add(time.Duration(i+1) * time.Hour)
+		require.NoError(t, os.Chtimes(path, newer, newer))
+		require.NoError(t, engine.SyncPathsContext(t.Context(), []string{path}))
+		session, err := database.GetSessionFull(t.Context(), "codex:"+id)
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		assert.Equal(t, []string{"a", "b"}[index], session.Project)
+		require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+		session, err = database.GetSessionFull(t.Context(), "codex:"+id)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"a", "b"}[index], session.Project)
+		messages, err := database.GetMessages(t.Context(), "codex:"+id, 0, 100, true)
+		require.NoError(t, err)
+		require.Len(t, messages, 2+i/2)
+		assert.Equal(t, []string{"a", "b"}[index], messages[0].Content)
+	}
+}
+
 func TestCodexLabeledRunIndexRename(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()

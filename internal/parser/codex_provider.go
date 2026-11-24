@@ -1058,21 +1058,12 @@ func (s codexSourceSet) discover(
 		}
 		paths := s.discoverSessionPaths(root)
 		if withLabeled {
-			err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
-				if err != nil {
-					return nil //nolint:nilerr // Discovery skips unreadable paths and keeps available sessions.
-				}
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-				if entry.IsDir() && strings.HasPrefix(entry.Name(), ".codex-run-v1-") {
-					paths = append(paths, s.discoverSessionPaths(filepath.Join(path, "sessions"))...)
-					return filepath.SkipDir
-				}
-				return nil
-			})
-			if err != nil && ctx.Err() != nil {
-				return nil, ctx.Err()
+			dirs, err := labeledSessionDirs(ctx, root)
+			if err != nil {
+				return nil, err
+			}
+			for _, dir := range dirs {
+				paths = append(paths, s.discoverSessionPaths(dir)...)
 			}
 		}
 		for _, path := range paths {
@@ -1095,6 +1086,24 @@ func (s codexSourceSet) discover(
 	}
 	sortJSONLSources(sources)
 	return sources, nil
+}
+
+func labeledSessionDirs(ctx context.Context, root string) ([]string, error) {
+	var dirs []string
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return nil //nolint:nilerr // Keep available sessions when a path is unreadable.
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if entry.IsDir() && strings.HasPrefix(entry.Name(), ".codex-run-v1-") {
+			dirs = append(dirs, filepath.Join(path, "sessions"))
+			return filepath.SkipDir
+		}
+		return nil
+	})
+	return dirs, err
 }
 
 // discoverSessionPaths finds all Codex JSONL session file paths under
@@ -1421,6 +1430,17 @@ func (s codexSourceSet) FindSource(
 			return s.canonicalSource(ctx, source)
 		}
 	}
+	for _, root := range s.roots {
+		dirs, err := labeledSessionDirs(ctx, root)
+		if err != nil {
+			return SourceRef{}, false, err
+		}
+		for _, dir := range dirs {
+			if source, ok := s.sourceRef(root, s.findSourceFile(dir, req.RawSessionID), true); ok {
+				return s.canonicalSource(ctx, source)
+			}
+		}
+	}
 	return SourceRef{}, false, nil
 }
 
@@ -1630,17 +1650,21 @@ func (s codexSourceSet) canonicalSource(
 		if err := ctx.Err(); err != nil {
 			return SourceRef{}, false, err
 		}
-		path := s.findSourceFile(root, src.UUID)
-		if path == "" {
-			continue
+		var dirs []string
+		if CodexSourceLabel(src.Root, src.Path) != "" {
+			var err error
+			dirs, err = labeledSessionDirs(ctx, root)
+			if err != nil {
+				return SourceRef{}, false, err
+			}
 		}
-		candidate, ok := s.sourceRef(root, path, true)
-		if !ok {
-			continue
-		}
-		if !foundExisting || preferCodexSource(candidate, best) {
-			best = candidate
-			foundExisting = true
+		for _, dir := range append([]string{root}, dirs...) {
+			path := s.findSourceFile(dir, src.UUID)
+			candidate, ok := s.sourceRef(root, path, true)
+			if ok && (!foundExisting || preferCodexSource(candidate, best)) {
+				best = candidate
+				foundExisting = true
+			}
 		}
 	}
 	if !foundExisting {
@@ -1670,6 +1694,15 @@ func CodexSourceKey(agent AgentType, uuid string) string {
 func preferCodexSource(candidate, current SourceRef) bool {
 	cand := candidate.Opaque.(codexSource)
 	curr := current.Opaque.(codexSource)
+	_, candSessions := codexLabeledSession(cand.Root, cand.Path)
+	_, currSessions := codexLabeledSession(curr.Root, curr.Path)
+	if candSessions != "" && currSessions != "" && candSessions != currSessions {
+		candInfo, candErr := os.Stat(cand.Path)
+		currInfo, currErr := os.Stat(curr.Path)
+		if candErr == nil && currErr == nil && !candInfo.ModTime().Equal(currInfo.ModTime()) {
+			return candInfo.ModTime().After(currInfo.ModTime())
+		}
+	}
 	if cand.Layout != curr.Layout {
 		return cand.Layout == CodexLayoutDated
 	}
