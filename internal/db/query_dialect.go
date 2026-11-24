@@ -821,26 +821,20 @@ func SessionTreeMemberPredicate(
 	f = f.withSelectionDefaults(f.HasAnnotationFilter())
 	pred := sessionAlias + ".message_count > 0 AND " + sessionAlias + ".deleted_at IS NULL"
 	if scope := dialect.AutomatedScopePredicate(NormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated), sessionAlias+".is_automated"); scope != "" {
-		if f.SidebarTree && f.ExcludeAutomated && !f.AutomatedFilterSet && f.AutomatedScope == "" {
+		if f.SidebarTree && f.ExcludeAutomated && !f.AutomatedFilterSet && f.AutomatedScope == "" && dialect.name != "clickhouse" {
 			linked := sessionAlias + ".relationship_type = 'subagent' AND "
-			if dialect.name == "clickhouse" {
-				// ClickHouse does not store the parser parent needed to identify launcher links.
-				linked += "COALESCE(" + sessionAlias + ".parent_session_id, '') <> ''"
-				scope = "(" + scope + " OR (" + linked + "))"
-			} else {
-				if dialect.name != "sqlite" {
-					linked += "COALESCE(" + sessionAlias + ".parent_session_id, '') <> '' AND "
-				}
-				comparison := "IS NOT"
-				if dialect.name == "postgres" {
-					comparison = "IS DISTINCT FROM"
-				}
-				linked += "COALESCE(" + sessionAlias + ".parser_parent_session_id, '') = '' AND NOT " + spawnEdgeExistsDialectSQL(sessionAlias, comparison)
-				if dialect.name == "sqlite" {
-					linked += " AND EXISTS (SELECT 1 FROM session_external_parents ep WHERE ep.session_id = " + sessionAlias + ".id AND ep.parent_session_id = " + sessionAlias + ".parent_session_id)"
-				}
-				scope = "(" + scope + " OR (" + linked + "))"
+			if dialect.name != "sqlite" {
+				linked += "COALESCE(" + sessionAlias + ".parent_session_id, '') <> '' AND "
 			}
+			comparison := "IS NOT"
+			if dialect.name == "postgres" {
+				comparison = "IS DISTINCT FROM"
+			}
+			linked += "COALESCE(" + sessionAlias + ".parser_parent_session_id, '') = '' AND NOT " + spawnEdgeExistsDialectSQL(sessionAlias, comparison)
+			if dialect.name == "sqlite" {
+				linked += " AND EXISTS (SELECT 1 FROM session_external_parents ep WHERE ep.session_id = " + sessionAlias + ".id AND ep.parent_session_id = " + sessionAlias + ".parent_session_id)"
+			}
+			scope = "(" + scope + " OR (" + linked + "))"
 		}
 		pred += " AND " + scope
 	}

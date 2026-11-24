@@ -120,7 +120,7 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 		assert.ElementsMatch(t, []string{fixtureAlphaID, fixtureChildID}, ids)
 	})
 
-	t.Run("sidebar_includes_automated_children_without_launcher_provenance", func(t *testing.T) {
+	t.Run("sidebar_excludes_automated_children_without_launcher_provenance", func(t *testing.T) {
 		store, syncer, local := newPushedStore(t)
 		for _, id := range []string{"ch-native-kind", "ch-launched"} {
 			session := fixtureSession(id, "alpha", "You are a code reviewer. Review the code.", "2026-01-10T00:07:00.000Z", 1)
@@ -148,8 +148,8 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 			ids[i] = row.ID
 		}
 		assert.Contains(t, ids, fixtureAlphaID)
-		assert.Contains(t, ids, "ch-native-kind")
-		assert.Contains(t, ids, "ch-launched")
+		assert.NotContains(t, ids, "ch-native-kind")
+		assert.NotContains(t, ids, "ch-launched")
 	})
 
 	t.Run("get_session_and_find", func(t *testing.T) {

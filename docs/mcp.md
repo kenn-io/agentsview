@@ -562,9 +562,9 @@ either `--server` or `--pg`. That mode only checks the selected read endpoint
 and never starts a local archive or reports that the remote corpus was
 refreshed. Contributor wake delivery currently works on macOS and Linux.
 
-Set `AGENTSVIEW_DISABLE_AUTO_SYNC=1` to skip the automatic lifecycle request
-and launcher links. Explicit `agentsview source sync` commands and searches
-still work. A failed hook reports the error without blocking your agent session.
+Set `AGENTSVIEW_DISABLE_AUTO_SYNC=1` to skip the automatic lifecycle request.
+Launcher links, explicit `agentsview source sync` commands, and searches still
+work. A failed hook reports the error without blocking your agent session.
 
 If you set `AGENTSVIEW_NO_DAEMON=1` to stop general CLI commands from
 auto-starting the daemon, avoid local MCP mode for that archive. Instead, start
