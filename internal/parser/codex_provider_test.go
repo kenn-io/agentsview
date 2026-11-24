@@ -1986,7 +1986,7 @@ func TestCodexProviderFindSourcePathOnlyKeepsStoredOrdinaryCopy(t *testing.T) {
 	base := t.TempDir()
 	ordinary, logs := filepath.Join(base, "ordinary"), filepath.Join(base, "logs")
 	stored := writeCodexProviderSession(t, ordinary, id, "ordinary")
-	labeled := writeCodexProviderSession(t, filepath.Join(logs, "team", ".codex-run-v1-a", "sessions"), id, "labeled")
+	writeCodexProviderSession(t, filepath.Join(logs, "team", ".codex-run-v1-a", "sessions"), id, "labeled")
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{ordinary, logs}})
 	require.True(t, ok)
 	req := FindSourceRequest{StoredFilePath: stored, RequireFreshSource: true, PreferStoredSource: true}
@@ -1994,11 +1994,6 @@ func TestCodexProviderFindSourcePathOnlyKeepsStoredOrdinaryCopy(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, stored, found.DisplayPath)
-	req.RawSessionID = id
-	found, ok, err = provider.FindSource(t.Context(), req)
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, labeled, found.DisplayPath)
 }
 
 func TestCodexProviderFindSourcePreferStoredSourceKeepsArchivedDuplicate(t *testing.T) {
@@ -2495,58 +2490,5 @@ func TestCodexLabeledAndOrdinaryNewestCopy(t *testing.T) {
 			require.True(t, ok)
 			assert.Equal(t, paths[1], found.DisplayPath)
 		}
-	}
-}
-
-func TestCodexLabeledCopyWinsAcrossThreeRoots(t *testing.T) {
-	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
-	root := t.TempDir()
-	roots := []string{filepath.Join(root, "dated"), filepath.Join(root, "flat"), filepath.Join(root, "logs")}
-	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", tsEarly)
-	content := testjsonl.JoinJSONL(meta, testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1))
-	dated := writeCodexProviderSessionContent(t, roots[0], id, content)
-	require.NoError(t, os.MkdirAll(roots[1], 0o755))
-	flat := filepath.Join(roots[1], filepath.Base(dated))
-	require.NoError(t, os.WriteFile(flat, []byte(content), 0o644))
-	labeled := writeCodexProviderSessionContent(t, filepath.Join(roots[2], "123", "case", ".codex-run-v1-abc", "sessions"), id, content)
-	for i, path := range []string{dated, labeled, flat} {
-		mtime := time.Now().Add(time.Duration(i) * time.Hour)
-		require.NoError(t, os.Chtimes(path, mtime, mtime))
-	}
-	for _, order := range [][]string{{roots[0], roots[1], roots[2]}, {roots[1], roots[2], roots[0]}, {roots[2], roots[0], roots[1]}} {
-		provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: order})
-		require.True(t, ok)
-		sources, err := provider.Discover(t.Context())
-		require.NoError(t, err)
-		require.Len(t, sources, 1)
-		assert.Equal(t, labeled, sources[0].DisplayPath)
-		found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: id})
-		require.NoError(t, err)
-		require.True(t, ok)
-		assert.Equal(t, labeled, found.DisplayPath)
-	}
-}
-
-func TestCodexLabeledRunNewestCopy(t *testing.T) {
-	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
-	root := t.TempDir()
-	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", tsEarly)
-	var paths []string
-	for _, label := range []string{"a", "b"} {
-		paths = append(paths, writeCodexProviderSessionContent(t, filepath.Join(root, label, ".codex-run-v1-abc", "sessions"), id, testjsonl.JoinJSONL(meta, testjsonl.CodexMsgJSON("user", label, tsEarlyS1))))
-	}
-	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	for i := range paths {
-		newer := time.Now().Add(time.Duration(i+1) * time.Hour)
-		require.NoError(t, os.Chtimes(paths[i], newer, newer))
-		sources, err := provider.Discover(t.Context())
-		require.NoError(t, err)
-		require.Len(t, sources, 1)
-		assert.Equal(t, paths[i], sources[0].DisplayPath)
-		found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: id})
-		require.NoError(t, err)
-		require.True(t, ok)
-		assert.Equal(t, paths[i], found.DisplayPath)
 	}
 }

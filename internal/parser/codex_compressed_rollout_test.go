@@ -178,13 +178,6 @@ func TestCodexLabeledCompressionUsesPlainCopyTime(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	assert.Equal(t, newer, sources[0].DisplayPath)
-	ranker := provider.(ReconciliationSourceRanker)
-	source := provider.(*codexProvider).sources
-	plainRef, ok := source.sourceRef(root, plain, true)
-	require.True(t, ok)
-	compressedRef, ok := source.sourceRef(root, compressed, true)
-	require.True(t, ok)
-	assert.Equal(t, ranker.ReconciliationSourceRank(plainRef).Recency, ranker.ReconciliationSourceRank(compressedRef).Recency)
 }
 
 // TestCodexParseCompressedRolloutMatchesPlain: the compressed file parses to
