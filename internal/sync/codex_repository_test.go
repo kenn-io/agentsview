@@ -249,6 +249,9 @@ func TestCodexLabeledProjectChangesWithRoots(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()
 	checkout := filepath.Join(root, "checkout")
+	require.NoError(t, os.MkdirAll(filepath.Join(checkout, ".git"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(checkout, ".git", "config"), []byte("[remote \"origin\"]\nurl = https://example.com/team/api.git\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(checkout, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644))
 	const id = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 	sessions := filepath.Join(root, "label", ".codex-run-v1-a", "sessions")
 	path := filepath.Join(sessions, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
@@ -257,7 +260,14 @@ func TestCodexLabeledProjectChangesWithRoots(t *testing.T) {
 	config := EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {sessions}}}
 	engine := NewEngine(t.Context(), database, config)
 	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+	session, err := database.GetSessionFull(t.Context(), "codex:"+id)
+	require.NoError(t, err)
+	require.Equal(t, "checkout", session.Project)
 	engine.Close()
+	require.NoError(t, os.Remove(filepath.Join(checkout, ".git", "config")))
+	require.NoError(t, os.Remove(filepath.Join(checkout, ".git", "HEAD")))
+	require.NoError(t, os.Remove(filepath.Join(checkout, ".git")))
+	require.NoError(t, os.Remove(checkout))
 	config.AgentDirs[parser.AgentCodex] = []string{root}
 	engine = NewEngine(t.Context(), database, config)
 	var oldMarker, marker string
@@ -265,7 +275,7 @@ func TestCodexLabeledProjectChangesWithRoots(t *testing.T) {
 	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
 	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key = ?`, codexLabelRootsKey).Scan(&marker))
 	assert.NotEqual(t, oldMarker, marker)
-	session, err := database.GetSessionFull(t.Context(), "codex:"+id)
+	session, err = database.GetSessionFull(t.Context(), "codex:"+id)
 	require.NoError(t, err)
 	require.Equal(t, "label", session.Project)
 	assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
@@ -276,7 +286,7 @@ func TestCodexLabeledProjectChangesWithRoots(t *testing.T) {
 	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
 	session, err = database.GetSessionFull(t.Context(), "codex:"+id)
 	require.NoError(t, err)
-	assert.Equal(t, "api", session.Project)
+	assert.Equal(t, "checkout", session.Project)
 
 	const assignedID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
 	const mappedID = "ffffffff-ffff-4fff-8fff-ffffffffffff"
