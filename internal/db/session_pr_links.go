@@ -411,9 +411,6 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 	if dir := parser.ToolInputWorkdir(input); dir != "" {
 		allowBare = !sharedContext.environment && !sharedContext.repository && parser.SamePRWorkingDirectory(cwd, dir)
 	}
-	if !allowBare {
-		remote = ""
-	}
 	var command string
 	if plain {
 		command = input
@@ -438,7 +435,7 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 		}
 		lists = append(lists, links)
 		if directory || repository {
-			allowBare, remote = false, ""
+			allowBare = false
 		}
 		sharedContext.repository = sharedContext.repository || repository
 	}

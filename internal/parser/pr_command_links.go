@@ -59,6 +59,26 @@ func shellLiteral(parts []syntax.WordPart) (string, bool) {
 	return b.String(), true
 }
 
+func shellLiteralPrefix(parts []syntax.WordPart) (string, bool) {
+	var prefix strings.Builder
+	for _, part := range parts {
+		if quoted, ok := part.(*syntax.DblQuoted); ok && !quoted.Dollar {
+			value, complete := shellLiteralPrefix(quoted.Parts)
+			prefix.WriteString(value)
+			if !complete {
+				return prefix.String(), false
+			}
+			continue
+		}
+		value, complete := shellLiteral([]syntax.WordPart{part})
+		prefix.WriteString(value)
+		if !complete {
+			return prefix.String(), false
+		}
+	}
+	return prefix.String(), true
+}
+
 // AnalyzePRCommand extracts links and shared shell context from one parse.
 func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBare, hostUnknown bool) ([]PRLink, bool, bool, bool, []PRLink, error) {
 	if err := ctx.Err(); err != nil {
@@ -104,10 +124,8 @@ func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 				if selector == "" {
 					invalid = true
 				}
-				if len(call.Args[i].Parts) > 0 {
-					if prefix, ok := call.Args[i].Parts[0].(*syntax.Lit); ok && (strings.HasPrefix(prefix.Value, "-R") || strings.HasPrefix(prefix.Value, "--repo")) {
-						invalid = true
-					}
+				if prefix, _ := shellLiteralPrefix(call.Args[i].Parts); strings.HasPrefix(prefix, "-R") || strings.HasPrefix(prefix, "--repo") {
+					invalid = true
 				}
 				continue
 			}

@@ -98,6 +98,18 @@ func TestToolCallPRLinksWorkingDirectory(t *testing.T) {
 	}
 }
 
+func TestToolCallPRLinksDirectoryChangePreservesHost(t *testing.T) {
+	for _, calls := range [][]db.ToolCall{
+		{{Category: "Bash", ToolName: "exec_command", InputJSON: `{"cmd":"gh pr view 42 -R example/repo","workdir":"/work/other"}`}},
+		{{Category: "Bash", ToolName: "Bash", InputJSON: `{"command":"cd /work/other"}`}, {Category: "Bash", ToolName: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`}},
+		{{Category: "Bash", ToolName: "Bash", InputJSON: `{"commands":["cd /work/other","gh pr view 42 -R example/repo"]}`}},
+	} {
+		links := toolCallPRLinks(t, []db.Message{{ToolCalls: calls}}, "/work/repo", "https://git.example/example/repo.git")
+		require.Len(t, links, 1)
+		assert.Equal(t, "https://git.example/example/repo/pull/42", links[0].URL)
+	}
+}
+
 func TestToolCallPRLinksSharedShellDirectoryChange(t *testing.T) {
 	for _, command := range []string{`cd /work/other`} {
 		messages := []db.Message{{ToolCalls: []db.ToolCall{
