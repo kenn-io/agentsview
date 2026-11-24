@@ -559,12 +559,17 @@ func TestTranscriptToolPRLinksCheckoutRemote(t *testing.T) {
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "assistant", ToolCalls: []ToolCall{
 		{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 41"}`},
 		{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/other"}`},
+		{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 43 -R placeholder/pr-link"}`},
+		{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 44; gh pr view 44 -R placeholder/pr-link"}`},
 	}}}))
 	got, err := d.GetSession(t.Context(), s.ID)
 	require.NoError(t, err)
-	require.Len(t, got.PRLinks, 2)
+	require.Len(t, got.PRLinks, 5)
 	assert.Equal(t, "https://git.example/example/repo/pull/41", got.PRLinks[0].URL)
 	assert.Equal(t, "https://git.example/example/other/pull/42", got.PRLinks[1].URL)
+	assert.Equal(t, "https://git.example/placeholder/pr-link/pull/43", got.PRLinks[2].URL)
+	assert.Equal(t, "https://git.example/example/repo/pull/44", got.PRLinks[3].URL)
+	assert.Equal(t, "https://git.example/placeholder/pr-link/pull/44", got.PRLinks[4].URL)
 }
 
 func TestToolPRLinksCopyOldArchiveToTranscripts(t *testing.T) {

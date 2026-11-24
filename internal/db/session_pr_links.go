@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -385,7 +386,7 @@ func bareLinksAllowed(workdir, cwd string, shared sharedPRContext) bool {
 	return !shared.directory && !shared.repository
 }
 
-func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote string, sharedContext sharedPRContext, change *sharedPRContext, depends *[]PRLink) ([]PRLink, error) {
+func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote string, sharedContext sharedPRContext, change *sharedPRContext, depends *[]PRLink, retainedDepends *[]parser.PRLinkDependency) ([]PRLink, error) {
 	if category == "Task" {
 		return taskPRLinks(ctx, input)
 	}
@@ -403,7 +404,12 @@ func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote str
 		links, directory, repository, persistent, usesRemote, err := parser.AnalyzePRCommand(ctx, command, cwd, remote, allowBare, sharedContext.repository)
 		change.add(directory, persistent)
 		if depends != nil {
-			*depends = append(*depends, usesRemote...)
+			for _, dependency := range usesRemote {
+				*depends = append(*depends, dependency.Link)
+			}
+		}
+		if retainedDepends != nil {
+			*retainedDepends = append(*retainedDepends, usesRemote...)
 		}
 		if err != nil {
 			return nil, err
@@ -523,53 +529,65 @@ func callPRStateIn(ctx context.Context, call ToolCall, cwd, remote string, state
 		if call.PRLinks == "" || json.Unmarshal([]byte(call.PRLinks), &retained) != nil {
 			return callPRState{}, nil
 		}
-		remoteHost, remoteRepo := "", ""
-		if normalized, ok := export.NormalizeGitRemote(remote); ok {
-			remoteHost, remoteRepo, _ = strings.Cut(normalized, "/")
-		}
-		var links []PRLink
-		for _, link := range retained.Links {
-			dependent := retained.Depends[link.URL]
-			link, ok := parser.NewPRLink(link.URL, link.Repository, link.Number)
-			if !ok {
-				continue
-			}
-			if dependent {
-				bare := link.Repository == retainedPRRepo
-				if state.repository || (bare && (!bareLinksAllowed(retained.Workdir, cwd, state) || remoteRepo == "")) {
-					continue
-				}
-				host, repo := remoteHost, link.Repository
-				if bare {
-					repo = remoteRepo
-				} else if host == "" {
-					host = "github.com"
-				}
-				link, ok = parser.NewPRLink(fmt.Sprintf("https://%s/%s/pull/%d", host, repo, link.Number), repo, link.Number)
-				if !ok {
-					continue
-				}
-				if depends != nil {
-					*depends = append(*depends, link)
-				}
-			}
-			links = append(links, link)
-		}
+		links := retainedPRLinksIn(retained, cwd, remote, state, depends)
 		return callPRState{links: links, change: sharedPRContext{directory: retained.Dir, repository: retained.Repo}}, nil
 	}
 	var change sharedPRContext
-	links, err := callPRLinks(ctx, call.Category, call.ToolName, call.InputJSON, cwd, remote, state, &change, depends)
+	links, err := callPRLinks(ctx, call.Category, call.ToolName, call.InputJSON, cwd, remote, state, &change, depends, nil)
 	return callPRState{links, change}, err
+}
+
+// retainedPRLinksIn resolves retained links under the current checkout. A link
+// retained for both a bare and an explicit selector resolves once per kind.
+func retainedPRLinksIn(retained retainedPRState, cwd, remote string, state sharedPRContext, depends *[]PRLink) []PRLink {
+	remoteHost, remoteRepo := "", ""
+	if normalized, ok := export.NormalizeGitRemote(remote); ok {
+		remoteHost, remoteRepo, _ = strings.Cut(normalized, "/")
+	}
+	var links []PRLink
+	for _, link := range retained.Links {
+		kinds := retained.Depends[link.URL]
+		link, ok := parser.NewPRLink(link.URL, link.Repository, link.Number)
+		if !ok {
+			continue
+		}
+		if len(kinds) == 0 {
+			links = append(links, link)
+			continue
+		}
+		for _, bare := range kinds {
+			if resolved, ok := resolveRetainedPRLink(link, bare, retained.Workdir, cwd, remoteHost, remoteRepo, state); ok {
+				if depends != nil {
+					*depends = append(*depends, resolved)
+				}
+				links = append(links, resolved)
+			}
+		}
+	}
+	return links
+}
+
+func resolveRetainedPRLink(link PRLink, bare bool, workdir, cwd, remoteHost, remoteRepo string, state sharedPRContext) (PRLink, bool) {
+	if state.repository || (bare && (!bareLinksAllowed(workdir, cwd, state) || remoteRepo == "")) {
+		return PRLink{}, false
+	}
+	host, repo := remoteHost, link.Repository
+	if bare {
+		repo = remoteRepo
+	} else if host == "" {
+		host = "github.com"
+	}
+	return parser.NewPRLink(fmt.Sprintf("https://%s/%s/pull/%d", host, repo, link.Number), repo, link.Number)
 }
 
 const retainedPRRepo = "placeholder/pr-link"
 
 type retainedPRState struct {
-	Links   []PRLink        `json:"links,omitempty"`
-	Depends map[string]bool `json:"depends,omitempty"`
-	Dir     bool            `json:"directory,omitempty"`
-	Repo    bool            `json:"repository,omitempty"`
-	Workdir string          `json:"workdir,omitempty"`
+	Links   []PRLink          `json:"links,omitempty"`
+	Depends map[string][]bool `json:"depends,omitempty"`
+	Dir     bool              `json:"directory,omitempty"`
+	Repo    bool              `json:"repository,omitempty"`
+	Workdir string            `json:"workdir,omitempty"`
 }
 
 // retainedCallPRLinks retains selectors and shell changes without the input.
@@ -583,16 +601,18 @@ func retainedCallPRLinks(call ToolCall) string {
 		cwd = "/"
 	}
 	var change sharedPRContext
-	var depends []PRLink
-	found, _ := callPRLinks(context.Background(), call.Category, call.ToolName, call.InputJSON, cwd, "https://pr-link.invalid/"+retainedPRRepo, sharedPRContext{}, &change, &depends)
+	var depends []parser.PRLinkDependency
+	found, _ := callPRLinks(context.Background(), call.Category, call.ToolName, call.InputJSON, cwd, "https://pr-link.invalid/"+retainedPRRepo, sharedPRContext{}, &change, nil, &depends)
 	if len(found) == 0 && !change.directory && !change.repository {
 		return ""
 	}
 	retained := retainedPRState{Links: found, Dir: change.directory, Repo: change.repository, Workdir: workdir}
 	if len(depends) > 0 {
-		retained.Depends = make(map[string]bool, len(depends))
+		retained.Depends = make(map[string][]bool, len(depends))
 		for _, link := range depends {
-			retained.Depends[link.URL] = true
+			if !slices.Contains(retained.Depends[link.Link.URL], link.Bare) {
+				retained.Depends[link.Link.URL] = append(retained.Depends[link.Link.URL], link.Bare)
+			}
 		}
 	}
 	encoded, _ := json.Marshal(retained)

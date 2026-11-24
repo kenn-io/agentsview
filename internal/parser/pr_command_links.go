@@ -127,8 +127,13 @@ func prCommandFlag(command, flag string) (takesValue, ok bool) {
 	return false, false
 }
 
+type PRLinkDependency struct {
+	Link PRLink
+	Bare bool
+}
+
 // AnalyzePRCommand extracts links and shared shell context from one parse.
-func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBare, hostUnknown bool) ([]PRLink, bool, bool, bool, []PRLink, error) {
+func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBare, hostUnknown bool) ([]PRLink, bool, bool, bool, []PRLinkDependency, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, false, false, nil, err
 	}
@@ -142,7 +147,7 @@ func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 		remoteHost, remoteRepo, _ = strings.Cut(normalized, "/")
 	}
 	var links [][]PRLink
-	var dependsOnRemote []PRLink
+	var dependsOnRemote []PRLinkDependency
 	for _, entry := range calls {
 		if err := ctx.Err(); err != nil {
 			return nil, false, false, false, nil, err
@@ -260,7 +265,7 @@ func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 		if link, ok := NewPRLink(fmt.Sprintf("https://%s/%s/pull/%d", selectedHost, repo, number), repo, number); ok {
 			links = append(links, []PRLink{link})
 			if !specified || explicitHost == "" {
-				dependsOnRemote = append(dependsOnRemote, link)
+				dependsOnRemote = append(dependsOnRemote, PRLinkDependency{Link: link, Bare: !specified})
 			}
 		}
 	}
