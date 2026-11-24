@@ -12,6 +12,7 @@ func TestCommandPRLinks(t *testing.T) {
 	remote := "https://github.com/example/repo.git"
 	for _, tc := range []struct{ command, remote, want string }{
 		{`gh pr view 42`, remote, "https://github.com/example/repo/pull/42"},
+		{`gh pr view 42 $OPTIONS`, remote, ""},
 		{`gh pr view 42 "--repo=$OTHER"`, remote, ""},
 		{`gh pr view 42 '-R'"$OTHER"`, remote, ""},
 		{`gh pr view 42 --body "$OTHER"`, remote, "https://github.com/example/repo/pull/42"},

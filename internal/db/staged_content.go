@@ -667,6 +667,8 @@ func replaceSessionMessagesTxStaged(
 				SubagentSessionID: m.ToolCalls[callIdx].SubagentSessionID,
 				FilePath:          m.ToolCalls[callIdx].FilePath,
 				CallIndex:         callIdx,
+				PRLinks:           m.ToolCalls[callIdx].PRLinks,
+				PRContext:         m.ToolCalls[callIdx].PRContext,
 			}
 			occurrence := callOccurrences[tc.ToolUseID]
 			callOccurrences[tc.ToolUseID] = occurrence + 1

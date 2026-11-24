@@ -458,6 +458,35 @@ func TestToolPRLinksTranscriptsStorage(t *testing.T) {
 	}
 }
 
+func TestStagedReplacementRetainsToolPRContext(t *testing.T) {
+	d := testDB(t)
+	d.SetArchiveContent(config.ArchiveContentTranscripts)
+	s := Session{ID: "staged-context", Project: "project", Machine: "local", Agent: "claude"}
+	require.NoError(t, d.UpsertSession(t.Context(), s))
+	msg := Message{SessionID: s.ID, Role: "assistant", ToolCalls: []ToolCall{
+		{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"cd /other"}`},
+		{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R github.com/example/repo"}`},
+	}}
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{msg}))
+	stored, err := d.GetAllMessages(t.Context(), s.ID)
+	require.NoError(t, err)
+	stored[0].Content = "updated"
+	path := d.Path()
+	require.NoError(t, d.Close())
+	d, err = OpenIsolated(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	require.NoError(t, d.WriteSessionBatchStaged(t.Context(), SessionBatchWrite{Session: s, Messages: stored, ReplaceMessages: true}, newScratchStagedResults(t), nil, nil))
+	stored, err = d.GetAllMessages(t.Context(), s.ID)
+	require.NoError(t, err)
+	assert.NotEmpty(t, stored[0].ToolCalls[0].PRContext)
+	assert.NotEmpty(t, stored[0].ToolCalls[1].PRLinks)
+	got, err := d.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	require.Len(t, got.PRLinks, 1)
+	assert.Equal(t, "https://github.com/example/repo/pull/42", got.PRLinks[0].URL)
+}
+
 func TestToolPRLinksTranscriptsContextAcrossWrites(t *testing.T) {
 	d := testDB(t)
 	d.SetArchiveContent(config.ArchiveContentTranscripts)

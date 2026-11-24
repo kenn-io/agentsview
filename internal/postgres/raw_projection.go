@@ -353,13 +353,6 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			changed = true
 		}
 	}
-	for _, group := range ordered {
-		linksChanged, err := syncSelectedRawPRLinks(ctx, tx, group, dialogueChanges, freshLinks)
-		if err != nil {
-			return err
-		}
-		derivedChanged = derivedChanged || linksChanged
-	}
 	staleFrictionGroups := make(map[string]bool)
 	for _, group := range ordered {
 		stale, staleErr := rawGroupHasStaleFriction(ctx, tx, group)
@@ -385,6 +378,19 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			}
 			embeddings = append(embeddings, changes...)
 		}
+	}
+	var restored []string
+	for _, change := range embeddings {
+		if change.action == "reconcile" {
+			restored = append(restored, change.session)
+		}
+	}
+	for _, group := range ordered {
+		linksChanged, err := syncSelectedRawPRLinks(ctx, tx, group, dialogueChanges, restored, freshLinks)
+		if err != nil {
+			return err
+		}
+		derivedChanged = derivedChanged || linksChanged
 	}
 	_, err = tx.ExecContext(ctx, rawSourceProofDeleteSQL, source)
 	if err != nil {

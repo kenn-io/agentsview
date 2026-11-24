@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"reflect"
+	"slices"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -37,12 +38,12 @@ func rawGroupHasStaleFriction(
 
 // syncSelectedRawPRLinks refreshes materialized revisions selected by active
 // branches, including longer retained captures whose source has departed.
-func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string, dialogueChanges []string, freshLinks map[string][]db.PRLink) (bool, error) {
+func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string, dialogueChanges, restored []string, freshLinks map[string][]db.PRLink) (bool, error) {
 	freshIDs := make([]string, 0, len(freshLinks))
 	for id := range freshLinks {
 		freshIDs = append(freshIDs, id)
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT b.session_id,s.data_version FROM raw_session_branches b JOIN sessions s ON s.id=b.session_id WHERE b.group_id=$1 AND b.active AND (s.data_version<$2 OR b.session_id=ANY($3::text[]) OR b.session_id=ANY($4::text[]))`, group, db.CurrentDataVersion(), dialogueChanges, freshIDs)
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT b.session_id,s.data_version FROM raw_session_branches b JOIN sessions s ON s.id=b.session_id WHERE b.group_id=$1 AND b.active AND (s.data_version<$2 OR b.session_id=ANY($3::text[]) OR b.session_id=ANY($4::text[]) OR b.session_id=ANY($5::text[]))`, group, db.CurrentDataVersion(), dialogueChanges, freshIDs, restored)
 	if err != nil {
 		return false, err
 	}
@@ -67,6 +68,22 @@ func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string, dialo
 	changed := false
 	for _, id := range ids {
 		links, fresh := freshLinks[id]
+		if !fresh && slices.Contains(restored, id) {
+			var metadataBytes []byte
+			err := tx.QueryRowContext(ctx, `SELECT prior_payload FROM raw_session_branches WHERE session_id=$1 AND captured_session_id=$1 AND active ORDER BY branch_id LIMIT 1`, id).Scan(&metadataBytes)
+			if err != nil && err != sql.ErrNoRows {
+				return false, err
+			}
+			if err == nil {
+				metadata, err := decodeRawPayload(metadataBytes)
+				if err != nil {
+					return false, err
+				}
+				if metadata.Session.DataVersion >= rawPRLinksDataVersion {
+					links, fresh = metadata.Session.PRLinks, true
+				}
+			}
+		}
 		if !fresh {
 			payload, err := loadRawPayload(ctx, tx, id)
 			if err != nil {

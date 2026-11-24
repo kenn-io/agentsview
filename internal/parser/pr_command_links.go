@@ -126,12 +126,10 @@ func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 				if (attached || len(flag) == 2 && strings.HasPrefix(flag, "-")) && strings.Contains(" "+ghPRValueFlags[words[2]]+" ", " "+flag+" ") {
 					continue
 				}
-				if selector == "" {
-					invalid = true
+				if i > 3 && words[i-1] == "--body" {
+					continue
 				}
-				if strings.HasPrefix(prefix, "-R") || strings.HasPrefix(prefix, "--repo") {
-					invalid = true
-				}
+				invalid = true
 				continue
 			}
 			word := words[i]
