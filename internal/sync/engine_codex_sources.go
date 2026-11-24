@@ -492,6 +492,11 @@ func (e *Engine) expandCodexProviderDuplicates(
 		if !isCodexFormatAgent(f.Agent) {
 			continue
 		}
+		// Discovery already chose a labeled copy over ordinary copies. A
+		// newer ordinary copy must not replace it after the cutoff filter.
+		if f.Agent == parser.AgentCodex && parser.CodexSourceLabelForRoots(e.sources().agentDirs[f.Agent], f.Path) != "" {
+			continue
+		}
 		pather, resolved := pathers[f.Agent]
 		if !resolved {
 			pather = e.codexUUIDPathLister(f.Agent, scope)

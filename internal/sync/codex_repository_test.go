@@ -323,6 +323,41 @@ func TestCodexLabeledAndOrdinaryNewestCopyOnSync(t *testing.T) {
 	}
 }
 
+func TestCodexLabeledCopyWinsQuickSync(t *testing.T) {
+	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	root := t.TempDir()
+	ordinary, logs := filepath.Join(root, "ordinary"), filepath.Join(root, "logs")
+	name := "rollout-2026-10-08T12-00-00-" + id + ".jsonl"
+	paths := []string{filepath.Join(ordinary, "2026", "10", "08", name), filepath.Join(logs, "team", ".codex-run-v1-abc", "sessions", "2026", "10", "08", name)}
+	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z")
+	for i, path := range paths {
+		dbtest.WriteTestFile(t, path, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", []string{"ordinary", "labeled"}[i], "2026-10-08T12:00:01Z")+"\n"))
+	}
+	now := time.Now()
+	require.NoError(t, os.Chtimes(paths[0], now, now))
+	require.NoError(t, os.Chtimes(paths[1], now.Add(-time.Hour), now.Add(-time.Hour)))
+	for _, tc := range []struct {
+		name   string
+		cutoff time.Time
+		want   bool
+	}{{"both after cutoff", now.Add(-2 * time.Hour), true}, {"only ordinary after cutoff", now.Add(-time.Minute), false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			database := openTestDB(t)
+			engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {ordinary, logs}}})
+			t.Cleanup(engine.Close)
+			require.Zero(t, engine.SyncAllSince(t.Context(), tc.cutoff, nil).Failed)
+			messages, err := database.GetMessages(t.Context(), "codex:"+id, 0, 100, true)
+			require.NoError(t, err)
+			if tc.want {
+				require.Len(t, messages, 1)
+				assert.Equal(t, "labeled", messages[0].Content)
+			} else {
+				assert.Empty(t, messages)
+			}
+		})
+	}
+}
+
 func TestCodexLabeledRunIndexRename(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()
