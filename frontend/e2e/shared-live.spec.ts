@@ -7,7 +7,7 @@ for (const fallback of ["worker", "broadcast"] as const) {
     context,
     page,
   }) => {
-    const active = new Set<http.ServerResponse>();
+    const active = new Map<http.ServerResponse, string>();
     const requested: string[] = [];
     const watches: string[] = [];
     const workerStatuses: number[] = [];
@@ -15,7 +15,7 @@ for (const fallback of ["worker", "broadcast"] as const) {
       const url = req.url ?? "/";
       if (/^\/api\/v1\/sessions\/[^/]+\/watch(?:\?|$)/.test(url)) watches.push(url);
       if (url.startsWith("/api/v1/events")) {
-        active.add(res);
+        active.set(res, url);
         requested.push(url);
         res.on("close", () => active.delete(res));
       }
@@ -49,6 +49,11 @@ for (const fallback of ["worker", "broadcast"] as const) {
     const address = proxy.address();
     if (!address || typeof address === "string") throw new Error("proxy did not bind");
     const base = `http://127.0.0.1:${address.port}`;
+    const singleActiveSessions = () => {
+      if (active.size !== 1) return null;
+      const [url] = active.values();
+      return new Set(new URL(url!, base).searchParams.getAll("session"));
+    };
     await context.addInitScript((disableWorker) => {
       if (disableWorker !== "worker")
         Object.defineProperty(window, "SharedWorker", { value: undefined });
@@ -68,12 +73,9 @@ for (const fallback of ["worker", "broadcast"] as const) {
         await tab.goto(`${base}/sessions/${ids[0]}`);
         await expect(tab).toHaveURL(new RegExp(ids[0]!));
       }
-      await expect.poll(() => active.size).toBe(1);
+      await expect.poll(singleActiveSessions).toEqual(new Set([ids[0]]));
       if (fallback === "worker") await expect.poll(() => workerStatuses).toEqual([200]);
       expect(requested[0]).toBe("/api/v1/events?session=test-session-small-5");
-      expect(new Set(new URL(requested.at(-1)!, base).searchParams.getAll("session"))).toEqual(
-        new Set([ids[0]]),
-      );
       const fourth = await context.newPage();
       await fourth.goto(`${base}/`, { timeout: 8000 });
       await fourth.keyboard.press("Control+g");
@@ -102,15 +104,12 @@ for (const fallback of ["worker", "broadcast"] as const) {
         await pages[index]!.goto(`${base}/sessions/${ids[index]}`);
         await expect(pages[index]!).toHaveURL(new RegExp(ids[index]!));
       }
-      await expect
-        .poll(() => new Set(new URL(requested.at(-1)!, base).searchParams.getAll("session")))
-        .toEqual(new Set(ids));
-      await expect.poll(() => active.size).toBe(1);
+      await expect.poll(singleActiveSessions).toEqual(new Set(ids));
       await expect.poll(() => sessionRequests.every((count) => count > 0)).toBe(true);
       for (const index of [1, 2]) {
         const beforeUpdate = sessionRequests[index - 1]!;
         const otherBefore = sessionRequests[2 - index]!;
-        for (const response of active)
+        for (const response of active.keys())
           response.write(`event: session_updated\ndata: ${ids[index]}\n\n`);
         await expect.poll(() => sessionRequests[index - 1]).toBeGreaterThan(beforeUpdate);
         await page.waitForTimeout(250);
@@ -120,10 +119,7 @@ for (const fallback of ["worker", "broadcast"] as const) {
       await page.close();
       if (fallback !== "worker")
         await expect.poll(() => requested.length).toBeGreaterThan(beforeLeaderClose);
-      await expect.poll(() => active.size).toBe(1);
-      await expect
-        .poll(() => new Set(new URL(requested.at(-1)!, base).searchParams.getAll("session")))
-        .toEqual(new Set(ids));
+      await expect.poll(singleActiveSessions).toEqual(new Set(ids));
       expect(watches).toEqual([]);
     } finally {
       await context.close();
