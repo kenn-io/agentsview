@@ -9,6 +9,7 @@ import (
 )
 
 func TestResolveLaunchers(t *testing.T) {
+	// A cycle exercises the defensive guard against malformed ancestry.
 	var calls [][]string
 	got, err := ResolveLaunchers(t.Context(), []SessionMeta{{SessionID: "child", IsSubagent: true, ParentSessionID: "b"}, {SessionID: "other", IsSubagent: true, ParentSessionID: "missing"}}, nil, func(_ context.Context, ids []string) ([]Launcher, error) {
 		calls = append(calls, ids)
@@ -23,7 +24,6 @@ func TestResolveLaunchers(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, [][]string{{"b", "missing"}, {"a"}}, calls)
 	assert.Equal(t, []string{"a", "b", "missing"}, got.Examined)
-	assert.Empty(t, got.Waiting)
 }
 
 func TestResolveLaunchersUsesKnownRunsAndCountsInteractiveAncestors(t *testing.T) {
@@ -42,13 +42,13 @@ func TestResolveLaunchersUsesKnownRunsAndCountsInteractiveAncestors(t *testing.T
 	assert.Equal(t, []string{"middle", "root"}, got.Examined)
 }
 
-func TestResolveLaunchersSkipsNonInteractiveAndCycles(t *testing.T) {
+func TestResolveLaunchersSkipsNonInteractive(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		runs []SessionMeta
-		want []string
 	}{
 		{name: "automated", runs: []SessionMeta{{SessionID: "parent", IsAutomated: true}, {SessionID: "run", IsSubagent: true, ParentSessionID: "parent"}}},
+		{name: "fork", runs: []SessionMeta{{SessionID: "parent"}, {SessionID: "run", ParentSessionID: "parent"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			selected := make(map[string]bool)
@@ -60,7 +60,7 @@ func TestResolveLaunchersSkipsNonInteractiveAndCycles(t *testing.T) {
 				return nil, nil
 			})
 			require.NoError(t, err)
-			assert.Equal(t, tc.want, got.Waiting["run"])
+			assert.Empty(t, got.Waiting["run"])
 		})
 	}
 }

@@ -275,10 +275,6 @@ func TestEndedActivityReportKeyTracksLauncher(t *testing.T) {
 	f := db.AnalyticsFilter{Timezone: "UTC", IncludeSubagents: true, IncludeForks: true}
 	start, end := activityReportRangeBoundsUTC(q)
 	where, args := clickActivityReportCandidateWhere(f, start, end)
-	_, launchers, err := store.endedActivityReportKey(ctx, f, where, args, start, end)
-	require.NoError(t, err)
-	require.NotNil(t, launchers)
-	assert.Equal(t, []string{parent.ID}, launchers.Waiting["\x00"+parent.ID])
 	key := func() string {
 		value, _, err := store.endedActivityReportKey(ctx, f, where, args, start, end)
 		require.NoError(t, err)

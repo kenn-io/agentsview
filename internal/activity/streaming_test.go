@@ -322,6 +322,30 @@ func TestWaitingLauncherAfterOwnInterval(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 2, matched)
+	t.Run("launcher outside range", func(t *testing.T) {
+		p := baseParams(t, "2026-06-16", "UTC")
+		p.Waiting = map[string][]string{"run-a": {"parent"}, "run-b": {"parent"}, "run-c": {"parent"}}
+		sessions := []SessionMeta{{SessionID: "run-a", IsSubagent: true}, {SessionID: "run-b", IsSubagent: true}, {SessionID: "run-c", IsSubagent: true}}
+		start := mustStart(t, "2026-06-16T10:00:00Z")
+		var candidates []IntervalCandidate
+		for minute := 0; minute < 40; minute += 5 {
+			for _, session := range sessions {
+				candidates = append(candidates, IntervalCandidate{SessionID: session.SessionID, Start: start.Add(time.Duration(minute) * time.Minute), End: start.Add(time.Duration(minute+5) * time.Minute)})
+			}
+		}
+		got, err := BuildCandidateArtifacts(t.Context(), p, sessions, candidates, nil)
+		require.NoError(t, err)
+		assert.Equal(t, 1, got.Report.InteractivePeak.Agents)
+		assert.Equal(t, 4, got.Report.Peak.Agents)
+		assert.InDelta(t, 120, got.Report.Totals.AgentMinutes, 1e-9)
+		p.Waiting = nil
+		baseline, err := BuildCandidateArtifacts(t.Context(), p, sessions, candidates, nil)
+		require.NoError(t, err)
+		assert.Equal(t, baseline.Report.Totals, got.Report.Totals)
+		assert.Equal(t, baseline.Sessions, got.Sessions)
+		assert.Equal(t, baseline.Membership, got.Membership)
+
+	})
 }
 
 func TestWaitingLauncherKeepsOwnMinutesDuringOverlap(t *testing.T) {
@@ -344,28 +368,4 @@ func TestWaitingLauncherKeepsOwnMinutesDuringOverlap(t *testing.T) {
 		}
 	}
 	require.FailNow(t, "parent session missing")
-}
-
-func TestWaitingLauncherFortyMinutesAcrossThreeRuns(t *testing.T) {
-	p := baseParams(t, "2026-06-16", "UTC")
-	p.Waiting = map[string][]string{"run-a": {"parent"}, "run-b": {"parent"}, "run-c": {"parent"}}
-	sessions := []SessionMeta{{SessionID: "run-a", IsSubagent: true}, {SessionID: "run-b", IsSubagent: true}, {SessionID: "run-c", IsSubagent: true}}
-	start := mustStart(t, "2026-06-16T10:00:00Z")
-	var candidates []IntervalCandidate
-	for minute := 0; minute < 40; minute += 5 {
-		for _, session := range sessions {
-			candidates = append(candidates, IntervalCandidate{SessionID: session.SessionID, Start: start.Add(time.Duration(minute) * time.Minute), End: start.Add(time.Duration(minute+5) * time.Minute)})
-		}
-	}
-	got, err := BuildCandidateArtifacts(t.Context(), p, sessions, candidates, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, got.Report.InteractivePeak.Agents)
-	assert.Equal(t, 4, got.Report.Peak.Agents)
-	assert.InDelta(t, 120, got.Report.Totals.AgentMinutes, 1e-9)
-	p.Waiting = nil
-	baseline, err := BuildCandidateArtifacts(t.Context(), p, sessions, candidates, nil)
-	require.NoError(t, err)
-	assert.Equal(t, baseline.Report.Totals, got.Report.Totals)
-	assert.Equal(t, baseline.Sessions, got.Sessions)
-	assert.Equal(t, baseline.Membership, got.Membership)
 }

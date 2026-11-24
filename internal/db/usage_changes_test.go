@@ -96,124 +96,125 @@ func TestUsageChangeJournal(t *testing.T) {
 			ctx := t.Context()
 			for _, tc := range []struct {
 				name  string
+				setup func(*Session)
 				write func(*testing.T, Session)
 			}{
-				{"append", func(t *testing.T, s Session) {
+				{"append", nil, func(t *testing.T, s Session) {
 					t.Helper()
 					require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: s.ID, Ordinal: 1, Role: "assistant", Content: "More", TokenUsage: []byte(`{"output_tokens":2}`)}}))
 				}},
-				{"message usage", func(t *testing.T, s Session) {
+				{"message usage", nil, func(t *testing.T, s Session) {
 					t.Helper()
 					require.NoError(t, d.ReplaceSessionMessages(ctx, s.ID, []Message{{SessionID: s.ID, Ordinal: 0, Role: "assistant", Content: "Hello", TokenUsage: []byte(`{"output_tokens":3}`)}}))
 				}},
-				{"usage events", func(t *testing.T, s Session) {
+				{"usage events", nil, func(t *testing.T, s Session) {
 					t.Helper()
 					require.NoError(t, d.ReplaceSessionUsageEvents(ctx, s.ID, []UsageEvent{{Source: "session", Model: "model-x", OutputTokens: 5}}))
 				}},
-				{"clear usage events", func(t *testing.T, s Session) {
+				{"clear usage events", nil, func(t *testing.T, s Session) {
 					t.Helper()
 					require.NoError(t, d.ReplaceSessionUsageEvents(ctx, s.ID, nil))
 				}},
-				{"rename", func(t *testing.T, s Session) {
+				{"rename", nil, func(t *testing.T, s Session) {
 					t.Helper()
 					require.NoError(t, d.RenameSession(ctx, s.ID, new("New title")))
 				}},
-				{"session name", func(t *testing.T, s Session) {
+				{"session name", nil, func(t *testing.T, s Session) {
 					t.Helper()
 					s.SessionName = new("Agent title")
 					require.NoError(t, d.UpsertSession(ctx, s))
 				}},
-				{"parent link", func(t *testing.T, s Session) {
+				{"parent link", func(s *Session) { s.RelationshipType = "subagent" }, func(t *testing.T, s Session) {
 					t.Helper()
 					s.ParentSessionID = new("parent")
 					require.NoError(t, d.UpsertSession(ctx, s))
 				}},
-				{"relationship", func(t *testing.T, s Session) {
+				{"relationship", nil, func(t *testing.T, s Session) {
 					t.Helper()
 					s.RelationshipType = "subagent"
 					require.NoError(t, d.UpsertSession(ctx, s))
 				}},
-				{"created at", func(t *testing.T, s Session) {
+				{"created at", nil, func(t *testing.T, s Session) {
 					t.Helper()
 					_, err := d.getWriter().ExecContext(ctx, "UPDATE sessions SET created_at = ? WHERE id = ?", "2026-07-01T10:00:00Z", s.ID)
 					require.NoError(t, err)
 				}},
-				{"start time", func(t *testing.T, s Session) {
+				{"start time", nil, func(t *testing.T, s Session) {
 					t.Helper()
 					s.StartedAt = new("2026-07-02T10:00:00Z")
 					require.NoError(t, d.UpsertSession(ctx, s))
 				}},
-				{"end time", func(t *testing.T, s Session) {
+				{"end time", nil, func(t *testing.T, s Session) {
 					t.Helper()
 					s.EndedAt = new("2026-07-02T11:00:00Z")
 					require.NoError(t, d.UpsertSession(ctx, s))
 				}},
-				{"termination status", func(t *testing.T, s Session) {
+				{"termination status", nil, func(t *testing.T, s Session) {
 					t.Helper()
 					s.TerminationStatus = new("completed")
 					require.NoError(t, d.UpsertSession(ctx, s))
 				}},
-				{"agent", func(t *testing.T, s Session) {
+				{"agent", nil, func(t *testing.T, s Session) {
 					t.Helper()
 					s.Agent = "codex"
 					require.NoError(t, d.UpsertSession(ctx, s))
 				}},
-				{"machine", func(t *testing.T, s Session) {
+				{"machine", nil, func(t *testing.T, s Session) {
 					t.Helper()
 					s.Machine = "machine-b"
 					require.NoError(t, d.UpsertSession(ctx, s))
 				}},
-				{"branch", func(t *testing.T, s Session) {
+				{"branch", nil, func(t *testing.T, s Session) {
 					t.Helper()
 					s.GitBranch = "feature"
 					require.NoError(t, d.UpsertSession(ctx, s))
 				}},
-				{"group", func(t *testing.T, s Session) {
+				{"group", nil, func(t *testing.T, s Session) {
 					t.Helper()
 					s.GroupKey = "group-a"
 					require.NoError(t, d.UpsertSession(ctx, s))
 				}},
-				{"user messages", func(t *testing.T, s Session) {
+				{"user messages", nil, func(t *testing.T, s Session) {
 					t.Helper()
 					s.UserMessageCount = 2
 					require.NoError(t, d.UpsertSession(ctx, s))
 				}},
-				{"automation", func(t *testing.T, s Session) {
+				{"automation", nil, func(t *testing.T, s Session) {
 					t.Helper()
 					s.IsAutomated = true
 					require.NoError(t, d.UpsertSession(ctx, s))
 				}},
-				{"soft delete", func(t *testing.T, s Session) {
+				{"soft delete", nil, func(t *testing.T, s Session) {
 					t.Helper()
 					require.NoError(t, d.SoftDeleteSession(ctx, s.ID))
 				}},
-				{"restore", func(t *testing.T, s Session) {
+				{"restore", nil, func(t *testing.T, s Session) {
 					t.Helper()
 					_, err := d.RestoreSession(ctx, s.ID)
 					require.NoError(t, err)
 				}},
-				{"hard delete", func(t *testing.T, s Session) {
+				{"hard delete", nil, func(t *testing.T, s Session) {
 					t.Helper()
 					require.NoError(t, d.DeleteSession(ctx, s.ID))
 				}},
-				{"reinsert", func(t *testing.T, s Session) {
+				{"reinsert", nil, func(t *testing.T, s Session) {
 					t.Helper()
 					_, err := d.getWriter().ExecContext(ctx, "DELETE FROM excluded_sessions WHERE id = ?", s.ID)
 					require.NoError(t, err)
 					require.NoError(t, d.UpsertSession(ctx, s))
 				}},
-				{"project", func(t *testing.T, s Session) {
+				{"project", nil, func(t *testing.T, s Session) {
 					t.Helper()
 					_, err := d.AssignSessionProject(ctx, s.ID, "project-b")
 					require.NoError(t, err)
 				}},
-				{"atomic sync insert", func(t *testing.T, s Session) {
+				{"atomic sync insert", nil, func(t *testing.T, s Session) {
 					t.Helper()
 					result, err := d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{{Session: s}})
 					require.NoError(t, err)
 					assert.Equal(t, 1, result.WrittenSessions)
 				}},
-				{"atomic sync events", func(t *testing.T, s Session) {
+				{"atomic sync events", nil, func(t *testing.T, s Session) {
 					t.Helper()
 					result, err := d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{{
 						Session: s, UsageEvents: []UsageEvent{{Source: "session", OutputTokens: 5}},
@@ -221,7 +222,7 @@ func TestUsageChangeJournal(t *testing.T) {
 					require.NoError(t, err)
 					assert.Equal(t, 1, result.WrittenSessions)
 				}},
-				{"atomic sync append", func(t *testing.T, s Session) {
+				{"atomic sync append", nil, func(t *testing.T, s Session) {
 					t.Helper()
 					result, err := d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{{
 						Session:  s,
@@ -236,8 +237,8 @@ func TestUsageChangeJournal(t *testing.T) {
 				}
 				t.Run(tc.name, func(t *testing.T) {
 					s := Session{ID: tc.name, Project: "project-a", Machine: "machine-a", Agent: "claude", StartedAt: new("2026-07-01T10:00:00Z")}
-					if tc.name == "parent link" {
-						s.RelationshipType = "subagent"
+					if tc.setup != nil {
+						tc.setup(&s)
 					}
 					before, err := d.UsageChangeRevision(ctx)
 					require.NoError(t, err)

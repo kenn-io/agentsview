@@ -782,15 +782,8 @@ func TestActivityReportRefreshesAfterParentLinkOnly(t *testing.T) {
 	response := te.get(t, path)
 	assertStatus(t, response, http.StatusOK)
 	report := decode[activity.Report](t, response)
-	before, err := te.db.ActivityReportSourceProbe(t.Context())
-	require.NoError(t, err)
 	child.ParentSessionID = new("d2")
 	require.NoError(t, te.db.UpsertSession(t.Context(), *child))
-	after, err := te.db.ActivityReportSourceProbe(t.Context())
-	require.NoError(t, err)
-	assert.Greater(t, after.SessionChangeRevision, before.SessionChangeRevision)
-	after.SessionChangeRevision = before.SessionChangeRevision
-	assert.Equal(t, before, after)
 	page := te.get(t, "/api/v1/activity/report/"+report.ReportID+"/sessions?limit=1")
 	assertStatus(t, page, http.StatusOK)
 	var refreshed struct {

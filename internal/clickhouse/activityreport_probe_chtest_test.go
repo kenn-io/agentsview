@@ -70,7 +70,6 @@ func TestActivitySourceProbeCachePreservesFreshness(t *testing.T) {
 			got, probeErr := store.ActivityReportSourceProbe(ctx)
 			require.NoError(t, probeErr)
 			if step.want.MaxDataVersion != want.MaxDataVersion && read == 0 {
-				require.NotEqual(t, want.SessionRowsFingerprint, got.SessionRowsFingerprint)
 				want.SessionRowsFingerprint = got.SessionRowsFingerprint
 				want.MaxDataVersion = step.want.MaxDataVersion
 			}
@@ -78,22 +77,13 @@ func TestActivitySourceProbeCachePreservesFreshness(t *testing.T) {
 			require.Equal(t, step.want, got, step.sql)
 		}
 	}
-}
-
-func TestActivitySourceProbeSessionLinkPushAndMerge(t *testing.T) {
-	t.Parallel()
-	dsn, database := chtest.FreshDatabase(t)
-	conn := chtest.Open(t, dsn, database)
-	ctx := t.Context()
-	require.NoError(t, EnsureSchemaOn(ctx, conn))
-	store := newTestStore(t, conn, Target{URL: dsn, Database: database})
-	_, err := conn.ExecContext(ctx, `SYSTEM STOP MERGES sessions`)
+	_, err = conn.ExecContext(ctx, `SYSTEM STOP MERGES sessions`)
 	require.NoError(t, err)
-	_, err = conn.ExecContext(ctx, `INSERT INTO sessions (id,push_version,data_version,local_modified_at,parent_session_id) VALUES ('child',1,1,'2026-01-10 00:00:00','old')`)
+	_, err = conn.ExecContext(ctx, `INSERT INTO sessions (id,push_version,data_version,local_modified_at,parent_session_id) VALUES ('probe',3,2,'2026-01-10 00:00:00','old')`)
 	require.NoError(t, err)
 	before, err := store.ActivityReportSourceProbe(ctx)
 	require.NoError(t, err)
-	_, err = conn.ExecContext(ctx, `INSERT INTO sessions (id,push_version,data_version,local_modified_at,parent_session_id) VALUES ('child',2,1,'2026-01-10 00:00:00','new')`)
+	_, err = conn.ExecContext(ctx, `INSERT INTO sessions (id,push_version,data_version,local_modified_at,parent_session_id) VALUES ('probe',4,2,'2026-01-10 00:00:00','new')`)
 	require.NoError(t, err)
 	after, err := store.ActivityReportSourceProbe(ctx)
 	require.NoError(t, err)

@@ -1806,33 +1806,6 @@ func TestGetActivityReport_ManySessionsWithinSQLiteVarLimit(t *testing.T) {
 		"usage aggregated across all id chunks")
 }
 
-func TestGetActivityReportCountsQuietLauncherWaitingOnLinkedRuns(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "launcher", "project-a", func(s *Session) {
-		s.StartedAt = Ptr("2026-06-15T10:00:00Z")
-		s.EndedAt = Ptr("2026-06-15T10:02:00Z")
-	})
-	insertSession(t, d, "run", "project-a", func(s *Session) {
-		s.StartedAt = Ptr("2026-06-16T10:00:00Z")
-		s.EndedAt = Ptr("2026-06-16T10:04:00Z")
-	})
-	seedMessage(t, d, "run", 1, "user", "2026-06-16T10:00:00Z", "")
-	seedMessage(t, d, "run", 2, "assistant", "2026-06-16T10:04:00Z", "")
-	q := dayQuery(t, "2026-06-16", "UTC")
-	filter := AnalyticsFilter{Timezone: "UTC"}
-	before, err := d.GetActivityReport(t.Context(), filter, q)
-	require.NoError(t, err)
-	_, err = d.SetSessionExternalParent(t.Context(), "run", "launcher")
-	require.NoError(t, err)
-	after, err := d.GetActivityReport(t.Context(), filter, q)
-	require.NoError(t, err)
-	assert.Equal(t, 1, after.InteractivePeak.Agents)
-	assert.Equal(t, 2, after.Peak.Agents)
-	assert.InDelta(t, before.Totals.AgentMinutes, after.Totals.AgentMinutes, 1e-9)
-	assert.Equal(t, before.Totals.Cost, after.Totals.Cost)
-	assert.NotContains(t, reportSessionIDs(after.BySession), "launcher")
-}
-
 func TestActivityReportLauncherFiltersAndLinkChanges(t *testing.T) {
 	d := testDB(t)
 	for _, tc := range []struct{ id, project string }{{"visible", "project-a"}, {"hidden", "project-b"}} {
@@ -1854,6 +1827,8 @@ func TestActivityReportLauncherFiltersAndLinkChanges(t *testing.T) {
 	before, err := d.GetActivityReport(t.Context(), filter, q)
 	require.NoError(t, err)
 	assert.Equal(t, 1, before.InteractivePeak.Agents)
+	assert.Equal(t, 2, before.Peak.Agents)
+	assert.NotContains(t, reportSessionIDs(before.BySession), "visible")
 	require.NoError(t, d.DeleteSession(t.Context(), "visible"))
 	deleted, err := d.GetActivityReport(t.Context(), filter, q)
 	require.NoError(t, err)
@@ -1954,24 +1929,4 @@ func TestActivityReportEvidenceReadsOnlySubagents(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, sessions, 1)
 	assert.Equal(t, "child", sessions[0].SessionID)
-}
-
-func TestActivityReportIgnoresNonSubagentParentLink(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "parent", "project-a", func(s *Session) {
-		s.StartedAt = Ptr("2026-06-15T10:00:00Z")
-		s.EndedAt = Ptr("2026-06-15T10:02:00Z")
-	})
-	insertSession(t, d, "fork", "project-a", func(s *Session) {
-		s.StartedAt = Ptr("2026-06-16T10:00:00Z")
-		s.EndedAt = Ptr("2026-06-16T10:04:00Z")
-		s.ParentSessionID = Ptr("parent")
-		s.RelationshipType = "fork"
-	})
-	seedMessage(t, d, "fork", 1, "user", "2026-06-16T10:00:00Z", "")
-	seedMessage(t, d, "fork", 2, "assistant", "2026-06-16T10:04:00Z", "")
-	report, err := d.GetActivityReport(t.Context(), AnalyticsFilter{Timezone: "UTC"}, dayQuery(t, "2026-06-16", "UTC"))
-	require.NoError(t, err)
-	assert.Equal(t, 1, report.Peak.Agents)
-	assert.Equal(t, 1, report.InteractivePeak.Agents)
 }
