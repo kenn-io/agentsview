@@ -79,6 +79,28 @@ func shellLiteralPrefix(parts []syntax.WordPart) (string, bool) {
 	return prefix.String(), true
 }
 
+func shellExpansionQuoted(word *syntax.Word) bool {
+	for _, part := range word.Parts {
+		switch v := part.(type) {
+		case *syntax.Lit, *syntax.SglQuoted:
+		case *syntax.DblQuoted:
+			safe := true
+			syntax.Walk(v, func(node syntax.Node) bool {
+				if p, ok := node.(*syntax.ParamExp); ok && (p.Param != nil && p.Param.Value == "@" || p.Index != nil || p.Names != 0) {
+					safe = false
+				}
+				return safe
+			})
+			if !safe {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // AnalyzePRCommand extracts links and shared shell context from one parse.
 func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBare, hostUnknown bool) ([]PRLink, bool, bool, bool, []PRLink, error) {
 	if err := ctx.Err(); err != nil {
@@ -123,10 +145,10 @@ func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 			if !literal[i] {
 				prefix, _ := shellLiteralPrefix(call.Args[i].Parts)
 				flag, _, attached := strings.Cut(prefix, "=")
-				if (attached || len(flag) == 2 && strings.HasPrefix(flag, "-")) && strings.Contains(" "+ghPRValueFlags[words[2]]+" ", " "+flag+" ") {
+				if shellExpansionQuoted(call.Args[i]) && (attached || len(flag) == 2 && strings.HasPrefix(flag, "-")) && strings.Contains(" "+ghPRValueFlags[words[2]]+" ", " "+flag+" ") {
 					continue
 				}
-				if i > 3 && words[i-1] == "--body" {
+				if i > 3 && words[i-1] == "--body" && shellExpansionQuoted(call.Args[i]) {
 					continue
 				}
 				invalid = true
@@ -151,6 +173,9 @@ func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 			case strings.HasPrefix(word, "-"):
 				if !strings.Contains(word, "=") && strings.Contains(" "+ghPRValueFlags[words[2]]+" ", " "+word+" ") {
 					i++
+					if i < len(words) && !literal[i] && !shellExpansionQuoted(call.Args[i]) {
+						invalid = true
+					}
 				}
 			case selector == "":
 				selector = word
@@ -238,6 +263,9 @@ func bashChangesRepositoryContext(file *syntax.File) (bool, bool, []*syntax.Call
 			}
 			for len(words) > 1 && (words[0] == "command" || words[0] == "builtin") {
 				words = words[1:]
+				if len(words) > 0 && words[0] == "--" {
+					words = words[1:]
+				}
 			}
 			if len(words) > 0 {
 				name := words[0]

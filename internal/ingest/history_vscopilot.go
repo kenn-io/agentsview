@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -296,6 +297,13 @@ func VisualStudioCopilotMessageHasArchiveUpdate(parsed, stored db.Message) bool 
 			(!stored.HasContextTokens || p.ContextTokens > stored.ContextTokens)) ||
 		(string(p.TokenUsage) != "" && string(p.TokenUsage) != string(stored.TokenUsage)) {
 		return true
+	}
+	_, projected := db.ProjectSessionForStoragePolicy(db.Session{}, []db.Message{p, stored}, config.ArchiveContentTranscripts)
+	for i := 0; i < len(projected[0].ToolCalls) && i < len(projected[1].ToolCalls); i++ {
+		current, previous := projected[0].ToolCalls[i], projected[1].ToolCalls[i]
+		if current.PRLinks != previous.PRLinks || current.PRContext != previous.PRContext {
+			return true
+		}
 	}
 	return visualStudioCopilotToolCallsHaveArchiveUpdate(p.ToolCalls, stored.ToolCalls)
 }

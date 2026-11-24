@@ -224,6 +224,27 @@ func TestReconcileProviderHistoryMergesVisualStudioCopilotArchive(t *testing.T) 
 	assert.True(t, result.Candidate.Session.HasTotalOutputTokens)
 }
 
+func TestVisualStudioCopilotPartialCaptureUpdatesRetainedToolLinks(t *testing.T) {
+	call := db.ToolCall{ToolUseID: "call", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`}
+	stored := []db.Message{
+		{Role: "user", Content: "earlier", ContentLength: 7, Timestamp: "2026-09-11T09:00:00Z"},
+		{Role: "assistant", Timestamp: "2026-09-11T09:10:00Z", ToolCalls: []db.ToolCall{call}},
+	}
+	_, stored = db.ProjectSessionForStoragePolicy(db.Session{}, stored, config.ArchiveContentTranscripts)
+	call.InputJSON = `{"command":"gh pr view 43 -R example/repo"}`
+	candidate := ingest.Candidate{
+		Session:  db.Session{Agent: string(parser.AgentVSCopilot)},
+		Messages: []db.Message{{Role: "assistant", Timestamp: "2026-09-11T09:10:00Z", ToolCalls: []db.ToolCall{call}}},
+	}
+	result, err := ingest.ReconcileProviderHistory(t.Context(), candidate, &ingest.PriorSession{Messages: stored}, ingest.ContentOptions{ArchiveContent: config.ArchiveContentTranscripts})
+	require.NoError(t, err)
+	require.Len(t, result.Candidate.Messages, 2)
+	links, err := db.ToolCallPRLinks(t.Context(), result.Candidate.Messages, "", "")
+	require.NoError(t, err)
+	require.Len(t, links, 1)
+	assert.Equal(t, 43, links[0].Number)
+}
+
 func TestProviderHistorySourceClassifiers(t *testing.T) {
 	tests := []struct {
 		name          string
