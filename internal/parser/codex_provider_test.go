@@ -2426,3 +2426,23 @@ func TestCodexFreshLookupPrefersSuppliedLabeledSource(t *testing.T) {
 	require.True(t, found)
 	assert.Equal(t, path, source.DisplayPath)
 }
+
+func TestCodexDiscoveryReportsUnreadableDirectory(t *testing.T) {
+	root := t.TempDir()
+	blocked := filepath.Join(root, "blocked")
+	writeCodexProviderSession(t, filepath.Join(blocked, ".codex-run-v1-a", "sessions"), "11111111-1111-4111-8111-111111111111", "blocked")
+	writeCodexProviderSession(t, filepath.Join(root, "available", ".codex-run-v1-b", "sessions"), "22222222-2222-4222-8222-222222222222", "available")
+	require.NoError(t, os.Chmod(blocked, 0))
+	t.Cleanup(func() { require.NoError(t, os.Chmod(blocked, 0o755)) })
+	if _, err := os.ReadDir(blocked); err == nil {
+		t.Skip("directory permissions do not block reads")
+	}
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root, filepath.Join(root, "missing")}})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.ErrorIs(t, err, os.ErrPermission)
+	var incomplete DiscoveryIncompleteError
+	require.ErrorAs(t, err, &incomplete)
+	require.Len(t, sources, 1)
+	assert.Contains(t, sources[0].DisplayPath, "available")
+}

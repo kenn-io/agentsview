@@ -385,3 +385,30 @@ func TestCodexLabelRootsUnavailableAndUnknownMarker(t *testing.T) {
 	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key = ?`, codexLabelRootsKey).Scan(&marker))
 	assert.Equal(t, `["v2"]`, marker)
 }
+
+func TestCodexLabelRootRefreshWaitsForUnreadableDirectory(t *testing.T) {
+	root := t.TempDir()
+	label := filepath.Join(root, "label")
+	sessions := filepath.Join(label, ".codex-run-v1-a", "sessions")
+	const id = "12345678-1234-4234-8234-123456789abc"
+	path := filepath.Join(sessions, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
+	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_cli_rs", "2026-10-08T12:00:00Z")
+	dbtest.WriteTestFile(t, path, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
+	database := openTestDB(t)
+	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {sessions}}})
+	t.Cleanup(engine.Close)
+	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+	engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
+	require.NoError(t, os.Chmod(label, 0))
+	t.Cleanup(func() { require.NoError(t, os.Chmod(label, 0o755)) })
+	if _, err := os.ReadDir(label); err == nil {
+		t.Skip("directory permissions do not block reads")
+	}
+	stats := engine.SyncAll(t.Context(), nil)
+	assert.Positive(t, stats.Failed)
+	require.NoError(t, os.Chmod(label, 0o755))
+	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+	session, err := database.GetSessionFull(t.Context(), "codex:"+id)
+	require.NoError(t, err)
+	assert.Equal(t, "label", session.Project)
+}

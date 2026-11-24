@@ -16,6 +16,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawsync"
 	"go.kenn.io/agentsview/internal/testjsonl"
@@ -1807,4 +1808,56 @@ func TestProviderParserHostedCodexSkillNameStaysLexical(t *testing.T) {
 	require.Len(t, out.Outcome.Results[0].Result.Messages, 1)
 	require.Len(t, out.Outcome.Results[0].Result.Messages[0].ToolCalls, 1)
 	assert.Empty(t, out.Outcome.Results[0].Result.Messages[0].ToolCalls[0].SkillName)
+}
+
+func TestProviderParserHostedCodexLabeledProject(t *testing.T) {
+	root := t.TempDir()
+	const id = "11111111-1111-4111-8111-111111111111"
+	const otherID = "22222222-2222-4222-8222-222222222222"
+	var selected string
+	for _, run := range []struct{ label, id string }{{"experiment/case", id}, {"other/case", otherID}} {
+		home := filepath.Join(root, filepath.FromSlash(run.label), ".codex-run-v1-a")
+		rollout := filepath.Join(home, "sessions", "2026", "09", "10", "rollout-2026-09-10T10-00-00-"+run.id+".jsonl")
+		require.NoError(t, os.MkdirAll(filepath.Dir(rollout), 0o700))
+		require.NoError(t, os.WriteFile(rollout, []byte(testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON(run.id, "/workspace/project", "codex_cli_rs", "2026-09-10T10:00:00Z"),
+			testjsonl.CodexMsgJSON("user", "Session prompt", "2026-09-10T10:00:01Z"),
+		)), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(home, parser.CodexSessionIndexFilename), []byte(fmt.Sprintf("{\"id\":%q,\"thread_name\":\"Selected title\"}\n", run.id)), 0o600))
+		if run.id == id {
+			selected = rollout
+		}
+	}
+	provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 2)
+	var source parser.SourceRef
+	for _, candidate := range sources {
+		if candidate.DisplayPath == selected {
+			source = candidate
+		}
+	}
+	require.NotEmpty(t, source.Key)
+	local, err := provider.Parse(t.Context(), parser.ParseRequest{Source: source})
+	require.NoError(t, err)
+	manifest, objects := manifestFromCapturePlan(t, parser.AgentCodex, provider, source)
+	require.Len(t, manifest.Manifest.Entries, 2)
+	materialized, err := (Materializer{Store: &materializerStore{objects: objects}, BaseDir: t.TempDir(), MaxTotalBytes: 1 << 20}).Materialize(t.Context(), manifest)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, materialized.Cleanup()) })
+	dispatch, err := NewProviderParser(parser.ProviderFactories(), "hosted-worker")
+	require.NoError(t, err)
+	hosted, err := dispatch.Parse(t.Context(), manifest, materialized)
+	require.NoError(t, err)
+	require.Len(t, hosted.Outcome.Results, 1)
+	assert.Equal(t, "experiment/case", local.Results[0].Result.Session.Project)
+	assert.Equal(t, local.Results[0].Result.Session.Project, hosted.Outcome.Results[0].Result.Session.Project)
+	assert.Equal(t, local.Results[0].Result.Session.Cwd, hosted.Outcome.Results[0].Result.Session.Cwd)
+	assert.Equal(t, local.Results[0].Result.Session.SessionName, hosted.Outcome.Results[0].Result.Session.SessionName)
+	mapping := []db.WorktreeProjectMapping{{PathPrefix: "/workspace", Layout: db.WorktreeMappingLayoutExplicit, Project: "mapped", Enabled: true}}
+	project, matched := db.ResolveWorktreeProjectFromMappings(mapping, hosted.Outcome.Results[0].Result.Session.Cwd, hosted.Outcome.Results[0].Result.Session.Project)
+	assert.True(t, matched)
+	assert.Equal(t, "mapped", project)
 }

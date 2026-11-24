@@ -482,7 +482,7 @@ func (p *codexProvider) PlanRawCapture(
 	}
 	captureRoot := filepath.Clean(src.Root)
 	indexPath := codexSessionIndexPath(src.Path)
-	if indexPath != "" {
+	if indexPath != "" && CodexSourceLabel(src.Root, src.Path) == "" {
 		// The provider reads this named sibling as session metadata, so raw
 		// capture widens only far enough to preserve the same parse inputs.
 		captureRoot = filepath.Dir(indexPath)
@@ -559,6 +559,13 @@ func (p *codexProvider) PlanRawCapture(
 			// is captured under a distinct logical path so parse inputs
 			// that came from another home travel with the transcript.
 			logical := CodexSessionIndexFilename
+			if i == 0 && CodexSourceLabel(src.Root, src.Path) != "" && rawCapturePathWithin(captureRoot, candidate) {
+				rel, err := filepath.Rel(captureRoot, candidate)
+				if err != nil {
+					return RawCapturePlan{}, invalidRawCapturePlan("resolve Codex session index: %s", rawCaptureFilesystemError(err))
+				}
+				logical = filepath.ToSlash(rel)
+			}
 			if i > 0 {
 				logical = fmt.Sprintf("alias-homes/%d/%s", i, CodexSessionIndexFilename)
 			}
@@ -1032,6 +1039,7 @@ func (s codexSourceSet) discover(
 	includeRoot func(string) bool,
 ) ([]SourceRef, error) {
 	var sources []SourceRef
+	var incomplete error
 	byKey := make(map[string]SourceRef)
 	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
@@ -1059,21 +1067,26 @@ func (s codexSourceSet) discover(
 			}
 			continue
 		}
-		// An unreadable subdirectory leaves the rest of the walk's sources.
+		if _, err := os.Stat(root); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
 		if err := s.discoverEachRoot(ctx, root, func(source SourceRef) error {
 			if current, ok := byKey[source.Key]; !ok || preferCodexSource(source, current) {
 				byKey[source.Key] = source
 			}
 			return nil
-		}); err != nil && ctx.Err() != nil {
-			return nil, ctx.Err()
+		}); err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			incomplete = errors.Join(incomplete, err)
 		}
 	}
 	for _, source := range byKey {
 		sources = append(sources, source)
 	}
 	sortJSONLSources(sources)
-	return sources, nil
+	return sources, incomplete
 }
 
 // discoverSessionPaths finds all Codex JSONL session file paths under
@@ -1723,6 +1736,7 @@ func codexProviderCapabilities() Capabilities {
 			Model:                CapabilitySupported,
 		},
 		Sync: ProviderSyncSemantics{
+			PartialDiscovery:                    true,
 			FingerprintHashInCacheKey:           true,
 			FingerprintHashRequiredForFreshness: true,
 			SkipCacheFreshWithoutStoredRow:      true,
