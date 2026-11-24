@@ -88,12 +88,19 @@ func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 		}
 		bareSafe := allowBare && (firstRepo < 0 || entry.end < firstRepo) && !hasCommandSubstitution(call)
 		host, hostSet, hostValid := "", false, true
-		for _, a := range call.Assigns {
+		envRepo, envRepoSet, envRepoValid := "", false, false
+		for _, a := range append(append([]*syntax.Assign(nil), entry.assigns...), call.Assigns...) {
 			if a.Name == nil {
 				continue
 			}
 			if a.Name.Value == "GH_REPO" {
 				bareSafe = false
+				envRepoSet = true
+				if a.Value != nil {
+					envRepo, envRepoValid = shellLiteral(a.Value.Parts)
+				} else {
+					envRepo, envRepoValid = "", false
+				}
 			}
 			if a.Name.Value == "GH_HOST" {
 				hostSet = true
@@ -173,10 +180,16 @@ func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 			continue
 		}
 		if !specified {
-			if !bareSafe {
+			if envRepoSet {
+				if !envRepoValid {
+					continue
+				}
+				repo, specified = envRepo, true
+			} else if !bareSafe {
 				continue
+			} else {
+				repo = remoteRepo
 			}
-			repo = remoteRepo
 		}
 		explicitHost := ""
 		if specified && strings.Count(repo, "/") == 2 {
@@ -235,19 +248,20 @@ func SamePRWorkingDirectory(cwd, dir string) bool {
 }
 
 type prShellCall struct {
-	call *syntax.CallExpr
-	end  int
+	call    *syntax.CallExpr
+	end     int
+	assigns []*syntax.Assign
 }
 
 func bashChangesRepositoryContext(file *syntax.File, cwd string) (bool, bool, bool, int, int, []prShellCall) {
 	type scope struct {
-		local bool
-		call  int
+		local   bool
+		call    int
+		assigns []*syntax.Assign
 	}
 	type event struct {
-		node            syntax.Node
-		scope           scope
-		assignmentsOnly bool
+		node  syntax.Node
+		scope scope
 	}
 	var events []event
 	var stack []scope
@@ -277,23 +291,37 @@ func bashChangesRepositoryContext(file *syntax.File, cwd string) (bool, bool, bo
 			case *syntax.Subshell, *syntax.CmdSubst, *syntax.ProcSubst:
 				current.local = true
 			case *syntax.CallExpr:
+				if len(n.Args) >= 3 && expansions < 4096 {
+					name, nameOK := shellLiteral(n.Args[0].Parts)
+					option, optionOK := shellLiteral(n.Args[1].Parts)
+					script, scriptOK := shellLiteral(n.Args[2].Parts)
+					if nameOK && optionOK && scriptOK && (path.Base(name) == "bash" || path.Base(name) == "sh") && (option == "-c" || option == "-lc") {
+						if nested, err := syntax.NewParser().Parse(strings.NewReader(script), ""); err == nil {
+							child := scope{local: true, call: -1, assigns: append(append([]*syntax.Assign(nil), current.assigns...), n.Assigns...)}
+							stack = append(stack, child)
+							expansions++
+							walk(nested)
+							stack = stack[:len(stack)-1]
+						}
+					}
+				}
 				if len(n.Args) > 0 {
 					name, literal := shellLiteral(n.Args[0].Parts)
 					if body := functions[name]; literal && body != nil && !active[name] && expansions < 4096 {
-						if len(n.Assigns) > 0 {
-							events = append(events, event{n, current, true})
-						}
+						child := scope{local: current.local, call: -1, assigns: append(append([]*syntax.Assign(nil), current.assigns...), n.Assigns...)}
+						stack = append(stack, child)
 						active[name] = true
 						expansions++
 						walk(body)
 						delete(active, name)
+						stack = stack[:len(stack)-1]
 					}
 				}
 				current.call = len(calls)
-				calls = append(calls, prShellCall{n, len(events)})
-				events = append(events, event{node, current, false})
+				calls = append(calls, prShellCall{n, len(events), current.assigns})
+				events = append(events, event{node, current})
 			case *syntax.DeclClause:
-				events = append(events, event{node, current, false})
+				events = append(events, event{node, current})
 			}
 			stack = append(stack, current)
 			return true
@@ -337,7 +365,7 @@ func bashChangesRepositoryContext(file *syntax.File, cwd string) (bool, bool, bo
 				if a.Name == nil {
 					continue
 				}
-				if a.Name.Value == "GH_REPO" {
+				if a.Name.Value == "GH_REPO" && len(words) == 0 {
 					record(&firstRepo, index)
 				}
 				if a.Name.Value == "GH_HOST" {
@@ -352,9 +380,6 @@ func bashChangesRepositoryContext(file *syntax.File, cwd string) (bool, bool, bo
 				if !item.scope.local && len(words) == 0 && (a.Name.Value == "GH_REPO" || a.Name.Value == "GH_HOST") {
 					repository = true
 				}
-			}
-			if item.assignmentsOnly {
-				continue
 			}
 			dir := ""
 			if name == "cd" && len(n.Args) == 2 {
@@ -419,12 +444,22 @@ func repositoryMutation(words []string) bool {
 	}
 	switch words[1] {
 	case "config":
+		write := false
 		for _, word := range words[2:] {
 			if word == "--get" || word == "--get-all" || word == "--list" || word == "-l" {
 				return false
 			}
+			if word == "--add" || word == "--replace-all" || word == "--unset" || word == "--unset-all" || word == "--rename-section" || word == "--remove-section" || word == "set" || word == "unset" {
+				write = true
+			}
 		}
-		return len(words) > 3
+		for i, word := range words[2:] {
+			key := strings.ToLower(word)
+			if strings.HasPrefix(key, "remote.") || strings.HasPrefix(key, "branch.") || strings.HasPrefix(key, "url.") {
+				return write || i+3 < len(words)
+			}
+		}
+		return false
 	case "remote":
 		return len(words) > 2 && (words[2] == "add" || words[2] == "remove" || words[2] == "rename" || words[2] == "set-url")
 	}

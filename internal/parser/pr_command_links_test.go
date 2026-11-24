@@ -26,9 +26,16 @@ func TestCommandPRLinks(t *testing.T) {
 		{`review() { gh pr view 42 -R example/repo; }; echo ready`, "", ""},
 		{`review() { gh pr view 42 -R example/repo; }; review`, "", "https://github.com/example/repo/pull/42"},
 		{`review() { gh pr view 42; }; review`, remote, "https://github.com/example/repo/pull/42"},
-		{`review() { gh pr view 42; }; GH_REPO=example/other review`, remote, ""},
-		{`review() { gh pr view 42 -R example/repo; }; GH_HOST=git.example review`, remote, ""},
+		{`review() { gh pr view 42; }; GH_REPO=example/other review`, remote, "https://github.com/example/other/pull/42"},
+		{`review() { gh pr view 42 -R example/repo; }; GH_HOST=git.example review`, remote, "https://git.example/example/repo/pull/42"},
 		{`review() { gh pr view 42 -R github.com/example/repo; }; GH_REPO=example/other review`, remote, "https://github.com/example/repo/pull/42"},
+		{`GH_REPO=example/other gh pr view 42 -R example/repo`, remote, "https://github.com/example/repo/pull/42"},
+		{`GH_REPO=$REPO gh pr view 42`, remote, ""},
+		{`GH_REPO=example/other GH_HOST=git.example gh pr view 42`, remote, "https://git.example/example/other/pull/42"},
+		{`GH_REPO=example/other /bin/bash -lc 'gh pr view 42'`, remote, "https://github.com/example/other/pull/42"},
+		{`/bin/bash -lc 'git remote set-url origin https://github.com/example/other.git'; gh pr view 42`, remote, ""},
+		{`git config remote.origin.url https://github.com/example/other.git; gh pr view 42`, remote, ""},
+		{`git config --global user.email test@example.com; gh pr view 42`, remote, "https://github.com/example/repo/pull/42"},
 		{`review() { gh pr view 42; }; cd /other; review`, remote, ""},
 		{`review() { git remote set-url origin https://github.com/example/other.git; gh pr view 42; }; review`, remote, ""},
 		{`review() { review; gh pr view 42 -R github.com/example/repo; }; review`, "", "https://github.com/example/repo/pull/42"},
@@ -148,6 +155,42 @@ func TestCommandPRLinksAfterManyCommands(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, links, 1)
 	assert.Equal(t, 42, links[0].Number)
+}
+
+func TestCommandPRLinksRecordedFormats(t *testing.T) {
+	remote := "https://github.com/example/repo.git"
+	for _, command := range []string{
+		`git config user.email test@example.com; gh pr view 42`,
+		`/bin/bash -lc 'gh pr view 42 -R example/repo'`,
+		`GH_REPO=example/repo gh pr view 42`,
+	} {
+		t.Run(command, func(t *testing.T) {
+			links, err := CommandPRLinks(t.Context(), command, remote, true)
+			require.NoError(t, err)
+			require.Len(t, links, 1)
+			assert.Equal(t, "https://github.com/example/repo/pull/42", links[0].URL)
+		})
+	}
+}
+
+func TestCommandPRLinksGitConfigReadsAndWrites(t *testing.T) {
+	for _, tc := range []struct {
+		command string
+		want    int
+	}{
+		{`git config remote.origin.url`, 1},
+		{`git config --global remote.origin.url`, 1},
+		{`git config remote.origin.url https://github.com/example/other`, 0},
+		{`git config --add branch.main.remote upstream`, 0},
+		{`git config --unset remote.origin.url`, 0},
+		{`git config set url.https://example.com.insteadOf git@example.com:`, 0},
+	} {
+		t.Run(tc.command, func(t *testing.T) {
+			links, err := CommandPRLinks(t.Context(), tc.command+`; gh pr view 42`, "https://github.com/example/repo.git", true)
+			require.NoError(t, err)
+			assert.Len(t, links, tc.want)
+		})
+	}
 }
 
 func TestCommandPRLinksUnsetRepoPreservesEarlierLink(t *testing.T) {

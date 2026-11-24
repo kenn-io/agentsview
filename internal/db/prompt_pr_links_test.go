@@ -59,6 +59,27 @@ func TestToolPRLinksExecAndUncalledFunctionFilter(t *testing.T) {
 	assert.Equal(t, "exec", page.Sessions[0].ID)
 }
 
+func TestToolPRLinksRecordedShellFormats(t *testing.T) {
+	for _, input := range []string{
+		`{"cmd":"/bin/bash -lc 'gh pr view 42 -R example/repo'"}`,
+		`{"cmd":"GH_REPO=example/repo gh pr view 42"}`,
+	} {
+		t.Run(input, func(t *testing.T) {
+			d := testDB(t)
+			s := Session{ID: "recorded-command", Project: "project", Machine: "local", Agent: "codex", MessageCount: 1}
+			require.NoError(t, d.UpsertSession(t.Context(), s))
+			require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "assistant", ToolCalls: []ToolCall{{Category: "Bash", ToolName: "exec_command", InputJSON: input}}}}))
+			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error { return refreshSessionPromptPRLinksTx(t.Context(), tx, s.ID) }))
+			filter, err := ParsePRFilter("example/repo#42")
+			require.NoError(t, err)
+			page, err := d.ListSessions(t.Context(), SessionFilter{PR: filter})
+			require.NoError(t, err)
+			require.Len(t, page.Sessions, 1)
+			assert.Equal(t, s.ID, page.Sessions[0].ID)
+		})
+	}
+}
+
 func TestPromptPRLinksArchiveUpgrade(t *testing.T) {
 	t.Run("missing column", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "archive.db")

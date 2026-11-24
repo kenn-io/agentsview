@@ -70,6 +70,20 @@ func TestToolCallPRLinksDirectFormats(t *testing.T) {
 	}
 }
 
+func TestToolCallPRLinksRecordedShellFormats(t *testing.T) {
+	for _, input := range []string{
+		`{"cmd":"/bin/bash -lc 'gh pr view 42 -R example/repo'"}`,
+		`{"cmd":"GH_REPO=example/repo gh pr view 42"}`,
+	} {
+		t.Run(input, func(t *testing.T) {
+			messages := []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", ToolName: "exec_command", InputJSON: input}}}}
+			links := toolCallPRLinks(t, messages, "", "")
+			require.Len(t, links, 1)
+			assert.Equal(t, "https://github.com/example/repo/pull/42", links[0].URL)
+		})
+	}
+}
+
 func TestToolCallPRLinksWorkingDirectory(t *testing.T) {
 	for _, tc := range []struct {
 		input string
