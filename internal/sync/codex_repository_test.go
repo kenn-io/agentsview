@@ -2,6 +2,7 @@ package sync
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -256,6 +257,44 @@ func TestCodexLabeledRunResyncAndExplicitWorktreeMappingWins(t *testing.T) {
 	session, err = database.GetSessionFull(t.Context(), "codex:"+id)
 	require.NoError(t, err)
 	assert.Equal(t, "mapped_project", session.Project)
+}
+
+func TestCodexLabeledRunsKeepLabelsAfterRootMove(t *testing.T) {
+	database := openTestDB(t)
+	base := t.TempDir()
+	oldRoot, newRoot := filepath.Join(base, "old"), filepath.Join(base, "new")
+	ids := []string{"cccccccc-cccc-4ccc-8ccc-cccccccccccc", "dddddddd-dddd-4ddd-8ddd-dddddddddddd"}
+	var relativePaths []string
+	for i, id := range ids {
+		path := filepath.Join("team", fmt.Sprintf(".codex-run-v1-%d", i), "sessions", "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
+		relativePaths = append(relativePaths, path)
+		meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z")
+		dbtest.WriteTestFile(t, filepath.Join(oldRoot, path), []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
+	}
+	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {oldRoot}}})
+	require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
+	for _, id := range ids {
+		session, err := database.GetSessionFull(t.Context(), "codex:"+id)
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		assert.Equal(t, "team", session.Project)
+	}
+	engine.Close()
+	require.NoError(t, os.Rename(oldRoot, newRoot))
+	engine = NewEngine(t.Context(), database, EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {newRoot}}})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
+	for i, id := range ids {
+		session, err := database.GetSessionFull(t.Context(), "codex:"+id)
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		assert.Equal(t, "team", session.Project)
+		require.NotNil(t, session.FilePath)
+		assert.Equal(t, filepath.Join(newRoot, relativePaths[i]), *session.FilePath)
+	}
+	result := engine.SyncAll(t.Context(), nil)
+	assert.Zero(t, result.Synced)
+	assert.Equal(t, 2, result.Skipped)
 }
 
 func TestCodexLabeledRunNewestCopyOnSync(t *testing.T) {
