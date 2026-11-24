@@ -14,6 +14,9 @@ import (
 	"go.kenn.io/agentsview/internal/rawsync"
 )
 
+// rawPRLinksDataVersion marks branch metadata that includes derived PR links.
+const rawPRLinksDataVersion = 189
+
 type rawBranch struct {
 	ID, Source, Group, Member, Session, Revision, Manifest, Version string
 	CapturedSession                                                 string
@@ -161,6 +164,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		}
 		previous, exists := priorByGroup[group]
 		var old ingest.PreparedSession
+		var originalPRLinks []db.PRLink
 		var history *ingest.PriorSession
 		if exists {
 			metadata, decodeErr := decodeRawPayload(previous.Payload)
@@ -178,6 +182,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			if loadErr != nil {
 				return loadErr
 			}
+			originalPRLinks = payload.Session.PRLinks
 			payload.Session = old.Session
 			old = payload
 			oldLoaded = true
@@ -239,30 +244,34 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			}
 		}
 		prepared.Signals = ingest.RefreshSignalRecencyAt(prepared.Session, prepared.Messages, prepared.Signals, s.options.Now())
-		revision, err := rawContentRevision(prepared)
+		identityPayload := prepared
+		if decision.Action == ingest.HistoryPreserve {
+			identityPayload.Session.PRLinks = originalPRLinks
+		}
+		revision, err := rawContentRevision(identityPayload)
 		if err != nil {
 			return err
 		}
-		payload, err := encodeRawPayload(prepared)
+		payload, err := encodeRawPayload(identityPayload)
 		if err != nil {
 			return err
 		}
 		sessionID := "raw-row-" + rawDigest("row-v1", group, revision)
-		if decision.Action != ingest.HistoryPreserve {
-			links := prepared.Session.PRLinks
-			if !s.options.Content.ArchiveContent.UsageOnly() {
-				promptLinks, err := db.PromptPRLinksContext(ctx, prepared.Messages)
-				if err != nil {
-					return err
-				}
-				toolLinks, err := db.ToolCallPRLinks(ctx, prepared.Messages, prepared.Session.Cwd, "")
-				if err != nil {
-					return err
-				}
-				links = parser.CombinePRLinks(links, promptLinks, toolLinks)
+		links := prepared.Session.PRLinks
+		if !s.options.Content.ArchiveContent.UsageOnly() && (decision.Action != ingest.HistoryPreserve || prepared.Session.DataVersion < rawPRLinksDataVersion) {
+			promptLinks, err := db.PromptPRLinksContext(ctx, prepared.Messages)
+			if err != nil {
+				return err
 			}
-			freshLinks[sessionID] = links
+			toolLinks, err := db.ToolCallPRLinks(ctx, prepared.Messages, prepared.Session.Cwd, "")
+			if err != nil {
+				return err
+			}
+			links = parser.CombinePRLinks(links, promptLinks, toolLinks)
 		}
+		freshLinks[sessionID] = links
+		prepared.Session.PRLinks = links
+		prepared.Session.DataVersion = db.CurrentDataVersion()
 		branchID := rawDigest("branch-v1", group, source)
 		inserted, err := tx.ExecContext(ctx, `INSERT INTO raw_content_revisions(session_id,group_id,content_revision,payload) VALUES($1,$2,$3,$4) ON CONFLICT(session_id) DO NOTHING`, sessionID, group, revision, payload)
 		if err != nil {

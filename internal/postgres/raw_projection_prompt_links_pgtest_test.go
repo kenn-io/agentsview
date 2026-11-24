@@ -49,6 +49,16 @@ func TestRawProjectionRolloutBackfillsPromptLinks(t *testing.T) {
 			_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET pr_links=$2, data_version=183 WHERE id=$1`, before.SessionID, db.EncodePRLinks(recorded))
 			require.NoError(t, err)
 			if tc.preserve {
+				var metadataBytes []byte
+				require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT prior_payload FROM raw_session_branches WHERE session_id=$1`, before.SessionID).Scan(&metadataBytes))
+				metadata, err := decodeRawPayload(metadataBytes)
+				require.NoError(t, err)
+				metadata.Session.PRLinks = nil
+				metadata.Session.DataVersion = 0
+				metadataBytes, err = encodeRawPayload(metadata)
+				require.NoError(t, err)
+				_, err = f.runtime.ExecContext(t.Context(), `UPDATE raw_session_branches SET prior_payload=$2 WHERE session_id=$1`, before.SessionID, metadataBytes)
+				require.NoError(t, err)
 				outcome.Outcome.Results[0].Result.Messages = nil
 				m, _ = f.accept(t, "device-a", "replay", receipt.Receipt, tc.agent)
 				require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
@@ -275,12 +285,27 @@ func TestRawProjectionRefreshesRetainedToolLinks(t *testing.T) {
 	assert.Equal(t, []db.PRLink{{URL: "https://github.com/example/repo/pull/43", Host: "github.com", Repository: "example/repo", Number: 43}}, db.DecodePRLinks(links))
 	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET data_version=$2 WHERE id=$1`, after.SessionID, db.CurrentDataVersion()-1)
 	require.NoError(t, err)
+	messages := result.Messages
 	result.Messages = nil
-	m, _ = f.accept(t, "device-a", "shortened", receipt.Receipt, parser.AgentRooCode)
+	m, receipt = f.accept(t, "device-a", "shortened", receipt.Receipt, parser.AgentRooCode)
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
 	retained, err := f.sink.Resolve(t.Context(), "roocode:portable")
 	require.NoError(t, err)
 	assert.Equal(t, before.SessionID, retained.SessionID)
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, retained.SessionID).Scan(&links))
 	assert.Equal(t, []db.PRLink{{URL: "https://github.com/example/repo/pull/43", Host: "github.com", Repository: "example/repo", Number: 43}}, db.DecodePRLinks(links))
+	result.Messages = messages
+	result.Messages[1].ToolCalls[0].InputJSON = `{"command":"true"}`
+	m, receipt = f.accept(t, "device-a", "removed", receipt.Receipt, parser.AgentRooCode)
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
+	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET data_version=$2 WHERE id=$1`, retained.SessionID, db.CurrentDataVersion()-1)
+	require.NoError(t, err)
+	result.Messages = nil
+	m, _ = f.accept(t, "device-a", "shortened-again", receipt.Receipt, parser.AgentRooCode)
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
+	retained, err = f.sink.Resolve(t.Context(), "roocode:portable")
+	require.NoError(t, err)
+	assert.Equal(t, before.SessionID, retained.SessionID)
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, retained.SessionID).Scan(&links))
+	assert.Empty(t, db.DecodePRLinks(links))
 }
