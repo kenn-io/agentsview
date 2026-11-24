@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mattn/go-sqlite3"
 	"github.com/shirou/gopsutil/v4/process"
 	"github.com/spf13/cobra"
 	"go.kenn.io/kit/agenthook"
@@ -260,11 +261,15 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 	if err != nil || native == "" {
 		return err
 	}
-	home := env["CODEX_HOME"]
+	launcherEnv := env
 	if launcherProcess.Environ != nil {
-		if launcherEnv, err := processEnv(ctx, launcherProcess); err == nil {
-			home = launcherEnv["CODEX_HOME"]
+		if values, err := processEnv(ctx, launcherProcess); err == nil {
+			launcherEnv = values
 		}
+	}
+	home := launcherEnv["CODEX_SQLITE_HOME"]
+	if home == "" {
+		home = launcherEnv["CODEX_HOME"]
 	}
 
 	data, err := readHookInput(ctx, cmd.InOrStdin())
@@ -293,11 +298,24 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 // once on a link the archive rejects or a read-only backend.
 func recordLaunchParent(ctx context.Context, cmd *cobra.Command, childID, home, launcher, native string) error {
 	delay := launchParentRetryDelay
+	missingDeadline := time.Now().Add(2 * time.Second)
 	var parentID string
 	for {
 		var err error
 		if parentID == "" {
 			parentID, err = launcherArchiveID(ctx, home, launcher, native)
+		}
+		if err != nil && parentID == "" {
+			if errors.Is(err, os.ErrNotExist) || errors.Is(err, sql.ErrNoRows) {
+				if time.Now().After(missingDeadline) {
+					return nil
+				}
+			} else {
+				var sqliteErr sqlite3.Error
+				if !errors.As(err, &sqliteErr) || (sqliteErr.Code != sqlite3.ErrBusy && sqliteErr.Code != sqlite3.ErrLocked) {
+					return err
+				}
+			}
 		}
 		if err == nil && parentID != "" {
 			err = writeLaunchParent(ctx, cmd, childID, parentID)
@@ -305,7 +323,14 @@ func recordLaunchParent(ctx context.Context, cmd *cobra.Command, childID, home, 
 		if err == nil || errors.Is(err, db.ErrSessionExternalParentInvalid) || errors.Is(err, db.ErrReadOnly) {
 			return err
 		}
-		timer := time.NewTimer(delay)
+		wait := delay
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, sql.ErrNoRows) {
+			wait = min(wait, time.Until(missingDeadline))
+			if wait <= 0 {
+				return nil
+			}
+		}
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -349,7 +374,7 @@ func codexIndexedPage(ctx context.Context, home, thread string) (string, error) 
 		}
 	}
 	if state == "" {
-		return "", nil
+		return "", os.ErrNotExist
 	}
 	path := filepath.ToSlash(state)
 	if !strings.HasPrefix(path, "/") {
@@ -363,9 +388,6 @@ func codexIndexedPage(ctx context.Context, home, thread string) (string, error) 
 	defer conn.Close()
 	var rollout string
 	if err := conn.QueryRowContext(ctx, "SELECT rollout_path FROM threads WHERE id = ?", thread).Scan(&rollout); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return "", nil
-		}
 		return "", err
 	}
 	key := parser.CodexSessionUUIDFromPath(rollout)

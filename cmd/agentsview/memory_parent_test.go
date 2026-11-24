@@ -471,3 +471,69 @@ func TestCaptureLaunchParentRetriesBusyCodexIndex(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "codex:"+codexLauncherID, link.ParentSessionID)
 }
+
+func TestCaptureLaunchParentUsesCodexSQLiteHome(t *testing.T) {
+	database := stubLaunchArchive(t)
+	launcherHome, sqliteHome := t.TempDir(), t.TempDir()
+	writeCodexState(t, sqliteHome, codexLauncherID, codexLauncherID)
+	stubLaunchProcesses(t, fakeProcess{name: "sh"},
+		fakeProcess{name: "claude", env: []string{"CODEX_THREAD_ID=" + codexLauncherID}},
+		fakeProcess{name: "codex", env: []string{"CODEX_HOME=" + launcherHome, "CODEX_SQLITE_HOME=" + sqliteHome}})
+	_, err := runLaunchHook(t, sessionStartPayload("startup"))
+	require.NoError(t, err)
+	link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
+	require.NoError(t, err)
+	assert.Equal(t, "codex:"+codexLauncherID, link.ParentSessionID)
+}
+
+func TestCaptureLaunchParentRetriesMissingCodexIndex(t *testing.T) {
+	for _, rowMissing := range []bool{false, true} {
+		t.Run(fmt.Sprint(rowMissing), func(t *testing.T) {
+			home := t.TempDir()
+			staged := t.TempDir()
+			if rowMissing {
+				writeCodexState(t, home, childSessionID, childSessionID)
+			} else {
+				writeCodexState(t, staged, codexLauncherID, codexLauncherID)
+			}
+			database := stubLaunchArchive(t)
+			stubLaunchProcesses(t, fakeProcess{name: "sh"},
+				fakeProcess{name: "claude", env: []string{"CODEX_HOME=" + home, "CODEX_THREAD_ID=" + codexLauncherID}},
+				fakeProcess{name: "codex"})
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			cmd := &cobra.Command{}
+			cmd.SetIn(strings.NewReader(sessionStartPayload("startup")))
+			done := make(chan error, 1)
+			go func() { done <- captureLaunchParent(ctx, cmd) }()
+			time.Sleep(time.Second)
+			if rowMissing {
+				state, err := sql.Open("sqlite3", filepath.Join(home, "state_5.sqlite"))
+				require.NoError(t, err)
+				_, err = state.ExecContext(t.Context(), `INSERT INTO threads (id, rollout_path) VALUES (?, ?)`, codexLauncherID, "rollout-2026-01-01-"+codexLauncherID+".jsonl")
+				require.NoError(t, err)
+				require.NoError(t, state.Close())
+			} else {
+				require.NoError(t, os.Rename(filepath.Join(staged, "state_5.sqlite"), filepath.Join(home, "state_5.sqlite")))
+			}
+			require.NoError(t, <-done)
+			link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
+			require.NoError(t, err)
+			assert.Equal(t, "codex:"+codexLauncherID, link.ParentSessionID)
+		})
+	}
+}
+
+func TestCaptureLaunchParentRejectsUnknownCodexIndexSchema(t *testing.T) {
+	home := t.TempDir()
+	state, err := sql.Open("sqlite3", filepath.Join(home, "state_999.sqlite"))
+	require.NoError(t, err)
+	_, err = state.ExecContext(t.Context(), `CREATE TABLE threads (id TEXT PRIMARY KEY)`)
+	require.NoError(t, err)
+	require.NoError(t, state.Close())
+	stubLaunchProcesses(t, fakeProcess{name: "sh"},
+		fakeProcess{name: "claude", env: []string{"CODEX_HOME=" + home, "CODEX_THREAD_ID=" + codexLauncherID}},
+		fakeProcess{name: "codex"})
+	_, err = runLaunchHook(t, sessionStartPayload("startup"))
+	require.ErrorContains(t, err, "no such column")
+}
