@@ -2786,9 +2786,11 @@ func TestDarwinWatcherLifecycleFailureFallsBackToPolling(t *testing.T) {
 	require.Equal(t, RecursiveWatchResult{
 		Watched: 1, MissingRootLifecycleOwned: true,
 	}, results[0])
-	watcher.Start()
+	// Create intermediate before Start so Start's single startup lifecycle
+	// wake drives the advance attempt; calling signalLifecycle() after Start
+	// can deliver a second wake once fallback is open and re-run addAncestor.
 	require.NoError(t, os.Mkdir(intermediate, 0o700))
-	backend.signalLifecycle()
+	watcher.Start()
 
 	assert.Equal(t, []string{ancestor}, requireReceiveWithin(t, coverage, time.Second))
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
