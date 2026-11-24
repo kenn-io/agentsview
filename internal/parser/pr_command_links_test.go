@@ -84,6 +84,7 @@ func TestCommandPRLinks(t *testing.T) {
 		{`gh pr view 42 -R example/repo`, "", "https://github.com/example/repo/pull/42"},
 		{`gh pr view 42 -R example/repo; export GH_HOST=git.example`, "", "https://github.com/example/repo/pull/42"},
 		{`GH_HOST=git.example gh pr view 42 -R example/repo`, "https://github.com/example/repo.git", ""},
+		{`GH_HOST=git.example gh pr view 41 -R example/repo; gh pr view 42 -R example/repo`, "", "https://github.com/example/repo/pull/42"},
 		{`export GH_HOST=git.example >/bad; gh pr view https://github.com/example/repo/pull/42`, "", "https://github.com/example/repo/pull/42"},
 		{`(cd /work/other); gh pr view 42`, remote, ""},
 		{`unset GH_REPO; gh pr view 42`, remote, ""},

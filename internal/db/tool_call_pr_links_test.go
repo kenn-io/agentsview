@@ -33,6 +33,14 @@ func TestToolCallPRLinks(t *testing.T) {
 	}
 }
 
+func TestToolCallPRLinksCommandArray(t *testing.T) {
+	messages := []db.Message{{ToolCalls: []db.ToolCall{{ToolName: "execute_command", Category: "Bash", InputJSON: `{"commands":["gh pr view 42 -R example/repo","gh pr view 43 -R example/repo"]}`}}}}
+	links := toolCallPRLinks(t, messages, "", "")
+	require.Len(t, links, 2)
+	assert.Equal(t, 42, links[0].Number)
+	assert.Equal(t, 43, links[1].Number)
+}
+
 func TestToolCallPRLinksOversizedInput(t *testing.T) {
 	for _, tc := range []struct {
 		name, first, second, cwd, remote string

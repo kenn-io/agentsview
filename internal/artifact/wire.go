@@ -262,7 +262,7 @@ type segmentToolCall struct {
 	Category            string               `json:"category,omitempty"`
 	ToolUseID           string               `json:"tool_use_id,omitempty"`
 	InputJSON           string               `json:"input_json,omitempty"`
-	PRLinks             []db.PRLink          `json:"pr_links,omitempty"`
+	PRLinks             jsontext.Value       `json:"pr_links,omitempty"`
 	FilePath            string               `json:"file_path,omitempty"`
 	SkillName           string               `json:"skill_name,omitempty"`
 	ResultContentLength int                  `json:"result_content_length,omitempty"`
@@ -346,7 +346,7 @@ func encodeSegment(msgs []db.Message) ([]byte, error) {
 }
 
 func messageHasToolPRLinks(msg db.Message) bool {
-	return slices.ContainsFunc(msg.ToolCalls, func(call db.ToolCall) bool { return len(db.DecodePRLinks(call.PRLinks)) > 0 })
+	return slices.ContainsFunc(msg.ToolCalls, func(call db.ToolCall) bool { return call.PRLinks != "" })
 }
 
 // Limit range overhead and fall back to literal dialogue for fragmented text.
@@ -421,13 +421,17 @@ func segmentMessageFromDB(msg db.Message) segmentMessage {
 	if len(msg.ToolCalls) > 0 {
 		record.ToolCalls = make([]segmentToolCall, len(msg.ToolCalls))
 		for i, call := range msg.ToolCalls {
+			var prLinks jsontext.Value
+			if call.PRLinks != "" {
+				prLinks = jsontext.Value(call.PRLinks)
+			}
 			record.ToolCalls[i] = segmentToolCall{
 				CallIndex:           i,
 				ToolName:            call.ToolName,
 				Category:            call.Category,
 				ToolUseID:           call.ToolUseID,
 				InputJSON:           call.InputJSON,
-				PRLinks:             db.DecodePRLinks(call.PRLinks),
+				PRLinks:             prLinks,
 				FilePath:            call.FilePath,
 				SkillName:           call.SkillName,
 				ResultContentLength: call.ResultContentLength,

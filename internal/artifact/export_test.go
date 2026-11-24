@@ -18,6 +18,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 )
 
@@ -2229,7 +2230,7 @@ func TestExportRoundTripsSessionQualitySignals(t *testing.T) {
 func TestExportMessageSegmentVersions(t *testing.T) {
 	plain := db.Message{Role: "user", Content: "ordinary"}
 	prompt := db.Message{Ordinal: 1, Role: "user", Content: "prompt", DialogueText: new("prompt")}
-	linked := db.Message{Ordinal: 2, Role: "assistant", ToolCalls: []db.ToolCall{{PRLinks: db.EncodePRLinks([]db.PRLink{{URL: "https://github.com/example/repo/pull/5", Host: "github.com", Repository: "example/repo", Number: 5}})}}}
+	linked := db.Message{Ordinal: 2, Role: "assistant", ToolCalls: []db.ToolCall{{PRLinks: `{"directory":true}`}}}
 	for _, tc := range []struct {
 		name            string
 		messages        []db.Message
@@ -2291,4 +2292,20 @@ func TestExportMessageSegmentVersions(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSegmentRetainsToolPRContext(t *testing.T) {
+	messages := []db.Message{{Role: "assistant", ToolCalls: []db.ToolCall{
+		{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"export GH_HOST=enterprise.example"}`},
+		{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo; gh pr view 43 -R git.example/example/repo"}`},
+	}}}
+	_, projected := db.ProjectSessionForStoragePolicy(db.Session{}, messages, config.ArchiveContentTranscripts)
+	data, err := encodeSegment(projected)
+	require.NoError(t, err)
+	decoded, err := decodeSegment(data)
+	require.NoError(t, err)
+	links, err := db.ToolCallPRLinks(t.Context(), decoded, "", "")
+	require.NoError(t, err)
+	require.Len(t, links, 1)
+	assert.Equal(t, "https://git.example/example/repo/pull/43", links[0].URL)
 }

@@ -243,3 +243,22 @@ func TestClineTeamTaskPRLinks(t *testing.T) {
 	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
 	assert.Equal(t, []string{"https://github.com/example/repo/pull/42"}, storedPRURLs(t, database, "cline:team-pr"))
 }
+
+func TestClineCommandArrayPRLinks(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "data", "sessions", "command-pr")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "command-pr.json"), []byte(`{"session_id":"command-pr","cwd":"/workspace"}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "command-pr.messages.json"), []byte(`{"messages":[{"id":"m1","role":"user","content":[{"type":"text","text":"Review changes"}],"ts":1000},{"id":"m2","role":"assistant","content":[{"type":"tool_use","id":"call","name":"execute_command","input":{"commands":["gh pr view 42 -R example/repo","gh pr view 43 -R example/repo"]}}],"ts":2000}]}`), 0o600))
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCline: {root}}, Machine: "local"})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	assert.Equal(t, []string{"https://github.com/example/repo/pull/42", "https://github.com/example/repo/pull/43"}, storedPRURLs(t, database, "cline:command-pr"))
+	for _, n := range []int{42, 43} {
+		page, err := database.ListSessions(t.Context(), db.SessionFilter{PR: db.PRFilter{Repository: "example/repo", Number: n}})
+		require.NoError(t, err)
+		require.Len(t, page.Sessions, 1)
+		assert.Equal(t, "cline:command-pr", page.Sessions[0].ID)
+	}
+}

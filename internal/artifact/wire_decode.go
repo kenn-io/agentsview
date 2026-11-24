@@ -10,7 +10,6 @@ import (
 	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/parser"
 )
 
 func decodeManifestWithLimits(data []byte, limits artifactLimits) (manifest, error) {
@@ -405,18 +404,12 @@ func (m segmentMessage) dbMessage() db.Message {
 	if len(m.ToolCalls) > 0 {
 		msg.ToolCalls = make([]db.ToolCall, len(m.ToolCalls))
 		for i, call := range m.ToolCalls {
-			var links []db.PRLink
-			for _, link := range call.PRLinks {
-				if normalized, ok := parser.NewPRLink(link.URL, link.Repository, link.Number); ok {
-					links = append(links, normalized)
-				}
-			}
 			msg.ToolCalls[i] = db.ToolCall{
 				ToolName:            call.ToolName,
 				Category:            call.Category,
 				ToolUseID:           call.ToolUseID,
 				InputJSON:           call.InputJSON,
-				PRLinks:             db.EncodePRLinks(parser.CombinePRLinks(links)),
+				PRLinks:             string(call.PRLinks),
 				FilePath:            call.FilePath,
 				SkillName:           call.SkillName,
 				ResultContentLength: call.ResultContentLength,

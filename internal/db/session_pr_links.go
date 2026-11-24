@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -444,14 +445,18 @@ func taskPRLinks(ctx context.Context, input string) ([]PRLink, error) {
 // when the input is structured but does not parse.
 func shellInputCommands(input string) (commands []string, ok bool) {
 	var payload struct {
-		Command string `json:"command"`
-		Cmd     string `json:"cmd"`
+		Command  string   `json:"command"`
+		Cmd      string   `json:"cmd"`
+		Commands []string `json:"commands"`
 	}
 	if json.Unmarshal([]byte(input), &payload) != nil {
 		return nil, false
 	}
 	if payload.Command != "" {
 		return []string{payload.Command}, true
+	}
+	if payload.Commands != nil {
+		return payload.Commands, true
 	}
 	return []string{payload.Cmd}, true
 }
@@ -514,21 +519,84 @@ func toolCallPRStates(ctx context.Context, messages []Message, cwd, remote strin
 // call whose input the archive dropped resolves the links and state it kept.
 func callPRStateIn(ctx context.Context, call ToolCall, cwd, remote string, state sharedPRContext, depends *[]PRLink) (callPRState, error) {
 	if call.InputJSON == "" {
-		return callPRState{links: DecodePRLinks(call.PRLinks)}, nil
+		var retained retainedPRState
+		if call.PRLinks == "" || json.Unmarshal([]byte(call.PRLinks), &retained) != nil {
+			return callPRState{}, nil
+		}
+		remoteHost, remoteRepo := "", ""
+		if normalized, ok := export.NormalizeGitRemote(remote); ok {
+			remoteHost, remoteRepo, _ = strings.Cut(normalized, "/")
+		}
+		var links []PRLink
+		for _, link := range retained.Links {
+			dependent := retained.Depends[link.URL]
+			link, ok := parser.NewPRLink(link.URL, link.Repository, link.Number)
+			if !ok {
+				continue
+			}
+			if dependent {
+				bare := link.Repository == retainedPRRepo
+				if state.repository || (bare && (!bareLinksAllowed(retained.Workdir, cwd, state) || remoteRepo == "")) {
+					continue
+				}
+				host, repo := remoteHost, link.Repository
+				if bare {
+					repo = remoteRepo
+				} else if host == "" {
+					host = "github.com"
+				}
+				link, ok = parser.NewPRLink(fmt.Sprintf("https://%s/%s/pull/%d", host, repo, link.Number), repo, link.Number)
+				if !ok {
+					continue
+				}
+				if depends != nil {
+					*depends = append(*depends, link)
+				}
+			}
+			links = append(links, link)
+		}
+		return callPRState{links: links, change: sharedPRContext{directory: retained.Dir, repository: retained.Repo}}, nil
 	}
 	var change sharedPRContext
 	links, err := callPRLinks(ctx, call.Category, call.ToolName, call.InputJSON, cwd, remote, state, &change, depends)
 	return callPRState{links, change}, err
 }
 
-// retainedCallPRLinks keeps explicitly named links before an input is dropped.
+const retainedPRRepo = "placeholder/pr-link"
+
+type retainedPRState struct {
+	Links   []PRLink        `json:"links,omitempty"`
+	Depends map[string]bool `json:"depends,omitempty"`
+	Dir     bool            `json:"directory,omitempty"`
+	Repo    bool            `json:"repository,omitempty"`
+	Workdir string          `json:"workdir,omitempty"`
+}
+
+// retainedCallPRLinks retains selectors and shell changes without the input.
 func retainedCallPRLinks(call ToolCall) string {
 	if call.InputJSON == "" || (call.Category != "Bash" && call.Category != "Task") {
 		return call.PRLinks
 	}
+	workdir := parser.ToolInputWorkdir(call.InputJSON)
+	cwd := workdir
+	if cwd == "" {
+		cwd = "/"
+	}
 	var change sharedPRContext
-	found, _ := callPRLinks(context.Background(), call.Category, call.ToolName, call.InputJSON, "", "", sharedPRContext{}, &change, nil)
-	return EncodePRLinks(found)
+	var depends []PRLink
+	found, _ := callPRLinks(context.Background(), call.Category, call.ToolName, call.InputJSON, cwd, "https://pr-link.invalid/"+retainedPRRepo, sharedPRContext{}, &change, &depends)
+	if len(found) == 0 && !change.directory && !change.repository {
+		return ""
+	}
+	retained := retainedPRState{Links: found, Dir: change.directory, Repo: change.repository, Workdir: workdir}
+	if len(depends) > 0 {
+		retained.Depends = make(map[string]bool, len(depends))
+		for _, link := range depends {
+			retained.Depends[link.URL] = true
+		}
+	}
+	encoded, _ := json.Marshal(retained)
+	return string(encoded)
 }
 
 // retainCopiedToolPRLinksTx keeps the PR metadata of copied sessions before

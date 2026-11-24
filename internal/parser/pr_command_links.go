@@ -288,15 +288,21 @@ func bashChangesRepositoryContext(file *syntax.File) (bool, bool, []prShellCall)
 	})
 	var directory, repository bool
 	var calls []prShellCall
+	callAssignments := make(map[*syntax.Assign]bool)
 	syntax.Walk(file, func(node syntax.Node) bool {
 		switch n := node.(type) {
 		case *syntax.FuncDecl:
 			return false
 		case *syntax.Assign:
-			if n.Name != nil && (n.Name.Value == "GH_REPO" || n.Name.Value == "GH_HOST") {
+			if !callAssignments[n] && n.Name != nil && (n.Name.Value == "GH_REPO" || n.Name.Value == "GH_HOST") {
 				repository = true
 			}
 		case *syntax.CallExpr:
+			if len(n.Args) > 0 {
+				for _, assignment := range n.Assigns {
+					callAssignments[assignment] = true
+				}
+			}
 			callDirectory, callRepository := directory, repository
 			args := n.Args
 			if len(args) > 0 {
