@@ -512,6 +512,11 @@ the index on the next build while keeping unchanged in-scope embeddings. The
 daemon reads the new value after it restarts. Keyword search, Recall embeddings,
 and hosted PostgreSQL embeddings ignore this setting.
 
+The `--role` flag on `agentsview session messages` filters the messages returned
+by that command. It does not change which messages are embedded. Before
+downgrading to a version without `[vector] roles`, remove that key from the
+config. The older version's next build indexes both roles.
+
 ### Ollama quickstart
 
 ```bash

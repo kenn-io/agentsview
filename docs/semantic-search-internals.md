@@ -329,9 +329,11 @@ as `scope_agents`, sorted, deduplicated, and comma-joined. A missing key reads a
 an empty list, so an upgrade forces no rescan. A `[vector] roles` list that
 names one role appends `;roles=<role>` to the `scope_agents` value; with both
 roles or none, the value has no suffix and matches what older versions store.
-Versions without `roles` ignore the setting and embed both roles. Only the
-local message store applies either list; Recall and hosted PostgreSQL embeddings
-ignore them.
+Before downgrading to a version without `roles`, remove the key from the config
+so that version can start. Its next build reconciles the index to include both
+roles. Only the local message store applies either list; Recall and hosted
+PostgreSQL embeddings ignore them.
+The scan reads both roles before filtering, even when only one is embedded.
 
 Changing any of these values forces a full mirror *reconciliation*, not a re-embed:
 it inserts or removes rows to match the new scope, but documents that stay in

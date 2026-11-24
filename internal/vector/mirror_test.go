@@ -675,6 +675,30 @@ func TestRefreshIncrementalUsesWatermark(t *testing.T) {
 	assert.True(t, ok)
 }
 
+func TestBuildIncrementalRemovesSessionWithOnlyExcludedRoles(t *testing.T) {
+	ctx := t.Context()
+	ix := openTestIndex(t)
+	src := &fakeUnitSource{rows: []fakeUnit{
+		{unit: userDoc("s1", "u1", 0, "question"), endedAt: "2024-01-01T00:00:00Z"},
+	}}
+	options := BuildOptions{Roles: []string{"user"}}
+	gen := fakeGeneration("fake-model")
+	_, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, options)
+	require.NoError(t, err)
+	require.Len(t, mirrorDocKeys(t, ix), 1)
+
+	src.rows = []fakeUnit{
+		{unit: runDoc("s1", "a1", 0, 0, "answer", nil), endedAt: "2024-01-02T00:00:00Z"},
+	}
+	var encoded []string
+	result, err := ix.Build(ctx, src, recordingEncoder(&encoded), gen, options)
+	require.NoError(t, err)
+	assert.NotEmpty(t, src.gotSince)
+	assert.Equal(t, 1, result.Refresh.Deleted)
+	assert.Empty(t, mirrorDocKeys(t, ix))
+	assert.Empty(t, encoded)
+}
+
 func TestRefreshIncrementalTombstoneDeletesOnlyChangedDocument(t *testing.T) {
 	ix := openTestIndex(t)
 	ctx := t.Context()
