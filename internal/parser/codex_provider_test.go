@@ -2439,6 +2439,7 @@ func TestCodexLabeledRunOverlappingRootsAndLookup(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, ok)
 		assert.Equal(t, path, found.DisplayPath)
+		assert.Equal(t, root, found.Opaque.(codexSource).Root)
 		outcome, err := provider.Parse(t.Context(), ParseRequest{Source: found})
 		require.NoError(t, err)
 		require.Len(t, outcome.Results, 1)
@@ -2490,12 +2491,41 @@ func TestCodexLabeledAndOrdinaryNewestCopy(t *testing.T) {
 			sources, err := provider.Discover(t.Context())
 			require.NoError(t, err)
 			require.Len(t, sources, 1)
-			assert.Equal(t, path, sources[0].DisplayPath)
+			assert.Equal(t, paths[1], sources[0].DisplayPath)
 			found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: id})
 			require.NoError(t, err)
 			require.True(t, ok)
-			assert.Equal(t, path, found.DisplayPath)
+			assert.Equal(t, paths[1], found.DisplayPath)
 		}
+	}
+}
+
+func TestCodexLabeledCopyWinsAcrossThreeRoots(t *testing.T) {
+	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
+	root := t.TempDir()
+	roots := []string{filepath.Join(root, "dated"), filepath.Join(root, "flat"), filepath.Join(root, "logs")}
+	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", tsEarly)
+	content := testjsonl.JoinJSONL(meta, testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1))
+	dated := writeCodexProviderSessionContent(t, roots[0], id, content)
+	require.NoError(t, os.MkdirAll(roots[1], 0o755))
+	flat := filepath.Join(roots[1], filepath.Base(dated))
+	require.NoError(t, os.WriteFile(flat, []byte(content), 0o644))
+	labeled := writeCodexProviderSessionContent(t, filepath.Join(roots[2], "123", "case", ".codex-run-v1-abc", "sessions"), id, content)
+	for i, path := range []string{dated, labeled, flat} {
+		mtime := time.Now().Add(time.Duration(i) * time.Hour)
+		require.NoError(t, os.Chtimes(path, mtime, mtime))
+	}
+	for _, order := range [][]string{{roots[0], roots[1], roots[2]}, {roots[1], roots[2], roots[0]}, {roots[2], roots[0], roots[1]}} {
+		provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: order})
+		require.True(t, ok)
+		sources, err := provider.Discover(t.Context())
+		require.NoError(t, err)
+		require.Len(t, sources, 1)
+		assert.Equal(t, labeled, sources[0].DisplayPath)
+		found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: id})
+		require.NoError(t, err)
+		require.True(t, ok)
+		assert.Equal(t, labeled, found.DisplayPath)
 	}
 }
 

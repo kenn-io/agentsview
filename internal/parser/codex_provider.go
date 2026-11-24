@@ -1676,20 +1676,26 @@ func CodexSourceKey(agent AgentType, uuid string) string {
 }
 
 // preferCodexSource reports whether candidate should replace current as the
-// copy of one session: the live dated layout before the archived flat one,
-// then the plain rollout before its compressed form, then the lexically
-// smaller path.
+// copy of one session. Labeled copies win over ordinary ones; among distinct
+// labeled homes the newest wins. Ordinary copies retain layout precedence.
 func preferCodexSource(candidate, current SourceRef) bool {
 	cand := candidate.Opaque.(codexSource)
 	curr := current.Opaque.(codexSource)
-	_, candSessions := codexLabeledSession(cand.Root, cand.Path)
-	_, currSessions := codexLabeledSession(curr.Root, curr.Path)
-	if (candSessions != "" || currSessions != "") && candSessions != currSessions {
+	candLabel, candSessions := codexLabeledSession(cand.Root, cand.Path)
+	currLabel, currSessions := codexLabeledSession(curr.Root, curr.Path)
+	if cand.Path == curr.Path {
+		return len(candLabel) > len(currLabel)
+	}
+	if (candSessions != "") != (currSessions != "") {
+		return candSessions != ""
+	}
+	if candSessions != "" && currSessions != "" && candSessions != currSessions {
 		candInfo, candErr := os.Stat(cand.Path)
 		currInfo, currErr := os.Stat(curr.Path)
 		if candErr == nil && currErr == nil && !candInfo.ModTime().Equal(currInfo.ModTime()) {
 			return candInfo.ModTime().After(currInfo.ModTime())
 		}
+		return candidate.DisplayPath < current.DisplayPath
 	}
 	if cand.Layout != curr.Layout {
 		return cand.Layout == CodexLayoutDated

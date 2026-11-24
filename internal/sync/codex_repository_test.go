@@ -317,7 +317,7 @@ func TestCodexLabeledAndOrdinaryNewestCopyOnSync(t *testing.T) {
 			messages, err := database.GetMessages(t.Context(), "codex:"+id, 0, 100, true)
 			require.NoError(t, err)
 			require.Len(t, messages, 1)
-			assert.Equal(t, []string{"ordinary", "labeled"}[i], messages[0].Content)
+			assert.Equal(t, "labeled", messages[0].Content)
 			engine.Close()
 		}
 	}
