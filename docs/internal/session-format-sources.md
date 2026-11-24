@@ -1104,6 +1104,13 @@ fixtures retain this field; missing identities remain source-local.
   after a revert persists the replacement page
   ([state database](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/state/src/sqlite.rs#L25-L50),
   [revert](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/thread-store/src/local/revert_thread.rs#L783-L799)).
+  Codex looks up `threads.rollout_path` by thread ID
+  ([threads.rs](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/state/src/runtime/threads.rs)).
+  Its `sqlite_home` configuration chooses the database directory, falling back
+  to `CODEX_SQLITE_HOME` and then `CODEX_HOME`
+  ([config_toml.rs](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/config/src/config_toml.rs)).
+  The launcher hook uses the same lookup to identify the current page; it reads
+  the launcher's environment and root `config.toml` setting.
   Resume and thread lookup take the thread id and open its newest file
   ([list.rs](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/rollout/src/list.rs#L1602-L1616)).
   A reported archive written by Codex `0.153.4` and `0.155.0-alpha.16.3`
