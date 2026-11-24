@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/parser"
@@ -286,6 +287,11 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		if count == 1 {
 			fresh[sessionID] = payload
 		}
+		if s.options.Content.ArchiveContent == config.ArchiveContentTranscripts {
+			if err := publishRawToolPRLinks(ctx, tx, sessionID, prepared.Messages); err != nil {
+				return err
+			}
+		}
 		dialogueChanged, err := syncRawDialogue(ctx, tx, sessionID, prepared.Messages)
 		if err != nil {
 			return err
@@ -457,6 +463,18 @@ func loadRawPayloadBytes(ctx context.Context, tx *sql.Tx, id string, payload []b
 			return p, err
 		}
 		state.apply(&p.Signals)
+		for i := range p.Messages {
+			if i >= len(state.ToolPRLinks) {
+				break
+			}
+			for j := range p.Messages[i].ToolCalls {
+				if j >= len(state.ToolPRLinks[i]) {
+					break
+				}
+				p.Messages[i].ToolCalls[j].PRLinks = state.ToolPRLinks[i][j].Links
+				p.Messages[i].ToolCalls[j].PRContext = state.ToolPRLinks[i][j].Context
+			}
+		}
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT ordinal, dialogue_text, is_content FROM raw_message_dialogue WHERE session_id=$1`, id)
 	if err != nil {
