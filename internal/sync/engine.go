@@ -12747,6 +12747,23 @@ func providerOutcomeContainsSession(
 	return false
 }
 
+// SessionWatchSourceMtime checks the stored Codex source during fallback
+// polling. Root watches and root polling discover replacement copies.
+func (e *Engine) SessionWatchSourceMtime(ctx context.Context, sessionID string) int64 {
+	host, rawID := parser.StripHostPrefix(sessionID)
+	if host == "" && strings.HasPrefix(rawID, "codex:") {
+		path := e.db.GetSessionFilePath(ctx, sessionID)
+		if path != "" && !isS3SourcePath(path) {
+			info, err := os.Stat(path)
+			if err != nil || !info.Mode().IsRegular() {
+				return 0
+			}
+			return info.ModTime().UnixNano()
+		}
+	}
+	return e.SourceMtime(ctx, sessionID)
+}
+
 // SourceMtime returns the current source-backed mtime for a
 // session. Most file-based agents map directly to a single source
 // file, but OpenCode storage sessions derive their effective mtime

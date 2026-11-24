@@ -74,6 +74,13 @@ func preferDiscoveredFile(
 	candidate, current parser.DiscoveredFile,
 ) bool {
 	if candidate.Agent == current.Agent && isCodexFormatAgent(candidate.Agent) {
+		if candidate.Agent == parser.AgentCodex && candidate.ProviderSource != nil && current.ProviderSource != nil {
+			candRank := parser.CodexSourceRank(*candidate.ProviderSource)
+			currRank := parser.CodexSourceRank(*current.ProviderSource)
+			if candRank.Class != 0 || currRank.Class != 0 {
+				return reconciliationSourceRankLower(currRank, candRank)
+			}
+		}
 		// Keep import ranking consistent with parser.preferCodexSource.
 		// Across roots this is a selection policy, not evidence of freshness.
 		candLayout := codexLayoutForPath(candidate.Path)

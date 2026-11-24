@@ -1702,6 +1702,11 @@ func codexSourceRank(source SourceRef) ReconciliationSourceRank {
 	return ReconciliationSourceRank{}
 }
 
+// CodexSourceRank ranks a source for duplicate selection.
+func CodexSourceRank(source SourceRef) ReconciliationSourceRank {
+	return codexSourceRank(source)
+}
+
 // preferCodexSource ranks labeled copies by recency and keeps ordinary layout precedence.
 func preferCodexSource(candidate, current SourceRef) bool {
 	cand := candidate.Opaque.(codexSource)
