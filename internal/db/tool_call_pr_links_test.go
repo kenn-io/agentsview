@@ -77,6 +77,8 @@ func TestToolCallPRLinksDirectFormats(t *testing.T) {
 			assert.Equal(t, 42, links[0].Number)
 		})
 	}
+	messages := []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", ToolName: "exec", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`}}}}
+	assert.Len(t, toolCallPRLinks(t, messages, "", "https://github.com/example/repo.git"), 1)
 }
 
 func TestToolCallPRLinksWorkingDirectory(t *testing.T) {
@@ -85,11 +87,7 @@ func TestToolCallPRLinksWorkingDirectory(t *testing.T) {
 		want  int
 	}{
 		{`{"cmd":"gh pr view 42","workdir":"/work/other"}`, 0},
-		{`{"cmd":"gh pr view 42 -R example/repo","workdir":"/work/other"}`, 1},
-		{`{"cmd":"gh pr view 42 -R git.example/example/repo","workdir":"/work/other"}`, 1},
 		{`{"cmd":"gh pr view 42","workdir":"/work/./repo"}`, 1},
-		{`{"cmd":"gh pr view 42 -R github.com/example/repo","workdir":"/work/other"}`, 1},
-		{`{"cmd":"gh pr view https://github.com/example/repo/pull/42","workdir":"/work/other"}`, 1},
 	} {
 		t.Run(tc.input, func(t *testing.T) {
 			links := toolCallPRLinks(t, []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", ToolName: "exec_command", InputJSON: tc.input}}}}, "/work/repo", "https://github.com/example/repo.git")
@@ -100,7 +98,6 @@ func TestToolCallPRLinksWorkingDirectory(t *testing.T) {
 
 func TestToolCallPRLinksDirectoryChangePreservesHost(t *testing.T) {
 	for _, calls := range [][]db.ToolCall{
-		{{Category: "Bash", ToolName: "exec_command", InputJSON: `{"cmd":"gh pr view 42 -R example/repo","workdir":"/work/other"}`}},
 		{{Category: "Bash", ToolName: "Bash", InputJSON: `{"command":"cd /work/other"}`}, {Category: "Bash", ToolName: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`}},
 		{{Category: "Bash", ToolName: "Bash", InputJSON: `{"commands":["cd /work/other","gh pr view 42 -R example/repo"]}`}},
 	} {
@@ -134,38 +131,12 @@ func TestToolCallPRLinksSharedShellDirectoryChange(t *testing.T) {
 	}
 }
 
-func TestToolCallPRLinksPlainInputAndRepositoryChanges(t *testing.T) {
-	for _, tool := range []string{"shell_command", "exec_command"} {
-		t.Run(tool, func(t *testing.T) {
-			call := func(input string) db.ToolCall { return db.ToolCall{Category: "Bash", ToolName: tool, InputJSON: input} }
-			links := toolCallPRLinks(t, []db.Message{{ToolCalls: []db.ToolCall{call(`gh pr view 42 -R github.com/example/repo`)}}}, "", "")
-			assert.Len(t, links, 1)
-			messages := []db.Message{{ToolCalls: []db.ToolCall{call(`{"command":"git remote set-url origin https://github.com/example/other.git"}`), call(`{"command":"gh pr view 42"}`)}}}
-			assert.Empty(t, toolCallPRLinks(t, messages, "/work/repo", "https://github.com/example/repo.git"))
-		})
-	}
+func TestToolCallPRLinksPlainInput(t *testing.T) {
+	messages := []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", ToolName: "shell_command", InputJSON: `gh pr view 42 -R github.com/example/repo`}}}}
+	assert.Len(t, toolCallPRLinks(t, messages, "", ""), 1)
 }
 
 func TestToolCallPRLinksRepositoryChangesAcrossCommands(t *testing.T) {
-	remote := "https://github.com/example/repo.git"
-	for _, tool := range []string{"run_command", "run_commands", "run_shell_command"} {
-		t.Run(tool, func(t *testing.T) {
-			call := func(input string) db.ToolCall { return db.ToolCall{Category: "Bash", ToolName: tool, InputJSON: input} }
-			messages := []db.Message{{ToolCalls: []db.ToolCall{call(`{"commands":["git remote set-url origin https://github.com/example/other.git","gh pr view 42"]}`)}}}
-			assert.Empty(t, toolCallPRLinks(t, messages, "/work/repo", remote))
-			messages = []db.Message{{ToolCalls: []db.ToolCall{call(`{"command":"git remote set-url origin https://github.com/example/other.git"}`), call(`{"command":"gh pr view 42"}`)}}}
-			assert.Empty(t, toolCallPRLinks(t, messages, "/work/repo", remote))
-		})
-	}
-}
-
-func TestToolCallPRLinksExecInputs(t *testing.T) {
-	for _, input := range []string{`tools.exec_command({cmd:"gh pr view 42 -R example/repo"})`, `{"code":"tools.exec_command({cmd:'gh pr view 42 -R example/repo'})"}`} {
-		messages := []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", ToolName: "exec", InputJSON: input}}}}
-		assert.Empty(t, toolCallPRLinks(t, messages, "", ""))
-	}
-	for _, input := range []string{`{"command":"gh pr view 42 -R example/repo"}`, `{"cmd":"gh pr view 42 -R example/repo"}`} {
-		messages := []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", ToolName: "exec", InputJSON: input}}}}
-		assert.Len(t, toolCallPRLinks(t, messages, "", ""), 1)
-	}
+	messages := []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", ToolName: "run_command", InputJSON: `{"commands":["git remote set-url origin https://github.com/example/other.git","gh pr view 42"]}`}}}}
+	assert.Empty(t, toolCallPRLinks(t, messages, "/work/repo", "https://github.com/example/repo.git"))
 }

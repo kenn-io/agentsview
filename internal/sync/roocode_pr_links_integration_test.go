@@ -12,7 +12,7 @@ import (
 	"go.kenn.io/agentsview/internal/sync"
 )
 
-func TestRooCodeChildPromptPRFilter(t *testing.T) {
+func TestRooCodeChildPromptPRLinks(t *testing.T) {
 	root := t.TempDir()
 	archive := dbtest.OpenTestDB(t)
 	engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentRooCode: {root}}, Machine: "local"})

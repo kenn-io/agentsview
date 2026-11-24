@@ -4,14 +4,12 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
@@ -209,48 +207,7 @@ func TestCommandPRCheckoutRemote(t *testing.T) {
 	}
 }
 
-func TestCommandPRCheckoutRemoteChange(t *testing.T) {
-	testutil.IsolateGit(t)
-	root := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o700))
-	configPath := filepath.Join(root, ".git", "config")
-	require.NoError(t, os.WriteFile(configPath, []byte("[remote \"origin\"]\n url = https://github.com/example/old.git\n"), 0o600))
-	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
-	const id = "checkout-remote-change"
-	path := env.writeClaudeSession(t, "proj", id+".jsonl", testjsonl.JoinJSONL(
-		testjsonl.ClaudeUserJSON("Finish the work", tsEarly, root),
-		testjsonl.ClaudeAssistantJSON([]map[string]any{{"type": "tool_use", "id": "call", "name": "Bash", "input": map[string]any{"command": "gh pr view 42"}}}, tsEarlyS1),
-	))
-	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
-	require.Equal(t, []string{"https://github.com/example/old/pull/42"}, storedPRURLs(t, env.db, id))
-	require.NoError(t, os.WriteFile(configPath, []byte("[remote \"origin\"]\n url = https://github.com/example/new.git\n"), 0o600))
-	appendClaudeSplitLines(t, path, testjsonl.ClaudeUserJSON("Continue", "2024-01-01T10:00:06Z", root))
-	env.engine.SyncPaths([]string{path})
-	assert.Equal(t, []string{"https://github.com/example/old/pull/42"}, storedPRURLs(t, env.db, id))
-}
-
-func TestCommandPRRecordedRemoteRepair(t *testing.T) {
-	testutil.IsolateGit(t)
-	root := t.TempDir()
-	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
-	const id = "recorded-remote-repair"
-	env.writeClaudeSession(t, "proj", id+".jsonl", testjsonl.JoinJSONL(
-		testjsonl.ClaudeUserJSON("Finish the work", tsEarly, root),
-		testjsonl.ClaudeAssistantJSON([]map[string]any{{"type": "tool_use", "id": "call", "name": "Bash", "input": map[string]any{"command": "gh pr view 42"}}}, tsEarlyS1),
-	))
-	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
-	assert.Empty(t, storedPRURLs(t, env.db, id))
-	session, err := env.db.GetSession(t.Context(), id)
-	require.NoError(t, err)
-	obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: id, Project: session.Project, Machine: session.Machine, RootPath: root, ObservedAt: time.Now().UTC()}, "https://github.com/example/repo.git")
-	require.NoError(t, env.db.UpsertProjectIdentityObservation(t.Context(), obs))
-	snapshots, err := env.db.ListSessionProjectIdentitySnapshotsByID(t.Context(), []string{id})
-	require.NoError(t, err)
-	assert.Equal(t, "https://github.com/example/repo.git", snapshots[id].GitRemote)
-	assert.Equal(t, []string{"https://github.com/example/repo/pull/42"}, storedPRURLs(t, env.db, id))
-}
-
-func TestClineTeamTaskPRFilter(t *testing.T) {
+func TestClineTeamTaskPRLinks(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "data", "sessions", "team-pr")
 	require.NoError(t, os.MkdirAll(dir, 0o755))

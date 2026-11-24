@@ -4247,8 +4247,8 @@ schemas keep their existing ordering behavior.
   `internal/parser/openclaw_sqlite.go`.
 - **Shell commands:** Rechecked 2026-11-23 at the pinned commit. The
   [`exec` tool](https://github.com/openclaw/openclaw/blob/40d31f34813c2a01284b097c0d0d785fbb173400/src/agents/bash-tools.exec.ts)
-  accepts a `command` string. `TestToolPRLinksExecAndUncalledFunctionFilter`
-  covers indexing it for PR search.
+  accepts a `command` string. `TestToolCallPRLinksDirectFormats`
+  covers extracting PR links from it.
 - **Source selection (rechecked 2026-09-27):** Isolated duplicate-file fixtures
   verify that discovery and session-ID lookup select the same legacy copy
   across configured roots: live files before archives, then the newer copy.

@@ -37,6 +37,10 @@ func pdBaseSession() db.Session {
 }
 
 func TestCompareSessionFields(t *testing.T) {
+	first, ok := parser.NewPRLink("https://github.com/example/repo/pull/1", "example/repo", 1)
+	require.True(t, ok)
+	second, ok := parser.NewPRLink("https://github.com/example/repo/pull/2", "example/repo", 2)
+	require.True(t, ok)
 	type want struct {
 		field         string
 		stored        string
@@ -51,6 +55,11 @@ func TestCompareSessionFields(t *testing.T) {
 	}{
 		{
 			name: "identical sessions produce no diffs",
+		},
+		{
+			name:     "PR link order does not change the session",
+			stored:   func(s *db.Session) { s.PRLinks = []db.PRLink{first, second} },
+			prepared: func(s *db.Session) { s.PRLinks = []db.PRLink{second, first} },
 		},
 		{
 			name:   "message count drift",
@@ -2600,16 +2609,4 @@ func TestStripVirtualSourceSuffixVisualStudioCopilot(t *testing.T) {
 	)
 	assert.Equal(t, tracePath, stripVirtualSourceSuffix(virtual),
 		"the conversation suffix must strip to the physical trace path")
-}
-
-func TestCompareSessionFieldsPRLinkOrder(t *testing.T) {
-	first, ok := parser.NewPRLink("https://github.com/example/repo/pull/1", "example/repo", 1)
-	require.True(t, ok)
-	second, ok := parser.NewPRLink("https://github.com/example/repo/pull/2", "example/repo", 2)
-	require.True(t, ok)
-	stored := pdBaseSession()
-	prepared := pdBaseSession()
-	stored.PRLinks = []db.PRLink{first, second}
-	prepared.PRLinks = []db.PRLink{second, first}
-	assert.Empty(t, compareSessionFields(&stored, prepared))
 }

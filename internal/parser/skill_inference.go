@@ -70,7 +70,7 @@ func inferCodexSkillNameWithBase(ctx context.Context, toolName, inputJSON, fallb
 	if !strings.Contains(cmd, "SKILL.md") {
 		return ""
 	}
-	baseDir := strings.TrimSpace(ToolInputWorkdir(inputJSON))
+	baseDir := ToolInputWorkdir(inputJSON)
 	if baseDir == "" {
 		baseDir = fallbackBaseDir
 	}
@@ -252,7 +252,7 @@ func inferSkillNameFromJSONPaths(ctx context.Context, inputJSON string) string {
 	if trimmed == "" {
 		return ""
 	}
-	baseDir := strings.TrimSpace(ToolInputWorkdir(trimmed))
+	baseDir := ToolInputWorkdir(trimmed)
 	if !gjson.Valid(trimmed) {
 		for _, path := range skillPathsFromText(trimmed) {
 			if name := skillNameFromPath(ctx, path, baseDir); name != "" {
@@ -470,7 +470,7 @@ func ToolInputWorkdir(inputJSON string) string {
 	}
 	g := gjson.Parse(trimmed)
 	for _, key := range []string{"workdir", "cwd", "working_directory"} {
-		if s := g.Get(key).Str; strings.TrimSpace(s) != "" {
+		if s := strings.TrimSpace(g.Get(key).Str); s != "" {
 			return s
 		}
 	}

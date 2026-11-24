@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -268,7 +269,7 @@ func refreshSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, i
 	if err != nil {
 		return err
 	}
-	tools, err := storedToolCallPRLinksTx(ctx, tx, id, cwd, remote)
+	tools, err := storedToolCallPRLinksTx(ctx, tx, id, cwd, remote, math.MaxInt, &sharedPRContext{})
 	if err != nil {
 		return err
 	}
@@ -304,8 +305,8 @@ func appendSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id
 	storedLinks := DecodePRLinks(stored)
 	// Only shell calls add to depends, so a new remote-dependent link implies one ran.
 	if len(parser.CombinePRLinks(storedLinks, depends)) > len(parser.CombinePRLinks(storedLinks)) {
-		sharedContext, err = priorBashContextChangeTx(ctx, tx, id, cwd, messages[0].Ordinal)
-		if err != nil {
+		sharedContext = sharedPRContext{}
+		if _, err := storedToolCallPRLinksTx(ctx, tx, id, cwd, remote, messages[0].Ordinal, &sharedContext); err != nil {
 			return err
 		}
 		if sharedContext.directory || sharedContext.repository {
@@ -369,10 +370,8 @@ func (db *DB) upgradePromptPRLinksTx(ctx context.Context, tx *sql.Tx) error {
 type sharedPRContext struct{ directory, repository bool }
 
 func (c *sharedPRContext) add(directory, repository bool) {
-	if c != nil {
-		c.directory = c.directory || directory
-		c.repository = c.repository || repository
-	}
+	c.directory = c.directory || directory
+	c.repository = c.repository || repository
 }
 
 func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote string, sharedContext sharedPRContext, change *sharedPRContext, depends *[]PRLink) ([]PRLink, error) {
@@ -456,13 +455,7 @@ func toolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string
 				state = *sharedContext
 			}
 			var change sharedPRContext
-			var contextChange *sharedPRContext
-			var bareDependency *[]PRLink
-			if call.Category == "Bash" {
-				contextChange = &change
-				bareDependency = depends
-			}
-			links, err := callPRLinks(ctx, call.Category, call.ToolName, call.InputJSON, cwd, remote, state, contextChange, bareDependency)
+			links, err := callPRLinks(ctx, call.Category, call.ToolName, call.InputJSON, cwd, remote, state, &change, depends)
 			if err != nil {
 				return nil, err
 			}
@@ -478,39 +471,20 @@ func toolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string
 	return parser.CombinePRLinks(lists...), nil
 }
 
-func priorBashContextChangeTx(ctx context.Context, tx transactionQueries, id, cwd string, before int) (sharedPRContext, error) {
-	rows, err := tx.Query(`SELECT t.tool_name,t.input_json FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND t.category='Bash' AND t.input_json IS NOT NULL AND m.ordinal<? ORDER BY m.ordinal,t.id`, id, before)
-	if err != nil {
-		return sharedPRContext{}, err
-	}
-	defer rows.Close()
-	var result sharedPRContext
-	for rows.Next() {
-		call := ToolCall{Category: "Bash"}
-		if err := rows.Scan(&call.ToolName, &call.InputJSON); err != nil {
-			return sharedPRContext{}, err
-		}
-		if _, err := toolCallPRLinks(ctx, []Message{{ToolCalls: []ToolCall{call}}}, cwd, "", &result, nil); err != nil {
-			return sharedPRContext{}, err
-		}
-	}
-	return result, rows.Err()
-}
-
-func storedToolCallPRLinksTx(ctx context.Context, tx transactionQueries, id, cwd, remote string) ([]PRLink, error) {
-	rows, err := tx.Query(`SELECT t.category, t.tool_name, t.input_json FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND t.category IN ('Bash','Task') AND t.input_json IS NOT NULL ORDER BY m.ordinal, t.id`, id)
+// storedToolCallPRLinksTx replays stored calls before an ordinal, leaving their shell changes in state.
+func storedToolCallPRLinksTx(ctx context.Context, tx transactionQueries, id, cwd, remote string, before int, state *sharedPRContext) ([]PRLink, error) {
+	rows, err := tx.Query(`SELECT t.category, t.tool_name, t.input_json FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND t.category IN ('Bash','Task') AND t.input_json IS NOT NULL AND m.ordinal<? ORDER BY m.ordinal, t.id`, id, before)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var lists [][]PRLink
-	changed := sharedPRContext{}
 	for rows.Next() {
 		var call ToolCall
 		if err := rows.Scan(&call.Category, &call.ToolName, &call.InputJSON); err != nil {
 			return nil, err
 		}
-		links, err := toolCallPRLinks(ctx, []Message{{ToolCalls: []ToolCall{call}}}, cwd, remote, &changed, nil)
+		links, err := toolCallPRLinks(ctx, []Message{{ToolCalls: []ToolCall{call}}}, cwd, remote, state, nil)
 		if err != nil {
 			return nil, err
 		}
