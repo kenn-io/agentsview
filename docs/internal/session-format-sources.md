@@ -3129,14 +3129,14 @@ schemas keep their existing ordering behavior.
 - **Team usage:** The
   [Admin API](https://cursor.com/docs/account/teams/admin-api), reverified
   2026-11-24, documents numeric user IDs in paginated daily usage data and as a
-  filter for usage events; its usage-event example does not include a user ID. An unfiltered sync
-  uses member-filtered responses to match accounts and records the matched
+  filter for usage events; its usage-event example does not include a user ID.
+  An unfiltered sync uses member-filtered responses to match accounts and records the matched
   account and unfiltered fetch completion time in separate columns. Events
   absent from that unfiltered fetch wait for a later sync. A later empty poll
   replaces an earlier covered account-hour with zero usage. Archives with
   account stamps require data version 185 or newer. The event's original
   `user_id`, `user_email`, and dedup key remain unchanged. Reporting schema 7
-  puts older-poll usage in a release part tied to the account snapshot.
+  exports event identities and account poll times for cross-archive reconciliation.
 
 - **Dialogue projection:** Reverified 2026-10-17 against the JSONL parser and
   shared block fixtures. Assistant text and thinking blocks remain separate.

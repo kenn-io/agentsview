@@ -11,6 +11,9 @@ The latest release is
 
 **Bug fixes**
 
+- Reporting schema 7 lets integrations count shared Cursor billing events once
+  across overlapping archives while retaining events unique to each archive.
+
 - `agentsview source import --type gemini-apps` now imports real Google
   Takeout exports. It used to reject every export with `input does not contain
   a Gemini Apps My Activity HTML document`, because it expected a layout that

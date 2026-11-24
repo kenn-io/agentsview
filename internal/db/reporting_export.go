@@ -9,7 +9,6 @@ import (
 	"math"
 	"slices"
 	"sort"
-	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/activity"
@@ -108,8 +107,13 @@ func (db *DB) ExportReportingDay(
 	if err != nil {
 		return export.ReportingDay{}, err
 	}
-	if export.IsAccountReportingSchema(schemaVersion) {
-		if err := db.loadReportingAccountUsage(ctx, tx, date, date.Add(time.Duration(hourCount)*time.Hour), schemaVersion, &source); err != nil {
+	if schemaVersion == export.ReportingAccountSchemaVersion {
+		if err := db.loadReportingAccountUsage(ctx, tx, date, date.Add(time.Duration(hourCount)*time.Hour), &source); err != nil {
+			return export.ReportingDay{}, err
+		}
+	}
+	if schemaVersion == export.ReportingCursorSchemaVersion {
+		if err := db.loadReportingCursorLedger(ctx, tx, date, date.Add(time.Duration(hourCount)*time.Hour), &source); err != nil {
 			return export.ReportingDay{}, err
 		}
 	}
@@ -232,8 +236,13 @@ func (db *DB) ExportReportingDigest(
 	if err != nil {
 		return nil, err
 	}
-	if export.IsAccountReportingSchema(schemaVersion) {
-		if err := db.loadReportingAccountUsage(ctx, tx, from, unionEnd, schemaVersion, &source); err != nil {
+	if schemaVersion == export.ReportingAccountSchemaVersion {
+		if err := db.loadReportingAccountUsage(ctx, tx, from, unionEnd, &source); err != nil {
+			return nil, err
+		}
+	}
+	if schemaVersion == export.ReportingCursorSchemaVersion {
+		if err := db.loadReportingCursorLedger(ctx, tx, from, unionEnd, &source); err != nil {
 			return nil, err
 		}
 	}
@@ -324,7 +333,7 @@ func reportingHoursFromSource(
 	for _, session := range mergeReportingSessions(source.activitySessions, source.usageSessions) {
 		machines[source.machineID(session.Machine, schemaVersion)] = true
 	}
-	if len(source.standaloneUsage) > 0 {
+	if len(source.standaloneUsage) > 0 || len(source.cursorEvents) > 0 {
 		machines[source.machineID("", schemaVersion)] = true
 	}
 	for i := range hours {
@@ -344,11 +353,10 @@ func reportingHoursFromSource(
 			hours[i].Machines[machine] = part
 		}
 	}
-	if len(projectKeys) == 0 {
+	if len(projectKeys) == 0 && schemaVersion == export.ReportingAccountSchemaVersion {
 		type accountHour struct {
-			account  string
-			index    int
-			released bool
+			account string
+			index   int
 		}
 		groups := map[accountHour][]activity.UsageRow{}
 		polled := map[accountHour]string{}
@@ -357,7 +365,7 @@ func reportingHoursFromSource(
 			if !ok {
 				continue
 			}
-			key := accountHour{row.account, index, row.released}
+			key := accountHour{row.account, index}
 			if !row.empty {
 				groups[key] = append(groups[key], row.usage)
 			} else if _, ok := groups[key]; !ok {
@@ -373,9 +381,7 @@ func reportingHoursFromSource(
 			if err != nil {
 				return nil, err
 			}
-			if !key.released {
-				part.PolledAt = polled[key]
-			}
+			part.PolledAt = polled[key]
 			part.Usage, part.HasData, err = reportingUsageForHour(start, start.Add(time.Hour), rows, nil, nil)
 			if err != nil {
 				return nil, err
@@ -384,11 +390,19 @@ func reportingHoursFromSource(
 			if err != nil {
 				return nil, err
 			}
-			account := key.account
-			if key.released {
-				account = cursorReleasePrefix + strings.TrimPrefix(account, cursorAccountPrefix)
+			hours[key.index].Machines[key.account] = part
+		}
+	}
+	if schemaVersion == export.ReportingCursorSchemaVersion && len(projectKeys) == 0 {
+		for _, row := range source.cursorEvents {
+			if index, ok := reportingHourIndex(date, date.Add(time.Duration(hourCount)*time.Hour), row.at); ok {
+				hours[index].CursorEvents = append(hours[index].CursorEvents, row.event)
 			}
-			hours[key.index].Machines[account] = part
+		}
+		for _, row := range source.cursorPolls {
+			if index, ok := reportingHourIndex(date, date.Add(time.Duration(hourCount)*time.Hour), row.at); ok {
+				hours[index].CursorPolls = append(hours[index].CursorPolls, row.poll)
+			}
 		}
 	}
 	for i := range hours {
@@ -436,6 +450,9 @@ func reportingHoursFromMachineSource(
 	if machine == "" {
 		standaloneUsage = slices.Clone(standaloneUsage)
 		for _, row := range source.accountUsage {
+			standaloneUsage = append(standaloneUsage, row.usage)
+		}
+		for _, row := range source.cursorEvents {
 			standaloneUsage = append(standaloneUsage, row.usage)
 		}
 	}
@@ -694,7 +711,7 @@ type reportingAccountRow struct {
 	usage             activity.UsageRow
 	account, polledAt string
 	at                time.Time
-	empty, released   bool
+	empty             bool
 }
 
 const reportingCursorHour = `(agentsview_timestamp_unix_micro(occurred_at) / 3600000000 - (agentsview_timestamp_unix_micro(occurred_at) < 0 AND agentsview_timestamp_unix_micro(occurred_at) % 3600000000 != 0)) * 3600`
@@ -705,7 +722,7 @@ const reportingEmptyCursorPollsQuery = `SELECT account_user_id, hour_start, poll
 		WHERE hour_start >= ? AND hour_start < ? AND NOT EXISTS (
 			SELECT 1 FROM cursor_usage_events WHERE agent='cursor' AND account_user_id = poll.account_user_id AND occurred_at >= strftime('%Y-%m-%dT%H:%M:%SZ', poll.hour_start - 1, 'unixepoch') AND occurred_at < strftime('%Y-%m-%dT%H:%M:%SZ', poll.hour_start + 3601, 'unixepoch') AND ` + reportingCursorHour + ` = poll.hour_start AND account_polled_at >= poll.polled_at)`
 
-func (db *DB) loadReportingAccountUsage(ctx context.Context, tx *sql.Tx, start, end time.Time, schemaVersion int, source *reportingExportSource) error {
+func (db *DB) loadReportingAccountUsage(ctx context.Context, tx *sql.Tx, start, end time.Time, source *reportingExportSource) error {
 	var exists bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='cursor_usage_events')`).Scan(&exists); err != nil {
 		return err
@@ -713,14 +730,10 @@ func (db *DB) loadReportingAccountUsage(ctx context.Context, tx *sql.Tx, start, 
 	if !exists || !start.Before(end) {
 		return nil
 	}
-	filter := ` WHERE account_polled_at = latest_poll AND account_polled_at >= COALESCE((SELECT polled_at FROM cursor_account_polls WHERE account_user_id = event.account_user_id AND hour_start = ` + reportingCursorHour + `),'')`
-	if schemaVersion == export.ReportingReleaseSchemaVersion {
-		filter = ""
-	}
-	rows, err := tx.QueryContext(ctx, `SELECT occurred_at, agentsview_timestamp_unix_micro(occurred_at), COALESCE(NULLIF(model, ''), '<unknown>'), input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, charged_microdollars, dedup_key, account_user_id, account_polled_at, max(latest_poll, COALESCE((SELECT polled_at FROM cursor_account_polls WHERE account_user_id = event.account_user_id AND hour_start = `+reportingCursorHour+`),'')) FROM (
+	rows, err := tx.QueryContext(ctx, `SELECT occurred_at, agentsview_timestamp_unix_micro(occurred_at), COALESCE(NULLIF(model, ''), '<unknown>'), input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, charged_microdollars, dedup_key, account_user_id, account_polled_at FROM (
 		SELECT *, max(account_polled_at) OVER (`+reportingCursorPollWindow+`) AS latest_poll FROM cursor_usage_events
 		WHERE agent = 'cursor' AND account_user_id != '' AND account_polled_at != '' AND occurred_at >= ? AND occurred_at < ? AND agentsview_timestamp_unix_micro(occurred_at) >= ? AND agentsview_timestamp_unix_micro(occurred_at) < ?)
-		AS event`+filter,
+		AS event WHERE account_polled_at = latest_poll AND account_polled_at >= COALESCE((SELECT polled_at FROM cursor_account_polls WHERE account_user_id = event.account_user_id AND hour_start = `+reportingCursorHour+`),'')`,
 		start.Add(-time.Second).UTC().Format(time.RFC3339Nano), end.Add(time.Second).UTC().Format(time.RFC3339Nano), start.UnixMicro(), end.UnixMicro())
 	if err != nil {
 		return fmt.Errorf("querying Cursor account usage: %w", err)
@@ -731,12 +744,9 @@ func (db *DB) loadReportingAccountUsage(ctx context.Context, tx *sql.Tx, start, 
 		var r reportingAccountRow
 		var input, output, write, read int
 		var occurredMicros int64
-		var latest string
-		if err := rows.Scan(&r.usage.Timestamp, &occurredMicros, &r.usage.Model, &input, &output, &write, &read, &r.usage.Cost, &r.usage.UsageDedupKey, &r.account, &r.polledAt, &latest); err != nil {
+		if err := rows.Scan(&r.usage.Timestamp, &occurredMicros, &r.usage.Model, &input, &output, &write, &read, &r.usage.Cost, &r.usage.UsageDedupKey, &r.account, &r.polledAt); err != nil {
 			return err
 		}
-		r.released = r.polledAt < latest
-		r.polledAt = latest
 		r.account = cursorAccountPrefix + r.account
 		r.at = time.UnixMicro(occurredMicros).UTC()
 		r.usage.Agent = "cursor"
@@ -797,8 +807,8 @@ func (db *DB) reportingStandaloneUsageCandidatesFrom(
 	)
 	source := `SELECT * FROM cursor_usage_events WHERE occurred_at >= ? AND occurred_at <= ?`
 	accountFilter := ""
-	if schemaVersion == export.ReportingReleaseSchemaVersion {
-		accountFilter = " WHERE NOT (agent = 'cursor' AND account_user_id != '' AND account_polled_at != '')"
+	if schemaVersion == export.ReportingCursorSchemaVersion {
+		accountFilter = " WHERE agent != 'cursor'"
 	} else if export.IsAccountReportingSchema(schemaVersion) {
 		source = `SELECT *, max(account_polled_at) OVER (` + reportingCursorPollWindow + `) AS latest_poll FROM cursor_usage_events WHERE occurred_at >= ? AND occurred_at <= ?`
 		accountFilter = " WHERE NOT (agent = 'cursor' AND account_user_id != '' AND account_polled_at != '' AND account_polled_at = latest_poll AND account_polled_at >= COALESCE((SELECT polled_at FROM cursor_account_polls WHERE account_user_id = event.account_user_id AND hour_start = " + reportingCursorHour + "),''))"

@@ -79,8 +79,12 @@ func TestExportReportingCursorAccountHour(t *testing.T) {
 	out, _, err := executeExportSessionsCommand(newExportReportingTestRoot(now), "export", "hour", "--schema-version", "7", "--by-machine", "2026-07-28-10")
 	require.NoError(t, err)
 	var result struct {
-		Machines map[string]any `json:"machines"`
+		Machines     map[string]any `json:"machines"`
+		CursorEvents []struct {
+			Key string `json:"key"`
+		} `json:"cursor_events"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(out), &result))
-	assert.Contains(t, result.Machines, "cursor-account:12")
+	require.Len(t, result.CursorEvents, 1)
+	assert.Equal(t, db.CursorUsageEventDedupKey(event), result.CursorEvents[0].Key)
 }

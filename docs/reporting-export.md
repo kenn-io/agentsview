@@ -86,12 +86,23 @@ change stream keep the original IDs. If your reports mix schemas 5 and 6, those
 machines have different IDs and can be counted twice. Use the same schema
 version across reporters.
 
-Schema 7 puts older-poll usage in `cursor-release:<user_id>` instead of
-`archive:<archive_id>`. For each account and hour, choose the newest
-`cursor-account:<user_id>` snapshot and include the release part from that same
-archive, if present. Sum all archive parts separately. Schemas 5 and 6 lack
-the information needed to reconcile overlapping account usage this way.
-Schema 7 also hashes machine IDs starting with `cursor-release:`.
+Schema 7 reports Cursor billing events in each hour's `cursor_events` list and
+account poll times in `cursor_polls`. Events carry a stable `key`, model, token
+counts, cost in microdollars, account ID, and poll time. Polls carry an account
+ID and the newest poll time observed for that account and hour, including empty
+polls. Both lists are sorted by key or account and omitted when empty. Scoped
+exports omit them. Cursor events remain in the whole-hour total but are omitted
+from machine parts. Other standalone usage stays in the archive part.
+
+To combine schema 7 reports, union events by `key` across source archives for the
+hour. Choose the event copy with the newest `polled_at`, breaking ties by the
+lowest source device ID. Credit its account only when its stamp matches the
+newest poll for that account across all sources. Otherwise count it under the
+archive of the lowest-ID device holding the event. This keeps unique events from
+older archives and counts shared events once, including after an empty poll.
+Schemas 5 and 6 lack the event identities needed for this reconciliation. Use
+one schema version across reporters. Schema 7 uses the same machine ID hashing
+as schema 6.
 
 Your downstream integration can pick one snapshot per originating machine and
 UTC hour before summing totals. Dropping an entire overlapping archive would

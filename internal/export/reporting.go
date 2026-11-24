@@ -3,7 +3,9 @@ package export
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/money"
@@ -21,8 +23,8 @@ const (
 	ReportingJointSchemaVersion = 5
 	// ReportingAccountSchemaVersion adds Cursor account usage parts.
 	ReportingAccountSchemaVersion = 6
-	// ReportingReleaseSchemaVersion separates older Cursor account usage.
-	ReportingReleaseSchemaVersion = 7
+	// ReportingCursorSchemaVersion adds Cursor event and poll ledgers.
+	ReportingCursorSchemaVersion = 7
 )
 
 // IsSupportedReportingSchemaVersion reports whether reporting exports can
@@ -38,12 +40,33 @@ func IsJointReportingSchema(version int) bool {
 
 // IsAccountReportingSchema reports whether the schema includes account parts.
 func IsAccountReportingSchema(version int) bool {
-	return version == ReportingAccountSchemaVersion || version == ReportingReleaseSchemaVersion
+	return version == ReportingAccountSchemaVersion || version == ReportingCursorSchemaVersion
 }
 
 // ReportingHour is one immutable UTC-hour export. Digest identifies the
 // canonical document body with the derived Digest field omitted.
+// ReportingCursorEvent identifies one Cursor billing event across archives.
+type ReportingCursorEvent struct {
+	Key              string      `json:"key"`
+	Model            string      `json:"model"`
+	InputTokens      int64       `json:"input_tokens"`
+	OutputTokens     int64       `json:"output_tokens"`
+	CacheWriteTokens int64       `json:"cache_write_tokens"`
+	CacheReadTokens  int64       `json:"cache_read_tokens"`
+	Cost             money.Money `json:"cost"`
+	Account          string      `json:"account"`
+	PolledAt         string      `json:"polled_at"`
+}
+
+// ReportingCursorPoll records the latest observed poll for an account-hour.
+type ReportingCursorPoll struct {
+	Account  string `json:"account"`
+	PolledAt string `json:"polled_at"`
+}
+
 type ReportingHour struct {
+	CursorEvents   []ReportingCursorEvent   `json:"cursor_events,omitempty"`
+	CursorPolls    []ReportingCursorPoll    `json:"cursor_polls,omitempty"`
 	PolledAt       string                   `json:"polled_at,omitempty"`
 	SchemaVersion  int                      `json:"schema_version"`
 	BucketSeconds  int                      `json:"bucket_seconds,omitzero"`
@@ -250,6 +273,8 @@ func FinalizeReportingHour(hour ReportingHour) (ReportingHour, []byte, error) {
 
 	digest, err := DigestCanonical(reportingHourDigestInput{
 		SchemaVersion:  hour.SchemaVersion,
+		CursorEvents:   hour.CursorEvents,
+		CursorPolls:    hour.CursorPolls,
 		PolledAt:       hour.PolledAt,
 		BucketSeconds:  hour.BucketSeconds,
 		Period:         hour.Period,
@@ -343,6 +368,8 @@ func FinalizeReportingDay(day ReportingDay) (ReportingDay, []byte, error) {
 }
 
 type reportingHourDigestInput struct {
+	CursorEvents   []ReportingCursorEvent   `json:"cursor_events,omitempty"`
+	CursorPolls    []ReportingCursorPoll    `json:"cursor_polls,omitempty"`
 	PolledAt       string                   `json:"polled_at,omitempty"`
 	SchemaVersion  int                      `json:"schema_version"`
 	BucketSeconds  int                      `json:"bucket_seconds,omitzero"`
@@ -364,6 +391,10 @@ func parseReportingHour(value string) (time.Time, error) {
 }
 
 func normalizeReportingHour(hour ReportingHour) ReportingHour {
+	hour.CursorEvents = slices.Clone(hour.CursorEvents)
+	hour.CursorPolls = slices.Clone(hour.CursorPolls)
+	slices.SortFunc(hour.CursorEvents, func(a, b ReportingCursorEvent) int { return strings.Compare(a.Key, b.Key) })
+	slices.SortFunc(hour.CursorPolls, func(a, b ReportingCursorPoll) int { return strings.Compare(a.Account, b.Account) })
 	hour.Activity.Buckets = cloneOrEmpty(hour.Activity.Buckets)
 	hour.Activity.ByModel = cloneOrEmpty(hour.Activity.ByModel)
 	hour.Activity.ByAgent = cloneOrEmpty(hour.Activity.ByAgent)
