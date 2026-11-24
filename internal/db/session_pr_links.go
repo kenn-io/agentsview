@@ -662,7 +662,7 @@ func retainStoredToolPRLinksTx(tx transactionQueries, id string) error {
 	return nil
 }
 
-const toolPRLinksDataVersion = 188
+const toolPRLinksDataVersion = 189
 
 func (db *DB) upgradeToolPRLinksTx(ctx context.Context, tx *sql.Tx) error {
 	version, _, err := readUserVersion(ctx, tx)

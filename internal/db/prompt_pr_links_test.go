@@ -365,7 +365,7 @@ func TestToolPRLinksArchiveUpgrade(t *testing.T) {
 		want            []string
 	}{
 		{"tool upgrade", 187, "review https://github.com/example/repo/pull/41", "gh pr view 42 -R github.com/example/repo", []string{"https://github.com/example/repo/pull/41", "https://github.com/example/repo/pull/42"}},
-		{"task pull", toolPRLinksDataVersion - 1, "", "https://github.com/example/repo/pull/44", []string{"https://github.com/example/repo/pull/44"}},
+		{"task pull", 188, "", "https://github.com/example/repo/pull/44", []string{"https://github.com/example/repo/pull/44"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "archive.db")
@@ -378,6 +378,11 @@ func TestToolPRLinksArchiveUpgrade(t *testing.T) {
 			})
 			s := Session{ID: "tool-upgrade", Project: "project", Machine: "local", Agent: "claude"}
 			require.NoError(t, d.UpsertSession(t.Context(), s))
+			for _, id := range []string{"pi-current", "pi-pending"} {
+				require.NoError(t, d.UpsertSession(t.Context(), Session{ID: id, Project: "project", Machine: "local", Agent: "pi"}))
+			}
+			require.NoError(t, d.SetSessionDataVersion(t.Context(), "pi-current", tc.version))
+			require.NoError(t, d.SetSessionDataVersion(t.Context(), "pi-pending", 187))
 			category, field := "Bash", "command"
 			if strings.HasPrefix(tc.name, "task ") {
 				category, field = "Task", "prompt"
@@ -403,6 +408,12 @@ func TestToolPRLinksArchiveUpgrade(t *testing.T) {
 				urls = append(urls, link.URL)
 			}
 			assert.Equal(t, tc.want, urls)
+			assert.Equal(t, 187, d.GetSessionDataVersion(t.Context(), "pi-pending"))
+			if tc.version == 187 {
+				assert.Equal(t, 187, d.GetSessionDataVersion(t.Context(), "pi-current"))
+			} else {
+				assert.Equal(t, 189, d.GetSessionDataVersion(t.Context(), "pi-current"))
+			}
 		})
 	}
 }
