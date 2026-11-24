@@ -113,7 +113,8 @@ func (db *DB) ExportReportingDay(
 		}
 	}
 	if schemaVersion == export.ReportingCursorSchemaVersion && len(opts.ProjectKeys) == 0 {
-		if err := db.loadReportingCursorPolls(ctx, tx, date, date.Add(time.Duration(hourCount)*time.Hour), &source); err != nil {
+		source.cursorPolls, err = loadReportingCursorPolls(ctx, tx, date, date.Add(time.Duration(hourCount)*time.Hour))
+		if err != nil {
 			return export.ReportingDay{}, err
 		}
 	}
@@ -242,7 +243,8 @@ func (db *DB) ExportReportingDigest(
 		}
 	}
 	if schemaVersion == export.ReportingCursorSchemaVersion && len(opts.ProjectKeys) == 0 {
-		if err := db.loadReportingCursorPolls(ctx, tx, from, unionEnd, &source); err != nil {
+		source.cursorPolls, err = loadReportingCursorPolls(ctx, tx, from, unionEnd)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -402,6 +404,7 @@ func reportingHoursFromSource(
 		for _, row := range source.cursorPolls {
 			if index, ok := reportingHourIndex(date, date.Add(time.Duration(hourCount)*time.Hour), row.at); ok {
 				hours[index].CursorPolls = append(hours[index].CursorPolls, row.poll)
+				hours[index].HasData = true
 			}
 		}
 	}
@@ -759,24 +762,12 @@ func (db *DB) loadReportingAccountUsage(ctx context.Context, tx *sql.Tx, start, 
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	emptyRows, err := tx.QueryContext(ctx, reportingEmptyCursorPollsQuery, start.Unix(), end.Unix())
+	polls, err := loadReportingCursorPolls(ctx, tx, start, end)
 	if err != nil {
-		return fmt.Errorf("querying empty Cursor account polls: %w", err)
-	}
-	defer emptyRows.Close()
-	for emptyRows.Next() {
-		var row reportingAccountRow
-		var seconds int64
-		if err := emptyRows.Scan(&row.account, &seconds, &row.polledAt); err != nil {
-			return err
-		}
-		row.account = cursorAccountPrefix + row.account
-		row.at = time.Unix(seconds, 0).UTC()
-		row.empty = true
-		result = append(result, row)
-	}
-	if err := emptyRows.Err(); err != nil {
 		return err
+	}
+	for _, poll := range polls {
+		result = append(result, reportingAccountRow{account: cursorAccountPrefix + poll.poll.Account, polledAt: poll.poll.PolledAt, at: poll.at, empty: true})
 	}
 	source.accountUsage = result
 	return nil

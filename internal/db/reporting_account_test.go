@@ -411,3 +411,26 @@ func TestCursorAccountReportingSharedUsageRead(t *testing.T) {
 		}
 	}
 }
+
+func TestCursorAccountReportingEmptyPollHasData(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	require.NoError(t, d.ConfigureArtifactLocalMachine(ctx, "host-a"))
+	start := time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC)
+	poll := start.Add(24 * time.Hour)
+	require.NoError(t, d.RecordCursorAccountPoll(ctx, nil, poll, []CursorAccountHour{{UserID: "12", Start: start}}))
+	date := start.Truncate(24 * time.Hour)
+	day, err := d.ExportReportingDay(ctx, ReportingExportOptions{Date: date, Now: poll.Add(24 * time.Hour), SchemaVersion: 7, ByMachine: true})
+	require.NoError(t, err)
+	assert.True(t, day.HasData)
+	assert.True(t, day.Hours[10].HasData)
+	assert.Empty(t, day.Hours[10].CursorEvents)
+	require.Len(t, day.Hours[10].CursorPolls, 1)
+	assert.Equal(t, "12", day.Hours[10].CursorPolls[0].Account)
+	assert.False(t, day.Hours[9].HasData)
+	digest, err := d.ExportReportingDigest(ctx, ReportingDigestExportOptions{From: date, To: date, Now: poll.Add(24 * time.Hour), SchemaVersion: 7, ByMachine: true})
+	require.NoError(t, err)
+	require.Len(t, digest, 1)
+	assert.True(t, digest[0].HasData)
+	assert.Equal(t, reportingDigestDayFromDay(day), digest[0])
+}

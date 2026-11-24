@@ -87,7 +87,7 @@ machines have different IDs and can be counted twice. Use the same schema
 version across reporters.
 
 Schema 7 reports Cursor billing events in each hour's `cursor_events` list and
-account poll times in `cursor_polls`. Events carry a stable `key`, model, token
+account poll times in `cursor_polls`. The `key` fingerprints stored event fields. Events also carry the model, token
 counts, cost in microdollars, account ID, poll time, and `at`, the event time in
 UTC RFC3339Nano. A poll is listed when it is newer than every event for that
 account and hour. The newest poll is the maximum of the event poll times and
