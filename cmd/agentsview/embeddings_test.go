@@ -1695,3 +1695,23 @@ func TestDirectListGenerationsVersionMismatchSurfacesRebuildRequired(t *testing.
 	assert.Contains(t, err.Error(), "embeddings build",
 		"the error must carry the rebuild remediation")
 }
+
+func TestCountEmbeddingStoreUnitsRoles(t *testing.T) {
+	dataDir := t.TempDir()
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	dbtest.SeedSessionWithMessages(t, database, "s", "project", []db.Message{dbtest.UserMsg("s", 0, "question"), dbtest.AsstMsg("s", 1, "answer")})
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `INSERT INTO recall_extract_generations (fingerprint, state, model, segmenter, params_json) VALUES ('extract-active', 'active', 'extract-model', 'turns-v1', '{}')`)
+		return err
+	}))
+	_, err := database.InsertRecallEntry(t.Context(), db.RecallEntry{ID: "entry", Type: "fact", Scope: "project", Status: "accepted", Title: "Fact", Body: "A fact", SourceSessionID: "s", SourceRunID: "extract-active"})
+	require.NoError(t, err)
+	cfg := vectorTestConfig(dataDir)
+	cfg.Vector.Roles = []string{"assistant"}
+	count, err := countEmbeddingStoreUnits(t.Context(), cfg, false, vector.MessageIndexSpec().Name)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+	count, err = countEmbeddingStoreUnits(t.Context(), cfg, false, vector.RecallIndexSpec().Name)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+}

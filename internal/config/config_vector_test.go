@@ -995,3 +995,14 @@ func TestVectorConfigAgents(t *testing.T) {
 		}
 	})
 }
+
+func TestVectorConfigRoles(t *testing.T) {
+	for _, roles := range [][]string{{}, {"user"}, {"assistant", "user"}} {
+		cfg := loadMinimalWithConfig(t, map[string]any{"vector": map[string]any{"roles": roles}})
+		assert.Equal(t, roles, cfg.Vector.Roles)
+	}
+	disabled := loadMinimalWithConfig(t, map[string]any{"vector": map[string]any{"roles": []string{"system"}}})
+	assert.Equal(t, []string{"system"}, disabled.Vector.Roles)
+	err := loadMinimalErrWithConfig(t, map[string]any{"vector": map[string]any{"enabled": true, "roles": []string{"system"}}})
+	require.ErrorContains(t, err, `unknown role "system"`)
+}

@@ -61,6 +61,7 @@ type BuildOptions struct {
 	IncludeAutomated bool
 	// Agents limits message scans to these agent IDs; an empty list includes all.
 	Agents []string
+	Roles  []string
 	// BatchSize is the encode batch size (config batch_size).
 	BatchSize int
 	// ModelContextTokens is the maximum tokens accepted for one input.
@@ -157,7 +158,13 @@ func (ix *Index) Build(
 	}
 	agents := normalizedAgents(o.Agents)
 	scopeAgents := strings.Join(agents, ",")
-	scopeChanged := !hasScope || storedScope != o.IncludeAutomated || storedAgents != scopeAgents
+	storedRoles, _, err := ix.metaGet(ctx, scopeRolesKey)
+	if err != nil {
+		return BuildResult{}, err
+	}
+	roles := normalizedRoles(o.Roles)
+	scopeRoles := strings.Join(roles, ",")
+	scopeChanged := !hasScope || storedScope != o.IncludeAutomated || storedAgents != scopeAgents || storedRoles != scopeRoles
 	corpusFingerprint := gen.Params[CorpusFingerprintParam]
 	storedCorpusFingerprint, hasCorpusFingerprint, err := ix.metaGet(
 		ctx, corpusFingerprintMetaKey,
@@ -223,7 +230,7 @@ func (ix *Index) Build(
 	if o.Progress != nil {
 		o.Progress(BuildProgress{Phase: "scanning"})
 	}
-	refreshStats, err := ix.refresh(ctx, src, full, o.IncludeAutomated, agents, seed)
+	refreshStats, err := ix.refresh(ctx, src, full, o.IncludeAutomated, agents, roles, seed)
 	if err != nil {
 		return BuildResult{}, err
 	}
@@ -233,6 +240,9 @@ func (ix *Index) Build(
 		}
 	}
 	if err := ix.metaSet(ctx, scopeAgentsKey, scopeAgents); err != nil {
+		return BuildResult{}, err
+	}
+	if err := ix.metaSet(ctx, scopeRolesKey, scopeRoles); err != nil {
 		return BuildResult{}, err
 	}
 	if err := ix.setIncludeAutomatedScope(ctx, o.IncludeAutomated); err != nil {
@@ -314,8 +324,12 @@ func (ix *Index) repairWithScope(
 		if err != nil {
 			return BuildResult{Fingerprint: gen.Fingerprint()}, err
 		}
-		if storedAgents != strings.Join(normalizedAgents(o.Agents), ",") || (hasAgents && !hasScope) {
-			return BuildResult{Fingerprint: gen.Fingerprint()}, errors.New("agent scope changed; run an embeddings build before repairing invalid vectors")
+		storedRoles, _, err := ix.metaGet(ctx, scopeRolesKey)
+		if err != nil {
+			return BuildResult{Fingerprint: gen.Fingerprint()}, err
+		}
+		if storedAgents != strings.Join(normalizedAgents(o.Agents), ",") || storedRoles != strings.Join(normalizedRoles(o.Roles), ",") || (hasAgents && !hasScope) {
+			return BuildResult{Fingerprint: gen.Fingerprint()}, errors.New("scope changed; run an embeddings build before repairing invalid vectors")
 		}
 	}
 	return ix.buildInvalidRepair(ctx, enc, gen, o)

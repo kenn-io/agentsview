@@ -222,11 +222,11 @@ func contentHash(content string) string {
 func (ix *Index) Refresh(
 	ctx context.Context, src UnitSource, full, includeAutomated bool, agents []string,
 ) (RefreshStats, error) {
-	return ix.refresh(ctx, src, full, includeAutomated, agents, nil)
+	return ix.refresh(ctx, src, full, includeAutomated, agents, nil, nil)
 }
 
 func (ix *Index) refresh(
-	ctx context.Context, src UnitSource, full, includeAutomated bool, agents []string, seed *reuseGeneration,
+	ctx context.Context, src UnitSource, full, includeAutomated bool, agents, roles []string, seed *reuseGeneration,
 ) (RefreshStats, error) {
 	if err := ix.requireWritable(); err != nil {
 		return RefreshStats{}, err
@@ -309,6 +309,10 @@ func (ix *Index) refresh(
 			}
 			return nil
 		}
+		visited[u.SessionID] = struct{}{}
+		if !UnitKindIncluded(roles, u.Kind) {
+			return nil
+		}
 		unchanged, evictedKeys, err := ix.upsertMirrorRow(ctx, key, u, &sentinel, seed)
 		if err != nil {
 			return fmt.Errorf("upserting mirror row %s: %w", key, err)
@@ -322,7 +326,6 @@ func (ix *Index) refresh(
 			stats.Upserted++
 		}
 		seen[key] = struct{}{}
-		visited[u.SessionID] = struct{}{}
 		return nil
 	}
 	runCap := RunMaxRunes(ix.split.MaxRunes)
@@ -767,7 +770,24 @@ func (ix *Index) Clear(ctx context.Context) error {
 }
 
 const scopeAgentsKey = "scope_agents"
+const scopeRolesKey = "scope_roles"
 
 func normalizedAgents(agents []string) []string {
 	return slices.Compact(db.SortedCopy(agents))
+}
+
+func normalizedRoles(roles []string) []string {
+	roles = slices.Compact(db.SortedCopy(roles))
+	if slices.Contains(roles, "user") && slices.Contains(roles, "assistant") {
+		return nil
+	}
+	return roles
+}
+
+// UnitKindIncluded reports whether the selected roles include an embedding unit.
+func UnitKindIncluded(roles []string, kind string) bool {
+	if len(roles) == 0 {
+		return true
+	}
+	return kind == "user" && slices.Contains(roles, "user") || kind == "run" && slices.Contains(roles, "assistant")
 }

@@ -212,6 +212,7 @@ type EncoderSet struct {
 type BuildTarget struct {
 	// Agents limits message scans to these agent IDs; an empty list includes all.
 	Agents         []string
+	Roles          []string
 	Source         UnitSource
 	Generation     kitvec.Generation
 	CorpusRevision string
@@ -489,6 +490,7 @@ func (m *Manager) runBuild(
 		RepairInvalid:      req.RepairInvalid,
 		IncludeAutomated:   req.IncludeAutomated,
 		Agents:             target.Agents,
+		Roles:              target.Roles,
 		BatchSize:          me.Settings.BatchSize,
 		ModelContextTokens: me.Settings.ModelContextTokens,
 		MaxBatchTokens:     me.Settings.MaxBatchTokens,

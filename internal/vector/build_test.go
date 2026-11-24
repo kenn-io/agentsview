@@ -1212,3 +1212,64 @@ func TestBuildAgentScopeFailureThenRestore(t *testing.T) {
 	require.NoError(t, build("claude"))
 	assert.Equal(t, []string{"a-old", "b-old"}, mirrorSessionIDs(t, ix))
 }
+
+func TestBuildRoleScopeReconciles(t *testing.T) {
+	ctx := t.Context()
+	archive := dbtest.OpenTestDB(t)
+	dbtest.SeedSessionWithMessages(t, archive, "s", "project", []db.Message{
+		dbtest.UserMsg("s", 0, "first question"), dbtest.AsstMsg("s", 1, "first answer"),
+		dbtest.AsstMsg("s", 2, "more answer"), dbtest.UserMsg("s", 3, "second question"), dbtest.AsstMsg("s", 4, "second answer"),
+	}, func(s *db.Session) { s.EndedAt = new("2024-01-01T00:00:00Z") })
+	ix := openTestIndex(t)
+	source := &agentScopeSource{DB: archive}
+	gen := fakeGeneration("fake-model")
+	build := func(roles []string, backstop bool) BuildResult {
+		result, err := ix.Build(ctx, source, fakeBuildEncoder(), gen, BuildOptions{Roles: roles, Backstop: backstop})
+		require.NoError(t, err)
+		return result
+	}
+	assert.Equal(t, 2, build([]string{"user"}, false).Fill.Documents)
+	users := mirrorDocKeys(t, ix)
+	require.Len(t, users, 2)
+	assert.Zero(t, build([]string{"user"}, true).Fill.Documents)
+	assert.Equal(t, 2, build(nil, false).Fill.Documents)
+	all := mirrorDocKeys(t, ix)
+	require.Len(t, all, 4)
+	for _, key := range users {
+		assert.Contains(t, all, key)
+	}
+	assert.Zero(t, build([]string{"assistant"}, false).Fill.Documents)
+	runs := mirrorDocKeys(t, ix)
+	require.Len(t, runs, 2)
+	assert.Equal(t, 2, build([]string{"user", "assistant"}, false).Fill.Documents)
+	assert.Equal(t, all, mirrorDocKeys(t, ix))
+	build([]string{"assistant", "user", "assistant"}, false)
+	assert.NotEmpty(t, source.since)
+	require.NoError(t, ix.metaDelete(ctx, scopeRolesKey))
+	build(nil, false)
+	assert.NotEmpty(t, source.since)
+	build([]string{"user"}, false)
+	require.NoError(t, archive.ReplaceSessionMessages(ctx, "s", []db.Message{dbtest.AsstMsg("s", 0, "answer only")}))
+	build([]string{"user"}, false)
+	assert.Empty(t, mirrorDocKeys(t, ix))
+}
+
+func TestBuildRoleScopeFailureThenRestore(t *testing.T) {
+	ctx := t.Context()
+	archive := dbtest.OpenTestDB(t)
+	dbtest.SeedSessionWithMessages(t, archive, "s", "project", []db.Message{dbtest.UserMsg("s", 0, "question"), dbtest.AsstMsg("s", 1, "answer")})
+	ix := openTestIndex(t)
+	gen := fakeGeneration("fake-model")
+	build := func(roles []string) error {
+		_, err := ix.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{Roles: roles})
+		return err
+	}
+	require.NoError(t, build([]string{"user"}))
+	_, err := ix.db.ExecContext(ctx, `CREATE TRIGGER fail_role_delete BEFORE DELETE ON vector_messages BEGIN SELECT RAISE(FAIL, 'injected failure'); END`)
+	require.NoError(t, err)
+	require.ErrorContains(t, build([]string{"assistant"}), "injected failure")
+	_, err = ix.db.ExecContext(ctx, `DROP TRIGGER fail_role_delete`)
+	require.NoError(t, err)
+	require.NoError(t, build([]string{"user"}))
+	require.Len(t, mirrorDocKeys(t, ix), 1)
+}

@@ -553,8 +553,10 @@ func countEmbeddingStoreUnits(
 	}
 	var n int
 	if _, err := source.ScanEmbeddableUnits(
-		ctx, "", includeAutomated, cfg.Vector.Agents, vector.RunMaxRunes(cfg.Vector.Embeddings.MaxInputChars), func(db.EmbeddableUnit) error {
-			n++
+		ctx, "", includeAutomated, cfg.Vector.Agents, vector.RunMaxRunes(cfg.Vector.Embeddings.MaxInputChars), func(u db.EmbeddableUnit) error {
+			if store == vector.RecallIndexSpec().Name || vector.UnitKindIncluded(cfg.Vector.Roles, u.Kind) {
+				n++
+			}
 			return nil
 		},
 	); err != nil {
@@ -656,7 +658,7 @@ func embeddingManager(
 	if store != vector.RecallIndexSpec().Name {
 		gen := vectorGeneration(cfg.Vector.Embeddings)
 		target := vector.BuildTarget{
-			Source: database, Generation: gen, Agents: cfg.Vector.Agents,
+			Source: database, Generation: gen, Agents: cfg.Vector.Agents, Roles: cfg.Vector.Roles,
 			Space: vectorSpace(cfg.Vector.Embeddings, gen),
 		}
 		return vector.NewResolvingManager(
