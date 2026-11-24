@@ -99,7 +99,7 @@ func (s *Store) activityReportLaunchers(ctx context.Context, filter db.Analytics
 		for rows.Next() {
 			var row activity.Launcher
 			var version uint64
-			if err := rows.Scan(&row.ID, &row.IsAutomated, &row.IsSubagent, &row.ParentSessionID, &row.Counted, &version); err != nil {
+			if err := rows.Scan(&row.ID, &row.IsAutomated, &row.IsSubagent, &row.ParentSessionID, &row.MatchesFilter, &version); err != nil {
 				return nil, err
 			}
 			versions[row.ID] = version

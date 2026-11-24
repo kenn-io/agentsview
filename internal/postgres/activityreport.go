@@ -83,7 +83,7 @@ func (b activityReportBackend) ActivityReportLaunchers(ctx context.Context, sess
 		var result []activity.Launcher
 		for rows.Next() {
 			var row activity.Launcher
-			if err := rows.Scan(&row.ID, &row.IsAutomated, &row.IsSubagent, &row.ParentSessionID, &row.Counted); err != nil {
+			if err := rows.Scan(&row.ID, &row.IsAutomated, &row.IsSubagent, &row.ParentSessionID, &row.MatchesFilter); err != nil {
 				return nil, err
 			}
 			result = append(result, row)

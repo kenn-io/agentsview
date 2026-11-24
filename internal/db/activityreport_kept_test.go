@@ -60,6 +60,28 @@ func keptActivityBuild(t *testing.T, d *DB, f AnalyticsFilter, q activity.Query,
 
 func clearKeptActivity(d *DB) { d.activityKept.DeleteSlots(func(string) bool { return true }) }
 
+func TestActivityOngoingUsageIgnoresHiddenRunChanges(t *testing.T) {
+	d := testDB(t)
+	keptActivitySession(t, d, "visible", "project-a", "2026-06-14")
+	q := dayQuery(t, "2026-06-14", "UTC")
+	q.Partial = true
+	f := AnalyticsFilter{Timezone: "UTC", Project: "project-a"}
+	revision, err := d.UsageChangeRevision(t.Context())
+	require.NoError(t, err)
+	insertSession(t, d, "hidden", "project-b", func(s *Session) {
+		s.RelationshipType = "subagent"
+		s.StartedAt = new("2026-06-14T10:00:00Z")
+		s.EndedAt = new("2026-06-14T10:01:00Z")
+	})
+	valid, err := d.keptActivityChangesValid(t.Context(), revision, []string{"visible"}, []string{"visible"}, f, q)
+	require.NoError(t, err)
+	assert.True(t, valid)
+	q.Partial = false
+	valid, err = d.keptActivityChangesValid(t.Context(), revision, []string{"visible"}, []string{"visible"}, f, q)
+	require.NoError(t, err)
+	assert.False(t, valid)
+}
+
 func TestActivityReportKeptReuse(t *testing.T) {
 	d := testDB(t)
 	keptActivitySessionWithClaudePair(t, d, "past", "project-a", "2026-06-14", "past-message", "past-request")

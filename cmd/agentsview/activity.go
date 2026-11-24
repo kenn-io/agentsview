@@ -173,6 +173,9 @@ func fetchHTTPActivityReport(
 	} else if err := json.Unmarshal(response.Body, &r); err != nil {
 		return activity.Report{}, err
 	}
+	if err := validateActivityReportSchema(r); err != nil {
+		return activity.Report{}, err
+	}
 	if r.Projects == nil {
 		r.Projects = map[string]export.ProjectMapEntry{}
 	}
@@ -183,6 +186,13 @@ func fetchHTTPActivityReport(
 		}
 	}
 	return r, nil
+}
+
+func validateActivityReportSchema(report activity.Report) error {
+	if report.SchemaVersion != export.ActivityReportSchemaVersion {
+		return fmt.Errorf("unsupported activity report schema %d (expected %d)", report.SchemaVersion, export.ActivityReportSchemaVersion)
+	}
+	return nil
 }
 
 func activitySessionPageCustomized(cfg ActivityReportConfig) bool {
@@ -254,6 +264,9 @@ func fetchHTTPActivitySessionPage(
 	}
 	page := result.JSON200
 	if page.Report != nil {
+		if err := validateActivityReportSchema(*page.Report); err != nil {
+			return activity.Report{}, err
+		}
 		return *page.Report, nil
 	}
 	if cfg.SessionsReportID != "" {

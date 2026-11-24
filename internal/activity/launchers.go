@@ -12,7 +12,7 @@ type Launcher struct {
 	IsAutomated     bool
 	IsSubagent      bool
 	ParentSessionID string
-	Counted         bool
+	MatchesFilter   bool
 }
 
 type Launchers struct {
@@ -25,7 +25,7 @@ func ResolveLaunchers(ctx context.Context, runs []SessionMeta, selected map[stri
 	rows := make(map[string]Launcher, len(runs))
 	var pending []string
 	for _, run := range runs {
-		rows[run.SessionID] = Launcher{ID: run.SessionID, IsAutomated: run.IsAutomated, IsSubagent: run.IsSubagent, ParentSessionID: run.ParentSessionID, Counted: selected[run.SessionID]}
+		rows[run.SessionID] = Launcher{ID: run.SessionID, IsAutomated: run.IsAutomated, IsSubagent: run.IsSubagent, ParentSessionID: run.ParentSessionID, MatchesFilter: selected[run.SessionID]}
 		if run.IsSubagent && run.ParentSessionID != "" {
 			pending = append(pending, run.ParentSessionID)
 		}
@@ -80,7 +80,7 @@ func ResolveLaunchers(ctx context.Context, runs []SessionMeta, selected map[stri
 			if !ok {
 				break
 			}
-			if current.Counted && !current.IsSubagent && !current.IsAutomated {
+			if current.MatchesFilter && !current.IsSubagent && !current.IsAutomated {
 				result.Waiting[run.SessionID] = append(result.Waiting[run.SessionID], id)
 			}
 		}

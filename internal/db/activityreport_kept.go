@@ -135,7 +135,7 @@ func (db *DB) keptActivityChangesValid(ctx context.Context, oldRevision int64, r
 		usageLowerBound := PaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
 		usageUpperBound := PaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
 		where, args := activityReportSessionSelectionWhere(filter, rangeStartUTC, rangeEndUTC)
-		if filter.ActivityNeedsEvidence() {
+		if !q.Partial && filter.ActivityNeedsEvidence() {
 			evidenceWhere, evidenceArgs := activityReportSessionSelectionWhere(AnalyticsFilter{Timezone: filter.Timezone, IncludeSubagents: true, IncludeForks: true}, rangeStartUTC, rangeEndUTC)
 			where = "(" + where + ") OR ((" + evidenceWhere + ") AND s.relationship_type = 'subagent')"
 			args = append(args, evidenceArgs...)
