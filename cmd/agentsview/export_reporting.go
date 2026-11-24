@@ -86,7 +86,7 @@ func newExportHourCommand(deps exportReportingDeps) *cobra.Command {
 	schemaVersion = bindReportingSchemaVersion(command)
 	projectKeys = bindReportingProjectKeys(command)
 	bucket = bindReportingBucket(command)
-	byMachine = command.Flags().Bool("by-machine", false, "Include snapshots by originating machine (schemas 5 and 6)")
+	byMachine = command.Flags().Bool("by-machine", false, "Include snapshots by originating machine (schemas 5, 6, and 7)")
 	return command
 }
 
@@ -138,7 +138,7 @@ func newExportDayCommand(deps exportReportingDeps) *cobra.Command {
 	schemaVersion = bindReportingSchemaVersion(command)
 	projectKeys = bindReportingProjectKeys(command)
 	bucket = bindReportingBucket(command)
-	byMachine = command.Flags().Bool("by-machine", false, "Include snapshots by originating machine (schemas 5 and 6)")
+	byMachine = command.Flags().Bool("by-machine", false, "Include snapshots by originating machine (schemas 5, 6, and 7)")
 	return command
 }
 
@@ -222,7 +222,7 @@ func newExportDigestCommand(deps exportReportingDeps) *cobra.Command {
 	schemaVersion = bindReportingSchemaVersion(command)
 	projectKeys = bindReportingProjectKeys(command)
 	bucket = bindReportingBucket(command)
-	byMachine = command.Flags().Bool("by-machine", false, "Include snapshots by originating machine (schemas 5 and 6)")
+	byMachine = command.Flags().Bool("by-machine", false, "Include snapshots by originating machine (schemas 5, 6, and 7)")
 	command.Flags().StringVar(
 		&fromValue, "from", "", "First UTC date (YYYY-MM-DD)",
 	)
@@ -253,7 +253,7 @@ func bindReportingProjectKeys(command *cobra.Command) *[]string {
 func bindReportingBucket(command *cobra.Command) *string {
 	bucket := new(string)
 	command.Flags().StringVar(bucket, "bucket", "",
-		"Bucket duration: whole-minute divisor of one hour (schemas 5 and 6; default 5m)")
+		"Bucket duration: whole-minute divisor of one hour (schemas 5, 6, and 7; default 5m)")
 	return bucket
 }
 
