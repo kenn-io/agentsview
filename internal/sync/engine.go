@@ -4066,12 +4066,10 @@ func (e *Engine) syncAll(
 	}()
 	defer e.clearCurrentProgress()
 	defer func() { e.recordStartupReconciled(ctx, stats, ctx.Err()) }()
-	ctx, finishLabels := e.prepareCodexLabelRoots(ctx)
 	stats = e.syncAllLocked(
 		ctx, onProgress, time.Time{}, nil, syncWriteDefault, true,
 		forceFullParse && !allowCachedFailures,
 	)
-	finishLabels(ctx, &stats)
 	return
 }
 
@@ -6323,6 +6321,11 @@ func (e *Engine) syncAllLocked(
 	if ctx.Err() != nil {
 		return SyncStats{Aborted: true}
 	}
+	if scope == nil {
+		var finishLabels func(context.Context, *SyncStats)
+		ctx, finishLabels = e.prepareCodexLabelRoots(ctx)
+		defer func() { finishLabels(ctx, &stats) }()
+	}
 	e.invalidateNativeTitleCache(nil)
 	ctx, closeProviderCache, err := e.withProviderFingerprintCache(ctx, nil)
 	if err != nil {
@@ -6411,6 +6414,15 @@ func (e *Engine) syncAllLocked(
 		}
 	}
 
+	if ctx.Value(codexLabelRootsPendingKey{}) != nil {
+		for i := range all {
+			if all[i].Agent == parser.AgentCodex && parser.CodexMarkedRunPath(all[i].Path) {
+				all[i].ForceParse = true
+				all[i].ForceFullParse = true
+			}
+		}
+	}
+
 	// Begin gate bookkeeping from the pre-filter discovery set: promotion
 	// needs a completion for every discovered session, so a cutoff-filtered
 	// pass must stay unpromotable (see opencode_container_gate.go).
@@ -6440,19 +6452,21 @@ func (e *Engine) syncAllLocked(
 		all = e.filterQuickSyncFiles(ctx, all, since)
 	}
 
-	if quickSyncCutoff {
+	if quickSyncCutoff && ctx.Value(codexLabelRootsPendingKey{}) != nil {
+		all = dedupeDiscoveredFilesByPreference(all, func(candidate, current parser.DiscoveredFile) bool {
+			markedCandidate := candidate.Agent == parser.AgentCodex && candidate.ForceFullParse && parser.CodexMarkedRunPath(candidate.Path)
+			markedCurrent := current.Agent == parser.AgentCodex && current.ForceFullParse && parser.CodexMarkedRunPath(current.Path)
+			if markedCandidate != markedCurrent {
+				return markedCandidate
+			}
+			return preferNewestCodexDiscoveredFile(candidate, current)
+		})
+	} else if quickSyncCutoff {
 		all = dedupeDiscoveredFilesPreferNewestCodex(all)
 	} else {
 		all = dedupeDiscoveredFiles(all)
 	}
 	all = e.dedupeClaudeDiscoveredFiles(ctx, all)
-	if ctx.Value(codexLabelRootsPendingKey{}) != nil {
-		for i := range all {
-			if all[i].Agent == parser.AgentCodex && parser.CodexMarkedRunPath(all[i].Path) {
-				all[i].ForceFullParse = true
-			}
-		}
-	}
 	if forceDiscoveredFiles {
 		for i := range all {
 			all[i].ForceParse = true

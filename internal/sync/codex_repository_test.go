@@ -333,3 +333,47 @@ func TestCodexLabeledProjectChangesWithRoots(t *testing.T) {
 		assert.Equal(t, project, session.Project)
 	}
 }
+
+func TestCodexLabelRootsRefreshDuringOrdinarySync(t *testing.T) {
+	for _, mode := range []string{"since", "then"} {
+		t.Run(mode, func(t *testing.T) {
+			database := openTestDB(t)
+			root := t.TempDir()
+			const id = "12345678-1234-4234-8234-123456789abc"
+			sessions := filepath.Join(root, "label", ".codex-run-v1-a", "sessions")
+			path := filepath.Join(sessions, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
+			meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_cli_rs", "2026-10-08T12:00:00Z")
+			dbtest.WriteTestFile(t, path, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
+			config := EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {sessions}}}
+			engine := NewEngine(t.Context(), database, config)
+			require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+			engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
+			t.Cleanup(engine.Close)
+			var oldMarker, marker string
+			require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key = ?`, codexLabelRootsKey).Scan(&oldMarker))
+			require.Zero(t, engine.SyncRootsSince(t.Context(), []string{root}, time.Now().Add(time.Hour), nil).Failed)
+			require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key = ?`, codexLabelRootsKey).Scan(&marker))
+			assert.Equal(t, oldMarker, marker)
+			cancelled, cancel := context.WithCancel(t.Context())
+			cancel()
+			assert.True(t, engine.SyncAllSince(cancelled, time.Now(), nil).Aborted)
+			require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key = ?`, codexLabelRootsKey).Scan(&marker))
+			assert.Equal(t, oldMarker, marker)
+			run := func() SyncStats {
+				if mode == "since" {
+					return engine.SyncAllSince(t.Context(), time.Now().Add(time.Hour), nil)
+				}
+				stats, err := engine.SyncThenRun(t.Context(), false, nil, func(bool) error { return nil })
+				require.NoError(t, err)
+				return stats
+			}
+			require.Zero(t, run().Failed)
+			session, err := database.GetSessionFull(t.Context(), "codex:"+id)
+			require.NoError(t, err)
+			require.Equal(t, "label", session.Project)
+			require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key = ?`, codexLabelRootsKey).Scan(&marker))
+			assert.NotEqual(t, oldMarker, marker)
+			assert.Zero(t, run().Synced)
+		})
+	}
+}
