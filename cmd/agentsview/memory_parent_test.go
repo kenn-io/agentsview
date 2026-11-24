@@ -158,6 +158,9 @@ func TestCaptureLaunchParentRecordsNothing(t *testing.T) {
 		{"invalid launcher ID", sessionStartPayload("startup"), []fakeProcess{
 			{name: "sh"}, {name: "claude", env: []string{"CODEX_THREAD_ID=not-a-uuid"}}, {name: "codex"},
 		}, true, childSessionID},
+		{"invalid child ID", strings.Replace(sessionStartPayload("startup"), childSessionID, "bad", 1), []fakeProcess{
+			{name: "sh"}, {name: "claude", env: []string{"CODEX_THREAD_ID=" + codexLauncherID}}, {name: "codex"},
+		}, true, "bad"},
 		{"same agent without readable environment", sessionStartPayload("startup"), []fakeProcess{
 			{name: "sh"}, {name: "claude"}, {name: "claude"},
 		}, false, childSessionID},

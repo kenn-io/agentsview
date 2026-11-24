@@ -168,13 +168,25 @@ func launcherArchiveID(ctx context.Context, home, agent, native string) (string,
 	return native, nil
 }
 
-// storedSessionID adds the agent's archive prefix to a native ID.
+// storedSessionID validates a native ID and adds the agent's archive prefix.
 func storedSessionID(agent, id string) (string, error) {
+	session, err := gittrailer.Discover(func(name string) string {
+		switch name {
+		case "AGENTSVIEW_SESSION_AGENT":
+			return agent
+		case "AGENTSVIEW_SESSION_ID":
+			return id
+		}
+		return ""
+	})
+	if err != nil {
+		return "", err
+	}
 	def, ok := parser.AgentByType(parser.AgentType(agent))
 	if !ok {
 		return "", fmt.Errorf("unknown agent %q", agent)
 	}
-	return def.IDPrefix + id, nil
+	return def.IDPrefix + session.ID, nil
 }
 
 type sessionStartCapture struct {
