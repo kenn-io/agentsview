@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"fmt"
+	"mime"
 	"strings"
 
 	"github.com/tidwall/gjson"
@@ -139,6 +140,9 @@ func toolResultContentLength(content gjson.Result) int {
 		return len(content.Str)
 	}
 	if content.IsArray() {
+		if normalized, ok := decodeImageBearingContentArray(content); ok {
+			return len(normalized)
+		}
 		total := 0
 		content.ForEach(func(_, block gjson.Result) bool {
 			if t := block.Get("text").Str; t != "" {
@@ -160,9 +164,11 @@ func toolResultContentLength(content gjson.Result) int {
 	return 0
 }
 
-// DecodeContent extracts the text from a raw JSON tool result content
-// value (the ContentRaw field of ParsedToolResult). It handles both
-// plain string and array-of-blocks formats.
+// DecodeContent extracts the display payload from a raw JSON tool result
+// content value (the ContentRaw field of ParsedToolResult). It handles plain
+// strings, text arrays, Anthropic base64 image-bearing arrays (normalizing
+// image blocks into canonical input_image blocks alongside text), and iFlow
+// nested response objects.
 func DecodeContent(raw string) string {
 	return decodeContent(gjson.Parse(raw))
 }
@@ -172,6 +178,9 @@ func decodeContent(content gjson.Result) string {
 		return content.Str
 	}
 	if content.IsArray() {
+		if normalized, ok := decodeImageBearingContentArray(content); ok {
+			return normalized
+		}
 		var parts []string
 		content.ForEach(func(_, block gjson.Result) bool {
 			if t := block.Get("text").Str; t != "" {
@@ -190,6 +199,60 @@ func decodeContent(content gjson.Result) string {
 		).Str
 	}
 	return ""
+}
+
+func toolResultBlockImageURL(block gjson.Result) (string, bool) {
+	if block.Get("type").Str != "image" {
+		return "", false
+	}
+	source := block.Get("source")
+	if source.Get("type").Str != "base64" {
+		return "", false
+	}
+	mediaType, _, err := mime.ParseMediaType(strings.TrimSpace(source.Get("media_type").Str))
+	if err != nil || !strings.HasPrefix(strings.ToLower(mediaType), "image/") {
+		return "", false
+	}
+	data := strings.TrimSpace(source.Get("data").Str)
+	if data == "" {
+		return "", false
+	}
+	return "data:" + strings.ToLower(mediaType) + ";base64," + data, true
+}
+
+func decodeImageBearingContentArray(content gjson.Result) (string, bool) {
+	hasImages := false
+	var blocks []map[string]string
+	content.ForEach(func(_, block gjson.Result) bool {
+		if imageURL, ok := toolResultBlockImageURL(block); ok {
+			hasImages = true
+			blocks = append(blocks, map[string]string{
+				"type":      "input_image",
+				"image_url": imageURL,
+			})
+			return true
+		}
+		if t := block.Get("text").Str; t != "" {
+			blocks = append(blocks, map[string]string{
+				"type": "text",
+				"text": t,
+			})
+		} else if r := block.Get("result").Str; r != "" {
+			blocks = append(blocks, map[string]string{
+				"type": "text",
+				"text": r,
+			})
+		}
+		return true
+	})
+	if !hasImages {
+		return "", false
+	}
+	encoded, err := json.Marshal(blocks, json.Deterministic(true))
+	if err != nil {
+		return "", false
+	}
+	return string(encoded), true
 }
 
 var todoIcons = map[string]string{

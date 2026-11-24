@@ -3,9 +3,11 @@ package sync
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image/color"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -755,4 +757,83 @@ func TestToolResultImagesOffloadFrictionUsesStoredContent(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, stored, 1)
 	assert.NotContains(t, stored[0].Text, "data:image", "findings come from the offloaded rows the archive stores")
+}
+
+func TestClaudeToolResultImagesRetainedOffloadedAndIndexed(t *testing.T) {
+	pngB64 := testjsonl.SolidPNGBase64(1, 1, color.RGBA{R: 12, G: 34, B: 56, A: 255})
+	rawPNG, err := base64.StdEncoding.DecodeString(pngB64)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name   string
+		policy config.ToolResultImages
+	}{
+		{name: "keep", policy: config.ToolResultImagesKeep},
+		{name: "offload", policy: config.ToolResultImagesOffload},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			claudeProject := filepath.Join(root, "proj")
+			require.NoError(t, os.MkdirAll(claudeProject, 0o755))
+
+			sessionID := "11111111-1111-4111-8111-111111111111"
+			lines := testjsonl.JoinJSONL(
+				`{"type":"user","uuid":"u0","parentUuid":null,"sessionId":"`+sessionID+`","timestamp":"2026-11-24T01:00:00Z","message":{"role":"user","content":"Take screenshot"}}`,
+				`{"type":"assistant","uuid":"a1","parentUuid":"u0","sessionId":"`+sessionID+`","timestamp":"2026-11-24T01:00:01Z","message":{"role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"tool_use","id":"toolu_shot_1","name":"Bash","input":{"command":"shot"}}]}}`,
+				`{"type":"user","uuid":"u1","parentUuid":"a1","sessionId":"`+sessionID+`","timestamp":"2026-11-24T01:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_shot_1","content":[{"type":"text","text":"shot saved"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"`+pngB64+`"}}]}]}}`,
+			)
+			require.NoError(t, os.WriteFile(filepath.Join(claudeProject, sessionID+".jsonl"), []byte(lines), 0o644))
+
+			database := dbtest.OpenTestDB(t)
+			assetsDir := filepath.Join(root, "assets")
+			engine := NewEngine(t.Context(), database, EngineConfig{
+				AgentDirs:        map[parser.AgentType][]string{parser.AgentClaude: {root}},
+				Machine:          "local",
+				ToolResultImages: tc.policy,
+				AssetsDir:        assetsDir,
+			})
+			t.Cleanup(engine.Close)
+
+			stats := engine.SyncAll(t.Context(), nil)
+			require.Equal(t, 1, stats.Synced)
+			require.Zero(t, stats.Failed)
+			require.NoError(t, database.BackfillImageTextOccurrences(t.Context()))
+
+			var eventContent string
+			var resultContentLen int
+			require.NoError(t, database.Reader().QueryRowContext(
+				t.Context(),
+				`SELECT content FROM tool_result_events WHERE tool_use_id = ?`,
+				"toolu_shot_1",
+			).Scan(&eventContent))
+			require.NoError(t, database.Reader().QueryRowContext(
+				t.Context(),
+				`SELECT COALESCE(result_content_length, 0) FROM tool_calls WHERE tool_use_id = ?`,
+				"toolu_shot_1",
+			).Scan(&resultContentLen))
+			require.NotEmpty(t, eventContent)
+			assert.Positive(t, resultContentLen)
+			assert.Contains(t, eventContent, "shot saved")
+			if tc.policy == config.ToolResultImagesOffload {
+				assert.Contains(t, eventContent, `"type":"agentsview_image"`)
+				assert.Contains(t, eventContent, `"image_ref":"asset://`)
+				entries, readErr := os.ReadDir(assetsDir)
+				require.NoError(t, readErr)
+				require.Len(t, entries, 1)
+			} else {
+				assert.Contains(t, eventContent, `"type":"input_image"`)
+			}
+
+			retained := db.RetainedToolResultImages(eventContent)
+			require.Len(t, retained, 1)
+
+			pending, err := database.PendingImageText(t.Context(), "test-proc", time.Now().Add(time.Minute), 10)
+			require.NoError(t, err)
+			require.Equal(t, []string{retained[0].SHA256}, pending)
+
+			gotPNG, err := db.ReadRetainedImage(eventContent, retained[0].Index, assetsDir, 1<<20)
+			require.NoError(t, err)
+			assert.Equal(t, rawPNG, gotPNG)
+		})
+	}
 }

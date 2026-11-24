@@ -1124,3 +1124,40 @@ func TestZCodeSystemMessagesAreMarkedSystem(t *testing.T) {
 	assert.Equal(t, RoleSystem, result.Messages[0].Role)
 	assert.True(t, result.Messages[0].IsSystem)
 }
+
+func TestZCodeToolResultImageBlockNormalized(t *testing.T) {
+	fixture := newZCodeTestFixture(t)
+	fixture.insertSession(
+		t,
+		"session-img",
+		"/Users/alice/code/acme-app",
+		"Screenshot check",
+		"2026-07-06T13:00:01Z",
+		"2026-07-06T13:05:00Z",
+		"",
+		"",
+	)
+	fixture.insertMessage(t, "msg-u0", "session-img", "2026-07-06T13:00:01Z", `{"role":"user"}`)
+	fixture.insertPart(t, "part-u0", "msg-u0", "session-img", `{"type":"text","text":"Check screenshot"}`)
+	fixture.insertMessage(t, "msg-a1", "session-img", "2026-07-06T13:00:02Z", `{"role":"assistant","modelID":"claude-sonnet-4-6"}`)
+	fixture.insertPart(t, "part-a1", "msg-a1", "session-img", `{"type":"tool_use","id":"call-img-1","name":"Bash","input":{"command":"shot"}}`)
+	fixture.insertMessage(t, "msg-u1", "session-img", "2026-07-06T13:00:03Z", `{"role":"user"}`)
+	fixture.insertPart(
+		t,
+		"part-u1",
+		"msg-u1",
+		"session-img",
+		`{"type":"tool_result","tool_use_id":"call-img-1","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAEC"}}]}`,
+	)
+
+	result, err := parseZCodeSession(t.Context(), fixture.DBPath, "session-img", "devbox", false)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, result.Messages, 3)
+	require.Len(t, result.Messages[2].ToolResults, 1)
+
+	tr := result.Messages[2].ToolResults[0]
+	want := `[{"image_url":"data:image/png;base64,AAEC","type":"input_image"}]`
+	assert.Equal(t, want, DecodeContent(tr.ContentRaw))
+	assert.Equal(t, len(want), tr.ContentLength)
+}
