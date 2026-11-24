@@ -430,7 +430,7 @@ func TestToolPRLinksArchiveUpgrade(t *testing.T) {
 				if _, err := tx.ExecContext(t.Context(), `ALTER TABLE tool_calls DROP COLUMN pr_links`); err != nil {
 					return err
 				}
-				return writeUserVersion(t.Context(), tx, toolPRLinksDataVersion-1)
+				return writeUserVersion(t.Context(), tx, dataVersion-1)
 			}))
 			require.NoError(t, d.Close())
 			policy := config.ArchiveContentFull
