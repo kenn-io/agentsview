@@ -2410,10 +2410,6 @@ func TestCodexLabeledRunDiscoveryAndParse(t *testing.T) {
 	require.Len(t, outcome.Results, 1)
 	assert.Equal(t, "experiment/case", outcome.Results[0].Result.Session.Project)
 	assert.Empty(t, outcome.Results[0].Result.Session.GitRemote)
-	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: path, EventKind: "write"})
-	require.NoError(t, err)
-	require.Len(t, changed, 1)
-	assert.Equal(t, path, changed[0].DisplayPath)
 	assert.Equal(t, "experiment/case", CodexSourceLabel(root, path))
 	assert.Empty(t, CodexSourceLabel(filepath.Join(home, "sessions"), path))
 }

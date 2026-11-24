@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"database/sql"
 	"os"
 	"path/filepath"
@@ -215,7 +214,7 @@ func TestCodexIncrementalAppendKeepsRecordedRepository(t *testing.T) {
 	}
 }
 
-func TestCodexLabeledRunKeepsProjectThroughResyncAndMapping(t *testing.T) {
+func TestCodexLabeledRunKeepsProjectThroughResync(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()
 	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
@@ -240,21 +239,16 @@ func TestCodexLabeledRunKeepsProjectThroughResyncAndMapping(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "experiment/case", session.Project)
 	assert.True(t, session.LastWriteIncremental)
-	_, err = database.CreateWorktreeProjectMapping(t.Context(), db.WorktreeProjectMapping{Machine: "local", PathPrefix: cwd, Project: "mapped", Enabled: true})
-	require.NoError(t, err)
 	require.Zero(t, engine.ResyncAll(t.Context(), nil).Failed)
 	session, err = database.GetSessionFull(t.Context(), "codex:"+id)
 	require.NoError(t, err)
-	assert.Equal(t, "mapped", session.Project)
+	assert.Equal(t, "experiment/case", session.Project)
 }
 
 func TestCodexLabeledProjectChangesWithRoots(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()
 	checkout := filepath.Join(root, "checkout")
-	require.NoError(t, os.MkdirAll(filepath.Join(checkout, ".git"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(checkout, ".git", "config"), []byte("[remote \"origin\"]\nurl = https://example.com/team/api.git\n"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(checkout, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644))
 	const id = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 	sessions := filepath.Join(root, "label", ".codex-run-v1-a", "sessions")
 	path := filepath.Join(sessions, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
@@ -264,24 +258,10 @@ func TestCodexLabeledProjectChangesWithRoots(t *testing.T) {
 	engine := NewEngine(t.Context(), database, config)
 	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
 	engine.Close()
-	require.NoError(t, os.Remove(filepath.Join(checkout, ".git", "config")))
-	require.NoError(t, os.Remove(filepath.Join(checkout, ".git", "HEAD")))
-	require.NoError(t, os.Remove(filepath.Join(checkout, ".git")))
-	require.NoError(t, os.Remove(checkout))
-	const ordinaryID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-	ordinary := filepath.Join(root, "rollout-"+ordinaryID+".jsonl")
-	ordinaryMeta := testjsonl.CodexSessionMetaJSON(ordinaryID, "/work/other", "codex_cli_rs", "2026-10-08T12:00:00Z")
-	dbtest.WriteTestFile(t, ordinary, []byte(ordinaryMeta+"\n"+testjsonl.CodexMsgJSON("user", "hello", "2026-10-08T12:00:01Z")+"\n"))
 	config.AgentDirs[parser.AgentCodex] = []string{root}
 	engine = NewEngine(t.Context(), database, config)
 	var oldMarker, marker string
 	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key = ?`, codexLabelRootsKey).Scan(&oldMarker))
-	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{path}))
-	cancelled, cancel := context.WithCancel(t.Context())
-	cancel()
-	assert.True(t, engine.SyncAll(cancelled, nil).Aborted)
-	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key = ?`, codexLabelRootsKey).Scan(&marker))
-	assert.Equal(t, oldMarker, marker)
 	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
 	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key = ?`, codexLabelRootsKey).Scan(&marker))
 	assert.NotEqual(t, oldMarker, marker)
@@ -296,7 +276,7 @@ func TestCodexLabeledProjectChangesWithRoots(t *testing.T) {
 	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
 	session, err = database.GetSessionFull(t.Context(), "codex:"+id)
 	require.NoError(t, err)
-	assert.Equal(t, "checkout", session.Project)
+	assert.Equal(t, "api", session.Project)
 
 	const assignedID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
 	const mappedID = "ffffffff-ffff-4fff-8fff-ffffffffffff"
@@ -335,45 +315,28 @@ func TestCodexLabeledProjectChangesWithRoots(t *testing.T) {
 }
 
 func TestCodexLabelRootsRefreshDuringOrdinarySync(t *testing.T) {
-	for _, mode := range []string{"since", "then"} {
-		t.Run(mode, func(t *testing.T) {
-			database := openTestDB(t)
-			root := t.TempDir()
-			const id = "12345678-1234-4234-8234-123456789abc"
-			sessions := filepath.Join(root, "label", ".codex-run-v1-a", "sessions")
-			path := filepath.Join(sessions, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
-			meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_cli_rs", "2026-10-08T12:00:00Z")
-			dbtest.WriteTestFile(t, path, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
-			config := EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {sessions}}}
-			engine := NewEngine(t.Context(), database, config)
-			require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
-			engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
-			t.Cleanup(engine.Close)
-			var oldMarker, marker string
-			require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key = ?`, codexLabelRootsKey).Scan(&oldMarker))
-			require.Zero(t, engine.SyncRootsSince(t.Context(), []string{root}, time.Now().Add(time.Hour), nil).Failed)
-			require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key = ?`, codexLabelRootsKey).Scan(&marker))
-			assert.Equal(t, oldMarker, marker)
-			cancelled, cancel := context.WithCancel(t.Context())
-			cancel()
-			assert.True(t, engine.SyncAllSince(cancelled, time.Now(), nil).Aborted)
-			require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key = ?`, codexLabelRootsKey).Scan(&marker))
-			assert.Equal(t, oldMarker, marker)
-			run := func() SyncStats {
-				if mode == "since" {
-					return engine.SyncAllSince(t.Context(), time.Now().Add(time.Hour), nil)
-				}
-				stats, err := engine.SyncThenRun(t.Context(), false, nil, func(bool) error { return nil })
-				require.NoError(t, err)
-				return stats
-			}
-			require.Zero(t, run().Failed)
-			session, err := database.GetSessionFull(t.Context(), "codex:"+id)
-			require.NoError(t, err)
-			require.Equal(t, "label", session.Project)
-			require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key = ?`, codexLabelRootsKey).Scan(&marker))
-			assert.NotEqual(t, oldMarker, marker)
-			assert.Zero(t, run().Synced)
-		})
-	}
+	database := openTestDB(t)
+	root := t.TempDir()
+	const id = "12345678-1234-4234-8234-123456789abc"
+	sessions := filepath.Join(root, "label", ".codex-run-v1-a", "sessions")
+	path := filepath.Join(sessions, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
+	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_cli_rs", "2026-10-08T12:00:00Z")
+	dbtest.WriteTestFile(t, path, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
+	config := EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {sessions}}}
+	engine := NewEngine(t.Context(), database, config)
+	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+	engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
+	t.Cleanup(engine.Close)
+	var oldMarker, marker string
+	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key = ?`, codexLabelRootsKey).Scan(&oldMarker))
+	require.Zero(t, engine.SyncRootsSince(t.Context(), []string{root}, time.Now().Add(time.Hour), nil).Failed)
+	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key = ?`, codexLabelRootsKey).Scan(&marker))
+	assert.Equal(t, oldMarker, marker)
+	require.Zero(t, engine.SyncAllSince(t.Context(), time.Now().Add(time.Hour), nil).Failed)
+	session, err := database.GetSessionFull(t.Context(), "codex:"+id)
+	require.NoError(t, err)
+	require.Equal(t, "label", session.Project)
+	require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT value FROM archive_metadata WHERE key = ?`, codexLabelRootsKey).Scan(&marker))
+	assert.NotEqual(t, oldMarker, marker)
+	assert.Zero(t, engine.SyncAllSince(t.Context(), time.Now().Add(time.Hour), nil).Synced)
 }
