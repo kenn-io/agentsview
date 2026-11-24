@@ -846,7 +846,7 @@ func CodexSessionPathInfo(root, path string) (CodexLayout, string, bool) {
 		return CodexLayoutUnknown, "", false
 	}
 	parts := strings.Split(rel, sep)
-	if len(parts) >= 6 && CodexSourceLabel(root, path) != "" {
+	if len(parts) >= 6 && CodexMarkedRunPath(path) {
 		parts = parts[len(parts)-4:]
 	}
 	switch len(parts) {
@@ -888,7 +888,7 @@ func CodexSourceLabel(root, path string) string {
 		return ""
 	}
 	parts := strings.Split(rel, string(filepath.Separator))
-	if len(parts) < 6 {
+	if len(parts) <= 6 {
 		return ""
 	}
 	return filepath.ToSlash(filepath.Clean(filepath.Join(parts[:len(parts)-6]...)))

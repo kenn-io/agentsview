@@ -389,26 +389,22 @@ func (p *codexProvider) FindSource(
 	return p.sources.FindSource(ctx, req)
 }
 
-// AllSourcePathsForUUIDs returns, for each requested session UUID, every
-// on-disk Codex transcript path under the provider's roots whose filename
-// carries it, without the live-over-archived deduplication Discover applies. A
-// UUID can exist as both a live dated copy and a flat archived copy under the
-// same root; the sync engine uses the full set so an mtime cutoff can judge each
-// copy independently. A compressed copy beside its plain file is left out: the
-// plain file is the one Codex appends to, so no cutoff may choose the
-// compressed one over it. One walk serves every requested UUID.
-func (p *codexProvider) AllSourcePathsForUUIDs(uuids []string) map[string][]string {
-	paths := make(map[string][]string, len(uuids))
-	for _, uuid := range uuids {
-		if uuid != "" {
-			paths[uuid] = nil
-		}
+// AllSourcePathsForUUID returns every on-disk Codex transcript path under the
+// provider's roots whose filename carries the given session UUID, without the
+// live-over-archived deduplication Discover applies. A UUID can exist as both a
+// live dated copy and a flat archived copy under the same root; the sync engine
+// uses the full set so an mtime cutoff can judge each copy independently. A
+// compressed copy beside its plain file is left out: the plain file is the one
+// Codex appends to, so no cutoff may choose the compressed one over it.
+func (p *codexProvider) AllSourcePathsForUUID(uuid string) []string {
+	if uuid == "" {
+		return nil
 	}
 	seen := make(map[string]struct{})
+	var paths []string
 	for _, root := range p.sources.roots {
 		for _, path := range p.sources.discoverSessionPaths(root) {
-			uuid := CodexSessionUUIDFromFilename(filepath.Base(path))
-			if _, wanted := paths[uuid]; !wanted {
+			if CodexSessionUUIDFromFilename(filepath.Base(path)) != uuid {
 				continue
 			}
 			clean := filepath.Clean(path)
@@ -420,7 +416,7 @@ func (p *codexProvider) AllSourcePathsForUUIDs(uuids []string) map[string][]stri
 				continue
 			}
 			seen[clean] = struct{}{}
-			paths[uuid] = append(paths[uuid], path)
+			paths = append(paths, path)
 		}
 	}
 	return paths
@@ -457,18 +453,15 @@ func (p *codexProvider) Fingerprint(
 // parentRoots includes the labeled home that owns a discovered child.
 func (p *codexProvider) parentRoots(path string) []string {
 	roots := p.sources.roots
-	for _, root := range roots {
-		if CodexSourceLabel(root, path) == "" {
-			continue
-		}
-		sessions := path
-		for range 4 {
-			sessions = filepath.Dir(sessions)
-		}
-		if !slices.Contains(roots, sessions) {
-			roots = append(slices.Clone(roots), sessions)
-		}
-		break
+	if !CodexMarkedRunPath(path) {
+		return roots
+	}
+	sessions := path
+	for range 4 {
+		sessions = filepath.Dir(sessions)
+	}
+	if !slices.Contains(roots, sessions) {
+		roots = append(slices.Clone(roots), sessions)
 	}
 	return roots
 }
@@ -1603,7 +1596,8 @@ func (s codexSourceSet) canonicalSource(
 	if !ok || src.UUID == "" {
 		return source, true, nil
 	}
-	best := source
+	var best SourceRef
+	foundExisting := false
 	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
 			return SourceRef{}, false, err
@@ -1616,9 +1610,13 @@ func (s codexSourceSet) canonicalSource(
 		if !ok {
 			continue
 		}
-		if preferCodexSource(candidate, best) {
+		if !foundExisting || preferCodexSource(candidate, best) {
 			best = candidate
+			foundExisting = true
 		}
+	}
+	if !foundExisting {
+		return source, true, nil
 	}
 	return best, true, nil
 }

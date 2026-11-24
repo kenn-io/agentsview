@@ -200,17 +200,12 @@ func (e *Engine) classifyCodexIndexPath(ctx context.Context,
 		return nil
 	}
 	var sessionRoots []string
-	home := filepath.Dir(path)
 	for _, agDir := range e.sources().agentDirs[parser.AgentCodex] {
 		if agDir == "" {
 			continue
 		}
 		if slices.Contains(e.codexMetadata().IndexFiles(agDir), path) {
 			sessionRoots = append(sessionRoots, agDir)
-		}
-		if strings.HasPrefix(filepath.Base(home), ".codex-run-v1-") &&
-			filepath.Clean(home) != filepath.Clean(agDir) && pathWithinRoot(home, agDir) {
-			sessionRoots = append(sessionRoots, filepath.Join(home, "sessions"))
 		}
 	}
 	if len(sessionRoots) == 0 {
@@ -475,20 +470,7 @@ func preferNewestCodexDiscoveredFile(
 func (e *Engine) expandCodexProviderDuplicates(
 	files []parser.DiscoveredFile, scope *rootSyncScope,
 ) []parser.DiscoveredFile {
-	uuids := make(map[parser.AgentType][]string)
-	for _, f := range files {
-		if isCodexFormatAgent(f.Agent) {
-			if uuid := parser.CodexSessionUUIDFromFilename(filepath.Base(f.Path)); uuid != "" {
-				uuids[f.Agent] = append(uuids[f.Agent], uuid)
-			}
-		}
-	}
-	paths := make(map[parser.AgentType]map[string][]string)
-	for agent, ids := range uuids {
-		if lister := e.codexUUIDPathLister(agent, scope); lister != nil {
-			paths[agent] = lister(ids)
-		}
-	}
+	pathers := make(map[parser.AgentType]func(string) []string)
 	seen := make(map[string]struct{}, len(files))
 	for _, f := range files {
 		seen[string(f.Agent)+"\x00"+filepath.Clean(f.Path)] = struct{}{}
@@ -498,11 +480,19 @@ func (e *Engine) expandCodexProviderDuplicates(
 		if !isCodexFormatAgent(f.Agent) {
 			continue
 		}
+		pather, resolved := pathers[f.Agent]
+		if !resolved {
+			pather = e.codexUUIDPathLister(f.Agent, scope)
+			pathers[f.Agent] = pather
+		}
+		if pather == nil {
+			continue
+		}
 		uuid := parser.CodexSessionUUIDFromFilename(filepath.Base(f.Path))
 		if uuid == "" {
 			continue
 		}
-		for _, dup := range paths[f.Agent][uuid] {
+		for _, dup := range pather(uuid) {
 			key := string(f.Agent) + "\x00" + filepath.Clean(dup)
 			if _, ok := seen[key]; ok {
 				continue
@@ -528,7 +518,7 @@ func (e *Engine) expandCodexProviderDuplicates(
 // root.
 func (e *Engine) codexUUIDPathLister(
 	agent parser.AgentType, scope *rootSyncScope,
-) func([]string) map[string][]string {
+) func(string) []string {
 	factory, ok := e.sources().providerFactories[agent]
 	if !ok || factory == nil {
 		return nil
@@ -549,10 +539,10 @@ func (e *Engine) codexUUIDPathLister(
 		SourceMachines: e.sources().sourceMachines[agent],
 	})
 	lister, ok := provider.(interface {
-		AllSourcePathsForUUIDs([]string) map[string][]string
+		AllSourcePathsForUUID(string) []string
 	})
 	if !ok {
 		return nil
 	}
-	return lister.AllSourcePathsForUUIDs
+	return lister.AllSourcePathsForUUID
 }

@@ -2414,19 +2414,6 @@ func TestCodexLabeledRunDiscoveryAndParse(t *testing.T) {
 	assert.Empty(t, CodexSourceLabel(filepath.Join(home, "sessions"), path))
 }
 
-func TestCodexFreshLookupPrefersSuppliedLabeledSource(t *testing.T) {
-	root := t.TempDir()
-	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
-	path := writeCodexProviderSession(t, filepath.Join(root, "label", ".codex-run-v1-a", "sessions"), id, "new")
-	writeCodexProviderArchivedSession(t, root, id, "old")
-	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	source, found, err := provider.FindSource(t.Context(), FindSourceRequest{StoredFilePath: path, RequireFreshSource: true})
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Equal(t, path, source.DisplayPath)
-}
-
 func TestCodexDotLabeledRuns(t *testing.T) {
 	root := t.TempDir()
 	for i, id := range []string{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"} {
@@ -2441,6 +2428,6 @@ func TestCodexDotLabeledRuns(t *testing.T) {
 		parsed, err := provider.Parse(t.Context(), ParseRequest{Source: source})
 		require.NoError(t, err)
 		require.Len(t, parsed.Results, 1)
-		assert.Equal(t, ".", parsed.Results[0].Result.Session.Project)
+		assert.Equal(t, "api", parsed.Results[0].Result.Session.Project)
 	}
 }
