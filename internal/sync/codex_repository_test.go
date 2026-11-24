@@ -253,3 +253,29 @@ func TestCodexLabeledRunKeepsProjectThroughResync(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "mapped_project", session.Project)
 }
+
+func TestCodexLabeledIndexEventUpdatesTitle(t *testing.T) {
+	root := t.TempDir()
+	database := openTestDB(t)
+	var indexes []string
+	for _, id := range []string{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"} {
+		home := filepath.Join(root, id, ".codex-run-v1-a")
+		path := filepath.Join(home, "sessions", "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
+		meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_cli_rs", "2026-10-08T12:00:00Z")
+		dbtest.WriteTestFile(t, path, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
+		index := filepath.Join(home, parser.CodexSessionIndexFilename)
+		dbtest.WriteTestFile(t, index, []byte(`{"id":"`+id+`","thread_name":"Old title"}`+"\n"))
+		indexes = append(indexes, index)
+	}
+	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
+	dbtest.WriteTestFile(t, indexes[0], []byte(`{"id":"11111111-1111-4111-8111-111111111111","thread_name":"New title"}`+"\n"))
+	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{indexes[0]}))
+	for id, title := range map[string]string{"11111111-1111-4111-8111-111111111111": "New title", "22222222-2222-4222-8222-222222222222": "Old title"} {
+		session, err := database.GetSessionFull(t.Context(), "codex:"+id)
+		require.NoError(t, err)
+		require.NotNil(t, session.SessionName)
+		assert.Equal(t, title, *session.SessionName)
+	}
+}

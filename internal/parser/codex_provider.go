@@ -1485,6 +1485,19 @@ func (s codexSourceSet) sourcesForIndexPath(
 		return nil, err
 	}
 	indexDir := filepath.Dir(indexPath)
+	if strings.HasPrefix(filepath.Base(indexDir), ".codex-run-v1-") {
+		for _, root := range s.roots {
+			if pathUnderRoot(root, indexDir) {
+				var sources []SourceRef
+				for _, path := range s.discoverSessionPaths(filepath.Join(indexDir, "sessions")) {
+					if source, ok := s.sourceRef(root, path, true); ok {
+						sources = append(sources, source)
+					}
+				}
+				return sources, nil
+			}
+		}
+	}
 	return s.discover(ctx, func(root string) bool {
 		return slices.Contains(s.metadata.dirs(root), indexDir)
 	})

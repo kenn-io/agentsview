@@ -2414,6 +2414,22 @@ func TestCodexLabeledRunDiscoveryAndParse(t *testing.T) {
 	assert.Empty(t, CodexSourceLabel(filepath.Join(home, "sessions"), path))
 }
 
+func TestCodexLabeledIndexChangedPath(t *testing.T) {
+	root := t.TempDir()
+	var indexes, paths []string
+	for _, id := range []string{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"} {
+		home := filepath.Join(root, id, ".codex-run-v1-a")
+		paths = append(paths, writeCodexProviderSession(t, filepath.Join(home, "sessions"), id, "prompt"))
+		indexes = append(indexes, filepath.Join(home, CodexSessionIndexFilename))
+	}
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: indexes[0]})
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, paths[0], sources[0].DisplayPath)
+}
+
 func TestCodexDotLabeledRuns(t *testing.T) {
 	root := t.TempDir()
 	for i, id := range []string{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"} {

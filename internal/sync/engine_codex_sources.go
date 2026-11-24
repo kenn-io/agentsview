@@ -188,11 +188,9 @@ func (e *Engine) codexCachedIndexSessionNameState(ctx context.Context,
 }
 
 // classifyCodexIndexPath maps a Codex session_index.jsonl change to the
-// session files whose stored title no longer matches the index. The live
-// watcher sees this file only because its parent directory is watched
-// shallowly (see ResolveCodexShallowWatchRoots); without this translation a
-// title-only rename would not refresh until the next periodic sync, since the
-// session transcript itself is untouched.
+// session files whose stored title no longer matches the index. Without this
+// translation a title-only rename would wait until the next periodic sync,
+// since the session transcript itself is untouched.
 func (e *Engine) classifyCodexIndexPath(ctx context.Context,
 	path string,
 ) []parser.DiscoveredFile {
@@ -200,12 +198,16 @@ func (e *Engine) classifyCodexIndexPath(ctx context.Context,
 		return nil
 	}
 	var sessionRoots []string
+	home := filepath.Dir(path)
 	for _, agDir := range e.sources().agentDirs[parser.AgentCodex] {
 		if agDir == "" {
 			continue
 		}
 		if slices.Contains(e.codexMetadata().IndexFiles(agDir), path) {
 			sessionRoots = append(sessionRoots, agDir)
+		}
+		if strings.HasPrefix(filepath.Base(home), ".codex-run-v1-") && pathWithinRoot(home, agDir) {
+			sessionRoots = append(sessionRoots, filepath.Join(home, "sessions"))
 		}
 	}
 	if len(sessionRoots) == 0 {

@@ -846,7 +846,7 @@ func CodexSessionPathInfo(root, path string) (CodexLayout, string, bool) {
 		return CodexLayoutUnknown, "", false
 	}
 	parts := strings.Split(rel, sep)
-	if len(parts) >= 6 && CodexMarkedRunPath(path) {
+	if len(parts) >= 6 && strings.HasPrefix(parts[len(parts)-6], ".codex-run-v1-") && parts[len(parts)-5] == "sessions" {
 		parts = parts[len(parts)-4:]
 	}
 	switch len(parts) {
