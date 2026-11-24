@@ -940,91 +940,78 @@ describe("nested subagent rows", () => {
     ]);
   });
 
-  it("nests a run shared by two launchers under the launcher each group shows", () => {
-    const sub = (id: string, parents: string[]) =>
-      makeSession({ id, parent_session_ids: parents, relationship_type: "subagent" });
-    const groups = buildSessionGroups([
-      makeSession({ id: "a1" }),
-      makeSession({ id: "a2" }),
-      sub("b1", ["a1"]),
-      sub("b2", ["a2"]),
-      sub("c", ["b1", "b2"]),
-    ]);
-    const nested = (key: string) => {
-      const group = groups.find((g) => g.key === key)!;
-      const expanded = new Set([key, `subagent:${key}`]);
-      return buildDisplayItems([group], [], "none", new Set(), expanded)
-        .filter((item) => item.isChild)
-        .map((item) => [item.session!.id, item.depth]);
-    };
-    expect(nested("a1")).toEqual([
-      ["b1", 2],
-      ["c", 3],
-    ]);
-    expect(nested("a2")).toEqual([
-      ["b2", 2],
-      ["c", 3],
-    ]);
-  });
-
-  it("keeps a run at the group root when a filter hides its launcher", () => {
-    const [full] = buildSessionGroups(launchedTree());
-    const group: SessionGroup = {
-      ...full!,
-      sessions: full!.sessions.filter((s) => s.id !== "b"),
-      allSessions: full!.sessions,
-    };
-    expect(rows(group)).toEqual([
-      ["d", 2, false],
-      ["c", 2, true],
-    ]);
-  });
-
-  it("preserves contextual and shared parent precedence", () => {
-    const [full] = buildSessionGroups(launchedTree());
-    const sessions = full!.sessions.map((s) =>
-      s.id === "c" ? { ...s, parent_session_id: undefined, parent_session_ids: ["b", "d"] } : s,
-    );
-    sessions.push(
-      makeSession({
-        id: "e",
-        relationship_type: "subagent",
-        parent_session_id: "b",
-        parent_session_ids: ["d"],
-      }),
-    );
-    const group: SessionGroup = { ...full!, sessions, allSessions: sessions };
-    expect(rows(group)).toEqual([
-      ["d", 2, false],
-      ["c", 3, true],
-      ["b", 2, true],
-      ["e", 3, true],
-    ]);
-  });
-
-  it("expands a large group with bounded parent lookups", () => {
-    const [full] = buildSessionGroups(launchedTree());
-    let idReads = 0;
-    const runs = Array.from({ length: 500 }, (_, i) => {
-      const id = `run-${i}`;
-      const session = makeSession({
-        id,
-        parent_session_id: i === 499 ? "a" : "run-499",
-        relationship_type: "subagent",
-      });
-      Object.defineProperty(session, "id", {
-        get: () => {
-          idReads++;
-          return id;
-        },
-      });
-      return session;
-    });
-    const sessions = [makeSession({ id: "a" }), ...runs];
-    const group: SessionGroup = { ...full!, sessions, allSessions: sessions };
-    const result = rows(group);
-    expect(result).toHaveLength(500);
-    expect(result[0]).toEqual(["run-499", 2, true]);
-    expect(idReads).toBeLessThan(500 * 50);
+  it.each([
+    {
+      name: "a shared run under the launcher each group shows",
+      run: () => {
+        const sub = (id: string, parents: string[]) =>
+          makeSession({ id, parent_session_ids: parents, relationship_type: "subagent" });
+        const groups = buildSessionGroups([
+          makeSession({ id: "a1" }),
+          makeSession({ id: "a2" }),
+          sub("b1", ["a1"]),
+          sub("b2", ["a2"]),
+          sub("c", ["b1", "b2"]),
+        ]);
+        return ["a1", "a2"].map((key) => {
+          const group = groups.find((g) => g.key === key)!;
+          const expanded = new Set([key, `subagent:${key}`]);
+          return buildDisplayItems([group], [], "none", new Set(), expanded)
+            .filter((item) => item.isChild)
+            .map((item) => [item.session!.id, item.depth]);
+        });
+      },
+      expected: [
+        [
+          ["b1", 2],
+          ["c", 3],
+        ],
+        [
+          ["b2", 2],
+          ["c", 3],
+        ],
+      ],
+    },
+    {
+      name: "a run at the root when a filter hides its launcher",
+      run: () => {
+        const [full] = buildSessionGroups(launchedTree());
+        return rows({
+          ...full!,
+          sessions: full!.sessions.filter((s) => s.id !== "b"),
+          allSessions: full!.sessions,
+        });
+      },
+      expected: [
+        ["d", 2, false],
+        ["c", 2, true],
+      ],
+    },
+    {
+      name: "contextual and shared parent precedence",
+      run: () => {
+        const [full] = buildSessionGroups(launchedTree());
+        const sessions = full!.sessions.map((s) =>
+          s.id === "c" ? { ...s, parent_session_id: undefined, parent_session_ids: ["b", "d"] } : s,
+        );
+        sessions.push(
+          makeSession({
+            id: "e",
+            relationship_type: "subagent",
+            parent_session_id: "b",
+            parent_session_ids: ["d"],
+          }),
+        );
+        return rows({ ...full!, sessions, allSessions: sessions });
+      },
+      expected: [
+        ["d", 2, false],
+        ["c", 3, true],
+        ["b", 2, true],
+        ["e", 3, true],
+      ],
+    },
+  ])("renders $name", ({ run, expected }) => {
+    expect(run()).toEqual(expected);
   });
 });

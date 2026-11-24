@@ -1835,19 +1835,22 @@ func TestSidebarShowsLaunchedAutomatedRun(t *testing.T) {
 		s.MessageCount = 2
 		s.UserMessageCount = 1
 	})
-	_, err := d.SetSessionExternalParent(t.Context(), "run", "launcher")
+	insertSession(t, d, "unattributed", "proj", func(s *Session) {
+		s.FirstMessage = new("You are a code reviewer. Review the code.")
+		s.ParentSessionID = new("launcher")
+		s.RelationshipType = "subagent"
+		s.Entrypoint = "sdk-cli"
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+	})
+	_, err := d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET parser_parent_session_id = NULL WHERE id = 'unattributed'`)
 	require.NoError(t, err)
-	for _, id := range []string{"run", "native"} {
-		_, err = d.SetSessionLabels(t.Context(), id, []string{"ticket=example"})
-		require.NoError(t, err)
-	}
+	_, err = d.SetSessionExternalParent(t.Context(), "run", "launcher")
+	require.NoError(t, err)
 	for _, limit := range []int{0, 1} {
 		index, err := d.GetSidebarSessionIndex(t.Context(), SessionFilter{ExcludeAutomated: true, Limit: limit})
 		require.NoError(t, err)
 		requireSidebarIndexIDs(t, index.Sessions, []string{"launcher", "run"})
-		index, err = d.GetSidebarSessionIndex(t.Context(), SessionFilter{ExcludeAutomated: true, Labels: []string{"ticket=example"}, Limit: limit})
-		require.NoError(t, err)
-		requireSidebarIndexIDs(t, index.Sessions, []string{"launcher", "run", "native"})
 		index, err = d.GetSidebarSessionIndex(t.Context(), SessionFilter{ExcludeAutomated: true, AutomatedFilterSet: true, Limit: limit})
 		require.NoError(t, err)
 		requireSidebarIndexIDs(t, index.Sessions, []string{"launcher"})

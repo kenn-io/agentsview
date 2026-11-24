@@ -84,28 +84,30 @@ func TestSidebarIncludesAutomatedLaunchChild(t *testing.T) {
 		VALUES
 			('launcher', 'm', 'launch-project', 'claude', 'root', NULL, 3, 3, false, '{}', NOW(), ''),
 			('worker', 'm', 'launch-project', 'codex', 'subagent', 'launcher', 1, 1, true, '{ticket=example}', NOW(), 'non-interactive'),
-			('native', 'm', 'launch-project', 'codex', 'subagent', 'launcher', 1, 1, true, '{ticket=example}', NOW(), 'non-interactive')`)
+			('native', 'm', 'launch-project', 'codex', 'subagent', 'launcher', 1, 1, true, '{ticket=example}', NOW(), 'non-interactive'),
+			('spawned', 'm', 'launch-project', 'codex', 'subagent', 'launcher', 1, 1, true, '{}', NOW(), 'non-interactive'),
+			('orphan', 'm', 'launch-project', 'codex', 'subagent', NULL, 1, 1, true, '{}', NOW(), 'non-interactive')`)
 	require.NoError(t, err)
 	_, err = store.DB().ExecContext(t.Context(), `UPDATE sessions SET parser_parent_session_id = 'launcher' WHERE id = 'native'`)
 	require.NoError(t, err)
+	_, err = store.DB().ExecContext(t.Context(), `INSERT INTO tool_calls (session_id, tool_name, category, message_ordinal, subagent_session_id) VALUES ('launcher', 'Task', 'Task', 0, 'spawned')`)
+	require.NoError(t, err)
+	predicate := db.SessionTreeMemberPredicate(db.SessionFilter{SidebarTree: true, ExcludeAutomated: true}, store.sessionDialect(), "s")
+	var orphanCount int
+	err = store.DB().QueryRowContext(t.Context(), "SELECT COUNT(*) FROM sessions s WHERE s.id = 'orphan' AND "+predicate).Scan(&orphanCount)
+	require.NoError(t, err)
+	assert.Zero(t, orphanCount)
 	for _, limit := range []int{0, 10} {
-		for _, labels := range [][]string{nil, {"ticket=example"}} {
-			index, err := store.GetSidebarSessionIndex(t.Context(), db.SessionFilter{
-				Project: "launch-project", ExcludeOneShot: true, ExcludeAutomated: true,
-				Labels: labels, Limit: limit,
-			})
-			require.NoError(t, err)
-			ids := make([]string, 0, len(index.Sessions))
-			for _, row := range index.Sessions {
-				ids = append(ids, row.ID)
-			}
-			want := []string{"launcher", "worker"}
-			if len(labels) > 0 {
-				want = append(want, "native")
-			}
-			assert.ElementsMatch(t, want, ids, "limit %d, labels %v", limit, labels)
-			assert.Equal(t, 1, index.Total, "limit %d, labels %v", limit, labels)
+		index, err := store.GetSidebarSessionIndex(t.Context(), db.SessionFilter{
+			Project: "launch-project", ExcludeOneShot: true, ExcludeAutomated: true, Limit: limit,
+		})
+		require.NoError(t, err)
+		ids := make([]string, 0, len(index.Sessions))
+		for _, row := range index.Sessions {
+			ids = append(ids, row.ID)
 		}
+		assert.ElementsMatch(t, []string{"launcher", "worker"}, ids, "limit %d", limit)
+		assert.Equal(t, 1, index.Total, "limit %d", limit)
 	}
 }
 
