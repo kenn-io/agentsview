@@ -286,6 +286,12 @@ func TestCodexLabeledCopyWinsSync(t *testing.T) {
 				write(1, paths[1])
 				write(2, paths[2])
 				require.NoError(t, engine.SyncSingleSessionContext(t.Context(), "codex:"+id))
+				saved, err := database.GetSessionFull(t.Context(), "codex:"+id)
+				require.NoError(t, err)
+				require.NotNil(t, saved)
+				require.NotNil(t, saved.FilePath)
+				assert.Equal(t, paths[0], *saved.FilePath)
+				require.NoError(t, engine.RefreshSessionByIDContext(t.Context(), "codex:"+id))
 			case "same batch":
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[1], paths[2]}))
 			case "changed path":

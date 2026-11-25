@@ -972,6 +972,10 @@ func TestDirectBackend_Sync_CodexID(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.NotNil(t, detail)
+			require.NoError(t, os.Remove(path))
+			detail, err = svc.Sync(t.Context(), service.SyncInput{ID: "codex:" + id})
+			require.NoError(t, err)
+			require.NotNil(t, detail)
 		})
 	}
 }

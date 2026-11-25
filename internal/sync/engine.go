@@ -13065,10 +13065,18 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 func (e *Engine) SyncSingleSessionContext(
 	ctx context.Context, sessionID string,
 ) (err error) {
-	return e.syncSingleSessionContext(ctx, sessionID, false)
+	return e.syncSingleSessionContext(ctx, sessionID, false, false)
 }
 
-func (e *Engine) syncSingleSessionContext(ctx context.Context, sessionID string, try bool) (err error) {
+// ErrSourceFileNotFound indicates that a session's source could not be found.
+var ErrSourceFileNotFound = errors.New("source file not found")
+
+// RefreshSessionByIDContext searches for the current source before refreshing it.
+func (e *Engine) RefreshSessionByIDContext(ctx context.Context, sessionID string) error {
+	return e.syncSingleSessionContext(ctx, sessionID, false, true)
+}
+
+func (e *Engine) syncSingleSessionContext(ctx context.Context, sessionID string, try, exhaustive bool) (err error) {
 	if e.sourceSyncErr != nil {
 		return e.sourceSyncErr
 	}
@@ -13128,7 +13136,7 @@ func (e *Engine) syncSingleSessionContext(ctx context.Context, sessionID string,
 	}
 
 	path := e.FindSourceFile(ctx, sessionID)
-	if def.Type == parser.AgentCodex {
+	if exhaustive && def.Type == parser.AgentCodex && e.db.GetSessionFilePath(ctx, sessionID) != "" {
 		raw := strings.TrimPrefix(sessionID, def.IDPrefix)
 		if found := e.findProviderSourceFile(ctx, def, sessionID, raw, ""); found != "" &&
 			parser.CodexSourceLabelForRoots(e.sources().agentDirs[def.Type], found) != "" {
@@ -13136,9 +13144,7 @@ func (e *Engine) syncSingleSessionContext(ctx context.Context, sessionID string,
 		}
 	}
 	if path == "" {
-		return fmt.Errorf(
-			"source file not found for %s", sessionID,
-		)
+		return fmt.Errorf("%w for %s", ErrSourceFileNotFound, sessionID)
 	}
 	// OpenCode-format agents (OpenCode, Kilo, MiMoCode) are
 	// provider-authoritative: their SQLite virtual paths and storage
