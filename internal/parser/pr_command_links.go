@@ -115,38 +115,17 @@ func prCommandFlag(command, flag string) (takesValue, ok bool) {
 
 // unwrapPRCommand removes execution wrappers whose arguments have fixed roles.
 func unwrapPRCommand(ctx context.Context, args []*syntax.Word) ([]*syntax.Word, error) {
-	words := make([]string, len(args))
-	literal := make([]bool, len(args))
-	for i, arg := range args {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		words[i], literal[i] = shellLiteral(arg.Parts)
-	}
-	for len(args) > 0 {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if !literal[0] {
+	words, literal := shellWords(args)
+	for at := 0; ctx.Err() == nil && at < len(args); {
+		if !literal[at] {
 			return nil, nil
 		}
-		i := 1
-		switch words[0] {
+		switch words[at] {
 		case "command", "env":
-			for i < len(words) && literal[i] && (words[0] == "command" && words[i] == "-p" || words[0] == "env" && strings.Contains(words[i], "=")) {
-				if err := ctx.Err(); err != nil {
-					return nil, err
-				}
-				i++
-			}
-			if i < len(words) && literal[i] && words[i] == "--" {
-				i++
-			}
+			at += wrappedCommandStart(words[at:], literal[at:])
 		case "timeout":
+			i := at + 1
 			for i < len(words) && literal[i] && strings.HasPrefix(words[i], "-") {
-				if err := ctx.Err(); err != nil {
-					return nil, err
-				}
 				flag := words[i]
 				i++
 				switch flag {
@@ -165,13 +144,23 @@ func unwrapPRCommand(ctx context.Context, args []*syntax.Word) ([]*syntax.Word, 
 			if i >= len(words) || !literal[i] || words[i] == "" {
 				return nil, nil
 			}
-			i++
+			at = i + 1
 		default:
-			return args, nil
+			return args[at:], nil
 		}
-		args, words, literal = args[i:], words[i:], literal[i:]
 	}
-	return nil, nil
+	return nil, ctx.Err()
+}
+
+func wrappedCommandStart(words []string, literal []bool) int {
+	i := 1
+	for i < len(words) && literal[i] && (words[0] == "command" && words[i] == "-p" || words[0] == "env" && strings.Contains(words[i], "=")) {
+		i++
+	}
+	if i < len(words) && literal[i] && words[i] == "--" {
+		i++
+	}
+	return i
 }
 
 // ghPRArgs moves inherited repository flags after the PR action.

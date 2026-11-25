@@ -103,7 +103,7 @@ type cancelDuringWrappers struct {
 
 func (c *cancelDuringWrappers) Err() error {
 	c.checks++
-	if c.checks == 2020 {
+	if c.checks == 1000 {
 		c.cancel()
 	}
 	return c.Context.Err()
