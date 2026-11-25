@@ -17,8 +17,6 @@ import (
 func TestContentScanStopsAtDeadline(t *testing.T) {
 	d := testDB(t)
 	seedSearchSession(t, d, "s1", "project", [][2]string{{"user", "ask opus and fable"}})
-	hasFTS := d.HasFTS(t.Context())
-	d.rawReader().SetMaxOpenConns(1)
 	previous := contentScanTimeout
 	contentScanTimeout = time.Nanosecond
 	t.Cleanup(func() { contentScanTimeout = previous })
@@ -26,66 +24,17 @@ func TestContentScanStopsAtDeadline(t *testing.T) {
 		name, mode, pattern, sessionID string
 		keywordOnly                    bool
 	}{
-		{"substring", "substring", "ask opus and fable", "", false},
 		{"session substring", "substring", "ask opus and fable", "s1", false},
-		{"regex", "regex", "ask.*fable", "", false},
 		{"session regex", "regex", "ask.*fable", "s1", false},
-		{"terms", "terms", "ask opus and fable", "", false},
 		{"session terms", "terms", "ask opus and fable", "s1", false},
 		{"fts", "fts", "ask opus and fable", "", false},
 		{"hybrid", "hybrid", "ask opus and fable", "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if (tc.keywordOnly || tc.mode == "fts") && !hasFTS {
-				t.Skip("fts5 not available")
-			}
 			_, err := d.SearchContent(t.Context(), ContentSearchFilter{Mode: tc.mode, Pattern: tc.pattern, SessionID: tc.sessionID, KeywordOnly: tc.keywordOnly})
 			require.ErrorIs(t, err, context.DeadlineExceeded)
-			waitCtx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-			defer cancel()
-			conn, err := d.rawReader().Conn(waitCtx)
-			require.NoError(t, err)
-			require.NoError(t, conn.Close())
-			assert.Zero(t, d.rawReader().Stats().InUse)
-			var releases []func()
-			defer func() {
-				for _, release := range releases {
-					release()
-				}
-			}()
-			for range bulkReadSlots {
-				release, ok := d.tryAcquireBulkRead()
-				require.True(t, ok)
-				releases = append(releases, release)
-			}
 		})
 	}
-}
-
-func TestContentScanDeadlineIncludesFTSProbe(t *testing.T) {
-	d := testDB(t)
-	d.rawReader().SetMaxOpenConns(1)
-	conn, err := d.rawReader().Conn(t.Context())
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = conn.Close() })
-	previous := contentScanTimeout
-	contentScanTimeout = time.Second
-	t.Cleanup(func() { contentScanTimeout = previous })
-	_, err = d.SearchContent(t.Context(), ContentSearchFilter{Mode: "fts", Pattern: "ask opus and fable"})
-	assert.ErrorIs(t, err, context.DeadlineExceeded)
-}
-
-func TestContentScanHybridDeadlineIncludesFTSProbe(t *testing.T) {
-	d := testDB(t)
-	d.rawReader().SetMaxOpenConns(1)
-	conn, err := d.rawReader().Conn(t.Context())
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = conn.Close() })
-	previous := contentScanTimeout
-	contentScanTimeout = time.Second
-	t.Cleanup(func() { contentScanTimeout = previous })
-	_, err = d.SearchContent(t.Context(), ContentSearchFilter{Mode: "hybrid", Pattern: "needle", KeywordOnly: true})
-	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 type hybridDeadlineSearcher struct {

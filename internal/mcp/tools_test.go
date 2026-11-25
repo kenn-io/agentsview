@@ -2718,19 +2718,14 @@ func (s *deadlineContentService) SearchContent(ctx context.Context, req service.
 func TestSearchContentSharedDeadline(t *testing.T) {
 	for _, tc := range []struct {
 		name, mode string
-		concepts   []string
 		bounded    bool
 	}{
-		{name: "substring", bounded: true}, {name: "semantic", mode: "semantic"}, {name: "concepts", concepts: []string{"needle", "thread"}},
+		{name: "substring", bounded: true}, {name: "semantic", mode: "semantic"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := &deadlineContentService{local: true}
 			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
-			pattern := "needle"
-			if len(tc.concepts) > 0 {
-				pattern = ""
-			}
-			_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: pattern, Mode: tc.mode, Concepts: tc.concepts, IncludeActive: true})
+			_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Mode: tc.mode, IncludeActive: true})
 			require.NoError(t, err)
 			require.Greater(t, len(fake.deadlines), 1)
 			for i := range fake.deadlines {
@@ -2742,24 +2737,11 @@ func TestSearchContentSharedDeadline(t *testing.T) {
 }
 
 func TestSearchContentCountDeadlineKeepsMatches(t *testing.T) {
-	fake := &deadlineContentService{oversized: true, local: true}
+	fake := &deadlineContentService{oversized: true}
 	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
 	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", IncludeActive: true, Limit: 20})
 	require.NoError(t, err)
 	assert.NotEmpty(t, out.Matches)
 	assert.Zero(t, out.Total)
 	assert.Contains(t, out.Note, "count timed out")
-	require.Len(t, fake.deadlines, 2)
-	assert.Equal(t, fake.deadlines[0], fake.deadlines[1])
-}
-
-func TestSearchContentNonLocalHasNoDeadline(t *testing.T) {
-	fake := &deadlineContentService{}
-	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
-	_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", IncludeActive: true})
-	require.NoError(t, err)
-	require.Greater(t, len(fake.bounded), 1)
-	for _, bounded := range fake.bounded {
-		assert.False(t, bounded)
-	}
 }

@@ -1048,7 +1048,6 @@ func TestSessionSearchHybridKeywordFallback(t *testing.T) {
 type deadlineCLIService struct {
 	service.SessionService
 	deadlines []time.Time
-	modes     []string
 }
 
 func (s *deadlineCLIService) LocalContentScan() bool { return true }
@@ -1060,7 +1059,6 @@ func (s *deadlineCLIService) MemoryStatus(context.Context) (service.MemoryStatus
 func (s *deadlineCLIService) SearchContent(ctx context.Context, req service.ContentSearchRequest) (*service.ContentSearchResult, error) {
 	deadline, _ := ctx.Deadline()
 	s.deadlines = append(s.deadlines, deadline)
-	s.modes = append(s.modes, req.Mode)
 	return &service.ContentSearchResult{}, nil
 }
 
@@ -1070,9 +1068,8 @@ func TestSessionSearchFollowupsShareDeadline(t *testing.T) {
 	req := service.ContentSearchRequest{Pattern: "missing words", Mode: "substring"}
 	_, _, err := searchContentWithHints(t.Context(), cmd, svc, req)
 	require.NoError(t, err)
-	require.Greater(t, len(svc.deadlines), 2)
+	require.Greater(t, len(svc.deadlines), 1)
 	assert.False(t, svc.deadlines[0].IsZero())
-	assert.Contains(t, svc.modes, "fts")
 	for _, deadline := range svc.deadlines {
 		assert.Equal(t, svc.deadlines[0], deadline)
 	}

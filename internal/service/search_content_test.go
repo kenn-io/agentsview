@@ -565,10 +565,21 @@ func TestContentSearchContextBackend(t *testing.T) {
 		{"HTTP", servicehttp.NewHTTPBackend("http://example.org", "", true, ""), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := service.ContentSearchContext(t.Context(), tc.svc, service.ContentSearchRequest{Mode: "substring"})
-			defer cancel()
-			_, bounded := ctx.Deadline()
-			assert.Equal(t, tc.bounded, bounded)
+			for _, req := range []struct {
+				name    string
+				request service.ContentSearchRequest
+				bounded bool
+			}{
+				{"substring", service.ContentSearchRequest{Mode: "substring"}, tc.bounded},
+				{"concepts", service.ContentSearchRequest{Concepts: []string{"needle", "thread"}}, false},
+			} {
+				t.Run(req.name, func(t *testing.T) {
+					ctx, cancel := service.ContentSearchContext(t.Context(), tc.svc, req.request)
+					defer cancel()
+					_, bounded := ctx.Deadline()
+					assert.Equal(t, req.bounded, bounded)
+				})
+			}
 		})
 	}
 }

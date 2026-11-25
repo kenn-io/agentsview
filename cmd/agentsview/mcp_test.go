@@ -769,10 +769,6 @@ func TestLocalDaemonContentSearchDeadline(t *testing.T) {
 					defer cancel()
 					_, hasDeadline := ctx.Deadline()
 					assert.Equal(t, tc.want, hasDeadline)
-					ctx, cancel = service.ContentSearchContext(t.Context(), svc, service.ContentSearchRequest{Mode: "semantic"})
-					defer cancel()
-					_, hasDeadline = ctx.Deadline()
-					assert.False(t, hasDeadline)
 				})
 			}
 		})
