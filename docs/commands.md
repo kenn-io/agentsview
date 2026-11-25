@@ -2375,12 +2375,15 @@ ______________________________________________________________________
 ### `agentsview index embeddings`
 
 Manage the local semantic search embedding index. Running `build` turns search
-on when needed, while the other subcommands require it to be enabled. For
-configuration and search details, see
+on when needed, while `switch` replaces the embedding recipe with the supplied
+model and one server, restarts the daemon, and rebuilds the session index. Other
+recipe options return to their defaults. It rebuilds Recall too when Recall
+embeddings are enabled. For configuration and search details, see
 [Semantic Search](/docs/semantic-search/).
 
 ```bash
 agentsview index embeddings build           # build or refresh the index
+agentsview index embeddings switch <endpoint> --model <model> --dimension <n> [--api-key-file <path>]
 agentsview index embeddings list            # list embedding generations
 agentsview index embeddings activate <id>   # activate a generation
 agentsview index embeddings retire <id>     # retire a generation

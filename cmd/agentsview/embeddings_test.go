@@ -1456,6 +1456,125 @@ func TestEmbeddingsBuildDispatchesToDaemon(t *testing.T) {
 		"daemon-dispatched build must not open vectors.db directly")
 }
 
+func TestEmbeddingsSwitch(t *testing.T) {
+	for _, tc := range []struct {
+		name                      string
+		recall, running, conflict bool
+	}{
+		{name: "waits and rebuilds recall", recall: true, running: true},
+		{name: "skips recall", recall: false},
+		{name: "joins a build started after restart", recall: false, conflict: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setTestHome(t, t.TempDir())
+			dataDir := testDataDir(t)
+			writeTestConfig(t, dataDir, fmt.Sprintf(`
+[vector]
+enabled = true
+include_automated = true
+
+[vector.embeddings]
+model = "old-model"
+dimension = 3
+max_input_chars = 1000
+
+[vector.embeddings.servers.old]
+endpoint = "http://127.0.0.1:1/v1"
+
+[vector.embed]
+recall = %t
+`, tc.recall))
+
+			oldPollInterval, oldRestart := embeddingsPollInterval, restartEmbeddingsDaemon
+			embeddingsPollInterval = time.Millisecond
+			t.Cleanup(func() {
+				embeddingsPollInterval = oldPollInterval
+				restartEmbeddingsDaemon = oldRestart
+			})
+
+			var events []string
+			statusReads := map[string]int{}
+			var requests []vector.BuildRequest
+			startEmbeddingsTestDaemon(t, dataDir, map[string]http.HandlerFunc{
+				"GET /api/v1/embeddings/status": func(w http.ResponseWriter, r *http.Request) {
+					store := r.URL.Query().Get("store")
+					if store == "" {
+						store = "messages"
+					}
+					statusReads[store]++
+					events = append(events, "status:"+store)
+					running := tc.running && len(requests) == 0 &&
+						store == "messages" && statusReads[store] == 1
+					w.Header().Set("Content-Type", "application/json")
+					_ = json.MarshalWrite(w, vector.BuildStatus{Running: running, Phase: "embed", Done: 1, Total: 2})
+				},
+				"POST /api/v1/embeddings/build": func(w http.ResponseWriter, r *http.Request) {
+					var req vector.BuildRequest
+					if !assert.NoError(t, json.UnmarshalRead(r.Body, &req)) {
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+					requests = append(requests, req)
+					events = append(events, "build:"+req.Store)
+					w.Header().Set("Content-Type", "application/json")
+					if tc.conflict && len(requests) == 1 {
+						w.WriteHeader(http.StatusConflict)
+						io.WriteString(w, `{"message":"a build is already running"}`)
+						return
+					}
+					w.WriteHeader(http.StatusAccepted)
+					io.WriteString(w, `{"started":true}`)
+				},
+			})
+
+			restartEmbeddingsDaemon = func(context.Context, io.Writer) error {
+				events = append(events, "restart")
+				cfg, err := config.LoadReadOnly()
+				require.NoError(t, err)
+				assert.True(t, cfg.Vector.Enabled)
+				assert.Equal(t, "new-model", cfg.Vector.Embeddings.Model)
+				assert.Equal(t, "https://embed.example/v1", cfg.Vector.Embeddings.Servers["default"].Endpoint)
+				return nil
+			}
+
+			cmd := newRootCommand()
+			cmd.SetContext(t.Context())
+			cmd.SetIn(strings.NewReader(""))
+			var out strings.Builder
+			cmd.SetOut(&out)
+			cmd.SetArgs([]string{
+				"index", "embeddings", "switch", "https://embed.example/v1",
+				"--model", "new-model", "--dimension", "3",
+			})
+			require.NoError(t, cmd.Execute())
+
+			wantEvents := []string{"status:messages"}
+			if tc.running {
+				wantEvents = append(wantEvents, "status:messages")
+			}
+			wantEvents = append(wantEvents, "status:recall", "restart", "build:messages", "status:messages")
+			if tc.recall {
+				wantEvents = append(wantEvents, "build:recall", "status:recall")
+			}
+			assert.Equal(t, wantEvents, events)
+			if tc.recall {
+				require.Len(t, requests, 2)
+				assert.Equal(t, "recall", requests[1].Store)
+			} else {
+				require.Len(t, requests, 1)
+			}
+			assert.Equal(t, "messages", requests[0].Store)
+			assert.True(t, requests[0].IncludeAutomated)
+			if tc.running {
+				assert.Contains(t, out.String(), "Waiting for the current embedding build to finish")
+			}
+			if tc.conflict {
+				assert.Contains(t, out.String(), "a build is already running")
+			}
+		})
+	}
+}
+
 func TestEmbeddingsBuildRejectsBackstopWithRepair(t *testing.T) {
 	cmd := newEmbeddingsBuildCommand()
 	require.NoError(t, cmd.Flags().Set("backstop", "true"))

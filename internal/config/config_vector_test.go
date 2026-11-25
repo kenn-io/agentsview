@@ -2,6 +2,7 @@ package config
 
 import (
 	"maps"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -400,6 +401,100 @@ func TestVectorConfigAPIKeyEnv(t *testing.T) {
 
 	t.Setenv("AGENTSVIEW_TEST_VECTOR_API_KEY", "secret-123")
 	assert.Equal(t, "secret-123", requireAPIKey(t, server))
+}
+
+func TestSaveVectorEmbeddingsServer(t *testing.T) {
+	f := newConfigFixture(t)
+	f.WriteTOML(t, map[string]any{
+		"unrelated": map[string]any{"keep": true},
+		"vector": map[string]any{
+			"enabled": false, "include_automated": true, "roles": []string{"user"},
+			"db_path": "custom-vectors.db",
+			"embed":   map[string]any{"recall": true},
+			"embeddings": map[string]any{
+				"model": "nomic-embed-text", "dimension": 768, "max_input_chars": 4000,
+				"query_prefix": "old query: ", "document_prefix": "old document: ",
+				"default_server": "old",
+				"servers": map[string]any{
+					"old":   map[string]any{"endpoint": "http://127.0.0.1:11434/v1"},
+					"extra": map[string]any{"endpoint": "http://127.0.0.1:8000/v1"},
+				},
+			},
+		},
+	})
+	keyPath := filepath.Join(secretDir(t), "embedding-api-key")
+	require.NoError(t, os.WriteFile(keyPath, []byte("private test key"), 0o600))
+	cfg := f.LoadFile(t)
+	require.NoError(t, cfg.SaveVectorEmbeddingsServer(
+		"https://embed.example/v1", "embeddinggemma", 768, keyPath,
+	))
+
+	got := f.LoadFile(t)
+	assert.True(t, got.Vector.Enabled)
+	assert.True(t, got.Vector.IncludeAutomated)
+	assert.Equal(t, []string{"user"}, got.Vector.Roles)
+	assert.Equal(t, "custom-vectors.db", got.Vector.DBPath)
+	assert.True(t, got.Vector.Embed.Recall)
+	assert.Equal(t, "embeddinggemma", got.Vector.Embeddings.Model)
+	assert.Equal(t, 768, got.Vector.Embeddings.Dimension)
+	assert.Equal(t, []string{"default"}, got.Vector.Embeddings.ServerNames())
+	assert.Empty(t, got.Vector.Embeddings.DefaultServer)
+	server := got.Vector.Embeddings.Servers["default"]
+	assert.Equal(t, "https://embed.example/v1", server.Endpoint)
+	assert.Equal(t, keyPath, server.APIKeyFile)
+	assert.Equal(t, 8192, got.Vector.Embeddings.MaxInputChars)
+	assert.Empty(t, got.Vector.Embeddings.QueryPrefix)
+	assert.Empty(t, got.Vector.Embeddings.DocumentPrefix)
+
+	data, err := os.ReadFile(f.Path(configFileName))
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "private test key")
+	decoded := f.ReadTOMLMap(t)
+	vectorSection := decoded["vector"].(map[string]any)
+	embeddings := vectorSection["embeddings"].(map[string]any)
+	assert.NotContains(t, embeddings, "default_server")
+	servers := embeddings["servers"].(map[string]any)
+	require.Len(t, servers, 1)
+	assert.Contains(t, servers, "default")
+	assert.Equal(t, true, decoded["unrelated"].(map[string]any)["keep"])
+
+	t.Run("Nomic keeps its default input recipe", func(t *testing.T) {
+		f := newConfigFixture(t)
+		f.WriteTOML(t, map[string]any{"vector": map[string]any{"enabled": true}})
+		cfg := f.LoadFile(t)
+		require.NoError(t, cfg.SaveVectorEmbeddingsServer(
+			"https://embed.example/v1", "nomic-embed-text", 768, "",
+		))
+		got := f.LoadFile(t).Vector.Embeddings
+		assert.Equal(t, 4000, got.MaxInputChars)
+		assert.Equal(t, 2048, got.ModelContextTokens)
+		assert.Equal(t, "search_query: ", got.QueryPrefix)
+		assert.Equal(t, "search_document: ", got.DocumentPrefix)
+	})
+
+	for _, tc := range []struct {
+		name, endpoint, apiKeyFile string
+		dimension                  int
+	}{
+		{name: "invalid endpoint", endpoint: "file:///bad", dimension: 768},
+		{name: "invalid dimension", endpoint: "https://embed.example/v1", dimension: 0},
+		{name: "missing key file", endpoint: "https://embed.example/v1", dimension: 768, apiKeyFile: f.Path("missing-key")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newConfigFixture(t)
+			f.WriteConfigText(t, "[vector]\nenabled = false\n")
+			before, err := os.ReadFile(f.Path(configFileName))
+			require.NoError(t, err)
+			cfg := f.LoadFile(t)
+			err = cfg.SaveVectorEmbeddingsServer(
+				tc.endpoint, "embeddinggemma", tc.dimension, tc.apiKeyFile,
+			)
+			require.Error(t, err)
+			after, readErr := os.ReadFile(f.Path(configFileName))
+			require.NoError(t, readErr)
+			assert.Equal(t, before, after)
+		})
+	}
 }
 
 // minimalServers returns the smallest valid servers table for TOML load

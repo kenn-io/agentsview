@@ -121,6 +121,13 @@ lexical queries stay available as an automatic or manual refresh catches up. See
 
 ### Named embeddings servers
 
+To replace the configured server and rebuild in one step, run
+`agentsview index embeddings switch <endpoint> --model <model> --dimension <n>`.
+Pass `--api-key-file <path>` when the endpoint needs a key. The command replaces
+the embedding recipe with the supplied model and one server, resets other
+recipe options to their defaults, restarts the daemon, and rebuilds the session
+index, plus Recall when its embedding index is enabled.
+
 To use Kit's local server while Ollama stays running, keep your explicit Nomic
 recipe and add a named server:
 

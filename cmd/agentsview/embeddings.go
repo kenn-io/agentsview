@@ -1,4 +1,4 @@
-// ABOUTME: `embeddings` command group — build, list, activate, and retire
+// ABOUTME: `embeddings` command group — build, switch, list, activate, and retire
 // ABOUTME: semantic-search embedding generations, via the daemon or directly.
 package main
 
@@ -53,6 +53,12 @@ const fingerprintDisplayLen = 12
 // cut off.
 var embeddingsDaemonHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
+var errNoReachableEmbeddingsDaemon = errors.New("no reachable local agentsview daemon found")
+
+var restartEmbeddingsDaemon = func(ctx context.Context, out io.Writer) error {
+	return runDaemonRestart(ctx, out, defaultDaemonCommandDeps())
+}
+
 func newEmbeddingsCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "embeddings",
@@ -68,10 +74,114 @@ func newEmbeddingsCommand() *cobra.Command {
 		},
 	}
 	cmd.AddCommand(newEmbeddingsBuildCommand())
+	cmd.AddCommand(newEmbeddingsSwitchCommand())
 	cmd.AddCommand(newEmbeddingsListCommand())
 	cmd.AddCommand(newEmbeddingsActivateCommand())
 	cmd.AddCommand(newEmbeddingsRetireCommand())
 	return cmd
+}
+
+func newEmbeddingsSwitchCommand() *cobra.Command {
+	var model, apiKeyFile string
+	var dimension int
+	cmd := &cobra.Command{
+		Use:          "switch <endpoint>",
+		Short:        "Switch the embedding server and rebuild the index",
+		Long:         "Replace the embedding recipe with the supplied model and one server, restart the AgentsView daemon, and rebuild the session index. Other recipe options return to their defaults. Recall is rebuilt too when its embedding index is enabled.",
+		Example:      "  agentsview index embeddings switch https://host/v1 --model embeddinggemma --dimension 768 --api-key-file ~/.config/agentsview/api-key",
+		SilenceUsage: true,
+		Args:         cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runEmbeddingsSwitch(
+				cmd.Context(), cmd.OutOrStdout(), args[0], model, dimension, apiKeyFile,
+			)
+		},
+	}
+	cmd.Flags().StringVar(&model, "model", "", "Embedding model served by the endpoint")
+	cmd.Flags().IntVar(&dimension, "dimension", 0, "Length of each returned embedding vector")
+	cmd.Flags().StringVar(&apiKeyFile, "api-key-file", "", "File containing the endpoint API key")
+	_ = cmd.MarkFlagRequired("model")
+	_ = cmd.MarkFlagRequired("dimension")
+	return cmd
+}
+
+func runEmbeddingsSwitch(
+	ctx context.Context, out io.Writer, endpoint, model string, dimension int, apiKeyFile string,
+) error {
+	cfg, err := loadDaemonClientConfig(config.ScopeVector)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	if cfg.ArchiveContent.UsageOnly() {
+		return fmt.Errorf("%w: embeddings require transcript content", db.ErrArchiveContentExcluded)
+	}
+
+	client, daemonErr := resolveEmbeddingsDaemonClient(cfg)
+	if daemonErr != nil && !errors.Is(daemonErr, errNoReachableEmbeddingsDaemon) {
+		return daemonErr
+	}
+	if err := cfg.SaveVectorEmbeddingsServer(endpoint, model, dimension, apiKeyFile); err != nil {
+		return fmt.Errorf("saving embedding server: %w", err)
+	}
+
+	if daemonErr == nil {
+		waiting := false
+		for _, store := range []string{"messages", "recall"} {
+			client.store = store
+			if err := waitForEmbeddingsBuild(ctx, out, client, &waiting); err != nil {
+				return err
+			}
+		}
+	}
+	if err := restartEmbeddingsDaemon(ctx, out); err != nil {
+		return err
+	}
+
+	cfg, err = loadDaemonClientConfig(config.ScopeVector)
+	if err != nil {
+		return fmt.Errorf("loading config after daemon restart: %w", err)
+	}
+	stores := []string{"messages"}
+	if cfg.Vector.Embed.Recall {
+		stores = append(stores, "recall")
+	}
+	for _, store := range stores {
+		req := vector.BuildRequest{Store: store}
+		if store == vector.MessageIndexSpec().Name {
+			req.IncludeAutomated = vector.MessageIndexSpec().NormalizeIncludeAutomated(
+				cfg.Vector.IncludeAutomated,
+			)
+		}
+		if err := runEmbeddingsBuildDaemon(ctx, out, cfg, req); err != nil {
+			return fmt.Errorf("building %s embeddings: %w", store, err)
+		}
+	}
+	return nil
+}
+
+func waitForEmbeddingsBuild(
+	ctx context.Context, out io.Writer, client embeddingsDaemonClient, announced *bool,
+) error {
+	var progress buildProgressPrinter
+	for {
+		status, err := client.status(ctx)
+		if err != nil {
+			return err
+		}
+		if !status.Running {
+			return nil
+		}
+		if !*announced {
+			fmt.Fprintln(out, "Waiting for the current embedding build to finish…")
+			*announced = true
+		}
+		progress.print(out, status.Phase, status.Done, status.Total)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(embeddingsPollInterval):
+		}
+	}
 }
 
 // EmbeddingsBuildOptions holds the parsed `embeddings build` flags.
@@ -1062,7 +1172,7 @@ func resolveEmbeddingsDaemonClient(cfg config.Config) (embeddingsDaemonClient, e
 		); err != nil {
 			return embeddingsDaemonClient{}, err
 		}
-		return embeddingsDaemonClient{}, errors.New("no reachable local agentsview daemon found")
+		return embeddingsDaemonClient{}, errNoReachableEmbeddingsDaemon
 	}
 	return embeddingsDaemonClient{baseURL: urlFromDaemonRuntime(rt), token: cfg.AuthToken}, nil
 }
