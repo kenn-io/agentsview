@@ -770,6 +770,16 @@ fixtures retain this field; missing identities remain source-local.
 
 ## Codex (`codex`)
 
+- **Lookup benchmark items (observed, no-public-source, 2026-11-24):** Local
+  Codex 0.172.0 rollouts
+  record nested code-mode MCP calls as `event_msg` records with payload type
+  `item_completed`. The payload has `started_at_ms`, `completed_at_ms`, and an
+  `item` of type `McpToolCall` with `server`, `tool`, `arguments`, `status`,
+  and `result`. Command calls use `CommandExecution` items with `command`,
+  `aggregated_output`, and `exit_code`. The lookup benchmark scores these
+  individual results and does not infer them from an `exec` script's combined
+  output. The rollout parser continues to store that script as one call.
+
 - **Reasoning, compaction, and usage repeats (checked 2026-11-11 at
   `87b7bdbf2efb9cb6fb15d821ef535061012c0138`):** The pinned
   [response schema](https://github.com/openai/codex/blob/87b7bdbf2efb9cb6fb15d821ef535061012c0138/codex-rs/protocol/src/models.rs)

@@ -1,0 +1,13 @@
+[
+  {"id":"11111111-1111-4111-8111-111111111111","age_hours":96,"title":"Harbor cache review","content":"The harbor cache uses the violet ledger namespace because the old namespace caused lock contention."},
+  {"id":"22222222-2222-4222-8222-222222222222","age_hours":72,"title":"Aurora deploy checklist","content":"The Aurora deploy checklist says to use the north pier marker for the release."},
+  {"id":"33333333-3333-4333-8333-333333333333","age_hours":48,"title":"Review issue 123 ownership","content":"The earlier owner of https://example.com/project-a/pull/123 was the cedar team. The cedar team handed it off."},
+  {"id":"44444444-4444-4444-8444-444444444444","age_hours":24,"title":"Take over issue 123","content":"The maple team now owns https://example.com/project-a/pull/123 after the cedar team handed it off."},
+  {"id":"55555555-5555-4555-8555-555555555555","age_hours":12,"title":"Investigate the clock drift","content":"The clock drift investigation found the worker was using the host timezone. The fix uses UTC."},
+  {"id":"66666666-6666-4666-8666-666666666666","age_hours":0,"title":"Recent lighthouse work","content":"The latest lighthouse session is checking the retry queue. The prior session finished the index migration."},
+  {"id":"77777777-7777-4777-8777-777777777777","age_hours":80,"title":"Harbor cache experiment","content":"An early harbor cache experiment used a copper ledger namespace, before the later review."},
+  {"id":"88888888-8888-4888-8888-888888888888","age_hours":36,"title":"Lighthouse index audit","content":"A delegated agent is reviewing the lighthouse event index.","spawned_child_id":"99999999-9999-4999-8999-999999999999"},
+  {"id":"99999999-9999-4999-8999-999999999999","age_hours":35,"title":"Delegated lighthouse event index review","content":"The child audit found that route_events lacked an index on project_id and created a migration proposal.","parent_id":"88888888-8888-4888-8888-888888888888"},
+  {"id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","age_hours":10,"title":"Release smoke test","content":"The release smoke test ran against the isolated candidate.","tool_result":"db-check failed: stale lease token rejected; retry budget was zero."},
+  {"id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","age_hours":60,"title":"Long migration review","content":"The accepted index name is account_created_project.","padding_repeats":1100}
+]

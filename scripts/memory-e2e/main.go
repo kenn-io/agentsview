@@ -35,17 +35,19 @@ const (
 )
 
 type config struct {
-	live        bool
-	clients     string
-	runs        int
-	caseName    string
-	outputDir   string
-	agentsview  string
-	claudeModel string
-	codexModel  string
-	effort      string
-	timeout     time.Duration
-	repository  string
+	live           bool
+	clients        string
+	runs           int
+	caseName       string
+	outputDir      string
+	agentsview     string
+	claudeModel    string
+	codexModel     string
+	effort         string
+	timeout        time.Duration
+	repository     string
+	suite          string
+	lookupManifest string
 }
 
 type behaviorCase struct {
@@ -131,6 +133,8 @@ func parseConfig(args []string) (config, error) {
 	fs.SetOutput(io.Discard)
 	fs.BoolVar(&cfg.live, "live", false,
 		"acknowledge that this runs authenticated Claude Code and Codex sessions")
+	fs.StringVar(&cfg.suite, "suite", "memory", "suite to run: memory or lookups")
+	fs.StringVar(&cfg.lookupManifest, "lookup-manifest", "", "local lookup corpus and question manifest")
 	fs.StringVar(&cfg.clients, "client", "all", "client to run: claude, codex, or all")
 	fs.IntVar(&cfg.runs, "runs", 3, "runs per behavioral case")
 	fs.StringVar(&cfg.caseName, "case", "", "run one named case")
@@ -146,6 +150,9 @@ func parseConfig(args []string) (config, error) {
 	if !cfg.live {
 		return config{}, errors.New("memory-e2e: --live is required; authenticated agent runs may consume quota")
 	}
+	if cfg.suite != "memory" && cfg.suite != "lookups" {
+		return config{}, fmt.Errorf("memory-e2e: unknown --suite %q", cfg.suite)
+	}
 	if cfg.runs < 1 {
 		return config{}, errors.New("memory-e2e: --runs must be at least 1")
 	}
@@ -156,10 +163,21 @@ func parseConfig(args []string) (config, error) {
 		return config{}, err
 	}
 	if cfg.outputDir == "" {
-		cfg.outputDir = filepath.Join(repo,
-			".test-data-memory-e2e-"+time.Now().UTC().Format("20060102T150405Z"))
+		if cfg.suite == "lookups" {
+			cache, err := os.UserCacheDir()
+			if err != nil {
+				return config{}, err
+			}
+			cfg.outputDir = filepath.Join(cache, "agentsview", "memory-e2e", "lookups-"+time.Now().UTC().Format("20060102T150405Z"))
+		} else {
+			cfg.outputDir = filepath.Join(repo,
+				".test-data-memory-e2e-"+time.Now().UTC().Format("20060102T150405Z"))
+		}
 	} else if !filepath.IsAbs(cfg.outputDir) {
 		cfg.outputDir = filepath.Join(repo, cfg.outputDir)
+	}
+	if cfg.lookupManifest != "" && !filepath.IsAbs(cfg.lookupManifest) {
+		cfg.lookupManifest = filepath.Join(repo, cfg.lookupManifest)
 	}
 	return cfg, nil
 }
@@ -253,6 +271,9 @@ func run(ctx context.Context, cfg config) error {
 	bin, err := prepareAgentsView(ctx, cfg)
 	if err != nil {
 		return err
+	}
+	if cfg.suite == "lookups" {
+		return runLookupSuite(ctx, cfg, bin)
 	}
 	clients, _ := selectedClients(cfg.clients)
 	cases, err := selectCases(cfg.caseName)
@@ -499,11 +520,18 @@ func runSourceSession(
 func syncSourceSession(
 	ctx context.Context, bin, dataDir, sourceFile string,
 ) (string, error) {
+	return syncSourceSessionWithEnv(ctx, bin, dataDir, sourceFile, nil)
+}
+
+func syncSourceSessionWithEnv(
+	ctx context.Context, bin, dataDir, sourceFile string, extraEnv []string,
+) (string, error) {
 	env := []string{
 		"AGENTSVIEW_DATA_DIR=" + dataDir,
 		"AGENTSVIEW_NO_DAEMON=1",
 		"DO_NOT_TRACK=1",
 	}
+	env = append(env, extraEnv...)
 	stdout, stderr, err := executeAgent(ctx, "", env, bin,
 		"session", "sync", sourceFile, "--format", "json")
 	if err != nil {

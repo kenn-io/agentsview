@@ -554,11 +554,16 @@ e2e:
 		npx playwright test
 
 # Run the opt-in native-client conversation-memory release gate. This uses the
-# caller's authenticated Claude Code and Codex installations and writes traces
-# only under an ignored .test-data-memory-e2e-* directory.
+# caller's authenticated Claude Code and Codex installations. The memory suite
+# writes traces under an ignored .test-data-memory-e2e-* directory; lookups use
+# the user's cache directory.
 MEMORY_E2E_ARGS ?=
 memory-e2e: pricing-snapshot ensure-embed-dir
-	go run ./scripts/memory-e2e --live $(MEMORY_E2E_ARGS)
+	go run -tags fts5 ./scripts/memory-e2e --live $(MEMORY_E2E_ARGS)
+
+.PHONY: test-memory-e2e
+test-memory-e2e: pricing-snapshot ensure-embed-dir
+	go test -tags fts5 ./scripts/memory-e2e -run '$(TEST_RUN)'
 
 # Vet
 vet: pricing-snapshot ensure-embed-dir
