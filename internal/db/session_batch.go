@@ -68,9 +68,14 @@ func (db *DB) projectSessionBatchMessages(write SessionBatchWrite) []Message {
 }
 
 // storageSessionBatchWrite applies the archive's image, content, and usage-only policies to a sanitized write before the transaction writes it.
-func (db *DB) storageSessionBatchWrite(write SessionBatchWrite) SessionBatchWrite {
+func (db *DB) storageSessionBatchWrite(ctx context.Context, write SessionBatchWrite) (SessionBatchWrite, error) {
 	write.Messages = db.projectSessionBatchMessages(write)
 	if db.ArchiveContent().OmitsToolContent() {
+		links, err := ToolCallPRLinks(ctx, write.Messages, "", "")
+		if err != nil {
+			return SessionBatchWrite{}, err
+		}
+		write.Session.SetProjectedPRLinks(links)
 		write.Signals.ToolObservations = []ToolObservation{}
 		write.Checkpoint, write.CheckpointBlobs = nil, nil
 	}
@@ -80,32 +85,20 @@ func (db *DB) storageSessionBatchWrite(write SessionBatchWrite) SessionBatchWrit
 		write.Findings = nil
 		write.SkipSignalUpdates = false
 	}
-	return write
-}
-
-func hasToolCalls(messages []Message) bool {
-	for _, message := range messages {
-		if len(message.ToolCalls) > 0 {
-			return true
-		}
-	}
-	return false
+	return write, nil
 }
 
 func retainUsageToolPRLinksTx(ctx context.Context, tx *sql.Tx, sessionID string, messages []Message) error {
-	if !hasToolCalls(messages) {
-		return nil
-	}
-	links, err := usageToolPRLinksTx(ctx, tx, sessionID, messages)
+	links, err := ToolCallPRLinks(ctx, messages, "", "")
 	if err != nil || len(links) == 0 {
 		return err
 	}
-	var stored string
-	if err := tx.QueryRowContext(ctx, `SELECT structured_pr_links FROM sessions WHERE id=?`, sessionID).Scan(&stored); err != nil {
+	var stored, visible string
+	if err := tx.QueryRowContext(ctx, `SELECT structured_pr_links, pr_links FROM sessions WHERE id=?`, sessionID).Scan(&stored, &visible); err != nil {
 		return err
 	}
 	encoded := EncodePRLinks(parser.CombinePRLinks(DecodePRLinks(stored), links))
-	_, err = tx.ExecContext(ctx, `UPDATE sessions SET structured_pr_links=?, pr_links=? WHERE id=?`, encoded, encoded, sessionID)
+	_, err = tx.ExecContext(ctx, `UPDATE sessions SET structured_pr_links=?, pr_links=? WHERE id=?`, encoded, EncodePRLinks(parser.CombinePRLinks(DecodePRLinks(visible), links)), sessionID)
 	return err
 }
 
@@ -115,28 +108,11 @@ func mergeUsagePRLinksTx(ctx context.Context, tx *sql.Tx, session *Session) erro
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	return mergePendingUsagePRLinks(ctx, tx, session, DecodePRLinks(stored))
-}
-
-func mergePendingUsagePRLinks(ctx context.Context, tx *sql.Tx, session *Session, stored []PRLink) error {
-	remote, changed, unknown, err := usagePRCheckoutContext(ctx, tx, session.ID, session.usagePRRemote)
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	links, changed, err := usageToolCallPRLinks(ctx, session.usagePRMessages, remote, changed || session.PRRepositoryChanged, unknown)
-	if err != nil {
-		return err
-	}
-	session.PRRepositoryChanged = session.PRRepositoryChanged || changed
-	session.PRLinks = parser.CombinePRLinks(stored, session.PRLinks, links)
+	session.PRLinks = parser.CombinePRLinks(DecodePRLinks(stored), session.PRLinks, session.projectedPRLinks)
 	return nil
-}
-
-func usagePRCheckoutContext(ctx context.Context, tx *sql.Tx, sessionID, fallback string) (string, bool, bool, error) {
-	var remote string
-	var changed, unknown bool
-	err := tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT git_remote FROM session_project_identity_snapshots WHERE session_id=?),?), COALESCE((SELECT remote_candidate_count>1 AND git_remote='' FROM session_project_identity_snapshots WHERE session_id=?),0), COALESCE((SELECT pr_repository_changed FROM sessions WHERE id=?),0)`, sessionID, fallback, sessionID, sessionID).Scan(&remote, &unknown, &changed)
-	return remote, changed, unknown, err
 }
 
 // SessionWouldShortenError reports a rejected message-count decrease.
@@ -243,7 +219,10 @@ func (db *DB) WriteSessionBatchContext(
 		if err != nil {
 			return result, err
 		}
-		write = db.storageSessionBatchWrite(write)
+		write, err = db.storageSessionBatchWrite(ctx, write)
+		if err != nil {
+			return result, err
+		}
 		savepoint := fmt.Sprintf("session_batch_%d", i)
 		if _, err := ctxTx.Exec("SAVEPOINT " + savepoint); err != nil {
 			return result, fmt.Errorf(
@@ -336,7 +315,9 @@ func (db *DB) WriteSessionBatchAtomic(ctx context.Context,
 		sanitized, err := sanitizeSessionBatchWriteContext(ctx, write)
 		var messagesWritten int
 		if err == nil {
-			write = db.storageSessionBatchWrite(sanitized)
+			write, err = db.storageSessionBatchWrite(ctx, sanitized)
+		}
+		if err == nil {
 			messagesWritten, err = db.writeOneSessionBatchTx(
 				ctx, tx, tx,
 				write,
@@ -578,7 +559,7 @@ func (db *DB) writeOneSessionBatchTx(
 			transcriptMessagesGainSourceIDs(stored, write.Messages)
 	}
 
-	if err := writeSessionBatchMetadataTx(ctx, tx, queries, write, upsertResult, !usageOnly); err != nil {
+	if err := writeSessionBatchMetadataTx(ctx, tx, queries, write, upsertResult); err != nil {
 		return 0, err
 	}
 
@@ -970,7 +951,7 @@ func (db *DB) upsertSessionBatchTx(ctx context.Context, tx *sql.Tx, write Sessio
 	if err := db.checkArchiveSessionProvenanceTx(ctx, tx, write); err != nil {
 		return sessionUpsertResult{}, err
 	}
-	if db.usageOnlyStorage() {
+	if db.ArchiveContent().OmitsToolContent() {
 		if err := mergeUsagePRLinksTx(ctx, tx, &write.Session); err != nil {
 			return sessionUpsertResult{}, err
 		}
@@ -994,7 +975,7 @@ func (db *DB) upsertSessionBatchTx(ctx context.Context, tx *sql.Tx, write Sessio
 	return upsertResult, nil
 }
 
-func writeSessionBatchMetadataTx(ctx context.Context, tx *sql.Tx, queries transactionQueries, write SessionBatchWrite, upsertResult sessionUpsertResult, refreshLinks bool) error {
+func writeSessionBatchMetadataTx(ctx context.Context, tx *sql.Tx, queries transactionQueries, write SessionBatchWrite, upsertResult sessionUpsertResult) error {
 	if write.IdentityObservation.Project != "" {
 		normalized, err := normalizeProjectIdentityObservation(
 			write.IdentityObservation,
@@ -1017,13 +998,13 @@ func writeSessionBatchMetadataTx(ctx context.Context, tx *sql.Tx, queries transa
 		var err error
 		if write.IdentitySnapshotProject == nil {
 			err = upsertProjectIdentityObservationTxContext(
-				ctx, tx, write.IdentityObservation, refreshLinks,
+				ctx, tx, write.IdentityObservation,
 			)
 		} else {
 			err = upsertProjectIdentityObservationWithSnapshotProjectTxContext(
 				ctx, tx, write.IdentityObservation,
 				*write.IdentitySnapshotProject,
-				upsertResult.inserted, true, refreshLinks,
+				upsertResult.inserted, true,
 			)
 		}
 		if err != nil {

@@ -61,7 +61,6 @@ const artifactToolCallRawBytesSQL = `
 	length(CAST(category AS BLOB)) +
 	length(CAST(COALESCE(tool_use_id, '') AS BLOB)) +
 	length(CAST(COALESCE(input_json, '') AS BLOB)) +
-	length(CAST(COALESCE(pr_links, '') AS BLOB)) +
 	length(CAST(COALESCE(skill_name, '') AS BLOB)) +
 	length(CAST(COALESCE(result_content, '') AS BLOB)) +
 	length(CAST(COALESCE(subagent_session_id, '') AS BLOB)) +
@@ -191,7 +190,7 @@ func attachArtifactNestedCollectionsTx(
 		SELECT id, message_id, session_id, tool_name, category,
 			tool_use_id, input_json, skill_name,
 			result_content_length, result_content, subagent_session_id,
-			file_path, call_index, COALESCE(pr_links, '')
+			file_path, call_index
 		FROM tool_calls
 		WHERE session_id = ?
 		LIMIT ?`, sessionID, limits.SessionToolCalls+1)
@@ -212,7 +211,7 @@ func attachArtifactNestedCollectionsTx(
 			&row.call.ToolName, &row.call.Category,
 			&toolUseID, &inputJSON, &skillName,
 			&resultLen, &resultContent, &subagentSessionID,
-			&filePath, &callIndex, &row.call.PRLinks,
+			&filePath, &callIndex,
 		); err != nil {
 			_ = rows.Close()
 			return fmt.Errorf("scanning bounded artifact tool call: %w", err)

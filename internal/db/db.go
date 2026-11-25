@@ -709,8 +709,7 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // indexing see them. Re-parse toolResultContentLength and raw tool-result array
 // providers in place; source and session identities are unchanged.)
 // (190: include retained tool calls in pull request links.)
-// (191: record repository uncertainty in usage-only sessions.)
-const dataVersion = 191
+const dataVersion = 190
 
 const archiveOnlyVersionBase = 1 << 20
 
@@ -2601,7 +2600,6 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"sessions", "structured_pr_links",
 			"ALTER TABLE sessions ADD COLUMN structured_pr_links TEXT NOT NULL DEFAULT ''; UPDATE sessions SET structured_pr_links=pr_links",
 		},
-		{"sessions", "pr_repository_changed", "ALTER TABLE sessions ADD COLUMN pr_repository_changed INTEGER NOT NULL DEFAULT 0"},
 		{"excluded_sessions", "file_path", "ALTER TABLE excluded_sessions ADD COLUMN file_path TEXT"},
 		{
 			"sessions", "trash_includes_codex_pages",
@@ -3078,7 +3076,6 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"tool_calls", "call_index",
 			"ALTER TABLE tool_calls ADD COLUMN call_index INTEGER",
 		},
-		{"tool_calls", "pr_links", "ALTER TABLE tool_calls ADD COLUMN pr_links TEXT"},
 		{
 			"worktree_project_mappings", "layout",
 			"ALTER TABLE worktree_project_mappings ADD COLUMN layout TEXT NOT NULL DEFAULT 'explicit'",
@@ -3453,7 +3450,6 @@ WHEN (
     OLD.cwd IS NOT NEW.cwd OR
     OLD.git_branch IS NOT NEW.git_branch OR
     OLD.structured_pr_links IS NOT NEW.structured_pr_links OR
-    OLD.pr_repository_changed IS NOT NEW.pr_repository_changed OR
     OLD.source_session_id IS NOT NEW.source_session_id OR
     OLD.source_version IS NOT NEW.source_version OR
     OLD.group_key IS NOT NEW.group_key OR

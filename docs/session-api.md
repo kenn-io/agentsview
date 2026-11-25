@@ -710,23 +710,14 @@ Because Claude Code records these links for the whole transcript, every session
 split from that transcript, such as a rewind's fork, carries them like its name
 and git branch.
 
-Bare numbers require one known checkout remote. Transcript-only and usage-only
-archives do not resolve them. A local command with
-`-R owner/repo` uses that remote's host when known and otherwise uses
-`github.com`. Hosted sessions and imported archives do not retain a checkout
-remote, so they use `github.com` for that form and cannot resolve bare numbers.
-Use a full URL or `-R host/owner/repo` to name another host in those sessions.
-Child-agent prompt URLs are references and do not establish that the session
-worked on the pull request. Transcript-only archives retain explicitly named
-links and repository changes when they discard tool inputs. Usage-only archives
-retain links named in new tool inputs as historical references; later writes do
-not remove them, and rebuilds preserve them. When a usage-only session runs a
-command that changes its repository configuration, such as `git remote set-url`,
-the session
-records that change. Later writes to that session then skip `-R owner/repo`,
-because the recorded remote may be stale and `gh` may have used another host.
-That record survives copies, rebuilds, and full rewrites of the session.
-Archives that discarded inputs before this feature cannot recover those links.
+Bare numbers require one known checkout remote and a command that does not
+change its working directory or repository context. Transcript-only and
+usage-only archives do not resolve bare numbers. `-R owner/repo` uses
+`github.com`; use a full URL or `-R host/owner/repo` for another host. A
+`GH_HOST` assignment in the same command prevents hostless `-R` links.
+Transcript-only and usage-only archives retain tool-derived links as historical
+references, so later writes do not remove them. Archives that discarded tool
+inputs before this feature cannot recover those links.
 
 To filter by pull request, use `session list --pr` or the `pr` query parameter.
 Pass `owner/repo` for any pull request in that repository, `owner/repo#123` for

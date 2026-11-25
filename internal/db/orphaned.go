@@ -2197,10 +2197,6 @@ func (d *DB) CopySessionMetadataFrom(
 		}
 	}
 
-	if err := d.copyRebuiltPRLinks(ctx, tx); err != nil {
-		return err
-	}
-
 	if d.usageOnlyStorage() {
 		// Pin notes are free text, which a usage archive does not store.
 		if _, err := tx.ExecContext(ctx,
@@ -2289,7 +2285,7 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 		"missing_verification_count",
 		"duplicate_prompt_count", "no_code_context_count",
 		"runaway_tool_loop_count",
-		"cwd", "git_branch", "pr_links", "structured_pr_links", "pr_repository_changed", "source_session_id",
+		"cwd", "git_branch", "pr_links", "structured_pr_links", "source_session_id",
 		"source_version", "group_key", "transcript_fidelity", "parser_malformed_lines",
 		"is_truncated", "last_write_incremental",
 		"termination_status", "transcript_revision",
@@ -2698,7 +2694,7 @@ func copySessionDataForIDs(
 		toolCallCols = append(toolCallCols, "call_index")
 		toolCallSelect = append(toolCallSelect, "NULL")
 	}
-	for _, column := range []string{"observed_outcome", "observed_repeat", "sequence_ending", "pr_links"} {
+	for _, column := range []string{"observed_outcome", "observed_repeat", "sequence_ending"} {
 		toolCallCols = append(toolCallCols, column)
 		if oldDBHasColumn(ctx, tx, "tool_calls", column) {
 			toolCallSelect = append(toolCallSelect, "otc."+column)
@@ -2819,11 +2815,8 @@ func copySessionDataForIDs(
 // removeGeneratedIdentitySnapshotsWithoutSource removes placeholder snapshots
 // created by the session-insert trigger for the current copy batch. Sources
 // predating parser-source snapshots cannot provide trustworthy replacements,
-// so every generated snapshot in that batch is removed. Newer sources keep a
-// placeholder only when it already names the source's checkout remote;
-// otherwise the source's snapshot replaces it before archive projection reads
-// the remote, and CopySessionMetadataFrom later overlays the rest. Mapped
-// orphans have no same-ID source snapshot and keep their archived evidence.
+// so every generated snapshot in that batch is removed. Newer sources retain
+// placeholders only when CopySessionMetadataFrom will overlay real evidence.
 // The temporary ID table and both snapshot primary keys keep the work
 // proportional to copied rows rather than total archive size.
 func removeGeneratedIdentitySnapshotsWithoutSource(
@@ -2837,9 +2830,8 @@ func removeGeneratedIdentitySnapshotsWithoutSource(
 		oldDBHasTable(ctx, tx, "session_project_identity_snapshots") {
 		missingSourceSnapshot = `NOT EXISTS (
 			SELECT 1 FROM old_db.session_project_identity_snapshots old_snapshot
-			WHERE old_snapshot.session_id = session_project_identity_snapshots.session_id
-			  AND old_snapshot.git_remote = session_project_identity_snapshots.git_remote
-			  AND old_snapshot.remote_candidate_count = session_project_identity_snapshots.remote_candidate_count
+			WHERE old_snapshot.session_id =
+				session_project_identity_snapshots.session_id
 		)`
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -2848,6 +2840,8 @@ func removeGeneratedIdentitySnapshotsWithoutSource(
 		  AND `+missingSourceSnapshot); err != nil {
 		return fmt.Errorf("removing generated identity snapshots: %w", err)
 	}
+	// Mapped orphans have no same-ID snapshot in the source. Preserve their
+	// archived evidence after removing the insert trigger's placeholder.
 	if sourceVersion >= projectIdentitySourceSnapshotDataVersion &&
 		oldDBHasTable(ctx, tx, "session_project_identity_snapshots") {
 		if _, err := tx.ExecContext(ctx, `
@@ -2865,8 +2859,8 @@ func removeGeneratedIdentitySnapshotsWithoutSource(
 				observed_at, normalized_remote, key_source, key
 			FROM old_db.session_project_identity_snapshots old_snapshot
 			JOIN `+tempIDsTable+` copied ON copied.source_id = old_snapshot.session_id
-			WHERE copied.id NOT IN (SELECT session_id FROM main.session_project_identity_snapshots)`); err != nil {
-			return fmt.Errorf("restoring copied project snapshots: %w", err)
+			WHERE copied.id != copied.source_id`); err != nil {
+			return fmt.Errorf("preserving mapped orphan project snapshots: %w", err)
 		}
 	}
 

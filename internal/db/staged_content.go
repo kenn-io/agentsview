@@ -667,7 +667,6 @@ func replaceSessionMessagesTxStaged(
 				SubagentSessionID: m.ToolCalls[callIdx].SubagentSessionID,
 				FilePath:          m.ToolCalls[callIdx].FilePath,
 				CallIndex:         callIdx,
-				PRLinks:           m.ToolCalls[callIdx].PRLinks,
 			}
 			occurrence := callOccurrences[tc.ToolUseID]
 			callOccurrences[tc.ToolUseID] = occurrence + 1
@@ -760,7 +759,10 @@ func (db *DB) WriteSessionBatchStaged(ctx context.Context, write SessionBatchWri
 	if err != nil {
 		return err
 	}
-	write = db.storageSessionBatchWrite(sanitized)
+	write, err = db.storageSessionBatchWrite(ctx, sanitized)
+	if err != nil {
+		return err
+	}
 	if err := db.replaceSessionContentStaged(ctx, write.Session.ID, write.Messages, staged, blocked, signals,
 		write.Checkpoint, write.CheckpointBlobs, &write); err != nil {
 		return err
@@ -778,7 +780,7 @@ func (db *DB) publishStagedSessionMetadataTx(ctx context.Context, tx *sql.Tx, wr
 		return err
 	}
 	queries := contextTransaction{ctx: ctx, tx: tx}
-	if err := writeSessionBatchMetadataTx(ctx, tx, queries, *write, result, !db.usageOnlyStorage()); err != nil {
+	if err := writeSessionBatchMetadataTx(ctx, tx, queries, *write, result); err != nil {
 		return err
 	}
 	if write.DataVersion > 0 {

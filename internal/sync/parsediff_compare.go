@@ -64,7 +64,7 @@ func (e *Engine) compareStoredSession(
 		return nil, err
 	}
 	var remote string
-	if snapshot := snapshots[stored.ID]; snapshot.RemoteCandidateCount == 1 || e.db.ArchiveContent().UsageOnly() {
+	if snapshot := snapshots[stored.ID]; snapshot.RemoteCandidateCount == 1 {
 		remote = snapshot.GitRemote
 	}
 	toolLinks, err := e.parseDiffToolPRLinks(ctx, prepared, msgs, remote)
@@ -163,8 +163,8 @@ func (e *Engine) compareStoredSession(
 }
 
 func (e *Engine) parseDiffToolPRLinks(ctx context.Context, session db.Session, messages []db.Message, remote string) ([]db.PRLink, error) {
-	if e.db.ArchiveContent().UsageOnly() {
-		return db.ProjectedUsagePRLinks(ctx, session, remote)
+	if e.db.ArchiveContent().OmitsToolContent() {
+		return db.ProjectedUsagePRLinks(ctx, session)
 	}
 	return db.ToolCallPRLinks(ctx, messages, session.Cwd, remote)
 }

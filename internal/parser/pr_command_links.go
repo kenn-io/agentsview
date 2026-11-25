@@ -246,71 +246,39 @@ func shellCommand(args []*syntax.Word) (string, bool) {
 	return "", false
 }
 
-// AnalyzePRCommand extracts links and shared shell context from one parse.
-func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBare, hostUnknown bool) ([]PRLink, bool, bool, []PRLink, error) {
-	return analyzePRCommand(ctx, command, cwd, remote, allowBare, hostUnknown, 0)
+// AnalyzePRCommand finds PR links in a single shell invocation.
+func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBare bool) ([]PRLink, error) {
+	return analyzePRCommand(ctx, command, cwd, remote, allowBare, false, 0)
 }
 
-// PRCommandChangesRepository finds repository changes that survive a shell.
-func PRCommandChangesRepository(command string) bool {
-	return prCommandChangesRepository(command, 0)
-}
-
-func prCommandChangesRepository(command string, depth int) bool {
-	if depth >= 8 {
-		return false
-	}
-	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
-	if err != nil {
-		return false
-	}
-	changed := false
-	syntax.Walk(file, func(node syntax.Node) bool {
-		call, ok := node.(*syntax.CallExpr)
-		if !ok {
-			return true
-		}
-		args := unwrapPRCommand(call.Args, true)
-		if inner, ok := shellCommand(args); ok && prCommandChangesRepository(inner, depth+1) {
-			changed = true
-		}
-		words, _ := shellWords(args)
-		changed = changed || repositoryMutation(words)
-		return true
-	})
-	return changed
-}
-
-func analyzePRCommand(ctx context.Context, command, cwd, remote string, allowBare, hostUnknown bool, depth int) ([]PRLink, bool, bool, []PRLink, error) {
+func analyzePRCommand(ctx context.Context, command, cwd, remote string, allowBare, inheritedHost bool, depth int) ([]PRLink, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, false, false, nil, err
+		return nil, err
 	}
 	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
 	if err != nil {
-		return nil, false, false, nil, ctx.Err()
+		return nil, ctx.Err()
 	}
-	directoryChanged, repositoryChanged, calls := bashChangesRepositoryContext(file, cwd)
+	unsafe, hostAssigned, calls := prCommandContext(file, depth)
+	hostAssigned = hostAssigned || inheritedHost
+	allowBare = allowBare && !unsafe
 	remoteHost, remoteRepo := "", ""
 	if normalized, ok := export.NormalizeGitRemote(remote); ok {
 		remoteHost, remoteRepo, _ = strings.Cut(normalized, "/")
 	}
 	var links [][]PRLink
-	var dependsOnRemote []PRLink
-	for _, entry := range calls {
+	for _, call := range calls {
 		if err := ctx.Err(); err != nil {
-			return nil, false, false, nil, err
+			return nil, err
 		}
-		args, overridden := unwrapPRCommandWithOverride(entry.call.Args)
-		bareSafe := allowBare && !entry.directory && !entry.repository && !overridden
+		args, overridden := unwrapPRCommandWithOverride(call.Args)
+		bareSafe := allowBare && !overridden
 		if inner, ok := shellCommand(args); ok && depth < 8 {
-			found, _, nested, dependencies, err := analyzePRCommand(ctx, inner, cwd, remote, bareSafe, hostUnknown || entry.repository || overridden, depth+1)
+			found, err := analyzePRCommand(ctx, inner, cwd, remote, bareSafe, hostAssigned, depth+1)
 			if err != nil {
-				return nil, false, false, nil, err
+				return nil, err
 			}
 			links = append(links, found)
-			dependsOnRemote = append(dependsOnRemote, dependencies...)
-			// A nested shell's remote change outlives it; its directory change does not.
-			repositoryChanged, allowBare, hostUnknown = repositoryChanged || nested, allowBare && !nested, hostUnknown || nested
 			continue
 		}
 		args = ghPRArgs(args)
@@ -321,7 +289,7 @@ func analyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 		if len(words) < 4 || !literal[0] || !literal[1] || !literal[2] || words[0] != "gh" || words[1] != "pr" {
 			continue
 		}
-		callHostUnknown := hostUnknown || entry.repository || overridden
+		callHostUnknown := hostAssigned
 		if words[2] == "co" {
 			words[2] = "checkout"
 		}
@@ -396,7 +364,7 @@ func analyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 		if strings.HasPrefix(selector, "https://") || strings.HasPrefix(selector, "http://") {
 			found, err := PromptPRLinksContext(ctx, selector)
 			if err != nil {
-				return nil, false, false, nil, err
+				return nil, err
 			}
 			links = append(links, found)
 			continue
@@ -416,17 +384,17 @@ func analyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 			continue
 		}
 		selectedHost := selectPRHost(explicitHost, remoteHost, specified, callHostUnknown)
+		if specified && explicitHost == "" {
+			selectedHost = selectPRHost("", "", true, callHostUnknown)
+		}
 		if selectedHost == "" {
 			continue
 		}
 		if link, ok := NewPRLink(fmt.Sprintf("https://%s/%s/pull/%d", selectedHost, repo, number), repo, number); ok {
 			links = append(links, []PRLink{link})
-			if !specified || explicitHost == "" {
-				dependsOnRemote = append(dependsOnRemote, link)
-			}
 		}
 	}
-	return CombinePRLinks(links...), directoryChanged, repositoryChanged, dependsOnRemote, nil
+	return CombinePRLinks(links...), nil
 }
 
 // splitPRRepository separates an explicit host from a -R repository and
@@ -443,13 +411,9 @@ func SamePRWorkingDirectory(cwd, dir string) bool {
 	return cwd != "" && dir != "" && path.Clean(strings.ReplaceAll(cwd, `\`, "/")) == path.Clean(strings.ReplaceAll(dir, `\`, "/"))
 }
 
-type prShellCall struct {
-	call                  *syntax.CallExpr
-	directory, repository bool
-}
-
-func bashChangesRepositoryContext(file *syntax.File, cwd string) (bool, bool, []prShellCall) {
-	functions := make(map[string]bool)
+// prCommandContext checks the invocation itself, without carrying state to another call.
+func prCommandContext(file *syntax.File, depth int) (unsafe, hostAssigned bool, calls []*syntax.CallExpr) {
+	functions := map[string]bool{}
 	syntax.Walk(file, func(node syntax.Node) bool {
 		if fn, ok := node.(*syntax.FuncDecl); ok {
 			functions[fn.Name.Value] = true
@@ -457,88 +421,82 @@ func bashChangesRepositoryContext(file *syntax.File, cwd string) (bool, bool, []
 		}
 		return true
 	})
-	var directory, repository bool
-	var calls []prShellCall
-	callAssignments := make(map[*syntax.Assign]bool)
 	syntax.Walk(file, func(node syntax.Node) bool {
 		switch n := node.(type) {
 		case *syntax.FuncDecl:
 			return false
 		case *syntax.Assign:
-			if !callAssignments[n] && n.Name != nil && (n.Name.Value == "GH_REPO" || n.Name.Value == "GH_HOST") {
-				repository = true
+			if n.Name != nil && (n.Name.Value == "GH_HOST" || n.Name.Value == "GH_REPO") {
+				unsafe = true
+				hostAssigned = hostAssigned || n.Name.Value == "GH_HOST"
 			}
 		case *syntax.CallExpr:
-			if len(n.Args) > 0 {
-				for _, assignment := range n.Assigns {
-					callAssignments[assignment] = true
+			calls = append(calls, n)
+			args := unwrapPRCommand(n.Args, true)
+			words, _ := shellWords(args)
+			if len(words) == 0 {
+				return true
+			}
+			name := words[0]
+			if name == "builtin" && len(words) > 1 {
+				words = words[1:]
+				name = words[0]
+			}
+			if name == "cd" || name == "pushd" || name == "popd" || name == "eval" || name == "source" || name == "." || functions[name] || repositoryMutation(words) {
+				unsafe = true
+			}
+			if name == "git" {
+				for _, word := range words[1:] {
+					if word == "-C" || strings.HasPrefix(word, "-C") {
+						unsafe = true
+					}
 				}
 			}
-			callDirectory, callRepository := directory, repository
-			args := unwrapPRCommand(n.Args, false)
-			if len(args) > 0 {
-				name, _ := shellLiteral(args[0].Parts)
-				if name == "gh" || path.Base(name) == "bash" || path.Base(name) == "sh" || path.Base(name) == "zsh" {
-					syntax.Walk(n, func(child syntax.Node) bool {
-						if a, ok := child.(*syntax.Assign); ok && a.Name != nil && (a.Name.Value == "GH_REPO" || a.Name.Value == "GH_HOST") {
-							callRepository = true
-						}
-						if inner, ok := child.(*syntax.CallExpr); ok && inner != n {
-							dir, repo := shellCallChangesPRContext(inner, functions, cwd)
-							callDirectory = callDirectory || dir
-							callRepository = callRepository || repo
-						}
-						return true
-					})
+			rawWords, _ := shellWords(n.Args)
+			for _, word := range rawWords[1:] {
+				if strings.HasPrefix(word, "GH_HOST=") || name == "unset" && word == "GH_HOST" {
+					hostAssigned = true
+					unsafe = true
+				}
+				if strings.HasPrefix(word, "GH_REPO=") || name == "unset" && word == "GH_REPO" {
+					unsafe = true
 				}
 			}
-			calls = append(calls, prShellCall{n, callDirectory, callRepository})
-			dir, repo := shellCallChangesPRContext(n, functions, cwd)
-			directory = directory || dir
-			repository = repository || repo
+			if inner, ok := shellCommand(args); ok && depth < 8 && prCommandMutatesRepository(inner, depth+1) {
+				unsafe = true
+			}
 		}
 		return true
 	})
-	return directory, repository, calls
+	return unsafe, hostAssigned, calls
 }
 
-// leavesCheckout reports whether words change directory, keeping a cd or
-// pushd to the session checkout's own absolute path in place.
-func leavesCheckout(words []string, cwd string) bool {
-	switch words[0] {
-	case "cd", "pushd":
-		return len(words) != 2 || !path.IsAbs(words[1]) || !SamePRWorkingDirectory(cwd, words[1])
+// A child shell can change repository configuration shared with its parent.
+func prCommandMutatesRepository(command string, depth int) bool {
+	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
+	if err != nil {
+		return false
 	}
-	return words[0] == "popd"
-}
-
-func shellCallChangesPRContext(call *syntax.CallExpr, functions map[string]bool, cwd string) (bool, bool) {
-	args := unwrapPRCommand(call.Args, true)
-	words := make([]string, len(args))
-	for i, arg := range args {
-		words[i], _ = shellLiteral(arg.Parts)
-	}
-	for len(words) > 1 && (words[0] == "command" || words[0] == "builtin") {
-		wrapper := words[0]
-		words = words[1:]
-		if wrapper == "command" {
-			for len(words) > 0 && strings.HasPrefix(words[0], "-") && words[0] != "--" {
-				flags := strings.TrimPrefix(words[0], "-")
-				if flags == "" || strings.Trim(flags, "p") != "" {
-					break
-				}
-				words = words[1:]
-			}
+	changed := false
+	syntax.Walk(file, func(node syntax.Node) bool {
+		if _, ok := node.(*syntax.FuncDecl); ok {
+			return false
 		}
-		if len(words) > 0 && words[0] == "--" {
-			words = words[1:]
+		call, ok := node.(*syntax.CallExpr)
+		if !ok {
+			return true
 		}
-	}
-	if len(words) == 0 {
-		return false, false
-	}
-	name := words[0]
-	return leavesCheckout(words, cwd), name == "eval" || name == "source" || name == "." || functions[name] || repositoryMutation(words) || len(unwrapPRCommand(call.Args, false)) == 0 && (path.Base(name) == "sh" || path.Base(name) == "bash" || path.Base(name) == "zsh")
+		args := unwrapPRCommand(call.Args, true)
+		words, _ := shellWords(args)
+		if len(words) > 0 && words[0] != "unset" && repositoryMutation(words) {
+			changed = true
+		}
+		if inner, ok := shellCommand(args); ok && depth < 8 && prCommandMutatesRepository(inner, depth+1) {
+			changed = true
+		}
+		return true
+	})
+	return changed
 }
 
 func repositoryMutation(words []string) bool {

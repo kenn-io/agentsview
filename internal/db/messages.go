@@ -68,7 +68,7 @@ const (
 	// 999-variable limit so binaries built against older SQLite
 	// versions still work.
 	messageInsertRowsPerStmt         = 31  // 32 params per row
-	toolCallInsertRowsPerStmt        = 62  // 16 params per row
+	toolCallInsertRowsPerStmt        = 66  // 15 params per row
 	toolResultEventInsertRowsPerStmt = 70  // 14 params per row
 	toolCallAgentStateRowsPerStmt    = 142 // 7 params per row
 )
@@ -96,8 +96,6 @@ type ToolCall struct {
 	// content for this call. It is consumed by the storage projection and
 	// never persisted.
 	Rendering string `json:"-"`
-	// PRLinks holds links retained when the archive drops the call's input.
-	PRLinks string `json:"-"`
 }
 
 // ToolResult holds a tool_result content block for pairing.
@@ -1387,7 +1385,7 @@ func multiRowPlaceholders(rows, cols int) string {
 func insertToolCallsChunkTx(
 	tx transactionQueries, calls []ToolCall,
 ) error {
-	args := make([]any, 0, len(calls)*16)
+	args := make([]any, 0, len(calls)*15)
 	for _, tc := range calls {
 		args = append(args,
 			tc.MessageID, tc.SessionID,
@@ -1399,7 +1397,7 @@ func insertToolCallsChunkTx(
 			nilIfEmpty(tc.ResultContent),
 			nilIfEmpty(tc.SubagentSessionID),
 			nilIfEmpty(tc.FilePath),
-			tc.CallIndex, tc.ObservedOutcome, tc.ObservedRepeat, tc.SequenceEnding, nilIfEmpty(tc.PRLinks),
+			tc.CallIndex, tc.ObservedOutcome, tc.ObservedRepeat, tc.SequenceEnding,
 		)
 	}
 	query := `
@@ -1407,8 +1405,8 @@ func insertToolCallsChunkTx(
 			(message_id, session_id, tool_name, category,
 			 tool_use_id, input_json, skill_name,
 			 result_content_length, result_content, subagent_session_id,
-			 file_path, call_index, observed_outcome, observed_repeat, sequence_ending, pr_links)
-		VALUES ` + multiRowPlaceholders(len(calls), 16)
+			 file_path, call_index, observed_outcome, observed_repeat, sequence_ending)
+		VALUES ` + multiRowPlaceholders(len(calls), 15)
 	if _, err := tx.Exec(query, args...); err != nil {
 		return fmt.Errorf(
 			"inserting tool_calls batch (%d rows): %w",
@@ -1629,10 +1627,12 @@ func (db *DB) insertMessages(ctx context.Context,
 	sessionIDs := messageSessionIDs(rawMessages)
 	for _, sessionID := range sessionIDs {
 		var err error
-		if db.usageOnlyStorage() {
+		if db.ArchiveContent().OmitsToolContent() {
 			if err := retainUsageToolPRLinksTx(ctx, tx, sessionID, messagesForSession(rawMessages, sessionID)); err != nil {
 				return err
 			}
+		}
+		if db.usageOnlyStorage() {
 			err = updateUsageOnlyAutomationTx(
 				tx, sessionID, messagesForSession(rawMessages, sessionID),
 			)
@@ -1851,7 +1851,7 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 	if err := db.checkArchiveSessionProvenanceTx(ctx, tx, SessionBatchWrite{Session: Session{ID: sessionID}}); err != nil {
 		return false, err
 	}
-	if db.usageOnlyStorage() {
+	if db.ArchiveContent().OmitsToolContent() {
 		if err := retainUsageToolPRLinksTx(ctx, tx, sessionID, rawMessages); err != nil {
 			return false, err
 		}
@@ -2178,7 +2178,7 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 	}
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 
-	if db.usageOnlyStorage() {
+	if db.ArchiveContent().OmitsToolContent() {
 		if err := retainUsageToolPRLinksTx(ctx, tx, sessionID, rawMessages); err != nil {
 			return err
 		}
@@ -3278,7 +3278,7 @@ func attachToolCallsBatch(
 		SELECT message_id, session_id, tool_name, category,
 			tool_use_id, input_json, skill_name,
 			result_content_length, %s, subagent_session_id,
-			file_path, call_index, observed_outcome, observed_repeat, sequence_ending, COALESCE(pr_links, '')
+			file_path, call_index, observed_outcome, observed_repeat, sequence_ending
 		FROM tool_calls
 		WHERE message_id IN (%s)
 		ORDER BY message_id, call_index`,
@@ -3302,7 +3302,7 @@ func attachToolCallsBatch(
 			&tc.ToolName, &tc.Category,
 			&toolUseID, &inputJSON, &skillName,
 			&resultLen, &resultContent, &subagentSessionID,
-			&filePath, &callIndex, &tc.ObservedOutcome, &tc.ObservedRepeat, &tc.SequenceEnding, &tc.PRLinks,
+			&filePath, &callIndex, &tc.ObservedOutcome, &tc.ObservedRepeat, &tc.SequenceEnding,
 		); err != nil {
 			return fmt.Errorf("scanning tool_call: %w", err)
 		}
@@ -4392,7 +4392,7 @@ func resolveToolCalls(
 				SubagentSessionID: tc.SubagentSessionID,
 				FilePath:          tc.FilePath,
 				CallIndex:         callIdx,
-				ObservedOutcome:   tc.ObservedOutcome, ObservedRepeat: tc.ObservedRepeat, SequenceEnding: tc.SequenceEnding, PRLinks: tc.PRLinks,
+				ObservedOutcome:   tc.ObservedOutcome, ObservedRepeat: tc.ObservedRepeat, SequenceEnding: tc.SequenceEnding,
 			})
 		}
 	}

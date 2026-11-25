@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"slices"
 
-	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/parser"
@@ -245,8 +244,11 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			}
 		}
 		prepared.Signals = ingest.RefreshSignalRecencyAt(prepared.Session, prepared.Messages, prepared.Signals, s.options.Now())
-		identityPayload, links := prepared, parser.CombinePRLinks(prepared.Session.PRLinks, prepared.UsagePRLinks)
-		identityPayload.UsagePRLinks = nil
+		projectedLinks, err := db.ProjectedUsagePRLinks(ctx, prepared.Session)
+		if err != nil {
+			return err
+		}
+		identityPayload, links := prepared, parser.CombinePRLinks(prepared.Session.PRLinks, projectedLinks)
 		if decision.Action == ingest.HistoryPreserve {
 			identityPayload.Session.PRLinks = originalPRLinks
 		}
@@ -270,7 +272,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			}
 			links = parser.CombinePRLinks(links, promptLinks, toolLinks)
 		}
-		links = retainMergedUsagePRLinks(links, old.Session, decision.Action, exists && s.options.Content.ArchiveContent.UsageOnly())
+		links = retainMergedUsagePRLinks(links, old.Session, decision.Action, exists && s.options.Content.ArchiveContent.OmitsToolContent())
 		freshLinks[sessionID], prepared.Session.PRLinks = links, links
 		prepared.Session.DataVersion = db.CurrentDataVersion()
 		branchID := rawDigest("branch-v1", group, source)
@@ -286,11 +288,6 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		// their stored payload and mutable derived state.
 		if count == 1 {
 			fresh[sessionID] = payload
-		}
-		if s.options.Content.ArchiveContent == config.ArchiveContentTranscripts {
-			if err := publishRawToolPRLinks(ctx, tx, sessionID, prepared.Messages); err != nil {
-				return err
-			}
 		}
 		dialogueChanged, err := syncRawDialogue(ctx, tx, sessionID, prepared.Messages)
 		if err != nil {
@@ -463,17 +460,6 @@ func loadRawPayloadBytes(ctx context.Context, tx *sql.Tx, id string, payload []b
 			return p, err
 		}
 		state.apply(&p.Signals)
-		for i := range p.Messages {
-			if i >= len(state.ToolPRLinks) {
-				break
-			}
-			for j := range p.Messages[i].ToolCalls {
-				if j >= len(state.ToolPRLinks[i]) {
-					break
-				}
-				p.Messages[i].ToolCalls[j].PRLinks = state.ToolPRLinks[i][j].Links
-			}
-		}
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT ordinal, dialogue_text, is_content FROM raw_message_dialogue WHERE session_id=$1`, id)
 	if err != nil {

@@ -88,7 +88,7 @@ func TestCodexPromptPRLinks(t *testing.T) {
 	assert.Equal(t, []string{"https://github.com/owner/repo/pull/123"}, storedPRURLs(t, env.db, "codex:"+id))
 }
 
-func TestUsageOnlyResyncPreservesPRLinkHistoryAndUncertainty(t *testing.T) {
+func TestUsageOnlyResyncIndexesCurrentCommands(t *testing.T) {
 	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
 	env.db.SetArchiveContent(config.ArchiveContentUsage)
 	const id = "01900000-0000-7000-8000-000000000095"
@@ -106,44 +106,7 @@ func TestUsageOnlyResyncPreservesPRLinkHistoryAndUncertainty(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(rewritten), 0o600))
 	stats := env.engine.ResyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "%v", stats.Warnings)
-	assert.ElementsMatch(t, []string{"https://github.com/example/repo/pull/41", "https://git.example/example/repo/pull/43"}, storedPRURLs(t, env.db, "codex:"+id))
-}
-
-func TestUsageOnlyResyncUsesRecordedCheckout(t *testing.T) {
-	testutil.IsolateGit(t)
-	for _, tc := range []struct {
-		name, initial, host string
-	}{
-		{"single", "[remote \"origin\"]\n url = https://git-a.example/example/repo.git\n", "git-a.example"},
-		{"resolved fork", "[remote \"origin\"]\n url = https://git-a.example/example/repo.git\n[remote \"upstream\"]\n url = https://git-c.example/example/repo.git\n", "git-a.example"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			env := setupSingleAgentTestEnv(t, parser.AgentClaude)
-			env.db.SetArchiveContent(config.ArchiveContentUsage)
-			root := t.TempDir()
-			require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o700))
-			configPath := filepath.Join(root, ".git", "config")
-			writeRemote := func(host string) {
-				t.Helper()
-				require.NoError(t, os.WriteFile(configPath, []byte("[remote \"origin\"]\n url = https://"+host+"/example/repo.git\n"), 0o600))
-			}
-			require.NoError(t, os.WriteFile(configPath, []byte(tc.initial), 0o600))
-			env.writeClaudeSession(t, "proj", "recorded-checkout.jsonl", testjsonl.JoinJSONL(
-				testjsonl.ClaudeUserJSON("Review", tsZero, root),
-				`{"type":"assistant","timestamp":"2024-01-01T00:00:01Z","message":{"content":[{"type":"tool_use","id":"call","name":"Bash","input":{"command":"gh pr view 42 -R example/repo"}}]}}`,
-			))
-			require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
-			want := []string{"https://" + tc.host + "/example/repo/pull/42"}
-			require.Equal(t, want, storedPRURLs(t, env.db, "recorded-checkout"))
-			writeRemote("git-b.example")
-			env.engine.Close()
-			engine := sync.NewEngine(t.Context(), env.db, sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {env.claudeDir}}, Machine: "local"})
-			t.Cleanup(engine.Close)
-			stats := engine.ResyncAll(t.Context(), nil)
-			require.False(t, stats.Aborted, "%v", stats.Warnings)
-			assert.Equal(t, want, storedPRURLs(t, env.db, "recorded-checkout"))
-		})
-	}
+	assert.ElementsMatch(t, []string{"https://github.com/example/repo/pull/42", "https://git.example/example/repo/pull/43"}, storedPRURLs(t, env.db, "codex:"+id))
 }
 
 func TestUsageOnlyParseDiffMultiRemoteOrigin(t *testing.T) {
@@ -155,13 +118,14 @@ func TestUsageOnlyParseDiffMultiRemoteOrigin(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "config"), []byte("[remote \"origin\"]\n url = https://ghe.example/fork/repo.git\n[remote \"upstream\"]\n url = https://ghe.example/org/repo.git\n"), 0o600))
 	env.writeClaudeSession(t, "proj", "multi-remote.jsonl", testjsonl.JoinJSONL(
 		testjsonl.ClaudeUserJSON("Review", tsZero, root),
-		`{"type":"assistant","timestamp":"2024-01-01T00:00:01Z","message":{"content":[{"type":"tool_use","id":"call","name":"Bash","input":{"command":"gh pr view 42 -R org/repo"}}]}}`,
+		`{"type":"assistant","timestamp":"2024-01-01T00:00:01Z","message":{"content":[{"type":"tool_use","id":"call","name":"Bash","input":{"command":"gh pr view 42"}}]}}`,
 	))
 	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
 	snapshots, err := env.db.ListSessionProjectIdentitySnapshotsByID(t.Context(), []string{"multi-remote"})
 	require.NoError(t, err)
 	require.Equal(t, 2, snapshots["multi-remote"].RemoteCandidateCount)
 	require.Equal(t, "https://ghe.example/fork/repo.git", snapshots["multi-remote"].GitRemote)
+	assert.Empty(t, storedPRURLs(t, env.db, "multi-remote"))
 	report := runParseDiff(t, env, sync.ParseDiffOptions{})
 	assert.Zero(t, report.FieldCounts[sync.FieldPRLinks])
 	assert.Equal(t, 1, report.Totals.Identical)
@@ -238,20 +202,26 @@ func TestCodexPRLinksCheckoutHost(t *testing.T) {
 				path := env.writeCodexSession(t, filepath.Join("2024", "01", "15"), "rollout-20240115-"+id+".jsonl", testjsonl.JoinJSONL(
 					testjsonl.CodexSessionMetaWithFieldsJSON(id, root, "user", tsEarly, fields),
 					testjsonl.CodexMsgJSON("user", "Review changes", tsEarlyS1),
-					testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call1", map[string]any{"cmd": "gh pr view 42 -R example/repo"}, tsEarlyS5),
+					testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call1", map[string]any{"cmd": "gh pr view 42"}, tsEarlyS5),
 				))
 				require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
-				assert.Equal(t, []string{"https://git.example/example/repo/pull/42"}, storedPRURLs(t, env.db, "codex:"+id))
 				if policy == config.ArchiveContentFull {
+					assert.Equal(t, []string{"https://git.example/example/repo/pull/42"}, storedPRURLs(t, env.db, "codex:"+id))
 					report := runParseDiff(t, env, sync.ParseDiffOptions{})
 					assert.Equal(t, 1, report.Totals.Identical)
+				} else {
+					assert.Empty(t, storedPRURLs(t, env.db, "codex:"+id))
 				}
-				appendClaudeSplitLines(t, path, testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call2", map[string]any{"cmd": "gh pr view 43 -R example/repo"}, "2024-01-01T10:00:06Z"))
+				appendClaudeSplitLines(t, path, testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call2", map[string]any{"cmd": "gh pr view 43"}, "2024-01-01T10:00:06Z"))
 				env.engine.SyncPaths([]string{path})
 				sess, err := env.db.GetSessionFull(t.Context(), "codex:"+id)
 				require.NoError(t, err)
 				require.True(t, sess.LastWriteIncremental)
-				assert.Equal(t, []string{"https://git.example/example/repo/pull/42", "https://git.example/example/repo/pull/43"}, storedPRURLs(t, env.db, "codex:"+id))
+				if policy == config.ArchiveContentFull {
+					assert.Equal(t, []string{"https://git.example/example/repo/pull/42", "https://git.example/example/repo/pull/43"}, storedPRURLs(t, env.db, "codex:"+id))
+				} else {
+					assert.Empty(t, storedPRURLs(t, env.db, "codex:"+id))
+				}
 			})
 		}
 	}
@@ -265,15 +235,15 @@ func TestCodexPRLinksCheckoutHost(t *testing.T) {
 		path := env.writeCodexSession(t, filepath.Join("2024", "01", "15"), "rollout-20240115-"+id+".jsonl", testjsonl.JoinJSONL(
 			testjsonl.CodexSessionMetaWithFieldsJSON(id, root, "user", tsEarly, nil),
 			testjsonl.CodexMsgJSON("user", "Review changes", tsEarlyS1),
-			testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call", map[string]any{"cmd": "gh pr view 42 -R example/repo"}, tsEarlyS5),
+			testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call", map[string]any{"cmd": "gh pr view 42"}, tsEarlyS5),
 		))
 		require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
-		assert.Equal(t, []string{"https://github.com/example/repo/pull/42"}, storedPRURLs(t, env.db, "codex:"+id))
+		assert.Empty(t, storedPRURLs(t, env.db, "codex:"+id))
 		report := runParseDiff(t, env, sync.ParseDiffOptions{})
 		assert.Equal(t, 1, report.Totals.Identical)
-		appendClaudeSplitLines(t, path, testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "append", map[string]any{"cmd": "gh pr view 43 -R example/repo"}, "2024-01-01T10:00:06Z"))
+		appendClaudeSplitLines(t, path, testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "append", map[string]any{"cmd": "gh pr view 43"}, "2024-01-01T10:00:06Z"))
 		env.engine.SyncPaths([]string{path})
-		assert.Equal(t, []string{"https://github.com/example/repo/pull/42", "https://github.com/example/repo/pull/43"}, storedPRURLs(t, env.db, "codex:"+id))
+		assert.Empty(t, storedPRURLs(t, env.db, "codex:"+id))
 	})
 }
 
@@ -282,10 +252,10 @@ func TestClineToolPRLinks(t *testing.T) {
 	dir := filepath.Join(root, "data", "sessions", "team-pr")
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "team-pr.json"), []byte(`{"session_id":"team-pr","cwd":"/workspace"}`), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "team-pr.messages.json"), []byte(`{"messages":[{"id":"m1","role":"user","content":[{"type":"text","text":"Delegate review"}],"ts":1000},{"id":"m2","role":"assistant","content":[{"type":"tool_use","id":"call","name":"team_run_task","input":{"task":"Review https://github.com/example/repo/pull/42"}},{"type":"tool_use","id":"call2","name":"execute_command","input":{"commands":["gh pr view 43 -R example/repo"]}}],"ts":2000}]}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "team-pr.messages.json"), []byte(`{"messages":[{"id":"m1","role":"user","content":[{"type":"text","text":"Delegate review"}],"ts":1000},{"id":"m2","role":"assistant","content":[{"type":"tool_use","id":"call","name":"team_run_task","input":{"task":"Review https://github.com/example/repo/pull/42"}}],"ts":2000}]}`), 0o600))
 	database := dbtest.OpenTestDB(t)
 	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCline: {root}}, Machine: "local"})
 	t.Cleanup(engine.Close)
 	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	assert.Equal(t, []string{"https://github.com/example/repo/pull/42", "https://github.com/example/repo/pull/43"}, storedPRURLs(t, database, "cline:team-pr"))
+	assert.Equal(t, []string{"https://github.com/example/repo/pull/42"}, storedPRURLs(t, database, "cline:team-pr"))
 }

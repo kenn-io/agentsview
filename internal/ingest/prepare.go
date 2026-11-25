@@ -15,7 +15,6 @@ type ContentOptions struct {
 	BlockedResultCategories map[string]bool
 	ToolResultImages        config.ToolResultImages
 	ArchiveContent          config.ArchiveContent
-	CheckoutRemote          string
 }
 
 // Candidate is normalized parser output before caller-owned identity,
@@ -31,8 +30,6 @@ type PreparedSession struct {
 	Session     db.Session
 	Messages    []db.Message
 	UsageEvents []db.UsageEvent
-	// UsagePRLinks are derived before usage-only projection discards tool inputs.
-	UsagePRLinks []db.PRLink
 	// PlanUsage is the session's plan usage and live-capture coverage
 	// row; nil when the parser reported neither.
 	PlanUsage *db.SessionPlanUsage
@@ -160,11 +157,12 @@ func finalize(
 	validation = addValidationStats(validation, usageValidation)
 	session.RelationshipType = db.SessionRelationship(session)
 	var usagePRLinks []db.PRLink
-	if options.ArchiveContent.UsageOnly() {
-		usagePRLinks, err = prepareUsagePRLinks(ctx, &session, messages, options.CheckoutRemote)
+	if options.ArchiveContent.OmitsToolContent() {
+		usagePRLinks, err = db.ToolCallPRLinks(ctx, messages, "", "")
 		if err != nil {
 			return PreparedSession{}, err
 		}
+		session.SetProjectedPRLinks(usagePRLinks)
 	}
 	session, messages = db.ProjectSessionForStoragePolicy(
 		session, messages, options.ArchiveContent,
@@ -178,7 +176,7 @@ func finalize(
 		}
 	}
 	return PreparedSession{
-		Session: session, Messages: messages, UsageEvents: usageEvents, UsagePRLinks: usagePRLinks,
+		Session: session, Messages: messages, UsageEvents: usageEvents,
 		PlanUsage: ConvertPlanUsage(
 			candidate.Parsed.Session.PlanUsage,
 			candidate.Parsed.Session.CaptureCoverage,
@@ -186,11 +184,6 @@ func finalize(
 		SessionTotal: ConvertSessionTotal(candidate.Parsed.Session.SessionTotal),
 		Signals:      signalUpdate, Findings: findings, Validation: validation,
 	}, ctx.Err()
-}
-
-func prepareUsagePRLinks(ctx context.Context, session *db.Session, messages []db.Message, remote string) ([]db.PRLink, error) {
-	db.SetUsagePRRemote(session, remote)
-	return db.ToolCallPRLinksForUsage(ctx, messages, remote)
 }
 
 // ApplySessionMessageDerivedFieldsContext derives filtered counts and

@@ -8,13 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 
-	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/shellquote"
 )
@@ -272,7 +270,7 @@ func refreshSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, i
 	if err != nil {
 		return err
 	}
-	tools, err := storedToolCallPRLinksTx(ctx, tx, id, cwd, remote, math.MaxInt, &sharedPRContext{})
+	tools, err := storedToolCallPRLinksTx(ctx, tx, id, cwd, remote)
 	if err != nil {
 		return err
 	}
@@ -292,9 +290,7 @@ func appendSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id
 	if err := tx.QueryRow(`SELECT COALESCE(cwd,''), `+checkoutRemoteSQL+` FROM sessions WHERE id=?`, id, id).Scan(&cwd, &remote); err != nil {
 		return err
 	}
-	sharedContext := sharedPRContext{}
-	var depends []PRLink
-	tools, err := toolCallPRLinks(ctx, messages, cwd, remote, &sharedContext, &depends)
+	tools, err := ToolCallPRLinks(ctx, messages, cwd, remote)
 	if err != nil {
 		return err
 	}
@@ -306,19 +302,6 @@ func appendSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id
 		return err
 	}
 	storedLinks := DecodePRLinks(stored)
-	// Only shell calls add to depends, so a new remote-dependent link implies one ran.
-	if len(parser.CombinePRLinks(storedLinks, depends)) > len(parser.CombinePRLinks(storedLinks)) {
-		sharedContext = sharedPRContext{}
-		if _, err := storedToolCallPRLinksTx(ctx, tx, id, cwd, remote, messages[0].Ordinal, &sharedContext); err != nil {
-			return err
-		}
-		if sharedContext.directory || sharedContext.repository {
-			tools, err = toolCallPRLinks(ctx, messages, cwd, remote, &sharedContext, nil)
-			if err != nil {
-				return err
-			}
-		}
-	}
 	derived := parser.CombinePRLinks(prompts, tools)
 	if len(derived) == 0 {
 		return nil
@@ -374,59 +357,31 @@ func (db *DB) upgradePRLinksTx(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
-type sharedPRContext struct{ directory, repository, noBare bool }
-
-func (c *sharedPRContext) add(directory, repository bool) {
-	c.directory = c.directory || directory
-	c.repository = c.repository || repository
-}
-
-// bareLinksAllowed reports whether a bare pull request number names the
-// session's repository: a call's own workdir must be the session checkout,
-// and otherwise no earlier command may have changed directory or repository.
-func bareLinksAllowed(workdir, cwd string, shared sharedPRContext) bool {
-	if shared.noBare {
-		return false
-	}
-	if workdir != "" {
-		return !shared.repository && parser.SamePRWorkingDirectory(cwd, resolveCommitDir(cwd, workdir))
-	}
-	return !shared.directory && !shared.repository
-}
-
 const maxPRCommandInputBytes = 256 * 1024
 
-func callPRLinks(ctx context.Context, category, input, cwd, remote string, sharedContext sharedPRContext, change *sharedPRContext, depends *[]PRLink) ([]PRLink, error) {
+func callPRLinks(ctx context.Context, category, input, cwd, remote string) ([]PRLink, error) {
 	if category == "Task" {
 		return taskPRLinks(ctx, input)
 	}
 	if category != "Bash" || len(input) > maxPRCommandInputBytes {
-		change.add(false, true)
 		return nil, ctx.Err()
 	}
 	commands, ok := shellInputCommands(input)
 	if !ok {
 		return nil, ctx.Err()
 	}
-	allowBare := bareLinksAllowed(parser.ToolInputWorkdir(input), cwd, sharedContext)
 	var lists [][]PRLink
 	for _, command := range commands {
+		workdir := parser.ToolInputWorkdir(input)
 		if command.codeMode {
-			allowBare = bareLinksAllowed(command.workdir, cwd, sharedContext)
+			workdir = command.workdir
 		}
-		links, directory, repository, usesRemote, err := parser.AnalyzePRCommand(ctx, command.text, cwd, remote, allowBare, sharedContext.repository)
-		change.add(directory, repository)
-		if depends != nil {
-			*depends = append(*depends, usesRemote...)
-		}
+		allowBare := workdir == "" || parser.SamePRWorkingDirectory(cwd, resolveCommitDir(cwd, workdir))
+		links, err := parser.AnalyzePRCommand(ctx, command.text, cwd, remote, allowBare)
 		if err != nil {
 			return nil, err
 		}
 		lists = append(lists, links)
-		if directory || repository {
-			allowBare = false
-		}
-		sharedContext.repository = sharedContext.repository || repository
 	}
 	return parser.CombinePRLinks(lists...), nil
 }
@@ -520,226 +475,54 @@ func commandValue(raw jsontext.Value) (string, bool) {
 	return strings.Join(argv, " "), true
 }
 
-// ToolCallPRLinks derives links from a transcript's tool calls.
+// ToolCallPRLinks derives links from each independent tool call.
 func ToolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string) ([]PRLink, error) {
-	changed := sharedPRContext{}
-	return toolCallPRLinks(ctx, messages, cwd, remote, &changed, nil)
-}
-
-// ToolCallPRLinksForUsage uses a known host without inferring bare numbers
-// after earlier shell state has been discarded.
-func ToolCallPRLinksForUsage(ctx context.Context, messages []Message, remote string) ([]PRLink, error) {
-	links, _, err := usageToolCallPRLinks(ctx, messages, remote, false, false)
-	return links, err
-}
-
-// ProjectedUsagePRLinks reads the calls held until a projected session is written.
-func ProjectedUsagePRLinks(ctx context.Context, session Session, remote string) ([]PRLink, error) {
-	links, _, err := usageToolCallPRLinks(ctx, session.usagePRMessages, remote, false, false)
-	return links, err
-}
-
-// usageToolCallPRLinks resolves usage-only calls after an earlier write that
-// may have changed repository context, and reports whether it is changed after them.
-func usageToolCallPRLinks(ctx context.Context, messages []Message, remote string, changed, hostUnknown bool) ([]PRLink, bool, error) {
-	state := sharedPRContext{repository: changed || hostUnknown, noBare: true}
-	links, err := toolCallPRLinks(ctx, messages, "", remote, &state, nil)
-	return links, changed || usageRepositoryChanged(messages), err
-}
-
-func usageRepositoryChanged(messages []Message) bool {
-	for _, message := range messages {
-		for _, call := range message.ToolCalls {
-			if call.Category == "Bash" && usageCallRepositoryChanged(call) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func usageCallRepositoryChanged(call ToolCall) bool {
-	if len(call.InputJSON) > maxPRCommandInputBytes || retainedRepositoryChanged(call) {
-		return true
-	}
-	commands, _ := shellInputCommands(call.InputJSON)
-	for _, command := range commands {
-		if parser.PRCommandChangesRepository(command.text) {
-			return true
-		}
-	}
-	return false
-}
-
-func retainedRepositoryChanged(call ToolCall) bool {
-	if call.InputJSON != "" || call.PRLinks == "" {
-		return false
-	}
-	var retained retainedPRState
-	return json.Unmarshal([]byte(call.PRLinks), &retained) == nil && retained.Repo
-}
-
-// usageToolPRLinksTx resolves a usage-only write under the session's recorded
-// repository change, and records a change this write makes before its inputs
-// are discarded.
-func usageToolPRLinksTx(ctx context.Context, tx *sql.Tx, sessionID string, messages []Message) ([]PRLink, error) {
-	remote, changed, unknown, err := usagePRCheckoutContext(ctx, tx, sessionID, "")
-	if err != nil {
-		return nil, err
-	}
-	links, after, err := usageToolCallPRLinks(ctx, messages, remote, changed, unknown)
-	if err != nil || after == changed {
-		return links, err
-	}
-	_, err = tx.ExecContext(ctx, `UPDATE sessions SET pr_repository_changed=1 WHERE id=?`, sessionID)
-	return links, err
-}
-
-// callPRState is what one tool call adds: the links it names and the shell
-// state it changes for later calls.
-type callPRState struct {
-	links  []PRLink
-	change sharedPRContext
-}
-
-func toolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string, sharedContext *sharedPRContext, depends *[]PRLink) ([]PRLink, error) {
 	var lists [][]PRLink
 	for _, message := range messages {
 		for _, call := range message.ToolCalls {
-			state := sharedPRContext{repository: sharedContext.repository, noBare: sharedContext.noBare}
-			if call.ToolName == "Bash" {
-				state = *sharedContext
-			}
-			callState, err := callPRStateIn(ctx, call, cwd, remote, state, depends)
+			links, err := callPRLinks(ctx, call.Category, call.InputJSON, cwd, remote)
 			if err != nil {
 				return nil, err
 			}
-			lists = append(lists, callState.links)
-			if call.Category == "Bash" {
-				if call.ToolName == "Bash" {
-					sharedContext.directory = sharedContext.directory || callState.change.directory
-				}
-				sharedContext.repository = sharedContext.repository || callState.change.repository
-			}
+			lists = append(lists, links)
 		}
 	}
 	return parser.CombinePRLinks(lists...), nil
 }
 
-// callPRStateIn derives one call's state under the shell state before it. A
-// call whose input the archive dropped resolves the links and state it kept.
-func callPRStateIn(ctx context.Context, call ToolCall, cwd, remote string, state sharedPRContext, depends *[]PRLink) (callPRState, error) {
-	if call.InputJSON == "" {
-		var retained retainedPRState
-		if call.PRLinks != "" && json.Unmarshal([]byte(call.PRLinks), &retained) == nil {
-			links := retainedPRLinksIn(retained, remote, state, depends)
-			return callPRState{links: links, change: sharedPRContext{directory: retained.Dir, repository: retained.Repo}}, nil
-		}
-		return callPRState{}, nil
-	}
-	var change sharedPRContext
-	links, err := callPRLinks(ctx, call.Category, call.InputJSON, cwd, remote, state, &change, depends)
-	return callPRState{links, change}, err
+// SetProjectedPRLinks keeps links derived before a content policy removes inputs.
+func (s *Session) SetProjectedPRLinks(links []PRLink) {
+	s.projectedPRLinks = parser.CombinePRLinks(s.projectedPRLinks, links)
 }
 
-// retainedPRLinksIn resolves retained links under the current checkout.
-func retainedPRLinksIn(retained retainedPRState, remote string, state sharedPRContext, depends *[]PRLink) []PRLink {
-	remoteHost := ""
-	if normalized, ok := export.NormalizeGitRemote(remote); ok {
-		remoteHost, _, _ = strings.Cut(normalized, "/")
-	}
-	var links []PRLink
-	for _, link := range retained.Links {
-		dependent := retained.Depends[prLinkKey(link)]
-		link, ok := parser.NewPRLink(link.URL, link.Repository, link.Number)
-		if !ok {
-			continue
-		}
-		if !dependent {
-			links = append(links, link)
-			continue
-		}
-		host := remoteHost
-		if host == "" {
-			host = "github.com"
-		}
-		if resolved, ok := parser.NewPRLink(fmt.Sprintf("https://%s/%s/pull/%d", host, link.Repository, link.Number), link.Repository, link.Number); ok && !state.repository {
-			if depends != nil {
-				*depends = append(*depends, resolved)
-			}
-			links = append(links, resolved)
-		}
-		if retained.Explicit[prLinkKey(link)] {
-			links = append(links, link)
-		}
-	}
-	return links
+// ProjectedUsagePRLinks returns links derived before projecting a session.
+func ProjectedUsagePRLinks(ctx context.Context, session Session) ([]PRLink, error) {
+	return session.projectedPRLinks, ctx.Err()
 }
 
-func prLinkKey(link PRLink) string {
-	return fmt.Sprintf("%s/%s/%d", strings.ToLower(link.Host), strings.ToLower(link.Repository), link.Number)
-}
-
-// retainedPRState holds what a call named without its input. Depends marks a
-// link whose host a hostless reference took from the checkout; Explicit marks
-// such a link that a reference naming that host also produced.
-type retainedPRState struct {
-	Links    []PRLink        `json:"links,omitempty"`
-	Depends  map[string]bool `json:"depends,omitempty"`
-	Explicit map[string]bool `json:"explicit,omitempty"`
-	Dir      bool            `json:"directory,omitempty"`
-	Repo     bool            `json:"repository,omitempty"`
-}
-
-// markDepends records which of a call's links the checkout decides. Resolving
-// the call again with no usable host leaves only the references naming one.
-func (r *retainedPRState) markDepends(call ToolCall, depends []PRLink) {
-	if len(depends) == 0 {
-		return
+func storedToolCallsTx(tx transactionQueries, id string) ([]ToolCall, error) {
+	rows, err := tx.Query(`SELECT t.category, t.tool_name, COALESCE(t.input_json,'') FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND t.category IN ('Bash','Task') AND t.input_json IS NOT NULL ORDER BY m.ordinal, t.id`, id)
+	if err != nil {
+		return nil, err
 	}
-	var ignored sharedPRContext
-	explicit, _ := callPRLinks(context.Background(), call.Category, call.InputJSON, "", "", sharedPRContext{repository: true}, &ignored, nil)
-	r.Depends = make(map[string]bool, len(depends))
-	for _, link := range depends {
-		r.Depends[prLinkKey(link)] = true
-	}
-	for _, link := range explicit {
-		if r.Depends[prLinkKey(link)] {
-			if r.Explicit == nil {
-				r.Explicit = make(map[string]bool)
-			}
-			r.Explicit[prLinkKey(link)] = true
+	defer rows.Close()
+	var calls []ToolCall
+	for rows.Next() {
+		var call ToolCall
+		if err := rows.Scan(&call.Category, &call.ToolName, &call.InputJSON); err != nil {
+			return nil, err
 		}
+		calls = append(calls, call)
 	}
+	return calls, rows.Err()
 }
 
-// retainedCallPRLinks retains selectors and shell changes without the input.
-func retainedCallPRLinks(call ToolCall) string {
-	if call.InputJSON == "" || (call.Category != "Bash" && call.Category != "Task") {
-		return call.PRLinks
+func storedToolCallPRLinksTx(ctx context.Context, tx transactionQueries, id, cwd, remote string) ([]PRLink, error) {
+	calls, err := storedToolCallsTx(tx, id)
+	if err != nil {
+		return nil, err
 	}
-	var change sharedPRContext
-	var depends []PRLink
-	found, _ := callPRLinks(context.Background(), call.Category, call.InputJSON, "", "", sharedPRContext{}, &change, &depends)
-	if len(found) == 0 && !change.directory && !change.repository {
-		return ""
-	}
-	retained := retainedPRState{Links: found, Dir: change.directory, Repo: change.repository}
-	retained.markDepends(call, depends)
-	encoded, _ := json.Marshal(retained)
-	return string(encoded)
-}
-
-// retainCopiedToolPRLinksTx keeps the PR metadata of copied sessions before
-// their inputs are dropped.
-func retainCopiedToolPRLinksTx(ctx context.Context, tx *sql.Tx, tempIDsTable string) error {
-	ids, err := sessionIDsTx(ctx, tx, "id IN (SELECT id FROM "+tempIDsTable+")")
-	for _, id := range ids {
-		if err = retainStoredToolPRLinksTx(contextTransaction{ctx: ctx, tx: tx}, id); err != nil {
-			break
-		}
-	}
-	return err
+	return ToolCallPRLinks(ctx, []Message{{ToolCalls: calls}}, cwd, remote)
 }
 
 func retainCopiedUsageToolPRLinksTx(ctx context.Context, tx *sql.Tx, tempIDsTable string) error {
@@ -748,69 +531,11 @@ func retainCopiedUsageToolPRLinksTx(ctx context.Context, tx *sql.Tx, tempIDsTabl
 		return err
 	}
 	for _, id := range ids {
-		stored, err := storedToolCallsTx(contextTransaction{ctx: ctx, tx: tx}, id, math.MaxInt)
+		calls, err := storedToolCallsTx(contextTransaction{ctx: ctx, tx: tx}, id)
 		if err != nil {
 			return err
 		}
-		message := Message{ToolCalls: make([]ToolCall, len(stored))}
-		for i, call := range stored {
-			message.ToolCalls[i] = call.call
-		}
-		if err := retainUsageToolPRLinksTx(ctx, tx, id, []Message{message}); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// storedToolCall is a stored tool call and the row it came from.
-type storedToolCall struct {
-	rowID int64
-	call  ToolCall
-}
-
-// storedToolCallsTx lists a session's stored shell and delegation calls in
-// order, as far as the ordinal, that hold an input or retained PR metadata.
-func storedToolCallsTx(tx transactionQueries, id string, before int) ([]storedToolCall, error) {
-	rows, err := tx.Query(`SELECT t.id, t.category, t.tool_name, COALESCE(t.input_json,''), COALESCE(t.pr_links,'') FROM tool_calls t JOIN messages m ON m.id=t.message_id WHERE t.session_id=? AND t.category IN ('Bash','Task') AND (t.input_json IS NOT NULL OR t.pr_links IS NOT NULL) AND m.ordinal<? ORDER BY m.ordinal, t.id`, id, before)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var calls []storedToolCall
-	for rows.Next() {
-		var stored storedToolCall
-		if err := rows.Scan(&stored.rowID, &stored.call.Category, &stored.call.ToolName, &stored.call.InputJSON, &stored.call.PRLinks); err != nil {
-			return nil, err
-		}
-		calls = append(calls, stored)
-	}
-	return calls, rows.Err()
-}
-
-// storedToolCallPRLinksTx replays stored calls before an ordinal, leaving their shell changes in state.
-func storedToolCallPRLinksTx(ctx context.Context, tx transactionQueries, id, cwd, remote string, before int, state *sharedPRContext) ([]PRLink, error) {
-	stored, err := storedToolCallsTx(tx, id, before)
-	if err != nil {
-		return nil, err
-	}
-	var calls []ToolCall
-	for _, s := range stored {
-		calls = append(calls, s.call)
-	}
-	return toolCallPRLinks(ctx, []Message{{ToolCalls: calls}}, cwd, remote, state, nil)
-}
-
-// retainStoredToolPRLinksTx keeps the PR metadata of a session's stored calls
-// that still hold an input, so a later refresh survives dropping it.
-func retainStoredToolPRLinksTx(tx transactionQueries, id string) error {
-	stored, err := storedToolCallsTx(tx, id, math.MaxInt)
-	if err != nil {
-		return err
-	}
-	for _, s := range stored {
-		links := retainedCallPRLinks(s.call)
-		if _, err := tx.Exec(`UPDATE tool_calls SET pr_links=? WHERE id=?`, nilIfEmpty(links), s.rowID); err != nil {
+		if err := retainUsageToolPRLinksTx(ctx, tx, id, []Message{{ToolCalls: calls}}); err != nil {
 			return err
 		}
 	}

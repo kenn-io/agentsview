@@ -77,6 +77,13 @@ func (db *DB) applyArtifactImportedSession(
 		return result, err
 	}
 	write.Messages = db.projectSessionBatchMessages(write)
+	if db.ArchiveContent().OmitsToolContent() {
+		links, err := ToolCallPRLinks(ctx, write.Messages, "", "")
+		if err != nil {
+			return result, err
+		}
+		write.Session.SetProjectedPRLinks(links)
+	}
 	write.Session, write.Messages = db.sessionAndMessagesForStorage(
 		write.Session, write.Messages,
 	)

@@ -18,7 +18,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 )
 
@@ -785,22 +784,10 @@ func TestExportToStorePublishesDependenciesBeforeCheckpointAndSkipsUnchanged(t *
 }
 
 func TestExportManifestVersionTracksPRLinks(t *testing.T) {
-	for _, tc := range []struct {
-		links    []db.PRLink
-		retained bool
-	}{
-		{},
-		{links: []db.PRLink{{URL: "https://github.com/owner/repo/pull/7", Host: "github.com", Repository: "owner/repo", Number: 7}}},
-		{retained: true},
-	} {
-		links := tc.links
+	for _, links := range [][]db.PRLink{nil, {{URL: "https://github.com/owner/repo/pull/7", Host: "github.com", Repository: "owner/repo", Number: 7}}} {
 		database := testExportDB(t)
 		store := newTestArtifactStore(t)
 		seedSession(t, database, "sess-1", "alpha", func(sess *db.Session) { sess.PRLinks = links })
-		if tc.retained {
-			database.SetArchiveContent(config.ArchiveContentTranscripts)
-			require.NoError(t, database.ReplaceSessionMessages(t.Context(), "sess-1", []db.Message{{SessionID: "sess-1", Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 5 -R example/repo"}`}}}}))
-		}
 		result, err := ExportToStore(t.Context(), database, store, ExportOptions{Origin: contractOrigin})
 		require.NoError(t, err)
 		require.Equal(t, 1, result.ExportedSessions)
@@ -810,9 +797,7 @@ func TestExportManifestVersionTracksPRLinks(t *testing.T) {
 		data := readContractArtifact(t, store, ref)
 		published, err := decodeManifestWithLimits(data, productionArtifactLimits())
 		require.NoError(t, err)
-		if tc.retained {
-			assert.Equal(t, 8, published.Version)
-		} else if len(links) == 0 {
+		if len(links) == 0 {
 			assert.Equal(t, 5, published.Version)
 			assert.NotContains(t, string(data), `"pr_links"`)
 		} else {
@@ -2244,7 +2229,6 @@ func TestExportRoundTripsSessionQualitySignals(t *testing.T) {
 func TestExportMessageSegmentVersions(t *testing.T) {
 	plain := db.Message{Role: "user", Content: "ordinary"}
 	prompt := db.Message{Ordinal: 1, Role: "user", Content: "prompt", DialogueText: new("prompt")}
-	linked := db.Message{Ordinal: 2, Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Bash", Category: "Bash", PRLinks: `{"directory":true}`}}}
 	for _, tc := range []struct {
 		name            string
 		messages        []db.Message
@@ -2263,12 +2247,6 @@ func TestExportMessageSegmentVersions(t *testing.T) {
 			messages: []db.Message{plain, prompt},
 			want:     [][]db.Message{{plain, prompt}},
 			versions: []string{`"v":5`},
-		},
-		{
-			name:     "retained links raise every record to v6",
-			messages: []db.Message{prompt, linked},
-			want:     [][]db.Message{{prompt, linked}},
-			versions: []string{`"v":6`},
 		},
 		{
 			name:            "version follows each segment",

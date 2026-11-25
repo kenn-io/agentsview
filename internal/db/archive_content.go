@@ -103,32 +103,13 @@ func ProjectSessionForStoragePolicy(
 			IsAutomatedTranscript(
 				session.UserMessageCount, messages, session.FirstMessage,
 			)
-		return usageSessionForStorage(session, messages, policy), usageOnlyMessages(messages)
+		return sessionForStoragePolicy(session, policy), usageOnlyMessages(messages)
 	case config.ArchiveContentTranscripts:
 		return session, transcriptMessages(messages)
 	default:
 		return session, messages
 	}
 }
-
-func usageSessionForStorage(session Session, messages []Message, policy config.ArchiveContent) Session {
-	var pending []Message
-	for _, message := range messages {
-		for _, call := range message.ToolCalls {
-			if (call.Category == "Bash" || call.Category == "Task") && (call.InputJSON != "" || call.PRLinks != "") {
-				pending = append(pending, Message{ToolCalls: []ToolCall{{ToolName: call.ToolName, Category: call.Category, InputJSON: call.InputJSON, PRLinks: call.PRLinks}}})
-			}
-		}
-	}
-	// A second projection sees calls without inputs; keep the first one's.
-	if len(pending) > 0 {
-		session.usagePRMessages = pending
-	}
-	return sessionForStoragePolicy(session, policy)
-}
-
-// SetUsagePRRemote supplies the recorded checkout remote for a pending write.
-func SetUsagePRRemote(session *Session, remote string) { session.usagePRRemote = remote }
 
 func sessionForStoragePolicy(
 	session Session, policy config.ArchiveContent,
@@ -221,29 +202,22 @@ func transcriptMessages(messages []Message) []Message {
 				stored[i].DialogueText = &redacted
 			}
 		}
-		stored[i].ToolCalls = withoutToolPayloads(stored[i].ToolCalls)
+		calls := slices.Clone(stored[i].ToolCalls)
+		for j := range calls {
+			calls[j].InputJSON = ""
+			calls[j].ResultContent = ""
+			if len(calls[j].ResultEvents) == 0 {
+				continue
+			}
+			events := slices.Clone(calls[j].ResultEvents)
+			for k := range events {
+				events[k].Content = ""
+			}
+			calls[j].ResultEvents = events
+		}
+		stored[i].ToolCalls = calls
 	}
 	return stored
-}
-
-// withoutToolPayloads clones calls without their input, result text, or
-// event content, keeping the pull request links each input named.
-func withoutToolPayloads(calls []ToolCall) []ToolCall {
-	calls = slices.Clone(calls)
-	for j := range calls {
-		calls[j].PRLinks = retainedCallPRLinks(calls[j])
-		calls[j].InputJSON = ""
-		calls[j].ResultContent = ""
-		if len(calls[j].ResultEvents) == 0 {
-			continue
-		}
-		events := slices.Clone(calls[j].ResultEvents)
-		for k := range events {
-			events[k].Content = ""
-		}
-		calls[j].ResultEvents = events
-	}
-	return calls
 }
 
 // redactToolUseRenderings rewrites the tool call summaries that parsers
@@ -553,7 +527,7 @@ func applyArchiveContentToCopiedSessionsTx(
 		if _, err := tx.ExecContext(ctx, `DELETE FROM commit_links WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)`); err != nil {
 			return err
 		}
-		if err := retainCopiedToolPRLinksTx(ctx, tx, tempIDsTable); err != nil {
+		if err := retainCopiedUsageToolPRLinksTx(ctx, tx, tempIDsTable); err != nil {
 			return err
 		}
 		err = dropCopiedToolContentTx(ctx, tx, tempIDsTable)
@@ -723,7 +697,7 @@ func compactCopiedSessionsForUsageTx(
 		{"delegation tool calls", `
 			UPDATE tool_calls
 			SET observed_outcome = NULL, observed_repeat = NULL, sequence_ending = NULL, tool_name = 'subagent', category = 'Task',
-			    input_json = NULL, pr_links = NULL, skill_name = NULL,
+			    input_json = NULL, skill_name = NULL,
 			    result_content_length = NULL, result_content = NULL,
 			    file_path = NULL
 			WHERE session_id` + inCopied},

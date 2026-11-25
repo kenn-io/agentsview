@@ -218,9 +218,6 @@ func TestRawContentRevisionJSONRepresentation(t *testing.T) {
 			InputJSON: `{"large":9007199254740993,"fraction":1.2500,"exponent":1e+03,"negative_zero":-0,"text":"<>&\u2028\u2029","duplicate":0,"duplicate":1,"null":null}`,
 		}},
 	}}}
-	key, err := rawMessageKey(p.Messages[0])
-	require.NoError(t, err)
-	p.Messages[0].ToolCalls[0].PRLinks = `[{"url":"https://github.com/acme/widgets/pull/7","host":"github.com","repository":"acme/widgets","number":7}]`
 	before, err := encodeRawPayload(p)
 	require.NoError(t, err)
 	got, err := rawContentRevision(p)
@@ -230,6 +227,8 @@ func TestRawContentRevisionJSONRepresentation(t *testing.T) {
 	assert.Equal(t, before, after, "hashing preserves the caller's complete content")
 	// The original normalized-content-v1 digest must survive encoder changes.
 	assert.Equal(t, "d5c710716bc7b8a68d60e43d58192489be71935625e141f9eb6c9dae723c3a29", got)
+	key, err := rawMessageKey(p.Messages[0])
+	require.NoError(t, err)
 	p.Signals.ToolObservations = []db.ToolObservation{{Outcome: "empty", Repeat: "exact", SequenceEnding: new("abandoned")}}
 	call := &p.Messages[0].ToolCalls[0]
 	call.ObservedOutcome, call.ObservedRepeat, call.SequenceEnding = new("empty"), new("exact"), new("abandoned")

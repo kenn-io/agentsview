@@ -2606,10 +2606,9 @@ func TestCompareStoredSessionPromptAndCommandLinks(t *testing.T) {
 	for _, tc := range []struct {
 		name            string
 		command, prompt string
-		count           int
 	}{
-		{"full", "gh pr view 42 -R user-a/project-a", "Review https://github.com/user-a/project-a/pull/43", 2},
-		{"mixed case", "gh pr view 42 -R example/repo", "Review https://github.com/Example/Repo/pull/42", 1},
+		{"full", "gh pr view 42 -R user-a/project-a", "Review https://github.com/user-a/project-a/pull/43"},
+		{"mixed case", "gh pr view 42 -R example/repo", "Review https://github.com/Example/Repo/pull/42"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := openTestDB(t)
@@ -2625,7 +2624,6 @@ func TestCompareStoredSessionPromptAndCommandLinks(t *testing.T) {
 			prepared, msgs, verdict := e.prepareSessionWrite(pw, nil)
 			require.Equal(t, sessionWriteOK, verdict)
 			stored := pdFetchStored(t, d, prepared.ID)
-			require.Len(t, stored.PRLinks, tc.count)
 			diffs, err := e.compareStoredSession(t.Context(), stored, prepared, msgs, nil)
 			require.NoError(t, err)
 			for _, diff := range diffs {

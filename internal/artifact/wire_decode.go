@@ -184,7 +184,7 @@ func decodePreflightedSegment(preflight segmentPreflight) ([]db.Message, error) 
 			return nil, fmt.Errorf("decoding message segment: %w", err)
 		}
 		if len(record.DialogueRanges) > 0 {
-			if record.Version < messageSegmentDialogueVersion || len(record.DialogueRanges) > maxDialogueRanges || record.DialogueText != nil || record.DialogueIsContent {
+			if record.Version < messageSegmentFormatVersion || len(record.DialogueRanges) > maxDialogueRanges || record.DialogueText != nil || record.DialogueIsContent {
 				return nil, errors.New("invalid dialogue ranges")
 			}
 			var text strings.Builder
@@ -409,7 +409,6 @@ func (m segmentMessage) dbMessage() db.Message {
 				Category:            call.Category,
 				ToolUseID:           call.ToolUseID,
 				InputJSON:           call.InputJSON,
-				PRLinks:             string(call.PRLinks),
 				FilePath:            call.FilePath,
 				SkillName:           call.SkillName,
 				ResultContentLength: call.ResultContentLength,

@@ -298,39 +298,60 @@ func TestRawProjectionCommandPRLinks(t *testing.T) {
 }
 
 func TestRawProjectionUsageCopilotMergeRetainsPRLinks(t *testing.T) {
-	f := newProjectionFixture(t)
-	var err error
-	f.sink, err = NewRawProjectionStore(t.Context(), f.runtime, RawProjectionOptions{Tenant: f.tenant, Content: ingest.ContentOptions{ArchiveContent: config.ArchiveContentUsage}})
-	require.NoError(t, err)
-	first := projectionOutcome("start")
-	result := &first.Outcome.Results[0].Result
-	result.Session.Agent = parser.AgentVSCopilot
-	result.Session.ID = "vscopilot:portable"
-	result.Messages[0].Role = parser.RoleAssistant
-	result.Messages[0].Timestamp = time.Date(2026, 1, 1, 0, 0, 1, 0, time.UTC)
-	result.Messages[0].ToolCalls = []parser.ParsedToolCall{{ToolUseID: "call", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`}}
-	result.Messages[1].Timestamp = time.Date(2026, 1, 1, 0, 0, 2, 0, time.UTC)
-	result.Messages[1].ToolCalls = nil
-	m, receipt := f.accept(t, "device-a", "initial", "", parser.AgentVSCopilot)
-	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, first))
-	before, err := f.sink.Resolve(t.Context(), "vscopilot:portable")
-	require.NoError(t, err)
-	var links string
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, before.SessionID).Scan(&links))
-	want := []db.PRLink{{URL: "https://github.com/example/repo/pull/42", Host: "github.com", Repository: "example/repo", Number: 42}}
-	require.Equal(t, want, db.DecodePRLinks(links))
-	result.Messages = []parser.ParsedMessage{result.Messages[1], {Ordinal: 2, Role: parser.RoleAssistant, Content: "new answer", Timestamp: time.Date(2026, 1, 1, 0, 0, 3, 0, time.UTC)}}
-	m, _ = f.accept(t, "device-a", "partial", receipt.Receipt, parser.AgentVSCopilot)
-	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, first))
-	after, err := f.sink.Resolve(t.Context(), "vscopilot:portable")
-	require.NoError(t, err)
-	var payload []byte
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT payload FROM raw_content_revisions WHERE session_id=$1`, after.SessionID).Scan(&payload))
-	merged, err := decodeRawPayload(payload)
-	require.NoError(t, err)
-	require.Len(t, merged.Messages, 3)
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, after.SessionID).Scan(&links))
-	assert.Equal(t, want, db.DecodePRLinks(links))
+	for _, tc := range []struct {
+		name       string
+		policy     config.ArchiveContent
+		twoDevices bool
+	}{
+		{"usage", config.ArchiveContentUsage, false},
+		{"transcripts", config.ArchiveContentTranscripts, false},
+		{"transcripts with other source withdrawn", config.ArchiveContentTranscripts, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newProjectionFixture(t)
+			var err error
+			f.sink, err = NewRawProjectionStore(t.Context(), f.runtime, RawProjectionOptions{Tenant: f.tenant, Content: ingest.ContentOptions{ArchiveContent: tc.policy}})
+			require.NoError(t, err)
+			first := projectionOutcome("start")
+			result := &first.Outcome.Results[0].Result
+			result.Session.Agent = parser.AgentVSCopilot
+			result.Session.ID = "vscopilot:portable"
+			result.Messages[0].Role = parser.RoleAssistant
+			result.Messages[0].Timestamp = time.Date(2026, 1, 1, 0, 0, 1, 0, time.UTC)
+			result.Messages[0].ToolCalls = []parser.ParsedToolCall{{ToolUseID: "call", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`}}
+			result.Messages[1].Timestamp = time.Date(2026, 1, 1, 0, 0, 2, 0, time.UTC)
+			result.Messages[1].ToolCalls = nil
+			m, receipt := f.accept(t, "device-a", "initial", "", parser.AgentVSCopilot)
+			require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, first))
+			before, err := f.sink.Resolve(t.Context(), "vscopilot:portable")
+			require.NoError(t, err)
+			var receiptB rawsync.CommitResult
+			if tc.twoDevices {
+				result.Messages[0].ToolCalls[0].InputJSON = `{"command":"gh pr view 43 -R example/repo"}`
+				other, saved := f.accept(t, "device-b", "initial-b", "", parser.AgentVSCopilot)
+				receiptB = saved
+				require.NoError(t, f.sink.Project(t.Context(), f.lease(t, other), other, first))
+			}
+			result.Messages = []parser.ParsedMessage{result.Messages[1], {Ordinal: 2, Role: parser.RoleAssistant, Content: "new answer", Timestamp: time.Date(2026, 1, 1, 0, 0, 3, 0, time.UTC)}}
+			m, _ = f.accept(t, "device-a", "partial", receipt.Receipt, parser.AgentVSCopilot)
+			require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, first))
+			if tc.twoDevices {
+				other, _ := f.accept(t, "device-b", "withdraw-b", receiptB.Receipt, parser.AgentVSCopilot)
+				require.NoError(t, f.sink.Project(t.Context(), f.lease(t, other), other, rawderive.ParsedManifest{Outcome: parser.ParseOutcome{ResultSetComplete: true, ExcludedSessionIDs: []string{"vscopilot:portable"}}}))
+			}
+			after, err := f.sink.Resolve(t.Context(), "vscopilot:portable")
+			require.NoError(t, err)
+			var payload []byte
+			require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT payload FROM raw_content_revisions WHERE session_id=$1`, after.SessionID).Scan(&payload))
+			merged, err := decodeRawPayload(payload)
+			require.NoError(t, err)
+			require.Len(t, merged.Messages, 3)
+			assert.NotEmpty(t, before.SessionID)
+			var links string
+			require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, after.SessionID).Scan(&links))
+			assert.Equal(t, []db.PRLink{{URL: "https://github.com/example/repo/pull/42", Host: "github.com", Repository: "example/repo", Number: 42}}, db.DecodePRLinks(links))
+		})
+	}
 }
 
 func TestRawProjectionWithdrawnDeviceLinks(t *testing.T) {
@@ -419,11 +440,6 @@ func TestRawProjectionRestoresOtherSourceToolLinks(t *testing.T) {
 }
 
 func TestRawProjectionRefreshesRetainedToolLinks(t *testing.T) {
-	f, outcome, receipt, before, after := prepareRetainedToolLinks(t)
-	result := &outcome.Outcome.Results[0].Result
-	var links string
-	var err error
-	var m rawsync.CanonicalManifest
 	for _, tc := range []struct {
 		name    string
 		removed parser.ParseOutcome
@@ -431,39 +447,52 @@ func TestRawProjectionRefreshesRetainedToolLinks(t *testing.T) {
 		{"replace", parser.ParseOutcome{ResultSetComplete: true, ForceReplace: true}},
 		{"exclude", parser.ParseOutcome{ResultSetComplete: true, ExcludedSessionIDs: []string{"roocode:portable"}}},
 	} {
-		m, receipt = f.accept(t, "device-a", "absent-"+tc.name, receipt.Receipt, parser.AgentRooCode)
-		require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, rawderive.ParsedManifest{Outcome: tc.removed}))
-		m, receipt = f.accept(t, "device-a", "restored-"+tc.name, receipt.Receipt, parser.AgentRooCode)
-		require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
-		after, err = f.sink.Resolve(t.Context(), "roocode:portable")
-		require.NoError(t, err)
-		assert.Equal(t, before.SessionID, after.SessionID)
-		require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, after.SessionID).Scan(&links))
-		assert.Equal(t, []db.PRLink{{URL: "https://github.com/example/repo/pull/43", Host: "github.com", Repository: "example/repo", Number: 43}}, db.DecodePRLinks(links))
+		t.Run(tc.name, func(t *testing.T) {
+			f, outcome, receipt, before, _ := prepareRetainedToolLinks(t)
+			m, receipt := f.accept(t, "device-a", "absent", receipt.Receipt, parser.AgentRooCode)
+			require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, rawderive.ParsedManifest{Outcome: tc.removed}))
+			m, _ = f.accept(t, "device-a", "restored", receipt.Receipt, parser.AgentRooCode)
+			require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
+			after, err := f.sink.Resolve(t.Context(), "roocode:portable")
+			require.NoError(t, err)
+			assert.Equal(t, before.SessionID, after.SessionID)
+			var links string
+			require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, after.SessionID).Scan(&links))
+			assert.Equal(t, []db.PRLink{{URL: "https://github.com/example/repo/pull/43", Host: "github.com", Repository: "example/repo", Number: 43}}, db.DecodePRLinks(links))
+		})
 	}
-	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET data_version=$2 WHERE id=$1`, after.SessionID, db.CurrentDataVersion()-1)
-	require.NoError(t, err)
-	messages := result.Messages
-	result.Messages = nil
-	m, receipt = f.accept(t, "device-a", "shortened", receipt.Receipt, parser.AgentRooCode)
-	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
-	retained, err := f.sink.Resolve(t.Context(), "roocode:portable")
-	require.NoError(t, err)
-	assert.Equal(t, before.SessionID, retained.SessionID)
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, retained.SessionID).Scan(&links))
-	assert.Equal(t, []db.PRLink{{URL: "https://github.com/example/repo/pull/43", Host: "github.com", Repository: "example/repo", Number: 43}}, db.DecodePRLinks(links))
-	result.Messages = messages
-	result.Messages[1].ToolCalls[0].InputJSON = `{"command":"true"}`
-	m, receipt = f.accept(t, "device-a", "removed", receipt.Receipt, parser.AgentRooCode)
-	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
-	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET data_version=$2 WHERE id=$1`, retained.SessionID, db.CurrentDataVersion()-1)
-	require.NoError(t, err)
-	result.Messages = nil
-	m, _ = f.accept(t, "device-a", "shortened-again", receipt.Receipt, parser.AgentRooCode)
-	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
-	retained, err = f.sink.Resolve(t.Context(), "roocode:portable")
-	require.NoError(t, err)
-	assert.Equal(t, before.SessionID, retained.SessionID)
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, retained.SessionID).Scan(&links))
-	assert.Empty(t, db.DecodePRLinks(links))
+	t.Run("shortened after version change", func(t *testing.T) {
+		f, outcome, receipt, before, after := prepareRetainedToolLinks(t)
+		_, err := f.runtime.ExecContext(t.Context(), `UPDATE sessions SET data_version=$2 WHERE id=$1`, after.SessionID, db.CurrentDataVersion()-1)
+		require.NoError(t, err)
+		outcome.Outcome.Results[0].Result.Messages = nil
+		m, _ := f.accept(t, "device-a", "shortened", receipt.Receipt, parser.AgentRooCode)
+		require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
+		retained, err := f.sink.Resolve(t.Context(), "roocode:portable")
+		require.NoError(t, err)
+		assert.Equal(t, before.SessionID, retained.SessionID)
+		var links string
+		require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, retained.SessionID).Scan(&links))
+		assert.Equal(t, []db.PRLink{{URL: "https://github.com/example/repo/pull/43", Host: "github.com", Repository: "example/repo", Number: 43}}, db.DecodePRLinks(links))
+	})
+	t.Run("removed then shortened", func(t *testing.T) {
+		f, outcome, receipt, before, after := prepareRetainedToolLinks(t)
+		result := &outcome.Outcome.Results[0].Result
+		result.Messages[1].ToolCalls[0].InputJSON = `{"command":"true"}`
+		m, receipt := f.accept(t, "device-a", "removed", receipt.Receipt, parser.AgentRooCode)
+		require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
+		var links string
+		require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, after.SessionID).Scan(&links))
+		assert.Empty(t, db.DecodePRLinks(links))
+		_, err := f.runtime.ExecContext(t.Context(), `UPDATE sessions SET data_version=$2 WHERE id=$1`, after.SessionID, db.CurrentDataVersion()-1)
+		require.NoError(t, err)
+		result.Messages = nil
+		m, _ = f.accept(t, "device-a", "shortened-again", receipt.Receipt, parser.AgentRooCode)
+		require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
+		retained, err := f.sink.Resolve(t.Context(), "roocode:portable")
+		require.NoError(t, err)
+		assert.Equal(t, before.SessionID, retained.SessionID)
+		require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, retained.SessionID).Scan(&links))
+		assert.Empty(t, db.DecodePRLinks(links))
+	})
 }

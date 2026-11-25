@@ -16,28 +16,6 @@ type rawRecencyState struct {
 	HealthScore                *int
 	HealthGrade                *string
 	ToolObservations           []db.ToolObservation `json:",omitzero"`
-	// Tool inputs are omitted from transcript-only payloads, so keep their
-	// derived links current without changing the immutable content revision.
-	ToolPRLinks [][]rawToolPRLinks `json:",omitzero"`
-}
-
-type rawToolPRLinks struct {
-	Links string
-}
-
-func publishRawToolPRLinks(ctx context.Context, tx *sql.Tx, id string, messages []db.Message) error {
-	links := make([][]rawToolPRLinks, len(messages))
-	for i, message := range messages {
-		for _, call := range message.ToolCalls {
-			links[i] = append(links[i], rawToolPRLinks{call.PRLinks})
-		}
-	}
-	data, err := json.Marshal(links)
-	if err != nil {
-		return err
-	}
-	_, err = tx.ExecContext(ctx, `UPDATE raw_content_revisions SET recency_state=jsonb_set(recency_state,'{ToolPRLinks}',$2::jsonb) WHERE session_id=$1 AND recency_state->'ToolPRLinks' IS DISTINCT FROM $2::jsonb`, id, data)
-	return err
 }
 
 func decodeRawRecency(data []byte) (rawRecencyState, error) {
@@ -59,7 +37,7 @@ func (r rawRecencyState) apply(update *db.SessionSignalUpdate) {
 // later reactivation and reports only a change to a currently materialized row.
 // Equal recent observations retain the original pending timestamp.
 func publishRawRecency(ctx context.Context, tx *sql.Tx, id string, update db.SessionSignalUpdate) (bool, error) {
-	next := rawRecencyState{Outcome: update.Outcome, OutcomeConfidence: update.OutcomeConfidence, SignalsPendingSince: update.SignalsPendingSince, HealthScore: update.HealthScore, HealthGrade: update.HealthGrade, ToolObservations: update.ToolObservations}
+	next := rawRecencyState{update.Outcome, update.OutcomeConfidence, update.SignalsPendingSince, update.HealthScore, update.HealthGrade, update.ToolObservations}
 	var data []byte
 	if err := tx.QueryRowContext(ctx, `SELECT recency_state FROM raw_content_revisions WHERE session_id=$1`, id).Scan(&data); err != nil {
 		return false, err
@@ -68,7 +46,6 @@ func publishRawRecency(ctx context.Context, tx *sql.Tx, id string, update db.Ses
 	if err != nil {
 		return false, err
 	}
-	next.ToolPRLinks = prior.ToolPRLinks
 	if next.ToolObservations == nil {
 		next.ToolObservations = prior.ToolObservations
 	}
