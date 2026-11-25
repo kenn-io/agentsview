@@ -1600,6 +1600,84 @@ func TestScopedUpgradeQueryErrorKeepsFreshnessWarning(t *testing.T) {
 	assert.Equal(t, "true", recorder.Header().Get(apiclient.ArchiveStaleHeader))
 }
 
+type pendingRouteIngestion struct {
+	engine *syncpkg.Engine
+	path   string
+}
+
+func (i *pendingRouteIngestion) EnsureFresh(ctx context.Context) bool {
+	return i.engine.SyncPathsContext(ctx, []string{i.path}) == nil
+}
+
+func (i *pendingRouteIngestion) Pending() bool { return true }
+
+func (i *pendingRouteIngestion) FlushChanges(context.Context) (bool, error) {
+	return false, nil
+}
+
+func TestScopedUpgradePendingAllowsReadCatchup(t *testing.T) {
+	f := newSyncRouteFixture(t)
+	firstPath := f.writeClaudeTranscript(t, "proj/first-session.jsonl", testjsonl.NewSessionBuilder().
+		AddClaudeUser("2026-01-01T00:00:00Z", "first session").
+		AddClaudeAssistant("2026-01-01T00:00:01Z", "reply").
+		AddClaudeUser("2026-01-01T00:00:02Z", "follow up").String())
+	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
+	ingestion := &pendingRouteIngestion{engine: engine, path: firstPath}
+	f.srv.ingestionFreshness = ingestion
+	w := serveJSON(t, f.handler, http.MethodGet, "/api/v1/sessions", nil)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), "first-session")
+
+	path := f.writeClaudeTranscript(t, "proj/new-session.jsonl", testjsonl.NewSessionBuilder().
+		AddClaudeUser("2026-01-01T00:00:00Z", "new session after idle").
+		AddClaudeAssistant("2026-01-01T00:00:01Z", "reply").
+		AddClaudeUser("2026-01-01T00:00:02Z", "follow up").String())
+	require.NoError(t, f.db.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), "INSERT INTO stats(key, value) VALUES ('scoped_upgrade_pending', 1)")
+		return err
+	}))
+	ingestion.path = path
+
+	w = serveJSON(t, f.handler, http.MethodGet, "/api/v1/sessions", nil)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Equal(t, "true", w.Header().Get(apiclient.ArchiveStaleHeader))
+	assert.Contains(t, w.Body.String(), "new-session")
+}
+
+func TestScopedUpgradeSessionSyncRejectsWriterHandoff(t *testing.T) {
+	f := newSyncRouteFixture(t)
+	path := f.writeClaudeSession(t, "proj/session.jsonl", "session during upgrade")
+	require.NoError(t, f.db.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), "INSERT INTO stats(key, value) VALUES ('scoped_upgrade_pending', 1)")
+		return err
+	}))
+	require.NoError(t, f.db.CloseWriter())
+	t.Cleanup(func() { require.NoError(t, f.db.ReopenWriter()) })
+	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
+	f.srv.engine = engine
+	f.srv.sessions = service.NewDirectBackend(f.db, engine)
+	locked, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		done <- engine.RunExclusive(func() error { close(locked); <-release; return nil })
+	}()
+	<-locked
+	response := make(chan *httptest.ResponseRecorder, 1)
+	go func() { response <- postSessionSync(t, f.handler, path) }()
+	var w *httptest.ResponseRecorder
+	select {
+	case w = <-response:
+	case <-time.After(time.Second): //nolint:kennlint // deadlinetest: the request must reject while the worker holds the sync lock
+	}
+	close(release)
+	require.NoError(t, <-done)
+	if w == nil {
+		<-response
+		t.Fatal("session sync waited for the worker instead of rejecting the request")
+	}
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code, w.Body.String())
+	assert.Equal(t, writerClosedRetryAfterSeconds, w.Header().Get("Retry-After"))
+}
+
 func TestHumaSyncSessionLocalNoSyncUsesOnDemandEngine(t *testing.T) {
 	f := newSyncRouteFixture(t)
 	sessionPath := f.writeClaudeSession(t, "proj/session.jsonl", "no sync route")
