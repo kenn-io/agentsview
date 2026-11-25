@@ -31,6 +31,8 @@ type PreparedSession struct {
 	Session     db.Session
 	Messages    []db.Message
 	UsageEvents []db.UsageEvent
+	// UsagePRLinks are derived before usage-only projection discards tool inputs.
+	UsagePRLinks []db.PRLink
 	// PlanUsage is the session's plan usage and live-capture coverage
 	// row; nil when the parser reported neither.
 	PlanUsage *db.SessionPlanUsage
@@ -157,12 +159,12 @@ func finalize(
 	}
 	validation = addValidationStats(validation, usageValidation)
 	session.RelationshipType = db.SessionRelationship(session)
+	var usagePRLinks []db.PRLink
 	if options.ArchiveContent.UsageOnly() {
-		links, err := db.ToolCallPRLinksForUsage(ctx, messages, options.CheckoutRemote)
+		usagePRLinks, err = db.ToolCallPRLinksForUsage(ctx, messages, options.CheckoutRemote)
 		if err != nil {
 			return PreparedSession{}, err
 		}
-		session.PRLinks = parser.CombinePRLinks(session.PRLinks, links)
 	}
 	session, messages = db.ProjectSessionForStoragePolicy(
 		session, messages, options.ArchiveContent,
@@ -176,7 +178,7 @@ func finalize(
 		}
 	}
 	return PreparedSession{
-		Session: session, Messages: messages, UsageEvents: usageEvents,
+		Session: session, Messages: messages, UsageEvents: usageEvents, UsagePRLinks: usagePRLinks,
 		PlanUsage: ConvertPlanUsage(
 			candidate.Parsed.Session.PlanUsage,
 			candidate.Parsed.Session.CaptureCoverage,

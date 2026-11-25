@@ -267,6 +267,33 @@ func TestRawProjectionCommandPRLinks(t *testing.T) {
 	}
 }
 
+func TestRawProjectionUsageCommandLinkIdentity(t *testing.T) {
+	f := newProjectionFixture(t)
+	var err error
+	f.sink, err = NewRawProjectionStore(t.Context(), f.runtime, RawProjectionOptions{Tenant: f.tenant, Content: ingest.ContentOptions{ArchiveContent: config.ArchiveContentUsage}})
+	require.NoError(t, err)
+	outcome := projectionOutcome("start")
+	call := &outcome.Outcome.Results[0].Result.Messages[1].ToolCalls[0]
+	call.InputJSON = `{"command":"gh pr view 43 -R example/repo"}`
+	m, _ := f.accept(t, "device-a", "initial", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
+	before, err := f.sink.Resolve(t.Context(), "codex:portable")
+	require.NoError(t, err)
+	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
+	require.NoError(t, err)
+	pr, err := db.ParsePRFilter("example/repo#43")
+	require.NoError(t, err)
+	page, err := h.ListSessions(t.Context(), db.SessionFilter{PR: pr, Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, page.Sessions, 1)
+	call.InputJSON = `{"command":"echo hello"}`
+	m, _ = f.accept(t, "device-b", "same-content", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
+	var revision string
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT captured_session_id FROM raw_session_branches WHERE manifest_id=$1`, m.ManifestID).Scan(&revision))
+	assert.Equal(t, before.SessionID, revision)
+}
+
 func TestRawProjectionRefreshesRetainedToolLinks(t *testing.T) {
 	for _, otherSource := range []bool{false, true} {
 		t.Run(fmt.Sprintf("other-source=%t", otherSource), func(t *testing.T) {

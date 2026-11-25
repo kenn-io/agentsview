@@ -65,6 +65,7 @@ func TestToolCallPRLinksWorkdirs(t *testing.T) {
 		{"other", "exec_command", `{"cmd":"gh pr view 42","workdir":"/work/other"}`, nil},
 		{"matching", "exec_command", `{"cmd":"gh pr view 42","workdir":"/work/./repo"}`, []int{42}},
 		{"code mode batch", "exec", `text(await tools.exec_command({cmd:"gh pr view 41",workdir:"/other"})); text(await tools.exec_command({cmd:"gh pr view 42",workdir:"/work/repo"}))`, []int{42}},
+		{"code mode commit directory", "exec", `text(await tools.exec_command({cmd:"git -C /other commit -m x; gh pr view 42",workdir:"/work/repo"}))`, []int{42}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			links := toolCallPRLinks(t, []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", ToolName: tc.tool, InputJSON: tc.input}}}}, "/work/repo", "https://github.com/example/repo.git")

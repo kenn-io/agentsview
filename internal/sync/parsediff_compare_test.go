@@ -2628,3 +2628,24 @@ func TestCompareStoredSessionPromptAndCommandLinks(t *testing.T) {
 		})
 	}
 }
+
+func TestCompareStoredSessionPRLinkCase(t *testing.T) {
+	d := openTestDB(t)
+	e := NewEngine(t.Context(), d, EngineConfig{Machine: "test-machine"})
+	pw := pdToolSession("pd-pr-case")
+	pw.msgs[1].ToolCalls[1].InputJSON = `{"command":"gh pr view 42 -R example/repo"}`
+	pw.msgs[2].IsSystem = false
+	pw.msgs[2].Content = "Review https://github.com/Example/Repo/pull/42"
+	pw.msgs[2].ContentLength = len(pw.msgs[2].Content)
+	written, _, failed, _ := e.writeBatch([]pendingWrite{pw}, syncWriteBulk, false)
+	require.Equal(t, 1, written)
+	require.Zero(t, failed)
+	prepared, msgs, verdict := e.prepareSessionWrite(pw, nil)
+	require.Equal(t, sessionWriteOK, verdict)
+	stored := pdFetchStored(t, d, prepared.ID)
+	diffs, err := e.compareStoredSession(t.Context(), stored, prepared, msgs, nil)
+	require.NoError(t, err)
+	for _, diff := range diffs {
+		assert.NotEqual(t, FieldPRLinks, diff.Field)
+	}
+}

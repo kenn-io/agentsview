@@ -246,6 +246,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		}
 		prepared.Signals = ingest.RefreshSignalRecencyAt(prepared.Session, prepared.Messages, prepared.Signals, s.options.Now())
 		identityPayload := prepared
+		identityPayload.UsagePRLinks = nil
 		if decision.Action == ingest.HistoryPreserve {
 			identityPayload.Session.PRLinks = originalPRLinks
 		}
@@ -258,7 +259,8 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			return err
 		}
 		sessionID := "raw-row-" + rawDigest("row-v1", group, revision)
-		links := prepared.Session.PRLinks
+		links := parser.CombinePRLinks(prepared.Session.PRLinks, prepared.UsagePRLinks)
+		prepared.UsagePRLinks = nil
 		if !s.options.Content.ArchiveContent.UsageOnly() && (decision.Action != ingest.HistoryPreserve || prepared.Session.DataVersion < rawPRLinksDataVersion) {
 			promptLinks, err := db.PromptPRLinksContext(ctx, prepared.Messages)
 			if err != nil {

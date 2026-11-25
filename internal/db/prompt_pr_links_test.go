@@ -669,6 +669,16 @@ func TestToolPRLinksSharedShellDirectoryAppend(t *testing.T) {
 	assert.Empty(t, got.PRLinks)
 }
 
+func TestRetainedToolPRLinksExplicitCase(t *testing.T) {
+	call := ToolCall{Category: "Bash", ToolName: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo; gh pr view 42 -R github.com/Example/Repo"}`}
+	call.PRLinks = retainedCallPRLinks(call)
+	call.InputJSON = ""
+	links, err := ToolCallPRLinks(t.Context(), []Message{{ToolCalls: []ToolCall{call}}}, "", "https://git.example/example/repo.git")
+	require.NoError(t, err)
+	require.Len(t, links, 2)
+	assert.ElementsMatch(t, []string{"github.com", "git.example"}, []string{links[0].Host, links[1].Host})
+}
+
 func TestTranscriptToolPRLinksPreservesDirectoryChange(t *testing.T) {
 	for _, tc := range []struct{ name, first, second, remote, want string }{
 		{"directory", `{"command":"cd /work/other"}`, `{"command":"gh pr view 42; gh pr view 43 -R github.com/example/repo"}`, "https://github.com/example/repo.git", "https://github.com/example/repo/pull/43"},

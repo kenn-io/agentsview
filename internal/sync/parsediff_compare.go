@@ -313,12 +313,12 @@ func appendSessionMetadataDiffs(
 		diffs, FieldGitBranch, agent, stored.GitBranch, prepared.GitBranch,
 	)
 	// Incremental writes can store links in a different order from a full parse.
-	storedLinks, parsedLinks := make(map[db.PRLink]int), make(map[db.PRLink]int)
+	storedLinks, parsedLinks := make(map[string]int), make(map[string]int)
 	for _, link := range stored.PRLinks {
-		storedLinks[link]++
+		storedLinks[fmt.Sprintf("%s/%s/%d", strings.ToLower(link.Host), strings.ToLower(link.Repository), link.Number)]++
 	}
 	for _, link := range prepared.PRLinks {
-		parsedLinks[link]++
+		parsedLinks[fmt.Sprintf("%s/%s/%d", strings.ToLower(link.Host), strings.ToLower(link.Repository), link.Number)]++
 	}
 	if !maps.Equal(storedLinks, parsedLinks) {
 		sv, pv := db.EncodePRLinks(stored.PRLinks), db.EncodePRLinks(prepared.PRLinks)

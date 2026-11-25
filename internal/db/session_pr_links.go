@@ -468,7 +468,7 @@ func shellInputCommands(input string) ([]prShellCommand, bool) {
 			var commands []prShellCommand
 			for _, call := range codeModeShellCallRE.FindAllString(input, -1) {
 				if command := commitCommandText(call); command != "" {
-					commands = append(commands, prShellCommand{text: command, workdir: commitRepository(call, ""), codeMode: true})
+					commands = append(commands, prShellCommand{text: command, workdir: commitWorkdir(call, ""), codeMode: true})
 				}
 			}
 			return commands, len(commands) > 0
@@ -586,7 +586,7 @@ func retainedPRLinksIn(retained retainedPRState, remote string, state sharedPRCo
 	}
 	var links []PRLink
 	for _, link := range retained.Links {
-		dependent := retained.Depends[link.URL]
+		dependent := retained.Depends[prLinkKey(link)]
 		link, ok := parser.NewPRLink(link.URL, link.Repository, link.Number)
 		if !ok {
 			continue
@@ -605,11 +605,15 @@ func retainedPRLinksIn(retained retainedPRState, remote string, state sharedPRCo
 			}
 			links = append(links, resolved)
 		}
-		if retained.Explicit[link.URL] {
+		if retained.Explicit[prLinkKey(link)] {
 			links = append(links, link)
 		}
 	}
 	return links
+}
+
+func prLinkKey(link PRLink) string {
+	return fmt.Sprintf("%s/%s/%d", strings.ToLower(link.Host), strings.ToLower(link.Repository), link.Number)
 }
 
 // retainedPRState holds what a call named without its input. Depends marks a
@@ -633,14 +637,14 @@ func (r *retainedPRState) markDepends(call ToolCall, depends []PRLink) {
 	explicit, _ := callPRLinks(context.Background(), call.Category, call.ToolName, call.InputJSON, "", "", sharedPRContext{repository: true}, &ignored, nil)
 	r.Depends = make(map[string]bool, len(depends))
 	for _, link := range depends {
-		r.Depends[link.URL] = true
+		r.Depends[prLinkKey(link)] = true
 	}
 	for _, link := range explicit {
-		if r.Depends[link.URL] {
+		if r.Depends[prLinkKey(link)] {
 			if r.Explicit == nil {
 				r.Explicit = make(map[string]bool)
 			}
-			r.Explicit[link.URL] = true
+			r.Explicit[prLinkKey(link)] = true
 		}
 	}
 }

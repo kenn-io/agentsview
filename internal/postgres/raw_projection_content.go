@@ -218,6 +218,7 @@ func rawCanonicalValue(v reflect.Value, field string) (any, error) {
 			// observation fields preserve the historical normalized-content-v1 representation.
 			// DialogueText is a derived search projection; reparses refresh it in place.
 			if !f.IsExported() || f.Name == "UsageAutomationProjected" || f.Name == "TrashIncludesCodexPages" ||
+				(v.Type() == reflect.TypeFor[ingest.PreparedSession]() && f.Name == "UsagePRLinks") ||
 				(v.Type() == reflect.TypeFor[db.Message]() && f.Name == "DialogueText") ||
 				(v.Type() == reflect.TypeFor[db.ToolCall]() && f.Name == "PRLinks") ||
 				(v.Type() == rawSessionType && f.Name == "SourceMachines") ||
