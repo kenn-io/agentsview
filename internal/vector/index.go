@@ -146,6 +146,7 @@ func (s IndexSpec) stampsTable() string      { return s.VectorsPrefix + "_stamps
 func (s IndexSpec) chunksTable() string      { return s.VectorsPrefix + "_chunks" }
 func (s IndexSpec) repairQueueTable() string { return s.VectorsPrefix + "_repair_queue" }
 func (s IndexSpec) reuseTable() string       { return s.VectorsPrefix + "_reuse" }
+func (s IndexSpec) chunkTextTable() string   { return s.VectorsPrefix + "_chunk_text" }
 
 // MessageIndexSpec is the conversation-message embedding store. Its table
 // names and metadata keys predate IndexSpec.
@@ -328,6 +329,19 @@ func OpenSpec(
 	}
 	if !readOnly {
 		if spec.Name == "messages" {
+			if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS `+spec.chunkTextTable()+` (ordinal INTEGER NOT NULL, doc_key TEXT NOT NULL, chunk_index INTEGER NOT NULL, revision TEXT NOT NULL, text_hash TEXT NOT NULL, PRIMARY KEY (ordinal, doc_key, chunk_index)) WITHOUT ROWID`); err != nil {
+				db.Close()
+				return nil, fmt.Errorf("creating chunk text table: %w", err)
+			}
+			if _, err := db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS `+spec.chunkTextTable()+`_hash ON `+spec.chunkTextTable()+` (ordinal, text_hash)`); err != nil {
+				db.Close()
+				return nil, fmt.Errorf("creating chunk text index: %w", err)
+			}
+			if _, err := db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS `+spec.chunkTextTable()+`_doc ON `+spec.chunkTextTable()+` (doc_key)`); err != nil {
+				db.Close()
+				return nil, fmt.Errorf("creating chunk text document index: %w", err)
+			}
+
 			if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS `+spec.reuseTable()+` (ordinal INTEGER NOT NULL, doc_key TEXT NOT NULL, text_hash TEXT NOT NULL, embedding BLOB NOT NULL, PRIMARY KEY (ordinal, doc_key, text_hash)) WITHOUT ROWID`); err != nil {
 				db.Close()
 				return nil, fmt.Errorf("creating chunk reuse table: %w", err)
