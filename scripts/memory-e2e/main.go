@@ -255,13 +255,7 @@ func run(ctx context.Context, cfg config) error {
 	var fixtures []lookupFixture
 	var questions []lookupQuestion
 	if cfg.suite == "lookups" {
-		entries, err := os.ReadDir(cfg.outputDir)
-		if err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("memory-e2e: read output: %w", err)
-		}
-		if len(entries) > 0 {
-			return fmt.Errorf("memory-e2e: output directory %q is not empty", cfg.outputDir)
-		}
+		var err error
 		fixtures, questions, err = selectLookupCorpus(cfg)
 		if err != nil {
 			return err

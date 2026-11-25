@@ -29,7 +29,6 @@ type lookupQuestion struct {
 	Prompt         string            `json:"prompt"`
 	Expected       []lookupItem      `json:"expected"`
 	ExpectedAnswer map[string]string `json:"expected_answer"`
-	Phrases        []string          `json:"phrases"`
 }
 
 type lookupAttempt struct {
@@ -139,15 +138,15 @@ func runLookupSuite(ctx context.Context, cfg config, bin string, fixtures []look
 }
 
 func seedLookupCorpus(
-	ctx context.Context, bin, dataDir, projectDir, transcriptsRoot string,
+	ctx context.Context, bin, dataDir, projectDir, fixtureRoot string,
 	fixtures []lookupFixture,
 ) error {
 	for _, f := range fixtures {
-		path, err := writeLookupFixtureTranscript(transcriptsRoot, projectDir, f)
+		path, err := writeLookupFixtureTranscript(fixtureRoot, projectDir, f)
 		if err != nil {
 			return err
 		}
-		id, err := syncSourceSessionWithEnv(ctx, bin, dataDir, path, []string{"CODEX_SESSIONS_DIR=" + transcriptsRoot, "CODEX_HOME=" + filepath.Dir(transcriptsRoot)})
+		id, err := syncSourceSessionWithEnv(ctx, bin, dataDir, path, []string{"CODEX_SESSIONS_DIR=" + fixtureRoot, "CODEX_HOME=" + filepath.Dir(fixtureRoot)})
 		if err != nil {
 			return err
 		}
@@ -207,12 +206,8 @@ func runLookupClient(
 	if err := initFixtureProject(ctx, project); err != nil {
 		return lookupClientReport{}, err
 	}
-	transcriptsRoot, err := os.MkdirTemp("/dev/shm", "agentsview-memory-e2e-lookups-")
-	if err != nil {
-		return lookupClientReport{}, fmt.Errorf("memory-e2e: create fixture archive: %w", err)
-	}
-	defer os.RemoveAll(transcriptsRoot)
-	if err := seedLookupCorpus(ctx, bin, data, project, transcriptsRoot, fixtures); err != nil {
+	fixtureRoot := filepath.Join(dir, "fixture-sessions")
+	if err := seedLookupCorpus(ctx, bin, data, project, fixtureRoot, fixtures); err != nil {
 		return lookupClientReport{}, err
 	}
 	server, err := startFixtureServer(ctx, bin, data, dir)
@@ -230,15 +225,12 @@ func runLookupClient(
 			report.Attempts = append(report.Attempts, lookupAttempt{Case: q.Name, Attempt: i, Score: lookupScore{Verdict: "unscored"}})
 		}
 	}
-	if err := writeJSON(filepath.Join(dir, "scheduled.json"), report.Attempts); err != nil {
-		return report, err
-	}
 	index := 0
 	for _, q := range questions {
 		for i := 1; i <= cfg.runs; i++ {
 			runDir := filepath.Join(dir, q.Name, fmt.Sprintf("run-%d", i))
 			started := time.Now()
-			calls, answer, runErr := captureLookup(ctx, cfg, bin, client, project, model, server.url, lookupPrompt(q), runDir, transcriptsRoot)
+			calls, answer, runErr := captureLookup(ctx, cfg, bin, client, project, model, server.url, lookupPrompt(q), runDir)
 			if errors.Is(runErr, errLookupSetup) {
 				return report, runErr
 			}
@@ -266,11 +258,17 @@ func lookupPrompt(q lookupQuestion) string {
 	return fmt.Sprintf("%s\n\nReturn only a JSON object with string fields %s. Copy each answer value exactly from the source, and include no other fields.", q.Prompt, fieldList)
 }
 
-func captureLookup(ctx context.Context, cfg config, bin string, client clientName, project, model, serverURL, prompt, dir, transcriptsRoot string) ([]lookupCall, string, error) {
+func captureLookup(ctx context.Context, cfg config, bin string, client clientName, project, model, serverURL, prompt, dir string) ([]lookupCall, string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, "", fmt.Errorf("%w: create attempt: %w", errLookupSetup, err)
 	}
-	isolation, err := prepareLookupIsolation(ctx, client, filepath.Dir(project), cfg.repository, project, bin, dir, transcriptsRoot)
+	if client == clientCodex {
+		codexSessionsDir := filepath.Join(dir, "home", ".codex", "sessions")
+		if err := copyLookupTranscripts(ctx, filepath.Join(filepath.Dir(project), "fixture-sessions"), codexSessionsDir); err != nil {
+			return nil, "", fmt.Errorf("%w: copy fixture transcripts: %w", errLookupSetup, err)
+		}
+	}
+	isolation, err := prepareLookupIsolation(ctx, client, filepath.Dir(project), cfg.repository, project, bin, dir)
 	if err != nil {
 		return nil, "", fmt.Errorf("%w: %s: %w", errLookupSetup, client, err)
 	}

@@ -44,7 +44,7 @@ func lookupExecutable(ctx context.Context, client string) (string, error) {
 	return resolved, nil
 }
 
-func prepareLookupIsolation(ctx context.Context, client clientName, clientDir, repository, project, bin, runDir, transcriptsRoot string) (result lookupIsolation, err error) {
+func prepareLookupIsolation(ctx context.Context, client clientName, clientDir, repository, project, bin, runDir string) (result lookupIsolation, err error) {
 	var credentials []string
 	defer func() {
 		if err != nil {
@@ -87,15 +87,6 @@ func prepareLookupIsolation(ctx context.Context, client clientName, clientDir, r
 	}
 	if err := os.MkdirAll(providerHome, 0o700); err != nil {
 		return lookupIsolation{}, err
-	}
-	fixtureSessions := filepath.Join(providerHome, "sessions")
-	if err := os.MkdirAll(fixtureSessions, 0o700); err != nil {
-		return lookupIsolation{}, err
-	}
-	if client == clientCodex {
-		if err := copyLookupTranscripts(ctx, transcriptsRoot, fixtureSessions); err != nil {
-			return lookupIsolation{}, err
-		}
 	}
 	if err := os.Symlink(filepath.Join(clientDir, "agentsview-data"), filepath.Join(privateHome, ".agentsview")); err != nil {
 		return lookupIsolation{}, err

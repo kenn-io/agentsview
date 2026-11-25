@@ -65,21 +65,22 @@ path, outside its working directory. Expected IDs and answer phrases stay
 outside the project visible to the agent. Codex disables `mcp_2026_07_28` so the capture records each MCP call under a
 fixed protocol. Opaque exec scripts without individual results stay unscored.
 
-The report counts lookup calls started by the time results for the cited
-session supply all expected phrases. A direct file read or the single-session
-`agentsview session messages <id>` command identifies the session from its
-input. Other commands need output that identifies each session. Facts may
-arrive across multiple results. The count includes MCP, CLI, direct reads, saved-output reads,
-and tool discovery.
+The report counts lookup calls through the first result that supplies every
+expected answer value for the cited session. A result counts when its text names
+the session, or when its non-empty, error-free call input names it. A result that
+names several sessions counts for each one. Facts may arrive across multiple
+results. The count includes MCP, CLI, direct reads, saved-output reads, and
+AgentsView tool discovery.
 
 Each question asks for a JSON object with named answer fields and the exact
-source session ID. The scorer checks those values exactly, so a wrong choice,
+source session ID. The scorer checks every expected value, so a wrong choice,
 contradiction, or changed identifier spelling cannot pass on keyword overlap.
 Errors, empty results, truncation, and calls per route appear per attempt.
-Wrong answers and timeouts fail. Missing results and calls whose timing cannot
-be compared leave a correct answer unscored. One- and two-call shares use all
-scheduled attempts. Client setup errors stop the run. Choose an empty output
-directory for each run.
+Wrong answers, timeouts, client failures, and unsupported answers in a complete
+capture fail. An otherwise correct answer stays unscored when capture is
+incomplete. If no hit is visible and calls are missing or untimed, the result
+also stays unscored. One- and two-call shares use all scheduled attempts.
+Client setup errors stop the run.
 
 The client receives temporary copies of its auth files for the run; the
 harness removes those copies after each attempt. Lookup captures are private;

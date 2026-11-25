@@ -35,12 +35,11 @@ func TestLookupIsolationReadsOnlyFixtureHome(t *testing.T) {
 	dataDir := filepath.Join(clientDir, "agentsview-data")
 	runDir := filepath.Join(clientDir, "attempt")
 	binDir := filepath.Join(clientDir, "bin")
-	transcriptsRoot := filepath.Join(base, "fixture-sessions")
-	for _, dir := range []string{project, dataDir, runDir, binDir, filepath.Join(home, ".codex")} {
+	fixtureSessions := filepath.Join(runDir, "home", ".codex", "sessions")
+	for _, dir := range []string{project, dataDir, runDir, binDir, filepath.Join(home, ".codex"), fixtureSessions} {
 		require.NoError(t, os.MkdirAll(dir, 0o700))
 	}
-	require.NoError(t, os.MkdirAll(transcriptsRoot, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(transcriptsRoot, "fixture.jsonl"), []byte("fixture transcript"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(fixtureSessions, "fixture.jsonl"), []byte("fixture transcript"), 0o600))
 	private := filepath.Join(home, "private.txt")
 	require.NoError(t, os.WriteFile(private, []byte("private"), 0o600))
 	prior := filepath.Join(clientDir, "prior-answer.txt")
@@ -56,7 +55,7 @@ func TestLookupIsolationReadsOnlyFixtureHome(t *testing.T) {
 	t.Setenv("PATH", binDir)
 	t.Setenv("ANTHROPIC_API_KEY", "host-anthropic-key")
 	t.Setenv("OPENAI_API_KEY", "host-openai-key")
-	isolation, err := prepareLookupIsolation(t.Context(), clientCodex, clientDir, project, project, bin, runDir, transcriptsRoot)
+	isolation, err := prepareLookupIsolation(t.Context(), clientCodex, clientDir, project, project, bin, runDir)
 	require.NoError(t, err)
 	cmd := exec.CommandContext(t.Context(), isolation.command)
 	cmd.Env = append(cmd.Env, isolation.env...)
@@ -72,7 +71,7 @@ func TestLookupIsolationReadsOnlyFixtureHome(t *testing.T) {
 	require.ErrorIs(t, err, os.ErrNotExist)
 
 	require.NoError(t, os.Remove(filepath.Join(home, ".codex", "auth.json")))
-	_, err = prepareLookupIsolation(t.Context(), clientCodex, clientDir, project, project, bin, filepath.Join(clientDir, "missing-auth"), transcriptsRoot)
+	_, err = prepareLookupIsolation(t.Context(), clientCodex, clientDir, project, project, bin, filepath.Join(clientDir, "missing-auth"))
 	require.ErrorContains(t, err, "missing codex credentials")
 }
 
@@ -101,9 +100,8 @@ func TestLookupIsolationRequiresNodeOnlyForNodeScripts(t *testing.T) {
 			dataDir := filepath.Join(clientDir, "agentsview-data")
 			runDir := filepath.Join(clientDir, "attempt")
 			binDir := filepath.Join(clientDir, "bin")
-			transcriptsRoot := filepath.Join(clientDir, "sessions")
 			configDir := filepath.Join(home, ".claude")
-			for _, dir := range []string{project, dataDir, runDir, binDir, transcriptsRoot, configDir} {
+			for _, dir := range []string{project, dataDir, runDir, binDir, configDir} {
 				require.NoError(t, os.MkdirAll(dir, 0o700))
 			}
 			require.NoError(t, os.WriteFile(filepath.Join(configDir, ".credentials.json"), []byte("{}"), 0o600))
@@ -116,7 +114,7 @@ func TestLookupIsolationRequiresNodeOnlyForNodeScripts(t *testing.T) {
 			t.Setenv("HOME", home)
 			t.Setenv("CLAUDE_CONFIG_DIR", configDir)
 			t.Setenv("PATH", binDir)
-			isolation, err := prepareLookupIsolation(t.Context(), clientClaude, clientDir, project, project, filepath.Join(binDir, "agentsview"), runDir, transcriptsRoot)
+			isolation, err := prepareLookupIsolation(t.Context(), clientClaude, clientDir, project, project, filepath.Join(binDir, "agentsview"), runDir)
 			if tc.wantErr != "" {
 				require.ErrorContains(t, err, tc.wantErr)
 				return
@@ -152,11 +150,10 @@ func TestLookupIsolationRejectsOutputOutsideHiddenRoots(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			project := filepath.Join(tc.clientDir, "project")
 			runDir := filepath.Join(tc.clientDir, "attempt")
-			transcriptsRoot := filepath.Join(tc.clientDir, "sessions")
-			for _, dir := range []string{tc.clientDir, tc.repository, project, runDir, transcriptsRoot} {
+			for _, dir := range []string{tc.clientDir, tc.repository, project, runDir} {
 				require.NoError(t, os.MkdirAll(dir, 0o700))
 			}
-			_, err := prepareLookupIsolation(t.Context(), clientCodex, tc.clientDir, tc.repository, project, filepath.Join(tc.clientDir, "agentsview"), runDir, transcriptsRoot)
+			_, err := prepareLookupIsolation(t.Context(), clientCodex, tc.clientDir, tc.repository, project, filepath.Join(tc.clientDir, "agentsview"), runDir)
 			require.ErrorContains(t, err, "fixture and output paths must be under the home directory or /tmp")
 		})
 	}
@@ -179,9 +176,9 @@ func TestLookupCaptureClassifiesSetupAndClientFailures(t *testing.T) {
 	clientDir := filepath.Join(home, "fixture")
 	project := filepath.Join(clientDir, "project")
 	dataDir := filepath.Join(clientDir, "agentsview-data")
-	transcriptsRoot := filepath.Join(clientDir, "sessions")
+	fixtureRoot := filepath.Join(clientDir, "fixture-sessions")
 	binDir := filepath.Join(clientDir, "bin")
-	for _, dir := range []string{home, filepath.Join(home, ".codex"), filepath.Join(home, ".claude"), project, dataDir, transcriptsRoot, binDir} {
+	for _, dir := range []string{home, filepath.Join(home, ".codex"), filepath.Join(home, ".claude"), project, dataDir, fixtureRoot, binDir} {
 		require.NoError(t, os.MkdirAll(dir, 0o700))
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(home, ".codex", "auth.json"), []byte("{}"), 0o600))
@@ -217,7 +214,7 @@ func TestLookupCaptureClassifiesSetupAndClientFailures(t *testing.T) {
 			if tc.executable != "" {
 				require.NoError(t, os.WriteFile(filepath.Join(binDir, tc.executable), []byte(tc.script), 0o700))
 			}
-			_, _, err := captureLookup(t.Context(), config{timeout: 10 * time.Second, repository: project}, serverBin, tc.client, project, "model", "", "question", filepath.Join(clientDir, "attempt-"+tc.name), transcriptsRoot)
+			_, _, err := captureLookup(t.Context(), config{timeout: 10 * time.Second, repository: project}, serverBin, tc.client, project, "model", "", "question", filepath.Join(clientDir, "attempt-"+tc.name))
 			require.ErrorIs(t, err, tc.want)
 			if tc.wantNot != nil {
 				require.NotErrorIs(t, err, tc.wantNot)
@@ -227,17 +224,6 @@ func TestLookupCaptureClassifiesSetupAndClientFailures(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestLookupRefusesPopulatedOutput(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "existing")
-	require.NoError(t, os.WriteFile(path, []byte("preserve"), 0o600))
-	err := run(t.Context(), config{suite: "lookups", outputDir: dir})
-	require.ErrorContains(t, err, "output directory")
-	data, err := os.ReadFile(path)
-	require.NoError(t, err)
-	assert.Equal(t, "preserve", string(data))
 }
 
 func TestLookupUnknownCaseLeavesOutputUncreated(t *testing.T) {
