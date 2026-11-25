@@ -1231,7 +1231,7 @@ func (s *Store) GetMatchingMachineIDs(ctx context.Context, candidates []string) 
 
 // GetSessionTreeMarker reads the parent and direct children in one query.
 func (s *Store) GetSessionTreeMarker(ctx context.Context, id string) (string, error) {
-	rows, err := s.pg.QueryContext(ctx, `SELECT id, message_count, updated_at FROM sessions WHERE id = $1 OR (parent_session_id = $1 AND deleted_at IS NULL)`, id)
+	rows, err := s.pg.QueryContext(ctx, "SELECT id, "+sessionVersionColumns+" FROM sessions WHERE id = $1 OR (parent_session_id = $1 AND deleted_at IS NULL)", id)
 	if err != nil {
 		return "", err
 	}
@@ -1240,11 +1240,11 @@ func (s *Store) GetSessionTreeMarker(ctx context.Context, id string) (string, er
 	var children []db.SessionTreeEntry
 	for rows.Next() {
 		var e db.SessionTreeEntry
-		var updated time.Time
-		if err := rows.Scan(&e.ID, &e.Count, &updated); err != nil {
+		var v sessionVersionRow
+		if err := rows.Scan(append([]any{&e.ID}, v.fields()...)...); err != nil {
 			return "", err
 		}
-		e.Version = db.SessionVersionMarker(FormatISO8601(updated))
+		e.Count, e.Version = v.count, v.version()
 		if e.ID == id {
 			parent = &e
 		} else {

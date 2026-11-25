@@ -401,6 +401,15 @@ func TestStoreGetSessionVersionChangesAfterPush(t *testing.T) {
 	store, syncer, local := newPushedStore(t)
 	marker, err := store.GetSessionTreeMarker(ctx, fixtureAlphaID)
 	require.NoError(t, err)
+	entries := make([]db.SessionTreeEntry, 0, 2)
+	for _, id := range []string{fixtureAlphaID, fixtureChildID} {
+		count, version, ok := store.GetSessionVersion(ctx, id)
+		require.True(t, ok)
+		entries = append(entries, db.SessionTreeEntry{ID: id, Count: count, Version: version})
+	}
+	want, err := db.SessionTreeMarker(entries)
+	require.NoError(t, err)
+	assert.Equal(t, want, marker)
 	count, version, ok := store.GetSessionVersion(t.Context(), fixtureAlphaID)
 	require.True(t, ok)
 	assert.Equal(t, 2, count)
@@ -416,6 +425,13 @@ func TestStoreGetSessionVersionChangesAfterPush(t *testing.T) {
 	updatedMarker, err := store.GetSessionTreeMarker(ctx, fixtureAlphaID)
 	require.NoError(t, err)
 	assert.NotEqual(t, marker, updatedMarker)
+	_, err = local.SetSessionLabels(ctx, fixtureChildID, []string{"review"})
+	require.NoError(t, err)
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	labelMarker, err := store.GetSessionTreeMarker(ctx, fixtureAlphaID)
+	require.NoError(t, err)
+	assert.NotEqual(t, updatedMarker, labelMarker)
 }
 
 func TestStoreMessageWindowReportsRevisionWithRows(t *testing.T) {

@@ -31,8 +31,8 @@ func (s sessionsSQL) AllMessagesSQL() string {
 	return (readbase.SessionQueries{}).AllMessagesSQL()
 }
 
-func (s sessionsSQL) SessionVersionSQL() string {
-	return (readbase.SessionQueries{}).SessionVersionSQL()
+func (s sessionsSQL) SessionVersionColumns() string {
+	return (readbase.SessionQueries{}).SessionVersionColumns()
 }
 
 func (s sessionsSQL) SidebarSQL(f db.SessionFilter, dialect db.QueryDialect) (string, []any) {

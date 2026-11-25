@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"time"
 
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -303,7 +302,7 @@ func (h *HostedStore) GetSessionTreeMarker(ctx context.Context, id string) (stri
 		if !target.Legacy {
 			membership = `id IN (SELECT owner.session_id ` + hostedLinkFromSQL + ` AND e.kind='parent' AND target.session_id=$1)`
 		}
-		rows, err := h.physical.pg.QueryContext(ctx, `SELECT id, message_count, updated_at, COALESCE(raw_content_revision, ''), COALESCE(raw_group_id, '') FROM sessions WHERE id=$1 OR ((`+membership+`) AND deleted_at IS NULL)`, target.SessionID)
+		rows, err := h.physical.pg.QueryContext(ctx, "SELECT id, "+sessionVersionColumns+", COALESCE(raw_content_revision, ''), COALESCE(raw_group_id, '') FROM sessions WHERE id=$1 OR (("+membership+") AND deleted_at IS NULL)", target.SessionID)
 		if err != nil {
 			return "", err
 		}
@@ -313,12 +312,14 @@ func (h *HostedStore) GetSessionTreeMarker(ctx context.Context, id string) (stri
 		var groupIDs []string
 		for rows.Next() {
 			var e db.SessionTreeEntry
-			var updated time.Time
+			var v sessionVersionRow
 			var content, group string
-			if err := rows.Scan(&e.ID, &e.Count, &updated, &content, &group); err != nil {
+			fields := append([]any{&e.ID}, v.fields()...)
+			fields = append(fields, &content, &group)
+			if err := rows.Scan(fields...); err != nil {
 				return "", err
 			}
-			e.Version = db.SessionVersionMarker(FormatISO8601(updated))
+			e.Count, e.Version = v.count, v.version()
 			e.State = &db.SessionTreeState{State: db.SessionWatchResolved, ContentRevision: content}
 			groups[e.ID] = group
 			if group != "" {

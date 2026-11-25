@@ -287,6 +287,25 @@ func TestHostedTreeMarkerTracksChildContent(t *testing.T) {
 	h, err := NewHostedStore(t.Context(), f.dsn, f.schema, f.tenant, false)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, h.Close()) })
+	parent, err := f.sink.Resolve(t.Context(), "codex:portable")
+	require.NoError(t, err)
+	children, err := h.physical.GetChildSessions(t.Context(), parent.SessionID)
+	require.NoError(t, err)
+	entries := make([]db.SessionTreeEntry, 0, len(children)+1)
+	ids := []string{parent.SessionID}
+	for _, child := range children {
+		ids = append(ids, child.ID)
+	}
+	for _, id := range ids {
+		count, version, ok := h.physical.GetSessionVersion(t.Context(), id)
+		require.True(t, ok)
+		entries = append(entries, db.SessionTreeEntry{ID: id, Count: count, Version: version})
+	}
+	want, err := db.SessionTreeMarker(entries)
+	require.NoError(t, err)
+	physicalMarker, err := h.physical.GetSessionTreeMarker(t.Context(), parent.SessionID)
+	require.NoError(t, err)
+	assert.Equal(t, want, physicalMarker)
 	before, err := h.GetSessionTreeMarker(t.Context(), "codex:portable")
 	require.NoError(t, err)
 	_, err = f.runtime.ExecContext(t.Context(), `UPDATE raw_corpus_state SET identity_revision=identity_revision+1 WHERE singleton=1`)

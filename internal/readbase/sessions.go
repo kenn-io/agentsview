@@ -22,7 +22,7 @@ type SessionsBackend interface {
 	TrashedSessionsSQL(string) string
 	ChildSessionsSQL(string) string
 	AllMessagesSQL() string
-	SessionVersionSQL() string
+	SessionVersionColumns() string
 	GetMachineMetadataSQL(prefix string) (string, []any)
 	ListSecretFindingsSQL(f db.SecretFindingFilter) (string, []any)
 	MessageWindowSQL(string, db.MessageWindow) (string, []any, bool)
@@ -199,25 +199,35 @@ func (s Sessions) GetChildSessions(ctx context.Context, parentID string) ([]db.S
 	return s.backend.ScanSessions(rows, false)
 }
 
+type sessionVersionRow struct {
+	count       int
+	mtime       sql.NullInt64
+	hash        sql.NullString
+	updated     any
+	fingerprint string
+}
+
+func (v *sessionVersionRow) fields() []any {
+	return []any{&v.count, &v.mtime, &v.hash, &v.updated, &v.fingerprint}
+}
+
+func (v *sessionVersionRow) version(backend SessionsBackend) int64 {
+	mtime, hash := "", ""
+	if v.mtime.Valid {
+		mtime = strconv.FormatInt(v.mtime.Int64, 10)
+	}
+	if v.hash.Valid {
+		hash = v.hash.String
+	}
+	return db.SessionVersionMarker(mtime, hash, backend.FormatTime(v.updated), v.fingerprint)
+}
+
 func (s Sessions) GetSessionVersion(ctx context.Context, id string) (int, int64, bool) {
-	var count int
-	var fileMtime sql.NullInt64
-	var fileHash sql.NullString
-	var updated any
-	var fingerprint string
-	err := s.backend.QueryRowContext(ctx, s.backend.SessionVersionSQL(), id).Scan(&count, &fileMtime, &fileHash, &updated, &fingerprint)
-	if err != nil {
+	var v sessionVersionRow
+	if err := s.backend.QueryRowContext(ctx, "SELECT "+s.backend.SessionVersionColumns()+" FROM sessions WHERE id = ?", id).Scan(v.fields()...); err != nil {
 		return 0, 0, false
 	}
-	fileMtimePart := ""
-	if fileMtime.Valid {
-		fileMtimePart = strconv.FormatInt(fileMtime.Int64, 10)
-	}
-	fileHashPart := ""
-	if fileHash.Valid {
-		fileHashPart = fileHash.String
-	}
-	return count, db.SessionVersionMarker(fileMtimePart, fileHashPart, s.backend.FormatTime(updated), fingerprint), true
+	return v.count, v.version(s.backend), true
 }
 
 func (s Sessions) scanSidebarRow(rows *sql.Rows, dest []any) (db.SidebarSessionIndexRow, error) {
@@ -323,7 +333,7 @@ func (s Sessions) getSidebarSessionIndexPage(ctx context.Context, f db.SessionFi
 
 // GetSessionTreeMarker reads the parent and its direct children together.
 func (s Sessions) GetSessionTreeMarker(ctx context.Context, id string) (string, error) {
-	rows, err := s.backend.QueryContext(ctx, `SELECT id, message_count, file_mtime, file_hash, COALESCE(local_modified_at, ended_at, started_at, created_at), COALESCE(agentsview_push_fingerprint, '') FROM sessions WHERE id = ? OR (parent_session_id = ? AND deleted_at IS NULL)`, id, id)
+	rows, err := s.backend.QueryContext(ctx, "SELECT id, "+s.backend.SessionVersionColumns()+" FROM sessions WHERE id = ? OR (parent_session_id = ? AND deleted_at IS NULL)", id, id)
 	if err != nil {
 		return "", err
 	}
@@ -332,18 +342,11 @@ func (s Sessions) GetSessionTreeMarker(ctx context.Context, id string) (string, 
 	var children []db.SessionTreeEntry
 	for rows.Next() {
 		var e db.SessionTreeEntry
-		var mtime sql.NullInt64
-		var hash sql.NullString
-		var updated any
-		var fingerprint string
-		if err := rows.Scan(&e.ID, &e.Count, &mtime, &hash, &updated, &fingerprint); err != nil {
+		var v sessionVersionRow
+		if err := rows.Scan(append([]any{&e.ID}, v.fields()...)...); err != nil {
 			return "", err
 		}
-		mtimePart := ""
-		if mtime.Valid {
-			mtimePart = strconv.FormatInt(mtime.Int64, 10)
-		}
-		e.Version = db.SessionVersionMarker(mtimePart, hash.String, s.backend.FormatTime(updated), fingerprint)
+		e.Count, e.Version = v.count, v.version(s.backend)
 		if e.ID == id {
 			parent = &e
 		} else {
