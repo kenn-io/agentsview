@@ -293,7 +293,8 @@ func TestAgentSetupWithoutMCP(t *testing.T) {
 			skill := slices.IndexFunc(report.Rows, func(row struct {
 				Piece string `json:"piece"`
 				State string `json:"state"`
-			}) bool {
+			},
+			) bool {
 				return row.Piece == "skill"
 			})
 			require.NotEqual(t, -1, skill)
@@ -339,7 +340,8 @@ func TestAgentSetupWithoutMCPWriteErrorAfterRefusal(t *testing.T) {
 		Piece    string `json:"piece"`
 		Reason   string `json:"reason"`
 		NextStep string `json:"next_step"`
-	}) bool {
+	},
+	) bool {
 		return row.Piece == "skill"
 	})
 	require.NotEqual(t, -1, skillRow)
@@ -367,7 +369,8 @@ func TestAgentSetupWithoutMCPFormatJSON(t *testing.T) {
 		Agent    string `json:"agent"`
 		Piece    string `json:"piece"`
 		NextStep string `json:"next_step"`
-	}) bool {
+	},
+	) bool {
 		return row.Piece == "skill"
 	})
 	require.NotEqual(t, -1, skill)

@@ -364,14 +364,14 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 				return cd, nil
 			}
 			if launcherProcess.Cwd == nil {
-				return "", errors.New("Codex launcher directory unavailable")
+				return "", errors.New("codex launcher directory unavailable")
 			}
 			cwd, err := launcherProcess.Cwd(ctx)
 			if err != nil {
 				return "", err
 			}
 			if !filepath.IsAbs(cwd) {
-				return "", errors.New("Codex launcher directory unavailable")
+				return "", errors.New("codex launcher directory unavailable")
 			}
 			return filepath.Join(cwd, cd), nil
 		}
