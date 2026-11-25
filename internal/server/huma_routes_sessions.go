@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/csv"
-	"encoding/hex"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -1515,8 +1514,7 @@ func (s *Server) sessionMarker(ctx context.Context, id string, state *db.Session
 	if err != nil {
 		return ""
 	}
-	sum := sha256.Sum256(encoded)
-	return hex.EncodeToString(sum[:16])
+	return fmt.Sprintf("%x", sha256.Sum256(encoded))
 }
 
 type eventsInput struct {

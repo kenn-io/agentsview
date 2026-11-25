@@ -335,7 +335,7 @@ func TestEvents_ParentMarkerSizeWithManyChildren(t *testing.T) {
 	te.waitForSSEEvent(t, w, "events_ready", 5*time.Second)
 	match := regexp.MustCompile(`id: ([^\n]+)\nevent: session_ready\ndata: parent-a\n`).FindStringSubmatch(w.BodyString())
 	require.Len(t, match, 2)
-	assert.Len(t, match[1], 32)
+	assert.Len(t, match[1], 64)
 }
 
 func TestEvents_ParentMarkerTracksChildChanges(t *testing.T) {
