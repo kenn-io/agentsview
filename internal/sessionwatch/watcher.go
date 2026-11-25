@@ -124,7 +124,7 @@ func (w *Watcher) Events(
 						case <-ctx.Done():
 							return
 						}
-						if transition {
+						if current.State != db.SessionWatchResolved {
 							return
 						}
 						initial, recovering = current, false

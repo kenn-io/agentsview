@@ -116,11 +116,11 @@ After subscribing to changes, the HTTP `/api/v1/events` stream sends
 the same stream, you can repeat the `session` query parameter. For each one, the
 stream sends `session_ready` and `session.timing`, or `session_missing` if the
 initial lookup finds that the session does not exist or cannot be resolved. A
-watched session can also become unresolved midstream; the stream then sends
-`session_missing` and stops watching that ID on the connection. When you
-reconnect, the stream sends the readiness events again. To receive the
-changed session and message records themselves with a cursor for resuming, use
-the [change stream](/docs/conversation-export/#follow-changes-live).
+session that becomes unresolved also gets `session_missing` and is no longer
+watched until the client reconnects. When you reconnect, the stream sends the
+readiness events again. To receive the changed session and message records
+themselves with a cursor for resuming, use the
+[change stream](/docs/conversation-export/#follow-changes-live).
 
 The web UI and generated API clients fetch filter options from these shared
 metadata endpoints:

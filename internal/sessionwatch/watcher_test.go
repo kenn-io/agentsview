@@ -51,6 +51,45 @@ func TestEventsBaselineTakenBeforeReturn(t *testing.T) {
 	})
 }
 
+type changingIdentityStore struct {
+	baselineStore
+	state atomic.Value
+}
+
+func (s *changingIdentityStore) GetSessionWatchState(string) (db.SessionWatchState, error) {
+	return s.state.Load().(db.SessionWatchState), nil
+}
+
+func TestEventsStaysOpenAcrossResolvedRevisionChange(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		store := &changingIdentityStore{}
+		store.state.Store(db.SessionWatchState{State: db.SessionWatchResolved, ContentRevision: "one"})
+		updates := New(store, nil).Events(ctx, "session-a")
+		tick := func() {
+			t.Helper()
+			time.Sleep(PollInterval)
+			synctest.Wait()
+			select {
+			case _, ok := <-updates:
+				require.True(t, ok)
+			default:
+				require.FailNow(t, "expected update")
+			}
+			synctest.Wait()
+		}
+		store.state.Store(db.SessionWatchState{State: db.SessionWatchResolved, ContentRevision: "two"})
+		tick()
+		store.count.Store(1)
+		tick()
+		store.state.Store(db.SessionWatchState{State: "ambiguous"})
+		tick()
+		_, ok := <-updates
+		assert.False(t, ok)
+	})
+}
+
 type transientIdentityStore struct {
 	baselineStore
 	reads atomic.Int32
