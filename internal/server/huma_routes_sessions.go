@@ -1427,9 +1427,11 @@ func (s *Server) sendSessionFrame(ctx context.Context, stream *SSEStream, id str
 			if err != nil {
 				return false
 			}
-			stream.SendJSON("session.identity", state)
-			if state.State != db.SessionWatchResolved {
+			if !stream.SendJSON("session.identity", state) {
 				return false
+			}
+			if state.State != db.SessionWatchResolved {
+				return true
 			}
 		}
 		if !stream.Send("session_updated", id) {
@@ -1552,7 +1554,13 @@ func (s *Server) humaEvents(ctx context.Context, in *eventsInput) (*huma.StreamR
 				}
 				stream.SendJSON("data_changed", map[string]string{"scope": ev.Scope})
 			case t := <-ticks:
-				if t.closed || !s.sendSessionFrame(ctx, stream, t.id, true) {
+				if t.closed {
+					if !stream.Send("session_missing", t.id) {
+						return
+					}
+					continue
+				}
+				if !s.sendSessionFrame(ctx, stream, t.id, true) {
 					return
 				}
 			case <-heartbeat.C:

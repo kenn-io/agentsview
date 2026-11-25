@@ -3,6 +3,7 @@ package sessionwatch
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -49,6 +50,67 @@ func TestEventsBaselineTakenBeforeReturn(t *testing.T) {
 			require.FailNow(t, "reply after watch creation was lost")
 		}
 	})
+}
+
+type changingIdentityStore struct {
+	baselineStore
+	state atomic.Value
+}
+
+func (s *changingIdentityStore) GetSessionWatchState(string) (db.SessionWatchState, error) {
+	return s.state.Load().(db.SessionWatchState), nil
+}
+
+type unavailableVersionStore struct {
+	changingIdentityStore
+	unavailable atomic.Bool
+}
+
+func (s *unavailableVersionStore) GetSessionVersion(ctx context.Context, id string) (int, int64, bool) {
+	if s.unavailable.Load() {
+		return 0, 0, false
+	}
+	return s.baselineStore.GetSessionVersion(ctx, id)
+}
+
+func TestEventsRevisionChange(t *testing.T) {
+	for _, unavailable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("version unavailable=%t", unavailable), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				store := &unavailableVersionStore{}
+				store.count.Store(1)
+				store.state.Store(db.SessionWatchState{State: db.SessionWatchResolved, PublicID: "session-a", ContentRevision: "one"})
+				updates := New(store, nil).Events(ctx, "session-a")
+				store.unavailable.Store(unavailable)
+				store.state.Store(db.SessionWatchState{State: db.SessionWatchResolved, PublicID: "session-a", ContentRevision: "two"})
+				time.Sleep(PollInterval)
+				synctest.Wait()
+				_, ok := <-updates
+				require.True(t, ok)
+				synctest.Wait()
+				if !unavailable {
+					store.state.Store(db.SessionWatchState{State: "ambiguous"})
+					time.Sleep(PollInterval)
+					synctest.Wait()
+					_, ok = <-updates
+					require.True(t, ok)
+					_, ok = <-updates
+					assert.False(t, ok)
+					return
+				}
+				store.unavailable.Store(false)
+				time.Sleep(PollInterval)
+				synctest.Wait()
+				select {
+				case <-updates:
+					require.FailNow(t, "unchanged version emitted a second update")
+				default:
+				}
+			})
+		})
+	}
 }
 
 type transientIdentityStore struct {
