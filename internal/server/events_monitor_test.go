@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -20,42 +21,73 @@ import (
 
 type watchStateStore struct {
 	db.Store
-	state atomic.Value
+	mu     sync.RWMutex
+	states map[string]db.SessionWatchState
 }
 
-func (s *watchStateStore) GetSessionWatchState(string) (db.SessionWatchState, error) {
-	return s.state.Load().(db.SessionWatchState), nil
+func (s *watchStateStore) GetSessionWatchState(id string) (db.SessionWatchState, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.states[id], nil
 }
 
-func TestEvents_EndsWhenHostedMonitorCloses(t *testing.T) {
+func (s *watchStateStore) set(id string, state db.SessionWatchState) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.states[id] = state
+}
+
+func TestEvents_HostedRevisionChangeKeepsStream(t *testing.T) {
 	t.Cleanup(sessionwatch.SetTimingsForTest(25*time.Millisecond, 50*time.Millisecond))
 	te := setup(t)
-	require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: "watch-a", Project: "project", Machine: "test", Agent: "claude"}))
-	store := &watchStateStore{Store: te.db}
-	store.state.Store(db.SessionWatchState{State: db.SessionWatchResolved, PublicID: "watch-a", ContentRevision: "one"})
+	for _, id := range []string{"watch-a", "watch-b"} {
+		require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: id, Project: "project", Machine: "test", Agent: "claude"}))
+	}
+	store := &watchStateStore{Store: te.db, states: make(map[string]db.SessionWatchState)}
+	for _, id := range []string{"watch-a", "watch-b"} {
+		store.set(id, db.SessionWatchState{State: db.SessionWatchResolved, PublicID: id, ContentRevision: "one"})
+	}
 	cfg := config.Config{Host: "127.0.0.1", InstallationID: "server-installation"}
 	handler := wrapTestHandler(cfg, server.New(cfg, store, nil, server.WithBroadcaster(te.broadcaster)).Handler())
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
 	w := newFlushRecorder()
 	done := make(chan struct{})
-	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/events?session=watch-a", nil)
+	t.Cleanup(func() { cancel(); <-done })
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/events?session=watch-a&session=watch-b", nil)
 	go func() { handler.ServeHTTP(w, req); close(done) }()
-	te.waitForSSEEvent(t, w, "session_ready", 5*time.Second)
-	store.state.Store(db.SessionWatchState{State: db.SessionWatchResolved, PublicID: "watch-a", ContentRevision: "two"})
+	te.waitForSSEEvent(t, w, "events_ready", 5*time.Second)
+	waitCount := func(event, id string, count int) {
+		t.Helper()
+		require.Eventually(t, func() bool {
+			return strings.Count(w.BodyString(), "event: "+event+"\ndata: "+id+"\n") >= count
+		}, 5*time.Second, 10*time.Millisecond)
+	}
+	store.set("watch-a", db.SessionWatchState{State: db.SessionWatchResolved, PublicID: "watch-a", ContentRevision: "two"})
+	waitCount("session_updated", "watch-a", 1)
+	te.broadcaster.Emit("messages")
+	te.waitForSSEEvent(t, w, "data_changed", 5*time.Second)
+	require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: "watch-b", Project: "project", Machine: "test", Agent: "claude", MessageCount: 1}))
+	waitCount("session_updated", "watch-b", 1)
+	store.set("watch-a", db.SessionWatchState{State: db.SessionWatchResolved, PublicID: "watch-a", ContentRevision: "three"})
+	waitCount("session_updated", "watch-a", 2)
+	store.set("watch-a", db.SessionWatchState{State: "ambiguous", Variants: []string{"watch-a~one", "watch-a~two"}})
+	waitCount("session_missing", "watch-a", 1)
+	te.broadcaster.Emit("messages")
+	require.Eventually(t, func() bool { return strings.Count(w.BodyString(), "event: data_changed\n") >= 2 }, 5*time.Second, 10*time.Millisecond)
+	require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: "watch-b", Project: "project", Machine: "test", Agent: "claude", MessageCount: 2}))
+	waitCount("session_updated", "watch-b", 2)
 	select {
 	case <-done:
-	case <-ctx.Done():
-		require.FailNow(t, "stream did not end after monitor stopped")
+		t.Fatal("stream ended before cancellation")
+	default:
 	}
-	assert.Contains(t, w.BodyString(), "event: session_updated\ndata: watch-a\n")
 }
 
 func TestEvents_UnresolvedHostedSessionIsMissing(t *testing.T) {
 	te := setup(t)
 	require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: "watch-a", Project: "project", Machine: "test", Agent: "claude"}))
-	store := &watchStateStore{Store: te.db}
-	store.state.Store(db.SessionWatchState{State: "ambiguous", Variants: []string{"watch-a~one", "watch-a~two"}})
+	store := &watchStateStore{Store: te.db, states: make(map[string]db.SessionWatchState)}
+	store.set("watch-a", db.SessionWatchState{State: "ambiguous", Variants: []string{"watch-a~one", "watch-a~two"}})
 	cfg := config.Config{Host: "127.0.0.1", InstallationID: "server-installation"}
 	handler := wrapTestHandler(cfg, server.New(cfg, store, nil, server.WithBroadcaster(te.broadcaster)).Handler())
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
