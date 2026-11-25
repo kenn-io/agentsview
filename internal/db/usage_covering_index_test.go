@@ -158,7 +158,6 @@ func TestDropAndRebuildBulkImportIndexes(t *testing.T) {
 	usageIndexes := []string{
 		"idx_messages_usage_timestamp",
 		"idx_messages_usage_session_covering",
-		"idx_messages_activity_timestamp",
 		"idx_messages_analytics_metadata",
 		"idx_tool_calls_session_tool_use",
 		"idx_tool_result_events_identity",
@@ -177,6 +176,7 @@ func TestDropAndRebuildBulkImportIndexes(t *testing.T) {
 	}
 
 	require.NoError(t, database.DropBulkImportIndexes(t.Context()))
+	assert.Equal(t, 1, countIndex("idx_messages_activity_timestamp"))
 	for _, name := range usageIndexes {
 		assert.Equal(t, 0, countIndex(name), "index %s after drop", name)
 	}

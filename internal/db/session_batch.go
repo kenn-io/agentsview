@@ -241,6 +241,9 @@ func (db *DB) WriteSessionBatchContext(
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
+	if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, writtenUsageIDs); err != nil {
+		return result, err
+	}
 	if err := tx.Commit(); err != nil {
 		return result, fmt.Errorf("committing batch tx: %w", err)
 	}

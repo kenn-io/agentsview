@@ -1332,8 +1332,8 @@ func TestResyncDropsAndRebuildsUsageIndexes(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, stats.Aborted, "resync aborted: %+v", stats)
 	assert.Equal(t, 1, rebuildCalls, "usage indexes rebuilt once")
-	assert.Equal(t, 0, duringRebuild,
-		"usage indexes must stay dropped during the bulk load")
+	assert.Equal(t, 1, duringRebuild,
+		"the activity index must remain available during the bulk load")
 	assert.Equal(t, 3, countArchiveUsageIndexes(t, database.Path()),
 		"swapped archive must carry rebuilt usage indexes")
 }

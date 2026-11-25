@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json/v2"
+	"errors"
 	"path"
 	"regexp"
 	"strings"
@@ -46,6 +47,7 @@ func inferLaunchParentsTx(ctx context.Context, tx *sql.Tx, ids []string) (int, e
 	if err != nil {
 		return 0, err
 	}
+	defer rows.Close()
 	var children []launchChild
 	for rows.Next() {
 		var c launchChild
@@ -94,6 +96,7 @@ func inferLaunchChild(ctx context.Context, tx *sql.Tx, child launchChild) (int, 
 	if err != nil {
 		return 0, err
 	}
+	defer rows.Close()
 	matches := map[string]bool{}
 	known := map[string]bool{}
 	for rows.Next() {
@@ -121,9 +124,6 @@ func inferLaunchChild(ctx context.Context, tx *sql.Tx, child launchChild) (int, 
 			continue
 		}
 		for _, call := range calls {
-			if call.reach == parser.Dead {
-				continue
-			}
 			if call.unknown {
 				if re := launchAgentWords[child.agent]; re != nil && re.MatchString(call.command) {
 					matches[id] = true
@@ -140,7 +140,7 @@ func inferLaunchChild(ctx context.Context, tx *sql.Tx, child launchChild) (int, 
 				dir = ""
 			}
 			for _, launch := range parser.LaunchesFromCommand(call.command, dir) {
-				if launch.Agent != child.agent || launch.Reach == parser.Dead {
+				if launch.Agent != child.agent {
 					continue
 				}
 				matched := false
@@ -154,7 +154,7 @@ func inferLaunchChild(ctx context.Context, tx *sql.Tx, child launchChild) (int, 
 					continue
 				}
 				matches[id] = true
-				if !trashed && matched && !launch.Unknown && len(launch.Dirs) == 1 && call.reach == parser.Reached && (launch.Reach == parser.Reached || launch.CDGuarded) && strings.TrimSpace(machine) != "" {
+				if !trashed && matched && !launch.Unknown && len(launch.Dirs) == 1 && strings.TrimSpace(machine) != "" {
 					known[id] = true
 				}
 			}
@@ -188,7 +188,7 @@ func absoluteLaunchFolder(dir string) bool {
 func retractInferredLaunchParent(ctx context.Context, tx *sql.Tx, id string) (int, error) {
 	var old string
 	err := tx.QueryRowContext(ctx, `SELECT parent_session_id FROM session_external_parents WHERE session_id=? AND inferred=1`, id).Scan(&old)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil
 	}
 	if err != nil {
@@ -216,6 +216,7 @@ func launchSeeds(ctx context.Context, tx *sql.Tx, ids []string) ([]string, error
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 	type call struct{ machine, stamp, tool string }
 	var calls []call
 	for rows.Next() {
@@ -244,6 +245,7 @@ func launchSeeds(ctx context.Context, tx *sql.Tx, ids []string) ([]string, error
 		if e != nil {
 			return nil, e
 		}
+		defer r.Close()
 		for r.Next() {
 			var id string
 			if e = r.Scan(&id); e != nil {
@@ -278,6 +280,7 @@ func backfillLaunchParentsTx(ctx context.Context, tx *sql.Tx) (int, error) {
 		if err != nil {
 			return 0, err
 		}
+		defer rows.Close()
 		var ids []string
 		for rows.Next() {
 			if err = rows.Scan(&cursor.ID, &cursor.Started); err != nil {

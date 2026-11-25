@@ -5,19 +5,16 @@ import (
 
 	"github.com/tdewolff/parse/v2"
 	"github.com/tdewolff/parse/v2/js"
-	"go.kenn.io/agentsview/internal/parser"
 )
 
 type shellCall struct {
 	command, workdir        string
 	unknownWorkdir, unknown bool
-	reach                   parser.Reach
 }
 
 type codeModeReader struct {
 	calls  []shellCall
 	locals map[string]string
-	stops  int
 }
 
 func codeModeLiteral(expr js.IExpr) (string, bool) {
@@ -39,9 +36,8 @@ func codeModeCalls(input string) ([]shellCall, bool) {
 	}
 	r := codeModeReader{locals: make(map[string]string)}
 	js.Walk(localFunctionVisitor(r.locals), ast)
-	reach := parser.Reached
 	for _, stmt := range ast.List {
-		reach = r.stmt(stmt, reach)
+		r.stmt(stmt)
 	}
 	return r.calls, true
 }
@@ -55,166 +51,128 @@ func (v localFunctionVisitor) Enter(node js.INode) js.IVisitor {
 	}
 	return v
 }
+
 func (localFunctionVisitor) Exit(js.INode) {}
 
-func (r *codeModeReader) stmt(stmt js.IStmt, reach parser.Reach) parser.Reach {
-	if stmt == nil || reach == parser.Dead {
-		return reach
+func (r *codeModeReader) stmt(stmt js.IStmt) {
+	if stmt == nil {
+		return
 	}
 	switch n := stmt.(type) {
 	case *js.BlockStmt:
 		for _, s := range n.List {
-			reach = r.stmt(s, reach)
+			r.stmt(s)
 		}
-		return reach
 	case *js.EmptyStmt, *js.FuncDecl:
-		return reach
 	case *js.ExprStmt:
-		return r.expr(n.Value, reach)
+		r.expr(n.Value)
 	case *js.VarDecl:
 		for _, item := range n.List {
-			if item.Default != nil {
-				if isCodeModeExec(item.Default) {
-					if name, ok := item.Binding.(*js.Var); ok {
-						r.locals[string(name.Name())] = item.Default.String()
-					}
-					continue
-				}
-				switch item.Default.(type) {
-				case *js.FuncDecl, *js.ArrowFunc:
-					if name, ok := item.Binding.(*js.Var); ok {
-						r.locals[string(name.Name())] = item.Default.String()
-					}
-					continue
-				}
-				reach = r.expr(item.Default, reach)
+			if item.Default == nil {
+				continue
 			}
+			if isCodeModeExec(item.Default) {
+				if name, ok := item.Binding.(*js.Var); ok {
+					r.locals[string(name.Name())] = item.Default.String()
+				}
+				continue
+			}
+			switch item.Default.(type) {
+			case *js.FuncDecl, *js.ArrowFunc:
+				if name, ok := item.Binding.(*js.Var); ok {
+					r.locals[string(name.Name())] = item.Default.String()
+				}
+				continue
+			}
+			r.expr(item.Default)
 		}
-		return reach
 	case *js.ThrowStmt:
-		r.expr(n.Value, reach)
-		r.stops++
-		return parser.Dead
+		r.expr(n.Value)
 	case *js.IfStmt:
-		reach = r.expr(n.Cond, reach)
-		if reach == parser.Dead {
-			return reach
-		}
-		if value, ok := codeModeBool(n.Cond); ok {
-			if value {
-				return r.stmt(n.Body, reach)
-			}
-			if n.Else != nil {
-				return r.stmt(n.Else, reach)
-			}
-			return reach
-		}
-		before := r.stops
-		yes := r.stmt(n.Body, parser.Possible)
-		no := parser.Possible
-		if n.Else != nil {
-			no = r.stmt(n.Else, parser.Possible)
-		}
-		if yes == parser.Dead && no == parser.Dead {
-			return parser.Dead
-		}
-		if yes == parser.Dead || no == parser.Dead || r.stops > before {
-			return parser.Possible
-		}
-		return reach
+		r.expr(n.Cond)
+		r.stmt(n.Body)
+		r.stmt(n.Else)
 	default:
-		return r.unsupported(stmt, reach)
+		r.unsupported(stmt)
 	}
 }
 
-func (r *codeModeReader) expr(expr js.IExpr, reach parser.Reach) parser.Reach {
-	if expr == nil || reach == parser.Dead {
-		return reach
+func (r *codeModeReader) expr(expr js.IExpr) {
+	if expr == nil {
+		return
 	}
 	switch n := expr.(type) {
 	case *js.GroupExpr:
-		return r.expr(n.X, reach)
+		r.expr(n.X)
 	case *js.UnaryExpr:
 		if n.Op == js.AwaitToken || n.Op == js.NotToken {
-			return r.expr(n.X, reach)
+			r.expr(n.X)
+		} else {
+			r.unsupported(n)
 		}
-		return r.unsupported(n, reach)
 	case *js.BinaryExpr:
-		if n.Op != js.AndToken && n.Op != js.OrToken {
-			return r.unsupported(n, reach)
+		if n.Op == js.AndToken || n.Op == js.OrToken {
+			r.expr(n.X)
+			r.expr(n.Y)
+		} else {
+			r.unsupported(n)
 		}
-		reach = r.expr(n.X, reach)
-		if reach == parser.Dead {
-			return reach
-		}
-		if value, ok := codeModeBool(n.X); ok {
-			if n.Op == js.AndToken && value || n.Op == js.OrToken && !value {
-				return r.expr(n.Y, reach)
-			}
-			return reach
-		}
-		before := r.stops
-		after := r.expr(n.Y, parser.Possible)
-		if after == parser.Dead || r.stops > before {
-			return parser.Possible
-		}
-		return reach
 	case *js.CallExpr:
 		if name, ok := n.X.(*js.Var); ok {
 			if body, exists := r.locals[string(name.Name())]; exists {
-				r.stops++
-				r.calls = append(r.calls, shellCall{command: body + " " + n.String(), unknown: true, reach: parser.Possible})
-				return parser.Possible
-			}
-			if string(name.Name()) == "exit" {
-				r.stops++
-				return parser.Dead
+				r.calls = append(r.calls, shellCall{command: body + " " + n.String(), unknown: true})
+				return
 			}
 		}
 		if access, ok := n.X.(*js.IndexExpr); ok && access.X.String() == "tools" {
 			if _, literal := codeModeLiteral(access.Y); !literal {
-				return r.unsupported(n, reach)
+				r.unsupported(n)
+				return
 			}
 		}
 		if isCodeModeExec(n.X) {
-			r.calls = append(r.calls, codeModeCall(n, reach))
-			return reach
+			r.calls = append(r.calls, codeModeCall(n))
+			return
 		}
 		if isEagerBatch(n.X) {
 			if len(n.Args.List) != 1 || n.Args.List[0].Rest {
-				return r.unsupported(n, reach)
+				r.unsupported(n)
+				return
 			}
 			array, ok := n.Args.List[0].Value.(*js.ArrayExpr)
 			if !ok {
-				return r.unsupported(n, reach)
+				r.unsupported(n)
+				return
 			}
 			for _, item := range array.List {
 				if item.Spread || item.Value == nil {
-					return r.unsupported(n, reach)
+					r.unsupported(n)
+					return
 				}
 			}
 			for _, item := range array.List {
-				reach = r.expr(item.Value, reach)
+				r.expr(item.Value)
 			}
-			return reach
+			return
 		}
 		if dot, ok := n.X.(*js.DotExpr); ok && (dot.Y.String() == "then" || dot.Y.String() == "map") {
-			return r.unsupported(n, reach)
+			r.unsupported(n)
+			return
 		}
 		if isCodeModeFunction(n.X) {
-			return r.unsupported(n, reach)
+			r.unsupported(n)
+			return
 		}
 		for _, arg := range n.Args.List {
 			if arg.Rest {
-				return r.unsupported(n, reach)
+				r.unsupported(n)
+				return
 			}
-			reach = r.expr(arg.Value, reach)
+			r.expr(arg.Value)
 		}
-		return reach
 	case *js.LiteralExpr, *js.Var, *js.TemplateExpr:
-		return reach
 	default:
-		return r.unsupported(expr, reach)
+		r.unsupported(expr)
 	}
 }
 
@@ -243,12 +201,14 @@ func isCodeModeExec(expr js.IExpr) bool {
 	}
 	return false
 }
+
 func isEagerBatch(expr js.IExpr) bool {
 	dot, ok := expr.(*js.DotExpr)
 	return ok && dot.X.String() == "Promise" && (dot.Y.String() == "all" || dot.Y.String() == "allSettled")
 }
-func codeModeCall(call *js.CallExpr, reach parser.Reach) shellCall {
-	result := shellCall{reach: reach}
+
+func codeModeCall(call *js.CallExpr) shellCall {
+	result := shellCall{}
 	if len(call.Args.List) != 1 || call.Args.List[0].Rest {
 		result.unknown = true
 		result.command = call.String()
@@ -286,39 +246,6 @@ func codeModeCall(call *js.CallExpr, reach parser.Reach) shellCall {
 		}
 	}
 	return result
-}
-func codeModeBool(expr js.IExpr) (bool, bool) {
-	switch n := expr.(type) {
-	case *js.GroupExpr:
-		return codeModeBool(n.X)
-	case *js.UnaryExpr:
-		if n.Op == js.NotToken {
-			value, ok := codeModeBool(n.X)
-			return !value, ok
-		}
-	case *js.Var:
-		if string(n.Name()) == "undefined" {
-			return false, true
-		}
-	case *js.LiteralExpr:
-		switch n.TokenType {
-		case js.TrueToken:
-			return true, true
-		case js.FalseToken, js.NullToken:
-			return false, true
-		case js.IntegerToken, js.DecimalToken:
-			if string(n.Data) == "0" {
-				return false, true
-			}
-			if string(n.Data) == "1" {
-				return true, true
-			}
-		case js.StringToken:
-			value, ok := codeModeLiteral(n)
-			return value != "", ok
-		}
-	}
-	return false, false
 }
 
 // unsupportedVisitor finds only constructs that may hide a launch or stop.
@@ -358,14 +285,13 @@ func (v *unsupportedVisitor) Enter(node js.INode) js.IVisitor {
 	}
 	return v
 }
+
 func (*unsupportedVisitor) Exit(js.INode) {}
-func (r *codeModeReader) unsupported(node js.INode, reach parser.Reach) parser.Reach {
+
+func (r *codeModeReader) unsupported(node js.INode) {
 	v := &unsupportedVisitor{locals: r.locals}
 	js.Walk(v, node)
-	if !v.risky {
-		return reach
+	if v.risky {
+		r.calls = append(r.calls, shellCall{command: node.String() + " " + v.text.String(), unknown: true})
 	}
-	r.calls = append(r.calls, shellCall{command: node.String() + " " + v.text.String(), unknown: true, reach: parser.Possible})
-	r.stops++
-	return parser.Possible
 }

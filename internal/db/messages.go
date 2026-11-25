@@ -1646,6 +1646,9 @@ func (db *DB) insertMessages(ctx context.Context,
 			return err
 		}
 	}
+	if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, sessionIDs); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
@@ -1982,6 +1985,9 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 			return false, err
 		}
 	}
+	if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, []string{sessionID}); err != nil {
+		return false, err
+	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("committing incremental write tx: %w", err)
 	}
@@ -2235,6 +2241,9 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 	if err := enqueueArtifactExportIfGenerationUnchangedTx(
 		tx, sessionID, queueGenerationBefore, queueExistedBefore,
 	); err != nil {
+		return err
+	}
+	if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, []string{sessionID}); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -2715,6 +2724,9 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 		if err := upsertParserCheckpointTx(tx, c, b); err != nil {
 			return err
 		}
+	}
+	if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, []string{sessionID}); err != nil {
+		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return err

@@ -35,7 +35,6 @@ var (
 	commitSHARE               = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
 	commitSummaryRE           = regexp.MustCompile(`(?m)^\[(detached HEAD|[^\s\[\]~^:?*\\]+) (?:\(root-commit\) )?([0-9a-f]{7,64})\] ([^\r\n]*)\r?$`)
 	commitInvocationRE        = regexp.MustCompile(`(?:^|[\s;&|(/]|\\[nrt]|(?:(?:cmd|command)["']?\s*:|(?:^|[\s/])(?:ba|da|z|k)?sh\s+(?:-\w+\s+)*-\w*c\s|\()\s*["'\x60])git\s+(?:` + commitGlobalOption + `\s+)*commit(?:$|[\s;&|)'"\x60\\])`)
-	commitWindowsDriveRE      = regexp.MustCompile(`^[A-Za-z]:`)
 	commitWorkdirRE           = regexp.MustCompile(`["']?(?:workdir|cwd)["']?\s*:\s*("(?:\\.|[^"\\])*"|'[^']*')`)
 	commitCommandRE           = regexp.MustCompile(`["']?(?:cmd|command)["']?\s*:\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\x60(?:\\.|[^\x60\\])*\x60)`)
 	commitToolCallRE          = regexp.MustCompile(`\btools\.\w+\s*\(`)
@@ -87,7 +86,6 @@ type CommitSessionList struct {
 
 // commitRepository records the directory of the first git commit invocation.
 func commitRepository(input, cwd string) string {
-
 	dir := toolCallWorkdir(input)
 	if dir != "" {
 		cwd = parser.ShellWorkdir(cwd, dir)
@@ -236,7 +234,7 @@ func shellCalls(input string) ([]shellCall, bool) {
 	if command == "" || command == input {
 		return nil, false
 	}
-	return []shellCall{{command: command, workdir: toolCallWorkdir(input), reach: parser.Reached}}, false
+	return []shellCall{{command: command, workdir: toolCallWorkdir(input)}}, false
 }
 
 // decodeCommandLiteral decodes the string form shared by code-mode readers.

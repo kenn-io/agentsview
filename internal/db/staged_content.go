@@ -576,6 +576,9 @@ func (db *DB) replaceSessionContentStaged(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, []string{sessionID}); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
