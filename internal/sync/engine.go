@@ -11553,14 +11553,13 @@ func (e *Engine) prepareSessionNormalizedContext(
 	resolveWorktreeProject worktreeProjectResolver,
 	derive bool,
 ) (preparedSessionWrite, sessionWriteVerdict, error) {
-	options := ingest.ContentOptions{
+	candidate, err := ingest.PrepareCandidate(ctx, parser.ParseResult{
+		Session: pw.sess, Messages: pw.msgs, UsageEvents: pw.usageEvents,
+	}, ingest.ContentOptions{
 		BlockedResultCategories: e.blockedResultCategories,
 		ToolResultImages:        e.toolResultImages,
 		ArchiveContent:          e.db.ArchiveContent(),
-	}
-	candidate, err := ingest.PrepareCandidate(ctx, parser.ParseResult{
-		Session: pw.sess, Messages: pw.msgs, UsageEvents: pw.usageEvents,
-	}, options)
+	})
 	if err != nil {
 		return preparedSessionWrite{}, sessionWritePreserved, err
 	}
@@ -11619,6 +11618,11 @@ func (e *Engine) prepareSessionNormalizedContext(
 	candidate.Messages, _ = e.projectToolResultImagesForPrepare(candidate.Messages)
 	if err := ctx.Err(); err != nil {
 		return preparedSessionWrite{}, sessionWritePreserved, err
+	}
+	options := ingest.ContentOptions{
+		BlockedResultCategories: e.blockedResultCategories,
+		ToolResultImages:        e.toolResultImages,
+		ArchiveContent:          e.db.ArchiveContent(),
 	}
 	if options.ArchiveContent.UsageOnly() {
 		if obs, ok := e.projectIdentityObservationForWrite(pw, candidate.Session); ok && obs.RemoteCandidateCount == 1 {
