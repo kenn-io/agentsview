@@ -2723,6 +2723,9 @@ func (s *Sync) pushSession(
 }
 
 func (s *Sync) externalParent(ctx context.Context, id string) (string, error) {
+	if s.local == nil {
+		return "", nil
+	}
 	link, err := s.local.GetSessionExternalParent(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
