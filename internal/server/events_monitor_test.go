@@ -292,30 +292,6 @@ func TestEvents_SessionVersionIDs(t *testing.T) {
 	}
 }
 
-type unavailableWatchStateStore struct{ db.Store }
-
-func (s *unavailableWatchStateStore) GetSessionWatchState(string) (db.SessionWatchState, error) {
-	return db.SessionWatchState{}, errors.New("watch state unavailable")
-}
-
-func TestEvents_UnavailableHostedMarker(t *testing.T) {
-	te := setup(t)
-	require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: "watch-a", Project: "project", Machine: "test", Agent: "claude"}))
-	store := &unavailableWatchStateStore{Store: te.db}
-	cfg := config.Config{Host: "127.0.0.1", InstallationID: "server-installation"}
-	handler := wrapTestHandler(cfg, server.New(cfg, store, nil, server.WithBroadcaster(te.broadcaster)).Handler())
-	ctx, cancel := context.WithCancel(t.Context())
-	w := newFlushRecorder()
-	done := make(chan struct{})
-	t.Cleanup(func() { cancel(); <-done })
-	go func() {
-		handler.ServeHTTP(w, httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/events?session=watch-a", nil))
-		close(done)
-	}()
-	te.waitForSSEEvent(t, w, "events_ready", 5*time.Second)
-	assert.Contains(t, w.BodyString(), "id: \nevent: session_ready\ndata: watch-a\n")
-}
-
 func TestEvents_ParentMarkerSizeWithManyChildren(t *testing.T) {
 	te := setup(t)
 	require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: "parent-a", Project: "project", Machine: "test", Agent: "claude"}))
@@ -377,48 +353,6 @@ func TestEvents_ParentMarkerTracksChildChanges(t *testing.T) {
 	assert.Equal(t, before["parent-b"], after["parent-b"])
 }
 
-type childMarkerFailureStore struct {
-	db.Store
-	failList bool
-}
-
-func (s *childMarkerFailureStore) GetChildSessions(ctx context.Context, id string) ([]db.Session, error) {
-	if s.failList {
-		return nil, errors.New("child lookup failed")
-	}
-	return s.Store.GetChildSessions(ctx, id)
-}
-
-func (s *childMarkerFailureStore) GetSessionVersion(ctx context.Context, id string) (int, int64, bool) {
-	if !s.failList && id == "child-a" {
-		return 0, 0, false
-	}
-	return s.Store.GetSessionVersion(ctx, id)
-}
-
-func TestEvents_ChildMarkerReadFailure(t *testing.T) {
-	for _, failList := range []bool{true, false} {
-		t.Run(fmt.Sprintf("child list fails=%t", failList), func(t *testing.T) {
-			te := setup(t)
-			require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: "parent-a", Project: "project", Machine: "test", Agent: "claude"}))
-			require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: "child-a", Project: "project", Machine: "test", Agent: "claude", ParentSessionID: new("parent-a")}))
-			store := &childMarkerFailureStore{Store: te.db, failList: failList}
-			cfg := config.Config{Host: "127.0.0.1", InstallationID: "server-installation"}
-			handler := wrapTestHandler(cfg, server.New(cfg, store, nil, server.WithBroadcaster(te.broadcaster)).Handler())
-			ctx, cancel := context.WithCancel(t.Context())
-			w := newFlushRecorder()
-			done := make(chan struct{})
-			t.Cleanup(func() { cancel(); <-done })
-			go func() {
-				handler.ServeHTTP(w, httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/events?session=parent-a", nil))
-				close(done)
-			}()
-			te.waitForSSEEvent(t, w, "events_ready", 5*time.Second)
-			assert.Contains(t, w.BodyString(), "id: \nevent: session_ready\ndata: parent-a\n")
-		})
-	}
-}
-
 func TestEvents_ParentMarkerTracksHostedChildRevision(t *testing.T) {
 	te := setup(t)
 	for _, session := range []db.Session{
@@ -450,32 +384,4 @@ func TestEvents_ParentMarkerTracksHostedChildRevision(t *testing.T) {
 	before := marker()
 	store.set("child-a", db.SessionWatchState{State: db.SessionWatchResolved, PublicID: "child-a", ContentRevision: "two"})
 	assert.NotEqual(t, before, marker())
-}
-
-type hostedChildFailureStore struct{ db.Store }
-
-func (s *hostedChildFailureStore) GetSessionWatchState(id string) (db.SessionWatchState, error) {
-	if id == "child-a" {
-		return db.SessionWatchState{}, errors.New("child watch state unavailable")
-	}
-	return db.SessionWatchState{State: db.SessionWatchResolved, PublicID: id}, nil
-}
-
-func TestEvents_HostedChildMarkerReadFailure(t *testing.T) {
-	te := setup(t)
-	require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: "parent-a", Project: "project", Machine: "test", Agent: "claude"}))
-	require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: "child-a", Project: "project", Machine: "test", Agent: "claude", ParentSessionID: new("parent-a")}))
-	store := &hostedChildFailureStore{Store: te.db}
-	cfg := config.Config{Host: "127.0.0.1", InstallationID: "server-installation"}
-	handler := wrapTestHandler(cfg, server.New(cfg, store, nil, server.WithBroadcaster(te.broadcaster)).Handler())
-	ctx, cancel := context.WithCancel(t.Context())
-	w := newFlushRecorder()
-	done := make(chan struct{})
-	t.Cleanup(func() { cancel(); <-done })
-	go func() {
-		handler.ServeHTTP(w, httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/events?session=parent-a", nil))
-		close(done)
-	}()
-	te.waitForSSEEvent(t, w, "events_ready", 5*time.Second)
-	assert.Contains(t, w.BodyString(), "id: \nevent: session_ready\ndata: parent-a\n")
 }

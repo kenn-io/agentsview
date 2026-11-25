@@ -1455,62 +1455,45 @@ func (s *Server) sendSessionFrame(ctx context.Context, stream *SSEStream, id str
 }
 
 func (s *Server) sessionMarker(ctx context.Context, id string, state *db.SessionWatchState) string {
-	count, version, ok := s.db.GetSessionVersion(ctx, id)
+	type entry struct {
+		ID      string                `json:"id"`
+		Count   int                   `json:"count"`
+		Version int64                 `json:"version"`
+		State   *db.SessionWatchState `json:"state"`
+	}
+	identity, hosted := s.db.(db.SessionWatchStateStore)
+	read := func(id string, state *db.SessionWatchState) (entry, bool) {
+		count, version, ok := s.db.GetSessionVersion(ctx, id)
+		if !ok {
+			return entry{}, false
+		}
+		if hosted && state == nil {
+			current, err := identity.GetSessionWatchState(id)
+			if err != nil {
+				return entry{}, false
+			}
+			state = &current
+		}
+		return entry{ID: id, Count: count, Version: version, State: state}, true
+	}
+	parent, ok := read(id, state)
 	if !ok {
 		return ""
-	}
-	if identity, ok := s.db.(db.SessionWatchStateStore); ok && state == nil {
-		current, err := identity.GetSessionWatchState(id)
-		if err != nil {
-			return ""
-		}
-		state = &current
 	}
 	children, err := s.db.GetChildSessions(ctx, id)
 	if err != nil {
 		return ""
 	}
 	slices.SortFunc(children, func(a, b db.Session) int { return strings.Compare(a.ID, b.ID) })
-	type childMarker struct {
-		ID              string   `json:"id"`
-		Count           int      `json:"count"`
-		Version         int64    `json:"version"`
-		State           string   `json:"state"`
-		PublicID        string   `json:"public_id"`
-		ContentRevision string   `json:"content_revision"`
-		Variants        []string `json:"variants"`
-	}
-	childVersions := make([]childMarker, 0, len(children))
+	entries := []entry{parent}
 	for _, child := range children {
-		count, version, ok := s.db.GetSessionVersion(ctx, child.ID)
+		marker, ok := read(child.ID, nil)
 		if !ok {
 			return ""
 		}
-		marker := childMarker{ID: child.ID, Count: count, Version: version}
-		if identity, ok := s.db.(db.SessionWatchStateStore); ok {
-			state, err := identity.GetSessionWatchState(child.ID)
-			if err != nil {
-				return ""
-			}
-			marker.State, marker.PublicID = state.State, state.PublicID
-			marker.ContentRevision, marker.Variants = state.ContentRevision, state.Variants
-		}
-		childVersions = append(childVersions, marker)
+		entries = append(entries, marker)
 	}
-	marker := struct {
-		Count           int           `json:"count"`
-		Version         int64         `json:"version"`
-		State           string        `json:"state"`
-		PublicID        string        `json:"public_id"`
-		ContentRevision string        `json:"content_revision"`
-		Variants        []string      `json:"variants"`
-		Children        []childMarker `json:"children"`
-	}{Count: count, Version: version, Children: childVersions}
-	if state != nil {
-		marker.State, marker.PublicID = state.State, state.PublicID
-		marker.ContentRevision, marker.Variants = state.ContentRevision, state.Variants
-	}
-	encoded, err := json.Marshal(marker)
+	encoded, err := json.Marshal(entries)
 	if err != nil {
 		return ""
 	}

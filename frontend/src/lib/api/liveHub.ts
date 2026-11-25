@@ -186,7 +186,6 @@ export class LiveHub {
         if (this.source === source && this.previous) {
           // The server subscribes to archive updates before sending its first frame.
           suppressReady = this.continuous && this.previous.readyState === 1;
-          if (!suppressReady) this.synced.clear();
           this.previous.close();
           this.previous = null;
           this.ready.clear();

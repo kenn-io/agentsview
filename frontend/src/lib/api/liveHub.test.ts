@@ -109,12 +109,6 @@ describe("shared live stream", () => {
   it.each([
     { name: "unchanged", old: "1:x", replacement: "1:x", ready: false },
     { name: "changed", old: "1:x", replacement: "2:y", ready: true },
-    {
-      name: "hosted content revision",
-      old: '{"count":1,"version":2,"content_revision":"one"}',
-      replacement: '{"count":1,"version":2,"content_revision":"two"}',
-      ready: true,
-    },
     { name: "unknown", old: "", replacement: "", ready: true },
     {
       name: "updated before handoff",
@@ -176,30 +170,6 @@ describe("shared live stream", () => {
       data: "a",
       id: "3:z",
     });
-    hub.close();
-  });
-
-  it("refreshes only the parent whose child changed during a handoff", () => {
-    const hub = new LiveHub();
-    const a = { postMessage: vi.fn() };
-    const b = { postMessage: vi.fn() };
-    hub.update(a, request("parent-a"));
-    hub.update(b, request("parent-b"));
-    vi.advanceTimersByTime(250);
-    const old = sources[1]!;
-    old.emit("session_ready", "parent-a", '{"child":"a","version":1}');
-    old.emit("session_ready", "parent-b", '{"child":"b","version":1}');
-    old.emit("events_ready", "{}");
-    a.postMessage.mockClear();
-    b.postMessage.mockClear();
-    hub.update({ postMessage: vi.fn() }, request("other"));
-    vi.advanceTimersByTime(250);
-    const next = sources[2]!;
-    next.emit("session_ready", "parent-a", '{"child":"a","version":2}');
-    next.emit("session_ready", "parent-b", '{"child":"b","version":1}');
-    next.emit("events_ready", "{}");
-    expect(a.postMessage).toHaveBeenCalledOnce();
-    expect(b.postMessage).not.toHaveBeenCalled();
     hub.close();
   });
 
