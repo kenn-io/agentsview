@@ -70,13 +70,6 @@ func (db *DB) projectSessionBatchMessages(write SessionBatchWrite) []Message {
 // storageSessionBatchWrite applies the archive's image, content, and usage-only policies to a sanitized write before the transaction writes it.
 func (db *DB) storageSessionBatchWrite(ctx context.Context, write SessionBatchWrite) (SessionBatchWrite, error) {
 	write.Messages = db.projectSessionBatchMessages(write)
-	if db.usageOnlyStorage() && hasToolCalls(write.Messages) {
-		links, err := ToolCallPRLinksForUsage(ctx, write.Messages, "")
-		if err != nil {
-			return write, err
-		}
-		write.Session.PRLinks = parser.CombinePRLinks(write.Session.PRLinks, links)
-	}
 	if db.ArchiveContent().OmitsToolContent() {
 		write.Signals.ToolObservations = []ToolObservation{}
 		write.Checkpoint, write.CheckpointBlobs = nil, nil
@@ -103,11 +96,7 @@ func retainUsageToolPRLinksTx(ctx context.Context, tx *sql.Tx, sessionID string,
 	if !hasToolCalls(messages) {
 		return nil
 	}
-	var remote string
-	if err := tx.QueryRowContext(ctx, `SELECT `+checkoutRemoteSQL, sessionID).Scan(&remote); err != nil {
-		return err
-	}
-	links, err := ToolCallPRLinksForUsage(ctx, messages, remote)
+	links, err := usageToolPRLinksTx(ctx, tx, sessionID, messages)
 	if err != nil || len(links) == 0 {
 		return err
 	}
@@ -126,7 +115,24 @@ func mergeUsagePRLinksTx(ctx context.Context, tx *sql.Tx, session *Session) erro
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	session.PRLinks = parser.CombinePRLinks(DecodePRLinks(stored), session.PRLinks)
+	return mergePendingUsagePRLinks(ctx, tx, session, DecodePRLinks(stored))
+}
+
+func mergePendingUsagePRLinks(ctx context.Context, tx *sql.Tx, session *Session, stored []PRLink) error {
+	var remote string
+	var changed bool
+	if err := tx.QueryRowContext(ctx, `SELECT `+checkoutRemoteSQL+`, COALESCE((SELECT pr_repository_changed FROM sessions WHERE id=?),0)`, session.ID, session.ID).Scan(&remote, &changed); err != nil {
+		return err
+	}
+	if session.usagePRRemote != "" {
+		remote = session.usagePRRemote
+	}
+	links, changed, err := usageToolCallPRLinks(ctx, session.usagePRMessages, remote, changed)
+	if err != nil {
+		return err
+	}
+	session.PRRepositoryChanged = session.PRRepositoryChanged || changed
+	session.PRLinks = parser.CombinePRLinks(stored, session.PRLinks, links)
 	return nil
 }
 

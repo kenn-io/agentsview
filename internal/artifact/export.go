@@ -562,7 +562,7 @@ func exportLoadedSessionToStore(
 	if wirePlanUsage != nil || wireCoverage != nil {
 		version = manifestPlanUsageVersion
 	}
-	if slices.ContainsFunc(messages, messageHasToolPRLinks) {
+	if wireSession.PRRepositoryChanged || slices.ContainsFunc(messages, messageHasToolPRLinks) {
 		version = manifestFormatVersion
 	}
 	m := manifest{

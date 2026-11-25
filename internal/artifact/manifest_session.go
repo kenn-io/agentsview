@@ -57,6 +57,7 @@ type manifestSession struct {
 	Cwd                  string      `json:"cwd,omitempty"`
 	GitBranch            string      `json:"git_branch,omitempty"`
 	PRLinks              []db.PRLink `json:"pr_links,omitempty"`
+	PRRepositoryChanged  bool        `json:"pr_repository_changed,omitzero"`
 	SourceSessionID      string      `json:"source_session_id,omitempty"`
 	SourceVersion        string      `json:"source_version,omitempty"`
 	GroupKey             string      `json:"group_key,omitempty"`
@@ -91,7 +92,7 @@ type manifestQualitySignals struct {
 }
 
 func manifestSessionFromDB(s db.Session) manifestSession {
-	return manifestSession{
+	return manifestSessionWithPRState(manifestSession{
 		ID:                   s.ID,
 		Project:              s.Project,
 		Machine:              s.Machine,
@@ -150,11 +151,11 @@ func manifestSessionFromDB(s db.Session) manifestSession {
 		LocalModifiedAt:    s.LocalModifiedAt,
 		TranscriptRevision: s.TranscriptRevision,
 		CreatedAt:          s.CreatedAt,
-	}
+	}, s.PRRepositoryChanged)
 }
 
 func (m manifestSession) dbSession() db.Session {
-	return db.Session{
+	return dbSessionWithPRState(db.Session{
 		ID:                   m.ID,
 		Project:              m.Project,
 		Machine:              m.Machine,
@@ -213,7 +214,17 @@ func (m manifestSession) dbSession() db.Session {
 		LocalModifiedAt:    m.LocalModifiedAt,
 		TranscriptRevision: m.TranscriptRevision,
 		CreatedAt:          m.CreatedAt,
-	}
+	}, m.PRRepositoryChanged)
+}
+
+func manifestSessionWithPRState(session manifestSession, changed bool) manifestSession {
+	session.PRRepositoryChanged = changed
+	return session
+}
+
+func dbSessionWithPRState(session db.Session, changed bool) db.Session {
+	session.PRRepositoryChanged = changed
+	return session
 }
 
 func manifestQualitySignalsFromDB(qs *db.QualitySignals) *manifestQualitySignals {

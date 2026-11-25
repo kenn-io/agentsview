@@ -74,6 +74,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     -- JSON array of parser-derived pull request links; '' when none.
     pr_links TEXT NOT NULL DEFAULT '',
     structured_pr_links TEXT NOT NULL DEFAULT '',
+    -- 1 once a usage-only write saw a call change repository context.
+    pr_repository_changed INTEGER NOT NULL DEFAULT 0,
     source_session_id TEXT NOT NULL DEFAULT '',
     source_version TEXT NOT NULL DEFAULT '',
     group_key TEXT NOT NULL DEFAULT '',

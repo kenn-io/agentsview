@@ -161,7 +161,7 @@ func finalize(
 	session.RelationshipType = db.SessionRelationship(session)
 	var usagePRLinks []db.PRLink
 	if options.ArchiveContent.UsageOnly() {
-		usagePRLinks, err = db.ToolCallPRLinksForUsage(ctx, messages, options.CheckoutRemote)
+		usagePRLinks, err = prepareUsagePRLinks(ctx, &session, messages, options.CheckoutRemote)
 		if err != nil {
 			return PreparedSession{}, err
 		}
@@ -186,6 +186,13 @@ func finalize(
 		SessionTotal: ConvertSessionTotal(candidate.Parsed.Session.SessionTotal),
 		Signals:      signalUpdate, Findings: findings, Validation: validation,
 	}, ctx.Err()
+}
+
+func prepareUsagePRLinks(ctx context.Context, session *db.Session, messages []db.Message, remote string) ([]db.PRLink, error) {
+	db.SetUsagePRRemote(session, remote)
+	links, changed, err := db.ToolCallPRLinksForUsage(ctx, messages, remote)
+	session.PRRepositoryChanged = changed
+	return links, err
 }
 
 // ApplySessionMessageDerivedFieldsContext derives filtered counts and

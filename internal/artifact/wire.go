@@ -43,7 +43,7 @@ const (
 	// session_kind provenance field. Manifest v4 adds the optional
 	// provider_id billing field on usage events. Manifest v5 adds session group_key,
 	// v6 adds session pr_links, v7 adds plan_usage and capture_coverage,
-	// and v8 references segments with retained tool-call PR links.
+	// and v8 adds repository uncertainty and retained tool-call PR links.
 	// Older manifests decode with missing fields empty. Export writes the
 	// lowest version that holds the session's fields.
 	manifestPRLinksVersion   = 6

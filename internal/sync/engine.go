@@ -11633,7 +11633,6 @@ func (e *Engine) prepareSessionNormalizedContext(
 	if err != nil {
 		return preparedSessionWrite{}, sessionWritePreserved, err
 	}
-	rows.Session.PRLinks = parser.CombinePRLinks(rows.Session.PRLinks, rows.UsagePRLinks)
 	prepared := preparedSessionWrite{PreparedSession: rows, codexForkState: forkState, stagedToolKeys: stagedToolKeys}
 	if forkState != nil {
 		// Totals describe the sanitized message and independent event rows that

@@ -43,6 +43,8 @@ func TestManifestSessionMatchesDBSessionWireFormat(t *testing.T) {
 	reference.WebURL = ""
 	reference.ParentSessionIDs = nil
 	reference.SourceMachines = nil
+	sess.PRRepositoryChanged = false
+	reference.PRRepositoryChanged = false
 	type sessionAlias db.Session
 	artifactReference := func(s db.Session) ([]byte, error) {
 		data, err := canonicalJSON(sessionAlias(s))
@@ -84,6 +86,15 @@ func TestManifestSessionMatchesDBSessionWireFormat(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, string(want), string(roundTrip),
 		"converting to the wire DTO and back must preserve every artifact-visible field")
+}
+
+func TestManifestPreservesPRRepositoryUncertainty(t *testing.T) {
+	original := manifest{Session: manifestSessionFromDB(db.Session{PRRepositoryChanged: true})}
+	encoded, err := json.Marshal(original)
+	require.NoError(t, err)
+	var restored manifest
+	require.NoError(t, json.Unmarshal(encoded, &restored))
+	assert.True(t, restored.Session.dbSession().PRRepositoryChanged)
 }
 
 func TestManifestQualitySignalsMatchesDBWireFormat(t *testing.T) {

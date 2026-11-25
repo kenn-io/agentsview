@@ -323,6 +323,25 @@ func TestToolPRLinksCopiedArchives(t *testing.T) {
 	}
 }
 
+func TestUsageOnlyCopyRetainsTranscriptRepositoryChange(t *testing.T) {
+	source := testDB(t)
+	source.SetArchiveContent(config.ArchiveContentTranscripts)
+	s := Session{ID: "copied-context", Project: "project", Machine: "local", Agent: "codex", Cwd: "/work/repo"}
+	require.NoError(t, source.UpsertSession(t.Context(), s))
+	obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://github.com/example/repo.git")
+	require.NoError(t, source.UpsertProjectIdentityObservation(t.Context(), obs))
+	require.NoError(t, source.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "exec_command", Category: "Bash", InputJSON: `{"cmd":"git remote set-url origin https://git.example/example/repo.git"}`}}}}))
+	dest := testDB(t)
+	dest.SetArchiveContent(config.ArchiveContentUsage)
+	_, err := dest.CopyOrphanedDataFrom(t.Context(), source.Path())
+	require.NoError(t, err)
+	require.NoError(t, dest.CopySessionMetadataFrom(t.Context(), source.Path()))
+	require.NoError(t, dest.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "exec_command", Category: "Bash", InputJSON: `{"cmd":"gh pr view 42 -R example/repo"}`}}}}))
+	got, err := dest.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	assert.Empty(t, got.PRLinks)
+}
+
 func TestPromptPRLinksStructuredChanges(t *testing.T) {
 	d := testDB(t)
 	first, ok := parser.NewPRLink("https://github.com/o/r/pull/1", "o/r", 1)
@@ -567,6 +586,87 @@ func TestToolPRLinksArchiveStorage(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestUsageOnlyPRLinksPreservesRepositoryUncertaintyAcrossWrites(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d := testDBAtPath(t, path, "usage archive")
+	d.SetArchiveContent(config.ArchiveContentUsage)
+	s := Session{ID: "usage-context", Project: "project", Machine: "local", Agent: "codex", Cwd: "/work/repo"}
+	require.NoError(t, d.UpsertSession(t.Context(), s))
+	obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://github.com/example/repo.git")
+	require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), obs))
+	message := func(ordinal int, command string) Message {
+		return Message{SessionID: s.ID, Ordinal: ordinal, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"` + command + `"}`}}}
+	}
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{message(0, "gh pr view 41 -R github.com/example/repo")}))
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{message(1, "git remote set-url origin https://git.example/example/repo.git")}))
+	require.NoError(t, d.Close())
+	d, err := Open(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	d.SetArchiveContent(config.ArchiveContentUsage)
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{message(2, "gh pr view 42 -R example/repo; gh pr view 43 -R git.example/example/repo")}))
+	got, err := d.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	exported, err := d.GetArtifactExportSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	assert.True(t, exported.PRRepositoryChanged)
+	var urls []string
+	for _, link := range got.PRLinks {
+		urls = append(urls, link.URL)
+	}
+	assert.Equal(t, []string{"https://github.com/example/repo/pull/41", "https://git.example/example/repo/pull/43"}, urls)
+	_, err = d.WriteSessionBatchContext(t.Context(), []SessionBatchWrite{{Session: s, Messages: []Message{message(3, "gh pr view 44 -R example/repo")}}})
+	require.NoError(t, err)
+	got, err = d.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	for _, link := range got.PRLinks {
+		assert.NotEqual(t, 44, link.Number)
+	}
+	require.NoError(t, d.Close())
+	dest := testDB(t)
+	dest.SetArchiveContent(config.ArchiveContentUsage)
+	_, err = dest.CopyOrphanedDataFrom(t.Context(), path)
+	require.NoError(t, err)
+	require.NoError(t, dest.InsertMessages(t.Context(), []Message{message(4, "gh pr view 45 -R example/repo")}))
+	got, err = dest.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	for _, link := range got.PRLinks {
+		assert.NotEqual(t, 45, link.Number)
+	}
+}
+
+func TestUsageOnlyPRLinksTemporaryEnvironmentDoesNotPersist(t *testing.T) {
+	d := testDB(t)
+	d.SetArchiveContent(config.ArchiveContentUsage)
+	s := Session{ID: "usage-env", Project: "project", Machine: "local", Agent: "codex", Cwd: "/work/repo"}
+	require.NoError(t, d.UpsertSession(t.Context(), s))
+	message := func(ordinal int, command string) Message {
+		return Message{SessionID: s.ID, Ordinal: ordinal, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "exec_command", Category: "Bash", InputJSON: `{"cmd":"` + command + `"}`}}}
+	}
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{message(0, "export GH_HOST=git.example")}))
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{message(1, "gh pr view 42 -R example/repo")}))
+	got, err := d.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	require.Len(t, got.PRLinks, 1)
+	assert.Equal(t, "https://github.com/example/repo/pull/42", got.PRLinks[0].URL)
+}
+
+func TestUsageOnlyPRRepositoryChangeQueuesArtifactExport(t *testing.T) {
+	d := testDB(t)
+	d.SetArchiveContent(config.ArchiveContentUsage)
+	seedArtifactOrigin(t, d)
+	s := Session{ID: "usage-export", Project: "project", Machine: "local", Agent: "codex"}
+	require.NoError(t, d.UpsertSession(t.Context(), s))
+	clearArtifactExportQueue(t, d)
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		return retainUsageToolPRLinksTx(t.Context(), tx, s.ID, []Message{{SessionID: s.ID, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "exec_command", Category: "Bash", InputJSON: `{"cmd":"git remote set-url origin https://git.example/example/repo.git"}`}}}})
+	}))
+	queued, err := d.PendingArtifactExports(t.Context(), 10)
+	require.NoError(t, err)
+	require.Len(t, queued, 1)
+	assert.Equal(t, s.ID, queued[0].SessionID)
 }
 
 func TestToolPRLinksCheckoutHost(t *testing.T) {

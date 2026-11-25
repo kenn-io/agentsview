@@ -405,6 +405,12 @@ type Session struct {
 	// Always serialized, as [] when empty, so a client merging a fresh
 	// response over a cached one drops cleared values.
 	PRLinks []PRLink `json:"pr_links" required:"false"`
+	// PRRepositoryChanged records that a usage-only projection saw a call
+	// change repository context before discarding its input. Session writes
+	// keep it set, so later hostless selectors don't use the stale checkout.
+	PRRepositoryChanged bool `json:"-"`
+	usagePRMessages     []Message
+	usagePRRemote       string
 	// Labels are user- or tool-supplied tags. They are stored apart from
 	// parsed transcript data, so a reparse or resync never changes them.
 	// Always serialized, as [] when empty, like PRLinks.
@@ -1285,8 +1291,14 @@ func (db *DB) GetArtifactExportSession(
 	if err != nil || s == nil {
 		return s, err
 	}
-	s.PRLinks, err = db.GetSessionStructuredPRLinks(ctx, id)
+	s.PRLinks, err = db.getArtifactSessionPRState(ctx, s)
 	return s, err
+}
+
+func (db *DB) getArtifactSessionPRState(ctx context.Context, s *Session) ([]PRLink, error) {
+	var links string
+	err := db.getReader().QueryRowContext(ctx, `SELECT structured_pr_links, pr_repository_changed FROM sessions WHERE id=?`, s.ID).Scan(&links, &s.PRRepositoryChanged)
+	return DecodePRLinks(links), err
 }
 
 func (db *DB) getSessionFullUncoalesced(
@@ -1577,8 +1589,9 @@ const insertSessionSQL = `
 			file_path, file_size, file_mtime,
 			next_ordinal, last_entry_uuid, claude_linear_parse,
 			file_inode, file_device, file_hash,
-			pr_links, structured_pr_links, parser_relationship_type
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			pr_links, structured_pr_links, parser_relationship_type,
+			pr_repository_changed
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // insertSessionIfAbsentSQL inserts a session only when its id does not already
 // exist, leaving an existing row untouched.
@@ -1647,7 +1660,8 @@ const upsertSessionBaseSQL = insertSessionSQL + `
 			file_inode = excluded.file_inode,
 			file_device = excluded.file_device,
 			file_hash = excluded.file_hash,
-			structured_pr_links = excluded.structured_pr_links`
+			structured_pr_links = excluded.structured_pr_links,
+			pr_repository_changed = MAX(sessions.pr_repository_changed, excluded.pr_repository_changed)`
 
 const upsertSessionSQL = upsertSessionBaseSQL + `,
 			source_missing_at = NULL`
@@ -1693,7 +1707,7 @@ func upsertSessionArgs(s Session) []any {
 		s.FileInode, s.FileDevice, s.FileHash,
 		EncodePRLinks(s.PRLinks),
 		EncodePRLinks(s.PRLinks),
-		s.RelationshipType,
+		s.RelationshipType, s.PRRepositoryChanged,
 	}
 }
 

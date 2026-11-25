@@ -525,10 +525,73 @@ func ToolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string
 }
 
 // ToolCallPRLinksForUsage uses a known host without inferring bare numbers
-// after earlier shell state has been discarded.
-func ToolCallPRLinksForUsage(ctx context.Context, messages []Message, remote string) ([]PRLink, error) {
-	changed := sharedPRContext{noBare: true}
-	return toolCallPRLinks(ctx, messages, "", remote, &changed, nil)
+// after earlier shell state has been discarded. It also reports whether a call
+// changed repository context, which the session keeps for later writes.
+func ToolCallPRLinksForUsage(ctx context.Context, messages []Message, remote string) ([]PRLink, bool, error) {
+	return usageToolCallPRLinks(ctx, messages, remote, false)
+}
+
+// ProjectedUsagePRLinks reads the calls held until a projected session is written.
+func ProjectedUsagePRLinks(ctx context.Context, session Session, remote string) ([]PRLink, error) {
+	links, _, err := usageToolCallPRLinks(ctx, session.usagePRMessages, remote, false)
+	return links, err
+}
+
+// usageToolCallPRLinks resolves usage-only calls after an earlier write that
+// may have changed repository context, and reports whether it is changed after them.
+func usageToolCallPRLinks(ctx context.Context, messages []Message, remote string, changed bool) ([]PRLink, bool, error) {
+	state := sharedPRContext{repository: changed, noBare: true}
+	links, err := toolCallPRLinks(ctx, messages, "", remote, &state, nil)
+	return links, changed || usageRepositoryChanged(messages), err
+}
+
+func usageRepositoryChanged(messages []Message) bool {
+	for _, message := range messages {
+		for _, call := range message.ToolCalls {
+			if call.Category == "Bash" && usageCallRepositoryChanged(call) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func usageCallRepositoryChanged(call ToolCall) bool {
+	if retainedRepositoryChanged(call) {
+		return true
+	}
+	commands, _ := shellInputCommands(call.InputJSON)
+	for _, command := range commands {
+		if parser.PRCommandChangesRepository(command.text) {
+			return true
+		}
+	}
+	return false
+}
+
+func retainedRepositoryChanged(call ToolCall) bool {
+	if call.InputJSON != "" || call.PRLinks == "" {
+		return false
+	}
+	var retained retainedPRState
+	return json.Unmarshal([]byte(call.PRLinks), &retained) == nil && retained.Repo
+}
+
+// usageToolPRLinksTx resolves a usage-only write under the session's recorded
+// repository change, and records a change this write makes before its inputs
+// are discarded.
+func usageToolPRLinksTx(ctx context.Context, tx *sql.Tx, sessionID string, messages []Message) ([]PRLink, error) {
+	var remote string
+	var changed bool
+	if err := tx.QueryRowContext(ctx, `SELECT `+checkoutRemoteSQL+`, COALESCE((SELECT pr_repository_changed FROM sessions WHERE id=?),0)`, sessionID, sessionID).Scan(&remote, &changed); err != nil {
+		return nil, err
+	}
+	links, after, err := usageToolCallPRLinks(ctx, messages, remote, changed)
+	if err != nil || after == changed {
+		return links, err
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE sessions SET pr_repository_changed=1 WHERE id=?`, sessionID)
+	return links, err
 }
 
 // callPRState is what one tool call adds: the links it names and the shell

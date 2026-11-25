@@ -243,6 +243,39 @@ func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 	return analyzePRCommand(ctx, command, cwd, remote, allowBare, hostUnknown, 0)
 }
 
+// PRCommandChangesRepository finds repository changes that survive a shell.
+func PRCommandChangesRepository(command string) bool {
+	return prCommandChangesRepository(command, 0)
+}
+
+func prCommandChangesRepository(command string, depth int) bool {
+	if depth >= 8 {
+		return false
+	}
+	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
+	if err != nil {
+		return false
+	}
+	changed := false
+	syntax.Walk(file, func(node syntax.Node) bool {
+		if _, ok := node.(*syntax.FuncDecl); ok {
+			return false
+		}
+		call, ok := node.(*syntax.CallExpr)
+		if !ok {
+			return true
+		}
+		args := unwrapPRCommand(call.Args, true)
+		if inner, ok := shellCommand(args); ok && prCommandChangesRepository(inner, depth+1) {
+			changed = true
+		}
+		words, _ := shellWords(args)
+		changed = changed || repositoryMutation(words)
+		return true
+	})
+	return changed
+}
+
 func analyzePRCommand(ctx context.Context, command, cwd, remote string, allowBare, hostUnknown bool, depth int) ([]PRLink, bool, bool, []PRLink, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, false, nil, err

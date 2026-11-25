@@ -103,13 +103,30 @@ func ProjectSessionForStoragePolicy(
 			IsAutomatedTranscript(
 				session.UserMessageCount, messages, session.FirstMessage,
 			)
-		return sessionForStoragePolicy(session, policy), usageOnlyMessages(messages)
+		return usageSessionForStorage(session, messages, policy), usageOnlyMessages(messages)
 	case config.ArchiveContentTranscripts:
 		return session, transcriptMessages(messages)
 	default:
 		return session, messages
 	}
 }
+
+func usageSessionForStorage(session Session, messages []Message, policy config.ArchiveContent) Session {
+	if hasToolCalls(messages) {
+		session.usagePRMessages = nil
+	}
+	for _, message := range messages {
+		for _, call := range message.ToolCalls {
+			if call.Category == "Bash" || call.Category == "Task" {
+				session.usagePRMessages = append(session.usagePRMessages, Message{ToolCalls: []ToolCall{{ToolName: call.ToolName, Category: call.Category, InputJSON: call.InputJSON, PRLinks: call.PRLinks}}})
+			}
+		}
+	}
+	return sessionForStoragePolicy(session, policy)
+}
+
+// SetUsagePRRemote supplies the recorded checkout remote for a pending write.
+func SetUsagePRRemote(session *Session, remote string) { session.usagePRRemote = remote }
 
 func sessionForStoragePolicy(
 	session Session, policy config.ArchiveContent,

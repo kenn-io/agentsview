@@ -67,12 +67,9 @@ func (e *Engine) compareStoredSession(
 	if snapshot := snapshots[stored.ID]; snapshot.RemoteCandidateCount == 1 {
 		remote = snapshot.GitRemote
 	}
-	var toolLinks []db.PRLink
-	if !e.db.ArchiveContent().UsageOnly() {
-		toolLinks, err = db.ToolCallPRLinks(ctx, msgs, prepared.Cwd, remote)
-		if err != nil {
-			return nil, err
-		}
+	toolLinks, err := e.parseDiffToolPRLinks(ctx, prepared, msgs, remote)
+	if err != nil {
+		return nil, err
 	}
 	prepared.PRLinks = parser.CombinePRLinks(prepared.PRLinks, toolLinks, db.PromptPRLinks(msgs))
 	diffs := compareSessionFields(stored, prepared)
@@ -163,6 +160,13 @@ func (e *Engine) compareStoredSession(
 	}
 	diffs = append(diffs, compareUsageEvents(storedEvents, events)...)
 	return diffs, nil
+}
+
+func (e *Engine) parseDiffToolPRLinks(ctx context.Context, session db.Session, messages []db.Message, remote string) ([]db.PRLink, error) {
+	if e.db.ArchiveContent().UsageOnly() {
+		return db.ProjectedUsagePRLinks(ctx, session, remote)
+	}
+	return db.ToolCallPRLinks(ctx, messages, session.Cwd, remote)
 }
 
 // compareSessionFields compares the session-row contract fields.
