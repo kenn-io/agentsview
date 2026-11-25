@@ -91,7 +91,7 @@ func discoverCodexTestSessions(t *testing.T, root string) []DiscoveredFile {
 // through the provider source set, replacing the removed FindCodexSourceFile.
 func findCodexTestSourceFile(t *testing.T, root, sessionID string) string {
 	t.Helper()
-	return newCodexTestProvider(t, root).sources.findSourceFile(root, sessionID)
+	return newCodexTestProvider(t, root).sources.findSourceFile(root, root, sessionID)
 }
 
 func assertToolResultEvents(

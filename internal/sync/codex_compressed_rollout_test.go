@@ -595,3 +595,22 @@ func TestCodexCompressedParseAdmissionAndStaging(t *testing.T) {
 		})
 	}
 }
+
+func TestCodexReconcileKeepsImportedPlainAcrossRoots(t *testing.T) {
+	base := t.TempDir()
+	compressedRoot := filepath.Join(base, "a-compressed")
+	plainRoot := filepath.Join(base, "z-plain")
+	one := codexUserEntryJSON("2026-09-01T10:00:01Z", "one")
+	two := codexAssistantEntryJSON("2026-09-01T10:00:02Z", "plain answer")
+	plain := writeCodexRollout(t, plainRoot, "01", compressedRolloutPlain, compressedRolloutContent(one, two))
+	database := openTestDB(t)
+	roots := []string{compressedRoot, plainRoot}
+	e := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: roots}})
+	t.Cleanup(e.Close)
+	require.Zero(t, e.SyncAll(t.Context(), nil).Failed)
+	require.Equal(t, plain, codexSessionFilePath(t, database, compressedRolloutSession))
+	writeCompressedCodexRollout(t, compressedRoot, "01", codexCompressedName, compressedRolloutContent(one))
+	require.NoError(t, e.ReconcileWatchRoots(t.Context(), roots, false))
+	assert.Equal(t, plain, codexSessionFilePath(t, database, compressedRolloutSession))
+	assert.Equal(t, []string{"one", "plain answer"}, compressedRolloutTexts(t, database, compressedRolloutSession))
+}

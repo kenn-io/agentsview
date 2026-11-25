@@ -669,7 +669,11 @@ func (b *directBackend) Sync(
 			if err := b.engine.SyncSingleSessionContext(ctx, in.ID); err != nil {
 				return nil, err
 			}
-			return b.Get(ctx, in.ID)
+			detail, err := b.Get(ctx, in.ID)
+			if err == nil && detail == nil {
+				return nil, syncSessionNotFoundError(in.ID)
+			}
+			return detail, err
 		}
 		storedPath := b.local.GetSessionFilePath(ctx, in.ID)
 		if storedPath == "" {

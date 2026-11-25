@@ -1739,3 +1739,17 @@ func TestValidateUsageRefreshRequiresCombinedID(t *testing.T) {
 		require.ErrorIs(t, service.ValidateUsageRefresh(input), service.ErrInvalidUsageRefresh)
 	}
 }
+
+func TestDirectBackend_Sync_CodexIDExcludedByCwd(t *testing.T) {
+	root := t.TempDir()
+	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	path := filepath.Join(root, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
+	dbtest.WriteTestFile(t, path, []byte(testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_cli_rs", "2026-10-08T12:00:00Z")+"\n"+testjsonl.CodexMsgJSON("user", "hello", "2026-10-08T12:00:01Z")+"\n"))
+	d := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(t.Context(), d, sync.EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}, IncludeCwdPrefixes: []string{"/other"}})
+	t.Cleanup(engine.Close)
+	svc := service.NewDirectBackend(d, engine)
+	detail, err := svc.Sync(t.Context(), service.SyncInput{ID: "codex:" + id})
+	require.ErrorContains(t, err, "was not found after sync")
+	assert.Nil(t, detail)
+}
