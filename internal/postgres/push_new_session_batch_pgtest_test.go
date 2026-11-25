@@ -563,3 +563,35 @@ func TestPGPushNewSessionBatchRollsBackEarlySends(t *testing.T) {
 	require.NoError(t, rows.Close())
 	assert.Equal(t, map[string]int{"flush-0": 9, "flush-2": 9}, counts, "the rejected session leaves no rows")
 }
+
+func TestPGPushNewSessionBatchReplacesLinksWrittenAfterPreload(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	pgURL := testPGSchemaURL(t, "agentsview")
+	local := testDB(t)
+	seedLatencyFixture(t, local, "orphan", 2, 2)
+	syncer, _ := newNewSessionBatchSync(t, pgURL, "agentsview", local, false)
+
+	other, err := sql.Open("pgx", pgURL)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, other.Close()) })
+	var once sync.Once
+	// A link for a session PostgreSQL has no row for appears after the
+	// batch read the published links; the archive has no links for it.
+	syncer.beforeNewSessionBatch = func() {
+		once.Do(func() {
+			_, err := other.ExecContext(ctx, `INSERT INTO agentsview.commit_links
+				(session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,turn_text,project,retained)
+				VALUES ('orphan-1','ddd1234567890123456789012345678901234567','main','Late','repo',1,0,'late-call','2026-01-01T00:00:00Z','','proj',FALSE)`)
+			require.NoError(t, err)
+		})
+	}
+
+	result, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Zero(t, result.Errors)
+	assert.Equal(t, 2, result.SessionsPushed)
+	var links int
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT count(*) FROM commit_links WHERE session_id = 'orphan-1'`).Scan(&links))
+	assert.Zero(t, links, "the archive has no links for the session")
+}
