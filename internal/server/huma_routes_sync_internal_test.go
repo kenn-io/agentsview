@@ -1689,6 +1689,56 @@ func TestScopedUpgradeSessionSyncRejectsWriterHandoff(t *testing.T) {
 	assert.Equal(t, writerClosedRetryAfterSeconds, w.Header().Get("Retry-After"))
 }
 
+func TestScopedUpgradeDiagnosticRejectsWriterHandoff(t *testing.T) {
+	f := newSyncRouteFixture(t)
+	require.NoError(t, f.db.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), "INSERT INTO stats(key, value) VALUES ('scoped_upgrade_pending', 1)")
+		return err
+	}))
+	require.NoError(t, f.db.CloseWriter())
+	t.Cleanup(func() {
+		if f.db.WriterClosed() {
+			require.NoError(t, f.db.ReopenWriter())
+		}
+	})
+	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
+	f.srv.engine = engine
+	locked, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		done <- engine.RunExclusive(func() error { close(locked); <-release; return nil })
+	}()
+	<-locked
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/diagnostics", strings.NewReader(`{"id":"123e4567-e89b-42d3-a456-426614174000","source":"worker","message":"launch failed"}`))
+	req.Host = "127.0.0.1:0"
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("Origin", "http://127.0.0.1:0")
+	req.Header.Set("Content-Type", "application/json")
+	response := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		w := httptest.NewRecorder()
+		f.handler.ServeHTTP(w, req)
+		response <- w
+	}()
+	var w *httptest.ResponseRecorder
+	select {
+	case w = <-response:
+	case <-time.After(time.Second):
+	}
+	close(release)
+	require.NoError(t, <-done)
+	if w == nil {
+		<-response
+		require.FailNow(t, "diagnostic write waited for the worker instead of rejecting the request")
+	}
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code, w.Body.String())
+	assert.Equal(t, writerClosedRetryAfterSeconds, w.Header().Get("Retry-After"))
+	require.NoError(t, f.db.ReopenWriter())
+	w = serveJSON(t, f.handler, http.MethodPost, "/api/v1/diagnostics", map[string]any{
+		"id": "123e4567-e89b-42d3-a456-426614174000", "source": "worker", "message": "launch failed",
+	})
+	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+}
+
 func TestHumaSyncSessionLocalNoSyncUsesOnDemandEngine(t *testing.T) {
 	f := newSyncRouteFixture(t)
 	sessionPath := f.writeClaudeSession(t, "proj/session.jsonl", "no sync route")

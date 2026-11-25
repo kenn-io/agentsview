@@ -1077,7 +1077,7 @@ func (s *Server) archiveStaleMiddleware(next http.Handler) http.Handler {
 			if !probe && (s.archiveStale() || pending || scopedPending) {
 				w.Header().Set(apiclient.ArchiveStaleHeader, "true")
 				// Session sync returns its stale-archive conflict through the route.
-				if archiveWriteRequest(r) && (s.archiveStale() && r.URL.Path != "/api/v1/sessions/sync" || scopedPending && !s.archiveStale() && r.URL.Path == "/api/v1/sessions/sync") {
+				if archiveWriteRequest(r) && (s.archiveStale() && r.URL.Path != "/api/v1/sessions/sync" || scopedPending && !s.archiveStale()) {
 					if local, ok := s.db.(*db.DB); ok && local.WriterClosed() {
 						response := writerClosedResponse(w.Header().Add, true)
 						writeError(w, response.Status, response.Message)
