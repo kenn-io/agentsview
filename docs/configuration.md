@@ -1429,9 +1429,10 @@ appear as boundaries without deleting earlier history. File references stay as
 inert text: AgentsView never opens their recorded paths. A final line still
 being written delays publication until it is complete.
 
-AgentsView does not infer titles, parent links, public model names, token usage,
-or costs from these files. Context-window snapshots and opaque metadata stay in
-raw custody. The maintainer
+AgentsView does not infer titles, public model names, token usage, or costs from
+these files. The only parent links come from a subagent run's
+`- Requester agent id:` field; see [Activity](/docs/activity/).
+Context-window snapshots and opaque metadata stay in raw custody. The maintainer
 [format evidence](https://github.com/kenn-io/agentsview/blob/main/docs/internal/session-format-sources.md#muse-personal-muse-personal)
 documents the projection's limits.
 
