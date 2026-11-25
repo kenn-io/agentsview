@@ -72,6 +72,35 @@ func TestLookupIsolationReadsOnlyFixtureHome(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(runDir, "home", ".codex", "sessions", "fresh.jsonl"))
 	require.NoError(t, err)
 	assert.Equal(t, "new transcript", string(data))
+
+}
+
+func TestLookupIsolationCredentials(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("bubblewrap is Linux-only")
+	}
+	bwrap, err := exec.LookPath("bwrap")
+	if err != nil {
+		t.Skip("bubblewrap unavailable")
+	}
+	home := filepath.Join(t.TempDir(), "home")
+	clientDir := filepath.Join(home, "fixture")
+	project := filepath.Join(clientDir, "project")
+	runDir := filepath.Join(clientDir, "attempt")
+	binDir := filepath.Join(home, "client-bin")
+	for _, dir := range []string{project, filepath.Join(clientDir, "agentsview-data"), runDir, binDir, filepath.Join(home, ".codex")} {
+		require.NoError(t, os.MkdirAll(dir, 0o700))
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".codex", "auth.json"), []byte("{}"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "codex"), []byte("#!/bin/sh\nexit 0\n"), 0o700))
+	require.NoError(t, os.Symlink(bwrap, filepath.Join(binDir, "bwrap")))
+	bin := filepath.Join(binDir, "agentsview")
+	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o700))
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	t.Setenv("PATH", binDir)
+	isolation, err := prepareLookupIsolation(t.Context(), clientCodex, clientDir, project, project, bin, runDir)
+	require.NoError(t, err)
 	isolation.removeCredentials()
 	_, err = os.Stat(filepath.Join(runDir, "home", ".codex", "auth.json"))
 	require.ErrorIs(t, err, os.ErrNotExist)
