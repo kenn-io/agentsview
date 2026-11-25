@@ -5,11 +5,11 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/ingest"
-	"go.kenn.io/agentsview/internal/parser"
 )
 
-// finalizeWithRebuildPRHistory carries saved usage-only evidence into a rebuild
-// before resolving new hostless selectors.
+// finalizeWithRebuildPRHistory carries a saved usage-only repository change
+// into a rebuild before resolving new hostless selectors. Saved links are
+// merged afterward by CopySessionMetadataFrom.
 func (e *Engine) finalizeWithRebuildPRHistory(ctx context.Context, candidate ingest.Candidate, options ingest.ContentOptions) (ingest.PreparedSession, error) {
 	if source, ok := e.archiveStore.(interface {
 		GetArtifactExportSession(context.Context, string) (*db.Session, error)
@@ -19,7 +19,6 @@ func (e *Engine) finalizeWithRebuildPRHistory(ctx context.Context, candidate ing
 			return ingest.PreparedSession{}, err
 		}
 		if previous != nil {
-			candidate.Session.PRLinks = parser.CombinePRLinks(previous.PRLinks, candidate.Session.PRLinks)
 			candidate.Session.PRRepositoryChanged = candidate.Session.PRRepositoryChanged || previous.PRRepositoryChanged
 		}
 	}
