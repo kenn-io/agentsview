@@ -297,6 +297,42 @@ func TestRawProjectionCommandPRLinks(t *testing.T) {
 	}
 }
 
+func TestRawProjectionUsageCopilotMergeRetainsPRLinks(t *testing.T) {
+	f := newProjectionFixture(t)
+	var err error
+	f.sink, err = NewRawProjectionStore(t.Context(), f.runtime, RawProjectionOptions{Tenant: f.tenant, Content: ingest.ContentOptions{ArchiveContent: config.ArchiveContentUsage}})
+	require.NoError(t, err)
+	first := projectionOutcome("start")
+	result := &first.Outcome.Results[0].Result
+	result.Session.Agent = parser.AgentVSCopilot
+	result.Session.ID = "vscopilot:portable"
+	result.Messages[0].Role = parser.RoleAssistant
+	result.Messages[0].Timestamp = time.Date(2026, 1, 1, 0, 0, 1, 0, time.UTC)
+	result.Messages[0].ToolCalls = []parser.ParsedToolCall{{ToolUseID: "call", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`}}
+	result.Messages[1].Timestamp = time.Date(2026, 1, 1, 0, 0, 2, 0, time.UTC)
+	result.Messages[1].ToolCalls = nil
+	m, receipt := f.accept(t, "device-a", "initial", "", parser.AgentVSCopilot)
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, first))
+	before, err := f.sink.Resolve(t.Context(), "vscopilot:portable")
+	require.NoError(t, err)
+	var links string
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, before.SessionID).Scan(&links))
+	want := []db.PRLink{{URL: "https://github.com/example/repo/pull/42", Host: "github.com", Repository: "example/repo", Number: 42}}
+	require.Equal(t, want, db.DecodePRLinks(links))
+	result.Messages = []parser.ParsedMessage{result.Messages[1], {Ordinal: 2, Role: parser.RoleAssistant, Content: "new answer", Timestamp: time.Date(2026, 1, 1, 0, 0, 3, 0, time.UTC)}}
+	m, _ = f.accept(t, "device-a", "partial", receipt.Receipt, parser.AgentVSCopilot)
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, first))
+	after, err := f.sink.Resolve(t.Context(), "vscopilot:portable")
+	require.NoError(t, err)
+	var payload []byte
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT payload FROM raw_content_revisions WHERE session_id=$1`, after.SessionID).Scan(&payload))
+	merged, err := decodeRawPayload(payload)
+	require.NoError(t, err)
+	require.Len(t, merged.Messages, 3)
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, after.SessionID).Scan(&links))
+	assert.Equal(t, want, db.DecodePRLinks(links))
+}
+
 func TestRawProjectionWithdrawnDeviceLinks(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

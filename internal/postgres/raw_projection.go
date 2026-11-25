@@ -270,8 +270,8 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			}
 			links = parser.CombinePRLinks(links, promptLinks, toolLinks)
 		}
-		freshLinks[sessionID] = links
-		prepared.Session.PRLinks = links
+		links = retainMergedUsagePRLinks(links, old.Session, decision.Action, exists && s.options.Content.ArchiveContent.UsageOnly())
+		freshLinks[sessionID], prepared.Session.PRLinks = links, links
 		prepared.Session.DataVersion = db.CurrentDataVersion()
 		branchID := rawDigest("branch-v1", group, source)
 		inserted, err := tx.ExecContext(ctx, `INSERT INTO raw_content_revisions(session_id,group_id,content_revision,payload) VALUES($1,$2,$3,$4) ON CONFLICT(session_id) DO NOTHING`, sessionID, group, revision, payload)

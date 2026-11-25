@@ -20,6 +20,13 @@ const (
 	rawGroupContentsSQL     = `SELECT id,raw_content_revision FROM sessions WHERE raw_group_id=$1 AND raw_group_id<>'' UNION SELECT session_id,content_revision FROM raw_session_branches WHERE group_id=$1 AND active ORDER BY 1`
 )
 
+func retainMergedUsagePRLinks(links []db.PRLink, old db.Session, action ingest.HistoryAction, usage bool) []db.PRLink {
+	if usage && action == ingest.HistoryMerge && old.DataVersion >= rawPRLinksDataVersion {
+		return parser.CombinePRLinks(links, old.PRLinks)
+	}
+	return links
+}
+
 func rawGroupHasStaleFriction(
 	ctx context.Context, tx *sql.Tx, group string,
 ) (bool, error) {
