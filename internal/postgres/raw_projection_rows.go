@@ -115,9 +115,9 @@ SELECT COALESCE((SELECT links_changed FROM updated),false)`, id, encoded, db.Cur
 	return changed, nil
 }
 
-// activeRawBranchPRLinks combines evidence from captures of the same revision.
+// activeRawBranchPRLinks combines evidence from active captures of a session.
 func activeRawBranchPRLinks(ctx context.Context, tx *sql.Tx, id string) ([]db.PRLink, bool, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT prior_payload FROM raw_session_branches WHERE session_id=$1 AND captured_session_id=$1 AND active ORDER BY branch_id`, id)
+	rows, err := tx.QueryContext(ctx, `SELECT prior_payload FROM raw_session_branches WHERE session_id=$1 AND active ORDER BY branch_id`, id)
 	if err != nil {
 		return nil, false, err
 	}

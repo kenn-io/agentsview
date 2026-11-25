@@ -443,7 +443,7 @@ func prCommandContext(file *syntax.File, depth int) (unsafe, hostAssigned bool, 
 				name = words[0]
 			}
 			if name == "cd" || name == "pushd" || name == "popd" || name == "eval" || name == "source" || name == "." || functions[name] || repositoryMutation(words) {
-				unsafe = true
+				unsafe, hostAssigned = true, hostAssigned || functions[name]
 			}
 			if name == "git" {
 				for _, word := range words[1:] {

@@ -147,6 +147,26 @@ func TestIncrementalSync_PromptPRLinks(t *testing.T) {
 	assert.Equal(t, []string{"https://github.com/owner/repo/pull/1"}, storedPRURLs(t, env.db, "prompt-append"))
 }
 
+func TestIncrementalSyncPRLinksWhenCheckoutAppears(t *testing.T) {
+	testutil.IsolateGit(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
+	const id = "01900000-0000-7000-8000-000000000092"
+	root := filepath.Join(t.TempDir(), "checkout")
+	path := env.writeCodexSession(t, filepath.Join("2024", "01", "15"), "rollout-20240115-"+id+".jsonl", testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaWithFieldsJSON(id, root, "user", tsEarly, nil),
+		testjsonl.CodexMsgJSON("user", "Review changes", tsEarlyS1),
+		testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call1", map[string]any{"cmd": "gh pr view 42"}, tsEarlyS5),
+	))
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+	assert.Empty(t, storedPRURLs(t, env.db, "codex:"+id))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".git"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "config"), []byte("[remote \"origin\"]\n url = https://github.com/example/repo.git\n"), 0o600))
+	env.engine = sync.NewEngine(t.Context(), env.db, sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {env.codexDir}}, Machine: "local"})
+	appendClaudeSplitLines(t, path, testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call2", map[string]any{"cmd": "gh pr view 43"}, "2024-01-01T10:00:06Z"))
+	env.engine.SyncPaths([]string{path})
+	assert.Equal(t, []string{"https://github.com/example/repo/pull/42", "https://github.com/example/repo/pull/43"}, storedPRURLs(t, env.db, "codex:"+id))
+}
+
 func TestIncrementalStructuredLinkAlsoInPrompt(t *testing.T) {
 	env := setupTestEnv(t)
 	path := env.writeClaudeSession(t, "proj", "shared-pr.jsonl", testjsonl.JoinJSONL(

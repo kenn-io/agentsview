@@ -387,6 +387,31 @@ func TestRawProjectionWithdrawnDeviceLinks(t *testing.T) {
 	}
 }
 
+func TestRawProjectionShortCaptureLinks(t *testing.T) {
+	f := newProjectionFixture(t)
+	var err error
+	f.sink, err = NewRawProjectionStore(t.Context(), f.runtime, RawProjectionOptions{Tenant: f.tenant, Content: ingest.ContentOptions{ArchiveContent: config.ArchiveContentTranscripts}})
+	require.NoError(t, err)
+	short := projectionOutcome("start")
+	short.Outcome.Results[0].Result.Messages[1].ToolCalls[0].InputJSON = `{"command":"gh pr view 41 -R example/repo"}`
+	a, receipt := f.accept(t, "device-a", "short", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, a), a, short))
+	long := projectionOutcome("start")
+	long.Outcome.Results[0].Result.Messages[1].ToolCalls[0].InputJSON = `{"command":"gh pr view 42 -R example/repo"}`
+	long.Outcome.Results[0].Result.Messages = append(long.Outcome.Results[0].Result.Messages, parser.ParsedMessage{Ordinal: 2, Role: parser.RoleUser, Content: "continue"})
+	b, _ := f.accept(t, "device-b", "long", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, b), b, long))
+	resolved, err := f.sink.Resolve(t.Context(), "codex:portable")
+	require.NoError(t, err)
+	var links string
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&links))
+	assert.Len(t, db.DecodePRLinks(links), 2)
+	a, _ = f.accept(t, "device-a", "withdrawn", receipt.Receipt)
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, a), a, rawderive.ParsedManifest{Outcome: parser.ParseOutcome{ResultSetComplete: true, ExcludedSessionIDs: []string{"codex:portable"}}}))
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&links))
+	assert.Equal(t, []db.PRLink{{URL: "https://github.com/example/repo/pull/42", Host: "github.com", Repository: "example/repo", Number: 42}}, db.DecodePRLinks(links))
+}
+
 func prepareRetainedToolLinks(t *testing.T) (projectionFixture, rawderive.ParsedManifest, rawsync.CommitResult, RawIdentity, RawIdentity) {
 	t.Helper()
 	f := newProjectionFixture(t)
