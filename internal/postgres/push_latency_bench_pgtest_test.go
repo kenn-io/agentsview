@@ -30,6 +30,8 @@ type latencyProxy struct {
 	delay      time.Duration
 	roundTrips atomic.Int64
 	wg         sync.WaitGroup
+	mu         sync.Mutex
+	conns      []net.Conn
 }
 
 func startLatencyProxy(tb testing.TB, pgURL string, delay time.Duration) *latencyProxy {
@@ -54,6 +56,12 @@ func startLatencyProxy(tb testing.TB, pgURL string, delay time.Duration) *latenc
 	proxy.wg.Go(proxy.accept)
 	tb.Cleanup(func() {
 		_ = listener.Close()
+		// Close relayed sockets too, so a stalled write cannot block cleanup.
+		proxy.mu.Lock()
+		for _, conn := range proxy.conns {
+			_ = conn.Close()
+		}
+		proxy.mu.Unlock()
 		proxy.wg.Wait()
 	})
 	return proxy
@@ -70,6 +78,9 @@ func (p *latencyProxy) accept() {
 			_ = client.Close()
 			continue
 		}
+		p.mu.Lock()
+		p.conns = append(p.conns, client, server)
+		p.mu.Unlock()
 		p.wg.Go(func() { p.serve(client, server) })
 	}
 }
