@@ -71,7 +71,10 @@ func (p *latencyProxy) serve(client, server net.Conn) {
 	var serverSpoke atomic.Bool
 	serverSpoke.Store(true)
 	chunks := make(chan delayedChunk, 4096)
+	done := make(chan struct{})
+	var closeOnce sync.Once
 	closeBoth := func() {
+		closeOnce.Do(func() { close(done) })
 		_ = client.Close()
 		_ = server.Close()
 	}
@@ -85,7 +88,11 @@ func (p *latencyProxy) serve(client, server net.Conn) {
 				if serverSpoke.Swap(false) {
 					p.roundTrips.Add(1)
 				}
-				chunks <- delayedChunk{due: time.Now().Add(p.delay), data: append([]byte(nil), buf[:n]...)}
+				select {
+				case chunks <- delayedChunk{due: time.Now().Add(p.delay), data: append([]byte(nil), buf[:n]...)}:
+				case <-done:
+					return
+				}
 			}
 			if err != nil {
 				return
@@ -164,23 +171,31 @@ type latencyPushRun struct {
 	elapsed    time.Duration
 }
 
-// firstPushThroughProxy pushes a freshly seeded archive into a new schema
-// through proxy and reports the push alone, without schema setup.
-func firstPushThroughProxy(tb testing.TB, pgURL, schema string, proxy *latencyProxy, sessions, messages int) latencyPushRun {
+// pushNewSessionsThroughProxy pushes the given number of new sessions from a
+// freshly seeded archive into a new schema through proxy and reports the push
+// alone, without schema setup. With warm set, a one-session push runs first,
+// so the measured push excludes the work every target's first push does once,
+// such as publishing model pricing.
+func pushNewSessionsThroughProxy(tb testing.TB, pgURL, schema string, proxy *latencyProxy, sessions, messages int, warm bool) latencyPushRun {
 	tb.Helper()
 	local, err := db.Open(tb.Context(), filepath.Join(tb.TempDir(), "archive.db"))
 	require.NoError(tb, err)
 	tb.Cleanup(func() { require.NoError(tb, local.Close()) })
-	seedLatencyFixture(tb, local, "latency-session", sessions, messages)
 
 	syncer, err := New(tb.Context(), proxy.url(tb, pgURL), schema, local, "latency", true, storage.PusherOptions{})
 	require.NoError(tb, err)
 	tb.Cleanup(func() { require.NoError(tb, syncer.Close()) })
 	require.NoError(tb, syncer.EnsureSchema(tb.Context()))
+	if warm {
+		seedLatencyFixture(tb, local, "latency-warm", 1, 2)
+		_, err := syncer.Push(tb.Context(), false, nil)
+		require.NoError(tb, err)
+	}
+	seedLatencyFixture(tb, local, "latency-session", sessions, messages)
 
 	before := proxy.roundTrips.Load()
 	start := time.Now()
-	result, err := syncer.Push(tb.Context(), true, nil)
+	result, err := syncer.Push(tb.Context(), false, nil)
 	elapsed := time.Since(start)
 	require.NoError(tb, err)
 	require.Zero(tb, result.Errors)
@@ -198,31 +213,39 @@ func dropLatencySchema(tb testing.TB, pgURL, schema string) {
 	require.NoError(tb, err)
 }
 
-// BenchmarkPGPushFirstLoadLatency measures a first push of new sessions over
-// a link that adds latency to every round trip. Run it with -benchtime=1x;
-// a higher count repeats the whole first load.
+// BenchmarkPGPushFirstLoadLatency measures pushing new sessions over a link
+// that adds latency to every round trip: "first" is a target's first push,
+// and "warm" pushes the same sessions after a one-session push, so it measures
+// only the session writes. Run it with -benchtime=1x; a higher count repeats
+// the whole load.
 func BenchmarkPGPushFirstLoadLatency(b *testing.B) {
 	const sessions, messages = 100, 20
 	for _, delay := range []time.Duration{20 * time.Millisecond, 100 * time.Millisecond} {
-		b.Run(fmt.Sprintf("latency=%s", delay), func(b *testing.B) {
-			pgURL := testPGURL(b)
-			proxy := startLatencyProxy(b, pgURL, delay)
-			var trips int64
-			var elapsed time.Duration
-			b.ResetTimer()
-			for iteration := range b.N {
-				b.StopTimer()
-				schema := fmt.Sprintf("push_latency_%d", iteration)
-				dropLatencySchema(b, pgURL, schema)
-				run := firstPushThroughProxy(b, pgURL, schema, proxy, sessions, messages)
-				trips += run.roundTrips
-				elapsed += run.elapsed
-				dropLatencySchema(b, pgURL, schema)
+		for _, warm := range []bool{false, true} {
+			push := "first"
+			if warm {
+				push = "warm"
 			}
-			b.ReportMetric(0, "ns/op")
-			b.ReportMetric(float64(trips)/float64(b.N*sessions), "round-trips/session")
-			b.ReportMetric(float64(b.N*sessions)/elapsed.Minutes(), "sessions/min")
-			b.ReportMetric(elapsed.Seconds()/float64(b.N), "push-s/op")
-		})
+			b.Run(fmt.Sprintf("latency=%s/push=%s", delay, push), func(b *testing.B) {
+				pgURL := testPGURL(b)
+				proxy := startLatencyProxy(b, pgURL, delay)
+				// The timer also covers seeding, so calibration sees each slow
+				// iteration; the push alone is reported as push-s/op.
+				var trips int64
+				var elapsed time.Duration
+				for iteration := range b.N {
+					schema := fmt.Sprintf("push_latency_%d", iteration)
+					dropLatencySchema(b, pgURL, schema)
+					run := pushNewSessionsThroughProxy(b, pgURL, schema, proxy, sessions, messages, warm)
+					trips += run.roundTrips
+					elapsed += run.elapsed
+					dropLatencySchema(b, pgURL, schema)
+				}
+				b.ReportMetric(0, "ns/op")
+				b.ReportMetric(float64(trips)/float64(b.N*sessions), "round-trips/session")
+				b.ReportMetric(float64(b.N*sessions)/elapsed.Minutes(), "sessions/min")
+				b.ReportMetric(elapsed.Seconds()/float64(b.N), "push-s/op")
+			})
+		}
 	}
 }

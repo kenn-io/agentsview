@@ -1245,14 +1245,22 @@ commit links (which can outlive their session) are read once per transaction.
 Sessions keep their order within the transaction. Queued statements are sent
 before any session that takes the sequential path, because a session's upsert
 can read rows an earlier session wrote, such as a Codex thread's trash state.
-The batch also sends early once it holds 8 MiB.
+The batch also sends early once it holds 8 MiB, even partway through a
+transcript.
+
+The last batch also confirms that the sessions were still new when written:
+no exclusion applies to any of their tombstone IDs, as the sequential path
+rechecks after its upsert, and none has pinned messages. Pins can exist only if
+another push from the same archive created the row after the existence check;
+the sequential rewrite then preserves them.
 
 Sessions PostgreSQL already has, sessions an exclusion may apply to, and
 usage-only archives keep the sequential path. If any batched statement fails,
 or a session's upsert does not create its row (for example, another machine
 created it after the existence check), the transaction rolls back and is
 rewritten one statement at a time, which applies the usual per-session error
-handling. The batch's writers report zero affected rows for every statement,
+handling; a session that fails this way is retried alone, batched and then
+sequentially. The batch's writers report zero affected rows for every statement,
 which is the true count only because nothing exists to delete for a new
 session; do not queue writes for sessions PostgreSQL already has.
 

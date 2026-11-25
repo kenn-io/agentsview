@@ -33,13 +33,14 @@ type pgBatchExecer struct {
 	tags  []pgconn.CommandTag
 }
 
-// ExecContext queues the statement; errors surface when the batch is sent.
-// The result reports zero affected rows because the statement has not run.
-// Only writes for sessions PostgreSQL has no row for are queued, and the
+// ExecContext queues the statement, and sends the batch once it holds
+// newSessionBatchFlushBytes; statement errors surface when the batch is sent.
+// The result reports zero affected rows because the statement may not have
+// run. Only writes for sessions PostgreSQL has no row for are queued, and the
 // writers read affected rows only from DELETEs on tables that reference
 // sessions, where such a session has nothing to delete, so zero is also what
 // those statements report once they run.
-func (e *pgBatchExecer) ExecContext(_ context.Context, query string, args ...any) (sql.Result, error) {
+func (e *pgBatchExecer) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	e.batch.Queue(query, args...)
 	e.bytes += len(query)
 	for _, arg := range args {
@@ -50,6 +51,11 @@ func (e *pgBatchExecer) ExecContext(_ context.Context, query string, args ...any
 			e.bytes += len(v)
 		default:
 			e.bytes += 8
+		}
+	}
+	if e.bytes >= newSessionBatchFlushBytes {
+		if err := e.send(ctx); err != nil {
+			return nil, err
 		}
 	}
 	return driver.RowsAffected(0), nil
@@ -67,7 +73,15 @@ func (e *pgBatchExecer) send(ctx context.Context) error {
 	}
 	queued := e.batch
 	e.batch, e.bytes = &pgx.Batch{}, 0
-	return e.conn.Raw(func(driverConn any) error {
+	return e.conn.Raw(func(driverConn any) (err error) {
+		// A panic escaping Raw would make database/sql close the
+		// connection while the transaction still holds it, which blocks
+		// forever; report it as an error instead.
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("sending pg batch: panic: %v", r)
+			}
+		}()
 		conn, ok := driverConn.(*stdlib.Conn)
 		if !ok {
 			return fmt.Errorf("unexpected pg driver connection %T", driverConn)
@@ -116,12 +130,13 @@ type newSessionBatch struct {
 // on the sequential path.
 func (s *Sync) prepareNewSessionBatch(
 	ctx context.Context, conn *sql.Conn, tx *sql.Tx, batch []db.Session,
+	comparisons *pushMessageComparison,
 	markerID string, legacyMarkerMachines []string, externalParents map[string]string,
 ) (*newSessionBatch, error) {
 	if s.local.ArchiveContent().UsageOnly() {
 		return nil, nil
 	}
-	created, err := s.chooseNewSessions(ctx, tx, batch, markerID, legacyMarkerMachines)
+	created, err := s.chooseNewSessions(ctx, tx, batch, comparisons, markerID, legacyMarkerMachines)
 	if err != nil || len(created) == 0 {
 		return nil, wrapNewSessionBatchErr(err)
 	}
@@ -148,16 +163,13 @@ func (b *newSessionBatch) has(sess db.Session) bool {
 	return b.created[sess.ID]
 }
 
-// queue adds sess's writes, sending early once the batch holds enough data.
+// queue adds sess's writes.
 func (b *newSessionBatch) queue(ctx context.Context, sess db.Session) error {
 	write, err := b.sync.queueNewSession(ctx, b.exec, sess, b.markerID, b.legacyMarkerMachines, b.externalParents[sess.ID], b.published[sess.ID])
 	if err != nil {
 		return wrapNewSessionBatchErr(fmt.Errorf("session %s: %w", sess.ID, err))
 	}
 	b.writes = append(b.writes, write)
-	if b.exec.bytes >= newSessionBatchFlushBytes {
-		return b.send(ctx)
-	}
 	return nil
 }
 
@@ -169,11 +181,29 @@ func (b *newSessionBatch) send(ctx context.Context) error {
 	return wrapNewSessionBatchErr(b.exec.send(ctx))
 }
 
-// finish sends the remaining statements and confirms that every session's
-// upsert created its row. It returns the sessions the batch wrote.
+// finish sends the remaining statements and confirms that the batch wrote
+// only new sessions: each upsert affected its row, no exclusion applies to any
+// of the session's tombstone IDs, and no session has pinned messages, which a
+// row created since the sessions were chosen could hold. The sequential path
+// rechecks exclusions after its upsert and preserves pins. Both checks ride
+// in the last batch. finish returns the sessions the batch wrote.
 func (b *newSessionBatch) finish(ctx context.Context) ([]newSessionWrite, error) {
-	if b == nil {
-		return nil, nil
+	if b == nil || len(b.writes) == 0 {
+		return nil, b.send(ctx)
+	}
+	sessions := make([]db.Session, len(b.writes))
+	ids := make([]string, len(b.writes))
+	for i, write := range b.writes {
+		sessions[i], ids[i] = write.session, write.session.ID
+	}
+	excludedQuery, excludedArgs := pgExcludedSessionIDsQuery(slices.Values(sessions), b.markerID, b.sync.machine, b.legacyMarkerMachines)
+	excluded := b.exec.position()
+	if _, err := b.exec.ExecContext(ctx, excludedQuery, excludedArgs...); err != nil {
+		return nil, wrapNewSessionBatchErr(err)
+	}
+	pinned := b.exec.position()
+	if _, err := b.exec.ExecContext(ctx, `SELECT 1 FROM pinned_messages WHERE session_id = ANY($1)`, ids); err != nil {
+		return nil, wrapNewSessionBatchErr(err)
 	}
 	if err := b.send(ctx); err != nil {
 		return nil, err
@@ -182,6 +212,12 @@ func (b *newSessionBatch) finish(ctx context.Context) ([]newSessionWrite, error)
 		if b.exec.tags[write.upsert].RowsAffected() != 1 {
 			return nil, wrapNewSessionBatchErr(fmt.Errorf("session %s was not created", write.session.ID))
 		}
+	}
+	if b.exec.tags[excluded].RowsAffected() != 0 {
+		return nil, wrapNewSessionBatchErr(errors.New("an exclusion applies to a batched session"))
+	}
+	if b.exec.tags[pinned].RowsAffected() != 0 {
+		return nil, wrapNewSessionBatchErr(errors.New("a batched session already has pinned messages"))
 	}
 	return b.writes, nil
 }
@@ -194,18 +230,30 @@ func wrapNewSessionBatchErr(err error) error {
 }
 
 // chooseNewSessions returns the IDs of the batch's sessions that PostgreSQL
-// has no row for and no exclusion applies to.
+// has no row for and no exclusion applies to. The comparison preload, when
+// present, already read the friction columns of every existing session, so
+// incremental pushes need no extra query.
 func (s *Sync) chooseNewSessions(
 	ctx context.Context, tx *sql.Tx, batch []db.Session,
+	comparisons *pushMessageComparison,
 	markerID string, legacyMarkerMachines []string,
 ) (map[string]bool, error) {
-	ids := make([]string, len(batch))
-	for i, sess := range batch {
-		ids[i] = sess.ID
-	}
-	existing, err := existingPGSessionIDs(ctx, tx, ids)
-	if err != nil {
-		return nil, err
+	var existing map[string]bool
+	if comparisons != nil {
+		existing = make(map[string]bool, len(comparisons.Friction))
+		for id := range comparisons.Friction {
+			existing[id] = true
+		}
+	} else {
+		ids := make([]string, len(batch))
+		for i, sess := range batch {
+			ids[i] = sess.ID
+		}
+		var err error
+		existing, err = existingPGSessionIDs(ctx, tx, ids)
+		if err != nil {
+			return nil, err
+		}
 	}
 	candidates := slices.DeleteFunc(slices.Clone(batch), func(sess db.Session) bool { return existing[sess.ID] })
 	excluded, err := readPGExcludedSessionIDs(ctx, tx, slices.Values(candidates), markerID, s.machine, legacyMarkerMachines)

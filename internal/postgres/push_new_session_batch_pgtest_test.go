@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -201,6 +202,12 @@ func dumpNewSessionBatchTables(t *testing.T, syncer *Sync) map[string][]string {
 		if volatile == nil {
 			volatile = []string{}
 		}
+		var exists bool
+		require.NoError(t, syncer.pg.QueryRowContext(t.Context(), `SELECT to_regclass($1) IS NOT NULL`, table.name).Scan(&exists))
+		if !exists {
+			// CockroachDB targets have no usage change journal.
+			continue
+		}
 		rows, err := syncer.pg.QueryContext(t.Context(),
 			`SELECT (to_jsonb(t) - $1::text[])::text FROM `+table.name+` t ORDER BY 1`, volatile)
 		require.NoError(t, err, table.name)
@@ -303,9 +310,24 @@ func TestPGPushNewSessionBatchYieldsToConcurrentOwner(t *testing.T) {
 	assert.Equal(t, 12, otherMessages)
 }
 
+// skipOnCockroach skips tests whose setup or concurrency assumptions hold
+// only on PostgreSQL.
+func skipOnCockroach(t *testing.T, pgURL, reason string) {
+	t.Helper()
+	pg, err := sql.Open("pgx", pgURL)
+	require.NoError(t, err)
+	defer pg.Close()
+	var version string
+	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT version()`).Scan(&version))
+	if strings.Contains(version, "CockroachDB") {
+		t.Skip(reason)
+	}
+}
+
 func TestPGPushNewSessionBatchFailureRetriesSessionsAlone(t *testing.T) {
 	ctx := t.Context()
 	pgURL := testPGURL(t)
+	skipOnCockroach(t, pgURL, "CockroachDB triggers cannot read NEW")
 	results := map[bool]storage.PushResult{}
 	for _, sequential := range []bool{false, true} {
 		local := testDB(t)
@@ -342,4 +364,103 @@ func TestPGPushNewSessionBatchFailureRetriesSessionsAlone(t *testing.T) {
 	assert.Equal(t, results[true].Errors, results[false].Errors)
 	assert.Equal(t, results[true].SessionsPushed, results[false].SessionsPushed)
 	assert.Equal(t, results[true].MessagesPushed, results[false].MessagesPushed)
+}
+
+func TestPGPushNewSessionBatchKeepsPinsOfConcurrentSameOwnerRow(t *testing.T) {
+	for _, sequential := range []bool{false, true} {
+		t.Run(fmt.Sprintf("sequential=%t", sequential), func(t *testing.T) {
+			ctx := t.Context()
+			pgURL := testPGURL(t)
+			local := testDB(t)
+			seedLatencyFixture(t, local, "pinned", 3, 0)
+			messages := []db.Message{}
+			for ordinal, content := range []string{"open the plan", "explain the join", "rewrite the query", "run it again"} {
+				messages = append(messages, db.Message{SessionID: "pinned-1", Ordinal: ordinal, Role: "user", Content: content, ContentLength: len(content)})
+			}
+			require.NoError(t, local.InsertMessages(ctx, messages))
+			schema := fmt.Sprintf("pins_sequential_%t", sequential)
+			syncer, _ := newNewSessionBatchSync(t, pgURL, schema, local, sequential)
+			markerID, err := syncer.pushMarkerID(ctx)
+			require.NoError(t, err)
+
+			other, err := sql.Open("pgx", pgURL)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, other.Close()) })
+			var once sync.Once
+			// Another push from this archive publishes an older transcript of
+			// a session after the batch chose it, and a reader pins a message
+			// that the current transcript holds at another ordinal.
+			hook := func() {
+				once.Do(func() {
+					_, err := other.ExecContext(ctx, `INSERT INTO `+schema+`.sessions
+						(id, machine, owner_marker, project, agent, first_message, message_count, user_message_count)
+						VALUES ('pinned-1', 'latency', $1, 'proj', 'claude', 'earlier', 2, 2)`, markerID)
+					require.NoError(t, err)
+					_, err = other.ExecContext(ctx, `INSERT INTO `+schema+`.messages (session_id, ordinal, role, content, content_length)
+						VALUES ('pinned-1', 0, 'user', 'open the plan', 13), ('pinned-1', 3, 'user', 'explain the join', 16)`)
+					require.NoError(t, err)
+					_, err = other.ExecContext(ctx, `INSERT INTO `+schema+`.pinned_messages (session_id, message_id, ordinal, note)
+						VALUES ('pinned-1', 3, 3, 'keep this')`)
+					require.NoError(t, err)
+				})
+			}
+			if sequential {
+				hook()
+			} else {
+				syncer.beforeNewSessionBatch = hook
+			}
+
+			result, err := syncer.Push(ctx, false, nil)
+			require.NoError(t, err)
+			assert.Zero(t, result.Errors)
+			assert.Equal(t, 3, result.SessionsPushed)
+			var note string
+			var ordinal int
+			require.NoError(t, syncer.pg.QueryRowContext(ctx,
+				`SELECT note, ordinal FROM pinned_messages WHERE session_id = 'pinned-1'`).Scan(&note, &ordinal))
+			assert.Equal(t, "keep this", note)
+			assert.Equal(t, 1, ordinal, "the pin follows its message")
+		})
+	}
+}
+
+func TestPGPushNewSessionBatchHonorsLateAliasExclusion(t *testing.T) {
+	ctx := t.Context()
+	pgURL := testPGURL(t)
+	// A serializable transaction cannot see an exclusion committed after
+	// it began, on either path.
+	skipOnCockroach(t, pgURL, "CockroachDB transactions read from one snapshot")
+	local := testDB(t)
+	seedLatencyFixture(t, local, "plain", 2, 2)
+	filePath := "logs/session_abc/meta.json"
+	require.NoError(t, local.UpsertSession(ctx, db.Session{
+		ID: "vibe:abc", Project: "proj", Machine: "latency", Agent: "vibe", FilePath: &filePath,
+		MessageCount: 1, UserMessageCount: 1, CreatedAt: "2026-01-01T00:00:00Z",
+	}))
+	require.NoError(t, local.InsertMessages(ctx, []db.Message{{SessionID: "vibe:abc", Ordinal: 0, Role: "user", Content: "hello"}}))
+	syncer, _ := newNewSessionBatchSync(t, pgURL, "agentsview", local, false)
+
+	other, err := sql.Open("pgx", pgURL)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, other.Close()) })
+	var once sync.Once
+	// The session is purged under its fallback ID after the batch chose it.
+	syncer.beforeNewSessionBatch = func() {
+		once.Do(func() {
+			_, err := other.ExecContext(ctx, `INSERT INTO agentsview.excluded_sessions (id) VALUES ('vibe:session_abc')`)
+			require.NoError(t, err)
+		})
+	}
+
+	result, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Zero(t, result.Errors)
+	var published int
+	require.NoError(t, syncer.pg.QueryRowContext(ctx,
+		`SELECT count(*) FROM sessions WHERE id = 'vibe:abc'`).Scan(&published))
+	assert.Zero(t, published, "the purged session stays unpublished")
+	var plain int
+	require.NoError(t, syncer.pg.QueryRowContext(ctx,
+		`SELECT count(*) FROM sessions WHERE id LIKE 'plain-%'`).Scan(&plain))
+	assert.Equal(t, 2, plain)
 }

@@ -1458,6 +1458,9 @@ func (s *Sync) pushBatchAttempt(
 			"begin pg tx: %w", err,
 		)
 	}
+	// End the transaction before conn.Close, which waits for it, even if
+	// the attempt panics. After a commit this is a no-op.
+	defer func() { _ = tx.Rollback() }()
 	if err := s.migrateCodexPages(ctx, tx, batch, markerID, legacyMarkerMachines); err != nil {
 		_ = tx.Rollback()
 		return batchResult{}, err
@@ -1486,7 +1489,7 @@ func (s *Sync) pushBatchAttempt(
 
 	var newSessions *newSessionBatch
 	if batchNewSessions {
-		newSessions, err = s.prepareNewSessionBatch(ctx, conn, tx, batch, markerID, legacyMarkerMachines, externalParents)
+		newSessions, err = s.prepareNewSessionBatch(ctx, conn, tx, batch, comparisons, markerID, legacyMarkerMachines, externalParents)
 		if err != nil {
 			_ = tx.Rollback()
 			return batchResult{}, err
@@ -1644,6 +1647,8 @@ func (s *Sync) pushBatchAttempt(
 		n++
 		msgs += msgCount
 	}
+	// Batched sessions are recorded after the sequential ones; consumers of
+	// pushed do not depend on its order.
 	written, err := newSessions.finish(ctx)
 	if err != nil {
 		_ = tx.Rollback()
