@@ -190,7 +190,7 @@ func (p *codexProvider) ReconciliationSourceRank(source SourceRef) Reconciliatio
 	if p.spec.agent != AgentCodex {
 		return ReconciliationSourceRank{}
 	}
-	return codexSourceRank(source)
+	return CodexSourceRank(source)
 }
 
 // SourceForReconciliation allows a rollout restored after discovery to use
@@ -1711,7 +1711,8 @@ func CodexSourceKey(agent AgentType, uuid string) string {
 	return codexSourceKey(agent, uuid)
 }
 
-func codexSourceRank(source SourceRef) ReconciliationSourceRank {
+// CodexSourceRank ranks a source for duplicate selection.
+func CodexSourceRank(source SourceRef) ReconciliationSourceRank {
 	src, ok := source.Opaque.(codexSource)
 	if !ok {
 		return ReconciliationSourceRank{}
@@ -1730,16 +1731,11 @@ func codexSourceRank(source SourceRef) ReconciliationSourceRank {
 	return ReconciliationSourceRank{}
 }
 
-// CodexSourceRank ranks a source for duplicate selection.
-func CodexSourceRank(source SourceRef) ReconciliationSourceRank {
-	return codexSourceRank(source)
-}
-
 // preferCodexSource ranks labeled copies by recency and keeps ordinary layout precedence.
 func preferCodexSource(candidate, current SourceRef) bool {
 	cand := candidate.Opaque.(codexSource)
 	curr := current.Opaque.(codexSource)
-	candRank, currRank := codexSourceRank(candidate), codexSourceRank(current)
+	candRank, currRank := CodexSourceRank(candidate), CodexSourceRank(current)
 	if candRank.Class == 2 || currRank.Class == 2 {
 		if candRank.Class != currRank.Class {
 			return candRank.Class > currRank.Class

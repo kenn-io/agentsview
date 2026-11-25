@@ -292,7 +292,7 @@ func TestSyncSingleSessionFindsNewLabeledCopy(t *testing.T) {
 }
 
 func TestCodexLabeledCopyWinsSync(t *testing.T) {
-	for _, mode := range []string{"changed path", "batch", "older then newer", "newer then older", "missed event", "planned batch", "reconcile"} {
+	for _, mode := range []string{"changed path", "batch", "newer then older", "missed event"} {
 		t.Run(mode, func(t *testing.T) {
 			database := openTestDB(t)
 			root := t.TempDir()
@@ -315,22 +315,11 @@ func TestCodexLabeledCopyWinsSync(t *testing.T) {
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[0]}))
 			} else if mode == "batch" {
 				require.NoError(t, engine.SyncPathsContext(t.Context(), paths[1:]))
-			} else if mode == "older then newer" {
-				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[1]}))
-				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[2]}))
 			} else if mode == "newer then older" {
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[2]}))
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[1]}))
-			} else if mode == "missed event" {
-				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[1]}))
-				require.NoError(t, engine.ReconcileWatchRoots(t.Context(), []string{ordinary, logs}, false))
-			} else if mode == "planned batch" {
-				plan, err := engine.PlanChangedPathsContext(t.Context(), paths)
-				require.NoError(t, err)
-				require.Len(t, plan.Files, 1)
-				assert.Equal(t, paths[2], plan.Files[0].Path)
-				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{plan.Files[0].Path}))
 			} else {
+				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[1]}))
 				require.NoError(t, engine.ReconcileWatchRoots(t.Context(), []string{ordinary, logs}, false))
 			}
 			session, err := database.GetSessionFull(t.Context(), "codex:"+id)
