@@ -1537,6 +1537,10 @@ func (s codexSourceSet) sourceRef(
 	if requireRegular && !IsRegularFile(path) {
 		return SourceRef{}, false
 	}
+	labelRoot, label := CodexSourceLabelRoot(s.roots, path)
+	if label != "" {
+		root = labelRoot
+	}
 	return SourceRef{
 		Provider:       s.agent,
 		Key:            codexSourceKey(s.agent, uuid),
@@ -1547,7 +1551,7 @@ func (s codexSourceSet) sourceRef(
 			Path:   path,
 			UUID:   uuid,
 			Layout: layout,
-			Label:  CodexSourceLabelForRoots(s.roots, path),
+			Label:  label,
 		},
 	}, true
 }
@@ -1565,6 +1569,10 @@ func (s codexSourceSet) directPathSource(
 	if requireRegular && !IsRegularFile(path) {
 		return SourceRef{}, false
 	}
+	labelRoot, label := CodexSourceLabelRoot(s.roots, path)
+	if label != "" {
+		root = labelRoot
+	}
 	return SourceRef{
 		Provider:       s.agent,
 		Key:            path,
@@ -1573,7 +1581,7 @@ func (s codexSourceSet) directPathSource(
 		Opaque: codexSource{
 			Root:  root,
 			Path:  path,
-			Label: CodexSourceLabelForRoots(s.roots, path),
+			Label: label,
 		},
 	}, true
 }

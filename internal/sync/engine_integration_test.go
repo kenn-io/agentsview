@@ -7480,12 +7480,12 @@ func TestSyncSingleSessionCodexPreservesStoredArchivedDuplicate(t *testing.T) {
 
 	uuid := "f7a8b9ca-7890-1234-ef01-456789012347"
 	archivedContent := testjsonl.NewSessionBuilder().
-		AddCodexMeta(tsEarly, uuid, "/workspace/project-a/api", "user").
+		AddCodexMeta(tsEarly, uuid, "/home/user/code/api", "user").
 		AddCodexMessage(tsEarlyS1, "user", "Archived copy").
 		AddCodexMessage(tsEarlyS5, "assistant", "Archived reply").
 		String()
 	staleLiveContent := testjsonl.NewSessionBuilder().
-		AddCodexMeta(tsEarly, uuid, "/workspace/project-a/api", "user").
+		AddCodexMeta(tsEarly, uuid, "/home/user/code/api", "user").
 		AddCodexMessage(tsEarlyS1, "user", "Stale live copy").
 		String()
 
