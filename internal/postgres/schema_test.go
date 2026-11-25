@@ -710,6 +710,16 @@ func TestCheckSchemaCompatRequiresDeletionCause(t *testing.T) {
 	assert.Contains(t, err.Error(), "sessions table missing required columns")
 }
 
+func TestCheckSchemaCompatRequiresExternalParentSessionID(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, nil)
+	state.execErrors = []schemaProbeQueryError{{
+		contains: "external_parent_session_id",
+		err:      &pgconn.PgError{Code: "42703", Message: `column "external_parent_session_id" does not exist`},
+	}}
+	err := CheckSchemaCompat(t.Context(), pg)
+	require.ErrorContains(t, err, "external_parent_session_id")
+}
+
 func TestCheckSchemaCompatRequiresParserParentSessionID(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
 	state.execErrors = []schemaProbeQueryError{{

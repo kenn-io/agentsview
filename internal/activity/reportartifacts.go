@@ -50,6 +50,7 @@ type SourceProbe struct {
 	MaxUsageID                int64  `json:"max_usage_id"`
 	MaxPricingUpdated         string `json:"max_pricing_updated"`
 	ProjectIdentityGeneration int64  `json:"project_identity_generation"`
+	UsageChangeRevision       int64  `json:"usage_change_revision,omitempty"`
 	PreparedUsageFingerprint  string `json:"prepared_usage_fingerprint,omitempty"`
 }
 

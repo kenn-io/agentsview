@@ -3,6 +3,7 @@
 package postgres
 
 import (
+	"database/sql"
 	"fmt"
 	"testing"
 	"time"
@@ -444,4 +445,52 @@ func TestPGActivityReportKeptHiddenRunLink(t *testing.T) {
 	assert.Equal(t, 1, after.Report.InteractivePeak.Agents)
 	assert.Empty(t, after.Sessions)
 	assert.Zero(t, after.Report.Totals.AgentMinutes)
+}
+
+func TestPGActivityReportExternalParentProvenance(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	local, syncer, store := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "parent", "project-a", "2026-06-12")
+	pgKeptSession(t, local, "child", "project-a", "2026-06-14")
+	_, err := local.SetSessionExternalParent(ctx, "child", "parent")
+	require.NoError(t, err)
+	pgKeptPush(t, syncer, false)
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	assert.Equal(t, 1, pgKeptBuild(t, store, f, q, true).Report.InteractivePeak.Agents)
+	pgKeptBuild(t, store, f, q, false)
+
+	// An older archive can retain the effective parent after its launcher link disappears.
+	raw, err := sql.Open("sqlite3", local.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
+	_, err = raw.ExecContext(ctx, `DELETE FROM session_external_parents WHERE session_id = 'child'`)
+	require.NoError(t, err)
+	pgKeptPush(t, syncer, false)
+	after := pgKeptBuild(t, store, f, q, true)
+	assert.Zero(t, after.Report.InteractivePeak.Agents)
+	store.runtimeState().activityKept.DeleteSlots(func(string) bool { return true })
+	store.runtimeState().activityInputs.DeleteSlots(func(string) bool { return true })
+	requirePGKeptEqual(t, after, pgKeptBuild(t, store, f, q, true))
+	var parent, external sql.NullString
+	require.NoError(t, store.DB().QueryRowContext(ctx, `SELECT parent_session_id, external_parent_session_id FROM sessions WHERE id='child'`).Scan(&parent, &external))
+	assert.Equal(t, "parent", parent.String)
+	assert.False(t, external.Valid)
+}
+
+func TestPGActivityReportSourceProbeTracksParentProvenance(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	local, syncer, store := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "child", "project-a", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	before, err := store.ActivityReportSourceProbe(ctx)
+	require.NoError(t, err)
+	_, err = store.DB().ExecContext(ctx, `UPDATE sessions SET external_parent_session_id = 'parent' WHERE id = 'child'`)
+	require.NoError(t, err)
+	after, err := store.ActivityReportSourceProbe(ctx)
+	require.NoError(t, err)
+	assert.Greater(t, after.UsageChangeRevision, before.UsageChangeRevision)
+	after.UsageChangeRevision = before.UsageChangeRevision
+	assert.Equal(t, before, after)
 }

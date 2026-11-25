@@ -74,3 +74,19 @@ func TestActivityReportSourceProbeIgnoresPricingMeta(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "2026-07-01T00:00:02.000Z", probe.MaxPricingUpdated)
 }
+
+func TestActivityReportSourceProbeTracksParentChanges(t *testing.T) {
+	database := testDB(t)
+	ctx := t.Context()
+	insertSession(t, database, "child", "project")
+	insertSession(t, database, "parent", "project")
+	_, err := database.getWriter().ExecContext(ctx, `UPDATE sessions SET parent_session_id = 'parent', relationship_type = 'subagent' WHERE id = 'child'`)
+	require.NoError(t, err)
+	before, err := database.ActivityReportSourceProbe(ctx)
+	require.NoError(t, err)
+	_, err = database.SetSessionExternalParent(ctx, "child", "parent")
+	require.NoError(t, err)
+	after, err := database.ActivityReportSourceProbe(ctx)
+	require.NoError(t, err)
+	assert.Greater(t, after.UsageChangeRevision, before.UsageChangeRevision)
+}

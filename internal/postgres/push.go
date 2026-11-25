@@ -28,6 +28,7 @@ const (
 	lastPushBoundaryStateKey               = "last_push_boundary_state"
 	lastPushSourceArchiveIDKey             = "pg_source_archive_id_v1"
 	lastPushTargetFingerprintKey           = "pg_target_fingerprint_v1"
+	externalParentBackfillStateKey         = "pg_external_parent_backfill_v1"
 	sessionAliasBackfillStateKey           = "pg_session_alias_backfill_v1"
 	legacyProjectIdentityStateKey          = "project_identity_publication_revision_v2"
 	projectIdentityPublicationStateKey     = "project_identity_publication_revision_v3"
@@ -328,6 +329,14 @@ func (s *Sync) pushWithOptions(
 		)
 		noteFull("backfilling session provenance")
 	}
+	var externalParentBackfillNeeded bool
+	full, externalParentBackfillNeeded, err = applyBackfillRequirement(ctx, state, externalParentBackfillStateKey, full)
+	if err != nil {
+		return result, err
+	}
+	if externalParentBackfillNeeded {
+		noteFull("backfilling external parents")
+	}
 	var transcriptRevisionBackfillNeeded bool
 	full, transcriptRevisionBackfillNeeded, err = applyBackfillRequirement(ctx, state, transcriptRevisionBackfillStateKey, full)
 	if err != nil {
@@ -368,6 +377,7 @@ func (s *Sync) pushWithOptions(
 	}
 	var backfills []string
 	for key, needed := range map[string]bool{
+		externalParentBackfillStateKey:         externalParentBackfillNeeded,
 		sessionAliasBackfillStateKey:           aliasBackfillNeeded,
 		sessionProvenanceBackfillStateKey:      provenanceBackfillNeeded,
 		transcriptRevisionBackfillStateKey:     transcriptRevisionBackfillNeeded,
@@ -648,10 +658,14 @@ func (s *Sync) pushWithOptions(
 				)
 			}
 			sess := sessionByID[id]
+			externalParent, err := s.externalParent(ctx, id)
+			if err != nil {
+				return result, err
+			}
 			sessionFingerprints[id] = sessionPushFingerprint(
 				sess, db.MirroredSessionMachine(sess, s.machine),
 				s.archiveID, usageFP, markerID,
-				dependencyFP+"\x00source-database-generation:"+
+				dependencyFP+"\x00external-parent:"+externalParent+"\x00source-database-generation:"+
 					s.databaseGeneration+"\x00archive-content:"+string(s.local.ArchiveContent()),
 			)
 			prepared++
@@ -721,6 +735,9 @@ func (s *Sync) pushWithOptions(
 		if err := completeBackfill(ctx,
 			state, transcriptRevisionBackfillStateKey, transcriptRevisionBackfillNeeded, result,
 		); err != nil {
+			return result, err
+		}
+		if err := completeBackfill(ctx, state, externalParentBackfillStateKey, externalParentBackfillNeeded, result); err != nil {
 			return result, err
 		}
 		if err := completeBackfill(ctx, state, commitLinksBackfillStateKey, commitLinksBackfillNeeded, result); err != nil {
@@ -863,6 +880,9 @@ func (s *Sync) pushWithOptions(
 	if err := completeBackfill(ctx,
 		state, transcriptRevisionBackfillStateKey, transcriptRevisionBackfillNeeded, result,
 	); err != nil {
+		return result, err
+	}
+	if err := completeBackfill(ctx, state, externalParentBackfillStateKey, externalParentBackfillNeeded, result); err != nil {
 		return result, err
 	}
 	if err := completeBackfill(ctx, state, commitLinksBackfillStateKey, commitLinksBackfillNeeded, result); err != nil {
@@ -2692,12 +2712,29 @@ func (s *Sync) pushSession(
 	ctx context.Context, tx *sql.Tx, sess db.Session, markerID string,
 	legacyMarkerMachines []string,
 ) error {
+	externalParent, err := s.externalParent(ctx, sess.ID)
+	if err != nil {
+		return err
+	}
 	return writePGSession(ctx, tx, sess, markerID, legacyMarkerMachines, pgSessionWriteOptions{
-		Machine: s.machine, ArchiveID: s.archiveID, DatabaseGeneration: s.databaseGeneration, UsageOnly: s.local.ArchiveContent().UsageOnly(),
+		ExternalParent: externalParent,
+		Machine:        s.machine, ArchiveID: s.archiveID, DatabaseGeneration: s.databaseGeneration, UsageOnly: s.local.ArchiveContent().UsageOnly(),
 	})
 }
 
+func (s *Sync) externalParent(ctx context.Context, id string) (string, error) {
+	link, err := s.local.GetSessionExternalParent(ctx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("reading external parent for %s: %w", id, err)
+	}
+	return link.ParentSessionID, nil
+}
+
 type pgSessionWriteOptions struct {
+	ExternalParent     string
 	Machine, ArchiveID string
 	DatabaseGeneration string
 	UsageOnly          bool
@@ -2789,7 +2826,7 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 			cwd, git_branch, source_session_id,
 			source_version, parser_malformed_lines,
 			is_truncated, termination_status,
-			parent_session_id, parser_parent_session_id, relationship_type,
+			parent_session_id, parser_parent_session_id, relationship_type, external_parent_session_id,
 			tool_failure_signal_count, tool_retry_count,
 			edit_churn_count, consecutive_failure_max,
 			outcome, outcome_confidence,
@@ -2821,7 +2858,7 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 				$16, $17, $18, $19,
 				$20, $21, $22, $23,
 				$24, $25, $26, $27, $28, $29, $30,
-				$31, $32, $33,
+				$31, $32, $33, NULLIF($78, ''),
 				$34, $35, $36, $37,
 				$38, $39, $40, $41,
 				$42,
@@ -2907,6 +2944,7 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 			termination_status = EXCLUDED.termination_status,
 			parent_session_id = EXCLUDED.parent_session_id,
 			parser_parent_session_id = EXCLUDED.parser_parent_session_id,
+			external_parent_session_id = EXCLUDED.external_parent_session_id,
 			relationship_type = EXCLUDED.relationship_type,
 			tool_failure_signal_count = EXCLUDED.tool_failure_signal_count,
 			tool_retry_count = EXCLUDED.tool_retry_count,
@@ -3002,6 +3040,7 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 			OR sessions.termination_status IS DISTINCT FROM EXCLUDED.termination_status
 			OR sessions.parent_session_id IS DISTINCT FROM EXCLUDED.parent_session_id
 			OR sessions.parser_parent_session_id IS DISTINCT FROM EXCLUDED.parser_parent_session_id
+			OR sessions.external_parent_session_id IS DISTINCT FROM EXCLUDED.external_parent_session_id
 			OR sessions.relationship_type IS DISTINCT FROM EXCLUDED.relationship_type
 			OR sessions.tool_failure_signal_count IS DISTINCT FROM EXCLUDED.tool_failure_signal_count
 			OR sessions.tool_retry_count IS DISTINCT FROM EXCLUDED.tool_retry_count
@@ -3088,6 +3127,7 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 		db.EncodePRLinks(sess.PRLinks),
 		db.LabelsArg(sess.Labels),
 		sess.FrictionCount, sess.FrictionRulesVersion, sess.FrictionHash,
+		sanitizePG(options.ExternalParent),
 	)
 	if err != nil {
 		return err
