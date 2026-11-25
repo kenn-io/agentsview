@@ -86,7 +86,7 @@ func (s *Store) readActivitySourceProbe(ctx context.Context) (activity.SourcePro
 		 FROM sessions WHERE deleted_at IS NULL)`,
 		identityRevisionKeyBase).Scan(
 		&probe.SessionCount, &probe.MaxSessionModified, &probe.MaxDataVersion,
-		&probe.MaxPricingUpdated, &probe.ProjectIdentityGeneration, &probe.LauncherLinksFingerprint,
+		&probe.MaxPricingUpdated, &probe.ProjectIdentityGeneration, &probe.SessionRelationshipsFingerprint,
 	)
 	if err != nil {
 		return activity.SourceProbe{}, fmt.Errorf("probing clickhouse activity report source: %w", err)

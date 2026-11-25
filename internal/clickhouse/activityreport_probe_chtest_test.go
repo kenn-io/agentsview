@@ -45,9 +45,9 @@ func TestActivitySourceProbeCachePreservesFreshness(t *testing.T) {
 	for _, id := range []string{"probe-cold", "probe-warm"} {
 		got, err := store.ActivityReportSourceProbe(chdriver.Context(ctx, chdriver.WithQueryID(id)))
 		require.NoError(t, err)
-		if want.LauncherLinksFingerprint == "" {
-			want.LauncherLinksFingerprint = got.LauncherLinksFingerprint
-			require.NotEmpty(t, want.LauncherLinksFingerprint)
+		if want.SessionRelationshipsFingerprint == "" {
+			want.SessionRelationshipsFingerprint = got.SessionRelationshipsFingerprint
+			require.NotEmpty(t, want.SessionRelationshipsFingerprint)
 		}
 		require.Equal(t, want, got)
 	}
@@ -78,7 +78,7 @@ func TestActivitySourceProbeCachePreservesFreshness(t *testing.T) {
 		for range 2 {
 			got, probeErr := store.ActivityReportSourceProbe(ctx)
 			require.NoError(t, probeErr)
-			step.want.LauncherLinksFingerprint = want.LauncherLinksFingerprint
+			step.want.SessionRelationshipsFingerprint = want.SessionRelationshipsFingerprint
 			require.Equal(t, step.want, got, step.sql)
 		}
 	}
