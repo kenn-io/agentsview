@@ -314,6 +314,10 @@ func TestWaitingLauncherSweeping(t *testing.T) {
 				candidates := []IntervalCandidate{{SessionID: "child", Start: mustStart(t, "2026-06-16T10:00:00Z"), End: mustStart(t, "2026-06-16T10:04:00Z")}}
 				got, err := BuildCandidateArtifacts(t.Context(), p, nil, candidates, nil)
 				require.NoError(t, err)
+				assert.Equal(t, 1, got.Report.Peak.Agents)
+				for _, bucket := range got.Report.Buckets {
+					assert.Zero(t, bucket.MaxSubagentAgents)
+				}
 				assert.Empty(t, got.Report.BySession)
 				assert.Zero(t, got.Report.Totals.AgentMinutes)
 				assert.InDelta(t, 4, got.Report.Totals.ActiveMinutes, 1e-9)

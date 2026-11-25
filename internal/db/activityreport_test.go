@@ -1828,10 +1828,6 @@ func TestActivityReportLauncherFiltersAndLinkChanges(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, before.InteractivePeak.Agents)
 	assert.Equal(t, 2, before.Peak.Agents)
-	require.NoError(t, d.SoftDeleteSession(t.Context(), "visible"))
-	deleted, err := d.GetActivityReport(t.Context(), filter, q)
-	require.NoError(t, err)
-	assert.Equal(t, 1, deleted.Peak.Agents)
 	_, err = d.SetSessionExternalParent(t.Context(), "run", "hidden")
 	require.NoError(t, err)
 	after, err := d.GetActivityReport(t.Context(), filter, q)
@@ -1881,7 +1877,7 @@ func TestActivityReportFilteredRunsKeepMatchingLauncherActive(t *testing.T) {
 	}
 }
 
-func TestActivityReportEvidenceReadsOnlyLaunchedRuns(t *testing.T) {
+func TestActivityReportEvidenceSkipsUnneededAndNativeRuns(t *testing.T) {
 	d := testDB(t)
 	for _, id := range []string{"root", "child"} {
 		insertSession(t, d, id, "project-a", func(s *Session) {

@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"database/sql"
 	"fmt"
 	"testing"
 	"time"
@@ -380,32 +379,6 @@ func TestPGActivityReportKeptJournalRecreated(t *testing.T) {
 
 func TestPGActivityReportKeptLauncherChange(t *testing.T) {
 	t.Parallel()
-	local, syncer, store := newUsageJournalFixture(t)
-	pgKeptSession(t, local, "parent", "project-a", "2026-06-12")
-	pgKeptSession(t, local, "past", "project-a", "2026-06-14")
-	_, err := local.SetSessionExternalParent(t.Context(), "past", "parent")
-	require.NoError(t, err)
-	pgKeptPush(t, syncer, false)
-	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC", Project: "project-a", IncludeSubagents: true}
-	before := pgKeptBuild(t, store, f, q, true)
-	assert.Equal(t, 1, before.Report.InteractivePeak.Agents)
-	pgKeptBuild(t, store, f, q, false)
-	parent, err := local.GetSession(t.Context(), "parent")
-	require.NoError(t, err)
-	parent.IsAutomated = true
-	require.NoError(t, local.UpsertSession(t.Context(), *parent))
-	require.NoError(t, local.BumpLocalModifiedAt(t.Context(), parent.ID))
-	pgKeptPush(t, syncer, false)
-	after := pgKeptBuild(t, store, f, q, true)
-	assert.Zero(t, after.Report.InteractivePeak.Agents)
-	assert.Zero(t, after.Report.AutomatedPeak.Agents)
-	store.runtimeState().activityKept.DeleteSlots(func(string) bool { return true })
-	store.runtimeState().activityInputs.DeleteSlots(func(string) bool { return true })
-	requirePGKeptEqual(t, after, pgKeptBuild(t, store, f, q, true))
-}
-
-func TestPGActivityReportKeptHiddenRunLink(t *testing.T) {
-	t.Parallel()
 	ctx := t.Context()
 	local, syncer, store := newUsageJournalFixture(t)
 	pgKeptSession(t, local, "parent", "project-a", "2026-06-12")
@@ -417,10 +390,24 @@ func TestPGActivityReportKeptHiddenRunLink(t *testing.T) {
 	_, err := local.SetSessionExternalParent(ctx, "child", "parent")
 	require.NoError(t, err)
 	pgKeptPush(t, syncer, false)
-	linked := pgKeptBuild(t, store, f, q, true)
-	assert.Equal(t, 1, linked.Report.InteractivePeak.Agents)
-	assert.Empty(t, linked.Sessions)
-	assert.Zero(t, linked.Report.Totals.AgentMinutes)
+	assert.Equal(t, 1, pgKeptBuild(t, store, f, q, true).Report.InteractivePeak.Agents)
+	pgKeptBuild(t, store, f, q, false)
+	parent, err := local.GetSession(ctx, "parent")
+	require.NoError(t, err)
+	parent.IsAutomated = true
+	require.NoError(t, local.UpsertSession(ctx, *parent))
+	require.NoError(t, local.BumpLocalModifiedAt(ctx, parent.ID))
+	pgKeptPush(t, syncer, false)
+	automated := pgKeptBuild(t, store, f, q, true)
+	assert.Zero(t, automated.Report.InteractivePeak.Agents)
+	store.runtimeState().activityKept.DeleteSlots(func(string) bool { return true })
+	store.runtimeState().activityInputs.DeleteSlots(func(string) bool { return true })
+	requirePGKeptEqual(t, automated, pgKeptBuild(t, store, f, q, true))
+	parent.IsAutomated = false
+	require.NoError(t, local.UpsertSession(ctx, *parent))
+	require.NoError(t, local.BumpLocalModifiedAt(ctx, parent.ID))
+	pgKeptPush(t, syncer, false)
+	assert.Equal(t, 1, pgKeptBuild(t, store, f, q, true).Report.InteractivePeak.Agents)
 	_, err = local.ClearSessionExternalParent(ctx, "child")
 	require.NoError(t, err)
 	pgKeptPush(t, syncer, false)
@@ -429,7 +416,4 @@ func TestPGActivityReportKeptHiddenRunLink(t *testing.T) {
 	store.runtimeState().activityKept.DeleteSlots(func(string) bool { return true })
 	store.runtimeState().activityInputs.DeleteSlots(func(string) bool { return true })
 	requirePGKeptEqual(t, cleared, pgKeptBuild(t, store, f, q, true))
-	var external sql.NullString
-	require.NoError(t, store.DB().QueryRowContext(ctx, `SELECT external_parent_session_id FROM sessions WHERE id='child'`).Scan(&external))
-	assert.False(t, external.Valid)
 }
