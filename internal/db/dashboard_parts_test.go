@@ -421,10 +421,42 @@ func TestDashboardPartsMemoEvictsLeastRecentlyUsed(t *testing.T) {
 	}
 	versions := map[string]string{"a": "v", "b": "v", "c": "v"}
 	memo.reuse("UTC", "version", []string{"a"}, versions, make(map[string]kept.Part[dashboardPart]))
+	// Reading an unchanged disk selection must not reorder the memo.
+	memo.seed("UTC", "version", map[string]kept.Part[dashboardPart]{"a": part("a"), "b": part("b"), "c": part("c")})
 	memo.store("UTC", "version", map[string]kept.Part[dashboardPart]{"c": part("c")})
 	got := make(map[string]kept.Part[dashboardPart])
 	assert.Equal(t, []string{"b"}, memo.reuse("UTC", "version", []string{"a", "b", "c"}, versions, got))
 	assert.Equal(t, map[string]kept.Part[dashboardPart]{"a": part("a"), "c": part("c")}, got)
+}
+
+func TestDashboardPartsMemoDropsStaleParts(t *testing.T) {
+	memo := dashboardPartsMemo{}
+	p := kept.Part[dashboardPart]{ID: "a", Fingerprint: "old"}
+	memo.store("UTC", "version", map[string]kept.Part[dashboardPart]{"a": p})
+	missing := memo.reuse("UTC", "version", []string{"a"}, map[string]string{"a": "new"}, make(map[string]kept.Part[dashboardPart]))
+	assert.Equal(t, []string{"a"}, missing)
+	assert.False(t, memo.parts.Has("a"))
+}
+
+func TestDashboardPartsMemoShrinksIndex(t *testing.T) {
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	memo := dashboardPartsMemo{}
+	for i := range 120_000 {
+		id := fmt.Sprintf("session-%06d", i)
+		memo.store("UTC", "version", map[string]kept.Part[dashboardPart]{id: {ID: id, Fingerprint: "v"}})
+	}
+	large := kept.Part[dashboardPart]{ID: "large", Fingerprint: "v", Value: dashboardPart{Velocity: SessionVelocity{TurnCycles: make([]float64, (kept.DefaultMaxBytes-8192)/8)}}}
+	memo.store("UTC", "version", map[string]kept.Part[dashboardPart]{"large": large})
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	retained := int64(after.HeapAlloc) - int64(before.HeapAlloc)
+	t.Logf("retained=%d entries=%d", retained, memo.parts.Len())
+	// The heap measurement also includes runtime and allocator overhead.
+	assert.LessOrEqual(t, retained, int64(kept.DefaultMaxBytes+(256<<10)))
+	assert.True(t, memo.parts.Has("large"))
+	runtime.KeepAlive(&memo)
 }
 
 func TestDashboardPartsMemoAccounting(t *testing.T) {
@@ -474,9 +506,17 @@ func TestDashboardPartsEvictionMatchesScans(t *testing.T) {
 		})
 		insertMessages(t, d, userMsgAt(id, 0, "hello", "2024-06-01T09:00:00Z"), asstMsgAt(id, 1, "answer", "2024-06-01T09:01:00Z"))
 	}
-	// All test sessions have identical shapes and fingerprints of equal length.
-	sample := kept.Part[dashboardPart]{ID: "s0", Fingerprint: string(make([]byte, 100)), Value: dashboardPart{Hours: map[int]int{0: 1}, Velocity: SessionVelocity{TurnCycles: make([]float64, 1), FirstResponse: new(float64)}}}
-	d.dashboardMemo.maxBytes = 3 * dashboardPartBytes("s0", sample)
+	sessions, versions, err := d.dashboardSessions(ctx, AnalyticsFilter{Timezone: "UTC"})
+	require.NoError(t, err)
+	ids := make([]string, 0, len(sessions))
+	for _, session := range sessions {
+		ids = append(ids, session.ID)
+	}
+	samples := make(map[string]kept.Part[dashboardPart])
+	require.NoError(t, d.fillDashboardParts(ctx, AnalyticsFilter{Timezone: "UTC"}, ids, versions, samples))
+	for id, part := range samples {
+		d.dashboardMemo.maxBytes = max(d.dashboardMemo.maxBytes, 3*dashboardPartBytes(id, part))
+	}
 	var reads [][]string
 	dashboardPartsReadObserver = func(ids []string) { reads = append(reads, append([]string(nil), ids...)) }
 	t.Cleanup(func() { dashboardPartsReadObserver = nil })
