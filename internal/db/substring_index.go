@@ -248,25 +248,18 @@ func regexIndexQuery(pattern string) string {
 			if re.Min > 0 {
 				return build(re.Sub[0], budget)
 			}
-		case syntax.OpConcat, syntax.OpAlternate:
+		case syntax.OpConcat:
 			var parts []string
 			used := 0
 			for _, sub := range re.Sub {
 				q, n := build(sub, budget-used)
 				if q == "" {
-					if re.Op == syntax.OpAlternate {
-						return "", 0
-					}
 					continue
 				}
 				parts = append(parts, "("+q+")")
 				used += n
 			}
-			sep := " AND "
-			if re.Op == syntax.OpAlternate {
-				sep = " OR "
-			}
-			return strings.Join(parts, sep), used
+			return strings.Join(parts, " AND "), used
 		}
 		return "", 0
 	}

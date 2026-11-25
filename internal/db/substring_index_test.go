@@ -476,7 +476,8 @@ func TestRegexIndexQuery(t *testing.T) {
 		pattern string
 		indexed bool
 	}{
-		{`\bdeploy-window`, true}, {`.*timeout.*`, true}, {`foo|bar`, true},
+		{`\bdeploy-window`, true}, {`.*timeout.*`, true}, {`foo|bar`, false},
+		{`foo(?:alpha|zebra)bar`, true}, {`(?:alpha|zebra)`, false},
 		{`foo|..`, false}, {`(?i)panic`, true}, {`(?i)sk`, false},
 		{`abc+`, false}, {`abcd+`, true}, {`abc*`, false},
 		{`(?:abc){2,3}`, true}, {`ab`, false}, {`"foo"`, true},
@@ -486,6 +487,11 @@ func TestRegexIndexQuery(t *testing.T) {
 			assert.Equal(t, tc.indexed, regexIndexQuery(tc.pattern) != "")
 		})
 	}
+	query := regexIndexQuery(`foo(?:alpha|zebra)bar`)
+	assert.Contains(t, query, `"foo"`)
+	assert.Contains(t, query, `"bar"`)
+	assert.NotContains(t, query, `"alp"`)
+	assert.NotContains(t, query, `"zeb"`)
 }
 
 func TestRegexIndexMatchesScan(t *testing.T) {
@@ -499,12 +505,12 @@ func TestRegexIndexMatchesScan(t *testing.T) {
 	})
 	insertMessages(t, d, Message{SessionID: "s1", Ordinal: 5, Role: "assistant", Content: "answer", ThinkingText: "zebra-crossing", Timestamp: "2026-05-20T12:00:05Z"})
 	countMessagesForSubstringIndex(t, d, "s1")
-	pattern := `\bdeploy-window|zebra-crossing`
+	pattern := `\bdeploy-window(?: and| again)`
 	candidates, err := d.substringCandidates(t.Context(), ContentSearchFilter{Pattern: pattern}, regexIndexQuery(pattern))
 	require.NoError(t, err)
 	require.NotEmpty(t, candidates.message.sql)
 	require.NotEmpty(t, candidates.thinking.sql)
-	patterns := []string{pattern, `(?i)panic`, `(?i)kelvin`, `(?i)search`, `.*timeout.*`, `"quoted"`, `foo|..`, `deploy-window`, `(?:abc){2,3}`}
+	patterns := []string{pattern, `\bdeploy-window|zebra-crossing`, `(?i)panic`, `(?i)kelvin`, `(?i)search`, `.*timeout.*`, `"quoted"`, `foo|..`, `deploy-window`, `(?:abc){2,3}`}
 	pages := make(map[string][]ContentSearchPage)
 	for _, pattern := range patterns {
 		for _, cursor := range []int{0, 1, 2} {
