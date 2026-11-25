@@ -133,6 +133,8 @@ func TestMusePersonalSessionKindUsesFirstUserItem(t *testing.T) {
 		{"subagent envelope on another source", item(0, "runtime.voice_audio", "user", subagent), "", subagent},
 		{"subagent envelope on a later user item", item(0, "runtime", "user", "hello") + item(1, "runtime", "user", subagent), "", "hello"},
 		{"subagent envelope must open the message", item(0, "runtime", "user", "note: "+subagent), "", "note: " + subagent},
+		{"truncated subagent banner", item(0, "runtime", "user", "[Subagent Context] You are running as a subagent (depth "), "", "[Subagent Context] You are running as a subagent (depth "},
+		{"subagent banner without a depth", item(0, "runtime", "user", "[Subagent Context] You are running as a subagent (depth x/y)."), "", "[Subagent Context] You are running as a subagent (depth x/y)."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p, _ := musePersonalTestProvider(t, tc.body)

@@ -173,10 +173,16 @@ var musePersonalBackgroundSources = map[string]bool{
 	"runtime.proactivity":      true,
 }
 
-// musePersonalSubagentPrefix opens the first user message of a Muse subagent
-// run. Subagent runs share plain runtime with conversations, so only this
-// envelope separates them.
-const musePersonalSubagentPrefix = "[Subagent Context] You are running as a subagent (depth "
+// musePersonalSubagentBanner opens the first user message of a Muse subagent
+// run, including its current and maximum depth. Subagent runs share plain
+// runtime with conversations, so only this envelope separates them.
+var musePersonalSubagentBanner = regexp.MustCompile(`^\[Subagent Context\] You are running as a subagent \(depth [0-9]+/[0-9]+\)`)
+
+// musePersonalSubagentEnvelope reports whether a first user item opens a
+// subagent run.
+func musePersonalSubagentEnvelope(source, content string) bool {
+	return source == "runtime" && musePersonalSubagentBanner.MatchString(content)
+}
 
 // musePersonalRequesterField labels the requester in a subagent envelope.
 // Each Muse Personal agent owns one session whose ID equals the agent ID, so
@@ -190,7 +196,7 @@ const musePersonalRequesterField = "- Requester agent id: "
 // the "- Field: value." lines that follow it; the delegated task after them
 // may quote other IDs.
 func musePersonalSubagentParent(source, content, sessionID string) string {
-	if source != "runtime" || !strings.HasPrefix(content, musePersonalSubagentPrefix) {
+	if !musePersonalSubagentEnvelope(source, content) {
 		return ""
 	}
 	_, fields, _ := strings.Cut(content, "\n")
@@ -231,7 +237,7 @@ func musePersonalSessionKind(source, content string) string {
 		return SessionKindMuseBackground
 	case source == "runtime.browser_input":
 		return SessionKindNonInteractive
-	case source == "runtime" && strings.HasPrefix(content, musePersonalSubagentPrefix):
+	case musePersonalSubagentEnvelope(source, content):
 		return SessionKindNonInteractive
 	default:
 		return ""
