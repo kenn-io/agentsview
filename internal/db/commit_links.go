@@ -15,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/google/shlex"
 	gitlog "go.kenn.io/agentsview/internal/db/git"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/shellquote"
@@ -88,45 +87,32 @@ type CommitSessionList struct {
 
 // commitRepository records the directory of the first git commit invocation.
 func commitRepository(input, cwd string) string {
-	resolve := func(base, dir string) string {
-		if strings.HasPrefix(dir, "'") {
-			if words, err := shlex.Split(dir); err == nil && len(words) == 1 {
-				dir = words[0]
-			}
-		} else if len(dir) >= 2 && strings.HasPrefix(dir, `"`) && strings.HasSuffix(dir, `"`) {
-			dir = dir[1 : len(dir)-1]
-		}
-		if path.IsAbs(dir) || strings.HasPrefix(dir, "~") || commitWindowsDriveRE.MatchString(dir) || strings.HasPrefix(dir, `\\`) {
-			return dir
-		}
-		if path.IsAbs(base) && !strings.HasPrefix(base, "//") || !strings.ContainsAny(base+dir, `\`) && !commitWindowsDriveRE.MatchString(base) {
-			return path.Join(base, dir)
-		}
-		// filepath follows the host OS; transcript paths can come from any OS.
-		backslashes := strings.ContainsAny(base+dir, `\`)
-		base = strings.ReplaceAll(base, `\`, "/")
-		dir = strings.ReplaceAll(dir, `\`, "/")
-		volume := ""
-		if commitWindowsDriveRE.MatchString(base) {
-			volume, base = base[:2], base[2:]
-		} else if strings.HasPrefix(base, "//") {
-			parts := strings.SplitN(base[2:], "/", 3)
-			if len(parts) >= 2 {
-				volume, base = "//"+parts[0]+"/"+parts[1], "/"
-				if len(parts) == 3 {
-					base += parts[2]
-				}
-			}
-		}
-		if path.IsAbs(dir) {
-			base = ""
-		}
-		joined := volume + path.Join(base, dir)
-		if backslashes {
-			joined = strings.ReplaceAll(joined, "/", `\`)
-		}
-		return joined
+
+	dir := toolCallWorkdir(input)
+	if dir != "" {
+		cwd = parser.ShellWorkdir(cwd, dir)
 	}
+	shellWord := func(word string) string {
+		if strings.HasPrefix(word, `"`) {
+			return strings.ReplaceAll(word, `\"`, `"`)
+		}
+		return word
+	}
+	command := commitCommandText(input)
+	if invocation := commitInvocationRE.FindStringIndex(command); invocation != nil {
+		if matches := commitCDRE.FindAllStringSubmatch(command[:invocation[0]], -1); len(matches) > 0 {
+			cwd = parser.ShellWorkdir(cwd, matches[len(matches)-1][1])
+		}
+	}
+	for _, option := range commitGlobalOptionRE.FindAllString(commitInvocationRE.FindString(command), -1) {
+		if strings.HasPrefix(option, "-C") {
+			cwd = parser.ShellWorkdir(cwd, shellWord(strings.TrimSpace(option[2:])))
+		}
+	}
+	return cwd
+}
+
+func toolCallWorkdir(input string) string {
 	var fields struct {
 		Workdir string `json:"workdir"`
 		Cwd     string `json:"cwd"`
@@ -144,39 +130,26 @@ func commitRepository(input, cwd string) string {
 			}
 		}
 	}
-	if dir != "" {
-		cwd = resolve(cwd, dir)
-	}
-	shellWord := func(word string) string {
-		if strings.HasPrefix(word, `"`) {
-			return strings.ReplaceAll(word, `\"`, `"`)
-		}
-		return word
-	}
-	command := commitCommandText(input)
-	if invocation := commitInvocationRE.FindStringIndex(command); invocation != nil {
-		if matches := commitCDRE.FindAllStringSubmatch(command[:invocation[0]], -1); len(matches) > 0 {
-			cwd = resolve(cwd, matches[len(matches)-1][1])
-		}
-	}
-	for _, option := range commitGlobalOptionRE.FindAllString(commitInvocationRE.FindString(command), -1) {
-		if strings.HasPrefix(option, "-C") {
-			cwd = resolve(cwd, shellWord(strings.TrimSpace(option[2:])))
-		}
-	}
-	return cwd
+	return dir
 }
 
 // commitArgv returns an argv command's shell text. A git argv that does not
 // start with a commit invocation returns none, since later matches are argument text.
-func commitArgv(input string) (string, bool) {
+func commandArgv(input string) ([]string, bool) {
 	var payload struct {
 		Command []string `json:"command"`
 	}
 	if json.Unmarshal([]byte(input), &payload) != nil || payload.Command == nil {
+		return nil, false
+	}
+	return payload.Command, true
+}
+
+func commitArgv(input string) (string, bool) {
+	args, present := commandArgv(input)
+	if !present {
 		return "", false
 	}
-	args := payload.Command
 	if len(args) == 0 {
 		return "", true
 	}

@@ -709,7 +709,8 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // indexing see them. Re-parse toolResultContentLength and raw tool-result array
 // providers in place; source and session identities are unchanged.)
 // (190: include retained tool calls in pull request links.)
-const dataVersion = 190
+// (191: prevent older binaries from losing inferred parent clears.)
+const dataVersion = 191
 
 const archiveOnlyVersionBase = 1 << 20
 
@@ -2181,6 +2182,7 @@ var readOnlyRequiredTables = []string{
 	"session_project_assignments",
 	"session_labels",
 	"session_external_parents",
+	"session_parent_inference_blocks",
 	"archive_metadata",
 	"background_migrations",
 	"project_identity_observations",
@@ -2586,6 +2588,7 @@ func legacySchemaColumnMigrations() []schemaColumnMigration {
 
 func schemaColumnMigrations() []schemaColumnMigration {
 	return []schemaColumnMigration{
+		{"session_external_parents", "inferred", "ALTER TABLE session_external_parents ADD COLUMN inferred INTEGER NOT NULL DEFAULT 0"},
 		{"cursor_usage_events", "account_user_id", "ALTER TABLE cursor_usage_events ADD COLUMN account_user_id TEXT NOT NULL DEFAULT ''"},
 		{"cursor_usage_events", "account_polled_at", "ALTER TABLE cursor_usage_events ADD COLUMN account_polled_at TEXT NOT NULL DEFAULT ''"},
 		{"cursor_usage_events", "conversation_id", "ALTER TABLE cursor_usage_events ADD COLUMN conversation_id TEXT NOT NULL DEFAULT ''"},

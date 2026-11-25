@@ -60,6 +60,12 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 		return "", fmt.Errorf("checking session %s: %w", id, err)
 	}
 
+	var inferredParent bool
+	var parserRelationship string
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM session_external_parents ep WHERE ep.session_id=sessions.id AND ep.inferred=1 AND ep.parent_session_id=sessions.parent_session_id AND COALESCE(sessions.parser_parent_session_id,'')=''), `+parserRelationshipSQL+` FROM sessions WHERE id=?`, id).Scan(&inferredParent, &parserRelationship); err != nil {
+		return "", err
+	}
+
 	stored, err := sessionMessagesTx(ctx, tx, id)
 	if err != nil {
 		return "", err
@@ -84,10 +90,6 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 	if write.PlanUsage == nil {
 		write.PlanUsage = planUsage
 	}
-	externalParent, err := loadSessionExternalParent(ctx, tx, id)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return "", err
-	}
 	var pins []savedPin
 	if _, err := db.writeOneSessionBatchTx(
 		ctx, tx, ctxTx, write, &pending, db.usageOnlyStorage(), &pins,
@@ -107,6 +109,10 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 	if keepCopy {
 		copyID = replacedSessionCopyID(id, time.Now())
 		copyWrite := db.storageSessionBatchWrite(sessionCopyWrite(*src, copyID, stored))
+		if inferredParent {
+			copyWrite.Session.ParentSessionID = nil
+			copyWrite.Session.RelationshipType = parserRelationship
+		}
 		copyWrite.UsageEvents = make([]UsageEvent, len(events))
 		for i, ev := range events {
 			ev.ID, ev.SessionID = 0, copyID
@@ -118,16 +124,13 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 		); err != nil {
 			return "", fmt.Errorf("writing replaced session copy: %w", err)
 		}
-		if externalParent.SessionID != "" {
-			if _, err := tx.ExecContext(ctx, `
-				INSERT INTO session_external_parents (
-					session_id, parent_session_id, created_at, updated_at
-				) VALUES (?, ?, ?, ?)`, copyID, externalParent.ParentSessionID,
-				externalParent.CreatedAt, externalParent.UpdatedAt,
-			); err != nil {
-				return "", fmt.Errorf("copying replaced session parent: %w", err)
-			}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO session_external_parents (session_id, parent_session_id, inferred, created_at, updated_at) SELECT ?, parent_session_id, inferred, created_at, updated_at FROM session_external_parents WHERE session_id = ? AND inferred=0`, copyID, id); err != nil {
+			return "", fmt.Errorf("copying replaced session parent: %w", err)
 		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO session_parent_inference_blocks (session_id, created_at) SELECT ?, created_at FROM session_parent_inference_blocks WHERE session_id = ?`, copyID, id); err != nil {
+			return "", fmt.Errorf("copying replaced inference block: %w", err)
+		}
+
 		if _, err := tx.ExecContext(ctx, `
 		UPDATE sessions
 		SET display_name = ?,

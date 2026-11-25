@@ -2129,6 +2129,10 @@ func (db *DB) LinkSubagentSessionsContext(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("counting linked subagent sessions: %w", err)
 	}
+	inferred, err := backfillLaunchParentsTx(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
 	launched, err := applySessionExternalParents(ctx, tx)
 	if err != nil {
 		return 0, err
@@ -2136,7 +2140,7 @@ func (db *DB) LinkSubagentSessionsContext(ctx context.Context) (int, error) {
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("committing subagent linking: %w", err)
 	}
-	return repaired + int(updated) + launched, nil
+	return repaired + int(updated) + launched + inferred, nil
 }
 
 // selfParentRepairStateKey marks the archive as having cleared the
@@ -2335,6 +2339,15 @@ func linkSubagentSessionsForSessionsTx(ctx context.Context, tx *sql.Tx, ids []st
 	if err != nil {
 		return 0, err
 	}
+	seeds, err = launchSeeds(ctx, tx, seeds)
+	if err != nil {
+		return 0, err
+	}
+	inferred, err := inferLaunchParentsTx(ctx, tx, seeds)
+	if err != nil {
+		return 0, err
+	}
+	updated += inferred
 	launched, err := applySessionExternalParentsFor(ctx, tx.ExecContext,
 		func(ctx context.Context, query string, args ...any) rowScanner {
 			return tx.QueryRowContext(ctx, query, args...)
@@ -5852,7 +5865,7 @@ func deleteSessionsTx(ctx context.Context, tx *sql.Tx, where string, args ...any
 }
 
 func deleteSessionAnnotationsTx(ctx context.Context, tx *sql.Tx, where string, args ...any) error {
-	for _, table := range []string{"session_labels", "session_external_parents"} {
+	for _, table := range []string{"session_labels", "session_external_parents", "session_parent_inference_blocks"} {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE session_id IN (SELECT id FROM sessions WHERE "+where+")", args...); err != nil {
 			return fmt.Errorf("deleting %s: %w", table, err)
 		}

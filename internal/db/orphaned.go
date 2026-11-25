@@ -1517,6 +1517,10 @@ func (d *DB) CopySessionMetadataFrom(
 		}
 	}
 	if oldDBHasTable(ctx, tx, "session_external_parents") {
+		inferredFilter := ""
+		if oldDBHasColumn(ctx, tx, "session_external_parents", "inferred") {
+			inferredFilter = " AND ep.inferred=0"
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO main.session_external_parents (
 				session_id, parent_session_id, created_at, updated_at
@@ -1525,14 +1529,23 @@ func (d *DB) CopySessionMetadataFrom(
 				COALESCE(`+retiredCodexTargetSQL("ep.parent_session_id")+`, ep.parent_session_id),
 				ep.created_at, ep.updated_at
 			FROM old_db.session_external_parents ep
-			WHERE true
+			WHERE true `+inferredFilter+`
 			ON CONFLICT(session_id) DO UPDATE SET
 				parent_session_id = excluded.parent_session_id,
 				created_at = excluded.created_at,
-				updated_at = excluded.updated_at`); err != nil {
+				updated_at = excluded.updated_at, inferred = 0`); err != nil {
 			return fmt.Errorf("copying session parents: %w", err)
 		}
 		if _, err := applySessionExternalParents(ctx, tx); err != nil {
+			return err
+		}
+	}
+
+	if oldDBHasTable(ctx, tx, "session_parent_inference_blocks") {
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO main.session_parent_inference_blocks (session_id, created_at) SELECT COALESCE(`+retiredCodexTargetSQL("session_id")+`, session_id), created_at FROM old_db.session_parent_inference_blocks`); err != nil {
+			return fmt.Errorf("copying parent inference blocks: %w", err)
+		}
+		if err := restoreInferenceBlocks(ctx, tx); err != nil {
 			return err
 		}
 	}
@@ -2460,6 +2473,11 @@ func copySessionDataForIDs(
 	); err != nil {
 		return fmt.Errorf("copying sessions: %w", err)
 	}
+	if oldDBHasTable(ctx, tx, "session_external_parents") && oldDBHasColumn(ctx, tx, "session_external_parents", "inferred") {
+		if _, err := tx.ExecContext(ctx, `UPDATE sessions SET parent_session_id=NULL, relationship_type=`+parserRelationshipSQL+` WHERE COALESCE(parser_parent_session_id,'')='' AND EXISTS (SELECT 1 FROM `+tempIDsTable+` copied JOIN old_db.session_external_parents ep ON ep.session_id=copied.source_id WHERE copied.id=sessions.id AND ep.inferred=1 AND ep.parent_session_id=sessions.parent_session_id)`); err != nil {
+			return fmt.Errorf("clearing copied inferred parents: %w", err)
+		}
+	}
 	if oldDBHasTable(ctx, tx, "archive_session_provenance") {
 		if err := copyAttachedArchiveStateTx(ctx, tx); err != nil {
 			return err
@@ -2472,6 +2490,10 @@ func copySessionDataForIDs(
 		}
 	}
 	if oldDBHasTable(ctx, tx, "session_external_parents") {
+		inferredFilter := ""
+		if oldDBHasColumn(ctx, tx, "session_external_parents", "inferred") {
+			inferredFilter = " AND ep.inferred=0"
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT OR IGNORE INTO main.session_external_parents (
 				session_id, parent_session_id, created_at, updated_at
@@ -2479,8 +2501,17 @@ func copySessionDataForIDs(
 			SELECT copied.id, COALESCE(`+retiredCodexTargetSQL("ep.parent_session_id")+`, ep.parent_session_id),
 				ep.created_at, ep.updated_at
 			FROM old_db.session_external_parents ep
-			JOIN `+tempIDsTable+` copied ON copied.source_id = ep.session_id`); err != nil {
+			JOIN `+tempIDsTable+` copied ON copied.source_id = ep.session_id WHERE true `+inferredFilter+``); err != nil {
 			return fmt.Errorf("copying retained session parents: %w", err)
+		}
+	}
+
+	if oldDBHasTable(ctx, tx, "session_parent_inference_blocks") {
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO main.session_parent_inference_blocks (session_id, created_at) SELECT copied.id, b.created_at FROM old_db.session_parent_inference_blocks b JOIN `+tempIDsTable+` copied ON copied.source_id=b.session_id`); err != nil {
+			return fmt.Errorf("copying retained inference blocks: %w", err)
+		}
+		if err := restoreInferenceBlocks(ctx, tx); err != nil {
+			return err
 		}
 	}
 

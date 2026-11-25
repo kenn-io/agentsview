@@ -114,10 +114,14 @@ func (db *DB) SetSessionExternalParent(
 		VALUES (?, ?)
 		ON CONFLICT(session_id) DO UPDATE SET
 			parent_session_id = excluded.parent_session_id,
+			inferred = 0,
 			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
 		sessionID, parentID,
 	); err != nil {
 		return SessionExternalParent{}, fmt.Errorf("saving session parent: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM session_parent_inference_blocks WHERE session_id = ?", sessionID); err != nil {
+		return SessionExternalParent{}, fmt.Errorf("clearing parent inference block: %w", err)
 	}
 	moved, err := applySessionExternalParentsFor(ctx, tx.ExecContext,
 		func(ctx context.Context, query string, args ...any) rowScanner {
@@ -164,6 +168,9 @@ func (db *DB) ClearSessionExternalParent(
 	}
 	if err != nil {
 		return SessionExternalParent{}, err
+	}
+	if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO session_parent_inference_blocks (session_id) VALUES (?)", sessionID); err != nil {
+		return SessionExternalParent{}, fmt.Errorf("blocking parent inference: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx,
 		"DELETE FROM session_external_parents WHERE session_id = ?", sessionID,

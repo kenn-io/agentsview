@@ -821,11 +821,17 @@ CREATE TABLE IF NOT EXISTS session_labels (
 CREATE TABLE IF NOT EXISTS session_external_parents (
     session_id        TEXT PRIMARY KEY,
     parent_session_id TEXT NOT NULL,
+    inferred INTEGER NOT NULL DEFAULT 0,
     created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     updated_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_session_external_parents_parent
     ON session_external_parents(parent_session_id);
+
+CREATE TABLE IF NOT EXISTS session_parent_inference_blocks (
+    session_id TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
 
 -- Excluded sessions: tracks session IDs that were permanently
 -- deleted by the user so the sync engine does not re-import them.

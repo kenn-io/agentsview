@@ -442,7 +442,9 @@ to 20 of its newest Edit and Write calls along with the session that made each
 one.
 
 `get_child_sessions` returns the sub-agent and fork sessions started from
-`session_id`, along with each child's `relationship`.
+`session_id`, along with each child's `relationship`. AgentsView links one-shot
+runs without setup when one archived launcher fits. A hook link takes precedence,
+and clearing a link prevents inference from restoring it.
 
 `compare_usage` compares two values across a `dimension` of `model` or
 `project`. Pass a single name or comma-separated names for `left` and `right`;

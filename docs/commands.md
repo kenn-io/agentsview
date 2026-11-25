@@ -2505,6 +2505,11 @@ entry and overwrite edited skill files. `--check` makes no changes, `--print`
 shows the MCP commands to run by hand, and `--mcp=false` installs or checks
 the skill without inspecting or changing the MCP entry.
 
+AgentsView also links one-shot runs without setup when exactly one archived
+session launched the run in the same folder shortly before it started. An
+explicit parent link takes precedence, and clearing a link prevents inference
+from restoring it.
+
 The SessionStart hook refreshes memory and links runs to their launching
 session on Linux and Windows. Parent linking on macOS is unverified. Codex
 launchers link to the thread. Codex requires you to trust a new hook in
