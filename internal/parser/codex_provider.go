@@ -187,9 +187,6 @@ func (p *codexProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) 
 }
 
 func (p *codexProvider) ReconciliationSourceRank(source SourceRef) ReconciliationSourceRank {
-	if p.spec.agent != AgentCodex {
-		return ReconciliationSourceRank{}
-	}
 	return CodexSourceRank(source)
 }
 

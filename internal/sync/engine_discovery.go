@@ -77,14 +77,8 @@ func preferDiscoveredFile(
 		if candidate.Agent == parser.AgentCodex && candidate.ProviderSource != nil && current.ProviderSource != nil {
 			candRank := parser.CodexSourceRank(*candidate.ProviderSource)
 			currRank := parser.CodexSourceRank(*current.ProviderSource)
-			if candRank.Class != currRank.Class {
-				return candRank.Class > currRank.Class
-			}
-			if candRank.Class != 0 {
-				if candRank.Recency != currRank.Recency {
-					return candRank.Recency > currRank.Recency
-				}
-				return candRank.Path < currRank.Path
+			if candRank.Class != currRank.Class || candRank.Class != 0 {
+				return reconciliationSourceRankLower(currRank, candRank)
 			}
 		}
 		// Keep import ranking consistent with parser.preferCodexSource.

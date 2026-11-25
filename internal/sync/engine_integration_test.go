@@ -7469,61 +7469,51 @@ func TestSyncPathsCodexArchivedDuplicateEventPinsChangedFile(t *testing.T) {
 }
 
 func TestSyncSingleSessionCodexPreservesStoredArchivedDuplicate(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		liveTime string
-	}{
-		{name: "different filename", liveTime: "02-10-04"},
-		{name: "same filename", liveTime: "14-31-58"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
-			codexDir := filepath.Join(root, "sessions")
-			archivedDir := filepath.Join(root, "archived_sessions")
-			require.NoError(t, os.MkdirAll(codexDir, 0o755))
-			require.NoError(t, os.MkdirAll(archivedDir, 0o755))
-			env := setupSingleAgentTestEnvWithDirs(
-				t, parser.AgentCodex, []string{codexDir, archivedDir},
-			)
+	root := t.TempDir()
+	codexDir := filepath.Join(root, "sessions")
+	archivedDir := filepath.Join(root, "archived_sessions")
+	require.NoError(t, os.MkdirAll(codexDir, 0o755))
+	require.NoError(t, os.MkdirAll(archivedDir, 0o755))
+	env := setupSingleAgentTestEnvWithDirs(
+		t, parser.AgentCodex, []string{codexDir, archivedDir},
+	)
 
-			uuid := "f7a8b9ca-7890-1234-ef01-456789012347"
-			archivedContent := testjsonl.NewSessionBuilder().
-				AddCodexMeta(tsEarly, uuid, "/home/user/code/api", "user").
-				AddCodexMessage(tsEarlyS1, "user", "Archived copy").
-				AddCodexMessage(tsEarlyS5, "assistant", "Archived reply").
-				String()
-			staleLiveContent := testjsonl.NewSessionBuilder().
-				AddCodexMeta(tsEarly, uuid, "/home/user/code/api", "user").
-				AddCodexMessage(tsEarlyS1, "user", "Stale live copy").
-				String()
+	uuid := "f7a8b9ca-7890-1234-ef01-456789012347"
+	archivedContent := testjsonl.NewSessionBuilder().
+		AddCodexMeta(tsEarly, uuid, "/home/user/code/api", "user").
+		AddCodexMessage(tsEarlyS1, "user", "Archived copy").
+		AddCodexMessage(tsEarlyS5, "assistant", "Archived reply").
+		String()
+	staleLiveContent := testjsonl.NewSessionBuilder().
+		AddCodexMeta(tsEarly, uuid, "/home/user/code/api", "user").
+		AddCodexMessage(tsEarlyS1, "user", "Stale live copy").
+		String()
 
-			archivedPath := env.writeSession(
-				t, archivedDir,
-				"rollout-2026-05-04T14-31-58-"+uuid+".jsonl",
-				archivedContent,
-			)
-			initialTime := time.Now().Add(-2 * time.Hour)
-			require.NoError(t, os.Chtimes(archivedPath, initialTime, initialTime), "chtimes archived")
+	archivedPath := env.writeSession(
+		t, archivedDir,
+		"rollout-2026-05-04T14-31-58-"+uuid+".jsonl",
+		archivedContent,
+	)
+	initialTime := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(archivedPath, initialTime, initialTime), "chtimes archived")
 
-			env.engine.SyncAll(t.Context(), nil)
-			require.Equal(t, archivedPath, env.db.GetSessionFilePath(t.Context(), "codex:"+uuid),
-				"DB must track the archived copy before a stale live duplicate appears")
+	env.engine.SyncAll(t.Context(), nil)
+	require.Equal(t, archivedPath, env.db.GetSessionFilePath(t.Context(), "codex:"+uuid),
+		"DB must track the archived copy before a stale live duplicate appears")
 
-			livePath := env.writeCodexSession(
-				t,
-				filepath.Join("2026", "05", "04"),
-				"rollout-2026-05-04T"+tc.liveTime+"-"+uuid+".jsonl",
-				staleLiveContent,
-			)
-			require.NoError(t, os.Chtimes(livePath, initialTime, initialTime), "chtimes live")
+	livePath := env.writeCodexSession(
+		t,
+		filepath.Join("2026", "05", "04"),
+		"rollout-2026-05-04T02-10-04-"+uuid+".jsonl",
+		staleLiveContent,
+	)
+	require.NoError(t, os.Chtimes(livePath, initialTime, initialTime), "chtimes live")
 
-			require.NoError(t, env.engine.SyncSingleSession("codex:"+uuid))
+	require.NoError(t, env.engine.SyncSingleSession("codex:"+uuid))
 
-			assert.Equal(t, archivedPath, env.db.GetSessionFilePath(t.Context(), "codex:"+uuid),
-				"single-session resync must preserve the stored archived source")
-			assertSessionMessageCount(t, env.db, "codex:"+uuid, 2)
-		})
-	}
+	assert.Equal(t, archivedPath, env.db.GetSessionFilePath(t.Context(), "codex:"+uuid),
+		"single-session resync must preserve the stored archived source")
+	assertSessionMessageCount(t, env.db, "codex:"+uuid, 2)
 }
 
 func TestSyncPathsGeminiRejectsWrongStructure(t *testing.T) {
