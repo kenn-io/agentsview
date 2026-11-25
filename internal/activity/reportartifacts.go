@@ -35,7 +35,7 @@ type Progress struct {
 
 type ProgressFunc func(Progress)
 
-// SourceProbe is a cheap monotonic summary used to reject stale report tokens
+// SourceProbe is a cheap summary used to reject stale report tokens
 // before an expensive cache-miss rebuild. It is deliberately coarse: unrelated
 // archive changes may force a harmless refresh, while the canonical artifact
 // digest remains the final consistency check.
@@ -52,6 +52,7 @@ type SourceProbe struct {
 	ProjectIdentityGeneration int64  `json:"project_identity_generation"`
 	UsageChangeRevision       int64  `json:"usage_change_revision,omitempty"`
 	PreparedUsageFingerprint  string `json:"prepared_usage_fingerprint,omitempty"`
+	SessionLinksFingerprint   string `json:"session_links_fingerprint,omitempty"`
 }
 
 type SessionSort string
