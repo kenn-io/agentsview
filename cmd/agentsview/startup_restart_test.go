@@ -173,6 +173,10 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 				assert.NotContains(t, contents, sessionID)
 			}
 			if tc.scoped && !tc.persisted && !tc.fail {
+				require.Eventually(t, func() bool {
+					status := restartGet(t, base+"/api/v1/sync/status")
+					return strings.Contains(status, `"upgrade_pending":true`)
+				}, 30*time.Second, 100*time.Millisecond)
 				var stdout, stderr bytes.Buffer
 				done := make(chan error, 1)
 				go func() {
