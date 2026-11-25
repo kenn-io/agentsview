@@ -222,6 +222,57 @@ func TestFrustrationCountsDelayedSave(t *testing.T) {
 	require.Equal(t, 1, count)
 }
 
+func TestFrustrationCountsRetryTimedOutBatch(t *testing.T) {
+	server, _ := testPGServer(t)
+	if server.cockroach {
+		t.Skip("batching is PostgreSQL-specific")
+	}
+	f := newFrustrationFixture(t, "agentsview")
+	_, err := f.pg.ExecContext(f.ctx, `INSERT INTO sessions (id, machine, project, agent) SELECT 'batch-' || n, 'test', 'sample', 'claude' FROM generate_series(1, 513) n`)
+	require.NoError(t, err)
+	rows, err := f.pg.QueryContext(f.ctx, `SELECT id, `+frustrationSessionVersion(f.versionColumn)+` FROM sessions WHERE id LIKE 'batch-%'`)
+	require.NoError(t, err)
+	versions := make(map[string]string)
+	counts := make(map[string]int)
+	for rows.Next() {
+		var id, version string
+		require.NoError(t, rows.Scan(&id, &version))
+		versions[id], counts[id] = version, 1
+	}
+	require.NoError(t, rows.Err())
+	require.NoError(t, rows.Close())
+	require.Len(t, versions, 513)
+	_, err = f.pg.ExecContext(f.ctx, `CREATE SEQUENCE frustration_test_attempt;
+		CREATE FUNCTION delay_first_frustration_save() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			IF nextval('frustration_test_attempt') = 1 THEN
+				PERFORM pg_sleep(5);
+			END IF;
+			RETURN NEW;
+		END $$;
+		CREATE TRIGGER delay_first_frustration_save BEFORE INSERT ON session_frustration_counts
+		FOR EACH ROW EXECUTE FUNCTION delay_first_frustration_save()`)
+	require.NoError(t, err)
+	previous := frustrationFillChunkTimeout
+	frustrationFillChunkTimeout = 2 * time.Second
+	t.Cleanup(func() { frustrationFillChunkTimeout = previous })
+	store := f.open(t)
+	retry, err := store.writeFrustrationCounts(f.ctx, versions, counts, f.versionColumn)
+	require.NoError(t, err)
+	require.Len(t, retry, 512)
+	var saved int
+	require.NoError(t, f.pg.QueryRowContext(f.ctx, `SELECT count(*) FROM session_frustration_counts WHERE session_id LIKE 'batch-%' AND marker_count = 1`).Scan(&saved))
+	require.Equal(t, 1, saved)
+	for id, version := range retry {
+		require.Equal(t, versions[id], version)
+	}
+	retry, err = store.writeFrustrationCounts(f.ctx, retry, counts, f.versionColumn)
+	require.NoError(t, err)
+	require.Empty(t, retry)
+	require.NoError(t, f.pg.QueryRowContext(f.ctx, `SELECT count(*) FROM session_frustration_counts WHERE session_id LIKE 'batch-%' AND marker_count = 1`).Scan(&saved))
+	require.Equal(t, 513, saved)
+}
+
 func TestFrustrationCountsBulkSaves(t *testing.T) {
 	t.Parallel()
 	f := newFrustrationFixture(t, "agentsview")
