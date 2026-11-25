@@ -6730,7 +6730,9 @@ schemas keep their existing ordering behavior.
   (half of the 1,520 `scheduler.cron` sessions had two user items), so message
   count does not separate them from conversations.
   `internal/parser/testdata/muse_personal/sources/` holds one synthetic sample
-  per case; none is a capture.
+  per first-user source; none is a capture.
+  `TestMusePersonalSessionKindUsesFirstUserItem` covers sessions with no user
+  item and other edge cases inline.
 - **Agentsview:** `internal/parser/muse_personal.go` and
   `internal/parser/muse_personal_provider.go` require UUID layout and matching
   version-1 header identity. Recognized future transcript versions and
