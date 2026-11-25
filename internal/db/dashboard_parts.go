@@ -8,7 +8,9 @@ import (
 	"slices"
 	"sort"
 	"sync"
+	"unsafe"
 
+	"github.com/jellydator/ttlcache/v3"
 	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -35,20 +37,25 @@ type dashboardSession struct {
 type dashboardPartsMemo struct {
 	mu            sync.Mutex
 	slot, version string
-	parts         map[string]kept.Part[dashboardPart]
-	bytes         int64
+	parts         *ttlcache.Cache[string, kept.Part[dashboardPart]]
+	maxBytes      int64
 }
 
 // reuse copies parts whose fingerprint matches into parts and returns the ids still to read.
 func (m *dashboardPartsMemo) reuse(slot, version string, ids []string, versions map[string]string, parts map[string]kept.Part[dashboardPart]) []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.slot != slot || m.version != version {
+	if m.parts == nil || m.slot != slot || m.version != version {
 		return ids
 	}
 	return slices.DeleteFunc(ids, func(id string) bool {
-		p, ok := m.parts[id]
-		if ok = ok && p.Fingerprint == versions[id]; ok {
+		item := m.parts.Get(id)
+		if item == nil {
+			return false
+		}
+		p := item.Value()
+		ok := p.Fingerprint == versions[id]
+		if ok {
 			parts[id] = p
 		}
 		return ok
@@ -58,34 +65,50 @@ func (m *dashboardPartsMemo) reuse(slot, version string, ids []string, versions 
 func (m *dashboardPartsMemo) store(slot, version string, parts map[string]kept.Part[dashboardPart]) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.slot != slot || m.version != version {
-		m.slot, m.version, m.parts, m.bytes = slot, version, make(map[string]kept.Part[dashboardPart], len(parts)), 0
+	maxBytes := m.maxBytes
+	if maxBytes == 0 {
+		maxBytes = kept.DefaultMaxBytes
+	}
+	if m.parts == nil || m.slot != slot || m.version != version {
+		m.slot, m.version = slot, version
+		m.parts = ttlcache.New(ttlcache.WithMaxCost(uint64(maxBytes), func(item ttlcache.CostItem[string, kept.Part[dashboardPart]]) uint64 {
+			return uint64(dashboardPartBytes(item.Key, item.Value))
+		}), ttlcache.WithDisableTouchOnHit[string, kept.Part[dashboardPart]]())
 	}
 	for id, p := range parts {
-		m.add(id, p)
+		if dashboardPartBytes(id, p) > maxBytes {
+			m.parts.Delete(id)
+			continue
+		}
+		m.parts.Set(id, p, ttlcache.NoTTL)
 	}
 }
 
-// add skips oversized parts and clears earlier entries when a fitting part would exceed the limit.
-func (m *dashboardPartsMemo) add(id string, p kept.Part[dashboardPart]) {
-	if old, ok := m.parts[id]; ok {
-		m.bytes -= dashboardPartBytes(old)
-		delete(m.parts, id)
+func dashboardPartBytes(key string, p kept.Part[dashboardPart]) int64 {
+	// The item includes the part; 128 bytes covers its list node and map share.
+	n := int64(unsafe.Sizeof(ttlcache.Item[string, kept.Part[dashboardPart]]{})) + 128 + int64(len(key)+len(p.ID)+len(p.Fingerprint))
+	n += int64(cap(p.Value.Velocity.TurnCycles)) * 8
+	if p.Value.Velocity.FirstResponse != nil {
+		n += 8
 	}
-	n := dashboardPartBytes(p)
-	if n > kept.DefaultMaxBytes {
-		return
+	if p.Value.Hours != nil {
+		n += dashboardHoursBytes(len(p.Value.Hours))
 	}
-	if m.bytes+n > kept.DefaultMaxBytes {
-		clear(m.parts)
-		m.bytes = 0
-	}
-	m.parts[id] = p
-	m.bytes += n
+	return n
 }
 
-func dashboardPartBytes(p kept.Part[dashboardPart]) int64 {
-	return int64(len(p.ID)+len(p.Fingerprint)) + dashboardPartSize(p.Value)
+func dashboardHoursBytes(n int) int64 {
+	// Round up to a power of two to cover allocator size classes and table metadata.
+	slots := 8
+	for n > 8 && n > slots*7/8 {
+		slots *= 2
+	}
+	bytes := 64 + slots*16 + slots
+	rounded := 1
+	for rounded < bytes {
+		rounded *= 2
+	}
+	return int64(rounded)
 }
 
 func dashboardPartSize(p dashboardPart) int64 {
