@@ -1425,12 +1425,10 @@ func (s *Server) sendSessionFrame(ctx context.Context, stream *SSEStream, id str
 		if identity, ok := s.db.(db.SessionWatchStateStore); ok {
 			state, err := identity.GetSessionWatchState(id)
 			if err != nil {
+				log.Printf("session watch state %q: %v", id, err)
+			} else if !stream.SendJSON("session.identity", state) {
 				return false
-			}
-			if !stream.SendJSON("session.identity", state) {
-				return false
-			}
-			if state.State != db.SessionWatchResolved {
+			} else if state.State != db.SessionWatchResolved {
 				return true
 			}
 		}
@@ -1568,6 +1566,9 @@ func (s *Server) humaEvents(ctx context.Context, in *eventsInput) (*huma.StreamR
 						}
 					}
 					watch(t.id)
+					if !s.sendSessionFrame(ctx, stream, t.id, true) {
+						return
+					}
 				} else if !s.sendSessionFrame(ctx, stream, t.id, true) {
 					return
 				}

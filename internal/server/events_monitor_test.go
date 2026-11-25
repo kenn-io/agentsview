@@ -23,11 +23,15 @@ type watchStateStore struct {
 	db.Store
 	mu     sync.RWMutex
 	states map[string]db.SessionWatchState
+	read   func(string, db.SessionWatchState) (db.SessionWatchState, error)
 }
 
 func (s *watchStateStore) GetSessionWatchState(id string) (db.SessionWatchState, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if s.read != nil {
+		return s.read(id, s.states[id])
+	}
 	return s.states[id], nil
 }
 
@@ -69,7 +73,7 @@ func TestEvents_HostedRevisionChangeKeepsStream(t *testing.T) {
 	require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: "watch-b", Project: "project", Machine: "test", Agent: "claude", MessageCount: 1}))
 	waitCount("session_updated", "watch-b", 1)
 	store.set("watch-a", db.SessionWatchState{State: db.SessionWatchResolved, PublicID: "watch-a", ContentRevision: "three"})
-	waitCount("session_updated", "watch-a", 2)
+	require.Eventually(t, func() bool { return strings.Contains(w.BodyString(), `"content_revision":"three"`) }, 5*time.Second, 10*time.Millisecond)
 	store.set("watch-a", db.SessionWatchState{State: "ambiguous", Variants: []string{"watch-a~one", "watch-a~two"}})
 	waitCount("session_missing", "watch-a", 1)
 	te.broadcaster.Emit("messages")
@@ -80,6 +84,64 @@ func TestEvents_HostedRevisionChangeKeepsStream(t *testing.T) {
 	case <-done:
 		t.Fatal("stream ended before cancellation")
 	default:
+	}
+}
+
+func TestEvents_HostedMonitorHandoff(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fail bool
+	}{
+		{name: "state changes before replacement baseline"},
+		{name: "frame state read fails", fail: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Cleanup(sessionwatch.SetTimingsForTest(25*time.Millisecond, 50*time.Millisecond))
+			te := setup(t)
+			for _, id := range []string{"watch-a", "watch-b"} {
+				require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: id, Project: "project", Machine: "test", Agent: "claude"}))
+			}
+			store := &watchStateStore{Store: te.db, states: make(map[string]db.SessionWatchState)}
+			for _, id := range []string{"watch-a", "watch-b"} {
+				store.set(id, db.SessionWatchState{State: db.SessionWatchResolved, PublicID: id, ContentRevision: "one"})
+			}
+			cfg := config.Config{Host: "127.0.0.1", InstallationID: "server-installation"}
+			handler := wrapTestHandler(cfg, server.New(cfg, store, nil, server.WithBroadcaster(te.broadcaster)).Handler())
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			w := newFlushRecorder()
+			done := make(chan struct{})
+			t.Cleanup(func() { cancel(); <-done })
+			req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/events?session=watch-a&session=watch-b", nil)
+			go func() { handler.ServeHTTP(w, req); close(done) }()
+			te.waitForSSEEvent(t, w, "events_ready", 5*time.Second)
+			var reads atomic.Int32
+			store.mu.Lock()
+			store.read = func(id string, state db.SessionWatchState) (db.SessionWatchState, error) {
+				if id == "watch-a" && state.ContentRevision == "two" {
+					n := reads.Add(1)
+					if tc.fail && n == 2 {
+						return db.SessionWatchState{}, errors.New("transient read failure")
+					}
+					if !tc.fail && n >= 4 {
+						state.ContentRevision = "three"
+					}
+				}
+				return state, nil
+			}
+			store.states["watch-a"] = db.SessionWatchState{State: db.SessionWatchResolved, PublicID: "watch-a", ContentRevision: "two"}
+			store.mu.Unlock()
+			if tc.fail {
+				require.Eventually(t, func() bool {
+					return reads.Load() >= 2 && strings.Contains(w.BodyString(), "event: session_updated\ndata: watch-a\n")
+				}, 5*time.Second, 10*time.Millisecond)
+			} else {
+				require.Eventually(t, func() bool { return strings.Contains(w.BodyString(), `"content_revision":"three"`) }, 5*time.Second, 10*time.Millisecond)
+			}
+			te.broadcaster.Emit("messages")
+			te.waitForSSEEvent(t, w, "data_changed", 5*time.Second)
+			require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: "watch-b", Project: "project", Machine: "test", Agent: "claude", MessageCount: 1}))
+			require.Eventually(t, func() bool { return strings.Contains(w.BodyString(), "event: session_updated\ndata: watch-b\n") }, 5*time.Second, 10*time.Millisecond)
+		})
 	}
 }
 
