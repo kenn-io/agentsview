@@ -2475,6 +2475,26 @@ func TestCodexLabeledRunFindSourcePrecedence(t *testing.T) {
 	}
 }
 
+func TestCodexLabeledRunUnderPrunedOverlappingRoot(t *testing.T) {
+	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
+	base := t.TempDir()
+	inner := filepath.Join(base, ".codex-run-v1-outer", "logs")
+	sessions := filepath.Join(inner, "case", ".codex-run-v1-inner", "sessions")
+	path := writeCodexProviderSession(t, sessions, id, "hello")
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{base, inner}})
+	require.True(t, ok)
+
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, path, sources[0].DisplayPath)
+
+	source, found, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: id})
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, path, source.DisplayPath)
+}
+
 func TestCodexLabeledFindSourceRanksAllDatedCopies(t *testing.T) {
 	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
 	root := t.TempDir()

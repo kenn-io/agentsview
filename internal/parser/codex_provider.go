@@ -1035,7 +1035,7 @@ func (s codexSourceSet) discover(
 ) ([]SourceRef, error) {
 	var sources []SourceRef
 	byKey := make(map[string]SourceRef)
-	for rootIndex, root := range s.roots {
+	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -1062,7 +1062,7 @@ func (s codexSourceSet) discover(
 			continue
 		}
 		paths := s.discoverSessionPaths(root)
-		if withLabeled && !coveredCodexRoot(s.roots, rootIndex, includeRoot) {
+		if withLabeled {
 			dirs, err := labeledSessionDirs(ctx, root)
 			if err != nil {
 				return nil, err
@@ -1109,20 +1109,6 @@ func labeledSessionDirs(ctx context.Context, root string) ([]string, error) {
 		return nil
 	})
 	return dirs, err
-}
-
-func coveredCodexRoot(roots []string, index int, include func(string) bool) bool {
-	root := filepath.Clean(roots[index])
-	for i, other := range roots {
-		if i == index || isS3URI(other) || (include != nil && !include(other)) {
-			continue
-		}
-		other = filepath.Clean(other)
-		if (other != root || i < index) && isWithinRoot(other, root) {
-			return true
-		}
-	}
-	return false
 }
 
 // discoverSessionPaths finds all Codex JSONL session file paths under
@@ -1654,12 +1640,12 @@ func (s codexSourceSet) findCanonicalSource(ctx context.Context, uuid string) (S
 	}
 	var best SourceRef
 	foundExisting := false
-	for rootIndex, root := range s.roots {
+	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
 			return SourceRef{}, false, err
 		}
 		dirs := []string{root}
-		if s.agent == AgentCodex && !coveredCodexRoot(s.roots, rootIndex, nil) {
+		if s.agent == AgentCodex {
 			labeled, err := labeledSessionDirs(ctx, root)
 			if err != nil {
 				return SourceRef{}, false, err
