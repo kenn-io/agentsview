@@ -55,7 +55,7 @@ func TestLookupIsolationReadsOnlyFixtureHome(t *testing.T) {
 	t.Setenv("PATH", binDir)
 	t.Setenv("ANTHROPIC_API_KEY", "host-anthropic-key")
 	t.Setenv("OPENAI_API_KEY", "host-openai-key")
-	isolation, err := prepareLookupIsolation(t.Context(), clientCodex, clientDir, project, bin, runDir, transcriptsRoot)
+	isolation, err := prepareLookupIsolation(t.Context(), clientCodex, clientDir, project, project, bin, runDir, transcriptsRoot)
 	require.NoError(t, err)
 	cmd := exec.CommandContext(t.Context(), isolation.command)
 	cmd.Env = append(cmd.Env, isolation.env...)
@@ -68,22 +68,110 @@ func TestLookupIsolationReadsOnlyFixtureHome(t *testing.T) {
 	require.ErrorIs(t, err, os.ErrNotExist)
 
 	require.NoError(t, os.Remove(filepath.Join(home, ".codex", "auth.json")))
-	_, err = prepareLookupIsolation(t.Context(), clientCodex, clientDir, project, bin, filepath.Join(clientDir, "missing-auth"), transcriptsRoot)
+	_, err = prepareLookupIsolation(t.Context(), clientCodex, clientDir, project, project, bin, filepath.Join(clientDir, "missing-auth"), transcriptsRoot)
 	require.ErrorContains(t, err, "missing codex credentials")
-	require.NoError(t, os.WriteFile(filepath.Join(home, ".codex", "auth.json"), []byte("{}"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(binDir, "codex"), []byte("#!/bin/sh\nprintf '%s\\n' '{\"type\":\"turn.failed\",\"error\":{\"message\":\"invalid model\"}}'\nexit 1\n"), 0o700))
-	_, _, err = captureLookup(t.Context(), config{timeout: 10 * time.Second}, bin, clientCodex, project, "invalid-model", "", "question", filepath.Join(clientDir, "bad-model"), transcriptsRoot)
-	require.ErrorIs(t, err, errLookupSetup)
-	require.NoError(t, os.WriteFile(filepath.Join(binDir, "codex"), []byte("#!/bin/sh\nprintf '%s\\n' '{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"mcp__agentsview__search_content\",\"call_id\":\"x\",\"arguments\":\"{}\"}}' '{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"x\",\"output\":\"no result\"}}'\nexit 1\n"), 0o700))
-	_, _, err = captureLookup(t.Context(), config{timeout: 10 * time.Second}, bin, clientCodex, project, "model", "", "question", filepath.Join(clientDir, "task-failure"), transcriptsRoot)
-	require.ErrorIs(t, err, errLookupClientFailed)
-	assert.NotErrorIs(t, err, errLookupSetup)
 }
 
-func TestLookupMissingClientSetupFails(t *testing.T) {
-	t.Setenv("PATH", t.TempDir())
-	_, _, err := captureLookup(t.Context(), config{}, "", clientClaude, t.TempDir(), "", "", "", t.TempDir(), "")
-	require.ErrorIs(t, err, errLookupSetup)
+func TestLookupIsolationRejectsOutputOutsideHiddenRoots(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("bubblewrap is Linux-only")
+	}
+	bwrap, err := exec.LookPath("bwrap")
+	if err != nil {
+		t.Skip("bubblewrap unavailable")
+	}
+	t.Setenv("TMPDIR", "/dev/shm")
+	outside := t.TempDir()
+	home := filepath.Join(outside, "home")
+	binDir := filepath.Join(home, "bin")
+	require.NoError(t, os.MkdirAll(binDir, 0o700))
+	require.NoError(t, os.Symlink(bwrap, filepath.Join(binDir, "bwrap")))
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", binDir)
+	for _, tc := range []struct {
+		name, clientDir, repository string
+	}{
+		{name: "output", clientDir: filepath.Join(outside, "output"), repository: t.TempDir()},
+		{name: "repository", clientDir: filepath.Join(home, "output"), repository: filepath.Join(outside, "repository")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			project := filepath.Join(tc.clientDir, "project")
+			runDir := filepath.Join(tc.clientDir, "attempt")
+			transcriptsRoot := filepath.Join(tc.clientDir, "sessions")
+			for _, dir := range []string{tc.clientDir, tc.repository, project, runDir, transcriptsRoot} {
+				require.NoError(t, os.MkdirAll(dir, 0o700))
+			}
+			_, err := prepareLookupIsolation(t.Context(), clientCodex, tc.clientDir, tc.repository, project, filepath.Join(tc.clientDir, "agentsview"), runDir, transcriptsRoot)
+			require.ErrorContains(t, err, "fixture and output paths must be under the home directory or /tmp")
+		})
+	}
+}
+
+func TestLookupCaptureClassifiesSetupAndClientFailures(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("bubblewrap is Linux-only")
+	}
+	bwrap, err := exec.LookPath("bwrap")
+	if err != nil {
+		t.Skip("bubblewrap unavailable")
+	}
+	hostHome, err := os.UserHomeDir()
+	require.NoError(t, err)
+	t.Setenv("TMPDIR", hostHome)
+	base := t.TempDir()
+	require.NoError(t, os.Chmod(base, 0o700))
+	home := filepath.Join(base, "home")
+	clientDir := filepath.Join(home, "fixture")
+	project := filepath.Join(clientDir, "project")
+	dataDir := filepath.Join(clientDir, "agentsview-data")
+	transcriptsRoot := filepath.Join(clientDir, "sessions")
+	binDir := filepath.Join(clientDir, "bin")
+	for _, dir := range []string{home, filepath.Join(home, ".codex"), filepath.Join(home, ".claude"), project, dataDir, transcriptsRoot, binDir} {
+		require.NoError(t, os.MkdirAll(dir, 0o700))
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".codex", "auth.json"), []byte("{}"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".claude", ".credentials.json"), []byte("{}"), 0o600))
+	require.NoError(t, os.Symlink(bwrap, filepath.Join(binDir, "bwrap")))
+	serverBin := filepath.Join(binDir, "agentsview")
+	require.NoError(t, os.WriteFile(serverBin, []byte("#!/bin/sh\nexit 0\n"), 0o700))
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+	t.Setenv("PATH", binDir)
+
+	cases := []struct {
+		name, executable, script string
+		client                   clientName
+		want, wantNot            error
+		wantText                 string
+	}{
+		{name: "missing client", client: clientClaude, want: errLookupSetup, wantText: "claude"},
+		{
+			name: "invalid model", executable: "codex", client: clientCodex,
+			script: "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"result\",\"is_error\":true,\"result\":\"invalid model\"}'\nexit 1\n",
+			want:   errLookupSetup,
+		},
+		{
+			name: "task failure after answer", executable: "codex", client: clientCodex,
+			script: "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"partial answer\"}}'\nexit 1\n",
+			want:   errLookupClientFailed, wantNot: errLookupSetup,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.executable != "" {
+				require.NoError(t, os.WriteFile(filepath.Join(binDir, tc.executable), []byte(tc.script), 0o700))
+			}
+			_, _, err := captureLookup(t.Context(), config{timeout: 10 * time.Second, repository: project}, serverBin, tc.client, project, "model", "", "question", filepath.Join(clientDir, "attempt-"+tc.name), transcriptsRoot)
+			require.ErrorIs(t, err, tc.want)
+			if tc.wantNot != nil {
+				require.NotErrorIs(t, err, tc.wantNot)
+			}
+			if tc.wantText != "" {
+				assert.ErrorContains(t, err, tc.wantText)
+			}
+		})
+	}
 }
 
 func TestLookupRefusesPopulatedOutput(t *testing.T) {

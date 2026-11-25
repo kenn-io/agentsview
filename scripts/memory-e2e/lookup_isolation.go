@@ -43,7 +43,7 @@ func lookupExecutable(ctx context.Context, client string) (string, error) {
 	return resolved, nil
 }
 
-func prepareLookupIsolation(ctx context.Context, client clientName, clientDir, project, bin, runDir, transcriptsRoot string) (result lookupIsolation, err error) {
+func prepareLookupIsolation(ctx context.Context, client clientName, clientDir, repository, project, bin, runDir, transcriptsRoot string) (result lookupIsolation, err error) {
 	var credentials []string
 	defer func() {
 		if err != nil {
@@ -59,6 +59,9 @@ func prepareLookupIsolation(ctx context.Context, client clientName, clientDir, p
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
+		return lookupIsolation{}, err
+	}
+	if err := requireHiddenLookupPaths(home, clientDir, repository); err != nil {
 		return lookupIsolation{}, err
 	}
 	executable, err := lookupExecutable(ctx, string(client))
@@ -204,6 +207,36 @@ func prepareLookupIsolation(ctx context.Context, client clientName, clientDir, p
 		rootDir = filepath.Join(providerHome, "projects")
 	}
 	return lookupIsolation{command: wrapper, env: env, providerRoot: rootDir, credentials: credentials}, nil
+}
+
+func requireHiddenLookupPaths(home string, paths ...string) error {
+	allowed := make([]string, 0, 4)
+	for _, root := range []string{home, "/tmp"} {
+		resolved, err := filepath.EvalSymlinks(root)
+		if err != nil {
+			return fmt.Errorf("lookup isolation: resolve hidden root %q: %w", root, err)
+		}
+		allowed = append(allowed, root)
+		allowed = append(allowed, resolved)
+	}
+	for _, path := range paths {
+		resolved, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return fmt.Errorf("lookup isolation: resolve %q: %w", path, err)
+		}
+		hidden := false
+		for _, root := range allowed {
+			rel, err := filepath.Rel(root, resolved)
+			if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) && !filepath.IsAbs(rel) {
+				hidden = true
+				break
+			}
+		}
+		if !hidden {
+			return fmt.Errorf("lookup isolation: fixture and output paths must be under the home directory or /tmp: %q", path)
+		}
+	}
+	return nil
 }
 
 func (i lookupIsolation) removeCredentials() {

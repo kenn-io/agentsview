@@ -270,7 +270,7 @@ func captureLookup(ctx context.Context, cfg config, bin string, client clientNam
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, "", fmt.Errorf("%w: create attempt: %w", errLookupSetup, err)
 	}
-	isolation, err := prepareLookupIsolation(ctx, client, filepath.Dir(project), project, bin, dir, transcriptsRoot)
+	isolation, err := prepareLookupIsolation(ctx, client, filepath.Dir(project), cfg.repository, project, bin, dir, transcriptsRoot)
 	if err != nil {
 		return nil, "", fmt.Errorf("%w: %s: %w", errLookupSetup, client, err)
 	}

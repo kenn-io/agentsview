@@ -568,9 +568,8 @@ func collectLookupEvidence(value any, inherited string, fragments *[]lookupEvide
 
 func scoreLookupQuestion(q lookupQuestion, answer string, calls []lookupCall, runErr error) lookupScore {
 	sourceID, valid := lookupAnswerSource(q, answer)
-	if valid && !lookupAnswerValuesHaveEvidence(q, sourceID, answer, calls) {
-		valid = false
-	}
+	values, supported := lookupSupportedAnswerValues(q, sourceID, answer, calls)
+	valid = valid && supported
 	var expected []lookupItem
 	if valid {
 		for _, item := range q.Expected {
@@ -579,7 +578,7 @@ func scoreLookupQuestion(q lookupQuestion, answer string, calls []lookupCall, ru
 			}
 		}
 	}
-	s := scoreLookupEvidence(answer, expected, nil, q.Phrases, calls, runErr)
+	s := scoreLookupEvidence(answer, expected, nil, append(values, q.Phrases...), calls, runErr)
 	if !valid && s.Verdict != "unscored" {
 		s.Verdict = "failed"
 		s.CallsToHit = nil
@@ -620,33 +619,26 @@ func lookupAnswerSource(q lookupQuestion, answer string) (string, bool) {
 	return matchedSource, true
 }
 
-func lookupAnswerValuesHaveEvidence(q lookupQuestion, sourceID, answer string, calls []lookupCall) bool {
+// lookupSupportedAnswerValues returns the answer values found in the source's evidence.
+func lookupSupportedAnswerValues(q lookupQuestion, sourceID, answer string, calls []lookupCall) ([]string, bool) {
 	var values map[string]string
 	if err := json.Unmarshal([]byte(lookupJSONFence.ReplaceAllString(answer, "$1")), &values); err != nil {
-		return false
-	}
-	var source *lookupItem
-	for i := range q.Expected {
-		if q.Expected[i].SessionID == sourceID {
-			source = &q.Expected[i]
-			break
-		}
-	}
-	if source == nil {
-		return false
+		return nil, false
 	}
 	var evidence []string
 	for _, call := range calls {
-		evidence = append(evidence, lookupEvidence(call, *source))
+		evidence = append(evidence, lookupEvidence(call, lookupItem{SessionID: sourceID}))
 	}
 	joinedEvidence := strings.Join(evidence, "\n")
+	supported := make([]string, 0, len(q.ExpectedAnswer))
 	for field := range q.ExpectedAnswer {
 		value := strings.TrimSpace(values[field])
 		if value == "" || !containsLookupPhrase(joinedEvidence, value) {
-			return false
+			return nil, false
 		}
+		supported = append(supported, value)
 	}
-	return true
+	return supported, true
 }
 
 func containsSessionID(text, sessionID string) bool {

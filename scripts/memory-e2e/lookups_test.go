@@ -41,8 +41,9 @@ func TestLookupFixtureSessionsAppearInDefaultList(t *testing.T) {
 		stored.Agent = string(session.Agent)
 		stored.SessionKind = session.SessionKind
 		stored.RelationshipType = string(session.RelationshipType)
-		stored.MessageCount = 4
-		stored.UserMessageCount = 2
+		stored.FirstMessage = dbtest.Ptr(session.FirstMessage)
+		stored.MessageCount = session.MessageCount
+		stored.UserMessageCount = session.UserMessageCount
 	})
 	listed, err := service.NewDirectBackend(database, nil).List(t.Context(), service.ListFilter{})
 	require.NoError(t, err)
