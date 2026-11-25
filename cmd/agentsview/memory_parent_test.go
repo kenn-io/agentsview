@@ -14,6 +14,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/shirou/gopsutil/v4/process"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -36,9 +37,10 @@ type fakeProcess struct {
 	name string
 	// args is the command line after the program name. Unset, an agent runs
 	// one-shot (-p or exec); set it to an empty slice for an interactive run.
-	args []string
-	env  []string
-	cwd  string
+	args  []string
+	env   []string
+	cwd   string
+	files []process.OpenFilesStat
 }
 
 func stubLaunchProcesses(t *testing.T, chain ...fakeProcess) {
@@ -56,7 +58,7 @@ func stubLaunchProcesses(t *testing.T, chain ...fakeProcess) {
 		if i == len(chain)-1 {
 			next = 1
 		}
-		return launchProcess{Name: p.name, PPID: next, Cwd: func(context.Context) (string, error) { return p.cwd, nil }, Cmdline: func(context.Context) ([]string, error) {
+		return launchProcess{Name: p.name, PPID: next, OpenFiles: func(context.Context) ([]process.OpenFilesStat, error) { return p.files, nil }, Cwd: func(context.Context) (string, error) { return p.cwd, nil }, Cmdline: func(context.Context) ([]string, error) {
 			if p.args != nil {
 				return append([]string{p.name}, p.args...), nil
 			}
@@ -379,6 +381,51 @@ func TestCaptureLaunchParentCodexHomeAndPage(t *testing.T) {
 			assert.Equal(t, "codex:"+tc.page, link.ParentSessionID)
 		})
 	}
+}
+
+func TestLauncherCodexIndexHomeOpenFile(t *testing.T) {
+	home := t.TempDir()
+	file, err := os.Create(filepath.Join(home, "state_5.sqlite"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, file.Close()) })
+	launcher, err := lookupGopsutilProcess(t.Context(), int32(os.Getpid()))
+	require.NoError(t, err)
+	got := launcherCodexIndexHome(t.Context(), launcher)
+	require.NotEmpty(t, got)
+	wantInfo, err := os.Stat(home)
+	require.NoError(t, err)
+	gotInfo, err := os.Stat(got)
+	require.NoError(t, err)
+	assert.True(t, os.SameFile(wantInfo, gotInfo))
+}
+
+func TestLauncherCodexIndexHomeAmbiguous(t *testing.T) {
+	first, second := t.TempDir(), t.TempDir()
+	launcher := launchProcess{OpenFiles: func(context.Context) ([]process.OpenFilesStat, error) {
+		return []process.OpenFilesStat{
+			{Path: filepath.Join(first, "state_5.sqlite")},
+			{Path: filepath.Join(second, "state_6.sqlite")},
+		}, nil
+	}}
+	assert.Empty(t, launcherCodexIndexHome(t.Context(), launcher))
+}
+
+func TestCaptureLaunchParentCodexOpenIndex(t *testing.T) {
+	home, state := t.TempDir(), t.TempDir()
+	page := codexLauncherID + "_44444444-4444-4444-8444-444444444444"
+	writeCodexState(t, home, codexLauncherID, codexLauncherID)
+	writeCodexState(t, state, codexLauncherID, page)
+	database := stubLaunchArchive(t)
+	stubLaunchProcesses(t,
+		fakeProcess{name: "sh"},
+		fakeProcess{name: "claude", env: []string{"CODEX_THREAD_ID=" + codexLauncherID}},
+		fakeProcess{name: "codex", env: []string{"CODEX_HOME=" + home}, files: []process.OpenFilesStat{{Path: filepath.Join(state, "state_5.sqlite")}}},
+	)
+	_, err := runLaunchHook(t, sessionStartPayload("startup"))
+	require.NoError(t, err)
+	link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
+	require.NoError(t, err)
+	assert.Equal(t, "codex:"+page, link.ParentSessionID)
 }
 
 func TestCaptureLaunchParentCodexConfigOverride(t *testing.T) {

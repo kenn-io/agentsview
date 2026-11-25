@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -40,11 +41,12 @@ const (
 
 // launchProcess is the part of a process the launcher walk reads.
 type launchProcess struct {
-	Name    string
-	PPID    int32
-	Cmdline func(context.Context) ([]string, error)
-	Environ func(context.Context) ([]string, error)
-	Cwd     func(context.Context) (string, error)
+	Name      string
+	PPID      int32
+	Cmdline   func(context.Context) ([]string, error)
+	Environ   func(context.Context) ([]string, error)
+	Cwd       func(context.Context) (string, error)
+	OpenFiles func(context.Context) ([]process.OpenFilesStat, error)
 }
 
 var (
@@ -67,7 +69,7 @@ func lookupGopsutilProcess(ctx context.Context, pid int32) (launchProcess, error
 	if err != nil {
 		return launchProcess{}, err
 	}
-	return launchProcess{Name: name, PPID: ppid, Cmdline: p.CmdlineSliceWithContext, Environ: p.EnvironWithContext, Cwd: p.CwdWithContext}, nil
+	return launchProcess{Name: name, PPID: ppid, Cmdline: p.CmdlineSliceWithContext, Environ: p.EnvironWithContext, Cwd: p.CwdWithContext, OpenFiles: p.OpenFilesWithContext}, nil
 }
 
 // processAgent names the agent a process runs, or "" for any other process.
@@ -181,6 +183,162 @@ func launcherSessionID(env map[string]string, launcher string) (string, error) {
 	return session.ID, nil
 }
 
+// launcherCodexIndexHome uses the index already open in the launcher, which
+// reflects Codex's effective configuration, including trusted project layers.
+func launcherCodexIndexHome(ctx context.Context, launcher launchProcess) string {
+	if launcher.OpenFiles == nil {
+		return ""
+	}
+	files, err := launcher.OpenFiles(ctx)
+	if err != nil {
+		return ""
+	}
+	var home string
+	for _, file := range files {
+		name := filepath.Base(file.Path)
+		version, ok := strings.CutPrefix(name, "state_")
+		if !ok || !strings.HasSuffix(version, ".sqlite") {
+			continue
+		}
+		if n, err := strconv.Atoi(strings.TrimSuffix(version, ".sqlite")); err != nil || n < 1 {
+			continue
+		}
+		dir := filepath.Dir(file.Path)
+		if home != "" && home != dir {
+			return ""
+		}
+		home = dir
+	}
+	return home
+}
+
+func configuredCodexHome(ctx context.Context, launcherProcess launchProcess, launcherEnv map[string]string, home string) (string, error) {
+	var err error
+	if home == "" {
+		return "", nil
+	}
+	sqliteHome := strings.TrimSpace(launcherEnv["CODEX_SQLITE_HOME"])
+	var config struct {
+		SQLiteHome string `toml:"sqlite_home"`
+	}
+	if _, err := toml.DecodeFile(filepath.Join(home, "config.toml"), &config); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	var profile, sqliteOverride, cd string
+	var hasSQLiteOverride bool
+	if launcherProcess.Cmdline != nil {
+		args, err := launcherProcess.Cmdline(ctx)
+		if err != nil {
+			return "", err
+		}
+		for i := 1; i < len(args); i++ {
+			arg := args[i]
+			if arg == "--" {
+				break
+			}
+			var override string
+			switch {
+			case arg == "-C" || arg == "--cd":
+				if i+1 < len(args) {
+					i++
+					cd = args[i]
+				}
+			case strings.HasPrefix(arg, "--cd="):
+				cd = strings.TrimPrefix(arg, "--cd=")
+			case strings.HasPrefix(arg, "-C="):
+				cd = strings.TrimPrefix(arg, "-C=")
+			case strings.HasPrefix(arg, "-C"):
+				cd = strings.TrimPrefix(arg, "-C")
+			case arg == "-p" || arg == "--profile":
+				if i+1 < len(args) {
+					i++
+					profile = args[i]
+				}
+			case strings.HasPrefix(arg, "--profile="):
+				profile = strings.TrimPrefix(arg, "--profile=")
+			case strings.HasPrefix(arg, "-p="):
+				profile = strings.TrimPrefix(arg, "-p=")
+			case strings.HasPrefix(arg, "-p"):
+				profile = strings.TrimPrefix(arg, "-p")
+			case arg == "-c" || arg == "--config":
+				if i+1 < len(args) {
+					i++
+					override = args[i]
+				}
+			case strings.HasPrefix(arg, "--config="):
+				override = strings.TrimPrefix(arg, "--config=")
+			case strings.HasPrefix(arg, "-c="):
+				override = strings.TrimPrefix(arg, "-c=")
+			case strings.HasPrefix(arg, "-c"):
+				override = strings.TrimPrefix(arg, "-c")
+			}
+			key, value, found := strings.Cut(override, "=")
+			if found && strings.TrimSpace(key) == "sqlite_home" {
+				var parsed struct {
+					SQLiteHome string `toml:"sqlite_home"`
+				}
+				if _, err := toml.Decode(override, &parsed); err != nil {
+					parsed.SQLiteHome = strings.TrimSpace(value)
+				}
+				sqliteOverride, hasSQLiteOverride = parsed.SQLiteHome, true
+			}
+		}
+	}
+	if profile != "" {
+		if strings.Trim(profile, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != "" {
+			return "", fmt.Errorf("invalid Codex profile name %q", profile)
+		}
+		if _, err := toml.DecodeFile(filepath.Join(home, profile+".config.toml"), &config); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+	}
+	if hasSQLiteOverride {
+		config.SQLiteHome = sqliteOverride
+	}
+	launcherDir := func() (string, error) {
+		if filepath.IsAbs(cd) {
+			return cd, nil
+		}
+		if launcherProcess.Cwd == nil {
+			return "", errors.New("codex launcher directory unavailable")
+		}
+		cwd, err := launcherProcess.Cwd(ctx)
+		if err != nil {
+			return "", err
+		}
+		if !filepath.IsAbs(cwd) {
+			return "", errors.New("codex launcher directory unavailable")
+		}
+		return filepath.Join(cwd, cd), nil
+	}
+	if config.SQLiteHome != "" {
+		if sqliteHome, err = pathutil.ExpandHome(config.SQLiteHome); err != nil {
+			return "", err
+		}
+		if !filepath.IsAbs(sqliteHome) {
+			base := home
+			if hasSQLiteOverride {
+				base, err = launcherDir()
+				if err != nil {
+					return "", err
+				}
+			}
+			sqliteHome = filepath.Join(base, sqliteHome)
+		}
+	} else if sqliteHome != "" && !filepath.IsAbs(sqliteHome) {
+		base, err := launcherDir()
+		if err != nil {
+			return "", err
+		}
+		sqliteHome = filepath.Join(base, sqliteHome)
+	}
+	if sqliteHome != "" {
+		home = sqliteHome
+	}
+
+	return home, nil
+}
+
 func launcherArchiveID(ctx context.Context, home, agent, native string) (string, error) {
 	if agent == "codex" {
 		key, err := parser.CodexIndexedSessionKey(ctx, home, native)
@@ -278,126 +436,10 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 		home = homes[0]
 	}
 	if launcher == "codex" {
-		if home == "" {
-			return nil
-		}
-		sqliteHome := strings.TrimSpace(launcherEnv["CODEX_SQLITE_HOME"])
-		var config struct {
-			SQLiteHome string `toml:"sqlite_home"`
-		}
-		if _, err := toml.DecodeFile(filepath.Join(home, "config.toml"), &config); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if indexedHome := launcherCodexIndexHome(ctx, launcherProcess); indexedHome != "" {
+			home = indexedHome
+		} else if home, err = configuredCodexHome(ctx, launcherProcess, launcherEnv, home); err != nil || home == "" {
 			return err
-		}
-		var profile, sqliteOverride, cd string
-		var hasSQLiteOverride bool
-		if launcherProcess.Cmdline != nil {
-			args, err := launcherProcess.Cmdline(ctx)
-			if err != nil {
-				return err
-			}
-			for i := 1; i < len(args); i++ {
-				arg := args[i]
-				if arg == "--" {
-					break
-				}
-				var override string
-				switch {
-				case arg == "-C" || arg == "--cd":
-					if i+1 < len(args) {
-						i++
-						cd = args[i]
-					}
-				case strings.HasPrefix(arg, "--cd="):
-					cd = strings.TrimPrefix(arg, "--cd=")
-				case strings.HasPrefix(arg, "-C="):
-					cd = strings.TrimPrefix(arg, "-C=")
-				case strings.HasPrefix(arg, "-C"):
-					cd = strings.TrimPrefix(arg, "-C")
-				case arg == "-p" || arg == "--profile":
-					if i+1 < len(args) {
-						i++
-						profile = args[i]
-					}
-				case strings.HasPrefix(arg, "--profile="):
-					profile = strings.TrimPrefix(arg, "--profile=")
-				case strings.HasPrefix(arg, "-p="):
-					profile = strings.TrimPrefix(arg, "-p=")
-				case strings.HasPrefix(arg, "-p"):
-					profile = strings.TrimPrefix(arg, "-p")
-				case arg == "-c" || arg == "--config":
-					if i+1 < len(args) {
-						i++
-						override = args[i]
-					}
-				case strings.HasPrefix(arg, "--config="):
-					override = strings.TrimPrefix(arg, "--config=")
-				case strings.HasPrefix(arg, "-c="):
-					override = strings.TrimPrefix(arg, "-c=")
-				case strings.HasPrefix(arg, "-c"):
-					override = strings.TrimPrefix(arg, "-c")
-				}
-				key, value, found := strings.Cut(override, "=")
-				if found && strings.TrimSpace(key) == "sqlite_home" {
-					var parsed struct {
-						SQLiteHome string `toml:"sqlite_home"`
-					}
-					if _, err := toml.Decode(override, &parsed); err != nil {
-						parsed.SQLiteHome = strings.TrimSpace(value)
-					}
-					sqliteOverride, hasSQLiteOverride = parsed.SQLiteHome, true
-				}
-			}
-		}
-		if profile != "" {
-			if strings.Trim(profile, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != "" {
-				return fmt.Errorf("invalid Codex profile name %q", profile)
-			}
-			if _, err := toml.DecodeFile(filepath.Join(home, profile+".config.toml"), &config); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return err
-			}
-		}
-		if hasSQLiteOverride {
-			config.SQLiteHome = sqliteOverride
-		}
-		launcherDir := func() (string, error) {
-			if filepath.IsAbs(cd) {
-				return cd, nil
-			}
-			if launcherProcess.Cwd == nil {
-				return "", errors.New("codex launcher directory unavailable")
-			}
-			cwd, err := launcherProcess.Cwd(ctx)
-			if err != nil {
-				return "", err
-			}
-			if !filepath.IsAbs(cwd) {
-				return "", errors.New("codex launcher directory unavailable")
-			}
-			return filepath.Join(cwd, cd), nil
-		}
-		if config.SQLiteHome != "" {
-			if sqliteHome, err = pathutil.ExpandHome(config.SQLiteHome); err != nil {
-				return err
-			}
-			if !filepath.IsAbs(sqliteHome) {
-				base := home
-				if hasSQLiteOverride {
-					base, err = launcherDir()
-					if err != nil {
-						return err
-					}
-				}
-				sqliteHome = filepath.Join(base, sqliteHome)
-			}
-		} else if sqliteHome != "" && !filepath.IsAbs(sqliteHome) {
-			base, err := launcherDir()
-			if err != nil {
-				return err
-			}
-			sqliteHome = filepath.Join(base, sqliteHome)
-		}
-		if sqliteHome != "" {
-			home = sqliteHome
 		}
 	}
 
