@@ -116,9 +116,9 @@ After subscribing to changes, the HTTP `/api/v1/events` stream sends
 the same stream, you can repeat the `session` query parameter. For each one, the
 stream sends `session_ready` and `session.timing`, or `session_missing` if the
 initial lookup finds that the session does not exist or cannot be resolved. The
-nonempty `session_ready` SSE ID changes when the session state or a child
-session changes. A session that becomes unresolved also gets `session_missing`
-and is no longer watched until the client reconnects. When you reconnect, the
+nonempty `session_ready` SSE ID is an opaque hash that changes when the session
+state or a child session changes. A session that becomes unresolved also gets
+`session_missing` and is no longer watched until the client reconnects. When you reconnect, the
 stream sends the readiness events again. To receive the changed session and
 message records themselves with a cursor for resuming, use the
 [change stream](/docs/conversation-export/#follow-changes-live).
