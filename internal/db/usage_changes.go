@@ -69,6 +69,11 @@ func usageChangeJournalSQL() (string, string) {
 		if sessionID != "" {
 			body = strings.ReplaceAll(sessionBody, "{{session_id}}", sessionID)
 		}
+		if table == "session_external_parents" {
+			body += `
+ UPDATE sessions SET sync_marker = MAX(COALESCE(sync_marker, ''), strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+ WHERE id = ` + sessionID + `;`
+		}
 		switch table {
 		case "image_text_cache", "image_text_occurrences":
 			body = searchCounterBody
@@ -90,7 +95,7 @@ func usageChangeJournalSQL() (string, string) {
 		}
 	}
 	add("trg_sessions_usage_change_insert", "INSERT", "sessions", "", "NEW.id", false)
-	columns := []string{"transcript_revision", "started_at", "deleted_at", "project", "agent", "machine", "git_branch", "group_key", "is_automated", "user_message_count", "ended_at", "termination_status", "display_name", "session_name", "relationship_type", "parent_session_id", "message_count", "created_at"}
+	columns := []string{"transcript_revision", "started_at", "deleted_at", "project", "agent", "machine", "git_branch", "group_key", "is_automated", "user_message_count", "ended_at", "termination_status", "display_name", "session_name", "relationship_type", "parent_session_id", "parser_parent_session_id", "message_count", "created_at"}
 	changes := make([]string, len(columns))
 	for i, column := range columns {
 		changes[i] = "OLD." + column + " IS NOT NEW." + column
@@ -100,6 +105,10 @@ func usageChangeJournalSQL() (string, string) {
 	// only the triggers they name, so this one survives their opens.
 	add("trg_sessions_usage_change_group_label", "UPDATE OF session_name", "sessions", "OLD.session_name IS NOT NEW.session_name AND (OLD.group_key!='' OR NEW.group_key!='')", "NEW.id", false)
 	add("trg_sessions_usage_change_delete", "DELETE", "sessions", "", "OLD.id", false)
+	add("trg_external_parent_usage_change_insert", "INSERT", "session_external_parents", "", "NEW.session_id", false)
+	add("trg_external_parent_usage_change_update", "UPDATE", "session_external_parents", "OLD.parent_session_id IS NOT NEW.parent_session_id OR OLD.session_id IS NOT NEW.session_id", "NEW.session_id", false)
+	add("trg_external_parent_usage_change_update_old", "UPDATE", "session_external_parents", "OLD.session_id IS NOT NEW.session_id", "OLD.session_id", false)
+	add("trg_external_parent_usage_change_delete", "DELETE", "session_external_parents", "", "OLD.session_id", false)
 	// Session or transcript revisions cover tool inserts and message metadata.
 	// Tool replacements without a transcript bump delete old calls first.
 	columns = []string{"first_message", "health_score", "health_grade", "outcome", "outcome_confidence", "tool_failure_signal_count", "tool_retry_count", "edit_churn_count", "compaction_count", "mid_task_compaction_count", "context_pressure_max", "quality_signal_version", "short_prompt_count", "unstructured_start", "missing_success_criteria_count", "missing_verification_count", "duplicate_prompt_count", "no_code_context_count", "runaway_tool_loop_count"}
@@ -117,6 +126,11 @@ func usageChangeJournalSQL() (string, string) {
 	add("trg_messages_search_dialogue", "UPDATE OF dialogue_text", "messages", "OLD.dialogue_text IS NOT NEW.dialogue_text", "", false)
 	add("trg_messages_analytics_change_length", "UPDATE OF content_length", "messages", "OLD.content_length IS NOT NEW.content_length", "", true)
 	add("trg_tool_calls_analytics_change_delete", "DELETE", "tool_calls", "", "", true)
+	add("trg_tool_calls_spawn_usage_insert", "INSERT", "tool_calls", "COALESCE(NEW.subagent_session_id, '') != '' AND NEW.session_id IS NOT NEW.subagent_session_id", "NEW.subagent_session_id", false)
+	add("trg_tool_calls_spawn_usage_delete", "DELETE", "tool_calls", "COALESCE(OLD.subagent_session_id, '') != '' AND OLD.session_id IS NOT OLD.subagent_session_id", "OLD.subagent_session_id", false)
+	spawnChanged := "(OLD.session_id IS NOT NEW.session_id OR OLD.subagent_session_id IS NOT NEW.subagent_session_id)"
+	add("trg_tool_calls_spawn_usage_update_old", "UPDATE OF session_id, subagent_session_id", "tool_calls", spawnChanged+" AND COALESCE(OLD.subagent_session_id, '') != '' AND OLD.session_id IS NOT OLD.subagent_session_id", "OLD.subagent_session_id", false)
+	add("trg_tool_calls_spawn_usage_update_new", "UPDATE OF session_id, subagent_session_id", "tool_calls", spawnChanged+" AND COALESCE(NEW.subagent_session_id, '') != '' AND NEW.session_id IS NOT NEW.subagent_session_id", "NEW.subagent_session_id", false)
 	columns = []string{"session_id", "message_id", "category", "tool_name", "observed_outcome", "observed_repeat", "sequence_ending"}
 	changes = make([]string, len(columns))
 	for i, column := range columns {
