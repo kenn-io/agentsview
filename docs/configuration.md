@@ -1415,8 +1415,9 @@ Use an explicit root when the collecting process's `HOME` differs from the
 transcript owner's. Run `agentsview doctor sync` to see the resolved root.
 
 AgentsView collects both sessions your Muse started on a schedule and ones you
-started. Raw capture keeps the transcript and any regular index as original
-bytes.
+started. Runs your Muse started itself count as automated, so they stay hidden
+by default; see [Automated Session Detection](#automated-session-detection).
+Raw capture keeps the transcript and any regular index as original bytes.
 
 Items appear in stable `seq` order, with same-sequence occurrences keeping their
 file order. Tool outputs pair only with a unique preceding unmatched call;
@@ -2072,7 +2073,12 @@ record stays intact through the bulk-resync rebuild-and-copy path.
 ## Automated Session Detection
 
 Roborev-tagged runs count as automated code reviews, including runs with
-multiple user messages. Other sessions count as automated when they have one or
+multiple user messages. Muse Personal runs that your Muse started itself, such
+as scheduled jobs and background passes, also count as automated regardless of
+message count. AgentsView reads this from the `source` of the run's first user
+item: `scheduler.cron`, `runtime.self_improvement`, `runtime.feed`,
+`runtime.proactivity`, `runtime.browser_input` or `runtime.action`. Other
+sessions count as automated when they have one or
 fewer real user messages and their first user message matches the automation
 classifier. By default, automated sessions such as roborev reviews, title
 generation, warmup pings, and changelog generation stay hidden from session

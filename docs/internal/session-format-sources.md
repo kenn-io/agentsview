@@ -6714,14 +6714,31 @@ schemas keep their existing ordering behavior.
   index keys.
 - **Usage and cost:** None emitted. `context_window_usage` is a context
   snapshot, not per-message usage. Internal `model_id` is not exposed as a
-  public model name. Titles, parent links and chat/subagent classification
-  remain unknown.
+  public model name. Titles and parent links remain unknown.
+- **Run classification:** every `item` line carries a top-level `source`; the
+  header has none. A private survey of about 3,700 transcripts from one agent
+  on 2026-11-24 found `source` on every item line. The first user-role item's
+  `source` identifies runs Muse starts itself: `scheduler.cron`,
+  `runtime.self_improvement`, `runtime.feed`, `runtime.proactivity`,
+  `runtime.browser_input` and `runtime.action` covered 2,581 sessions, and a
+  manual review found no conversations among them. Conversations open with
+  plain `runtime`, a voice source such as `runtime.voice_audio`, or
+  `runtime.onboarding`. Plain `runtime` also opens subagent runs and delegated
+  assignments. Context items such as `runtime.skill_invalidation` and
+  `runtime.chats` can come first with a different role, so the first item is
+  not the signal. Scheduled runs can receive injected user items, such as
+  approvals, so message count does not separate them from conversations.
+  `internal/parser/testdata/muse_personal/sources/` holds one synthetic sample
+  per case; none is a capture.
 - **Agentsview:** `internal/parser/muse_personal.go` and
   `internal/parser/muse_personal_provider.go` require UUID layout and matching
   version-1 header identity. Recognized future transcript versions and
   duplicate session identities leave discovery incomplete so they cannot
   authorize raw custody tombstones. Sessions use `muse-personal:<session_id>`.
   Visible assistant commentary participates in dialogue search and export.
+  A session whose first user item, in sequence order, has one of the six
+  background sources is stored as `session_kind` `muse-background` and counts
+  as automated at any message count; all other sessions keep an empty kind.
   Items are sorted by sequence before pairing; ties keep physical order. Only
   byte-identical same-sequence records are deduplicated. A checkpoint is
   anchored after the highest preceding physical item sequence; it does not

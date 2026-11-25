@@ -162,6 +162,19 @@ func (record *musePersonalRecord) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, (*known)(record))
 }
 
+// musePersonalBackgroundSources are the item sources Muse stamps on the first
+// user item of runs it starts itself. Real conversations use plain runtime,
+// voice sources or runtime.onboarding. Plain runtime also covers subagent
+// runs and delegated work, so it is left to the prompt classifier.
+var musePersonalBackgroundSources = map[string]bool{
+	"scheduler.cron":           true,
+	"runtime.self_improvement": true,
+	"runtime.feed":             true,
+	"runtime.proactivity":      true,
+	"runtime.browser_input":    true,
+	"runtime.action":           true,
+}
+
 // parseMusePersonalSession streams original records into the supported normalized
 // projection. Opaque metadata stays in raw custody, never arbitrary system text.
 func parseMusePersonalSession(ctx context.Context, path, machine string) (*ParsedSession, []ParsedMessage, error) {
@@ -392,6 +405,9 @@ func parseMusePersonalSession(ctx context.Context, path, machine string) (*Parse
 		msg.ContentLength = len(msg.Content)
 		if msg.Role == RoleUser {
 			sess.UserMessageCount++
+			if sess.UserMessageCount == 1 && musePersonalBackgroundSources[rec.Source] {
+				sess.SessionKind = SessionKindMuseBackground
+			}
 			if sess.FirstMessage == "" {
 				sess.FirstMessage = msg.Content
 			}

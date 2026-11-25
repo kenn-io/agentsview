@@ -27,8 +27,12 @@ func TestMusePersonalFixture(t *testing.T) {
 		result := out.Results[0].Result
 		assert.Empty(t, result.Session.UsageEvents)
 		assert.Empty(t, result.Session.ParentSessionID)
-		assert.Empty(t, result.Session.SessionKind)
 		assert.Empty(t, result.Session.SessionName)
+		if result.Session.SourceSessionID == "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee" {
+			assert.Equal(t, SessionKindMuseBackground, result.Session.SessionKind, "the fixture's run opens with a scheduler.cron user item")
+		} else {
+			assert.Empty(t, result.Session.SessionKind)
+		}
 		if result.Session.SourceSessionID != "11111111-2222-4333-8444-555555555555" {
 			continue
 		}
@@ -55,6 +59,55 @@ func TestMusePersonalFixture(t *testing.T) {
 		}
 	}
 	assert.True(t, checked, "the main fixture's content must be checked")
+}
+
+// TestMusePersonalSourceSessionKind checks the synthetic samples under
+// testdata/muse_personal/sources. Each models one value of the top-level
+// source that Muse Personal stamps on its first user-role item.
+func TestMusePersonalSourceSessionKind(t *testing.T) {
+	for _, tc := range []struct {
+		fixture   string
+		wantKind  string
+		wantUsers int
+	}{
+		// Muse starts these runs itself. A run stays background even when a
+		// later injected item, such as an approval, adds user messages.
+		{"scheduler-cron", SessionKindMuseBackground, 2},
+		{"runtime-self-improvement", SessionKindMuseBackground, 1},
+		{"runtime-feed", SessionKindMuseBackground, 1},
+		{"runtime-proactivity", SessionKindMuseBackground, 1},
+		{"runtime-browser-input", SessionKindMuseBackground, 1},
+		{"runtime-action", SessionKindMuseBackground, 1},
+		// Conversations with the person. A context item can come before the
+		// first user item and carry a different source.
+		{"chat-after-context-stamp", "", 2},
+		{"voice-call", "", 1},
+		{"onboarding", "", 1},
+		// Plain runtime mixes chats with subagent runs, so it stays unclassified.
+		{"runtime-subagent", "", 1},
+	} {
+		t.Run(tc.fixture, func(t *testing.T) {
+			body, err := os.ReadFile(filepath.Join("testdata", "muse_personal", "sources", tc.fixture+".jsonl"))
+			require.NoError(t, err)
+			p, path := musePersonalTestProvider(t, "")
+			writeSourceFile(t, path, string(body))
+			out := musePersonalTestParse(t, p)
+			require.Len(t, out.Results, 1)
+			sess := out.Results[0].Result.Session
+			assert.Zero(t, sess.MalformedLines)
+			assert.Equal(t, tc.wantKind, sess.SessionKind)
+			assert.Equal(t, tc.wantUsers, sess.UserMessageCount)
+		})
+	}
+}
+
+func TestMusePersonalSessionKindFollowsSequenceOrder(t *testing.T) {
+	cron := `{"type":"item","seq":0,"source":"scheduler.cron","created_at":"2026-10-05T15:04:06Z","item":{"type":"message","role":"user","text":"run"}}` + "\n"
+	chat := `{"type":"item","seq":1,"source":"runtime","created_at":"2026-10-05T15:04:07Z","item":{"type":"message","role":"user","text":"hello"}}` + "\n"
+	p, _ := musePersonalTestProvider(t, chat+cron)
+	sess := musePersonalTestParse(t, p).Results[0].Result.Session
+	assert.Equal(t, SessionKindMuseBackground, sess.SessionKind, "the lowest sequence is the first user item, not the first physical line")
+	assert.Equal(t, "run", sess.FirstMessage)
 }
 
 func TestMusePersonalHeaderFieldsMatchExactJSONNames(t *testing.T) {

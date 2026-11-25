@@ -1,0 +1,4 @@
+{"type":"session_header","version":1,"session_id":"11111111-2222-4333-8444-555555555555","agent_id":"66666666-7777-4888-8999-000000000000","created_at":"2026-10-05T15:04:05Z"}
+{"type":"item","seq":0,"source":"runtime.voice_companion_context","item":{"type":"message","role":"developer","text":"Synthetic voice context."},"created_at":"2026-10-05T15:04:06Z","row_created_at":1791212646,"timestamp_timezone":"UTC"}
+{"type":"item","seq":1,"source":"runtime.voice_audio","item":{"type":"message_parts","role":"user","parts":[{"type":"text","text":"What is on my synthetic calendar today?"}]},"created_at":"2026-10-05T15:04:07Z","row_created_at":1791212647,"timestamp_timezone":"UTC"}
+{"type":"item","seq":2,"source":"runtime","item":{"type":"message","role":"assistant","text":"One synthetic meeting at noon."},"created_at":"2026-10-05T15:04:08Z","row_created_at":1791212648,"timestamp_timezone":"UTC"}

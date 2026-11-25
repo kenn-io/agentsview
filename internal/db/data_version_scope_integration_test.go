@@ -1882,6 +1882,57 @@ func TestEvenerCompactionUpgradeReparsesStoredLabels(t *testing.T) {
 	assert.Equal(t, parser.EvenerLiteralCompactionSourceType, messages[1].SourceType)
 }
 
+func TestMusePersonalBackgroundKindUpgradeReparsesInPlace(t *testing.T) {
+	scope := db.ScopedDataVersionProviders(189, 190)
+	assert.ElementsMatch(t, []parser.AgentType{parser.AgentMusePersonal}, scope)
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
+	ctx := t.Context()
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	const rel = "agent-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee/sessions/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee.jsonl"
+	data, err := os.ReadFile(filepath.Join("..", "parser", "testdata", "data-version-corpus", "muse-personal", filepath.FromSlash(rel)))
+	require.NoError(t, err)
+	dbtest.WriteTestFile(t, filepath.Join(root, filepath.FromSlash(rel)), data)
+	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentMusePersonal: {root}}, DisableFilesystemProjectDiscovery: true}
+	engine := sync.NewEngine(ctx, database, cfg)
+	stats := engine.SyncAll(ctx, nil)
+	require.Zero(t, stats.Failed)
+	require.Equal(t, 1, stats.Synced)
+	engine.Close()
+	const id = "muse-personal:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+
+	// Reproduce the version-189 archive: the parser left every Muse Personal
+	// session unclassified.
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE sessions SET session_kind = '', is_automated = 0 WHERE id = ?`, id)
+		return err
+	}))
+	require.NoError(t, database.SetSessionDataVersion(ctx, id, version-1))
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", version-1))
+		return err
+	}))
+	path := database.Path()
+	require.NoError(t, database.Close())
+	database, err = db.OpenIsolated(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	_, fullRebuild, _, err := db.ArchiveResyncState(ctx, path)
+	require.NoError(t, err)
+	assert.False(t, fullRebuild)
+	engine = sync.NewEngine(ctx, database, cfg)
+	t.Cleanup(engine.Close)
+	stats = engine.SyncAll(ctx, nil)
+	require.Zero(t, stats.Failed)
+	require.Equal(t, 1, stats.Synced)
+	sess, err := database.GetSession(ctx, id)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, parser.SessionKindMuseBackground, sess.SessionKind)
+	assert.True(t, sess.IsAutomated)
+}
+
 func TestClaudeToolResultImageUpgradeReparsesAndIndexes(t *testing.T) {
 	scope := db.ScopedDataVersionProviders(188, 189)
 	assert.Contains(t, scope, parser.AgentClaude)
