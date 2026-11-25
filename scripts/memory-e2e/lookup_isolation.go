@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -217,39 +216,12 @@ func lookupExecutableNeedsNode(path string) (bool, error) {
 	return strings.HasPrefix(shebang, "#!") && (strings.Contains(strings.ToLower(shebang), "node") || nodeShellExec.Match(buf[:n])), nil
 }
 
-func copyLookupTranscripts(ctx context.Context, source, destination string) error {
-	return filepath.WalkDir(source, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(source, path)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(destination, rel)
-		if entry.IsDir() {
-			return os.MkdirAll(target, 0o700)
-		}
-		if !entry.Type().IsRegular() {
-			return fmt.Errorf("lookup isolation: unsupported transcript entry %q", rel)
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		return os.WriteFile(target, data, 0o600)
-	})
-}
-
-func copyLookupTranscriptsForClient(ctx context.Context, client clientName, source, privateHome, project string) error {
+func copyLookupTranscriptsForClient(client clientName, source, privateHome, project string) error {
 	destination, err := lookupTranscriptRoot(client, privateHome, project)
 	if err != nil {
 		return err
 	}
-	return copyLookupTranscripts(ctx, source, destination)
+	return os.CopyFS(destination, os.DirFS(source))
 }
 
 func lookupTranscriptRoot(client clientName, privateHome, project string) (string, error) {

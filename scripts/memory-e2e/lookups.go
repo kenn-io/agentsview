@@ -52,7 +52,6 @@ type lookupSummary struct {
 	Direct         int     `json:"direct_calls"`
 	Other          int     `json:"other_calls"`
 	Errors         int     `json:"errors"`
-	MissingCalls   int     `json:"missing_calls"`
 }
 
 type lookupClientReport struct {
@@ -275,7 +274,7 @@ func captureLookup(ctx context.Context, cfg config, bin string, client clientNam
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, "", fmt.Errorf("%w: create attempt: %w", errLookupSetup, err)
 	}
-	if err := copyLookupTranscriptsForClient(ctx, client, filepath.Join(filepath.Dir(project), "fixture-sessions"), filepath.Join(dir, "home"), project); err != nil {
+	if err := copyLookupTranscriptsForClient(client, filepath.Join(filepath.Dir(project), "fixture-sessions"), filepath.Join(dir, "home"), project); err != nil {
 		return nil, "", fmt.Errorf("%w: copy fixture transcripts: %w", errLookupSetup, err)
 	}
 	isolation, err := prepareLookupIsolation(ctx, client, filepath.Dir(project), cfg.repository, project, bin, dir)
@@ -424,7 +423,6 @@ func summarizeLookups(attempts []lookupAttempt) []lookupSummary {
 		r.Direct += a.Score.Direct
 		r.Other += a.Score.Other
 		r.Errors += a.Score.Errors
-		r.MissingCalls += a.Score.MissingCalls
 		switch a.Score.Verdict {
 		case "success":
 			r.Success++

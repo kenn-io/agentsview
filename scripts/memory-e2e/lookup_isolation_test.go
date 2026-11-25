@@ -58,7 +58,7 @@ func TestLookupIsolationReadsOnlyFixtureHome(t *testing.T) {
 	t.Setenv("PATH", binDir)
 	t.Setenv("ANTHROPIC_API_KEY", "host-anthropic-key")
 	t.Setenv("OPENAI_API_KEY", "host-openai-key")
-	require.NoError(t, copyLookupTranscriptsForClient(t.Context(), clientCodex, fixtureRoot, filepath.Join(runDir, "home"), project))
+	require.NoError(t, copyLookupTranscriptsForClient(clientCodex, fixtureRoot, filepath.Join(runDir, "home"), project))
 	isolation, err := prepareLookupIsolation(t.Context(), clientCodex, clientDir, project, project, bin, runDir)
 	require.NoError(t, err)
 	cmd := exec.CommandContext(t.Context(), isolation.command)

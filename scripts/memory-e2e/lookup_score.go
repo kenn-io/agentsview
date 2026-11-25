@@ -24,21 +24,19 @@ type lookupCall struct {
 	Name                         string
 	Input                        string
 	Result                       string
-	StructuredResult             string
 	Start, End                   int64
 	Source, StartOrder, EndOrder int
 	Missing, Error               bool
 }
 
 type lookupScore struct {
-	Verdict      string `json:"verdict"`
-	CallsToHit   *int   `json:"calls_to_hit"`
-	MCP          int    `json:"mcp_calls"`
-	CLI          int    `json:"cli_calls"`
-	Direct       int    `json:"direct_calls"`
-	Other        int    `json:"other_calls"`
-	Errors       int    `json:"errors"`
-	MissingCalls int    `json:"missing_calls"`
+	Verdict    string `json:"verdict"`
+	CallsToHit *int   `json:"calls_to_hit"`
+	MCP        int    `json:"mcp_calls"`
+	CLI        int    `json:"cli_calls"`
+	Direct     int    `json:"direct_calls"`
+	Other      int    `json:"other_calls"`
+	Errors     int    `json:"errors"`
 }
 
 var (
@@ -185,7 +183,7 @@ func claudeLookupCalls(ctx context.Context, events []map[string]any) ([]lookupCa
 				continue
 			}
 			c := &calls[idx]
-			c.Result, c.StructuredResult = lookupResultParts(ctx, toolResult.ContentRaw)
+			c.Result = lookupResultText(toolResult.ContentRaw)
 			c.Missing = toolResult.ContentRaw == "" || toolResult.ContentRaw == "null"
 			c.End = at
 			c.EndOrder = line + 1
@@ -196,52 +194,12 @@ func claudeLookupCalls(ctx context.Context, events []map[string]any) ([]lookupCa
 	return calls, nil
 }
 
-func lookupResultParts(ctx context.Context, raw string) (string, string) {
-	var quoted string
-	if json.Unmarshal([]byte(raw), &quoted) == nil {
-		nested := gjson.Parse(quoted)
-		if nested.IsObject() || nested.IsArray() {
-			raw = quoted
-		} else {
-			return quoted, ""
-		}
+func lookupResultText(raw string) string {
+	var value any
+	if err := json.Unmarshal([]byte(raw), &value); err != nil {
+		return raw
 	}
-
-	value := gjson.Parse(raw)
-	if value.IsArray() {
-		text, _, _, _, _, _, _ := parser.ExtractTextContent(
-			parser.WithoutFilesystemProjectDiscovery(ctx), value,
-		)
-		if text != "" {
-			return text, ""
-		}
-		return raw, raw
-	}
-	if !value.IsObject() {
-		return raw, ""
-	}
-
-	var text string
-	content := value.Get("content")
-	if content.IsArray() {
-		text, _, _, _, _, _, _ = parser.ExtractTextContent(
-			parser.WithoutFilesystemProjectDiscovery(ctx), content,
-		)
-	}
-	structured := value.Get("structuredContent")
-	if structured.Exists() {
-		if text == "" {
-			text = structured.Raw
-		}
-		return text, structured.Raw
-	}
-	if value.Get("isError").Bool() || value.Get("is_error").Bool() {
-		return text, raw
-	}
-	if content.IsArray() && text != "" {
-		return text, ""
-	}
-	return raw, raw
+	return resultText(value)
 }
 
 func codexLookupCalls(ctx context.Context, events []map[string]any) []lookupCall {
@@ -305,12 +263,12 @@ func codexLookupCalls(ctx context.Context, events []map[string]any) []lookupCall
 					}
 				}
 				if i, ok := pendingCalls[id]; ok {
-					calls[i].Result, calls[i].StructuredResult = lookupResultParts(ctx, rawText(p["output"]))
+					calls[i].Result = resultText(p["output"])
 					calls[i].Missing = p["output"] == nil
 					calls[i].End = at
 					calls[i].EndOrder = line + 1
 					status, _ := p["status"].(string)
-					calls[i].Error = status == "failed" || (calls[i].Route == "mcp" && mcpErrorPattern.MatchString(calls[i].Result+calls[i].StructuredResult))
+					calls[i].Error = status == "failed" || (calls[i].Route == "mcp" && mcpErrorPattern.MatchString(calls[i].Result))
 					upgradeLookupRoute(&calls[i])
 				}
 			}
@@ -344,7 +302,7 @@ func codexLookupCalls(ctx context.Context, events []map[string]any) []lookupCall
 			c.Name = tool
 			c.Input = rawText(item["arguments"])
 			c.Route = "mcp"
-			c.Result, c.StructuredResult = lookupResultParts(ctx, rawText(item["result"]))
+			c.Result = resultText(item["result"])
 			c.Missing = item["result"] == nil
 			status, _ := item["status"].(string)
 			c.Error = status == "failed" || item["error"] != nil
@@ -385,7 +343,7 @@ func codexLookupCalls(ctx context.Context, events []map[string]any) []lookupCall
 }
 
 func upgradeLookupRoute(c *lookupCall) {
-	if c.Route == "other" && lookupOutputPattern.MatchString(c.Result+c.StructuredResult) {
+	if c.Route == "other" && lookupOutputPattern.MatchString(c.Result) {
 		c.Route = "direct"
 	}
 }
@@ -396,9 +354,6 @@ func scoreLookupQuestion(q lookupQuestion, answer string, calls []lookupCall, ru
 		calls = make([]lookupCall, 0)
 	}
 	for i := range calls {
-		if calls[i].Missing {
-			s.MissingCalls++
-		}
 		switch calls[i].Route {
 		case "mcp":
 			s.MCP++
@@ -440,12 +395,12 @@ func scoreLookupQuestion(q lookupQuestion, answer string, calls []lookupCall, ru
 	hitIndex := -1
 	for _, index := range ordered {
 		c := &calls[index]
-		if c.Error || c.Missing || strings.TrimSpace(c.Result+c.StructuredResult) == "" {
+		if c.Error || c.Missing || strings.TrimSpace(c.Result) == "" {
 			continue
 		}
 		name := strings.TrimPrefix(strings.TrimPrefix(c.Name, "mcp__agentsview__"), "agentsview:")
 		sessionRead := c.Route == "cli" || c.Route == "direct" || (c.Route == "mcp" && strings.HasPrefix(name, "get_"))
-		if containsSessionID(c.Result+c.StructuredResult, sourceID) || (sessionRead && containsSessionID(c.Input, sourceID)) {
+		if containsSessionID(c.Result, sourceID) || (sessionRead && containsSessionID(c.Input, sourceID)) {
 			hit, hitIndex = c, index
 			break
 		}

@@ -84,25 +84,13 @@ func TestLookupCodexParallelResultsAndWait(t *testing.T) {
 	assert.Equal(t, 2, *score.CallsToHit)
 }
 
-func TestLookupKeepsStructuredSessionRowsSeparate(t *testing.T) {
-	source := "codex:" + lookupID
-	result := `{"matches":[{"session_id":"` + source + `","snippet":"violet ledger"}]}`
-	output := `{"structuredContent":` + result + `}`
-	trace := `{"timestamp":"2026-11-24T12:00:00Z","type":"response_item","payload":{"type":"function_call","name":"mcp__agentsview__search_content","call_id":"search","arguments":"{}"}}` + "\n" + `{"timestamp":"2026-11-24T12:00:01Z","type":"response_item","payload":{"type":"function_call_output","call_id":"search","output":` + stringMustJSON(t, output) + `}}`
-	calls, err := extractLookupCalls(t.Context(), clientCodex, [][]byte{[]byte(trace)})
-	require.NoError(t, err)
-	require.Len(t, calls, 1)
-	assert.JSONEq(t, result, calls[0].StructuredResult)
-}
-
 func TestLookupGetMessagesUsesItsRequestedSessionScope(t *testing.T) {
 	source := "codex:" + lookupID
 	call := lookupCall{
 		Name: "get_messages", Route: "mcp",
-		Input:            `{"session_id":"` + source + `"}`,
-		StructuredResult: `{"messages":[{"content":"violet ledger"}]}`,
-		Result:           "violet ledger",
-		Start:            1, End: 2,
+		Input:  `{"session_id":"` + source + `"}`,
+		Result: "violet ledger",
+		Start:  1, End: 2,
 	}
 	question := lookupQuestion{
 		Expected:       []lookupItem{{SessionID: source}},
