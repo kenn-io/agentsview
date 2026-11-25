@@ -359,7 +359,9 @@ func (s *Sync) queueNewSession(
 }
 
 // queueNewSessionTranscript queues a new session's usage events and its whole
-// transcript, read from one archive snapshot as copySessionMessages requires.
+// transcript. Transcript pages come from one archive snapshot, as
+// copySessionMessages requires; usage events are read separately, as on the
+// sequential path.
 func (s *Sync) queueNewSessionTranscript(
 	ctx context.Context, exec *pgBatchExecer, sessionID string,
 ) (count int, changed bool, err error) {
