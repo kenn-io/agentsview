@@ -45,6 +45,10 @@ func TestActivitySourceProbeCachePreservesFreshness(t *testing.T) {
 	for _, id := range []string{"probe-cold", "probe-warm"} {
 		got, err := store.ActivityReportSourceProbe(chdriver.Context(ctx, chdriver.WithQueryID(id)))
 		require.NoError(t, err)
+		if want.LauncherLinksFingerprint == "" {
+			want.LauncherLinksFingerprint = got.LauncherLinksFingerprint
+			require.NotEmpty(t, want.LauncherLinksFingerprint)
+		}
 		require.Equal(t, want, got)
 	}
 	_, err := conn.ExecContext(ctx, `SYSTEM FLUSH LOGS query_log`)
@@ -74,6 +78,7 @@ func TestActivitySourceProbeCachePreservesFreshness(t *testing.T) {
 		for range 2 {
 			got, probeErr := store.ActivityReportSourceProbe(ctx)
 			require.NoError(t, probeErr)
+			step.want.LauncherLinksFingerprint = want.LauncherLinksFingerprint
 			require.Equal(t, step.want, got, step.sql)
 		}
 	}
@@ -169,4 +174,30 @@ func TestActivitySourceProbeTracksLauncherLinksAcrossMerges(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, cleared, clearedMerged, "a merge must leave the cleared report ID valid")
 	page(clearedReport.ReportID, false, 1)
+
+	for _, step := range []struct {
+		update string
+		peak   int
+	}{
+		{"relationship_type='subagent', parent_session_id='probe-parent'", 1},
+		{"parent_session_id=''", 1},
+		{"deleted_at='2026-06-15 00:00:00'", 0},
+		{"deleted_at=NULL", 1},
+	} {
+		_, err = syncer.conn.ExecContext(ctx, `ALTER TABLE sessions UPDATE `+step.update+` WHERE id='probe-child' SETTINGS mutations_sync=2`)
+		require.NoError(t, err)
+		changed, err := store.ActivityReportSourceProbe(ctx)
+		require.NoError(t, err)
+		require.Equal(t, cleared.MaxSessionModified, changed.MaxSessionModified)
+		require.NotEqual(t, cleared, changed)
+		next := page(clearedReport.ReportID, true, step.peak)
+		require.Equal(t, step.peak, next.SubagentPeak.Agents)
+		_, err = syncer.conn.ExecContext(ctx, `OPTIMIZE TABLE sessions FINAL`)
+		require.NoError(t, err)
+		merged, err := store.ActivityReportSourceProbe(ctx)
+		require.NoError(t, err)
+		require.Equal(t, changed, merged)
+		page(next.ReportID, false, step.peak)
+		cleared, clearedReport = changed, next
+	}
 }
