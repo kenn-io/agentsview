@@ -1882,59 +1882,83 @@ func TestEvenerCompactionUpgradeReparsesStoredLabels(t *testing.T) {
 	assert.Equal(t, parser.EvenerLiteralCompactionSourceType, messages[1].SourceType)
 }
 
-func TestMusePersonalBackgroundKindUpgradeReparsesInPlace(t *testing.T) {
+func TestMusePersonalRunCategoryUpgradeReparsesInPlace(t *testing.T) {
 	scope := db.ScopedDataVersionProviders(189, 190)
 	assert.ElementsMatch(t, []parser.AgentType{parser.AgentMusePersonal}, scope)
 	version := db.CurrentDataVersion()
 	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
-	ctx := t.Context()
-	database := dbtest.OpenTestDB(t)
-	root := t.TempDir()
-	// The cron sample has an injected approval, so it has two user messages.
-	data, err := os.ReadFile(filepath.Join("..", "parser", "testdata", "muse_personal", "sources", "scheduler-cron.jsonl"))
-	require.NoError(t, err)
-	dbtest.WriteTestFile(t, filepath.Join(root, "agent-66666666-7777-4888-8999-000000000000", "sessions", "11111111-2222-4333-8444-555555555555.jsonl"), data)
-	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentMusePersonal: {root}}, DisableFilesystemProjectDiscovery: true}
-	engine := sync.NewEngine(ctx, database, cfg)
-	stats := engine.SyncAll(ctx, nil)
-	require.Zero(t, stats.Failed)
-	require.Equal(t, 1, stats.Synced)
-	engine.Close()
-	const id = "muse-personal:11111111-2222-4333-8444-555555555555"
+	for _, tc := range []struct {
+		fixture          string
+		wantKind         string
+		wantAutomated    bool
+		wantRelationship string
+		wantParent       string
+		wantUsers        int
+	}{
+		// The cron sample has an injected approval, so it has two user
+		// messages and still counts as automated.
+		{"scheduler-cron", parser.SessionKindMuseBackground, true, "", "", 2},
+		// Delegated browser work becomes a parentless Subagent worker.
+		{"runtime-browser-input", parser.SessionKindNonInteractive, false, string(parser.RelSubagent), "", 1},
+		// A subagent run links to the session named by its requester.
+		{"runtime-subagent", parser.SessionKindNonInteractive, false, string(parser.RelSubagent), "muse-personal:77777777-8888-4999-8aaa-bbbbbbbbbbbb", 1},
+	} {
+		t.Run(tc.fixture, func(t *testing.T) {
+			ctx := t.Context()
+			database := dbtest.OpenTestDB(t)
+			root := t.TempDir()
+			data, err := os.ReadFile(filepath.Join("..", "parser", "testdata", "muse_personal", "sources", tc.fixture+".jsonl"))
+			require.NoError(t, err)
+			dbtest.WriteTestFile(t, filepath.Join(root, "agent-66666666-7777-4888-8999-000000000000", "sessions", "11111111-2222-4333-8444-555555555555.jsonl"), data)
+			cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentMusePersonal: {root}}, DisableFilesystemProjectDiscovery: true}
+			engine := sync.NewEngine(ctx, database, cfg)
+			stats := engine.SyncAll(ctx, nil)
+			require.Zero(t, stats.Failed)
+			require.Equal(t, 1, stats.Synced)
+			engine.Close()
+			const id = "muse-personal:11111111-2222-4333-8444-555555555555"
 
-	// Reproduce the version-189 archive: the parser left every Muse Personal
-	// session unclassified.
-	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `UPDATE sessions SET session_kind = '', is_automated = 0 WHERE id = ?`, id)
-		return err
-	}))
-	require.NoError(t, database.SetSessionDataVersion(ctx, id, version-1))
-	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", version-1))
-		return err
-	}))
-	path := database.Path()
-	require.NoError(t, database.Close())
-	database, err = db.OpenIsolated(ctx, path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	_, fullRebuild, _, err := db.ArchiveResyncState(ctx, path)
-	require.NoError(t, err)
-	assert.False(t, fullRebuild)
-	engine = sync.NewEngine(ctx, database, cfg)
-	t.Cleanup(engine.Close)
-	stats = engine.SyncAll(ctx, nil)
-	require.Zero(t, stats.Failed)
-	require.Equal(t, 1, stats.Synced)
-	sess, err := database.GetSession(ctx, id)
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	assert.Equal(t, parser.SessionKindMuseBackground, sess.SessionKind)
-	assert.True(t, sess.IsAutomated)
-	assert.Equal(t, 2, sess.UserMessageCount, "a background run stays automated with more than one user message")
-	var sessions int
-	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT count(*) FROM sessions").Scan(&sessions))
-	assert.Equal(t, 1, sessions, "the reparse keeps the session identity")
+			// Reproduce the version-189 archive: the parser left every Muse
+			// Personal session unclassified and without a relationship.
+			require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, `UPDATE sessions SET session_kind = '', is_automated = 0, relationship_type = '', parser_relationship_type = NULL, parent_session_id = NULL, parser_parent_session_id = NULL WHERE id = ?`, id)
+				return err
+			}))
+			require.NoError(t, database.SetSessionDataVersion(ctx, id, version-1))
+			require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", version-1))
+				return err
+			}))
+			path := database.Path()
+			require.NoError(t, database.Close())
+			database, err = db.OpenIsolated(ctx, path)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			_, fullRebuild, _, err := db.ArchiveResyncState(ctx, path)
+			require.NoError(t, err)
+			assert.False(t, fullRebuild)
+			engine = sync.NewEngine(ctx, database, cfg)
+			t.Cleanup(engine.Close)
+			stats = engine.SyncAll(ctx, nil)
+			require.Zero(t, stats.Failed)
+			require.Equal(t, 1, stats.Synced)
+			sess, err := database.GetSession(ctx, id)
+			require.NoError(t, err)
+			require.NotNil(t, sess)
+			assert.Equal(t, tc.wantKind, sess.SessionKind)
+			assert.Equal(t, tc.wantAutomated, sess.IsAutomated)
+			assert.Equal(t, tc.wantRelationship, sess.RelationshipType)
+			if tc.wantParent == "" {
+				assert.Nil(t, sess.ParentSessionID)
+			} else if assert.NotNil(t, sess.ParentSessionID) {
+				assert.Equal(t, tc.wantParent, *sess.ParentSessionID)
+			}
+			assert.Equal(t, tc.wantUsers, sess.UserMessageCount)
+			var sessions int
+			require.NoError(t, database.Reader().QueryRow(ctx, "SELECT count(*) FROM sessions").Scan(&sessions))
+			assert.Equal(t, 1, sessions, "the reparse keeps the session identity")
+		})
+	}
 }
 
 func TestClaudeToolResultImageUpgradeReparsesAndIndexes(t *testing.T) {

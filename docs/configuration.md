@@ -1415,10 +1415,12 @@ Use an explicit root when the collecting process's `HOME` differs from the
 transcript owner's. Run `agentsview doctor sync` to see the resolved root.
 
 AgentsView collects both sessions your Muse started on a schedule and ones you
-started. Scheduled jobs and other background runs your Muse starts itself count
-as automated, so session lists and counts hide them by default; see
-[Automated Session Detection](#automated-session-detection). Raw capture keeps
-the transcript and any regular index as original bytes.
+started. Scheduled jobs and upkeep runs count as automated, so session lists
+and counts hide them by default; see
+[Automated Session Detection](#automated-session-detection). Delegated browser
+runs and subagent runs count as Subagents, like other headless workers; see
+[Activity](/docs/activity/). Raw capture keeps the transcript and any regular
+index as original bytes.
 
 Items appear in stable `seq` order, with same-sequence occurrences keeping their
 file order. Tool outputs pair only with a unique preceding unmatched call;
@@ -2074,19 +2076,18 @@ record stays intact through the bulk-resync rebuild-and-copy path.
 ## Automated Session Detection
 
 Roborev-tagged runs count as automated code reviews, including runs with
-multiple user messages. Muse Personal scheduled jobs and other background runs
-also count as automated regardless of message count. AgentsView reads this from
-the `source` of the run's first user item: `scheduler.cron`,
-`runtime.self_improvement`, `runtime.feed`, `runtime.proactivity`,
-`runtime.browser_input` or `runtime.action`. Muse subagent runs and delegated
-assignments start with plain `runtime`, so they follow the prompt rules below:
-an `[automated]` pattern hides them only when they have one or fewer real user
-messages. Other sessions count as automated when they have one or fewer real
-user messages and their first user message matches the automation classifier. By
-default, automated sessions such as roborev reviews, title generation, warmup
-pings, and changelog generation stay hidden from session lists, counts, and
-analytics. Turn on **Include automated** in the session filter dropdown to show
-them. See [Activity](https://agentsview.io/docs/activity/) for headless worker
+multiple user messages. Muse Personal scheduled jobs and upkeep runs also count
+as automated regardless of message count. AgentsView reads this from the
+`source` of the run's first user item: `scheduler.cron`, `runtime.action`,
+`runtime.self_improvement`, `runtime.feed` or `runtime.proactivity`. Muse
+delegated browser runs and subagent runs count as Subagents instead; see
+[Activity](https://agentsview.io/docs/activity/). Other sessions count as
+automated when they have one or fewer real user messages and their first user
+message matches the automation classifier. By default, automated sessions such
+as roborev reviews, title generation, warmup pings, and changelog generation
+stay hidden from session lists, counts, and analytics. Turn on **Include
+automated** in the session filter dropdown to show them. See
+[Activity](https://agentsview.io/docs/activity/) for headless worker
 classification.
 
 Built-in patterns cover the roborev family and AgentsView's own internal

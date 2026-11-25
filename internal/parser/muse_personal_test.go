@@ -70,22 +70,23 @@ func TestMusePersonalSourceSessionKind(t *testing.T) {
 		wantKind  string
 		wantUsers int
 	}{
-		// Muse starts these runs itself. The cron sample opens with a
-		// runtime.chats context item before its first user item, and a later
-		// injected approval adds a second user message.
+		// Scheduled jobs and Muse's own upkeep are automated, like roborev.
+		// The cron sample opens with a runtime.chats context item before its
+		// first user item, and a later injected approval adds a second user
+		// message.
 		{"scheduler-cron", SessionKindMuseBackground, 2},
+		{"runtime-action", SessionKindMuseBackground, 1},
 		{"runtime-self-improvement", SessionKindMuseBackground, 1},
 		{"runtime-feed", SessionKindMuseBackground, 1},
 		{"runtime-proactivity", SessionKindMuseBackground, 1},
-		{"runtime-browser-input", SessionKindMuseBackground, 1},
-		{"runtime-action", SessionKindMuseBackground, 1},
+		// Delegated browser work and subagent runs are headless workers.
+		{"runtime-browser-input", SessionKindNonInteractive, 1},
+		{"runtime-subagent", SessionKindNonInteractive, 1},
 		// Conversations with the person. A context item can come before the
 		// first user item and carry a different source.
 		{"chat-after-context-stamp", "", 2},
 		{"voice-call", "", 1},
 		{"onboarding", "", 1},
-		// Plain runtime mixes chats with subagent runs, so it stays unclassified.
-		{"runtime-subagent", "", 1},
 	} {
 		t.Run(tc.fixture, func(t *testing.T) {
 			body, err := os.ReadFile(filepath.Join("testdata", "muse_personal", "sources", tc.fixture+".jsonl"))
@@ -111,10 +112,12 @@ func TestMusePersonalSessionKindUsesFirstUserItem(t *testing.T) {
 		}
 		return fmt.Sprintf(`{"type":"item","seq":%d,%s"created_at":"2026-10-05T15:04:06Z","item":{"type":"message","role":%q,"text":%q}}`+"\n", seq, sourceField, role, text)
 	}
+	const subagent = "[Subagent Context] You are running as a subagent (depth 1/3). Summarize the notes."
 	for _, tc := range []struct {
 		name, body, wantKind, wantFirst string
 	}{
 		{"lowest sequence, not first line", item(1, "runtime", "user", "hello") + item(0, "scheduler.cron", "user", "run"), SessionKindMuseBackground, "run"},
+		{"delegated source", item(0, "runtime.browser_input", "user", "browse"), SessionKindNonInteractive, "browse"},
 		{"background source on a non-user item", item(0, "scheduler.cron", "developer", "context") + item(1, "runtime", "user", "hello"), "", "hello"},
 		{"same sequence keeps file order", item(0, "runtime", "user", "hello") + item(0, "scheduler.cron", "user", "run"), "", "hello"},
 		// Only the first user item counts, even when it carries a context source.
@@ -125,6 +128,11 @@ func TestMusePersonalSessionKindUsesFirstUserItem(t *testing.T) {
 		{"source matching is exact", item(0, "Scheduler.Cron", "user", "run"), "", "run"},
 		{"malformed line before the first user item", "{malformed\n" + item(1, "scheduler.cron", "user", "run"), SessionKindMuseBackground, "run"},
 		{"malformed first user line falls through to the next", "{malformed\n" + item(1, "runtime", "user", "hello"), "", "hello"},
+		// The subagent envelope counts only on plain runtime, as the first user item.
+		{"subagent envelope on plain runtime", item(0, "runtime", "user", subagent), SessionKindNonInteractive, subagent},
+		{"subagent envelope on another source", item(0, "runtime.voice_audio", "user", subagent), "", subagent},
+		{"subagent envelope on a later user item", item(0, "runtime", "user", "hello") + item(1, "runtime", "user", subagent), "", "hello"},
+		{"subagent envelope must open the message", item(0, "runtime", "user", "note: "+subagent), "", "note: " + subagent},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p, _ := musePersonalTestProvider(t, tc.body)
@@ -133,6 +141,56 @@ func TestMusePersonalSessionKindUsesFirstUserItem(t *testing.T) {
 			sess := out.Results[0].Result.Session
 			assert.Equal(t, tc.wantKind, sess.SessionKind)
 			assert.Equal(t, tc.wantFirst, sess.FirstMessage, "the preview comes from the same first user item")
+		})
+	}
+}
+
+func TestMusePersonalSubagentParentLink(t *testing.T) {
+	const (
+		parent   = "77777777-8888-4999-8aaa-bbbbbbbbbbbb"
+		other    = "99999999-aaaa-4bbb-8ccc-dddddddddddd"
+		envelope = "[Subagent Context] You are running as a subagent (depth 1/2).\n"
+	)
+	t.Run("fixture", func(t *testing.T) {
+		body, err := os.ReadFile(filepath.Join("testdata", "muse_personal", "sources", "runtime-subagent.jsonl"))
+		require.NoError(t, err)
+		p, path := musePersonalTestProvider(t, "")
+		writeSourceFile(t, path, string(body))
+		sess := musePersonalTestParse(t, p).Results[0].Result.Session
+		assert.Equal(t, SessionKindNonInteractive, sess.SessionKind)
+		assert.Equal(t, "muse-personal:"+parent, sess.ParentSessionID, "the requester agent id names the parent session; Your session is ignored")
+		assert.Equal(t, RelSubagent, sess.RelationshipType)
+	})
+	item := func(seq int, source, text string) string {
+		return fmt.Sprintf(`{"type":"item","seq":%d,"source":%q,"created_at":"2026-10-05T15:04:06Z","item":{"type":"message","role":"user","text":%q}}`+"\n", seq, source, text)
+	}
+	for _, tc := range []struct {
+		name, body, wantKind, wantParent string
+	}{
+		{"labelled requester on one line", item(0, "runtime", envelope+"Requester agent id: "+parent+". Requester source: runtime."), SessionKindNonInteractive, parent},
+		{"requester without trailing period", item(0, "runtime", envelope+"Requester agent id: "+parent+"\nDo the work."), SessionKindNonInteractive, parent},
+		{"no requester label", item(0, "runtime", envelope+"Label: "+other+"."), SessionKindNonInteractive, ""},
+		{"only Your session", item(0, "runtime", envelope+"Your session: "+parent+"."), SessionKindNonInteractive, ""},
+		{"two different requesters", item(0, "runtime", envelope+"Requester agent id: "+parent+".\nRequester agent id: "+other+"."), SessionKindNonInteractive, ""},
+		{"repeated same requester", item(0, "runtime", envelope+"Requester agent id: "+parent+".\nRequester agent id: "+parent+"."), SessionKindNonInteractive, parent},
+		{"requester is the session itself", item(0, "runtime", envelope+"Requester agent id: "+musePersonalTestID+"."), SessionKindNonInteractive, ""},
+		{"label inside a longer word", item(0, "runtime", envelope+"XRequester agent id: "+parent+"."), SessionKindNonInteractive, ""},
+		{"malformed id", item(0, "runtime", envelope+"Requester agent id: "+parent+"0."), SessionKindNonInteractive, ""},
+		{"requester outside the subagent envelope", item(0, "runtime", "Requester agent id: "+parent+"."), "", ""},
+		{"requester on delegated browser work", item(0, "runtime.browser_input", envelope+"Requester agent id: "+parent+"."), SessionKindNonInteractive, ""},
+		{"requester on a later user item", item(0, "runtime", "hello") + item(1, "runtime", envelope+"Requester agent id: "+parent+"."), "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, _ := musePersonalTestProvider(t, tc.body)
+			sess := musePersonalTestParse(t, p).Results[0].Result.Session
+			assert.Equal(t, tc.wantKind, sess.SessionKind)
+			if tc.wantParent == "" {
+				assert.Empty(t, sess.ParentSessionID)
+				assert.Equal(t, RelNone, sess.RelationshipType)
+				return
+			}
+			assert.Equal(t, "muse-personal:"+tc.wantParent, sess.ParentSessionID)
+			assert.Equal(t, RelSubagent, sess.RelationshipType)
 		})
 	}
 }

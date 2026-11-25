@@ -1526,9 +1526,8 @@ const SessionKindNonInteractive = "non-interactive"
 // is the roborev feature tag (`codex exec --thread-source roborev`).
 const SessionKindRoborev = "roborev"
 
-// SessionKindMuseBackground marks a Muse Personal run that Muse started
-// itself, such as a scheduled job or a background pass, rather than a
-// conversation with the person.
+// SessionKindMuseBackground marks a Muse Personal scheduled job or upkeep
+// pass that Muse started itself, rather than a conversation with the person.
 const SessionKindMuseBackground = "muse-background"
 
 // FileInfo holds file system metadata for a session source file.

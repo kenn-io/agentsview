@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 const (
@@ -163,16 +164,68 @@ func (record *musePersonalRecord) UnmarshalJSON(data []byte) error {
 }
 
 // musePersonalBackgroundSources are the item sources Muse stamps on the first
-// user item of runs it starts itself. Real conversations use plain runtime,
-// voice sources or runtime.onboarding. Plain runtime also covers subagent
-// runs and delegated work, so it is left to the prompt classifier.
+// user item of scheduled jobs and of its own upkeep. These runs are automated,
+// like roborev.
 var musePersonalBackgroundSources = map[string]bool{
 	"scheduler.cron":           true,
+	"runtime.action":           true,
 	"runtime.self_improvement": true,
 	"runtime.feed":             true,
 	"runtime.proactivity":      true,
-	"runtime.browser_input":    true,
-	"runtime.action":           true,
+}
+
+// musePersonalSubagentPrefix opens the first user message of a Muse subagent
+// run. Subagent runs share plain runtime with conversations, so only this
+// envelope separates them.
+const musePersonalSubagentPrefix = "[Subagent Context] You are running as a subagent (depth "
+
+// musePersonalRequesterPattern finds the labelled requester in a subagent
+// envelope. Each Muse Personal agent owns one session whose ID equals the
+// agent ID, so the requester agent ID names the parent session. The envelope's
+// "Your session" field does not reliably name the run and is ignored.
+var musePersonalRequesterPattern = regexp.MustCompile(`(?:^|\s)Requester agent id: (` + codexUUIDPattern + `)\.?`)
+
+// musePersonalSubagentParent returns the parent session ID recorded in the
+// first user item of a subagent run, or "" when the envelope does not name
+// exactly one other session.
+func musePersonalSubagentParent(source, content, sessionID string) string {
+	if source != "runtime" || !strings.HasPrefix(content, musePersonalSubagentPrefix) {
+		return ""
+	}
+	parent := ""
+	for _, match := range musePersonalRequesterPattern.FindAllStringSubmatchIndex(content, -1) {
+		// The ID must end at whitespace or the end of the message.
+		if end := match[1]; end < len(content) && !unicode.IsSpace(rune(content[end])) {
+			return ""
+		}
+		id := content[match[2]:match[3]]
+		if parent != "" && id != parent {
+			return ""
+		}
+		parent = id
+	}
+	if parent == sessionID {
+		return ""
+	}
+	return parent
+}
+
+// musePersonalSessionKind classifies a session from its first user item.
+// Delegated browser work and subagent runs are headless workers: the
+// non-interactive kind makes them parentless Subagent sessions. Real
+// conversations use plain runtime, voice sources or runtime.onboarding and
+// keep an empty kind.
+func musePersonalSessionKind(source, content string) string {
+	switch {
+	case musePersonalBackgroundSources[source]:
+		return SessionKindMuseBackground
+	case source == "runtime.browser_input":
+		return SessionKindNonInteractive
+	case source == "runtime" && strings.HasPrefix(content, musePersonalSubagentPrefix):
+		return SessionKindNonInteractive
+	default:
+		return ""
+	}
 }
 
 // parseMusePersonalSession streams original records into the supported normalized
@@ -405,8 +458,12 @@ func parseMusePersonalSession(ctx context.Context, path, machine string) (*Parse
 		msg.ContentLength = len(msg.Content)
 		if msg.Role == RoleUser {
 			sess.UserMessageCount++
-			if sess.UserMessageCount == 1 && musePersonalBackgroundSources[rec.Source] {
-				sess.SessionKind = SessionKindMuseBackground
+			if sess.UserMessageCount == 1 {
+				sess.SessionKind = musePersonalSessionKind(rec.Source, msg.Content)
+				if parent := musePersonalSubagentParent(rec.Source, msg.Content, h.SessionID); parent != "" {
+					sess.ParentSessionID = "muse-personal:" + parent
+					sess.RelationshipType = RelSubagent
+				}
 			}
 			if sess.FirstMessage == "" {
 				sess.FirstMessage = msg.Content

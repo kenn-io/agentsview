@@ -6719,16 +6719,22 @@ schemas keep their existing ordering behavior.
   header has none. A private check of all 3,923 transcripts from one agent on
   2026-11-25 found `source` on every item line. The first user-role item's
   `source` identifies runs Muse starts itself: `scheduler.cron`,
-  `runtime.self_improvement`, `runtime.feed`, `runtime.proactivity`,
-  `runtime.browser_input` and `runtime.action` covered 3,608 sessions, and none
-  of them was a conversation. Five sessions had no user item. Conversations open
-  with plain `runtime`, a voice source such as `runtime.voice_audio`, or
-  `runtime.onboarding`. Plain `runtime` also opens subagent runs and delegated
-  assignments. Context items such as `runtime.skill_invalidation` and
-  `runtime.chats` can come first with a different role, so the first item is not
-  the signal. Scheduled runs can receive injected user items, such as approvals
-  (half of the 1,520 `scheduler.cron` sessions had two user items), so message
-  count does not separate them from conversations.
+  `runtime.action`, `runtime.self_improvement`, `runtime.feed`,
+  `runtime.proactivity` and `runtime.browser_input` covered 3,608 sessions, and
+  none of them was a conversation. Five sessions had no user item. Conversations
+  open with plain `runtime`, a voice source such as `runtime.voice_audio`, or
+  `runtime.onboarding`. Plain `runtime` also opens subagent runs, whose first
+  user item opens with a `[Subagent Context]` envelope. A check of 3,932
+  transcripts on 2026-11-25 found no structured parent field: every header had
+  `session_id` equal to `agent_id`. All 128 subagent envelopes carried
+  `Requester agent id: <UUID>.`, and every one named an existing session. The
+  envelope's `Your session` field named the run itself in only 87 of 128, so it
+  is not used. `runtime.browser_input` runs carry no parent reference. Context
+  items such as `runtime.skill_invalidation` and `runtime.chats` can come first
+  with a different role, so the first item is not the signal. Scheduled runs can
+  receive injected user items, such as approvals (half of the 1,520
+  `scheduler.cron` sessions had two user items), so message count does not
+  separate them from conversations.
   `internal/parser/testdata/muse_personal/sources/` holds one synthetic sample
   per first-user source; none is a capture.
   `TestMusePersonalSessionKindUsesFirstUserItem` covers sessions with no user
@@ -6739,9 +6745,13 @@ schemas keep their existing ordering behavior.
   duplicate session identities leave discovery incomplete so they cannot
   authorize raw custody tombstones. Sessions use `muse-personal:<session_id>`.
   Visible assistant commentary participates in dialogue search and export.
-  A session whose first user item, in sequence order, has one of the six
-  background sources is stored as `session_kind` `muse-background` and counts
-  as automated at any message count; all other sessions keep an empty kind.
+  The first user item, in sequence order, classifies the session. Scheduled and
+  upkeep sources are stored as `session_kind` `muse-background` and count as
+  automated at any message count. `runtime.browser_input` and plain-`runtime`
+  subagent envelopes are stored as `non-interactive`, which makes them Subagent
+  workers. A subagent envelope that names exactly one other session in
+  `Requester agent id` links to it as its parent; otherwise the worker stays
+  parentless. All other sessions keep an empty kind.
   Items are sorted by sequence before pairing; ties keep physical order. Only
   byte-identical same-sequence records are deduplicated. A checkpoint is
   anchored after the highest preceding physical item sequence; it does not
