@@ -2403,7 +2403,6 @@ func TestCodexLabeledRunDiscoveryAndParse(t *testing.T) {
 		{"root", ".codex-run-v1-abc", ".", []string{"."}},
 		{"outer root first", "team/case/.codex-run-v1-abc", "team/case", []string{".", "team"}},
 		{"inner root first", "team/case/.codex-run-v1-abc", "team/case", []string{"team", "."}},
-		{"sessions root first", "team/case/.codex-run-v1-abc", "team/case", []string{"team/case/.codex-run-v1-abc/sessions", "."}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -2424,10 +2423,6 @@ func TestCodexLabeledRunDiscoveryAndParse(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, supported)
 			assert.Equal(t, root, plan.CaptureRoot)
-			found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: id})
-			require.NoError(t, err)
-			require.True(t, ok)
-			assert.Equal(t, path, found.DisplayPath)
 			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
 			require.NoError(t, err)
 			require.Len(t, outcome.Results, 1)

@@ -5609,11 +5609,9 @@ func (e *Engine) reconciliationCandidate(ctx context.Context,
 			preference1 = rank.Class
 			preference2 = configuredRootPreferenceForSource(source, statPath, roots)
 			preference3 = rank.Recency
-		} else if !isCodexFormatAgent(agent) {
+		} else {
 			preference2 = rank.Class
 			preference3 = rank.Recency
-		} else if rank.Class != 0 {
-			preference1, preference2, preference3 = rank.Class, rank.Class, rank.Recency
 		}
 	}
 	if agent == parser.AgentAntigravityCLI {
