@@ -384,7 +384,12 @@ func (b *codexSessionBuilder) processLine(ctx context.Context,
 	line string,
 ) (skip bool, err error) {
 	b.sourceLine++
-	if gjson.Get(line, "type").Str == codexTypeTurnContext {
+	lineType := gjson.Get(line, "type").Str
+	// A token_usage_record is commonly followed by response_item and
+	// item_completed lines before Codex emits the mirrored token_count. Keep
+	// the record candidate across those transcript lines; the next
+	// usage-bearing event (record or token_count) resolves it.
+	if lineType == codexTypeTurnContext {
 		b.sourceTurnID = strings.Clone(gjson.Get(line, "payload.turn_id").Str)
 		b.sourceTurnContexts = append(b.sourceTurnContexts, b.sourceTurnID)
 		b.sourceInTurn = true
@@ -740,16 +745,14 @@ func (b *codexSessionBuilder) handleHistoryMutation(
 func (b *codexSessionBuilder) handleTokenUsageRecord(
 	payload gjson.Result,
 ) {
-	if b.agent != AgentTraeX {
-		return
-	}
 	usage := payload.Get("usage")
 	if !usage.IsObject() {
 		return
 	}
 	for _, counter := range []string{"input_tokens", "cached_input_tokens", "output_tokens", "cache_write_input_tokens"} {
 		if usage.Get(counter).Type == gjson.Number {
-			b.applyTokenUsage(usage.Raw, usage.Raw, payload.Get("response_id").Str)
+			responseID := payload.Get("response_id").Str
+			b.applyTokenUsage(usage.Raw, usage.Raw, responseID, true)
 			return
 		}
 	}
@@ -767,16 +770,24 @@ func (b *codexSessionBuilder) handleTokenCountEvent(
 	if raw == "" {
 		return
 	}
-	// A repeated token_count carries the same cumulative total_token_usage;
-	// a new call with equal per-call counts raises it. Keying on the whole
-	// info object therefore drops only true repeats.
-	b.applyTokenUsage(raw, info.Raw, "")
+	// A token_count at the next usage-bearing event after a token_usage_record
+	// with the same per-call counters is that record's mirror, even when its
+	// cumulative totals differ. Later token_count repeats use the whole info
+	// object.
+	b.applyTokenUsage(raw, info.Raw, "", false)
 }
 
-// applyTokenUsage attaches one call's usage, raw, unless dedupKey and
-// responseID repeat the previous observation.
-func (b *codexSessionBuilder) applyTokenUsage(raw, dedupKey, responseID string) {
-	if b.observeTokenUsage(dedupKey, responseID) {
+// applyTokenUsage attaches one call's usage. Record events dedupe by their
+// per-call counters and response ID, while token_count events dedupe by their
+// full info object unless they are the pending record's mirror.
+func (b *codexSessionBuilder) applyTokenUsage(raw, dedupKey, responseID string, record bool) {
+	duplicate := false
+	if record {
+		duplicate = b.observeTokenUsageRecord(raw, responseID)
+	} else {
+		duplicate = b.observeTokenUsage(raw, dedupKey, responseID)
+	}
+	if duplicate {
 		return
 	}
 

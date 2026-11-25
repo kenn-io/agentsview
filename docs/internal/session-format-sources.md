@@ -810,9 +810,8 @@ fixtures retain this field; missing identities remain source-local.
   `token_usage_record` rows carry `response_id`, per-response `usage`, and
   running turn and thread totals
   ([protocol.rs](https://github.com/openai/codex/blob/87b7bdbf2efb9cb6fb15d821ef535061012c0138/codex-rs/protocol/src/protocol.rs)).
-  They mirror `token_count` (291,310 records against 292,444 `token_count`
-  events with usage in a second scan of the same, still-growing corpus), so
-  the parser still reads only `token_count` and adds no session totals.
+  Many have a matching `token_count` (291,310 records against 292,444
+  `token_count` events with usage in a second scan of the same corpus).
   Repeated `token_count` events are now recognized by their whole `info`
   object, including the cumulative `total_token_usage`, so two calls with
   equal per-call counts both count. The scan suppressed the same 753 repeats
@@ -826,6 +825,16 @@ fixtures retain this field; missing identities remain source-local.
   `TestCodexFidelityUsageReachesCost`,
   `TestCodexFidelityAppendMatchesFullParse`, and
   `TestCodexTranscriptFidelityUpgradeReparsesInPlace`.
+
+- **Unmirrored usage records:** The parser counts `token_usage_record` and
+  skips the next `token_count` if its per-response counters match. Repeated
+  records use the counters and `response_id` when present, so distinct
+  responses with equal counters can still count. The parser stores
+  `reasoning_output_tokens` separately. `output_tokens` already includes
+  those tokens, so billing counts them once. Checkpoint version 8 retains the
+  pending mirror state across appends. Data version 193 reparses Codex,
+  TraeX, Augure Code, and Open Interpreter. `TestCodexTokenUsageRecordAndMirror`
+  covers mirrored, unmirrored, and repeated usage records.
 
 - **Archived shell argv:** Older Codex shell calls record `command` as an
   argument array, including `bash -lc` scripts. Commit links read these arrays
@@ -1747,10 +1756,10 @@ fixtures retain this field; missing identities remain source-local.
   independent archive format.
 - **Usage and cost:** `token_count` records carry the Codex fields. Newer
   rollouts can instead write the same per-response usage shape at
-  `token_usage_record.payload.usage`. Both paths use Codex normalization and
-  catalog pricing, including the same reasoning-output omission. Consecutive
-  repeats are suppressed using a single usage digest keyed by `response_id`
-  when present, so equal counts for different responses remain distinct.
+  `token_usage_record.payload.usage`. Both paths use Codex normalization,
+  mirror detection, and catalog pricing, and retain reasoning output. The
+  record deduplication key includes `response_id` when present, so equal
+  counts for different responses remain distinct.
   `cache_creation_input_tokens` is unread on purpose; the only capture has 0
   and no source shows whether it sits inside `input_tokens`. Empty usage
   objects leave the response available for a later valid record.
@@ -1829,12 +1838,10 @@ fixtures retain this field; missing identities remain source-local.
   Interpreter 0.0.59 attached to agentsview issue 2745 has
   `originator: "codex-tui"` and the Codex record shapes.
 - **Usage and cost:** Each model response persists both a `token_count` event
-  and a `token_usage_record` with the same per-response usage. The parser
-  counts `token_count` alone, as for Codex, and skips `token_usage_record`,
-  which only TraeX reads because its rollouts lack `token_count`. Reading both
-  would add a response's usage once per tool call it issued. Open Interpreter
-  targets open models through third-party providers (the sample used
-  `glm-5.2`); slugs absent from the pricing catalog price as unpriced.
+  and a `token_usage_record` with the same per-response usage. The shared
+  Codex parser counts the record and skips its matching `token_count`.
+  Open Interpreter targets open models through third-party providers. The
+  sample used `glm-5.2`. Slugs absent from the pricing catalog stay unpriced.
 - **Agentsview:** `internal/parser/openinterpreter.go` relabels the shared Codex
   parser (`internal/parser/codex.go`, `internal/parser/codex_provider.go`)
   onto the `open-interpreter:` ID namespace, and `parser.IsCodexFormatAgent`

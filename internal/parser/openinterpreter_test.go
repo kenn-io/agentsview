@@ -80,9 +80,9 @@ func TestOpenInterpreterProviderParsesRollout(t *testing.T) {
 		assert.Equal(t, "glm-5.2", msg.Model)
 		outputTokens += msg.OutputTokens
 	}
-	// token_usage_record repeats the usage token_count already carries. The
-	// parser counts token_count alone, as for Codex; reading both would bill
-	// the response once per tool call.
+	// token_usage_record carries the usage for this response. The mirrored
+	// token_count is suppressed separately, so both events still account for
+	// the response exactly once.
 	assert.Equal(t, 90, outputTokens)
 
 	for i, want := range []struct{ id, output string }{

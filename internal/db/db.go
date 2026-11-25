@@ -713,7 +713,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (191: import Antigravity CLI session titles from conversation_summaries.db;
 // native title reconciliation backfills stored sessions without reparsing.)
 // (192: use recorded labels for retained Codex runs.)
-const dataVersion = 192
+// (193: reparse Codex-format sessions to count unmirrored usage records and
+// retain reasoning tokens.)
+const dataVersion = 193
 
 const archiveOnlyVersionBase = 1 << 20
 
