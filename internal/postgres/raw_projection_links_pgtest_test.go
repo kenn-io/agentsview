@@ -11,7 +11,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawderive"
 )
@@ -239,21 +238,6 @@ func TestHostedCrossSourcePluralOwnersRemainContextual(t *testing.T) {
 	require.NotNil(t, child)
 	assert.Nil(t, child.ParentSessionID)
 	assert.Equal(t, conflict.Variants, child.ParentSessionIDs)
-	sessions, _, err := h.physical.activityReportSessionsWhere(t.Context(), db.AnalyticsFilter{Timezone: "UTC", IncludeSubagents: true, IncludeForks: true}, "2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z", nil, false, true)
-	require.NoError(t, err)
-	var childSession activity.SessionMeta
-	var parentIDs []string
-	for _, session := range sessions {
-		if session.IsSubagent {
-			childSession = session
-		} else {
-			parentIDs = append(parentIDs, session.SessionID)
-		}
-	}
-	require.Len(t, parentIDs, 2)
-	require.NotEmpty(t, childSession.SessionID)
-	assert.ElementsMatch(t, parentIDs, childSession.ParentSessionIDs)
-	assert.False(t, childSession.IsLaunched)
 	for _, parent := range conflict.Variants {
 		children, err := h.GetChildSessions(t.Context(), parent)
 		require.NoError(t, err)

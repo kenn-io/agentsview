@@ -8,16 +8,16 @@ import (
 
 // Launcher describes an ancestor and whether it passes the report filters.
 type Launcher struct {
-	ID               string
-	IsAutomated      bool
-	IsSubagent       bool
-	IsLaunched       bool
-	ParentSessionIDs []string
-	MatchesFilter    bool
+	ID              string
+	IsAutomated     bool
+	IsSubagent      bool
+	IsLaunched      bool
+	ParentSessionID string
+	MatchesFilter   bool
 }
 
 type Launchers struct {
-	Waiting  map[string][]string
+	Waiting  map[string]string
 	Examined []string
 }
 
@@ -26,9 +26,9 @@ func ResolveLaunchers(ctx context.Context, runs []SessionMeta, selected map[stri
 	rows := make(map[string]Launcher, len(runs))
 	var pending []string
 	for _, run := range runs {
-		rows[run.SessionID] = Launcher{ID: run.SessionID, IsAutomated: run.IsAutomated, IsSubagent: run.IsSubagent, IsLaunched: run.IsLaunched, ParentSessionIDs: run.ParentSessionIDs, MatchesFilter: selected[run.SessionID]}
+		rows[run.SessionID] = Launcher{ID: run.SessionID, IsAutomated: run.IsAutomated, IsSubagent: run.IsSubagent, IsLaunched: run.IsLaunched, ParentSessionID: run.ParentSessionID, MatchesFilter: selected[run.SessionID]}
 		if run.IsLaunched {
-			pending = append(pending, run.ParentSessionIDs...)
+			pending = append(pending, run.ParentSessionID)
 		}
 	}
 	examined := make(map[string]struct{})
@@ -49,7 +49,7 @@ func ResolveLaunchers(ctx context.Context, runs []SessionMeta, selected map[stri
 		for _, id := range ids {
 			if row, ok := rows[id]; ok {
 				if row.IsLaunched {
-					pending = append(pending, row.ParentSessionIDs...)
+					pending = append(pending, row.ParentSessionID)
 				}
 			} else {
 				missing = append(missing, id)
@@ -65,11 +65,11 @@ func ResolveLaunchers(ctx context.Context, runs []SessionMeta, selected map[stri
 		for _, row := range loaded {
 			rows[row.ID] = row
 			if row.IsLaunched {
-				pending = append(pending, row.ParentSessionIDs...)
+				pending = append(pending, row.ParentSessionID)
 			}
 		}
 	}
-	result := Launchers{Waiting: make(map[string][]string), Examined: slices.Sorted(maps.Keys(examined))}
+	result := Launchers{Waiting: make(map[string]string), Examined: slices.Sorted(maps.Keys(examined))}
 	for _, run := range runs {
 		if !run.IsLaunched {
 			continue
@@ -88,13 +88,12 @@ func ResolveLaunchers(ctx context.Context, runs []SessionMeta, selected map[stri
 				continue
 			}
 			if id != run.SessionID && current.MatchesFilter && !current.IsSubagent && !current.IsAutomated {
-				result.Waiting[run.SessionID] = append(result.Waiting[run.SessionID], id)
+				result.Waiting[run.SessionID] = id
 			}
 			if current.IsLaunched {
-				pending = append(pending, current.ParentSessionIDs...)
+				pending = append(pending, current.ParentSessionID)
 			}
 		}
-		slices.Sort(result.Waiting[run.SessionID])
 	}
 	return result, nil
 }

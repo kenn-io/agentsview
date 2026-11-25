@@ -459,6 +459,8 @@ func TestPGActivityReportExternalParentProvenance(t *testing.T) {
 	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
 	assert.Equal(t, 1, pgKeptBuild(t, store, f, q, true).Report.InteractivePeak.Agents)
 	pgKeptBuild(t, store, f, q, false)
+	beforeProbe, err := store.ActivityReportSourceProbe(ctx)
+	require.NoError(t, err)
 
 	// An older archive can retain the effective parent after its launcher link disappears.
 	raw, err := sql.Open("sqlite3", local.Path())
@@ -467,6 +469,9 @@ func TestPGActivityReportExternalParentProvenance(t *testing.T) {
 	_, err = raw.ExecContext(ctx, `DELETE FROM session_external_parents WHERE session_id = 'child'`)
 	require.NoError(t, err)
 	pgKeptPush(t, syncer, false)
+	afterProbe, err := store.ActivityReportSourceProbe(ctx)
+	require.NoError(t, err)
+	assert.NotEqual(t, beforeProbe.MaxSessionModified, afterProbe.MaxSessionModified)
 	after := pgKeptBuild(t, store, f, q, true)
 	assert.Zero(t, after.Report.InteractivePeak.Agents)
 	store.runtimeState().activityKept.DeleteSlots(func(string) bool { return true })
@@ -476,21 +481,4 @@ func TestPGActivityReportExternalParentProvenance(t *testing.T) {
 	require.NoError(t, store.DB().QueryRowContext(ctx, `SELECT parent_session_id, external_parent_session_id FROM sessions WHERE id='child'`).Scan(&parent, &external))
 	assert.Equal(t, "parent", parent.String)
 	assert.False(t, external.Valid)
-}
-
-func TestPGActivityReportSourceProbeTracksParentProvenance(t *testing.T) {
-	t.Parallel()
-	ctx := t.Context()
-	local, syncer, store := newUsageJournalFixture(t)
-	pgKeptSession(t, local, "child", "project-a", "2026-06-14")
-	pgKeptPush(t, syncer, false)
-	before, err := store.ActivityReportSourceProbe(ctx)
-	require.NoError(t, err)
-	_, err = store.DB().ExecContext(ctx, `UPDATE sessions SET external_parent_session_id = 'parent' WHERE id = 'child'`)
-	require.NoError(t, err)
-	after, err := store.ActivityReportSourceProbe(ctx)
-	require.NoError(t, err)
-	assert.Greater(t, after.UsageChangeRevision, before.UsageChangeRevision)
-	after.UsageChangeRevision = before.UsageChangeRevision
-	assert.Equal(t, before, after)
 }

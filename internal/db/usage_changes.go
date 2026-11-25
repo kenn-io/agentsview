@@ -106,8 +106,7 @@ func usageChangeJournalSQL() (string, string) {
 	add("trg_sessions_usage_change_group_label", "UPDATE OF session_name", "sessions", "OLD.session_name IS NOT NEW.session_name AND (OLD.group_key!='' OR NEW.group_key!='')", "NEW.id", false)
 	add("trg_sessions_usage_change_delete", "DELETE", "sessions", "", "OLD.id", false)
 	add("trg_external_parent_usage_change_insert", "INSERT", "session_external_parents", "", "NEW.session_id", false)
-	add("trg_external_parent_usage_change_update", "UPDATE", "session_external_parents", "OLD.parent_session_id IS NOT NEW.parent_session_id OR OLD.session_id IS NOT NEW.session_id", "NEW.session_id", false)
-	add("trg_external_parent_usage_change_update_old", "UPDATE", "session_external_parents", "OLD.session_id IS NOT NEW.session_id", "OLD.session_id", false)
+	add("trg_external_parent_usage_change_update", "UPDATE", "session_external_parents", "OLD.parent_session_id IS NOT NEW.parent_session_id", "NEW.session_id", false)
 	add("trg_external_parent_usage_change_delete", "DELETE", "session_external_parents", "", "OLD.session_id", false)
 	// Session or transcript revisions cover tool inserts and message metadata.
 	// Tool replacements without a transcript bump delete old calls first.

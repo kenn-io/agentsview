@@ -63,7 +63,7 @@ func (s *Store) keptActivityReport(ctx context.Context, selection, version strin
 			return kept.Report{}, through, false, err
 		}
 		if f.ActivityNeedsEvidence() {
-			_, evidenceIDs, err := s.activityReportSessionsWhere(ctx, db.AnalyticsFilter{Timezone: f.Timezone, IncludeSubagents: true, IncludeForks: true}, rangeStart, rangeEnd, changed, true, false)
+			_, evidenceIDs, err := s.activityReportSessionsWhere(ctx, db.AnalyticsFilter{Timezone: f.Timezone, IncludeSubagents: true, IncludeForks: true}, rangeStart, rangeEnd, changed, true)
 			if err != nil || len(evidenceIDs) > 0 {
 				return kept.Report{}, through, false, err
 			}

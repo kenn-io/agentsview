@@ -64,7 +64,7 @@ func BuildReportArtifacts(
 	sweepIDs := slices.Clone(ids)
 	hidden := make(map[string]bool)
 	for _, run := range evidence {
-		if len(ancestors.Waiting[run.SessionID]) > 0 {
+		if ancestors.Waiting[run.SessionID] != "" {
 			sweepIDs = append(sweepIDs, run.SessionID)
 			hidden[run.SessionID] = true
 		}

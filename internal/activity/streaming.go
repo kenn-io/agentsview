@@ -341,7 +341,7 @@ func buildIntervalArtifacts(
 		if !p.Evidence[iv.sessionID] {
 			sweep(iv)
 		}
-		for _, id := range p.Waiting[iv.sessionID] {
+		if id := p.Waiting[iv.sessionID]; id != "" {
 			part := iv
 			part.sessionID = id
 			sweep(part)

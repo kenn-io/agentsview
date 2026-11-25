@@ -281,11 +281,11 @@ type evidenceReportBackend struct {
 }
 
 func (b *evidenceReportBackend) ActivityReportEvidence(context.Context, Query) ([]SessionMeta, error) {
-	return []SessionMeta{{SessionID: "linked", IsSubagent: true, IsLaunched: true, ParentSessionIDs: []string{"s"}}, {SessionID: "unrelated", IsSubagent: true, IsLaunched: true, ParentSessionIDs: []string{"other"}}}, nil
+	return []SessionMeta{{SessionID: "linked", IsSubagent: true, IsLaunched: true, ParentSessionID: "s"}, {SessionID: "unrelated", IsSubagent: true, IsLaunched: true, ParentSessionID: "other"}}, nil
 }
 
 func (b *evidenceReportBackend) ActivityReportLaunchers(_ context.Context, _ []SessionMeta, _ map[string]bool, _ Query) (Launchers, error) {
-	return Launchers{Waiting: map[string][]string{"linked": {"s"}}}, nil
+	return Launchers{Waiting: map[string]string{"linked": "s"}}, nil
 }
 
 func (b *evidenceReportBackend) ActivityReportCandidateSource(ids []string, _ Query) CandidateSource {

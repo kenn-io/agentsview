@@ -24,8 +24,7 @@ func (s *Store) ActivityReportSourceProbe(
 			UNION ALL
 			SELECT MAX(updated_at) FROM genai_pricing
 		) AS pricing_times)::text, ''),
-		COALESCE((SELECT value::bigint FROM sync_metadata WHERE key = $1), 0),
-		COALESCE((SELECT value::bigint FROM sync_metadata WHERE key = 'usage_change_revision'), 0)
+		COALESCE((SELECT value::bigint FROM sync_metadata WHERE key = $1), 0)
 	FROM (
 		SELECT COUNT(*) AS session_count,
 			COALESCE(MAX(updated_at)::text, '') AS max_updated_at,
@@ -35,7 +34,7 @@ func (s *Store) ActivityReportSourceProbe(
 	) AS session_probe`, activityReportProjectIdentityGenerationKey).Scan(
 		&probe.SessionCount, &probe.MaxSessionModified, &probe.MaxDataVersion,
 		&probe.MaxMessageID, &probe.MaxUsageID, &probe.MaxPricingUpdated,
-		&probe.ProjectIdentityGeneration, &probe.UsageChangeRevision,
+		&probe.ProjectIdentityGeneration,
 	)
 	if err != nil {
 		return activity.SourceProbe{}, fmt.Errorf("probing pg activity report source: %w", err)
