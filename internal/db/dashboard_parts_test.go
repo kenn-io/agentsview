@@ -608,8 +608,8 @@ func TestDashboardPartsEvictionMatchesScans(t *testing.T) {
 	}
 	samples := make(map[string]kept.Part[dashboardPart])
 	require.NoError(t, d.fillDashboardParts(ctx, AnalyticsFilter{Timezone: "UTC"}, ids, versions, samples))
-	for id, part := range samples {
-		d.dashboardMemo.maxBytes = max(d.dashboardMemo.maxBytes, 3*dashboardPartBytes(id, part))
+	for _, part := range samples {
+		d.dashboardMemo.maxBytes = max(d.dashboardMemo.maxBytes, 3*dashboardPartBytes(part))
 	}
 	var reads [][]string
 	dashboardPartsReadObserver = func(ids []string) { reads = append(reads, append([]string(nil), ids...)) }
