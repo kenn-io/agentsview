@@ -24,6 +24,8 @@ const (
 	ContentSnippetRadius      = 60 // chars of context on each side of a match
 )
 
+var contentScanTimeout = 2 * time.Minute
+
 // ContentSearchFilter parameterises SearchContent. Session-scoping fields
 // mirror SessionFilter; they are mapped through buildSessionFilter so the
 // include-children / one-shot / orphan logic is shared, not reimplemented.
@@ -368,6 +370,9 @@ func (db *DB) searchContentSubstring(
 			return ContentSearchPage{}, err
 		}
 		defer release()
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, contentScanTimeout)
+		defer cancel()
 	}
 	if words && db.messageFTSRepairPending.Load() {
 		return ContentSearchPage{}, errFTSUnavailable
@@ -641,6 +646,9 @@ func (db *DB) searchContentTerms(
 			return ContentSearchPage{}, err
 		}
 		defer release()
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, contentScanTimeout)
+		defer cancel()
 	}
 	return searchWithTermsIndex(ctx, db, f, terms,
 		func(indexed map[string]string) (ContentSearchPage, error) {
@@ -724,6 +732,9 @@ func (db *DB) searchContentRegex(
 			return ContentSearchPage{}, err
 		}
 		defer release()
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, contentScanTimeout)
+		defer cancel()
 	}
 
 	lit := LiteralPrefix(f.Pattern)
@@ -1853,6 +1864,8 @@ func (db *DB) hybridFTSLeg(
 func (db *DB) hybridWordHits(
 	ctx context.Context, f ContentSearchFilter, q contentWords, limit int,
 ) ([]hybridDisplay, error) {
+	ctx, cancel := context.WithTimeout(ctx, contentScanTimeout)
+	defer cancel()
 	snapshot, err := db.BeginMessageSnapshot(ctx)
 	if err != nil {
 		return nil, err

@@ -1,14 +1,54 @@
 package db
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestContentScanStopsAtDeadline(t *testing.T) {
+	d := testDB(t)
+	seedSearchSession(t, d, "s1", "project", [][2]string{{"user", "ask opus and fable"}})
+	hasFTS := d.HasFTS(t.Context())
+	previous := contentScanTimeout
+	contentScanTimeout = time.Nanosecond
+	t.Cleanup(func() { contentScanTimeout = previous })
+	for _, tc := range []struct {
+		mode, pattern string
+		keywordOnly   bool
+	}{
+		{"substring", "ask opus and fable", false},
+		{"regex", "ask.*fable", false},
+		{"terms", "ask opus and fable", false},
+		{"hybrid", "ask opus and fable", true},
+	} {
+		t.Run(tc.mode, func(t *testing.T) {
+			if tc.keywordOnly && !hasFTS {
+				t.Skip("fts5 not available")
+			}
+			_, err := d.SearchContent(t.Context(), ContentSearchFilter{Mode: tc.mode, Pattern: tc.pattern, KeywordOnly: tc.keywordOnly})
+			assert.ErrorIs(t, err, context.DeadlineExceeded)
+			assert.Zero(t, d.rawReader().Stats().InUse)
+			var releases []func()
+			defer func() {
+				for _, release := range releases {
+					release()
+				}
+			}()
+			for range bulkReadSlots {
+				release, ok := d.tryAcquireBulkRead()
+				require.True(t, ok)
+				releases = append(releases, release)
+			}
+		})
+	}
+}
 
 // seedSearchSession inserts one session with the given messages
 // (role/content pairs) for content-search tests.
