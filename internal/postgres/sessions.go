@@ -1230,10 +1230,10 @@ func (s *Store) GetMatchingMachineIDs(ctx context.Context, candidates []string) 
 }
 
 // GetSessionTreeMarker reads the parent and direct children in one query.
-func (s *Store) GetSessionTreeMarker(ctx context.Context, id string) (string, error) {
+func (s *Store) GetSessionTreeMarker(ctx context.Context, id string) (db.SessionTreeSnapshot, error) {
 	rows, err := s.pg.QueryContext(ctx, "SELECT id, "+sessionVersionColumns+" FROM sessions WHERE id = $1 OR (parent_session_id = $1 AND deleted_at IS NULL)", id)
 	if err != nil {
-		return "", err
+		return db.SessionTreeSnapshot{}, err
 	}
 	defer rows.Close()
 	var parent *db.SessionTreeEntry
@@ -1242,7 +1242,7 @@ func (s *Store) GetSessionTreeMarker(ctx context.Context, id string) (string, er
 		var e db.SessionTreeEntry
 		var v sessionVersionRow
 		if err := rows.Scan(append([]any{&e.ID}, v.fields()...)...); err != nil {
-			return "", err
+			return db.SessionTreeSnapshot{}, err
 		}
 		e.Count, e.Version = v.count, v.version()
 		if e.ID == id {
@@ -1252,10 +1252,10 @@ func (s *Store) GetSessionTreeMarker(ctx context.Context, id string) (string, er
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return "", err
+		return db.SessionTreeSnapshot{}, err
 	}
 	if parent == nil {
-		return "", fmt.Errorf("session not found")
+		return db.SessionTreeSnapshot{}, errors.New("session not found")
 	}
-	return db.SessionTreeMarker(append([]db.SessionTreeEntry{*parent}, children...))
+	return db.NewSessionTreeSnapshot(append([]db.SessionTreeEntry{*parent}, children...))
 }

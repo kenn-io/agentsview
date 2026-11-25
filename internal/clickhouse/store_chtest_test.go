@@ -409,7 +409,9 @@ func TestStoreGetSessionVersionChangesAfterPush(t *testing.T) {
 	}
 	want, err := db.SessionTreeMarker(entries)
 	require.NoError(t, err)
-	assert.Equal(t, want, marker)
+	assert.Equal(t, want, marker.Marker)
+	assert.Equal(t, entries[0].Count, marker.ParentCount)
+	assert.Equal(t, entries[0].Version, marker.ParentVersion)
 	count, version, ok := store.GetSessionVersion(t.Context(), fixtureAlphaID)
 	require.True(t, ok)
 	assert.Equal(t, 2, count)

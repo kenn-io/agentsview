@@ -220,6 +220,6 @@ func (s *Store) GetMatchingMachineIDs(ctx context.Context, candidates []string) 
 	return s.sessions().GetMatchingMachineIDs(ctx, candidates)
 }
 
-func (s *Store) GetSessionTreeMarker(ctx context.Context, id string) (string, error) {
+func (s *Store) GetSessionTreeMarker(ctx context.Context, id string) (db.SessionTreeSnapshot, error) {
 	return s.sessions().GetSessionTreeMarker(ctx, id)
 }

@@ -2,7 +2,7 @@ package postgres
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"slices"
 	"strings"
 
@@ -289,14 +289,14 @@ func (h *HostedStore) GetProviderResumeID(ctx context.Context, id string) (strin
 }
 
 // GetSessionTreeMarker reads hosted identity and content in one snapshot.
-func (h *HostedStore) GetSessionTreeMarker(ctx context.Context, id string) (string, error) {
-	return hostedRead(ctx, h, func(h *HostedStore, _ hostedRevision) (string, error) {
+func (h *HostedStore) GetSessionTreeMarker(ctx context.Context, id string) (db.SessionTreeSnapshot, error) {
+	return hostedRead(ctx, h, func(h *HostedStore, _ hostedRevision) (db.SessionTreeSnapshot, error) {
 		target, err := h.resolve(ctx, id)
 		if err != nil {
-			return "", err
+			return db.SessionTreeSnapshot{}, err
 		}
 		if target.SessionID == "" {
-			return "", fmt.Errorf("session not found")
+			return db.SessionTreeSnapshot{}, errors.New("session not found")
 		}
 		membership := `parent_session_id = $1`
 		if !target.Legacy {
@@ -304,7 +304,7 @@ func (h *HostedStore) GetSessionTreeMarker(ctx context.Context, id string) (stri
 		}
 		rows, err := h.physical.pg.QueryContext(ctx, "SELECT id, "+sessionVersionColumns+", COALESCE(raw_content_revision, ''), COALESCE(raw_group_id, '') FROM sessions WHERE id=$1 OR (("+membership+") AND deleted_at IS NULL)", target.SessionID)
 		if err != nil {
-			return "", err
+			return db.SessionTreeSnapshot{}, err
 		}
 		defer rows.Close()
 		var entries []db.SessionTreeEntry
@@ -317,7 +317,7 @@ func (h *HostedStore) GetSessionTreeMarker(ctx context.Context, id string) (stri
 			fields := append([]any{&e.ID}, v.fields()...)
 			fields = append(fields, &content, &group)
 			if err := rows.Scan(fields...); err != nil {
-				return "", err
+				return db.SessionTreeSnapshot{}, err
 			}
 			e.Count, e.Version = v.count, v.version()
 			e.State = &db.SessionTreeState{State: db.SessionWatchResolved, ContentRevision: content}
@@ -328,7 +328,7 @@ func (h *HostedStore) GetSessionTreeMarker(ctx context.Context, id string) (stri
 			entries = append(entries, e)
 		}
 		if err := rows.Err(); err != nil {
-			return "", err
+			return db.SessionTreeSnapshot{}, err
 		}
 		rows.Close()
 		var parent *db.SessionTreeEntry
@@ -341,25 +341,25 @@ func (h *HostedStore) GetSessionTreeMarker(ctx context.Context, id string) (stri
 			}
 		}
 		if parent == nil {
-			return "", fmt.Errorf("session not found")
+			return db.SessionTreeSnapshot{}, errors.New("session not found")
 		}
 		entries = append([]db.SessionTreeEntry{*parent}, children...)
 		variants := map[string][]string{}
 		if len(groupIDs) > 0 {
 			rows, err := h.physical.pg.QueryContext(ctx, `SELECT b.group_id, g.base_alias, min(b.branch_id) FROM raw_session_branches b JOIN raw_session_groups g ON g.group_id=b.group_id WHERE b.group_id=ANY($1) AND b.active AND NOT COALESCE(`+rawBranchExclusionSQL("b", "")+`,false) GROUP BY b.group_id,g.base_alias,b.session_id ORDER BY b.group_id,min(b.branch_id)`, groupIDs)
 			if err != nil {
-				return "", err
+				return db.SessionTreeSnapshot{}, err
 			}
 			defer rows.Close()
 			for rows.Next() {
 				var group, base, branch string
 				if err := rows.Scan(&group, &base, &branch); err != nil {
-					return "", err
+					return db.SessionTreeSnapshot{}, err
 				}
 				variants[group] = append(variants[group], base+"~"+branch)
 			}
 			if err := rows.Err(); err != nil {
-				return "", err
+				return db.SessionTreeSnapshot{}, err
 			}
 			rows.Close()
 		}
@@ -369,11 +369,11 @@ func (h *HostedStore) GetSessionTreeMarker(ctx context.Context, id string) (stri
 			refs.add(&entries[i].ID)
 		}
 		if err := refs.mapIDs(ctx, h); err != nil {
-			return "", err
+			return db.SessionTreeSnapshot{}, err
 		}
 		for i := range entries {
 			entries[i].State.PublicID = entries[i].ID
 		}
-		return db.SessionTreeMarker(entries)
+		return db.NewSessionTreeSnapshot(entries)
 	})
 }

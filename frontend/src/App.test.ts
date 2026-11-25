@@ -323,7 +323,10 @@ describe("App session URL date state", () => {
     vi.spyOn(sessions, "load").mockResolvedValue();
     vi.spyOn(messages, "reload").mockResolvedValue(true);
     vi.spyOn(sessions, "refreshActiveSession").mockResolvedValue(true);
-    const activityReload = vi.spyOn(sessionActivity, "reload").mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const activityReload = vi
+      .spyOn(sessionActivity, "reload")
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
     router.route = "sessions";
     router.isRootPath = false;
     router.sessionId = "session-1";

@@ -1460,7 +1460,7 @@ func (s *Server) sessionMarker(ctx context.Context, id string) string {
 	if err != nil {
 		return ""
 	}
-	return marker
+	return marker.Marker
 }
 
 type eventsInput struct {

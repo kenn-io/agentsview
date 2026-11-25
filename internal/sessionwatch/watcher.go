@@ -112,7 +112,7 @@ func (w *Watcher) TreeEvents(ctx context.Context, sessionID string) <-chan struc
 
 func (w *Watcher) events(ctx context.Context, sessionID string, tree bool) <-chan struct{} {
 	ch := make(chan struct{})
-	var marker string
+	var marker db.SessionTreeSnapshot
 	var markerErr error
 	failureReported := false
 	if tree {
@@ -123,10 +123,11 @@ func (w *Watcher) events(ctx context.Context, sessionID string, tree bool) <-cha
 			return false, false
 		}
 		current, err := w.db.GetSessionTreeMarker(ctx, sessionID)
-		changed := err != nil && !failureReported || err == nil && (markerErr != nil || current != marker)
+		changed := err != nil && !failureReported || err == nil && (markerErr != nil || current.Marker != marker.Marker)
+		parentChanged := err == nil && markerErr == nil && treeParentChanged(marker, current)
 		failureReported = err != nil
 		marker, markerErr = current, err
-		return changed, err == nil
+		return changed, parentChanged
 	}
 	if identity, ok := w.db.(db.SessionWatchStateStore); ok {
 		initial, err := identity.GetSessionWatchState(sessionID)
@@ -238,6 +239,10 @@ func (w *Watcher) events(ctx context.Context, sessionID string, tree bool) <-cha
 	return ch
 }
 
+func treeParentChanged(previous, current db.SessionTreeSnapshot) bool {
+	return previous.ParentCount != current.ParentCount || previous.ParentVersion != current.ParentVersion
+}
+
 // pollDBOnly polls GetSessionVersion on a timer and signals ch
 // when changes are detected. Used in PG-read mode where there is
 // no sync engine or file watcher.
@@ -288,18 +293,18 @@ func (w *Watcher) checkDBForChanges(ctx context.Context,
 ) bool {
 	// Primary: check if the DB has new data. The version marker covers
 	// message appends and metadata/content-only updates.
-	changed, readable := false, false
+	changed, parentChanged := false, false
 	if tree {
-		changed, readable = checkTree()
+		changed, parentChanged = checkTree()
 	} else if count, dbVersion, ok := w.db.GetSessionVersion(ctx,
 		sessionID,
 	); ok && (count != *lastCount ||
 		dbVersion != *lastDBVersion) {
 		*lastCount = count
 		*lastDBVersion = dbVersion
-		changed, readable = true, true
+		parentChanged = true
 	}
-	if changed && readable && !tree {
+	if parentChanged {
 		// DB was updated; clear any pending fallback.
 		*fileMtimeChangedAt = time.Time{}
 		return true

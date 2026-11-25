@@ -33,16 +33,16 @@ func (s *watchStateStore) GetSessionWatchState(id string) (db.SessionWatchState,
 	return s.states[id], nil
 }
 
-func (s *watchStateStore) GetSessionTreeMarker(ctx context.Context, id string) (string, error) {
+func (s *watchStateStore) GetSessionTreeMarker(ctx context.Context, id string) (db.SessionTreeSnapshot, error) {
 	base, err := s.Store.GetSessionTreeMarker(ctx, id)
 	if err != nil {
-		return "", err
+		return db.SessionTreeSnapshot{}, err
 	}
-	children, err := s.Store.GetChildSessions(ctx, id)
+	children, err := s.GetChildSessions(ctx, id)
 	if err != nil {
-		return "", err
+		return db.SessionTreeSnapshot{}, err
 	}
-	entries := []db.SessionTreeEntry{{ID: base}}
+	entries := []db.SessionTreeEntry{{ID: base.Marker}}
 	for _, key := range append([]string{id}, func() []string {
 		ids := make([]string, 0, len(children))
 		for _, child := range children {
@@ -52,11 +52,13 @@ func (s *watchStateStore) GetSessionTreeMarker(ctx context.Context, id string) (
 	}()...) {
 		state, err := s.GetSessionWatchState(key)
 		if err != nil {
-			return "", err
+			return db.SessionTreeSnapshot{}, err
 		}
 		entries = append(entries, db.SessionTreeEntry{ID: key, State: &db.SessionTreeState{State: state.State, PublicID: state.PublicID, Variants: state.Variants, ContentRevision: state.ContentRevision}})
 	}
-	return db.SessionTreeMarker(entries)
+	marker, err := db.SessionTreeMarker(entries)
+	base.Marker = marker
+	return base, err
 }
 
 func (s *watchStateStore) set(id string, state db.SessionWatchState) {
@@ -239,8 +241,8 @@ func (s *versionFailureStore) GetSessionVersion(context.Context, string) (int, i
 	return 0, 0, false
 }
 
-func (s *versionFailureStore) GetSessionTreeMarker(context.Context, string) (string, error) {
-	return "", errors.New("marker read failed")
+func (s *versionFailureStore) GetSessionTreeMarker(context.Context, string) (db.SessionTreeSnapshot, error) {
+	return db.SessionTreeSnapshot{}, errors.New("marker read failed")
 }
 
 func TestEvents_SessionVersionIDs(t *testing.T) {

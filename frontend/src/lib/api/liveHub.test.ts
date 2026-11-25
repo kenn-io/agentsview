@@ -133,7 +133,10 @@ describe("shared live stream", () => {
     hub.update({ postMessage: vi.fn() }, request("b"));
     vi.advanceTimersByTime(250);
     sources[1]!.emit("session_ready", "a", marker1);
-    sources[1]!.emit("session.timing", '{"session_id":"a","total_duration_ms":61000,"running":true}');
+    sources[1]!.emit(
+      "session.timing",
+      '{"session_id":"a","total_duration_ms":61000,"running":true}',
+    );
     expect(a.postMessage.mock.calls.map(([frame]) => frame.type)).toEqual(["session.timing"]);
     expect(a.postMessage.mock.lastCall![0].data).toContain("61000");
     hub.close();
@@ -297,7 +300,10 @@ describe("shared live stream", () => {
         id: marker2,
       }),
     );
-    hub.acknowledge(joining, joining.postMessage.mock.calls.find(([frame]) => frame.receipt)![0].receipt);
+    hub.acknowledge(
+      joining,
+      joining.postMessage.mock.calls.find(([frame]) => frame.receipt)![0].receipt,
+    );
     joining.postMessage.mockClear();
     hub.update({ postMessage: vi.fn() }, request("b"));
     vi.advanceTimersByTime(250);

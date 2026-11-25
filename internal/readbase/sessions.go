@@ -332,10 +332,10 @@ func (s Sessions) getSidebarSessionIndexPage(ctx context.Context, f db.SessionFi
 }
 
 // GetSessionTreeMarker reads the parent and its direct children together.
-func (s Sessions) GetSessionTreeMarker(ctx context.Context, id string) (string, error) {
+func (s Sessions) GetSessionTreeMarker(ctx context.Context, id string) (db.SessionTreeSnapshot, error) {
 	rows, err := s.backend.QueryContext(ctx, "SELECT id, "+s.backend.SessionVersionColumns()+" FROM sessions WHERE id = ? OR (parent_session_id = ? AND deleted_at IS NULL)", id, id)
 	if err != nil {
-		return "", err
+		return db.SessionTreeSnapshot{}, err
 	}
 	defer rows.Close()
 	var parent *db.SessionTreeEntry
@@ -344,7 +344,7 @@ func (s Sessions) GetSessionTreeMarker(ctx context.Context, id string) (string, 
 		var e db.SessionTreeEntry
 		var v sessionVersionRow
 		if err := rows.Scan(append([]any{&e.ID}, v.fields()...)...); err != nil {
-			return "", err
+			return db.SessionTreeSnapshot{}, err
 		}
 		e.Count, e.Version = v.count, v.version(s.backend)
 		if e.ID == id {
@@ -354,10 +354,10 @@ func (s Sessions) GetSessionTreeMarker(ctx context.Context, id string) (string, 
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return "", err
+		return db.SessionTreeSnapshot{}, err
 	}
 	if parent == nil {
-		return "", fmt.Errorf("session not found")
+		return db.SessionTreeSnapshot{}, errors.New("session not found")
 	}
-	return db.SessionTreeMarker(append([]db.SessionTreeEntry{*parent}, children...))
+	return db.NewSessionTreeSnapshot(append([]db.SessionTreeEntry{*parent}, children...))
 }

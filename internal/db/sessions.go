@@ -7117,10 +7117,10 @@ func (db *DB) loadSessionMirrorSnapshot(ctx context.Context, id string, afterSes
 }
 
 // GetSessionTreeMarker reads the parent and its direct children in one snapshot.
-func (db *DB) GetSessionTreeMarker(ctx context.Context, id string) (string, error) {
+func (db *DB) GetSessionTreeMarker(ctx context.Context, id string) (SessionTreeSnapshot, error) {
 	rows, err := db.getReader().QueryContext(ctx, "SELECT id, "+sessionVersionColumns+" FROM sessions WHERE id = ? OR (parent_session_id = ? AND deleted_at IS NULL) ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END", id, id, id)
 	if err != nil {
-		return "", err
+		return SessionTreeSnapshot{}, err
 	}
 	defer rows.Close()
 	var entries []SessionTreeEntry
@@ -7128,16 +7128,16 @@ func (db *DB) GetSessionTreeMarker(ctx context.Context, id string) (string, erro
 		var e SessionTreeEntry
 		var v sessionVersionRow
 		if err := rows.Scan(append([]any{&e.ID}, v.fields()...)...); err != nil {
-			return "", err
+			return SessionTreeSnapshot{}, err
 		}
 		e.Count, e.Version = v.count, v.version()
 		entries = append(entries, e)
 	}
 	if err := rows.Err(); err != nil {
-		return "", err
+		return SessionTreeSnapshot{}, err
 	}
 	if len(entries) == 0 || entries[0].ID != id {
-		return "", fmt.Errorf("session not found")
+		return SessionTreeSnapshot{}, errors.New("session not found")
 	}
-	return SessionTreeMarker(entries)
+	return NewSessionTreeSnapshot(entries)
 }

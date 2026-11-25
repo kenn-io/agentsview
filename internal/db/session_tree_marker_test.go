@@ -23,8 +23,10 @@ func TestSessionTreeMarkerMatchesSessionVersions(t *testing.T) {
 		require.NoError(t, err)
 		got, err := d.GetSessionTreeMarker(t.Context(), "parent")
 		require.NoError(t, err)
-		assert.Equal(t, want, got)
-		return got
+		assert.Equal(t, want, got.Marker)
+		assert.Equal(t, entries[0].Count, got.ParentCount)
+		assert.Equal(t, entries[0].Version, got.ParentVersion)
+		return got.Marker
 	}
 	before := check()
 	_, err := d.SetSessionLabels(t.Context(), "child", []string{"review"})

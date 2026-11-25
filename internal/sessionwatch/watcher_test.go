@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -36,11 +37,11 @@ func (s *treeStore) GetSessionVersion(context.Context, string) (int, int64, bool
 	return 0, 0, true
 }
 
-func (s *treeStore) GetSessionTreeMarker(context.Context, string) (string, error) {
+func (s *treeStore) GetSessionTreeMarker(context.Context, string) (db.SessionTreeSnapshot, error) {
 	if s.unavailable.Load() {
-		return "", errors.New("marker unavailable")
+		return db.SessionTreeSnapshot{}, errors.New("marker unavailable")
 	}
-	return fmt.Sprint(s.count.Load()), nil
+	return db.SessionTreeSnapshot{Marker: strconv.FormatInt(s.count.Load(), 10)}, nil
 }
 
 func TestTreeEventsReportReadFailureAndRecoveryOnce(t *testing.T) {
@@ -395,9 +396,31 @@ func TestCheckDBForChangesPositAssistantSidecarAppendFallsBackToSync(
 		"the sidecar mtime must start the fallback timer")
 	assert.Equal(t, sidecarTime.UnixNano(), lastFileMtime)
 	started := fileMtimeChangedAt
-	changed = watcher.checkDBForChanges(t.Context(), sessionID, &lastCount, &lastDBVersion, &sourcePath, &lastFileMtime, &fileMtimeChangedAt, true, func() (bool, bool) { return true, true })
+	before, err := database.GetSessionTreeMarker(t.Context(), sessionID)
+	require.NoError(t, err)
+	checkTree := func() (bool, bool) {
+		current, err := database.GetSessionTreeMarker(t.Context(), sessionID)
+		require.NoError(t, err)
+		changed, parentChanged := current.Marker != before.Marker, treeParentChanged(before, current)
+		before = current
+		return changed, parentChanged
+	}
+	dbtest.SeedSession(t, database, "child", "proj", func(s *db.Session) {
+		s.ParentSessionID = new(sessionID)
+	})
+	changed = watcher.checkDBForChanges(t.Context(), sessionID, &lastCount, &lastDBVersion, &sourcePath, &lastFileMtime, &fileMtimeChangedAt, true, checkTree)
 	assert.True(t, changed)
 	assert.Equal(t, started, fileMtimeChangedAt, "child changes must not delay source fallback")
+
+	parent, err := database.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	parent.MessageCount++
+	require.NoError(t, database.UpsertSession(t.Context(), *parent))
+	changed = watcher.checkDBForChanges(t.Context(), sessionID, &lastCount, &lastDBVersion, &sourcePath, &lastFileMtime, &fileMtimeChangedAt, true, checkTree)
+	assert.True(t, changed)
+	assert.True(t, fileMtimeChangedAt.IsZero(), "parent changes must clear source fallback")
+	lastCount, lastDBVersion, ok = database.GetSessionVersion(t.Context(), sessionID)
+	require.True(t, ok)
 
 	fileMtimeChangedAt = time.Now().Add(-SyncFallbackDelay)
 	changed = watcher.checkDBForChanges(t.Context(),

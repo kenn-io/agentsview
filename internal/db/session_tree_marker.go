@@ -3,6 +3,7 @@ package db
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -23,10 +24,26 @@ type SessionTreeState struct {
 	ContentRevision string   `json:"content_revision,omitempty"`
 }
 
+// SessionTreeSnapshot includes the parent version from the same read as the marker.
+type SessionTreeSnapshot struct {
+	Marker        string
+	ParentCount   int
+	ParentVersion int64
+}
+
+// NewSessionTreeSnapshot builds a marker and retains the parent version.
+func NewSessionTreeSnapshot(entries []SessionTreeEntry) (SessionTreeSnapshot, error) {
+	marker, err := SessionTreeMarker(entries)
+	if err != nil {
+		return SessionTreeSnapshot{}, err
+	}
+	return SessionTreeSnapshot{Marker: marker, ParentCount: entries[0].Count, ParentVersion: entries[0].Version}, nil
+}
+
 // SessionTreeMarker encodes a parent and its direct children deterministically.
 func SessionTreeMarker(entries []SessionTreeEntry) (string, error) {
 	if len(entries) == 0 {
-		return "", fmt.Errorf("session not found")
+		return "", errors.New("session not found")
 	}
 	slices.SortFunc(entries[1:], func(a, b SessionTreeEntry) int { return strings.Compare(a.ID, b.ID) })
 	encoded, err := json.Marshal(entries)
