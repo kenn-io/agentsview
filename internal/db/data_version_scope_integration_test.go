@@ -1890,17 +1890,17 @@ func TestMusePersonalBackgroundKindUpgradeReparsesInPlace(t *testing.T) {
 	ctx := t.Context()
 	database := dbtest.OpenTestDB(t)
 	root := t.TempDir()
-	const rel = "agent-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee/sessions/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee.jsonl"
-	data, err := os.ReadFile(filepath.Join("..", "parser", "testdata", "data-version-corpus", "muse-personal", filepath.FromSlash(rel)))
+	// The cron sample has an injected approval, so it has two user messages.
+	data, err := os.ReadFile(filepath.Join("..", "parser", "testdata", "muse_personal", "sources", "scheduler-cron.jsonl"))
 	require.NoError(t, err)
-	dbtest.WriteTestFile(t, filepath.Join(root, filepath.FromSlash(rel)), data)
+	dbtest.WriteTestFile(t, filepath.Join(root, "agent-66666666-7777-4888-8999-000000000000", "sessions", "11111111-2222-4333-8444-555555555555.jsonl"), data)
 	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentMusePersonal: {root}}, DisableFilesystemProjectDiscovery: true}
 	engine := sync.NewEngine(ctx, database, cfg)
 	stats := engine.SyncAll(ctx, nil)
 	require.Zero(t, stats.Failed)
 	require.Equal(t, 1, stats.Synced)
 	engine.Close()
-	const id = "muse-personal:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+	const id = "muse-personal:11111111-2222-4333-8444-555555555555"
 
 	// Reproduce the version-189 archive: the parser left every Muse Personal
 	// session unclassified.
@@ -1931,6 +1931,7 @@ func TestMusePersonalBackgroundKindUpgradeReparsesInPlace(t *testing.T) {
 	require.NotNil(t, sess)
 	assert.Equal(t, parser.SessionKindMuseBackground, sess.SessionKind)
 	assert.True(t, sess.IsAutomated)
+	assert.Equal(t, 2, sess.UserMessageCount, "a background run stays automated with more than one user message")
 	var sessions int
 	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT count(*) FROM sessions").Scan(&sessions))
 	assert.Equal(t, 1, sessions, "the reparse keeps the session identity")
