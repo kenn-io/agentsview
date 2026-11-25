@@ -10,6 +10,7 @@ import { pins } from "./lib/stores/pins.svelte.js";
 import { router } from "./lib/stores/router.svelte.js";
 import { rollingRange } from "./lib/utils/dates.js";
 import { sessionTiming } from "./lib/stores/sessionTiming.svelte.js";
+import { sessionActivity } from "./lib/stores/sessionActivity.svelte.js";
 import { createSessionsStore, sessions } from "./lib/stores/sessions.svelte.js";
 import { settings } from "./lib/stores/settings.svelte.js";
 import { starred } from "./lib/stores/starred.svelte.js";
@@ -317,6 +318,26 @@ describe("saved remote API version", () => {
 });
 
 describe("App session URL date state", () => {
+  it("does not acknowledge a failed activity refresh", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    vi.spyOn(messages, "reload").mockResolvedValue(true);
+    vi.spyOn(sessions, "refreshActiveSession").mockResolvedValue(true);
+    const activityReload = vi.spyOn(sessionActivity, "reload").mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    router.route = "sessions";
+    router.isRootPath = false;
+    router.sessionId = "session-1";
+    sessions.activeSessionId = "session-1";
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    ui.vitalsOpen = true;
+    const refresh = vi.mocked(sync.watchSession).mock.calls[0]![1];
+    expect(await refresh()).toBe(false);
+    expect(await refresh()).toBe(true);
+    expect(activityReload).toHaveBeenCalledTimes(2);
+    ui.vitalsOpen = false;
+  });
+
   it.each(["selection change", "selection cleared", "route exit", "unmount"])(
     "ignores an old watch's children fallback after %s",
     async (change) => {

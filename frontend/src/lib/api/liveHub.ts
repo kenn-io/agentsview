@@ -19,6 +19,7 @@ export class LiveHub {
       receipt?: string;
       pending?: string;
       suppressTiming?: boolean;
+      timing?: string;
     }
   >();
   private nextReceipt = 0;
@@ -46,7 +47,7 @@ export class LiveHub {
         this.sessions.delete(key);
       } else if (ready) this.deliver(port, ready);
       const timing = this.timing.get(key);
-      if (timing) port.postMessage(timing);
+      if (timing) this.deliver(port, timing);
     }
     if (
       this.source &&
@@ -265,7 +266,7 @@ export class LiveHub {
       }
       if (frame.type === "session.timing" && state?.suppressTiming) {
         delete state.suppressTiming;
-        continue;
+        if (frame.data === state.timing) continue;
       }
       this.deliver(port, frame);
     }
@@ -274,6 +275,7 @@ export class LiveHub {
   private deliver(port: LivePort, frame: LiveFrame) {
     const state = this.synced.get(port) ?? {};
     if (frame.type === "events_ready") state.archive = true;
+    if (frame.type === "session.timing") state.timing = frame.data;
     if (frame.type === "session_ready" || frame.type === "session_updated") {
       delete state.marker;
       delete state.suppressTiming;

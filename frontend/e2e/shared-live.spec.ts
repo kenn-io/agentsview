@@ -129,7 +129,7 @@ for (const fallback of ["worker", "broadcast"] as const) {
           ids[1]!,
         );
       const marker = await readMarker();
-      expect(marker).toMatch(/^[0-9a-f]{64}$/);
+      expect(marker).toMatch(/^v1:[0-9a-f]{64}$/);
       expect(await readMarker()).toBe(marker);
       await expect.poll(singleActiveSessions).toEqual(new Set(ids));
       for (const index of [1, 2]) {

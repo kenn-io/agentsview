@@ -97,6 +97,7 @@ describe("shared live stream", () => {
     for (const { id, port } of ports) {
       old.emit("session_ready", id, marker1);
       hub.acknowledge(port, port.postMessage.mock.lastCall![0].receipt);
+      old.emit("session.timing", JSON.stringify({ session_id: id }));
     }
     old.emit("events_ready", "{}");
     for (const { port } of ports) port.postMessage.mockClear();
@@ -116,6 +117,25 @@ describe("shared live stream", () => {
       "session_ready",
       "session.timing",
     ]);
+    hub.close();
+  });
+
+  it("delivers changed timing during an otherwise quiet handoff", () => {
+    const hub = new LiveHub();
+    const a = { postMessage: vi.fn() };
+    hub.update(a, request("a"));
+    const old = sources[0]!;
+    old.emit("session_ready", "a", marker1);
+    hub.acknowledge(a, a.postMessage.mock.lastCall![0].receipt);
+    old.emit("session.timing", '{"session_id":"a","total_duration_ms":1000,"running":true}');
+    old.emit("events_ready", "{}");
+    a.postMessage.mockClear();
+    hub.update({ postMessage: vi.fn() }, request("b"));
+    vi.advanceTimersByTime(250);
+    sources[1]!.emit("session_ready", "a", marker1);
+    sources[1]!.emit("session.timing", '{"session_id":"a","total_duration_ms":61000,"running":true}');
+    expect(a.postMessage.mock.calls.map(([frame]) => frame.type)).toEqual(["session.timing"]);
+    expect(a.postMessage.mock.lastCall![0].data).toContain("61000");
     hub.close();
   });
 
@@ -268,6 +288,7 @@ describe("shared live stream", () => {
     old.emit("session_ready", "a", marker1);
     old.emit("events_ready", "{}");
     old.emit("session_updated", "a", marker2);
+    old.emit("session.timing", '{"session_id":"a","turn_count":1}');
     hub.update(joining, request("a"));
     expect(joining.postMessage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -276,11 +297,12 @@ describe("shared live stream", () => {
         id: marker2,
       }),
     );
-    hub.acknowledge(joining, joining.postMessage.mock.lastCall![0].receipt);
+    hub.acknowledge(joining, joining.postMessage.mock.calls.find(([frame]) => frame.receipt)![0].receipt);
     joining.postMessage.mockClear();
     hub.update({ postMessage: vi.fn() }, request("b"));
     vi.advanceTimersByTime(250);
     sources[1]!.emit("session_ready", "a", marker2);
+    sources[1]!.emit("session.timing", '{"session_id":"a","turn_count":1}');
     expect(joining.postMessage).not.toHaveBeenCalled();
     hub.close();
   });
