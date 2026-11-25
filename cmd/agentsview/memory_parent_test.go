@@ -595,16 +595,92 @@ func TestMemorySessionStartInvalidModeDoesNotCapture(t *testing.T) {
 }
 
 func TestCaptureLaunchParentCodexIndexAppears(t *testing.T) {
-	for _, rowMissing := range []bool{false, true} {
-		name := "index"
-		if rowMissing {
-			name = "row"
-		}
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T, home string)
+		ready func(t *testing.T, home, page string)
+	}{
+		{
+			name: "index",
+			ready: func(t *testing.T, home, page string) {
+				t.Helper()
+				writeCodexState(t, home, codexLauncherID, page)
+			},
+		},
+		{
+			name: "initializing",
+			setup: func(t *testing.T, home string) {
+				t.Helper()
+				state, err := sql.Open("sqlite3", filepath.Join(home, "state_5.sqlite"))
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = state.Close() })
+				_, err = state.ExecContext(t.Context(), `PRAGMA journal_mode=WAL`)
+				require.NoError(t, err)
+				require.NoError(t, state.Close())
+			},
+			ready: func(t *testing.T, home, page string) {
+				t.Helper()
+				state, err := sql.Open("sqlite3", filepath.Join(home, "state_5.sqlite"))
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = state.Close() })
+				_, err = state.ExecContext(t.Context(), `CREATE TABLE _sqlx_migrations (version BIGINT PRIMARY KEY)`)
+				require.NoError(t, err)
+				_, err = state.ExecContext(t.Context(), `CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL)`)
+				require.NoError(t, err)
+				_, err = state.ExecContext(t.Context(), `INSERT INTO _sqlx_migrations VALUES (54)`)
+				require.NoError(t, err)
+				_, err = state.ExecContext(t.Context(), `INSERT INTO threads (id, rollout_path) VALUES (?, ?)`, codexLauncherID, "rollout-2026-01-01-"+page+".jsonl")
+				require.NoError(t, err)
+				require.NoError(t, state.Close())
+			},
+		},
+		{
+			name: "migrating",
+			setup: func(t *testing.T, home string) {
+				t.Helper()
+				state, err := sql.Open("sqlite3", filepath.Join(home, "state_5.sqlite"))
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = state.Close() })
+				_, err = state.ExecContext(t.Context(), `CREATE TABLE _sqlx_migrations (version BIGINT PRIMARY KEY)`)
+				require.NoError(t, err)
+				require.NoError(t, state.Close())
+			},
+			ready: func(t *testing.T, home, page string) {
+				t.Helper()
+				state, err := sql.Open("sqlite3", filepath.Join(home, "state_5.sqlite"))
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = state.Close() })
+				_, err = state.ExecContext(t.Context(), `CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL)`)
+				require.NoError(t, err)
+				_, err = state.ExecContext(t.Context(), `INSERT INTO _sqlx_migrations VALUES (54)`)
+				require.NoError(t, err)
+				_, err = state.ExecContext(t.Context(), `INSERT INTO threads (id, rollout_path) VALUES (?, ?)`, codexLauncherID, "rollout-2026-01-01-"+page+".jsonl")
+				require.NoError(t, err)
+				require.NoError(t, state.Close())
+			},
+		},
+		{
+			name: "row",
+			setup: func(t *testing.T, home string) {
+				t.Helper()
+				writeCodexState(t, home, childSessionID, childSessionID)
+			},
+			ready: func(t *testing.T, home, page string) {
+				t.Helper()
+				state, err := sql.Open("sqlite3", filepath.Join(home, "state_5.sqlite"))
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = state.Close() })
+				_, err = state.ExecContext(t.Context(), `INSERT INTO threads (id, rollout_path) VALUES (?, ?)`, codexLauncherID, "rollout-2026-01-01-"+page+".jsonl")
+				require.NoError(t, err)
+				require.NoError(t, state.Close())
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
 			page := codexLauncherID + "_44444444-4444-4444-8444-444444444444"
-			if rowMissing {
-				writeCodexState(t, home, childSessionID, childSessionID)
+			if tc.setup != nil {
+				tc.setup(t, home)
 			}
 			synctest.Test(t, func(t *testing.T) {
 				database := stubLaunchArchive(t)
@@ -613,20 +689,14 @@ func TestCaptureLaunchParentCodexIndexAppears(t *testing.T) {
 				cmd.SetIn(strings.NewReader(sessionStartPayload("startup")))
 				done := make(chan error, 1)
 				go func() { done <- captureLaunchParent(t.Context(), cmd) }()
+				// Wait between the 100ms and 300ms retry ticks so captureLaunchParent
+				// is durably blocked when the fixture updates state_5.sqlite.
 				select {
 				case err := <-done:
 					require.FailNow(t, "capture returned before index appeared", "%v", err)
-				case <-time.After(300 * time.Millisecond):
+				case <-time.After(250 * time.Millisecond):
 				}
-				if rowMissing {
-					state, err := sql.Open("sqlite3", filepath.Join(home, "state_5.sqlite"))
-					require.NoError(t, err)
-					_, err = state.ExecContext(t.Context(), `INSERT INTO threads (id, rollout_path) VALUES (?, ?)`, codexLauncherID, "rollout-2026-01-01-"+page+".jsonl")
-					require.NoError(t, err)
-					require.NoError(t, state.Close())
-				} else {
-					writeCodexState(t, home, codexLauncherID, page)
-				}
+				tc.ready(t, home, page)
 				require.NoError(t, <-done)
 				link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
 				require.NoError(t, err)
@@ -638,15 +708,16 @@ func TestCaptureLaunchParentCodexIndexAppears(t *testing.T) {
 
 func TestCaptureLaunchParentCodexIndexRetry(t *testing.T) {
 	for _, tc := range []struct {
-		name                                             string
-		rowMissing, unreadable, locked, newer, migration bool
+		name                                                            string
+		rowMissing, uninitialized, unreadable, locked, newer, migration bool
 	}{
-		{"missing index", false, false, false, false, false},
-		{"missing row", true, false, false, false, false},
-		{"unreadable index", false, true, false, false, false},
-		{"locked index", false, false, true, false, false},
-		{"newer index", false, false, false, true, false},
-		{"newer migration", false, false, false, false, true},
+		{"missing index", false, false, false, false, false, false},
+		{"uninitialized index", false, true, false, false, false, false},
+		{"missing row", true, false, false, false, false, false},
+		{"unreadable index", false, false, true, false, false, false},
+		{"locked index", false, false, false, true, false, false},
+		{"newer index", false, false, false, false, true, false},
+		{"newer migration", false, false, false, false, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
@@ -662,6 +733,9 @@ func TestCaptureLaunchParentCodexIndexRetry(t *testing.T) {
 			}
 			if tc.rowMissing {
 				writeCodexState(t, home, childSessionID, childSessionID)
+			}
+			if tc.uninitialized {
+				require.NoError(t, os.WriteFile(filepath.Join(home, "state_5.sqlite"), nil, 0o600))
 			}
 			if tc.unreadable {
 				require.NoError(t, os.WriteFile(filepath.Join(home, "state_5.sqlite"), []byte("corrupt"), 0o600))

@@ -75,3 +75,96 @@ func TestCodexIndexedSessionKeyRejectsFutureMigration(t *testing.T) {
 	require.ErrorIs(t, err, ErrUnsupportedCodexStateIndex)
 	require.ErrorContains(t, err, "unsupported Codex state migration 65")
 }
+
+func TestCodexIndexedSessionKeyUninitializedAndCorrupt(t *testing.T) {
+	const thread = "22222222-2222-4222-8222-222222222222"
+	for _, tc := range []struct {
+		name    string
+		setup   func(t *testing.T, statePath string)
+		wantErr error
+	}{
+		{
+			name: "empty file",
+			setup: func(t *testing.T, statePath string) {
+				t.Helper()
+				require.NoError(t, os.WriteFile(statePath, nil, 0o600))
+			},
+			wantErr: os.ErrNotExist,
+		},
+		{
+			name: "wal initialized without tables",
+			setup: func(t *testing.T, statePath string) {
+				t.Helper()
+				state, err := sql.Open("sqlite3", statePath)
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = state.Close() })
+				_, err = state.ExecContext(t.Context(), `PRAGMA journal_mode=WAL`)
+				require.NoError(t, err)
+				require.NoError(t, state.Close())
+			},
+			wantErr: os.ErrNotExist,
+		},
+		{
+			name: "migrations table without threads",
+			setup: func(t *testing.T, statePath string) {
+				t.Helper()
+				state, err := sql.Open("sqlite3", statePath)
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = state.Close() })
+				_, err = state.ExecContext(t.Context(), `CREATE TABLE _sqlx_migrations (version BIGINT PRIMARY KEY)`)
+				require.NoError(t, err)
+				require.NoError(t, state.Close())
+			},
+			wantErr: os.ErrNotExist,
+		},
+		{
+			name: "threads table without migrations",
+			setup: func(t *testing.T, statePath string) {
+				t.Helper()
+				state, err := sql.Open("sqlite3", statePath)
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = state.Close() })
+				_, err = state.ExecContext(t.Context(), `CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL)`)
+				require.NoError(t, err)
+				require.NoError(t, state.Close())
+			},
+			wantErr: os.ErrNotExist,
+		},
+		{
+			name: "future migration without threads",
+			setup: func(t *testing.T, statePath string) {
+				t.Helper()
+				state, err := sql.Open("sqlite3", statePath)
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = state.Close() })
+				_, err = state.ExecContext(t.Context(), `CREATE TABLE _sqlx_migrations (version BIGINT PRIMARY KEY)`)
+				require.NoError(t, err)
+				_, err = state.ExecContext(t.Context(), `INSERT INTO _sqlx_migrations VALUES (65)`)
+				require.NoError(t, err)
+				require.NoError(t, state.Close())
+			},
+			wantErr: ErrUnsupportedCodexStateIndex,
+		},
+		{
+			name: "corrupt file",
+			setup: func(t *testing.T, statePath string) {
+				t.Helper()
+				require.NoError(t, os.WriteFile(statePath, []byte("corrupt"), 0o600))
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			tc.setup(t, filepath.Join(home, "state_5.sqlite"))
+			_, err := CodexIndexedSessionKey(t.Context(), home, thread)
+			require.Error(t, err)
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+			} else {
+				require.NotErrorIs(t, err, os.ErrNotExist)
+				require.NotErrorIs(t, err, sql.ErrNoRows)
+				require.NotErrorIs(t, err, ErrUnsupportedCodexStateIndex)
+			}
+		})
+	}
+}
