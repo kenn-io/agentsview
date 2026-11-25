@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -41,6 +42,37 @@ func (p *sourceRankCountingProvider) SourceForReconciliation(
 
 func (p *sourceRankCountingProvider) ReconciliationSourceRank(source parser.SourceRef) parser.ReconciliationSourceRank {
 	return p.Provider.(parser.ReconciliationSourceRanker).ReconciliationSourceRank(source)
+}
+
+func TestCodexFormatForksSkipStoredSourceRank(t *testing.T) {
+	for _, agent := range parser.CodexFormatAgents() {
+		t.Run(string(agent), func(t *testing.T) {
+			const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+			root := t.TempDir()
+			path := filepath.Join(root, "rollout-2026-10-08T12-00-00-"+id+".jsonl")
+			require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
+			provider, ok := parser.NewProvider(agent, parser.ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			source, found, err := provider.FindSource(t.Context(), parser.FindSourceRequest{StoredFilePath: path})
+			require.NoError(t, err)
+			require.True(t, found)
+			source.ReconciliationIdentity = id
+			database := openTestDB(t)
+			require.NoError(t, database.UpsertSession(t.Context(), db.Session{
+				ID: provider.Definition().IDPrefix + id, Agent: string(agent), FilePath: &path,
+			}))
+			lookups := 0
+			counting := &sourceRankCountingProvider{Provider: provider, lookups: &lookups}
+			engine := &Engine{db: database}
+			_, err = engine.providerSourceLowerRanked(t.Context(), counting, agent, source)
+			require.NoError(t, err)
+			if agent == parser.AgentCodex {
+				assert.Equal(t, 1, lookups)
+			} else {
+				assert.Zero(t, lookups)
+			}
+		})
+	}
 }
 
 func writeSourceRankOpenClawSession(t *testing.T, root, id, content string) string {
