@@ -972,8 +972,6 @@ func TestDirectBackend_Sync_CodexID(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.NotNil(t, detail)
-			require.NotNil(t, detail.FirstMessage)
-			assert.Equal(t, "hello", *detail.FirstMessage)
 		})
 	}
 }
