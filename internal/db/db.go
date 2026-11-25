@@ -1545,6 +1545,9 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 	d.mu.Lock()
 	_, err = d.getWriter().ExecContext(ctx, "ALTER TABLE sessions ADD COLUMN tools_generation TEXT")
 	if err == nil {
+		_, err = d.getWriter().ExecContext(ctx, "ALTER TABLE sessions ADD COLUMN dashboard_parts_generation TEXT")
+	}
+	if err == nil {
 		_, err = d.getWriter().ExecContext(ctx, usageGenerationSchemaSQL)
 	}
 	if err == nil {
@@ -1558,6 +1561,9 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 	}
 	if err == nil {
 		_, err = d.getWriter().ExecContext(ctx, dashboardGenerationTriggerSQL)
+	}
+	if err == nil {
+		_, err = d.getWriter().ExecContext(ctx, dashboardPartsGenerationSQL)
 	}
 	if err == nil {
 		err = ensureConversationSchemaLocked(ctx, d.getWriter())
@@ -2589,6 +2595,7 @@ func schemaColumnMigrations() []schemaColumnMigration {
 		{"sessions", "trends_generation", "ALTER TABLE sessions ADD COLUMN trends_generation TEXT"},
 		{"sessions", "tools_generation", "ALTER TABLE sessions ADD COLUMN tools_generation TEXT;" +
 			" UPDATE sessions SET tools_generation=lower(hex(randomblob(16)))"},
+		{"sessions", "dashboard_parts_generation", "ALTER TABLE sessions ADD COLUMN dashboard_parts_generation TEXT"},
 		{
 			"sessions", "automation_audit",
 			"ALTER TABLE sessions ADD COLUMN automation_audit INTEGER NOT NULL DEFAULT 1",
@@ -3176,6 +3183,27 @@ BEGIN
 END;
 `
 
+const dashboardPartsGenerationSQL = `
+CREATE TRIGGER IF NOT EXISTS dashboard_parts_messages_insert AFTER INSERT ON messages BEGIN
+    UPDATE sessions SET dashboard_parts_generation=lower(hex(randomblob(16))) WHERE id=NEW.session_id;
+END;
+CREATE TRIGGER IF NOT EXISTS dashboard_parts_messages_delete AFTER DELETE ON messages BEGIN
+    UPDATE sessions SET dashboard_parts_generation=lower(hex(randomblob(16))) WHERE id=OLD.session_id;
+END;
+CREATE TRIGGER IF NOT EXISTS dashboard_parts_messages_update AFTER UPDATE OF session_id, ordinal, role, timestamp, content_length, source_subtype, is_system, has_thinking ON messages BEGIN
+    UPDATE sessions SET dashboard_parts_generation=lower(hex(randomblob(16))) WHERE id IN (OLD.session_id, NEW.session_id);
+END;
+CREATE TRIGGER IF NOT EXISTS dashboard_parts_tools_insert AFTER INSERT ON tool_calls BEGIN
+    UPDATE sessions SET dashboard_parts_generation=lower(hex(randomblob(16))) WHERE id=NEW.session_id;
+END;
+CREATE TRIGGER IF NOT EXISTS dashboard_parts_tools_delete AFTER DELETE ON tool_calls BEGIN
+    UPDATE sessions SET dashboard_parts_generation=lower(hex(randomblob(16))) WHERE id=OLD.session_id;
+END;
+CREATE TRIGGER IF NOT EXISTS dashboard_parts_tools_update AFTER UPDATE OF session_id ON tool_calls BEGIN
+    UPDATE sessions SET dashboard_parts_generation=lower(hex(randomblob(16))) WHERE id IN (OLD.session_id, NEW.session_id);
+END;
+`
+
 // A tail append preserves the generation. Every change to an existing usage
 // input invalidates the prefix retained by incremental usage-cache fills.
 const usageGenerationSchemaSQL = `
@@ -3254,6 +3282,9 @@ func applySchemaColumnMigrations(ctx context.Context, w *writerHandle, progress 
 	}
 	if _, err := tx.ExecContext(ctx, dashboardGenerationTriggerSQL); err != nil {
 		return fmt.Errorf("installing dashboard generation triggers: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, dashboardPartsGenerationSQL); err != nil {
+		return fmt.Errorf("installing dashboard parts generation triggers: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing column migrations: %w", err)

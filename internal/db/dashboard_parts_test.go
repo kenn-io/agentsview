@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json/v2"
 	"fmt"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -154,7 +155,7 @@ func TestDashboardPartsReuseAcrossAgentAndDateFilters(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, handled)
 	assert.Equal(t, 2, parts["s0"].Value.Messages)
-	assert.Equal(t, [][]string{{"s0", "s1", "s2", "s3", "s4", "s5"}, {"s0", "s1", "s2", "s3", "s4", "s5"}}, reads)
+	assert.Equal(t, [][]string{{"s0", "s1", "s2", "s3", "s4", "s5"}, {"s0"}}, reads)
 	// Save the updated full selection, then simulate an empty in-process memo.
 	_, _, handled, err = d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC"})
 	require.NoError(t, err)
@@ -166,7 +167,7 @@ func TestDashboardPartsReuseAcrossAgentAndDateFilters(t *testing.T) {
 	_, _, handled, err = d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC", Agent: "gemini"})
 	require.NoError(t, err)
 	require.True(t, handled)
-	assert.Equal(t, [][]string{{"s0", "s1", "s2", "s3", "s4", "s5"}, {"s0", "s1", "s2", "s3", "s4", "s5"}}, reads)
+	assert.Equal(t, [][]string{{"s0", "s1", "s2", "s3", "s4", "s5"}, {"s0"}}, reads)
 }
 
 func TestDashboardPartsDiskPreservesZeroFirstResponse(t *testing.T) {
@@ -564,8 +565,8 @@ func TestDashboardPartsDirtySessionReuseAndInvalidation(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
 	d.readOnly = false
-	assistant.HasThinking = true
-	require.NoError(t, d.ReplaceSessionMessages(ctx, "s", []Message{user, assistant}))
+	_, err = d.getWriter().ExecContext(ctx, `UPDATE messages SET has_thinking=1 WHERE session_id='s' AND ordinal=1`)
+	require.NoError(t, err)
 	activity, err := d.GetAnalyticsActivity(ctx, f, "day")
 	require.NoError(t, err)
 	d.readOnly = true
@@ -636,10 +637,8 @@ func TestDashboardPartsUnrelatedWriteKeepsSelection(t *testing.T) {
 		insertSession(t, d, id, id, func(s *Session) { s.StartedAt = new("2024-06-01T09:00:00Z") })
 		insertMessages(t, d, userMsgAt(id, 0, "hello", "2024-06-01T09:00:00Z"))
 	}
-	_, err := d.stampToolsSessions(ctx, []string{"a", "b"})
-	require.NoError(t, err)
 	f := AnalyticsFilter{Timezone: "UTC", Project: "a"}
-	_, _, _, err = d.dashboardParts(ctx, f)
+	_, _, _, err := d.dashboardParts(ctx, f)
 	require.NoError(t, err)
 	insertMessages(t, d, asstMsgAt("b", 1, "answer", "2024-06-01T09:01:00Z"))
 	var reads int
@@ -648,6 +647,32 @@ func TestDashboardPartsUnrelatedWriteKeepsSelection(t *testing.T) {
 	_, _, _, err = d.dashboardParts(ctx, f)
 	require.NoError(t, err)
 	assert.Zero(t, reads)
+}
+
+func TestDashboardPartsGenerationMigration(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d, err := openCopiedTestDB(t, path)
+	require.NoError(t, err)
+	insertSession(t, d, "s", "project")
+	insertMessages(t, d, userMsgAt("s", 0, "hello", "2024-06-01T09:00:00Z"))
+	_, err = d.getWriter().ExecContext(ctx, `DROP TRIGGER dashboard_parts_messages_insert; DROP TRIGGER dashboard_parts_messages_delete; DROP TRIGGER dashboard_parts_messages_update; DROP TRIGGER dashboard_parts_tools_insert; DROP TRIGGER dashboard_parts_tools_delete; DROP TRIGGER dashboard_parts_tools_update; ALTER TABLE sessions DROP COLUMN dashboard_parts_generation`)
+	require.NoError(t, err)
+	require.NoError(t, d.Close())
+	d, err = Open(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	f := AnalyticsFilter{Timezone: "UTC"}
+	_, parts, handled, err := d.dashboardParts(ctx, f)
+	require.NoError(t, err)
+	require.True(t, handled)
+	assert.Equal(t, 1, parts["s"].Value.Messages)
+	insertMessages(t, d, asstMsgAt("s", 1, "answer", "2024-06-01T09:01:00Z"))
+	_, parts, handled, err = d.dashboardParts(ctx, f)
+	require.NoError(t, err)
+	require.True(t, handled)
+	assert.Equal(t, 2, parts["s"].Value.Messages)
 }
 
 func TestDashboardPartsDirtyThinkingFillChangesAfterWrite(t *testing.T) {

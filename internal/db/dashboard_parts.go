@@ -14,7 +14,7 @@ import (
 )
 
 // Increment when dashboard counts, ComputeSessionVelocity, or parser.IsClaudeHookSubtype changes.
-const dashboardPartsVersion = 2
+const dashboardPartsVersion = 3
 
 var dashboardPartsReadObserver func([]string)
 
@@ -101,7 +101,7 @@ func (db *DB) dashboardSessions(ctx context.Context, f AnalyticsFilter) ([]dashb
 	loc := f.location()
 	dateCol := "COALESCE(NULLIF(s.started_at, ''), s.created_at)"
 	where, args := f.buildWhereWithDate(dateCol, true, "s.id")
-	rows, err := db.getReader().QueryContext(ctx, `SELECT s.id, `+dateCol+`, s.agent, s.message_count, s.transcript_revision || '|' || COALESCE(s.trends_generation, '') || '|' || s.message_count, CASE WHEN s.tools_generation IS NULL THEN '|' || COALESCE((SELECT value FROM archive_metadata WHERE key='dashboard_velocity'),'') ELSE '' END, `+toolsSessionFingerprintSQL+` FROM sessions s WHERE `+where+` ORDER BY s.id`, args...)
+	rows, err := db.getReader().QueryContext(ctx, `SELECT s.id, `+dateCol+`, s.agent, s.message_count, s.transcript_revision || '|' || COALESCE(s.trends_generation, '') || '|' || s.message_count, COALESCE(s.dashboard_parts_generation, ''), `+toolsSessionFingerprintSQL+` FROM sessions s WHERE `+where+` ORDER BY s.id`, args...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -117,7 +117,7 @@ func (db *DB) dashboardSessions(ctx context.Context, f AnalyticsFilter) ([]dashb
 		if !InDateRange(LocalDate(s.Date, loc), f.From, f.To) {
 			continue
 		}
-		s.Fingerprint += "|" + toolsFingerprint + dirtyToken
+		s.Fingerprint += "|" + toolsFingerprint + "|" + dirtyToken
 		sessions = append(sessions, s)
 		versions[s.ID] = s.Fingerprint
 	}
