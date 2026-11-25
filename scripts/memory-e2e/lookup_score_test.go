@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
+	"maps"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -82,6 +83,7 @@ func TestLookupEmptyUsesToolResultField(t *testing.T) {
 		})
 	}
 }
+
 func TestLookupTraceSetupError(t *testing.T) {
 	assert.True(t, lookupTraceSetupError([]byte(`{"type":"result","is_error":true,"result":"invalid model"}`)))
 	assert.True(t, lookupTraceSetupError([]byte(`{"type":"result","is_error":true,"result":"authentication required"}`)))
@@ -515,10 +517,7 @@ func TestLookupAcceptsSourceExcerpts(t *testing.T) {
 			sourceID := q.Expected[0].SessionID
 			source, ok := sources[sourceID]
 			require.True(t, ok, "fixture source for %s", sourceID)
-			answer := make(map[string]string, len(q.ExpectedAnswer)+1)
-			for key, value := range q.ExpectedAnswer {
-				answer[key] = value
-			}
+			answer := maps.Clone(q.ExpectedAnswer)
 			answer["source_session_id"] = sourceID
 			encoded, err := json.Marshal(answer)
 			require.NoError(t, err)
