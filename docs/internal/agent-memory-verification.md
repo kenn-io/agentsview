@@ -60,17 +60,20 @@ per client. Pass `--client`, `--runs`, or `--case` through
 
 The corpus and questions live in `scripts/memory-e2e/testdata/lookups/`.
 They cover topic, named-session, ownership, recent-work, and long-result
-lookups. Fixture transcripts appear under the client's `~/.codex/sessions/`
-path, outside its working directory. Expected IDs and answer phrases stay
-outside the project visible to the agent. Codex disables `mcp_2026_07_28` so the capture records each MCP call under a
-fixed protocol. Opaque exec scripts without individual results stay unscored.
+lookups. Fixture transcripts appear in each isolated client's provider-specific
+session directory, outside its working directory. Expected IDs and answer
+phrases stay outside the project visible to the agent. Codex disables
+`mcp_2026_07_28` so the capture records each MCP call under a fixed protocol.
+Opaque exec scripts without individual results stay unscored. Scoring is limited
+to the client versions whose transcript formats the benchmark has checked;
+other versions remain unscored until rechecked.
 
 The report counts lookup calls through the first result that supplies every
-expected answer value for the cited session. A result counts when its text names
-the session, or when its non-empty, error-free call input names it. A result that
-names several sessions counts for each one. Facts may arrive across multiple
-results. The count includes MCP, CLI, direct reads, saved-output reads, and
-AgentsView tool discovery.
+expected answer value for the cited session. A result contributes only the text
+under the cited session's row, or the full result when a non-empty, error-free
+call input names that session and the result has no session rows. Facts may
+arrive across multiple results. The count includes MCP, CLI, direct reads,
+saved-output reads, and AgentsView tool discovery.
 
 Each question asks for a JSON object with named answer fields and the exact
 source session ID. The scorer checks every expected value, so a wrong choice,

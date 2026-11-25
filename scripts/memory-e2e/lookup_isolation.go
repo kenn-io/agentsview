@@ -241,6 +241,26 @@ func copyLookupTranscripts(ctx context.Context, source, destination string) erro
 	})
 }
 
+func copyLookupTranscriptsForClient(ctx context.Context, client clientName, source, privateHome, project string) error {
+	destination, err := lookupTranscriptRoot(client, privateHome, project)
+	if err != nil {
+		return err
+	}
+	return copyLookupTranscripts(ctx, source, destination)
+}
+
+func lookupTranscriptRoot(client clientName, privateHome, project string) (string, error) {
+	switch client {
+	case clientCodex:
+		return filepath.Join(privateHome, ".codex", "sessions"), nil
+	case clientClaude:
+		projectName := strings.ReplaceAll(filepath.Clean(project), string(os.PathSeparator), "-")
+		return filepath.Join(privateHome, ".claude", "projects", projectName), nil
+	default:
+		return "", fmt.Errorf("lookup isolation: unsupported client %q", client)
+	}
+}
+
 func requireHiddenLookupPaths(home string, paths ...string) error {
 	allowed := make([]string, 0, 4)
 	for _, root := range []string{home, "/tmp"} {

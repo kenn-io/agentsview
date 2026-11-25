@@ -35,11 +35,11 @@ func TestLookupIsolationReadsOnlyFixtureHome(t *testing.T) {
 	dataDir := filepath.Join(clientDir, "agentsview-data")
 	runDir := filepath.Join(clientDir, "attempt")
 	binDir := filepath.Join(clientDir, "bin")
-	fixtureSessions := filepath.Join(runDir, "home", ".codex", "sessions")
-	for _, dir := range []string{project, dataDir, runDir, binDir, filepath.Join(home, ".codex"), fixtureSessions} {
+	fixtureRoot := filepath.Join(clientDir, "fixture-sessions")
+	for _, dir := range []string{project, dataDir, runDir, binDir, filepath.Join(home, ".codex"), fixtureRoot} {
 		require.NoError(t, os.MkdirAll(dir, 0o700))
 	}
-	require.NoError(t, os.WriteFile(filepath.Join(fixtureSessions, "fixture.jsonl"), []byte("fixture transcript"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(fixtureRoot, "fixture.jsonl"), []byte("fixture transcript"), 0o600))
 	private := filepath.Join(home, "private.txt")
 	require.NoError(t, os.WriteFile(private, []byte("private"), 0o600))
 	prior := filepath.Join(clientDir, "prior-answer.txt")
@@ -55,6 +55,7 @@ func TestLookupIsolationReadsOnlyFixtureHome(t *testing.T) {
 	t.Setenv("PATH", binDir)
 	t.Setenv("ANTHROPIC_API_KEY", "host-anthropic-key")
 	t.Setenv("OPENAI_API_KEY", "host-openai-key")
+	require.NoError(t, copyLookupTranscriptsForClient(t.Context(), clientCodex, fixtureRoot, filepath.Join(runDir, "home"), project))
 	isolation, err := prepareLookupIsolation(t.Context(), clientCodex, clientDir, project, project, bin, runDir)
 	require.NoError(t, err)
 	cmd := exec.CommandContext(t.Context(), isolation.command)
@@ -73,6 +74,60 @@ func TestLookupIsolationReadsOnlyFixtureHome(t *testing.T) {
 	require.NoError(t, os.Remove(filepath.Join(home, ".codex", "auth.json")))
 	_, err = prepareLookupIsolation(t.Context(), clientCodex, clientDir, project, project, bin, filepath.Join(clientDir, "missing-auth"))
 	require.ErrorContains(t, err, "missing codex credentials")
+}
+
+func TestLookupClaudeIsolationReadsFixtureTranscripts(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("bubblewrap is Linux-only")
+	}
+	bwrap, err := exec.LookPath("bwrap")
+	if err != nil {
+		t.Skip("bubblewrap unavailable")
+	}
+	hostHome, err := os.UserHomeDir()
+	require.NoError(t, err)
+	t.Setenv("TMPDIR", hostHome)
+	privateTemp := t.TempDir()
+	t.Setenv("TMPDIR", privateTemp)
+	base := t.TempDir()
+	require.NoError(t, os.Chmod(base, 0o700))
+	home := filepath.Join(base, "home")
+	clientDir := filepath.Join(home, "fixture")
+	project := filepath.Join(clientDir, "project")
+	dataDir := filepath.Join(clientDir, "agentsview-data")
+	runDir := filepath.Join(clientDir, "attempt")
+	privateHome := filepath.Join(runDir, "home")
+	claudeHome := filepath.Join(home, ".claude")
+	binDir := filepath.Join(clientDir, "bin")
+	fixtureRoot := filepath.Join(clientDir, "fixture-sessions")
+	for _, dir := range []string{project, dataDir, runDir, claudeHome, binDir, fixtureRoot} {
+		require.NoError(t, os.MkdirAll(dir, 0o700))
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(claudeHome, ".credentials.json"), []byte("{}"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(fixtureRoot, "fixture.jsonl"), []byte("fixture transcript"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "claude"), []byte("#!/bin/sh\ncat \"$FIXTURE_PATH\"\nprintf 'new transcript' > \"$FIXTURE_PATH.new\"\n"), 0o700))
+	require.NoError(t, os.Symlink(bwrap, filepath.Join(binDir, "bwrap")))
+	bin := filepath.Join(binDir, "agentsview")
+	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o700))
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", claudeHome)
+	t.Setenv("PATH", binDir)
+
+	transcriptRoot, err := lookupTranscriptRoot(clientClaude, privateHome, project)
+	require.NoError(t, err)
+	transcriptPath := filepath.Join(transcriptRoot, "fixture.jsonl")
+	require.NoError(t, copyLookupTranscriptsForClient(t.Context(), clientClaude, fixtureRoot, privateHome, project))
+	isolation, err := prepareLookupIsolation(t.Context(), clientClaude, clientDir, project, project, bin, runDir)
+	require.NoError(t, err)
+	cmd := exec.CommandContext(t.Context(), isolation.command)
+	cmd.Env = append(isolation.env, "FIXTURE_PATH="+transcriptPath)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(out))
+	assert.Equal(t, "fixture transcript", string(out))
+	data, err := os.ReadFile(transcriptPath + ".new")
+	require.NoError(t, err)
+	assert.Equal(t, "new transcript", string(data))
+	isolation.removeCredentials()
 }
 
 func TestLookupIsolationRequiresNodeOnlyForNodeScripts(t *testing.T) {

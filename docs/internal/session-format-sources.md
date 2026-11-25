@@ -155,6 +155,16 @@ evidence; they do not establish whether a tool helped the task.
 
 ## Claude Code (`claude`)
 
+- **Lookup benchmark items (observed, no-public-source, 2026-11-25):** Claude
+  Code 2.1.332 session records use `assistant` messages with `tool_use` content
+  blocks and `user` messages with matching `tool_result` blocks. The benchmark
+  pairs them by `tool_use_id`, uses record timestamps for call counts, and reads
+  `content` and `is_error` for result scoring. An upstream issue reports that
+  no session JSONL schema is published
+  ([anthropics/claude-code#49400](https://github.com/anthropics/claude-code/issues/49400));
+  other client versions remain unscored until this observed format is
+  rechecked.
+
 - **Modified-time refresh without a write (observed 2026-11-15):** On a machine
   running Claude Code 2.1.325, four transcripts of open sessions received new
   modified times exactly 3,600 seconds apart while their size and SHA-256
@@ -778,7 +788,8 @@ fixtures retain this field; missing identities remain source-local.
   and `result`. Command calls use `CommandExecution` items with `command`,
   `aggregated_output`, and `exit_code`. The lookup benchmark scores these
   individual results and does not infer them from an `exec` script's combined
-  output. The rollout parser continues to store that script as one call.
+  output. The rollout parser continues to store that script as one call. Lookup
+  scoring leaves other Codex versions unscored until this format is rechecked.
 
 - **Reasoning, compaction, and usage repeats (checked 2026-11-11 at
   `87b7bdbf2efb9cb6fb15d821ef535061012c0138`):** The pinned

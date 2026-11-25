@@ -64,7 +64,7 @@ func lookupTestCase(answerText string, expected []lookupItem, values []string) (
 func TestLookupCodexScriptRequiresIndividualResults(t *testing.T) {
 	trace := `{"timestamp":"2026-11-24T12:00:00Z","type":"response_item","payload":{"type":"custom_tool_call","name":"exec","call_id":"x","input":"await tools.mcp__agentsview__search_content({}); await tools.mcp__agentsview__search_content({})"}}
 {"timestamp":"2026-11-24T12:00:02Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"x","output":"` + lookupID + `"}}`
-	calls, err := extractLookupCalls(clientCodex, [][]byte{[]byte(trace)})
+	calls, err := extractLookupCalls(t.Context(), clientCodex, [][]byte{[]byte(trace)})
 	require.NoError(t, err)
 	require.Len(t, calls, 1)
 	assert.True(t, calls[0].Missing)
@@ -77,7 +77,7 @@ func TestLookupCodexScriptRequiresIndividualResults(t *testing.T) {
 func TestLookupCodexTopLevelCallPairsOutputAndError(t *testing.T) {
 	trace := `{"timestamp":"2026-11-24T12:00:00Z","type":"response_item","payload":{"type":"function_call","name":"mcp__agentsview__search_content","call_id":"top","arguments":"{}"}}
 {"timestamp":"2026-11-24T12:00:01Z","type":"response_item","payload":{"type":"function_call_output","call_id":"top","output":"{\"isError\":true,\"content\":[{\"type\":\"text\",\"text\":\"failed\"}]}"}}`
-	calls, err := extractLookupCalls(clientCodex, [][]byte{[]byte(trace)})
+	calls, err := extractLookupCalls(t.Context(), clientCodex, [][]byte{[]byte(trace)})
 	require.NoError(t, err)
 	require.Len(t, calls, 1)
 	assert.Equal(t, "mcp", calls[0].Route)
@@ -85,7 +85,7 @@ func TestLookupCodexTopLevelCallPairsOutputAndError(t *testing.T) {
 	assert.False(t, calls[0].Missing)
 	failed := `{"timestamp":"2026-11-24T12:00:00Z","type":"response_item","payload":{"type":"custom_tool_call","name":"exec_command","call_id":"shell","input":"sqlite3 sessions.db"}}
 {"timestamp":"2026-11-24T12:00:01Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"shell","status":"failed","output":"error"}}`
-	calls, err = extractLookupCalls(clientCodex, [][]byte{[]byte(failed)})
+	calls, err = extractLookupCalls(t.Context(), clientCodex, [][]byte{[]byte(failed)})
 	require.NoError(t, err)
 	require.Len(t, calls, 1)
 	assert.True(t, calls[0].Error)
@@ -94,7 +94,7 @@ func TestLookupCodexTopLevelCallPairsOutputAndError(t *testing.T) {
 func TestLookupRetainsTraceCallsWhenCaptureIsIncomplete(t *testing.T) {
 	trace := `{"timestamp":"2026-11-24T12:00:00Z","type":"assistant","message":{"content":[{"type":"tool_use","id":"top","name":"mcp__agentsview__search_content","input":{}}]}}
 {"timestamp":"2026-11-24T12:00:01Z","type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"top","content":"failed","is_error":true}]}}`
-	calls, err := readLookupTranscriptCalls(clientClaude, t.TempDir(), []byte(trace))
+	calls, err := readLookupTranscriptCalls(t.Context(), clientClaude, t.TempDir(), []byte(trace))
 	require.ErrorIs(t, err, errCaptureIncomplete)
 	require.Len(t, calls, 1)
 	assert.Equal(t, "mcp", calls[0].Route)
@@ -103,7 +103,7 @@ func TestLookupRetainsTraceCallsWhenCaptureIsIncomplete(t *testing.T) {
 func TestLookupRetainsCallsBeforeMalformedJSONL(t *testing.T) {
 	trace := `{"timestamp":"2026-11-24T12:00:00Z","type":"assistant","message":{"content":[{"type":"tool_use","id":"1","name":"mcp__agentsview__search_content","input":{}}]}}
 {invalid`
-	calls, err := extractLookupCalls(clientClaude, [][]byte{[]byte(trace)})
+	calls, err := extractLookupCalls(t.Context(), clientClaude, [][]byte{[]byte(trace)})
 	require.Error(t, err)
 	require.Len(t, calls, 1)
 	assert.True(t, calls[0].Missing)
@@ -159,7 +159,7 @@ func TestLookupCodexParallelResultsAndWait(t *testing.T) {
 {"timestamp":"2026-11-24T12:00:03Z","type":"event_msg","payload":{"type":"item_completed","started_at_ms":1795521602500,"completed_at_ms":1795521603000,"item":{"type":"McpToolCall","server":"agentsview","tool":"search_content","status":"completed","result":{"content":[{"type":"text","text":"{\"session_id\":\"codex:` + lookupID + `\"}"}]}}}}
 {"timestamp":"2026-11-24T12:00:03Z","type":"response_item","payload":{"type":"function_call_output","call_id":"w","output":"done"}}
 {"timestamp":"2026-11-24T12:00:04Z","type":"event_msg","payload":{"type":"item_completed","started_at_ms":1795521602700,"completed_at_ms":1795521604000,"item":{"type":"McpToolCall","server":"agentsview","tool":"search_content","status":"completed","result":{"content":[{"type":"text","text":"other"}]}}}}`
-	calls, err := extractLookupCalls(clientCodex, [][]byte{[]byte(trace)})
+	calls, err := extractLookupCalls(t.Context(), clientCodex, [][]byte{[]byte(trace)})
 	require.NoError(t, err)
 	require.Len(t, calls, 2)
 	question, answer := lookupTestCase(lookupID, []lookupItem{{SessionID: lookupID}}, nil)
@@ -169,12 +169,59 @@ func TestLookupCodexParallelResultsAndWait(t *testing.T) {
 	assert.Equal(t, 2, *score.CallsToHit)
 }
 
+func TestLookupAttributesMixedResultsToSessionRows(t *testing.T) {
+	source := "codex:" + lookupID
+	other := "codex:22222222-2222-4222-8222-222222222222"
+	question := lookupQuestion{
+		Expected:       []lookupItem{{SessionID: source}, {SessionID: other}},
+		ExpectedAnswer: map[string]string{"namespace": "violet ledger", "reason": "lock contention"},
+	}
+	answer := `{"namespace":"violet ledger","reason":"lock contention","source_session_id":"` + source + `"}`
+	for _, tc := range []struct {
+		name   string
+		result string
+		calls  int
+	}{
+		{
+			name:   "other row has the complete answer",
+			result: `{"results":[{"session_id":"` + source + `","content":"other"},{"session_id":"` + other + `","content":"violet ledger lock contention"}]}`,
+			calls:  2,
+		},
+		{
+			name:   "plain text rows have separate answers",
+			result: "session_id: " + source + "\ncontent: other\n\nsession_id: " + other + "\ncontent: violet ledger lock contention",
+			calls:  2,
+		},
+		{
+			name:   "selected row has one answer field",
+			result: `{"results":[{"session_id":"` + source + `","content":"violet ledger"},{"session_id":"` + other + `","content":"lock contention"}]}`,
+			calls:  2,
+		},
+		{
+			name:   "selected row has the complete answer",
+			result: `{"results":[{"session_id":"` + source + `","content":"violet ledger lock contention"},{"session_id":"` + other + `","content":"other"}]}`,
+			calls:  1,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := []lookupCall{
+				{Route: "mcp", Result: tc.result, Start: 1, End: 2},
+				{Name: "get_messages", Route: "mcp", Input: `{"session_id":"` + source + `"}`, Result: "violet ledger lock contention", Start: 3, End: 4},
+			}
+			score := scoreLookupQuestion(question, answer, calls, nil)
+			assert.Equal(t, "success", score.Verdict)
+			require.NotNil(t, score.CallsToHit)
+			assert.Equal(t, tc.calls, *score.CallsToHit)
+		})
+	}
+}
+
 func TestLookupIncludesChildTranscript(t *testing.T) {
 	root := `{"timestamp":"2026-11-24T12:00:00Z","message":{"content":[{"type":"tool_use","id":"1","name":"mcp__agentsview__search_content","input":{}}]}}
 {"timestamp":"2026-11-24T12:00:01Z","message":{"content":[{"type":"tool_result","tool_use_id":"1","content":"no match"}]}}`
 	child := `{"timestamp":"2026-11-24T12:00:02Z","message":{"content":[{"type":"tool_use","id":"1","name":"mcp__agentsview__search_content","input":{}}]}}
 {"timestamp":"2026-11-24T12:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"1","content":"{\"session_id\":\"codex:` + lookupID + `\"}"}]}}`
-	calls, err := extractLookupCalls(clientClaude, [][]byte{[]byte(root), []byte(child)})
+	calls, err := extractLookupCalls(t.Context(), clientClaude, [][]byte{[]byte(root), []byte(child)})
 	require.NoError(t, err)
 	question, answer := lookupTestCase(lookupID, []lookupItem{{SessionID: lookupID}}, nil)
 	score := scoreLookupQuestion(question, answer, calls, nil)
@@ -186,7 +233,7 @@ func TestLookupIgnoresLaterUntimedCallForHit(t *testing.T) {
 	trace := `{"timestamp":"2026-11-24T12:00:00Z","type":"response_item","payload":{"type":"function_call","name":"exec","call_id":"parent","arguments":"await tools.mcp__agentsview__search_content({})"}}
 {"timestamp":"2026-11-24T12:00:02Z","type":"event_msg","payload":{"type":"item_completed","started_at_ms":1795521601000,"completed_at_ms":1795521602000,"item":{"type":"McpToolCall","server":"agentsview","tool":"search_content","result":{"content":[{"type":"text","text":"{\"session_id\":\"codex:` + lookupID + `\",\"snippet\":\"violet ledger\"}"}]}}}}
 {"timestamp":"2026-11-24T12:00:01.500Z","type":"response_item","payload":{"type":"function_call","name":"exec","call_id":"unfinished","arguments":"tools.mcp__agentsview__get_messages({})"}}`
-	calls, err := extractLookupCalls(clientCodex, [][]byte{[]byte(trace)})
+	calls, err := extractLookupCalls(t.Context(), clientCodex, [][]byte{[]byte(trace)})
 	require.NoError(t, err)
 	question, answer := lookupTestCase(lookupID, []lookupItem{{SessionID: lookupID}}, nil)
 	score := scoreLookupQuestion(question, answer, calls, nil)
@@ -203,7 +250,7 @@ func TestLookupCodexToolDiscoveryIsOneCall(t *testing.T) {
 {"timestamp":"2026-11-24T12:00:02Z","type":"response_item","payload":{"type":"custom_tool_call","name":"exec","call_id":"search","input":"await tools.mcp__agentsview__search_content({})"}}
 {"timestamp":"2026-11-24T12:00:03Z","type":"event_msg","payload":{"type":"item_completed","started_at_ms":1795521602000,"completed_at_ms":1795521603000,"item":{"type":"McpToolCall","server":"agentsview","tool":"search_content","result":{"content":[{"type":"text","text":"{\"session_id\":\"codex:` + lookupID + `\"}"}]}}}}
 {"timestamp":"2026-11-24T12:00:03Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"search","output":"done"}}`
-	calls, err := extractLookupCalls(clientCodex, [][]byte{[]byte(trace)})
+	calls, err := extractLookupCalls(t.Context(), clientCodex, [][]byte{[]byte(trace)})
 	require.NoError(t, err)
 	require.Len(t, calls, 2)
 	assert.Equal(t, "tool discovery", calls[0].Name)
@@ -218,7 +265,7 @@ func TestLookupClaudeToolSearchCountsAsDiscovery(t *testing.T) {
 {"timestamp":"2026-11-24T12:00:01Z","message":{"content":[{"type":"tool_result","tool_use_id":"discover","content":"Found the AgentsView search tool."}]}}
 {"timestamp":"2026-11-24T12:00:02Z","message":{"content":[{"type":"tool_use","id":"search","name":"mcp__agentsview__search_content","input":{}}]}}
 {"timestamp":"2026-11-24T12:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"search","content":"{\"session_id\":\"codex:` + lookupID + `\",\"snippet\":\"violet ledger\"}"}]}}`
-	calls, err := extractLookupCalls(clientClaude, [][]byte{[]byte(trace)})
+	calls, err := extractLookupCalls(t.Context(), clientClaude, [][]byte{[]byte(trace)})
 	require.NoError(t, err)
 	require.Len(t, calls, 2)
 	assert.Equal(t, "tool discovery", calls[0].Name)
@@ -237,7 +284,7 @@ func TestLookupClaudePairsResultsAndScoresFirstHit(t *testing.T) {
 {"timestamp":"2026-11-24T12:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"2","content":"{\"session_id\":\"codex:` + lookupID + `\"}"}]}}
 {"timestamp":"2026-11-24T12:00:04Z","message":{"content":[{"type":"tool_use","id":"3","name":"mcp__agentsview__get_messages","input":{"session_id":"other"}}]}}
 {"timestamp":"2026-11-24T12:00:05Z","message":{"content":[{"type":"tool_result","tool_use_id":"3","content":"other"}]}}`
-	calls, err := extractLookupCalls(clientClaude, [][]byte{[]byte(trace)})
+	calls, err := extractLookupCalls(t.Context(), clientClaude, [][]byte{[]byte(trace)})
 	require.NoError(t, err)
 	question, answer := lookupTestCase(lookupID, []lookupItem{{SessionID: lookupID}}, nil)
 	score := scoreLookupQuestion(question, answer, calls, nil)
@@ -250,7 +297,7 @@ func TestLookupClaudeIgnoresAPIRequestBlobs(t *testing.T) {
 	trace := `{"timestamp":"2026-11-24T12:00:00Z","type":"assistant","message":{"content":[{"type":"tool_use","id":"1","name":"mcp__agentsview__search_content","input":{}}]}}
 {"timestamp":"2026-11-24T12:00:01Z","type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"1","content":"{\"session_id\":\"codex:` + lookupID + `\"}"}]}}
 {"type":"api-request-blob","message":{"content":[{"type":"tool_use","id":"1","name":"mcp__agentsview__search_content","input":{}},{"type":"tool_result","tool_use_id":"1","content":"{\"session_id\":\"codex:` + lookupID + `\"}"}]}}`
-	calls, err := extractLookupCalls(clientClaude, [][]byte{[]byte(trace)})
+	calls, err := extractLookupCalls(t.Context(), clientClaude, [][]byte{[]byte(trace)})
 	require.NoError(t, err)
 	require.Len(t, calls, 1)
 	question, answer := lookupTestCase(lookupID, []lookupItem{{SessionID: lookupID}}, nil)
@@ -280,6 +327,7 @@ func TestLookupScoringRoutesAndEvidence(t *testing.T) {
 		{"timeout", "codex:" + lookupID + " violet ledger", []lookupCall{{Route: "direct", Result: lookupID, Start: 1, End: 2}}, errors.New("timeout"), "failed", 0},
 		{"timeout with incomplete capture", "codex:" + lookupID + " violet ledger", []lookupCall{{Route: "mcp", Result: `{"session_id":"codex:` + lookupID + `","snippet":"violet ledger"}`, Start: 1, End: 2}}, errors.Join(context.DeadlineExceeded, errCaptureIncomplete), "failed", 0},
 		{"client failure with incomplete capture", "codex:" + lookupID + " violet ledger", []lookupCall{{Route: "mcp", Result: `{"session_id":"codex:` + lookupID + `","snippet":"violet ledger"}`, Start: 1, End: 2}}, errors.Join(errLookupClientFailed, errCaptureIncomplete), "failed", 0},
+		{"unsupported lookup capture format", "codex:" + lookupID + " violet ledger", nil, errLookupCaptureUnsupported, "unscored", 0},
 		{"incomplete capture", "codex:" + lookupID + " violet ledger", nil, errCaptureIncomplete, "unscored", 0},
 	}
 	for _, tc := range cases {
@@ -319,7 +367,7 @@ func TestLookupRejectsDifferentProviderWithSameID(t *testing.T) {
 func TestLookupClassifiesTranscriptFromGrepOutput(t *testing.T) {
 	trace := `{"timestamp":"2026-11-24T12:00:00Z","message":{"content":[{"type":"tool_use","id":"1","name":"Grep","input":{"pattern":"violet ledger","path":"."}}]}}
 {"timestamp":"2026-11-24T12:00:01Z","message":{"content":[{"type":"tool_result","tool_use_id":"1","content":"transcripts/2026/01/01/rollout-2026-11-24T12-00-00-` + lookupID + `.jsonl:session ` + lookupID + ` violet ledger"}]}}`
-	calls, err := extractLookupCalls(clientClaude, [][]byte{[]byte(trace)})
+	calls, err := extractLookupCalls(t.Context(), clientClaude, [][]byte{[]byte(trace)})
 	require.NoError(t, err)
 	require.Len(t, calls, 1)
 	assert.Equal(t, "direct", calls[0].Route)
@@ -380,7 +428,7 @@ func TestLookupWildcardTranscriptRead(t *testing.T) {
 	item := lookupItem{SessionID: "codex:" + lookupID}
 	transcript := `{"type":"session_meta","payload":{"id":"` + lookupID + `"}}` + "\n" + `{"payload":{"content":"violet ledger"}}`
 	trace := `{"timestamp":"2026-11-24T12:00:00Z","message":{"content":[{"type":"tool_use","id":"1","name":"Bash","input":{"command":"cat ~/.codex/sessions/**/*.jsonl"}}]}}` + "\n" + `{"timestamp":"2026-11-24T12:00:01Z","message":{"content":[{"type":"tool_result","tool_use_id":"1","content":` + stringMustJSON(t, transcript) + `}]}}`
-	calls, err := extractLookupCalls(clientClaude, [][]byte{[]byte(trace)})
+	calls, err := extractLookupCalls(t.Context(), clientClaude, [][]byte{[]byte(trace)})
 	require.NoError(t, err)
 	question, answer := lookupTestCase(item.SessionID+" violet ledger", []lookupItem{item}, []string{"violet ledger"})
 	score := scoreLookupQuestion(question, answer, calls, nil)
@@ -420,7 +468,7 @@ func TestLookupAccumulatesFactsForCitedSession(t *testing.T) {
 	score := scoreLookupQuestion(question, answer, calls, nil)
 	assert.Equal(t, "success", score.Verdict)
 	require.NotNil(t, score.CallsToHit)
-	assert.Equal(t, 2, *score.CallsToHit)
+	assert.Equal(t, 3, *score.CallsToHit)
 }
 
 func TestLookupCallsToHitIncludesCompleteAnswerValue(t *testing.T) {

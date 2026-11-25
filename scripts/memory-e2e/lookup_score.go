@@ -10,6 +10,9 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/tidwall/gjson"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 type lookupItem struct {
@@ -40,17 +43,19 @@ type lookupScore struct {
 }
 
 var (
-	lookupCommandPattern      = regexp.MustCompile(`(?i)(sqlite3|sessions\.db|\.claude/projects/|\.codex/sessions/|rollout-[^\s"']*\.jsonl|tool-results/|\bagentsview\s+(?:session|search|db|mcp)\b)`)
-	lookupOutputPattern       = regexp.MustCompile(`(?i)(sessions\.db|\.claude/projects/|\.codex/sessions/|rollout-[^\s"']*\.jsonl|tool-results/)`)
-	truncatedResultPattern    = regexp.MustCompile(`(?i)"[^"\n]*truncated"\s*:\s*true|output truncated`)
-	emptyResultPattern        = regexp.MustCompile(`(?i)"(?:matches|messages|results|sessions|tool_calls)"\s*:\s*(?:\[\s*\]|null)`)
-	codexMCPInvocationPattern = regexp.MustCompile(`\btools\s*(?:\.\s*mcp__agentsview__|\[)`)
-	mcpErrorPattern           = regexp.MustCompile(`(?i)"is_?error"\s*:\s*true`)
-	runningCellPattern        = regexp.MustCompile(`(?i)script (?:still )?running with cell ID\s+([^\s]+)`)
-	sessionProviderPrefix     = regexp.MustCompile(`(?i)(?:([a-z][a-z0-9_-]*):|/sessions/([a-z][a-z0-9_-]*)/)$`)
-	lookupJSONFence           = regexp.MustCompile("(?s)^\\s*```(?:json)?[ \\t]*\\r?\\n(.*?)\\r?\\n```\\s*$")
-	errCaptureIncomplete      = errors.New("capture incomplete")
-	errLookupClientFailed     = errors.New("lookup client failed")
+	lookupCommandPattern        = regexp.MustCompile(`(?i)(sqlite3|sessions\.db|\.claude/projects/|\.codex/sessions/|rollout-[^\s"']*\.jsonl|tool-results/|\bagentsview\s+(?:session|search|db|mcp)\b)`)
+	lookupOutputPattern         = regexp.MustCompile(`(?i)(sessions\.db|\.claude/projects/|\.codex/sessions/|rollout-[^\s"']*\.jsonl|tool-results/)`)
+	truncatedResultPattern      = regexp.MustCompile(`(?i)"[^"\n]*truncated"\s*:\s*true|output truncated`)
+	emptyResultPattern          = regexp.MustCompile(`(?i)"(?:matches|messages|results|sessions|tool_calls)"\s*:\s*(?:\[\s*\]|null)`)
+	codexMCPInvocationPattern   = regexp.MustCompile(`\btools\s*(?:\.\s*mcp__agentsview__|\[)`)
+	mcpErrorPattern             = regexp.MustCompile(`(?i)"is_?error"\s*:\s*true`)
+	runningCellPattern          = regexp.MustCompile(`(?i)script (?:still )?running with cell ID\s+([^\s]+)`)
+	sessionProviderPrefix       = regexp.MustCompile(`(?i)(?:([a-z][a-z0-9_-]*):|/sessions/([a-z][a-z0-9_-]*)/)$`)
+	lookupJSONFence             = regexp.MustCompile("(?s)^\\s*```(?:json)?[ \\t]*\\r?\\n(.*?)\\r?\\n```\\s*$")
+	lookupSessionReference      = regexp.MustCompile(`(?i)(?:/sessions/[a-z][a-z0-9_-]*/|[a-z][a-z0-9_-]*:)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
+	errCaptureIncomplete        = errors.New("capture incomplete")
+	errLookupCaptureUnsupported = errors.New("lookup capture format is unsupported")
+	errLookupClientFailed       = errors.New("lookup client failed")
 )
 
 func routeFor(name, input string) string {
@@ -121,14 +126,18 @@ func timestampMS(value any) int64 {
 	return t.UnixMilli()
 }
 
-func extractLookupCalls(client clientName, transcripts [][]byte) ([]lookupCall, error) {
+func extractLookupCalls(ctx context.Context, client clientName, transcripts [][]byte) ([]lookupCall, error) {
 	var calls []lookupCall
 	for source, data := range transcripts {
 		var events []map[string]any
-		err := scanJSONLEvents(data, 32*1024*1024, false, func(event map[string]any) { events = append(events, event) })
+		scanErr := scanJSONLEvents(data, 32*1024*1024, false, func(event map[string]any) { events = append(events, event) })
 		var sourceCalls []lookupCall
 		if client == clientClaude {
-			sourceCalls = claudeLookupCalls(events)
+			var err error
+			sourceCalls, err = claudeLookupCalls(ctx, events)
+			if err != nil {
+				return calls, fmt.Errorf("decode source %d: %w", source+1, err)
+			}
 		} else {
 			sourceCalls = codexLookupCalls(events)
 		}
@@ -136,15 +145,15 @@ func extractLookupCalls(client clientName, transcripts [][]byte) ([]lookupCall, 
 			sourceCalls[i].Source = source + 1
 		}
 		calls = append(calls, sourceCalls...)
-		if err != nil {
-			return calls, fmt.Errorf("decode source %d: %w", source+1, err)
+		if scanErr != nil {
+			return calls, fmt.Errorf("decode source %d: %w", source+1, scanErr)
 		}
 	}
 	sort.SliceStable(calls, func(i, j int) bool { return calls[i].Start < calls[j].Start })
 	return calls, nil
 }
 
-func claudeLookupCalls(events []map[string]any) []lookupCall {
+func claudeLookupCalls(ctx context.Context, events []map[string]any) ([]lookupCall, error) {
 	calls := make([]lookupCall, 0)
 	pending := map[string]int{}
 	for line, e := range events {
@@ -153,39 +162,50 @@ func claudeLookupCalls(events []map[string]any) []lookupCall {
 		}
 		msg, _ := e["message"].(map[string]any)
 		blocks, _ := msg["content"].([]any)
+		content, err := json.Marshal(blocks)
+		if err != nil {
+			return calls, err
+		}
+		_, _, _, _, _, toolUses, toolResults := parser.ExtractTextContent(
+			parser.WithoutFilesystemProjectDiscovery(ctx),
+			gjson.ParseBytes(content),
+		)
 		at := timestampMS(e["timestamp"])
-		for _, raw := range blocks {
-			b, _ := raw.(map[string]any)
-			switch b["type"] {
-			case "tool_use":
-				name, _ := b["name"].(string)
-				id, _ := b["id"].(string)
-				route := routeFor(name, rawText(b["input"]))
-				if route == "" {
-					continue
-				}
-				if name == "ToolSearch" {
-					name = "tool discovery"
-				}
-				pending[id] = len(calls)
-				calls = append(calls, lookupCall{Name: name, Input: rawText(b["input"]), Route: route, Start: at, End: at, StartOrder: line + 1, Missing: true})
-			case "tool_result":
-				id, _ := b["tool_use_id"].(string)
-				idx, ok := pending[id]
-				if !ok {
-					continue
-				}
-				c := &calls[idx]
-				c.Result = resultText(b["content"])
-				c.Missing = b["content"] == nil
-				c.End = at
-				c.EndOrder = line + 1
-				c.Error, _ = b["is_error"].(bool)
-				resultFlags(c)
+		for _, toolUse := range toolUses {
+			name := toolUse.ToolName
+			route := routeFor(name, toolUse.InputJSON)
+			if route == "" {
+				continue
 			}
+			if name == "ToolSearch" {
+				name = "tool discovery"
+			}
+			pending[toolUse.ToolUseID] = len(calls)
+			calls = append(calls, lookupCall{Name: name, Input: toolUse.InputJSON, Route: route, Start: at, End: at, StartOrder: line + 1, Missing: true})
+		}
+		for _, toolResult := range toolResults {
+			idx, ok := pending[toolResult.ToolUseID]
+			if !ok {
+				continue
+			}
+			c := &calls[idx]
+			c.Result = lookupResultText(toolResult.ContentRaw)
+			c.Missing = toolResult.ContentRaw == "" || toolResult.ContentRaw == "null"
+			c.End = at
+			c.EndOrder = line + 1
+			c.Error = toolResult.Status == "errored"
+			resultFlags(c)
 		}
 	}
-	return calls
+	return calls, nil
+}
+
+func lookupResultText(raw string) string {
+	var value any
+	if err := json.Unmarshal([]byte(raw), &value); err != nil {
+		return raw
+	}
+	return resultText(value)
 }
 
 func codexLookupCalls(events []map[string]any) []lookupCall {
@@ -375,6 +395,10 @@ func scoreLookupQuestion(q lookupQuestion, answer string, calls []lookupCall, ru
 	if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) || errors.Is(runErr, errLookupClientFailed) {
 		return s
 	}
+	if errors.Is(runErr, errLookupCaptureUnsupported) {
+		s.Verdict = "unscored"
+		return s
+	}
 	sourceID, valid := lookupAnswerSource(q, answer)
 	captureIncomplete := lookupCaptureIncomplete(runErr)
 	if !valid || (runErr != nil && !captureIncomplete) {
@@ -397,11 +421,12 @@ func scoreLookupQuestion(q lookupQuestion, answer string, calls []lookupCall, ru
 		if c.Error || c.Missing || strings.TrimSpace(c.Result) == "" {
 			continue
 		}
-		if !containsSessionID(c.Result, sourceID) && !containsSessionID(c.Input, sourceID) {
+		sessionText := lookupSessionEvidence(*c, sourceID)
+		if sessionText == "" {
 			continue
 		}
 		evidence.WriteByte(' ')
-		evidence.WriteString(c.Result)
+		evidence.WriteString(sessionText)
 		complete := true
 		for _, value := range q.ExpectedAnswer {
 			complete = complete && containsLookupPhrase(evidence.String(), value)
@@ -446,6 +471,76 @@ func scoreLookupQuestion(q lookupQuestion, answer string, calls []lookupCall, ru
 	s.Verdict = "success"
 	s.CallsToHit = &count
 	return s
+}
+
+func lookupSessionEvidence(call lookupCall, sessionID string) string {
+	var result any
+	if json.Unmarshal([]byte(call.Result), &result) == nil {
+		var text strings.Builder
+		hasSessionScope := false
+		appendScopedLookupJSON(&text, result, sessionID, false, &hasSessionScope)
+		if hasSessionScope {
+			return text.String()
+		}
+	}
+
+	if containsSessionID(call.Input, sessionID) && len(lookupSessionReference.FindAllString(call.Result, -1)) == 0 {
+		return call.Result
+	}
+	return lookupUnstructuredSessionEvidence(call.Result, sessionID)
+}
+
+func appendScopedLookupJSON(text *strings.Builder, value any, sessionID string, inSession bool, hasSessionScope *bool) {
+	switch value := value.(type) {
+	case map[string]any:
+		for _, key := range []string{"session_id", "sessionId", "sessionid", "session", "source_session_id"} {
+			id, ok := value[key].(string)
+			if ok {
+				inSession = containsSessionID(id, sessionID)
+				*hasSessionScope = true
+				break
+			}
+		}
+		for _, child := range value {
+			appendScopedLookupJSON(text, child, sessionID, inSession, hasSessionScope)
+		}
+	case []any:
+		for _, child := range value {
+			appendScopedLookupJSON(text, child, sessionID, inSession, hasSessionScope)
+		}
+	case string:
+		if inSession {
+			text.WriteByte(' ')
+			text.WriteString(value)
+		}
+	}
+}
+
+func lookupUnstructuredSessionEvidence(text, sessionID string) string {
+	references := lookupSessionReference.FindAllStringIndex(text, -1)
+	if len(references) == 0 {
+		if containsSessionID(text, sessionID) {
+			return text
+		}
+		return ""
+	}
+	if len(references) == 1 && containsSessionID(text[references[0][0]:references[0][1]], sessionID) {
+		return text
+	}
+
+	var evidence strings.Builder
+	for i, reference := range references {
+		if !containsSessionID(text[reference[0]:reference[1]], sessionID) {
+			continue
+		}
+		end := len(text)
+		if i+1 < len(references) {
+			end = references[i+1][0]
+		}
+		evidence.WriteByte(' ')
+		evidence.WriteString(text[reference[0]:end])
+	}
+	return evidence.String()
 }
 
 func lookupAnswerSource(q lookupQuestion, answer string) (string, bool) {

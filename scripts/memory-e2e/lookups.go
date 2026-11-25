@@ -231,6 +231,9 @@ func runLookupClient(
 			runDir := filepath.Join(dir, q.Name, fmt.Sprintf("run-%d", i))
 			started := time.Now()
 			calls, answer, runErr := captureLookup(ctx, cfg, bin, client, project, model, server.url, lookupPrompt(q), runDir)
+			if !lookupClientVersionSupported(client, report.Version) {
+				runErr = errors.Join(runErr, fmt.Errorf("%w: %s %q", errLookupCaptureUnsupported, client, report.Version))
+			}
 			if errors.Is(runErr, errLookupSetup) {
 				return report, runErr
 			}
@@ -258,15 +261,23 @@ func lookupPrompt(q lookupQuestion) string {
 	return fmt.Sprintf("%s\n\nReturn only a JSON object with string fields %s. Copy each answer value exactly from the source, and include no other fields.", q.Prompt, fieldList)
 }
 
+func lookupClientVersionSupported(client clientName, version string) bool {
+	switch client {
+	case clientClaude:
+		return version == "2.1.332 (Claude Code)"
+	case clientCodex:
+		return version == "codex-cli 0.172.0"
+	default:
+		return false
+	}
+}
+
 func captureLookup(ctx context.Context, cfg config, bin string, client clientName, project, model, serverURL, prompt, dir string) ([]lookupCall, string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, "", fmt.Errorf("%w: create attempt: %w", errLookupSetup, err)
 	}
-	if client == clientCodex {
-		codexSessionsDir := filepath.Join(dir, "home", ".codex", "sessions")
-		if err := copyLookupTranscripts(ctx, filepath.Join(filepath.Dir(project), "fixture-sessions"), codexSessionsDir); err != nil {
-			return nil, "", fmt.Errorf("%w: copy fixture transcripts: %w", errLookupSetup, err)
-		}
+	if err := copyLookupTranscriptsForClient(ctx, client, filepath.Join(filepath.Dir(project), "fixture-sessions"), filepath.Join(dir, "home"), project); err != nil {
+		return nil, "", fmt.Errorf("%w: copy fixture transcripts: %w", errLookupSetup, err)
 	}
 	isolation, err := prepareLookupIsolation(ctx, client, filepath.Dir(project), cfg.repository, project, bin, dir)
 	if err != nil {
@@ -295,7 +306,7 @@ func captureLookup(ctx context.Context, cfg config, bin string, client clientNam
 		return nil, "", fmt.Errorf("%w: write stderr: %w", errLookupSetup, writeErr)
 	}
 	parsed, parseErr := parseAgentTrace(client, stdout.Bytes())
-	calls, captureErr := readLookupTranscriptCalls(client, dir, stdout.Bytes())
+	calls, captureErr := readLookupTranscriptCalls(ctx, client, dir, stdout.Bytes())
 	var runErr error
 	if runCtx.Err() != nil {
 		runErr = runCtx.Err()
@@ -334,9 +345,9 @@ func lookupTraceSetupError(trace []byte) bool {
 }
 
 func readLookupTranscriptCalls(
-	client clientName, dir string, trace []byte,
+	ctx context.Context, client clientName, dir string, trace []byte,
 ) ([]lookupCall, error) {
-	traceCalls, traceErr := extractLookupCalls(client, [][]byte{trace})
+	traceCalls, traceErr := extractLookupCalls(ctx, client, [][]byte{trace})
 	captureErr := func(err error) error {
 		if err == nil {
 			return nil
@@ -384,7 +395,7 @@ func readLookupTranscriptCalls(
 		}
 		transcripts = append(transcripts, b)
 	}
-	calls, err := extractLookupCalls(client, transcripts)
+	calls, err := extractLookupCalls(ctx, client, transcripts)
 	if err != nil {
 		captureQualityErr = errors.Join(captureQualityErr, captureErr(err))
 	}
