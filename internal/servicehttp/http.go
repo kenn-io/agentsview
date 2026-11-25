@@ -134,7 +134,7 @@ func NewHTTPBackend(baseURL, token string, readOnly bool, browserURL string) ser
 // NewLocalHTTPBackend connects to the implicitly selected local daemon.
 func NewLocalHTTPBackend(baseURL, token string, readOnly bool, browserURL string) service.SessionService {
 	b := NewHTTPBackend(baseURL, token, readOnly, browserURL).(*httpBackend)
-	b.localContentScan = true
+	b.localContentScan = !readOnly
 	return b
 }
 

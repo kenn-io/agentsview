@@ -320,8 +320,8 @@ outside this mode, and `terms` currently requires a SQLite or PostgreSQL
 backend.
 
 On a local archive, substring, regex, terms, and FTS searches stop after two
-minutes. A hybrid search that falls back to keywords has the same limit. If a search
-times out, retry with `date_from`, `project`, or `session_id`.
+minutes. A hybrid search that falls back to keywords has the same limit. If a
+search times out, retry with `date_from`, `project`, or `session_id`.
 
 You can set `scope` to `top`, `all` (the default), or `subordinate` for
 substring, regex, terms, semantic, and hybrid searches. `all` includes child

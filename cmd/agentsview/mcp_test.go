@@ -746,3 +746,35 @@ func TestMCPDaemonServiceFrictionCapabilityFollowsReadOnlyDaemon(t *testing.T) {
 		assert.True(t, service.SupportsFriction(svc), "the daemon started on demand is an archive daemon")
 	})
 }
+
+func TestLocalDaemonContentSearchDeadline(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		readOnly bool
+		want     bool
+	}{
+		{"SQLite", false, true},
+		{"PostgreSQL", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := runtimeTestDir(t)
+			writeLiveRuntime(t, dir, tc.readOnly)
+			cli, cleanup, err := newService(t.Context(), config.Config{}, transport{Mode: transportHTTP, ReadOnly: tc.readOnly})
+			require.NoError(t, err)
+			defer cleanup()
+			mcp := newMCPDaemonService(config.Config{DataDir: dir})
+			for name, svc := range map[string]service.SessionService{"CLI": cli, "MCP": mcp} {
+				t.Run(name, func(t *testing.T) {
+					ctx, cancel := service.ContentSearchContext(t.Context(), svc, service.ContentSearchRequest{Mode: "substring"})
+					defer cancel()
+					_, hasDeadline := ctx.Deadline()
+					assert.Equal(t, tc.want, hasDeadline)
+					ctx, cancel = service.ContentSearchContext(t.Context(), svc, service.ContentSearchRequest{Mode: "semantic"})
+					defer cancel()
+					_, hasDeadline = ctx.Deadline()
+					assert.False(t, hasDeadline)
+				})
+			}
+		})
+	}
+}
