@@ -94,7 +94,7 @@ func (m *activityCandidateMemo) swap(swap func()) {
 	defer m.mu.Unlock()
 	swap()
 	m.generation++
-	m.boundedLRU.reset()
+	m.reset()
 }
 
 func (m *activityCandidateMemo) store(generation uint64, entries ...activityMemoEntry) {
@@ -104,12 +104,12 @@ func (m *activityCandidateMemo) store(generation uint64, entries ...activityMemo
 		return
 	}
 	for _, entry := range entries {
-		m.remove(entry.key, activityMemoEntry.bytes)
+		m.remove(entry.key)
 	}
 	for _, entry := range entries {
 		m.add(entry.key, entry, entry.bytes())
 	}
-	m.trim(activityMemoMaxBytes, activityMemoEntry.bytes)
+	m.trim(activityMemoMaxBytes)
 }
 
 // activityReportCandidateSource streams the sessions' candidates that start
@@ -159,12 +159,14 @@ func (db *DB) activityReportRuns(
 	var misses []string
 	m.mu.Lock()
 	for _, id := range ids {
-		if element := m.entries[activityMemoKey{id, lower}]; element != nil && generation == m.generation {
-			e := element.Value.(lruEntry[activityMemoKey, activityMemoEntry]).value
-			if version, exists := versions[id]; exists && e.version == version && !q.EffectiveEnd.After(e.upper) {
-				sessions[id] = e
-				m.order.MoveToBack(element)
-				continue
+		key := activityMemoKey{id, lower}
+		if generation == m.generation {
+			if e, ok := m.peek(key); ok {
+				if version, exists := versions[id]; exists && e.version == version && !q.EffectiveEnd.After(e.upper) {
+					sessions[id] = e
+					_, _ = m.get(key)
+					continue
+				}
 			}
 		}
 		misses = append(misses, id)

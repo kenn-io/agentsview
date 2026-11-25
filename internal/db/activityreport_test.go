@@ -454,7 +454,7 @@ func BenchmarkSQLiteActivityReportRunsWarm100K(b *testing.B) {
 	runs, _, err := d.activityReportRuns(b.Context(), ids, q)
 	require.NoError(b, err)
 	require.Len(b, runs, len(ids))
-	require.Len(b, d.activityMemo.entries, len(ids))
+	require.Equal(b, len(ids), d.activityMemo.Len())
 	rewriteActivityModels(b, d, "reread", ids...)
 	b.ReportAllocs()
 	b.ResetTimer()

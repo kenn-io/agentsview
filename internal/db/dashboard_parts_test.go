@@ -164,7 +164,7 @@ func TestDashboardPartsReuseAcrossAgentAndDateFilters(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, handled)
 	d.dashboardMemo.slot, d.dashboardMemo.version = "", ""
-	d.dashboardMemo.boundedLRU.reset()
+	d.dashboardMemo.reset()
 	_, _, handled, err = d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC"})
 	require.NoError(t, err)
 	require.True(t, handled)
@@ -430,6 +430,71 @@ func TestDashboardPartsBroadSelectionPreservesHotParts(t *testing.T) {
 	assert.Equal(t, [][]string{{"a"}, {"b", "c"}}, reads)
 }
 
+func TestDashboardPartsColdBroadSelectionRetainsFittingParts(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	for _, id := range []string{"a", "b", "c"} {
+		insertSession(t, d, id, id, func(s *Session) { s.Agent = "codex" })
+		insertMessages(t, d, userMsgAt(id, 0, "hello", "2024-06-01T09:00:00Z"))
+	}
+	_, seeded, handled, err := d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC", Project: "a"})
+	require.NoError(t, err)
+	require.True(t, handled)
+	d.dashboardMemo.maxBytes = 2 * dashboardPartBytes(seeded["a"])
+	d.dashboardMemo.slot, d.dashboardMemo.version = "", ""
+	d.dashboardMemo.reset()
+
+	var reads [][]string
+	dashboardPartsReadObserver = func(ids []string) { reads = append(reads, append([]string(nil), ids...)) }
+	t.Cleanup(func() { dashboardPartsReadObserver = nil })
+	_, _, handled, err = d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC"})
+	require.NoError(t, err)
+	require.True(t, handled)
+	_, _, handled, err = d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC", Agent: "codex"})
+	require.NoError(t, err)
+	require.True(t, handled)
+
+	assert.Equal(t, [][]string{{"a", "b", "c"}, {"c"}}, reads)
+	assert.True(t, d.dashboardMemo.contains("a"))
+	assert.True(t, d.dashboardMemo.contains("b"))
+	assert.False(t, d.dashboardMemo.contains("c"))
+}
+
+func TestDashboardPartsSavedFilterRefreshesMemoRecency(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	for _, id := range []string{"a", "b", "c"} {
+		insertSession(t, d, id, id, func(s *Session) { s.Agent = "codex" })
+		insertMessages(t, d, userMsgAt(id, 0, "hello", "2024-06-01T09:00:00Z"))
+	}
+	var reads [][]string
+	dashboardPartsReadObserver = func(ids []string) { reads = append(reads, append([]string(nil), ids...)) }
+	t.Cleanup(func() { dashboardPartsReadObserver = nil })
+	for _, id := range []string{"a", "b"} {
+		_, _, handled, err := d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC", Project: id})
+		require.NoError(t, err)
+		require.True(t, handled)
+		if id == "a" {
+			part, ok := d.dashboardMemo.peek(id)
+			require.True(t, ok)
+			d.dashboardMemo.maxBytes = 2 * dashboardPartBytes(part)
+		}
+	}
+	_, _, handled, err := d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC", Project: "a"})
+	require.NoError(t, err)
+	require.True(t, handled)
+	_, _, handled, err = d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC", Project: "c"})
+	require.NoError(t, err)
+	require.True(t, handled)
+
+	assert.Equal(t, [][]string{{"a"}, {"b"}, {"c"}}, reads)
+	assert.True(t, d.dashboardMemo.contains("a"))
+	assert.False(t, d.dashboardMemo.contains("b"))
+	assert.True(t, d.dashboardMemo.contains("c"))
+}
+
 func TestDashboardPartsWarmDiskDoesNotDisplaceMemo(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	d := testDB(t)
@@ -442,7 +507,7 @@ func TestDashboardPartsWarmDiskDoesNotDisplaceMemo(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, handled)
 	d.dashboardMemo.slot, d.dashboardMemo.version = "", ""
-	d.dashboardMemo.boundedLRU.reset()
+	d.dashboardMemo.reset()
 	for _, id := range []string{"b", "c"} {
 		_, _, handled, err = d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC", Project: id})
 		require.NoError(t, err)
@@ -452,8 +517,8 @@ func TestDashboardPartsWarmDiskDoesNotDisplaceMemo(t *testing.T) {
 	_, _, handled, err = d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC", Project: "a"})
 	require.NoError(t, err)
 	require.True(t, handled)
-	assert.Contains(t, d.dashboardMemo.entries, "b")
-	assert.Contains(t, d.dashboardMemo.entries, "c")
+	assert.True(t, d.dashboardMemo.contains("b"))
+	assert.True(t, d.dashboardMemo.contains("c"))
 }
 
 func TestDashboardPartsMemoSkipsOversizedPart(t *testing.T) {
@@ -500,7 +565,7 @@ func TestDashboardPartsMemoStaleReuseDoesNotPromote(t *testing.T) {
 	memo.store("UTC", "version", map[string]kept.Part[dashboardPart]{"a": part("a"), "b": part("b")})
 	assert.Equal(t, []string{"a"}, memo.reuse("UTC", "version", []string{"a"}, map[string]string{"a": "new"}, make(map[string]kept.Part[dashboardPart])))
 	memo.store("UTC", "version", map[string]kept.Part[dashboardPart]{"c": part("c")})
-	assert.NotContains(t, memo.entries, "a")
+	assert.False(t, memo.contains("a"))
 }
 
 func TestDashboardPartsMemoAccounting(t *testing.T) {
@@ -512,7 +577,7 @@ func TestDashboardPartsMemoAccounting(t *testing.T) {
 	assert.Equal(t, dashboardPartBytes(a)+dashboardPartBytes(b), memo.bytes)
 	memo.store("UTC", "version", map[string]kept.Part[dashboardPart]{"c": c})
 	assert.Equal(t, dashboardPartBytes(b)+dashboardPartBytes(c), memo.bytes)
-	assert.NotContains(t, memo.entries, "a")
+	assert.False(t, memo.contains("a"))
 }
 
 func TestDashboardPartsMemoRetainedHeap(t *testing.T) {
@@ -545,7 +610,7 @@ func TestDashboardPartsMemoRetainedHeap(t *testing.T) {
 	runtime.ReadMemStats(&after)
 	retained := int64(after.HeapAlloc) - int64(before.HeapAlloc)
 	t.Logf("retained=%d estimated=%d", retained, memo.bytes)
-	require.Len(t, memo.entries, count)
+	require.Equal(t, count, memo.Len())
 	assert.GreaterOrEqual(t, memo.bytes, retained)
 	runtime.KeepAlive(&memo)
 }
