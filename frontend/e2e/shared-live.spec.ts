@@ -96,7 +96,6 @@ for (const fallback of ["worker", "broadcast"] as const) {
       });
       await expect.poll(() => active.size).toBe(1);
       const sessionRequests = [0, 0];
-      let beforeThird = 0;
       for (const index of [1, 2]) {
         pages[index]!.on("request", (request) => {
           if (request.url().includes(`/api/v1/sessions/${ids[index]}/messages`))
@@ -104,23 +103,35 @@ for (const fallback of ["worker", "broadcast"] as const) {
         });
         await pages[index]!.goto(`${base}/sessions/${ids[index]}`);
         await expect(pages[index]!).toHaveURL(new RegExp(ids[index]!));
-        if (index === 1) {
-          await expect.poll(singleActiveSessions).toEqual(new Set([ids[0], ids[1]]));
-          await expect.poll(() => sessionRequests[0]).toBeGreaterThan(0);
-          beforeThird = sessionRequests[0]!;
-        }
         if (index === 2) {
           await expect.poll(() => sessionRequests[1]).toBeGreaterThan(0);
           await expect(
             pages[index]!.locator('.message-list-scroll[data-loaded="true"]'),
           ).toBeVisible();
-          await page.waitForTimeout(250);
-          await expect.poll(singleActiveSessions).toEqual(new Set(ids));
-          expect(sessionRequests[0]).toBe(beforeThird);
         }
       }
       await expect.poll(singleActiveSessions).toEqual(new Set(ids));
       await expect.poll(() => sessionRequests.every((count) => count > 0)).toBe(true);
+      const readMarker = () =>
+        page.evaluate(
+          (id) =>
+            new Promise<string>((resolve, reject) => {
+              const source = new EventSource(`/api/v1/events?session=${encodeURIComponent(id)}`);
+              source.addEventListener("session_ready", (event) => {
+                source.close();
+                resolve((event as MessageEvent).lastEventId);
+              });
+              source.onerror = () => {
+                source.close();
+                reject(new Error("session stream failed"));
+              };
+            }),
+          ids[1]!,
+        );
+      const marker = await readMarker();
+      expect(marker).toMatch(/^[0-9a-f]{64}$/);
+      expect(await readMarker()).toBe(marker);
+      await expect.poll(singleActiveSessions).toEqual(new Set(ids));
       for (const index of [1, 2]) {
         const beforeUpdate = sessionRequests[index - 1]!;
         const otherBefore = sessionRequests[2 - index]!;

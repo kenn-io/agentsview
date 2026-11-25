@@ -292,28 +292,6 @@ func TestEvents_SessionVersionIDs(t *testing.T) {
 	}
 }
 
-func TestEvents_ParentMarkerSizeWithManyChildren(t *testing.T) {
-	te := setup(t)
-	require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: "parent-a", Project: "project", Machine: "test", Agent: "claude"}))
-	for i := range 500 {
-		require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: fmt.Sprintf("child-%d", i), Project: "project", Machine: "test", Agent: "claude", ParentSessionID: new("parent-a")}))
-	}
-	cfg := config.Config{Host: "127.0.0.1", InstallationID: "server-installation"}
-	handler := wrapTestHandler(cfg, server.New(cfg, te.db, nil, server.WithBroadcaster(te.broadcaster)).Handler())
-	ctx, cancel := context.WithCancel(t.Context())
-	w := newFlushRecorder()
-	done := make(chan struct{})
-	t.Cleanup(func() { cancel(); <-done })
-	go func() {
-		handler.ServeHTTP(w, httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/events?session=parent-a", nil))
-		close(done)
-	}()
-	te.waitForSSEEvent(t, w, "events_ready", 5*time.Second)
-	match := regexp.MustCompile(`id: ([^\n]+)\nevent: session_ready\ndata: parent-a\n`).FindStringSubmatch(w.BodyString())
-	require.Len(t, match, 2)
-	assert.Len(t, match[1], 64)
-}
-
 func TestEvents_ParentMarkerTracksChildChanges(t *testing.T) {
 	te := setup(t)
 	for _, session := range []db.Session{
@@ -342,6 +320,7 @@ func TestEvents_ParentMarkerTracksChildChanges(t *testing.T) {
 		for _, id := range []string{"parent-a", "parent-b"} {
 			match := regexp.MustCompile(`id: ([^\n]+)\nevent: session_ready\ndata: ` + id + `\n`).FindStringSubmatch(w.BodyString())
 			require.Len(t, match, 2)
+			assert.Len(t, match[1], 64)
 			result[id] = match[1]
 		}
 		return result

@@ -877,7 +877,7 @@ describe("live event payloads", () => {
     source.close();
   });
 
-  it("moves a stream to the tab broadcast when its SharedWorker fails to start", async () => {
+  it("moves a stream to the tab broadcast and manages its heartbeat when SharedWorker fails", async () => {
     vi.useFakeTimers();
     const states: Record<string, { session?: string }>[] = [];
     class Channel {
