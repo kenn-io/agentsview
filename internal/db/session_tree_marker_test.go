@@ -7,6 +7,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSessionTreeMarkerEncoding(t *testing.T) {
+	entries := []SessionTreeEntry{{ID: "parent<&>\u2028\u2029", State: &SessionTreeState{State: "resolved"}}}
+	marker, err := SessionTreeMarker(entries)
+	require.NoError(t, err)
+	assert.Equal(t, "v1:4a6ef312923f252f76741a84b54256fcacea57204128b6fc8374843823250177", marker)
+}
+
 func TestSessionTreeMarkerMatchesSessionVersions(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "parent", "project")

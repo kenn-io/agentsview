@@ -2,7 +2,8 @@ package db
 
 import (
 	"crypto/sha256"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"slices"
@@ -46,7 +47,7 @@ func SessionTreeMarker(entries []SessionTreeEntry) (string, error) {
 		return "", errors.New("session not found")
 	}
 	slices.SortFunc(entries[1:], func(a, b SessionTreeEntry) int { return strings.Compare(a.ID, b.ID) })
-	encoded, err := json.Marshal(entries)
+	encoded, err := json.Marshal(entries, jsontext.EscapeForHTML(true), jsontext.EscapeForJS(true))
 	if err != nil {
 		return "", err
 	}
