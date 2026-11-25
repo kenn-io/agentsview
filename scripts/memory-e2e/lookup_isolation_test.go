@@ -72,7 +72,6 @@ func TestLookupIsolationReadsOnlyFixtureHome(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(runDir, "home", ".codex", "sessions", "fresh.jsonl"))
 	require.NoError(t, err)
 	assert.Equal(t, "new transcript", string(data))
-
 }
 
 func TestLookupIsolationCredentials(t *testing.T) {

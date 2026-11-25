@@ -19,6 +19,7 @@ func TestLookupCodexScriptRequiresIndividualResults(t *testing.T) {
 	require.Len(t, calls, 1)
 	assert.True(t, calls[0].Missing)
 }
+
 func TestLookupCodexTopLevelCallPairsOutputAndError(t *testing.T) {
 	trace := `{"timestamp":"2026-11-24T12:00:00Z","type":"response_item","payload":{"type":"function_call","name":"mcp__agentsview__search_content","call_id":"top","arguments":"{}"}}
 {"timestamp":"2026-11-24T12:00:01Z","type":"response_item","payload":{"type":"function_call_output","call_id":"top","output":"{\"isError\":true,\"content\":[{\"type\":\"text\",\"text\":\"failed\"}]}"}}`
@@ -73,6 +74,7 @@ func TestLookupCodexParallelResults(t *testing.T) {
 	assert.LessOrEqual(t, calls[1].Start, calls[0].End)
 	assert.LessOrEqual(t, calls[0].Start, calls[1].End)
 }
+
 func TestLookupExtractsOtherToolResult(t *testing.T) {
 	trace := `{"timestamp":"2026-11-24T12:00:00Z","message":{"content":[{"type":"tool_use","id":"read","name":"Bash","input":{"command":"for file in $(find transcripts); do read_session \"$file\"; done"}}]}}
 {"timestamp":"2026-11-24T12:00:01Z","message":{"content":[{"type":"tool_result","tool_use_id":"read","content":"session_id: ` + lookupID + `\nviolet ledger"}]}}`
@@ -81,6 +83,7 @@ func TestLookupExtractsOtherToolResult(t *testing.T) {
 	require.Len(t, calls, 1)
 	assert.Equal(t, "other", calls[0].Route)
 }
+
 func TestLookupClaudeTranscriptCalls(t *testing.T) {
 	cases := []struct {
 		name            string
@@ -143,6 +146,7 @@ func TestLookupExtractsLaterUntimedCallOrder(t *testing.T) {
 	assert.Equal(t, "other", calls[1].Route)
 	assert.Greater(t, calls[1].StartOrder, calls[0].EndOrder)
 }
+
 func TestLookupCodexToolDiscoveryIsOneCall(t *testing.T) {
 	trace := `{"timestamp":"2026-11-24T12:00:00Z","type":"response_item","payload":{"type":"custom_tool_call","name":"exec","call_id":"discovery","input":"text(ALL_TOOLS.filter(x => x.name.includes(\"mcp__agentsview__search_content\")))"}}
 {"timestamp":"2026-11-24T12:00:01Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"discovery","output":"tools"}}
@@ -205,7 +209,6 @@ func TestLookupRejectsDifferentProviderWithSameID(t *testing.T) {
 	for _, text := range []string{lookupID, "codex:" + lookupID, "http://example.com/sessions/codex/" + lookupID} {
 		assert.True(t, containsSessionID(text, item.SessionID), text)
 	}
-
 }
 
 func TestLookupClassifiesTranscriptFromGrepOutput(t *testing.T) {
@@ -216,6 +219,7 @@ func TestLookupClassifiesTranscriptFromGrepOutput(t *testing.T) {
 	require.Len(t, calls, 1)
 	assert.Equal(t, "direct", calls[0].Route)
 }
+
 func TestLookupSummaryKeepsFailuresInDenominator(t *testing.T) {
 	one, two := 1, 2
 	summary := summarizeLookups([]lookupAttempt{{Case: "topic", Score: lookupScore{Verdict: "success", CallsToHit: &one}}, {Case: "topic", Score: lookupScore{Verdict: "success", CallsToHit: &two}}, {Case: "topic", Score: lookupScore{Verdict: "failed"}}, {Case: "topic", Score: lookupScore{Verdict: "unscored"}}})
@@ -340,7 +344,6 @@ func TestLookupExpectedAnswersAppearInFixtures(t *testing.T) {
 			for _, answer := range q.ExpectedAnswer {
 				assert.Contains(t, source, answer)
 			}
-
 		})
 	}
 }
