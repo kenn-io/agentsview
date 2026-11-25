@@ -74,9 +74,6 @@ type activityReportBackend struct {
 }
 
 func (b activityReportBackend) ActivityReportEvidence(ctx context.Context, q activity.Query) ([]activity.SessionMeta, error) {
-	if !b.filter.ActivityNeedsEvidence() {
-		return nil, nil
-	}
 	start, end := activityReportRangeBoundsUTC(q)
 	sessions, _, err := b.activityReportSessionsFromWhere(ctx, b.getReader(), AnalyticsFilter{Timezone: b.filter.Timezone, IncludeSubagents: true, IncludeForks: true}, start, end, true)
 	if err == nil && b.read != nil && !q.Partial {
@@ -622,7 +619,7 @@ func (db *DB) activityReportSessionsFrom(
 }
 
 func activityLaunchedSQL() string {
-	return `EXISTS (SELECT 1 FROM session_external_parents ep WHERE ep.session_id = s.id AND ep.parent_session_id = s.parent_session_id AND s.relationship_type = 'subagent' AND COALESCE(s.parser_parent_session_id, '') = '' AND NOT ` + spawnEdgeExistsSQL("s") + `)`
+	return `EXISTS (SELECT 1 FROM session_external_parents ep WHERE ep.session_id = s.id AND ep.parent_session_id = s.parent_session_id AND s.relationship_type = 'subagent' AND COALESCE(s.parser_parent_session_id, '') = '')`
 }
 
 func (db *DB) activityReportSessionsFromWhere(ctx context.Context, q sessionExportQuerier, f AnalyticsFilter, rangeStartUTC, rangeEndUTC string, onlySubagents bool) ([]activity.SessionMeta, []string, error) {

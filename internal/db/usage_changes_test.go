@@ -320,53 +320,6 @@ func TestUsageChangeJournal(t *testing.T) {
 				return
 			}
 
-			t.Run("spawn link changes", func(t *testing.T) {
-				keptActivitySession(t, d, "owner", "project-a", "2026-06-14")
-				result, err := d.getWriter().ExecContext(ctx, `INSERT INTO tool_calls (message_id, session_id, tool_name, category)
-					SELECT id, 'owner', 'Task', 'Task' FROM messages WHERE session_id = 'owner' AND ordinal = 0`)
-				require.NoError(t, err)
-				callID, err := result.LastInsertId()
-				require.NoError(t, err)
-				before, err := d.UsageChangeRevision(ctx)
-				require.NoError(t, err)
-				_, err = d.getWriter().ExecContext(ctx, `UPDATE tool_calls SET subagent_session_id = 'child' WHERE id = ?`, callID)
-				require.NoError(t, err)
-				after, err := d.UsageChangeRevision(ctx)
-				require.NoError(t, err)
-				changed, err := d.LoadUsageChanges(ctx, before, after)
-				require.NoError(t, err)
-				assert.Equal(t, []string{"child"}, changed)
-				before = after
-				_, err = d.getWriter().ExecContext(ctx, `DELETE FROM tool_calls WHERE id = ?`, callID)
-				require.NoError(t, err)
-				after, err = d.UsageChangeRevision(ctx)
-				require.NoError(t, err)
-				changed, err = d.LoadUsageChanges(ctx, before, after)
-				require.NoError(t, err)
-				assert.Equal(t, []string{"child"}, changed)
-				before = after
-				_, err = d.getWriter().ExecContext(ctx, `INSERT INTO tool_calls (message_id, session_id, tool_name, category, subagent_session_id)
-					SELECT id, 'owner', 'Task', 'Task', 'child' FROM messages WHERE session_id = 'owner' AND ordinal = 0`)
-				require.NoError(t, err)
-				after, err = d.UsageChangeRevision(ctx)
-				require.NoError(t, err)
-				changed, err = d.LoadUsageChanges(ctx, before, after)
-				require.NoError(t, err)
-				assert.Equal(t, []string{"child"}, changed)
-				result, err = d.getWriter().ExecContext(ctx, `INSERT INTO tool_calls (message_id, session_id, tool_name, category, subagent_session_id)
-					SELECT id, 'owner', 'Task', 'Task', 'owner' FROM messages WHERE session_id = 'owner' AND ordinal = 0`)
-				require.NoError(t, err)
-				callID, err = result.LastInsertId()
-				require.NoError(t, err)
-				before, err = d.UsageChangeRevision(ctx)
-				require.NoError(t, err)
-				_, err = d.getWriter().ExecContext(ctx, `DELETE FROM tool_calls WHERE id = ?`, callID)
-				require.NoError(t, err)
-				after, err = d.UsageChangeRevision(ctx)
-				require.NoError(t, err)
-				assert.Equal(t, before, after)
-			})
-
 			t.Run("no usage change", func(t *testing.T) {
 				s := Session{ID: "unchanged", Project: "project-a", Machine: "machine-a", Agent: "claude"}
 				require.NoError(t, d.UpsertSession(ctx, s))

@@ -62,11 +62,9 @@ func (s *Store) keptActivityReport(ctx context.Context, selection, version strin
 		if err != nil || len(ids) > 0 {
 			return kept.Report{}, through, false, err
 		}
-		if f.ActivityNeedsEvidence() {
-			_, evidenceIDs, err := s.activityReportSessionsWhere(ctx, db.AnalyticsFilter{Timezone: f.Timezone, IncludeSubagents: true, IncludeForks: true}, rangeStart, rangeEnd, changed, true)
-			if err != nil || len(evidenceIDs) > 0 {
-				return kept.Report{}, through, false, err
-			}
+		_, evidenceIDs, err := s.activityReportSessionsWhere(ctx, db.AnalyticsFilter{Timezone: f.Timezone, IncludeSubagents: true, IncludeForks: true}, rangeStart, rangeEnd, changed, true)
+		if err != nil || len(evidenceIDs) > 0 {
+			return kept.Report{}, through, false, err
 		}
 		var overlaps bool
 		err = s.pg.QueryRowContext(ctx, `SELECT EXISTS (

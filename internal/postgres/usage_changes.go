@@ -62,7 +62,7 @@ BEGIN
 END;
 `
 
-const usageChangeJournalVersionPG = 4
+const usageChangeJournalVersionPG = 3
 
 // Messages and plan usage reach the journal through the sessions.updated_at
 // bump every released publisher writes with them.
@@ -261,7 +261,7 @@ func installDashboardJournalPG(ctx context.Context, tx *sql.Tx) error {
 	if err := tx.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='usage_change_journal_version'`).Scan(&version); err != nil {
 		return err
 	}
-	if version != "2" && version != "3" {
+	if version != "2" {
 		return nil
 	}
 	if _, err := tx.ExecContext(ctx, `LOCK TABLE sessions, messages, tool_calls, usage_session_changes IN SHARE ROW EXCLUSIVE MODE`); err != nil {
@@ -320,17 +320,6 @@ func installDashboardJournalPG(ctx context.Context, tx *sql.Tx) error {
 			}
 			body.WriteString(dashboardChangeFlagPG(columns, group, "any_changed := true;"))
 		}
-		if table.name == "tool_calls" {
-			body.WriteString(`PERFORM set_config('agentsview.uc_stamped_' || 'usage_session_changes'::regclass::oid, '', true);
- IF TG_OP = 'INSERT' THEN
- INSERT INTO usage_session_changes(session_id,revision) SELECT DISTINCT subagent_session_id,0 FROM new_rows WHERE COALESCE(subagent_session_id,'') <> '' ON CONFLICT(session_id) DO UPDATE SET revision=0;
- ELSIF TG_OP = 'DELETE' THEN
- INSERT INTO usage_session_changes(session_id,revision) SELECT DISTINCT subagent_session_id,0 FROM old_rows WHERE COALESCE(subagent_session_id,'') <> '' ON CONFLICT(session_id) DO UPDATE SET revision=0;
- ELSE
- INSERT INTO usage_session_changes(session_id,revision) SELECT subagent_session_id,0 FROM (SELECT subagent_session_id FROM old_rows UNION SELECT subagent_session_id FROM new_rows) targets WHERE COALESCE(subagent_session_id,'') <> '' ON CONFLICT(session_id) DO UPDATE SET revision=0;
- END IF;
-`)
-		}
 		body.WriteString(`IF any_changed THEN
  PERFORM set_config('agentsview.uc_stamped_' || 'usage_session_changes'::regclass::oid, '', true);
  IF TG_OP = 'INSERT' THEN
@@ -346,16 +335,11 @@ func installDashboardJournalPG(ctx context.Context, tx *sql.Tx) error {
 		function := "mark_dashboard_" + table.name
 		fmt.Fprintf(&ddl, `CREATE OR REPLACE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, %s, pg_temp AS $dashboard$%s$dashboard$;
  REVOKE ALL ON FUNCTION %s() FROM PUBLIC;`, function, quoted, body.String(), function)
-		if version == "2" {
-			for _, trigger := range []struct{ event, referencing string }{
-				{"INSERT", "NEW TABLE AS new_rows"}, {"UPDATE", "OLD TABLE AS old_rows NEW TABLE AS new_rows"}, {"DELETE", "OLD TABLE AS old_rows"},
-			} {
-				fmt.Fprintf(&ddl, "CREATE TRIGGER trg_dashboard_%s_%s AFTER %s ON %s REFERENCING %s FOR EACH STATEMENT EXECUTE FUNCTION %s();\n", table.name, strings.ToLower(trigger.event), trigger.event, table.name, trigger.referencing, function)
-			}
+		for _, trigger := range []struct{ event, referencing string }{
+			{"INSERT", "NEW TABLE AS new_rows"}, {"UPDATE", "OLD TABLE AS old_rows NEW TABLE AS new_rows"}, {"DELETE", "OLD TABLE AS old_rows"},
+		} {
+			fmt.Fprintf(&ddl, "CREATE TRIGGER trg_dashboard_%s_%s AFTER %s ON %s REFERENCING %s FOR EACH STATEMENT EXECUTE FUNCTION %s();\n", table.name, strings.ToLower(trigger.event), trigger.event, table.name, trigger.referencing, function)
 		}
-	}
-	if version == "3" {
-		ddl.WriteString("UPDATE sync_metadata SET value=pg_catalog.gen_random_uuid()::text WHERE key='usage_history_token';\n")
 	}
 	fmt.Fprintf(&ddl, "UPDATE sync_metadata SET value='%d' WHERE key='usage_change_journal_version';", usageChangeJournalVersionPG)
 	_, err = tx.ExecContext(ctx, ddl.String())
@@ -493,7 +477,7 @@ const usageChangeRevisionSQL = `coalesce((
 
 const supportedUsageChangeRevisionSQL = `coalesce((
  SELECT value::bigint FROM sync_metadata WHERE key = 'usage_change_revision'
- AND EXISTS (SELECT 1 FROM sync_metadata WHERE key = 'usage_change_journal_version' AND value IN ('1', '2', '3', $1))
+ AND EXISTS (SELECT 1 FROM sync_metadata WHERE key = 'usage_change_journal_version' AND value IN ('1', '2', $1))
 ), 0)`
 
 // UsageChangeRevision returns the current revision, or 0 when the journal is

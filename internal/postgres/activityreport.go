@@ -57,9 +57,6 @@ type activityReportBackend struct {
 }
 
 func (b activityReportBackend) ActivityReportEvidence(ctx context.Context, q activity.Query) ([]activity.SessionMeta, error) {
-	if !b.filter.ActivityNeedsEvidence() {
-		return nil, nil
-	}
 	start, end := db.ActivityReportInstantBoundsUTC(q)
 	sessions, _, err := b.activityReportSessionsWhere(ctx, db.AnalyticsFilter{Timezone: b.filter.Timezone, IncludeSubagents: true, IncludeForks: true}, start, end, nil, true)
 	if err == nil && b.read != nil && !q.Partial {
@@ -477,7 +474,7 @@ func (s *Store) activityReportSessions(
 }
 
 func (s *Store) activityLaunchedSQL() string {
-	launched := `s.relationship_type = 'subagent' AND COALESCE(s.parent_session_id, '') <> '' AND COALESCE(s.external_parent_session_id, '') = s.parent_session_id AND COALESCE(s.parser_parent_session_id, '') = '' AND NOT EXISTS (SELECT 1 FROM tool_calls tc WHERE tc.subagent_session_id = s.id AND tc.session_id <> s.id)`
+	launched := `s.relationship_type = 'subagent' AND COALESCE(s.parent_session_id, '') <> '' AND COALESCE(s.external_parent_session_id, '') = s.parent_session_id AND COALESCE(s.parser_parent_session_id, '') = ''`
 	if s.hostedRelations {
 		launched += ` AND s.provenance_kind = 'legacy'`
 	}

@@ -1877,7 +1877,7 @@ func TestActivityReportFilteredRunsKeepMatchingLauncherActive(t *testing.T) {
 	}
 }
 
-func TestActivityReportEvidenceSkipsUnneededAndNativeRuns(t *testing.T) {
+func TestActivityReportEvidenceIncludesLaunchedRuns(t *testing.T) {
 	d := testDB(t)
 	for _, id := range []string{"root", "child"} {
 		insertSession(t, d, id, "project-a", func(s *Session) {
@@ -1889,13 +1889,7 @@ func TestActivityReportEvidenceSkipsUnneededAndNativeRuns(t *testing.T) {
 	require.NoError(t, err)
 	q := dayQuery(t, "2026-06-16", "UTC")
 	backend := activityReportBackend{DB: d, filter: AnalyticsFilter{Timezone: "UTC"}}
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	sessions, err := backend.ActivityReportEvidence(ctx, q)
-	require.NoError(t, err)
-	assert.Empty(t, sessions)
-	backend.filter.Agent = "claude"
-	sessions, err = backend.ActivityReportEvidence(t.Context(), q)
+	sessions, err := backend.ActivityReportEvidence(t.Context(), q)
 	require.NoError(t, err)
 	require.Len(t, sessions, 1)
 	assert.Equal(t, "child", sessions[0].SessionID)

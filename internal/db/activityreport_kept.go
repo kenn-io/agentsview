@@ -137,7 +137,7 @@ func (db *DB) keptActivityChangesValid(ctx context.Context, oldRevision int64, r
 		where, args := activityReportSessionSelectionWhere(
 			filter, rangeStartUTC, rangeEndUTC,
 		)
-		if !q.Partial && filter.ActivityNeedsEvidence() {
+		if !q.Partial {
 			evidenceWhere, evidenceArgs := activityReportSessionSelectionWhere(AnalyticsFilter{Timezone: filter.Timezone, IncludeSubagents: true, IncludeForks: true}, rangeStartUTC, rangeEndUTC)
 			where = "(" + where + ") OR ((" + evidenceWhere + ") AND " + activityLaunchedSQL() + ")"
 			args = append(args, evidenceArgs...)

@@ -125,11 +125,6 @@ func usageChangeJournalSQL() (string, string) {
 	add("trg_messages_search_dialogue", "UPDATE OF dialogue_text", "messages", "OLD.dialogue_text IS NOT NEW.dialogue_text", "", false)
 	add("trg_messages_analytics_change_length", "UPDATE OF content_length", "messages", "OLD.content_length IS NOT NEW.content_length", "", true)
 	add("trg_tool_calls_analytics_change_delete", "DELETE", "tool_calls", "", "", true)
-	add("trg_tool_calls_spawn_usage_insert", "INSERT", "tool_calls", "COALESCE(NEW.subagent_session_id, '') != '' AND NEW.session_id IS NOT NEW.subagent_session_id", "NEW.subagent_session_id", false)
-	add("trg_tool_calls_spawn_usage_delete", "DELETE", "tool_calls", "COALESCE(OLD.subagent_session_id, '') != '' AND OLD.session_id IS NOT OLD.subagent_session_id", "OLD.subagent_session_id", false)
-	spawnChanged := "(OLD.session_id IS NOT NEW.session_id OR OLD.subagent_session_id IS NOT NEW.subagent_session_id)"
-	add("trg_tool_calls_spawn_usage_update_old", "UPDATE OF session_id, subagent_session_id", "tool_calls", spawnChanged+" AND COALESCE(OLD.subagent_session_id, '') != '' AND OLD.session_id IS NOT OLD.subagent_session_id", "OLD.subagent_session_id", false)
-	add("trg_tool_calls_spawn_usage_update_new", "UPDATE OF session_id, subagent_session_id", "tool_calls", spawnChanged+" AND COALESCE(NEW.subagent_session_id, '') != '' AND NEW.session_id IS NOT NEW.subagent_session_id", "NEW.subagent_session_id", false)
 	columns = []string{"session_id", "message_id", "category", "tool_name", "observed_outcome", "observed_repeat", "sequence_ending"}
 	changes = make([]string, len(columns))
 	for i, column := range columns {
