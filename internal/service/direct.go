@@ -665,6 +665,12 @@ func (b *directBackend) Sync(
 
 	path := in.Path
 	if path == "" {
+		if def, ok := parser.AgentByPrefix(in.ID); ok && def.Type == parser.AgentCodex {
+			if err := b.engine.SyncSingleSessionContext(ctx, in.ID); err != nil {
+				return nil, err
+			}
+			return b.Get(ctx, in.ID)
+		}
 		storedPath := b.local.GetSessionFilePath(ctx, in.ID)
 		if storedPath == "" {
 			return nil, fmt.Errorf(

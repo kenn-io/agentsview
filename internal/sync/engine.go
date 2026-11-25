@@ -12468,15 +12468,6 @@ func (e *Engine) writeSessionFullWithResolver(
 // ID, e.g. Zencoder header ID vs filename), then falls back
 // to agent-specific path reconstruction.
 func (e *Engine) FindSourceFile(ctx context.Context, sessionID string) string {
-	return e.findSourceFile(ctx, sessionID, true)
-}
-
-// FindSourceFileForWatch resolves a source without scanning labeled-run trees.
-func (e *Engine) FindSourceFileForWatch(ctx context.Context, sessionID string) string {
-	return e.findSourceFile(ctx, sessionID, false)
-}
-
-func (e *Engine) findSourceFile(ctx context.Context, sessionID string, searchLabeled bool) string {
 	host, rawID := parser.StripHostPrefix(sessionID)
 	if host != "" {
 		if fp := e.db.GetSessionFilePath(ctx, sessionID); isS3SourcePath(fp) {
@@ -12502,7 +12493,7 @@ func (e *Engine) findSourceFile(ctx context.Context, sessionID string, searchLab
 		}
 		storedPath := e.db.GetSessionFilePath(ctx, sessionID)
 		if f := e.findProviderSourceFile(
-			ctx, def, sessionID, rawSessionID, storedPath, searchLabeled,
+			ctx, def, sessionID, rawSessionID, storedPath,
 		); f != "" {
 			return f
 		}
@@ -12512,7 +12503,7 @@ func (e *Engine) findSourceFile(ctx context.Context, sessionID string, searchLab
 	storedPath := e.db.GetSessionFilePath(ctx, sessionID)
 
 	if f := e.findProviderSourceFile(
-		ctx, def, sessionID, bareID, storedPath, searchLabeled,
+		ctx, def, sessionID, bareID, storedPath,
 	); f != "" {
 		return f
 	}
@@ -12582,7 +12573,6 @@ func (e *Engine) findProviderSourceFile(
 	sessionID string,
 	rawSessionID string,
 	storedPath string,
-	searchLabeled bool,
 ) string {
 	ctx = e.parsePolicyContext(ctx)
 	mode := e.providerMigrationModes[def.Type]
@@ -12600,13 +12590,12 @@ func (e *Engine) findProviderSourceFile(
 		PathRewriter:   e.pathRewriter,
 	})
 	source, found, err := provider.FindSource(ctx, parser.FindSourceRequest{
-		RawSessionID:              rawSessionID,
-		FullSessionID:             sessionID,
-		StoredFilePath:            storedPath,
-		FingerprintKey:            storedPath,
-		RequireFreshSource:        true,
-		PreferStoredSource:        true,
-		SearchLabeledCodexSources: searchLabeled,
+		RawSessionID:       rawSessionID,
+		FullSessionID:      sessionID,
+		StoredFilePath:     storedPath,
+		FingerprintKey:     storedPath,
+		RequireFreshSource: true,
+		PreferStoredSource: true,
 	})
 	if err != nil {
 		log.Printf("%s provider source lookup: %v", def.Type, err)
@@ -12813,7 +12802,7 @@ func (e *Engine) SourceMtime(ctx context.Context, sessionID string) int64 {
 		return 0
 	}
 
-	path := e.findSourceFile(ctx, sessionID, false)
+	path := e.FindSourceFile(ctx, sessionID)
 	if path == "" {
 		return 0
 	}
@@ -13077,15 +13066,10 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 func (e *Engine) SyncSingleSessionContext(
 	ctx context.Context, sessionID string,
 ) (err error) {
-	return e.syncSingleSessionContext(ctx, sessionID, false, true)
+	return e.syncSingleSessionContext(ctx, sessionID, false)
 }
 
-// SyncWatchedSessionContext refreshes the stored source after a watch fallback.
-func (e *Engine) SyncWatchedSessionContext(ctx context.Context, sessionID string) error {
-	return e.syncSingleSessionContext(ctx, sessionID, false, false)
-}
-
-func (e *Engine) syncSingleSessionContext(ctx context.Context, sessionID string, try, searchLabeled bool) (err error) {
+func (e *Engine) syncSingleSessionContext(ctx context.Context, sessionID string, try bool) (err error) {
 	if e.sourceSyncErr != nil {
 		return e.sourceSyncErr
 	}
@@ -13144,7 +13128,7 @@ func (e *Engine) syncSingleSessionContext(ctx context.Context, sessionID string,
 		}
 	}
 
-	path := e.findSourceFile(ctx, sessionID, searchLabeled)
+	path := e.FindSourceFile(ctx, sessionID)
 	if path == "" {
 		return fmt.Errorf(
 			"source file not found for %s", sessionID,

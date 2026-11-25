@@ -1472,6 +1472,36 @@ func TestSessionExport_RejectsPGFlag(t *testing.T) {
 	assert.Contains(t, err.Error(), "--pg not supported")
 }
 
+func TestSessionUsageFindsUnsyncedLabeledCodex(t *testing.T) {
+	for _, ordinary := range []bool{false, true} {
+		t.Run(fmt.Sprintf("ordinary-%t", ordinary), func(t *testing.T) {
+			const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+			isolateDirectCLISources(t)
+			newAgentDataDir(t)
+			t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
+			root := t.TempDir()
+			t.Setenv("CODEX_SESSIONS_DIR", root)
+			name := "rollout-2026-10-08T12-00-00-" + id + ".jsonl"
+			labeled := filepath.Join(root, "team", ".codex-run-v1-abc", "sessions", "2026", "10", "08", name)
+			meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z")
+			content := testjsonl.JoinJSONL(meta, testjsonl.CodexMsgJSON("user", "labeled", "2026-10-08T12:00:01Z"), testjsonl.CodexTokenCountJSON("2026-10-08T12:00:02Z", 50, 17, 0))
+			dbtest.WriteTestFile(t, labeled, []byte(content))
+			if ordinary {
+				path := filepath.Join(root, "2026", "10", "08", name)
+				dbtest.WriteTestFile(t, path, []byte(testjsonl.JoinJSONL(meta, testjsonl.CodexMsgJSON("user", "ordinary", "2026-10-08T12:00:01Z"))))
+			}
+			cmd := sessionUsageCommand(t, "session", "usage", id)
+			out, code, err := sessionUsageDataForCommand(cmd, id)
+			require.NoError(t, err)
+			require.Equal(t, tokenUseExitOK, code)
+			require.NotNil(t, out)
+			assert.Equal(t, "codex:"+id, out.SessionID)
+			assert.Equal(t, "team", out.Project)
+			assert.Equal(t, 17, out.TotalOutputTokens)
+		})
+	}
+}
+
 func TestSessionUsage_MissingReturnsNotFoundWithoutPrinting(t *testing.T) {
 	newAgentDataDir(t)
 	ts := sessionUsageRuntimeServer(t, func(w http.ResponseWriter, r *http.Request) {

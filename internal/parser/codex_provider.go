@@ -222,10 +222,20 @@ func (p *codexProvider) SourceForReconciliation(
 func (p *codexProvider) DiscoverRawCaptureSourcesEach(
 	ctx context.Context,
 	yield func(SourceRef) error,
-) (bool, error) {
+) (complete bool, resultErr error) {
 	ctx = withRawCaptureStreamingTraversal(ctx)
+	index, err := newDiscoveryDiskMapForContext(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer func() {
+		if err := index.close(); err != nil {
+			complete = false
+			resultErr = errors.Join(resultErr, err)
+		}
+	}()
 	var incomplete error
-	for index, root := range p.sources.roots {
+	for rootIndex, root := range p.sources.roots {
 		if err := ReportRawCaptureDiscoveryProgress(ctx); err != nil {
 			return false, err
 		}
@@ -240,7 +250,7 @@ func (p *codexProvider) DiscoverRawCaptureSourcesEach(
 			// The first root accepting this layout owns the physical file for
 			// the whole pass, including across audit batches. Checking roots
 			// avoids retaining a set that grows with the transcript archive.
-			for _, previous := range p.sources.roots[:index] {
+			for _, previous := range p.sources.roots[:rootIndex] {
 				if isS3URI(previous) {
 					continue
 				}
@@ -248,7 +258,22 @@ func (p *codexProvider) DiscoverRawCaptureSourcesEach(
 					return nil
 				}
 			}
-			return yield(source)
+			src := source.Opaque.(codexSource)
+			key := src.Root + "\x00" + source.Key
+			path, found, err := index.get(ctx, key)
+			if err != nil {
+				return err
+			}
+			if found {
+				current, ok := p.sources.sourceRef(src.Root, path, false)
+				if !ok {
+					current, ok = p.sources.directPathSource(src.Root, path, false)
+				}
+				if ok && !preferCodexSource(source, current) {
+					return nil
+				}
+			}
+			return index.put(ctx, key, source.DisplayPath, true)
 		})
 		if err == nil {
 			continue
@@ -261,6 +286,23 @@ func (p *codexProvider) DiscoverRawCaptureSourcesEach(
 			return false, err
 		}
 		incomplete = errors.Join(incomplete, rootErr)
+	}
+	err = index.forEach(ctx, func(key, path string) error {
+		root, _, ok := strings.Cut(key, "\x00")
+		if !ok {
+			return errors.New("invalid Codex raw discovery identity")
+		}
+		source, ok := p.sources.sourceRef(root, path, true)
+		if !ok {
+			source, ok = p.sources.directPathSource(root, path, true)
+		}
+		if !ok {
+			return incompleteDiscoveryError(p.Def.Type, "Codex source changed during discovery", os.ErrNotExist)
+		}
+		return yield(source)
+	})
+	if err != nil {
+		return false, err
 	}
 	return incomplete == nil, incomplete
 }
@@ -1417,25 +1459,18 @@ func (s codexSourceSet) FindSource(
 				source, ok = s.directPathSource(root, path, true)
 			}
 			if ok {
-				if !req.RequireFreshSource || (req.PreferStoredSource && (!req.SearchLabeledCodexSources || s.agent != AgentCodex || req.RawSessionID == "")) {
+				if !req.RequireFreshSource || req.PreferStoredSource {
 					return source, true, nil
 				}
-				if !req.SearchLabeledCodexSources {
-					preferred, err := s.preferredKnownRolloutSource(ctx, source)
-					return preferred, err == nil, err
-				}
-				preferred, found, err := s.canonicalSource(ctx, source)
-				if err != nil || !found || !req.PreferStoredSource || codexSourceRank(preferred).Class != 0 {
-					return preferred, found, err
-				}
-				return source, true, nil
+				preferred, err := s.preferredKnownRolloutSource(ctx, source)
+				return preferred, err == nil, err
 			}
 		}
 	}
 	if req.RawSessionID == "" {
 		return SourceRef{}, false, nil
 	}
-	return s.findCanonicalSource(ctx, req.RawSessionID, req.SearchLabeledCodexSources)
+	return s.findCanonicalSource(ctx, req.RawSessionID)
 }
 
 func (s codexSourceSet) Fingerprint(
@@ -1635,22 +1670,7 @@ func (s codexSourceSet) preferredKnownRolloutSource(
 	return best, nil
 }
 
-func (s codexSourceSet) canonicalSource(
-	ctx context.Context,
-	source SourceRef,
-) (SourceRef, bool, error) {
-	src, ok := source.Opaque.(codexSource)
-	if !ok || src.UUID == "" {
-		return source, true, nil
-	}
-	best, found, err := s.findCanonicalSource(ctx, src.UUID, true)
-	if err != nil || found {
-		return best, found, err
-	}
-	return source, true, nil
-}
-
-func (s codexSourceSet) findCanonicalSource(ctx context.Context, uuid string, searchLabeled bool) (SourceRef, bool, error) {
+func (s codexSourceSet) findCanonicalSource(ctx context.Context, uuid string) (SourceRef, bool, error) {
 	var best SourceRef
 	foundExisting := false
 	for _, root := range s.roots {
@@ -1658,7 +1678,7 @@ func (s codexSourceSet) findCanonicalSource(ctx context.Context, uuid string, se
 			return SourceRef{}, false, err
 		}
 		dirs := []string{root}
-		if searchLabeled {
+		if s.agent == AgentCodex {
 			labeled, err := labeledSessionDirs(ctx, root)
 			if err != nil {
 				return SourceRef{}, false, err

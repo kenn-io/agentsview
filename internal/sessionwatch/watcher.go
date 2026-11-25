@@ -202,7 +202,7 @@ func (w *Watcher) events(ctx context.Context, sessionID string, tree bool) <-cha
 		}
 
 		// Track file mtime for fallback sync.
-		sourcePath := w.engine.FindSourceFileForWatch(ctx, sessionID)
+		sourcePath := w.engine.FindSourceFile(ctx, sessionID)
 		var lastFileMtime int64
 		var fileMtimeChangedAt time.Time
 		if sourcePath != "" {
@@ -312,7 +312,7 @@ func (w *Watcher) checkDBForChanges(ctx context.Context,
 
 	// Track file mtime for the fallback path.
 	if *sourcePath == "" {
-		*sourcePath = w.engine.FindSourceFileForWatch(ctx, sessionID)
+		*sourcePath = w.engine.FindSourceFile(ctx, sessionID)
 		if *sourcePath == "" {
 			sourceMissingObserver.Load().(func(string))(sessionID)
 			return changed
@@ -348,7 +348,7 @@ func (w *Watcher) checkDBForChanges(ctx context.Context,
 	if !fileMtimeChangedAt.IsZero() &&
 		time.Since(*fileMtimeChangedAt) >= syncFallbackDelay() {
 		*fileMtimeChangedAt = time.Time{}
-		if err := w.engine.SyncWatchedSessionContext(
+		if err := w.engine.SyncSingleSessionContext(
 			ctx, sessionID,
 		); err != nil {
 			log.Printf("watch sync error: %v", err)

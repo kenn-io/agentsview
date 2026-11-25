@@ -796,6 +796,35 @@ func TestDirectBackend_Sync_AmbiguousPath_ReturnsListedIDs(t *testing.T) {
 		"error should tell the caller how to disambiguate")
 }
 
+func TestDirectBackendSyncUnsyncedLabeledCodex(t *testing.T) {
+	for _, refresh := range []bool{false, true} {
+		t.Run(fmt.Sprintf("refresh-%t", refresh), func(t *testing.T) {
+			const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+			root := t.TempDir()
+			name := "rollout-2026-10-08T12-00-00-" + id + ".jsonl"
+			ordinary := filepath.Join(root, "2026", "10", "08", name)
+			labeled := filepath.Join(root, "team", ".codex-run-v1-abc", "sessions", "2026", "10", "08", name)
+			meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z")
+			for _, item := range []struct{ path, message string }{{ordinary, "ordinary"}, {labeled, "labeled"}} {
+				dbtest.WriteTestFile(t, item.path, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", item.message, "2026-10-08T12:00:01Z")+"\n"))
+			}
+			database := dbtest.OpenTestDB(t)
+			engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
+			t.Cleanup(engine.Close)
+			svc := service.NewDirectBackend(database, engine)
+			detail, err := svc.Sync(t.Context(), service.SyncInput{ID: "codex:" + id, Subagents: refresh, UsageRefresh: refresh})
+			require.NoError(t, err)
+			require.NotNil(t, detail)
+			assert.Equal(t, "team", detail.Project)
+			assert.Equal(t, labeled, database.GetSessionFilePath(t.Context(), "codex:"+id))
+			messages, err := database.GetMessages(t.Context(), "codex:"+id, 0, 100, true)
+			require.NoError(t, err)
+			require.Len(t, messages, 1)
+			assert.Equal(t, "labeled", messages[0].Content)
+		})
+	}
+}
+
 // TestDirectBackend_Sync_VSCopilotPhysicalPathResolvesSession verifies
 // that syncing a Visual Studio Copilot session by its physical trace
 // file resolves the single session whose stored file_path is the

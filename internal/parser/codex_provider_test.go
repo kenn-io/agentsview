@@ -2435,10 +2435,7 @@ func TestCodexLabeledRunOverlappingRootsAndLookup(t *testing.T) {
 	for _, roots := range [][]string{{root, inner}, {inner, root}} {
 		provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: roots})
 		require.True(t, ok)
-		_, foundWithoutSearch, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: id})
-		require.NoError(t, err)
-		assert.False(t, foundWithoutSearch)
-		found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: id, SearchLabeledCodexSources: true})
+		found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: id})
 		require.NoError(t, err)
 		require.True(t, ok)
 		assert.Equal(t, path, found.DisplayPath)
