@@ -62,7 +62,7 @@ BEGIN
 END;
 `
 
-const usageChangeJournalVersionPG = 3
+const usageChangeJournalVersionPG = 4
 
 // Messages and plan usage reach the journal through the sessions.updated_at
 // bump every released publisher writes with them.
@@ -87,6 +87,7 @@ var dropUsageChangeJournalSQL = func() string {
 	ddl.WriteString(`DROP TABLE IF EXISTS usage_session_changes;
  DROP FUNCTION IF EXISTS stamp_usage_change();
  DROP FUNCTION IF EXISTS checkpoint_usage_history() CASCADE;
+ DROP FUNCTION IF EXISTS mark_activity_spawn() CASCADE;
  DO $cleanup$ BEGIN
  IF to_regclass('sync_metadata') IS NOT NULL THEN
      DELETE FROM sync_metadata WHERE key LIKE 'usage_history_checkpoint:%' OR key IN ('usage_change_revision', 'usage_change_journal_lock', 'usage_change_journal_version', 'usage_account_revision', 'usage_history_token', 'dashboard_common', 'dashboard_tools', 'dashboard_velocity', 'dashboard_signals', 'dashboard_scope');
@@ -133,6 +134,10 @@ func ensureUsageChangeJournalPG(ctx context.Context, pg *sql.DB) (ok bool) {
 		return
 	}
 	err = installDashboardJournalPG(ctx, tx)
+	if err != nil {
+		return
+	}
+	err = installSpawnJournalPG(ctx, tx)
 	if err != nil {
 		return
 	}
@@ -341,8 +346,66 @@ func installDashboardJournalPG(ctx context.Context, tx *sql.Tx) error {
 			fmt.Fprintf(&ddl, "CREATE TRIGGER trg_dashboard_%s_%s AFTER %s ON %s REFERENCING %s FOR EACH STATEMENT EXECUTE FUNCTION %s();\n", table.name, strings.ToLower(trigger.event), trigger.event, table.name, trigger.referencing, function)
 		}
 	}
-	fmt.Fprintf(&ddl, "UPDATE sync_metadata SET value='%d' WHERE key='usage_change_journal_version';", usageChangeJournalVersionPG)
+	ddl.WriteString("UPDATE sync_metadata SET value='3' WHERE key='usage_change_journal_version';")
 	_, err = tx.ExecContext(ctx, ddl.String())
+	if err != nil {
+		return err
+	}
+	return installSpawnJournalPG(ctx, tx)
+}
+
+// installSpawnJournalPG records the children whose launcher eligibility changes
+// when a tool-call spawn edge is inserted, changed, or removed.
+func installSpawnJournalPG(ctx context.Context, tx *sql.Tx) error {
+	var version string
+	if err := tx.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='usage_change_journal_version'`).Scan(&version); err != nil {
+		return err
+	}
+	if version != "3" {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `LOCK TABLE tool_calls, usage_session_changes IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+		return err
+	}
+	var schema string
+	if err := tx.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {
+		return err
+	}
+	quoted, err := quoteIdentifier(schema)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, fmt.Sprintf(`
+CREATE OR REPLACE FUNCTION mark_activity_spawn() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog, %s, pg_temp AS $spawn$
+BEGIN
+ PERFORM set_config('agentsview.uc_stamped_' || 'usage_session_changes'::regclass::oid, '', true);
+ IF TG_OP = 'INSERT' THEN
+  INSERT INTO usage_session_changes(session_id, revision)
+  SELECT DISTINCT subagent_session_id, 0 FROM new_rows
+  WHERE subagent_session_id <> '' AND subagent_session_id <> session_id
+  ON CONFLICT(session_id) DO UPDATE SET revision=0;
+ ELSIF TG_OP = 'DELETE' THEN
+  INSERT INTO usage_session_changes(session_id, revision)
+  SELECT DISTINCT subagent_session_id, 0 FROM old_rows
+  WHERE subagent_session_id <> '' AND subagent_session_id <> session_id
+  ON CONFLICT(session_id) DO UPDATE SET revision=0;
+ ELSE
+  INSERT INTO usage_session_changes(session_id, revision)
+  SELECT DISTINCT subagent_session_id, 0 FROM (
+   (SELECT session_id, subagent_session_id FROM old_rows EXCEPT SELECT session_id, subagent_session_id FROM new_rows)
+   UNION
+   (SELECT session_id, subagent_session_id FROM new_rows EXCEPT SELECT session_id, subagent_session_id FROM old_rows)
+  ) changed WHERE subagent_session_id <> '' AND subagent_session_id <> session_id
+  ON CONFLICT(session_id) DO UPDATE SET revision=0;
+ END IF;
+ RETURN NULL;
+END $spawn$;
+REVOKE ALL ON FUNCTION mark_activity_spawn() FROM PUBLIC;
+CREATE TRIGGER trg_activity_spawn_insert AFTER INSERT ON tool_calls REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION mark_activity_spawn();
+CREATE TRIGGER trg_activity_spawn_update AFTER UPDATE ON tool_calls REFERENCING OLD TABLE AS old_rows NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION mark_activity_spawn();
+CREATE TRIGGER trg_activity_spawn_delete AFTER DELETE ON tool_calls REFERENCING OLD TABLE AS old_rows FOR EACH STATEMENT EXECUTE FUNCTION mark_activity_spawn();
+UPDATE sync_metadata SET value='4' WHERE key='usage_change_journal_version';`, quoted))
 	return err
 }
 
@@ -477,7 +540,7 @@ const usageChangeRevisionSQL = `coalesce((
 
 const supportedUsageChangeRevisionSQL = `coalesce((
  SELECT value::bigint FROM sync_metadata WHERE key = 'usage_change_revision'
- AND EXISTS (SELECT 1 FROM sync_metadata WHERE key = 'usage_change_journal_version' AND value IN ('1', '2', $1))
+ AND EXISTS (SELECT 1 FROM sync_metadata WHERE key = 'usage_change_journal_version' AND value IN ('1', '2', '3', $1))
 ), 0)`
 
 // UsageChangeRevision returns the current revision, or 0 when the journal is

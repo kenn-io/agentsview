@@ -474,7 +474,7 @@ func (s *Store) activityReportSessions(
 }
 
 func (s *Store) activityLaunchedSQL() string {
-	launched := `s.relationship_type = 'subagent' AND COALESCE(s.parent_session_id, '') <> '' AND COALESCE(s.external_parent_session_id, '') = s.parent_session_id AND COALESCE(s.parser_parent_session_id, '') = ''`
+	launched := `s.relationship_type = 'subagent' AND COALESCE(s.parent_session_id, '') <> '' AND COALESCE(s.external_parent_session_id, '') = s.parent_session_id AND COALESCE(s.parser_parent_session_id, '') = '' AND NOT EXISTS (SELECT 1 FROM tool_calls tc WHERE tc.subagent_session_id = s.id AND tc.session_id <> s.id)`
 	if s.hostedRelations {
 		launched += ` AND s.provenance_kind = 'legacy'`
 	}

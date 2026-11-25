@@ -358,6 +358,41 @@ func TestUsageChangeJournal(t *testing.T) {
 	}
 }
 
+func TestUsageChangeJournalSpawnEdgeUpdates(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	for _, id := range []string{"owner", "child-a", "child-b"} {
+		keptActivitySession(t, d, id, "project-a", "2026-06-14")
+	}
+	result, err := d.getWriter().ExecContext(ctx, `INSERT INTO tool_calls (message_id, session_id, tool_name, category, subagent_session_id)
+		SELECT id, 'owner', 'Task', 'Task', 'child-a' FROM messages WHERE session_id = 'owner' AND ordinal = 0`)
+	require.NoError(t, err)
+	callID, err := result.LastInsertId()
+	require.NoError(t, err)
+	before, err := d.UsageChangeRevision(ctx)
+	require.NoError(t, err)
+	_, err = d.getWriter().ExecContext(ctx, `UPDATE tool_calls SET subagent_session_id = 'child-b' WHERE id = ?`, callID)
+	require.NoError(t, err)
+	after, err := d.UsageChangeRevision(ctx)
+	require.NoError(t, err)
+	changed, err := d.LoadUsageChanges(ctx, before, after)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"child-a", "child-b"}, changed)
+	before = after
+	_, err = d.getWriter().ExecContext(ctx, `UPDATE tool_calls SET subagent_session_id = 'owner' WHERE id = ?`, callID)
+	require.NoError(t, err)
+	after, err = d.UsageChangeRevision(ctx)
+	require.NoError(t, err)
+	changed, err = d.LoadUsageChanges(ctx, before, after)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"child-b"}, changed)
+	_, err = d.getWriter().ExecContext(ctx, `DELETE FROM tool_calls WHERE id = ?`, callID)
+	require.NoError(t, err)
+	final, err := d.UsageChangeRevision(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, after, final)
+}
+
 func TestUsageChangeJournalUsageEventUpdates(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

@@ -578,7 +578,7 @@ func TestAnalyticsKeptJournalUpgrade(t *testing.T) {
 	t.Parallel()
 	_, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
-	_, err := store.pg.ExecContext(ctx, `DROP FUNCTION mark_dashboard_messages() CASCADE; DROP FUNCTION mark_dashboard_tool_calls() CASCADE;
+	_, err := store.pg.ExecContext(ctx, `DROP FUNCTION mark_activity_spawn() CASCADE; DROP FUNCTION mark_dashboard_messages() CASCADE; DROP FUNCTION mark_dashboard_tool_calls() CASCADE;
  DELETE FROM sync_metadata WHERE key IN ('dashboard_common','dashboard_tools','dashboard_velocity','dashboard_signals','dashboard_scope');
  UPDATE sync_metadata SET value='2' WHERE key='usage_change_journal_version'`)
 	require.NoError(t, err)

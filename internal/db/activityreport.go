@@ -619,7 +619,7 @@ func (db *DB) activityReportSessionsFrom(
 }
 
 func activityLaunchedSQL() string {
-	return `EXISTS (SELECT 1 FROM session_external_parents ep WHERE ep.session_id = s.id AND ep.parent_session_id = s.parent_session_id AND s.relationship_type = 'subagent' AND COALESCE(s.parser_parent_session_id, '') = '')`
+	return `EXISTS (SELECT 1 FROM session_external_parents ep WHERE ep.session_id = s.id AND ep.parent_session_id = s.parent_session_id AND s.relationship_type = 'subagent' AND COALESCE(s.parser_parent_session_id, '') = '' AND NOT ` + spawnEdgeExistsSQL("s") + `)`
 }
 
 func (db *DB) activityReportSessionsFromWhere(ctx context.Context, q sessionExportQuerier, f AnalyticsFilter, rangeStartUTC, rangeEndUTC string, onlySubagents bool) ([]activity.SessionMeta, []string, error) {

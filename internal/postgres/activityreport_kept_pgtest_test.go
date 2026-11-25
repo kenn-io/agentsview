@@ -377,6 +377,36 @@ func TestPGActivityReportKeptJournalRecreated(t *testing.T) {
 	require.Empty(t, pgKeptBuild(t, store, f, q, true).Sessions)
 }
 
+func TestPGActivityReportKeptSpawnEdgeChangesLauncher(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	local, syncer, store := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "parent", "project-a", "2026-06-12")
+	pgKeptSession(t, local, "owner", "project-b", "2026-06-12")
+	pgKeptSession(t, local, "child", "project-b", "2026-06-14")
+	_, err := local.SetSessionExternalParent(ctx, "child", "parent")
+	require.NoError(t, err)
+	pgKeptPush(t, syncer, false)
+	_, err = syncer.pg.ExecContext(ctx, `DROP FUNCTION mark_activity_spawn() CASCADE; UPDATE sync_metadata SET value='3' WHERE key='usage_change_journal_version'`)
+	require.NoError(t, err)
+	require.NoError(t, EnsureSchema(ctx, syncer.pg, syncer.schema))
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC", Project: "project-a"}
+	assert.Equal(t, 1, pgKeptBuild(t, store, f, q, true).Report.InteractivePeak.Agents)
+	pgKeptBuild(t, store, f, q, false)
+	_, err = syncer.pg.ExecContext(ctx, `INSERT INTO tool_calls (session_id, tool_name, category, message_ordinal, subagent_session_id) VALUES ('owner', 'Task', 'Task', 0, 'child')`)
+	require.NoError(t, err)
+	assert.Zero(t, pgKeptBuild(t, store, f, q, true).Report.InteractivePeak.Agents)
+	_, err = syncer.pg.ExecContext(ctx, `UPDATE tool_calls SET subagent_session_id = 'parent' WHERE session_id = 'owner'`)
+	require.NoError(t, err)
+	assert.Equal(t, 1, pgKeptBuild(t, store, f, q, true).Report.InteractivePeak.Agents)
+	_, err = syncer.pg.ExecContext(ctx, `UPDATE tool_calls SET subagent_session_id = 'child' WHERE session_id = 'owner'`)
+	require.NoError(t, err)
+	assert.Zero(t, pgKeptBuild(t, store, f, q, true).Report.InteractivePeak.Agents)
+	_, err = syncer.pg.ExecContext(ctx, `DELETE FROM tool_calls WHERE session_id = 'owner' AND subagent_session_id = 'child'`)
+	require.NoError(t, err)
+	assert.Equal(t, 1, pgKeptBuild(t, store, f, q, true).Report.InteractivePeak.Agents)
+}
+
 func TestPGActivityReportKeptLauncherChange(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

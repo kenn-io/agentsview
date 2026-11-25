@@ -60,6 +60,33 @@ func keptActivityBuild(t *testing.T, d *DB, f AnalyticsFilter, q activity.Query,
 
 func clearKeptActivity(d *DB) { d.activityKept.DeleteSlots(func(string) bool { return true }) }
 
+func TestActivityKeptSpawnEdgeChangesLauncher(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	keptActivitySession(t, d, "parent", "project-a", "2026-06-13")
+	keptActivitySession(t, d, "child", "project-b", "2026-06-14")
+	_, err := d.SetSessionExternalParent(ctx, "child", "parent")
+	require.NoError(t, err)
+	q := dayQuery(t, "2026-06-14", "UTC")
+	f := AnalyticsFilter{Timezone: "UTC", Project: "project-a"}
+	assert.Equal(t, 1, keptActivityBuild(t, d, f, q, true).Report.InteractivePeak.Agents)
+	keptActivityBuild(t, d, f, q, false)
+	_, err = d.getWriter().ExecContext(ctx, `UPDATE sessions SET sync_marker = '2020-01-01T00:00:00.000Z' WHERE id = 'child'`)
+	require.NoError(t, err)
+	result, err := d.getWriter().ExecContext(ctx, `INSERT INTO tool_calls (message_id, session_id, tool_name, category, subagent_session_id)
+		SELECT id, 'parent', 'Task', 'Task', 'child' FROM messages WHERE session_id = 'parent' AND ordinal = 0`)
+	require.NoError(t, err)
+	callID, err := result.LastInsertId()
+	require.NoError(t, err)
+	var marker string
+	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT sync_marker FROM sessions WHERE id = 'child'`).Scan(&marker))
+	assert.Greater(t, marker, "2020-01-01T00:00:00.000Z")
+	assert.Zero(t, keptActivityBuild(t, d, f, q, true).Report.InteractivePeak.Agents)
+	_, err = d.getWriter().ExecContext(ctx, `DELETE FROM tool_calls WHERE id = ?`, callID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, keptActivityBuild(t, d, f, q, true).Report.InteractivePeak.Agents)
+}
+
 func TestActivityKeptHiddenRunEligibility(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
