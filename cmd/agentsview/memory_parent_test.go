@@ -390,7 +390,8 @@ func TestLauncherCodexIndexHomeOpenFile(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, file.Close()) })
 	launcher, err := lookupGopsutilProcess(t.Context(), int32(os.Getpid()))
 	require.NoError(t, err)
-	got := launcherCodexIndexHome(t.Context(), launcher)
+	got, ambiguous := launcherCodexIndexHome(t.Context(), launcher)
+	require.False(t, ambiguous)
 	require.NotEmpty(t, got)
 	wantInfo, err := os.Stat(home)
 	require.NoError(t, err)
@@ -407,7 +408,27 @@ func TestLauncherCodexIndexHomeAmbiguous(t *testing.T) {
 			{Path: filepath.Join(second, "state_6.sqlite")},
 		}, nil
 	}}
-	assert.Empty(t, launcherCodexIndexHome(t.Context(), launcher))
+	home, ambiguous := launcherCodexIndexHome(t.Context(), launcher)
+	assert.Empty(t, home)
+	assert.True(t, ambiguous)
+}
+
+func TestCaptureLaunchParentCodexAmbiguousIndexes(t *testing.T) {
+	home, first, second := t.TempDir(), t.TempDir(), t.TempDir()
+	writeCodexState(t, home, codexLauncherID, codexLauncherID)
+	database := stubLaunchArchive(t)
+	stubLaunchProcesses(t,
+		fakeProcess{name: "sh"},
+		fakeProcess{name: "claude", env: []string{"CODEX_THREAD_ID=" + codexLauncherID}},
+		fakeProcess{name: "codex", env: []string{"CODEX_HOME=" + home}, files: []process.OpenFilesStat{
+			{Path: filepath.Join(first, "state_5.sqlite")},
+			{Path: filepath.Join(second, "state_5.sqlite")},
+		}},
+	)
+	_, err := runLaunchHook(t, sessionStartPayload("startup"))
+	require.NoError(t, err)
+	_, err = database.GetSessionExternalParent(t.Context(), childSessionID)
+	require.ErrorIs(t, err, sql.ErrNoRows)
 }
 
 func TestCaptureLaunchParentCodexOpenIndex(t *testing.T) {
@@ -573,6 +594,48 @@ func TestMemorySessionStartInvalidModeDoesNotCapture(t *testing.T) {
 	require.ErrorIs(t, err, sql.ErrNoRows)
 }
 
+func TestCaptureLaunchParentCodexIndexAppears(t *testing.T) {
+	for _, rowMissing := range []bool{false, true} {
+		name := "index"
+		if rowMissing {
+			name = "row"
+		}
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			page := codexLauncherID + "_44444444-4444-4444-8444-444444444444"
+			if rowMissing {
+				writeCodexState(t, home, childSessionID, childSessionID)
+			}
+			synctest.Test(t, func(t *testing.T) {
+				database := stubLaunchArchive(t)
+				stubLaunchProcesses(t, fakeProcess{name: "sh"}, fakeProcess{name: "claude", env: []string{"CODEX_HOME=" + home, "CODEX_THREAD_ID=" + codexLauncherID}}, fakeProcess{name: "codex"})
+				cmd := &cobra.Command{}
+				cmd.SetIn(strings.NewReader(sessionStartPayload("startup")))
+				done := make(chan error, 1)
+				go func() { done <- captureLaunchParent(t.Context(), cmd) }()
+				select {
+				case err := <-done:
+					require.FailNow(t, "capture returned before index appeared", "%v", err)
+				case <-time.After(300 * time.Millisecond):
+				}
+				if rowMissing {
+					state, err := sql.Open("sqlite3", filepath.Join(home, "state_5.sqlite"))
+					require.NoError(t, err)
+					_, err = state.ExecContext(t.Context(), `INSERT INTO threads (id, rollout_path) VALUES (?, ?)`, codexLauncherID, "rollout-2026-01-01-"+page+".jsonl")
+					require.NoError(t, err)
+					require.NoError(t, state.Close())
+				} else {
+					writeCodexState(t, home, codexLauncherID, page)
+				}
+				require.NoError(t, <-done)
+				link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
+				require.NoError(t, err)
+				assert.Equal(t, "codex:"+page, link.ParentSessionID)
+			})
+		})
+	}
+}
+
 func TestCaptureLaunchParentCodexIndexRetry(t *testing.T) {
 	for _, tc := range []struct {
 		name                                             string
@@ -641,8 +704,8 @@ func TestCaptureLaunchParentCodexIndexRetry(t *testing.T) {
 						} else {
 							require.NoError(t, err)
 						}
-					case <-time.After(time.Second):
-						require.FailNow(t, "missing or unreadable index was retried")
+					case <-time.After(2 * time.Second):
+						require.FailNow(t, "index lookup exceeded its retry window")
 					}
 				} else {
 					require.NoError(t, <-done)

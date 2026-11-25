@@ -2502,8 +2502,9 @@ the skill without inspecting or changing the MCP entry.
 
 The SessionStart hook refreshes memory and links runs to their launching
 session on Linux and Windows. Parent linking on macOS is unverified. Codex
-launchers use the state index open in the launcher when available. Codex requires
-you to trust a new hook in `/hooks`.
+launchers use the state index open in the launcher when available. If indexes
+in multiple directories are open, the run stays unlinked. Codex requires you to
+trust a new hook in `/hooks`.
 
 In a ClickHouse sidebar, native automated subagents may also appear under a
 parent because the mirror does not store launcher provenance.
@@ -2579,10 +2580,10 @@ hosted data.
 The refresh returns within 1.9 seconds and does not wait for archive-scale
 work. With `--hook`, recording a launcher link can take another 6 seconds.
 The hook records links only at startup, so resuming a run does not restore a
-missing link. If the Codex index or thread is missing, or its index or schema
-is newer than AgentsView supports, the link points to the original thread page;
-after a revert, that may be an earlier page. Set `AGENTSVIEW_DISABLE_AUTO_SYNC=1`
-to skip the automatic request.
+missing link. If the Codex index or thread stays missing after a short retry,
+or its index or schema is newer than AgentsView supports, the link points to
+the original thread page; after a revert, that may be an earlier page. Set
+`AGENTSVIEW_DISABLE_AUTO_SYNC=1` to skip the automatic request.
 Launcher links, explicit sync commands, and searches still work. Restart a
 contributor owner started by an older binary once so it advertises the
 lifecycle wake endpoint. Contributor wake works on macOS and Linux, while

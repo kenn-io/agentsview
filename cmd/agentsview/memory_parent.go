@@ -35,8 +35,9 @@ const (
 	launcherAncestryLimit  = 32
 	launcherHookInputLimit = 1 << 20
 
-	launchParentRetryDelay    = 100 * time.Millisecond
-	launchParentRetryMaxDelay = 400 * time.Millisecond
+	launchParentMissingIndexWait = time.Second
+	launchParentRetryDelay       = 100 * time.Millisecond
+	launchParentRetryMaxDelay    = 400 * time.Millisecond
 )
 
 // launchProcess is the part of a process the launcher walk reads.
@@ -185,13 +186,13 @@ func launcherSessionID(env map[string]string, launcher string) (string, error) {
 
 // launcherCodexIndexHome uses the index already open in the launcher, which
 // reflects Codex's effective configuration, including trusted project layers.
-func launcherCodexIndexHome(ctx context.Context, launcher launchProcess) string {
+func launcherCodexIndexHome(ctx context.Context, launcher launchProcess) (string, bool) {
 	if launcher.OpenFiles == nil {
-		return ""
+		return "", false
 	}
 	files, err := launcher.OpenFiles(ctx)
 	if err != nil {
-		return ""
+		return "", false
 	}
 	var home string
 	for _, file := range files {
@@ -205,11 +206,11 @@ func launcherCodexIndexHome(ctx context.Context, launcher launchProcess) string 
 		}
 		dir := filepath.Dir(file.Path)
 		if home != "" && home != dir {
-			return ""
+			return "", true
 		}
 		home = dir
 	}
-	return home
+	return home, false
 }
 
 func configuredCodexHome(ctx context.Context, launcherProcess launchProcess, launcherEnv map[string]string, home string) (string, error) {
@@ -421,7 +422,11 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 		home = homes[0]
 	}
 	if launcher == "codex" {
-		if indexedHome := launcherCodexIndexHome(ctx, launcherProcess); indexedHome != "" {
+		indexedHome, ambiguous := launcherCodexIndexHome(ctx, launcherProcess)
+		if ambiguous {
+			return nil
+		}
+		if indexedHome != "" {
 			home = indexedHome
 		} else if home, err = configuredCodexHome(ctx, launcherProcess, launcherEnv, home); err != nil || home == "" {
 			return err
@@ -450,20 +455,25 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 }
 
 // recordLaunchParent retries a busy archive or an unreachable daemon until
-// the hook's deadline. When the Codex index is missing or newer than this
-// reader, the thread ID remains a valid thread-level parent.
+// the hook's deadline. A missing Codex index or row gets a short retry window
+// before falling back to the thread ID; newer indexes fall back immediately.
 func recordLaunchParent(ctx context.Context, cmd *cobra.Command, childID, home, launcher, native string) error {
 	delay := launchParentRetryDelay
 	var parentID string
+	var missingUntil time.Time
 	for {
 		var err error
 		if parentID == "" {
 			parentID, err = launcherArchiveID(ctx, home, launcher, native)
-			if launcher == "codex" && (errors.Is(err, os.ErrNotExist) || errors.Is(err, sql.ErrNoRows) || errors.Is(err, parser.ErrUnsupportedCodexStateIndex)) {
+			missing := launcher == "codex" && (errors.Is(err, os.ErrNotExist) || errors.Is(err, sql.ErrNoRows))
+			if missing && missingUntil.IsZero() {
+				missingUntil = time.Now().Add(launchParentMissingIndexWait)
+			}
+			if launcher == "codex" && (errors.Is(err, parser.ErrUnsupportedCodexStateIndex) || (missing && !time.Now().Before(missingUntil))) {
 				parentID, err = "codex:"+native, nil
 			}
 			sqliteErr, isSQLite := errors.AsType[sqlite3.Error](err)
-			if err != nil && (!isSQLite || (sqliteErr.Code != sqlite3.ErrBusy && sqliteErr.Code != sqlite3.ErrLocked)) {
+			if err != nil && !missing && (!isSQLite || (sqliteErr.Code != sqlite3.ErrBusy && sqliteErr.Code != sqlite3.ErrLocked)) {
 				return err
 			}
 		}
@@ -473,7 +483,11 @@ func recordLaunchParent(ctx context.Context, cmd *cobra.Command, childID, home, 
 		if err == nil || errors.Is(err, db.ErrSessionExternalParentInvalid) || errors.Is(err, db.ErrReadOnly) {
 			return err
 		}
-		timer := time.NewTimer(delay)
+		wait := delay
+		if parentID == "" && !missingUntil.IsZero() && (errors.Is(err, os.ErrNotExist) || errors.Is(err, sql.ErrNoRows)) {
+			wait = min(wait, time.Until(missingUntil))
+		}
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
