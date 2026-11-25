@@ -9543,43 +9543,6 @@ func (e *Engine) providerSourceLowerRanked(
 	return e.storedSourceRanksHigher(ctx, provider, storedPath, candidate)
 }
 
-// PreferredSessionForPath identifies a Codex copy skipped for a better stored source.
-func (e *Engine) PreferredSessionForPath(ctx context.Context, path string) (string, error) {
-	if !filepath.IsAbs(path) || !parser.IsRegularFile(path) {
-		return "", nil
-	}
-	path = filepath.Clean(path)
-	factory := e.sources().providerFactories[parser.AgentCodex]
-	if factory == nil {
-		return "", nil
-	}
-	provider := factory.NewProvider(parser.ProviderConfig{Roots: e.sources().agentDirs[parser.AgentCodex], Machine: e.machine})
-	resolver, ok := provider.(parser.ReconciliationSourceResolver)
-	if !ok {
-		return "", nil
-	}
-	source, found, err := resolver.SourceForReconciliation(ctx, path, "")
-	if err != nil || !found {
-		return "", err
-	}
-	lower, err := e.providerSourceLowerRanked(ctx, provider, parser.AgentCodex, source)
-	if err != nil || !lower {
-		return "", err
-	}
-	id := reconciliationMemberIdentity(parser.AgentCodex, source)
-	id = applyIDPrefixToID(provider.Definition().IDPrefix, id)
-	outcome, err := provider.Parse(ctx, parser.ParseRequest{Source: source, Machine: e.machine})
-	if err != nil {
-		return "", err
-	}
-	for _, result := range outcome.Results {
-		if result.Result.Session.ID == id {
-			return applyIDPrefixToID(e.idPrefix, id), nil
-		}
-	}
-	return "", nil
-}
-
 func (e *Engine) providerSourceForDiscoveredFile(
 	ctx context.Context,
 	provider parser.Provider,
