@@ -428,7 +428,7 @@ func TestDashboardPartsMemoEvictsLeastRecentlyUsed(t *testing.T) {
 
 func TestDashboardPartsMemoAccounting(t *testing.T) {
 	for _, hours := range []int{0, 1, 8, 9, 24, 168} {
-		t.Run(fmt.Sprint(hours), func(t *testing.T) {
+		t.Run(strconv.Itoa(hours), func(t *testing.T) {
 			const count = 5000
 			runtime.GC()
 			var before, after runtime.MemStats
@@ -455,7 +455,7 @@ func TestDashboardPartsMemoAccounting(t *testing.T) {
 			retained := int64(after.HeapAlloc) - int64(before.HeapAlloc)
 			t.Logf("hours=%d retained=%d estimate=%d", hours, retained, estimate)
 			assert.GreaterOrEqual(t, estimate, retained)
-			runtime.KeepAlive(memo)
+			runtime.KeepAlive(&memo)
 		})
 	}
 }
