@@ -760,10 +760,7 @@ func (db *DB) WriteSessionBatchStaged(ctx context.Context, write SessionBatchWri
 	if err != nil {
 		return err
 	}
-	write, err = db.storageSessionBatchWrite(ctx, sanitized)
-	if err != nil {
-		return err
-	}
+	write = db.storageSessionBatchWrite(sanitized)
 	if err := db.replaceSessionContentStaged(ctx, write.Session.ID, write.Messages, staged, blocked, signals,
 		write.Checkpoint, write.CheckpointBlobs, &write); err != nil {
 		return err

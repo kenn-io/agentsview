@@ -689,8 +689,8 @@ child-agent prompts, or structured transcript records. Supported actions are
 `unlock`, and `revert`. A command names its pull request by URL or number,
 optionally with `-R` or `--repo` set to `owner/repo` or `host/owner/repo`.
 AgentsView recognizes supported command flags and literal commands wrapped by
-`command`, `timeout`, or a shell. A selector or repository from a variable or
-substitution is not indexed.
+`command`, `env`, `timeout`, or a shell. A selector or repository from a
+variable or substitution is not indexed.
 
 ```json
 "pr_links": [

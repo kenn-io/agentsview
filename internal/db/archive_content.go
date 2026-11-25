@@ -112,17 +112,28 @@ func ProjectSessionForStoragePolicy(
 }
 
 func usageSessionForStorage(session Session, messages []Message, policy config.ArchiveContent) Session {
-	if hasToolCalls(messages) {
+	if hasPRToolInputs(messages) {
 		session.usagePRMessages = nil
 	}
 	for _, message := range messages {
 		for _, call := range message.ToolCalls {
-			if call.Category == "Bash" || call.Category == "Task" {
+			if (call.Category == "Bash" || call.Category == "Task") && (call.InputJSON != "" || call.PRLinks != "") {
 				session.usagePRMessages = append(session.usagePRMessages, Message{ToolCalls: []ToolCall{{ToolName: call.ToolName, Category: call.Category, InputJSON: call.InputJSON, PRLinks: call.PRLinks}}})
 			}
 		}
 	}
 	return sessionForStoragePolicy(session, policy)
+}
+
+func hasPRToolInputs(messages []Message) bool {
+	for _, message := range messages {
+		for _, call := range message.ToolCalls {
+			if (call.Category == "Bash" || call.Category == "Task") && (call.InputJSON != "" || call.PRLinks != "") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // SetUsagePRRemote supplies the recorded checkout remote for a pending write.

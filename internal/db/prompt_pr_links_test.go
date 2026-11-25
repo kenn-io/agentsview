@@ -342,6 +342,24 @@ func TestUsageOnlyCopyRetainsTranscriptRepositoryChange(t *testing.T) {
 	assert.Empty(t, got.PRLinks)
 }
 
+func TestUsageOnlyBatchKeepsPRInputsAfterProjection(t *testing.T) {
+	d := testDB(t)
+	d.SetArchiveContent(config.ArchiveContentUsage)
+	s := Session{ID: "projected-pr-inputs", Project: "project", Machine: "local", Agent: "claude"}
+	messages := []Message{{SessionID: s.ID, Role: "assistant", ToolCalls: []ToolCall{
+		{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`},
+		{ToolName: "Task", Category: "Task", InputJSON: `{"prompt":"Review https://github.com/example/repo/pull/43"}`},
+	}}}
+	s, messages = ProjectSessionForStoragePolicy(s, messages, config.ArchiveContentUsage)
+	_, err := d.WriteSessionBatchContext(t.Context(), []SessionBatchWrite{{Session: s, Messages: messages}})
+	require.NoError(t, err)
+	got, err := d.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	require.Len(t, got.PRLinks, 2)
+	assert.Equal(t, "https://github.com/example/repo/pull/42", got.PRLinks[0].URL)
+	assert.Equal(t, "https://github.com/example/repo/pull/43", got.PRLinks[1].URL)
+}
+
 func TestPromptPRLinksStructuredChanges(t *testing.T) {
 	d := testDB(t)
 	first, ok := parser.NewPRLink("https://github.com/o/r/pull/1", "o/r", 1)

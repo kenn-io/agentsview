@@ -68,7 +68,7 @@ func (db *DB) projectSessionBatchMessages(write SessionBatchWrite) []Message {
 }
 
 // storageSessionBatchWrite applies the archive's image, content, and usage-only policies to a sanitized write before the transaction writes it.
-func (db *DB) storageSessionBatchWrite(ctx context.Context, write SessionBatchWrite) (SessionBatchWrite, error) {
+func (db *DB) storageSessionBatchWrite(write SessionBatchWrite) SessionBatchWrite {
 	write.Messages = db.projectSessionBatchMessages(write)
 	if db.ArchiveContent().OmitsToolContent() {
 		write.Signals.ToolObservations = []ToolObservation{}
@@ -80,7 +80,7 @@ func (db *DB) storageSessionBatchWrite(ctx context.Context, write SessionBatchWr
 		write.Findings = nil
 		write.SkipSignalUpdates = false
 	}
-	return write, nil
+	return write
 }
 
 func hasToolCalls(messages []Message) bool {
@@ -240,10 +240,7 @@ func (db *DB) WriteSessionBatchContext(
 		if err != nil {
 			return result, err
 		}
-		write, err = db.storageSessionBatchWrite(ctx, write)
-		if err != nil {
-			return result, err
-		}
+		write = db.storageSessionBatchWrite(write)
 		savepoint := fmt.Sprintf("session_batch_%d", i)
 		if _, err := ctxTx.Exec("SAVEPOINT " + savepoint); err != nil {
 			return result, fmt.Errorf(
@@ -336,9 +333,7 @@ func (db *DB) WriteSessionBatchAtomic(ctx context.Context,
 		sanitized, err := sanitizeSessionBatchWriteContext(ctx, write)
 		var messagesWritten int
 		if err == nil {
-			write, err = db.storageSessionBatchWrite(ctx, sanitized)
-		}
-		if err == nil {
+			write = db.storageSessionBatchWrite(sanitized)
 			messagesWritten, err = db.writeOneSessionBatchTx(
 				ctx, tx, tx,
 				write,

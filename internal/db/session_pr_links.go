@@ -394,7 +394,7 @@ func bareLinksAllowed(workdir, cwd string, shared sharedPRContext) bool {
 	return !shared.directory && !shared.repository
 }
 
-func callPRLinks(ctx context.Context, category, toolName, input, cwd, remote string, sharedContext sharedPRContext, change *sharedPRContext, depends *[]PRLink) ([]PRLink, error) {
+func callPRLinks(ctx context.Context, category, input, cwd, remote string, sharedContext sharedPRContext, change *sharedPRContext, depends *[]PRLink) ([]PRLink, error) {
 	if category == "Task" {
 		return taskPRLinks(ctx, input)
 	}
@@ -525,10 +525,10 @@ func ToolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string
 }
 
 // ToolCallPRLinksForUsage uses a known host without inferring bare numbers
-// after earlier shell state has been discarded. It also reports whether a call
-// changed repository context, which the session keeps for later writes.
-func ToolCallPRLinksForUsage(ctx context.Context, messages []Message, remote string) ([]PRLink, bool, error) {
-	return usageToolCallPRLinks(ctx, messages, remote, false)
+// after earlier shell state has been discarded.
+func ToolCallPRLinksForUsage(ctx context.Context, messages []Message, remote string) ([]PRLink, error) {
+	links, _, err := usageToolCallPRLinks(ctx, messages, remote, false)
+	return links, err
 }
 
 // ProjectedUsagePRLinks reads the calls held until a projected session is written.
@@ -637,7 +637,7 @@ func callPRStateIn(ctx context.Context, call ToolCall, cwd, remote string, state
 		return callPRState{}, nil
 	}
 	var change sharedPRContext
-	links, err := callPRLinks(ctx, call.Category, call.ToolName, call.InputJSON, cwd, remote, state, &change, depends)
+	links, err := callPRLinks(ctx, call.Category, call.InputJSON, cwd, remote, state, &change, depends)
 	return callPRState{links, change}, err
 }
 
@@ -697,7 +697,7 @@ func (r *retainedPRState) markDepends(call ToolCall, depends []PRLink) {
 		return
 	}
 	var ignored sharedPRContext
-	explicit, _ := callPRLinks(context.Background(), call.Category, call.ToolName, call.InputJSON, "", "", sharedPRContext{repository: true}, &ignored, nil)
+	explicit, _ := callPRLinks(context.Background(), call.Category, call.InputJSON, "", "", sharedPRContext{repository: true}, &ignored, nil)
 	r.Depends = make(map[string]bool, len(depends))
 	for _, link := range depends {
 		r.Depends[prLinkKey(link)] = true
@@ -719,7 +719,7 @@ func retainedCallPRLinks(call ToolCall) string {
 	}
 	var change sharedPRContext
 	var depends []PRLink
-	found, _ := callPRLinks(context.Background(), call.Category, call.ToolName, call.InputJSON, "", "", sharedPRContext{}, &change, &depends)
+	found, _ := callPRLinks(context.Background(), call.Category, call.InputJSON, "", "", sharedPRContext{}, &change, &depends)
 	if len(found) == 0 && !change.directory && !change.repository {
 		return ""
 	}

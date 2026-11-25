@@ -190,9 +190,7 @@ func finalize(
 
 func prepareUsagePRLinks(ctx context.Context, session *db.Session, messages []db.Message, remote string) ([]db.PRLink, error) {
 	db.SetUsagePRRemote(session, remote)
-	links, changed, err := db.ToolCallPRLinksForUsage(ctx, messages, remote)
-	session.PRRepositoryChanged = changed
-	return links, err
+	return db.ToolCallPRLinksForUsage(ctx, messages, remote)
 }
 
 // ApplySessionMessageDerivedFieldsContext derives filtered counts and
