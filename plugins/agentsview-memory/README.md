@@ -34,10 +34,10 @@ the client's local environment:
 | Hosted reader over daemon     | `AGENTSVIEW_MEMORY_MODE=hosted-reader`, `AGENTSVIEW_MEMORY_SERVER`, and optional `AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE` |
 | Hosted reader over PostgreSQL | `AGENTSVIEW_MEMORY_MODE=hosted-reader` and `AGENTSVIEW_MEMORY_PG=true`                                                 |
 
-`AGENTSVIEW_DISABLE_AUTO_SYNC=1` disables the hook action while keeping existing
-history searchable. Token values stay outside this package; the daemon target
-uses a token-file reference or the existing `AGENTSVIEW_SERVER_TOKEN` runtime
-environment.
+`AGENTSVIEW_DISABLE_AUTO_SYNC=1` skips the automatic lifecycle refresh. Launcher
+links are still recorded, and existing history stays searchable. Token values
+stay outside this package; the daemon target uses a token-file reference or the
+existing `AGENTSVIEW_SERVER_TOKEN` runtime environment.
 
 PostgreSQL MCP reads use the target selected by `default_pg` in the AgentsView
 configuration. For a named hosted contributor target, set `default_pg` to that
