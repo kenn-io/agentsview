@@ -359,9 +359,11 @@ test: pricing-snapshot ensure-embed-dir
 	go test $(GO_TEST_P_FLAG) -tags "fts5" ./... -skip '^TestActiveAppendGrowth$$' -v
 	go test -tags "fts5" ./cmd/perfsim -run '^TestActiveAppendGrowth$$' -v
 
+# Keep this focused target separate: `make test` also runs perfsim's
+# unrelated TestActiveAppendGrowth case.
 .PHONY: test-scoped-upgrade-startup
 test-scoped-upgrade-startup: pricing-snapshot ensure-embed-dir
-	go test $(GO_TEST_P_FLAG) -tags "fts5" ./internal/db ./cmd/agentsview -run '^(TestArchiveResyncState|TestServeScopedUpgradeServesSessionsBeforeReparse|TestServeRestartServesSessionsBeforeStartupSync|TestServeSkipInitialSyncStillReparsesStaleArchive)$$' -count=1
+	go test $(GO_TEST_P_FLAG) -tags "fts5" ./internal/db ./cmd/agentsview -run '^(TestArchiveResyncState|TestServeRestartServesSessionsBeforeStartupSync|TestServeSkipInitialSyncStillReparsesStaleArchive)$$' -count=1
 
 .PHONY: test-cursor-account-reporting
 test-cursor-account-reporting: pricing-snapshot ensure-embed-dir
