@@ -92,6 +92,7 @@ func (s *Sync) pushWithOptions(
 		s.archiveKey(messageDialogueReadyKeyBase),
 		s.archiveKey(commitLinksReadyKeyBase),
 		s.archiveKey(storedCountRepairKeyBase),
+		s.archiveKey(launcherRowsReadyKeyBase),
 		s.archiveKey(databaseIDKeyBase),
 		s.archiveKey(fullPushRunKeyBase),
 		s.archiveKey(curationFingerprintKeyBase),
@@ -165,6 +166,9 @@ func (s *Sync) pushWithOptions(
 	}
 	if !full && meta[s.archiveKey(messageDialogueReadyKeyBase)] == "" {
 		full, reason = true, "preparing message dialogue"
+	}
+	if !full && meta[s.archiveKey(launcherRowsReadyKeyBase)] == "" {
+		full, reason = true, "republishing launcher provenance"
 	}
 	// Rows from before stored_message_count, the current dashboard facts, or
 	// content fingerprints, or from an older writer, stay in the old format
@@ -431,6 +435,7 @@ func (s *Sync) pushWithOptions(
 			pushed[s.archiveKey(storedCountRepairKeyBase)] = ""
 		}
 		if full {
+			pushed[s.archiveKey(launcherRowsReadyKeyBase)] = cutoff
 			pushed[s.archiveKey(messageDialogueReadyKeyBase)] = cutoff
 			pushed[s.archiveKey(commitLinksReadyKeyBase)] = cutoff
 			pushed[s.archiveKey(fullPushRunKeyBase)] = ""
@@ -509,7 +514,7 @@ func (s *Sync) unchangedSinceLastPush(
 	}
 	// Each of these starts a full push or finishes one.
 	for _, base := range []string{
-		usageSnapshotReadyKeyBase, messageDialogueReadyKeyBase, commitLinksReadyKeyBase,
+		usageSnapshotReadyKeyBase, messageDialogueReadyKeyBase, commitLinksReadyKeyBase, launcherRowsReadyKeyBase,
 	} {
 		if meta[s.archiveKey(base)] == "" {
 			return false, nil
@@ -639,7 +644,7 @@ var rewriteSession = sessionWrite{row: true, content: true}
 // makes any later change to its session fields rewrite every table, so
 // the repair push republishes the row to record it.
 const currentSessionRowSQL = `stored_message_count IS NOT NULL AND dashboard_facts_version = ?
-	AND agentsview_content_fingerprint != ''`
+	AND agentsview_content_fingerprint != '' AND is_launched IS NOT NULL`
 
 // mirrorSession is what the mirror's session row records about the rows a
 // push wrote for the session.
@@ -1123,6 +1128,7 @@ func reportProgress(done, total int, result *storage.PushResult, onProgress func
 // sessionPayload is everything one session contributes to the mirror.
 type sessionPayload struct {
 	session     db.Session
+	isLaunched  bool
 	messages    []db.Message
 	usage       []db.UsageEvent
 	planUsage   *db.SessionPlanUsage
@@ -1158,7 +1164,7 @@ func (s *Sync) loadPayload(ctx context.Context, sess db.Session) (sessionPayload
 		return sessionPayload{}, err
 	}
 	return sessionPayload{
-		session: snapshot.Session, messages: snapshot.Messages, usage: snapshot.Usage,
+		session: snapshot.Session, isLaunched: snapshot.IsLaunched, messages: snapshot.Messages, usage: snapshot.Usage,
 		planUsage: snapshot.PlanUsage, total: total,
 		findings: snapshot.Findings, commitLinks: snapshot.CommitLinks, imageText: snapshot.ImageText,
 		pins: snapshot.Pins, fingerprint: fingerprint,
@@ -1572,7 +1578,7 @@ func (s *Sync) sessionRow(p sessionPayload, publication sessionPublication, vers
 		nullString(sess.FilePath), nullInt64(sess.FileSize), nullInt64(sess.FileMtime),
 		nullInt64(sess.FileInode), nullInt64(sess.FileDevice), nullString(sess.FileHash),
 		nullTime(sess.LocalModifiedAt), db.TranscriptRevisionValue(sess.TranscriptRevision),
-		nullString(sess.ParentSessionID), sess.RelationshipType,
+		nullString(sess.ParentSessionID), sess.RelationshipType, p.isLaunched,
 		int64(sess.TotalOutputTokens), int64(sess.PeakContextTokens),
 		sess.HasTotalOutputTokens, sess.HasPeakContextTokens, sess.IsAutomated,
 		int64(sess.ToolFailureSignalCount), int64(sess.ToolRetryCount),

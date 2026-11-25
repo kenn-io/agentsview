@@ -906,15 +906,22 @@ func TestWaitingLauncherParityAcrossBackends(t *testing.T) {
 	require.NoError(t, err)
 	_, err = local.SetSessionExternalParent(ctx, "native-run", "native-middle")
 	require.NoError(t, err)
-	pgStore := pushParityPostgres(t, ctx, local, len(parityFixture())+5)
+	var pgStore *postgresstore.Store
+	if os.Getenv("TEST_PG_URL") != "" {
+		pgStore = pushParityPostgres(t, ctx, local, len(parityFixture())+5)
+	}
+	chStore := pushParityClickHouse(t, ctx, local, len(parityFixture())+5)
+	if pgStore == nil && chStore == nil {
+		t.Skip("no replica configured")
+	}
 	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: parityDate, Timezone: "UTC"}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
 	require.NoError(t, err)
-	report := assertParityForCase(t, ctx, q, db.AnalyticsFilter{Timezone: "UTC", Project: "waiting"}, local, pgStore, nil)
+	report := assertParityForCase(t, ctx, q, db.AnalyticsFilter{Timezone: "UTC", Project: "waiting"}, local, pgStore, chStore)
 	assert.Equal(t, 1, report.InteractivePeak.Agents)
 	assert.Equal(t, 2, report.Peak.Agents)
 	assert.Equal(t, 1, report.Totals.Sessions)
-	filtered := assertParityForCase(t, ctx, q, db.AnalyticsFilter{Timezone: "UTC", Project: "waiting", Agent: "claude"}, local, pgStore, nil)
+	filtered := assertParityForCase(t, ctx, q, db.AnalyticsFilter{Timezone: "UTC", Project: "waiting", Agent: "claude"}, local, pgStore, chStore)
 	assert.Equal(t, 1, filtered.InteractivePeak.Agents)
-	nativeReport := assertParityForCase(t, ctx, q, db.AnalyticsFilter{Timezone: "UTC", Project: "native"}, local, pgStore, nil)
+	nativeReport := assertParityForCase(t, ctx, q, db.AnalyticsFilter{Timezone: "UTC", Project: "native"}, local, pgStore, chStore)
 	assert.Zero(t, nativeReport.InteractivePeak.Agents)
 }

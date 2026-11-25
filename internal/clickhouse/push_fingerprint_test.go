@@ -66,10 +66,8 @@ func TestSnapshotFingerprintTracksDialogue(t *testing.T) {
 	assert.Equal(t, legacy, fingerprint())
 }
 
-// TestSnapshotFingerprintSplit pins the session fingerprint stored before
-// the content fingerprint existed, so an upgrade rewrites nothing, and
-// checks that the content fingerprint ignores session fields and follows
-// every dependent table.
+// TestSnapshotFingerprintSplit checks that the content fingerprint ignores
+// session fields and follows every dependent table.
 func TestSnapshotFingerprintSplit(t *testing.T) {
 	s := &Sync{machine: "m"}
 	snapshot := &db.SessionMirrorSnapshot{
@@ -100,8 +98,10 @@ func TestSnapshotFingerprintSplit(t *testing.T) {
 	}
 
 	first := fingerprint()
-	const beforeSplit = "fd493dcbb439d59f17e007806eccee99fd1d64b9eff40737f5fd09eb753498f6"
-	assert.Equal(t, beforeSplit, first.full)
+	snapshot.IsLaunched = true
+	launched := fingerprint()
+	assert.NotEqual(t, first.full, launched.full)
+	assert.Equal(t, first.content, launched.content)
 
 	snapshot.Session.DataVersion = 8
 	snapshot.Session.DisplayName = new("renamed")

@@ -100,7 +100,7 @@ func (s *Sync) snapshotFingerprint(
 		SessionFields  []any
 		SessionContent `json:",inline"`
 	}{
-		SessionFields:  sessionFingerprintFields(sess, db.MirroredSessionMachine(sess, s.machine)),
+		SessionFields:  sessionFingerprintFields(sess, db.MirroredSessionMachine(sess, s.machine), snapshot.IsLaunched),
 		SessionContent: content,
 	})
 	if err != nil {
@@ -127,7 +127,7 @@ func hashJSON(sessionID string, value any) (string, error) {
 // keeps this list and the sessions table spec in step: a column left out
 // here could go stale while the fingerprint still reports the session as
 // unchanged.
-func sessionFingerprintFields(sess db.Session, machine string) []any {
+func sessionFingerprintFields(sess db.Session, machine string, launched bool) []any {
 	return []any{
 		sess.ID, sess.Project, sess.ProjectAssigned, machine, sess.Agent,
 		sess.AgentLabel, sess.Entrypoint, sess.SessionKind,
@@ -136,7 +136,7 @@ func sessionFingerprintFields(sess db.Session, machine string) []any {
 		sess.MessageCount, sess.UserMessageCount,
 		sess.FilePath, sess.FileSize, sess.FileMtime, sess.FileInode, sess.FileDevice, sess.FileHash,
 		sess.LocalModifiedAt, sess.TranscriptRevision,
-		sess.ParentSessionID, sess.RelationshipType,
+		sess.ParentSessionID, sess.RelationshipType, launched,
 		sess.TotalOutputTokens, sess.PeakContextTokens,
 		sess.HasTotalOutputTokens, sess.HasPeakContextTokens, sess.IsAutomated,
 		sess.ToolFailureSignalCount, sess.ToolRetryCount, sess.EditChurnCount,
@@ -170,7 +170,7 @@ var sessionFingerprintColumns = []string{
 	"message_count", "user_message_count",
 	"file_path", "file_size", "file_mtime", "file_inode", "file_device", "file_hash",
 	"local_modified_at", "transcript_revision",
-	"parent_session_id", "relationship_type",
+	"parent_session_id", "relationship_type", "is_launched",
 	"total_output_tokens", "peak_context_tokens",
 	"has_total_output_tokens", "has_peak_context_tokens", "is_automated",
 	"tool_failure_signal_count", "tool_retry_count", "edit_churn_count",

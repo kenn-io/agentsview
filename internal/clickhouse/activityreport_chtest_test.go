@@ -13,6 +13,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func TestActivityReportParentlessAutomatedWorker(t *testing.T) {
@@ -256,4 +257,89 @@ func TestActivityReportUsageHandlesOversizedClaudeSnapshotKeys(t *testing.T) {
 		assert.Equal(t, ref.Cost, row.Cost, row.SessionID)
 	}
 	assert.NotContains(t, wantBySession, peerID)
+}
+
+func TestActivityReportWaitingLauncher(t *testing.T) {
+	t.Parallel()
+	store, syncer, local := newPushedStore(t)
+	ctx := t.Context()
+	parent := fixtureSession("waiting-parent", "waiting", "question", "2026-06-13T10:00:00Z", 1)
+	parent.Agent = "claude"
+	parent.EndedAt = new("2026-06-13T10:00:00Z")
+	child := fixtureSession("waiting-child", "waiting", "question", "2026-06-14T10:00:00Z", 2)
+	child.Agent = "codex"
+	child.EndedAt = new("2026-06-14T10:04:00Z")
+	nested := fixtureSession("nested-child", "waiting", "question", "2026-06-14T10:01:00Z", 2)
+	nested.Agent = "codex"
+	nested.EndedAt = new("2026-06-14T10:03:00Z")
+	native := fixtureSession("native-child", "waiting", "question", "2026-06-14T11:00:00Z", 2)
+	native.Agent = "codex"
+	native.EndedAt = new("2026-06-14T11:04:00Z")
+	native.ParentSessionID = &parent.ID
+	native.RelationshipType = "subagent"
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{
+		{Session: parent, Messages: []db.Message{fixtureMessage(parent.ID, 0, "user", "question", "2026-06-13T10:00:00Z")}, DataVersion: db.CurrentDataVersion(), ReplaceMessages: true},
+		{Session: child, Messages: []db.Message{fixtureMessage(child.ID, 0, "user", "question", "2026-06-14T10:00:00Z"), fixtureMessage(child.ID, 1, "assistant", "answer", "2026-06-14T10:04:00Z")}, DataVersion: db.CurrentDataVersion(), ReplaceMessages: true},
+		{Session: nested, Messages: []db.Message{fixtureMessage(nested.ID, 0, "user", "question", "2026-06-14T10:01:00Z"), fixtureMessage(nested.ID, 1, "assistant", "answer", "2026-06-14T10:03:00Z")}, DataVersion: db.CurrentDataVersion(), ReplaceMessages: true},
+		{Session: native, Messages: []db.Message{fixtureMessage(native.ID, 0, "user", "question", "2026-06-14T11:00:00Z"), fixtureMessage(native.ID, 1, "assistant", "answer", "2026-06-14T11:04:00Z")}, DataVersion: db.CurrentDataVersion(), ReplaceMessages: true},
+	})
+	require.NoError(t, err)
+	_, err = local.SetSessionExternalParent(ctx, child.ID, parent.ID)
+	require.NoError(t, err)
+	_, err = local.SetSessionExternalParent(ctx, nested.ID, child.ID)
+	require.NoError(t, err)
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	before := readPushVersions(t, syncer.conn, child.ID)
+	_, err = syncer.conn.ExecContext(ctx, "ALTER TABLE sessions UPDATE is_launched = NULL WHERE id = ? SETTINGS mutations_sync = 2", child.ID)
+	require.NoError(t, err)
+	require.NoError(t, writeMetadata(ctx, syncer.conn, map[string]string{syncer.archiveKey(launcherRowsReadyKeyBase): ""}))
+	republished, err := syncer.PushWithOptions(ctx, storage.PushOptions{SkipIfUnchanged: true}, nil)
+	require.NoError(t, err)
+	assert.True(t, republished.Full)
+	assert.Equal(t, before.messages, readPushVersions(t, syncer.conn, child.ID).messages)
+	var launched bool
+	require.NoError(t, syncer.conn.QueryRowContext(ctx, "SELECT is_launched FROM sessions WHERE id = ?", child.ID).Scan(&launched))
+	assert.True(t, launched)
+	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-06-14", Timezone: "UTC"}, time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	for _, agent := range []string{"", "claude"} {
+		filter := db.AnalyticsFilter{Timezone: "UTC", Project: "waiting", Agent: agent}
+		want, err := local.GetActivityReport(ctx, filter, q)
+		require.NoError(t, err)
+		got, err := store.GetActivityReport(ctx, filter, q)
+		require.NoError(t, err)
+		assert.Equal(t, 1, want.InteractivePeak.Agents)
+		assert.Equal(t, want.InteractivePeak.Agents, got.InteractivePeak.Agents, "agent filter %q", agent)
+		assert.Equal(t, want.InteractivePeak.At, got.InteractivePeak.At)
+	}
+	_, err = local.AssignSessionProject(ctx, parent.ID, "other")
+	require.NoError(t, err)
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	filtered, err := store.GetActivityReport(ctx, db.AnalyticsFilter{Timezone: "UTC", Project: "waiting", Agent: "claude"}, q)
+	require.NoError(t, err)
+	assert.Zero(t, filtered.InteractivePeak.Agents, "a changed out-of-range launcher must invalidate the report")
+	_, err = local.AssignSessionProject(ctx, parent.ID, "waiting")
+	require.NoError(t, err)
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	filtered, err = store.GetActivityReport(ctx, db.AnalyticsFilter{Timezone: "UTC", Project: "waiting", Agent: "claude"}, q)
+	require.NoError(t, err)
+	assert.Equal(t, 1, filtered.InteractivePeak.Agents)
+	_, err = local.ClearSessionExternalParent(ctx, child.ID)
+	require.NoError(t, err)
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	for _, agent := range []string{"", "claude"} {
+		filter := db.AnalyticsFilter{Timezone: "UTC", Project: "waiting", Agent: agent}
+		want, err := local.GetActivityReport(ctx, filter, q)
+		require.NoError(t, err)
+		got, err := store.GetActivityReport(ctx, filter, q)
+		require.NoError(t, err)
+		assert.Equal(t, want.InteractivePeak.Agents, got.InteractivePeak.Agents, "cleared link with agent filter %q", agent)
+		if agent == "claude" {
+			assert.Zero(t, got.InteractivePeak.Agents, "native subagent must not extend the launcher")
+		}
+	}
 }

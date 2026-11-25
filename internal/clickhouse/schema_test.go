@@ -68,7 +68,7 @@ func TestSessionFingerprintCoversEveryMirroredColumn(t *testing.T) {
 		_, exists := tableColumn(spec, name)
 		assert.True(t, exists, "fingerprint column %s is not a sessions column", name)
 	}
-	fields := sessionFingerprintFields(db.Session{}, "m")
+	fields := sessionFingerprintFields(db.Session{}, "m", false)
 	assert.Len(t, fields, len(sessionFingerprintColumns),
 		"sessionFingerprintFields and sessionFingerprintColumns must stay parallel")
 }
