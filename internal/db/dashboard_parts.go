@@ -81,7 +81,7 @@ func (m *dashboardPartsMemo) store(slot, version string, parts map[string]kept.P
 	m.storeParts(slot, version, parts, parts, false)
 }
 
-func (m *dashboardPartsMemo) storeParts(slot, version string, parts, selection map[string]kept.Part[dashboardPart], onlyEmpty bool) {
+func (m *dashboardPartsMemo) storeParts(slot, version string, parts, selection map[string]kept.Part[dashboardPart], diskOnly bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	maxBytes := m.maxBytes
@@ -92,7 +92,28 @@ func (m *dashboardPartsMemo) storeParts(slot, version string, parts, selection m
 		m.slot, m.version = slot, version
 		m.reset()
 	}
-	if onlyEmpty && m.Len() > 0 {
+	if diskOnly {
+		// Saved parts may fill spare space without evicting hot entries.
+		var pending []string
+		for id, p := range parts {
+			if cached, ok := m.peek(id); !ok || cached.Fingerprint != p.Fingerprint {
+				pending = append(pending, id)
+			}
+		}
+		slices.Sort(pending)
+		for _, id := range pending {
+			p := parts[id]
+			available := maxBytes - m.bytes
+			if cached, ok := m.peek(id); ok {
+				available += dashboardPartBytes(cached)
+			}
+			size := dashboardPartBytes(p)
+			if size > available {
+				continue
+			}
+			m.remove(id)
+			m.add(id, p, size)
+		}
 		return
 	}
 	var total int64

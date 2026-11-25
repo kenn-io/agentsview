@@ -495,6 +495,37 @@ func TestDashboardPartsSavedFilterRefreshesMemoRecency(t *testing.T) {
 	assert.True(t, d.dashboardMemo.contains("c"))
 }
 
+func TestDashboardPartsSavedFiltersSeedMemo(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	for _, id := range []string{"a", "b"} {
+		insertSession(t, d, id, id, func(s *Session) { s.Agent = "codex" })
+		insertMessages(t, d, userMsgAt(id, 0, "hello", "2024-06-01T09:00:00Z"))
+	}
+	filters := []AnalyticsFilter{{Timezone: "UTC", Project: "a"}, {Timezone: "UTC", Project: "b"}}
+	for _, f := range filters {
+		_, _, handled, err := d.dashboardParts(ctx, f)
+		require.NoError(t, err)
+		require.True(t, handled)
+	}
+	d.dashboardMemo.slot, d.dashboardMemo.version = "", ""
+	d.dashboardMemo.reset()
+	var reads [][]string
+	dashboardPartsReadObserver = func(ids []string) { reads = append(reads, append([]string(nil), ids...)) }
+	t.Cleanup(func() { dashboardPartsReadObserver = nil })
+	for _, f := range filters {
+		_, _, handled, err := d.dashboardParts(ctx, f)
+		require.NoError(t, err)
+		require.True(t, handled)
+	}
+	_, parts, handled, err := d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC"})
+	require.NoError(t, err)
+	require.True(t, handled)
+	assert.Len(t, parts, 2)
+	assert.Empty(t, reads)
+}
+
 func TestDashboardPartsWarmDiskDoesNotDisplaceMemo(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	d := testDB(t)
