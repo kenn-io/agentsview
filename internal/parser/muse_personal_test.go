@@ -103,8 +103,13 @@ func TestMusePersonalSourceSessionKind(t *testing.T) {
 }
 
 func TestMusePersonalSessionKindUsesFirstUserItem(t *testing.T) {
+	// item omits the source key when source is empty.
 	item := func(seq int, source, role, text string) string {
-		return fmt.Sprintf(`{"type":"item","seq":%d,"source":%q,"created_at":"2026-10-05T15:04:06Z","item":{"type":"message","role":%q,"text":%q}}`+"\n", seq, source, role, text)
+		sourceField := ""
+		if source != "" {
+			sourceField = fmt.Sprintf(`"source":%q,`, source)
+		}
+		return fmt.Sprintf(`{"type":"item","seq":%d,%s"created_at":"2026-10-05T15:04:06Z","item":{"type":"message","role":%q,"text":%q}}`+"\n", seq, sourceField, role, text)
 	}
 	for _, tc := range []struct {
 		name, body, wantKind, wantFirst string
@@ -112,14 +117,35 @@ func TestMusePersonalSessionKindUsesFirstUserItem(t *testing.T) {
 		{"lowest sequence, not first line", item(1, "runtime", "user", "hello") + item(0, "scheduler.cron", "user", "run"), SessionKindMuseBackground, "run"},
 		{"background source on a non-user item", item(0, "scheduler.cron", "developer", "context") + item(1, "runtime", "user", "hello"), "", "hello"},
 		{"same sequence keeps file order", item(0, "runtime", "user", "hello") + item(0, "scheduler.cron", "user", "run"), "", "hello"},
+		// Only the first user item counts, even when it carries a context source.
+		{"context source on the first user item", item(0, "runtime.skill_invalidation", "user", "context") + item(1, "scheduler.cron", "user", "run"), "", "context"},
+		{"background source on a later user item", item(0, "runtime", "user", "hello") + item(1, "runtime.feed", "user", "feed"), "", "hello"},
+		{"no user item", item(0, "scheduler.cron", "assistant", "done"), "", ""},
+		{"user item without a source", item(0, "", "user", "hello"), "", "hello"},
+		{"source matching is exact", item(0, "Scheduler.Cron", "user", "run"), "", "run"},
+		{"malformed line before the first user item", "{malformed\n" + item(1, "scheduler.cron", "user", "run"), SessionKindMuseBackground, "run"},
+		{"malformed first user line falls through to the next", "{malformed\n" + item(1, "runtime", "user", "hello"), "", "hello"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p, _ := musePersonalTestProvider(t, tc.body)
-			sess := musePersonalTestParse(t, p).Results[0].Result.Session
+			out := musePersonalTestParse(t, p)
+			require.Len(t, out.Results, 1)
+			sess := out.Results[0].Result.Session
 			assert.Equal(t, tc.wantKind, sess.SessionKind)
 			assert.Equal(t, tc.wantFirst, sess.FirstMessage, "the preview comes from the same first user item")
 		})
 	}
+}
+
+func TestMusePersonalSessionKindWaitsForCompleteTail(t *testing.T) {
+	run := `{"type":"item","seq":0,"source":"scheduler.cron","created_at":"2026-10-05T15:04:06Z","item":{"type":"message","role":"user","text":"run"}}`
+	p, path := musePersonalTestProvider(t, run)
+	out := musePersonalTestParse(t, p)
+	assert.Empty(t, out.Results, "an unterminated first user item is not published")
+	writeSourceFile(t, path, musePersonalTestHeader+run+"\n")
+	out = musePersonalTestParse(t, p)
+	require.Len(t, out.Results, 1)
+	assert.Equal(t, SessionKindMuseBackground, out.Results[0].Result.Session.SessionKind)
 }
 
 func TestMusePersonalHeaderFieldsMatchExactJSONNames(t *testing.T) {
