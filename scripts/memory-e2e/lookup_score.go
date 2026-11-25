@@ -46,6 +46,7 @@ var codexMCPInvocationPattern = regexp.MustCompile(`\btools\s*(?:\.\s*mcp__agent
 var mcpErrorPattern = regexp.MustCompile(`(?i)"is_?error"\s*:\s*true`)
 var runningCellPattern = regexp.MustCompile(`(?i)script (?:still )?running with cell ID\s+([^\s]+)`)
 var sessionProviderPrefix = regexp.MustCompile(`(?i)(?:([a-z][a-z0-9_-]*):|/sessions/([a-z][a-z0-9_-]*)/)$`)
+var lookupJSONFence = regexp.MustCompile("(?s)^\\s*```(?:json)?[ \\t]*\\r?\\n(.*?)\\r?\\n```\\s*$")
 var lookupSessionIDPattern = regexp.MustCompile(`(?i)\b(?:([a-z][a-z0-9_-]*):)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b`)
 var errCaptureIncomplete = errors.New("capture incomplete")
 var errLookupClientFailed = errors.New("lookup client failed")
@@ -554,7 +555,7 @@ func lookupAnswerSource(q lookupQuestion, answer string) (string, bool) {
 		return "", false
 	}
 	var values map[string]string
-	if err := json.Unmarshal([]byte(answer), &values); err != nil || len(values) != len(q.ExpectedAnswer)+1 {
+	if err := json.Unmarshal([]byte(lookupJSONFence.ReplaceAllString(answer, "$1")), &values); err != nil || len(values) != len(q.ExpectedAnswer)+1 {
 		return "", false
 	}
 	sourceID, ok := values["source_session_id"]

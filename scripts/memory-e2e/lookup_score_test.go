@@ -429,6 +429,16 @@ func TestLookupStructuredAnswerWithIncompleteCapture(t *testing.T) {
 	assert.Equal(t, "unscored", score.Verdict)
 }
 
+func TestLookupStructuredAnswerInMarkdownFence(t *testing.T) {
+	q := lookupQuestion{Expected: []lookupItem{{SessionID: "codex:" + lookupID}}, ExpectedAnswer: map[string]string{"team": "maple team"}, Phrases: []string{"maple team now owns"}}
+	calls := []lookupCall{{Route: "mcp", Result: `{"session_id":"codex:` + lookupID + `","snippet":"maple team now owns"}`, Start: 1, End: 2}}
+	answer := "```json\n{\"team\":\"maple team\",\"source_session_id\":\"codex:" + lookupID + "\"}\n```"
+	score := scoreLookupQuestion(q, answer, calls, nil)
+	assert.Equal(t, "success", score.Verdict)
+	require.NotNil(t, score.CallsToHit)
+	assert.Equal(t, 1, *score.CallsToHit)
+}
+
 func TestLookupIdentifierSpellingIsExact(t *testing.T) {
 	item := lookupItem{SessionID: "codex:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}
 	question := lookupQuestion{Expected: []lookupItem{item}, ExpectedAnswer: map[string]string{"index": "account_created_project"}, Phrases: []string{"account_created_project"}}
