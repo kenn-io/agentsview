@@ -608,6 +608,10 @@ func TestStoreGetSidebarSessionIndexPagedExcludesAutomatedDescendants(
 		s.userMessageCount = 1
 		s.isAutomated = true
 	})
+	_, err := store.DB().ExecContext(t.Context(), `
+		UPDATE sessions SET parser_parent_session_id = $1 WHERE id = $2
+	`, rootID, "automated-child")
+	require.NoError(t, err)
 
 	index, err := store.GetSidebarSessionIndex(
 		t.Context(),
