@@ -319,6 +319,10 @@ match. `%`, `_`, and backslashes stay literal, tool and system content are
 outside this mode, and `terms` currently requires a SQLite or PostgreSQL
 backend.
 
+On a local archive, substring, regex, terms, and FTS searches stop after two
+minutes. The keyword part of a hybrid search has the same limit. If a search
+times out, retry with `date_from`, `project`, or `session_id`.
+
 You can set `scope` to `top`, `all` (the default), or `subordinate` for
 substring, regex, terms, semantic, and hybrid searches. `all` includes child
 sessions and sidechain messages, `top` excludes them, and `subordinate` returns

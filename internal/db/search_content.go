@@ -309,6 +309,11 @@ func (db *DB) SearchContent(
 	if f.Pattern == "" {
 		return ContentSearchPage{}, nil
 	}
+	if f.Mode != "semantic" && f.Mode != "hybrid" {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, contentScanTimeout)
+		defer cancel()
+	}
 
 	// Semantic and hybrid validate and default Sources themselves (messages
 	// only) ahead of the substring/regex/fts source-set default just below,
@@ -364,11 +369,6 @@ func (db *DB) searchContentSubstring(
 	ctx context.Context, f ContentSearchFilter,
 ) (ContentSearchPage, error) {
 	f, q, words := routeContentWords(f)
-	if f.SessionID == "" || words {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, contentScanTimeout)
-		defer cancel()
-	}
 	if f.SessionID == "" {
 		release, err := db.acquireBulkRead(ctx)
 		if err != nil {
@@ -643,9 +643,6 @@ func (db *DB) searchContentTerms(
 		return ContentSearchPage{}, nil
 	}
 	if f.SessionID == "" {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, contentScanTimeout)
-		defer cancel()
 		release, err := db.acquireBulkRead(ctx)
 		if err != nil {
 			return ContentSearchPage{}, err
@@ -729,9 +726,6 @@ func (db *DB) searchContentRegex(
 		return ContentSearchPage{}, searchInputErrorf("search: invalid regex: %v", err)
 	}
 	if f.SessionID == "" {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, contentScanTimeout)
-		defer cancel()
 		release, err := db.acquireBulkRead(ctx)
 		if err != nil {
 			return ContentSearchPage{}, err
@@ -1130,11 +1124,12 @@ func (db *DB) searchContentFTS(
 	// as invalid user input (400). With FTS present, the only SQLITE_ERROR the
 	// MATCH query can raise comes from a malformed pattern.
 	if !db.HasFTS(ctx) {
+		if err := ctx.Err(); err != nil {
+			return ContentSearchPage{}, err
+		}
 		return ContentSearchPage{}, errFTSUnavailable
 	}
 	if _, q, words := routeContentWords(f); words {
-		ctx, cancel := context.WithTimeout(ctx, contentScanTimeout)
-		defer cancel()
 		return db.searchContentWords(ctx, f, q, false)
 	}
 	ftsQuery, err := db.prepareMessageFTSQuery(ctx, f.Pattern)
@@ -1748,7 +1743,14 @@ func (db *DB) searchContentHybrid(
 			return ContentSearchPage{}, ErrSemanticUnavailable
 		}
 	}
-	if !db.HasFTS(ctx) {
+	probeCtx, cancelProbe := context.WithTimeout(ctx, contentScanTimeout)
+	hasFTS := db.HasFTS(probeCtx)
+	probeErr := probeCtx.Err()
+	cancelProbe()
+	if !hasFTS {
+		if err := probeErr; err != nil {
+			return ContentSearchPage{}, err
+		}
 		return ContentSearchPage{}, errFTSUnavailable
 	}
 
@@ -1761,7 +1763,9 @@ func (db *DB) searchContentHybrid(
 			return ContentSearchPage{}, err
 		}
 	}
-	ftsLeg, err := db.hybridFTSLeg(ctx, f, searcher, k)
+	lexicalCtx, cancelLexical := context.WithTimeout(ctx, contentScanTimeout)
+	defer cancelLexical()
+	ftsLeg, err := db.hybridFTSLeg(lexicalCtx, f, searcher, k)
 	if err != nil {
 		return ContentSearchPage{}, err
 	}
@@ -1868,8 +1872,6 @@ func (db *DB) hybridFTSLeg(
 func (db *DB) hybridWordHits(
 	ctx context.Context, f ContentSearchFilter, q contentWords, limit int,
 ) ([]hybridDisplay, error) {
-	ctx, cancel := context.WithTimeout(ctx, contentScanTimeout)
-	defer cancel()
 	snapshot, err := db.BeginMessageSnapshot(ctx)
 	if err != nil {
 		return nil, err

@@ -10,6 +10,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -18,6 +19,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/servicehttp"
 )
 
 // toolset holds the dependencies shared by every tool handler. now is
@@ -1109,7 +1111,7 @@ func (t *toolset) countContentMatches(ctx context.Context, req service.ContentSe
 		req.Cursor = cursor
 		res, err := t.svc.SearchContent(ctx, req)
 		if err != nil {
-			return 0, false, err
+			return 0, false, contentSearchError(err)
 		}
 		for _, m := range res.Matches {
 			if !legacy || keep(m) {
@@ -1300,7 +1302,7 @@ func (t *toolset) searchContent(
 func (t *toolset) searchContentMatches(ctx context.Context, req service.ContentSearchRequest, listing bool) (*service.ContentSearchResult, error) {
 	res, err := t.svc.SearchContent(ctx, req)
 	if err != nil || !listing {
-		return res, err
+		return res, contentSearchError(err)
 	}
 	for i := range res.Matches {
 		match := &res.Matches[i]
@@ -1321,6 +1323,14 @@ func (t *toolset) searchContentMatches(ctx context.Context, req service.ContentS
 		}
 	}
 	return res, nil
+}
+
+func contentSearchError(err error) error {
+	status, _, ok := servicehttp.HTTPErrorDetails(err)
+	if errors.Is(err, context.DeadlineExceeded) || (ok && status == http.StatusGatewayTimeout) {
+		return fmt.Errorf("search timed out; retry with date_from, project, or session_id: %w", err)
+	}
+	return err
 }
 
 // --- get_usage_summary ---

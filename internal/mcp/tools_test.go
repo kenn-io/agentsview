@@ -1575,6 +1575,29 @@ type fakeContentSearchService struct {
 	err     error
 }
 
+func TestSearchContentDeadlineSuggestsFilters(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		svc  service.SessionService
+	}{
+		{name: "direct", svc: &fakeContentSearchService{err: context.DeadlineExceeded}},
+		{name: "daemon", svc: func() service.SessionService {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusGatewayTimeout)
+			}))
+			t.Cleanup(srv.Close)
+			return servicehttp.NewHTTPBackend(srv.URL, "", false, "")
+		}()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := &toolset{svc: tc.svc, now: func() time.Time { return fixedNow }}
+			_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", IncludeActive: true})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "retry with date_from, project, or session_id")
+		})
+	}
+}
+
 func (f *fakeContentSearchService) Get(_ context.Context, id string) (*service.SessionDetail, error) {
 	if id == "child" || id == "older" || id == "current" {
 		return &service.SessionDetail{ID: id}, nil
