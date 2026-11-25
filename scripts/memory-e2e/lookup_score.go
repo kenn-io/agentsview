@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json/v2"
 	"errors"
@@ -47,11 +45,13 @@ type lookupScore struct {
 
 var ordinalPattern = regexp.MustCompile(`(?i)(?:[?&]msg=|["']?(?:match_)?ordinal["']?\s*[:=]\s*|\b(?:message|ordinal)\s+)(\d+)`)
 var lookupCommandPattern = regexp.MustCompile(`(?i)(sqlite3|sessions\.db|\.claude/projects/|\.codex/sessions/|rollout-[^\s"']*\.jsonl|tool-results/|\bagentsview\s+(?:session|search|db|mcp)\b)`)
+var lookupOutputPattern = regexp.MustCompile(`(?i)(sessions\.db|\.claude/projects/|\.codex/sessions/|rollout-[^\s"']*\.jsonl|tool-results/)`)
 var truncatedResultPattern = regexp.MustCompile(`(?i)"[^"\n]*truncated"\s*:\s*true|output truncated`)
 var emptyResultPattern = regexp.MustCompile(`(?i)"(?:matches|messages|results|sessions|tool_calls)"\s*:\s*(?:\[\s*\]|null)`)
 var codexMCPInvocationPattern = regexp.MustCompile(`\btools\s*(?:\.\s*mcp__agentsview__|\[)`)
 var mcpErrorPattern = regexp.MustCompile(`(?i)"is_?error"\s*:\s*true`)
 var runningCellPattern = regexp.MustCompile(`(?i)script (?:still )?running with cell ID\s+([^\s]+)`)
+var sessionProviderPrefix = regexp.MustCompile(`(?i)(?:([a-z][a-z0-9_-]*):|/sessions/([a-z][a-z0-9_-]*)/)$`)
 var errCaptureIncomplete = errors.New("capture incomplete")
 var errLookupClientFailed = errors.New("lookup client failed")
 
@@ -120,27 +120,11 @@ func timestampMS(value any) int64 {
 	return t.UnixMilli()
 }
 
-func decodeLines(data []byte) ([]map[string]any, error) {
-	var out []map[string]any
-	s := bufio.NewScanner(bytes.NewReader(data))
-	s.Buffer(make([]byte, 64*1024), 32*1024*1024)
-	for s.Scan() {
-		if len(bytes.TrimSpace(s.Bytes())) == 0 {
-			continue
-		}
-		var event map[string]any
-		if err := json.Unmarshal(s.Bytes(), &event); err != nil {
-			return nil, err
-		}
-		out = append(out, event)
-	}
-	return out, s.Err()
-}
-
 func extractLookupCalls(client clientName, transcripts [][]byte) ([]lookupCall, error) {
 	var calls []lookupCall
 	for source, data := range transcripts {
-		events, err := decodeLines(data)
+		var events []map[string]any
+		err := scanJSONLEvents(data, 32*1024*1024, false, func(event map[string]any) { events = append(events, event) })
 		var sourceCalls []lookupCall
 		if client == clientClaude {
 			sourceCalls = claudeLookupCalls(events)
@@ -344,6 +328,9 @@ func codexLookupCalls(events []map[string]any) []lookupCall {
 func resultFlags(c *lookupCall) {
 	c.Truncated = truncatedResultPattern.MatchString(c.Result)
 	c.Empty = emptyResultPattern.MatchString(c.Result)
+	if c.Route == "other" && lookupOutputPattern.MatchString(c.Result) {
+		c.Route = "direct"
+	}
 }
 
 func lookupPreflightComplete(calls []lookupCall) bool {
@@ -352,7 +339,7 @@ func lookupPreflightComplete(calls []lookupCall) bool {
 		if c.Route != "mcp" || c.Missing || c.Error || c.Empty || c.Result == "" || c.Start <= 0 || c.End < c.Start {
 			continue
 		}
-		if c.Name == "search_content" || strings.HasSuffix(c.Name, "__search_content") {
+		if c.Name == "search_content" || strings.HasSuffix(c.Name, "__search_content") || c.Name == "search_sessions" || strings.HasSuffix(c.Name, "__search_sessions") {
 			search = strings.Contains(c.Result, `"session_id"`)
 		}
 		if c.Name == "get_messages" || strings.HasSuffix(c.Name, "__get_messages") {
@@ -390,28 +377,20 @@ func lookupToolDeliveryMode(client clientName, calls []lookupCall) string {
 }
 
 func containsItem(text string, item lookupItem) bool {
-	id := strings.TrimPrefix(item.SessionID, "codex:")
-	if id == "" || !strings.Contains(strings.ToLower(text), strings.ToLower(id)) {
+	if !containsSessionID(text, item.SessionID) {
 		return false
 	}
 	if item.Ordinal == nil {
 		return true
 	}
-	plain := strings.NewReplacer("`", "", "*", "", "~", "").Replace(text)
-	for _, match := range ordinalPattern.FindAllStringSubmatch(plain, -1) {
-		n, _ := strconv.Atoi(match[1])
-		if n == *item.Ordinal {
-			return true
-		}
-	}
-	return false
+	return containsOrdinal(text, *item.Ordinal)
 }
 
 func callContainsItem(call lookupCall, item lookupItem) bool {
 	if containsItem(call.Result, item) {
 		return true
 	}
-	if !containsSessionID(call.Input, item.SessionID) {
+	if !sessionReadMatches(call, item) {
 		return false
 	}
 	if item.Ordinal == nil {
@@ -420,14 +399,22 @@ func callContainsItem(call lookupCall, item lookupItem) bool {
 	return containsOrdinal(call.Result, *item.Ordinal)
 }
 
+func sessionReadMatches(call lookupCall, item lookupItem) bool {
+	if call.Route != "mcp" {
+		return false
+	}
+	for _, name := range []string{"get_messages", "get_tool_calls", "get_session_overview", "get_child_sessions"} {
+		if call.Name == name || strings.HasSuffix(call.Name, "__"+name) {
+			return containsSessionID(call.Input, item.SessionID)
+		}
+	}
+	return false
+}
+
 func callContainsEvidence(call lookupCall, item lookupItem, phrases []string) bool {
 	if !callContainsItem(call, item) || !containsAnswerEvidence(call.Result, phrases) {
 		return false
 	}
-	if call.Route != "mcp" {
-		return true
-	}
-	parsed := false
 	for _, line := range strings.Split(call.Result, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -435,14 +422,13 @@ func callContainsEvidence(call lookupCall, item lookupItem, phrases []string) bo
 		}
 		var result any
 		if json.Unmarshal([]byte(line), &result) != nil {
-			continue
+			result = line
 		}
-		parsed = true
-		if resultContainsMessageEvidence(result, containsSessionID(call.Input, item.SessionID), false, item, phrases) {
+		if resultContainsMessageEvidence(result, sessionReadMatches(call, item), false, item, phrases) {
 			return true
 		}
 	}
-	return !parsed
+	return false
 }
 
 func resultContainsMessageEvidence(
@@ -516,8 +502,36 @@ func directText(value map[string]any) string {
 }
 
 func containsSessionID(text, sessionID string) bool {
-	id := strings.TrimPrefix(sessionID, "codex:")
-	return id != "" && strings.Contains(strings.ToLower(text), strings.ToLower(id))
+	text, sessionID = strings.ToLower(text), strings.ToLower(sessionID)
+	provider, id, prefixed := strings.Cut(sessionID, ":")
+	if !prefixed {
+		id, provider = sessionID, ""
+	}
+	if id == "" {
+		return false
+	}
+	for start := 0; start < len(text); {
+		offset := strings.Index(text[start:], id)
+		if offset < 0 {
+			return false
+		}
+		at := start + offset
+		end := at + len(id)
+		if end < len(text) && (text[end] >= 'a' && text[end] <= 'z' || text[end] >= '0' && text[end] <= '9' || text[end] == '-' || text[end] == '_') {
+			start = end
+			continue
+		}
+		prefix := sessionProviderPrefix.FindStringSubmatch(text[:at])
+		if len(prefix) == 0 {
+			if at == 0 || !(text[at-1] >= 'a' && text[at-1] <= 'z' || text[at-1] >= '0' && text[at-1] <= '9' || text[at-1] == '-' || text[at-1] == '_') {
+				return true
+			}
+		} else if provider == "" || prefix[1] == provider || prefix[2] == provider {
+			return true
+		}
+		start = end
+	}
+	return false
 }
 
 func containsOrdinal(text string, ordinal int) bool {

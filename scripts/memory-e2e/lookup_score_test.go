@@ -65,6 +65,15 @@ func TestLookupRetainsTraceCallsWhenCaptureIsIncomplete(t *testing.T) {
 	assert.Equal(t, 1, score.Errors)
 }
 
+func TestLookupRetainsCallsBeforeMalformedJSONL(t *testing.T) {
+	trace := `{"timestamp":"2026-11-24T12:00:00Z","type":"assistant","message":{"content":[{"type":"tool_use","id":"1","name":"mcp__agentsview__search_content","input":{}}]}}
+{invalid`
+	calls, err := extractLookupCalls(clientClaude, [][]byte{[]byte(trace)})
+	require.Error(t, err)
+	require.Len(t, calls, 1)
+	assert.True(t, calls[0].Missing)
+}
+
 func TestLookupTimeoutAndClientFailureFailWithIncompleteCapture(t *testing.T) {
 	calls := []lookupCall{{Route: "mcp", Result: lookupID, Start: 1, End: 2}}
 	for _, runErr := range []error{
@@ -138,6 +147,8 @@ func TestLookupCodexPreflightScoresIdentifiedNestedResults(t *testing.T) {
 		{Name: "get_messages", Route: "mcp", Result: `{"messages":[{"ordinal":1,"content":"violet ledger"}]}`, Start: 3, End: 4, Nested: true},
 	}
 	assert.True(t, lookupPreflightComplete(calls))
+	calls[0].Name = "search_sessions"
+	assert.True(t, lookupPreflightComplete(calls))
 	assert.Equal(t, "code-mode-only", lookupToolDeliveryMode(clientCodex, calls))
 	assert.Equal(t, "native", lookupToolDeliveryMode(clientClaude, calls))
 	calls[1].Result = `{"messages":[]}`
@@ -145,6 +156,16 @@ func TestLookupCodexPreflightScoresIdentifiedNestedResults(t *testing.T) {
 	assert.False(t, lookupPreflightComplete(calls))
 	calls = []lookupCall{{Name: "exec", Route: "other", Missing: true}}
 	assert.False(t, lookupPreflightComplete(calls))
+}
+
+func TestLookupPreflightUsesManifestSession(t *testing.T) {
+	prompt, err := lookupPreflightPrompt([]lookupQuestion{{Expected: []lookupItem{{SessionID: "codex:" + lookupID}}}})
+	require.NoError(t, err)
+	assert.Contains(t, prompt, "codex:"+lookupID)
+	assert.Contains(t, prompt, "search_sessions")
+	assert.Contains(t, prompt, "get_messages")
+	_, err = lookupPreflightPrompt([]lookupQuestion{{}})
+	assert.Error(t, err)
 }
 
 func TestLookupIncludesChildTranscript(t *testing.T) {
@@ -272,6 +293,54 @@ func TestLookupSessionEvidenceCannotMixSearchRows(t *testing.T) {
 	score := scoreLookup(lookupID+" maple", []lookupItem{{SessionID: lookupID}}, []string{"maple"}, []lookupCall{call}, nil)
 	assert.Equal(t, "unscored", score.Verdict)
 	assert.Nil(t, score.CallsToHit)
+}
+
+func TestLookupDirectAndCLIEvidenceCannotMixRows(t *testing.T) {
+	for _, route := range []string{"direct", "cli"} {
+		for _, result := range []string{
+			`{"results":[{"session_id":"codex:` + lookupID + `","snippet":"cedar"},{"session_id":"codex:22222222-2222-4222-8222-222222222222","snippet":"maple"}]}`,
+			`{"session_id":"codex:` + lookupID + `","snippet":"cedar"}` + "\n" + `{"session_id":"codex:22222222-2222-4222-8222-222222222222","snippet":"maple"}`,
+			"session codex:" + lookupID + " cedar\nsession codex:22222222-2222-4222-8222-222222222222 maple",
+		} {
+			call := lookupCall{Route: route, Result: result, Start: 1, End: 2}
+			score := scoreLookup("codex:"+lookupID+" maple", []lookupItem{{SessionID: "codex:" + lookupID}}, []string{"maple"}, []lookupCall{call}, nil)
+			assert.Equal(t, "unscored", score.Verdict, "%s: %s", route, result)
+		}
+	}
+}
+
+func TestLookupRejectsDifferentProviderWithSameID(t *testing.T) {
+	item := lookupItem{SessionID: "codex:" + lookupID}
+	for _, text := range []string{"claude:" + lookupID, "http://example.com/sessions/claude/" + lookupID} {
+		assert.False(t, containsItem(text, item), text)
+		score := scoreLookup(text+" violet ledger", []lookupItem{item}, []string{"violet ledger"}, []lookupCall{{Route: "mcp", Result: text + " violet ledger", Start: 1, End: 2}}, nil)
+		assert.Equal(t, "failed", score.Verdict, text)
+	}
+	for _, text := range []string{lookupID, "codex:" + lookupID, "http://example.com/sessions/codex/" + lookupID} {
+		assert.True(t, containsItem(text, item), text)
+	}
+	wrong := lookupCall{Route: "mcp", Result: "claude:" + lookupID + " violet ledger", Start: 1, End: 2}
+	right := lookupCall{Route: "mcp", Result: "codex:" + lookupID + " violet ledger", Start: 3, End: 4}
+	score := scoreLookup("codex:"+lookupID+" violet ledger", []lookupItem{item}, []string{"violet ledger"}, []lookupCall{wrong, right}, nil)
+	require.NotNil(t, score.CallsToHit)
+	assert.Equal(t, 2, *score.CallsToHit)
+	ordinal := 3
+	item.Ordinal = &ordinal
+	otherRead := lookupCall{Name: "get_messages", Route: "mcp", Input: `{"session_id":"claude:` + lookupID + `"}`, Result: `{"messages":[{"ordinal":3,"content":"violet ledger"}]}`, Start: 1, End: 2}
+	score = scoreLookup("codex:"+lookupID+"?msg=3 violet ledger", []lookupItem{item}, []string{"violet ledger"}, []lookupCall{otherRead}, nil)
+	assert.Equal(t, "unscored", score.Verdict)
+}
+
+func TestLookupClassifiesTranscriptFromGrepOutput(t *testing.T) {
+	trace := `{"timestamp":"2026-11-24T12:00:00Z","message":{"content":[{"type":"tool_use","id":"1","name":"Grep","input":{"pattern":"violet ledger","path":"."}}]}}
+{"timestamp":"2026-11-24T12:00:01Z","message":{"content":[{"type":"tool_result","tool_use_id":"1","content":"transcripts/2026/01/01/rollout-123.jsonl:session ` + lookupID + ` violet ledger"}]}}`
+	calls, err := extractLookupCalls(clientClaude, [][]byte{[]byte(trace)})
+	require.NoError(t, err)
+	require.Len(t, calls, 1)
+	assert.Equal(t, "direct", calls[0].Route)
+	score := scoreLookup(lookupID+" violet ledger", []lookupItem{{SessionID: lookupID}}, []string{"violet ledger"}, calls, nil)
+	assert.Equal(t, "direct-only", score.Route)
+	assert.Equal(t, "success", score.Verdict)
 }
 
 func TestLookupSessionEvidenceInPlainContentBlock(t *testing.T) {

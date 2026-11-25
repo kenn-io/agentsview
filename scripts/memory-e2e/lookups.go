@@ -326,7 +326,10 @@ func runLookupClient(
 	if err := writeJSON(filepath.Join(dir, "scheduled.json"), report.Attempts); err != nil {
 		return report, err
 	}
-	preflight := "Use the AgentsView MCP search_content tool to find harbor cache, then use get_messages to read that session. Cite its session ID."
+	preflight, err := lookupPreflightPrompt(questions)
+	if err != nil {
+		return report, err
+	}
 	calls, _, _, preErr := captureLookup(ctx, cfg, bin, client, project, model, server.url, preflight, filepath.Join(dir, "preflight"))
 	report.ToolDeliveryMode = lookupToolDeliveryMode(client, calls)
 	if preErr != nil {
@@ -361,6 +364,17 @@ func runLookupClient(
 	}
 	report.Summary = summarizeLookups(report.Attempts)
 	return report, nil
+}
+
+func lookupPreflightPrompt(questions []lookupQuestion) (string, error) {
+	for _, question := range questions {
+		for _, item := range question.Expected {
+			if item.SessionID != "" {
+				return fmt.Sprintf("Use the AgentsView MCP search_sessions tool with session_id %q, then use get_messages to read that session. Cite its session ID.", item.SessionID), nil
+			}
+		}
+	}
+	return "", errors.New("memory-e2e: lookup questions must name an expected session for preflight")
 }
 
 func captureLookup(ctx context.Context, cfg config, bin string, client clientName, project, model, serverURL, prompt, dir string) ([]lookupCall, string, int, error) {

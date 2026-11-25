@@ -744,27 +744,34 @@ func executeAgent(
 	return stdout.Bytes(), stderr.Bytes(), err
 }
 
-func parseAgentTrace(client clientName, trace []byte) (parsedTrace, error) {
-	var out parsedTrace
-	seenTools := map[string]bool{}
+func scanJSONLEvents(trace []byte, maxLine int, skipNonJSON bool, visit func(map[string]any)) error {
 	scanner := bufio.NewScanner(bytes.NewReader(trace))
-	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	scanner.Buffer(make([]byte, 64*1024), maxLine)
 	for scanner.Scan() {
 		line := bytes.TrimSpace(scanner.Bytes())
-		if len(line) == 0 || line[0] != '{' {
+		if len(line) == 0 || (skipNonJSON && line[0] != '{') {
 			continue
 		}
 		var event map[string]any
 		if err := json.Unmarshal(line, &event); err != nil {
-			return parsedTrace{}, fmt.Errorf("decode JSONL event: %w", err)
+			return fmt.Errorf("decode JSONL event: %w", err)
 		}
+		visit(event)
+	}
+	return scanner.Err()
+}
+
+func parseAgentTrace(client clientName, trace []byte) (parsedTrace, error) {
+	var out parsedTrace
+	seenTools := map[string]bool{}
+	err := scanJSONLEvents(trace, 4*1024*1024, true, func(event map[string]any) {
 		if client == clientClaude {
 			parseClaudeEvent(event, &out, seenTools)
 		} else {
 			parseCodexEvent(event, &out, seenTools)
 		}
-	}
-	if err := scanner.Err(); err != nil {
+	})
+	if err != nil {
 		return parsedTrace{}, err
 	}
 	return out, nil
