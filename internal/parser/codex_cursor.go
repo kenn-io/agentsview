@@ -20,6 +20,9 @@ const (
 	// codexCursorCheckpointVersion is the wire version for the persisted
 	// cursor encoding. Bump when the encoding changes; decode failures fall
 	// back to a full parse.
+	// Version 7 records whether a user prompt has set the first-message
+	// preview; a leading slash-command envelope or other injected Claude Code
+	// text no longer sets it.
 	// Version 6 digests the whole token_count info object, including the
 	// cumulative total, instead of last_token_usage alone; a version 5 digest
 	// cannot recognize a repeat that straddles the resume offset.
@@ -29,7 +32,7 @@ const (
 	// full parsing; version 2 retained the oldest unresolved occurrence.
 	// The fork replay gate is process-only state: it is re-armed from the
 	// transcript on every parse and is not part of the persisted cursor.
-	codexCursorCheckpointVersion   = 6
+	codexCursorCheckpointVersion   = 7
 	codexCursorCheckpointMaxString = 1 << 20
 
 	// Account for the map bucket, list element, pointers, string headers, and
@@ -63,6 +66,7 @@ type codexCursorState struct {
 	firstUserSeen            bool
 	sawUserTurnAfterFirst    bool
 	mayReplayFirstUserPrompt bool
+	firstMessageSeen         bool
 	lastTokenUsageDigest     [sha256.Size]byte
 	lastTokenUsageSeen       bool
 	forkGate                 codexForkGate
@@ -117,6 +121,9 @@ func (s *codexCursorState) MarshalBinary() ([]byte, error) {
 	}
 	if s.lastTokenUsageSeen {
 		flags |= 1 << 3
+	}
+	if s.firstMessageSeen {
+		flags |= 1 << 4
 	}
 	if err := write(flags); err != nil {
 		return nil, err
@@ -218,6 +225,7 @@ func (s *codexCursorState) UnmarshalBinary(data []byte) error {
 	s.sawUserTurnAfterFirst = flags&(1<<1) != 0
 	s.mayReplayFirstUserPrompt = flags&(1<<2) != 0
 	s.lastTokenUsageSeen = flags&(1<<3) != 0
+	s.firstMessageSeen = flags&(1<<4) != 0
 	if err := read(&s.lastTokenUsageDigest); err != nil {
 		return err
 	}
@@ -342,25 +350,24 @@ func (s *codexCursorState) forgetToolCall(id string) {
 }
 
 // observeUserPrompt advances the first-user replay state using only a digest
-// of the full normalized prompt. first reports the initial genuine prompt;
-// replay reports the one positively identified post-abort re-emission that the
-// caller must suppress.
-func (s *codexCursorState) observeUserPrompt(content string) (first, replay bool) {
+// of the full normalized prompt. replay reports the one positively identified
+// post-abort re-emission of the initial prompt that the caller must suppress.
+func (s *codexCursorState) observeUserPrompt(content string) (replay bool) {
 	digest := sha256.Sum256([]byte(content))
 	if !s.firstUserSeen {
 		s.firstUserDigest = digest
 		s.firstUserSeen = true
-		return true, false
+		return false
 	}
 	if digest == s.firstUserDigest &&
 		!s.sawUserTurnAfterFirst &&
 		s.mayReplayFirstUserPrompt {
 		s.mayReplayFirstUserPrompt = false
-		return false, true
+		return true
 	}
 	s.sawUserTurnAfterFirst = true
 	s.mayReplayFirstUserPrompt = false
-	return false, false
+	return false
 }
 
 func (s *codexCursorState) markFirstUserReplayPossible() {

@@ -875,10 +875,11 @@ func (p *codexProvider) ParseIncremental(
 		}
 		return IncrementalOutcome{}, IncrementalNeedsFullParse, err
 	}
-	if !result.initialCursor.firstUserSeen && result.cursor.firstUserSeen {
-		// The stored session has no genuine first prompt yet, so appending this
-		// tail would leave its persisted FirstMessage preview stale. A full parse
-		// can rebuild both the messages and the session summary atomically.
+	if !result.initialCursor.firstMessageSeen && result.cursor.firstMessageSeen {
+		// The stored session has no first-message preview yet, because every
+		// user message so far is left out of the preview, so appending this tail
+		// would leave its persisted FirstMessage preview stale. A full parse can
+		// rebuild both the messages and the session summary atomically.
 		return IncrementalOutcome{ForceReplace: true},
 			IncrementalNeedsFullParse, nil
 	}

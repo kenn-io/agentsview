@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -221,6 +222,50 @@ func TestCodexForkReviewTurnWithoutIDAndPreview(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, s)
 	assert.Equal(t, new("child prompt"), s.FirstMessage)
+}
+
+func TestCodexForkReviewPreviewSkipsSlashCommand(t *testing.T) {
+	const envelope = "<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args></command-args>"
+	const output = "<local-command-stdout>Set model to gpt-5.5</local-command-stdout>"
+	tests := []struct {
+		name        string
+		userTexts   []string
+		wantPreview *string
+	}{
+		{"command and its output before a prompt", []string{envelope, output, "child prompt"}, new("child prompt")},
+		{"only a command and its output", []string{envelope, output}, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e, d, cp, _, meta := forkReviewEngine(t, 1, parser.AgentCodex)
+			lines := []string{testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", forkReviewTime)}
+			for _, text := range tt.userTexts {
+				lines = append(lines, testjsonl.CodexMsgJSON("user", text, forkReviewTime))
+			}
+			require.NoError(t, os.WriteFile(cp, []byte(meta+testjsonl.JoinJSONL(lines...)), 0o600))
+			// The parent is absent, so the fork title comes from retained rows.
+			require.Equal(t, 1, e.SyncAll(t.Context(), nil).Deferred)
+			id := "codex:" + forkReviewChild
+			assert.Equal(t, tt.userTexts, messageContents(t, d, id))
+			s, err := d.GetSessionFull(t.Context(), id)
+			require.NoError(t, err)
+			require.NotNil(t, s)
+			assert.Equal(t, tt.wantPreview, s.FirstMessage)
+
+			// An archive from the previous parser has the same rows and the
+			// envelope as its title. The next sync retitles it and adds no row.
+			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(t.Context(), "UPDATE sessions SET first_message = ? WHERE id = ?", envelope, id)
+				return err
+			}))
+			require.NoError(t, e.TrySyncSessionWithSubagentsContext(t.Context(), id))
+			assert.Equal(t, tt.userTexts, messageContents(t, d, id))
+			s, err = d.GetSessionFull(t.Context(), id)
+			require.NoError(t, err)
+			require.NotNil(t, s)
+			assert.Equal(t, tt.wantPreview, s.FirstMessage)
+		})
+	}
 }
 
 func TestCodexForkReviewLegacyUsage(t *testing.T) {

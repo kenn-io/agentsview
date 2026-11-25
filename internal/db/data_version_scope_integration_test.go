@@ -2120,3 +2120,66 @@ func TestZCodeToolResultImageUpgradeReparsesAndIndexes(t *testing.T) {
 	).Scan(&occCount))
 	assert.Positive(t, occCount)
 }
+
+func TestCodexSlashCommandUpgradeRetitlesInPlace(t *testing.T) {
+	scope := db.ScopedDataVersionProviders(189, 190)
+	assert.ElementsMatch(t,
+		[]parser.AgentType{parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode, parser.AgentInterpreter},
+		scope)
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
+	ctx := t.Context()
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	const id = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+	const envelope = "<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args></command-args>"
+	const output = "<local-command-stdout>Set model to gpt-5.5</local-command-stdout>"
+	sessionID := "codex:" + id
+	source := filepath.Join(root, "rollout-"+id+".jsonl")
+	body := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(id, root, "codex_cli_rs", "2026-11-16T09:00:00Z"),
+		testjsonl.CodexMsgJSON("user", envelope, "2026-11-16T09:00:01Z"),
+		testjsonl.CodexMsgJSON("user", output, "2026-11-16T09:00:01Z"),
+		testjsonl.CodexMsgJSON("user", "fix the failing build", "2026-11-16T09:00:02Z"),
+		testjsonl.CodexMsgJSON("assistant", "The build passes now.", "2026-11-16T09:00:03Z"),
+	)
+	dbtest.WriteTestFile(t, source, []byte(body))
+	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}}
+	engine := sync.NewEngine(ctx, database, cfg)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	engine.Close()
+
+	// Model the archive the previous parser wrote: the same rows, with the
+	// envelope as the session title.
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, "UPDATE sessions SET first_message = ? WHERE id = ?", envelope, sessionID); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, fmt.Sprintf("UPDATE sessions SET data_version=%d; PRAGMA user_version=%d", version-1, version-1))
+		return err
+	}))
+	path := database.Path()
+	require.NoError(t, database.Close())
+	database, err := db.OpenIsolated(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	assert.False(t, database.NeedsResync(), "Codex upgrade must reparse in place")
+	engine = sync.NewEngine(ctx, database, cfg)
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+
+	assert.Equal(t, source, database.GetSessionFilePath(ctx, sessionID))
+	var firstMessage string
+	var userCount int
+	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT first_message, user_message_count FROM sessions WHERE id = ?", sessionID).Scan(&firstMessage, &userCount))
+	assert.Equal(t, "fix the failing build", firstMessage)
+	assert.Equal(t, 3, userCount)
+	var content string
+	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT content FROM messages WHERE session_id = ? AND ordinal = 0", sessionID).Scan(&content))
+	assert.Equal(t, envelope, content, "the transcript keeps the envelope as written")
+	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT content FROM messages WHERE session_id = ? AND ordinal = 1", sessionID).Scan(&content))
+	assert.Equal(t, output, content)
+	var count int
+	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT count(*) FROM sessions").Scan(&count))
+	assert.Equal(t, 1, count)
+}

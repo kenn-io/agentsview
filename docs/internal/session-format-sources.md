@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-23
+last_edited: 2026-11-25
 ---
 
 # Session Format Source Inventory
@@ -769,6 +769,42 @@ fixtures retain this field; missing identities remain source-local.
   `internal/parser/cowork_paths.go`, and `internal/parser/cowork_provider.go`.
 
 ## Codex (`codex`)
+
+- **Imported Claude Code sessions (checked 2026-11-16 at
+  `c0d47262f33fdb866e2012baad52cf6584e37c03`):** Codex imports sessions from
+  other agents as native rollouts. For a Claude Code transcript, the pinned
+  [record reader](https://github.com/openai/codex/blob/c0d47262f33fdb866e2012baad52cf6584e37c03/codex-rs/external-agent-migration/src/sessions/records_cla.rs)
+  keeps each `user` and `assistant` record that is not `isMeta` or
+  `isSidechain`. The
+  [exporter](https://github.com/openai/codex/blob/c0d47262f33fdb866e2012baad52cf6584e37c03/codex-rs/external-agent-migration/src/sessions/export.rs)
+  writes that record's text unchanged as a `message` response item with one
+  `input_text` or `output_text` block. It also writes a `user_message` or
+  `agent_message` event with the same text, and numbers the turns
+  `external-import-turn-N`. Codex removes leading control wrappers such as
+  `<command-name>`, `<local-command-stdout>`, and `<system-reminder>` only
+  when it derives the thread title
+  ([title.rs](https://github.com/openai/codex/blob/c0d47262f33fdb866e2012baad52cf6584e37c03/codex-rs/external-agent-migration/src/sessions/title.rs));
+  the rollout keeps them. An imported session can therefore open with a
+  Claude Code slash-command envelope and that command's
+  `<local-command-stdout>` record as ordinary Codex user messages. Claude Code
+  has no public producer source; these are the shapes the Claude parser
+  already reads. AgentsView keeps these messages in the transcript as written,
+  and they still count as user messages. It takes the session's first message
+  from the first user message that is neither a pure command envelope nor text
+  the Claude parser treats as injected (`IsSkippableCodexPreview`, built on
+  `isCommandEnvelope` and `isClaudeSystemMessage`). A prompt that a user typed
+  with a leading slash still titles its session. A wrapper that precedes a
+  prompt in the same message is not separated from it. Data version 190
+  reparses Codex, TraeX, Augure Code, and Open Interpreter sources in place,
+  and the parser checkpoint moves to version 7, so a stored cursor makes the
+  next append a full parse. The corpus input follows the exporter's row order
+  with synthetic text. Synthetic coverage:
+  `TestParseCodexSession_SlashCommandEnvelopes`,
+  `TestIsSkippableCodexPreview`,
+  `TestCodexProviderIncrementalFirstGenuinePromptNeedsFullParse`,
+  `TestCodexProviderCheckpointSeedKeepsPreviewState`,
+  `TestCodexForkReviewPreviewSkipsSlashCommand`, and
+  `TestCodexSlashCommandUpgradeRetitlesInPlace`.
 
 - **Reasoning, compaction, and usage repeats (checked 2026-11-11 at
   `87b7bdbf2efb9cb6fb15d821ef535061012c0138`):** The pinned

@@ -753,106 +753,132 @@ func TestCodexProviderIncrementalFirstGenuinePromptNeedsFullParse(t *testing.T) 
 			"user", "first genuine request", tsLate,
 		),
 	)
-
-	for _, mode := range []string{"warm", "cold"} {
-		t.Run(mode, func(t *testing.T) {
-			root := t.TempDir()
-			uuid := "019eb791-cf7d-75c1-8439-9ed74c1229f4"
-			prefix := testjsonl.JoinJSONL(
-				testjsonl.CodexSessionMetaJSON(
-					uuid, "/workspace/project-a", "codex_cli_rs", tsEarly,
-				),
-				testjsonl.CodexMsgJSON(
-					"user", orphanNotification, tsEarlyS1,
-				),
-			)
-			content := prefix
-			if mode == "cold" {
-				content += tail
-			}
-			path := writeCodexProviderSessionContent(
-				t, root, uuid, content,
-			)
-			provider, ok := NewProvider(
-				AgentCodex, ProviderConfig{Roots: []string{root}},
-			)
-			require.True(t, ok)
-			concrete, ok := provider.(*codexProvider)
-			require.True(t, ok)
-			source := requireCodexProviderSource(t, provider, uuid)
-
-			if mode == "warm" {
-				prefixFingerprint, err := provider.Fingerprint(
-					t.Context(), source,
-				)
-				require.NoError(t, err)
-				full, err := provider.Parse(
-					t.Context(),
-					ParseRequest{
-						Source: source, Fingerprint: prefixFingerprint,
-					},
-				)
-				require.NoError(t, err)
-				require.Len(t, full.Results, 1)
-				assert.Empty(t, full.Results[0].Result.Session.FirstMessage)
-				require.Len(t, full.Results[0].Result.Messages, 1)
-				assert.Equal(t,
-					"Orphan task finished",
-					full.Results[0].Result.Messages[0].Content,
-				)
-				appendCodexProviderContent(t, path, tail)
-			}
-
-			fingerprint, err := provider.Fingerprint(
-				t.Context(), source,
-			)
-			require.NoError(t, err)
-			inode, device := fingerprint.Inode, fingerprint.Device
-			prefixOffset := int64(len(prefix))
-			_, oldBefore := concrete.cursorCache.Get(
-				path, prefixOffset, inode, device,
-			)
-
-			outcome, status, err := provider.ParseIncremental(
-				t.Context(),
-				IncrementalRequest{
-					Source:       source,
-					Fingerprint:  fingerprint,
-					SessionID:    "codex:" + uuid,
-					Offset:       prefixOffset,
-					StartOrdinal: 1,
-				},
-			)
-
-			require.NoError(t, err)
-			assert.Equal(t, IncrementalNeedsFullParse, status)
-			assert.True(t, outcome.ForceReplace)
-			assert.Empty(t, outcome.Messages)
-			_, oldAfter := concrete.cursorCache.Get(
-				path, prefixOffset, inode, device,
-			)
-			_, newAfter := concrete.cursorCache.Get(
-				path, fingerprint.Size, inode, device,
-			)
-			assert.Equal(t, oldBefore, oldAfter)
-			assert.False(t, newAfter)
-			if mode == "cold" {
-				assert.False(t, oldAfter)
-			}
-
-			full, err := provider.Parse(
-				t.Context(),
-				ParseRequest{Source: source, Fingerprint: fingerprint},
-			)
-			require.NoError(t, err)
-			require.Len(t, full.Results, 1)
-			assert.Equal(t,
-				"first genuine request",
-				full.Results[0].Result.Session.FirstMessage,
-			)
-			require.Len(t, full.Results[0].Result.Messages, 2)
-		})
+	prefixes := []struct {
+		name        string
+		text        string
+		wantContent string
+	}{
+		{"orphan notification", orphanNotification, "Orphan task finished"},
+		{
+			"slash command",
+			"<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args></command-args>",
+			"<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args></command-args>",
+		},
+		{
+			"local command output",
+			"<local-command-stdout>Set model to gpt-5.5</local-command-stdout>",
+			"<local-command-stdout>Set model to gpt-5.5</local-command-stdout>",
+		},
 	}
+
+	for _, pf := range prefixes {
+		for _, mode := range []string{"warm", "cold"} {
+			t.Run(pf.name+"/"+mode, func(t *testing.T) {
+				testCodexIncrementalFirstGenuinePrompt(t, pf.text, pf.wantContent, tail, mode)
+			})
+		}
+	}
+}
+
+func testCodexIncrementalFirstGenuinePrompt(
+	t *testing.T, prefixText, wantPrefixContent, tail, mode string,
+) {
+	t.Helper()
+	root := t.TempDir()
+	uuid := "019eb791-cf7d-75c1-8439-9ed74c1229f4"
+	prefix := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/workspace/project-a", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexMsgJSON(
+			"user", prefixText, tsEarlyS1,
+		),
+	)
+	content := prefix
+	if mode == "cold" {
+		content += tail
+	}
+	path := writeCodexProviderSessionContent(
+		t, root, uuid, content,
+	)
+	provider, ok := NewProvider(
+		AgentCodex, ProviderConfig{Roots: []string{root}},
+	)
+	require.True(t, ok)
+	concrete, ok := provider.(*codexProvider)
+	require.True(t, ok)
+	source := requireCodexProviderSource(t, provider, uuid)
+
+	if mode == "warm" {
+		prefixFingerprint, err := provider.Fingerprint(
+			t.Context(), source,
+		)
+		require.NoError(t, err)
+		full, err := provider.Parse(
+			t.Context(),
+			ParseRequest{
+				Source: source, Fingerprint: prefixFingerprint,
+			},
+		)
+		require.NoError(t, err)
+		require.Len(t, full.Results, 1)
+		assert.Empty(t, full.Results[0].Result.Session.FirstMessage)
+		require.Len(t, full.Results[0].Result.Messages, 1)
+		assert.Equal(t,
+			wantPrefixContent,
+			full.Results[0].Result.Messages[0].Content,
+		)
+		appendCodexProviderContent(t, path, tail)
+	}
+
+	fingerprint, err := provider.Fingerprint(
+		t.Context(), source,
+	)
+	require.NoError(t, err)
+	inode, device := fingerprint.Inode, fingerprint.Device
+	prefixOffset := int64(len(prefix))
+	_, oldBefore := concrete.cursorCache.Get(
+		path, prefixOffset, inode, device,
+	)
+
+	outcome, status, err := provider.ParseIncremental(
+		t.Context(),
+		IncrementalRequest{
+			Source:       source,
+			Fingerprint:  fingerprint,
+			SessionID:    "codex:" + uuid,
+			Offset:       prefixOffset,
+			StartOrdinal: 1,
+		},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, IncrementalNeedsFullParse, status)
+	assert.True(t, outcome.ForceReplace)
+	assert.Empty(t, outcome.Messages)
+	_, oldAfter := concrete.cursorCache.Get(
+		path, prefixOffset, inode, device,
+	)
+	_, newAfter := concrete.cursorCache.Get(
+		path, fingerprint.Size, inode, device,
+	)
+	assert.Equal(t, oldBefore, oldAfter)
+	assert.False(t, newAfter)
+	if mode == "cold" {
+		assert.False(t, oldAfter)
+	}
+
+	full, err := provider.Parse(
+		t.Context(),
+		ParseRequest{Source: source, Fingerprint: fingerprint},
+	)
+	require.NoError(t, err)
+	require.Len(t, full.Results, 1)
+	assert.Equal(t,
+		"first genuine request",
+		full.Results[0].Result.Session.FirstMessage,
+	)
+	require.Len(t, full.Results[0].Result.Messages, 2)
 }
 
 func TestCodexProviderIncrementalCustomToolOutputUpdatesStoredCall(t *testing.T) {

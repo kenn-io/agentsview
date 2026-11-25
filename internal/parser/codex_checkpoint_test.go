@@ -20,6 +20,7 @@ func TestCodexCursorStateCheckpointRoundTrip(t *testing.T) {
 		firstUserSeen:            true,
 		sawUserTurnAfterFirst:    true,
 		mayReplayFirstUserPrompt: false,
+		firstMessageSeen:         true,
 		lastTokenUsageSeen:       true,
 		lastTokenUsageDigest:     [sha256.Size]byte{1, 2, 3},
 		forkGate: codexForkGate{
@@ -133,6 +134,85 @@ func TestCodexProviderIncrementalResumesFromCheckpointSeed(t *testing.T) {
 	assert.Equal(t, callID, incOutcome.ToolCallUpdates[0].ToolUseID)
 	assert.NotEmpty(t, incOutcome.NextCursor,
 		"an applied incremental parse must advance the cursor")
+}
+
+// TestCodexProviderCheckpointSeedKeepsPreviewState verifies that the persisted
+// cursor carries whether a prompt has set the session preview. An append to a
+// titled session stays incremental, and the first prompt after a leading
+// command envelope forces a full parse.
+func TestCodexProviderCheckpointSeedKeepsPreviewState(t *testing.T) {
+	const envelope = "<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args></command-args>"
+	tests := []struct {
+		name       string
+		uuid       string
+		userTexts  []string
+		wantStatus IncrementalStatus
+		wantForce  bool
+	}{
+		{
+			name:       "prompt already set the preview",
+			uuid:       "019eb791-cf7d-75c1-8439-9ed74c122a11",
+			userTexts:  []string{envelope, "first genuine request"},
+			wantStatus: IncrementalApplied,
+		},
+		{
+			name:       "only a command envelope so far",
+			uuid:       "019eb791-cf7d-75c1-8439-9ed74c122a12",
+			userTexts:  []string{envelope},
+			wantStatus: IncrementalNeedsFullParse,
+			wantForce:  true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lines := []string{testjsonl.CodexSessionMetaJSON(
+				tt.uuid, "/workspace/project-a", "codex_cli_rs", tsEarly,
+			)}
+			for _, text := range tt.userTexts {
+				lines = append(lines, testjsonl.CodexMsgJSON("user", text, tsEarlyS1))
+			}
+			prefix := testjsonl.JoinJSONL(lines...)
+			root := t.TempDir()
+			path := writeCodexProviderSessionContent(t, root, tt.uuid, prefix)
+			provider, ok := NewProvider(
+				AgentCodex, ProviderConfig{Roots: []string{root}},
+			)
+			require.True(t, ok)
+			source := requireCodexProviderSource(t, provider, tt.uuid)
+			fingerprint, err := provider.Fingerprint(t.Context(), source)
+			require.NoError(t, err)
+			outcome, err := provider.Parse(t.Context(), ParseRequest{
+				Source: source, Fingerprint: fingerprint,
+			})
+			require.NoError(t, err)
+			require.Len(t, outcome.Results, 1)
+			checkpoint := outcome.Results[0].Result.Checkpoint
+			require.NotEmpty(t, checkpoint)
+			// Drop the in-memory cursor so only the persisted seed carries state.
+			concrete, ok := provider.(*codexProvider)
+			require.True(t, ok)
+			concrete.cursorCache = newProductionCodexCursorCache()
+
+			appendCodexProviderContent(t, path, testjsonl.JoinJSONL(
+				testjsonl.CodexMsgJSON("user", "second request", tsLate),
+			))
+			fingerprint, err = provider.Fingerprint(t.Context(), source)
+			require.NoError(t, err)
+			incOutcome, status, err := provider.ParseIncremental(
+				t.Context(), IncrementalRequest{
+					Source:       source,
+					Fingerprint:  fingerprint,
+					SessionID:    "codex:" + tt.uuid,
+					Offset:       int64(len(prefix)),
+					StartOrdinal: len(tt.userTexts),
+					Seed:         checkpoint,
+				},
+			)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantStatus, status)
+			assert.Equal(t, tt.wantForce, incOutcome.ForceReplace)
+		})
+	}
 }
 
 // TestCodexParseCarriesSinglePassHashState verifies the full parse captures

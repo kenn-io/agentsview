@@ -708,7 +708,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // canonical input_image blocks so image retention, offload, and image_text
 // indexing see them. Re-parse toolResultContentLength and raw tool-result array
 // providers in place; source and session identities are unchanged.)
-const dataVersion = 189
+// (190: title a Codex-format session by the first user message that is not a
+// Claude Code slash-command envelope or other text Claude Code injects.
+// Re-parse Codex, TraeX, Augure Code, and Open Interpreter sources in place;
+// source and session identities are unchanged.)
+const dataVersion = 190
 
 const archiveOnlyVersionBase = 1 << 20
 

@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-23
+last_edited: 2026-11-25
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -17,6 +17,11 @@ The latest release is
   Takeout does not write. Each prompt now becomes a session with your prompt
   and Gemini's response as separate messages. Time zone abbreviations that your
   computer's time zone uses, such as `IST`, are now recognized.
+- Codex sessions that Codex imported from Claude Code now show their first real
+  prompt as the title. Before, a session that opened with a slash command such
+  as `/model` showed raw `<command-name>` text in the session lists and in Top
+  Sessions. The transcript is unchanged. The next sync reparses Codex, TraeX,
+  Augure Code, and Open Interpreter sessions in place.
 
 ## 0.48.0
 
