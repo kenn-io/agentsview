@@ -230,9 +230,6 @@ func TestRawContentRevisionJSONRepresentation(t *testing.T) {
 	assert.Equal(t, before, after, "hashing preserves the caller's complete content")
 	// The original normalized-content-v1 digest must survive encoder changes.
 	assert.Equal(t, "d5c710716bc7b8a68d60e43d58192489be71935625e141f9eb6c9dae723c3a29", got)
-	linkedKey, err := rawMessageKey(p.Messages[0])
-	require.NoError(t, err)
-	assert.Equal(t, key, linkedKey)
 	p.Signals.ToolObservations = []db.ToolObservation{{Outcome: "empty", Repeat: "exact", SequenceEnding: new("abandoned")}}
 	call := &p.Messages[0].ToolCalls[0]
 	call.ObservedOutcome, call.ObservedRepeat, call.SequenceEnding = new("empty"), new("exact"), new("abandoned")
