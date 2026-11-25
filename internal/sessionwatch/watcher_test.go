@@ -60,6 +60,44 @@ func (s *changingIdentityStore) GetSessionWatchState(string) (db.SessionWatchSta
 	return s.state.Load().(db.SessionWatchState), nil
 }
 
+type unavailableVersionStore struct {
+	changingIdentityStore
+	unavailable atomic.Bool
+}
+
+func (s *unavailableVersionStore) GetSessionVersion(ctx context.Context, id string) (int, int64, bool) {
+	if s.unavailable.Load() {
+		return 0, 0, false
+	}
+	return s.baselineStore.GetSessionVersion(ctx, id)
+}
+
+func TestEventsRevisionChangeWithUnavailableVersion(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		store := &unavailableVersionStore{}
+		store.count.Store(1)
+		store.state.Store(db.SessionWatchState{State: db.SessionWatchResolved, ContentRevision: "one"})
+		updates := New(store, nil).Events(ctx, "session-a")
+		store.unavailable.Store(true)
+		store.state.Store(db.SessionWatchState{State: db.SessionWatchResolved, ContentRevision: "two"})
+		time.Sleep(PollInterval)
+		synctest.Wait()
+		_, ok := <-updates
+		require.True(t, ok)
+		synctest.Wait()
+		store.unavailable.Store(false)
+		time.Sleep(PollInterval)
+		synctest.Wait()
+		select {
+		case <-updates:
+			require.FailNow(t, "unchanged version emitted a second update")
+		default:
+		}
+	})
+}
+
 func TestEventsStaysOpenAcrossResolvedRevisionChange(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())

@@ -128,7 +128,9 @@ func (w *Watcher) Events(
 							return
 						}
 						initial, recovering = current, false
-						lastCount, lastVersion = count, version
+						if ok {
+							lastCount, lastVersion = count, version
+						}
 					}
 				}
 				select {
