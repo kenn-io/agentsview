@@ -912,6 +912,10 @@ describe("live event payloads", () => {
     const next = watchSession("b", vi.fn());
     worker.onerror?.(new Event("error"));
     expect(states.at(-1)).toEqual({ "1": expect.objectContaining({ session: "b" }) });
+    const restartedCount = states.length;
+    vi.advanceTimersByTime(1000);
+    expect(states).toHaveLength(restartedCount + 1);
+    expect(states.at(-1)).toEqual({ "1": expect.objectContaining({ session: "b" }) });
     next.close();
   });
 

@@ -17,11 +17,17 @@ export class LiveHub {
   private credentials: { base: string; token: string } | null = null;
   private connected = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private drainTimer: ReturnType<typeof setTimeout> | null = null;
+  private quiet = new Set<LivePort>();
+  private draining = false;
 
   update(port: LivePort, request: LiveRequest) {
     const previous = this.ports.get(port);
     this.ports.set(port, request);
-    if (!previous || previous.session !== request.session) this.synced.delete(port);
+    if (!previous || previous.session !== request.session) {
+      this.synced.delete(port);
+      this.quiet.delete(port);
+    }
     if (
       (!previous || previous.session !== request.session) &&
       this.source &&
@@ -59,10 +65,12 @@ export class LiveHub {
     }
     this.ports.delete(port);
     this.synced.delete(port);
+    this.quiet.delete(port);
     this.schedule();
   }
 
   close() {
+    this.stopDrain();
     if (this.timer !== null) clearTimeout(this.timer);
     this.timer = null;
     this.source?.close();
@@ -96,6 +104,11 @@ export class LiveHub {
     const changed =
       sessions.size !== this.sessions.size || [...sessions].some((id) => !this.sessions.has(id));
     if (this.source && request && !changed && this.sameCredentials(request)) return;
+    if (this.draining) {
+      // A new handoff interrupts the old watcher's overlap, so refresh again.
+      this.stopDrain();
+      this.synced.clear();
+    }
     const old = this.previous ?? this.source;
     this.connected = this.sameCredentials(request) && (this.connected || old?.readyState === 1);
     if (!request || !this.sameCredentials(request) || old?.readyState !== 1) {
@@ -137,7 +150,7 @@ export class LiveHub {
     this.source = source;
     let errors = 0;
     let opened = this.connected;
-    let quiet = new Set<LivePort>();
+    this.quiet.clear();
 
     source.addEventListener("open", () => {
       if (this.source !== source && this.previous !== source) return;
@@ -153,10 +166,9 @@ export class LiveHub {
         this.synced.clear();
         this.broadcast({ type: "error" });
       }
-      quiet.clear();
+      this.quiet.clear();
       if (this.previous === source) {
-        source.close();
-        this.previous = null;
+        this.stopDrain();
         return;
       }
       if (errors >= 5) {
@@ -178,11 +190,18 @@ export class LiveHub {
     ]) {
       source.addEventListener(type, (event) => {
         if (this.source !== source && this.previous !== source) return;
-        if (this.source === source && this.previous) {
+        if (this.previous === source && this.draining) {
+          if (type === "session_updated" || type === "session_missing")
+            this.broadcast(
+              { type, data: (event as MessageEvent).data as string },
+              (event as MessageEvent).data as string,
+            );
+          return;
+        }
+        if (this.source === source && this.previous && !this.draining) {
           // The server subscribes to archive updates before sending its first frame.
-          if (this.continuous && this.previous.readyState === 1) quiet = new Set(this.synced);
-          this.previous.close();
-          this.previous = null;
+          if (this.continuous && this.previous.readyState === 1) this.quiet = new Set(this.synced);
+          this.draining = true;
           this.ready.clear();
           this.timing.clear();
         }
@@ -198,8 +217,14 @@ export class LiveHub {
           }
         }
         const frame = { type, data };
-        this.broadcast(frame, session, quiet);
-        if (type === "events_ready") quiet.clear();
+        this.broadcast(frame, session, this.quiet);
+        if (type === "events_ready") {
+          this.quiet.clear();
+          if (this.draining && this.drainTimer === null) {
+            // Let the old session watcher poll once after the replacement's baseline.
+            this.drainTimer = setTimeout(() => this.stopDrain(), 1500);
+          }
+        }
         if (type === "events_ready" || type === "session_ready" || type === "session_missing") {
           this.ready.set(session ?? "", frame);
           if (type === "session_missing") this.timing.delete(session ?? "");
@@ -209,12 +234,23 @@ export class LiveHub {
     }
   }
 
+  private stopDrain() {
+    if (this.drainTimer !== null) clearTimeout(this.drainTimer);
+    this.drainTimer = null;
+    this.previous?.close();
+    this.previous = null;
+    this.draining = false;
+  }
+
   private broadcast(frame: LiveFrame, session?: string, quiet = new Set<LivePort>()) {
     for (const [port, request] of this.ports) {
       if (session !== undefined && request.session !== session) continue;
       if ((frame.type === "events_ready" || frame.type === "data_changed") && request.session)
         continue;
-      if (quiet.has(port) && ["events_ready", "session_ready", "session.timing"].includes(frame.type))
+      if (
+        quiet.has(port) &&
+        ["events_ready", "session_ready", "session.timing"].includes(frame.type)
+      )
         continue;
       this.deliver(port, frame);
     }

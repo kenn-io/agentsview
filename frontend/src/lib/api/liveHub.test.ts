@@ -72,11 +72,13 @@ describe("shared live stream", () => {
     expect(a).toEqual([]);
     old.emit("data_changed", '{"scope":"sessions"}');
     next.emit("session_ready", "a");
-    expect(old.closed).toBe(true);
+    expect(old.closed).toBe(false);
     old.emit("data_changed", '{"scope":"sessions"}');
     next.emit("session.timing", '{"session_id":"a","turn_count":2}');
     next.emit("session_ready", "b");
     next.emit("events_ready", "{}");
+    vi.advanceTimersByTime(1500);
+    expect(old.closed).toBe(true);
     next.emit("session_updated", "a");
     next.emit("data_changed", '{"scope":"messages"}');
     expect(a.map((frame) => frame.type)).toEqual([
@@ -96,6 +98,7 @@ describe("shared live stream", () => {
     expect(next.closed).toBe(false);
     next.emit("data_changed", '{"scope":"sessions"}');
     sources[2]!.emit("events_ready", "{}");
+    vi.advanceTimersByTime(1500);
     expect(next.closed).toBe(true);
     expect(archive.map((frame) => frame.type)).toEqual([
       "events_ready",
@@ -111,9 +114,10 @@ describe("shared live stream", () => {
     const archive = { postMessage: vi.fn() };
     const a = { postMessage: vi.fn() };
     const b = { postMessage: vi.fn() };
-    hub.update(archive, request());
     hub.update(a, request("a"));
+    hub.update(archive, request());
     const old = sources[0]!;
+    expect(old.url.searchParams.getAll("session")).toEqual(["a"]);
     old.emit("session_ready", "a");
     old.emit("session.timing", '{"session_id":"a"}');
     old.emit("events_ready", "{}");
@@ -133,9 +137,16 @@ describe("shared live stream", () => {
       "session_ready",
       "session.timing",
     ]);
+    old.emit("session_updated", "a");
+    expect(a.postMessage).toHaveBeenLastCalledWith({ type: "session_updated", data: "a" });
+    vi.advanceTimersByTime(1500);
+    expect(old.closed).toBe(true);
+    old.emit("session_updated", "a");
+    expect(a.postMessage).toHaveBeenCalledTimes(1);
     next.emit("session_updated", "a");
     next.emit("session.timing", '{"session_id":"a"}');
     expect(a.postMessage.mock.calls.map(([frame]) => frame.type)).toEqual([
+      "session_updated",
       "session_updated",
       "session.timing",
     ]);
@@ -144,6 +155,44 @@ describe("shared live stream", () => {
     vi.advanceTimersByTime(250);
     sources[2]!.emit("session_ready", "a");
     expect(a.postMessage).toHaveBeenLastCalledWith({ type: "session_ready", data: "a" });
+    hub.close();
+  });
+
+  it.each(["leave", "change session"])("restores readiness after a port can %s", (action) => {
+    const hub = new LiveHub();
+    const a = { postMessage: vi.fn() };
+    hub.update(a, request("a"));
+    sources[0]!.emit("session_ready", "a");
+    sources[0]!.emit("events_ready", "{}");
+    hub.update({ postMessage: vi.fn() }, request("b"));
+    vi.advanceTimersByTime(250);
+    const next = sources[1]!;
+    next.emit("session_ready", "b");
+    if (action === "leave") hub.leave(a);
+    else hub.update(a, request("c"));
+    hub.update(a, request("a"));
+    a.postMessage.mockClear();
+    next.emit("session_ready", "a");
+    expect(a.postMessage).toHaveBeenCalledWith({ type: "session_ready", data: "a" });
+    hub.close();
+  });
+
+  it("refreshes sessions when another handoff interrupts the old watcher's overlap", () => {
+    const hub = new LiveHub();
+    const a = { postMessage: vi.fn() };
+    hub.update(a, request("a"));
+    sources[0]!.emit("session_ready", "a");
+    sources[0]!.emit("events_ready", "{}");
+    hub.update({ postMessage: vi.fn() }, request("b"));
+    vi.advanceTimersByTime(250);
+    sources[1]!.emit("session_ready", "a");
+    sources[1]!.emit("events_ready", "{}");
+    a.postMessage.mockClear();
+    hub.update({ postMessage: vi.fn() }, request("c"));
+    vi.advanceTimersByTime(250);
+    expect(sources[0]!.closed).toBe(true);
+    sources[2]!.emit("session_ready", "a");
+    expect(a.postMessage).toHaveBeenCalledWith({ type: "session_ready", data: "a" });
     hub.close();
   });
 
@@ -182,8 +231,9 @@ describe("shared live stream", () => {
       }
       sources[reason === "reconnect" ? 0 : 1]!.emit("events_ready", "{}");
       sources[reason === "reconnect" ? 0 : 1]!.emit("session_ready", "existing");
-      expect(session.postMessage.mock.calls.filter(([frame]) => frame.type === "session_ready"))
-        .toHaveLength(2);
+      expect(
+        session.postMessage.mock.calls.filter(([frame]) => frame.type === "session_ready"),
+      ).toHaveLength(2);
       expect(archive.postMessage.mock.calls.map(([frame]) => frame.type)).toEqual([
         "events_ready",
         "error",
@@ -209,6 +259,7 @@ describe("shared live stream", () => {
     sources[0]!.emit("data_changed", '{"scope":"sessions"}');
     sources[2]!.emit("session_ready", "a");
     sources[2]!.emit("events_ready", "{}");
+    vi.advanceTimersByTime(1500);
     expect(sources[0]!.closed).toBe(true);
     expect(archive.postMessage.mock.calls.map(([frame]) => frame.type)).toEqual([
       "events_ready",
@@ -300,6 +351,7 @@ describe("shared live stream", () => {
     vi.advanceTimersByTime(250);
     expect(active.closed).toBe(false);
     sources[1]!.emit("events_ready", "{}");
+    vi.advanceTimersByTime(1500);
     expect(active.closed).toBe(true);
     expect(sources[1]!.url.searchParams.has("session")).toBe(false);
     hub.leave(archive);
