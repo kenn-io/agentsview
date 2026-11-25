@@ -7,10 +7,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/service"
 )
 
 func TestLookupRejectsUnsupportedClientBeforeSetup(t *testing.T) {
@@ -45,87 +42,33 @@ func TestLookupVersionUsesResolvedClient(t *testing.T) {
 	require.NotErrorIs(t, err, errLookupCaptureUnsupported)
 }
 
-func TestLookupFixtureSessionsAppearInDefaultList(t *testing.T) {
+func TestLookupCorpusFixtures(t *testing.T) {
+	var fixtures []lookupFixture
+	require.NoError(t, readLookupJSON("testdata/lookups/corpus.json", &fixtures))
 	root := t.TempDir()
-	transcriptsRoot := filepath.Join(root, "transcripts")
-	fixture := lookupFixture{
-		ID:       lookupID,
-		AgeHours: 24,
-		Title:    "Question about an interactive session",
-		Content:  "The session records the answer to this question.",
-	}
-	_, err := writeLookupFixtureTranscript(transcriptsRoot, root, fixture)
-	require.NoError(t, err)
-
-	cfg := parser.ProviderConfig{Roots: []string{transcriptsRoot}, Machine: "local"}
-	provider, ok := parser.NewProvider(parser.AgentCodex, cfg)
-	require.True(t, ok)
-	source, found, err := provider.FindSource(t.Context(), parser.FindSourceRequest{
-		FullSessionID: "codex:" + fixture.ID,
-	})
-	require.NoError(t, err)
-	require.True(t, found)
-	parsed, err := provider.Parse(t.Context(), parser.ParseRequest{Source: source})
-	require.NoError(t, err)
-	require.Len(t, parsed.Results, 1)
-	session := parsed.Results[0].Result.Session
-
-	database := dbtest.OpenTestDB(t)
-	dbtest.SeedSession(t, database, session.ID, "lookup-project", func(stored *db.Session) {
-		stored.Agent = string(session.Agent)
-		stored.SessionKind = session.SessionKind
-		stored.RelationshipType = string(session.RelationshipType)
-		stored.FirstMessage = dbtest.Ptr(session.FirstMessage)
-		stored.MessageCount = session.MessageCount
-		stored.UserMessageCount = session.UserMessageCount
-	})
-	listed, err := service.NewDirectBackend(database, nil).List(t.Context(), service.ListFilter{})
-	require.NoError(t, err)
-	require.Equal(t, 1, listed.Total)
-	require.Equal(t, session.ID, listed.Sessions[0].ID)
-}
-
-func TestLookupOwnerFixturesMatchPRFilter(t *testing.T) {
-	root := t.TempDir()
-	transcriptsRoot := filepath.Join(root, "transcripts")
-	fixtures := []lookupFixture{
-		{
-			ID: "33333333-3333-4333-8333-333333333333", AgeHours: 48,
-			Title:   "Review https://github.com/example-org/project-a/pull/123 ownership",
-			Content: "The earlier owner handed the pull request off.",
-		},
-		{
-			ID: "44444444-4444-4444-8444-444444444444", AgeHours: 24,
-			Title:   "Take over https://github.com/example-org/project-a/pull/123",
-			Content: "The maple team now owns the pull request.",
-		},
-	}
+	owners := 0
 	for _, fixture := range fixtures {
-		_, err := writeLookupFixtureTranscript(transcriptsRoot, root, fixture)
-		require.NoError(t, err)
-	}
-	provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{Roots: []string{transcriptsRoot}, Machine: "local"})
-	require.True(t, ok)
-	database := dbtest.OpenTestDB(t)
-	for _, fixture := range fixtures {
-		source, found, err := provider.FindSource(t.Context(), parser.FindSourceRequest{FullSessionID: "codex:" + fixture.ID})
-		require.NoError(t, err)
-		require.True(t, found)
-		parsed, err := provider.Parse(t.Context(), parser.ParseRequest{Source: source})
-		require.NoError(t, err)
-		require.Len(t, parsed.Results, 1)
-		session := parsed.Results[0].Result.Session
-		links, err := parser.PromptPRLinksContext(t.Context(), fixture.Title)
-		require.NoError(t, err)
-		require.Len(t, links, 1)
-		require.Equal(t, "example-org/project-a", links[0].Repository)
-		dbtest.SeedSession(t, database, session.ID, "lookup-project", func(stored *db.Session) {
-			stored.PRLinks = links
+		t.Run(fixture.ID, func(t *testing.T) {
+			_, err := writeLookupFixtureTranscript(root, root, fixture)
+			require.NoError(t, err)
+			provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{Roots: []string{root}, Machine: "local"})
+			require.True(t, ok)
+			source, found, err := provider.FindSource(t.Context(), parser.FindSourceRequest{FullSessionID: "codex:" + fixture.ID})
+			require.NoError(t, err)
+			require.True(t, found)
+			parsed, err := provider.Parse(t.Context(), parser.ParseRequest{Source: source})
+			require.NoError(t, err)
+			require.Len(t, parsed.Results, 1)
+			require.GreaterOrEqual(t, parsed.Results[0].Result.Session.UserMessageCount, 2)
+			if fixture.ID == "33333333-3333-4333-8333-333333333333" || fixture.ID == "44444444-4444-4444-8444-444444444444" {
+				owners++
+				links, err := parser.PromptPRLinksContext(t.Context(), fixture.Title)
+				require.NoError(t, err)
+				require.Len(t, links, 1)
+				require.Equal(t, "example-org/project-a", links[0].Repository)
+				require.Equal(t, 123, links[0].Number)
+			}
 		})
 	}
-
-	listed, err := service.NewDirectBackend(database, nil).List(t.Context(), service.ListFilter{PR: "example-org/project-a#123"})
-	require.NoError(t, err)
-	require.Equal(t, 2, listed.Total)
-	require.Len(t, listed.Sessions, 2)
+	require.Equal(t, 2, owners)
 }

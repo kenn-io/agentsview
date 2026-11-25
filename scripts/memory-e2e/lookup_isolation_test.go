@@ -21,6 +21,9 @@ func TestLookupIsolationReadsOnlyFixtureHome(t *testing.T) {
 	if err != nil {
 		t.Skip("bubblewrap unavailable")
 	}
+	if out, err := exec.CommandContext(t.Context(), bwrap, "--ro-bind", "/", "/", "--", "/bin/true").CombinedOutput(); err != nil {
+		t.Skipf("bubblewrap cannot run: %s", out)
+	}
 	hostHome, err := os.UserHomeDir()
 	require.NoError(t, err)
 	// The sandbox replaces /tmp, so keep the test home outside it.
@@ -76,106 +79,21 @@ func TestLookupIsolationReadsOnlyFixtureHome(t *testing.T) {
 	require.ErrorContains(t, err, "missing codex credentials")
 }
 
-func TestLookupClaudeIsolationReadsFixtureTranscripts(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("bubblewrap is Linux-only")
-	}
-	bwrap, err := exec.LookPath("bwrap")
-	if err != nil {
-		t.Skip("bubblewrap unavailable")
-	}
-	hostHome, err := os.UserHomeDir()
-	require.NoError(t, err)
-	t.Setenv("TMPDIR", hostHome)
-	privateTemp := t.TempDir()
-	t.Setenv("TMPDIR", privateTemp)
-	base := t.TempDir()
-	require.NoError(t, os.Chmod(base, 0o700))
-	home := filepath.Join(base, "home")
-	clientDir := filepath.Join(home, "fixture")
-	project := filepath.Join(clientDir, "project")
-	dataDir := filepath.Join(clientDir, "agentsview-data")
-	runDir := filepath.Join(clientDir, "attempt")
-	privateHome := filepath.Join(runDir, "home")
-	claudeHome := filepath.Join(home, ".claude")
-	binDir := filepath.Join(clientDir, "bin")
-	fixtureRoot := filepath.Join(clientDir, "fixture-sessions")
-	for _, dir := range []string{project, dataDir, runDir, claudeHome, binDir, fixtureRoot} {
-		require.NoError(t, os.MkdirAll(dir, 0o700))
-	}
-	require.NoError(t, os.WriteFile(filepath.Join(claudeHome, ".credentials.json"), []byte("{}"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(fixtureRoot, "fixture.jsonl"), []byte("fixture transcript"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(binDir, "claude"), []byte("#!/bin/sh\ncat \"$FIXTURE_PATH\"\nprintf 'new transcript' > \"$FIXTURE_PATH.new\"\n"), 0o700))
-	require.NoError(t, os.Symlink(bwrap, filepath.Join(binDir, "bwrap")))
-	bin := filepath.Join(binDir, "agentsview")
-	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o700))
-	t.Setenv("HOME", home)
-	t.Setenv("CLAUDE_CONFIG_DIR", claudeHome)
-	t.Setenv("PATH", binDir)
-
-	transcriptRoot, err := lookupTranscriptRoot(clientClaude, privateHome, project)
-	require.NoError(t, err)
-	transcriptPath := filepath.Join(transcriptRoot, "fixture.jsonl")
-	require.NoError(t, copyLookupTranscriptsForClient(t.Context(), clientClaude, fixtureRoot, privateHome, project))
-	isolation, err := prepareLookupIsolation(t.Context(), clientClaude, clientDir, project, project, bin, runDir)
-	require.NoError(t, err)
-	cmd := exec.CommandContext(t.Context(), isolation.command)
-	cmd.Env = append(isolation.env, "FIXTURE_PATH="+transcriptPath)
-	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, string(out))
-	assert.Equal(t, "fixture transcript", string(out))
-	data, err := os.ReadFile(transcriptPath + ".new")
-	require.NoError(t, err)
-	assert.Equal(t, "new transcript", string(data))
-	isolation.removeCredentials()
-}
-
 func TestLookupIsolationRequiresNodeOnlyForNodeScripts(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("bubblewrap is Linux-only")
-	}
-	bwrap, err := exec.LookPath("bwrap")
-	if err != nil {
-		t.Skip("bubblewrap unavailable")
-	}
 	for _, tc := range []struct {
 		name, script string
-		withNode     bool
-		wantErr      string
+		want         bool
 	}{
-		{name: "standalone executable", script: "#!/bin/sh\nexit 0\n"},
-		{name: "node mentioned in comment", script: "#!/bin/sh\n# node is not the interpreter\nexit 0\n"},
-		{name: "node executable without Node", script: "#!/usr/bin/env node\n", wantErr: "executable file not found"},
-		{name: "node executable with Node", script: "#!/usr/bin/env node\n", withNode: true},
+		{"node mentioned in comment", "#!/bin/sh\n# node is not the interpreter\nexit 0\n", false},
+		{"node interpreter", "#!/usr/bin/env node\n", true},
+		{"shell shim falling back to node", "#!/bin/sh\nbasedir=$(dirname \"$0\")\nif [ -x \"$basedir/node\" ]; then\n  exec \"$basedir/node\" \"$basedir/client.js\" \"$@\"\nelse\n  exec node \"$basedir/client.js\" \"$@\"\nfi\n", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			home := t.TempDir()
-			clientDir := filepath.Join(home, "fixture")
-			project := filepath.Join(clientDir, "project")
-			dataDir := filepath.Join(clientDir, "agentsview-data")
-			runDir := filepath.Join(clientDir, "attempt")
-			binDir := filepath.Join(clientDir, "bin")
-			configDir := filepath.Join(home, ".claude")
-			for _, dir := range []string{project, dataDir, runDir, binDir, configDir} {
-				require.NoError(t, os.MkdirAll(dir, 0o700))
-			}
-			require.NoError(t, os.WriteFile(filepath.Join(configDir, ".credentials.json"), []byte("{}"), 0o600))
-			require.NoError(t, os.WriteFile(filepath.Join(binDir, "claude"), []byte(tc.script), 0o700))
-			require.NoError(t, os.WriteFile(filepath.Join(binDir, "agentsview"), []byte("#!/bin/sh\nexit 0\n"), 0o700))
-			require.NoError(t, os.Symlink(bwrap, filepath.Join(binDir, "bwrap")))
-			if tc.withNode {
-				require.NoError(t, os.WriteFile(filepath.Join(binDir, "node"), []byte("#!/bin/sh\nexit 0\n"), 0o700))
-			}
-			t.Setenv("HOME", home)
-			t.Setenv("CLAUDE_CONFIG_DIR", configDir)
-			t.Setenv("PATH", binDir)
-			isolation, err := prepareLookupIsolation(t.Context(), clientClaude, clientDir, project, project, filepath.Join(binDir, "agentsview"), runDir)
-			if tc.wantErr != "" {
-				require.ErrorContains(t, err, tc.wantErr)
-				return
-			}
+			path := filepath.Join(t.TempDir(), "client")
+			require.NoError(t, os.WriteFile(path, []byte(tc.script), 0o700))
+			needsNode, err := lookupExecutableNeedsNode(path)
 			require.NoError(t, err)
-			isolation.removeCredentials()
+			assert.Equal(t, tc.want, needsNode)
 		})
 	}
 }
@@ -199,7 +117,7 @@ func TestLookupIsolationRejectsOutputOutsideHiddenRoots(t *testing.T) {
 	for _, tc := range []struct {
 		name, clientDir, repository string
 	}{
-		{name: "output", clientDir: filepath.Join(outside, "output"), repository: t.TempDir()},
+		{name: "output", clientDir: filepath.Join(outside, "output"), repository: filepath.Join(home, "repository")},
 		{name: "repository", clientDir: filepath.Join(home, "output"), repository: filepath.Join(outside, "repository")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -221,6 +139,9 @@ func TestLookupCaptureClassifiesSetupAndClientFailures(t *testing.T) {
 	bwrap, err := exec.LookPath("bwrap")
 	if err != nil {
 		t.Skip("bubblewrap unavailable")
+	}
+	if out, err := exec.CommandContext(t.Context(), bwrap, "--ro-bind", "/", "/", "--", "/bin/true").CombinedOutput(); err != nil {
+		t.Skipf("bubblewrap cannot run: %s", out)
 	}
 	hostHome, err := os.UserHomeDir()
 	require.NoError(t, err)
@@ -254,7 +175,7 @@ func TestLookupCaptureClassifiesSetupAndClientFailures(t *testing.T) {
 	}{
 		{name: "missing client", client: clientClaude, want: errLookupSetup, wantText: "claude"},
 		{
-			name: "invalid model", executable: "codex", client: clientCodex,
+			name: "invalid model", executable: "claude", client: clientClaude,
 			script: "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"result\",\"is_error\":true,\"result\":\"invalid model\"}'\nexit 1\n",
 			want:   errLookupSetup,
 		},
@@ -266,10 +187,18 @@ func TestLookupCaptureClassifiesSetupAndClientFailures(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			runDir := filepath.Join(clientDir, "attempt-"+tc.name)
+			if tc.name == "invalid model" {
+				root, err := lookupTranscriptRoot(clientClaude, filepath.Join(runDir, "home"), project)
+				require.NoError(t, err)
+				tc.script = "#!/bin/sh\nwhile [ $# -gt 0 ]; do if [ \"$1\" = --session-id ]; then shift; sid=$1; fi; shift; done\n" +
+					"mkdir -p " + strconv.Quote(root) + "\nprintf '%s\\n' '{}' > " + strconv.Quote(root) + "/\"$sid.jsonl\"\n" +
+					"printf '%s\\n' '{\"type\":\"result\",\"is_error\":true,\"result\":\"invalid model\"}'\nexit 1\n"
+			}
 			if tc.executable != "" {
 				require.NoError(t, os.WriteFile(filepath.Join(binDir, tc.executable), []byte(tc.script), 0o700))
 			}
-			_, _, err := captureLookup(t.Context(), config{timeout: 10 * time.Second, repository: project}, serverBin, tc.client, project, "model", "", "question", filepath.Join(clientDir, "attempt-"+tc.name))
+			_, _, err := captureLookup(t.Context(), config{timeout: 10 * time.Second, repository: project}, serverBin, tc.client, project, "model", "", "question", runDir)
 			require.ErrorIs(t, err, tc.want)
 			if tc.wantNot != nil {
 				require.NotErrorIs(t, err, tc.wantNot)

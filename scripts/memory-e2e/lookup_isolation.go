@@ -8,12 +8,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/shellquote"
 )
+
+var nodeShellExec = regexp.MustCompile(`(?m)^\s*exec\s+node(?:\s|$)`)
 
 // lookupIsolation hides the operator's home from the agent while leaving the
 // isolated corpus and the selected client executable available.
@@ -211,7 +214,7 @@ func lookupExecutableNeedsNode(path string) (bool, error) {
 	if line, _, ok := strings.Cut(shebang, "\n"); ok {
 		shebang = line
 	}
-	return strings.HasPrefix(shebang, "#!") && strings.Contains(strings.ToLower(shebang), "node"), nil
+	return strings.HasPrefix(shebang, "#!") && (strings.Contains(strings.ToLower(shebang), "node") || nodeShellExec.Match(buf[:n])), nil
 }
 
 func copyLookupTranscripts(ctx context.Context, source, destination string) error {
