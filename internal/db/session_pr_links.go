@@ -397,7 +397,7 @@ func taskPRLinks(ctx context.Context, input string) ([]PRLink, error) {
 func shellInputCommands(input string) ([]string, bool) {
 	if !jsontext.Value(input).IsValid() {
 		text := strings.TrimSpace(input)
-		return []string{input}, text != "" && text[0] != '{' && text[0] != '['
+		return []string{input}, text != ""
 	}
 	var payload struct {
 		Command     jsontext.Value `json:"command"`

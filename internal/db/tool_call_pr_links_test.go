@@ -51,3 +51,17 @@ func TestToolCallPRLinks(t *testing.T) {
 		})
 	}
 }
+
+func TestToolCallPRLinksRawShellGroups(t *testing.T) {
+	for _, input := range []string{
+		`{ gh pr view 42 -R example/repo; }`,
+		`[ -n "$VALUE" ] && gh pr view 42 -R example/repo`,
+	} {
+		t.Run(input, func(t *testing.T) {
+			links, err := db.ToolCallPRLinks(t.Context(), []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", InputJSON: input}}}})
+			require.NoError(t, err)
+			require.Len(t, links, 1)
+			assert.Equal(t, "https://github.com/example/repo/pull/42", links[0].URL)
+		})
+	}
+}

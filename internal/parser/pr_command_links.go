@@ -114,18 +114,39 @@ func prCommandFlag(command, flag string) (takesValue, ok bool) {
 }
 
 // unwrapPRCommand removes execution wrappers whose arguments have fixed roles.
-func unwrapPRCommand(args []*syntax.Word) []*syntax.Word {
-	for len(args) > 0 {
-		words, literal := shellWords(args)
-		if !literal[0] {
-			return nil
+func unwrapPRCommand(ctx context.Context, args []*syntax.Word) ([]*syntax.Word, error) {
+	words := make([]string, len(args))
+	literal := make([]bool, len(args))
+	for i, arg := range args {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
+		words[i], literal[i] = shellLiteral(arg.Parts)
+	}
+	for len(args) > 0 {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if !literal[0] {
+			return nil, nil
+		}
+		i := 1
 		switch words[0] {
 		case "command", "env":
-			args = args[wrappedCommandStart(words, literal):]
+			for i < len(words) && literal[i] && (words[0] == "command" && words[i] == "-p" || words[0] == "env" && strings.Contains(words[i], "=")) {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				i++
+			}
+			if i < len(words) && literal[i] && words[i] == "--" {
+				i++
+			}
 		case "timeout":
-			i := 1
 			for i < len(words) && literal[i] && strings.HasPrefix(words[i], "-") {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
 				flag := words[i]
 				i++
 				switch flag {
@@ -136,31 +157,21 @@ func unwrapPRCommand(args []*syntax.Word) []*syntax.Word {
 				case "--foreground", "--preserve-status", "-v", "--verbose":
 				default:
 					if !strings.HasPrefix(flag, "--kill-after=") && !strings.HasPrefix(flag, "--signal=") {
-						return nil
+						return nil, nil
 					}
 				}
 			}
 		duration:
 			if i >= len(words) || !literal[i] || words[i] == "" {
-				return nil
+				return nil, nil
 			}
-			args = args[i+1:]
+			i++
 		default:
-			return args
+			return args, nil
 		}
+		args, words, literal = args[i:], words[i:], literal[i:]
 	}
-	return nil
-}
-
-func wrappedCommandStart(words []string, literal []bool) int {
-	i := 1
-	for i < len(words) && literal[i] && (words[0] == "command" && words[i] == "-p" || words[0] == "env" && strings.Contains(words[i], "=")) {
-		i++
-	}
-	if i < len(words) && literal[i] && words[i] == "--" {
-		i++
-	}
-	return i
+	return nil, nil
 }
 
 // ghPRArgs moves inherited repository flags after the PR action.
@@ -242,7 +253,10 @@ func analyzePRCommand(ctx context.Context, command string, hostUnknown bool, dep
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		args := unwrapPRCommand(call.Args)
+		args, err := unwrapPRCommand(ctx, call.Args)
+		if err != nil {
+			return nil, err
+		}
 		if inner, ok := shellCommand(args); ok && depth < 8 {
 			found, err := analyzePRCommand(ctx, inner, hostUnknown || strings.Contains(inner, "GH_HOST"), depth+1)
 			if err != nil {

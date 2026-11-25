@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -92,4 +93,27 @@ func TestCommandPRLinks(t *testing.T) {
 		_, err := AnalyzePRCommand(ctx, "gh pr view 42")
 		assert.ErrorIs(t, err, context.Canceled)
 	})
+}
+
+type cancelDuringWrappers struct {
+	context.Context
+	checks int
+	cancel context.CancelFunc
+}
+
+func (c *cancelDuringWrappers) Err() error {
+	c.checks++
+	if c.checks == 2020 {
+		c.cancel()
+	}
+	return c.Context.Err()
+}
+
+func TestCommandPRLinksCancellationDuringWrappers(t *testing.T) {
+	base, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	ctx := &cancelDuringWrappers{Context: base, cancel: cancel}
+	command := strings.Repeat("command ", 2000) + "gh pr view 42 -R example/repo"
+	_, err := AnalyzePRCommand(ctx, command)
+	assert.ErrorIs(t, err, context.Canceled)
 }
