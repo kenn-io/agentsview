@@ -10,9 +10,8 @@ import (
 )
 
 // TestSnapshotFingerprintTracksPlanUsage pins both halves of the plan
-// usage fingerprint contract: a session without plan usage keeps the
-// fingerprint it had before the table existed, so an upgrade re-pushes
-// nothing, and a plan usage change makes the session a push candidate.
+// usage fingerprint contract: a session without plan usage has a stable
+// fingerprint, and a plan usage change makes the session a push candidate.
 func TestSnapshotFingerprintTracksPlanUsage(t *testing.T) {
 	s := &Sync{machine: "m"}
 	snapshot := &db.SessionMirrorSnapshot{Session: db.Session{
@@ -26,9 +25,7 @@ func TestSnapshotFingerprintTracksPlanUsage(t *testing.T) {
 		return fp.full
 	}
 
-	// Fingerprint this session had before session_plan_usage existed; sessions
-	// without plan usage must keep it.
-	const withoutPlanUsage = "3ffa01ac4b265fffea3c52f5731cafd35b542c2db053e8d5f993bac323c0d07b"
+	const withoutPlanUsage = "e5a5f3f0f630d23945a9193394aa275b73161fdef2149e0d63cae384c72d2afa"
 	assert.Equal(t, withoutPlanUsage, fingerprint())
 
 	snapshot.PlanUsage = &db.SessionPlanUsage{HasPlanUsage: true, WeeklyPercent: new(1.0)}

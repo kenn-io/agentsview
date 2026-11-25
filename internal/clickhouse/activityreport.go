@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -174,9 +175,13 @@ func (s *Store) BuildActivityReportArtifacts(
 	candidateWhere, candidateArgs := clickActivityReportCandidateWhere(
 		f, rangeStartUTC, rangeEndUTC)
 	evidenceWhere, evidenceArgs := clickActivityReportCandidateWhere(db.AnalyticsFilter{Timezone: f.Timezone, IncludeSubagents: true, IncludeForks: true}, rangeStartUTC, rangeEndUTC)
-	evidenceWhere = "(" + evidenceWhere + ") AND s.relationship_type = 'subagent'"
-	keyWhere := "(" + candidateWhere + ") OR (" + evidenceWhere + ")"
-	keyArgs := append(slices.Clone(candidateArgs), evidenceArgs...)
+	needsEvidence := candidateWhere != evidenceWhere || !reflect.DeepEqual(candidateArgs, evidenceArgs)
+	keyWhere, keyArgs := candidateWhere, candidateArgs
+	if needsEvidence {
+		evidenceWhere = "(" + evidenceWhere + ") AND s.relationship_type = 'subagent'"
+		keyWhere = "(" + candidateWhere + ") OR (" + evidenceWhere + ")"
+		keyArgs = append(slices.Clone(candidateArgs), evidenceArgs...)
+	}
 	// A range that has ended does not depend on the time of the request, so
 	// its report is kept per the rows it reads; a range in progress moves its
 	// effective end with every request and is always built. The key is taken
@@ -200,9 +205,13 @@ func (s *Store) BuildActivityReportArtifacts(
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
 	}
-	evidence, _, evidenceVersions, err := s.activityReportSessions(ctx, evidenceWhere, evidenceArgs, memoKey == "")
-	if err != nil {
-		return activity.CandidateArtifacts{}, err
+	var evidence []activity.SessionMeta
+	var evidenceVersions map[string]uint64
+	if needsEvidence {
+		evidence, _, evidenceVersions, err = s.activityReportSessions(ctx, evidenceWhere, evidenceArgs, memoKey == "")
+		if err != nil {
+			return activity.CandidateArtifacts{}, err
+		}
 	}
 	selected := make(map[string]bool, len(ids))
 	for _, id := range ids {
