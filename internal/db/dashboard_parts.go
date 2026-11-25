@@ -101,7 +101,7 @@ func (db *DB) dashboardSessions(ctx context.Context, f AnalyticsFilter) ([]dashb
 	loc := f.location()
 	dateCol := "COALESCE(NULLIF(s.started_at, ''), s.created_at)"
 	where, args := f.buildWhereWithDate(dateCol, true, "s.id")
-	rows, err := db.getReader().QueryContext(ctx, `SELECT s.id, `+dateCol+`, s.agent, s.message_count, s.transcript_revision || '|' || COALESCE(s.trends_generation, '') || '|' || s.message_count, COALESCE(s.dashboard_parts_generation, ''), `+toolsSessionFingerprintSQL+` FROM sessions s WHERE `+where+` ORDER BY s.id`, args...)
+	rows, err := db.getReader().QueryContext(ctx, `SELECT s.id, `+dateCol+`, s.agent, s.message_count, s.transcript_revision || '|' || COALESCE(s.trends_generation, '') || '|' || s.message_count FROM sessions s WHERE `+where+` ORDER BY s.id`, args...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -110,14 +110,12 @@ func (db *DB) dashboardSessions(ctx context.Context, f AnalyticsFilter) ([]dashb
 	versions := make(map[string]string)
 	for rows.Next() {
 		var s dashboardSession
-		var toolsFingerprint, dirtyToken string
-		if err := rows.Scan(&s.ID, &s.Date, &s.Agent, &s.MessageCount, &s.Fingerprint, &dirtyToken, &toolsFingerprint); err != nil {
+		if err := rows.Scan(&s.ID, &s.Date, &s.Agent, &s.MessageCount, &s.Fingerprint); err != nil {
 			return nil, nil, err
 		}
 		if !InDateRange(LocalDate(s.Date, loc), f.From, f.To) {
 			continue
 		}
-		s.Fingerprint += "|" + toolsFingerprint + "|" + dirtyToken
 		sessions = append(sessions, s)
 		versions[s.ID] = s.Fingerprint
 	}

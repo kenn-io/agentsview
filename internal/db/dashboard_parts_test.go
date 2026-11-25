@@ -7,7 +7,6 @@ import (
 	"database/sql"
 	"encoding/json/v2"
 	"fmt"
-	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -276,6 +275,7 @@ func TestDashboardPartsRawMessageEdits(t *testing.T) {
 		{"insert", `INSERT INTO messages(session_id,ordinal,role,content,content_length,timestamp) VALUES('s',2,'assistant','later',20,'2024-06-01T09:02:00Z')`, 1, 3, 1, 13},
 		{"delete", `DELETE FROM messages WHERE session_id='s' AND ordinal=1`, 1, 1, 0, 0},
 		{"length", `UPDATE messages SET content_length=20 WHERE session_id='s' AND ordinal=1`, 1, 2, 1, 20},
+		{"thinking", `UPDATE messages SET has_thinking=1 WHERE session_id='s' AND ordinal=1`, 1, 2, 1, 6},
 		{"tool", `DELETE FROM tool_calls WHERE session_id='s'`, 1, 2, 0, 6},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -649,81 +649,21 @@ func TestDashboardPartsUnrelatedWriteKeepsSelection(t *testing.T) {
 	assert.Zero(t, reads)
 }
 
-func TestDashboardPartsGenerationMigration(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	ctx := t.Context()
-	path := filepath.Join(t.TempDir(), "archive.db")
-	d, err := openCopiedTestDB(t, path)
-	require.NoError(t, err)
-	insertSession(t, d, "s", "project")
-	insertMessages(t, d, userMsgAt("s", 0, "hello", "2024-06-01T09:00:00Z"))
-	_, err = d.getWriter().ExecContext(ctx, `DROP TRIGGER dashboard_parts_messages_insert; DROP TRIGGER dashboard_parts_messages_delete; DROP TRIGGER dashboard_parts_messages_update; DROP TRIGGER dashboard_parts_tools_insert; DROP TRIGGER dashboard_parts_tools_delete; DROP TRIGGER dashboard_parts_tools_update; ALTER TABLE sessions DROP COLUMN dashboard_parts_generation`)
-	require.NoError(t, err)
-	require.NoError(t, d.Close())
-	d, err = Open(ctx, path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, d.Close()) })
-	f := AnalyticsFilter{Timezone: "UTC"}
-	_, parts, handled, err := d.dashboardParts(ctx, f)
-	require.NoError(t, err)
-	require.True(t, handled)
-	assert.Equal(t, 1, parts["s"].Value.Messages)
-	insertMessages(t, d, asstMsgAt("s", 1, "answer", "2024-06-01T09:01:00Z"))
-	_, parts, handled, err = d.dashboardParts(ctx, f)
-	require.NoError(t, err)
-	require.True(t, handled)
-	assert.Equal(t, 2, parts["s"].Value.Messages)
-}
-
-func TestDashboardPartsDirtyThinkingFillChangesAfterWrite(t *testing.T) {
+func TestDashboardPartsToolsReadKeepsParts(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	d := testDB(t)
 	ctx := t.Context()
-	insertSession(t, d, "s", "project", func(s *Session) { s.StartedAt = new("2024-06-01T09:00:00Z"); s.MessageCount = 2 })
-	user := userMsgAt("s", 0, "hello", "2024-06-01T09:00:00Z")
-	assistant := asstMsgAt("s", 1, "answer", "2024-06-01T09:01:00Z")
-	insertMessages(t, d, user, assistant)
-	entered, unblock := make(chan struct{}), make(chan struct{})
-	var reads atomic.Int32
-	dashboardPartsReadObserver = func([]string) {
-		if reads.Add(1) == 1 {
-			close(entered)
-			<-unblock
-		}
-	}
+	insertSession(t, d, "s", "project")
+	insertMessages(t, d, userMsgAt("s", 0, "hello", "2024-06-01T09:00:00Z"))
+	var reads int
+	dashboardPartsReadObserver = func([]string) { reads++ }
 	t.Cleanup(func() { dashboardPartsReadObserver = nil })
 	f := AnalyticsFilter{Timezone: "UTC"}
-	done := make(chan error, 1)
-	go func() { _, err := d.GetAnalyticsActivity(ctx, f, "day"); done <- err }()
-	<-entered
-	assistant.HasThinking = true
-	err := d.ReplaceSessionMessages(ctx, "s", []Message{user, assistant})
-	if err != nil {
-		close(unblock)
-		<-done
-		require.NoError(t, err)
-	}
-	type result struct {
-		value ActivityResponse
-		err   error
-	}
-	second := make(chan result, 1)
-	go func() { value, err := d.GetAnalyticsActivity(ctx, f, "day"); second <- result{value, err} }()
-	var got result
-	select {
-	case got = <-second:
-	case <-time.After(5 * time.Second):
-		close(unblock)
-		<-done
-		<-second
-		t.Fatal("new request joined the stale fill")
-	}
-	close(unblock)
-	require.NoError(t, <-done)
-	require.NoError(t, got.err)
-	d.readOnly = true
-	want, err := d.GetAnalyticsActivity(ctx, f, "day")
+	_, err := d.GetAnalyticsActivity(ctx, f, "day")
 	require.NoError(t, err)
-	assert.Equal(t, want, got.value)
-	assert.EqualValues(t, 1, got.value.Series[0].ThinkingMessages)
+	_, err = d.GetAnalyticsTools(ctx, f)
+	require.NoError(t, err)
+	_, err = d.GetAnalyticsActivity(ctx, f, "day")
+	require.NoError(t, err)
+	assert.Equal(t, 1, reads)
 }
