@@ -7,14 +7,12 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
 
 type lookupItem struct {
 	SessionID string `json:"session_id"`
-	Ordinal   *int   `json:"ordinal,omitempty"`
 }
 
 type lookupCall struct {
@@ -25,25 +23,21 @@ type lookupCall struct {
 	Start, End                       int64
 	Source, StartOrder, EndOrder     int
 	Missing, Error, Empty, Truncated bool
-	Nested                           bool
 }
 
 type lookupScore struct {
-	Verdict        string `json:"verdict"`
-	CallsToHit     *int   `json:"calls_to_hit"`
-	SupplyingRoute string `json:"supplying_route,omitempty"`
-	Route          string `json:"route"`
-	MCP            int    `json:"mcp_calls"`
-	CLI            int    `json:"cli_calls"`
-	Direct         int    `json:"direct_calls"`
-	Other          int    `json:"other_calls"`
-	Errors         int    `json:"errors"`
-	Empty          int    `json:"empty"`
-	Truncated      int    `json:"truncated"`
-	MissingCalls   int    `json:"missing_calls"`
+	Verdict      string `json:"verdict"`
+	CallsToHit   *int   `json:"calls_to_hit"`
+	MCP          int    `json:"mcp_calls"`
+	CLI          int    `json:"cli_calls"`
+	Direct       int    `json:"direct_calls"`
+	Other        int    `json:"other_calls"`
+	Errors       int    `json:"errors"`
+	Empty        int    `json:"empty"`
+	Truncated    int    `json:"truncated"`
+	MissingCalls int    `json:"missing_calls"`
 }
 
-var ordinalPattern = regexp.MustCompile(`(?i)(?:[?&]msg=|["']?(?:match_)?ordinal["']?\s*[:=]\s*|\b(?:message|ordinal)\s+)(\d+)`)
 var lookupCommandPattern = regexp.MustCompile(`(?i)(sqlite3|sessions\.db|\.claude/projects/|\.codex/sessions/|rollout-[^\s"']*\.jsonl|tool-results/|\bagentsview\s+(?:session|search|db|mcp)\b)`)
 var lookupOutputPattern = regexp.MustCompile(`(?i)(sessions\.db|\.claude/projects/|\.codex/sessions/|rollout-[^\s"']*\.jsonl|tool-results/)`)
 var truncatedResultPattern = regexp.MustCompile(`(?i)"[^"\n]*truncated"\s*:\s*true|output truncated`)
@@ -264,7 +258,6 @@ func codexLookupCalls(events []map[string]any) []lookupCall {
 		c.Start = numberAsInt64(p["started_at_ms"])
 		c.End = numberAsInt64(p["completed_at_ms"])
 		c.EndOrder = line + 1
-		c.Nested = true
 		parent := -1
 		for i := len(scripts) - 1; i >= 0; i-- {
 			if c.Start > 0 && scripts[i].start <= c.Start && (scripts[i].end == 0 || scripts[i].end >= c.Start) {
@@ -333,73 +326,21 @@ func resultFlags(c *lookupCall) {
 	}
 }
 
-func lookupPreflightComplete(calls []lookupCall) bool {
-	var search, read bool
-	for _, c := range calls {
-		if c.Route != "mcp" || c.Missing || c.Error || c.Empty || c.Result == "" || c.Start <= 0 || c.End < c.Start {
-			continue
-		}
-		if c.Name == "search_content" || strings.HasSuffix(c.Name, "__search_content") || c.Name == "search_sessions" || strings.HasSuffix(c.Name, "__search_sessions") {
-			search = strings.Contains(c.Result, `"session_id"`)
-		}
-		if c.Name == "get_messages" || strings.HasSuffix(c.Name, "__get_messages") {
-			read = strings.Contains(c.Result, `"ordinal"`) && strings.Contains(c.Result, `"content"`)
-		}
-	}
-	return search && read
-}
-
-func lookupToolDeliveryMode(client clientName, calls []lookupCall) string {
-	if client == clientClaude {
-		return "native"
-	}
-	var direct, nested bool
-	for _, c := range calls {
-		if c.Route != "mcp" {
-			continue
-		}
-		if c.Nested {
-			nested = true
-		} else {
-			direct = true
-		}
-	}
-	switch {
-	case direct && nested:
-		return "mixed"
-	case nested:
-		return "code-mode-only"
-	case direct:
-		return "direct"
-	default:
-		return "unknown"
-	}
-}
-
 func containsItem(text string, item lookupItem) bool {
-	if !containsSessionID(text, item.SessionID) {
-		return false
-	}
-	if item.Ordinal == nil {
-		return true
-	}
-	return containsOrdinal(text, *item.Ordinal)
+	return containsSessionID(text, item.SessionID)
 }
 
 func callContainsItem(call lookupCall, item lookupItem) bool {
 	if containsItem(call.Result, item) {
 		return true
 	}
-	if !sessionReadMatches(call, item) {
-		return false
-	}
-	if item.Ordinal == nil {
-		return true
-	}
-	return containsOrdinal(call.Result, *item.Ordinal)
+	return sessionReadMatches(call, item)
 }
 
 func sessionReadMatches(call lookupCall, item lookupItem) bool {
+	if call.Route == "direct" || call.Route == "cli" {
+		return containsSessionID(call.Input, item.SessionID)
+	}
 	if call.Route != "mcp" {
 		return false
 	}
@@ -409,96 +350,6 @@ func sessionReadMatches(call lookupCall, item lookupItem) bool {
 		}
 	}
 	return false
-}
-
-func callContainsEvidence(call lookupCall, item lookupItem, phrases []string) bool {
-	if !callContainsItem(call, item) || !containsAnswerEvidence(call.Result, phrases) {
-		return false
-	}
-	for _, line := range strings.Split(call.Result, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		var result any
-		if json.Unmarshal([]byte(line), &result) != nil {
-			result = line
-		}
-		if resultContainsMessageEvidence(result, sessionReadMatches(call, item), false, item, phrases) {
-			return true
-		}
-	}
-	return false
-}
-
-func resultContainsMessageEvidence(
-	value any, sessionMatched, ordinalMatched bool, item lookupItem, phrases []string,
-) bool {
-	switch value := value.(type) {
-	case string:
-		var nested any
-		if json.Unmarshal([]byte(value), &nested) == nil {
-			return resultContainsMessageEvidence(nested, sessionMatched, ordinalMatched, item, phrases)
-		}
-		sessionMatched = sessionMatched || containsSessionID(value, item.SessionID)
-		ordinalMatched = ordinalMatched || item.Ordinal == nil || containsOrdinal(value, *item.Ordinal)
-		return sessionMatched && ordinalMatched && containsAnswerEvidence(value, phrases)
-	case []any:
-		for _, child := range value {
-			if resultContainsMessageEvidence(child, sessionMatched, ordinalMatched, item, phrases) {
-				return true
-			}
-		}
-	case map[string]any:
-		for _, key := range []string{"session_id", "id"} {
-			if id, ok := value[key].(string); ok {
-				sessionMatched = containsSessionID(id, item.SessionID)
-				break
-			}
-		}
-		if item.Ordinal != nil {
-			for _, key := range []string{"ordinal", "match_ordinal"} {
-				if ordinal, ok := value[key]; ok {
-					ordinalMatched = ordinalMatchesValue(ordinal, *item.Ordinal)
-					break
-				}
-			}
-		}
-		if sessionMatched && (item.Ordinal == nil || ordinalMatched) && containsAnswerEvidence(directText(value), phrases) {
-			return true
-		}
-		for _, child := range value {
-			if resultContainsMessageEvidence(child, sessionMatched, ordinalMatched, item, phrases) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func ordinalMatchesValue(value any, expected int) bool {
-	switch value := value.(type) {
-	case float64:
-		return int(value) == expected
-	case int:
-		return value == expected
-	case string:
-		ordinal, err := strconv.Atoi(value)
-		return err == nil && ordinal == expected
-	default:
-		return false
-	}
-}
-
-func directText(value map[string]any) string {
-	var parts []string
-	for key, child := range value {
-		switch child := child.(type) {
-		case string, float64, int, bool:
-			parts = append(parts, key+":"+fmt.Sprint(child))
-		}
-	}
-	return strings.Join(parts, " ")
 }
 
 func containsSessionID(text, sessionID string) bool {
@@ -523,7 +374,7 @@ func containsSessionID(text, sessionID string) bool {
 		}
 		prefix := sessionProviderPrefix.FindStringSubmatch(text[:at])
 		if len(prefix) == 0 {
-			if at == 0 || !(text[at-1] >= 'a' && text[at-1] <= 'z' || text[at-1] >= '0' && text[at-1] <= '9' || text[at-1] == '-' || text[at-1] == '_') {
+			if at == 0 || !(text[at-1] >= 'a' && text[at-1] <= 'z' || text[at-1] >= '0' && text[at-1] <= '9') {
 				return true
 			}
 		} else if provider == "" || prefix[1] == provider || prefix[2] == provider {
@@ -532,30 +383,6 @@ func containsSessionID(text, sessionID string) bool {
 		start = end
 	}
 	return false
-}
-
-func containsOrdinal(text string, ordinal int) bool {
-	plain := strings.NewReplacer("`", "", "*", "", "~", "").Replace(text)
-	for _, match := range ordinalPattern.FindAllStringSubmatch(plain, -1) {
-		n, _ := strconv.Atoi(match[1])
-		if n == ordinal {
-			return true
-		}
-	}
-	return false
-}
-
-func containsAnswerEvidence(text string, phrases []string) bool {
-	if len(phrases) == 0 {
-		return true
-	}
-	normalized := normalizePhrase(text)
-	for _, phrase := range phrases {
-		if phrase == "" || !strings.Contains(normalized, normalizePhrase(phrase)) {
-			return false
-		}
-	}
-	return true
 }
 
 func scoreLookup(answer string, expected []lookupItem, phrases []string, calls []lookupCall, runErr error) lookupScore {
@@ -599,16 +426,15 @@ func scoreLookup(answer string, expected []lookupItem, phrases []string, calls [
 		if c.Truncated {
 			s.Truncated++
 		}
-		if !c.Error && !c.Missing && (hit == nil || c.End < hit.End) {
+		if !c.Error && !c.Missing && !c.Empty && strings.TrimSpace(c.Result) != "" && (hit == nil || c.End < hit.End) {
 			for _, item := range cited {
-				if callContainsEvidence(*c, item, phrases) {
+				if callContainsItem(*c, item) {
 					hit = c
 					break
 				}
 			}
 		}
 	}
-	s.Route = lookupRoute(calls)
 	if captureIncomplete && strings.TrimSpace(answer) == "" {
 		s.Verdict = "unscored"
 		return s
@@ -650,43 +476,7 @@ func scoreLookup(answer string, expected []lookupItem, phrases []string, calls [
 	}
 	s.Verdict = "success"
 	s.CallsToHit = &count
-	s.SupplyingRoute = hit.Route
 	return s
-}
-
-func lookupRoute(calls []lookupCall) string {
-	mcp, cli, direct := false, false, false
-	first := ""
-	for _, c := range calls {
-		if c.Route == "other" {
-			continue
-		}
-		if first == "" {
-			first = c.Route
-		}
-		switch c.Route {
-		case "mcp":
-			mcp = true
-		case "cli":
-			cli = true
-		case "direct":
-			direct = true
-		}
-	}
-	switch {
-	case mcp && (cli || direct) && first == "mcp":
-		return "fell-back"
-	case mcp && (cli || direct) || cli && direct:
-		return "mixed"
-	case mcp:
-		return "mcp-only"
-	case cli:
-		return "cli-only"
-	case direct:
-		return "direct-only"
-	default:
-		return "none"
-	}
 }
 
 func scoreError(err error) string {

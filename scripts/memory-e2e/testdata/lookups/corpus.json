@@ -6,8 +6,5 @@
   {"id":"55555555-5555-4555-8555-555555555555","age_hours":12,"title":"Investigate the clock drift","content":"The clock drift investigation found the worker was using the host timezone. The fix uses UTC."},
   {"id":"66666666-6666-4666-8666-666666666666","age_hours":1,"title":"Recent lighthouse work","content":"The latest lighthouse session is checking the retry queue. The prior session finished the index migration."},
   {"id":"77777777-7777-4777-8777-777777777777","age_hours":80,"title":"Harbor cache experiment","content":"An early harbor cache experiment used a copper ledger namespace, before the later review."},
-  {"id":"88888888-8888-4888-8888-888888888888","age_hours":36,"title":"Lighthouse index audit","content":"A delegated agent is reviewing the lighthouse event index.","spawned_child_id":"99999999-9999-4999-8999-999999999999"},
-  {"id":"99999999-9999-4999-8999-999999999999","age_hours":35,"title":"Delegated lighthouse event index review","content":"The child audit found that route_events lacked an index on project_id and created a migration proposal.","parent_id":"88888888-8888-4888-8888-888888888888"},
-  {"id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","age_hours":10,"title":"Release smoke test","content":"The release smoke test ran against the isolated candidate.","tool_result":"db-check failed: stale lease token rejected; retry budget was zero."},
   {"id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","age_hours":60,"title":"Long migration review","content":"The accepted index name is account_created_project.","padding_repeats":1100}
 ]

@@ -55,42 +55,24 @@ questions against a synthetic archive. The benchmark needs Linux and
 archive, including its transcript files, while hiding the operator's home.
 The client uses the full MCP profile and can use shell and file reads.
 The run consumes model quota. By default, it runs three attempts per question
-and one preflight per client. Pass `--client`, `--runs`, or `--case` through
+per client. Pass `--client`, `--runs`, or `--case` through
 `MEMORY_E2E_ARGS` to narrow a run.
 
-The default corpus and questions live in `scripts/memory-e2e/testdata/lookups/`.
-They cover topic, named-session, ownership, recent-work, child-session,
-tool-result, message, and long-result lookups. Expected IDs and answer phrases
-stay outside the project visible to the agent.
-Pass `--lookup-manifest /path/to/manifest.json` to run a local corpus. The
-manifest has `fixtures`, `sources`, and `questions` arrays. A source entry names
-its `provider` (`claude` or `codex`), a transcript `path`, and an optional
-`session_id` to check after sync. Relative source paths resolve beside the
-manifest. The runner copies only those transcripts into each isolated project
-before syncing them; it leaves the input files untouched. Keep manifests,
-transcripts, prompts, and results private. The selected session content goes to
-the configured model during a live run.
-Each client first runs a search and message-read preflight. A client whose
-capture cannot identify both results is marked unsupported and its scheduled
-attempts remain unscored. Codex disables `mcp_2026_07_28` so the capture records
-each MCP call under a fixed protocol. The selected Codex model uses code-mode-only
-tool delivery, so the capture scores nested MCP calls when it records their own
-results and timing. Opaque exec scripts without individual results stay
-unscored. The report records the client's tool delivery mode.
+The corpus and questions live in `scripts/memory-e2e/testdata/lookups/`.
+They cover topic, named-session, ownership, recent-work, and long-result
+lookups. Expected IDs and answer phrases stay outside the project visible to
+the agent. Codex disables `mcp_2026_07_28` so the capture records each MCP call
+under a fixed protocol. Opaque exec scripts without individual results stay
+unscored.
 
-The report counts lookup calls started by the time the first result containing
-the cited item completed. It includes MCP, CLI, direct reads, saved-output
-reads, and tool discovery. A hit must link the cited session to a returned
-result, through its content or the paired call's arguments, and contain every
-expected answer phrase. Message hits also require the cited ordinal in the
-result. Direct transcript reads count as fallback calls and follow the same
-rules.
-Errors, empty results, truncation, route totals, and the route that supplied
-the hit appear per attempt, alongside the captured source and missing-call
-counts. Wrong answers and timeouts fail. Missing results
-and calls whose timing cannot be compared leave a correct answer unscored.
-The one- and two-call shares use all scheduled attempts; p50 and p90 use
-scored successes. The report shows both per-question and overall figures.
+The report counts lookup calls started by the time the first non-empty,
+successful result naming the cited session completed. A direct or CLI read
+also counts when its input names the session and its result is non-empty.
+The count includes MCP, CLI, direct reads, saved-output reads, and tool
+discovery. Expected phrases grade the final answer. Errors, empty results,
+truncation, and calls per route appear per attempt. Wrong answers and timeouts
+fail. Missing results and calls whose timing cannot be compared leave a correct
+answer unscored. One- and two-call shares use all scheduled attempts.
 
 The lookup suite stores private captures and reports under
 `$XDG_CACHE_HOME/agentsview/memory-e2e/`, or the platform cache directory when

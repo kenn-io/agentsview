@@ -35,19 +35,18 @@ const (
 )
 
 type config struct {
-	live           bool
-	clients        string
-	runs           int
-	caseName       string
-	outputDir      string
-	agentsview     string
-	claudeModel    string
-	codexModel     string
-	effort         string
-	timeout        time.Duration
-	repository     string
-	suite          string
-	lookupManifest string
+	live        bool
+	clients     string
+	runs        int
+	caseName    string
+	outputDir   string
+	agentsview  string
+	claudeModel string
+	codexModel  string
+	effort      string
+	timeout     time.Duration
+	repository  string
+	suite       string
 }
 
 type behaviorCase struct {
@@ -134,7 +133,6 @@ func parseConfig(args []string) (config, error) {
 	fs.BoolVar(&cfg.live, "live", false,
 		"acknowledge that this runs authenticated Claude Code and Codex sessions")
 	fs.StringVar(&cfg.suite, "suite", "memory", "suite to run: memory or lookups")
-	fs.StringVar(&cfg.lookupManifest, "lookup-manifest", "", "local lookup corpus and question manifest")
 	fs.StringVar(&cfg.clients, "client", "all", "client to run: claude, codex, or all")
 	fs.IntVar(&cfg.runs, "runs", 3, "runs per behavioral case")
 	fs.StringVar(&cfg.caseName, "case", "", "run one named case")
@@ -175,9 +173,6 @@ func parseConfig(args []string) (config, error) {
 		}
 	} else if !filepath.IsAbs(cfg.outputDir) {
 		cfg.outputDir = filepath.Join(repo, cfg.outputDir)
-	}
-	if cfg.lookupManifest != "" && !filepath.IsAbs(cfg.lookupManifest) {
-		cfg.lookupManifest = filepath.Join(repo, cfg.lookupManifest)
 	}
 	return cfg, nil
 }
