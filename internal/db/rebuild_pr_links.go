@@ -42,6 +42,7 @@ func (d *DB) copyRebuiltPRLinks(ctx context.Context, tx *sql.Tx) error {
 	if err != nil {
 		return fmt.Errorf("listing saved PR links: %w", err)
 	}
+	defer rows.Close()
 	type savedLinks struct {
 		id, links string
 		changed   bool
@@ -50,7 +51,6 @@ func (d *DB) copyRebuiltPRLinks(ctx context.Context, tx *sql.Tx) error {
 	for rows.Next() {
 		var entry savedLinks
 		if err := rows.Scan(&entry.id, &entry.links, &entry.changed); err != nil {
-			rows.Close()
 			return err
 		}
 		saved = append(saved, entry)
