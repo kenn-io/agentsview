@@ -10,36 +10,42 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-func TestLookupRejectsUnsupportedClientBeforeSetup(t *testing.T) {
+func TestLookupClientVersionGate(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("executable shims require Unix")
 	}
-	dir := t.TempDir()
-	client := filepath.Join(dir, "codex")
-	require.NoError(t, os.WriteFile(client, []byte("#!/bin/sh\necho 'codex-cli 0.0.0'\n"), 0o700))
-	t.Setenv("PATH", dir)
-	cfg := config{outputDir: filepath.Join(dir, "output"), repository: dir}
-	_, err := runLookupClient(t.Context(), cfg, "missing-agentsview", clientCodex, nil, nil)
-	require.ErrorIs(t, err, errLookupCaptureUnsupported)
-	_, err = os.Stat(cfg.outputDir)
-	require.True(t, os.IsNotExist(err))
-}
-
-func TestLookupVersionUsesResolvedClient(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("executable shims require Unix")
+	for _, tc := range []struct {
+		name     string
+		resolved bool
+	}{
+		{name: "unsupported version"},
+		{name: "resolved supported version", resolved: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			client := filepath.Join(dir, "codex")
+			if tc.resolved {
+				resolved := filepath.Join(dir, "real-codex")
+				require.NoError(t, os.WriteFile(resolved, []byte("#!/bin/sh\necho 'codex-cli 0.172.0'\n"), 0o700))
+				mise := filepath.Join(dir, "mise")
+				require.NoError(t, os.WriteFile(mise, []byte("#!/bin/sh\nif [ \"$1\" = which ]; then echo '"+resolved+"'; else echo 'codex-cli 0.0.0'; fi\n"), 0o700))
+				require.NoError(t, os.Symlink(mise, client))
+			} else {
+				require.NoError(t, os.WriteFile(client, []byte("#!/bin/sh\necho 'codex-cli 0.0.0'\n"), 0o700))
+			}
+			t.Setenv("PATH", dir)
+			cfg := config{outputDir: filepath.Join(dir, "output"), repository: dir}
+			_, err := runLookupClient(t.Context(), cfg, "missing-agentsview", clientCodex, nil, nil)
+			if tc.resolved {
+				require.Error(t, err)
+				require.NotErrorIs(t, err, errLookupCaptureUnsupported)
+			} else {
+				require.ErrorIs(t, err, errLookupCaptureUnsupported)
+				_, err = os.Stat(cfg.outputDir)
+				require.ErrorIs(t, err, os.ErrNotExist)
+			}
+		})
 	}
-	dir := t.TempDir()
-	resolved := filepath.Join(dir, "real-codex")
-	require.NoError(t, os.WriteFile(resolved, []byte("#!/bin/sh\necho 'codex-cli 0.172.0'\n"), 0o700))
-	mise := filepath.Join(dir, "mise")
-	require.NoError(t, os.WriteFile(mise, []byte("#!/bin/sh\nif [ \"$1\" = which ]; then echo '"+resolved+"'; else echo 'codex-cli 0.0.0'; fi\n"), 0o700))
-	require.NoError(t, os.Symlink(mise, filepath.Join(dir, "codex")))
-	t.Setenv("PATH", dir)
-	cfg := config{outputDir: filepath.Join(dir, "output"), repository: dir}
-	_, err := runLookupClient(t.Context(), cfg, "missing-agentsview", clientCodex, nil, nil)
-	require.Error(t, err)
-	require.NotErrorIs(t, err, errLookupCaptureUnsupported)
 }
 
 func TestLookupCorpusFixtures(t *testing.T) {

@@ -168,35 +168,37 @@ func TestLookupCaptureClassifiesSetupAndClientFailures(t *testing.T) {
 	t.Setenv("PATH", binDir)
 
 	cases := []struct {
-		name, executable, script string
-		client                   clientName
-		want, wantNot            error
-		wantText                 string
+		name, executable string
+		script           func(t *testing.T, runDir string) string
+		client           clientName
+		want, wantNot    error
+		wantText         string
 	}{
 		{name: "missing client", client: clientClaude, want: errLookupSetup, wantText: "claude"},
 		{
 			name: "invalid model", executable: "claude", client: clientClaude,
-			script: "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"result\",\"is_error\":true,\"result\":\"invalid model\"}'\nexit 1\n",
-			want:   errLookupSetup,
+			script: func(t *testing.T, runDir string) string {
+				root, err := lookupTranscriptRoot(clientClaude, filepath.Join(runDir, "home"), project)
+				require.NoError(t, err)
+				return "#!/bin/sh\nwhile [ $# -gt 0 ]; do if [ \"$1\" = --session-id ]; then shift; sid=$1; fi; shift; done\n" +
+					"mkdir -p " + strconv.Quote(root) + "\nprintf '%s\\n' '{}' > " + strconv.Quote(root) + "/\"$sid.jsonl\"\n" +
+					"printf '%s\\n' '{\"type\":\"result\",\"is_error\":true,\"result\":\"invalid model\"}'\nexit 1\n"
+			},
+			want: errLookupSetup,
 		},
 		{
 			name: "task failure after answer", executable: "codex", client: clientCodex,
-			script: "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"partial answer\"}}'\nexit 1\n",
-			want:   errLookupClientFailed, wantNot: errLookupSetup,
+			script: func(_ *testing.T, _ string) string {
+				return "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"partial answer\"}}'\nexit 1\n"
+			},
+			want: errLookupClientFailed, wantNot: errLookupSetup,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			runDir := filepath.Join(clientDir, "attempt-"+tc.name)
-			if tc.name == "invalid model" {
-				root, err := lookupTranscriptRoot(clientClaude, filepath.Join(runDir, "home"), project)
-				require.NoError(t, err)
-				tc.script = "#!/bin/sh\nwhile [ $# -gt 0 ]; do if [ \"$1\" = --session-id ]; then shift; sid=$1; fi; shift; done\n" +
-					"mkdir -p " + strconv.Quote(root) + "\nprintf '%s\\n' '{}' > " + strconv.Quote(root) + "/\"$sid.jsonl\"\n" +
-					"printf '%s\\n' '{\"type\":\"result\",\"is_error\":true,\"result\":\"invalid model\"}'\nexit 1\n"
-			}
 			if tc.executable != "" {
-				require.NoError(t, os.WriteFile(filepath.Join(binDir, tc.executable), []byte(tc.script), 0o700))
+				require.NoError(t, os.WriteFile(filepath.Join(binDir, tc.executable), []byte(tc.script(t, runDir)), 0o700))
 			}
 			_, _, err := captureLookup(t.Context(), config{timeout: 10 * time.Second, repository: project}, serverBin, tc.client, project, "model", "", "question", runDir)
 			require.ErrorIs(t, err, tc.want)
