@@ -527,7 +527,7 @@ func TestDashboardPartsDoNotWaitOnWriterLock(t *testing.T) {
 			for range 3 - i {
 				<-done
 			}
-			t.Fatal("dashboard reads waited on the writer lock")
+			require.FailNow(t, "dashboard reads waited on the writer lock")
 		}
 	}
 	d.mu.Unlock()
@@ -616,7 +616,7 @@ func TestDashboardPartsDirtyFillChangesAfterWrite(t *testing.T) {
 		close(unblock)
 		<-done
 		<-second
-		t.Fatal("new request joined the stale fill")
+		require.FailNow(t, "new request joined the stale fill")
 	}
 	close(unblock)
 	require.NoError(t, <-done)
