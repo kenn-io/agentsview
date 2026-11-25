@@ -156,7 +156,9 @@ func TestMusePersonalSubagentParentLink(t *testing.T) {
 		require.NoError(t, err)
 		p, path := musePersonalTestProvider(t, "")
 		writeSourceFile(t, path, string(body))
-		sess := musePersonalTestParse(t, p).Results[0].Result.Session
+		out := musePersonalTestParse(t, p)
+		require.Len(t, out.Results, 1)
+		sess := out.Results[0].Result.Session
 		assert.Equal(t, SessionKindNonInteractive, sess.SessionKind)
 		assert.Equal(t, "muse-personal:"+parent, sess.ParentSessionID, "the requester agent id names the parent session; Your session is ignored")
 		assert.Equal(t, RelSubagent, sess.RelationshipType)
@@ -188,7 +190,9 @@ func TestMusePersonalSubagentParentLink(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p, _ := musePersonalTestProvider(t, tc.body)
-			sess := musePersonalTestParse(t, p).Results[0].Result.Session
+			out := musePersonalTestParse(t, p)
+			require.Len(t, out.Results, 1)
+			sess := out.Results[0].Result.Session
 			assert.Equal(t, tc.wantKind, sess.SessionKind)
 			if tc.wantParent == "" {
 				assert.Empty(t, sess.ParentSessionID)
