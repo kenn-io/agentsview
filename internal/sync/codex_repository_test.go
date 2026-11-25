@@ -275,17 +275,18 @@ func TestCodexLabeledCopyWinsSync(t *testing.T) {
 			}
 			engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {ordinary, logs}}})
 			t.Cleanup(engine.Close)
-			if mode == "changed path" {
+			switch mode {
+			case "changed path":
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[2]}))
 				mtime := time.Now().Add(3 * time.Hour)
 				require.NoError(t, os.Chtimes(paths[0], mtime, mtime))
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[0]}))
-			} else if mode == "batch" {
+			case "batch":
 				require.NoError(t, engine.SyncPathsContext(t.Context(), paths[1:]))
-			} else if mode == "newer then older" {
+			case "newer then older":
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[2]}))
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[1]}))
-			} else {
+			default:
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[1]}))
 				require.NoError(t, engine.ReconcileWatchRoots(t.Context(), []string{ordinary, logs}, false))
 			}

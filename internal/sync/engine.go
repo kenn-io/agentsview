@@ -12592,7 +12592,7 @@ func (e *Engine) findProviderSourceFile(
 		StoredFilePath:     storedPath,
 		FingerprintKey:     storedPath,
 		RequireFreshSource: true,
-		PreferStoredSource: true,
+		PreferStoredSource: def.Type != parser.AgentCodex,
 	})
 	if err != nil {
 		log.Printf("%s provider source lookup: %v", def.Type, err)

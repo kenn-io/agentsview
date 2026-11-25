@@ -260,6 +260,9 @@ func (p *codexProvider) DiscoverRawCaptureSourcesEach(
 			}
 			src := source.Opaque.(codexSource)
 			key := src.Root + "\x00" + source.Key
+			if CodexSourceLabel(src.Root, src.Path) == "" {
+				key = src.Root + "\x00" + source.DisplayPath
+			}
 			path, found, err := index.get(ctx, key)
 			if err != nil {
 				return err
@@ -1461,6 +1464,15 @@ func (s codexSourceSet) FindSource(
 			if ok {
 				if !req.RequireFreshSource || req.PreferStoredSource {
 					return source, true, nil
+				}
+				if s.agent == AgentCodex && req.RawSessionID != "" {
+					candidate, found, err := s.findCanonicalSource(ctx, req.RawSessionID)
+					if err != nil {
+						return SourceRef{}, false, err
+					}
+					if found && CodexSourceLabelForRoots(s.roots, candidate.DisplayPath) != "" && preferCodexSource(candidate, source) {
+						return candidate, true, nil
+					}
 				}
 				preferred, err := s.preferredKnownRolloutSource(ctx, source)
 				return preferred, err == nil, err

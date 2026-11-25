@@ -963,6 +963,30 @@ func TestDirectBackend_Sync_WindsurfPhysicalDBPathAmbiguous(t *testing.T) {
 	assert.Contains(t, msg, "session sync <id>")
 }
 
+func TestDirectBackend_Sync_CodexIDPrefersLabeledSource(t *testing.T) {
+	root := t.TempDir()
+	ordinary := filepath.Join(root, "ordinary")
+	logs := filepath.Join(root, "logs")
+	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	name := "rollout-2026-10-08T12-00-00-" + id + ".jsonl"
+	write := func(path, message string) {
+		dbtest.WriteTestFile(t, path, []byte(testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_cli_rs", "2026-10-08T12:00:00Z")+"\n"+testjsonl.CodexMsgJSON("user", message, "2026-10-08T12:00:01Z")+"\n"))
+	}
+	ordinaryPath := filepath.Join(ordinary, "2026", "10", "08", name)
+	labeledPath := filepath.Join(logs, "review", ".codex-run-v1-abc", "sessions", "2026", "10", "08", name)
+	write(ordinaryPath, "ordinary")
+	d := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(t.Context(), d, sync.EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {ordinary, logs}}})
+	t.Cleanup(engine.Close)
+	svc := service.NewDirectBackend(d, engine)
+	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{ordinaryPath}))
+	write(labeledPath, "labeled")
+	detail, err := svc.Sync(t.Context(), service.SyncInput{ID: "codex:" + id})
+	require.NoError(t, err)
+	require.NotNil(t, detail.FirstMessage)
+	assert.Equal(t, "labeled", *detail.FirstMessage)
+}
+
 func TestDirectBackend_Sync_VSCopilotIDRefreshesOnlyRequestedConversation(t *testing.T) {
 	t.Parallel()
 	tracesDir := t.TempDir()
