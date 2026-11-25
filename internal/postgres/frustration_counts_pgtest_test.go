@@ -352,6 +352,13 @@ func TestReviewerSaveIndependentRowsWhileOneLocked(t *testing.T) {
 	require.NoError(t, tx.Rollback())
 	waitFrustrationSave(store)
 	require.NoError(t, f.pg.QueryRowContext(f.ctx, `SELECT rules_version FROM session_frustration_counts WHERE session_id='one'`).Scan(&rules))
+	require.Zero(t, rules)
+	stop := store.StartFrustrationFill(f.ctx)
+	defer stop()
+	require.Eventually(t, func() bool {
+		return f.pg.QueryRowContext(f.ctx, `SELECT rules_version FROM session_frustration_counts WHERE session_id='one'`).Scan(&rules) == nil && rules == frustrationMarkerRulesVersion
+	}, 10*time.Second, 10*time.Millisecond)
+	require.NoError(t, f.pg.QueryRowContext(f.ctx, `SELECT rules_version FROM session_frustration_counts WHERE session_id='one'`).Scan(&rules))
 	require.Equal(t, frustrationMarkerRulesVersion, rules)
 }
 

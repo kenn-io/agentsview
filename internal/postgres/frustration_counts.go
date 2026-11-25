@@ -166,11 +166,23 @@ func (s *Store) writeFrustrationCountBatch(ctx context.Context, versions map[str
         SELECT t.id, t.version, $4, t.count FROM (` + want + `) t ORDER BY t.id`
 	if !s.cockroach {
 		query = `WITH want AS MATERIALIZED (` + want + `),
-        free AS MATERIALIZED (SELECT c.session_id FROM session_frustration_counts c WHERE c.session_id IN (SELECT id FROM want) ORDER BY c.session_id FOR UPDATE OF c SKIP LOCKED)
+		acquired AS MATERIALIZED (
+			SELECT w.* FROM want w
+			WHERE pg_try_advisory_xact_lock(
+				hashtextextended(current_schema() || ':frustration:' || w.id, 0)
+			)
+		),
+		free AS MATERIALIZED (
+			SELECT c.session_id FROM session_frustration_counts c
+			WHERE c.session_id IN (SELECT id FROM acquired)
+			ORDER BY c.session_id FOR UPDATE OF c SKIP LOCKED
+		)
         INSERT INTO session_frustration_counts (session_id, session_version, rules_version, marker_count)
-        SELECT w.id, w.version, $4, w.count FROM want w
-        WHERE NOT EXISTS (SELECT 1 FROM session_frustration_counts c WHERE c.session_id = w.id) OR w.id IN (SELECT session_id FROM free)
-        ORDER BY w.id`
+		SELECT a.id, a.version, $4, a.count FROM acquired a
+		WHERE NOT EXISTS (
+			SELECT 1 FROM session_frustration_counts c WHERE c.session_id = a.id
+		) OR a.id IN (SELECT session_id FROM free)
+		ORDER BY a.id`
 	}
 	query += ` ON CONFLICT (session_id) DO UPDATE SET session_version = EXCLUDED.session_version, rules_version = EXCLUDED.rules_version, marker_count = EXCLUDED.marker_count
         WHERE session_frustration_counts.rules_version <= EXCLUDED.rules_version`

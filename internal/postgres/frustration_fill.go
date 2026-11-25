@@ -36,10 +36,7 @@ type frustrationCountSave struct {
 	versionColumn string
 }
 
-var errSharedFillWait = errors.New("shared load cannot wait for count fill")
-
-// keptSignals lets a shared report load fall back when the startup fill owns
-// the sessions it needs.
+// keptSignals keeps cacheable report loads shared during startup fill.
 func (s *Store) keptSignals(ctx context.Context, f db.AnalyticsFilter) (db.SignalsAnalyticsResponse, error) {
 	return keptAnalyticsWithLoads(ctx, s, "signals", f, s.keptAnalyticsVersion, s.loadAnalyticsSignals, func(ctx context.Context, f db.AnalyticsFilter) (db.SignalsAnalyticsResponse, error) {
 		return s.loadAnalyticsSignalsWithMode(ctx, f, true)
@@ -93,7 +90,7 @@ func (s *Store) joinFrustrationFill(ctx context.Context, ids []string, completed
 		return false, nil
 	}
 	if shared {
-		return false, errSharedFillWait
+		return false, nil
 	}
 	budget := frustrationJoinWait
 	if deadline, ok := ctx.Deadline(); ok {

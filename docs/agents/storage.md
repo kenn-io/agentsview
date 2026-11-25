@@ -1489,17 +1489,17 @@ independent rules version. A saved count must match both the version selected
 for Signals and the current session version at lookup. A mismatch triggers a
 fresh count. Bump `frustrationMarkerRulesVersion` whenever the Go or PostgreSQL
 frustration classifier changes a verdict. On startup, writable PostgreSQL
-stores fill missing or stale counts after the Usage cache warms. A Signals
-request reuses saved counts and waits briefly for matching startup fill chunks
-before scanning misses. Concurrent requests with the same cacheable filter
-share one load. Requests send scanned counts, including zero counts, to one
-background writer without delaying the response. At most one save waits behind
-the active save; when both slots are occupied, later saves are dropped. A later
-startup fill can recompute counts missing from PostgreSQL. PostgreSQL skips rows
-held by another writer, while CockroachDB uses its plain upsert. The startup
-fill retries stale counts for a few passes. A sync overlapping a save can leave
-a stale row; later reads reject that row and recount the session. Closing the
-store cancels pending saves.
+stores fill missing or stale counts after the Usage cache warms. A cacheable
+Signals load scans misses once and shares its report with matching requests.
+Other reads wait briefly for matching startup fill chunks before scanning
+misses. Requests send scanned counts, including zero counts, to one background
+writer without delaying the response. At most one save waits behind the active
+save; when both slots are occupied, later saves are dropped. A later startup
+fill can recompute counts missing from PostgreSQL. PostgreSQL skips rows held by
+another writer, including concurrent inserts of the same missing count, while
+CockroachDB uses its plain upsert. The startup fill retries stale counts for a
+few passes. A sync overlapping a save can leave a stale row; later reads reject
+that row and recount the session. Closing the store cancels pending saves.
 
 A read-only role reuses rows it can read and scans misses without saving them.
 The table is optional for push. A missing table falls back to scanning. Hosted
