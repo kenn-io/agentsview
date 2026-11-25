@@ -119,9 +119,8 @@ func mergeUsagePRLinksTx(ctx context.Context, tx *sql.Tx, session *Session) erro
 }
 
 func mergePendingUsagePRLinks(ctx context.Context, tx *sql.Tx, session *Session, stored []PRLink) error {
-	var remote string
-	var changed, unknown bool
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT git_remote FROM session_project_identity_snapshots WHERE session_id=?),?), COALESCE((SELECT remote_candidate_count>1 AND git_remote='' FROM session_project_identity_snapshots WHERE session_id=?),0), COALESCE((SELECT pr_repository_changed FROM sessions WHERE id=?),0)`, session.ID, session.usagePRRemote, session.ID, session.ID).Scan(&remote, &unknown, &changed); err != nil {
+	remote, changed, unknown, err := usagePRCheckoutContext(ctx, tx, session.ID, session.usagePRRemote)
+	if err != nil {
 		return err
 	}
 	links, changed, err := usageToolCallPRLinks(ctx, session.usagePRMessages, remote, changed || session.PRRepositoryChanged, unknown)
@@ -131,6 +130,13 @@ func mergePendingUsagePRLinks(ctx context.Context, tx *sql.Tx, session *Session,
 	session.PRRepositoryChanged = session.PRRepositoryChanged || changed
 	session.PRLinks = parser.CombinePRLinks(stored, session.PRLinks, links)
 	return nil
+}
+
+func usagePRCheckoutContext(ctx context.Context, tx *sql.Tx, sessionID, fallback string) (string, bool, bool, error) {
+	var remote string
+	var changed, unknown bool
+	err := tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT git_remote FROM session_project_identity_snapshots WHERE session_id=?),?), COALESCE((SELECT remote_candidate_count>1 AND git_remote='' FROM session_project_identity_snapshots WHERE session_id=?),0), COALESCE((SELECT pr_repository_changed FROM sessions WHERE id=?),0)`, sessionID, fallback, sessionID, sessionID).Scan(&remote, &unknown, &changed)
+	return remote, changed, unknown, err
 }
 
 // SessionWouldShortenError reports a rejected message-count decrease.

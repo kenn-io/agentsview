@@ -115,7 +115,7 @@ func TestUsageOnlyResyncUsesRecordedCheckout(t *testing.T) {
 		name, initial, host string
 	}{
 		{"single", "[remote \"origin\"]\n url = https://git-a.example/example/repo.git\n", "git-a.example"},
-		{"ambiguous", "[remote \"origin\"]\n url = https://git-a.example/example/repo.git\n[remote \"upstream\"]\n url = https://git-c.example/example/repo.git\n", "github.com"},
+		{"resolved fork", "[remote \"origin\"]\n url = https://git-a.example/example/repo.git\n[remote \"upstream\"]\n url = https://git-c.example/example/repo.git\n", "git-a.example"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env := setupSingleAgentTestEnv(t, parser.AgentClaude)
@@ -142,6 +142,48 @@ func TestUsageOnlyResyncUsesRecordedCheckout(t *testing.T) {
 			stats := engine.ResyncAll(t.Context(), nil)
 			require.False(t, stats.Aborted, "%v", stats.Warnings)
 			assert.Equal(t, want, storedPRURLs(t, env.db, "recorded-checkout"))
+		})
+	}
+}
+
+func TestUsageOnlyPRLinksMultiRemoteOrigin(t *testing.T) {
+	testutil.IsolateGit(t)
+	for _, stage := range []string{"import", "rebuild", "parse-diff"} {
+		t.Run(stage, func(t *testing.T) {
+			env := setupSingleAgentTestEnv(t, parser.AgentClaude)
+			env.db.SetArchiveContent(config.ArchiveContentUsage)
+			root := t.TempDir()
+			require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o700))
+			require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "config"), []byte("[remote \"origin\"]\n url = https://ghe.example/fork/repo.git\n[remote \"upstream\"]\n url = https://ghe.example/org/repo.git\n"), 0o600))
+			env.writeClaudeSession(t, "proj", "multi-remote.jsonl", testjsonl.JoinJSONL(
+				testjsonl.ClaudeUserJSON("Review", tsZero, root),
+				`{"type":"assistant","timestamp":"2024-01-01T00:00:01Z","message":{"content":[{"type":"tool_use","id":"call","name":"Bash","input":{"command":"gh pr view 42 -R org/repo"}}]}}`,
+			))
+			require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+			want := []string{"https://ghe.example/org/repo/pull/42"}
+			if stage == "import" {
+				assert.Equal(t, want, storedPRURLs(t, env.db, "multi-remote"))
+				return
+			}
+			snapshots, err := env.db.ListSessionProjectIdentitySnapshotsByID(t.Context(), []string{"multi-remote"})
+			require.NoError(t, err)
+			require.Equal(t, 2, snapshots["multi-remote"].RemoteCandidateCount)
+			require.Equal(t, "https://ghe.example/fork/repo.git", snapshots["multi-remote"].GitRemote)
+			link, ok := parser.NewPRLink(want[0], "org/repo", 42)
+			require.True(t, ok)
+			encoded := db.EncodePRLinks([]db.PRLink{link})
+			mutateDB(t, env, `UPDATE sessions SET structured_pr_links=?,pr_links=? WHERE id=?`, encoded, encoded, "multi-remote")
+			if stage == "parse-diff" {
+				report := runParseDiff(t, env, sync.ParseDiffOptions{})
+				assert.Zero(t, report.FieldCounts[sync.FieldPRLinks])
+				return
+			}
+			env.engine.Close()
+			engine := sync.NewEngine(t.Context(), env.db, sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {env.claudeDir}}, Machine: "local"})
+			t.Cleanup(engine.Close)
+			stats := engine.ResyncAll(t.Context(), nil)
+			require.False(t, stats.Aborted, "%v", stats.Warnings)
+			assert.Equal(t, want, storedPRURLs(t, env.db, "multi-remote"))
 		})
 	}
 }

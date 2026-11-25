@@ -36,10 +36,7 @@ func (e *Engine) restoreRebuildPRContext(ctx context.Context, candidate *ingest.
 				return err
 			}
 			if identity, found := identities[candidate.Session.ID]; found {
-				options.CheckoutRemote = ""
-				if identity.RemoteCandidateCount == 1 {
-					options.CheckoutRemote = identity.GitRemote
-				}
+				options.CheckoutRemote = identity.GitRemote
 			}
 		}
 	}

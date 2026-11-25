@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -655,6 +656,41 @@ func TestUsageOnlyPRLinksPreservesRepositoryUncertaintyAcrossWrites(t *testing.T
 		require.NoError(t, err)
 		assert.Empty(t, got.PRLinks)
 	})
+}
+
+func TestUsageOnlyPRLinksAppendAndReplaceCheckoutHost(t *testing.T) {
+	for _, tc := range []struct {
+		name, remote string
+		ambiguous    bool
+	}{
+		{"resolved", "https://ghe.example/fork/repo.git", false},
+		{"ambiguous", "", true},
+	} {
+		for _, replace := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/replace=%t", tc.name, replace), func(t *testing.T) {
+				d := testDB(t)
+				d.SetArchiveContent(config.ArchiveContentUsage)
+				s := Session{ID: "append-checkout", Project: "project", Machine: "local", Agent: "codex", Cwd: "/work/repo"}
+				require.NoError(t, d.UpsertSession(t.Context(), s))
+				obs := export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, GitRemote: tc.remote, RemoteCandidateCount: 2, ObservedAt: time.Now().UTC()}
+				require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), obs))
+				messages := []Message{{SessionID: s.ID, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "exec_command", Category: "Bash", InputJSON: `{"cmd":"gh pr view 43 -R org/repo; gh pr view 44 -R ghe.example/org/repo; gh pr view 45"}`}}}}
+				if replace {
+					require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, messages))
+				} else {
+					require.NoError(t, d.InsertMessages(t.Context(), messages))
+				}
+				got, err := d.GetSession(t.Context(), s.ID)
+				require.NoError(t, err)
+				want := []PRLink{{URL: "https://ghe.example/org/repo/pull/44", Host: "ghe.example", Repository: "org/repo", Number: 44}}
+				if !tc.ambiguous {
+					want = append([]PRLink{{URL: "https://ghe.example/org/repo/pull/43", Host: "ghe.example", Repository: "org/repo", Number: 43}}, want...)
+				}
+				assert.Equal(t, want, got.PRLinks)
+				assert.False(t, got.PRRepositoryChanged)
+			})
+		}
+	}
 }
 
 func TestUsageOnlyPRLinksResolvedForkCheckout(t *testing.T) {

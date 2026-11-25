@@ -583,12 +583,11 @@ func retainedRepositoryChanged(call ToolCall) bool {
 // repository change, and records a change this write makes before its inputs
 // are discarded.
 func usageToolPRLinksTx(ctx context.Context, tx *sql.Tx, sessionID string, messages []Message) ([]PRLink, error) {
-	var remote string
-	var changed bool
-	if err := tx.QueryRowContext(ctx, `SELECT `+checkoutRemoteSQL+`, COALESCE((SELECT pr_repository_changed FROM sessions WHERE id=?),0)`, sessionID, sessionID).Scan(&remote, &changed); err != nil {
+	remote, changed, unknown, err := usagePRCheckoutContext(ctx, tx, sessionID, "")
+	if err != nil {
 		return nil, err
 	}
-	links, after, err := usageToolCallPRLinks(ctx, messages, remote, changed, false)
+	links, after, err := usageToolCallPRLinks(ctx, messages, remote, changed, unknown)
 	if err != nil || after == changed {
 		return links, err
 	}

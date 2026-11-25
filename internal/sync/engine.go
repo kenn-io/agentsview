@@ -11625,7 +11625,7 @@ func (e *Engine) prepareSessionNormalizedContext(
 		ArchiveContent:          e.db.ArchiveContent(),
 	}
 	if options.ArchiveContent.UsageOnly() {
-		if obs, ok := e.projectIdentityObservationForWrite(pw, candidate.Session); ok && obs.RemoteCandidateCount == 1 {
+		if obs, ok := e.projectIdentityObservationForWrite(pw, candidate.Session); ok {
 			options.CheckoutRemote = obs.GitRemote
 		}
 	}

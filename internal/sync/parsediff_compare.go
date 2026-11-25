@@ -64,7 +64,7 @@ func (e *Engine) compareStoredSession(
 		return nil, err
 	}
 	var remote string
-	if snapshot := snapshots[stored.ID]; snapshot.RemoteCandidateCount == 1 {
+	if snapshot := snapshots[stored.ID]; snapshot.RemoteCandidateCount == 1 || e.db.ArchiveContent().UsageOnly() {
 		remote = snapshot.GitRemote
 	}
 	toolLinks, err := e.parseDiffToolPRLinks(ctx, prepared, msgs, remote)
