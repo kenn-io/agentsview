@@ -67,12 +67,18 @@ unscored.
 
 The report counts lookup calls started by the time results for the cited
 session supply all expected phrases. A direct or CLI read identifies the
-session from its input. Facts may arrive across multiple results. The count
-includes MCP, CLI, direct reads, saved-output reads, and tool discovery.
-Expected phrases also grade the final answer. Errors, empty results,
-truncation, and calls per route appear per attempt. Wrong answers and timeouts
-fail. Missing results and calls whose timing cannot be compared leave a correct
-answer unscored. One- and two-call shares use all scheduled attempts.
+session from its input; a command that names several sessions stays unattributed
+when its output cannot be separated by session. Facts may arrive across
+multiple results. The count includes MCP, CLI, direct reads, saved-output reads,
+and tool discovery.
+
+Each question asks for a JSON object with named answer fields and the exact
+source session ID. The scorer checks those values exactly, so a wrong choice,
+contradiction, or changed identifier spelling cannot pass on keyword overlap.
+Errors, empty results, truncation, and calls per route appear per attempt.
+Wrong answers and timeouts fail. Missing results and calls whose timing cannot
+be compared leave a correct answer unscored. One- and two-call shares use all
+scheduled attempts.
 
 The lookup suite stores private captures and reports under
 `$XDG_CACHE_HOME/agentsview/memory-e2e/`, or the platform cache directory when

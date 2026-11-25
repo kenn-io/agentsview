@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -24,10 +25,11 @@ type lookupFixture struct {
 }
 
 type lookupQuestion struct {
-	Name     string       `json:"name"`
-	Prompt   string       `json:"prompt"`
-	Expected []lookupItem `json:"expected"`
-	Phrases  []string     `json:"phrases"`
+	Name           string            `json:"name"`
+	Prompt         string            `json:"prompt"`
+	Expected       []lookupItem      `json:"expected"`
+	ExpectedAnswer map[string]string `json:"expected_answer"`
+	Phrases        []string          `json:"phrases"`
 }
 
 type lookupAttempt struct {
@@ -91,7 +93,39 @@ func readLookupCorpus(repository string) ([]lookupFixture, []lookupQuestion, err
 	if err := readLookupJSON(filepath.Join(root, "questions.json"), &questions); err != nil {
 		return nil, nil, err
 	}
+	if err := validateLookupQuestions(questions); err != nil {
+		return nil, nil, err
+	}
 	return fixtures, questions, nil
+}
+
+func validateLookupQuestions(questions []lookupQuestion) error {
+	seen := map[string]struct{}{}
+	for _, q := range questions {
+		if strings.TrimSpace(q.Name) == "" || strings.TrimSpace(q.Prompt) == "" || len(q.Expected) == 0 || len(q.ExpectedAnswer) == 0 || len(q.Phrases) == 0 {
+			return fmt.Errorf("memory-e2e: lookup question %q needs a name, prompt, expected session, answer fields, and evidence phrases", q.Name)
+		}
+		if _, ok := seen[q.Name]; ok {
+			return fmt.Errorf("memory-e2e: duplicate lookup question %q", q.Name)
+		}
+		seen[q.Name] = struct{}{}
+		for _, item := range q.Expected {
+			if strings.TrimSpace(item.SessionID) == "" {
+				return fmt.Errorf("memory-e2e: lookup question %q has an empty expected session ID", q.Name)
+			}
+		}
+		for field, value := range q.ExpectedAnswer {
+			if strings.TrimSpace(field) == "" || field == "source_session_id" || strings.TrimSpace(value) == "" {
+				return fmt.Errorf("memory-e2e: lookup question %q has an invalid expected answer field", q.Name)
+			}
+		}
+		for _, phrase := range q.Phrases {
+			if strings.TrimSpace(phrase) == "" {
+				return fmt.Errorf("memory-e2e: lookup question %q has an empty evidence phrase", q.Name)
+			}
+		}
+	}
+	return nil
 }
 
 func runLookupSuite(ctx context.Context, cfg config, bin string) error {
@@ -222,7 +256,7 @@ func runLookupClient(
 		for i := 1; i <= cfg.runs; i++ {
 			runDir := filepath.Join(dir, q.Name, fmt.Sprintf("run-%d", i))
 			started := time.Now()
-			calls, answer, runErr := captureLookup(ctx, cfg, bin, client, project, model, server.url, q.Prompt, runDir)
+			calls, answer, runErr := captureLookup(ctx, cfg, bin, client, project, model, server.url, lookupPrompt(q), runDir)
 			a := &report.Attempts[index]
 			a.DurationMS = time.Since(started).Milliseconds()
 			a.Error = scoreError(runErr)
@@ -237,6 +271,17 @@ func runLookupClient(
 	}
 	report.Summary = summarizeLookups(report.Attempts)
 	return report, nil
+}
+
+func lookupPrompt(q lookupQuestion) string {
+	fields := make([]string, 0, len(q.ExpectedAnswer)+1)
+	for field := range q.ExpectedAnswer {
+		fields = append(fields, field)
+	}
+	sort.Strings(fields)
+	fields = append(fields, "source_session_id")
+	fieldList, _ := json.Marshal(fields)
+	return fmt.Sprintf("%s\n\nReturn only a JSON object with string fields %s. Copy each answer value exactly from the source, and include no other fields.", q.Prompt, fieldList)
 }
 
 func captureLookup(ctx context.Context, cfg config, bin string, client clientName, project, model, serverURL, prompt, dir string) ([]lookupCall, string, error) {

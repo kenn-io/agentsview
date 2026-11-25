@@ -46,6 +46,7 @@ var codexMCPInvocationPattern = regexp.MustCompile(`\btools\s*(?:\.\s*mcp__agent
 var mcpErrorPattern = regexp.MustCompile(`(?i)"is_?error"\s*:\s*true`)
 var runningCellPattern = regexp.MustCompile(`(?i)script (?:still )?running with cell ID\s+([^\s]+)`)
 var sessionProviderPrefix = regexp.MustCompile(`(?i)(?:([a-z][a-z0-9_-]*):|/sessions/([a-z][a-z0-9_-]*)/)$`)
+var lookupSessionIDPattern = regexp.MustCompile(`(?i)\b(?:([a-z][a-z0-9_-]*):)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b`)
 var errCaptureIncomplete = errors.New("capture incomplete")
 var errLookupClientFailed = errors.New("lookup client failed")
 
@@ -330,88 +331,249 @@ func containsItem(text string, item lookupItem) bool {
 	return containsSessionID(text, item.SessionID)
 }
 
-// lookupEvidence keeps search results for different sessions separate.
+func containsLookupPhrase(text, phrase string) bool {
+	text = strings.ToLower(strings.Join(strings.Fields(text), " "))
+	phrase = strings.ToLower(strings.Join(strings.Fields(phrase), " "))
+	return strings.Contains(text, phrase)
+}
+
+type lookupEvidenceFragment struct {
+	SessionID string
+	Text      string
+}
+
+// lookupEvidence keeps each result fragment tied to its explicit or typed source.
 func lookupEvidence(call lookupCall, item lookupItem) string {
-	if sessionReadMatches(call, item) || (call.Route == "direct" && strings.Contains(call.Result, `"type":"session_meta"`) && containsItem(call.Result, item)) {
-		return call.Result
+	fallback := ""
+	switch call.Route {
+	case "mcp":
+		fallback = mcpSessionReadID(call)
+	case "direct":
+		fallback = directFileReadID(call)
 	}
 	var evidence []string
-	var visit func(any) bool
-	visit = func(value any) bool {
-		switch value := value.(type) {
-		case string:
-			var decoded any
-			if json.Unmarshal([]byte(value), &decoded) == nil {
-				return visit(decoded)
-			}
-			if containsItem(value, item) {
-				evidence = append(evidence, value)
-				return true
-			}
-		case []any:
-			found := false
-			for _, child := range value {
-				found = visit(child) || found
-			}
-			return found
-		case map[string]any:
-			found := false
-			for _, child := range value {
-				if _, nested := child.(map[string]any); nested {
-					found = visit(child) || found
-				} else if _, nested := child.([]any); nested {
-					found = visit(child) || found
-				}
-			}
-			if !found && containsItem(rawText(value), item) {
-				evidence = append(evidence, rawText(value))
-				return true
-			}
-			return found
-		}
-		return false
-	}
-	for _, line := range strings.Split(call.Result, "\n") {
-		var value any
-		if json.Unmarshal([]byte(line), &value) == nil {
-			visit(value)
-		} else {
-			visit(line)
+	for _, fragment := range lookupEvidenceFragments(call.Result, fallback, call.Route == "direct") {
+		if containsSessionID(fragment.SessionID, item.SessionID) {
+			evidence = append(evidence, fragment.Text)
 		}
 	}
 	return strings.Join(evidence, "\n")
 }
 
-var ownerAnswerPattern = regexp.MustCompile(`(?i)\b(?:maple(?:\s+team)?\s+(?:now\s+|currently\s+)?(?:owns|took over|is (?:the |now the |currently the )?owner)|(?:owner|team)(?:\s+is|:)\s+(?:the\s+)?maple(?:\s+team)?)\b`)
-var negatedOwnerPattern = regexp.MustCompile(`(?i)\b(?:not|never|neither|isn't|wasn't)\b[^.!?\n]*\bmaple\b|\bmaple\b[^.!?\n]*\b(?:does not|doesn't|is not|isn't|was not|wasn't|never)\b`)
+func mcpSessionReadID(call lookupCall) string {
+	if call.Route != "mcp" {
+		return ""
+	}
+	for _, name := range []string{
+		"get_messages", "get_tool_calls", "get_session_overview", "get_child_sessions",
+		"get_compaction_summaries", "search_content", "search_sessions",
+	} {
+		if call.Name != name && !strings.HasSuffix(call.Name, "__"+name) {
+			continue
+		}
+		var input map[string]any
+		if json.Unmarshal([]byte(call.Input), &input) != nil {
+			return ""
+		}
+		id, _ := input["session_id"].(string)
+		id = strings.TrimSpace(id)
+		matches := lookupSessionIDPattern.FindAllString(id, -1)
+		if len(matches) != 1 || !strings.EqualFold(matches[0], id) {
+			return ""
+		}
+		return id
+	}
+	return ""
+}
+
+func directFileReadID(call lookupCall) string {
+	if call.Route != "direct" || call.Name != "Read" {
+		return ""
+	}
+	var input struct {
+		FilePath string `json:"file_path"`
+	}
+	if json.Unmarshal([]byte(call.Input), &input) != nil {
+		return ""
+	}
+	base := input.FilePath
+	if index := strings.LastIndexAny(base, `/\\`); index >= 0 {
+		base = base[index+1:]
+	}
+	if !strings.HasSuffix(strings.ToLower(base), ".jsonl") {
+		return ""
+	}
+	matches := lookupSessionIDPattern.FindAllStringSubmatch(base, -1)
+	if len(matches) != 1 {
+		return ""
+	}
+	return matches[0][2]
+}
+
+func lookupEvidenceFragments(result, fallback string, nativeTranscript bool) []lookupEvidenceFragment {
+	var fragments []lookupEvidenceFragment
+	sourceID := fallback
+	for _, line := range strings.Split(result, "\n") {
+		var value any
+		if json.Unmarshal([]byte(line), &value) == nil {
+			if nativeTranscript {
+				if id, isHeader := transcriptHeaderID(value); isHeader {
+					sourceID = id
+				}
+			}
+			collectLookupEvidence(value, sourceID, &fragments)
+			continue
+		}
+		collectLookupEvidence(line, sourceID, &fragments)
+	}
+	return fragments
+}
+
+func transcriptHeaderID(value any) (string, bool) {
+	row, ok := value.(map[string]any)
+	if !ok {
+		return "", false
+	}
+	if row["type"] == "session_meta" {
+		payload, _ := row["payload"].(map[string]any)
+		id, _ := payload["id"].(string)
+		return strings.TrimSpace(id), true
+	}
+	if id, ok := row["sessionId"].(string); ok {
+		return strings.TrimSpace(id), true
+	}
+	return "", false
+}
+
+func lookupSourceID(row map[string]any) string {
+	for _, key := range []string{"session_id", "source_session_id"} {
+		if id, ok := row[key].(string); ok && strings.TrimSpace(id) != "" {
+			return strings.TrimSpace(id)
+		}
+	}
+	if row["type"] == "session_meta" {
+		if payload, ok := row["payload"].(map[string]any); ok {
+			if id, ok := payload["id"].(string); ok {
+				return strings.TrimSpace(id)
+			}
+		}
+	}
+	return ""
+}
+
+func transcriptPathSessionID(text string) string {
+	end := strings.Index(strings.ToLower(text), ".jsonl:")
+	if end < 0 {
+		return ""
+	}
+	file := text[:end+len(".jsonl")]
+	base := file
+	if index := strings.LastIndexAny(base, `/\\`); index >= 0 {
+		base = base[index+1:]
+	}
+	matches := lookupSessionIDPattern.FindAllStringSubmatch(base, -1)
+	if len(matches) != 1 {
+		return ""
+	}
+	return matches[0][2]
+}
+
+func collectLookupEvidence(value any, inherited string, fragments *[]lookupEvidenceFragment) {
+	switch value := value.(type) {
+	case string:
+		var decoded any
+		if json.Unmarshal([]byte(value), &decoded) == nil {
+			collectLookupEvidence(decoded, inherited, fragments)
+			return
+		}
+		sourceID := inherited
+		if sourceID == "" {
+			sourceID = transcriptPathSessionID(value)
+		}
+		if sourceID != "" && strings.TrimSpace(value) != "" {
+			*fragments = append(*fragments, lookupEvidenceFragment{SessionID: sourceID, Text: value})
+		}
+	case []any:
+		for _, child := range value {
+			collectLookupEvidence(child, inherited, fragments)
+		}
+	case map[string]any:
+		sourceID := lookupSourceID(value)
+		if sourceID == "" {
+			sourceID = inherited
+		}
+		var text []string
+		for key, child := range value {
+			if key == "session_id" || key == "source_session_id" || key == "sessionId" {
+				continue
+			}
+			switch child := child.(type) {
+			case string:
+				var decoded any
+				if json.Unmarshal([]byte(child), &decoded) == nil {
+					collectLookupEvidence(decoded, sourceID, fragments)
+				} else {
+					text = append(text, child)
+				}
+			case map[string]any, []any:
+				collectLookupEvidence(child, sourceID, fragments)
+			}
+		}
+		if sourceID == "" {
+			sourceID = transcriptPathSessionID(strings.Join(text, " "))
+		}
+		if sourceID != "" {
+			if len(text) == 0 {
+				text = append(text, sourceID)
+			}
+			*fragments = append(*fragments, lookupEvidenceFragment{SessionID: sourceID, Text: strings.Join(text, "\n")})
+		}
+	}
+}
 
 func scoreLookupQuestion(q lookupQuestion, answer string, calls []lookupCall, runErr error) lookupScore {
-	s := scoreLookup(answer, q.Expected, q.Phrases, calls, runErr)
-	shortAnswer := answer
-	for _, item := range q.Expected {
-		shortAnswer = strings.ReplaceAll(shortAnswer, item.SessionID, "")
+	sourceID, valid := lookupAnswerSource(q, answer)
+	var expected []lookupItem
+	if valid {
+		for _, item := range q.Expected {
+			if item.SessionID == sourceID {
+				expected = append(expected, item)
+			}
+		}
 	}
-	shortAnswer = normalizePhrase(shortAnswer)
-	if q.Name == "owner" && strings.TrimSpace(answer) != "" && (negatedOwnerPattern.MatchString(answer) || (!ownerAnswerPattern.MatchString(answer) && shortAnswer != "maple" && shortAnswer != "maple team")) {
+	s := scoreLookupEvidence(answer, expected, nil, q.Phrases, calls, runErr)
+	if !valid && s.Verdict != "unscored" {
 		s.Verdict = "failed"
 		s.CallsToHit = nil
 	}
 	return s
 }
 
-func sessionReadMatches(call lookupCall, item lookupItem) bool {
-	if call.Route == "direct" || call.Route == "cli" {
-		return containsSessionID(call.Input, item.SessionID)
+func lookupAnswerSource(q lookupQuestion, answer string) (string, bool) {
+	if len(q.ExpectedAnswer) == 0 {
+		return "", false
 	}
-	if call.Route != "mcp" {
-		return false
+	var values map[string]string
+	if err := json.Unmarshal([]byte(answer), &values); err != nil || len(values) != len(q.ExpectedAnswer)+1 {
+		return "", false
 	}
-	for _, name := range []string{"get_messages", "get_tool_calls", "get_session_overview", "get_child_sessions"} {
-		if call.Name == name || strings.HasSuffix(call.Name, "__"+name) {
-			return containsSessionID(call.Input, item.SessionID)
+	sourceID, ok := values["source_session_id"]
+	if !ok {
+		return "", false
+	}
+	matchedSource := false
+	for _, item := range q.Expected {
+		matchedSource = matchedSource || sourceID == item.SessionID
+	}
+	if !matchedSource {
+		return "", false
+	}
+	for key, expected := range q.ExpectedAnswer {
+		if values[key] != expected {
+			return "", false
 		}
 	}
-	return false
+	return sourceID, true
 }
 
 func containsSessionID(text, sessionID string) bool {
@@ -448,6 +610,16 @@ func containsSessionID(text, sessionID string) bool {
 }
 
 func scoreLookup(answer string, expected []lookupItem, phrases []string, calls []lookupCall, runErr error) lookupScore {
+	return scoreLookupEvidence(answer, expected, phrases, phrases, calls, runErr)
+}
+
+func scoreLookupEvidence(
+	answer string,
+	expected []lookupItem,
+	answerPhrases, evidencePhrases []string,
+	calls []lookupCall,
+	runErr error,
+) lookupScore {
 	s := lookupScore{Verdict: "failed"}
 	captureIncomplete := errors.Is(runErr, errCaptureIncomplete) &&
 		!errors.Is(runErr, context.Canceled) &&
@@ -460,8 +632,8 @@ func scoreLookup(answer string, expected []lookupItem, phrases []string, calls [
 		}
 	}
 	correct := (runErr == nil || captureIncomplete) && len(cited) > 0
-	for _, phrase := range phrases {
-		correct = correct && strings.Contains(normalizePhrase(answer), normalizePhrase(phrase))
+	for _, phrase := range answerPhrases {
+		correct = correct && containsLookupPhrase(answer, phrase)
 	}
 	var hit *lookupCall
 	for i := range calls {
@@ -508,8 +680,8 @@ func scoreLookup(answer string, expected []lookupItem, phrases []string, calls [
 			evidence.WriteString(" ")
 			evidence.WriteString(part)
 			complete := true
-			for _, phrase := range phrases {
-				complete = complete && strings.Contains(normalizePhrase(evidence.String()), normalizePhrase(phrase))
+			for _, phrase := range evidencePhrases {
+				complete = complete && containsLookupPhrase(evidence.String(), phrase)
 			}
 			if complete {
 				if hit == nil || c.End < hit.End {
