@@ -25,10 +25,6 @@ func (l *boundedLRU[K, V]) Len() int {
 	return l.entries.Len()
 }
 
-func (l *boundedLRU[K, V]) contains(key K) bool {
-	return l.entries != nil && l.entries.Contains(key)
-}
-
 func (l *boundedLRU[K, V]) get(key K) (V, bool) {
 	var zero V
 	if l.entries == nil {

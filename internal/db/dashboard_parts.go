@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/json/v2"
 	"fmt"
-	"maps"
 	"slices"
 	"sort"
 	"sync"
@@ -40,22 +39,6 @@ type dashboardPartsMemo struct {
 	maxBytes int64
 }
 
-// reuse copies parts whose fingerprint matches into parts and returns the ids still to read.
-func (m *dashboardPartsMemo) reuse(slot, version string, ids []string, versions map[string]string, parts map[string]kept.Part[dashboardPart]) []string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.slot != slot || m.version != version {
-		return ids
-	}
-	missing := ids[:0]
-	for _, id := range ids {
-		if !m.reusePart(id, versions, parts) {
-			missing = append(missing, id)
-		}
-	}
-	return missing
-}
-
 func (m *dashboardPartsMemo) reuseSelection(slot, version string, sessions []dashboardSession, versions map[string]string, parts map[string]kept.Part[dashboardPart]) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -77,11 +60,7 @@ func (m *dashboardPartsMemo) reusePart(id string, versions map[string]string, pa
 	return true
 }
 
-func (m *dashboardPartsMemo) store(slot, version string, parts map[string]kept.Part[dashboardPart]) {
-	m.storeParts(slot, version, parts, parts, false)
-}
-
-func (m *dashboardPartsMemo) storeParts(slot, version string, parts, selection map[string]kept.Part[dashboardPart], diskOnly bool) {
+func (m *dashboardPartsMemo) storeParts(slot, version string, parts, selection map[string]kept.Part[dashboardPart]) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	maxBytes := m.maxBytes
@@ -92,61 +71,56 @@ func (m *dashboardPartsMemo) storeParts(slot, version string, parts, selection m
 		m.slot, m.version = slot, version
 		m.reset()
 	}
-	if diskOnly {
-		// Saved parts may fill spare space without evicting hot entries.
-		var pending []string
-		for id, p := range parts {
-			if cached, ok := m.peek(id); !ok || cached.Fingerprint != p.Fingerprint {
-				pending = append(pending, id)
-			}
+	var pending []string
+	for id, p := range parts {
+		if cached, ok := m.peek(id); !ok || cached.Fingerprint != p.Fingerprint {
+			pending = append(pending, id)
 		}
-		slices.Sort(pending)
-		for _, id := range pending {
-			p := parts[id]
-			available := maxBytes - m.bytes
-			if cached, ok := m.peek(id); ok {
-				available += dashboardPartBytes(cached)
-			}
-			size := dashboardPartBytes(p)
-			if size > available {
-				continue
-			}
-			m.remove(id)
-			m.add(id, p, size)
-		}
+	}
+	if len(pending) == 0 {
 		return
 	}
-	var total int64
-	for _, p := range selection {
-		total += dashboardPartBytes(p)
-		if total > maxBytes {
-			break
+	slices.Sort(pending)
+	var selectedBytes int64
+	for id := range selection {
+		if p, ok := m.peek(id); ok {
+			selectedBytes += dashboardPartBytes(p)
 		}
 	}
-	if total > maxBytes {
-		for _, id := range slices.Sorted(maps.Keys(parts)) {
-			p := parts[id]
-			if cached, ok := m.peek(id); ok {
-				if cached.Fingerprint == p.Fingerprint {
-					_, _ = m.get(id)
-					continue
-				}
-				m.remove(id)
-			}
-			size := dashboardPartBytes(p)
-			if size > maxBytes-m.bytes {
-				continue
-			}
-			m.add(id, p, size)
-		}
-		return
-	}
-	for _, id := range slices.Sorted(maps.Keys(parts)) {
+	var oldest []string
+	next := 0
+	for _, id := range pending {
 		p := parts[id]
-		m.remove(id)
-		m.add(id, p, dashboardPartBytes(p))
+		if cached, ok := m.peek(id); ok {
+			m.remove(id)
+			if _, selected := selection[id]; selected {
+				selectedBytes -= dashboardPartBytes(cached)
+			}
+		}
+		size := dashboardPartBytes(p)
+		if size > maxBytes-selectedBytes {
+			continue
+		}
+		// Retain selected parts and evict unrelated entries in LRU order.
+		if m.bytes+size > maxBytes {
+			if oldest == nil {
+				oldest = m.keys()
+			}
+			for next < len(oldest) && m.bytes+size > maxBytes {
+				old := oldest[next]
+				next++
+				if _, selected := selection[old]; !selected {
+					m.remove(old)
+				}
+			}
+		}
+		if m.bytes+size <= maxBytes {
+			m.add(id, p, size)
+			if _, selected := selection[id]; selected {
+				selectedBytes += size
+			}
+		}
 	}
-	m.trim(maxBytes)
 }
 
 func dashboardPartBytes(p kept.Part[dashboardPart]) int64 {
@@ -245,8 +219,8 @@ func (db *DB) dashboardParts(ctx context.Context, f AnalyticsFilter) ([]dashboar
 		}
 		sort.Strings(ids)
 		memoSlot := "dashboard-parts|" + TrendsTimezoneKey(f)
-		db.dashboardMemo.storeParts(memoSlot, version, parts, parts, true)
 		db.dashboardMemo.reuseSelection(memoSlot, version, sessions, versions, parts)
+		db.dashboardMemo.storeParts(memoSlot, version, parts, parts)
 		ids = slices.DeleteFunc(ids, func(id string) bool {
 			_, reused := parts[id]
 			return reused
@@ -264,7 +238,7 @@ func (db *DB) dashboardParts(ctx context.Context, f AnalyticsFilter) ([]dashboar
 			for _, id := range ids {
 				filled[id] = parts[id]
 			}
-			db.dashboardMemo.storeParts(memoSlot, version, filled, parts, false)
+			db.dashboardMemo.storeParts(memoSlot, version, filled, parts)
 		}
 		if len(changed) > 0 {
 			saveDashboardParts(db, slot, version, parts)
