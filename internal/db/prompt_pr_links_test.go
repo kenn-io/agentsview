@@ -676,6 +676,30 @@ func TestUsageOnlyPRLinksPreferRecordedCheckoutRemote(t *testing.T) {
 	assert.Equal(t, "https://github.com/example/repo/pull/42", got.PRLinks[0].URL)
 }
 
+func TestUsageOnlyPRLinksResolvedForkCheckout(t *testing.T) {
+	for _, host := range []string{"github.com", "ghe.example"} {
+		t.Run(host, func(t *testing.T) {
+			d := testDB(t)
+			d.SetArchiveContent(config.ArchiveContentUsage)
+			s := Session{ID: "fork-context", Project: "project", Machine: "local", Agent: "codex", Cwd: "/work/repo"}
+			SetUsagePRRemote(&s, "https://"+host+"/fork/repo.git")
+			message := Message{SessionID: s.ID, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "exec_command", Category: "Bash", InputJSON: `{"cmd":"gh pr view 42 -R org/repo"}`}}}
+			_, err := d.WriteSessionBatchContext(t.Context(), []SessionBatchWrite{{Session: s, Messages: []Message{message}, ReplaceMessages: true}})
+			require.NoError(t, err)
+			obs := export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, GitRemote: "https://" + host + "/fork/repo.git", GitRemoteName: "origin", RemoteResolution: export.ProjectResolutionResolved, RemoteCandidateCount: 2, ObservedAt: time.Now().UTC()}
+			require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), obs))
+			message.ToolCalls[0].InputJSON = `{"cmd":"gh pr view 43 -R org/repo"}`
+			_, err = d.WriteSessionBatchContext(t.Context(), []SessionBatchWrite{{Session: s, Messages: []Message{message}, ReplaceMessages: true}})
+			require.NoError(t, err)
+			got, err := d.GetSession(t.Context(), s.ID)
+			require.NoError(t, err)
+			require.Len(t, got.PRLinks, 2)
+			assert.Equal(t, "https://"+host+"/org/repo/pull/42", got.PRLinks[0].URL)
+			assert.Equal(t, "https://"+host+"/org/repo/pull/43", got.PRLinks[1].URL)
+		})
+	}
+}
+
 func TestUsageOnlyPRLinksPreserveAmbiguousCheckout(t *testing.T) {
 	d := testDB(t)
 	d.SetArchiveContent(config.ArchiveContentUsage)
