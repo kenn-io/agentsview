@@ -259,7 +259,7 @@ func TestCodexLabeledRunResyncAndExplicitWorktreeMappingWins(t *testing.T) {
 }
 
 func TestCodexLabeledCopyWinsSync(t *testing.T) {
-	for _, mode := range []string{"changed path", "newer then older", "missed event", "same batch"} {
+	for _, mode := range []string{"changed path", "newer then older", "missed event", "same batch", "single session"} {
 		t.Run(mode, func(t *testing.T) {
 			database := openTestDB(t)
 			root := t.TempDir()
@@ -268,14 +268,24 @@ func TestCodexLabeledCopyWinsSync(t *testing.T) {
 			name := "rollout-2026-10-08T12-00-00-" + id + ".jsonl"
 			paths := []string{filepath.Join(ordinary, "2026", "10", "08", name), filepath.Join(logs, "a", ".codex-run-v1-abc", "sessions", "2026", "10", "08", name), filepath.Join(logs, "b", ".codex-run-v1-abc", "sessions", "2026", "10", "08", name)}
 			meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z")
-			for i, path := range paths {
+			write := func(i int, path string) {
 				dbtest.WriteTestFile(t, path, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", []string{"ordinary", "a", "b"}[i], "2026-10-08T12:00:01Z")+"\n"))
 				mtime := time.Now().Add(time.Duration(i) * time.Hour)
 				require.NoError(t, os.Chtimes(path, mtime, mtime))
 			}
+			write(0, paths[0])
+			if mode != "single session" {
+				write(1, paths[1])
+				write(2, paths[2])
+			}
 			engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {ordinary, logs}}})
 			t.Cleanup(engine.Close)
 			switch mode {
+			case "single session":
+				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[0]}))
+				write(1, paths[1])
+				write(2, paths[2])
+				require.NoError(t, engine.SyncSingleSessionContext(t.Context(), "codex:"+id))
 			case "same batch":
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[1], paths[2]}))
 			case "changed path":

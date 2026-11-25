@@ -174,10 +174,14 @@ func TestCodexLabeledCompressionUsesPlainCopyTime(t *testing.T) {
 	}
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	sources, err := provider.Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	assert.Equal(t, newer, sources[0].DisplayPath)
+	pinner := provider.(interface {
+		SourceRefForPath(string) (SourceRef, bool)
+	})
+	compressedSource, ok := pinner.SourceRefForPath(compressed)
+	require.True(t, ok)
+	newerSource, ok := pinner.SourceRefForPath(newer)
+	require.True(t, ok)
+	assert.Less(t, CodexSourceRank(compressedSource).Recency, CodexSourceRank(newerSource).Recency)
 }
 
 // TestCodexParseCompressedRolloutMatchesPlain: the compressed file parses to

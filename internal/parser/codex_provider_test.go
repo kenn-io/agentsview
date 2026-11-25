@@ -2451,23 +2451,24 @@ func TestCodexLabeledRunOverlappingRootsAndLookup(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, path, found.DisplayPath)
-}
 
-func TestCodexRankOverlappingRoots(t *testing.T) {
-	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
-	root := t.TempDir()
-	inner := filepath.Join(root, "team", "case", ".codex-run-v1-abc", "sessions")
-	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", tsEarly)
-	labeled := writeCodexProviderSessionContent(t, inner, id, testjsonl.JoinJSONL(meta, testjsonl.CodexMsgJSON("user", "labeled", tsEarlyS1)))
-	writeCodexProviderSessionContent(t, root, id, testjsonl.JoinJSONL(meta, testjsonl.CodexMsgJSON("user", "ordinary", tsEarlyS1)))
-	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{inner, root}})
+	provider, ok = NewProvider(AgentCodex, ProviderConfig{Roots: []string{filepath.Join(inner, "case", ".codex-run-v1-abc", "sessions"), root}})
 	require.True(t, ok)
 	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
-	assert.Equal(t, labeled, sources[0].DisplayPath)
+	assert.Equal(t, path, sources[0].DisplayPath)
 	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 	assert.Equal(t, "team/case", outcome.Results[0].Result.Session.Project)
+
+	newer := writeCodexProviderSessionContent(t, filepath.Join(root, "newer", ".codex-run-v1-xyz", "sessions"), id, testjsonl.JoinJSONL(meta, testjsonl.CodexMsgJSON("user", "newer", tsEarlyS1)))
+	now := time.Now()
+	require.NoError(t, os.Chtimes(path, now.Add(-time.Hour), now.Add(-time.Hour)))
+	require.NoError(t, os.Chtimes(newer, now, now))
+	sources, err = provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, newer, sources[0].DisplayPath)
 }
