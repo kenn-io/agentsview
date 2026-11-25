@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tidwall/gjson"
+	"go.kenn.io/agentsview/internal/mcp"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -391,21 +392,30 @@ func codexLookupCalls(ctx context.Context, events []map[string]any) []lookupCall
 func resultFlags(c *lookupCall) {
 	result := c.Result + c.StructuredResult
 	c.Truncated = truncatedResultPattern.MatchString(result)
-	c.Empty = lookupResultEmpty(c.Result) || lookupResultEmpty(c.StructuredResult)
+	c.Empty = lookupResultEmpty(c.Name, c.Result) || lookupResultEmpty(c.Name, c.StructuredResult)
 	if c.Route == "other" && lookupOutputPattern.MatchString(result) {
 		c.Route = "direct"
 	}
 }
 
-func lookupResultEmpty(result string) bool {
-	value := gjson.Parse(result)
-	for _, field := range []string{"matches", "messages", "results", "sessions", "tool_calls", "entries"} {
-		item := value.Get(field)
-		if item.Exists() && (item.Type == gjson.Null || item.IsArray() && len(item.Array()) == 0) {
-			return true
-		}
+func lookupResultEmpty(name, result string) bool {
+	item := gjson.Parse(result).Get(lookupResultField(name))
+	return item.Exists() && (item.Type == gjson.Null || item.IsArray() && len(item.Array()) == 0)
+}
+
+func lookupResultField(name string) string {
+	if _, suffix, ok := strings.Cut(name, "mcp__agentsview__"); ok {
+		name = suffix
 	}
-	return false
+	name = strings.TrimPrefix(name, "agentsview:")
+	switch name {
+	case "get_messages":
+		return "messages"
+	case "get_tool_calls":
+		return "tool_calls"
+	default:
+		return mcp.SearchResultField(name)
+	}
 }
 
 func containsLookupPhrase(text, phrase string) bool {

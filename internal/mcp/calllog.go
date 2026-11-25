@@ -45,7 +45,8 @@ type CallSummary struct {
 	MedianMs         int         `json:"median_ms"`
 }
 
-func searchField(tool string) string {
+// SearchResultField returns the result field used to count empty searches.
+func SearchResultField(tool string) string {
 	switch tool {
 	case ToolSearchSessions, ToolSearchDocs:
 		return "results"
@@ -117,8 +118,8 @@ func recordToolCall(dir string, req *mcp.CallToolRequest, result mcp.Result, cal
 			var content any
 			if json.Unmarshal(b, &content) == nil {
 				rec.Truncated = hasTruncated(content)
-				if fields, ok := content.(map[string]any); ok && searchField(name) != "" {
-					if value, exists := fields[searchField(name)]; exists {
+				if fields, ok := content.(map[string]any); ok && SearchResultField(name) != "" {
+					if value, exists := fields[SearchResultField(name)]; exists {
 						if entries, ok := value.([]any); ok && len(entries) == 0 || value == nil {
 							rec.Empty = true
 						}
@@ -212,7 +213,7 @@ func SummarizeCalls(dir, from, to string) ([]CallSummary, error) {
 			if rec.Truncated {
 				g.truncated++
 			}
-			if searchField(rec.Tool) != "" && !rec.Continuation {
+			if SearchResultField(rec.Tool) != "" && !rec.Continuation {
 				g.searches++
 				if rec.Empty {
 					g.empty++
@@ -229,7 +230,7 @@ func SummarizeCalls(dir, from, to string) ([]CallSummary, error) {
 	for _, g := range groups {
 		g.row.ErrorPercent = 100 * float64(g.errors) / float64(g.row.Calls)
 		g.row.TruncatedPercent = 100 * float64(g.truncated) / float64(g.row.Calls)
-		if searchField(g.row.Tool) != "" && g.searches > 0 {
+		if SearchResultField(g.row.Tool) != "" && g.searches > 0 {
 			pct := 100 * float64(g.empty) / float64(g.searches)
 			g.row.EmptyPercent = &pct
 		}

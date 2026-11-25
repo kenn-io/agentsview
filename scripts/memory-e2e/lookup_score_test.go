@@ -110,15 +110,21 @@ func TestLookupRetainsCallsBeforeMalformedJSONL(t *testing.T) {
 }
 
 func TestLookupCountsEmptyMessageAndToolCallResults(t *testing.T) {
-	for _, result := range []string{`{"messages":[]}`, `{"tool_calls":null}`} {
-		call := lookupCall{Result: result}
+	for _, tc := range []struct{ name, result string }{{"get_messages", `{"messages":[]}`}, {"get_tool_calls", `{"tool_calls":null}`}} {
+		call := lookupCall{Name: tc.name, Result: tc.result}
 		resultFlags(&call)
-		assert.True(t, call.Empty, result)
+		assert.True(t, call.Empty, tc.result)
 	}
 }
 
 func TestLookupDoesNotCountNestedEmptyResult(t *testing.T) {
-	call := lookupCall{Route: "mcp", Result: `{"sessions":[{"id":"codex:1","messages":[]}],"total":1}`}
+	call := lookupCall{Route: "mcp", Name: "list_sessions", Result: `{"sessions":[{"id":"codex:1","messages":[]}],"total":1}`}
+	resultFlags(&call)
+	assert.False(t, call.Empty)
+}
+
+func TestLookupEmptyUsesToolResultField(t *testing.T) {
+	call := lookupCall{Route: "mcp", Name: "mcp__agentsview__search_content", Result: `{"matches":[{"content":"found"}],"messages":[]}`}
 	resultFlags(&call)
 	assert.False(t, call.Empty)
 }
