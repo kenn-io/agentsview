@@ -128,6 +128,11 @@ func TestUsageChangeJournal(t *testing.T) {
 					_, err := d.getWriter().ExecContext(ctx, "UPDATE sessions SET parent_session_id = ? WHERE id = ?", "parent", s.ID)
 					require.NoError(t, err)
 				}},
+				{"parser parent", func(t *testing.T, s Session) {
+					t.Helper()
+					_, err := d.getWriter().ExecContext(ctx, "UPDATE sessions SET parser_parent_session_id = ? WHERE id = ?", "parent", s.ID)
+					require.NoError(t, err)
+				}},
 				{"external parent insert", func(t *testing.T, s Session) {
 					t.Helper()
 					_, err := d.getWriter().ExecContext(ctx, `INSERT INTO session_external_parents(session_id, parent_session_id) VALUES (?, 'parent')`, s.ID)
@@ -315,7 +320,7 @@ func TestUsageChangeJournal(t *testing.T) {
 				return
 			}
 
-			t.Run("spawn link update and self delete", func(t *testing.T) {
+			t.Run("spawn link changes", func(t *testing.T) {
 				keptActivitySession(t, d, "owner", "project-a", "2026-06-14")
 				result, err := d.getWriter().ExecContext(ctx, `INSERT INTO tool_calls (message_id, session_id, tool_name, category)
 					SELECT id, 'owner', 'Task', 'Task' FROM messages WHERE session_id = 'owner' AND ordinal = 0`)
@@ -329,6 +334,23 @@ func TestUsageChangeJournal(t *testing.T) {
 				after, err := d.UsageChangeRevision(ctx)
 				require.NoError(t, err)
 				changed, err := d.LoadUsageChanges(ctx, before, after)
+				require.NoError(t, err)
+				assert.Equal(t, []string{"child"}, changed)
+				before = after
+				_, err = d.getWriter().ExecContext(ctx, `DELETE FROM tool_calls WHERE id = ?`, callID)
+				require.NoError(t, err)
+				after, err = d.UsageChangeRevision(ctx)
+				require.NoError(t, err)
+				changed, err = d.LoadUsageChanges(ctx, before, after)
+				require.NoError(t, err)
+				assert.Equal(t, []string{"child"}, changed)
+				before = after
+				_, err = d.getWriter().ExecContext(ctx, `INSERT INTO tool_calls (message_id, session_id, tool_name, category, subagent_session_id)
+					SELECT id, 'owner', 'Task', 'Task', 'child' FROM messages WHERE session_id = 'owner' AND ordinal = 0`)
+				require.NoError(t, err)
+				after, err = d.UsageChangeRevision(ctx)
+				require.NoError(t, err)
+				changed, err = d.LoadUsageChanges(ctx, before, after)
 				require.NoError(t, err)
 				assert.Equal(t, []string{"child"}, changed)
 				result, err = d.getWriter().ExecContext(ctx, `INSERT INTO tool_calls (message_id, session_id, tool_name, category, subagent_session_id)

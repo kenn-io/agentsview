@@ -697,7 +697,7 @@ func TestCheckSchemaCompatRequiresCurationBaselineColumns(t *testing.T) {
 	assert.Contains(t, err.Error(), "sessions table missing curation columns")
 }
 
-func TestCheckSchemaCompatRequiresDeletionCause(t *testing.T) {
+func TestCheckSchemaCompatRequiresSessionColumns(t *testing.T) {
 	for _, column := range []string{"deletion_cause", "external_parent_session_id"} {
 		t.Run(column, func(t *testing.T) {
 			pg, state := newSchemaProbeDB(t, nil)

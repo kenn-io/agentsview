@@ -60,28 +60,7 @@ func keptActivityBuild(t *testing.T, d *DB, f AnalyticsFilter, q activity.Query,
 
 func clearKeptActivity(d *DB) { d.activityKept.DeleteSlots(func(string) bool { return true }) }
 
-func TestActivityKeptRefreshesWhenParserParentAppears(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	keptActivitySession(t, d, "parent", "project-a", "2026-06-13")
-	keptActivitySession(t, d, "child", "project-b", "2026-06-14")
-	link, err := d.SetSessionExternalParent(ctx, "child", "parent")
-	require.NoError(t, err)
-	require.True(t, link.Applied)
-	q := dayQuery(t, "2026-06-14", "UTC")
-	f := AnalyticsFilter{Timezone: "UTC", Project: "project-a"}
-	before := keptActivityBuild(t, d, f, q, true)
-	assert.Equal(t, 1, before.Report.InteractivePeak.Agents)
-	keptActivityBuild(t, d, f, q, false)
-	_, err = d.getWriter().ExecContext(ctx, `UPDATE sessions SET parser_parent_session_id = 'parent' WHERE id = 'child'`)
-	require.NoError(t, err)
-	after := keptActivityBuild(t, d, f, q, true)
-	assert.Zero(t, after.Report.InteractivePeak.Agents)
-	clearKeptActivity(d)
-	assert.Equal(t, after, keptActivityBuild(t, d, f, q, true))
-}
-
-func TestActivityKeptRefreshesWhenSpawnLinkChanges(t *testing.T) {
+func TestActivityKeptRefreshesWhenLaunchEvidenceChanges(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	keptActivitySession(t, d, "parent", "project-a", "2026-06-13")
@@ -96,29 +75,26 @@ func TestActivityKeptRefreshesWhenSpawnLinkChanges(t *testing.T) {
 	require.NoError(t, err)
 	q := dayQuery(t, "2026-06-14", "UTC")
 	f := AnalyticsFilter{Timezone: "UTC", Project: "project-a"}
-	first := keptActivityBuild(t, d, f, q, true)
-	assert.Zero(t, first.Report.InteractivePeak.Agents)
+	assert.Zero(t, keptActivityBuild(t, d, f, q, true).Report.InteractivePeak.Agents)
 	keptActivityBuild(t, d, f, q, false)
 	_, err = d.getWriter().ExecContext(ctx, `DELETE FROM tool_calls WHERE id = ?`, callID)
 	require.NoError(t, err)
-	after := keptActivityBuild(t, d, f, q, true)
-	assert.Equal(t, 1, after.Report.InteractivePeak.Agents)
+	eligible := keptActivityBuild(t, d, f, q, true)
+	assert.Equal(t, 1, eligible.Report.InteractivePeak.Agents)
 	clearKeptActivity(d)
-	assert.Equal(t, after, keptActivityBuild(t, d, f, q, true))
-	_, err = d.getWriter().ExecContext(ctx, `INSERT INTO tool_calls (message_id, session_id, tool_name, category, subagent_session_id)
-		SELECT id, 'owner', 'Task', 'Task', 'child' FROM messages WHERE session_id = 'owner' AND ordinal = 0`)
+	assert.Equal(t, eligible, keptActivityBuild(t, d, f, q, true))
+	_, err = d.getWriter().ExecContext(ctx, `UPDATE sessions SET parser_parent_session_id = 'parent' WHERE id = 'child'`)
 	require.NoError(t, err)
-	again := keptActivityBuild(t, d, f, q, true)
-	assert.Zero(t, again.Report.InteractivePeak.Agents)
+	ineligible := keptActivityBuild(t, d, f, q, true)
+	assert.Zero(t, ineligible.Report.InteractivePeak.Agents)
 	clearKeptActivity(d)
-	assert.Equal(t, again, keptActivityBuild(t, d, f, q, true))
+	assert.Equal(t, ineligible, keptActivityBuild(t, d, f, q, true))
 }
 
-func TestActivityOngoingUsageIgnoresHiddenRunChanges(t *testing.T) {
+func TestActivityKeptHiddenRunEligibility(t *testing.T) {
 	d := testDB(t)
 	keptActivitySession(t, d, "visible", "project-a", "2026-06-14")
 	q := dayQuery(t, "2026-06-14", "UTC")
-	q.Partial = true
 	f := AnalyticsFilter{Timezone: "UTC", Project: "project-a"}
 	revision, err := d.UsageChangeRevision(t.Context())
 	require.NoError(t, err)
@@ -128,10 +104,6 @@ func TestActivityOngoingUsageIgnoresHiddenRunChanges(t *testing.T) {
 		s.EndedAt = new("2026-06-14T10:01:00Z")
 	})
 	valid, err := d.keptActivityChangesValid(t.Context(), revision, []string{"visible"}, []string{"visible"}, f, q)
-	require.NoError(t, err)
-	assert.True(t, valid)
-	q.Partial = false
-	valid, err = d.keptActivityChangesValid(t.Context(), revision, []string{"visible"}, []string{"visible"}, f, q)
 	require.NoError(t, err)
 	assert.True(t, valid, "a native subagent is not hidden launcher evidence")
 

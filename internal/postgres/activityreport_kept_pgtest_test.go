@@ -406,52 +406,29 @@ func TestPGActivityReportKeptLauncherChange(t *testing.T) {
 
 func TestPGActivityReportKeptHiddenRunLink(t *testing.T) {
 	t.Parallel()
-	local, syncer, store := newUsageJournalFixture(t)
-	pgKeptSession(t, local, "parent", "project-a", "2026-06-12")
-	pgKeptSession(t, local, "child", "project-a", "2026-06-14")
-	child, err := local.GetSession(t.Context(), "child")
-	require.NoError(t, err)
-	child.Agent = "codex"
-	require.NoError(t, local.UpsertSession(t.Context(), *child))
-	pgKeptPush(t, syncer, false)
-	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC", Agent: "claude"}
-	assert.Zero(t, pgKeptBuild(t, store, f, q, true).Report.Peak.Agents)
-	pgKeptBuild(t, store, f, q, false)
-	_, err = local.SetSessionExternalParent(t.Context(), "child", "parent")
-	require.NoError(t, err)
-	pgKeptPush(t, syncer, false)
-	after := pgKeptBuild(t, store, f, q, true)
-	assert.Equal(t, 1, after.Report.InteractivePeak.Agents)
-	assert.Empty(t, after.Sessions)
-	assert.Zero(t, after.Report.Totals.AgentMinutes)
-}
-
-func TestPGActivityReportExternalParentProvenance(t *testing.T) {
-	t.Parallel()
 	ctx := t.Context()
 	local, syncer, store := newUsageJournalFixture(t)
 	pgKeptSession(t, local, "parent", "project-a", "2026-06-12")
 	pgKeptSession(t, local, "child", "project-b", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC", Project: "project-a"}
+	assert.Zero(t, pgKeptBuild(t, store, f, q, true).Report.Peak.Agents)
+	pgKeptBuild(t, store, f, q, false)
 	_, err := local.SetSessionExternalParent(ctx, "child", "parent")
 	require.NoError(t, err)
 	pgKeptPush(t, syncer, false)
-	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC", Project: "project-a"}
-	assert.Equal(t, 1, pgKeptBuild(t, store, f, q, true).Report.InteractivePeak.Agents)
-	pgKeptBuild(t, store, f, q, false)
-	beforeProbe, err := store.ActivityReportSourceProbe(ctx)
-	require.NoError(t, err)
-
+	linked := pgKeptBuild(t, store, f, q, true)
+	assert.Equal(t, 1, linked.Report.InteractivePeak.Agents)
+	assert.Empty(t, linked.Sessions)
+	assert.Zero(t, linked.Report.Totals.AgentMinutes)
 	_, err = local.ClearSessionExternalParent(ctx, "child")
 	require.NoError(t, err)
 	pgKeptPush(t, syncer, false)
-	afterProbe, err := store.ActivityReportSourceProbe(ctx)
-	require.NoError(t, err)
-	assert.NotEqual(t, beforeProbe.MaxSessionModified, afterProbe.MaxSessionModified)
-	after := pgKeptBuild(t, store, f, q, true)
-	assert.Zero(t, after.Report.InteractivePeak.Agents)
+	cleared := pgKeptBuild(t, store, f, q, true)
+	assert.Zero(t, cleared.Report.InteractivePeak.Agents)
 	store.runtimeState().activityKept.DeleteSlots(func(string) bool { return true })
 	store.runtimeState().activityInputs.DeleteSlots(func(string) bool { return true })
-	requirePGKeptEqual(t, after, pgKeptBuild(t, store, f, q, true))
+	requirePGKeptEqual(t, cleared, pgKeptBuild(t, store, f, q, true))
 	var external sql.NullString
 	require.NoError(t, store.DB().QueryRowContext(ctx, `SELECT external_parent_session_id FROM sessions WHERE id='child'`).Scan(&external))
 	assert.False(t, external.Valid)

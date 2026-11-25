@@ -294,17 +294,32 @@ func normalizeReportMinutes(report Report) Report {
 	return report
 }
 
-func TestWaitingLauncherAfterOwnInterval(t *testing.T) {
+func TestWaitingLauncherSweeping(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
 		includeParent bool
 		inside        bool
+		evidence      bool
 	}{
 		{name: "after own interval", includeParent: true},
 		{name: "launcher outside range"},
 		{name: "own interval inside run", includeParent: true, inside: true},
+		{name: "hidden evidence", evidence: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.evidence {
+				p := baseParams(t, "2026-06-16", "UTC")
+				p.Waiting = map[string]string{"child": "parent"}
+				p.Evidence = map[string]bool{"child": true}
+				candidates := []IntervalCandidate{{SessionID: "child", Start: mustStart(t, "2026-06-16T10:00:00Z"), End: mustStart(t, "2026-06-16T10:04:00Z")}}
+				got, err := BuildCandidateArtifacts(t.Context(), p, nil, candidates, nil)
+				require.NoError(t, err)
+				assert.Empty(t, got.Report.BySession)
+				assert.Zero(t, got.Report.Totals.AgentMinutes)
+				assert.InDelta(t, 4, got.Report.Totals.ActiveMinutes, 1e-9)
+				assert.Zero(t, got.Report.Totals.Sessions)
+				return
+			}
 			p := baseParams(t, "2026-06-16", "UTC")
 			p.Bucket = BucketSpec{Unit: BucketMinute, NominalSeconds: 300}
 			p.Waiting = map[string]string{"child": "parent", "child2": "parent"}

@@ -284,7 +284,12 @@ func (b *evidenceReportBackend) ActivityReportEvidence(context.Context, Query) (
 	return []SessionMeta{{SessionID: "linked", IsSubagent: true, IsLaunched: true, ParentSessionID: "s"}, {SessionID: "unrelated", IsSubagent: true, IsLaunched: true, ParentSessionID: "other"}}, nil
 }
 
-func (b *evidenceReportBackend) ActivityReportLaunchers(_ context.Context, _ []SessionMeta, _ map[string]bool, _ Query) (Launchers, error) {
+func (b *evidenceReportBackend) ActivityReportLaunchers(_ context.Context, runs []SessionMeta, _ map[string]bool, _ Query) (Launchers, error) {
+	var ids []string
+	for _, run := range runs {
+		ids = append(ids, run.SessionID)
+	}
+	assert.ElementsMatch(b.t, []string{"s", "linked", "unrelated"}, ids)
 	return Launchers{Waiting: map[string]string{"linked": "s"}}, nil
 }
 

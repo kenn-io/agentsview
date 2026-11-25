@@ -1877,35 +1877,6 @@ func TestActivityReportFilteredRunsKeepMatchingLauncherActive(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, 1, report.InteractivePeak.Agents)
 			assert.Equal(t, 1, report.Peak.Agents)
-			assert.Empty(t, report.BySession)
-			assert.Zero(t, report.Totals.AgentMinutes)
-			assert.InDelta(t, 4, report.Totals.ActiveMinutes, 1e-9)
-			assert.Zero(t, report.Totals.Sessions)
-		})
-	}
-}
-
-func TestActivityReportLaunchedRunStopsAtNativeAncestor(t *testing.T) {
-	for _, middleDate := range []string{"2026-06-15"} {
-		t.Run(middleDate, func(t *testing.T) {
-			d := testDB(t)
-			for _, row := range []struct{ id, date string }{{"root", "2026-06-15"}, {"native", middleDate}, {"run", "2026-06-16"}} {
-				insertSession(t, d, row.id, "project-a", func(s *Session) {
-					s.StartedAt = Ptr(row.date + "T10:00:00Z")
-					s.EndedAt = Ptr(row.date + "T10:04:00Z")
-					if row.id == "native" {
-						s.ParentSessionID = Ptr("root")
-						s.RelationshipType = "subagent"
-					}
-				})
-			}
-			_, err := d.SetSessionExternalParent(t.Context(), "run", "native")
-			require.NoError(t, err)
-			seedMessage(t, d, "run", 1, "user", "2026-06-16T10:00:00Z", "")
-			seedMessage(t, d, "run", 2, "assistant", "2026-06-16T10:04:00Z", "")
-			report, err := d.GetActivityReport(t.Context(), AnalyticsFilter{Timezone: "UTC"}, dayQuery(t, "2026-06-16", "UTC"))
-			require.NoError(t, err)
-			assert.Zero(t, report.InteractivePeak.Agents)
 		})
 	}
 }

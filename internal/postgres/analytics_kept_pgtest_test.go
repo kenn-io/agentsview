@@ -595,9 +595,25 @@ func TestAnalyticsKeptJournalUpgrade(t *testing.T) {
 	require.NoError(t, tx.Commit())
 	var newRevision, newAccount, newHistory, version string
 	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT (SELECT value FROM sync_metadata WHERE key='usage_change_revision'), (SELECT value FROM sync_metadata WHERE key='usage_account_revision'), (SELECT value FROM sync_metadata WHERE key='usage_history_token'), (SELECT value FROM sync_metadata WHERE key='usage_change_journal_version')`).Scan(&newRevision, &newAccount, &newHistory, &version))
-	require.Equal(t, []string{revision, account, history, "3"}, []string{newRevision, newAccount, newHistory, version})
+	require.Equal(t, []string{revision, account, history, fmt.Sprint(usageChangeJournalVersionPG)}, []string{newRevision, newAccount, newHistory, version})
 	var tokens int
 	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT count(*) FROM sync_metadata WHERE key IN ('dashboard_common','dashboard_tools','dashboard_velocity','dashboard_signals','dashboard_scope') AND value <> ''`).Scan(&tokens))
 	require.Equal(t, 5, tokens)
 
+	// Simulate the version 3 tool-call trigger before upgrading again.
+	_, err = store.pg.ExecContext(ctx, `CREATE OR REPLACE FUNCTION mark_dashboard_tool_calls() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN NULL; END'; UPDATE sync_metadata SET value='3' WHERE key='usage_change_journal_version'`)
+	require.NoError(t, err)
+	require.True(t, ensureUsageChangeJournalPG(ctx, store.DB()))
+	var upgraded string
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='usage_history_token'`).Scan(&upgraded))
+	assert.NotEqual(t, newHistory, upgraded)
+	_, err = store.pg.ExecContext(ctx, `INSERT INTO sessions(id,machine,project,agent) VALUES('owner','machine','project','claude')`)
+	require.NoError(t, err)
+	before, err := store.UsageChangeRevision(ctx)
+	require.NoError(t, err)
+	_, err = store.pg.ExecContext(ctx, `INSERT INTO tool_calls(session_id,tool_name,category,message_ordinal,subagent_session_id) VALUES('owner','Task','Task',0,'child')`)
+	require.NoError(t, err)
+	_, ids, err := store.LoadUsageChanges(ctx, before)
+	require.NoError(t, err)
+	assert.Contains(t, ids, "child")
 }

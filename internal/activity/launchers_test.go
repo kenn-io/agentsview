@@ -17,6 +17,7 @@ func TestResolveLaunchersUsesKnownRunsAndCountsInteractiveAncestors(t *testing.T
 		examined []string
 	}{
 		{name: "interactive", runs: []SessionMeta{{SessionID: "root"}, {SessionID: "middle", IsSubagent: true, IsLaunched: true, ParentSessionID: "root"}, {SessionID: "child", IsSubagent: true, IsLaunched: true, ParentSessionID: "middle"}}, selected: map[string]bool{"root": true, "child": true}, waiting: map[string]string{"child": "root", "middle": "root"}, examined: []string{"middle", "root"}},
+		{name: "native", runs: []SessionMeta{{SessionID: "root"}, {SessionID: "middle", IsSubagent: true, ParentSessionID: "root"}, {SessionID: "child", IsSubagent: true, IsLaunched: true, ParentSessionID: "middle"}}, selected: map[string]bool{"root": true, "child": true}, waiting: map[string]string{}, examined: []string{"middle"}},
 		{name: "automated", runs: []SessionMeta{{SessionID: "parent", IsAutomated: true}, {SessionID: "run", IsSubagent: true, IsLaunched: true, ParentSessionID: "parent"}}, selected: map[string]bool{"parent": true, "run": true}, waiting: map[string]string{}, examined: []string{"parent"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

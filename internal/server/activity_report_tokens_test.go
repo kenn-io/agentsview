@@ -87,7 +87,7 @@ func TestActivityReportTokenSelectionRevalidatesResolvedQuery(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestActivitySessionCursorRejectsTheReportTokenVersion(t *testing.T) {
+func TestActivitySessionCursorRejectsReportAndSchemaVersions(t *testing.T) {
 	cursor := activitySessionCursorPayload{
 		Version:   activityReportTokenVersion,
 		Schema:    export.ActivityReportSchemaVersion,
