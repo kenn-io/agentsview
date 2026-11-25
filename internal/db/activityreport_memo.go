@@ -34,9 +34,9 @@ type activityMemoEntry struct {
 }
 
 func (e activityMemoEntry) bytes() int64 {
-	// 64 bytes stand in for the map entry and the list element.
+	// 96 bytes stand in for the map entry, list element, and retained key.
 	return int64(unsafe.Sizeof(e)) + int64(len(e.key.id)+len(e.version)) + e.runs.Bytes() +
-		e.counted.bytes() + 64
+		e.counted.bytes() + 96
 }
 
 // activityMemoCounted keeps a window's counted messages. A message stored
@@ -109,7 +109,7 @@ func (m *activityCandidateMemo) store(generation uint64, entries ...activityMemo
 	for _, entry := range entries {
 		m.add(entry.key, entry, entry.bytes())
 	}
-	m.trim(activityMemoMaxBytes, func(e activityMemoEntry) activityMemoKey { return e.key }, activityMemoEntry.bytes)
+	m.trim(activityMemoMaxBytes, activityMemoEntry.bytes)
 }
 
 // activityReportCandidateSource streams the sessions' candidates that start
@@ -160,7 +160,7 @@ func (db *DB) activityReportRuns(
 	m.mu.Lock()
 	for _, id := range ids {
 		if element := m.entries[activityMemoKey{id, lower}]; element != nil && generation == m.generation {
-			e := element.Value.(activityMemoEntry)
+			e := element.Value.(lruEntry[activityMemoKey, activityMemoEntry]).value
 			if version, exists := versions[id]; exists && e.version == version && !q.EffectiveEnd.After(e.upper) {
 				sessions[id] = e
 				m.order.MoveToBack(element)

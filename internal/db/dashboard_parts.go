@@ -52,7 +52,7 @@ func (m *dashboardPartsMemo) reuse(slot, version string, ids []string, versions 
 		if item == nil {
 			return false
 		}
-		p := item.Value.(kept.Part[dashboardPart])
+		p := item.Value.(lruEntry[string, kept.Part[dashboardPart]]).value
 		if p.Fingerprint != versions[id] {
 			return false
 		}
@@ -92,7 +92,7 @@ func (m *dashboardPartsMemo) storeParts(slot, version string, parts, selection m
 		m.remove(id, dashboardPartBytes)
 		m.add(id, p, dashboardPartBytes(p))
 	}
-	m.trim(maxBytes, func(p kept.Part[dashboardPart]) string { return p.ID }, dashboardPartBytes)
+	m.trim(maxBytes, dashboardPartBytes)
 }
 
 func dashboardPartBytes(p kept.Part[dashboardPart]) int64 {

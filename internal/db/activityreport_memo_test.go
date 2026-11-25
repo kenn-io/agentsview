@@ -51,7 +51,7 @@ func TestActivityMemoReuseAndReset(t *testing.T) {
 			case "stale store":
 				key := activityMemoKey{"s", q.RangeStart.Add(-time.Duration(q.GapCapSeconds) * time.Second).UnixMicro()}
 				generation := d.activityMemo.generation
-				entry := d.activityMemo.entries[key].Value.(activityMemoEntry)
+				entry := d.activityMemo.entries[key].Value.(lruEntry[activityMemoKey, activityMemoEntry]).value
 				replacement := testDB(t)
 				insertSession(t, replacement, "s", "p")
 				seedMessage(t, replacement, "s", 0, "user", "2026-06-16T10:00:00Z", "")

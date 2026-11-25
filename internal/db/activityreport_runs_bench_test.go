@@ -120,7 +120,7 @@ func BenchmarkSQLiteActivityReportRefresh(b *testing.B) {
 		for _, id := range ids[:10] {
 			for key, element := range d.activityMemo.entries {
 				if key.id == id {
-					d.activityMemo.bytes -= element.Value.(activityMemoEntry).bytes()
+					d.activityMemo.bytes -= element.Value.(lruEntry[activityMemoKey, activityMemoEntry]).value.bytes()
 					d.activityMemo.order.Remove(element)
 					delete(d.activityMemo.entries, key)
 				}
