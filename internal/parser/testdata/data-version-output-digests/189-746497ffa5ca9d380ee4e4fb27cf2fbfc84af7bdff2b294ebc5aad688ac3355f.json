@@ -1,9 +1,0 @@
-{
-  "version": 189,
-  "digest": "746497ffa5ca9d380ee4e4fb27cf2fbfc84af7bdff2b294ebc5aad688ac3355f",
-  "providers": {
-    "muse-personal": {
-      "agent-22222222-3333-4444-8555-666666666666/sessions/22222222-3333-4444-8555-666666666666.jsonl": "942f9fb1767035d64591fb723606258ac29b1c4143f20e0e295d9606bee313a5"
-    }
-  }
-}
