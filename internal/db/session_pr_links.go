@@ -269,7 +269,7 @@ func refreshSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, i
 	if err != nil {
 		return err
 	}
-	tools, err := storedToolCallPRLinksTx(ctx, tx, id, "", "")
+	tools, err := storedToolCallPRLinksTx(ctx, tx, id)
 	if err != nil {
 		return err
 	}
@@ -285,23 +285,19 @@ func appendSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id
 	if err != nil {
 		return err
 	}
-	tools, err := ToolCallPRLinks(ctx, messages, "", "")
+	tools, err := ToolCallPRLinks(ctx, messages)
 	if err != nil {
 		return err
 	}
-	if len(prompts) == 0 && len(tools) == 0 {
+	derived := parser.CombinePRLinks(prompts, tools)
+	if len(derived) == 0 {
 		return nil
 	}
 	var stored string
 	if err := tx.QueryRow(`SELECT pr_links FROM sessions WHERE id=?`, id).Scan(&stored); err != nil {
 		return err
 	}
-	storedLinks := DecodePRLinks(stored)
-	derived := parser.CombinePRLinks(prompts, tools)
-	if len(derived) == 0 {
-		return nil
-	}
-	return writeSessionPromptPRLinksTx(tx, id, stored, parser.CombinePRLinks(storedLinks, derived))
+	return writeSessionPromptPRLinksTx(tx, id, stored, parser.CombinePRLinks(DecodePRLinks(stored), derived))
 }
 
 // GetSessionStructuredPRLinks returns parser-recorded links without prompt links.
@@ -364,7 +360,7 @@ func callPRLinks(ctx context.Context, category, input string) ([]PRLink, error) 
 	}
 	var lists [][]PRLink
 	for _, command := range commands {
-		links, err := parser.AnalyzePRCommand(ctx, command.text)
+		links, err := parser.AnalyzePRCommand(ctx, command)
 		if err != nil {
 			return nil, err
 		}
@@ -397,13 +393,11 @@ func taskPRLinks(ctx context.Context, input string) ([]PRLink, error) {
 	return parser.PromptPRLinksContext(ctx, strings.Join(text, "\n"))
 }
 
-type prShellCommand struct{ text string }
-
 // shellInputCommands lists literal commands in a shell tool input.
-func shellInputCommands(input string) ([]prShellCommand, bool) {
+func shellInputCommands(input string) ([]string, bool) {
 	if !jsontext.Value(input).IsValid() {
 		text := strings.TrimSpace(input)
-		return []prShellCommand{{text: input}}, text != "" && text[0] != '{' && text[0] != '['
+		return []string{input}, text != "" && text[0] != '{' && text[0] != '['
 	}
 	var payload struct {
 		Command     jsontext.Value `json:"command"`
@@ -416,19 +410,15 @@ func shellInputCommands(input string) ([]prShellCommand, bool) {
 	}
 	if len(payload.Command) > 0 && string(payload.Command) != "null" {
 		command, ok := commandValue(payload.Command)
-		return []prShellCommand{{text: command}}, ok
+		return []string{command}, ok
 	}
 	if payload.CommandLine != "" {
-		return []prShellCommand{{text: payload.CommandLine}}, true
+		return []string{payload.CommandLine}, true
 	}
 	if payload.Commands != nil {
-		commands := make([]prShellCommand, len(payload.Commands))
-		for i, command := range payload.Commands {
-			commands[i].text = command
-		}
-		return commands, true
+		return payload.Commands, true
 	}
-	return []prShellCommand{{text: payload.Cmd}}, true
+	return []string{payload.Cmd}, true
 }
 
 // commandValue decodes a command given as shell text or as an argv list.
@@ -448,7 +438,7 @@ func commandValue(raw jsontext.Value) (string, bool) {
 }
 
 // ToolCallPRLinks derives links from each independent tool call.
-func ToolCallPRLinks(ctx context.Context, messages []Message, _, _ string) ([]PRLink, error) {
+func ToolCallPRLinks(ctx context.Context, messages []Message) ([]PRLink, error) {
 	var lists [][]PRLink
 	for _, message := range messages {
 		for _, call := range message.ToolCalls {
@@ -479,12 +469,12 @@ func storedToolCallsTx(tx transactionQueries, id string) ([]ToolCall, error) {
 	return calls, rows.Err()
 }
 
-func storedToolCallPRLinksTx(ctx context.Context, tx transactionQueries, id, cwd, remote string) ([]PRLink, error) {
+func storedToolCallPRLinksTx(ctx context.Context, tx transactionQueries, id string) ([]PRLink, error) {
 	calls, err := storedToolCallsTx(tx, id)
 	if err != nil {
 		return nil, err
 	}
-	return ToolCallPRLinks(ctx, []Message{{ToolCalls: calls}}, cwd, remote)
+	return ToolCallPRLinks(ctx, []Message{{ToolCalls: calls}})
 }
 
 const toolPRLinksDataVersion = 190

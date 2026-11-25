@@ -30,7 +30,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"maps"
 	"sort"
 	"strconv"
 	"strings"
@@ -59,7 +58,7 @@ func (e *Engine) compareStoredSession(
 	if err != nil {
 		return nil, err
 	}
-	toolLinks, err := db.ToolCallPRLinks(ctx, msgs, "", "")
+	toolLinks, err := db.ToolCallPRLinks(ctx, msgs)
 	if err != nil {
 		return nil, err
 	}
@@ -302,14 +301,7 @@ func appendSessionMetadataDiffs(
 		diffs, FieldGitBranch, agent, stored.GitBranch, prepared.GitBranch,
 	)
 	// Incremental writes can store links in a different order from a full parse.
-	storedLinks, parsedLinks := make(map[string]int), make(map[string]int)
-	for _, link := range stored.PRLinks {
-		storedLinks[fmt.Sprintf("%s/%s/%d", strings.ToLower(link.Host), strings.ToLower(link.Repository), link.Number)]++
-	}
-	for _, link := range prepared.PRLinks {
-		parsedLinks[fmt.Sprintf("%s/%s/%d", strings.ToLower(link.Host), strings.ToLower(link.Repository), link.Number)]++
-	}
-	if !maps.Equal(storedLinks, parsedLinks) {
+	if len(stored.PRLinks) != len(prepared.PRLinks) || len(parser.CombinePRLinks(stored.PRLinks, prepared.PRLinks)) != len(stored.PRLinks) {
 		sv, pv := db.EncodePRLinks(stored.PRLinks), db.EncodePRLinks(prepared.PRLinks)
 		diffs = append(diffs, FieldDiff{
 			Field:  FieldPRLinks,

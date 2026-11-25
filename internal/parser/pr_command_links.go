@@ -122,11 +122,7 @@ func unwrapPRCommand(args []*syntax.Word) []*syntax.Word {
 		}
 		switch words[0] {
 		case "command", "env":
-			i, ok := wrappedCommandStart(words, literal)
-			if !ok {
-				return nil
-			}
-			args = args[i:]
+			args = args[wrappedCommandStart(words, literal):]
 		case "timeout":
 			i := 1
 			for i < len(words) && literal[i] && strings.HasPrefix(words[i], "-") {
@@ -156,7 +152,7 @@ func unwrapPRCommand(args []*syntax.Word) []*syntax.Word {
 	return nil
 }
 
-func wrappedCommandStart(words []string, literal []bool) (int, bool) {
+func wrappedCommandStart(words []string, literal []bool) int {
 	i := 1
 	for i < len(words) && literal[i] && (words[0] == "command" && words[i] == "-p" || words[0] == "env" && strings.Contains(words[i], "=")) {
 		i++
@@ -164,7 +160,7 @@ func wrappedCommandStart(words []string, literal []bool) (int, bool) {
 	if i < len(words) && literal[i] && words[i] == "--" {
 		i++
 	}
-	return i, true
+	return i
 }
 
 // ghPRArgs moves inherited repository flags after the PR action.
@@ -343,13 +339,13 @@ func analyzePRCommand(ctx context.Context, command string, hostUnknown bool, dep
 			continue
 		}
 		number, err := strconv.Atoi(strings.TrimPrefix(selector, "#"))
-		if err != nil || number <= 0 || invalid {
+		if err != nil || number <= 0 {
 			continue
 		}
 		if !specified {
 			continue
 		}
-		explicitHost, repo, valid := splitPRRepository(repo, specified)
+		explicitHost, repo, valid := splitPRRepository(repo)
 		if !valid {
 			continue
 		}
@@ -369,8 +365,8 @@ func analyzePRCommand(ctx context.Context, command string, hostUnknown bool, dep
 
 // splitPRRepository separates an explicit host from a -R repository and
 // reports whether both parts are well formed.
-func splitPRRepository(repo string, specified bool) (host, name string, valid bool) {
-	if specified && strings.Count(repo, "/") == 2 {
+func splitPRRepository(repo string) (host, name string, valid bool) {
+	if strings.Count(repo, "/") == 2 {
 		host, repo, _ = strings.Cut(repo, "/")
 	}
 	return host, repo, (host == "" || prHostRE.MatchString(host)) && repoPathRE.MatchString(repo)
