@@ -7,6 +7,8 @@ import (
 	"database/sql"
 	"encoding/json/v2"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -666,4 +668,31 @@ func TestDashboardPartsToolsReadKeepsParts(t *testing.T) {
 	_, err = d.GetAnalyticsActivity(ctx, f, "day")
 	require.NoError(t, err)
 	assert.Equal(t, 1, reads)
+}
+
+func TestDashboardPartsFreshArchiveTracksWrites(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	path := filepath.Join(t.TempDir(), "archive.db")
+	require.NoError(t, os.WriteFile(path, nil, 0o600))
+	d, err := OpenFreshIsolatedContext(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	insertSession(t, d, "s", "project", func(s *Session) { s.StartedAt = new("2024-06-01T09:00:00Z") })
+	insertMessages(t, d, userMsgAt("s", 0, "hello", "2024-06-01T09:00:00Z"))
+	f := AnalyticsFilter{Timezone: "UTC"}
+	_, parts, handled, err := d.dashboardParts(t.Context(), f)
+	require.NoError(t, err)
+	require.True(t, handled)
+	require.Equal(t, 1, parts["s"].Value.Messages)
+	insertMessages(t, d, asstMsgAt("s", 1, "answer", "2024-06-01T09:01:00Z"))
+	_, parts, handled, err = d.dashboardParts(t.Context(), f)
+	require.NoError(t, err)
+	require.True(t, handled)
+	assert.Equal(t, 2, parts["s"].Value.Messages)
+	_, err = d.getWriter().ExecContext(t.Context(), `INSERT INTO tool_calls(message_id, session_id, tool_name, category) SELECT id, session_id, 'Read', 'Read' FROM messages WHERE session_id='s' AND ordinal=1`)
+	require.NoError(t, err)
+	_, parts, handled, err = d.dashboardParts(t.Context(), f)
+	require.NoError(t, err)
+	require.True(t, handled)
+	assert.Equal(t, 1, parts["s"].Value.Tools)
 }
