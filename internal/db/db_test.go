@@ -3176,7 +3176,7 @@ func TestGetSessionFull(t *testing.T) {
 			OutcomeConfidence:  "low",
 			CreatedAt:          got.CreatedAt,
 		}
-		if diff := cmp.Diff(want, got); diff != "" {
+		if diff := cmp.Diff(want, got, cmp.AllowUnexported(Session{})); diff != "" {
 			assert.Failf(t, "GetSessionFull mismatch", "(-want +got):\n%s", diff)
 		}
 	})
@@ -3200,7 +3200,7 @@ func TestGetSessionFull(t *testing.T) {
 			OutcomeConfidence:  "low",
 			CreatedAt:          got.CreatedAt,
 		}
-		if diff := cmp.Diff(want, got); diff != "" {
+		if diff := cmp.Diff(want, got, cmp.AllowUnexported(Session{})); diff != "" {
 			assert.Failf(t, "GetSessionFull mismatch", "(-want +got):\n%s", diff)
 		}
 	})
