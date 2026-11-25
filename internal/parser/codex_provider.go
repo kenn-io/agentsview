@@ -1417,8 +1417,12 @@ func (s codexSourceSet) FindSource(
 				source, ok = s.directPathSource(root, path, true)
 			}
 			if ok {
-				if !req.RequireFreshSource || (req.PreferStoredSource && (s.agent != AgentCodex || req.RawSessionID == "")) {
+				if !req.RequireFreshSource || (req.PreferStoredSource && (!req.SearchLabeledCodexSources || s.agent != AgentCodex || req.RawSessionID == "")) {
 					return source, true, nil
+				}
+				if !req.SearchLabeledCodexSources {
+					preferred, err := s.preferredKnownRolloutSource(ctx, source)
+					return preferred, err == nil, err
 				}
 				preferred, found, err := s.canonicalSource(ctx, source)
 				if err != nil || !found || !req.PreferStoredSource || codexSourceRank(preferred).Class != 0 {
@@ -1431,7 +1435,7 @@ func (s codexSourceSet) FindSource(
 	if req.RawSessionID == "" {
 		return SourceRef{}, false, nil
 	}
-	return s.findCanonicalSource(ctx, req.RawSessionID)
+	return s.findCanonicalSource(ctx, req.RawSessionID, req.SearchLabeledCodexSources)
 }
 
 func (s codexSourceSet) Fingerprint(
@@ -1639,25 +1643,29 @@ func (s codexSourceSet) canonicalSource(
 	if !ok || src.UUID == "" {
 		return source, true, nil
 	}
-	best, found, err := s.findCanonicalSource(ctx, src.UUID)
+	best, found, err := s.findCanonicalSource(ctx, src.UUID, true)
 	if err != nil || found {
 		return best, found, err
 	}
 	return source, true, nil
 }
 
-func (s codexSourceSet) findCanonicalSource(ctx context.Context, uuid string) (SourceRef, bool, error) {
+func (s codexSourceSet) findCanonicalSource(ctx context.Context, uuid string, searchLabeled bool) (SourceRef, bool, error) {
 	var best SourceRef
 	foundExisting := false
 	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
 			return SourceRef{}, false, err
 		}
-		dirs, err := labeledSessionDirs(ctx, root)
-		if err != nil {
-			return SourceRef{}, false, err
+		dirs := []string{root}
+		if searchLabeled {
+			labeled, err := labeledSessionDirs(ctx, root)
+			if err != nil {
+				return SourceRef{}, false, err
+			}
+			dirs = append(dirs, labeled...)
 		}
-		for _, dir := range append([]string{root}, dirs...) {
+		for _, dir := range dirs {
 			path := s.findSourceFile(dir, uuid)
 			candidate, ok := s.sourceRef(root, path, true)
 			if ok && (!foundExisting || preferCodexSource(candidate, best)) {

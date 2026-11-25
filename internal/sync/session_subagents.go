@@ -30,7 +30,7 @@ func (e *Engine) TrySyncSessionWithSubagentsContext(ctx context.Context, session
 }
 
 func (e *Engine) syncSessionWithSubagentsContext(ctx context.Context, sessionID string, try bool) error {
-	parentErr := e.syncSingleSessionContext(ctx, sessionID, try)
+	parentErr := e.syncSingleSessionContext(ctx, sessionID, try, !try)
 	if errors.Is(parentErr, ErrSyncInProgress) {
 		return parentErr
 	}
@@ -44,7 +44,7 @@ func (e *Engine) syncSessionWithSubagentsContext(ctx context.Context, sessionID 
 	}
 	sourcePath := e.db.GetSessionFilePath(ctx, sessionID)
 	if sourcePath == "" {
-		sourcePath = e.FindSourceFile(ctx, sessionID)
+		sourcePath = e.findSourceFile(ctx, sessionID, !try)
 	}
 	paths := subagentTranscriptPaths(sourcePath)
 	if len(paths) == 0 {

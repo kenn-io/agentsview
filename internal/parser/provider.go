@@ -1009,6 +1009,9 @@ type FindSourceRequest struct {
 	// source path is preserved; sync processing leaves it false so duplicate
 	// sources still canonicalize to a single location.
 	PreferStoredSource bool
+	// SearchLabeledCodexSources permits a recursive search for labeled Codex
+	// runs when an explicit session lookup needs the preferred copy.
+	SearchLabeledCodexSources bool
 }
 
 // SourceFingerprint is the provider-normalized source freshness identity. The

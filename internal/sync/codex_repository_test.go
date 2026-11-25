@@ -303,12 +303,17 @@ func TestSyncSingleSessionFindsNewLabeledCopy(t *testing.T) {
 	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {ordinary, logs}}})
 	t.Cleanup(engine.Close)
 	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
-	ordinaryMtime := engine.SessionWatchSourceMtime(t.Context(), "codex:"+id)
+	ordinaryMtime := engine.SourceMtime(t.Context(), "codex:"+id)
 	require.NotZero(t, ordinaryMtime)
 	dbtest.WriteTestFile(t, labeledPath, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "labeled", "2026-10-08T12:00:01Z")+"\n"))
 	newer := time.Now().Add(time.Hour)
 	require.NoError(t, os.Chtimes(labeledPath, newer, newer))
-	assert.Equal(t, ordinaryMtime, engine.SessionWatchSourceMtime(t.Context(), "codex:"+id))
+	assert.Equal(t, ordinaryMtime, engine.SourceMtime(t.Context(), "codex:"+id))
+	assert.Equal(t, ordinaryPath, engine.FindSourceFileForWatch(t.Context(), "codex:"+id))
+	require.NoError(t, engine.SyncWatchedSessionContext(t.Context(), "codex:"+id))
+	assert.Equal(t, ordinaryPath, database.GetSessionFilePath(t.Context(), "codex:"+id))
+	require.NoError(t, engine.TrySyncSessionWithSubagentsContext(t.Context(), "codex:"+id))
+	assert.Equal(t, ordinaryPath, database.GetSessionFilePath(t.Context(), "codex:"+id))
 	assert.Equal(t, labeledPath, engine.FindSourceFile(t.Context(), "codex:"+id))
 	require.NoError(t, engine.SyncSingleSession("codex:"+id))
 	session, err := database.GetSessionFull(t.Context(), "codex:"+id)
@@ -316,11 +321,11 @@ func TestSyncSingleSessionFindsNewLabeledCopy(t *testing.T) {
 	require.NotNil(t, session)
 	require.NotNil(t, session.FilePath)
 	assert.Equal(t, labeledPath, *session.FilePath)
-	assert.Equal(t, newer.UnixNano(), engine.SessionWatchSourceMtime(t.Context(), "codex:"+id))
+	assert.Equal(t, newer.UnixNano(), engine.SourceMtime(t.Context(), "codex:"+id))
 }
 
 func TestCodexLabeledCopyWinsSync(t *testing.T) {
-	for _, mode := range []string{"changed path", "batch", "planned batch", "reconcile"} {
+	for _, mode := range []string{"changed path", "batch", "older then newer", "newer then older", "missed event", "planned batch", "reconcile"} {
 		t.Run(mode, func(t *testing.T) {
 			database := openTestDB(t)
 			root := t.TempDir()
@@ -342,7 +347,16 @@ func TestCodexLabeledCopyWinsSync(t *testing.T) {
 				require.NoError(t, os.Chtimes(paths[0], mtime, mtime))
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[0]}))
 			} else if mode == "batch" {
-				require.NoError(t, engine.SyncPathsContext(t.Context(), paths))
+				require.NoError(t, engine.SyncPathsContext(t.Context(), paths[1:]))
+			} else if mode == "older then newer" {
+				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[1]}))
+				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[2]}))
+			} else if mode == "newer then older" {
+				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[2]}))
+				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[1]}))
+			} else if mode == "missed event" {
+				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[1]}))
+				require.NoError(t, engine.ReconcileWatchRoots(t.Context(), []string{ordinary, logs}, false))
 			} else if mode == "planned batch" {
 				plan, err := engine.PlanChangedPathsContext(t.Context(), paths)
 				require.NoError(t, err)

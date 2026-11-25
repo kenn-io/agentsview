@@ -202,11 +202,11 @@ func (w *Watcher) events(ctx context.Context, sessionID string, tree bool) <-cha
 		}
 
 		// Track file mtime for fallback sync.
-		sourcePath := w.engine.FindSourceFile(ctx, sessionID)
+		sourcePath := w.engine.FindSourceFileForWatch(ctx, sessionID)
 		var lastFileMtime int64
 		var fileMtimeChangedAt time.Time
 		if sourcePath != "" {
-			lastFileMtime = w.engine.SessionWatchSourceMtime(ctx, sessionID)
+			lastFileMtime = w.engine.SourceMtime(ctx, sessionID)
 		}
 
 		ticker := time.NewTicker(pollInterval())
@@ -312,19 +312,19 @@ func (w *Watcher) checkDBForChanges(ctx context.Context,
 
 	// Track file mtime for the fallback path.
 	if *sourcePath == "" {
-		*sourcePath = w.engine.FindSourceFile(ctx, sessionID)
+		*sourcePath = w.engine.FindSourceFileForWatch(ctx, sessionID)
 		if *sourcePath == "" {
 			sourceMissingObserver.Load().(func(string))(sessionID)
 			return changed
 		}
-		*lastFileMtime = w.engine.SessionWatchSourceMtime(ctx, sessionID)
+		*lastFileMtime = w.engine.SourceMtime(ctx, sessionID)
 		// Source file (re-)resolved — trigger fallback sync
 		// immediately since content likely differs from DB.
 		past := time.Now().Add(-syncFallbackDelay())
 		*fileMtimeChangedAt = past
 	}
 
-	mtime := w.engine.SessionWatchSourceMtime(ctx, sessionID)
+	mtime := w.engine.SourceMtime(ctx, sessionID)
 	if mtime == 0 {
 		// File disappeared; try to re-resolve later.
 		*sourcePath = ""
@@ -348,7 +348,7 @@ func (w *Watcher) checkDBForChanges(ctx context.Context,
 	if !fileMtimeChangedAt.IsZero() &&
 		time.Since(*fileMtimeChangedAt) >= syncFallbackDelay() {
 		*fileMtimeChangedAt = time.Time{}
-		if err := w.engine.SyncSingleSessionContext(
+		if err := w.engine.SyncWatchedSessionContext(
 			ctx, sessionID,
 		); err != nil {
 			log.Printf("watch sync error: %v", err)
