@@ -514,6 +514,12 @@ func TestFrustrationFillDeploymentGates(t *testing.T) {
 			writable, err := store.canFillFrustrationCounts(f.ctx)
 			require.NoError(t, err)
 			require.Equal(t, scenario == "writable", writable)
+			if scenario == "writable" {
+				_, versions, err := store.scanFrustrationCounts(f.ctx, []string{"one"}, f.versionColumn)
+				require.NoError(t, err)
+				_, err = store.writeFrustrationCounts(f.ctx, versions, map[string]int{"one": 1}, f.versionColumn)
+				require.NoError(t, err)
+			}
 		})
 	}
 }
@@ -623,4 +629,35 @@ func TestFrustrationFillConcurrentSignalsShareOneLoad(t *testing.T) {
 	// One row read confirms both requests reached the kept.Reads flight during the fill.
 	require.EqualValues(t, 1, counter.reads.Load())
 	require.EqualValues(t, 2, counter.scans.Load())
+}
+
+func TestFrustrationSaveSkipsConcurrentInsert(t *testing.T) {
+	t.Parallel()
+	server, _ := testPGServer(t)
+	if server.cockroach {
+		t.Skip("SKIP LOCKED is PostgreSQL-specific")
+	}
+	f := newFrustrationFixture(t, "agentsview")
+	store := f.open(t)
+	_, versions, err := store.scanFrustrationCounts(f.ctx, []string{"one", "two"}, f.versionColumn)
+	require.NoError(t, err)
+	tx, err := f.pg.BeginTx(f.ctx, nil)
+	require.NoError(t, err)
+	defer tx.Rollback()
+	_, err = tx.ExecContext(f.ctx, `SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ':frustration:' || $1, 0))`, "one")
+	require.NoError(t, err)
+	_, err = tx.ExecContext(f.ctx, `INSERT INTO session_frustration_counts(session_id,session_version,rules_version,marker_count) VALUES ('one',$1,$2,1)`, versions["one"], frustrationMarkerRulesVersion)
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(f.ctx, 2*time.Second)
+	defer cancel()
+	skipped, err := store.writeFrustrationCounts(ctx, versions, map[string]int{"one": 1, "two": 1}, f.versionColumn)
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"one": versions["one"]}, skipped)
+	var count int
+	require.NoError(t, f.pg.QueryRowContext(f.ctx, `SELECT marker_count FROM session_frustration_counts WHERE session_id='two'`).Scan(&count))
+	require.Equal(t, 1, count)
+	require.NoError(t, tx.Rollback())
+	skipped, err = store.writeFrustrationCounts(f.ctx, skipped, map[string]int{"one": 1}, f.versionColumn)
+	require.NoError(t, err)
+	require.Empty(t, skipped)
 }

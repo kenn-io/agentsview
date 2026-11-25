@@ -109,6 +109,38 @@ func (s *Store) storeFrustrationCounts(ctx context.Context, versions map[string]
 }
 
 func (s *Store) writeFrustrationCounts(ctx context.Context, versions map[string]string, counts map[string]int, versionColumn string) (map[string]string, error) {
+	if s.cockroach {
+		return s.writeFrustrationCountBatch(ctx, versions, counts, versionColumn)
+	}
+	// Bound the transaction-scoped advisory locks held by each statement.
+	remaining := make(map[string]string)
+	batch := make(map[string]string)
+	for id, version := range versions {
+		batch[id] = version
+		if len(batch) == 512 {
+			skipped, err := s.writeFrustrationCountBatch(ctx, batch, counts, versionColumn)
+			if err != nil {
+				return nil, err
+			}
+			for id, version := range skipped {
+				remaining[id] = version
+			}
+			clear(batch)
+		}
+	}
+	if len(batch) > 0 {
+		skipped, err := s.writeFrustrationCountBatch(ctx, batch, counts, versionColumn)
+		if err != nil {
+			return nil, err
+		}
+		for id, version := range skipped {
+			remaining[id] = version
+		}
+	}
+	return remaining, nil
+}
+
+func (s *Store) writeFrustrationCountBatch(ctx context.Context, versions map[string]string, counts map[string]int, versionColumn string) (map[string]string, error) {
 	ids := make([]string, 0, len(versions))
 	tokens := make([]string, 0, len(versions))
 	values := make([]int32, 0, len(versions))
@@ -122,7 +154,8 @@ func (s *Store) writeFrustrationCounts(ctx context.Context, versions map[string]
 	query := `INSERT INTO session_frustration_counts (session_id, session_version, rules_version, marker_count)
         SELECT t.id, t.version, $4, t.count FROM (` + want + `) t ORDER BY t.id`
 	if !s.cockroach {
-		query = `WITH want AS (` + want + `),
+		// Coordinate missing rows too, since uncommitted inserts are invisible.
+		query = `WITH want AS MATERIALIZED (SELECT * FROM (` + want + `) wanted WHERE pg_try_advisory_xact_lock(hashtextextended(current_schema() || ':frustration:' || wanted.id, 0))),
         free AS MATERIALIZED (SELECT c.session_id FROM session_frustration_counts c WHERE c.session_id IN (SELECT id FROM want) ORDER BY c.session_id FOR UPDATE OF c SKIP LOCKED)
         INSERT INTO session_frustration_counts (session_id, session_version, rules_version, marker_count)
         SELECT w.id, w.version, $4, w.count FROM want w
