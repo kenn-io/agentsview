@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -20,19 +21,21 @@ func TestContentScanStopsAtDeadline(t *testing.T) {
 	contentScanTimeout = time.Nanosecond
 	t.Cleanup(func() { contentScanTimeout = previous })
 	for _, tc := range []struct {
-		mode, pattern string
-		keywordOnly   bool
+		name, mode, pattern, sessionID string
+		keywordOnly                    bool
 	}{
-		{"substring", "ask opus and fable", false},
-		{"regex", "ask.*fable", false},
-		{"terms", "ask opus and fable", false},
-		{"hybrid", "ask opus and fable", true},
+		{"substring", "substring", "ask opus and fable", "", false},
+		{"session substring", "substring", "ask opus and fable", "s1", false},
+		{"regex", "regex", "ask.*fable", "", false},
+		{"terms", "terms", "ask opus and fable", "", false},
+		{"fts", "fts", "ask opus and fable", "", false},
+		{"hybrid", "hybrid", "ask opus and fable", "", true},
 	} {
-		t.Run(tc.mode, func(t *testing.T) {
-			if tc.keywordOnly && !hasFTS {
+		t.Run(tc.name, func(t *testing.T) {
+			if (tc.keywordOnly || tc.mode == "fts") && !hasFTS {
 				t.Skip("fts5 not available")
 			}
-			_, err := d.SearchContent(t.Context(), ContentSearchFilter{Mode: tc.mode, Pattern: tc.pattern, KeywordOnly: tc.keywordOnly})
+			_, err := d.SearchContent(t.Context(), ContentSearchFilter{Mode: tc.mode, Pattern: tc.pattern, SessionID: tc.sessionID, KeywordOnly: tc.keywordOnly})
 			assert.ErrorIs(t, err, context.DeadlineExceeded)
 			assert.Zero(t, d.rawReader().Stats().InUse)
 			var releases []func()
@@ -47,6 +50,70 @@ func TestContentScanStopsAtDeadline(t *testing.T) {
 				releases = append(releases, release)
 			}
 		})
+	}
+}
+
+func TestContentScanDeadlineReleasesActiveReader(t *testing.T) {
+	d := testDB(t)
+	seedSearchSession(t, d, "s1", "project", [][2]string{{"user", "needle"}, {"assistant", "needle"}})
+	d.rawReader().SetMaxIdleConns(0)
+	d.rawReader().SetMaxOpenConns(1)
+	d.rawReader().SetMaxIdleConns(1)
+	previous := contentScanTimeout
+	contentScanTimeout = 2 * time.Second
+	t.Cleanup(func() { contentScanTimeout = previous })
+	entered := make(chan struct{})
+	unblock := make(chan struct{})
+	release := sync.OnceFunc(func() { close(unblock) })
+	t.Cleanup(release)
+	conn, err := d.getReader().Conn(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, conn.Raw(func(raw any) error {
+		return raw.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("julianday", func(string) float64 {
+			select {
+			case <-entered:
+			default:
+				close(entered)
+			}
+			<-unblock
+			return 0
+		}, false)
+	}))
+	require.NoError(t, conn.Close())
+	done := make(chan error, 1)
+	go func() {
+		_, err := d.SearchContent(t.Context(), ContentSearchFilter{Mode: "substring", Pattern: "needle", Sources: []string{"messages"}, IncludeOneShot: true})
+		done <- err
+	}()
+	select {
+	case <-entered:
+	case err := <-done:
+		t.Fatalf("search returned before reaching the reader: %v", err)
+	case <-time.After(10 * time.Second):
+		release()
+		<-done
+		t.Fatal("search did not reach the reader")
+	}
+	assert.Positive(t, d.rawReader().Stats().InUse)
+	time.Sleep(contentScanTimeout)
+	release()
+	assert.ErrorIs(t, <-done, context.DeadlineExceeded)
+	waitCtx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	conn, err = d.rawReader().Conn(waitCtx)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	assert.Zero(t, d.rawReader().Stats().InUse)
+	var releases []func()
+	defer func() {
+		for _, release := range releases {
+			release()
+		}
+	}()
+	for range bulkReadSlots {
+		release, ok := d.tryAcquireBulkRead()
+		require.True(t, ok)
+		releases = append(releases, release)
 	}
 }
 

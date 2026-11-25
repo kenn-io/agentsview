@@ -373,6 +373,10 @@ func (db *DB) searchContentSubstring(
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, contentScanTimeout)
 		defer cancel()
+	} else if words {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, contentScanTimeout)
+		defer cancel()
 	}
 	if words && db.messageFTSRepairPending.Load() {
 		return ContentSearchPage{}, errFTSUnavailable
@@ -1131,6 +1135,8 @@ func (db *DB) searchContentFTS(
 		return ContentSearchPage{}, errFTSUnavailable
 	}
 	if _, q, words := routeContentWords(f); words {
+		ctx, cancel := context.WithTimeout(ctx, contentScanTimeout)
+		defer cancel()
 		return db.searchContentWords(ctx, f, q, false)
 	}
 	ftsQuery, err := db.prepareMessageFTSQuery(ctx, f.Pattern)
