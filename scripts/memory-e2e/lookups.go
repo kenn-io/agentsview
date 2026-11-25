@@ -196,6 +196,10 @@ func runLookupClient(
 	ctx context.Context, cfg config, bin string, client clientName,
 	fixtures []lookupFixture, questions []lookupQuestion,
 ) (lookupClientReport, error) {
+	version := lookupClientVersion(ctx, cfg.repository, client)
+	if !lookupClientVersionSupported(client, version) {
+		return lookupClientReport{Client: client, Version: version}, fmt.Errorf("%w: %s %q", errLookupCaptureUnsupported, client, version)
+	}
 	dir := filepath.Join(cfg.outputDir, string(client))
 	project, data := filepath.Join(dir, "lookup-project"), filepath.Join(dir, "agentsview-data")
 	for _, path := range []string{project, data} {
@@ -215,11 +219,8 @@ func runLookupClient(
 		return lookupClientReport{}, err
 	}
 	defer server.stop()
-	model := cfg.claudeModel
-	if client == clientCodex {
-		model = cfg.codexModel
-	}
-	report := lookupClientReport{Client: client, Version: commandOutput(ctx, project, string(client), "--version"), Model: model, Effort: cfg.effort}
+	model := map[clientName]string{clientClaude: cfg.claudeModel, clientCodex: cfg.codexModel}[client]
+	report := lookupClientReport{Client: client, Version: version, Model: model, Effort: cfg.effort}
 	for _, q := range questions {
 		for i := 1; i <= cfg.runs; i++ {
 			report.Attempts = append(report.Attempts, lookupAttempt{Case: q.Name, Attempt: i, Score: lookupScore{Verdict: "unscored"}})
@@ -231,9 +232,6 @@ func runLookupClient(
 			runDir := filepath.Join(dir, q.Name, fmt.Sprintf("run-%d", i))
 			started := time.Now()
 			calls, answer, runErr := captureLookup(ctx, cfg, bin, client, project, model, server.url, lookupPrompt(q), runDir)
-			if !lookupClientVersionSupported(client, report.Version) {
-				runErr = errors.Join(runErr, fmt.Errorf("%w: %s %q", errLookupCaptureUnsupported, client, report.Version))
-			}
 			if errors.Is(runErr, errLookupSetup) {
 				return report, runErr
 			}
@@ -248,6 +246,14 @@ func runLookupClient(
 	}
 	report.Summary = summarizeLookups(report.Attempts)
 	return report, nil
+}
+
+func lookupClientVersion(ctx context.Context, repository string, client clientName) string {
+	executable, err := lookupExecutable(ctx, string(client))
+	if err != nil {
+		return "unknown"
+	}
+	return commandOutput(ctx, repository, executable, "--version")
 }
 
 func lookupPrompt(q lookupQuestion) string {

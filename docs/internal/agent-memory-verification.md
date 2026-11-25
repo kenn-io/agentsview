@@ -66,7 +66,7 @@ phrases stay outside the project visible to the agent. Codex disables
 `mcp_2026_07_28` so the capture records each MCP call under a fixed protocol.
 Opaque exec scripts without individual results stay unscored. Scoring is limited
 to the client versions whose transcript formats the benchmark has checked;
-other versions remain unscored until rechecked.
+the benchmark rejects other versions before starting attempts.
 
 The report counts lookup calls through the first result that supplies every
 expected answer value for the cited session. A result contributes only the text
