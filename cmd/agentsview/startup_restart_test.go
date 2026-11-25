@@ -68,7 +68,8 @@ func TestDailyUsageServesSavedTotalsDuringScopedUpgrade(t *testing.T) {
 		require.FailNow(t, "worker did not start")
 	}
 	require.Eventually(t, func() bool {
-		return strings.Contains(restartGet(t, base+"/api/v1/sync/status"), `"sync_pending":true`)
+		status := restartGet(t, base+"/api/v1/sync/status")
+		return strings.Contains(status, `"sync_pending":true`) && strings.Contains(status, `"upgrade_pending":true`)
 	}, 30*time.Second, 100*time.Millisecond)
 	var stdout, stderr bytes.Buffer
 	done := make(chan error, 1)
