@@ -412,6 +412,59 @@ func TestRawProjectionShortCaptureLinks(t *testing.T) {
 	assert.Equal(t, []db.PRLink{{URL: "https://github.com/example/repo/pull/42", Host: "github.com", Repository: "example/repo", Number: 42}}, db.DecodePRLinks(links))
 }
 
+func TestRawProjectionUsageDistinctCaptureLinks(t *testing.T) {
+	f := newProjectionFixture(t)
+	var err error
+	f.sink, err = NewRawProjectionStore(t.Context(), f.runtime, RawProjectionOptions{Tenant: f.tenant, Content: ingest.ContentOptions{ArchiveContent: config.ArchiveContentUsage}})
+	require.NoError(t, err)
+	short := projectionOutcome("start")
+	short.Outcome.Results[0].Result.Messages[1].ToolCalls[0].InputJSON = `{"command":"gh pr view 41 -R example/repo"}`
+	a, receipt := f.accept(t, "device-a", "short", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, a), a, short))
+	long := projectionOutcome("start")
+	long.Outcome.Results[0].Result.Messages[1].ToolCalls[0].InputJSON = `{"command":"gh pr view 42 -R example/repo"}`
+	long.Outcome.Results[0].Result.Messages = append(long.Outcome.Results[0].Result.Messages, parser.ParsedMessage{Ordinal: 2, Role: parser.RoleUser, Content: "continue"})
+	b, _ := f.accept(t, "device-b", "long", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, b), b, long))
+	resolved, err := f.sink.Resolve(t.Context(), "codex:portable")
+	require.NoError(t, err)
+	require.Equal(t, RawIdentityAmbiguous, resolved.State)
+	require.Len(t, resolved.Variants, 2)
+	var urls []string
+	for _, alias := range resolved.Variants {
+		variant, err := f.sink.Resolve(t.Context(), alias)
+		require.NoError(t, err)
+		require.Equal(t, RawIdentityUnique, variant.State)
+		var encoded string
+		require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, variant.SessionID).Scan(&encoded))
+		links := db.DecodePRLinks(encoded)
+		require.Len(t, links, 1)
+		urls = append(urls, links[0].URL)
+	}
+	assert.ElementsMatch(t, []string{"https://github.com/example/repo/pull/41", "https://github.com/example/repo/pull/42"}, urls)
+	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
+	require.NoError(t, err)
+	for _, number := range []int{41, 42} {
+		page, err := h.ListSessions(t.Context(), db.SessionFilter{PR: db.PRFilter{Repository: "example/repo", Number: number}, Limit: 10})
+		require.NoError(t, err)
+		assert.Len(t, page.Sessions, 1)
+	}
+	a, _ = f.accept(t, "device-a", "withdrawn", receipt.Receipt)
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, a), a, rawderive.ParsedManifest{Outcome: parser.ParseOutcome{ResultSetComplete: true, ExcludedSessionIDs: []string{"codex:portable"}}}))
+	resolved, err = f.sink.Resolve(t.Context(), "codex:portable")
+	require.NoError(t, err)
+	require.Equal(t, RawIdentityUnique, resolved.State)
+	var encoded string
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&encoded))
+	assert.Equal(t, []db.PRLink{{URL: "https://github.com/example/repo/pull/42", Host: "github.com", Repository: "example/repo", Number: 42}}, db.DecodePRLinks(encoded))
+	page, err := h.ListSessions(t.Context(), db.SessionFilter{PR: db.PRFilter{Repository: "example/repo", Number: 41}, Limit: 10})
+	require.NoError(t, err)
+	assert.Empty(t, page.Sessions)
+	page, err = h.ListSessions(t.Context(), db.SessionFilter{PR: db.PRFilter{Repository: "example/repo", Number: 42}, Limit: 10})
+	require.NoError(t, err)
+	assert.Len(t, page.Sessions, 1)
+}
+
 func prepareRetainedToolLinks(t *testing.T) (projectionFixture, rawderive.ParsedManifest, rawsync.CommitResult, RawIdentity, RawIdentity) {
 	t.Helper()
 	f := newProjectionFixture(t)
