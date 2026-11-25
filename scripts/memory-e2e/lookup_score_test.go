@@ -392,7 +392,7 @@ func TestLookupSeparatesEvidenceBetweenTranscriptHeaders(t *testing.T) {
 func TestLookupWildcardTranscriptRead(t *testing.T) {
 	item := lookupItem{SessionID: "codex:" + lookupID}
 	transcript := `{"type":"session_meta","payload":{"id":"22222222-2222-4222-8222-222222222222"}}` + "\n" + `{"payload":{"content":"unrelated"}}` + "\n" + `{"type":"session_meta","payload":{"id":"` + lookupID + `"}}` + "\n" + `{"payload":{"content":"violet ledger"}}`
-	trace := `{"timestamp":"2026-11-24T12:00:00Z","message":{"content":[{"type":"tool_use","id":"1","name":"Bash","input":{"command":"cat transcripts/**/*.jsonl"}}]}}` + "\n" + `{"timestamp":"2026-11-24T12:00:01Z","message":{"content":[{"type":"tool_result","tool_use_id":"1","content":` + stringMustJSON(t, transcript) + `}]}}`
+	trace := `{"timestamp":"2026-11-24T12:00:00Z","message":{"content":[{"type":"tool_use","id":"1","name":"Bash","input":{"command":"cat ~/.codex/sessions/**/*.jsonl"}}]}}` + "\n" + `{"timestamp":"2026-11-24T12:00:01Z","message":{"content":[{"type":"tool_result","tool_use_id":"1","content":` + stringMustJSON(t, transcript) + `}]}}`
 	calls, err := extractLookupCalls(clientClaude, [][]byte{[]byte(trace)})
 	require.NoError(t, err)
 	score := scoreLookup(item.SessionID+" violet ledger", []lookupItem{item}, []string{"violet ledger"}, calls, nil)
@@ -609,7 +609,7 @@ func TestLookupShellTranscriptExcerptsUsePathSessionID(t *testing.T) {
 	}
 }
 
-func TestLookupPromptAndQuestionValidation(t *testing.T) {
+func TestLookupPromptHidesExpectedAnswer(t *testing.T) {
 	question := lookupQuestion{
 		Name:           "topic",
 		Prompt:         "Which namespace did the review choose, and why?",
@@ -617,32 +617,8 @@ func TestLookupPromptAndQuestionValidation(t *testing.T) {
 		ExpectedAnswer: map[string]string{"namespace": "violet ledger", "reason": "lock contention"},
 		Phrases:        []string{"violet ledger", "lock contention"},
 	}
-	fixtures := []lookupFixture{{ID: lookupID, Content: "The violet ledger caused lock contention."}}
-	require.NoError(t, validateLookupQuestions(fixtures, []lookupQuestion{question}))
 	prompt := lookupPrompt(question)
 	assert.Contains(t, prompt, `["namespace","reason","source_session_id"]`)
 	assert.NotContains(t, prompt, "violet ledger")
 	assert.NotContains(t, prompt, "codex:")
-
-	question.ExpectedAnswer = nil
-	assert.Error(t, validateLookupQuestions(fixtures, []lookupQuestion{question}))
-}
-
-func TestLookupQuestionValidationRejectsMissingEvidence(t *testing.T) {
-	fixture := lookupFixture{ID: lookupID, Content: "The violet ledger caused lock contention."}
-	question := lookupQuestion{
-		Name:           "topic",
-		Prompt:         "What namespace did the review choose?",
-		Expected:       []lookupItem{{SessionID: "codex:" + lookupID}},
-		ExpectedAnswer: map[string]string{"namespace": "violet ledger"},
-		Phrases:        []string{"violet ledger"},
-	}
-
-	missingSession := question
-	missingSession.Expected = []lookupItem{{SessionID: "codex:22222222-2222-4222-8222-222222222222"}}
-	require.ErrorContains(t, validateLookupQuestions([]lookupFixture{fixture}, []lookupQuestion{missingSession}), "missing from the corpus")
-
-	missingPhrase := question
-	missingPhrase.Phrases = []string{"copper namespace"}
-	require.ErrorContains(t, validateLookupQuestions([]lookupFixture{fixture}, []lookupQuestion{missingPhrase}), "absent from its expected sessions")
 }

@@ -161,16 +161,8 @@ func parseConfig(args []string) (config, error) {
 		return config{}, err
 	}
 	if cfg.outputDir == "" {
-		if cfg.suite == "lookups" {
-			cache, err := os.UserCacheDir()
-			if err != nil {
-				return config{}, err
-			}
-			cfg.outputDir = filepath.Join(cache, "agentsview", "memory-e2e", "lookups-"+time.Now().UTC().Format("20060102T150405Z"))
-		} else {
-			cfg.outputDir = filepath.Join(repo,
-				".test-data-memory-e2e-"+time.Now().UTC().Format("20060102T150405Z"))
-		}
+		cfg.outputDir = filepath.Join(repo,
+			".test-data-memory-e2e-"+time.Now().UTC().Format("20060102T150405Z"))
 	} else if !filepath.IsAbs(cfg.outputDir) {
 		cfg.outputDir = filepath.Join(repo, cfg.outputDir)
 	}

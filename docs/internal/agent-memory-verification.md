@@ -60,10 +60,10 @@ per client. Pass `--client`, `--runs`, or `--case` through
 
 The corpus and questions live in `scripts/memory-e2e/testdata/lookups/`.
 They cover topic, named-session, ownership, recent-work, and long-result
-lookups. Expected IDs and answer phrases stay outside the project visible to
-the agent. Codex disables `mcp_2026_07_28` so the capture records each MCP call
-under a fixed protocol. Opaque exec scripts without individual results stay
-unscored.
+lookups. Fixture transcripts appear under the client's `~/.codex/sessions/`
+path, outside its working directory. Expected IDs and answer phrases stay
+outside the project visible to the agent. Codex disables `mcp_2026_07_28` so the capture records each MCP call under a
+fixed protocol. Opaque exec scripts without individual results stay unscored.
 
 The report counts lookup calls started by the time results for the cited
 session supply all expected phrases. A direct file read or the single-session
@@ -81,11 +81,9 @@ be compared leave a correct answer unscored. One- and two-call shares use all
 scheduled attempts. Client setup errors stop the run. Choose an empty output
 directory for each run.
 
-The lookup suite stores private captures and reports under
-`$XDG_CACHE_HOME/agentsview/memory-e2e/`, or the platform cache directory when
-`XDG_CACHE_HOME` is unset. The client receives temporary copies of its auth
-files for the run; the harness removes those copies after each attempt. Keep
-the artifacts private and remove them when they are no longer needed.
+The client receives temporary copies of its auth files for the run; the
+harness removes those copies after each attempt. Lookup captures are private;
+remove them when they are no longer needed.
 
 This gate measures native-client behavior on a synthetic local archive. It does
 not replace the PostgreSQL contract suite, prove behavior for every model, or

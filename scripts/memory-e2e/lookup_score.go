@@ -40,7 +40,7 @@ type lookupScore struct {
 }
 
 var (
-	lookupCommandPattern         = regexp.MustCompile(`(?i)(sqlite3|sessions\.db|\.claude/projects/|\.codex/sessions/|rollout-[^\s"']*\.jsonl|transcripts/[^\s"']*[?*]|tool-results/|\bagentsview\s+(?:session|search|db|mcp)\b)`)
+	lookupCommandPattern         = regexp.MustCompile(`(?i)(sqlite3|sessions\.db|\.claude/projects/|\.codex/sessions/|rollout-[^\s"']*\.jsonl|tool-results/|\bagentsview\s+(?:session|search|db|mcp)\b)`)
 	lookupOutputPattern          = regexp.MustCompile(`(?i)(sessions\.db|\.claude/projects/|\.codex/sessions/|rollout-[^\s"']*\.jsonl|tool-results/)`)
 	truncatedResultPattern       = regexp.MustCompile(`(?i)"[^"\n]*truncated"\s*:\s*true|output truncated`)
 	emptyResultPattern           = regexp.MustCompile(`(?i)"(?:matches|messages|results|sessions|tool_calls)"\s*:\s*(?:\[\s*\]|null)`)
@@ -68,10 +68,7 @@ func routeFor(name, input string) string {
 	if lookupCommandPattern.MatchString(input) {
 		return "direct"
 	}
-	if strings.Contains(lower, "tool") && (strings.Contains(lower, "description") || strings.Contains(lower, "all_tools")) {
-		return "other"
-	}
-	if name == "Read" || name == "Grep" || name == "Glob" || name == "Bash" || name == "exec_command" || name == "CommandExecution" {
+	if toolDescriptionLookup(lower) || name == "Read" || name == "Grep" || name == "Glob" || name == "Bash" || name == "exec_command" || name == "CommandExecution" {
 		return "other"
 	}
 	return ""

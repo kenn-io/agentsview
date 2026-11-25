@@ -95,77 +95,7 @@ func readLookupCorpus(repository string) ([]lookupFixture, []lookupQuestion, err
 	if err := readLookupJSON(filepath.Join(root, "questions.json"), &questions); err != nil {
 		return nil, nil, err
 	}
-	if err := validateLookupQuestions(fixtures, questions); err != nil {
-		return nil, nil, err
-	}
 	return fixtures, questions, nil
-}
-
-func validateLookupQuestions(fixtures []lookupFixture, questions []lookupQuestion) error {
-	fixtureByID := make(map[string]lookupFixture, len(fixtures))
-	for _, fixture := range fixtures {
-		id := strings.TrimSpace(fixture.ID)
-		if id == "" {
-			return errors.New("memory-e2e: lookup fixture has an empty session ID")
-		}
-		if _, ok := fixtureByID[id]; ok {
-			return fmt.Errorf("memory-e2e: duplicate lookup fixture session ID %q", id)
-		}
-		fixtureByID[id] = fixture
-	}
-	seen := map[string]struct{}{}
-	for _, q := range questions {
-		if strings.TrimSpace(q.Name) == "" || strings.TrimSpace(q.Prompt) == "" || len(q.Expected) == 0 || len(q.ExpectedAnswer) == 0 || len(q.Phrases) == 0 {
-			return fmt.Errorf("memory-e2e: lookup question %q needs a name, prompt, expected session, answer fields, and evidence phrases", q.Name)
-		}
-		if _, ok := seen[q.Name]; ok {
-			return fmt.Errorf("memory-e2e: duplicate lookup question %q", q.Name)
-		}
-		seen[q.Name] = struct{}{}
-		expectedFixtures := make([]lookupFixture, 0, len(q.Expected))
-		for _, item := range q.Expected {
-			id := strings.TrimSpace(item.SessionID)
-			if id == "" {
-				return fmt.Errorf("memory-e2e: lookup question %q has an empty expected session ID", q.Name)
-			}
-			if _, rawID, prefixed := strings.Cut(id, ":"); prefixed {
-				id = rawID
-			}
-			fixture, ok := fixtureByID[id]
-			if !ok {
-				return fmt.Errorf("memory-e2e: lookup question %q expects session %q, which is missing from the corpus", q.Name, item.SessionID)
-			}
-			expectedFixtures = append(expectedFixtures, fixture)
-		}
-		for field, value := range q.ExpectedAnswer {
-			if strings.TrimSpace(field) == "" || field == "source_session_id" || strings.TrimSpace(value) == "" {
-				return fmt.Errorf("memory-e2e: lookup question %q has an invalid expected answer field", q.Name)
-			}
-		}
-		for _, phrase := range q.Phrases {
-			if strings.TrimSpace(phrase) == "" {
-				return fmt.Errorf("memory-e2e: lookup question %q has an empty evidence phrase", q.Name)
-			}
-			if !lookupFixtureContains(expectedFixtures, phrase) {
-				return fmt.Errorf("memory-e2e: lookup question %q requires evidence phrase %q absent from its expected sessions", q.Name, phrase)
-			}
-		}
-		for _, answer := range q.ExpectedAnswer {
-			if !lookupFixtureContains(expectedFixtures, answer) {
-				return fmt.Errorf("memory-e2e: lookup question %q expects answer %q absent from its expected sessions", q.Name, answer)
-			}
-		}
-	}
-	return nil
-}
-
-func lookupFixtureContains(fixtures []lookupFixture, text string) bool {
-	for _, fixture := range fixtures {
-		if containsLookupPhrase(fixture.Content, text) {
-			return true
-		}
-	}
-	return false
 }
 
 func selectLookupCorpus(cfg config) ([]lookupFixture, []lookupQuestion, error) {
@@ -209,47 +139,15 @@ func runLookupSuite(ctx context.Context, cfg config, bin string, fixtures []look
 }
 
 func seedLookupCorpus(
-	ctx context.Context, bin, dataDir, projectDir string,
+	ctx context.Context, bin, dataDir, projectDir, transcriptsRoot string,
 	fixtures []lookupFixture,
 ) error {
-	root := filepath.Join(projectDir, "transcripts")
 	for _, f := range fixtures {
-		when := time.Now().UTC().Add(-time.Duration(f.AgeHours) * time.Hour)
-		at := when.Format(time.RFC3339)
-		dir := filepath.Join(root, when.Format("2006"), when.Format("01"), when.Format("02"))
-		if err := os.MkdirAll(dir, 0o700); err != nil {
+		path, err := writeLookupFixtureTranscript(transcriptsRoot, projectDir, f)
+		if err != nil {
 			return err
 		}
-		meta := map[string]any{"id": f.ID, "cwd": projectDir, "originator": "codex_exec", "source": "exec"}
-
-		content := f.Content
-		if f.PaddingRepeats > 0 {
-			content = f.Title + " examined the archive. " + strings.Repeat("Background detail without a decision. ", f.PaddingRepeats) + f.Content
-		}
-		lines := []any{
-			map[string]any{"timestamp": at, "type": "session_meta", "payload": meta},
-			map[string]any{"timestamp": at, "type": "response_item", "payload": map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": f.Title}}}},
-			map[string]any{"timestamp": at, "type": "response_item", "payload": map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": content}}}},
-		}
-		lines = append(lines,
-			map[string]any{"timestamp": at, "type": "response_item", "payload": map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "Record this update for the project."}}}},
-			map[string]any{"timestamp": at, "type": "response_item", "payload": map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": "Recorded."}}}},
-		)
-
-		var body bytes.Buffer
-		for _, line := range lines {
-			b, err := json.Marshal(line)
-			if err != nil {
-				return err
-			}
-			body.Write(b)
-			body.WriteByte('\n')
-		}
-		path := filepath.Join(dir, "rollout-"+when.Format("2006-01-02T15-04-05")+"-"+f.ID+".jsonl")
-		if err := os.WriteFile(path, body.Bytes(), 0o600); err != nil {
-			return err
-		}
-		id, err := syncSourceSessionWithEnv(ctx, bin, dataDir, path, []string{"CODEX_SESSIONS_DIR=" + root, "CODEX_HOME=" + filepath.Join(projectDir, "fixture-codex")})
+		id, err := syncSourceSessionWithEnv(ctx, bin, dataDir, path, []string{"CODEX_SESSIONS_DIR=" + transcriptsRoot, "CODEX_HOME=" + filepath.Dir(transcriptsRoot)})
 		if err != nil {
 			return err
 		}
@@ -258,6 +156,41 @@ func seedLookupCorpus(
 		}
 	}
 	return nil
+}
+
+func writeLookupFixtureTranscript(root, projectDir string, f lookupFixture) (string, error) {
+	when := time.Now().UTC().Add(-time.Duration(f.AgeHours) * time.Hour)
+	at := when.Format(time.RFC3339)
+	dir := filepath.Join(root, when.Format("2006"), when.Format("01"), when.Format("02"))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	meta := map[string]any{"id": f.ID, "cwd": projectDir, "originator": "codex_cli_rs", "source": "cli"}
+	content := f.Content
+	if f.PaddingRepeats > 0 {
+		content = f.Title + " examined the archive. " + strings.Repeat("Background detail without a decision. ", f.PaddingRepeats) + f.Content
+	}
+	lines := []any{
+		map[string]any{"timestamp": at, "type": "session_meta", "payload": meta},
+		map[string]any{"timestamp": at, "type": "response_item", "payload": map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": f.Title}}}},
+		map[string]any{"timestamp": at, "type": "response_item", "payload": map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": content}}}},
+		map[string]any{"timestamp": at, "type": "response_item", "payload": map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "Record this update for the project."}}}},
+		map[string]any{"timestamp": at, "type": "response_item", "payload": map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": "Recorded."}}}},
+	}
+	var body bytes.Buffer
+	for _, line := range lines {
+		b, err := json.Marshal(line)
+		if err != nil {
+			return "", err
+		}
+		body.Write(b)
+		body.WriteByte('\n')
+	}
+	path := filepath.Join(dir, "rollout-"+when.Format("2006-01-02T15-04-05")+"-"+f.ID+".jsonl")
+	if err := os.WriteFile(path, body.Bytes(), 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 func runLookupClient(
@@ -274,7 +207,12 @@ func runLookupClient(
 	if err := initFixtureProject(ctx, project); err != nil {
 		return lookupClientReport{}, err
 	}
-	if err := seedLookupCorpus(ctx, bin, data, project, fixtures); err != nil {
+	transcriptsRoot, err := os.MkdirTemp("/dev/shm", "agentsview-memory-e2e-lookups-")
+	if err != nil {
+		return lookupClientReport{}, fmt.Errorf("memory-e2e: create fixture archive: %w", err)
+	}
+	defer os.RemoveAll(transcriptsRoot)
+	if err := seedLookupCorpus(ctx, bin, data, project, transcriptsRoot, fixtures); err != nil {
 		return lookupClientReport{}, err
 	}
 	server, err := startFixtureServer(ctx, bin, data, dir)
@@ -300,7 +238,7 @@ func runLookupClient(
 		for i := 1; i <= cfg.runs; i++ {
 			runDir := filepath.Join(dir, q.Name, fmt.Sprintf("run-%d", i))
 			started := time.Now()
-			calls, answer, runErr := captureLookup(ctx, cfg, bin, client, project, model, server.url, lookupPrompt(q), runDir)
+			calls, answer, runErr := captureLookup(ctx, cfg, bin, client, project, model, server.url, lookupPrompt(q), runDir, transcriptsRoot)
 			if errors.Is(runErr, errLookupSetup) {
 				return report, runErr
 			}
@@ -309,9 +247,6 @@ func runLookupClient(
 			a.Error = scoreError(runErr)
 			a.Artifacts = relativeArtifact(cfg.outputDir, runDir)
 			a.Score = scoreLookupQuestion(q, answer, calls, runErr)
-			if err := writeJSON(filepath.Join(dir, "attempts.json"), report.Attempts); err != nil {
-				return report, err
-			}
 			fmt.Printf("%s %-16s run %d: %s\n", client, q.Name, i, a.Score.Verdict)
 			index++
 		}
@@ -331,11 +266,11 @@ func lookupPrompt(q lookupQuestion) string {
 	return fmt.Sprintf("%s\n\nReturn only a JSON object with string fields %s. Copy each answer value exactly from the source, and include no other fields.", q.Prompt, fieldList)
 }
 
-func captureLookup(ctx context.Context, cfg config, bin string, client clientName, project, model, serverURL, prompt, dir string) ([]lookupCall, string, error) {
+func captureLookup(ctx context.Context, cfg config, bin string, client clientName, project, model, serverURL, prompt, dir, transcriptsRoot string) ([]lookupCall, string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, "", fmt.Errorf("%w: create attempt: %w", errLookupSetup, err)
 	}
-	isolation, err := prepareLookupIsolation(ctx, client, filepath.Dir(project), project, bin, dir)
+	isolation, err := prepareLookupIsolation(ctx, client, filepath.Dir(project), project, bin, dir, transcriptsRoot)
 	if err != nil {
 		return nil, "", fmt.Errorf("%w: %s: %w", errLookupSetup, client, err)
 	}

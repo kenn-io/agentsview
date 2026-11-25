@@ -43,7 +43,7 @@ func lookupExecutable(ctx context.Context, client string) (string, error) {
 	return resolved, nil
 }
 
-func prepareLookupIsolation(ctx context.Context, client clientName, clientDir, project, bin, runDir string) (result lookupIsolation, err error) {
+func prepareLookupIsolation(ctx context.Context, client clientName, clientDir, project, bin, runDir, transcriptsRoot string) (result lookupIsolation, err error) {
 	var credentials []string
 	defer func() {
 		if err != nil {
@@ -95,6 +95,10 @@ func prepareLookupIsolation(ctx context.Context, client clientName, clientDir, p
 		providerHome = filepath.Join(privateHome, ".claude")
 	}
 	if err := os.MkdirAll(providerHome, 0o700); err != nil {
+		return lookupIsolation{}, err
+	}
+	fixtureSessions := filepath.Join(providerHome, "sessions")
+	if err := os.MkdirAll(fixtureSessions, 0o700); err != nil {
 		return lookupIsolation{}, err
 	}
 	if err := os.Symlink(filepath.Join(clientDir, "agentsview-data"), filepath.Join(privateHome, ".agentsview")); err != nil {
@@ -160,7 +164,7 @@ func prepareLookupIsolation(ctx context.Context, client clientName, clientDir, p
 	for _, p := range parents {
 		argv = append(argv, "--dir", p)
 	}
-	argv = append(argv, "--bind", project, project, "--bind", dataDir, dataDir, "--bind", privateHome, privateHome, "--ro-bind", bin, bin)
+	argv = append(argv, "--bind", project, project, "--bind", dataDir, dataDir, "--bind", privateHome, privateHome, "--ro-bind", bin, bin, "--ro-bind", transcriptsRoot, fixtureSessions)
 	for _, p := range mounts[4:] {
 		argv = append(argv, "--ro-bind", p, p)
 	}
