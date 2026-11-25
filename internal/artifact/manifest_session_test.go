@@ -30,6 +30,11 @@ func TestManifestSessionMatchesDBSessionWireFormat(t *testing.T) {
 	populateWireFixture(t, reflect.ValueOf(&sess).Elem(), 1)
 	require.Len(t, sess.ParentSessionIDs, 2)
 	require.NotEqual(t, sess.ParentSessionIDs[0], sess.ParentSessionIDs[1])
+	encoded, err := json.Marshal(manifest{Session: manifestSessionFromDB(sess)})
+	require.NoError(t, err)
+	var restored manifest
+	require.NoError(t, json.Unmarshal(encoded, &restored))
+	assert.True(t, restored.Session.dbSession().PRRepositoryChanged)
 
 	// Deliberate parity exemptions: quality_signals is hoisted to the
 	// manifest-level session_quality_signals field because db.Session's
@@ -86,15 +91,6 @@ func TestManifestSessionMatchesDBSessionWireFormat(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, string(want), string(roundTrip),
 		"converting to the wire DTO and back must preserve every artifact-visible field")
-}
-
-func TestManifestPreservesPRRepositoryUncertainty(t *testing.T) {
-	original := manifest{Session: manifestSessionFromDB(db.Session{PRRepositoryChanged: true})}
-	encoded, err := json.Marshal(original)
-	require.NoError(t, err)
-	var restored manifest
-	require.NoError(t, json.Unmarshal(encoded, &restored))
-	assert.True(t, restored.Session.dbSession().PRRepositoryChanged)
 }
 
 func TestManifestQualitySignalsMatchesDBWireFormat(t *testing.T) {

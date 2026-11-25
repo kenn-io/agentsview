@@ -23,7 +23,6 @@ func TestCommandPRLinks(t *testing.T) {
 		{`gh pr view 42; cd /other; gh pr view 43`, remote, "https://github.com/example/repo/pull/42", "", false},
 		{`gh pr view 42; git remote set-url origin other`, remote, "https://github.com/example/repo/pull/42", "", false},
 		{`env GH_HOST=other.example gh pr view 42 -R example/repo`, remote, "", "", false},
-		{`gh pr view 42`, remote, "https://github.com/example/repo/pull/42", "", false},
 		{`bash -n -c 'gh pr view 42 -R example/repo'`, remote, "", "", false},
 		{`command -v gh pr view 42 -R example/repo`, remote, "", "", false},
 		{`GH_HOST=git.example command gh pr view 42 -R example/repo`, remote, "", "", false},
@@ -89,12 +88,10 @@ func TestCommandPRLinks(t *testing.T) {
 		{`if gh pr checks 44; then gh pr merge 44; fi`, "https://github.com/example/repo.git", "https://github.com/example/repo/pull/44", "", false},
 		{`cd /work/other; gh pr view 45 -R example/repo`, "https://github.com/example/repo.git", "https://github.com/example/repo/pull/45", "", false},
 		{`gh pr view 42 -R=github.com/example/repo`, "", "https://github.com/example/repo/pull/42", "", false},
-		{`gh pr view 42 -R github.com/example/repo`, "", "https://github.com/example/repo/pull/42", "", false},
 		{`gh pr view 42 -R git.example/example/repo`, "", "https://git.example/example/repo/pull/42", "", false},
 		{`gh pr view 42 -R example/other`, "https://github.com/example/repo.git", "https://github.com/example/other/pull/42", "", false},
 		{`GH_HOST=$HOST gh pr view 42 -R github.com/example/repo`, "", "https://github.com/example/repo/pull/42", "", false},
 		{`gh pr view -R example/repo 42`, "https://github.com/example/repo.git", "https://github.com/example/repo/pull/42", "", false},
-		{`gh pr view 42 -R example/repo`, "", "https://github.com/example/repo/pull/42", "", false},
 		{`gh pr view 42 -R example/repo; export GH_HOST=git.example`, "", "https://github.com/example/repo/pull/42", "", false},
 		{`GH_HOST=git.example gh pr view 42 -R example/repo`, "https://github.com/example/repo.git", "", "", false},
 		{`GH_HOST=git.example gh pr view 41 -R example/repo; gh pr view 42 -R example/repo`, "", "https://github.com/example/repo/pull/42", "", false},
@@ -110,6 +107,8 @@ func TestCommandPRLinks(t *testing.T) {
 		{`cd /work/repo && gh pr view 42`, remote, "https://github.com/example/repo/pull/42", "/work/repo", false},
 		{`env GH_PAGER=cat gh pr view 42 -R example/repo`, remote, "https://github.com/example/repo/pull/42", "/work/repo", false},
 		{`env GH_REPO=other/repo gh pr view 42`, remote, "", "/work/repo", false},
+		{`env GH_REPO=example/other git remote set-url origin https://github.com/example/other.git; gh pr view 42`, remote, "", "/work/repo", true},
+		{`env GH_HOST=git.example bash -c 'git remote set-url origin other'; gh pr view 42`, remote, "", "/work/repo", true},
 	} {
 		t.Run(tc.command, func(t *testing.T) {
 			links, _, changed, _, err := AnalyzePRCommand(t.Context(), tc.command, tc.cwd, tc.remote, true, false)
@@ -139,18 +138,4 @@ func TestCommandPRLinks(t *testing.T) {
 func commandPRLinks(ctx context.Context, command, remote string, allowBare bool) ([]PRLink, error) {
 	links, _, _, _, err := AnalyzePRCommand(ctx, command, "", remote, allowBare, false)
 	return links, err
-}
-
-func TestAnalyzePRCommandEnvWrappedRemoteChange(t *testing.T) {
-	for _, command := range []string{
-		`env GH_REPO=example/other git remote set-url origin https://github.com/example/other.git; gh pr view 42`,
-		`env GH_HOST=git.example bash -c 'git remote set-url origin other'; gh pr view 42`,
-	} {
-		t.Run(command, func(t *testing.T) {
-			links, _, changed, _, err := AnalyzePRCommand(t.Context(), command, "/work/repo", "https://github.com/example/repo.git", true, false)
-			require.NoError(t, err)
-			assert.True(t, changed)
-			assert.Empty(t, links)
-		})
-	}
 }

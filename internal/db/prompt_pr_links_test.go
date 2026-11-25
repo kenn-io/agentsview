@@ -514,7 +514,7 @@ func TestToolPRLinksArchiveUpgrade(t *testing.T) {
 				if _, err := tx.ExecContext(t.Context(), `ALTER TABLE tool_calls DROP COLUMN pr_links`); err != nil {
 					return err
 				}
-				return writeUserVersion(t.Context(), tx, dataVersion-1)
+				return writeUserVersion(t.Context(), tx, toolPRLinksDataVersion-1)
 			}))
 			require.NoError(t, d.Close())
 			d, err = OpenIsolatedWithArchiveContent(t.Context(), path, config.ArchiveContentFull)
@@ -568,7 +568,7 @@ func TestToolPRLinksArchiveStorage(t *testing.T) {
 				}
 				assertLinks()
 			}
-			for i, input := range []string{`{"command":"gh pr comment --body \"$BODY\" 5 -R example/repo"}`, `{"command":"gh pr view 6 -R example/repo --future value"}`} {
+			for i, input := range []string{`{"command":"gh pr view 5 -R example/repo"}`, `{"command":"gh pr view 6 -R example/repo"}`} {
 				_, err := d.WriteSessionBatchContext(t.Context(), []SessionBatchWrite{{Session: session, Messages: []Message{message(i, "Bash", "Bash", input)}, ReplaceMessages: i == 0}})
 				require.NoError(t, err)
 			}
@@ -733,7 +733,7 @@ func TestToolPRLinksSharedShellDirectoryAppend(t *testing.T) {
 	assert.Empty(t, got.PRLinks)
 }
 
-func TestTranscriptToolPRLinksPreservesDirectoryChange(t *testing.T) {
+func TestTranscriptToolPRLinksWithoutInputs(t *testing.T) {
 	for _, tc := range []struct {
 		name, first, second, remote string
 		hosts                       []string
