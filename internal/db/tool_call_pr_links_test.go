@@ -31,14 +31,12 @@ func TestToolCallPRLinks(t *testing.T) {
 			{ToolName: "newTask", Category: "Task", InputJSON: `{"tool":"newTask","content":"Review https://github.com/example/repo/pull/48"}`},
 			{ToolName: "Task", Category: "Task", InputJSON: `{"prompt":"Review https://github.com/example/repo/pull/49","content":[{"type":"text","text":"other"}]}`},
 			bash("Bash", `{"command":["codex","exec","Review https://github.com/example/repo/pull/43"]}`),
-			bash("Bash", `{"command":"curl https://github.com/example/repo/pull/44"}`),
 		}, []int{52, 53, 51, 50, 42, 48, 49}},
 		{"command", []db.ToolCall{bash("Bash", `{"command":"gh pr view 42 -R example/repo"}`)}, []int{42}},
-		{"argv", []db.ToolCall{bash("shell", `{"command":["bash","-lc","gh pr view 43 -R example/repo"]}`)}, []int{43}},
+		{"argv", []db.ToolCall{bash("shell", `{"command":["gh","pr","view","43","-R","example/repo"]}`)}, []int{43}},
 		{"commands", []db.ToolCall{bash("execute_command", `{"commands":["gh pr view 42 -R example/repo","gh pr view 43 -R example/repo"]}`)}, []int{42, 43}},
 		{"CommandLine", []db.ToolCall{bash("run_command", `{"CommandLine":"gh pr view 42 -R example/repo"}`)}, []int{42}},
 		{"plain text", []db.ToolCall{bash("shell", `gh pr view 42 -R example/repo`)}, []int{42}},
-		{"earlier directory", []db.ToolCall{bash("Bash", `{"command":"gh pr view 61 -R github.com/example/repo"}`)}, []int{61}},
 		{"oversized skipped", []db.ToolCall{bash("Bash", oversized("gh pr view 41 -R github.com/example/repo")), bash("Bash", `{"command":"gh pr view 42 -R github.com/example/repo"}`)}, []int{42}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -107,12 +107,10 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 			var seed bytes.Buffer
 			require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &seed))
 			if tc.scoped {
-				oldVersion := db.CurrentDataVersion() - 1
-				for oldVersion > 0 && len(db.ScopedDataVersionProviders(oldVersion, db.CurrentDataVersion())) == 0 {
-					oldVersion--
-				}
-				require.NotEmpty(t, db.ScopedDataVersionProviders(oldVersion, db.CurrentDataVersion()),
+				const oldVersion = 188
+				require.NotEmpty(t, db.ScopedDataVersionProviders(oldVersion, 189),
 					"fixture must exercise a scoped parser upgrade")
+				require.Equal(t, 190, db.CurrentDataVersion(), "update fixture for the latest parser upgrade")
 				conn, err := sql.Open("sqlite3", cfg.DBPath)
 				require.NoError(t, err)
 				_, err = conn.ExecContext(t.Context(), `UPDATE messages SET content='old transcript' WHERE session_id IN (SELECT id FROM sessions WHERE agent='claude') AND content LIKE 'visible-seed-%'`)

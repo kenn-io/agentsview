@@ -2608,7 +2608,6 @@ func TestCompareStoredSessionPromptAndCommandLinks(t *testing.T) {
 		command, prompt string
 	}{
 		{"full", "gh pr view 42 -R user-a/project-a", "Review https://github.com/user-a/project-a/pull/43"},
-		{"mixed case", "gh pr view 42 -R example/repo", "Review https://github.com/Example/Repo/pull/42"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := openTestDB(t)

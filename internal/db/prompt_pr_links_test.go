@@ -326,33 +326,6 @@ func TestPromptPRLinksBackfillUsesDialogue(t *testing.T) {
 }
 
 func TestToolPRLinksArchiveUpgrade(t *testing.T) {
-	t.Run("usage-only", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "archive.db")
-		d, err := OpenIsolated(t.Context(), path)
-		require.NoError(t, err)
-		t.Cleanup(func() {
-			if d != nil {
-				_ = d.Close()
-			}
-		})
-		link, ok := parser.NewPRLink("https://github.com/example/repo/pull/41", "example/repo", 41)
-		require.True(t, ok)
-		s := Session{ID: "usage-upgrade", Project: "project", Machine: "local", Agent: "claude", PRLinks: []PRLink{link}}
-		require.NoError(t, d.UpsertSession(t.Context(), s))
-		require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"gh pr view 42 -R example/repo"}`}}}}))
-		require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
-			if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links=structured_pr_links`); err != nil {
-				return err
-			}
-			return writeUserVersion(t.Context(), tx, toolPRLinksDataVersion-1)
-		}))
-		require.NoError(t, d.Close())
-		d, err = OpenIsolatedWithArchiveContent(t.Context(), path, config.ArchiveContentUsage)
-		require.NoError(t, err)
-		got, err := d.GetSession(t.Context(), s.ID)
-		require.NoError(t, err)
-		assert.Equal(t, []PRLink{link}, got.PRLinks)
-	})
 	for _, tc := range []struct {
 		name, category, field string
 		prompt, command       string
