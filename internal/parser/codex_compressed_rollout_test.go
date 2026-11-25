@@ -178,6 +178,10 @@ func TestCodexLabeledCompressionUsesPlainCopyTime(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	assert.Equal(t, newer, sources[0].DisplayPath)
+	discovery, err := DiscoverRawCaptureSources(t.Context(), provider)
+	require.NoError(t, err)
+	require.Len(t, discovery.Sources, 1)
+	assert.Equal(t, newer, discovery.Sources[0].DisplayPath)
 }
 
 // TestCodexParseCompressedRolloutMatchesPlain: the compressed file parses to

@@ -258,39 +258,6 @@ func TestCodexLabeledRunResyncAndExplicitWorktreeMappingWins(t *testing.T) {
 	assert.Equal(t, "mapped_project", session.Project)
 }
 
-func TestSyncSingleSessionFindsNewLabeledCopy(t *testing.T) {
-	database := openTestDB(t)
-	root := t.TempDir()
-	ordinary, logs := filepath.Join(root, "ordinary"), filepath.Join(root, "logs")
-	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
-	name := "rollout-2026-10-08T12-00-00-" + id + ".jsonl"
-	ordinaryPath := filepath.Join(ordinary, "2026", "10", "08", name)
-	labeledPath := filepath.Join(logs, "team", ".codex-run-v1-abc", "sessions", "2026", "10", "08", name)
-	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z")
-	dbtest.WriteTestFile(t, ordinaryPath, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "ordinary", "2026-10-08T12:00:01Z")+"\n"))
-	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {ordinary, logs}}})
-	t.Cleanup(engine.Close)
-	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
-	ordinaryMtime := engine.SourceMtime(t.Context(), "codex:"+id)
-	require.NotZero(t, ordinaryMtime)
-	dbtest.WriteTestFile(t, labeledPath, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "labeled", "2026-10-08T12:00:01Z")+"\n"))
-	newer := time.Now().Add(time.Hour)
-	require.NoError(t, os.Chtimes(labeledPath, newer, newer))
-	assert.Equal(t, ordinaryMtime, engine.SourceMtime(t.Context(), "codex:"+id))
-	assert.Equal(t, ordinaryPath, engine.FindSourceFile(t.Context(), "codex:"+id))
-	require.NoError(t, engine.SyncSingleSessionContext(t.Context(), "codex:"+id))
-	assert.Equal(t, ordinaryPath, database.GetSessionFilePath(t.Context(), "codex:"+id))
-	require.NoError(t, engine.TrySyncSessionWithSubagentsContext(t.Context(), "codex:"+id))
-	assert.Equal(t, ordinaryPath, database.GetSessionFilePath(t.Context(), "codex:"+id))
-	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{labeledPath}))
-	session, err := database.GetSessionFull(t.Context(), "codex:"+id)
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	require.NotNil(t, session.FilePath)
-	assert.Equal(t, labeledPath, *session.FilePath)
-	assert.Equal(t, newer.UnixNano(), engine.SourceMtime(t.Context(), "codex:"+id))
-}
-
 func TestCodexLabeledCopyWinsSync(t *testing.T) {
 	for _, mode := range []string{"changed path", "batch", "newer then older", "missed event"} {
 		t.Run(mode, func(t *testing.T) {

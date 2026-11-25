@@ -21,7 +21,6 @@ import (
 	"go.kenn.io/agentsview/internal/rawcheckpoint"
 	"go.kenn.io/agentsview/internal/rawsync"
 	"go.kenn.io/agentsview/internal/rawupload"
-	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 // Only the remote metadata seam is in memory. Canonical manifests, object
@@ -163,51 +162,6 @@ func TestBackfillCodexOverlappingRootsKeepFirstEligibleOwner(t *testing.T) {
 				}
 			})
 		}
-	}
-}
-
-func TestBackfillCodexCapturesNewestLabeledCopy(t *testing.T) {
-	root := t.TempDir()
-	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
-	name := "rollout-2026-10-08T12-00-00-" + id + ".jsonl"
-	var paths []string
-	for i, label := range []string{"a", "b"} {
-		path := filepath.Join(root, label, ".codex-run-v1-abc", "sessions", "2026", "10", "08", name)
-		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-		meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z")
-		content := testjsonl.JoinJSONL(meta, testjsonl.CodexMsgJSON("user", label, "2026-10-08T12:00:01Z"))
-		require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-		mtime := time.Now().Add(time.Duration(1-i) * time.Hour)
-		require.NoError(t, os.Chtimes(path, mtime, mtime))
-		paths = append(paths, path)
-	}
-	store, err := rawcheckpoint.Open(t.Context(), filepath.Join(t.TempDir(), "checkpoint.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
-	configured, err := store.ResolveConfiguredRoot(t.Context(), parser.AgentCodex, root)
-	require.NoError(t, err)
-	spec := rawcheckpoint.BackfillRunSpec{RunID: "run-a", DeviceID: "device-a", Destination: "https://ingest.example", Providers: []parser.AgentType{parser.AgentCodex}, Roots: []rawcheckpoint.BackfillSelection{{Provider: parser.AgentCodex, ConfiguredRootID: configured.ID}}}
-	provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	sources, err := provider.Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	require.Equal(t, paths[0], sources[0].DisplayPath)
-	transport := newBackfillCustody(t)
-	progress, err := RunBackfill(t.Context(), store, rawcapture.New(store), rawupload.New(store, transport, "device-a"), BackfillOptions{Spec: spec, Providers: []parser.Provider{provider}, BatchSize: 128})
-	require.NoError(t, err)
-	require.True(t, progress.Complete)
-	require.Len(t, transport.metadata.manifests, 1)
-	for _, manifest := range transport.metadata.manifests {
-		require.Len(t, manifest.Manifest.Entries, 1)
-		require.Equal(t, filepath.ToSlash(filepath.Join("a", ".codex-run-v1-abc", "sessions", "2026", "10", "08", name)), manifest.Manifest.Entries[0].Path)
-		var data bytes.Buffer
-		for _, object := range manifest.Manifest.Entries[0].Objects {
-			_, err := transport.objects.CopyObject(t.Context(), backfillIdentity.TenantID, object, &data)
-			require.NoError(t, err)
-		}
-		require.Contains(t, data.String(), `"a"`)
 	}
 }
 

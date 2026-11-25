@@ -2455,4 +2455,11 @@ func TestCodexLabeledRunOverlappingRootsAndLookup(t *testing.T) {
 		require.Len(t, outcome.Results, 1)
 		assert.Equal(t, "team/case", outcome.Results[0].Result.Session.Project)
 	}
+	writeCodexProviderSessionContent(t, root, id, testjsonl.JoinJSONL(meta, testjsonl.CodexMsgJSON("user", "ordinary", tsEarlyS1)))
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: id})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, path, found.DisplayPath)
 }
