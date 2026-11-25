@@ -591,7 +591,7 @@ func TestActivityReportGolden(t *testing.T) {
 	})
 	require.NoError(t, err, "activity report json golden command")
 
-	assertCatalogGolden(t, "activity_report_v8.json", []byte(stdout))
+	assertCatalogGolden(t, "activity_report_v9.json", []byte(stdout))
 }
 
 func TestActivityPageClearsPreviousContinuationCursor(t *testing.T) {

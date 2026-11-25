@@ -1456,7 +1456,7 @@ Response excerpt:
 
 ```json
 {
-  "schema_version": 8,
+  "schema_version": 9,
   "report_id": "v1.eyJ2IjoxLC4uLn0.signature",
   "sessions_total": 18,
   "sessions_next_cursor": "v1.eyJvZmZzZXQiOjIwMH0.signature",

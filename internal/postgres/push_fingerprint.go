@@ -117,23 +117,24 @@ func hashLocalDependencyPayload(
 // Values must match the per-session methods byte for byte — see the
 // batched twins in internal/db for the identity contract.
 type localPushDependencyState struct {
-	contentAgg     map[string]db.MessageContentAggregate
-	contentHashFP  map[string]string
-	roleTimeFP     map[string]string
-	flagsFP        map[string]string
-	dialogueFP     map[string]string
-	systemFP       map[string]string
-	tokenFP        map[string]string
-	toolCallCount  map[string]int
-	toolCallSum    map[string]int64
-	toolCallFP     map[string]string
-	toolResultFP   map[string]string
-	secretFindings map[string][]db.SecretFinding
-	pins           map[string][]db.PinnedMessage
-	planUsageFP    map[string]string
-	sessionTotalFP map[string]string
-	commitLinks    map[string][]db.CommitLinkRow
-	imageText      map[string][]db.ImageTextRow
+	contentAgg      map[string]db.MessageContentAggregate
+	contentHashFP   map[string]string
+	roleTimeFP      map[string]string
+	flagsFP         map[string]string
+	dialogueFP      map[string]string
+	systemFP        map[string]string
+	tokenFP         map[string]string
+	toolCallCount   map[string]int
+	toolCallSum     map[string]int64
+	toolCallFP      map[string]string
+	toolResultFP    map[string]string
+	secretFindings  map[string][]db.SecretFinding
+	pins            map[string][]db.PinnedMessage
+	planUsageFP     map[string]string
+	sessionTotalFP  map[string]string
+	commitLinks     map[string][]db.CommitLinkRow
+	imageText       map[string][]db.ImageTextRow
+	externalParents map[string]string
 }
 
 func readLocalPushDependencyState(
@@ -205,6 +206,9 @@ func readLocalPushDependencyState(
 	}
 	if st.imageText, err = local.SessionImageTextRowsBySession(ctx, sessionIDs); err != nil {
 		return nil, fmt.Errorf("reading local image text: %w", err)
+	}
+	if st.externalParents, err = local.SessionExternalParentsBySession(ctx, sessionIDs); err != nil {
+		return nil, fmt.Errorf("reading external parents: %w", err)
 	}
 	return st, nil
 }

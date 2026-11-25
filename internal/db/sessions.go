@@ -7049,6 +7049,7 @@ func sqliteSyncTimestampExpr(expr trustedSQLiteExpr) string {
 // fingerprint inputs from the same committed archive version.
 type SessionMirrorSnapshot struct {
 	Session             Session
+	IsLaunched          bool
 	Messages            []Message
 	Usage               []UsageEvent
 	CommitLinks         []CommitLinkRow
@@ -7079,6 +7080,9 @@ func (db *DB) loadSessionMirrorSnapshot(ctx context.Context, id string, afterSes
 		afterSession()
 	}
 	result := &SessionMirrorSnapshot{Session: *session}
+	if err := tx.QueryRowContext(ctx, `SELECT `+activityLaunchedSQL()+` FROM sessions s WHERE s.id = ?`, id).Scan(&result.IsLaunched); err != nil {
+		return nil, err
+	}
 	if result.Messages, err = allMessagesWithQuerier(ctx, tx, id, selectMessageCols); err != nil {
 		return nil, err
 	}

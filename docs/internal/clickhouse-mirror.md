@@ -216,7 +216,9 @@ rewrites the whole session instead. A row in an older format lacks a stored
 message count, current dashboard facts, or a content fingerprint. Without a
 content fingerprint, any session-field change would rewrite the whole session,
 so the first push after upgrading republishes every session row of its archive
-once, with its content fingerprint, and keeps the messages.
+once, with its content fingerprint, and keeps the messages. The same row-only
+refresh records launcher-link provenance for Activity reports. Upgrade serve
+and every pushing client together so later pushes retain that provenance.
 
 **A session that only grew gets its new messages appended.** Most changed
 sessions are agent sessions that gained messages since the last push. On one

@@ -61,6 +61,7 @@ func schemaColumnMigrations() []columnMigration {
 			`deletion_cause TEXT`,
 			"adding sessions.deletion_cause",
 		},
+		{"sessions", "external_parent_session_id", `external_parent_session_id TEXT`, "adding sessions.external_parent_session_id"},
 		{
 			"sessions", "parser_parent_session_id",
 			`parser_parent_session_id TEXT`,

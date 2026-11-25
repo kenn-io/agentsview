@@ -888,3 +888,40 @@ func assertDayMinuteFixtureSanity(t *testing.T, r activity.Report) {
 	require.InDelta(t, 1.0, *bySession["parity-tool-boundary"].AgentMinutes, 1e-9,
 		"post-range completion closes the final in-range message")
 }
+
+func TestWaitingLauncherParityAcrossBackends(t *testing.T) {
+	ctx := t.Context()
+	local := seedParitySQLite(t)
+	child := paritySessionWrite(parityFixtureSession{id: "linked-run", project: "waiting", events: []parityEvent{{role: "user", ts: "2026-06-14T10:00:00Z"}, {role: "assistant", ts: "2026-06-14T10:04:00Z"}}})
+	child.Session.Agent = "codex"
+	nativeRoot := paritySessionWrite(parityFixtureSession{id: "native-root", project: "native", events: []parityEvent{{role: "user", ts: "2026-06-13T10:00:00Z"}, {role: "assistant", ts: "2026-06-13T10:02:00Z"}}})
+	native := paritySessionWrite(parityFixtureSession{id: "native-middle", project: "native", parent: "native-root", relationship: "subagent", events: []parityEvent{{role: "user", ts: "2026-06-13T10:00:00Z"}, {role: "assistant", ts: "2026-06-13T10:02:00Z"}}})
+	nativeRun := paritySessionWrite(parityFixtureSession{id: "native-run", project: "native", events: []parityEvent{{role: "user", ts: "2026-06-14T10:00:00Z"}, {role: "assistant", ts: "2026-06-14T10:04:00Z"}}})
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{
+		paritySessionWrite(parityFixtureSession{id: "quiet-launcher", project: "waiting", events: []parityEvent{{role: "user", ts: "2026-06-13T10:00:00Z"}, {role: "assistant", ts: "2026-06-13T10:02:00Z"}}}),
+		child, nativeRoot, native, nativeRun,
+	})
+	require.NoError(t, err)
+	_, err = local.SetSessionExternalParent(ctx, "linked-run", "quiet-launcher")
+	require.NoError(t, err)
+	_, err = local.SetSessionExternalParent(ctx, "native-run", "native-middle")
+	require.NoError(t, err)
+	var pgStore *postgresstore.Store
+	if os.Getenv("TEST_PG_URL") != "" {
+		pgStore = pushParityPostgres(t, ctx, local, len(parityFixture())+5)
+	}
+	chStore := pushParityClickHouse(t, ctx, local, len(parityFixture())+5)
+	if pgStore == nil && chStore == nil {
+		t.Skip("no replica configured")
+	}
+	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: parityDate, Timezone: "UTC"}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	report := assertParityForCase(t, ctx, q, db.AnalyticsFilter{Timezone: "UTC", Project: "waiting"}, local, pgStore, chStore)
+	assert.Equal(t, 1, report.InteractivePeak.Agents)
+	assert.Equal(t, 2, report.Peak.Agents)
+	assert.Equal(t, 1, report.Totals.Sessions)
+	filtered := assertParityForCase(t, ctx, q, db.AnalyticsFilter{Timezone: "UTC", Project: "waiting", Agent: "claude"}, local, pgStore, chStore)
+	assert.Equal(t, 1, filtered.InteractivePeak.Agents)
+	nativeReport := assertParityForCase(t, ctx, q, db.AnalyticsFilter{Timezone: "UTC", Project: "native"}, local, pgStore, chStore)
+	assert.Zero(t, nativeReport.InteractivePeak.Agents)
+}

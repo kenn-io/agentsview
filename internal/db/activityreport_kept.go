@@ -137,11 +137,16 @@ func (db *DB) keptActivityChangesValid(ctx context.Context, oldRevision int64, r
 		where, args := activityReportSessionSelectionWhere(
 			filter, rangeStartUTC, rangeEndUTC,
 		)
+		if !q.Partial {
+			evidenceWhere, evidenceArgs := activityReportSessionSelectionWhere(AnalyticsFilter{Timezone: filter.Timezone, IncludeSubagents: true, IncludeForks: true}, rangeStartUTC, rangeEndUTC)
+			where = "(" + where + ") OR ((" + evidenceWhere + ") AND " + activityLaunchedSQL() + ")"
+			args = append(args, evidenceArgs...)
+		}
 		args = append(args, string(changedJSON))
 		var eligible bool
 		err = db.getReader().QueryRowContext(ctx, `SELECT EXISTS (
 			SELECT 1 FROM sessions s
-			WHERE `+where+`
+			WHERE (`+where+`)
 				AND s.id IN (SELECT value FROM json_each(?)))`, args...).Scan(&eligible)
 		if err != nil {
 			return false, fmt.Errorf("checking kept activity session changes: %w", err)

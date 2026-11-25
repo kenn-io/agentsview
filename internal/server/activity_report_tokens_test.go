@@ -23,6 +23,7 @@ func TestActivityReportTokenSelectionRevalidatesResolvedQuery(t *testing.T) {
 		name   string
 		mutate func(*activityReportTokenPayload)
 	}{
+		{name: "previous schema", mutate: func(payload *activityReportTokenPayload) { payload.Schema = export.ActivityReportSchemaVersion - 1 }},
 		{
 			name: "range longer than one year",
 			mutate: func(payload *activityReportTokenPayload) {
@@ -86,7 +87,7 @@ func TestActivityReportTokenSelectionRevalidatesResolvedQuery(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestActivitySessionCursorRejectsTheReportTokenVersion(t *testing.T) {
+func TestActivitySessionCursorRejectsReportAndSchemaVersions(t *testing.T) {
 	cursor := activitySessionCursorPayload{
 		Version:   activityReportTokenVersion,
 		Schema:    export.ActivityReportSchemaVersion,
@@ -99,4 +100,6 @@ func TestActivitySessionCursorRejectsTheReportTokenVersion(t *testing.T) {
 	assert.False(t, validActivitySessionCursor(cursor, "digest"))
 	cursor.Version = activitySessionCursorVersion
 	assert.True(t, validActivitySessionCursor(cursor, "digest"))
+	cursor.Schema = export.ActivityReportSchemaVersion - 1
+	assert.False(t, validActivitySessionCursor(cursor, "digest"))
 }

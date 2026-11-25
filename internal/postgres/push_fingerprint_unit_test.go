@@ -84,6 +84,9 @@ func TestBatchedDependencyFingerprintMatchesPerSession(t *testing.T) {
 			},
 		}))
 
+	_, err = local.SetSessionExternalParent(ctx, "dep-a", "launcher-not-yet-synced")
+	require.NoError(t, err)
+
 	ids := []string{"dep-a", "dep-empty", "dep-missing"}
 	usageFPs, err := local.SortedUsageEventFingerprints(
 		ctx, ids, pgUsageEventTimestampFingerprintText,
@@ -92,6 +95,7 @@ func TestBatchedDependencyFingerprintMatchesPerSession(t *testing.T) {
 
 	state, err := readLocalPushDependencyState(ctx, local, ids)
 	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"dep-a": "launcher-not-yet-synced"}, state.externalParents)
 
 	for _, id := range ids {
 		byUsageKnown := map[bool]string{}

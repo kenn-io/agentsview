@@ -20,8 +20,8 @@ import (
 // with few distinct values to LowCardinality (see convertToLowCardinality).
 // Version 12 moves pricing metadata out of model_pricing (see
 // movePricingMeta) and stores pricing times as timestamps (see
-// typePricingTimes).
-const SchemaVersion = 12
+// typePricingTimes). Version 13 records launcher-link provenance.
+const SchemaVersion = 13
 
 // Metadata keys shared by every archive that pushes into the mirror.
 const (
@@ -44,6 +44,7 @@ const (
 	commitLinksReadyKeyBase     = "agentsview_commit_links_ready_v2"
 	messageDialogueReadyKeyBase = "agentsview_message_dialogue_ready"
 	storedCountRepairKeyBase    = "agentsview_stored_message_count_repair"
+	launcherRowsReadyKeyBase    = "agentsview_launcher_rows_ready"
 	databaseIDKeyBase           = "agentsview_source_database_id"
 	fullPushRunKeyBase          = "agentsview_full_push_run"
 )
@@ -226,6 +227,7 @@ var mirrorTables = []tableSpec{
 			colDefault("transcript_revision", tString, "'0'"),
 			col("parent_session_id", tNullString),
 			col("relationship_type", tLowString),
+			col("is_launched", "Nullable(Bool)"),
 			col("total_output_tokens", tInt),
 			col("peak_context_tokens", tInt),
 			col("has_total_output_tokens", tBool),

@@ -1805,3 +1805,92 @@ func TestGetActivityReport_ManySessionsWithinSQLiteVarLimit(t *testing.T) {
 	assert.Positive(t, r.Totals.OutputTokens,
 		"usage aggregated across all id chunks")
 }
+
+func TestActivityReportLauncherFiltersAndLinkChanges(t *testing.T) {
+	d := testDB(t)
+	for _, tc := range []struct{ id, project string }{{"visible", "project-a"}, {"hidden", "project-b"}} {
+		insertSession(t, d, tc.id, tc.project, func(s *Session) {
+			s.StartedAt = Ptr("2026-06-15T10:00:00Z")
+			s.EndedAt = Ptr("2026-06-15T10:02:00Z")
+		})
+	}
+	insertSession(t, d, "run", "project-a", func(s *Session) {
+		s.StartedAt = Ptr("2026-06-16T10:00:00Z")
+		s.EndedAt = Ptr("2026-06-16T10:04:00Z")
+	})
+	seedMessage(t, d, "run", 1, "user", "2026-06-16T10:00:00Z", "")
+	seedMessage(t, d, "run", 2, "assistant", "2026-06-16T10:04:00Z", "")
+	_, err := d.SetSessionExternalParent(t.Context(), "run", "visible")
+	require.NoError(t, err)
+	q := dayQuery(t, "2026-06-16", "UTC")
+	filter := AnalyticsFilter{Timezone: "UTC", Project: "project-a"}
+	before, err := d.GetActivityReport(t.Context(), filter, q)
+	require.NoError(t, err)
+	assert.Equal(t, 1, before.InteractivePeak.Agents)
+	assert.Equal(t, 2, before.Peak.Agents)
+	_, err = d.SetSessionExternalParent(t.Context(), "run", "hidden")
+	require.NoError(t, err)
+	after, err := d.GetActivityReport(t.Context(), filter, q)
+	require.NoError(t, err)
+	assert.Zero(t, after.InteractivePeak.Agents)
+}
+
+func TestActivityReportFilteredRunsKeepMatchingLauncherActive(t *testing.T) {
+	for _, tc := range []struct {
+		name                     string
+		filter                   AnalyticsFilter
+		childAgent, childProject string
+		automated                bool
+	}{
+		{name: "agent", filter: AnalyticsFilter{Agent: "claude"}, childAgent: "codex", childProject: "project-a"},
+		{name: "project", filter: AnalyticsFilter{Project: "project-a"}, childAgent: "claude", childProject: "project-b"},
+		{name: "automation", filter: AnalyticsFilter{ExcludeAutomated: true}, childAgent: "claude", childProject: "project-a", automated: true},
+		{name: "human scope", filter: AnalyticsFilter{AutomatedScope: "human"}, childAgent: "claude", childProject: "project-a", automated: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "parent", "project-a", func(s *Session) {
+				s.Agent = "claude"
+				s.StartedAt = Ptr("2026-06-15T10:00:00Z")
+				s.EndedAt = Ptr("2026-06-15T10:02:00Z")
+			})
+			insertSession(t, d, "child", tc.childProject, func(s *Session) {
+				s.Agent = tc.childAgent
+				s.IsAutomated = tc.automated
+				s.StartedAt = Ptr("2026-06-16T10:00:00Z")
+				s.EndedAt = Ptr("2026-06-16T10:04:00Z")
+			})
+			seedMessage(t, d, "child", 1, "user", "2026-06-16T10:00:00Z", "")
+			seedMessage(t, d, "child", 2, "assistant", "2026-06-16T10:04:00Z", "")
+			tc.filter.Timezone = "UTC"
+			q := dayQuery(t, "2026-06-16", "UTC")
+			before, err := d.GetActivityReport(t.Context(), tc.filter, q)
+			require.NoError(t, err)
+			assert.Zero(t, before.Peak.Agents)
+			_, err = d.SetSessionExternalParent(t.Context(), "child", "parent")
+			require.NoError(t, err)
+			report, err := d.GetActivityReport(t.Context(), tc.filter, q)
+			require.NoError(t, err)
+			assert.Equal(t, 1, report.InteractivePeak.Agents)
+			assert.Equal(t, 1, report.Peak.Agents)
+		})
+	}
+}
+
+func TestActivityReportEvidenceIncludesLaunchedRuns(t *testing.T) {
+	d := testDB(t)
+	for _, id := range []string{"root", "child"} {
+		insertSession(t, d, id, "project-a", func(s *Session) {
+			s.StartedAt = Ptr("2026-06-16T10:00:00Z")
+			s.EndedAt = Ptr("2026-06-16T10:04:00Z")
+		})
+	}
+	_, err := d.SetSessionExternalParent(t.Context(), "child", "root")
+	require.NoError(t, err)
+	q := dayQuery(t, "2026-06-16", "UTC")
+	backend := activityReportBackend{DB: d, filter: AnalyticsFilter{Timezone: "UTC"}}
+	sessions, err := backend.ActivityReportEvidence(t.Context(), q)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, "child", sessions[0].SessionID)
+}

@@ -47,12 +47,55 @@ func (s *Store) GetActivityReport(
 
 type activityReportBackend struct {
 	*Store
+	filter                 db.AnalyticsFilter
 	lowerBound, upperBound string
 	read                   map[string]struct{}
 	pricing                []export.EffectivePricingRow
 	pricingDigest          string
 	inputs                 *pgActivityInputs
 	counted                *[]pgActivityCountedMessage
+}
+
+func (b activityReportBackend) ActivityReportEvidence(ctx context.Context, q activity.Query) ([]activity.SessionMeta, error) {
+	start, end := db.ActivityReportInstantBoundsUTC(q)
+	sessions, _, err := b.activityReportSessionsWhere(ctx, db.AnalyticsFilter{Timezone: b.filter.Timezone, IncludeSubagents: true, IncludeForks: true}, start, end, nil, true)
+	if err == nil && b.read != nil && !q.Partial {
+		for _, session := range sessions {
+			b.read[session.SessionID] = struct{}{}
+		}
+	}
+	return sessions, err
+}
+
+func (b activityReportBackend) ActivityReportLaunchers(ctx context.Context, sessions []activity.SessionMeta, selected map[string]bool, q activity.Query) (activity.Launchers, error) {
+	result, err := activity.ResolveLaunchers(ctx, sessions, selected, func(ctx context.Context, ids []string) ([]activity.Launcher, error) {
+		pb := &paramBuilder{}
+		where := buildAnalyticsWhereWithDate(b.filter, "", pb, false, "s.id", b.sessionDialect())
+		idParam := pb.add(ids)
+		rows, err := b.pg.QueryContext(ctx, `SELECT s.id, s.is_automated, s.relationship_type = 'subagent', (`+b.activityLaunchedSQL()+`), CASE WHEN s.relationship_type = 'subagent' THEN COALESCE(s.parent_session_id, '') ELSE '' END, (`+where+`) FROM sessions s WHERE s.id = ANY(`+idParam+`) AND s.deleted_at IS NULL`, pb.args...)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var result []activity.Launcher
+		for rows.Next() {
+			var row activity.Launcher
+			if err := rows.Scan(&row.ID, &row.IsAutomated, &row.IsSubagent, &row.IsLaunched, &row.ParentSessionID, &row.MatchesFilter); err != nil {
+				return nil, err
+			}
+			result = append(result, row)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		return result, nil
+	})
+	if err == nil && b.read != nil && !q.Partial {
+		for _, id := range result.Examined {
+			b.read[id] = struct{}{}
+		}
+	}
+	return result, err
 }
 
 func (b activityReportBackend) ActivityReportSecondRead() (func(), bool) {
@@ -113,7 +156,14 @@ func (b activityReportBackend) ActivityReportMessageCounts(
 	ctx context.Context, ids []string, q activity.Query, artifacts *activity.CandidateArtifacts,
 ) error {
 	counts := activity.NewMessageAccumulator(q, artifacts)
+	selected := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		selected[id] = true
+	}
 	for _, message := range *b.counted {
+		if !selected[message.sessionID] {
+			continue
+		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -208,6 +258,7 @@ func (s *Store) BuildActivityReportArtifacts(
 		pricing:       pricing,
 		pricingDigest: pricingDigest,
 		Store:         s,
+		filter:        f,
 		lowerBound:    lowerBound, upperBound: upperBound,
 	}
 	var reportBackend activity.ReportBackend = backend
@@ -419,8 +470,24 @@ func (s *Store) activityReportSessions(
 	ctx context.Context, f db.AnalyticsFilter, rangeStartUTC, rangeEndUTC string,
 	only []string,
 ) ([]activity.SessionMeta, []string, error) {
+	return s.activityReportSessionsWhere(ctx, f, rangeStartUTC, rangeEndUTC, only, false)
+}
+
+func (s *Store) activityLaunchedSQL() string {
+	launched := `s.relationship_type = 'subagent' AND COALESCE(s.parent_session_id, '') <> '' AND COALESCE(s.external_parent_session_id, '') = s.parent_session_id AND COALESCE(s.parser_parent_session_id, '') = '' AND NOT EXISTS (SELECT 1 FROM tool_calls tc WHERE tc.subagent_session_id = s.id AND tc.session_id <> s.id)`
+	if s.hostedRelations {
+		launched += ` AND s.provenance_kind = 'legacy'`
+	}
+	return launched
+}
+
+func (s *Store) activityReportSessionsWhere(ctx context.Context, f db.AnalyticsFilter, rangeStartUTC, rangeEndUTC string, only []string, onlySubagents bool) ([]activity.SessionMeta, []string, error) {
 	pb := &paramBuilder{}
 	where := buildAnalyticsWhereWithDate(f, "", pb, false, "s.id", s.sessionDialect())
+	launched := s.activityLaunchedSQL()
+	if onlySubagents {
+		where += " AND (" + launched + ")"
+	}
 	lower := pb.add(rangeStartUTC)
 	upper := pb.add(rangeEndUTC)
 	if only != nil {
@@ -439,7 +506,9 @@ func (s *Store) activityReportSessions(
 		s.started_at,
 		s.ended_at,
 		s.is_automated,
-		s.relationship_type = 'subagent' AS is_subagent
+		s.relationship_type = 'subagent' AS is_subagent,
+		(` + launched + `) AS is_launched,
+		CASE WHEN s.relationship_type = 'subagent' THEN COALESCE(s.parent_session_id, '') ELSE '' END
 	FROM sessions s
 	WHERE ` + where + `
 		AND (COALESCE(s.ended_at,
@@ -471,7 +540,7 @@ func (s *Store) activityReportSessions(
 		var startedAt, endedAt sql.NullTime
 		if err := rows.Scan(
 			&m.SessionID, &m.Title, &m.Project, &m.Agent,
-			&m.Machine, &startedAt, &endedAt, &m.IsAutomated, &m.IsSubagent,
+			&m.Machine, &startedAt, &endedAt, &m.IsAutomated, &m.IsSubagent, &m.IsLaunched, &m.ParentSessionID,
 		); err != nil {
 			return nil, nil, fmt.Errorf(
 				"scanning activity report session: %w", err)

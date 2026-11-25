@@ -578,7 +578,7 @@ func TestAnalyticsKeptJournalUpgrade(t *testing.T) {
 	t.Parallel()
 	_, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
-	_, err := store.pg.ExecContext(ctx, `DROP FUNCTION mark_dashboard_messages() CASCADE; DROP FUNCTION mark_dashboard_tool_calls() CASCADE;
+	_, err := store.pg.ExecContext(ctx, `DROP FUNCTION mark_activity_spawn() CASCADE; DROP FUNCTION mark_dashboard_messages() CASCADE; DROP FUNCTION mark_dashboard_tool_calls() CASCADE;
  DELETE FROM sync_metadata WHERE key IN ('dashboard_common','dashboard_tools','dashboard_velocity','dashboard_signals','dashboard_scope');
  UPDATE sync_metadata SET value='2' WHERE key='usage_change_journal_version'`)
 	require.NoError(t, err)
@@ -595,9 +595,8 @@ func TestAnalyticsKeptJournalUpgrade(t *testing.T) {
 	require.NoError(t, tx.Commit())
 	var newRevision, newAccount, newHistory, version string
 	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT (SELECT value FROM sync_metadata WHERE key='usage_change_revision'), (SELECT value FROM sync_metadata WHERE key='usage_account_revision'), (SELECT value FROM sync_metadata WHERE key='usage_history_token'), (SELECT value FROM sync_metadata WHERE key='usage_change_journal_version')`).Scan(&newRevision, &newAccount, &newHistory, &version))
-	require.Equal(t, []string{revision, account, history, "3"}, []string{newRevision, newAccount, newHistory, version})
+	require.Equal(t, []string{revision, account, history, fmt.Sprint(usageChangeJournalVersionPG)}, []string{newRevision, newAccount, newHistory, version})
 	var tokens int
 	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT count(*) FROM sync_metadata WHERE key IN ('dashboard_common','dashboard_tools','dashboard_velocity','dashboard_signals','dashboard_scope') AND value <> ''`).Scan(&tokens))
 	require.Equal(t, 5, tokens)
-
 }

@@ -10,9 +10,8 @@ import (
 )
 
 // TestSnapshotFingerprintTracksPlanUsage pins both halves of the plan
-// usage fingerprint contract: a session without plan usage keeps the
-// fingerprint it had before the table existed, so an upgrade re-pushes
-// nothing, and a plan usage change makes the session a push candidate.
+// usage fingerprint contract: a session without plan usage has a stable
+// fingerprint, and a plan usage change makes the session a push candidate.
 func TestSnapshotFingerprintTracksPlanUsage(t *testing.T) {
 	s := &Sync{machine: "m"}
 	snapshot := &db.SessionMirrorSnapshot{Session: db.Session{
@@ -26,9 +25,7 @@ func TestSnapshotFingerprintTracksPlanUsage(t *testing.T) {
 		return fp.full
 	}
 
-	// Fingerprint this session had before session_plan_usage existed; sessions
-	// without plan usage must keep it.
-	const withoutPlanUsage = "3ffa01ac4b265fffea3c52f5731cafd35b542c2db053e8d5f993bac323c0d07b"
+	const withoutPlanUsage = "e5a5f3f0f630d23945a9193394aa275b73161fdef2149e0d63cae384c72d2afa"
 	assert.Equal(t, withoutPlanUsage, fingerprint())
 
 	snapshot.PlanUsage = &db.SessionPlanUsage{HasPlanUsage: true, WeeklyPercent: new(1.0)}
@@ -66,10 +63,8 @@ func TestSnapshotFingerprintTracksDialogue(t *testing.T) {
 	assert.Equal(t, legacy, fingerprint())
 }
 
-// TestSnapshotFingerprintSplit pins the session fingerprint stored before
-// the content fingerprint existed, so an upgrade rewrites nothing, and
-// checks that the content fingerprint ignores session fields and follows
-// every dependent table.
+// TestSnapshotFingerprintSplit checks that the content fingerprint ignores
+// session fields and follows every dependent table.
 func TestSnapshotFingerprintSplit(t *testing.T) {
 	s := &Sync{machine: "m"}
 	snapshot := &db.SessionMirrorSnapshot{
@@ -100,8 +95,10 @@ func TestSnapshotFingerprintSplit(t *testing.T) {
 	}
 
 	first := fingerprint()
-	const beforeSplit = "fd493dcbb439d59f17e007806eccee99fd1d64b9eff40737f5fd09eb753498f6"
-	assert.Equal(t, beforeSplit, first.full)
+	snapshot.IsLaunched = true
+	launched := fingerprint()
+	assert.NotEqual(t, first.full, launched.full)
+	assert.Equal(t, first.content, launched.content)
 
 	snapshot.Session.DataVersion = 8
 	snapshot.Session.DisplayName = new("renamed")

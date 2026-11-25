@@ -64,12 +64,53 @@ func (db *DB) GetActivityReport(
 
 type activityReportBackend struct {
 	*DB
+	filter                 AnalyticsFilter
 	lowerBound, upperBound string
 	read                   *[]string
 	counted                *activityReportCounted
 	usage                  activityUsageWindow
 	keptUsage              *activityKeptUsage
 	usageResult            *activityKeptUsage
+}
+
+func (b activityReportBackend) ActivityReportEvidence(ctx context.Context, q activity.Query) ([]activity.SessionMeta, error) {
+	start, end := activityReportRangeBoundsUTC(q)
+	sessions, _, err := b.activityReportSessionsFromWhere(ctx, b.getReader(), AnalyticsFilter{Timezone: b.filter.Timezone, IncludeSubagents: true, IncludeForks: true}, start, end, true)
+	if err == nil && b.read != nil && !q.Partial {
+		for _, session := range sessions {
+			*b.read = append(*b.read, session.SessionID)
+		}
+	}
+	return sessions, err
+}
+
+func (b activityReportBackend) ActivityReportLaunchers(ctx context.Context, sessions []activity.SessionMeta, selected map[string]bool, q activity.Query) (activity.Launchers, error) {
+	where, args := b.filter.buildWhereWithDate("", false, "s.id")
+	result, err := activity.ResolveLaunchers(ctx, sessions, selected, func(ctx context.Context, ids []string) ([]activity.Launcher, error) {
+		encoded, err := json.Marshal(ids)
+		if err != nil {
+			return nil, err
+		}
+		queryArgs := append(slices.Clone(args), string(encoded))
+		rows, err := b.getReader().QueryContext(ctx, `SELECT s.id, s.is_automated, s.relationship_type = 'subagent', `+activityLaunchedSQL()+`, CASE WHEN s.relationship_type = 'subagent' THEN COALESCE(s.parent_session_id, '') ELSE '' END, CASE WHEN (`+where+`) THEN 1 ELSE 0 END FROM sessions s WHERE s.id IN (SELECT value FROM json_each(?)) AND s.deleted_at IS NULL`, queryArgs...)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var result []activity.Launcher
+		for rows.Next() {
+			var row activity.Launcher
+			if err := rows.Scan(&row.ID, &row.IsAutomated, &row.IsSubagent, &row.IsLaunched, &row.ParentSessionID, &row.MatchesFilter); err != nil {
+				return nil, err
+			}
+			result = append(result, row)
+		}
+		return result, rows.Err()
+	})
+	if err == nil && b.read != nil && !q.Partial {
+		*b.read = append(*b.read, result.Examined...)
+	}
+	return result, err
 }
 
 // activityReportCounted holds the counted messages of the build's sessions,
@@ -247,6 +288,7 @@ func (db *DB) BuildActivityReportArtifacts(
 		keptUsage: cachedUsage, usageResult: usageResult,
 		read:       readSet,
 		DB:         db,
+		filter:     f,
 		lowerBound: lowerBound, upperBound: upperBound,
 		counted: &activityReportCounted{},
 		usage:   usage,
@@ -573,7 +615,19 @@ func (db *DB) activityReportSessionsFrom(
 	f AnalyticsFilter,
 	rangeStartUTC, rangeEndUTC string,
 ) ([]activity.SessionMeta, []string, error) {
+	return db.activityReportSessionsFromWhere(ctx, q, f, rangeStartUTC, rangeEndUTC, false)
+}
+
+func activityLaunchedSQL() string {
+	return `EXISTS (SELECT 1 FROM session_external_parents ep WHERE ep.session_id = s.id AND ep.parent_session_id = s.parent_session_id AND s.relationship_type = 'subagent' AND COALESCE(s.parser_parent_session_id, '') = '' AND NOT ` + spawnEdgeExistsSQL("s") + `)`
+}
+
+func (db *DB) activityReportSessionsFromWhere(ctx context.Context, q sessionExportQuerier, f AnalyticsFilter, rangeStartUTC, rangeEndUTC string, onlySubagents bool) ([]activity.SessionMeta, []string, error) {
 	where, args := activityReportSessionSelectionWhere(f, rangeStartUTC, rangeEndUTC)
+	launched := activityLaunchedSQL()
+	if onlySubagents {
+		where += " AND " + launched
+	}
 
 	// Each Title candidate is NULLIF'd independently (not a nested
 	// COALESCE-then-NULLIF) so an empty display_name cannot mask a real
@@ -588,7 +642,9 @@ func (db *DB) activityReportSessionsFrom(
 		COALESCE(s.started_at, ''),
 		COALESCE(s.ended_at, ''),
 		s.is_automated,
-		s.relationship_type = 'subagent'
+		s.relationship_type = 'subagent',
+		` + launched + `,
+		CASE WHEN s.relationship_type = 'subagent' THEN COALESCE(s.parent_session_id, '') ELSE '' END
 	FROM sessions s
 	WHERE ` + where
 
@@ -605,7 +661,7 @@ func (db *DB) activityReportSessionsFrom(
 		var s activity.SessionMeta
 		if err := rows.Scan(
 			&s.SessionID, &s.Title, &s.Project, &s.Agent,
-			&s.Machine, &s.StartedAt, &s.EndedAt, &s.IsAutomated, &s.IsSubagent,
+			&s.Machine, &s.StartedAt, &s.EndedAt, &s.IsAutomated, &s.IsSubagent, &s.IsLaunched, &s.ParentSessionID,
 		); err != nil {
 			return nil, nil, fmt.Errorf(
 				"scanning activity report session: %w", err)

@@ -107,6 +107,14 @@ shows that class's count at the instant of that peak, so the segments always add
 up to the bar. The legend above the chart names the segments, and the label on
 the right gives the combined peak for the range. Interactive concurrency counts
 overlapping human-facing conversations and does not measure human attention.
+An interactive session also counts while a run it launched is active, including
+nested runs and runs that continue after the session's last message. The combined
+peak and bucket maximum include that waiting session.
+The launcher must match the Project, Agent, Machine, and Automation filters. A
+linked run can keep it active even when the run is excluded by those filters.
+Agent-minutes, cost, session counts, the sessions table, and bucket membership
+continue to use each session's own activity. Reporting exports use each session's
+own activity for concurrency as well.
 
 To see how often you send prompts, switch the chart to **User messages**. To see
 agent output, switch to **Assistant messages**. Both views count timestamped
@@ -246,12 +254,13 @@ For flags and response shape, see
 ### JSON contract
 
 `agentsview report activity --json` and `/api/v1/activity/report` emit schema
-version 8. The report contains a bounded first page of sessions,
+version 9. The report contains a bounded first page of sessions,
 `sessions_total`, `sessions_next_cursor`, and a signed `report_id` that ties
 later pages to the report. It does not include the old `intervals` array. The
 CLI and HTTP API share the same schema version and change together.
 
-Version 8 separates interactive, subagent, and automated sessions in session
+Version 9 counts interactive launchers while their runs work. Version 8
+separated interactive, subagent, and automated sessions in session
 counts, agent-minutes, costs, and concurrency. The three class counts sum to
 `totals.sessions`, and total usage and cost accounting is unchanged. Buckets
 include independent `max_interactive_agents`, `max_subagent_agents`, and
@@ -314,7 +323,7 @@ reporting version 1. Version 2 corrected those markers, version 3 introduced
 exact microdollar money objects, and version 4 added resolved-model pricing
 provenance with complete request-pricing bands and application counts. Currently,
 usage daily JSON is version 6, session-summary export (`export sessions`) is
-version 7, and the activity report is version 8. Do not treat transitional
+version 7, and the activity report is version 9. Do not treat transitional
 releases 0.38.0 and 0.38.1 as v1-compatible. Consumers should require the
 expected `schema_version` and ignore unknown additive fields. The commands do
 not provide an earlier-version output mode.

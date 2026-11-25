@@ -305,7 +305,7 @@ func TestAutomationAuditPGMessageOnlyPush(t *testing.T) {
 	marker, err := ps.pushMarkerID(t.Context())
 	require.NoError(t, err)
 	var pushed []db.Session
-	result, err := ps.pushBatch(t.Context(), []db.Session{*sess}, true, marker, nil, nil, &pushed)
+	result, err := ps.pushBatch(t.Context(), []db.Session{*sess}, true, marker, nil, nil, nil, &pushed)
 	require.NoError(t, err)
 	require.True(t, result.ok)
 	var currentRevision string

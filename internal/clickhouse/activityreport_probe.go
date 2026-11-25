@@ -69,6 +69,7 @@ func (s *Store) readActivitySourceProbe(ctx context.Context) (activity.SourcePro
 	var probe activity.SourceProbe
 	err := s.queryRowContext(ctx, `SELECT
 		(SELECT toInt64(count()) FROM sessions),
+		(SELECT toString(tuple(count(), sumWithOverflow(cityHash64(id, ifNull(parent_session_id, ''), relationship_type, ifNull(is_launched, false))))) FROM sessions WHERE deleted_at IS NULL),
 		ifNull(toString((SELECT max(local_modified_at) FROM sessions)), ''),
 		ifNull((SELECT max(data_version) FROM sessions), 0),
 		ifNull(toString((SELECT max(updated_at) FROM (
@@ -82,7 +83,7 @@ func (s *Store) readActivitySourceProbe(ctx context.Context) (activity.SourcePro
 			WHERE startsWith(key, ?)
 		), 0)`,
 		identityRevisionKeyBase).Scan(
-		&probe.SessionCount, &probe.MaxSessionModified, &probe.MaxDataVersion,
+		&probe.SessionCount, &probe.SessionLinksFingerprint, &probe.MaxSessionModified, &probe.MaxDataVersion,
 		&probe.MaxPricingUpdated, &probe.ProjectIdentityGeneration,
 	)
 	if err != nil {

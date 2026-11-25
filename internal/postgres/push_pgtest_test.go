@@ -3750,3 +3750,30 @@ func TestFilteredPushReconcilesProjectMoveCommittedDuringPush(t *testing.T) {
 	).Scan(&count))
 	assert.Zero(t, count, "a session moved out of scope during the push must leave the remote")
 }
+
+func TestPushKeepsExternalParentFromPreparation(t *testing.T) {
+	t.Parallel()
+	local, syncer, _ := newUsageJournalFixture(t)
+	ctx := t.Context()
+	pgKeptSession(t, local, "launcher", "project-a", "2026-06-14")
+	pgKeptSession(t, local, "run", "project-a", "2026-06-14")
+	_, err := local.SetSessionExternalParent(ctx, "run", "launcher")
+	require.NoError(t, err)
+	changed := false
+	_, err = syncer.Push(ctx, true, func(progress storage.PushProgress) {
+		if !changed && progress.Phase == "preparing" && progress.SessionsTotal > 0 && progress.SessionsDone == progress.SessionsTotal {
+			changed = true
+			_, err := local.ClearSessionExternalParent(ctx, "run")
+			require.NoError(t, err)
+		}
+	})
+	require.NoError(t, err)
+	require.True(t, changed)
+	var parent string
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT COALESCE(external_parent_session_id, '') FROM sessions WHERE id='run'`).Scan(&parent))
+	assert.Equal(t, "launcher", parent)
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT COALESCE(external_parent_session_id, '') FROM sessions WHERE id='run'`).Scan(&parent))
+	assert.Empty(t, parent)
+}
