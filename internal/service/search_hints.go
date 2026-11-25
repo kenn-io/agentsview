@@ -15,7 +15,7 @@ const MaxListSessionIDs = 100
 
 // ContentSearchContext shares a deadline across a keyword search and its follow-ups.
 func ContentSearchContext(ctx context.Context, svc SessionService, req ContentSearchRequest) (context.Context, context.CancelFunc) {
-	if local, ok := svc.(interface{ LocalContentScan() bool }); ok && local.LocalContentScan() && len(req.Concepts) == 0 && db.ContentScanBounded(req.Mode, false) {
+	if boundedContentSearch(svc, req) {
 		return db.WithContentScanDeadline(ctx)
 	}
 	return ctx, func() {}
