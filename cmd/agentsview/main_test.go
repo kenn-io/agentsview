@@ -484,9 +484,9 @@ func TestServeLegacyImageTextHelperProcess(t *testing.T) {
 	select {
 	case state = <-ready:
 	case <-done:
-		t.Fatal("server stopped before readiness")
+		require.FailNow(t, "server stopped before readiness")
 	case <-time.After(20 * time.Second):
-		t.Fatal("server did not become ready")
+		require.FailNow(t, "server did not become ready")
 	}
 	require.NoError(t, state.err)
 	require.False(t, state.fullRebuild, "full rebuild must finish before readiness")

@@ -1661,18 +1661,29 @@ func TestScopedUpgradeSessionSyncRejectsWriterHandoff(t *testing.T) {
 		done <- engine.RunExclusive(func() error { close(locked); <-release; return nil })
 	}()
 	<-locked
+	payload, err := json.Marshal(service.SyncInput{Path: path})
+	require.NoError(t, err)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/sessions/sync", bytes.NewReader(payload))
+	req.Host = "127.0.0.1:0"
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("Origin", "http://127.0.0.1:0")
+	req.Header.Set("Content-Type", "application/json")
 	response := make(chan *httptest.ResponseRecorder, 1)
-	go func() { response <- postSessionSync(t, f.handler, path) }()
+	go func() {
+		w := httptest.NewRecorder()
+		f.handler.ServeHTTP(w, req)
+		response <- w
+	}()
 	var w *httptest.ResponseRecorder
 	select {
 	case w = <-response:
-	case <-time.After(time.Second): //nolint:kennlint // deadlinetest: the request must reject while the worker holds the sync lock
+	case <-time.After(time.Second):
 	}
 	close(release)
 	require.NoError(t, <-done)
 	if w == nil {
 		<-response
-		t.Fatal("session sync waited for the worker instead of rejecting the request")
+		require.FailNow(t, "session sync waited for the worker instead of rejecting the request")
 	}
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code, w.Body.String())
 	assert.Equal(t, writerClosedRetryAfterSeconds, w.Header().Get("Retry-After"))

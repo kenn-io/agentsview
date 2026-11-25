@@ -185,7 +185,7 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 				select {
 				case err := <-done:
 					require.NoError(t, err)
-				case <-time.After(time.Second): //nolint:kennlint // deadlinetest: the report must return before the held worker's catch-up deadline
+				case <-time.After(time.Second):
 					close(release)
 					<-done
 					require.FailNow(t, "daily report waited for the startup worker")

@@ -101,7 +101,8 @@ func (db *DB) ScopedUpgradePending(ctx context.Context) (bool, error) {
 
 func scopedUpgradePending(ctx context.Context, conn interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
-}) (bool, error) {
+},
+) (bool, error) {
 	var pending bool
 	err := conn.QueryRowContext(ctx,
 		"SELECT EXISTS(SELECT 1 FROM stats WHERE key = ? AND value > 0)",
