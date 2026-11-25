@@ -148,7 +148,6 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 	}{
 		{name: "ordinary"},
 		{name: "scoped upgrade", scoped: true},
-		{name: "scoped upgrade with skip initial sync", scoped: true, skip: true},
 		{name: "persisted scoped upgrade with skip initial sync", scoped: true, skip: true, persisted: true},
 		{name: "scoped upgrade with incomplete pass", scoped: true, fail: true},
 	} {

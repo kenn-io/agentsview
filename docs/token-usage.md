@@ -956,9 +956,7 @@ long as progress updates arrive, including when a foreground server starts in
 another terminal. Restart older daemons after upgrading so the usage progress
 endpoint is available.
 During a scoped upgrade, daily reports may use saved totals and print the stale
-warning to stderr until a successful authoritative pass clears the marker. The
-`session usage --wait` command waits for the upgrade before refreshing; a
-timeout can still return saved totals with an incomplete-wait warning.
+warning to stderr until a successful authoritative pass clears the marker.
 
 ```bash
 agentsview report usage daily [flags]
