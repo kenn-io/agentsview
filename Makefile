@@ -353,6 +353,10 @@ desktop-app: desktop-macos-app
 GO_TEST_P ?= 4
 GO_TEST_P_FLAG := $(if $(GO_TEST_P),-p $(GO_TEST_P),)
 
+.PHONY: test-frontend
+test-frontend:
+	cd frontend && npm test -- $(TEST_ARGS)
+
 # Run the cacheable unit/integration suite. The external-service lanes below
 # intentionally retain `-count=1` because they require fresh state.
 test: pricing-snapshot ensure-embed-dir

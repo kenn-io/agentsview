@@ -102,10 +102,40 @@ func New(d db.Store, engine *sync.Engine) *Watcher {
 func (w *Watcher) Events(
 	ctx context.Context, sessionID string,
 ) <-chan struct{} {
+	return w.events(ctx, sessionID, false)
+}
+
+// TreeEvents also detects changes to the session's direct children.
+func (w *Watcher) TreeEvents(ctx context.Context, sessionID string) <-chan struct{} {
+	return w.events(ctx, sessionID, true)
+}
+
+func (w *Watcher) events(ctx context.Context, sessionID string, tree bool) <-chan struct{} {
 	ch := make(chan struct{})
+	var marker db.SessionTreeSnapshot
+	var markerErr error
+	failureReported := false
+	if tree {
+		marker, markerErr = w.db.GetSessionTreeMarker(ctx, sessionID)
+	}
+	checkTree := func() (bool, bool) {
+		if !tree {
+			return false, false
+		}
+		current, err := w.db.GetSessionTreeMarker(ctx, sessionID)
+		changed := err != nil && !failureReported || err == nil && (markerErr != nil || current.Marker != marker.Marker)
+		parentChanged := err == nil && markerErr == nil && treeParentChanged(marker, current)
+		failureReported = err != nil
+		marker, markerErr = current, err
+		return changed, parentChanged
+	}
 	if identity, ok := w.db.(db.SessionWatchStateStore); ok {
 		initial, err := identity.GetSessionWatchState(sessionID)
-		lastCount, lastVersion, _ := w.db.GetSessionVersion(ctx, sessionID)
+		var lastCount int
+		var lastVersion int64
+		if !tree {
+			lastCount, lastVersion, _ = w.db.GetSessionVersion(ctx, sessionID)
+		}
 		go func() {
 			defer close(ch)
 			ticker := time.NewTicker(pollInterval())
@@ -115,10 +145,16 @@ func (w *Watcher) Events(
 			recovering := err != nil
 			current, e := initial, err
 			for {
+				treeChanged, _ := checkTree()
 				if e == nil {
-					count, version, ok := w.db.GetSessionVersion(ctx, sessionID)
+					var count int
+					var version int64
+					var ok bool
+					if !tree {
+						count, version, ok = w.db.GetSessionVersion(ctx, sessionID)
+					}
 					transition := current.State != db.SessionWatchResolved || !recovering && (current.State != initial.State || current.PublicID != initial.PublicID || current.ContentRevision != initial.ContentRevision || !slices.Equal(current.Variants, initial.Variants))
-					if recovering || transition || ok && (count != lastCount || version != lastVersion) {
+					if recovering || transition || ok && (count != lastCount || version != lastVersion) || treeChanged {
 						select {
 						case ch <- struct{}{}:
 						case <-ctx.Done():
@@ -132,6 +168,12 @@ func (w *Watcher) Events(
 							lastCount, lastVersion = count, version
 						}
 					}
+				} else if treeChanged {
+					select {
+					case ch <- struct{}{}:
+					case <-ctx.Done():
+						return
+					}
 				}
 				select {
 				case <-ctx.Done():
@@ -143,9 +185,11 @@ func (w *Watcher) Events(
 		}()
 		return ch
 	}
-	lastCount, lastDBVersion, _ := w.db.GetSessionVersion(
-		ctx, sessionID,
-	)
+	var lastCount int
+	var lastDBVersion int64
+	if !tree {
+		lastCount, lastDBVersion, _ = w.db.GetSessionVersion(ctx, sessionID)
+	}
 	go func() {
 		defer close(ch)
 
@@ -153,7 +197,7 @@ func (w *Watcher) Events(
 			// PG read mode: poll GetSessionVersion only,
 			// no file watching or fallback sync.
 			w.pollDBOnly(ctx, ch, sessionID,
-				lastCount, lastDBVersion)
+				lastCount, lastDBVersion, tree, checkTree)
 			return
 		}
 
@@ -180,6 +224,7 @@ func (w *Watcher) Events(
 					&sourcePath,
 					&lastFileMtime,
 					&fileMtimeChangedAt,
+					tree, checkTree,
 				)
 				if changed {
 					select {
@@ -194,12 +239,17 @@ func (w *Watcher) Events(
 	return ch
 }
 
+func treeParentChanged(previous, current db.SessionTreeSnapshot) bool {
+	return previous.ParentCount != current.ParentCount || previous.ParentVersion != current.ParentVersion
+}
+
 // pollDBOnly polls GetSessionVersion on a timer and signals ch
 // when changes are detected. Used in PG-read mode where there is
 // no sync engine or file watcher.
 func (w *Watcher) pollDBOnly(
 	ctx context.Context, ch chan<- struct{},
 	sessionID string, lastCount int, lastDBVersion int64,
+	tree bool, checkTree func() (bool, bool),
 ) {
 	ticker := time.NewTicker(pollInterval())
 	defer ticker.Stop()
@@ -209,8 +259,14 @@ func (w *Watcher) pollDBOnly(
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			count, dbVersion, ok := w.db.GetSessionVersion(ctx, sessionID)
-			if ok && (count != lastCount || dbVersion != lastDBVersion) {
+			var count int
+			var dbVersion int64
+			var ok bool
+			changed, _ := checkTree()
+			if !tree {
+				count, dbVersion, ok = w.db.GetSessionVersion(ctx, sessionID)
+			}
+			if changed || ok && (count != lastCount || dbVersion != lastDBVersion) {
 				lastCount = count
 				lastDBVersion = dbVersion
 				select {
@@ -233,15 +289,22 @@ func (w *Watcher) checkDBForChanges(ctx context.Context,
 	sourcePath *string,
 	lastFileMtime *int64,
 	fileMtimeChangedAt *time.Time,
+	tree bool, checkTree func() (bool, bool),
 ) bool {
 	// Primary: check if the DB has new data. The version marker covers
 	// message appends and metadata/content-only updates.
-	if count, dbVersion, ok := w.db.GetSessionVersion(ctx,
+	changed, parentChanged := false, false
+	if tree {
+		changed, parentChanged = checkTree()
+	} else if count, dbVersion, ok := w.db.GetSessionVersion(ctx,
 		sessionID,
 	); ok && (count != *lastCount ||
 		dbVersion != *lastDBVersion) {
 		*lastCount = count
 		*lastDBVersion = dbVersion
+		parentChanged = true
+	}
+	if parentChanged {
 		// DB was updated; clear any pending fallback.
 		*fileMtimeChangedAt = time.Time{}
 		return true
@@ -252,7 +315,7 @@ func (w *Watcher) checkDBForChanges(ctx context.Context,
 		*sourcePath = w.engine.FindSourceFile(ctx, sessionID)
 		if *sourcePath == "" {
 			sourceMissingObserver.Load().(func(string))(sessionID)
-			return false
+			return changed
 		}
 		*lastFileMtime = w.engine.SourceMtime(ctx, sessionID)
 		// Source file (re-)resolved — trigger fallback sync
@@ -268,7 +331,7 @@ func (w *Watcher) checkDBForChanges(ctx context.Context,
 		*lastFileMtime = 0
 		*fileMtimeChangedAt = time.Time{}
 		sourceMissingObserver.Load().(func(string))(sessionID)
-		return false
+		return changed
 	}
 
 	if mtime != *lastFileMtime {
@@ -289,9 +352,13 @@ func (w *Watcher) checkDBForChanges(ctx context.Context,
 			ctx, sessionID,
 		); err != nil {
 			log.Printf("watch sync error: %v", err)
-			return false
+			return changed
 		}
 		// Re-check the DB after syncing.
+		if tree {
+			after, _ := checkTree()
+			return changed || after
+		}
 		if count, dbVersion, ok := w.db.GetSessionVersion(ctx,
 			sessionID,
 		); ok && (count != *lastCount ||
@@ -302,7 +369,7 @@ func (w *Watcher) checkDBForChanges(ctx context.Context,
 		}
 	}
 
-	return false
+	return changed
 }
 
 // StatMtime returns the file's modification time in

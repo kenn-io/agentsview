@@ -22,7 +22,7 @@ type SessionsBackend interface {
 	TrashedSessionsSQL(string) string
 	ChildSessionsSQL(string) string
 	AllMessagesSQL() string
-	SessionVersionSQL() string
+	SessionVersionColumns() string
 	GetMachineMetadataSQL(prefix string) (string, []any)
 	ListSecretFindingsSQL(f db.SecretFindingFilter) (string, []any)
 	MessageWindowSQL(string, db.MessageWindow) (string, []any, bool)
@@ -200,25 +200,35 @@ func (s Sessions) GetChildSessions(ctx context.Context, parentID string) ([]db.S
 	return s.backend.ScanSessions(rows, false)
 }
 
+type sessionVersionRow struct {
+	count       int
+	mtime       sql.NullInt64
+	hash        sql.NullString
+	updated     any
+	fingerprint string
+}
+
+func (v *sessionVersionRow) fields() []any {
+	return []any{&v.count, &v.mtime, &v.hash, &v.updated, &v.fingerprint}
+}
+
+func (v *sessionVersionRow) version(backend SessionsBackend) int64 {
+	mtime, hash := "", ""
+	if v.mtime.Valid {
+		mtime = strconv.FormatInt(v.mtime.Int64, 10)
+	}
+	if v.hash.Valid {
+		hash = v.hash.String
+	}
+	return db.SessionVersionMarker(mtime, hash, backend.FormatTime(v.updated), v.fingerprint)
+}
+
 func (s Sessions) GetSessionVersion(ctx context.Context, id string) (int, int64, bool) {
-	var count int
-	var fileMtime sql.NullInt64
-	var fileHash sql.NullString
-	var updated any
-	var fingerprint string
-	err := s.backend.QueryRowContext(ctx, s.backend.SessionVersionSQL(), id).Scan(&count, &fileMtime, &fileHash, &updated, &fingerprint)
-	if err != nil {
+	var v sessionVersionRow
+	if err := s.backend.QueryRowContext(ctx, "SELECT "+s.backend.SessionVersionColumns()+" FROM sessions WHERE id = ?", id).Scan(v.fields()...); err != nil {
 		return 0, 0, false
 	}
-	fileMtimePart := ""
-	if fileMtime.Valid {
-		fileMtimePart = strconv.FormatInt(fileMtime.Int64, 10)
-	}
-	fileHashPart := ""
-	if fileHash.Valid {
-		fileHashPart = fileHash.String
-	}
-	return count, db.SessionVersionMarker(fileMtimePart, fileHashPart, s.backend.FormatTime(updated), fingerprint), true
+	return v.count, v.version(s.backend), true
 }
 
 func (s Sessions) scanSidebarRow(rows *sql.Rows, dest []any) (db.SidebarSessionIndexRow, error) {
@@ -320,4 +330,35 @@ func (s Sessions) getSidebarSessionIndexPage(ctx context.Context, f db.SessionFi
 		return db.SidebarSessionIndex{}, fmt.Errorf("iterating %s sidebar tree page: %w", s.backend.MemoryBackendName(), err)
 	}
 	return index, nil
+}
+
+// GetSessionTreeMarker reads the parent and its direct children together.
+func (s Sessions) GetSessionTreeMarker(ctx context.Context, id string) (db.SessionTreeSnapshot, error) {
+	rows, err := s.backend.QueryContext(ctx, "SELECT id, "+s.backend.SessionVersionColumns()+" FROM sessions WHERE id = ? OR (parent_session_id = ? AND deleted_at IS NULL)", id, id)
+	if err != nil {
+		return db.SessionTreeSnapshot{}, err
+	}
+	defer rows.Close()
+	var parent *db.SessionTreeEntry
+	var children []db.SessionTreeEntry
+	for rows.Next() {
+		var e db.SessionTreeEntry
+		var v sessionVersionRow
+		if err := rows.Scan(append([]any{&e.ID}, v.fields()...)...); err != nil {
+			return db.SessionTreeSnapshot{}, err
+		}
+		e.Count, e.Version = v.count, v.version(s.backend)
+		if e.ID == id {
+			parent = &e
+		} else {
+			children = append(children, e)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return db.SessionTreeSnapshot{}, err
+	}
+	if parent == nil {
+		return db.SessionTreeSnapshot{}, errors.New("session not found")
+	}
+	return db.NewSessionTreeSnapshot(append([]db.SessionTreeEntry{*parent}, children...))
 }

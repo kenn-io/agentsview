@@ -219,22 +219,25 @@ func probeInsightGenerationAvailabilityTx(
 	return true, nil
 }
 
-// GetSessionVersion returns the message count and a compact version
-// marker for SSE change detection.
-func (s *Store) GetSessionVersion(ctx context.Context,
-	id string,
-) (int, int64, bool) {
-	var count int
-	var updatedAt time.Time
-	err := s.pg.QueryRowContext(ctx,
-		`SELECT message_count, updated_at
-		 FROM sessions WHERE id = $1`,
-		id,
-	).Scan(&count, &updatedAt)
-	if err != nil {
+const sessionVersionColumns = `message_count, updated_at`
+
+type sessionVersionRow struct {
+	count     int
+	updatedAt time.Time
+}
+
+func (v *sessionVersionRow) fields() []any { return []any{&v.count, &v.updatedAt} }
+func (v *sessionVersionRow) version() int64 {
+	return db.SessionVersionMarker(FormatISO8601(v.updatedAt))
+}
+
+// GetSessionVersion returns the message count and a compact version marker.
+func (s *Store) GetSessionVersion(ctx context.Context, id string) (int, int64, bool) {
+	var v sessionVersionRow
+	if err := s.pg.QueryRowContext(ctx, "SELECT "+sessionVersionColumns+" FROM sessions WHERE id = $1", id).Scan(v.fields()...); err != nil {
 		return 0, 0, false
 	}
-	return count, db.SessionVersionMarker(FormatISO8601(updatedAt)), true
+	return v.count, v.version(), true
 }
 
 const maxPGInsights = 500

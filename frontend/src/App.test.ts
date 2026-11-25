@@ -10,6 +10,7 @@ import { pins } from "./lib/stores/pins.svelte.js";
 import { router } from "./lib/stores/router.svelte.js";
 import { rollingRange } from "./lib/utils/dates.js";
 import { sessionTiming } from "./lib/stores/sessionTiming.svelte.js";
+import { sessionActivity } from "./lib/stores/sessionActivity.svelte.js";
 import { createSessionsStore, sessions } from "./lib/stores/sessions.svelte.js";
 import { settings } from "./lib/stores/settings.svelte.js";
 import { starred } from "./lib/stores/starred.svelte.js";
@@ -73,8 +74,8 @@ function stubAppDependencies() {
   vi.spyOn(sessions, "loadProjects").mockResolvedValue();
   vi.spyOn(sessions, "loadAgents").mockResolvedValue();
   vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
-  vi.spyOn(sessions, "loadChildSessions").mockResolvedValue();
-  vi.spyOn(messages, "loadSession").mockResolvedValue();
+  vi.spyOn(sessions, "loadChildSessions").mockResolvedValue(true);
+  vi.spyOn(messages, "loadSession").mockResolvedValue(true);
   vi.spyOn(sessionTiming, "load").mockResolvedValue();
   vi.spyOn(pins, "loadForSession").mockResolvedValue();
   vi.spyOn(analytics, "fetchAll").mockResolvedValue();
@@ -239,7 +240,7 @@ describe("saved remote API version", () => {
     stubAppDependencies();
     vi.mocked(sync.watchSession).mockRestore();
     vi.spyOn(sessions, "load").mockResolvedValue();
-    vi.spyOn(sessions, "refreshActiveSession").mockResolvedValue();
+    vi.spyOn(sessions, "refreshActiveSession").mockResolvedValue(true);
     sessions.sessions = [
       {
         id: "session-1",
@@ -317,6 +318,29 @@ describe("saved remote API version", () => {
 });
 
 describe("App session URL date state", () => {
+  it("does not acknowledge a failed activity refresh", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    vi.spyOn(messages, "reload").mockResolvedValue(true);
+    vi.spyOn(sessions, "refreshActiveSession").mockResolvedValue(true);
+    const activityReload = vi
+      .spyOn(sessionActivity, "reload")
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    router.route = "sessions";
+    router.isRootPath = false;
+    router.sessionId = "session-1";
+    sessions.activeSessionId = "session-1";
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    ui.vitalsOpen = true;
+    const refresh = vi.mocked(sync.watchSession).mock.calls[0]![1];
+    expect(await refresh()).toBe(false);
+    expect(await refresh()).toBe(true);
+    expect(activityReload).toHaveBeenCalledTimes(2);
+    ui.vitalsOpen = false;
+  });
+
   it.each(["selection change", "selection cleared", "route exit", "unmount"])(
     "ignores an old watch's children fallback after %s",
     async (change) => {
@@ -364,8 +388,8 @@ describe("App session URL date state", () => {
     vi.spyOn(document, "hidden", "get").mockReturnValue(false);
     vi.spyOn(sessions, "load").mockResolvedValue();
     vi.spyOn(sessions, "navigateToSession").mockResolvedValue();
-    vi.spyOn(sessions, "refreshActiveSession").mockResolvedValue();
-    vi.spyOn(messages, "reload").mockResolvedValue();
+    vi.spyOn(sessions, "refreshActiveSession").mockResolvedValue(true);
+    vi.spyOn(messages, "reload").mockResolvedValue(true);
     let port!: {
       onmessage: ((event: MessageEvent) => void) | null;
       postMessage: ReturnType<typeof vi.fn>;
@@ -436,9 +460,9 @@ describe("App session URL date state", () => {
     vi.spyOn(sessions, "loadProjects").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
     vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
-    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue();
+    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue(true);
     const cancelRouteReads = vi.spyOn(sessions, "cancelRouteReads");
-    const loadMessages = vi.spyOn(messages, "loadSession").mockResolvedValue();
+    const loadMessages = vi.spyOn(messages, "loadSession").mockResolvedValue(true);
     const cancelMessages = vi.spyOn(messages, "cancelInFlight");
     vi.spyOn(sessionTiming, "load").mockResolvedValue();
     vi.spyOn(pins, "loadForSession").mockResolvedValue();
@@ -483,8 +507,8 @@ describe("App session URL date state", () => {
     vi.spyOn(sessions, "loadProjects").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
     vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
-    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue();
-    vi.spyOn(messages, "loadSession").mockResolvedValue();
+    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue(true);
+    vi.spyOn(messages, "loadSession").mockResolvedValue(true);
     vi.spyOn(sessionTiming, "load").mockResolvedValue();
     vi.spyOn(pins, "loadForSession").mockResolvedValue();
     vi.spyOn(usage, "fetchAll").mockResolvedValue();
@@ -528,8 +552,8 @@ describe("App session URL date state", () => {
     vi.spyOn(sessions, "loadProjects").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
     vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
-    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue();
-    vi.spyOn(messages, "loadSession").mockResolvedValue();
+    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue(true);
+    vi.spyOn(messages, "loadSession").mockResolvedValue(true);
     vi.spyOn(sessionTiming, "load").mockResolvedValue();
     vi.spyOn(pins, "loadForSession").mockResolvedValue();
     vi.spyOn(usage, "fetchAll").mockResolvedValue();
@@ -578,8 +602,8 @@ describe("App session URL date state", () => {
     vi.spyOn(sessions, "loadProjects").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
     vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
-    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue();
-    vi.spyOn(messages, "loadSession").mockResolvedValue();
+    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue(true);
+    vi.spyOn(messages, "loadSession").mockResolvedValue(true);
     vi.spyOn(sessionTiming, "load").mockResolvedValue();
     vi.spyOn(pins, "loadForSession").mockResolvedValue();
     vi.spyOn(usage, "fetchAll").mockResolvedValue();
@@ -622,8 +646,8 @@ describe("App session URL date state", () => {
     vi.spyOn(sessions, "loadProjects").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
     vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
-    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue();
-    vi.spyOn(messages, "loadSession").mockResolvedValue();
+    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue(true);
+    vi.spyOn(messages, "loadSession").mockResolvedValue(true);
     vi.spyOn(sessionTiming, "load").mockResolvedValue();
     vi.spyOn(pins, "loadForSession").mockResolvedValue();
     vi.spyOn(usage, "fetchAll").mockResolvedValue();
@@ -670,8 +694,8 @@ describe("App session URL date state", () => {
     vi.spyOn(sessions, "loadProjects").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
     vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
-    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue();
-    vi.spyOn(messages, "loadSession").mockResolvedValue();
+    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue(true);
+    vi.spyOn(messages, "loadSession").mockResolvedValue(true);
     vi.spyOn(sessionTiming, "load").mockResolvedValue();
     vi.spyOn(pins, "loadForSession").mockResolvedValue();
     vi.spyOn(usage, "fetchAll").mockResolvedValue();
@@ -1622,11 +1646,11 @@ describe("App analytics date navigation", () => {
     vi.spyOn(sessions, "loadProjects").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
     vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
-    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue();
+    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue(true);
     vi.spyOn(sessions, "navigateToSession").mockImplementation(async (id) => {
       sessions.activeSessionId = id;
     });
-    vi.spyOn(messages, "loadSession").mockResolvedValue();
+    vi.spyOn(messages, "loadSession").mockResolvedValue(true);
     vi.spyOn(sessionTiming, "load").mockResolvedValue();
     vi.spyOn(pins, "loadForSession").mockResolvedValue();
     vi.spyOn(analytics, "fetchAll").mockResolvedValue();

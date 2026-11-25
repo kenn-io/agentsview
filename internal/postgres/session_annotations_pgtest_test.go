@@ -37,6 +37,11 @@ func TestPGPushRepushesAnnotationOnlyChanges(t *testing.T) {
 	const id = dbtest.AnnotatedOtherID
 	_, err := syncer.Push(ctx, true, nil)
 	require.NoError(t, err, "initial Push")
+	store, err := NewStore(ctx, testPGURL(t), syncer.schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	marker, err := store.GetSessionTreeMarker(ctx, id)
+	require.NoError(t, err)
 
 	readPG := func(t *testing.T) (string, []string) {
 		t.Helper()
@@ -58,6 +63,9 @@ func TestPGPushRepushesAnnotationOnlyChanges(t *testing.T) {
 	result, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err, "label-only Push")
 	assert.Equal(t, 1, result.SessionsPushed)
+	updatedMarker, err := store.GetSessionTreeMarker(ctx, id)
+	require.NoError(t, err)
+	assert.NotEqual(t, marker, updatedMarker)
 	_, labels := readPG(t)
 	assert.Equal(t, []string{"role=lead", "ticket=example-b"}, labels)
 

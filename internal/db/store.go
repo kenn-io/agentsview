@@ -61,6 +61,7 @@ type Store interface {
 
 	// SSE change detection.
 	GetSessionVersion(ctx context.Context, id string) (count int, version int64, ok bool)
+	GetSessionTreeMarker(ctx context.Context, id string) (SessionTreeSnapshot, error)
 
 	// Metadata.
 	GetStats(ctx context.Context, excludeOneShot, excludeAutomated bool) (Stats, error)

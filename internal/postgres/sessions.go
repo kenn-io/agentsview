@@ -1229,3 +1229,34 @@ func (s *Store) GetBranches(
 func (s *Store) GetMatchingMachineIDs(ctx context.Context, candidates []string) ([]string, error) {
 	return db.MatchingMachineIDs(ctx, s.pg, db.PostgresQueryDialect(), candidates)
 }
+
+// GetSessionTreeMarker reads the parent and direct children in one query.
+func (s *Store) GetSessionTreeMarker(ctx context.Context, id string) (db.SessionTreeSnapshot, error) {
+	rows, err := s.pg.QueryContext(ctx, "SELECT id, "+sessionVersionColumns+" FROM sessions WHERE id = $1 OR (parent_session_id = $1 AND deleted_at IS NULL)", id)
+	if err != nil {
+		return db.SessionTreeSnapshot{}, err
+	}
+	defer rows.Close()
+	var parent *db.SessionTreeEntry
+	var children []db.SessionTreeEntry
+	for rows.Next() {
+		var e db.SessionTreeEntry
+		var v sessionVersionRow
+		if err := rows.Scan(append([]any{&e.ID}, v.fields()...)...); err != nil {
+			return db.SessionTreeSnapshot{}, err
+		}
+		e.Count, e.Version = v.count, v.version()
+		if e.ID == id {
+			parent = &e
+		} else {
+			children = append(children, e)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return db.SessionTreeSnapshot{}, err
+	}
+	if parent == nil {
+		return db.SessionTreeSnapshot{}, errors.New("session not found")
+	}
+	return db.NewSessionTreeSnapshot(append([]db.SessionTreeEntry{*parent}, children...))
+}

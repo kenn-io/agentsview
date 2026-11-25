@@ -3109,34 +3109,30 @@ func SessionVersionMarker(parts ...string) int64 {
 	return int64(h)
 }
 
-// GetSessionVersion returns the message count and a compact version
-// marker for change detection in SSE watchers.
-func (db *DB) GetSessionVersion(ctx context.Context,
-	id string,
-) (count int, version int64, ok bool) {
-	var fileMtime int64
-	var fileHash, localModifiedAt, syncMarker, labels, parent, relationship, launcherParent string
-	err := db.getReader().QueryRow(ctx,
-		"SELECT message_count, COALESCE(file_mtime, 0),"+
-			" COALESCE(file_hash, ''), COALESCE(local_modified_at, ''), COALESCE(sync_marker, '')"+
-			", (SELECT json_group_array(label) FROM (SELECT label FROM session_labels WHERE session_id = sessions.id ORDER BY label)),"+
-			" COALESCE(parent_session_id, ''), relationship_type,"+
-			" COALESCE((SELECT ep.parent_session_id FROM session_external_parents ep WHERE ep.session_id = sessions.id), '') FROM sessions WHERE id = ?",
-		id,
-	).Scan(&count, &fileMtime, &fileHash, &localModifiedAt, &syncMarker, &labels, &parent, &relationship, &launcherParent)
+const sessionVersionColumns = `message_count, COALESCE(file_mtime, 0), COALESCE(file_hash, ''), COALESCE(local_modified_at, ''), COALESCE(sync_marker, ''), (SELECT json_group_array(label) FROM (SELECT label FROM session_labels WHERE session_id = sessions.id ORDER BY label)), COALESCE(parent_session_id, ''), relationship_type, COALESCE((SELECT ep.parent_session_id FROM session_external_parents ep WHERE ep.session_id = sessions.id), '')`
+
+type sessionVersionRow struct {
+	count                                                          int
+	mtime                                                          int64
+	hash, modified, marker, labels, parent, relationship, launcher string
+}
+
+func (v *sessionVersionRow) fields() []any {
+	return []any{&v.count, &v.mtime, &v.hash, &v.modified, &v.marker, &v.labels, &v.parent, &v.relationship, &v.launcher}
+}
+
+func (v *sessionVersionRow) version() int64 {
+	return SessionVersionMarker(strconv.FormatInt(v.mtime, 10), v.hash, v.modified, v.marker, v.labels, v.parent, v.relationship, v.launcher)
+}
+
+// GetSessionVersion returns the message count and a compact version marker.
+func (db *DB) GetSessionVersion(ctx context.Context, id string) (int, int64, bool) {
+	var v sessionVersionRow
+	err := db.getReader().QueryRow(ctx, "SELECT "+sessionVersionColumns+" FROM sessions WHERE id = ?", id).Scan(v.fields()...)
 	if err != nil {
 		return 0, 0, false
 	}
-	return count, SessionVersionMarker(
-		strconv.FormatInt(fileMtime, 10),
-		fileHash,
-		localModifiedAt,
-		syncMarker,
-		labels,
-		parent,
-		relationship,
-		launcherParent,
-	), true
+	return v.count, v.version(), true
 }
 
 // IncrementalInfo holds the data needed for incremental
@@ -7124,4 +7120,30 @@ func (db *DB) loadSessionMirrorSnapshot(ctx context.Context, id string, afterSes
 		return nil, fmt.Errorf("finishing mirror source snapshot: %w", err)
 	}
 	return result, nil
+}
+
+// GetSessionTreeMarker reads the parent and its direct children in one snapshot.
+func (db *DB) GetSessionTreeMarker(ctx context.Context, id string) (SessionTreeSnapshot, error) {
+	rows, err := db.getReader().QueryContext(ctx, "SELECT id, "+sessionVersionColumns+" FROM sessions WHERE id = ? OR (parent_session_id = ? AND deleted_at IS NULL) ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END", id, id, id)
+	if err != nil {
+		return SessionTreeSnapshot{}, err
+	}
+	defer rows.Close()
+	var entries []SessionTreeEntry
+	for rows.Next() {
+		var e SessionTreeEntry
+		var v sessionVersionRow
+		if err := rows.Scan(append([]any{&e.ID}, v.fields()...)...); err != nil {
+			return SessionTreeSnapshot{}, err
+		}
+		e.Count, e.Version = v.count, v.version()
+		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		return SessionTreeSnapshot{}, err
+	}
+	if len(entries) == 0 || entries[0].ID != id {
+		return SessionTreeSnapshot{}, errors.New("session not found")
+	}
+	return NewSessionTreeSnapshot(entries)
 }

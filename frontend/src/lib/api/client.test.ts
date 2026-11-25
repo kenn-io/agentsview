@@ -867,6 +867,30 @@ describe("live event payloads", () => {
     vi.unstubAllGlobals();
   });
 
+  it("returns a refresh receipt to the shared worker", async () => {
+    const postMessage = vi.fn();
+    class Worker {
+      port = { start() {}, postMessage, onmessage: null } as unknown as MessagePort;
+      constructor() {
+        port = this.port;
+      }
+    }
+    vi.stubGlobal("SharedWorker", Worker);
+    const { watchSession } = await import("./client.js");
+    const update = vi.fn();
+    const source = watchSession("a", update);
+    port.onmessage?.(
+      new MessageEvent("message", {
+        data: { type: "session_updated", data: "a", id: "v1:marker", receipt: "receipt" },
+      }),
+    );
+    expect(update.mock.lastCall![0].receipt).toBe("receipt");
+    expect(update.mock.lastCall![0].lastEventId).toBe("v1:marker");
+    source.acknowledge("receipt");
+    expect(postMessage).toHaveBeenLastCalledWith({ type: "ack", receipt: "receipt" });
+    source.close();
+  });
+
   it.each(["closed", "permanent_failure"])("exposes %s as a closed stream", async (type) => {
     const { watchEvents } = await import("./client.js");
     const onPermanentFailure = vi.fn();
@@ -877,7 +901,7 @@ describe("live event payloads", () => {
     source.close();
   });
 
-  it("moves a stream to the tab broadcast when its SharedWorker fails to start", async () => {
+  it("moves a stream to the tab broadcast and manages its heartbeat when SharedWorker fails", async () => {
     vi.useFakeTimers();
     const states: Record<string, { session?: string }>[] = [];
     class Channel {
@@ -907,6 +931,16 @@ describe("live event payloads", () => {
     const count = states.length;
     worker.onerror?.(new Event("error"));
     expect(states).toHaveLength(count);
+    vi.advanceTimersByTime(5000);
+    expect(states).toHaveLength(count);
+    const next = watchSession("b", vi.fn());
+    worker.onerror?.(new Event("error"));
+    expect(states.at(-1)).toEqual({ "1": expect.objectContaining({ session: "b" }) });
+    const restartedCount = states.length;
+    vi.advanceTimersByTime(1000);
+    expect(states).toHaveLength(restartedCount + 1);
+    expect(states.at(-1)).toEqual({ "1": expect.objectContaining({ session: "b" }) });
+    next.close();
   });
 
   it("ignores queued frames after a subscription is closed", async () => {

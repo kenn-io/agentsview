@@ -1,8 +1,15 @@
-import { LiveHub, type LiveFrame, type LivePort, type LiveRequest } from "./liveHub.js";
+import {
+  LiveHub,
+  type LiveAck,
+  type LiveFrame,
+  type LivePort,
+  type LiveRequest,
+} from "./liveHub.js";
 
 type Peer = { seen: number; requests: Record<string, LiveRequest> };
 type Message =
   | { type: "state"; id: string; requests: Record<string, LiveRequest> }
+  | { type: "ack"; id: string; port: string; receipt: string }
   | { type: "frame"; id: string; port: string; frame: LiveFrame };
 
 // A tab advertises its subscriptions so another tab can take over when it closes.
@@ -16,9 +23,15 @@ export class LiveBroadcast {
   private ports = new Map<string, { port: LivePort; request: LiveRequest }>();
   private nextPort = 0;
   private election: ReturnType<typeof setTimeout> | null = null;
+  private heartbeat: ReturnType<typeof setInterval> | null = null;
 
   constructor(base: string) {
     const receive = (message: Message) => {
+      if (message.type === "ack") {
+        const port = this.ports.get(`${message.id}:${message.port}`)?.port;
+        if (port) this.hub?.acknowledge(port, message.receipt);
+        return;
+      }
       if (message.type === "frame") {
         if (message.id === this.id) this.receivers.get(message.port)?.(message.frame);
         return;
@@ -31,26 +44,40 @@ export class LiveBroadcast {
     const channel = new BroadcastChannel(`agentsview-live:${base}`);
     channel.onmessage = (event: MessageEvent<Message>) => receive(event.data);
     this.send = (message) => channel.postMessage(message);
-    setInterval(() => {
-      const cutoff = Date.now() - 4000;
-      for (const [id, peer] of this.peers) if (peer.seen < cutoff) this.peers.delete(id);
-      this.announce();
-      this.elect();
-    }, 1000);
     this.announce();
   }
 
-  connect(receive: (frame: LiveFrame) => void): (value: LiveRequest | "leave" | "close") => void {
+  connect(
+    receive: (frame: LiveFrame) => void,
+  ): (value: LiveRequest | LiveAck | "leave" | "close") => void {
     const id = String(this.nextPort++);
     this.receivers.set(id, receive);
     return (value) => {
+      if (typeof value === "object" && "type" in value) {
+        const port = this.ports.get(`${this.id}:${id}`)?.port;
+        if (port) this.hub?.acknowledge(port, value.receipt);
+        else this.send({ type: "ack", id: this.id, port: id, receipt: value.receipt });
+        return;
+      }
       if (value === "leave" || value === "close") {
         delete this.requests[id];
         if (value === "close") this.receivers.delete(id);
       } else this.requests[id] = value;
-      this.announce();
-      this.elect();
+      if (Object.keys(this.requests).length && this.heartbeat === null)
+        this.heartbeat = setInterval(() => this.tick(), 1000);
+      else if (!Object.keys(this.requests).length && this.heartbeat !== null) {
+        clearInterval(this.heartbeat);
+        this.heartbeat = null;
+      }
+      this.tick();
     };
+  }
+
+  private tick() {
+    const cutoff = Date.now() - 4000;
+    for (const [id, peer] of this.peers) if (peer.seen < cutoff) this.peers.delete(id);
+    this.announce();
+    this.elect();
   }
 
   private announce() {

@@ -196,15 +196,14 @@
         }
         const ready = liveAllowed ? sync.watchSession(
           id,
-          () => {
-            messages.reload();
-            sessions.refreshActiveSession();
-            sessions.loadChildSessions(id);
+          async () => {
+            const reads = [messages.reload(), sessions.refreshActiveSession(), sessions.loadChildSessions(id)];
             if (ui.vitalsOpen) {
-              sessionActivity.reload(id);
+              reads.push(sessionActivity.reload(id));
             } else {
               sessionActivity.invalidate();
             }
+            return (await Promise.all(reads)).every(Boolean) && current;
           },
           (t) => {
             sessionTiming.applyEvent(t);

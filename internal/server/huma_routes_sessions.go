@@ -1401,7 +1401,7 @@ func (s *Server) humaWatchSession(
 			sessionwatch.PollInterval * sessionwatch.HeartbeatTicks,
 		)
 		defer heartbeat.Stop()
-		s.sendSessionFrame(streamCtx, stream, in.ID, false)
+		s.sendSessionFrame(streamCtx, stream, in.ID, false, false)
 		for {
 			select {
 			case <-streamCtx.Done():
@@ -1410,7 +1410,7 @@ func (s *Server) humaWatchSession(
 				if !ok {
 					return
 				}
-				if !s.sendSessionFrame(streamCtx, stream, in.ID, true) {
+				if !s.sendSessionFrame(streamCtx, stream, in.ID, true, false) {
 					return
 				}
 			case <-heartbeat.C:
@@ -1420,21 +1420,30 @@ func (s *Server) humaWatchSession(
 	}}, nil
 }
 
-func (s *Server) sendSessionFrame(ctx context.Context, stream *SSEStream, id string, update bool) bool {
+func (s *Server) sendSessionFrame(ctx context.Context, stream *SSEStream, id string, update, versioned bool) bool {
 	if update {
+		identityFailed := false
 		if identity, ok := s.db.(db.SessionWatchStateStore); ok {
 			state, err := identity.GetSessionWatchState(id)
 			if err != nil {
+				if !versioned {
+					return false
+				}
+				identityFailed = true
+			} else if !stream.SendJSON("session.identity", state) {
 				return false
-			}
-			if !stream.SendJSON("session.identity", state) {
-				return false
-			}
-			if state.State != db.SessionWatchResolved {
+			} else if state.State != db.SessionWatchResolved {
 				return true
 			}
 		}
-		if !stream.Send("session_updated", id) {
+		marker := ""
+		if versioned && !identityFailed {
+			marker = s.sessionMarker(ctx, id)
+		}
+		if versioned && !stream.SendWithID(marker, "session_updated", id) {
+			return false
+		}
+		if !versioned && !stream.Send("session_updated", id) {
 			return false
 		}
 	}
@@ -1444,6 +1453,14 @@ func (s *Server) sendSessionFrame(ctx context.Context, stream *SSEStream, id str
 		stream.SendJSON("session.timing", t)
 	}
 	return true
+}
+
+func (s *Server) sessionMarker(ctx context.Context, id string) string {
+	marker, err := s.db.GetSessionTreeMarker(ctx, id)
+	if err != nil {
+		return ""
+	}
+	return marker.Marker
 }
 
 type eventsInput struct {
@@ -1514,7 +1531,7 @@ func (s *Server) humaEvents(ctx context.Context, in *eventsInput) (*huma.StreamR
 			}
 		}
 		for _, id := range found {
-			updates := s.sessionMonitor(ctx, id)
+			updates := s.sessionTreeMonitor(ctx, id)
 			go func() {
 				for {
 					select {
@@ -1532,10 +1549,10 @@ func (s *Server) humaEvents(ctx context.Context, in *eventsInput) (*huma.StreamR
 					}
 				}
 			}()
-			if !stream.Send("session_ready", id) {
+			if !stream.SendWithID(s.sessionMarker(ctx, id), "session_ready", id) {
 				return
 			}
-			s.sendSessionFrame(ctx, stream, id, false)
+			s.sendSessionFrame(ctx, stream, id, false, true)
 		}
 		if !stream.SendJSON("events_ready", struct{}{}) {
 			return
@@ -1560,7 +1577,7 @@ func (s *Server) humaEvents(ctx context.Context, in *eventsInput) (*huma.StreamR
 					}
 					continue
 				}
-				if !s.sendSessionFrame(ctx, stream, t.id, true) {
+				if !s.sendSessionFrame(ctx, stream, t.id, true, true) {
 					return
 				}
 			case <-heartbeat.C:

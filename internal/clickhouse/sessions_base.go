@@ -31,8 +31,8 @@ func (s sessionsSQL) AllMessagesSQL() string {
 	return (readbase.SessionQueries{}).AllMessagesSQL()
 }
 
-func (s sessionsSQL) SessionVersionSQL() string {
-	return (readbase.SessionQueries{}).SessionVersionSQL()
+func (s sessionsSQL) SessionVersionColumns() string {
+	return (readbase.SessionQueries{}).SessionVersionColumns()
 }
 
 func (s sessionsSQL) SidebarSQL(f db.SessionFilter, dialect db.QueryDialect) (string, []any) {
@@ -218,4 +218,8 @@ func (s sessionsSQL) ScanMessages(rows db.MessageRows) ([]db.Message, error) {
 
 func (s *Store) GetMatchingMachineIDs(ctx context.Context, candidates []string) ([]string, error) {
 	return s.sessions().GetMatchingMachineIDs(ctx, candidates)
+}
+
+func (s *Store) GetSessionTreeMarker(ctx context.Context, id string) (db.SessionTreeSnapshot, error) {
+	return s.sessions().GetSessionTreeMarker(ctx, id)
 }

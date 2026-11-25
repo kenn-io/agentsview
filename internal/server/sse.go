@@ -19,13 +19,26 @@ type SSEStream struct {
 // Send writes an SSE event with the given name and string data.
 // It returns false when the write fails.
 func (s *SSEStream) Send(event, data string) bool {
+	return s.send(event, data, nil)
+}
+
+// SendWithID writes an SSE event with an explicit last-event ID.
+func (s *SSEStream) SendWithID(id, event, data string) bool {
+	return s.send(event, data, &id)
+}
+
+func (s *SSEStream) send(event, data string, id *string) bool {
 	// Apply a bounded write deadline when supported so a stalled
 	// client cannot block handlers forever.
 	rc := http.NewResponseController(s.w)
 	_ = rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
 	defer func() { _ = rc.SetWriteDeadline(time.Time{}) }()
 
-	if _, err := fmt.Fprintf(s.w, "event: %s\ndata: %s\n\n", event, data); err != nil {
+	prefix := ""
+	if id != nil {
+		prefix = fmt.Sprintf("id: %s\n", *id)
+	}
+	if _, err := fmt.Fprintf(s.w, "%sevent: %s\ndata: %s\n\n", prefix, event, data); err != nil {
 		log.Printf("SSE write error for %q: %v", event, err)
 		return false
 	}

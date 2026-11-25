@@ -272,6 +272,58 @@ func TestHostedSharedChildTraversesBothParentVariants(t *testing.T) {
 
 }
 
+func TestHostedTreeMarkerTracksChildContent(t *testing.T) {
+	t.Parallel()
+	f := newProjectionFixture(t)
+	outcome := projectionOutcome("parent")
+	child := projectionOutcome("child").Outcome.Results[0]
+	child.Result.Session.ID = "codex:child"
+	child.Result.Session.SourceSessionID = "child"
+	child.Result.Session.ParentSessionID = "codex:portable"
+	child.Result.Session.RelationshipType = "subagent"
+	outcome.Outcome.Results = append(outcome.Outcome.Results, child)
+	manifest, _ := f.accept(t, "device-a", "capture-a", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, manifest), manifest, outcome))
+	h, err := NewHostedStore(t.Context(), f.dsn, f.schema, f.tenant, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, h.Close()) })
+	parent, err := f.sink.Resolve(t.Context(), "codex:portable")
+	require.NoError(t, err)
+	children, err := h.physical.GetChildSessions(t.Context(), parent.SessionID)
+	require.NoError(t, err)
+	entries := make([]db.SessionTreeEntry, 0, len(children)+1)
+	ids := []string{parent.SessionID}
+	for _, child := range children {
+		ids = append(ids, child.ID)
+	}
+	for _, id := range ids {
+		count, version, ok := h.physical.GetSessionVersion(t.Context(), id)
+		require.True(t, ok)
+		entries = append(entries, db.SessionTreeEntry{ID: id, Count: count, Version: version})
+	}
+	want, err := db.SessionTreeMarker(entries)
+	require.NoError(t, err)
+	physicalMarker, err := h.physical.GetSessionTreeMarker(t.Context(), parent.SessionID)
+	require.NoError(t, err)
+	assert.Equal(t, want, physicalMarker.Marker)
+	assert.Equal(t, entries[0].Count, physicalMarker.ParentCount)
+	assert.Equal(t, entries[0].Version, physicalMarker.ParentVersion)
+	before, err := h.GetSessionTreeMarker(t.Context(), "codex:portable")
+	require.NoError(t, err)
+	_, err = f.runtime.ExecContext(t.Context(), `UPDATE raw_corpus_state SET identity_revision=identity_revision+1 WHERE singleton=1`)
+	require.NoError(t, err)
+	same, err := h.GetSessionTreeMarker(t.Context(), "codex:portable")
+	require.NoError(t, err)
+	assert.Equal(t, before, same)
+	identity, err := f.sink.Resolve(t.Context(), "codex:child")
+	require.NoError(t, err)
+	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET raw_content_revision='changed' WHERE id=$1`, identity.SessionID)
+	require.NoError(t, err)
+	after, err := h.GetSessionTreeMarker(t.Context(), "codex:portable")
+	require.NoError(t, err)
+	assert.NotEqual(t, before, after)
+}
+
 func TestHostedReadKeepsOneIdentitySnapshot(t *testing.T) {
 	t.Parallel()
 	f := newProjectionFixture(t)

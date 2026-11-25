@@ -42,7 +42,7 @@ class SessionActivityStore {
 
   async load(sessionId: string) {
     if (this.cachedSessionId === sessionId && this.loaded) {
-      return;
+      return this.error === null;
     }
     // Clear stale data from a different session before
     // fetching so the component never renders old buckets.
@@ -61,19 +61,21 @@ class SessionActivityStore {
         { signal },
       );
       // Ignore stale responses from previous sessions.
-      if (version !== this.loadVersion || !this.activityRead.isCurrent(signal)) return;
+      if (version !== this.loadVersion || !this.activityRead.isCurrent(signal)) return false;
       this.buckets = resp.buckets;
       this.intervalSeconds = resp.interval_seconds;
       this.totalMessages = resp.total_messages;
       this.cachedSessionId = sessionId;
       this.loaded = true;
+      return true;
     } catch (e) {
       if (isAbortError(e) || version !== this.loadVersion || !this.activityRead.isCurrent(signal))
-        return;
+        return false;
       this.error = e instanceof Error ? e.message : m.session_activity_load_failed();
       this.buckets = [];
       this.cachedSessionId = sessionId;
       this.loaded = true;
+      return false;
     } finally {
       if (this.activityRead.finish(signal)) {
         this.loading = false;

@@ -103,9 +103,35 @@ for (const fallback of ["worker", "broadcast"] as const) {
         });
         await pages[index]!.goto(`${base}/sessions/${ids[index]}`);
         await expect(pages[index]!).toHaveURL(new RegExp(ids[index]!));
+        if (index === 2) {
+          await expect.poll(() => sessionRequests[1]).toBeGreaterThan(0);
+          await expect(
+            pages[index]!.locator('.message-list-scroll[data-loaded="true"]'),
+          ).toBeVisible();
+        }
       }
       await expect.poll(singleActiveSessions).toEqual(new Set(ids));
       await expect.poll(() => sessionRequests.every((count) => count > 0)).toBe(true);
+      const readMarker = () =>
+        page.evaluate(
+          (id) =>
+            new Promise<string>((resolve, reject) => {
+              const source = new EventSource(`/api/v1/events?session=${encodeURIComponent(id)}`);
+              source.addEventListener("session_ready", (event) => {
+                source.close();
+                resolve((event as MessageEvent).lastEventId);
+              });
+              source.onerror = () => {
+                source.close();
+                reject(new Error("session stream failed"));
+              };
+            }),
+          ids[1]!,
+        );
+      const marker = await readMarker();
+      expect(marker).toMatch(/^v1:[0-9a-f]{64}$/);
+      expect(await readMarker()).toBe(marker);
+      await expect.poll(singleActiveSessions).toEqual(new Set(ids));
       for (const index of [1, 2]) {
         const beforeUpdate = sessionRequests[index - 1]!;
         const otherBefore = sessionRequests[2 - index]!;
