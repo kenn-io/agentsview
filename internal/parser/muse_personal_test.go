@@ -107,16 +107,17 @@ func TestMusePersonalSessionKindUsesFirstUserItem(t *testing.T) {
 		return fmt.Sprintf(`{"type":"item","seq":%d,"source":%q,"created_at":"2026-10-05T15:04:06Z","item":{"type":"message","role":%q,"text":%q}}`+"\n", seq, source, role, text)
 	}
 	for _, tc := range []struct {
-		name, body, wantKind string
+		name, body, wantKind, wantFirst string
 	}{
-		{"lowest sequence, not first line", item(1, "runtime", "user", "hello") + item(0, "scheduler.cron", "user", "run"), SessionKindMuseBackground},
-		{"background source on a non-user item", item(0, "scheduler.cron", "developer", "context") + item(1, "runtime", "user", "hello"), ""},
-		{"same sequence keeps file order", item(0, "runtime", "user", "hello") + item(0, "scheduler.cron", "user", "run"), ""},
+		{"lowest sequence, not first line", item(1, "runtime", "user", "hello") + item(0, "scheduler.cron", "user", "run"), SessionKindMuseBackground, "run"},
+		{"background source on a non-user item", item(0, "scheduler.cron", "developer", "context") + item(1, "runtime", "user", "hello"), "", "hello"},
+		{"same sequence keeps file order", item(0, "runtime", "user", "hello") + item(0, "scheduler.cron", "user", "run"), "", "hello"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p, _ := musePersonalTestProvider(t, tc.body)
 			sess := musePersonalTestParse(t, p).Results[0].Result.Session
 			assert.Equal(t, tc.wantKind, sess.SessionKind)
+			assert.Equal(t, tc.wantFirst, sess.FirstMessage, "the preview comes from the same first user item")
 		})
 	}
 }
