@@ -26,6 +26,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/clickhouse"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -1569,6 +1570,34 @@ func TestHumaSyncStatusUsesExistingOnDemandEngine(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, out.Body.Stats)
 	assert.Equal(t, engine.LastSyncStats(), *out.Body.Stats)
+}
+
+func TestScopedUpgradeQueryErrorKeepsFreshnessWarning(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	database := dbtest.OpenTestDBAt(t, dbPath)
+	srv := New(config.Config{
+		Host:         "127.0.0.1",
+		Port:         0,
+		DataDir:      dir,
+		DBPath:       dbPath,
+		WriteTimeout: 30 * time.Second,
+	}, database, nil)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	status, err := srv.humaSyncStatus(ctx, &emptyInput{})
+	require.NoError(t, err)
+	assert.True(t, status.Body.UpgradePending,
+		"a failed marker query must not report the archive as current")
+
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/sessions", nil)
+	recorder := httptest.NewRecorder()
+	srv.archiveStaleMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})).ServeHTTP(recorder, req)
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Equal(t, "true", recorder.Header().Get(apiclient.ArchiveStaleHeader))
 }
 
 func TestHumaSyncSessionLocalNoSyncUsesOnDemandEngine(t *testing.T) {

@@ -363,7 +363,12 @@ test: pricing-snapshot ensure-embed-dir
 # unrelated TestActiveAppendGrowth case.
 .PHONY: test-scoped-upgrade-startup
 test-scoped-upgrade-startup: pricing-snapshot ensure-embed-dir
-	go test $(GO_TEST_P_FLAG) -tags "fts5" ./internal/db ./cmd/agentsview -run '^(TestArchiveResyncState|TestServeRestartServesSessionsBeforeStartupSync|TestServeSkipInitialSyncStillReparsesStaleArchive)$$' -count=1
+	go test $(GO_TEST_P_FLAG) -tags "fts5" ./internal/db ./internal/server ./cmd/agentsview -run '^(TestArchiveResyncState|TestScopedUpgradePending|TestScopedUpgradeFreshnessOutlivesWriterPause|TestScopedUpgradeQueryErrorKeepsFreshnessWarning|TestLocalDailyUsageWarnsForScopedUpgrade|TestLocalSessionUsageRefreshesSubagentTranscripts|TestServeRestartServesSessionsBeforeStartupSync|TestServeSkipInitialSyncStillReparsesStaleArchive|TestSessionUsageResolvesMissingIDsBySyncStatus)$$' -count=1
+
+.PHONY: test-scoped-upgrade-frontend
+test-scoped-upgrade-frontend:
+	cd frontend && npm run check
+	cd frontend && npm run test -- src/lib/components/layout/StatusBar.test.ts src/lib/stores/sync.test.ts
 
 .PHONY: test-cursor-account-reporting
 test-cursor-account-reporting: pricing-snapshot ensure-embed-dir

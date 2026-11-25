@@ -80,12 +80,13 @@ func restartContents(t *testing.T, url string) []string {
 
 func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 	for _, tc := range []struct {
-		name         string
-		scoped, skip bool
+		name               string
+		scoped, skip, fail bool
 	}{
 		{name: "ordinary"},
 		{name: "scoped upgrade", scoped: true},
 		{name: "scoped upgrade with skip initial sync", scoped: true, skip: true},
+		{name: "scoped upgrade with incomplete pass", scoped: true, fail: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			isolateServeTestHome(t)
@@ -111,9 +112,16 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 			var seed bytes.Buffer
 			require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &seed))
 			if tc.scoped {
+				oldVersion := db.CurrentDataVersion() - 1
+				require.NotEmpty(t, db.ScopedDataVersionProviders(oldVersion, db.CurrentDataVersion()),
+					"fixture must exercise a scoped parser upgrade")
 				conn, err := sql.Open("sqlite3", cfg.DBPath)
 				require.NoError(t, err)
-				_, err = conn.ExecContext(t.Context(), `UPDATE messages SET content='old transcript' WHERE session_id IN (SELECT id FROM sessions WHERE agent='claude') AND content LIKE 'visible-seed-%'; UPDATE sessions SET data_version=188; PRAGMA user_version=188`)
+				_, err = conn.ExecContext(t.Context(), `UPDATE messages SET content='old transcript' WHERE session_id IN (SELECT id FROM sessions WHERE agent='claude') AND content LIKE 'visible-seed-%'`)
+				require.NoError(t, err)
+				_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET data_version=?`, oldVersion)
+				require.NoError(t, err)
+				_, err = conn.ExecContext(t.Context(), fmt.Sprintf(`PRAGMA user_version=%d`, oldVersion))
 				require.NoError(t, err)
 				require.NoError(t, conn.Close())
 			}
@@ -126,6 +134,13 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 				case <-release:
 				case <-ctx.Done():
 					return workerResult{}, ctx.Err()
+				}
+				if tc.fail {
+					stats := syncpkg.SyncStats{Aborted: true}
+					return workerResult{
+						Status: "aborted", Error: "injected incomplete startup pass",
+						Stats: &stats,
+					}, errors.New("injected incomplete startup pass")
 				}
 				var out bytes.Buffer
 				err := runSyncWorkerContext(ctx, cfg, req, &out)
@@ -140,7 +155,19 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 				require.FailNow(t, "worker did not start")
 			}
 			require.Contains(t, restartGet(t, base+"/api/v1/sessions/sidebar-index?limit=500"), "visible-seed-0")
-			require.Contains(t, restartGet(t, base+"/api/v1/sync/status"), `"startup_pending":true`)
+			statusBody := restartGet(t, base+"/api/v1/sync/status")
+			require.Contains(t, statusBody, `"startup_pending":true`)
+			if tc.scoped {
+				var status struct {
+					ArchiveStale   bool `json:"archive_stale"`
+					UpgradePending bool `json:"upgrade_pending"`
+					WritesPaused   bool `json:"writes_paused"`
+				}
+				require.NoError(t, json.Unmarshal([]byte(statusBody), &status))
+				assert.False(t, status.ArchiveStale)
+				assert.True(t, status.UpgradePending)
+				assert.True(t, status.WritesPaused)
+			}
 			codexBefore := make(map[string][]string)
 			for _, id := range codexIDs {
 				contents := restartContents(t, base+"/api/v1/sessions/"+id+"/messages")
@@ -149,10 +176,40 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 			}
 			if tc.scoped {
 				for _, id := range claudeIDs {
+					response, err := restartTestRequest(t, http.MethodGet,
+						base+"/api/v1/sessions/"+id+"/messages", "", "")
+					require.NoError(t, err)
+					assert.Equal(t, "true", response.Header.Get("X-Agentsview-Archive-Stale"))
+					require.NoError(t, response.Body.Close())
 					contents := restartContents(t, base+"/api/v1/sessions/"+id+"/messages")
 					require.Contains(t, contents, "old transcript")
-					require.NotContains(t, contents, id)
+					assert.NotContains(t, contents, id)
 				}
+			}
+			if tc.fail {
+				close(release)
+				require.Eventually(t, func() bool {
+					status := restartGet(t, base+"/api/v1/sync/status")
+					return strings.Contains(status, `"startup_pending":true`) &&
+						strings.Contains(status, `"aborted":true`) &&
+						strings.Contains(status, `"upgrade_pending":true`) &&
+						strings.Contains(status, `"writes_paused":false`)
+				}, 30*time.Second, 100*time.Millisecond)
+				response, err := restartTestRequest(t, http.MethodGet,
+					base+"/api/v1/sessions/"+claudeIDs[0]+"/messages", "", "")
+				require.NoError(t, err)
+				assert.Equal(t, "true", response.Header.Get("X-Agentsview-Archive-Stale"))
+				require.NoError(t, response.Body.Close())
+				require.NotEmpty(t, restartContents(t,
+					base+"/api/v1/sessions/"+claudeIDs[0]+"/messages"),
+					"saved transcript remains readable after the incomplete pass")
+				response, err = restartTestRequest(t, http.MethodPut,
+					base+"/api/v1/sessions/missing/star", "{}", "")
+				require.NoError(t, err)
+				assert.Equal(t, http.StatusNotFound, response.StatusCode,
+					"writes should resume when the incomplete worker releases the writer")
+				require.NoError(t, response.Body.Close())
+				return
 			}
 			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 			defer cancel()
@@ -175,7 +232,10 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 			require.True(t, found, "committed sessions should emit an event: %v", scanner.Err())
 			require.Eventually(t, func() bool {
 				stale, _, _, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
-				return err == nil && !stale && strings.Contains(restartGet(t, base+"/api/v1/sync/status"), `"startup_pending":false`)
+				status := restartGet(t, base+"/api/v1/sync/status")
+				return err == nil && !stale && strings.Contains(status, `"startup_pending":false`) &&
+					strings.Contains(status, `"upgrade_pending":false`) &&
+					strings.Contains(status, `"writes_paused":false`)
 			}, 30*time.Second, 100*time.Millisecond)
 			require.Contains(t, restartGet(t, base+"/api/v1/sessions/sidebar-index?limit=500"), "before-worker")
 			for _, id := range claudeIDs {

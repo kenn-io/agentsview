@@ -13,6 +13,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
@@ -233,12 +234,27 @@ func TestLocalSessionUsageRefreshesSubagentTranscripts(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, unsynced)
 
-	out, _, err := backend.SessionUsage(
-		ctx, sessionUsageQuery{SessionID: "parent-uuid"})
-	require.NoError(t, err)
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx,
+			"INSERT INTO stats(key, value) VALUES ('scoped_upgrade_pending', 1)",
+		)
+		return err
+	}))
+	var out *sessionUsageOutput
+	stderr := captureStderr(t, func() {
+		var err error
+		out, _, err = backend.SessionUsage(
+			ctx, sessionUsageQuery{SessionID: "parent-uuid"})
+		require.NoError(t, err)
+	})
+	assert.Contains(t, stderr, apiclient.ArchiveStaleWarning)
 	require.NotNil(t, out)
 	assert.Equal(t, 1, out.SubagentCount,
 		"the new subagent transcript must be ingested before the query")
+	pending, err := database.ScopedUpgradePending(ctx)
+	require.NoError(t, err)
+	assert.True(t, pending,
+		"a per-session refresh must not clear the full-pass freshness marker")
 
 	child, err := database.GetSession(ctx, "agent-worker1")
 	require.NoError(t, err)
@@ -283,6 +299,27 @@ func TestLocalSessionUsageStaleArchiveReturnsStoredUsage(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, out)
 	assert.False(t, out.RefreshIncomplete)
+}
+
+func TestLocalDailyUsageWarnsForScopedUpgrade(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
+			"INSERT INTO stats(key, value) VALUES ('scoped_upgrade_pending', 1)",
+		)
+		return err
+	}))
+	backend := localArchiveQueryBackend{
+		database:      database,
+		offline:       true,
+		skipFreshData: true,
+	}
+
+	stderr := captureStderr(t, func() {
+		_, err := backend.DailyUsage(t.Context(), dailyUsageQuery{NoDefaultRange: true})
+		require.NoError(t, err)
+	})
+	assert.Contains(t, stderr, apiclient.ArchiveStaleWarning)
 }
 
 func TestLocalSessionUsageReportsNotFoundWhenStale(t *testing.T) {

@@ -2516,7 +2516,7 @@ func TestPrintSessionParentHumanClearAbsent(t *testing.T) {
 }
 
 func TestSessionUsageResolvesMissingIDsBySyncStatus(t *testing.T) {
-	const clearStatus = `{"archive_stale":false,"startup_pending":false,"stats":{}}`
+	const clearStatus = `{"archive_stale":false,"upgrade_pending":false,"writes_paused":false,"startup_pending":false,"stats":{}}`
 	for _, tc := range []struct {
 		name, id, statusBody      string
 		statusCode                int
@@ -2541,6 +2541,12 @@ func TestSessionUsageResolvesMissingIDsBySyncStatus(t *testing.T) {
 			name: "archive rebuild pending", id: "absent",
 			statusBody: `{"archive_stale":true,"startup_pending":false,"stats":{}}`,
 			wantErr:    "session usage is not ready", wantCode: tokenUseExitErr,
+			detailLookups: 1, wantStatusChecks: 1,
+		},
+		{
+			name: "scoped parser upgrade pending", id: "absent",
+			statusBody: `{"archive_stale":false,"upgrade_pending":true,"writes_paused":true,"startup_pending":false,"stats":{}}`,
+			wantErr:    "parser upgrades", wantCode: tokenUseExitErr,
 			detailLookups: 1, wantStatusChecks: 1,
 		},
 		{

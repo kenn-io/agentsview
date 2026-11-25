@@ -368,11 +368,7 @@ func TestServeSkipInitialSyncStillReparsesStaleArchive(t *testing.T) {
 			} else {
 				conn, err := sql.Open("sqlite3", cfg.DBPath)
 				require.NoError(t, err)
-				statement := "INSERT INTO stats(key, value) VALUES ('scoped_upgrade_pending', 1)"
-				if kind == "schema repair" {
-					statement = "ALTER TABLE tool_calls DROP COLUMN result_content_length"
-				}
-				_, err = conn.ExecContext(t.Context(), statement)
+				_, err = conn.ExecContext(t.Context(), "ALTER TABLE tool_calls DROP COLUMN result_content_length")
 				require.NoError(t, err)
 				require.NoError(t, conn.Close())
 			}

@@ -1335,8 +1335,10 @@ subagent transcripts without waiting for startup ingestion, sending
 `POST /api/v1/sessions/sync`. If the refresh is refused or fails, the command
 returns archived totals with a warning and sets `refresh_incomplete: true` in
 JSON. While `GET /api/v1/sync/status` reports `startup_pending`,
-`archive_stale`, or `sync_pending`, a missing daemon ID returns a retry error;
-once all three are clear, it returns exit 2 without `--wait`.
+`archive_stale`, `upgrade_pending`, or `sync_pending`, a missing daemon ID
+returns a retry error; once all four are clear, it returns exit 2 without
+`--wait`. A scoped parser upgrade can keep saved usage readable while the status
+remains pending until a successful authoritative pass clears the marker.
 
 Pass `--wait` to give HTTP lookup, ingestion, and refresh a shared 30-second
 budget after daemon discovery. When startup is deferred, combined usage
@@ -1353,15 +1355,18 @@ still absent while work remains pending returns a retry error.
 Daemon API 15 adds `sync_pending`, which stays true while ingestion catches up
 after an idle period, so older local clients must upgrade to interpret it. The
 field and catch-up warning clear when the pass finishes or fails, and failures
-are logged. Archive responses include `X-Agentsview-Archive-Stale: true` when a
-catch-up of changes held back by the background sync interval or an idle pause
-does not finish within the read's wait. A read within two minutes of another
-archive read starts no catch-up; the watcher keeps syncing at `sync_interval`
-during that time, so the read can miss up to that interval of changes. If an
-earlier read's catch-up is still running, the read shares its remaining wait
-and is marked stale if that wait runs out. Otherwise, it answers at once and is
-not marked stale. A required parser rebuild sets the stale header
-independently.
+are logged. API 31 adds `upgrade_pending` for scoped parser freshness and
+`writes_paused` for an active writer handoff. An incomplete upgrade keeps the
+freshness warning after writes resume. `archive_stale` remains the full-rebuild
+signal. Archive-data API responses include `X-Agentsview-Archive-Stale: true`
+when a catch-up of changes held back by the background sync interval or an
+idle pause does not finish within the read's wait. A read within two minutes
+of another archive read starts no catch-up; the watcher keeps syncing at
+`sync_interval` during that time, so the read can miss up to that interval
+of changes. If an earlier read's catch-up is still running, the read shares
+its remaining wait and is marked stale if that wait runs out. Otherwise, it
+answers at once and is not marked stale. A required parser rebuild sets the
+stale header independently.
 
 With HTTP `--own-only`, the CLI reads usage from the archive and, if you pass
 `--wait`, can start deferred ingestion. HTTP `--no-sync` reads the archive and

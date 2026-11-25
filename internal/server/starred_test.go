@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -60,6 +61,57 @@ func TestStarSessionReturns503WhileWriterClosed(t *testing.T) {
 			assert.Contains(t, w.Body.String(), "archive is read-only for a maintenance pass; retry after it finishes")
 		})
 	}
+}
+
+func TestScopedUpgradeFreshnessOutlivesWriterPause(t *testing.T) {
+	te := setup(t)
+	te.seedSession(t, "s1", "alpha", 2)
+	require.NoError(t, te.db.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
+			"INSERT INTO stats(key, value) VALUES ('scoped_upgrade_pending', 1)",
+		)
+		return err
+	}))
+
+	type statusResponse struct {
+		ArchiveStale   bool `json:"archive_stale"`
+		UpgradePending bool `json:"upgrade_pending"`
+		WritesPaused   bool `json:"writes_paused"`
+	}
+	assertStatus := func(w *httptest.ResponseRecorder, upgradePending, writesPaused bool) {
+		t.Helper()
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		status := decode[statusResponse](t, w)
+		assert.False(t, status.ArchiveStale)
+		assert.Equal(t, upgradePending, status.UpgradePending)
+		assert.Equal(t, writesPaused, status.WritesPaused)
+	}
+
+	assertStatus(te.get(t, "/api/v1/sync/status"), true, false)
+	read := te.get(t, "/api/v1/sessions")
+	require.Equal(t, http.StatusOK, read.Code, read.Body.String())
+	assert.Equal(t, "true", read.Header().Get("X-Agentsview-Archive-Stale"))
+
+	require.NoError(t, te.db.CloseWriter())
+	t.Cleanup(func() {
+		if te.db.WriterClosed() {
+			assert.NoError(t, te.db.ReopenWriter())
+		}
+	})
+	assertStatus(te.get(t, "/api/v1/sync/status"), true, true)
+	blocked := te.put(t, "/api/v1/sessions/s1/star", `{}`)
+	require.Equal(t, http.StatusServiceUnavailable, blocked.Code, blocked.Body.String())
+	assert.Equal(t, "5", blocked.Header().Get("Retry-After"))
+
+	require.NoError(t, te.db.ReopenWriter())
+	assertStatus(te.get(t, "/api/v1/sync/status"), true, false)
+	assert.Equal(t, "true", te.get(t, "/api/v1/sessions").Header().Get("X-Agentsview-Archive-Stale"))
+
+	require.NoError(t, te.db.CompleteScopedUpgrade(t.Context()))
+	assertStatus(te.get(t, "/api/v1/sync/status"), false, false)
+	read = te.get(t, "/api/v1/sessions")
+	assert.Empty(t, read.Header().Get("X-Agentsview-Archive-Stale"))
+	assert.Equal(t, http.StatusNoContent, te.put(t, "/api/v1/sessions/s1/star", `{}`).Code)
 }
 
 func TestStarredHandlers(t *testing.T) {

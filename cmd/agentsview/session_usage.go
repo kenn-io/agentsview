@@ -390,14 +390,14 @@ func waitSessionUsageReady(ctx context.Context, baseURL, token string, backend s
 	}
 	id, err := backoff.Retry(ctx, func() (string, error) {
 		collectStart()
-		startup, stale, pending, statusErr := httpSessionSyncStatus(ctx, baseURL, token)
+		startup, stale, upgradePending, pending, statusErr := httpSessionSyncStatus(ctx, baseURL, token)
 		if statusErr != nil {
 			return resolvedID, sessionUsageRetryError(wait, fmt.Errorf("checking sync status: %w", statusErr))
 		}
-		if !wait && (startup || stale || pending) {
-			return resolvedID, backoff.Permanent(errors.New("session usage is not ready; wait for syncing or rebuilding to finish, then retry"))
+		if !wait && (startup || stale || upgradePending || pending) {
+			return resolvedID, backoff.Permanent(errors.New("session usage is not ready; wait for syncing, parser upgrades, or rebuilding to finish, then retry"))
 		}
-		if !startup && !stale && resolvedID == "" {
+		if !startup && !stale && !upgradePending && resolvedID == "" {
 			found, lookupErr := resolveServiceSessionID(ctx, backend, sessionID)
 			if lookupErr == nil {
 				resolvedID = found
@@ -410,7 +410,7 @@ func waitSessionUsageReady(ctx context.Context, baseURL, token string, backend s
 				return resolvedID, errSessionNotFound
 			}
 		}
-		if resolvedID != "" && !startup && !stale && (!pending || refresh) {
+		if resolvedID != "" && !startup && !stale && !upgradePending && (!pending || refresh) {
 			return resolvedID, nil
 		}
 		if startup && !stale && allowSync && !started {
@@ -456,24 +456,25 @@ func refreshSessionUsage(ctx context.Context, backend service.SessionService, id
 
 func httpSessionSyncStatus(
 	ctx context.Context, baseURL, token string,
-) (startupPending, archiveStale, syncPending bool, err error) {
+) (startupPending, archiveStale, upgradePending, syncPending bool, err error) {
 	api, err := apiclient.NewHTTPClient(baseURL, token, sessionUsageHTTPClient)
 	if err != nil {
-		return false, false, false, err
+		return false, false, false, false, err
 	}
 	response, err := api.GetAPIV1SyncStatusWithResponse(ctx)
 	if err != nil {
-		return false, false, false, err
+		return false, false, false, false, err
 	}
 	if response == nil {
-		return false, false, false, io.ErrUnexpectedEOF
+		return false, false, false, false, io.ErrUnexpectedEOF
 	}
 	if response.JSON200 == nil {
-		return false, false, false, fmt.Errorf(
+		return false, false, false, false, fmt.Errorf(
 			"sync status: HTTP %d: %s", response.StatusCode, response.Body,
 		)
 	}
-	return response.JSON200.StartupPending, response.JSON200.ArchiveStale, response.JSON200.SyncPending, nil
+	return response.JSON200.StartupPending, response.JSON200.ArchiveStale,
+		response.JSON200.UpgradePending, response.JSON200.SyncPending, nil
 }
 
 func storeSessionUsageData(

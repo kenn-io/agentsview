@@ -100,6 +100,8 @@
   "header_actions_keyboard_shortcuts": "Keyboard shortcuts",
   "header_actions_keyboard_shortcuts_shortcut": "Keyboard shortcuts (?)",
   "status_bar_archive_stale": "Some session results may be out of date.",
+  "status_bar_upgrade_pending": "Some session results may be out of date after a parser upgrade.",
+  "status_bar_writes_paused": "Archive changes are paused.",
   "status_bar_archive_rebuilding": "Some session results may be out of date. Changes are paused until rebuilding finishes.",
   "status_bar_archive_stale_rebuild": "Some session results may be out of date. Click to rebuild.",
   "status_bar_sync_failed": "Sync failed",

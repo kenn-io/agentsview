@@ -75,6 +75,9 @@
   let canRebuildArchive = $derived(!sync.syncing && !sync.readOnly && !sync.archiveOnly);
 
   let showSyncError = $derived(!sync.syncing && sync.lastSyncError !== null);
+  let showArchiveNotice = $derived(
+    sync.archiveStale || sync.syncPending || sync.upgradePending || sync.writesPaused,
+  );
 
   onMount(() => {
     const interval = window.setInterval(() => {
@@ -228,7 +231,7 @@
         {m.status_bar_version_mismatch()}
       </button>
     {/if}
-    {#if sync.archiveStale || sync.syncPending}
+    {#if showArchiveNotice}
       {#if sync.versionMismatch}<span class="sep">&middot;</span>{/if}
       {#if sync.archiveStale && sync.syncing && sync.progress?.resync}
         <span class="archive-warn" role="status">{m.status_bar_archive_rebuilding()}</span>
@@ -236,29 +239,34 @@
         <button class="archive-warn archive-rebuild" onclick={() => sync.triggerSync()}>
           {m.status_bar_archive_stale_rebuild()}
         </button>
+      {:else if sync.upgradePending}
+        <span class="archive-warn" role="status">{m.status_bar_upgrade_pending()}</span>
+        {#if sync.writesPaused}<span class="sep">&middot;</span><span class="archive-warn" role="status">{m.status_bar_writes_paused()}</span>{/if}
+      {:else if sync.writesPaused}
+        <span class="archive-warn" role="status">{m.status_bar_writes_paused()}</span>
       {:else}
         <span class="archive-warn" role="status">{m.status_bar_archive_stale()}</span>
       {/if}
     {/if}
     {#if showSyncError}
-      {#if sync.versionMismatch || sync.archiveStale || sync.syncPending}<span class="sep">&middot;</span>{/if}
+      {#if sync.versionMismatch || showArchiveNotice}<span class="sep">&middot;</span>{/if}
       <span class="sync-error" role="alert" title={sync.lastSyncError ?? undefined}>
         {m.status_bar_sync_failed()}
       </span>
     {/if}
     {#if progressText}
-      {#if sync.versionMismatch || sync.archiveStale || sync.syncPending || showSyncError}<span class="sep">&middot;</span>{/if}
+      {#if sync.versionMismatch || showArchiveNotice || showSyncError}<span class="sep">&middot;</span>{/if}
       <span class="sync-progress" title={progressTitle ?? undefined}>
         {progressText}
       </span>
     {:else if lastSyncText}
-      {#if sync.versionMismatch || sync.archiveStale || sync.syncPending || showSyncError}<span class="sep">&middot;</span>{/if}
+      {#if sync.versionMismatch || showArchiveNotice || showSyncError}<span class="sep">&middot;</span>{/if}
       <span title={lastSyncTimestamp ?? undefined}>
         {m.status_bar_synced_ago({ time: lastSyncText })}
       </span>
     {/if}
     {#if sync.serverVersion}
-      {#if sync.versionMismatch || sync.archiveStale || sync.syncPending || showSyncError || progressText || sync.lastSync}
+      {#if sync.versionMismatch || showArchiveNotice || showSyncError || progressText || sync.lastSync}
         <span class="sep">&middot;</span>
       {/if}
       <button

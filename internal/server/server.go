@@ -76,7 +76,7 @@ type VersionInfo struct {
 // Bump it when a client-visible contract cannot be decoded safely by an older
 // CLI or daemon.
 const (
-	APIVersion = 30
+	APIVersion = 31
 	// SyncPendingAPIVersion reports catch-up in sync status.
 	SyncPendingAPIVersion = 15
 	// UsageWaitAPIVersion supports bounded usage waits and safe refresh retries.
@@ -1067,10 +1067,14 @@ func (s *Server) archiveStaleMiddleware(next http.Handler) http.Handler {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			probe := archiveFreshnessProbe(r.URL.Path)
 			pending := false
+			scopedPending := false
 			if !probe && s.ingestionFreshness != nil && !archiveFreshnessExempt(r) {
 				pending = !s.ingestionFreshness.EnsureFresh(r.Context())
 			}
-			if !probe && (s.archiveStale() || pending) {
+			if !probe {
+				scopedPending = s.scopedUpgradePending(r.Context())
+			}
+			if !probe && (s.archiveStale() || pending || scopedPending) {
 				w.Header().Set(apiclient.ArchiveStaleHeader, "true")
 				// Session sync returns its stale-archive conflict through the route.
 				if s.archiveStale() && archiveWriteRequest(r) && r.URL.Path != "/api/v1/sessions/sync" {

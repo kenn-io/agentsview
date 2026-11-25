@@ -89,6 +89,20 @@ const firstScopedDataVersion = 131
 // reads waiting until a full sync pass has reparsed affected sources.
 const scopedUpgradePendingKey = "scoped_upgrade_pending"
 
+// ScopedUpgradePending reports whether a successful full sync pass still needs
+// to reparse the sources affected by a scoped parser upgrade.
+func (db *DB) ScopedUpgradePending(ctx context.Context) (bool, error) {
+	var pending bool
+	err := db.getReader().QueryRow(ctx,
+		"SELECT EXISTS(SELECT 1 FROM stats WHERE key = ? AND value > 0)",
+		scopedUpgradePendingKey,
+	).Scan(&pending)
+	if err != nil {
+		return false, fmt.Errorf("checking pending scoped upgrade: %w", err)
+	}
+	return pending, nil
+}
+
 // ScopedDataVersionProviders returns the providers to reparse when an
 // archive moves from one parser version to another. It returns nil when any
 // version in the range requires a full rebuild.

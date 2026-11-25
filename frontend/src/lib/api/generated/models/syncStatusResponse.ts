@@ -14,4 +14,8 @@ export interface SyncStatusResponse {
   stats: SyncSyncStats;
   /** Local ingestion is catching up after an idle period */
   sync_pending: boolean;
+  /** Some session results may be out of date after a scoped parser upgrade */
+  upgrade_pending: boolean;
+  /** Archive changes are paused during a maintenance pass */
+  writes_paused: boolean;
 }

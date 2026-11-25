@@ -2203,6 +2203,14 @@ AgentsView migrates the database automatically on startup when the schema
 changes. When a parser upgrade affects only some agents and the archive syncs
 source files, AgentsView reparses those agents' sessions in place and retries
 failed sources on later syncs. It serves saved sessions during the reparse.
+The status bar names the parser upgrade when some session results may be out of
+date, and archive-data API responses carry `X-Agentsview-Archive-Stale: true`
+until a successful authoritative pass clears the marker. This warning remains
+separate from `archive_stale`, which means a full rebuild is required.
+`/api/v1/sync/status` reports `upgrade_pending` and the live writer state in
+`writes_paused`. Writes receive HTTP 503 with `Retry-After: 5` only while a
+maintenance worker holds the writer. After an incomplete pass, writes resume
+while the stale warning remains.
 Other stale data versions trigger a full resync into a fresh temporary database,
 which copies preserved and orphaned session data from the previous database
 before swapping atomically. If a full resync
@@ -2746,8 +2754,9 @@ Check sync status:
 curl http://127.0.0.1:8080/api/v1/sync/status
 ```
 
-The JSON response includes `startup_pending`, `archive_stale`, and (starting
-with daemon API 15) `sync_pending` alongside sync progress. See the
+The JSON response includes `startup_pending`, `archive_stale`, and
+`upgrade_pending`, `writes_paused`, and (starting with daemon API 15)
+`sync_pending` alongside sync progress. See the
 [session usage contract](/docs/session-api/#agentsview-session-usage) for how
 `session usage --wait` uses these states.
 

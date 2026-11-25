@@ -55,6 +55,8 @@ type SyncRead = "status" | "stats" | "version";
 class SyncStore {
   archiveStale: boolean = $state(false);
   syncPending: boolean = $state(false);
+  upgradePending: boolean = $state(false);
+  writesPaused: boolean = $state(false);
 
   syncing: boolean = $state(false);
   // Message from the last sync or resync that failed, cleared when one
@@ -194,6 +196,8 @@ class SyncStore {
       this.lastSyncStats = status.stats ?? null;
       this.archiveStale = status.archive_stale === true;
       this.syncPending = status.sync_pending === true;
+      this.upgradePending = status.upgrade_pending === true;
+      this.writesPaused = status.writes_paused === true;
       const statusProgress = status.progress ?? null;
       let statusProgressCompleted = false;
       if (statusProgress) {

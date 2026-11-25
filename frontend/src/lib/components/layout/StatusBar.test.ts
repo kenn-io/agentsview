@@ -23,6 +23,8 @@ describe("StatusBar", () => {
     vi.setSystemTime(new Date("2026-04-08T05:00:00Z"));
     sync.archiveStale = false;
     sync.syncPending = false;
+    sync.upgradePending = false;
+    sync.writesPaused = false;
     sync.syncing = false;
     sync.progress = null;
     sync.lastSync = "2026-04-08T05:00:00Z";
@@ -48,6 +50,8 @@ describe("StatusBar", () => {
     sync.syncing = false;
     sync.archiveStale = false;
     sync.syncPending = false;
+    sync.upgradePending = false;
+    sync.writesPaused = false;
     sync.lastSyncError = null;
   });
 
@@ -77,6 +81,31 @@ describe("StatusBar", () => {
     sync.syncPending = false;
     await tick();
     expect(document.body.textContent).not.toContain("Some session results may be out of date.");
+    await unmount(component);
+  });
+
+  it("keeps upgrade freshness separate from the writer pause", async () => {
+    sync.upgradePending = true;
+    sync.writesPaused = true;
+    const component = mount(StatusBar, { target: document.body });
+    await tick();
+    expect(document.body.textContent).toContain(
+      "Some session results may be out of date after a parser upgrade.",
+    );
+    expect(document.body.textContent).toContain("Archive changes are paused.");
+
+    sync.writesPaused = false;
+    await tick();
+    expect(document.body.textContent).toContain(
+      "Some session results may be out of date after a parser upgrade.",
+    );
+    expect(document.body.textContent).not.toContain("Archive changes are paused.");
+
+    sync.upgradePending = false;
+    await tick();
+    expect(document.body.textContent).not.toContain(
+      "Some session results may be out of date after a parser upgrade.",
+    );
     await unmount(component);
   });
 
