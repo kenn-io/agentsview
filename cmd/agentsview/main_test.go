@@ -456,9 +456,10 @@ func TestServeLegacyImageTextHelperProcess(t *testing.T) {
 	writeDaemonRuntimeWithAuthAndNoSync = func(lifetime *daemonLifetime, dataDir, host string, port int, version, browserURL string, readOnly, requireAuth, noSync bool, explicitPort *int, caddyPID ...int) (string, error) {
 		base := fmt.Sprintf("http://%s:%d", host, port)
 		client := &http.Client{Timeout: 10 * time.Second, Transport: localTransport}
-		stale, _, _, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
+		_, fullRebuild, schemaRepair, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
 		require.NoError(t, err)
-		require.False(t, stale, "startup reconciliation must finish before readiness")
+		require.False(t, fullRebuild, "full rebuild must finish before readiness")
+		require.False(t, schemaRepair, "schema repair must finish before readiness")
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/sessions/session0/messages", nil)
 		require.NoError(t, err)
 		resp, err := client.Do(req)
