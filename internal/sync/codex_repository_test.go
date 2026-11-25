@@ -2,9 +2,9 @@ package sync
 
 import (
 	"database/sql"
-	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -261,7 +261,7 @@ func TestCodexLabeledRunResyncAndExplicitWorktreeMappingWins(t *testing.T) {
 
 func TestCodexLabeledOverlappingRootsSync(t *testing.T) {
 	for _, innerFirst := range []bool{false, true} {
-		t.Run(fmt.Sprint(innerFirst), func(t *testing.T) {
+		t.Run(strconv.FormatBool(innerFirst), func(t *testing.T) {
 			root := t.TempDir()
 			const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 			path := filepath.Join(root, "team", "case", ".codex-run-v1-abc", "sessions", "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")

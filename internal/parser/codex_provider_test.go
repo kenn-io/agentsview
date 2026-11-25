@@ -2505,8 +2505,8 @@ func TestCodexLabeledFindSourceRanksAllDatedCopies(t *testing.T) {
 		filepath.Join(root, "z", ".codex-run-v1-abc", "sessions", "2026", "10", "08", name),
 	}
 	for i, path := range paths {
-		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0755))
-		require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0644))
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o644))
 		mtime := time.Now().Add(time.Duration([]int{0, 2, 1}[i]) * time.Hour)
 		require.NoError(t, os.Chtimes(path, mtime, mtime))
 	}
