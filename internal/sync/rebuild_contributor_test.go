@@ -1429,3 +1429,60 @@ func TestResyncOrphanRelinkCountsAndAbortsOnFailure(t *testing.T) {
 		})
 	}
 }
+
+func TestSyncThenRunReportsSwapFailureWithoutIncrementalFallback(t *testing.T) {
+	root := t.TempDir()
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine := NewEngine(t.Context(), database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
+		Machine:   "local",
+	})
+	t.Cleanup(engine.Close)
+	writeSession := func(name, text string) {
+		path := filepath.Join(root, "project", name+".jsonl")
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(testjsonl.NewSessionBuilder().
+			AddClaudeUser("2026-01-01T00:00:00Z", text).String()), 0o644))
+	}
+	writeSession("old", "already archived")
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	// An incremental fallback pass would import this file into the
+	// original archive and report the discarded rebuild as a sync.
+	writeSession("added", "arrives after the first sync")
+
+	restore := db.SetCloseDrainTimeoutForTest(100 * time.Millisecond)
+	defer restore()
+	pinned, err := database.Reader().Query(t.Context(), "SELECT 1")
+	require.NoError(t, err)
+	pinnedOpen := true
+	defer func() {
+		if pinnedOpen {
+			require.NoError(t, pinned.Err())
+			require.NoError(t, pinned.Close())
+		}
+	}()
+
+	workCalls := 0
+	stats, err := engine.SyncThenRun(t.Context(), true, nil,
+		func(bool) error { workCalls++; return nil })
+	require.NoError(t, pinned.Err())
+	require.NoError(t, pinned.Close())
+	pinnedOpen = false
+
+	require.Error(t, err, "a rebuild that was not installed must fail the sync")
+	assert.Contains(t, err.Error(), "full resync not installed, archive unchanged")
+	assert.True(t, stats.Aborted)
+	assert.False(t, stats.ArchiveRebuilt)
+	assert.Zero(t, workCalls, "work must not run after a failed rebuild")
+	require.NotEmpty(t, stats.Warnings)
+	assert.Contains(t, stats.Warnings[0], "close before swap failed")
+	added, err := database.GetSession(t.Context(), "added")
+	require.NoError(t, err)
+	assert.Nil(t, added, "no incremental pass may run after a failed rebuild")
+	old, err := database.GetSession(t.Context(), "old")
+	require.NoError(t, err)
+	assert.NotNil(t, old, "the original archive stays in place")
+	assert.NoFileExists(t, database.Path()+resyncTempSuffix)
+}

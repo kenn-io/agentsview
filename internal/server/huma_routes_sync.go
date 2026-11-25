@@ -37,7 +37,7 @@ func (s *Server) registerSyncRoutes() {
 }
 
 func syncEventDescription(op *huma.Operation) {
-	op.Description = "Streams progress and done events. An error event preserves the error text and may include code sync_running when a sync is already running. Other errors omit code."
+	op.Description = "Streams progress and done events. An error event preserves the error text and may include code sync_running when a sync is already running, or archive_busy when another connection holds a read transaction on the archive. Other errors omit code."
 }
 
 type syncStatusResponse struct {
@@ -73,10 +73,17 @@ type remoteSyncRequest struct {
 	Hosts            []config.RemoteHost `json:"hosts"`
 }
 
+// archiveBusyCode marks a sync error caused by another connection holding a
+// read transaction on the archive, so the WAL checkpoint could not finish.
+const archiveBusyCode = "archive_busy"
+
 func syncErrorPayload(err error) map[string]string {
 	payload := map[string]string{"error": err.Error()}
-	if errors.Is(err, syncpkg.ErrSyncInProgress) {
+	switch {
+	case errors.Is(err, syncpkg.ErrSyncInProgress):
 		payload["code"] = "sync_running"
+	case errors.Is(err, db.ErrWALCheckpointBusy):
+		payload["code"] = archiveBusyCode
 	}
 	return payload
 }

@@ -2733,13 +2733,17 @@ func (e *Engine) ResyncAll(
 	defer e.clearCurrentProgress()
 	defer func() { e.recordStartupReconciled(ctx, stats, nil) }()
 
-	return e.resyncAllLocked(ctx, onProgress)
+	stats, _ = e.resyncAllLocked(ctx, onProgress)
+	return stats
 }
 
+// resyncAllLocked returns the rebuild's error alongside its stats. An error
+// means the replacement was not installed for an operational reason, such as
+// a swap that another connection blocked, rather than a safety abort.
 func (e *Engine) resyncAllLocked(
 	ctx context.Context, onProgress ProgressFunc,
-) (stats SyncStats) {
-	stats, _ = e.resyncAllWithOptionsLocked(
+) (stats SyncStats, err error) {
+	stats, err = e.resyncAllWithOptionsLocked(
 		ctx, onProgress, RebuildOptions{}, productionRebuildOperations,
 	)
 	// Preserve the legacy result shape; phase diagnostics are part of the
@@ -2748,7 +2752,7 @@ func (e *Engine) resyncAllLocked(
 	e.mu.Lock()
 	e.lastSyncStats = stats
 	e.mu.Unlock()
-	return stats
+	return stats, err
 }
 
 // ResyncAllWithOptions atomically rebuilds the archive from the local sources
@@ -2969,6 +2973,7 @@ func (e *Engine) swapResyncDatabaseLocked(
 		stats.Warnings = append(stats.Warnings,
 			"close before swap failed: "+err.Error(),
 		)
+		err = fmt.Errorf("full resync not installed, archive unchanged: %w", err)
 		removeTempDB(tempPath)
 		// Connections may be partially closed; reopen to restore service.
 		if rerr := origDB.Reopen(); rerr != nil {
@@ -3376,7 +3381,14 @@ func (e *Engine) syncThenRunLocked(
 	}
 	didResync := full || e.db.NeedsResync()
 	if didResync {
-		stats = e.resyncAllLocked(ctx, onProgress)
+		var resyncErr error
+		stats, resyncErr = e.resyncAllLocked(ctx, onProgress)
+		if resyncErr != nil && ctx.Err() == nil {
+			// The rebuild failed operationally and was discarded. Report
+			// that instead of an incremental pass that would read as a
+			// successful sync, matching the worker-backed resync.
+			return stats, resyncErr
+		}
 		if stats.Aborted && ctx.Err() == nil {
 			stats = e.syncAllLocked(
 				ctx, onProgress, time.Time{}, nil,

@@ -2432,7 +2432,18 @@ func (p *resyncProgressPrinter) Finish() {
 	p.finishCurrent()
 }
 
+// Fail ends the output for a resync that failed, so its last phase does not
+// read as completed.
+func (p *resyncProgressPrinter) Fail() {
+	p.finished = true
+	p.endCurrent("stopped after")
+}
+
 func (p *resyncProgressPrinter) finishCurrent() {
+	p.endCurrent("completed in")
+}
+
+func (p *resyncProgressPrinter) endCurrent(outcome string) {
 	if p.label == "" {
 		return
 	}
@@ -2440,7 +2451,7 @@ func (p *resyncProgressPrinter) finishCurrent() {
 		fmt.Fprint(p.w, "\n")
 	}
 	elapsed := p.now().Sub(p.started).Round(time.Millisecond)
-	fmt.Fprintf(p.w, "  %s completed in %s\n", p.label, elapsed)
+	fmt.Fprintf(p.w, "  %s %s %s\n", p.label, outcome, elapsed)
 	p.label = ""
 	p.started = time.Time{}
 	p.inPlace = false

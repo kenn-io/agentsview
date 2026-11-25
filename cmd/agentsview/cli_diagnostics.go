@@ -297,6 +297,13 @@ func applyCLIRecovery(cmd *cobra.Command, err error, d *cliDiagnosticError) {
 		d.hint = configRecoveryHint
 		return
 	}
+	if errors.Is(err, db.ErrWALCheckpointBusy) {
+		d.display = "another connection holds a read transaction on the archive, " +
+			"so its WAL checkpoint could not finish: " + err.Error()
+		d.hint = "close other programs reading sessions.db, such as a sqlite3 shell, then retry; " +
+			commandHelpHint(cmd)
+		return
+	}
 	if errors.Is(err, errSessionNotFound) {
 		d.kind, d.hint = "not_found", sessionLookupHint
 		return

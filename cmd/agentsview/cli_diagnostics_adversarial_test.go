@@ -252,3 +252,29 @@ func TestCLIRecoveryHiddenLineagesKeepProtocol(t *testing.T) {
 		assert.Equal(ht, "fatal: "+message+"\n", stderr.String())
 	}, hegel.WithTestCases(1000))
 }
+
+func TestCLIRecoveryWALCheckpointBusyNamesTheReader(t *testing.T) {
+	cmd, _, err := newRootCommand().Find([]string{"source", "sync"})
+	require.NoError(t, err)
+	_, daemonErr := consumeDaemonSyncEvents(daemonEventStream(strings.NewReader(
+		"event: error\n" +
+			`data: {"code":"archive_busy","error":"swap resync database: final wal checkpoint: wal checkpoint busy"}` +
+			"\n\n",
+	)))
+	require.ErrorIs(t, daemonErr, db.ErrWALCheckpointBusy)
+	for name, cause := range map[string]error{
+		"local": fmt.Errorf("local sync: full resync not installed, archive unchanged: final wal checkpoint: %w",
+			db.ErrWALCheckpointBusy),
+		"daemon": fmt.Errorf("daemon sync: %w", daemonErr),
+	} {
+		t.Run(name, func(t *testing.T) {
+			diagnostic := &cliDiagnosticError{err: cause}
+			applyCLIRecovery(cmd, cause, diagnostic)
+			var output bytes.Buffer
+			writeCLIDiagnostic(&output, diagnostic)
+			assert.Contains(t, output.String(), "another connection holds a read transaction on the archive")
+			assert.Contains(t, output.String(), "close other programs reading sessions.db")
+			assert.NotContains(t, output.String(), "remote_hosts")
+		})
+	}
+}
