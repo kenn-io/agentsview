@@ -161,7 +161,8 @@ func TestDashboardPartsReuseAcrossAgentAndDateFilters(t *testing.T) {
 	_, _, handled, err = d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC"})
 	require.NoError(t, err)
 	require.True(t, handled)
-	d.dashboardMemo.slot, d.dashboardMemo.version, d.dashboardMemo.parts, d.dashboardMemo.bytes = "", "", nil, 0
+	d.dashboardMemo.slot, d.dashboardMemo.version = "", ""
+	d.dashboardMemo.boundedLRU.reset()
 	_, _, handled, err = d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC"})
 	require.NoError(t, err)
 	require.True(t, handled)
@@ -394,6 +395,65 @@ func TestDashboardPartsReleasesScanPermitBeforeFill(t *testing.T) {
 	}
 }
 
+func TestDashboardPartsMemoOversizedBatchPreservesHotParts(t *testing.T) {
+	part := func(id string) kept.Part[dashboardPart] { return kept.Part[dashboardPart]{ID: id, Fingerprint: "v"} }
+	memo := dashboardPartsMemo{maxBytes: 2 * dashboardPartBytes(part("a"))}
+	memo.store("UTC", "version", map[string]kept.Part[dashboardPart]{"a": part("a")})
+	memo.store("UTC", "version", map[string]kept.Part[dashboardPart]{"b": part("b"), "c": part("c"), "d": part("d")})
+	got := make(map[string]kept.Part[dashboardPart])
+	assert.Empty(t, memo.reuse("UTC", "version", []string{"a"}, map[string]string{"a": "v"}, got))
+}
+
+func TestDashboardPartsBroadSelectionPreservesHotParts(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	for _, id := range []string{"a", "b", "c"} {
+		insertSession(t, d, id, id, func(s *Session) { s.Agent = "codex" })
+		insertMessages(t, d, userMsgAt(id, 0, "hello", "2024-06-01T09:00:00Z"))
+	}
+	var reads [][]string
+	dashboardPartsReadObserver = func(ids []string) { reads = append(reads, append([]string(nil), ids...)) }
+	t.Cleanup(func() { dashboardPartsReadObserver = nil })
+	_, _, handled, err := d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC", Project: "a"})
+	require.NoError(t, err)
+	require.True(t, handled)
+	d.dashboardMemo.maxBytes = 2 * d.dashboardMemo.bytes
+	_, _, handled, err = d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC"})
+	require.NoError(t, err)
+	require.True(t, handled)
+	_, _, handled, err = d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC", Project: "a", Agent: "codex"})
+	require.NoError(t, err)
+	require.True(t, handled)
+	assert.Equal(t, [][]string{{"a"}, {"b", "c"}}, reads)
+}
+
+func TestDashboardPartsWarmDiskDoesNotDisplaceMemo(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	for _, id := range []string{"a", "b", "c"} {
+		insertSession(t, d, id, id, func(s *Session) { s.Agent = "codex" })
+		insertMessages(t, d, userMsgAt(id, 0, "hello", "2024-06-01T09:00:00Z"))
+	}
+	_, _, handled, err := d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC", Project: "a"})
+	require.NoError(t, err)
+	require.True(t, handled)
+	d.dashboardMemo.slot, d.dashboardMemo.version = "", ""
+	d.dashboardMemo.boundedLRU.reset()
+	for _, id := range []string{"b", "c"} {
+		_, _, handled, err = d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC", Project: id})
+		require.NoError(t, err)
+		require.True(t, handled)
+	}
+	d.dashboardMemo.maxBytes = d.dashboardMemo.bytes
+	_, _, handled, err = d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC", Project: "a"})
+	require.NoError(t, err)
+	require.True(t, handled)
+	assert.Contains(t, d.dashboardMemo.entries, "b")
+	assert.Contains(t, d.dashboardMemo.entries, "c")
+}
+
 func TestDashboardPartsMemoSkipsOversizedPart(t *testing.T) {
 	small := kept.Part[dashboardPart]{ID: "a", Fingerprint: "v"}
 	large := kept.Part[dashboardPart]{ID: "b", Fingerprint: "v", Value: dashboardPart{Velocity: SessionVelocity{TurnCycles: make([]float64, 1)}}}
@@ -438,22 +498,7 @@ func TestDashboardPartsMemoStaleReuseDoesNotPromote(t *testing.T) {
 	memo.store("UTC", "version", map[string]kept.Part[dashboardPart]{"a": part("a"), "b": part("b")})
 	assert.Equal(t, []string{"a"}, memo.reuse("UTC", "version", []string{"a"}, map[string]string{"a": "new"}, make(map[string]kept.Part[dashboardPart])))
 	memo.store("UTC", "version", map[string]kept.Part[dashboardPart]{"c": part("c")})
-	assert.NotContains(t, memo.parts, "a")
-}
-
-func TestDashboardPartsMemoOverBudgetBatchIsDeterministic(t *testing.T) {
-	parts := make(map[string]kept.Part[dashboardPart])
-	for _, id := range []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"} {
-		parts[id] = kept.Part[dashboardPart]{ID: id, Fingerprint: "v"}
-	}
-	for range 2 {
-		memo := dashboardPartsMemo{maxBytes: 4 * dashboardPartBytes(parts["a"])}
-		memo.store("UTC", "version", parts)
-		assert.Len(t, memo.parts, 4)
-		for _, id := range []string{"g", "h", "i", "j"} {
-			assert.Contains(t, memo.parts, id)
-		}
-	}
+	assert.NotContains(t, memo.entries, "a")
 }
 
 func TestDashboardPartsMemoAccounting(t *testing.T) {
@@ -465,7 +510,7 @@ func TestDashboardPartsMemoAccounting(t *testing.T) {
 	assert.Equal(t, dashboardPartBytes(a)+dashboardPartBytes(b), memo.bytes)
 	memo.store("UTC", "version", map[string]kept.Part[dashboardPart]{"c": c})
 	assert.Equal(t, dashboardPartBytes(b)+dashboardPartBytes(c), memo.bytes)
-	assert.NotContains(t, memo.parts, "a")
+	assert.NotContains(t, memo.entries, "a")
 }
 
 func TestDashboardPartsWorksWhenWriterClosed(t *testing.T) {

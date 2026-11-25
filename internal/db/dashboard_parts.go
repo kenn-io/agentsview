@@ -1,7 +1,6 @@
 package db
 
 import (
-	"container/list"
 	"context"
 	"crypto/sha256"
 	"encoding/json/v2"
@@ -37,10 +36,8 @@ type dashboardSession struct {
 type dashboardPartsMemo struct {
 	mu            sync.Mutex
 	slot, version string
-	parts         map[string]*list.Element
-	order         list.List
-	bytes         int64
-	maxBytes      int64
+	boundedLRU[string, kept.Part[dashboardPart]]
+	maxBytes int64
 }
 
 // reuse copies parts whose fingerprint matches into parts and returns the ids still to read.
@@ -51,7 +48,7 @@ func (m *dashboardPartsMemo) reuse(slot, version string, ids []string, versions 
 		return ids
 	}
 	return slices.DeleteFunc(ids, func(id string) bool {
-		item := m.parts[id]
+		item := m.entries[id]
 		if item == nil {
 			return false
 		}
@@ -66,6 +63,10 @@ func (m *dashboardPartsMemo) reuse(slot, version string, ids []string, versions 
 }
 
 func (m *dashboardPartsMemo) store(slot, version string, parts map[string]kept.Part[dashboardPart]) {
+	m.storeParts(slot, version, parts, parts, false)
+}
+
+func (m *dashboardPartsMemo) storeParts(slot, version string, parts, selection map[string]kept.Part[dashboardPart], onlyEmpty bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	maxBytes := m.maxBytes
@@ -74,34 +75,24 @@ func (m *dashboardPartsMemo) store(slot, version string, parts map[string]kept.P
 	}
 	if m.slot != slot || m.version != version {
 		m.slot, m.version = slot, version
-		m.parts = make(map[string]*list.Element)
-		m.order.Init()
-		m.bytes = 0
+		m.boundedLRU.reset()
 	}
-	for _, id := range slices.Sorted(maps.Keys(parts)) {
-		m.add(id, parts[id], maxBytes)
-	}
-}
-
-func (m *dashboardPartsMemo) add(id string, p kept.Part[dashboardPart], maxBytes int64) {
-	if old := m.parts[id]; old != nil {
-		m.bytes -= dashboardPartBytes(old.Value.(kept.Part[dashboardPart]))
-		m.order.Remove(old)
-		delete(m.parts, id)
-	}
-	cost := dashboardPartBytes(p)
-	if cost > maxBytes {
+	if onlyEmpty && len(m.entries) > 0 {
 		return
 	}
-	m.parts[id] = m.order.PushBack(p)
-	m.bytes += cost
-	for m.bytes > maxBytes {
-		old := m.order.Front()
-		part := old.Value.(kept.Part[dashboardPart])
-		delete(m.parts, part.ID)
-		m.bytes -= dashboardPartBytes(part)
-		m.order.Remove(old)
+	var total int64
+	for _, p := range selection {
+		total += dashboardPartBytes(p)
+		if total > maxBytes {
+			return
+		}
 	}
+	for _, id := range slices.Sorted(maps.Keys(parts)) {
+		p := parts[id]
+		m.remove(id, dashboardPartBytes)
+		m.add(id, p, dashboardPartBytes(p))
+	}
+	m.trim(maxBytes, func(p kept.Part[dashboardPart]) string { return p.ID }, dashboardPartBytes)
 }
 
 func dashboardPartBytes(p kept.Part[dashboardPart]) int64 {
@@ -199,7 +190,9 @@ func (db *DB) dashboardParts(ctx context.Context, f AnalyticsFilter) ([]dashboar
 			}
 		}
 		sort.Strings(ids)
-		ids = db.dashboardMemo.reuse("dashboard-parts|"+TrendsTimezoneKey(f), version, ids, versions, parts)
+		memoSlot := "dashboard-parts|" + TrendsTimezoneKey(f)
+		db.dashboardMemo.storeParts(memoSlot, version, parts, parts, true)
+		ids = db.dashboardMemo.reuse(memoSlot, version, ids, versions, parts)
 		if len(ids) > 0 {
 			if dashboardPartsReadObserver != nil {
 				dashboardPartsReadObserver(ids)
@@ -208,7 +201,13 @@ func (db *DB) dashboardParts(ctx context.Context, f AnalyticsFilter) ([]dashboar
 				return dashboardPartsResult{}, err
 			}
 		}
-		db.dashboardMemo.store("dashboard-parts|"+TrendsTimezoneKey(f), version, parts)
+		if len(ids) > 0 {
+			filled := make(map[string]kept.Part[dashboardPart], len(ids))
+			for _, id := range ids {
+				filled[id] = parts[id]
+			}
+			db.dashboardMemo.storeParts(memoSlot, version, filled, parts, false)
+		}
 		if len(changed) > 0 {
 			saveDashboardParts(db, slot, version, parts)
 		}

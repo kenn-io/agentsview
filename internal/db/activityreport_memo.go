@@ -1,7 +1,6 @@
 package db
 
 import (
-	"container/list"
 	"context"
 	"encoding/json/v2"
 	"fmt"
@@ -87,9 +86,7 @@ func (c *activityMemoCounted) bytes() int64 {
 type activityCandidateMemo struct {
 	mu         sync.Mutex
 	generation uint64
-	entries    map[activityMemoKey]*list.Element
-	order      list.List
-	bytes      int64
+	boundedLRU[activityMemoKey, activityMemoEntry]
 }
 
 func (m *activityCandidateMemo) swap(swap func()) {
@@ -97,9 +94,7 @@ func (m *activityCandidateMemo) swap(swap func()) {
 	defer m.mu.Unlock()
 	swap()
 	m.generation++
-	m.entries = nil
-	m.order.Init()
-	m.bytes = 0
+	m.boundedLRU.reset()
 }
 
 func (m *activityCandidateMemo) store(generation uint64, entries ...activityMemoEntry) {
@@ -108,27 +103,13 @@ func (m *activityCandidateMemo) store(generation uint64, entries ...activityMemo
 	if generation != m.generation {
 		return
 	}
-	if m.entries == nil {
-		m.entries = make(map[activityMemoKey]*list.Element)
+	for _, entry := range entries {
+		m.remove(entry.key, activityMemoEntry.bytes)
 	}
 	for _, entry := range entries {
-		if old := m.entries[entry.key]; old != nil {
-			m.bytes -= old.Value.(activityMemoEntry).bytes()
-			m.order.Remove(old)
-			delete(m.entries, entry.key)
-		}
+		m.add(entry.key, entry, entry.bytes())
 	}
-	for _, entry := range entries {
-		m.entries[entry.key] = m.order.PushBack(entry)
-		m.bytes += entry.bytes()
-	}
-	for m.bytes > activityMemoMaxBytes {
-		old := m.order.Front()
-		e := old.Value.(activityMemoEntry)
-		delete(m.entries, e.key)
-		m.bytes -= e.bytes()
-		m.order.Remove(old)
-	}
+	m.trim(activityMemoMaxBytes, func(e activityMemoEntry) activityMemoKey { return e.key }, activityMemoEntry.bytes)
 }
 
 // activityReportCandidateSource streams the sessions' candidates that start
