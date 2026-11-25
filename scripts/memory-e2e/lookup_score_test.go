@@ -90,6 +90,12 @@ func TestLookupCountsEmptyMessageAndToolCallResults(t *testing.T) {
 	}
 }
 
+func TestLookupTraceSetupError(t *testing.T) {
+	assert.True(t, lookupTraceSetupError([]byte(`{"type":"result","is_error":true,"result":"invalid model"}`)))
+	assert.True(t, lookupTraceSetupError([]byte(`{"type":"result","is_error":true,"result":"authentication required"}`)))
+	assert.False(t, lookupTraceSetupError([]byte(`{"type":"result","is_error":true,"result":"maximum turns reached"}`)))
+}
+
 func TestLookupScoresSearchResult(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	dbtest.SeedSession(t, d, lookupID, "example", dbtest.WithMessageCounts(2, 1))
@@ -297,6 +303,29 @@ func TestLookupDirectSessionResult(t *testing.T) {
 	assert.Equal(t, 1, score.Direct)
 	require.NotNil(t, score.CallsToHit)
 	assert.Equal(t, 1, *score.CallsToHit)
+}
+
+func TestLookupCLIMessageReadAttribution(t *testing.T) {
+	item := lookupItem{SessionID: "codex:" + lookupID}
+	for _, tc := range []struct {
+		name, input string
+		verdict     string
+	}{
+		{"command", "agentsview session messages " + item.SessionID, "success"},
+		{"shell input", `{"command":"agentsview session messages ` + item.SessionID + `"}`, "success"},
+		{"combined commands", "agentsview session messages " + item.SessionID + " && echo unrelated", "unscored"},
+		{"different command", "agentsview session list " + item.SessionID, "unscored"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			call := lookupCall{Route: "cli", Input: tc.input, Result: "violet ledger", Start: 1, End: 2}
+			score := scoreLookup(item.SessionID+" violet ledger", []lookupItem{item}, []string{"violet ledger"}, []lookupCall{call}, nil)
+			assert.Equal(t, tc.verdict, score.Verdict)
+			if tc.verdict == "success" {
+				require.NotNil(t, score.CallsToHit)
+				assert.Equal(t, 1, *score.CallsToHit)
+			}
+		})
+	}
 }
 
 func TestLookupDirectSessionInInput(t *testing.T) {

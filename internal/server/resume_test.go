@@ -44,7 +44,7 @@ func TestShellQuote(t *testing.T) {
 		{"alphanumeric", "session42", "session42"},
 		{"with colon", "a:b", "'a:b'"},
 		{"with spaces", "has space", "'has space'"},
-		{"with single quote", "it's", `'it'"'"'s'`},
+		{"with single quote", "it's", `'it'\''s'`},
 		{"command injection attempt", "$(whoami)", "'$(whoami)'"},
 		{"backtick injection", "`rm -rf /`", "'`rm -rf /`'"},
 		{"semicolon", "id;rm -rf /", "'id;rm -rf /'"},

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,6 +28,7 @@ func TestLookupIsolationReadsOnlyFixtureHome(t *testing.T) {
 	// The sandbox replaces /tmp, so keep the test home outside it.
 	t.Setenv("TMPDIR", tempRoot)
 	base := t.TempDir()
+	require.NoError(t, os.Chmod(base, 0o700))
 	home := filepath.Join(base, "home")
 	clientDir := filepath.Join(home, "fixture")
 	project := filepath.Join(clientDir, "project")
@@ -61,4 +63,33 @@ func TestLookupIsolationReadsOnlyFixtureHome(t *testing.T) {
 	isolation.removeCredentials()
 	_, err = os.Stat(filepath.Join(runDir, "home", ".codex", "auth.json"))
 	assert.ErrorIs(t, err, os.ErrNotExist)
+
+	require.NoError(t, os.Remove(filepath.Join(home, ".codex", "auth.json")))
+	_, err = prepareLookupIsolation(t.Context(), clientCodex, clientDir, project, bin, filepath.Join(clientDir, "missing-auth"))
+	require.ErrorContains(t, err, "missing codex credentials")
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".codex", "auth.json"), []byte("{}"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "codex"), []byte("#!/bin/sh\nprintf '%s\\n' '{\"type\":\"turn.failed\",\"error\":{\"message\":\"invalid model\"}}'\nexit 1\n"), 0o700))
+	_, _, err = captureLookup(t.Context(), config{timeout: 10 * time.Second}, bin, clientCodex, project, "invalid-model", "", "question", filepath.Join(clientDir, "bad-model"))
+	require.ErrorIs(t, err, errLookupSetup)
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "codex"), []byte("#!/bin/sh\nprintf '%s\\n' '{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"mcp__agentsview__search_content\",\"call_id\":\"x\",\"arguments\":\"{}\"}}' '{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"x\",\"output\":\"no result\"}}'\nexit 1\n"), 0o700))
+	_, _, err = captureLookup(t.Context(), config{timeout: 10 * time.Second}, bin, clientCodex, project, "model", "", "question", filepath.Join(clientDir, "task-failure"))
+	require.ErrorIs(t, err, errLookupClientFailed)
+	assert.NotErrorIs(t, err, errLookupSetup)
+}
+
+func TestLookupMissingClientSetupFails(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	_, _, err := captureLookup(t.Context(), config{}, "", clientClaude, t.TempDir(), "", "", "", t.TempDir())
+	require.ErrorIs(t, err, errLookupSetup)
+}
+
+func TestLookupRefusesPopulatedOutput(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "existing")
+	require.NoError(t, os.WriteFile(path, []byte("preserve"), 0o600))
+	err := run(t.Context(), config{suite: "lookups", outputDir: dir})
+	require.ErrorContains(t, err, "output directory")
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "preserve", string(data))
 }

@@ -76,6 +76,8 @@ type lookupReport struct {
 	Clients    []lookupClientReport `json:"clients"`
 }
 
+var errLookupSetup = errors.New("lookup client setup failed")
+
 func readLookupJSON(path string, dst any) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -258,6 +260,9 @@ func runLookupClient(
 			runDir := filepath.Join(dir, q.Name, fmt.Sprintf("run-%d", i))
 			started := time.Now()
 			calls, answer, runErr := captureLookup(ctx, cfg, bin, client, project, model, server.url, lookupPrompt(q), runDir)
+			if errors.Is(runErr, errLookupSetup) {
+				return report, runErr
+			}
 			a := &report.Attempts[index]
 			a.DurationMS = time.Since(started).Milliseconds()
 			a.Error = scoreError(runErr)
@@ -287,11 +292,11 @@ func lookupPrompt(q lookupQuestion) string {
 
 func captureLookup(ctx context.Context, cfg config, bin string, client clientName, project, model, serverURL, prompt, dir string) ([]lookupCall, string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("%w: create attempt: %v", errLookupSetup, err)
 	}
 	isolation, err := prepareLookupIsolation(ctx, client, filepath.Dir(project), project, bin, dir)
 	if err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("%w: %s: %v", errLookupSetup, client, err)
 	}
 	defer isolation.removeCredentials()
 	var args []string
@@ -310,24 +315,42 @@ func captureLookup(ctx context.Context, cfg config, bin string, client clientNam
 	defer cancel()
 	outcome, err := capture.Run(runCtx, capture.RunOptions{Provider: capture.Provider(client), OccurrenceID: newUUID(), CaptureDir: filepath.Join(dir, "capture"), ResultPath: filepath.Join(dir, "capture-result.json"), ProviderRoot: isolation.providerRoot, WorkDir: project, Command: args, Environment: isolation.env, Streams: capture.Streams{Stdout: &stdout, Stderr: &stderr}})
 	if writeErr := os.WriteFile(filepath.Join(dir, "trace.jsonl"), stdout.Bytes(), 0o600); writeErr != nil {
-		return nil, "", writeErr
+		return nil, "", fmt.Errorf("%w: write trace: %v", errLookupSetup, writeErr)
 	}
 	if writeErr := os.WriteFile(filepath.Join(dir, "stderr.txt"), stderr.Bytes(), 0o600); writeErr != nil {
-		return nil, "", writeErr
+		return nil, "", fmt.Errorf("%w: write stderr: %v", errLookupSetup, writeErr)
 	}
 	parsed, parseErr := parseAgentTrace(client, stdout.Bytes())
 	calls, captureErr := readLookupTranscriptCalls(client, dir, stdout.Bytes())
 	var runErr error
 	if runCtx.Err() != nil {
 		runErr = runCtx.Err()
+	} else if len(calls) == 0 && lookupTraceSetupError(stdout.Bytes()) {
+		runErr = fmt.Errorf("%w: %s: %s %s", errLookupSetup, client, parsed.FinalAnswer, strings.TrimSpace(stderr.String()))
 	} else if outcome.Execution.ExitCode == nil || *outcome.Execution.ExitCode != 0 {
 		runErr = fmt.Errorf("%w: exit %d: %v", errLookupClientFailed, outcome.ExitCode, err)
+		if len(calls) == 0 && parsed.FinalAnswer == "" {
+			runErr = fmt.Errorf("%w: %s: exit %d: %v: %s", errLookupSetup, client, outcome.ExitCode, err, strings.TrimSpace(stderr.String()))
+		}
 	} else if parseErr != nil {
 		runErr = fmt.Errorf("%w: parse trace: %v", errCaptureIncomplete, parseErr)
 	} else if err != nil {
 		runErr = fmt.Errorf("%w: %v", errCaptureIncomplete, err)
 	}
 	return calls, parsed.FinalAnswer, errors.Join(runErr, captureErr)
+}
+
+func lookupTraceSetupError(trace []byte) bool {
+	found := false
+	_ = scanJSONLEvents(trace, 4*1024*1024, false, func(event map[string]any) {
+		if event["type"] == "result" && event["is_error"] == true {
+			message := strings.ToLower(rawText(event["result"]))
+			for _, term := range []string{"model", "auth", "credential", "log in", "login", "sign in", "unauthorized"} {
+				found = found || strings.Contains(message, term)
+			}
+		}
+	})
+	return found
 }
 
 func readLookupTranscriptCalls(

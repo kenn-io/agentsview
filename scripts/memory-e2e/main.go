@@ -260,6 +260,15 @@ func sourceFollowUpPrompt() string {
 }
 
 func run(ctx context.Context, cfg config) error {
+	if cfg.suite == "lookups" {
+		entries, err := os.ReadDir(cfg.outputDir)
+		if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("memory-e2e: read output: %w", err)
+		}
+		if len(entries) > 0 {
+			return fmt.Errorf("memory-e2e: output directory %q is not empty", cfg.outputDir)
+		}
+	}
 	if err := os.MkdirAll(cfg.outputDir, 0o700); err != nil {
 		return fmt.Errorf("memory-e2e: create output: %w", err)
 	}

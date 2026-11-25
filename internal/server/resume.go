@@ -165,7 +165,7 @@ func shellQuote(s string) string {
 	if safe {
 		return s
 	}
-	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
+	return shellquote.POSIXLiteral(s)
 }
 
 func commandWithCwd(cmd, cwd string) string {

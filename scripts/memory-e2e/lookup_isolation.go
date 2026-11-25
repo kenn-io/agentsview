@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+
+	"go.kenn.io/agentsview/internal/shellquote"
 )
 
 // lookupIsolation hides the operator's home from the agent while leaving the
@@ -19,8 +21,6 @@ type lookupIsolation struct {
 	providerRoot string
 	credentials  []string
 }
-
-func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
 
 func lookupExecutable(ctx context.Context, client string) (string, error) {
 	path, err := exec.LookPath(client)
@@ -102,7 +102,7 @@ func prepareLookupIsolation(ctx context.Context, client clientName, clientDir, p
 	copyCredential := func(source, dest string) error {
 		data, err := os.ReadFile(source)
 		if os.IsNotExist(err) {
-			return nil
+			return fmt.Errorf("lookup isolation: missing %s credentials", client)
 		}
 		if err != nil {
 			return err
@@ -168,7 +168,7 @@ func prepareLookupIsolation(ctx context.Context, client clientName, clientDir, p
 	script.WriteString("#!/bin/sh\nexec")
 	for _, arg := range argv {
 		script.WriteByte(' ')
-		script.WriteString(shellQuote(arg))
+		script.WriteString(shellquote.POSIXLiteral(arg))
 	}
 	script.WriteString(" \"$@\"\n")
 	wrapper := filepath.Join(runDir, string(client))

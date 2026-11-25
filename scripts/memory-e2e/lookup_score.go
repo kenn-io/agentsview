@@ -49,6 +49,7 @@ var runningCellPattern = regexp.MustCompile(`(?i)script (?:still )?running with 
 var sessionProviderPrefix = regexp.MustCompile(`(?i)(?:([a-z][a-z0-9_-]*):|/sessions/([a-z][a-z0-9_-]*)/)$`)
 var lookupJSONFence = regexp.MustCompile("(?s)^\\s*```(?:json)?[ \\t]*\\r?\\n(.*?)\\r?\\n```\\s*$")
 var lookupSessionIDPattern = regexp.MustCompile(`(?i)\b(?:([a-z][a-z0-9_-]*):)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b`)
+var lookupCLIReadPattern = regexp.MustCompile(`(?i)^\s*agentsview\s+session\s+messages\s+((?:[a-z][a-z0-9_-]*:)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\s*$`)
 var errCaptureIncomplete = errors.New("capture incomplete")
 var errLookupClientFailed = errors.New("lookup client failed")
 
@@ -352,6 +353,17 @@ func lookupEvidence(call lookupCall, item lookupItem) string {
 		fallback = mcpSessionReadID(call)
 	case "direct":
 		fallback = directFileReadID(call)
+	case "cli":
+		input := call.Input
+		var args struct {
+			Command string `json:"command"`
+		}
+		if json.Unmarshal([]byte(input), &args) == nil {
+			input = args.Command
+		}
+		if match := lookupCLIReadPattern.FindStringSubmatch(input); len(match) == 2 {
+			fallback = match[1]
+		}
 	}
 	var evidence []string
 	for _, fragment := range lookupEvidenceFragments(call.Result, fallback, call.Route == "direct") {
