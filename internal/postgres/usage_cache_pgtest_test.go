@@ -840,7 +840,6 @@ func TestPGUsageAccountUpgradeWaitsForOldWriter(t *testing.T) {
 	quoted, err := quoteIdentifier(schema)
 	require.NoError(t, err)
 	_, err = store.pg.ExecContext(ctx, fmt.Sprintf(`
-DROP FUNCTION mark_activity_spawn() CASCADE;
 DROP FUNCTION mark_dashboard_messages() CASCADE;
 DROP FUNCTION mark_dashboard_tool_calls() CASCADE;
 DELETE FROM sync_metadata WHERE key IN ('dashboard_common','dashboard_tools','dashboard_velocity','dashboard_signals','dashboard_scope');
