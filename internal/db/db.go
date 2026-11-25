@@ -713,9 +713,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (191: import Antigravity CLI session titles from conversation_summaries.db;
 // native title reconciliation backfills stored sessions without reparsing.)
 // (192: use recorded labels for retained Codex runs.)
-// (193: classify Muse Personal runs that Muse started itself from the source
-// of their first user item, stored as session_kind muse-background. Re-parse
-// Muse Personal sources in place; source and session identities are
+// (193: classify Muse Personal runs from the source of their first user item.
+// Scheduled and upkeep runs are stored as session_kind muse-background;
+// delegated browser and subagent runs as non-interactive workers, with
+// subagent runs linked to the session named by their requester field.
+// Re-parse Muse Personal sources in place; source and session identities are
 // unchanged.)
 const dataVersion = 193
 

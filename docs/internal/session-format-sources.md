@@ -6717,26 +6717,27 @@ schemas keep their existing ordering behavior.
   public model name. Titles remain unknown, and the format has no structured
   parent field; see run classification for the derived subagent parent link.
 - **Run classification:** every `item` line carries a top-level `source`; the
-  header has none. A private check of all 3,939 transcripts from one agent on
-  2026-11-25 found `source` on every item line. Classified by the first
-  user-role item's `source`: `scheduler.cron`, `runtime.action`,
-  `runtime.self_improvement`, `runtime.feed` and `runtime.proactivity` covered
-  3,536 sessions; `runtime.browser_input` (88) and plain-`runtime` subagent
-  envelopes (128) covered 216; 182 stayed interactive; five had no user item.
-  None of the first two groups was a conversation. Conversations open with plain
-  `runtime`, a voice source such as `runtime.voice_audio`, or
-  `runtime.onboarding`. Plain `runtime` also opens subagent runs, whose first
-  user item opens with a `[Subagent Context]` envelope. The check found no
-  structured parent field: every header had `session_id` equal to `agent_id`.
-  Envelope fields sit one per line as `- Field: value.` after the opening line.
-  All 128 subagent envelopes carried `- Requester agent id: <UUID>.`, and every
-  one named an existing session. The envelope's `Your session` field named the
-  run itself in only 87 of 128, so it is not used. `runtime.browser_input` runs
-  carry no parent reference. Context items such as `runtime.skill_invalidation`
-  and `runtime.chats` can come first with a different role, so the first item is
-  not the signal. Scheduled runs can receive injected user items, such as
-  approvals (half of the 1,520 `scheduler.cron` sessions had two user items), so
-  message count does not separate them from conversations.
+  header has none. A private check of all 3,939 transcripts from one Muse
+  Personal installation on 2026-11-25 found `source` on every item line.
+  Classified by the first user-role item's `source`: `scheduler.cron`,
+  `runtime.action`, `runtime.self_improvement`, `runtime.feed` and
+  `runtime.proactivity` covered 3,536 sessions; `runtime.browser_input` (88) and
+  plain-`runtime` subagent envelopes (128) covered 216; 182 stayed interactive;
+  five had no user item. None of the first two groups was a conversation.
+  Conversations open with plain `runtime`, a voice source such as
+  `runtime.voice_audio`, or `runtime.onboarding`. Plain `runtime` also opens
+  subagent runs, whose first user item opens with a `[Subagent Context]`
+  envelope. The check found no structured parent field: every header had
+  `session_id` equal to `agent_id`. Envelope fields sit one per line as
+  `- Field: value.` after the opening line. All 128 subagent envelopes carried
+  `- Requester agent id: <UUID>.`, and every one named an existing session. The
+  envelope's `Your session` field named the run itself in only 87 of 128, so it
+  is not used. `runtime.browser_input` runs carry no parent reference. Context
+  items such as `runtime.skill_invalidation` and `runtime.chats` can come first
+  with a different role, so the first item is not the signal. Scheduled runs can
+  receive injected user items, such as approvals (half of the 1,520
+  `scheduler.cron` sessions had two user items), so message count does not
+  separate them from conversations.
   `internal/parser/testdata/muse_personal/sources/` holds one synthetic sample
   per first-user source; none is a capture.
   `TestMusePersonalSessionKindUsesFirstUserItem` covers sessions with no user
