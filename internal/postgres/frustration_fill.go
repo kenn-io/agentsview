@@ -13,7 +13,9 @@ import (
 
 // Bound a slow chunk so later chunks can still be prepared.
 var frustrationFillChunkTimeout = 30 * time.Second
+
 var frustrationFillRetryDelay = time.Second
+
 var frustrationJoinWait = 5 * time.Second
 
 type frustrationChunk struct {
@@ -167,7 +169,7 @@ func (s *Store) StartFrustrationFill(ctx context.Context) func() {
 			log.Printf("selecting frustration count version: %v", err)
 			return
 		}
-		for pass := 0; pass < 3; pass++ {
+		for pass := range 3 {
 			if pass > 0 {
 				timer := time.NewTimer(frustrationFillRetryDelay)
 				select {

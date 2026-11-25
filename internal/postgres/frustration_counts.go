@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/signals"
@@ -130,9 +131,7 @@ func (s *Store) writeFrustrationCounts(ctx context.Context, versions map[string]
 			skipped = batch
 			err = nil
 		}
-		for id, version := range skipped {
-			remaining[id] = version
-		}
+		maps.Copy(remaining, skipped)
 		return err
 	}
 	for id, version := range versions {
@@ -180,20 +179,17 @@ func (s *Store) writeFrustrationCountBatch(ctx context.Context, versions map[str
 	if err != nil {
 		return nil, fmt.Errorf("writing frustration counts: %w", err)
 	}
+	defer rows.Close()
 	remaining := make(map[string]string, len(versions))
-	for id, version := range versions {
-		remaining[id] = version
-	}
+	maps.Copy(remaining, versions)
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			rows.Close()
 			return nil, fmt.Errorf("reading saved frustration counts: %w", err)
 		}
 		delete(remaining, id)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
 		return nil, fmt.Errorf("reading saved frustration counts: %w", err)
 	}
 	if err := rows.Close(); err != nil {
