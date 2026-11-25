@@ -38,6 +38,8 @@ func TestToolCallPRLinks(t *testing.T) {
 		{"CommandLine", []db.ToolCall{bash("run_command", `{"CommandLine":"gh pr view 42 -R example/repo"}`)}, []int{42}},
 		{"plain text", []db.ToolCall{bash("shell", `gh pr view 42 -R example/repo`)}, []int{42}},
 		{"code mode exec", []db.ToolCall{bash("exec", `text(await tools.exec_command({cmd:"gh pr view 42 -R example/repo"}))`)}, []int{42}},
+		{"code mode batch", []db.ToolCall{bash("exec", `await tools.exec_command({cmd:"gh pr view 42 -R example/repo"}); await tools.exec_command({cmd:'gh pr view 43 -R example/repo'})`)}, []int{42, 43}},
+		{"code mode concatenation", []db.ToolCall{bash("exec", `await tools.exec_command({cmd:"gh pr view 42 -R example/repo" + "-fork"})`)}, nil},
 		{"code mode dynamic selector", []db.ToolCall{bash("exec", `text(await tools.exec_command({cmd:"gh pr view $PR -R example/repo"}))`)}, nil},
 		{"oversized code mode skipped", []db.ToolCall{bash("exec", `text(await tools.exec_command({cmd:"gh pr view 42 -R example/repo"}))`+strings.Repeat(" ", 256*1024))}, nil},
 		{"oversized skipped", []db.ToolCall{bash("Bash", oversized("gh pr view 41 -R github.com/example/repo")), bash("Bash", `{"command":"gh pr view 42 -R github.com/example/repo"}`)}, []int{42}},

@@ -396,8 +396,8 @@ func taskPRLinks(ctx context.Context, input string) ([]PRLink, error) {
 // shellInputCommands lists literal commands in a shell tool input.
 func shellInputCommands(input string) ([]string, bool) {
 	if !jsontext.Value(input).IsValid() {
-		if command := commitCommandText(input); command != "" {
-			return []string{command}, true
+		if commitToolCallRE.MatchString(input) {
+			return literalCommands(input), true
 		}
 		text := strings.TrimSpace(input)
 		return []string{input}, text != ""
