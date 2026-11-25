@@ -80,12 +80,13 @@ func restartContents(t *testing.T, url string) []string {
 
 func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 	for _, tc := range []struct {
-		name               string
-		scoped, skip, fail bool
+		name                          string
+		scoped, skip, fail, persisted bool
 	}{
 		{name: "ordinary"},
 		{name: "scoped upgrade", scoped: true},
 		{name: "scoped upgrade with skip initial sync", scoped: true, skip: true},
+		{name: "persisted scoped upgrade with skip initial sync", scoped: true, skip: true, persisted: true},
 		{name: "scoped upgrade with incomplete pass", scoped: true, fail: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -119,10 +120,20 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 				require.NoError(t, err)
 				_, err = conn.ExecContext(t.Context(), `UPDATE messages SET content='old transcript' WHERE session_id IN (SELECT id FROM sessions WHERE agent='claude') AND content LIKE 'visible-seed-%'`)
 				require.NoError(t, err)
-				_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET data_version=?`, oldVersion)
-				require.NoError(t, err)
-				_, err = conn.ExecContext(t.Context(), fmt.Sprintf(`PRAGMA user_version=%d`, oldVersion))
-				require.NoError(t, err)
+				if tc.persisted {
+					_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET data_version=? WHERE agent='claude'`, oldVersion)
+					require.NoError(t, err)
+					_, err = conn.ExecContext(t.Context(), `INSERT OR REPLACE INTO stats(key, value) VALUES ('scoped_upgrade_pending', ?)`, db.CurrentDataVersion())
+					require.NoError(t, err)
+					var version int
+					require.NoError(t, conn.QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version))
+					require.Equal(t, db.CurrentDataVersion(), version)
+				} else {
+					_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET data_version=?`, oldVersion)
+					require.NoError(t, err)
+					_, err = conn.ExecContext(t.Context(), fmt.Sprintf(`PRAGMA user_version=%d`, oldVersion))
+					require.NoError(t, err)
+				}
 				require.NoError(t, conn.Close())
 			}
 			writeRestartSession(t, cfg, "before-worker")
