@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -51,21 +52,72 @@ func startRestartServe(t *testing.T, cfg config.Config, opts serveOptions) strin
 	return fmt.Sprintf("http://127.0.0.1:%d", waitForRestartRuntime(t, cfg.DataDir).Port)
 }
 
-func TestServeScopedUpgradeServesSessionsBeforeReparse(t *testing.T) {
-	for _, skip := range []bool{false, true} {
-		t.Run(fmt.Sprintf("skip_initial_sync=%t", skip), func(t *testing.T) {
+func restartGet(t *testing.T, url string) string {
+	t.Helper()
+	resp, err := restartTestRequest(t, http.MethodGet, url, "", "")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+	return string(body)
+}
+
+func restartContents(t *testing.T, url string) []string {
+	t.Helper()
+	var response struct {
+		Messages []struct {
+			Content string `json:"content"`
+		} `json:"messages"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(restartGet(t, url)), &response))
+	contents := make([]string, 0, len(response.Messages))
+	for _, message := range response.Messages {
+		contents = append(contents, message.Content)
+	}
+	return contents
+}
+
+func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		scoped, skip bool
+	}{
+		{name: "ordinary"},
+		{name: "scoped upgrade", scoped: true},
+		{name: "scoped upgrade with skip initial sync", scoped: true, skip: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			isolateServeTestHome(t)
 			t.Setenv(syncWorkerChildEnvVar, "1")
 			cfg := testConfigWithClaudeFixture(t)
 			cfg.Host = "127.0.0.1"
-			writeRestartSession(t, cfg, "visible-seed")
+			cfg.EventsCoalesceInterval = 0
+			codexRoot := t.TempDir()
+			cfg.AgentDirs[parser.AgentCodex] = []string{codexRoot}
+			var claudeIDs, codexIDs []string
+			for i := range 3 {
+				id := fmt.Sprintf("visible-seed-%d", i)
+				claudeIDs = append(claudeIDs, id)
+				writeRestartSession(t, cfg, id)
+				uuid := fmt.Sprintf("a0000000-0000-4000-8000-%012d", i)
+				codexIDs = append(codexIDs, "codex:"+uuid)
+				content := testjsonl.NewSessionBuilder().
+					AddCodexMeta("2026-01-02T00:00:00Z", uuid, "/project", "codex_cli_rs").
+					AddCodexMessage("2026-01-02T00:00:01Z", "user", "unchanged codex transcript").String()
+				path := filepath.Join(codexRoot, "rollout-2026-01-02T00-00-00-"+uuid+".jsonl")
+				require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+			}
 			var seed bytes.Buffer
 			require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &seed))
-			conn, err := sql.Open("sqlite3", cfg.DBPath)
-			require.NoError(t, err)
-			_, err = conn.ExecContext(t.Context(), "INSERT INTO stats(key, value) VALUES ('scoped_upgrade_pending', 1)")
-			require.NoError(t, err)
-			require.NoError(t, conn.Close())
+			if tc.scoped {
+				conn, err := sql.Open("sqlite3", cfg.DBPath)
+				require.NoError(t, err)
+				_, err = conn.ExecContext(t.Context(), `UPDATE messages SET content='old transcript' WHERE session_id IN (SELECT id FROM sessions WHERE agent='claude') AND content LIKE 'visible-seed-%'; UPDATE sessions SET data_version=188; PRAGMA user_version=188`)
+				require.NoError(t, err)
+				require.NoError(t, conn.Close())
+			}
+			writeRestartSession(t, cfg, "before-worker")
 
 			started, release := make(chan syncWorkerRequest, 1), make(chan struct{})
 			restore := stubLaunchSyncWorker(t, func(ctx context.Context, cfg config.Config, req syncWorkerRequest, _ func(workerLine)) (workerResult, error) {
@@ -80,95 +132,61 @@ func TestServeScopedUpgradeServesSessionsBeforeReparse(t *testing.T) {
 				return decodeSingleResult(t, &out), err
 			})
 			t.Cleanup(restore)
-			base := startRestartServe(t, cfg, serveOptions{SkipInitialSync: skip})
+			base := startRestartServe(t, cfg, serveOptions{SkipInitialSync: tc.skip})
 			select {
 			case request := <-started:
 				require.Equal(t, "startup", request.Mode)
-			case <-time.After(5 * time.Second):
+			case <-time.After(30 * time.Second):
 				require.FailNow(t, "worker did not start")
 			}
-			require.Contains(t, restartGet(t, base+"/api/v1/sessions/sidebar-index?limit=500"), "visible-seed")
+			require.Contains(t, restartGet(t, base+"/api/v1/sessions/sidebar-index?limit=500"), "visible-seed-0")
 			require.Contains(t, restartGet(t, base+"/api/v1/sync/status"), `"startup_pending":true`)
+			codexBefore := make(map[string][]string)
+			for _, id := range codexIDs {
+				contents := restartContents(t, base+"/api/v1/sessions/"+id+"/messages")
+				require.Contains(t, contents, "unchanged codex transcript")
+				codexBefore[id] = contents
+			}
+			if tc.scoped {
+				for _, id := range claudeIDs {
+					contents := restartContents(t, base+"/api/v1/sessions/"+id+"/messages")
+					require.Contains(t, contents, "old transcript")
+					require.NotContains(t, contents, id)
+				}
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancel()
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/v1/events", nil)
+			require.NoError(t, err)
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			scanner := bufio.NewScanner(resp.Body)
+			require.True(t, scanner.Scan())
+			require.Contains(t, scanner.Text(), "events_ready")
 			close(release)
+			found := false
+			for scanner.Scan() {
+				if strings.Contains(scanner.Text(), `"scope":"sync"`) {
+					found = true
+					break
+				}
+			}
+			require.True(t, found, "committed sessions should emit an event: %v", scanner.Err())
 			require.Eventually(t, func() bool {
 				stale, _, _, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
 				return err == nil && !stale && strings.Contains(restartGet(t, base+"/api/v1/sync/status"), `"startup_pending":false`)
 			}, 30*time.Second, 100*time.Millisecond)
+			require.Contains(t, restartGet(t, base+"/api/v1/sessions/sidebar-index?limit=500"), "before-worker")
+			for _, id := range claudeIDs {
+				contents := restartContents(t, base+"/api/v1/sessions/"+id+"/messages")
+				require.Contains(t, contents, id)
+				require.NotContains(t, contents, "old transcript")
+			}
+			for _, id := range codexIDs {
+				require.Equal(t, codexBefore[id], restartContents(t, base+"/api/v1/sessions/"+id+"/messages"))
+			}
 		})
-	}
-}
-
-func restartGet(t *testing.T, url string) string {
-	t.Helper()
-	resp, err := restartTestRequest(t, http.MethodGet, url, "", "")
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
-	return string(body)
-}
-
-func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
-	isolateServeTestHome(t)
-	t.Setenv(syncWorkerChildEnvVar, "1")
-	cfg := testConfigWithClaudeFixture(t)
-	cfg.Host = "127.0.0.1"
-	cfg.EventsCoalesceInterval = 0
-	writeRestartSession(t, cfg, "visible-seed")
-	var seed bytes.Buffer
-	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &seed))
-	writeRestartSession(t, cfg, "before-worker")
-
-	started, release := make(chan syncWorkerRequest, 1), make(chan struct{})
-	restore := stubLaunchSyncWorker(t, func(ctx context.Context, cfg config.Config, req syncWorkerRequest, _ func(workerLine)) (workerResult, error) {
-		started <- req
-		select {
-		case <-release:
-		case <-ctx.Done():
-			return workerResult{}, ctx.Err()
-		}
-		var out bytes.Buffer
-		err := runSyncWorkerContext(ctx, cfg, req, &out)
-		return decodeSingleResult(t, &out), err
-	})
-	t.Cleanup(restore)
-	base := startRestartServe(t, cfg, serveOptions{})
-	select {
-	case request := <-started:
-		require.Equal(t, "startup", request.Mode)
-	case <-time.After(30 * time.Second):
-		require.FailNow(t, "worker did not start")
-	}
-	page := restartGet(t, base+"/api/v1/sessions/sidebar-index?limit=500")
-	require.Contains(t, page, "visible-seed")
-	require.Contains(t, restartGet(t, base+"/api/v1/sync/status"), `"startup_pending":true`)
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/v1/events", nil)
-	require.NoError(t, err)
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	scanner := bufio.NewScanner(resp.Body)
-	require.True(t, scanner.Scan())
-	require.Contains(t, scanner.Text(), "events_ready")
-	close(release)
-	found := false
-	for scanner.Scan() {
-		if strings.Contains(scanner.Text(), `"scope":"sync"`) {
-			found = true
-			break
-		}
-	}
-	require.True(t, found, "committed sessions should emit an event: %v", scanner.Err())
-	require.Contains(t, restartGet(t, base+"/api/v1/sessions/sidebar-index?limit=500"), "before-worker")
-	var body string
-	if !assert.Eventually(t, func() bool {
-		body = restartGet(t, base+"/api/v1/sessions/sidebar-index?limit=500")
-		return strings.Contains(body, "before-worker") && strings.Contains(restartGet(t, base+"/api/v1/sync/status"), `"startup_pending":false`)
-	}, 30*time.Second, 100*time.Millisecond) {
-		t.Logf("last response: %s", body)
 	}
 }
 
