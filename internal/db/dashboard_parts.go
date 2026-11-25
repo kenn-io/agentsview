@@ -43,11 +43,11 @@ type dashboardPartsMemo struct {
 	maxBytes      int64
 }
 
-// reuse copies matching parts and returns the ids still to read.
+// reuse copies parts whose fingerprint matches into parts and returns the ids still to read.
 func (m *dashboardPartsMemo) reuse(slot, version string, ids []string, versions map[string]string, parts map[string]kept.Part[dashboardPart]) []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.parts == nil || m.slot != slot || m.version != version {
+	if m.slot != slot || m.version != version {
 		return ids
 	}
 	return slices.DeleteFunc(ids, func(id string) bool {
@@ -72,7 +72,7 @@ func (m *dashboardPartsMemo) store(slot, version string, parts map[string]kept.P
 	if maxBytes == 0 {
 		maxBytes = kept.DefaultMaxBytes
 	}
-	if m.parts == nil || m.slot != slot || m.version != version {
+	if m.slot != slot || m.version != version {
 		m.slot, m.version = slot, version
 		m.parts = make(map[string]*list.Element)
 		m.order.Init()
@@ -109,8 +109,6 @@ func dashboardPartBytes(p kept.Part[dashboardPart]) int64 {
 	return int64(len(p.ID)+len(p.Fingerprint)) + 3*dashboardPartSize(p.Value) + 256
 }
 
-// dashboardPartSize estimates the encoded disk payload, whose cap is separate
-// from the memo's estimate of retained Go allocations.
 func dashboardPartSize(p dashboardPart) int64 {
 	return int64(128 + len(p.Hours)*16 + len(p.Velocity.TurnCycles)*8)
 }
@@ -209,7 +207,6 @@ func (db *DB) dashboardParts(ctx context.Context, f AnalyticsFilter) ([]dashboar
 			if err := db.fillDashboardParts(ctx, f, ids, versions, parts); err != nil {
 				return dashboardPartsResult{}, err
 			}
-
 		}
 		db.dashboardMemo.store("dashboard-parts|"+TrendsTimezoneKey(f), version, parts)
 		if len(changed) > 0 {
