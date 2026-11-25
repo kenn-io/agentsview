@@ -2473,28 +2473,6 @@ func TestCodexLabeledRunFindSourcePrecedence(t *testing.T) {
 	}
 }
 
-func TestCodexLabeledLookupRanksAllDatedCopies(t *testing.T) {
-	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
-	root := t.TempDir()
-	dir := filepath.Join(root, "team", ".codex-run-v1-abc", "sessions")
-	name := "rollout-2026-05-04T14-31-58-" + id + ".jsonl"
-	older := filepath.Join(dir, "2026", "05", "04", name)
-	newer := filepath.Join(dir, "2026", "05", "05", name)
-	for _, path := range []string{older, newer} {
-		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-		require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
-	}
-	now := time.Now()
-	require.NoError(t, os.Chtimes(older, now.Add(-time.Hour), now.Add(-time.Hour)))
-	require.NoError(t, os.Chtimes(newer, now, now))
-	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: id})
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, newer, found.DisplayPath)
-}
-
 func TestCodexLabeledDiscoveryPrefersPlainSibling(t *testing.T) {
 	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
 	root := t.TempDir()

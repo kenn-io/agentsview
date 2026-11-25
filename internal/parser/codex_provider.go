@@ -1154,24 +1154,15 @@ func (s codexSourceSet) discoverSessionPaths(sessionsDir string) []string {
 }
 
 // findSourceFile resolves a Codex session file by UUID under sessionsDir.
-// Ordinary sources prefer the dated layout; labeled sources use recency.
-func (s codexSourceSet) findSourceFile(root, sessionsDir, sessionID string) string {
+// It prefers the standard year/month/day live path when present, then falls
+// back to a flat archived directory entry, matching the lookup precedence the
+// package-level entrypoint provided before the fold.
+func (s codexSourceSet) findSourceFile(sessionsDir, sessionID string) string {
 	if !IsValidSessionID(sessionID) {
 		return ""
 	}
 
 	var archived string
-	prefer := func(candidate, current string) bool {
-		if current == "" {
-			return true
-		}
-		a, aOK := s.sourceRef(root, candidate, true)
-		b, bOK := s.sourceRef(root, current, true)
-		if aOK && bOK && CodexSourceRank(a).Class != 0 {
-			return preferCodexSource(a, b)
-		}
-		return preferCodexRolloutPath(candidate, current)
-	}
 	entries, err := os.ReadDir(sessionsDir)
 	if err == nil {
 		for _, f := range entries {
@@ -1186,7 +1177,7 @@ func (s codexSourceSet) findSourceFile(root, sessionsDir, sessionID string) stri
 				continue
 			}
 			candidate := filepath.Join(sessionsDir, name)
-			if prefer(candidate, archived) {
+			if archived == "" || preferCodexRolloutPath(candidate, archived) {
 				archived = candidate
 			}
 		}
@@ -1210,15 +1201,13 @@ func (s codexSourceSet) findSourceFile(root, sessionsDir, sessionID string) stri
 				continue
 			}
 			candidate := filepath.Join(dayPath, name)
-			if prefer(candidate, live) {
+			if live == "" || preferCodexRolloutPath(candidate, live) {
 				live = candidate
 			}
 		}
-		return live == "" || CodexSourceLabelForRoots(s.roots, live) != ""
+		// The first day directory holding the session has both its forms.
+		return live == ""
 	})
-	if live != "" && archived != "" && CodexSourceLabelForRoots(s.roots, live) != "" && prefer(archived, live) {
-		return archived
-	}
 	if live != "" {
 		return live
 	}
@@ -1651,7 +1640,7 @@ func (s codexSourceSet) findCanonicalSource(ctx context.Context, uuid string) (S
 			dirs = append(dirs, labeled...)
 		}
 		for _, dir := range dirs {
-			path := s.findSourceFile(root, dir, uuid)
+			path := s.findSourceFile(dir, uuid)
 			candidate, ok := s.sourceRef(root, path, true)
 			if ok && (!foundExisting || preferCodexSource(candidate, best)) {
 				best = candidate
@@ -1707,9 +1696,6 @@ func preferCodexSource(candidate, current SourceRef) bool {
 	if candRank.Class == 2 || currRank.Class == 2 {
 		if candRank.Class != currRank.Class {
 			return candRank.Class > currRank.Class
-		}
-		if codexPlainRolloutPath(cand.Path) == codexPlainRolloutPath(curr.Path) {
-			return preferCodexRolloutPath(cand.Path, curr.Path)
 		}
 		if candRank.Recency != currRank.Recency {
 			return candRank.Recency > currRank.Recency
