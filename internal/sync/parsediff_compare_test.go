@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/money"
@@ -2606,16 +2605,15 @@ func TestStripVirtualSourceSuffixVisualStudioCopilot(t *testing.T) {
 func TestCompareStoredSessionPromptAndCommandLinks(t *testing.T) {
 	for _, tc := range []struct {
 		name            string
-		policy          config.ArchiveContent
 		command, prompt string
 		count           int
 	}{
-		{"full", config.ArchiveContentFull, "gh pr view 42 -R user-a/project-a", "Review https://github.com/user-a/project-a/pull/43", 2},
-		{"mixed case", config.ArchiveContentFull, "gh pr view 42 -R example/repo", "Review https://github.com/Example/Repo/pull/42", 1},
+		{"full", "gh pr view 42 -R user-a/project-a", "Review https://github.com/user-a/project-a/pull/43", 2},
+		{"mixed case", "gh pr view 42 -R example/repo", "Review https://github.com/Example/Repo/pull/42", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := openTestDB(t)
-			e := NewEngine(t.Context(), d, EngineConfig{Machine: "test-machine", ArchiveContent: tc.policy})
+			e := NewEngine(t.Context(), d, EngineConfig{Machine: "test-machine"})
 			pw := pdToolSession("pd-pr-links")
 			pw.msgs[1].ToolCalls[1].InputJSON = `{"command":"` + tc.command + `"}`
 			pw.msgs[2].IsSystem = false
