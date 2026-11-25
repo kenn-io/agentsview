@@ -12,6 +12,7 @@ import (
 
 // Bound a slow chunk so later chunks can still be prepared.
 var frustrationFillChunkTimeout = 30 * time.Second
+var frustrationFillRetryDelay = time.Second
 
 func (s *Store) fillFrustrationCounts(ctx context.Context, ids []string, column string) error {
 	var firstErr error
@@ -19,7 +20,7 @@ func (s *Store) fillFrustrationCounts(ctx context.Context, ids []string, column 
 		chunkCtx, cancel := context.WithTimeout(ctx, frustrationFillChunkTimeout)
 		counts, versions, err := s.scanFrustrationCounts(chunkCtx, chunk, column)
 		if err == nil {
-			err = s.storeFrustrationCountsWithLockTimeout(chunkCtx, versions, counts, column)
+			err = s.storeFrustrationCounts(chunkCtx, versions, counts, column)
 		}
 		cancel()
 		if err != nil && firstErr == nil {
@@ -57,13 +58,29 @@ func (s *Store) StartFrustrationFill(ctx context.Context) func() {
 			log.Printf("selecting frustration count version: %v", err)
 			return
 		}
-		ids, err := s.staleFrustrationSessions(ctx, column)
-		if err != nil {
-			log.Printf("selecting stale frustration counts: %v", err)
-			return
-		}
-		if err := s.fillFrustrationCounts(ctx, ids, column); err != nil && ctx.Err() == nil {
-			log.Printf("filling frustration counts: %v", err)
+		for pass := 0; pass < 3; pass++ {
+			if pass > 0 {
+				timer := time.NewTimer(frustrationFillRetryDelay)
+				select {
+				case <-timer.C:
+				case <-ctx.Done():
+					timer.Stop()
+					return
+				}
+			}
+			ids, err := s.staleFrustrationSessions(ctx, column)
+			if err != nil {
+				if ctx.Err() == nil {
+					log.Printf("selecting stale frustration counts: %v", err)
+				}
+				return
+			}
+			if len(ids) == 0 {
+				return
+			}
+			if err := s.fillFrustrationCounts(ctx, ids, column); err != nil && ctx.Err() == nil {
+				log.Printf("filling frustration counts: %v", err)
+			}
 		}
 	}()
 	return func() { cancel(); <-done }

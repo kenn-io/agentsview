@@ -93,24 +93,12 @@ type storeRuntime struct {
 }
 
 type frustrationSaveQueue struct {
-	mu      sync.Mutex
-	ctx     context.Context
-	cancel  context.CancelFunc
-	closed  bool
-	running bool
-	pending []frustrationSave
-	queued  map[frustrationSaveKey]struct{}
-	wg      sync.WaitGroup
-}
-
-type frustrationSaveKey struct {
-	id, version, column string
-}
-
-type frustrationSave struct {
-	versions map[string]string
-	counts   map[string]int
-	column   string
+	mu     sync.Mutex
+	ctx    context.Context
+	cancel context.CancelFunc
+	closed bool
+	wg     sync.WaitGroup
+	write  sync.Mutex
 }
 
 // pgSessionBaseCols is the column list for PG session queries that do not

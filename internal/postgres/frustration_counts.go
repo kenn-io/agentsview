@@ -3,12 +3,10 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"log"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgconn"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/signals"
 )
@@ -72,98 +70,45 @@ func (s *Store) storeFrustrationCountsForRead(versions map[string]string, counts
 	if queue.ctx == nil {
 		queue.ctx, queue.cancel = context.WithCancel(context.Background())
 	}
-	if queue.queued == nil {
-		queue.queued = make(map[frustrationSaveKey]struct{})
-	}
-	save := frustrationSave{make(map[string]string), make(map[string]int), versionColumn}
-	for id, version := range versions {
-		key := frustrationSaveKey{id, version, versionColumn}
-		if _, exists := queue.queued[key]; exists {
-			continue
-		}
-		queue.queued[key] = struct{}{}
-		save.versions[id] = version
-		save.counts[id] = counts[id]
-	}
-	if len(save.versions) == 0 {
-		return
-	}
-	queue.pending = append(queue.pending, save)
-	if !queue.running {
-		queue.running = true
-		queue.wg.Go(func() { s.drainFrustrationSaves(queue) })
-	}
-}
-
-func (s *Store) drainFrustrationSaves(queue *frustrationSaveQueue) {
-	for {
-		queue.mu.Lock()
-		if queue.closed || len(queue.pending) == 0 {
-			queue.running = false
-			queue.pending = nil
-			queue.queued = nil
-			queue.mu.Unlock()
-			return
-		}
-		save := queue.pending[0]
-		queue.pending[0] = frustrationSave{}
-		queue.pending = queue.pending[1:]
-		queue.mu.Unlock()
-		// Saves outlive requests but stop when the store closes.
-		ctx, cancel := context.WithTimeout(queue.ctx, frustrationFillChunkTimeout)
-		err := s.storeFrustrationCountsWithLockTimeout(ctx, save.versions, save.counts, save.column)
-		pgErr, isPGError := errors.AsType[*pgconn.PgError](err)
-		retry := err != nil && (ctx.Err() == context.DeadlineExceeded || (isPGError && pgErr.Code == "55P03"))
-		cancel()
-		if err != nil && !retry && !isUndefinedTable(err) && !IsReadOnlyError(err) && queue.ctx.Err() == nil {
-			log.Printf("storing frustration counts: %v", err)
-		}
-		queue.mu.Lock()
-		if retry && !queue.closed {
-			queue.pending = append(queue.pending, save)
-		} else {
-			for id, version := range save.versions {
-				delete(queue.queued, frustrationSaveKey{id, version, save.column})
+	queue.wg.Add(1)
+	go func() {
+		defer queue.wg.Done()
+		for attempt := 0; attempt < 3; attempt++ {
+			if attempt > 0 {
+				timer := time.NewTimer(frustrationFillRetryDelay)
+				select {
+				case <-timer.C:
+				case <-queue.ctx.Done():
+					timer.Stop()
+					return
+				}
 			}
-		}
-		queue.mu.Unlock()
-		if retry {
-			// Give foreground reads a chance to acquire the connection before retrying.
-			timer := time.NewTimer(250 * time.Millisecond)
-			select {
-			case <-timer.C:
-			case <-queue.ctx.Done():
+			// Saves outlive requests but stop when the store closes.
+			queue.write.Lock()
+			ctx, cancel := context.WithTimeout(queue.ctx, frustrationFillChunkTimeout)
+			skipped, err := s.writeFrustrationCounts(ctx, versions, counts, versionColumn)
+			cancel()
+			queue.write.Unlock()
+			if err != nil {
+				if !isUndefinedTable(err) && !IsReadOnlyError(err) && queue.ctx.Err() == nil {
+					log.Printf("storing frustration counts: %v", err)
+				}
+				return
 			}
-			timer.Stop()
+			if len(skipped) == 0 {
+				return
+			}
+			versions = skipped
 		}
-	}
-}
-
-func (s *Store) storeFrustrationCountsWithLockTimeout(ctx context.Context, versions map[string]string, counts map[string]int, column string) error {
-	if s.cockroach {
-		return s.storeFrustrationCounts(ctx, versions, counts, column)
-	}
-	tx, err := s.DB().BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `SET LOCAL lock_timeout = '100ms'`); err != nil {
-		return err
-	}
-	if err := writeFrustrationCounts(ctx, tx, versions, counts, column); err != nil {
-		return err
-	}
-	return tx.Commit()
+	}()
 }
 
 func (s *Store) storeFrustrationCounts(ctx context.Context, versions map[string]string, counts map[string]int, versionColumn string) error {
-	return writeFrustrationCounts(ctx, s.DB(), versions, counts, versionColumn)
+	_, err := s.writeFrustrationCounts(ctx, versions, counts, versionColumn)
+	return err
 }
 
-func writeFrustrationCounts(ctx context.Context, pg interface {
-	ExecContext(context.Context, string, ...any) (sql.Result, error)
-}, versions map[string]string, counts map[string]int, versionColumn string) error {
+func (s *Store) writeFrustrationCounts(ctx context.Context, versions map[string]string, counts map[string]int, versionColumn string) (map[string]string, error) {
 	ids := make([]string, 0, len(versions))
 	tokens := make([]string, 0, len(versions))
 	values := make([]int32, 0, len(versions))
@@ -172,16 +117,41 @@ func writeFrustrationCounts(ctx context.Context, pg interface {
 		tokens = append(tokens, version)
 		values = append(values, int32(counts[id]))
 	}
-	_, err := pg.ExecContext(ctx, `INSERT INTO session_frustration_counts (session_id, session_version, rules_version, marker_count)
-        SELECT t.id, t.version, $4, t.count FROM unnest($1::text[], $2::text[], $3::integer[]) AS t(id, version, count)
-        JOIN sessions s ON s.id = t.id AND `+frustrationSessionVersion("s."+versionColumn)+` = t.version
-        ORDER BY t.id
-        ON CONFLICT (session_id) DO UPDATE SET session_version = EXCLUDED.session_version, rules_version = EXCLUDED.rules_version, marker_count = EXCLUDED.marker_count
-        WHERE session_frustration_counts.rules_version <= EXCLUDED.rules_version`, ids, tokens, values, frustrationMarkerRulesVersion)
-	if err != nil {
-		return fmt.Errorf("writing frustration counts: %w", err)
+	want := `SELECT t.id, t.version, t.count FROM unnest($1::text[], $2::text[], $3::integer[]) AS t(id, version, count)
+        JOIN sessions s ON s.id = t.id AND ` + frustrationSessionVersion("s."+versionColumn) + ` = t.version`
+	query := `INSERT INTO session_frustration_counts (session_id, session_version, rules_version, marker_count)
+        SELECT t.id, t.version, $4, t.count FROM (` + want + `) t ORDER BY t.id`
+	if !s.cockroach {
+		query = `WITH want AS (` + want + `),
+        free AS MATERIALIZED (SELECT c.session_id FROM session_frustration_counts c WHERE c.session_id IN (SELECT id FROM want) ORDER BY c.session_id FOR UPDATE OF c SKIP LOCKED)
+        INSERT INTO session_frustration_counts (session_id, session_version, rules_version, marker_count)
+        SELECT w.id, w.version, $4, w.count FROM want w
+        WHERE NOT EXISTS (SELECT 1 FROM session_frustration_counts c WHERE c.session_id = w.id) OR w.id IN (SELECT session_id FROM free)
+        ORDER BY w.id`
 	}
-	return nil
+	query += ` ON CONFLICT (session_id) DO UPDATE SET session_version = EXCLUDED.session_version, rules_version = EXCLUDED.rules_version, marker_count = EXCLUDED.marker_count
+        WHERE session_frustration_counts.rules_version <= EXCLUDED.rules_version`
+	query += ` RETURNING session_id`
+	rows, err := s.DB().QueryContext(ctx, query, ids, tokens, values, frustrationMarkerRulesVersion)
+	if err != nil {
+		return nil, fmt.Errorf("writing frustration counts: %w", err)
+	}
+	defer rows.Close()
+	remaining := make(map[string]string, len(versions))
+	for id, version := range versions {
+		remaining[id] = version
+	}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("reading saved frustration counts: %w", err)
+		}
+		delete(remaining, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading saved frustration counts: %w", err)
+	}
+	return remaining, nil
 }
 
 func (s *Store) scanFrustrationCounts(ctx context.Context, ids []string, versionColumn string) (map[string]int, map[string]string, error) {
