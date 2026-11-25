@@ -2728,7 +2728,8 @@ func TestSearchContentSharedDeadline(t *testing.T) {
 			_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Mode: tc.mode, IncludeActive: true})
 			require.NoError(t, err)
 			require.Greater(t, len(fake.deadlines), 1)
-			for i := range fake.deadlines {
+			require.Equal(t, tc.bounded, fake.bounded[0])
+			for i := 1; i < len(fake.deadlines); i++ {
 				assert.Equal(t, tc.bounded, fake.bounded[i])
 				assert.Equal(t, fake.deadlines[0], fake.deadlines[i])
 			}
