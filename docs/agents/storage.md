@@ -561,8 +561,16 @@ command counts raw `tool_calls.result_content` and `tool_result_events.content`
 bytes separately from decoded image bytes. `db compact` reports file-size
 reclamation separately.
 
-Transcript-only and usage-only writes omit parser checkpoints because resumable
-hash state can contain raw trailing transcript bytes. They retain staged parsing
+Transcript-only and usage-only writes keep parser checkpoints only in a form
+that holds no transcript bytes. A SHA-256 state buffers the input after the
+last 64-byte block, so these archives save the state at that block boundary,
+and a resume re-reads the bytes from the boundary to the committed offset.
+Claude checkpoints have no cursor. A Codex cursor holds session metadata,
+digests, and pending tool call IDs and names; transcript-only archives keep
+it, and usage-only archives, which drop tool call names and IDs, keep no Codex
+checkpoint. Every checkpoint write goes through one database helper that
+aligns the state and deletes the session's checkpoint when the payload still
+does not meet these rules. Restricted writes retain staged parsing
 but publish projected messages and tool metadata without staged output. Late
 result updates use the same projection as newly inserted messages.
 

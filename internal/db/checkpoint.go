@@ -1,11 +1,18 @@
 package db
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
+
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 // ParserCheckpointVersion is the codec version for parser_checkpoints rows.
@@ -40,6 +47,53 @@ type ParserCheckpointBlobs struct {
 	SessionID string
 	Cursor    []byte
 	HashState []byte
+}
+
+// keptUnder reports whether an archive with the given content policy may
+// store the payload. Archives that omit tool content must not store
+// transcript bytes. A crypto/sha256 state buffers the input after the last
+// 64-byte block, so only a state saved at a block boundary qualifies. A Codex
+// cursor holds session metadata, digests, and pending tool call IDs and names,
+// which transcript archives already store but usage archives do not. Unknown
+// encodings are refused.
+func (b ParserCheckpointBlobs) keptUnder(content config.ArchiveContent) bool {
+	if !content.OmitsToolContent() {
+		return true
+	}
+	if len(b.Cursor) > 0 && (content.UsageOnly() || !parser.IsCodexCursor(b.Cursor)) {
+		return false
+	}
+	aligned := blockAlignedSHA256State(b.HashState)
+	return aligned != nil && bytes.Equal(aligned, b.HashState)
+}
+
+// sha256StateSize is the crypto/sha256 marshaled state size: "sha\x03",
+// eight 32-bit chaining words, the block buffer, and the big-endian count of
+// bytes hashed.
+const sha256StateSize = 4 + 32 + sha256.BlockSize + 8
+
+// SHA256StateOffset returns how many bytes a marshaled crypto/sha256 state
+// has hashed. ok is false for an unknown encoding.
+func SHA256StateOffset(state []byte) (n int64, ok bool) {
+	if len(state) != sha256StateSize || string(state[:4]) != "sha\x03" {
+		return 0, false
+	}
+	return int64(binary.BigEndian.Uint64(state[sha256StateSize-8:])), true
+}
+
+// blockAlignedSHA256State rewinds a marshaled crypto/sha256 state to its last
+// 64-byte block boundary, where it buffers no input. The chaining values
+// already cover every complete block, so it clears the buffer and rounds the
+// count down. It returns nil for an unknown encoding.
+func blockAlignedSHA256State(state []byte) []byte {
+	n, ok := SHA256StateOffset(state)
+	if !ok {
+		return nil
+	}
+	aligned := slices.Clone(state)
+	clear(aligned[36 : sha256StateSize-8])
+	binary.BigEndian.PutUint64(aligned[sha256StateSize-8:], uint64(n-n%sha256.BlockSize))
+	return aligned
 }
 
 // GetParserCheckpoint loads the checkpoint metadata for a session. ok=false
@@ -144,15 +198,6 @@ func deleteParserCheckpointTx(ctx context.Context, tx *sql.Tx, sessionID string)
 func (db *DB) UpsertParserCheckpoint(ctx context.Context,
 	cp ParserCheckpoint, blobs ParserCheckpointBlobs,
 ) error {
-	if db.ArchiveContent().OmitsToolContent() {
-		return db.DeleteParserCheckpoint(ctx, cp.SessionID)
-	}
-	if cp.Version == 0 {
-		cp.Version = ParserCheckpointVersion
-	}
-	if cp.UpdatedAt == "" {
-		cp.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	}
 	blobs.SessionID = cp.SessionID
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -161,7 +206,7 @@ func (db *DB) UpsertParserCheckpoint(ctx context.Context,
 		return fmt.Errorf("beginning checkpoint upsert tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := upsertParserCheckpointExec(tx, cp, blobs); err != nil {
+	if err := db.upsertParserCheckpointTx(ctx, tx, cp, blobs); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -195,9 +240,20 @@ func (db *DB) RecordSourceTouch(ctx context.Context,
 	return tx.Commit()
 }
 
-func upsertParserCheckpointTx(
-	tx *sql.Tx, cp ParserCheckpoint, blobs ParserCheckpointBlobs,
+// upsertParserCheckpointTx stores a checkpoint in the form the archive policy
+// allows, or deletes the session's checkpoint when the policy allows none.
+// Archives that omit tool content store the hash state at its last block
+// boundary; a resume reads the offset from the state.
+func (db *DB) upsertParserCheckpointTx(
+	ctx context.Context, tx *sql.Tx, cp ParserCheckpoint, blobs ParserCheckpointBlobs,
 ) error {
+	content := db.ArchiveContent()
+	if content.OmitsToolContent() {
+		blobs.HashState = blockAlignedSHA256State(blobs.HashState)
+	}
+	if !blobs.keptUnder(content) {
+		return deleteParserCheckpointTx(ctx, tx, cp.SessionID)
+	}
 	return upsertParserCheckpointExec(tx, cp, blobs)
 }
 

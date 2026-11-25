@@ -375,7 +375,7 @@ func (db *DB) commitStagedDerivedStateAndCheckpoint(
 		b := *blobs
 		c.SessionID = sessionID
 		b.SessionID = sessionID
-		if err := upsertParserCheckpointTx(tx, c, b); err != nil {
+		if err := db.upsertParserCheckpointTx(ctx, tx, c, b); err != nil {
 			return err
 		}
 	}
@@ -411,7 +411,9 @@ func (db *DB) replaceSessionContentStaged(
 			_, err := db.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{projected})
 			return err
 		}
-		return db.ReplaceSessionContent(ctx, sessionID, msgs, update, findings)
+		return db.ReplaceSessionContentWithCheckpoint(
+			ctx, sessionID, msgs, update, findings, cp, blobs,
+		)
 	}
 
 	db.mu.Lock()
@@ -569,7 +571,7 @@ func (db *DB) replaceSessionContentStaged(
 		// parser-native id or collide with a local session sharing it.
 		c.SessionID = sessionID
 		b.SessionID = sessionID
-		if err := upsertParserCheckpointTx(tx, c, b); err != nil {
+		if err := db.upsertParserCheckpointTx(ctx, tx, c, b); err != nil {
 			return err
 		}
 	}
