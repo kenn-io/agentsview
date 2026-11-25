@@ -12,6 +12,11 @@ func TestCommandPRLinks(t *testing.T) {
 	remote := "https://github.com/example/repo.git"
 	for _, tc := range []struct{ command, remote, want string }{
 		{`gh pr view 42; cd /other`, remote, "https://github.com/example/repo/pull/42"},
+		{`command gh pr view 41 -R example/repo`, "", "https://github.com/example/repo/pull/41"},
+		{`gh -R example/repo pr view 42`, "", "https://github.com/example/repo/pull/42"},
+		{`bash -lc 'gh pr view 44 -R example/repo'`, "", "https://github.com/example/repo/pull/44"},
+		{`timeout 60 gh pr checks 45 -R example/repo --watch`, "", "https://github.com/example/repo/pull/45"},
+		{`bash -lc 'git remote set-url origin https://github.com/user-b/project-b.git'; gh pr view 42`, remote, ""},
 		{`gh pr view 42; cd /other; gh pr view 43`, remote, "https://github.com/example/repo/pull/42"},
 		{`gh pr view 42; git remote set-url origin other`, remote, "https://github.com/example/repo/pull/42"},
 		{`env GH_HOST=other.example gh pr view 42 -R example/repo`, remote, ""},
@@ -131,8 +136,4 @@ func TestAnalyzePRCommandNestedRemoteChange(t *testing.T) {
 	_, _, repositoryChanged, _, err := AnalyzePRCommand(t.Context(), command, "", "https://github.com/user-a/project-a.git", true, false)
 	require.NoError(t, err)
 	assert.True(t, repositoryChanged)
-
-	links, err := commandPRLinks(t.Context(), command+`; gh pr view 42`, "https://github.com/user-a/project-a.git", true)
-	require.NoError(t, err)
-	assert.Empty(t, links)
 }

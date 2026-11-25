@@ -26,9 +26,8 @@ func TestArtifactImportRetainsToolPRLinks(t *testing.T) {
 		ToolCalls: []db.ToolCall{
 			{ToolName: "Bash", Category: "Bash", ToolUseID: "call-1", InputJSON: `{"command":"gh pr view 5 -R example/repo"}`},
 			{ToolName: "Task", Category: "Task", ToolUseID: "call-2", InputJSON: `{"prompt":"Review https://github.com/example/repo/pull/6"}`},
-			{ToolName: "Bash", Category: "Bash", ToolUseID: "call-3", InputJSON: `{"command":"GH_HOST=git.example.com gh pr view 7 -R example/repo"}`},
 			{ToolName: "Bash", Category: "Bash", ToolUseID: "call-4", InputJSON: `{"command":"gh pr view 8 -R example/repo"}`},
-			{ToolName: "shell", Category: "Bash", ToolUseID: "call-5", InputJSON: `{"command":["bash","-lc","gh -R example/repo pr view 9"]}`},
+			{ToolName: "shell", Category: "Bash", ToolUseID: "call-5", InputJSON: `{"command":"gh pr view 9 -R example/repo"}`},
 		},
 	}}))
 	store := newTestArtifactStore(t)

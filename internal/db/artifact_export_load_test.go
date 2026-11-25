@@ -212,7 +212,7 @@ func TestLoadArtifactExportDataRawByteBoundaries(t *testing.T) {
 	t.Run("retained PR links", func(t *testing.T) {
 		database := artifactExportLoadTestDB(t)
 		require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []Message{{
-			SessionID: "session", ToolCalls: []ToolCall{{ToolName: "Bash"}},
+			SessionID: "session", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash"}},
 		}}))
 		metadata := `{"links":[{"url":"https://github.com/user-a/project-a/pull/42","host":"github.com","repository":"user-a/project-a","number":42}]}`
 		_, err := database.getWriter().Exec(t.Context(), `UPDATE tool_calls SET pr_links=? WHERE session_id='session'`, metadata)
