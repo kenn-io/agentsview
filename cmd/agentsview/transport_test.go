@@ -1493,3 +1493,23 @@ func TestNewServiceDocbankConfigured(t *testing.T) {
 		})
 	}
 }
+
+func TestLocalDaemonSearchDeadline(t *testing.T) {
+	cli, cleanup, err := newService(t.Context(), config.Config{}, transport{Mode: transportHTTP, URL: "http://example.org"})
+	require.NoError(t, err)
+	defer cleanup()
+	for _, tc := range []struct {
+		name string
+		svc  service.SessionService
+	}{
+		{"cli", cli},
+		{"mcp", newMCPDaemonService(config.Config{})},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := service.ContentSearchContext(t.Context(), tc.svc, service.ContentSearchRequest{Mode: "substring"})
+			defer cancel()
+			_, ok := ctx.Deadline()
+			assert.True(t, ok)
+		})
+	}
+}

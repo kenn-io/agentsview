@@ -584,7 +584,7 @@ func newService(ctx context.Context,
 ) (service.SessionService, func(), error) {
 	switch tr.Mode {
 	case transportHTTP:
-		return servicehttp.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly, tr.BrowserURL),
+		return servicehttp.NewLocalHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly, tr.BrowserURL),
 			func() {}, nil
 	default:
 		if err := directIncompatibleDaemonError(tr); err != nil {

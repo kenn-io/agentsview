@@ -281,6 +281,8 @@ func newMCPDaemonService(cfg config.Config) service.SessionService {
 	return &mcpDaemonService{cfg: cfg}
 }
 
+func (s *mcpDaemonService) LocalContentScan() bool { return true }
+
 func (s *mcpDaemonService) SupportsFileReferences() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
