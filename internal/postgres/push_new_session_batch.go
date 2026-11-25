@@ -326,8 +326,11 @@ func (s *Sync) queueNewSession(
 	if err != nil {
 		return newSessionWrite{}, err
 	}
-	linksChanged, err := replaceCommitLinks(ctx, exec, sess.ID, linkRows, publishedLinks)
-	if err != nil {
+	// Write the links even when the preload matched: commit links can exist
+	// without their session, and another push can change them after the
+	// preload. The comparison decides only whether the session changed.
+	linksChanged := !commitLinksMatch(publishedLinks, linkRows)
+	if err := writeCommitLinks(ctx, exec, sess.ID, linkRows); err != nil {
 		return newSessionWrite{}, err
 	}
 	imageTextChanged, err := replaceImageText(ctx, exec, sess.ID, imageRows, nil)

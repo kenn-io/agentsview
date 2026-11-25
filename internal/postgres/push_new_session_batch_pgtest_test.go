@@ -511,3 +511,55 @@ func TestPGPushNewSessionBatchReplacesConcurrentSameOwnerRow(t *testing.T) {
 	assert.Equal(t, 4, messageCount, "the archive's copy replaces the older one")
 	assert.Zero(t, links, "the archive no longer has the commit link")
 }
+
+func TestPGPushNewSessionBatchRollsBackEarlySends(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	pgURL := testPGURL(t)
+	skipOnCockroach(t, pgURL, "CockroachDB triggers cannot read NEW")
+	local := testDB(t)
+	// Two transcripts larger than newSessionBatchFlushBytes make the batch
+	// send early whatever the session order, so the rejected session fails
+	// after earlier statements already reached the server.
+	content := strings.Repeat("x", 1<<20)
+	started := "2026-10-01T09:00:00Z"
+	for _, id := range []string{"flush-0", "flush-1", "flush-2"} {
+		messages := 9
+		if id == "flush-1" {
+			messages = 1
+		}
+		require.NoError(t, local.UpsertSession(ctx, db.Session{ID: id, Machine: "latency", Project: "proj", Agent: "claude", StartedAt: &started, CreatedAt: started, MessageCount: messages, UserMessageCount: messages}))
+		batch := make([]db.Message, messages)
+		for ordinal := range messages {
+			batch[ordinal] = db.Message{SessionID: id, Ordinal: ordinal, Role: "user", Timestamp: started, Content: content}
+		}
+		require.NoError(t, local.InsertMessages(ctx, batch))
+	}
+	syncer, _ := newNewSessionBatchSync(t, pgURL, "agentsview", local, false)
+	_, err := syncer.pg.ExecContext(ctx, `
+		CREATE FUNCTION reject_flush_1() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			IF NEW.session_id = 'flush-1' THEN RAISE EXCEPTION 'rejected for test'; END IF;
+			RETURN NEW;
+		END $$;
+		CREATE TRIGGER reject_flush_1 BEFORE INSERT ON messages
+			FOR EACH ROW EXECUTE FUNCTION reject_flush_1();`)
+	require.NoError(t, err)
+
+	result, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Errors)
+	assert.Equal(t, 2, result.SessionsPushed)
+	counts := map[string]int{}
+	rows, err := syncer.pg.QueryContext(ctx, `SELECT s.id, count(m.ordinal) FROM sessions s LEFT JOIN messages m ON m.session_id = s.id GROUP BY s.id`)
+	require.NoError(t, err)
+	for rows.Next() {
+		var id string
+		var count int
+		require.NoError(t, rows.Scan(&id, &count))
+		counts[id] = count
+	}
+	require.NoError(t, rows.Err())
+	require.NoError(t, rows.Close())
+	assert.Equal(t, map[string]int{"flush-0": 9, "flush-2": 9}, counts, "the rejected session leaves no rows")
+}

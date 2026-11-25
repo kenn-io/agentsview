@@ -46,19 +46,24 @@ func (s *Sync) pushCommitLinks(ctx context.Context, tx *sql.Tx, id string) (bool
 	if err != nil {
 		return false, err
 	}
-	return replaceCommitLinks(ctx, tx, id, rows, published[id])
-}
-
-// replaceCommitLinks rewrites a session's published links unless they already
-// match the archive's rows.
-func replaceCommitLinks(ctx context.Context, exec pgSessionExecer, id string, rows []db.CommitLinkRow, published map[publishedCommitLink]struct{}) (bool, error) {
-	if len(published) == len(rows) && containsCommitLinks(published, rows) {
+	if commitLinksMatch(published[id], rows) {
 		return false, nil
 	}
+	return true, writeCommitLinks(ctx, tx, id, rows)
+}
+
+// commitLinksMatch reports whether the published links are exactly the
+// archive's rows.
+func commitLinksMatch(published map[publishedCommitLink]struct{}, rows []db.CommitLinkRow) bool {
+	return len(published) == len(rows) && containsCommitLinks(published, rows)
+}
+
+// writeCommitLinks replaces a session's published links with the archive's.
+func writeCommitLinks(ctx context.Context, exec pgSessionExecer, id string, rows []db.CommitLinkRow) error {
 	if _, err := exec.ExecContext(ctx, "DELETE FROM commit_links WHERE session_id=$1", id); err != nil {
-		return false, err
+		return err
 	}
-	return true, insertCommitLinks(ctx, exec, rows, false)
+	return insertCommitLinks(ctx, exec, rows, false)
 }
 
 // publishedCommitLink holds every column insertCommitLinks writes.
