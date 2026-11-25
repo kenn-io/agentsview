@@ -3203,6 +3203,7 @@
   "empty_archive_desc": "AgentsView はこれらのフォルダーからセッションを読み取ります。エージェントがいずれかに書き込むと、ここに表示されます。",
   "empty_archive_choose_folders": "フォルダーを選択",
   "usage_tooltip_no_usage": "使用なし",
+  "usage_tooltip_total": "合計",
   "session_toc_toggle": "プロンプトへ移動",
   "session_toc_toggle_shortcut": "プロンプトへ移動 (T)",
   "session_toc_empty": "このセッションにはプロンプトがありません",

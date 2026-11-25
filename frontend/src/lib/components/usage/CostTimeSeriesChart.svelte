@@ -472,6 +472,11 @@
     return isTokenMode ? formatCount(v) : fmtCostYLabel(v);
   }
 
+  // Formats a tooltip value in the current mode: a token count or money.
+  function fmtTooltipValue(v: number): string {
+    return isTokenMode ? formatCount(v) : formatMoney(moneyFromMicrodollars(v));
+  }
+
   // Series with nothing on this day are left out: a column of $0.00 rows
   // says nothing. Tiny non-zero values still show (as "<$0.01").
   function tooltipRows(point: Point) {
@@ -527,6 +532,23 @@
 
   const tooltipPoint = $derived(
     tooltip ? seriesData.points[tooltip.idx] ?? null : null,
+  );
+
+  // Rows shown for the hovered day, computed once so the total and the
+  // list below it always come from the same data.
+  const tooltipRowsForPoint = $derived(
+    tooltipPoint ? tooltipRows(tooltipPoint) : [],
+  );
+
+  // The day's total is the sum of the rows the tooltip lists, which are
+  // the series drawn on the chart. Series hidden by the model, project,
+  // or agent filters are not counted, so the total matches the stack
+  // height rather than the summary cards. With a single row the total
+  // would repeat it, so it is shown only for two or more rows.
+  const tooltipTotal = $derived(
+    tooltipRowsForPoint.length > 1
+      ? tooltipRowsForPoint.reduce((sum, row) => sum + row.value, 0)
+      : null,
   );
 
   const selectedRange = $derived.by(() => {
@@ -839,8 +861,15 @@
             : "visibility: hidden;"}
         >
           <div class="tooltip-date">{tooltipDateLabel(tooltipPoint.date)}</div>
+          {#if tooltipTotal !== null}
+            <!-- Day total, placed first so it is read before the breakdown. -->
+            <dl class="tooltip-total">
+              <dt>{m.usage_tooltip_total()}</dt>
+              <dd>{fmtTooltipValue(tooltipTotal)}</dd>
+            </dl>
+          {/if}
           <dl class="tooltip-metrics">
-            {#each tooltipRows(tooltipPoint) as row (row.key)}
+            {#each tooltipRowsForPoint as row (row.key)}
               <div class="tooltip-row">
                 <dt>
                   <span
@@ -850,11 +879,7 @@
                   ></span>
                   <span class="tooltip-name">{row.label}</span>
                 </dt>
-                <dd>
-                  {isTokenMode
-                    ? formatCount(row.value)
-                    : formatMoney(moneyFromMicrodollars(row.value))}
-                </dd>
+                <dd>{fmtTooltipValue(row.value)}</dd>
               </div>
             {:else}
               <div class="tooltip-empty">{m.usage_tooltip_no_usage()}</div>
@@ -1019,6 +1044,25 @@
     padding-bottom: 6px;
     border-bottom: 1px solid color-mix(in srgb, currentColor 18%, transparent);
     font-weight: 600;
+  }
+
+  /* Day total: same two-column layout as a series row, set off from the
+     breakdown below by a divider like the date header's. */
+  .tooltip-total {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 16px;
+    align-items: baseline;
+    margin: 0;
+    padding: 6px 0;
+    border-bottom: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+    font-weight: 600;
+  }
+
+  .tooltip-total dd {
+    margin: 0;
+    font-family: var(--font-mono);
+    text-align: right;
   }
 
   .tooltip-metrics {
