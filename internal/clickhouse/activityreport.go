@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -174,6 +175,7 @@ func (s *Store) BuildActivityReportArtifacts(
 	candidateWhere, candidateArgs := clickActivityReportCandidateWhere(
 		f, rangeStartUTC, rangeEndUTC)
 	evidenceWhere, evidenceArgs := clickActivityReportCandidateWhere(db.AnalyticsFilter{Timezone: f.Timezone, IncludeSubagents: true, IncludeForks: true}, rangeStartUTC, rangeEndUTC)
+	sameFilters := candidateWhere == evidenceWhere && reflect.DeepEqual(candidateArgs, evidenceArgs)
 	evidenceWhere = "(" + evidenceWhere + ") AND s.relationship_type = 'subagent'"
 	keyWhere := "(" + candidateWhere + ") OR (" + evidenceWhere + ")"
 	keyArgs := append(slices.Clone(candidateArgs), evidenceArgs...)
@@ -200,9 +202,19 @@ func (s *Store) BuildActivityReportArtifacts(
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
 	}
-	evidence, _, evidenceVersions, err := s.activityReportSessions(ctx, evidenceWhere, evidenceArgs, memoKey == "")
-	if err != nil {
-		return activity.CandidateArtifacts{}, err
+	var evidence []activity.SessionMeta
+	evidenceVersions := versions
+	if sameFilters {
+		for _, session := range sessions {
+			if session.IsSubagent {
+				evidence = append(evidence, session)
+			}
+		}
+	} else {
+		evidence, _, evidenceVersions, err = s.activityReportSessions(ctx, evidenceWhere, evidenceArgs, memoKey == "")
+		if err != nil {
+			return activity.CandidateArtifacts{}, err
+		}
 	}
 	selected := make(map[string]bool, len(ids))
 	for _, id := range ids {
