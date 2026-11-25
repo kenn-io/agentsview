@@ -822,8 +822,7 @@ agentsview session watch <id>
 
 Today, recognized `event` values are `session_updated` and `heartbeat`. New
 events may be added, so ignore any unknown event types in your consumer. The
-watch stays open across session revision changes. It ends if the session becomes
-unresolved, or when you interrupt it (Ctrl+C) or cancel its context. Like
+command runs until you interrupt it (Ctrl+C) or cancel its context. Like
 `session export`, it streams a fixed format and rejects `--format`/`--json`.
 
 On every connection, the HTTP session watch sends `session_ready` after taking

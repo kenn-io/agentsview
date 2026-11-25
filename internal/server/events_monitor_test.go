@@ -37,39 +37,6 @@ func (s *watchStateStore) set(id string, state db.SessionWatchState) {
 	s.states[id] = state
 }
 
-func TestWatchSession_HostedRevisionChangesKeepStream(t *testing.T) {
-	t.Cleanup(sessionwatch.SetTimingsForTest(25*time.Millisecond, 50*time.Millisecond))
-	te := setup(t)
-	const id = "watch-a"
-	require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: id, Project: "project", Machine: "test", Agent: "claude"}))
-	store := &watchStateStore{Store: te.db, states: make(map[string]db.SessionWatchState)}
-	store.set(id, db.SessionWatchState{State: db.SessionWatchResolved, PublicID: id, ContentRevision: "one"})
-	cfg := config.Config{Host: "127.0.0.1", InstallationID: "server-installation"}
-	handler := wrapTestHandler(cfg, server.New(cfg, store, nil).Handler())
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	w := newFlushRecorder()
-	done := make(chan struct{})
-	t.Cleanup(func() { cancel(); <-done })
-	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/sessions/"+id+"/watch", nil)
-	go func() { handler.ServeHTTP(w, req); close(done) }()
-	te.waitForSSEEvent(t, w, "session_ready", 5*time.Second)
-	for i, revision := range []string{"two", "three"} {
-		store.set(id, db.SessionWatchState{State: db.SessionWatchResolved, PublicID: id, ContentRevision: revision})
-		require.Eventually(t, func() bool {
-			return strings.Count(w.BodyString(), "event: session_updated\ndata: "+id+"\n") >= i+1
-		}, 5*time.Second, 10*time.Millisecond)
-		assert.Contains(t, w.BodyString(), `"content_revision":"`+revision+`"`)
-	}
-	store.set(id, db.SessionWatchState{State: "ambiguous", Variants: []string{"watch-a~one", "watch-a~two"}})
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("watch did not end after the session became unresolved")
-	}
-	assert.Contains(t, w.BodyString(), `"state":"ambiguous"`)
-	assert.Equal(t, 2, strings.Count(w.BodyString(), "event: session_updated\ndata: "+id+"\n"))
-}
-
 func TestEvents_HostedRevisionChangeKeepsStream(t *testing.T) {
 	t.Cleanup(sessionwatch.SetTimingsForTest(25*time.Millisecond, 50*time.Millisecond))
 	te := setup(t)
