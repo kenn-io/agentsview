@@ -999,6 +999,10 @@ func TestDirectBackend_Sync_CodexDuplicatePath(t *testing.T) {
 	require.NotNil(t, detail)
 	assert.Equal(t, "codex:"+id, detail.ID)
 	assert.Equal(t, labeled, d.GetSessionFilePath(t.Context(), "codex:"+id))
+	other := testjsonl.CodexSessionMetaJSON("dddddddd-dddd-4ddd-8ddd-dddddddddddd", "/work/project", "codex_cli_rs", "2026-10-08T12:00:00Z") + "\n" + testjsonl.CodexMsgJSON("user", "other", "2026-10-08T12:00:01Z") + "\n"
+	dbtest.WriteTestFile(t, ordinary, []byte(other))
+	_, err = svc.Sync(t.Context(), service.SyncInput{Path: ordinary})
+	require.ErrorContains(t, err, "no session found for path")
 	require.NoError(t, os.Remove(ordinary))
 	_, err = svc.Sync(t.Context(), service.SyncInput{Path: ordinary})
 	require.ErrorContains(t, err, "no session found for path")

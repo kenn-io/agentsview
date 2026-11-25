@@ -336,7 +336,7 @@ func TestCodexLabeledCopyWinsQuickSync(t *testing.T) {
 	database := openTestDB(t)
 	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {ordinary, logs}}})
 	t.Cleanup(engine.Close)
-	require.Zero(t, engine.SyncAllSince(t.Context(), now.Add(-2*time.Hour), nil).Failed)
+	require.Zero(t, engine.SyncAllSince(t.Context(), now.Add(-30*time.Minute), nil).Failed)
 	messages, err := database.GetMessages(t.Context(), "codex:"+id, 0, 100, true)
 	require.NoError(t, err)
 	require.Len(t, messages, 1)

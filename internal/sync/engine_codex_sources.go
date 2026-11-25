@@ -451,6 +451,13 @@ func preferNewestCodexDiscoveredFile(
 	candidate, current parser.DiscoveredFile,
 ) bool {
 	if candidate.Agent == current.Agent && isCodexFormatAgent(candidate.Agent) {
+		if candidate.Agent == parser.AgentCodex && candidate.ProviderSource != nil && current.ProviderSource != nil {
+			candRank := parser.CodexSourceRank(*candidate.ProviderSource)
+			currRank := parser.CodexSourceRank(*current.ProviderSource)
+			if candRank.Class != currRank.Class || candRank.Class != 0 {
+				return reconciliationSourceRankLower(currRank, candRank)
+			}
+		}
 		candMTime, candOK := discoveredFileMTime(candidate.Path)
 		currMTime, currOK := discoveredFileMTime(current.Path)
 		if candOK && currOK && candMTime != currMTime {
@@ -480,11 +487,6 @@ func (e *Engine) expandCodexProviderDuplicates(
 	out := files
 	for _, f := range files {
 		if !isCodexFormatAgent(f.Agent) {
-			continue
-		}
-		// Discovery already chose a labeled copy over ordinary copies. A
-		// newer ordinary copy must not replace it after the cutoff filter.
-		if f.Agent == parser.AgentCodex && parser.CodexSourceLabelForRoots(e.sources().agentDirs[f.Agent], f.Path) != "" {
 			continue
 		}
 		pather, resolved := pathers[f.Agent]

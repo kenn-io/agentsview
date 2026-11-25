@@ -2475,6 +2475,14 @@ func TestCodexLabeledRunFindSourcePrecedence(t *testing.T) {
 	}
 }
 
+func TestCodexFindSourceRejectsInvalidID(t *testing.T) {
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{t.TempDir()}})
+	require.True(t, ok)
+	_, found, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: "bad.id"})
+	require.NoError(t, err)
+	assert.False(t, found)
+}
+
 func TestCodexLabeledDiscoveryPrefersPlainSibling(t *testing.T) {
 	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
 	root := t.TempDir()

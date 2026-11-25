@@ -6447,11 +6447,23 @@ func (e *Engine) syncAllLocked(
 		// engine's own dedup, so a changed archived copy that is newer than the
 		// cutoff would be lost behind an older live copy that the cutoff drops.
 		// Re-expand to every on-disk duplicate before filtering so the cutoff
-		// sees each copy's real mtime; the quick-sync dedupe below then keeps
-		// the newest surviving duplicate before falling back to normal layout
-		// preference.
+		// sees each copy's real mtime. Keep a preferred labeled source when
+		// any copy passes the cutoff; otherwise prefer the newest survivor.
+		labeled := make(map[string]parser.DiscoveredFile)
+		for _, file := range all {
+			if file.Agent == parser.AgentCodex && parser.CodexSourceLabelForRoots(e.sources().agentDirs[file.Agent], file.Path) != "" {
+				labeled[discoveredFileKey(file)] = file
+			}
+		}
 		all = e.expandCodexProviderDuplicates(all, scope)
 		all = e.filterQuickSyncFiles(ctx, all, since)
+		for _, file := range all {
+			key := discoveredFileKey(file)
+			if preferred, ok := labeled[key]; ok {
+				all = append(all, preferred)
+				delete(labeled, key)
+			}
+		}
 	}
 
 	if quickSyncCutoff {
@@ -9553,7 +9565,16 @@ func (e *Engine) PreferredSessionForPath(ctx context.Context, path string) (stri
 		}
 		if lower {
 			id := reconciliationMemberIdentity(file.Agent, *file.ProviderSource)
-			return applyIDPrefixToID(e.idPrefix, applyIDPrefixToID(provider.Definition().IDPrefix, id)), nil
+			id = applyIDPrefixToID(provider.Definition().IDPrefix, id)
+			outcome, err := provider.Parse(ctx, parser.ParseRequest{Source: *file.ProviderSource, Machine: e.machine})
+			if err != nil {
+				return "", err
+			}
+			for _, result := range outcome.Results {
+				if result.Result.Session.ID == id {
+					return applyIDPrefixToID(e.idPrefix, id), nil
+				}
+			}
 		}
 	}
 	return "", nil

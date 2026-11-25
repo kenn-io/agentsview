@@ -1625,6 +1625,9 @@ func (s codexSourceSet) preferredKnownRolloutSource(
 }
 
 func (s codexSourceSet) findCanonicalSource(ctx context.Context, uuid string) (SourceRef, bool, error) {
+	if !IsValidSessionID(uuid) {
+		return SourceRef{}, false, nil
+	}
 	var best SourceRef
 	foundExisting := false
 	for _, root := range s.roots {
