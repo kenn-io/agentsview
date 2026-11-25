@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -570,7 +571,7 @@ func lookupAnswerSource(q lookupQuestion, answer string) (string, bool) {
 		return "", false
 	}
 	for key, expected := range q.ExpectedAnswer {
-		if values[key] != expected {
+		if values[key] == "" || (values[key] != expected && !slices.Contains(q.AnswerAlternatives[key], values[key])) {
 			return "", false
 		}
 	}

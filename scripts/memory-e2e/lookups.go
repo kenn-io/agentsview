@@ -25,11 +25,12 @@ type lookupFixture struct {
 }
 
 type lookupQuestion struct {
-	Name           string            `json:"name"`
-	Prompt         string            `json:"prompt"`
-	Expected       []lookupItem      `json:"expected"`
-	ExpectedAnswer map[string]string `json:"expected_answer"`
-	Phrases        []string          `json:"phrases"`
+	Name               string              `json:"name"`
+	Prompt             string              `json:"prompt"`
+	Expected           []lookupItem        `json:"expected"`
+	ExpectedAnswer     map[string]string   `json:"expected_answer"`
+	AnswerAlternatives map[string][]string `json:"answer_alternatives,omitempty"`
+	Phrases            []string            `json:"phrases"`
 }
 
 type lookupAttempt struct {

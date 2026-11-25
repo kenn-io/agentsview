@@ -423,6 +423,32 @@ func TestLookupStructuredAnswers(t *testing.T) {
 	}
 }
 
+func TestLookupAcceptsListedSourceExcerpts(t *testing.T) {
+	var questions []lookupQuestion
+	require.NoError(t, readLookupJSON("testdata/lookups/questions.json", &questions))
+	for _, tc := range []struct {
+		name, answer string
+		valid        bool
+	}{
+		{"topic", `{"namespace":"violet ledger","reason":"the old namespace caused lock contention","source_session_id":"codex:11111111-1111-4111-8111-111111111111"}`, true},
+		{"named", `{"release_marker":"north pier marker","source_session_id":"codex:22222222-2222-4222-8222-222222222222"}`, true},
+		{"named", `{"release_marker":"south pier marker","source_session_id":"codex:22222222-2222-4222-8222-222222222222"}`, false},
+		{"named", `{"release_marker":"north pier marker","source_session_id":"codex:11111111-1111-4111-8111-111111111111"}`, false},
+		{"long-result", `{"index":"account-created-project","source_session_id":"codex:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}`, false},
+	} {
+		t.Run(tc.name+"/"+tc.answer, func(t *testing.T) {
+			for _, q := range questions {
+				if q.Name == tc.name {
+					_, ok := lookupAnswerSource(q, tc.answer)
+					assert.Equal(t, tc.valid, ok)
+					return
+				}
+			}
+			t.Fatal("question missing")
+		})
+	}
+}
+
 func TestLookupStructuredAnswerWithIncompleteCapture(t *testing.T) {
 	q := lookupQuestion{Expected: []lookupItem{{SessionID: "codex:" + lookupID}}, ExpectedAnswer: map[string]string{"team": "maple team"}, Phrases: []string{"maple team now owns"}}
 	score := scoreLookupQuestion(q, "", nil, errCaptureIncomplete)
