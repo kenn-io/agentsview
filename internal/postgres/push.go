@@ -583,6 +583,7 @@ func (s *Sync) pushWithOptions(
 
 	var priorFingerprints map[string]string
 	sessionFingerprints := make(map[string]string, len(sessionByID))
+	externalParents := make(map[string]string)
 	if !full {
 		var bErr error
 		priorFingerprints, _, _, bErr = readBoundaryAndFingerprints(ctx,
@@ -646,6 +647,7 @@ func (s *Sync) pushWithOptions(
 		if err != nil {
 			return result, err
 		}
+		maps.Copy(externalParents, depState.externalParents)
 		for _, id := range chunk {
 			usageFP, usageKnown := usageFingerprints[id]
 			dependencyFP, err := depState.dependencyFingerprint(
@@ -658,14 +660,10 @@ func (s *Sync) pushWithOptions(
 				)
 			}
 			sess := sessionByID[id]
-			externalParent, err := s.externalParent(ctx, id)
-			if err != nil {
-				return result, err
-			}
 			sessionFingerprints[id] = sessionPushFingerprint(
 				sess, db.MirroredSessionMachine(sess, s.machine),
 				s.archiveID, usageFP, markerID,
-				dependencyFP+"\x00external-parent:"+externalParent+"\x00source-database-generation:"+
+				dependencyFP+"\x00external-parent:"+externalParents[id]+"\x00source-database-generation:"+
 					s.databaseGeneration+"\x00archive-content:"+string(s.local.ArchiveContent()),
 			)
 			prepared++
@@ -794,7 +792,7 @@ func (s *Sync) pushWithOptions(
 
 		batchResult, err := s.pushBatch(
 			ctx, batch, rewriteTranscripts, markerID, legacyMarkerMachines,
-			usageFingerprints, &pushed,
+			usageFingerprints, externalParents, &pushed,
 		)
 		if err != nil {
 			return result, err
@@ -810,7 +808,7 @@ func (s *Sync) pushWithOptions(
 				sr, retryErr := s.pushBatch(
 					ctx, []db.Session{sess},
 					rewriteTranscripts, markerID, legacyMarkerMachines,
-					usageFingerprints, &pushed,
+					usageFingerprints, externalParents, &pushed,
 				)
 				if retryErr != nil {
 					return result, retryErr
@@ -1405,13 +1403,13 @@ func (s *Sync) pushBatch(
 	rewriteTranscripts bool,
 	markerID string,
 	legacyMarkerMachines []string,
-	sessionUsageFingerprints map[string]string,
+	sessionUsageFingerprints, externalParents map[string]string,
 	pushed *[]db.Session,
 ) (batchResult, error) {
 	preloadComparisons := len(batch) > 0 && !rewriteTranscripts
 	result, err := s.pushBatchAttempt(
 		ctx, batch, rewriteTranscripts, markerID, legacyMarkerMachines,
-		sessionUsageFingerprints, pushed, preloadComparisons,
+		sessionUsageFingerprints, externalParents, pushed, preloadComparisons,
 	)
 	if err == nil || !errors.Is(err, errPushComparisonPreload) {
 		return result, err
@@ -1423,7 +1421,7 @@ func (s *Sync) pushBatch(
 	)
 	return s.pushBatchAttempt(
 		ctx, batch, rewriteTranscripts, markerID, legacyMarkerMachines,
-		sessionUsageFingerprints, pushed, false,
+		sessionUsageFingerprints, externalParents, pushed, false,
 	)
 }
 
@@ -1433,7 +1431,7 @@ func (s *Sync) pushBatchAttempt(
 	rewriteTranscripts bool,
 	markerID string,
 	legacyMarkerMachines []string,
-	sessionUsageFingerprints map[string]string,
+	sessionUsageFingerprints, externalParents map[string]string,
 	pushed *[]db.Session,
 	preloadComparisons bool,
 ) (batchResult, error) {
@@ -1489,9 +1487,10 @@ func (s *Sync) pushBatchAttempt(
 		}
 		mirrored := sess
 		mirrored.DataVersion = db.MirrorDataVersion(sess.DataVersion, len(imageRows) > 0)
-		if err := s.pushSession(
-			ctx, tx, mirrored, markerID, legacyMarkerMachines,
-		); err != nil {
+		if err := writePGSession(ctx, tx, mirrored, markerID, legacyMarkerMachines, pgSessionWriteOptions{
+			ExternalParent: externalParents[sess.ID],
+			Machine:        s.machine, ArchiveID: s.archiveID, DatabaseGeneration: s.databaseGeneration, UsageOnly: s.local.ArchiveContent().UsageOnly(),
+		}); err != nil {
 			if errors.Is(err, errSessionOwnershipConflict) {
 				skippedConflicts++
 				continue
