@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -254,8 +253,8 @@ func writeSessionPromptPRLinksTx(tx transactionQueries, id, stored string, links
 const promptPRLinkCandidateSQL = `role='user' AND (COALESCE(` + sqliteDialogueExprBare + `, content) LIKE '%http://%' OR COALESCE(` + sqliteDialogueExprBare + `, content) LIKE '%https://%')`
 
 func refreshSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id string) error {
-	var stored, structured, cwd, remote string
-	if err := tx.QueryRow(`SELECT pr_links, structured_pr_links, COALESCE(cwd,''), `+checkoutRemoteSQL+` FROM sessions WHERE id=?`, id, id).Scan(&stored, &structured, &cwd, &remote); err != nil {
+	var stored, structured string
+	if err := tx.QueryRow(`SELECT pr_links, structured_pr_links FROM sessions WHERE id=?`, id).Scan(&stored, &structured); err != nil {
 		return err
 	}
 	rows, err := tx.Query(`SELECT `+selectMessageCols+` FROM messages WHERE session_id=? AND `+promptPRLinkCandidateSQL+` ORDER BY ordinal`, id)
@@ -270,7 +269,7 @@ func refreshSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, i
 	if err != nil {
 		return err
 	}
-	tools, err := storedToolCallPRLinksTx(ctx, tx, id, cwd, remote)
+	tools, err := storedToolCallPRLinksTx(ctx, tx, id, "", "")
 	if err != nil {
 		return err
 	}
@@ -286,11 +285,7 @@ func appendSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id
 	if err != nil {
 		return err
 	}
-	var cwd, remote string
-	if err := tx.QueryRow(`SELECT COALESCE(cwd,''), `+checkoutRemoteSQL+` FROM sessions WHERE id=?`, id, id).Scan(&cwd, &remote); err != nil {
-		return err
-	}
-	tools, err := ToolCallPRLinks(ctx, messages, cwd, remote)
+	tools, err := ToolCallPRLinks(ctx, messages, "", "")
 	if err != nil {
 		return err
 	}
@@ -308,9 +303,6 @@ func appendSessionPromptPRLinksTx(ctx context.Context, tx transactionQueries, id
 	}
 	return writeSessionPromptPRLinksTx(tx, id, stored, parser.CombinePRLinks(storedLinks, derived))
 }
-
-// checkoutRemoteSQL selects a single checkout remote.
-const checkoutRemoteSQL = `COALESCE((SELECT CASE WHEN remote_candidate_count=1 THEN git_remote END FROM session_project_identity_snapshots WHERE session_id=?),'')`
 
 // GetSessionStructuredPRLinks returns parser-recorded links without prompt links.
 func (db *DB) GetSessionStructuredPRLinks(ctx context.Context, id string) ([]PRLink, error) {
@@ -359,7 +351,7 @@ func (db *DB) upgradePRLinksTx(ctx context.Context, tx *sql.Tx) error {
 
 const maxPRCommandInputBytes = 256 * 1024
 
-func callPRLinks(ctx context.Context, category, input, cwd, remote string) ([]PRLink, error) {
+func callPRLinks(ctx context.Context, category, input string) ([]PRLink, error) {
 	if category == "Task" {
 		return taskPRLinks(ctx, input)
 	}
@@ -372,12 +364,7 @@ func callPRLinks(ctx context.Context, category, input, cwd, remote string) ([]PR
 	}
 	var lists [][]PRLink
 	for _, command := range commands {
-		workdir := parser.ToolInputWorkdir(input)
-		if command.codeMode {
-			workdir = command.workdir
-		}
-		allowBare := workdir == "" || parser.SamePRWorkingDirectory(cwd, resolveCommitDir(cwd, workdir))
-		links, err := parser.AnalyzePRCommand(ctx, command.text, cwd, remote, allowBare)
+		links, err := parser.AnalyzePRCommand(ctx, command.text)
 		if err != nil {
 			return nil, err
 		}
@@ -410,26 +397,11 @@ func taskPRLinks(ctx context.Context, input string) ([]PRLink, error) {
 	return parser.PromptPRLinksContext(ctx, strings.Join(text, "\n"))
 }
 
-type prShellCommand struct {
-	text, workdir string
-	codeMode      bool
-}
-
-// codeModeShellCallRE matches literal object arguments to code-mode tool calls.
-var codeModeShellCallRE = regexp.MustCompile("\\btools\\.\\w+\\s*\\(\\s*\\{(?:[^{}\"'`]|\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|`(?:\\\\.|[^`\\\\])*`)*\\}")
+type prShellCommand struct{ text string }
 
 // shellInputCommands lists literal commands in a shell tool input.
 func shellInputCommands(input string) ([]prShellCommand, bool) {
 	if !jsontext.Value(input).IsValid() {
-		if commitToolCallRE.MatchString(input) {
-			var commands []prShellCommand
-			for _, call := range codeModeShellCallRE.FindAllString(input, -1) {
-				if command := commitCommandText(call); command != "" {
-					commands = append(commands, prShellCommand{text: command, workdir: commitWorkdir(call, ""), codeMode: true})
-				}
-			}
-			return commands, len(commands) > 0
-		}
 		text := strings.TrimSpace(input)
 		return []prShellCommand{{text: input}}, text != "" && text[0] != '{' && text[0] != '['
 	}
@@ -476,11 +448,11 @@ func commandValue(raw jsontext.Value) (string, bool) {
 }
 
 // ToolCallPRLinks derives links from each independent tool call.
-func ToolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string) ([]PRLink, error) {
+func ToolCallPRLinks(ctx context.Context, messages []Message, _, _ string) ([]PRLink, error) {
 	var lists [][]PRLink
 	for _, message := range messages {
 		for _, call := range message.ToolCalls {
-			links, err := callPRLinks(ctx, call.Category, call.InputJSON, cwd, remote)
+			links, err := callPRLinks(ctx, call.Category, call.InputJSON)
 			if err != nil {
 				return nil, err
 			}
@@ -488,16 +460,6 @@ func ToolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string
 		}
 	}
 	return parser.CombinePRLinks(lists...), nil
-}
-
-// SetProjectedPRLinks keeps links derived before a content policy removes inputs.
-func (s *Session) SetProjectedPRLinks(links []PRLink) {
-	s.projectedPRLinks = parser.CombinePRLinks(s.projectedPRLinks, links)
-}
-
-// ProjectedUsagePRLinks returns links derived before projecting a session.
-func ProjectedUsagePRLinks(ctx context.Context, session Session) ([]PRLink, error) {
-	return session.projectedPRLinks, ctx.Err()
 }
 
 func storedToolCallsTx(tx transactionQueries, id string) ([]ToolCall, error) {
@@ -523,23 +485,6 @@ func storedToolCallPRLinksTx(ctx context.Context, tx transactionQueries, id, cwd
 		return nil, err
 	}
 	return ToolCallPRLinks(ctx, []Message{{ToolCalls: calls}}, cwd, remote)
-}
-
-func retainCopiedUsageToolPRLinksTx(ctx context.Context, tx *sql.Tx, tempIDsTable string) error {
-	ids, err := sessionIDsTx(ctx, tx, "id IN (SELECT id FROM "+tempIDsTable+")")
-	if err != nil {
-		return err
-	}
-	for _, id := range ids {
-		calls, err := storedToolCallsTx(contextTransaction{ctx: ctx, tx: tx}, id)
-		if err != nil {
-			return err
-		}
-		if err := retainUsageToolPRLinksTx(ctx, tx, id, []Message{{ToolCalls: calls}}); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 const toolPRLinksDataVersion = 190

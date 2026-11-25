@@ -404,8 +404,7 @@ type Session struct {
 	// user prompts. A prompt mention does not establish active work.
 	// Always serialized, as [] when empty, so a client merging a fresh
 	// response over a cached one drops cleared values.
-	PRLinks          []PRLink `json:"pr_links" required:"false"`
-	projectedPRLinks []PRLink
+	PRLinks []PRLink `json:"pr_links" required:"false"`
 	// Labels are user- or tool-supplied tags. They are stored apart from
 	// parsed transcript data, so a reparse or resync never changes them.
 	// Always serialized, as [] when empty, like PRLinks.
@@ -1286,7 +1285,7 @@ func (db *DB) GetArtifactExportSession(
 	if err != nil || s == nil {
 		return s, err
 	}
-	s.PRLinks, err = db.GetSessionStructuredPRLinks(ctx, s.ID)
+	s.PRLinks, err = db.GetSessionStructuredPRLinks(ctx, id)
 	return s, err
 }
 
@@ -1742,11 +1741,6 @@ func (db *DB) upsertSession(ctx context.Context,
 	defer func() { _ = tx.Rollback() }()
 	if err := db.checkArchiveSessionProvenanceTx(ctx, tx, SessionBatchWrite{Session: s}); err != nil {
 		return sessionUpsertResult{}, err
-	}
-	if db.ArchiveContent().OmitsToolContent() {
-		if err := mergeUsagePRLinksTx(ctx, tx, &s); err != nil {
-			return sessionUpsertResult{}, err
-		}
 	}
 
 	result, err := upsertSessionExec(

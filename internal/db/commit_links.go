@@ -86,47 +86,47 @@ type CommitSessionList struct {
 	Commits []CommitSessionMatch `json:"commits"`
 }
 
-func resolveCommitDir(base, dir string) string {
-	if strings.HasPrefix(dir, "'") {
-		if words, err := shlex.Split(dir); err == nil && len(words) == 1 {
-			dir = words[0]
+// commitRepository records the directory of the first git commit invocation.
+func commitRepository(input, cwd string) string {
+	resolve := func(base, dir string) string {
+		if strings.HasPrefix(dir, "'") {
+			if words, err := shlex.Split(dir); err == nil && len(words) == 1 {
+				dir = words[0]
+			}
+		} else if len(dir) >= 2 && strings.HasPrefix(dir, `"`) && strings.HasSuffix(dir, `"`) {
+			dir = dir[1 : len(dir)-1]
 		}
-	} else if len(dir) >= 2 && strings.HasPrefix(dir, `"`) && strings.HasSuffix(dir, `"`) {
-		dir = dir[1 : len(dir)-1]
-	}
-	if path.IsAbs(dir) || strings.HasPrefix(dir, "~") || commitWindowsDriveRE.MatchString(dir) || strings.HasPrefix(dir, `\\`) {
-		return dir
-	}
-	if path.IsAbs(base) && !strings.HasPrefix(base, "//") || !strings.ContainsAny(base+dir, `\`) && !commitWindowsDriveRE.MatchString(base) {
-		return path.Join(base, dir)
-	}
-	// filepath follows the host OS; transcript paths can come from any OS.
-	backslashes := strings.ContainsAny(base+dir, `\`)
-	base = strings.ReplaceAll(base, `\`, "/")
-	dir = strings.ReplaceAll(dir, `\`, "/")
-	volume := ""
-	if commitWindowsDriveRE.MatchString(base) {
-		volume, base = base[:2], base[2:]
-	} else if strings.HasPrefix(base, "//") {
-		parts := strings.SplitN(base[2:], "/", 3)
-		if len(parts) >= 2 {
-			volume, base = "//"+parts[0]+"/"+parts[1], "/"
-			if len(parts) == 3 {
-				base += parts[2]
+		if path.IsAbs(dir) || strings.HasPrefix(dir, "~") || commitWindowsDriveRE.MatchString(dir) || strings.HasPrefix(dir, `\\`) {
+			return dir
+		}
+		if path.IsAbs(base) && !strings.HasPrefix(base, "//") || !strings.ContainsAny(base+dir, `\`) && !commitWindowsDriveRE.MatchString(base) {
+			return path.Join(base, dir)
+		}
+		// filepath follows the host OS; transcript paths can come from any OS.
+		backslashes := strings.ContainsAny(base+dir, `\`)
+		base = strings.ReplaceAll(base, `\`, "/")
+		dir = strings.ReplaceAll(dir, `\`, "/")
+		volume := ""
+		if commitWindowsDriveRE.MatchString(base) {
+			volume, base = base[:2], base[2:]
+		} else if strings.HasPrefix(base, "//") {
+			parts := strings.SplitN(base[2:], "/", 3)
+			if len(parts) >= 2 {
+				volume, base = "//"+parts[0]+"/"+parts[1], "/"
+				if len(parts) == 3 {
+					base += parts[2]
+				}
 			}
 		}
+		if path.IsAbs(dir) {
+			base = ""
+		}
+		joined := volume + path.Join(base, dir)
+		if backslashes {
+			joined = strings.ReplaceAll(joined, "/", `\`)
+		}
+		return joined
 	}
-	if path.IsAbs(dir) {
-		base = ""
-	}
-	joined := volume + path.Join(base, dir)
-	if backslashes {
-		joined = strings.ReplaceAll(joined, "/", `\`)
-	}
-	return joined
-}
-
-func commitWorkdir(input, cwd string) string {
 	var fields struct {
 		Workdir string `json:"workdir"`
 		Cwd     string `json:"cwd"`
@@ -145,14 +145,8 @@ func commitWorkdir(input, cwd string) string {
 		}
 	}
 	if dir != "" {
-		cwd = resolveCommitDir(cwd, dir)
+		cwd = resolve(cwd, dir)
 	}
-	return cwd
-}
-
-// commitRepository records the directory of the first git commit invocation.
-func commitRepository(input, cwd string) string {
-	cwd = commitWorkdir(input, cwd)
 	shellWord := func(word string) string {
 		if strings.HasPrefix(word, `"`) {
 			return strings.ReplaceAll(word, `\"`, `"`)
@@ -162,12 +156,12 @@ func commitRepository(input, cwd string) string {
 	command := commitCommandText(input)
 	if invocation := commitInvocationRE.FindStringIndex(command); invocation != nil {
 		if matches := commitCDRE.FindAllStringSubmatch(command[:invocation[0]], -1); len(matches) > 0 {
-			cwd = resolveCommitDir(cwd, matches[len(matches)-1][1])
+			cwd = resolve(cwd, matches[len(matches)-1][1])
 		}
 	}
 	for _, option := range commitGlobalOptionRE.FindAllString(commitInvocationRE.FindString(command), -1) {
 		if strings.HasPrefix(option, "-C") {
-			cwd = resolveCommitDir(cwd, shellWord(strings.TrimSpace(option[2:])))
+			cwd = resolve(cwd, shellWord(strings.TrimSpace(option[2:])))
 		}
 	}
 	return cwd

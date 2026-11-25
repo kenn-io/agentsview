@@ -687,7 +687,7 @@ child-agent prompts, or structured transcript records. Supported actions are
 `view`, `checkout` (including `co`), `edit`, `diff`, `checks`, `comment`,
 `review`, `ready`, `merge`, `close`, `reopen`, `update-branch`, `lock`,
 `unlock`, and `revert`. A command names its pull request by URL or number,
-optionally with `-R` or `--repo` set to `owner/repo` or `host/owner/repo`.
+with `-R` or `--repo` set to `owner/repo` or `host/owner/repo`.
 AgentsView recognizes supported command flags and literal commands wrapped by
 `command`, `env`, `timeout`, or a shell. A selector or repository from a
 variable or substitution is not indexed.
@@ -710,14 +710,11 @@ Because Claude Code records these links for the whole transcript, every session
 split from that transcript, such as a rewind's fork, carries them like its name
 and git branch.
 
-Bare numbers require one known checkout remote and a command that does not
-change its working directory or repository context. Transcript-only and
-usage-only archives do not resolve bare numbers. `-R owner/repo` uses
-`github.com`; use a full URL or `-R host/owner/repo` for another host. A
-`GH_HOST` assignment in the same command prevents hostless `-R` links.
-Transcript-only and usage-only archives retain tool-derived links as historical
-references, so later writes do not remove them. Archives that discarded tool
-inputs before this feature cannot recover those links.
+A number requires an explicit repository. `-R owner/repo` uses `github.com`,
+including on GitHub Enterprise installations. Use a full URL or `-R
+host/owner/repo` for another host. A command containing `GH_HOST` does not
+produce a hostless `-R` link. Transcript-only and usage-only archives do not
+retain tool inputs, so they cannot recover command or child-agent prompt links.
 
 To filter by pull request, use `session list --pr` or the `pr` query parameter.
 Pass `owner/repo` for any pull request in that repository, `owner/repo#123` for

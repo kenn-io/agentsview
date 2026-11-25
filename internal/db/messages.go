@@ -1627,11 +1627,6 @@ func (db *DB) insertMessages(ctx context.Context,
 	sessionIDs := messageSessionIDs(rawMessages)
 	for _, sessionID := range sessionIDs {
 		var err error
-		if db.ArchiveContent().OmitsToolContent() {
-			if err := retainUsageToolPRLinksTx(ctx, tx, sessionID, messagesForSession(rawMessages, sessionID)); err != nil {
-				return err
-			}
-		}
 		if db.usageOnlyStorage() {
 			err = updateUsageOnlyAutomationTx(
 				tx, sessionID, messagesForSession(rawMessages, sessionID),
@@ -1850,11 +1845,6 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 	defer func() { _ = tx.Rollback() }()
 	if err := db.checkArchiveSessionProvenanceTx(ctx, tx, SessionBatchWrite{Session: Session{ID: sessionID}}); err != nil {
 		return false, err
-	}
-	if db.ArchiveContent().OmitsToolContent() {
-		if err := retainUsageToolPRLinksTx(ctx, tx, sessionID, rawMessages); err != nil {
-			return false, err
-		}
 	}
 
 	var replaced *messageRangeTotals
@@ -2178,11 +2168,6 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 	}
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 
-	if db.ArchiveContent().OmitsToolContent() {
-		if err := retainUsageToolPRLinksTx(ctx, tx, sessionID, rawMessages); err != nil {
-			return err
-		}
-	}
 	if err := reconcileReplacedConversationTx(tx, sessionID, msgs, plan, useDiff, db.usageOnlyStorage()); err != nil {
 		return err
 	}

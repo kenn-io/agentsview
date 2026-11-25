@@ -10,46 +10,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
 )
 
 const importLocalOrigin = "local-b2c3d4"
-
-func TestArtifactImportRetainsToolPRLinks(t *testing.T) {
-	source := testExportDB(t)
-	source.SetArchiveContent(config.ArchiveContentTranscripts)
-	seedSession(t, source, "one", "project", func(s *db.Session) { s.MessageCount, s.UserMessageCount = 1, 0 })
-	require.NoError(t, source.ReplaceSessionMessages(t.Context(), "one", []db.Message{{
-		SessionID: "one", Role: "assistant", Content: "reviewing", HasToolUse: true,
-		ToolCalls: []db.ToolCall{
-			{ToolName: "Bash", Category: "Bash", ToolUseID: "call-1", InputJSON: `{"command":"gh pr view 5 -R example/repo"}`},
-			{ToolName: "Task", Category: "Task", ToolUseID: "call-2", InputJSON: `{"prompt":"Review https://github.com/example/repo/pull/6"}`},
-		},
-	}}))
-	store := newTestArtifactStore(t)
-	exported, err := ExportToStore(t.Context(), source, store, ExportOptions{Origin: contractOrigin, Full: true})
-	require.NoError(t, err)
-	require.Equal(t, 1, exported.ExportedSessions)
-	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
-		t.Run(string(policy), func(t *testing.T) {
-			destination := testDB(t)
-			destination.SetArchiveContent(policy)
-			coordinator := NewStoreImportCoordinator(destination, store, importLocalOrigin)
-			recordAllImportEntries(t, coordinator, store, contractOrigin)
-			result, err := coordinator.Finalize(t.Context())
-			require.NoError(t, err)
-			require.Equal(t, 1, result.Sessions, "%+v", result)
-			session, err := destination.GetSessionFull(t.Context(), contractOrigin+"~one")
-			require.NoError(t, err)
-			require.NotNil(t, session)
-			require.Len(t, session.PRLinks, 2)
-			assert.Equal(t, 5, session.PRLinks[0].Number)
-			assert.Equal(t, 6, session.PRLinks[1].Number)
-		})
-	}
-}
 
 func TestArtifactImportKeepsLauncherParentEditable(t *testing.T) {
 	for _, kind := range []string{"", "non-interactive"} {

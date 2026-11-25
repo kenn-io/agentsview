@@ -156,14 +156,6 @@ func finalize(
 	}
 	validation = addValidationStats(validation, usageValidation)
 	session.RelationshipType = db.SessionRelationship(session)
-	var usagePRLinks []db.PRLink
-	if options.ArchiveContent.OmitsToolContent() {
-		usagePRLinks, err = db.ToolCallPRLinks(ctx, messages, "", "")
-		if err != nil {
-			return PreparedSession{}, err
-		}
-		session.SetProjectedPRLinks(usagePRLinks)
-	}
 	session, messages = db.ProjectSessionForStoragePolicy(
 		session, messages, options.ArchiveContent,
 	)

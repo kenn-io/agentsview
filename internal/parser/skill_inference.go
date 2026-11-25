@@ -70,7 +70,7 @@ func inferCodexSkillNameWithBase(ctx context.Context, toolName, inputJSON, fallb
 	if !strings.Contains(cmd, "SKILL.md") {
 		return ""
 	}
-	baseDir := ToolInputWorkdir(inputJSON)
+	baseDir := skillBaseDirFromInput(inputJSON)
 	if baseDir == "" {
 		baseDir = fallbackBaseDir
 	}
@@ -252,7 +252,7 @@ func inferSkillNameFromJSONPaths(ctx context.Context, inputJSON string) string {
 	if trimmed == "" {
 		return ""
 	}
-	baseDir := ToolInputWorkdir(trimmed)
+	baseDir := skillBaseDirFromInput(trimmed)
 	if !gjson.Valid(trimmed) {
 		for _, path := range skillPathsFromText(trimmed) {
 			if name := skillNameFromPath(ctx, path, baseDir); name != "" {
@@ -461,9 +461,9 @@ func expandSkillHome(path string) string {
 	return filepath.Join(home, path[len("~/"):])
 }
 
-// ToolInputWorkdir extracts a working-directory hint from a
+// skillBaseDirFromInput extracts a working-directory hint from a
 // tool call's input JSON (e.g. Codex exec_command "workdir").
-func ToolInputWorkdir(inputJSON string) string {
+func skillBaseDirFromInput(inputJSON string) string {
 	trimmed := strings.TrimSpace(inputJSON)
 	if trimmed == "" || !gjson.Valid(trimmed) {
 		return ""

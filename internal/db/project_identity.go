@@ -760,27 +760,10 @@ func (db *DB) upsertProjectIdentityObservationWithSnapshotProject(
 		return fmt.Errorf("beginning project identity observation upsert: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	var oldRemote string
-	if !db.ArchiveContent().OmitsToolContent() && obs.SessionID != "" {
-		if err := tx.QueryRowContext(ctx, `SELECT `+checkoutRemoteSQL, obs.SessionID).Scan(&oldRemote); err != nil {
-			return err
-		}
-	}
 	if err := upsertProjectIdentityObservationWithSnapshotProjectTxContext(
 		ctx, tx, obs, snapshotProject, false, allowSnapshotProjectCorrection,
 	); err != nil {
 		return err
-	}
-	if !db.ArchiveContent().OmitsToolContent() && obs.SessionID != "" {
-		var newRemote string
-		if err := tx.QueryRowContext(ctx, `SELECT `+checkoutRemoteSQL, obs.SessionID).Scan(&newRemote); err != nil {
-			return err
-		}
-		if oldRemote != newRemote {
-			if err := refreshSessionPromptPRLinksTx(ctx, contextTransaction{ctx: ctx, tx: tx}, obs.SessionID); err != nil {
-				return err
-			}
-		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing project identity observation upsert: %w", err)
@@ -858,11 +841,6 @@ func (db *DB) upsertSessionWithProjectIdentity(ctx context.Context,
 		return sessionUpsertResult{}, err
 	}
 
-	if db.ArchiveContent().OmitsToolContent() {
-		if err := mergeUsagePRLinksTx(ctx, tx, &s); err != nil {
-			return sessionUpsertResult{}, err
-		}
-	}
 	result, err := upsertSessionExec(
 		ctx,
 		tx.ExecContext,

@@ -39,19 +39,13 @@ func TestToolCallPRLinks(t *testing.T) {
 		{"argv", []db.ToolCall{bash("shell", `{"command":["bash","-lc","gh pr view 43 -R example/repo"]}`)}, "/work/repo", remote, []int{43}},
 		{"commands", []db.ToolCall{bash("execute_command", `{"commands":["gh pr view 42 -R example/repo","gh pr view 43 -R example/repo"]}`)}, "/work/repo", remote, []int{42, 43}},
 		{"CommandLine", []db.ToolCall{bash("run_command", `{"CommandLine":"gh pr view 42 -R example/repo"}`)}, "/work/repo", remote, []int{42}},
-		{"plain text", []db.ToolCall{bash("shell", `gh pr view 42`)}, "/work/repo", remote, []int{42}},
-		{"code mode", []db.ToolCall{bash("exec", `text(await tools.exec_command({cmd:"gh pr view 42 -R example/repo"})); text(await tools.exec_command({cmd:"gh pr view 43 -R example/repo"}))`)}, "/work/repo", remote, []int{42, 43}},
+		{"plain text", []db.ToolCall{bash("shell", `gh pr view 42 -R example/repo`)}, "/work/repo", remote, []int{42}},
 		{"other", []db.ToolCall{bash("exec_command", `{"cmd":"gh pr view 42","workdir":"/work/other"}`)}, "/work/repo", remote, nil},
-		{"matching", []db.ToolCall{bash("exec_command", `{"cmd":"gh pr view 42","workdir":"/work/./repo"}`)}, "/work/repo", remote, []int{42}},
-		{"relative matching", []db.ToolCall{bash("exec_command", `{"cmd":"gh pr view 42","workdir":"."}`)}, "/work/repo", remote, []int{42}},
 		{"relative other", []db.ToolCall{bash("exec_command", `{"cmd":"gh pr view 42","workdir":"../other"}`)}, "/work/repo", remote, nil},
-		{"code mode relative matching", []db.ToolCall{bash("exec", `text(await tools.exec_command({cmd:"gh pr view 42",workdir:"."}))`)}, "/work/repo", remote, []int{42}},
-		{"code mode batch", []db.ToolCall{bash("exec", `text(await tools.exec_command({cmd:"gh pr view 41",workdir:"/other"})); text(await tools.exec_command({cmd:"gh pr view 42",workdir:"/work/repo"}))`)}, "/work/repo", remote, []int{42}},
-		{"code mode commit directory", []db.ToolCall{bash("exec", `text(await tools.exec_command({cmd:"git -C /other commit -m x; gh pr view 42",workdir:"/work/repo"}))`)}, "/work/repo", remote, nil},
-		{"earlier directory", []db.ToolCall{bash("Bash", `{"command":"cd /work/other"}`), bash("Bash", `{"command":"gh pr view 42"}`), bash("Bash", `{"command":"gh pr view 61 -R github.com/example/repo"}`)}, "/work/repo", remote, []int{42, 61}},
-		{"earlier repository", []db.ToolCall{bash("Bash", `{"command":"git remote set-url origin https://github.com/user-b/project-b.git"}`), bash("Bash", `{"command":"gh pr view 42"}`), bash("Bash", `{"command":"gh pr view 61 -R github.com/example/repo"}`)}, "/work/repo", remote, []int{42, 61}},
+		{"earlier directory", []db.ToolCall{bash("Bash", `{"command":"cd /work/other"}`), bash("Bash", `{"command":"gh pr view 42"}`), bash("Bash", `{"command":"gh pr view 61 -R github.com/example/repo"}`)}, "/work/repo", remote, []int{61}},
+		{"earlier repository", []db.ToolCall{bash("Bash", `{"command":"git remote set-url origin https://github.com/user-b/project-b.git"}`), bash("Bash", `{"command":"gh pr view 42"}`), bash("Bash", `{"command":"gh pr view 61 -R github.com/example/repo"}`)}, "/work/repo", remote, []int{61}},
 		{"oversized skipped", []db.ToolCall{bash("Bash", oversized("gh pr view 41 -R github.com/example/repo")), bash("Bash", `{"command":"gh pr view 42 -R github.com/example/repo"}`)}, "", "", []int{42}},
-		{"oversized input leaves later call independent", []db.ToolCall{bash("Bash", oversized("echo")), bash("Bash", `{"command":"gh pr view 42"}`)}, "/work/repo", remote, []int{42}},
+		{"oversized input leaves later call independent", []db.ToolCall{bash("Bash", oversized("echo")), bash("Bash", `{"command":"gh pr view 42"}`)}, "/work/repo", remote, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			links, err := db.ToolCallPRLinks(t.Context(), []db.Message{{ToolCalls: tc.calls}}, tc.cwd, tc.remote)

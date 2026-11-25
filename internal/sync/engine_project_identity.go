@@ -100,7 +100,7 @@ func (e *Engine) projectIdentityObservationForWrite(
 
 // mayDiscoverLocalProject reports whether path may be probed on the local
 // filesystem. Only sessions recorded on this machine qualify: another
-// machine's cwd from a synced Linux host is meaningless
+// machine's cwd (e.g. /home/... from a synced Linux host) is meaningless
 // here, and on macOS merely stat'ing such paths wakes the /home automounter —
 // with tens of thousands of remote sessions and a one-minute cache TTL that
 // becomes a sustained automountd/opendirectoryd CPU storm.

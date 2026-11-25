@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"reflect"
-	"slices"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -19,13 +18,6 @@ const (
 	rawSourceProofDetachSQL = `UPDATE session_sources SET physical_session_id=NULL WHERE physical_session_id=$1`
 	rawGroupContentsSQL     = `SELECT id,raw_content_revision FROM sessions WHERE raw_group_id=$1 AND raw_group_id<>'' UNION SELECT session_id,content_revision FROM raw_session_branches WHERE group_id=$1 AND active ORDER BY 1`
 )
-
-func retainMergedUsagePRLinks(links []db.PRLink, old db.Session, action ingest.HistoryAction, usage bool) []db.PRLink {
-	if usage && action == ingest.HistoryMerge && old.DataVersion >= rawPRLinksDataVersion {
-		return parser.CombinePRLinks(links, old.PRLinks)
-	}
-	return links
-}
 
 func rawGroupHasStaleFriction(
 	ctx context.Context, tx *sql.Tx, group string,
@@ -45,12 +37,8 @@ func rawGroupHasStaleFriction(
 
 // syncSelectedRawPRLinks refreshes materialized revisions selected by active
 // branches, including longer retained captures whose source has departed.
-func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string, dialogueChanges, restored []string, freshLinks map[string][]db.PRLink, membershipChanged bool) (bool, error) {
-	freshIDs := make([]string, 0, len(freshLinks))
-	for id := range freshLinks {
-		freshIDs = append(freshIDs, id)
-	}
-	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT b.session_id,s.data_version FROM raw_session_branches b JOIN sessions s ON s.id=b.session_id WHERE b.group_id=$1 AND b.active AND (s.data_version<$2 OR b.session_id=ANY($3::text[]) OR b.session_id=ANY($4::text[]) OR b.session_id=ANY($5::text[]) OR $6)`, group, db.CurrentDataVersion(), dialogueChanges, freshIDs, restored, membershipChanged)
+func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string, dialogueChanges []string) (bool, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT b.session_id,s.data_version FROM raw_session_branches b JOIN sessions s ON s.id=b.session_id WHERE b.group_id=$1 AND b.active AND (s.data_version<$2 OR b.session_id=ANY($3::text[]))`, group, db.CurrentDataVersion(), dialogueChanges)
 	if err != nil {
 		return false, err
 	}
@@ -74,30 +62,19 @@ func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string, dialo
 	}
 	changed := false
 	for _, id := range ids {
-		links, fresh := freshLinks[id]
-		branchLinks, hasBranchLinks, err := activeRawBranchPRLinks(ctx, tx, id)
+		payload, err := loadRawPayload(ctx, tx, id)
 		if err != nil {
 			return false, err
 		}
-		if !fresh && (membershipChanged || slices.Contains(restored, id)) && hasBranchLinks {
-			links, fresh = branchLinks, true
+		promptLinks, err := db.PromptPRLinksContext(ctx, payload.Messages)
+		if err != nil {
+			return false, err
 		}
-		if !fresh {
-			payload, err := loadRawPayload(ctx, tx, id)
-			if err != nil {
-				return false, err
-			}
-			promptLinks, err := db.PromptPRLinksContext(ctx, payload.Messages)
-			if err != nil {
-				return false, err
-			}
-			toolLinks, err := db.ToolCallPRLinks(ctx, payload.Messages, payload.Session.Cwd, "")
-			if err != nil {
-				return false, err
-			}
-			links = parser.CombinePRLinks(payload.Session.PRLinks, promptLinks, toolLinks)
+		toolLinks, err := db.ToolCallPRLinks(ctx, payload.Messages, "", "")
+		if err != nil {
+			return false, err
 		}
-		encoded := db.EncodePRLinks(parser.CombinePRLinks(links, branchLinks))
+		links := db.EncodePRLinks(parser.CombinePRLinks(payload.Session.PRLinks, promptLinks, toolLinks))
 		var linksChanged bool
 		err = tx.QueryRowContext(ctx, `WITH prior AS (
  SELECT pr_links FROM sessions WHERE id=$1 FOR UPDATE
@@ -106,39 +83,13 @@ func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string, dialo
  FROM prior WHERE id=$1 AND (sessions.pr_links IS DISTINCT FROM $2 OR data_version<$3)
  RETURNING prior.pr_links IS DISTINCT FROM $2 AS links_changed
 )
-SELECT COALESCE((SELECT links_changed FROM updated),false)`, id, encoded, db.CurrentDataVersion()).Scan(&linksChanged)
+SELECT COALESCE((SELECT links_changed FROM updated),false)`, id, links, db.CurrentDataVersion()).Scan(&linksChanged)
 		if err != nil {
 			return false, err
 		}
 		changed = changed || linksChanged
 	}
 	return changed, nil
-}
-
-// activeRawBranchPRLinks combines evidence from active captures of a session.
-func activeRawBranchPRLinks(ctx context.Context, tx *sql.Tx, id string) ([]db.PRLink, bool, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT prior_payload FROM raw_session_branches WHERE session_id=$1 AND active ORDER BY branch_id`, id)
-	if err != nil {
-		return nil, false, err
-	}
-	defer rows.Close()
-	var lists [][]db.PRLink
-	current := false
-	for rows.Next() {
-		var data []byte
-		if err := rows.Scan(&data); err != nil {
-			return nil, false, err
-		}
-		metadata, err := decodeRawPayload(data)
-		if err != nil {
-			return nil, false, err
-		}
-		if metadata.Session.DataVersion >= rawPRLinksDataVersion {
-			current = true
-			lists = append(lists, metadata.Session.PRLinks)
-		}
-	}
-	return parser.CombinePRLinks(lists...), current, rows.Err()
 }
 
 // rawEmbeddingChange is a physical session whose embeddings must follow a
@@ -378,7 +329,7 @@ func (s *RawProjectionStore) writePayload(ctx context.Context, tx *sql.Tx, id, g
 	if err != nil {
 		return err
 	}
-	toolLinks, err := db.ToolCallPRLinks(ctx, p.Messages, p.Session.Cwd, "")
+	toolLinks, err := db.ToolCallPRLinks(ctx, p.Messages, "", "")
 	if err != nil {
 		return err
 	}

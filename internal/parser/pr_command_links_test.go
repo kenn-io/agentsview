@@ -13,11 +13,9 @@ func TestCommandPRLinks(t *testing.T) {
 	for _, tc := range []struct {
 		command, remote, want, cwd string
 	}{
-		{`bash -c 'export GH_HOST=git.example'; gh pr view 42`, remote, "https://github.com/example/repo/pull/42", "/work/repo"},
-		{`bash -c 'export GH_HOST=git.example'; gh pr view 42 -R example/repo`, remote, "https://github.com/example/repo/pull/42", ""},
+		{`bash -c 'export GH_HOST=git.example'; gh pr view 42 -R example/repo`, remote, "", ""},
 		{`export GH_HOST=$HOST; gh pr view 42 -R example/repo`, remote, "", ""},
 		{`setHost() { export GH_HOST=git.example; }; setHost; gh pr view 42 -R example/repo`, remote, "", ""},
-		{`setHost() { export GH_HOST=git.example; }; gh pr view 42 -R example/repo`, remote, "https://github.com/example/repo/pull/42", ""},
 		{`setHost() { export GH_HOST=git.example; }; setHost; gh pr view 42 -R github.com/example/repo`, remote, "https://github.com/example/repo/pull/42", ""},
 		{`gh pr view 42; cd /other; gh pr view 43`, remote, "", ""},
 		{`command gh pr view 41 -R example/repo`, "", "https://github.com/example/repo/pull/41", ""},
@@ -37,7 +35,6 @@ func TestCommandPRLinks(t *testing.T) {
 		{`timeout 60 git remote set-url origin other; gh pr view 42`, remote, "", ""},
 		{`bash -c 'export GH_HOST=git.example; gh pr view 42 -R example/repo'`, remote, "", ""},
 		{`gh pr merge 12 -R example/repo --squash`, "", "https://github.com/example/repo/pull/12", ""},
-		{`gh pr view --json title 42 --web`, remote, "https://github.com/example/repo/pull/42", ""},
 		{`gh pr comment https://github.com/example/repo/pull/42 --body 'hello'`, "", "https://github.com/example/repo/pull/42", ""},
 		{`gh pr comment --body "$BODY" 42 -R example/repo`, "", "https://github.com/example/repo/pull/42", ""},
 		{`gh pr comment 42 -R example/repo --body "$BODY"`, "", "https://github.com/example/repo/pull/42", ""},
@@ -61,7 +58,6 @@ func TestCommandPRLinks(t *testing.T) {
 		{`command cd /other && gh pr view 42`, remote, "", ""},
 		{`command -- cd /other && gh pr view 42`, remote, "", ""},
 		{`command -p cd /other && gh pr view 42`, remote, "", ""},
-		{`command -v cd && gh pr view 42`, remote, "https://github.com/example/repo/pull/42", ""},
 		{`builtin cd /other && gh pr view 42`, remote, "", ""},
 		{`gh pr co 42 -R example/repo`, "", "https://github.com/example/repo/pull/42", ""},
 		{`gh pr view '#42' -R example/repo`, "", "https://github.com/example/repo/pull/42", ""},
@@ -75,14 +71,8 @@ func TestCommandPRLinks(t *testing.T) {
 		{`git -c a=b remote set-url origin https://github.com/example/other.git; gh pr view 42`, remote, "", ""},
 		{`git --git-dir=.git remote set-url origin https://github.com/example/other.git; gh pr view 42`, remote, "", ""},
 		{`git config remote.origin.url https://github.com/example/other.git; gh pr view 42`, remote, "", ""},
-		{`git config --global core.editor vim; gh pr view 42`, remote, "https://github.com/example/repo/pull/42", ""},
 		{`gh pr comment 42 -R example/repo --body "$(export GH_HOST=git.example)"`, "", "", ""},
 		{`gh pr comment 42 --body "$(git remote set-url origin other)"`, remote, "", ""},
-		{`git push && gh pr view 42`, remote, "https://github.com/example/repo/pull/42", ""},
-		{`echo $GH_REPO; gh pr view 42`, remote, "https://github.com/example/repo/pull/42", ""},
-		{`change_repo() { export GH_REPO=example/other; }; gh pr view 42`, remote, "https://github.com/example/repo/pull/42", ""},
-		{`change_repo() { export GH_REPO=example/other; }; change_repo; gh pr view 42`, remote, "", ""},
-		{`gh repo set-default --view; gh pr view 42`, remote, "https://github.com/example/repo/pull/42", ""},
 		{`gh repo set-default example/other; gh pr view 42`, remote, "", ""},
 		{`cd repo && gh pr view 42`, remote, "", ""},
 		{`popd; gh pr view 42`, remote, "", ""},
@@ -91,8 +81,6 @@ func TestCommandPRLinks(t *testing.T) {
 		{`gh pr view $(echo 42) -R example/repo`, remote, "", ""},
 		{`gh pr create 42 -R example/repo`, remote, "", ""},
 		{`gh pr view branch -R example/repo`, remote, "", ""},
-		{`g''h pr view 43`, remote, "https://github.com/example/repo/pull/43", ""},
-		{`if gh pr checks 44; then gh pr merge 44; fi`, "https://github.com/example/repo.git", "https://github.com/example/repo/pull/44", ""},
 		{`cd /work/other; gh pr view 45 -R example/repo`, "https://github.com/example/repo.git", "https://github.com/example/repo/pull/45", ""},
 		{`gh pr view 42 -R=github.com/example/repo`, "", "https://github.com/example/repo/pull/42", ""},
 		{`gh pr view 42 -R git.example/example/repo`, "", "https://git.example/example/repo/pull/42", ""},
@@ -105,7 +93,6 @@ func TestCommandPRLinks(t *testing.T) {
 		{`export GH_HOST=git.example >/bad; gh pr view https://github.com/example/repo/pull/42`, "", "https://github.com/example/repo/pull/42", ""},
 		{`(cd /work/other); gh pr view 42`, remote, "", ""},
 		{`unset GH_REPO; gh pr view 42`, remote, "", ""},
-		{`git config remote.origin.url; gh pr view 42`, remote, "https://github.com/example/repo/pull/42", ""},
 		{`git config --add branch.main.remote upstream; gh pr view 42`, remote, "", ""},
 		{`git config --unset remote.origin.url; gh pr view 42`, remote, "", ""},
 		{`git config set url.https://example.com.insteadOf git@example.com:; gh pr view 42`, remote, "", ""},
@@ -117,7 +104,7 @@ func TestCommandPRLinks(t *testing.T) {
 		{`env GH_HOST=git.example bash -c 'git remote set-url origin other'; gh pr view 42`, remote, "", "/work/repo"},
 	} {
 		t.Run(tc.command, func(t *testing.T) {
-			links, err := AnalyzePRCommand(t.Context(), tc.command, tc.cwd, tc.remote, true)
+			links, err := AnalyzePRCommand(t.Context(), tc.command)
 			require.NoError(t, err)
 			if tc.want == "" {
 				assert.Empty(t, links)
@@ -127,13 +114,13 @@ func TestCommandPRLinks(t *testing.T) {
 			assert.Equal(t, tc.want, links[0].URL)
 		})
 	}
-	branches, err := AnalyzePRCommand(t.Context(), `if true; then gh pr view 45 -R example/repo; else gh pr view 46 -R example/repo; fi`, "", "", true)
+	branches, err := AnalyzePRCommand(t.Context(), `if true; then gh pr view 45 -R example/repo; else gh pr view 46 -R example/repo; fi`)
 	require.NoError(t, err)
 	require.Len(t, branches, 2)
 	assert.Equal(t, 45, branches[0].Number)
 	assert.Equal(t, 46, branches[1].Number)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	_, err = AnalyzePRCommand(ctx, "gh pr view 42", "", remote, true)
+	_, err = AnalyzePRCommand(ctx, "gh pr view 42")
 	assert.ErrorIs(t, err, context.Canceled)
 }

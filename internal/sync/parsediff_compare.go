@@ -59,15 +59,7 @@ func (e *Engine) compareStoredSession(
 	if err != nil {
 		return nil, err
 	}
-	snapshots, err := e.db.ListSessionProjectIdentitySnapshotsByID(ctx, []string{stored.ID})
-	if err != nil {
-		return nil, err
-	}
-	var remote string
-	if snapshot := snapshots[stored.ID]; snapshot.RemoteCandidateCount == 1 {
-		remote = snapshot.GitRemote
-	}
-	toolLinks, err := e.parseDiffToolPRLinks(ctx, prepared, msgs, remote)
+	toolLinks, err := db.ToolCallPRLinks(ctx, msgs, "", "")
 	if err != nil {
 		return nil, err
 	}
@@ -160,13 +152,6 @@ func (e *Engine) compareStoredSession(
 	}
 	diffs = append(diffs, compareUsageEvents(storedEvents, events)...)
 	return diffs, nil
-}
-
-func (e *Engine) parseDiffToolPRLinks(ctx context.Context, session db.Session, messages []db.Message, remote string) ([]db.PRLink, error) {
-	if e.db.ArchiveContent().OmitsToolContent() {
-		return db.ProjectedUsagePRLinks(ctx, session)
-	}
-	return db.ToolCallPRLinks(ctx, messages, session.Cwd, remote)
 }
 
 // compareSessionFields compares the session-row contract fields.

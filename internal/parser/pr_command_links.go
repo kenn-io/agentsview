@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/export"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -84,19 +83,6 @@ func quotedValue(word *syntax.Word) bool {
 	return true
 }
 
-func selectPRHost(explicitHost, remoteHost string, specified, hostUnknown bool) string {
-	if explicitHost != "" {
-		return explicitHost
-	}
-	if remoteHost != "" && !hostUnknown {
-		return remoteHost
-	}
-	if specified && !hostUnknown {
-		return "github.com"
-	}
-	return ""
-}
-
 // gh flags differ by subcommand, including short flags that take a value in
 // one command and are boolean in another. Unknown flags are ambiguous.
 func prCommandFlag(command, flag string) (takesValue, ok bool) {
@@ -128,7 +114,7 @@ func prCommandFlag(command, flag string) (takesValue, ok bool) {
 }
 
 // unwrapPRCommand removes execution wrappers whose arguments have fixed roles.
-func unwrapPRCommand(args []*syntax.Word, allowEnvOverride bool) []*syntax.Word {
+func unwrapPRCommand(args []*syntax.Word) []*syntax.Word {
 	for len(args) > 0 {
 		words, literal := shellWords(args)
 		if !literal[0] {
@@ -136,7 +122,7 @@ func unwrapPRCommand(args []*syntax.Word, allowEnvOverride bool) []*syntax.Word 
 		}
 		switch words[0] {
 		case "command", "env":
-			i, ok := wrappedCommandStart(words, literal, allowEnvOverride)
+			i, ok := wrappedCommandStart(words, literal)
 			if !ok {
 				return nil
 			}
@@ -170,23 +156,9 @@ func unwrapPRCommand(args []*syntax.Word, allowEnvOverride bool) []*syntax.Word 
 	return nil
 }
 
-func unwrapPRCommandWithOverride(args []*syntax.Word) ([]*syntax.Word, bool) {
-	if strict := unwrapPRCommand(args, false); strict != nil {
-		return strict, false
-	}
-	permissive := unwrapPRCommand(args, true)
-	return permissive, permissive != nil
-}
-
-// wrappedCommandStart skips command's -p flags or env's assignments. Strict
-// matching fails when env sets the repository or host gh would use.
-func wrappedCommandStart(words []string, literal []bool, allowEnvOverride bool) (int, bool) {
+func wrappedCommandStart(words []string, literal []bool) (int, bool) {
 	i := 1
 	for i < len(words) && literal[i] && (words[0] == "command" && words[i] == "-p" || words[0] == "env" && strings.Contains(words[i], "=")) {
-		name, _, _ := strings.Cut(words[i], "=")
-		if !allowEnvOverride && words[0] == "env" && (name == "GH_HOST" || name == "GH_REPO") {
-			return 0, false
-		}
 		i++
 	}
 	if i < len(words) && literal[i] && words[i] == "--" {
@@ -247,11 +219,11 @@ func shellCommand(args []*syntax.Word) (string, bool) {
 }
 
 // AnalyzePRCommand finds PR links in a single shell invocation.
-func AnalyzePRCommand(ctx context.Context, command, cwd, remote string, allowBare bool) ([]PRLink, error) {
-	return analyzePRCommand(ctx, command, cwd, remote, allowBare, false, 0)
+func AnalyzePRCommand(ctx context.Context, command string) ([]PRLink, error) {
+	return analyzePRCommand(ctx, command, strings.Contains(command, "GH_HOST"), 0)
 }
 
-func analyzePRCommand(ctx context.Context, command, cwd, remote string, allowBare, inheritedHost bool, depth int) ([]PRLink, error) {
+func analyzePRCommand(ctx context.Context, command string, hostUnknown bool, depth int) ([]PRLink, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -259,22 +231,24 @@ func analyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 	if err != nil {
 		return nil, ctx.Err()
 	}
-	unsafe, hostAssigned, calls := prCommandContext(file, depth)
-	hostAssigned = hostAssigned || inheritedHost
-	allowBare = allowBare && !unsafe
-	remoteHost, remoteRepo := "", ""
-	if normalized, ok := export.NormalizeGitRemote(remote); ok {
-		remoteHost, remoteRepo, _ = strings.Cut(normalized, "/")
-	}
+	var calls []*syntax.CallExpr
+	syntax.Walk(file, func(node syntax.Node) bool {
+		if _, ok := node.(*syntax.FuncDecl); ok {
+			return false
+		}
+		if call, ok := node.(*syntax.CallExpr); ok {
+			calls = append(calls, call)
+		}
+		return true
+	})
 	var links [][]PRLink
 	for _, call := range calls {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		args, overridden := unwrapPRCommandWithOverride(call.Args)
-		bareSafe := allowBare && !overridden
+		args := unwrapPRCommand(call.Args)
 		if inner, ok := shellCommand(args); ok && depth < 8 {
-			found, err := analyzePRCommand(ctx, inner, cwd, remote, bareSafe, hostAssigned, depth+1)
+			found, err := analyzePRCommand(ctx, inner, hostUnknown || strings.Contains(inner, "GH_HOST"), depth+1)
 			if err != nil {
 				return nil, err
 			}
@@ -289,7 +263,6 @@ func analyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 		if len(words) < 4 || !literal[0] || !literal[1] || !literal[2] || words[0] != "gh" || words[1] != "pr" {
 			continue
 		}
-		callHostUnknown := hostAssigned
 		if words[2] == "co" {
 			words[2] = "checkout"
 		}
@@ -374,18 +347,15 @@ func analyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 			continue
 		}
 		if !specified {
-			if !bareSafe {
-				continue
-			}
-			repo = remoteRepo
+			continue
 		}
 		explicitHost, repo, valid := splitPRRepository(repo, specified)
 		if !valid {
 			continue
 		}
-		selectedHost := selectPRHost(explicitHost, remoteHost, specified, callHostUnknown)
-		if specified && explicitHost == "" {
-			selectedHost = selectPRHost("", "", true, callHostUnknown)
+		selectedHost := explicitHost
+		if selectedHost == "" && !hostUnknown {
+			selectedHost = "github.com"
 		}
 		if selectedHost == "" {
 			continue
@@ -404,166 +374,4 @@ func splitPRRepository(repo string, specified bool) (host, name string, valid bo
 		host, repo, _ = strings.Cut(repo, "/")
 	}
 	return host, repo, (host == "" || prHostRE.MatchString(host)) && repoPathRE.MatchString(repo)
-}
-
-// SamePRWorkingDirectory compares recorded checkout paths across platforms.
-func SamePRWorkingDirectory(cwd, dir string) bool {
-	return cwd != "" && dir != "" && path.Clean(strings.ReplaceAll(cwd, `\`, "/")) == path.Clean(strings.ReplaceAll(dir, `\`, "/"))
-}
-
-// prCommandContext checks the invocation itself, without carrying state to another call.
-func prCommandContext(file *syntax.File, depth int) (unsafe, hostAssigned bool, calls []*syntax.CallExpr) {
-	functions := map[string]bool{}
-	syntax.Walk(file, func(node syntax.Node) bool {
-		if fn, ok := node.(*syntax.FuncDecl); ok {
-			functions[fn.Name.Value] = true
-			return false
-		}
-		return true
-	})
-	syntax.Walk(file, func(node syntax.Node) bool {
-		switch n := node.(type) {
-		case *syntax.FuncDecl:
-			return false
-		case *syntax.Assign:
-			if n.Name != nil && (n.Name.Value == "GH_HOST" || n.Name.Value == "GH_REPO") {
-				unsafe = true
-				hostAssigned = hostAssigned || n.Name.Value == "GH_HOST"
-			}
-		case *syntax.CallExpr:
-			calls = append(calls, n)
-			args := unwrapPRCommand(n.Args, true)
-			words, _ := shellWords(args)
-			if len(words) == 0 {
-				return true
-			}
-			name := words[0]
-			if name == "builtin" && len(words) > 1 {
-				words = words[1:]
-				name = words[0]
-			}
-			if name == "cd" || name == "pushd" || name == "popd" || name == "eval" || name == "source" || name == "." || functions[name] || repositoryMutation(words) {
-				unsafe, hostAssigned = true, hostAssigned || functions[name]
-			}
-			if name == "git" {
-				for _, word := range words[1:] {
-					if word == "-C" || strings.HasPrefix(word, "-C") {
-						unsafe = true
-					}
-				}
-			}
-			rawWords, _ := shellWords(n.Args)
-			for _, word := range rawWords[1:] {
-				if strings.HasPrefix(word, "GH_HOST=") || name == "unset" && word == "GH_HOST" {
-					hostAssigned = true
-					unsafe = true
-				}
-				if strings.HasPrefix(word, "GH_REPO=") || name == "unset" && word == "GH_REPO" {
-					unsafe = true
-				}
-			}
-			if inner, ok := shellCommand(args); ok && depth < 8 && prCommandMutatesRepository(inner, depth+1) {
-				unsafe = true
-			}
-		}
-		return true
-	})
-	return unsafe, hostAssigned, calls
-}
-
-// A child shell can change repository configuration shared with its parent.
-func prCommandMutatesRepository(command string, depth int) bool {
-	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
-	if err != nil {
-		return false
-	}
-	changed := false
-	syntax.Walk(file, func(node syntax.Node) bool {
-		if _, ok := node.(*syntax.FuncDecl); ok {
-			return false
-		}
-		call, ok := node.(*syntax.CallExpr)
-		if !ok {
-			return true
-		}
-		args := unwrapPRCommand(call.Args, true)
-		words, _ := shellWords(args)
-		if len(words) > 0 && words[0] != "unset" && repositoryMutation(words) {
-			changed = true
-		}
-		if inner, ok := shellCommand(args); ok && depth < 8 && prCommandMutatesRepository(inner, depth+1) {
-			changed = true
-		}
-		return true
-	})
-	return changed
-}
-
-func repositoryMutation(words []string) bool {
-	if len(words) < 2 {
-		return false
-	}
-	if words[0] == "unset" {
-		for _, word := range words[1:] {
-			if word == "GH_REPO" || word == "GH_HOST" {
-				return true
-			}
-		}
-	}
-	if words[0] == "gh" && len(words) >= 3 && words[1] == "repo" && words[2] == "set-default" {
-		for _, word := range words[3:] {
-			if word == "--view" || word == "-v" {
-				return false
-			}
-		}
-		return true
-	}
-	return words[0] == "git" && gitRepositoryMutation(words[1:])
-}
-
-// gitRepositoryMutation reports whether git's subcommand, after its global
-// options, can change a repository's remotes or branches.
-func gitRepositoryMutation(words []string) bool {
-	i := 0
-	for i < len(words) && strings.HasPrefix(words[i], "-") {
-		option := words[i]
-		i++
-		switch option {
-		case "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix":
-			if i >= len(words) {
-				return true
-			}
-			i++
-		}
-	}
-	if i >= len(words) {
-		return false
-	}
-	words = words[i:]
-	switch words[0] {
-	case "config":
-		return gitConfigMutation(words[1:])
-	case "remote":
-		return len(words) > 1 && (words[1] == "add" || words[1] == "remove" || words[1] == "rename" || words[1] == "set-url")
-	}
-	return false
-}
-
-func gitConfigMutation(args []string) bool {
-	write := false
-	for _, word := range args {
-		if word == "--get" || word == "--get-all" || word == "--list" || word == "-l" {
-			return false
-		}
-		if word == "--add" || word == "--replace-all" || word == "--unset" || word == "--unset-all" || word == "--rename-section" || word == "--remove-section" || word == "set" || word == "unset" {
-			write = true
-		}
-	}
-	for i, word := range args {
-		key := strings.ToLower(word)
-		if strings.HasPrefix(key, "remote.") || strings.HasPrefix(key, "branch.") || strings.HasPrefix(key, "url.") {
-			return write || i+1 < len(args)
-		}
-	}
-	return false
 }
