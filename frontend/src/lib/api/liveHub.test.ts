@@ -107,22 +107,20 @@ describe("shared live stream", () => {
   });
 
   it.each([
-    { name: "unchanged", old: "1:x", replacement: "1:x", ready: false, timing: false },
-    { name: "changed", old: "1:x", replacement: "2:y", ready: true, timing: true },
+    { name: "unchanged", old: "1:x", replacement: "1:x", ready: false },
+    { name: "changed", old: "1:x", replacement: "2:y", ready: true },
     {
       name: "hosted content revision",
       old: '{"count":1,"version":2,"content_revision":"one"}',
       replacement: '{"count":1,"version":2,"content_revision":"two"}',
       ready: true,
-      timing: false,
     },
-    { name: "unknown", old: "", replacement: "", ready: true, timing: false },
+    { name: "unknown", old: "", replacement: "", ready: true },
     {
       name: "updated before handoff",
       old: "2:y",
       replacement: "2:y",
       ready: false,
-      timing: false,
       update: true,
     },
     {
@@ -130,7 +128,6 @@ describe("shared live stream", () => {
       old: "1:x",
       replacement: "1:x",
       ready: true,
-      timing: true,
       missing: true,
     },
     {
@@ -138,7 +135,6 @@ describe("shared live stream", () => {
       old: "1:x",
       replacement: "1:x",
       ready: true,
-      timing: true,
       disconnected: true,
     },
   ])("compares readiness at handoff: $name", (scenario) => {
@@ -161,16 +157,13 @@ describe("shared live stream", () => {
     vi.advanceTimersByTime(250);
     const next = sources[1]!;
     next.emit("session_ready", "a", scenario.replacement);
-    next.emit(
-      "session.timing",
-      scenario.timing ? '{"session_id":"a","turn_count":2}' : '{"session_id":"a","turn_count":1}',
-    );
+    next.emit("session.timing", '{"session_id":"a","turn_count":1}');
     next.emit("session_ready", "b", "1:b");
     next.emit("session.timing", '{"session_id":"b"}');
     next.emit("events_ready", "{}");
     expect(a.postMessage.mock.calls.map(([frame]) => frame.type)).toEqual([
       ...(scenario.ready ? ["session_ready"] : []),
-      ...(scenario.timing ? ["session.timing"] : []),
+      "session.timing",
     ]);
     expect(b.postMessage.mock.calls.map(([frame]) => frame.type)).toEqual([
       "session_ready",
@@ -183,6 +176,30 @@ describe("shared live stream", () => {
       data: "a",
       id: "3:z",
     });
+    hub.close();
+  });
+
+  it("refreshes only the parent whose child changed during a handoff", () => {
+    const hub = new LiveHub();
+    const a = { postMessage: vi.fn() };
+    const b = { postMessage: vi.fn() };
+    hub.update(a, request("parent-a"));
+    hub.update(b, request("parent-b"));
+    vi.advanceTimersByTime(250);
+    const old = sources[1]!;
+    old.emit("session_ready", "parent-a", '{"child":"a","version":1}');
+    old.emit("session_ready", "parent-b", '{"child":"b","version":1}');
+    old.emit("events_ready", "{}");
+    a.postMessage.mockClear();
+    b.postMessage.mockClear();
+    hub.update({ postMessage: vi.fn() }, request("other"));
+    vi.advanceTimersByTime(250);
+    const next = sources[2]!;
+    next.emit("session_ready", "parent-a", '{"child":"a","version":2}');
+    next.emit("session_ready", "parent-b", '{"child":"b","version":1}');
+    next.emit("events_ready", "{}");
+    expect(a.postMessage).toHaveBeenCalledOnce();
+    expect(b.postMessage).not.toHaveBeenCalled();
     hub.close();
   });
 
@@ -218,7 +235,7 @@ describe("shared live stream", () => {
       if (when === "between readiness and timing") hub.update(joining, request("a"));
       next.emit("session.timing", '{"session_id":"a"}');
       next.emit("events_ready", "{}");
-      expect(a.postMessage).not.toHaveBeenCalled();
+      expect(a.postMessage.mock.calls.map(([frame]) => frame.type)).toEqual(["session.timing"]);
       expect(joining.postMessage.mock.calls).toEqual([
         [{ type: "session_ready", data: "a", id: "1:x" }],
         [{ type: "session.timing", data: '{"session_id":"a"}' }],

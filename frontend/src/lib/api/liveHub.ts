@@ -10,7 +10,7 @@ export class LiveHub {
   private source: EventSource | null = null;
   private previous: EventSource | null = null;
   private continuous = false;
-  private synced = new Map<LivePort, { archive?: boolean; marker?: string; timing?: string }>();
+  private synced = new Map<LivePort, { archive?: boolean; marker?: string }>();
   private sessions = new Set<string>();
   private ready = new Map<string, LiveFrame>();
   private timing = new Map<string, LiveFrame>();
@@ -21,9 +21,7 @@ export class LiveHub {
   update(port: LivePort, request: LiveRequest) {
     const previous = this.ports.get(port);
     this.ports.set(port, request);
-    if (!previous || previous.session !== request.session) {
-      this.synced.delete(port);
-    }
+    if (!previous || previous.session !== request.session) this.synced.delete(port);
     if (
       (!previous || previous.session !== request.session) &&
       this.source &&
@@ -36,7 +34,7 @@ export class LiveHub {
         this.sessions.delete(key);
       } else if (ready) this.deliver(port, ready);
       const timing = this.timing.get(key);
-      if (timing) this.deliver(port, timing);
+      if (timing) port.postMessage(timing);
     }
     if (
       this.source &&
@@ -158,7 +156,6 @@ export class LiveHub {
       } else {
         for (const state of this.synced.values()) {
           delete state.marker;
-          delete state.timing;
         }
       }
       suppressReady = false;
@@ -228,7 +225,6 @@ export class LiveHub {
       const state = this.synced.get(port);
       if (suppressSynced && state?.archive) continue;
       if (frame.type === "session_ready" && frame.id && frame.id === state?.marker) continue;
-      if (frame.type === "session.timing" && frame.data === state?.timing) continue;
       this.deliver(port, frame);
     }
   }
@@ -237,11 +233,7 @@ export class LiveHub {
     const state = this.synced.get(port) ?? {};
     if (frame.type === "events_ready") state.archive = true;
     if (frame.type === "session_ready" || frame.type === "session_updated") state.marker = frame.id;
-    if (frame.type === "session.timing") state.timing = frame.data;
-    if (frame.type === "session_missing") {
-      delete state.marker;
-      delete state.timing;
-    }
+    if (frame.type === "session_missing") delete state.marker;
     this.synced.set(port, state);
     port.postMessage(frame);
   }

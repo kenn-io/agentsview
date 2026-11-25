@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -1464,14 +1465,46 @@ func (s *Server) sessionMarker(ctx context.Context, id string, state *db.Session
 		}
 		state = &current
 	}
-	marker := struct {
+	children, err := s.db.GetChildSessions(ctx, id)
+	if err != nil {
+		return ""
+	}
+	slices.SortFunc(children, func(a, b db.Session) int { return strings.Compare(a.ID, b.ID) })
+	type childMarker struct {
+		ID              string   `json:"id"`
 		Count           int      `json:"count"`
 		Version         int64    `json:"version"`
 		State           string   `json:"state"`
 		PublicID        string   `json:"public_id"`
 		ContentRevision string   `json:"content_revision"`
 		Variants        []string `json:"variants"`
-	}{Count: count, Version: version}
+	}
+	childVersions := make([]childMarker, 0, len(children))
+	for _, child := range children {
+		count, version, ok := s.db.GetSessionVersion(ctx, child.ID)
+		if !ok {
+			return ""
+		}
+		marker := childMarker{ID: child.ID, Count: count, Version: version}
+		if identity, ok := s.db.(db.SessionWatchStateStore); ok {
+			state, err := identity.GetSessionWatchState(child.ID)
+			if err != nil {
+				return ""
+			}
+			marker.State, marker.PublicID = state.State, state.PublicID
+			marker.ContentRevision, marker.Variants = state.ContentRevision, state.Variants
+		}
+		childVersions = append(childVersions, marker)
+	}
+	marker := struct {
+		Count           int           `json:"count"`
+		Version         int64         `json:"version"`
+		State           string        `json:"state"`
+		PublicID        string        `json:"public_id"`
+		ContentRevision string        `json:"content_revision"`
+		Variants        []string      `json:"variants"`
+		Children        []childMarker `json:"children"`
+	}{Count: count, Version: version, Children: childVersions}
 	if state != nil {
 		marker.State, marker.PublicID = state.State, state.PublicID
 		marker.ContentRevision, marker.Variants = state.ContentRevision, state.Variants
