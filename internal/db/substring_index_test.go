@@ -68,7 +68,7 @@ func TestSearchContentSubstringIndexMatchesScan(t *testing.T) {
 	})
 	countMessagesForSubstringIndex(t, d, "s1")
 	for _, pattern := range []string{"deploy-window", "zebra-crossing"} {
-		candidates, err := d.substringCandidates(t.Context(), ContentSearchFilter{Pattern: pattern}, pattern)
+		candidates, err := d.substringCandidates(t.Context(), ContentSearchFilter{Pattern: pattern}, literalIndexQuery(pattern))
 		require.NoError(t, err)
 		require.NotEmpty(t, candidates.message.sql, pattern)
 		require.NotEmpty(t, candidates.thinking.sql, pattern)
@@ -226,7 +226,7 @@ func TestSubstringCandidatesOnlyForSelectivePatterns(t *testing.T) {
 	}
 	candidates := func(f ContentSearchFilter) substringCandidateFilters {
 		t.Helper()
-		got, err := d.substringCandidates(ctx, f, f.Pattern)
+		got, err := d.substringCandidates(ctx, f, literalIndexQuery(f.Pattern))
 		require.NoError(t, err)
 		return got
 	}
@@ -274,7 +274,7 @@ func TestSubstringSearchScansWhenImportDropsIndexMidSearch(t *testing.T) {
 	}
 
 	var usedIndex []bool
-	page, err := searchWithSubstringCandidates(ctx, d, f, f.Pattern,
+	page, err := searchWithSubstringCandidates(ctx, d, f, literalIndexQuery(f.Pattern),
 		func(candidates substringCandidateFilters) (ContentSearchPage, error) {
 			usedIndex = append(usedIndex, candidates.message.sql != "")
 			if len(usedIndex) == 1 {
@@ -316,7 +316,7 @@ func TestRegexSearchScansWhenImportDropsIndexBeforeFirstRow(t *testing.T) {
 				d = reader
 			}
 			f := ContentSearchFilter{
-				Pattern: `rare-tok(en)`, Mode: "regex", Limit: 50,
+				Pattern: `\brare-tok(en)`, Mode: "regex", Limit: 50,
 				Sources: []string{"messages", "thinking", "tool_input", "tool_result"},
 			}
 			re, err := regexp.Compile(f.Pattern)
@@ -324,7 +324,7 @@ func TestRegexSearchScansWhenImportDropsIndexBeforeFirstRow(t *testing.T) {
 			lit := LiteralPrefix(f.Pattern)
 
 			var usedIndex []bool
-			matches, err := searchWithSubstringCandidates(ctx, d, f, lit,
+			matches, err := searchWithSubstringCandidates(ctx, d, f, regexIndexQuery(f.Pattern),
 				func(candidates substringCandidateFilters) ([]ContentMatch, error) {
 					usedIndex = append(usedIndex, candidates.message.sql != "")
 					if len(usedIndex) == 1 {
@@ -468,5 +468,57 @@ func TestDaemonOpenBuildsIndexesForEmptyArchive(t *testing.T) {
 		page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "中文搜索", Mode: "fts", Sources: []string{"messages"}, Limit: 20})
 		require.NoError(t, err)
 		assert.Len(t, page.Matches, 1)
+	}
+}
+
+func TestRegexIndexQuery(t *testing.T) {
+	for _, tc := range []struct {
+		pattern string
+		indexed bool
+	}{
+		{`\bdeploy-window`, true}, {`.*timeout.*`, true}, {`foo|bar`, true},
+		{`foo|..`, false}, {`(?i)panic`, true}, {`(?i)sk`, false},
+		{`abc+`, false}, {`abcd+`, true}, {`abc*`, false},
+		{`(?:abc){2,3}`, true}, {`ab`, false}, {`"foo"`, true},
+		{strings.Repeat("abc", 40) + `|xyz`, false},
+	} {
+		t.Run(tc.pattern, func(t *testing.T) {
+			assert.Equal(t, tc.indexed, regexIndexQuery(tc.pattern) != "")
+		})
+	}
+}
+
+func TestRegexIndexMatchesScan(t *testing.T) {
+	d := testDB(t)
+	seedSearchSession(t, d, "s1", "proj", [][2]string{
+		{"user", "deploy-window and zebra-crossing"},
+		{"assistant", "PANIC timeout 123"},
+		{"user", "Kelvin and ſearch"},
+		{"assistant", `a "quoted" value`},
+		{"user", "deploy-window again"},
+	})
+	insertMessages(t, d, Message{SessionID: "s1", Ordinal: 5, Role: "assistant", Content: "answer", ThinkingText: "zebra-crossing", Timestamp: "2026-05-20T12:00:05Z"})
+	countMessagesForSubstringIndex(t, d, "s1")
+	pattern := `\bdeploy-window|zebra-crossing`
+	candidates, err := d.substringCandidates(t.Context(), ContentSearchFilter{Pattern: pattern}, regexIndexQuery(pattern))
+	require.NoError(t, err)
+	require.NotEmpty(t, candidates.message.sql)
+	require.NotEmpty(t, candidates.thinking.sql)
+	patterns := []string{pattern, `(?i)panic`, `(?i)kelvin`, `(?i)search`, `.*timeout.*`, `"quoted"`, `foo|..`, `deploy-window`, `(?:abc){2,3}`}
+	pages := make(map[string][]ContentSearchPage)
+	for _, pattern := range patterns {
+		for _, cursor := range []int{0, 1, 2} {
+			page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: pattern, Mode: "regex", Limit: 1, Cursor: cursor})
+			require.NoError(t, err)
+			pages[pattern] = append(pages[pattern], page)
+		}
+	}
+	require.NoError(t, d.DropFTS(t.Context()))
+	for _, pattern := range patterns {
+		for _, cursor := range []int{0, 1, 2} {
+			page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: pattern, Mode: "regex", Limit: 1, Cursor: cursor})
+			require.NoError(t, err)
+			assert.Equal(t, pages[pattern][cursor], page, "%s cursor %d", pattern, cursor)
+		}
 	}
 }

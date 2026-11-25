@@ -451,7 +451,7 @@ func (db *DB) searchContentWordsOrSubstring(ctx context.Context, f ContentSearch
 }
 
 func (db *DB) searchContentLiteral(ctx context.Context, f ContentSearchFilter) (ContentSearchPage, error) {
-	return searchWithSubstringCandidates(ctx, db, f, f.Pattern,
+	return searchWithSubstringCandidates(ctx, db, f, literalIndexQuery(f.Pattern),
 		func(candidates substringCandidateFilters) (ContentSearchPage, error) {
 			return db.substringSearchPage(ctx, f, candidates)
 		})
@@ -790,7 +790,7 @@ func (db *DB) searchContentRegex(
 	}
 
 	lit := LiteralPrefix(f.Pattern)
-	out, err := searchWithSubstringCandidates(ctx, db, f, lit,
+	out, err := searchWithSubstringCandidates(ctx, db, f, regexIndexQuery(f.Pattern),
 		func(candidates substringCandidateFilters) ([]ContentMatch, error) {
 			return db.regexSearchRows(ctx, f, re, lit, candidates)
 		})

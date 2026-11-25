@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"regexp/syntax"
 	"strings"
 )
 
@@ -149,17 +150,17 @@ func substringIndexDropped(err error) bool {
 		strings.Contains(msg, "no such table: thinking_trigram_fts")
 }
 
-// searchWithSubstringCandidates chooses index filters for literal and runs
+// searchWithSubstringCandidates chooses index filters for query and runs
 // search with them. An archive import can drop the index between those
 // steps, because each query reads its own snapshot, so a search that then
 // names a missing index table runs once more. The second attempt finds no
 // index and scans.
 func searchWithSubstringCandidates[T any](
-	ctx context.Context, db *DB, f ContentSearchFilter, literal string,
+	ctx context.Context, db *DB, f ContentSearchFilter, query string,
 	search func(substringCandidateFilters) (T, error),
 ) (T, error) {
 	attempt := func() (T, error) {
-		candidates, err := db.substringCandidates(ctx, f, literal)
+		candidates, err := db.substringCandidates(ctx, f, query)
 		if err != nil {
 			var zero T
 			return zero, err
@@ -205,6 +206,79 @@ func substringIndexQuery(literal string) (string, bool) {
 	return strings.Join(terms, " AND "), true
 }
 
+// regexIndexQuery builds a necessary condition for a match. An empty result
+// means the index cannot safely narrow the search.
+func regexIndexQuery(pattern string) string {
+	re, err := syntax.Parse(pattern, syntax.Perl)
+	if err != nil {
+		return ""
+	}
+	var build func(*syntax.Regexp, int) (string, int)
+	build = func(re *syntax.Regexp, budget int) (string, int) {
+		switch re.Op {
+		case syntax.OpLiteral:
+			var parts []string
+			var run []rune
+			used := 0
+			flush := func() {
+				if budget-used < 1 {
+					return
+				}
+				for i := 0; i+3 <= len(run) && used < budget; i++ {
+					term, ok := substringIndexQuery(string(run[i : i+3]))
+					if ok {
+						parts = append(parts, "("+term+")")
+						used++
+					}
+				}
+				run = nil
+			}
+			for _, r := range re.Rune {
+				if r == 0 || (re.Flags&syntax.FoldCase != 0 && (r > 127 || r == 'K' || r == 'k' || r == 'S' || r == 's')) {
+					flush()
+				} else {
+					run = append(run, r)
+				}
+			}
+			flush()
+			return strings.Join(parts, " AND "), used
+		case syntax.OpCapture, syntax.OpPlus:
+			return build(re.Sub[0], budget)
+		case syntax.OpRepeat:
+			if re.Min > 0 {
+				return build(re.Sub[0], budget)
+			}
+		case syntax.OpConcat, syntax.OpAlternate:
+			var parts []string
+			used := 0
+			for _, sub := range re.Sub {
+				q, n := build(sub, budget-used)
+				if q == "" {
+					if re.Op == syntax.OpAlternate {
+						return "", 0
+					}
+					continue
+				}
+				parts = append(parts, "("+q+")")
+				used += n
+			}
+			sep := " AND "
+			if re.Op == syntax.OpAlternate {
+				sep = " OR "
+			}
+			return strings.Join(parts, sep), used
+		}
+		return "", 0
+	}
+	query, _ := build(re, maxSubstringIndexTrigrams)
+	return query
+}
+
+func literalIndexQuery(literal string) string {
+	query, _ := substringIndexQuery(literal)
+	return query
+}
+
 // substringFilter is an optional SQL condition and its arguments.
 type substringFilter struct {
 	sql  string
@@ -212,7 +286,7 @@ type substringFilter struct {
 }
 
 // substringCandidateFilters limit the message and thinking branches of a
-// content search to rows the substring index lists for a literal.
+// content search to rows the substring index lists for a query.
 type substringCandidateFilters struct {
 	message, thinking substringFilter
 }
@@ -223,21 +297,20 @@ type substringCandidateFilters struct {
 const substringIndexMaxShare = 4
 
 // substringCandidates returns conditions that keep only messages whose text
-// may contain literal, ignoring case. A branch keeps scanning when the
-// archive has no substring index, literal is too short to look up, or the
+// may match query. A branch keeps scanning when the archive has no substring
+// index, query is empty, or the
 // index lists more than a quarter as many messages as the scope's sessions
 // hold. The index lists matches across the whole archive, so a common
 // sequence inside one project or date range is cheaper to scan for. The
 // capped count stops as soon as it passes that share.
 func (db *DB) substringCandidates(
-	ctx context.Context, f ContentSearchFilter, literal string,
+	ctx context.Context, f ContentSearchFilter, query string,
 ) (substringCandidateFilters, error) {
 	var out substringCandidateFilters
 	if f.SessionID != "" {
 		return out, nil
 	}
-	query, ok := substringIndexQuery(literal)
-	if !ok || !db.hasSubstringIndex(ctx) {
+	if query == "" || !db.hasSubstringIndex(ctx) {
 		return out, nil
 	}
 	scope, scopeArgs := sessionScopeSubquery(f)
