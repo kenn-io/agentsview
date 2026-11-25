@@ -143,7 +143,7 @@ func extractLookupCalls(client clientName, transcripts [][]byte) ([]lookupCall, 
 }
 
 func claudeLookupCalls(events []map[string]any) []lookupCall {
-	var calls []lookupCall
+	calls := make([]lookupCall, 0)
 	pending := map[string]int{}
 	for line, e := range events {
 		if e["type"] == "api-request-blob" {
@@ -184,7 +184,7 @@ func claudeLookupCalls(events []map[string]any) []lookupCall {
 }
 
 func codexLookupCalls(events []map[string]any) []lookupCall {
-	var calls []lookupCall
+	calls := make([]lookupCall, 0)
 	type script struct {
 		start, end           int64
 		input                string
@@ -192,7 +192,7 @@ func codexLookupCalls(events []map[string]any) []lookupCall {
 		cell                 string
 		startOrder, endOrder int
 	}
-	var scripts []script
+	scripts := make([]script, 0)
 	pending := map[string]int{}
 	pendingCalls := map[string]int{}
 	pendingWaits := map[string]int{}
@@ -693,6 +693,9 @@ func scoreLookupEvidence(
 	calls []lookupCall,
 	runErr error,
 ) lookupScore {
+	if calls == nil {
+		calls = make([]lookupCall, 0)
+	}
 	s := lookupScore{Verdict: "failed"}
 	captureIncomplete := errors.Is(runErr, errCaptureIncomplete) &&
 		!errors.Is(runErr, context.Canceled) &&
