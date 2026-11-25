@@ -684,7 +684,7 @@ func TestUsageOnlyPRLinksPreserveAmbiguousCheckout(t *testing.T) {
 	obs := export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, RemoteCandidateCount: 2, ObservedAt: time.Now().UTC()}
 	require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), obs))
 	SetUsagePRRemote(&s, "https://ghe.example/example/repo.git")
-	message := Message{SessionID: s.ID, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "exec_command", Category: "Bash", InputJSON: `{"cmd":"gh pr view 42"}`}}}
+	message := Message{SessionID: s.ID, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "exec_command", Category: "Bash", InputJSON: `{"cmd":"gh pr view 42 -R example/repo"}`}}}
 	_, err := d.WriteSessionBatchContext(t.Context(), []SessionBatchWrite{{Session: s, Messages: []Message{message}, ReplaceMessages: true}})
 	require.NoError(t, err)
 	got, err := d.GetSession(t.Context(), s.ID)
