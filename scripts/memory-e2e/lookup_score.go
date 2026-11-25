@@ -39,7 +39,7 @@ type lookupScore struct {
 	MissingCalls int    `json:"missing_calls"`
 }
 
-var lookupCommandPattern = regexp.MustCompile(`(?i)(sqlite3|sessions\.db|\.claude/projects/|\.codex/sessions/|rollout-[^\s"']*\.jsonl|tool-results/|\bagentsview\s+(?:session|search|db|mcp)\b)`)
+var lookupCommandPattern = regexp.MustCompile(`(?i)(sqlite3|sessions\.db|\.claude/projects/|\.codex/sessions/|rollout-[^\s"']*\.jsonl|transcripts/[^\s"']*[?*]|tool-results/|\bagentsview\s+(?:session|search|db|mcp)\b)`)
 var lookupOutputPattern = regexp.MustCompile(`(?i)(sessions\.db|\.claude/projects/|\.codex/sessions/|rollout-[^\s"']*\.jsonl|tool-results/)`)
 var truncatedResultPattern = regexp.MustCompile(`(?i)"[^"\n]*truncated"\s*:\s*true|output truncated`)
 var emptyResultPattern = regexp.MustCompile(`(?i)"(?:matches|messages|results|sessions|tool_calls)"\s*:\s*(?:\[\s*\]|null)`)
@@ -581,11 +581,17 @@ func lookupAnswerSource(q lookupQuestion, answer string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	matchedSource := false
+	matchedSource := ""
 	for _, item := range q.Expected {
-		matchedSource = matchedSource || sourceID == item.SessionID
+		_, raw, prefixed := strings.Cut(item.SessionID, ":")
+		if sourceID == item.SessionID || (prefixed && sourceID == raw) {
+			if matchedSource != "" {
+				return "", false
+			}
+			matchedSource = item.SessionID
+		}
 	}
-	if !matchedSource {
+	if matchedSource == "" {
 		return "", false
 	}
 	for key, expected := range q.ExpectedAnswer {
@@ -593,7 +599,7 @@ func lookupAnswerSource(q lookupQuestion, answer string) (string, bool) {
 			return "", false
 		}
 	}
-	return sourceID, true
+	return matchedSource, true
 }
 
 func containsSessionID(text, sessionID string) bool {
@@ -732,6 +738,10 @@ func scoreLookupEvidence(
 	}
 	count := 0
 	for _, c := range calls {
+		lower := strings.ToLower(c.Input)
+		if c.Route == "other" && c.Name != "tool discovery" && c.Name != "exec" && !(strings.Contains(lower, "tool") && (strings.Contains(lower, "description") || strings.Contains(lower, "all_tools"))) {
+			continue
+		}
 		if c.Start > hit.End {
 			continue
 		}

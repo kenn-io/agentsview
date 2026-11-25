@@ -93,3 +93,14 @@ func TestLookupRefusesPopulatedOutput(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "preserve", string(data))
 }
+
+func TestLookupUnknownCaseLeavesOutputUncreated(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	output := filepath.Join(t.TempDir(), "output")
+	repository, err := filepath.Abs("../..")
+	require.NoError(t, err)
+	err = run(t.Context(), config{suite: "lookups", repository: repository, caseName: "missing", outputDir: output})
+	require.ErrorContains(t, err, "unknown --case")
+	_, err = os.Stat(output)
+	assert.ErrorIs(t, err, os.ErrNotExist)
+}

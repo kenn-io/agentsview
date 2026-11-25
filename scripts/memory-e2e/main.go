@@ -260,6 +260,8 @@ func sourceFollowUpPrompt() string {
 }
 
 func run(ctx context.Context, cfg config) error {
+	var fixtures []lookupFixture
+	var questions []lookupQuestion
 	if cfg.suite == "lookups" {
 		entries, err := os.ReadDir(cfg.outputDir)
 		if err != nil && !os.IsNotExist(err) {
@@ -267,6 +269,10 @@ func run(ctx context.Context, cfg config) error {
 		}
 		if len(entries) > 0 {
 			return fmt.Errorf("memory-e2e: output directory %q is not empty", cfg.outputDir)
+		}
+		fixtures, questions, err = selectLookupCorpus(cfg)
+		if err != nil {
+			return err
 		}
 	}
 	if err := os.MkdirAll(cfg.outputDir, 0o700); err != nil {
@@ -277,7 +283,7 @@ func run(ctx context.Context, cfg config) error {
 		return err
 	}
 	if cfg.suite == "lookups" {
-		return runLookupSuite(ctx, cfg, bin)
+		return runLookupSuite(ctx, cfg, bin, fixtures, questions)
 	}
 	clients, _ := selectedClients(cfg.clients)
 	cases, err := selectCases(cfg.caseName)

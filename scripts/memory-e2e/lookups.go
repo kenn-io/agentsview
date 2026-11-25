@@ -131,10 +131,10 @@ func validateLookupQuestions(questions []lookupQuestion) error {
 	return nil
 }
 
-func runLookupSuite(ctx context.Context, cfg config, bin string) error {
+func selectLookupCorpus(cfg config) ([]lookupFixture, []lookupQuestion, error) {
 	fixtures, questions, err := readLookupCorpus(cfg.repository)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	if cfg.caseName != "" {
 		selected := questions[:0]
@@ -145,9 +145,13 @@ func runLookupSuite(ctx context.Context, cfg config, bin string) error {
 		}
 		questions = selected
 		if len(questions) == 0 {
-			return fmt.Errorf("memory-e2e: unknown --case %q", cfg.caseName)
+			return nil, nil, fmt.Errorf("memory-e2e: unknown --case %q", cfg.caseName)
 		}
 	}
+	return fixtures, questions, nil
+}
+
+func runLookupSuite(ctx context.Context, cfg config, bin string, fixtures []lookupFixture, questions []lookupQuestion) error {
 	clients, _ := selectedClients(cfg.clients)
 	report := lookupReport{Revision: repositoryRevision(ctx, cfg.repository), StartedAt: time.Now().UTC()}
 	path := filepath.Join(cfg.outputDir, "lookup-result.json")

@@ -390,6 +390,47 @@ func TestLookupSeparatesEvidenceBetweenTranscriptHeaders(t *testing.T) {
 	assert.Equal(t, 2, *score.CallsToHit)
 }
 
+func TestLookupWildcardTranscriptRead(t *testing.T) {
+	item := lookupItem{SessionID: "codex:" + lookupID}
+	transcript := `{"type":"session_meta","payload":{"id":"22222222-2222-4222-8222-222222222222"}}` + "\n" + `{"payload":{"content":"unrelated"}}` + "\n" + `{"type":"session_meta","payload":{"id":"` + lookupID + `"}}` + "\n" + `{"payload":{"content":"violet ledger"}}`
+	trace := `{"timestamp":"2026-11-24T12:00:00Z","message":{"content":[{"type":"tool_use","id":"1","name":"Bash","input":{"command":"cat transcripts/**/*.jsonl"}}]}}` + "\n" + `{"timestamp":"2026-11-24T12:00:01Z","message":{"content":[{"type":"tool_result","tool_use_id":"1","content":` + stringMustJSON(t, transcript) + `}]}}`
+	calls, err := extractLookupCalls(clientClaude, [][]byte{[]byte(trace)})
+	require.NoError(t, err)
+	score := scoreLookup(item.SessionID+" violet ledger", []lookupItem{item}, []string{"violet ledger"}, calls, nil)
+	assert.Equal(t, "success", score.Verdict)
+	assert.Equal(t, 1, score.Direct)
+}
+
+func stringMustJSON(t *testing.T, value string) string {
+	t.Helper()
+	b, err := json.Marshal(value)
+	require.NoError(t, err)
+	return string(b)
+}
+
+func TestLookupCountsOnlyLookupCalls(t *testing.T) {
+	item := lookupItem{SessionID: "codex:" + lookupID}
+	calls := []lookupCall{
+		{Name: "Bash", Route: "other", Input: "pwd", Start: 1, End: 2},
+		{Name: "tool discovery", Route: "other", Start: 3, End: 4},
+		{Route: "mcp", Result: `{"session_id":"` + item.SessionID + `","content":"answer"}`, Start: 5, End: 6},
+	}
+	score := scoreLookup(item.SessionID+" answer", []lookupItem{item}, []string{"answer"}, calls, nil)
+	require.NotNil(t, score.CallsToHit)
+	assert.Equal(t, 2, *score.CallsToHit)
+	assert.Equal(t, 2, score.Other)
+}
+
+func TestLookupBareSourceID(t *testing.T) {
+	q := lookupQuestion{Expected: []lookupItem{{SessionID: "codex:" + lookupID}}, ExpectedAnswer: map[string]string{"team": "maple team"}, Phrases: []string{"maple team now owns"}}
+	calls := []lookupCall{{Route: "mcp", Result: `{"session_id":"codex:` + lookupID + `","content":"maple team now owns"}`, Start: 1, End: 2}}
+	answer := `{"team":"maple team","source_session_id":"` + lookupID + `"}`
+	assert.Equal(t, "success", scoreLookupQuestion(q, answer, calls, nil).Verdict)
+	assert.Equal(t, "failed", scoreLookupQuestion(q, strings.Replace(answer, lookupID, "claude:"+lookupID, 1), calls, nil).Verdict)
+	q.Expected = append(q.Expected, lookupItem{SessionID: "claude:" + lookupID})
+	assert.Equal(t, "failed", scoreLookupQuestion(q, answer, calls, nil).Verdict)
+}
+
 func TestReviewAnswerAcrossPages(t *testing.T) {
 	id := "codex:" + lookupID
 	calls := []lookupCall{
