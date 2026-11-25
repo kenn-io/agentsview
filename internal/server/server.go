@@ -1068,11 +1068,11 @@ func (s *Server) archiveStaleMiddleware(next http.Handler) http.Handler {
 			probe := archiveFreshnessProbe(r.URL.Path)
 			pending := false
 			scopedPending := false
-			if !probe && s.ingestionFreshness != nil && !archiveFreshnessExempt(r) {
-				pending = !s.ingestionFreshness.EnsureFresh(r.Context())
-			}
 			if !probe {
 				scopedPending = s.scopedUpgradePending(r.Context())
+			}
+			if !probe && (!scopedPending || s.archiveStale()) && s.ingestionFreshness != nil && !archiveFreshnessExempt(r) {
+				pending = !s.ingestionFreshness.EnsureFresh(r.Context())
 			}
 			if !probe && (s.archiveStale() || pending || scopedPending) {
 				w.Header().Set(apiclient.ArchiveStaleHeader, "true")

@@ -18,6 +18,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
@@ -25,6 +26,67 @@ import (
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
+
+func TestDailyUsageServesSavedTotalsDuringScopedUpgrade(t *testing.T) {
+	isolateServeTestHome(t)
+	t.Setenv(syncWorkerChildEnvVar, "1")
+	cfg := testConfigWithClaudeFixture(t)
+	t.Setenv("AGENTSVIEW_DATA_DIR", cfg.DataDir)
+	cfg.Host = "127.0.0.1"
+	cfg.SyncIdleAfter = 100 * time.Millisecond
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser("2026-01-02T00:00:00Z", "hello").
+		AddClaudeAssistantUsage("2026-01-02T00:00:01Z", "reply", testjsonl.ClaudeAssistantUsage{
+			MessageID: "message-a", RequestID: "request-a", Model: "claude-sonnet-4-5", InputTokens: 1234, OutputTokens: 42,
+		}).String()
+	require.NoError(t, os.WriteFile(filepath.Join(cfg.AgentDirs[parser.AgentClaude][0], "-home-proj0", "usage.jsonl"), []byte(content), 0o644))
+	var seed bytes.Buffer
+	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &seed))
+	oldVersion := db.CurrentDataVersion() - 1
+	require.NotEmpty(t, db.ScopedDataVersionProviders(oldVersion, db.CurrentDataVersion()))
+	conn, err := sql.Open("sqlite3", cfg.DBPath)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), fmt.Sprintf(`PRAGMA user_version=%d`, oldVersion))
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	started, release := make(chan struct{}), make(chan struct{})
+	restore := stubLaunchSyncWorker(t, func(ctx context.Context, _ config.Config, _ syncWorkerRequest, _ func(workerLine)) (workerResult, error) {
+		close(started)
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return workerResult{}, ctx.Err()
+		}
+		return workerResult{}, nil
+	})
+	t.Cleanup(restore)
+	base := startRestartServe(t, cfg, serveOptions{SkipInitialSync: true})
+	select {
+	case <-started:
+	case <-time.After(30 * time.Second):
+		require.FailNow(t, "worker did not start")
+	}
+	require.Eventually(t, func() bool {
+		return strings.Contains(restartGet(t, base+"/api/v1/sync/status"), `"sync_pending":true`)
+	}, 30*time.Second, 100*time.Millisecond)
+	var stdout, stderr bytes.Buffer
+	done := make(chan error, 1)
+	go func() {
+		done <- executeCLIWithLegacyFlagCompat([]string{"report", "usage", "daily", "--all", "--json", "--timezone", "UTC"}, &stdout, &stderr)
+	}()
+	select {
+	case err := <-done:
+		close(release)
+		require.NoError(t, err)
+	case <-time.After(time.Second): //nolint:kennlint // deadlinetest: the report must return before the held worker's catch-up deadline
+		close(release)
+		<-done
+		require.FailNow(t, "daily report waited for the startup worker")
+	}
+	assert.Contains(t, stdout.String(), `"inputTokens": 1234`)
+	assert.Contains(t, stderr.String(), apiclient.ArchiveStaleWarning)
+}
 
 func writeRestartSession(t *testing.T, cfg config.Config, id string) string {
 	t.Helper()

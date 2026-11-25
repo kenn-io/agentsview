@@ -363,7 +363,7 @@ test: pricing-snapshot ensure-embed-dir
 # unrelated TestActiveAppendGrowth case.
 .PHONY: test-scoped-upgrade-startup
 test-scoped-upgrade-startup: pricing-snapshot ensure-embed-dir
-	go test $(GO_TEST_P_FLAG) -tags "fts5" ./internal/db ./internal/server ./cmd/agentsview -run '^(TestArchiveResyncState|TestScopedUpgradePending|TestScopedUpgradeWaitsForAuthoritativeFullPass|TestScopedUpgradeFreshnessOutlivesWriterPause|TestScopedUpgradeQueryErrorKeepsFreshnessWarning|TestLocalDailyUsageWarnsForScopedUpgrade|TestLocalSessionUsageRefreshesSubagentTranscripts|TestServeLegacyImageTextAfterRestart|TestServeRestartServesSessionsBeforeStartupSync|TestServeSkipInitialSyncStillReparsesStaleArchive|TestSessionUsageResolvesMissingIDsBySyncStatus|TestSessionUsageWaitPendingFallback)$$' -count=1
+	go test $(GO_TEST_P_FLAG) -tags "fts5" ./internal/db ./internal/server ./cmd/agentsview -run '^(TestArchiveResyncState|TestScopedUpgradePending|TestScopedUpgradeWaitsForAuthoritativeFullPass|TestScopedUpgradeFreshnessOutlivesWriterPause|TestScopedUpgradeQueryErrorKeepsFreshnessWarning|TestDailyUsageServesSavedTotalsDuringScopedUpgrade|TestLocalDailyUsageWarnsForScopedUpgrade|TestLocalSessionUsageRefreshesSubagentTranscripts|TestServeLegacyImageTextAfterRestart|TestServeRestartServesSessionsBeforeStartupSync|TestServeSkipInitialSyncStillReparsesStaleArchive|TestSessionUsageResolvesMissingIDsBySyncStatus|TestSessionUsageWaitPendingFallback)$$' -count=1
 
 .PHONY: test-scoped-upgrade-frontend
 test-scoped-upgrade-frontend:
