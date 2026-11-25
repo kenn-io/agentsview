@@ -11,6 +11,8 @@ export class LiveHub {
   private previous: EventSource | null = null;
   private continuous = false;
   private synced = new Set<LivePort>();
+  private sessionReady = new Set<LivePort>();
+  private sessionTiming = new Set<LivePort>();
   private sessions = new Set<string>();
   private ready = new Map<string, LiveFrame>();
   private timing = new Map<string, LiveFrame>();
@@ -22,7 +24,11 @@ export class LiveHub {
   update(port: LivePort, request: LiveRequest) {
     const previous = this.ports.get(port);
     this.ports.set(port, request);
-    if (!previous || previous.session !== request.session) this.synced.delete(port);
+    if (!previous || previous.session !== request.session) {
+      this.synced.delete(port);
+      this.sessionReady.delete(port);
+      this.sessionTiming.delete(port);
+    }
     if (
       (!previous || previous.session !== request.session) &&
       this.source &&
@@ -35,7 +41,7 @@ export class LiveHub {
         this.sessions.delete(key);
       } else if (ready) this.deliver(port, ready);
       const timing = this.timing.get(key);
-      if (timing) port.postMessage(timing);
+      if (timing) this.deliver(port, timing);
     }
     if (
       this.source &&
@@ -60,6 +66,8 @@ export class LiveHub {
     }
     this.ports.delete(port);
     this.synced.delete(port);
+    this.sessionReady.delete(port);
+    this.sessionTiming.delete(port);
     this.schedule();
   }
 
@@ -214,8 +222,12 @@ export class LiveHub {
           before.versions.get(session) === version;
         const unchangedTiming =
           type === "session.timing" && session && before?.timing.get(session)?.data === data;
-        if (!unchangedReady && !unchangedTiming)
-          this.broadcast(frame, session, suppressReady && type === "events_ready");
+        const current = unchangedReady
+          ? this.sessionReady
+          : unchangedTiming
+            ? this.sessionTiming
+            : undefined;
+        this.broadcast(frame, session, suppressReady && type === "events_ready", current);
         if (type === "events_ready") {
           suppressReady = false;
           before = undefined;
@@ -232,18 +244,30 @@ export class LiveHub {
     }
   }
 
-  private broadcast(frame: LiveFrame, session?: string, suppressSynced = false) {
+  private broadcast(
+    frame: LiveFrame,
+    session?: string,
+    suppressSynced = false,
+    current?: Set<LivePort>,
+  ) {
     for (const [port, request] of this.ports) {
       if (session !== undefined && request.session !== session) continue;
       if ((frame.type === "events_ready" || frame.type === "data_changed") && request.session)
         continue;
       if (suppressSynced && this.synced.has(port)) continue;
+      if (current?.has(port)) continue;
       this.deliver(port, frame);
     }
   }
 
   private deliver(port: LivePort, frame: LiveFrame) {
     if (frame.type === "events_ready") this.synced.add(port);
+    if (frame.type === "session_ready") this.sessionReady.add(port);
+    if (frame.type === "session.timing") this.sessionTiming.add(port);
+    if (frame.type === "session_missing") {
+      this.sessionReady.delete(port);
+      this.sessionTiming.delete(port);
+    }
     port.postMessage(frame);
   }
 

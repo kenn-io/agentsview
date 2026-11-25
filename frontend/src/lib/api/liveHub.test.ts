@@ -175,6 +175,47 @@ describe("shared live stream", () => {
     hub.close();
   });
 
+  it.each(["before readiness", "between readiness and timing", "after leaving and rejoining"])(
+    "delivers session state to a tab joining mid-handoff: %s",
+    (when) => {
+      const hub = new LiveHub();
+      const a = { postMessage: vi.fn() };
+      const joining = { postMessage: vi.fn() };
+      hub.update(a, request("a"));
+      hub.update({ postMessage: vi.fn() }, request("b"));
+      vi.advanceTimersByTime(250);
+      const old = sources[1]!;
+      old.emit("session_ready", "a", "1:x");
+      old.emit("session.timing", '{"session_id":"a"}');
+      old.emit("session_ready", "b", "1:b");
+      old.emit("events_ready", "{}");
+      if (when === "after leaving and rejoining") {
+        hub.update(joining, request("a"));
+        joining.postMessage.mockClear();
+      }
+      a.postMessage.mockClear();
+      hub.update({ postMessage: vi.fn() }, request("c"));
+      vi.advanceTimersByTime(250);
+      const next = sources[2]!;
+      next.emit("session_ready", "c", "1:c");
+      if (when === "before readiness") hub.update(joining, request("a"));
+      if (when === "after leaving and rejoining") {
+        hub.leave(joining);
+        hub.update(joining, request("a"));
+      }
+      next.emit("session_ready", "a", "1:x");
+      if (when === "between readiness and timing") hub.update(joining, request("a"));
+      next.emit("session.timing", '{"session_id":"a"}');
+      next.emit("events_ready", "{}");
+      expect(a.postMessage).not.toHaveBeenCalled();
+      expect(joining.postMessage.mock.calls).toEqual([
+        [{ type: "session_ready", data: "a" }],
+        [{ type: "session.timing", data: '{"session_id":"a"}' }],
+      ]);
+      hub.close();
+    },
+  );
+
   it("closes the old stream immediately when credentials change and refreshes on readiness", () => {
     const hub = new LiveHub();
     const archive = { postMessage: vi.fn() };
