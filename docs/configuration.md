@@ -1416,7 +1416,7 @@ transcript owner's. Run `agentsview doctor sync` to see the resolved root.
 
 AgentsView collects both sessions your Muse started on a schedule and ones you
 started. Scheduled jobs and other background runs your Muse starts itself count
-as automated, so they stay hidden by default; see
+as automated, so session lists and counts hide them by default; see
 [Automated Session Detection](#automated-session-detection). Raw capture keeps
 the transcript and any regular index as original bytes.
 
