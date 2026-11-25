@@ -86,10 +86,27 @@ func (m *dashboardPartsMemo) put(slot, version string, parts map[string]kept.Par
 		m.slot, m.version = slot, version
 		m.parts = newDashboardPartsCache(maxBytes)
 		m.peakEntries = 0
-	} else if seedOnly {
-		return
 	}
+	var used int64 = -1
 	for id, p := range parts {
+		if seedOnly {
+			if m.parts.Has(id) {
+				continue
+			}
+			if used < 0 {
+				// ttlcache does not expose total cost; count it only when a disk part is missing.
+				used = 0
+				m.parts.RangeBackwards(func(item *ttlcache.Item[string, kept.Part[dashboardPart]]) bool {
+					used += int64(item.Cost())
+					return true
+				})
+			}
+			cost := dashboardPartBytes(id, p)
+			if cost > maxBytes-used {
+				continue
+			}
+			used += cost
+		}
 		if dashboardPartBytes(id, p) > maxBytes {
 			m.parts.Delete(id)
 		} else {
@@ -243,7 +260,7 @@ func (db *DB) dashboardParts(ctx context.Context, f AnalyticsFilter) ([]dashboar
 				ids = append(ids, id)
 			}
 		}
-		// Seed from disk only when this timezone or database is new to the memo.
+		// Seed unseen disk parts without evicting or reordering cached parts.
 		db.dashboardMemo.seed("dashboard-parts|"+TrendsTimezoneKey(f), version, parts)
 		sort.Strings(ids)
 		ids = db.dashboardMemo.reuse("dashboard-parts|"+TrendsTimezoneKey(f), version, ids, versions, parts)

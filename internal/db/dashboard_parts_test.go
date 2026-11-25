@@ -175,6 +175,36 @@ func TestDashboardPartsReuseAcrossAgentAndDateFilters(t *testing.T) {
 	assert.Equal(t, [][]string{{"s0", "s1", "s2", "s3", "s4", "s5"}, {"s0"}}, reads)
 }
 
+func TestDashboardPartsSeedsEachSavedFilter(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	for _, agent := range []string{"codex", "gemini"} {
+		insertSession(t, d, agent, "project", func(s *Session) { s.Agent = agent })
+		insertMessages(t, d, userMsgAt(agent, 0, "hello", "2024-06-01T09:00:00Z"))
+	}
+	var reads [][]string
+	dashboardPartsReadObserver = func(ids []string) { reads = append(reads, append([]string(nil), ids...)) }
+	t.Cleanup(func() { dashboardPartsReadObserver = nil })
+	for _, agent := range []string{"codex", "gemini"} {
+		_, _, handled, err := d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC", Agent: agent})
+		require.NoError(t, err)
+		require.True(t, handled)
+	}
+	d.dashboardMemo.mu.Lock()
+	d.dashboardMemo.parts = nil
+	d.dashboardMemo.mu.Unlock()
+	for _, agent := range []string{"codex", "gemini"} {
+		_, _, handled, err := d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC", Agent: agent})
+		require.NoError(t, err)
+		require.True(t, handled)
+	}
+	_, _, handled, err := d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC"})
+	require.NoError(t, err)
+	require.True(t, handled)
+	assert.Equal(t, [][]string{{"codex"}, {"gemini"}}, reads)
+}
+
 func TestDashboardPartsDiskPreservesZeroFirstResponse(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	d := testDB(t)
@@ -423,10 +453,23 @@ func TestDashboardPartsMemoEvictsLeastRecentlyUsed(t *testing.T) {
 	memo.reuse("UTC", "version", []string{"a"}, versions, make(map[string]kept.Part[dashboardPart]))
 	// Reading an unchanged disk selection must not reorder the memo.
 	memo.seed("UTC", "version", map[string]kept.Part[dashboardPart]{"a": part("a"), "b": part("b"), "c": part("c")})
+	assert.False(t, memo.parts.Has("c"))
 	memo.store("UTC", "version", map[string]kept.Part[dashboardPart]{"c": part("c")})
 	got := make(map[string]kept.Part[dashboardPart])
 	assert.Equal(t, []string{"b"}, memo.reuse("UTC", "version", []string{"a", "b", "c"}, versions, got))
 	assert.Equal(t, map[string]kept.Part[dashboardPart]{"a": part("a"), "c": part("c")}, got)
+}
+
+func TestDashboardPartsMemoSeedsLaterSelections(t *testing.T) {
+	memo := dashboardPartsMemo{}
+	a := kept.Part[dashboardPart]{ID: "a", Fingerprint: "v"}
+	b := kept.Part[dashboardPart]{ID: "b", Fingerprint: "v"}
+	memo.seed("UTC", "version", map[string]kept.Part[dashboardPart]{"a": a})
+	memo.seed("UTC", "version", map[string]kept.Part[dashboardPart]{"b": b})
+	parts := make(map[string]kept.Part[dashboardPart])
+	missing := memo.reuse("UTC", "version", []string{"a", "b"}, map[string]string{"a": "v", "b": "v"}, parts)
+	assert.Empty(t, missing)
+	assert.Equal(t, map[string]kept.Part[dashboardPart]{"a": a, "b": b}, parts)
 }
 
 func TestDashboardPartsMemoDropsStaleParts(t *testing.T) {
