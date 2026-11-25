@@ -1079,3 +1079,17 @@ func TestBuildRepairInvalidRejectsChangedAgentScope(t *testing.T) {
 	require.ErrorContains(t, err, "run an embeddings build")
 	assert.Empty(t, encoded)
 }
+
+func TestBuildRepairInvalidRejectsChangedRoleScope(t *testing.T) {
+	ctx := t.Context()
+	archive := dbtest.OpenTestDB(t)
+	dbtest.SeedSessionWithMessages(t, archive, "s", "project", []db.Message{dbtest.UserMsg("s", 0, "question"), dbtest.AsstMsg("s", 1, "answer")})
+	ix := openTestIndex(t)
+	gen := fakeGeneration("fake-model")
+	_, err := ix.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{Roles: []string{"user"}})
+	require.NoError(t, err)
+	_, err = ix.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{RepairInvalid: true})
+	require.ErrorContains(t, err, "scope changed")
+	_, err = ix.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{RepairInvalid: true, Roles: []string{"user"}})
+	require.NoError(t, err)
+}

@@ -60,6 +60,7 @@ enabled = true                    # default false; everything below is opt-in
 # db_path defaults to <data_dir>/vectors.db
 include_automated = false         # default; automated sessions (e.g. roborev) are not embedded -- set true to include
 agents = []                       # default; empty embeds every agent -- e.g. ["claude"] embeds only Claude Code sessions
+roles = []                        # default; empty embeds both roles -- e.g. ["user"] embeds only prompts
 recall_max_revision_lag = 256     # default; Recall corpus revisions the Recall index may trail and still serve (0 = exact)
 
 [vector.embeddings]
@@ -501,6 +502,21 @@ the same reconciliation on the next build. A running daemon picks up the new
 list after it restarts. Keyword search is unaffected. The list does not apply to the Recall
 index or hosted PostgreSQL embeddings.
 
+`roles` selects which message documents local builds embed. `"user"` keeps user
+prompts, and `"assistant"` keeps assistant replies. An empty list, or a list
+with both roles, embeds both. With vector search enabled, any other value fails
+config load with `[vector] roles: unknown role "<name>"`. Builds combine roles
+with `agents` and `include_automated`; the after-sync build, periodic backstop,
+and `embeddings build` all use the configured roles. Changing roles reconciles
+the index on the next build while keeping unchanged in-scope embeddings. The
+daemon reads the new value after it restarts. Keyword search, Recall embeddings,
+and hosted PostgreSQL embeddings ignore this setting.
+
+The `--role` flag on `agentsview session messages` filters the messages returned
+by that command. It does not change which messages are embedded. Before
+downgrading to a version without `[vector] roles`, remove that key from the
+config. The older version's next build indexes both roles.
+
 ### Ollama quickstart
 
 ```bash
@@ -659,7 +675,7 @@ you want automated sessions embedded on every build, set
 
 `--repair-invalid` targets the existing generation whose fingerprint matches
 your current embedding configuration, and it fails without writing if that
-generation does not exist. After changing `agents`, run an ordinary build before
+generation does not exist. After changing `agents` or `roles`, run an ordinary build before
 repairing invalid vectors. It does not accept a generation ID. The command scans
 stored documents with a revision-current generation stamp in bounded batches and
 checks for malformed byte length, a length that differs from the generation's
@@ -898,8 +914,9 @@ What the range *means* depends on the search mode:
   spans the whole stretch of assistant messages. Lexical citations therefore
   need no vector index and never change with index state. Derived and embedded
   spans differ for assistant runs the index split into capped pieces, sessions
-  excluded from the build (`include_automated = false` or an `agents` list
-  that omits their agent), and messages newer than the last index refresh.
+  excluded from the build (`include_automated = false`, an `agents` list that
+  omits their agent, or a `roles` list that omits their role), and messages
+  newer than the last index refresh.
 
 Lexical row cardinality is unchanged: substring, regex, and FTS still return one
 row per matching source row with the same snippets, and the range and lineage

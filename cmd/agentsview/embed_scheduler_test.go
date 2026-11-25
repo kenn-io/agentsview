@@ -1960,11 +1960,12 @@ func TestEmbedSchedulerFiltersAgents(t *testing.T) {
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
 	for _, agent := range []string{"claude", "codex"} {
 		dbtest.SeedSessionWithMessages(t, database, agent, "project",
-			[]db.Message{dbtest.UserMsg(agent, 0, agent+" text")},
+			[]db.Message{dbtest.UserMsg(agent, 0, agent+" question"), dbtest.AsstMsg(agent, 1, agent+" answer")},
 			func(s *db.Session) { s.Agent = agent })
 	}
 	cfg := vectorTestConfig(dataDir)
 	cfg.Vector.Agents = []string{"claude"}
+	cfg.Vector.Roles = []string{"user"}
 	ix, err := vector.OpenSpec(t.Context(), cfg.Vector.ResolvedDBPath(dataDir), vector.MessageIndexSpec(), false, cfg.Vector.Embeddings.MaxInputChars)
 	require.NoError(t, err)
 	defer ix.Close()
@@ -1993,5 +1994,5 @@ func TestEmbedSchedulerFiltersAgents(t *testing.T) {
 	}, "after-sync build did not encode")
 	mu.Lock()
 	defer mu.Unlock()
-	assert.Contains(t, encoded[0], "claude text")
+	assert.Contains(t, encoded[0], "claude question")
 }

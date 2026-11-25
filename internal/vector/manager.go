@@ -211,7 +211,9 @@ type EncoderSet struct {
 // corpus whose own active generation can change at runtime.
 type BuildTarget struct {
 	// Agents limits message scans to these agent IDs; an empty list includes all.
-	Agents         []string
+	Agents []string
+	// Roles limits message scans to these roles; an empty list includes both.
+	Roles          []string
 	Source         UnitSource
 	Generation     kitvec.Generation
 	CorpusRevision string
@@ -489,6 +491,7 @@ func (m *Manager) runBuild(
 		RepairInvalid:      req.RepairInvalid,
 		IncludeAutomated:   req.IncludeAutomated,
 		Agents:             target.Agents,
+		Roles:              target.Roles,
 		BatchSize:          me.Settings.BatchSize,
 		ModelContextTokens: me.Settings.ModelContextTokens,
 		MaxBatchTokens:     me.Settings.MaxBatchTokens,

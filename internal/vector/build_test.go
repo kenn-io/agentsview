@@ -1212,3 +1212,86 @@ func TestBuildAgentScopeFailureThenRestore(t *testing.T) {
 	require.NoError(t, build("claude"))
 	assert.Equal(t, []string{"a-old", "b-old"}, mirrorSessionIDs(t, ix))
 }
+
+func seedRoleSession(t *testing.T, archive *db.DB, msgs ...db.Message) {
+	t.Helper()
+	dbtest.SeedSessionWithMessages(t, archive, "s", "project", msgs, func(s *db.Session) {
+		s.Agent = "claude"
+		s.EndedAt = new("2024-01-01T00:00:00Z")
+	})
+}
+
+func roleSessionMessages() []db.Message {
+	return []db.Message{
+		dbtest.UserMsg("s", 0, "first question"), dbtest.AsstMsg("s", 1, "first answer"),
+		dbtest.AsstMsg("s", 2, "more answer"), dbtest.UserMsg("s", 3, "second question"),
+		dbtest.AsstMsg("s", 4, "second answer"),
+	}
+}
+
+func assertEncodedOnly(t *testing.T, encoded []string, want, reject string) {
+	t.Helper()
+	require.NotEmpty(t, encoded)
+	for _, text := range encoded {
+		assert.Contains(t, text, want)
+		assert.NotContains(t, text, reject)
+	}
+}
+
+func TestBuildRoleScopeReconciles(t *testing.T) {
+	ctx := t.Context()
+	archive := dbtest.OpenTestDB(t)
+	seedRoleSession(t, archive, roleSessionMessages()...)
+	ix := openTestIndex(t)
+	source := &agentScopeSource{DB: archive}
+	gen := fakeGeneration("fake-model")
+	var encoded []string
+	build := func(roles ...string) {
+		t.Helper()
+		encoded = nil
+		source.since = ""
+		_, err := ix.Build(ctx, source, recordingEncoder(&encoded), gen, BuildOptions{Agents: []string{"claude"}, Roles: roles})
+		require.NoError(t, err)
+	}
+	build("user")
+	stored, _, err := ix.metaGet(ctx, scopeAgentsKey)
+	require.NoError(t, err)
+	assert.Equal(t, "claude;roles=user", stored)
+	users := mirrorDocKeys(t, ix)
+	require.Len(t, users, 2)
+	assertEncodedOnly(t, encoded, "question", "answer")
+
+	require.NoError(t, archive.ReplaceSessionMessages(ctx, "s", append(roleSessionMessages(), dbtest.AsstMsg("s", 5, "late answer"))))
+	build("user")
+	assert.NotEmpty(t, source.since, "the append uses an incremental scan")
+	assert.Empty(t, encoded, "an appended reply adds nothing to a user-only index")
+	assert.Equal(t, users, mirrorDocKeys(t, ix))
+
+	build("assistant")
+	runs := mirrorDocKeys(t, ix)
+	require.Len(t, runs, 2)
+	assertEncodedOnly(t, encoded, "answer", "question")
+
+	build()
+	stored, _, err = ix.metaGet(ctx, scopeAgentsKey)
+	require.NoError(t, err)
+	assert.Equal(t, "claude", stored)
+	all := mirrorDocKeys(t, ix)
+	require.Len(t, all, 4)
+	assert.Subset(t, all, runs)
+	assertEncodedOnly(t, encoded, "question", "answer")
+
+	build("user")
+	assert.Equal(t, users, mirrorDocKeys(t, ix))
+	assert.Empty(t, encoded, "prompts kept across scope changes are not re-embedded")
+	build("assistant", "user", "assistant")
+	assert.Equal(t, all, mirrorDocKeys(t, ix))
+	assertEncodedOnly(t, encoded, "answer", "question")
+
+	stored, _, err = ix.metaGet(ctx, scopeAgentsKey)
+	require.NoError(t, err)
+	assert.Equal(t, "claude", stored, "both roles store the value older writers store")
+	build()
+	assert.NotEmpty(t, source.since, "a value with no roles suffix needs no rescan")
+	assert.Empty(t, encoded)
+}

@@ -185,6 +185,8 @@ type VectorConfig struct {
 	// Agents limits local message embeddings to these session agent IDs.
 	// An empty list includes all agents.
 	Agents []string `toml:"agents" json:"agents,omitempty"`
+	// Roles limits message embeddings to user or assistant; empty includes both.
+	Roles []string `toml:"roles" json:"roles,omitempty"`
 	// RecallMaxRevisionLag is how many Recall corpus revisions the Recall
 	// vector index may trail the corpus and still answer vector and hybrid
 	// queries. Every insert, delete, or text edit of an accepted Recall entry
@@ -476,6 +478,11 @@ func (c VectorConfig) Validate() error {
 			return slices.Contains(parser.ProviderStoredAgents(def.Type), parser.AgentType(agent))
 		}) {
 			return fmt.Errorf("[vector] agents: unknown agent %q", agent)
+		}
+	}
+	for _, role := range c.Roles {
+		if role != "user" && role != "assistant" {
+			return fmt.Errorf("[vector] roles: unknown role %q", role)
 		}
 	}
 	if c.RecallMaxRevisionLag < 0 {
@@ -2307,6 +2314,9 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if meta.IsDefined("vector", "agents") {
 		c.Vector.Agents = file.Vector.Agents
+	}
+	if meta.IsDefined("vector", "roles") {
+		c.Vector.Roles = file.Vector.Roles
 	}
 	if meta.IsDefined("vector", "recall_max_revision_lag") {
 		c.Vector.RecallMaxRevisionLag = file.Vector.RecallMaxRevisionLag
