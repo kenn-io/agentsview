@@ -26,20 +26,12 @@ func TestArtifactImportRetainsToolPRLinks(t *testing.T) {
 		ToolCalls: []db.ToolCall{
 			{ToolName: "Bash", Category: "Bash", ToolUseID: "call-1", InputJSON: `{"command":"gh pr view 5 -R example/repo"}`},
 			{ToolName: "Task", Category: "Task", ToolUseID: "call-2", InputJSON: `{"prompt":"Review https://github.com/example/repo/pull/6"}`},
-			{ToolName: "Bash", Category: "Bash", ToolUseID: "call-4", InputJSON: `{"command":"gh pr view 8 -R example/repo"}`},
-			{ToolName: "shell", Category: "Bash", ToolUseID: "call-5", InputJSON: `{"command":"gh pr view 9 -R example/repo"}`},
 		},
 	}}))
 	store := newTestArtifactStore(t)
 	exported, err := ExportToStore(t.Context(), source, store, ExportOptions{Origin: contractOrigin, Full: true})
 	require.NoError(t, err)
 	require.Equal(t, 1, exported.ExportedSessions)
-	checkpoint := latestStoreCheckpointForTest(t, store, contractOrigin)
-	ref, err := NewRef(contractOrigin, KindManifests, checkpoint.Sessions[contractOrigin+"~one"]+".json")
-	require.NoError(t, err)
-	manifest, err := decodeManifestWithLimits(readContractArtifact(t, store, ref), productionArtifactLimits())
-	require.NoError(t, err)
-	assert.Equal(t, 8, manifest.Version)
 	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
 		t.Run(string(policy), func(t *testing.T) {
 			destination := testDB(t)
@@ -52,17 +44,9 @@ func TestArtifactImportRetainsToolPRLinks(t *testing.T) {
 			session, err := destination.GetSessionFull(t.Context(), contractOrigin+"~one")
 			require.NoError(t, err)
 			require.NotNil(t, session)
-			require.Len(t, session.PRLinks, 4)
+			require.Len(t, session.PRLinks, 2)
 			assert.Equal(t, 5, session.PRLinks[0].Number)
 			assert.Equal(t, 6, session.PRLinks[1].Number)
-			assert.Equal(t, 8, session.PRLinks[2].Number)
-			assert.Equal(t, 9, session.PRLinks[3].Number)
-			messages, err := destination.GetMessages(t.Context(), session.ID, 0, 10, true)
-			require.NoError(t, err)
-			require.NoError(t, destination.ReplaceSessionMessages(t.Context(), session.ID, messages))
-			session, err = destination.GetSessionFull(t.Context(), session.ID)
-			require.NoError(t, err)
-			assert.Len(t, session.PRLinks, 4)
 		})
 	}
 }

@@ -42,9 +42,12 @@ func TestToolCallPRLinksInputShapes(t *testing.T) {
 		{"argv", "shell", `{"command":["bash","-lc","gh pr view 43 -R example/repo"]}`, []int{43}},
 		{"commands", "execute_command", `{"commands":["gh pr view 42 -R example/repo","gh pr view 43 -R example/repo"]}`, []int{42, 43}},
 		{"CommandLine", "run_command", `{"CommandLine":"gh pr view 42 -R example/repo"}`, []int{42}},
-		{"cmd", "exec_command", `{"cmd":"gh pr view 42 -R example/repo"}`, []int{42}},
 		{"plain text", "shell", `gh pr view 42`, []int{42}},
 		{"code mode", "exec", `text(await tools.exec_command({cmd:"gh pr view 42 -R example/repo"})); text(await tools.exec_command({cmd:"gh pr view 43 -R example/repo"}))`, []int{42, 43}},
+		{"other", "exec_command", `{"cmd":"gh pr view 42","workdir":"/work/other"}`, nil},
+		{"matching", "exec_command", `{"cmd":"gh pr view 42","workdir":"/work/./repo"}`, []int{42}},
+		{"code mode batch", "exec", `text(await tools.exec_command({cmd:"gh pr view 41",workdir:"/other"})); text(await tools.exec_command({cmd:"gh pr view 42",workdir:"/work/repo"}))`, []int{42}},
+		{"code mode commit directory", "exec", `text(await tools.exec_command({cmd:"git -C /other commit -m x; gh pr view 42",workdir:"/work/repo"}))`, []int{42}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			links := toolCallPRLinks(t, []db.Message{{ToolCalls: []db.ToolCall{{ToolName: tc.tool, Category: "Bash", InputJSON: tc.input}}}}, "/work/repo", "https://github.com/example/repo.git")
@@ -57,31 +60,10 @@ func TestToolCallPRLinksInputShapes(t *testing.T) {
 	}
 }
 
-func TestToolCallPRLinksWorkdirs(t *testing.T) {
-	for _, tc := range []struct {
-		name, tool, input string
-		want              []int
-	}{
-		{"other", "exec_command", `{"cmd":"gh pr view 42","workdir":"/work/other"}`, nil},
-		{"matching", "exec_command", `{"cmd":"gh pr view 42","workdir":"/work/./repo"}`, []int{42}},
-		{"code mode batch", "exec", `text(await tools.exec_command({cmd:"gh pr view 41",workdir:"/other"})); text(await tools.exec_command({cmd:"gh pr view 42",workdir:"/work/repo"}))`, []int{42}},
-		{"code mode commit directory", "exec", `text(await tools.exec_command({cmd:"git -C /other commit -m x; gh pr view 42",workdir:"/work/repo"}))`, []int{42}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			links := toolCallPRLinks(t, []db.Message{{ToolCalls: []db.ToolCall{{Category: "Bash", ToolName: tc.tool, InputJSON: tc.input}}}}, "/work/repo", "https://github.com/example/repo.git")
-			var numbers []int
-			for _, link := range links {
-				numbers = append(numbers, link.Number)
-			}
-			assert.Equal(t, tc.want, numbers)
-		})
-	}
-}
-
 func TestToolCallPRLinksEarlierShellContext(t *testing.T) {
 	for _, tc := range []struct{ name, command string }{
 		{"directory", "cd /work/other"},
-		{"repository", "bash -lc 'git remote set-url origin https://github.com/user-b/project-b.git'"},
+		{"repository", "git remote set-url origin https://github.com/user-b/project-b.git"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := []db.ToolCall{

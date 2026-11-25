@@ -2604,48 +2604,36 @@ func TestStripVirtualSourceSuffixVisualStudioCopilot(t *testing.T) {
 }
 
 func TestCompareStoredSessionPromptAndCommandLinks(t *testing.T) {
-	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts} {
-		t.Run(string(policy), func(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		policy          config.ArchiveContent
+		command, prompt string
+		count           int
+	}{
+		{"full", config.ArchiveContentFull, "gh pr view 42 -R user-a/project-a", "Review https://github.com/user-a/project-a/pull/43", 2},
+		{"transcripts", config.ArchiveContentTranscripts, "gh pr view 42 -R user-a/project-a", "Review https://github.com/user-a/project-a/pull/43", 2},
+		{"mixed case", config.ArchiveContentFull, "gh pr view 42 -R example/repo", "Review https://github.com/Example/Repo/pull/42", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			d := openTestDB(t)
-			e := NewEngine(t.Context(), d, EngineConfig{Machine: "test-machine", ArchiveContent: policy})
+			e := NewEngine(t.Context(), d, EngineConfig{Machine: "test-machine", ArchiveContent: tc.policy})
 			pw := pdToolSession("pd-pr-links")
-			pw.msgs[1].ToolCalls[1].InputJSON = `{"command":"gh pr view 42 -R user-a/project-a"}`
+			pw.msgs[1].ToolCalls[1].InputJSON = `{"command":"` + tc.command + `"}`
 			pw.msgs[2].IsSystem = false
-			pw.msgs[2].Content = "Review https://github.com/user-a/project-a/pull/43"
-			pw.msgs[2].ContentLength = len(pw.msgs[2].Content)
+			pw.msgs[2].Content = tc.prompt
+			pw.msgs[2].ContentLength = len(tc.prompt)
 			written, _, failed, _ := e.writeBatch([]pendingWrite{pw}, syncWriteBulk, false)
 			require.Equal(t, 1, written)
 			require.Zero(t, failed)
 			prepared, msgs, verdict := e.prepareSessionWrite(pw, nil)
 			require.Equal(t, sessionWriteOK, verdict)
 			stored := pdFetchStored(t, d, prepared.ID)
-			require.Len(t, stored.PRLinks, 2)
+			require.Len(t, stored.PRLinks, tc.count)
 			diffs, err := e.compareStoredSession(t.Context(), stored, prepared, msgs, nil)
 			require.NoError(t, err)
 			for _, diff := range diffs {
 				assert.NotEqual(t, FieldPRLinks, diff.Field)
 			}
 		})
-	}
-}
-
-func TestCompareStoredSessionPRLinkCase(t *testing.T) {
-	d := openTestDB(t)
-	e := NewEngine(t.Context(), d, EngineConfig{Machine: "test-machine"})
-	pw := pdToolSession("pd-pr-case")
-	pw.msgs[1].ToolCalls[1].InputJSON = `{"command":"gh pr view 42 -R example/repo"}`
-	pw.msgs[2].IsSystem = false
-	pw.msgs[2].Content = "Review https://github.com/Example/Repo/pull/42"
-	pw.msgs[2].ContentLength = len(pw.msgs[2].Content)
-	written, _, failed, _ := e.writeBatch([]pendingWrite{pw}, syncWriteBulk, false)
-	require.Equal(t, 1, written)
-	require.Zero(t, failed)
-	prepared, msgs, verdict := e.prepareSessionWrite(pw, nil)
-	require.Equal(t, sessionWriteOK, verdict)
-	stored := pdFetchStored(t, d, prepared.ID)
-	diffs, err := e.compareStoredSession(t.Context(), stored, prepared, msgs, nil)
-	require.NoError(t, err)
-	for _, diff := range diffs {
-		assert.NotEqual(t, FieldPRLinks, diff.Field)
 	}
 }
