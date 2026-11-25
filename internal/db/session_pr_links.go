@@ -529,20 +529,20 @@ func ToolCallPRLinks(ctx context.Context, messages []Message, cwd, remote string
 // ToolCallPRLinksForUsage uses a known host without inferring bare numbers
 // after earlier shell state has been discarded.
 func ToolCallPRLinksForUsage(ctx context.Context, messages []Message, remote string) ([]PRLink, error) {
-	links, _, err := usageToolCallPRLinks(ctx, messages, remote, false)
+	links, _, err := usageToolCallPRLinks(ctx, messages, remote, false, false)
 	return links, err
 }
 
 // ProjectedUsagePRLinks reads the calls held until a projected session is written.
 func ProjectedUsagePRLinks(ctx context.Context, session Session, remote string) ([]PRLink, error) {
-	links, _, err := usageToolCallPRLinks(ctx, session.usagePRMessages, remote, false)
+	links, _, err := usageToolCallPRLinks(ctx, session.usagePRMessages, remote, false, false)
 	return links, err
 }
 
 // usageToolCallPRLinks resolves usage-only calls after an earlier write that
 // may have changed repository context, and reports whether it is changed after them.
-func usageToolCallPRLinks(ctx context.Context, messages []Message, remote string, changed bool) ([]PRLink, bool, error) {
-	state := sharedPRContext{repository: changed, noBare: true}
+func usageToolCallPRLinks(ctx context.Context, messages []Message, remote string, changed, hostUnknown bool) ([]PRLink, bool, error) {
+	state := sharedPRContext{repository: changed || hostUnknown, noBare: true}
 	links, err := toolCallPRLinks(ctx, messages, "", remote, &state, nil)
 	return links, changed || usageRepositoryChanged(messages), err
 }
@@ -588,7 +588,7 @@ func usageToolPRLinksTx(ctx context.Context, tx *sql.Tx, sessionID string, messa
 	if err := tx.QueryRowContext(ctx, `SELECT `+checkoutRemoteSQL+`, COALESCE((SELECT pr_repository_changed FROM sessions WHERE id=?),0)`, sessionID, sessionID).Scan(&remote, &changed); err != nil {
 		return nil, err
 	}
-	links, after, err := usageToolCallPRLinks(ctx, messages, remote, changed)
+	links, after, err := usageToolCallPRLinks(ctx, messages, remote, changed, false)
 	if err != nil || after == changed {
 		return links, err
 	}

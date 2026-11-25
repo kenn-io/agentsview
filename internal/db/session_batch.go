@@ -120,14 +120,11 @@ func mergeUsagePRLinksTx(ctx context.Context, tx *sql.Tx, session *Session) erro
 
 func mergePendingUsagePRLinks(ctx context.Context, tx *sql.Tx, session *Session, stored []PRLink) error {
 	var remote string
-	var changed bool
-	if err := tx.QueryRowContext(ctx, `SELECT `+checkoutRemoteSQL+`, COALESCE((SELECT pr_repository_changed FROM sessions WHERE id=?),0)`, session.ID, session.ID).Scan(&remote, &changed); err != nil {
+	var changed, unknown bool
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT CASE WHEN remote_candidate_count=1 THEN git_remote ELSE '' END FROM session_project_identity_snapshots WHERE session_id=?),?), COALESCE((SELECT remote_candidate_count>1 FROM session_project_identity_snapshots WHERE session_id=?),0), COALESCE((SELECT pr_repository_changed FROM sessions WHERE id=?),0)`, session.ID, session.usagePRRemote, session.ID, session.ID).Scan(&remote, &unknown, &changed); err != nil {
 		return err
 	}
-	if remote == "" {
-		remote = session.usagePRRemote
-	}
-	links, changed, err := usageToolCallPRLinks(ctx, session.usagePRMessages, remote, changed || session.PRRepositoryChanged)
+	links, changed, err := usageToolCallPRLinks(ctx, session.usagePRMessages, remote, changed || session.PRRepositoryChanged, unknown)
 	if err != nil {
 		return err
 	}

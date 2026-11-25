@@ -690,6 +690,35 @@ func TestUsageOnlyPRLinksPreserveAmbiguousCheckout(t *testing.T) {
 	got, err := d.GetSession(t.Context(), s.ID)
 	require.NoError(t, err)
 	assert.Empty(t, got.PRLinks)
+	assert.False(t, got.PRRepositoryChanged)
+	message.ToolCalls[0].InputJSON = `{"cmd":"gh pr view 43 -R github.com/example/repo; gh pr view https://git.example/example/repo/pull/44"}`
+	_, err = d.WriteSessionBatchContext(t.Context(), []SessionBatchWrite{{Session: s, Messages: []Message{message}, ReplaceMessages: true}})
+	require.NoError(t, err)
+	got, err = d.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	require.Len(t, got.PRLinks, 2)
+	assert.Equal(t, "https://github.com/example/repo/pull/43", got.PRLinks[0].URL)
+	assert.Equal(t, "https://git.example/example/repo/pull/44", got.PRLinks[1].URL)
+	assert.False(t, got.PRRepositoryChanged)
+	obs = export.WithRecordedGitRemote(obs, "https://github.com/example/repo.git")
+	require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), obs))
+	message.ToolCalls[0].InputJSON = `{"cmd":"gh pr view 45 -R example/repo"}`
+	_, err = d.WriteSessionBatchContext(t.Context(), []SessionBatchWrite{{Session: s, Messages: []Message{message}, ReplaceMessages: true}})
+	require.NoError(t, err)
+	got, err = d.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	require.Len(t, got.PRLinks, 3)
+	assert.Equal(t, "https://github.com/example/repo/pull/45", got.PRLinks[2].URL)
+
+	newSession := Session{ID: "no-snapshot", Project: s.Project, Machine: s.Machine, Agent: s.Agent, Cwd: s.Cwd}
+	SetUsagePRRemote(&newSession, "https://ghe.example/example/repo.git")
+	message.SessionID = newSession.ID
+	_, err = d.WriteSessionBatchContext(t.Context(), []SessionBatchWrite{{Session: newSession, Messages: []Message{message}, ReplaceMessages: true}})
+	require.NoError(t, err)
+	got, err = d.GetSession(t.Context(), newSession.ID)
+	require.NoError(t, err)
+	require.Len(t, got.PRLinks, 1)
+	assert.Equal(t, "https://ghe.example/example/repo/pull/45", got.PRLinks[0].URL)
 }
 
 func TestUsageOnlyPRRepositoryChangeQueuesArtifactExport(t *testing.T) {
