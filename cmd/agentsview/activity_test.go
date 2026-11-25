@@ -243,8 +243,7 @@ func TestFetchHTTPActivityReportContinuesRequestedGeneration(t *testing.T) {
 	mux.HandleFunc("/api/v1/activity/report", func(w http.ResponseWriter, _ *http.Request) {
 		reportRequests++
 		if !assert.NoError(t, json.MarshalWrite(w, activity.Report{
-			SchemaVersion: export.ActivityReportSchemaVersion,
-			ReportID:      "fresh-report", Timezone: "UTC",
+			ReportID: "fresh-report", Timezone: "UTC",
 		})) {
 			return
 		}
@@ -263,8 +262,7 @@ func TestFetchHTTPActivityReportContinuesRequestedGeneration(t *testing.T) {
 				"sessions":  []activity.SessionRow{{SessionID: "continued"}},
 				"total":     2,
 				"report": activity.Report{
-					SchemaVersion: export.ActivityReportSchemaVersion,
-					ReportID:      "original-report", Timezone: "UTC",
+					ReportID: "original-report", Timezone: "UTC",
 					BySession:     []activity.SessionRow{{SessionID: "continued"}},
 					SessionsTotal: 2,
 				},
@@ -296,8 +294,7 @@ func TestActivityReportCommandCursorInheritsNonDefaultPagingFlags(t *testing.T) 
 	queries := make(chan url.Values, 2)
 	pageResponse := func(sessionID, nextCursor string) string {
 		report := activity.Report{
-			SchemaVersion: export.ActivityReportSchemaVersion,
-			ReportID:      "saved-report", Timezone: "UTC",
+			ReportID: "saved-report", Timezone: "UTC",
 			BySession:     []activity.SessionRow{{SessionID: sessionID}},
 			SessionsTotal: 2, SessionsNextCursor: nextCursor,
 		}
