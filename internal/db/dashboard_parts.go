@@ -60,6 +60,7 @@ func (m *dashboardPartsMemo) reuse(slot, version string, ids []string, versions 
 			return false
 		}
 		parts[id] = p
+		m.order.MoveToBack(item)
 		return true
 	})
 }

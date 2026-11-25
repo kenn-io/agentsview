@@ -484,6 +484,39 @@ func TestDashboardPartsMemoEvictsLeastRecentlyUsed(t *testing.T) {
 	assert.Equal(t, map[string]kept.Part[dashboardPart]{"a": part("a"), "c": part("c"), "d": part("d")}, got)
 }
 
+func TestDashboardPartsMemoConcurrentReusePromotesBeforeStore(t *testing.T) {
+	part := func(id string) kept.Part[dashboardPart] { return kept.Part[dashboardPart]{ID: id, Fingerprint: "v"} }
+	memo := dashboardPartsMemo{maxBytes: 2 * dashboardPartBytes(part("a"))}
+	memo.store("UTC", "version", map[string]kept.Part[dashboardPart]{"a": part("a"), "b": part("b")})
+	versions := map[string]string{"a": "v", "b": "v", "c": "v"}
+	reused := make(chan []string, 1)
+	resume := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		parts := make(map[string]kept.Part[dashboardPart])
+		reused <- memo.reuse("UTC", "version", []string{"a", "missing"}, versions, parts)
+		<-resume // The request is still filling its missing part.
+		close(done)
+	}()
+	missing := <-reused
+	memo.store("UTC", "version", map[string]kept.Part[dashboardPart]{"c": part("c")})
+	close(resume)
+	<-done
+	assert.Equal(t, []string{"missing"}, missing)
+	got := make(map[string]kept.Part[dashboardPart])
+	assert.Equal(t, []string{"b"}, memo.reuse("UTC", "version", []string{"a", "b", "c"}, versions, got))
+	assert.Equal(t, map[string]kept.Part[dashboardPart]{"a": part("a"), "c": part("c")}, got)
+}
+
+func TestDashboardPartsMemoStaleReuseDoesNotPromote(t *testing.T) {
+	part := func(id string) kept.Part[dashboardPart] { return kept.Part[dashboardPart]{ID: id, Fingerprint: "v"} }
+	memo := dashboardPartsMemo{maxBytes: 2 * dashboardPartBytes(part("a"))}
+	memo.store("UTC", "version", map[string]kept.Part[dashboardPart]{"a": part("a"), "b": part("b")})
+	assert.Equal(t, []string{"a"}, memo.reuse("UTC", "version", []string{"a"}, map[string]string{"a": "new"}, make(map[string]kept.Part[dashboardPart])))
+	memo.store("UTC", "version", map[string]kept.Part[dashboardPart]{"c": part("c")})
+	assert.NotContains(t, memo.parts, "a")
+}
+
 func TestDashboardPartsMemoOverBudgetBatchIsDeterministic(t *testing.T) {
 	parts := make(map[string]kept.Part[dashboardPart])
 	for _, id := range []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"} {
