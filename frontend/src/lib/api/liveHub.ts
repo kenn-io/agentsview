@@ -30,6 +30,26 @@ export class LiveHub {
   private credentials: { base: string; token: string } | null = null;
   private connected = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private batching = false;
+  private dirty = false;
+
+  batch(fn: () => void) {
+    if (this.batching) {
+      fn();
+      return;
+    }
+    this.batching = true;
+    this.dirty = false;
+    try {
+      fn();
+    } finally {
+      this.batching = false;
+      if (this.dirty) {
+        this.dirty = false;
+        this.schedule();
+      }
+    }
+  }
 
   update(port: LivePort, request: LiveRequest) {
     const previous = this.ports.get(port);
@@ -94,6 +114,10 @@ export class LiveHub {
   }
 
   private schedule() {
+    if (this.batching) {
+      this.dirty = true;
+      return;
+    }
     if (this.timer !== null) clearTimeout(this.timer);
     if (!this.source && this.ports.size > 0) {
       this.reconcile();
