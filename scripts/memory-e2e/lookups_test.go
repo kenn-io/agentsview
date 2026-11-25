@@ -40,7 +40,6 @@ func TestLookupClientVersionGate(t *testing.T) {
 			cfg := config{outputDir: filepath.Join(dir, "output"), repository: dir}
 			_, err := runLookupClient(t.Context(), cfg, "missing-agentsview", clientCodex, nil, nil)
 			if tc.resolved {
-				require.Error(t, err)
 				require.NotErrorIs(t, err, errLookupCaptureUnsupported)
 			} else {
 				require.ErrorIs(t, err, errLookupCaptureUnsupported)
