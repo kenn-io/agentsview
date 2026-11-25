@@ -482,8 +482,7 @@ func (p *codexProvider) PlanRawCapture(
 	}
 	captureRoot := filepath.Clean(src.Root)
 	indexPath := codexSessionIndexPath(src.Path)
-	label := CodexSourceLabel(src.Root, src.Path)
-	if indexPath != "" && label == "" {
+	if indexPath != "" && CodexSourceLabel(src.Root, src.Path) == "" {
 		// The provider reads this named sibling as session metadata, so raw
 		// capture widens only far enough to preserve the same parse inputs.
 		captureRoot = filepath.Dir(indexPath)
@@ -563,7 +562,7 @@ func (p *codexProvider) PlanRawCapture(
 			if i > 0 {
 				logical = fmt.Sprintf("alias-homes/%d/%s", i, CodexSessionIndexFilename)
 			}
-			if (p.Config.StableSourceSnapshots || i == 0 && label != "") &&
+			if (p.Config.StableSourceSnapshots || i == 0 && CodexSourceLabel(src.Root, src.Path) != "") &&
 				rawCapturePathWithin(captureRoot, candidate) {
 				// Materialized aliases already have custody paths. Keep their
 				// original ordinals even when missing indexes left gaps.
@@ -1568,10 +1567,6 @@ func (s codexSourceSet) directPathSource(
 	if requireRegular && !IsRegularFile(path) {
 		return SourceRef{}, false
 	}
-	labelRoot, label := CodexSourceLabelRoot(s.roots, path)
-	if label != "" {
-		root = labelRoot
-	}
 	return SourceRef{
 		Provider:       s.agent,
 		Key:            path,
@@ -1677,12 +1672,8 @@ func CodexSourceRank(source SourceRef) ReconciliationSourceRank {
 		return ReconciliationSourceRank{}
 	}
 	if CodexSourceLabel(src.Root, src.Path) != "" {
-		path := src.Path
-		if plain := codexPlainRolloutPath(path); IsRegularFile(plain) {
-			path = plain
-		}
 		var recency int64
-		if info, err := os.Stat(path); err == nil {
+		if info, err := os.Stat(src.Path); err == nil {
 			recency = info.ModTime().UnixNano()
 		}
 		return ReconciliationSourceRank{Class: 2, Recency: recency, Path: src.Path}
