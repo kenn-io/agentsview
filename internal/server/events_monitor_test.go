@@ -89,11 +89,14 @@ func TestEvents_HostedRevisionChangeKeepsStream(t *testing.T) {
 
 func TestEvents_HostedMonitorHandoff(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		fail bool
+		name    string
+		mode    string
+		updates int
 	}{
-		{name: "state changes before replacement baseline"},
-		{name: "frame state read fails", fail: true},
+		{name: "ordinary revision", updates: 1},
+		{name: "state changes before replacement baseline", mode: "change", updates: 2},
+		{name: "ambiguous state resolves during handoff", mode: "resolve", updates: 1},
+		{name: "frame state read fails", mode: "error", updates: 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Cleanup(sessionwatch.SetTimingsForTest(25*time.Millisecond, 50*time.Millisecond))
@@ -115,30 +118,36 @@ func TestEvents_HostedMonitorHandoff(t *testing.T) {
 			go func() { handler.ServeHTTP(w, req); close(done) }()
 			te.waitForSSEEvent(t, w, "events_ready", 5*time.Second)
 			var reads atomic.Int32
+			compared := make(chan struct{})
 			store.mu.Lock()
 			store.read = func(id string, state db.SessionWatchState) (db.SessionWatchState, error) {
 				if id == "watch-a" && state.ContentRevision == "two" {
 					n := reads.Add(1)
-					if tc.fail && n == 2 {
+					if tc.mode == "error" && n == 2 {
 						return db.SessionWatchState{}, errors.New("transient read failure")
 					}
-					if !tc.fail && n >= 4 {
+					if tc.mode == "resolve" && n == 2 {
+						state.State = "ambiguous"
+					}
+					if tc.mode == "change" && n >= 4 {
 						state.ContentRevision = "three"
+					}
+					if n == 5 {
+						close(compared)
 					}
 				}
 				return state, nil
 			}
 			store.states["watch-a"] = db.SessionWatchState{State: db.SessionWatchResolved, PublicID: "watch-a", ContentRevision: "two"}
 			store.mu.Unlock()
-			if tc.fail {
-				require.Eventually(t, func() bool {
-					return reads.Load() >= 2 && strings.Contains(w.BodyString(), "event: session_updated\ndata: watch-a\n")
-				}, 5*time.Second, 10*time.Millisecond)
-			} else {
-				require.Eventually(t, func() bool { return strings.Contains(w.BodyString(), `"content_revision":"three"`) }, 5*time.Second, 10*time.Millisecond)
+			select {
+			case <-compared:
+			case <-ctx.Done():
+				t.Fatal("replacement monitor did not compare state")
 			}
 			te.broadcaster.Emit("messages")
 			te.waitForSSEEvent(t, w, "data_changed", 5*time.Second)
+			assert.Equal(t, tc.updates, strings.Count(w.BodyString(), "event: session_updated\ndata: watch-a\n"))
 			require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: "watch-b", Project: "project", Machine: "test", Agent: "claude", MessageCount: 1}))
 			require.Eventually(t, func() bool { return strings.Contains(w.BodyString(), "event: session_updated\ndata: watch-b\n") }, 5*time.Second, 10*time.Millisecond)
 		})

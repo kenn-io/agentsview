@@ -1410,7 +1410,7 @@ func (s *Server) humaWatchSession(
 				if !ok {
 					return
 				}
-				if !s.sendSessionFrame(streamCtx, stream, in.ID, true) {
+				if _, ok := s.sendSessionFrame(streamCtx, stream, in.ID, true); !ok {
 					return
 				}
 			case <-heartbeat.C:
@@ -1420,20 +1420,23 @@ func (s *Server) humaWatchSession(
 	}}, nil
 }
 
-func (s *Server) sendSessionFrame(ctx context.Context, stream *SSEStream, id string, update bool) bool {
+func (s *Server) sendSessionFrame(ctx context.Context, stream *SSEStream, id string, update bool) (*db.SessionWatchState, bool) {
+	var sent *db.SessionWatchState
 	if update {
 		if identity, ok := s.db.(db.SessionWatchStateStore); ok {
 			state, err := identity.GetSessionWatchState(id)
 			if err != nil {
 				log.Printf("session watch state %q: %v", id, err)
 			} else if !stream.SendJSON("session.identity", state) {
-				return false
+				return nil, false
 			} else if state.State != db.SessionWatchResolved {
-				return true
+				return &state, true
+			} else {
+				sent = &state
 			}
 		}
 		if !stream.Send("session_updated", id) {
-			return false
+			return nil, false
 		}
 	}
 	if t, err := s.db.GetSessionTiming(ctx, id); err != nil {
@@ -1441,7 +1444,7 @@ func (s *Server) sendSessionFrame(ctx context.Context, stream *SSEStream, id str
 	} else if t != nil {
 		stream.SendJSON("session.timing", t)
 	}
-	return true
+	return sent, true
 }
 
 type eventsInput struct {
@@ -1506,6 +1509,7 @@ func (s *Server) humaEvents(ctx context.Context, in *eventsInput) (*huma.StreamR
 			closed bool
 		}
 		ticks := make(chan tick)
+		lastSent := make(map[string]*db.SessionWatchState)
 		for _, id := range missing {
 			if !stream.Send("session_missing", id) {
 				return
@@ -1562,15 +1566,27 @@ func (s *Server) humaEvents(ctx context.Context, in *eventsInput) (*huma.StreamR
 							if !stream.Send("session_missing", t.id) {
 								return
 							}
+							delete(lastSent, t.id)
 							continue
 						}
 					}
 					watch(t.id)
-					if !s.sendSessionFrame(ctx, stream, t.id, true) {
+					if identity, ok := s.db.(db.SessionWatchStateStore); ok {
+						state, err := identity.GetSessionWatchState(t.id)
+						if err != nil || lastSent[t.id] == nil || !reflect.DeepEqual(state, *lastSent[t.id]) {
+							var sent bool
+							lastSent[t.id], sent = s.sendSessionFrame(ctx, stream, t.id, true)
+							if !sent {
+								return
+							}
+						}
+					}
+				} else {
+					var sent bool
+					lastSent[t.id], sent = s.sendSessionFrame(ctx, stream, t.id, true)
+					if !sent {
 						return
 					}
-				} else if !s.sendSessionFrame(ctx, stream, t.id, true) {
-					return
 				}
 			case <-heartbeat.C:
 				stream.Send("heartbeat", time.Now().Format(time.RFC3339))
