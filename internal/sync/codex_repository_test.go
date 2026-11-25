@@ -258,6 +258,38 @@ func TestCodexLabeledRunResyncAndExplicitWorktreeMappingWins(t *testing.T) {
 	assert.Equal(t, "mapped_project", session.Project)
 }
 
+func TestCodexLabeledRunKeepsLabelAfterRootMove(t *testing.T) {
+	database := openTestDB(t)
+	base := t.TempDir()
+	oldRoot, newRoot := filepath.Join(base, "old"), filepath.Join(base, "new")
+	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	relative := filepath.Join("team", "case", ".codex-run-v1-abc", "sessions", "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
+	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z")
+	dbtest.WriteTestFile(t, filepath.Join(oldRoot, relative), []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
+	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {oldRoot}}})
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	session, err := database.GetSessionFull(t.Context(), "codex:"+id)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, "team/case", session.Project)
+	require.NotNil(t, session.FilePath)
+	assert.Equal(t, filepath.Join(oldRoot, relative), *session.FilePath)
+	engine.Close()
+	require.NoError(t, os.Rename(oldRoot, newRoot))
+	engine = NewEngine(t.Context(), database, EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {newRoot}}})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	session, err = database.GetSessionFull(t.Context(), "codex:"+id)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, "team/case", session.Project)
+	require.NotNil(t, session.FilePath)
+	assert.Equal(t, filepath.Join(newRoot, relative), *session.FilePath)
+	result := engine.SyncAll(t.Context(), nil)
+	assert.Zero(t, result.Synced)
+	assert.Equal(t, 1, result.Skipped)
+}
+
 func TestSyncSingleSessionFindsNewLabeledCopy(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()
