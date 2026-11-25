@@ -24,8 +24,10 @@ The latest release is
   automated** to see them. Conversations with your Muse, including voice calls,
   stay visible. AgentsView reads the run type Muse records on the first user
   message, so no `[automated]` patterns are needed. Restart or run
-  `agentsview sync` to reclassify existing Muse Personal sessions whose
-  transcripts are still on disk.
+  `agentsview sync` to reclassify local Muse Personal sessions whose
+  transcripts are still on disk. For hosted sessions, run
+  `agentsview replica pg raw-reparse <runtime-target> --run-id <id> --batch-size 64`.
+  See [PostgreSQL Sync](/docs/pg-sync/).
 
 - Reporting schema 7 lets integrations count shared Cursor billing events once
   across overlapping archives while retaining events unique to each archive.
