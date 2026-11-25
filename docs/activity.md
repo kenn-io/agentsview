@@ -260,8 +260,6 @@ version 9. The report contains a bounded first page of sessions,
 `sessions_total`, `sessions_next_cursor`, and a signed `report_id` that ties
 later pages to the report. It does not include the old `intervals` array. The
 CLI and HTTP API share the same schema version and change together.
-The CLI rejects other report schema versions and asks for matching CLI and
-daemon versions.
 
 Version 9 counts interactive launchers while their runs work. Version 8
 separated interactive, subagent, and automated sessions in session
