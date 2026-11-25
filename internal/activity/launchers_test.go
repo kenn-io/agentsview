@@ -22,14 +22,20 @@ func TestResolveLaunchers(t *testing.T) {
 			// A cycle exercises the defensive guard against malformed ancestry.
 			name:      "cycle",
 			runs:      []SessionMeta{{SessionID: "child", IsSubagent: true, IsLaunched: true, ParentSessionIDs: []string{"b"}}, {SessionID: "other", IsSubagent: true, IsLaunched: true, ParentSessionIDs: []string{"missing"}}},
-			ancestors: map[string]Launcher{"b": {ID: "b", IsSubagent: true, ParentSessionIDs: []string{"a"}}, "a": {ID: "a", IsSubagent: true, ParentSessionIDs: []string{"b"}}},
+			ancestors: map[string]Launcher{"b": {ID: "b", IsSubagent: true, IsLaunched: true, ParentSessionIDs: []string{"a"}}, "a": {ID: "a", IsSubagent: true, IsLaunched: true, ParentSessionIDs: []string{"b"}}},
 			calls:     [][]string{{"b", "missing"}, {"a"}}, examined: []string{"a", "b", "missing"},
 		},
 		{
 			name:      "shared parent",
 			runs:      []SessionMeta{{SessionID: "child", IsSubagent: true, IsLaunched: true, ParentSessionIDs: []string{"middle", "second"}}},
-			ancestors: map[string]Launcher{"middle": {ID: "middle", IsSubagent: true, ParentSessionIDs: []string{"first", "second"}}, "first": {ID: "first", MatchesFilter: true}, "second": {ID: "second", MatchesFilter: true}},
+			ancestors: map[string]Launcher{"middle": {ID: "middle", IsSubagent: true, IsLaunched: true, ParentSessionIDs: []string{"first", "second"}}, "first": {ID: "first", MatchesFilter: true}, "second": {ID: "second", MatchesFilter: true}},
 			waiting:   []string{"first", "second"},
+		},
+		{
+			name:      "native intermediate",
+			runs:      []SessionMeta{{SessionID: "child", IsSubagent: true, IsLaunched: true, ParentSessionIDs: []string{"middle"}}},
+			ancestors: map[string]Launcher{"middle": {ID: "middle", IsSubagent: true, ParentSessionIDs: []string{"root"}}, "root": {ID: "root", MatchesFilter: true}},
+			calls:     [][]string{{"middle"}}, examined: []string{"middle"}, waiting: []string{},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -69,13 +75,15 @@ func TestResolveLaunchersUsesKnownRunsAndCountsInteractiveAncestors(t *testing.T
 				return nil, nil
 			})
 			require.NoError(t, err)
-			assert.Equal(t, []string{"root"}, got.Waiting["child"])
 			if launched {
+				assert.Equal(t, []string{"root"}, got.Waiting["child"])
 				assert.Equal(t, []string{"root"}, got.Waiting["middle"])
+				assert.Equal(t, []string{"middle", "root"}, got.Examined)
 			} else {
+				assert.Empty(t, got.Waiting["child"])
 				assert.Empty(t, got.Waiting["middle"])
+				assert.Equal(t, []string{"middle"}, got.Examined)
 			}
-			assert.Equal(t, []string{"middle", "root"}, got.Examined)
 		})
 	}
 }

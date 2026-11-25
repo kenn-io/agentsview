@@ -95,7 +95,7 @@ func (b activityReportBackend) ActivityReportLaunchers(ctx context.Context, sess
 			return nil, err
 		}
 		queryArgs := append(slices.Clone(args), string(encoded))
-		rows, err := b.getReader().QueryContext(ctx, `SELECT s.id, s.is_automated, s.relationship_type = 'subagent', CASE WHEN s.relationship_type = 'subagent' THEN COALESCE(s.parent_session_id, '') ELSE '' END, CASE WHEN (`+where+`) THEN 1 ELSE 0 END FROM sessions s WHERE s.id IN (SELECT value FROM json_each(?)) AND s.deleted_at IS NULL`, queryArgs...)
+		rows, err := b.getReader().QueryContext(ctx, `SELECT s.id, s.is_automated, s.relationship_type = 'subagent', `+activityLaunchedSQL()+`, CASE WHEN s.relationship_type = 'subagent' THEN COALESCE(s.parent_session_id, '') ELSE '' END, CASE WHEN (`+where+`) THEN 1 ELSE 0 END FROM sessions s WHERE s.id IN (SELECT value FROM json_each(?)) AND s.deleted_at IS NULL`, queryArgs...)
 		if err != nil {
 			return nil, err
 		}
@@ -104,7 +104,7 @@ func (b activityReportBackend) ActivityReportLaunchers(ctx context.Context, sess
 		for rows.Next() {
 			var row activity.Launcher
 			var parent string
-			if err := rows.Scan(&row.ID, &row.IsAutomated, &row.IsSubagent, &parent, &row.MatchesFilter); err != nil {
+			if err := rows.Scan(&row.ID, &row.IsAutomated, &row.IsSubagent, &row.IsLaunched, &parent, &row.MatchesFilter); err != nil {
 				return nil, err
 			}
 			if parent != "" {
@@ -625,9 +625,13 @@ func (db *DB) activityReportSessionsFrom(
 	return db.activityReportSessionsFromWhere(ctx, q, f, rangeStartUTC, rangeEndUTC, false)
 }
 
+func activityLaunchedSQL() string {
+	return `EXISTS (SELECT 1 FROM session_external_parents ep WHERE ep.session_id = s.id AND ep.parent_session_id = s.parent_session_id AND s.relationship_type = 'subagent' AND COALESCE(s.parser_parent_session_id, '') = '' AND NOT ` + spawnEdgeExistsSQL("s") + `)`
+}
+
 func (db *DB) activityReportSessionsFromWhere(ctx context.Context, q sessionExportQuerier, f AnalyticsFilter, rangeStartUTC, rangeEndUTC string, onlySubagents bool) ([]activity.SessionMeta, []string, error) {
 	where, args := activityReportSessionSelectionWhere(f, rangeStartUTC, rangeEndUTC)
-	launched := `EXISTS (SELECT 1 FROM session_external_parents ep WHERE ep.session_id = s.id AND ep.parent_session_id = s.parent_session_id AND s.relationship_type = 'subagent' AND COALESCE(s.parser_parent_session_id, '') = '' AND NOT ` + spawnEdgeExistsSQL("s") + `)`
+	launched := activityLaunchedSQL()
 	if onlySubagents {
 		where += " AND " + launched
 	}

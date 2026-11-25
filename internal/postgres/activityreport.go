@@ -75,7 +75,7 @@ func (b activityReportBackend) ActivityReportLaunchers(ctx context.Context, sess
 		pb := &paramBuilder{}
 		where := buildAnalyticsWhereWithDate(b.filter, "", pb, false, "s.id", b.sessionDialect())
 		idParam := pb.add(ids)
-		rows, err := b.pg.QueryContext(ctx, `SELECT s.id, s.is_automated, s.relationship_type = 'subagent', (`+where+`) FROM sessions s WHERE s.id = ANY(`+idParam+`) AND s.deleted_at IS NULL`, pb.args...)
+		rows, err := b.pg.QueryContext(ctx, `SELECT s.id, s.is_automated, s.relationship_type = 'subagent', (`+b.activityLaunchedSQL()+`), (`+where+`) FROM sessions s WHERE s.id = ANY(`+idParam+`) AND s.deleted_at IS NULL`, pb.args...)
 		if err != nil {
 			return nil, err
 		}
@@ -83,7 +83,7 @@ func (b activityReportBackend) ActivityReportLaunchers(ctx context.Context, sess
 		var result []activity.Launcher
 		for rows.Next() {
 			var row activity.Launcher
-			if err := rows.Scan(&row.ID, &row.IsAutomated, &row.IsSubagent, &row.MatchesFilter); err != nil {
+			if err := rows.Scan(&row.ID, &row.IsAutomated, &row.IsSubagent, &row.IsLaunched, &row.MatchesFilter); err != nil {
 				return nil, err
 			}
 			result = append(result, row)
@@ -486,13 +486,18 @@ func (s *Store) activityReportSessions(
 	return s.activityReportSessionsWhere(ctx, f, rangeStartUTC, rangeEndUTC, only, false, true)
 }
 
-func (s *Store) activityReportSessionsWhere(ctx context.Context, f db.AnalyticsFilter, rangeStartUTC, rangeEndUTC string, only []string, onlySubagents, loadParents bool) ([]activity.SessionMeta, []string, error) {
-	pb := &paramBuilder{}
-	where := buildAnalyticsWhereWithDate(f, "", pb, false, "s.id", s.sessionDialect())
+func (s *Store) activityLaunchedSQL() string {
 	launched := `s.relationship_type = 'subagent' AND COALESCE(s.parent_session_id, '') <> '' AND COALESCE(s.parser_parent_session_id, '') = '' AND NOT EXISTS (SELECT 1 FROM tool_calls tc WHERE tc.subagent_session_id = s.id AND tc.session_id <> s.id)`
 	if s.hostedRelations {
 		launched += ` AND s.provenance_kind = 'legacy'`
 	}
+	return launched
+}
+
+func (s *Store) activityReportSessionsWhere(ctx context.Context, f db.AnalyticsFilter, rangeStartUTC, rangeEndUTC string, only []string, onlySubagents, loadParents bool) ([]activity.SessionMeta, []string, error) {
+	pb := &paramBuilder{}
+	where := buildAnalyticsWhereWithDate(f, "", pb, false, "s.id", s.sessionDialect())
+	launched := s.activityLaunchedSQL()
 	if onlySubagents {
 		where += " AND (" + launched + ")"
 	}

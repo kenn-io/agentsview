@@ -11,6 +11,7 @@ type Launcher struct {
 	ID               string
 	IsAutomated      bool
 	IsSubagent       bool
+	IsLaunched       bool
 	ParentSessionIDs []string
 	MatchesFilter    bool
 }
@@ -25,8 +26,8 @@ func ResolveLaunchers(ctx context.Context, runs []SessionMeta, selected map[stri
 	rows := make(map[string]Launcher, len(runs))
 	var pending []string
 	for _, run := range runs {
-		rows[run.SessionID] = Launcher{ID: run.SessionID, IsAutomated: run.IsAutomated, IsSubagent: run.IsSubagent, ParentSessionIDs: run.ParentSessionIDs, MatchesFilter: selected[run.SessionID]}
-		if run.IsSubagent {
+		rows[run.SessionID] = Launcher{ID: run.SessionID, IsAutomated: run.IsAutomated, IsSubagent: run.IsSubagent, IsLaunched: run.IsLaunched, ParentSessionIDs: run.ParentSessionIDs, MatchesFilter: selected[run.SessionID]}
+		if run.IsLaunched {
 			pending = append(pending, run.ParentSessionIDs...)
 		}
 	}
@@ -47,7 +48,7 @@ func ResolveLaunchers(ctx context.Context, runs []SessionMeta, selected map[stri
 		var missing []string
 		for _, id := range ids {
 			if row, ok := rows[id]; ok {
-				if row.IsSubagent {
+				if row.IsLaunched {
 					pending = append(pending, row.ParentSessionIDs...)
 				}
 			} else {
@@ -63,7 +64,7 @@ func ResolveLaunchers(ctx context.Context, runs []SessionMeta, selected map[stri
 		}
 		for _, row := range loaded {
 			rows[row.ID] = row
-			if row.IsSubagent {
+			if row.IsLaunched {
 				pending = append(pending, row.ParentSessionIDs...)
 			}
 		}
@@ -89,7 +90,7 @@ func ResolveLaunchers(ctx context.Context, runs []SessionMeta, selected map[stri
 			if id != run.SessionID && current.MatchesFilter && !current.IsSubagent && !current.IsAutomated {
 				result.Waiting[run.SessionID] = append(result.Waiting[run.SessionID], id)
 			}
-			if current.IsSubagent {
+			if current.IsLaunched {
 				pending = append(pending, current.ParentSessionIDs...)
 			}
 		}

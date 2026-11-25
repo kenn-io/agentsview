@@ -403,6 +403,27 @@ func TestPGActivityReportKeptLauncherChange(t *testing.T) {
 	requirePGKeptEqual(t, after, pgKeptBuild(t, store, f, q, true))
 }
 
+func TestPGActivityReportLaunchedRunStopsAtNativeAncestor(t *testing.T) {
+	for _, middleDate := range []string{"2026-06-12", "2026-06-14"} {
+		t.Run(middleDate, func(t *testing.T) {
+			local, syncer, store := newUsageJournalFixture(t)
+			pgKeptSession(t, local, "root", "project-a", "2026-06-12")
+			pgKeptSession(t, local, "native", "project-a", middleDate)
+			pgKeptSession(t, local, "run", "project-a", "2026-06-14")
+			middle, err := local.GetSession(t.Context(), "native")
+			require.NoError(t, err)
+			middle.ParentSessionID = new("root")
+			middle.RelationshipType = "subagent"
+			require.NoError(t, local.UpsertSession(t.Context(), *middle))
+			_, err = local.SetSessionExternalParent(t.Context(), "run", "native")
+			require.NoError(t, err)
+			pgKeptPush(t, syncer, false)
+			report := pgKeptBuild(t, store, db.AnalyticsFilter{Timezone: "UTC"}, pgDayQuery(t, "2026-06-14", "UTC"), true)
+			assert.Zero(t, report.Report.InteractivePeak.Agents)
+		})
+	}
+}
+
 func TestPGActivityReportKeptHiddenRunLink(t *testing.T) {
 	t.Parallel()
 	local, syncer, store := newUsageJournalFixture(t)
