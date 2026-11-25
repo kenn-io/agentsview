@@ -135,13 +135,10 @@ func unwrapPRCommand(args []*syntax.Word) []*syntax.Word {
 			return nil
 		}
 		switch words[0] {
-		case "command":
-			i := 1
-			for i < len(words) && literal[i] && words[i] == "-p" {
-				i++
-			}
-			if i < len(words) && literal[i] && words[i] == "--" {
-				i++
+		case "command", "env":
+			i, ok := wrappedCommandStart(words, literal)
+			if !ok {
+				return nil
 			}
 			args = args[i:]
 		case "timeout":
@@ -171,6 +168,23 @@ func unwrapPRCommand(args []*syntax.Word) []*syntax.Word {
 		}
 	}
 	return nil
+}
+
+// wrappedCommandStart skips command's -p flags or env's assignments. It fails
+// when env sets the repository or host gh would use.
+func wrappedCommandStart(words []string, literal []bool) (int, bool) {
+	i := 1
+	for i < len(words) && literal[i] && (words[0] == "command" && words[i] == "-p" || words[0] == "env" && strings.Contains(words[i], "=")) {
+		name, _, _ := strings.Cut(words[i], "=")
+		if words[0] == "env" && (name == "GH_HOST" || name == "GH_REPO") {
+			return 0, false
+		}
+		i++
+	}
+	if i < len(words) && literal[i] && words[i] == "--" {
+		i++
+	}
+	return i, true
 }
 
 // ghPRArgs moves inherited repository flags after the PR action.
@@ -237,7 +251,7 @@ func analyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 	if err != nil {
 		return nil, false, false, nil, ctx.Err()
 	}
-	directoryChanged, repositoryChanged, calls := bashChangesRepositoryContext(file)
+	directoryChanged, repositoryChanged, calls := bashChangesRepositoryContext(file, cwd)
 	remoteHost, remoteRepo := "", ""
 	if normalized, ok := export.NormalizeGitRemote(remote); ok {
 		remoteHost, remoteRepo, _ = strings.Cut(normalized, "/")
@@ -396,7 +410,7 @@ type prShellCall struct {
 	directory, repository bool
 }
 
-func bashChangesRepositoryContext(file *syntax.File) (bool, bool, []prShellCall) {
+func bashChangesRepositoryContext(file *syntax.File, cwd string) (bool, bool, []prShellCall) {
 	functions := make(map[string]bool)
 	syntax.Walk(file, func(node syntax.Node) bool {
 		if fn, ok := node.(*syntax.FuncDecl); ok {
@@ -432,7 +446,7 @@ func bashChangesRepositoryContext(file *syntax.File) (bool, bool, []prShellCall)
 							callRepository = true
 						}
 						if inner, ok := child.(*syntax.CallExpr); ok && inner != n {
-							dir, repo := shellCallChangesPRContext(inner, functions)
+							dir, repo := shellCallChangesPRContext(inner, functions, cwd)
 							callDirectory = callDirectory || dir
 							callRepository = callRepository || repo
 						}
@@ -441,7 +455,7 @@ func bashChangesRepositoryContext(file *syntax.File) (bool, bool, []prShellCall)
 				}
 			}
 			calls = append(calls, prShellCall{n, callDirectory, callRepository})
-			dir, repo := shellCallChangesPRContext(n, functions)
+			dir, repo := shellCallChangesPRContext(n, functions, cwd)
 			directory = directory || dir
 			repository = repository || repo
 		}
@@ -450,7 +464,17 @@ func bashChangesRepositoryContext(file *syntax.File) (bool, bool, []prShellCall)
 	return directory, repository, calls
 }
 
-func shellCallChangesPRContext(call *syntax.CallExpr, functions map[string]bool) (bool, bool) {
+// leavesCheckout reports whether words change directory, keeping a cd or
+// pushd to the session checkout's own absolute path in place.
+func leavesCheckout(words []string, cwd string) bool {
+	switch words[0] {
+	case "cd", "pushd":
+		return len(words) != 2 || !path.IsAbs(words[1]) || !SamePRWorkingDirectory(cwd, words[1])
+	}
+	return words[0] == "popd"
+}
+
+func shellCallChangesPRContext(call *syntax.CallExpr, functions map[string]bool, cwd string) (bool, bool) {
 	args := unwrapPRCommand(call.Args)
 	words := make([]string, len(args))
 	for i, arg := range args {
@@ -476,7 +500,7 @@ func shellCallChangesPRContext(call *syntax.CallExpr, functions map[string]bool)
 		return false, false
 	}
 	name := words[0]
-	return name == "cd" || name == "pushd" || name == "popd", name == "eval" || name == "source" || name == "." || functions[name] || repositoryMutation(words)
+	return leavesCheckout(words, cwd), name == "eval" || name == "source" || name == "." || functions[name] || repositoryMutation(words)
 }
 
 func repositoryMutation(words []string) bool {

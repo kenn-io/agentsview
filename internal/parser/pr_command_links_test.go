@@ -137,3 +137,27 @@ func TestAnalyzePRCommandNestedRemoteChange(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, repositoryChanged)
 }
+
+func TestAnalyzePRCommandChangesToCheckout(t *testing.T) {
+	links, _, _, _, err := AnalyzePRCommand(t.Context(), `cd /work/repo && gh pr view 42`, "/work/repo", "https://github.com/example/repo.git", true, false)
+	require.NoError(t, err)
+	require.Len(t, links, 1)
+	assert.Equal(t, "https://github.com/example/repo/pull/42", links[0].URL)
+}
+
+func TestAnalyzePRCommandEnv(t *testing.T) {
+	for _, tc := range []struct {
+		command string
+		want    bool
+	}{
+		{`env GH_PAGER=cat gh pr view 42 -R example/repo`, true},
+		{`env GH_HOST=other.example gh pr view 42 -R example/repo`, false},
+		{`env GH_REPO=other/repo gh pr view 42`, false},
+	} {
+		t.Run(tc.command, func(t *testing.T) {
+			links, _, _, _, err := AnalyzePRCommand(t.Context(), tc.command, "/work/repo", "https://github.com/example/repo.git", true, false)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, len(links) > 0)
+		})
+	}
+}
