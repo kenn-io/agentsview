@@ -722,7 +722,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (194: link Claude Code forks to the session their derived-from record
 // names and trim the replayed prefix. Re-parse Claude sources in place;
 // source and session identities are unchanged.)
-const dataVersion = 194
+// (195: title a Codex-format session by the first user message that is not a
+// Claude Code slash-command envelope or other text Claude Code injects.
+// Re-parse Codex, TraeX, Augure Code, and Open Interpreter sources in place;
+// source and session identities are unchanged.)
+const dataVersion = 195
 
 const archiveOnlyVersionBase = 1 << 20
 

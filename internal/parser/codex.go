@@ -582,13 +582,7 @@ func (b *codexSessionBuilder) handleResponseItem(ctx context.Context,
 	}
 
 	if role == "user" {
-		first, replay := b.observeUserPrompt(content)
-		if first {
-			b.firstMessage = truncate(
-				strings.ReplaceAll(content, "\n", " "), 300,
-			)
-		}
-		if replay {
+		if b.observeUserPrompt(content) {
 			// Codex can re-emit the initial prompt verbatim after a
 			// turn_aborted continuation signal. Drop only that positively
 			// identified replay; otherwise an identical second prompt is
@@ -596,6 +590,7 @@ func (b *codexSessionBuilder) handleResponseItem(ctx context.Context,
 			// not the truncated first-message preview.
 			return
 		}
+		b.observeFirstMessage(content)
 		b.committedUsageTarget = nil
 		b.committedUsageBlockedByUser = true
 	}
@@ -623,15 +618,10 @@ func (b *codexSessionBuilder) handleAgentMessage(
 	if strings.TrimSpace(content) == "" {
 		return
 	}
-	first, replay := b.observeUserPrompt(content)
-	if first {
-		b.firstMessage = truncate(
-			strings.ReplaceAll(content, "\n", " "), 300,
-		)
-	}
-	if replay {
+	if b.observeUserPrompt(content) {
 		return
 	}
+	b.observeFirstMessage(content)
 	b.committedUsageTarget = nil
 	b.committedUsageBlockedByUser = true
 	b.sink.AppendMessage(ParsedMessage{
@@ -643,6 +633,28 @@ func (b *codexSessionBuilder) handleAgentMessage(
 		ContentLength: len(content),
 		Model:         b.model,
 	})
+}
+
+// observeFirstMessage keeps the first user prompt as the session preview, so a
+// session that opens with a command such as /model is titled by the prompt
+// that follows it.
+func (b *codexSessionBuilder) observeFirstMessage(content string) {
+	if b.firstMessageSeen || IsSkippableCodexPreview(content) {
+		return
+	}
+	b.firstMessageSeen = true
+	b.firstMessage = truncate(strings.ReplaceAll(content, "\n", " "), 300)
+}
+
+// IsSkippableCodexPreview reports whether Codex-format user text is left out
+// of the session preview. Codex copies user records as written when it imports
+// a Claude Code session, so a rollout can open with a slash-command envelope,
+// its local command output, or other text Claude Code injects. The Claude
+// parser's rules decide what is not a prompt. Only the envelope markup counts
+// as a command: a prompt that a user typed with a leading slash, such as
+// "/tmp is full", still titles its session.
+func IsSkippableCodexPreview(content string) bool {
+	return isCommandEnvelope(content) || isClaudeSystemMessage(content)
 }
 
 // handleReasoning keeps a reasoning item's readable text as a thinking row.

@@ -4342,3 +4342,132 @@ func TestCodexUsageOnlyRowAfterReasoningKeepsResumeOrdinals(t *testing.T) {
 	assert.Equal(t, 4, cold.toolCallUpdates[0].MessageOrdinal)
 	assert.True(t, cold.toolCallUpdates[0].TargetKnown)
 }
+
+func TestParseCodexSession_SlashCommandEnvelopes(t *testing.T) {
+	const (
+		model         = "<command-name>/model</command-name>\n            <command-message>model</command-message>\n            <command-args></command-args>"
+		modelWithArgs = "<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>gpt-5.5 high</command-args>"
+		modelOutput   = "<local-command-stdout>Set model to gpt-5.5</local-command-stdout>"
+		prose         = "Why does <command-name>/model</command-name> show up as the session title?"
+		trailingProse = "<command-name>/model</command-name> then explain the change"
+		typedSlash    = "/tmp is full, find out why"
+		prompt        = "fix the failing build"
+	)
+	tests := []struct {
+		name          string
+		userTexts     []string
+		wantFirst     string
+		wantContents  []string
+		wantUserCount int
+	}{
+		{
+			name:          "command with empty args before a prompt",
+			userTexts:     []string{model, prompt},
+			wantFirst:     prompt,
+			wantContents:  []string{model, prompt},
+			wantUserCount: 2,
+		},
+		{
+			name:          "command with args before a prompt",
+			userTexts:     []string{modelWithArgs, prompt},
+			wantFirst:     prompt,
+			wantContents:  []string{modelWithArgs, prompt},
+			wantUserCount: 2,
+		},
+		{
+			name:          "command and its output before a prompt",
+			userTexts:     []string{model, modelOutput, prompt},
+			wantFirst:     prompt,
+			wantContents:  []string{model, modelOutput, prompt},
+			wantUserCount: 3,
+		},
+		{
+			name:          "only a command and its output",
+			userTexts:     []string{model, modelOutput},
+			wantFirst:     "",
+			wantContents:  []string{model, modelOutput},
+			wantUserCount: 2,
+		},
+		{
+			name:          "prose that mentions command tags",
+			userTexts:     []string{prose},
+			wantFirst:     prose,
+			wantContents:  []string{prose},
+			wantUserCount: 1,
+		},
+		{
+			name:          "command tags followed by prose",
+			userTexts:     []string{trailingProse},
+			wantFirst:     trailingProse,
+			wantContents:  []string{trailingProse},
+			wantUserCount: 1,
+		},
+		{
+			name:          "only a command",
+			userTexts:     []string{model},
+			wantFirst:     "",
+			wantContents:  []string{model},
+			wantUserCount: 1,
+		},
+		{
+			name:          "command replayed after turn_aborted",
+			userTexts:     []string{model, "<turn_aborted>\ninterrupted", model, prompt},
+			wantFirst:     prompt,
+			wantContents:  []string{model, prompt},
+			wantUserCount: 2,
+		},
+		{
+			name:          "typed prompt with a leading slash",
+			userTexts:     []string{typedSlash, prompt},
+			wantFirst:     typedSlash,
+			wantContents:  []string{typedSlash, prompt},
+			wantUserCount: 2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lines := []string{testjsonl.CodexSessionMetaJSON("cmd", "/tmp", "user", tsEarly)}
+			for i, text := range tt.userTexts {
+				ts := fmt.Sprintf("2024-01-01T10:00:%02dZ", i+1)
+				lines = append(lines, testjsonl.CodexMsgJSON("user", text, ts))
+			}
+			sess, msgs := runCodexParserTest(t, "test.jsonl", testjsonl.JoinJSONL(lines...), false)
+			require.NotNil(t, sess)
+			assert.Equal(t, tt.wantFirst, sess.FirstMessage)
+			assert.Equal(t, tt.wantUserCount, sess.UserMessageCount)
+			contents := make([]string, 0, len(msgs))
+			for _, msg := range msgs {
+				contents = append(contents, msg.Content)
+			}
+			assert.Equal(t, tt.wantContents, contents)
+		})
+	}
+}
+
+func TestIsSkippableCodexPreview(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{"command envelope", "<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args></command-args>", true},
+		{"command envelope with args", "<command-name>/model</command-name><command-args>gpt-5.5 high</command-args>", true},
+		{"local command output", "<local-command-stdout>Set model to gpt-5.5</local-command-stdout>", true},
+		{"local command error", "<local-command-stderr>unknown model</local-command-stderr>", true},
+		{"local command caveat", "<local-command-caveat>Caveat: local commands follow.</local-command-caveat>", true},
+		{"task notification", "<task-notification>\n<status>completed</status>\n</task-notification>", true},
+		{"only a system reminder", "<system-reminder>context</system-reminder>", true},
+		{"continuation notice", "This session is being continued from a previous conversation.", true},
+		{"prompt", "fix the failing build", false},
+		{"typed slash command", "/model", false},
+		{"typed prompt with a leading slash", "/tmp is full, find out why", false},
+		{"command tags followed by prose", "<command-name>/model</command-name> then explain the change", false},
+		{"system reminder before a prompt", "<system-reminder>context</system-reminder>\nfix the failing build", false},
+		{"prose that mentions local command output", "Why is <local-command-stdout> in the title?", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, IsSkippableCodexPreview(tt.content))
+		})
+	}
+}

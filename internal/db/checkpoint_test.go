@@ -291,11 +291,11 @@ func TestRestrictedArchiveKeepsOnlySourceFreeCheckpoints(t *testing.T) {
 }
 
 // codexCursorBytes encodes a Codex cursor (codexCursorState.MarshalBinary,
-// version 6) with only a model and no pending tool calls.
+// version 7) with only a model and no pending tool calls.
 func codexCursorBytes(t *testing.T) []byte {
 	t.Helper()
 	var b []byte
-	b = append(b, 6)
+	b = append(b, 7)
 	for _, str := range []string{"gpt-5.4", "", "", "", ""} {
 		b = binary.LittleEndian.AppendUint32(b, uint32(len(str)))
 		b = append(b, str...)
