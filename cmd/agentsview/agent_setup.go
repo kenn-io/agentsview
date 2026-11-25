@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
+	"go.kenn.io/kit/agenthook"
 	"go.kenn.io/kit/agentmcp"
 	"go.kenn.io/kit/agentsetup"
 
@@ -15,7 +17,7 @@ import (
 )
 
 func newAgentCommand() *cobra.Command {
-	group := &cobra.Command{Use: "agent", Short: "Set up coding agents", Long: "Connect Claude Code and Codex to conversation memory by installing skills and registering the agentsview MCP server.", GroupID: groupMeta}
+	group := &cobra.Command{Use: "agent", Short: "Set up coding agents", Long: "Connect Claude Code and Codex to conversation memory by installing skills, a SessionStart hook, and the agentsview MCP server.", GroupID: groupMeta}
 	var force bool
 	mcp := true
 	cmd := agentsetup.NewCommand(agentsetup.Options{
@@ -125,8 +127,10 @@ func setupItems(agent string, force, withMCP bool) ([]agentsetup.Item, error) {
 			return err
 		},
 	}
+	hooks := setupHooks(agent, sessionStartHookOptions())
+
 	if !withMCP {
-		return []agentsetup.Item{skill}, nil
+		return []agentsetup.Item{skill, hooks}, nil
 	}
 	mcp := setupMCP(agent)
 	installMCP := mcp.Install
@@ -147,8 +151,24 @@ func setupItems(agent string, force, withMCP bool) ([]agentsetup.Item, error) {
 		}
 		return installMCP(ctx)
 	}
-	return []agentsetup.Item{skill, mcp}, nil
+	return []agentsetup.Item{skill, hooks, mcp}, nil
 }
+
+// sessionStartHookOptions registers the command that refreshes memory and
+// records which session launched a new one.
+func sessionStartHookOptions() agenthook.InstallOptions {
+	return agenthook.InstallOptions{
+		Executable: "agentsview",
+		Arguments:  []string{"memory", "session-start", "--hook"},
+		Marker:     "agentsview memory session-start",
+		Hooks: []agenthook.Hook{{
+			Event:   agenthook.EventSessionStart,
+			Timeout: 10 * time.Second,
+		}},
+	}
+}
+
+var setupHooks = agentsetup.Hooks
 
 func setupMCP(agent string) agentsetup.Item {
 	return agentsetup.MCP(agent, "agentsview", memoryMCPServer())

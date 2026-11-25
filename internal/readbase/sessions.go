@@ -121,6 +121,7 @@ func (s Sessions) ListSessions(ctx context.Context, f db.SessionFilter) (db.Sess
 func (s Sessions) GetSidebarSessionIndex(ctx context.Context, f db.SessionFilter) (db.SidebarSessionIndex, error) {
 	f.IncludeChildren = true
 	f.IncludeOrphans = true
+	f.SidebarTree = true
 	if f.Limit > 0 || f.Cursor != "" || f.Starred {
 		return s.getSidebarSessionIndexPage(ctx, f)
 	}

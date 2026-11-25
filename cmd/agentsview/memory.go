@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"go.kenn.io/kit/agenthook"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/postgres"
@@ -85,11 +86,14 @@ func newMemorySessionStartCommand() *cobra.Command {
 		Short: "Update session memory when a session starts",
 		Long: "Queue a local refresh, ask a hosted contributor to sync, " +
 			"or check a hosted reader. The command returns " +
-			"within two seconds without waiting for the refresh to finish.",
+			"within two seconds without waiting for the refresh to finish. " +
+			"With --hook, it also reads the agent's SessionStart input and, " +
+			"for a new Claude Code or Codex session started by another one, " +
+			"records the launcher as its parent.",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			err := runMemorySessionStartCommand(cmd, pluginRoot)
+			err := runMemorySessionStartCommand(cmd, pluginRoot, hook)
 			if hook && err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "agentsview memory hook: %v\n", err)
 				return nil
@@ -115,7 +119,7 @@ func newMemorySessionStartCommand() *cobra.Command {
 }
 
 func runMemorySessionStartCommand(
-	cmd *cobra.Command, pluginRoot string,
+	cmd *cobra.Command, pluginRoot string, hook bool,
 ) error {
 	if err := applyMemorySessionEnv(cmd); err != nil {
 		return err
@@ -127,13 +131,7 @@ func runMemorySessionStartCommand(
 	pg, _ := cmd.Flags().GetBool("pg")
 
 	if strings.TrimSpace(pluginRoot) != "" {
-		reportMemoryPluginConflicts(cmd.ErrOrStderr(), pluginRoot)
-	}
-	if os.Getenv("AGENTSVIEW_DISABLE_AUTO_SYNC") == "1" {
-		fmt.Fprintln(cmd.ErrOrStderr(),
-			"agentsview memory: automatic sync disabled by "+
-				"AGENTSVIEW_DISABLE_AUTO_SYNC=1")
-		return nil
+		reportMemoryPluginConflicts(cmd.Context(), cmd.ErrOrStderr(), pluginRoot)
 	}
 	req := memorySessionStartRequest{
 		Mode:   memorySessionStartMode(strings.TrimSpace(mode)),
@@ -143,6 +141,22 @@ func runMemorySessionStartCommand(
 	}
 	if err := req.validate(strings.TrimSpace(serverTokenFile) != ""); err != nil {
 		return err
+	}
+	// A hosted reader has no archive of its own to record the launcher in.
+	if hook && req.Mode != memoryModeHostedReader {
+		defer func() {
+			captureCtx, captureCancel := context.WithTimeout(cmd.Context(), 6*time.Second)
+			defer captureCancel()
+			if err := captureLaunchParent(captureCtx, cmd); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "agentsview memory hook: launcher link: %v\n", err)
+			}
+		}()
+	}
+	if os.Getenv("AGENTSVIEW_DISABLE_AUTO_SYNC") == "1" {
+		fmt.Fprintln(cmd.ErrOrStderr(),
+			"agentsview memory: automatic sync disabled by "+
+				"AGENTSVIEW_DISABLE_AUTO_SYNC=1")
+		return nil
 	}
 	if req.Server != "" {
 		token, err := explicitServerToken(cmd)
@@ -198,11 +212,14 @@ func applyMemorySessionEnv(cmd *cobra.Command) error {
 	return nil
 }
 
-func reportMemoryPluginConflicts(out io.Writer, pluginRoot string) {
+func reportMemoryPluginConflicts(ctx context.Context, out io.Writer, pluginRoot string) {
 	if _, err := os.Stat(filepath.Join(pluginRoot, "skills",
 		"agentsview-finding-history", "SKILL.md")); err != nil {
 		fmt.Fprintf(out, "agentsview memory: plugin skill unavailable: %v\n", err)
 		return
+	}
+	if hooks, err := agenthook.Check(ctx, agenthook.AgentClaude, sessionStartHookOptions()); err == nil && hooks.HookCount > 0 && hooks.State != agenthook.CheckDisabled {
+		fmt.Fprintln(out, "agentsview memory: standalone SessionStart hook found in Claude settings; remove it to avoid duplicate refreshes")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {

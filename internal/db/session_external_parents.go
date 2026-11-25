@@ -184,10 +184,14 @@ func (db *DB) ClearSessionExternalParent(
 // named by alias as a spawned subagent. Linking derives that session's
 // parent from the edge, so a launcher-supplied link never owns it.
 func spawnEdgeExistsSQL(alias string) string {
+	return spawnEdgeExistsDialectSQL(alias, "IS NOT")
+}
+
+func spawnEdgeExistsDialectSQL(alias, comparison string) string {
 	return `EXISTS (
 			SELECT 1 FROM tool_calls tc
 			WHERE tc.subagent_session_id = ` + alias + `.id
-			AND tc.session_id IS NOT tc.subagent_session_id
+			AND tc.session_id ` + comparison + ` tc.subagent_session_id
 		)`
 }
 

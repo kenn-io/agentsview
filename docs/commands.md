@@ -2487,8 +2487,8 @@ ______________________________________________________________________
 
 ### `agentsview agent setup`
 
-Install the conversation search skill and focused MCP profile for installed
-Claude Code and Codex clients:
+Install the conversation search skill, a SessionStart hook, and the focused
+MCP profile for installed Claude Code and Codex clients:
 
 ```bash
 agentsview agent setup [--agent claude|codex]... [--check] [--force] [--mcp=false] [--print] [--format json]
@@ -2499,6 +2499,15 @@ Setup refuses to replace a different `agentsview` MCP entry unless you pass
 entry and overwrite edited skill files. `--check` makes no changes, `--print`
 shows the MCP commands to run by hand, and `--mcp=false` installs or checks
 the skill without inspecting or changing the MCP entry.
+
+The SessionStart hook refreshes memory and links runs to their launching
+session on Linux and Windows. Parent linking on macOS is unverified. Codex
+launchers use the state index open in the launcher when available. If indexes
+in multiple directories are open, the run stays unlinked. Codex requires you to
+trust a new hook in `/hooks`.
+
+In a ClickHouse sidebar, native automated subagents may also appear under a
+parent because the mirror does not store launcher provenance.
 
 Setup registers `agentsview mcp --profile memory` without server flags. To use
 a remote archive, set `AGENTSVIEW_MEMORY_SERVER` or `AGENTSVIEW_MEMORY_PG`
@@ -2568,9 +2577,14 @@ existing debounce, credentials, embedding work, and push cadence.
 PostgreSQL read target without starting a local archive or claiming to refresh
 hosted data.
 
-Every mode returns within 1.9 seconds and does not wait for archive-scale
-work. To skip only this automatic request while keeping explicit sync commands
-and searches working, set `AGENTSVIEW_DISABLE_AUTO_SYNC=1`. Restart a
+The refresh returns within 1.9 seconds and does not wait for archive-scale
+work. With `--hook`, recording a launcher link can take another 6 seconds.
+The hook records links only at startup, so resuming a run does not restore a
+missing link. If the Codex index or thread stays missing after a short retry,
+or its index or schema is newer than AgentsView supports, the link points to
+the original thread page; after a revert, that may be an earlier page. Set
+`AGENTSVIEW_DISABLE_AUTO_SYNC=1` to skip the automatic request.
+Launcher links, explicit sync commands, and searches still work. Restart a
 contributor owner started by an older binary once so it advertises the
 lifecycle wake endpoint. Contributor wake works on macOS and Linux, while
 Windows contributors stay on the watcher's normal event and interval cadence.

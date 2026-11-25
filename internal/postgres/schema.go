@@ -542,6 +542,10 @@ CREATE INDEX IF NOT EXISTS idx_tool_calls_session
 CREATE INDEX IF NOT EXISTS idx_tool_calls_session_category
     ON tool_calls (session_id, category);
 
+CREATE INDEX IF NOT EXISTS idx_tool_calls_subagent
+    ON tool_calls (subagent_session_id)
+    WHERE subagent_session_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS tool_result_events (
     id                        BIGSERIAL PRIMARY KEY,
     session_id                TEXT NOT NULL,

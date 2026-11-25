@@ -617,6 +617,7 @@ type SessionFilter struct {
 	// (session list, substring/regex/fts search) leaves this false.
 	ChildExemptOneShot bool
 	ExcludeAutomated   bool     // exclude sessions where is_automated = 1
+	SidebarTree        bool     // include launched runs below visible sidebar roots
 	AutomatedScope     string   // "", "human", "all", or "automated"
 	IncludeChildren    bool     // include subagent sessions (for sidebar grouping)
 	Flat               bool     // match child sessions individually
@@ -849,6 +850,7 @@ func (db *DB) GetSidebarSessionIndex(
 ) (SidebarSessionIndex, error) {
 	f.IncludeChildren = true
 	f.IncludeOrphans = true
+	f.SidebarTree = true
 
 	if f.Limit > 0 || f.Cursor != "" || f.Starred {
 		return db.getSidebarSessionIndexPage(ctx, f)

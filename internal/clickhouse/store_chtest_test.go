@@ -120,6 +120,38 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 		assert.ElementsMatch(t, []string{fixtureAlphaID, fixtureChildID}, ids)
 	})
 
+	t.Run("sidebar_excludes_automated_children_without_launcher_provenance", func(t *testing.T) {
+		store, syncer, local := newPushedStore(t)
+		for _, id := range []string{"ch-native-kind", "ch-launched"} {
+			session := fixtureSession(id, "alpha", "You are a code reviewer. Review the code.", "2026-01-10T00:07:00.000Z", 1)
+			if id != "ch-launched" {
+				session.RelationshipType = "subagent"
+				parent := fixtureAlphaID
+				session.ParentSessionID = &parent
+			}
+			session.IsAutomated = true
+			session.SessionKind = "non-interactive"
+			_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+				Session: session, Messages: []db.Message{fixtureMessage(id, 0, "user", "You are a code reviewer. Review the code.", "2026-01-10T00:07:00.000Z")},
+				DataVersion: 1, ReplaceMessages: true,
+			}})
+			require.NoError(t, err)
+		}
+		_, err := local.SetSessionExternalParent(ctx, "ch-launched", fixtureAlphaID)
+		require.NoError(t, err)
+		_, err = syncer.Push(ctx, false, nil)
+		require.NoError(t, err)
+		index, err := store.GetSidebarSessionIndex(ctx, db.SessionFilter{Project: "alpha", ExcludeAutomated: true})
+		require.NoError(t, err)
+		ids := make([]string, len(index.Sessions))
+		for i, row := range index.Sessions {
+			ids[i] = row.ID
+		}
+		assert.Contains(t, ids, fixtureAlphaID)
+		assert.NotContains(t, ids, "ch-native-kind")
+		assert.NotContains(t, ids, "ch-launched")
+	})
+
 	t.Run("get_session_and_find", func(t *testing.T) {
 		sess, err := store.GetSession(ctx, fixtureAlphaID)
 		require.NoError(t, err)

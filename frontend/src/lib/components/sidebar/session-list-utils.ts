@@ -36,7 +36,7 @@ export interface DisplayItem {
   session?: SessionGroupInput;
   /** True when this is a child session inside an expanded group. */
   isChild?: boolean;
-  /** Nesting depth: 0 = root, 1 = child/team-group, 2 = teammate. */
+  /** Nesting depth: 0 = root, 1 = child/team-group, 2+ = teammate or nested subagent. */
   depth?: number;
   /** True when this is the last sibling at its depth level. */
   isLastChild?: boolean;
@@ -135,6 +135,49 @@ export function subagentDescendantMatcher(
   groupSessions: SessionGroupInput[],
 ): (session: SessionGroupInput) => boolean {
   return sessionAncestryMatcher(groupSessions, isSubagent);
+}
+
+/**
+ * Map each subagent's visible launcher ("" for the group root) to its
+ * children, keeping the input's sibling order. A run whose launcher
+ * this group doesn't show stays at the root, and a run that would
+ * nest under its own descendant stays at the root too.
+ */
+function subagentTree(subagents: SessionGroupInput[]): Map<string, SessionGroupInput[]> {
+  const byId = new Map<string, SessionGroupInput>();
+  for (const s of subagents) {
+    if (!byId.has(s.id)) byId.set(s.id, s);
+  }
+  const parentOf = new Map<string, string>();
+  for (const s of subagents) {
+    let parent = "";
+    const parents = s.parent_session_id ? [s.parent_session_id] : (s.parent_session_ids ?? []);
+    for (let i = parents.length - 1; i >= 0; i--) {
+      const candidate = byId.get(parents[i]!);
+      if (candidate && candidate.id !== s.id) {
+        parent = candidate.id;
+        break;
+      }
+    }
+    for (let id = parent; id; id = parentOf.get(id) ?? "") {
+      if (id === s.id) {
+        parent = "";
+        break;
+      }
+    }
+    parentOf.set(s.id, parent);
+  }
+  const childrenOf = new Map<string, SessionGroupInput[]>();
+  for (const s of subagents) {
+    const parent = parentOf.get(s.id)!;
+    let list = childrenOf.get(parent);
+    if (!list) {
+      list = [];
+      childrenOf.set(parent, list);
+    }
+    list.push(s);
+  }
+  return childrenOf;
 }
 
 /**
@@ -257,23 +300,29 @@ function emitGroupItems(
     depth1Idx++;
 
     if (subExpanded) {
-      for (let i = 0; i < subagents.length; i++) {
-        const s = subagents[i]!;
-        items.push({
-          id: `child:${g.key}:${s.id}`,
-          type: "session",
-          label,
-          count: 0,
-          group: g,
-          session: s,
-          isChild: true,
-          depth: 2,
-          isLastChild: i === subagents.length - 1,
-          height: childHeight,
-          top: y.value,
-        });
-        y.value += childHeight;
-      }
+      const childrenOf = subagentTree(subagents);
+      const emit = (parentId: string, depth: number) => {
+        const siblings = childrenOf.get(parentId) ?? [];
+        for (let i = 0; i < siblings.length; i++) {
+          const s = siblings[i]!;
+          items.push({
+            id: `child:${g.key}:${s.id}`,
+            type: "session",
+            label,
+            count: 0,
+            group: g,
+            session: s,
+            isChild: true,
+            depth,
+            isLastChild: i === siblings.length - 1,
+            height: childHeight,
+            top: y.value,
+          });
+          y.value += childHeight;
+          emit(s.id, depth + 1);
+        }
+      };
+      emit("", 2);
     }
   }
 

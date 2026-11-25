@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -155,17 +156,17 @@ func resolveSinceFlag(since, activeSince string) (string, error) {
 func resolveWritableService(
 	cmd *cobra.Command,
 ) (service.SessionService, func(), error) {
-	return resolveWritableServiceWithIntent(cmd, false)
+	return resolveWritableServiceWithIntent(cmd.Context(), cmd, false)
 }
 
 func resolveFreshWritableService(
 	cmd *cobra.Command,
 ) (service.SessionService, func(), error) {
-	return resolveWritableServiceWithIntent(cmd, true)
+	return resolveWritableServiceWithIntent(cmd.Context(), cmd, true)
 }
 
 func resolveWritableServiceWithIntent(
-	cmd *cobra.Command, fresh bool,
+	ctx context.Context, cmd *cobra.Command, fresh bool,
 ) (service.SessionService, func(), error) {
 	if remote, _ := cmd.Flags().GetString("server"); remote != "" {
 		if pgReadRequested(cmd) {
@@ -191,9 +192,9 @@ func resolveWritableServiceWithIntent(
 	}
 	var tr transport
 	if fresh {
-		tr, err = ensureTransportContext(cmd.Context(), &cfg, transportIntentArchiveWrite, 0)
+		tr, err = ensureTransportContext(ctx, &cfg, transportIntentArchiveWrite, 0)
 	} else {
-		tr, err = detectClientTransportContext(cmd.Context(), &cfg, 0)
+		tr, err = detectClientTransportContext(ctx, &cfg, 0)
 	}
 	if err != nil {
 		return nil, nil, err
@@ -216,7 +217,7 @@ func resolveWritableServiceWithIntent(
 				"is reachable and compatible, or stop it to write locally",
 		)
 	}
-	return syncService(cmd.Context(), cfg, tr)
+	return syncService(ctx, cfg, tr)
 }
 
 func resolvePGReadConfig(
