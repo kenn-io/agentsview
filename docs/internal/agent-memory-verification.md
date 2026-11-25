@@ -59,7 +59,7 @@ per client. Pass `--client`, `--runs`, or `--case` through
 `MEMORY_E2E_ARGS` to narrow a run.
 
 The corpus and questions live in `scripts/memory-e2e/testdata/lookups/`.
-They cover topic, named-session, ownership, recent-work, and long-result
+They cover topic, named-session, ownership, and recent-work
 lookups. Fixture transcripts appear in each isolated client's provider-specific
 session directory, outside its working directory. Expected IDs and answer
 phrases stay outside the project visible to the agent. Codex disables
@@ -68,17 +68,16 @@ Opaque exec scripts without individual results stay unscored. Scoring is limited
 to the client versions whose transcript formats the benchmark has checked;
 the benchmark rejects other versions before starting attempts.
 
-The report counts lookup calls through the first result that supplies every
-expected answer value for the cited session. A result contributes only the text
-under the cited session's row, or the full result when a non-empty, error-free
-call input names that session and the result has no session rows. Facts may
-arrive across multiple results. The count includes MCP, CLI, direct reads,
-saved-output reads, and AgentsView tool discovery.
+The report counts lookup calls through the first result that names the cited
+session. A call counts when its result names the cited session, or, for a
+session read, its input does. Mixed results count for every session they name.
+The count includes MCP, CLI, direct reads, saved-output reads, and AgentsView
+tool discovery.
 
 Each question asks for a JSON object with named answer fields and the exact
 source session ID. The scorer checks every expected value, so a wrong choice,
 contradiction, or changed identifier spelling cannot pass on keyword overlap.
-Errors, empty results, truncation, and calls per route appear per attempt.
+Errors and calls per route appear per attempt.
 Wrong answers, timeouts, client failures, and unsupported answers in a complete
 capture fail. An otherwise correct answer stays unscored when capture is
 incomplete. If no hit is visible and calls are missing or untimed, the result
@@ -86,8 +85,8 @@ also stays unscored. One- and two-call shares use all scheduled attempts.
 Client setup errors stop the run.
 
 The client receives temporary copies of its auth files for the run; the
-harness removes those copies after each attempt. Lookup captures are private;
-remove them when they are no longer needed.
+harness removes those copies after each attempt unless it is killed. Lookup
+captures are private; remove them when they are no longer needed.
 
 This gate measures native-client behavior on a synthetic local archive. It does
 not replace the PostgreSQL contract suite, prove behavior for every model, or

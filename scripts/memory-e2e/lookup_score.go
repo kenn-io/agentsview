@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/tidwall/gjson"
-	"go.kenn.io/agentsview/internal/mcp"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -21,14 +20,14 @@ type lookupItem struct {
 }
 
 type lookupCall struct {
-	Route                            string
-	Name                             string
-	Input                            string
-	Result                           string
-	StructuredResult                 string
-	Start, End                       int64
-	Source, StartOrder, EndOrder     int
-	Missing, Error, Empty, Truncated bool
+	Route                        string
+	Name                         string
+	Input                        string
+	Result                       string
+	StructuredResult             string
+	Start, End                   int64
+	Source, StartOrder, EndOrder int
+	Missing, Error               bool
 }
 
 type lookupScore struct {
@@ -39,21 +38,17 @@ type lookupScore struct {
 	Direct       int    `json:"direct_calls"`
 	Other        int    `json:"other_calls"`
 	Errors       int    `json:"errors"`
-	Empty        int    `json:"empty"`
-	Truncated    int    `json:"truncated"`
 	MissingCalls int    `json:"missing_calls"`
 }
 
 var (
 	lookupCommandPattern        = regexp.MustCompile(`(?i)(sqlite3|sessions\.db|\.claude/projects/|\.codex/sessions/|rollout-[^\s"']*\.jsonl|tool-results/|\bagentsview\s+(?:session|search|db|mcp)\b)`)
 	lookupOutputPattern         = regexp.MustCompile(`(?i)(sessions\.db|\.claude/projects/|\.codex/sessions/|rollout-[^\s"']*\.jsonl|tool-results/)`)
-	truncatedResultPattern      = regexp.MustCompile(`(?i)"[^"\n]*truncated"\s*:\s*true|output truncated`)
 	codexMCPInvocationPattern   = regexp.MustCompile(`\btools\s*(?:\.\s*mcp__agentsview__|\[)`)
 	mcpErrorPattern             = regexp.MustCompile(`(?i)"is_?error"\s*:\s*true`)
 	runningCellPattern          = regexp.MustCompile(`(?i)script (?:still )?running with cell ID\s+([^\s]+)`)
 	sessionProviderPrefix       = regexp.MustCompile(`(?i)(?:([a-z][a-z0-9_-]*):|/sessions/([a-z][a-z0-9_-]*)/)$`)
 	lookupJSONFence             = regexp.MustCompile("(?s)^\\s*```(?:json)?[ \\t]*\\r?\\n(.*?)\\r?\\n```\\s*$")
-	lookupSessionReference      = regexp.MustCompile(`(?i)(?:/sessions/[a-z][a-z0-9_-]*/|[a-z][a-z0-9_-]*:)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
 	errCaptureIncomplete        = errors.New("capture incomplete")
 	errLookupCaptureUnsupported = errors.New("lookup capture format is unsupported")
 	errLookupClientFailed       = errors.New("lookup client failed")
@@ -195,7 +190,7 @@ func claudeLookupCalls(ctx context.Context, events []map[string]any) ([]lookupCa
 			c.End = at
 			c.EndOrder = line + 1
 			c.Error = toolResult.Status == "errored"
-			resultFlags(c)
+			upgradeLookupRoute(c)
 		}
 	}
 	return calls, nil
@@ -316,7 +311,7 @@ func codexLookupCalls(ctx context.Context, events []map[string]any) []lookupCall
 					calls[i].EndOrder = line + 1
 					status, _ := p["status"].(string)
 					calls[i].Error = status == "failed" || (calls[i].Route == "mcp" && mcpErrorPattern.MatchString(calls[i].Result+calls[i].StructuredResult))
-					resultFlags(&calls[i])
+					upgradeLookupRoute(&calls[i])
 				}
 			}
 		}
@@ -370,7 +365,7 @@ func codexLookupCalls(ctx context.Context, events []map[string]any) []lookupCall
 		default:
 			continue
 		}
-		resultFlags(&c)
+		upgradeLookupRoute(&c)
 		calls = append(calls, c)
 		if c.Route == "mcp" {
 			scripts[parent].mcp++
@@ -389,31 +384,10 @@ func codexLookupCalls(ctx context.Context, events []map[string]any) []lookupCall
 	return calls
 }
 
-func resultFlags(c *lookupCall) {
-	result := c.Result + c.StructuredResult
-	c.Truncated = truncatedResultPattern.MatchString(result)
-	c.Empty = lookupResultEmpty(c.Name, c.Result) || lookupResultEmpty(c.Name, c.StructuredResult)
-	if c.Route == "other" && lookupOutputPattern.MatchString(result) {
+func upgradeLookupRoute(c *lookupCall) {
+	if c.Route == "other" && lookupOutputPattern.MatchString(c.Result+c.StructuredResult) {
 		c.Route = "direct"
 	}
-}
-
-func lookupResultEmpty(name, result string) bool {
-	if _, suffix, ok := strings.Cut(name, "mcp__agentsview__"); ok {
-		name = suffix
-	}
-	field := mcp.SearchResultField(strings.TrimPrefix(name, "agentsview:"))
-	if field == "" {
-		return false
-	}
-	item := gjson.Parse(result).Get(field)
-	return item.Exists() && (item.Type == gjson.Null || item.IsArray() && len(item.Array()) == 0)
-}
-
-func containsLookupPhrase(text, phrase string) bool {
-	text = strings.ToLower(strings.Join(strings.Fields(text), " "))
-	phrase = strings.ToLower(strings.Join(strings.Fields(phrase), " "))
-	return strings.Contains(text, phrase)
 }
 
 func scoreLookupQuestion(q lookupQuestion, answer string, calls []lookupCall, runErr error) lookupScore {
@@ -437,12 +411,6 @@ func scoreLookupQuestion(q lookupQuestion, answer string, calls []lookupCall, ru
 		}
 		if calls[i].Error {
 			s.Errors++
-		}
-		if calls[i].Empty {
-			s.Empty++
-		}
-		if calls[i].Truncated {
-			s.Truncated++
 		}
 	}
 
@@ -468,27 +436,17 @@ func scoreLookupQuestion(q lookupQuestion, answer string, calls []lookupCall, ru
 		ordered[i] = i
 	}
 	sort.SliceStable(ordered, func(i, j int) bool { return calls[ordered[i]].End < calls[ordered[j]].End })
-	var evidence strings.Builder
 	var hit *lookupCall
-	evidenceCalls := make(map[int]bool, len(calls))
+	hitIndex := -1
 	for _, index := range ordered {
 		c := &calls[index]
 		if c.Error || c.Missing || strings.TrimSpace(c.Result+c.StructuredResult) == "" {
 			continue
 		}
-		sessionText := lookupSessionEvidence(*c, sourceID)
-		if sessionText == "" {
-			continue
-		}
-		evidenceCalls[index] = true
-		evidence.WriteByte(' ')
-		evidence.WriteString(sessionText)
-		complete := true
-		for _, value := range q.ExpectedAnswer {
-			complete = complete && containsLookupPhrase(evidence.String(), value)
-		}
-		if complete {
-			hit = c
+		name := strings.TrimPrefix(strings.TrimPrefix(c.Name, "mcp__agentsview__"), "agentsview:")
+		sessionRead := c.Route == "cli" || c.Route == "direct" || (c.Route == "mcp" && strings.HasPrefix(name, "get_"))
+		if containsSessionID(c.Result+c.StructuredResult, sourceID) || (sessionRead && containsSessionID(c.Input, sourceID)) {
+			hit, hitIndex = c, index
 			break
 		}
 	}
@@ -505,7 +463,7 @@ func scoreLookupQuestion(q lookupQuestion, answer string, calls []lookupCall, ru
 	count := 0
 	for i, c := range calls {
 		lower := strings.ToLower(c.Input)
-		if c.Route == "other" && !evidenceCalls[i] && c.Name != "tool discovery" && c.Name != "exec" && !toolDescriptionLookup(lower) {
+		if c.Route == "other" && i != hitIndex && c.Name != "tool discovery" && c.Name != "exec" && !toolDescriptionLookup(lower) {
 			continue
 		}
 		if c.Start > hit.End {
@@ -527,178 +485,6 @@ func scoreLookupQuestion(q lookupQuestion, answer string, calls []lookupCall, ru
 	s.Verdict = "success"
 	s.CallsToHit = &count
 	return s
-}
-
-func lookupSessionEvidence(call lookupCall, sessionID string) string {
-	result := call.StructuredResult
-	if result == "" {
-		result = call.Result
-	}
-	if text, hasSessionRows := lookupStructuredSessionEvidence(result, sessionID); hasSessionRows {
-		return text
-	}
-	if lookupRequestSessionMatches(call, sessionID) {
-		return call.Result
-	}
-	if (call.Route == "direct" || call.Route == "cli" || call.Name == "Bash" || call.Name == "Read" || call.Name == "Grep" || call.Name == "Glob" || call.Name == "CommandExecution" || call.Name == "exec") &&
-		containsSessionID(call.Input, sessionID) && len(lookupSessionReference.FindAllString(call.Result, -1)) == 0 {
-		return call.Result
-	}
-	return lookupUnstructuredSessionEvidence(call.Result, sessionID)
-}
-
-type lookupResultRow struct {
-	SessionID     string                `json:"session_id"`
-	Snippet       string                `json:"snippet"`
-	Content       string                `json:"content"`
-	Text          string                `json:"text"`
-	Message       string                `json:"message"`
-	Summary       string                `json:"summary"`
-	Name          string                `json:"name"`
-	Title         string                `json:"title"`
-	FirstMessage  string                `json:"first_message"`
-	Messages      []lookupResultMessage `json:"messages"`
-	LastMessages  []lookupResultMessage `json:"last_messages"`
-	ContextBefore []lookupResultMessage `json:"context_before"`
-	ContextAfter  []lookupResultMessage `json:"context_after"`
-}
-
-type lookupResultMessage struct {
-	Content string `json:"content"`
-	Text    string `json:"text"`
-	Message string `json:"message"`
-}
-
-type lookupStructuredResult struct {
-	SessionID    string                `json:"session_id"`
-	Snippet      string                `json:"snippet"`
-	Content      string                `json:"content"`
-	Text         string                `json:"text"`
-	Message      string                `json:"message"`
-	Summary      string                `json:"summary"`
-	Name         string                `json:"name"`
-	Title        string                `json:"title"`
-	FirstMessage string                `json:"first_message"`
-	Matches      []lookupResultRow     `json:"matches"`
-	Results      []lookupResultRow     `json:"results"`
-	Sessions     []lookupResultRow     `json:"sessions"`
-	Entries      []lookupResultRow     `json:"entries"`
-	Messages     []lookupResultMessage `json:"messages"`
-	LastMessages []lookupResultMessage `json:"last_messages"`
-}
-
-func lookupStructuredSessionEvidence(raw, sessionID string) (string, bool) {
-	value := gjson.Parse(raw)
-	if value.Type == gjson.String {
-		nested := gjson.Parse(value.Str)
-		if nested.IsObject() {
-			value = nested
-		}
-	}
-	if !value.IsObject() {
-		return "", false
-	}
-	if structured := value.Get("structuredContent"); structured.IsObject() {
-		value = structured
-	}
-
-	var result lookupStructuredResult
-	if err := json.Unmarshal([]byte(value.Raw), &result); err != nil {
-		return "", false
-	}
-	var text strings.Builder
-	hasRows := false
-	if result.SessionID != "" {
-		hasRows = true
-		if containsSessionID(result.SessionID, sessionID) {
-			appendLookupRowText(&text, lookupResultRow{
-				SessionID: result.SessionID, Snippet: result.Snippet,
-				Content: result.Content, Text: result.Text, Message: result.Message,
-				Summary: result.Summary, Name: result.Name, Title: result.Title,
-				FirstMessage: result.FirstMessage, Messages: result.Messages,
-				LastMessages: result.LastMessages,
-			})
-		}
-	}
-	for _, rows := range [][]lookupResultRow{result.Matches, result.Results, result.Sessions, result.Entries} {
-		for _, row := range rows {
-			if row.SessionID == "" {
-				continue
-			}
-			hasRows = true
-			if containsSessionID(row.SessionID, sessionID) {
-				appendLookupRowText(&text, row)
-			}
-		}
-	}
-	return text.String(), hasRows
-}
-
-func appendLookupRowText(text *strings.Builder, row lookupResultRow) {
-	for _, value := range []string{
-		row.Snippet, row.Content, row.Text, row.Message, row.Summary,
-		row.Name, row.Title, row.FirstMessage,
-	} {
-		if value != "" {
-			text.WriteByte(' ')
-			text.WriteString(value)
-		}
-	}
-	for _, messages := range [][]lookupResultMessage{row.Messages, row.LastMessages, row.ContextBefore, row.ContextAfter} {
-		for _, message := range messages {
-			for _, value := range []string{message.Content, message.Text, message.Message} {
-				if value != "" {
-					text.WriteByte(' ')
-					text.WriteString(value)
-				}
-			}
-		}
-	}
-}
-
-func lookupRequestSessionMatches(call lookupCall, sessionID string) bool {
-	name := call.Name
-	name = strings.TrimPrefix(name, "mcp__agentsview__")
-	name = strings.TrimPrefix(name, "agentsview:")
-	switch name {
-	case "get_messages", "get_messages_around", "get_session_overview", "search_content":
-	default:
-		return false
-	}
-	var input struct {
-		SessionID string `json:"session_id"`
-	}
-	if err := json.Unmarshal([]byte(call.Input), &input); err != nil {
-		return false
-	}
-	return input.SessionID != "" && containsSessionID(input.SessionID, sessionID)
-}
-
-func lookupUnstructuredSessionEvidence(text, sessionID string) string {
-	references := lookupSessionReference.FindAllStringIndex(text, -1)
-	if len(references) == 0 {
-		if containsSessionID(text, sessionID) {
-			return text
-		}
-		return ""
-	}
-	if len(references) == 1 && containsSessionID(text[references[0][0]:references[0][1]], sessionID) {
-		return text
-	}
-
-	var evidence strings.Builder
-	for i, reference := range references {
-		if !containsSessionID(text[reference[0]:reference[1]], sessionID) {
-			continue
-		}
-		end := len(text)
-		if i+1 < len(references) {
-			end = references[i+1][0]
-		}
-		evidence.WriteByte(' ')
-		evidence.WriteString(text[reference[0]:end])
-	}
-	return evidence.String()
 }
 
 func lookupAnswerSource(q lookupQuestion, answer string) (string, bool) {

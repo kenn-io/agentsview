@@ -17,11 +17,10 @@ import (
 )
 
 type lookupFixture struct {
-	ID             string `json:"id"`
-	AgeHours       int    `json:"age_hours"`
-	Title          string `json:"title"`
-	Content        string `json:"content"`
-	PaddingRepeats int    `json:"padding_repeats,omitempty"`
+	ID       string `json:"id"`
+	AgeHours int    `json:"age_hours"`
+	Title    string `json:"title"`
+	Content  string `json:"content"`
 }
 
 type lookupQuestion struct {
@@ -53,8 +52,6 @@ type lookupSummary struct {
 	Direct         int     `json:"direct_calls"`
 	Other          int     `json:"other_calls"`
 	Errors         int     `json:"errors"`
-	Empty          int     `json:"empty"`
-	Truncated      int     `json:"truncated"`
 	MissingCalls   int     `json:"missing_calls"`
 }
 
@@ -165,14 +162,10 @@ func writeLookupFixtureTranscript(root, projectDir string, f lookupFixture) (str
 		return "", err
 	}
 	meta := map[string]any{"id": f.ID, "cwd": projectDir, "originator": "codex_cli_rs", "source": "cli"}
-	content := f.Content
-	if f.PaddingRepeats > 0 {
-		content = f.Title + " examined the archive. " + strings.Repeat("Background detail without a decision. ", f.PaddingRepeats) + f.Content
-	}
 	lines := []any{
 		map[string]any{"timestamp": at, "type": "session_meta", "payload": meta},
 		map[string]any{"timestamp": at, "type": "response_item", "payload": map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": f.Title}}}},
-		map[string]any{"timestamp": at, "type": "response_item", "payload": map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": content}}}},
+		map[string]any{"timestamp": at, "type": "response_item", "payload": map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": f.Content}}}},
 		map[string]any{"timestamp": at, "type": "response_item", "payload": map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "Record this update for the project."}}}},
 		map[string]any{"timestamp": at, "type": "response_item", "payload": map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": "Recorded."}}}},
 	}
@@ -431,8 +424,6 @@ func summarizeLookups(attempts []lookupAttempt) []lookupSummary {
 		r.Direct += a.Score.Direct
 		r.Other += a.Score.Other
 		r.Errors += a.Score.Errors
-		r.Empty += a.Score.Empty
-		r.Truncated += a.Score.Truncated
 		r.MissingCalls += a.Score.MissingCalls
 		switch a.Score.Verdict {
 		case "success":

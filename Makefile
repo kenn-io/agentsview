@@ -558,7 +558,7 @@ e2e:
 # only under an ignored .test-data-memory-e2e-* directory.
 MEMORY_E2E_ARGS ?=
 memory-e2e: pricing-snapshot ensure-embed-dir
-	go run -tags fts5 ./scripts/memory-e2e --live $(MEMORY_E2E_ARGS)
+	go run ./scripts/memory-e2e --live $(MEMORY_E2E_ARGS)
 
 # Vet
 vet: pricing-snapshot ensure-embed-dir
