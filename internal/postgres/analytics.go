@@ -2604,10 +2604,14 @@ func (s *Store) GetAnalyticsTopSessions(
 func (s *Store) GetAnalyticsSignals(
 	ctx context.Context, f db.AnalyticsFilter,
 ) (db.SignalsAnalyticsResponse, error) {
-	return keptAnalytics(ctx, s, "signals", f, s.loadAnalyticsSignals)
+	return s.keptSignals(ctx, f)
 }
 
 func (s *Store) loadAnalyticsSignals(ctx context.Context, f db.AnalyticsFilter) (db.SignalsAnalyticsResponse, error) {
+	return s.loadAnalyticsSignalsWithMode(ctx, f, false)
+}
+
+func (s *Store) loadAnalyticsSignalsWithMode(ctx context.Context, f db.AnalyticsFilter, shared bool) (db.SignalsAnalyticsResponse, error) {
 	versionColumn, err := sessionVersionColumnPG(ctx, s.pg)
 	if err != nil {
 		return db.SignalsAnalyticsResponse{}, err
@@ -2616,7 +2620,7 @@ func (s *Store) loadAnalyticsSignals(ctx context.Context, f db.AnalyticsFilter) 
 	if err != nil {
 		return db.SignalsAnalyticsResponse{}, err
 	}
-	if err := s.populateFrustrationMarkers(ctx, all, versions, versionColumn); err != nil {
+	if err := s.populateFrustrationMarkers(ctx, all, versions, versionColumn, shared); err != nil {
 		return db.SignalsAnalyticsResponse{}, err
 	}
 
@@ -2652,7 +2656,7 @@ func (s *Store) GetAnalyticsSignalSessions(
 	if err != nil {
 		return db.SignalSessionsResponse{}, err
 	}
-	if err := s.populateFrustrationMarkers(ctx, rows, versions, versionColumn); err != nil {
+	if err := s.populateFrustrationMarkers(ctx, rows, versions, versionColumn, false); err != nil {
 		return db.SignalSessionsResponse{}, err
 	}
 	candidates := db.SignalCandidates(rows, signal, limit)
@@ -2856,6 +2860,7 @@ func (s *Store) populateFrustrationMarkers(
 	rows []db.SignalRow,
 	versions map[string]string,
 	versionColumn string,
+	shared bool,
 ) error {
 	if rows == nil {
 		return nil
@@ -2892,7 +2897,17 @@ func (s *Store) populateFrustrationMarkers(
 			}
 			return remaining
 		}
+		completed := s.runtimeState().frustrationFill.completedCount()
 		ids = load(ids)
+		if len(ids) > 0 {
+			joined, err := s.joinFrustrationFill(ctx, ids, completed, shared)
+			if err != nil {
+				return err
+			}
+			if joined {
+				ids = load(ids)
+			}
+		}
 		if len(ids) == 0 {
 			return nil
 		}

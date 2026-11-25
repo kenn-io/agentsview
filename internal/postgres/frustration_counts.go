@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"time"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/signals"
@@ -70,36 +69,43 @@ func (s *Store) storeFrustrationCountsForRead(versions map[string]string, counts
 	}
 	if queue.ctx == nil {
 		queue.ctx, queue.cancel = context.WithCancel(context.Background())
+		queue.jobs = make(chan frustrationCountSave, 1)
 	}
-	queue.wg.Add(1)
-	go func() {
-		defer queue.wg.Done()
-		for attempt := 0; attempt < 3; attempt++ {
-			if attempt > 0 {
-				timer := time.NewTimer(frustrationFillRetryDelay)
-				select {
-				case <-timer.C:
-				case <-queue.ctx.Done():
-					timer.Stop()
-					return
-				}
+	select {
+	case queue.jobs <- frustrationCountSave{versions: versions, counts: counts, versionColumn: versionColumn}:
+	default:
+		return
+	}
+	if !queue.running {
+		queue.running = true
+		queue.wg.Add(1)
+		go s.runFrustrationCountSaves(queue)
+	}
+}
+
+func (s *Store) runFrustrationCountSaves(queue *frustrationSaveQueue) {
+	defer queue.wg.Done()
+	for {
+		select {
+		case <-queue.ctx.Done():
+			return
+		case save := <-queue.jobs:
+			if queue.ctx.Err() != nil {
+				return
 			}
 			// Saves outlive requests but stop when the store closes.
-			queue.write.Lock()
-			skipped, err := s.writeFrustrationCounts(queue.ctx, versions, counts, versionColumn)
-			queue.write.Unlock()
-			if err != nil {
-				if !isUndefinedTable(err) && !IsReadOnlyError(err) && queue.ctx.Err() == nil {
-					log.Printf("storing frustration counts: %v", err)
-				}
-				return
+			if err := s.storeFrustrationCounts(queue.ctx, save.versions, save.counts, save.versionColumn); err != nil && !isUndefinedTable(err) && !IsReadOnlyError(err) && queue.ctx.Err() == nil {
+				log.Printf("storing frustration counts: %v", err)
 			}
-			if len(skipped) == 0 {
-				return
-			}
-			versions = skipped
 		}
-	}()
+		queue.mu.Lock()
+		if len(queue.jobs) == 0 {
+			queue.running = false
+			queue.mu.Unlock()
+			return
+		}
+		queue.mu.Unlock()
+	}
 }
 
 func (s *Store) storeFrustrationCounts(ctx context.Context, versions map[string]string, counts map[string]int, versionColumn string) error {
@@ -160,8 +166,7 @@ func (s *Store) writeFrustrationCountBatch(ctx context.Context, versions map[str
 	query := `INSERT INTO session_frustration_counts (session_id, session_version, rules_version, marker_count)
         SELECT t.id, t.version, $4, t.count FROM (` + want + `) t ORDER BY t.id`
 	if !s.cockroach {
-		// Coordinate missing rows too, since uncommitted inserts are invisible.
-		query = `WITH want AS MATERIALIZED (SELECT * FROM (` + want + `) wanted WHERE pg_try_advisory_xact_lock(hashtextextended(current_schema() || ':frustration:' || wanted.id, 0))),
+		query = `WITH want AS MATERIALIZED (` + want + `),
         free AS MATERIALIZED (SELECT c.session_id FROM session_frustration_counts c WHERE c.session_id IN (SELECT id FROM want) ORDER BY c.session_id FOR UPDATE OF c SKIP LOCKED)
         INSERT INTO session_frustration_counts (session_id, session_version, rules_version, marker_count)
         SELECT w.id, w.version, $4, w.count FROM want w
