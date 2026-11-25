@@ -92,15 +92,22 @@ const scopedUpgradePendingKey = "scoped_upgrade_pending"
 // ScopedUpgradePending reports whether a successful full sync pass still needs
 // to reparse the sources affected by a scoped parser upgrade.
 func (db *DB) ScopedUpgradePending(ctx context.Context) (bool, error) {
-	var pending bool
-	err := db.getReader().QueryRow(ctx,
-		"SELECT EXISTS(SELECT 1 FROM stats WHERE key = ? AND value > 0)",
-		scopedUpgradePendingKey,
-	).Scan(&pending)
+	pending, err := scopedUpgradePending(ctx, db.getReader())
 	if err != nil {
 		return false, fmt.Errorf("checking pending scoped upgrade: %w", err)
 	}
 	return pending, nil
+}
+
+func scopedUpgradePending(ctx context.Context, conn interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}) (bool, error) {
+	var pending bool
+	err := conn.QueryRowContext(ctx,
+		"SELECT EXISTS(SELECT 1 FROM stats WHERE key = ? AND value > 0)",
+		scopedUpgradePendingKey,
+	).Scan(&pending)
+	return pending, err
 }
 
 // ScopedDataVersionProviders returns the providers to reparse when an

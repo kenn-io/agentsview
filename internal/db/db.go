@@ -2440,11 +2440,7 @@ func probeDatabaseConn(ctx context.Context,
 	// needs their preservation rebuild.
 	countScoped := includeScoped || archiveOnly
 	if countScoped {
-		var pending bool
-		if err := conn.QueryRowContext(ctx,
-			"SELECT EXISTS(SELECT 1 FROM stats WHERE key = ? AND value > 0)",
-			scopedUpgradePendingKey,
-		).Scan(&pending); err != nil || pending {
+		if pending, err := scopedUpgradePending(ctx, conn); err != nil || pending {
 			return false, pending, pending && fullRebuild, err
 		}
 	}
