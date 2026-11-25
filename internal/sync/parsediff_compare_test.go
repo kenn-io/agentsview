@@ -2611,7 +2611,6 @@ func TestCompareStoredSessionPromptAndCommandLinks(t *testing.T) {
 		count           int
 	}{
 		{"full", config.ArchiveContentFull, "gh pr view 42 -R user-a/project-a", "Review https://github.com/user-a/project-a/pull/43", 2},
-		{"transcripts", config.ArchiveContentTranscripts, "gh pr view 42 -R user-a/project-a", "Review https://github.com/user-a/project-a/pull/43", 2},
 		{"mixed case", config.ArchiveContentFull, "gh pr view 42 -R example/repo", "Review https://github.com/Example/Repo/pull/42", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

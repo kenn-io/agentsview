@@ -353,7 +353,8 @@ func TestUsageOnlyCopyMappedPRHistory(t *testing.T) {
 		s.FilePath = new(filepath.Join(dir, "rollout-2026-09-25T12-00-00-"+page[len("codex:"):]+".jsonl"))
 		s.PRLinks = []PRLink{link}
 	})
-	_, err := src.getWriter().Exec(ctx, `PRAGMA user_version = 130`)
+	prepareLegacyPRLinksArchive(t, src, 130, true)
+	_, err := src.getWriter().Exec(ctx, `ALTER TABLE sessions DROP COLUMN pr_repository_changed`)
 	require.NoError(t, err)
 	require.NoError(t, src.Close())
 	dst := testDB(t)

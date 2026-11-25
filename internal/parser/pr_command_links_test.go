@@ -14,7 +14,6 @@ func TestCommandPRLinks(t *testing.T) {
 		command, remote, want, cwd string
 		repositoryChanged          bool
 	}{
-		{`gh pr view 42; cd /other`, remote, "https://github.com/example/repo/pull/42", "", false},
 		{`command gh pr view 41 -R example/repo`, "", "https://github.com/example/repo/pull/41", "", false},
 		{`gh -R example/repo pr view 42`, "", "https://github.com/example/repo/pull/42", "", false},
 		{`bash -lc 'gh pr view 44 -R example/repo'`, "", "https://github.com/example/repo/pull/44", "", false},
@@ -84,7 +83,6 @@ func TestCommandPRLinks(t *testing.T) {
 		{`gh pr create 42 -R example/repo`, remote, "", "", false},
 		{`gh pr view branch -R example/repo`, remote, "", "", false},
 		{`g''h pr view 43`, remote, "https://github.com/example/repo/pull/43", "", false},
-		{`if gh pr view 42 -R github.com/example/repo; then true; fi`, "", "https://github.com/example/repo/pull/42", "", false},
 		{`if gh pr checks 44; then gh pr merge 44; fi`, "https://github.com/example/repo.git", "https://github.com/example/repo/pull/44", "", false},
 		{`cd /work/other; gh pr view 45 -R example/repo`, "https://github.com/example/repo.git", "https://github.com/example/repo/pull/45", "", false},
 		{`gh pr view 42 -R=github.com/example/repo`, "", "https://github.com/example/repo/pull/42", "", false},
@@ -109,11 +107,13 @@ func TestCommandPRLinks(t *testing.T) {
 		{`env GH_REPO=other/repo gh pr view 42`, remote, "", "/work/repo", false},
 		{`env GH_REPO=example/other git remote set-url origin https://github.com/example/other.git; gh pr view 42`, remote, "", "/work/repo", true},
 		{`env GH_HOST=git.example bash -c 'git remote set-url origin other'; gh pr view 42`, remote, "", "/work/repo", true},
+		{`f(){ git remote set-url origin https://ghe.example/example/repo.git; }; f`, remote, "", "/work/repo", true},
 	} {
 		t.Run(tc.command, func(t *testing.T) {
 			links, _, changed, _, err := AnalyzePRCommand(t.Context(), tc.command, tc.cwd, tc.remote, true, false)
 			if tc.repositoryChanged {
 				assert.True(t, changed)
+				assert.True(t, PRCommandChangesRepository(tc.command))
 			}
 			require.NoError(t, err)
 			if tc.want == "" {

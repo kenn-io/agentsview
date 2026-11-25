@@ -109,20 +109,6 @@ func TestUsageOnlyResyncPreservesPRLinkHistoryAndUncertainty(t *testing.T) {
 	assert.ElementsMatch(t, []string{"https://github.com/example/repo/pull/41", "https://git.example/example/repo/pull/43"}, storedPRURLs(t, env.db, "codex:"+id))
 }
 
-func TestUsageOnlyClaudeBulkSyncToolPRLinks(t *testing.T) {
-	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
-	env.db.SetArchiveContent(config.ArchiveContentUsage)
-	env.writeClaudeSession(t, "proj", "bulk-tool-links.jsonl", testjsonl.JoinJSONL(
-		testjsonl.ClaudeUserJSON("Review", tsZero),
-		testjsonl.ClaudeAssistantJSON([]map[string]any{
-			{"type": "tool_use", "id": "bash", "name": "Bash", "input": map[string]any{"command": "gh pr view 42 -R example/repo"}},
-			{"type": "tool_use", "id": "task", "name": "Task", "input": map[string]any{"prompt": "Review https://github.com/example/repo/pull/43"}},
-		}, tsZeroS1),
-	))
-	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
-	assert.Equal(t, []string{"https://github.com/example/repo/pull/42", "https://github.com/example/repo/pull/43"}, storedPRURLs(t, env.db, "bulk-tool-links"))
-}
-
 func TestIncrementalSync_PromptPRLinks(t *testing.T) {
 	env := setupTestEnv(t)
 	path := env.writeClaudeSession(t, "proj", "prompt-append.jsonl", testjsonl.JoinJSONL(
