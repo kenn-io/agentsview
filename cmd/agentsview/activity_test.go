@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json/v2"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -199,6 +200,7 @@ func TestActivityReport_UsesDiscoveredDaemon(t *testing.T) {
 		"/api/v1/activity/report": func(w http.ResponseWriter, r *http.Request) {
 			gotQuery = r.URL.Query()
 			writeJSONResponse(w, `{
+				"schema_version":9,
 				"timezone":"UTC",
 				"range_start":"2026-06-16T00:00:00Z",
 				"range_end":"2026-06-17T00:00:00Z",
@@ -243,7 +245,7 @@ func TestFetchHTTPActivityReportContinuesRequestedGeneration(t *testing.T) {
 	mux.HandleFunc("/api/v1/activity/report", func(w http.ResponseWriter, _ *http.Request) {
 		reportRequests++
 		if !assert.NoError(t, json.MarshalWrite(w, activity.Report{
-			ReportID: "fresh-report", Timezone: "UTC",
+			SchemaVersion: export.ActivityReportSchemaVersion, ReportID: "fresh-report", Timezone: "UTC",
 		})) {
 			return
 		}
@@ -262,7 +264,7 @@ func TestFetchHTTPActivityReportContinuesRequestedGeneration(t *testing.T) {
 				"sessions":  []activity.SessionRow{{SessionID: "continued"}},
 				"total":     2,
 				"report": activity.Report{
-					ReportID: "original-report", Timezone: "UTC",
+					SchemaVersion: export.ActivityReportSchemaVersion, ReportID: "original-report", Timezone: "UTC",
 					BySession:     []activity.SessionRow{{SessionID: "continued"}},
 					SessionsTotal: 2,
 				},
@@ -287,6 +289,51 @@ func TestFetchHTTPActivityReportContinuesRequestedGeneration(t *testing.T) {
 	assert.Equal(t, "original-report", report.ReportID)
 	require.Len(t, report.BySession, 1)
 	assert.Equal(t, "continued", report.BySession[0].SessionID)
+}
+
+func TestFetchHTTPActivityReportSchemaVersion(t *testing.T) {
+	versions := []struct {
+		name    string
+		field   string
+		version int
+	}{
+		{"missing", "", 0},
+		{"old", `"schema_version":8,`, 8},
+		{"current", fmt.Sprintf(`"schema_version":%d,`, export.ActivityReportSchemaVersion), export.ActivityReportSchemaVersion},
+		{"future", fmt.Sprintf(`"schema_version":%d,`, export.ActivityReportSchemaVersion+1), export.ActivityReportSchemaVersion + 1},
+	}
+	for _, transportKind := range []string{"json", "sse", "page"} {
+		for _, tc := range versions {
+			t.Run(transportKind+"/"+tc.name, func(t *testing.T) {
+				ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					body := fmt.Sprintf(`{%s"report_id":"report"}`, tc.field)
+					switch transportKind {
+					case "sse":
+						w.Header().Set("Content-Type", "text/event-stream")
+						fmt.Fprintf(w, "event: report\ndata: %s\n\n", body)
+					case "page":
+						w.Header().Set("Content-Type", "application/json")
+						fmt.Fprintf(w, `{"report_id":"report","sessions":[],"total":0,"report":%s}`, body)
+					default:
+						w.Header().Set("Content-Type", "application/json")
+						fmt.Fprint(w, body)
+					}
+				}))
+				t.Cleanup(ts.Close)
+				cfg := ActivityReportConfig{}
+				if transportKind == "page" {
+					cfg.SessionsReportID = "report"
+				}
+				_, err := fetchHTTPActivityReport(t.Context(), transport{URL: ts.URL}, "", cfg)
+				if tc.version == export.ActivityReportSchemaVersion {
+					require.NoError(t, err)
+				} else {
+					require.ErrorContains(t, err, fmt.Sprintf("unsupported Activity report schema version %d", tc.version))
+					assert.ErrorContains(t, err, "use matching CLI and daemon versions")
+				}
+			})
+		}
+	}
 }
 
 func TestActivityReportCommandCursorInheritsNonDefaultPagingFlags(t *testing.T) {
