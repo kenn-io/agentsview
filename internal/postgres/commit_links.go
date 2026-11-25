@@ -24,7 +24,7 @@ func (s *Store) CommitSessionLinks(ctx context.Context, shas []string) (*db.Comm
 	return out, err
 }
 
-func insertCommitLinks(ctx context.Context, exec *sql.Tx, rows []db.CommitLinkRow, retained bool) error {
+func insertCommitLinks(ctx context.Context, exec pgSessionExecer, rows []db.CommitLinkRow, retained bool) error {
 	for _, r := range rows {
 		l := newPublishedCommitLink(r, retained)
 		if _, err := exec.ExecContext(ctx, `INSERT INTO commit_links (session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,turn_ordinal,turn_text,project,retained) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, l.sessionID, l.sha, l.branch, l.subject, l.repository, l.messageOrdinal, l.callIndex, l.toolUseID, l.committedAt, l.turnOrdinal, l.turnText, l.project, l.retained); err != nil {
@@ -42,17 +42,23 @@ func (s *Sync) pushCommitLinks(ctx context.Context, tx *sql.Tx, id string) (bool
 	if err != nil {
 		return false, err
 	}
-	published, err := publishedCommitLinks(ctx, tx, id)
+	published, err := publishedCommitLinks(ctx, tx, []string{id})
 	if err != nil {
 		return false, err
 	}
+	return replaceCommitLinks(ctx, tx, id, rows, published[id])
+}
+
+// replaceCommitLinks rewrites a session's published links unless they already
+// match the archive's rows.
+func replaceCommitLinks(ctx context.Context, exec pgSessionExecer, id string, rows []db.CommitLinkRow, published map[publishedCommitLink]struct{}) (bool, error) {
 	if len(published) == len(rows) && containsCommitLinks(published, rows) {
 		return false, nil
 	}
-	if _, err := tx.ExecContext(ctx, "DELETE FROM commit_links WHERE session_id=$1", id); err != nil {
+	if _, err := exec.ExecContext(ctx, "DELETE FROM commit_links WHERE session_id=$1", id); err != nil {
 		return false, err
 	}
-	return true, insertCommitLinks(ctx, tx, rows, false)
+	return true, insertCommitLinks(ctx, exec, rows, false)
 }
 
 // publishedCommitLink holds every column insertCommitLinks writes.
@@ -80,19 +86,24 @@ func newPublishedCommitLink(r db.CommitLinkRow, retained bool) publishedCommitLi
 	return link
 }
 
-func publishedCommitLinks(ctx context.Context, tx *sql.Tx, id string) (map[publishedCommitLink]struct{}, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,turn_ordinal,turn_text,project,retained FROM commit_links WHERE session_id=$1`, id)
+// publishedCommitLinks reads the published links of each session in ids,
+// keyed by session ID.
+func publishedCommitLinks(ctx context.Context, tx pgSessionQueryer, ids []string) (map[string]map[publishedCommitLink]struct{}, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,turn_ordinal,turn_text,project,retained FROM commit_links WHERE session_id = ANY($1)`, ids)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	published := map[publishedCommitLink]struct{}{}
+	published := map[string]map[publishedCommitLink]struct{}{}
 	for rows.Next() {
 		var l publishedCommitLink
 		if err := rows.Scan(&l.sessionID, &l.sha, &l.branch, &l.subject, &l.repository, &l.messageOrdinal, &l.callIndex, &l.toolUseID, &l.committedAt, &l.turnOrdinal, &l.turnText, &l.project, &l.retained); err != nil {
 			return nil, err
 		}
-		published[l] = struct{}{}
+		if published[l.sessionID] == nil {
+			published[l.sessionID] = map[publishedCommitLink]struct{}{}
+		}
+		published[l.sessionID][l] = struct{}{}
 	}
 	return published, rows.Err()
 }
