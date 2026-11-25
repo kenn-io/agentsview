@@ -259,7 +259,7 @@ func TestCodexLabeledRunResyncAndExplicitWorktreeMappingWins(t *testing.T) {
 }
 
 func TestCodexLabeledCopyWinsSync(t *testing.T) {
-	for _, mode := range []string{"changed path", "newer then older", "missed event"} {
+	for _, mode := range []string{"changed path", "newer then older", "missed event", "same batch"} {
 		t.Run(mode, func(t *testing.T) {
 			database := openTestDB(t)
 			root := t.TempDir()
@@ -276,6 +276,8 @@ func TestCodexLabeledCopyWinsSync(t *testing.T) {
 			engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {ordinary, logs}}})
 			t.Cleanup(engine.Close)
 			switch mode {
+			case "same batch":
+				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[1], paths[2]}))
 			case "changed path":
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[2]}))
 				mtime := time.Now().Add(3 * time.Hour)
@@ -367,4 +369,46 @@ func TestCodexLabelIsNotRepositoryAlias(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	assert.Equal(t, "api", session.Project)
+}
+
+func TestCodexLabelUpgradeRefreshesUnchangedSession(t *testing.T) {
+	require.Contains(t, db.ScopedDataVersionProviders(189, db.CurrentDataVersion()), parser.AgentCodex)
+	for _, mode := range []string{"derived", "assigned", "worktree"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			inner := filepath.Join(root, "team")
+			const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+			cwd := filepath.Join(root, "checkout")
+			source := filepath.Join(inner, "case", ".codex-run-v1-abc", "sessions", "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
+			meta := testjsonl.CodexSessionMetaJSON(id, cwd, "codex_exec", "2026-10-08T12:00:00Z")
+			dbtest.WriteTestFile(t, source, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z")+"\n"))
+			database := openTestDB(t)
+			old := NewEngine(t.Context(), database, EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {inner}}})
+			require.Equal(t, 1, old.SyncAll(t.Context(), nil).Synced)
+			old.Close()
+			before, err := database.GetSessionFull(t.Context(), "codex:"+id)
+			require.NoError(t, err)
+			require.Equal(t, "case", before.Project)
+			want := "team/case"
+			switch mode {
+			case "assigned":
+				_, err = database.AssignSessionProject(t.Context(), "codex:"+id, "curated")
+				require.NoError(t, err)
+				want = "curated"
+			case "worktree":
+				_, err = database.CreateWorktreeProjectMapping(t.Context(), db.WorktreeProjectMapping{Machine: "local", PathPrefix: cwd, Layout: db.WorktreeMappingLayoutExplicit, Project: "mapped", Enabled: true})
+				require.NoError(t, err)
+				want = "mapped"
+			}
+			require.NoError(t, database.SetSessionDataVersion(t.Context(), "codex:"+id, 189))
+			engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {inner, root}}})
+			t.Cleanup(engine.Close)
+			require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+			after, err := database.GetSessionFull(t.Context(), "codex:"+id)
+			require.NoError(t, err)
+			require.NotNil(t, after)
+			assert.Equal(t, before.ID, after.ID)
+			assert.Equal(t, want, after.Project)
+		})
+	}
 }

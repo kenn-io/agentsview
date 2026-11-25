@@ -2452,3 +2452,18 @@ func TestCodexLabeledRunOverlappingRootsAndLookup(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, path, found.DisplayPath)
 }
+
+func TestCodexRankOverlappingRoots(t *testing.T) {
+	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
+	root := t.TempDir()
+	inner := filepath.Join(root, "team", "case", ".codex-run-v1-abc", "sessions")
+	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", tsEarly)
+	labeled := writeCodexProviderSessionContent(t, inner, id, testjsonl.JoinJSONL(meta, testjsonl.CodexMsgJSON("user", "labeled", tsEarlyS1)))
+	ordinary := writeCodexProviderSessionContent(t, root, id, testjsonl.JoinJSONL(meta, testjsonl.CodexMsgJSON("user", "ordinary", tsEarlyS1)))
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{inner, root}})
+	require.True(t, ok)
+	source, ok := provider.(*codexProvider).SourceRefForPath(labeled)
+	require.True(t, ok)
+	assert.Equal(t, int64(2), CodexSourceRank(source).Class)
+	assert.NotEqual(t, ordinary, labeled)
+}
