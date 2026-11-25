@@ -3282,6 +3282,7 @@
   "empty_archive_desc": "AgentsView lit les sessions dans ces dossiers. Elles apparaîtront ici dès qu'un agent écrira dans l'un d'eux.",
   "empty_archive_choose_folders": "Choisir les dossiers",
   "usage_tooltip_no_usage": "Aucune utilisation",
+  "usage_tooltip_total": "Total",
   "session_toc_toggle": "Aller à un prompt",
   "session_toc_toggle_shortcut": "Aller à un prompt (T)",
   "session_toc_empty": "Aucun prompt dans cette session",

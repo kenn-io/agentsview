@@ -855,6 +855,107 @@ describe("CostTimeSeriesChart", () => {
     unmount(component);
   });
 
+  // Hovers the first day slot and returns the tooltip's total text, or
+  // null when the tooltip shows no total row.
+  async function hoverFirstDayTotal(): Promise<string | null> {
+    document
+      .querySelector(".slot-hit")!
+      .dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+    await tick();
+    const total = document.querySelector(".tooltip .tooltip-total");
+    return total ? total.textContent!.replace(/\s+/g, " ").trim() : null;
+  }
+
+  it("shows the day's total cost above the per-series rows", async () => {
+    usage.toggles.timeSeries.groupBy = "model";
+    usage.summary = usageSummary([
+      modelDailyEntry(0, [
+        { modelName: "large", cost: testMoney(9) },
+        { modelName: "medium", cost: testMoney(4) },
+        { modelName: "small", cost: testMoney(1.5) },
+      ]),
+      modelDailyEntry(1, [{ modelName: "large", cost: testMoney(1) }]),
+    ]);
+
+    const component = mountChart();
+    await tick();
+
+    // 9 + 4 + 1.5 = 14.5, shown in the same money format as the rows.
+    expect(await hoverFirstDayTotal()).toBe("Total $14.50");
+    // The total sits between the date header and the breakdown list.
+    const tooltip = document.querySelector(".tooltip")!;
+    expect(Array.from(tooltip.children, (el) => el.className.split(" ")[0])).toEqual([
+      "tooltip-date",
+      "tooltip-total",
+      "tooltip-metrics",
+    ]);
+    expect(tooltip.querySelectorAll(".tooltip-row")).toHaveLength(3);
+
+    unmount(component);
+  });
+
+  it("shows the day's total token count in token mode", async () => {
+    usage.mode = "token";
+    usage.toggles.timeSeries.groupBy = "model";
+    usage.summary = usageSummary([
+      modelDailyEntry(0, [
+        { modelName: "large", cost: testMoney(9), inputTokens: 400, outputTokens: 300 },
+        { modelName: "small", cost: testMoney(1), inputTokens: 150, outputTokens: 50 },
+      ]),
+      modelDailyEntry(1, [{ modelName: "large", cost: testMoney(1) }]),
+    ]);
+
+    const component = mountChart();
+    await tick();
+
+    // (400 + 300) + (150 + 50) = 900 tokens across both models.
+    expect(await hoverFirstDayTotal()).toBe("Total 900");
+
+    unmount(component);
+  });
+
+  it("leaves hidden series out of the day's total", async () => {
+    usage.toggles.timeSeries.groupBy = "model";
+    usage.summary = usageSummary([
+      modelDailyEntry(0, [
+        { modelName: "large", cost: testMoney(9) },
+        { modelName: "medium", cost: testMoney(4) },
+        { modelName: "small", cost: testMoney(2) },
+      ]),
+      modelDailyEntry(1, [{ modelName: "large", cost: testMoney(1) }]),
+    ]);
+    usage.excludedModels = "large";
+
+    const component = mountChart();
+    await tick();
+
+    // Only the drawn series count: 4 + 2, not 15 with "large" included.
+    expect(await hoverFirstDayTotal()).toBe("Total $6.00");
+
+    unmount(component);
+  });
+
+  it("omits the total when the day has a single series", async () => {
+    usage.toggles.timeSeries.groupBy = "model";
+    usage.summary = usageSummary([
+      modelDailyEntry(0, [
+        { modelName: "large", cost: testMoney(9) },
+        { modelName: "idle", cost: testMoney(0) },
+      ]),
+      modelDailyEntry(1, [{ modelName: "idle", cost: testMoney(3) }]),
+    ]);
+
+    const component = mountChart();
+    await tick();
+
+    // "idle" has nothing on this day, so one row remains and a total
+    // would only repeat it.
+    expect(await hoverFirstDayTotal()).toBeNull();
+    expect(document.querySelectorAll(".tooltip .tooltip-row")).toHaveLength(1);
+
+    unmount(component);
+  });
+
   it("shows the hovered non-first date", async () => {
     usage.toggles.timeSeries.groupBy = "model";
     usage.summary = usageSummary([
