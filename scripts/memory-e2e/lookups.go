@@ -25,12 +25,11 @@ type lookupFixture struct {
 }
 
 type lookupQuestion struct {
-	Name               string              `json:"name"`
-	Prompt             string              `json:"prompt"`
-	Expected           []lookupItem        `json:"expected"`
-	ExpectedAnswer     map[string]string   `json:"expected_answer"`
-	AnswerAlternatives map[string][]string `json:"answer_alternatives,omitempty"`
-	Phrases            []string            `json:"phrases"`
+	Name           string            `json:"name"`
+	Prompt         string            `json:"prompt"`
+	Expected       []lookupItem      `json:"expected"`
+	ExpectedAnswer map[string]string `json:"expected_answer"`
+	Phrases        []string          `json:"phrases"`
 }
 
 type lookupAttempt struct {
@@ -96,13 +95,24 @@ func readLookupCorpus(repository string) ([]lookupFixture, []lookupQuestion, err
 	if err := readLookupJSON(filepath.Join(root, "questions.json"), &questions); err != nil {
 		return nil, nil, err
 	}
-	if err := validateLookupQuestions(questions); err != nil {
+	if err := validateLookupQuestions(fixtures, questions); err != nil {
 		return nil, nil, err
 	}
 	return fixtures, questions, nil
 }
 
-func validateLookupQuestions(questions []lookupQuestion) error {
+func validateLookupQuestions(fixtures []lookupFixture, questions []lookupQuestion) error {
+	fixtureByID := make(map[string]lookupFixture, len(fixtures))
+	for _, fixture := range fixtures {
+		id := strings.TrimSpace(fixture.ID)
+		if id == "" {
+			return errors.New("memory-e2e: lookup fixture has an empty session ID")
+		}
+		if _, ok := fixtureByID[id]; ok {
+			return fmt.Errorf("memory-e2e: duplicate lookup fixture session ID %q", id)
+		}
+		fixtureByID[id] = fixture
+	}
 	seen := map[string]struct{}{}
 	for _, q := range questions {
 		if strings.TrimSpace(q.Name) == "" || strings.TrimSpace(q.Prompt) == "" || len(q.Expected) == 0 || len(q.ExpectedAnswer) == 0 || len(q.Phrases) == 0 {
@@ -112,10 +122,20 @@ func validateLookupQuestions(questions []lookupQuestion) error {
 			return fmt.Errorf("memory-e2e: duplicate lookup question %q", q.Name)
 		}
 		seen[q.Name] = struct{}{}
+		expectedFixtures := make([]lookupFixture, 0, len(q.Expected))
 		for _, item := range q.Expected {
-			if strings.TrimSpace(item.SessionID) == "" {
+			id := strings.TrimSpace(item.SessionID)
+			if id == "" {
 				return fmt.Errorf("memory-e2e: lookup question %q has an empty expected session ID", q.Name)
 			}
+			if _, rawID, prefixed := strings.Cut(id, ":"); prefixed {
+				id = rawID
+			}
+			fixture, ok := fixtureByID[id]
+			if !ok {
+				return fmt.Errorf("memory-e2e: lookup question %q expects session %q, which is missing from the corpus", q.Name, item.SessionID)
+			}
+			expectedFixtures = append(expectedFixtures, fixture)
 		}
 		for field, value := range q.ExpectedAnswer {
 			if strings.TrimSpace(field) == "" || field == "source_session_id" || strings.TrimSpace(value) == "" {
@@ -126,9 +146,26 @@ func validateLookupQuestions(questions []lookupQuestion) error {
 			if strings.TrimSpace(phrase) == "" {
 				return fmt.Errorf("memory-e2e: lookup question %q has an empty evidence phrase", q.Name)
 			}
+			if !lookupFixtureContains(expectedFixtures, phrase) {
+				return fmt.Errorf("memory-e2e: lookup question %q requires evidence phrase %q absent from its expected sessions", q.Name, phrase)
+			}
+		}
+		for _, answer := range q.ExpectedAnswer {
+			if !lookupFixtureContains(expectedFixtures, answer) {
+				return fmt.Errorf("memory-e2e: lookup question %q expects answer %q absent from its expected sessions", q.Name, answer)
+			}
 		}
 	}
 	return nil
+}
+
+func lookupFixtureContains(fixtures []lookupFixture, text string) bool {
+	for _, fixture := range fixtures {
+		if containsLookupPhrase(fixture.Content, text) {
+			return true
+		}
+	}
+	return false
 }
 
 func selectLookupCorpus(cfg config) ([]lookupFixture, []lookupQuestion, error) {
@@ -296,11 +333,11 @@ func lookupPrompt(q lookupQuestion) string {
 
 func captureLookup(ctx context.Context, cfg config, bin string, client clientName, project, model, serverURL, prompt, dir string) ([]lookupCall, string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, "", fmt.Errorf("%w: create attempt: %v", errLookupSetup, err)
+		return nil, "", fmt.Errorf("%w: create attempt: %w", errLookupSetup, err)
 	}
 	isolation, err := prepareLookupIsolation(ctx, client, filepath.Dir(project), project, bin, dir)
 	if err != nil {
-		return nil, "", fmt.Errorf("%w: %s: %v", errLookupSetup, client, err)
+		return nil, "", fmt.Errorf("%w: %s: %w", errLookupSetup, client, err)
 	}
 	defer isolation.removeCredentials()
 	var args []string
@@ -319,10 +356,10 @@ func captureLookup(ctx context.Context, cfg config, bin string, client clientNam
 	defer cancel()
 	outcome, err := capture.Run(runCtx, capture.RunOptions{Provider: capture.Provider(client), OccurrenceID: newUUID(), CaptureDir: filepath.Join(dir, "capture"), ResultPath: filepath.Join(dir, "capture-result.json"), ProviderRoot: isolation.providerRoot, WorkDir: project, Command: args, Environment: isolation.env, Streams: capture.Streams{Stdout: &stdout, Stderr: &stderr}})
 	if writeErr := os.WriteFile(filepath.Join(dir, "trace.jsonl"), stdout.Bytes(), 0o600); writeErr != nil {
-		return nil, "", fmt.Errorf("%w: write trace: %v", errLookupSetup, writeErr)
+		return nil, "", fmt.Errorf("%w: write trace: %w", errLookupSetup, writeErr)
 	}
 	if writeErr := os.WriteFile(filepath.Join(dir, "stderr.txt"), stderr.Bytes(), 0o600); writeErr != nil {
-		return nil, "", fmt.Errorf("%w: write stderr: %v", errLookupSetup, writeErr)
+		return nil, "", fmt.Errorf("%w: write stderr: %w", errLookupSetup, writeErr)
 	}
 	parsed, parseErr := parseAgentTrace(client, stdout.Bytes())
 	calls, captureErr := readLookupTranscriptCalls(client, dir, stdout.Bytes())
@@ -332,14 +369,20 @@ func captureLookup(ctx context.Context, cfg config, bin string, client clientNam
 	} else if len(calls) == 0 && lookupTraceSetupError(stdout.Bytes()) {
 		runErr = fmt.Errorf("%w: %s: %s %s", errLookupSetup, client, parsed.FinalAnswer, strings.TrimSpace(stderr.String()))
 	} else if outcome.Execution.ExitCode == nil || *outcome.Execution.ExitCode != 0 {
-		runErr = fmt.Errorf("%w: exit %d: %v", errLookupClientFailed, outcome.ExitCode, err)
+		runErr = fmt.Errorf("%w: exit %d", errLookupClientFailed, outcome.ExitCode)
+		if err != nil {
+			runErr = fmt.Errorf("%w: %w", runErr, err)
+		}
 		if len(calls) == 0 && parsed.FinalAnswer == "" {
-			runErr = fmt.Errorf("%w: %s: exit %d: %v: %s", errLookupSetup, client, outcome.ExitCode, err, strings.TrimSpace(stderr.String()))
+			runErr = fmt.Errorf("%w: %s: exit %d: %s", errLookupSetup, client, outcome.ExitCode, strings.TrimSpace(stderr.String()))
+			if err != nil {
+				runErr = fmt.Errorf("%w: %w", runErr, err)
+			}
 		}
 	} else if parseErr != nil {
-		runErr = fmt.Errorf("%w: parse trace: %v", errCaptureIncomplete, parseErr)
+		runErr = fmt.Errorf("%w: parse trace: %w", errCaptureIncomplete, parseErr)
 	} else if err != nil {
-		runErr = fmt.Errorf("%w: %v", errCaptureIncomplete, err)
+		runErr = fmt.Errorf("%w: %w", errCaptureIncomplete, err)
 	}
 	return calls, parsed.FinalAnswer, errors.Join(runErr, captureErr)
 }
@@ -365,7 +408,7 @@ func readLookupTranscriptCalls(
 		if err == nil {
 			return nil
 		}
-		return fmt.Errorf("%w: %v", errCaptureIncomplete, err)
+		return fmt.Errorf("%w: %w", errCaptureIncomplete, err)
 	}
 	resultFile, err := os.Open(filepath.Join(dir, "capture-result.json"))
 	if err != nil {

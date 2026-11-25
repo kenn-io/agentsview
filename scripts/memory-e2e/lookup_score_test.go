@@ -258,7 +258,6 @@ func TestLookupRejectsDifferentProviderWithSameID(t *testing.T) {
 	score := scoreLookup("codex:"+lookupID+" violet ledger", []lookupItem{item}, []string{"violet ledger"}, []lookupCall{wrong, right}, nil)
 	require.NotNil(t, score.CallsToHit)
 	assert.Equal(t, 2, *score.CallsToHit)
-
 }
 
 func TestLookupClassifiesTranscriptFromGrepOutput(t *testing.T) {
@@ -502,28 +501,29 @@ func TestLookupStructuredAnswers(t *testing.T) {
 	}
 }
 
-func TestLookupAcceptsListedSourceExcerpts(t *testing.T) {
+func TestLookupAcceptsSourceExcerpts(t *testing.T) {
 	var questions []lookupQuestion
 	require.NoError(t, readLookupJSON("testdata/lookups/questions.json", &questions))
 	for _, tc := range []struct {
-		name, answer string
-		valid        bool
+		name, answer, sessionID, source string
+		verdict                         string
 	}{
-		{"topic", `{"namespace":"violet ledger","reason":"the old namespace caused lock contention","source_session_id":"codex:11111111-1111-4111-8111-111111111111"}`, true},
-		{"named", `{"release_marker":"north pier marker","source_session_id":"codex:22222222-2222-4222-8222-222222222222"}`, true},
-		{"named", `{"release_marker":"south pier marker","source_session_id":"codex:22222222-2222-4222-8222-222222222222"}`, false},
-		{"named", `{"release_marker":"north pier marker","source_session_id":"codex:11111111-1111-4111-8111-111111111111"}`, false},
-		{"long-result", `{"index":"account-created-project","source_session_id":"codex:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}`, false},
+		{"topic", `{"namespace":"violet ledger","reason":"the old namespace caused lock contention","source_session_id":"codex:11111111-1111-4111-8111-111111111111"}`, "codex:11111111-1111-4111-8111-111111111111", "The harbor cache uses the violet ledger namespace because the old namespace caused lock contention.", "success"},
+		{"named", `{"release_marker":"north pier marker","source_session_id":"codex:22222222-2222-4222-8222-222222222222"}`, "codex:22222222-2222-4222-8222-222222222222", "The Aurora deploy checklist says to use the north pier marker for the release.", "success"},
+		{"named", `{"release_marker":"south pier marker","source_session_id":"codex:22222222-2222-4222-8222-222222222222"}`, "codex:22222222-2222-4222-8222-222222222222", "The Aurora deploy checklist says to use the north pier marker for the release.", "failed"},
+		{"named", `{"release_marker":"north pier marker","source_session_id":"codex:11111111-1111-4111-8111-111111111111"}`, "codex:11111111-1111-4111-8111-111111111111", "The harbor cache uses the violet ledger namespace because the old namespace caused lock contention.", "failed"},
+		{"long-result", `{"index":"account-created-project","source_session_id":"codex:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}`, "codex:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "The accepted index name is account_created_project.", "failed"},
 	} {
 		t.Run(tc.name+"/"+tc.answer, func(t *testing.T) {
 			for _, q := range questions {
 				if q.Name == tc.name {
-					_, ok := lookupAnswerSource(q, tc.answer)
-					assert.Equal(t, tc.valid, ok)
+					call := lookupCall{Route: "mcp", Result: `{"session_id":"` + tc.sessionID + `","content":` + stringMustJSON(t, tc.source) + `}`, Start: 1, End: 2}
+					score := scoreLookupQuestion(q, tc.answer, []lookupCall{call}, nil)
+					assert.Equal(t, tc.verdict, score.Verdict)
 					return
 				}
 			}
-			t.Fatal("question missing")
+			require.FailNow(t, "question missing")
 		})
 	}
 }
@@ -582,7 +582,31 @@ func TestLookupSavedOutputClassification(t *testing.T) {
 	assert.Equal(t, "direct", routeFor("Read", `{"file_path":"/tmp/tool-results/result.txt"}`))
 	assert.Equal(t, "cli", routeFor("Bash", `{"command":"agentsview session list"}`))
 	assert.Equal(t, "direct", routeFor("Bash", `{"command":"sqlite3 sessions.db 'select 1'"}`))
-	assert.False(t, strings.Contains(routeFor("Read", `{"file_path":"README.md"}`), "mcp"))
+	assert.NotContains(t, routeFor("Read", `{"file_path":"README.md"}`), "mcp")
+}
+
+func TestLookupShellTranscriptExcerptsUsePathSessionID(t *testing.T) {
+	id := "11111111-1111-4111-8111-111111111111"
+	item := lookupItem{SessionID: "codex:" + id}
+	for _, tc := range []struct {
+		name, input string
+	}{
+		{"Bash sed", `{"command":"sed -n '1,20p' /fixture-home/.codex/sessions/2026/11/24/rollout-2026-11-24T12-00-00-` + id + `.jsonl"}`},
+		{"Bash tail", `{"command":"tail -n 20 '/fixture-home/.codex/sessions/2026/11/24/rollout-2026-11-24T12-00-00-` + id + `.jsonl'"}`},
+		{"Codex tail", `tail -n 20 /fixture-home/.codex/sessions/2026/11/24/rollout-2026-11-24T12-00-00-` + id + `.jsonl`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			name := "Bash"
+			if strings.HasPrefix(tc.name, "Codex") {
+				name = "CommandExecution"
+			}
+			call := lookupCall{Name: name, Route: "direct", Input: tc.input, Result: "The violet ledger uses lock contention mitigation.", Start: 1, End: 2}
+			score := scoreLookup(item.SessionID+" violet ledger", []lookupItem{item}, []string{"violet ledger"}, []lookupCall{call}, nil)
+			assert.Equal(t, "success", score.Verdict)
+			require.NotNil(t, score.CallsToHit)
+			assert.Equal(t, 1, *score.CallsToHit)
+		})
+	}
 }
 
 func TestLookupPromptAndQuestionValidation(t *testing.T) {
@@ -593,12 +617,32 @@ func TestLookupPromptAndQuestionValidation(t *testing.T) {
 		ExpectedAnswer: map[string]string{"namespace": "violet ledger", "reason": "lock contention"},
 		Phrases:        []string{"violet ledger", "lock contention"},
 	}
-	require.NoError(t, validateLookupQuestions([]lookupQuestion{question}))
+	fixtures := []lookupFixture{{ID: lookupID, Content: "The violet ledger caused lock contention."}}
+	require.NoError(t, validateLookupQuestions(fixtures, []lookupQuestion{question}))
 	prompt := lookupPrompt(question)
 	assert.Contains(t, prompt, `["namespace","reason","source_session_id"]`)
 	assert.NotContains(t, prompt, "violet ledger")
 	assert.NotContains(t, prompt, "codex:")
 
 	question.ExpectedAnswer = nil
-	assert.Error(t, validateLookupQuestions([]lookupQuestion{question}))
+	assert.Error(t, validateLookupQuestions(fixtures, []lookupQuestion{question}))
+}
+
+func TestLookupQuestionValidationRejectsMissingEvidence(t *testing.T) {
+	fixture := lookupFixture{ID: lookupID, Content: "The violet ledger caused lock contention."}
+	question := lookupQuestion{
+		Name:           "topic",
+		Prompt:         "What namespace did the review choose?",
+		Expected:       []lookupItem{{SessionID: "codex:" + lookupID}},
+		ExpectedAnswer: map[string]string{"namespace": "violet ledger"},
+		Phrases:        []string{"violet ledger"},
+	}
+
+	missingSession := question
+	missingSession.Expected = []lookupItem{{SessionID: "codex:22222222-2222-4222-8222-222222222222"}}
+	require.ErrorContains(t, validateLookupQuestions([]lookupFixture{fixture}, []lookupQuestion{missingSession}), "missing from the corpus")
+
+	missingPhrase := question
+	missingPhrase.Phrases = []string{"copper namespace"}
+	require.ErrorContains(t, validateLookupQuestions([]lookupFixture{fixture}, []lookupQuestion{missingPhrase}), "absent from its expected sessions")
 }

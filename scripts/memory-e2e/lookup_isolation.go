@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -50,7 +51,7 @@ func prepareLookupIsolation(ctx context.Context, client clientName, clientDir, p
 		}
 	}()
 	if runtime.GOOS != "linux" {
-		return lookupIsolation{}, fmt.Errorf("lookup isolation requires Linux bubblewrap")
+		return lookupIsolation{}, errors.New("lookup isolation requires Linux bubblewrap")
 	}
 	bwrap, err := exec.LookPath("bwrap")
 	if err != nil {
