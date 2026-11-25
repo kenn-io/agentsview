@@ -3,15 +3,19 @@ package db
 import (
 	"context"
 	"database/sql"
-	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"path"
+	"regexp"
 	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/shellquote"
 )
+
+var launchAgentWords = map[string]*regexp.Regexp{
+	"codex":  regexp.MustCompile(`(?i)(^|[^a-z0-9_])codex([^a-z0-9_]|$)`),
+	"claude": regexp.MustCompile(`(?i)(^|[^a-z0-9_])claude([^a-z0-9_]|$)`),
+}
 
 func launchFolder(s string) string {
 	s = strings.ReplaceAll(s, `\`, "/")
@@ -69,9 +73,9 @@ func inferLaunchParentsTx(ctx context.Context, tx *sql.Tx, ids []string) (int, e
 
 // Starting with the bounded timestamp range prevents a scan of every session
 // on the machine for each candidate child.
-const launchCandidateSQL = `SELECT s.id, s.cwd, s.machine, m.timestamp, tc.input_json FROM messages m INDEXED BY idx_messages_activity_timestamp
+const launchCandidateSQL = `SELECT s.id, s.cwd, s.machine, m.timestamp, tc.tool_name, tc.input_json FROM messages m INDEXED BY idx_messages_activity_timestamp
  CROSS JOIN tool_calls tc ON tc.message_id=m.id CROSS JOIN sessions s ON s.id=m.session_id
- WHERE m.role='assistant' AND m.model != '<synthetic>' AND m.timestamp >= ? AND m.timestamp <= ? AND (s.machine=? OR TRIM(s.machine)='') AND s.id != ? AND s.deleted_at IS NULL AND s.agent IN ('claude','codex') AND tc.category='Bash' AND tc.input_json IS NOT NULL`
+ WHERE m.role='assistant' AND m.model != '<synthetic>' AND m.timestamp >= ? AND m.timestamp <= ? AND (s.machine=? OR TRIM(s.machine)='') AND s.id != ? AND s.deleted_at IS NULL AND s.agent IN ('claude','codex') AND tc.category='Bash'`
 
 func inferLaunchChild(ctx context.Context, tx *sql.Tx, child launchChild) (int, error) {
 	start, err := time.Parse(time.RFC3339Nano, child.started)
@@ -93,40 +97,36 @@ func inferLaunchChild(ctx context.Context, tx *sql.Tx, child launchChild) (int, 
 	matches := map[string]bool{}
 	known := map[string]bool{}
 	for rows.Next() {
-		var id, cwd, machine, stamp, input string
-		if err := rows.Scan(&id, &cwd, &machine, &stamp, &input); err != nil {
+		var id, cwd, machine, stamp, tool string
+		var input sql.NullString
+		if err := rows.Scan(&id, &cwd, &machine, &stamp, &tool, &input); err != nil {
 			rows.Close()
 			return 0, err
+		}
+		if pollTool(tool) {
+			continue
 		}
 		at, e := time.Parse(time.RFC3339Nano, stamp)
 		if e != nil || at.After(start) || start.Sub(at) > 60*time.Second {
 			continue
 		}
-		var calls []codeModeCommand
-		if !jsontext.Value(input).IsValid() {
-			var ok bool
-			calls, ok = codeModeCommands(input)
-			if !ok {
-				matches[id] = true
-				continue
-			}
-		} else {
-			command := commitCommandText(input)
-			if args, ok := commandArgv(input); ok && command == "" {
-				words := make([]string, len(args))
-				for i, arg := range args {
-					words[i] = shellquote.POSIX(arg)
-				}
-				command = strings.Join(words, " ")
-			}
-			if command == input {
-				command = ""
-			}
-			calls = []codeModeCommand{{command: command, workdir: toolCallWorkdir(input)}}
+		if !input.Valid || strings.TrimSpace(input.String) == "" {
+			matches[id] = true
+			continue
+		}
+		calls, undecodable := shellCalls(input.String)
+		if undecodable {
+			matches[id] = true
+			continue
 		}
 		for _, call := range calls {
-			if call.command == "" {
-				matches[id] = true
+			if call.reach == parser.Dead {
+				continue
+			}
+			if call.unknown {
+				if re := launchAgentWords[child.agent]; re != nil && re.MatchString(call.command) {
+					matches[id] = true
+				}
 				continue
 			}
 			dir := cwd
@@ -135,17 +135,26 @@ func inferLaunchChild(ctx context.Context, tx *sql.Tx, child launchChild) (int, 
 			} else if call.workdir != "" {
 				dir = parser.ShellWorkdir(dir, call.workdir)
 			}
+			if !absoluteLaunchFolder(dir) {
+				dir = ""
+			}
 			for _, launch := range parser.LaunchesFromCommand(call.command, dir) {
-				if launch.Agent != child.agent {
+				if launch.Agent != child.agent || launch.Reach == parser.Dead {
 					continue
 				}
-				if call.uncertain || !launch.Certain || !absoluteLaunchFolder(launch.Dir) {
-					matches[id] = true
-				} else if launchFolder(launch.Dir) == launchFolder(child.cwd) {
-					matches[id] = true
-					if strings.TrimSpace(machine) != "" {
-						known[id] = true
+				matched := false
+				for _, folder := range launch.Dirs {
+					if absoluteLaunchFolder(folder) && launchFolder(folder) == launchFolder(child.cwd) {
+						matched = true
+						break
 					}
+				}
+				if !launch.Unknown && !matched {
+					continue
+				}
+				matches[id] = true
+				if matched && !launch.Unknown && len(launch.Dirs) == 1 && call.reach == parser.Reached && (launch.Reach == parser.Reached || launch.CDGuarded) && strings.TrimSpace(machine) != "" {
+					known[id] = true
 				}
 			}
 		}
@@ -202,15 +211,15 @@ func launchSeeds(ctx context.Context, tx *sql.Tx, ids []string) ([]string, error
 	if err != nil {
 		return nil, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT s.machine, m.timestamp FROM sessions s JOIN tool_calls tc ON tc.session_id=s.id JOIN messages m ON m.id=tc.message_id WHERE s.id IN (SELECT value FROM json_each(?)) AND s.deleted_at IS NULL AND s.agent IN ('claude','codex') AND tc.category='Bash' AND m.timestamp IS NOT NULL`, string(data))
+	rows, err := tx.QueryContext(ctx, `SELECT s.machine, m.timestamp, tc.tool_name FROM sessions s JOIN tool_calls tc ON tc.session_id=s.id JOIN messages m ON m.id=tc.message_id WHERE s.id IN (SELECT value FROM json_each(?)) AND s.deleted_at IS NULL AND s.agent IN ('claude','codex') AND tc.category='Bash' AND m.timestamp IS NOT NULL`, string(data))
 	if err != nil {
 		return nil, err
 	}
-	type call struct{ machine, stamp string }
+	type call struct{ machine, stamp, tool string }
 	var calls []call
 	for rows.Next() {
 		var c call
-		if err := rows.Scan(&c.machine, &c.stamp); err != nil {
+		if err := rows.Scan(&c.machine, &c.stamp, &c.tool); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -223,6 +232,9 @@ func launchSeeds(ctx context.Context, tx *sql.Tx, ids []string) ([]string, error
 	}
 	seeds := append([]string{}, ids...)
 	for _, c := range calls {
+		if pollTool(c.tool) {
+			continue
+		}
 		at, e := time.Parse(time.RFC3339Nano, c.stamp)
 		if e != nil {
 			continue

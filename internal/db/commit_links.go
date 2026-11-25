@@ -219,6 +219,43 @@ func literalCommands(input string) []string {
 	return commands
 }
 
+// shellCalls reads command inputs without assigning a result to a batch member.
+func shellCalls(input string) ([]shellCall, bool) {
+	if !jsontext.Value(input).IsValid() {
+		calls, ok := codeModeCalls(input)
+		return calls, !ok
+	}
+	command := commitCommandText(input)
+	if args, ok := commandArgv(input); ok && command == "" {
+		words := make([]string, len(args))
+		for i, arg := range args {
+			words[i] = shellquote.POSIX(arg)
+		}
+		command = strings.Join(words, " ")
+	}
+	if command == "" || command == input {
+		return nil, false
+	}
+	return []shellCall{{command: command, workdir: toolCallWorkdir(input), reach: parser.Reached}}, false
+}
+
+// decodeCommandLiteral decodes the string form shared by code-mode readers.
+func decodeCommandLiteral(literal string) (string, bool) {
+	if len(literal) < 2 || strings.Contains(literal, "${") {
+		return "", false
+	}
+	var decoded strings.Builder
+	for rest := literal[1 : len(literal)-1]; rest != ""; {
+		r, _, tail, err := strconv.UnquoteChar(rest, literal[0])
+		if err != nil {
+			return "", false
+		}
+		decoded.WriteRune(r)
+		rest = tail
+	}
+	return decoded.String(), true
+}
+
 type commitCall struct {
 	CommitLink
 	input, result, toolName string
@@ -284,13 +321,14 @@ func callOutput(result string) ([]commitOutput, []string) {
 	return []commitOutput{{text: result, process: process}}, running
 }
 
+func pollTool(name string) bool { return name == "write_stdin" || name == "wait" }
+
 func commitPollIDs(input, tool string) []string {
 	var args struct {
 		SessionID int64  `json:"session_id"`
 		CellID    string `json:"cell_id"`
 	}
-	switch tool {
-	case "write_stdin", "wait":
+	if pollTool(tool) {
 		if json.Unmarshal([]byte(input), &args) == nil {
 			if tool == "wait" && args.CellID != "" {
 				return []string{"cell:" + args.CellID}
@@ -299,7 +337,9 @@ func commitPollIDs(input, tool string) []string {
 				return []string{strconv.FormatInt(args.SessionID, 10)}
 			}
 		}
-	case "exec":
+		return nil
+	}
+	if tool == "exec" {
 		var ids []string
 		for _, match := range commitPollRE.FindAllStringSubmatch(input, -1) {
 			if !slices.Contains(ids, match[1]) {

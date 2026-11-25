@@ -3,6 +3,7 @@ package parser
 import (
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
@@ -46,66 +47,236 @@ func oneShotRunState(agent string, args []string) (bool, bool) {
 	return false, false
 }
 
-// LaunchCommand records a possible or certain launch and its working directory.
+// Reach describes whether a command in archived source can have run.
+type Reach uint8
+
+const (
+	Reached Reach = iota
+	Possible
+	Dead
+)
+
+// LaunchCommand describes one possible agent launch.
 type LaunchCommand struct {
-	Agent, Dir string
-	Certain    bool
+	Agent     string
+	Dirs      []string
+	Unknown   bool
+	Reach     Reach
+	CDGuarded bool
+}
+type shellFlow struct {
+	dirs       []string
+	unknown    bool
+	reach      Reach
+	cdGuarded  bool
+	mayStop    bool
+	cwdChanged bool
+}
+type shellStatus uint8
+
+const (
+	statusUnknown shellStatus = iota
+	statusSuccess
+	statusFailure
+)
+
+func possibleReach(r Reach) Reach {
+	if r == Dead {
+		return Dead
+	}
+	return Possible
+}
+func mergeShellFlows(a, b shellFlow) shellFlow {
+	if a.reach == Dead && b.reach == Dead {
+		a.mayStop = true
+		return a
+	}
+	if a.reach == Dead {
+		b.reach = possibleReach(b.reach)
+		b.mayStop = true
+		return b
+	}
+	if b.reach == Dead {
+		a.reach = possibleReach(a.reach)
+		a.mayStop = true
+		return a
+	}
+	for _, dir := range b.dirs {
+		if !slices.Contains(a.dirs, dir) {
+			a.dirs = append(a.dirs, dir)
+		}
+	}
+	a.unknown = a.unknown || b.unknown
+	a.mayStop = a.mayStop || b.mayStop
+	a.cwdChanged = a.cwdChanged || b.cwdChanged
+	if a.reach == Possible || b.reach == Possible {
+		a.reach = Possible
+	}
+	a.cdGuarded = false
+	return a
 }
 
-// LaunchesFromCommand finds possible agent launches at executable positions.
+// LaunchesFromCommand reads reach and directory evidence from shell syntax.
 func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
 	if err != nil {
 		var out []LaunchCommand
 		for _, agent := range []string{"codex", "claude"} {
 			if regexp.MustCompile(`(?i)(^|[^a-z0-9_])` + agent + `([^a-z0-9_]|$)`).MatchString(command) {
-				out = append(out, LaunchCommand{Agent: agent})
+				out = append(out, LaunchCommand{Agent: agent, Unknown: true, Reach: Possible})
 			}
 		}
 		return out
 	}
+	initial := shellFlow{reach: Reached}
+	if baseDir == "" {
+		initial.unknown = true
+	} else {
+		initial.dirs = []string{baseDir}
+	}
 	var out []LaunchCommand
-	dir := baseDir
-	var visit func(*syntax.Stmt, bool)
-	visit = func(stmt *syntax.Stmt, trusted bool) {
-		before := dir
-		if stmt.Background {
-			defer func() { dir = before }()
+	var run func(*syntax.Stmt, shellFlow) (shellFlow, shellStatus)
+	var list func([]*syntax.Stmt, shellFlow) (shellFlow, shellStatus)
+	list = func(stmts []*syntax.Stmt, f shellFlow) (shellFlow, shellStatus) {
+		status := statusUnknown
+		for _, stmt := range stmts {
+			f, status = run(stmt, f)
 		}
-		switch call := stmt.Cmd.(type) {
+		return f, status
+	}
+	emit := func(agent string, f shellFlow, uncertain bool) {
+		if f.reach == Dead {
+			return
+		}
+		r := f.reach
+		if uncertain {
+			r = possibleReach(r)
+		}
+		out = append(out, LaunchCommand{Agent: agent, Dirs: slices.Clone(f.dirs), Unknown: f.unknown, Reach: r, CDGuarded: f.cdGuarded && !uncertain})
+	}
+	run = func(stmt *syntax.Stmt, f shellFlow) (result shellFlow, resultStatus shellStatus) {
+		if f.reach == Dead {
+			return f, statusUnknown
+		}
+		f.dirs = slices.Clone(f.dirs)
+		before := f
+		before.dirs = slices.Clone(f.dirs)
+		if stmt.Background {
+			defer func() { result = before; resultStatus = statusUnknown }()
+		}
+		if stmt.Negated {
+			defer func() {
+				if resultStatus == statusSuccess {
+					resultStatus = statusFailure
+				} else if resultStatus == statusFailure {
+					resultStatus = statusSuccess
+				}
+			}()
+		}
+		switch c := stmt.Cmd.(type) {
 		case *syntax.BinaryCmd:
-			switch call.Op {
-			case syntax.AndStmt:
-				visit(call.X, true)
-				start := len(out)
-				visit(call.Y, true)
-				if !isLiteralCD(call.X) {
-					for i := start; i < len(out); i++ {
-						out[i].Certain = false
+			switch c.Op {
+			case syntax.AndStmt, syntax.OrStmt:
+				left, status := run(c.X, f)
+				rhs := left
+				take := status == statusSuccess
+				if c.Op == syntax.OrStmt {
+					take = status == statusFailure
+				}
+				skip := status == statusFailure
+				if c.Op == syntax.OrStmt {
+					skip = status == statusSuccess
+				}
+				if skip {
+					return left, status
+				}
+				if status == statusUnknown {
+					rhs.reach = possibleReach(f.reach)
+					rhs.cdGuarded = false
+					if c.Op == syntax.AndStmt && isLiteralCD(c.X) {
+						if call, ok := c.X.Cmd.(*syntax.CallExpr); ok {
+							target, _ := launchWord(call.Args[1].Parts)
+							rhs.dirs = nil
+							rhs.unknown = before.unknown
+							for _, d := range before.dirs {
+								resolved := launchWorkdir(d, target)
+								if resolved == "" {
+									rhs.unknown = true
+								} else if !slices.Contains(rhs.dirs, resolved) {
+									rhs.dirs = append(rhs.dirs, resolved)
+								}
+							}
+							if len(before.dirs) == 0 {
+								resolved := launchWorkdir("", target)
+								if resolved != "" {
+									rhs.dirs = []string{resolved}
+									rhs.unknown = false
+								}
+							}
+							if absolute := resolveLaunchDirs(nil, target); len(absolute) > 0 {
+								rhs.dirs = absolute
+								rhs.unknown = false
+							}
+							rhs.cdGuarded = f.reach == Reached && !rhs.unknown
+						}
 					}
 				}
-				if !trusted && dir != before {
-					dir = ""
+				right, rightStatus := run(c.Y, rhs)
+				if take {
+					return right, rightStatus
 				}
-			case syntax.OrStmt:
-				visit(call.X, false)
-				dir = ""
-				start := len(out)
-				visit(call.Y, false)
-				for i := start; i < len(out); i++ {
-					out[i].Certain = false
+				merged := mergeShellFlows(left, right)
+				if right.reach != Dead && !right.mayStop && left.reach == Reached {
+					merged.reach = Reached
 				}
-				dir = ""
+				return merged, statusUnknown
 			case syntax.Pipe, syntax.PipeAll:
-				visit(call.X, false)
-				dir = before
-				visit(call.Y, false)
-				dir = before
+				nested := f
+				nested.reach = possibleReach(f.reach)
+				nested.cdGuarded = false
+				_, _ = run(c.X, nested)
+				_, _ = run(c.Y, nested)
+				return before, statusUnknown
 			}
+		case *syntax.Subshell:
+			nested := f
+			nested.reach = possibleReach(f.reach)
+			nested.unknown = true
+			nested.dirs = nil
+			nested.cdGuarded = false
+			_, _ = list(c.Stmts, nested)
+			return f, statusUnknown
+		case *syntax.IfClause:
+			if len(c.Cond) == 0 {
+				return list(c.Then, f)
+			}
+			cond, st := list(c.Cond, f)
+			if st == statusSuccess {
+				return list(c.Then, cond)
+			}
+			if st == statusFailure {
+				if c.Else != nil {
+					return run(&syntax.Stmt{Cmd: c.Else}, cond)
+				}
+				return cond, statusSuccess
+			}
+			branch := cond
+			branch.reach = possibleReach(cond.reach)
+			branch.cdGuarded = false
+			yes, _ := list(c.Then, branch)
+			no := cond
+			if c.Else != nil {
+				no, _ = run(&syntax.Stmt{Cmd: c.Else}, branch)
+			}
+			merged := mergeShellFlows(yes, no)
+			if !yes.mayStop && !no.mayStop {
+				merged.reach = cond.reach
+			}
+			return merged, statusUnknown
 		case *syntax.CallExpr:
-			args := make([]string, len(call.Args))
-			dynamic := make([]bool, len(call.Args))
-			for i, w := range call.Args {
+			args := make([]string, len(c.Args))
+			dynamic := make([]bool, len(c.Args))
+			for i, w := range c.Args {
 				var ok bool
 				args[i], ok = launchWord(w.Parts)
 				dynamic[i] = !ok
@@ -116,17 +287,13 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 				}
 				if !ok {
 					syntax.Walk(w, func(n syntax.Node) bool {
-						if sub, ok := n.(*syntax.CmdSubst); ok {
-							saved, start := dir, len(out)
-							dir = ""
-							for _, st := range sub.Stmts {
-								visit(st, false)
-							}
-							for i := start; i < len(out); i++ {
-								out[i].Dir = ""
-								out[i].Certain = false
-							}
-							dir = saved
+						if sub, yes := n.(*syntax.CmdSubst); yes {
+							nested := f
+							nested.reach = possibleReach(f.reach)
+							nested.unknown = true
+							nested.dirs = nil
+							nested.cdGuarded = false
+							_, _ = list(sub.Stmts, nested)
 							return false
 						}
 						return true
@@ -134,67 +301,132 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 				}
 			}
 			if len(args) == 0 {
-				return
+				return f, statusUnknown
 			}
 			program := launchProgram(args[0])
-			if program == "cd" || program == "set-location" {
-				if !trusted || len(args) != 2 || dynamic[1] || args[1] == "-" {
-					dir = ""
-				} else {
-					dir = launchWorkdir(dir, args[1])
+			switch program {
+			case "true", ":":
+				return f, statusSuccess
+			case "false":
+				return f, statusFailure
+			case "exit":
+				f.mayStop = true
+				f.reach = Dead
+				return f, statusUnknown
+			case "source", ".":
+				f.mayStop = true
+				f.reach = possibleReach(f.reach)
+				fallthrough
+			case "pushd", "popd":
+				f.unknown = true
+				f.cdGuarded = false
+				f.cwdChanged = true
+				return f, statusUnknown
+			case "cd", "set-location":
+				f.cwdChanged = true
+				if len(args) != 2 || dynamic[1] || args[1] == "-" || strings.HasPrefix(args[1], "~") {
+					f.unknown = true
+					return f, statusUnknown
 				}
-				return
+				for _, d := range before.dirs {
+					target := launchWorkdir(d, args[1])
+					if target == "" {
+						f.unknown = true
+					} else if !slices.Contains(f.dirs, target) {
+						f.dirs = append(f.dirs, target)
+					}
+				}
+				if len(before.dirs) == 0 {
+					target := launchWorkdir("", args[1])
+					if target != "" {
+						f.dirs = append(f.dirs, target)
+					} else {
+						f.unknown = true
+					}
+				}
+				return f, statusUnknown
 			}
 			if (program == "bash" || program == "sh" || program == "zsh") && len(args) >= 3 && (args[1] == "-c" || args[1] == "-lc") && !dynamic[2] {
-				out = append(out, LaunchesFromCommand(args[2], dir)...)
-				return
+				nested, err := syntax.NewParser().Parse(strings.NewReader(args[2]), "")
+				if err == nil {
+					_, _ = list(nested.Stmts, f)
+				} else {
+					for _, agent := range []string{"codex", "claude"} {
+						if strings.Contains(strings.ToLower(args[2]), agent) {
+							emit(agent, f, true)
+						}
+					}
+				}
+				return f, statusUnknown
 			}
 			wrappers := map[string]bool{"sudo": true, "doas": true, "env": true, "command": true, "exec": true, "nohup": true, "time": true, "nice": true, "timeout": true, "stdbuf": true, "setsid": true, "xargs": true, "eval": true, "bash": true, "sh": true, "zsh": true}
 			if wrappers[program] {
 				if program == "eval" && len(args) == 2 && !dynamic[1] {
 					for _, nested := range LaunchesFromCommand(args[1], "") {
-						nested.Certain = false
-						out = append(out, nested)
+						u := f
+						u.unknown = true
+						u.dirs = nil
+						emit(nested.Agent, u, true)
 					}
 				}
 				for i := 1; i < len(args); i++ {
 					for _, agent := range []string{"codex", "claude"} {
 						if launchProgram(args[i]) == agent || dynamic[i] && (i == 1 || i+1 < len(args) || program == "eval" || (program == "bash" || program == "sh" || program == "zsh") && (args[i-1] == "-c" || args[i-1] == "-lc")) {
-							out = append(out, LaunchCommand{Agent: agent})
+							u := f
+							u.unknown = true
+							u.dirs = nil
+							emit(agent, u, true)
 						}
 					}
 				}
-				return
+				if program == "exec" && len(args) > 1 {
+					f.mayStop = true
+					f.reach = possibleReach(f.reach)
+				}
+				if program == "eval" {
+					f.unknown = true
+					f.cdGuarded = false
+					f.cwdChanged = true
+					f.mayStop = true
+					f.reach = possibleReach(f.reach)
+				}
+				return f, statusUnknown
 			}
 			if dynamic[0] {
 				if len(args) > 1 {
-					for _, agent := range []string{"codex", "claude"} {
-						out = append(out, LaunchCommand{Agent: agent})
-					}
+					u := f
+					u.unknown = true
+					u.dirs = nil
+					emit("codex", u, true)
+					emit("claude", u, true)
 				}
-				return
+				return f, statusUnknown
 			}
 			if program != "codex" && program != "claude" {
-				return
+				return f, statusUnknown
 			}
-			workdir := dir
+			launch := f
 			modeAt := -1
 			uncertain := false
 			for i := 1; i < len(args); i++ {
 				if program == "codex" && (args[i] == "-C" || args[i] == "--cd") && i+1 < len(args) {
 					i++
 					if dynamic[i] {
-						workdir = ""
+						launch.dirs = nil
+						launch.unknown = true
+						launch.cdGuarded = false
 					} else {
-						workdir = launchWorkdir(workdir, args[i])
+						launch = setLaunchDir(launch, args[i])
 					}
 					continue
 				}
 				if program == "codex" && strings.HasPrefix(args[i], "--cd=") {
 					if dynamic[i] {
-						workdir = ""
+						launch.dirs = nil
+						launch.unknown = true
+						launch.cdGuarded = false
 					} else {
-						workdir = launchWorkdir(workdir, strings.TrimPrefix(args[i], "--cd="))
+						launch = setLaunchDir(launch, strings.TrimPrefix(args[i], "--cd="))
 					}
 					continue
 				}
@@ -209,36 +441,79 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 					if found {
 						modeAt = i
 					} else if nonLaunch && !uncertain {
-						return
+						return f, statusUnknown
 					}
 				}
 			}
 			if modeAt >= 0 {
-				out = append(out, LaunchCommand{Agent: program, Dir: workdir, Certain: !uncertain})
-				return
+				emit(program, launch, uncertain)
+			} else if uncertain {
+				u := launch
+				u.unknown = true
+				u.dirs = nil
+				emit(program, u, true)
 			}
-			if uncertain {
-				out = append(out, LaunchCommand{Agent: program})
-			}
+			return f, statusUnknown
 		default:
+			mayStop := false
+			cwdChanged := false
 			syntax.Walk(stmt.Cmd, func(n syntax.Node) bool {
 				if st, ok := n.(*syntax.Stmt); ok {
-					saved, start := dir, len(out)
-					dir = ""
-					visit(st, false)
-					for i := start; i < len(out); i++ {
-						out[i].Dir = ""
-						out[i].Certain = false
-					}
-					dir = saved
+					nested := f
+					nested.reach = possibleReach(f.reach)
+					nested.unknown = true
+					nested.dirs = nil
+					nested.cdGuarded = false
+					after, _ := run(st, nested)
+					mayStop = mayStop || after.mayStop
+					cwdChanged = cwdChanged || after.cwdChanged
 					return false
 				}
 				return true
 			})
+			if mayStop {
+				f.mayStop = true
+				f.reach = possibleReach(f.reach)
+			}
+			if cwdChanged {
+				f.unknown = true
+				f.cdGuarded = false
+				f.cwdChanged = true
+			}
 		}
+		if stmt.Background {
+			return before, statusUnknown
+		}
+		return f, statusUnknown
 	}
-	for _, stmt := range file.Stmts {
-		visit(stmt, false)
+	_, _ = list(file.Stmts, initial)
+	return out
+}
+
+func setLaunchDir(f shellFlow, dir string) shellFlow {
+	resolved := resolveLaunchDirs(f.dirs, dir)
+	absolute := len(resolveLaunchDirs(nil, dir)) > 0
+	unknown := len(resolved) == 0 || f.unknown && !absolute
+	if f.cdGuarded && (!slices.Equal(f.dirs, resolved) || unknown) {
+		f.cdGuarded = false
+	}
+	f.dirs, f.unknown = resolved, unknown
+	return f
+}
+
+func resolveLaunchDirs(bases []string, dir string) []string {
+	if strings.HasPrefix(dir, "~") {
+		return nil
+	}
+	if path.IsAbs(strings.ReplaceAll(dir, `\`, "/")) || len(dir) >= 3 && dir[1] == ':' && (dir[2] == '/' || dir[2] == '\\') {
+		return []string{ShellWorkdir("", dir)}
+	}
+	var out []string
+	for _, base := range bases {
+		d := ShellWorkdir(base, dir)
+		if !slices.Contains(out, d) {
+			out = append(out, d)
+		}
 	}
 	return out
 }
