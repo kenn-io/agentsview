@@ -1455,11 +1455,17 @@ func (s *Server) sendSessionFrame(ctx context.Context, stream *SSEStream, id str
 }
 
 func (s *Server) sessionMarker(ctx context.Context, id string, state *db.SessionWatchState) string {
+	type watchState struct {
+		State           string   `json:"state"`
+		PublicID        string   `json:"public_id,omitempty"`
+		Variants        []string `json:"variants,omitempty"`
+		ContentRevision string   `json:"content_revision,omitempty"`
+	}
 	type entry struct {
-		ID      string                `json:"id"`
-		Count   int                   `json:"count"`
-		Version int64                 `json:"version"`
-		State   *db.SessionWatchState `json:"state"`
+		ID      string      `json:"id"`
+		Count   int         `json:"count"`
+		Version int64       `json:"version"`
+		State   *watchState `json:"state"`
 	}
 	identity, hosted := s.db.(db.SessionWatchStateStore)
 	read := func(id string, state *db.SessionWatchState) (entry, bool) {
@@ -1474,7 +1480,11 @@ func (s *Server) sessionMarker(ctx context.Context, id string, state *db.Session
 			}
 			state = &current
 		}
-		return entry{ID: id, Count: count, Version: version, State: state}, true
+		var markerState *watchState
+		if state != nil {
+			markerState = &watchState{State: state.State, PublicID: state.PublicID, Variants: state.Variants, ContentRevision: state.ContentRevision}
+		}
+		return entry{ID: id, Count: count, Version: version, State: markerState}, true
 	}
 	parent, ok := read(id, state)
 	if !ok {

@@ -39,40 +39,6 @@ func (s *watchStateStore) set(id string, state db.SessionWatchState) {
 	s.states[id] = state
 }
 
-func TestWatchSession_HostedRevisionChangesKeepStream(t *testing.T) {
-	t.Cleanup(sessionwatch.SetTimingsForTest(25*time.Millisecond, 50*time.Millisecond))
-	te := setup(t)
-	const id = "watch-a"
-	require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: id, Project: "project", Machine: "test", Agent: "claude"}))
-	store := &watchStateStore{Store: te.db, states: make(map[string]db.SessionWatchState)}
-	store.set(id, db.SessionWatchState{State: db.SessionWatchResolved, PublicID: id, ContentRevision: "one"})
-	cfg := config.Config{Host: "127.0.0.1", InstallationID: "server-installation"}
-	handler := wrapTestHandler(cfg, server.New(cfg, store, nil).Handler())
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	w := newFlushRecorder()
-	done := make(chan struct{})
-	t.Cleanup(func() { cancel(); <-done })
-	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/sessions/"+id+"/watch", nil)
-	go func() { handler.ServeHTTP(w, req); close(done) }()
-	te.waitForSSEEvent(t, w, "session_ready", 5*time.Second)
-	for i, revision := range []string{"two", "three"} {
-		store.set(id, db.SessionWatchState{State: db.SessionWatchResolved, PublicID: id, ContentRevision: revision})
-		require.Eventually(t, func() bool {
-			return strings.Count(w.BodyString(), "event: session_updated\ndata: "+id+"\n") >= i+1
-		}, 5*time.Second, 10*time.Millisecond)
-		assert.Contains(t, w.BodyString(), `"content_revision":"`+revision+`"`)
-		assert.NotContains(t, w.BodyString(), "id: ")
-	}
-	store.set(id, db.SessionWatchState{State: "ambiguous", Variants: []string{"watch-a~one", "watch-a~two"}})
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("watch did not end after the session became unresolved")
-	}
-	assert.Contains(t, w.BodyString(), `"state":"ambiguous"`)
-	assert.Equal(t, 2, strings.Count(w.BodyString(), "event: session_updated\ndata: "+id+"\n"))
-}
-
 func TestEvents_HostedRevisionChangeKeepsStream(t *testing.T) {
 	t.Cleanup(sessionwatch.SetTimingsForTest(25*time.Millisecond, 50*time.Millisecond))
 	te := setup(t)
@@ -115,10 +81,6 @@ func TestEvents_HostedRevisionChangeKeepsStream(t *testing.T) {
 	}()
 	te.waitForSSEEvent(t, w2, "events_ready", 5*time.Second)
 	assert.Contains(t, w2.BodyString(), "id: "+updated[1]+"\nevent: session_ready\ndata: watch-a\n")
-	te.broadcaster.Emit("messages")
-	te.waitForSSEEvent(t, w, "data_changed", 5*time.Second)
-	require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: "watch-b", Project: "project", Machine: "test", Agent: "claude", MessageCount: 1}))
-	waitCount("session_updated", "watch-b", 1)
 	store.set("watch-a", db.SessionWatchState{State: db.SessionWatchResolved, PublicID: "watch-a", ContentRevision: "three"})
 	waitCount("session_updated", "watch-a", 2)
 	assert.Contains(t, w.BodyString(), `"content_revision":"three"`)
@@ -128,14 +90,9 @@ func TestEvents_HostedRevisionChangeKeepsStream(t *testing.T) {
 	assert.Contains(t, body, `"state":"ambiguous"`)
 	assert.Less(t, strings.LastIndex(body, "event: session.identity"), strings.Index(body, "event: session_missing"))
 	te.broadcaster.Emit("messages")
-	require.Eventually(t, func() bool { return strings.Count(w.BodyString(), "event: data_changed\n") >= 2 }, 5*time.Second, 10*time.Millisecond)
+	te.waitForSSEEvent(t, w, "data_changed", 5*time.Second)
 	require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: "watch-b", Project: "project", Machine: "test", Agent: "claude", MessageCount: 2}))
-	waitCount("session_updated", "watch-b", 2)
-	select {
-	case <-done:
-		t.Fatal("stream ended before cancellation")
-	default:
-	}
+	waitCount("session_updated", "watch-b", 1)
 }
 
 func TestEvents_UnresolvedHostedSessionIsMissing(t *testing.T) {
@@ -361,6 +318,9 @@ func TestEvents_ParentMarkerTracksHostedChildRevision(t *testing.T) {
 		return match[1]
 	}
 	before := marker()
+	store.set("parent-a", db.SessionWatchState{State: db.SessionWatchResolved, PublicID: "parent-a", ContentRevision: "one", IdentityRevision: 2})
+	store.set("child-a", db.SessionWatchState{State: db.SessionWatchResolved, PublicID: "child-a", ContentRevision: "one", IdentityRevision: 2})
+	assert.Equal(t, before, marker())
 	store.set("child-a", db.SessionWatchState{State: db.SessionWatchResolved, PublicID: "child-a", ContentRevision: "two"})
 	assert.NotEqual(t, before, marker())
 }

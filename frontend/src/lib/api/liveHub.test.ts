@@ -181,6 +181,29 @@ describe("shared live stream", () => {
     hub.close();
   });
 
+  it("gives a joining tab the latest readiness marker after an update", () => {
+    const hub = new LiveHub();
+    const first = { postMessage: vi.fn() };
+    const joining = { postMessage: vi.fn() };
+    hub.update(first, request("a"));
+    const old = sources[0]!;
+    old.emit("session_ready", "a", "1:x");
+    old.emit("events_ready", "{}");
+    old.emit("session_updated", "a", "2:y");
+    hub.update(joining, request("a"));
+    expect(joining.postMessage).toHaveBeenCalledWith({
+      type: "session_ready",
+      data: "a",
+      id: "2:y",
+    });
+    joining.postMessage.mockClear();
+    hub.update({ postMessage: vi.fn() }, request("b"));
+    vi.advanceTimersByTime(250);
+    sources[1]!.emit("session_ready", "a", "2:y");
+    expect(joining.postMessage).not.toHaveBeenCalled();
+    hub.close();
+  });
+
   it.each(["before readiness", "between readiness and timing", "after leaving and rejoining"])(
     "delivers session state to a tab joining mid-handoff: %s",
     (when) => {

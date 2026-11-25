@@ -211,6 +211,13 @@ export class LiveHub {
           this.ready.set(session ?? "", frame);
           if (type === "session_missing") this.timing.delete(session ?? "");
         }
+        if (
+          type === "session_updated" &&
+          session &&
+          this.ready.get(session)?.type === "session_ready"
+        ) {
+          this.ready.set(session, { type: "session_ready", data, id: frame.id });
+        }
         if (type === "session.timing" && session) this.timing.set(session, frame);
       });
     }
