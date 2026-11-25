@@ -92,7 +92,6 @@ type httpBackend struct {
 	client            *http.Client
 	longRunningClient *http.Client
 	readOnly          bool
-	localContentScan  bool
 	signed            bool
 	recallQueries     bool
 	docbankEnabled    bool
@@ -130,15 +129,6 @@ func NewHTTPBackend(baseURL, token string, readOnly bool, browserURL string) ser
 	}
 	return b
 }
-
-// NewLocalHTTPBackend connects to the implicitly selected local daemon.
-func NewLocalHTTPBackend(baseURL, token string, readOnly bool, browserURL string) service.SessionService {
-	b := NewHTTPBackend(baseURL, token, readOnly, browserURL).(*httpBackend)
-	b.localContentScan = !readOnly
-	return b
-}
-
-func (b *httpBackend) LocalContentScan() bool { return b.localContentScan }
 
 // NewHTTPBackendForServer constructs a backend whose advertised capabilities
 // are limited by metadata probed from an explicitly selected daemon.

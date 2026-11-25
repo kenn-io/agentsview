@@ -560,7 +560,6 @@ func TestContentSearchContextBackend(t *testing.T) {
 		bounded bool
 	}{
 		{"local", service.NewDirectBackend(d, nil), true},
-		{"read-only sqlite", service.NewReadOnlyBackend(d), true},
 		{"read-only remote", service.NewReadOnlyBackend(&fakeContentStore{}), false},
 		{"HTTP", servicehttp.NewHTTPBackend("http://example.org", "", true, ""), false},
 	} {

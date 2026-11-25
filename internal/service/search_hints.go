@@ -15,16 +15,10 @@ const MaxListSessionIDs = 100
 
 // ContentSearchContext shares a deadline across a keyword search and its follow-ups.
 func ContentSearchContext(ctx context.Context, svc SessionService, req ContentSearchRequest) (context.Context, context.CancelFunc) {
-	if boundedContentSearch(svc, req) {
+	if SupportsRecallQueries(svc) && len(req.Concepts) == 0 && db.ContentScanBounded(req.Mode, false) {
 		return db.WithContentScanDeadline(ctx)
 	}
 	return ctx, func() {}
-}
-
-func boundedContentSearch(svc SessionService, req ContentSearchRequest) bool {
-	local, ok := svc.(interface{ LocalContentScan() bool })
-	return ok && local.LocalContentScan() && len(req.Concepts) == 0 &&
-		db.ContentScanBounded(req.Mode, false)
 }
 
 // ContentSearchHint describes a measured reason an empty search can hide matches.

@@ -2696,7 +2696,7 @@ type deadlineContentService struct {
 	local     bool
 }
 
-func (s *deadlineContentService) LocalContentScan() bool { return s.local }
+func (s *deadlineContentService) SupportsRecallQueries() bool { return s.local }
 
 func (s *deadlineContentService) SearchContent(ctx context.Context, req service.ContentSearchRequest) (*service.ContentSearchResult, error) {
 	d, ok := ctx.Deadline()
