@@ -97,7 +97,7 @@ func TestUnpricedChatUpgradeReparsesCodexCloudInPlace(t *testing.T) {
 	database, err := db.OpenIsolated(ctx, path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	needsSync, fullRebuild, err := db.ArchiveResyncState(ctx, path)
+	needsSync, fullRebuild, _, err := db.ArchiveResyncState(ctx, path)
 	require.NoError(t, err)
 	assert.True(t, needsSync)
 	assert.False(t, fullRebuild, "the upgrade must not rebuild the archive")

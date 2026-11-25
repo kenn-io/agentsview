@@ -102,6 +102,8 @@
   "header_actions_keyboard_shortcuts": "Atajos de teclado",
   "header_actions_keyboard_shortcuts_shortcut": "Atajos de teclado (?)",
   "status_bar_archive_stale": "Los resultados del archivo pueden estar desactualizados.",
+  "status_bar_upgrade_pending": "Algunos resultados de sesión pueden estar desactualizados tras una actualización del analizador.",
+  "status_bar_writes_paused": "Los cambios en el archivo están en pausa.",
   "status_bar_archive_rebuilding": "Los resultados del archivo pueden estar desactualizados. Los cambios están pausados hasta que termine la reconstrucción.",
   "status_bar_archive_stale_rebuild": "Los resultados del archivo pueden estar desactualizados. Haz clic para reconstruir.",
   "status_bar_sync_failed": "La sincronización falló",

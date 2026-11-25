@@ -279,7 +279,7 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 				missing, err := database.ListSessionIDsByFilePath(t.Context(), paths[0], "cursor")
 				require.NoError(t, err)
 				require.Empty(t, missing, "main's cached overwritten source remains missing after ordinary sync")
-				needsResync, _, err := db.ArchiveResyncState(t.Context(), database.Path())
+				needsResync, _, _, err := db.ArchiveResyncState(t.Context(), database.Path())
 				require.NoError(t, err)
 				require.True(t, needsResync, "the data-version bump must schedule recovery")
 			}

@@ -2202,9 +2202,15 @@ and its triggers.
 AgentsView migrates the database automatically on startup when the schema
 changes. When a parser upgrade affects only some agents and the archive syncs
 source files, AgentsView reparses those agents' sessions in place and retries
-failed sources on later syncs. Other stale data versions trigger a full resync
-into a fresh temporary database, which copies preserved and orphaned session
-data from the previous database before swapping atomically. If a full resync
+failed sources on later syncs. It serves saved sessions during the reparse.
+The status bar names the parser upgrade when some session results may be out of
+date, and archive-data API responses carry `X-Agentsview-Archive-Stale: true`
+until a successful authoritative pass clears the marker. Writes receive HTTP 503
+with `Retry-After: 5` only while a maintenance worker holds the writer. After an
+incomplete pass, writes resume while the stale warning remains.
+Other stale data versions trigger a full resync into a fresh temporary database,
+which copies preserved and orphaned session data from the previous database
+before swapping atomically. If a full resync
 aborts, AgentsView falls back to an incremental sync and leaves the data-version
 marker stale. The running daemon retries the rebuild after an hour, backing off
 to daily, and a restart also retries.
@@ -2448,11 +2454,11 @@ generation metadata for one or more records, but AgentsView could not derive
 normalized usage totals from them during that sync).
 
 During full parser rebuilds, AgentsView keeps serving the retained archive while
-the dashboard and CLI report stale results. Scoped upgrades and schema repairs
-finish before HTTP readiness: their startup output prints phase and completion
-lines, and `agentsview daemon status` shows the starting PID, elapsed time,
-current phase, progress detail, and log path while the daemon holds the start
-lock.
+the dashboard and CLI report stale results. Scoped upgrades serve saved sessions
+while affected agents reparse. Schema repairs finish before HTTP readiness:
+their startup output prints phase and completion lines. While the daemon holds
+the start lock, `agentsview daemon status` shows the starting PID, elapsed time,
+current phase, progress detail, and log path.
 
 ### Friction Log
 
@@ -2745,8 +2751,9 @@ Check sync status:
 curl http://127.0.0.1:8080/api/v1/sync/status
 ```
 
-The JSON response includes `startup_pending`, `archive_stale`, and (starting
-with daemon API 15) `sync_pending` alongside sync progress. See the
+The JSON response includes `startup_pending`, `archive_stale`, and
+`upgrade_pending`, `writes_paused`, and (starting with daemon API 15)
+`sync_pending` alongside sync progress. See the
 [session usage contract](/docs/session-api/#agentsview-session-usage) for how
 `session usage --wait` uses these states.
 

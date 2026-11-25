@@ -236,3 +236,33 @@ func TestAdvanceScopedDataVersion(t *testing.T) {
 		})
 	}
 }
+
+func TestScopedUpgradePending(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+
+	pending, err := d.ScopedUpgradePending(ctx)
+	require.NoError(t, err)
+	assert.False(t, pending)
+
+	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx,
+			"INSERT INTO stats(key, value) VALUES (?, ?)",
+			scopedUpgradePendingKey, dataVersion,
+		)
+		return err
+	}))
+	pending, err = d.ScopedUpgradePending(ctx)
+	require.NoError(t, err)
+	assert.True(t, pending)
+
+	require.NoError(t, d.CompleteScopedUpgrade(ctx))
+	pending, err = d.ScopedUpgradePending(ctx)
+	require.NoError(t, err)
+	assert.False(t, pending)
+
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	_, err = d.ScopedUpgradePending(canceled)
+	assert.ErrorIs(t, err, context.Canceled)
+}

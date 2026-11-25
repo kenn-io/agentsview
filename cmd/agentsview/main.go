@@ -246,11 +246,11 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	workerAfterListen := false
 	firstImport := false
 	if !cfg.NoSync || archiveOnly {
-		needsResync, fullRebuild, err := db.ArchiveResyncState(ctx, cfg.DBPath)
+		needsResync, fullRebuild, schemaRepair, err := db.ArchiveResyncState(ctx, cfg.DBPath)
 		if err != nil && skipInitialSync {
 			fatal("checking archive before startup: %v", err)
 		}
-		// Scoped upgrades and schema repairs finish before startup publishes readiness.
+		// Schema repairs and full rebuilds retain their existing startup order.
 		startupRebuild = err == nil && fullRebuild
 		if err == nil && !needsResync && !cfg.NoSync && !archiveOnly {
 			firstImport, err = isFirstImport(ctx, cfg)
@@ -264,7 +264,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		if skipInitialSync {
 			skipInitialSync = !needsResync
 		}
-		workerAfterListen = !skipInitialSync && !cfg.NoSync && !archiveOnly && err == nil && !needsResync
+		workerAfterListen = !skipInitialSync && !cfg.NoSync && !archiveOnly && err == nil && !schemaRepair && !fullRebuild
 	}
 	if !startupRebuild && !skipInitialSync && !cfg.NoSync && !testing.Testing() && !workerAfterListen {
 		startupProgress.SetPhase("opening database")

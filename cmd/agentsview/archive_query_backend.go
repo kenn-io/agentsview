@@ -268,11 +268,14 @@ func (b localArchiveQueryBackend) DailyUsage(
 	query dailyUsageQuery,
 ) (dailyUsageReport, error) {
 	ensureFreshData(ctx, b.cfg, b.database, b.skipFreshData)
+	upgradePending, err := b.database.ScopedUpgradePending(ctx)
+	if err != nil || upgradePending {
+		fmt.Fprintln(os.Stderr, apiclient.ArchiveStaleWarning)
+	}
 	ensureUsagePricing(
 		ctx, b.database, b.offline, b.cfg.CustomModelPricing,
 	)
 	filter := localDailyUsageFilter(query)
-	var err error
 	filter.Machine, err = db.ResolveMachineFilter(ctx, b.database, filter.Machine)
 	if err != nil {
 		return dailyUsageReport{}, err
@@ -331,6 +334,7 @@ func (b localArchiveQueryBackend) SessionUsage(
 	)
 
 	stale := b.database.NeedsResync()
+	upgradePending, upgradeErr := b.database.ScopedUpgradePending(ctx)
 	refreshIncomplete := stale && !b.skipFreshData && !query.NoSync
 	if known && !b.skipFreshData && !query.NoSync && !stale {
 		engine := sync.NewEngine(ctx, b.database, sync.EngineConfig{
@@ -381,6 +385,8 @@ func (b localArchiveQueryBackend) SessionUsage(
 	}
 	if stale && !b.skipFreshData && !query.NoSync {
 		fmt.Fprintln(os.Stderr, "warning: archive data version changed; showing stored usage until the archive is rebuilt")
+	} else if upgradeErr != nil || upgradePending {
+		fmt.Fprintln(os.Stderr, apiclient.ArchiveStaleWarning)
 	}
 	if len(u.UnpricedModels) > 0 && !b.offline {
 		refreshed, refErr := pricingrefresh.RefreshIfStale(

@@ -26,6 +26,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/clickhouse"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -1569,6 +1570,173 @@ func TestHumaSyncStatusUsesExistingOnDemandEngine(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, out.Body.Stats)
 	assert.Equal(t, engine.LastSyncStats(), *out.Body.Stats)
+}
+
+func TestScopedUpgradeQueryErrorKeepsFreshnessWarning(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	database := dbtest.OpenTestDBAt(t, dbPath)
+	srv := New(config.Config{
+		Host:         "127.0.0.1",
+		Port:         0,
+		DataDir:      dir,
+		DBPath:       dbPath,
+		WriteTimeout: 30 * time.Second,
+	}, database, nil)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	status, err := srv.humaSyncStatus(ctx, &emptyInput{})
+	require.NoError(t, err)
+	assert.True(t, status.Body.UpgradePending,
+		"a failed marker query must not report the archive as current")
+
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/sessions", nil)
+	recorder := httptest.NewRecorder()
+	srv.archiveStaleMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})).ServeHTTP(recorder, req)
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Equal(t, "true", recorder.Header().Get(apiclient.ArchiveStaleHeader))
+}
+
+type pendingRouteIngestion struct {
+	engine *syncpkg.Engine
+	path   string
+}
+
+func (i *pendingRouteIngestion) EnsureFresh(ctx context.Context) bool {
+	return i.engine.SyncPathsContext(ctx, []string{i.path}) == nil
+}
+
+func (i *pendingRouteIngestion) Pending() bool { return true }
+
+func (i *pendingRouteIngestion) FlushChanges(context.Context) (bool, error) {
+	return false, nil
+}
+
+func TestScopedUpgradePendingAllowsReadCatchup(t *testing.T) {
+	f := newSyncRouteFixture(t)
+	firstPath := f.writeClaudeTranscript(t, "proj/first-session.jsonl", testjsonl.NewSessionBuilder().
+		AddClaudeUser("2026-01-01T00:00:00Z", "first session").
+		AddClaudeAssistant("2026-01-01T00:00:01Z", "reply").
+		AddClaudeUser("2026-01-01T00:00:02Z", "follow up").String())
+	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
+	ingestion := &pendingRouteIngestion{engine: engine, path: firstPath}
+	f.srv.ingestionFreshness = ingestion
+	w := serveJSON(t, f.handler, http.MethodGet, "/api/v1/sessions", nil)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), "first-session")
+
+	path := f.writeClaudeTranscript(t, "proj/new-session.jsonl", testjsonl.NewSessionBuilder().
+		AddClaudeUser("2026-01-01T00:00:00Z", "new session after idle").
+		AddClaudeAssistant("2026-01-01T00:00:01Z", "reply").
+		AddClaudeUser("2026-01-01T00:00:02Z", "follow up").String())
+	require.NoError(t, f.db.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), "INSERT INTO stats(key, value) VALUES ('scoped_upgrade_pending', 1)")
+		return err
+	}))
+	ingestion.path = path
+
+	w = serveJSON(t, f.handler, http.MethodGet, "/api/v1/sessions", nil)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Equal(t, "true", w.Header().Get(apiclient.ArchiveStaleHeader))
+	assert.Contains(t, w.Body.String(), "new-session")
+}
+
+func TestScopedUpgradeSessionSyncRejectsWriterHandoff(t *testing.T) {
+	f := newSyncRouteFixture(t)
+	path := f.writeClaudeSession(t, "proj/session.jsonl", "session during upgrade")
+	require.NoError(t, f.db.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), "INSERT INTO stats(key, value) VALUES ('scoped_upgrade_pending', 1)")
+		return err
+	}))
+	require.NoError(t, f.db.CloseWriter())
+	t.Cleanup(func() { require.NoError(t, f.db.ReopenWriter()) })
+	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
+	f.srv.engine = engine
+	f.srv.sessions = service.NewDirectBackend(f.db, engine)
+	locked, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		done <- engine.RunExclusive(func() error { close(locked); <-release; return nil })
+	}()
+	<-locked
+	payload, err := json.Marshal(service.SyncInput{Path: path})
+	require.NoError(t, err)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/sessions/sync", bytes.NewReader(payload))
+	req.Host = "127.0.0.1:0"
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("Origin", "http://127.0.0.1:0")
+	req.Header.Set("Content-Type", "application/json")
+	response := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		w := httptest.NewRecorder()
+		f.handler.ServeHTTP(w, req)
+		response <- w
+	}()
+	var w *httptest.ResponseRecorder
+	select {
+	case w = <-response:
+	case <-time.After(time.Second):
+	}
+	close(release)
+	require.NoError(t, <-done)
+	if w == nil {
+		<-response
+		require.FailNow(t, "session sync waited for the worker instead of rejecting the request")
+	}
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code, w.Body.String())
+	assert.Equal(t, writerClosedRetryAfterSeconds, w.Header().Get("Retry-After"))
+}
+
+func TestScopedUpgradeDiagnosticRejectsWriterHandoff(t *testing.T) {
+	f := newSyncRouteFixture(t)
+	require.NoError(t, f.db.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), "INSERT INTO stats(key, value) VALUES ('scoped_upgrade_pending', 1)")
+		return err
+	}))
+	require.NoError(t, f.db.CloseWriter())
+	t.Cleanup(func() {
+		if f.db.WriterClosed() {
+			require.NoError(t, f.db.ReopenWriter())
+		}
+	})
+	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
+	f.srv.engine = engine
+	locked, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		done <- engine.RunExclusive(func() error { close(locked); <-release; return nil })
+	}()
+	<-locked
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/diagnostics", strings.NewReader(`{"id":"123e4567-e89b-42d3-a456-426614174000","source":"worker","message":"launch failed"}`))
+	req.Host = "127.0.0.1:0"
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("Origin", "http://127.0.0.1:0")
+	req.Header.Set("Content-Type", "application/json")
+	response := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		w := httptest.NewRecorder()
+		f.handler.ServeHTTP(w, req)
+		response <- w
+	}()
+	var w *httptest.ResponseRecorder
+	select {
+	case w = <-response:
+	case <-time.After(time.Second):
+	}
+	close(release)
+	require.NoError(t, <-done)
+	if w == nil {
+		<-response
+		require.FailNow(t, "diagnostic write waited for the worker instead of rejecting the request")
+	}
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code, w.Body.String())
+	assert.Equal(t, writerClosedRetryAfterSeconds, w.Header().Get("Retry-After"))
+	require.NoError(t, f.db.ReopenWriter())
+	w = serveJSON(t, f.handler, http.MethodPost, "/api/v1/diagnostics", map[string]any{
+		"id": "123e4567-e89b-42d3-a456-426614174000", "source": "worker", "message": "launch failed",
+	})
+	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
 }
 
 func TestHumaSyncSessionLocalNoSyncUsesOnDemandEngine(t *testing.T) {

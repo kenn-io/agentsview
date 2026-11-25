@@ -100,6 +100,8 @@
   "header_actions_keyboard_shortcuts": "Raccourcis clavier",
   "header_actions_keyboard_shortcuts_shortcut": "Raccourcis clavier (?)",
   "status_bar_archive_stale": "Les résultats des archives peuvent être obsolètes.",
+  "status_bar_upgrade_pending": "Certains résultats de session peuvent être obsolètes après une mise à jour de l’analyseur.",
+  "status_bar_writes_paused": "Les modifications de l’archive sont en pause.",
   "status_bar_archive_rebuilding": "Les résultats des archives peuvent être obsolètes. Les modifications sont suspendues jusqu'à la fin de la reconstruction.",
   "status_bar_archive_stale_rebuild": "Les résultats des archives peuvent être obsolètes. Cliquez pour reconstruire.",
   "status_bar_sync_failed": "Échec de la synchronisation",

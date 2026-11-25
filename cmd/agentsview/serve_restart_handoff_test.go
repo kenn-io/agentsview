@@ -188,7 +188,7 @@ func TestServeRestartPreservesSkipInitialSyncAfterArchiveUpgrade(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, database.Close())
 	markArchiveStale(t, dbPath)
-	needsResync, _, err := db.ArchiveResyncState(t.Context(), dbPath)
+	needsResync, _, _, err := db.ArchiveResyncState(t.Context(), dbPath)
 	require.NoError(t, err)
 	require.True(t, needsResync)
 
@@ -231,7 +231,7 @@ func TestServeRestartPreservesSkipInitialSyncAfterArchiveUpgrade(t *testing.T) {
 		}
 		return resp.StatusCode == http.StatusOK && json.UnmarshalRead(resp.Body, &status) == nil && !status.ArchiveStale && !status.StartupPending
 	}, 30*time.Second, 100*time.Millisecond)
-	needsResync, _, err = db.ArchiveResyncState(t.Context(), dbPath)
+	needsResync, _, _, err = db.ArchiveResyncState(t.Context(), dbPath)
 	require.NoError(t, err)
 	require.False(t, needsResync, "archive upgrade must finish before restart")
 	restartAndWait(t, dataDir, base, "")

@@ -1199,10 +1199,11 @@ func TestArchiveResyncState(t *testing.T) {
 			}
 			path := d.Path()
 			require.NoError(t, d.Close())
-			needs, full, err := ArchiveResyncState(t.Context(), path)
+			needs, full, repair, err := ArchiveResyncState(t.Context(), path)
 			require.NoError(t, err)
 			assert.Equal(t, tc.needs, needs)
 			assert.Equal(t, tc.full, full)
+			assert.Equal(t, tc.repair, repair)
 		})
 	}
 }

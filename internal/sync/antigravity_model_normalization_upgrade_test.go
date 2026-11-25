@@ -80,7 +80,7 @@ func TestAntigravityModelNormalizationUpgradeReparsesInPlace(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, archive.Close())
 
-			_, fullRebuild, err := db.ArchiveResyncState(t.Context(), archivePath)
+			_, fullRebuild, _, err := db.ArchiveResyncState(t.Context(), archivePath)
 			require.NoError(t, err)
 			assert.False(t, fullRebuild, "version 186 must reparse Antigravity in place")
 

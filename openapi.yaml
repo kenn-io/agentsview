@@ -8740,9 +8740,17 @@ components:
         sync_pending:
           description: Local ingestion is catching up after an idle period
           type: boolean
+        upgrade_pending:
+          description: Some session results may be out of date after a scoped parser upgrade
+          type: boolean
+        writes_paused:
+          description: Archive changes are paused during a maintenance pass
+          type: boolean
       required:
         - sync_pending
         - archive_stale
+        - upgrade_pending
+        - writes_paused
         - startup_pending
         - last_sync
         - stats

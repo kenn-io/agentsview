@@ -102,6 +102,8 @@
   "header_actions_keyboard_shortcuts": "Klaviatura qısayolları",
   "header_actions_keyboard_shortcuts_shortcut": "Klaviatura qısayolları (?)",
   "status_bar_archive_stale": "Arxiv nəticələri köhnəlmiş ola bilər.",
+  "status_bar_upgrade_pending": "Parser yeniləməsindən sonra bəzi sessiya nəticələri köhnəlmiş ola bilər.",
+  "status_bar_writes_paused": "Arxivdə dəyişikliklər dayandırılıb.",
   "status_bar_archive_rebuilding": "Arxiv nəticələri köhnəlmiş ola bilər. Yenidən qurma bitənədək dəyişikliklər dayandırılıb.",
   "status_bar_archive_stale_rebuild": "Arxiv nəticələri köhnəlmiş ola bilər. Yenidən qurmaq üçün klikləyin.",
   "status_bar_sync_failed": "Sinxronizasiya uğursuz oldu",

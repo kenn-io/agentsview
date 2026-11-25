@@ -100,6 +100,8 @@
   "header_actions_keyboard_shortcuts": "鍵盤快捷鍵",
   "header_actions_keyboard_shortcuts_shortcut": "鍵盤快捷鍵 (?)",
   "status_bar_archive_stale": "封存資料結果可能已過時。",
+  "status_bar_upgrade_pending": "剖析器升級後，部分工作階段結果可能已過時。",
+  "status_bar_writes_paused": "封存資料的變更已暫停。",
   "status_bar_archive_rebuilding": "封存資料結果可能已過時。重建完成前，變更操作已暫停。",
   "status_bar_archive_stale_rebuild": "封存資料結果可能已過時。按一下以重建。",
   "status_bar_sync_failed": "同步失敗",

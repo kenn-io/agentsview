@@ -100,6 +100,8 @@
   "header_actions_keyboard_shortcuts": "键盘快捷键",
   "header_actions_keyboard_shortcuts_shortcut": "键盘快捷键 (?)",
   "status_bar_archive_stale": "存档结果可能已过时。",
+  "status_bar_upgrade_pending": "解析器升级后，部分会话结果可能已过时。",
+  "status_bar_writes_paused": "存档更改已暂停。",
   "status_bar_archive_rebuilding": "存档结果可能已过时。重建完成前，修改操作已暂停。",
   "status_bar_archive_stale_rebuild": "存档结果可能已过时。点击以重建。",
   "status_bar_sync_failed": "同步失败",

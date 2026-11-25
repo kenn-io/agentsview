@@ -754,6 +754,44 @@ describe("SyncStore.remoteUnreachable", () => {
     s.backendDegradedMessage = null;
     s.statusHydrated = false;
     s.syncPending = false;
+    s.upgradePending = false;
+    s.writesPaused = false;
+  });
+
+  it("hydrates freshness and writer pause independently", async () => {
+    sync.serverVersion = {
+      api_version: 31,
+      build_date: "",
+      commit: "abc123",
+      data_version: 1,
+      friction_available: false,
+      friction_build_allowed: false,
+      insight_generation_available: false,
+      kata_available: false,
+      read_only: false,
+      session_stats_available: false,
+      version: "dev",
+    };
+    vi.mocked(api.getSyncStatus).mockResolvedValue({
+      last_sync: "",
+      stats: MOCK_STATS,
+      upgrade_pending: true,
+      writes_paused: true,
+    });
+
+    await sync.loadStatus();
+    expect(sync.upgradePending).toBe(true);
+    expect(sync.writesPaused).toBe(true);
+
+    vi.mocked(api.getSyncStatus).mockResolvedValue({
+      last_sync: "",
+      stats: MOCK_STATS,
+      upgrade_pending: true,
+      writes_paused: false,
+    });
+    await sync.loadStatus();
+    expect(sync.upgradePending).toBe(true);
+    expect(sync.writesPaused).toBe(false);
   });
 
   it("flags unreachable when a remote load fails", async () => {

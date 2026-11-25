@@ -352,7 +352,7 @@ func TestServeCommandMountsWritableServerAtBasePath(t *testing.T) {
 }
 
 func TestServeSkipInitialSyncStillReparsesStaleArchive(t *testing.T) {
-	for _, kind := range []string{"data version", "archive only", "scoped pending", "schema repair"} {
+	for _, kind := range []string{"data version", "archive only", "schema repair"} {
 		t.Run(kind, func(t *testing.T) {
 			cfg := testConfigWithClaudeFixture(t)
 			cfg.Host = "127.0.0.1"
@@ -368,11 +368,7 @@ func TestServeSkipInitialSyncStillReparsesStaleArchive(t *testing.T) {
 			} else {
 				conn, err := sql.Open("sqlite3", cfg.DBPath)
 				require.NoError(t, err)
-				statement := "INSERT INTO stats(key, value) VALUES ('scoped_upgrade_pending', 1)"
-				if kind == "schema repair" {
-					statement = "ALTER TABLE tool_calls DROP COLUMN result_content_length"
-				}
-				_, err = conn.ExecContext(t.Context(), statement)
+				_, err = conn.ExecContext(t.Context(), "ALTER TABLE tool_calls DROP COLUMN result_content_length")
 				require.NoError(t, err)
 				require.NoError(t, conn.Close())
 			}
@@ -446,6 +442,7 @@ func TestServeLegacyImageTextHelperProcess(t *testing.T) {
 	t.Setenv("GH_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
 	t.Setenv("GH_CONFIG_DIR", t.TempDir())
+	t.Setenv(syncWorkerChildEnvVar, "1")
 	localTransport := http.DefaultTransport
 	transport := localTransport.(*http.Transport).Clone()
 	transport.DialContext = func(context.Context, string, string) (net.Conn, error) {
@@ -456,48 +453,94 @@ func TestServeLegacyImageTextHelperProcess(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(data), &cfg))
 	cfg.DBPath = filepath.Join(cfg.DataDir, "sessions.db")
 	cfg.AgentDirs = map[parser.AgentType][]string{parser.AgentClaude: {os.Getenv("AGENTSVIEW_IMAGE_SERVE_SOURCES")}}
+	restore := stubLaunchSyncWorker(t, func(ctx context.Context, cfg config.Config, req syncWorkerRequest, _ func(workerLine)) (workerResult, error) {
+		var out bytes.Buffer
+		err := runSyncWorkerContext(ctx, cfg, req, &out)
+		return decodeSingleResult(t, &out), err
+	})
+	defer restore()
 	original := writeDaemonRuntimeWithAuthAndNoSync
+	type readiness struct {
+		base                      string
+		fullRebuild, schemaRepair bool
+		err                       error
+	}
+	ready := make(chan readiness, 1)
 	writeDaemonRuntimeWithAuthAndNoSync = func(lifetime *daemonLifetime, dataDir, host string, port int, version, browserURL string, readOnly, requireAuth, noSync bool, explicitPort *int, caddyPID ...int) (string, error) {
 		base := fmt.Sprintf("http://%s:%d", host, port)
-		client := &http.Client{Timeout: 10 * time.Second, Transport: localTransport}
-		stale, _, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
+		_, fullRebuild, schemaRepair, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
+		path, writeErr := original(lifetime, dataDir, host, port, version, browserURL, readOnly, requireAuth, noSync, explicitPort, caddyPID...)
+		ready <- readiness{base, fullRebuild, schemaRepair, err}
+		return path, writeErr
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runServe(ctx, cfg, serveOptions{}, 0)
+	}()
+	defer func() { cancel(); <-done }()
+	var state readiness
+	select {
+	case state = <-ready:
+	case <-done:
+		require.FailNow(t, "server stopped before readiness")
+	case <-time.After(20 * time.Second):
+		require.FailNow(t, "server did not become ready")
+	}
+	require.NoError(t, state.err)
+	require.False(t, state.fullRebuild, "full rebuild must finish before readiness")
+	require.False(t, state.schemaRepair, "schema repair must finish before readiness")
+	base := state.base
+	client := &http.Client{Timeout: 10 * time.Second, Transport: localTransport}
+	require.Eventually(t, func() bool {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/sync/status", nil)
 		require.NoError(t, err)
-		require.False(t, stale, "startup reconciliation must finish before readiness")
+		resp, err := client.Do(req)
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		var status struct {
+			StartupPending bool `json:"startup_pending"`
+			UpgradePending bool `json:"upgrade_pending"`
+		}
+		return resp.StatusCode == http.StatusOK && json.UnmarshalRead(resp.Body, &status) == nil && !status.StartupPending && !status.UpgradePending
+	}, 20*time.Second, time.Second)
+	require.Eventually(t, func() bool {
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/sessions/session0/messages", nil)
 		require.NoError(t, err)
 		resp, err := client.Do(req)
-		require.NoError(t, err)
-		body, err := io.ReadAll(resp.Body)
-		require.NoError(t, err)
-		require.NoError(t, resp.Body.Close())
-		require.Equal(t, http.StatusOK, resp.StatusCode)
-		require.Contains(t, string(body), "hello")
-		req, err = http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/sessions/replacement/messages", nil)
-		require.NoError(t, err)
-		resp, err = client.Do(req)
-		require.NoError(t, err)
-		body, err = io.ReadAll(resp.Body)
-		require.NoError(t, err)
-		require.NoError(t, resp.Body.Close())
-		require.Equal(t, http.StatusOK, resp.StatusCode)
-		require.Contains(t, string(body), "updated transcript")
-		if os.Getenv("AGENTSVIEW_IMAGE_SERVE_RESTART") == "1" {
-			require.Eventually(t, func() bool {
-				req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/search?q=invoice+marker&include_one_shot=true", nil)
-				require.NoError(t, err)
-				resp, err := client.Do(req)
-				if err != nil {
-					return false
-				}
-				body, err := io.ReadAll(resp.Body)
-				require.NoError(t, resp.Body.Close())
-				return err == nil && resp.StatusCode == http.StatusOK && strings.Contains(string(body), "retained-image")
-			}, 20*time.Second, time.Second)
+		if err != nil {
+			return false
 		}
-		fmt.Println("archive rebuild complete")
-		return original(lifetime, dataDir, host, port, version, browserURL, readOnly, requireAuth, noSync, explicitPort, caddyPID...)
+		body, err := io.ReadAll(resp.Body)
+		require.NoError(t, resp.Body.Close())
+		return err == nil && resp.StatusCode == http.StatusOK && strings.Contains(string(body), "hello")
+	}, 20*time.Second, time.Second)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/sessions/replacement/messages", nil)
+	require.NoError(t, err)
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Contains(t, string(body), "updated transcript")
+	if os.Getenv("AGENTSVIEW_IMAGE_SERVE_RESTART") == "1" {
+		require.Eventually(t, func() bool {
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/search?q=invoice+marker&include_one_shot=true", nil)
+			require.NoError(t, err)
+			resp, err := client.Do(req)
+			if err != nil {
+				return false
+			}
+			body, err := io.ReadAll(resp.Body)
+			require.NoError(t, resp.Body.Close())
+			return err == nil && resp.StatusCode == http.StatusOK && strings.Contains(string(body), "retained-image")
+		}, 20*time.Second, time.Second)
 	}
-	runServe(t.Context(), cfg, serveOptions{}, 0)
+	fmt.Println("archive rebuild complete")
 }
 
 func TestServeStaleArchiveHelperProcess(t *testing.T) {
@@ -517,7 +560,7 @@ func TestServeStaleArchiveHelperProcess(t *testing.T) {
 	cfg.AgentDirs = map[parser.AgentType][]string{parser.AgentClaude: {os.Getenv("AGENTSVIEW_STALE_SERVE_SOURCES")}}
 	kind := os.Getenv("AGENTSVIEW_STALE_SERVE_KIND")
 	release, launched, rebuilt := make(chan struct{}), make(chan struct{}), make(chan struct{})
-	needsResync, _, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
+	needsResync, _, _, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
 	require.NoError(t, err)
 	backgroundRebuild := kind == "data version" || kind == "archive only" || kind == "" && needsResync
 	if backgroundRebuild {
@@ -581,14 +624,14 @@ func TestServeStaleArchiveHelperProcess(t *testing.T) {
 				if json.UnmarshalRead(resp.Body, &status) != nil || status.Progress != nil {
 					return false
 				}
-				stale, _, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
+				stale, _, _, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
 				return err == nil && !stale
 			}, 20*time.Second, 10*time.Millisecond, "replacement archive must be installed and fresh")
 		}
-		stale, _, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
+		stale, _, _, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
 		require.NoError(t, err)
 		require.False(t, stale, "startup reconciliation must finish before readiness")
-		if kind == "data version" || kind == "scoped pending" || kind == "schema repair" {
+		if kind == "data version" || kind == "schema repair" {
 			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/sessions/session0/messages", nil)
 			require.NoError(t, err)
 			resp, err := client.Do(req)

@@ -2516,7 +2516,7 @@ func TestPrintSessionParentHumanClearAbsent(t *testing.T) {
 }
 
 func TestSessionUsageResolvesMissingIDsBySyncStatus(t *testing.T) {
-	const clearStatus = `{"archive_stale":false,"startup_pending":false,"stats":{}}`
+	const clearStatus = `{"archive_stale":false,"upgrade_pending":false,"writes_paused":false,"startup_pending":false,"stats":{}}`
 	for _, tc := range []struct {
 		name, id, statusBody      string
 		statusCode                int
@@ -2541,6 +2541,12 @@ func TestSessionUsageResolvesMissingIDsBySyncStatus(t *testing.T) {
 			name: "archive rebuild pending", id: "absent",
 			statusBody: `{"archive_stale":true,"startup_pending":false,"stats":{}}`,
 			wantErr:    "session usage is not ready", wantCode: tokenUseExitErr,
+			detailLookups: 1, wantStatusChecks: 1,
+		},
+		{
+			name: "scoped parser upgrade pending", id: "absent",
+			statusBody: `{"archive_stale":false,"upgrade_pending":true,"writes_paused":true,"startup_pending":false,"stats":{}}`,
+			wantErr:    "parser upgrades", wantCode: tokenUseExitErr,
 			detailLookups: 1, wantStatusChecks: 1,
 		},
 		{
@@ -2812,23 +2818,30 @@ func TestSessionUsageWaitPendingFallback(t *testing.T) {
 	originalTimeout := sessionUsageWaitTimeout
 	sessionUsageWaitTimeout = 100 * time.Millisecond
 	t.Cleanup(func() { sessionUsageWaitTimeout = originalTimeout })
-	for _, missing := range []bool{false, true} {
-		t.Run(fmt.Sprintf("missing=%v", missing), func(t *testing.T) {
+	for _, tc := range []struct {
+		name, status string
+		missing      bool
+	}{
+		{name: "stale saved", status: `{"archive_stale":true}`},
+		{name: "stale missing", status: `{"archive_stale":true}`, missing: true},
+		{name: "upgrade pending saved", status: `{"upgrade_pending":true}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			ts, _ := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
 			original := ts.Config.Handler
 			ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/api/v1/sync/status" {
-					writeJSONResponse(w, `{"archive_stale":true}`)
+					writeJSONResponse(w, tc.status)
 					return
 				}
-				if missing && r.URL.Path == "/api/v1/sessions/remote-session" {
+				if tc.missing && r.URL.Path == "/api/v1/sessions/remote-session" {
 					http.NotFound(w, r)
 					return
 				}
 				original.ServeHTTP(w, r)
 			})
 			out, code, err := httpSessionUsageData(t.Context(), ts.URL, "", sessionUsageQuery{SessionID: "remote-session", Wait: true})
-			if missing {
+			if tc.missing {
 				require.ErrorContains(t, err, "waiting for session usage")
 				assert.Nil(t, out)
 				return

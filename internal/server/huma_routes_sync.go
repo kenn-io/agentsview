@@ -43,6 +43,8 @@ func syncEventDescription(op *huma.Operation) {
 type syncStatusResponse struct {
 	SyncPending    bool               `json:"sync_pending" doc:"Local ingestion is catching up after an idle period"`
 	ArchiveStale   bool               `json:"archive_stale" doc:"Results may reflect the archive before a required parser rebuild"`
+	UpgradePending bool               `json:"upgrade_pending" doc:"Some session results may be out of date after a scoped parser upgrade"`
+	WritesPaused   bool               `json:"writes_paused" doc:"Archive changes are paused during a maintenance pass"`
 	StartupPending bool               `json:"startup_pending" doc:"Startup ingestion has not completed successfully"`
 	LastSync       string             `json:"last_sync"`
 	Stats          *syncpkg.SyncStats `json:"stats"`
@@ -197,12 +199,19 @@ func (l *preparedHTTPRebuildLease) Commit() error {
 }
 
 func (s *Server) humaSyncStatus(
-	_ context.Context,
+	ctx context.Context,
 	_ *emptyInput,
 ) (*jsonOutput[syncStatusResponse], error) {
 	engine := s.syncStatusEngine()
+	upgradePending := s.scopedUpgradePending(ctx)
+	writesPaused := s.archiveWritesPaused()
 	if engine == nil {
-		return &jsonOutput[syncStatusResponse]{Body: syncStatusResponse{ArchiveStale: s.archiveStale(), SyncPending: s.syncPending()}}, nil
+		return &jsonOutput[syncStatusResponse]{Body: syncStatusResponse{
+			ArchiveStale:   s.archiveStale(),
+			SyncPending:    s.syncPending(),
+			UpgradePending: upgradePending,
+			WritesPaused:   writesPaused,
+		}}, nil
 	}
 	startupPending := s.engine != nil && !s.engine.StartupReconciled()
 	lastSync := engine.LastSync()
@@ -219,6 +228,8 @@ func (s *Server) humaSyncStatus(
 		Body: syncStatusResponse{
 			ArchiveStale:   s.archiveStale(),
 			SyncPending:    s.syncPending(),
+			UpgradePending: upgradePending,
+			WritesPaused:   writesPaused,
 			StartupPending: startupPending,
 			LastSync:       lastSyncStr,
 			Stats:          &stats,
@@ -409,6 +420,24 @@ func (s *Server) syncPending() bool {
 func (s *Server) archiveStale() bool {
 	local, ok := s.db.(*db.DB)
 	return ok && local.NeedsResync()
+}
+
+func (s *Server) scopedUpgradePending(ctx context.Context) bool {
+	local, ok := s.db.(*db.DB)
+	if !ok {
+		return false
+	}
+	pending, err := local.ScopedUpgradePending(ctx)
+	if err != nil {
+		log.Printf("checking pending scoped upgrade: %v", err)
+		return true
+	}
+	return pending
+}
+
+func (s *Server) archiveWritesPaused() bool {
+	local, ok := s.db.(*db.DB)
+	return ok && local.WriterClosed()
 }
 
 // rejectStaleArchiveForSync fails a worker-backed /sync when the archive's data

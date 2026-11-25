@@ -31959,6 +31959,12 @@ type SyncStatusResponse struct {
 
 	// SyncPending Local ingestion is catching up after an idle period
 	SyncPending bool `json:"sync_pending"`
+
+	// UpgradePending Some session results may be out of date after a scoped parser upgrade
+	UpgradePending bool `json:"upgrade_pending"`
+
+	// WritesPaused Archive changes are paused during a maintenance pass
+	WritesPaused bool `json:"writes_paused"`
 }
 
 func (s SyncStatusResponse) Validate() error {

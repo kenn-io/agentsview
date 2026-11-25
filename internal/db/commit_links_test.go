@@ -584,7 +584,7 @@ func TestCommitLinksBackfillArchiveOnlyVersion(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, got.Commits, 1)
 			require.NoError(t, d.Close())
-			needs, rebuild, err := ArchiveResyncState(t.Context(), path)
+			needs, rebuild, _, err := ArchiveResyncState(t.Context(), path)
 			require.NoError(t, err)
 			assert.True(t, needs)
 			assert.True(t, rebuild)

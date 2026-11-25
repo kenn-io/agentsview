@@ -948,12 +948,15 @@ can keep running in the daemon, and canceling daemon startup leaves the
 detached child running.
 
 Full parser rebuilds continue serving the retained archive while rebuilding,
-and CLI reports print a stale warning to stderr. Scoped upgrades and schema
-repairs finish before the daemon serves requests. While waiting for those
-upgrades and repairs at startup, the CLI displays phases and keeps waiting as
+and CLI reports print a stale warning to stderr. Scoped upgrades serve saved
+rows while affected agents reparse, so reports can use those saved rows. Schema
+repairs finish before the daemon serves requests. While waiting for repairs at
+startup, the CLI displays phases and keeps waiting as
 long as progress updates arrive, including when a foreground server starts in
 another terminal. Restart older daemons after upgrading so the usage progress
 endpoint is available.
+During a scoped upgrade, daily reports may use saved totals and print the stale
+warning to stderr until a successful authoritative pass clears the marker.
 
 ```bash
 agentsview report usage daily [flags]
@@ -1356,8 +1359,9 @@ take time.
 `usage daily` reads committed archive data. When it starts a daemon, routine
 source ingestion runs after the daemon is ready. If your report must include
 new source changes, run `agentsview source sync` first. Full parser rebuilds
-continue serving the retained archive with a stale warning, while scoped
-upgrades and schema repairs finish before the daemon serves requests.
+continue serving the retained archive with a stale warning. Scoped upgrades
+serve saved rows while affected agents reparse. Schema repairs finish before
+the daemon serves requests.
 
 `usage statusline` waits for pending startup ingestion to finish before
 querying, even when an earlier daily report started the daemon. After startup
