@@ -1931,6 +1931,9 @@ func TestMusePersonalBackgroundKindUpgradeReparsesInPlace(t *testing.T) {
 	require.NotNil(t, sess)
 	assert.Equal(t, parser.SessionKindMuseBackground, sess.SessionKind)
 	assert.True(t, sess.IsAutomated)
+	var sessions int
+	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT count(*) FROM sessions").Scan(&sessions))
+	assert.Equal(t, 1, sessions, "the reparse keeps the session identity")
 }
 
 func TestClaudeToolResultImageUpgradeReparsesAndIndexes(t *testing.T) {

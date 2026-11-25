@@ -70,8 +70,9 @@ func TestMusePersonalSourceSessionKind(t *testing.T) {
 		wantKind  string
 		wantUsers int
 	}{
-		// Muse starts these runs itself. A run stays background even when a
-		// later injected item, such as an approval, adds user messages.
+		// Muse starts these runs itself. The cron sample opens with a
+		// runtime.chats context item before its first user item, and a later
+		// injected approval adds a second user message.
 		{"scheduler-cron", SessionKindMuseBackground, 2},
 		{"runtime-self-improvement", SessionKindMuseBackground, 1},
 		{"runtime-feed", SessionKindMuseBackground, 1},
@@ -101,13 +102,23 @@ func TestMusePersonalSourceSessionKind(t *testing.T) {
 	}
 }
 
-func TestMusePersonalSessionKindFollowsSequenceOrder(t *testing.T) {
-	cron := `{"type":"item","seq":0,"source":"scheduler.cron","created_at":"2026-10-05T15:04:06Z","item":{"type":"message","role":"user","text":"run"}}` + "\n"
-	chat := `{"type":"item","seq":1,"source":"runtime","created_at":"2026-10-05T15:04:07Z","item":{"type":"message","role":"user","text":"hello"}}` + "\n"
-	p, _ := musePersonalTestProvider(t, chat+cron)
-	sess := musePersonalTestParse(t, p).Results[0].Result.Session
-	assert.Equal(t, SessionKindMuseBackground, sess.SessionKind, "the lowest sequence is the first user item, not the first physical line")
-	assert.Equal(t, "run", sess.FirstMessage)
+func TestMusePersonalSessionKindUsesFirstUserItem(t *testing.T) {
+	item := func(seq int, source, role, text string) string {
+		return fmt.Sprintf(`{"type":"item","seq":%d,"source":%q,"created_at":"2026-10-05T15:04:06Z","item":{"type":"message","role":%q,"text":%q}}`+"\n", seq, source, role, text)
+	}
+	for _, tc := range []struct {
+		name, body, wantKind string
+	}{
+		{"lowest sequence, not first line", item(1, "runtime", "user", "hello") + item(0, "scheduler.cron", "user", "run"), SessionKindMuseBackground},
+		{"background source on a non-user item", item(0, "scheduler.cron", "developer", "context") + item(1, "runtime", "user", "hello"), ""},
+		{"same sequence keeps file order", item(0, "runtime", "user", "hello") + item(0, "scheduler.cron", "user", "run"), ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, _ := musePersonalTestProvider(t, tc.body)
+			sess := musePersonalTestParse(t, p).Results[0].Result.Session
+			assert.Equal(t, tc.wantKind, sess.SessionKind)
+		})
+	}
 }
 
 func TestMusePersonalHeaderFieldsMatchExactJSONNames(t *testing.T) {
