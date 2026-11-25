@@ -19,7 +19,7 @@ func (s *Store) fillFrustrationCounts(ctx context.Context, ids []string, column 
 		chunkCtx, cancel := context.WithTimeout(ctx, frustrationFillChunkTimeout)
 		counts, versions, err := s.scanFrustrationCounts(chunkCtx, chunk, column)
 		if err == nil {
-			err = s.storeFrustrationCounts(chunkCtx, versions, counts, column)
+			err = s.storeFrustrationCountsWithLockTimeout(chunkCtx, versions, counts, column)
 		}
 		cancel()
 		if err != nil && firstErr == nil {

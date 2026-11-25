@@ -3,9 +3,12 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
+	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/signals"
 )
@@ -108,14 +111,15 @@ func (s *Store) drainFrustrationSaves(queue *frustrationSaveQueue) {
 		queue.mu.Unlock()
 		// Saves outlive requests but stop when the store closes.
 		ctx, cancel := context.WithTimeout(queue.ctx, frustrationFillChunkTimeout)
-		err := s.storeFrustrationCounts(ctx, save.versions, save.counts, save.column)
-		timedOut := err != nil && ctx.Err() == context.DeadlineExceeded
+		err := s.storeFrustrationCountsWithLockTimeout(ctx, save.versions, save.counts, save.column)
+		pgErr, isPGError := errors.AsType[*pgconn.PgError](err)
+		retry := err != nil && (ctx.Err() == context.DeadlineExceeded || (isPGError && pgErr.Code == "55P03"))
 		cancel()
-		if err != nil && !isUndefinedTable(err) && !IsReadOnlyError(err) && queue.ctx.Err() == nil {
+		if err != nil && !retry && !isUndefinedTable(err) && !IsReadOnlyError(err) && queue.ctx.Err() == nil {
 			log.Printf("storing frustration counts: %v", err)
 		}
 		queue.mu.Lock()
-		if timedOut && !queue.closed {
+		if retry && !queue.closed {
 			queue.pending = append(queue.pending, save)
 		} else {
 			for id, version := range save.versions {
@@ -123,10 +127,43 @@ func (s *Store) drainFrustrationSaves(queue *frustrationSaveQueue) {
 			}
 		}
 		queue.mu.Unlock()
+		if retry {
+			// Give foreground reads a chance to acquire the connection before retrying.
+			timer := time.NewTimer(250 * time.Millisecond)
+			select {
+			case <-timer.C:
+			case <-queue.ctx.Done():
+			}
+			timer.Stop()
+		}
 	}
 }
 
+func (s *Store) storeFrustrationCountsWithLockTimeout(ctx context.Context, versions map[string]string, counts map[string]int, column string) error {
+	if s.cockroach {
+		return s.storeFrustrationCounts(ctx, versions, counts, column)
+	}
+	tx, err := s.DB().BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SET LOCAL lock_timeout = '100ms'`); err != nil {
+		return err
+	}
+	if err := writeFrustrationCounts(ctx, tx, versions, counts, column); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (s *Store) storeFrustrationCounts(ctx context.Context, versions map[string]string, counts map[string]int, versionColumn string) error {
+	return writeFrustrationCounts(ctx, s.DB(), versions, counts, versionColumn)
+}
+
+func writeFrustrationCounts(ctx context.Context, pg interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, versions map[string]string, counts map[string]int, versionColumn string) error {
 	ids := make([]string, 0, len(versions))
 	tokens := make([]string, 0, len(versions))
 	values := make([]int32, 0, len(versions))
@@ -135,7 +172,7 @@ func (s *Store) storeFrustrationCounts(ctx context.Context, versions map[string]
 		tokens = append(tokens, version)
 		values = append(values, int32(counts[id]))
 	}
-	_, err := s.DB().ExecContext(ctx, `INSERT INTO session_frustration_counts (session_id, session_version, rules_version, marker_count)
+	_, err := pg.ExecContext(ctx, `INSERT INTO session_frustration_counts (session_id, session_version, rules_version, marker_count)
         SELECT t.id, t.version, $4, t.count FROM unnest($1::text[], $2::text[], $3::integer[]) AS t(id, version, count)
         JOIN sessions s ON s.id = t.id AND `+frustrationSessionVersion("s."+versionColumn)+` = t.version
         ORDER BY t.id

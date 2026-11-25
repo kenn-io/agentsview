@@ -327,6 +327,82 @@ func TestFrustrationSavesWithLockedCount(t *testing.T) {
 	require.Zero(t, counter.scans.Load())
 }
 
+func TestFrustrationSaveYieldsSingleConnection(t *testing.T) {
+	t.Parallel()
+	server, _ := testPGServer(t)
+	if server.cockroach {
+		t.Skip("lock wait inspection requires PostgreSQL")
+	}
+	f := newFrustrationFixture(t, "agentsview")
+	store := f.open(t)
+	store.DB().SetMaxOpenConns(1)
+	_, versions, err := store.signalRows(f.ctx, db.AnalyticsFilter{}, f.versionColumn)
+	require.NoError(t, err)
+	_, err = f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts(session_id,session_version,rules_version,marker_count) VALUES ('one','stale',0,0)`)
+	require.NoError(t, err)
+	tx, err := f.pg.BeginTx(f.ctx, nil)
+	require.NoError(t, err)
+	defer tx.Rollback()
+	_, err = tx.ExecContext(f.ctx, `SELECT 1 FROM session_frustration_counts WHERE session_id='one' FOR UPDATE`)
+	require.NoError(t, err)
+	var blocker int
+	require.NoError(t, tx.QueryRowContext(f.ctx, `SELECT pg_backend_pid()`).Scan(&blocker))
+	store.storeFrustrationCountsForRead(versions, map[string]int{"one": 1, "two": 1}, f.versionColumn)
+	require.Eventually(t, func() bool {
+		var blocked bool
+		err := f.pg.QueryRowContext(f.ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND $1=ANY(pg_blocking_pids(pid)))`, blocker).Scan(&blocked)
+		return err == nil && blocked
+	}, 10*time.Second, 10*time.Millisecond)
+	ctx, cancel := context.WithTimeout(f.ctx, 3*time.Second)
+	defer cancel()
+	evidence, err := store.GetAnalyticsSignalSessions(ctx, db.AnalyticsFilter{}, "frustration_marker_count", 10)
+	require.NoError(t, err)
+	require.Len(t, evidence.Sessions, 2)
+	require.NoError(t, tx.Rollback())
+	waitFrustrationSave(store)
+	var count int
+	require.NoError(t, f.pg.QueryRowContext(f.ctx, `SELECT count(*) FROM session_frustration_counts WHERE rules_version=$1 AND marker_count=1`, frustrationMarkerRulesVersion).Scan(&count))
+	require.Equal(t, 2, count)
+}
+
+func TestFrustrationFillYieldsSingleConnection(t *testing.T) {
+	t.Parallel()
+	server, _ := testPGServer(t)
+	if server.cockroach {
+		t.Skip("lock wait inspection requires PostgreSQL")
+	}
+	f := newFrustrationFixture(t, "agentsview")
+	store := f.open(t)
+	store.DB().SetMaxOpenConns(1)
+	_, err := f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts(session_id,session_version,rules_version,marker_count) VALUES ('one','stale',0,0)`)
+	require.NoError(t, err)
+	tx, err := f.pg.BeginTx(f.ctx, nil)
+	require.NoError(t, err)
+	defer tx.Rollback()
+	_, err = tx.ExecContext(f.ctx, `SELECT 1 FROM session_frustration_counts WHERE session_id='one' FOR UPDATE`)
+	require.NoError(t, err)
+	var blocker int
+	require.NoError(t, tx.QueryRowContext(f.ctx, `SELECT pg_backend_pid()`).Scan(&blocker))
+	done := make(chan error, 1)
+	go func() { done <- store.fillFrustrationCounts(f.ctx, []string{"one", "two"}, f.versionColumn) }()
+	require.Eventually(t, func() bool {
+		var blocked bool
+		err := f.pg.QueryRowContext(f.ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND $1=ANY(pg_blocking_pids(pid)))`, blocker).Scan(&blocked)
+		return err == nil && blocked
+	}, 10*time.Second, 10*time.Millisecond)
+	ctx, cancel := context.WithTimeout(f.ctx, 3*time.Second)
+	defer cancel()
+	evidence, err := store.GetAnalyticsSignalSessions(ctx, db.AnalyticsFilter{}, "frustration_marker_count", 10)
+	require.NoError(t, err)
+	require.Len(t, evidence.Sessions, 2)
+	require.ErrorContains(t, <-done, "lock timeout")
+	require.NoError(t, tx.Rollback())
+	waitFrustrationSave(store)
+	var count int
+	require.NoError(t, f.pg.QueryRowContext(f.ctx, `SELECT count(*) FROM session_frustration_counts WHERE rules_version=$1 AND marker_count=1`, frustrationMarkerRulesVersion).Scan(&count))
+	require.Equal(t, 2, count)
+}
+
 func TestFrustrationSaveShutdown(t *testing.T) {
 	t.Parallel()
 	server, _ := testPGServer(t)
@@ -533,7 +609,11 @@ func TestFrustrationFillSkipsTimedOutChunk(t *testing.T) {
 	defer cancel()
 	select {
 	case err := <-fillDone:
-		require.ErrorIs(t, err, context.DeadlineExceeded)
+		if f.versionColumn == "xmin" {
+			require.ErrorContains(t, err, "lock timeout")
+		} else {
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+		}
 	case <-ctx.Done():
 		t.Fatal("fill did not finish after the chunk deadline")
 	}
