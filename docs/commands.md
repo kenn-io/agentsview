@@ -2502,12 +2502,11 @@ the skill without inspecting or changing the MCP entry.
 
 The SessionStart hook refreshes memory and links runs to their launching
 session on Linux and Windows. Parent linking on macOS is unverified. Codex
-launchers use the state index open in the launcher when available. If indexes
-in multiple directories are open, the run stays unlinked. Codex requires you to
-trust a new hook in `/hooks`.
+launchers link to the thread. Codex requires you to trust a new hook in
+`/hooks`.
 
-In a ClickHouse sidebar, native automated subagents may also appear under a
-parent because the mirror does not store launcher provenance.
+A ClickHouse sidebar does not show automated launched runs because the mirror
+does not store launcher links.
 
 Setup registers `agentsview mcp --profile memory` without server flags. To use
 a remote archive, set `AGENTSVIEW_MEMORY_SERVER` or `AGENTSVIEW_MEMORY_PG`

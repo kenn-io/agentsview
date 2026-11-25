@@ -7,14 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"testing/synctest"
-	"time"
 
-	"github.com/shirou/gopsutil/v4/process"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,7 +19,6 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/service"
-	"go.kenn.io/agentsview/internal/testutil"
 )
 
 const (
@@ -37,10 +33,8 @@ type fakeProcess struct {
 	name string
 	// args is the command line after the program name. Unset, an agent runs
 	// one-shot (-p or exec); set it to an empty slice for an interactive run.
-	args  []string
-	env   []string
-	cwd   string
-	files []process.OpenFilesStat
+	args []string
+	env  []string
 }
 
 func stubLaunchProcesses(t *testing.T, chain ...fakeProcess) {
@@ -58,7 +52,7 @@ func stubLaunchProcesses(t *testing.T, chain ...fakeProcess) {
 		if i == len(chain)-1 {
 			next = 1
 		}
-		return launchProcess{Name: p.name, PPID: next, OpenFiles: func(context.Context) ([]process.OpenFilesStat, error) { return p.files, nil }, Cwd: func(context.Context) (string, error) { return p.cwd, nil }, Cmdline: func(context.Context) ([]string, error) {
+		return launchProcess{Name: p.name, PPID: next, Cmdline: func(context.Context) ([]string, error) {
 			if p.args != nil {
 				return append([]string{p.name}, p.args...), nil
 			}
@@ -129,13 +123,7 @@ func TestCaptureLaunchParentLinksEachProviderPair(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			database := stubLaunchArchive(t)
-			chain := tc.chain
-			if strings.HasPrefix(tc.wantParent, "codex:") {
-				home := t.TempDir()
-				writeCodexState(t, home, codexLauncherID, codexLauncherID)
-				chain[1].env = append(chain[1].env, "CODEX_HOME="+home)
-			}
-			stubLaunchProcesses(t, chain...)
+			stubLaunchProcesses(t, tc.chain...)
 			stderr, err := runLaunchHook(t, sessionStartPayload("startup"))
 			require.NoError(t, err, stderr)
 
@@ -180,11 +168,7 @@ func TestCaptureLaunchParentRecordsNothing(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			database := stubLaunchArchive(t)
-			if tc.name == "interactive claude with stale ID" || tc.name == "resume event" || tc.name == "clear event" || tc.name == "compact event" {
-				home := t.TempDir()
-				writeCodexState(t, home, codexLauncherID, codexLauncherID)
-				tc.chain[1].env = append(tc.chain[1].env, "CODEX_HOME="+home)
-			}
+
 			stubLaunchProcesses(t, tc.chain...)
 			_, err := runLaunchHook(t, tc.payload)
 			if tc.wantErr {
@@ -205,11 +189,10 @@ func TestCaptureLaunchParentWithoutCodexHome(t *testing.T) {
 	}
 	t.Setenv(homeEnv, "")
 	for _, tc := range []struct {
-		name, launcher, sessionEnv string
-		wantLink                   bool
+		name, launcher, sessionEnv, wantParent string
 	}{
-		{"codex", "codex", "CODEX_THREAD_ID=" + codexLauncherID, false},
-		{"claude", "claude", "CLAUDE_CODE_SESSION_ID=" + claudeLauncherID, true},
+		{"codex", "codex", "CODEX_THREAD_ID=" + codexLauncherID, "codex:" + codexLauncherID},
+		{"claude", "claude", "CLAUDE_CODE_SESSION_ID=" + claudeLauncherID, claudeLauncherID},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			database := stubLaunchArchive(t)
@@ -219,12 +202,8 @@ func TestCaptureLaunchParentWithoutCodexHome(t *testing.T) {
 			_, err := runLaunchHook(t, sessionStartPayload("startup"))
 			require.NoError(t, err)
 			link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
-			if tc.wantLink {
-				require.NoError(t, err)
-				assert.Equal(t, claudeLauncherID, link.ParentSessionID)
-			} else {
-				require.ErrorIs(t, err, sql.ErrNoRows)
-			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantParent, link.ParentSessionID)
 		})
 	}
 }
@@ -300,14 +279,12 @@ func TestCaptureLaunchParentWriteRetryPolicy(t *testing.T) {
 		{"read-only backend", db.ErrReadOnly, 1 << 30, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			home := t.TempDir()
-			writeCodexState(t, home, codexLauncherID, codexLauncherID)
 			synctest.Test(t, func(t *testing.T) {
 				annotator := &flakyAnnotator{failures: tc.failures, err: tc.err}
 				stubFlakyLaunchArchive(t, annotator)
 				stubLaunchProcesses(t,
 					fakeProcess{name: "sh"},
-					fakeProcess{name: "claude", env: []string{"CODEX_THREAD_ID=" + codexLauncherID, "CODEX_HOME=" + home}},
+					fakeProcess{name: "claude", env: []string{"CODEX_THREAD_ID=" + codexLauncherID}},
 					fakeProcess{name: "codex"},
 				)
 				ctx, cancel := context.WithTimeout(t.Context(), memorySessionStartTimeout)
@@ -329,228 +306,6 @@ func TestCaptureLaunchParentWriteRetryPolicy(t *testing.T) {
 					assert.Equal(t, tc.wantCalls, annotator.calls)
 				}
 			})
-		})
-	}
-}
-
-func writeCodexState(t *testing.T, home, thread, page string) {
-	t.Helper()
-	testutil.WriteCodexState(t, home, "state_5.sqlite", thread, page)
-}
-
-func TestCaptureLaunchParentCodexHomeAndPage(t *testing.T) {
-	for _, tc := range []struct {
-		name                                string
-		childHome, launcherHome, sqliteHome bool
-		page                                string
-	}{
-		{"launcher home", true, true, false, codexLauncherID + "_44444444-4444-4444-8444-444444444444"},
-		{"sqlite home", false, true, true, codexLauncherID},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			childHome, launcherHome, sqliteHome := t.TempDir(), t.TempDir(), t.TempDir()
-			home := childHome
-			if tc.launcherHome {
-				home = launcherHome
-			}
-			if tc.sqliteHome {
-				home = sqliteHome
-			}
-			writeCodexState(t, home, codexLauncherID, tc.page)
-			childEnv := []string{"CODEX_THREAD_ID=" + codexLauncherID}
-			if tc.childHome {
-				childEnv = append(childEnv, "CODEX_HOME="+childHome)
-			}
-			launcherEnv := []string{}
-			if tc.launcherHome {
-				launcherEnv = append(launcherEnv, "CODEX_HOME="+launcherHome)
-			}
-			if tc.sqliteHome {
-				launcherEnv = append(launcherEnv, "CODEX_SQLITE_HOME="+sqliteHome)
-			}
-			database := stubLaunchArchive(t)
-			chain := []fakeProcess{{name: "sh"}, {name: "claude", env: childEnv}}
-			if tc.launcherHome {
-				chain = append(chain, fakeProcess{name: "codex", env: launcherEnv})
-			}
-			stubLaunchProcesses(t, chain...)
-			_, err := runLaunchHook(t, sessionStartPayload("startup"))
-			require.NoError(t, err)
-			link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
-			require.NoError(t, err)
-			assert.Equal(t, "codex:"+tc.page, link.ParentSessionID)
-		})
-	}
-}
-
-func TestLauncherCodexIndexHomeOpenFile(t *testing.T) {
-	home := t.TempDir()
-	file, err := os.Create(filepath.Join(home, "state_5.sqlite"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, file.Close()) })
-	launcher, err := lookupGopsutilProcess(t.Context(), int32(os.Getpid()))
-	require.NoError(t, err)
-	got, ambiguous := launcherCodexIndexHome(t.Context(), launcher)
-	require.False(t, ambiguous)
-	require.NotEmpty(t, got)
-	wantInfo, err := os.Stat(home)
-	require.NoError(t, err)
-	gotInfo, err := os.Stat(got)
-	require.NoError(t, err)
-	assert.True(t, os.SameFile(wantInfo, gotInfo))
-}
-
-func TestLauncherCodexIndexHomeAmbiguous(t *testing.T) {
-	first, second := t.TempDir(), t.TempDir()
-	launcher := launchProcess{OpenFiles: func(context.Context) ([]process.OpenFilesStat, error) {
-		return []process.OpenFilesStat{
-			{Path: filepath.Join(first, "state_5.sqlite")},
-			{Path: filepath.Join(second, "state_6.sqlite")},
-		}, nil
-	}}
-	home, ambiguous := launcherCodexIndexHome(t.Context(), launcher)
-	assert.Empty(t, home)
-	assert.True(t, ambiguous)
-}
-
-func TestCaptureLaunchParentCodexAmbiguousIndexes(t *testing.T) {
-	home, first, second := t.TempDir(), t.TempDir(), t.TempDir()
-	writeCodexState(t, home, codexLauncherID, codexLauncherID)
-	database := stubLaunchArchive(t)
-	stubLaunchProcesses(t,
-		fakeProcess{name: "sh"},
-		fakeProcess{name: "claude", env: []string{"CODEX_THREAD_ID=" + codexLauncherID}},
-		fakeProcess{name: "codex", env: []string{"CODEX_HOME=" + home}, files: []process.OpenFilesStat{
-			{Path: filepath.Join(first, "state_5.sqlite")},
-			{Path: filepath.Join(second, "state_5.sqlite")},
-		}},
-	)
-	_, err := runLaunchHook(t, sessionStartPayload("startup"))
-	require.NoError(t, err)
-	_, err = database.GetSessionExternalParent(t.Context(), childSessionID)
-	require.ErrorIs(t, err, sql.ErrNoRows)
-}
-
-func TestCaptureLaunchParentCodexOpenIndex(t *testing.T) {
-	home, state := t.TempDir(), t.TempDir()
-	page := codexLauncherID + "_44444444-4444-4444-8444-444444444444"
-	writeCodexState(t, home, codexLauncherID, codexLauncherID)
-	writeCodexState(t, state, codexLauncherID, page)
-	database := stubLaunchArchive(t)
-	stubLaunchProcesses(t,
-		fakeProcess{name: "sh"},
-		fakeProcess{name: "claude", env: []string{"CODEX_THREAD_ID=" + codexLauncherID}},
-		fakeProcess{name: "codex", env: []string{"CODEX_HOME=" + home}, files: []process.OpenFilesStat{{Path: filepath.Join(state, "state_5.sqlite")}}},
-	)
-	_, err := runLaunchHook(t, sessionStartPayload("startup"))
-	require.NoError(t, err)
-	link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
-	require.NoError(t, err)
-	assert.Equal(t, "codex:"+page, link.ParentSessionID)
-}
-
-func TestCaptureLaunchParentCodexConfigOverride(t *testing.T) {
-	home, state := t.TempDir(), t.TempDir()
-	page := codexLauncherID + "_44444444-4444-4444-8444-444444444444"
-	writeCodexState(t, home, codexLauncherID, codexLauncherID)
-	writeCodexState(t, state, codexLauncherID, page)
-	database := stubLaunchArchive(t)
-	stubLaunchProcesses(t,
-		fakeProcess{name: "sh"},
-		fakeProcess{name: "claude", env: []string{"CODEX_THREAD_ID=" + codexLauncherID}},
-		fakeProcess{name: "codex", env: []string{"CODEX_HOME=" + home}, args: []string{"-c", fmt.Sprintf("sqlite_home=%q", state)}},
-	)
-	_, err := runLaunchHook(t, sessionStartPayload("startup"))
-	require.NoError(t, err)
-	link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
-	require.NoError(t, err)
-	assert.Equal(t, "codex:"+page, link.ParentSessionID)
-}
-
-func TestCaptureLaunchParentCodexRelativeOverride(t *testing.T) {
-	for _, tc := range []struct {
-		name, env string
-		args      []string
-		dir       string
-	}{
-		{"config cwd", "", []string{"-c", "sqlite_home=state"}, "state"},
-		{"config cd", "", []string{"--cd", "project", "-c", "sqlite_home=state"}, filepath.Join("project", "state")},
-		{"environment cwd", " state ", []string{}, "state"},
-		{"environment cd", "state", []string{"-C", "project"}, filepath.Join("project", "state")},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			home, cwd := t.TempDir(), t.TempDir()
-			state := filepath.Join(cwd, tc.dir)
-			require.NoError(t, os.MkdirAll(state, 0o700))
-			page := codexLauncherID + "_44444444-4444-4444-8444-444444444444"
-			writeCodexState(t, home, codexLauncherID, codexLauncherID)
-			writeCodexState(t, state, codexLauncherID, page)
-			database := stubLaunchArchive(t)
-			stubLaunchProcesses(t,
-				fakeProcess{name: "sh"},
-				fakeProcess{name: "claude", env: []string{"CODEX_THREAD_ID=" + codexLauncherID}},
-				fakeProcess{name: "codex", env: []string{"CODEX_HOME=" + home, "CODEX_SQLITE_HOME=" + tc.env}, cwd: cwd, args: tc.args},
-			)
-			_, err := runLaunchHook(t, sessionStartPayload("startup"))
-			require.NoError(t, err)
-			link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
-			require.NoError(t, err)
-			assert.Equal(t, "codex:"+page, link.ParentSessionID)
-		})
-	}
-}
-
-func TestCaptureLaunchParentCodexRelativeHomeWithoutLauncherDirectory(t *testing.T) {
-	home := t.TempDir()
-	database := stubLaunchArchive(t)
-	stubLaunchProcesses(t,
-		fakeProcess{name: "sh"},
-		fakeProcess{name: "claude", env: []string{"CODEX_THREAD_ID=" + codexLauncherID, "CODEX_HOME=" + home, "CODEX_SQLITE_HOME=state"}},
-	)
-	_, err := runLaunchHook(t, sessionStartPayload("startup"))
-	require.ErrorContains(t, err, "launcher directory unavailable")
-	_, err = database.GetSessionExternalParent(t.Context(), childSessionID)
-	require.ErrorIs(t, err, sql.ErrNoRows)
-}
-
-func TestCaptureLaunchParentCodexSQLiteHomePaths(t *testing.T) {
-	for _, tc := range []struct {
-		name            string
-		tilde, absolute bool
-	}{
-		{"relative to Codex home", false, false},
-		{"home shorthand", true, false},
-		{"absolute config overrides environment", false, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			codexHome, userHome := t.TempDir(), t.TempDir()
-			t.Setenv("HOME", userHome)
-			t.Setenv("USERPROFILE", userHome)
-			base := codexHome
-			path := "state"
-			if tc.tilde {
-				path = filepath.Join("~", "state")
-				base = userHome
-			}
-			if tc.absolute {
-				path = filepath.Join(codexHome, "state")
-			}
-			state := filepath.Join(base, "state")
-			require.NoError(t, os.Mkdir(state, 0o700))
-			writeCodexState(t, state, codexLauncherID, codexLauncherID)
-			require.NoError(t, os.WriteFile(filepath.Join(codexHome, "config.toml"), fmt.Appendf(nil, "sqlite_home = %q\n", path), 0o600))
-			database := stubLaunchArchive(t)
-			stubLaunchProcesses(t, fakeProcess{name: "sh"},
-				fakeProcess{name: "claude", env: []string{"CODEX_THREAD_ID=" + codexLauncherID}},
-				fakeProcess{name: "codex", env: []string{"CODEX_HOME=" + codexHome, "CODEX_SQLITE_HOME=" + t.TempDir()}})
-			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-			defer cancel()
-			cmd := &cobra.Command{}
-			cmd.SetIn(strings.NewReader(sessionStartPayload("startup")))
-			require.NoError(t, captureLaunchParent(ctx, cmd))
-			link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
-			require.NoError(t, err)
-			assert.Equal(t, "codex:"+codexLauncherID, link.ParentSessionID)
 		})
 	}
 }
@@ -592,206 +347,4 @@ func TestMemorySessionStartInvalidModeDoesNotCapture(t *testing.T) {
 	require.NoError(t, cmd.Execute())
 	_, err := database.GetSessionExternalParent(t.Context(), childSessionID)
 	require.ErrorIs(t, err, sql.ErrNoRows)
-}
-
-func TestCaptureLaunchParentCodexIndexAppears(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		setup func(t *testing.T, home string)
-		ready func(t *testing.T, home, page string)
-	}{
-		{
-			name: "index",
-			ready: func(t *testing.T, home, page string) {
-				t.Helper()
-				writeCodexState(t, home, codexLauncherID, page)
-			},
-		},
-		{
-			name: "initializing",
-			setup: func(t *testing.T, home string) {
-				t.Helper()
-				state, err := sql.Open("sqlite3", filepath.Join(home, "state_5.sqlite"))
-				require.NoError(t, err)
-				t.Cleanup(func() { _ = state.Close() })
-				_, err = state.ExecContext(t.Context(), `PRAGMA journal_mode=WAL`)
-				require.NoError(t, err)
-				require.NoError(t, state.Close())
-			},
-			ready: func(t *testing.T, home, page string) {
-				t.Helper()
-				state, err := sql.Open("sqlite3", filepath.Join(home, "state_5.sqlite"))
-				require.NoError(t, err)
-				t.Cleanup(func() { _ = state.Close() })
-				_, err = state.ExecContext(t.Context(), `CREATE TABLE _sqlx_migrations (version BIGINT PRIMARY KEY)`)
-				require.NoError(t, err)
-				_, err = state.ExecContext(t.Context(), `CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL)`)
-				require.NoError(t, err)
-				_, err = state.ExecContext(t.Context(), `INSERT INTO _sqlx_migrations VALUES (54)`)
-				require.NoError(t, err)
-				_, err = state.ExecContext(t.Context(), `INSERT INTO threads (id, rollout_path) VALUES (?, ?)`, codexLauncherID, "rollout-2026-01-01-"+page+".jsonl")
-				require.NoError(t, err)
-				require.NoError(t, state.Close())
-			},
-		},
-		{
-			name: "migrating",
-			setup: func(t *testing.T, home string) {
-				t.Helper()
-				state, err := sql.Open("sqlite3", filepath.Join(home, "state_5.sqlite"))
-				require.NoError(t, err)
-				t.Cleanup(func() { _ = state.Close() })
-				_, err = state.ExecContext(t.Context(), `CREATE TABLE _sqlx_migrations (version BIGINT PRIMARY KEY)`)
-				require.NoError(t, err)
-				require.NoError(t, state.Close())
-			},
-			ready: func(t *testing.T, home, page string) {
-				t.Helper()
-				state, err := sql.Open("sqlite3", filepath.Join(home, "state_5.sqlite"))
-				require.NoError(t, err)
-				t.Cleanup(func() { _ = state.Close() })
-				_, err = state.ExecContext(t.Context(), `CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL)`)
-				require.NoError(t, err)
-				_, err = state.ExecContext(t.Context(), `INSERT INTO _sqlx_migrations VALUES (54)`)
-				require.NoError(t, err)
-				_, err = state.ExecContext(t.Context(), `INSERT INTO threads (id, rollout_path) VALUES (?, ?)`, codexLauncherID, "rollout-2026-01-01-"+page+".jsonl")
-				require.NoError(t, err)
-				require.NoError(t, state.Close())
-			},
-		},
-		{
-			name: "row",
-			setup: func(t *testing.T, home string) {
-				t.Helper()
-				writeCodexState(t, home, childSessionID, childSessionID)
-			},
-			ready: func(t *testing.T, home, page string) {
-				t.Helper()
-				state, err := sql.Open("sqlite3", filepath.Join(home, "state_5.sqlite"))
-				require.NoError(t, err)
-				t.Cleanup(func() { _ = state.Close() })
-				_, err = state.ExecContext(t.Context(), `INSERT INTO threads (id, rollout_path) VALUES (?, ?)`, codexLauncherID, "rollout-2026-01-01-"+page+".jsonl")
-				require.NoError(t, err)
-				require.NoError(t, state.Close())
-			},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			home := t.TempDir()
-			page := codexLauncherID + "_44444444-4444-4444-8444-444444444444"
-			if tc.setup != nil {
-				tc.setup(t, home)
-			}
-			synctest.Test(t, func(t *testing.T) {
-				database := stubLaunchArchive(t)
-				stubLaunchProcesses(t, fakeProcess{name: "sh"}, fakeProcess{name: "claude", env: []string{"CODEX_HOME=" + home, "CODEX_THREAD_ID=" + codexLauncherID}}, fakeProcess{name: "codex"})
-				cmd := &cobra.Command{}
-				cmd.SetIn(strings.NewReader(sessionStartPayload("startup")))
-				done := make(chan error, 1)
-				go func() { done <- captureLaunchParent(t.Context(), cmd) }()
-				// Wait between the 100ms and 300ms retry ticks so captureLaunchParent
-				// is durably blocked when the fixture updates state_5.sqlite.
-				select {
-				case err := <-done:
-					require.FailNow(t, "capture returned before index appeared", "%v", err)
-				case <-time.After(250 * time.Millisecond):
-				}
-				tc.ready(t, home, page)
-				require.NoError(t, <-done)
-				link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
-				require.NoError(t, err)
-				assert.Equal(t, "codex:"+page, link.ParentSessionID)
-			})
-		})
-	}
-}
-
-func TestCaptureLaunchParentCodexIndexRetry(t *testing.T) {
-	for _, tc := range []struct {
-		name                                                            string
-		rowMissing, uninitialized, unreadable, locked, newer, migration bool
-	}{
-		{"missing index", false, false, false, false, false, false},
-		{"uninitialized index", false, true, false, false, false, false},
-		{"missing row", true, false, false, false, false, false},
-		{"unreadable index", false, false, true, false, false, false},
-		{"locked index", false, false, false, true, false, false},
-		{"newer index", false, false, false, false, true, false},
-		{"newer migration", false, false, false, false, false, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			home := t.TempDir()
-			var locked *sql.DB
-			if tc.locked {
-				writeCodexState(t, home, codexLauncherID, codexLauncherID)
-				var err error
-				locked, err = sql.Open("sqlite3", filepath.Join(home, "state_5.sqlite"))
-				require.NoError(t, err)
-				t.Cleanup(func() { require.NoError(t, locked.Close()) })
-				_, err = locked.ExecContext(t.Context(), "BEGIN EXCLUSIVE")
-				require.NoError(t, err)
-			}
-			if tc.rowMissing {
-				writeCodexState(t, home, childSessionID, childSessionID)
-			}
-			if tc.uninitialized {
-				require.NoError(t, os.WriteFile(filepath.Join(home, "state_5.sqlite"), nil, 0o600))
-			}
-			if tc.unreadable {
-				require.NoError(t, os.WriteFile(filepath.Join(home, "state_5.sqlite"), []byte("corrupt"), 0o600))
-			}
-			if tc.newer {
-				writeCodexState(t, home, codexLauncherID, codexLauncherID+"_44444444-4444-4444-8444-444444444444")
-				require.NoError(t, os.WriteFile(filepath.Join(home, "state_6.sqlite"), nil, 0o600))
-			}
-			if tc.migration {
-				writeCodexState(t, home, codexLauncherID, codexLauncherID+"_44444444-4444-4444-8444-444444444444")
-				state, err := sql.Open("sqlite3", filepath.Join(home, "state_5.sqlite"))
-				require.NoError(t, err)
-				_, err = state.ExecContext(t.Context(), "INSERT INTO _sqlx_migrations VALUES (65)")
-				require.NoError(t, err)
-				require.NoError(t, state.Close())
-			}
-			synctest.Test(t, func(t *testing.T) {
-				database := stubLaunchArchive(t)
-				stubLaunchProcesses(t, fakeProcess{name: "sh"}, fakeProcess{name: "claude", env: []string{"CODEX_HOME=" + home, "CODEX_THREAD_ID=" + codexLauncherID}}, fakeProcess{name: "codex"})
-				ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-				defer cancel()
-				cmd := &cobra.Command{}
-				cmd.SetIn(strings.NewReader(sessionStartPayload("startup")))
-				done := make(chan error, 1)
-				go func() { done <- captureLaunchParent(ctx, cmd) }()
-				if tc.locked {
-					select {
-					case err := <-done:
-						require.FailNow(t, "capture returned while index was locked", "%v", err)
-					case <-time.After(2 * time.Second):
-					}
-					_, err := locked.ExecContext(t.Context(), "COMMIT")
-					require.NoError(t, err)
-				}
-				if !tc.locked {
-					select {
-					case err := <-done:
-						if tc.unreadable {
-							require.Error(t, err)
-						} else {
-							require.NoError(t, err)
-						}
-					case <-time.After(2 * time.Second):
-						require.FailNow(t, "index lookup exceeded its retry window")
-					}
-				} else {
-					require.NoError(t, <-done)
-				}
-				link, err := database.GetSessionExternalParent(t.Context(), childSessionID)
-				if !tc.unreadable {
-					require.NoError(t, err)
-					assert.Equal(t, "codex:"+codexLauncherID, link.ParentSessionID)
-				} else {
-					require.ErrorIs(t, err, sql.ErrNoRows)
-				}
-			})
-		})
-	}
 }
