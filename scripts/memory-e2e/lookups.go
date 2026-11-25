@@ -243,7 +243,9 @@ func runLookupClient(
 			}
 			a := &report.Attempts[index]
 			a.DurationMS = time.Since(started).Milliseconds()
-			a.Error = scoreError(runErr)
+			if runErr != nil {
+				a.Error = runErr.Error()
+			}
 			a.Artifacts = relativeArtifact(cfg.outputDir, runDir)
 			a.Score = scoreLookupQuestion(q, answer, calls, runErr)
 			fmt.Printf("%s %-16s run %d: %s\n", client, q.Name, i, a.Score.Verdict)

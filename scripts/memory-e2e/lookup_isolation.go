@@ -187,11 +187,6 @@ func prepareLookupIsolation(ctx context.Context, client clientName, clientDir, r
 		"DO_NOT_TRACK=1",
 		"TMPDIR=/tmp",
 	}
-	for _, key := range []string{"LANG", "LC_ALL", "LC_CTYPE", "TERM", "TZ", "NO_COLOR"} {
-		if value, ok := os.LookupEnv(key); ok {
-			env = append(env, key+"="+value)
-		}
-	}
 	rootDir := filepath.Join(providerHome, "sessions")
 	if client == clientClaude {
 		rootDir = filepath.Join(providerHome, "projects")

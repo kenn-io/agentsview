@@ -109,9 +109,6 @@ func resultText(v any) string {
 }
 
 func timestampMS(value any) int64 {
-	if n, ok := value.(float64); ok {
-		return int64(n)
-	}
 	s, _ := value.(string)
 	t, err := time.Parse(time.RFC3339Nano, s)
 	if err != nil {
@@ -541,11 +538,4 @@ func lookupCaptureIncomplete(runErr error) bool {
 func toolDescriptionLookup(input string) bool {
 	return strings.Contains(input, "tool") &&
 		(strings.Contains(input, "description") || strings.Contains(input, "all_tools"))
-}
-
-func scoreError(err error) string {
-	if err == nil {
-		return ""
-	}
-	return fmt.Sprint(err)
 }
