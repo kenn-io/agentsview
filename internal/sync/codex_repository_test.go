@@ -310,6 +310,7 @@ func TestCodexLabeledCopyWinsSync(t *testing.T) {
 			switch mode {
 			case "older first":
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[1]}))
+				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[2]}))
 			case "usage refresh":
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[0]}))
 				write(1, paths[1])

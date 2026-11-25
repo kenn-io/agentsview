@@ -1384,16 +1384,6 @@ func (s codexSourceSet) SourcesForChangedPath(
 			}
 		}
 		if ok {
-			if s.agent == AgentCodex {
-				id := extractUUIDFromRollout(filepath.Base(req.Path))
-				preferred, found, err := s.findCanonicalSource(ctx, id)
-				if err != nil {
-					return nil, err
-				}
-				if found && CodexSourceRank(preferred).Class != 0 {
-					source = preferred
-				}
-			}
 			if compressed {
 				preferred, err := s.preferredKnownRolloutSource(ctx, source)
 				if err != nil {
