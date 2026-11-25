@@ -389,7 +389,7 @@ func bareLinksAllowed(workdir, cwd string, shared sharedPRContext) bool {
 		return false
 	}
 	if workdir != "" {
-		return !shared.repository && parser.SamePRWorkingDirectory(cwd, workdir)
+		return !shared.repository && parser.SamePRWorkingDirectory(cwd, resolveCommitDir(cwd, workdir))
 	}
 	return !shared.directory && !shared.repository
 }

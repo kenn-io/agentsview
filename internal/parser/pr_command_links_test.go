@@ -140,3 +140,17 @@ func commandPRLinks(ctx context.Context, command, remote string, allowBare bool)
 	links, _, _, _, err := AnalyzePRCommand(ctx, command, "", remote, allowBare, false)
 	return links, err
 }
+
+func TestAnalyzePRCommandEnvWrappedRemoteChange(t *testing.T) {
+	for _, command := range []string{
+		`env GH_REPO=example/other git remote set-url origin https://github.com/example/other.git; gh pr view 42`,
+		`env GH_HOST=git.example bash -c 'git remote set-url origin other'; gh pr view 42`,
+	} {
+		t.Run(command, func(t *testing.T) {
+			links, _, changed, _, err := AnalyzePRCommand(t.Context(), command, "/work/repo", "https://github.com/example/repo.git", true, false)
+			require.NoError(t, err)
+			assert.True(t, changed)
+			assert.Empty(t, links)
+		})
+	}
+}

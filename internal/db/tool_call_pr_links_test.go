@@ -46,6 +46,9 @@ func TestToolCallPRLinksInputShapes(t *testing.T) {
 		{"code mode", "exec", `text(await tools.exec_command({cmd:"gh pr view 42 -R example/repo"})); text(await tools.exec_command({cmd:"gh pr view 43 -R example/repo"}))`, []int{42, 43}},
 		{"other", "exec_command", `{"cmd":"gh pr view 42","workdir":"/work/other"}`, nil},
 		{"matching", "exec_command", `{"cmd":"gh pr view 42","workdir":"/work/./repo"}`, []int{42}},
+		{"relative matching", "exec_command", `{"cmd":"gh pr view 42","workdir":"."}`, []int{42}},
+		{"relative other", "exec_command", `{"cmd":"gh pr view 42","workdir":"../other"}`, nil},
+		{"code mode relative matching", "exec", `text(await tools.exec_command({cmd:"gh pr view 42",workdir:"."}))`, []int{42}},
 		{"code mode batch", "exec", `text(await tools.exec_command({cmd:"gh pr view 41",workdir:"/other"})); text(await tools.exec_command({cmd:"gh pr view 42",workdir:"/work/repo"}))`, []int{42}},
 		{"code mode commit directory", "exec", `text(await tools.exec_command({cmd:"git -C /other commit -m x; gh pr view 42",workdir:"/work/repo"}))`, []int{42}},
 	} {

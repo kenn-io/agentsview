@@ -128,7 +128,7 @@ func prCommandFlag(command, flag string) (takesValue, ok bool) {
 }
 
 // unwrapPRCommand removes execution wrappers whose arguments have fixed roles.
-func unwrapPRCommand(args []*syntax.Word) []*syntax.Word {
+func unwrapPRCommand(args []*syntax.Word, allowEnvOverride bool) []*syntax.Word {
 	for len(args) > 0 {
 		words, literal := shellWords(args)
 		if !literal[0] {
@@ -136,7 +136,7 @@ func unwrapPRCommand(args []*syntax.Word) []*syntax.Word {
 		}
 		switch words[0] {
 		case "command", "env":
-			i, ok := wrappedCommandStart(words, literal)
+			i, ok := wrappedCommandStart(words, literal, allowEnvOverride)
 			if !ok {
 				return nil
 			}
@@ -170,13 +170,13 @@ func unwrapPRCommand(args []*syntax.Word) []*syntax.Word {
 	return nil
 }
 
-// wrappedCommandStart skips command's -p flags or env's assignments. It fails
-// when env sets the repository or host gh would use.
-func wrappedCommandStart(words []string, literal []bool) (int, bool) {
+// wrappedCommandStart skips command's -p flags or env's assignments. Strict
+// matching fails when env sets the repository or host gh would use.
+func wrappedCommandStart(words []string, literal []bool, allowEnvOverride bool) (int, bool) {
 	i := 1
 	for i < len(words) && literal[i] && (words[0] == "command" && words[i] == "-p" || words[0] == "env" && strings.Contains(words[i], "=")) {
 		name, _, _ := strings.Cut(words[i], "=")
-		if words[0] == "env" && (name == "GH_HOST" || name == "GH_REPO") {
+		if !allowEnvOverride && words[0] == "env" && (name == "GH_HOST" || name == "GH_REPO") {
 			return 0, false
 		}
 		i++
@@ -262,7 +262,7 @@ func analyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 		if err := ctx.Err(); err != nil {
 			return nil, false, false, nil, err
 		}
-		args := unwrapPRCommand(entry.call.Args)
+		args := unwrapPRCommand(entry.call.Args, false)
 		bareSafe := allowBare && !entry.directory && !entry.repository
 		if inner, ok := shellCommand(args); ok && depth < 8 {
 			found, _, nested, dependencies, err := analyzePRCommand(ctx, inner, cwd, remote, bareSafe, hostUnknown || entry.repository, depth+1)
@@ -437,7 +437,7 @@ func bashChangesRepositoryContext(file *syntax.File, cwd string) (bool, bool, []
 				}
 			}
 			callDirectory, callRepository := directory, repository
-			args := unwrapPRCommand(n.Args)
+			args := unwrapPRCommand(n.Args, false)
 			if len(args) > 0 {
 				name, _ := shellLiteral(args[0].Parts)
 				if name == "gh" || path.Base(name) == "bash" || path.Base(name) == "sh" || path.Base(name) == "zsh" {
@@ -475,7 +475,7 @@ func leavesCheckout(words []string, cwd string) bool {
 }
 
 func shellCallChangesPRContext(call *syntax.CallExpr, functions map[string]bool, cwd string) (bool, bool) {
-	args := unwrapPRCommand(call.Args)
+	args := unwrapPRCommand(call.Args, true)
 	words := make([]string, len(args))
 	for i, arg := range args {
 		words[i], _ = shellLiteral(arg.Parts)
@@ -500,7 +500,7 @@ func shellCallChangesPRContext(call *syntax.CallExpr, functions map[string]bool,
 		return false, false
 	}
 	name := words[0]
-	return leavesCheckout(words, cwd), name == "eval" || name == "source" || name == "." || functions[name] || repositoryMutation(words)
+	return leavesCheckout(words, cwd), name == "eval" || name == "source" || name == "." || functions[name] || repositoryMutation(words) || len(unwrapPRCommand(call.Args, false)) == 0 && (path.Base(name) == "sh" || path.Base(name) == "bash" || path.Base(name) == "zsh")
 }
 
 func repositoryMutation(words []string) bool {
