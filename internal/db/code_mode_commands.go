@@ -16,22 +16,50 @@ type codeModeCommand struct {
 
 type codeModeVisitor struct {
 	calls       *[]codeModeCommand
+	direct      map[js.INode]bool
 	conditional bool
 }
 
 func (v *codeModeVisitor) Enter(node js.INode) js.IVisitor {
 	switch n := node.(type) {
 	case *js.IfStmt, *js.ForStmt, *js.ForInStmt, *js.ForOfStmt, *js.WhileStmt, *js.DoWhileStmt, *js.FuncDecl, *js.ArrowFunc, *js.MethodDecl, *js.CondExpr, *js.SwitchStmt, *js.CaseClause, *js.TryStmt:
-		return &codeModeVisitor{calls: v.calls, conditional: true}
+		return &codeModeVisitor{calls: v.calls, direct: v.direct, conditional: true}
 	case *js.BinaryExpr:
 		if n.Op == js.AndToken || n.Op == js.OrToken || n.Op == js.NullishToken {
-			return &codeModeVisitor{calls: v.calls, conditional: true}
+			return &codeModeVisitor{calls: v.calls, direct: v.direct, conditional: true}
+		}
+	case *js.DotExpr:
+		if !v.direct[n] && n.X.String() == "tools" && n.Y.String() == "exec_command" {
+			*v.calls = append(*v.calls, codeModeCommand{uncertain: true})
+		}
+	case *js.IndexExpr:
+		if !v.direct[n] && n.X.String() == "tools" {
+			name, ok := codeModeLiteral(n.Y)
+			if !ok || name == "exec_command" {
+				*v.calls = append(*v.calls, codeModeCommand{uncertain: true})
+			}
 		}
 	case *js.CallExpr:
-		dot, ok := n.X.(*js.DotExpr)
-		if !ok || dot.X.String() != "tools" || dot.Y.String() != "exec_command" {
+		var execCall, dynamicAccessor bool
+		switch access := n.X.(type) {
+		case *js.DotExpr:
+			execCall = access.X.String() == "tools" && access.Y.String() == "exec_command"
+		case *js.IndexExpr:
+			if access.X.String() == "tools" {
+				name, ok := codeModeLiteral(access.Y)
+				execCall = ok && name == "exec_command"
+				dynamicAccessor = !ok
+			}
+		}
+		if dynamicAccessor {
+			v.direct[n.X] = true
+			*v.calls = append(*v.calls, codeModeCommand{uncertain: true})
 			return v
 		}
+		if !execCall {
+			return v
+		}
+		v.direct[n.X] = true
 		call := codeModeCommand{uncertain: v.conditional}
 		if len(n.Args.List) != 1 || n.Args.List[0].Rest {
 			call.uncertain = true
@@ -102,7 +130,7 @@ func codeModeLiteral(expr js.IExpr) (string, bool) {
 	return decoded.String(), true
 }
 
-// codeModeCommands returns each statically described exec_command call.
+// codeModeCommands returns shell calls and whether the cell was parsed.
 // A conditional or dynamically described call can block inference but cannot
 // establish a parent.
 func codeModeCommands(input string) ([]codeModeCommand, bool) {
@@ -111,6 +139,6 @@ func codeModeCommands(input string) ([]codeModeCommand, bool) {
 		return nil, false
 	}
 	var calls []codeModeCommand
-	js.Walk(&codeModeVisitor{calls: &calls}, ast)
-	return calls, len(calls) > 0
+	js.Walk(&codeModeVisitor{calls: &calls, direct: make(map[js.INode]bool)}, ast)
+	return calls, true
 }
