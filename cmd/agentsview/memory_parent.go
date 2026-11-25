@@ -224,7 +224,7 @@ func configuredCodexHome(ctx context.Context, launcherProcess launchProcess, lau
 	if _, err := toml.DecodeFile(filepath.Join(home, "config.toml"), &config); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return "", err
 	}
-	var profile, sqliteOverride, cd string
+	var sqliteOverride, cd string
 	var hasSQLiteOverride bool
 	if launcherProcess.Cmdline != nil {
 		args, err := launcherProcess.Cmdline(ctx)
@@ -252,14 +252,7 @@ func configuredCodexHome(ctx context.Context, launcherProcess launchProcess, lau
 			case arg == "-p" || arg == "--profile":
 				if i+1 < len(args) {
 					i++
-					profile = args[i]
 				}
-			case strings.HasPrefix(arg, "--profile="):
-				profile = strings.TrimPrefix(arg, "--profile=")
-			case strings.HasPrefix(arg, "-p="):
-				profile = strings.TrimPrefix(arg, "-p=")
-			case strings.HasPrefix(arg, "-p"):
-				profile = strings.TrimPrefix(arg, "-p")
 			case arg == "-c" || arg == "--config":
 				if i+1 < len(args) {
 					i++
@@ -282,14 +275,6 @@ func configuredCodexHome(ctx context.Context, launcherProcess launchProcess, lau
 				}
 				sqliteOverride, hasSQLiteOverride = parsed.SQLiteHome, true
 			}
-		}
-	}
-	if profile != "" {
-		if strings.Trim(profile, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != "" {
-			return "", fmt.Errorf("invalid Codex profile name %q", profile)
-		}
-		if _, err := toml.DecodeFile(filepath.Join(home, profile+".config.toml"), &config); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return "", err
 		}
 	}
 	if hasSQLiteOverride {
