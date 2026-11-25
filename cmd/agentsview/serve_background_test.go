@@ -1215,6 +1215,7 @@ func TestWaitForBackgroundServeReadyAttachedObservesProgressWithoutTimeout(
 	_, err = WriteDaemonRuntime(dir, host, port, version, false)
 	require.NoError(t, err)
 	t.Cleanup(func() { RemoveDaemonRuntime(dir) })
+	UnmarkDaemonStarting(dir)
 
 	select {
 	case err := <-errCh:
@@ -1264,6 +1265,7 @@ func TestWaitForBackgroundServeReadyRenewsTimeoutOnStartupProgress(t *testing.T)
 						_, err := WriteDaemonRuntime(dir, host, port, version, false)
 						require.NoError(t, err)
 						t.Cleanup(func() { RemoveDaemonRuntime(dir) })
+						UnmarkDaemonStarting(dir)
 					}
 				},
 			},
@@ -1321,6 +1323,90 @@ func TestWaitForBackgroundServeReadyReprobesRuntimeAtTimeout(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, rt)
 	assert.Equal(t, port, rt.Port)
+}
+
+func TestWaitForBackgroundServeReadyWaitsForStartLockRelease(t *testing.T) {
+	for _, attached := range []bool{false, true} {
+		t.Run(fmt.Sprintf("attached-%t", attached), func(t *testing.T) {
+			setStartProbeTickForTest(t, 10*time.Millisecond)
+			dir := runtimeTestDir(t)
+			host, port := testPingServer(t)
+			MarkDaemonStarting(dir)
+			t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+			_, err := WriteDaemonRuntime(dir, host, port, version, false)
+			require.NoError(t, err)
+			t.Cleanup(func() { RemoveDaemonRuntime(dir) })
+
+			type waitResult struct {
+				rt  *DaemonRuntime
+				err error
+			}
+			polled := make(chan struct{}, 1)
+			done := make(chan waitResult, 1)
+			go func() {
+				rt, waitErr := waitForBackgroundServeReadyWithPolicy(
+					t.Context(), dir, "", make(chan error), 5*time.Second,
+					backgroundServeReadyWaitPolicy{
+						Attached: attached,
+						Observe: func(*startupState, time.Duration) {
+							select {
+							case polled <- struct{}{}:
+							default:
+							}
+						},
+					},
+				)
+				done <- waitResult{rt: rt, err: waitErr}
+			}()
+
+			select {
+			case res := <-done:
+				require.FailNowf(
+					t,
+					"readiness wait returned while start lock was still held",
+					"rt=%v err=%v", res.rt, res.err,
+				)
+			case <-polled:
+			case <-time.After(5 * time.Second):
+				require.FailNow(t, "readiness wait did not poll while start lock was held")
+			}
+
+			UnmarkDaemonStarting(dir)
+
+			select {
+			case res := <-done:
+				require.NoError(t, res.err)
+				require.NotNil(t, res.rt)
+				assert.Equal(t, port, res.rt.Port)
+				assert.False(t, IsDaemonStarting(dir))
+			case <-time.After(5 * time.Second):
+				require.FailNow(t, "readiness wait did not return after start lock released")
+			}
+		})
+	}
+
+	t.Run("timeout reprobe respects held start lock", func(t *testing.T) {
+		host, port := testPingServer(t)
+		synctest.Test(t, func(t *testing.T) {
+			setStartProbeTickForTest(t, time.Second)
+			dir := runtimeTestDir(t)
+			MarkDaemonStarting(dir)
+			t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+
+			rt, err := waitForBackgroundServeReadyWithPolicy(
+				t.Context(), dir, "", make(chan error), 20*time.Millisecond,
+				backgroundServeReadyWaitPolicy{
+					Observe: func(*startupState, time.Duration) {
+						_, writeErr := WriteDaemonRuntime(dir, host, port, version, false)
+						require.NoError(t, writeErr)
+					},
+				},
+			)
+			t.Cleanup(func() { RemoveDaemonRuntime(dir) })
+			require.NoError(t, err)
+			assert.Nil(t, rt)
+		})
+	})
 }
 
 func TestWaitForBackgroundServeReadyAttachedChildExitAndCancellation(t *testing.T) {

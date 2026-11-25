@@ -1110,8 +1110,9 @@ func isBackgroundChildStrippedFlagArg(arg string) bool {
 }
 
 // waitForBackgroundServeReady polls for the spawned child to publish a
-// writable runtime record. It returns the runtime once ready, nil on timeout
-// (the child is still starting), or an error if the child exits first.
+// writable runtime record and clear its startup lock. It returns the runtime
+// once ready, nil on timeout (the child is still starting), or an error if the
+// child exits first.
 func waitForBackgroundServeReady(
 	ctx context.Context,
 	dataDir string,
@@ -1124,6 +1125,23 @@ func waitForBackgroundServeReady(
 		ctx, dataDir, authToken, waitCh, timeout,
 		backgroundServeReadyWaitPolicy{Observe: progress.progress},
 	)
+}
+
+// probeBackgroundServeReady returns a ready writable runtime once startup has
+// completed, or (nil, starting) while the child is still starting. A published
+// runtime record is not ready to hand off until the child also releases its
+// start lock; a startup-state fallback intentionally keeps that lock as its
+// active marker.
+func probeBackgroundServeReady(dataDir, authToken string) (*DaemonRuntime, bool) {
+	rt := FindWritableDaemonRuntime(dataDir, authToken)
+	if rt != nil && rt.RuntimeFallback {
+		return rt, false
+	}
+	starting := IsDaemonStarting(dataDir)
+	if rt != nil && !starting {
+		return rt, false
+	}
+	return nil, starting
 }
 
 func waitForBackgroundServeReadyWithPolicy(
@@ -1147,14 +1165,13 @@ func waitForBackgroundServeReadyWithPolicy(
 	var lastStartupUpdate time.Time
 
 	for {
-		if rt := FindWritableDaemonRuntime(dataDir, authToken); rt != nil {
+		rt, starting := probeBackgroundServeReady(dataDir, authToken)
+		if rt != nil {
 			return rt, nil
 		}
 		var snapshot *startupState
-		if policy.Observe != nil || timer != nil {
-			if IsDaemonStarting(dataDir) {
-				snapshot = readStartupState(dataDir)
-			}
+		if starting && (policy.Observe != nil || timer != nil) {
+			snapshot = readStartupState(dataDir)
 		}
 		if timer != nil && snapshot != nil &&
 			snapshot.UpdatedAt.After(lastStartupUpdate) {
@@ -1175,11 +1192,12 @@ func waitForBackgroundServeReadyWithPolicy(
 			return nil, ctx.Err()
 		case <-ticker.C:
 		case <-timeoutC:
-			if rt := FindWritableDaemonRuntime(dataDir, authToken); rt != nil {
+			rt, starting := probeBackgroundServeReady(dataDir, authToken)
+			if rt != nil {
 				return rt, nil
 			}
 			var latest *startupState
-			if IsDaemonStarting(dataDir) {
+			if starting {
 				latest = readStartupState(dataDir)
 			}
 			if latest != nil && latest.UpdatedAt.After(lastStartupUpdate) {
