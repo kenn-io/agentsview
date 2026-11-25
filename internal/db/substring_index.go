@@ -291,9 +291,8 @@ const substringIndexMaxShare = 4
 
 // substringCandidates returns conditions that keep only messages whose text
 // may match query. A branch keeps scanning when the archive has no substring
-// index, query is empty, or the
-// index lists more than a quarter as many messages as the scope's sessions
-// hold. The index lists matches across the whole archive, so a common
+// index, query is empty, or the index lists more than a quarter as many
+// messages as the scope's sessions hold. The index lists matches across the whole archive, so a common
 // sequence inside one project or date range is cheaper to scan for. The
 // capped count stops as soon as it passes that share.
 func (db *DB) substringCandidates(
