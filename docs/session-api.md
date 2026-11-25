@@ -720,11 +720,12 @@ Child-agent prompt URLs are references and do not establish that the session
 worked on the pull request. Transcript-only archives retain explicitly named
 links and repository changes when they discard tool inputs. Usage-only archives
 retain links named in new tool inputs as historical references; later writes do
-not remove them. When a usage-only session runs a command that changes its
-repository configuration, such as `git remote set-url`, the session
+not remove them, and rebuilds preserve them. When a usage-only session runs a
+command that changes its repository configuration, such as `git remote set-url`,
+the session
 records that change. Later writes to that session then skip `-R owner/repo`,
 because the recorded remote may be stale and `gh` may have used another host.
-That record survives copies and full rewrites of the session.
+That record survives copies, rebuilds, and full rewrites of the session.
 Archives that discarded inputs before this feature cannot recover those links.
 
 To filter by pull request, use `session list --pr` or the `pr` query parameter.

@@ -68,21 +68,12 @@ func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string, dialo
 	changed := false
 	for _, id := range ids {
 		links, fresh := freshLinks[id]
-		if !fresh && slices.Contains(restored, id) {
-			var metadataBytes []byte
-			err := tx.QueryRowContext(ctx, `SELECT prior_payload FROM raw_session_branches WHERE session_id=$1 AND captured_session_id=$1 AND active ORDER BY branch_id LIMIT 1`, id).Scan(&metadataBytes)
-			if err != nil && err != sql.ErrNoRows {
-				return false, err
-			}
-			if err == nil {
-				metadata, err := decodeRawPayload(metadataBytes)
-				if err != nil {
-					return false, err
-				}
-				if metadata.Session.DataVersion >= rawPRLinksDataVersion {
-					links, fresh = metadata.Session.PRLinks, true
-				}
-			}
+		branchLinks, hasBranchLinks, err := activeRawBranchPRLinks(ctx, tx, id)
+		if err != nil {
+			return false, err
+		}
+		if !fresh && slices.Contains(restored, id) && hasBranchLinks {
+			links, fresh = branchLinks, true
 		}
 		if !fresh {
 			payload, err := loadRawPayload(ctx, tx, id)
@@ -99,7 +90,7 @@ func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string, dialo
 			}
 			links = parser.CombinePRLinks(payload.Session.PRLinks, promptLinks, toolLinks)
 		}
-		encoded := db.EncodePRLinks(links)
+		encoded := db.EncodePRLinks(parser.CombinePRLinks(links, branchLinks))
 		var linksChanged bool
 		err = tx.QueryRowContext(ctx, `WITH prior AS (
  SELECT pr_links FROM sessions WHERE id=$1 FOR UPDATE
@@ -115,6 +106,32 @@ SELECT COALESCE((SELECT links_changed FROM updated),false)`, id, encoded, db.Cur
 		changed = changed || linksChanged
 	}
 	return changed, nil
+}
+
+// activeRawBranchPRLinks combines evidence from captures of the same revision.
+func activeRawBranchPRLinks(ctx context.Context, tx *sql.Tx, id string) ([]db.PRLink, bool, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT prior_payload FROM raw_session_branches WHERE session_id=$1 AND captured_session_id=$1 AND active ORDER BY branch_id`, id)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	var lists [][]db.PRLink
+	current := false
+	for rows.Next() {
+		var data []byte
+		if err := rows.Scan(&data); err != nil {
+			return nil, false, err
+		}
+		metadata, err := decodeRawPayload(data)
+		if err != nil {
+			return nil, false, err
+		}
+		if metadata.Session.DataVersion >= rawPRLinksDataVersion {
+			current = true
+			lists = append(lists, metadata.Session.PRLinks)
+		}
+	}
+	return parser.CombinePRLinks(lists...), current, rows.Err()
 }
 
 // rawEmbeddingChange is a physical session whose embeddings must follow a

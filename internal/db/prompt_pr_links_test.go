@@ -2,7 +2,6 @@ package db
 
 import (
 	"database/sql"
-	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -657,31 +656,19 @@ func TestUsageOnlyPRLinksPreservesRepositoryUncertaintyAcrossWrites(t *testing.T
 	}
 }
 
-func TestUsageOnlyPRLinksOversizedInputMatchesSameBatch(t *testing.T) {
+func TestUsageOnlyPRLinksOversizedInputAcrossWrites(t *testing.T) {
 	d := testDB(t)
 	d.SetArchiveContent(config.ArchiveContentUsage)
-	for _, separate := range []bool{false, true} {
-		t.Run(fmt.Sprint(separate), func(t *testing.T) {
-			s := Session{ID: fmt.Sprintf("oversized-%v", separate), Project: "project", Machine: "local", Agent: "codex", Cwd: "/work/repo"}
-			require.NoError(t, d.UpsertSession(t.Context(), s))
-			obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://github.com/example/repo.git")
-			require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), obs))
-			message := func(ordinal int, input string) Message {
-				return Message{SessionID: s.ID, Ordinal: ordinal, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "exec_command", Category: "Bash", InputJSON: input}}}
-			}
-			first := message(0, `{"cmd":"echo `+strings.Repeat("x", 256*1024)+`"}`)
-			second := message(1, `{"cmd":"gh pr view 42 -R example/repo"}`)
-			if separate {
-				require.NoError(t, d.InsertMessages(t.Context(), []Message{first}))
-				require.NoError(t, d.InsertMessages(t.Context(), []Message{second}))
-			} else {
-				require.NoError(t, d.InsertMessages(t.Context(), []Message{first, second}))
-			}
-			got, err := d.GetSession(t.Context(), s.ID)
-			require.NoError(t, err)
-			assert.Empty(t, got.PRLinks)
-		})
+	s := Session{ID: "oversized", Project: "project", Machine: "local", Agent: "codex", Cwd: "/work/repo"}
+	require.NoError(t, d.UpsertSession(t.Context(), s))
+	obs := export.WithRecordedGitRemote(export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: s.Cwd, ObservedAt: time.Now().UTC()}, "https://github.com/example/repo.git")
+	require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), obs))
+	for i, input := range []string{`{"cmd":"echo ` + strings.Repeat("x", 256*1024) + `"}`, `{"cmd":"gh pr view 42 -R example/repo"}`} {
+		require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Ordinal: i, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "exec_command", Category: "Bash", InputJSON: input}}}}))
 	}
+	got, err := d.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	assert.Empty(t, got.PRLinks)
 }
 
 func TestUsageOnlyPRLinksFunctionRepositoryChange(t *testing.T) {

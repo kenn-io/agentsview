@@ -265,11 +265,33 @@ func TestRawProjectionCommandPRLinks(t *testing.T) {
 			assert.Equal(t, []db.PRLink{{URL: "https://github.com/example/repo/pull/43", Host: "github.com", Repository: "example/repo", Number: 43}}, db.DecodePRLinks(links))
 			if policy == config.ArchiveContentUsage {
 				outcome.Outcome.Results[0].Result.Messages[1].ToolCalls[0].InputJSON = `{"command":"echo hello"}`
-				m, _ = f.accept(t, "device-b", "same-content", "")
+				m, receipt := f.accept(t, "device-b", "same-content", "")
 				require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
 				var captured string
 				require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT captured_session_id FROM raw_session_branches WHERE manifest_id=$1`, m.ManifestID).Scan(&captured))
 				assert.Equal(t, resolved.SessionID, captured)
+				require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&links))
+				assert.Equal(t, []db.PRLink{{URL: "https://github.com/example/repo/pull/43", Host: "github.com", Repository: "example/repo", Number: 43}}, db.DecodePRLinks(links))
+				outcome.Outcome.Results[0].Result.Messages[1].ToolCalls[0].InputJSON = `{"command":"gh pr view 44 -R example/repo"}`
+				m, _ = f.accept(t, "device-b", "new-link", receipt.Receipt)
+				require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
+				require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&links))
+				want := []db.PRLink{
+					{URL: "https://github.com/example/repo/pull/43", Host: "github.com", Repository: "example/repo", Number: 43},
+					{URL: "https://github.com/example/repo/pull/44", Host: "github.com", Repository: "example/repo", Number: 44},
+				}
+				assert.ElementsMatch(t, want, db.DecodePRLinks(links))
+				_, err = f.runtime.ExecContext(t.Context(), rawSourceProofDetachSQL, resolved.SessionID)
+				require.NoError(t, err)
+				_, err = f.runtime.ExecContext(t.Context(), `DELETE FROM sessions WHERE id=$1`, resolved.SessionID)
+				require.NoError(t, err)
+				outcome.Outcome.Results[0].Result.Messages[1].ToolCalls[0].InputJSON = `{"command":"echo hello"}`
+				m, _ = f.accept(t, "device-c", "restore", "")
+				require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
+				restored, err := f.sink.Resolve(t.Context(), "codex:portable")
+				require.NoError(t, err)
+				require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, restored.SessionID).Scan(&links))
+				assert.ElementsMatch(t, want, db.DecodePRLinks(links))
 			}
 		})
 	}

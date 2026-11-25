@@ -11629,7 +11629,7 @@ func (e *Engine) prepareSessionNormalizedContext(
 			options.CheckoutRemote = obs.GitRemote
 		}
 	}
-	rows, err := ingest.FinalizeRows(ctx, candidate, options)
+	rows, err := e.finalizeWithRebuildPRHistory(ctx, candidate, options)
 	if err != nil {
 		return preparedSessionWrite{}, sessionWritePreserved, err
 	}

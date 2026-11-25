@@ -2197,16 +2197,8 @@ func (d *DB) CopySessionMetadataFrom(
 		}
 	}
 
-	if !d.usageOnlyStorage() && oldDBHasTable(ctx, tx, "sessions") {
-		ids, err := sessionIDsTx(ctx, tx, "id IN (SELECT id FROM old_db.sessions) AND id IN (SELECT session_id FROM tool_calls WHERE category IN ('Bash','Task'))")
-		if err != nil {
-			return fmt.Errorf("listing sessions for PR link refresh: %w", err)
-		}
-		for _, id := range ids {
-			if err := refreshSessionPromptPRLinksTx(ctx, tx, id); err != nil {
-				return fmt.Errorf("refreshing copied session PR links: %w", err)
-			}
-		}
+	if err := d.copyRebuiltPRLinks(ctx, tx); err != nil {
+		return err
 	}
 
 	if d.usageOnlyStorage() {

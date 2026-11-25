@@ -127,7 +127,7 @@ func mergePendingUsagePRLinks(ctx context.Context, tx *sql.Tx, session *Session,
 	if remote == "" {
 		remote = session.usagePRRemote
 	}
-	links, changed, err := usageToolCallPRLinks(ctx, session.usagePRMessages, remote, changed)
+	links, changed, err := usageToolCallPRLinks(ctx, session.usagePRMessages, remote, changed || session.PRRepositoryChanged)
 	if err != nil {
 		return err
 	}

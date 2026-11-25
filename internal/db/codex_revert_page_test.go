@@ -340,6 +340,31 @@ func TestCopySessionMetadataFromCodexPageProjectSnapshot(t *testing.T) {
 	}
 }
 
+func TestUsageOnlyCopyMappedPRHistory(t *testing.T) {
+	const thread = "codex:11111111-1111-4111-8111-111111111111"
+	const page = thread + "_22222222-2222-4222-8222-222222222222"
+	ctx := t.Context()
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "old.db")
+	src := testDBAtPath(t, srcPath, "source")
+	link := PRLink{URL: "https://github.com/example/repo/pull/41", Host: "github.com", Repository: "example/repo", Number: 41}
+	insertSession(t, src, thread, "project", func(s *Session) {
+		s.Agent = "codex"
+		s.FilePath = new(filepath.Join(dir, "rollout-2026-09-25T12-00-00-"+page[len("codex:"):]+".jsonl"))
+		s.PRLinks = []PRLink{link}
+	})
+	_, err := src.getWriter().Exec(ctx, `PRAGMA user_version = 130`)
+	require.NoError(t, err)
+	require.NoError(t, src.Close())
+	dst := testDB(t)
+	dst.SetArchiveContent(config.ArchiveContentUsage)
+	insertSession(t, dst, page, "project", func(s *Session) { s.Agent = "codex" })
+	require.NoError(t, dst.CopySessionMetadataFrom(ctx, srcPath))
+	got, err := dst.GetSession(ctx, page)
+	require.NoError(t, err)
+	assert.Equal(t, []PRLink{link}, got.PRLinks)
+}
+
 // Old deletion records retain only their thread ID. Pages need not be present
 // when that scope is migrated or when a later rebuild copies it again.
 func TestCopyExcludedSessionsFromRetainsCodexThreadScope(t *testing.T) {
