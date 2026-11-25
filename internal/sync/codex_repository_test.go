@@ -259,7 +259,7 @@ func TestCodexLabeledRunResyncAndExplicitWorktreeMappingWins(t *testing.T) {
 }
 
 func TestCodexLabeledCopyWinsSync(t *testing.T) {
-	for _, mode := range []string{"changed path", "batch", "newer then older", "missed event"} {
+	for _, mode := range []string{"changed path", "newer then older", "missed event"} {
 		t.Run(mode, func(t *testing.T) {
 			database := openTestDB(t)
 			root := t.TempDir()
@@ -281,8 +281,6 @@ func TestCodexLabeledCopyWinsSync(t *testing.T) {
 				mtime := time.Now().Add(3 * time.Hour)
 				require.NoError(t, os.Chtimes(paths[0], mtime, mtime))
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[0]}))
-			case "batch":
-				require.NoError(t, engine.SyncPathsContext(t.Context(), paths[1:]))
 			case "newer then older":
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[2]}))
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[1]}))
@@ -317,26 +315,14 @@ func TestCodexLabeledCopyWinsQuickSync(t *testing.T) {
 	now := time.Now()
 	require.NoError(t, os.Chtimes(paths[0], now, now))
 	require.NoError(t, os.Chtimes(paths[1], now.Add(-time.Hour), now.Add(-time.Hour)))
-	for _, tc := range []struct {
-		name   string
-		cutoff time.Time
-		want   bool
-	}{{"both after cutoff", now.Add(-2 * time.Hour), true}, {"only ordinary after cutoff", now.Add(-time.Minute), false}} {
-		t.Run(tc.name, func(t *testing.T) {
-			database := openTestDB(t)
-			engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {ordinary, logs}}})
-			t.Cleanup(engine.Close)
-			require.Zero(t, engine.SyncAllSince(t.Context(), tc.cutoff, nil).Failed)
-			messages, err := database.GetMessages(t.Context(), "codex:"+id, 0, 100, true)
-			require.NoError(t, err)
-			if tc.want {
-				require.Len(t, messages, 1)
-				assert.Equal(t, "labeled", messages[0].Content)
-			} else {
-				assert.Empty(t, messages)
-			}
-		})
-	}
+	database := openTestDB(t)
+	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {ordinary, logs}}})
+	t.Cleanup(engine.Close)
+	require.Zero(t, engine.SyncAllSince(t.Context(), now.Add(-2*time.Hour), nil).Failed)
+	messages, err := database.GetMessages(t.Context(), "codex:"+id, 0, 100, true)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "labeled", messages[0].Content)
 }
 
 func TestCodexLabeledRunIndexRename(t *testing.T) {

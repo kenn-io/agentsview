@@ -12592,7 +12592,7 @@ func (e *Engine) findProviderSourceFile(
 		StoredFilePath:     storedPath,
 		FingerprintKey:     storedPath,
 		RequireFreshSource: true,
-		PreferStoredSource: def.Type != parser.AgentCodex,
+		PreferStoredSource: true,
 	})
 	if err != nil {
 		log.Printf("%s provider source lookup: %v", def.Type, err)
@@ -13126,6 +13126,13 @@ func (e *Engine) syncSingleSessionContext(ctx context.Context, sessionID string,
 	}
 
 	path := e.FindSourceFile(ctx, sessionID)
+	if def.Type == parser.AgentCodex {
+		raw := strings.TrimPrefix(sessionID, def.IDPrefix)
+		if found := e.findProviderSourceFile(ctx, def, sessionID, raw, ""); found != "" &&
+			parser.CodexSourceLabelForRoots(e.sources().agentDirs[def.Type], found) != "" {
+			path = found
+		}
+	}
 	if path == "" {
 		return fmt.Errorf(
 			"source file not found for %s", sessionID,

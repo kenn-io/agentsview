@@ -6516,7 +6516,7 @@ func TestSyncAllSinceCodexKeepsChangedArchivedDuplicate(t *testing.T) {
 	livePath := env.writeCodexSession(
 		t,
 		filepath.Join("2026", "05", "04"),
-		"rollout-2026-05-04T02-10-04-"+uuid+".jsonl",
+		"rollout-2026-05-04T14-31-58-"+uuid+".jsonl",
 		content,
 	)
 	archivedPath := env.writeSession(

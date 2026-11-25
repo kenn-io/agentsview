@@ -964,6 +964,7 @@ func TestDirectBackend_Sync_CodexIDPrefersLabeledSource(t *testing.T) {
 	svc := service.NewDirectBackend(d, engine)
 	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{ordinaryPath}))
 	write(labeledPath, "labeled")
+	assert.Equal(t, ordinaryPath, engine.FindSourceFile(t.Context(), "codex:"+id))
 	detail, err := svc.Sync(t.Context(), service.SyncInput{ID: "codex:" + id})
 	require.NoError(t, err)
 	require.NotNil(t, detail.FirstMessage)
