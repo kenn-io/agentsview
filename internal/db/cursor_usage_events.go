@@ -19,6 +19,7 @@ import (
 // to cursor for Cursor admin API imports; xAI CSV imports identify each product.
 // Events are deduped by a stable fingerprint; account attribution can update existing rows.
 type CursorUsageEvent struct {
+	ConversationID   string
 	ID               int64
 	Agent            string
 	OccurredAt       string
@@ -66,6 +67,7 @@ func (db *DB) ensureCursorUsageEventsSchemaLocked(ctx context.Context, w *writer
 			user_email TEXT NOT NULL DEFAULT '',
 			account_user_id TEXT NOT NULL DEFAULT '',
 			account_polled_at TEXT NOT NULL DEFAULT '',
+			conversation_id TEXT NOT NULL DEFAULT '',
 			is_headless INTEGER NOT NULL DEFAULT 0,
 			dedup_key TEXT NOT NULL DEFAULT ''
 		);
@@ -187,16 +189,21 @@ func (db *DB) InsertCursorUsageEvents(ctx context.Context,
 				input_tokens, output_tokens,
 				cache_write_tokens, cache_read_tokens,
 				charged_microdollars, cursor_token_fee_microdollars,
-				user_id, user_email, is_headless, dedup_key
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				user_id, user_email, is_headless, dedup_key, conversation_id
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			SanitizeUTF8(ev.Agent), ev.OccurredAt, SanitizeUTF8(ev.Model), SanitizeUTF8(ev.Kind),
 			ev.InputTokens, ev.OutputTokens,
 			ev.CacheWriteTokens, ev.CacheReadTokens,
 			ev.Charged.Microdollars, ev.CursorTokenFee.Microdollars,
 			SanitizeUTF8(ev.UserID), SanitizeUTF8(ev.UserEmail),
-			isHeadless, ev.DedupKey,
+			isHeadless, ev.DedupKey, SanitizeUTF8(strings.TrimSpace(ev.ConversationID)),
 		); err != nil {
 			return fmt.Errorf("inserting cursor usage event: %w", err)
+		}
+		if conversationID := SanitizeUTF8(strings.TrimSpace(ev.ConversationID)); conversationID != "" {
+			if _, err := tx.ExecContext(ctx, `UPDATE cursor_usage_events SET conversation_id=? WHERE dedup_key=? AND conversation_id=''`, conversationID, ev.DedupKey); err != nil {
+				return fmt.Errorf("updating Cursor conversation ID: %w", err)
+			}
 		}
 	}
 

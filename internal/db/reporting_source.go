@@ -26,6 +26,8 @@ type reportingExportSource struct {
 	usageCandidates     []activityReportUsageCandidate
 	standaloneUsage     []activity.UsageRow
 	accountUsage        []reportingAccountRow
+	cursorEvents        []reportingCursorEventRow
+	cursorPolls         []reportingCursorPollRow
 	pricing             []export.EffectivePricingRow
 	createdAt           map[string]time.Time
 	projectObservations []export.ProjectIdentityObservation
@@ -53,6 +55,8 @@ type reportingDaySource struct {
 	usageCandidates  []activityReportUsageCandidate
 	standaloneUsage  []activity.UsageRow
 	accountUsage     []reportingAccountRow
+	cursorEvents     []reportingCursorEventRow
+	cursorPolls      []reportingCursorPollRow
 	pricing          []export.EffectivePricingRow
 	createdAt        map[string]time.Time
 	projects         map[string]export.ProjectMapEntry
@@ -131,7 +135,7 @@ func (db *DB) loadReportingExportSource(
 		return source, err
 	}
 	standaloneUsage, err := db.reportingStandaloneUsageCandidatesFrom(
-		ctx, tx, query, schemaVersion,
+		ctx, tx, query, schemaVersion, &source,
 	)
 	if err != nil {
 		return source, err
@@ -296,6 +300,8 @@ func (src reportingExportSource) forDate(
 		usageCandidates:  usageCandidates,
 		standaloneUsage:  standaloneUsage,
 		accountUsage:     accountUsage,
+		cursorEvents:     filterReportingRows(src.cursorEvents, func(row *reportingCursorEventRow) bool { return !row.at.Before(date) && row.at.Before(end) }),
+		cursorPolls:      filterReportingRows(src.cursorPolls, func(row *reportingCursorPollRow) bool { return !row.at.Before(date) && row.at.Before(end) }),
 		pricing:          src.pricing,
 		createdAt:        createdAt,
 		projects:         projects,

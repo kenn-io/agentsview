@@ -265,6 +265,7 @@ imported:
 
 func cursorUsageRow(ev cursorusage.UsageEvent) db.CursorUsageEvent {
 	return db.CursorUsageEvent{
+		ConversationID:   ev.ConversationID,
 		OccurredAt:       ev.Timestamp.UTC().Format(time.RFC3339Nano),
 		Model:            ev.Model,
 		Kind:             ev.Kind,

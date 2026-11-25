@@ -86,7 +86,7 @@ func newExportHourCommand(deps exportReportingDeps) *cobra.Command {
 	schemaVersion = bindReportingSchemaVersion(command)
 	projectKeys = bindReportingProjectKeys(command)
 	bucket = bindReportingBucket(command)
-	byMachine = command.Flags().Bool("by-machine", false, "Include snapshots by originating machine (schemas 5 and 6)")
+	byMachine = command.Flags().Bool("by-machine", false, "Include snapshots by originating machine (schemas 5, 6, and 7)")
 	return command
 }
 
@@ -138,7 +138,7 @@ func newExportDayCommand(deps exportReportingDeps) *cobra.Command {
 	schemaVersion = bindReportingSchemaVersion(command)
 	projectKeys = bindReportingProjectKeys(command)
 	bucket = bindReportingBucket(command)
-	byMachine = command.Flags().Bool("by-machine", false, "Include snapshots by originating machine (schemas 5 and 6)")
+	byMachine = command.Flags().Bool("by-machine", false, "Include snapshots by originating machine (schemas 5, 6, and 7)")
 	return command
 }
 
@@ -222,7 +222,7 @@ func newExportDigestCommand(deps exportReportingDeps) *cobra.Command {
 	schemaVersion = bindReportingSchemaVersion(command)
 	projectKeys = bindReportingProjectKeys(command)
 	bucket = bindReportingBucket(command)
-	byMachine = command.Flags().Bool("by-machine", false, "Include snapshots by originating machine (schemas 5 and 6)")
+	byMachine = command.Flags().Bool("by-machine", false, "Include snapshots by originating machine (schemas 5, 6, and 7)")
 	command.Flags().StringVar(
 		&fromValue, "from", "", "First UTC date (YYYY-MM-DD)",
 	)
@@ -238,7 +238,7 @@ func bindReportingSchemaVersion(command *cobra.Command) *int {
 		version,
 		"schema-version",
 		export.ReportingSchemaVersion,
-		fmt.Sprintf("Reporting export schema version (%d, %d, or %d)", export.ReportingSchemaVersion, export.ReportingJointSchemaVersion, export.ReportingAccountSchemaVersion),
+		fmt.Sprintf("Reporting export schema version (%d, %d, %d, or %d)", export.ReportingSchemaVersion, export.ReportingJointSchemaVersion, export.ReportingAccountSchemaVersion, export.ReportingCursorSchemaVersion),
 	)
 	return version
 }

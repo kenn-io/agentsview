@@ -25,11 +25,12 @@ most 31 dates.
 
 By default, `hour`, `day`, and `digest` use schema version 3, and you can also
 pass `--schema-version 5` for joint cells or `--schema-version 6 --by-machine`
-for Cursor account usage. Versions 1, 2, and 4 are no longer available. Any
-unsupported schema version fails before the command opens the archive or writes
-output. If your integration is pinned to version 1 or 2, update it to version 3;
-if it is pinned to version 4, update it to version 5. In either case, refresh
-your saved digests.
+for Cursor account usage, or `--schema-version 7 --by-machine` for Cursor event
+evidence. Versions 1, 2, and 4 are no longer available. Any unsupported schema
+version fails before the command opens the archive or writes output. If your
+integration is pinned to version 1 or 2, update it to version 3; if it is
+pinned to version 4, update it to version 5. In either case, refresh your saved
+digests.
 
 When a command succeeds, it writes exactly one canonical JSON document followed by one
 newline to stdout, and sends diagnostics to stderr. A malformed or future
@@ -85,6 +86,36 @@ machine ID starting with `cursor-account:` or `machine:`, while schema 5 and the
 change stream keep the original IDs. If your reports mix schemas 5 and 6, those
 machines have different IDs and can be counted twice. Use the same schema
 version across reporters.
+
+Schema 7 reports Cursor billing events in each hour's `cursor_events` list and
+account poll times in `cursor_polls`. The `key` fingerprints stored event
+fields. Events also carry the model, token counts, cost in microdollars, account
+ID, poll time, and `at`, the event time in UTC RFC3339Nano. When available,
+`conversation_id` identifies the conversation that generated the event. A poll
+is listed when it is newer than every event for that account and hour. The
+newest poll is the maximum of the event poll times and listed polls, including
+completed empty polls. Both lists are sorted by key and conversation ID or by
+account and omitted when empty. Scoped exports omit them. Cursor events remain
+in the whole-hour total but are omitted from machine parts. Schema 7 has no
+`cursor-account:*` parts, so consumers reconcile the ledger before summing.
+Other standalone usage stays in the archive part.
+
+To combine schema 7 reports for an hour, union events by `(key, conversation_id)`.
+When any event with a given key has a conversation ID, drop copies with that key
+and an empty ID. Otherwise union the empty-ID events by key. Choose the event
+copy with the newest `polled_at`, breaking ties by the lowest source device ID.
+Credit its account only when its stamp matches the newest poll for that account
+across all sources. Otherwise count it under the archive of the lowest-ID device
+holding the event. Consumers must implement this reconciliation to count shared
+events once. Schemas 5 and 6 lack the event identities needed for it. Use one
+schema version across reporters. Schema 7 uses the same machine ID hashing as
+schema 6.
+
+Events without a conversation ID and older rows that have not been fetched
+again retain fingerprint-only ambiguity. Each archive stores one row per
+fingerprint, so two events with the same fingerprint and different conversation
+IDs in one archive still count as one. A later fetch fills a missing conversation
+ID without replacing one already stored.
 
 Your downstream integration can pick one snapshot per originating machine and
 UTC hour before summing totals. Dropping an entire overlapping archive would
