@@ -4100,8 +4100,9 @@ END;
 const automationAuditSchemaSQL = `
 DROP TRIGGER IF EXISTS trg_sessions_automation_audit;
 CREATE TRIGGER IF NOT EXISTS trg_sessions_automation_audit
-AFTER UPDATE OF session_kind, first_message, user_message_count, is_automated, transcript_revision ON sessions
+AFTER UPDATE OF session_kind, entrypoint, first_message, user_message_count, is_automated, transcript_revision ON sessions
 WHEN NEW.session_kind IS NOT OLD.session_kind
+  OR NEW.entrypoint IS NOT OLD.entrypoint
   OR NEW.first_message IS NOT OLD.first_message
   OR NEW.user_message_count IS NOT OLD.user_message_count
   OR NEW.is_automated IS NOT OLD.is_automated
@@ -4591,11 +4592,25 @@ const clearAutomationAuditSQL = `UPDATE sessions SET automation_audit = 0 WHERE 
 // classifier changes. The writer is exclusively owned during the audit, and
 // interrupted audits leave stale rows for retry.
 func (db *DB) backfillIsAutomatedLocked(ctx context.Context, w *writerHandle) error {
-	if err := repairParentlessWorkers(ctx, w); err != nil {
-		return err
-	}
 	current := ClassifierHash()
+	var stored string
+	err := w.QueryRow(ctx,
+		`SELECT value FROM stats WHERE key = ?`,
+		ClassifierHashKey,
+	).Scan(&stored)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf(
+			"probing classifier hash: %w", err,
+		)
+	}
+	matchingHash := stored == current
 	if db.usageOnlyStorage() {
+		if err := reconcileParentlessWorkers(ctx, w, matchingHash); err != nil {
+			return err
+		}
+		if _, err := w.Exec(ctx, clearAutomationAuditSQL); err != nil {
+			return fmt.Errorf("marking automation audit rows fresh: %w", err)
+		}
 		// Usage-only archives deliberately discard the text this migration
 		// audits. Session writes classify while raw parser/importer data is
 		// still available, so the stored flag is the durable authority here.
@@ -4609,20 +4624,10 @@ func (db *DB) backfillIsAutomatedLocked(ctx context.Context, w *writerHandle) er
 		}
 		return nil
 	}
-	var stored string
-	err := w.QueryRow(ctx,
-		`SELECT value FROM stats WHERE key = ?`,
-		ClassifierHashKey,
-	).Scan(&stored)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf(
-			"probing classifier hash: %w", err,
-		)
-	}
 
 	patterns := snapshotAutomationPatterns()
 	var setIDs, clearIDs []string
-	if stored == current {
+	if matchingHash {
 		setIDs, clearIDs, err = auditAutomatedMatchingHash(ctx, w, patterns)
 	} else {
 		setIDs, clearIDs, err = auditAutomatedFull(ctx, w, patterns)
@@ -4639,6 +4644,9 @@ func (db *DB) backfillIsAutomatedLocked(ctx context.Context, w *writerHandle) er
 	if err := batchUpdateAutomated(ctx,
 		w, clearIDs, 0,
 	); err != nil {
+		return err
+	}
+	if err := reconcileParentlessWorkers(ctx, w, matchingHash); err != nil {
 		return err
 	}
 	if _, err := w.Exec(ctx,

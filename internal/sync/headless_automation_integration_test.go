@@ -24,10 +24,22 @@ func TestHeadlessSubagentsSurviveSyncAppends(t *testing.T) {
 		automated                                bool
 	}{
 		{
-			id: "scripted-worker", path: filepath.Join(claudeRoot, "project", "scripted-worker.jsonl"), relationship: parser.RelSubagent, automated: true,
-			content:  `{"type":"user","entrypoint":"sdk-cli","uuid":"u1","turnOrigin":"sdk","promptSource":"sdk","timestamp":"2026-10-01T10:00:00Z","message":{"content":"You are a code reviewer. Review the settings change."}}` + "\n",
+			id: "claude-worker", path: filepath.Join(claudeRoot, "project", "claude-worker.jsonl"), relationship: parser.RelSubagent, automated: false,
+			content:  `{"type":"user","entrypoint":"sdk-cli","uuid":"u1","turnOrigin":"sdk","promptSource":"sdk","timestamp":"2026-10-01T10:00:00Z","message":{"content":"Plan a settings change."}}` + "\n",
 			reply:    testjsonl.NewSessionBuilder().AddClaudeAssistantWithUUID("2026-10-01T10:01:00Z", "The plan is ready.", "a1", "u1").String(),
 			followup: testjsonl.NewSessionBuilder().AddClaudeAssistantWithUUID("2026-10-01T10:02:00Z", "More detail.", "a2", "a1").String(),
+		},
+		{
+			id: "scripted-worker", path: filepath.Join(claudeRoot, "project", "scripted-worker.jsonl"), relationship: parser.RelNone, automated: true,
+			content:  `{"type":"user","entrypoint":"sdk-cli","uuid":"u1","turnOrigin":"sdk","promptSource":"sdk","timestamp":"2026-10-01T10:00:00Z","message":{"content":"You are a code reviewer. Review the settings change."}}` + "\n",
+			reply:    testjsonl.NewSessionBuilder().AddClaudeAssistantWithUUID("2026-10-01T10:01:00Z", "No issues found.", "a1", "u1").String(),
+			followup: testjsonl.NewSessionBuilder().AddClaudeAssistantWithUUID("2026-10-01T10:02:00Z", "More detail.", "a2", "a1").String(),
+		},
+		{
+			id: "roborev-claude", path: filepath.Join(claudeRoot, "project", "roborev-claude.jsonl"), relationship: parser.RelNone, automated: true,
+			content:  `{"type":"user","entrypoint":"roborev","uuid":"u1","turnOrigin":"sdk","promptSource":"sdk","timestamp":"2026-10-01T10:00:00Z","message":{"content":"# UX review\nCheck the CLI output."}}` + "\n",
+			reply:    testjsonl.NewSessionBuilder().AddClaudeAssistantWithUUID("2026-10-01T10:01:00Z", "No issues found.", "a1", "u1").String(),
+			followup: `{"type":"user","entrypoint":"roborev","uuid":"u2","parentUuid":"a1","turnOrigin":"sdk","promptSource":"sdk","timestamp":"2026-10-01T10:02:00Z","message":{"content":"Double-check empty input."}}` + "\n",
 		},
 		{
 			id: "codex:019eb791-cf7d-75c1-8439-9ed74c122c80", path: filepath.Join(codexRoot, "rollout-2026-10-01T10-00-00-019eb791-cf7d-75c1-8439-9ed74c122c80.jsonl"),
@@ -56,23 +68,34 @@ func TestHeadlessSubagentsSurviveSyncAppends(t *testing.T) {
 			require.NoError(t, os.MkdirAll(filepath.Dir(session.path), 0o700))
 			require.NoError(t, os.WriteFile(session.path, []byte(session.content), 0o600))
 		}
-		require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
+		require.Equal(t, len(sessions), engine.SyncAll(t.Context(), nil).Synced)
 		for _, session := range sessions {
 			stored, err := database.GetSession(t.Context(), session.id)
 			require.NoError(t, err)
 			require.NotNil(t, stored)
-			assert.Equal(t, session.kind, stored.SessionKind)
-			assert.Equal(t, string(session.relationship), stored.RelationshipType)
-			assert.Nil(t, stored.ParentSessionID)
-			assert.Equal(t, session.automated, stored.IsAutomated)
+			assert.Equal(t, session.kind, stored.SessionKind, session.id)
+			assert.Equal(t, string(session.relationship), stored.RelationshipType, session.id)
+			assert.Nil(t, stored.ParentSessionID, session.id)
+			assert.Equal(t, session.automated, stored.IsAutomated, session.id)
 		}
 	}
+	// A second user turn on an automated sdk-cli worker clears automation and
+	// restores its parser-derived subagent relationship on incremental append.
+	sessions[1].content += `{"type":"user","entrypoint":"sdk-cli","uuid":"u2","parentUuid":"a2","turnOrigin":"sdk","promptSource":"sdk","timestamp":"2026-10-01T10:03:00Z","message":{"content":"Explain the first finding."}}` + "\n"
+	require.NoError(t, os.WriteFile(sessions[1].path, []byte(sessions[1].content), 0o600))
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	scriptedAfterFollowup, err := database.GetSession(t.Context(), "scripted-worker")
+	require.NoError(t, err)
+	require.NotNil(t, scriptedAfterFollowup)
+	assert.False(t, scriptedAfterFollowup.IsAutomated)
+	assert.Equal(t, "subagent", scriptedAfterFollowup.RelationshipType)
+
 	engine.Close()
 	path := database.Path()
 	require.NoError(t, database.Close())
 	raw, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
-	_, err = raw.ExecContext(t.Context(), `UPDATE sessions SET session_kind = '', relationship_type = '', is_automated = 0, data_version = 126 WHERE id = 'scripted-worker'`)
+	_, err = raw.ExecContext(t.Context(), `UPDATE sessions SET session_kind = '', relationship_type = '', is_automated = 0, data_version = 126 WHERE id = 'claude-worker'`)
 	require.NoError(t, err)
 	_, err = raw.ExecContext(t.Context(), `UPDATE sessions SET session_kind = 'non-interactive', relationship_type = '', is_automated = 1, data_version = 126 WHERE agent = 'codex'`)
 	require.NoError(t, err)
@@ -82,12 +105,12 @@ func TestHeadlessSubagentsSurviveSyncAppends(t *testing.T) {
 	reopened := dbtest.OpenTestDBAt(t, path)
 	engine = sync.NewEngine(t.Context(), reopened, engineConfig)
 	require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
-	worker, err := reopened.GetSession(t.Context(), "scripted-worker")
+	worker, err := reopened.GetSession(t.Context(), "claude-worker")
 	require.NoError(t, err)
 	require.NotNil(t, worker)
 	assert.Empty(t, worker.SessionKind)
 	assert.Equal(t, "subagent", worker.RelationshipType)
-	assert.Equal(t, db.CurrentDataVersion(), reopened.GetSessionDataVersion(t.Context(), "scripted-worker"))
+	assert.Equal(t, db.CurrentDataVersion(), reopened.GetSessionDataVersion(t.Context(), "claude-worker"))
 	engine.Close()
 	require.NoError(t, reopened.Close())
 }

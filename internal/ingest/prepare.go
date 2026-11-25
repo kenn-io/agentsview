@@ -155,6 +155,7 @@ func finalize(
 		return PreparedSession{}, err
 	}
 	validation = addValidationStats(validation, usageValidation)
+	session.SetParserRelationshipType(db.ParserSessionRelationship(session))
 	session.RelationshipType = db.SessionRelationship(session)
 	session, messages = db.ProjectSessionForStoragePolicy(
 		session, messages, options.ArchiveContent,
@@ -199,7 +200,7 @@ func ApplySessionMessageDerivedFieldsContext(
 		session.UserMessageCount = user
 	}
 	session.IsAutomated = db.IsAutomatedSessionMetadata(
-		session.SessionKind,
+		session.SessionKind, session.Entrypoint,
 	) || db.IsAutomatedTranscript(
 		session.UserMessageCount, messages, session.FirstMessage,
 	)

@@ -82,11 +82,13 @@ func TestReportingJointSubagentsTakePrecedenceOverAutomation(t *testing.T) {
 	for _, session := range []struct {
 		id                  string
 		subagent, automated bool
+		parentlessHeadless  bool
 	}{
-		{"root", false, false},
-		{"child", true, false},
-		{"automated-child", true, true},
-		{"automated", false, true},
+		{"root", false, false, false},
+		{"child", true, false, false},
+		{"automated-child", true, true, false},
+		{"automated-worker", true, true, true},
+		{"automated", false, true, false},
 	} {
 		insertSession(t, d, session.id, "project-a", func(s *Session) {
 			s.Agent = "agent-a"
@@ -94,7 +96,7 @@ func TestReportingJointSubagentsTakePrecedenceOverAutomation(t *testing.T) {
 			s.IsAutomated = session.automated
 			if session.subagent {
 				s.ParentSessionID = new("root")
-				if session.id == "automated-child" {
+				if session.parentlessHeadless {
 					s.ParentSessionID = nil
 					s.Entrypoint = "sdk-cli"
 				}
@@ -123,7 +125,7 @@ func TestReportingJointSubagentsTakePrecedenceOverAutomation(t *testing.T) {
 		peak     int
 		tokens   int64
 	}{
-		{"automated", 1, 1, 10},
+		{"automated", 2, 2, 20},
 		{"interactive", 1, 1, 10},
 		{"subagent", 2, 2, 20},
 	} {
@@ -137,9 +139,11 @@ func TestReportingJointSubagentsTakePrecedenceOverAutomation(t *testing.T) {
 	}
 	assert.InDelta(t, 1.0, hour.Activity.Totals.InteractiveAgentMinutes, 0)
 	assert.InDelta(t, 2.0, hour.Activity.Totals.SubagentAgentMinutes, 0)
-	assert.InDelta(t, 1.0, hour.Activity.Totals.AutomatedAgentMinutes, 0)
+	assert.InDelta(t, 2.0, hour.Activity.Totals.AutomatedAgentMinutes, 0)
 	assert.Equal(t, 2, hour.Activity.Buckets[0].MaxSubagentAgents)
+	assert.Equal(t, 2, hour.Activity.Buckets[0].MaxAutomatedAgents)
 	assert.Equal(t, money.Money{Microdollars: 20}, hour.Activity.Totals.SubagentCost)
+	assert.Equal(t, money.Money{Microdollars: 20}, hour.Activity.Totals.AutomatedCost)
 }
 
 func TestReportingJointUsageOnlySubagentRetainsClassification(t *testing.T) {

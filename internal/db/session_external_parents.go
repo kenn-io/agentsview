@@ -173,7 +173,7 @@ func (db *DB) ClearSessionExternalParent(
 	cleared, err := tx.ExecContext(ctx, `
 		UPDATE sessions
 		SET parent_session_id = NULL,
-			relationship_type = `+parserRelationshipSQL+`,
+			relationship_type = `+effectiveParentlessRelationshipSQL+`,
 			friction_rules_version = '',
 			sync_marker = MAX(COALESCE(sync_marker, ''), strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 		WHERE id = ? AND parent_session_id = ? AND relationship_type = 'subagent'
@@ -301,7 +301,7 @@ func applySessionExternalParentsSQL(linksSQL string) string {
 	return `
 	UPDATE sessions
 	SET parent_session_id = IIF(l.blocked, NULL, l.parent_session_id),
-		relationship_type = IIF(l.blocked, ` + parserRelationshipSQL + `, 'subagent'),
+		relationship_type = IIF(l.blocked, ` + effectiveParentlessRelationshipSQL + `, 'subagent'),
 		-- Friction review reads the hierarchy; a moved session needs a new one.
 		friction_rules_version = '',
 		sync_marker = MAX(COALESCE(sync_marker, ''), strftime('%Y-%m-%dT%H:%M:%fZ','now'))
@@ -317,7 +317,7 @@ func applySessionExternalParentsSQL(linksSQL string) string {
 	AND NOT ` + spawnEdgeExistsSQL("sessions") + `
 	AND (
 		COALESCE(sessions.parent_session_id, '') <> IIF(l.blocked, '', l.parent_session_id)
-		OR sessions.relationship_type <> IIF(l.blocked, ` + parserRelationshipSQL + `, 'subagent')
+		OR sessions.relationship_type <> IIF(l.blocked, ` + effectiveParentlessRelationshipSQL + `, 'subagent')
 	)`
 }
 

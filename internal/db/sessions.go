@@ -340,27 +340,28 @@ type Session struct {
 	Project string `json:"project"`
 	Machine string `json:"machine"`
 	// SourceMachines lists contributing hosted device identities, derived on read.
-	SourceMachines        []string `json:"source_machines,omitempty" doc:"Contributing hosted device machine IDs; omitted for sessions without hosted provenance."`
-	Agent                 string   `json:"agent"`
-	AgentLabel            string   `json:"agent_label,omitempty"`
-	Entrypoint            string   `json:"entrypoint,omitempty"`
-	SessionKind           string   `json:"session_kind,omitempty"`
-	FirstMessage          *string  `json:"first_message"`
-	DisplayName           *string  `json:"display_name,omitempty"`
-	SessionName           *string  `json:"-"`
-	StartedAt             *string  `json:"started_at"`
-	EndedAt               *string  `json:"ended_at"`
-	MessageCount          int      `json:"message_count"`
-	UserMessageCount      int      `json:"user_message_count"`
-	ParentSessionIDs      []string `json:"parent_session_ids,omitempty"`
-	ParentSessionID       *string  `json:"parent_session_id,omitempty"`
-	ParserParentSessionID *string  `json:"-"`
-	RelationshipType      string   `json:"relationship_type,omitempty"`
-	TotalOutputTokens     int      `json:"total_output_tokens"`
-	PeakContextTokens     int      `json:"peak_context_tokens"`
-	HasTotalOutputTokens  bool     `json:"has_total_output_tokens"`
-	HasPeakContextTokens  bool     `json:"has_peak_context_tokens"`
-	IsAutomated           bool     `json:"is_automated"`
+	SourceMachines         []string `json:"source_machines,omitempty" doc:"Contributing hosted device machine IDs; omitted for sessions without hosted provenance."`
+	Agent                  string   `json:"agent"`
+	AgentLabel             string   `json:"agent_label,omitempty"`
+	Entrypoint             string   `json:"entrypoint,omitempty"`
+	SessionKind            string   `json:"session_kind,omitempty"`
+	FirstMessage           *string  `json:"first_message"`
+	DisplayName            *string  `json:"display_name,omitempty"`
+	SessionName            *string  `json:"-"`
+	StartedAt              *string  `json:"started_at"`
+	EndedAt                *string  `json:"ended_at"`
+	MessageCount           int      `json:"message_count"`
+	UserMessageCount       int      `json:"user_message_count"`
+	ParentSessionIDs       []string `json:"parent_session_ids,omitempty"`
+	ParentSessionID        *string  `json:"parent_session_id,omitempty"`
+	ParserParentSessionID  *string  `json:"-"`
+	parserRelationshipType *string
+	RelationshipType       string `json:"relationship_type,omitempty"`
+	TotalOutputTokens      int    `json:"total_output_tokens"`
+	PeakContextTokens      int    `json:"peak_context_tokens"`
+	HasTotalOutputTokens   bool   `json:"has_total_output_tokens"`
+	HasPeakContextTokens   bool   `json:"has_peak_context_tokens"`
+	IsAutomated            bool   `json:"is_automated"`
 
 	// Session signals (computed from messages/tool_calls).
 	ToolFailureSignalCount int      `json:"tool_failure_signal_count"`
@@ -1278,7 +1279,7 @@ func (db *DB) GetArtifactExportSession(
 		AND EXISTS (SELECT 1 FROM session_external_parents ep
 			WHERE ep.session_id = sessions.id AND ep.parent_session_id = sessions.parent_session_id)`
 	parent := `CASE WHEN ` + launcherApplied + ` THEN NULL ELSE parent_session_id END`
-	relationship := `CASE WHEN ` + launcherApplied + ` THEN ` + parserRelationshipSQL + ` ELSE relationship_type END`
+	relationship := `CASE WHEN ` + launcherApplied + ` THEN ` + effectiveParentlessRelationshipSQL + ` ELSE relationship_type END`
 	cols := sessionFullColsBeforeParent + parent + `, parser_parent_session_id, ` + relationship + sessionFullColsAfterRelationship
 	s, err := scanSessionFullRow(db.getReader().QueryRowContext(ctx,
 		"SELECT "+cols+" FROM sessions WHERE id = ?", id), id)
@@ -1654,7 +1655,7 @@ const upsertSessionSQL = upsertSessionBaseSQL + `,
 
 func sessionIsAutomated(s Session) bool {
 	return s.IsAutomated ||
-		IsAutomatedSessionMetadata(s.SessionKind) ||
+		IsAutomatedSessionMetadata(s.SessionKind, s.Entrypoint) ||
 		(s.UserMessageCount <= 1 &&
 			s.FirstMessage != nil &&
 			IsAutomatedSession(*s.FirstMessage))
@@ -1667,7 +1668,16 @@ func parserParentSessionID(s Session) *string {
 	return s.ParentSessionID
 }
 
+// SetParserRelationshipType records the parser-derived relationship before
+// write-time normalization clears subagent status on automated parentless
+// headless runs. Stored in an unexported field so digest serialization ignores it.
+func (s *Session) SetParserRelationshipType(rel string) {
+	s.parserRelationshipType = &rel
+}
+
 func upsertSessionArgs(s Session) []any {
+	parserRel := ParserSessionRelationship(s)
+	s.IsAutomated = sessionIsAutomated(s)
 	s.RelationshipType = SessionRelationship(s)
 	return []any{
 		s.ID, s.Project, s.Machine, s.Agent, s.FirstMessage, s.SessionName,
@@ -1677,7 +1687,7 @@ func upsertSessionArgs(s Session) []any {
 		s.RelationshipType,
 		s.TotalOutputTokens, s.PeakContextTokens,
 		s.HasTotalOutputTokens, s.HasPeakContextTokens,
-		sessionIsAutomated(s),
+		s.IsAutomated,
 		s.TerminationStatus,
 		s.Cwd, s.GitBranch, s.SourceSessionID,
 		s.SourceVersion, s.GroupKey, s.TranscriptFidelity,
@@ -1693,17 +1703,46 @@ func upsertSessionArgs(s Session) []any {
 		s.FileInode, s.FileDevice, s.FileHash,
 		EncodePRLinks(s.PRLinks),
 		EncodePRLinks(s.PRLinks),
-		s.RelationshipType,
+		parserRel,
 	}
 }
 
-// SessionRelationship normalizes older parentless workers at every session write.
-func SessionRelationship(s Session) string {
+// ParserSessionRelationship returns the parser-derived relationship, promoting
+// parentless non-interactive sessions to subagent for provenance tracking.
+func ParserSessionRelationship(s Session) string {
+	if s.parserRelationshipType != nil {
+		return *s.parserRelationshipType
+	}
 	var parent string
 	if s.ParentSessionID != nil {
 		parent = *s.ParentSessionID
 	}
 	return string(parser.PromoteParentlessWorker(parent, parser.RelationshipType(s.RelationshipType), s.SessionKind == parser.SessionKindNonInteractive))
+}
+
+func isParentlessHeadlessWorker(s Session) bool {
+	if s.ParentSessionID != nil && *s.ParentSessionID != "" {
+		return false
+	}
+	if s.ParserParentSessionID != nil && *s.ParserParentSessionID != "" {
+		return false
+	}
+	if strings.HasPrefix(s.ID, "agent-") {
+		return false
+	}
+	return s.SessionKind == parser.SessionKindNonInteractive || s.Entrypoint == "sdk-cli"
+}
+
+// SessionRelationship normalizes parentless workers at every session write.
+// Parentless headless runs classified as automated stay un-delegated so
+// Activity counts them as Automated rather than Subagents, while real subagents
+// with a parent, spawn link, or native agent identity keep their subagent role.
+func SessionRelationship(s Session) string {
+	rel := ParserSessionRelationship(s)
+	if rel == string(parser.RelSubagent) && s.IsAutomated && isParentlessHeadlessWorker(s) {
+		return ""
+	}
+	return rel
 }
 
 // UpsertSession inserts or updates a session.

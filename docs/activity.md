@@ -62,16 +62,19 @@ sessions, so **Total Cost** lines up with `agentsview report usage daily` for
 the same day and timezone. Usage rows that recur across related sessions are
 deduplicated before totaling, following the same rule the Usage page applies.
 
-Subagents include native child sessions and eligible `claude -p`, `codex exec`,
-or Grok headless runs. Claude Code `sdk-cli` workers qualify when their first
-real normalized prompt records `turnOrigin=sdk`, and a human origin wins over
-conflicting markers. A queued first prompt, missing or unknown origin, SDK
-library entrypoints, or an explicit provider kind blocks this inference. Human
-SDK conversations stay Interactive unless their prompts match an automation
-pattern, while known subagents keep that category even when their prompts match
-built-in or user `[automated]` patterns. Runs without a subagent relationship
-count as Automated when they carry a roborev tag or a matching first prompt,
-and prompt matching requires one or fewer real user messages.
+Subagents include native child sessions, externally linked runs, and
+non-automated parentless `claude -p`, `codex exec`, or Grok headless runs.
+Claude Code `sdk-cli` workers qualify when their first real normalized prompt
+records `turnOrigin=sdk`, and a human origin wins over conflicting markers. A
+queued first prompt, missing or unknown origin, SDK library entrypoints, or an
+explicit provider kind blocks this inference. Human SDK conversations stay
+Interactive unless their prompts match an automation pattern. Real subagents
+(sessions with a parent, spawn link, or native subagent identity) keep the
+Subagents category even when scripted or their parent disappears. Parentless
+headless runs whose prompts match built-in or user `[automated]` patterns, or
+sessions tagged with `roborev` metadata (Codex `thread_source=roborev` or Claude
+`entrypoint=roborev`), count as Automated; prompt matching requires one or fewer
+real user messages.
 
 Parentless workers appear as sidebar roots, and flat lists, search, and CLI
 include them when children are requested. General stats and project, agent, and

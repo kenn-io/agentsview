@@ -20,18 +20,21 @@ func TestIsAutomatedSessionMetadata(t *testing.T) {
 	tests := []struct {
 		name        string
 		sessionKind string
+		entrypoint  string
 		want        bool
 	}{
-		{"NonInteractive", parser.SessionKindNonInteractive, false},
-		{"Roborev", parser.SessionKindRoborev, true},
-		{"EmptyKind", "", false},
-		{"Background", "bg", false},
+		{"NonInteractive", parser.SessionKindNonInteractive, "", false},
+		{"RoborevKind", parser.SessionKindRoborev, "", true},
+		{"RoborevEntrypoint", "", parser.SessionKindRoborev, true},
+		{"SDKCLIEntrypoint", "", "sdk-cli", false},
+		{"EmptyKind", "", "", false},
+		{"Background", "bg", "", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := IsAutomatedSessionMetadata(tt.sessionKind)
+			got := IsAutomatedSessionMetadata(tt.sessionKind, tt.entrypoint)
 			assert.Equal(t, tt.want, got,
-				"IsAutomatedSessionMetadata(%q)", tt.sessionKind)
+				"IsAutomatedSessionMetadata(%q, %q)", tt.sessionKind, tt.entrypoint)
 		})
 	}
 }
@@ -190,6 +193,11 @@ func TestIsAutomatedSession(t *testing.T) {
 		{
 			"RoborevRebaseFix",
 			"# Rebase Fix Request\n\nA previous fix attempt produced a patch that no longer applies cleanly.",
+			true,
+		},
+		{
+			"RoborevSnapshotHandoff",
+			"Read the complete task prompt from \"/workspace/repo/.roborev/roborev-snapshot-12345/prompt.md\" and carry out its instructions. Read the file in full before starting.\n",
 			true,
 		},
 

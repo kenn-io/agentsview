@@ -2759,10 +2759,12 @@ func sessionAutomationStateTx(
 		firstUserMessage sql.NullString
 		userMsgCount     int
 		sessionKind      string
+		entrypoint       string
 	)
 	err = tx.QueryRow(`
 		SELECT
 			s.session_kind,
+			s.entrypoint,
 			s.first_message,
 			s.user_message_count,
 			s.is_automated,
@@ -2782,6 +2784,7 @@ func sessionAutomationStateTx(
 		sessionID,
 	).Scan(
 		&sessionKind,
+		&entrypoint,
 		&firstMessage, &userMsgCount,
 		&rowAutomated, &firstUserMessage,
 	)
@@ -2795,7 +2798,7 @@ func sessionAutomationStateTx(
 		)
 	}
 
-	want = IsAutomatedSessionMetadata(sessionKind) ||
+	want = IsAutomatedSessionMetadata(sessionKind, entrypoint) ||
 		isAutomatedFromTextCandidates(userMsgCount, firstUserMessage, firstMessage)
 	return want, rowAutomated, true, nil
 }
@@ -2806,9 +2809,33 @@ func setSessionAutomationTx(
 	if _, err := tx.Exec(`
 		UPDATE sessions
 		   SET is_automated = ?,
+		       relationship_type = CASE
+		           WHEN ? = 1
+		            AND relationship_type = 'subagent'
+		            AND COALESCE(parent_session_id, '') = ''
+		            AND `+parentlessHeadlessWorkerConditionSQL+`
+		            AND NOT `+spawnEdgeExistsSQL("sessions")+`
+		           THEN ''
+		           WHEN ? = 0
+		            AND COALESCE(relationship_type, '') = ''
+		            AND COALESCE(parent_session_id, '') = ''
+		            AND (session_kind = 'non-interactive'
+		                 OR (entrypoint = 'sdk-cli' AND parser_relationship_type = 'subagent'))
+		           THEN 'subagent'
+		           ELSE relationship_type
+		       END,
+		       parser_relationship_type = CASE
+		           WHEN ? = 1
+		            AND relationship_type = 'subagent'
+		            AND COALESCE(parent_session_id, '') = ''
+		            AND `+parentlessHeadlessWorkerConditionSQL+`
+		            AND NOT `+spawnEdgeExistsSQL("sessions")+`
+		           THEN COALESCE(parser_relationship_type, 'subagent')
+		           ELSE parser_relationship_type
+		       END,
 		       local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		 WHERE id = ?`,
-		isAutomated, sessionID,
+		isAutomated, isAutomated, isAutomated, isAutomated, sessionID,
 	); err != nil {
 		return fmt.Errorf(
 			"updating is_automated from messages for %s: %w",

@@ -18,6 +18,7 @@ type automatedAuditPGProgress struct {
 const fullAutomationCandidatesPG = `SELECT
 	s.id, s.%s::text,
 	s.session_kind,
+	s.entrypoint,
 	s.first_message,
 	s.user_message_count,
 	s.is_automated,
@@ -39,9 +40,6 @@ func backfillIsAutomatedPGWithProgress(
 	ctx context.Context, pg *sql.DB,
 ) (automatedAuditPGProgress, error) {
 	var progress automatedAuditPGProgress
-	if err := repairParentlessWorkersPG(ctx, pg); err != nil {
-		return progress, err
-	}
 	current := db.ClassifierHash()
 	var stored string
 	errHash := pg.QueryRowContext(ctx,
@@ -64,17 +62,19 @@ func backfillIsAutomatedPGWithProgress(
 	}
 	classifier := db.SnapshotAutomationClassifier()
 	var verdicts []automationVerdictPG
+	var candidateIDs []string
+	fullReconcile := stored != current
 	if tracking {
 		if errors.Is(errHash, sql.ErrNoRows) {
 			if _, err := pg.ExecContext(ctx, `UPDATE sessions SET automation_audit_hash = NULL WHERE automation_audit_hash IS NOT NULL`); err != nil {
 				return progress, err
 			}
 		}
-		ids, err := automationCandidateIDsPG(ctx, pg, current)
+		candidateIDs, err = automationCandidateIDsPG(ctx, pg, current)
 		if err != nil {
 			return progress, err
 		}
-		if err := pgQueryChunked(ids, func(chunk []string) error {
+		if err := pgQueryChunked(candidateIDs, func(chunk []string) error {
 			batch, err := auditAutomatedMatchingHashPG(ctx, pg, classifier, &progress, column, chunk)
 			if err != nil {
 				return err
@@ -94,6 +94,9 @@ func backfillIsAutomatedPGWithProgress(
 	if err := writeAutomationVerdictsPG(ctx, pg, verdicts, column, ""); err != nil {
 		return progress, err
 	}
+	if err := reconcileParentlessWorkersPG(ctx, pg, tracking, current, fullReconcile, candidateIDs); err != nil {
+		return progress, err
+	}
 
 	if _, err := pg.ExecContext(ctx,
 		`INSERT INTO sync_metadata (key, value)
@@ -111,13 +114,84 @@ func backfillIsAutomatedPGWithProgress(
 
 const repairParentlessWorkersSQL = `UPDATE sessions
 		SET relationship_type = 'subagent', updated_at = NOW()
-		WHERE ` + db.ParentlessWorkerSQL
+		WHERE ` + db.ParentlessWorkerSQL + ` AND NOT is_automated
+		RETURNING id`
 
-func repairParentlessWorkersPG(ctx context.Context, pg *sql.DB) error {
-	if _, err := pg.ExecContext(ctx, repairParentlessWorkersSQL); err != nil {
-		return fmt.Errorf("repairing PG parentless workers: %w", err)
+const clearAutomatedParentlessWorkersPGWhere = `relationship_type = 'subagent'
+		  AND is_automated
+		  AND COALESCE(parent_session_id, '') = ''
+		  AND COALESCE(parser_parent_session_id, '') = ''
+		  AND COALESCE(external_parent_session_id, '') = ''
+		  AND id NOT LIKE 'agent-%'
+		  AND (session_kind = 'non-interactive' OR entrypoint = 'sdk-cli')
+		  AND NOT EXISTS (
+			SELECT 1 FROM tool_calls tc
+			WHERE tc.subagent_session_id = sessions.id
+			  AND tc.session_id IS DISTINCT FROM tc.subagent_session_id
+		  )`
+
+const clearAutomatedParentlessWorkersPGSQL = `UPDATE sessions
+		SET relationship_type = '', updated_at = NOW()
+		WHERE ` + clearAutomatedParentlessWorkersPGWhere + `
+		RETURNING id`
+
+func reconcileParentlessWorkersPG(
+	ctx context.Context, pg *sql.DB, tracking bool, hash string, fullReconcile bool, candidateIDs []string,
+) error {
+	changed, err := queryReturnedIDsPG(ctx, pg, repairParentlessWorkersSQL)
+	if err != nil {
+		return fmt.Errorf("promoting PG parentless workers: %w", err)
 	}
-	return nil
+	if fullReconcile || !tracking {
+		cleared, err := queryReturnedIDsPG(ctx, pg, clearAutomatedParentlessWorkersPGSQL)
+		if err != nil {
+			return fmt.Errorf("clearing PG automated parentless workers: %w", err)
+		}
+		changed = append(changed, cleared...)
+	} else if len(candidateIDs) > 0 {
+		if err := pgQueryChunked(candidateIDs, func(chunk []string) error {
+			cleared, err := queryReturnedIDsPG(ctx, pg,
+				`UPDATE sessions SET relationship_type = '', updated_at = NOW()
+				 WHERE id = ANY($1) AND `+clearAutomatedParentlessWorkersPGWhere+`
+				 RETURNING id`,
+				chunk,
+			)
+			if err != nil {
+				return fmt.Errorf("clearing PG automated parentless workers: %w", err)
+			}
+			changed = append(changed, cleared...)
+			return nil
+		}); err != nil {
+			return err
+		}
+	}
+	if !tracking || len(changed) == 0 {
+		return nil
+	}
+	return pgQueryChunked(changed, func(chunk []string) error {
+		_, err := pg.ExecContext(ctx,
+			`UPDATE sessions SET automation_audit_hash = $1 WHERE id = ANY($2) AND automation_audit_hash IS NULL`,
+			hash, chunk,
+		)
+		return err
+	})
+}
+
+func queryReturnedIDsPG(ctx context.Context, pg *sql.DB, query string, args ...any) ([]string, error) {
+	rows, err := pg.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, errors.Join(rows.Err(), rows.Close())
 }
 
 func auditAutomatedFullPG(
@@ -164,6 +238,7 @@ func auditAutomatedMatchingHashPG(
 		`SELECT
 			s.id, s.`+column+`::text,
 			s.session_kind,
+			s.entrypoint,
 			s.user_message_count,
 			s.is_automated,
 			s.prompt_evidence_discarded,
@@ -214,6 +289,7 @@ func auditAutomatedMatchingHashPG(
 		var (
 			id, version             string
 			sessionKind             string
+			entrypoint              string
 			userMessageCount        int
 			rowAutomated            bool
 			promptEvidenceDiscarded bool
@@ -225,6 +301,7 @@ func auditAutomatedMatchingHashPG(
 		if err := rows.Scan(
 			&id, &version,
 			&sessionKind,
+			&entrypoint,
 			&userMessageCount,
 			&rowAutomated,
 			&promptEvidenceDiscarded,
@@ -246,7 +323,7 @@ func auditAutomatedMatchingHashPG(
 			}
 			continue
 		}
-		if db.IsAutomatedSessionMetadata(sessionKind) {
+		if db.IsAutomatedSessionMetadata(sessionKind, entrypoint) {
 			if ids != nil || !rowAutomated {
 				verdicts = append(verdicts, automationVerdictPG{id, version, true})
 			}
@@ -323,6 +400,7 @@ func scanFullAutomationCandidatesPG(
 		var (
 			id, version             string
 			sessionKind             string
+			entrypoint              string
 			firstMessage            sql.NullString
 			firstUser               sql.NullString
 			userCount               int
@@ -330,7 +408,7 @@ func scanFullAutomationCandidatesPG(
 			promptEvidenceDiscarded bool
 		)
 		if err := rows.Scan(
-			&id, &version, &sessionKind,
+			&id, &version, &sessionKind, &entrypoint,
 			&firstMessage, &userCount, &rowAutomated, &promptEvidenceDiscarded, &firstUser,
 		); err != nil {
 			return nil, count, fmt.Errorf(
@@ -345,7 +423,7 @@ func scanFullAutomationCandidatesPG(
 			}
 			continue
 		}
-		want := db.IsAutomatedSessionMetadata(sessionKind)
+		want := db.IsAutomatedSessionMetadata(sessionKind, entrypoint)
 		want = want || classifier.IsAutomatedFromTextCandidates(
 			userCount, firstUser, firstMessage,
 		)

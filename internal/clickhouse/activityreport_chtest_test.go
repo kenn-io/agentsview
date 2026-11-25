@@ -20,13 +20,16 @@ func TestActivityReportParentlessAutomatedWorker(t *testing.T) {
 	t.Parallel()
 	store, syncer, local := newPushedStore(t)
 	for _, tc := range []struct {
-		id        string
-		parent    *string
-		automated bool
+		id         string
+		parent     *string
+		automated  bool
+		kind       string
+		entrypoint string
 	}{
-		{"worker", nil, false},
-		{"script", nil, true},
-		{"child", new("worker"), true},
+		{"worker", nil, false, "", ""},
+		{"script", nil, true, "non-interactive", ""},
+		{"claude-panel", nil, true, "", "sdk-cli"},
+		{"child", new("worker"), true, "", ""},
 	} {
 		prompt := "Explain this function."
 		if tc.automated {
@@ -37,9 +40,8 @@ func TestActivityReportParentlessAutomatedWorker(t *testing.T) {
 		sess.RelationshipType = "subagent"
 		sess.ParentSessionID = tc.parent
 		sess.IsAutomated = tc.automated
-		if tc.id == "script" {
-			sess.SessionKind = "non-interactive"
-		}
+		sess.SessionKind = tc.kind
+		sess.Entrypoint = tc.entrypoint
 		_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
 			Session: sess,
 			Messages: []db.Message{
@@ -58,8 +60,8 @@ func TestActivityReportParentlessAutomatedWorker(t *testing.T) {
 	require.NoError(t, err)
 	report, err := store.GetActivityReport(t.Context(), db.AnalyticsFilter{Timezone: "UTC", IncludeSubagents: true}, q)
 	require.NoError(t, err)
-	assert.Equal(t, 3, report.Totals.SubagentSessions)
-	assert.Zero(t, report.Totals.AutomatedSessions)
+	assert.Equal(t, 2, report.Totals.SubagentSessions)
+	assert.Equal(t, 2, report.Totals.AutomatedSessions)
 	assert.Zero(t, report.Totals.InteractiveSessions)
 }
 

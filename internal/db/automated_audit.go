@@ -17,11 +17,44 @@ const parentlessRelationshipSQL = `IIF(sessions.session_kind = 'non-interactive'
 // parserRelationshipSQL restores parser provenance, falling back to kind for legacy rows.
 const parserRelationshipSQL = `COALESCE(sessions.parser_relationship_type, ` + parentlessRelationshipSQL + `)`
 
-func repairParentlessWorkers(ctx context.Context, w *writerHandle) error {
+const parentlessHeadlessWorkerConditionSQL = `COALESCE(sessions.parser_parent_session_id, '') = ''
+ AND sessions.id NOT LIKE 'agent-%'
+ AND (sessions.session_kind = 'non-interactive' OR sessions.entrypoint = 'sdk-cli')`
+
+// effectiveParentlessRelationshipSQL restores a parentless session's effective
+// relationship when no external launcher parent applies. Automated parentless
+// headless runs stay un-delegated so they count as Automated.
+const effectiveParentlessRelationshipSQL = `IIF(sessions.is_automated = 1 AND ` + parentlessHeadlessWorkerConditionSQL + `, '', ` + parserRelationshipSQL + `)`
+
+func reconcileParentlessWorkers(ctx context.Context, w *writerHandle, onlyAudited bool) error {
 	if _, err := w.Exec(ctx, `UPDATE sessions
 		SET relationship_type = 'subagent', local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		WHERE `+ParentlessWorkerSQL); err != nil {
-		return fmt.Errorf("repairing parentless workers: %w", err)
+		WHERE `+ParentlessWorkerSQL+` AND is_automated = 0`); err != nil {
+		return fmt.Errorf("promoting parentless workers: %w", err)
+	}
+	auditFilter := ""
+	if onlyAudited {
+		auditFilter = " AND automation_audit = 1"
+	}
+	if _, err := w.Exec(ctx, `UPDATE sessions
+		SET relationship_type = '',
+			parser_relationship_type = COALESCE(parser_relationship_type, 'subagent'),
+			local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		WHERE relationship_type = 'subagent'
+		  AND is_automated = 1
+		  AND COALESCE(parent_session_id, '') = ''
+		  AND `+parentlessHeadlessWorkerConditionSQL+`
+		  AND NOT `+spawnEdgeExistsSQL("sessions")+auditFilter); err != nil {
+		return fmt.Errorf("clearing automated parentless workers: %w", err)
+	}
+	if _, err := w.Exec(ctx, `UPDATE sessions
+		SET relationship_type = 'subagent', local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		WHERE is_automated = 0
+		  AND COALESCE(parent_session_id, '') = ''
+		  AND COALESCE(relationship_type, '') = ''
+		  AND entrypoint = 'sdk-cli'
+		  AND parser_relationship_type = 'subagent'`+auditFilter); err != nil {
+		return fmt.Errorf("restoring parentless sdk-cli workers: %w", err)
 	}
 	return nil
 }
@@ -47,6 +80,7 @@ func auditAutomatedFull(ctx context.Context,
 		`SELECT
 			s.id,
 			s.session_kind,
+			s.entrypoint,
 			s.first_message,
 			s.user_message_count,
 			s.is_automated,
@@ -80,6 +114,7 @@ func auditAutomatedFull(ctx context.Context,
 const auditAutomatedMatchingHashSQL = `SELECT
 			s.id,
 			s.session_kind,
+			s.entrypoint,
 			s.user_message_count,
 			s.is_automated,
 			substr(CAST(first_user.content AS BLOB), 1, ?)
@@ -131,6 +166,7 @@ func auditAutomatedMatchingHash(ctx context.Context,
 		var (
 			id               string
 			sessionKind      string
+			entrypoint       string
 			userMessageCount int
 			rowAutomated     bool
 			firstUser        boundedAutomationText
@@ -139,6 +175,7 @@ func auditAutomatedMatchingHash(ctx context.Context,
 		if err := rows.Scan(
 			&id,
 			&sessionKind,
+			&entrypoint,
 			&userMessageCount,
 			&rowAutomated,
 			&firstUser.prefix,
@@ -151,7 +188,7 @@ func auditAutomatedMatchingHash(ctx context.Context,
 				"scanning bounded automated audit candidate: %w", err,
 			)
 		}
-		if IsAutomatedSessionMetadata(sessionKind) {
+		if IsAutomatedSessionMetadata(sessionKind, entrypoint) {
 			setIDs, clearIDs = AppendAutomationFlagChange(
 				setIDs, clearIDs, id, rowAutomated, true,
 			)
@@ -183,6 +220,7 @@ func auditAutomatedMatchingHash(ctx context.Context,
 			`SELECT
 				s.id,
 				s.session_kind,
+				s.entrypoint,
 				s.first_message,
 				s.user_message_count,
 				s.is_automated,
@@ -234,20 +272,21 @@ func scanFullAutomationCandidates(
 		var (
 			id           string
 			sessionKind  string
+			entrypoint   string
 			firstMessage sql.NullString
 			firstUser    sql.NullString
 			userCount    int
 			rowAutomated bool
 		)
 		if err := rows.Scan(
-			&id, &sessionKind,
+			&id, &sessionKind, &entrypoint,
 			&firstMessage, &userCount, &rowAutomated, &firstUser,
 		); err != nil {
 			return nil, nil, fmt.Errorf(
 				"scanning automated audit candidate: %w", err,
 			)
 		}
-		want := IsAutomatedSessionMetadata(sessionKind) ||
+		want := IsAutomatedSessionMetadata(sessionKind, entrypoint) ||
 			patterns.matchesTextCandidates(
 				userCount, firstUser, firstMessage,
 			)

@@ -39,6 +39,7 @@ var automatedPrefixes = []string{
 	"Review the code changes introduced by commit ",
 	"Review the code changes in commit ",
 	"Implement the following plan:",
+	"Read the complete task prompt from \"",
 }
 
 // automatedSubstrings are patterns matched anywhere in the
@@ -73,13 +74,9 @@ const AutomationEvidencePrefixBytes = userPatternMaxLen
 
 // IsAutomatedSessionMetadata classifies durable provider-owned session
 // metadata that explicitly identifies an automated invocation.
-func IsAutomatedSessionMetadata(sessionKind string) bool {
-	switch sessionKind {
-	case parser.SessionKindRoborev:
-		return true
-	default:
-		return false
-	}
+func IsAutomatedSessionMetadata(sessionKind, entrypoint string) bool {
+	return sessionKind == parser.SessionKindRoborev ||
+		entrypoint == parser.SessionKindRoborev
 }
 
 var (

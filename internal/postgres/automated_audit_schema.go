@@ -16,11 +16,11 @@ END;
 $audit$;
 DROP TRIGGER IF EXISTS trg_sessions_automation_audit ON sessions;
 CREATE TRIGGER trg_sessions_automation_audit
-BEFORE UPDATE OF session_kind, first_message, user_message_count, is_automated, transcript_revision, prompt_evidence_discarded, updated_at ON sessions
+BEFORE UPDATE OF session_kind, entrypoint, first_message, user_message_count, is_automated, transcript_revision, prompt_evidence_discarded, updated_at ON sessions
 FOR EACH ROW WHEN (
     NEW.automation_audit_hash IS NOT DISTINCT FROM OLD.automation_audit_hash
-    AND ROW(NEW.session_kind, NEW.first_message, NEW.user_message_count, NEW.is_automated, NEW.transcript_revision, NEW.prompt_evidence_discarded, NEW.updated_at)
-        IS DISTINCT FROM ROW(OLD.session_kind, OLD.first_message, OLD.user_message_count, OLD.is_automated, OLD.transcript_revision, OLD.prompt_evidence_discarded, OLD.updated_at)
+    AND ROW(NEW.session_kind, NEW.entrypoint, NEW.first_message, NEW.user_message_count, NEW.is_automated, NEW.transcript_revision, NEW.prompt_evidence_discarded, NEW.updated_at)
+        IS DISTINCT FROM ROW(OLD.session_kind, OLD.entrypoint, OLD.first_message, OLD.user_message_count, OLD.is_automated, OLD.transcript_revision, OLD.prompt_evidence_discarded, OLD.updated_at)
 ) EXECUTE FUNCTION mark_session_automation_audit();
 `
 

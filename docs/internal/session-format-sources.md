@@ -287,9 +287,17 @@ evidence; they do not establish whether a tool helped the task.
   for interactive terminal launches; SDK libraries use `sdk-py` or `sdk-ts`.
   Worker prompts record `turnOrigin=sdk`; relayed human prompts record
   `turnOrigin=human` and `origin.kind=human`, even when `promptSource=sdk`.
-  AgentsView assigns `relationship_type=subagent` for parentless `sdk-cli`
-  sessions with no existing relationship when the first real normalized prompt
-  has SDK origin, after queued prompts merge. SDK ingress discards queued SDK
+  AgentsView records `parser_relationship_type=subagent` for parentless
+  `sdk-cli` sessions with no existing relationship when the first real
+  normalized prompt has SDK origin, after queued prompts merge. When such a
+  parentless headless run is classified as automated, AgentsView leaves
+  `relationship_type` empty so it counts as Automated instead of Subagents,
+  and restores `relationship_type=subagent` if automation clears (for example,
+  on a second user turn or after removing a user `[automated]` pattern).
+  Sessions with `entrypoint=roborev` (from `CLAUDE_CODE_ENTRYPOINT=roborev`,
+  which Claude Code preserves verbatim on `-p` launches) count as automated
+  directly via `IsAutomatedSessionMetadata` without subagent promotion. SDK
+  ingress discards queued SDK
   origin before attachments are persisted. A queued first prompt supplies no
   SDK evidence and blocks later-turn inference. Human origin wins conflicting
   markers; missing origin remains ambiguous. Explicit provider kinds remain

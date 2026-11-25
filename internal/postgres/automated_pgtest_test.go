@@ -119,32 +119,40 @@ func TestHeadlessClassificationRepairPG(t *testing.T) {
 	defer cancel()
 	require.NoError(t, ps.EnsureSchema(ctx))
 	for _, tc := range []struct {
-		id, prompt, kind, relationship string
-		parent                         *string
+		id, agent, entrypoint, prompt, kind, relationship string
+		parent, parserParent                              *string
+		userCount                                         int
 	}{
-		{"plain", "Explain this function.", "non-interactive", "", nil},
-		{"script", "You are a code reviewer. Review this change.", "non-interactive", "", nil},
-		{"child", "Explain this function.", "non-interactive", "", new("plain")},
-		{"fork", "Explain this function.", "non-interactive", "fork", nil},
-		{"review", "Explain this function.", "roborev", "", nil},
+		{"plain", "codex", "", "Explain this function.", "non-interactive", "", nil, nil, 1},
+		{"script", "codex", "", "You are a code reviewer. Review this change.", "non-interactive", "subagent", nil, nil, 1},
+		{"claude-panel", "claude", "sdk-cli", "You are a code reviewer. Review this change.", "", "subagent", nil, nil, 1},
+		{"claude-roborev", "claude", "roborev", "# UX review\nCheck the CLI output.", "", "", nil, nil, 2},
+		{"real-child", "claude", "sdk-cli", "You are a code reviewer. Review this change.", "", "subagent", nil, new("plain"), 1},
+		{"child", "codex", "", "Explain this function.", "non-interactive", "", new("plain"), new("plain"), 1},
+		{"fork", "codex", "", "Explain this function.", "non-interactive", "fork", nil, nil, 1},
+		{"review", "codex", "", "Explain this function.", "roborev", "", nil, nil, 1},
 	} {
 		_, err = ps.DB().ExecContext(ctx, `INSERT INTO sessions (
-			id, machine, project, agent, first_message, session_kind, relationship_type,
-			parent_session_id, user_message_count, is_automated, updated_at
-		) VALUES ($1, 'host', 'project-a', 'codex', $2, $3, $4, $5, 1, true, '2000-01-01T00:00:00Z')`,
-			tc.id, tc.prompt, tc.kind, tc.relationship, tc.parent)
+			id, machine, project, agent, entrypoint, first_message, session_kind, relationship_type,
+			parent_session_id, parser_parent_session_id, user_message_count, is_automated, updated_at
+		) VALUES ($1, 'host', 'project-a', $2, $3, $4, $5, $6, $7, $8, $9, true, '2000-01-01T00:00:00Z')`,
+			tc.id, tc.agent, tc.entrypoint, tc.prompt, tc.kind, tc.relationship, tc.parent, tc.parserParent, tc.userCount)
 		require.NoError(t, err)
 	}
 	require.NoError(t, backfillIsAutomatedPG(ctx, ps.DB()))
 	for _, tc := range []struct {
 		id, relationship string
 		automated        bool
+		bumped           bool
 	}{
-		{"plain", "subagent", false},
-		{"script", "subagent", true},
-		{"child", "", false},
-		{"fork", "fork", false},
-		{"review", "", true},
+		{"plain", "subagent", false, true},
+		{"script", "", true, true},
+		{"claude-panel", "", true, true},
+		{"claude-roborev", "", true, false},
+		{"real-child", "subagent", true, false},
+		{"child", "", false, false},
+		{"fork", "fork", false, false},
+		{"review", "", true, false},
 	} {
 		var relationship string
 		var automated bool
@@ -152,10 +160,13 @@ func TestHeadlessClassificationRepairPG(t *testing.T) {
 		require.NoError(t, ps.DB().QueryRowContext(ctx, `SELECT relationship_type, is_automated, updated_at FROM sessions WHERE id = $1`, tc.id).Scan(&relationship, &automated, &updated))
 		assert.Equal(t, tc.relationship, relationship, tc.id)
 		assert.Equal(t, tc.automated, automated, tc.id)
-		if tc.relationship == "subagent" {
-			assert.True(t, updated.After(time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)))
+		if tc.bumped {
+			assert.True(t, updated.After(time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)), tc.id)
 		}
 	}
+	progress, err := backfillIsAutomatedPGWithProgress(ctx, ps.DB())
+	require.NoError(t, err)
+	assert.Zero(t, progress.RowsPrefetched, "reconciled rows stay stamped for incremental audits")
 	_, err = ps.DB().ExecContext(ctx, `UPDATE sessions SET relationship_type = '' WHERE id = 'plain'`)
 	require.NoError(t, err)
 	require.NoError(t, backfillIsAutomatedPG(ctx, ps.DB()))
