@@ -36,6 +36,11 @@ func startLatencyProxy(tb testing.TB, pgURL string, delay time.Duration) *latenc
 	tb.Helper()
 	parsed, err := url.Parse(pgURL)
 	require.NoError(tb, err)
+	if mode := parsed.Query().Get("sslmode"); mode == "verify-ca" || mode == "verify-full" {
+		// Clients reach the proxy by its loopback address, so certificate
+		// checks against the server's name would fail.
+		tb.Skip("the latency proxy cannot preserve TLS server verification")
+	}
 	port := parsed.Port()
 	if port == "" {
 		port = "5432"
@@ -57,7 +62,7 @@ func (p *latencyProxy) accept() {
 		if err != nil {
 			return
 		}
-		server, err := net.Dial("tcp", p.upstream)
+		server, err := net.DialTimeout("tcp", p.upstream, 10*time.Second)
 		if err != nil {
 			_ = client.Close()
 			continue
