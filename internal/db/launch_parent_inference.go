@@ -6,15 +6,12 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"path"
-	"regexp"
 	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/shellquote"
 )
-
-var launchWorkdirKeyRE = regexp.MustCompile(`["']?(?:workdir|cwd)["']?\s*:`)
 
 func launchFolder(s string) string {
 	s = strings.ReplaceAll(s, `\`, "/")
@@ -105,39 +102,50 @@ func inferLaunchChild(ctx context.Context, tx *sql.Tx, child launchChild) (int, 
 		if e != nil || at.After(start) || start.Sub(at) > 60*time.Second {
 			continue
 		}
-		command := commitCommandText(input)
-		if args, ok := commandArgv(input); ok && command == "" {
-			words := make([]string, len(args))
-			for i, arg := range args {
-				words[i] = shellquote.POSIX(arg)
-			}
-			command = strings.Join(words, " ")
-		}
-		if command == input && jsontext.Value(input).IsValid() {
-			command = ""
-		}
-		if command == "" {
-			matches[id] = true
-			continue
-		}
-		dir := cwd
-		unknownWorkdir := !jsontext.Value(input).IsValid() && len(launchWorkdirKeyRE.FindAllStringIndex(input, -1)) > len(commitWorkdirRE.FindAllStringIndex(input, -1))
-		if unknownWorkdir {
-			dir = ""
-		}
-		if workdir := toolCallWorkdir(input); workdir != "" && !unknownWorkdir {
-			dir = parser.ShellWorkdir(dir, workdir)
-		}
-		for _, launch := range parser.LaunchesFromCommand(command, dir) {
-			if launch.Agent != child.agent {
+		var calls []codeModeCommand
+		if !jsontext.Value(input).IsValid() {
+			var ok bool
+			calls, ok = codeModeCommands(input)
+			if !ok {
+				matches[id] = true
 				continue
 			}
-			if !launch.Certain || !absoluteLaunchFolder(launch.Dir) {
+		} else {
+			command := commitCommandText(input)
+			if args, ok := commandArgv(input); ok && command == "" {
+				words := make([]string, len(args))
+				for i, arg := range args {
+					words[i] = shellquote.POSIX(arg)
+				}
+				command = strings.Join(words, " ")
+			}
+			if command == input {
+				command = ""
+			}
+			calls = []codeModeCommand{{command: command, workdir: toolCallWorkdir(input)}}
+		}
+		for _, call := range calls {
+			if call.command == "" {
 				matches[id] = true
-			} else if launchFolder(launch.Dir) == launchFolder(child.cwd) {
-				matches[id] = true
-				if strings.TrimSpace(machine) != "" {
-					known[id] = true
+				continue
+			}
+			dir := cwd
+			if call.unknownWorkdir {
+				dir = ""
+			} else if call.workdir != "" {
+				dir = parser.ShellWorkdir(dir, call.workdir)
+			}
+			for _, launch := range parser.LaunchesFromCommand(call.command, dir) {
+				if launch.Agent != child.agent {
+					continue
+				}
+				if call.uncertain || !launch.Certain || !absoluteLaunchFolder(launch.Dir) {
+					matches[id] = true
+				} else if launchFolder(launch.Dir) == launchFolder(child.cwd) {
+					matches[id] = true
+					if strings.TrimSpace(machine) != "" {
+						known[id] = true
+					}
 				}
 			}
 		}

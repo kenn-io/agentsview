@@ -572,3 +572,69 @@ func TestLaunchParentConditionalAlone(t *testing.T) {
 	_, err = d.GetSessionExternalParent(t.Context(), "child")
 	assert.ErrorIs(t, err, sql.ErrNoRows)
 }
+
+func TestLaunchParentShellOrAndCodeMode(t *testing.T) {
+	for _, tc := range []struct {
+		name, input string
+		linked      bool
+	}{
+		{"short circuit", `{"command":"true || codex -C /repo exec hi"}`, false},
+		{"conditional JavaScript", `if (false) { await tools.exec_command({cmd:"codex exec hi",workdir:"/repo"}) }`, false},
+		{"short circuit JavaScript", `false && await tools.exec_command({cmd:"codex exec hi",workdir:"/repo"})`, false},
+		{"uncalled function", `function f() { return tools.exec_command({cmd:"codex exec hi",workdir:"/repo"}) }`, false},
+		{"uncalled method", `const x = { f() { return tools.exec_command({cmd:"codex exec hi",workdir:"/repo"}) } }`, false},
+		{"multiple JavaScript calls", `await Promise.all([tools.exec_command({cmd:"echo hello"}), tools.exec_command({cmd:"codex exec hi",workdir:"/repo"})])`, true},
+		{"separate workdirs", `await Promise.all([tools.exec_command({cmd:"echo hello",workdir:"/other"}), tools.exec_command({cmd:"codex exec hi"})])`, true},
+		{"literal templates", "await Promise.all([tools.exec_command({cmd:`echo hello`}), tools.exec_command({cmd:`codex exec hi`,workdir:`/repo`})])", true},
+		{"dynamic template", "await tools.exec_command({cmd:`codex exec ${prompt}`,workdir:`/repo`})", false},
+		{"conditional alongside certain", `if (false) { await tools.exec_command({cmd:"echo hi"}) }; await tools.exec_command({cmd:"codex exec hi",workdir:"/repo"})`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = "codex"; s.Cwd = "/repo" })
+			insertMessages(t, d, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: "parent", ToolName: "exec", Category: "Bash", InputJSON: tc.input}}})
+			started := "2026-01-02T03:04:03Z"
+			insertSession(t, d, "child", "project", func(s *Session) {
+				s.Agent = "codex"
+				s.Cwd = "/repo"
+				s.StartedAt = &started
+				s.SessionKind = "non-interactive"
+			})
+			_, err := d.LinkSubagentSessionsForSessions(t.Context(), []string{"child"})
+			require.NoError(t, err)
+			link, err := d.GetSessionExternalParent(t.Context(), "child")
+			if tc.linked {
+				require.NoError(t, err)
+				assert.Equal(t, "parent", link.ParentSessionID)
+			} else {
+				assert.ErrorIs(t, err, sql.ErrNoRows)
+			}
+		})
+	}
+}
+
+func TestLaunchParentConditionalCompetitor(t *testing.T) {
+	for _, tc := range []struct{ name, input string }{
+		{"shell", `{"command":"true || codex -C /repo exec hi"}`},
+		{"JavaScript", `if (false) { await tools.exec_command({cmd:"codex exec hi",workdir:"/repo"}) }`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			for _, launcher := range []struct{ id, input string }{{"certain", `{"command":"codex exec hi"}`}, {"conditional", tc.input}} {
+				insertSession(t, d, launcher.id, "project", func(s *Session) { s.Agent = "codex"; s.Cwd = "/repo" })
+				insertMessages(t, d, Message{SessionID: launcher.id, Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: launcher.id, ToolName: "exec", Category: "Bash", InputJSON: launcher.input}}})
+			}
+			started := "2026-01-02T03:04:03Z"
+			insertSession(t, d, "child", "project", func(s *Session) {
+				s.Agent = "codex"
+				s.Cwd = "/repo"
+				s.StartedAt = &started
+				s.SessionKind = "non-interactive"
+			})
+			_, err := d.LinkSubagentSessionsForSessions(t.Context(), []string{"child"})
+			require.NoError(t, err)
+			_, err = d.GetSessionExternalParent(t.Context(), "child")
+			assert.ErrorIs(t, err, sql.ErrNoRows)
+		})
+	}
+}

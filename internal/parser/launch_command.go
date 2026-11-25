@@ -90,7 +90,11 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 			case syntax.OrStmt:
 				visit(call.X, false)
 				dir = ""
+				start := len(out)
 				visit(call.Y, false)
+				for i := start; i < len(out); i++ {
+					out[i].Certain = false
+				}
 				dir = ""
 			case syntax.Pipe, syntax.PipeAll:
 				visit(call.X, false)
