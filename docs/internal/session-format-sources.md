@@ -6716,18 +6716,19 @@ schemas keep their existing ordering behavior.
   snapshot, not per-message usage. Internal `model_id` is not exposed as a
   public model name. Titles and parent links remain unknown.
 - **Run classification:** every `item` line carries a top-level `source`; the
-  header has none. A private survey of about 3,700 transcripts from one agent
-  on 2026-11-24 found `source` on every item line. The first user-role item's
+  header has none. A private check of all 3,923 transcripts from one agent on
+  2026-11-25 found `source` on every item line. The first user-role item's
   `source` identifies runs Muse starts itself: `scheduler.cron`,
   `runtime.self_improvement`, `runtime.feed`, `runtime.proactivity`,
-  `runtime.browser_input` and `runtime.action` covered 2,581 sessions, and a
-  manual review found no conversations among them. Conversations open with
-  plain `runtime`, a voice source such as `runtime.voice_audio`, or
+  `runtime.browser_input` and `runtime.action` covered 3,608 sessions, and none
+  of them was a conversation. Five sessions had no user item. Conversations open
+  with plain `runtime`, a voice source such as `runtime.voice_audio`, or
   `runtime.onboarding`. Plain `runtime` also opens subagent runs and delegated
   assignments. Context items such as `runtime.skill_invalidation` and
-  `runtime.chats` can come first with a different role, so the first item is
-  not the signal. Scheduled runs can receive injected user items, such as
-  approvals, so message count does not separate them from conversations.
+  `runtime.chats` can come first with a different role, so the first item is not
+  the signal. Scheduled runs can receive injected user items, such as approvals
+  (half of the 1,520 `scheduler.cron` sessions had two user items), so message
+  count does not separate them from conversations.
   `internal/parser/testdata/muse_personal/sources/` holds one synthetic sample
   per case; none is a capture.
 - **Agentsview:** `internal/parser/muse_personal.go` and
