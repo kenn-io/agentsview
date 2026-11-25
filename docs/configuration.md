@@ -2202,9 +2202,10 @@ and its triggers.
 AgentsView migrates the database automatically on startup when the schema
 changes. When a parser upgrade affects only some agents and the archive syncs
 source files, AgentsView reparses those agents' sessions in place and retries
-failed sources on later syncs. Other stale data versions trigger a full resync
-into a fresh temporary database, which copies preserved and orphaned session
-data from the previous database before swapping atomically. If a full resync
+failed sources on later syncs. It serves saved sessions during the reparse.
+Other stale data versions trigger a full resync into a fresh temporary database,
+which copies preserved and orphaned session data from the previous database
+before swapping atomically. If a full resync
 aborts, AgentsView falls back to an incremental sync and leaves the data-version
 marker stale. The running daemon retries the rebuild after an hour, backing off
 to daily, and a restart also retries.
@@ -2448,11 +2449,11 @@ generation metadata for one or more records, but AgentsView could not derive
 normalized usage totals from them during that sync).
 
 During full parser rebuilds, AgentsView keeps serving the retained archive while
-the dashboard and CLI report stale results. Scoped upgrades and schema repairs
-finish before HTTP readiness: their startup output prints phase and completion
-lines, and `agentsview daemon status` shows the starting PID, elapsed time,
-current phase, progress detail, and log path while the daemon holds the start
-lock.
+the dashboard and CLI report stale results. Scoped upgrades serve saved sessions
+while affected agents reparse. Schema repairs finish before HTTP readiness:
+their startup output prints phase and completion lines. While the daemon holds
+the start lock, `agentsview daemon status` shows the starting PID, elapsed time,
+current phase, progress detail, and log path.
 
 ### Friction Log
 

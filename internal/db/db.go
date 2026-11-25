@@ -2388,10 +2388,10 @@ func CheckDataVersion(ctx context.Context, path string) error {
 	return err
 }
 
-// ArchiveResyncState reads both startup decisions from one archive probe.
-func ArchiveResyncState(ctx context.Context, path string) (needsResync, fullRebuild bool, err error) {
+// ArchiveResyncState reads startup decisions from one archive probe.
+func ArchiveResyncState(ctx context.Context, path string) (needsResync, fullRebuild, schemaRepairNeeded bool, err error) {
 	schema, stale, full, err := probeDatabase(ctx, path, true)
-	return schema || stale, full, err
+	return schema || stale, full, schema, err
 }
 
 // probeDatabase checks schema repairs, scoped upgrades, and full rebuilds together.

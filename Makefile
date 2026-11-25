@@ -359,6 +359,10 @@ test: pricing-snapshot ensure-embed-dir
 	go test $(GO_TEST_P_FLAG) -tags "fts5" ./... -skip '^TestActiveAppendGrowth$$' -v
 	go test -tags "fts5" ./cmd/perfsim -run '^TestActiveAppendGrowth$$' -v
 
+.PHONY: test-scoped-upgrade-startup
+test-scoped-upgrade-startup: pricing-snapshot ensure-embed-dir
+	go test $(GO_TEST_P_FLAG) -tags "fts5" ./internal/db ./cmd/agentsview -run '^(TestArchiveResyncState|TestServeScopedUpgradeServesSessionsBeforeReparse|TestServeRestartServesSessionsBeforeStartupSync|TestServeSkipInitialSyncStillReparsesStaleArchive)$$' -count=1
+
 .PHONY: test-cursor-account-reporting
 test-cursor-account-reporting: pricing-snapshot ensure-embed-dir
 	go test $(GO_TEST_P_FLAG) -tags "fts5" ./internal/db ./cmd/agentsview ./internal/cursorusage -run '^(TestCursorAccount|TestCursorSync|TestExportReportingCursorAccount|TestListDailyUsageUsers|TestFetchAllUsageEvents|TestListUsageEventsRejectsNonNumericUserID|TestAccountUsageAgentMigrationPreservesCursorRows|TestOpenReadOnlyDBRejectsStaleArchive)' -count=1

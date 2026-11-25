@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -34,11 +35,11 @@ func writeRestartSession(t *testing.T, cfg config.Config, id string) string {
 
 // startRestartServe runs an ordinary serve and returns its base URL once the
 // runtime record is published.
-func startRestartServe(t *testing.T, cfg config.Config) string {
+func startRestartServe(t *testing.T, cfg config.Config, opts serveOptions) string {
 	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- runServe(ctx, cfg, serveOptions{}, 0) }()
+	go func() { done <- runServe(ctx, cfg, opts, 0) }()
 	t.Cleanup(func() {
 		cancel()
 		select {
@@ -48,6 +49,53 @@ func startRestartServe(t *testing.T, cfg config.Config) string {
 		}
 	})
 	return fmt.Sprintf("http://127.0.0.1:%d", waitForRestartRuntime(t, cfg.DataDir).Port)
+}
+
+func TestServeScopedUpgradeServesSessionsBeforeReparse(t *testing.T) {
+	for _, skip := range []bool{false, true} {
+		t.Run(fmt.Sprintf("skip_initial_sync=%t", skip), func(t *testing.T) {
+			isolateServeTestHome(t)
+			t.Setenv(syncWorkerChildEnvVar, "1")
+			cfg := testConfigWithClaudeFixture(t)
+			cfg.Host = "127.0.0.1"
+			writeRestartSession(t, cfg, "visible-seed")
+			var seed bytes.Buffer
+			require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &seed))
+			conn, err := sql.Open("sqlite3", cfg.DBPath)
+			require.NoError(t, err)
+			_, err = conn.ExecContext(t.Context(), "INSERT INTO stats(key, value) VALUES ('scoped_upgrade_pending', 1)")
+			require.NoError(t, err)
+			require.NoError(t, conn.Close())
+
+			started, release := make(chan syncWorkerRequest, 1), make(chan struct{})
+			restore := stubLaunchSyncWorker(t, func(ctx context.Context, cfg config.Config, req syncWorkerRequest, _ func(workerLine)) (workerResult, error) {
+				started <- req
+				select {
+				case <-release:
+				case <-ctx.Done():
+					return workerResult{}, ctx.Err()
+				}
+				var out bytes.Buffer
+				err := runSyncWorkerContext(ctx, cfg, req, &out)
+				return decodeSingleResult(t, &out), err
+			})
+			t.Cleanup(restore)
+			base := startRestartServe(t, cfg, serveOptions{SkipInitialSync: skip})
+			select {
+			case request := <-started:
+				require.Equal(t, "startup", request.Mode)
+			case <-time.After(5 * time.Second):
+				require.FailNow(t, "worker did not start")
+			}
+			require.Contains(t, restartGet(t, base+"/api/v1/sessions/sidebar-index?limit=500"), "visible-seed")
+			require.Contains(t, restartGet(t, base+"/api/v1/sync/status"), `"startup_pending":true`)
+			close(release)
+			require.Eventually(t, func() bool {
+				stale, _, _, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
+				return err == nil && !stale && strings.Contains(restartGet(t, base+"/api/v1/sync/status"), `"startup_pending":false`)
+			}, 30*time.Second, 100*time.Millisecond)
+		})
+	}
 }
 
 func restartGet(t *testing.T, url string) string {
@@ -85,7 +133,7 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 		return decodeSingleResult(t, &out), err
 	})
 	t.Cleanup(restore)
-	base := startRestartServe(t, cfg)
+	base := startRestartServe(t, cfg, serveOptions{})
 	select {
 	case request := <-started:
 		require.Equal(t, "startup", request.Mode)
@@ -152,7 +200,7 @@ func TestServeStartupWorkerFailure(t *testing.T) {
 		return workerResult{}, errors.New("injected worker failure")
 	})
 	t.Cleanup(restore)
-	base := startRestartServe(t, cfg)
+	base := startRestartServe(t, cfg, serveOptions{})
 	messagesURL := base + "/api/v1/sessions/visible-seed/messages"
 	require.NotContains(t, restartGet(t, messagesURL), "partial-commit")
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
@@ -199,7 +247,7 @@ func TestServeStartupWorkerWithoutChangesDoesNotEmitSessions(t *testing.T) {
 		return workerResult{Status: "ok", DiscoveryComplete: true}, nil
 	})
 	t.Cleanup(restore)
-	base := startRestartServe(t, cfg)
+	base := startRestartServe(t, cfg, serveOptions{})
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/v1/events", nil)
@@ -233,7 +281,7 @@ func TestServeResumesFirstImportWithoutStartupWorker(t *testing.T) {
 		return workerResult{}, nil
 	})
 	t.Cleanup(restore)
-	base := startRestartServe(t, cfg)
+	base := startRestartServe(t, cfg, serveOptions{})
 	require.Eventually(t, func() bool {
 		return strings.Contains(restartGet(t, base+"/api/v1/sync/status"), `"startup_pending":false`)
 	}, 30*time.Second, 100*time.Millisecond)
