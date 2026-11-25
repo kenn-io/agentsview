@@ -47,7 +47,6 @@ var (
 	lookupCommandPattern        = regexp.MustCompile(`(?i)(sqlite3|sessions\.db|\.claude/projects/|\.codex/sessions/|rollout-[^\s"']*\.jsonl|tool-results/|\bagentsview\s+(?:session|search|db|mcp)\b)`)
 	lookupOutputPattern         = regexp.MustCompile(`(?i)(sessions\.db|\.claude/projects/|\.codex/sessions/|rollout-[^\s"']*\.jsonl|tool-results/)`)
 	truncatedResultPattern      = regexp.MustCompile(`(?i)"[^"\n]*truncated"\s*:\s*true|output truncated`)
-	emptyResultPattern          = regexp.MustCompile(`(?i)"(?:matches|messages|results|sessions|tool_calls)"\s*:\s*(?:\[\s*\]|null)`)
 	codexMCPInvocationPattern   = regexp.MustCompile(`\btools\s*(?:\.\s*mcp__agentsview__|\[)`)
 	mcpErrorPattern             = regexp.MustCompile(`(?i)"is_?error"\s*:\s*true`)
 	runningCellPattern          = regexp.MustCompile(`(?i)script (?:still )?running with cell ID\s+([^\s]+)`)
@@ -392,10 +391,21 @@ func codexLookupCalls(ctx context.Context, events []map[string]any) []lookupCall
 func resultFlags(c *lookupCall) {
 	result := c.Result + c.StructuredResult
 	c.Truncated = truncatedResultPattern.MatchString(result)
-	c.Empty = emptyResultPattern.MatchString(result)
+	c.Empty = lookupResultEmpty(c.Result) || lookupResultEmpty(c.StructuredResult)
 	if c.Route == "other" && lookupOutputPattern.MatchString(result) {
 		c.Route = "direct"
 	}
+}
+
+func lookupResultEmpty(result string) bool {
+	value := gjson.Parse(result)
+	for _, field := range []string{"matches", "messages", "results", "sessions", "tool_calls", "entries"} {
+		item := value.Get(field)
+		if item.Exists() && (item.Type == gjson.Null || item.IsArray() && len(item.Array()) == 0) {
+			return true
+		}
+	}
+	return false
 }
 
 func containsLookupPhrase(text, phrase string) bool {

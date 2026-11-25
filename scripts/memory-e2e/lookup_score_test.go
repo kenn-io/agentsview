@@ -117,6 +117,12 @@ func TestLookupCountsEmptyMessageAndToolCallResults(t *testing.T) {
 	}
 }
 
+func TestLookupDoesNotCountNestedEmptyResult(t *testing.T) {
+	call := lookupCall{Route: "mcp", Result: `{"sessions":[{"id":"codex:1","messages":[]}],"total":1}`}
+	resultFlags(&call)
+	assert.False(t, call.Empty)
+}
+
 func TestLookupTraceSetupError(t *testing.T) {
 	assert.True(t, lookupTraceSetupError([]byte(`{"type":"result","is_error":true,"result":"invalid model"}`)))
 	assert.True(t, lookupTraceSetupError([]byte(`{"type":"result","is_error":true,"result":"authentication required"}`)))
