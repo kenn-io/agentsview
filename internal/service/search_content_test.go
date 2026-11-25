@@ -12,6 +12,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/servicehttp"
 )
 
 const fakeAWSKey = "AKIA" + "7QHWN2DKR4FYPLJM"
@@ -549,4 +550,25 @@ func TestDirectSearchContentContextSkipsNegativeOrdinal(t *testing.T) {
 	require.Len(t, res.Matches, 1)
 	assert.Nil(t, res.Matches[0].ContextBefore)
 	assert.Nil(t, res.Matches[0].ContextAfter)
+}
+
+func TestContentSearchContextBackend(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	for _, tc := range []struct {
+		name    string
+		svc     service.SessionService
+		bounded bool
+	}{
+		{"local", service.NewDirectBackend(d, nil), true},
+		{"read-only sqlite", service.NewReadOnlyBackend(d), true},
+		{"read-only remote", service.NewReadOnlyBackend(&fakeContentStore{}), false},
+		{"HTTP", servicehttp.NewHTTPBackend("http://example.org", "", true, ""), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := service.ContentSearchContext(t.Context(), tc.svc, service.ContentSearchRequest{Mode: "substring"})
+			defer cancel()
+			_, bounded := ctx.Deadline()
+			assert.Equal(t, tc.bounded, bounded)
+		})
+	}
 }

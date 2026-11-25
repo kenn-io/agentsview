@@ -2693,7 +2693,10 @@ type deadlineContentService struct {
 	deadlines []time.Time
 	bounded   []bool
 	oversized bool
+	local     bool
 }
+
+func (s *deadlineContentService) LocalContentScan() bool { return s.local }
 
 func (s *deadlineContentService) SearchContent(ctx context.Context, req service.ContentSearchRequest) (*service.ContentSearchResult, error) {
 	d, ok := ctx.Deadline()
@@ -2721,7 +2724,7 @@ func TestSearchContentSharedDeadline(t *testing.T) {
 		{name: "substring", bounded: true}, {name: "semantic", mode: "semantic"}, {name: "concepts", concepts: []string{"needle", "thread"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			fake := &deadlineContentService{}
+			fake := &deadlineContentService{local: true}
 			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
 			pattern := "needle"
 			if len(tc.concepts) > 0 {
@@ -2739,7 +2742,7 @@ func TestSearchContentSharedDeadline(t *testing.T) {
 }
 
 func TestSearchContentCountDeadlineKeepsMatches(t *testing.T) {
-	fake := &deadlineContentService{oversized: true}
+	fake := &deadlineContentService{oversized: true, local: true}
 	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
 	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", IncludeActive: true, Limit: 20})
 	require.NoError(t, err)
@@ -2748,4 +2751,15 @@ func TestSearchContentCountDeadlineKeepsMatches(t *testing.T) {
 	assert.Contains(t, out.Note, "count timed out")
 	require.Len(t, fake.deadlines, 2)
 	assert.Equal(t, fake.deadlines[0], fake.deadlines[1])
+}
+
+func TestSearchContentNonLocalHasNoDeadline(t *testing.T) {
+	fake := &deadlineContentService{}
+	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+	_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", IncludeActive: true})
+	require.NoError(t, err)
+	require.Greater(t, len(fake.bounded), 1)
+	for _, bounded := range fake.bounded {
+		assert.False(t, bounded)
+	}
 }

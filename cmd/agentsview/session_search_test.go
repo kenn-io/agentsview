@@ -1051,6 +1051,8 @@ type deadlineCLIService struct {
 	modes     []string
 }
 
+func (s *deadlineCLIService) LocalContentScan() bool { return true }
+
 func (s *deadlineCLIService) MemoryStatus(context.Context) (service.MemoryStatus, error) {
 	return service.MemoryStatus{}, errors.New("status unavailable")
 }

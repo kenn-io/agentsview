@@ -568,7 +568,7 @@ func wordArchive(ctx context.Context, svc service.SessionService, remote bool) b
 }
 
 func searchContentWithHints(ctx context.Context, cmd *cobra.Command, svc service.SessionService, req service.ContentSearchRequest) (*service.ContentSearchResult, []contentSearchCLIHint, error) {
-	ctx, cancel := service.ContentSearchContext(ctx, req)
+	ctx, cancel := service.ContentSearchContext(ctx, svc, req)
 	defer cancel()
 	res, err := svc.SearchContent(ctx, req)
 	if err != nil {
