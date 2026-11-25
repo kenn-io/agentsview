@@ -68,3 +68,48 @@ func TestLookupFixtureSessionsAppearInDefaultList(t *testing.T) {
 	require.Equal(t, 1, listed.Total)
 	require.Equal(t, session.ID, listed.Sessions[0].ID)
 }
+
+func TestLookupOwnerFixturesMatchPRFilter(t *testing.T) {
+	root := t.TempDir()
+	transcriptsRoot := filepath.Join(root, "transcripts")
+	fixtures := []lookupFixture{
+		{
+			ID: "33333333-3333-4333-8333-333333333333", AgeHours: 48,
+			Title:   "Review https://github.com/example-org/project-a/pull/123 ownership",
+			Content: "The earlier owner handed the pull request off.",
+		},
+		{
+			ID: "44444444-4444-4444-8444-444444444444", AgeHours: 24,
+			Title:   "Take over https://github.com/example-org/project-a/pull/123",
+			Content: "The maple team now owns the pull request.",
+		},
+	}
+	for _, fixture := range fixtures {
+		_, err := writeLookupFixtureTranscript(transcriptsRoot, root, fixture)
+		require.NoError(t, err)
+	}
+	provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{Roots: []string{transcriptsRoot}, Machine: "local"})
+	require.True(t, ok)
+	database := dbtest.OpenTestDB(t)
+	for _, fixture := range fixtures {
+		source, found, err := provider.FindSource(t.Context(), parser.FindSourceRequest{FullSessionID: "codex:" + fixture.ID})
+		require.NoError(t, err)
+		require.True(t, found)
+		parsed, err := provider.Parse(t.Context(), parser.ParseRequest{Source: source})
+		require.NoError(t, err)
+		require.Len(t, parsed.Results, 1)
+		session := parsed.Results[0].Result.Session
+		links, err := parser.PromptPRLinksContext(t.Context(), fixture.Title)
+		require.NoError(t, err)
+		require.Len(t, links, 1)
+		require.Equal(t, "example-org/project-a", links[0].Repository)
+		dbtest.SeedSession(t, database, session.ID, "lookup-project", func(stored *db.Session) {
+			stored.PRLinks = links
+		})
+	}
+
+	listed, err := service.NewDirectBackend(database, nil).List(t.Context(), service.ListFilter{PR: "example-org/project-a#123"})
+	require.NoError(t, err)
+	require.Equal(t, 2, listed.Total)
+	require.Len(t, listed.Sessions, 2)
+}
