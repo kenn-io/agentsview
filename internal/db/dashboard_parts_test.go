@@ -154,7 +154,7 @@ func TestDashboardPartsReuseAcrossAgentAndDateFilters(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, handled)
 	assert.Equal(t, 2, parts["s0"].Value.Messages)
-	assert.Equal(t, [][]string{{"s0", "s1", "s2", "s3", "s4", "s5"}, {"s0"}}, reads)
+	assert.Equal(t, [][]string{{"s0", "s1", "s2", "s3", "s4", "s5"}, {"s0", "s1", "s2", "s3", "s4", "s5"}}, reads)
 	// Save the updated full selection, then simulate an empty in-process memo.
 	_, _, handled, err = d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC"})
 	require.NoError(t, err)
@@ -166,7 +166,7 @@ func TestDashboardPartsReuseAcrossAgentAndDateFilters(t *testing.T) {
 	_, _, handled, err = d.dashboardParts(ctx, AnalyticsFilter{Timezone: "UTC", Agent: "gemini"})
 	require.NoError(t, err)
 	require.True(t, handled)
-	assert.Equal(t, [][]string{{"s0", "s1", "s2", "s3", "s4", "s5"}, {"s0"}}, reads)
+	assert.Equal(t, [][]string{{"s0", "s1", "s2", "s3", "s4", "s5"}, {"s0", "s1", "s2", "s3", "s4", "s5"}}, reads)
 }
 
 func TestDashboardPartsDiskPreservesZeroFirstResponse(t *testing.T) {
@@ -430,7 +430,7 @@ func TestDashboardPartsMemoRespectsSizeLimit(t *testing.T) {
 	})
 }
 
-func TestDashboardPartsFallsBackWhenWriterClosed(t *testing.T) {
+func TestDashboardPartsWorksWhenWriterClosed(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	d := testDB(t)
 	ctx := t.Context()
@@ -458,6 +458,9 @@ func TestDashboardPartsFallsBackWhenWriterClosed(t *testing.T) {
 	assert.Equal(t, 2, activity.Series[0].Messages)
 	assert.Equal(t, 1, activity.Series[0].ToolCalls)
 	require.NoError(t, d.CloseWriter())
+	_, _, handled, err := d.dashboardParts(ctx, f)
+	require.NoError(t, err)
+	require.True(t, handled)
 
 	t.Run("activity", func(t *testing.T) {
 		got, err := d.GetAnalyticsActivity(ctx, f, "day")
@@ -474,4 +477,228 @@ func TestDashboardPartsFallsBackWhenWriterClosed(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, velocity, got)
 	})
+}
+
+func TestDashboardPartsDoNotWaitOnWriterLock(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "s", "project", func(s *Session) { s.StartedAt = new("2024-06-01T09:00:00Z"); s.MessageCount = 2 })
+	insertMessages(t, d, userMsgAt("s", 0, "hello", "2024-06-01T09:00:00Z"), asstMsgAt("s", 1, "answer", "2024-06-01T09:01:00Z"))
+	f := AnalyticsFilter{Timezone: "UTC"}
+	d.readOnly = true
+	activity, err := d.GetAnalyticsActivity(ctx, f, "day")
+	require.NoError(t, err)
+	hours, err := d.GetAnalyticsHourOfWeek(ctx, f)
+	require.NoError(t, err)
+	velocity, err := d.analyticsVelocity(ctx, f)
+	require.NoError(t, err)
+	d.readOnly = false
+	d.mu.Lock()
+	done := make(chan struct{}, 3)
+	go func() {
+		defer func() { done <- struct{}{} }()
+		got, err := d.GetAnalyticsActivity(ctx, f, "day")
+		assert.NoError(t, err)
+		assert.Equal(t, activity, got)
+	}()
+	go func() {
+		defer func() { done <- struct{}{} }()
+		got, err := d.GetAnalyticsHourOfWeek(ctx, f)
+		assert.NoError(t, err)
+		assert.Equal(t, hours, got)
+	}()
+	go func() {
+		defer func() { done <- struct{}{} }()
+		got, err := d.analyticsVelocity(ctx, f)
+		assert.NoError(t, err)
+		assert.Equal(t, velocity, got)
+	}()
+	guard := time.NewTimer(5 * time.Second)
+	defer guard.Stop()
+	for i := range 3 {
+		select {
+		case <-done:
+		case <-guard.C:
+			d.mu.Unlock()
+			for range 3 - i {
+				<-done
+			}
+			t.Fatal("dashboard reads waited on the writer lock")
+		}
+	}
+	d.mu.Unlock()
+	for range bulkReadSlots {
+		release, err := d.acquireBulkRead(ctx)
+		require.NoError(t, err)
+		t.Cleanup(release)
+	}
+}
+
+func TestDashboardPartsDirtySessionReuseAndInvalidation(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "s", "project", func(s *Session) { s.StartedAt = new("2024-06-01T09:00:00Z"); s.MessageCount = 2 })
+	user := userMsgAt("s", 0, "hello", "2024-06-01T09:00:00Z")
+	assistant := asstMsgAt("s", 1, "answer", "2024-06-01T09:01:00Z")
+	insertMessages(t, d, user, assistant)
+	var reads [][]string
+	dashboardPartsReadObserver = func(ids []string) { reads = append(reads, append([]string(nil), ids...)) }
+	t.Cleanup(func() { dashboardPartsReadObserver = nil })
+	f := AnalyticsFilter{Timezone: "UTC"}
+	_, err := d.GetAnalyticsActivity(ctx, f, "day")
+	require.NoError(t, err)
+	_, err = d.GetAnalyticsActivity(ctx, f, "day")
+	require.NoError(t, err)
+	f.Project = "project"
+	_, err = d.GetAnalyticsActivity(ctx, f, "day")
+	require.NoError(t, err)
+	assert.Equal(t, [][]string{{"s"}}, reads)
+	_, err = d.getWriter().ExecContext(ctx, `UPDATE messages SET content_length=200 WHERE session_id='s' AND ordinal=1`)
+	require.NoError(t, err)
+	got, err := d.analyticsVelocity(ctx, f)
+	require.NoError(t, err)
+	d.readOnly = true
+	want, err := d.analyticsVelocity(ctx, f)
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+	d.readOnly = false
+	assistant.HasThinking = true
+	require.NoError(t, d.ReplaceSessionMessages(ctx, "s", []Message{user, assistant}))
+	activity, err := d.GetAnalyticsActivity(ctx, f, "day")
+	require.NoError(t, err)
+	d.readOnly = true
+	scan, err := d.GetAnalyticsActivity(ctx, f, "day")
+	require.NoError(t, err)
+	assert.Equal(t, scan, activity)
+	assert.Len(t, reads, 3)
+}
+
+func TestDashboardPartsDirtyFillChangesAfterWrite(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "s", "project", func(s *Session) { s.StartedAt = new("2024-06-01T09:00:00Z"); s.MessageCount = 2 })
+	insertMessages(t, d, userMsgAt("s", 0, "hello", "2024-06-01T09:00:00Z"), asstMsgAt("s", 1, "answer", "2024-06-01T09:01:00Z"))
+	entered, unblock := make(chan struct{}), make(chan struct{})
+	var reads atomic.Int32
+	dashboardPartsReadObserver = func([]string) {
+		if reads.Add(1) == 1 {
+			close(entered)
+			<-unblock
+		}
+	}
+	t.Cleanup(func() { dashboardPartsReadObserver = nil })
+	f := AnalyticsFilter{Timezone: "UTC"}
+	done := make(chan error, 1)
+	go func() { _, err := d.GetAnalyticsVelocity(ctx, f); done <- err }()
+	<-entered
+	_, err := d.getWriter().ExecContext(ctx, `UPDATE messages SET content_length=200 WHERE session_id='s' AND ordinal=1`)
+	if err != nil {
+		close(unblock)
+		<-done
+		require.NoError(t, err)
+	}
+	type result struct {
+		value VelocityResponse
+		err   error
+	}
+	second := make(chan result, 1)
+	go func() { value, err := d.GetAnalyticsVelocity(ctx, f); second <- result{value, err} }()
+	var got result
+	select {
+	case got = <-second:
+	case <-time.After(5 * time.Second):
+		close(unblock)
+		<-done
+		<-second
+		t.Fatal("new request joined the stale fill")
+	}
+	close(unblock)
+	require.NoError(t, <-done)
+	require.NoError(t, got.err)
+	d.readOnly = true
+	want, err := d.analyticsVelocity(ctx, f)
+	require.NoError(t, err)
+	d.readOnly = false
+	assert.Equal(t, want, got.value)
+	again, err := d.GetAnalyticsVelocity(ctx, f)
+	require.NoError(t, err)
+	assert.Equal(t, want, again)
+}
+
+func TestDashboardPartsUnrelatedWriteKeepsSelection(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	for _, id := range []string{"a", "b"} {
+		insertSession(t, d, id, id, func(s *Session) { s.StartedAt = new("2024-06-01T09:00:00Z") })
+		insertMessages(t, d, userMsgAt(id, 0, "hello", "2024-06-01T09:00:00Z"))
+	}
+	_, err := d.stampToolsSessions(ctx, []string{"a", "b"})
+	require.NoError(t, err)
+	f := AnalyticsFilter{Timezone: "UTC", Project: "a"}
+	_, _, _, err = d.dashboardParts(ctx, f)
+	require.NoError(t, err)
+	insertMessages(t, d, asstMsgAt("b", 1, "answer", "2024-06-01T09:01:00Z"))
+	var reads int
+	dashboardPartsReadObserver = func([]string) { reads++ }
+	t.Cleanup(func() { dashboardPartsReadObserver = nil })
+	_, _, _, err = d.dashboardParts(ctx, f)
+	require.NoError(t, err)
+	assert.Zero(t, reads)
+}
+
+func TestDashboardPartsDirtyThinkingFillChangesAfterWrite(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "s", "project", func(s *Session) { s.StartedAt = new("2024-06-01T09:00:00Z"); s.MessageCount = 2 })
+	user := userMsgAt("s", 0, "hello", "2024-06-01T09:00:00Z")
+	assistant := asstMsgAt("s", 1, "answer", "2024-06-01T09:01:00Z")
+	insertMessages(t, d, user, assistant)
+	entered, unblock := make(chan struct{}), make(chan struct{})
+	var reads atomic.Int32
+	dashboardPartsReadObserver = func([]string) {
+		if reads.Add(1) == 1 {
+			close(entered)
+			<-unblock
+		}
+	}
+	t.Cleanup(func() { dashboardPartsReadObserver = nil })
+	f := AnalyticsFilter{Timezone: "UTC"}
+	done := make(chan error, 1)
+	go func() { _, err := d.GetAnalyticsActivity(ctx, f, "day"); done <- err }()
+	<-entered
+	assistant.HasThinking = true
+	err := d.ReplaceSessionMessages(ctx, "s", []Message{user, assistant})
+	if err != nil {
+		close(unblock)
+		<-done
+		require.NoError(t, err)
+	}
+	type result struct {
+		value ActivityResponse
+		err   error
+	}
+	second := make(chan result, 1)
+	go func() { value, err := d.GetAnalyticsActivity(ctx, f, "day"); second <- result{value, err} }()
+	var got result
+	select {
+	case got = <-second:
+	case <-time.After(5 * time.Second):
+		close(unblock)
+		<-done
+		<-second
+		t.Fatal("new request joined the stale fill")
+	}
+	close(unblock)
+	require.NoError(t, <-done)
+	require.NoError(t, got.err)
+	d.readOnly = true
+	want, err := d.GetAnalyticsActivity(ctx, f, "day")
+	require.NoError(t, err)
+	assert.Equal(t, want, got.value)
+	assert.EqualValues(t, 1, got.value.Series[0].ThinkingMessages)
 }
