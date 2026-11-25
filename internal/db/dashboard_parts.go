@@ -1,16 +1,16 @@
 package db
 
 import (
+	"container/list"
 	"context"
 	"crypto/sha256"
 	"encoding/json/v2"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"sync"
-	"unsafe"
 
-	"github.com/jellydator/ttlcache/v3"
 	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -37,45 +37,34 @@ type dashboardSession struct {
 type dashboardPartsMemo struct {
 	mu            sync.Mutex
 	slot, version string
-	parts         *ttlcache.Cache[string, kept.Part[dashboardPart]]
+	parts         map[string]*list.Element
+	order         list.List
+	bytes         int64
 	maxBytes      int64
-	peakEntries   int
 }
 
-// reuse copies parts whose fingerprint matches into parts and returns the ids still to read.
+// reuse copies matching parts and returns the ids still to read.
 func (m *dashboardPartsMemo) reuse(slot, version string, ids []string, versions map[string]string, parts map[string]kept.Part[dashboardPart]) []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.parts == nil || m.slot != slot || m.version != version {
 		return ids
 	}
-	missing := slices.DeleteFunc(ids, func(id string) bool {
-		item := m.parts.Get(id)
+	return slices.DeleteFunc(ids, func(id string) bool {
+		item := m.parts[id]
 		if item == nil {
 			return false
 		}
-		p := item.Value()
-		ok := p.Fingerprint == versions[id]
-		if ok {
-			parts[id] = p
-		} else {
-			m.parts.Delete(id)
+		p := item.Value.(kept.Part[dashboardPart])
+		if p.Fingerprint != versions[id] {
+			return false
 		}
-		return ok
+		parts[id] = p
+		return true
 	})
-	m.compact()
-	return missing
 }
 
 func (m *dashboardPartsMemo) store(slot, version string, parts map[string]kept.Part[dashboardPart]) {
-	m.put(slot, version, parts, false)
-}
-
-func (m *dashboardPartsMemo) seed(slot, version string, parts map[string]kept.Part[dashboardPart]) {
-	m.put(slot, version, parts, true)
-}
-
-func (m *dashboardPartsMemo) put(slot, version string, parts map[string]kept.Part[dashboardPart], seedOnly bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	maxBytes := m.maxBytes
@@ -84,89 +73,39 @@ func (m *dashboardPartsMemo) put(slot, version string, parts map[string]kept.Par
 	}
 	if m.parts == nil || m.slot != slot || m.version != version {
 		m.slot, m.version = slot, version
-		m.parts = newDashboardPartsCache(maxBytes)
-		m.peakEntries = 0
+		m.parts = make(map[string]*list.Element)
+		m.order.Init()
+		m.bytes = 0
 	}
-	var used int64 = -1
-	for id, p := range parts {
-		if seedOnly {
-			if m.parts.Has(id) {
-				continue
-			}
-			if used < 0 {
-				// ttlcache does not expose total cost; count it only when a disk part is missing.
-				used = 0
-				m.parts.RangeBackwards(func(item *ttlcache.Item[string, kept.Part[dashboardPart]]) bool {
-					used += int64(item.Cost())
-					return true
-				})
-			}
-			cost := dashboardPartBytes(id, p)
-			if cost > maxBytes-used {
-				continue
-			}
-			used += cost
-		}
-		if dashboardPartBytes(id, p) > maxBytes {
-			m.parts.Delete(id)
-		} else {
-			m.parts.Set(id, p, ttlcache.NoTTL)
-		}
-		n := m.parts.Len()
-		m.peakEntries = max(m.peakEntries, n)
-		m.compact()
+	for _, id := range slices.Sorted(maps.Keys(parts)) {
+		m.add(id, parts[id], maxBytes)
 	}
 }
 
-func (m *dashboardPartsMemo) compact() {
-	n := m.parts.Len()
-	if m.peakEntries <= 256 || n >= m.peakEntries/2 {
+func (m *dashboardPartsMemo) add(id string, p kept.Part[dashboardPart], maxBytes int64) {
+	if old := m.parts[id]; old != nil {
+		m.bytes -= dashboardPartBytes(old.Value.(kept.Part[dashboardPart]))
+		m.order.Remove(old)
+		delete(m.parts, id)
+	}
+	cost := dashboardPartBytes(p)
+	if cost > maxBytes {
 		return
 	}
-	maxBytes := m.maxBytes
-	if maxBytes == 0 {
-		maxBytes = kept.DefaultMaxBytes
+	m.parts[id] = m.order.PushBack(p)
+	m.bytes += cost
+	for m.bytes > maxBytes {
+		old := m.order.Front()
+		part := old.Value.(kept.Part[dashboardPart])
+		delete(m.parts, part.ID)
+		m.bytes -= dashboardPartBytes(part)
+		m.order.Remove(old)
 	}
-	// Rebuild in LRU order so deleted entries don't leave a large map behind.
-	fresh := newDashboardPartsCache(maxBytes)
-	m.parts.RangeBackwards(func(item *ttlcache.Item[string, kept.Part[dashboardPart]]) bool {
-		fresh.Set(item.Key(), item.Value(), ttlcache.NoTTL)
-		return true
-	})
-	m.parts, m.peakEntries = fresh, n
 }
 
-func newDashboardPartsCache(maxBytes int64) *ttlcache.Cache[string, kept.Part[dashboardPart]] {
-	return ttlcache.New(ttlcache.WithMaxCost(uint64(maxBytes), func(item ttlcache.CostItem[string, kept.Part[dashboardPart]]) uint64 {
-		return uint64(dashboardPartBytes(item.Key, item.Value))
-	}))
-}
-
-func dashboardPartBytes(key string, p kept.Part[dashboardPart]) int64 {
-	// The item includes the part; 128 bytes covers its list node and map share.
-	n := int64(unsafe.Sizeof(ttlcache.Item[string, kept.Part[dashboardPart]]{})) + 128 + int64(len(key)+len(p.ID)+len(p.Fingerprint))
-	n += int64(cap(p.Value.Velocity.TurnCycles)) * 8
-	if p.Value.Velocity.FirstResponse != nil {
-		n += 8
-	}
-	if p.Value.Hours != nil {
-		n += dashboardHoursBytes(len(p.Value.Hours))
-	}
-	return n
-}
-
-func dashboardHoursBytes(n int) int64 {
-	// Round up to a power of two to cover allocator size classes and table metadata.
-	slots := 8
-	for n > 8 && n > slots*7/8 {
-		slots *= 2
-	}
-	bytes := 64 + slots*16 + slots
-	rounded := 1
-	for rounded < bytes {
-		rounded *= 2
-	}
-	return int64(rounded)
+func dashboardPartBytes(p kept.Part[dashboardPart]) int64 {
+	// The multiplier covers retained allocations; 256 covers the entry, list node, and map slot.
+	return int64(len(p.ID)+len(p.Fingerprint)) + 3*dashboardPartSize(p.Value) + 256
 }
 
 // dashboardPartSize estimates the encoded disk payload, whose cap is separate
@@ -260,8 +199,6 @@ func (db *DB) dashboardParts(ctx context.Context, f AnalyticsFilter) ([]dashboar
 				ids = append(ids, id)
 			}
 		}
-		// Seed unseen disk parts without evicting or reordering cached parts.
-		db.dashboardMemo.seed("dashboard-parts|"+TrendsTimezoneKey(f), version, parts)
 		sort.Strings(ids)
 		ids = db.dashboardMemo.reuse("dashboard-parts|"+TrendsTimezoneKey(f), version, ids, versions, parts)
 		if len(ids) > 0 {
@@ -271,12 +208,9 @@ func (db *DB) dashboardParts(ctx context.Context, f AnalyticsFilter) ([]dashboar
 			if err := db.fillDashboardParts(ctx, f, ids, versions, parts); err != nil {
 				return dashboardPartsResult{}, err
 			}
-			filled := make(map[string]kept.Part[dashboardPart], len(ids))
-			for _, id := range ids {
-				filled[id] = parts[id]
-			}
-			db.dashboardMemo.store("dashboard-parts|"+TrendsTimezoneKey(f), version, filled)
+
 		}
+		db.dashboardMemo.store("dashboard-parts|"+TrendsTimezoneKey(f), version, parts)
 		if len(changed) > 0 {
 			saveDashboardParts(db, slot, version, parts)
 		}
