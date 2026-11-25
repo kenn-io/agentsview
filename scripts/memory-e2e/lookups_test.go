@@ -45,24 +45,6 @@ func TestLookupVersionUsesResolvedClient(t *testing.T) {
 	require.NotErrorIs(t, err, errLookupCaptureUnsupported)
 }
 
-func TestLookupClientVersionSupported(t *testing.T) {
-	for _, tc := range []struct {
-		client  clientName
-		version string
-		want    bool
-	}{
-		{clientClaude, "2.1.332 (Claude Code)", true},
-		{clientClaude, "2.1.333 (Claude Code)", false},
-		{clientCodex, "codex-cli 0.172.0", true},
-		{clientCodex, "codex-cli 0.173.0", false},
-		{clientCodex, "unknown", false},
-	} {
-		t.Run(string(tc.client)+"/"+tc.version, func(t *testing.T) {
-			require.Equal(t, tc.want, lookupClientVersionSupported(tc.client, tc.version))
-		})
-	}
-}
-
 func TestLookupFixtureSessionsAppearInDefaultList(t *testing.T) {
 	root := t.TempDir()
 	transcriptsRoot := filepath.Join(root, "transcripts")

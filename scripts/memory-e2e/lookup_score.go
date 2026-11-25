@@ -399,23 +399,15 @@ func resultFlags(c *lookupCall) {
 }
 
 func lookupResultEmpty(name, result string) bool {
-	item := gjson.Parse(result).Get(lookupResultField(name))
-	return item.Exists() && (item.Type == gjson.Null || item.IsArray() && len(item.Array()) == 0)
-}
-
-func lookupResultField(name string) string {
 	if _, suffix, ok := strings.Cut(name, "mcp__agentsview__"); ok {
 		name = suffix
 	}
-	name = strings.TrimPrefix(name, "agentsview:")
-	switch name {
-	case "get_messages":
-		return "messages"
-	case "get_tool_calls":
-		return "tool_calls"
-	default:
-		return mcp.SearchResultField(name)
+	field := mcp.SearchResultField(strings.TrimPrefix(name, "agentsview:"))
+	if field == "" {
+		return false
 	}
+	item := gjson.Parse(result).Get(field)
+	return item.Exists() && (item.Type == gjson.Null || item.IsArray() && len(item.Array()) == 0)
 }
 
 func containsLookupPhrase(text, phrase string) bool {
@@ -546,9 +538,6 @@ func lookupSessionEvidence(call lookupCall, sessionID string) string {
 		return text
 	}
 	if lookupRequestSessionMatches(call, sessionID) {
-		if text := lookupStructuredMessageText(result); text != "" {
-			return text
-		}
 		return call.Result
 	}
 	if (call.Route == "direct" || call.Route == "cli" || call.Name == "Bash" || call.Name == "Read" || call.Name == "Grep" || call.Name == "Glob" || call.Name == "CommandExecution" || call.Name == "exec") &&
@@ -665,35 +654,6 @@ func appendLookupRowText(text *strings.Builder, row lookupResultRow) {
 			}
 		}
 	}
-}
-
-func lookupStructuredMessageText(raw string) string {
-	value := gjson.Parse(raw)
-	if value.Type == gjson.String {
-		nested := gjson.Parse(value.Str)
-		if nested.IsObject() {
-			value = nested
-		}
-	}
-	if structured := value.Get("structuredContent"); structured.IsObject() {
-		value = structured
-	}
-	var result lookupStructuredResult
-	if err := json.Unmarshal([]byte(value.Raw), &result); err != nil {
-		return ""
-	}
-	var text strings.Builder
-	for _, messages := range [][]lookupResultMessage{result.Messages, result.LastMessages} {
-		for _, message := range messages {
-			for _, value := range []string{message.Content, message.Text, message.Message} {
-				if value != "" {
-					text.WriteByte(' ')
-					text.WriteString(value)
-				}
-			}
-		}
-	}
-	return text.String()
 }
 
 func lookupRequestSessionMatches(call lookupCall, sessionID string) bool {

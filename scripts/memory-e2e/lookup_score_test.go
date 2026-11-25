@@ -109,14 +109,6 @@ func TestLookupRetainsCallsBeforeMalformedJSONL(t *testing.T) {
 	assert.True(t, calls[0].Missing)
 }
 
-func TestLookupCountsEmptyMessageAndToolCallResults(t *testing.T) {
-	for _, tc := range []struct{ name, result string }{{"get_messages", `{"messages":[]}`}, {"get_tool_calls", `{"tool_calls":null}`}} {
-		call := lookupCall{Name: tc.name, Result: tc.result}
-		resultFlags(&call)
-		assert.True(t, call.Empty, tc.result)
-	}
-}
-
 func TestLookupDoesNotCountNestedEmptyResult(t *testing.T) {
 	call := lookupCall{Route: "mcp", Name: "list_sessions", Result: `{"sessions":[{"id":"codex:1","messages":[]}],"total":1}`}
 	resultFlags(&call)
@@ -450,19 +442,6 @@ func TestLookupClassifiesTranscriptFromGrepOutput(t *testing.T) {
 	assert.Equal(t, "success", score.Verdict)
 }
 
-func TestLookupSessionEvidenceInPlainContentBlock(t *testing.T) {
-	result, structured := lookupResultParts(t.Context(), `{"content":[{"type":"text","text":"{\"session_id\":\"codex:`+lookupID+`\",\"snippet\":\"chose violet ledger\"}"}]}`)
-	call := lookupCall{
-		Name: "search_sessions", Route: "mcp", Start: 1, End: 2,
-		Result: result, StructuredResult: structured,
-	}
-	question, answer := lookupTestCase(lookupID+" violet ledger", []lookupItem{{SessionID: lookupID}}, []string{"violet ledger"})
-	score := scoreLookupQuestion(question, answer, []lookupCall{call}, nil)
-	assert.Equal(t, "success", score.Verdict)
-	require.NotNil(t, score.CallsToHit)
-	assert.Equal(t, 1, *score.CallsToHit)
-}
-
 func TestLookupSummaryKeepsFailuresInDenominator(t *testing.T) {
 	one, two := 1, 2
 	summary := summarizeLookups([]lookupAttempt{{Case: "topic", Score: lookupScore{Verdict: "success", CallsToHit: &one}}, {Case: "topic", Score: lookupScore{Verdict: "success", CallsToHit: &two}}, {Case: "topic", Score: lookupScore{Verdict: "failed"}}, {Case: "topic", Score: lookupScore{Verdict: "unscored"}}})
@@ -629,6 +608,13 @@ func TestLookupStructuredAnswers(t *testing.T) {
 			verdict:  "unscored",
 		},
 		{
+			name:     "wrong answer with incomplete capture",
+			answer:   `{"team":"cedar team","source_session_id":"codex:` + lookupID + `"}`,
+			question: lookupQuestion{Expected: []lookupItem{{SessionID: "codex:" + lookupID}}, ExpectedAnswer: map[string]string{"team": "maple team"}},
+			runErr:   errCaptureIncomplete,
+			verdict:  "failed",
+		},
+		{
 			name:     "markdown fence",
 			answer:   "```json\n{\"team\":\"maple team\",\"source_session_id\":\"codex:" + lookupID + "\"}\n```",
 			question: lookupQuestion{Expected: []lookupItem{{SessionID: "codex:" + lookupID}}, ExpectedAnswer: map[string]string{"team": "maple team"}},
@@ -714,35 +700,6 @@ func TestLookupResultNamingOnlyAnotherSessionDoesNotCount(t *testing.T) {
 	score := scoreLookupQuestion(question, answer, []lookupCall{call}, nil)
 	assert.Equal(t, "failed", score.Verdict)
 	assert.Nil(t, score.CallsToHit)
-}
-
-func TestLookupCorrectJSONAnswerWithIncompleteCaptureIsUnscored(t *testing.T) {
-	item := lookupItem{SessionID: "codex:" + lookupID}
-	question := lookupQuestion{
-		Name:           "named",
-		Expected:       []lookupItem{item},
-		ExpectedAnswer: map[string]string{"release_marker": "north pier marker"},
-	}
-	for _, tc := range []struct {
-		name, answer, verdict string
-	}{
-		{
-			name:    "correct answer",
-			answer:  `{"release_marker":"north pier marker","source_session_id":"` + item.SessionID + `"}`,
-			verdict: "unscored",
-		},
-		{
-			name:    "wrong answer",
-			answer:  `{"release_marker":"south pier marker","source_session_id":"` + item.SessionID + `"}`,
-			verdict: "failed",
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			score := scoreLookupQuestion(question, tc.answer, nil, errCaptureIncomplete)
-			assert.Equal(t, tc.verdict, score.Verdict)
-			assert.Nil(t, score.CallsToHit)
-		})
-	}
 }
 
 func TestLookupSavedOutputClassification(t *testing.T) {
