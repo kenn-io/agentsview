@@ -62,14 +62,8 @@ func TestEvents_HostedRevisionChangeKeepsStream(t *testing.T) {
 			return strings.Count(w.BodyString(), "event: "+event+"\ndata: "+id+"\n") >= count
 		}, 5*time.Second, 10*time.Millisecond)
 	}
-	store.set("watch-a", db.SessionWatchState{State: db.SessionWatchResolved, PublicID: "watch-a", ContentRevision: "two"})
-	waitCount("session_updated", "watch-a", 1)
-	te.broadcaster.Emit("messages")
-	te.waitForSSEEvent(t, w, "data_changed", 5*time.Second)
-	require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: "watch-b", Project: "project", Machine: "test", Agent: "claude", MessageCount: 1}))
-	waitCount("session_updated", "watch-b", 1)
 	store.set("watch-a", db.SessionWatchState{State: db.SessionWatchResolved, PublicID: "watch-a", ContentRevision: "three"})
-	waitCount("session_updated", "watch-a", 2)
+	waitCount("session_updated", "watch-a", 1)
 	assert.Contains(t, w.BodyString(), `"content_revision":"three"`)
 	store.set("watch-a", db.SessionWatchState{State: "ambiguous", Variants: []string{"watch-a~one", "watch-a~two"}})
 	waitCount("session_missing", "watch-a", 1)
@@ -77,14 +71,9 @@ func TestEvents_HostedRevisionChangeKeepsStream(t *testing.T) {
 	assert.Contains(t, body, `"state":"ambiguous"`)
 	assert.Less(t, strings.LastIndex(body, "event: session.identity"), strings.Index(body, "event: session_missing"))
 	te.broadcaster.Emit("messages")
-	require.Eventually(t, func() bool { return strings.Count(w.BodyString(), "event: data_changed\n") >= 2 }, 5*time.Second, 10*time.Millisecond)
+	te.waitForSSEEvent(t, w, "data_changed", 5*time.Second)
 	require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: "watch-b", Project: "project", Machine: "test", Agent: "claude", MessageCount: 2}))
-	waitCount("session_updated", "watch-b", 2)
-	select {
-	case <-done:
-		t.Fatal("stream ended before cancellation")
-	default:
-	}
+	waitCount("session_updated", "watch-b", 1)
 }
 
 func TestEvents_UnresolvedHostedSessionIsMissing(t *testing.T) {

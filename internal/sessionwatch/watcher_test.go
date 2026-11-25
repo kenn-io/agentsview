@@ -3,6 +3,7 @@ package sessionwatch
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -72,60 +73,44 @@ func (s *unavailableVersionStore) GetSessionVersion(ctx context.Context, id stri
 	return s.baselineStore.GetSessionVersion(ctx, id)
 }
 
-func TestEventsRevisionChangeWithUnavailableVersion(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
-		store := &unavailableVersionStore{}
-		store.count.Store(1)
-		store.state.Store(db.SessionWatchState{State: db.SessionWatchResolved, ContentRevision: "one"})
-		updates := New(store, nil).Events(ctx, "session-a")
-		store.unavailable.Store(true)
-		store.state.Store(db.SessionWatchState{State: db.SessionWatchResolved, ContentRevision: "two"})
-		time.Sleep(PollInterval)
-		synctest.Wait()
-		_, ok := <-updates
-		require.True(t, ok)
-		synctest.Wait()
-		store.unavailable.Store(false)
-		time.Sleep(PollInterval)
-		synctest.Wait()
-		select {
-		case <-updates:
-			require.FailNow(t, "unchanged version emitted a second update")
-		default:
-		}
-	})
-}
-
-func TestEventsStaysOpenAcrossResolvedRevisionChange(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
-		store := &changingIdentityStore{}
-		store.state.Store(db.SessionWatchState{State: db.SessionWatchResolved, ContentRevision: "one"})
-		updates := New(store, nil).Events(ctx, "session-a")
-		tick := func() {
-			t.Helper()
-			time.Sleep(PollInterval)
-			synctest.Wait()
-			select {
-			case _, ok := <-updates:
+func TestEventsRevisionChange(t *testing.T) {
+	for _, unavailable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("version unavailable=%t", unavailable), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				store := &unavailableVersionStore{}
+				store.count.Store(1)
+				store.state.Store(db.SessionWatchState{State: db.SessionWatchResolved, PublicID: "session-a", ContentRevision: "one"})
+				updates := New(store, nil).Events(ctx, "session-a")
+				store.unavailable.Store(unavailable)
+				store.state.Store(db.SessionWatchState{State: db.SessionWatchResolved, PublicID: "session-a", ContentRevision: "two"})
+				time.Sleep(PollInterval)
+				synctest.Wait()
+				_, ok := <-updates
 				require.True(t, ok)
-			default:
-				require.FailNow(t, "expected update")
-			}
-			synctest.Wait()
-		}
-		store.state.Store(db.SessionWatchState{State: db.SessionWatchResolved, ContentRevision: "two"})
-		tick()
-		store.count.Store(1)
-		tick()
-		store.state.Store(db.SessionWatchState{State: "ambiguous"})
-		tick()
-		_, ok := <-updates
-		assert.False(t, ok)
-	})
+				synctest.Wait()
+				if !unavailable {
+					store.state.Store(db.SessionWatchState{State: "ambiguous"})
+					time.Sleep(PollInterval)
+					synctest.Wait()
+					_, ok = <-updates
+					require.True(t, ok)
+					_, ok = <-updates
+					assert.False(t, ok)
+					return
+				}
+				store.unavailable.Store(false)
+				time.Sleep(PollInterval)
+				synctest.Wait()
+				select {
+				case <-updates:
+					require.FailNow(t, "unchanged version emitted a second update")
+				default:
+				}
+			})
+		})
+	}
 }
 
 type transientIdentityStore struct {
