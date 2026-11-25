@@ -297,6 +297,39 @@ func TestRawProjectionCommandPRLinks(t *testing.T) {
 	}
 }
 
+func TestRawProjectionWithdrawnDeviceLinks(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		outcome parser.ParseOutcome
+	}{
+		{"exclude", parser.ParseOutcome{ResultSetComplete: true, ExcludedSessionIDs: []string{"codex:portable"}}},
+		{"replace", parser.ParseOutcome{ResultSetComplete: true, ForceReplace: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newProjectionFixture(t)
+			var err error
+			f.sink, err = NewRawProjectionStore(t.Context(), f.runtime, RawProjectionOptions{Tenant: f.tenant, Content: ingest.ContentOptions{ArchiveContent: config.ArchiveContentUsage}})
+			require.NoError(t, err)
+			outcome := projectionOutcome("start")
+			outcome.Outcome.Results[0].Result.Messages[1].ToolCalls[0].InputJSON = `{"command":"gh pr view 41 -R example/repo"}`
+			a, receipt := f.accept(t, "device-a", "initial", "")
+			require.NoError(t, f.sink.Project(t.Context(), f.lease(t, a), a, outcome))
+			outcome.Outcome.Results[0].Result.Messages[1].ToolCalls[0].InputJSON = `{"command":"gh pr view 42 -R example/repo"}`
+			b, _ := f.accept(t, "device-b", "initial", "")
+			require.NoError(t, f.sink.Project(t.Context(), f.lease(t, b), b, outcome))
+			resolved, err := f.sink.Resolve(t.Context(), "codex:portable")
+			require.NoError(t, err)
+			var links string
+			require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&links))
+			require.Len(t, db.DecodePRLinks(links), 2)
+			a, _ = f.accept(t, "device-a", "withdrawn", receipt.Receipt)
+			require.NoError(t, f.sink.Project(t.Context(), f.lease(t, a), a, rawderive.ParsedManifest{Outcome: tc.outcome}))
+			require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&links))
+			assert.Equal(t, []db.PRLink{{URL: "https://github.com/example/repo/pull/42", Host: "github.com", Repository: "example/repo", Number: 42}}, db.DecodePRLinks(links))
+		})
+	}
+}
+
 func TestRawProjectionRefreshesRetainedToolLinks(t *testing.T) {
 	for _, otherSource := range []bool{false, true} {
 		t.Run(fmt.Sprintf("other-source=%t", otherSource), func(t *testing.T) {

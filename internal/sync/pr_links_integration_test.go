@@ -109,6 +109,43 @@ func TestUsageOnlyResyncPreservesPRLinkHistoryAndUncertainty(t *testing.T) {
 	assert.ElementsMatch(t, []string{"https://github.com/example/repo/pull/41", "https://git.example/example/repo/pull/43"}, storedPRURLs(t, env.db, "codex:"+id))
 }
 
+func TestUsageOnlyResyncUsesRecordedCheckout(t *testing.T) {
+	testutil.IsolateGit(t)
+	for _, tc := range []struct {
+		name, initial, host string
+	}{
+		{"single", "[remote \"origin\"]\n url = https://git-a.example/example/repo.git\n", "git-a.example"},
+		{"ambiguous", "[remote \"origin\"]\n url = https://git-a.example/example/repo.git\n[remote \"upstream\"]\n url = https://git-c.example/example/repo.git\n", "github.com"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := setupSingleAgentTestEnv(t, parser.AgentClaude)
+			env.db.SetArchiveContent(config.ArchiveContentUsage)
+			root := t.TempDir()
+			require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o700))
+			configPath := filepath.Join(root, ".git", "config")
+			writeRemote := func(host string) {
+				t.Helper()
+				require.NoError(t, os.WriteFile(configPath, []byte("[remote \"origin\"]\n url = https://"+host+"/example/repo.git\n"), 0o600))
+			}
+			require.NoError(t, os.WriteFile(configPath, []byte(tc.initial), 0o600))
+			env.writeClaudeSession(t, "proj", "recorded-checkout.jsonl", testjsonl.JoinJSONL(
+				testjsonl.ClaudeUserJSON("Review", tsZero, root),
+				`{"type":"assistant","timestamp":"2024-01-01T00:00:01Z","message":{"content":[{"type":"tool_use","id":"call","name":"Bash","input":{"command":"gh pr view 42 -R example/repo"}}]}}`,
+			))
+			require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+			want := []string{"https://" + tc.host + "/example/repo/pull/42"}
+			require.Equal(t, want, storedPRURLs(t, env.db, "recorded-checkout"))
+			writeRemote("git-b.example")
+			env.engine.Close()
+			engine := sync.NewEngine(t.Context(), env.db, sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {env.claudeDir}}, Machine: "local"})
+			t.Cleanup(engine.Close)
+			stats := engine.ResyncAll(t.Context(), nil)
+			require.False(t, stats.Aborted, "%v", stats.Warnings)
+			assert.Equal(t, want, storedPRURLs(t, env.db, "recorded-checkout"))
+		})
+	}
+}
+
 func TestIncrementalSync_PromptPRLinks(t *testing.T) {
 	env := setupTestEnv(t)
 	path := env.writeClaudeSession(t, "proj", "prompt-append.jsonl", testjsonl.JoinJSONL(

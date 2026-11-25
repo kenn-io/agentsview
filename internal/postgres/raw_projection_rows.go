@@ -38,12 +38,12 @@ func rawGroupHasStaleFriction(
 
 // syncSelectedRawPRLinks refreshes materialized revisions selected by active
 // branches, including longer retained captures whose source has departed.
-func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string, dialogueChanges, restored []string, freshLinks map[string][]db.PRLink) (bool, error) {
+func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string, dialogueChanges, restored []string, freshLinks map[string][]db.PRLink, membershipChanged bool) (bool, error) {
 	freshIDs := make([]string, 0, len(freshLinks))
 	for id := range freshLinks {
 		freshIDs = append(freshIDs, id)
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT b.session_id,s.data_version FROM raw_session_branches b JOIN sessions s ON s.id=b.session_id WHERE b.group_id=$1 AND b.active AND (s.data_version<$2 OR b.session_id=ANY($3::text[]) OR b.session_id=ANY($4::text[]) OR b.session_id=ANY($5::text[]))`, group, db.CurrentDataVersion(), dialogueChanges, freshIDs, restored)
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT b.session_id,s.data_version FROM raw_session_branches b JOIN sessions s ON s.id=b.session_id WHERE b.group_id=$1 AND b.active AND (s.data_version<$2 OR b.session_id=ANY($3::text[]) OR b.session_id=ANY($4::text[]) OR b.session_id=ANY($5::text[]) OR $6)`, group, db.CurrentDataVersion(), dialogueChanges, freshIDs, restored, membershipChanged)
 	if err != nil {
 		return false, err
 	}
@@ -72,7 +72,7 @@ func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string, dialo
 		if err != nil {
 			return false, err
 		}
-		if !fresh && slices.Contains(restored, id) && hasBranchLinks {
+		if !fresh && (membershipChanged || slices.Contains(restored, id)) && hasBranchLinks {
 			links, fresh = branchLinks, true
 		}
 		if !fresh {

@@ -392,7 +392,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		}
 	}
 	for _, group := range ordered {
-		linksChanged, err := syncSelectedRawPRLinks(ctx, tx, group, dialogueChanges, restored, freshLinks)
+		linksChanged, err := syncSelectedRawPRLinks(ctx, tx, group, dialogueChanges, restored, freshLinks, changed)
 		if err != nil {
 			return err
 		}
