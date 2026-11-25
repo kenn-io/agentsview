@@ -980,6 +980,30 @@ func TestDirectBackend_Sync_CodexID(t *testing.T) {
 	}
 }
 
+func TestDirectBackend_Sync_CodexDuplicatePath(t *testing.T) {
+	root := t.TempDir()
+	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	name := "rollout-2026-10-08T12-00-00-" + id + ".jsonl"
+	ordinary := filepath.Join(root, "ordinary", "2026", "10", "08", name)
+	labeled := filepath.Join(root, "logs", "a", ".codex-run-v1-abc", "sessions", "2026", "10", "08", name)
+	content := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_cli_rs", "2026-10-08T12:00:00Z") + "\n" + testjsonl.CodexMsgJSON("user", "hello", "2026-10-08T12:00:01Z") + "\n"
+	dbtest.WriteTestFile(t, ordinary, []byte(content))
+	dbtest.WriteTestFile(t, labeled, []byte(content))
+	d := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(t.Context(), d, sync.EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {filepath.Join(root, "ordinary"), filepath.Join(root, "logs")}}})
+	t.Cleanup(engine.Close)
+	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{labeled}))
+	svc := service.NewDirectBackend(d, engine)
+	detail, err := svc.Sync(t.Context(), service.SyncInput{Path: ordinary})
+	require.NoError(t, err)
+	require.NotNil(t, detail)
+	assert.Equal(t, "codex:"+id, detail.ID)
+	assert.Equal(t, labeled, d.GetSessionFilePath(t.Context(), "codex:"+id))
+	require.NoError(t, os.Remove(ordinary))
+	_, err = svc.Sync(t.Context(), service.SyncInput{Path: ordinary})
+	require.ErrorContains(t, err, "no session found for path")
+}
+
 func TestDirectBackend_Sync_VSCopilotIDRefreshesOnlyRequestedConversation(t *testing.T) {
 	t.Parallel()
 	tracesDir := t.TempDir()

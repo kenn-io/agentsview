@@ -9531,6 +9531,34 @@ func (e *Engine) providerSourceLowerRanked(
 	return e.storedSourceRanksHigher(ctx, provider, storedPath, candidate)
 }
 
+// PreferredSessionForPath identifies a Codex copy skipped for a better stored source.
+func (e *Engine) PreferredSessionForPath(ctx context.Context, path string) (string, error) {
+	if !filepath.IsAbs(path) || !parser.IsRegularFile(path) {
+		return "", nil
+	}
+	path = filepath.Clean(path)
+	plan, err := e.PlanChangedPathsContext(ctx, []string{path})
+	if err != nil {
+		return "", err
+	}
+	for _, file := range plan.Files {
+		if file.Agent != parser.AgentCodex || file.ProviderSource == nil || file.Path != path {
+			continue
+		}
+		factory := e.sources().providerFactories[file.Agent]
+		provider := factory.NewProvider(parser.ProviderConfig{Roots: e.sources().agentDirs[file.Agent], Machine: e.machine})
+		lower, err := e.providerSourceLowerRanked(ctx, provider, file.Agent, *file.ProviderSource)
+		if err != nil {
+			return "", err
+		}
+		if lower {
+			id := reconciliationMemberIdentity(file.Agent, *file.ProviderSource)
+			return applyIDPrefixToID(e.idPrefix, applyIDPrefixToID(provider.Definition().IDPrefix, id)), nil
+		}
+	}
+	return "", nil
+}
+
 func (e *Engine) providerSourceForDiscoveredFile(
 	ctx context.Context,
 	provider parser.Provider,

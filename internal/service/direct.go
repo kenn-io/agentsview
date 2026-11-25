@@ -822,6 +822,13 @@ func (b *directBackend) resolveSessionIDByPath(
 	}
 	switch len(ids) {
 	case 0:
+		id, err := b.engine.PreferredSessionForPath(ctx, path)
+		if err != nil {
+			return "", err
+		}
+		if id != "" {
+			return id, nil
+		}
 		return "", fmt.Errorf(
 			"sync: no session found for path %q", path,
 		)

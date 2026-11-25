@@ -916,7 +916,12 @@ func CodexSourceLabelForRoots(roots []string, path string) string {
 func CodexSourceLabelRoot(roots []string, path string) (string, string) {
 	var selected, label string
 	for _, root := range roots {
-		if candidate := CodexSourceLabel(root, path); len(candidate) > len(label) {
+		candidate := CodexSourceLabel(root, path)
+		if candidate == "" {
+			continue
+		}
+		rel, err := filepath.Rel(root, selected)
+		if selected == "" || (err == nil && filepath.IsLocal(rel)) {
 			selected = root
 			label = candidate
 		}

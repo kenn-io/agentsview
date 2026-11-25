@@ -2403,6 +2403,8 @@ func TestCodexLabeledRunDiscoveryAndParse(t *testing.T) {
 		{"root", ".codex-run-v1-abc", ".", []string{"."}},
 		{"outer root first", "team/case/.codex-run-v1-abc", "team/case", []string{".", "team"}},
 		{"inner root first", "team/case/.codex-run-v1-abc", "team/case", []string{"team", "."}},
+		{"single character inner first", "a/.codex-run-v1-abc", "a", []string{"a", "."}},
+		{"single character outer first", "a/.codex-run-v1-abc", "a", []string{".", "a"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
