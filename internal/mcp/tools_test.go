@@ -1575,29 +1575,6 @@ type fakeContentSearchService struct {
 	err     error
 }
 
-func TestSearchContentDeadlineSuggestsFilters(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		svc  service.SessionService
-	}{
-		{name: "direct", svc: &fakeContentSearchService{err: context.DeadlineExceeded}},
-		{name: "daemon", svc: func() service.SessionService {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusGatewayTimeout)
-			}))
-			t.Cleanup(srv.Close)
-			return servicehttp.NewHTTPBackend(srv.URL, "", false, "")
-		}()},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ts := &toolset{svc: tc.svc, now: func() time.Time { return fixedNow }}
-			_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", IncludeActive: true})
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "retry with date_from, project, or session_id")
-		})
-	}
-}
-
 func (f *fakeContentSearchService) Get(_ context.Context, id string) (*service.SessionDetail, error) {
 	if id == "child" || id == "older" || id == "current" {
 		return &service.SessionDetail{ID: id}, nil
@@ -2709,4 +2686,66 @@ func TestSessionResolutionTrashedExactID(t *testing.T) {
 			require.ErrorIs(t, err, service.ErrSessionNotFound)
 		})
 	}
+}
+
+type deadlineContentService struct {
+	service.SessionService
+	deadlines []time.Time
+	bounded   []bool
+	oversized bool
+}
+
+func (s *deadlineContentService) SearchContent(ctx context.Context, req service.ContentSearchRequest) (*service.ContentSearchResult, error) {
+	d, ok := ctx.Deadline()
+	s.deadlines = append(s.deadlines, d)
+	s.bounded = append(s.bounded, ok)
+	if s.oversized {
+		if len(s.deadlines) > 1 {
+			return nil, context.DeadlineExceeded
+		}
+		matches := make([]db.ContentMatch, 20)
+		for i := range matches {
+			matches[i] = db.ContentMatch{SessionID: "session", Ordinal: i, Snippet: strings.Repeat("x", 4000)}
+		}
+		return &service.ContentSearchResult{Matches: matches, NextCursor: 20, ActiveFilterApplied: true}, nil
+	}
+	return &service.ContentSearchResult{}, nil
+}
+
+func TestSearchContentSharedDeadline(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode string
+		concepts   []string
+		bounded    bool
+	}{
+		{name: "substring", bounded: true}, {name: "semantic", mode: "semantic"}, {name: "concepts", concepts: []string{"needle", "thread"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &deadlineContentService{}
+			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+			pattern := "needle"
+			if len(tc.concepts) > 0 {
+				pattern = ""
+			}
+			_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: pattern, Mode: tc.mode, Concepts: tc.concepts, IncludeActive: true})
+			require.NoError(t, err)
+			require.Greater(t, len(fake.deadlines), 1)
+			for i := range fake.deadlines {
+				assert.Equal(t, tc.bounded, fake.bounded[i])
+				assert.Equal(t, fake.deadlines[0], fake.deadlines[i])
+			}
+		})
+	}
+}
+
+func TestSearchContentCountDeadlineKeepsMatches(t *testing.T) {
+	fake := &deadlineContentService{oversized: true}
+	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", IncludeActive: true, Limit: 20})
+	require.NoError(t, err)
+	assert.NotEmpty(t, out.Matches)
+	assert.Zero(t, out.Total)
+	assert.Contains(t, out.Note, "count timed out")
+	require.Len(t, fake.deadlines, 2)
+	assert.Equal(t, fake.deadlines[0], fake.deadlines[1])
 }

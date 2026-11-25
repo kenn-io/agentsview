@@ -13,6 +13,14 @@ import (
 // HTTP session list rejects larger batches.
 const MaxListSessionIDs = 100
 
+// ContentSearchContext shares a deadline across a keyword search and its follow-ups.
+func ContentSearchContext(ctx context.Context, req ContentSearchRequest) (context.Context, context.CancelFunc) {
+	if len(req.Concepts) == 0 && db.ContentScanBounded(req.Mode, false) {
+		return db.WithContentScanDeadline(ctx)
+	}
+	return ctx, func() {}
+}
+
 // ContentSearchHint describes a measured reason an empty search can hide matches.
 // RetryWith contains the arguments to change while preserving the original request.
 type ContentSearchHint struct {

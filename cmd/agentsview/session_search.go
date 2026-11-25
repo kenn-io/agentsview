@@ -101,11 +101,10 @@ func newSessionSearchCommand() *cobra.Command {
 				Cursor:            cursor,
 				Context:           contextN,
 			}
-			res, err := svc.SearchContent(cmd.Context(), req)
+			res, cliHints, err := searchContentWithHints(cmd.Context(), cmd, svc, req)
 			if err != nil {
 				return err
 			}
-			cliHints := contentSearchHints(cmd.Context(), cmd, svc, req, res)
 			if res.Note != "" {
 				fmt.Fprintln(cmd.ErrOrStderr(), sanitizeTerminal(res.Note))
 			}
@@ -566,6 +565,16 @@ func wordArchive(ctx context.Context, svc service.SessionService, remote bool) b
 		return status.Archive.Backend == "sqlite" && status.Lexical.Status == service.MemoryReady
 	}
 	return status.Archive.Backend != "cockroach"
+}
+
+func searchContentWithHints(ctx context.Context, cmd *cobra.Command, svc service.SessionService, req service.ContentSearchRequest) (*service.ContentSearchResult, []contentSearchCLIHint, error) {
+	ctx, cancel := service.ContentSearchContext(ctx, req)
+	defer cancel()
+	res, err := svc.SearchContent(ctx, req)
+	if err != nil {
+		return nil, nil, err
+	}
+	return res, contentSearchHints(ctx, cmd, svc, req, res), nil
 }
 
 func contentSearchHints(ctx context.Context, cmd *cobra.Command, svc service.SessionService, req service.ContentSearchRequest, res *service.ContentSearchResult) []contentSearchCLIHint {

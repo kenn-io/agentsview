@@ -299,6 +299,16 @@ func semanticSessionScopeSubquery(f ContentSearchFilter) (string, []any) {
 	return "session_id IN (SELECT id FROM sessions WHERE " + where + ")", args
 }
 
+// ContentScanBounded reports whether a search uses the local keyword scan deadline.
+func ContentScanBounded(mode string, keywordOnly bool) bool {
+	return mode != "semantic" && (mode != "hybrid" || keywordOnly)
+}
+
+// WithContentScanDeadline bounds a content scan and its follow-up searches.
+func WithContentScanDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, contentScanTimeout)
+}
+
 // SearchContent runs a content search and returns a page of matches.
 func (db *DB) SearchContent(
 	ctx context.Context, f ContentSearchFilter,
@@ -309,9 +319,9 @@ func (db *DB) SearchContent(
 	if f.Pattern == "" {
 		return ContentSearchPage{}, nil
 	}
-	if f.Mode != "semantic" && f.Mode != "hybrid" {
+	if ContentScanBounded(f.Mode, f.KeywordOnly) {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, contentScanTimeout)
+		ctx, cancel = WithContentScanDeadline(ctx)
 		defer cancel()
 	}
 
@@ -1743,12 +1753,8 @@ func (db *DB) searchContentHybrid(
 			return ContentSearchPage{}, ErrSemanticUnavailable
 		}
 	}
-	probeCtx, cancelProbe := context.WithTimeout(ctx, contentScanTimeout)
-	hasFTS := db.HasFTS(probeCtx)
-	probeErr := probeCtx.Err()
-	cancelProbe()
-	if !hasFTS {
-		if err := probeErr; err != nil {
+	if !db.HasFTS(ctx) {
+		if err := ctx.Err(); err != nil {
 			return ContentSearchPage{}, err
 		}
 		return ContentSearchPage{}, errFTSUnavailable
@@ -1763,9 +1769,7 @@ func (db *DB) searchContentHybrid(
 			return ContentSearchPage{}, err
 		}
 	}
-	lexicalCtx, cancelLexical := context.WithTimeout(ctx, contentScanTimeout)
-	defer cancelLexical()
-	ftsLeg, err := db.hybridFTSLeg(lexicalCtx, f, searcher, k)
+	ftsLeg, err := db.hybridFTSLeg(ctx, f, searcher, k)
 	if err != nil {
 		return ContentSearchPage{}, err
 	}

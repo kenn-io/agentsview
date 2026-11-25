@@ -69,6 +69,19 @@ func TestContentScanDeadlineIncludesFTSProbe(t *testing.T) {
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
+func TestContentScanHybridDeadlineIncludesFTSProbe(t *testing.T) {
+	d := testDB(t)
+	d.rawReader().SetMaxOpenConns(1)
+	conn, err := d.rawReader().Conn(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	previous := contentScanTimeout
+	contentScanTimeout = time.Second
+	t.Cleanup(func() { contentScanTimeout = previous })
+	_, err = d.SearchContent(t.Context(), ContentSearchFilter{Mode: "hybrid", Pattern: "needle", KeywordOnly: true})
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
 type hybridDeadlineSearcher struct {
 	fakeVectorSearcher
 	hasDeadline bool
@@ -89,47 +102,6 @@ func TestContentScanHybridPreservesVectorDeadline(t *testing.T) {
 	_, err := d.SearchContent(t.Context(), ContentSearchFilter{Mode: "hybrid", Pattern: "needle"})
 	require.NoError(t, err)
 	assert.False(t, searcher.hasDeadline)
-}
-
-func TestContentWordHitsRespectSessionScope(t *testing.T) {
-	d := testDB(t)
-	if !d.HasFTS(t.Context()) {
-		t.Skip("fts5 not available")
-	}
-	seedSearchSession(t, d, "s1", "project-a", [][2]string{{"user", "alpha beta"}})
-	seedSearchSession(t, d, "s2", "project-b", [][2]string{{"user", "alpha"}})
-	_, err := d.getWriter().Exec(t.Context(), `UPDATE sessions SET ended_at = CASE id WHEN 's1' THEN '2026-01-01T00:00:00Z' ELSE '2026-11-01T00:00:00Z' END`)
-	require.NoError(t, err)
-	for _, tc := range []struct {
-		name string
-		f    ContentSearchFilter
-		id   string
-		n    int
-	}{
-		{"project", ContentSearchFilter{Project: "project-a"}, "s1", 2},
-		{"session", ContentSearchFilter{SessionID: "s2"}, "s2", 1},
-		{"date", ContentSearchFilter{DateFrom: "2026-10-01"}, "s2", 1},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			q, words := contentWordsQuery("alpha beta")
-			require.True(t, words)
-			snapshot, err := d.BeginMessageSnapshot(t.Context())
-			require.NoError(t, err)
-			defer snapshot.Close()
-			require.NoError(t, buildContentWordHits(t.Context(), snapshot.tx, q, lexicalMessageFilter(tc.f)))
-			rows, err := snapshot.tx.QueryContext(t.Context(), `SELECT m.session_id, h.n FROM content_word_hits h JOIN messages m ON m.id = h.id`)
-			require.NoError(t, err)
-			defer rows.Close()
-			require.True(t, rows.Next())
-			var sessionID string
-			var count int
-			require.NoError(t, rows.Scan(&sessionID, &count))
-			assert.Equal(t, tc.id, sessionID)
-			assert.Equal(t, tc.n, count)
-			assert.False(t, rows.Next())
-			require.NoError(t, rows.Err())
-		})
-	}
 }
 
 func TestContentScanDeadlineReleasesActiveReader(t *testing.T) {

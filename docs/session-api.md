@@ -846,7 +846,7 @@ tool inputs, and tool result content. The response shape matches
 `GET /api/v1/search/content`.
 
 On a local archive, substring, regex, terms, and FTS searches stop after two
-minutes. The keyword part of a hybrid search has the same limit (HTTP 504 from
+minutes. A hybrid search that falls back to keywords has the same limit (HTTP 504 from
 the API). Narrow a search with `--date-from` or `--project` (`date_from` or
 `project` over HTTP).
 
