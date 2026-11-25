@@ -3,8 +3,10 @@ package server_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -228,6 +230,48 @@ func TestEvents_SessionLookupError(t *testing.T) {
 			w := httptest.NewRecorder()
 			handler.ServeHTTP(w, httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/events?session=bad", nil))
 			assertStatus(t, w, http.StatusInternalServerError)
+		})
+	}
+}
+
+type versionFailureStore struct{ db.Store }
+
+func (s *versionFailureStore) GetSessionVersion(context.Context, string) (int, int64, bool) {
+	return 0, 0, false
+}
+
+func TestEvents_SessionVersionIDs(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("version read fails=%t", failed), func(t *testing.T) {
+			t.Cleanup(sessionwatch.SetTimingsForTest(25*time.Millisecond, 50*time.Millisecond))
+			te := setup(t)
+			require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: "watch-a", Project: "project", Machine: "test", Agent: "claude"}))
+			var store db.Store = te.db
+			if failed {
+				store = &versionFailureStore{Store: te.db}
+			}
+			cfg := config.Config{Host: "127.0.0.1", InstallationID: "server-installation"}
+			handler := wrapTestHandler(cfg, server.New(cfg, store, nil, server.WithBroadcaster(te.broadcaster)).Handler())
+			ctx, cancel := context.WithCancel(t.Context())
+			w := newFlushRecorder()
+			done := make(chan struct{})
+			t.Cleanup(func() { cancel(); <-done })
+			go func() {
+				handler.ServeHTTP(w, httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/events?session=watch-a", nil))
+				close(done)
+			}()
+			te.waitForSSEEvent(t, w, "events_ready", 5*time.Second)
+			if failed {
+				assert.Contains(t, w.BodyString(), "id: \nevent: session_ready\ndata: watch-a\n")
+				return
+			}
+			match := regexp.MustCompile(`id: ([^\n]+)\nevent: session_ready\ndata: watch-a\n`).FindStringSubmatch(w.BodyString())
+			require.Len(t, match, 2)
+			require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: "watch-a", Project: "project", Machine: "test", Agent: "claude", MessageCount: 1}))
+			te.waitForSSEEvent(t, w, "session_updated", 5*time.Second)
+			updated := regexp.MustCompile(`id: ([^\n]+)\nevent: session_updated\ndata: watch-a\n`).FindStringSubmatch(w.BodyString())
+			require.Len(t, updated, 2)
+			assert.NotEqual(t, match[1], updated[1])
 		})
 	}
 }

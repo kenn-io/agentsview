@@ -17,9 +17,9 @@ class FakeSource extends EventTarget {
     this.closed = true;
     this.readyState = 2;
   }
-  emit(type: string, data = "") {
+  emit(type: string, data = "", lastEventId = "") {
     this.readyState = type === "error" ? 0 : 1;
-    this.dispatchEvent(new MessageEvent(type, { data }));
+    this.dispatchEvent(new MessageEvent(type, { data, lastEventId }));
   }
 }
 
@@ -72,13 +72,11 @@ describe("shared live stream", () => {
     expect(a).toEqual([]);
     old.emit("data_changed", '{"scope":"sessions"}');
     next.emit("session_ready", "a");
-    expect(old.closed).toBe(false);
+    expect(old.closed).toBe(true);
     old.emit("data_changed", '{"scope":"sessions"}');
     next.emit("session.timing", '{"session_id":"a","turn_count":2}');
     next.emit("session_ready", "b");
     next.emit("events_ready", "{}");
-    vi.advanceTimersByTime(1500);
-    expect(old.closed).toBe(true);
     next.emit("session_updated", "a");
     next.emit("data_changed", '{"scope":"messages"}');
     expect(a.map((frame) => frame.type)).toEqual([
@@ -98,7 +96,6 @@ describe("shared live stream", () => {
     expect(next.closed).toBe(false);
     next.emit("data_changed", '{"scope":"sessions"}');
     sources[2]!.emit("events_ready", "{}");
-    vi.advanceTimersByTime(1500);
     expect(next.closed).toBe(true);
     expect(archive.map((frame) => frame.type)).toEqual([
       "events_ready",
@@ -109,7 +106,35 @@ describe("shared live stream", () => {
     hub.close();
   });
 
-  it("keeps ready ports quiet during a healthy handoff", () => {
+  it.each([
+    { name: "unchanged", old: "1:x", replacement: "1:x", ready: false, timing: false },
+    { name: "changed", old: "1:x", replacement: "2:y", ready: true, timing: true },
+    { name: "unknown", old: "", replacement: "", ready: true, timing: false },
+    {
+      name: "updated before handoff",
+      old: "2:y",
+      replacement: "2:y",
+      ready: false,
+      timing: false,
+      update: true,
+    },
+    {
+      name: "missing before handoff",
+      old: "1:x",
+      replacement: "1:x",
+      ready: true,
+      timing: true,
+      missing: true,
+    },
+    {
+      name: "disconnected",
+      old: "1:x",
+      replacement: "1:x",
+      ready: true,
+      timing: true,
+      disconnected: true,
+    },
+  ])("compares readiness at handoff: $name", (scenario) => {
     const hub = new LiveHub();
     const archive = { postMessage: vi.fn() };
     const a = { postMessage: vi.fn() };
@@ -117,82 +142,36 @@ describe("shared live stream", () => {
     hub.update(a, request("a"));
     hub.update(archive, request());
     const old = sources[0]!;
-    expect(old.url.searchParams.getAll("session")).toEqual(["a"]);
-    old.emit("session_ready", "a");
-    old.emit("session.timing", '{"session_id":"a"}');
+    old.emit("session_ready", "a", scenario.update ? "1:x" : scenario.old);
+    old.emit("session.timing", '{"session_id":"a","turn_count":1}');
     old.emit("events_ready", "{}");
-    archive.postMessage.mockClear();
+    if (scenario.update) old.emit("session_updated", "a", scenario.old);
+    if (scenario.missing) old.emit("session_missing", "a");
+    if (scenario.disconnected) old.emit("error");
     a.postMessage.mockClear();
+    archive.postMessage.mockClear();
     hub.update(b, request("b"));
     vi.advanceTimersByTime(250);
     const next = sources[1]!;
-    next.emit("session_ready", "a");
-    next.emit("session.timing", '{"session_id":"a"}');
-    next.emit("session_ready", "b");
+    next.emit("session_ready", "a", scenario.replacement);
+    next.emit(
+      "session.timing",
+      scenario.timing ? '{"session_id":"a","turn_count":2}' : '{"session_id":"a","turn_count":1}',
+    );
+    next.emit("session_ready", "b", "1:b");
     next.emit("session.timing", '{"session_id":"b"}');
     next.emit("events_ready", "{}");
-    expect(archive.postMessage).not.toHaveBeenCalled();
-    expect(a.postMessage).not.toHaveBeenCalled();
+    expect(a.postMessage.mock.calls.map(([frame]) => frame.type)).toEqual([
+      ...(scenario.ready ? ["session_ready"] : []),
+      ...(scenario.timing ? ["session.timing"] : []),
+    ]);
     expect(b.postMessage.mock.calls.map(([frame]) => frame.type)).toEqual([
       "session_ready",
       "session.timing",
     ]);
-    old.emit("session_updated", "a");
+    expect(archive.postMessage).toHaveBeenCalledTimes(scenario.disconnected ? 1 : 0);
+    next.emit("session_updated", "a", "3:z");
     expect(a.postMessage).toHaveBeenLastCalledWith({ type: "session_updated", data: "a" });
-    vi.advanceTimersByTime(1500);
-    expect(old.closed).toBe(true);
-    old.emit("session_updated", "a");
-    expect(a.postMessage).toHaveBeenCalledTimes(1);
-    next.emit("session_updated", "a");
-    next.emit("session.timing", '{"session_id":"a"}');
-    expect(a.postMessage.mock.calls.map(([frame]) => frame.type)).toEqual([
-      "session_updated",
-      "session_updated",
-      "session.timing",
-    ]);
-    next.emit("session_missing", "a");
-    hub.update({ postMessage: vi.fn() }, request("c"));
-    vi.advanceTimersByTime(250);
-    sources[2]!.emit("session_ready", "a");
-    expect(a.postMessage).toHaveBeenLastCalledWith({ type: "session_ready", data: "a" });
-    hub.close();
-  });
-
-  it.each(["leave", "change session"])("restores readiness after a port can %s", (action) => {
-    const hub = new LiveHub();
-    const a = { postMessage: vi.fn() };
-    hub.update(a, request("a"));
-    sources[0]!.emit("session_ready", "a");
-    sources[0]!.emit("events_ready", "{}");
-    hub.update({ postMessage: vi.fn() }, request("b"));
-    vi.advanceTimersByTime(250);
-    const next = sources[1]!;
-    next.emit("session_ready", "b");
-    if (action === "leave") hub.leave(a);
-    else hub.update(a, request("c"));
-    hub.update(a, request("a"));
-    a.postMessage.mockClear();
-    next.emit("session_ready", "a");
-    expect(a.postMessage).toHaveBeenCalledWith({ type: "session_ready", data: "a" });
-    hub.close();
-  });
-
-  it("refreshes sessions when another handoff interrupts the old watcher's overlap", () => {
-    const hub = new LiveHub();
-    const a = { postMessage: vi.fn() };
-    hub.update(a, request("a"));
-    sources[0]!.emit("session_ready", "a");
-    sources[0]!.emit("events_ready", "{}");
-    hub.update({ postMessage: vi.fn() }, request("b"));
-    vi.advanceTimersByTime(250);
-    sources[1]!.emit("session_ready", "a");
-    sources[1]!.emit("events_ready", "{}");
-    a.postMessage.mockClear();
-    hub.update({ postMessage: vi.fn() }, request("c"));
-    vi.advanceTimersByTime(250);
-    expect(sources[0]!.closed).toBe(true);
-    sources[2]!.emit("session_ready", "a");
-    expect(a.postMessage).toHaveBeenCalledWith({ type: "session_ready", data: "a" });
     hub.close();
   });
 
@@ -216,10 +195,7 @@ describe("shared live stream", () => {
     (reason) => {
       const hub = new LiveHub();
       const archive = { postMessage: vi.fn() };
-      const session = { postMessage: vi.fn() };
       hub.update(archive, request());
-      hub.update(session, request("existing"));
-      sources[0]!.emit("session_ready", "existing");
       sources[0]!.emit("events_ready", "{}");
       if (reason !== "failure during handoff") sources[0]!.emit("error");
       if (reason !== "reconnect") {
@@ -230,10 +206,6 @@ describe("shared live stream", () => {
         sources[1]!.emit("session_ready", "a");
       }
       sources[reason === "reconnect" ? 0 : 1]!.emit("events_ready", "{}");
-      sources[reason === "reconnect" ? 0 : 1]!.emit("session_ready", "existing");
-      expect(
-        session.postMessage.mock.calls.filter(([frame]) => frame.type === "session_ready"),
-      ).toHaveLength(2);
       expect(archive.postMessage.mock.calls.map(([frame]) => frame.type)).toEqual([
         "events_ready",
         "error",
@@ -259,7 +231,6 @@ describe("shared live stream", () => {
     sources[0]!.emit("data_changed", '{"scope":"sessions"}');
     sources[2]!.emit("session_ready", "a");
     sources[2]!.emit("events_ready", "{}");
-    vi.advanceTimersByTime(1500);
     expect(sources[0]!.closed).toBe(true);
     expect(archive.postMessage.mock.calls.map(([frame]) => frame.type)).toEqual([
       "events_ready",
@@ -351,7 +322,6 @@ describe("shared live stream", () => {
     vi.advanceTimersByTime(250);
     expect(active.closed).toBe(false);
     sources[1]!.emit("events_ready", "{}");
-    vi.advanceTimersByTime(1500);
     expect(active.closed).toBe(true);
     expect(sources[1]!.url.searchParams.has("session")).toBe(false);
     hub.leave(archive);
@@ -414,10 +384,11 @@ describe("shared live stream", () => {
     vi.advanceTimersByTime(250);
     expect(sources).toHaveLength(order === "old first" ? 2 : 1);
     const source = sources.at(-1)!;
-    await source.options.fetch(source.url, {});
+    await source.options.fetch(source.url, { headers: { "Last-Event-ID": "1:x" } });
     expect((fetch.mock.calls[0]![1].headers as Headers).get("Authorization")).toBe(
       "Bearer new-token",
     );
+    expect((fetch.mock.calls[0]![1].headers as Headers).has("Last-Event-ID")).toBe(false);
     hub.close();
   });
 
