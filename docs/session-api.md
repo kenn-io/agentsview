@@ -115,7 +115,8 @@ After subscribing to changes, the HTTP `/api/v1/events` stream sends
 `events_ready` on every connection. If you want updates for specific sessions on
 the same stream, you can repeat the `session` query parameter. For each one, the
 stream sends `session_ready` and `session.timing`, or `session_missing` if the
-initial lookup finds that the session does not exist or cannot be resolved. A
+initial lookup finds that the session does not exist or cannot be resolved. The
+nonempty `session_ready` SSE ID changes when the session state changes. A
 session that becomes unresolved also gets `session_missing` and is no longer
 watched until the client reconnects. When you reconnect, the stream sends the
 readiness events again. To receive the changed session and message records

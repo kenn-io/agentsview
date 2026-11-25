@@ -2,7 +2,7 @@ import { EventSource } from "eventsource";
 import { getApiV1Events, getGetApiV1EventsUrl } from "./generated/sessions/sessions.js";
 
 export type LiveRequest = { base: string; token: string; credentialTime: number; session?: string };
-export type LiveFrame = { type: string; data?: string };
+export type LiveFrame = { type: string; data?: string; id?: string };
 export type LivePort = { postMessage: (frame: LiveFrame) => void };
 
 export class LiveHub {
@@ -10,13 +10,10 @@ export class LiveHub {
   private source: EventSource | null = null;
   private previous: EventSource | null = null;
   private continuous = false;
-  private synced = new Set<LivePort>();
-  private sessionReady = new Set<LivePort>();
-  private sessionTiming = new Set<LivePort>();
+  private synced = new Map<LivePort, { archive?: boolean; marker?: string; timing?: string }>();
   private sessions = new Set<string>();
   private ready = new Map<string, LiveFrame>();
   private timing = new Map<string, LiveFrame>();
-  private versions = new Map<string, string>();
   private credentials: { base: string; token: string } | null = null;
   private connected = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -26,8 +23,6 @@ export class LiveHub {
     this.ports.set(port, request);
     if (!previous || previous.session !== request.session) {
       this.synced.delete(port);
-      this.sessionReady.delete(port);
-      this.sessionTiming.delete(port);
     }
     if (
       (!previous || previous.session !== request.session) &&
@@ -66,8 +61,6 @@ export class LiveHub {
     }
     this.ports.delete(port);
     this.synced.delete(port);
-    this.sessionReady.delete(port);
-    this.sessionTiming.delete(port);
     this.schedule();
   }
 
@@ -122,7 +115,6 @@ export class LiveHub {
     if (!this.previous) {
       this.ready.clear();
       this.timing.clear();
-      this.versions.clear();
       this.synced.clear();
     }
     this.sessions = sessions;
@@ -132,7 +124,6 @@ export class LiveHub {
       this.previous = null;
       this.ready.clear();
       this.timing.clear();
-      this.versions.clear();
       this.synced.clear();
       return;
     }
@@ -150,7 +141,6 @@ export class LiveHub {
     let errors = 0;
     let opened = this.connected;
     let suppressReady = false;
-    let before: { versions: Map<string, string>; timing: Map<string, LiveFrame> } | undefined;
 
     source.addEventListener("open", () => {
       if (this.source !== source && this.previous !== source) return;
@@ -165,9 +155,13 @@ export class LiveHub {
         this.continuous = false;
         this.synced.clear();
         this.broadcast({ type: "error" });
+      } else {
+        for (const state of this.synced.values()) {
+          delete state.marker;
+          delete state.timing;
+        }
       }
       suppressReady = false;
-      before = undefined;
       if (this.previous === source) {
         source.close();
         this.previous = null;
@@ -195,12 +189,11 @@ export class LiveHub {
         if (this.source === source && this.previous) {
           // The server subscribes to archive updates before sending its first frame.
           suppressReady = this.continuous && this.previous.readyState === 1;
-          if (suppressReady) before = { versions: this.versions, timing: this.timing };
+          if (!suppressReady) this.synced.clear();
           this.previous.close();
           this.previous = null;
           this.ready.clear();
-          this.timing = new Map();
-          this.versions = new Map();
+          this.timing.clear();
         }
         errors = 0;
         const data = (event as MessageEvent).data as string;
@@ -213,28 +206,11 @@ export class LiveHub {
             return;
           }
         }
-        const frame = { type, data };
-        const version = (event as MessageEvent).lastEventId;
-        const unchangedReady =
-          type === "session_ready" &&
-          session &&
-          !!before?.versions.get(session) &&
-          before.versions.get(session) === version;
-        const unchangedTiming =
-          type === "session.timing" && session && before?.timing.get(session)?.data === data;
-        const current = unchangedReady
-          ? this.sessionReady
-          : unchangedTiming
-            ? this.sessionTiming
-            : undefined;
-        this.broadcast(frame, session, suppressReady && type === "events_ready", current);
-        if (type === "events_ready") {
-          suppressReady = false;
-          before = undefined;
-        }
-        if ((type === "session_ready" || type === "session_updated") && session)
-          this.versions.set(session, version);
-        if (type === "session_missing" && session) this.versions.delete(session);
+        const frame: LiveFrame = { type, data };
+        if (type === "session_ready" || type === "session_updated")
+          frame.id = (event as MessageEvent).lastEventId;
+        this.broadcast(frame, session, suppressReady && type === "events_ready");
+        if (type === "events_ready") suppressReady = false;
         if (type === "events_ready" || type === "session_ready" || type === "session_missing") {
           this.ready.set(session ?? "", frame);
           if (type === "session_missing") this.timing.delete(session ?? "");
@@ -244,30 +220,29 @@ export class LiveHub {
     }
   }
 
-  private broadcast(
-    frame: LiveFrame,
-    session?: string,
-    suppressSynced = false,
-    current?: Set<LivePort>,
-  ) {
+  private broadcast(frame: LiveFrame, session?: string, suppressSynced = false) {
     for (const [port, request] of this.ports) {
       if (session !== undefined && request.session !== session) continue;
       if ((frame.type === "events_ready" || frame.type === "data_changed") && request.session)
         continue;
-      if (suppressSynced && this.synced.has(port)) continue;
-      if (current?.has(port)) continue;
+      const state = this.synced.get(port);
+      if (suppressSynced && state?.archive) continue;
+      if (frame.type === "session_ready" && frame.id && frame.id === state?.marker) continue;
+      if (frame.type === "session.timing" && frame.data === state?.timing) continue;
       this.deliver(port, frame);
     }
   }
 
   private deliver(port: LivePort, frame: LiveFrame) {
-    if (frame.type === "events_ready") this.synced.add(port);
-    if (frame.type === "session_ready") this.sessionReady.add(port);
-    if (frame.type === "session.timing") this.sessionTiming.add(port);
+    const state = this.synced.get(port) ?? {};
+    if (frame.type === "events_ready") state.archive = true;
+    if (frame.type === "session_ready" || frame.type === "session_updated") state.marker = frame.id;
+    if (frame.type === "session.timing") state.timing = frame.data;
     if (frame.type === "session_missing") {
-      this.sessionReady.delete(port);
-      this.sessionTiming.delete(port);
+      delete state.marker;
+      delete state.timing;
     }
+    this.synced.set(port, state);
     port.postMessage(frame);
   }
 

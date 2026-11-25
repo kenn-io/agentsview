@@ -109,6 +109,13 @@ describe("shared live stream", () => {
   it.each([
     { name: "unchanged", old: "1:x", replacement: "1:x", ready: false, timing: false },
     { name: "changed", old: "1:x", replacement: "2:y", ready: true, timing: true },
+    {
+      name: "hosted content revision",
+      old: '{"count":1,"version":2,"content_revision":"one"}',
+      replacement: '{"count":1,"version":2,"content_revision":"two"}',
+      ready: true,
+      timing: false,
+    },
     { name: "unknown", old: "", replacement: "", ready: true, timing: false },
     {
       name: "updated before handoff",
@@ -171,7 +178,11 @@ describe("shared live stream", () => {
     ]);
     expect(archive.postMessage).toHaveBeenCalledTimes(scenario.disconnected ? 1 : 0);
     next.emit("session_updated", "a", "3:z");
-    expect(a.postMessage).toHaveBeenLastCalledWith({ type: "session_updated", data: "a" });
+    expect(a.postMessage).toHaveBeenLastCalledWith({
+      type: "session_updated",
+      data: "a",
+      id: "3:z",
+    });
     hub.close();
   });
 
@@ -209,7 +220,7 @@ describe("shared live stream", () => {
       next.emit("events_ready", "{}");
       expect(a.postMessage).not.toHaveBeenCalled();
       expect(joining.postMessage.mock.calls).toEqual([
-        [{ type: "session_ready", data: "a" }],
+        [{ type: "session_ready", data: "a", id: "1:x" }],
         [{ type: "session.timing", data: '{"session_id":"a"}' }],
       ]);
       hub.close();
@@ -255,6 +266,32 @@ describe("shared live stream", () => {
       hub.close();
     },
   );
+
+  it("refreshes session state after a replacement stream errors", () => {
+    const hub = new LiveHub();
+    const a = { postMessage: vi.fn() };
+    const archive = { postMessage: vi.fn() };
+    hub.update(a, request("a"));
+    hub.update(archive, request());
+    sources[0]!.emit("session_ready", "a", "1:x");
+    sources[0]!.emit("session.timing", '{"session_id":"a"}');
+    sources[0]!.emit("events_ready", "{}");
+    a.postMessage.mockClear();
+    archive.postMessage.mockClear();
+    hub.update({ postMessage: vi.fn() }, request("b"));
+    vi.advanceTimersByTime(250);
+    const next = sources[1]!;
+    next.emit("error");
+    next.emit("session_ready", "a", "1:x");
+    next.emit("session.timing", '{"session_id":"a"}');
+    next.emit("events_ready", "{}");
+    expect(a.postMessage.mock.calls.map(([frame]) => frame.type)).toEqual([
+      "session_ready",
+      "session.timing",
+    ]);
+    expect(archive.postMessage).not.toHaveBeenCalled();
+    hub.close();
+  });
 
   it("keeps the old stream while a pending replacement is superseded", () => {
     const hub = new LiveHub();
@@ -383,7 +420,7 @@ describe("shared live stream", () => {
     expect(sources).toHaveLength(1);
     expect(first.postMessage).not.toHaveBeenCalled();
     expect(joining.postMessage.mock.calls).toEqual([
-      [{ type: "session_ready", data: "a" }],
+      [{ type: "session_ready", data: "a", id: "" }],
       [{ type: "session.timing", data: '{"session_id":"a","turn_count":2}' }],
     ]);
   });
@@ -400,8 +437,16 @@ describe("shared live stream", () => {
     expect(sources).toHaveLength(2);
     expect(sources[1]!.url.searchParams.getAll("session")).toEqual(["a"]);
     sources[1]!.emit("session_ready", "a");
-    expect(first.postMessage).toHaveBeenLastCalledWith({ type: "session_ready", data: "a" });
-    expect(joining.postMessage).toHaveBeenLastCalledWith({ type: "session_ready", data: "a" });
+    expect(first.postMessage).toHaveBeenLastCalledWith({
+      type: "session_ready",
+      data: "a",
+      id: "",
+    });
+    expect(joining.postMessage).toHaveBeenLastCalledWith({
+      type: "session_ready",
+      data: "a",
+      id: "",
+    });
     hub.close();
   });
 

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/csv"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"log"
@@ -1422,11 +1423,13 @@ func (s *Server) humaWatchSession(
 
 func (s *Server) sendSessionFrame(ctx context.Context, stream *SSEStream, id string, update, versioned bool) bool {
 	if update {
+		var markerState *db.SessionWatchState
 		if identity, ok := s.db.(db.SessionWatchStateStore); ok {
 			state, err := identity.GetSessionWatchState(id)
 			if err != nil {
 				return false
 			}
+			markerState = &state
 			if !stream.SendJSON("session.identity", state) {
 				return false
 			}
@@ -1434,7 +1437,7 @@ func (s *Server) sendSessionFrame(ctx context.Context, stream *SSEStream, id str
 				return true
 			}
 		}
-		if versioned && !stream.SendWithID(s.sessionVersion(ctx, id), "session_updated", id) {
+		if versioned && !stream.SendWithID(s.sessionMarker(ctx, id, markerState), "session_updated", id) {
 			return false
 		}
 		if !versioned && !stream.Send("session_updated", id) {
@@ -1449,12 +1452,35 @@ func (s *Server) sendSessionFrame(ctx context.Context, stream *SSEStream, id str
 	return true
 }
 
-func (s *Server) sessionVersion(ctx context.Context, id string) string {
+func (s *Server) sessionMarker(ctx context.Context, id string, state *db.SessionWatchState) string {
 	count, version, ok := s.db.GetSessionVersion(ctx, id)
 	if !ok {
 		return ""
 	}
-	return fmt.Sprintf("%d:%d", count, version)
+	if identity, ok := s.db.(db.SessionWatchStateStore); ok && state == nil {
+		current, err := identity.GetSessionWatchState(id)
+		if err != nil {
+			return ""
+		}
+		state = &current
+	}
+	marker := struct {
+		Count           int      `json:"count"`
+		Version         int64    `json:"version"`
+		State           string   `json:"state"`
+		PublicID        string   `json:"public_id"`
+		ContentRevision string   `json:"content_revision"`
+		Variants        []string `json:"variants"`
+	}{Count: count, Version: version}
+	if state != nil {
+		marker.State, marker.PublicID = state.State, state.PublicID
+		marker.ContentRevision, marker.Variants = state.ContentRevision, state.Variants
+	}
+	encoded, err := json.Marshal(marker)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
 }
 
 type eventsInput struct {
@@ -1543,7 +1569,7 @@ func (s *Server) humaEvents(ctx context.Context, in *eventsInput) (*huma.StreamR
 					}
 				}
 			}()
-			if !stream.SendWithID(s.sessionVersion(ctx, id), "session_ready", id) {
+			if !stream.SendWithID(s.sessionMarker(ctx, id, nil), "session_ready", id) {
 				return
 			}
 			s.sendSessionFrame(ctx, stream, id, false, true)

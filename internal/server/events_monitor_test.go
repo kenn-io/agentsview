@@ -61,6 +61,7 @@ func TestWatchSession_HostedRevisionChangesKeepStream(t *testing.T) {
 			return strings.Count(w.BodyString(), "event: session_updated\ndata: "+id+"\n") >= i+1
 		}, 5*time.Second, 10*time.Millisecond)
 		assert.Contains(t, w.BodyString(), `"content_revision":"`+revision+`"`)
+		assert.NotContains(t, w.BodyString(), "id: ")
 	}
 	store.set(id, db.SessionWatchState{State: "ambiguous", Variants: []string{"watch-a~one", "watch-a~two"}})
 	select {
@@ -91,6 +92,8 @@ func TestEvents_HostedRevisionChangeKeepsStream(t *testing.T) {
 	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/events?session=watch-a&session=watch-b", nil)
 	go func() { handler.ServeHTTP(w, req); close(done) }()
 	te.waitForSSEEvent(t, w, "events_ready", 5*time.Second)
+	marker := regexp.MustCompile(`id: ([^\n]+)\nevent: session_ready\ndata: watch-a\n`).FindStringSubmatch(w.BodyString())
+	require.Len(t, marker, 2)
 	waitCount := func(event, id string, count int) {
 		t.Helper()
 		require.Eventually(t, func() bool {
@@ -99,6 +102,20 @@ func TestEvents_HostedRevisionChangeKeepsStream(t *testing.T) {
 	}
 	store.set("watch-a", db.SessionWatchState{State: db.SessionWatchResolved, PublicID: "watch-a", ContentRevision: "two"})
 	waitCount("session_updated", "watch-a", 1)
+	updated := regexp.MustCompile(`id: ([^\n]+)\nevent: session_updated\ndata: watch-a\n`).FindStringSubmatch(w.BodyString())
+	require.Len(t, updated, 2)
+	assert.NotEqual(t, marker[1], updated[1])
+	assert.Contains(t, updated[1], `"content_revision":"two"`)
+	w2 := newFlushRecorder()
+	done2 := make(chan struct{})
+	ctx2, cancel2 := context.WithCancel(t.Context())
+	t.Cleanup(func() { cancel2(); <-done2 })
+	go func() {
+		handler.ServeHTTP(w2, httptest.NewRequestWithContext(ctx2, http.MethodGet, "/api/v1/events?session=watch-a", nil))
+		close(done2)
+	}()
+	te.waitForSSEEvent(t, w2, "events_ready", 5*time.Second)
+	assert.Contains(t, w2.BodyString(), "id: "+updated[1]+"\nevent: session_ready\ndata: watch-a\n")
 	te.broadcaster.Emit("messages")
 	te.waitForSSEEvent(t, w, "data_changed", 5*time.Second)
 	require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: "watch-b", Project: "project", Machine: "test", Agent: "claude", MessageCount: 1}))
@@ -274,4 +291,28 @@ func TestEvents_SessionVersionIDs(t *testing.T) {
 			assert.NotEqual(t, match[1], updated[1])
 		})
 	}
+}
+
+type unavailableWatchStateStore struct{ db.Store }
+
+func (s *unavailableWatchStateStore) GetSessionWatchState(string) (db.SessionWatchState, error) {
+	return db.SessionWatchState{}, errors.New("watch state unavailable")
+}
+
+func TestEvents_UnavailableHostedMarker(t *testing.T) {
+	te := setup(t)
+	require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: "watch-a", Project: "project", Machine: "test", Agent: "claude"}))
+	store := &unavailableWatchStateStore{Store: te.db}
+	cfg := config.Config{Host: "127.0.0.1", InstallationID: "server-installation"}
+	handler := wrapTestHandler(cfg, server.New(cfg, store, nil, server.WithBroadcaster(te.broadcaster)).Handler())
+	ctx, cancel := context.WithCancel(t.Context())
+	w := newFlushRecorder()
+	done := make(chan struct{})
+	t.Cleanup(func() { cancel(); <-done })
+	go func() {
+		handler.ServeHTTP(w, httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/events?session=watch-a", nil))
+		close(done)
+	}()
+	te.waitForSSEEvent(t, w, "events_ready", 5*time.Second)
+	assert.Contains(t, w.BodyString(), "id: \nevent: session_ready\ndata: watch-a\n")
 }

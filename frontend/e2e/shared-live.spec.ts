@@ -9,7 +9,6 @@ for (const fallback of ["worker", "broadcast"] as const) {
   }) => {
     const active = new Map<http.ServerResponse, string>();
     const requested: string[] = [];
-    const ready = new Set<string>();
     const watches: string[] = [];
     const workerStatuses: number[] = [];
     const proxy = http.createServer((req, res) => {
@@ -36,15 +35,6 @@ for (const fallback of ["worker", "broadcast"] as const) {
         },
         (response) => {
           if (url.includes("/live.worker-")) workerStatuses.push(response.statusCode ?? 0);
-          if (url.startsWith("/api/v1/events")) {
-            let pending = "";
-            response.on("data", (chunk: Buffer) => {
-              pending += chunk.toString();
-              const frames = pending.split("\n\n");
-              pending = frames.pop() ?? "";
-              if (frames.some((frame) => /^event: events_ready\r?$/m.test(frame))) ready.add(url);
-            });
-          }
           res.writeHead(response.statusCode ?? 500, response.headers);
           response.pipe(res);
         },
@@ -120,14 +110,10 @@ for (const fallback of ["worker", "broadcast"] as const) {
           beforeThird = sessionRequests[0]!;
         }
         if (index === 2) {
-          await expect
-            .poll(() =>
-              [...ready].some((url) => {
-                const sessions = new Set(new URL(url, base).searchParams.getAll("session"));
-                return ids.every((id) => sessions.has(id));
-              }),
-            )
-            .toBe(true);
+          await expect.poll(() => sessionRequests[1]).toBeGreaterThan(0);
+          await expect(
+            pages[index]!.locator('.message-list-scroll[data-loaded="true"]'),
+          ).toBeVisible();
           await page.waitForTimeout(250);
           await expect.poll(singleActiveSessions).toEqual(new Set(ids));
           expect(sessionRequests[0]).toBe(beforeThird);
