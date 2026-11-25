@@ -170,6 +170,14 @@ func unwrapPRCommand(args []*syntax.Word, allowEnvOverride bool) []*syntax.Word 
 	return nil
 }
 
+func unwrapPRCommandWithOverride(args []*syntax.Word) ([]*syntax.Word, bool) {
+	if strict := unwrapPRCommand(args, false); strict != nil {
+		return strict, false
+	}
+	permissive := unwrapPRCommand(args, true)
+	return permissive, permissive != nil
+}
+
 // wrappedCommandStart skips command's -p flags or env's assignments. Strict
 // matching fails when env sets the repository or host gh would use.
 func wrappedCommandStart(words []string, literal []bool, allowEnvOverride bool) (int, bool) {
@@ -292,10 +300,10 @@ func analyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 		if err := ctx.Err(); err != nil {
 			return nil, false, false, nil, err
 		}
-		args := unwrapPRCommand(entry.call.Args, false)
-		bareSafe := allowBare && !entry.directory && !entry.repository
+		args, overridden := unwrapPRCommandWithOverride(entry.call.Args)
+		bareSafe := allowBare && !entry.directory && !entry.repository && !overridden
 		if inner, ok := shellCommand(args); ok && depth < 8 {
-			found, _, nested, dependencies, err := analyzePRCommand(ctx, inner, cwd, remote, bareSafe, hostUnknown || entry.repository, depth+1)
+			found, _, nested, dependencies, err := analyzePRCommand(ctx, inner, cwd, remote, bareSafe, hostUnknown || entry.repository || overridden, depth+1)
 			if err != nil {
 				return nil, false, false, nil, err
 			}
@@ -313,7 +321,7 @@ func analyzePRCommand(ctx context.Context, command, cwd, remote string, allowBar
 		if len(words) < 4 || !literal[0] || !literal[1] || !literal[2] || words[0] != "gh" || words[1] != "pr" {
 			continue
 		}
-		callHostUnknown := hostUnknown || entry.repository
+		callHostUnknown := hostUnknown || entry.repository || overridden
 		if words[2] == "co" {
 			words[2] = "checkout"
 		}
