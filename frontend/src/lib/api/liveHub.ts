@@ -137,7 +137,7 @@ export class LiveHub {
     this.source = source;
     let errors = 0;
     let opened = this.connected;
-    let suppressReady = false;
+    let quiet = new Set<LivePort>();
 
     source.addEventListener("open", () => {
       if (this.source !== source && this.previous !== source) return;
@@ -153,7 +153,7 @@ export class LiveHub {
         this.synced.clear();
         this.broadcast({ type: "error" });
       }
-      suppressReady = false;
+      quiet.clear();
       if (this.previous === source) {
         source.close();
         this.previous = null;
@@ -180,7 +180,7 @@ export class LiveHub {
         if (this.source !== source && this.previous !== source) return;
         if (this.source === source && this.previous) {
           // The server subscribes to archive updates before sending its first frame.
-          suppressReady = this.continuous && this.previous.readyState === 1;
+          if (this.continuous && this.previous.readyState === 1) quiet = new Set(this.synced);
           this.previous.close();
           this.previous = null;
           this.ready.clear();
@@ -198,8 +198,8 @@ export class LiveHub {
           }
         }
         const frame = { type, data };
-        this.broadcast(frame, session, suppressReady && type === "events_ready");
-        if (type === "events_ready") suppressReady = false;
+        this.broadcast(frame, session, quiet);
+        if (type === "events_ready") quiet.clear();
         if (type === "events_ready" || type === "session_ready" || type === "session_missing") {
           this.ready.set(session ?? "", frame);
           if (type === "session_missing") this.timing.delete(session ?? "");
@@ -209,18 +209,20 @@ export class LiveHub {
     }
   }
 
-  private broadcast(frame: LiveFrame, session?: string, suppressSynced = false) {
+  private broadcast(frame: LiveFrame, session?: string, quiet = new Set<LivePort>()) {
     for (const [port, request] of this.ports) {
       if (session !== undefined && request.session !== session) continue;
       if ((frame.type === "events_ready" || frame.type === "data_changed") && request.session)
         continue;
-      if (suppressSynced && this.synced.has(port)) continue;
+      if (quiet.has(port) && ["events_ready", "session_ready", "session.timing"].includes(frame.type))
+        continue;
       this.deliver(port, frame);
     }
   }
 
   private deliver(port: LivePort, frame: LiveFrame) {
-    if (frame.type === "events_ready") this.synced.add(port);
+    if (frame.type === "events_ready" || frame.type === "session_ready") this.synced.add(port);
+    if (frame.type === "session_missing") this.synced.delete(port);
     port.postMessage(frame);
   }
 

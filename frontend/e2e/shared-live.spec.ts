@@ -96,6 +96,7 @@ for (const fallback of ["worker", "broadcast"] as const) {
       });
       await expect.poll(() => active.size).toBe(1);
       const sessionRequests = [0, 0];
+      let beforeThird = 0;
       for (const index of [1, 2]) {
         pages[index]!.on("request", (request) => {
           if (request.url().includes(`/api/v1/sessions/${ids[index]}/messages`))
@@ -103,6 +104,15 @@ for (const fallback of ["worker", "broadcast"] as const) {
         });
         await pages[index]!.goto(`${base}/sessions/${ids[index]}`);
         await expect(pages[index]!).toHaveURL(new RegExp(ids[index]!));
+        if (index === 1) {
+          await expect.poll(singleActiveSessions).toEqual(new Set([ids[0], ids[1]]));
+          await expect.poll(() => sessionRequests[0]).toBeGreaterThan(0);
+          beforeThird = sessionRequests[0]!;
+        }
+        if (index === 2) {
+          await expect.poll(singleActiveSessions).toEqual(new Set(ids));
+          expect(sessionRequests[0]).toBe(beforeThird);
+        }
       }
       await expect.poll(singleActiveSessions).toEqual(new Set(ids));
       await expect.poll(() => sessionRequests.every((count) => count > 0)).toBe(true);

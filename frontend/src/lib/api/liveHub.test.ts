@@ -106,6 +106,47 @@ describe("shared live stream", () => {
     hub.close();
   });
 
+  it("keeps ready ports quiet during a healthy handoff", () => {
+    const hub = new LiveHub();
+    const archive = { postMessage: vi.fn() };
+    const a = { postMessage: vi.fn() };
+    const b = { postMessage: vi.fn() };
+    hub.update(archive, request());
+    hub.update(a, request("a"));
+    const old = sources[0]!;
+    old.emit("session_ready", "a");
+    old.emit("session.timing", '{"session_id":"a"}');
+    old.emit("events_ready", "{}");
+    archive.postMessage.mockClear();
+    a.postMessage.mockClear();
+    hub.update(b, request("b"));
+    vi.advanceTimersByTime(250);
+    const next = sources[1]!;
+    next.emit("session_ready", "a");
+    next.emit("session.timing", '{"session_id":"a"}');
+    next.emit("session_ready", "b");
+    next.emit("session.timing", '{"session_id":"b"}');
+    next.emit("events_ready", "{}");
+    expect(archive.postMessage).not.toHaveBeenCalled();
+    expect(a.postMessage).not.toHaveBeenCalled();
+    expect(b.postMessage.mock.calls.map(([frame]) => frame.type)).toEqual([
+      "session_ready",
+      "session.timing",
+    ]);
+    next.emit("session_updated", "a");
+    next.emit("session.timing", '{"session_id":"a"}');
+    expect(a.postMessage.mock.calls.map(([frame]) => frame.type)).toEqual([
+      "session_updated",
+      "session.timing",
+    ]);
+    next.emit("session_missing", "a");
+    hub.update({ postMessage: vi.fn() }, request("c"));
+    vi.advanceTimersByTime(250);
+    sources[2]!.emit("session_ready", "a");
+    expect(a.postMessage).toHaveBeenLastCalledWith({ type: "session_ready", data: "a" });
+    hub.close();
+  });
+
   it("closes the old stream immediately when credentials change and refreshes on readiness", () => {
     const hub = new LiveHub();
     const archive = { postMessage: vi.fn() };
@@ -126,7 +167,10 @@ describe("shared live stream", () => {
     (reason) => {
       const hub = new LiveHub();
       const archive = { postMessage: vi.fn() };
+      const session = { postMessage: vi.fn() };
       hub.update(archive, request());
+      hub.update(session, request("existing"));
+      sources[0]!.emit("session_ready", "existing");
       sources[0]!.emit("events_ready", "{}");
       if (reason !== "failure during handoff") sources[0]!.emit("error");
       if (reason !== "reconnect") {
@@ -137,6 +181,9 @@ describe("shared live stream", () => {
         sources[1]!.emit("session_ready", "a");
       }
       sources[reason === "reconnect" ? 0 : 1]!.emit("events_ready", "{}");
+      sources[reason === "reconnect" ? 0 : 1]!.emit("session_ready", "existing");
+      expect(session.postMessage.mock.calls.filter(([frame]) => frame.type === "session_ready"))
+        .toHaveLength(2);
       expect(archive.postMessage.mock.calls.map(([frame]) => frame.type)).toEqual([
         "events_ready",
         "error",

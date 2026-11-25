@@ -16,6 +16,7 @@ export class LiveBroadcast {
   private ports = new Map<string, { port: LivePort; request: LiveRequest }>();
   private nextPort = 0;
   private election: ReturnType<typeof setTimeout> | null = null;
+  private heartbeat: ReturnType<typeof setInterval> | null = null;
 
   constructor(base: string) {
     const receive = (message: Message) => {
@@ -31,12 +32,6 @@ export class LiveBroadcast {
     const channel = new BroadcastChannel(`agentsview-live:${base}`);
     channel.onmessage = (event: MessageEvent<Message>) => receive(event.data);
     this.send = (message) => channel.postMessage(message);
-    setInterval(() => {
-      const cutoff = Date.now() - 4000;
-      for (const [id, peer] of this.peers) if (peer.seen < cutoff) this.peers.delete(id);
-      this.announce();
-      this.elect();
-    }, 1000);
     this.announce();
   }
 
@@ -48,9 +43,21 @@ export class LiveBroadcast {
         delete this.requests[id];
         if (value === "close") this.receivers.delete(id);
       } else this.requests[id] = value;
-      this.announce();
-      this.elect();
+      if (Object.keys(this.requests).length && this.heartbeat === null)
+        this.heartbeat = setInterval(() => this.tick(), 1000);
+      else if (!Object.keys(this.requests).length && this.heartbeat !== null) {
+        clearInterval(this.heartbeat);
+        this.heartbeat = null;
+      }
+      this.tick();
     };
+  }
+
+  private tick() {
+    const cutoff = Date.now() - 4000;
+    for (const [id, peer] of this.peers) if (peer.seen < cutoff) this.peers.delete(id);
+    this.announce();
+    this.elect();
   }
 
   private announce() {

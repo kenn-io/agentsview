@@ -907,6 +907,12 @@ describe("live event payloads", () => {
     const count = states.length;
     worker.onerror?.(new Event("error"));
     expect(states).toHaveLength(count);
+    vi.advanceTimersByTime(5000);
+    expect(states).toHaveLength(count);
+    const next = watchSession("b", vi.fn());
+    worker.onerror?.(new Event("error"));
+    expect(states.at(-1)).toEqual({ "1": expect.objectContaining({ session: "b" }) });
+    next.close();
   });
 
   it("ignores queued frames after a subscription is closed", async () => {
