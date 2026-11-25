@@ -258,9 +258,6 @@ func prCommandChangesRepository(command string, depth int) bool {
 	}
 	changed := false
 	syntax.Walk(file, func(node syntax.Node) bool {
-		if _, ok := node.(*syntax.FuncDecl); ok {
-			return false
-		}
 		call, ok := node.(*syntax.CallExpr)
 		if !ok {
 			return true

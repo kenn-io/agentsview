@@ -394,11 +394,13 @@ func bareLinksAllowed(workdir, cwd string, shared sharedPRContext) bool {
 	return !shared.directory && !shared.repository
 }
 
+const maxPRCommandInputBytes = 256 * 1024
+
 func callPRLinks(ctx context.Context, category, input, cwd, remote string, sharedContext sharedPRContext, change *sharedPRContext, depends *[]PRLink) ([]PRLink, error) {
 	if category == "Task" {
 		return taskPRLinks(ctx, input)
 	}
-	if category != "Bash" || len(input) > 256*1024 {
+	if category != "Bash" || len(input) > maxPRCommandInputBytes {
 		change.add(false, true)
 		return nil, ctx.Err()
 	}
@@ -557,7 +559,7 @@ func usageRepositoryChanged(messages []Message) bool {
 }
 
 func usageCallRepositoryChanged(call ToolCall) bool {
-	if retainedRepositoryChanged(call) {
+	if len(call.InputJSON) > maxPRCommandInputBytes || retainedRepositoryChanged(call) {
 		return true
 	}
 	commands, _ := shellInputCommands(call.InputJSON)

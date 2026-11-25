@@ -124,7 +124,7 @@ func mergePendingUsagePRLinks(ctx context.Context, tx *sql.Tx, session *Session,
 	if err := tx.QueryRowContext(ctx, `SELECT `+checkoutRemoteSQL+`, COALESCE((SELECT pr_repository_changed FROM sessions WHERE id=?),0)`, session.ID, session.ID).Scan(&remote, &changed); err != nil {
 		return err
 	}
-	if session.usagePRRemote != "" {
+	if remote == "" {
 		remote = session.usagePRRemote
 	}
 	links, changed, err := usageToolCallPRLinks(ctx, session.usagePRMessages, remote, changed)
