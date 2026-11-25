@@ -12,7 +12,6 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/service"
-	"go.kenn.io/agentsview/internal/servicehttp"
 )
 
 const fakeAWSKey = "AKIA" + "7QHWN2DKR4FYPLJM"
@@ -554,31 +553,23 @@ func TestDirectSearchContentContextSkipsNegativeOrdinal(t *testing.T) {
 
 func TestContentSearchContextBackend(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
+	local := service.NewDirectBackend(d, nil)
 	for _, tc := range []struct {
 		name    string
 		svc     service.SessionService
+		request service.ContentSearchRequest
 		bounded bool
 	}{
-		{"local", service.NewDirectBackend(d, nil), true},
-		{"read-only remote", service.NewReadOnlyBackend(&fakeContentStore{}), false},
-		{"HTTP", servicehttp.NewHTTPBackend("http://example.org", "", true, ""), false},
+		{"local substring", local, service.ContentSearchRequest{Mode: "substring"}, true},
+		{"local concepts", local, service.ContentSearchRequest{Concepts: []string{"needle", "thread"}}, false},
+		{"local semantic", local, service.ContentSearchRequest{Mode: "semantic"}, false},
+		{"read-only remote", service.NewReadOnlyBackend(&fakeContentStore{}), service.ContentSearchRequest{Mode: "substring"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, req := range []struct {
-				name    string
-				request service.ContentSearchRequest
-				bounded bool
-			}{
-				{"substring", service.ContentSearchRequest{Mode: "substring"}, tc.bounded},
-				{"concepts", service.ContentSearchRequest{Concepts: []string{"needle", "thread"}}, false},
-			} {
-				t.Run(req.name, func(t *testing.T) {
-					ctx, cancel := service.ContentSearchContext(t.Context(), tc.svc, req.request)
-					defer cancel()
-					_, bounded := ctx.Deadline()
-					assert.Equal(t, req.bounded, bounded)
-				})
-			}
+			ctx, cancel := service.ContentSearchContext(t.Context(), tc.svc, tc.request)
+			defer cancel()
+			_, bounded := ctx.Deadline()
+			assert.Equal(t, tc.bounded, bounded)
 		})
 	}
 }

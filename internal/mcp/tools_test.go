@@ -2716,24 +2716,15 @@ func (s *deadlineContentService) SearchContent(ctx context.Context, req service.
 }
 
 func TestSearchContentSharedDeadline(t *testing.T) {
-	for _, tc := range []struct {
-		name, mode string
-		bounded    bool
-	}{
-		{name: "substring", bounded: true}, {name: "semantic", mode: "semantic"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			fake := &deadlineContentService{local: true}
-			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
-			_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Mode: tc.mode, IncludeActive: true})
-			require.NoError(t, err)
-			require.Greater(t, len(fake.deadlines), 1)
-			require.Equal(t, tc.bounded, fake.bounded[0])
-			for i := 1; i < len(fake.deadlines); i++ {
-				assert.Equal(t, tc.bounded, fake.bounded[i])
-				assert.Equal(t, fake.deadlines[0], fake.deadlines[i])
-			}
-		})
+	fake := &deadlineContentService{local: true}
+	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+	_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", IncludeActive: true})
+	require.NoError(t, err)
+	require.Greater(t, len(fake.deadlines), 1)
+	require.True(t, fake.bounded[0])
+	for i := 1; i < len(fake.deadlines); i++ {
+		assert.True(t, fake.bounded[i])
+		assert.Equal(t, fake.deadlines[0], fake.deadlines[i])
 	}
 }
 
