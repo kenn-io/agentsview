@@ -11,6 +11,10 @@ func TestLaunchCommands(t *testing.T) {
 		want    []LaunchCommand
 	}{
 		{`codex exec "$PROMPT"`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}, Reach: Reached}}},
+		{`codex -m "$MODEL" exec hi`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}, Reach: Reached}}},
+		{`codex --model="$MODEL" exec hi`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}, Reach: Reached}}},
+		{`claude --model "$MODEL" -p hi`, []LaunchCommand{{Agent: "claude", Dirs: []string{"/repo"}, Reach: Reached}}},
+		{`codex -C "$DIR" exec hi`, []LaunchCommand{{Agent: "codex", Unknown: true, Reach: Reached}}},
 		{`claude -p "$PROMPT"`, []LaunchCommand{{Agent: "claude", Dirs: []string{"/repo"}, Reach: Reached}}},
 		{`codex "$MODE"`, []LaunchCommand{{Agent: "codex", Unknown: true, Reach: Possible}}},
 		{`sudo "$BIN" exec`, []LaunchCommand{{Agent: "codex", Unknown: true, Reach: Possible}, {Agent: "claude", Unknown: true, Reach: Possible}}},

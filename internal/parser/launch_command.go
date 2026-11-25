@@ -30,21 +30,26 @@ func oneShotRunState(agent string, args []string) (bool, bool) {
 			}
 			continue
 		}
-		if !strings.Contains(arg, "=") {
-			if agent == "codex" {
-				switch arg {
-				case "-C", "--cd", "-c", "--config", "-m", "--model", "-p", "--profile", "-s", "--sandbox", "-a", "--ask-for-approval", "-i", "--image", "--add-dir", "--enable", "--disable", "--remote", "--remote-auth-token-env", "--local-provider":
-					i++
-				}
-			} else {
-				switch arg {
-				case "--model", "--add-dir", "--append-system-prompt", "--append-system-prompt-file", "--system-prompt", "--system-prompt-file", "--agent", "--agents", "--settings", "--setting-sources", "--session-id", "--permission-mode", "--output-format", "--input-format", "--json-schema", "--effort", "--fallback-model", "--name", "-n", "--max-budget-usd", "--mcp-config", "--plugin-dir", "--tools", "--allowedTools", "--allowed-tools", "--disallowedTools", "--disallowed-tools":
-					i++
-				}
-			}
+		if launchOptionValue(agent, arg) {
+			i++
 		}
 	}
 	return false, false
+}
+
+func launchOptionValue(agent, arg string) bool {
+	if agent == "codex" {
+		switch arg {
+		case "-C", "--cd", "-c", "--config", "-m", "--model", "-p", "--profile", "-s", "--sandbox", "-a", "--ask-for-approval", "-i", "--image", "--add-dir", "--enable", "--disable", "--remote", "--remote-auth-token-env", "--local-provider":
+			return true
+		}
+	} else if agent == "claude" {
+		switch arg {
+		case "--model", "--add-dir", "--append-system-prompt", "--append-system-prompt-file", "--system-prompt", "--system-prompt-file", "--agent", "--agents", "--settings", "--setting-sources", "--session-id", "--permission-mode", "--output-format", "--input-format", "--json-schema", "--effort", "--fallback-model", "--name", "-n", "--max-budget-usd", "--mcp-config", "--plugin-dir", "--tools", "--allowedTools", "--allowed-tools", "--disallowedTools", "--disallowed-tools":
+			return true
+		}
+	}
+	return false
 }
 
 // Reach describes whether a command in archived source can have run.
@@ -281,8 +286,8 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 				args[i], ok = launchWord(w.Parts)
 				dynamic[i] = !ok
 				if !ok && len(w.Parts) > 0 {
-					if lit, yes := w.Parts[0].(*syntax.Lit); yes && lit.Value == "--cd=" {
-						args[i] = "--cd="
+					if lit, yes := w.Parts[0].(*syntax.Lit); yes && strings.HasSuffix(lit.Value, "=") {
+						args[i] = lit.Value
 					}
 				}
 				if !ok {
@@ -428,6 +433,13 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 					} else {
 						launch = setLaunchDir(launch, strings.TrimPrefix(args[i], "--cd="))
 					}
+					continue
+				}
+				if modeAt < 0 && launchOptionValue(program, args[i]) && i+1 < len(args) {
+					i++
+					continue
+				}
+				if dynamic[i] && modeAt < 0 && strings.HasSuffix(args[i], "=") && launchOptionValue(program, strings.TrimSuffix(args[i], "=")) {
 					continue
 				}
 				if dynamic[i] {

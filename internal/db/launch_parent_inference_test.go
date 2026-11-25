@@ -295,6 +295,85 @@ func TestLaunchParentUnknownLauncherFolder(t *testing.T) {
 	}
 }
 
+func TestLaunchParentTrashEvidence(t *testing.T) {
+	t.Run("late trashed competitor", func(t *testing.T) {
+		d := testDB(t)
+		ctx := t.Context()
+		add := func(id string) {
+			insertSession(t, d, id, "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
+			insertMessages(t, d, Message{SessionID: id, Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: id, ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}})
+		}
+		add("first")
+		start := "2026-01-02T03:04:03Z"
+		insertSession(t, d, "child", "project", func(s *Session) {
+			s.Agent = "codex"
+			s.Cwd = "/repo"
+			s.StartedAt = &start
+			s.SessionKind = "non-interactive"
+		})
+		_, err := d.LinkSubagentSessionsForSessions(ctx, []string{"child"})
+		require.NoError(t, err)
+		_, err = d.GetSessionExternalParent(ctx, "child")
+		require.NoError(t, err)
+		add("second")
+		require.NoError(t, d.SoftDeleteSession(ctx, "second"))
+		_, err = d.GetSessionExternalParent(ctx, "child")
+		assert.ErrorIs(t, err, sql.ErrNoRows)
+	})
+	for _, action := range []string{"single", "batch"} {
+		t.Run(action, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			add := func(id string) {
+				insertSession(t, d, id, "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
+				insertMessages(t, d, Message{SessionID: id, Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: id, ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex -m $MODEL exec hi"}`}}})
+			}
+			add("first")
+			start := "2026-01-02T03:04:03Z"
+			insertSession(t, d, "child", "project", func(s *Session) {
+				s.Agent = "codex"
+				s.Cwd = "/repo"
+				s.StartedAt = &start
+				s.SessionKind = "non-interactive"
+			})
+			_, err := d.LinkSubagentSessionsForSessions(ctx, []string{"child"})
+			require.NoError(t, err)
+			link, err := d.GetSessionExternalParent(ctx, "child")
+			require.NoError(t, err)
+			assert.Equal(t, "first", link.ParentSessionID)
+			if action == "single" {
+				require.NoError(t, d.SoftDeleteSession(ctx, "first"))
+			} else {
+				_, err = d.SoftDeleteSessions(ctx, []string{"first"})
+				require.NoError(t, err)
+			}
+			_, err = d.GetSessionExternalParent(ctx, "child")
+			assert.ErrorIs(t, err, sql.ErrNoRows)
+			_, err = d.RestoreSession(ctx, "first")
+			require.NoError(t, err)
+			link, err = d.GetSessionExternalParent(ctx, "child")
+			require.NoError(t, err)
+			assert.Equal(t, "first", link.ParentSessionID)
+			require.NoError(t, d.SoftDeleteSession(ctx, "first"))
+			add("second")
+			_, err = d.LinkSubagentSessionsForSessions(ctx, []string{"second"})
+			require.NoError(t, err)
+			_, err = d.GetSessionExternalParent(ctx, "child")
+			assert.ErrorIs(t, err, sql.ErrNoRows)
+			_, err = d.RestoreSession(ctx, "first")
+			require.NoError(t, err)
+			_, err = d.GetSessionExternalParent(ctx, "child")
+			assert.ErrorIs(t, err, sql.ErrNoRows)
+			require.NoError(t, d.SoftDeleteSession(ctx, "first"))
+			_, err = d.DeleteSessionIfTrashed(ctx, "first")
+			require.NoError(t, err)
+			link, err = d.GetSessionExternalParent(ctx, "child")
+			require.NoError(t, err)
+			assert.Equal(t, "second", link.ParentSessionID)
+		})
+	}
+}
+
 func TestLaunchParentUnknownEvidenceDoesNotCreateLink(t *testing.T) {
 	for _, tc := range []struct{ name, parentMachine, childMachine, parentCwd, childCwd string }{
 		{"unknown folder", "local", "local", "", "/repo"},

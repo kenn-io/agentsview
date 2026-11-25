@@ -5801,6 +5801,10 @@ func deleteSessionsTx(ctx context.Context, tx *sql.Tx, where string, args ...any
 	if err != nil {
 		return 0, err
 	}
+	launchChildren, err := launchSeeds(ctx, tx, ids)
+	if err != nil {
+		return 0, err
+	}
 	if err := retainTrailerProjectsTx(ctx, tx, ids); err != nil {
 		return 0, fmt.Errorf("retaining deleted trailer projects: %w", err)
 	}
@@ -5859,6 +5863,9 @@ func deleteSessionsTx(ctx context.Context, tx *sql.Tx, where string, args ...any
 		func(ctx context.Context, query string, args ...any) rowScanner {
 			return tx.QueryRowContext(ctx, query, args...)
 		}, append(ids, children...)); err != nil {
+		return 0, err
+	}
+	if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, launchChildren); err != nil {
 		return 0, err
 	}
 	return n, nil
@@ -6349,14 +6356,7 @@ func (db *DB) FindPruneCandidates(ctx context.Context,
 // SoftDeleteSession moves an active session to user trash. Source availability
 // is independent and is left unchanged.
 func (db *DB) SoftDeleteSession(ctx context.Context, id string) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	_, err := db.getWriter().Exec(ctx,
-		`UPDATE sessions
-		 SET deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
-		     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		 WHERE id = ? AND deleted_at IS NULL`, id,
-	)
+	_, err := db.SoftDeleteSessions(ctx, []string{id})
 	return err
 }
 
@@ -6401,6 +6401,9 @@ func (db *DB) SoftDeleteSessions(ctx context.Context, ids []string) (int, error)
 		}
 		n, _ := res.RowsAffected()
 		total += int(n)
+	}
+	if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, ids); err != nil {
+		return 0, err
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -6467,6 +6470,9 @@ func (db *DB) RestoreSession(ctx context.Context, id string) (int64, error) {
 			 )`,
 			id,
 		); err != nil {
+			return 0, err
+		}
+		if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, []string{id}); err != nil {
 			return 0, err
 		}
 	}

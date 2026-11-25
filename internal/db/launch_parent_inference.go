@@ -73,9 +73,9 @@ func inferLaunchParentsTx(ctx context.Context, tx *sql.Tx, ids []string) (int, e
 
 // Starting with the bounded timestamp range prevents a scan of every session
 // on the machine for each candidate child.
-const launchCandidateSQL = `SELECT s.id, s.cwd, s.machine, m.timestamp, tc.tool_name, tc.input_json FROM messages m INDEXED BY idx_messages_activity_timestamp
+const launchCandidateSQL = `SELECT s.id, s.cwd, s.machine, m.timestamp, tc.tool_name, tc.input_json, s.deleted_at IS NOT NULL FROM messages m INDEXED BY idx_messages_activity_timestamp
  CROSS JOIN tool_calls tc ON tc.message_id=m.id CROSS JOIN sessions s ON s.id=m.session_id
- WHERE m.role='assistant' AND m.model != '<synthetic>' AND m.timestamp >= ? AND m.timestamp <= ? AND (s.machine=? OR TRIM(s.machine)='') AND s.id != ? AND s.deleted_at IS NULL AND s.agent IN ('claude','codex') AND tc.category='Bash'`
+ WHERE m.role='assistant' AND m.model != '<synthetic>' AND m.timestamp >= ? AND m.timestamp <= ? AND (s.machine=? OR TRIM(s.machine)='') AND s.id != ? AND s.agent IN ('claude','codex') AND tc.category='Bash'`
 
 func inferLaunchChild(ctx context.Context, tx *sql.Tx, child launchChild) (int, error) {
 	start, err := time.Parse(time.RFC3339Nano, child.started)
@@ -99,7 +99,8 @@ func inferLaunchChild(ctx context.Context, tx *sql.Tx, child launchChild) (int, 
 	for rows.Next() {
 		var id, cwd, machine, stamp, tool string
 		var input sql.NullString
-		if err := rows.Scan(&id, &cwd, &machine, &stamp, &tool, &input); err != nil {
+		var trashed bool
+		if err := rows.Scan(&id, &cwd, &machine, &stamp, &tool, &input, &trashed); err != nil {
 			rows.Close()
 			return 0, err
 		}
@@ -153,7 +154,7 @@ func inferLaunchChild(ctx context.Context, tx *sql.Tx, child launchChild) (int, 
 					continue
 				}
 				matches[id] = true
-				if matched && !launch.Unknown && len(launch.Dirs) == 1 && call.reach == parser.Reached && (launch.Reach == parser.Reached || launch.CDGuarded) && strings.TrimSpace(machine) != "" {
+				if !trashed && matched && !launch.Unknown && len(launch.Dirs) == 1 && call.reach == parser.Reached && (launch.Reach == parser.Reached || launch.CDGuarded) && strings.TrimSpace(machine) != "" {
 					known[id] = true
 				}
 			}
@@ -211,7 +212,7 @@ func launchSeeds(ctx context.Context, tx *sql.Tx, ids []string) ([]string, error
 	if err != nil {
 		return nil, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT s.machine, m.timestamp, tc.tool_name FROM sessions s JOIN tool_calls tc ON tc.session_id=s.id JOIN messages m ON m.id=tc.message_id WHERE s.id IN (SELECT value FROM json_each(?)) AND s.deleted_at IS NULL AND s.agent IN ('claude','codex') AND tc.category='Bash' AND m.timestamp IS NOT NULL`, string(data))
+	rows, err := tx.QueryContext(ctx, `SELECT s.machine, m.timestamp, tc.tool_name FROM sessions s JOIN tool_calls tc ON tc.session_id=s.id JOIN messages m ON m.id=tc.message_id WHERE s.id IN (SELECT value FROM json_each(?)) AND s.agent IN ('claude','codex') AND tc.category='Bash' AND m.timestamp IS NOT NULL`, string(data))
 	if err != nil {
 		return nil, err
 	}
