@@ -2505,8 +2505,7 @@ session on Linux and Windows. Parent linking on macOS is unverified. Codex
 launchers link to the thread. Codex requires you to trust a new hook in
 `/hooks`.
 
-A ClickHouse sidebar does not show automated launched runs because the mirror
-does not store launcher links.
+A ClickHouse sidebar hides automated launched runs.
 
 Setup registers `agentsview mcp --profile memory` without server flags. To use
 a remote archive, set `AGENTSVIEW_MEMORY_SERVER` or `AGENTSVIEW_MEMORY_PG`
