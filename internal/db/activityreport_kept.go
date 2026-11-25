@@ -139,7 +139,7 @@ func (db *DB) keptActivityChangesValid(ctx context.Context, oldRevision int64, r
 		)
 		if !q.Partial && filter.ActivityNeedsEvidence() {
 			evidenceWhere, evidenceArgs := activityReportSessionSelectionWhere(AnalyticsFilter{Timezone: filter.Timezone, IncludeSubagents: true, IncludeForks: true}, rangeStartUTC, rangeEndUTC)
-			where = "(" + where + ") OR ((" + evidenceWhere + ") AND s.relationship_type = 'subagent')"
+			where = "(" + where + ") OR ((" + evidenceWhere + ") AND " + activityLaunchedSQL() + ")"
 			args = append(args, evidenceArgs...)
 		}
 		args = append(args, string(changedJSON))

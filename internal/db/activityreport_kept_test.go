@@ -79,7 +79,17 @@ func TestActivityOngoingUsageIgnoresHiddenRunChanges(t *testing.T) {
 	q.Partial = false
 	valid, err = d.keptActivityChangesValid(t.Context(), revision, []string{"visible"}, []string{"visible"}, f, q)
 	require.NoError(t, err)
+	assert.True(t, valid, "a native subagent is not hidden launcher evidence")
+
+	_, err = d.SetSessionExternalParent(t.Context(), "hidden", "visible")
+	require.NoError(t, err)
+	valid, err = d.keptActivityChangesValid(t.Context(), revision, []string{"visible"}, []string{"visible"}, f, q)
+	require.NoError(t, err)
 	assert.False(t, valid)
+	q.Partial = true
+	valid, err = d.keptActivityChangesValid(t.Context(), revision, []string{"visible"}, []string{"visible"}, f, q)
+	require.NoError(t, err)
+	assert.True(t, valid)
 }
 
 func TestActivityReportKeptReuse(t *testing.T) {
