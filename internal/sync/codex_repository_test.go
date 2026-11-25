@@ -2,6 +2,7 @@ package sync
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -258,8 +259,34 @@ func TestCodexLabeledRunResyncAndExplicitWorktreeMappingWins(t *testing.T) {
 	assert.Equal(t, "mapped_project", session.Project)
 }
 
+func TestCodexLabeledOverlappingRootsSync(t *testing.T) {
+	for _, innerFirst := range []bool{false, true} {
+		t.Run(fmt.Sprint(innerFirst), func(t *testing.T) {
+			root := t.TempDir()
+			const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+			path := filepath.Join(root, "team", "case", ".codex-run-v1-abc", "sessions", "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
+			content := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z") + "\n" + testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z") + "\n"
+			dbtest.WriteTestFile(t, path, []byte(content))
+			roots := []string{root, filepath.Join(root, "team")}
+			if innerFirst {
+				roots[0], roots[1] = roots[1], roots[0]
+			}
+			database := openTestDB(t)
+			engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: roots}})
+			t.Cleanup(engine.Close)
+			require.NoError(t, engine.RefreshSessionByIDContext(t.Context(), "codex:"+id))
+			require.NoError(t, engine.SyncPathsContext(t.Context(), []string{path}))
+			require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+			session, err := database.GetSessionFull(t.Context(), "codex:"+id)
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			assert.Equal(t, "team/case", session.Project)
+		})
+	}
+}
+
 func TestCodexLabeledCopyWinsSync(t *testing.T) {
-	for _, mode := range []string{"changed path", "newer then older", "missed event", "same batch", "single session"} {
+	for _, mode := range []string{"changed path", "older first", "usage refresh", "newer then older", "missed event", "same batch", "single session"} {
 		t.Run(mode, func(t *testing.T) {
 			database := openTestDB(t)
 			root := t.TempDir()
@@ -274,13 +301,20 @@ func TestCodexLabeledCopyWinsSync(t *testing.T) {
 				require.NoError(t, os.Chtimes(path, mtime, mtime))
 			}
 			write(0, paths[0])
-			if mode != "single session" {
+			if mode != "single session" && mode != "usage refresh" {
 				write(1, paths[1])
 				write(2, paths[2])
 			}
 			engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {ordinary, logs}}})
 			t.Cleanup(engine.Close)
 			switch mode {
+			case "older first":
+				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[1]}))
+			case "usage refresh":
+				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[0]}))
+				write(1, paths[1])
+				write(2, paths[2])
+				require.NoError(t, engine.SyncSessionWithSubagentsContext(t.Context(), "codex:"+id))
 			case "single session":
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[0]}))
 				write(1, paths[1])

@@ -5611,7 +5611,7 @@ func (e *Engine) reconciliationCandidate(ctx context.Context,
 			preference3 = rank.Recency
 		} else if isCodexFormatAgent(agent) {
 			if rank.Class != 0 {
-				preference1, preference2, preference3 = 2, rank.Recency, 0
+				preference1, preference2, preference3 = rank.Class, rank.Recency, 0
 			}
 		} else {
 			preference2 = rank.Class
@@ -9549,32 +9549,32 @@ func (e *Engine) PreferredSessionForPath(ctx context.Context, path string) (stri
 		return "", nil
 	}
 	path = filepath.Clean(path)
-	plan, err := e.PlanChangedPathsContext(ctx, []string{path})
+	factory := e.sources().providerFactories[parser.AgentCodex]
+	if factory == nil {
+		return "", nil
+	}
+	provider := factory.NewProvider(parser.ProviderConfig{Roots: e.sources().agentDirs[parser.AgentCodex], Machine: e.machine})
+	resolver, ok := provider.(parser.ReconciliationSourceResolver)
+	if !ok {
+		return "", nil
+	}
+	source, found, err := resolver.SourceForReconciliation(ctx, path, "")
+	if err != nil || !found {
+		return "", err
+	}
+	lower, err := e.providerSourceLowerRanked(ctx, provider, parser.AgentCodex, source)
+	if err != nil || !lower {
+		return "", err
+	}
+	id := reconciliationMemberIdentity(parser.AgentCodex, source)
+	id = applyIDPrefixToID(provider.Definition().IDPrefix, id)
+	outcome, err := provider.Parse(ctx, parser.ParseRequest{Source: source, Machine: e.machine})
 	if err != nil {
 		return "", err
 	}
-	for _, file := range plan.Files {
-		if file.Agent != parser.AgentCodex || file.ProviderSource == nil || file.Path != path {
-			continue
-		}
-		factory := e.sources().providerFactories[file.Agent]
-		provider := factory.NewProvider(parser.ProviderConfig{Roots: e.sources().agentDirs[file.Agent], Machine: e.machine})
-		lower, err := e.providerSourceLowerRanked(ctx, provider, file.Agent, *file.ProviderSource)
-		if err != nil {
-			return "", err
-		}
-		if lower {
-			id := reconciliationMemberIdentity(file.Agent, *file.ProviderSource)
-			id = applyIDPrefixToID(provider.Definition().IDPrefix, id)
-			outcome, err := provider.Parse(ctx, parser.ParseRequest{Source: *file.ProviderSource, Machine: e.machine})
-			if err != nil {
-				return "", err
-			}
-			for _, result := range outcome.Results {
-				if result.Result.Session.ID == id {
-					return applyIDPrefixToID(e.idPrefix, id), nil
-				}
-			}
+	for _, result := range outcome.Results {
+		if result.Result.Session.ID == id {
+			return applyIDPrefixToID(e.idPrefix, id), nil
 		}
 	}
 	return "", nil

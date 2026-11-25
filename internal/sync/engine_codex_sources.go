@@ -452,10 +452,8 @@ func preferNewestCodexDiscoveredFile(
 ) bool {
 	if candidate.Agent == current.Agent && isCodexFormatAgent(candidate.Agent) {
 		if candidate.Agent == parser.AgentCodex && candidate.ProviderSource != nil && current.ProviderSource != nil {
-			candRank := parser.CodexSourceRank(*candidate.ProviderSource)
-			currRank := parser.CodexSourceRank(*current.ProviderSource)
-			if candRank.Class != currRank.Class || candRank.Class != 0 {
-				return reconciliationSourceRankLower(currRank, candRank)
+			if preferred, compared := parser.PreferLabeledCodexSource(*candidate.ProviderSource, *current.ProviderSource); compared {
+				return preferred
 			}
 		}
 		candMTime, candOK := discoveredFileMTime(candidate.Path)

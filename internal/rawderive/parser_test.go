@@ -756,6 +756,45 @@ func TestProviderParserHostedCodexAliasHomeMetadata(t *testing.T) {
 	}
 }
 
+func TestProviderParserHostedCodexLabeledCopies(t *testing.T) {
+	const id = "11111111-1111-4111-8111-111111111111"
+	for _, innerFirst := range []bool{false, true} {
+		t.Run(strconv.FormatBool(innerFirst), func(t *testing.T) {
+			root := t.TempDir()
+			name := "rollout-2026-09-10T10-00-00-" + id + ".jsonl"
+			for i, label := range []string{"team/a", "team/b"} {
+				path := filepath.Join(root, label, ".codex-run-v1-abc", "sessions", "2026", "09", "10", name)
+				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+				content := testjsonl.JoinJSONL(testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-09-10T10:00:00Z"), testjsonl.CodexMsgJSON("user", label, "2026-09-10T10:00:01Z"))
+				require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+				mtime := time.Date(2026, 9, 10, 10, i, 0, 0, time.UTC)
+				require.NoError(t, os.Chtimes(path, mtime, mtime))
+			}
+			roots := []string{root, filepath.Join(root, "team")}
+			if innerFirst {
+				roots[0], roots[1] = roots[1], roots[0]
+			}
+			provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{Roots: roots})
+			require.True(t, ok)
+			sources, err := provider.Discover(t.Context())
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
+			manifest, objects := manifestFromCapturePlan(t, parser.AgentCodex, provider, sources[0])
+			materialized, err := (Materializer{Store: &materializerStore{objects: objects}, BaseDir: t.TempDir(), MaxTotalBytes: 1 << 20}).Materialize(t.Context(), manifest)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, materialized.Cleanup()) })
+			dispatch, err := NewProviderParser(parser.ProviderFactories(), "hosted-worker")
+			require.NoError(t, err)
+			hosted, err := dispatch.Parse(t.Context(), manifest, materialized)
+			require.NoError(t, err)
+			require.Len(t, hosted.Outcome.Results, 1)
+			assert.Equal(t, "team/b", hosted.Outcome.Results[0].Result.Session.Project)
+			require.NotEmpty(t, hosted.Outcome.Results[0].Result.Messages)
+			assert.Equal(t, "team/b", hosted.Outcome.Results[0].Result.Messages[0].Content)
+		})
+	}
+}
+
 func TestProviderParserHostedCodexOrphanPreservesHistory(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join(t.TempDir(), "sessions")

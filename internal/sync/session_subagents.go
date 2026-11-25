@@ -30,7 +30,7 @@ func (e *Engine) TrySyncSessionWithSubagentsContext(ctx context.Context, session
 }
 
 func (e *Engine) syncSessionWithSubagentsContext(ctx context.Context, sessionID string, try bool) error {
-	parentErr := e.syncSingleSessionContext(ctx, sessionID, try, false)
+	parentErr := e.syncSingleSessionContext(ctx, sessionID, try, true)
 	if errors.Is(parentErr, ErrSyncInProgress) {
 		return parentErr
 	}

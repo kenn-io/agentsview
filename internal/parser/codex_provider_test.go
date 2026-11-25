@@ -2475,6 +2475,29 @@ func TestCodexLabeledRunFindSourcePrecedence(t *testing.T) {
 	}
 }
 
+func TestCodexLabeledFindSourceRanksAllDatedCopies(t *testing.T) {
+	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
+	root := t.TempDir()
+	name := "rollout-2026-10-08T12-00-00-" + id + ".jsonl"
+	paths := []string{
+		filepath.Join(root, "a", ".codex-run-v1-abc", "sessions", "2026", "10", "07", name),
+		filepath.Join(root, "a", ".codex-run-v1-abc", "sessions", "2026", "10", "08", name),
+		filepath.Join(root, "z", ".codex-run-v1-abc", "sessions", "2026", "10", "08", name),
+	}
+	for i, path := range paths {
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0755))
+		require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0644))
+		mtime := time.Now().Add(time.Duration([]int{0, 2, 1}[i]) * time.Hour)
+		require.NoError(t, os.Chtimes(path, mtime, mtime))
+	}
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: id})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, paths[1], found.DisplayPath)
+}
+
 func TestCodexFindSourceRejectsInvalidID(t *testing.T) {
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{t.TempDir()}})
 	require.True(t, ok)
