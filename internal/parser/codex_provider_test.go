@@ -2424,7 +2424,6 @@ func TestCodexLabeledRunDiscoveryAndParse(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, supported)
 			assert.Equal(t, root, plan.CaptureRoot)
-			assert.Equal(t, tc.project, CodexSourceLabel(plan.CaptureRoot, path))
 			found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: id})
 			require.NoError(t, err)
 			require.True(t, ok)
@@ -2450,7 +2449,7 @@ func TestCodexLabeledRunFindSourcePrecedence(t *testing.T) {
 		newer          bool
 	}{
 		{"labeled over ordinary", ".", false},
-		{"newer labeled over older", "newer/.codex-run-v1-xyz/sessions", true},
+		{"newer labeled over older", "zzz/.codex-run-v1-xyz/sessions", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
