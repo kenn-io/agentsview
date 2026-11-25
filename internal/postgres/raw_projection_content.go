@@ -218,14 +218,13 @@ func rawCanonicalValue(v reflect.Value, field string) (any, error) {
 			// observation fields preserve the historical normalized-content-v1 representation.
 			// DialogueText is a derived search projection; reparses refresh it in place.
 			if !f.IsExported() || f.Name == "UsageAutomationProjected" || f.Name == "TrashIncludesCodexPages" ||
-				(v.Type() == reflect.TypeFor[ingest.PreparedSession]() && f.Name == "UsagePRLinks") ||
 				(v.Type() == reflect.TypeFor[db.Message]() && f.Name == "DialogueText") ||
 				(v.Type() == reflect.TypeFor[db.ToolCall]() && f.Name == "PRLinks") ||
 				(v.Type() == rawSessionType && f.Name == "SourceMachines") ||
 				f.Name == "ToolObservations" || f.Name == "ObservedOutcome" || f.Name == "ObservedRepeat" || f.Name == "SequenceEnding" ||
 				(v.Type() == reflect.TypeFor[db.Session]() && f.Name == "GroupKey" && v.Field(i).IsZero()) ||
-				(v.Type() == reflect.TypeFor[ingest.PreparedSession]() &&
-					(f.Name == "PlanUsage" || f.Name == "SessionTotal") && v.Field(i).IsZero()) {
+				(v.Type() == reflect.TypeFor[ingest.PreparedSession]() && (f.Name == "UsagePRLinks" ||
+					(f.Name == "PlanUsage" || f.Name == "SessionTotal") && v.Field(i).IsZero())) {
 				continue
 			}
 			// Session fields added after normalized-content-v1 was recorded
