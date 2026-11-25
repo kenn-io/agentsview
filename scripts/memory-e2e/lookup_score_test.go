@@ -313,7 +313,16 @@ func TestLookupCLIMessageReadAttribution(t *testing.T) {
 	}{
 		{"command", "agentsview session messages " + item.SessionID, "success"},
 		{"shell input", `{"command":"agentsview session messages ` + item.SessionID + `"}`, "success"},
+		{"documented flags", "agentsview session messages " + item.SessionID + " --from 0 --limit 20 --json", "success"},
+		{"command input with flags", `{"command":"agentsview session messages ` + item.SessionID + ` --from 0 --limit 20"}`, "success"},
+		{"equals flags", "agentsview session messages " + item.SessionID + " --direction=desc --limit=20 --json", "success"},
+		{"cmd input", `{"cmd":"agentsview session messages ` + item.SessionID + ` --from 0 --limit 20"}`, "success"},
 		{"combined commands", "agentsview session messages " + item.SessionID + " && echo unrelated", "unscored"},
+		{"combined after flags", "agentsview session messages " + item.SessionID + " --limit 20; echo unrelated", "unscored"},
+		{"pipe after flags", "agentsview session messages " + item.SessionID + " --json | cat", "unscored"},
+		{"substitution in flag", "agentsview session messages " + item.SessionID + " --limit $(echo 20)", "unscored"},
+		{"newline command", "agentsview session messages " + item.SessionID + " --limit 20\necho unrelated", "unscored"},
+		{"ambiguous input", `{"command":"agentsview session messages ` + item.SessionID + `","cmd":"echo unrelated"}`, "unscored"},
 		{"different command", "agentsview session list " + item.SessionID, "unscored"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
