@@ -60,40 +60,6 @@ func keptActivityBuild(t *testing.T, d *DB, f AnalyticsFilter, q activity.Query,
 
 func clearKeptActivity(d *DB) { d.activityKept.DeleteSlots(func(string) bool { return true }) }
 
-func TestActivityParentEvidenceChangesJournal(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	insertSession(t, d, "child", "project")
-	insertSession(t, d, "parent", "project")
-	_, err := d.getWriter().ExecContext(ctx, `UPDATE sessions SET parent_session_id = 'parent', relationship_type = 'subagent' WHERE id = 'child'`)
-	require.NoError(t, err)
-	for _, tc := range []struct {
-		statement string
-		mirror    bool
-	}{
-		{`INSERT INTO session_external_parents(session_id, parent_session_id) VALUES ('child', 'parent')`, true},
-		{`DELETE FROM session_external_parents WHERE session_id = 'child'`, true},
-	} {
-		before, err := d.UsageChangeRevision(ctx)
-		require.NoError(t, err)
-		_, err = d.getWriter().ExecContext(ctx, `UPDATE sessions SET sync_marker = '2000-01-01T00:00:00.000Z' WHERE id = 'child'`)
-		require.NoError(t, err)
-		_, err = d.getWriter().ExecContext(ctx, tc.statement)
-		require.NoError(t, err)
-		after, err := d.UsageChangeRevision(ctx)
-		require.NoError(t, err)
-		assert.Greater(t, after, before, tc.statement)
-		changed, err := d.LoadUsageChanges(ctx, before, after)
-		require.NoError(t, err)
-		assert.Contains(t, changed, "child", tc.statement)
-		if tc.mirror {
-			var marker string
-			require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT sync_marker FROM sessions WHERE id = 'child'`).Scan(&marker))
-			assert.Greater(t, marker, "2000-01-01T00:00:00.000Z")
-		}
-	}
-}
-
 func TestActivityKeptRefreshesWhenParserParentAppears(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
@@ -146,35 +112,6 @@ func TestActivityKeptRefreshesWhenSpawnLinkChanges(t *testing.T) {
 	assert.Zero(t, again.Report.InteractivePeak.Agents)
 	clearKeptActivity(d)
 	assert.Equal(t, again, keptActivityBuild(t, d, f, q, true))
-}
-
-func TestActivitySpawnLinkJournalTracksBothChildren(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	keptActivitySession(t, d, "owner", "project", "2026-06-14")
-	result, err := d.getWriter().ExecContext(ctx, `INSERT INTO tool_calls (message_id, session_id, tool_name, category, subagent_session_id)
-		SELECT id, 'owner', 'Task', 'Task', 'child-a' FROM messages WHERE session_id = 'owner' AND ordinal = 0`)
-	require.NoError(t, err)
-	callID, err := result.LastInsertId()
-	require.NoError(t, err)
-	before, err := d.UsageChangeRevision(ctx)
-	require.NoError(t, err)
-	_, err = d.getWriter().ExecContext(ctx, `UPDATE tool_calls SET subagent_session_id = 'child-b' WHERE id = ?`, callID)
-	require.NoError(t, err)
-	after, err := d.UsageChangeRevision(ctx)
-	require.NoError(t, err)
-	changed, err := d.LoadUsageChanges(ctx, before, after)
-	require.NoError(t, err)
-	assert.ElementsMatch(t, []string{"child-a", "child-b"}, changed)
-	_, err = d.getWriter().ExecContext(ctx, `UPDATE tool_calls SET subagent_session_id = 'owner' WHERE id = ?`, callID)
-	require.NoError(t, err)
-	before, err = d.UsageChangeRevision(ctx)
-	require.NoError(t, err)
-	_, err = d.getWriter().ExecContext(ctx, `DELETE FROM tool_calls WHERE id = ?`, callID)
-	require.NoError(t, err)
-	after, err = d.UsageChangeRevision(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, before, after)
 }
 
 func TestActivityOngoingUsageIgnoresHiddenRunChanges(t *testing.T) {

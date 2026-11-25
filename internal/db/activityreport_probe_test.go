@@ -80,8 +80,6 @@ func TestActivityReportSourceProbeTracksParentChanges(t *testing.T) {
 	ctx := t.Context()
 	insertSession(t, database, "child", "project")
 	insertSession(t, database, "parent", "project")
-	_, err := database.getWriter().ExecContext(ctx, `UPDATE sessions SET parent_session_id = 'parent', relationship_type = 'subagent' WHERE id = 'child'`)
-	require.NoError(t, err)
 	before, err := database.ActivityReportSourceProbe(ctx)
 	require.NoError(t, err)
 	_, err = database.SetSessionExternalParent(ctx, "child", "parent")

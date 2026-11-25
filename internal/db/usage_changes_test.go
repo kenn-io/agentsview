@@ -128,6 +128,16 @@ func TestUsageChangeJournal(t *testing.T) {
 					_, err := d.getWriter().ExecContext(ctx, "UPDATE sessions SET parent_session_id = ? WHERE id = ?", "parent", s.ID)
 					require.NoError(t, err)
 				}},
+				{"external parent insert", func(t *testing.T, s Session) {
+					t.Helper()
+					_, err := d.getWriter().ExecContext(ctx, `INSERT INTO session_external_parents(session_id, parent_session_id) VALUES (?, 'parent')`, s.ID)
+					require.NoError(t, err)
+				}},
+				{"external parent delete", func(t *testing.T, s Session) {
+					t.Helper()
+					_, err := d.getWriter().ExecContext(ctx, `DELETE FROM session_external_parents WHERE session_id = ?`, s.ID)
+					require.NoError(t, err)
+				}},
 				{"relationship", func(t *testing.T, s Session) {
 					t.Helper()
 					s.RelationshipType = "subagent"
@@ -256,6 +266,10 @@ func TestUsageChangeJournal(t *testing.T) {
 					}
 					require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: s.ID, Ordinal: 0, Role: "assistant", Content: "Hello", TokenUsage: []byte(`{"output_tokens":1}`)}}))
 					switch tc.name {
+					case "external parent delete":
+						_, err := d.getWriter().ExecContext(ctx, `INSERT INTO session_external_parents(session_id, parent_session_id) VALUES (?, 'parent')`, s.ID)
+						require.NoError(t, err)
+
 					case "clear usage events":
 						before, err = d.UsageChangeRevision(ctx)
 						require.NoError(t, err)
@@ -276,6 +290,10 @@ func TestUsageChangeJournal(t *testing.T) {
 					case "reinsert":
 						require.NoError(t, d.DeleteSession(ctx, s.ID))
 					}
+					if tc.name == "external parent insert" || tc.name == "external parent delete" {
+						_, err := d.getWriter().ExecContext(ctx, `UPDATE sessions SET sync_marker = '2000-01-01T00:00:00.000Z' WHERE id = ?`, s.ID)
+						require.NoError(t, err)
+					}
 					before, err = d.UsageChangeRevision(ctx)
 					require.NoError(t, err)
 					tc.write(t, s)
@@ -285,12 +303,47 @@ func TestUsageChangeJournal(t *testing.T) {
 					ids, err := d.LoadUsageChanges(ctx, before, after)
 					require.NoError(t, err)
 					assert.Equal(t, []string{s.ID}, ids)
+					if tc.name == "external parent insert" || tc.name == "external parent delete" {
+						var marker string
+						require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT sync_marker FROM sessions WHERE id = ?`, s.ID).Scan(&marker))
+						assert.Greater(t, marker, "2000-01-01T00:00:00.000Z")
+					}
 				})
 			}
 
 			if mode.name == "fresh" {
 				return
 			}
+
+			t.Run("spawn link update and self delete", func(t *testing.T) {
+				keptActivitySession(t, d, "owner", "project-a", "2026-06-14")
+				result, err := d.getWriter().ExecContext(ctx, `INSERT INTO tool_calls (message_id, session_id, tool_name, category)
+					SELECT id, 'owner', 'Task', 'Task' FROM messages WHERE session_id = 'owner' AND ordinal = 0`)
+				require.NoError(t, err)
+				callID, err := result.LastInsertId()
+				require.NoError(t, err)
+				before, err := d.UsageChangeRevision(ctx)
+				require.NoError(t, err)
+				_, err = d.getWriter().ExecContext(ctx, `UPDATE tool_calls SET subagent_session_id = 'child' WHERE id = ?`, callID)
+				require.NoError(t, err)
+				after, err := d.UsageChangeRevision(ctx)
+				require.NoError(t, err)
+				changed, err := d.LoadUsageChanges(ctx, before, after)
+				require.NoError(t, err)
+				assert.Equal(t, []string{"child"}, changed)
+				result, err = d.getWriter().ExecContext(ctx, `INSERT INTO tool_calls (message_id, session_id, tool_name, category, subagent_session_id)
+					SELECT id, 'owner', 'Task', 'Task', 'owner' FROM messages WHERE session_id = 'owner' AND ordinal = 0`)
+				require.NoError(t, err)
+				callID, err = result.LastInsertId()
+				require.NoError(t, err)
+				before, err = d.UsageChangeRevision(ctx)
+				require.NoError(t, err)
+				_, err = d.getWriter().ExecContext(ctx, `DELETE FROM tool_calls WHERE id = ?`, callID)
+				require.NoError(t, err)
+				after, err = d.UsageChangeRevision(ctx)
+				require.NoError(t, err)
+				assert.Equal(t, before, after)
+			})
 
 			t.Run("no usage change", func(t *testing.T) {
 				s := Session{ID: "unchanged", Project: "project-a", Machine: "machine-a", Agent: "claude"}

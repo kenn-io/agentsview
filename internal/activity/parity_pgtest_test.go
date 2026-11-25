@@ -894,14 +894,19 @@ func TestWaitingLauncherParityAcrossBackends(t *testing.T) {
 	local := seedParitySQLite(t)
 	child := paritySessionWrite(parityFixtureSession{id: "linked-run", project: "waiting", events: []parityEvent{{role: "user", ts: "2026-06-14T10:00:00Z"}, {role: "assistant", ts: "2026-06-14T10:04:00Z"}}})
 	child.Session.Agent = "codex"
+	nativeRoot := paritySessionWrite(parityFixtureSession{id: "native-root", project: "native", events: []parityEvent{{role: "user", ts: "2026-06-13T10:00:00Z"}, {role: "assistant", ts: "2026-06-13T10:02:00Z"}}})
+	native := paritySessionWrite(parityFixtureSession{id: "native-middle", project: "native", parent: "native-root", relationship: "subagent", events: []parityEvent{{role: "user", ts: "2026-06-13T10:00:00Z"}, {role: "assistant", ts: "2026-06-13T10:02:00Z"}}})
+	nativeRun := paritySessionWrite(parityFixtureSession{id: "native-run", project: "native", events: []parityEvent{{role: "user", ts: "2026-06-14T10:00:00Z"}, {role: "assistant", ts: "2026-06-14T10:04:00Z"}}})
 	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{
 		paritySessionWrite(parityFixtureSession{id: "quiet-launcher", project: "waiting", events: []parityEvent{{role: "user", ts: "2026-06-13T10:00:00Z"}, {role: "assistant", ts: "2026-06-13T10:02:00Z"}}}),
-		child,
+		child, nativeRoot, native, nativeRun,
 	})
 	require.NoError(t, err)
 	_, err = local.SetSessionExternalParent(ctx, "linked-run", "quiet-launcher")
 	require.NoError(t, err)
-	pgStore := pushParityPostgres(t, ctx, local, len(parityFixture())+2)
+	_, err = local.SetSessionExternalParent(ctx, "native-run", "native-middle")
+	require.NoError(t, err)
+	pgStore := pushParityPostgres(t, ctx, local, len(parityFixture())+5)
 	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: parityDate, Timezone: "UTC"}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
 	require.NoError(t, err)
 	report := assertParityForCase(t, ctx, q, db.AnalyticsFilter{Timezone: "UTC", Project: "waiting"}, local, pgStore, nil)
@@ -910,4 +915,6 @@ func TestWaitingLauncherParityAcrossBackends(t *testing.T) {
 	assert.Equal(t, 1, report.Totals.Sessions)
 	filtered := assertParityForCase(t, ctx, q, db.AnalyticsFilter{Timezone: "UTC", Project: "waiting", Agent: "claude"}, local, pgStore, nil)
 	assert.Equal(t, 1, filtered.InteractivePeak.Agents)
+	nativeReport := assertParityForCase(t, ctx, q, db.AnalyticsFilter{Timezone: "UTC", Project: "native"}, local, pgStore, nil)
+	assert.Zero(t, nativeReport.InteractivePeak.Agents)
 }

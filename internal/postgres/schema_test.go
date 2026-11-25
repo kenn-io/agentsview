@@ -698,26 +698,17 @@ func TestCheckSchemaCompatRequiresCurationBaselineColumns(t *testing.T) {
 }
 
 func TestCheckSchemaCompatRequiresDeletionCause(t *testing.T) {
-	pg, state := newSchemaProbeDB(t, nil)
-	state.execErrors = []schemaProbeQueryError{{
-		contains: "deletion_cause",
-		err:      &pgconn.PgError{Code: "42703", Message: `column "deletion_cause" does not exist`},
-	}}
-
-	err := CheckSchemaCompat(t.Context(), pg)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "sessions table missing required columns")
-}
-
-func TestCheckSchemaCompatRequiresExternalParentSessionID(t *testing.T) {
-	pg, state := newSchemaProbeDB(t, nil)
-	state.execErrors = []schemaProbeQueryError{{
-		contains: "external_parent_session_id",
-		err:      &pgconn.PgError{Code: "42703", Message: `column "external_parent_session_id" does not exist`},
-	}}
-	err := CheckSchemaCompat(t.Context(), pg)
-	require.ErrorContains(t, err, "external_parent_session_id")
+	for _, column := range []string{"deletion_cause", "external_parent_session_id"} {
+		t.Run(column, func(t *testing.T) {
+			pg, state := newSchemaProbeDB(t, nil)
+			state.execErrors = []schemaProbeQueryError{{
+				contains: column,
+				err:      &pgconn.PgError{Code: "42703", Message: `column "` + column + `" does not exist`},
+			}}
+			err := CheckSchemaCompat(t.Context(), pg)
+			require.ErrorContains(t, err, column)
+		})
+	}
 }
 
 func TestCheckSchemaCompatRequiresParserParentSessionID(t *testing.T) {

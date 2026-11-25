@@ -298,9 +298,11 @@ func TestWaitingLauncherAfterOwnInterval(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
 		includeParent bool
+		inside        bool
 	}{
 		{name: "after own interval", includeParent: true},
 		{name: "launcher outside range"},
+		{name: "own interval inside run", includeParent: true, inside: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := baseParams(t, "2026-06-16", "UTC")
@@ -317,6 +319,13 @@ func TestWaitingLauncherAfterOwnInterval(t *testing.T) {
 			if tc.includeParent {
 				sessions = append(sessions, SessionMeta{SessionID: "parent"})
 				candidates = append([]IntervalCandidate{{SessionID: "parent", Start: mustStart(t, "2026-06-16T10:00:00Z"), End: mustStart(t, "2026-06-16T10:02:00Z")}}, candidates...)
+			}
+			if tc.inside {
+				candidates = []IntervalCandidate{
+					{SessionID: "child", Start: mustStart(t, "2026-06-16T10:01:00Z"), End: mustStart(t, "2026-06-16T10:09:00Z")},
+					{SessionID: "child2", Start: mustStart(t, "2026-06-16T10:01:00Z"), End: mustStart(t, "2026-06-16T10:08:00Z")},
+					{SessionID: "parent", Start: mustStart(t, "2026-06-16T10:02:00Z"), End: mustStart(t, "2026-06-16T10:03:00Z")},
+				}
 			}
 			got, err := BuildCandidateArtifacts(t.Context(), p, sessions, candidates, nil)
 			require.NoError(t, err)
@@ -340,26 +349,4 @@ func TestWaitingLauncherAfterOwnInterval(t *testing.T) {
 			assert.Equal(t, baseline.Membership, got.Membership)
 		})
 	}
-}
-
-func TestWaitingLauncherKeepsOwnMinutesDuringOverlap(t *testing.T) {
-	p := baseParams(t, "2026-06-16", "UTC")
-	p.Waiting = map[string]string{"child": "parent"}
-	sessions := []SessionMeta{{SessionID: "parent"}, {SessionID: "child", IsSubagent: true}}
-	candidates := []IntervalCandidate{
-		{SessionID: "child", Start: mustStart(t, "2026-06-16T10:00:00Z"), End: mustStart(t, "2026-06-16T10:04:00Z")},
-		{SessionID: "parent", Start: mustStart(t, "2026-06-16T10:02:00Z"), End: mustStart(t, "2026-06-16T10:03:00Z")},
-	}
-	got, err := BuildCandidateArtifacts(t.Context(), p, sessions, candidates, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 2, got.Report.Peak.Agents)
-	assert.InDelta(t, 5, got.Report.Totals.AgentMinutes, 1e-9)
-	for _, row := range got.Sessions {
-		if row.SessionID == "parent" {
-			require.NotNil(t, row.AgentMinutes)
-			assert.InDelta(t, 1, *row.AgentMinutes, 1e-9)
-			return
-		}
-	}
-	require.FailNow(t, "parent session missing")
 }

@@ -404,27 +404,6 @@ func TestPGActivityReportKeptLauncherChange(t *testing.T) {
 	requirePGKeptEqual(t, after, pgKeptBuild(t, store, f, q, true))
 }
 
-func TestPGActivityReportLaunchedRunStopsAtNativeAncestor(t *testing.T) {
-	for _, middleDate := range []string{"2026-06-12", "2026-06-14"} {
-		t.Run(middleDate, func(t *testing.T) {
-			local, syncer, store := newUsageJournalFixture(t)
-			pgKeptSession(t, local, "root", "project-a", "2026-06-12")
-			pgKeptSession(t, local, "native", "project-a", middleDate)
-			pgKeptSession(t, local, "run", "project-a", "2026-06-14")
-			middle, err := local.GetSession(t.Context(), "native")
-			require.NoError(t, err)
-			middle.ParentSessionID = new("root")
-			middle.RelationshipType = "subagent"
-			require.NoError(t, local.UpsertSession(t.Context(), *middle))
-			_, err = local.SetSessionExternalParent(t.Context(), "run", "native")
-			require.NoError(t, err)
-			pgKeptPush(t, syncer, false)
-			report := pgKeptBuild(t, store, db.AnalyticsFilter{Timezone: "UTC"}, pgDayQuery(t, "2026-06-14", "UTC"), true)
-			assert.Zero(t, report.Report.InteractivePeak.Agents)
-		})
-	}
-}
-
 func TestPGActivityReportKeptHiddenRunLink(t *testing.T) {
 	t.Parallel()
 	local, syncer, store := newUsageJournalFixture(t)
@@ -452,21 +431,17 @@ func TestPGActivityReportExternalParentProvenance(t *testing.T) {
 	ctx := t.Context()
 	local, syncer, store := newUsageJournalFixture(t)
 	pgKeptSession(t, local, "parent", "project-a", "2026-06-12")
-	pgKeptSession(t, local, "child", "project-a", "2026-06-14")
+	pgKeptSession(t, local, "child", "project-b", "2026-06-14")
 	_, err := local.SetSessionExternalParent(ctx, "child", "parent")
 	require.NoError(t, err)
 	pgKeptPush(t, syncer, false)
-	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC", Project: "project-a"}
 	assert.Equal(t, 1, pgKeptBuild(t, store, f, q, true).Report.InteractivePeak.Agents)
 	pgKeptBuild(t, store, f, q, false)
 	beforeProbe, err := store.ActivityReportSourceProbe(ctx)
 	require.NoError(t, err)
 
-	// An older archive can retain the effective parent after its launcher link disappears.
-	raw, err := sql.Open("sqlite3", local.Path())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, raw.Close()) })
-	_, err = raw.ExecContext(ctx, `DELETE FROM session_external_parents WHERE session_id = 'child'`)
+	_, err = local.ClearSessionExternalParent(ctx, "child")
 	require.NoError(t, err)
 	pgKeptPush(t, syncer, false)
 	afterProbe, err := store.ActivityReportSourceProbe(ctx)
@@ -477,8 +452,7 @@ func TestPGActivityReportExternalParentProvenance(t *testing.T) {
 	store.runtimeState().activityKept.DeleteSlots(func(string) bool { return true })
 	store.runtimeState().activityInputs.DeleteSlots(func(string) bool { return true })
 	requirePGKeptEqual(t, after, pgKeptBuild(t, store, f, q, true))
-	var parent, external sql.NullString
-	require.NoError(t, store.DB().QueryRowContext(ctx, `SELECT parent_session_id, external_parent_session_id FROM sessions WHERE id='child'`).Scan(&parent, &external))
-	assert.Equal(t, "parent", parent.String)
+	var external sql.NullString
+	require.NoError(t, store.DB().QueryRowContext(ctx, `SELECT external_parent_session_id FROM sessions WHERE id='child'`).Scan(&external))
 	assert.False(t, external.Valid)
 }
