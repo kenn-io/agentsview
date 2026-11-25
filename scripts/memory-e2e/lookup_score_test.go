@@ -380,6 +380,11 @@ func TestLookupExpectedAnswersAppearInFixtures(t *testing.T) {
 			for _, answer := range q.ExpectedAnswer {
 				assert.Contains(t, source, answer)
 			}
+			if q.Name == "topic" {
+				answer := `{"namespace":"violet ledger namespace","reason":"the old namespace caused lock contention","source_session_id":"` + sourceID + `"}`
+				_, ok := lookupAnswerSource(q, answer)
+				assert.True(t, ok)
+			}
 		})
 	}
 }
@@ -421,6 +426,7 @@ func TestLookupMixedResultCountsForEachSession(t *testing.T) {
 func TestLookupSavedOutputClassification(t *testing.T) {
 	assert.Equal(t, "direct", routeFor("Read", `{"file_path":"/tmp/tool-results/result.txt"}`))
 	assert.Equal(t, "direct", routeFor("Bash", "cat ~/.codex/sessions/**/*.jsonl"))
+	assert.Equal(t, "direct", routeFor("Bash", `grep -r phrase "$HOME/.codex"`))
 	assert.Equal(t, "cli", routeFor("Bash", `{"command":"agentsview session list"}`))
 	assert.Equal(t, "direct", routeFor("Bash", `{"command":"sqlite3 sessions.db 'select 1'"}`))
 	assert.Equal(t, "other", routeFor("Read", `{"file_path":"README.md"}`))

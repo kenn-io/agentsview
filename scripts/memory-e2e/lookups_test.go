@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json/v2"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/parser"
@@ -77,4 +80,22 @@ func TestLookupCorpusFixtures(t *testing.T) {
 		})
 	}
 	require.Equal(t, 2, owners)
+}
+
+func TestLookupRefreshFixtureTranscript(t *testing.T) {
+	root := t.TempDir()
+	fixture := lookupFixture{ID: lookupID, AgeHours: 1, Title: "Active session", Content: "Work in progress"}
+	path, err := writeLookupFixtureTranscript(root, root, fixture)
+	require.NoError(t, err)
+	fixture.AgeHours = 0
+	refreshed, err := writeLookupFixtureTranscript(root, root, fixture)
+	require.NoError(t, err)
+	require.Equal(t, path, refreshed)
+	data, err := os.ReadFile(refreshed)
+	require.NoError(t, err)
+	var event struct {
+		Timestamp time.Time `json:"timestamp"`
+	}
+	require.NoError(t, json.Unmarshal(bytes.SplitN(data, []byte("\n"), 2)[0], &event))
+	require.WithinDuration(t, time.Now(), event.Timestamp, time.Minute)
 }

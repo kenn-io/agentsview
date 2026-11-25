@@ -40,8 +40,8 @@ type lookupScore struct {
 }
 
 var (
-	lookupCommandPattern        = regexp.MustCompile(`(?i)(sqlite3|sessions\.db|\.claude/projects/|\.codex/sessions/|rollout-[^\s"']*\.jsonl|tool-results/|\bagentsview\s+(?:session|search|db|mcp)\b)`)
-	lookupOutputPattern         = regexp.MustCompile(`(?i)(sessions\.db|\.claude/projects/|\.codex/sessions/|rollout-[^\s"']*\.jsonl|tool-results/)`)
+	lookupCommandPattern        = regexp.MustCompile(`(?i)(sqlite3|sessions\.db|\.claude(?:/projects)?(?:/|\b)|\.codex(?:/sessions)?(?:/|\b)|rollout-[^\s"']*\.jsonl|tool-results/|\bagentsview\s+(?:session|search|db|mcp)\b)`)
+	lookupOutputPattern         = regexp.MustCompile(`(?i)(sessions\.db|\.claude(?:/projects)?(?:/|\b)|\.codex(?:/sessions)?(?:/|\b)|rollout-[^\s"']*\.jsonl|tool-results/)`)
 	codexMCPInvocationPattern   = regexp.MustCompile(`\btools\s*(?:\.\s*mcp__agentsview__|\[)`)
 	mcpErrorPattern             = regexp.MustCompile(`(?i)"is_?error"\s*:\s*true`)
 	runningCellPattern          = regexp.MustCompile(`(?i)script (?:still )?running with cell ID\s+([^\s]+)`)

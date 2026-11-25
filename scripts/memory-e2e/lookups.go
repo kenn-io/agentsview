@@ -178,6 +178,13 @@ func writeLookupFixtureTranscript(root, projectDir string, f lookupFixture) (str
 		body.WriteByte('\n')
 	}
 	path := filepath.Join(dir, "rollout-"+when.Format("2006-01-02T15-04-05")+"-"+f.ID+".jsonl")
+	existing, err := filepath.Glob(filepath.Join(root, "*", "*", "*", "rollout-*-"+f.ID+".jsonl"))
+	if err != nil {
+		return "", err
+	}
+	if len(existing) > 0 {
+		path = existing[0]
+	}
 	if err := os.WriteFile(path, body.Bytes(), 0o600); err != nil {
 		return "", err
 	}
@@ -221,6 +228,13 @@ func runLookupClient(
 	index := 0
 	for _, q := range questions {
 		for i := 1; i <= cfg.runs; i++ {
+			for _, fixture := range fixtures {
+				if fixture.AgeHours == 0 {
+					if err := seedLookupCorpus(ctx, bin, data, project, fixtureRoot, []lookupFixture{fixture}); err != nil {
+						return report, err
+					}
+				}
+			}
 			runDir := filepath.Join(dir, q.Name, fmt.Sprintf("run-%d", i))
 			started := time.Now()
 			calls, answer, runErr := captureLookup(ctx, cfg, bin, client, project, model, server.url, lookupPrompt(q), runDir)

@@ -130,13 +130,17 @@ func prepareLookupIsolation(ctx context.Context, client clientName, clientDir, r
 	root := filepath.Join(home, ".local", "share", "mise", "installs")
 	dataDir := filepath.Join(clientDir, "agentsview-data")
 	mounts := []string{project, dataDir, privateHome, bin}
-	if _, err := os.Stat(root); err == nil && (strings.HasPrefix(executable, root+string(os.PathSeparator)) || strings.HasPrefix(node, root+string(os.PathSeparator))) {
-		mounts = append(mounts, root)
-	}
 	for _, p := range []string{executable, node} {
-		if strings.HasPrefix(p, home+string(os.PathSeparator)) && !strings.HasPrefix(p, root+string(os.PathSeparator)) {
-			mounts = append(mounts, filepath.Dir(p))
+		if !strings.HasPrefix(p, home+string(os.PathSeparator)) {
+			continue
 		}
+		if rel, ok := strings.CutPrefix(p, root+string(os.PathSeparator)); ok {
+			parts := strings.SplitN(rel, string(os.PathSeparator), 3)
+			if len(parts) == 3 {
+				p = filepath.Join(root, parts[0], parts[1])
+			}
+		}
+		mounts = append(mounts, p)
 	}
 	dirs := map[string]bool{}
 	for _, p := range mounts {
