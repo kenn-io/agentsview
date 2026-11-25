@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 	"unicode/utf8"
 
@@ -55,27 +56,25 @@ func TestContentScanStopsAtDeadline(t *testing.T) {
 
 func TestContentScanDeadlineReleasesActiveReader(t *testing.T) {
 	d := testDB(t)
-	seedSearchSession(t, d, "s1", "project", [][2]string{{"user", "needle"}, {"assistant", "needle"}})
+	msgs := make([][2]string, 200)
+	for i := range msgs {
+		msgs[i] = [2]string{"user", "needle"}
+	}
+	seedSearchSession(t, d, "s1", "project", msgs)
 	d.rawReader().SetMaxIdleConns(0)
 	d.rawReader().SetMaxOpenConns(1)
 	d.rawReader().SetMaxIdleConns(1)
 	previous := contentScanTimeout
-	contentScanTimeout = 2 * time.Second
+	contentScanTimeout = time.Second
 	t.Cleanup(func() { contentScanTimeout = previous })
 	entered := make(chan struct{})
-	unblock := make(chan struct{})
-	release := sync.OnceFunc(func() { close(unblock) })
-	t.Cleanup(release)
+	started := sync.OnceFunc(func() { close(entered) })
 	conn, err := d.getReader().Conn(t.Context())
 	require.NoError(t, err)
 	require.NoError(t, conn.Raw(func(raw any) error {
 		return raw.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("julianday", func(string) float64 {
-			select {
-			case <-entered:
-			default:
-				close(entered)
-			}
-			<-unblock
+			started()
+			time.Sleep(20 * time.Millisecond)
 			return 0
 		}, false)
 	}))
@@ -90,13 +89,10 @@ func TestContentScanDeadlineReleasesActiveReader(t *testing.T) {
 	case err := <-done:
 		t.Fatalf("search returned before reaching the reader: %v", err)
 	case <-time.After(10 * time.Second):
-		release()
 		<-done
 		t.Fatal("search did not reach the reader")
 	}
 	assert.Positive(t, d.rawReader().Stats().InUse)
-	time.Sleep(contentScanTimeout)
-	release()
 	assert.ErrorIs(t, <-done, context.DeadlineExceeded)
 	waitCtx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
@@ -114,6 +110,45 @@ func TestContentScanDeadlineReleasesActiveReader(t *testing.T) {
 		release, ok := d.tryAcquireBulkRead()
 		require.True(t, ok)
 		releases = append(releases, release)
+	}
+}
+
+func TestContentScanDeadlineIncludesSlotWait(t *testing.T) {
+	for _, mode := range []string{"substring", "regex", "terms"} {
+		t.Run(mode, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				d := &DB{}
+				var releases []func()
+				defer func() {
+					for _, release := range releases {
+						release()
+					}
+				}()
+				for range bulkReadSlots {
+					release, ok := d.tryAcquireBulkRead()
+					require.True(t, ok)
+					releases = append(releases, release)
+				}
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				done := make(chan error, 1)
+				go func() {
+					_, err := d.SearchContent(ctx, ContentSearchFilter{Mode: mode, Pattern: "needle"})
+					done <- err
+				}()
+				synctest.Wait()
+				time.Sleep(contentScanTimeout)
+				synctest.Wait()
+				select {
+				case err := <-done:
+					assert.ErrorIs(t, err, context.DeadlineExceeded)
+				default:
+					cancel()
+					<-done
+					t.Fatal("search did not stop while waiting for a slot")
+				}
+			})
+		})
 	}
 }
 

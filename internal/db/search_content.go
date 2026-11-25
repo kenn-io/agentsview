@@ -364,19 +364,17 @@ func (db *DB) searchContentSubstring(
 	ctx context.Context, f ContentSearchFilter,
 ) (ContentSearchPage, error) {
 	f, q, words := routeContentWords(f)
+	if f.SessionID == "" || words {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, contentScanTimeout)
+		defer cancel()
+	}
 	if f.SessionID == "" {
 		release, err := db.acquireBulkRead(ctx)
 		if err != nil {
 			return ContentSearchPage{}, err
 		}
 		defer release()
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, contentScanTimeout)
-		defer cancel()
-	} else if words {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, contentScanTimeout)
-		defer cancel()
 	}
 	if words && db.messageFTSRepairPending.Load() {
 		return ContentSearchPage{}, errFTSUnavailable
@@ -645,14 +643,14 @@ func (db *DB) searchContentTerms(
 		return ContentSearchPage{}, nil
 	}
 	if f.SessionID == "" {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, contentScanTimeout)
+		defer cancel()
 		release, err := db.acquireBulkRead(ctx)
 		if err != nil {
 			return ContentSearchPage{}, err
 		}
 		defer release()
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, contentScanTimeout)
-		defer cancel()
 	}
 	return searchWithTermsIndex(ctx, db, f, terms,
 		func(indexed map[string]string) (ContentSearchPage, error) {
@@ -731,14 +729,14 @@ func (db *DB) searchContentRegex(
 		return ContentSearchPage{}, searchInputErrorf("search: invalid regex: %v", err)
 	}
 	if f.SessionID == "" {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, contentScanTimeout)
+		defer cancel()
 		release, err := db.acquireBulkRead(ctx)
 		if err != nil {
 			return ContentSearchPage{}, err
 		}
 		defer release()
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, contentScanTimeout)
-		defer cancel()
 	}
 
 	lit := LiteralPrefix(f.Pattern)
