@@ -36,9 +36,13 @@ func startLatencyProxy(tb testing.TB, pgURL string, delay time.Duration) *latenc
 	tb.Helper()
 	parsed, err := url.Parse(pgURL)
 	require.NoError(tb, err)
+	port := parsed.Port()
+	if port == "" {
+		port = "5432"
+	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(tb, err)
-	proxy := &latencyProxy{listener: listener, upstream: parsed.Host, delay: delay}
+	proxy := &latencyProxy{listener: listener, upstream: net.JoinHostPort(parsed.Hostname(), port), delay: delay}
 	proxy.wg.Go(proxy.accept)
 	tb.Cleanup(func() {
 		_ = listener.Close()
@@ -178,13 +182,14 @@ type latencyPushRun struct {
 // such as publishing model pricing.
 func pushNewSessionsThroughProxy(tb testing.TB, pgURL, schema string, proxy *latencyProxy, sessions, messages int, warm bool) latencyPushRun {
 	tb.Helper()
+	// Close per call, so repeated iterations do not hold archives and pools.
 	local, err := db.Open(tb.Context(), filepath.Join(tb.TempDir(), "archive.db"))
 	require.NoError(tb, err)
-	tb.Cleanup(func() { require.NoError(tb, local.Close()) })
+	defer func() { require.NoError(tb, local.Close()) }()
 
 	syncer, err := New(tb.Context(), proxy.url(tb, pgURL), schema, local, "latency", true, storage.PusherOptions{})
 	require.NoError(tb, err)
-	tb.Cleanup(func() { require.NoError(tb, syncer.Close()) })
+	defer func() { require.NoError(tb, syncer.Close()) }()
 	require.NoError(tb, syncer.EnsureSchema(tb.Context()))
 	if warm {
 		seedLatencyFixture(tb, local, "latency-warm", 1, 2)

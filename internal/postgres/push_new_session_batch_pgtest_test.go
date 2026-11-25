@@ -464,3 +464,42 @@ func TestPGPushNewSessionBatchHonorsLateAliasExclusion(t *testing.T) {
 		`SELECT count(*) FROM sessions WHERE id LIKE 'plain-%'`).Scan(&plain))
 	assert.Equal(t, 2, plain)
 }
+
+func TestPGPushNewSessionBatchReplacesConcurrentSameOwnerRow(t *testing.T) {
+	ctx := t.Context()
+	pgURL := testPGURL(t)
+	local := testDB(t)
+	seedLatencyFixture(t, local, "stale", 3, 4)
+	syncer, _ := newNewSessionBatchSync(t, pgURL, "agentsview", local, false)
+	markerID, err := syncer.pushMarkerID(ctx)
+	require.NoError(t, err)
+
+	other, err := sql.Open("pgx", pgURL)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, other.Close()) })
+	var once sync.Once
+	// Another push from this archive publishes an older copy of a session,
+	// with a commit link the archive no longer has, after the batch chose it.
+	syncer.beforeNewSessionBatch = func() {
+		once.Do(func() {
+			_, err := other.ExecContext(ctx, `INSERT INTO agentsview.sessions
+				(id, machine, owner_marker, project, agent, first_message, message_count, user_message_count)
+				VALUES ('stale-1', 'latency', $1, 'proj', 'claude', 'earlier', 1, 1)`, markerID)
+			require.NoError(t, err)
+			_, err = other.ExecContext(ctx, `INSERT INTO agentsview.commit_links
+				(session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,turn_text,project,retained)
+				VALUES ('stale-1','eee1234567890123456789012345678901234567','main','Gone','repo',1,0,'gone-call','2026-01-01T00:00:00Z','','proj',FALSE)`)
+			require.NoError(t, err)
+		})
+	}
+
+	result, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Zero(t, result.Errors)
+	assert.Equal(t, 3, result.SessionsPushed)
+	var messageCount, links int
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT message_count FROM sessions WHERE id = 'stale-1'`).Scan(&messageCount))
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT count(*) FROM commit_links WHERE session_id = 'stale-1'`).Scan(&links))
+	assert.Equal(t, 4, messageCount, "the archive's copy replaces the older one")
+	assert.Zero(t, links, "the archive no longer has the commit link")
+}

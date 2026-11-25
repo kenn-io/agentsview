@@ -1248,16 +1248,16 @@ can read rows an earlier session wrote, such as a Codex thread's trash state.
 The batch also sends early once it holds 8 MiB, even partway through a
 transcript.
 
-The last batch also confirms that the sessions were still new when written:
-no exclusion applies to any of their tombstone IDs, as the sequential path
-rechecks after its upsert, and none has pinned messages. Pins can exist only if
-another push from the same archive created the row after the existence check;
-the sequential rewrite then preserves them.
+The batch confirms that each session was still new when written. Its session
+upsert is insert-only (`pgSessionWriteOptions.InsertOnly`), so a row another
+push created after the existence check reports no affected rows instead of
+being overwritten without reconciling its pins, image text, and commit links.
+The last batch also checks that no exclusion applies to any of the sessions'
+tombstone IDs, as the sequential path does after its upsert.
 
 Sessions PostgreSQL already has, sessions an exclusion may apply to, and
 usage-only archives keep the sequential path. If any batched statement fails,
-or a session's upsert does not create its row (for example, another machine
-created it after the existence check), the transaction rolls back and is
+or a session's upsert does not create its row, the transaction rolls back and is
 rewritten one statement at a time, which applies the usual per-session error
 handling; a session that fails this way is retried alone, batched and then
 sequentially. The batch's writers report zero affected rows for every statement,

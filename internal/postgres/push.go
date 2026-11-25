@@ -2798,6 +2798,9 @@ type pgSessionWriteOptions struct {
 	DatabaseGeneration string
 	UsageOnly          bool
 	SkipAliases        bool
+	// InsertOnly leaves an existing row unchanged, so the upsert affects no
+	// rows unless it creates the session.
+	InsertOnly bool
 }
 
 // pgSessionUpsert builds the guarded upsert that writes one session row.
@@ -3025,6 +3028,7 @@ func pgSessionUpsert(sess db.Session, markerID string, legacyMarkerMachines []st
 			AND NOT EXISTS (
 				SELECT 1 FROM excluded_session
 			)
+			AND NOT $79::boolean
 			AND (
 			sessions.machine IS DISTINCT FROM EXCLUDED.machine
 			OR sessions.owner_marker IS DISTINCT FROM EXCLUDED.owner_marker
@@ -3165,6 +3169,7 @@ func pgSessionUpsert(sess db.Session, markerID string, legacyMarkerMachines []st
 		db.LabelsArg(sess.Labels),
 		sess.FrictionCount, sess.FrictionRulesVersion, sess.FrictionHash,
 		sanitizePG(options.ExternalParent),
+		options.InsertOnly,
 	}
 	return query, args, nil
 }

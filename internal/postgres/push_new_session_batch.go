@@ -182,27 +182,22 @@ func (b *newSessionBatch) send(ctx context.Context) error {
 }
 
 // finish sends the remaining statements and confirms that the batch wrote
-// only new sessions: each upsert affected its row, no exclusion applies to any
-// of the session's tombstone IDs, and no session has pinned messages, which a
-// row created since the sessions were chosen could hold. The sequential path
-// rechecks exclusions after its upsert and preserves pins. Both checks ride
-// in the last batch. finish returns the sessions the batch wrote.
+// only new sessions: each insert-only upsert created its row, so no other
+// push created it after the sessions were chosen, and no exclusion applies to
+// any of the session's tombstone IDs, which the sequential path rechecks after
+// its upsert. The exclusion check rides in the last batch. finish returns the
+// sessions the batch wrote.
 func (b *newSessionBatch) finish(ctx context.Context) ([]newSessionWrite, error) {
 	if b == nil || len(b.writes) == 0 {
 		return nil, b.send(ctx)
 	}
 	sessions := make([]db.Session, len(b.writes))
-	ids := make([]string, len(b.writes))
 	for i, write := range b.writes {
-		sessions[i], ids[i] = write.session, write.session.ID
+		sessions[i] = write.session
 	}
 	excludedQuery, excludedArgs := pgExcludedSessionIDsQuery(slices.Values(sessions), b.markerID, b.sync.machine, b.legacyMarkerMachines)
 	excluded := b.exec.position()
 	if _, err := b.exec.ExecContext(ctx, excludedQuery, excludedArgs...); err != nil {
-		return nil, wrapNewSessionBatchErr(err)
-	}
-	pinned := b.exec.position()
-	if _, err := b.exec.ExecContext(ctx, `SELECT 1 FROM pinned_messages WHERE session_id = ANY($1)`, ids); err != nil {
 		return nil, wrapNewSessionBatchErr(err)
 	}
 	if err := b.send(ctx); err != nil {
@@ -215,9 +210,6 @@ func (b *newSessionBatch) finish(ctx context.Context) ([]newSessionWrite, error)
 	}
 	if b.exec.tags[excluded].RowsAffected() != 0 {
 		return nil, wrapNewSessionBatchErr(errors.New("an exclusion applies to a batched session"))
-	}
-	if b.exec.tags[pinned].RowsAffected() != 0 {
-		return nil, wrapNewSessionBatchErr(errors.New("a batched session already has pinned messages"))
 	}
 	return b.writes, nil
 }
@@ -309,6 +301,7 @@ func (s *Sync) queueNewSession(
 	query, args, err := pgSessionUpsert(mirrored, markerID, legacyMarkerMachines, pgSessionWriteOptions{
 		ExternalParent: externalParent,
 		Machine:        s.machine, ArchiveID: s.archiveID, DatabaseGeneration: s.databaseGeneration,
+		InsertOnly: true,
 	})
 	if err != nil {
 		return newSessionWrite{}, err
