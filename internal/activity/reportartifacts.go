@@ -35,24 +35,24 @@ type Progress struct {
 
 type ProgressFunc func(Progress)
 
-// SourceProbe is a cheap summary used to reject stale report tokens
+// SourceProbe is a cheap monotonic summary used to reject stale report tokens
 // before an expensive cache-miss rebuild. It is deliberately coarse: unrelated
 // archive changes may force a harmless refresh, while the canonical artifact
 // digest remains the final consistency check.
 type SourceProbe struct {
-	HostedIdentityRevision    int64  `json:"hosted_identity_revision,omitempty"`
-	HostedSelectionRevision   int64  `json:"hosted_selection_revision,omitempty"`
-	HostedCorpusRevision      int64  `json:"hosted_corpus_revision,omitempty"`
-	SessionCount              int64  `json:"session_count"`
-	MaxSessionModified        string `json:"max_session_modified"`
-	MaxDataVersion            int64  `json:"max_data_version"`
-	MaxMessageID              int64  `json:"max_message_id"`
-	MaxUsageID                int64  `json:"max_usage_id"`
-	MaxPricingUpdated         string `json:"max_pricing_updated"`
-	ProjectIdentityGeneration int64  `json:"project_identity_generation"`
-	UsageChangeRevision       int64  `json:"usage_change_revision,omitempty"`
-	PreparedUsageFingerprint  string `json:"prepared_usage_fingerprint,omitempty"`
-	SessionLinksFingerprint   string `json:"session_links_fingerprint,omitempty"`
+	HostedIdentityRevision          int64  `json:"hosted_identity_revision,omitempty"`
+	HostedSelectionRevision         int64  `json:"hosted_selection_revision,omitempty"`
+	HostedCorpusRevision            int64  `json:"hosted_corpus_revision,omitempty"`
+	SessionCount                    int64  `json:"session_count"`
+	MaxSessionModified              string `json:"max_session_modified"`
+	MaxDataVersion                  int64  `json:"max_data_version"`
+	MaxMessageID                    int64  `json:"max_message_id"`
+	MaxUsageID                      int64  `json:"max_usage_id"`
+	MaxPricingUpdated               string `json:"max_pricing_updated"`
+	ProjectIdentityGeneration       int64  `json:"project_identity_generation"`
+	UsageChangeRevision             int64  `json:"usage_change_revision,omitempty"`
+	PreparedUsageFingerprint        string `json:"prepared_usage_fingerprint,omitempty"`
+	SessionRelationshipsFingerprint string `json:"session_relationships_fingerprint,omitempty"`
 }
 
 type SessionSort string

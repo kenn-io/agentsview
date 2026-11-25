@@ -67,9 +67,9 @@ func (s *Store) ActivityReportSourceProbe(
 // the message and usage event parts whose highest ids it starts from.
 func (s *Store) readActivitySourceProbe(ctx context.Context) (activity.SourceProbe, error) {
 	var probe activity.SourceProbe
+	// Hash live membership and relationships by value so merges leave the probe unchanged.
 	err := s.queryRowContext(ctx, `SELECT
 		(SELECT toInt64(count()) FROM sessions),
-		(SELECT toString(tuple(count(), sumWithOverflow(cityHash64(id, ifNull(parent_session_id, ''), relationship_type, ifNull(is_launched, false))))) FROM sessions WHERE deleted_at IS NULL),
 		ifNull(toString((SELECT max(local_modified_at) FROM sessions)), ''),
 		ifNull((SELECT max(data_version) FROM sessions), 0),
 		ifNull(toString((SELECT max(updated_at) FROM (
@@ -81,10 +81,12 @@ func (s *Store) readActivitySourceProbe(ctx context.Context) (activity.SourcePro
 			SELECT max(toInt64OrZero(value))
 			FROM sync_metadata
 			WHERE startsWith(key, ?)
-		), 0)`,
+		), 0),
+		(SELECT if(count() = 0, '', hex(SHA256(toString(tuple(count(), sumWithOverflow(cityHash64(id, relationship_type, ifNull(is_launched, false), ifNull(parent_session_id, ''))))))))
+		 FROM sessions WHERE deleted_at IS NULL)`,
 		identityRevisionKeyBase).Scan(
-		&probe.SessionCount, &probe.SessionLinksFingerprint, &probe.MaxSessionModified, &probe.MaxDataVersion,
-		&probe.MaxPricingUpdated, &probe.ProjectIdentityGeneration,
+		&probe.SessionCount, &probe.MaxSessionModified, &probe.MaxDataVersion,
+		&probe.MaxPricingUpdated, &probe.ProjectIdentityGeneration, &probe.SessionRelationshipsFingerprint,
 	)
 	if err != nil {
 		return activity.SourceProbe{}, fmt.Errorf("probing clickhouse activity report source: %w", err)
