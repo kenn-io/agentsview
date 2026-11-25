@@ -1,7 +1,7 @@
 {
   "version": 190,
   "bump": true,
-  "digest": "012fa5bafd4265639e696ed4611cb1e7b6a6a92aab8bc730d5ad8bcaaec8acdc",
+  "digest": "aa17e4f45189d503b0010cf607f87d584b2b579e3d16d8433e1a6c34524763df",
   "providers": {
     "aider": {
       "myrepo/.aider.chat.history.md": "bd3361561a4547452dddf33ac27898f2b60e8c305f2ef07ed13ec520f1f51244"
@@ -168,7 +168,7 @@
     },
     "muse-personal": {
       "agent-11111111-2222-4333-8444-555555555555/sessions/11111111-2222-4333-8444-555555555555.jsonl": "c2e1244c85f737a49400822cb83a1ed9bbe15a14bff05cc9e417f10d094dd920",
-      "agent-22222222-3333-4444-8555-666666666666/sessions/22222222-3333-4444-8555-666666666666.jsonl": "5eea31d8a3a7a2ead664624c539da96682b332affddc7edf53dbcd890e24579a",
+      "agent-22222222-3333-4444-8555-666666666666/sessions/22222222-3333-4444-8555-666666666666.jsonl": "e2dae06226bce69d5256f4f2f85b8450ac3f1fcb3c86b75525409889d74c47ed",
       "agent-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee/sessions/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee.jsonl": "e76f5de2681d135acf6f07cac11b4e0fe058abb1fa0ee4f606fd1b50a63cd1bc"
     },
     "omnigent": {

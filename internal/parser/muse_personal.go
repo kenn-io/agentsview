@@ -17,7 +17,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 )
 
 const (
@@ -179,27 +178,38 @@ var musePersonalBackgroundSources = map[string]bool{
 // envelope separates them.
 const musePersonalSubagentPrefix = "[Subagent Context] You are running as a subagent (depth "
 
-// musePersonalRequesterPattern finds the labelled requester in a subagent
-// envelope. Each Muse Personal agent owns one session whose ID equals the
-// agent ID, so the requester agent ID names the parent session. The envelope's
+// musePersonalRequesterField labels the requester in a subagent envelope.
+// Each Muse Personal agent owns one session whose ID equals the agent ID, so
+// the requester agent ID names the parent session. The envelope's
 // "Your session" field does not reliably name the run and is ignored.
-var musePersonalRequesterPattern = regexp.MustCompile(`(?:^|\s)Requester agent id: (` + codexUUIDPattern + `)\.?`)
+const musePersonalRequesterField = "- Requester agent id: "
 
 // musePersonalSubagentParent returns the parent session ID recorded in the
-// first user item of a subagent run, or "" when the envelope does not name
-// exactly one other session.
+// envelope of a subagent run's first user item, or "" when the envelope does
+// not name exactly one other session. The envelope is the opening line and
+// the "- Field: value." lines that follow it; the delegated task after them
+// may quote other IDs.
 func musePersonalSubagentParent(source, content, sessionID string) string {
 	if source != "runtime" || !strings.HasPrefix(content, musePersonalSubagentPrefix) {
 		return ""
 	}
-	parent := ""
-	for _, match := range musePersonalRequesterPattern.FindAllStringSubmatchIndex(content, -1) {
-		// The ID must end at whitespace or the end of the message.
-		if end := match[1]; end < len(content) && !unicode.IsSpace(rune(content[end])) {
-			return ""
+	_, fields, _ := strings.Cut(content, "\n")
+	parent, inFields := "", false
+	for line := range strings.Lines(fields) {
+		line = strings.TrimRight(line, " \t\r\n")
+		if !strings.HasPrefix(line, "- ") {
+			if line == "" && !inFields {
+				continue
+			}
+			break
 		}
-		id := content[match[2]:match[3]]
-		if parent != "" && id != parent {
+		inFields = true
+		id, ok := strings.CutPrefix(line, musePersonalRequesterField)
+		if !ok {
+			continue
+		}
+		id = strings.TrimSuffix(id, ".")
+		if !musePersonalUUID(id) || parent != "" && id != parent {
 			return ""
 		}
 		parent = id

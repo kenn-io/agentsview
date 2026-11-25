@@ -164,21 +164,27 @@ func TestMusePersonalSubagentParentLink(t *testing.T) {
 	item := func(seq int, source, text string) string {
 		return fmt.Sprintf(`{"type":"item","seq":%d,"source":%q,"created_at":"2026-10-05T15:04:06Z","item":{"type":"message","role":"user","text":%q}}`+"\n", seq, source, text)
 	}
+	requester := func(id string) string { return "- Requester agent id: " + id + ".\n" }
 	for _, tc := range []struct {
 		name, body, wantKind, wantParent string
 	}{
-		{"labelled requester on one line", item(0, "runtime", envelope+"Requester agent id: "+parent+". Requester source: runtime."), SessionKindNonInteractive, parent},
-		{"requester without trailing period", item(0, "runtime", envelope+"Requester agent id: "+parent+"\nDo the work."), SessionKindNonInteractive, parent},
-		{"no requester label", item(0, "runtime", envelope+"Label: "+other+"."), SessionKindNonInteractive, ""},
-		{"only Your session", item(0, "runtime", envelope+"Your session: "+parent+"."), SessionKindNonInteractive, ""},
-		{"two different requesters", item(0, "runtime", envelope+"Requester agent id: "+parent+".\nRequester agent id: "+other+"."), SessionKindNonInteractive, ""},
-		{"repeated same requester", item(0, "runtime", envelope+"Requester agent id: "+parent+".\nRequester agent id: "+parent+"."), SessionKindNonInteractive, parent},
-		{"requester is the session itself", item(0, "runtime", envelope+"Requester agent id: "+musePersonalTestID+"."), SessionKindNonInteractive, ""},
-		{"label inside a longer word", item(0, "runtime", envelope+"XRequester agent id: "+parent+"."), SessionKindNonInteractive, ""},
-		{"malformed id", item(0, "runtime", envelope+"Requester agent id: "+parent+"0."), SessionKindNonInteractive, ""},
-		{"requester outside the subagent envelope", item(0, "runtime", "Requester agent id: "+parent+"."), "", ""},
-		{"requester on delegated browser work", item(0, "runtime.browser_input", envelope+"Requester agent id: "+parent+"."), SessionKindNonInteractive, ""},
-		{"requester on a later user item", item(0, "runtime", "hello") + item(1, "runtime", envelope+"Requester agent id: "+parent+"."), "", ""},
+		{"blank line before the fields", item(0, "runtime", envelope+"\n"+requester(parent)), SessionKindNonInteractive, parent},
+		{"requester without trailing period", item(0, "runtime", envelope+"- Requester agent id: "+parent+"\n\nDo the work."), SessionKindNonInteractive, parent},
+		{"no requester field", item(0, "runtime", envelope+"- Label: "+other+".\n"), SessionKindNonInteractive, ""},
+		{"only Your session", item(0, "runtime", envelope+"- Your session: "+parent+".\n"), SessionKindNonInteractive, ""},
+		{"two different requesters", item(0, "runtime", envelope+requester(parent)+requester(other)), SessionKindNonInteractive, ""},
+		{"repeated same requester", item(0, "runtime", envelope+requester(parent)+requester(parent)), SessionKindNonInteractive, parent},
+		{"requester is the session itself", item(0, "runtime", envelope+requester(musePersonalTestID)), SessionKindNonInteractive, ""},
+		{"requester not a field line", item(0, "runtime", envelope+"Requester agent id: "+parent+".\n"), SessionKindNonInteractive, ""},
+		{"label inside a longer word", item(0, "runtime", envelope+"- XRequester agent id: "+parent+".\n"), SessionKindNonInteractive, ""},
+		{"malformed id", item(0, "runtime", envelope+"- Requester agent id: "+parent+"0.\n"), SessionKindNonInteractive, ""},
+		// The fields end at the first line that is not a field; the
+		// delegated task after them may quote other IDs.
+		{"task body quotes another requester", item(0, "runtime", envelope+requester(parent)+"\nForward this:\n"+requester(other)), SessionKindNonInteractive, parent},
+		{"requester only in the task body", item(0, "runtime", envelope+"- Depth: 1/2.\n\n"+requester(other)), SessionKindNonInteractive, ""},
+		{"requester outside the subagent envelope", item(0, "runtime", requester(parent)), "", ""},
+		{"requester on delegated browser work", item(0, "runtime.browser_input", envelope+requester(parent)), SessionKindNonInteractive, ""},
+		{"requester on a later user item", item(0, "runtime", "hello") + item(1, "runtime", envelope+requester(parent)), "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p, _ := musePersonalTestProvider(t, tc.body)
