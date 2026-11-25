@@ -277,7 +277,7 @@ func TestPGPushNewSessionBatchMatchesSequentialWrites(t *testing.T) {
 func TestPGPushNewSessionBatchYieldsToConcurrentOwner(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	pgURL := testPGURL(t)
+	pgURL := testPGSchemaURL(t, "agentsview")
 	local := testDB(t)
 	seedLatencyFixture(t, local, "race", 4, 4)
 	syncer, _ := newNewSessionBatchSync(t, pgURL, "agentsview", local, false)
@@ -433,7 +433,7 @@ func TestPGPushNewSessionBatchKeepsPinsOfConcurrentSameOwnerRow(t *testing.T) {
 func TestPGPushNewSessionBatchHonorsLateAliasExclusion(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	pgURL := testPGURL(t)
+	pgURL := testPGSchemaURL(t, "agentsview")
 	// A serializable transaction cannot see an exclusion committed after
 	// it began, on either path.
 	skipOnCockroach(t, pgURL, "CockroachDB transactions read from one snapshot")
@@ -475,7 +475,7 @@ func TestPGPushNewSessionBatchHonorsLateAliasExclusion(t *testing.T) {
 func TestPGPushNewSessionBatchReplacesConcurrentSameOwnerRow(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	pgURL := testPGURL(t)
+	pgURL := testPGSchemaURL(t, "agentsview")
 	local := testDB(t)
 	seedLatencyFixture(t, local, "stale", 3, 4)
 	syncer, _ := newNewSessionBatchSync(t, pgURL, "agentsview", local, false)
@@ -515,7 +515,7 @@ func TestPGPushNewSessionBatchReplacesConcurrentSameOwnerRow(t *testing.T) {
 func TestPGPushNewSessionBatchRollsBackEarlySends(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	pgURL := testPGURL(t)
+	pgURL := testPGSchemaURL(t, "agentsview")
 	skipOnCockroach(t, pgURL, "CockroachDB triggers cannot read NEW")
 	local := testDB(t)
 	// Two transcripts larger than newSessionBatchFlushBytes make the batch
