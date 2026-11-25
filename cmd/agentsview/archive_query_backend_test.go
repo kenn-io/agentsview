@@ -235,27 +235,17 @@ func TestLocalSessionUsageRefreshesSubagentTranscripts(t *testing.T) {
 	assert.Nil(t, unsynced)
 
 	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx,
-			"INSERT INTO stats(key, value) VALUES ('scoped_upgrade_pending', 1)",
-		)
+		_, err := tx.ExecContext(ctx, "INSERT INTO stats(key, value) VALUES ('scoped_upgrade_pending', 1)")
 		return err
 	}))
-	var out *sessionUsageOutput
-	stderr := captureStderr(t, func() {
-		var err error
-		out, _, err = backend.SessionUsage(
-			ctx, sessionUsageQuery{SessionID: "parent-uuid"})
-		require.NoError(t, err)
-	})
-	assert.Contains(t, stderr, apiclient.ArchiveStaleWarning)
+	out, _, err := backend.SessionUsage(ctx, sessionUsageQuery{SessionID: "parent-uuid"})
+	require.NoError(t, err)
 	require.NotNil(t, out)
 	assert.Equal(t, 1, out.SubagentCount,
 		"the new subagent transcript must be ingested before the query")
 	pending, err := database.ScopedUpgradePending(ctx)
 	require.NoError(t, err)
-	assert.True(t, pending,
-		"a per-session refresh must not clear the full-pass freshness marker")
-
+	assert.True(t, pending, "a per-session refresh must not clear the full-pass freshness marker")
 	child, err := database.GetSession(ctx, "agent-worker1")
 	require.NoError(t, err)
 	require.NotNil(t, child, "subagent session was not synced")
@@ -295,10 +285,17 @@ func TestLocalSessionUsageStaleArchiveReturnsStoredUsage(t *testing.T) {
 		assert.Equal(t, tokenUseExitErr, code)
 	})
 	assert.NotContains(t, retryStderr, "session not found")
-	out, _, err := backend.SessionUsage(t.Context(), sessionUsageQuery{SessionID: "saved", NoSync: true})
-	require.NoError(t, err)
-	require.NotNil(t, out)
-	assert.False(t, out.RefreshIncomplete)
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), "INSERT INTO stats(key, value) VALUES ('scoped_upgrade_pending', 1)")
+		return err
+	}))
+	stderr = captureStderr(t, func() {
+		out, _, err := backend.SessionUsage(t.Context(), sessionUsageQuery{SessionID: "saved", NoSync: true})
+		require.NoError(t, err)
+		require.NotNil(t, out)
+		assert.False(t, out.RefreshIncomplete)
+	})
+	assert.Contains(t, stderr, apiclient.ArchiveStaleWarning)
 }
 
 func TestLocalDailyUsageWarnsForScopedUpgrade(t *testing.T) {

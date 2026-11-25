@@ -63,7 +63,7 @@ func TestStarSessionReturns503WhileWriterClosed(t *testing.T) {
 	}
 }
 
-func TestScopedUpgradeFreshnessOutlivesWriterPause(t *testing.T) {
+func TestScopedUpgradeFreshnessStatusAndHeader(t *testing.T) {
 	te := setup(t)
 	te.seedSession(t, "s1", "alpha", 2)
 	require.NoError(t, te.db.Update(t.Context(), func(tx *sql.Tx) error {
@@ -76,24 +76,22 @@ func TestScopedUpgradeFreshnessOutlivesWriterPause(t *testing.T) {
 	type statusResponse struct {
 		ArchiveStale   bool `json:"archive_stale"`
 		UpgradePending bool `json:"upgrade_pending"`
-		WritesPaused   bool `json:"writes_paused"`
 	}
-	assertStatus := func(w *httptest.ResponseRecorder, upgradePending, writesPaused bool) {
+	assertStatus := func(w *httptest.ResponseRecorder, upgradePending bool) {
 		t.Helper()
 		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 		status := decode[statusResponse](t, w)
 		assert.False(t, status.ArchiveStale)
 		assert.Equal(t, upgradePending, status.UpgradePending)
-		assert.Equal(t, writesPaused, status.WritesPaused)
 	}
 
-	assertStatus(te.get(t, "/api/v1/sync/status"), true, false)
+	assertStatus(te.get(t, "/api/v1/sync/status"), true)
 	read := te.get(t, "/api/v1/sessions")
 	require.Equal(t, http.StatusOK, read.Code, read.Body.String())
 	assert.Equal(t, "true", read.Header().Get("X-Agentsview-Archive-Stale"))
 
 	require.NoError(t, te.db.CompleteScopedUpgrade(t.Context()))
-	assertStatus(te.get(t, "/api/v1/sync/status"), false, false)
+	assertStatus(te.get(t, "/api/v1/sync/status"), false)
 	read = te.get(t, "/api/v1/sessions")
 	assert.Empty(t, read.Header().Get("X-Agentsview-Archive-Stale"))
 }

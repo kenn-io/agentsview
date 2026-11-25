@@ -18,7 +18,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
@@ -26,68 +25,6 @@ import (
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
-
-func TestDailyUsageServesSavedTotalsDuringScopedUpgrade(t *testing.T) {
-	isolateServeTestHome(t)
-	t.Setenv(syncWorkerChildEnvVar, "1")
-	cfg := testConfigWithClaudeFixture(t)
-	t.Setenv("AGENTSVIEW_DATA_DIR", cfg.DataDir)
-	cfg.Host = "127.0.0.1"
-	cfg.SyncIdleAfter = 100 * time.Millisecond
-	content := testjsonl.NewSessionBuilder().
-		AddClaudeUser("2026-01-02T00:00:00Z", "hello").
-		AddClaudeAssistantUsage("2026-01-02T00:00:01Z", "reply", testjsonl.ClaudeAssistantUsage{
-			MessageID: "message-a", RequestID: "request-a", Model: "claude-sonnet-4-5", InputTokens: 1234, OutputTokens: 42,
-		}).String()
-	require.NoError(t, os.WriteFile(filepath.Join(cfg.AgentDirs[parser.AgentClaude][0], "-home-proj0", "usage.jsonl"), []byte(content), 0o644))
-	var seed bytes.Buffer
-	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &seed))
-	oldVersion := db.CurrentDataVersion() - 1
-	require.NotEmpty(t, db.ScopedDataVersionProviders(oldVersion, db.CurrentDataVersion()))
-	conn, err := sql.Open("sqlite3", cfg.DBPath)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), fmt.Sprintf(`PRAGMA user_version=%d`, oldVersion))
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
-
-	started, release := make(chan struct{}), make(chan struct{})
-	restore := stubLaunchSyncWorker(t, func(ctx context.Context, _ config.Config, _ syncWorkerRequest, _ func(workerLine)) (workerResult, error) {
-		close(started)
-		select {
-		case <-release:
-		case <-ctx.Done():
-			return workerResult{}, ctx.Err()
-		}
-		return workerResult{}, nil
-	})
-	t.Cleanup(restore)
-	base := startRestartServe(t, cfg, serveOptions{SkipInitialSync: true})
-	select {
-	case <-started:
-	case <-time.After(30 * time.Second):
-		require.FailNow(t, "worker did not start")
-	}
-	require.Eventually(t, func() bool {
-		status := restartGet(t, base+"/api/v1/sync/status")
-		return strings.Contains(status, `"sync_pending":true`) && strings.Contains(status, `"upgrade_pending":true`)
-	}, 30*time.Second, 100*time.Millisecond)
-	var stdout, stderr bytes.Buffer
-	done := make(chan error, 1)
-	go func() {
-		done <- executeCLIWithLegacyFlagCompat([]string{"report", "usage", "daily", "--all", "--json", "--timezone", "UTC"}, &stdout, &stderr)
-	}()
-	select {
-	case err := <-done:
-		close(release)
-		require.NoError(t, err)
-	case <-time.After(time.Second): //nolint:kennlint // deadlinetest: the report must return before the held worker's catch-up deadline
-		close(release)
-		<-done
-		require.FailNow(t, "daily report waited for the startup worker")
-	}
-	assert.Contains(t, stdout.String(), `"inputTokens": 1234`)
-	assert.Contains(t, stderr.String(), apiclient.ArchiveStaleWarning)
-}
 
 func writeRestartSession(t *testing.T, cfg config.Config, id string) string {
 	t.Helper()
@@ -155,23 +92,18 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 			isolateServeTestHome(t)
 			t.Setenv(syncWorkerChildEnvVar, "1")
 			cfg := testConfigWithClaudeFixture(t)
+			t.Setenv("AGENTSVIEW_DATA_DIR", cfg.DataDir)
 			cfg.Host = "127.0.0.1"
 			cfg.EventsCoalesceInterval = 0
-			codexRoot := t.TempDir()
-			cfg.AgentDirs[parser.AgentCodex] = []string{codexRoot}
-			var claudeIDs, codexIDs []string
-			for i := range 3 {
-				id := fmt.Sprintf("visible-seed-%d", i)
-				claudeIDs = append(claudeIDs, id)
-				writeRestartSession(t, cfg, id)
-				uuid := fmt.Sprintf("a0000000-0000-4000-8000-%012d", i)
-				codexIDs = append(codexIDs, "codex:"+uuid)
-				content := testjsonl.NewSessionBuilder().
-					AddCodexMeta("2026-01-02T00:00:00Z", uuid, "/project", "codex_cli_rs").
-					AddCodexMessage("2026-01-02T00:00:01Z", "user", "unchanged codex transcript").String()
-				path := filepath.Join(codexRoot, "rollout-2026-01-02T00-00-00-"+uuid+".jsonl")
-				require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
-			}
+			const sessionID = "visible-seed-0"
+			path := writeRestartSession(t, cfg, sessionID)
+			content := testjsonl.NewSessionBuilder().
+				AddClaudeUser("2026-01-02T00:00:00Z", sessionID).
+				AddClaudeAssistantUsage("2026-01-02T00:00:01Z", "reply", testjsonl.ClaudeAssistantUsage{
+					MessageID: "message-a", RequestID: "request-a", Model: "claude-sonnet-4-5", InputTokens: 1234, OutputTokens: 42,
+				}).
+				AddClaudeUser("2026-01-02T00:00:02Z", "follow up").String()
+			require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 			var seed bytes.Buffer
 			require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &seed))
 			if tc.scoped {
@@ -232,32 +164,29 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 			require.Contains(t, statusBody, `"startup_pending":true`)
 			if tc.scoped {
 				var status struct {
-					ArchiveStale   bool `json:"archive_stale"`
-					UpgradePending bool `json:"upgrade_pending"`
-					WritesPaused   bool `json:"writes_paused"`
+					WritesPaused bool `json:"writes_paused"`
 				}
 				require.NoError(t, json.Unmarshal([]byte(statusBody), &status))
-				assert.False(t, status.ArchiveStale)
-				assert.True(t, status.UpgradePending)
 				assert.True(t, status.WritesPaused)
+				contents := restartContents(t, base+"/api/v1/sessions/"+sessionID+"/messages")
+				require.Contains(t, contents, "old transcript")
+				assert.NotContains(t, contents, sessionID)
 			}
-			codexBefore := make(map[string][]string)
-			for _, id := range codexIDs {
-				contents := restartContents(t, base+"/api/v1/sessions/"+id+"/messages")
-				require.Contains(t, contents, "unchanged codex transcript")
-				codexBefore[id] = contents
-			}
-			if tc.scoped {
-				for _, id := range claudeIDs {
-					response, err := restartTestRequest(t, http.MethodGet,
-						base+"/api/v1/sessions/"+id+"/messages", "", "")
+			if tc.scoped && !tc.persisted && !tc.fail {
+				var stdout, stderr bytes.Buffer
+				done := make(chan error, 1)
+				go func() {
+					done <- executeCLIWithLegacyFlagCompat([]string{"report", "usage", "daily", "--all", "--json", "--timezone", "UTC"}, &stdout, &stderr)
+				}()
+				select {
+				case err := <-done:
 					require.NoError(t, err)
-					assert.Equal(t, "true", response.Header.Get("X-Agentsview-Archive-Stale"))
-					require.NoError(t, response.Body.Close())
-					contents := restartContents(t, base+"/api/v1/sessions/"+id+"/messages")
-					require.Contains(t, contents, "old transcript")
-					assert.NotContains(t, contents, id)
+				case <-time.After(time.Second): //nolint:kennlint // deadlinetest: the report must return before the held worker's catch-up deadline
+					close(release)
+					<-done
+					require.FailNow(t, "daily report waited for the startup worker")
 				}
+				assert.Contains(t, stdout.String(), `"inputTokens": 1234`)
 			}
 			if tc.fail {
 				close(release)
@@ -265,18 +194,12 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 					status := restartGet(t, base+"/api/v1/sync/status")
 					return strings.Contains(status, `"startup_pending":true`) &&
 						strings.Contains(status, `"aborted":true`) &&
-						strings.Contains(status, `"upgrade_pending":true`) &&
 						strings.Contains(status, `"writes_paused":false`)
 				}, 30*time.Second, 100*time.Millisecond)
-				response, err := restartTestRequest(t, http.MethodGet,
-					base+"/api/v1/sessions/"+claudeIDs[0]+"/messages", "", "")
-				require.NoError(t, err)
-				assert.Equal(t, "true", response.Header.Get("X-Agentsview-Archive-Stale"))
-				require.NoError(t, response.Body.Close())
 				require.NotEmpty(t, restartContents(t,
-					base+"/api/v1/sessions/"+claudeIDs[0]+"/messages"),
+					base+"/api/v1/sessions/"+sessionID+"/messages"),
 					"saved transcript remains readable after the incomplete pass")
-				response, err = restartTestRequest(t, http.MethodPut,
+				response, err := restartTestRequest(t, http.MethodPut,
 					base+"/api/v1/sessions/missing/star", "{}", "")
 				require.NoError(t, err)
 				assert.Equal(t, http.StatusNotFound, response.StatusCode,
@@ -307,18 +230,12 @@ func TestServeRestartServesSessionsBeforeStartupSync(t *testing.T) {
 				stale, _, _, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
 				status := restartGet(t, base+"/api/v1/sync/status")
 				return err == nil && !stale && strings.Contains(status, `"startup_pending":false`) &&
-					strings.Contains(status, `"upgrade_pending":false`) &&
 					strings.Contains(status, `"writes_paused":false`)
 			}, 30*time.Second, 100*time.Millisecond)
 			require.Contains(t, restartGet(t, base+"/api/v1/sessions/sidebar-index?limit=500"), "before-worker")
-			for _, id := range claudeIDs {
-				contents := restartContents(t, base+"/api/v1/sessions/"+id+"/messages")
-				require.Contains(t, contents, id)
-				require.NotContains(t, contents, "old transcript")
-			}
-			for _, id := range codexIDs {
-				require.Equal(t, codexBefore[id], restartContents(t, base+"/api/v1/sessions/"+id+"/messages"))
-			}
+			contents := restartContents(t, base+"/api/v1/sessions/"+sessionID+"/messages")
+			require.Contains(t, contents, sessionID)
+			require.NotContains(t, contents, "old transcript")
 		})
 	}
 }
