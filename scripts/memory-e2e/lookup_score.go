@@ -50,6 +50,7 @@ var (
 	sessionProviderPrefix        = regexp.MustCompile(`(?i)(?:([a-z][a-z0-9_-]*):|/sessions/([a-z][a-z0-9_-]*)/)$`)
 	lookupJSONFence              = regexp.MustCompile("(?s)^\\s*```(?:json)?[ \\t]*\\r?\\n(.*?)\\r?\\n```\\s*$")
 	lookupSessionIDPattern       = regexp.MustCompile(`(?i)\b(?:([a-z][a-z0-9_-]*):)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b`)
+	lookupSessionURLPattern      = regexp.MustCompile(`(?i)/sessions/([a-z][a-z0-9_-]*)/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})`)
 	transcriptFileSessionPattern = regexp.MustCompile(`(?i)(?:rollout-[^\s"'<>|;]*?-)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl`)
 	transcriptReaderPattern      = regexp.MustCompile(`(?i)(?:^|[;&|]\s*)(?:\S*[/\\])?(?:cat|head|tail|sed|awk|less|more|grep|rg|jq)(?:\s|$)`)
 	lookupCLIReadPattern         = regexp.MustCompile(`(?i)^[ \t]*agentsview[ \t]+session[ \t]+messages[ \t]+((?:[a-z][a-z0-9_-]*:)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[ \t]+--[a-z][a-z0-9-]*(?:[= \t]+[a-z0-9_][a-z0-9_,.+-]*)?)*[ \t]*$`)
@@ -58,6 +59,12 @@ var (
 )
 
 func routeFor(name, input string) string {
+	if name == "ToolSearch" {
+		if strings.Contains(strings.ToLower(input), "agentsview") {
+			return "other"
+		}
+		return ""
+	}
 	if strings.Contains(name, "mcp__agentsview__") || strings.HasPrefix(name, "agentsview:") {
 		return "mcp"
 	}
@@ -449,6 +456,9 @@ func lookupEvidenceFragments(result, fallback string, nativeTranscript bool) []l
 	var fragments []lookupEvidenceFragment
 	sourceID := fallback
 	for line := range strings.SplitSeq(result, "\n") {
+		if id := lookupTextSessionID(line); id != "" {
+			sourceID = id
+		}
 		var value any
 		if json.Unmarshal([]byte(line), &value) == nil {
 			if nativeTranscript {
@@ -513,6 +523,28 @@ func transcriptPathSessionID(text string) string {
 	return matches[0][2]
 }
 
+func lookupTextSessionID(text string) string {
+	var sourceID string
+	setSourceID := func(id string) bool {
+		if sourceID != "" && sourceID != id {
+			return false
+		}
+		sourceID = id
+		return true
+	}
+	for _, match := range lookupSessionIDPattern.FindAllStringSubmatch(text, -1) {
+		if match[1] != "" && !setSourceID(match[1]+":"+match[2]) {
+			return ""
+		}
+	}
+	for _, match := range lookupSessionURLPattern.FindAllStringSubmatch(text, -1) {
+		if !setSourceID(match[1] + ":" + match[2]) {
+			return ""
+		}
+	}
+	return sourceID
+}
+
 func collectLookupEvidence(value any, inherited string, fragments *[]lookupEvidenceFragment) {
 	switch value := value.(type) {
 	case string:
@@ -524,6 +556,9 @@ func collectLookupEvidence(value any, inherited string, fragments *[]lookupEvide
 		sourceID := inherited
 		if sourceID == "" {
 			sourceID = transcriptPathSessionID(value)
+		}
+		if sourceID == "" {
+			sourceID = lookupTextSessionID(value)
 		}
 		if sourceID != "" && strings.TrimSpace(value) != "" {
 			*fragments = append(*fragments, lookupEvidenceFragment{SessionID: sourceID, Text: value})
@@ -569,7 +604,7 @@ func collectLookupEvidence(value any, inherited string, fragments *[]lookupEvide
 func scoreLookupQuestion(q lookupQuestion, answer string, calls []lookupCall, runErr error) lookupScore {
 	sourceID, valid := lookupAnswerSource(q, answer)
 	values, supported := lookupSupportedAnswerValues(q, sourceID, answer, calls)
-	valid = valid && supported
+	valid = valid && (supported || lookupCaptureIncomplete(runErr))
 	var expected []lookupItem
 	if valid {
 		for _, item := range q.Expected {
@@ -697,10 +732,7 @@ func scoreLookupEvidence(
 		calls = make([]lookupCall, 0)
 	}
 	s := lookupScore{Verdict: "failed"}
-	captureIncomplete := errors.Is(runErr, errCaptureIncomplete) &&
-		!errors.Is(runErr, context.Canceled) &&
-		!errors.Is(runErr, context.DeadlineExceeded) &&
-		!errors.Is(runErr, errLookupClientFailed)
+	captureIncomplete := lookupCaptureIncomplete(runErr)
 	var cited []lookupItem
 	for _, item := range expected {
 		if containsItem(answer, item) {
@@ -789,7 +821,7 @@ func scoreLookupEvidence(
 	count := 0
 	for _, c := range calls {
 		lower := strings.ToLower(c.Input)
-		if c.Route == "other" && c.Name != "tool discovery" && c.Name != "exec" && !toolDescriptionLookup(lower) {
+		if c.Route == "other" && c.Name != "tool discovery" && c.Name != "ToolSearch" && c.Name != "exec" && !toolDescriptionLookup(lower) {
 			continue
 		}
 		if c.Start > hit.End {
@@ -813,6 +845,13 @@ func scoreLookupEvidence(
 	s.Verdict = "success"
 	s.CallsToHit = &count
 	return s
+}
+
+func lookupCaptureIncomplete(runErr error) bool {
+	return errors.Is(runErr, errCaptureIncomplete) &&
+		!errors.Is(runErr, context.Canceled) &&
+		!errors.Is(runErr, context.DeadlineExceeded) &&
+		!errors.Is(runErr, errLookupClientFailed)
 }
 
 func toolDescriptionLookup(input string) bool {

@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"testing"
 	"time"
 
@@ -46,7 +47,7 @@ func TestLookupIsolationReadsOnlyFixtureHome(t *testing.T) {
 	require.NoError(t, os.WriteFile(prior, []byte("prior"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "probe"), []byte("fixture"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(home, ".codex", "auth.json"), []byte("{}"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(binDir, "codex"), []byte("#!/bin/sh\nif [ -r \"$PRIVATE_PATH\" ] || [ -r \"$PRIOR_PATH\" ] || [ -n \"${ANTHROPIC_API_KEY:-}\" ] || [ -n \"${OPENAI_API_KEY:-}\" ]; then echo leaked; else echo hidden; fi\ncat \"$AGENTSVIEW_DATA_DIR/probe\"\ncat \"$HOME/.agentsview/probe\"\ncat \"$HOME/.codex/sessions/fixture.jsonl\"\n"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "codex"), []byte("#!/bin/sh\nif [ -r \"$PRIVATE_PATH\" ] || [ -r \"$PRIOR_PATH\" ] || [ -r \"/proc/$HOST_PID/root$PRIVATE_PATH\" ] || [ -n \"${ANTHROPIC_API_KEY:-}\" ] || [ -n \"${OPENAI_API_KEY:-}\" ]; then echo leaked; else echo hidden; fi\ncat \"$AGENTSVIEW_DATA_DIR/probe\"\ncat \"$HOME/.agentsview/probe\"\ncat \"$HOME/.codex/sessions/fixture.jsonl\"\nprintf 'new transcript' > \"$HOME/.codex/sessions/fresh.jsonl\"\n"), 0o700))
 	require.NoError(t, os.Symlink(bwrap, filepath.Join(binDir, "bwrap")))
 	bin := filepath.Join(binDir, "agentsview")
 	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o700))
@@ -59,10 +60,13 @@ func TestLookupIsolationReadsOnlyFixtureHome(t *testing.T) {
 	require.NoError(t, err)
 	cmd := exec.CommandContext(t.Context(), isolation.command)
 	cmd.Env = append(cmd.Env, isolation.env...)
-	cmd.Env = append(cmd.Env, "PRIVATE_PATH="+private, "PRIOR_PATH="+prior)
+	cmd.Env = append(cmd.Env, "PRIVATE_PATH="+private, "PRIOR_PATH="+prior, "HOST_PID="+strconv.Itoa(os.Getpid()))
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(out))
 	assert.Equal(t, "hidden\nfixturefixturefixture transcript", string(out))
+	data, err := os.ReadFile(filepath.Join(runDir, "home", ".codex", "sessions", "fresh.jsonl"))
+	require.NoError(t, err)
+	assert.Equal(t, "new transcript", string(data))
 	isolation.removeCredentials()
 	_, err = os.Stat(filepath.Join(runDir, "home", ".codex", "auth.json"))
 	require.ErrorIs(t, err, os.ErrNotExist)
@@ -70,6 +74,57 @@ func TestLookupIsolationReadsOnlyFixtureHome(t *testing.T) {
 	require.NoError(t, os.Remove(filepath.Join(home, ".codex", "auth.json")))
 	_, err = prepareLookupIsolation(t.Context(), clientCodex, clientDir, project, project, bin, filepath.Join(clientDir, "missing-auth"), transcriptsRoot)
 	require.ErrorContains(t, err, "missing codex credentials")
+}
+
+func TestLookupIsolationRequiresNodeOnlyForNodeScripts(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("bubblewrap is Linux-only")
+	}
+	bwrap, err := exec.LookPath("bwrap")
+	if err != nil {
+		t.Skip("bubblewrap unavailable")
+	}
+	for _, tc := range []struct {
+		name, script string
+		withNode     bool
+		wantErr      string
+	}{
+		{name: "standalone executable", script: "#!/bin/sh\nexit 0\n"},
+		{name: "node mentioned in comment", script: "#!/bin/sh\n# node is not the interpreter\nexit 0\n"},
+		{name: "node executable without Node", script: "#!/usr/bin/env node\n", wantErr: "executable file not found"},
+		{name: "node executable with Node", script: "#!/usr/bin/env node\n", withNode: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			clientDir := filepath.Join(home, "fixture")
+			project := filepath.Join(clientDir, "project")
+			dataDir := filepath.Join(clientDir, "agentsview-data")
+			runDir := filepath.Join(clientDir, "attempt")
+			binDir := filepath.Join(clientDir, "bin")
+			transcriptsRoot := filepath.Join(clientDir, "sessions")
+			configDir := filepath.Join(home, ".claude")
+			for _, dir := range []string{project, dataDir, runDir, binDir, transcriptsRoot, configDir} {
+				require.NoError(t, os.MkdirAll(dir, 0o700))
+			}
+			require.NoError(t, os.WriteFile(filepath.Join(configDir, ".credentials.json"), []byte("{}"), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(binDir, "claude"), []byte(tc.script), 0o700))
+			require.NoError(t, os.WriteFile(filepath.Join(binDir, "agentsview"), []byte("#!/bin/sh\nexit 0\n"), 0o700))
+			require.NoError(t, os.Symlink(bwrap, filepath.Join(binDir, "bwrap")))
+			if tc.withNode {
+				require.NoError(t, os.WriteFile(filepath.Join(binDir, "node"), []byte("#!/bin/sh\nexit 0\n"), 0o700))
+			}
+			t.Setenv("HOME", home)
+			t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+			t.Setenv("PATH", binDir)
+			isolation, err := prepareLookupIsolation(t.Context(), clientClaude, clientDir, project, project, filepath.Join(binDir, "agentsview"), runDir, transcriptsRoot)
+			if tc.wantErr != "" {
+				require.ErrorContains(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			isolation.removeCredentials()
+		})
+	}
 }
 
 func TestLookupIsolationRejectsOutputOutsideHiddenRoots(t *testing.T) {

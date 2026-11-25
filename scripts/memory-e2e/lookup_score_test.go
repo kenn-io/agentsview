@@ -166,6 +166,24 @@ func TestLookupCodexToolDiscoveryIsOneCall(t *testing.T) {
 	assert.Equal(t, "mcp", calls[1].Route)
 }
 
+func TestLookupClaudeToolSearchCountsAsDiscovery(t *testing.T) {
+	trace := `{"timestamp":"2026-11-24T11:59:58Z","message":{"content":[{"type":"tool_use","id":"other","name":"ToolSearch","input":{"query":"select:browser__search"}}]}}
+{"timestamp":"2026-11-24T11:59:59Z","message":{"content":[{"type":"tool_result","tool_use_id":"other","content":"Found a browser search tool."}]}}
+{"timestamp":"2026-11-24T12:00:00Z","message":{"content":[{"type":"tool_use","id":"discover","name":"ToolSearch","input":{"query":"select:mcp__agentsview__search_content"}}]}}
+{"timestamp":"2026-11-24T12:00:01Z","message":{"content":[{"type":"tool_result","tool_use_id":"discover","content":"Found the AgentsView search tool."}]}}
+{"timestamp":"2026-11-24T12:00:02Z","message":{"content":[{"type":"tool_use","id":"search","name":"mcp__agentsview__search_content","input":{}}]}}
+{"timestamp":"2026-11-24T12:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"search","content":"{\"session_id\":\"codex:` + lookupID + `\",\"snippet\":\"violet ledger\"}"}]}}`
+	calls, err := extractLookupCalls(clientClaude, [][]byte{[]byte(trace)})
+	require.NoError(t, err)
+	require.Len(t, calls, 2)
+	assert.Equal(t, "ToolSearch", calls[0].Name)
+	assert.Equal(t, "other", calls[0].Route)
+	score := scoreLookup(lookupID+" violet ledger", []lookupItem{{SessionID: lookupID}}, []string{"violet ledger"}, calls, nil)
+	assert.Equal(t, "success", score.Verdict)
+	require.NotNil(t, score.CallsToHit)
+	assert.Equal(t, 2, *score.CallsToHit)
+}
+
 func TestLookupClaudePairsResultsAndScoresFirstHit(t *testing.T) {
 	trace := `{"timestamp":"2026-11-24T12:00:00Z","message":{"content":[{"type":"tool_use","id":"1","name":"mcp__agentsview__search_content","input":{}}]}}
 {"timestamp":"2026-11-24T12:00:01Z","message":{"content":[{"type":"tool_result","tool_use_id":"1","content":"empty"}]}}
@@ -515,6 +533,56 @@ func TestLookupAcceptsSourceExcerpts(t *testing.T) {
 				}
 			}
 			require.FailNow(t, "question missing")
+		})
+	}
+}
+
+func TestLookupHumanReadableSearchRowsKeepEvidenceSeparate(t *testing.T) {
+	wanted := lookupItem{SessionID: "codex:" + lookupID}
+	other := lookupItem{SessionID: "codex:22222222-2222-4222-8222-222222222222"}
+	call := lookupCall{
+		Route: "mcp",
+		Result: "Search results\n" +
+			"session_id: " + wanted.SessionID + "\n" +
+			"snippet: violet ledger namespace\n" +
+			"context_after:\nThe old namespace caused lock contention.\n" +
+			"web_url: https://example.test/sessions/codex/" + strings.TrimPrefix(other.SessionID, "codex:") + "\n" +
+			"snippet: copper ledger namespace\n",
+	}
+	wantedEvidence := lookupEvidence(call, wanted)
+	otherEvidence := lookupEvidence(call, other)
+	assert.Contains(t, wantedEvidence, "violet ledger namespace")
+	assert.Contains(t, wantedEvidence, "old namespace caused lock contention")
+	assert.NotContains(t, wantedEvidence, "copper ledger namespace")
+	assert.Contains(t, otherEvidence, "copper ledger namespace")
+	assert.NotContains(t, otherEvidence, "violet ledger namespace")
+}
+
+func TestLookupCorrectJSONAnswerWithIncompleteCaptureIsUnscored(t *testing.T) {
+	item := lookupItem{SessionID: "codex:" + lookupID}
+	question := lookupQuestion{
+		Name:           "named",
+		Expected:       []lookupItem{item},
+		ExpectedAnswer: map[string]string{"release_marker": "north pier marker"},
+	}
+	for _, tc := range []struct {
+		name, answer, verdict string
+	}{
+		{
+			name:    "correct answer",
+			answer:  `{"release_marker":"north pier marker","source_session_id":"` + item.SessionID + `"}`,
+			verdict: "unscored",
+		},
+		{
+			name:    "wrong answer",
+			answer:  `{"release_marker":"south pier marker","source_session_id":"` + item.SessionID + `"}`,
+			verdict: "failed",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			score := scoreLookupQuestion(question, tc.answer, nil, errCaptureIncomplete)
+			assert.Equal(t, tc.verdict, score.Verdict)
+			assert.Nil(t, score.CallsToHit)
 		})
 	}
 }

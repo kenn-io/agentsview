@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -69,22 +70,9 @@ func prepareLookupIsolation(ctx context.Context, client clientName, clientDir, r
 		return lookupIsolation{}, err
 	}
 	node := ""
-	needsNode := client == clientClaude
-	if !needsNode {
-		file, err := os.Open(executable)
-		if err != nil {
-			return lookupIsolation{}, err
-		}
-		buf := make([]byte, 4096)
-		n, readErr := file.Read(buf)
-		closeErr := file.Close()
-		if readErr != nil && n == 0 {
-			return lookupIsolation{}, readErr
-		}
-		if closeErr != nil {
-			return lookupIsolation{}, closeErr
-		}
-		needsNode = strings.HasPrefix(string(buf[:n]), "#!") && strings.Contains(string(buf[:n]), "node")
+	needsNode, err := lookupExecutableNeedsNode(executable)
+	if err != nil {
+		return lookupIsolation{}, err
 	}
 	if needsNode {
 		node, err = lookupExecutable(ctx, "node")
@@ -103,6 +91,11 @@ func prepareLookupIsolation(ctx context.Context, client clientName, clientDir, r
 	fixtureSessions := filepath.Join(providerHome, "sessions")
 	if err := os.MkdirAll(fixtureSessions, 0o700); err != nil {
 		return lookupIsolation{}, err
+	}
+	if client == clientCodex {
+		if err := copyLookupTranscripts(ctx, transcriptsRoot, fixtureSessions); err != nil {
+			return lookupIsolation{}, err
+		}
 	}
 	if err := os.Symlink(filepath.Join(clientDir, "agentsview-data"), filepath.Join(privateHome, ".agentsview")); err != nil {
 		return lookupIsolation{}, err
@@ -163,11 +156,11 @@ func prepareLookupIsolation(ctx context.Context, client clientName, clientDir, r
 		parents = append(parents, p)
 	}
 	sort.Slice(parents, func(i, j int) bool { return len(parents[i]) < len(parents[j]) })
-	argv := []string{bwrap, "--die-with-parent", "--ro-bind", "/", "/", "--tmpfs", home, "--tmpfs", "/tmp"}
+	argv := []string{bwrap, "--die-with-parent", "--unshare-pid", "--ro-bind", "/", "/", "--tmpfs", home, "--tmpfs", "/tmp", "--proc", "/proc"}
 	for _, p := range parents {
 		argv = append(argv, "--dir", p)
 	}
-	argv = append(argv, "--bind", project, project, "--bind", dataDir, dataDir, "--bind", privateHome, privateHome, "--ro-bind", bin, bin, "--ro-bind", transcriptsRoot, fixtureSessions)
+	argv = append(argv, "--bind", project, project, "--bind", dataDir, dataDir, "--bind", privateHome, privateHome, "--ro-bind", bin, bin)
 	for _, p := range mounts[4:] {
 		argv = append(argv, "--ro-bind", p, p)
 	}
@@ -207,6 +200,54 @@ func prepareLookupIsolation(ctx context.Context, client clientName, clientDir, r
 		rootDir = filepath.Join(providerHome, "projects")
 	}
 	return lookupIsolation{command: wrapper, env: env, providerRoot: rootDir, credentials: credentials}, nil
+}
+
+func lookupExecutableNeedsNode(path string) (bool, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	buf := make([]byte, 4096)
+	n, readErr := file.Read(buf)
+	closeErr := file.Close()
+	if readErr != nil && n == 0 {
+		return false, readErr
+	}
+	if closeErr != nil {
+		return false, closeErr
+	}
+	shebang := string(buf[:n])
+	if line, _, ok := strings.Cut(shebang, "\n"); ok {
+		shebang = line
+	}
+	return strings.HasPrefix(shebang, "#!") && strings.Contains(strings.ToLower(shebang), "node"), nil
+}
+
+func copyLookupTranscripts(ctx context.Context, source, destination string) error {
+	return filepath.WalkDir(source, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(destination, rel)
+		if entry.IsDir() {
+			return os.MkdirAll(target, 0o700)
+		}
+		if !entry.Type().IsRegular() {
+			return fmt.Errorf("lookup isolation: unsupported transcript entry %q", rel)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, 0o600)
+	})
 }
 
 func requireHiddenLookupPaths(home string, paths ...string) error {
