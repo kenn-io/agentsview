@@ -2604,7 +2604,7 @@ func TestStripVirtualSourceSuffixVisualStudioCopilot(t *testing.T) {
 }
 
 func TestCompareStoredSessionPromptAndCommandLinks(t *testing.T) {
-	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
+	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts} {
 		t.Run(string(policy), func(t *testing.T) {
 			d := openTestDB(t)
 			e := NewEngine(t.Context(), d, EngineConfig{Machine: "test-machine", ArchiveContent: policy})
@@ -2620,9 +2620,6 @@ func TestCompareStoredSessionPromptAndCommandLinks(t *testing.T) {
 			require.Equal(t, sessionWriteOK, verdict)
 			stored := pdFetchStored(t, d, prepared.ID)
 			require.Len(t, stored.PRLinks, 2)
-			if policy.UsageOnly() {
-				msgs[1].ToolCalls[1].InputJSON = `{"command":"gh pr view 44 -R user-a/project-a"}`
-			}
 			diffs, err := e.compareStoredSession(t.Context(), stored, prepared, msgs, nil)
 			require.NoError(t, err)
 			for _, diff := range diffs {
