@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -85,9 +86,7 @@ func (s *Store) storeFrustrationCountsForRead(versions map[string]string, counts
 			}
 			// Saves outlive requests but stop when the store closes.
 			queue.write.Lock()
-			ctx, cancel := context.WithTimeout(queue.ctx, frustrationFillChunkTimeout)
-			skipped, err := s.writeFrustrationCounts(ctx, versions, counts, versionColumn)
-			cancel()
+			skipped, err := s.writeFrustrationCounts(queue.ctx, versions, counts, versionColumn)
 			queue.write.Unlock()
 			if err != nil {
 				if !isUndefinedTable(err) && !IsReadOnlyError(err) && queue.ctx.Err() == nil {
@@ -110,31 +109,38 @@ func (s *Store) storeFrustrationCounts(ctx context.Context, versions map[string]
 
 func (s *Store) writeFrustrationCounts(ctx context.Context, versions map[string]string, counts map[string]int, versionColumn string) (map[string]string, error) {
 	if s.cockroach {
-		return s.writeFrustrationCountBatch(ctx, versions, counts, versionColumn)
+		batchCtx, cancel := context.WithTimeout(ctx, frustrationFillChunkTimeout)
+		defer cancel()
+		return s.writeFrustrationCountBatch(batchCtx, versions, counts, versionColumn)
 	}
 	// Bound the transaction-scoped advisory locks held by each statement.
 	remaining := make(map[string]string)
 	batch := make(map[string]string)
+	writeBatch := func() error {
+		batchCtx, cancel := context.WithTimeout(ctx, frustrationFillChunkTimeout)
+		skipped, err := s.writeFrustrationCountBatch(batchCtx, batch, counts, versionColumn)
+		cancel()
+		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			skipped = batch
+			err = nil
+		}
+		for id, version := range skipped {
+			remaining[id] = version
+		}
+		return err
+	}
 	for id, version := range versions {
 		batch[id] = version
 		if len(batch) == 512 {
-			skipped, err := s.writeFrustrationCountBatch(ctx, batch, counts, versionColumn)
-			if err != nil {
+			if err := writeBatch(); err != nil {
 				return nil, err
-			}
-			for id, version := range skipped {
-				remaining[id] = version
 			}
 			clear(batch)
 		}
 	}
 	if len(batch) > 0 {
-		skipped, err := s.writeFrustrationCountBatch(ctx, batch, counts, versionColumn)
-		if err != nil {
+		if err := writeBatch(); err != nil {
 			return nil, err
-		}
-		for id, version := range skipped {
-			remaining[id] = version
 		}
 	}
 	return remaining, nil
@@ -169,7 +175,6 @@ func (s *Store) writeFrustrationCountBatch(ctx context.Context, versions map[str
 	if err != nil {
 		return nil, fmt.Errorf("writing frustration counts: %w", err)
 	}
-	defer rows.Close()
 	remaining := make(map[string]string, len(versions))
 	for id, version := range versions {
 		remaining[id] = version
@@ -177,14 +182,45 @@ func (s *Store) writeFrustrationCountBatch(ctx context.Context, versions map[str
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
+			rows.Close()
 			return nil, fmt.Errorf("reading saved frustration counts: %w", err)
 		}
 		delete(remaining, id)
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		return nil, fmt.Errorf("reading saved frustration counts: %w", err)
 	}
-	return remaining, nil
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("closing saved frustration counts: %w", err)
+	}
+	if len(remaining) == 0 {
+		return remaining, nil
+	}
+	// A changed session or a newer rules version cannot be saved by retrying.
+	ids = ids[:0]
+	for id := range remaining {
+		ids = append(ids, id)
+	}
+	rows, err = s.DB().QueryContext(ctx, `SELECT s.id, `+frustrationSessionVersion("s."+versionColumn)+` FROM sessions s LEFT JOIN session_frustration_counts c ON c.session_id = s.id WHERE s.id = ANY($1) AND (c.session_id IS NULL OR c.rules_version <= $2)`, ids, frustrationMarkerRulesVersion)
+	if err != nil {
+		return nil, fmt.Errorf("checking skipped frustration counts: %w", err)
+	}
+	defer rows.Close()
+	retry := make(map[string]string)
+	for rows.Next() {
+		var id, version string
+		if err := rows.Scan(&id, &version); err != nil {
+			return nil, err
+		}
+		if remaining[id] == version {
+			retry[id] = version
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return retry, nil
 }
 
 func (s *Store) scanFrustrationCounts(ctx context.Context, ids []string, versionColumn string) (map[string]int, map[string]string, error) {

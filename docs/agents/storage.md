@@ -1496,8 +1496,8 @@ requests with the same cacheable filter share one load. Requests save scanned
 counts, including zero counts, in the background without delaying the response.
 A save skips rows held by another writer and sessions changed before the write
 starts. Background saves and the fill retry skipped rows a few times. A sync
-overlapping the save can leave a stale row; later reads reject that row and recount the session. Closing the store
-cancels pending saves.
+overlapping the save can leave a stale row; later reads reject that row and
+recount the session. Closing the store cancels pending saves.
 
 A read-only role reuses rows it can read and scans misses without saving them.
 The table is optional for push. A missing table falls back to scanning. Hosted

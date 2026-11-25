@@ -57,6 +57,26 @@ func waitFrustrationSave(store *Store) {
 	store.runtimeState().frustrationSaves.wg.Wait()
 }
 
+func TestFrustrationSaveDoesNotRetryUnwritableCounts(t *testing.T) {
+	t.Parallel()
+	f := newFrustrationFixture(t, "agentsview")
+	store := f.open(t)
+	counts, versions, err := store.scanFrustrationCounts(f.ctx, []string{"one", "two"}, f.versionColumn)
+	require.NoError(t, err)
+	_, err = f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts (session_id, session_version, rules_version, marker_count) VALUES ('one', $1, $2, 7)`, versions["one"], frustrationMarkerRulesVersion+1)
+	require.NoError(t, err)
+	_, err = f.pg.ExecContext(f.ctx, `UPDATE sessions SET updated_at = now() WHERE id = 'two'`)
+	require.NoError(t, err)
+	skipped, err := store.writeFrustrationCounts(f.ctx, versions, counts, f.versionColumn)
+	require.NoError(t, err)
+	require.Empty(t, skipped)
+	var count int
+	require.NoError(t, f.pg.QueryRowContext(f.ctx, `SELECT marker_count FROM session_frustration_counts WHERE session_id = 'one'`).Scan(&count))
+	require.Equal(t, 7, count)
+	store.storeFrustrationCountsForRead(versions, counts, f.versionColumn)
+	waitFrustrationSave(store)
+}
+
 func (f *frustrationFixture) replace(t *testing.T, id, content string) {
 	t.Helper()
 	session := db.Session{ID: id, Agent: "claude", Project: "sample", Machine: "workstation", MessageCount: 1}
