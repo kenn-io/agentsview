@@ -180,6 +180,7 @@ func TestLookupCaptureClassifiesSetupAndClientFailures(t *testing.T) {
 		{
 			name: "invalid model", executable: "claude", client: clientClaude,
 			script: func(t *testing.T, runDir string) string {
+				t.Helper()
 				root, err := lookupTranscriptRoot(clientClaude, filepath.Join(runDir, "home"), project)
 				require.NoError(t, err)
 				return "#!/bin/sh\nwhile [ $# -gt 0 ]; do if [ \"$1\" = --session-id ]; then shift; sid=$1; fi; shift; done\n" +
