@@ -330,11 +330,73 @@ func containsItem(text string, item lookupItem) bool {
 	return containsSessionID(text, item.SessionID)
 }
 
-func callContainsItem(call lookupCall, item lookupItem) bool {
-	if containsItem(call.Result, item) {
-		return true
+// lookupEvidence keeps search results for different sessions separate.
+func lookupEvidence(call lookupCall, item lookupItem) string {
+	if sessionReadMatches(call, item) || (call.Route == "direct" && strings.Contains(call.Result, `"type":"session_meta"`) && containsItem(call.Result, item)) {
+		return call.Result
 	}
-	return sessionReadMatches(call, item)
+	var evidence []string
+	var visit func(any) bool
+	visit = func(value any) bool {
+		switch value := value.(type) {
+		case string:
+			var decoded any
+			if json.Unmarshal([]byte(value), &decoded) == nil {
+				return visit(decoded)
+			}
+			if containsItem(value, item) {
+				evidence = append(evidence, value)
+				return true
+			}
+		case []any:
+			found := false
+			for _, child := range value {
+				found = visit(child) || found
+			}
+			return found
+		case map[string]any:
+			found := false
+			for _, child := range value {
+				if _, nested := child.(map[string]any); nested {
+					found = visit(child) || found
+				} else if _, nested := child.([]any); nested {
+					found = visit(child) || found
+				}
+			}
+			if !found && containsItem(rawText(value), item) {
+				evidence = append(evidence, rawText(value))
+				return true
+			}
+			return found
+		}
+		return false
+	}
+	for _, line := range strings.Split(call.Result, "\n") {
+		var value any
+		if json.Unmarshal([]byte(line), &value) == nil {
+			visit(value)
+		} else {
+			visit(line)
+		}
+	}
+	return strings.Join(evidence, "\n")
+}
+
+var ownerAnswerPattern = regexp.MustCompile(`(?i)\b(?:maple(?:\s+team)?\s+(?:now\s+|currently\s+)?(?:owns|took over|is (?:the |now the |currently the )?owner)|(?:owner|team)(?:\s+is|:)\s+(?:the\s+)?maple(?:\s+team)?)\b`)
+var negatedOwnerPattern = regexp.MustCompile(`(?i)\b(?:not|never|neither|isn't|wasn't)\b[^.!?\n]*\bmaple\b|\bmaple\b[^.!?\n]*\b(?:does not|doesn't|is not|isn't|was not|wasn't|never)\b`)
+
+func scoreLookupQuestion(q lookupQuestion, answer string, calls []lookupCall, runErr error) lookupScore {
+	s := scoreLookup(answer, q.Expected, q.Phrases, calls, runErr)
+	shortAnswer := answer
+	for _, item := range q.Expected {
+		shortAnswer = strings.ReplaceAll(shortAnswer, item.SessionID, "")
+	}
+	shortAnswer = normalizePhrase(shortAnswer)
+	if q.Name == "owner" && strings.TrimSpace(answer) != "" && (negatedOwnerPattern.MatchString(answer) || (!ownerAnswerPattern.MatchString(answer) && shortAnswer != "maple" && shortAnswer != "maple team")) {
+		s.Verdict = "failed"
+		s.CallsToHit = nil
+	}
+	return s
 }
 
 func sessionReadMatches(call lookupCall, item lookupItem) bool {
@@ -426,12 +488,34 @@ func scoreLookup(answer string, expected []lookupItem, phrases []string, calls [
 		if c.Truncated {
 			s.Truncated++
 		}
-		if !c.Error && !c.Missing && !c.Empty && strings.TrimSpace(c.Result) != "" && (hit == nil || c.End < hit.End) {
-			for _, item := range cited {
-				if callContainsItem(*c, item) {
+	}
+	ordered := make([]int, len(calls))
+	for i := range ordered {
+		ordered[i] = i
+	}
+	sort.SliceStable(ordered, func(i, j int) bool { return calls[ordered[i]].End < calls[ordered[j]].End })
+	for _, item := range cited {
+		var evidence strings.Builder
+		for _, index := range ordered {
+			c := &calls[index]
+			if c.Error || c.Missing || c.Empty || strings.TrimSpace(c.Result) == "" {
+				continue
+			}
+			part := lookupEvidence(*c, item)
+			if part == "" {
+				continue
+			}
+			evidence.WriteString(" ")
+			evidence.WriteString(part)
+			complete := true
+			for _, phrase := range phrases {
+				complete = complete && strings.Contains(normalizePhrase(evidence.String()), normalizePhrase(phrase))
+			}
+			if complete {
+				if hit == nil || c.End < hit.End {
 					hit = c
-					break
 				}
+				break
 			}
 		}
 	}

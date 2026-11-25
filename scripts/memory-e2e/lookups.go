@@ -227,7 +227,7 @@ func runLookupClient(
 			a.DurationMS = time.Since(started).Milliseconds()
 			a.Error = scoreError(runErr)
 			a.Artifacts = relativeArtifact(cfg.outputDir, runDir)
-			a.Score = scoreLookup(answer, q.Expected, q.Phrases, calls, runErr)
+			a.Score = scoreLookupQuestion(q, answer, calls, runErr)
 			if err := writeJSON(filepath.Join(dir, "attempts.json"), report.Attempts); err != nil {
 				return report, err
 			}

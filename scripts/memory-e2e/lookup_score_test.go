@@ -212,8 +212,8 @@ func TestLookupScoringRoutesAndEvidence(t *testing.T) {
 		verdict      string
 		hit          int
 	}{
-		{"session result", "codex:" + lookupID + " violet ledger", []lookupCall{{Route: "mcp", Result: lookupID, Start: 1, End: 2}}, nil, "success", 1},
-		{"result needs no answer phrase", "codex:" + lookupID + " violet ledger", []lookupCall{{Route: "mcp", Result: lookupID + " other", Start: 1, End: 2}}, nil, "success", 1},
+		{"session result", "codex:" + lookupID + " violet ledger", []lookupCall{{Route: "mcp", Result: lookupID + " violet ledger", Start: 1, End: 2}}, nil, "success", 1},
+		{"result lacks answer phrase", "codex:" + lookupID + " violet ledger", []lookupCall{{Route: "mcp", Result: lookupID + " other", Start: 1, End: 2}}, nil, "unscored", 0},
 		{"empty session read", "codex:" + lookupID + " violet ledger", []lookupCall{{Name: "get_messages", Route: "mcp", Input: lookupID, Result: `{"messages":[]}`, Empty: true, Start: 1, End: 2}}, nil, "unscored", 0},
 		{"empty direct output", "codex:" + lookupID + " violet ledger", []lookupCall{{Route: "direct", Input: lookupID, Result: "", Start: 1, End: 2}}, nil, "unscored", 0},
 		{"failed session read", "codex:" + lookupID + " violet ledger", []lookupCall{{Route: "direct", Input: lookupID, Result: "error", Error: true, Start: 1, End: 2}}, nil, "unscored", 0},
@@ -303,7 +303,7 @@ func TestLookupDirectSessionInInput(t *testing.T) {
 		{"cli", "agentsview session show codex:" + lookupID},
 	} {
 		t.Run(tc.route+tc.input, func(t *testing.T) {
-			call := lookupCall{Route: tc.route, Input: tc.input, Result: "recorded content", Start: 1, End: 2}
+			call := lookupCall{Route: tc.route, Input: tc.input, Result: "recorded answer", Start: 1, End: 2}
 			score := scoreLookup("codex:"+lookupID+" answer", []lookupItem{item}, []string{"answer"}, []lookupCall{call}, nil)
 			assert.Equal(t, "success", score.Verdict)
 			require.NotNil(t, score.CallsToHit)
@@ -318,8 +318,8 @@ func TestLookupDirectSessionInInput(t *testing.T) {
 
 func TestReviewDirectReadFixture(t *testing.T) {
 	for _, result := range []string{
-		`{"type":"session_meta","payload":{"id":"` + lookupID + `"}}` + "\n" + `{"payload":{"content":"other"}}`,
-		`{"sessionId":"` + lookupID + `","message":{"content":"other"}}`,
+		`{"type":"session_meta","payload":{"id":"` + lookupID + `"}}` + "\n" + `{"payload":{"content":"answer"}}`,
+		`{"sessionId":"` + lookupID + `","message":{"content":"answer"}}`,
 	} {
 		call := lookupCall{Route: "direct", Result: result, Start: 1, End: 2}
 		score := scoreLookup("codex:"+lookupID+" answer", []lookupItem{{SessionID: "codex:" + lookupID}}, []string{"answer"}, []lookupCall{call}, nil)
@@ -333,12 +333,43 @@ func TestReviewAnswerAcrossPages(t *testing.T) {
 	id := "codex:" + lookupID
 	calls := []lookupCall{
 		{Name: "get_messages", Route: "mcp", Input: id, Result: `{"messages":[{"content":"first page"}]}`, Start: 1, End: 2},
-		{Name: "get_messages", Route: "mcp", Input: id, Result: `{"messages":[{"content":"second page"}]}`, Start: 3, End: 4},
+		{Name: "get_messages", Route: "mcp", Input: id, Result: `{"messages":[{"content":"second page answer"}]}`, Start: 3, End: 4},
 	}
 	score := scoreLookup(id+" answer", []lookupItem{{SessionID: id}}, []string{"answer"}, calls, nil)
 	assert.Equal(t, "success", score.Verdict)
 	require.NotNil(t, score.CallsToHit)
-	assert.Equal(t, 1, *score.CallsToHit)
+	assert.Equal(t, 2, *score.CallsToHit)
+}
+
+func TestLookupAccumulatesFactsForCitedSession(t *testing.T) {
+	item := lookupItem{SessionID: "codex:" + lookupID}
+	calls := []lookupCall{
+		{Route: "mcp", Result: lookupID + " violet ledger", Start: 1, End: 2},
+		{Route: "mcp", Result: `{"results":[{"session_id":"` + lookupID + `","content":"other"},{"session_id":"22222222-2222-4222-8222-222222222222","content":"lock contention"}]}`, Start: 3, End: 4},
+		{Name: "get_messages", Route: "mcp", Input: item.SessionID, Result: "lock contention", Start: 5, End: 6},
+	}
+	score := scoreLookup(item.SessionID+" violet ledger lock contention", []lookupItem{item}, []string{"violet ledger", "lock contention"}, calls, nil)
+	assert.Equal(t, "success", score.Verdict)
+	require.NotNil(t, score.CallsToHit)
+	assert.Equal(t, 3, *score.CallsToHit)
+}
+
+func TestLookupOwnerAnswer(t *testing.T) {
+	q := lookupQuestion{Name: "owner", Expected: []lookupItem{{SessionID: lookupID}}, Phrases: []string{"maple"}}
+	calls := []lookupCall{{Route: "mcp", Result: lookupID + " maple team now owns", Start: 1, End: 2}}
+	for _, tc := range []struct{ answer, verdict string }{
+		{"The maple team now owns it. ", "success"},
+		{"The owner is maple. ", "success"},
+		{"The owner is cedar, not maple. ", "failed"},
+		{"Maple is not the owner. ", "failed"},
+		{"It is not true that maple is the owner. ", "failed"},
+		{"Maple handed it to cedar. ", "failed"},
+	} {
+		t.Run(tc.answer, func(t *testing.T) {
+			score := scoreLookupQuestion(q, tc.answer+lookupID, calls, nil)
+			assert.Equal(t, tc.verdict, score.Verdict)
+		})
+	}
 }
 
 func TestLookupSavedOutputClassification(t *testing.T) {

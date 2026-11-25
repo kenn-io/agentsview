@@ -65,11 +65,11 @@ the agent. Codex disables `mcp_2026_07_28` so the capture records each MCP call
 under a fixed protocol. Opaque exec scripts without individual results stay
 unscored.
 
-The report counts lookup calls started by the time the first non-empty,
-successful result naming the cited session completed. A direct or CLI read
-also counts when its input names the session and its result is non-empty.
-The count includes MCP, CLI, direct reads, saved-output reads, and tool
-discovery. Expected phrases grade the final answer. Errors, empty results,
+The report counts lookup calls started by the time results for the cited
+session supply all expected phrases. A direct or CLI read identifies the
+session from its input. Facts may arrive across multiple results. The count
+includes MCP, CLI, direct reads, saved-output reads, and tool discovery.
+Expected phrases also grade the final answer. Errors, empty results,
 truncation, and calls per route appear per attempt. Wrong answers and timeouts
 fail. Missing results and calls whose timing cannot be compared leave a correct
 answer unscored. One- and two-call shares use all scheduled attempts.
