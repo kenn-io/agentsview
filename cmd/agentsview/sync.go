@@ -165,7 +165,11 @@ func doSync(ctx context.Context, cfg SyncConfig) (hadRemoteFailures bool) {
 					onProgress,
 				)
 				if progress != nil {
-					progress.Finish()
+					if err != nil && !errors.Is(err, errDaemonResyncRequired) {
+						progress.Fail()
+					} else {
+						progress.Finish()
+					}
 				}
 				if errors.Is(err, errDaemonResyncRequired) {
 					// The archive's data version changed and the
@@ -181,7 +185,11 @@ func doSync(ctx context.Context, cfg SyncConfig) (hadRemoteFailures bool) {
 						ctx, tr, appCfg.AuthToken, true, false,
 						progress.Print,
 					)
-					progress.Finish()
+					if err != nil {
+						progress.Fail()
+					} else {
+						progress.Finish()
+					}
 				}
 				if err != nil {
 					fatal("daemon sync: %v", err)
@@ -231,7 +239,9 @@ func doSync(ctx context.Context, cfg SyncConfig) (hadRemoteFailures bool) {
 
 	if len(appCfg.RemoteHosts) == 0 {
 		if cfg.Target == "" {
-			runLocalSync(ctx, appCfg, database, cfg.Full)
+			if _, err := runLocalSync(ctx, appCfg, database, cfg.Full); err != nil {
+				fatal("local sync: %v", err)
+			}
 		} else {
 			result, err := runLocalAndArtifactFolderSync(
 				ctx, appCfg, database, cfg,
@@ -781,18 +791,20 @@ func primaryCoordinatorError(err error) error {
 	return nil
 }
 
-// runLocalSync runs a local sync (incremental or full resync).
-// It returns true if a full resync was performed, which callers
-// can use to force a full PG push (watermarks become stale after
-// a local resync).
+// runLocalSync runs a local sync (incremental or full resync). didResync
+// reports whether a full resync was attempted. Unfinished attachment
+// ingestion is a warning, since later syncs retry it; any other failure is
+// returned so the command exits non-zero.
 func runLocalSync(
 	ctx context.Context, appCfg config.Config, database *db.DB, full bool,
-) bool {
-	didResync, _, err := runLocalSyncResult(ctx, appCfg, database, full)
-	if err != nil {
-		log.Printf("local sync failed: %v", err)
+) (didResync bool, err error) {
+	didResync, _, err = runLocalSyncResult(ctx, appCfg, database, full)
+	if _, pending := errors.AsType[archivesource.DrainError](err); pending {
+		log.Printf("attachment ingestion warning: %v", err)
+		fmt.Fprintf(os.Stderr, "warning: attachment ingestion unfinished: %v\n", err)
+		return didResync, nil
 	}
-	return didResync
+	return didResync, err
 }
 
 // runLocalSyncAuthoritative requires complete local ingestion before a direct
@@ -843,10 +855,20 @@ func runLocalSyncResult(
 		},
 		func(bool, bool) error { return nil },
 	)
+	// A failed sync must not print "Sync complete". Unfinished attachment
+	// ingestion still committed the session history, so it keeps the summary.
+	_, pending := errors.AsType[archivesource.DrainError](err)
+	failed := err != nil && !pending
 	if resyncProgress != nil {
-		resyncProgress.Finish()
+		if failed {
+			resyncProgress.Fail()
+		} else {
+			resyncProgress.Finish()
+		}
 	}
-	printDirectSyncResult(ctx, database, stats, started)
+	if !failed {
+		printDirectSyncResult(ctx, database, stats, started)
+	}
 	return didResync, stats, err
 }
 
@@ -1194,6 +1216,15 @@ func consumeDaemonSyncEvents(stream *runtime.Stream[[]byte], progressFns ...sync
 		return sync.SyncStats{}, err
 	}
 	if lastNonDoneData != "" {
+		var payload struct {
+			Code string `json:"code"`
+		}
+		if json.Unmarshal([]byte(lastNonDoneData), &payload) == nil &&
+			payload.Code == "archive_busy" {
+			return sync.SyncStats{}, fmt.Errorf(
+				"daemon sync error: %s: %w", lastNonDoneData, db.ErrWALCheckpointBusy,
+			)
+		}
 		return sync.SyncStats{}, fmt.Errorf("daemon sync error: %s", lastNonDoneData)
 	}
 	return sync.SyncStats{}, errors.New("daemon sync response missing done event")

@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-23
+last_edited: 2026-11-25
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -17,6 +17,14 @@ The latest release is
   Takeout does not write. Each prompt now becomes a session with your prompt
   and Gemini's response as separate messages. Time zone abbreviations that your
   computer's time zone uses, such as `IST`, are now recognized.
+- `agentsview source sync --full` now exits with an error when its rebuilt
+  archive could not be installed. Another program holding a read transaction
+  on `sessions.db`, such as an open `sqlite3` shell, blocks the swap. Run
+  without a daemon, the command used to print `Sync complete` and exit 0 while
+  the archive stayed unchanged. It now says that another connection blocked the
+  swap, leaves the archive unchanged, and tells you to close that connection
+  and retry. Other failures of a direct `source sync` also exit non-zero now.
+  Before, only `debug.log` recorded them.
 
 ## 0.48.0
 

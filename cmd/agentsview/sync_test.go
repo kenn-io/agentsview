@@ -542,8 +542,9 @@ func TestRunLocalSyncZeroContributorRetainsAbortFallback(t *testing.T) {
 		Project: "preserved", FilePath: &missingPath, MessageCount: 1,
 	}))
 
-	didResync := runLocalSync(t.Context(), cfg, database, true)
+	didResync, err := runLocalSync(t.Context(), cfg, database, true)
 
+	require.NoError(t, err)
 	assert.True(t, didResync)
 	preserved, getErr := database.GetSession(t.Context(), "old-file-session")
 	require.NoError(t, getErr)
@@ -1863,13 +1864,15 @@ func TestRunLocalSyncUsesCallerContextForResync(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	var didResync bool
+	var syncErr error
 	captureStdout(t, func() {
-		didResync = runLocalSync(ctx, config.Config{
+		didResync, syncErr = runLocalSync(ctx, config.Config{
 			DataDir: dataDir,
 			DBPath:  dbPath,
 		}, database, false)
 	})
 
+	require.ErrorIs(t, syncErr, context.Canceled)
 	assert.True(t, didResync)
 	assert.True(t, database.NeedsResync())
 }
@@ -2749,4 +2752,56 @@ func TestRunRemoteSyncWithOmittedTransportReachesHTTPMirrorPath(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, manifestRequests,
 		"configured DataDir must route HTTP sync through the manifest/mirror path")
+}
+
+func TestRunLocalSyncReportsDiscardedFullResync(t *testing.T) {
+	cfg, database := newDirectSyncFixture(t)
+	restore := db.SetCloseDrainTimeoutForTest(100 * time.Millisecond)
+	defer restore()
+	// A reader that stays open keeps the swap from closing the archive, so
+	// the rebuilt replacement is discarded.
+	pinned, err := database.Reader().Query(t.Context(), "SELECT 1")
+	require.NoError(t, err)
+	pinnedOpen := true
+	defer func() {
+		if pinnedOpen {
+			require.NoError(t, pinned.Err())
+			require.NoError(t, pinned.Close())
+		}
+	}()
+
+	var syncErr error
+	out := captureStdout(t, func() {
+		_, syncErr = runLocalSync(t.Context(), cfg, database, true)
+	})
+	require.NoError(t, pinned.Err())
+	require.NoError(t, pinned.Close())
+	pinnedOpen = false
+
+	require.Error(t, syncErr)
+	assert.Contains(t, syncErr.Error(), "full resync not installed, archive unchanged")
+	assert.NotContains(t, out, "Sync complete")
+	assert.Contains(t, out, "Closing current database before swap stopped after")
+	session, err := database.GetSession(t.Context(), "session")
+	require.NoError(t, err)
+	assert.Nil(t, session, "the discarded rebuild must not be replaced by an incremental pass")
+}
+
+func TestResyncProgressPrinterFailDoesNotReportCompletion(t *testing.T) {
+	now := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+	var out bytes.Buffer
+	printer := newResyncProgressPrinter(&out, func() time.Time { return now })
+	printer.Print(agentsync.Progress{
+		Phase:  agentsync.PhaseCopyingMetadata,
+		Detail: "Closing current database before swap",
+		Resync: true,
+	})
+	now = now.Add(5 * time.Second)
+	printer.Fail()
+	printer.Finish()
+
+	assert.Equal(t,
+		"  Closing current database before swap...\n"+
+			"  Closing current database before swap stopped after 5s\n",
+		out.String())
 }

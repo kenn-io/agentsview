@@ -1732,6 +1732,7 @@ func TestHumaForegroundSyncTerminalErrors(t *testing.T) {
 			{"rebuild with failed source", syncpkg.SyncStats{ArchiveRebuilt: true, Deferred: 1, Failed: 1}, nil, ""},
 			{"aborted rebuild", syncpkg.SyncStats{ArchiveRebuilt: true, Deferred: 1, Aborted: true}, nil, ""},
 			{"busy", syncpkg.SyncStats{}, syncpkg.ErrSyncInProgress, "sync_running"},
+			{"archive busy", syncpkg.SyncStats{}, fmt.Errorf("swap resync database: final wal checkpoint: %w", db.ErrWALCheckpointBusy), "archive_busy"},
 		} {
 			t.Run(path+"/"+tc.name, func(t *testing.T) {
 				t.Parallel()
