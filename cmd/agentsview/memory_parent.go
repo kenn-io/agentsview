@@ -5,27 +5,20 @@ package main
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
-	"github.com/BurntSushi/toml"
-	"github.com/mattn/go-sqlite3"
 	"github.com/shirou/gopsutil/v4/process"
 	"github.com/spf13/cobra"
 	"go.kenn.io/kit/agenthook"
 
-	"go.kenn.io/agentsview/internal/codexcloud"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/gittrailer"
 	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/pathutil"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -35,19 +28,16 @@ const (
 	launcherAncestryLimit  = 32
 	launcherHookInputLimit = 1 << 20
 
-	launchParentMissingIndexWait = time.Second
-	launchParentRetryDelay       = 100 * time.Millisecond
-	launchParentRetryMaxDelay    = 400 * time.Millisecond
+	launchParentRetryDelay    = 100 * time.Millisecond
+	launchParentRetryMaxDelay = 400 * time.Millisecond
 )
 
 // launchProcess is the part of a process the launcher walk reads.
 type launchProcess struct {
-	Name      string
-	PPID      int32
-	Cmdline   func(context.Context) ([]string, error)
-	Environ   func(context.Context) ([]string, error)
-	Cwd       func(context.Context) (string, error)
-	OpenFiles func(context.Context) ([]process.OpenFilesStat, error)
+	Name    string
+	PPID    int32
+	Cmdline func(context.Context) ([]string, error)
+	Environ func(context.Context) ([]string, error)
 }
 
 var (
@@ -70,7 +60,7 @@ func lookupGopsutilProcess(ctx context.Context, pid int32) (launchProcess, error
 	if err != nil {
 		return launchProcess{}, err
 	}
-	return launchProcess{Name: name, PPID: ppid, Cmdline: p.CmdlineSliceWithContext, Environ: p.EnvironWithContext, Cwd: p.CwdWithContext, OpenFiles: launchOpenFiles(p)}, nil
+	return launchProcess{Name: name, PPID: ppid, Cmdline: p.CmdlineSliceWithContext, Environ: p.EnvironWithContext}, nil
 }
 
 // processAgent names the agent a process runs, or "" for any other process.
@@ -184,158 +174,6 @@ func launcherSessionID(env map[string]string, launcher string) (string, error) {
 	return session.ID, nil
 }
 
-// launcherCodexIndexHome uses the index already open in the launcher, which
-// reflects Codex's effective configuration, including trusted project layers.
-func launcherCodexIndexHome(ctx context.Context, launcher launchProcess) (string, bool) {
-	if launcher.OpenFiles == nil {
-		return "", false
-	}
-	files, err := launcher.OpenFiles(ctx)
-	if err != nil {
-		return "", false
-	}
-	var home string
-	for _, file := range files {
-		name := filepath.Base(file.Path)
-		version, ok := strings.CutPrefix(name, "state_")
-		if !ok || !strings.HasSuffix(version, ".sqlite") {
-			continue
-		}
-		if n, err := strconv.Atoi(strings.TrimSuffix(version, ".sqlite")); err != nil || n < 1 {
-			continue
-		}
-		dir := filepath.Dir(file.Path)
-		if home != "" && home != dir {
-			return "", true
-		}
-		home = dir
-	}
-	return home, false
-}
-
-func configuredCodexHome(ctx context.Context, launcherProcess launchProcess, launcherEnv map[string]string, home string) (string, error) {
-	var err error
-	if home == "" {
-		return "", nil
-	}
-	sqliteHome := strings.TrimSpace(launcherEnv["CODEX_SQLITE_HOME"])
-	var config struct {
-		SQLiteHome string `toml:"sqlite_home"`
-	}
-	if _, err := toml.DecodeFile(filepath.Join(home, "config.toml"), &config); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return "", err
-	}
-	var sqliteOverride, cd string
-	var hasSQLiteOverride bool
-	if launcherProcess.Cmdline != nil {
-		args, err := launcherProcess.Cmdline(ctx)
-		if err != nil {
-			return "", err
-		}
-		for i := 1; i < len(args); i++ {
-			arg := args[i]
-			if arg == "--" {
-				break
-			}
-			var override string
-			switch {
-			case arg == "-C" || arg == "--cd":
-				if i+1 < len(args) {
-					i++
-					cd = args[i]
-				}
-			case strings.HasPrefix(arg, "--cd="):
-				cd = strings.TrimPrefix(arg, "--cd=")
-			case strings.HasPrefix(arg, "-C="):
-				cd = strings.TrimPrefix(arg, "-C=")
-			case strings.HasPrefix(arg, "-C"):
-				cd = strings.TrimPrefix(arg, "-C")
-			case arg == "-p" || arg == "--profile":
-				if i+1 < len(args) {
-					i++
-				}
-			case arg == "-c" || arg == "--config":
-				if i+1 < len(args) {
-					i++
-					override = args[i]
-				}
-			case strings.HasPrefix(arg, "--config="):
-				override = strings.TrimPrefix(arg, "--config=")
-			case strings.HasPrefix(arg, "-c="):
-				override = strings.TrimPrefix(arg, "-c=")
-			case strings.HasPrefix(arg, "-c"):
-				override = strings.TrimPrefix(arg, "-c")
-			}
-			key, value, found := strings.Cut(override, "=")
-			if found && strings.TrimSpace(key) == "sqlite_home" {
-				var parsed struct {
-					SQLiteHome string `toml:"sqlite_home"`
-				}
-				if _, err := toml.Decode(override, &parsed); err != nil {
-					parsed.SQLiteHome = strings.TrimSpace(value)
-				}
-				sqliteOverride, hasSQLiteOverride = parsed.SQLiteHome, true
-			}
-		}
-	}
-	if hasSQLiteOverride {
-		config.SQLiteHome = sqliteOverride
-	}
-	launcherDir := func() (string, error) {
-		if filepath.IsAbs(cd) {
-			return cd, nil
-		}
-		if launcherProcess.Cwd == nil {
-			return "", errors.New("codex launcher directory unavailable")
-		}
-		cwd, err := launcherProcess.Cwd(ctx)
-		if err != nil {
-			return "", err
-		}
-		if !filepath.IsAbs(cwd) {
-			return "", errors.New("codex launcher directory unavailable")
-		}
-		return filepath.Join(cwd, cd), nil
-	}
-	if config.SQLiteHome != "" {
-		if sqliteHome, err = pathutil.ExpandHome(config.SQLiteHome); err != nil {
-			return "", err
-		}
-		if !filepath.IsAbs(sqliteHome) {
-			base := home
-			if hasSQLiteOverride {
-				base, err = launcherDir()
-				if err != nil {
-					return "", err
-				}
-			}
-			sqliteHome = filepath.Join(base, sqliteHome)
-		}
-	} else if sqliteHome != "" && !filepath.IsAbs(sqliteHome) {
-		base, err := launcherDir()
-		if err != nil {
-			return "", err
-		}
-		sqliteHome = filepath.Join(base, sqliteHome)
-	}
-	if sqliteHome != "" {
-		home = sqliteHome
-	}
-
-	return home, nil
-}
-
-func launcherArchiveID(ctx context.Context, home, agent, native string) (string, error) {
-	if agent == "codex" {
-		key, err := parser.CodexIndexedSessionKey(ctx, home, native)
-		if err != nil || key == "" {
-			return "", err
-		}
-		return "codex:" + key, nil
-	}
-	return native, nil
-}
-
 // storedSessionID adds the agent's archive prefix to a native ID.
 func storedSessionID(agent, id string) (string, error) {
 	def, ok := parser.AgentByType(parser.AgentType(agent))
@@ -383,7 +221,7 @@ func readHookInput(ctx context.Context, r io.Reader) ([]byte, error) {
 // with no agent launcher, and only on startup, so a resume or clear cannot
 // restore a link the user removed.
 func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
-	child, childAgent, launcherProcess, launcher, err := launchAgents(ctx, int32(os.Getppid()))
+	child, childAgent, _, launcher, err := launchAgents(ctx, int32(os.Getppid()))
 	if childAgent == "" || !oneShotRun(ctx, child, childAgent) {
 		return err
 	}
@@ -409,29 +247,6 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 	if err != nil || native == "" {
 		return err
 	}
-	launcherEnv := env
-	if launcherProcess.Environ != nil {
-		if values, err := processEnv(ctx, launcherProcess); err == nil {
-			launcherEnv = values
-		}
-	}
-	userHome, _ := os.UserHomeDir()
-	homes := codexcloud.DiscoverHomes(func(name string) string { return launcherEnv[name] }, userHome, nil)
-	var home string
-	if len(homes) > 0 {
-		home = homes[0]
-	}
-	if launcher == "codex" {
-		indexedHome, ambiguous := launcherCodexIndexHome(ctx, launcherProcess)
-		if ambiguous {
-			return nil
-		}
-		if indexedHome != "" {
-			home = indexedHome
-		} else if home, err = configuredCodexHome(ctx, launcherProcess, launcherEnv, home); err != nil || home == "" {
-			return err
-		}
-	}
 
 	data, err := readHookInput(ctx, cmd.InOrStdin())
 	if err != nil || len(data) == 0 {
@@ -451,43 +266,23 @@ func captureLaunchParent(ctx context.Context, cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	return recordLaunchParent(ctx, cmd, childID, home, launcher, native)
+	parentID := native
+	if launcher == "codex" {
+		parentID = "codex:" + native
+	}
+	return recordLaunchParent(ctx, cmd, childID, parentID)
 }
 
 // recordLaunchParent retries a busy archive or an unreachable daemon until
-// the hook's deadline. A missing Codex index or row gets a short retry window
-// before falling back to the thread ID; newer indexes fall back immediately.
-func recordLaunchParent(ctx context.Context, cmd *cobra.Command, childID, home, launcher, native string) error {
+// the hook's deadline.
+func recordLaunchParent(ctx context.Context, cmd *cobra.Command, childID, parentID string) error {
 	delay := launchParentRetryDelay
-	var parentID string
-	var missingUntil time.Time
 	for {
-		var err error
-		if parentID == "" {
-			parentID, err = launcherArchiveID(ctx, home, launcher, native)
-			missing := launcher == "codex" && (errors.Is(err, os.ErrNotExist) || errors.Is(err, sql.ErrNoRows))
-			if missing && missingUntil.IsZero() {
-				missingUntil = time.Now().Add(launchParentMissingIndexWait)
-			}
-			if launcher == "codex" && (errors.Is(err, parser.ErrUnsupportedCodexStateIndex) || (missing && !time.Now().Before(missingUntil))) {
-				parentID, err = "codex:"+native, nil
-			}
-			sqliteErr, isSQLite := errors.AsType[sqlite3.Error](err)
-			if err != nil && !missing && (!isSQLite || (sqliteErr.Code != sqlite3.ErrBusy && sqliteErr.Code != sqlite3.ErrLocked)) {
-				return err
-			}
-		}
-		if err == nil && parentID != "" {
-			err = writeLaunchParent(ctx, cmd, childID, parentID)
-		}
+		err := writeLaunchParent(ctx, cmd, childID, parentID)
 		if err == nil || errors.Is(err, db.ErrSessionExternalParentInvalid) || errors.Is(err, db.ErrReadOnly) {
 			return err
 		}
-		wait := delay
-		if parentID == "" && !missingUntil.IsZero() && (errors.Is(err, os.ErrNotExist) || errors.Is(err, sql.ErrNoRows)) {
-			wait = min(wait, time.Until(missingUntil))
-		}
-		timer := time.NewTimer(wait)
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
