@@ -309,7 +309,6 @@ func TestToolPRLinksCopiedArchives(t *testing.T) {
 					assert.Equal(t, 43, links[1].Number)
 				}
 			}
-
 		})
 	}
 }
