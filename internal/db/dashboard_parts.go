@@ -97,7 +97,7 @@ func (m *dashboardPartsMemo) storeParts(slot, version string, parts, selection m
 
 func dashboardPartBytes(p kept.Part[dashboardPart]) int64 {
 	// The multiplier covers retained allocations; 256 covers the entry, list node, and map slot.
-	return int64(len(p.ID)+len(p.Fingerprint)) + 3*dashboardPartSize(p.Value) + 256
+	return int64(len(p.ID)+len(p.Fingerprint)) + 2*dashboardPartSize(p.Value) + 256
 }
 
 func dashboardPartSize(p dashboardPart) int64 {

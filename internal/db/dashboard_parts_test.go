@@ -8,7 +8,9 @@ import (
 	"encoding/json/v2"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -511,6 +513,41 @@ func TestDashboardPartsMemoAccounting(t *testing.T) {
 	memo.store("UTC", "version", map[string]kept.Part[dashboardPart]{"c": c})
 	assert.Equal(t, dashboardPartBytes(b)+dashboardPartBytes(c), memo.bytes)
 	assert.NotContains(t, memo.entries, "a")
+}
+
+func TestDashboardPartsMemoRetainedHeap(t *testing.T) {
+	const childEnv = "AGENTSVIEW_TEST_DASHBOARD_HEAP"
+	if os.Getenv(childEnv) == "" {
+		cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestDashboardPartsMemoRetainedHeap$")
+		cmd.Env = append(os.Environ(), childEnv+"=1")
+		output, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s", output)
+		return
+	}
+
+	const count = 5000
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	memo := dashboardPartsMemo{maxBytes: 1 << 30}
+	for i := range count {
+		id := fmt.Sprintf("session-%08d", i)
+		p := kept.Part[dashboardPart]{ID: id, Fingerprint: "version", Value: dashboardPart{
+			Hours:    make(map[int]int, 168),
+			Velocity: SessionVelocity{TurnCycles: make([]float64, 1, 8), FirstResponse: new(float64)},
+		}}
+		for hour := range 168 {
+			p.Value.Hours[hour] = hour
+		}
+		memo.store("UTC", "version", map[string]kept.Part[dashboardPart]{id: p})
+	}
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	retained := int64(after.HeapAlloc) - int64(before.HeapAlloc)
+	t.Logf("retained=%d estimated=%d", retained, memo.bytes)
+	require.Len(t, memo.entries, count)
+	assert.GreaterOrEqual(t, memo.bytes, retained)
+	runtime.KeepAlive(&memo)
 }
 
 func TestDashboardPartsWorksWhenWriterClosed(t *testing.T) {
