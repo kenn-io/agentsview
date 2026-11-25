@@ -38,7 +38,7 @@ func startLatencyProxy(tb testing.TB, pgURL string, delay time.Duration) *latenc
 	tb.Helper()
 	parsed, err := url.Parse(pgURL)
 	require.NoError(tb, err)
-	if parsed.Query().Has("host") || parsed.Query().Has("port") {
+	if parsed.Hostname() == "" || parsed.Query().Has("host") || parsed.Query().Has("port") {
 		tb.Skip("the latency proxy needs the server address in the URL authority")
 	}
 	if mode := parsed.Query().Get("sslmode"); mode == "verify-ca" || mode == "verify-full" {
