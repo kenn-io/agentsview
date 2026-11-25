@@ -320,3 +320,41 @@ func (s Sessions) getSidebarSessionIndexPage(ctx context.Context, f db.SessionFi
 	}
 	return index, nil
 }
+
+// GetSessionTreeMarker reads the parent and its direct children together.
+func (s Sessions) GetSessionTreeMarker(ctx context.Context, id string) (string, error) {
+	rows, err := s.backend.QueryContext(ctx, `SELECT id, message_count, file_mtime, file_hash, COALESCE(local_modified_at, ended_at, started_at, created_at), COALESCE(agentsview_push_fingerprint, '') FROM sessions WHERE id = ? OR (parent_session_id = ? AND deleted_at IS NULL)`, id, id)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var parent *db.SessionTreeEntry
+	var children []db.SessionTreeEntry
+	for rows.Next() {
+		var e db.SessionTreeEntry
+		var mtime sql.NullInt64
+		var hash sql.NullString
+		var updated any
+		var fingerprint string
+		if err := rows.Scan(&e.ID, &e.Count, &mtime, &hash, &updated, &fingerprint); err != nil {
+			return "", err
+		}
+		mtimePart := ""
+		if mtime.Valid {
+			mtimePart = strconv.FormatInt(mtime.Int64, 10)
+		}
+		e.Version = db.SessionVersionMarker(mtimePart, hash.String, s.backend.FormatTime(updated), fingerprint)
+		if e.ID == id {
+			parent = &e
+		} else {
+			children = append(children, e)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	if parent == nil {
+		return "", fmt.Errorf("session not found")
+	}
+	return db.SessionTreeMarker(append([]db.SessionTreeEntry{*parent}, children...))
+}

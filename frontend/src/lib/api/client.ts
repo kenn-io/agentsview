@@ -1,4 +1,4 @@
-import { type LiveFrame, type LiveRequest } from "./liveHub.js";
+import { type LiveAck, type LiveFrame, type LiveRequest } from "./liveHub.js";
 import { LiveBroadcast } from "./liveBroadcast.js";
 import { createParser, type EventSourceMessage } from "eventsource-parser";
 import type {
@@ -103,6 +103,7 @@ export interface DataChangedEvent {
 
 export interface LiveSource extends EventTarget {
   readyState: number;
+  acknowledge(receipt: string): void;
   close(): void;
 }
 
@@ -129,12 +130,16 @@ function connectLive(session?: string): LiveSource {
   const target = new EventTarget() as LiveSource;
   target.readyState = 0;
   let disposed = false;
-  let send: (value: LiveRequest | "leave" | "close") => void;
+  let send: (value: LiveRequest | LiveAck | "leave" | "close") => void;
   const receive = (frame: LiveFrame) => {
     if (disposed) return;
     if (frame.type === "events_ready" || frame.type === "session_ready") target.readyState = 1;
     if (frame.type === "closed" || frame.type === "permanent_failure") target.readyState = 2;
-    target.dispatchEvent(new MessageEvent(frame.type, { data: frame.data }));
+    target.dispatchEvent(
+      Object.assign(new MessageEvent(frame.type, { data: frame.data, lastEventId: frame.id }), {
+        receipt: frame.receipt,
+      }),
+    );
   };
   if (typeof SharedWorker !== "undefined") {
     const worker = new SharedWorker(new URL("./live.worker.ts", import.meta.url), {
@@ -176,13 +181,14 @@ function connectLive(session?: string): LiveSource {
     window.removeEventListener("pagehide", onPageHide);
     window.removeEventListener("pageshow", onPageShow);
   };
+  target.acknowledge = (receipt) => send({ type: "ack", receipt });
   send({ ...request });
   return target;
 }
 
 export function watchSession(
   sessionId: string,
-  onUpdate: () => void,
+  onUpdate: (event: Event) => void,
   onTiming?: (t: SessionTiming) => void,
 ): LiveSource {
   const source = connectLive(sessionId);

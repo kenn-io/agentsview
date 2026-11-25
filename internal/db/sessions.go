@@ -7119,3 +7119,30 @@ func (db *DB) loadSessionMirrorSnapshot(ctx context.Context, id string, afterSes
 	}
 	return result, nil
 }
+
+// GetSessionTreeMarker reads the parent and its direct children in one snapshot.
+func (db *DB) GetSessionTreeMarker(ctx context.Context, id string) (string, error) {
+	rows, err := db.getReader().QueryContext(ctx, `SELECT id, message_count, COALESCE(file_mtime, 0), COALESCE(file_hash, ''), COALESCE(local_modified_at, ''), COALESCE(sync_marker, ''), (SELECT json_group_array(label) FROM (SELECT label FROM session_labels WHERE session_id = sessions.id ORDER BY label)), COALESCE(parent_session_id, ''), relationship_type, COALESCE((SELECT ep.parent_session_id FROM session_external_parents ep WHERE ep.session_id = sessions.id), '') FROM sessions WHERE id = ? OR (parent_session_id = ? AND deleted_at IS NULL) ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END`, id, id, id)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var entries []SessionTreeEntry
+	for rows.Next() {
+		var e SessionTreeEntry
+		var mtime int64
+		var hash, modified, marker, labels, parent, relationship, launcher string
+		if err := rows.Scan(&e.ID, &e.Count, &mtime, &hash, &modified, &marker, &labels, &parent, &relationship, &launcher); err != nil {
+			return "", err
+		}
+		e.Version = SessionVersionMarker(strconv.FormatInt(mtime, 10), hash, modified, marker, labels, parent, relationship, launcher)
+		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	if len(entries) == 0 || entries[0].ID != id {
+		return "", fmt.Errorf("session not found")
+	}
+	return SessionTreeMarker(entries)
+}

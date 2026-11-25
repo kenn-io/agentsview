@@ -219,3 +219,7 @@ func (s sessionsSQL) ScanMessages(rows db.MessageRows) ([]db.Message, error) {
 func (s *Store) GetMatchingMachineIDs(ctx context.Context, candidates []string) ([]string, error) {
 	return s.sessions().GetMatchingMachineIDs(ctx, candidates)
 }
+
+func (s *Store) GetSessionTreeMarker(ctx context.Context, id string) (string, error) {
+	return s.sessions().GetSessionTreeMarker(ctx, id)
+}

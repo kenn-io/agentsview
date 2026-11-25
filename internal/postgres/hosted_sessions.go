@@ -2,8 +2,10 @@ package postgres
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -284,5 +286,93 @@ func (h *HostedStore) GetProviderResumeID(ctx context.Context, id string) (strin
 			}
 		}
 		return strings.TrimPrefix(memberID, session.Agent+":"), nil
+	})
+}
+
+// GetSessionTreeMarker reads hosted identity and content in one snapshot.
+func (h *HostedStore) GetSessionTreeMarker(ctx context.Context, id string) (string, error) {
+	return hostedRead(ctx, h, func(h *HostedStore, _ hostedRevision) (string, error) {
+		target, err := h.resolve(ctx, id)
+		if err != nil {
+			return "", err
+		}
+		if target.SessionID == "" {
+			return "", fmt.Errorf("session not found")
+		}
+		membership := `parent_session_id = $1`
+		if !target.Legacy {
+			membership = `id IN (SELECT owner.session_id ` + hostedLinkFromSQL + ` AND e.kind='parent' AND target.session_id=$1)`
+		}
+		rows, err := h.physical.pg.QueryContext(ctx, `SELECT id, message_count, updated_at, COALESCE(raw_content_revision, ''), COALESCE(raw_group_id, '') FROM sessions WHERE id=$1 OR ((`+membership+`) AND deleted_at IS NULL)`, target.SessionID)
+		if err != nil {
+			return "", err
+		}
+		defer rows.Close()
+		var entries []db.SessionTreeEntry
+		groups := map[string]string{}
+		var groupIDs []string
+		for rows.Next() {
+			var e db.SessionTreeEntry
+			var updated time.Time
+			var content, group string
+			if err := rows.Scan(&e.ID, &e.Count, &updated, &content, &group); err != nil {
+				return "", err
+			}
+			e.Version = db.SessionVersionMarker(FormatISO8601(updated))
+			e.State = &db.SessionTreeState{State: db.SessionWatchResolved, ContentRevision: content}
+			groups[e.ID] = group
+			if group != "" {
+				groupIDs = append(groupIDs, group)
+			}
+			entries = append(entries, e)
+		}
+		if err := rows.Err(); err != nil {
+			return "", err
+		}
+		rows.Close()
+		var parent *db.SessionTreeEntry
+		var children []db.SessionTreeEntry
+		for _, e := range entries {
+			if e.ID == target.SessionID {
+				parent = &e
+			} else {
+				children = append(children, e)
+			}
+		}
+		if parent == nil {
+			return "", fmt.Errorf("session not found")
+		}
+		entries = append([]db.SessionTreeEntry{*parent}, children...)
+		variants := map[string][]string{}
+		if len(groupIDs) > 0 {
+			rows, err := h.physical.pg.QueryContext(ctx, `SELECT b.group_id, g.base_alias, min(b.branch_id) FROM raw_session_branches b JOIN raw_session_groups g ON g.group_id=b.group_id WHERE b.group_id=ANY($1) AND b.active AND NOT COALESCE(`+rawBranchExclusionSQL("b", "")+`,false) GROUP BY b.group_id,g.base_alias,b.session_id ORDER BY b.group_id,min(b.branch_id)`, groupIDs)
+			if err != nil {
+				return "", err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var group, base, branch string
+				if err := rows.Scan(&group, &base, &branch); err != nil {
+					return "", err
+				}
+				variants[group] = append(variants[group], base+"~"+branch)
+			}
+			if err := rows.Err(); err != nil {
+				return "", err
+			}
+			rows.Close()
+		}
+		refs := hostedRefs{}
+		for i := range entries {
+			entries[i].State.Variants = variants[groups[entries[i].ID]]
+			refs.add(&entries[i].ID)
+		}
+		if err := refs.mapIDs(ctx, h); err != nil {
+			return "", err
+		}
+		for i := range entries {
+			entries[i].State.PublicID = entries[i].ID
+		}
+		return db.SessionTreeMarker(entries)
 	})
 }

@@ -33,6 +33,32 @@ func (s *watchStateStore) GetSessionWatchState(id string) (db.SessionWatchState,
 	return s.states[id], nil
 }
 
+func (s *watchStateStore) GetSessionTreeMarker(ctx context.Context, id string) (string, error) {
+	base, err := s.Store.GetSessionTreeMarker(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	children, err := s.Store.GetChildSessions(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	entries := []db.SessionTreeEntry{{ID: base}}
+	for _, key := range append([]string{id}, func() []string {
+		ids := make([]string, 0, len(children))
+		for _, child := range children {
+			ids = append(ids, child.ID)
+		}
+		return ids
+	}()...) {
+		state, err := s.GetSessionWatchState(key)
+		if err != nil {
+			return "", err
+		}
+		entries = append(entries, db.SessionTreeEntry{ID: key, State: &db.SessionTreeState{State: state.State, PublicID: state.PublicID, Variants: state.Variants, ContentRevision: state.ContentRevision}})
+	}
+	return db.SessionTreeMarker(entries)
+}
+
 func (s *watchStateStore) set(id string, state db.SessionWatchState) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -213,6 +239,10 @@ func (s *versionFailureStore) GetSessionVersion(context.Context, string) (int, i
 	return 0, 0, false
 }
 
+func (s *versionFailureStore) GetSessionTreeMarker(context.Context, string) (string, error) {
+	return "", errors.New("marker read failed")
+}
+
 func TestEvents_SessionVersionIDs(t *testing.T) {
 	for _, failed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("version read fails=%t", failed), func(t *testing.T) {
@@ -277,7 +307,7 @@ func TestEvents_ParentMarkerTracksChildChanges(t *testing.T) {
 		for _, id := range []string{"parent-a", "parent-b"} {
 			match := regexp.MustCompile(`id: ([^\n]+)\nevent: session_ready\ndata: ` + id + `\n`).FindStringSubmatch(w.BodyString())
 			require.Len(t, match, 2)
-			assert.Len(t, match[1], 64)
+			assert.Len(t, match[1], 67)
 			result[id] = match[1]
 		}
 		return result
@@ -287,6 +317,40 @@ func TestEvents_ParentMarkerTracksChildChanges(t *testing.T) {
 	after := markers()
 	assert.NotEqual(t, before["parent-a"], after["parent-a"])
 	assert.Equal(t, before["parent-b"], after["parent-b"])
+	require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: "child-new", Project: "project", Machine: "test", Agent: "claude", ParentSessionID: new("parent-a")}))
+	added := markers()
+	assert.NotEqual(t, after["parent-a"], added["parent-a"])
+	require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: "child-new", Project: "project", Machine: "test", Agent: "claude", ParentSessionID: new("parent-b")}))
+	moved := markers()
+	assert.NotEqual(t, added["parent-a"], moved["parent-a"])
+	assert.NotEqual(t, added["parent-b"], moved["parent-b"])
+	require.NoError(t, te.db.SoftDeleteSession(t.Context(), "child-new"))
+	deleted := markers()
+	assert.NotEqual(t, moved["parent-b"], deleted["parent-b"])
+}
+
+func TestEvents_ChildChangeEmitsParentUpdate(t *testing.T) {
+	t.Cleanup(sessionwatch.SetTimingsForTest(25*time.Millisecond, 50*time.Millisecond))
+	te := setup(t)
+	parent := db.Session{ID: "parent", Project: "project", Machine: "test", Agent: "claude"}
+	child := db.Session{ID: "child", Project: "project", Machine: "test", Agent: "claude", ParentSessionID: new("parent")}
+	require.NoError(t, te.db.UpsertSession(t.Context(), parent))
+	require.NoError(t, te.db.UpsertSession(t.Context(), child))
+	cfg := config.Config{Host: "127.0.0.1", InstallationID: "server-installation"}
+	handler := wrapTestHandler(cfg, server.New(cfg, te.db, nil, server.WithBroadcaster(te.broadcaster)).Handler())
+	ctx, cancel := context.WithCancel(t.Context())
+	w := newFlushRecorder()
+	done := make(chan struct{})
+	t.Cleanup(func() { cancel(); <-done })
+	go func() {
+		handler.ServeHTTP(w, httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/events?session=parent", nil))
+		close(done)
+	}()
+	te.waitForSSEEvent(t, w, "events_ready", 5*time.Second)
+	child.MessageCount = 1
+	require.NoError(t, te.db.UpsertSession(t.Context(), child))
+	te.waitForSSEEvent(t, w, "session_updated", 5*time.Second)
+	assert.Contains(t, w.BodyString(), "event: session_updated\ndata: parent\n")
 }
 
 func TestEvents_ParentMarkerTracksHostedChildRevision(t *testing.T) {

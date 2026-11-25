@@ -1228,3 +1228,34 @@ func (s *Store) GetBranches(
 func (s *Store) GetMatchingMachineIDs(ctx context.Context, candidates []string) ([]string, error) {
 	return db.MatchingMachineIDs(ctx, s.pg, db.PostgresQueryDialect(), candidates)
 }
+
+// GetSessionTreeMarker reads the parent and direct children in one query.
+func (s *Store) GetSessionTreeMarker(ctx context.Context, id string) (string, error) {
+	rows, err := s.pg.QueryContext(ctx, `SELECT id, message_count, updated_at FROM sessions WHERE id = $1 OR (parent_session_id = $1 AND deleted_at IS NULL)`, id)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var parent *db.SessionTreeEntry
+	var children []db.SessionTreeEntry
+	for rows.Next() {
+		var e db.SessionTreeEntry
+		var updated time.Time
+		if err := rows.Scan(&e.ID, &e.Count, &updated); err != nil {
+			return "", err
+		}
+		e.Version = db.SessionVersionMarker(FormatISO8601(updated))
+		if e.ID == id {
+			parent = &e
+		} else {
+			children = append(children, e)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	if parent == nil {
+		return "", fmt.Errorf("session not found")
+	}
+	return db.SessionTreeMarker(append([]db.SessionTreeEntry{*parent}, children...))
+}

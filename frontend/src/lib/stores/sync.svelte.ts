@@ -393,7 +393,11 @@ class SyncStore {
     return true;
   }
 
-  watchSession(sessionId: string, onUpdate: () => void, onTiming?: (t: SessionTiming) => void) {
+  watchSession(
+    sessionId: string,
+    onUpdate: () => Promise<boolean>,
+    onTiming?: (t: SessionTiming) => void,
+  ) {
     this.unwatchSession();
     let settle!: (seen: boolean) => void;
     const ready = new Promise<boolean>((resolve) => {
@@ -405,7 +409,21 @@ class SyncStore {
     });
     const open = () => {
       this.closeSessionStream();
-      this.watchEventSource = watchSession(sessionId, onUpdate, onTiming);
+      let generation = 0;
+      const refresh = (event?: Event) => {
+        const current = ++generation;
+        const receipt = (event as (Event & { receipt?: string }) | undefined)?.receipt;
+        void onUpdate().then((success) => {
+          if (
+            success &&
+            receipt !== undefined &&
+            current === generation &&
+            this.watchEventSource === es
+          )
+            es.acknowledge(receipt);
+        });
+      };
+      this.watchEventSource = watchSession(sessionId, refresh, onTiming);
       const es = this.watchEventSource;
       es.addEventListener("error", () => {
         if (this.watchEventSource !== es) return;
@@ -414,12 +432,12 @@ class SyncStore {
       es.addEventListener("session_missing", () => {
         if (this.watchEventSource !== es) return;
         settle(false);
-        onUpdate();
+        refresh();
       });
-      es.addEventListener("session_ready", () => {
+      es.addEventListener("session_ready", (event) => {
         if (this.watchEventSource !== es) return;
         settle(true);
-        onUpdate();
+        refresh(event);
       });
     };
     if (typeof document === "undefined") {
@@ -432,7 +450,7 @@ class SyncStore {
       } else if (!this.watchEventSource || this.watchEventSource.readyState === 2) {
         open();
         // A rejected reconnect, such as a deleted session's 404, never sends session_ready.
-        onUpdate();
+        void onUpdate();
       }
     };
     document.addEventListener("visibilitychange", this.watchVisibilityHandler);

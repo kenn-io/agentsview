@@ -2,9 +2,7 @@ package server
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/csv"
-	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"log"
@@ -15,7 +13,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
-	"slices"
 	"strings"
 	"time"
 
@@ -1425,21 +1422,25 @@ func (s *Server) humaWatchSession(
 
 func (s *Server) sendSessionFrame(ctx context.Context, stream *SSEStream, id string, update, versioned bool) bool {
 	if update {
-		var markerState *db.SessionWatchState
+		identityFailed := false
 		if identity, ok := s.db.(db.SessionWatchStateStore); ok {
 			state, err := identity.GetSessionWatchState(id)
 			if err != nil {
+				if !versioned {
+					return false
+				}
+				identityFailed = true
+			} else if !stream.SendJSON("session.identity", state) {
 				return false
-			}
-			markerState = &state
-			if !stream.SendJSON("session.identity", state) {
-				return false
-			}
-			if state.State != db.SessionWatchResolved {
+			} else if state.State != db.SessionWatchResolved {
 				return true
 			}
 		}
-		if versioned && !stream.SendWithID(s.sessionMarker(ctx, id, markerState), "session_updated", id) {
+		marker := ""
+		if versioned && !identityFailed {
+			marker = s.sessionMarker(ctx, id)
+		}
+		if versioned && !stream.SendWithID(marker, "session_updated", id) {
 			return false
 		}
 		if !versioned && !stream.Send("session_updated", id) {
@@ -1454,60 +1455,12 @@ func (s *Server) sendSessionFrame(ctx context.Context, stream *SSEStream, id str
 	return true
 }
 
-func (s *Server) sessionMarker(ctx context.Context, id string, state *db.SessionWatchState) string {
-	type watchState struct {
-		State           string   `json:"state"`
-		PublicID        string   `json:"public_id,omitempty"`
-		Variants        []string `json:"variants,omitempty"`
-		ContentRevision string   `json:"content_revision,omitempty"`
-	}
-	type entry struct {
-		ID      string      `json:"id"`
-		Count   int         `json:"count"`
-		Version int64       `json:"version"`
-		State   *watchState `json:"state"`
-	}
-	identity, hosted := s.db.(db.SessionWatchStateStore)
-	read := func(id string, state *db.SessionWatchState) (entry, bool) {
-		count, version, ok := s.db.GetSessionVersion(ctx, id)
-		if !ok {
-			return entry{}, false
-		}
-		if hosted && state == nil {
-			current, err := identity.GetSessionWatchState(id)
-			if err != nil {
-				return entry{}, false
-			}
-			state = &current
-		}
-		var markerState *watchState
-		if state != nil {
-			markerState = &watchState{State: state.State, PublicID: state.PublicID, Variants: state.Variants, ContentRevision: state.ContentRevision}
-		}
-		return entry{ID: id, Count: count, Version: version, State: markerState}, true
-	}
-	parent, ok := read(id, state)
-	if !ok {
-		return ""
-	}
-	children, err := s.db.GetChildSessions(ctx, id)
+func (s *Server) sessionMarker(ctx context.Context, id string) string {
+	marker, err := s.db.GetSessionTreeMarker(ctx, id)
 	if err != nil {
 		return ""
 	}
-	slices.SortFunc(children, func(a, b db.Session) int { return strings.Compare(a.ID, b.ID) })
-	entries := []entry{parent}
-	for _, child := range children {
-		marker, ok := read(child.ID, nil)
-		if !ok {
-			return ""
-		}
-		entries = append(entries, marker)
-	}
-	encoded, err := json.Marshal(entries)
-	if err != nil {
-		return ""
-	}
-	return fmt.Sprintf("%x", sha256.Sum256(encoded))
+	return marker
 }
 
 type eventsInput struct {
@@ -1578,7 +1531,7 @@ func (s *Server) humaEvents(ctx context.Context, in *eventsInput) (*huma.StreamR
 			}
 		}
 		for _, id := range found {
-			updates := s.sessionMonitor(ctx, id)
+			updates := s.sessionTreeMonitor(ctx, id)
 			go func() {
 				for {
 					select {
@@ -1596,7 +1549,7 @@ func (s *Server) humaEvents(ctx context.Context, in *eventsInput) (*huma.StreamR
 					}
 				}
 			}()
-			if !stream.SendWithID(s.sessionMarker(ctx, id, nil), "session_ready", id) {
+			if !stream.SendWithID(s.sessionMarker(ctx, id), "session_ready", id) {
 				return
 			}
 			s.sendSessionFrame(ctx, stream, id, false, true)

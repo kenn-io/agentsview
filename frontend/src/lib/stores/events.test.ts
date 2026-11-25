@@ -6,6 +6,7 @@ vi.mock("../api/client.js", () => api);
 
 class FakeSource extends EventTarget implements LiveSource {
   readyState = 1;
+  acknowledge = vi.fn();
   close = vi.fn(() => {
     this.readyState = 2;
   });

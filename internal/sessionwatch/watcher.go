@@ -102,7 +102,30 @@ func New(d db.Store, engine *sync.Engine) *Watcher {
 func (w *Watcher) Events(
 	ctx context.Context, sessionID string,
 ) <-chan struct{} {
+	return w.events(ctx, sessionID, false)
+}
+
+// TreeEvents also detects changes to the session's direct children.
+func (w *Watcher) TreeEvents(ctx context.Context, sessionID string) <-chan struct{} {
+	return w.events(ctx, sessionID, true)
+}
+
+func (w *Watcher) events(ctx context.Context, sessionID string, tree bool) <-chan struct{} {
 	ch := make(chan struct{})
+	var marker string
+	var markerErr error
+	if tree {
+		marker, markerErr = w.db.GetSessionTreeMarker(ctx, sessionID)
+	}
+	checkTree := func() bool {
+		if !tree {
+			return false
+		}
+		current, err := w.db.GetSessionTreeMarker(ctx, sessionID)
+		changed := err != nil || markerErr != nil || current != marker
+		marker, markerErr = current, err
+		return changed
+	}
 	if identity, ok := w.db.(db.SessionWatchStateStore); ok {
 		initial, err := identity.GetSessionWatchState(sessionID)
 		lastCount, lastVersion, _ := w.db.GetSessionVersion(ctx, sessionID)
@@ -115,10 +138,11 @@ func (w *Watcher) Events(
 			recovering := err != nil
 			current, e := initial, err
 			for {
+				treeChanged := checkTree()
 				if e == nil {
 					count, version, ok := w.db.GetSessionVersion(ctx, sessionID)
 					transition := current.State != db.SessionWatchResolved || !recovering && (current.State != initial.State || current.PublicID != initial.PublicID || current.ContentRevision != initial.ContentRevision || !slices.Equal(current.Variants, initial.Variants))
-					if recovering || transition || ok && (count != lastCount || version != lastVersion) {
+					if recovering || transition || ok && (count != lastCount || version != lastVersion) || treeChanged {
 						select {
 						case ch <- struct{}{}:
 						case <-ctx.Done():
@@ -131,6 +155,12 @@ func (w *Watcher) Events(
 						if ok {
 							lastCount, lastVersion = count, version
 						}
+					}
+				} else if treeChanged {
+					select {
+					case ch <- struct{}{}:
+					case <-ctx.Done():
+						return
 					}
 				}
 				select {
@@ -153,7 +183,7 @@ func (w *Watcher) Events(
 			// PG read mode: poll GetSessionVersion only,
 			// no file watching or fallback sync.
 			w.pollDBOnly(ctx, ch, sessionID,
-				lastCount, lastDBVersion)
+				lastCount, lastDBVersion, checkTree)
 			return
 		}
 
@@ -181,7 +211,7 @@ func (w *Watcher) Events(
 					&lastFileMtime,
 					&fileMtimeChangedAt,
 				)
-				if changed {
+				if checkTree() || changed {
 					select {
 					case ch <- struct{}{}:
 					case <-ctx.Done():
@@ -200,6 +230,7 @@ func (w *Watcher) Events(
 func (w *Watcher) pollDBOnly(
 	ctx context.Context, ch chan<- struct{},
 	sessionID string, lastCount int, lastDBVersion int64,
+	checkTree func() bool,
 ) {
 	ticker := time.NewTicker(pollInterval())
 	defer ticker.Stop()
@@ -210,7 +241,7 @@ func (w *Watcher) pollDBOnly(
 			return
 		case <-ticker.C:
 			count, dbVersion, ok := w.db.GetSessionVersion(ctx, sessionID)
-			if ok && (count != lastCount || dbVersion != lastDBVersion) {
+			if checkTree() || ok && (count != lastCount || dbVersion != lastDBVersion) {
 				lastCount = count
 				lastDBVersion = dbVersion
 				select {

@@ -399,18 +399,23 @@ func TestStoreGetSessionVersionChangesAfterPush(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	store, syncer, local := newPushedStore(t)
+	marker, err := store.GetSessionTreeMarker(ctx, fixtureAlphaID)
+	require.NoError(t, err)
 	count, version, ok := store.GetSessionVersion(t.Context(), fixtureAlphaID)
 	require.True(t, ok)
 	assert.Equal(t, 2, count)
 
 	appendMessage(t, local, fixtureAlphaID, "a later message", "2026-01-10T00:03:00.000Z")
-	_, err := syncer.Push(ctx, false, nil)
+	_, err = syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 
 	count2, version2, ok := store.GetSessionVersion(t.Context(), fixtureAlphaID)
 	require.True(t, ok)
 	assert.Equal(t, 3, count2)
 	assert.NotEqual(t, version, version2)
+	updatedMarker, err := store.GetSessionTreeMarker(ctx, fixtureAlphaID)
+	require.NoError(t, err)
+	assert.NotEqual(t, marker, updatedMarker)
 }
 
 func TestStoreMessageWindowReportsRevisionWithRows(t *testing.T) {

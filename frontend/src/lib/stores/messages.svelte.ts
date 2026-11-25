@@ -78,8 +78,8 @@ export class MessagesStore {
   // this before reporting a missing session.
   private loadGeneration: number = 0;
   private watchGate: number | null = null;
-  private loadSessionPromise: Promise<void> | null = null;
-  private reloadPromise: Promise<void> | null = null;
+  private loadSessionPromise: Promise<boolean> | null = null;
+  private reloadPromise: Promise<boolean> | null = null;
   private reloadSessionId: string | null = null;
   private pendingReload: boolean = false;
   // Failed passes since the last outside reload request, bounded for busy or unavailable sessions.
@@ -111,7 +111,7 @@ export class MessagesStore {
       !resumesCancelledLoad &&
       (this.messages.length > 0 || this.loading)
     ) {
-      return;
+      return false;
     }
     const promise = this.doLoadSession(id, resumesCancelledLoad, ready).finally(() => {
       if (this.loadSessionPromise === promise) this.loadSessionPromise = null;
@@ -148,7 +148,7 @@ export class MessagesStore {
         countHint = sess.message_count ?? 0;
         pendingToken = buildReadProgressToken(sess);
       } catch (err) {
-        if (isAbortError(err)) return;
+        if (isAbortError(err)) return false;
         // This probe is the only detail fetch a plain click on an
         // already-hydrated sidebar row makes, so it is what detects
         // a session deleted behind a cached row.
@@ -176,8 +176,15 @@ export class MessagesStore {
           readMarker !== null && readMarker.token !== token,
         );
       }
+      return (
+        landed &&
+        countHint !== null &&
+        this.sessionId === id &&
+        this.loadGeneration === generation &&
+        !ac.signal.aborted
+      );
     } catch (err) {
-      if (isAbortError(err)) return;
+      if (isAbortError(err)) return false;
       if (this.sessionId === id) this.historyComplete = false;
       if (this.loadGeneration === generation) {
         sessions.markActiveSessionMissing(id, err);
@@ -187,6 +194,7 @@ export class MessagesStore {
       if (this.sessionId === id && this.loadGeneration === generation) {
         this.failLoad(err, "load");
       }
+      return false;
     } finally {
       if (this.sessionId === id && this.loadingOwner === owner) {
         this.loading = false;
@@ -195,9 +203,10 @@ export class MessagesStore {
     }
   }
 
-  reload(): Promise<void> {
-    if (this.watchGate === this.loadGeneration) return this.loadSessionPromise ?? Promise.resolve();
-    if (!this.sessionId) return Promise.resolve();
+  reload(): Promise<boolean> {
+    if (this.watchGate === this.loadGeneration)
+      return this.loadSessionPromise ?? Promise.resolve(false);
+    if (!this.sessionId) return Promise.resolve(false);
     this.reloadFailures = 0;
     if (this.loadSessionPromise) {
       const id = this.sessionId;
@@ -206,14 +215,15 @@ export class MessagesStore {
         if (this.sessionId === id && this.loadGeneration === generation) {
           return this.queueReload();
         }
+        return false;
       });
     }
     return this.queueReload();
   }
 
   /** Reload, or queue one more pass behind a reload already running for this session. */
-  private queueReload(): Promise<void> {
-    if (!this.sessionId) return Promise.resolve();
+  private queueReload(): Promise<boolean> {
+    if (!this.sessionId) return Promise.resolve(false);
 
     if (this.reloadPromise && this.reloadSessionId === this.sessionId) {
       this.pendingReload = true;
@@ -224,7 +234,8 @@ export class MessagesStore {
     this.reloadSessionId = id;
     this.reloading = true;
 
-    const promise = this.reloadNow(id).finally(async () => {
+    const generation = this.loadGeneration;
+    const promise = this.reloadNow(id).then(async (success) => {
       if (this.reloadPromise === promise) {
         this.reloadPromise = null;
         this.reloadSessionId = null;
@@ -232,10 +243,11 @@ export class MessagesStore {
       const shouldReload = this.pendingReload && this.sessionId === id;
       if (shouldReload) {
         this.pendingReload = false;
-        await this.queueReload();
+        return this.queueReload();
       } else if (this.sessionId === id) {
         this.reloading = false;
       }
+      return success && this.loadGeneration === generation && this.sessionId === id;
     });
     this.reloadPromise = promise;
     return promise;
@@ -256,7 +268,7 @@ export class MessagesStore {
   }
 
   /** Repeat the read behind loadError. */
-  retryLoad(): Promise<void> {
+  retryLoad(): Promise<void | boolean> {
     const id = this.sessionId;
     if (!id || this.loadError === null) return Promise.resolve();
     const kind = this.loadErrorKind;
@@ -833,14 +845,14 @@ export class MessagesStore {
 
   private async reloadNow(id: string) {
     const signal = this.abortController?.signal;
-    if (!signal || signal.aborted) return;
+    if (!signal || signal.aborted) return false;
 
     const previousToken = this.activeSessionToken;
     const previousMessages = this.messages;
 
     try {
       const sess = await SessionsService.getApiV1SessionsById({ id }, { signal });
-      if (this.sessionId !== id) return;
+      if (this.sessionId !== id) return false;
 
       const pendingToken = buildReadProgressToken(sess);
       const newCount = sess.message_count ?? 0;
@@ -848,7 +860,7 @@ export class MessagesStore {
       let landed = true;
       if (newCount === oldCount) {
         const refreshed = await this.refreshLoadedWindow(id, signal);
-        if (this.sessionId !== id) return;
+        if (this.sessionId !== id) return false;
         if (refreshed === "superseded") {
           landed = false;
         } else if (refreshed === "empty") {
@@ -865,7 +877,7 @@ export class MessagesStore {
       } else if (newCount > oldCount && this.messages.length > 0) {
         const oldestOrdinal = this.messages[0]!.ordinal;
         const refreshed = await this.loadFrom(id, oldestOrdinal, signal);
-        if (this.sessionId !== id) return;
+        if (this.sessionId !== id) return false;
 
         const newest = this.messages[this.messages.length - 1];
         if (refreshed === "superseded") {
@@ -889,21 +901,23 @@ export class MessagesStore {
           token !== previousToken ? earliestChangedOrdinal(previousMessages, this.messages) : null;
         this.publishOrDeferSessionToken(token, unreadOrdinal);
       }
+      return landed && this.sessionId === id && !signal.aborted;
     } catch (err) {
-      if (isAbortError(err)) return;
+      if (isAbortError(err)) return false;
       const transient = isTransient(err);
       if (this.sessionId === id && (isRevisionChange(err) || transient)) {
         if (++this.reloadFailures < MAX_LOAD_ATTEMPTS) {
           if (transient) await new Promise((resolve) => setTimeout(resolve, 300));
           if (this.sessionId === id && !signal.aborted) this.pendingReload = true;
-          return;
+          return false;
         }
-        if (isRevisionChange(err)) return;
+        if (isRevisionChange(err)) return false;
       }
       if (this.sessionId === id) {
         this.historyComplete = false;
         this.failLoad(err, "load");
       }
+      return false;
     }
   }
 

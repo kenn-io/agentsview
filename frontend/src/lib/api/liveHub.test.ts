@@ -23,6 +23,9 @@ class FakeSource extends EventTarget {
   }
 }
 
+const marker1 = `v1:${"1".repeat(64)}`;
+const marker2 = `v1:${"2".repeat(64)}`;
+
 describe("shared live stream", () => {
   let sources: FakeSource[];
   const request = (session?: string): LiveRequest => ({
@@ -44,6 +47,76 @@ describe("shared live stream", () => {
     vi.unstubAllGlobals();
     vi.clearAllTimers();
     vi.useRealTimers();
+  });
+
+  it("retries readiness when the latest child refresh failed", () => {
+    const hub = new LiveHub();
+    const a = { postMessage: vi.fn() };
+    hub.update(a, request("a"));
+    const old = sources[0]!;
+    old.emit("session_ready", "a", `v1:${"a".repeat(64)}`);
+    hub.acknowledge(
+      a,
+      a.postMessage.mock.calls.findLast(([frame]) => frame.receipt !== undefined)![0].receipt,
+    );
+    old.emit("events_ready", "{}");
+    old.emit("session_updated", "a", `v1:${"a".repeat(64)}`);
+    // The child read failed, so the update is not acknowledged.
+    a.postMessage.mockClear();
+    hub.update({ postMessage: vi.fn() }, request("b"));
+    vi.advanceTimersByTime(250);
+    sources[1]!.emit("session_ready", "a", `v1:${"a".repeat(64)}`);
+    expect(a.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "session_ready" }));
+    hub.close();
+  });
+
+  it("ignores an acknowledgment for an overtaken refresh", () => {
+    const hub = new LiveHub();
+    const a = { postMessage: vi.fn() };
+    hub.update(a, request("a"));
+    const old = sources[0]!;
+    old.emit("session_ready", "a", marker1);
+    const receipt = a.postMessage.mock.lastCall![0].receipt;
+    old.emit("events_ready", "{}");
+    old.emit("session_updated", "a", marker2);
+    hub.acknowledge(a, receipt);
+    a.postMessage.mockClear();
+    hub.update({ postMessage: vi.fn() }, request("b"));
+    vi.advanceTimersByTime(250);
+    sources[1]!.emit("session_ready", "a", marker1);
+    expect(a.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "session_ready" }));
+    hub.close();
+  });
+
+  it("suppresses startup frames for three applied sessions during a handoff", () => {
+    const hub = new LiveHub();
+    const ports = ["a", "b", "c"].map((id) => ({ id, port: { postMessage: vi.fn() } }));
+    for (const { id, port } of ports) hub.update(port, request(id));
+    vi.advanceTimersByTime(250);
+    const old = sources.at(-1)!;
+    for (const { id, port } of ports) {
+      old.emit("session_ready", id, marker1);
+      hub.acknowledge(port, port.postMessage.mock.lastCall![0].receipt);
+    }
+    old.emit("events_ready", "{}");
+    for (const { port } of ports) port.postMessage.mockClear();
+    const changed = { postMessage: vi.fn() };
+    hub.update(changed, request("d"));
+    vi.advanceTimersByTime(250);
+    const next = sources.at(-1)!;
+    for (const { id } of ports) {
+      next.emit("session_ready", id, marker1);
+      next.emit("session.timing", JSON.stringify({ session_id: id }));
+    }
+    next.emit("session_ready", "d", marker2);
+    next.emit("session.timing", '{"session_id":"d"}');
+    next.emit("events_ready", "{}");
+    for (const { port } of ports) expect(port.postMessage).not.toHaveBeenCalled();
+    expect(changed.postMessage.mock.calls.map(([frame]) => frame.type)).toEqual([
+      "session_ready",
+      "session.timing",
+    ]);
+    hub.close();
   });
 
   it("keeps archive updates flowing while changing watched sessions", () => {
@@ -107,34 +180,34 @@ describe("shared live stream", () => {
   });
 
   it.each([
-    { name: "unchanged", old: "1:x", replacement: "1:x", ready: false },
-    { name: "changed", old: "1:x", replacement: "2:y", ready: true },
+    { name: "unchanged", old: marker1, replacement: marker1, ready: false },
+    { name: "changed", old: marker1, replacement: marker2, ready: true },
     { name: "unknown", old: "", replacement: "", ready: true },
     {
       name: "updated before handoff",
-      old: "2:y",
-      replacement: "2:y",
+      old: marker2,
+      replacement: marker2,
       ready: false,
       update: true,
     },
     {
       name: "missing before handoff",
-      old: "1:x",
-      replacement: "1:x",
+      old: marker1,
+      replacement: marker1,
       ready: true,
       missing: true,
     },
     {
       name: "disconnected",
-      old: "1:x",
-      replacement: "1:x",
+      old: marker1,
+      replacement: marker1,
       ready: true,
       disconnected: true,
     },
     {
       name: "replacement errors",
-      old: "1:x",
-      replacement: "1:x",
+      old: marker1,
+      replacement: marker1,
       ready: true,
       replacementError: true,
     },
@@ -146,10 +219,14 @@ describe("shared live stream", () => {
     hub.update(a, request("a"));
     hub.update(archive, request());
     const old = sources[0]!;
-    old.emit("session_ready", "a", scenario.update ? "1:x" : scenario.old);
+    old.emit("session_ready", "a", scenario.update ? marker1 : scenario.old);
     old.emit("session.timing", '{"session_id":"a","turn_count":1}');
     old.emit("events_ready", "{}");
     if (scenario.update) old.emit("session_updated", "a", scenario.old);
+    hub.acknowledge(
+      a,
+      a.postMessage.mock.calls.findLast(([frame]) => frame.receipt !== undefined)![0].receipt,
+    );
     if (scenario.missing) old.emit("session_missing", "a");
     if (scenario.disconnected) old.emit("error");
     a.postMessage.mockClear();
@@ -164,8 +241,7 @@ describe("shared live stream", () => {
     next.emit("session.timing", '{"session_id":"b"}');
     next.emit("events_ready", "{}");
     expect(a.postMessage.mock.calls.map(([frame]) => frame.type)).toEqual([
-      ...(scenario.ready ? ["session_ready"] : []),
-      "session.timing",
+      ...(scenario.ready ? ["session_ready", "session.timing"] : []),
     ]);
     expect(b.postMessage.mock.calls.map(([frame]) => frame.type)).toEqual([
       "session_ready",
@@ -173,11 +249,13 @@ describe("shared live stream", () => {
     ]);
     if (!scenario.disconnected) expect(archive.postMessage).not.toHaveBeenCalled();
     next.emit("session_updated", "a", "3:z");
-    expect(a.postMessage).toHaveBeenLastCalledWith({
-      type: "session_updated",
-      data: "a",
-      id: "3:z",
-    });
+    expect(a.postMessage).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        type: "session_updated",
+        data: "a",
+        id: "3:z",
+      }),
+    );
     hub.close();
   });
 
@@ -187,19 +265,22 @@ describe("shared live stream", () => {
     const joining = { postMessage: vi.fn() };
     hub.update(first, request("a"));
     const old = sources[0]!;
-    old.emit("session_ready", "a", "1:x");
+    old.emit("session_ready", "a", marker1);
     old.emit("events_ready", "{}");
-    old.emit("session_updated", "a", "2:y");
+    old.emit("session_updated", "a", marker2);
     hub.update(joining, request("a"));
-    expect(joining.postMessage).toHaveBeenCalledWith({
-      type: "session_ready",
-      data: "a",
-      id: "2:y",
-    });
+    expect(joining.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "session_ready",
+        data: "a",
+        id: marker2,
+      }),
+    );
+    hub.acknowledge(joining, joining.postMessage.mock.lastCall![0].receipt);
     joining.postMessage.mockClear();
     hub.update({ postMessage: vi.fn() }, request("b"));
     vi.advanceTimersByTime(250);
-    sources[1]!.emit("session_ready", "a", "2:y");
+    sources[1]!.emit("session_ready", "a", marker2);
     expect(joining.postMessage).not.toHaveBeenCalled();
     hub.close();
   });
@@ -214,7 +295,7 @@ describe("shared live stream", () => {
       hub.update({ postMessage: vi.fn() }, request("b"));
       vi.advanceTimersByTime(250);
       const old = sources[1]!;
-      old.emit("session_ready", "a", "1:x");
+      old.emit("session_ready", "a", marker1);
       old.emit("session.timing", '{"session_id":"a"}');
       old.emit("session_ready", "b", "1:b");
       old.emit("events_ready", "{}");
@@ -233,12 +314,12 @@ describe("shared live stream", () => {
         hub.leave(joining);
         hub.update(joining, request("a"));
       }
-      next.emit("session_ready", "a", "1:x");
+      next.emit("session_ready", "a", marker1);
       if (when === "between readiness and timing") hub.update(joining, request("a"));
       next.emit("session.timing", '{"session_id":"a"}');
       next.emit("events_ready", "{}");
       expect(joining.postMessage.mock.calls).toEqual([
-        [{ type: "session_ready", data: "a", id: "1:x" }],
+        [expect.objectContaining({ type: "session_ready", data: "a", id: marker1 })],
         [{ type: "session.timing", data: '{"session_id":"a"}' }],
       ]);
       hub.close();
@@ -412,7 +493,7 @@ describe("shared live stream", () => {
     expect(sources).toHaveLength(1);
     expect(first.postMessage).not.toHaveBeenCalled();
     expect(joining.postMessage.mock.calls).toEqual([
-      [{ type: "session_ready", data: "a", id: "" }],
+      [expect.objectContaining({ type: "session_ready", data: "a", id: "" })],
       [{ type: "session.timing", data: '{"session_id":"a","turn_count":2}' }],
     ]);
   });
@@ -429,16 +510,20 @@ describe("shared live stream", () => {
     expect(sources).toHaveLength(2);
     expect(sources[1]!.url.searchParams.getAll("session")).toEqual(["a"]);
     sources[1]!.emit("session_ready", "a");
-    expect(first.postMessage).toHaveBeenLastCalledWith({
-      type: "session_ready",
-      data: "a",
-      id: "",
-    });
-    expect(joining.postMessage).toHaveBeenLastCalledWith({
-      type: "session_ready",
-      data: "a",
-      id: "",
-    });
+    expect(first.postMessage).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        type: "session_ready",
+        data: "a",
+        id: "",
+      }),
+    );
+    expect(joining.postMessage).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        type: "session_ready",
+        data: "a",
+        id: "",
+      }),
+    );
     hub.close();
   });
 
@@ -464,7 +549,7 @@ describe("shared live stream", () => {
       vi.advanceTimersByTime(250);
       expect(sources).toHaveLength(order === "old first" ? 2 : 1);
       const source = sources.at(-1)!;
-      await source.options.fetch(source.url, { headers: { "Last-Event-ID": "1:x" } });
+      await source.options.fetch(source.url, { headers: { "Last-Event-ID": marker1 } });
       expect((fetch.mock.calls[0]![1].headers as Headers).get("Authorization")).toBe(
         "Bearer new-token",
       );

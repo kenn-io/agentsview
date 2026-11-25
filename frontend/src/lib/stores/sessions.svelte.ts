@@ -945,7 +945,7 @@ class SessionsStore {
 
   async refreshActiveSession() {
     const id = this.activeSessionId;
-    if (!id) return;
+    if (!id) return false;
     const version = ++this.refreshVersion;
     const signal = this.refreshRead.begin();
     try {
@@ -955,18 +955,20 @@ class SessionsStore {
         this.activeSessionId !== id ||
         !this.refreshRead.isCurrent(signal)
       ) {
-        return;
+        return false;
       }
       if (this.byId.has(id)) {
         this.details.set(id, { ...this.details.get(id), ...session });
         this.updateActiveIndex(session);
       }
       this.markActiveSessionFound(id);
+      return this.byId.has(id);
     } catch (err) {
       // Session may have been deleted
       if (this.refreshVersion === version && this.refreshRead.isCurrent(signal)) {
         this.markActiveSessionMissing(id, err);
       }
+      return false;
     } finally {
       this.refreshRead.finish(signal);
     }
@@ -985,18 +987,20 @@ class SessionsStore {
         this.activeSessionId !== parentId ||
         !this.childSessionsRead.isCurrent(signal)
       ) {
-        return;
+        return false;
       }
       const map = new Map<string, Session>();
       for (const child of children) {
         map.set(child.id, child);
       }
       this.childSessions = map;
+      return true;
     } catch {
       if (this.childSessionsVersion !== version || this.activeSessionId !== parentId) {
-        return;
+        return false;
       }
       this.childSessions = new Map();
+      return false;
     } finally {
       this.childSessionsRead.finish(signal);
     }

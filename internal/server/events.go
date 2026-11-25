@@ -15,3 +15,7 @@ func (s *Server) sessionMonitor(
 ) <-chan struct{} {
 	return sessionwatch.New(s.db, s.engine).Events(ctx, sessionID)
 }
+
+func (s *Server) sessionTreeMonitor(ctx context.Context, sessionID string) <-chan struct{} {
+	return sessionwatch.New(s.db, s.engine).TreeEvents(ctx, sessionID)
+}
