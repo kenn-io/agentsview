@@ -1490,11 +1490,14 @@ for Signals and the current session version at lookup. A mismatch triggers a
 fresh count. Bump `frustrationMarkerRulesVersion` whenever the Go or PostgreSQL
 frustration classifier changes a verdict. On startup, writable PostgreSQL
 stores fill missing or stale counts after the Usage cache warms. A Signals
-request waits up to five seconds when the active fill covers all its missing
-counts, then scans any remaining misses. Requests also scan and save missing
-or stale counts, including zero counts. A save skips sessions changed before
-the write starts. A sync overlapping the save can leave a stale row; later
-reads reject that row and recount the session.
+request reuses saved counts and scans its own misses without waiting for the
+fill. An active fill and a request can scan the same sessions. Concurrent
+requests with the same cacheable filter share one load. Requests save scanned
+counts, including zero counts, in the background without delaying the response.
+The save queue coalesces identical session versions. A save skips sessions
+changed before the write starts. A sync overlapping the save can leave a stale
+row; later reads reject that row and recount the session. Closing the store
+cancels pending saves.
 
 A read-only role reuses rows it can read and scans misses without saving them.
 The table is optional for push. A missing table falls back to scanning. Hosted

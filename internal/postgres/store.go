@@ -133,6 +133,14 @@ func (s *Store) DB() *sql.DB {
 // Close closes the underlying database connection.
 func (s *Store) Close() error {
 	if pool := s.DB(); pool != nil {
+		queue := &s.runtimeState().frustrationSaves
+		queue.mu.Lock()
+		queue.closed = true
+		if queue.cancel != nil {
+			queue.cancel()
+		}
+		queue.mu.Unlock()
+		queue.wg.Wait()
 		s.saveActivityInputs()
 		var cacheErr error
 		if s.usageCache != nil {

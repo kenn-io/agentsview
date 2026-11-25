@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-	"time"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/signals"
@@ -16,6 +15,10 @@ const frustrationMarkerRulesVersion = 1
 
 func frustrationSessionVersion(column string) string {
 	return `(` + column + `::text || ':' || COALESCE(to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), ''))`
+}
+
+func frustrationCountValid(column, rulesParam string) string {
+	return `c.rules_version = ` + rulesParam + ` AND c.session_version = ` + frustrationSessionVersion("s."+column)
 }
 
 // ensureFrustrationCountsPG reports false when setup failed.
@@ -34,7 +37,7 @@ func ensureFrustrationCountsPG(ctx context.Context, pg *sql.DB) bool {
 
 func (s *Store) loadStoredFrustrationCounts(ctx context.Context, ids []string, versions map[string]string, versionColumn string) (map[string]int, error) {
 	counts := make(map[string]int)
-	rows, err := s.DB().QueryContext(ctx, `SELECT c.session_id, c.session_version, c.marker_count FROM session_frustration_counts c JOIN sessions s ON s.id = c.session_id WHERE c.session_id = ANY($1) AND c.rules_version = $2 AND c.session_version = `+frustrationSessionVersion("s."+versionColumn), ids, frustrationMarkerRulesVersion)
+	rows, err := s.DB().QueryContext(ctx, `SELECT c.session_id, c.session_version, c.marker_count FROM session_frustration_counts c JOIN sessions s ON s.id = c.session_id WHERE c.session_id = ANY($1) AND `+frustrationCountValid(versionColumn, "$2"), ids, frustrationMarkerRulesVersion)
 	if isUndefinedTable(err) || isInsufficientPrivilege(err) {
 		return counts, nil
 	}
@@ -55,15 +58,72 @@ func (s *Store) loadStoredFrustrationCounts(ctx context.Context, ids []string, v
 	return counts, rows.Err()
 }
 
-// Reserve request time for evidence reads when another writer holds a count row.
-func (s *Store) storeFrustrationCountsForRead(ctx context.Context, versions map[string]string, counts map[string]int, versionColumn string) error {
-	budget := time.Second
-	if deadline, ok := ctx.Deadline(); ok {
-		budget = min(budget, time.Until(deadline)/2)
+// Optional saves belong to the store and must not hold up the response.
+func (s *Store) storeFrustrationCountsForRead(versions map[string]string, counts map[string]int, versionColumn string) {
+	queue := &s.runtimeState().frustrationSaves
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	if queue.closed {
+		return
 	}
-	writeCtx, cancel := context.WithTimeout(ctx, budget)
-	defer cancel()
-	return s.storeFrustrationCounts(writeCtx, versions, counts, versionColumn)
+	if queue.ctx == nil {
+		queue.ctx, queue.cancel = context.WithCancel(context.Background())
+	}
+	if queue.queued == nil {
+		queue.queued = make(map[frustrationSaveKey]struct{})
+	}
+	save := frustrationSave{make(map[string]string), make(map[string]int), versionColumn}
+	for id, version := range versions {
+		key := frustrationSaveKey{id, version, versionColumn}
+		if _, exists := queue.queued[key]; exists {
+			continue
+		}
+		queue.queued[key] = struct{}{}
+		save.versions[id] = version
+		save.counts[id] = counts[id]
+	}
+	if len(save.versions) == 0 {
+		return
+	}
+	queue.pending = append(queue.pending, save)
+	if !queue.running {
+		queue.running = true
+		queue.wg.Go(func() { s.drainFrustrationSaves(queue) })
+	}
+}
+
+func (s *Store) drainFrustrationSaves(queue *frustrationSaveQueue) {
+	for {
+		queue.mu.Lock()
+		if queue.closed || len(queue.pending) == 0 {
+			queue.running = false
+			queue.pending = nil
+			queue.queued = nil
+			queue.mu.Unlock()
+			return
+		}
+		save := queue.pending[0]
+		queue.pending[0] = frustrationSave{}
+		queue.pending = queue.pending[1:]
+		queue.mu.Unlock()
+		// Saves outlive requests but stop when the store closes.
+		ctx, cancel := context.WithTimeout(queue.ctx, frustrationFillChunkTimeout)
+		err := s.storeFrustrationCounts(ctx, save.versions, save.counts, save.column)
+		timedOut := err != nil && ctx.Err() == context.DeadlineExceeded
+		cancel()
+		if err != nil && !isUndefinedTable(err) && !IsReadOnlyError(err) && queue.ctx.Err() == nil {
+			log.Printf("storing frustration counts: %v", err)
+		}
+		queue.mu.Lock()
+		if timedOut && !queue.closed {
+			queue.pending = append(queue.pending, save)
+		} else {
+			for id, version := range save.versions {
+				delete(queue.queued, frustrationSaveKey{id, version, save.column})
+			}
+		}
+		queue.mu.Unlock()
+	}
 }
 
 func (s *Store) storeFrustrationCounts(ctx context.Context, versions map[string]string, counts map[string]int, versionColumn string) error {
@@ -124,7 +184,7 @@ func (s *Store) scanFrustrationCounts(ctx context.Context, ids []string, version
 // staleFrustrationSessions lists stale sessions in Dashboard order.
 func (s *Store) staleFrustrationSessions(ctx context.Context, versionColumn string) ([]string, error) {
 	where := db.BuildAnalyticsWhere(db.AnalyticsFilter{}, db.NewQueryBuilder(s.sessionDialect(), 1), "s.", "", nil)
-	rows, err := s.pg.QueryContext(ctx, `SELECT s.id FROM sessions s LEFT JOIN session_frustration_counts c ON c.session_id=s.id WHERE `+where+` AND (c.session_id IS NULL OR (c.rules_version <= $1 AND (c.rules_version < $1 OR c.session_version <> `+frustrationSessionVersion("s."+versionColumn)+`))) ORDER BY s.is_automated, COALESCE(s.started_at, s.created_at) DESC NULLS LAST, s.id`, frustrationMarkerRulesVersion)
+	rows, err := s.pg.QueryContext(ctx, `SELECT s.id FROM sessions s LEFT JOIN session_frustration_counts c ON c.session_id=s.id WHERE `+where+` AND (c.session_id IS NULL OR (c.rules_version <= $1 AND NOT (`+frustrationCountValid(versionColumn, "$1")+`))) ORDER BY s.is_automated, COALESCE(s.started_at, s.created_at) DESC NULLS LAST, s.id`, frustrationMarkerRulesVersion)
 	if err != nil {
 		return nil, err
 	}

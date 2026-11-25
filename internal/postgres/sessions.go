@@ -47,7 +47,7 @@ type storeRuntime struct {
 	activityKept       kept.Memo[pgActivityKept]
 	activityInputs     kept.Memo[pgActivityInputs]
 	frustrationMarkers db.FrustrationMarkerMemo
-	frustrationFill    frustrationFillState
+	frustrationSaves   frustrationSaveQueue
 
 	cursorMu     sync.RWMutex
 	cursorSecret []byte
@@ -90,6 +90,27 @@ type storeRuntime struct {
 	vectorMu                  sync.RWMutex
 	vectorSearcher            db.VectorSearcher
 	semanticUnavailableReason string
+}
+
+type frustrationSaveQueue struct {
+	mu      sync.Mutex
+	ctx     context.Context
+	cancel  context.CancelFunc
+	closed  bool
+	running bool
+	pending []frustrationSave
+	queued  map[frustrationSaveKey]struct{}
+	wg      sync.WaitGroup
+}
+
+type frustrationSaveKey struct {
+	id, version, column string
+}
+
+type frustrationSave struct {
+	versions map[string]string
+	counts   map[string]int
+	column   string
 }
 
 // pgSessionBaseCols is the column list for PG session queries that do not
