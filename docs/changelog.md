@@ -25,9 +25,9 @@ The latest release is
   stay visible. AgentsView reads the run type Muse records on the first user
   message, so no `[automated]` patterns are needed. Restart or run
   `agentsview sync` to reclassify local Muse Personal sessions whose
-  transcripts are still on disk. For hosted sessions, run
-  `agentsview replica pg raw-reparse <runtime-target> --run-id <id> --batch-size 64`.
-  See [PostgreSQL Sync](/docs/pg-sync/).
+  transcripts are still on disk. Hosted operators run a parser rollout with a
+  fresh run ID and repeat it until the output contains `complete=true`; see
+  [Reparse and rollback](/docs/hosted-raw-sync/#reparse-and-rollback).
 
 - Reporting schema 7 lets integrations count shared Cursor billing events once
   across overlapping archives while retaining events unique to each archive.
