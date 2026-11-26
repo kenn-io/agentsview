@@ -725,3 +725,42 @@ func TestLaunchParentClaudeEarlierDirectoryChange(t *testing.T) {
 		})
 	}
 }
+
+func TestLaunchParentArchivedLauncherWithoutSource(t *testing.T) {
+	for _, agent := range []string{"claude", "codex"} {
+		for _, tc := range []struct {
+			name, command, callCwd string
+			want                   bool
+		}{
+			{"stored call directory", `codex exec hi`, "/repo", true},
+			{"explicit directory", `codex -C /repo exec hi`, "", true},
+			{"missing directory", `codex exec hi`, "", false},
+		} {
+			t.Run(agent+"/"+tc.name, func(t *testing.T) {
+				d := testDB(t)
+				require.NoError(t, d.DropBulkImportIndexes(t.Context()))
+				insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = agent; s.Cwd = "/repo" })
+				insertMessages(t, d, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"` + tc.command + `"}`, WorkingDirectory: tc.callCwd}}})
+				_, err := d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET source_missing_at='2026-01-03T00:00:00Z' WHERE id='parent'`)
+				require.NoError(t, err)
+				started := "2026-01-02T03:04:03Z"
+				insertSession(t, d, "child", "project", func(s *Session) {
+					s.Agent = "codex"
+					s.Cwd = "/repo"
+					s.StartedAt = &started
+					s.SessionKind = "non-interactive"
+				})
+				require.NoError(t, d.RebuildBulkImportIndexes(t.Context()))
+				_, err = d.LinkSubagentSessionsContext(t.Context())
+				require.NoError(t, err)
+				link, err := d.GetSessionExternalParent(t.Context(), "child")
+				if tc.want {
+					require.NoError(t, err)
+					assert.Equal(t, "parent", link.ParentSessionID)
+				} else {
+					require.ErrorIs(t, err, sql.ErrNoRows)
+				}
+			})
+		}
+	}
+}

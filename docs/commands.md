@@ -2508,7 +2508,9 @@ the skill without inspecting or changing the MCP entry.
 AgentsView also links one-shot runs without setup when exactly one archived
 session launched the run in the same folder shortly before it started. An
 explicit parent link takes precedence, and clearing a link prevents inference
-from restoring it.
+from restoring it. If an older launcher's transcript is gone and its archived
+call has no working directory, a run stays parentless unless the command names
+an absolute directory.
 
 The SessionStart hook refreshes memory and links runs to their launching
 session on Linux and Windows. Parent linking on macOS is unverified. Codex
