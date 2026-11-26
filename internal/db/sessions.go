@@ -1755,25 +1755,40 @@ func (db *DB) upsertSession(ctx context.Context,
 	if err != nil {
 		return result, err
 	}
-	if result.structuredPRLinksChanged && !db.usageOnlyStorage() {
-		if err := refreshSessionPromptPRLinksTx(ctx, tx, s.ID); err != nil {
-			return result, err
-		}
+	if err := db.settleUpsertedSessionTx(ctx, tx, s, result); err != nil {
+		return result, err
 	}
-	if db.usageOnlyStorage() {
-		if err := settleUsageOnlySessionTx(tx, s.ID); err != nil {
-			return result, err
-		}
-	}
-	if result.inserted && (s.Agent == "codex" && s.SessionKind == "non-interactive" || s.Agent == "claude" && s.Entrypoint == "sdk-cli") {
-		if _, err := linkLaunchParentsChangedTx(ctx, tx, []string{s.ID}, map[string]int{}); err != nil {
-			return result, err
-		}
+	if err := linkInsertedLaunchChildTx(ctx, tx, s, result); err != nil {
+		return result, err
 	}
 	if err := tx.Commit(); err != nil {
 		return result, fmt.Errorf("committing session upsert: %w", err)
 	}
 	return result, nil
+}
+
+// settleUpsertedSessionTx refreshes PR links and applies the usage-only policy
+// to a session row that upsertSessionExec just wrote.
+func (db *DB) settleUpsertedSessionTx(ctx context.Context, tx *sql.Tx, s Session, result sessionUpsertResult) error {
+	if result.structuredPRLinksChanged && !db.usageOnlyStorage() {
+		if err := refreshSessionPromptPRLinksTx(ctx, tx, s.ID); err != nil {
+			return err
+		}
+	}
+	if db.usageOnlyStorage() {
+		return settleUsageOnlySessionTx(tx, s.ID)
+	}
+	return nil
+}
+
+// linkInsertedLaunchChildTx links a newly inserted launched run to its parent
+// in the transaction that wrote it.
+func linkInsertedLaunchChildTx(ctx context.Context, tx *sql.Tx, s Session, result sessionUpsertResult) error {
+	if !result.inserted || !(s.Agent == "codex" && s.SessionKind == "non-interactive" || s.Agent == "claude" && s.Entrypoint == "sdk-cli") {
+		return nil
+	}
+	_, err := linkLaunchParentsChangedTx(ctx, tx, []string{s.ID}, map[string]int{})
+	return err
 }
 
 type sessionUpsertResult struct {

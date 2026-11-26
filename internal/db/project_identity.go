@@ -853,15 +853,8 @@ func (db *DB) upsertSessionWithProjectIdentity(ctx context.Context,
 	if err != nil {
 		return sessionUpsertResult{}, err
 	}
-	if result.structuredPRLinksChanged && !db.usageOnlyStorage() {
-		if err := refreshSessionPromptPRLinksTx(ctx, tx, s.ID); err != nil {
-			return result, err
-		}
-	}
-	if db.usageOnlyStorage() {
-		if err := settleUsageOnlySessionTx(tx, s.ID); err != nil {
-			return sessionUpsertResult{}, err
-		}
+	if err := db.settleUpsertedSessionTx(ctx, tx, s, result); err != nil {
+		return sessionUpsertResult{}, err
 	}
 	if obs.Project != "" {
 		if err := upsertProjectIdentityObservationWithSnapshotProjectTxContext(
@@ -877,6 +870,9 @@ func (db *DB) upsertSessionWithProjectIdentity(ctx context.Context,
 		); err != nil {
 			return sessionUpsertResult{}, err
 		}
+	}
+	if err := linkInsertedLaunchChildTx(ctx, tx, s, result); err != nil {
+		return sessionUpsertResult{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return sessionUpsertResult{},

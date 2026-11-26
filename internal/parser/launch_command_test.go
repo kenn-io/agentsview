@@ -68,8 +68,6 @@ func TestLaunchCommands(t *testing.T) {
 		{`cmd.exe /c "codex exec hi"`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}}},
 		{`echo $(codex exec hi)`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}}},
 		{`cat <(codex exec hi)`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}}},
-		{`cat < <(codex exec hi)`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}}},
-		{`cat > >(codex exec hi)`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}}},
 		{`env echo "$TEXT"`, nil},
 		{`bash -c "$COMMAND"`, []LaunchCommand{{Agent: "codex", Unknown: true}, {Agent: "claude", Unknown: true}}},
 		{`cd /other && cd nested && codex exec hi`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/other/nested"}}}},
@@ -80,6 +78,17 @@ func TestLaunchCommands(t *testing.T) {
 		{`cat p.md | codex exec -`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}}},
 		{`export X=1 && codex exec hi`, []LaunchCommand{{Agent: "codex", Unknown: true, Dirs: []string{"/repo"}}}},
 		{`grep codex exec`, nil},
+		{`cat > "$(codex exec hi)"`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}}},
+		{`cat < <(codex exec hi)`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}}},
+		{`cat > >(codex exec hi)`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}}},
+		{"cat <<EOF\n$(codex exec hi)\nEOF", []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}}},
+		{"cat <<EOF\n`claude -p hi`\nEOF", []LaunchCommand{{Agent: "claude", Dirs: []string{"/repo"}}}},
+		{"cat <<'EOF'\n$(codex exec hi)\nEOF", nil},
+		{`cat > "$(cd /other && codex exec hi)"`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/other"}}}},
+		{`cat > "$(cd /other)"; codex exec hi`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}}},
+		{`cat > "$(codex exec hi)"; codex exec hi`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}, {Agent: "codex", Dirs: []string{"/repo"}}}},
+		{`{ echo hi; } > "$(codex exec hi)"`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}}},
+		{`cat > "$(cat > "$(codex exec hi)")"`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}}},
 	} {
 		t.Run(tc.command, func(t *testing.T) { assert.Equal(t, tc.want, LaunchesFromCommand(tc.command, "/repo")) })
 	}
