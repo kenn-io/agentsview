@@ -286,7 +286,7 @@ func TestCodexLabeledOverlappingRootsSync(t *testing.T) {
 }
 
 func TestCodexLabeledCopyWinsSync(t *testing.T) {
-	for _, mode := range []string{"changed path", "older first", "known before newer copy", "usage refresh", "missed event", "single session"} {
+	for _, mode := range []string{"changed path", "older first", "newer event then older event", "usage refresh", "missed event", "single session"} {
 		t.Run(mode, func(t *testing.T) {
 			database := openTestDB(t)
 			root := t.TempDir()
@@ -301,14 +301,14 @@ func TestCodexLabeledCopyWinsSync(t *testing.T) {
 				require.NoError(t, os.Chtimes(path, mtime, mtime))
 			}
 			write(0, paths[0])
-			if mode != "single session" && mode != "usage refresh" && mode != "known before newer copy" {
+			if mode != "single session" && mode != "usage refresh" && mode != "newer event then older event" {
 				write(1, paths[1])
 				write(2, paths[2])
 			}
 			engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {ordinary, logs}}})
 			t.Cleanup(engine.Close)
 			switch mode {
-			case "known before newer copy":
+			case "newer event then older event":
 				write(1, paths[1])
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[1]}))
 				write(2, paths[2])
