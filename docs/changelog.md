@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-25
+last_edited: 2026-11-26
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -29,6 +29,13 @@ The latest release is
   swap, leaves the archive unchanged, and tells you to close that connection
   and retry. Other failures of a direct `source sync` also exit non-zero now.
   Before, only `debug.log` recorded them.
+
+- A server that only collects sessions from `[[remote_hosts]]` now finishes
+  its upgrade rebuild and returns to small incremental remote syncs. Before,
+  the rebuild aborted because the machine had no local session files, and
+  every scheduled remote sync after that re-downloaded and re-parsed each
+  remote's full history. After an upgrade, each remote now rebuilds once from
+  its local mirror.
 
 ## 0.48.0
 
