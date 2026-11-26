@@ -22,13 +22,10 @@ const (
 	// codexCursorCheckpointVersion is the wire version for the persisted
 	// cursor encoding. Bump when the encoding changes; decode failures fall
 	// back to a full parse.
-	// Version 9 keeps the token_count repeat key separate from the pending
-	// record awaiting its mirror, and scopes that pending record to its turn.
-	// Version 8 persists the record identity separately from the most recent
-	// usage-event digest, so a repeated record remains deduplicated after its
-	// mirrored token_count.
-	// Version 7 persists the immediately preceding Codex usage-record counters
-	// so an incremental tail can suppress its token_count mirror.
+	// Version 9 persists token_usage_record state: the record identity, the
+	// pending record awaiting its token_count mirror, and the previous
+	// token_count's repeat key and cumulative total, kept separate so each
+	// dedupe decision survives an incremental resume.
 	// Version 6 digests the whole token_count info object, including the
 	// cumulative total, instead of last_token_usage alone; a version 5 digest
 	// cannot recognize a repeat that straddles the resume offset.
@@ -77,6 +74,9 @@ type codexCursorState struct {
 	pendingUsageRecordDigest     [sha256.Size]byte // per-call counters awaiting mirror
 	lastTokenUsageSeen           bool
 	lastTokenCountSeen           bool
+	lastTokenCountTotalKnown     bool
+	lastTokenCountTotal          int64 // previous token_count cumulative total_tokens
+	recordTotalSinceTokenCount   int64 // total_tokens of records counted since then
 	lastTokenUsageResponseID     string
 	pendingUsageRecordResponseID string
 	pendingUsageRecord           bool
@@ -139,6 +139,9 @@ func (s *codexCursorState) MarshalBinary() ([]byte, error) {
 	if s.lastTokenCountSeen {
 		flags |= 1 << 5
 	}
+	if s.lastTokenCountTotalKnown {
+		flags |= 1 << 6
+	}
 	if err := write(flags); err != nil {
 		return nil, err
 	}
@@ -149,6 +152,12 @@ func (s *codexCursorState) MarshalBinary() ([]byte, error) {
 		return nil, err
 	}
 	if err := write(s.pendingUsageRecordDigest); err != nil {
+		return nil, err
+	}
+	if err := write(s.lastTokenCountTotal); err != nil {
+		return nil, err
+	}
+	if err := write(s.recordTotalSinceTokenCount); err != nil {
 		return nil, err
 	}
 	for _, str := range []string{s.lastTokenUsageResponseID, s.pendingUsageRecordResponseID} {
@@ -258,6 +267,7 @@ func (s *codexCursorState) UnmarshalBinary(data []byte) error {
 	s.lastTokenUsageSeen = flags&(1<<3) != 0
 	s.pendingUsageRecord = flags&(1<<4) != 0
 	s.lastTokenCountSeen = flags&(1<<5) != 0
+	s.lastTokenCountTotalKnown = flags&(1<<6) != 0
 	if err := read(&s.lastTokenUsageDigest); err != nil {
 		return err
 	}
@@ -265,6 +275,12 @@ func (s *codexCursorState) UnmarshalBinary(data []byte) error {
 		return err
 	}
 	if err := read(&s.pendingUsageRecordDigest); err != nil {
+		return err
+	}
+	if err := read(&s.lastTokenCountTotal); err != nil {
+		return err
+	}
+	if err := read(&s.recordTotalSinceTokenCount); err != nil {
 		return err
 	}
 	if s.lastTokenUsageResponseID, err = readStr(); err != nil {
@@ -483,29 +499,35 @@ func (s *codexCursorState) observeTokenUsageRecord(raw, responseID string) bool 
 	s.pendingUsageRecordDigest = digest
 	s.pendingUsageRecordResponseID = responseID
 	s.pendingUsageRecord = true
+	s.recordTotalSinceTokenCount += gjson.Get(raw, "total_tokens").Int()
 	return false
 }
 
-// observeTokenUsage records token_count's full info-object key separately from
-// record identity. Duplicate counts never consume a different record's mirror.
-func (s *codexCursorState) observeTokenUsage(raw, dedupKey string) bool {
+// observeTokenUsage dedupes token_count by its full info object, separately
+// from record identity, so an unchanged repeat never consumes a record's
+// pending mirror. A token_count mirrors the pending record when its per-call
+// counters match and its cumulative total grew by no more than the records
+// counted since the previous token_count. A larger increase means the session
+// total also covers this token_count's own response, so both count.
+func (s *codexCursorState) observeTokenUsage(raw, dedupKey string, cumulative int64, hasCumulative bool) bool {
 	canonical := jsontext.Value(dedupKey).Clone()
 	if err := canonical.Canonicalize(jsontext.CanonicalizeRawInts(false)); err != nil {
-		mirror := s.pendingUsageRecord && tokenUsageDigest(raw) == s.pendingUsageRecordDigest
-		s.expirePendingUsageRecord()
-		if !mirror {
-			s.forgetIDlessUsageRecord()
-		}
-		return mirror
+		canonical = jsontext.Value(dedupKey)
 	}
 	digest := sha256.Sum256(canonical)
 	if s.lastTokenCountSeen && digest == s.lastTokenUsageDigest {
 		return true
 	}
-	usageDigest := tokenUsageDigest(raw)
-	mirror := s.pendingUsageRecord && usageDigest == s.pendingUsageRecordDigest
+	mirror := s.pendingUsageRecord && tokenUsageDigest(raw) == s.pendingUsageRecordDigest
+	if mirror && hasCumulative && s.lastTokenCountTotalKnown &&
+		cumulative-s.lastTokenCountTotal > s.recordTotalSinceTokenCount {
+		mirror = false
+	}
 	s.lastTokenUsageDigest = digest
 	s.lastTokenCountSeen = true
+	s.lastTokenCountTotal = cumulative
+	s.lastTokenCountTotalKnown = hasCumulative
+	s.recordTotalSinceTokenCount = 0
 	s.expirePendingUsageRecord()
 	if !mirror {
 		s.forgetIDlessUsageRecord()

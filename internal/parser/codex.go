@@ -385,13 +385,13 @@ func (b *codexSessionBuilder) processLine(ctx context.Context,
 ) (skip bool, err error) {
 	b.sourceLine++
 	lineType := gjson.Get(line, "type").Str
+	// A token_usage_record is commonly followed by response_item and
+	// item_completed lines before Codex emits the mirrored token_count, so the
+	// record stays pending across those lines. The next non-repeat token_count
+	// resolves it, and a new turn expires it.
 	if lineType == codexTypeTurnContext {
 		b.expireUsageRecordAtTurn()
 	}
-	// A token_usage_record is commonly followed by response_item and
-	// item_completed lines before Codex emits the mirrored token_count. Keep
-	// the record candidate across those transcript lines; the next
-	// usage-bearing token_count or a new turn resolves it.
 	if lineType == codexTypeTurnContext {
 		b.sourceTurnID = strings.Clone(gjson.Get(line, "payload.turn_id").Str)
 		b.sourceTurnContexts = append(b.sourceTurnContexts, b.sourceTurnID)
@@ -754,8 +754,9 @@ func (b *codexSessionBuilder) handleTokenUsageRecord(
 	}
 	for _, counter := range []string{"input_tokens", "cached_input_tokens", "output_tokens", "cache_write_input_tokens"} {
 		if usage.Get(counter).Type == gjson.Number {
-			responseID := payload.Get("response_id").Str
-			b.applyTokenUsage(usage.Raw, usage.Raw, responseID, true)
+			if !b.observeTokenUsageRecord(usage.Raw, payload.Get("response_id").Str) {
+				b.attachTokenUsage(usage.Raw)
+			}
 			return
 		}
 	}
@@ -773,27 +774,16 @@ func (b *codexSessionBuilder) handleTokenCountEvent(
 	if raw == "" {
 		return
 	}
-	// A token_count at the next usage-bearing event after a token_usage_record
-	// with the same per-call counters is that record's mirror, even when its
-	// cumulative totals differ. Later token_count repeats use the whole info
-	// object.
-	b.applyTokenUsage(raw, info.Raw, "", false)
-}
-
-// applyTokenUsage attaches one call's usage. Record events dedupe by their
-// per-call counters and response ID, while token_count events dedupe by their
-// full info object unless they are the pending record's mirror.
-func (b *codexSessionBuilder) applyTokenUsage(raw, dedupKey, responseID string, record bool) {
-	var duplicate bool
-	if record {
-		duplicate = b.observeTokenUsageRecord(raw, responseID)
-	} else {
-		duplicate = b.observeTokenUsage(raw, dedupKey)
-	}
-	if duplicate {
+	total := info.Get("total_token_usage.total_tokens")
+	if b.observeTokenUsage(raw, info.Raw, total.Int(), total.Exists()) {
 		return
 	}
+	b.attachTokenUsage(raw)
+}
 
+// handleTokenUsageRecord and handleTokenCountEvent dedupe first, then
+// attachTokenUsage attaches one call's usage.
+func (b *codexSessionBuilder) attachTokenUsage(raw string) {
 	// Attach usage to the last assistant message without usage in the
 	// current turn; the sink stops at the user boundary so turns are
 	// never crossed.

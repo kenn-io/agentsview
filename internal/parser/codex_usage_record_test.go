@@ -247,6 +247,81 @@ func TestCodexPendingMirrorExpiresAtTurnAcrossCheckpoint(t *testing.T) {
 	assert.Equal(t, fullUsage, incrementalUsage)
 }
 
+func TestCodexRecordMirrorUsesCumulativeTotal(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		calls int
+		want  int
+	}{
+		{name: "cumulative grows by the record is its mirror", calls: 2, want: 2},
+		{name: "cumulative grows past the record is a separate response", calls: 3, want: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prefix := codexUsageFixture(t,
+				testjsonl.CodexMsgJSON("assistant", "first", tsEarlyS5),
+				codexUsageCountLineWithCumulative(t, tsLate, 1, 100, 40, 12, 5, 112),
+				testjsonl.CodexMsgJSON("assistant", "second", tsLate),
+				codexUsageRecordLine(t, tsLate, "", 100, 40, 12, 5, 112),
+			)
+			tail := testjsonl.JoinJSONL(
+				testjsonl.CodexMsgJSON("assistant", "third", tsLate),
+				codexUsageCountLineWithCumulative(t, tsLate, tc.calls, 100, 40, 12, 5, 112),
+			) + "\n"
+			countUsage := func(messages []ParsedMessage) int {
+				var got int
+				for _, message := range messages {
+					if len(message.TokenUsage) > 0 {
+						got++
+					}
+				}
+				return got
+			}
+
+			fullPath := createTestFile(t, "usage-cumulative-full.jsonl", prefix+tail)
+			_, fullMessages, err := parseCodexTestSession(t, fullPath, "local", false)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, countUsage(fullMessages))
+
+			incrementalPath := createTestFile(t, "usage-cumulative-incremental.jsonl", prefix)
+			provider := newCodexTestProvider(t)
+			_, prefixMessages, err := provider.parseSession(incrementalPath, "local", false)
+			require.NoError(t, err)
+			prefixInfo, err := os.Stat(incrementalPath)
+			require.NoError(t, err)
+			file, err := os.OpenFile(incrementalPath, os.O_APPEND|os.O_WRONLY, 0o644)
+			require.NoError(t, err)
+			_, err = file.WriteString(tail)
+			require.NoError(t, err)
+			require.NoError(t, file.Close())
+			incremental, err := provider.parseSessionFromDetailed(t.Context(), incrementalPath, prefixInfo.Size(), len(prefixMessages), false)
+			require.NoError(t, err)
+			require.NotNil(t, incremental)
+			got := append(append([]ParsedMessage(nil), prefixMessages...), incremental.messages...)
+			assert.Equal(t, tc.want, countUsage(got))
+		})
+	}
+}
+
+func TestCodexMirrorAfterTwoRecordsCountsEachOnce(t *testing.T) {
+	content := codexUsageFixture(t,
+		testjsonl.CodexMsgJSON("assistant", "first", tsEarlyS5),
+		codexUsageCountLineWithCumulative(t, tsLate, 1, 100, 40, 12, 5, 112),
+		testjsonl.CodexMsgJSON("assistant", "second", tsLate),
+		codexUsageRecordLine(t, tsLate, "response-2", 100, 40, 12, 5, 112),
+		testjsonl.CodexMsgJSON("assistant", "third", tsLate),
+		codexUsageRecordLine(t, tsLate, "response-3", 100, 40, 12, 5, 112),
+		codexUsageCountLineWithCumulative(t, tsLate, 3, 100, 40, 12, 5, 112),
+	)
+	_, messages := runCodexParserTest(t, "usage-two-records.jsonl", content, false)
+	var got int
+	for _, message := range messages {
+		if len(message.TokenUsage) > 0 {
+			got++
+		}
+	}
+	assert.Equal(t, 3, got)
+}
+
 func TestCodexIdlessRecordAfterDistinctUsageCounts(t *testing.T) {
 	content := codexUsageFixture(t,
 		testjsonl.CodexMsgJSON("assistant", "reply", tsEarlyS5),
@@ -364,6 +439,9 @@ func TestCodexCursorCheckpointPersistsRecordMirrorState(t *testing.T) {
 		pendingUsageRecordResponseID: "response-1",
 		lastTokenUsageResponseID:     "response-1",
 		lastTokenCountSeen:           true,
+		lastTokenCountTotalKnown:     true,
+		lastTokenCountTotal:          224,
+		recordTotalSinceTokenCount:   112,
 	}
 	blob, err := seed.MarshalBinary()
 	require.NoError(t, err)
@@ -376,6 +454,9 @@ func TestCodexCursorCheckpointPersistsRecordMirrorState(t *testing.T) {
 	assert.Equal(t, seed.pendingUsageRecord, got.pendingUsageRecord)
 	assert.Equal(t, seed.pendingUsageRecordDigest, got.pendingUsageRecordDigest)
 	assert.Equal(t, seed.lastTokenCountSeen, got.lastTokenCountSeen)
+	assert.Equal(t, seed.lastTokenCountTotalKnown, got.lastTokenCountTotalKnown)
+	assert.Equal(t, seed.lastTokenCountTotal, got.lastTokenCountTotal)
+	assert.Equal(t, seed.recordTotalSinceTokenCount, got.recordTotalSinceTokenCount)
 	assert.Equal(t, seed.pendingUsageRecordResponseID, got.pendingUsageRecordResponseID)
 
 	// A version 6 checkpoint has no record-mirror state. Rejecting it sends

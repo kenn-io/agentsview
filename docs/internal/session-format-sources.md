@@ -827,12 +827,16 @@ fixtures retain this field; missing identities remain source-local.
   `TestCodexTranscriptFidelityUpgradeReparsesInPlace`.
 
 - **Unmirrored usage records:** The parser counts `token_usage_record` and
-  skips the next `token_count` if its per-response counters match. Repeated
-  records use the counters and `response_id` when present, so distinct
-  responses with equal counters can still count. The parser stores
+  skips the next `token_count` in the same turn when its per-response
+  counters match and its cumulative total grew by no more than the records
+  counted since the previous `token_count`. A larger increase means a separate
+  response, so both count. The parser skips an unchanged `token_count` repeat
+  and leaves a pending record in place.
+  Repeated records use the counters and `response_id` when present, so
+  distinct responses with equal counters can still count. The parser stores
   `reasoning_output_tokens` separately. `output_tokens` already includes
-  those tokens, so billing counts them once. Checkpoint version 8 retains the
-  pending mirror state across appends. Data version 193 reparses Codex,
+  those tokens, so billing counts them once. Checkpoint version 9 retains this
+  state across appends. Data version 193 reparses Codex,
   TraeX, Augure Code, and Open Interpreter. `TestCodexTokenUsageRecordAndMirror`
   covers mirrored, unmirrored, and repeated usage records.
 
