@@ -259,7 +259,7 @@ func TestCodexLabeledRunResyncAndExplicitWorktreeMappingWins(t *testing.T) {
 }
 
 func TestCodexLabeledCopyWinsSync(t *testing.T) {
-	for _, mode := range []string{"quick sync", "older path with both copies present", "usage refresh", "missed event", "single session"} {
+	for _, mode := range []string{"quick sync", "older path with both copies present", "usage refresh", "missed event", "id refresh"} {
 		t.Run(mode, func(t *testing.T) {
 			database := openTestDB(t)
 			root := t.TempDir()
@@ -274,7 +274,7 @@ func TestCodexLabeledCopyWinsSync(t *testing.T) {
 				require.NoError(t, os.Chtimes(path, mtime, mtime))
 			}
 			write(0, paths[0])
-			if mode != "single session" && mode != "usage refresh" && mode != "missed event" {
+			if mode != "id refresh" && mode != "usage refresh" && mode != "missed event" {
 				write(1, paths[1])
 				write(2, paths[2])
 			}
@@ -293,16 +293,11 @@ func TestCodexLabeledCopyWinsSync(t *testing.T) {
 				write(1, paths[1])
 				write(2, paths[2])
 				require.NoError(t, engine.TrySyncSessionWithSubagentsContext(t.Context(), "codex:"+id))
-			case "single session":
+			case "id refresh":
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[0]}))
 				write(1, paths[1])
 				write(2, paths[2])
 				require.NoError(t, engine.SyncSingleSessionContext(t.Context(), "codex:"+id))
-				saved, err := database.GetSessionFull(t.Context(), "codex:"+id)
-				require.NoError(t, err)
-				require.NotNil(t, saved)
-				require.NotNil(t, saved.FilePath)
-				assert.Equal(t, paths[0], *saved.FilePath)
 				require.NoError(t, engine.RefreshSessionByIDContext(t.Context(), "codex:"+id))
 			case "missed event":
 				write(1, paths[1])

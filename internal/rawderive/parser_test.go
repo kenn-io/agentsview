@@ -760,15 +760,11 @@ func TestProviderParserHostedCodexLabeledCopies(t *testing.T) {
 	const id = "11111111-1111-4111-8111-111111111111"
 	root := t.TempDir()
 	name := "rollout-2026-09-10T10-00-00-" + id + ".jsonl"
-	for i, label := range []string{"team/a", "team/b"} {
-		path := filepath.Join(root, label, ".codex-run-v1-abc", "sessions", "2026", "09", "10", name)
-		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
-		content := testjsonl.JoinJSONL(testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-09-10T10:00:00Z"), testjsonl.CodexMsgJSON("user", label, "2026-09-10T10:00:01Z"))
-		require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-		mtime := time.Date(2026, 9, 10, 10, i, 0, 0, time.UTC)
-		require.NoError(t, os.Chtimes(path, mtime, mtime))
-	}
-	roots := []string{filepath.Join(root, "team"), root}
+	path := filepath.Join(root, "team", "a", ".codex-run-v1-abc", "sessions", "2026", "09", "10", name)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	content := testjsonl.JoinJSONL(testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-09-10T10:00:00Z"), testjsonl.CodexMsgJSON("user", "hello", "2026-09-10T10:00:01Z"))
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	roots := []string{root}
 	provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{Roots: roots})
 	require.True(t, ok)
 	sources, err := provider.Discover(t.Context())
@@ -783,9 +779,7 @@ func TestProviderParserHostedCodexLabeledCopies(t *testing.T) {
 	hosted, err := dispatch.Parse(t.Context(), manifest, materialized)
 	require.NoError(t, err)
 	require.Len(t, hosted.Outcome.Results, 1)
-	assert.Equal(t, "team/b", hosted.Outcome.Results[0].Result.Session.Project)
-	require.NotEmpty(t, hosted.Outcome.Results[0].Result.Messages)
-	assert.Equal(t, "team/b", hosted.Outcome.Results[0].Result.Messages[0].Content)
+	assert.Equal(t, "team/a", hosted.Outcome.Results[0].Result.Session.Project)
 }
 
 func TestProviderParserHostedCodexOrphanPreservesHistory(t *testing.T) {

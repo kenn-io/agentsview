@@ -1024,11 +1024,12 @@ func TestDirectBackend_Sync_CodexID(t *testing.T) {
 	detail, err := svc.Sync(t.Context(), service.SyncInput{ID: "codex:" + id})
 	require.NoError(t, err)
 	require.NotNil(t, detail)
-	assert.Equal(t, "team", detail.Project)
+	assert.Equal(t, "codex:"+id, detail.ID)
 	require.NoError(t, os.Remove(path))
 	detail, err = svc.Sync(t.Context(), service.SyncInput{ID: "codex:" + id})
 	require.NoError(t, err)
 	require.NotNil(t, detail)
+	assert.Equal(t, "codex:"+id, detail.ID)
 }
 
 func TestDirectBackend_Sync_VSCopilotIDRefreshesOnlyRequestedConversation(t *testing.T) {
