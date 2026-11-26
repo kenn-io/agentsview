@@ -277,7 +277,7 @@ func TestLaunchParentBackfillCheckpoint(t *testing.T) {
 	assert.Equal(t, "parent", parent.ParentSessionID)
 }
 
-func TestLaunchParentBulkImportBackfillsAfterIndexRebuild(t *testing.T) {
+func TestLaunchParentBulkImportBackfillCancellation(t *testing.T) {
 	d := testDB(t)
 	require.NoError(t, d.DropBulkImportIndexes(t.Context()))
 	var exists int
