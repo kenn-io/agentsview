@@ -129,8 +129,7 @@ func (r *codeModeReader) expr(expr js.IExpr) {
 			}
 		}
 		if isCodeModeExec(n.X) {
-			call := codeModeCall(n)
-			r.calls = append(r.calls, call)
+			r.calls = append(r.calls, codeModeCall(n))
 			return
 		}
 		if isEagerBatch(n.X) {
@@ -209,15 +208,11 @@ func isEagerBatch(expr js.IExpr) bool {
 func codeModeCall(call *js.CallExpr) shellCall {
 	result := shellCall{}
 	if len(call.Args.List) != 1 || call.Args.List[0].Rest {
-		result.unknown = true
-		result.command = call.String()
-		return result
+		return shellCall{command: call.String(), unknown: true}
 	}
 	obj, ok := call.Args.List[0].Value.(*js.ObjectExpr)
 	if !ok {
-		result.unknown = true
-		result.command = call.String()
-		return result
+		return shellCall{command: call.String(), unknown: true}
 	}
 	for _, prop := range obj.List {
 		if prop.Name == nil || prop.Name.IsComputed() || prop.Spread {
@@ -261,10 +256,7 @@ func (v *unsupportedVisitor) Enter(node js.INode) js.IVisitor {
 	case *js.ForStmt, *js.ForInStmt, *js.ForOfStmt, *js.WhileStmt, *js.DoWhileStmt, *js.TryStmt, *js.SwitchStmt:
 		v.risky = true
 	case *js.CallExpr:
-		if isCodeModeFunction(n.X) {
-			v.risky = true
-		}
-		if isCodeModeExec(n.X) {
+		if isCodeModeFunction(n.X) || isCodeModeExec(n.X) {
 			v.risky = true
 		}
 		if name, ok := n.X.(*js.Var); ok {

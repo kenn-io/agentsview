@@ -348,8 +348,7 @@ func possibleLaunches(ctx context.Context, tx *sql.Tx, child launchChild, from, 
 					return absoluteLaunchFolder(dir) && sameLaunchFolder(dir, child.cwd)
 				})
 				if launch.Unknown || matched {
-					knownFolder := machine == child.machine && matched && !launch.Unknown && len(launch.Dirs) == 1
-					certain := knownFolder
+					certain := machine == child.machine && matched && !launch.Unknown && len(launch.Dirs) == 1
 					launches = append(launches, possibleLaunch{parent: id, at: at, certain: certain && !trashed, retained: certain && trashed})
 				}
 			}

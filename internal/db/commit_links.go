@@ -196,22 +196,11 @@ func literalCommands(input string) []string {
 	for _, match := range commitCommandRE.FindAllStringSubmatchIndex(input, -1) {
 		after := strings.TrimLeft(input[match[1]:], " \t\r\n")
 		literal := input[match[2]:match[3]]
-		if len(after) == 0 || (after[0] != ',' && after[0] != '}') || strings.Contains(literal, "${") {
+		if len(after) == 0 || (after[0] != ',' && after[0] != '}') {
 			continue
 		}
-		var decoded strings.Builder
-		valid := true
-		for rest := literal[1 : len(literal)-1]; rest != ""; {
-			r, _, tail, err := strconv.UnquoteChar(rest, literal[0])
-			if err != nil {
-				valid = false
-				break
-			}
-			decoded.WriteRune(r)
-			rest = tail
-		}
-		if valid {
-			commands = append(commands, decoded.String())
+		if command, ok := decodeCommandLiteral(literal); ok {
+			commands = append(commands, command)
 		}
 	}
 	return commands
@@ -237,7 +226,7 @@ func shellCalls(input string) ([]shellCall, bool) {
 	return []shellCall{{command: command, workdir: toolCallWorkdir(input)}}, false
 }
 
-// decodeCommandLiteral decodes the string form shared by code-mode readers.
+// decodeCommandLiteral decodes a JavaScript string literal from a code-mode call.
 func decodeCommandLiteral(literal string) (string, bool) {
 	if len(literal) < 2 || strings.Contains(literal, "${") {
 		return "", false
