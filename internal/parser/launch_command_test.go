@@ -12,6 +12,13 @@ func TestLaunchCommands(t *testing.T) {
 		want    []LaunchCommand
 	}{
 		{`codex exec "$PROMPT"`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}}},
+		{`codex exec $OPTS hi`, []LaunchCommand{{Agent: "codex", Unknown: true}}},
+		{`codex -m $MODEL exec hi`, []LaunchCommand{{Agent: "codex", Unknown: true}}},
+		{`codex --model=$MODEL exec hi`, []LaunchCommand{{Agent: "codex", Unknown: true}}},
+		{`$CMD exec hi`, []LaunchCommand{{Agent: "codex", Unknown: true}, {Agent: "claude", Unknown: true}}},
+		{`"$CMD" exec hi`, []LaunchCommand{{Agent: "codex", Unknown: true}, {Agent: "claude", Unknown: true}}},
+		{`! cd /other && codex exec hi`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo", "/other"}, Unknown: true}}},
+		{`! cd /repo && codex exec hi`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}, Unknown: true}}},
 		{`codex -m "$MODEL" exec hi`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}}},
 		{`codex --model="$MODEL" exec hi`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}}},
 		{`claude --model "$MODEL" -p hi`, []LaunchCommand{{Agent: "claude", Dirs: []string{"/repo"}}}},

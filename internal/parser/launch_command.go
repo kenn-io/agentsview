@@ -195,6 +195,13 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 			if len(args) == 0 {
 				return f
 			}
+			if dynamic[0] {
+				if len(args) > 1 {
+					emit("codex", f, true)
+					emit("claude", f, true)
+				}
+				return f
+			}
 			program := launchProgram(args[0])
 			switch program {
 			case "source", ".", "pushd", "popd":
@@ -268,19 +275,12 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 				}
 				return f
 			}
-			if dynamic[0] {
-				if len(args) > 1 {
-					emit("codex", f, true)
-					emit("claude", f, true)
-				}
-				return f
-			}
 			if program != "codex" && program != "claude" {
 				return f
 			}
 			launch := f
 			modeAt := -1
-			uncertain := false
+			uncertain := unquotedLaunchExpansion(c.Args[1:])
 			for i := 1; i < len(args) && args[i] != "--"; i++ {
 				if program == "codex" && ((args[i] == "-C" || args[i] == "--cd") && i+1 < len(args) || strings.HasPrefix(args[i], "--cd=")) {
 					dir := strings.TrimPrefix(args[i], "--cd=")
@@ -418,7 +418,7 @@ func guardedLaunchDir(stmt *syntax.Stmt, f shellFlow) (shellFlow, bool) {
 
 func isLiteralCD(stmt *syntax.Stmt) bool {
 	call, ok := stmt.Cmd.(*syntax.CallExpr)
-	if !ok || len(call.Args) != 2 {
+	if !ok || stmt.Negated || len(call.Args) != 2 {
 		return false
 	}
 	name, ok := launchWord(call.Args[0].Parts)
@@ -427,6 +427,22 @@ func isLiteralCD(stmt *syntax.Stmt) bool {
 	}
 	dir, ok := launchWord(call.Args[1].Parts)
 	return ok && dir != "" && dir != "-" && !strings.HasPrefix(dir, "~")
+}
+
+func unquotedLaunchExpansion(args []*syntax.Word) bool {
+	for _, word := range args {
+		if value, ok := launchWord(word.Parts); ok && value == "--" {
+			break
+		}
+		for _, part := range word.Parts {
+			switch part.(type) {
+			case *syntax.Lit, *syntax.SglQuoted, *syntax.DblQuoted:
+			default:
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func launchProgram(name string) string {
