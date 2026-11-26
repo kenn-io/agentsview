@@ -585,8 +585,6 @@ func TestReconcileWatchRootsLinkingFailureExpandsRetryToCompletedScopes(t *testi
 		END;
 	`)
 	require.NoError(t, err)
-	_, err = raw.ExecContext(t.Context(), `UPDATE sessions SET parent_session_id=NULL, relationship_type='' WHERE id='link-child'`)
-	require.NoError(t, err)
 
 	err = engine.ReconcileWatchRoots(t.Context(), nil, true)
 
