@@ -524,7 +524,9 @@
         </p>
       </div>
 
-      {#if loading && !signals}
+      {#if error && !signals}
+        <LoadError message={error} onRetry={fetchQualitySignals} telemetry="analytics" />
+      {:else if loading && !signals}
         <div class="summary-grid" aria-live="polite">
           {#each Array(4) as _}
             <div class="skeleton-card"></div>
@@ -535,8 +537,6 @@
             <Card level="default" padding="none" class="skeleton-pattern"></Card>
           {/each}
         </div>
-      {:else if error && !signals}
-        <LoadError message={error} onRetry={fetchQualitySignals} telemetry="analytics" />
       {:else if !hasData && error}
         <!-- The last good read was empty; say the refresh failed rather
              than repeat that empty result. -->
