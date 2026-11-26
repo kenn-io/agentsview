@@ -426,12 +426,17 @@ func tokenUsageDigest(raw string) [sha256.Size]byte {
 }
 
 // observeTokenUsageRecord applies record-level deduplication while retaining
-// the record identity across its mirrored token_count event.
+// the record identity across its mirrored token_count event. A repeated record
+// leaves the state alone, so the next token_count is compared with the event
+// before the repeat rather than treated as the repeat's mirror.
 func (s *codexCursorState) observeTokenUsageRecord(raw, responseID string) bool {
 	digest := tokenUsageDigest(raw)
 	duplicate := s.lastTokenUsageSeen && s.lastTokenUsageRecordDigest == digest &&
 		((s.lastTokenUsageResponseID != "" && s.lastTokenUsageResponseID == responseID) ||
 			(s.lastTokenUsageResponseID == "" && responseID == ""))
+	if duplicate {
+		return true
+	}
 	s.lastTokenUsageDigest = digest
 	s.lastTokenUsageRecordDigest = digest
 	s.lastTokenUsageSeen = true

@@ -27,17 +27,28 @@ func codexUsageRecordLine(t *testing.T, ts, responseID string, input, cached, ou
 
 func codexUsageCountLine(t *testing.T, ts string, input, cached, output, reasoning, total int) string {
 	t.Helper()
+	return codexUsageCountLineWithCumulative(t, ts, 1, input, cached, output, reasoning, total)
+}
+
+// codexUsageCountLineWithCumulative writes a token_count whose cumulative
+// totals are the per-call counters multiplied by calls.
+func codexUsageCountLineWithCumulative(t *testing.T, ts string, calls, input, cached, output, reasoning, total int) string {
+	t.Helper()
 	usage := map[string]int{
 		"input_tokens": input, "cached_input_tokens": cached,
 		"output_tokens": output, "reasoning_output_tokens": reasoning,
 		"total_tokens": total,
+	}
+	cumulative := map[string]int{}
+	for key, value := range usage {
+		cumulative[key] = value * calls
 	}
 	return mustCodexLine(t, map[string]any{
 		"type": "event_msg", "timestamp": ts,
 		"payload": map[string]any{
 			"type": "token_count",
 			"info": map[string]any{
-				"last_token_usage": usage, "total_token_usage": usage,
+				"last_token_usage": usage, "total_token_usage": cumulative,
 				"model_context_window": 272000,
 			},
 		},
@@ -115,6 +126,29 @@ func TestCodexTokenUsageRecordAndMirror(t *testing.T) {
 				codexUsageRecordLine(t, tsLate, "response-1", 100, 40, 12, 5, 112),
 			),
 			want: 1,
+		},
+		{
+			name: "mirror repeated after a repeated record dedupes",
+			rows: testjsonl.JoinJSONL(
+				testjsonl.CodexMsgJSON("assistant", "reply", tsEarlyS5),
+				codexUsageRecordLine(t, tsLate, "response-1", 100, 40, 12, 5, 112),
+				codexUsageCountLine(t, tsLate, 100, 40, 12, 5, 112),
+				codexUsageRecordLine(t, tsLate, "response-1", 100, 40, 12, 5, 112),
+				codexUsageCountLine(t, tsLate, 100, 40, 12, 5, 112),
+			),
+			want: 1,
+		},
+		{
+			name: "count-only response with equal counters after a repeated record counts",
+			rows: testjsonl.JoinJSONL(
+				testjsonl.CodexMsgJSON("assistant", "first", tsEarlyS5),
+				codexUsageRecordLine(t, tsLate, "response-1", 100, 40, 12, 5, 112),
+				codexUsageCountLine(t, tsLate, 100, 40, 12, 5, 112),
+				codexUsageRecordLine(t, tsLate, "response-1", 100, 40, 12, 5, 112),
+				testjsonl.CodexMsgJSON("assistant", "second", tsLate),
+				codexUsageCountLineWithCumulative(t, tsLate, 2, 100, 40, 12, 5, 112),
+			),
+			want: 2,
 		},
 		{
 			name: "equal counters from distinct responses count twice",
