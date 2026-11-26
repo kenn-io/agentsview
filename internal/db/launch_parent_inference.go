@@ -102,96 +102,31 @@ func inferLaunchChild(ctx context.Context, tx *sql.Tx, child launchChild) (int, 
 	if !eligible {
 		return retractInferredLaunchParent(ctx, tx, child.id)
 	}
-	rows, err := tx.QueryContext(ctx, launchCandidateSQL, start.Add(-62*time.Second).UTC().Format(time.RFC3339Nano), start.Add(2*time.Second).UTC().Format(time.RFC3339Nano), child.machine, child.id)
+	launches, err := possibleLaunches(ctx, tx, child, start.Add(-60*time.Second-time.Nanosecond), start)
 	if err != nil {
 		return 0, err
 	}
-	defer rows.Close()
 	matches := map[string]bool{}
 	known := map[string]int{}
 	competing := map[string]map[string]bool{}
 	uncertain := map[string]bool{}
-	for rows.Next() {
-		var id, cwd, machine, stamp, tool string
-		var input sql.NullString
-		var trashed bool
-		if err := rows.Scan(&id, &cwd, &machine, &stamp, &tool, &input, &trashed); err != nil {
-			rows.Close()
+	for _, launch := range launches {
+		matches[launch.parent] = true
+		if !launch.certain {
+			uncertain[launch.parent] = true
+			continue
+		}
+		runs, err := launchRuns(ctx, tx, child, launch.at)
+		if err != nil {
 			return 0, err
 		}
-		if pollTool(tool) {
-			continue
+		known[launch.parent]++
+		if competing[launch.parent] == nil {
+			competing[launch.parent] = map[string]bool{}
 		}
-		at, e := time.Parse(time.RFC3339Nano, stamp)
-		if e != nil || at.After(start) || start.Sub(at) > 60*time.Second {
-			continue
+		for _, run := range runs {
+			competing[launch.parent][run] = true
 		}
-		if !input.Valid || strings.TrimSpace(input.String) == "" {
-			matches[id] = true
-			uncertain[id] = true
-			continue
-		}
-		calls, undecodable := shellCalls(input.String)
-		if undecodable {
-			matches[id] = true
-			uncertain[id] = true
-			continue
-		}
-		for _, call := range calls {
-			if call.unknown {
-				if re := launchAgentWords[child.agent]; re != nil && re.MatchString(call.command) {
-					matches[id] = true
-					uncertain[id] = true
-				}
-				continue
-			}
-			dir := cwd
-			if call.unknownWorkdir {
-				dir = ""
-			} else if call.workdir != "" {
-				dir = parser.ShellWorkdir(dir, call.workdir)
-			}
-			if !absoluteLaunchFolder(dir) {
-				dir = ""
-			}
-			for _, launch := range parser.LaunchesFromCommand(call.command, dir) {
-				if launch.Agent != child.agent {
-					continue
-				}
-				matched := false
-				for _, folder := range launch.Dirs {
-					if absoluteLaunchFolder(folder) && launchFolder(folder) == launchFolder(child.cwd) {
-						matched = true
-						break
-					}
-				}
-				if !launch.Unknown && !matched {
-					continue
-				}
-				matches[id] = true
-				if !trashed && matched && !launch.Unknown && !launch.Possible && !call.possible && len(launch.Dirs) == 1 && strings.TrimSpace(machine) != "" {
-					runs, err := launchRuns(ctx, tx, child, at)
-					if err != nil {
-						rows.Close()
-						return 0, err
-					}
-					known[id]++
-					if competing[id] == nil {
-						competing[id] = map[string]bool{}
-					}
-					for _, run := range runs {
-						competing[id][run] = true
-					}
-				} else {
-					uncertain[id] = true
-				}
-			}
-		}
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return 0, err
 	}
 	for id, count := range known {
 		if !uncertain[id] && count < len(competing[id]) {
@@ -451,59 +386,39 @@ func launchSeedsChanged(ctx context.Context, tx *sql.Tx, ids []string, changes m
 	if err != nil {
 		return nil, err
 	}
-	changedData, err := json.Marshal(changes)
-	if err != nil {
-		return nil, err
-	}
-	rows, err := tx.QueryContext(ctx, `SELECT s.machine, m.timestamp, tc.tool_name, tc.input_json FROM json_each(?) changed JOIN sessions s ON s.id=changed.key CROSS JOIN messages m INDEXED BY idx_messages_session_ordinal ON m.session_id=s.id CROSS JOIN tool_calls tc INDEXED BY idx_tool_calls_message ON tc.message_id=m.id WHERE s.agent IN ('claude','codex') AND m.ordinal>=CAST(changed.value AS INTEGER) AND tc.category='Bash' AND m.timestamp IS NOT NULL`, string(changedData))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
 	type call struct {
 		machine, stamp, tool string
 		input                sql.NullString
 	}
 	var calls []call
-	for rows.Next() {
-		var c call
-		if err := rows.Scan(&c.machine, &c.stamp, &c.tool, &c.input); err != nil {
-			rows.Close()
+	if len(changes) > 0 {
+		changedData, err := json.Marshal(changes)
+		if err != nil {
 			return nil, err
 		}
-		calls = append(calls, c)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return nil, err
-	}
-	seeds := append([]string{}, ids...)
-	for _, c := range calls {
-		if pollTool(c.tool) || !launchInputMayMatter(c.input) {
-			continue
+		rows, err := tx.QueryContext(ctx, `SELECT s.machine, m.timestamp, tc.tool_name, tc.input_json FROM json_each(?) changed JOIN sessions s ON s.id=changed.key CROSS JOIN messages m INDEXED BY idx_messages_session_ordinal ON m.session_id=s.id CROSS JOIN tool_calls tc INDEXED BY idx_tool_calls_message ON tc.message_id=m.id WHERE s.agent IN ('claude','codex') AND m.ordinal>=CAST(changed.value AS INTEGER) AND tc.category='Bash' AND m.timestamp IS NOT NULL`, string(changedData))
+		if err != nil {
+			return nil, err
 		}
-		at, e := time.Parse(time.RFC3339Nano, c.stamp)
-		if e != nil {
-			continue
-		}
-		r, e := tx.QueryContext(ctx, `SELECT id FROM sessions INDEXED BY idx_sessions_started WHERE (?='' OR machine=?) AND started_at>=? AND started_at<=? AND deleted_at IS NULL AND ((agent='codex' AND session_kind='non-interactive') OR (agent='claude' AND entrypoint='sdk-cli'))`, strings.TrimSpace(c.machine), c.machine, at.Add(-62*time.Second).UTC().Format(time.RFC3339Nano), at.Add(62*time.Second).UTC().Format(time.RFC3339Nano))
-		if e != nil {
-			return nil, e
-		}
-		defer r.Close()
-		for r.Next() {
-			var id string
-			if e = r.Scan(&id); e != nil {
-				r.Close()
-				return nil, e
+		defer rows.Close()
+		for rows.Next() {
+			var c call
+			if err := rows.Scan(&c.machine, &c.stamp, &c.tool, &c.input); err != nil {
+				rows.Close()
+				return nil, err
 			}
-			seeds = append(seeds, id)
+			calls = append(calls, c)
 		}
-		e = r.Err()
-		r.Close()
-		if e != nil {
-			return nil, e
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
+	}
+	var anchors []call
+	for _, c := range calls {
+		if !pollTool(c.tool) && launchInputMayMatter(c.input) {
+			anchors = append(anchors, c)
 		}
 	}
 	childRows, err := tx.QueryContext(ctx, `SELECT machine,started_at FROM sessions WHERE id IN (SELECT value FROM json_each(?)) AND started_at IS NOT NULL AND ((agent='codex' AND session_kind='non-interactive') OR (agent='claude' AND entrypoint='sdk-cli'))`, string(data))
@@ -511,24 +426,24 @@ func launchSeedsChanged(ctx context.Context, tx *sql.Tx, ids []string, changes m
 		return nil, err
 	}
 	defer childRows.Close()
-	var children []call
 	for childRows.Next() {
 		var c call
 		if err := childRows.Scan(&c.machine, &c.stamp); err != nil {
 			return nil, err
 		}
-		children = append(children, c)
+		anchors = append(anchors, c)
 	}
 	if err := childRows.Err(); err != nil {
 		return nil, err
 	}
 	childRows.Close()
-	for _, c := range children {
+	seeds := append([]string{}, ids...)
+	for _, c := range anchors {
 		at, err := time.Parse(time.RFC3339Nano, c.stamp)
 		if err != nil {
 			continue
 		}
-		r, err := tx.QueryContext(ctx, `SELECT id FROM sessions INDEXED BY idx_sessions_started WHERE started_at>=? AND started_at<=? AND machine=? AND deleted_at IS NULL AND ((agent='codex' AND session_kind='non-interactive') OR (agent='claude' AND entrypoint='sdk-cli'))`, at.Add(-60*time.Second).UTC().Format(time.RFC3339Nano), at.Add(60*time.Second).UTC().Format(time.RFC3339Nano), c.machine)
+		r, err := tx.QueryContext(ctx, `SELECT id FROM sessions INDEXED BY idx_sessions_started WHERE (?='' OR machine=?) AND started_at>=? AND started_at<=? AND deleted_at IS NULL AND ((agent='codex' AND session_kind='non-interactive') OR (agent='claude' AND entrypoint='sdk-cli'))`, strings.TrimSpace(c.machine), c.machine, at.Add(-62*time.Second).UTC().Format(time.RFC3339Nano), at.Add(62*time.Second).UTC().Format(time.RFC3339Nano))
 		if err != nil {
 			return nil, err
 		}
@@ -541,11 +456,11 @@ func launchSeedsChanged(ctx context.Context, tx *sql.Tx, ids []string, changes m
 			}
 			seeds = append(seeds, id)
 		}
-		if err := r.Err(); err != nil {
-			r.Close()
+		err = r.Err()
+		r.Close()
+		if err != nil {
 			return nil, err
 		}
-		r.Close()
 	}
 	return seeds, nil
 }

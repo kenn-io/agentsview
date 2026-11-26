@@ -1646,12 +1646,7 @@ func (db *DB) insertMessages(ctx context.Context,
 			return err
 		}
 	}
-	changes := make(map[string]int)
-	for _, msg := range msgs {
-		if previous, ok := changes[msg.SessionID]; !ok || msg.Ordinal < previous {
-			changes[msg.SessionID] = msg.Ordinal
-		}
-	}
+	changes := launchMessageChanges(msgs)
 	if _, err := linkSubagentSessionsChangedTx(ctx, tx, sessionIDs, changes); err != nil {
 		return err
 	}
@@ -1859,9 +1854,7 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 	var replaced *messageRangeTotals
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 	var oldLaunchSeeds []string
-	fromOrdinal := minimumMessageOrdinal(msgs)
 	if from := update.ReplaceFromOrdinal; from != nil {
-		fromOrdinal = min(fromOrdinal, *from)
 		oldLaunchSeeds, err = launchSeedsFrom(ctx, tx, []string{sessionID}, *from)
 		if err != nil {
 			return false, err
@@ -1998,7 +1991,7 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 			return false, err
 		}
 	}
-	if _, err := linkSubagentSessionsFromTx(ctx, tx, append(oldLaunchSeeds, sessionID), fromOrdinal); err != nil {
+	if _, err := linkSubagentSessionsChangedTx(ctx, tx, append(oldLaunchSeeds, sessionID), launchMessageChanges(msgs)); err != nil {
 		return false, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -2031,6 +2024,21 @@ func minimumMessageOrdinal(msgs []Message) int {
 		from = min(from, msg.Ordinal)
 	}
 	return from
+}
+
+func launchMessageChanges(msgs []Message) map[string]int {
+	changes := make(map[string]int)
+	for _, msg := range msgs {
+		for _, call := range msg.ToolCalls {
+			if call.Category != "Bash" || pollTool(call.ToolName) || !launchInputMayMatter(sql.NullString{String: call.InputJSON, Valid: true}) {
+				continue
+			}
+			if previous, ok := changes[msg.SessionID]; !ok || msg.Ordinal < previous {
+				changes[msg.SessionID] = msg.Ordinal
+			}
+		}
+	}
+	return changes
 }
 
 // MaxOrdinal returns the highest ordinal for a session,

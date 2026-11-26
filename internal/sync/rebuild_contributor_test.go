@@ -1296,8 +1296,7 @@ func countArchiveUsageIndexes(t *testing.T, path string) int {
 		`SELECT count(*) FROM sqlite_master
 		 WHERE type = 'index' AND name IN (
 			'idx_messages_usage_timestamp',
-			'idx_messages_usage_session_covering',
-			'idx_messages_activity_timestamp'
+			'idx_messages_usage_session_covering'
 		 )`,
 	).Scan(&count), "count usage indexes in %s", path)
 	return count
@@ -1332,9 +1331,8 @@ func TestResyncDropsAndRebuildsUsageIndexes(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, stats.Aborted, "resync aborted: %+v", stats)
 	assert.Equal(t, 1, rebuildCalls, "usage indexes rebuilt once")
-	assert.Equal(t, 1, duringRebuild,
-		"the activity index must remain available during the bulk load")
-	assert.Equal(t, 3, countArchiveUsageIndexes(t, database.Path()),
+	assert.Equal(t, 0, duringRebuild, "usage indexes must be dropped during the bulk load")
+	assert.Equal(t, 2, countArchiveUsageIndexes(t, database.Path()),
 		"swapped archive must carry rebuilt usage indexes")
 }
 
@@ -1365,7 +1363,7 @@ func TestResyncUsageIndexRebuildFailureAbortsSwap(t *testing.T) {
 	page, listErr := database.ListSessions(t.Context(), db.SessionFilter{})
 	require.NoError(t, listErr)
 	require.Len(t, page.Sessions, 1, "original archive must stay intact")
-	assert.Equal(t, 3, countArchiveUsageIndexes(t, database.Path()),
+	assert.Equal(t, 2, countArchiveUsageIndexes(t, database.Path()),
 		"original archive must keep its usage indexes")
 	assert.NoFileExists(t, database.Path()+resyncTempSuffix)
 	assert.NoFileExists(t, database.Path()+resyncTempSuffix+"-wal")

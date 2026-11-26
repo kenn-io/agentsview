@@ -235,9 +235,7 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 			case "exit":
 				f.stopped = true
 				return f
-			case "source", ".":
-				fallthrough
-			case "pushd", "popd":
+			case "source", ".", "pushd", "popd":
 				f.unknown = true
 				f.cwdChanged = true
 				return f
@@ -292,10 +290,7 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 			if wrappers[program] {
 				if program == "eval" && len(args) == 2 && !dynamic[1] {
 					for _, nested := range LaunchesFromCommand(args[1], "") {
-						u := f
-						u.unknown = true
-						u.dirs = nil
-						emit(nested.Agent, u, true)
+						emit(nested.Agent, f, true)
 					}
 				}
 				for i := 1; i < len(args); i++ {
@@ -305,10 +300,7 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 					}
 					for _, agent := range []string{"codex", "claude"} {
 						if launchProgram(args[i]) == agent || dynamic[i] && (i == 1 || i+1 < len(args) || program == "eval" || (program == "bash" || program == "sh" || program == "zsh") && (args[i-1] == "-c" || args[i-1] == "-lc")) {
-							u := f
-							u.unknown = true
-							u.dirs = nil
-							emit(agent, u, true)
+							emit(agent, f, true)
 						}
 					}
 				}
@@ -320,11 +312,8 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 			}
 			if dynamic[0] {
 				if len(args) > 1 {
-					u := f
-					u.unknown = true
-					u.dirs = nil
-					emit("codex", u, true)
-					emit("claude", u, true)
+					emit("codex", f, true)
+					emit("claude", f, true)
 				}
 				return f
 			}
@@ -335,25 +324,18 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 			modeAt := -1
 			uncertain := false
 			for i := 1; i < len(args); i++ {
-				if program == "codex" && (args[i] == "-C" || args[i] == "--cd") && i+1 < len(args) {
-					i++
-					if dynamic[i] {
-						launch.dirs = nil
-						launch.unknown = true
-					} else {
-						beforeDir := slices.Clone(launch.dirs)
-						launch = setLaunchDir(launch, args[i])
-						launch.possible = launch.possible || launch.guarded && !slices.Equal(beforeDir, launch.dirs)
+				if program == "codex" && ((args[i] == "-C" || args[i] == "--cd") && i+1 < len(args) || strings.HasPrefix(args[i], "--cd=")) {
+					dir := strings.TrimPrefix(args[i], "--cd=")
+					if dir == args[i] {
+						i++
+						dir = args[i]
 					}
-					continue
-				}
-				if program == "codex" && strings.HasPrefix(args[i], "--cd=") {
 					if dynamic[i] {
 						launch.dirs = nil
 						launch.unknown = true
 					} else {
 						beforeDir := slices.Clone(launch.dirs)
-						launch = setLaunchDir(launch, strings.TrimPrefix(args[i], "--cd="))
+						launch = setLaunchDir(launch, dir)
 						launch.possible = launch.possible || launch.guarded && !slices.Equal(beforeDir, launch.dirs)
 					}
 					continue
@@ -383,10 +365,7 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 			if modeAt >= 0 {
 				emit(program, launch, uncertain)
 			} else if uncertain {
-				u := launch
-				u.unknown = true
-				u.dirs = nil
-				emit(program, u, true)
+				emit(program, launch, true)
 			}
 			return f
 		default:
