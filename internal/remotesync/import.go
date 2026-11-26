@@ -219,7 +219,7 @@ func importEngineConfig(
 		AgentDirs:               layout.engineDirs,
 		ProviderMetadata:        layout.metadataDirs,
 		Machine:                 host,
-		IDPrefix:                rebuildIDPrefix(host),
+		IDPrefix:                HostIDPrefix(host),
 		PathRewriter:            layout.paths.pathRewriter(),
 		StoredPathResolver:      layout.paths.storedPathResolver(),
 		Ephemeral:               true,
@@ -232,9 +232,7 @@ func importEngineConfig(
 
 // HostIDPrefix returns the session ID prefix used to namespace sessions
 // imported from host.
-func HostIDPrefix(host string) string { return rebuildIDPrefix(host) }
-
-func rebuildIDPrefix(host string) string { return host + "~" }
+func HostIDPrefix(host string) string { return host + "~" }
 
 func loadImportSkipCache(ctx context.Context,
 	database *db.DB,
