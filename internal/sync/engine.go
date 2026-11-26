@@ -13532,7 +13532,7 @@ func (e *Engine) processAndWriteSessionFile(
 			return false, sessionsChanged, err
 		}
 		if !res.incremental.changesSubagentEdges() {
-			return false, sessionsChanged, nil
+			return false, sessionsChanged || res.incremental.changesLaunchEvidence(), nil
 		}
 		if err := queueWrittenChildren(
 			[]string{res.incremental.sessionID},
@@ -13546,7 +13546,7 @@ func (e *Engine) processAndWriteSessionFile(
 			return false, sessionsChanged, fmt.Errorf(
 				"link incremental subagent sessions: %w", err)
 		}
-		sessionsChanged = sessionsChanged || linked > 0
+		sessionsChanged = sessionsChanged || linked > 0 || res.incremental.changesLaunchEvidence()
 		return false, sessionsChanged, nil
 	}
 

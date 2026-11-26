@@ -16,6 +16,28 @@ func OneShotRun(agent string, args []string) bool {
 }
 
 func oneShotRunState(agent string, args []string) (bool, bool) {
+	if launchHelpOption(agent, args) {
+		return false, true
+	}
+	return oneShotRunArgsState(agent, args)
+}
+
+func launchHelpOption(agent string, args []string) bool {
+	for i := 1; i < len(args); i++ {
+		if args[i] == "--" {
+			return false
+		}
+		if args[i] == "--help" || args[i] == "-h" || args[i] == "--version" || args[i] == "-V" {
+			return true
+		}
+		if launchOptionValue(agent, args[i]) {
+			i++
+		}
+	}
+	return false
+}
+
+func oneShotRunArgsState(agent string, args []string) (bool, bool) {
 	for i := 1; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--" {
@@ -318,7 +340,7 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 					}
 				}
 			}
-			if modeAt >= 0 {
+			if modeAt >= 0 && !launchHelpOption(program, args) {
 				emit(program, launch, uncertain)
 			} else if uncertain {
 				emit(program, launch, true)

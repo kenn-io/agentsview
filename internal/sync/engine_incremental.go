@@ -73,6 +73,20 @@ func (inc *incrementalUpdate) changesSubagentEdges() bool {
 	return false
 }
 
+func (inc *incrementalUpdate) changesLaunchEvidence() bool {
+	if inc.suffixReplace {
+		return true
+	}
+	for _, msg := range inc.msgs {
+		for _, call := range msg.ToolCalls {
+			if call.Category == "Bash" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // hasSubstantiveUserMessage reports whether the delta contains a user
 // message with non-whitespace content. Such deltas can change prompt-derived
 // heuristics, which the incremental signal maintainer does not fold; they

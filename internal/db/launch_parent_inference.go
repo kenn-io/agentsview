@@ -120,7 +120,7 @@ func inferLaunchChild(ctx context.Context, tx *sql.Tx, child launchChild) (int, 
 	if !eligible {
 		return retractInferredLaunchParent(ctx, tx, child.id)
 	}
-	launches, err := possibleLaunches(ctx, tx, child, start.Add(-60*time.Second-time.Nanosecond), start)
+	candidates, nearbyRuns, err := launchContext(ctx, tx, child, start)
 	if err != nil {
 		return 0, err
 	}
@@ -133,16 +133,13 @@ func inferLaunchChild(ctx context.Context, tx *sql.Tx, child launchChild) (int, 
 	known := map[string]int{}
 	competing := map[string]map[string]bool{}
 	uncertain := map[string]bool{}
-	for _, launch := range launches {
+	for _, launch := range launchWindow(candidates, time.Time{}, start) {
 		matches[launch.parent] = true
 		if !launch.certain && (!launch.retained || launch.parent != existingParent) {
 			uncertain[launch.parent] = true
 			continue
 		}
-		runs, err := launchRuns(ctx, tx, child, launch.at)
-		if err != nil {
-			return 0, err
-		}
+		runs := launchRuns(start, launch.at, candidates, nearbyRuns)
 		known[launch.parent]++
 		if competing[launch.parent] == nil {
 			competing[launch.parent] = map[string]bool{}
@@ -171,55 +168,61 @@ func inferLaunchChild(ctx context.Context, tx *sql.Tx, child launchChild) (int, 
 	return retractInferredLaunchParent(ctx, tx, child.id)
 }
 
-// launchRuns finds the runs that could have used an invocation.
-func launchRuns(ctx context.Context, tx *sql.Tx, child launchChild, at time.Time) ([]string, error) {
-	childStart, err := time.Parse(time.RFC3339Nano, child.started)
+type nearbyLaunchRun struct {
+	id      string
+	started time.Time
+}
+
+func launchContext(ctx context.Context, tx *sql.Tx, child launchChild, start time.Time) ([]possibleLaunch, []nearbyLaunchRun, error) {
+	candidates, err := possibleLaunches(ctx, tx, child, start.Add(-60*time.Second-time.Nanosecond), start.Add(60*time.Second))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT id,cwd,started_at FROM sessions INDEXED BY idx_sessions_started WHERE started_at>=? AND started_at<=? AND machine=? AND agent=? AND ((agent='codex' AND session_kind='non-interactive') OR (agent='claude' AND entrypoint='sdk-cli'))`, at.Add(-2*time.Second).UTC().Format(time.RFC3339Nano), at.Add(62*time.Second).UTC().Format(time.RFC3339Nano), child.machine, child.agent)
+	if len(candidates) == 0 {
+		return candidates, nil, nil
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id,cwd,started_at FROM sessions INDEXED BY idx_sessions_started WHERE started_at>=? AND started_at<=? AND machine=? AND agent=? AND ((agent='codex' AND session_kind='non-interactive') OR (agent='claude' AND entrypoint='sdk-cli'))`, start.Add(-62*time.Second).UTC().Format(time.RFC3339Nano), start.Add(62*time.Second).UTC().Format(time.RFC3339Nano), child.machine, child.agent)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer rows.Close()
-	var runs []string
-	type laterRun struct {
-		id      string
-		started time.Time
-	}
-	var later []laterRun
+	var runs []nearbyLaunchRun
 	for rows.Next() {
 		var id, cwd, stamp string
 		if err := rows.Scan(&id, &cwd, &stamp); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		started, err := time.Parse(time.RFC3339Nano, stamp)
-		if err == nil && !started.Before(at) && started.Sub(at) <= 60*time.Second && absoluteLaunchFolder(cwd) && sameLaunchFolder(cwd, child.cwd) {
-			if started.After(childStart) {
-				later = append(later, laterRun{id, started})
+		if err == nil && absoluteLaunchFolder(cwd) && sameLaunchFolder(cwd, child.cwd) {
+			runs = append(runs, nearbyLaunchRun{id, started})
+		}
+	}
+	return candidates, runs, rows.Err()
+}
+
+// launchRuns finds the runs that could have used an invocation.
+func launchRuns(childStart, at time.Time, candidates []possibleLaunch, nearby []nearbyLaunchRun) []string {
+	var runs []string
+	var later []nearbyLaunchRun
+	for _, run := range nearby {
+		if !run.started.Before(at) && run.started.Sub(at) <= 60*time.Second {
+			if run.started.After(childStart) {
+				later = append(later, run)
 			} else {
-				runs = append(runs, id)
+				runs = append(runs, run.id)
 			}
 		}
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	rows.Close()
 	if len(later) == 0 {
-		return runs, nil
-	}
-	candidates, err := possibleLaunches(ctx, tx, child, childStart, at.Add(60*time.Second))
-	if err != nil {
-		return nil, err
+		return runs
 	}
 	var launches []time.Time
-	for _, candidate := range candidates {
+	for _, candidate := range launchWindow(candidates, childStart, at.Add(60*time.Second)) {
 		if candidate.certain {
 			launches = append(launches, candidate.at)
 		}
 	}
-	slices.SortFunc(later, func(a, b laterRun) int { return a.started.Compare(b.started) })
+	slices.SortFunc(later, func(a, b nearbyLaunchRun) int { return a.started.Compare(b.started) })
 	for _, run := range later {
 		matched := false
 		for i, launch := range launches {
@@ -233,7 +236,7 @@ func launchRuns(ctx context.Context, tx *sql.Tx, child launchChild, at time.Time
 			runs = append(runs, run.id)
 		}
 	}
-	return runs, nil
+	return runs
 }
 
 type possibleLaunch struct {
@@ -241,6 +244,16 @@ type possibleLaunch struct {
 	at       time.Time
 	certain  bool
 	retained bool
+}
+
+func launchWindow(candidates []possibleLaunch, from, until time.Time) []possibleLaunch {
+	var result []possibleLaunch
+	for _, candidate := range candidates {
+		if candidate.at.After(from) && !candidate.at.After(until) {
+			result = append(result, candidate)
+		}
+	}
+	return result
 }
 
 func possibleLaunches(ctx context.Context, tx *sql.Tx, child launchChild, from, until time.Time) ([]possibleLaunch, error) {

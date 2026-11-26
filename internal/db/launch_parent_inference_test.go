@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
@@ -65,6 +66,7 @@ func TestLaunchParentEvidence(t *testing.T) {
 		want                                                    string
 		parentAgent, childAgent, callCwd, started               string
 	}{
+		{"help is not a launch", `{"command":"codex exec --help"}`, "Bash", "/repo", "local", "/repo", "local", false, "", "", "", "", ""},
 		{"possible alone", `{"command":"test -d /repo && codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", false, "", "", "", "", ""},
 		{"unresolved competitor", `const cmd = "codex exec hi"; tools.exec_command({cmd})`, "exec", "/repo", "local", "/repo", "local", true, "", "codex", "codex", "/repo", ""},
 		{"possible competitor", `{"command":"test -d /repo && codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
@@ -704,4 +706,58 @@ func TestLaunchParentArchivedLauncherWithoutSource(t *testing.T) {
 	link, err := d.GetSessionExternalParent(t.Context(), "child")
 	require.NoError(t, err)
 	assert.Equal(t, "parent", link.ParentSessionID)
+}
+
+func TestLaunchParentLegacyMissingLauncherDirectory(t *testing.T) {
+	for _, tc := range []struct{ name, command, want string }{
+		{"explicit directory", "codex -C /repo exec hi", "parent"},
+		{"implicit directory", "codex exec hi", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			require.NoError(t, d.DropBulkImportIndexes(t.Context()))
+			insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
+			insertMessages(t, d, Message{SessionID: "parent", Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"` + tc.command + `"}`}}})
+			_, err := d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET source_missing_at='2026-01-03T00:00:00Z' WHERE id='parent'`)
+			require.NoError(t, err)
+			started := "2026-01-02T03:04:03Z"
+			insertSession(t, d, "child", "project", func(s *Session) {
+				s.Agent = "codex"
+				s.Cwd = "/repo"
+				s.StartedAt = &started
+				s.SessionKind = "non-interactive"
+			})
+			require.NoError(t, d.RebuildBulkImportIndexes(t.Context()))
+			_, err = d.LinkSubagentSessionsContext(t.Context())
+			require.NoError(t, err)
+			link, err := d.GetSessionExternalParent(t.Context(), "child")
+			if tc.want == "" {
+				require.ErrorIs(t, err, sql.ErrNoRows)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, link.ParentSessionID)
+		})
+	}
+}
+
+func TestLaunchParentDenseBatchIngest(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
+	base := time.Date(2026, 1, 2, 3, 4, 0, 0, time.UTC)
+	for i := range 80 {
+		stamp := base.Add(time.Duration(i) * time.Second).Format(time.RFC3339)
+		insertMessages(t, d, Message{SessionID: "parent", Ordinal: i, Role: "assistant", Timestamp: stamp, ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`, WorkingDirectory: "/repo"}}})
+	}
+	start := time.Now()
+	for i := range 80 {
+		stamp := base.Add(time.Duration(i+3) * time.Second).Format(time.RFC3339)
+		insertSession(t, d, fmt.Sprintf("child-%02d", i), "project", func(s *Session) {
+			s.Agent = "codex"
+			s.Cwd = "/repo"
+			s.StartedAt = &stamp
+			s.SessionKind = "non-interactive"
+		})
+	}
+	assert.Less(t, time.Since(start), 20*time.Second, "dense launch ingest repeatedly scans the same candidates")
 }

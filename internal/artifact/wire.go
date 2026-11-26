@@ -51,11 +51,14 @@ const (
 	// Segment v2 adds the optional prompt_source provenance field on
 	// message records. Segment v3 adds the optional provider_id billing
 	// field. Segment v4 adds reasoning_effort, and v5 adds dialogue_text
-	// and ranges that reconstruct it from content.
+	// and ranges that reconstruct it from content. Segment v6 adds
+	// per-call working_directory.
 	// Earlier segments still decode with missing fields empty. Export writes
 	// the lowest version that holds every record in the segment.
 	messageSegmentPreDialogueVersion = 4
-	messageSegmentFormatVersion      = 5
+	messageSegmentDialogueVersion    = 5
+	messageSegmentWorkdirVersion     = 6
+	messageSegmentFormatVersion      = messageSegmentWorkdirVersion
 	messageSegmentMinDecodeVersion   = 1
 	metadataEventFormatVersion       = 1
 )
@@ -320,11 +323,21 @@ func ValidateRawSource(raw *RawSourceRef) error {
 	return nil
 }
 
-func encodeSegment(msgs []db.Message) ([]byte, error) {
+func messageSegmentVersion(msgs []db.Message) int {
 	version := messageSegmentPreDialogueVersion
-	if slices.ContainsFunc(msgs, func(msg db.Message) bool { return msg.DialogueText != nil }) {
-		version = messageSegmentFormatVersion
+	for _, msg := range msgs {
+		if msg.DialogueText != nil {
+			version = max(version, messageSegmentDialogueVersion)
+		}
+		if slices.ContainsFunc(msg.ToolCalls, func(call db.ToolCall) bool { return call.WorkingDirectory != "" }) {
+			return messageSegmentWorkdirVersion
+		}
 	}
+	return version
+}
+
+func encodeSegment(msgs []db.Message) ([]byte, error) {
+	version := messageSegmentVersion(msgs)
 	var buf bytes.Buffer
 	for _, msg := range msgs {
 		record := segmentMessageFromDB(msg)

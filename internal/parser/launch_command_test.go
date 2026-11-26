@@ -12,6 +12,14 @@ func TestLaunchCommands(t *testing.T) {
 		want    []LaunchCommand
 	}{
 		{`codex exec "$PROMPT"`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}}},
+		{`codex exec --help`, nil},
+		{`codex exec -h`, nil},
+		{`codex exec --version`, nil},
+		{`codex exec -V`, nil},
+		{`codex -m --help exec hi`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}}},
+		{`codex exec -- --help`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}}},
+		{`codex --help`, nil},
+		{`claude -p --help`, nil},
 		{`codex exec $OPTS hi`, []LaunchCommand{{Agent: "codex", Unknown: true}}},
 		{`codex -m $MODEL exec hi`, []LaunchCommand{{Agent: "codex", Unknown: true}}},
 		{`codex --model=$MODEL exec hi`, []LaunchCommand{{Agent: "codex", Unknown: true}}},

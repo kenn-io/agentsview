@@ -2237,6 +2237,18 @@ func TestExportMessageSegmentVersions(t *testing.T) {
 		versions        []string
 	}{
 		{
+			name:     "working directory requires v6",
+			messages: []db.Message{{Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Bash", WorkingDirectory: "/repo"}}}},
+			want:     [][]db.Message{{{Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Bash", WorkingDirectory: "/repo"}}}}},
+			versions: []string{`"v":6`},
+		},
+		{
+			name:     "working directory raises the whole segment",
+			messages: []db.Message{plain, {Ordinal: 1, Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Bash", WorkingDirectory: "/repo"}}}},
+			want:     [][]db.Message{{plain, {Ordinal: 1, Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Bash", WorkingDirectory: "/repo"}}}}},
+			versions: []string{`"v":6`},
+		},
+		{
 			name:     "no dialogue keeps v4",
 			messages: []db.Message{plain},
 			want:     [][]db.Message{{plain}},
@@ -2280,6 +2292,10 @@ func TestExportMessageSegmentVersions(t *testing.T) {
 				require.Len(t, decoded, len(tc.want[i]))
 				for j, msg := range decoded {
 					assert.Equal(t, tc.want[i][j].DialogueText, msg.DialogueText)
+					if len(tc.want[i][j].ToolCalls) > 0 {
+						require.Len(t, msg.ToolCalls, 1)
+						assert.Equal(t, tc.want[i][j].ToolCalls[0].WorkingDirectory, msg.ToolCalls[0].WorkingDirectory)
+					}
 				}
 			}
 		})

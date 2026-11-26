@@ -325,3 +325,21 @@ func TestCanonicalMetadataEventGolden(t *testing.T) {
 	)
 	assert.Equal(t, "fcb36d602e56fe1616ba6e2f86e973adde4ef547e0ecf280b37eb534b60e4b71", hashHex(data))
 }
+
+func TestEncodeSegmentWorkingDirectoryVersion(t *testing.T) {
+	data, err := encodeSegment([]db.Message{{Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Bash", WorkingDirectory: "/repo"}}}})
+	require.NoError(t, err)
+	var record segmentMessage
+	require.NoError(t, json.Unmarshal(data, &record))
+	assert.Equal(t, 6, record.Version)
+	decoded, err := decodeSegment(data)
+	require.NoError(t, err)
+	require.Len(t, decoded, 1)
+	require.Len(t, decoded[0].ToolCalls, 1)
+	assert.Equal(t, "/repo", decoded[0].ToolCalls[0].WorkingDirectory)
+	v5, err := decodeSegment([]byte(`{"v":5,"ordinal":0,"role":"user","content":"hello","dialogue_ranges":[[0,5]]}` + "\n"))
+	require.NoError(t, err)
+	require.Len(t, v5, 1)
+	require.NotNil(t, v5[0].DialogueText)
+	assert.Equal(t, "hello", *v5[0].DialogueText)
+}
