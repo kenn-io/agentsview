@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/assert"
@@ -156,6 +157,22 @@ func TestCodexPlainRolloutWinsOverCompressedSibling(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, compressed, found.DisplayPath)
+
+	t.Run("labeled with newer compressed sibling", func(t *testing.T) {
+		root := t.TempDir()
+		day := codexDayDir(filepath.Join(root, "team", ".codex-run-v1-abc", "sessions"))
+		plain := writeFileIn(t, day, compressedDayPrefix+compressedThreadA+".jsonl", []byte(content))
+		compressed := writeFileIn(t, day, compressedDayPrefix+compressedThreadA+".jsonl.zst", zstdCompress(t, []byte(content)))
+		now := time.Now()
+		require.NoError(t, os.Chtimes(plain, now.Add(-time.Hour), now.Add(-time.Hour)))
+		require.NoError(t, os.Chtimes(compressed, now, now))
+		provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+		require.True(t, ok)
+		sources, err := provider.Discover(t.Context())
+		require.NoError(t, err)
+		require.Len(t, sources, 1)
+		assert.Equal(t, plain, sources[0].DisplayPath)
+	})
 }
 
 // TestCodexParseCompressedRolloutMatchesPlain: the compressed file parses to

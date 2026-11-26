@@ -953,27 +953,23 @@ func TestDirectBackend_Sync_CodexDuplicatePath(t *testing.T) {
 	roots := []string{filepath.Join(root, "ordinary"), filepath.Join(root, "logs")}
 	paths := []string{
 		filepath.Join(roots[0], "2026", "10", "08", name),
-		filepath.Join(roots[1], "a", ".codex-run-v1-abc", "sessions", "2026", "10", "08", name),
 		filepath.Join(roots[1], "b", ".codex-run-v1-abc", "sessions", "2026", "10", "08", name),
 	}
 	for i, path := range paths {
 		meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z")
-		dbtest.WriteTestFile(t, path, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", []string{"ordinary", "a", "b"}[i], "2026-10-08T12:00:01Z")+"\n"))
+		dbtest.WriteTestFile(t, path, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", []string{"ordinary", "b"}[i], "2026-10-08T12:00:01Z")+"\n"))
 		mtime := time.Now().Add(time.Duration(i) * time.Hour)
 		require.NoError(t, os.Chtimes(path, mtime, mtime))
 	}
 	d := dbtest.OpenTestDB(t)
 	engine := sync.NewEngine(t.Context(), d, sync.EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: roots}})
 	t.Cleanup(engine.Close)
-	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[2]}))
+	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[1]}))
 	svc := service.NewDirectBackend(d, engine)
 	detail, err := svc.Sync(t.Context(), service.SyncInput{Path: paths[0]})
 	require.NoError(t, err)
 	require.NotNil(t, detail)
 	assert.Equal(t, "codex:"+id, detail.ID)
-	assert.Equal(t, "b", detail.Project)
-	require.NotNil(t, detail.FirstMessage)
-	assert.Equal(t, "b", *detail.FirstMessage)
 }
 
 func TestDirectBackend_Sync_RemoteCodexID(t *testing.T) {

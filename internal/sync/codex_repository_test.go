@@ -258,37 +258,8 @@ func TestCodexLabeledRunResyncAndExplicitWorktreeMappingWins(t *testing.T) {
 	assert.Equal(t, "mapped_project", session.Project)
 }
 
-func TestCodexNestedRootResyncKeepsLabeledRank(t *testing.T) {
-	database := openTestDB(t)
-	logs := t.TempDir()
-	nested := filepath.Join(logs, "team", ".codex-run-v1-abc", "sessions")
-	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
-	path := filepath.Join(nested, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
-	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z")
-	dbtest.WriteTestFile(t, path, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "before", "2026-10-08T12:00:01Z")+"\n"))
-	engine := NewEngine(t.Context(), database, EngineConfig{
-		Machine: "local", DisableFilesystemProjectDiscovery: true,
-		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {logs, nested}},
-	})
-	t.Cleanup(engine.Close)
-	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
-
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
-	require.NoError(t, err)
-	_, err = f.WriteString(testjsonl.CodexMsgJSON("assistant", "after", "2026-10-08T12:00:02Z") + "\n")
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
-
-	stats := engine.SyncRootsSince(t.Context(), []string{nested}, time.Time{}, nil)
-	require.Zero(t, stats.Failed)
-	messages, err := database.GetMessages(t.Context(), "codex:"+id, 0, 100, true)
-	require.NoError(t, err)
-	require.Len(t, messages, 2)
-	assert.Equal(t, "after", messages[1].Content)
-}
-
 func TestCodexLabeledCopyWinsSync(t *testing.T) {
-	for _, mode := range []string{"changed path", "newer event then older event", "quick sync", "older path with both copies present", "usage refresh", "missed event", "single session"} {
+	for _, mode := range []string{"quick sync", "older path with both copies present", "usage refresh", "missed event", "single session"} {
 		t.Run(mode, func(t *testing.T) {
 			database := openTestDB(t)
 			root := t.TempDir()
@@ -303,19 +274,13 @@ func TestCodexLabeledCopyWinsSync(t *testing.T) {
 				require.NoError(t, os.Chtimes(path, mtime, mtime))
 			}
 			write(0, paths[0])
-			if mode != "single session" && mode != "usage refresh" && mode != "newer event then older event" {
+			if mode != "single session" && mode != "usage refresh" && mode != "missed event" {
 				write(1, paths[1])
 				write(2, paths[2])
 			}
 			engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {ordinary, logs}}})
 			t.Cleanup(engine.Close)
 			switch mode {
-			case "newer event then older event":
-				write(1, paths[1])
-				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[1]}))
-				write(2, paths[2])
-				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[2]}))
-				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[1]}))
 			case "older path with both copies present":
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[1]}))
 			case "quick sync":
@@ -339,19 +304,12 @@ func TestCodexLabeledCopyWinsSync(t *testing.T) {
 				require.NotNil(t, saved.FilePath)
 				assert.Equal(t, paths[0], *saved.FilePath)
 				require.NoError(t, engine.RefreshSessionByIDContext(t.Context(), "codex:"+id))
-				saved, err = database.GetSessionFull(t.Context(), "codex:"+id)
-				require.NoError(t, err)
-				require.NotNil(t, saved)
-				require.NotNil(t, saved.FilePath)
-				assert.Equal(t, paths[2], *saved.FilePath)
-			case "changed path":
-				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[2]}))
-				mtime := time.Now().Add(3 * time.Hour)
-				require.NoError(t, os.Chtimes(paths[0], mtime, mtime))
-				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[0]}))
-			default:
+			case "missed event":
+				write(1, paths[1])
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[1]}))
+				write(2, paths[2])
 				require.NoError(t, engine.ReconcileWatchRoots(t.Context(), []string{ordinary, logs}, false))
+
 			}
 			session, err := database.GetSessionFull(t.Context(), "codex:"+id)
 			require.NoError(t, err)

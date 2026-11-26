@@ -1023,7 +1023,7 @@ func (i *codexLabeledPathIndex) paths(
 		}
 		i.loaded = true
 	}
-	if changedPath != "" && CodexSessionUUIDFromFilename(filepath.Base(changedPath)) == uuid {
+	if changedPath != "" && CodexSourceLabelForRoots(sources.roots, changedPath) != "" && CodexSessionUUIDFromFilename(filepath.Base(changedPath)) == uuid {
 		if changedExists {
 			i.add(uuid, changedPath)
 		}

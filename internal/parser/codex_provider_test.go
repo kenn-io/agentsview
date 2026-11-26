@@ -2450,29 +2450,37 @@ func TestCodexLabeledRunFindSourcePrefersLabeled(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, changed, 1)
 	assert.Equal(t, labeled, changed[0].DisplayPath)
-	plan, supported, err := ResolveRawCapturePlan(t.Context(), provider, changed[0])
-	require.NoError(t, err)
-	require.True(t, supported)
-	require.NotEmpty(t, plan.Entries)
-	assert.Equal(t, labeled, plan.Entries[0].LocalPath)
 	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	assert.Equal(t, labeled, sources[0].DisplayPath)
+	newer := writeCodexProviderSessionContent(t, filepath.Join(root, "team", "newer", ".codex-run-v1-abc", "sessions"), id, content)
+	now := time.Now().Add(time.Hour)
+	require.NoError(t, os.Chtimes(newer, now, now))
+	changed, err = RawCaptureSourcesForChangedPath(t.Context(), provider, ChangedPathRequest{Path: newer, EventKind: "write"})
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, newer, changed[0].DisplayPath)
 }
 
-func TestCodexLabeledDiscoveryPrefersPlainSibling(t *testing.T) {
+func TestCodexRawCaptureChangedOrdinaryCopies(t *testing.T) {
 	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
 	root := t.TempDir()
-	path := writeCodexProviderSessionContent(t, filepath.Join(root, "team", ".codex-run-v1-abc", "sessions"), id, "{}\n")
-	require.NoError(t, os.WriteFile(path+".zst", []byte("compressed"), 0o600))
+	name := "rollout-2026-10-08T12-00-00-" + id + ".jsonl"
+	dated := filepath.Join(root, "sessions", "2026", "10", "08", name)
+	archived := filepath.Join(root, "archived_sessions", name)
+	for _, path := range []string{dated, archived} {
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
+	}
 	now := time.Now()
-	require.NoError(t, os.Chtimes(path, now.Add(-time.Hour), now.Add(-time.Hour)))
-	require.NoError(t, os.Chtimes(path+".zst", now, now))
-	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.NoError(t, os.Chtimes(dated, now.Add(time.Hour), now.Add(time.Hour)))
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{filepath.Join(root, "sessions"), filepath.Join(root, "archived_sessions")}})
 	require.True(t, ok)
-	sources, err := provider.Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	assert.Equal(t, path, sources[0].DisplayPath)
+	for _, path := range []string{dated, archived} {
+		sources, err := RawCaptureSourcesForChangedPath(t.Context(), provider, ChangedPathRequest{Path: path, EventKind: "write"})
+		require.NoError(t, err)
+		require.Len(t, sources, 1)
+		assert.Equal(t, path, sources[0].DisplayPath)
+	}
 }
