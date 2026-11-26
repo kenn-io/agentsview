@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -23,6 +24,63 @@ const (
 	MaxContentSearchLimit     = 500
 	ContentSnippetRadius      = 60 // chars of context on each side of a match
 )
+
+// contentScanTimeout stops a keyword search so it frees its reader connection.
+var contentScanTimeout = 2 * time.Minute
+
+const ContentScanDeadlineHeader = "X-AgentsView-Content-Scan-Deadline"
+
+type contentScanBudgetKey struct{}
+
+type contentScanBudget struct {
+	mu       sync.Mutex
+	deadline time.Time
+}
+
+// WithContentScanBudget shares the first keyword deadline across searches.
+func WithContentScanBudget(ctx context.Context) context.Context {
+	if _, ok := ctx.Value(contentScanBudgetKey{}).(*contentScanBudget); ok {
+		return ctx
+	}
+	return context.WithValue(ctx, contentScanBudgetKey{}, &contentScanBudget{})
+}
+
+// ContentScanDeadline reports the keyword deadline once a scan has started.
+func ContentScanDeadline(ctx context.Context) time.Time {
+	budget, _ := ctx.Value(contentScanBudgetKey{}).(*contentScanBudget)
+	if budget == nil {
+		return time.Time{}
+	}
+	budget.mu.Lock()
+	defer budget.mu.Unlock()
+	return budget.deadline
+}
+
+// SetContentScanDeadline records a deadline received from the local daemon.
+func SetContentScanDeadline(ctx context.Context, deadline time.Time) {
+	budget, _ := ctx.Value(contentScanBudgetKey{}).(*contentScanBudget)
+	if budget == nil || deadline.IsZero() {
+		return
+	}
+	budget.mu.Lock()
+	defer budget.mu.Unlock()
+	if budget.deadline.IsZero() || deadline.Before(budget.deadline) {
+		budget.deadline = deadline
+	}
+}
+
+// WithContentScanDeadline bounds a local keyword search and its follow-ups.
+func WithContentScanDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
+	deadline := ContentScanDeadline(ctx)
+	if deadline.IsZero() {
+		deadline = time.Now().Add(contentScanTimeout)
+		SetContentScanDeadline(ctx, deadline)
+		if shared := ContentScanDeadline(ctx); !shared.IsZero() {
+			deadline = shared
+		}
+	}
+	return context.WithDeadline(ctx, deadline)
+}
 
 // ContentSearchFilter parameterises SearchContent. Session-scoping fields
 // mirror SessionFilter; they are mapped through buildSessionFilter so the
@@ -306,6 +364,11 @@ func (db *DB) SearchContent(
 	}
 	if f.Pattern == "" {
 		return ContentSearchPage{}, nil
+	}
+	if f.Mode != "semantic" && f.Mode != "fts" && (f.Mode != "hybrid" || f.KeywordOnly) {
+		var cancel context.CancelFunc
+		ctx, cancel = WithContentScanDeadline(ctx)
+		defer cancel()
 	}
 
 	// Semantic and hybrid validate and default Sources themselves (messages
@@ -1117,6 +1180,9 @@ func (db *DB) searchContentFTS(
 	// as invalid user input (400). With FTS present, the only SQLITE_ERROR the
 	// MATCH query can raise comes from a malformed pattern.
 	if !db.HasFTS(ctx) {
+		if err := ctx.Err(); err != nil {
+			return ContentSearchPage{}, err
+		}
 		return ContentSearchPage{}, errFTSUnavailable
 	}
 	if _, q, words := routeContentWords(f); words {
@@ -1733,10 +1799,6 @@ func (db *DB) searchContentHybrid(
 			return ContentSearchPage{}, ErrSemanticUnavailable
 		}
 	}
-	if !db.HasFTS(ctx) {
-		return ContentSearchPage{}, errFTSUnavailable
-	}
-
 	k := max(f.Limit*4, SemanticOverfetchMin)
 	var vecLeg hybridLeg
 	var err error
@@ -1745,6 +1807,17 @@ func (db *DB) searchContentHybrid(
 		if err != nil {
 			return ContentSearchPage{}, err
 		}
+	}
+	if searcher != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = WithContentScanDeadline(ctx)
+		defer cancel()
+	}
+	if !db.HasFTS(ctx) {
+		if err := ctx.Err(); err != nil {
+			return ContentSearchPage{}, err
+		}
+		return ContentSearchPage{}, errFTSUnavailable
 	}
 	ftsLeg, err := db.hybridFTSLeg(ctx, f, searcher, k)
 	if err != nil {

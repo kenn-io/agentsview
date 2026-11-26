@@ -977,6 +977,9 @@ Substring (the default) and regex modes also scan `tool_calls.input_json`,
 `--cursor` is rejected); see [Semantic Search](/docs/semantic-search/) for
 setup, scoring, and limitations.
 
+SQLite substring, regex, and terms searches, and hybrid multi-word keyword
+scans, stop after two minutes and release their reader connection.
+
 On SQLite, PostgreSQL, and ClickHouse, a default multi-word search that
 includes `messages` returns exact text matches first, then messages ordered by
 how many query words they contain, with that count in `matched_words`. Unquoted

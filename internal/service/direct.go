@@ -86,6 +86,9 @@ func newEvidenceSource() string { return rand.Text() }
 
 func (b *directBackend) SupportsRecallQueries() bool { return b.local != nil }
 
+// LocalContentScan reports whether this service searches a local SQLite archive.
+func (b *directBackend) LocalContentScan() bool { return b.local != nil }
+
 func (b *directBackend) MemoryStatus(ctx context.Context) (MemoryStatus, error) {
 	status, err := b.computeMemoryStatus(ctx)
 	if err != nil {
@@ -143,16 +146,20 @@ func (b *directBackend) memoryStatusForSearch(
 	ctx context.Context,
 ) (MemoryStatus, error) {
 	b.memoryStatusMu.Lock()
-	defer b.memoryStatusMu.Unlock()
 	if !b.memoryStatusAt.IsZero() && time.Since(b.memoryStatusAt) < memorySearchStatusTTL {
-		return b.memoryStatus, nil
+		status := b.memoryStatus
+		b.memoryStatusMu.Unlock()
+		return status, nil
 	}
+	b.memoryStatusMu.Unlock()
 	status, err := b.computeMemoryStatus(ctx)
 	if err != nil {
 		return MemoryStatus{}, err
 	}
+	b.memoryStatusMu.Lock()
 	b.memoryStatus = status
 	b.memoryStatusAt = time.Now()
+	b.memoryStatusMu.Unlock()
 	return status, nil
 }
 
@@ -1199,6 +1206,8 @@ func (b *directBackend) SearchContent(
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel := ContentSearchContext(ctx, b, req)
+	defer cancel()
 	var excludeActiveSince time.Time
 	if req.ExcludeActiveSince != "" {
 		excludeActiveSince, err = time.Parse(time.RFC3339, req.ExcludeActiveSince)
@@ -1288,6 +1297,8 @@ func (b *directBackend) SearchContent(
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancelFollowup := ContentSearchFollowupContext(ctx, b, req)
+	defer cancelFollowup()
 	revisionBound := true
 	for i := range page.Matches {
 		if !matchRevisionBound(page.Matches[i]) {
@@ -1305,6 +1316,9 @@ func (b *directBackend) SearchContent(
 		revisionBound = revisionBound && contextBound
 	}
 	status, statusErr := b.memoryStatusForSearch(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	coverage := status.Coverage()
 	if statusErr != nil {
 		unknown := MemoryCapabilityStatus{Status: MemoryUnknown, Reason: "status_probe_failed"}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
@@ -25,6 +26,11 @@ type searchSort string
 type contentSearchMode string
 
 type contentSearchScope string
+
+type contentSearchOutput struct {
+	Deadline string `header:"X-AgentsView-Content-Scan-Deadline"`
+	Body     *service.ContentSearchResult
+}
 
 type searchInput struct {
 	DateFrom string     `query:"date_from" format:"date" doc:"Filter sessions active on or after this date"`
@@ -107,7 +113,7 @@ func (s *Server) humaSearch(
 func (s *Server) humaSearchContent(
 	ctx context.Context,
 	in *contentSearchInput,
-) (*jsonOutput[*service.ContentSearchResult], error) {
+) (*contentSearchOutput, error) {
 	if strings.TrimSpace(in.Pattern) == "" && len(in.Concepts) == 0 {
 		return nil, apiError(http.StatusBadRequest, "pattern or concepts required")
 	}
@@ -142,6 +148,7 @@ func (s *Server) humaSearchContent(
 	if err != nil {
 		return nil, apiError(http.StatusBadRequest, err.Error())
 	}
+	ctx = db.WithContentScanBudget(ctx)
 	res, err := s.sessions.SearchContent(ctx, service.ContentSearchRequest{
 		Pattern:            in.Pattern,
 		Concepts:           in.Concepts,
@@ -200,7 +207,11 @@ func (s *Server) humaSearchContent(
 	if res.Matches == nil {
 		res.Matches = []db.ContentMatch{}
 	}
-	return &jsonOutput[*service.ContentSearchResult]{Body: res}, nil
+	out := &contentSearchOutput{Body: res}
+	if deadline := db.ContentScanDeadline(ctx); !deadline.IsZero() {
+		out.Deadline = deadline.UTC().Format(time.RFC3339Nano)
+	}
+	return out, nil
 }
 
 func requiresSemanticSearchIntent(mode contentSearchMode) bool {

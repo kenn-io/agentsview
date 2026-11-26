@@ -1,14 +1,86 @@
 package db
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestContentScanStopsAtDeadline(t *testing.T) {
+	d := testDB(t)
+	requireFTS(t, d)
+	searcher := &fakeVectorSearcher{}
+	d.SetVectorSearcher(searcher)
+	previous := contentScanTimeout
+	contentScanTimeout = time.Nanosecond
+	t.Cleanup(func() { contentScanTimeout = previous })
+	for _, tc := range []struct {
+		name, mode, pattern string
+		keywordOnly         bool
+	}{
+		{"substring", "substring", "ask opus and fable", false},
+		{"regex", "regex", "ask.*fable", false},
+		{"terms", "terms", "ask opus and fable", false},
+		{"hybrid keyword", "hybrid", "ask opus and fable", true},
+		{"hybrid", "hybrid", "ask opus and fable", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := d.SearchContent(t.Context(), ContentSearchFilter{Mode: tc.mode, Pattern: tc.pattern, KeywordOnly: tc.keywordOnly})
+			if tc.name == "hybrid" {
+				assert.Positive(t, searcher.calls, "semantic search ran before the keyword scan")
+			}
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+		})
+	}
+}
+
+func TestFTSSearchIgnoresContentScanDeadline(t *testing.T) {
+	d := testDB(t)
+	requireFTS(t, d)
+	seedSearchSession(t, d, "s1", "project", [][2]string{{"user", "needle"}})
+	previous := contentScanTimeout
+	contentScanTimeout = time.Nanosecond
+	t.Cleanup(func() { contentScanTimeout = previous })
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{Mode: "fts", Pattern: "needle", SessionID: "s1"})
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+}
+
+func TestFTSSearchReturnsCallerCancellation(t *testing.T) {
+	d := testDB(t)
+	requireFTS(t, d)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := d.SearchContent(ctx, ContentSearchFilter{Mode: "fts", Pattern: "needle"})
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestHybridFTSProbeStopsAtDeadline(t *testing.T) {
+	d := testDB(t)
+	requireFTS(t, d)
+	searcher := &fakeVectorSearcher{}
+	d.SetVectorSearcher(searcher)
+	d.rawReader().SetMaxOpenConns(1)
+	conn, err := d.rawReader().Conn(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, conn.Close()) })
+	previous := contentScanTimeout
+	contentScanTimeout = time.Second
+	t.Cleanup(func() { contentScanTimeout = previous })
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	_, err = d.SearchContent(ctx, ContentSearchFilter{Mode: "hybrid", Pattern: "needle"})
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Positive(t, searcher.calls, "semantic search runs before the FTS probe")
+	assert.NoError(t, ctx.Err(), "the keyword deadline expired before the caller deadline")
+}
 
 // seedSearchSession inserts one session with the given messages
 // (role/content pairs) for content-search tests.
@@ -1485,4 +1557,71 @@ func TestSearchContentExcludeSessionIDs(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got.Matches, 1, "excluded id must not consume the page")
 	assert.Equal(t, "keep", got.Matches[0].SessionID)
+}
+
+func TestContentScanDeadlineReleasesActiveReader(t *testing.T) {
+	d := testDB(t)
+	msgs := make([][2]string, 200)
+	for i := range msgs {
+		msgs[i] = [2]string{"user", "needle"}
+	}
+	seedSearchSession(t, d, "s1", "project", msgs)
+	d.rawReader().SetMaxIdleConns(0)
+	d.rawReader().SetMaxOpenConns(1)
+	d.rawReader().SetMaxIdleConns(1)
+	previous := contentScanTimeout
+	contentScanTimeout = time.Second
+	t.Cleanup(func() { contentScanTimeout = previous })
+	entered := make(chan struct{})
+	started := sync.OnceFunc(func() { close(entered) })
+	releaseScan := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(releaseScan) })
+	defer unblock()
+	conn, err := d.getReader().Conn(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, conn.Raw(func(raw any) error {
+		return raw.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("julianday", func(string) float64 {
+			started()
+			<-releaseScan
+			return 0
+		}, false)
+	}))
+	require.NoError(t, conn.Close())
+	done := make(chan error, 1)
+	go func() {
+		_, err := d.SearchContent(t.Context(), ContentSearchFilter{Mode: "substring", Pattern: "needle", Sources: []string{"messages"}, IncludeOneShot: true})
+		done <- err
+	}()
+	select {
+	case <-entered:
+	case err := <-done:
+		require.FailNow(t, "search returned before reaching the reader", "%v", err)
+	case <-time.After(10 * time.Second):
+		require.FailNow(t, "search did not reach the reader")
+	}
+	assert.Positive(t, d.rawReader().Stats().InUse)
+	select {
+	case err := <-done:
+		require.FailNow(t, "search returned before its deadline", "%v", err)
+	case <-time.After(2 * time.Second):
+		unblock()
+	}
+	require.ErrorIs(t, <-done, context.DeadlineExceeded)
+	waitCtx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	conn, err = d.rawReader().Conn(waitCtx)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	assert.Zero(t, d.rawReader().Stats().InUse)
+	var releases []func()
+	defer func() {
+		for _, release := range releases {
+			release()
+		}
+	}()
+	for range bulkReadSlots {
+		release, ok := d.tryAcquireBulkRead()
+		require.True(t, ok)
+		releases = append(releases, release)
+	}
 }

@@ -995,6 +995,11 @@ func (b *httpBackend) SearchContent(
 	if response == nil {
 		return nil, err
 	}
+	if response.HTTPResponse != nil {
+		if deadline, parseErr := time.Parse(time.RFC3339Nano, response.HTTPResponse.Header.Get(db.ContentScanDeadlineHeader)); parseErr == nil {
+			db.SetContentScanDeadline(ctx, deadline)
+		}
+	}
 	out := response.JSON200
 	err = serviceResponseError(response.HTTPResponse, response.Body, err)
 	if err != nil {

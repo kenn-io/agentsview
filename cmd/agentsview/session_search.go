@@ -101,11 +101,15 @@ func newSessionSearchCommand() *cobra.Command {
 				Cursor:            cursor,
 				Context:           contextN,
 			}
-			res, err := svc.SearchContent(cmd.Context(), req)
+			ctx, cancel := service.ContentSearchContext(cmd.Context(), svc, req)
+			defer cancel()
+			res, err := svc.SearchContent(ctx, req)
 			if err != nil {
 				return err
 			}
-			cliHints := contentSearchHints(cmd.Context(), cmd, svc, req, res)
+			ctx, cancelFollowups := service.ContentSearchFollowupContext(ctx, svc, req)
+			defer cancelFollowups()
+			cliHints := contentSearchHints(ctx, cmd, svc, req, res)
 			if res.Note != "" {
 				fmt.Fprintln(cmd.ErrOrStderr(), sanitizeTerminal(res.Note))
 			}

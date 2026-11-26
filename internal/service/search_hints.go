@@ -13,6 +13,26 @@ import (
 // HTTP session list rejects larger batches.
 const MaxListSessionIDs = 100
 
+// ContentSearchContext shares a local keyword deadline with follow-up searches.
+func ContentSearchContext(ctx context.Context, svc SessionService, req ContentSearchRequest) (context.Context, context.CancelFunc) {
+	if len(req.Concepts) == 0 && req.Mode != "semantic" && req.Mode != "fts" {
+		ctx = db.WithContentScanBudget(ctx)
+		local, ok := svc.(interface{ LocalContentScan() bool })
+		if ok && local.LocalContentScan() && req.Mode != "hybrid" {
+			return db.WithContentScanDeadline(ctx)
+		}
+	}
+	return ctx, func() {}
+}
+
+// ContentSearchFollowupContext applies the remaining keyword budget to follow-ups.
+func ContentSearchFollowupContext(ctx context.Context, svc SessionService, req ContentSearchRequest) (context.Context, context.CancelFunc) {
+	if len(req.Concepts) == 0 && req.Mode != "semantic" && req.Mode != "fts" && !db.ContentScanDeadline(ctx).IsZero() {
+		return db.WithContentScanDeadline(ctx)
+	}
+	return ctx, func() {}
+}
+
 // ContentSearchHint describes a measured reason an empty search can hide matches.
 // RetryWith contains the arguments to change while preserving the original request.
 type ContentSearchHint struct {

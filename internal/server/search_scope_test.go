@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,7 +12,49 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/servicehttp"
 )
+
+func TestSearchSharesKeywordDeadlineThroughHTTP(t *testing.T) {
+	te := setup(t)
+	searcher := &deadlineVectorSearcher{}
+	te.db.SetVectorSearcher(searcher)
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Host = "127.0.0.1:0"
+		te.srv.Handler().ServeHTTP(w, r)
+	}))
+	t.Cleanup(daemon.Close)
+	svc := servicehttp.NewHTTPBackend(daemon.URL, "", false, "")
+	for _, mode := range []string{"substring", "hybrid"} {
+		t.Run(mode, func(t *testing.T) {
+			req := service.ContentSearchRequest{Pattern: "needle", Mode: mode}
+			ctx, cancel := service.ContentSearchContext(t.Context(), svc, req)
+			defer cancel()
+			_, err := svc.SearchContent(ctx, req)
+			require.NoError(t, err)
+			if mode == "hybrid" {
+				assert.False(t, searcher.hadDeadline, "the primary semantic phase keeps its existing wait")
+			}
+			deadline := db.ContentScanDeadline(ctx)
+			require.False(t, deadline.IsZero(), "the daemon returned the initial keyword deadline")
+			followup, cancelFollowup := service.ContentSearchFollowupContext(ctx, svc, req)
+			defer cancelFollowup()
+			got, ok := followup.Deadline()
+			require.True(t, ok)
+			assert.True(t, deadline.Equal(got))
+		})
+	}
+}
+
+type deadlineVectorSearcher struct {
+	fakeHitsVectorSearcher
+	hadDeadline bool
+}
+
+func (s *deadlineVectorSearcher) PrepareSemanticSearch(ctx context.Context, pattern string) (db.VectorSearchPage, int, error) {
+	_, s.hadDeadline = ctx.Deadline()
+	return s.fakeHitsVectorSearcher.PrepareSemanticSearch(ctx, pattern)
+}
 
 // fakeHitsVectorSearcher returns canned semantic hits. ResolveMessageUnits
 // resolves against the units implied by the hits, mirroring the db-layer

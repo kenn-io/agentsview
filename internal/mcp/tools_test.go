@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -1748,11 +1749,91 @@ func TestSearchContent_ConceptsMapping(t *testing.T) {
 type listingMessageSpy struct {
 	service.SessionService
 	filters []service.MessageFilter
+	err     error
+}
+
+type listingHTTPService struct {
+	service.SessionService
+	search service.SessionService
+}
+
+func (s *listingHTTPService) SearchContent(ctx context.Context, req service.ContentSearchRequest) (*service.ContentSearchResult, error) {
+	return s.search.SearchContent(ctx, req)
+}
+
+func (s *listingHTTPService) Messages(ctx context.Context, id string, filter service.MessageFilter) (*service.MessageList, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return &service.MessageList{Messages: []db.Message{{SessionID: id, Ordinal: *filter.From, Content: "hello"}}}, nil
+}
+
+func TestSearchContentListingUsesHTTPDeadline(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSessionWithMessages(t, d, "session-a", "project-a", []db.Message{dbtest.UserMsg("session-a", 0, "hello")}, dbtest.WithMessageCounts(1, 1))
+	for _, tc := range []struct {
+		name     string
+		deadline bool
+	}{
+		{"SQLite deadline", true},
+		{"replica without deadline", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if tc.deadline {
+					w.Header().Set(db.ContentScanDeadlineHeader, time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano))
+				}
+				_, _ = w.Write([]byte(`{"matches":[{"session_id":"session-a","ordinal":0}]}`))
+			}))
+			t.Cleanup(daemon.Close)
+			svc := &listingHTTPService{SessionService: ts.svc, search: servicehttp.NewHTTPBackend(daemon.URL, "", false, "")}
+			tool := &toolset{svc: svc, now: ts.now}
+			_, out, err := tool.searchContent(t.Context(), nil, searchContentIn{SessionID: "session-a"})
+			if tc.deadline {
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+				assert.ErrorContains(t, err, "retry with date_from, project, or session_id")
+			} else {
+				require.NoError(t, err)
+				require.Len(t, out.Matches, 1)
+				assert.Equal(t, "hello", out.Matches[0].Snippet)
+			}
+		})
+	}
 }
 
 func (s *listingMessageSpy) Messages(ctx context.Context, id string, f service.MessageFilter) (*service.MessageList, error) {
 	s.filters = append(s.filters, f)
+	if s.err != nil {
+		return nil, s.err
+	}
 	return s.SessionService.Messages(ctx, id, f)
+}
+
+func TestSearchContentListingMessageError(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSessionWithMessages(t, d, "session-a", "project-a", []db.Message{dbtest.UserMsg("session-a", 0, "hello")}, dbtest.WithMessageCounts(1, 1))
+	otherErr := errors.New("message read failed")
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"deadline", context.DeadlineExceeded},
+		{"other", otherErr},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spy := &listingMessageSpy{SessionService: ts.svc, err: tc.err}
+			tool := &toolset{svc: spy, now: ts.now}
+			_, _, err := tool.searchContent(t.Context(), nil, searchContentIn{SessionID: "session-a"})
+			require.ErrorIs(t, err, tc.err)
+			require.NotEmpty(t, spy.filters)
+			if tc.name == "deadline" {
+				assert.ErrorContains(t, err, "retry with date_from, project, or session_id")
+			} else {
+				assert.Equal(t, otherErr, err)
+			}
+		})
+	}
 }
 
 func TestSearchContent_ListSessionMessages(t *testing.T) {
@@ -2686,4 +2767,125 @@ func TestSessionResolutionTrashedExactID(t *testing.T) {
 			require.ErrorIs(t, err, service.ErrSessionNotFound)
 		})
 	}
+}
+
+type deadlineContentService struct {
+	service.SessionService
+	deadlines []time.Time
+	bounded   []bool
+	oversized bool
+	local     bool
+	countErr  error
+}
+
+func (s *deadlineContentService) SupportsRecallQueries() bool { return s.local }
+
+func (s *deadlineContentService) LocalContentScan() bool { return s.local }
+
+func (s *deadlineContentService) SearchContent(ctx context.Context, req service.ContentSearchRequest) (*service.ContentSearchResult, error) {
+	d, ok := ctx.Deadline()
+	s.deadlines = append(s.deadlines, d)
+	s.bounded = append(s.bounded, ok)
+	if s.local && req.Mode == "hybrid" && len(s.deadlines) == 1 {
+		_, cancel := db.WithContentScanDeadline(ctx)
+		cancel()
+	}
+	if s.oversized {
+		if len(s.deadlines) > 1 {
+			if s.countErr != nil {
+				return nil, s.countErr
+			}
+			return nil, context.DeadlineExceeded
+		}
+		matches := make([]db.ContentMatch, 20)
+		for i := range matches {
+			matches[i] = db.ContentMatch{SessionID: "session", Ordinal: i, Snippet: strings.Repeat("x", 4000)}
+		}
+		return &service.ContentSearchResult{Matches: matches, NextCursor: 20, ActiveFilterApplied: true}, nil
+	}
+	return &service.ContentSearchResult{}, nil
+}
+
+func TestSearchContentCountFailure(t *testing.T) {
+	otherErr := errors.New("count failed")
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "timed out", http.StatusGatewayTimeout)
+	}))
+	t.Cleanup(daemon.Close)
+	_, httpErr := servicehttp.NewHTTPBackend(daemon.URL, "", false, "").SearchContent(t.Context(), service.ContentSearchRequest{Pattern: "needle"})
+	require.Error(t, httpErr)
+	for _, tc := range []struct {
+		name      string
+		err       error
+		returnErr bool
+	}{
+		{name: "deadline"},
+		{name: "daemon timeout", err: httpErr},
+		{name: "other error", err: otherErr, returnErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &deadlineContentService{oversized: true, countErr: tc.err}
+			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", IncludeActive: true, Limit: 20})
+			if tc.returnErr {
+				require.ErrorIs(t, err, tc.err)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, fake.deadlines, 2)
+			assert.NotEmpty(t, out.Matches)
+			assert.Positive(t, out.Omitted)
+			assert.True(t, fitsResponse(out))
+			require.NotNil(t, out.NextCursor)
+			assert.Equal(t, out.Matches[len(out.Matches)-1].Ordinal+1, *out.NextCursor)
+			encoded, err := json.Marshal(out)
+			require.NoError(t, err)
+			assert.NotContains(t, string(encoded), `"total":`)
+		})
+	}
+}
+
+func TestSearchContentSharedDeadline(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode string
+		bounded    bool
+	}{
+		{name: "substring", bounded: true}, {name: "semantic", mode: "semantic"}, {name: "fts", mode: "fts"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &deadlineContentService{local: true}
+			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+			_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Mode: tc.mode, IncludeActive: true})
+			require.NoError(t, err)
+			require.Greater(t, len(fake.deadlines), 1)
+			require.Equal(t, tc.bounded, fake.bounded[0])
+			for i := 1; i < len(fake.deadlines); i++ {
+				assert.Equal(t, tc.bounded, fake.bounded[i])
+				assert.Equal(t, fake.deadlines[0], fake.deadlines[i])
+			}
+		})
+	}
+}
+
+func TestHybridFollowupsShareDeadline(t *testing.T) {
+	fake := &deadlineContentService{local: true}
+	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+	_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Mode: "hybrid", IncludeActive: true})
+	require.NoError(t, err)
+	require.Greater(t, len(fake.deadlines), 1)
+	assert.False(t, fake.bounded[0], "the primary semantic search keeps its existing wait")
+	assert.True(t, fake.bounded[1], "follow-up searches share a keyword deadline")
+}
+
+type timeoutContentService struct{ service.SessionService }
+
+func (s timeoutContentService) SearchContent(context.Context, service.ContentSearchRequest) (*service.ContentSearchResult, error) {
+	return nil, context.DeadlineExceeded
+}
+
+func TestSearchContentTimeoutAdvice(t *testing.T) {
+	ts := &toolset{svc: timeoutContentService{}, now: func() time.Time { return fixedNow }}
+	_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", IncludeActive: true})
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.ErrorContains(t, err, "date_from, project, or session_id")
 }

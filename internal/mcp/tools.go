@@ -10,6 +10,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -18,6 +19,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/servicehttp"
 )
 
 // toolset holds the dependencies shared by every tool handler. now is
@@ -1047,7 +1049,7 @@ type searchContentOut struct {
 	Hints          []service.ContentSearchHint `json:"hints,omitempty"`
 	Matches        []contentMatch              `json:"matches"`
 	Omitted        int                         `json:"omitted,omitempty"`
-	Total          int                         `json:"total,omitempty"`
+	Total          int                         `json:"total,omitzero"`
 	TotalCapped    bool                        `json:"total_capped,omitempty" jsonschema:"True when total is a lower bound."`
 	NextCursor     *int                        `json:"next_cursor,omitempty"`
 	ActivityCutoff string                      `json:"activity_cutoff,omitempty" jsonschema:"Effective RFC3339 activity cutoff; pass it unchanged with next_cursor as cursor to continue."`
@@ -1109,7 +1111,7 @@ func (t *toolset) countContentMatches(ctx context.Context, req service.ContentSe
 		req.Cursor = cursor
 		res, err := t.svc.SearchContent(ctx, req)
 		if err != nil {
-			return 0, false, err
+			return 0, false, contentSearchError(err)
 		}
 		for _, m := range res.Matches {
 			if !legacy || keep(m) {
@@ -1210,9 +1212,18 @@ func (t *toolset) searchContent(
 	if listing {
 		req.Sources = []string{"messages"}
 	}
-	res, err := t.searchContentMatches(ctx, req, listing)
+	ctx, cancel := service.ContentSearchContext(ctx, t.svc, req)
+	defer cancel()
+	res, err := t.svc.SearchContent(ctx, req)
 	if err != nil {
-		return nil, searchContentOut{}, err
+		return nil, searchContentOut{}, contentSearchError(err)
+	}
+	ctx, cancelFollowups := service.ContentSearchFollowupContext(ctx, t.svc, req)
+	defer cancelFollowups()
+	if listing {
+		if err := t.expandListingMessages(ctx, res); err != nil {
+			return nil, searchContentOut{}, err
+		}
 	}
 	legacy := cutoff != "" && !res.ActiveFilterApplied
 	out := searchContentOut{
@@ -1278,7 +1289,7 @@ func (t *toolset) searchContent(
 			out.NextCursor, out.Note = nil, strings.TrimSpace(out.Note+" Reduce limit to fit ranked results in one response.")
 		} else if len(items) > 0 {
 			out.Total, out.TotalCapped, err = t.countContentMatches(ctx, req, legacy, keepMatch)
-			if err != nil {
+			if err != nil && !isContentSearchTimeout(err) {
 				return nil, searchContentOut{}, err
 			}
 		}
@@ -1297,21 +1308,17 @@ func (t *toolset) searchContent(
 	return nil, out, nil
 }
 
-func (t *toolset) searchContentMatches(ctx context.Context, req service.ContentSearchRequest, listing bool) (*service.ContentSearchResult, error) {
-	res, err := t.svc.SearchContent(ctx, req)
-	if err != nil || !listing {
-		return res, err
-	}
+func (t *toolset) expandListingMessages(ctx context.Context, res *service.ContentSearchResult) error {
 	for i := range res.Matches {
 		match := &res.Matches[i]
 		messages, err := t.svc.Messages(ctx, match.SessionID, service.MessageFilter{
 			From: &match.Ordinal, Limit: 1, ExpectedRevision: match.TranscriptRevision,
 		})
 		if err != nil {
-			return nil, err
+			return contentSearchError(err)
 		}
 		if len(messages.Messages) != 1 || messages.Messages[0].Ordinal != match.Ordinal {
-			return nil, service.ErrSourceChanged
+			return service.ErrSourceChanged
 		}
 		body := cmp.Or(messages.Messages[0].Content, messages.Messages[0].ThinkingText)
 		match.Snippet = (db.ContentSearchFilter{}).BuildSnippet(body, 0, 0)
@@ -1320,7 +1327,19 @@ func (t *toolset) searchContentMatches(ctx context.Context, req service.ContentS
 			match.Snippet += "..."
 		}
 	}
-	return res, nil
+	return nil
+}
+
+func contentSearchError(err error) error {
+	if isContentSearchTimeout(err) {
+		return fmt.Errorf("search timed out; retry with date_from, project, or session_id: %w", err)
+	}
+	return err
+}
+
+func isContentSearchTimeout(err error) bool {
+	status, _, ok := servicehttp.HTTPErrorDetails(err)
+	return errors.Is(err, context.DeadlineExceeded) || (ok && status == http.StatusGatewayTimeout)
 }
 
 // --- get_usage_summary ---
