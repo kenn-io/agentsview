@@ -946,7 +946,7 @@ func TestDirectBackend_Sync_WindsurfPhysicalDBPathAmbiguous(t *testing.T) {
 	assert.Contains(t, msg, "session sync <id>")
 }
 
-func TestDirectBackend_Sync_CodexDuplicatePath(t *testing.T) {
+func TestDirectBackend_Sync_CodexPath(t *testing.T) {
 	root := t.TempDir()
 	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 	name := "rollout-2026-10-08T12-00-00-" + id + ".jsonl"
@@ -955,46 +955,35 @@ func TestDirectBackend_Sync_CodexDuplicatePath(t *testing.T) {
 		filepath.Join(roots[0], "2026", "10", "08", name),
 		filepath.Join(roots[1], "b", ".codex-run-v1-abc", "sessions", "2026", "10", "08", name),
 	}
-	for i, path := range paths {
+	unconfigured := filepath.Join(root, "unconfigured", name)
+	for i, path := range append(paths, unconfigured) {
 		meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z")
-		dbtest.WriteTestFile(t, path, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", []string{"ordinary", "b"}[i], "2026-10-08T12:00:01Z")+"\n"))
-		mtime := time.Now().Add(time.Duration(i) * time.Hour)
-		require.NoError(t, os.Chtimes(path, mtime, mtime))
+		dbtest.WriteTestFile(t, path, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", []string{"ordinary", "b", "unconfigured"}[i], "2026-10-08T12:00:01Z")+"\n"))
 	}
 	d := dbtest.OpenTestDB(t)
 	engine := sync.NewEngine(t.Context(), d, sync.EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: roots}})
 	t.Cleanup(engine.Close)
 	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[1]}))
 	svc := service.NewDirectBackend(d, engine)
-	detail, err := svc.Sync(t.Context(), service.SyncInput{Path: paths[0]})
-	require.NoError(t, err)
-	require.NotNil(t, detail)
-	assert.Equal(t, "codex:"+id, detail.ID)
-}
-
-func TestDirectBackend_Sync_CodexUnconfiguredPathDoesNotReturnArchivedSession(t *testing.T) {
-	root := t.TempDir()
-	const id = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
-	name := "rollout-2026-10-08T12-00-00-" + id + ".jsonl"
-	configured := filepath.Join(root, "configured", name)
-	unconfigured := filepath.Join(root, "unconfigured", name)
-	content := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z") + "\n" +
-		testjsonl.CodexMsgJSON("user", "archived", "2026-10-08T12:00:01Z") + "\n"
-	dbtest.WriteTestFile(t, configured, []byte(content))
-	dbtest.WriteTestFile(t, unconfigured, []byte(content))
-	d := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(t.Context(), d, sync.EngineConfig{
-		Machine: "local", DisableFilesystemProjectDiscovery: true,
-		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {filepath.Dir(configured)}},
-	})
-	t.Cleanup(engine.Close)
-	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{configured}))
-	svc := service.NewDirectBackend(d, engine)
-
-	detail, err := svc.Sync(t.Context(), service.SyncInput{Path: unconfigured})
-	require.Error(t, err)
-	assert.Nil(t, detail)
-	assert.Contains(t, err.Error(), "no session found")
+	for _, tc := range []struct {
+		name, path string
+		wantError  bool
+	}{
+		{"configured duplicate", paths[0], false},
+		{"unconfigured path", unconfigured, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			detail, err := svc.Sync(t.Context(), service.SyncInput{Path: tc.path})
+			if tc.wantError {
+				require.ErrorContains(t, err, "no session found")
+				assert.Nil(t, detail)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, detail)
+			assert.Equal(t, "codex:"+id, detail.ID)
+		})
+	}
 }
 
 func TestDirectBackend_Sync_RemoteCodexID(t *testing.T) {

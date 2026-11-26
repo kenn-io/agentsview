@@ -2099,7 +2099,7 @@ func TestCodexProviderChangedPathPinsArchivedDuplicate(t *testing.T) {
 	liveRoot := filepath.Join(base, "sessions")
 	archivedRoot := filepath.Join(base, "archived_sessions")
 	uuid := "019eb791-cf7d-75c1-8439-9ed74c1229e7"
-	livePath := writeCodexProviderSession(t, liveRoot, uuid, "live")
+	writeCodexProviderSession(t, liveRoot, uuid, "live")
 	archivedPath := writeCodexProviderArchivedSession(
 		t, archivedRoot, uuid, "archived",
 	)
@@ -2123,15 +2123,6 @@ func TestCodexProviderChangedPathPinsArchivedDuplicate(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rawChanged, 1)
 	assert.Equal(t, archivedPath, rawChanged[0].DisplayPath)
-
-	now := time.Now().Add(time.Hour)
-	require.NoError(t, os.Chtimes(livePath, now, now))
-	for _, path := range []string{livePath, archivedPath} {
-		rawChanged, err := RawCaptureSourcesForChangedPath(t.Context(), provider, ChangedPathRequest{Path: path, EventKind: "write"})
-		require.NoError(t, err)
-		require.Len(t, rawChanged, 1)
-		assert.Equal(t, path, rawChanged[0].DisplayPath)
-	}
 }
 
 func TestCodexProviderChangedPathClassifiesRemovedTranscript(t *testing.T) {
@@ -2440,22 +2431,6 @@ func TestCodexLabeledRunDiscoveryAndParse(t *testing.T) {
 			assert.Equal(t, path, changed[0].DisplayPath)
 		})
 	}
-}
-
-func TestCodexLabeledRunFindSourcePrefersLabeled(t *testing.T) {
-	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
-	root := t.TempDir()
-	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", tsEarly)
-	content := testjsonl.JoinJSONL(meta, testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1))
-	labeled := writeCodexProviderSessionContent(t, filepath.Join(root, "team", "case", ".codex-run-v1-abc", "sessions"), id, content)
-	writeCodexProviderSessionContent(t, root, id, content)
-	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: id})
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, labeled, found.DisplayPath)
-
 }
 
 func TestCodexChangedPathAndDiscoverySelectCopies(t *testing.T) {

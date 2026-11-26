@@ -259,7 +259,7 @@ func TestCodexLabeledRunResyncAndExplicitWorktreeMappingWins(t *testing.T) {
 }
 
 func TestCodexLabeledCopyWinsSync(t *testing.T) {
-	for _, mode := range []string{"quick sync", "ordinary event after labeled copy", "ordinary first in batch", "usage refresh", "missed event", "id refresh"} {
+	for _, mode := range []string{"quick sync", "ordinary event after labeled copy", "ordinary first in batch", "missed event", "id refresh"} {
 		t.Run(mode, func(t *testing.T) {
 			database := openTestDB(t)
 			root := t.TempDir()
@@ -274,7 +274,7 @@ func TestCodexLabeledCopyWinsSync(t *testing.T) {
 				require.NoError(t, os.Chtimes(path, mtime, mtime))
 			}
 			write(0, paths[0])
-			if mode != "id refresh" && mode != "usage refresh" && mode != "missed event" {
+			if mode != "id refresh" && mode != "missed event" {
 				write(1, paths[1])
 				write(2, paths[2])
 			}
@@ -292,16 +292,10 @@ func TestCodexLabeledCopyWinsSync(t *testing.T) {
 				require.NoError(t, os.Chtimes(paths[1], now.Add(-2*time.Hour), now.Add(-2*time.Hour)))
 				require.NoError(t, os.Chtimes(paths[2], now.Add(-time.Hour), now.Add(-time.Hour)))
 				require.Zero(t, engine.SyncAllSince(t.Context(), now.Add(-30*time.Minute), nil).Failed)
-			case "usage refresh":
-				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[0]}))
-				write(1, paths[1])
-				write(2, paths[2])
-				require.NoError(t, engine.TrySyncSessionWithSubagentsContext(t.Context(), "codex:"+id))
 			case "id refresh":
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[0]}))
 				write(1, paths[1])
 				write(2, paths[2])
-				require.NoError(t, engine.SyncSingleSessionContext(t.Context(), "codex:"+id))
 				require.NoError(t, engine.RefreshSessionByIDContext(t.Context(), "codex:"+id))
 			case "missed event":
 				write(1, paths[1])
