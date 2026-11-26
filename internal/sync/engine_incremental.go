@@ -59,6 +59,20 @@ type incrementalUpdate struct {
 	replaceFromOrdinal int
 }
 
+func (inc *incrementalUpdate) changesSubagentEdges() bool {
+	if inc.suffixReplace || len(inc.links) > 0 {
+		return true
+	}
+	for _, msg := range inc.msgs {
+		for _, call := range msg.ToolCalls {
+			if call.SubagentSessionID != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // hasSubstantiveUserMessage reports whether the delta contains a user
 // message with non-whitespace content. Such deltas can change prompt-derived
 // heuristics, which the incremental signal maintainer does not fold; they

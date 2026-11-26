@@ -1765,6 +1765,11 @@ func (db *DB) upsertSession(ctx context.Context,
 			return result, err
 		}
 	}
+	if result.inserted && (s.Agent == "codex" && s.SessionKind == "non-interactive" || s.Agent == "claude" && s.Entrypoint == "sdk-cli") {
+		if _, err := linkSubagentSessionsChangedTx(ctx, tx, []string{s.ID}, map[string]int{}); err != nil {
+			return result, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return result, fmt.Errorf("committing session upsert: %w", err)
 	}

@@ -13531,6 +13531,9 @@ func (e *Engine) processAndWriteSessionFile(
 		if err := e.writeIncremental(ctx, res.incremental); err != nil {
 			return false, sessionsChanged, err
 		}
+		if !res.incremental.changesSubagentEdges() {
+			return false, sessionsChanged, nil
+		}
 		if err := queueWrittenChildren(
 			[]string{res.incremental.sessionID},
 		); err != nil {

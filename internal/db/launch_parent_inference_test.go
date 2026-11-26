@@ -738,3 +738,52 @@ func TestLaunchParentSeedCandidateFiltering(t *testing.T) {
 		})
 	}
 }
+
+func TestLaunchParentOrdinaryAppendDoesNotRelink(t *testing.T) {
+	for _, incremental := range []bool{false, true} {
+		t.Run(fmt.Sprintf("incremental=%t", incremental), func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "parent", "project")
+			insertSession(t, d, "child", "project", func(s *Session) { s.ParentSessionID = Ptr("other"); s.RelationshipType = "subagent" })
+			insertMessages(t, d, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Agent", Category: "Task", SubagentSessionID: "child"}}})
+			message := Message{SessionID: "parent", Ordinal: 1, Role: "assistant", Content: "ordinary reply"}
+			if incremental {
+				_, err := d.WriteSessionIncremental(t.Context(), "parent", []Message{message}, IncrementalSessionUpdate{})
+				require.NoError(t, err)
+			} else {
+				require.NoError(t, d.InsertMessages(t.Context(), []Message{message}))
+			}
+			child, err := d.GetSession(t.Context(), "child")
+			require.NoError(t, err)
+			require.NotNil(t, child.ParentSessionID)
+			assert.Equal(t, "other", *child.ParentSessionID)
+			_, err = d.LinkSubagentSessionsForSessions(t.Context(), []string{"parent"})
+			require.NoError(t, err)
+			child, err = d.GetSession(t.Context(), "child")
+			require.NoError(t, err)
+			require.NotNil(t, child.ParentSessionID)
+			assert.Equal(t, "parent", *child.ParentSessionID)
+		})
+	}
+}
+
+func TestLaunchParentNewChild(t *testing.T) {
+	for _, batch := range []bool{false, true} {
+		t.Run(fmt.Sprintf("batch=%t", batch), func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
+			insertMessages(t, d, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}})
+			started := "2026-01-02T03:04:03Z"
+			child := Session{ID: "child", Project: "project", Machine: "local", Agent: "codex", Cwd: "/repo", StartedAt: &started, SessionKind: "non-interactive"}
+			if batch {
+				_, err := d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{{Session: child}})
+				require.NoError(t, err)
+			} else {
+				require.NoError(t, d.UpsertSession(t.Context(), child))
+			}
+			link, err := d.GetSessionExternalParent(t.Context(), "child")
+			require.NoError(t, err)
+			assert.Equal(t, "parent", link.ParentSessionID)
+		})
+	}
+}

@@ -1649,8 +1649,14 @@ func (db *DB) insertMessages(ctx context.Context,
 		}
 	}
 	changes := launchMessageChanges(msgs)
-	if _, err := linkSubagentSessionsChangedTx(ctx, tx, sessionIDs, changes); err != nil {
-		return err
+	if len(changes) > 0 {
+		changedIDs := make([]string, 0, len(changes))
+		for id := range changes {
+			changedIDs = append(changedIDs, id)
+		}
+		if _, err := linkSubagentSessionsChangedTx(ctx, tx, changedIDs, changes); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return err
@@ -1993,8 +1999,11 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 			return false, err
 		}
 	}
-	if _, err := linkSubagentSessionsChangedTx(ctx, tx, append(oldLaunchSeeds, sessionID), launchMessageChanges(msgs)); err != nil {
-		return false, err
+	changes := launchMessageChanges(msgs)
+	if len(changes) > 0 || update.ReplaceFromOrdinal != nil {
+		if _, err := linkSubagentSessionsChangedTx(ctx, tx, append(oldLaunchSeeds, sessionID), changes); err != nil {
+			return false, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("committing incremental write tx: %w", err)
