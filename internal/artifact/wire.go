@@ -258,6 +258,7 @@ type segmentToolCall struct {
 	Category            string               `json:"category,omitempty"`
 	ToolUseID           string               `json:"tool_use_id,omitempty"`
 	InputJSON           string               `json:"input_json,omitempty"`
+	WorkingDirectory    string               `json:"working_directory,omitempty"`
 	FilePath            string               `json:"file_path,omitempty"`
 	SkillName           string               `json:"skill_name,omitempty"`
 	ResultContentLength int                  `json:"result_content_length,omitempty"`
@@ -415,6 +416,7 @@ func segmentMessageFromDB(msg db.Message) segmentMessage {
 				Category:            call.Category,
 				ToolUseID:           call.ToolUseID,
 				InputJSON:           call.InputJSON,
+				WorkingDirectory:    call.WorkingDirectory,
 				FilePath:            call.FilePath,
 				SkillName:           call.SkillName,
 				ResultContentLength: call.ResultContentLength,

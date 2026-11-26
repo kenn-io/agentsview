@@ -205,6 +205,7 @@ func transcriptMessages(messages []Message) []Message {
 		calls := slices.Clone(stored[i].ToolCalls)
 		for j := range calls {
 			calls[j].InputJSON = ""
+			calls[j].WorkingDirectory = ""
 			calls[j].ResultContent = ""
 			if len(calls[j].ResultEvents) == 0 {
 				continue
@@ -577,7 +578,7 @@ func dropCopiedToolContentTx(
 		sql   string
 	}{
 		{"tool payloads", `
-			UPDATE tool_calls SET observed_outcome = NULL, observed_repeat = NULL, sequence_ending = NULL, input_json = NULL, result_content = NULL
+			UPDATE tool_calls SET observed_outcome = NULL, observed_repeat = NULL, sequence_ending = NULL, input_json = NULL, working_directory = NULL, result_content = NULL
 			WHERE session_id` + inCopied},
 		{"tool result coordinates", `DELETE FROM tool_call_occurrence_agent_state WHERE session_id` + inCopied},
 		{"tool result events", `
@@ -691,7 +692,7 @@ func compactCopiedSessionsForUsageTx(
 		{"delegation tool calls", `
 			UPDATE tool_calls
 			SET observed_outcome = NULL, observed_repeat = NULL, sequence_ending = NULL, tool_name = 'subagent', category = 'Task',
-			    input_json = NULL, skill_name = NULL,
+			    input_json = NULL, working_directory = NULL, skill_name = NULL,
 			    result_content_length = NULL, result_content = NULL,
 			    file_path = NULL
 			WHERE session_id` + inCopied},

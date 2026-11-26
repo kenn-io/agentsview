@@ -188,7 +188,7 @@ func attachArtifactNestedCollectionsTx(
 	}
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, message_id, session_id, tool_name, category,
-			tool_use_id, input_json, skill_name,
+			tool_use_id, input_json, working_directory, skill_name,
 			result_content_length, result_content, subagent_session_id,
 			file_path, call_index
 		FROM tool_calls
@@ -201,7 +201,7 @@ func attachArtifactNestedCollectionsTx(
 	toolCalls := make([]toolCallRow, 0)
 	for rows.Next() {
 		var row toolCallRow
-		var toolUseID, inputJSON, skillName sql.NullString
+		var toolUseID, inputJSON, workingDirectory, skillName sql.NullString
 		var subagentSessionID, resultContent sql.NullString
 		var filePath sql.NullString
 		var resultLen sql.NullInt64
@@ -209,13 +209,14 @@ func attachArtifactNestedCollectionsTx(
 		if err := rows.Scan(
 			&row.rowID, &row.call.MessageID, &row.call.SessionID,
 			&row.call.ToolName, &row.call.Category,
-			&toolUseID, &inputJSON, &skillName,
+			&toolUseID, &inputJSON, &workingDirectory, &skillName,
 			&resultLen, &resultContent, &subagentSessionID,
 			&filePath, &callIndex,
 		); err != nil {
 			_ = rows.Close()
 			return fmt.Errorf("scanning bounded artifact tool call: %w", err)
 		}
+		row.call.WorkingDirectory = workingDirectory.String
 		if toolUseID.Valid {
 			row.call.ToolUseID = toolUseID.String
 		}

@@ -357,6 +357,7 @@ func TestTranscriptsArchiveContentKeepsTextAndDropsToolPayloads(t *testing.T) {
 			ToolCalls: []ToolCall{{
 				ToolName: "Bash", Category: "Bash", ToolUseID: "tool-use-1",
 				InputJSON:           `{"command":"make build TOKEN=abc","description":"build it"}`,
+				WorkingDirectory:    "/workspace/project",
 				ResultContent:       "build output line",
 				ResultContentLength: 17,
 				ResultEvents: []ToolResultEvent{{
@@ -469,6 +470,7 @@ func TestTranscriptsArchiveContentKeepsTextAndDropsToolPayloads(t *testing.T) {
 	assert.Equal(t, "the build script is make", messages[1].ThinkingText)
 	require.Len(t, messages[1].ToolCalls, 1)
 	call := messages[1].ToolCalls[0]
+	assert.Empty(t, call.WorkingDirectory)
 	assert.Equal(t, "Bash", call.ToolName)
 	assert.Equal(t, "tool-use-1", call.ToolUseID)
 	assert.Empty(t, call.InputJSON)

@@ -419,6 +419,7 @@ func (b *codexSessionBuilder) processLine(ctx context.Context,
 		}
 		b.model = payload.Get("model").Str
 		b.reasoningEffort = payload.Get("effort").Str
+		b.turnCwd = payload.Get("cwd").Str
 	case codexTypeResponseItem:
 		if b.suppresses(codexTypeResponseItem, payload) {
 			return false, nil
@@ -490,6 +491,7 @@ func (b *codexSessionBuilder) handleSessionMeta(
 	if !codexAcceptSessionMetaID(&b.sessionID, payload.Get("id").Str) {
 		return false
 	}
+	b.turnCwd = ""
 	b.metaSessionID = payload.Get("session_id").Str
 	b.historyBase = strings.TrimSpace(payload.Get("history_base.thread_id").Str)
 	b.forkedFromID = strings.TrimSpace(payload.Get("forked_from_id").Str)
@@ -898,6 +900,9 @@ func (b *codexSessionBuilder) handleFunctionCall(
 		InputJSON: inputJSON,
 		Rendering: content,
 		SkillName: skillName,
+	}
+	if call.Category == "Bash" {
+		call.WorkingDirectory = b.turnCwd
 	}
 	toolCalls := []ParsedToolCall{call}
 	if name == "apply_patch" {

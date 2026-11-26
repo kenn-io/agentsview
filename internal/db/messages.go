@@ -68,7 +68,7 @@ const (
 	// 999-variable limit so binaries built against older SQLite
 	// versions still work.
 	messageInsertRowsPerStmt         = 31  // 32 params per row
-	toolCallInsertRowsPerStmt        = 66  // 15 params per row
+	toolCallInsertRowsPerStmt        = 62  // 16 params per row
 	toolResultEventInsertRowsPerStmt = 70  // 14 params per row
 	toolCallAgentStateRowsPerStmt    = 142 // 7 params per row
 )
@@ -85,6 +85,7 @@ type ToolCall struct {
 	Category            string            `json:"category"`
 	ToolUseID           string            `json:"tool_use_id,omitempty"`
 	InputJSON           string            `json:"input_json,omitempty"`
+	WorkingDirectory    string            `json:"-"`
 	FilePath            string            `json:"-"`
 	CallIndex           int               `json:"call_index"`
 	SkillName           string            `json:"skill_name,omitempty"`
@@ -1385,13 +1386,14 @@ func multiRowPlaceholders(rows, cols int) string {
 func insertToolCallsChunkTx(
 	tx transactionQueries, calls []ToolCall,
 ) error {
-	args := make([]any, 0, len(calls)*15)
+	args := make([]any, 0, len(calls)*16)
 	for _, tc := range calls {
 		args = append(args,
 			tc.MessageID, tc.SessionID,
 			tc.ToolName, tc.Category,
 			nilIfEmpty(tc.ToolUseID),
 			nilIfEmpty(tc.InputJSON),
+			nilIfEmpty(tc.WorkingDirectory),
 			nilIfEmpty(tc.SkillName),
 			NilIfZero(tc.ResultContentLength),
 			nilIfEmpty(tc.ResultContent),
@@ -1403,10 +1405,10 @@ func insertToolCallsChunkTx(
 	query := `
 		INSERT INTO tool_calls
 			(message_id, session_id, tool_name, category,
-			 tool_use_id, input_json, skill_name,
+			 tool_use_id, input_json, working_directory, skill_name,
 			 result_content_length, result_content, subagent_session_id,
 			 file_path, call_index, observed_outcome, observed_repeat, sequence_ending)
-		VALUES ` + multiRowPlaceholders(len(calls), 15)
+		VALUES ` + multiRowPlaceholders(len(calls), 16)
 	if _, err := tx.Exec(query, args...); err != nil {
 		return fmt.Errorf(
 			"inserting tool_calls batch (%d rows): %w",
@@ -3310,7 +3312,7 @@ func attachToolCallsBatch(
 	}
 	query := fmt.Sprintf(`
 		SELECT message_id, session_id, tool_name, category,
-			tool_use_id, input_json, skill_name,
+			tool_use_id, input_json, working_directory, skill_name,
 			result_content_length, %s, subagent_session_id,
 			file_path, call_index, observed_outcome, observed_repeat, sequence_ending
 		FROM tool_calls
@@ -3326,7 +3328,7 @@ func attachToolCallsBatch(
 
 	for rows.Next() {
 		var tc ToolCall
-		var toolUseID, inputJSON, skillName sql.NullString
+		var toolUseID, inputJSON, workingDirectory, skillName sql.NullString
 		var subagentSessionID, resultContent sql.NullString
 		var filePath sql.NullString
 		var resultLen sql.NullInt64
@@ -3334,7 +3336,7 @@ func attachToolCallsBatch(
 		if err := rows.Scan(
 			&tc.MessageID, &tc.SessionID,
 			&tc.ToolName, &tc.Category,
-			&toolUseID, &inputJSON, &skillName,
+			&toolUseID, &inputJSON, &workingDirectory, &skillName,
 			&resultLen, &resultContent, &subagentSessionID,
 			&filePath, &callIndex, &tc.ObservedOutcome, &tc.ObservedRepeat, &tc.SequenceEnding,
 		); err != nil {
@@ -3346,6 +3348,7 @@ func attachToolCallsBatch(
 		if inputJSON.Valid {
 			tc.InputJSON = inputJSON.String
 		}
+		tc.WorkingDirectory = workingDirectory.String
 		if skillName.Valid {
 			tc.SkillName = skillName.String
 		}
@@ -3777,7 +3780,7 @@ func (db *DB) ToolCallParseDiffFingerprint(ctx context.Context, sessionID string
 	rows, err := db.getReader().Query(ctx,
 		`SELECT m.ordinal, tc.tool_name, tc.category, tc.tool_use_id,
 			tc.input_json, tc.skill_name, tc.subagent_session_id,
-			tc.result_content_length, COALESCE(tc.file_path, '')
+			tc.result_content_length, COALESCE(tc.file_path, ''), COALESCE(tc.working_directory, '')
 		 FROM tool_calls tc
 		 JOIN messages m ON m.id = tc.message_id
 		 WHERE tc.session_id = ?
@@ -3793,12 +3796,12 @@ func (db *DB) ToolCallParseDiffFingerprint(ctx context.Context, sessionID string
 	for rows.Next() {
 		var ordinal int
 		var resultLen sql.NullInt64
-		var toolName, category, filePath string
+		var toolName, category, filePath, workingDirectory string
 		var toolUseID, inputJSON, skillName, subagentSessionID sql.NullString
 		if err := rows.Scan(
 			&ordinal, &toolName, &category, &toolUseID,
 			&inputJSON, &skillName, &subagentSessionID, &resultLen,
-			&filePath,
+			&filePath, &workingDirectory,
 		); err != nil {
 			return "", err
 		}
@@ -3808,9 +3811,10 @@ func (db *DB) ToolCallParseDiffFingerprint(ctx context.Context, sessionID string
 		skill := SanitizeUTF8(skillName.String)
 		sub := SanitizeUTF8(subagentSessionID.String)
 		fp := SanitizeUTF8(filePath)
+		workingDirectory = SanitizeUTF8(workingDirectory)
 		sum := sha256.Sum256([]byte(SanitizeUTF8(inputJSON.String)))
 		fmt.Fprintf(&b,
-			"%d|%d:%s|%d:%s|%d:%s|%x|%d:%s|%d:%s|%d|%d:%s;",
+			"%d|%d:%s|%d:%s|%d:%s|%x|%d:%s|%d:%s|%d|%d:%s|%d:%s;",
 			ordinal,
 			len(toolName), toolName,
 			len(category), category,
@@ -3820,6 +3824,7 @@ func (db *DB) ToolCallParseDiffFingerprint(ctx context.Context, sessionID string
 			len(sub), sub,
 			int(resultLen.Int64),
 			len(fp), fp,
+			len(workingDirectory), workingDirectory,
 		)
 	}
 	return b.String(), rows.Err()
@@ -4410,13 +4415,14 @@ func resolveToolCalls(
 	for i, m := range msgs {
 		for callIdx, tc := range m.ToolCalls {
 			calls = append(calls, ToolCall{
-				MessageID: ids[i],
-				SessionID: m.SessionID,
-				ToolName:  tc.ToolName,
-				Category:  tc.Category,
-				ToolUseID: tc.ToolUseID,
-				InputJSON: tc.InputJSON,
-				SkillName: tc.SkillName,
+				MessageID:        ids[i],
+				SessionID:        m.SessionID,
+				ToolName:         tc.ToolName,
+				Category:         tc.Category,
+				ToolUseID:        tc.ToolUseID,
+				InputJSON:        tc.InputJSON,
+				WorkingDirectory: tc.WorkingDirectory,
+				SkillName:        tc.SkillName,
 				ResultContentLength: ResolveResultContentLength(
 					tc.ResultContent, tc.ResultContentLength,
 				),

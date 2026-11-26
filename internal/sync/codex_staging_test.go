@@ -252,6 +252,29 @@ func TestSyncSingleSessionStagedPublishesRealContent(t *testing.T) {
 		"the single-session path must release its scratch file")
 }
 
+func TestCodexTurnDirectoryStoredInBothParsePaths(t *testing.T) {
+	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122c13"
+	transcript := strings.Replace(codexParityTranscript(uuid), `"/tmp"`, `"/workspace/original"`, 1)
+	for _, stagedMin := range []int64{0, 1} {
+		t.Run(strconv.FormatInt(stagedMin, 10), func(t *testing.T) {
+			database := openTestDB(t)
+			root := writeCodexTranscriptRoot(t, uuid, transcript)
+			syncCodexParityEngine(t, database, root, stagedMin)
+			msgs, err := database.GetAllMessages(t.Context(), "codex:"+uuid)
+			require.NoError(t, err)
+			for _, msg := range msgs {
+				for _, call := range msg.ToolCalls {
+					if call.ToolUseID == "call_a" {
+						require.Equal(t, "/workspace/original", call.WorkingDirectory)
+						return
+					}
+				}
+			}
+			require.FailNow(t, "missing launch call")
+		})
+	}
+}
+
 func TestParseDiffLargeCodexDoesNotStagePlaceholders(t *testing.T) {
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122c12"
 	root := writeCodexParityRoot(t, uuid)

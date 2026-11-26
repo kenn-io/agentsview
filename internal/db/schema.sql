@@ -390,6 +390,7 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     category   TEXT NOT NULL,
     tool_use_id TEXT,
     input_json  TEXT,
+    working_directory TEXT,
     skill_name  TEXT,
     result_content_length INTEGER,
     result_content        TEXT,

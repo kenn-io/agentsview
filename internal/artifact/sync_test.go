@@ -30,6 +30,13 @@ func TestArtifactSyncTwoNodeFolderRoundTripAndReplay(t *testing.T) {
 	originA := "laptop-a1b2c3"
 	originB := "desktop-d4e5f6"
 	seedSession(t, databaseA, "one", "alpha")
+	require.NoError(t, databaseA.ReplaceSessionMessages(t.Context(), "one", []db.Message{
+		{SessionID: "one", Ordinal: 0, Role: "user", Content: "hello", ContentLength: 5},
+		{
+			SessionID: "one", Ordinal: 1, Role: "assistant", Content: "world", ContentLength: 5,
+			ToolCalls: []db.ToolCall{{ToolName: "exec_command", Category: "Bash", InputJSON: `{"cmd":"codex exec hi"}`, WorkingDirectory: "/repo"}},
+		},
+	}))
 
 	published, err := SyncWithRepository(
 		t.Context(),
@@ -70,6 +77,8 @@ func TestArtifactSyncTwoNodeFolderRoundTripAndReplay(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, messages, 2)
 	assert.Equal(t, "world", messages[1].Content)
+	require.Len(t, messages[1].ToolCalls, 1)
+	assert.Equal(t, "/repo", messages[1].ToolCalls[0].WorkingDirectory)
 	journalSequenceBeforeReplay := readTestFolderJournalSequence(t, target)
 
 	replay, err := SyncWithRepository(

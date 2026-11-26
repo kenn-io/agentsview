@@ -247,7 +247,7 @@ func ConvertToolCallsContext(
 		calls[i] = db.ToolCall{
 			SessionID: sessionID, ToolName: call.ToolName,
 			Category: call.Category, ToolUseID: call.ToolUseID,
-			InputJSON: call.InputJSON, Rendering: call.Rendering,
+			InputJSON: call.InputJSON, WorkingDirectory: call.WorkingDirectory, Rendering: call.Rendering,
 			FilePath: filePath, CallIndex: i, SkillName: call.SkillName,
 			SubagentSessionID: call.SubagentSessionID,
 			ResultEvents:      resultEvents,

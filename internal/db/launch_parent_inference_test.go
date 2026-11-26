@@ -67,7 +67,8 @@ func TestLaunchParentEvidence(t *testing.T) {
 		other                                     bool
 		want                                      string
 	}{
-		{"possible alone", `{"command":"test -d /repo && codex exec hi"}`, "Bash", "/repo", "local", "/repo", false, ""},
+		{"possible alone", `{"command":"test -d /repo && codex exec hi"}`, "Bash", "/repo", "local", "/repo", false, "candidate"},
+		{"replaced shell", `{"command":"exec true; codex exec hi"}`, "Bash", "/repo", "local", "/repo", false, ""},
 		{"possible competitor", `{"command":"test -d /repo && codex exec hi"}`, "Bash", "/repo", "local", "/repo", true, ""},
 		{"dead competitor", `{"command":"false && codex exec hi"}`, "Bash", "/repo", "local", "/repo", true, "actual"},
 		{"missing folder", `{"command":"codex exec hi"}`, "Bash", "", "local", "/repo", false, ""},
@@ -224,15 +225,87 @@ func TestLaunchParentBackfillPages(t *testing.T) {
 	assert.Equal(t, "parent", parent.String)
 }
 
+func TestLaunchParentBackfillCheckpoint(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "first-parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/first" })
+	insertMessages(t, d, Message{SessionID: "first-parent", Ordinal: 0, Role: "assistant", Timestamp: "2025-12-31T03:04:00Z", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}})
+	insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
+	insertMessages(t, d, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}})
+	tx, err := d.getWriter().BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	for i := range 1001 {
+		started := "2026-01-01T03:04:03Z"
+		cwd := "/repo"
+		if i == 0 {
+			started = "2025-12-31T03:04:03Z"
+			cwd = "/first"
+		}
+		if i == 1000 {
+			started = "2026-01-02T03:04:03Z"
+		}
+		_, err = tx.ExecContext(t.Context(), `INSERT INTO sessions (id,project,agent,session_kind,cwd,started_at) VALUES (?, 'project', 'codex', 'non-interactive', ?, ?)`, fmt.Sprintf("child-%04d", i), cwd, started)
+		require.NoError(t, err)
+	}
+	require.NoError(t, tx.Commit())
+	tx, err = d.getWriter().BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	_, err = backfillLaunchParentsTx(t.Context(), tx)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+	state, err := d.GetSyncState(t.Context(), launchBackfillKey)
+	require.NoError(t, err)
+	assert.NotEmpty(t, state)
+	assert.NotEqual(t, "done", state)
+	first, err := d.GetSessionExternalParent(t.Context(), "child-0000")
+	require.NoError(t, err)
+	assert.Equal(t, "first-parent", first.ParentSessionID)
+	_, err = d.LinkSubagentSessionsContext(t.Context())
+	require.NoError(t, err)
+	state, err = d.GetSyncState(t.Context(), launchBackfillKey)
+	require.NoError(t, err)
+	assert.Equal(t, "done", state)
+	first, err = d.GetSessionExternalParent(t.Context(), "child-0000")
+	require.NoError(t, err)
+	assert.Equal(t, "first-parent", first.ParentSessionID)
+	parent, err := d.GetSessionExternalParent(t.Context(), "child-1000")
+	require.NoError(t, err)
+	assert.Equal(t, "parent", parent.ParentSessionID)
+}
+
+func TestLaunchParentBulkImportBackfillsAfterIndexRebuild(t *testing.T) {
+	d := testDB(t)
+	require.NoError(t, d.DropBulkImportIndexes(t.Context()))
+	var exists int
+	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT count(*) FROM sqlite_master WHERE type='index' AND name='idx_messages_activity_timestamp'`).Scan(&exists))
+	assert.Zero(t, exists)
+	insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
+	insertMessages(t, d, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}})
+	started := "2026-01-02T03:04:03Z"
+	insertSession(t, d, "child", "project", func(s *Session) {
+		s.Agent = "codex"
+		s.Cwd = "/repo"
+		s.StartedAt = &started
+		s.SessionKind = "non-interactive"
+	})
+	_, err := d.GetSessionExternalParent(t.Context(), "child")
+	require.ErrorIs(t, err, sql.ErrNoRows)
+	require.NoError(t, d.RebuildBulkImportIndexes(t.Context()))
+	_, err = d.LinkSubagentSessionsContext(t.Context())
+	require.NoError(t, err)
+	parent, err := d.GetSessionExternalParent(t.Context(), "child")
+	require.NoError(t, err)
+	assert.Equal(t, "parent", parent.ParentSessionID)
+}
+
 func TestLaunchParentAgentPairs(t *testing.T) {
 	for _, parentAgent := range []string{"claude", "codex"} {
 		for _, childAgent := range []string{"claude", "codex"} {
 			t.Run(parentAgent+"-"+childAgent, func(t *testing.T) {
 				d := testDB(t)
 				insertSession(t, d, "launcher", "project", func(s *Session) { s.Agent = parentAgent; s.Cwd = "/repo" })
-				input := `{"cmd":"codex exec hi"}`
+				input := `{"cmd":"codex exec hi","workdir":"/repo"}`
 				if childAgent == "claude" {
-					input = `{"cmd":"claude -p hi"}`
+					input = `{"cmd":"claude -p hi","workdir":"/repo"}`
 				}
 				insertMessages(t, d, Message{SessionID: "launcher", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00.250Z", ToolCalls: []ToolCall{{SessionID: "launcher", ToolName: "exec_command", Category: "Bash", InputJSON: input}}})
 				start := "2026-01-02T03:05:00.250Z"
@@ -256,12 +329,47 @@ func TestLaunchParentAgentPairs(t *testing.T) {
 	}
 }
 
+func TestLaunchParentResumedCodexDirectory(t *testing.T) {
+	for _, tc := range []struct {
+		name, input, cwd, callCwd string
+		linked                    bool
+	}{
+		{"missing call directory", `{"command":"codex exec hi"}`, "/later", "", false},
+		{"recorded original directory", `{"command":"codex exec hi"}`, "/original", "/original", true},
+		{"recorded directory differs from session", `{"command":"codex exec hi"}`, "/later", "/original", false},
+		{"explicit original directory", `{"command":"codex exec hi","workdir":"/original"}`, "/original", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "launcher", "project", func(s *Session) { s.Agent = "codex"; s.Cwd = "/later" })
+			insertMessages(t, d, Message{SessionID: "launcher", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: "launcher", ToolName: "exec_command", Category: "Bash", InputJSON: tc.input, WorkingDirectory: tc.callCwd}}})
+			started := "2026-01-02T03:04:03Z"
+			insertSession(t, d, "run", "project", func(s *Session) {
+				s.Agent = "codex"
+				s.Cwd = tc.cwd
+				s.StartedAt = &started
+				s.SessionKind = "non-interactive"
+			})
+			_, err := d.LinkSubagentSessionsForSessions(t.Context(), []string{"run"})
+			require.NoError(t, err)
+			parent, err := d.GetSessionExternalParent(t.Context(), "run")
+			if tc.linked {
+				require.NoError(t, err)
+				assert.Equal(t, "launcher", parent.ParentSessionID)
+			} else {
+				require.ErrorIs(t, err, sql.ErrNoRows)
+			}
+		})
+	}
+}
+
 func TestLaunchParentFolderMachineAndWindow(t *testing.T) {
 	for _, tc := range []struct {
 		name, cwd, machine, started string
 		want                        bool
 	}{
 		{"matching Windows path", `c:\repo`, "local", "2026-01-02T03:05:00.250Z", true},
+		{"Git Bash path", `/c/repo`, "local", "2026-01-02T03:04:03Z", true},
 		{"other folder", `c:\elsewhere`, "local", "2026-01-02T03:04:03Z", false},
 		{"other machine", `c:\repo`, "other", "2026-01-02T03:04:03Z", false},
 		{"outside window", `c:\repo`, "local", "2026-01-02T03:05:00.251Z", false},
@@ -385,8 +493,9 @@ func TestLaunchParentTrashEvidence(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "first", link.ParentSessionID)
 	require.NoError(t, d.SoftDeleteSession(ctx, "first"))
-	_, err = d.GetSessionExternalParent(ctx, "child")
-	require.ErrorIs(t, err, sql.ErrNoRows)
+	link, err = d.GetSessionExternalParent(ctx, "child")
+	require.NoError(t, err)
+	assert.Equal(t, "first", link.ParentSessionID)
 	_, err = d.RestoreSession(ctx, "first")
 	require.NoError(t, err)
 	link, err = d.GetSessionExternalParent(ctx, "child")

@@ -231,7 +231,7 @@ func stagedSessionContentDigestTx(ctx context.Context,
 		       COALESCE(tc.skill_name, ''),
 		       COALESCE(tc.result_content_length, 0),
 		       COALESCE(tc.result_content, ''),
-		       COALESCE(tc.subagent_session_id, ''), COALESCE(tc.file_path, '')
+		       COALESCE(tc.subagent_session_id, ''), COALESCE(tc.file_path, ''), COALESCE(tc.working_directory, '')
 		FROM tool_calls tc JOIN messages m ON m.id = tc.message_id
 		WHERE tc.session_id = ?
 		ORDER BY m.ordinal, COALESCE(tc.call_index, 0), tc.id`, sessionID)
@@ -242,11 +242,11 @@ func stagedSessionContentDigestTx(ctx context.Context,
 	for rows.Next() {
 		var ordinal, callIndex, resultLength int64
 		var toolName, category, toolUseID, inputJSON, skillName string
-		var resultContent, subagentSessionID, filePath string
+		var resultContent, subagentSessionID, filePath, workingDirectory string
 		if err := rows.Scan(
 			&ordinal, &callIndex, &toolName, &category, &toolUseID,
 			&inputJSON, &skillName, &resultLength, &resultContent,
-			&subagentSessionID, &filePath,
+			&subagentSessionID, &filePath, &workingDirectory,
 		); err != nil {
 			rows.Close()
 			return [sha256.Size]byte{}, err
@@ -257,7 +257,7 @@ func stagedSessionContentDigestTx(ctx context.Context,
 		writeStagedDigestInt(h, resultLength)
 		for _, value := range []string{
 			toolName, category, toolUseID, inputJSON, skillName,
-			resultContent, subagentSessionID, filePath,
+			resultContent, subagentSessionID, filePath, workingDirectory,
 		} {
 			writeStagedDigestString(h, value)
 		}
@@ -670,6 +670,7 @@ func replaceSessionMessagesTxStaged(
 				Category:          m.ToolCalls[callIdx].Category,
 				ToolUseID:         m.ToolCalls[callIdx].ToolUseID,
 				InputJSON:         m.ToolCalls[callIdx].InputJSON,
+				WorkingDirectory:  m.ToolCalls[callIdx].WorkingDirectory,
 				SkillName:         m.ToolCalls[callIdx].SkillName,
 				SubagentSessionID: m.ToolCalls[callIdx].SubagentSessionID,
 				FilePath:          m.ToolCalls[callIdx].FilePath,

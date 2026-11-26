@@ -11,12 +11,13 @@ type shellCall struct {
 	command, workdir        string
 	unknownWorkdir, unknown bool
 	possible                bool
+	guarded                 bool
 }
 
 type codeModeReader struct {
-	calls             []shellCall
-	locals            map[string]string
-	possible, stopped bool
+	calls                      []shellCall
+	locals                     map[string]string
+	possible, stopped, guarded bool
 }
 
 func codeModeLiteral(expr js.IExpr) (string, bool) {
@@ -104,7 +105,11 @@ func (r *codeModeReader) stmt(stmt js.IStmt) {
 		}
 		value, known := codeModeCondition(n.Cond)
 		old := r.possible
+		oldGuarded := r.guarded
 		r.possible = old || !known
+		if !known {
+			r.guarded = false
+		}
 		if !known || value {
 			r.stmt(n.Body)
 		}
@@ -116,6 +121,7 @@ func (r *codeModeReader) stmt(stmt js.IStmt) {
 		stopped = stopped || r.stopped
 		r.stopped = known && stopped
 		r.possible = old || !known && stopped
+		r.guarded = oldGuarded && !stopped
 	default:
 		r.unsupported(stmt)
 	}
@@ -143,9 +149,14 @@ func (r *codeModeReader) expr(expr js.IExpr) {
 			value, known := codeModeCondition(n.X)
 			if !known || n.Op == js.AndToken && value || n.Op == js.OrToken && !value {
 				old := r.possible
+				oldGuarded := r.guarded
 				r.possible = old || !known
+				if !known {
+					r.guarded = !old || oldGuarded
+				}
 				r.expr(n.Y)
 				r.possible = old || !known && r.stopped
+				r.guarded = oldGuarded && !r.stopped
 				if !known {
 					r.stopped = false
 				}
@@ -173,6 +184,7 @@ func (r *codeModeReader) expr(expr js.IExpr) {
 		if isCodeModeExec(n.X) {
 			call := codeModeCall(n)
 			call.possible = r.possible
+			call.guarded = r.guarded
 			r.calls = append(r.calls, call)
 			return
 		}

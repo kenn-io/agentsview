@@ -2120,3 +2120,37 @@ func TestZCodeToolResultImageUpgradeReparsesAndIndexes(t *testing.T) {
 	).Scan(&occCount))
 	assert.Positive(t, occCount)
 }
+
+func TestCodexLaunchDirectoryUpgradeReparsesSource(t *testing.T) {
+	ctx := t.Context()
+	version := db.CurrentDataVersion()
+	require.Equal(t, []parser.AgentType{parser.AgentCodex}, db.ScopedDataVersionProviders(version-1, version))
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	body := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(id, "/later", "codex_cli_rs", "2026-10-08T12:00:00Z"),
+		`{"type":"turn_context","timestamp":"2026-10-08T12:00:01Z","payload":{"cwd":"/original"}}`,
+		testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call", `{"cmd":"codex exec hi"}`, "2026-10-08T12:00:02Z"),
+	)
+	dbtest.WriteTestFile(t, filepath.Join(root, "rollout-"+id+".jsonl"), []byte(body))
+	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}}
+	engine := sync.NewEngine(ctx, database, cfg)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	engine.Close()
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, fmt.Sprintf("UPDATE tool_calls SET working_directory=NULL; UPDATE sessions SET data_version=%d; PRAGMA user_version=%d", version-1, version-1))
+		return err
+	}))
+	archive := database.Path()
+	require.NoError(t, database.Close())
+	database, err := db.OpenIsolated(ctx, archive)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine = sync.NewEngine(ctx, database, cfg)
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	var cwd string
+	require.NoError(t, database.Reader().QueryRow(ctx, `SELECT working_directory FROM tool_calls WHERE tool_use_id='call'`).Scan(&cwd))
+	assert.Equal(t, "/original", cwd)
+}

@@ -912,3 +912,17 @@ func TestCopySessionMetadataDoesNotCarryRevisionCounters(t *testing.T) {
 		SELECT value FROM archive_metadata WHERE key = 'analytics_change_revision'`).Scan(&revision)
 	require.ErrorIs(t, err, sql.ErrNoRows)
 }
+
+func TestCopyOrphanedDataPreservesLaunchDirectory(t *testing.T) {
+	source := testDB(t)
+	insertSession(t, source, "parent", "project", func(s *Session) { s.Agent = "codex" })
+	insertMessages(t, source, Message{SessionID: "parent", Role: "assistant", ToolCalls: []ToolCall{{ToolName: "exec_command", Category: "Bash", InputJSON: `{"cmd":"codex exec hi"}`, WorkingDirectory: "/repo"}}})
+	destination := testDB(t)
+	_, err := destination.CopyOrphanedDataFrom(t.Context(), source.Path())
+	require.NoError(t, err)
+	messages, err := destination.GetAllMessages(t.Context(), "parent")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	require.Len(t, messages[0].ToolCalls, 1)
+	assert.Equal(t, "/repo", messages[0].ToolCalls[0].WorkingDirectory)
+}

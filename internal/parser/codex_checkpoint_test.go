@@ -16,6 +16,7 @@ func TestCodexCursorStateCheckpointRoundTrip(t *testing.T) {
 		model:                    "gpt-5.6-luna",
 		serviceTierProviderID:    "openai-priority",
 		cwd:                      "/workspace/project-a",
+		turnCwd:                  "/workspace/project-b",
 		agentPath:                "codex/agents/a",
 		firstUserSeen:            true,
 		sawUserTurnAfterFirst:    true,

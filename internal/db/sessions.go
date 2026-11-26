@@ -2100,8 +2100,22 @@ func (db *DB) LinkSubagentSessions() error {
 // LinkSubagentSessionsContext is LinkSubagentSessions with caller-controlled
 // cancellation for bounded sync paths. The count is the number of session
 // rows whose parent link changed. Legacy repairs and ordinary linking commit
-// together so an error leaves no unreported parent changes.
+// together; launch backfill commits each page with its resume cursor.
 func (db *DB) LinkSubagentSessionsContext(ctx context.Context) (int, error) {
+	updated, err := db.linkKnownSubagentSessions(ctx)
+	if err != nil {
+		return 0, err
+	}
+	for {
+		n, done, err := db.backfillLaunchParentPage(ctx)
+		updated += n
+		if err != nil || done {
+			return updated, err
+		}
+	}
+}
+
+func (db *DB) linkKnownSubagentSessions(ctx context.Context) (int, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	tx, err := db.getWriter().BeginTx(ctx, nil)
@@ -2129,10 +2143,6 @@ func (db *DB) LinkSubagentSessionsContext(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("counting linked subagent sessions: %w", err)
 	}
-	inferred, err := backfillLaunchParentsTx(ctx, tx)
-	if err != nil {
-		return 0, err
-	}
 	launched, err := applySessionExternalParents(ctx, tx)
 	if err != nil {
 		return 0, err
@@ -2140,7 +2150,33 @@ func (db *DB) LinkSubagentSessionsContext(ctx context.Context) (int, error) {
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("committing subagent linking: %w", err)
 	}
-	return repaired + int(updated) + launched + inferred, nil
+	return repaired + int(updated) + launched, nil
+}
+
+func (db *DB) backfillLaunchParentPage(ctx context.Context) (int, bool, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	tx, err := db.getWriter().BeginTx(ctx, nil)
+	if err != nil {
+		return 0, false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	enabled, err := launchInferenceEnabled(ctx, tx)
+	if err != nil || !enabled {
+		return 0, true, err
+	}
+	n, err := backfillLaunchParentsTx(ctx, tx)
+	if err != nil {
+		return 0, false, err
+	}
+	state, err := GetSyncStateTx(ctx, tx, launchBackfillKey)
+	if err != nil {
+		return 0, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, false, err
+	}
+	return n, state == "done", nil
 }
 
 // selfParentRepairStateKey marks the archive as having cleared the

@@ -2705,6 +2705,10 @@ func copySessionDataForIDs(
 		"otc.category", "otc.tool_use_id", "otc.input_json",
 		"otc.skill_name", "otc.result_content_length",
 	}
+	if oldDBHasColumn(ctx, tx, "tool_calls", "working_directory") {
+		toolCallCols = append(toolCallCols, "working_directory")
+		toolCallSelect = append(toolCallSelect, "otc.working_directory")
+	}
 	if oldDBHasColumn(ctx, tx, "tool_calls", "result_content") {
 		toolCallCols = append(toolCallCols, "result_content")
 		toolCallSelect = append(toolCallSelect, "otc.result_content")

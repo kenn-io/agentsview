@@ -59,15 +59,29 @@ type LaunchCommand struct {
 	Dirs     []string
 	Unknown  bool
 	Possible bool
+	Guarded  bool
 }
+
+var launchAgentWords = map[string]*regexp.Regexp{
+	"codex":  regexp.MustCompile(`(?i)(^|[^a-z0-9_])codex([^a-z0-9_]|$)`),
+	"claude": regexp.MustCompile(`(?i)(^|[^a-z0-9_])claude([^a-z0-9_]|$)`),
+}
+
+// MentionsLaunchAgent reports whether an unparseable command names an agent.
+func MentionsLaunchAgent(command, agent string) bool {
+	re := launchAgentWords[agent]
+	return re != nil && re.MatchString(command)
+}
+
 type shellFlow struct {
-	dirs       []string
-	unknown    bool
-	cwdChanged bool
-	possible   bool
-	stopped    bool
-	guarded    bool
-	mayStop    bool
+	dirs        []string
+	unknown     bool
+	cwdChanged  bool
+	possible    bool
+	stopped     bool
+	guarded     bool
+	conditional bool
+	mayStop     bool
 }
 
 func mergeShellFlows(a, b shellFlow) shellFlow {
@@ -88,7 +102,7 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 	if err != nil {
 		var out []LaunchCommand
 		for _, agent := range []string{"codex", "claude"} {
-			if regexp.MustCompile(`(?i)(^|[^a-z0-9_])` + agent + `([^a-z0-9_]|$)`).MatchString(command) {
+			if MentionsLaunchAgent(command, agent) {
 				out = append(out, LaunchCommand{Agent: agent, Unknown: true})
 			}
 		}
@@ -116,7 +130,7 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 			f.unknown = true
 			f.dirs = nil
 		}
-		out = append(out, LaunchCommand{Agent: agent, Dirs: slices.Clone(f.dirs), Unknown: f.unknown, Possible: f.possible})
+		out = append(out, LaunchCommand{Agent: agent, Dirs: slices.Clone(f.dirs), Unknown: f.unknown, Possible: f.possible, Guarded: f.possible && f.conditional})
 	}
 	run = func(stmt *syntax.Stmt, f shellFlow) (result shellFlow) {
 		f.dirs = slices.Clone(f.dirs)
@@ -143,9 +157,11 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 						rhs = narrowed
 						rhs.guarded = true
 					} else if truth == 0 {
+						rhs.conditional = !rhs.possible || rhs.conditional
 						rhs.possible = true
 					}
 				} else if truth == 0 {
+					rhs.conditional = !rhs.possible || rhs.conditional
 					rhs.possible = true
 				}
 				right := run(c.Y, rhs)
@@ -154,6 +170,9 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 				}
 				merged := mergeShellFlows(left, right)
 				merged.possible = merged.possible || right.stopped
+				if right.stopped {
+					merged.conditional = false
+				}
 				merged.mayStop = merged.mayStop || right.stopped
 				return merged
 			case syntax.Pipe, syntax.PipeAll:
@@ -177,12 +196,18 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 			if truth >= 0 {
 				branch := cond
 				branch.possible = branch.possible || truth == 0
+				if truth == 0 {
+					branch.conditional = false
+				}
 				yes = list(c.Then, branch)
 			}
 			no := cond
 			if c.Else != nil && truth <= 0 {
 				branch := cond
 				branch.possible = branch.possible || truth == 0
+				if truth == 0 {
+					branch.conditional = false
+				}
 				no = run(&syntax.Stmt{Cmd: c.Else}, branch)
 			}
 			if truth > 0 {
@@ -192,6 +217,9 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 				return no
 			}
 			cond.possible = cond.possible || yes.stopped || no.stopped || yes.mayStop || no.mayStop
+			if yes.stopped || no.stopped || yes.mayStop || no.mayStop {
+				cond.conditional = false
+			}
 			yes.possible, no.possible = cond.possible, cond.possible
 			yes.stopped, no.stopped = false, false
 			return mergeShellFlows(yes, no)
@@ -288,6 +316,14 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 			}
 			wrappers := map[string]bool{"sudo": true, "doas": true, "env": true, "command": true, "exec": true, "nohup": true, "time": true, "nice": true, "timeout": true, "stdbuf": true, "setsid": true, "xargs": true, "eval": true, "bash": true, "sh": true, "zsh": true}
 			if wrappers[program] {
+				if program == "exec" && len(args) > 1 {
+					if dynamic[1] || strings.HasPrefix(args[1], "-") {
+						f.possible = true
+						f.conditional = false
+					} else {
+						f.stopped = true
+					}
+				}
 				if program == "eval" && len(args) == 2 && !dynamic[1] {
 					for _, nested := range LaunchesFromCommand(args[1], "") {
 						emit(nested.Agent, f, true)

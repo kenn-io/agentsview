@@ -6,18 +6,12 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"path"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/parser"
 )
-
-var launchAgentWords = map[string]*regexp.Regexp{
-	"codex":  regexp.MustCompile(`(?i)(^|[^a-z0-9_])codex([^a-z0-9_]|$)`),
-	"claude": regexp.MustCompile(`(?i)(^|[^a-z0-9_])claude([^a-z0-9_]|$)`),
-}
 
 func launchFolder(s string) string {
 	s = normalizedMappingPath(s)
@@ -28,14 +22,38 @@ func launchFolder(s string) string {
 	return s
 }
 
+func sameLaunchFolder(a, b string) bool {
+	convert := func(path, reference string) string {
+		path = normalizedMappingPath(path)
+		reference = normalizedMappingPath(reference)
+		if len(reference) >= 3 && reference[1] == ':' && reference[2] == '/' && len(path) >= 3 && path[0] == '/' && path[2] == '/' && (path[1] >= 'a' && path[1] <= 'z' || path[1] >= 'A' && path[1] <= 'Z') {
+			return string(path[1]) + ":" + path[2:]
+		}
+		return path
+	}
+	return launchFolder(convert(a, b)) == launchFolder(convert(b, a))
+}
+
 type launchChild struct {
 	id, agent, cwd, machine, started string
 	qualified                        bool
 }
 
+// The activity index is dropped only while a disposable archive is bulk-loaded.
+// Its final backfill links the runs after the index has been rebuilt.
+func launchInferenceEnabled(ctx context.Context, tx *sql.Tx) (bool, error) {
+	var enabled bool
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_messages_activity_timestamp')`).Scan(&enabled)
+	return enabled, err
+}
+
 func inferLaunchParentsTx(ctx context.Context, tx *sql.Tx, ids []string) (int, error) {
 	if len(ids) == 0 {
 		return 0, nil
+	}
+	enabled, err := launchInferenceEnabled(ctx, tx)
+	if err != nil || !enabled {
+		return 0, err
 	}
 	encoded, err := json.Marshal(ids)
 	if err != nil {
@@ -85,7 +103,7 @@ func inferLaunchParentsTx(ctx context.Context, tx *sql.Tx, ids []string) (int, e
 
 // Starting with the bounded timestamp range prevents a scan of every session
 // on the machine for each candidate child.
-const launchCandidateSQL = `SELECT s.id, s.cwd, s.machine, m.timestamp, tc.tool_name, tc.input_json, s.deleted_at IS NOT NULL FROM messages m INDEXED BY idx_messages_activity_timestamp
+const launchCandidateSQL = `SELECT s.id, s.cwd, s.machine, m.timestamp, tc.tool_name, tc.input_json, s.deleted_at IS NOT NULL, s.agent, COALESCE(tc.working_directory,'') FROM messages m INDEXED BY idx_messages_activity_timestamp
  CROSS JOIN tool_calls tc ON tc.message_id=m.id CROSS JOIN sessions s ON s.id=m.session_id
  WHERE m.role='assistant' AND m.model != '<synthetic>' AND m.timestamp >= ? AND m.timestamp <= ? AND (s.machine=? OR TRIM(s.machine)='') AND s.id != ? AND s.agent IN ('claude','codex') AND tc.category='Bash'`
 
@@ -106,13 +124,18 @@ func inferLaunchChild(ctx context.Context, tx *sql.Tx, child launchChild) (int, 
 	if err != nil {
 		return 0, err
 	}
+	var existingParent string
+	err = tx.QueryRowContext(ctx, `SELECT parent_session_id FROM session_external_parents WHERE session_id=? AND inferred=1`, child.id).Scan(&existingParent)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return 0, err
+	}
 	matches := map[string]bool{}
 	known := map[string]int{}
 	competing := map[string]map[string]bool{}
 	uncertain := map[string]bool{}
 	for _, launch := range launches {
 		matches[launch.parent] = true
-		if !launch.certain {
+		if !launch.certain && !launch.guarded && (!launch.retained || launch.parent != existingParent) {
 			uncertain[launch.parent] = true
 			continue
 		}
@@ -230,7 +253,7 @@ func launchRuns(ctx context.Context, tx *sql.Tx, child launchChild, at time.Time
 			return nil, err
 		}
 		started, err := time.Parse(time.RFC3339Nano, stamp)
-		if err == nil && !started.Before(at) && started.Sub(at) <= 60*time.Second && absoluteLaunchFolder(cwd) && launchFolder(cwd) == launchFolder(child.cwd) {
+		if err == nil && !started.Before(at) && started.Sub(at) <= 60*time.Second && absoluteLaunchFolder(cwd) && sameLaunchFolder(cwd, child.cwd) {
 			if started.After(childStart) {
 				later = append(later, laterRun{id, started})
 			} else {
@@ -273,9 +296,11 @@ func launchRuns(ctx context.Context, tx *sql.Tx, child launchChild, at time.Time
 }
 
 type possibleLaunch struct {
-	parent  string
-	at      time.Time
-	certain bool
+	parent   string
+	at       time.Time
+	certain  bool
+	retained bool
+	guarded  bool
 }
 
 func possibleLaunches(ctx context.Context, tx *sql.Tx, child launchChild, from, until time.Time) ([]possibleLaunch, error) {
@@ -286,10 +311,10 @@ func possibleLaunches(ctx context.Context, tx *sql.Tx, child launchChild, from, 
 	defer rows.Close()
 	var launches []possibleLaunch
 	for rows.Next() {
-		var id, cwd, machine, stamp, tool string
+		var id, cwd, machine, stamp, tool, agent, callCwd string
 		var input sql.NullString
 		var trashed bool
-		if err := rows.Scan(&id, &cwd, &machine, &stamp, &tool, &input, &trashed); err != nil {
+		if err := rows.Scan(&id, &cwd, &machine, &stamp, &tool, &input, &trashed, &agent, &callCwd); err != nil {
 			return nil, err
 		}
 		at, err := time.Parse(time.RFC3339Nano, stamp)
@@ -307,12 +332,15 @@ func possibleLaunches(ctx context.Context, tx *sql.Tx, child launchChild, from, 
 		}
 		for _, call := range calls {
 			if call.unknown {
-				if re := launchAgentWords[child.agent]; re != nil && re.MatchString(call.command) {
+				if parser.MentionsLaunchAgent(call.command, child.agent) {
 					launches = append(launches, possibleLaunch{parent: id, at: at})
 				}
 				continue
 			}
 			dir := cwd
+			if agent == "codex" {
+				dir = callCwd
+			}
 			if call.unknownWorkdir {
 				dir = ""
 			} else if call.workdir != "" {
@@ -326,11 +354,13 @@ func possibleLaunches(ctx context.Context, tx *sql.Tx, child launchChild, from, 
 					continue
 				}
 				matched := slices.ContainsFunc(launch.Dirs, func(dir string) bool {
-					return absoluteLaunchFolder(dir) && launchFolder(dir) == launchFolder(child.cwd)
+					return absoluteLaunchFolder(dir) && sameLaunchFolder(dir, child.cwd)
 				})
 				if launch.Unknown || matched {
-					certain := !trashed && machine == child.machine && matched && !launch.Unknown && !launch.Possible && !call.possible && len(launch.Dirs) == 1
-					launches = append(launches, possibleLaunch{parent: id, at: at, certain: certain})
+					knownFolder := machine == child.machine && matched && !launch.Unknown && len(launch.Dirs) == 1
+					certain := knownFolder && !launch.Possible && !call.possible
+					guarded := knownFolder && !trashed && (launch.Possible || call.possible) && (!launch.Possible || launch.Guarded) && (!call.possible || call.guarded)
+					launches = append(launches, possibleLaunch{parent: id, at: at, certain: certain && !trashed, retained: certain && trashed, guarded: guarded})
 				}
 			}
 		}
@@ -382,6 +412,10 @@ func launchSeedsFrom(ctx context.Context, tx *sql.Tx, ids []string, from int) ([
 }
 
 func launchSeedsChanged(ctx context.Context, tx *sql.Tx, ids []string, changes map[string]int) ([]string, error) {
+	enabled, err := launchInferenceEnabled(ctx, tx)
+	if err != nil || !enabled {
+		return ids, err
+	}
 	data, err := json.Marshal(ids)
 	if err != nil {
 		return nil, err
@@ -475,8 +509,8 @@ func launchInputMayMatter(input sql.NullString) bool {
 	}
 	for _, call := range calls {
 		if call.unknown {
-			for _, re := range launchAgentWords {
-				if re.MatchString(call.command) {
+			for _, agent := range []string{"codex", "claude"} {
+				if parser.MentionsLaunchAgent(call.command, agent) {
 					return true
 				}
 			}
@@ -500,39 +534,51 @@ func backfillLaunchParentsTx(ctx context.Context, tx *sql.Tx) (int, error) {
 		return 0, nil
 	}
 	var cursor struct{ Started, ID string }
-	updated := 0
-	for {
-		rows, err := tx.QueryContext(ctx, `SELECT id, started_at FROM sessions WHERE started_at IS NOT NULL AND (started_at > ? OR (started_at = ? AND id > ?)) AND ((agent='codex' AND session_kind='non-interactive') OR (agent='claude' AND entrypoint='sdk-cli')) ORDER BY started_at,id LIMIT 1000`, cursor.Started, cursor.Started, cursor.ID)
-		if err != nil {
+	if state != "" {
+		if err := json.Unmarshal([]byte(state), &cursor); err != nil {
 			return 0, err
-		}
-		defer rows.Close()
-		var ids []string
-		for rows.Next() {
-			if err = rows.Scan(&cursor.ID, &cursor.Started); err != nil {
-				rows.Close()
-				return 0, err
-			}
-			ids = append(ids, cursor.ID)
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return 0, err
-		}
-		n, err := inferLaunchParentsTx(ctx, tx, ids)
-		if err != nil {
-			return 0, err
-		}
-		updated += n
-		if len(ids) < 1000 {
-			break
 		}
 	}
-	if err = SetSyncStateTx(ctx, tx, launchBackfillKey, "done"); err != nil {
+	rows, err := tx.QueryContext(ctx, `SELECT id, started_at FROM sessions WHERE started_at IS NOT NULL AND (started_at > ? OR (started_at = ? AND id > ?)) AND ((agent='codex' AND session_kind='non-interactive') OR (agent='claude' AND entrypoint='sdk-cli')) ORDER BY started_at,id LIMIT 1000`, cursor.Started, cursor.Started, cursor.ID)
+	if err != nil {
 		return 0, err
 	}
-	return updated, nil
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		if err = rows.Scan(&cursor.ID, &cursor.Started); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ids = append(ids, cursor.ID)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return 0, err
+	}
+	updated, err := inferLaunchParentsTx(ctx, tx, ids)
+	if err != nil {
+		return 0, err
+	}
+	applied, err := applySessionExternalParentsFor(ctx, tx.ExecContext, func(ctx context.Context, query string, args ...any) rowScanner {
+		return tx.QueryRowContext(ctx, query, args...)
+	}, ids)
+	if err != nil {
+		return 0, err
+	}
+	state = "done"
+	if len(ids) == 1000 {
+		encoded, err := json.Marshal(cursor)
+		if err != nil {
+			return 0, err
+		}
+		state = string(encoded)
+	}
+	if err = SetSyncStateTx(ctx, tx, launchBackfillKey, state); err != nil {
+		return 0, err
+	}
+	return updated + applied, nil
 }
 
 // restoreInferenceBlocks removes links inferred before rebuild metadata arrived.

@@ -1007,3 +1007,35 @@ func TestResyncCanceledDuringFinalizationAborts(t *testing.T) {
 		})
 	}
 }
+
+func TestResyncBackfillsLaunchesAfterBulkImport(t *testing.T) {
+	const parentID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	const childID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+	root := t.TempDir()
+	parent := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(parentID, "/repo", "codex_cli_rs", "2026-01-02T03:03:59Z"),
+		`{"type":"turn_context","timestamp":"2026-01-02T03:04:00Z","payload":{"cwd":"/repo"}}`,
+		testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call", `{"cmd":"codex exec hi"}`, "2026-01-02T03:04:00Z"),
+	)
+	child := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(childID, "/repo", "codex_exec", "2026-01-02T03:04:03Z"),
+		testjsonl.CodexMsgJSON("user", "hi", "2026-01-02T03:04:04Z"),
+	)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "rollout-"+parentID+".jsonl"), []byte(parent), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "rollout-"+childID+".jsonl"), []byte(child), 0o600))
+	database := openTestDB(t)
+	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
+	_, err := database.GetSessionExternalParent(t.Context(), "codex:"+childID)
+	require.NoError(t, err)
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `DELETE FROM session_external_parents; UPDATE sessions SET parent_session_id=NULL, relationship_type='' WHERE id=?`, "codex:"+childID)
+		return err
+	}))
+	stats := engine.ResyncAll(t.Context(), nil)
+	require.False(t, stats.Aborted, "%v", stats.Warnings)
+	link, err := database.GetSessionExternalParent(t.Context(), "codex:"+childID)
+	require.NoError(t, err)
+	assert.Equal(t, "codex:"+parentID, link.ParentSessionID)
+}

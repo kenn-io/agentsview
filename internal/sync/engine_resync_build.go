@@ -1075,6 +1075,25 @@ func (e *Engine) resyncBuildLocked(
 		time.Since(tUsageIndexes).Round(time.Millisecond),
 	)
 
+	// The activity index is unavailable during the bulk load. Link launched
+	// runs once all sources and orphaned sessions have been restored.
+	err = newDB.DeleteSyncState(ctx, "launch_parent_backfill_v1")
+	if err == nil {
+		repaired, err = newDB.LinkSubagentSessionsContext(ctx)
+		pendingLinksUpdated += repaired
+	}
+	if err != nil {
+		stats.Aborted = true
+		stats.Warnings = append(stats.Warnings, "launch parent backfill failed, aborting swap: "+err.Error())
+		newDB.Close()
+		removeTempDB(tempPath)
+		restoreSkipCache()
+		if rerr := origDB.Reopen(); rerr != nil {
+			log.Printf("resync: recovery reopen: %v", rerr)
+		}
+		return stats, err
+	}
+
 	// Persist the fresh skip state into the replacement so the post-swap engine
 	// loads warm state: this engine after an in-process swap, or the daemon
 	// after a worker build. Then checkpoint and close the replacement so its

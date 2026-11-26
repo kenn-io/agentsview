@@ -1499,6 +1499,9 @@ func TestToolCallDiffDetectsFilePath(t *testing.T) {
 	// A file_path-only parser change must be detected so the resync rewrites
 	// the row and the mirrors pick up the corrected path.
 	assert.Contains(t, toolCallDiff(base, moved), "file_path")
+	moved = base
+	moved.WorkingDirectory = "/repo"
+	assert.Contains(t, toolCallDiff(base, moved), "working_directory")
 }
 
 // TestCompareStoredSessionRoundTripToolCalls is the false-diff acid test

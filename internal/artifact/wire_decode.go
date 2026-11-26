@@ -409,6 +409,7 @@ func (m segmentMessage) dbMessage() db.Message {
 				Category:            call.Category,
 				ToolUseID:           call.ToolUseID,
 				InputJSON:           call.InputJSON,
+				WorkingDirectory:    call.WorkingDirectory,
 				FilePath:            call.FilePath,
 				SkillName:           call.SkillName,
 				ResultContentLength: call.ResultContentLength,

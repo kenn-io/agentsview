@@ -1685,6 +1685,7 @@ type ParsedToolCall struct {
 	ToolName          string // raw name from session data
 	Category          string // normalized: Read, Edit, Write, Bash, etc.
 	InputJSON         string // raw JSON of the input object
+	WorkingDirectory  string // directory recorded at the time of the call
 	FilePath          string // resolved edit/write target path, when known natively
 	SkillName         string // skill name when ToolName is "Skill"
 	SubagentSessionID string // linked subagent session file (e.g. "agent-{task_id}")

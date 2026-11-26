@@ -709,7 +709,7 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // indexing see them. Re-parse toolResultContentLength and raw tool-result array
 // providers in place; source and session identities are unchanged.)
 // (190: include retained tool calls in pull request links.)
-// (191: prevent older binaries from losing inferred parent clears.)
+// (191: preserve inferred parent state and record each Codex shell call turn directory.)
 const dataVersion = 191
 
 const archiveOnlyVersionBase = 1 << 20

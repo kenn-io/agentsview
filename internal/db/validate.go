@@ -244,6 +244,7 @@ func sanitizeToolCallContent(
 	// just like result content; unsanitized rows break replica pushes
 	// and force the resync copy path to re-scan them (#945).
 	sanitizeStringField(&tc.InputJSON, stats)
+	sanitizeStringField(&tc.WorkingDirectory, stats)
 	// The recorded rendering must keep matching the message content byte
 	// for byte after the content is sanitized, so it gets the same
 	// treatment. Its stripped bytes are already counted under the content.

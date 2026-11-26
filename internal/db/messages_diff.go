@@ -118,6 +118,7 @@ func toolCallRowEqual(a, b ToolCall) bool {
 		a.Category == b.Category &&
 		a.ToolUseID == b.ToolUseID &&
 		a.InputJSON == b.InputJSON &&
+		a.WorkingDirectory == b.WorkingDirectory &&
 		a.SkillName == b.SkillName &&
 		a.ResultContentLength == b.ResultContentLength &&
 		a.ResultContent == b.ResultContent &&
