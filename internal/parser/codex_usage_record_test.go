@@ -81,16 +81,20 @@ func TestCodexTokenUsageRecordAndMirror(t *testing.T) {
 			),
 			want: 1,
 		},
-		{
-			name: "record mirror after intervening transcript lines counts once",
-			rows: testjsonl.JoinJSONL(
-				testjsonl.CodexMsgJSON("assistant", "reply", tsEarlyS5),
-				codexUsageRecordLine(t, tsLate, "response-1", 100, 40, 12, 5, 112),
-				testjsonl.CodexFunctionCallOutputJSON("call-1", "ok", tsLate),
-				codexUsageCountLine(t, tsLate, 100, 40, 12, 5, 112),
-			),
-			want: 1,
-		},
+		{name: "count-only later turn with same counters counts after mirror expires", rows: testjsonl.JoinJSONL(
+			testjsonl.CodexMsgJSON("assistant", "first", tsEarlyS5),
+			codexUsageRecordLine(t, tsLate, "response-1", 100, 40, 12, 5, 112),
+			codexUsageCountLine(t, tsLate, 100, 40, 12, 5, 112),
+			testjsonl.CodexTurnContextJSON("gpt-5.4", tsLateS5),
+			testjsonl.CodexMsgJSON("assistant", "second", tsLateS5),
+			codexUsageCountLineWithCumulative(t, tsLateS5, 2, 100, 40, 12, 5, 112),
+		), want: 2},
+		{name: "record mirror after intervening transcript lines counts once", rows: testjsonl.JoinJSONL(
+			testjsonl.CodexMsgJSON("assistant", "reply", tsEarlyS5),
+			codexUsageRecordLine(t, tsLate, "response-1", 100, 40, 12, 5, 112),
+			testjsonl.CodexFunctionCallOutputJSON("call-1", "ok", tsLate),
+			codexUsageCountLine(t, tsLate, 100, 40, 12, 5, 112),
+		), want: 1},
 		{
 			name: "lone record counts",
 			rows: testjsonl.JoinJSONL(
@@ -173,6 +177,74 @@ func TestCodexTokenUsageRecordAndMirror(t *testing.T) {
 			assert.Equal(t, tc.want, got)
 		})
 	}
+}
+
+func TestCodexTokenCountRepeatAfterDistinctRecordKeepsRecordMirror(t *testing.T) {
+	content := codexUsageFixture(t,
+		testjsonl.CodexMsgJSON("assistant", "first", tsEarlyS5),
+		codexUsageCountLine(t, tsLate, 80, 30, 10, 4, 90),
+		testjsonl.CodexMsgJSON("assistant", "second", tsLate),
+		codexUsageRecordLine(t, tsLate, "response-2", 100, 40, 12, 5, 112),
+		codexUsageCountLine(t, tsLate, 80, 30, 10, 4, 90),
+		codexUsageCountLine(t, tsLate, 100, 40, 12, 5, 112),
+	)
+	_, messages := runCodexParserTest(t, "usage-repeat-distinct.jsonl", content, false)
+	var usages []string
+	for _, message := range messages {
+		if len(message.TokenUsage) > 0 {
+			usages = append(usages, string(message.TokenUsage))
+		}
+	}
+	require.Len(t, usages, 2)
+	assert.JSONEq(t, `{"input_tokens":50,"output_tokens":10,"cache_read_input_tokens":30,"reasoning_tokens":4}`, usages[0])
+	assert.JSONEq(t, `{"input_tokens":60,"output_tokens":12,"cache_read_input_tokens":40,"reasoning_tokens":5}`, usages[1])
+}
+
+func TestCodexPendingMirrorExpiresAtTurnAcrossCheckpoint(t *testing.T) {
+	prefix := codexUsageFixture(t,
+		testjsonl.CodexMsgJSON("assistant", "first", tsEarlyS5),
+		codexUsageRecordLine(t, tsLate, "", 100, 40, 12, 5, 112),
+	)
+	tail := testjsonl.JoinJSONL(
+		testjsonl.CodexTurnContextJSON("gpt-5.4", tsLateS5),
+		testjsonl.CodexMsgJSON("assistant", "second", tsLateS5),
+		codexUsageCountLineWithCumulative(t, tsLateS5, 2, 100, 40, 12, 5, 112),
+	) + "\n"
+
+	fullPath := createTestFile(t, "usage-turn-full.jsonl", prefix+tail)
+	_, fullMessages, err := parseCodexTestSession(t, fullPath, "local", false)
+	require.NoError(t, err)
+	var fullUsage int
+	for _, message := range fullMessages {
+		if len(message.TokenUsage) > 0 {
+			fullUsage++
+		}
+	}
+	require.Equal(t, 2, fullUsage, "a later turn's count-only usage is not the earlier record's mirror")
+
+	incrementalPath := createTestFile(t, "usage-turn-incremental.jsonl", prefix)
+	provider := newCodexTestProvider(t)
+	_, prefixMessages, err := provider.parseSession(incrementalPath, "local", false)
+	require.NoError(t, err)
+	prefixInfo, err := os.Stat(incrementalPath)
+	require.NoError(t, err)
+	file, err := os.OpenFile(incrementalPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = file.WriteString(tail)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+
+	incremental, err := provider.parseSessionFromDetailed(t.Context(), incrementalPath, prefixInfo.Size(), len(prefixMessages), false)
+	require.NoError(t, err)
+	require.NotNil(t, incremental)
+	got := append(append([]ParsedMessage(nil), prefixMessages...), incremental.messages...)
+	var incrementalUsage int
+	for _, message := range got {
+		if len(message.TokenUsage) > 0 {
+			incrementalUsage++
+		}
+	}
+	assert.Equal(t, fullUsage, incrementalUsage)
 }
 
 func TestCodexIdlessRecordAfterDistinctUsageCounts(t *testing.T) {
@@ -284,11 +356,14 @@ func TestCodexRecordRepeatAfterMirrorIncrementalDedupesWithoutResponseID(t *test
 
 func TestCodexCursorCheckpointPersistsRecordMirrorState(t *testing.T) {
 	seed := codexCursorState{
-		lastTokenUsageSeen:          true,
-		lastTokenUsageDigest:        tokenUsageDigest(`{"input_tokens":100,"cached_input_tokens":40,"output_tokens":12,"reasoning_output_tokens":5,"total_tokens":112}`),
-		lastTokenUsageRecordDigest:  tokenUsageDigest(`{"input_tokens":100,"cached_input_tokens":40,"output_tokens":12,"reasoning_output_tokens":5,"total_tokens":112}`),
-		lastTokenUsageResponseID:    "response-1",
-		lastTokenUsageRecordPending: true,
+		lastTokenUsageDigest:         tokenUsageDigest(`{"input_tokens":100,"cached_input_tokens":40,"output_tokens":12,"reasoning_output_tokens":5,"total_tokens":112}`),
+		lastTokenUsageRecordDigest:   tokenUsageDigest(`{"input_tokens":100,"cached_input_tokens":40,"output_tokens":12,"reasoning_output_tokens":5,"total_tokens":112}`),
+		pendingUsageRecordDigest:     tokenUsageDigest(`{"input_tokens":100,"cached_input_tokens":40,"output_tokens":12,"reasoning_output_tokens":5,"total_tokens":112}`),
+		lastTokenUsageSeen:           true,
+		pendingUsageRecord:           true,
+		pendingUsageRecordResponseID: "response-1",
+		lastTokenUsageResponseID:     "response-1",
+		lastTokenCountSeen:           true,
 	}
 	blob, err := seed.MarshalBinary()
 	require.NoError(t, err)
@@ -298,7 +373,10 @@ func TestCodexCursorCheckpointPersistsRecordMirrorState(t *testing.T) {
 	assert.Equal(t, seed.lastTokenUsageRecordDigest, got.lastTokenUsageRecordDigest)
 	assert.Equal(t, seed.lastTokenUsageSeen, got.lastTokenUsageSeen)
 	assert.Equal(t, seed.lastTokenUsageResponseID, got.lastTokenUsageResponseID)
-	assert.Equal(t, seed.lastTokenUsageRecordPending, got.lastTokenUsageRecordPending)
+	assert.Equal(t, seed.pendingUsageRecord, got.pendingUsageRecord)
+	assert.Equal(t, seed.pendingUsageRecordDigest, got.pendingUsageRecordDigest)
+	assert.Equal(t, seed.lastTokenCountSeen, got.lastTokenCountSeen)
+	assert.Equal(t, seed.pendingUsageRecordResponseID, got.pendingUsageRecordResponseID)
 
 	// A version 6 checkpoint has no record-mirror state. Rejecting it sends
 	// the caller to a full parse, as for any other version mismatch.

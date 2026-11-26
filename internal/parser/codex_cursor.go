@@ -22,6 +22,8 @@ const (
 	// codexCursorCheckpointVersion is the wire version for the persisted
 	// cursor encoding. Bump when the encoding changes; decode failures fall
 	// back to a full parse.
+	// Version 9 keeps the token_count repeat key separate from the pending
+	// record awaiting its mirror, and scopes that pending record to its turn.
 	// Version 8 persists the record identity separately from the most recent
 	// usage-event digest, so a repeated record remains deduplicated after its
 	// mirrored token_count.
@@ -36,7 +38,7 @@ const (
 	// full parsing; version 2 retained the oldest unresolved occurrence.
 	// The fork replay gate is process-only state: it is re-armed from the
 	// transcript on every parse and is not part of the persisted cursor.
-	codexCursorCheckpointVersion   = 8
+	codexCursorCheckpointVersion   = 9
 	codexCursorCheckpointMaxString = 1 << 20
 
 	// Account for the map bucket, list element, pointers, string headers, and
@@ -61,25 +63,28 @@ type codexPendingToolCall struct {
 // though the already-persisted prefix had just been scanned. It deliberately
 // excludes parsed messages, raw transcript data, tool maps, and open files.
 type codexCursorState struct {
-	model                       string
-	reasoningEffort             string
-	serviceTierProviderID       string
-	cwd                         string
-	agentPath                   string
-	firstUserDigest             [sha256.Size]byte
-	firstUserSeen               bool
-	sawUserTurnAfterFirst       bool
-	mayReplayFirstUserPrompt    bool
-	lastTokenUsageDigest        [sha256.Size]byte
-	lastTokenUsageRecordDigest  [sha256.Size]byte
-	lastTokenUsageSeen          bool
-	lastTokenUsageResponseID    string
-	lastTokenUsageRecordPending bool
-	forkGate                    codexForkGate
-	lastTaskEvent               string
-	pendingCalls                [codexCursorMaxPendingCalls]codexPendingToolCall
-	pendingCallCount            uint8
-	pendingCallsOverflow        bool
+	model                        string
+	reasoningEffort              string
+	serviceTierProviderID        string
+	cwd                          string
+	agentPath                    string
+	firstUserDigest              [sha256.Size]byte
+	firstUserSeen                bool
+	sawUserTurnAfterFirst        bool
+	mayReplayFirstUserPrompt     bool
+	lastTokenUsageDigest         [sha256.Size]byte // previous token_count full-info key
+	lastTokenUsageRecordDigest   [sha256.Size]byte // last record's per-call counters
+	pendingUsageRecordDigest     [sha256.Size]byte // per-call counters awaiting mirror
+	lastTokenUsageSeen           bool
+	lastTokenCountSeen           bool
+	lastTokenUsageResponseID     string
+	pendingUsageRecordResponseID string
+	pendingUsageRecord           bool
+	forkGate                     codexForkGate
+	lastTaskEvent                string
+	pendingCalls                 [codexCursorMaxPendingCalls]codexPendingToolCall
+	pendingCallCount             uint8
+	pendingCallsOverflow         bool
 }
 
 // MarshalBinary encodes the compact continuation state for persistence.
@@ -128,8 +133,11 @@ func (s *codexCursorState) MarshalBinary() ([]byte, error) {
 	if s.lastTokenUsageSeen {
 		flags |= 1 << 3
 	}
-	if s.lastTokenUsageRecordPending {
+	if s.pendingUsageRecord {
 		flags |= 1 << 4
+	}
+	if s.lastTokenCountSeen {
+		flags |= 1 << 5
 	}
 	if err := write(flags); err != nil {
 		return nil, err
@@ -140,8 +148,13 @@ func (s *codexCursorState) MarshalBinary() ([]byte, error) {
 	if err := write(s.lastTokenUsageRecordDigest); err != nil {
 		return nil, err
 	}
-	if err := writeStr(s.lastTokenUsageResponseID); err != nil {
+	if err := write(s.pendingUsageRecordDigest); err != nil {
 		return nil, err
+	}
+	for _, str := range []string{s.lastTokenUsageResponseID, s.pendingUsageRecordResponseID} {
+		if err := writeStr(str); err != nil {
+			return nil, err
+		}
 	}
 	if err := writeStr(s.lastTaskEvent); err != nil {
 		return nil, err
@@ -243,14 +256,21 @@ func (s *codexCursorState) UnmarshalBinary(data []byte) error {
 	s.sawUserTurnAfterFirst = flags&(1<<1) != 0
 	s.mayReplayFirstUserPrompt = flags&(1<<2) != 0
 	s.lastTokenUsageSeen = flags&(1<<3) != 0
-	s.lastTokenUsageRecordPending = flags&(1<<4) != 0
+	s.pendingUsageRecord = flags&(1<<4) != 0
+	s.lastTokenCountSeen = flags&(1<<5) != 0
 	if err := read(&s.lastTokenUsageDigest); err != nil {
 		return err
 	}
 	if err := read(&s.lastTokenUsageRecordDigest); err != nil {
 		return err
 	}
+	if err := read(&s.pendingUsageRecordDigest); err != nil {
+		return err
+	}
 	if s.lastTokenUsageResponseID, err = readStr(); err != nil {
+		return err
+	}
+	if s.pendingUsageRecordResponseID, err = readStr(); err != nil {
 		return err
 	}
 	if s.lastTaskEvent, err = readStr(); err != nil {
@@ -425,10 +445,30 @@ func tokenUsageDigest(raw string) [sha256.Size]byte {
 	return sha256.Sum256([]byte(encoded))
 }
 
+func (s *codexCursorState) expirePendingUsageRecord() {
+	s.pendingUsageRecord = false
+	s.pendingUsageRecordDigest = [sha256.Size]byte{}
+	s.pendingUsageRecordResponseID = ""
+}
+
+// expireUsageRecordAtTurn ends the pending mirror at a turn boundary. A record
+// without a response ID has only its counters as identity, so that identity
+// also ends with the turn; a record with a response ID keeps deduplicating.
+func (s *codexCursorState) expireUsageRecordAtTurn() {
+	s.expirePendingUsageRecord()
+	s.forgetIDlessUsageRecord()
+}
+
+func (s *codexCursorState) forgetIDlessUsageRecord() {
+	if s.lastTokenUsageSeen && s.lastTokenUsageResponseID == "" {
+		s.lastTokenUsageRecordDigest = [sha256.Size]byte{}
+		s.lastTokenUsageSeen = false
+	}
+}
+
 // observeTokenUsageRecord applies record-level deduplication while retaining
 // the record identity across its mirrored token_count event. A repeated record
-// leaves the state alone, so the next token_count is compared with the event
-// before the repeat rather than treated as the repeat's mirror.
+// leaves all deduplication state untouched.
 func (s *codexCursorState) observeTokenUsageRecord(raw, responseID string) bool {
 	digest := tokenUsageDigest(raw)
 	duplicate := s.lastTokenUsageSeen && s.lastTokenUsageRecordDigest == digest &&
@@ -437,45 +477,40 @@ func (s *codexCursorState) observeTokenUsageRecord(raw, responseID string) bool 
 	if duplicate {
 		return true
 	}
-	s.lastTokenUsageDigest = digest
 	s.lastTokenUsageRecordDigest = digest
-	s.lastTokenUsageSeen = true
 	s.lastTokenUsageResponseID = responseID
-	s.lastTokenUsageRecordPending = true
-	return duplicate
+	s.lastTokenUsageSeen = true
+	s.pendingUsageRecordDigest = digest
+	s.pendingUsageRecordResponseID = responseID
+	s.pendingUsageRecord = true
+	return false
 }
 
-// observeTokenUsage records token_count's existing info-object dedup key. A
-// token_count at the next usage-bearing event is skipped only when its per-call
-// counters mirror that record; later repeats still use the existing key.
-func (s *codexCursorState) observeTokenUsage(raw, dedupKey, responseID string) bool {
-	usageDigest := tokenUsageDigest(raw)
-	mirror := s.lastTokenUsageSeen && s.lastTokenUsageRecordPending && usageDigest == s.lastTokenUsageDigest && responseID == ""
+// observeTokenUsage records token_count's full info-object key separately from
+// record identity. Duplicate counts never consume a different record's mirror.
+func (s *codexCursorState) observeTokenUsage(raw, dedupKey string) bool {
 	canonical := jsontext.Value(dedupKey).Clone()
 	if err := canonical.Canonicalize(jsontext.CanonicalizeRawInts(false)); err != nil {
-		if mirror {
-			s.lastTokenUsageSeen = true
-			s.lastTokenUsageRecordPending = false
-			return true
+		mirror := s.pendingUsageRecord && tokenUsageDigest(raw) == s.pendingUsageRecordDigest
+		s.expirePendingUsageRecord()
+		if !mirror {
+			s.forgetIDlessUsageRecord()
 		}
-		s.lastTokenUsageRecordPending = false
-		if s.lastTokenUsageResponseID == "" {
-			s.lastTokenUsageRecordDigest = [sha256.Size]byte{}
-		}
-		return false
-	}
-	if responseID != "" {
-		canonical = append(append(canonical, 0), responseID...)
+		return mirror
 	}
 	digest := sha256.Sum256(canonical)
-	duplicate := mirror || (!s.lastTokenUsageRecordPending && s.lastTokenUsageSeen && digest == s.lastTokenUsageDigest)
-	if !mirror && !duplicate && s.lastTokenUsageResponseID == "" {
-		s.lastTokenUsageRecordDigest = [sha256.Size]byte{}
+	if s.lastTokenCountSeen && digest == s.lastTokenUsageDigest {
+		return true
 	}
+	usageDigest := tokenUsageDigest(raw)
+	mirror := s.pendingUsageRecord && usageDigest == s.pendingUsageRecordDigest
 	s.lastTokenUsageDigest = digest
-	s.lastTokenUsageSeen = true
-	s.lastTokenUsageRecordPending = false
-	return duplicate
+	s.lastTokenCountSeen = true
+	s.expirePendingUsageRecord()
+	if !mirror {
+		s.forgetIDlessUsageRecord()
+	}
+	return mirror
 }
 
 type codexCursorKey struct {
@@ -627,6 +662,7 @@ func cloneCodexCursorState(state codexCursorState) codexCursorState {
 	state.agentPath = strings.Clone(state.agentPath)
 	state.lastTaskEvent = strings.Clone(state.lastTaskEvent)
 	state.lastTokenUsageResponseID = strings.Clone(state.lastTokenUsageResponseID)
+	state.pendingUsageRecordResponseID = strings.Clone(state.pendingUsageRecordResponseID)
 	for i := range state.pendingCallCount {
 		state.pendingCalls[i].id = strings.Clone(state.pendingCalls[i].id)
 		state.pendingCalls[i].name = strings.Clone(state.pendingCalls[i].name)
@@ -650,6 +686,7 @@ func estimateCodexCursorEntryBytes(
 			len(state.agentPath)+
 			len(state.lastTaskEvent)+
 			len(state.lastTokenUsageResponseID)+
+			len(state.pendingUsageRecordResponseID)+
 			codexPendingCallStringBytes(state)+
 			len(state.forkGate.parentSessionID),
 	)

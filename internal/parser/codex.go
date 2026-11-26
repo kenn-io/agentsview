@@ -385,10 +385,13 @@ func (b *codexSessionBuilder) processLine(ctx context.Context,
 ) (skip bool, err error) {
 	b.sourceLine++
 	lineType := gjson.Get(line, "type").Str
+	if lineType == codexTypeTurnContext {
+		b.expireUsageRecordAtTurn()
+	}
 	// A token_usage_record is commonly followed by response_item and
 	// item_completed lines before Codex emits the mirrored token_count. Keep
 	// the record candidate across those transcript lines; the next
-	// usage-bearing event (record or token_count) resolves it.
+	// usage-bearing token_count or a new turn resolves it.
 	if lineType == codexTypeTurnContext {
 		b.sourceTurnID = strings.Clone(gjson.Get(line, "payload.turn_id").Str)
 		b.sourceTurnContexts = append(b.sourceTurnContexts, b.sourceTurnID)
@@ -785,7 +788,7 @@ func (b *codexSessionBuilder) applyTokenUsage(raw, dedupKey, responseID string, 
 	if record {
 		duplicate = b.observeTokenUsageRecord(raw, responseID)
 	} else {
-		duplicate = b.observeTokenUsage(raw, dedupKey, responseID)
+		duplicate = b.observeTokenUsage(raw, dedupKey)
 	}
 	if duplicate {
 		return
