@@ -287,6 +287,9 @@ func runParserProcess(ctx context.Context, stopChild context.CancelFunc, cmd *ex
 	if err = cmd.Start(); err != nil {
 		stdin.Close()
 		stdout.Close()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		return ErrSandboxUnavailable
 	}
 
