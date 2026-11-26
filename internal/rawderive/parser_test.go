@@ -764,22 +764,37 @@ func TestProviderParserHostedCodexLabeledCopies(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	content := testjsonl.JoinJSONL(testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-09-10T10:00:00Z"), testjsonl.CodexMsgJSON("user", "hello", "2026-09-10T10:00:01Z"))
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-	roots := []string{root}
-	provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{Roots: roots})
-	require.True(t, ok)
-	sources, err := provider.Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	manifest, objects := manifestFromCapturePlan(t, parser.AgentCodex, provider, sources[0])
-	materialized, err := (Materializer{Store: &materializerStore{objects: objects}, BaseDir: t.TempDir(), MaxTotalBytes: 1 << 20}).Materialize(t.Context(), manifest)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, materialized.Cleanup()) })
-	dispatch, err := NewProviderParser(parser.ProviderFactories(), "hosted-worker")
-	require.NoError(t, err)
-	hosted, err := dispatch.Parse(t.Context(), manifest, materialized)
-	require.NoError(t, err)
-	require.Len(t, hosted.Outcome.Results, 1)
-	assert.Equal(t, "team/a", hosted.Outcome.Results[0].Result.Session.Project)
+	inner := filepath.Join(root, "team")
+	for _, roots := range [][]string{{root, inner}, {inner, root}} {
+		provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{Roots: roots})
+		require.True(t, ok)
+		var sources []parser.SourceRef
+		complete, err := parser.StreamRawCaptureSources(t.Context(), provider, func(source parser.SourceRef) error {
+			sources = append(sources, source)
+			return nil
+		})
+		require.NoError(t, err)
+		require.True(t, complete)
+		require.Len(t, sources, 1)
+		for _, watchRoot := range roots {
+			changed, err := parser.RawCaptureSourcesForChangedPath(t.Context(), provider, parser.ChangedPathRequest{Path: path, WatchRoot: watchRoot, EventKind: "write"})
+			require.NoError(t, err)
+			require.Len(t, changed, 1)
+			sources = append(sources, changed[0])
+		}
+		for _, source := range sources {
+			manifest, objects := manifestFromCapturePlan(t, parser.AgentCodex, provider, source)
+			materialized, err := (Materializer{Store: &materializerStore{objects: objects}, BaseDir: t.TempDir(), MaxTotalBytes: 1 << 20}).Materialize(t.Context(), manifest)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, materialized.Cleanup()) })
+			dispatch, err := NewProviderParser(parser.ProviderFactories(), "hosted-worker")
+			require.NoError(t, err)
+			hosted, err := dispatch.Parse(t.Context(), manifest, materialized)
+			require.NoError(t, err)
+			require.Len(t, hosted.Outcome.Results, 1)
+			assert.Equal(t, "team/a", hosted.Outcome.Results[0].Result.Session.Project)
+		}
+	}
 }
 
 func TestProviderParserHostedCodexOrphanPreservesHistory(t *testing.T) {

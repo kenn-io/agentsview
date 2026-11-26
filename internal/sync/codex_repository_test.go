@@ -259,11 +259,11 @@ func TestCodexLabeledRunResyncAndExplicitWorktreeMappingWins(t *testing.T) {
 }
 
 func TestCodexLabeledCopyWinsSync(t *testing.T) {
-	for _, mode := range []string{"quick sync", "ordinary event after labeled copy", "usage refresh", "missed event", "id refresh"} {
+	for _, mode := range []string{"quick sync", "ordinary event after labeled copy", "ordinary first in batch", "usage refresh", "missed event", "id refresh"} {
 		t.Run(mode, func(t *testing.T) {
 			database := openTestDB(t)
 			root := t.TempDir()
-			ordinary, logs := filepath.Join(root, "ordinary"), filepath.Join(root, "logs")
+			ordinary, logs := filepath.Join(root, "a-ordinary"), filepath.Join(root, "logs")
 			const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 			name := "rollout-2026-10-08T12-00-00-" + id + ".jsonl"
 			paths := []string{filepath.Join(ordinary, "2026", "10", "08", name), filepath.Join(logs, "a", ".codex-run-v1-abc", "sessions", "2026", "10", "08", name), filepath.Join(logs, "b", ".codex-run-v1-abc", "sessions", "2026", "10", "08", name)}
@@ -284,6 +284,9 @@ func TestCodexLabeledCopyWinsSync(t *testing.T) {
 			case "ordinary event after labeled copy":
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[2]}))
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[0]}))
+			case "ordinary first in batch":
+				require.Less(t, paths[0], paths[2])
+				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[0], paths[2]}))
 			case "quick sync":
 				now := time.Now()
 				require.NoError(t, os.Chtimes(paths[1], now.Add(-2*time.Hour), now.Add(-2*time.Hour)))
