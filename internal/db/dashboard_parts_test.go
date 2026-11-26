@@ -536,6 +536,7 @@ func TestDashboardPartsMemoEvictsLeastRecentlyUsed(t *testing.T) {
 		got := make(map[string]kept.Part[dashboardPart])
 		memo.reuseSelection("UTC", "version", []dashboardSession{{ID: "a"}}, map[string]string{"a": "new"}, got)
 		assert.Empty(t, got)
+		assert.NotContains(t, memo.keys(), "a")
 		memo.storeParts("UTC", "version", map[string]kept.Part[dashboardPart]{"c": c})
 		assert.Equal(t, []string{"b", "c"}, memo.keys())
 	})

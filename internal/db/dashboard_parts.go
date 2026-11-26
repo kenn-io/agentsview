@@ -46,9 +46,15 @@ func (m *dashboardPartsMemo) reuseSelection(slot, version string, sessions []das
 		return
 	}
 	for _, session := range sessions {
-		if p, ok := m.peek(session.ID); ok && p.Fingerprint == versions[session.ID] {
+		p, ok := m.get(session.ID)
+		if !ok {
+			continue
+		}
+		fingerprint, current := versions[session.ID]
+		if current && p.Fingerprint == fingerprint {
 			parts[session.ID] = p
-			_, _ = m.get(session.ID)
+		} else {
+			m.remove(session.ID)
 		}
 	}
 }

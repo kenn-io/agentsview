@@ -161,12 +161,13 @@ func (db *DB) activityReportRuns(
 	for _, id := range ids {
 		key := activityMemoKey{id, lower}
 		if generation == m.generation {
-			if e, ok := m.peek(key); ok {
-				if version, exists := versions[id]; exists && e.version == version && !q.EffectiveEnd.After(e.upper) {
+			if e, ok := m.get(key); ok {
+				version, exists := versions[id]
+				if exists && e.version == version && !q.EffectiveEnd.After(e.upper) {
 					sessions[id] = e
-					_, _ = m.get(key)
 					continue
 				}
+				m.remove(key)
 			}
 		}
 		misses = append(misses, id)
