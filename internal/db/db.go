@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"database/sql/driver"
 	_ "embed"
 	"encoding/hex"
 	"errors"
@@ -992,7 +993,8 @@ type DB struct {
 	mu                   sync.Mutex // serializes writes
 	compactMu            sync.Mutex // serializes staged archive compactions
 	connMu               sync.RWMutex
-	retired              []*sql.DB // old pools kept open for in-flight reads
+	readPause            atomic.Pointer[chan struct{}] // non-nil while a live file swap pauses new readers
+	retired              []*sql.DB                     // old pools kept open for in-flight reads
 	// undrainedPools holds closed pools whose connections had not drained
 	// when CloseWriter or CloseConnections gave up. They must drain before
 	// a later close reports success, or write ownership could be released
@@ -1105,22 +1107,45 @@ func (r *readerHandle) current() *sql.DB {
 	return r.owner.reader.Load()
 }
 
+// acquirePool waits while a live database swap has paused new readers, then
+// returns the active reader pool alongside a once-wrapped connMu.RUnlock.
+func (r *readerHandle) acquirePool(ctx context.Context) (*sql.DB, func(), error) {
+	for {
+		r.owner.connMu.RLock()
+		if ch := r.owner.readPause.Load(); ch != nil {
+			r.owner.connMu.RUnlock()
+			select {
+			case <-*ch:
+				continue
+			case <-ctx.Done():
+				return nil, nil, ctx.Err()
+			}
+		}
+		return r.current(), sync.OnceFunc(r.owner.connMu.RUnlock), nil
+	}
+}
+
 func (r *readerHandle) Exec(ctx context.Context,
 	query string, args ...any,
 ) (sql.Result, error) {
-	r.owner.connMu.RLock()
-	defer r.owner.connMu.RUnlock()
-	return r.current().ExecContext(ctx, query, args...)
+	pool, unlock, err := r.acquirePool(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	return pool.ExecContext(ctx, query, args...)
 }
 
 func (r *readerHandle) Query(ctx context.Context,
 	query string, args ...any,
 ) (*sql.Rows, error) {
-	r.owner.connMu.RLock()
-	unlock := sync.OnceFunc(r.owner.connMu.RUnlock)
+	pool, unlock, err := r.acquirePool(ctx)
+	if err != nil {
+		return nil, err
+	}
 	defer unlock()
 	ctx = context.WithValue(ctx, readerQueryUnlockKey{}, unlock)
-	return r.current().QueryContext(ctx, query, args...)
+	return pool.QueryContext(ctx, query, args...)
 }
 
 func (r *readerHandle) QueryContext(
@@ -1129,14 +1154,32 @@ func (r *readerHandle) QueryContext(
 	return r.Query(ctx, query, args...)
 }
 
+type errConnector struct {
+	err error
+}
+
+func (c errConnector) Connect(context.Context) (driver.Conn, error) {
+	return nil, c.err
+}
+
+func (errConnector) Driver() driver.Driver { return nil }
+
+func errorSQLRow(ctx context.Context, err error) *sql.Row {
+	tmp := sql.OpenDB(errConnector{err: err})
+	defer func() { _ = tmp.Close() }()
+	return tmp.QueryRowContext(ctx, "")
+}
+
 func (r *readerHandle) QueryRow(ctx context.Context,
 	query string, args ...any,
 ) *sql.Row {
-	r.owner.connMu.RLock()
-	unlock := sync.OnceFunc(r.owner.connMu.RUnlock)
+	pool, unlock, err := r.acquirePool(ctx)
+	if err != nil {
+		return errorSQLRow(ctx, err)
+	}
 	defer unlock()
 	ctx = context.WithValue(ctx, readerQueryUnlockKey{}, unlock)
-	return r.current().QueryRowContext(ctx, query, args...)
+	return pool.QueryRowContext(ctx, query, args...)
 }
 
 func (r *readerHandle) QueryRowContext(
@@ -1148,15 +1191,21 @@ func (r *readerHandle) QueryRowContext(
 func (r *readerHandle) BeginTx(
 	ctx context.Context, opts *sql.TxOptions,
 ) (*sql.Tx, error) {
-	r.owner.connMu.RLock()
-	defer r.owner.connMu.RUnlock()
-	return r.current().BeginTx(ctx, opts)
+	pool, unlock, err := r.acquirePool(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	return pool.BeginTx(ctx, opts)
 }
 
 func (r *readerHandle) Conn(ctx context.Context) (*sql.Conn, error) {
-	r.owner.connMu.RLock()
-	defer r.owner.connMu.RUnlock()
-	return r.current().Conn(ctx)
+	pool, unlock, err := r.acquirePool(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	return pool.Conn(ctx)
 }
 
 func (w *writerHandle) current() (*sql.DB, error) {
@@ -5851,6 +5900,28 @@ func SetCloseDrainTimeoutForTest(d time.Duration) (restore func()) {
 	return func() { closeDrainTimeout = prev }
 }
 
+// PauseReads holds new readerHandle queries until Reopen installs a fresh
+// reader pool or the returned resume function runs. In-flight queries that
+// already leased a connection keep running and drain when CloseConnections
+// runs. Live archive swaps call PauseReads before CloseConnections and defer
+// resume so concurrent HTTP reads wait across the file swap instead of failing
+// with sql: database is closed.
+func (db *DB) PauseReads() func() {
+	ch := make(chan struct{})
+	db.connMu.Lock()
+	if prev := db.readPause.Swap(&ch); prev != nil {
+		close(*prev)
+	}
+	db.connMu.Unlock()
+	return sync.OnceFunc(func() {
+		db.connMu.Lock()
+		if db.readPause.CompareAndSwap(&ch, nil) {
+			close(ch)
+		}
+		db.connMu.Unlock()
+	})
+}
+
 // CloseConnections closes both connections without reopening,
 // releasing file locks so the database file can be renamed.
 // Also drains any retired pools from previous Reopen calls.
@@ -6076,6 +6147,11 @@ func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
 	// resync swap that ran behind the worker write barrier would reopen the
 	// pool yet keep rejecting writes.
 	db.writerClosed.Store(keepWriterBarrier)
+	// Resume readers paused for a live swap now that the replacement reader
+	// pool is installed.
+	if paused := db.readPause.Swap(nil); paused != nil {
+		close(*paused)
+	}
 
 	// Retire the just-swapped pools. Concurrent readers that
 	// loaded the old pointer before the swap may still have

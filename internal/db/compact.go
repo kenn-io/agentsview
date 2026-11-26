@@ -640,6 +640,8 @@ func checkpointWALTruncateConn(ctx context.Context, conn *sql.DB) error {
 // write barrier still up. On failure the unchanged (or restored) original is
 // serving again before the error returns.
 func (db *DB) installCompactCandidate(ctx context.Context, op *compactOperation) error {
+	resumeReads := db.PauseReads()
+	defer resumeReads()
 	db.mu.Lock()
 	if err := db.closeConnectionsLocked(ctx); err != nil {
 		return db.reopenUnchangedAfterSwapFailureLocked(

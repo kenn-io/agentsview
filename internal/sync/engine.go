@@ -3024,6 +3024,14 @@ func (e *Engine) swapResyncDatabaseLocked(
 		})
 	}
 
+	// Stop background usage-cache backfill before pausing reads so its worker
+	// exits cleanly, then hold new reads across the close-rename-reopen window
+	// so live HTTP requests wait for the replacement pool instead of failing
+	// with sql: database is closed.
+	origDB.StopUsageCacheBackfill()
+	resumeReads := origDB.PauseReads()
+	defer resumeReads()
+
 	// Close the original to quiesce writes and checkpoint its WAL before the
 	// rename. The worker path already holds the daemon's write barrier; the
 	// in-process path relies on this close for the same guarantee.

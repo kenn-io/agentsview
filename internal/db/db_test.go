@@ -5257,6 +5257,52 @@ func TestCloseConnectionsBlocksConcurrentReopen(t *testing.T) {
 	assert.NotNil(t, s, "session s1 missing after Reopen")
 }
 
+func TestPauseReadsHoldsQueriesAcrossCloseAndReopen(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "proj")
+
+	resume := d.PauseReads()
+	defer resume()
+
+	require.NoError(t, d.CloseConnections(t.Context()), "CloseConnections")
+
+	// A read whose context cancels while paused must unblock with context.Canceled
+	// instead of waiting or reporting sql: database is closed.
+	canceledCtx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := d.GetSession(canceledCtx, "s1")
+	require.ErrorIs(t, err, context.Canceled)
+
+	// A live read blocks while connections are closed and completes against the
+	// replacement pool as soon as Reopen installs it.
+	type readResult struct {
+		session *Session
+		err     error
+	}
+	readDone := make(chan readResult, 1)
+	go func() {
+		s, readErr := d.GetSession(t.Context(), "s1")
+		readDone <- readResult{session: s, err: readErr}
+	}()
+
+	select {
+	case res := <-readDone:
+		require.Failf(t, "read returned while paused", "session=%v err=%v", res.session, res.err)
+	case <-time.After(100 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; read must remain paused until Reopen installs the new pool
+	}
+
+	require.NoError(t, d.Reopen(), "Reopen")
+
+	select {
+	case res := <-readDone:
+		require.NoError(t, res.err, "GetSession after Reopen")
+		require.NotNil(t, res.session)
+		assert.Equal(t, "s1", res.session.ID)
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "paused read did not wake after Reopen")
+	}
+}
+
 func TestCloseWriterWaitsForInFlightWriterQuery(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "proj")

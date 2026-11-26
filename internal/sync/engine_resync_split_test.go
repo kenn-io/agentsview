@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	gosync "sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1005,5 +1006,61 @@ func TestResyncCanceledDuringFinalizationAborts(t *testing.T) {
 			requireOriginalArchiveServes(t, e, database)
 			assert.NoFileExists(t, e.ResyncTempPath())
 		})
+	}
+}
+
+func TestSwapResyncDatabaseConcurrentReadsDoNotFail(t *testing.T) {
+	e, database, _ := newResyncSplitEngine(t)
+	tempPath, stats, err := e.ResyncBuild(t.Context(), nil)
+	require.NoError(t, err)
+	require.False(t, stats.Aborted)
+
+	readCtx, cancelReads := context.WithCancel(t.Context())
+	defer cancelReads()
+
+	errCh := make(chan error, 8)
+	started := make(chan struct{}, 4)
+	var wg gosync.WaitGroup
+	for range 4 {
+		wg.Go(func() {
+			first := true
+			for readCtx.Err() == nil {
+				msgs, readErr := database.GetMessagesWindow(readCtx, "keep0", db.MessageWindow{Limit: 10, Asc: true})
+				if readErr != nil {
+					if readCtx.Err() == nil {
+						select {
+						case errCh <- readErr:
+						default:
+						}
+					}
+					return
+				}
+				if len(msgs) == 0 {
+					select {
+					case errCh <- errors.New("expected messages for keep0"):
+					default:
+					}
+					return
+				}
+				if first {
+					first = false
+					started <- struct{}{}
+				}
+			}
+		})
+	}
+	for range 4 {
+		<-started
+	}
+
+	installed, err := e.SwapResyncDatabase(t.Context(), tempPath)
+	require.NoError(t, err)
+	require.True(t, installed)
+
+	cancelReads()
+	wg.Wait()
+	close(errCh)
+	for readErr := range errCh {
+		require.NoError(t, readErr, "concurrent read failed during resync database swap")
 	}
 }
