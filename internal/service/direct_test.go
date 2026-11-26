@@ -972,6 +972,31 @@ func TestDirectBackend_Sync_CodexDuplicatePath(t *testing.T) {
 	assert.Equal(t, "codex:"+id, detail.ID)
 }
 
+func TestDirectBackend_Sync_CodexUnconfiguredPathDoesNotReturnArchivedSession(t *testing.T) {
+	root := t.TempDir()
+	const id = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+	name := "rollout-2026-10-08T12-00-00-" + id + ".jsonl"
+	configured := filepath.Join(root, "configured", name)
+	unconfigured := filepath.Join(root, "unconfigured", name)
+	content := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z") + "\n" +
+		testjsonl.CodexMsgJSON("user", "archived", "2026-10-08T12:00:01Z") + "\n"
+	dbtest.WriteTestFile(t, configured, []byte(content))
+	dbtest.WriteTestFile(t, unconfigured, []byte(content))
+	d := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(t.Context(), d, sync.EngineConfig{
+		Machine: "local", DisableFilesystemProjectDiscovery: true,
+		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {filepath.Dir(configured)}},
+	})
+	t.Cleanup(engine.Close)
+	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{configured}))
+	svc := service.NewDirectBackend(d, engine)
+
+	detail, err := svc.Sync(t.Context(), service.SyncInput{Path: unconfigured})
+	require.Error(t, err)
+	assert.Nil(t, detail)
+	assert.Contains(t, err.Error(), "no session found")
+}
+
 func TestDirectBackend_Sync_RemoteCodexID(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	path := "remote:/archive/session.jsonl"

@@ -823,19 +823,7 @@ func (b *directBackend) resolveSessionIDByPath(
 	}
 	switch len(ids) {
 	case 0:
-		if uuid := parser.CodexSessionUUIDFromPath(path); uuid != "" {
-			id := parser.CodexSourceKey(parser.AgentCodex, uuid)
-			session, err := b.db.GetSession(ctx, id)
-			if err != nil {
-				return "", fmt.Errorf("sync: resolving Codex session for path %q: %w", path, err)
-			}
-			if session != nil {
-				return id, nil
-			}
-		}
-		return "", fmt.Errorf(
-			"sync: no session found for path %q", path,
-		)
+		return b.resolveCodexSessionIDByPath(ctx, path)
 	case 1:
 		return ids[0], nil
 	default:
@@ -845,6 +833,43 @@ func (b *directBackend) resolveSessionIDByPath(
 			len(ids), path, ids,
 		)
 	}
+}
+
+func (b *directBackend) resolveCodexSessionIDByPath(
+	ctx context.Context, path string,
+) (string, error) {
+	noSession := func() (string, error) {
+		return "", fmt.Errorf("sync: no session found for path %q", path)
+	}
+	uuid := parser.CodexSessionUUIDFromPath(path)
+	if uuid == "" {
+		return noSession()
+	}
+	plan, err := b.engine.PlanChangedPathsContext(ctx, []string{path})
+	if err != nil {
+		return "", fmt.Errorf("sync: classifying provider for path %q: %w", path, err)
+	}
+	codexSource := false
+	for _, file := range plan.Files {
+		if file.Agent != parser.AgentCodex || file.ProviderSource == nil ||
+			file.ProviderSource.Provider != parser.AgentCodex ||
+			parser.CodexSessionUUIDFromPath(file.Path) != uuid {
+			return noSession()
+		}
+		codexSource = true
+	}
+	if !codexSource {
+		return noSession()
+	}
+	id := parser.CodexSourceKey(parser.AgentCodex, uuid)
+	session, err := b.db.GetSession(ctx, id)
+	if err != nil {
+		return "", fmt.Errorf("sync: resolving Codex session for path %q: %w", path, err)
+	}
+	if session == nil {
+		return noSession()
+	}
+	return id, nil
 }
 
 func isVirtualSessionContainerPath(path string) bool {
