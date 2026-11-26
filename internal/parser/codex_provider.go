@@ -1625,9 +1625,6 @@ func (s codexSourceSet) preferredKnownRolloutSource(
 }
 
 func (s codexSourceSet) findCanonicalSource(ctx context.Context, uuid string) (SourceRef, bool, error) {
-	if !IsValidSessionID(uuid) {
-		return SourceRef{}, false, nil
-	}
 	var best SourceRef
 	foundExisting := false
 	for _, root := range s.roots {
@@ -1678,8 +1675,7 @@ func CodexSourceKey(agent AgentType, uuid string) string {
 	return codexSourceKey(agent, uuid)
 }
 
-// CodexLabeledSourceClass ranks labeled copies above ordinary copies.
-const CodexLabeledSourceClass = 2
+const codexLabeledSourceClass = 2
 
 // CodexSourceRank ranks a source for duplicate selection.
 func CodexSourceRank(source SourceRef) ReconciliationSourceRank {
@@ -1699,7 +1695,7 @@ func CodexSourceRank(source SourceRef) ReconciliationSourceRank {
 		if info, err := os.Stat(path); err == nil {
 			recency = info.ModTime().UnixNano()
 		}
-		return ReconciliationSourceRank{Class: CodexLabeledSourceClass, Recency: recency, Path: src.Path}
+		return ReconciliationSourceRank{Class: codexLabeledSourceClass, Recency: recency, Path: src.Path}
 	}
 	return ReconciliationSourceRank{}
 }

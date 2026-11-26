@@ -456,6 +456,47 @@ func TestScopedUpgradeWaitsForAuthoritativeFullPass(t *testing.T) {
 	}
 }
 
+func TestCodexLabeledProjectUpgrade(t *testing.T) {
+	ctx := t.Context()
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	path := filepath.Join(root, "team", "case", ".codex-run-v1-abc", "sessions", "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
+	body := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z"),
+		testjsonl.CodexMsgJSON("user", "hello", "2026-10-08T12:00:01Z"),
+	)
+	dbtest.WriteTestFile(t, path, []byte(body))
+	cfg := sync.EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{
+		parser.AgentCodex: {filepath.Join(root, "team"), root},
+	}}
+	engine := sync.NewEngine(ctx, database, cfg)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	engine.Close()
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, "UPDATE sessions SET project='case', data_version=189; PRAGMA user_version=189")
+		return err
+	}))
+	dbPath := database.Path()
+	require.NoError(t, database.Close())
+	database, err := db.OpenIsolated(ctx, dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine = sync.NewEngine(ctx, database, cfg)
+	t.Cleanup(engine.Close)
+	stats := engine.SyncAll(ctx, nil)
+	require.Zero(t, stats.Failed)
+	assert.False(t, stats.ArchiveRebuilt)
+	assert.Equal(t, 1, stats.Synced)
+	session, err := database.GetSessionFull(ctx, "codex:"+id)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, "team/case", session.Project)
+	require.NotNil(t, session.FilePath)
+	assert.Equal(t, path, *session.FilePath)
+	assert.Zero(t, engine.SyncAll(ctx, nil).Synced)
+}
+
 func TestCodexGitBranchUpgradeReparsesCodexInPlace(t *testing.T) {
 	scope := db.ScopedDataVersionProviders(132, 133)
 	assert.ElementsMatch(t,

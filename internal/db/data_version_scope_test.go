@@ -29,6 +29,10 @@ func TestAntigravityCLIPromptEnvelopeUpgradeScopes(t *testing.T) {
 		ScopedDataVersionProviders(158, 160))
 }
 
+func TestCodexLabeledProjectUpgradeScope(t *testing.T) {
+	assert.Equal(t, []parser.AgentType{parser.AgentCodex}, ScopedDataVersionProviders(189, 190))
+}
+
 func TestHermesCompactionUpgradeScopes(t *testing.T) {
 	assert.ElementsMatch(t, []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop},
 		ScopedDataVersionProviders(186, 187))

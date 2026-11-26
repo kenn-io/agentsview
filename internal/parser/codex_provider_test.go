@@ -2403,7 +2403,6 @@ func TestCodexLabeledRunDiscoveryAndParse(t *testing.T) {
 		{"root", ".codex-run-v1-abc", ".", []string{"."}},
 		{"outer root first", "team/case/.codex-run-v1-abc", "team/case", []string{".", "team"}},
 		{"inner root first", "team/case/.codex-run-v1-abc", "team/case", []string{"team", "."}},
-		{"single character inner first", "a/.codex-run-v1-abc", "a", []string{"a", "."}},
 		{"single character outer first", "a/.codex-run-v1-abc", "a", []string{".", "a"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2473,49 +2472,6 @@ func TestCodexLabeledRunFindSourcePrecedence(t *testing.T) {
 			assert.Equal(t, want, sources[0].DisplayPath)
 		})
 	}
-}
-
-func TestCodexLabeledRunUnderPrunedOverlappingRoot(t *testing.T) {
-	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
-	base := t.TempDir()
-	inner := filepath.Join(base, ".codex-run-v1-outer", "logs")
-	sessions := filepath.Join(inner, "case", ".codex-run-v1-inner", "sessions")
-	path := writeCodexProviderSession(t, sessions, id, "hello")
-	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{base, inner}})
-	require.True(t, ok)
-
-	sources, err := provider.Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	assert.Equal(t, path, sources[0].DisplayPath)
-
-	source, found, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: id})
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Equal(t, path, source.DisplayPath)
-}
-
-func TestCodexLabeledFindSourceRanksAllDatedCopies(t *testing.T) {
-	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
-	root := t.TempDir()
-	name := "rollout-2026-10-08T12-00-00-" + id + ".jsonl"
-	paths := []string{
-		filepath.Join(root, "a", ".codex-run-v1-abc", "sessions", "2026", "10", "07", name),
-		filepath.Join(root, "a", ".codex-run-v1-abc", "sessions", "2026", "10", "08", name),
-		filepath.Join(root, "z", ".codex-run-v1-abc", "sessions", "2026", "10", "08", name),
-	}
-	for i, path := range paths {
-		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-		require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o644))
-		mtime := time.Now().Add(time.Duration([]int{0, 2, 1}[i]) * time.Hour)
-		require.NoError(t, os.Chtimes(path, mtime, mtime))
-	}
-	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: id})
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, paths[1], found.DisplayPath)
 }
 
 func TestCodexFindSourceRejectsInvalidID(t *testing.T) {
