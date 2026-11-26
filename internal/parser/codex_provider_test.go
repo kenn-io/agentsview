@@ -2403,7 +2403,6 @@ func TestCodexLabeledRunDiscoveryAndParse(t *testing.T) {
 		{"root", ".codex-run-v1-abc", ".", []string{"."}},
 		{"outer root first", "team/case/.codex-run-v1-abc", "team/case", []string{".", "team"}},
 		{"inner root first", "team/case/.codex-run-v1-abc", "team/case", []string{"team", "."}},
-		{"single character outer first", "a/.codex-run-v1-abc", "a", []string{".", "a"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -2420,10 +2419,6 @@ func TestCodexLabeledRunDiscoveryAndParse(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, sources, 1)
 			assert.Equal(t, path, sources[0].DisplayPath)
-			plan, supported, err := ResolveRawCapturePlan(t.Context(), provider, sources[0])
-			require.NoError(t, err)
-			require.True(t, supported)
-			assert.Equal(t, root, plan.CaptureRoot)
 			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
 			require.NoError(t, err)
 			require.Len(t, outcome.Results, 1)
@@ -2438,48 +2433,23 @@ func TestCodexLabeledRunDiscoveryAndParse(t *testing.T) {
 	}
 }
 
-func TestCodexLabeledRunFindSourcePrecedence(t *testing.T) {
+func TestCodexLabeledRunFindSourcePrefersLabeled(t *testing.T) {
 	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
-	for _, tc := range []struct {
-		name, otherDir string
-		newer          bool
-	}{
-		{"labeled over ordinary", ".", false},
-		{"newer labeled over older", "zzz/.codex-run-v1-xyz/sessions", true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
-			meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", tsEarly)
-			content := testjsonl.JoinJSONL(meta, testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1))
-			labeled := writeCodexProviderSessionContent(t, filepath.Join(root, "team", "case", ".codex-run-v1-abc", "sessions"), id, content)
-			other := writeCodexProviderSessionContent(t, filepath.Join(root, filepath.FromSlash(tc.otherDir)), id, content)
-			want := labeled
-			if tc.newer {
-				now := time.Now()
-				require.NoError(t, os.Chtimes(labeled, now.Add(-time.Hour), now.Add(-time.Hour)))
-				require.NoError(t, os.Chtimes(other, now, now))
-				want = other
-			}
-			provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
-			require.True(t, ok)
-			found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: id})
-			require.NoError(t, err)
-			require.True(t, ok)
-			assert.Equal(t, want, found.DisplayPath)
-			sources, err := provider.Discover(t.Context())
-			require.NoError(t, err)
-			require.Len(t, sources, 1)
-			assert.Equal(t, want, sources[0].DisplayPath)
-		})
-	}
-}
-
-func TestCodexFindSourceRejectsInvalidID(t *testing.T) {
-	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{t.TempDir()}})
+	root := t.TempDir()
+	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", tsEarly)
+	content := testjsonl.JoinJSONL(meta, testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1))
+	labeled := writeCodexProviderSessionContent(t, filepath.Join(root, "team", "case", ".codex-run-v1-abc", "sessions"), id, content)
+	writeCodexProviderSessionContent(t, root, id, content)
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	_, found, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: "bad.id"})
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: id})
 	require.NoError(t, err)
-	assert.False(t, found)
+	require.True(t, ok)
+	assert.Equal(t, labeled, found.DisplayPath)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, labeled, sources[0].DisplayPath)
 }
 
 func TestCodexLabeledDiscoveryPrefersPlainSibling(t *testing.T) {

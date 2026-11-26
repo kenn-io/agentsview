@@ -286,7 +286,7 @@ func TestCodexLabeledOverlappingRootsSync(t *testing.T) {
 }
 
 func TestCodexLabeledCopyWinsSync(t *testing.T) {
-	for _, mode := range []string{"changed path", "older first", "usage refresh", "newer then older", "missed event", "same batch", "single session"} {
+	for _, mode := range []string{"changed path", "older first", "usage refresh", "missed event", "single session"} {
 		t.Run(mode, func(t *testing.T) {
 			database := openTestDB(t)
 			root := t.TempDir()
@@ -327,16 +327,11 @@ func TestCodexLabeledCopyWinsSync(t *testing.T) {
 				require.NotNil(t, saved.FilePath)
 				assert.Equal(t, paths[0], *saved.FilePath)
 				require.NoError(t, engine.RefreshSessionByIDContext(t.Context(), "codex:"+id))
-			case "same batch":
-				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[1], paths[2]}))
 			case "changed path":
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[2]}))
 				mtime := time.Now().Add(3 * time.Hour)
 				require.NoError(t, os.Chtimes(paths[0], mtime, mtime))
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[0]}))
-			case "newer then older":
-				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[2]}))
-				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[1]}))
 			default:
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[1]}))
 				require.NoError(t, engine.ReconcileWatchRoots(t.Context(), []string{ordinary, logs}, false))

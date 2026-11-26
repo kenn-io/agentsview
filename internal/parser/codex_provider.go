@@ -1631,30 +1631,24 @@ func (s codexSourceSet) findCanonicalSource(ctx context.Context, uuid string) (S
 		if err := ctx.Err(); err != nil {
 			return SourceRef{}, false, err
 		}
-		dirs := []string{root}
+		paths := []string{s.findSourceFile(root, uuid)}
 		if s.agent == AgentCodex {
-			labeled, err := labeledSessionDirs(ctx, root)
+			dirs, err := labeledSessionDirs(ctx, root)
 			if err != nil {
 				return SourceRef{}, false, err
 			}
-			dirs = append(dirs, labeled...)
-		}
-		for _, dir := range dirs {
-			var paths []string
-			if dir == root {
-				paths = []string{s.findSourceFile(dir, uuid)}
-			} else {
-				paths = s.discoverSessionPaths(dir)
+			for _, dir := range dirs {
+				paths = append(paths, s.discoverSessionPaths(dir)...)
 			}
-			for _, path := range paths {
-				if extractUUIDFromRollout(filepath.Base(path)) != uuid {
-					continue
-				}
-				candidate, ok := s.sourceRef(root, path, true)
-				if ok && (!foundExisting || preferCodexSource(candidate, best)) {
-					best = candidate
-					foundExisting = true
-				}
+		}
+		for _, path := range paths {
+			if extractUUIDFromRollout(filepath.Base(path)) != uuid {
+				continue
+			}
+			candidate, ok := s.sourceRef(root, path, true)
+			if ok && (!foundExisting || preferCodexSource(candidate, best)) {
+				best = candidate
+				foundExisting = true
 			}
 		}
 	}
@@ -1680,24 +1674,18 @@ const codexLabeledSourceClass = 2
 // CodexSourceRank ranks a source for duplicate selection.
 func CodexSourceRank(source SourceRef) ReconciliationSourceRank {
 	src, ok := source.Opaque.(codexSource)
-	if !ok {
+	if !ok || CodexSourceLabel(src.Root, src.Path) == "" {
 		return ReconciliationSourceRank{}
 	}
-	if CodexSourceLabel(src.Root, src.Path) != "" {
-		var recency int64
-		path := src.Path
-		if isCompressedCodexRolloutPath(path) {
-			plain := codexPlainRolloutPath(path)
-			if _, err := os.Stat(plain); err == nil {
-				path = plain
-			}
-		}
-		if info, err := os.Stat(path); err == nil {
-			recency = info.ModTime().UnixNano()
-		}
-		return ReconciliationSourceRank{Class: codexLabeledSourceClass, Recency: recency, Path: src.Path}
+	path := src.Path
+	if plain := codexPlainRolloutPath(path); isCompressedCodexRolloutPath(path) && IsRegularFile(plain) {
+		path = plain
 	}
-	return ReconciliationSourceRank{}
+	var recency int64
+	if info, err := os.Stat(path); err == nil {
+		recency = info.ModTime().UnixNano()
+	}
+	return ReconciliationSourceRank{Class: codexLabeledSourceClass, Recency: recency, Path: src.Path}
 }
 
 // PreferLabeledCodexSource compares labeled copies, or leaves ordinary copies to the caller.

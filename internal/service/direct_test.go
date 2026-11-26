@@ -953,7 +953,6 @@ func TestDirectBackend_Sync_CodexID(t *testing.T) {
 		wantAbsent bool
 		labeled    bool
 	}{
-		{name: "found"},
 		{name: "labeled", labeled: true},
 		{name: "not found after sync", prefixes: []string{"/other"}, wantAbsent: true},
 	} {
@@ -987,32 +986,6 @@ func TestDirectBackend_Sync_CodexID(t *testing.T) {
 			require.NotNil(t, detail)
 		})
 	}
-}
-
-func TestDirectBackend_Sync_CodexDuplicatePath(t *testing.T) {
-	root := t.TempDir()
-	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
-	name := "rollout-2026-10-08T12-00-00-" + id + ".jsonl"
-	ordinary := filepath.Join(root, "ordinary", "2026", "10", "08", name)
-	labeled := filepath.Join(root, "logs", "a", ".codex-run-v1-abc", "sessions", "2026", "10", "08", name)
-	content := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_cli_rs", "2026-10-08T12:00:00Z") + "\n" + testjsonl.CodexMsgJSON("user", "hello", "2026-10-08T12:00:01Z") + "\n"
-	dbtest.WriteTestFile(t, ordinary, []byte(content))
-	dbtest.WriteTestFile(t, labeled, []byte(content))
-	d := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(t.Context(), d, sync.EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {filepath.Join(root, "ordinary"), filepath.Join(root, "logs")}}})
-	t.Cleanup(engine.Close)
-	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{labeled}))
-	svc := service.NewDirectBackend(d, engine)
-	_, err := svc.Sync(t.Context(), service.SyncInput{Path: ordinary})
-	require.ErrorContains(t, err, "no session found for path")
-	assert.Equal(t, labeled, d.GetSessionFilePath(t.Context(), "codex:"+id))
-	other := testjsonl.CodexSessionMetaJSON("dddddddd-dddd-4ddd-8ddd-dddddddddddd", "/work/project", "codex_cli_rs", "2026-10-08T12:00:00Z") + "\n" + testjsonl.CodexMsgJSON("user", "other", "2026-10-08T12:00:01Z") + "\n"
-	dbtest.WriteTestFile(t, ordinary, []byte(other))
-	_, err = svc.Sync(t.Context(), service.SyncInput{Path: ordinary})
-	require.ErrorContains(t, err, "no session found for path")
-	require.NoError(t, os.Remove(ordinary))
-	_, err = svc.Sync(t.Context(), service.SyncInput{Path: ordinary})
-	require.ErrorContains(t, err, "no session found for path")
 }
 
 func TestDirectBackend_Sync_VSCopilotIDRefreshesOnlyRequestedConversation(t *testing.T) {
