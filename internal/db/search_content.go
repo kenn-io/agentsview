@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"regexp/syntax"
 	"slices"
 	"strconv"
 	"strings"
@@ -451,7 +452,7 @@ func (db *DB) searchContentWordsOrSubstring(ctx context.Context, f ContentSearch
 }
 
 func (db *DB) searchContentLiteral(ctx context.Context, f ContentSearchFilter) (ContentSearchPage, error) {
-	return searchWithSubstringCandidates(ctx, db, f, substringIndexQuery(f.Pattern),
+	return searchWithSubstringCandidates(ctx, db, f, f.Pattern,
 		func(candidates substringCandidateFilters) (ContentSearchPage, error) {
 			return db.substringSearchPage(ctx, f, candidates)
 		})
@@ -772,7 +773,7 @@ func (d *LegacyThinkingDedupe) Suppress(m ContentMatch, legacyThinking bool) boo
 }
 
 // searchContentRegex compiles the pattern, narrows candidate rows with a
-// substring index and a LIKE prefilter for required literals, then keeps
+// substring index and an instr prefilter for required literals, then keeps
 // RE2 matches. Patterns without usable literals scan candidate bodies.
 func (db *DB) searchContentRegex(
 	ctx context.Context, f ContentSearchFilter,
@@ -789,8 +790,8 @@ func (db *DB) searchContentRegex(
 		defer release()
 	}
 
-	query, lit := regexIndexQuery(f.Pattern)
-	out, err := searchWithSubstringCandidates(ctx, db, f, query,
+	lit := RequiredLiteral(f.Pattern)
+	out, err := searchWithSubstringCandidates(ctx, db, f, lit,
 		func(candidates substringCandidateFilters) ([]ContentMatch, error) {
 			return db.regexSearchRows(ctx, f, re, lit, candidates)
 		})
@@ -897,7 +898,7 @@ func (p *regexPage) read(rows *sql.Rows) error {
 }
 
 // regexCandidateRows returns full-body rows for the selected sources in the
-// sessions scope selects, LIKE-prefiltered by lit when non-empty, ordered for
+// sessions scope selects, prefiltered by lit when non-empty, ordered for
 // stable paging. Each branch selects: session_id, project, agent,
 // transcript_revision, location, role, tool_name, ordinal, ts AS ts, body,
 // sort_ts, src, row_id, legacy_thinking. The message and thinking branches
@@ -911,14 +912,14 @@ func regexCandidateRows(
 	var branches []string
 	var args []any
 
-	addLike := func() { args = append(args, "%"+escapeLike(lit)+"%") }
+	addLiteral := func() { args = append(args, lit) }
 
 	prefilterClause := func(col string) string {
 		if lit == "" {
 			return col + " IS NOT NULL"
 		}
-		addLike()
-		return col + " LIKE ? ESCAPE '\\'"
+		addLiteral()
+		return "instr(lower(" + col + "), lower(?)) > 0"
 	}
 
 	sysPred := "1=1"
@@ -1019,7 +1020,7 @@ func regexCandidateRows(
 		branches = append(branches, imageTextSearchBranches(f, scope, eventAnchorJoin, prefilterClause("c.text"), true)...)
 		args = append(args, scopeArgs...)
 		if lit != "" {
-			addLike()
+			addLiteral()
 		}
 		args = append(args, scopeArgs...)
 	}
@@ -1151,6 +1152,49 @@ func foldPrefixEnd(s string, i int, sub string) (int, bool) {
 		i += size
 	}
 	return i, true
+}
+
+// RequiredLiteral returns the longest safe fixed text every regex match contains.
+// SQLite lower folds ASCII only, while Go also folds K and S to non-ASCII.
+func RequiredLiteral(pattern string) string {
+	re, err := syntax.Parse(pattern, syntax.Perl)
+	if err != nil {
+		return ""
+	}
+	var longest []rune
+	var visit func(*syntax.Regexp)
+	visit = func(re *syntax.Regexp) {
+		switch re.Op {
+		case syntax.OpLiteral:
+			var run []rune
+			flush := func() {
+				if len(run) > len(longest) {
+					longest = append([]rune(nil), run...)
+				}
+				run = nil
+			}
+			for _, r := range re.Rune {
+				if r == 0 || (re.Flags&syntax.FoldCase != 0 && (r > 127 || r == 'K' || r == 'k' || r == 'S' || r == 's')) {
+					flush()
+				} else {
+					run = append(run, r)
+				}
+			}
+			flush()
+		case syntax.OpCapture, syntax.OpPlus:
+			visit(re.Sub[0])
+		case syntax.OpRepeat:
+			if re.Min > 0 {
+				visit(re.Sub[0])
+			}
+		case syntax.OpConcat:
+			for _, sub := range re.Sub {
+				visit(sub)
+			}
+		}
+	}
+	visit(re)
+	return string(longest)
 }
 
 // LiteralPrefix extracts a required literal prefix from a regex for use

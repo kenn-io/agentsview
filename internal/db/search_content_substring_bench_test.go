@@ -157,3 +157,23 @@ func BenchmarkSearchContentToolOutputRecentMatches(b *testing.B) {
 		})
 	}
 }
+
+func BenchmarkSearchContentRegexRequiredLiteral(b *testing.B) {
+	d := seedSubstringSearchBenchmark(b)
+	for _, tc := range []struct {
+		name    string
+		sources []string
+	}{
+		{"default", nil}, {"messages", []string{"messages"}},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			f := ContentSearchFilter{Pattern: `\bdeploy-window`, Mode: "regex", Limit: 50, Sources: tc.sources}
+			b.ReportAllocs()
+			for b.Loop() {
+				page, err := d.SearchContent(b.Context(), f)
+				require.NoError(b, err)
+				require.Len(b, page.Matches, 20)
+			}
+		})
+	}
+}

@@ -1386,17 +1386,17 @@ indexed text. Each field gets its own table because a `detail='none'` table
 cannot filter by column; `detail='column'` measured nearly three times larger.
 
 The index only narrows candidates. A search intersects the listed IDs for the
-pattern's sequences, up to 32 of them, and the existing `LIKE` still decides
-every row. Regex searches also use the index for required literals, while Go's
-regex engine decides the final match. Alternation branches keep scanning when
-no literal outside them is required: indexing them slowed measured searches.
-The tokenizer folds case for every script while `LIKE` folds only ASCII, so the
-index returns a superset and results stay identical to a scan. Patterns shorter
-than three characters, single-session searches, and branches
+pattern's sequences, up to 32 of them. Substring search uses `LIKE` to check
+each row. Regex search uses one required literal to find candidates and filters
+every source with NUL-safe `instr`; Go's regex engine decides the final match.
+Alternation branches keep scanning when no literal outside them is required.
+The tokenizer folds case for every script, while `LIKE` and `lower()` fold only
+ASCII. The index returns a superset, so results stay identical to a scan.
+Patterns shorter than three characters, single-session searches, and branches
 where the index lists more than a quarter of the messages in the scope's
 sessions keep the scan. A capped count of the listed IDs makes that choice; it
 stops as soon as the share is passed. Tool input and tool result branches have
-no trigram index. Regex searches use `LIKE` to filter their bodies when the
+no trigram index. Regex searches use `instr` to filter their bodies when the
 pattern has a required literal.
 
 Tool branches scan the sessions they cover, so substring, word, and regex
@@ -1408,9 +1408,9 @@ ID, then position, so a session's rows never split across batches and the
 batches together return the same rows in the same order as one query. A walk
 that reaches the last session counts every exact match, which word search
 needs to offset its ranked results. The message and thinking branches test the
-batch's session list before `LIKE`, because SQLite checks conditions in the
-order written and the index candidates otherwise load bodies from sessions
-outside the batch.
+batch's session list before the body filter, because SQLite checks conditions
+in the order written and the index candidates otherwise load bodies from
+sessions outside the batch.
 
 Terms search uses `message_trigram_fts` under the same share rule per term. When
 the index lists any term, the query starts from the messages it lists for the

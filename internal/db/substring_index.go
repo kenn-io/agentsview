@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"regexp/syntax"
 	"strings"
 )
 
@@ -150,17 +149,17 @@ func substringIndexDropped(err error) bool {
 		strings.Contains(msg, "no such table: thinking_trigram_fts")
 }
 
-// searchWithSubstringCandidates chooses index filters for query and runs
+// searchWithSubstringCandidates chooses index filters for literal and runs
 // search with them. An archive import can drop the index between those
 // steps, because each query reads its own snapshot, so a search that then
 // names a missing index table runs once more. The second attempt finds no
 // index and scans.
 func searchWithSubstringCandidates[T any](
-	ctx context.Context, db *DB, f ContentSearchFilter, query string,
+	ctx context.Context, db *DB, f ContentSearchFilter, literal string,
 	search func(substringCandidateFilters) (T, error),
 ) (T, error) {
 	attempt := func() (T, error) {
-		candidates, err := db.substringCandidates(ctx, f, query)
+		candidates, err := db.substringCandidates(ctx, f, literal)
 		if err != nil {
 			var zero T
 			return zero, err
@@ -185,19 +184,17 @@ func retryWhenSubstringIndexDropped[T any](attempt func() (T, error)) (T, error)
 // sequences only widen the candidate set, which the LIKE check then narrows.
 const maxSubstringIndexTrigrams = 32
 
-// substringIndexQuery returns a case-insensitive FTS5 query for a literal.
-// An empty query means the index cannot look it up.
-func substringIndexQuery(literal string) string {
-	if strings.ContainsRune(literal, 0) {
-		return ""
+// substringIndexQuery returns an FTS5 query that matches every row whose text
+// contains literal, ignoring case. It reports false when literal is shorter
+// than three characters, which the index cannot look up.
+func substringIndexQuery(literal string) (string, bool) {
+	runes := []rune(literal)
+	if len(runes) < 3 || strings.ContainsRune(literal, 0) {
+		return "", false
 	}
-	return strings.Join(substringIndexTerms([]rune(literal), make(map[string]struct{})), " AND ")
-}
-
-// substringIndexTerms adds distinct trigrams to seen, up to the shared limit.
-func substringIndexTerms(runes []rune, seen map[string]struct{}) []string {
-	var terms []string
-	for i := 0; i+3 <= len(runes) && len(seen) < maxSubstringIndexTrigrams; i++ {
+	seen := make(map[string]struct{})
+	terms := make([]string, 0, min(len(runes)-2, maxSubstringIndexTrigrams))
+	for i := 0; i+3 <= len(runes) && len(terms) < maxSubstringIndexTrigrams; i++ {
 		trigram := string(runes[i : i+3])
 		if _, ok := seen[trigram]; ok {
 			continue
@@ -205,53 +202,7 @@ func substringIndexTerms(runes []rune, seen map[string]struct{}) []string {
 		seen[trigram] = struct{}{}
 		terms = append(terms, `"`+strings.ReplaceAll(trigram, `"`, `""`)+`"`)
 	}
-	return terms
-}
-
-// regexIndexQuery returns an index query and the longest required literal safe
-// for SQLite LIKE. An empty value leaves that prefilter unused.
-func regexIndexQuery(pattern string) (string, string) {
-	re, err := syntax.Parse(pattern, syntax.Perl)
-	if err != nil {
-		return "", ""
-	}
-	var terms []string
-	var longest string
-	seen := make(map[string]struct{})
-	var visit func(*syntax.Regexp)
-	visit = func(re *syntax.Regexp) {
-		switch re.Op {
-		case syntax.OpLiteral:
-			var run []rune
-			flush := func() {
-				if len(run) > len([]rune(longest)) {
-					longest = string(run)
-				}
-				terms = append(terms, substringIndexTerms(run, seen)...)
-				run = nil
-			}
-			for _, r := range re.Rune {
-				if r == 0 || (re.Flags&syntax.FoldCase != 0 && (r > 127 || r == 'K' || r == 'k' || r == 'S' || r == 's')) {
-					flush()
-				} else {
-					run = append(run, r)
-				}
-			}
-			flush()
-		case syntax.OpCapture, syntax.OpPlus:
-			visit(re.Sub[0])
-		case syntax.OpRepeat:
-			if re.Min > 0 {
-				visit(re.Sub[0])
-			}
-		case syntax.OpConcat:
-			for _, sub := range re.Sub {
-				visit(sub)
-			}
-		}
-	}
-	visit(re)
-	return strings.Join(terms, " AND "), longest
+	return strings.Join(terms, " AND "), true
 }
 
 // substringFilter is an optional SQL condition and its arguments.
@@ -261,7 +212,7 @@ type substringFilter struct {
 }
 
 // substringCandidateFilters limit the message and thinking branches of a
-// content search to rows the substring index lists for a query.
+// content search to rows the substring index lists for a literal.
 type substringCandidateFilters struct {
 	message, thinking substringFilter
 }
@@ -272,19 +223,21 @@ type substringCandidateFilters struct {
 const substringIndexMaxShare = 4
 
 // substringCandidates returns conditions that keep only messages whose text
-// may match query. A branch keeps scanning when the archive has no substring
-// index, query is empty, or the index lists more than a quarter as many
-// messages as the scope's sessions hold. The index lists matches across the whole archive, so a common
+// may contain literal, ignoring case. A branch keeps scanning when the
+// archive has no substring index, literal is too short to look up, or the
+// index lists more than a quarter as many messages as the scope's sessions
+// hold. The index lists matches across the whole archive, so a common
 // sequence inside one project or date range is cheaper to scan for. The
 // capped count stops as soon as it passes that share.
 func (db *DB) substringCandidates(
-	ctx context.Context, f ContentSearchFilter, query string,
+	ctx context.Context, f ContentSearchFilter, literal string,
 ) (substringCandidateFilters, error) {
 	var out substringCandidateFilters
 	if f.SessionID != "" {
 		return out, nil
 	}
-	if query == "" || !db.hasSubstringIndex(ctx) {
+	query, ok := substringIndexQuery(literal)
+	if !ok || !db.hasSubstringIndex(ctx) {
 		return out, nil
 	}
 	scope, scopeArgs := sessionScopeSubquery(f)
@@ -361,8 +314,8 @@ func (db *DB) termsIndexQueries(
 	}
 	indexed := make(map[string]string, len(terms))
 	for _, term := range terms {
-		query := substringIndexQuery(term)
-		if query == "" {
+		query, ok := substringIndexQuery(term)
+		if !ok {
 			continue
 		}
 		selective, err := db.substringIndexSelective(ctx, "message_trigram_fts", query, scopeMessages)
