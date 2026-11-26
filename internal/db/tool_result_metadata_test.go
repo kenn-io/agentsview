@@ -239,12 +239,9 @@ func TestLateResultIdentitySurvivesTranscriptReplacement(t *testing.T) {
 	call := ToolCall{
 		SessionID: "s1",
 		ToolName:  "exec_command", Category: "Bash", ToolUseID: "call",
-		WorkingDirectory: "/repo\x01",
-		ResultContent:    "x\x01", ResultContentLength: 2,
+		ResultContent: "x\x01", ResultContentLength: 2,
 		ResultEvents: []ToolResultEvent{event},
 	}
-	SanitizeToolCall(&call)
-	assert.Equal(t, "/repo", call.WorkingDirectory)
 	require.NoError(t, d.ReplaceSessionContent(t.Context(), "s1", []Message{{
 		SessionID: "s1", Ordinal: 0, Role: "assistant",
 		HasToolUse: true, ToolCalls: []ToolCall{call},

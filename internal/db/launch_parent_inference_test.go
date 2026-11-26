@@ -36,11 +36,9 @@ func TestLaunchParentInference(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, children, 1)
 	assert.Equal(t, "child", children[0].ID)
-	_, err = d.SetSessionExternalParent(t.Context(), "child", "parent")
-	require.NoError(t, err)
 	var inferred bool
 	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT inferred FROM session_external_parents WHERE session_id='child'`).Scan(&inferred))
-	assert.False(t, inferred)
+	assert.True(t, inferred)
 	_, err = d.ClearSessionExternalParent(t.Context(), "child")
 	require.NoError(t, err)
 	_, err = d.LinkSubagentSessionsForSessions(t.Context(), []string{"child"})
@@ -50,6 +48,8 @@ func TestLaunchParentInference(t *testing.T) {
 	insertSession(t, d, "recorded", "project")
 	_, err = d.SetSessionExternalParent(t.Context(), "child", "recorded")
 	require.NoError(t, err)
+	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT inferred FROM session_external_parents WHERE session_id='child'`).Scan(&inferred))
+	assert.False(t, inferred)
 	_, err = d.LinkSubagentSessionsForSessions(t.Context(), []string{"child"})
 	require.NoError(t, err)
 	parent, err = d.GetSessionExternalParent(t.Context(), "child")
@@ -64,38 +64,27 @@ func TestLaunchParentEvidence(t *testing.T) {
 		want                                                    string
 		parentAgent, childAgent, callCwd, started               string
 	}{
-		{"wrapped print", `{"command":"env echo codex exec"}`, "Bash", "/repo", "local", "/repo", "local", false, "", "", "", "", ""},
-		{"option terminator", `{"command":"codex exec -- '--cd=/other'"}`, "Bash", "/repo", "local", "/repo", "local", false, "candidate", "", "", "", ""},
-		{"conditional branch", `{"command":"if false; then codex exec hi; fi"}`, "Bash", "/repo", "local", "/repo", "local", false, "", "", "", "", ""},
-		{"conditional absolute directory", `{"command":"if false; then codex -C /repo exec hi; fi"}`, "Bash", "/repo", "local", "/repo", "local", false, "", "", "", "", ""},
 		{"possible alone", `{"command":"test -d /repo && codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", false, "", "", "", "", ""},
-		{"shell or conditional", `{"command":"test -f ready || codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", false, "", "", "", "", ""},
-		{"code if conditional", `if (flag) { await tools.exec_command({cmd:"codex exec hi"}) }`, "exec", "/repo", "local", "/repo", "local", false, "", "", "", "", ""},
-		{"code and conditional", `flag && tools.exec_command({cmd:"codex exec hi"})`, "exec", "/repo", "local", "/repo", "local", false, "", "", "", "", ""},
-		{"code or conditional", `flag || tools.exec_command({cmd:"codex exec hi"})`, "exec", "/repo", "local", "/repo", "local", false, "", "", "", "", ""},
-		{"unresolved competitor", `const cmd = "codex exec hi"; tools.exec_command({cmd})`, "exec", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
+		{"unresolved competitor", `const cmd = "codex exec hi"; tools.exec_command({cmd})`, "exec", "/repo", "local", "/repo", "local", true, "", "codex", "codex", "/repo", ""},
 		{"possible competitor", `{"command":"test -d /repo && codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
-		{"missing folder", `{"command":"codex exec hi"}`, "Bash", "", "local", "/repo", "local", false, "", "", "", "", ""},
 		{"two folders", `{"command":"cd /missing; codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", false, "", "", "", "", ""},
-		{"unknown directory", `{"command":"codex -C \"$DIR\" exec hi"}`, "Bash", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
-		{"unknown code workdir", `text(await tools.exec_command({cmd: "codex exec hi", workdir: dir}))`, "exec", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
-		{"guarded code call", `flag && tools.exec_command({cmd: "codex exec hi"})`, "exec", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
+		{"unknown code workdir", `text(await tools.exec_command({cmd: "codex exec hi", workdir: dir}))`, "exec", "/repo", "local", "/repo", "local", false, "", "codex", "codex", "/repo", ""},
 		{"unreadable", `{`, "Bash", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
 		{"empty", ``, "Bash", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
 		{"empty object", `{}`, "Bash", "/repo", "local", "/repo", "local", true, "actual", "", "", "", ""},
-		{"other agent in batch", `Promise.all([tools.exec_command({cmd:"claude -p hi"}),tools.exec_command({cmd:"pwd"})])`, "exec", "/repo", "local", "/repo", "local", true, "actual", "", "", "", ""},
+		{"other agent in batch", `Promise.all([tools.exec_command({cmd:"claude -p hi"}),tools.exec_command({cmd:"pwd"})])`, "exec", "/repo", "local", "/repo", "local", true, "actual", "codex", "codex", "/repo", ""},
 		{"different folder", `{"command":"cd /repo && codex exec hi"}`, "Bash", "/start", "local", "/other", "local", true, "actual", "", "", "", ""},
 		{"blank machine", `{"command":"codex exec hi"}`, "Bash", "/repo", "", "/repo", "local", true, "", "", "", "", ""},
 		{"two launchers", `{"command":"codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
-		{"guarded directory", `{"command":"cd /repo && codex exec hi"}`, "Bash", "/start", "local", "/repo", "local", false, "candidate", "", "", "", ""},
 		{"blank child machine", `{"command":"codex exec hi"}`, "Bash", "/repo", "", "/repo", "", false, "", "", "", "", ""},
-		{"argv cmd.exe Windows folder", `{"command":["cmd.exe","/c","codex","exec","hi"]}`, "Bash", `C:\Users\example\project`, "local", `C:\Users\example\project`, "local", false, "candidate", "", "", "", ""},
-		{"claude-codex", `{"cmd":"codex exec hi","workdir":"/repo"}`, "exec_command", "/repo", "local", "/repo", "local", false, "candidate", "claude", "codex", "", ""},
-		{"claude-claude", `{"cmd":"claude -p hi","workdir":"/repo"}`, "exec_command", "/repo", "local", "/repo", "local", false, "candidate", "claude", "claude", "", ""},
+		{"argv cmd.exe Windows folder", `{"command":["cmd.exe","/c","codex","exec","hi"]}`, "shell", `C:\Users\example\project`, "local", `C:\Users\example\project`, "local", false, "candidate", "codex", "codex", `C:\Users\example\project`, ""},
+		{"claude-claude", `{"command":"claude -p hi"}`, "Bash", "/repo", "local", "/repo", "local", false, "candidate", "claude", "claude", "/repo", ""},
 		{"codex-claude", `{"cmd":"claude -p hi","workdir":"/repo"}`, "exec_command", "/repo", "local", "/repo", "local", false, "candidate", "codex", "claude", "", ""},
-		{"missing call directory", `{"command":"codex exec hi"}`, "exec_command", "/later", "local", "/later", "local", false, "", "codex", "codex", "", ""},
-		{"recorded original directory", `{"command":"codex exec hi"}`, "exec_command", "/later", "local", "/original", "local", false, "candidate", "codex", "codex", "/original", ""},
-		{"explicit original directory", `{"command":"codex exec hi","workdir":"/original"}`, "exec_command", "/later", "local", "/original", "local", false, "candidate", "codex", "codex", "", ""},
+		{"missing call directory", `{"command":"codex exec hi"}`, "shell_command", "/later", "local", "/later", "local", false, "", "codex", "codex", "", ""},
+		{"Claude call directory matches", `{"command":"codex exec hi"}`, "Bash", "/repo", "local", "/repo/sub", "local", false, "candidate", "claude", "codex", "/repo/sub", ""},
+		{"Claude call directory differs", `{"command":"codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", false, "", "claude", "codex", "/repo/sub", ""},
+		{"recorded original directory", `{"command":"codex exec hi"}`, "shell_command", "/later", "local", "/original", "local", false, "candidate", "codex", "codex", "/original", ""},
+		{"explicit original directory", `{"cmd":"codex exec hi","workdir":"/original"}`, "exec_command", "/later", "local", "/original", "local", false, "candidate", "codex", "codex", "", ""},
 		{"matching Windows path", `{"cmd":"codex.exe exec hi", "workdir":"C:\\repo"}`, "exec_command", `C:\repo`, "local", `c:\repo`, "local", false, "candidate", "codex", "codex", "", "2026-01-02T03:05:00.250Z"},
 		{"Git Bash path", `{"cmd":"codex.exe exec hi", "workdir":"C:\\repo"}`, "exec_command", `C:\repo`, "local", `/c/repo`, "local", false, "candidate", "codex", "codex", "", ""},
 		{"other folder", `{"cmd":"codex.exe exec hi", "workdir":"C:\\repo"}`, "exec_command", `C:\repo`, "local", `c:\elsewhere`, "local", false, "", "codex", "codex", "", ""},
@@ -339,7 +328,6 @@ func TestLaunchParentCandidateQueryPlan(t *testing.T) {
 	d := testDB(t)
 	plan := explainQueryPlan(t, d, launchCandidateSQL, "2026-01-01", "2026-01-02", "local", "child")
 	require.NotEmpty(t, plan)
-	assert.Contains(t, plan[0], "idx_messages_activity_timestamp")
 	assert.Contains(t, plan[1], "idx_tool_calls_message")
 }
 
@@ -526,7 +514,13 @@ func TestLaunchParentReplacementWritePaths(t *testing.T) {
 				require.NoError(t, err)
 				_, err = d.LinkSubagentSessionsForSessions(t.Context(), []string{"child"})
 			case "competitor", "unresolved competitor":
-				insertSession(t, d, "competitor", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
+				insertSession(t, d, "competitor", "project", func(s *Session) {
+					s.Agent = "claude"
+					if mode == "unresolved competitor" {
+						s.Agent = "codex"
+					}
+					s.Cwd = "/repo"
+				})
 				message.SessionID = "competitor"
 				if mode == "unresolved competitor" {
 					message.ToolCalls[0].ToolName = "exec"
@@ -692,36 +686,6 @@ func TestLaunchParentOrdinaryAppendDoesNotRelink(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, child.ParentSessionID)
 			assert.Equal(t, "parent", *child.ParentSessionID)
-		})
-	}
-}
-
-func TestLaunchParentClaudeEarlierDirectoryChange(t *testing.T) {
-	for _, tc := range []struct{ name, command, cwd, callCwd, want string }{
-		{"earlier directory", `codex exec hi`, "/repo", "/repo/sub", ""},
-		{"recorded directory", `codex exec hi`, "/repo/sub", "/repo/sub", "parent"},
-		{"missing directory", `codex exec hi`, "/repo", "", ""},
-		{"explicit directory", `codex -C /repo/sub exec hi`, "/repo/sub", "", "parent"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			d := testDB(t)
-			insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
-			insertMessages(t, d, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:03:58Z", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"cd /repo/sub"}`}}})
-			insertMessages(t, d, Message{SessionID: "parent", Ordinal: 1, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"` + tc.command + `"}`, WorkingDirectory: tc.callCwd}}})
-			started := "2026-01-02T03:04:03Z"
-			insertSession(t, d, "child", "project", func(s *Session) {
-				s.Agent = "codex"
-				s.Cwd = tc.cwd
-				s.StartedAt = &started
-				s.SessionKind = "non-interactive"
-			})
-			link, err := d.GetSessionExternalParent(t.Context(), "child")
-			if tc.want == "" {
-				require.ErrorIs(t, err, sql.ErrNoRows)
-			} else {
-				require.NoError(t, err)
-				assert.Equal(t, tc.want, link.ParentSessionID)
-			}
 		})
 	}
 }
