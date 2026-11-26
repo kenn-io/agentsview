@@ -2458,7 +2458,7 @@ func TestCodexLabeledRunFindSourcePrefersLabeled(t *testing.T) {
 
 }
 
-func TestCodexChangedPathFindsMissedLabeledCopies(t *testing.T) {
+func TestCodexChangedPathAndDiscoverySelectCopies(t *testing.T) {
 	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
 	root := t.TempDir()
 	content := testjsonl.JoinJSONL(testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", tsEarly))
@@ -2480,9 +2480,17 @@ func TestCodexChangedPathFindsMissedLabeledCopies(t *testing.T) {
 				got, err := lookup(t.Context(), request)
 				require.NoError(t, err)
 				require.Len(t, got, 1)
-				assert.Equal(t, want, got[0].DisplayPath)
+				assert.Equal(t, path, got[0].DisplayPath)
 			}
 		}
+		found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: id})
+		require.NoError(t, err)
+		require.True(t, ok)
+		assert.Equal(t, want, found.DisplayPath)
+		sources, err := provider.Discover(t.Context())
+		require.NoError(t, err)
+		require.Len(t, sources, 1)
+		assert.Equal(t, want, sources[0].DisplayPath)
 	}
 	require.NoError(t, os.Remove(newer))
 	require.NoError(t, os.Chtimes(newer+".zst", now, now))

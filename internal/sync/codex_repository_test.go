@@ -259,7 +259,7 @@ func TestCodexLabeledRunResyncAndExplicitWorktreeMappingWins(t *testing.T) {
 }
 
 func TestCodexLabeledCopyWinsSync(t *testing.T) {
-	for _, mode := range []string{"quick sync", "older path with both copies present", "usage refresh", "missed event", "id refresh"} {
+	for _, mode := range []string{"quick sync", "ordinary event after labeled copy", "usage refresh", "missed event", "id refresh"} {
 		t.Run(mode, func(t *testing.T) {
 			database := openTestDB(t)
 			root := t.TempDir()
@@ -281,8 +281,9 @@ func TestCodexLabeledCopyWinsSync(t *testing.T) {
 			engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {ordinary, logs}}})
 			t.Cleanup(engine.Close)
 			switch mode {
-			case "older path with both copies present":
-				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[1]}))
+			case "ordinary event after labeled copy":
+				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[2]}))
+				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[0]}))
 			case "quick sync":
 				now := time.Now()
 				require.NoError(t, os.Chtimes(paths[1], now.Add(-2*time.Hour), now.Add(-2*time.Hour)))

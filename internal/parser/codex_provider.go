@@ -294,11 +294,7 @@ func (p *codexProvider) RawCaptureSourcesForChangedPath(
 			source, ok = p.sources.directPathSource(root, req.Path, true)
 		}
 		if ok {
-			preferred, err := p.sources.preferredLabeledSource(ctx, source)
-			if err != nil {
-				return nil, err
-			}
-			return []SourceRef{preferred}, nil
+			return []SourceRef{source}, nil
 		}
 	}
 	return nil, nil
@@ -1395,11 +1391,7 @@ func (s codexSourceSet) SourcesForChangedPath(
 				}
 				source = preferred
 			}
-			preferred, err := s.preferredLabeledSource(ctx, source)
-			if err != nil {
-				return nil, err
-			}
-			return []SourceRef{preferred}, nil
+			return []SourceRef{source}, nil
 		}
 	}
 	return nil, nil
@@ -1664,26 +1656,6 @@ func (s codexSourceSet) findCanonicalSource(ctx context.Context, uuid string) (S
 		}
 	}
 	return best, foundExisting, nil
-}
-
-func (s codexSourceSet) preferredLabeledSource(ctx context.Context, source SourceRef) (SourceRef, error) {
-	if s.agent != AgentCodex {
-		return source, nil
-	}
-	selected, ok := source.Opaque.(codexSource)
-	if !ok {
-		return source, nil
-	}
-	best, found, err := s.findCanonicalSource(ctx, selected.UUID)
-	if err != nil {
-		return SourceRef{}, err
-	}
-	if found {
-		if preferred, compared := PreferLabeledCodexSource(best, source); compared && preferred {
-			return best, nil
-		}
-	}
-	return source, nil
 }
 
 func codexSourceKey(agent AgentType, uuid string) string {
