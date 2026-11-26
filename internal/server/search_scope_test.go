@@ -15,7 +15,7 @@ import (
 	"go.kenn.io/agentsview/internal/servicehttp"
 )
 
-func TestHybridSearchSharesKeywordDeadlineThroughHTTP(t *testing.T) {
+func TestSearchSharesKeywordDeadlineThroughHTTP(t *testing.T) {
 	te := setup(t)
 	searcher := &deadlineVectorSearcher{}
 	te.db.SetVectorSearcher(searcher)
@@ -25,19 +25,25 @@ func TestHybridSearchSharesKeywordDeadlineThroughHTTP(t *testing.T) {
 	}))
 	t.Cleanup(daemon.Close)
 	svc := servicehttp.NewHTTPBackend(daemon.URL, "", false, "")
-	req := service.ContentSearchRequest{Pattern: "needle", Mode: "hybrid"}
-	ctx, cancel := service.ContentSearchContext(t.Context(), svc, req)
-	defer cancel()
-	_, err := svc.SearchContent(ctx, req)
-	require.NoError(t, err)
-	assert.False(t, searcher.hadDeadline, "the primary semantic phase keeps its existing wait")
-	deadline := db.ContentScanDeadline(ctx)
-	require.False(t, deadline.IsZero(), "the daemon returned the initial keyword deadline")
-	followup, cancelFollowup := service.ContentSearchFollowupContext(ctx, svc, req)
-	defer cancelFollowup()
-	got, ok := followup.Deadline()
-	require.True(t, ok)
-	assert.True(t, deadline.Equal(got))
+	for _, mode := range []string{"substring", "hybrid"} {
+		t.Run(mode, func(t *testing.T) {
+			req := service.ContentSearchRequest{Pattern: "needle", Mode: mode}
+			ctx, cancel := service.ContentSearchContext(t.Context(), svc, req)
+			defer cancel()
+			_, err := svc.SearchContent(ctx, req)
+			require.NoError(t, err)
+			if mode == "hybrid" {
+				assert.False(t, searcher.hadDeadline, "the primary semantic phase keeps its existing wait")
+			}
+			deadline := db.ContentScanDeadline(ctx)
+			require.False(t, deadline.IsZero(), "the daemon returned the initial keyword deadline")
+			followup, cancelFollowup := service.ContentSearchFollowupContext(ctx, svc, req)
+			defer cancelFollowup()
+			got, ok := followup.Deadline()
+			require.True(t, ok)
+			assert.True(t, deadline.Equal(got))
+		})
+	}
 }
 
 type deadlineVectorSearcher struct {

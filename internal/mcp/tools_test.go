@@ -2700,10 +2700,16 @@ type deadlineContentService struct {
 
 func (s *deadlineContentService) SupportsRecallQueries() bool { return s.local }
 
+func (s *deadlineContentService) LocalContentScan() bool { return s.local }
+
 func (s *deadlineContentService) SearchContent(ctx context.Context, req service.ContentSearchRequest) (*service.ContentSearchResult, error) {
 	d, ok := ctx.Deadline()
 	s.deadlines = append(s.deadlines, d)
 	s.bounded = append(s.bounded, ok)
+	if s.local && req.Mode == "hybrid" && len(s.deadlines) == 1 {
+		_, cancel := db.WithContentScanDeadline(ctx)
+		cancel()
+	}
 	if s.oversized {
 		if len(s.deadlines) > 1 {
 			if s.countErr != nil {

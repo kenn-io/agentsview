@@ -52,6 +52,26 @@ func TestHTTPBackendRecallCapabilityRespectsReadOnlyMode(t *testing.T) {
 	}
 }
 
+func TestRemoteContentSearchDoesNotAcquireSQLiteDeadline(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"matches":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+	svc := NewHTTPBackend(srv.URL, "", false, "")
+	req := service.ContentSearchRequest{Pattern: "needle", Mode: "substring"}
+	ctx, cancel := service.ContentSearchContext(t.Context(), svc, req)
+	defer cancel()
+	_, bounded := ctx.Deadline()
+	assert.False(t, bounded)
+	_, err := svc.SearchContent(ctx, req)
+	require.NoError(t, err)
+	followup, cancelFollowup := service.ContentSearchFollowupContext(ctx, svc, req)
+	defer cancelFollowup()
+	_, bounded = followup.Deadline()
+	assert.False(t, bounded)
+}
+
 func TestListForwardsListOptions(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

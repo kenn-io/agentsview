@@ -39,6 +39,9 @@ type contentScanBudget struct {
 
 // WithContentScanBudget shares the first keyword deadline across searches.
 func WithContentScanBudget(ctx context.Context) context.Context {
+	if _, ok := ctx.Value(contentScanBudgetKey{}).(*contentScanBudget); ok {
+		return ctx
+	}
 	return context.WithValue(ctx, contentScanBudgetKey{}, &contentScanBudget{})
 }
 
