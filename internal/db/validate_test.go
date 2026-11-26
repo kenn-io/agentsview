@@ -139,8 +139,7 @@ func TestSelfParentNeverPersists(t *testing.T) {
 
 // Dialogue classification survives sanitization and persistence, including
 // ordinary prose whose dialogue and display text happen to be identical.
-// Tool-call directories are sanitized as well.
-func TestSanitizeMessageAndToolCall(t *testing.T) {
+func TestSanitizeMessagePreservesDialogueClassification(t *testing.T) {
 	for _, tc := range []struct {
 		name, content, thinking string
 		dialogue, want          *string
@@ -166,11 +165,6 @@ func TestSanitizeMessageAndToolCall(t *testing.T) {
 		})
 	}
 
-	// Tool-call directories are sanitized independently of message text.
-	call := ToolCall{WorkingDirectory: "/repo\x01"}
-	SanitizeToolCall(&call)
-	assert.Equal(t, "/repo", call.WorkingDirectory)
-
 	d := testDB(t)
 	insertSession(t, d, "s1", "project")
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "s1", []Message{{
@@ -181,4 +175,10 @@ func TestSanitizeMessageAndToolCall(t *testing.T) {
 	require.NotNil(t, stored)
 	require.NotNil(t, stored.DialogueText)
 	assert.Equal(t, "answer", *stored.DialogueText)
+}
+
+func TestSanitizeToolCallWorkingDirectory(t *testing.T) {
+	call := ToolCall{WorkingDirectory: "/repo\x01"}
+	SanitizeToolCall(&call)
+	assert.Equal(t, "/repo", call.WorkingDirectory)
 }
