@@ -92,6 +92,15 @@ func TestFTSSearchIgnoresContentScanDeadline(t *testing.T) {
 	require.Len(t, page.Matches, 1)
 }
 
+func TestFTSSearchReturnsCallerCancellation(t *testing.T) {
+	d := testDB(t)
+	requireFTS(t, d)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := d.SearchContent(ctx, ContentSearchFilter{Mode: "fts", Pattern: "needle"})
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 func TestHybridFTSProbeStopsAtDeadline(t *testing.T) {
 	d := testDB(t)
 	requireFTS(t, d)

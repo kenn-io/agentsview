@@ -1176,6 +1176,9 @@ func (db *DB) searchContentFTS(
 	// as invalid user input (400). With FTS present, the only SQLITE_ERROR the
 	// MATCH query can raise comes from a malformed pattern.
 	if !db.HasFTS(ctx) {
+		if err := ctx.Err(); err != nil {
+			return ContentSearchPage{}, err
+		}
 		return ContentSearchPage{}, errFTSUnavailable
 	}
 	if _, q, words := routeContentWords(f); words {
