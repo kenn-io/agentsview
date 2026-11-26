@@ -192,7 +192,7 @@ func (p *codexProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) 
 }
 
 func (p *codexProvider) ReconciliationSourceRank(source SourceRef) ReconciliationSourceRank {
-	return codexSourceRank(p.sources.roots, source)
+	return CodexSourceRank(source)
 }
 
 // SourceForReconciliation allows a rollout restored after discovery to use
@@ -299,13 +299,11 @@ func (p *codexProvider) RawCaptureSourcesForChangedPath(
 			source, ok = p.sources.directPathSource(root, req.Path, true)
 		}
 		if ok {
-			if p.sources.agent == AgentCodex {
-				preferred, err := p.sources.preferredLabeledSource(ctx, source, req.Path)
-				if err != nil {
-					return nil, err
-				}
-				source = preferred
+			preferred, err := p.sources.preferredLabeledSource(ctx, source, req.Path)
+			if err != nil {
+				return nil, err
 			}
+			source = preferred
 			return []SourceRef{source}, nil
 		}
 	}
@@ -1479,26 +1477,18 @@ func (s codexSourceSet) SourcesForChangedPath(
 			}
 		}
 		if ok {
-			if s.agent == AgentCodex {
-				if compressed {
-					preferred, err := s.preferredKnownRolloutSource(ctx, source)
-					if err != nil {
-						return nil, err
-					}
-					source = preferred
-				}
-				preferred, err := s.preferredLabeledSource(ctx, source, req.Path)
-				if err != nil {
-					return nil, err
-				}
-				source = preferred
-			} else if compressed {
+			if compressed {
 				preferred, err := s.preferredKnownRolloutSource(ctx, source)
 				if err != nil {
 					return nil, err
 				}
 				source = preferred
 			}
+			preferred, err := s.preferredLabeledSource(ctx, source, req.Path)
+			if err != nil {
+				return nil, err
+			}
+			source = preferred
 			return []SourceRef{source}, nil
 		}
 	}
@@ -1757,11 +1747,9 @@ func (s codexSourceSet) findCanonicalSource(ctx context.Context, uuid string) (S
 				continue
 			}
 			candidate, ok := s.sourceRef(root, path, true)
-			if ok {
-				if !foundExisting || preferCodexSource(candidate, best) {
-					best = candidate
-					foundExisting = true
-				}
+			if ok && (!foundExisting || preferCodexSource(candidate, best)) {
+				best = candidate
+				foundExisting = true
 			}
 		}
 	}
@@ -1819,19 +1807,8 @@ const codexLabeledSourceClass = 2
 
 // CodexSourceRank ranks a source for duplicate selection.
 func CodexSourceRank(source SourceRef) ReconciliationSourceRank {
-	return codexSourceRank(nil, source)
-}
-
-func codexSourceRank(roots []string, source SourceRef) ReconciliationSourceRank {
 	src, ok := source.Opaque.(codexSource)
-	if !ok {
-		return ReconciliationSourceRank{}
-	}
-	label := CodexSourceLabel(src.Root, src.Path)
-	if roots != nil {
-		label = CodexSourceLabelForRoots(roots, src.Path)
-	}
-	if label == "" {
+	if !ok || CodexSourceLabel(src.Root, src.Path) == "" {
 		return ReconciliationSourceRank{}
 	}
 	path := src.Path
