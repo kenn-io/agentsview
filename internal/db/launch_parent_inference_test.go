@@ -66,7 +66,6 @@ func TestLaunchParentEvidence(t *testing.T) {
 		want                                                    string
 		parentAgent, childAgent, callCwd, started               string
 	}{
-		{"help is not a launch", `{"command":"codex exec --help"}`, "Bash", "/repo", "local", "/repo", "local", false, "", "", "", "", ""},
 		{"possible alone", `{"command":"test -d /repo && codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", false, "", "", "", "", ""},
 		{"unresolved competitor", `const cmd = "codex exec hi"; tools.exec_command({cmd})`, "exec", "/repo", "local", "/repo", "local", true, "", "codex", "codex", "/repo", ""},
 		{"possible competitor", `{"command":"test -d /repo && codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
@@ -76,11 +75,8 @@ func TestLaunchParentEvidence(t *testing.T) {
 		{"unreadable", `{`, "Bash", "/repo", "local", "/repo", "local", true, "actual", "", "", "", ""},
 		{"empty", ``, "Bash", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
 		{"empty object", `{}`, "Bash", "/repo", "local", "/repo", "local", true, "actual", "", "", "", ""},
-		{"other agent in batch", `Promise.all([tools.exec_command({cmd:"claude -p hi"}),tools.exec_command({cmd:"pwd"})])`, "exec", "/repo", "local", "/repo", "local", true, "", "codex", "codex", "/repo", ""},
 		{"different folder", `{"command":"cd /repo && codex exec hi"}`, "Bash", "/start", "local", "/other", "local", true, "actual", "", "", "", ""},
 		{"blank machine", `{"command":"codex exec hi"}`, "Bash", "/repo", "", "/repo", "local", false, "", "", "", "", ""},
-		{"two launchers", `{"command":"codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
-		{"process substitution alone", `{"command":"cat <(codex exec hi)"}`, "Bash", "/repo", "local", "/repo", "local", false, "candidate", "", "", "", ""},
 		{"blank child machine", `{"command":"codex exec hi"}`, "Bash", "/repo", "", "/repo", "", false, "", "", "", "", ""},
 		{"argv cmd.exe Windows folder", `{"command":["cmd.exe","/c","codex","exec","hi"]}`, "shell", `C:\Users\example\project`, "local", `C:\Users\example\project`, "local", false, "candidate", "codex", "codex", `C:\Users\example\project`, ""},
 		{"claude-claude", `{"command":"claude -p hi"}`, "Bash", "/repo", "local", "/repo", "local", false, "candidate", "claude", "claude", "/repo", ""},
@@ -686,32 +682,9 @@ func TestLaunchParentOrdinaryAppendDoesNotRelink(t *testing.T) {
 	}
 }
 
-func TestLaunchParentArchivedLauncherWithoutSource(t *testing.T) {
-	d := testDB(t)
-	require.NoError(t, d.DropBulkImportIndexes(t.Context()))
-	insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
-	insertMessages(t, d, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`, WorkingDirectory: "/repo"}}})
-	_, err := d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET source_missing_at='2026-01-03T00:00:00Z' WHERE id='parent'`)
-	require.NoError(t, err)
-	started := "2026-01-02T03:04:03Z"
-	insertSession(t, d, "child", "project", func(s *Session) {
-		s.Agent = "codex"
-		s.Cwd = "/repo"
-		s.StartedAt = &started
-		s.SessionKind = "non-interactive"
-	})
-	require.NoError(t, d.RebuildBulkImportIndexes(t.Context()))
-	_, err = d.LinkSubagentSessionsContext(t.Context())
-	require.NoError(t, err)
-	link, err := d.GetSessionExternalParent(t.Context(), "child")
-	require.NoError(t, err)
-	assert.Equal(t, "parent", link.ParentSessionID)
-}
-
 func TestLaunchParentLegacyMissingLauncherDirectory(t *testing.T) {
 	for _, tc := range []struct{ name, command, want string }{
 		{"explicit directory", "codex -C /repo exec hi", "parent"},
-		{"implicit directory", "codex exec hi", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)

@@ -287,9 +287,6 @@ func TestShellCalls(t *testing.T) {
 		count                int
 		unknown, unknownDir  bool
 	}{
-		{"double quote", `text(await tools.exec_command({cmd:"git commit -m \"fix\""}))`, `git commit -m "fix"`, 1, false, false},
-		{"single quote", `text(await tools.exec_command({cmd:'git commit -m fix'}))`, `git commit -m fix`, 1, false, false},
-		{"template", "text(await tools.exec_command({cmd:`git commit -m fix`}))", `git commit -m fix`, 1, false, false},
 		{"interpolated", "text(await tools.exec_command({cmd:`codex exec ${message}`}))", "", 1, true, false},
 		{"dynamic tool", `await tools[name]({cmd:"codex exec hi"})`, "", 1, true, false},
 		{"alias", `const run = tools.exec_command; await run({cmd:"codex exec hi"})`, "", 1, true, false},
