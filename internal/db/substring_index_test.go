@@ -569,6 +569,22 @@ func TestRegexRequiredLiteralPrefiltersToolSources(t *testing.T) {
 		_, err := d.getWriter().Exec(ctx, stmt.sql, stmt.value)
 		require.NoError(t, err)
 	}
+	// The two image occurrence paths join cached text to a call or an event.
+	for _, image := range []struct {
+		id                        int
+		hash, text, occurrenceSQL string
+	}{
+		{-1, "call-image", "before\x00rare-needle call image", `INSERT INTO image_text_occurrences(session_id, call_id, image_index, image_hash) SELECT session_id, id, 0, ? FROM tool_calls WHERE session_id = 's1' AND tool_use_id = 'a'`},
+		{-2, "event-image", "before\x00rare-needle event image", `INSERT INTO image_text_occurrences(session_id, event_id, image_index, image_hash) SELECT session_id, id, 0, ? FROM tool_result_events WHERE session_id = 's1' AND tool_use_id = 'c'`},
+	} {
+		_, err := d.getWriter().Exec(ctx, `INSERT INTO image_text_cache(id, image_hash, processor, provider, model, revision, text, succeeded) VALUES (?, ?, 'processor', 'provider', 'model', 'revision', ?, 1)`, image.id, image.hash, image.text)
+		require.NoError(t, err)
+		result, err := d.getWriter().Exec(ctx, image.occurrenceSQL, image.hash)
+		require.NoError(t, err)
+		count, err := result.RowsAffected()
+		require.NoError(t, err)
+		require.EqualValues(t, 1, count)
+	}
 	f := ContentSearchFilter{Pattern: `\brare-needle`, Mode: "regex", Limit: 50, Sources: []string{"messages", "thinking", "tool_input", "tool_result"}}
 	countMessagesForSubstringIndex(t, d, "s1")
 	candidates, err := d.substringCandidates(ctx, f, RequiredLiteral(f.Pattern))
@@ -603,7 +619,13 @@ func TestRegexRequiredLiteralPrefiltersToolSources(t *testing.T) {
 	for _, hit := range filtered {
 		locations[hit.Location]++
 	}
-	assert.Equal(t, map[string]int{"message": 1, "thinking": 1, "tool_input": 1, "tool_result": 2}, locations)
+	assert.Equal(t, map[string]int{"message": 1, "thinking": 1, "tool_input": 1, "tool_result": 4}, locations)
+	var snippets []string
+	for _, hit := range filtered {
+		snippets = append(snippets, hit.Snippet)
+	}
+	assert.Contains(t, snippets, "before\x00rare-needle call image")
+	assert.Contains(t, snippets, "before\x00rare-needle event image")
 	page, err := d.SearchContent(ctx, ContentSearchFilter{Pattern: f.Pattern, Mode: "regex", Limit: 50})
 	require.NoError(t, err)
 	require.NoError(t, d.DropFTS(ctx))
