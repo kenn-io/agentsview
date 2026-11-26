@@ -2378,7 +2378,8 @@ Manage the local semantic search embedding index. `build` and `switch` turn
 search on when needed. `list`, `activate`, and `retire` require search to be
 enabled. `switch` waits for any running build or setup, including manual Recall
 builds, replaces the embedding server, restarts the daemon, and rebuilds the
-session index. The same model keeps its recipe; a new model starts from its
+session index. Before saving, it sends one sample query and checks the returned
+vector dimension. The same model keeps its recipe; a new model starts from its
 defaults. Recall is rebuilt when Recall embeddings are enabled. For
 configuration and search details, see
 [Semantic Search](/docs/semantic-search/).

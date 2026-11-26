@@ -88,7 +88,7 @@ func newEmbeddingsSwitchCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "switch <endpoint>",
 		Short:        "Switch the embedding server and rebuild the index",
-		Long:         "Switch to one embedding server and rebuild the session index. The same model keeps its recipe; a new model starts from its defaults. The command waits for Recall builds and rebuilds Recall when its embedding index is enabled.",
+		Long:         "Switch to one embedding server and rebuild the session index. Before saving, the command sends one sample query and checks the returned vector dimension. The same model keeps its recipe; a new model starts from its defaults. The command waits for Recall builds and rebuilds Recall when its embedding index is enabled.",
 		Example:      "  agentsview index embeddings switch https://host/v1 --model embeddinggemma --dimension 768 --api-key-file ~/.config/agentsview/api-key",
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),
@@ -120,7 +120,7 @@ func runEmbeddingsSwitch(
 	if cfg.Vector.Embed.Recall {
 		stores = append(stores, "recall")
 	}
-	waiting := "Waiting for the current embedding build or setup to finish…"
+	waiting := false
 
 	client, daemonErr := resolveEmbeddingsDaemonClient(cfg)
 	if daemonErr != nil && !errors.Is(daemonErr, errNoReachableEmbeddingsDaemon) {
@@ -139,6 +139,13 @@ func runEmbeddingsSwitch(
 		if err != nil {
 			return fmt.Errorf("resolving API key file: %w", err)
 		}
+	}
+	candidate, err := cfg.VectorEmbeddingsServerCandidate(endpoint, model, dimension, apiKeyFile)
+	if err != nil {
+		return fmt.Errorf("validating embedding server: %w", err)
+	}
+	if err := preflightEmbeddingsServer(ctx, candidate); err != nil {
+		return fmt.Errorf("testing embedding server: %w", err)
 	}
 	if err := cfg.SaveVectorEmbeddingsServer(endpoint, model, dimension, apiKeyFile); err != nil {
 		return fmt.Errorf("saving embedding server: %w", err)
@@ -200,6 +207,25 @@ func runEmbeddingsSwitch(
 		}
 	}
 	return errors.Join(buildErrors...)
+}
+
+func preflightEmbeddingsServer(ctx context.Context, embeddings config.VectorEmbeddingsConfig) error {
+	encode, err := newVectorQueryEncoder(embeddings, "default")
+	if err != nil {
+		return err
+	}
+	vectors, err := encode(ctx, []string{"AgentsView embedding server check"})
+	if err != nil {
+		return err
+	}
+	if len(vectors) != 1 {
+		return fmt.Errorf("server returned %d vectors for one input", len(vectors))
+	}
+	if len(vectors[0]) != embeddings.Dimension {
+		return fmt.Errorf("server returned %d dimensions; configured dimension is %d",
+			len(vectors[0]), embeddings.Dimension)
+	}
+	return nil
 }
 
 // EmbeddingsBuildOptions holds the parsed `embeddings build` flags.
@@ -902,7 +928,7 @@ func pollDaemonBuildStatus(
 }
 
 func waitDaemonBuild(
-	ctx context.Context, out io.Writer, client embeddingsDaemonClient, setup bool, waiting *string,
+	ctx context.Context, out io.Writer, client embeddingsDaemonClient, setup bool, waiting *bool,
 ) (vector.BuildStatus, error) {
 	var progress buildProgressPrinter
 	for {
@@ -914,9 +940,9 @@ func waitDaemonBuild(
 		if !status.Running && !busy {
 			return status, nil
 		}
-		if waiting != nil && *waiting != "" {
-			fmt.Fprintln(out, *waiting)
-			*waiting = ""
+		if waiting != nil && !*waiting {
+			fmt.Fprintln(out, "Waiting for the current embedding build or setup to finish…")
+			*waiting = true
 		}
 		if setup && status.Setup != nil && status.Setup.Busy && status.Setup.TotalBytes > 0 {
 			progress.printDownload(out, status.Setup.DownloadedBytes, status.Setup.TotalBytes)

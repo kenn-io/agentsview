@@ -4288,43 +4288,70 @@ func (c *Config) SaveVectorEmbeddingsServer(
 	endpoint, model string, dimension int, apiKeyFile string,
 ) error {
 	return c.withConfigLock(func() error {
-		server := map[string]any{"endpoint": endpoint}
-		if apiKeyFile != "" {
-			server["api_key_file"] = apiKeyFile
-		}
-		existing, candidate, err := c.vectorSetupCandidate(func(section map[string]any) {
-			embeddings, _ := section["embeddings"].(map[string]any)
-			oldModel, _ := embeddings["model"].(string)
-			_, hasServers := embeddings["servers"]
-			if embeddings == nil || (oldModel != model && !(oldModel == "" && !hasServers && model == defaultNomicModel)) {
-				embeddings = make(map[string]any)
-			}
-			delete(embeddings, "default_server")
-			embeddings["model"] = model
-			embeddings["dimension"] = dimension
-			embeddings["servers"] = map[string]any{"default": server}
-			if isNomicModel(model) && oldModel != model {
-				for key, value := range map[string]any{
-					"max_input_chars":      nomicMaxInputChars,
-					"model_context_tokens": nomicModelContextTokens,
-					"query_prefix":         nomicQueryPrefix,
-					"document_prefix":      nomicDocumentPrefix,
-				} {
-					if _, ok := embeddings[key]; !ok {
-						embeddings[key] = value
-					}
-				}
-			}
-			section["embeddings"] = embeddings
-		})
+		existing, _, err := c.vectorEmbeddingsServerCandidate(endpoint, model, dimension, apiKeyFile)
 		if err != nil {
 			return err
 		}
-		if err := candidate.ApplyDeploymentEmbeddings(); err != nil {
-			return invalidVectorSetupError{err}
-		}
 		return c.writeConfigMap(existing)
 	})
+}
+
+// VectorEmbeddingsServerCandidate returns the validated in-memory config that
+// SaveVectorEmbeddingsServer would write, without changing the saved config.
+func (c *Config) VectorEmbeddingsServerCandidate(
+	endpoint, model string, dimension int, apiKeyFile string,
+) (VectorEmbeddingsConfig, error) {
+	var embeddings VectorEmbeddingsConfig
+	err := c.withConfigLock(func() error {
+		_, candidate, err := c.vectorEmbeddingsServerCandidate(endpoint, model, dimension, apiKeyFile)
+		if err != nil {
+			return err
+		}
+		embeddings = candidate.Vector.Embeddings
+		return nil
+	})
+	return embeddings, err
+}
+
+func (c *Config) vectorEmbeddingsServerCandidate(
+	endpoint, model string, dimension int, apiKeyFile string,
+) (map[string]any, Config, error) {
+	server := map[string]any{"endpoint": endpoint}
+	if apiKeyFile != "" {
+		server["api_key_file"] = apiKeyFile
+	}
+	existing, candidate, err := c.vectorSetupCandidate(func(section map[string]any) {
+		embeddings, _ := section["embeddings"].(map[string]any)
+		oldModel, _ := embeddings["model"].(string)
+		_, hasServers := embeddings["servers"]
+		if embeddings == nil || (oldModel != model && !(oldModel == "" && !hasServers && model == defaultNomicModel)) {
+			embeddings = make(map[string]any)
+		}
+		delete(embeddings, "default_server")
+		embeddings["model"] = model
+		embeddings["dimension"] = dimension
+		embeddings["servers"] = map[string]any{"default": server}
+		if isNomicModel(model) && oldModel != model {
+			for key, value := range map[string]any{
+				"max_input_chars":      nomicMaxInputChars,
+				"model_context_tokens": nomicModelContextTokens,
+				"query_prefix":         nomicQueryPrefix,
+				"document_prefix":      nomicDocumentPrefix,
+			} {
+				if _, ok := embeddings[key]; !ok {
+					embeddings[key] = value
+				}
+			}
+		}
+		section["embeddings"] = embeddings
+	})
+	if err != nil {
+		return nil, Config{}, err
+	}
+	if err := candidate.ApplyDeploymentEmbeddings(); err != nil {
+		return nil, Config{}, invalidVectorSetupError{err}
+	}
+	return existing, candidate, nil
 }
 
 // VectorExplicitlyDisabled reports a saved opt-out.

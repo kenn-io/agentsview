@@ -63,7 +63,7 @@ max_retries = 1
 // uses.
 func newEmbeddingsStubServer(t *testing.T, dimension int) *httptest.Server {
 	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Model string   `json:"model"`
 			Input []string `json:"input"`
@@ -72,6 +72,8 @@ func newEmbeddingsStubServer(t *testing.T, dimension int) *httptest.Server {
 
 		writeEmbeddingsResponse(t, w, len(req.Input), dimension)
 	}))
+	t.Cleanup(server.Close)
+	return server
 }
 
 func writeEmbeddingsResponse(t *testing.T, w http.ResponseWriter, count, dimension int) {
@@ -1496,6 +1498,7 @@ api_key_file = "/missing-old-key"
 [vector.embed]
 recall = %t
 `, tc.recall))
+			endpoint := newEmbeddingsStubServer(t, 3).URL + "/v1"
 
 			oldPollInterval, oldRestart := embeddingsPollInterval, restartEmbeddingsDaemon
 			embeddingsPollInterval = time.Millisecond
@@ -1559,7 +1562,7 @@ recall = %t
 				require.NoError(t, err)
 				assert.True(t, cfg.Vector.Enabled)
 				assert.Equal(t, "new-model", cfg.Vector.Embeddings.Model)
-				assert.Equal(t, "https://embed.example/v1", cfg.Vector.Embeddings.Servers["default"].Endpoint)
+				assert.Equal(t, endpoint, cfg.Vector.Embeddings.Servers["default"].Endpoint)
 				return nil
 			}
 
@@ -1569,7 +1572,7 @@ recall = %t
 			var out strings.Builder
 			cmd.SetOut(&out)
 			cmd.SetArgs([]string{
-				"index", "embeddings", "switch", "https://embed.example/v1",
+				"index", "embeddings", "switch", endpoint,
 				"--model", "new-model", "--dimension", "3",
 			})
 			err := cmd.Execute()
@@ -1633,18 +1636,19 @@ func TestEmbeddingsSwitchRestartFailureCanRetry(t *testing.T) {
 	setTestHome(t, t.TempDir())
 	dataDir := testDataDir(t)
 	writeEmbeddingsTestConfig(t, dataDir, "http://127.0.0.1:1/v1")
+	endpoint := newEmbeddingsStubServer(t, 3).URL + "/v1"
 	oldRestart := restartEmbeddingsDaemon
 	t.Cleanup(func() { restartEmbeddingsDaemon = oldRestart })
 	restartErr := errors.New("restart unavailable")
 	restartEmbeddingsDaemon = func(context.Context, io.Writer) error { return restartErr }
-	err := runEmbeddingsSwitch(t.Context(), io.Discard, "https://embed.example/v1", "new-model", 3, "")
+	err := runEmbeddingsSwitch(t.Context(), io.Discard, endpoint, "new-model", 3, "")
 	require.ErrorIs(t, err, restartErr)
 	assert.ErrorContains(t, err, "embedding server saved")
 	assert.ErrorContains(t, err, "rerun 'agentsview index embeddings switch'")
 	cfg, err := config.LoadReadOnly()
 	require.NoError(t, err)
 	assert.Equal(t, "new-model", cfg.Vector.Embeddings.Model)
-	assert.Equal(t, "https://embed.example/v1", cfg.Vector.Embeddings.Servers["default"].Endpoint)
+	assert.Equal(t, endpoint, cfg.Vector.Embeddings.Servers["default"].Endpoint)
 
 	var stores []string
 	restartEmbeddingsDaemon = func(context.Context, io.Writer) error {
@@ -1665,14 +1669,95 @@ func TestEmbeddingsSwitchRestartFailureCanRetry(t *testing.T) {
 		})
 		return nil
 	}
-	require.NoError(t, runEmbeddingsSwitch(t.Context(), io.Discard, "https://embed.example/v1", "new-model", 3, ""))
+	require.NoError(t, runEmbeddingsSwitch(t.Context(), io.Discard, endpoint, "new-model", 3, ""))
 	assert.Equal(t, []string{"messages"}, stores)
+}
+
+func TestEmbeddingsSwitchPreflightFailurePreservesConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		dimension    int
+		unauthorized bool
+	}{
+		{name: "request rejected", dimension: 3, unauthorized: true},
+		{name: "wrong vector dimension", dimension: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setTestHome(t, t.TempDir())
+			dataDir := testDataDir(t)
+			writeEmbeddingsTestConfig(t, dataDir, "http://127.0.0.1:1/v1")
+			path := filepath.Join(dataDir, "config.toml")
+			before, err := os.ReadFile(path)
+			require.NoError(t, err)
+
+			var endpoint string
+			if tc.unauthorized {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					http.Error(w, "invalid API key", http.StatusUnauthorized)
+				}))
+				t.Cleanup(server.Close)
+				endpoint = server.URL + "/v1"
+			} else {
+				endpoint = newEmbeddingsStubServer(t, tc.dimension).URL + "/v1"
+			}
+
+			oldRestart := restartEmbeddingsDaemon
+			restarted := false
+			restartEmbeddingsDaemon = func(context.Context, io.Writer) error {
+				restarted = true
+				return nil
+			}
+			t.Cleanup(func() { restartEmbeddingsDaemon = oldRestart })
+
+			err = runEmbeddingsSwitch(t.Context(), io.Discard, endpoint, "test-model", 3, "")
+			require.ErrorContains(t, err, "testing embedding server")
+			assert.False(t, restarted)
+			after, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Equal(t, before, after)
+		})
+	}
+}
+
+func TestEmbeddingsSwitchPreflightCredentials(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dataDir := testDataDir(t)
+	writeEmbeddingsTestConfig(t, dataDir, "http://127.0.0.1:1/v1")
+	dir := t.TempDir()
+	require.NoError(t, os.Chmod(dir, 0o700))
+	key := filepath.Join(dir, "key")
+	require.NoError(t, os.WriteFile(key, []byte("test-key"), 0o600))
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		assert.Equal(t, "Bearer test-key", r.Header.Get("Authorization"))
+		var req struct {
+			Model string   `json:"model"`
+			Input []string `json:"input"`
+		}
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &req)) {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		assert.Equal(t, "new-model", req.Model)
+		assert.Len(t, req.Input, 1)
+		writeEmbeddingsResponse(t, w, 1, 3)
+	}))
+	t.Cleanup(server.Close)
+	oldRestart := restartEmbeddingsDaemon
+	restartErr := errors.New("restart unavailable")
+	restartEmbeddingsDaemon = func(context.Context, io.Writer) error { return restartErr }
+	t.Cleanup(func() { restartEmbeddingsDaemon = oldRestart })
+	err := runEmbeddingsSwitch(t.Context(), io.Discard, server.URL+"/v1", "new-model", 3, key)
+	require.ErrorIs(t, err, restartErr)
+	assert.Equal(t, 1, requests)
 }
 
 func TestEmbeddingsSwitchStartsStoppedDaemon(t *testing.T) {
 	setTestHome(t, t.TempDir())
 	dataDir := testDataDir(t)
 	writeTestConfig(t, dataDir, "[vector]\nenabled = false\n[vector.embed]\nrecall = true\n")
+	endpoint := newEmbeddingsStubServer(t, 3).URL + "/v1"
 	var stores []string
 	oldRestart := restartEmbeddingsDaemon
 	restartEmbeddingsDaemon = func(context.Context, io.Writer) error {
@@ -1694,7 +1779,7 @@ func TestEmbeddingsSwitchStartsStoppedDaemon(t *testing.T) {
 		return nil
 	}
 	t.Cleanup(func() { restartEmbeddingsDaemon = oldRestart })
-	require.NoError(t, runEmbeddingsSwitch(t.Context(), io.Discard, "https://embed.example/v1", "new-model", 3, ""))
+	require.NoError(t, runEmbeddingsSwitch(t.Context(), io.Discard, endpoint, "new-model", 3, ""))
 	assert.Equal(t, []string{"messages", "recall"}, stores)
 }
 
@@ -1735,6 +1820,7 @@ func TestEmbeddingsSwitchRelativeKey(t *testing.T) {
 	setTestHome(t, home)
 	dataDir := testDataDir(t)
 	writeEmbeddingsTestConfig(t, dataDir, "http://127.0.0.1:1/v1")
+	endpoint := newEmbeddingsStubServer(t, 3).URL + "/v1"
 	dir := t.TempDir()
 	require.NoError(t, os.Chmod(dir, 0o700))
 	dir, err := filepath.EvalSymlinks(dir)
@@ -1754,13 +1840,13 @@ func TestEmbeddingsSwitchRelativeKey(t *testing.T) {
 	oldRestart := restartEmbeddingsDaemon
 	restartEmbeddingsDaemon = func(context.Context, io.Writer) error { return nil }
 	t.Cleanup(func() { restartEmbeddingsDaemon = oldRestart })
-	require.NoError(t, runEmbeddingsSwitch(t.Context(), io.Discard, "https://embed.example/v1", "new-model", 3, "key"))
+	require.NoError(t, runEmbeddingsSwitch(t.Context(), io.Discard, endpoint, "new-model", 3, "key"))
 	cfg, err := config.LoadReadOnly()
 	require.NoError(t, err)
 	assert.Equal(t, key, cfg.Vector.Embeddings.Servers["default"].APIKeyFile)
 
 	require.NoError(t, os.WriteFile(filepath.Join(home, "key"), []byte("test-key"), 0o600))
-	require.NoError(t, runEmbeddingsSwitch(t.Context(), io.Discard, "https://embed.example/v1", "new-model", 3, "~/key"))
+	require.NoError(t, runEmbeddingsSwitch(t.Context(), io.Discard, endpoint, "new-model", 3, "~/key"))
 	cfg, err = config.LoadReadOnly()
 	require.NoError(t, err)
 	assert.Equal(t, "~/key", cfg.Vector.Embeddings.Servers["default"].APIKeyFile)
