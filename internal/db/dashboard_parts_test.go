@@ -401,10 +401,9 @@ func TestDashboardPartsMemoOversizedBatchPreservesHotParts(t *testing.T) {
 	part := func(id string) kept.Part[dashboardPart] { return kept.Part[dashboardPart]{ID: id, Fingerprint: "v"} }
 	memo := dashboardPartsMemo{maxBytes: 2 * dashboardPartBytes(part("a"))}
 	hot := map[string]kept.Part[dashboardPart]{"a": part("a")}
-	memo.storeParts("UTC", "version", hot, hot)
-	batch := map[string]kept.Part[dashboardPart]{"b": part("b"), "c": part("c"), "d": part("d")}
+	memo.storeParts("UTC", "version", hot)
 	selection := map[string]kept.Part[dashboardPart]{"a": part("a"), "b": part("b"), "c": part("c"), "d": part("d")}
-	memo.storeParts("UTC", "version", batch, selection)
+	memo.storeParts("UTC", "version", selection)
 	_, ok := memo.peek("a")
 	assert.True(t, ok)
 }
@@ -631,8 +630,8 @@ func TestDashboardPartsMemoSkipsOversizedPart(t *testing.T) {
 	require.Greater(t, dashboardPartBytes(large), memo.maxBytes)
 	a := map[string]kept.Part[dashboardPart]{"a": small}
 	b := map[string]kept.Part[dashboardPart]{"b": large}
-	memo.storeParts("UTC", "version", a, a)
-	memo.storeParts("UTC", "version", b, b)
+	memo.storeParts("UTC", "version", a)
+	memo.storeParts("UTC", "version", b)
 	got := make(map[string]kept.Part[dashboardPart])
 	memo.reuseSelection("UTC", "version", []dashboardSession{{ID: "a"}, {ID: "b"}}, map[string]string{"a": "v", "b": "v"}, got)
 	assert.Equal(t, a, got)
@@ -643,11 +642,11 @@ func TestDashboardPartsMemoEvictsLeastRecentlyUsed(t *testing.T) {
 	memo := dashboardPartsMemo{maxBytes: 3 * dashboardPartBytes(part("a"))}
 	for _, id := range []string{"a", "b", "c"} {
 		p := map[string]kept.Part[dashboardPart]{id: part(id)}
-		memo.storeParts("UTC", "version", p, p)
+		memo.storeParts("UTC", "version", p)
 	}
 	memo.reuseSelection("UTC", "version", []dashboardSession{{ID: "a"}}, map[string]string{"a": "v"}, make(map[string]kept.Part[dashboardPart]))
 	d := map[string]kept.Part[dashboardPart]{"d": part("d")}
-	memo.storeParts("UTC", "version", d, d)
+	memo.storeParts("UTC", "version", d)
 	assert.Equal(t, []string{"c", "a", "d"}, memo.keys())
 }
 
@@ -655,12 +654,12 @@ func TestDashboardPartsMemoStaleReuseDoesNotPromote(t *testing.T) {
 	part := func(id string) kept.Part[dashboardPart] { return kept.Part[dashboardPart]{ID: id, Fingerprint: "v"} }
 	memo := dashboardPartsMemo{maxBytes: 2 * dashboardPartBytes(part("a"))}
 	initial := map[string]kept.Part[dashboardPart]{"a": part("a"), "b": part("b")}
-	memo.storeParts("UTC", "version", initial, initial)
+	memo.storeParts("UTC", "version", initial)
 	got := make(map[string]kept.Part[dashboardPart])
 	memo.reuseSelection("UTC", "version", []dashboardSession{{ID: "a"}}, map[string]string{"a": "new"}, got)
 	assert.Empty(t, got)
 	c := map[string]kept.Part[dashboardPart]{"c": part("c")}
-	memo.storeParts("UTC", "version", c, c)
+	memo.storeParts("UTC", "version", c)
 	assert.NotContains(t, memo.keys(), "a")
 }
 
@@ -670,10 +669,10 @@ func TestDashboardPartsMemoAccounting(t *testing.T) {
 	c := kept.Part[dashboardPart]{ID: "c", Fingerprint: "v"}
 	memo := dashboardPartsMemo{maxBytes: dashboardPartBytes(a) + dashboardPartBytes(b)}
 	initial := map[string]kept.Part[dashboardPart]{"a": a, "b": b}
-	memo.storeParts("UTC", "version", initial, initial)
+	memo.storeParts("UTC", "version", initial)
 	assert.Equal(t, dashboardPartBytes(a)+dashboardPartBytes(b), memo.bytes)
 	next := map[string]kept.Part[dashboardPart]{"c": c}
-	memo.storeParts("UTC", "version", next, next)
+	memo.storeParts("UTC", "version", next)
 	assert.Equal(t, dashboardPartBytes(b)+dashboardPartBytes(c), memo.bytes)
 	assert.NotContains(t, memo.keys(), "a")
 }
@@ -703,7 +702,7 @@ func TestDashboardPartsMemoRetainedHeap(t *testing.T) {
 			p.Value.Hours[hour] = hour
 		}
 		parts := map[string]kept.Part[dashboardPart]{id: p}
-		memo.storeParts("UTC", "version", parts, parts)
+		memo.storeParts("UTC", "version", parts)
 	}
 	runtime.GC()
 	runtime.ReadMemStats(&after)
