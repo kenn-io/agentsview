@@ -2124,7 +2124,7 @@ func TestZCodeToolResultImageUpgradeReparsesAndIndexes(t *testing.T) {
 func TestCodexLaunchDirectoryUpgradeReparsesSource(t *testing.T) {
 	ctx := t.Context()
 	const oldVersion = 190
-	require.ElementsMatch(t, []parser.AgentType{parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode, parser.AgentInterpreter}, db.ScopedDataVersionProviders(oldVersion, 191))
+	require.Equal(t, []parser.AgentType{parser.AgentCodex}, db.ScopedDataVersionProviders(oldVersion, 191))
 	database := dbtest.OpenTestDB(t)
 	root := t.TempDir()
 	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"

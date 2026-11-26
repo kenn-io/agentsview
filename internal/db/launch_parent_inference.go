@@ -136,7 +136,7 @@ func inferLaunchChild(ctx context.Context, tx *sql.Tx, child launchChild) (int, 
 	uncertain := map[string]bool{}
 	for _, launch := range launches {
 		matches[launch.parent] = true
-		if !launch.certain && !launch.guarded && (!launch.retained || launch.parent != existingParent) {
+		if !launch.certain && (!launch.retained || launch.parent != existingParent) {
 			uncertain[launch.parent] = true
 			continue
 		}
@@ -297,7 +297,6 @@ type possibleLaunch struct {
 	at       time.Time
 	certain  bool
 	retained bool
-	guarded  bool
 }
 
 func possibleLaunches(ctx context.Context, tx *sql.Tx, child launchChild, from, until time.Time) ([]possibleLaunch, error) {
@@ -329,7 +328,9 @@ func possibleLaunches(ctx context.Context, tx *sql.Tx, child launchChild, from, 
 		}
 		for _, call := range calls {
 			if call.unknown {
-				launches = append(launches, possibleLaunch{parent: id, at: at})
+				if parser.MentionsLaunchAgent(call.command, child.agent) {
+					launches = append(launches, possibleLaunch{parent: id, at: at})
+				}
 				continue
 			}
 			dir := cwd
@@ -353,9 +354,8 @@ func possibleLaunches(ctx context.Context, tx *sql.Tx, child launchChild, from, 
 				})
 				if launch.Unknown || matched {
 					knownFolder := machine == child.machine && matched && !launch.Unknown && len(launch.Dirs) == 1
-					certain := knownFolder && !launch.Possible && !call.possible
-					guarded := knownFolder && !trashed && (launch.Possible || call.possible) && (!launch.Possible || launch.Guarded) && (!call.possible || call.guarded)
-					launches = append(launches, possibleLaunch{parent: id, at: at, certain: certain && !trashed, retained: certain && trashed, guarded: guarded})
+					certain := knownFolder
+					launches = append(launches, possibleLaunch{parent: id, at: at, certain: certain && !trashed, retained: certain && trashed})
 				}
 			}
 		}
@@ -500,7 +500,12 @@ func launchInputMayMatter(input sql.NullString) bool {
 	}
 	for _, call := range calls {
 		if call.unknown {
-			return true
+			for _, agent := range []string{"codex", "claude"} {
+				if parser.MentionsLaunchAgent(call.command, agent) {
+					return true
+				}
+			}
+			continue
 		}
 		if len(parser.LaunchesFromCommand(call.command, "")) != 0 {
 			return true

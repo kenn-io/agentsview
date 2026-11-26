@@ -901,7 +901,7 @@ func (b *codexSessionBuilder) handleFunctionCall(
 		Rendering: content,
 		SkillName: skillName,
 	}
-	if call.Category == "Bash" {
+	if b.agent == AgentCodex && call.Category == "Bash" {
 		call.WorkingDirectory = b.turnCwd
 	}
 	toolCalls := []ParsedToolCall{call}
