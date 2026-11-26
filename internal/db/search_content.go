@@ -451,7 +451,7 @@ func (db *DB) searchContentWordsOrSubstring(ctx context.Context, f ContentSearch
 }
 
 func (db *DB) searchContentLiteral(ctx context.Context, f ContentSearchFilter) (ContentSearchPage, error) {
-	return searchWithSubstringCandidates(ctx, db, f, literalIndexQuery(f.Pattern),
+	return searchWithSubstringCandidates(ctx, db, f, substringIndexQuery(f.Pattern),
 		func(candidates substringCandidateFilters) (ContentSearchPage, error) {
 			return db.substringSearchPage(ctx, f, candidates)
 		})
@@ -772,8 +772,8 @@ func (d *LegacyThinkingDedupe) Suppress(m ContentMatch, legacyThinking bool) boo
 }
 
 // searchContentRegex compiles the pattern, narrows candidate rows with a
-// LIKE prefilter on any required literal substring (full scan when none),
-// streams candidates, and keeps RE2 matches. Snippets are built in Go.
+// substring index and a LIKE prefilter for required literals, then keeps
+// RE2 matches. Patterns without usable literals scan candidate bodies.
 func (db *DB) searchContentRegex(
 	ctx context.Context, f ContentSearchFilter,
 ) (ContentSearchPage, error) {
@@ -789,8 +789,8 @@ func (db *DB) searchContentRegex(
 		defer release()
 	}
 
-	lit := LiteralPrefix(f.Pattern)
-	out, err := searchWithSubstringCandidates(ctx, db, f, regexIndexQuery(f.Pattern),
+	query, lit := regexIndexQuery(f.Pattern)
+	out, err := searchWithSubstringCandidates(ctx, db, f, query,
 		func(candidates substringCandidateFilters) ([]ContentMatch, error) {
 			return db.regexSearchRows(ctx, f, re, lit, candidates)
 		})

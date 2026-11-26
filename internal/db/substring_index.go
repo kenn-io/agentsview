@@ -185,17 +185,19 @@ func retryWhenSubstringIndexDropped[T any](attempt func() (T, error)) (T, error)
 // sequences only widen the candidate set, which the LIKE check then narrows.
 const maxSubstringIndexTrigrams = 32
 
-// substringIndexQuery returns an FTS5 query that matches every row whose text
-// contains literal, ignoring case. It reports false when literal is shorter
-// than three characters, which the index cannot look up.
-func substringIndexQuery(literal string) (string, bool) {
-	runes := []rune(literal)
-	if len(runes) < 3 || strings.ContainsRune(literal, 0) {
-		return "", false
+// substringIndexQuery returns a case-insensitive FTS5 query for a literal.
+// An empty query means the index cannot look it up.
+func substringIndexQuery(literal string) string {
+	if strings.ContainsRune(literal, 0) {
+		return ""
 	}
-	seen := make(map[string]struct{})
-	terms := make([]string, 0, min(len(runes)-2, maxSubstringIndexTrigrams))
-	for i := 0; i+3 <= len(runes) && len(terms) < maxSubstringIndexTrigrams; i++ {
+	return strings.Join(substringIndexTerms([]rune(literal), make(map[string]struct{})), " AND ")
+}
+
+// substringIndexTerms adds distinct trigrams to seen, up to the shared limit.
+func substringIndexTerms(runes []rune, seen map[string]struct{}) []string {
+	var terms []string
+	for i := 0; i+3 <= len(runes) && len(seen) < maxSubstringIndexTrigrams; i++ {
 		trigram := string(runes[i : i+3])
 		if _, ok := seen[trigram]; ok {
 			continue
@@ -203,34 +205,29 @@ func substringIndexQuery(literal string) (string, bool) {
 		seen[trigram] = struct{}{}
 		terms = append(terms, `"`+strings.ReplaceAll(trigram, `"`, `""`)+`"`)
 	}
-	return strings.Join(terms, " AND "), true
+	return terms
 }
 
-// regexIndexQuery builds a necessary condition for a match. An empty result
-// means the index cannot safely narrow the search.
-func regexIndexQuery(pattern string) string {
+// regexIndexQuery returns an index query and the longest required literal safe
+// for SQLite LIKE. An empty value leaves that prefilter unused.
+func regexIndexQuery(pattern string) (string, string) {
 	re, err := syntax.Parse(pattern, syntax.Perl)
 	if err != nil {
-		return ""
+		return "", ""
 	}
-	var build func(*syntax.Regexp, int) (string, int)
-	build = func(re *syntax.Regexp, budget int) (string, int) {
+	var terms []string
+	var longest string
+	seen := make(map[string]struct{})
+	var visit func(*syntax.Regexp)
+	visit = func(re *syntax.Regexp) {
 		switch re.Op {
 		case syntax.OpLiteral:
-			var parts []string
 			var run []rune
-			used := 0
 			flush := func() {
-				if budget-used < 1 {
-					return
+				if len(run) > len([]rune(longest)) {
+					longest = string(run)
 				}
-				for i := 0; i+3 <= len(run) && used < budget; i++ {
-					term, ok := substringIndexQuery(string(run[i : i+3]))
-					if ok {
-						parts = append(parts, "("+term+")")
-						used++
-					}
-				}
+				terms = append(terms, substringIndexTerms(run, seen)...)
 				run = nil
 			}
 			for _, r := range re.Rune {
@@ -241,35 +238,20 @@ func regexIndexQuery(pattern string) string {
 				}
 			}
 			flush()
-			return strings.Join(parts, " AND "), used
 		case syntax.OpCapture, syntax.OpPlus:
-			return build(re.Sub[0], budget)
+			visit(re.Sub[0])
 		case syntax.OpRepeat:
 			if re.Min > 0 {
-				return build(re.Sub[0], budget)
+				visit(re.Sub[0])
 			}
 		case syntax.OpConcat:
-			var parts []string
-			used := 0
 			for _, sub := range re.Sub {
-				q, n := build(sub, budget-used)
-				if q == "" {
-					continue
-				}
-				parts = append(parts, "("+q+")")
-				used += n
+				visit(sub)
 			}
-			return strings.Join(parts, " AND "), used
 		}
-		return "", 0
 	}
-	query, _ := build(re, maxSubstringIndexTrigrams)
-	return query
-}
-
-func literalIndexQuery(literal string) string {
-	query, _ := substringIndexQuery(literal)
-	return query
+	visit(re)
+	return strings.Join(terms, " AND "), longest
 }
 
 // substringFilter is an optional SQL condition and its arguments.
@@ -379,8 +361,8 @@ func (db *DB) termsIndexQueries(
 	}
 	indexed := make(map[string]string, len(terms))
 	for _, term := range terms {
-		query, ok := substringIndexQuery(term)
-		if !ok {
+		query := substringIndexQuery(term)
+		if query == "" {
 			continue
 		}
 		selective, err := db.substringIndexSelective(ctx, "message_trigram_fts", query, scopeMessages)

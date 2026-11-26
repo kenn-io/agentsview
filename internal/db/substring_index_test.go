@@ -68,7 +68,7 @@ func TestSearchContentSubstringIndexMatchesScan(t *testing.T) {
 	})
 	countMessagesForSubstringIndex(t, d, "s1")
 	for _, pattern := range []string{"deploy-window", "zebra-crossing"} {
-		candidates, err := d.substringCandidates(t.Context(), ContentSearchFilter{Pattern: pattern}, literalIndexQuery(pattern))
+		candidates, err := d.substringCandidates(t.Context(), ContentSearchFilter{Pattern: pattern}, substringIndexQuery(pattern))
 		require.NoError(t, err)
 		require.NotEmpty(t, candidates.message.sql, pattern)
 		require.NotEmpty(t, candidates.thinking.sql, pattern)
@@ -226,7 +226,7 @@ func TestSubstringCandidatesOnlyForSelectivePatterns(t *testing.T) {
 	}
 	candidates := func(f ContentSearchFilter) substringCandidateFilters {
 		t.Helper()
-		got, err := d.substringCandidates(ctx, f, literalIndexQuery(f.Pattern))
+		got, err := d.substringCandidates(ctx, f, substringIndexQuery(f.Pattern))
 		require.NoError(t, err)
 		return got
 	}
@@ -274,7 +274,7 @@ func TestSubstringSearchScansWhenImportDropsIndexMidSearch(t *testing.T) {
 	}
 
 	var usedIndex []bool
-	page, err := searchWithSubstringCandidates(ctx, d, f, literalIndexQuery(f.Pattern),
+	page, err := searchWithSubstringCandidates(ctx, d, f, substringIndexQuery(f.Pattern),
 		func(candidates substringCandidateFilters) (ContentSearchPage, error) {
 			usedIndex = append(usedIndex, candidates.message.sql != "")
 			if len(usedIndex) == 1 {
@@ -321,10 +321,10 @@ func TestRegexSearchScansWhenImportDropsIndexBeforeFirstRow(t *testing.T) {
 			}
 			re, err := regexp.Compile(f.Pattern)
 			require.NoError(t, err)
-			lit := LiteralPrefix(f.Pattern)
+			query, lit := regexIndexQuery(f.Pattern)
 
 			var usedIndex []bool
-			matches, err := searchWithSubstringCandidates(ctx, d, f, regexIndexQuery(f.Pattern),
+			matches, err := searchWithSubstringCandidates(ctx, d, f, query,
 				func(candidates substringCandidateFilters) ([]ContentMatch, error) {
 					usedIndex = append(usedIndex, candidates.message.sql != "")
 					if len(usedIndex) == 1 {
@@ -484,14 +484,19 @@ func TestRegexIndexQuery(t *testing.T) {
 		{strings.Repeat("abc", 40) + `|xyz`, false},
 	} {
 		t.Run(tc.pattern, func(t *testing.T) {
-			assert.Equal(t, tc.indexed, regexIndexQuery(tc.pattern) != "")
+			query, _ := regexIndexQuery(tc.pattern)
+			assert.Equal(t, tc.indexed, query != "")
 		})
 	}
-	query := regexIndexQuery(`foo(?:alpha|zebra)bar`)
+	query, _ := regexIndexQuery(`foo(?:alpha|zebra)bar`)
 	assert.Contains(t, query, `"foo"`)
 	assert.Contains(t, query, `"bar"`)
 	assert.NotContains(t, query, `"alp"`)
 	assert.NotContains(t, query, `"zeb"`)
+	_, literal := regexIndexQuery(`x.*longer-text.*end`)
+	assert.Equal(t, "longer-text", literal)
+	_, literal = regexIndexQuery(`(?i)kelvin`)
+	assert.Equal(t, "ELVIN", literal)
 }
 
 func TestRegexIndexMatchesScan(t *testing.T) {
@@ -506,7 +511,8 @@ func TestRegexIndexMatchesScan(t *testing.T) {
 	insertMessages(t, d, Message{SessionID: "s1", Ordinal: 5, Role: "assistant", Content: "answer", ThinkingText: "zebra-crossing", Timestamp: "2026-05-20T12:00:05Z"})
 	countMessagesForSubstringIndex(t, d, "s1")
 	pattern := `\bdeploy-window(?: and| again)`
-	candidates, err := d.substringCandidates(t.Context(), ContentSearchFilter{Pattern: pattern}, regexIndexQuery(pattern))
+	query, _ := regexIndexQuery(pattern)
+	candidates, err := d.substringCandidates(t.Context(), ContentSearchFilter{Pattern: pattern}, query)
 	require.NoError(t, err)
 	require.NotEmpty(t, candidates.message.sql)
 	require.NotEmpty(t, candidates.thinking.sql)
@@ -527,4 +533,67 @@ func TestRegexIndexMatchesScan(t *testing.T) {
 			assert.Equal(t, pages[pattern][cursor], page, "%s cursor %d", pattern, cursor)
 		}
 	}
+}
+
+func TestRegexIndexRepeatedTrigramsKeepRareSuffix(t *testing.T) {
+	d := testDB(t)
+	pattern := strings.Repeat("0", 40) + "needle"
+	seedSearchSession(t, d, "s1", "proj", [][2]string{{"user", pattern}, {"user", strings.Repeat("0", 80)}})
+	countMessagesForSubstringIndex(t, d, "s1")
+	query, lit := regexIndexQuery(pattern)
+	assert.Equal(t, pattern, lit)
+	assert.Contains(t, query, `"nee"`)
+	candidates, err := d.substringCandidates(t.Context(), ContentSearchFilter{Pattern: pattern}, query)
+	require.NoError(t, err)
+	require.NotEmpty(t, candidates.message.sql)
+	assert.Equal(t, []substringHit{{"message", 0}}, substringHits(t, d, ContentSearchFilter{Pattern: pattern, Mode: "regex", Limit: 50}))
+}
+
+func TestRegexRequiredLiteralPrefiltersToolSources(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "s1", "proj", func(s *Session) { s.UserMessageCount = 2 })
+	require.NoError(t, d.ReplaceSessionMessages(ctx, "s1", []Message{
+		{SessionID: "s1", Ordinal: 0, Role: "user", Content: "rare-needle in message"},
+		{SessionID: "s1", Ordinal: 1, Role: "user", Content: "another question"},
+		{SessionID: "s1", Ordinal: 2, Role: "assistant", Content: "answer", ThinkingText: "rare-needle in thought", ToolCalls: []ToolCall{
+			{ToolName: "Bash", Category: "Bash", ToolUseID: "a", InputJSON: `{"cmd":"rare-needle"}`, ResultContent: "rare-needle output"},
+			{ToolName: "Bash", Category: "Bash", ToolUseID: "b", InputJSON: `{"cmd":"other"}`, ResultContent: "unrelated output"},
+			{ToolName: "Bash", Category: "Bash", ToolUseID: "c", InputJSON: `{"cmd":"other"}`, ResultEvents: []ToolResultEvent{{ToolUseID: "c", Source: "stdout", Status: "success", Content: "rare-needle event", EventIndex: 0}}},
+		}},
+	}))
+	f := ContentSearchFilter{Pattern: `\brare-needle`, Mode: "regex", Limit: 50, Sources: []string{"messages", "thinking", "tool_input", "tool_result"}}
+	re := regexp.MustCompile(f.Pattern)
+	_, lit := regexIndexQuery(f.Pattern)
+	require.Equal(t, "rare-needle", lit)
+	snapshot, err := d.BeginMessageSnapshot(ctx)
+	require.NoError(t, err)
+	defer snapshot.Close()
+	scope, scopeArgs := sessionScopeSubquery(f)
+	count := func(literal string) int {
+		rows, err := regexCandidateRows(ctx, snapshot.tx, f, literal, scope, scopeArgs, substringCandidateFilters{})
+		require.NoError(t, err)
+		defer rows.Close()
+		n := 0
+		for rows.Next() {
+			n++
+		}
+		require.NoError(t, rows.Err())
+		return n
+	}
+	assert.Less(t, count(lit), count(""))
+	require.NoError(t, snapshot.Close())
+	filtered, err := d.regexSearchRows(ctx, f, re, lit, substringCandidateFilters{})
+	require.NoError(t, err)
+	scanned, err := d.regexSearchRows(ctx, f, re, "", substringCandidateFilters{})
+	require.NoError(t, err)
+	assert.Equal(t, scanned, filtered)
+	locations := make(map[string]int)
+	for _, hit := range filtered {
+		locations[hit.Location]++
+	}
+	assert.Equal(t, map[string]int{"message": 1, "thinking": 1, "tool_input": 1, "tool_result": 2}, locations)
+	page, err := d.SearchContent(ctx, ContentSearchFilter{Pattern: f.Pattern, Mode: "regex", Limit: 50})
+	require.NoError(t, err)
+	assert.Len(t, page.Matches, len(filtered))
 }

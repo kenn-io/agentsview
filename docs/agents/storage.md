@@ -1388,10 +1388,11 @@ cannot filter by column; `detail='column'` measured nearly three times larger.
 The index only narrows candidates. A search intersects the listed IDs for the
 pattern's sequences, up to 32 of them, and the existing `LIKE` still decides
 every row. Regex searches also use the index for required literals, while Go's
-regex engine decides the final match. The tokenizer folds case for every script
-while `LIKE` folds only ASCII, so the index returns a superset and results stay
-identical to a scan.
-Patterns shorter than three characters, single-session searches, and branches
+regex engine decides the final match. Alternation branches keep scanning when
+no literal outside them is required: indexing them slowed measured searches.
+The tokenizer folds case for every script while `LIKE` folds only ASCII, so the
+index returns a superset and results stay identical to a scan. Patterns shorter
+than three characters, single-session searches, and branches
 where the index lists more than a quarter of the messages in the scope's
 sessions keep the scan. A capped count of the listed IDs makes that choice; it
 stops as soon as the share is passed. Tool input and tool result branches are
