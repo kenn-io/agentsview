@@ -1718,6 +1718,80 @@ func TestEmbeddingsSwitchLegacyRequestedDimensions(t *testing.T) {
 	}
 }
 
+func TestEmbeddingsSwitchFindsDaemonWhileWaitingForLock(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dataDir := testDataDir(t)
+	writeEmbeddingsTestConfig(t, dataDir, "http://127.0.0.1:1/v1")
+	endpoint := newEmbeddingsStubServer(t, 3).URL + "/v1"
+	held, err := tryAcquireNamedLock(dataDir, vectorsWriteLockFile)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = held.Close() })
+
+	restartErr := errors.New("restart stopped by test")
+	oldRestart := restartEmbeddingsDaemon
+	restartEmbeddingsDaemon = func(context.Context, io.Writer) error { return restartErr }
+	t.Cleanup(func() { restartEmbeddingsDaemon = oldRestart })
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	waiting := make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		result <- runEmbeddingsSwitch(ctx, &embeddingsSwitchSignalWriter{firstWrite: waiting}, endpoint, "new-model", 3, "")
+	}()
+	select {
+	case <-waiting:
+	case <-time.After(5 * time.Second):
+		cancel()
+		<-result
+		require.FailNow(t, "switch did not wait for the lock")
+	}
+
+	draining := make(chan struct{})
+	drained := make(chan struct{})
+	startEmbeddingsTestDaemon(t, dataDir, map[string]http.HandlerFunc{
+		"POST /api/v1/embeddings/switch-drain": func(w http.ResponseWriter, r *http.Request) {
+			close(draining)
+			lock, err := waitForEmbeddingsWriteLock(r.Context(), io.Discard, dataDir, nil)
+			if err != nil {
+				return
+			}
+			defer lock.Close()
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "event: ready\ndata: true\n\n")
+			w.(http.Flusher).Flush()
+			close(drained)
+			<-r.Context().Done()
+		},
+	})
+	select {
+	case <-draining:
+	case <-time.After(5 * time.Second):
+		cancel()
+		<-result
+		require.FailNow(t, "switch did not find the daemon while it held the lock")
+	}
+	select {
+	case <-result:
+		require.FailNow(t, "switch finished before the direct build released its lock")
+	default:
+	}
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	assert.Equal(t, "test-model", cfg.Vector.Embeddings.Model)
+	require.NoError(t, held.Close())
+	select {
+	case <-drained:
+	case <-time.After(5 * time.Second):
+		cancel()
+		<-result
+		require.FailNow(t, "daemon drain did not acquire the lock after the direct build finished")
+	}
+	require.ErrorIs(t, <-result, restartErr)
+	cfg, err = config.LoadReadOnly()
+	require.NoError(t, err)
+	assert.Equal(t, "new-model", cfg.Vector.Embeddings.Model)
+}
+
 func TestEmbeddingsSwitchWaitsForDirectBuildBeforeSaving(t *testing.T) {
 	setTestHome(t, t.TempDir())
 	dataDir := testDataDir(t)

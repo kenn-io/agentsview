@@ -152,24 +152,16 @@ func runEmbeddingsSwitch(
 	if err := preflightEmbeddingsServer(ctx, candidate); err != nil {
 		return fmt.Errorf("testing embedding server: %w", err)
 	}
-	var directBuildLock *writeOwnerLock
-	if daemonErr == nil {
-		release, err := client.pauseBuilds(ctx, out, &waiting)
-		if err != nil {
-			return fmt.Errorf("waiting for embedding builds: %w", err)
-		}
-		defer release()
-	} else {
-		directBuildLock, err = waitForEmbeddingsWriteLock(ctx, out, cfg.DataDir, &waiting)
-		if err != nil {
-			return fmt.Errorf("waiting for embedding builds: %w", err)
-		}
-		defer func() {
-			if directBuildLock != nil {
-				_ = directBuildLock.Close()
-			}
-		}()
+	directBuildLock, release, err := pauseEmbeddingsSwitchBuilds(ctx, out, cfg, client, daemonErr, &waiting)
+	if err != nil {
+		return fmt.Errorf("waiting for embedding builds: %w", err)
 	}
+	defer release()
+	defer func() {
+		if directBuildLock != nil {
+			_ = directBuildLock.Close()
+		}
+	}()
 	if err := cfg.SaveVectorEmbeddingsServer(endpoint, model, dimension, apiKeyFile); err != nil {
 		return fmt.Errorf("saving embedding server: %w", err)
 	}
@@ -236,6 +228,36 @@ func runEmbeddingsSwitch(
 		}
 	}
 	return errors.Join(buildErrors...)
+}
+
+// pauseEmbeddingsSwitchBuilds pauses daemon builds, or waits for the direct
+// build lock when no daemon is reachable. A compatible daemon that appears
+// during the lock wait takes over through the same daemon pause.
+func pauseEmbeddingsSwitchBuilds(
+	ctx context.Context, out io.Writer, cfg config.Config,
+	client embeddingsDaemonClient, daemonErr error, waiting *bool,
+) (*writeOwnerLock, func(), error) {
+	if daemonErr != nil {
+		waitCtx, stop := context.WithCancel(ctx)
+		defer stop()
+		lock, err := waitForEmbeddingsWriteLockWithWait(waitCtx, cfg.DataDir, func() {
+			if !*waiting {
+				fmt.Fprintln(out, "Waiting for the current embedding build or setup to finish…")
+				*waiting = true
+			}
+			if client, daemonErr = resolveEmbeddingsDaemonClient(cfg); daemonErr == nil {
+				stop()
+			}
+		})
+		if err == nil {
+			return lock, func() {}, nil
+		}
+		if daemonErr != nil || ctx.Err() != nil {
+			return nil, nil, err
+		}
+	}
+	release, err := client.pauseBuilds(ctx, out, waiting)
+	return nil, release, err
 }
 
 func waitForEmbeddingsWriteLock(
