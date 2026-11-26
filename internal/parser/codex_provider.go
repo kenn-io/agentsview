@@ -294,11 +294,7 @@ func (p *codexProvider) RawCaptureSourcesForChangedPath(
 			source, ok = p.sources.directPathSource(root, req.Path, true)
 		}
 		if ok {
-			preferred, err := p.sources.preferredChangedLabeledSource(ctx, source)
-			if err != nil {
-				return nil, err
-			}
-			return []SourceRef{preferred}, nil
+			return []SourceRef{source}, nil
 		}
 	}
 	return nil, nil
@@ -1395,35 +1391,10 @@ func (s codexSourceSet) SourcesForChangedPath(
 				}
 				source = preferred
 			}
-			if IsRegularFile(req.Path) {
-				preferred, err := s.preferredChangedLabeledSource(ctx, source)
-				if err != nil {
-					return nil, err
-				}
-				source = preferred
-			}
 			return []SourceRef{source}, nil
 		}
 	}
 	return nil, nil
-}
-
-func (s codexSourceSet) preferredChangedLabeledSource(ctx context.Context, source SourceRef) (SourceRef, error) {
-	if s.agent != AgentCodex {
-		return source, nil
-	}
-	uuid := extractUUIDFromRollout(filepath.Base(source.DisplayPath))
-	if uuid == "" {
-		return source, nil
-	}
-	preferred, found, err := s.findCanonicalSource(ctx, uuid)
-	if err != nil {
-		return SourceRef{}, err
-	}
-	if found && CodexSourceRank(preferred).Class == codexLabeledSourceClass {
-		return preferred, nil
-	}
-	return source, nil
 }
 
 func (s codexSourceSet) FindSource(

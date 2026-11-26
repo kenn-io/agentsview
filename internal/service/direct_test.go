@@ -967,6 +967,7 @@ func TestDirectBackend_Sync_CodexDuplicatePath(t *testing.T) {
 			d := dbtest.OpenTestDB(t)
 			engine := sync.NewEngine(t.Context(), d, sync.EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: roots}})
 			t.Cleanup(engine.Close)
+			require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[2]}))
 			svc := service.NewDirectBackend(d, engine)
 			detail, err := svc.Sync(t.Context(), service.SyncInput{Path: paths[requested]})
 			require.NoError(t, err)

@@ -711,16 +711,18 @@ func (b *directBackend) Sync(
 		path = parser.ResolveSourceFilePath(storedPath)
 	}
 
-	selectedPath, _ := b.engine.SyncPathContext(ctx, path)
+	selectedID, _ := b.engine.SyncPathContext(ctx, path)
 
 	id := in.ID
 	if id == "" {
 		resolved, err := b.resolveSessionIDByPath(ctx, path)
 		if errors.Is(err, errSyncNoSessionForPath) {
-			// A changed Codex copy can select a different labeled source for
-			// the same session. Resolve the selected source's stored path.
-			if selectedPath != "" && selectedPath != path {
-				resolved, err = b.resolveSessionIDByPath(ctx, selectedPath)
+			// A higher-ranked Codex copy may own this session's stored path.
+			if selectedID != "" {
+				detail, lookupErr := b.Get(ctx, selectedID)
+				if lookupErr != nil || detail != nil {
+					return detail, lookupErr
+				}
 			}
 		}
 		if err != nil {

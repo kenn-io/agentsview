@@ -1632,7 +1632,7 @@ func (e *Engine) prepareChangedPathSync(
 // one owned pass. The caller holds syncMu, so this progress cannot overwrite a
 // different pass while waiting to enter the serialized sync path.
 func (e *Engine) syncChangedPathsLocked(
-	ctx context.Context, paths []string, selectedCodexPath *string,
+	ctx context.Context, paths []string, selectedCodexID *string,
 ) (stats SyncStats, tombstoned int, retErr error) {
 	ctx, closeProviderCache, err := e.withProviderFingerprintCache(ctx, paths)
 	if err != nil {
@@ -1650,8 +1650,8 @@ func (e *Engine) syncChangedPathsLocked(
 	e.invalidateNativeTitleCache(paths)
 	summary := e.beginChangedPathPass(paths)
 	prepared := e.prepareChangedPathSync(ctx, paths)
-	if selectedCodexPath != nil && len(prepared.files) == 1 && prepared.files[0].Agent == parser.AgentCodex {
-		*selectedCodexPath = prepared.files[0].Path
+	if selectedCodexID != nil && len(prepared.files) == 1 && prepared.files[0].Agent == parser.AgentCodex && prepared.files[0].ProviderSource != nil {
+		*selectedCodexID = prepared.files[0].ProviderSource.Key
 	}
 	summary.sources = len(prepared.files)
 	defer func() { log.Print(summary.finish(e, stats)) }()
@@ -1847,7 +1847,7 @@ func (e *Engine) SyncPathsContext(ctx context.Context, paths []string) error {
 	return e.syncPathsContext(ctx, paths, false)
 }
 
-// SyncPathContext returns the selected Codex path when one source owns the event.
+// SyncPathContext returns the Codex session ID when one source owns the event.
 func (e *Engine) SyncPathContext(ctx context.Context, path string) (string, error) {
 	var selected string
 	err := e.syncPathsWithLockContext(ctx, []string{path}, false, false, &selected)
@@ -1864,7 +1864,7 @@ func (e *Engine) syncPathsContext(ctx context.Context, paths []string, force boo
 	return e.syncPathsWithLockContext(ctx, paths, force, false, nil)
 }
 
-func (e *Engine) syncPathsWithLockContext(ctx context.Context, paths []string, force, try bool, selectedCodexPath *string) error {
+func (e *Engine) syncPathsWithLockContext(ctx context.Context, paths []string, force, try bool, selectedCodexID *string) error {
 	if e.sourceSyncErr != nil {
 		return e.sourceSyncErr
 	}
@@ -1881,7 +1881,7 @@ func (e *Engine) syncPathsWithLockContext(ctx context.Context, paths []string, f
 		previous := e.forceFullParse
 		e.forceFullParse = previous || force
 		defer func() { e.forceFullParse = previous }()
-		return e.syncChangedPathsLocked(ctx, paths, selectedCodexPath)
+		return e.syncChangedPathsLocked(ctx, paths, selectedCodexID)
 	}()
 	if stats.hasSessionChanges() || tombstoned > 0 {
 		e.emit("sessions")
