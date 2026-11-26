@@ -68,7 +68,7 @@ func TestSearchContentSubstringIndexMatchesScan(t *testing.T) {
 	})
 	countMessagesForSubstringIndex(t, d, "s1")
 	for _, pattern := range []string{"deploy-window", "zebra-crossing"} {
-		candidates, err := d.substringCandidates(t.Context(), ContentSearchFilter{Pattern: pattern}, pattern)
+		candidates, err := d.substringCandidates(t.Context(), ContentSearchFilter{Pattern: pattern}, []string{pattern})
 		require.NoError(t, err)
 		require.NotEmpty(t, candidates.message.sql, pattern)
 		require.NotEmpty(t, candidates.thinking.sql, pattern)
@@ -226,7 +226,7 @@ func TestSubstringCandidatesOnlyForSelectivePatterns(t *testing.T) {
 	}
 	candidates := func(f ContentSearchFilter) substringCandidateFilters {
 		t.Helper()
-		got, err := d.substringCandidates(ctx, f, f.Pattern)
+		got, err := d.substringCandidates(ctx, f, []string{f.Pattern})
 		require.NoError(t, err)
 		return got
 	}
@@ -274,7 +274,7 @@ func TestSubstringSearchScansWhenImportDropsIndexMidSearch(t *testing.T) {
 	}
 
 	var usedIndex []bool
-	page, err := searchWithSubstringCandidates(ctx, d, f, f.Pattern,
+	page, err := searchWithSubstringCandidates(ctx, d, f, []string{f.Pattern},
 		func(candidates substringCandidateFilters) (ContentSearchPage, error) {
 			usedIndex = append(usedIndex, candidates.message.sql != "")
 			if len(usedIndex) == 1 {
@@ -321,16 +321,16 @@ func TestRegexSearchScansWhenImportDropsIndexBeforeFirstRow(t *testing.T) {
 			}
 			re, err := regexp.Compile(f.Pattern)
 			require.NoError(t, err)
-			lit := requiredLiteral(f.Pattern)
+			literals := requiredLiterals(f.Pattern)
 
 			var usedIndex []bool
-			matches, err := searchWithSubstringCandidates(ctx, d, f, lit,
+			matches, err := searchWithSubstringCandidates(ctx, d, f, literalTexts(literals),
 				func(candidates substringCandidateFilters) ([]ContentMatch, error) {
 					usedIndex = append(usedIndex, candidates.message.sql != "")
 					if len(usedIndex) == 1 {
 						require.NoError(t, archive.DropFTS(ctx))
 					}
-					return d.regexSearchRows(ctx, f, re, lit, candidates)
+					return d.regexSearchRows(ctx, f, re, literals, candidates)
 				})
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantIndex, usedIndex)
@@ -471,16 +471,34 @@ func TestDaemonOpenBuildsIndexesForEmptyArchive(t *testing.T) {
 	}
 }
 
-func TestRequiredLiteral(t *testing.T) {
-	for _, tc := range []struct{ pattern, want string }{
-		{`\bdeploy-window`, "deploy-window"}, {`.*timeout.*`, "timeout"},
-		{`x.*longer-text.*end`, "longer-text"}, {`foo|bar`, ""},
-		{`foo(?:alpha|zebra)bar`, "foo"}, {`abc*`, "ab"},
-		{`(?:abc){2,3}`, "abc"}, {`(?i)kelvin`, "ELVIN"}, {`(?i)sk`, ""},
-		{`ab\x00cdef`, "cdef"}, {`[`, ""},
-	} {
-		t.Run(tc.pattern, func(t *testing.T) { assert.Equal(t, tc.want, requiredLiteral(tc.pattern)) })
+func literalTexts(literals []regexLiteral) []string {
+	var texts []string
+	for _, literal := range literals {
+		texts = append(texts, literal.text)
 	}
+	return texts
+}
+
+func TestRequiredLiterals(t *testing.T) {
+	for _, tc := range []struct {
+		pattern string
+		want    []regexLiteral
+	}{
+		{`\bdeploy-window`, []regexLiteral{{text: "deploy-window"}}},
+		{`.*timeout.*`, []regexLiteral{{text: "timeout"}}},
+		{`unique-rare.*common fixed portion`, []regexLiteral{{text: "unique-rare"}, {text: "common fixed portion"}}},
+		{`foo|bar`, nil}, {`foo(?:alpha|zebra)bar`, []regexLiteral{{text: "foo"}, {text: "bar"}}},
+		{`fo(o)`, []regexLiteral{{text: "fo"}, {text: "o"}}},
+		{`abc*`, []regexLiteral{{text: "ab"}}}, {`(?:abc){2,3}`, []regexLiteral{{text: "abc"}}},
+		{`(?i)kelvin`, []regexLiteral{{text: "elvin", fold: true}}}, {`(?i)sk`, nil},
+		{`ab\x00cdef`, []regexLiteral{{text: "ab"}, {text: "cdef"}}},
+		{`abc\x{FFFD}def`, []regexLiteral{{text: "abc"}, {text: "def"}}},
+		{`\x{FFFD}{3}`, nil}, {`[`, nil},
+	} {
+		t.Run(tc.pattern, func(t *testing.T) { assert.Equal(t, tc.want, requiredLiterals(tc.pattern)) })
+	}
+	re := regexp.MustCompile(`fo(o)`)
+	assert.Equal(t, []regexLiteral{{text: "foo"}}, regexBodyLiterals(re, requiredLiterals(re.String())))
 }
 
 func TestRegexIndexMatchesScan(t *testing.T) {
@@ -494,16 +512,21 @@ func TestRegexIndexMatchesScan(t *testing.T) {
 		{"user", "deploy-window again"},
 		{"assistant", "legacy placeholder"},
 		{"user", strings.Repeat("0", 40) + "needle"},
+		{"user", "invalid placeholder"},
+		{"assistant", "Foo then bar"},
 	})
 	_, err := d.getWriter().Exec(ctx, `UPDATE messages SET content = ? WHERE session_id = ? AND ordinal = ?`, "before\x00after timeout", "s1", 5)
 	require.NoError(t, err)
+	_, err = d.getWriter().Exec(ctx, `UPDATE messages SET content = ? WHERE session_id = ? AND ordinal = ?`, "foo\xffbar", "s1", 7)
+	require.NoError(t, err)
+	insertMessages(t, d, Message{SessionID: "s1", Ordinal: 9, Role: "assistant", Content: "running", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", ResultContent: "panic in tool output"}}})
 	countMessagesForSubstringIndex(t, d, "s1")
 	pattern := `\bdeploy-window(?: and| again)`
-	candidates, err := d.substringCandidates(ctx, ContentSearchFilter{Pattern: pattern}, requiredLiteral(pattern))
+	candidates, err := d.substringCandidates(ctx, ContentSearchFilter{Pattern: pattern}, literalTexts(requiredLiterals(pattern)))
 	require.NoError(t, err)
 	require.NotEmpty(t, candidates.message.sql)
 	require.NotEmpty(t, candidates.thinking.sql)
-	patterns := []string{pattern, `\bafter timeout`, `(?i)panic`, `(?i)kelvin`, `(?i)search`, `.*timeout.*`, `"quoted"`, `foo|..`, strings.Repeat("0", 40) + "needle"}
+	patterns := []string{pattern, `\bafter timeout`, `(?i)panic`, `(?i)kelvin`, `(?i)search`, `.*timeout.*`, `"quoted"`, `foo|..`, `\bfoo\x{FFFD}bar`, `Foo.*(?i)bar`, strings.Repeat("0", 40) + "needle"}
 	pages := make(map[string][]ContentSearchPage)
 	for _, pattern := range patterns {
 		for _, cursor := range []int{0, 1, 2} {
@@ -513,11 +536,14 @@ func TestRegexIndexMatchesScan(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, pages[`\bafter timeout`][0].Matches)
+	require.NotEmpty(t, pages[`\bfoo\x{FFFD}bar`][0].Matches)
+	require.NotEmpty(t, pages[`Foo.*(?i)bar`][0].Matches)
+	assert.Equal(t, []substringHit{{"tool_result", 9}}, substringHits(t, d, ContentSearchFilter{Pattern: `(?i)PANIC`, Mode: "regex", Limit: 50, Sources: []string{"tool_result"}}))
 	require.NoError(t, d.DropFTS(ctx))
 	for _, pattern := range patterns {
 		for _, cursor := range []int{0, 1, 2} {
 			f := ContentSearchFilter{Pattern: pattern, Mode: "regex", Limit: 1, Cursor: cursor, Sources: []string{"messages", "thinking", "tool_input", "tool_result"}}
-			matches, err := d.regexSearchRows(ctx, f, regexp.MustCompile(pattern), "", substringCandidateFilters{})
+			matches, err := d.regexSearchRows(ctx, f, regexp.MustCompile(pattern), nil, substringCandidateFilters{})
 			require.NoError(t, err)
 			page := f.Page(matches)
 			require.NoError(t, d.deriveLexicalUnits(ctx, page.Matches))
@@ -531,15 +557,51 @@ func TestRegexIndexRepeatedTrigramsKeepRareSuffix(t *testing.T) {
 	pattern := strings.Repeat("0", 40) + "needle"
 	seedSearchSession(t, d, "s1", "proj", [][2]string{{"user", pattern}, {"user", strings.Repeat("0", 80)}})
 	countMessagesForSubstringIndex(t, d, "s1")
-	lit := requiredLiteral(pattern)
-	assert.Equal(t, pattern, lit)
-	query, ok := substringIndexQuery(lit)
+	literals := requiredLiterals(pattern)
+	assert.Equal(t, []regexLiteral{{text: pattern}}, literals)
+	query, ok := substringIndexQuery(literalTexts(literals)...)
 	require.True(t, ok)
 	assert.Contains(t, query, `"nee"`)
-	candidates, err := d.substringCandidates(t.Context(), ContentSearchFilter{Pattern: pattern}, lit)
+	candidates, err := d.substringCandidates(t.Context(), ContentSearchFilter{Pattern: pattern}, literalTexts(literals))
 	require.NoError(t, err)
 	require.NotEmpty(t, candidates.message.sql)
 	assert.Equal(t, []substringHit{{"message", 0}}, substringHits(t, d, ContentSearchFilter{Pattern: pattern, Mode: "regex", Limit: 50}))
+}
+
+func TestRegexIndexRetainsSelectiveLiteral(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	var messages [][2]string
+	for range 40 {
+		messages = append(messages, [2]string{"user", "common fixed portion"})
+	}
+	messages = append(messages, [2]string{"user", "unique-rare then common fixed portion"}, [2]string{"user", "common fixed portion then unique-rare"}, [2]string{"user", "abcde"}, [2]string{"user", "foo"})
+	seedSearchSession(t, d, "s1", "proj", messages)
+	countMessagesForSubstringIndex(t, d, "s1")
+	for _, tc := range []struct {
+		pattern string
+		ordinal int
+	}{
+		{`unique-rare.*common fixed portion`, 40},
+		{`common fixed portion.*unique-rare`, 41},
+		{`ab(c)de`, 42},
+		{`fo(o)`, 43},
+	} {
+		t.Run(tc.pattern, func(t *testing.T) {
+			f := ContentSearchFilter{Pattern: tc.pattern, Mode: "regex", Limit: 50, Sources: []string{"messages"}}
+			candidates, err := d.substringCandidates(ctx, f, regexIndexLiterals(regexp.MustCompile(f.Pattern), requiredLiterals(f.Pattern)))
+			require.NoError(t, err)
+			require.NotEmpty(t, candidates.message.sql)
+			assert.Equal(t, []substringHit{{"message", tc.ordinal}}, substringHits(t, d, f))
+			indexed, err := d.SearchContent(ctx, f)
+			require.NoError(t, err)
+			matches, err := d.regexSearchRows(ctx, f, regexp.MustCompile(tc.pattern), nil, substringCandidateFilters{})
+			require.NoError(t, err)
+			scan := f.Page(matches)
+			require.NoError(t, d.deriveLexicalUnits(ctx, scan.Matches))
+			assert.Equal(t, scan, indexed)
+		})
+	}
 }
 
 func TestRegexRequiredLiteralPrefiltersToolSources(t *testing.T) {
@@ -587,17 +649,17 @@ func TestRegexRequiredLiteralPrefiltersToolSources(t *testing.T) {
 	}
 	f := ContentSearchFilter{Pattern: `\brare-needle`, Mode: "regex", Limit: 50, Sources: []string{"messages", "thinking", "tool_input", "tool_result"}}
 	countMessagesForSubstringIndex(t, d, "s1")
-	candidates, err := d.substringCandidates(ctx, f, requiredLiteral(f.Pattern))
+	candidates, err := d.substringCandidates(ctx, f, literalTexts(requiredLiterals(f.Pattern)))
 	require.NoError(t, err)
 	require.NotEmpty(t, candidates.message.sql)
 	re := regexp.MustCompile(f.Pattern)
-	lit := requiredLiteral(f.Pattern)
-	require.Equal(t, "rare-needle", lit)
+	literals := requiredLiterals(f.Pattern)
+	require.Equal(t, []regexLiteral{{text: "rare-needle"}}, literals)
 	snapshot, err := d.BeginMessageSnapshot(ctx)
 	require.NoError(t, err)
 	defer snapshot.Close()
 	scope, scopeArgs := sessionScopeSubquery(f)
-	count := func(literal string) int {
+	count := func(literal []regexLiteral) int {
 		rows, err := regexCandidateRows(ctx, snapshot.tx, f, literal, scope, scopeArgs, substringCandidateFilters{})
 		require.NoError(t, err)
 		defer rows.Close()
@@ -608,11 +670,11 @@ func TestRegexRequiredLiteralPrefiltersToolSources(t *testing.T) {
 		require.NoError(t, rows.Err())
 		return n
 	}
-	assert.Less(t, count(lit), count(""))
+	assert.Less(t, count(literals), count(nil))
 	require.NoError(t, snapshot.Close())
-	filtered, err := d.regexSearchRows(ctx, f, re, lit, substringCandidateFilters{})
+	filtered, err := d.regexSearchRows(ctx, f, re, literals, substringCandidateFilters{})
 	require.NoError(t, err)
-	scanned, err := d.regexSearchRows(ctx, f, re, "", substringCandidateFilters{})
+	scanned, err := d.regexSearchRows(ctx, f, re, nil, substringCandidateFilters{})
 	require.NoError(t, err)
 	assert.Equal(t, scanned, filtered)
 	locations := make(map[string]int)
@@ -626,10 +688,13 @@ func TestRegexRequiredLiteralPrefiltersToolSources(t *testing.T) {
 	}
 	assert.Contains(t, snippets, "before\x00rare-needle call image")
 	assert.Contains(t, snippets, "before\x00rare-needle event image")
+	imagePage, err := d.SearchContent(ctx, ContentSearchFilter{Pattern: `\brare-needle.*image`, Mode: "regex", Limit: 50, Sources: []string{"tool_result"}})
+	require.NoError(t, err)
+	require.Len(t, imagePage.Matches, 2)
 	page, err := d.SearchContent(ctx, ContentSearchFilter{Pattern: f.Pattern, Mode: "regex", Limit: 50})
 	require.NoError(t, err)
 	require.NoError(t, d.DropFTS(ctx))
-	fullScan, err := d.regexSearchRows(ctx, f, re, "", substringCandidateFilters{})
+	fullScan, err := d.regexSearchRows(ctx, f, re, nil, substringCandidateFilters{})
 	require.NoError(t, err)
 	scanPage := f.Page(fullScan)
 	require.NoError(t, d.deriveLexicalUnits(ctx, scanPage.Matches))

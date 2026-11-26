@@ -393,7 +393,7 @@ func (db *DB) searchContentWords(
 	var matches []ContentMatch
 	var err error
 	if exact {
-		matches, err = searchWithSubstringCandidates(ctx, db, f, f.Pattern, search)
+		matches, err = searchWithSubstringCandidates(ctx, db, f, []string{f.Pattern}, search)
 	} else {
 		matches, err = search(substringCandidateFilters{})
 	}

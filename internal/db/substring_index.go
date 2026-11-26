@@ -149,17 +149,17 @@ func substringIndexDropped(err error) bool {
 		strings.Contains(msg, "no such table: thinking_trigram_fts")
 }
 
-// searchWithSubstringCandidates chooses index filters for literal and runs
+// searchWithSubstringCandidates chooses index filters for literals and runs
 // search with them. An archive import can drop the index between those
 // steps, because each query reads its own snapshot, so a search that then
 // names a missing index table runs once more. The second attempt finds no
 // index and scans.
 func searchWithSubstringCandidates[T any](
-	ctx context.Context, db *DB, f ContentSearchFilter, literal string,
+	ctx context.Context, db *DB, f ContentSearchFilter, literals []string,
 	search func(substringCandidateFilters) (T, error),
 ) (T, error) {
 	attempt := func() (T, error) {
-		candidates, err := db.substringCandidates(ctx, f, literal)
+		candidates, err := db.substringCandidates(ctx, f, literals)
 		if err != nil {
 			var zero T
 			return zero, err
@@ -184,25 +184,26 @@ func retryWhenSubstringIndexDropped[T any](attempt func() (T, error)) (T, error)
 // sequences only widen the candidate set, which the LIKE check then narrows.
 const maxSubstringIndexTrigrams = 32
 
-// substringIndexQuery returns an FTS5 query that matches every row whose text
-// contains literal, ignoring case. It reports false when literal is shorter
-// than three characters, which the index cannot look up.
-func substringIndexQuery(literal string) (string, bool) {
-	runes := []rune(literal)
-	if len(runes) < 3 || strings.ContainsRune(literal, 0) {
-		return "", false
-	}
+// substringIndexQuery returns a case-insensitive FTS5 query for the literals.
+// It reports false when none has a trigram the index can look up.
+func substringIndexQuery(literals ...string) (string, bool) {
 	seen := make(map[string]struct{})
-	terms := make([]string, 0, min(len(runes)-2, maxSubstringIndexTrigrams))
-	for i := 0; i+3 <= len(runes) && len(terms) < maxSubstringIndexTrigrams; i++ {
-		trigram := string(runes[i : i+3])
-		if _, ok := seen[trigram]; ok {
+	var terms []string
+	for _, literal := range literals {
+		runes := []rune(literal)
+		if len(runes) < 3 || strings.ContainsRune(literal, 0) {
 			continue
 		}
-		seen[trigram] = struct{}{}
-		terms = append(terms, `"`+strings.ReplaceAll(trigram, `"`, `""`)+`"`)
+		for i := 0; i+3 <= len(runes) && len(terms) < maxSubstringIndexTrigrams; i++ {
+			trigram := string(runes[i : i+3])
+			if _, ok := seen[trigram]; ok {
+				continue
+			}
+			seen[trigram] = struct{}{}
+			terms = append(terms, `"`+strings.ReplaceAll(trigram, `"`, `""`)+`"`)
+		}
 	}
-	return strings.Join(terms, " AND "), true
+	return strings.Join(terms, " AND "), len(terms) > 0
 }
 
 // substringFilter is an optional SQL condition and its arguments.
@@ -223,20 +224,20 @@ type substringCandidateFilters struct {
 const substringIndexMaxShare = 4
 
 // substringCandidates returns conditions that keep only messages whose text
-// may contain literal, ignoring case. A branch keeps scanning when the
-// archive has no substring index, literal is too short to look up, or the
+// may contain the literals, ignoring case. A branch keeps scanning when the
+// archive has no substring index, no literal can be looked up, or the
 // index lists more than a quarter as many messages as the scope's sessions
 // hold. The index lists matches across the whole archive, so a common
 // sequence inside one project or date range is cheaper to scan for. The
 // capped count stops as soon as it passes that share.
 func (db *DB) substringCandidates(
-	ctx context.Context, f ContentSearchFilter, literal string,
+	ctx context.Context, f ContentSearchFilter, literals []string,
 ) (substringCandidateFilters, error) {
 	var out substringCandidateFilters
 	if f.SessionID != "" {
 		return out, nil
 	}
-	query, ok := substringIndexQuery(literal)
+	query, ok := substringIndexQuery(literals...)
 	if !ok || !db.hasSubstringIndex(ctx) {
 		return out, nil
 	}

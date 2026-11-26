@@ -1387,8 +1387,9 @@ cannot filter by column; `detail='column'` measured nearly three times larger.
 
 The index only narrows candidates. A search intersects the listed IDs for the
 pattern's sequences, up to 32 of them. Substring search uses `LIKE` to check
-each row. Regex search uses one required literal to find candidates and filters
+each row. Regex search intersects index lists for required literals and filters
 every source with NUL-safe `instr`; Go's regex engine decides the final match.
+The filter folds case only for case-insensitive literals.
 Alternation branches keep scanning when no literal outside them is required.
 The tokenizer folds case for every script, while `LIKE` and `lower()` fold only
 ASCII. The index returns a superset, so results stay identical to a scan.

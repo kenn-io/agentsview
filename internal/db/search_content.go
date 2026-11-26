@@ -452,7 +452,7 @@ func (db *DB) searchContentWordsOrSubstring(ctx context.Context, f ContentSearch
 }
 
 func (db *DB) searchContentLiteral(ctx context.Context, f ContentSearchFilter) (ContentSearchPage, error) {
-	return searchWithSubstringCandidates(ctx, db, f, f.Pattern,
+	return searchWithSubstringCandidates(ctx, db, f, []string{f.Pattern},
 		func(candidates substringCandidateFilters) (ContentSearchPage, error) {
 			return db.substringSearchPage(ctx, f, candidates)
 		})
@@ -790,10 +790,12 @@ func (db *DB) searchContentRegex(
 		defer release()
 	}
 
-	lit := requiredLiteral(f.Pattern)
-	out, err := searchWithSubstringCandidates(ctx, db, f, lit,
+	literals := requiredLiterals(f.Pattern)
+	texts := regexIndexLiterals(re, literals)
+	literals = regexBodyLiterals(re, literals)
+	out, err := searchWithSubstringCandidates(ctx, db, f, texts,
 		func(candidates substringCandidateFilters) ([]ContentMatch, error) {
-			return db.regexSearchRows(ctx, f, re, lit, candidates)
+			return db.regexSearchRows(ctx, f, re, literals, candidates)
 		})
 	if err != nil {
 		return ContentSearchPage{}, err
@@ -809,7 +811,7 @@ func (db *DB) searchContentRegex(
 // newest first, and keeps the RE2 matches for the page at f.Cursor, plus one
 // more for cursor detection. It stops after the batch that fills the page.
 func (db *DB) regexSearchRows(
-	ctx context.Context, f ContentSearchFilter, re *regexp.Regexp, lit string,
+	ctx context.Context, f ContentSearchFilter, re *regexp.Regexp, literals []regexLiteral,
 	candidates substringCandidateFilters,
 ) ([]ContentMatch, error) {
 	// One snapshot keeps the session batches consistent with each other.
@@ -820,7 +822,7 @@ func (db *DB) regexSearchRows(
 	defer func() { _ = snapshot.Close() }()
 	page := regexPage{f: f, re: re, out: make([]ContentMatch, 0)}
 	err = walkContentSessions(ctx, snapshot.tx, f, func(scope string, scopeArgs []any) (bool, error) {
-		rows, err := regexCandidateRows(ctx, snapshot.tx, f, lit, scope, scopeArgs, candidates)
+		rows, err := regexCandidateRows(ctx, snapshot.tx, f, literals, scope, scopeArgs, candidates)
 		if err != nil {
 			return false, err
 		}
@@ -898,13 +900,13 @@ func (p *regexPage) read(rows *sql.Rows) error {
 }
 
 // regexCandidateRows returns full-body rows for the selected sources in the
-// sessions scope selects, prefiltered by lit when non-empty, ordered for
+// sessions scope selects, prefiltered by required literals, ordered for
 // stable paging. Each branch selects: session_id, project, agent,
 // transcript_revision, location, role, tool_name, ordinal, ts AS ts, body,
 // sort_ts, src, row_id, legacy_thinking. The message and thinking branches
 // keep only the rows candidates lists.
 func regexCandidateRows(
-	ctx context.Context, q messageRowsQuerier, f ContentSearchFilter, lit string,
+	ctx context.Context, q messageRowsQuerier, f ContentSearchFilter, literals []regexLiteral,
 	scope string, scopeArgs []any, candidates substringCandidateFilters,
 ) (*sql.Rows, error) {
 	eventAnchorJoin := LexicalEventAnchorJoinSQL(f.Scope)
@@ -912,14 +914,25 @@ func regexCandidateRows(
 	var branches []string
 	var args []any
 
-	addLiteral := func() { args = append(args, lit) }
-
+	addLiterals := func() {
+		for _, literal := range literals {
+			args = append(args, literal.text)
+		}
+	}
 	prefilterClause := func(col string) string {
-		if lit == "" {
+		if len(literals) == 0 {
 			return col + " IS NOT NULL"
 		}
-		addLiteral()
-		return "instr(lower(" + col + "), lower(?)) > 0"
+		conditions := make([]string, 0, len(literals))
+		for _, literal := range literals {
+			column := col
+			if literal.fold {
+				column = "lower(" + col + ")"
+			}
+			conditions = append(conditions, "instr("+column+", ?) > 0")
+		}
+		addLiterals()
+		return strings.Join(conditions, " AND ")
 	}
 
 	sysPred := "1=1"
@@ -1019,9 +1032,7 @@ func regexCandidateRows(
 	if hasSource(f, "tool_result") {
 		branches = append(branches, imageTextSearchBranches(f, scope, eventAnchorJoin, prefilterClause("c.text"), true)...)
 		args = append(args, scopeArgs...)
-		if lit != "" {
-			addLiteral()
-		}
+		addLiterals()
 		args = append(args, scopeArgs...)
 	}
 	if len(branches) == 0 {
@@ -1154,27 +1165,66 @@ func foldPrefixEnd(s string, i int, sub string) (int, bool) {
 	return i, true
 }
 
-// requiredLiteral returns the longest safe fixed text every regex match contains.
-// SQLite lower folds ASCII only, while Go also folds K and S to non-ASCII.
-func requiredLiteral(pattern string) string {
+// regexIndexLiterals keeps the compiled prefix when captures split it into
+// runs too short for the trigram index.
+func regexIndexLiterals(re *regexp.Regexp, literals []regexLiteral) []string {
+	var texts []string
+	if prefix, _ := re.LiteralPrefix(); prefix != "" && !strings.ContainsAny(prefix, "\x00\ufffd") {
+		texts = append(texts, prefix)
+	}
+	for _, literal := range literals {
+		texts = append(texts, literal.text)
+	}
+	return texts
+}
+
+// regexBodyLiterals uses the compiled prefix once when it spans captures.
+func regexBodyLiterals(re *regexp.Regexp, literals []regexLiteral) []regexLiteral {
+	prefix, _ := re.LiteralPrefix()
+	if prefix == "" || strings.ContainsAny(prefix, "\x00\ufffd") {
+		return literals
+	}
+	out := []regexLiteral{{text: prefix}}
+	for _, literal := range literals {
+		if literal.fold || !strings.Contains(prefix, literal.text) {
+			out = append(out, literal)
+		}
+	}
+	return out
+}
+
+// regexLiteral is text every regex match contains and whether it folds case.
+type regexLiteral struct {
+	text string
+	fold bool
+}
+
+// requiredLiterals returns safe fixed runs in pattern order. SQLite lower folds
+// ASCII only, while Go also folds K and S to non-ASCII.
+func requiredLiterals(pattern string) []regexLiteral {
 	re, err := syntax.Parse(pattern, syntax.Perl)
 	if err != nil {
-		return ""
+		return nil
 	}
-	var longest []rune
+	var literals []regexLiteral
 	var visit func(*syntax.Regexp)
 	visit = func(re *syntax.Regexp) {
 		switch re.Op {
 		case syntax.OpLiteral:
 			var run []rune
+			fold := re.Flags&syntax.FoldCase != 0
 			flush := func() {
-				if len(run) > len(longest) {
-					longest = append([]rune(nil), run...)
+				if len(run) > 0 {
+					text := string(run)
+					if fold {
+						text = strings.ToLower(text)
+					}
+					literals = append(literals, regexLiteral{text: text, fold: fold})
 				}
 				run = nil
 			}
 			for _, r := range re.Rune {
-				if r == 0 || (re.Flags&syntax.FoldCase != 0 && (r > 127 || r == 'K' || r == 'k' || r == 'S' || r == 's')) {
+				if r == 0 || r == utf8.RuneError || (fold && (r > 127 || r == 'K' || r == 'k' || r == 'S' || r == 's')) {
 					flush()
 				} else {
 					run = append(run, r)
@@ -1194,7 +1244,7 @@ func requiredLiteral(pattern string) string {
 		}
 	}
 	visit(re)
-	return string(longest)
+	return literals
 }
 
 // LiteralPrefix extracts a required literal prefix from a regex for use

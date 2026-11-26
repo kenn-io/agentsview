@@ -123,7 +123,7 @@ func seedToolOutputSearchBenchmark(b *testing.B) *DB {
 		SELECT m.id, m.session_id, 'Bash', 'Bash', 'tu-' || m.id,
 			'{"command":"make step-' || m.ordinal || '"}',
 			CASE WHEN m.ordinal = 7 AND CAST(substr(m.session_id, 7) AS INTEGER) >= 1975
-				THEN 'the deploy window opens ' ELSE '' END
+				THEN 'the deploy window opens deploy-window output ' ELSE '' END
 				|| hex(randomblob(250 + (m.id * 397) % 250)),
 			750
 		FROM messages m WHERE m.role = 'assistant'`,
@@ -173,6 +173,26 @@ func BenchmarkSearchContentRegexRequiredLiteral(b *testing.B) {
 				page, err := d.SearchContent(b.Context(), f)
 				require.NoError(b, err)
 				require.Len(b, page.Matches, 20)
+			}
+		})
+	}
+}
+
+func BenchmarkSearchContentRegexToolRequiredLiterals(b *testing.B) {
+	d := seedToolOutputSearchBenchmark(b)
+	for _, tc := range []struct{ name, pattern string }{
+		{"prefix", `deploy-window output [0-9A-F]+`},
+		{"prefix-capture", `deploy-(window) output [0-9A-F]+`},
+		{"no-prefix", `\bdeploy-window output [0-9A-F]+`},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			f := ContentSearchFilter{Pattern: tc.pattern, Mode: "regex", Limit: 20, Sources: []string{"tool_result"}}
+			b.ReportAllocs()
+			for b.Loop() {
+				page, err := d.SearchContent(b.Context(), f)
+				require.NoError(b, err)
+				require.Len(b, page.Matches, 20)
+				require.Equal(b, 20, page.NextCursor)
 			}
 		})
 	}
