@@ -63,6 +63,8 @@ func TestLaunchParentConditionalExecution(t *testing.T) {
 		`{"command":"false && codex exec hi"}`,
 		`false && tools.exec_command({cmd: "codex exec hi"})`,
 		`{"command":"test -d /repo && codex exec hi"}`,
+		`{"command":"test -d x && echo ok && codex exec hi"}`,
+		`{"command":"if test -d x; then test -d y && exit; fi; codex exec hi"}`,
 		`flag && tools.exec_command({cmd: "codex exec hi"})`,
 		`{"command":"exit; codex exec hi"}`,
 		`exit(); tools.exec_command({cmd: "codex exec hi"})`,
@@ -752,6 +754,7 @@ func TestLaunchParentShellOrAndCodeMode(t *testing.T) {
 		linked      bool
 	}{
 		{"short circuit JavaScript", `false && await tools.exec_command({cmd:"codex exec hi",workdir:"/repo"})`, false},
+		{"shell command after semicolon", `{"command":"test -d x && echo ok; codex exec hi"}`, true},
 		{"uncalled function", `function f() { return tools.exec_command({cmd:"codex exec hi",workdir:"/repo"}) }`, false},
 		{"uncalled method", `const x = { f() { return tools.exec_command({cmd:"codex exec hi",workdir:"/repo"}) } }`, false},
 		{"multiple JavaScript calls", `await Promise.all([tools.exec_command({cmd:"echo hello"}), tools.exec_command({cmd:"codex exec hi",workdir:"/repo"})])`, true},

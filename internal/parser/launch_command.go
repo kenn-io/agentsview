@@ -67,6 +67,7 @@ type shellFlow struct {
 	possible   bool
 	stopped    bool
 	guarded    bool
+	mayStop    bool
 }
 
 func mergeShellFlows(a, b shellFlow) shellFlow {
@@ -77,6 +78,7 @@ func mergeShellFlows(a, b shellFlow) shellFlow {
 	}
 	a.unknown = a.unknown || b.unknown
 	a.cwdChanged = a.cwdChanged || b.cwdChanged
+	a.mayStop = a.mayStop || b.mayStop
 	return a
 }
 
@@ -152,6 +154,7 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 				}
 				merged := mergeShellFlows(left, right)
 				merged.possible = merged.possible || right.stopped
+				merged.mayStop = merged.mayStop || right.stopped
 				return merged
 			case syntax.Pipe, syntax.PipeAll:
 				run(c.X, f)
@@ -188,7 +191,7 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 			if truth < 0 {
 				return no
 			}
-			cond.possible = cond.possible || yes.stopped || no.stopped
+			cond.possible = cond.possible || yes.stopped || no.stopped || yes.mayStop || no.mayStop
 			yes.possible, no.possible = cond.possible, cond.possible
 			yes.stopped, no.stopped = false, false
 			return mergeShellFlows(yes, no)
