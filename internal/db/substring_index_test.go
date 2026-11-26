@@ -525,7 +525,7 @@ func TestRequiredLiterals(t *testing.T) {
 	assert.Equal(t, []regexLiteral{{text: "foo"}}, regexBodyLiterals(re, requiredLiterals(re.String())))
 }
 
-func TestReview3427LongValidRegex(t *testing.T) {
+func TestRegexSearchCapsSQLLiterals(t *testing.T) {
 	d := testDB(t)
 	var pattern, body strings.Builder
 	for i := range 1100 {
@@ -541,7 +541,7 @@ func TestReview3427LongValidRegex(t *testing.T) {
 	assert.Len(t, page.Matches, 3)
 }
 
-func TestReview3427SelectiveSuffix(t *testing.T) {
+func TestSubstringIndexQueryReachesLaterLiterals(t *testing.T) {
 	d := testDB(t)
 	common := "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 	insertSession(t, d, "suffix", "proj", func(s *Session) { s.MessageCount = 8; s.UserMessageCount = 4 })
@@ -562,7 +562,7 @@ func TestReview3427SelectiveSuffix(t *testing.T) {
 	assert.Equal(t, []substringHit{{"message", 3}}, substringHits(t, d, ContentSearchFilter{Pattern: regexp.QuoteMeta(common) + `.*rare-needle`, Mode: "regex", Limit: 50, Sources: []string{"messages"}}))
 }
 
-func TestReview3427ToolOnlyAvoidsUnrelatedIndex(t *testing.T) {
+func TestSubstringCandidatesSkipUnselectedSources(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	seedSearchSession(t, d, "tool", "proj", [][2]string{{"user", "rare-needle"}})
