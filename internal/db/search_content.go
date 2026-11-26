@@ -1175,7 +1175,7 @@ func regexBodyLiterals(re *regexp.Regexp, literals []regexLiteral) []regexLitera
 	prefix, _ := re.LiteralPrefix()
 	var out []regexLiteral
 	seen := make(map[regexLiteral]struct{})
-	if strings.ContainsAny(prefix, "\x00\ufffd") {
+	if strings.ContainsRune(prefix, utf8.RuneError) {
 		prefix = ""
 	}
 	if prefix != "" {
@@ -1247,10 +1247,7 @@ func requiredLiterals(pattern string) []regexLiteral {
 			for _, sub := range re.Sub {
 				visit(sub)
 			}
-		case syntax.OpNoMatch, syntax.OpEmptyMatch, syntax.OpCharClass, syntax.OpAnyCharNotNL,
-			syntax.OpAnyChar, syntax.OpBeginLine, syntax.OpEndLine, syntax.OpBeginText,
-			syntax.OpEndText, syntax.OpWordBoundary, syntax.OpNoWordBoundary, syntax.OpStar,
-			syntax.OpQuest, syntax.OpAlternate:
+		default:
 		}
 	}
 	visit(re)

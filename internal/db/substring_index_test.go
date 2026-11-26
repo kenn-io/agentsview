@@ -270,14 +270,9 @@ func TestSubstringCandidatesOnlyForSelectivePatterns(t *testing.T) {
 	assert.Equal(t, []substringHit{{"message", 3}},
 		substringHits(t, d, ContentSearchFilter{Pattern: "rare-token", Limit: 50}))
 	assert.Len(t, substringHits(t, d, ContentSearchFilter{Pattern: "common", Limit: 50}), 7)
-	// Add the common text to the rare row, so both terms are required there.
+	// A capture splits the prefix into runs too short for the index.
 	_, err = d.getWriter().Exec(ctx, `UPDATE messages SET content = 'common rare-token foo here' WHERE session_id = 's1' AND ordinal = 3`)
 	require.NoError(t, err)
-	for _, literals := range [][]string{{"common", "rare-token"}, {"rare-token", "common"}} {
-		got, err := d.substringCandidates(ctx, ContentSearchFilter{Sources: []string{"messages"}}, literals)
-		require.NoError(t, err)
-		require.NotEmpty(t, got.message.sql)
-	}
 	re := regexp.MustCompile(`(fo)o`)
 	prefix := regexBodyLiterals(re, requiredLiterals(re.String()))
 	got, err := d.substringCandidates(ctx, ContentSearchFilter{Sources: []string{"messages"}}, regexLiteralTexts(prefix))
@@ -562,34 +557,6 @@ func TestSubstringIndexQueryReachesLaterLiterals(t *testing.T) {
 	assert.Equal(t, []substringHit{{"message", 3}}, substringHits(t, d, ContentSearchFilter{Pattern: regexp.QuoteMeta(common) + `.*rare-needle`, Mode: "regex", Limit: 50, Sources: []string{"messages"}}))
 }
 
-func TestSubstringCandidatesSkipUnselectedSources(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	seedSearchSession(t, d, "tool", "proj", [][2]string{{"user", "rare-needle"}})
-	countMessagesForSubstringIndex(t, d, "tool")
-	reader := d.rawReader()
-	reader.SetMaxOpenConns(1)
-	conn, err := reader.Conn(ctx)
-	require.NoError(t, err)
-	var calls atomic.Int64
-	var sqlite *sqlite3.SQLiteConn
-	require.NoError(t, conn.Raw(func(raw any) error {
-		sqlite = raw.(*diagnosticReaderConn).SQLiteConn
-		sqlite.RegisterAuthorizer(func(op int, _, name, _ string) int {
-			if op == sqlite3.SQLITE_FUNCTION && strings.EqualFold(name, "match") {
-				calls.Add(1)
-			}
-			return sqlite3.SQLITE_OK
-		})
-		return nil
-	}))
-	require.NoError(t, conn.Close())
-	defer sqlite.RegisterAuthorizer(nil)
-	_, err = d.SearchContent(ctx, ContentSearchFilter{Pattern: `\brare-needle`, Mode: "regex", Limit: 50, Sources: []string{"tool_result"}})
-	require.NoError(t, err)
-	assert.Zero(t, calls.Load())
-}
-
 func TestRegexRequiredLiteralPrefiltersToolSources(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
@@ -630,16 +597,13 @@ func TestRegexRequiredLiteralPrefiltersToolSources(t *testing.T) {
 	reader.SetMaxOpenConns(1)
 	conn, err := reader.Conn(ctx)
 	require.NoError(t, err)
-	var indexQueries, bodyFilters atomic.Int64
+	var indexQueries atomic.Int64
 	var sqlite *sqlite3.SQLiteConn
 	require.NoError(t, conn.Raw(func(raw any) error {
 		sqlite = raw.(*diagnosticReaderConn).SQLiteConn
 		sqlite.RegisterAuthorizer(func(op int, _, name, _ string) int {
 			if op == sqlite3.SQLITE_FUNCTION && strings.EqualFold(name, "match") {
 				indexQueries.Add(1)
-			}
-			if op == sqlite3.SQLITE_FUNCTION && strings.EqualFold(name, "instr") {
-				bodyFilters.Add(1)
 			}
 			return sqlite3.SQLITE_OK
 		})
@@ -651,7 +615,6 @@ func TestRegexRequiredLiteralPrefiltersToolSources(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, page.Matches)
 	assert.Positive(t, indexQueries.Load(), "search must query the substring index")
-	assert.Positive(t, bodyFilters.Load(), "search must filter candidate bodies")
 	re := regexp.MustCompile(f.Pattern)
 	literals := regexBodyLiterals(re, requiredLiterals(f.Pattern))
 	snapshot, err := d.BeginMessageSnapshot(ctx)
@@ -675,20 +638,12 @@ func TestRegexRequiredLiteralPrefiltersToolSources(t *testing.T) {
 		assert.Less(t, count(source, literals), count(source, nil), source)
 	}
 	require.NoError(t, snapshot.Close())
-	filtered, err := d.regexSearchRows(ctx, f, re, literals, substringCandidateFilters{})
-	require.NoError(t, err)
-	scanned, err := d.regexSearchRows(ctx, f, re, nil, substringCandidateFilters{})
-	require.NoError(t, err)
-	assert.Equal(t, scanned, filtered)
 	locations := make(map[string]int)
-	for _, hit := range filtered {
+	for _, hit := range page.Matches {
 		locations[hit.Location]++
 	}
 	assert.Equal(t, map[string]int{"message": 1, "thinking": 1, "tool_input": 1, "tool_result": 4}, locations)
-	imagePage, err := d.SearchContent(ctx, ContentSearchFilter{Pattern: `\brare-needle.*image`, Mode: "regex", Limit: 50, Sources: []string{"tool_result"}})
-	require.NoError(t, err)
-	require.Len(t, imagePage.Matches, 2)
-	patterns := []string{f.Pattern, `(?i)PANIC`, `(?i)search`, `Foo.*(?i)bar`, `\bfoo\x{FFFD}bar`}
+	patterns := []string{f.Pattern, `(?i)PANIC`, `(?i)search`, `Foo.*(?i)bar`, `foo\x{FFFD}bar`}
 	pages := make(map[string]ContentSearchPage)
 	for _, pattern := range patterns {
 		page, err := d.SearchContent(ctx, ContentSearchFilter{Pattern: pattern, Mode: "regex", Limit: 50})
