@@ -19968,6 +19968,10 @@ paths:
               schema:
                 $ref: "#/components/schemas/ServiceContentSearchResult"
           description: OK
+          headers:
+            X-AgentsView-Content-Scan-Deadline:
+              schema:
+                type: string
         "400":
           content:
             application/json:
