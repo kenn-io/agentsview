@@ -1867,6 +1867,8 @@ func (db *DB) hybridFTSLeg(
 func (db *DB) hybridWordHits(
 	ctx context.Context, f ContentSearchFilter, q contentWords, limit int,
 ) ([]hybridDisplay, error) {
+	ctx, cancel := context.WithTimeout(ctx, contentScanTimeout)
+	defer cancel()
 	snapshot, err := db.BeginMessageSnapshot(ctx)
 	if err != nil {
 		return nil, err

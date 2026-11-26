@@ -51,6 +51,20 @@ func TestContentSearchFTSProbeDeadline(t *testing.T) {
 	}
 }
 
+func TestHybridWordScanStopsAtDeadline(t *testing.T) {
+	d := testDB(t)
+	requireFTS(t, d)
+	searcher := &fakeVectorSearcher{}
+	d.SetVectorSearcher(searcher)
+	previous := contentScanTimeout
+	contentScanTimeout = time.Nanosecond
+	t.Cleanup(func() { contentScanTimeout = previous })
+
+	_, err := d.SearchContent(t.Context(), ContentSearchFilter{Mode: "hybrid", Pattern: "hello world"})
+	assert.Positive(t, searcher.calls, "semantic search ran before the keyword scan")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
 // seedSearchSession inserts one session with the given messages
 // (role/content pairs) for content-search tests.
 func seedSearchSession(t *testing.T, d *DB, id, project string, msgs [][2]string) {
