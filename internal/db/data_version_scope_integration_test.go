@@ -1883,7 +1883,7 @@ func TestEvenerCompactionUpgradeReparsesStoredLabels(t *testing.T) {
 }
 
 func TestMusePersonalRunCategoryUpgradeReparsesInPlace(t *testing.T) {
-	scope := db.ScopedDataVersionProviders(189, 190)
+	scope := db.ScopedDataVersionProviders(190, 191)
 	assert.ElementsMatch(t, []parser.AgentType{parser.AgentMusePersonal}, scope)
 	version := db.CurrentDataVersion()
 	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
@@ -1918,7 +1918,7 @@ func TestMusePersonalRunCategoryUpgradeReparsesInPlace(t *testing.T) {
 			engine.Close()
 			const id = "muse-personal:11111111-2222-4333-8444-555555555555"
 
-			// Reproduce the version-189 archive: the parser left every Muse
+			// Reproduce the version-190 archive: the parser left every Muse
 			// Personal session unclassified and without a relationship.
 			require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
 				_, err := tx.ExecContext(ctx, `UPDATE sessions SET session_kind = '', is_automated = 0, relationship_type = '', parser_relationship_type = NULL, parent_session_id = NULL, parser_parent_session_id = NULL WHERE id = ?`, id)
