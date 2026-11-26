@@ -500,7 +500,7 @@ func TestRequiredLiterals(t *testing.T) {
 		{`foo(?:alpha|zebra)bar`, []regexLiteral{{text: "foo"}, {text: "bar"}}},
 		{`fo(o)`, []regexLiteral{{text: "fo"}, {text: "o"}}},
 		{`abc*`, []regexLiteral{{text: "ab"}}}, {`(?:abc){2,3}`, []regexLiteral{{text: "abc"}}},
-		{`(?i)kelvin`, []regexLiteral{{text: "elvin", fold: true}}}, {`(?i)sk`, nil},
+		{`(?i)KELVIN`, []regexLiteral{{text: "elvin", fold: true}}}, {`(?i)sk`, nil},
 		{`ab\x00cdef`, []regexLiteral{{text: "ab"}, {text: "cdef"}}},
 		{`abc\x{FFFD}def`, []regexLiteral{{text: "abc"}, {text: "def"}}},
 	} {
