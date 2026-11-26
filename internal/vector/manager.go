@@ -10,6 +10,8 @@ import (
 	"go.kenn.io/kit/embedmodel"
 	kitvec "go.kenn.io/kit/vector"
 	"go.kenn.io/kit/vector/sqlitevec"
+
+	"go.kenn.io/agentsview/internal/lockctx"
 )
 
 // ErrBuildRunning is returned by StartBuild when a build is already in
@@ -100,6 +102,7 @@ type Manager struct {
 	// Status() stays responsive during a build.
 	mu        sync.Mutex
 	running   bool
+	paused    bool
 	buildDone chan struct{}
 	status    BuildStatus
 	eta       buildETAEstimator
@@ -366,6 +369,41 @@ func (m *Manager) Wait() {
 	}
 }
 
+// Pause prevents new builds and waits for the current build to finish.
+// The caller must release the returned function when the pause is no longer needed.
+func (m *Manager) Pause(ctx context.Context, onWait func()) (func(), error) {
+	if err := lockctx.Lock(ctx, &m.opMu); err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	if m.paused {
+		m.mu.Unlock()
+		m.opMu.Unlock()
+		return nil, ErrBuildRunning
+	}
+	m.paused = true
+	done := m.buildDone
+	m.mu.Unlock()
+	m.opMu.Unlock()
+	release := sync.OnceFunc(func() {
+		m.mu.Lock()
+		m.paused = false
+		m.mu.Unlock()
+	})
+	if done != nil {
+		if onWait != nil {
+			onWait()
+		}
+		select {
+		case <-done:
+		case <-ctx.Done():
+			release()
+			return nil, ctx.Err()
+		}
+	}
+	return release, nil
+}
+
 // Shutdown cancels any detached StartBuild in flight and blocks until no
 // build is running. Owners call it instead of Wait when closing down: a
 // detached build's encoder may be waiting out provider rate limits
@@ -448,7 +486,7 @@ func (m *Manager) begin() error {
 	defer m.opMu.Unlock()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.running {
+	if m.running || m.paused {
 		return ErrBuildRunning
 	}
 	m.running = true

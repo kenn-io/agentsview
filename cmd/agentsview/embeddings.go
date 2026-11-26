@@ -12,6 +12,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -27,6 +28,7 @@ import (
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/requestsign"
 	"go.kenn.io/agentsview/internal/vector"
 )
 
@@ -146,6 +148,13 @@ func runEmbeddingsSwitch(
 	}
 	if err := preflightEmbeddingsServer(ctx, candidate); err != nil {
 		return fmt.Errorf("testing embedding server: %w", err)
+	}
+	if daemonErr == nil {
+		release, err := client.pauseBuilds(ctx, out, &waiting)
+		if err != nil {
+			return fmt.Errorf("waiting for embedding builds: %w", err)
+		}
+		defer release()
 	}
 	if err := cfg.SaveVectorEmbeddingsServer(endpoint, model, dimension, apiKeyFile); err != nil {
 		return fmt.Errorf("saving embedding server: %w", err)
@@ -1233,6 +1242,68 @@ type embeddingsDaemonClient struct {
 	baseURL string
 	token   string
 	store   string
+}
+
+func (c embeddingsDaemonClient) pauseBuilds(ctx context.Context, out io.Writer, waiting *bool) (func(), error) {
+	ctx, cancel := context.WithCancel(ctx)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSuffix(c.baseURL, "/")+"/api/v1/embeddings/switch-drain", nil)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	origin, err := url.Parse(c.baseURL)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	origin.Path, origin.RawPath, origin.RawQuery, origin.Fragment = "", "", "", ""
+	req.Header.Set("Origin", origin.String())
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	client, err := requestsign.ClientFromEnvironment(c.baseURL, http.DefaultClient)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	response, err := client.Do(req)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	if response.StatusCode != http.StatusOK {
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, 64*1024))
+		_ = response.Body.Close()
+		cancel()
+		return nil, embeddingResponseError(response.StatusCode, body, readErr)
+	}
+	closeResponse := func() { cancel(); _ = response.Body.Close() }
+	scanner := bufio.NewScanner(response.Body)
+	for scanner.Scan() {
+		switch scanner.Text() {
+		case "event: waiting":
+			if waiting != nil && !*waiting {
+				fmt.Fprintln(out, "Waiting for the current embedding build or setup to finish…")
+				*waiting = true
+			}
+		case "event: ready":
+			return closeResponse, nil
+		case "event: error":
+			if scanner.Scan() {
+				var message string
+				if err := json.Unmarshal([]byte(strings.TrimPrefix(scanner.Text(), "data: ")), &message); err == nil {
+					closeResponse()
+					return nil, errors.New(message)
+				}
+			}
+		}
+	}
+	err = scanner.Err()
+	closeResponse()
+	if err == nil {
+		err = io.ErrUnexpectedEOF
+	}
+	return nil, err
 }
 
 // daemonAPIError carries an embeddings API error response's HTTP status

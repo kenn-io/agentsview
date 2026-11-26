@@ -1360,6 +1360,14 @@ func startEmbeddingsTestDaemon(
 		Service: daemonService,
 		Version: "test",
 	}))
+	if _, ok := handlers["POST /api/v1/embeddings/switch-drain"]; !ok {
+		mux.HandleFunc("POST /api/v1/embeddings/switch-drain", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "event: ready\ndata: true\n\n")
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+		})
+	}
 	for pattern, h := range handlers {
 		mux.HandleFunc(pattern, h)
 	}

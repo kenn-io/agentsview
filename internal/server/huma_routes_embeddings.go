@@ -87,12 +87,56 @@ func (s *Server) registerEmbeddingsRoutes() {
 
 	registerRoute(group, http.MethodPost, "/build", "Start an embeddings build", s.humaEmbeddingsBuild,
 		s.humaTimeout(), func(op *huma.Operation) { op.DefaultStatus = http.StatusAccepted })
+	s.stream(group, http.MethodPost, "/switch-drain", "Wait for embeddings builds before switching", s.humaEmbeddingsSwitchDrain)
 	s.get(group, "/status", "Embeddings build status", s.humaEmbeddingsStatus)
 	s.get(group, "/generations", "List embedding generations", s.humaEmbeddingsGenerations)
 	s.post(group, "/generations/{id}/activate", "Activate an embedding generation",
 		s.humaEmbeddingsActivate)
 	s.post(group, "/generations/{id}/retire", "Retire an embedding generation",
 		s.humaEmbeddingsRetire)
+}
+
+func (s *Server) humaEmbeddingsSwitchDrain(ctx context.Context, _ *emptyInput) (*huma.StreamResponse, error) {
+	runtime, ok := s.embeddingsRuntime.(interface {
+		PauseBuilds(context.Context, func()) (func(), <-chan struct{}, error)
+	})
+	if !ok {
+		return nil, s.embeddingsUnavailableError()
+	}
+	return &huma.StreamResponse{Body: func(hctx huma.Context) {
+		stream, ok := newHumaSSEStream(hctx)
+		if !ok {
+			return
+		}
+		announced := false
+		release, shutdown, err := runtime.PauseBuilds(ctx, func() {
+			if !announced {
+				stream.SendJSON("waiting", true)
+				announced = true
+			}
+		})
+		if err != nil {
+			stream.SendJSON("error", err.Error())
+			return
+		}
+		if !stream.SendJSON("ready", true) {
+			select {
+			case <-shutdown:
+			default:
+				release()
+			}
+			return
+		}
+		select {
+		case <-shutdown:
+		case <-ctx.Done():
+			select {
+			case <-shutdown:
+			default:
+				release()
+			}
+		}
+	}}, nil
 }
 
 // embeddingsBuildRequest mirrors vector.BuildRequest for the HTTP surface,
