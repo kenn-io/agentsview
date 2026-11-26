@@ -77,6 +77,7 @@ func TestLaunchParentEvidence(t *testing.T) {
 		{"different folder", `{"command":"cd /repo && codex exec hi"}`, "Bash", "/start", "local", "/other", "local", true, "actual", "", "", "", ""},
 		{"blank machine", `{"command":"codex exec hi"}`, "Bash", "/repo", "", "/repo", "local", true, "", "", "", "", ""},
 		{"two launchers", `{"command":"codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
+		{"exit before launch", `{"command":"exit 0; codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", false, "", "", "", "", ""},
 		{"redirection substitution competitor", `{"command":"cat > \"$(codex exec hi)\""}`, "Bash", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
 		{"blank child machine", `{"command":"codex exec hi"}`, "Bash", "/repo", "", "/repo", "", false, "", "", "", "", ""},
 		{"argv cmd.exe Windows folder", `{"command":["cmd.exe","/c","codex","exec","hi"]}`, "shell", `C:\Users\example\project`, "local", `C:\Users\example\project`, "local", false, "candidate", "codex", "codex", `C:\Users\example\project`, ""},
