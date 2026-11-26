@@ -2124,7 +2124,7 @@ func TestZCodeToolResultImageUpgradeReparsesAndIndexes(t *testing.T) {
 func TestCodexLaunchDirectoryUpgradeReparsesSource(t *testing.T) {
 	ctx := t.Context()
 	const oldVersion = 190
-	require.Equal(t, []parser.AgentType{parser.AgentCodex}, db.ScopedDataVersionProviders(oldVersion, 191))
+	require.Equal(t, []parser.AgentType{parser.AgentClaude, parser.AgentCodex}, db.ScopedDataVersionProviders(oldVersion, 191))
 	database := dbtest.OpenTestDB(t)
 	root := t.TempDir()
 	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
@@ -2153,4 +2153,37 @@ func TestCodexLaunchDirectoryUpgradeReparsesSource(t *testing.T) {
 	var cwd string
 	require.NoError(t, database.Reader().QueryRow(ctx, `SELECT working_directory FROM tool_calls WHERE tool_use_id='call'`).Scan(&cwd))
 	assert.Equal(t, "/original", cwd)
+}
+
+func TestClaudeLaunchDirectoryUpgradeReparsesSource(t *testing.T) {
+	ctx := t.Context()
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	require.NoError(t, os.MkdirAll(project, 0o755))
+	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	body := testjsonl.JoinJSONL(
+		`{"type":"user","uuid":"u1","parentUuid":null,"sessionId":"`+id+`","cwd":"/repo","timestamp":"2026-10-08T12:00:00Z","message":{"content":"run it"}}`,
+		`{"type":"assistant","uuid":"a1","parentUuid":"u1","sessionId":"`+id+`","cwd":"/repo/sub","timestamp":"2026-10-08T12:00:01Z","message":{"content":[{"type":"tool_use","id":"call","name":"Bash","input":{"command":"codex exec hi"}}]}}`,
+	)
+	dbtest.WriteTestFile(t, filepath.Join(project, id+".jsonl"), []byte(body))
+	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}}
+	engine := sync.NewEngine(ctx, database, cfg)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	engine.Close()
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE tool_calls SET working_directory=NULL; UPDATE sessions SET data_version=190; PRAGMA user_version=190`)
+		return err
+	}))
+	archive := database.Path()
+	require.NoError(t, database.Close())
+	database, err := db.OpenIsolated(ctx, archive)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine = sync.NewEngine(ctx, database, cfg)
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	var cwd string
+	require.NoError(t, database.Reader().QueryRow(ctx, `SELECT working_directory FROM tool_calls WHERE tool_use_id='call'`).Scan(&cwd))
+	assert.Equal(t, "/repo/sub", cwd)
 }

@@ -751,7 +751,7 @@ func TestWriteSessionBatchAtomicLinksSpawnAfterCommit(t *testing.T) {
 				t.Cleanup(func() { rawConn.RegisterAuthorizer(nil) })
 				write.Session.Cwd = "/repo"
 				write.Messages[0].Timestamp = "2026-01-02T03:04:00Z"
-				write.Messages[0].ToolCalls = append(write.Messages[0].ToolCalls, ToolCall{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`})
+				write.Messages[0].ToolCalls = append(write.Messages[0].ToolCalls, ToolCall{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`, WorkingDirectory: "/repo"})
 				beforeCommit = append(beforeCommit, func() error {
 					rawConn.RegisterAuthorizer(func(op int, table, _, _ string) int {
 						if op == sqlite3.SQLITE_READ && table == "sqlite_master" {

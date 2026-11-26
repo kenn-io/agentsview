@@ -1,0 +1,9 @@
+{
+  "version": 190,
+  "digest": "ad6e87b25faa72096e84660fc6554d82da87e84bf2f68e295248c322478d9053",
+  "providers": {
+    "claude": {
+      "project/launch_call_cwd.jsonl": "644ba4643c5c075cb939918cd15a25f26b266a456b0fb8c83c66360a00be81bc"
+    }
+  }
+}

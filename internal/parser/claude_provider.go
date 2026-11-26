@@ -308,7 +308,7 @@ func (p *claudeProvider) Parse(
 	opts := claudeParseOptions{
 		siblingLineage:              claudeSourceIsProjectLevel(req.Source, path),
 		persistedOutputPathResolver: persistedOutputPathResolver,
-		aiTitleFallback:             true,
+		aiTitleFallback:             true, captureCallCwd: true,
 	}
 	results, excludedIDs, err := claudeParseFile(ctx, path, project, machine, opts)
 	if err != nil {
@@ -369,7 +369,7 @@ func (p *claudeProvider) ParseUploadedTranscript(
 ) ([]ParseResult, error) {
 	machine = firstNonEmptyJSONLString(machine, p.Config.Machine)
 	results, _, err := claudeParseFile(ctx, path, project, machine, claudeParseOptions{
-		uploadIdentity: true,
+		uploadIdentity: true, captureCallCwd: true,
 	})
 	if err != nil {
 		return nil, err

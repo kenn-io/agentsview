@@ -1,0 +1,2 @@
+{"type":"user","uuid":"u1","parentUuid":null,"sessionId":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","cwd":"/repo","timestamp":"2026-10-08T12:00:00Z","message":{"role":"user","content":"run it"}}
+{"type":"assistant","uuid":"a1","parentUuid":"u1","sessionId":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","cwd":"/repo/sub","timestamp":"2026-10-08T12:00:01Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"call","name":"Bash","input":{"command":"codex exec hi"}}]}}

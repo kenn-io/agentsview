@@ -86,6 +86,7 @@ var (
 // claudeParseOptions gates opt-in parse behaviors for providers that reuse the
 // Claude transcript pipeline.
 type claudeParseOptions struct {
+	captureCallCwd              bool
 	persistedOutputPathResolver func(string) (string, bool)
 	// siblingLineage enables background-fork lineage resolution
 	// against sibling transcripts in the same directory.

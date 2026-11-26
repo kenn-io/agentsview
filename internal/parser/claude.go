@@ -59,6 +59,7 @@ type dagEntry struct {
 	uuid       string
 	parentUuid string
 	entryType  string // "user" or "assistant"
+	callCwd    string
 	lineIndex  int
 	line       string
 	timestamp  time.Time
@@ -443,7 +444,7 @@ func claudeParseFile(
 		ts := extractTimestamp(line)
 
 		entries = append(entries, dagEntry{
-			uuid:       uuid,
+			callCwd: claudeEntryCwd(opts.captureCallCwd && entryType == "assistant", lineBytes), uuid: uuid,
 			parentUuid: parentUuid,
 			entryType:  strings.Clone(entryType),
 			lineIndex:  lineIndex,
@@ -651,6 +652,23 @@ func isValidClaudeUploadIdentity(id string) bool {
 type claudeCompactField struct {
 	name   string
 	result gjson.Result
+}
+
+func claudeEntryCwd(native bool, line []byte) string {
+	if native {
+		return strings.Clone(gjson.GetBytes(line, "cwd").Str)
+	}
+	return ""
+}
+
+func extractClaudeTextContent(ctx context.Context, content gjson.Result, cwd string) (string, string, string, bool, bool, []ParsedToolCall, []ParsedToolResult) {
+	text, thinking, dialogue, hasThinking, hasToolUse, calls, results := ExtractTextContent(ctx, content)
+	for i := range calls {
+		if calls[i].Category == "Bash" {
+			calls[i].WorkingDirectory = cwd
+		}
+	}
+	return text, thinking, dialogue, hasThinking, hasToolUse, calls, results
 }
 
 func compactClaudeEntry(line []byte) string {
@@ -1037,7 +1055,7 @@ func claudeParseSessionFrom(
 			}
 			ts := extractTimestamp(line)
 			entries = append(entries, dagEntry{
-				uuid:       gjson.Get(line, "uuid").Str,
+				callCwd: gjson.Get(line, "cwd").Str, uuid: gjson.Get(line, "uuid").Str,
 				parentUuid: gjson.Get(line, "parentUuid").Str,
 				entryType:  entryType,
 				lineIndex:  lineIndex,
@@ -1478,7 +1496,7 @@ func extractMessagesFrom(
 		}
 
 		content := gjson.Get(e.line, "message.content")
-		text, thinkingText, dialogueText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(ctx, content)
+		text, thinkingText, dialogueText, hasThinking, hasToolUse, tcs, trs := extractClaudeTextContent(ctx, content, e.callCwd)
 		originalContent := text
 
 		// Convert command/skill invocation XML into readable
@@ -2841,7 +2859,7 @@ func extractMessagesContext(
 		}
 
 		content := gjson.Get(e.line, "message.content")
-		text, thinkingText, dialogueText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(ctx, content)
+		text, thinkingText, dialogueText, hasThinking, hasToolUse, tcs, trs := extractClaudeTextContent(ctx, content, e.callCwd)
 		originalContent := text
 
 		// Convert command/skill invocation XML into readable

@@ -104,7 +104,7 @@ func inferLaunchParentsTx(ctx context.Context, tx *sql.Tx, ids []string) (int, e
 
 // Starting with the bounded timestamp range prevents a scan of every session
 // on the machine for each candidate child.
-const launchCandidateSQL = `SELECT s.id, s.cwd, s.machine, m.timestamp, tc.tool_name, tc.input_json, s.deleted_at IS NOT NULL, s.agent, COALESCE(tc.working_directory,'') FROM messages m INDEXED BY idx_messages_activity_timestamp
+const launchCandidateSQL = `SELECT s.id, s.machine, m.timestamp, tc.tool_name, tc.input_json, s.deleted_at IS NOT NULL, COALESCE(tc.working_directory,'') FROM messages m INDEXED BY idx_messages_activity_timestamp
  CROSS JOIN tool_calls tc ON tc.message_id=m.id CROSS JOIN sessions s ON s.id=m.session_id
  WHERE m.role='assistant' AND m.model != '<synthetic>' AND m.timestamp >= ? AND m.timestamp <= ? AND (s.machine=? OR TRIM(s.machine)='') AND s.id != ? AND s.agent IN ('claude','codex') AND tc.category='Bash'`
 
@@ -307,10 +307,10 @@ func possibleLaunches(ctx context.Context, tx *sql.Tx, child launchChild, from, 
 	defer rows.Close()
 	var launches []possibleLaunch
 	for rows.Next() {
-		var id, cwd, machine, stamp, tool, agent, callCwd string
+		var id, machine, stamp, tool, callCwd string
 		var input sql.NullString
 		var trashed bool
-		if err := rows.Scan(&id, &cwd, &machine, &stamp, &tool, &input, &trashed, &agent, &callCwd); err != nil {
+		if err := rows.Scan(&id, &machine, &stamp, &tool, &input, &trashed, &callCwd); err != nil {
 			return nil, err
 		}
 		at, err := time.Parse(time.RFC3339Nano, stamp)
@@ -331,10 +331,7 @@ func possibleLaunches(ctx context.Context, tx *sql.Tx, child launchChild, from, 
 				launches = append(launches, possibleLaunch{parent: id, at: at})
 				continue
 			}
-			dir := cwd
-			if agent == "codex" {
-				dir = callCwd
-			}
+			dir := callCwd
 			if call.unknownWorkdir {
 				dir = ""
 			} else if call.workdir != "" {

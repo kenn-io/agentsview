@@ -16,7 +16,7 @@ func TestLaunchParentInference(t *testing.T) {
 	d := testDB(t)
 	launch := func(id, command string) {
 		insertSession(t, d, id, "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
-		insertMessages(t, d, Message{SessionID: id, Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", HasToolUse: true, ToolCalls: []ToolCall{{SessionID: id, ToolName: "Bash", Category: "Bash", InputJSON: command}}})
+		insertMessages(t, d, Message{SessionID: id, Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", HasToolUse: true, ToolCalls: []ToolCall{{SessionID: id, ToolName: "Bash", Category: "Bash", InputJSON: command, WorkingDirectory: "/repo"}}})
 	}
 	launch("parent", `{"command":"codex exec -C /repo 'review'"}`)
 	start := "2026-01-02T03:04:03Z"
@@ -105,6 +105,9 @@ func TestLaunchParentEvidence(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
 			add := func(id, agent, cwd, machine, tool, input, callCwd string) {
+				if agent == "claude" && callCwd == "" {
+					callCwd = cwd
+				}
 				insertSession(t, d, id, "project", func(s *Session) { s.Agent = agent; s.Cwd = cwd; s.Machine = machine })
 				insertMessages(t, d, Message{SessionID: id, Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00.250Z", ToolCalls: []ToolCall{{SessionID: id, ToolName: tool, Category: "Bash", InputJSON: input, WorkingDirectory: callCwd}}})
 			}
@@ -185,7 +188,7 @@ func TestLaunchParentCopyEvidence(t *testing.T) {
 				_, err := source.getWriter().ExecContext(t.Context(), `UPDATE sessions SET agent='codex', session_kind='non-interactive', cwd='/repo', started_at='2026-01-02T03:04:03Z' WHERE id=?`, id)
 				require.NoError(t, err)
 				insertSession(t, source, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
-				insertMessages(t, source, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}})
+				insertMessages(t, source, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`, WorkingDirectory: "/repo"}}})
 				_, err = source.GetSessionExternalParent(t.Context(), id)
 				require.NoError(t, err)
 				if state == "cleared" {
@@ -209,7 +212,7 @@ func TestLaunchParentCopyEvidence(t *testing.T) {
 						s.StartedAt = &started
 					})
 					if state == "cleared" {
-						insertMessages(t, dest, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}})
+						insertMessages(t, dest, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`, WorkingDirectory: "/repo"}}})
 						_, err = dest.GetSessionExternalParent(t.Context(), id)
 						require.NoError(t, err)
 					}
@@ -234,9 +237,9 @@ func TestLaunchParentCopyEvidence(t *testing.T) {
 func TestLaunchParentBackfillCheckpoint(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "first-parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/first" })
-	insertMessages(t, d, Message{SessionID: "first-parent", Ordinal: 0, Role: "assistant", Timestamp: "2025-12-31T03:04:00Z", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}})
+	insertMessages(t, d, Message{SessionID: "first-parent", Ordinal: 0, Role: "assistant", Timestamp: "2025-12-31T03:04:00Z", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`, WorkingDirectory: "/first"}}})
 	insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
-	insertMessages(t, d, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}})
+	insertMessages(t, d, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`, WorkingDirectory: "/repo"}}})
 	tx, err := d.getWriter().BeginTx(t.Context(), nil)
 	require.NoError(t, err)
 	for i := range 1001 {
@@ -287,7 +290,7 @@ func TestLaunchParentBulkImportBackfillsAfterIndexRebuild(t *testing.T) {
 	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT count(*) FROM sqlite_master WHERE type='index' AND name='idx_messages_activity_timestamp'`).Scan(&exists))
 	assert.Zero(t, exists)
 	insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
-	insertMessages(t, d, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}})
+	insertMessages(t, d, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`, WorkingDirectory: "/repo"}}})
 	started := "2026-01-02T03:04:03Z"
 	insertSession(t, d, "child", "project", func(s *Session) {
 		s.Agent = "codex"
@@ -380,7 +383,7 @@ func TestLaunchParentTrashEvidence(t *testing.T) {
 	ctx := t.Context()
 	add := func(id string) {
 		insertSession(t, d, id, "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
-		insertMessages(t, d, Message{SessionID: id, Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: id, ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex -m $MODEL exec hi"}`}}})
+		insertMessages(t, d, Message{SessionID: id, Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: id, ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex -m $MODEL exec hi"}`, WorkingDirectory: "/repo"}}})
 	}
 	add("first")
 	start := "2026-01-02T03:04:03Z"
@@ -446,7 +449,7 @@ func TestLaunchParentReplacementWritePaths(t *testing.T) {
 			if mode == "new child" || mode == "new child batch" {
 				d := testDB(t)
 				insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
-				insertMessages(t, d, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}})
+				insertMessages(t, d, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`, WorkingDirectory: "/repo"}}})
 				started := "2026-01-02T03:04:03Z"
 				child := Session{ID: "child", Project: "project", Machine: "local", Agent: "codex", Cwd: "/repo", StartedAt: &started, SessionKind: "non-interactive"}
 				if mode == "new child batch" {
@@ -463,7 +466,7 @@ func TestLaunchParentReplacementWritePaths(t *testing.T) {
 			if mode == "mixed batch append" {
 				d := testDB(t)
 				insertSession(t, d, "history", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
-				insertMessages(t, d, Message{SessionID: "history", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-01T03:04:00Z", ToolCalls: []ToolCall{{SessionID: "history", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec old"}`}}})
+				insertMessages(t, d, Message{SessionID: "history", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-01T03:04:00Z", ToolCalls: []ToolCall{{SessionID: "history", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec old"}`, WorkingDirectory: "/repo"}}})
 				for _, child := range []struct{ id, cwd string }{{"first", "/repo"}, {"second", "/other"}} {
 					started := "2026-01-02T03:04:03Z"
 					insertSession(t, d, child.id, "project", func(s *Session) {
@@ -476,7 +479,11 @@ func TestLaunchParentReplacementWritePaths(t *testing.T) {
 				history, err := d.GetSession(t.Context(), "history")
 				require.NoError(t, err)
 				launch := func(id string, ordinal int) Message {
-					return Message{SessionID: id, Ordinal: ordinal, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: id, ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}}
+					cwd := "/repo"
+					if id == "new" {
+						cwd = "/other"
+					}
+					return Message{SessionID: id, Ordinal: ordinal, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: id, ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`, WorkingDirectory: cwd}}}
 				}
 				newSession := Session{ID: "new", Project: "project", Machine: history.Machine, Agent: "claude", Cwd: "/other"}
 				_, err = d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{
@@ -494,7 +501,7 @@ func TestLaunchParentReplacementWritePaths(t *testing.T) {
 			}
 			d := testDB(t)
 			insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
-			message := Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: "parent", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}}
+			message := Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: "parent", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`, WorkingDirectory: "/repo"}}}
 			if mode != "late" {
 				insertMessages(t, d, message)
 			}
@@ -583,7 +590,7 @@ func TestLaunchParentSequentialRuns(t *testing.T) {
 				}{"parent", "2026-01-02T03:03:10Z", 0})
 			}
 			for _, call := range calls {
-				insertMessages(t, d, Message{SessionID: call.id, Ordinal: call.ordinal, Role: "assistant", Timestamp: call.stamp, ToolCalls: []ToolCall{{SessionID: call.id, ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}})
+				insertMessages(t, d, Message{SessionID: call.id, Ordinal: call.ordinal, Role: "assistant", Timestamp: call.stamp, ToolCalls: []ToolCall{{SessionID: call.id, ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`, WorkingDirectory: "/repo"}}})
 			}
 			for _, child := range []struct{ id, started string }{{"one", "2026-01-02T03:04:03Z"}, {"two", "2026-01-02T03:04:33Z"}} {
 				insertSession(t, d, child.id, "project", func(s *Session) {
@@ -614,7 +621,7 @@ func TestLaunchParentSequentialRuns(t *testing.T) {
 func TestLaunchParentAmbiguousRuns(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
-	insertMessages(t, d, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: "parent", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}})
+	insertMessages(t, d, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: "parent", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`, WorkingDirectory: "/repo"}}})
 	started := "2026-01-02T03:04:03Z"
 	addRun := func(id string) {
 		insertSession(t, d, id, "project", func(s *Session) {
@@ -636,7 +643,7 @@ func TestLaunchParentAmbiguousRuns(t *testing.T) {
 		_, err := d.GetSessionExternalParent(t.Context(), id)
 		require.ErrorIs(t, err, sql.ErrNoRows)
 	}
-	_, err = d.WriteSessionIncremental(t.Context(), "parent", []Message{{SessionID: "parent", Ordinal: 1, Role: "assistant", Timestamp: "2026-01-02T03:04:01Z", ToolCalls: []ToolCall{{SessionID: "parent", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}}}, IncrementalSessionUpdate{})
+	_, err = d.WriteSessionIncremental(t.Context(), "parent", []Message{{SessionID: "parent", Ordinal: 1, Role: "assistant", Timestamp: "2026-01-02T03:04:01Z", ToolCalls: []ToolCall{{SessionID: "parent", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`, WorkingDirectory: "/repo"}}}}, IncrementalSessionUpdate{})
 	require.NoError(t, err)
 	for _, id := range []string{"one", "two"} {
 		parent, err := d.GetSessionExternalParent(t.Context(), id)
@@ -685,6 +692,36 @@ func TestLaunchParentOrdinaryAppendDoesNotRelink(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, child.ParentSessionID)
 			assert.Equal(t, "parent", *child.ParentSessionID)
+		})
+	}
+}
+
+func TestLaunchParentClaudeEarlierDirectoryChange(t *testing.T) {
+	for _, tc := range []struct{ name, command, cwd, callCwd, want string }{
+		{"earlier directory", `codex exec hi`, "/repo", "/repo/sub", ""},
+		{"recorded directory", `codex exec hi`, "/repo/sub", "/repo/sub", "parent"},
+		{"missing directory", `codex exec hi`, "/repo", "", ""},
+		{"explicit directory", `codex -C /repo/sub exec hi`, "/repo/sub", "", "parent"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
+			insertMessages(t, d, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:03:58Z", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"cd /repo/sub"}`}}})
+			insertMessages(t, d, Message{SessionID: "parent", Ordinal: 1, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"` + tc.command + `"}`, WorkingDirectory: tc.callCwd}}})
+			started := "2026-01-02T03:04:03Z"
+			insertSession(t, d, "child", "project", func(s *Session) {
+				s.Agent = "codex"
+				s.Cwd = tc.cwd
+				s.StartedAt = &started
+				s.SessionKind = "non-interactive"
+			})
+			link, err := d.GetSessionExternalParent(t.Context(), "child")
+			if tc.want == "" {
+				require.ErrorIs(t, err, sql.ErrNoRows)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tc.want, link.ParentSessionID)
+			}
 		})
 	}
 }
