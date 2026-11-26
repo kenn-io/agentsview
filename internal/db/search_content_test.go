@@ -13,11 +13,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type deadlineVectorSearcher struct {
+	fakeVectorSearcher
+	hadDeadline bool
+}
+
+func (s *deadlineVectorSearcher) PrepareSemanticSearch(ctx context.Context, pattern string) (VectorSearchPage, int, error) {
+	_, s.hadDeadline = ctx.Deadline()
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err
+	}
+	return s.fakeVectorSearcher.PrepareSemanticSearch(ctx, pattern)
+}
+
 func TestContentScanStopsAtDeadline(t *testing.T) {
 	d := testDB(t)
 	requireFTS(t, d)
 	seedSearchSession(t, d, "s1", "project", [][2]string{{"user", "ask opus and fable"}})
-	searcher := &fakeVectorSearcher{}
+	searcher := &deadlineVectorSearcher{}
 	d.SetVectorSearcher(searcher)
 	previous := contentScanTimeout
 	// A past deadline makes context.WithDeadline cancel synchronously without
@@ -45,6 +58,7 @@ func TestContentScanStopsAtDeadline(t *testing.T) {
 				KeywordOnly: tc.keywordOnly,
 			})
 			if tc.name == "hybrid" {
+				assert.False(t, searcher.hadDeadline, "semantic search ran before the keyword deadline")
 				assert.Positive(t, searcher.calls, "semantic search ran before the keyword scan")
 			}
 			require.ErrorIs(t, err, context.DeadlineExceeded)
