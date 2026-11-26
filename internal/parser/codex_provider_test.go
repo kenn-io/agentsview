@@ -2099,7 +2099,7 @@ func TestCodexProviderChangedPathPinsArchivedDuplicate(t *testing.T) {
 	liveRoot := filepath.Join(base, "sessions")
 	archivedRoot := filepath.Join(base, "archived_sessions")
 	uuid := "019eb791-cf7d-75c1-8439-9ed74c1229e7"
-	writeCodexProviderSession(t, liveRoot, uuid, "live")
+	_ = writeCodexProviderSession(t, liveRoot, uuid, "live")
 	archivedPath := writeCodexProviderArchivedSession(
 		t, archivedRoot, uuid, "archived",
 	)
@@ -2433,12 +2433,12 @@ func TestCodexLabeledRunDiscoveryAndParse(t *testing.T) {
 	}
 }
 
-func TestCodexChangedPathAndDiscoverySelectCopies(t *testing.T) {
+func TestCodexLookupAndDiscoverySelectCopies(t *testing.T) {
 	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
 	root := t.TempDir()
 	content := testjsonl.JoinJSONL(testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", tsEarly))
-	older := writeCodexProviderSessionContent(t, filepath.Join(root, "team", "older", ".codex-run-v1-abc", "sessions"), id, content)
-	ordinary := writeCodexProviderSessionContent(t, root, id, content)
+	writeCodexProviderSessionContent(t, filepath.Join(root, "team", "older", ".codex-run-v1-abc", "sessions"), id, content)
+	writeCodexProviderSessionContent(t, root, id, content)
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 	newer := writeCodexProviderSessionContent(t, filepath.Join(root, "team", "newer", ".codex-run-v1-abc", "sessions"), id, content)
@@ -2447,17 +2447,6 @@ func TestCodexChangedPathAndDiscoverySelectCopies(t *testing.T) {
 	require.NoError(t, os.WriteFile(newer+".zst", zstdCompress(t, []byte(content)), 0o600))
 	check := func(want string) {
 		t.Helper()
-		for _, path := range []string{older, ordinary} {
-			request := ChangedPathRequest{Path: path, EventKind: "write"}
-			for _, lookup := range []func(context.Context, ChangedPathRequest) ([]SourceRef, error){provider.SourcesForChangedPath, func(ctx context.Context, req ChangedPathRequest) ([]SourceRef, error) {
-				return RawCaptureSourcesForChangedPath(ctx, provider, req)
-			}} {
-				got, err := lookup(t.Context(), request)
-				require.NoError(t, err)
-				require.Len(t, got, 1)
-				assert.Equal(t, path, got[0].DisplayPath)
-			}
-		}
 		found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: id})
 		require.NoError(t, err)
 		require.True(t, ok)

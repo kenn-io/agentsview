@@ -302,7 +302,6 @@ func TestCodexLabeledCopyWinsSync(t *testing.T) {
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[1]}))
 				write(2, paths[2])
 				require.NoError(t, engine.ReconcileWatchRoots(t.Context(), []string{ordinary, logs}, false))
-
 			}
 			session, err := database.GetSessionFull(t.Context(), "codex:"+id)
 			require.NoError(t, err)

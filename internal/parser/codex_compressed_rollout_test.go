@@ -156,7 +156,6 @@ func TestCodexPlainRolloutWinsOverCompressedSibling(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, compressed, found.DisplayPath)
-
 }
 
 // TestCodexParseCompressedRolloutMatchesPlain: the compressed file parses to
