@@ -460,9 +460,7 @@ func (s *Server) humaReadDeadline(timeout time.Duration) func(*huma.Operation) {
 	return func(op *huma.Operation) {
 		op.Middlewares = append(op.Middlewares, func(ctx huma.Context, next func(huma.Context)) {
 			_, writer := humago.Unwrap(ctx)
-			err := http.NewResponseController(writer).SetReadDeadline(
-				time.Now().Add(timeout),
-			)
+			err := extendRequestReadDeadline(writer, timeout)
 			if err != nil && !errors.Is(err, http.ErrNotSupported) {
 				log.Printf("extending request read deadline: %v", err)
 				_ = huma.WriteErr(
@@ -474,6 +472,10 @@ func (s *Server) humaReadDeadline(timeout time.Duration) func(*huma.Operation) {
 			next(ctx)
 		})
 	}
+}
+
+func extendRequestReadDeadline(writer http.ResponseWriter, timeout time.Duration) error {
+	return http.NewResponseController(writer).SetReadDeadline(time.Now().Add(timeout))
 }
 
 func handleHumaContextError(err error) error {

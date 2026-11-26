@@ -98,6 +98,7 @@ func (s *Server) authMiddlewareRequired(next http.Handler, force bool) http.Hand
 		s.mu.RLock()
 		token := s.cfg.AuthToken
 		authRequired := force || s.cfg.RequireAuth
+		acceptSessionPush := s.cfg.AcceptSessionPush
 		writeTimeout := s.cfg.WriteTimeout
 		s.mu.RUnlock()
 		if force && (writeTimeout <= 0 || writeTimeout > 5*time.Second) {
@@ -162,7 +163,7 @@ func (s *Server) authMiddlewareRequired(next http.Handler, force bool) http.Hand
 			return
 		}
 
-		machineAuth := isRemoteSyncPath(r.URL.Path) ||
+		machineAuth := (acceptSessionPush && r.URL.Path == sessionPushPath) || isRemoteSyncPath(r.URL.Path) ||
 			(s.artifactExchangeRunner != nil &&
 				isArtifactExchangePath(r.URL.Path))
 

@@ -6,9 +6,11 @@ import (
 	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/assets"
@@ -107,10 +109,10 @@ func walkMarkdownImages(markdown parser.Parser, content string, visit func(strin
 	})
 }
 
-// parseAssetMarkdown skips parsing content with no asset reference. A nil
+// parseAssetMarkdown skips parsing content with no retained image. A nil
 // parser is built only when the content needs one.
 func parseAssetMarkdown(markdown parser.Parser, content string) ast.Node {
-	if !strings.Contains(content, "asset://") {
+	if !strings.Contains(content, "asset://") && !strings.Contains(content, "data:image/") {
 		return ast.NewDocument()
 	}
 	if markdown == nil {
@@ -140,11 +142,66 @@ func assetImageDigest(ref string) (string, string, bool) {
 func MarkdownAssetImages(content string) []RetainedImage {
 	var images []RetainedImage
 	_ = walkMarkdownImages(nil, content, func(ref string) error {
-		if digest, ext, ok := assetImageDigest(ref); ok {
-			mediaType, _ := assets.MediaTypeForExt(ext)
-			images = append(images, RetainedImage{Index: len(images), MediaType: mediaType, SHA256: digest})
+		if image, ok := retainedMarkdownImage(ref, len(images)); ok {
+			images = append(images, image)
 		}
 		return nil
 	})
 	return images
+}
+
+func retainedMarkdownImage(ref string, index int) (RetainedImage, bool) {
+	if digest, ext, ok := assetImageDigest(ref); ok {
+		mediaType, _ := assets.MediaTypeForExt(ext)
+		return RetainedImage{Index: index, MediaType: mediaType, SHA256: digest}, true
+	}
+	raw, err := json.Marshal(ref)
+	if err != nil {
+		return RetainedImage{}, false
+	}
+	hash := sha256.New()
+	mediaType, size, _, ok := streamInlineData(raw, hash, true)
+	return RetainedImage{Index: index, MediaType: mediaType, Size: new(size), SHA256: hex.EncodeToString(hash.Sum(nil))}, ok
+}
+
+// projectMarkdownAssetImages replaces only parsed image destinations.
+func projectMarkdownAssetImages(content string, resolve func(string) (string, error)) (string, error) {
+	type edit struct {
+		start, end int
+		text       string
+	}
+	var edits []edit
+	seen := map[int]bool{}
+	err := ast.Walk(parseAssetMarkdown(nil, content), func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		image, ok := node.(*ast.Image)
+		if !ok || !entering {
+			return ast.WalkContinue, nil
+		}
+		ref := image.Destination.Value([]byte(content))
+		if !strings.HasPrefix(ref, "asset://") {
+			return ast.WalkContinue, nil
+		}
+		if image.Destination.IsOwned() {
+			return ast.WalkStop, errors.New("image destination has no source span")
+		}
+		pos := image.Destination.Index()
+		if seen[pos.Start] {
+			return ast.WalkContinue, nil
+		}
+		value, err := resolve(ref)
+		if err != nil {
+			return ast.WalkStop, err
+		}
+		seen[pos.Start] = true
+		edits = append(edits, edit{pos.Start, pos.Stop, value})
+		return ast.WalkContinue, nil
+	})
+	if err != nil {
+		return "", err
+	}
+	sort.Slice(edits, func(i, j int) bool { return edits[i].start > edits[j].start })
+	for _, e := range edits {
+		content = content[:e.start] + e.text + content[e.end:]
+	}
+	return content, nil
 }

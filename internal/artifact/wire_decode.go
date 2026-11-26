@@ -183,28 +183,38 @@ func decodePreflightedSegment(preflight segmentPreflight) ([]db.Message, error) 
 		if err := json.Unmarshal(line, &record); err != nil {
 			return nil, fmt.Errorf("decoding message segment: %w", err)
 		}
-		if len(record.DialogueRanges) > 0 {
-			if record.Version < messageSegmentFormatVersion || len(record.DialogueRanges) > maxDialogueRanges || record.DialogueText != nil || record.DialogueIsContent {
-				return nil, errors.New("invalid dialogue ranges")
-			}
-			var text strings.Builder
-			end := 0
-			for _, bounds := range record.DialogueRanges {
-				if bounds[0] < end || bounds[1] < bounds[0] || bounds[1] > len(record.Content) {
-					return nil, errors.New("invalid dialogue range bounds")
-				}
-				text.WriteString(record.Content[bounds[0]:bounds[1]])
-				end = bounds[1]
-			}
-			dialogue := text.String()
-			if !utf8.ValidString(dialogue) {
-				return nil, errors.New("invalid dialogue range text")
-			}
-			record.DialogueText = &dialogue
+		if err := resolveDialogueRanges(&record); err != nil {
+			return nil, err
 		}
 		msgs = append(msgs, record.dbMessage())
 	}
 	return msgs, nil
+}
+
+// resolveDialogueRanges rebuilds dialogue text from content positions, so every
+// segment decoder stores the same dialogue the sender recorded.
+func resolveDialogueRanges(m *segmentMessage) error {
+	if len(m.DialogueRanges) == 0 {
+		return nil
+	}
+	if m.Version < messageSegmentFormatVersion || len(m.DialogueRanges) > maxDialogueRanges || m.DialogueText != nil || m.DialogueIsContent {
+		return errors.New("invalid dialogue ranges")
+	}
+	var text strings.Builder
+	end := 0
+	for _, bounds := range m.DialogueRanges {
+		if bounds[0] < end || bounds[1] < bounds[0] || bounds[1] > len(m.Content) {
+			return errors.New("invalid dialogue range bounds")
+		}
+		text.WriteString(m.Content[bounds[0]:bounds[1]])
+		end = bounds[1]
+	}
+	dialogue := text.String()
+	if !utf8.ValidString(dialogue) {
+		return errors.New("invalid dialogue range text")
+	}
+	m.DialogueText = &dialogue
+	return nil
 }
 
 func preflightSegmentData(data []byte, limits artifactLimits) (segmentPreflight, error) {

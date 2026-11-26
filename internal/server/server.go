@@ -76,7 +76,7 @@ type VersionInfo struct {
 // Bump it when a client-visible contract cannot be decoded safely by an older
 // CLI or daemon.
 const (
-	APIVersion = 32
+	APIVersion = 33
 	// SyncPendingAPIVersion reports catch-up in sync status.
 	SyncPendingAPIVersion = 15
 	// UsageWaitAPIVersion supports bounded usage waits and safe refresh retries.
@@ -241,6 +241,7 @@ type Server struct {
 	telemetryCapture http.Handler
 
 	artifactExchangeRunner ArtifactExchangeRunner
+	sessionPushMu          gosync.Mutex
 	rawSyncTenant          string
 	frictionRunner         *review.Runner
 	// The friction job runs its automatic filing passes sequentially.
@@ -1064,6 +1065,12 @@ func archiveFreshnessExempt(r *http.Request) bool {
 
 func (s *Server) archiveStaleMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A session push reads no local sources and returns no archive rows;
+		// its handler reports pending rebuilds in its own error contract.
+		if r.URL.Path == sessionPushPath {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			probe := archiveFreshnessProbe(r.URL.Path)
 			pending := false

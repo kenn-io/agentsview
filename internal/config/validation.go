@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 )
@@ -47,6 +48,7 @@ func (c *Config) validateSections() error {
 		{ScopeServer, "public_url/public_origins", c.resolvePublicConfig},
 		{ScopeServer, "daemon_idle_timeout", c.validateDaemonIdleTimeout},
 		{ScopeServer, "sync_idle_after", c.validateSyncIdleAfter},
+		{ScopeServer, "accept_session_push", c.validateSessionPush},
 		// Sections with *_file secrets read them once they validate.
 		{ScopeVector, "[vector]", func() error { return resolveVectorSecrets(&c.Vector) }},
 		{ScopeRecall, "[recall.extract]", func() error { return resolveRecallExtractSecrets(&c.Recall.Extract) }},
@@ -61,6 +63,13 @@ func (c *Config) validateSections() error {
 		if err := c.validateSection(section.scope, section.name, section.validate); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func (c *Config) validateSessionPush() error {
+	if c.AcceptSessionPush && !c.RequireAuth {
+		return errors.New("accept_session_push requires require_auth = true")
 	}
 	return nil
 }

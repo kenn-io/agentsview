@@ -59,6 +59,10 @@ func (d *DB) CopyAttachedArchiveStateFrom(ctx context.Context, source string) er
 }
 
 func copyAttachedArchiveStateTx(ctx context.Context, tx *sql.Tx) error {
+	// This existing pre-parse ownership barrier also reserves immutable pushes.
+	if err := copySessionPushReceiptsTx(ctx, tx); err != nil {
+		return err
+	}
 	for _, item := range []struct{ table, columns string }{
 		{"archive_attachments", "repository_id,snapshot_id,archive_id,target,pending_count"},
 		{"archive_source_bindings", "archive_id,device_id,root_id,source_key,manifest_id"},

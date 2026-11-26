@@ -709,7 +709,8 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // indexing see them. Re-parse toolResultContentLength and raw tool-result array
 // providers in place; source and session identities are unchanged.)
 // (190: include retained tool calls in pull request links.)
-const dataVersion = 190
+// (191: prevent older binaries from writing archives with pushed sessions.)
+const dataVersion = SessionPushDataVersion
 
 const archiveOnlyVersionBase = 1 << 20
 
@@ -2181,6 +2182,7 @@ var readOnlyRequiredTables = []string{
 	"session_project_assignments",
 	"session_labels",
 	"session_external_parents",
+	"session_push_receipts",
 	"archive_metadata",
 	"background_migrations",
 	"project_identity_observations",

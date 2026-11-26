@@ -93,14 +93,13 @@ that key is set, startup runs its initial sync and read-only opens report that
 the archive needs a resync. A full, authoritative sync pass deletes the key,
 even when individual sources failed to parse. Incremental passes, aborted
 passes, and passes with provider failures or deferred sources leave it in place.
-Writable servers keep serving saved rows while affected sources reparse and
-mark archive-data API responses with `X-Agentsview-Archive-Stale: true`. This
-header warns that some rows may be old; it does not set `archive_stale` or
-request a full rebuild. `/sync/status` reports the durable marker as
-`upgrade_pending` and the live writer barrier separately as `writes_paused`.
-A failed pass can reopen the writer and clear `writes_paused` while
-`upgrade_pending` remains true. Writes that reach a closed writer receive HTTP
-503 with `Retry-After: 5`.
+Writable servers keep serving saved rows while affected sources reparse and mark
+archive-data API responses with `X-Agentsview-Archive-Stale: true`. This header
+warns that some rows may be old; it does not set `archive_stale` or request a
+full rebuild. `/sync/status` reports the durable marker as `upgrade_pending` and
+the live writer barrier separately as `writes_paused`. A failed pass can reopen
+the writer and clear `writes_paused` while `upgrade_pending` remains true.
+Writes that reach a closed writer receive HTTP 503 with `Retry-After: 5`.
 
 The replacement archive's writer raises `wal_autocheckpoint` to 128 MiB of pages
 for the bulk load; the live writer keeps SQLite's 1,000-page default. The
@@ -217,6 +216,9 @@ builds refuse them. This build decodes that range and preserves pending
 rebuilds; ordinary archives keep their parser version unchanged. Data version
 173 requires no source reparse; it keeps older binaries from writing archives
 whose image-text index they cannot maintain.
+
+Data version 191 requires no source reparse; it keeps older binaries from
+writing archives with pushed sessions they cannot preserve.
 
 ### Artifact checkpoint landings
 
@@ -376,8 +378,8 @@ content still contains the thinking.
 - PostgreSQL and ClickHouse replicas keep no marker. They rewrite existing
   copies once from schema setup, guarded by the `dialogue_dedupe_v1` and
   `agentsview_dialogue_deduplicated` metadata keys. The ClickHouse mutation
-  must write `''` beneath the NULL; an UPDATE to plain NULL keeps the old string
-  under the null mask.
+  must write `''` beneath the NULL; an UPDATE to plain NULL keeps the old
+  string under the null mask.
 
 Data version 146 reparses providers with dialogue classification in place,
 including the shared Codex parser. Retained sources that cannot be reparsed keep
@@ -722,7 +724,8 @@ their backend.
    `readbase.NewSessions`, with every `readbase.SessionsBackend` SQL method
    explicitly forwarding to shared `readbase.SessionQueries` builders or
    supplying specialized SQL. ClickHouse embeds `readbase.MirrorStubs`;
-   PostgreSQL uses `readbase.ReadOnlyStubs`. Keep typed loaders in the backend.
+   PostgreSQL uses `readbase.ReadOnlyStubs`. Keep typed loaders in the
+   backend.
 1. Add the config section and its resolvers in `internal/config` the way
    `[pg]`/`[pg.NAME]` and `[clickhouse]` work: a struct, `Resolve<Name>`,
    `Resolve<Name>Target`, and `<Name>TargetNames`. `Backend.Targets` and
@@ -775,8 +778,8 @@ two implementations; `internal/backendcontract` asserts both.
 
 What a new backend does not touch: `internal/server` HTTP handlers,
 `archive_write_backend.go`, `replica.go`, `replica_watch.go`,
-`replica_vector_search.go`, or the PostgreSQL package. `pg serve`
-extras (raw-upload ingestion) live in `cmd/agentsview/pg.go` behind the optional
+`replica_vector_search.go`, or the PostgreSQL package. `pg serve` extras
+(raw-upload ingestion) live in `cmd/agentsview/pg.go` behind the optional
 `replicaServeExtras` interface; a backend with no extras implements nothing.
 
 Known limits: `pg vectors`, the CLI direct-read transport that selects
@@ -806,9 +809,9 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
 [reporting exports](../reporting-export.md#project-identity-evidence).
 
 - Keep observable behavior and query shape aligned between SQLite,
-  PostgreSQL/CockroachDB, and ClickHouse. Match queries, indexes, aggregations,
-  filters and ordering unless a documented SQL or storage layout constraint
-  requires a difference.
+  PostgreSQL/CockroachDB, and ClickHouse. Match queries, indexes,
+  aggregations, filters and ordering unless a documented SQL or storage layout
+  constraint requires a difference.
 - Do not fix correctness in only one backend unless the user limits the task to
   that backend. If implementations must differ, explain why and preserve the
   same behavior. Performance work follows
@@ -837,17 +840,17 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
   remain per backend.
 - ClickHouse Activity reports select, price, and sum usage in SQL with
   `readActivityUsageSums` in `internal/clickhouse`. Go resolves each model to
-  its rates over the range as a schedule of segments; SQL picks a row's segment
-  and pricing band and does the integer cost math. The schedule and the
-  assembly of the summed groups live in `internal/readbase/activityusage.go`.
-  The SQLite and PostgreSQL reports keep the Go rules in `internal/activity`,
-  because the SQL was slower for them on a one-year archive of 30,000
-  sessions:
+  its rates over the range as a schedule of segments; SQL picks a row's
+  segment and pricing band and does the integer cost math. The schedule and
+  the assembly of the summed groups live in
+  `internal/readbase/activityusage.go`. The SQLite and PostgreSQL reports keep
+  the Go rules in `internal/activity`, because the SQL was slower for them on
+  a one-year archive of 30,000 sessions:
     - SQLite: the usage step took 6.2 s in SQL and 0.99 s in Go, 6.3x slower. One
       sort of the 600,000 usage rows already takes 1.1 s, and the rules need
       several. The runs SQL took 11.1 s against 1.9 s for the Go pairing, 5.8x
-      slower, even with an inexact stand-in for
-      `last_value(... IGNORE NULLS)`, which SQLite lacks.
+      slower, even with an inexact stand-in for `last_value(... IGNORE NULLS)`,
+      which SQLite lacks.
     - PostgreSQL: the usage selection alone took 1.86 s at best, against about 1 s
       for the whole Go usage step, at least 1.9x slower.
 
@@ -873,9 +876,8 @@ reported cost wins.
   a separate `recorded_cost_microdollars` column (ClickHouse does this).
 - Message rows select no cost in SQL. SQLite and PostgreSQL scanners fill it
   from the token JSON with `db.MessageRecordedCost`; ClickHouse extracts it in
-  SQL and stores it in
-  `usage_messages.usage_recorded_cost` and the snapshot `usage_recorded_costs`
-  array.
+  SQL and stores it in `usage_messages.usage_recorded_cost` and the snapshot
+  `usage_recorded_costs` array.
 - A cost-only row whose recorded figure loses contributes nothing: no breakdown
   entry, no computed request count.
 - `dbtest.SeedRecordedCostSessions` and `dbtest.AssertRecordedCostUsage` are the
@@ -903,8 +905,8 @@ rows, so no usage, cost, or rollup query reads it. Session usage loads it as
 ### Optimizations apply to every backend
 
 Apply every database optimization and every Go-side backend optimization to each
-backend it applies to: SQLite, PostgreSQL, CockroachDB, and ClickHouse, plus
-any code they share.
+backend it applies to: SQLite, PostgreSQL, CockroachDB, and ClickHouse, plus any
+code they share.
 
 A change that optimizes one, two, or three of these backends while the
 optimization applies to the others is incomplete. When a backend cannot take the
@@ -915,16 +917,16 @@ and pull request description.
 ### Search pages
 
 Search keeps exact pages on disk for SQLite archives and native PostgreSQL and
-ClickHouse mirrors. It reuses a page when its filters, paging, search rules,
-and searchable data match. Searchable writes invalidate old pages. PostgreSQL
-keeps each session's best match in memory and a companion file; page visits keep
-that file active for cache cleanup. The file is capped at 128 MiB within a
-shared 256 MiB cache budget. PostgreSQL refreshes changed matches when the
-journal proves the retained history. A missing, oversized, or evicted file, or
-a missing checkpoint or one 128 or more revisions old, requires a full search.
-ClickHouse merges that leave rows unchanged keep pages valid. Deleted snippets
-can remain in old cache files until the same search overwrites them or the cache
-is trimmed. Read-only SQLite and hosted or borrowed PostgreSQL views read directly.
+ClickHouse mirrors. It reuses a page when its filters, paging, search rules, and
+searchable data match. Searchable writes invalidate old pages. PostgreSQL keeps
+each session's best match in memory and a companion file; page visits keep that
+file active for cache cleanup. The file is capped at 128 MiB within a shared 256
+MiB cache budget. PostgreSQL refreshes changed matches when the journal proves
+the retained history. A missing, oversized, or evicted file, or a missing
+checkpoint or one 128 or more revisions old, requires a full search. ClickHouse
+merges that leave rows unchanged keep pages valid. Deleted snippets can remain
+in old cache files until the same search overwrites them or the cache is
+trimmed. Read-only SQLite and hosted or borrowed PostgreSQL views read directly.
 
 ### Usage cache divergence
 
@@ -1188,17 +1190,17 @@ invalidates it. Partial reports, read-only archives, and reports filtered by
 active, stale, or unclean termination status bypass this cache.
 
 SQLite and native PostgreSQL track the inputs to Tools, Velocity, and Signals
-with separate change tokens. A score-only edit refreshes Signals while Tools
-and Velocity remain reusable. SQLite and native PostgreSQL save these results
-per selection and timezone; hosted PostgreSQL reads them fresh. The entries
-share the existing 256 MiB Trends disk budget. PostgreSQL also retains finished
+with separate change tokens. A score-only edit refreshes Signals while Tools and
+Velocity remain reusable. SQLite and native PostgreSQL save these results per
+selection and timezone; hosted PostgreSQL reads them fresh. The entries share
+the existing 256 MiB Trends disk budget. PostgreSQL also retains finished
 Signals in memory. Active-since selections are not saved.
 
 SQLite invalidates Trends with its usage and analytics revisions. PostgreSQL
-uses its session journal, hosted PostgreSQL uses its tenant identity,
-selection, and corpus revisions, and ClickHouse uses session and message row
-identities. Read-only archives and reports filtered by active, stale, or
-unclean termination status bypass this cache.
+uses its session journal, hosted PostgreSQL uses its tenant identity, selection,
+and corpus revisions, and ClickHouse uses session and message row identities.
+Read-only archives and reports filtered by active, stale, or unclean termination
+status bypass this cache.
 
 PostgreSQL keeps ongoing Activity reports' per-session activity and raw usage
 inputs in memory with a 256 MiB estimated-size budget. Each session keeps its
@@ -1246,8 +1248,8 @@ schema. It also still runs the data repairs (`runSchemaDataRepairsPG`), because
 pushes since the step can leave rows they fix, such as sessions awaiting the
 automation audit. A full push, a missing push marker, or a failed push forgets
 the record, so the next push runs the whole step. A step whose optional setup
-fails, such as an index the role lacks privilege to create, records nothing,
-so the next push retries it.
+fails, such as an index the role lacks privilege to create, records nothing, so
+the next push retries it.
 
 ### Raw session ID lookups
 
@@ -1350,12 +1352,11 @@ use that query-local edge set without changing parent identity or visibility.
 SQLite retains per-session Dashboard Tools contributions on disk and uses
 `tools_generation` to refresh sessions when tool calls change. Relevant call
 writes set the token to null once; a refresh assigns a new token before reading
-the session's calls.
-Message model, timestamp, and ordinal edits invalidate saved Tools contributions
-through `usage_generation`.
-Each filter combination has its own entry. Each file is capped at 128 MiB, and
-all `sqlite-trends` entries share a 256 MiB budget. Read-only archives and
-disabled disk storage use the direct reader.
+the session's calls. Message model, timestamp, and ordinal edits invalidate
+saved Tools contributions through `usage_generation`. Each filter combination
+has its own entry. Each file is capped at 128 MiB, and all `sqlite-trends`
+entries share a 256 MiB budget. Read-only archives and disabled disk storage use
+the direct reader.
 
 SQLite's summary and tool analytics can read model names and message timestamps
 through `idx_messages_analytics_metadata` on
@@ -1395,18 +1396,18 @@ sessions keep the scan. A capped count of the listed IDs makes that choice; it
 stops as soon as the share is passed. Tool input and tool result branches are
 not indexed.
 
-Because the tool branches read every row of every session they cover,
-substring, word, and regex search read the scope's sessions in batches, newest
-first in the result order, and stop after the batch that fills the page and
-its next-page row. The first batch holds sessions totaling 16,384 messages and
-each later batch doubles that. Results sort by session recency, then session
-ID, then position, so a session's rows never split across batches and the
-batches together return the same rows in the same order as one query. A walk
-that reaches the last session counts every exact match, which word search
-needs to offset its ranked results. The message and thinking branches test the
-batch's session list before `LIKE`, because SQLite checks conditions in the
-order written and the index candidates otherwise load bodies from sessions
-outside the batch.
+Because the tool branches read every row of every session they cover, substring,
+word, and regex search read the scope's sessions in batches, newest first in the
+result order, and stop after the batch that fills the page and its next-page
+row. The first batch holds sessions totaling 16,384 messages and each later
+batch doubles that. Results sort by session recency, then session ID, then
+position, so a session's rows never split across batches and the batches
+together return the same rows in the same order as one query. A walk that
+reaches the last session counts every exact match, which word search needs to
+offset its ranked results. The message and thinking branches test the batch's
+session list before `LIKE`, because SQLite checks conditions in the order
+written and the index candidates otherwise load bodies from sessions outside the
+batch.
 
 Terms search uses `message_trigram_fts` under the same share rule per term. When
 the index lists any term, the query starts from the messages it lists for the
@@ -1441,10 +1442,10 @@ Token usage, Claude message/request identities, and source UUID participate in
 transcript revision equality. Finalizing a streamed message can therefore bump
 `transcript_revision` and `local_modified_at`, invalidate secret-scan freshness,
 mark the session updated for read-progress/UI purposes, and enqueue the normal
-artifact, recall, and PostgreSQL refreshes. Full resync reconciliation
-must compare the same fields so incremental and resync paths agree. A no-op
-message replacement preserves existing secret findings; changed transcript
-content clears them for a fresh scan.
+artifact, recall, and PostgreSQL refreshes. Full resync reconciliation must
+compare the same fields so incremental and resync paths agree. A no-op message
+replacement preserves existing secret findings; changed transcript content
+clears them for a fresh scan.
 
 ### PostgreSQL usage change journal
 
@@ -1486,8 +1487,8 @@ blocked categories store exactly what the parser produced. Load tool calls
 through the message loaders, which refill the summary once events are attached;
 a query that selects the column directly must apply the same fallback, and
 PostgreSQL applies the same write rule so its tool-call fingerprints match
-SQLite. Anyone reading the archive or a replica by hand sees the empty
-column and must join the events table to recover the text.
+SQLite. Anyone reading the archive or a replica by hand sees the empty column
+and must join the events table to recover the text.
 
 ### PostgreSQL frustration marker reads
 
@@ -1496,13 +1497,13 @@ pairs the session's committed row version and UTC `updated_at` with an
 independent rules version. A saved count must match both the version selected
 for Signals and the current session version at lookup. A mismatch triggers a
 fresh count. Bump `frustrationMarkerRulesVersion` whenever the Go or PostgreSQL
-frustration classifier changes a verdict. On startup, writable PostgreSQL
-stores fill missing or stale counts after the Usage cache warms. A Signals
-request waits up to five seconds when the active fill covers all its missing
-counts, then scans any remaining misses. Requests also scan and save missing
-or stale counts, including zero counts. A save skips sessions changed before
-the write starts. A sync overlapping the save can leave a stale row; later
-reads reject that row and recount the session.
+frustration classifier changes a verdict. On startup, writable PostgreSQL stores
+fill missing or stale counts after the Usage cache warms. A Signals request
+waits up to five seconds when the active fill covers all its missing counts,
+then scans any remaining misses. Requests also scan and save missing or stale
+counts, including zero counts. A save skips sessions changed before the write
+starts. A sync overlapping the save can leave a stale row; later reads reject
+that row and recount the session.
 
 A read-only role reuses rows it can read and scans misses without saving them.
 The table is optional for push. A missing table falls back to scanning. Hosted
@@ -1585,9 +1586,10 @@ own metadata, which is why the docs below call the database a mirror.
   collapse them, and deleting them writes patch rows. A push that appends to a
   session that only grew keeps the rows of its stored messages, or of all but
   the last when only the last changed, and limits that delete, in the tables
-  listed in `messageOrdinalColumn`, to ordinals after the last kept one. A change to how a push renders a row in those tables must
-  change `messageRowsFingerprints` with it, or appends will keep stale rows.
-  A push also takes a kept message's usage from the mirror's snapshot
+  listed in `messageOrdinalColumn`, to ordinals after the last kept one. A
+  change to how a push renders a row in those tables must change
+  `messageRowsFingerprints` with it, or appends will keep stale rows. A push
+  also takes a kept message's usage from the mirror's snapshot
   (`insertCarriedSnapshots`), so every field of the snapshot's usage message
   tuple must be a field of `messageRow`. See
   [appends](../internal/clickhouse-mirror.md#pushes-rewrite-only-what-differs).
@@ -1605,9 +1607,9 @@ own metadata, which is why the docs below call the database a mirror.
   Add every new table a session push rewrites to that list. Compaction
   failures are logged and never fail the push. See
   [Compaction after a large rewrite](../internal/clickhouse-mirror.md#compaction-after-a-large-rewrite).
-- ClickHouse cannot change `index_granularity` or other read-only table
-  settings on an existing table. Changing one means rebuilding the table
-  without losing rows, as `rebuildUsageSnapshots` does; see
+- ClickHouse cannot change `index_granularity` or other read-only table settings
+  on an existing table. Changing one means rebuilding the table without losing
+  rows, as `rebuildUsageSnapshots` does; see
   [Snapshot table granularity](../internal/clickhouse-mirror.md#snapshot-table-granularity).
 - Every mirrored table is `ReplacingMergeTree(push_version)`. Every connection
   sets `final = 1` and, unless the URL sets it, `max_threads = 8`. Do not
@@ -1631,13 +1633,13 @@ own metadata, which is why the docs below call the database a mirror.
   exactly. Any read that pairs a session with its dependent rows compares them
   with `content_version`, never `push_version`, and a check that rejects
   unpublished rows bounds them by `sessions.rows_version`, the newest version
-  the session row published. A materialized view runs
-  inside the insert and reads joined tables in full, so filter a joined table
-  to the inserted block's sessions. Create and update long-lived views through
-  `ensureView`, which replaces the query of a view an older release created.
-  Views never see deletes; `deleteMirrorSessions` clears the derived tables.
-  Startup backfills record completion in `sync_metadata` only after finishing,
-  never modify source tables, and must stay safe to repeat. See the
+  the session row published. A materialized view runs inside the insert and
+  reads joined tables in full, so filter a joined table to the inserted
+  block's sessions. Create and update long-lived views through `ensureView`,
+  which replaces the query of a view an older release created. Views never see
+  deletes; `deleteMirrorSessions` clears the derived tables. Startup backfills
+  record completion in `sync_metadata` only after finishing, never modify
+  source tables, and must stay safe to repeat. See the
   [Activity report reads](../internal/clickhouse-mirror.md#activity-report-reads)
   design section.
 - Usage reads add priced sums from `usage_rollup`, built from `prepared_usage`
@@ -1655,8 +1657,7 @@ own metadata, which is why the docs below call the database a mirror.
   exactly what the scan it replaces counts; change a definition only with a
   version bump, which makes each archive's next push a full push that
   republishes the session rows below that version. SQLite and PostgreSQL still
-  scan. See
-  [Dashboard facts](../internal/clickhouse-mirror.md#dashboard-facts).
+  scan. See [Dashboard facts](../internal/clickhouse-mirror.md#dashboard-facts).
 - Activity report queries receive the selected session IDs as the
   `activity_candidate_ids` external table on the request context. Do not
   rebuild candidate discovery inside later queries, and never materialize a
@@ -1692,11 +1693,10 @@ carries a `test-service.lease` label, and the tests hold an exclusive lock on
 `~/.local/state/test-service-leases/<id>` until the last descendant exits. The
 test command then removes its Compose project. A scheduled cleaner can remove
 projects left by killed runs after their lock is released. Manual services have
-no lease label. Use
-`make clickhouse-up` and `make clickhouse-down` to manage a separate standing
-service. When running tagged Go tests directly, set `TEST_CLICKHOUSE_URL` to
-reuse a dedicated test server.
-These tests use the `chtest` build tag. Never point them at a live mirror.
+no lease label. Use `make clickhouse-up` and `make clickhouse-down` to manage a
+separate standing service. When running tagged Go tests directly, set
+`TEST_CLICKHOUSE_URL` to reuse a dedicated test server. These tests use the
+`chtest` build tag. Never point them at a live mirror.
 
 - For reads against the standard populated mirror, use `newClonedReadStore(t)`.
   The first caller pushes the fixture once. Each caller gets its own database
@@ -1784,13 +1784,12 @@ Because each test owns a database, the tests run in parallel:
   (`start-single-node --store=type=mem,size=4GiB`). Schema setup takes about
   10 s per test there, against 86 s on a disk store.
 
-Use `make test-postgres` to start a disposable container and run the suite.
-The same lease applies to PostgreSQL.
-Use `make postgres-up` and `make postgres-down` to manage a separate standing
-test container.
-The leased PostgreSQL, ClickHouse, and usage benchmark targets use Unix file
-locks and process groups. On native Windows, run them from WSL with the checkout
-in WSL's Linux filesystem.
+Use `make test-postgres` to start a disposable container and run the suite. The
+same lease applies to PostgreSQL. Use `make postgres-up` and
+`make postgres-down` to manage a separate standing test container. The leased
+PostgreSQL, ClickHouse, and usage benchmark targets use Unix file locks and
+process groups. On native Windows, run them from WSL with the checkout in WSL's
+Linux filesystem.
 
 To use an existing dedicated instance, run:
 
@@ -1816,10 +1815,10 @@ cached text during the next pass. Disabling image text and restarting removes
 cached text and mirror matches; re-enabling extracts it again. Usage-only
 archives do not store image text.
 
-Successful text is published to PostgreSQL and ClickHouse as
-session-owned `image_text` rows keyed by the tool call or result event, image
-index, and processor, with the image hash, provider, model, and revision. A new
-extraction advances the session's `sync_marker`, so the next incremental push
-sends it without changing the transcript revision. Global keyword search and
-substring and regex `tool_result` searches match this text in every backend,
-anchored to the message holding the tool call.
+Successful text is published to PostgreSQL and ClickHouse as session-owned
+`image_text` rows keyed by the tool call or result event, image index, and
+processor, with the image hash, provider, model, and revision. A new extraction
+advances the session's `sync_marker`, so the next incremental push sends it
+without changing the transcript revision. Global keyword search and substring
+and regex `tool_result` searches match this text in every backend, anchored to
+the message holding the tool call.

@@ -199,6 +199,40 @@ func TestSyncEngineForgeBulkSync(t *testing.T) {
 	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 0, Synced: 0, Skipped: 0})
 }
 
+func TestForgeRebuildPreservesPushedSession(t *testing.T) {
+	for _, scenario := range []string{"reserved only", "with unreserved"} {
+		t.Run(scenario, func(t *testing.T) {
+			env := setupTestEnv(t)
+			forge := createForgeDB(t, env.forgeDir)
+			forge.addConversation(t, "reserved", "Reserved", forgeTestContext("native", "native answer"), "2026-05-02 09:58:15", "2026-05-02 10:00:16", `{}`)
+			if scenario == "with unreserved" {
+				forge.addConversation(t, "other", "Other", forgeTestContext("other prompt", "other answer"), "2026-05-02 09:58:15", "2026-05-02 10:00:16", `{}`)
+			}
+			receipt := db.SessionPushReceipt{SessionID: "forge:reserved", SourceOrigin: "source", PayloadHash: strings.Repeat("a", 64)}
+			write := db.SessionBatchWrite{Session: db.Session{ID: receipt.SessionID, Agent: "forge", Machine: "source", MessageCount: 1, UserMessageCount: 1}, Messages: []db.Message{{SessionID: receipt.SessionID, Ordinal: 0, Role: "user", Content: "accepted snapshot"}}, ReplaceMessages: true, DataVersion: db.CurrentDataVersion()}
+			created, err := env.db.ApplySessionPush(t.Context(), receipt, write)
+			require.NoError(t, err)
+			require.True(t, created)
+			stats := env.engine.ResyncAll(t.Context(), nil)
+			require.False(t, stats.Aborted, "%v", stats.Warnings)
+			require.Zero(t, stats.Failed)
+			assert.Positive(t, stats.Skipped)
+			messages, err := env.db.GetAllMessages(t.Context(), receipt.SessionID)
+			require.NoError(t, err)
+			require.Len(t, messages, 1)
+			assert.Equal(t, "accepted snapshot", messages[0].Content)
+			created, err = env.db.ApplySessionPush(t.Context(), receipt, write)
+			require.NoError(t, err)
+			assert.False(t, created)
+			if scenario == "with unreserved" {
+				other, err := env.db.GetSession(t.Context(), "forge:other")
+				require.NoError(t, err)
+				require.NotNil(t, other)
+			}
+		})
+	}
+}
+
 func TestReconcileWatchRootsGenericDBBackedProviderPreservesArchive(t *testing.T) {
 	env := setupSingleAgentTestEnv(t, parser.AgentForge)
 	forge := createForgeDB(t, env.forgeDir)
