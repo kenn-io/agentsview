@@ -34,9 +34,10 @@ type ConversationSessionOptions struct {
 }
 
 // ConversationSessionHeader opens a session stream. Revision is the archive's
-// publication revision in the snapshot the stream reads; every change in the
-// stream is at or below it. Session and Project are nil for a session the
-// archive no longer holds.
+// publication revision in the snapshot the stream reads; every session and
+// message change in the stream is at or below it. The tool summary carries a
+// revision from the separate tool journal counter. Session and Project are nil
+// for a session the archive no longer holds.
 type ConversationSessionHeader struct {
 	Type          string                   `json:"type"`
 	SchemaVersion int                      `json:"schema_version"`

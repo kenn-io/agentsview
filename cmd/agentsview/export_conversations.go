@@ -114,7 +114,8 @@ func newConversationSessionCommand() *cobra.Command {
 		Long: "Write one session from a single archive snapshot as JSON lines: " +
 			"a header, the session and message changes in revision order with text chunks after each readable message, and a trailer. " +
 			"The header's revision is the snapshot's archive revision. " +
-			"Every change in the stream is at or below that revision. " +
+			"Every session and message change in the stream is at or below that revision. " +
+			"The tool_summary record from --tool-summaries has its own revision sequence; compare it only with other tool_summary revisions. " +
 			"The trailer gives the message count, including tombstones. " +
 			"If the trailer is missing or the count does not match, discard the stream and read the session again. " +
 			"The command masks detected secrets by default. " +

@@ -291,10 +291,16 @@ Record details:
   most `--max-bytes` bytes. The default limit is 65,536 bytes.
 - A deleted message appears as a tombstone record with no text.
 
-The stream contains the same changes for this session that a full `changes`
-walk would list at the header's `revision`. Every change in the stream is at or
-below that revision. After you store the stream, skip later changes to this
-session at or below that revision.
+The stream contains the same session and message changes for this session that
+a full `changes` walk would list at the header's `revision`. Every session and
+message change in the stream is at or below that revision. After you store the
+stream, skip later session and message changes to this session at or below that
+revision.
+
+The header's `revision` does not apply to the `tool_summary` record, because
+[summaries have their own `revision` sequence](#session-tool-summaries). Keep
+the exported summary's `revision`, and replace the summary when a walk lists a
+`tool_summary` change for this session with a higher `revision`.
 
 If the stream ends without a `trailer`, or if the `messages` count in `trailer`
 does not match the message records you read, the stream is incomplete. Discard
