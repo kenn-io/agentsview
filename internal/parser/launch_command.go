@@ -258,13 +258,30 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 				}
 				return f
 			}
-			if (program == "bash" || program == "sh" || program == "zsh") && len(args) >= 3 && (args[1] == "-c" || args[1] == "-lc") && !dynamic[2] {
-				nested, err := syntax.NewParser().Parse(strings.NewReader(args[2]), "")
+			commandAt := shellCommandArgument(program, args)
+			if commandAt > 0 && commandAt < len(args) {
+				commandEnd := len(args)
+				if program == "bash" || program == "sh" || program == "zsh" {
+					commandEnd = commandAt + 1
+				}
+				if slices.Contains(dynamic[commandAt:commandEnd], true) {
+					emit("codex", f, true)
+					emit("claude", f, true)
+					return f
+				}
+				command := strings.Join(args[commandAt:commandEnd], " ")
+				if program == "powershell" || program == "pwsh" {
+					trimmed := strings.TrimSpace(command)
+					if strings.HasPrefix(trimmed, "& ") || strings.HasPrefix(trimmed, "&\t") {
+						command = strings.TrimSpace(trimmed[1:])
+					}
+				}
+				nested, err := syntax.NewParser().Parse(strings.NewReader(command), "")
 				if err == nil {
 					list(nested.Stmts, f)
 				} else {
 					for _, agent := range []string{"codex", "claude"} {
-						if strings.Contains(strings.ToLower(args[2]), agent) {
+						if strings.Contains(strings.ToLower(command), agent) {
 							emit(agent, f, true)
 						}
 					}
@@ -397,6 +414,27 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 	}
 	list(file.Stmts, initial)
 	return out
+}
+
+func shellCommandArgument(program string, args []string) int {
+	for i := 1; i < len(args); i++ {
+		option := strings.ToLower(args[i])
+		switch program {
+		case "bash", "sh", "zsh":
+			if option == "-c" || option == "-lc" {
+				return i + 1
+			}
+		case "powershell", "pwsh":
+			if option == "-command" || option == "-c" {
+				return i + 1
+			}
+		case "cmd":
+			if option == "/c" {
+				return i + 1
+			}
+		}
+	}
+	return 0
 }
 
 func shellCondition(stmt *syntax.Stmt) int {

@@ -463,6 +463,10 @@ func (db *DB) replaceSessionContentStaged(
 		}
 	}
 	var pendingRecallRevocations recallEvidenceRevocationEvents
+	oldLaunchSeeds, err := launchSeeds(ctx, tx, []string{sessionID})
+	if err != nil {
+		return err
+	}
 
 	if err := reconcileConversationMessagesTx(tx, sessionID, msgs, true, false); err != nil {
 		return err
@@ -576,7 +580,7 @@ func (db *DB) replaceSessionContentStaged(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, []string{sessionID}); err != nil {
+	if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, append(oldLaunchSeeds, sessionID)); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {

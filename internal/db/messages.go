@@ -1646,7 +1646,13 @@ func (db *DB) insertMessages(ctx context.Context,
 			return err
 		}
 	}
-	if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, sessionIDs); err != nil {
+	changes := make(map[string]int)
+	for _, msg := range msgs {
+		if previous, ok := changes[msg.SessionID]; !ok || msg.Ordinal < previous {
+			changes[msg.SessionID] = msg.Ordinal
+		}
+	}
+	if _, err := linkSubagentSessionsChangedTx(ctx, tx, sessionIDs, changes); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -1852,7 +1858,14 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 
 	var replaced *messageRangeTotals
 	var pendingRecallRevocations recallEvidenceRevocationEvents
+	var oldLaunchSeeds []string
+	fromOrdinal := minimumMessageOrdinal(msgs)
 	if from := update.ReplaceFromOrdinal; from != nil {
+		fromOrdinal = min(fromOrdinal, *from)
+		oldLaunchSeeds, err = launchSeedsFrom(ctx, tx, []string{sessionID}, *from)
+		if err != nil {
+			return false, err
+		}
 		if err := reconcileConversationRangeTx(tx, sessionID, msgs, true, db.usageOnlyStorage(), *from); err != nil {
 			return false, err
 		}
@@ -1985,7 +1998,7 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 			return false, err
 		}
 	}
-	if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, []string{sessionID}); err != nil {
+	if _, err := linkSubagentSessionsFromTx(ctx, tx, append(oldLaunchSeeds, sessionID), fromOrdinal); err != nil {
 		return false, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -2010,6 +2023,14 @@ func messageSessionIDs(msgs []Message) []string {
 		ids = append(ids, m.SessionID)
 	}
 	return ids
+}
+
+func minimumMessageOrdinal(msgs []Message) int {
+	from := int(^uint(0) >> 1)
+	for _, msg := range msgs {
+		from = min(from, msg.Ordinal)
+	}
+	return from
 }
 
 // MaxOrdinal returns the highest ordinal for a session,
@@ -2173,6 +2194,10 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 		return err
 	}
 	var pendingRecallRevocations recallEvidenceRevocationEvents
+	oldLaunchSeeds, err := launchSeeds(ctx, tx, []string{sessionID})
+	if err != nil {
+		return err
+	}
 
 	if err := reconcileReplacedConversationTx(tx, sessionID, msgs, plan, useDiff, db.usageOnlyStorage()); err != nil {
 		return err
@@ -2243,7 +2268,7 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 	); err != nil {
 		return err
 	}
-	if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, []string{sessionID}); err != nil {
+	if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, append(oldLaunchSeeds, sessionID)); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -2636,6 +2661,10 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 		return err
 	}
 	var pendingRecallRevocations recallEvidenceRevocationEvents
+	oldLaunchSeeds, err := launchSeeds(ctx, tx, []string{sessionID})
+	if err != nil {
+		return err
+	}
 
 	if err := reconcileReplacedConversationTx(tx, sessionID, msgs, plan, useDiff, db.usageOnlyStorage()); err != nil {
 		return err
@@ -2725,7 +2754,7 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 			return err
 		}
 	}
-	if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, []string{sessionID}); err != nil {
+	if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, append(oldLaunchSeeds, sessionID)); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {

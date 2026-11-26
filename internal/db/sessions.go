@@ -2308,6 +2308,18 @@ func (db *DB) LinkSubagentSessionsForSessions(ctx context.Context, ids []string)
 }
 
 func linkSubagentSessionsForSessionsTx(ctx context.Context, tx *sql.Tx, ids []string) (int, error) {
+	return linkSubagentSessionsChangedTx(ctx, tx, ids, nil)
+}
+
+func linkSubagentSessionsFromTx(ctx context.Context, tx *sql.Tx, ids []string, from int) (int, error) {
+	changes := make(map[string]int, len(ids))
+	for _, id := range ids {
+		changes[id] = from
+	}
+	return linkSubagentSessionsChangedTx(ctx, tx, ids, changes)
+}
+
+func linkSubagentSessionsChangedTx(ctx context.Context, tx *sql.Tx, ids []string, changes map[string]int) (int, error) {
 	updated := 0
 	seeds := append([]string{}, ids...)
 
@@ -2339,7 +2351,13 @@ func linkSubagentSessionsForSessionsTx(ctx context.Context, tx *sql.Tx, ids []st
 	if err != nil {
 		return 0, err
 	}
-	seeds, err = launchSeeds(ctx, tx, seeds)
+	if changes == nil {
+		changes = make(map[string]int, len(seeds))
+		for _, id := range seeds {
+			changes[id] = 0
+		}
+	}
+	seeds, err = launchSeedsChanged(ctx, tx, seeds, changes)
 	if err != nil {
 		return 0, err
 	}

@@ -130,9 +130,13 @@ func (db *DB) applyArtifactImportedSession(
 
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 	ctxTx := contextTransaction{ctx: ctx, tx: tx}
+	evidence, err := batchLaunchChange(ctx, tx, write)
+	if err != nil {
+		return result, err
+	}
 	messagesWritten, err := db.writeOneSessionBatchTx(
 		ctx, tx, ctxTx, write, &pendingRecallRevocations,
-		db.usageOnlyStorage(), nil,
+		db.usageOnlyStorage(), nil, &evidence,
 	)
 	switch {
 	case err == nil:
@@ -151,7 +155,7 @@ func (db *DB) applyArtifactImportedSession(
 				return ArtifactImportedSessionResult{}, err
 			}
 		}
-		if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, []string{write.Session.ID}); err != nil {
+		if _, err := linkSubagentSessionsFromTx(ctx, tx, append(evidence.oldSeeds, write.Session.ID), evidence.from); err != nil {
 			return ArtifactImportedSessionResult{}, err
 		}
 	}

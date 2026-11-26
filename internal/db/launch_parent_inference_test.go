@@ -1077,6 +1077,276 @@ func TestLaunchParentLateTranscriptWrite(t *testing.T) {
 	assert.Equal(t, "parent", parent.ParentSessionID)
 }
 
+func TestLaunchParentReplacementRemovesEvidence(t *testing.T) {
+	for _, competitor := range []bool{false, true} {
+		t.Run(strconv.FormatBool(competitor), func(t *testing.T) {
+			d := testDB(t)
+			for _, id := range []string{"parent", "other"} {
+				insertSession(t, d, id, "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
+			}
+			launch := func(id string) {
+				insertMessages(t, d, Message{SessionID: id, Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: id, ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}})
+			}
+			launch("parent")
+			if competitor {
+				launch("other")
+			}
+			started := "2026-01-02T03:04:03Z"
+			insertSession(t, d, "child", "project", func(s *Session) {
+				s.Agent = "codex"
+				s.Cwd = "/repo"
+				s.StartedAt = &started
+				s.SessionKind = "non-interactive"
+			})
+			_, err := d.LinkSubagentSessionsContext(t.Context())
+			require.NoError(t, err)
+			id := "parent"
+			if competitor {
+				id = "other"
+			}
+			require.NoError(t, d.ReplaceSessionMessages(t.Context(), id, nil))
+			link, err := d.GetSessionExternalParent(t.Context(), "child")
+			if competitor {
+				require.NoError(t, err)
+				assert.Equal(t, "parent", link.ParentSessionID)
+			} else {
+				require.ErrorIs(t, err, sql.ErrNoRows)
+			}
+		})
+	}
+}
+
+func TestLaunchParentReplacementWritePaths(t *testing.T) {
+	for _, mode := range []string{"content", "incremental", "batch", "atomic batch", "staged"} {
+		t.Run(mode, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
+			insertMessages(t, d, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: "parent", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}})
+			started := "2026-01-02T03:04:03Z"
+			insertSession(t, d, "child", "project", func(s *Session) {
+				s.Agent = "codex"
+				s.Cwd = "/repo"
+				s.StartedAt = &started
+				s.SessionKind = "non-interactive"
+			})
+			_, err := d.LinkSubagentSessionsContext(t.Context())
+			require.NoError(t, err)
+			_, err = d.GetSessionExternalParent(t.Context(), "child")
+			require.NoError(t, err)
+			switch mode {
+			case "content":
+				err = d.ReplaceSessionContent(t.Context(), "parent", nil, SessionSignalUpdate{}, nil)
+			case "incremental":
+				from := 0
+				_, err = d.WriteSessionIncremental(t.Context(), "parent", nil, IncrementalSessionUpdate{ReplaceFromOrdinal: &from})
+			case "batch", "atomic batch":
+				session, getErr := d.GetSession(t.Context(), "parent")
+				require.NoError(t, getErr)
+				write := SessionBatchWrite{Session: *session, ReplaceMessages: true}
+				if mode == "batch" {
+					_, err = d.WriteSessionBatchContext(t.Context(), []SessionBatchWrite{write})
+				} else {
+					_, err = d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{write})
+				}
+			case "staged":
+				err = d.ReplaceSessionContentStaged(t.Context(), "parent", nil, newScratchStagedResults(t), nil, nil)
+			}
+			require.NoError(t, err)
+			_, err = d.GetSessionExternalParent(t.Context(), "child")
+			require.ErrorIs(t, err, sql.ErrNoRows)
+		})
+	}
+}
+
+func TestLaunchParentSequentialRuns(t *testing.T) {
+	for _, sameParent := range []bool{false, true} {
+		t.Run(strconv.FormatBool(sameParent), func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
+			insertMessages(t, d, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: "parent", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}})
+			second := "parent"
+			if !sameParent {
+				second = "other"
+				insertSession(t, d, second, "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
+			}
+			insertMessages(t, d, Message{SessionID: second, Ordinal: 1, Role: "assistant", Timestamp: "2026-01-02T03:04:30Z", ToolCalls: []ToolCall{{SessionID: second, ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}})
+			for _, child := range []struct{ id, started string }{{"one", "2026-01-02T03:04:03Z"}, {"two", "2026-01-02T03:04:33Z"}} {
+				insertSession(t, d, child.id, "project", func(s *Session) {
+					s.Agent = "codex"
+					s.Cwd = "/repo"
+					s.StartedAt = &child.started
+					s.SessionKind = "non-interactive"
+				})
+			}
+			_, err := d.LinkSubagentSessionsForSessions(t.Context(), []string{"one", "two"})
+			require.NoError(t, err)
+			parent, err := d.GetSessionExternalParent(t.Context(), "one")
+			require.NoError(t, err)
+			assert.Equal(t, "parent", parent.ParentSessionID)
+			parent, err = d.GetSessionExternalParent(t.Context(), "two")
+			require.NoError(t, err)
+			assert.Equal(t, second, parent.ParentSessionID)
+		})
+	}
+}
+
+func TestLaunchParentPlatformFolders(t *testing.T) {
+	for _, tc := range []struct{ name, cwd, input string }{
+		{"macos", "/Users/example/project", `{"command":"codex exec hi"}`},
+		{"windows powershell", `C:\Users\example\project`, `{"command":["powershell.exe","-Command","codex exec hi"]}`},
+		{"windows powershell call", `C:\Users\example\project`, `{"command":["powershell.exe","-Command","& codex exec hi"]}`},
+		{"windows pwsh", `C:\Users\example\project`, `{"command":["pwsh","-Command","codex exec hi"]}`},
+		{"windows cmd", `C:\Users\example\project`, `{"command":["cmd.exe","/c","codex","exec","hi"]}`},
+		{"windows cmd quoted", `C:\Users\example\project`, `{"command":["cmd.exe","/c","codex exec hi"]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = tc.cwd })
+			insertMessages(t, d, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: "parent", ToolName: "Bash", Category: "Bash", InputJSON: tc.input}}})
+			started := "2026-01-02T03:04:03Z"
+			insertSession(t, d, "child", "project", func(s *Session) {
+				s.Agent = "codex"
+				s.Cwd = tc.cwd
+				s.StartedAt = &started
+				s.SessionKind = "non-interactive"
+			})
+			_, err := d.LinkSubagentSessionsForSessions(t.Context(), []string{"child"})
+			require.NoError(t, err)
+			parent, err := d.GetSessionExternalParent(t.Context(), "child")
+			require.NoError(t, err)
+			assert.Equal(t, "parent", parent.ParentSessionID)
+		})
+	}
+}
+
+func TestLaunchParentOneLaunchTwoDifferentRuns(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
+	insertMessages(t, d, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: "parent", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}})
+	for _, child := range []struct{ id, started string }{{"one", "2026-01-02T03:04:03Z"}, {"two", "2026-01-02T03:04:33Z"}} {
+		insertSession(t, d, child.id, "project", func(s *Session) {
+			s.Agent = "codex"
+			s.Cwd = "/repo"
+			s.StartedAt = &child.started
+			s.SessionKind = "non-interactive"
+		})
+	}
+	_, err := d.LinkSubagentSessionsForSessions(t.Context(), []string{"one", "two"})
+	require.NoError(t, err)
+	for _, id := range []string{"one", "two"} {
+		_, err := d.GetSessionExternalParent(t.Context(), id)
+		require.ErrorIs(t, err, sql.ErrNoRows)
+	}
+}
+
+func TestLaunchParentAmbiguousEarlierRunDoesNotReserveLaunch(t *testing.T) {
+	d := testDB(t)
+	for _, id := range []string{"a", "b"} {
+		insertSession(t, d, id, "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
+		insertMessages(t, d, Message{SessionID: id, Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: id, ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}})
+	}
+	insertMessages(t, d, Message{SessionID: "b", Ordinal: 1, Role: "assistant", Timestamp: "2026-01-02T03:04:30Z", ToolCalls: []ToolCall{{SessionID: "b", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}})
+	for _, child := range []struct{ id, started string }{{"one", "2026-01-02T03:04:03Z"}, {"two", "2026-01-02T03:04:33Z"}} {
+		insertSession(t, d, child.id, "project", func(s *Session) {
+			s.Agent = "codex"
+			s.Cwd = "/repo"
+			s.StartedAt = &child.started
+			s.SessionKind = "non-interactive"
+		})
+	}
+	_, err := d.LinkSubagentSessionsForSessions(t.Context(), []string{"one", "two"})
+	require.NoError(t, err)
+	for _, id := range []string{"one", "two"} {
+		_, err := d.GetSessionExternalParent(t.Context(), id)
+		require.ErrorIs(t, err, sql.ErrNoRows)
+	}
+}
+
+func TestLaunchParentEarlierRunWithTwoCallsDoesNotReserveEither(t *testing.T) {
+	d := testDB(t)
+	for _, id := range []string{"a", "b"} {
+		insertSession(t, d, id, "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
+	}
+	for _, call := range []struct {
+		id, stamp string
+		ordinal   int
+	}{
+		{"a", "2026-01-02T03:03:10Z", 0},
+		{"a", "2026-01-02T03:04:00Z", 1},
+		{"b", "2026-01-02T03:04:30Z", 0},
+	} {
+		insertMessages(t, d, Message{SessionID: call.id, Ordinal: call.ordinal, Role: "assistant", Timestamp: call.stamp, ToolCalls: []ToolCall{{SessionID: call.id, ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}})
+	}
+	for _, child := range []struct{ id, started string }{{"one", "2026-01-02T03:04:03Z"}, {"two", "2026-01-02T03:04:33Z"}} {
+		insertSession(t, d, child.id, "project", func(s *Session) {
+			s.Agent = "codex"
+			s.Cwd = "/repo"
+			s.StartedAt = &child.started
+			s.SessionKind = "non-interactive"
+		})
+	}
+	_, err := d.LinkSubagentSessionsForSessions(t.Context(), []string{"one", "two"})
+	require.NoError(t, err)
+	_, err = d.GetSessionExternalParent(t.Context(), "two")
+	require.ErrorIs(t, err, sql.ErrNoRows)
+}
+
+func TestLaunchParentIncrementalAppend(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
+	first := Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: "parent", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}}
+	insertMessages(t, d, first)
+	for _, child := range []struct{ id, started string }{{"one", "2026-01-02T03:04:03Z"}, {"two", "2026-01-02T03:04:33Z"}} {
+		insertSession(t, d, child.id, "project", func(s *Session) {
+			s.Agent = "codex"
+			s.Cwd = "/repo"
+			s.StartedAt = &child.started
+			s.SessionKind = "non-interactive"
+		})
+	}
+	_, err := d.LinkSubagentSessionsForSessions(t.Context(), []string{"one", "two"})
+	require.NoError(t, err)
+	second := Message{SessionID: "parent", Ordinal: 1, Role: "assistant", Timestamp: "2026-01-02T03:04:30Z", ToolCalls: []ToolCall{{SessionID: "parent", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}}
+	_, err = d.WriteSessionIncremental(t.Context(), "parent", []Message{second}, IncrementalSessionUpdate{})
+	require.NoError(t, err)
+	for _, id := range []string{"one", "two"} {
+		parent, err := d.GetSessionExternalParent(t.Context(), id)
+		require.NoError(t, err)
+		assert.Equal(t, "parent", parent.ParentSessionID)
+	}
+}
+
+func TestLaunchParentMixedBatchAppend(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "history", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
+	insertMessages(t, d, Message{SessionID: "history", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-01T03:04:00Z", ToolCalls: []ToolCall{{SessionID: "history", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec old"}`}}})
+	for _, child := range []struct{ id, cwd string }{{"first", "/repo"}, {"second", "/other"}} {
+		started := "2026-01-02T03:04:03Z"
+		insertSession(t, d, child.id, "project", func(s *Session) {
+			s.Agent = "codex"
+			s.Cwd = child.cwd
+			s.StartedAt = &started
+			s.SessionKind = "non-interactive"
+		})
+	}
+	history, err := d.GetSession(t.Context(), "history")
+	require.NoError(t, err)
+	launch := func(id string, ordinal int) Message {
+		return Message{SessionID: id, Ordinal: ordinal, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: id, ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}}
+	}
+	newSession := Session{ID: "new", Project: "project", Machine: history.Machine, Agent: "claude", Cwd: "/other"}
+	_, err = d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{
+		{Session: *history, Messages: []Message{launch("history", 1)}},
+		{Session: newSession, Messages: []Message{launch("new", 0)}},
+	})
+	require.NoError(t, err)
+	for _, pair := range []struct{ child, parent string }{{"first", "history"}, {"second", "new"}} {
+		link, err := d.GetSessionExternalParent(t.Context(), pair.child)
+		require.NoError(t, err)
+		assert.Equal(t, pair.parent, link.ParentSessionID)
+	}
+}
+
 func TestLaunchParentAmbiguousRuns(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
