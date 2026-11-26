@@ -82,6 +82,8 @@ func TestMusePersonalSourceSessionKind(t *testing.T) {
 		// Delegated browser work and subagent runs are headless workers.
 		{"runtime-browser-input", SessionKindNonInteractive, 1},
 		{"runtime-subagent", SessionKindNonInteractive, 1},
+		{"runtime-carry-out", SessionKindNonInteractive, 2},
+		{"runtime-task-updates", SessionKindNonInteractive, 1},
 		// Conversations with the person. A context item can come before the
 		// first user item and carry a different source.
 		{"chat-after-context-stamp", "", 2},
@@ -112,7 +114,12 @@ func TestMusePersonalSessionKindUsesFirstUserItem(t *testing.T) {
 		}
 		return fmt.Sprintf(`{"type":"item","seq":%d,%s"created_at":"2026-10-05T15:04:06Z","item":{"type":"message","role":%q,"text":%q}}`+"\n", seq, sourceField, role, text)
 	}
-	const subagent = "[Subagent Context] You are running as a subagent (depth 1/3). Summarize the notes."
+	const (
+		banner   = "[Subagent Context] You are running as a subagent (depth 1/2); your completed results are delivered to your parent agent automatically, so do not busy-poll for status."
+		subagent = banner + "\n\nSummarize the notes."
+		carryOut = "Carry out this assignment end to end, then report the result.\n\nRead the status page."
+		task     = "## Task and updates\nRead the status page."
+	)
 	for _, tc := range []struct {
 		name, body, wantKind, wantFirst string
 	}{
@@ -133,8 +140,17 @@ func TestMusePersonalSessionKindUsesFirstUserItem(t *testing.T) {
 		{"subagent envelope on another source", item(0, "runtime.voice_audio", "user", subagent), "", subagent},
 		{"subagent envelope on a later user item", item(0, "runtime", "user", "hello") + item(1, "runtime", "user", subagent), "", "hello"},
 		{"subagent envelope must open the message", item(0, "runtime", "user", "note: "+subagent), "", "note: " + subagent},
+		// The banner must be the whole first line, with a numeric depth.
 		{"truncated subagent banner", item(0, "runtime", "user", "[Subagent Context] You are running as a subagent (depth "), "", "[Subagent Context] You are running as a subagent (depth "},
-		{"subagent banner without a depth", item(0, "runtime", "user", "[Subagent Context] You are running as a subagent (depth x/y)."), "", "[Subagent Context] You are running as a subagent (depth x/y)."},
+		{"subagent banner without a numeric depth", item(0, "runtime", "user", strings.Replace(banner, "1/2", "x/y", 1)), "", strings.Replace(banner, "1/2", "x/y", 1)},
+		{"subagent banner with text after it", item(0, "runtime", "user", banner+" Summarize."), "", banner + " Summarize."},
+		{"subagent banner at depth 2/2", item(0, "runtime", "user", strings.Replace(banner, "1/2", "2/2", 1)), SessionKindNonInteractive, strings.Replace(banner, "1/2", "2/2", 1)},
+		// Delegated assignments on plain runtime are headless workers too.
+		{"carry-out assignment on plain runtime", item(0, "runtime", "user", carryOut), SessionKindNonInteractive, carryOut},
+		{"task and updates on plain runtime", item(0, "runtime", "user", task), SessionKindNonInteractive, task},
+		{"carry-out assignment on a voice source", item(0, "runtime.voice_audio", "user", carryOut), "", carryOut},
+		{"carry-out assignment on a later user item", item(0, "runtime", "user", "hello") + item(1, "runtime", "user", carryOut), "", "hello"},
+		{"carry-out wording must open the message", item(0, "runtime", "user", "Please "+carryOut), "", "Please " + carryOut},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p, _ := musePersonalTestProvider(t, tc.body)
@@ -151,7 +167,7 @@ func TestMusePersonalSubagentParentLink(t *testing.T) {
 	const (
 		parent   = "77777777-8888-4999-8aaa-bbbbbbbbbbbb"
 		other    = "99999999-aaaa-4bbb-8ccc-dddddddddddd"
-		envelope = "[Subagent Context] You are running as a subagent (depth 1/2).\n"
+		envelope = "[Subagent Context] You are running as a subagent (depth 1/2); your completed results are delivered to your parent agent automatically, so do not busy-poll for status.\n"
 	)
 	t.Run("fixture", func(t *testing.T) {
 		body, err := os.ReadFile(filepath.Join("testdata", "muse_personal", "sources", "runtime-subagent.jsonl"))
@@ -188,6 +204,8 @@ func TestMusePersonalSubagentParentLink(t *testing.T) {
 		{"requester only in the task body", item(0, "runtime", envelope+"- Depth: 1/2.\n\n"+requester(other)), SessionKindNonInteractive, ""},
 		{"requester outside the subagent envelope", item(0, "runtime", requester(parent)), "", ""},
 		{"requester on delegated browser work", item(0, "runtime.browser_input", envelope+requester(parent)), SessionKindNonInteractive, ""},
+		{"requester on a carry-out assignment", item(0, "runtime", "Carry out this assignment end to end, then report the result.\n"+requester(parent)), SessionKindNonInteractive, ""},
+		{"banner line with trailing text", item(0, "runtime", strings.TrimSuffix(envelope, "\n")+" Extra.\n"+requester(parent)), "", ""},
 		{"requester on a later user item", item(0, "runtime", "hello") + item(1, "runtime", envelope+requester(parent)), "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

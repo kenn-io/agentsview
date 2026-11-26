@@ -6721,23 +6721,29 @@ schemas keep their existing ordering behavior.
   Personal installation on 2026-11-25 found `source` on every item line.
   Classified by the first user-role item's `source`: `scheduler.cron`,
   `runtime.action`, `runtime.self_improvement`, `runtime.feed` and
-  `runtime.proactivity` covered 3,536 sessions; `runtime.browser_input` (88) and
-  plain-`runtime` subagent envelopes (128) covered 216; 182 stayed interactive;
-  five had no user item. None of the first two groups was a conversation.
+  `runtime.proactivity` covered 3,536 sessions; `runtime.browser_input` (88),
+  plain-`runtime` subagent envelopes (128) and plain-`runtime` delegated
+  assignments (82) covered 298; 100 stayed interactive; five had no user item.
+  None of the first two groups was a conversation. The delegated assignments
+  open with `Carry out this assignment end to end, then report the result.` (45)
+  or `## Task and updates` (37); every user item in them is stamped `runtime`,
+  and none carries chat context, voice items or a parent reference.
   Conversations open with plain `runtime`, a voice source such as
   `runtime.voice_audio`, or `runtime.onboarding`. Plain `runtime` also opens
   subagent runs, whose first user item opens with a `[Subagent Context]`
-  envelope. The check found no structured parent field: every header had
-  `session_id` equal to `agent_id`. Envelope fields sit one per line as
-  `- Field: value.` after the opening line. All 128 subagent envelopes carried
+  envelope. Its first line had one shape in all 128:
+  `[Subagent Context] You are running as a subagent (depth N/M); your completed results are delivered to your parent agent automatically, so do not busy-poll for status.`
+  The check found no structured parent field: every header had `session_id`
+  equal to `agent_id`. Envelope fields sit one per line as `- Field: value.`
+  after the opening line. All 128 subagent envelopes carried
   `- Requester agent id: <UUID>.`, and every one named an existing session. The
   envelope's `Your session` field named the run itself in only 87 of 128, so it
-  is not used. `runtime.browser_input` runs carry no parent reference. Context
-  items such as `runtime.skill_invalidation` and `runtime.chats` can come first
-  with a different role, so the first item is not the signal. Scheduled runs can
-  receive injected user items, such as approvals (half of the 1,520
-  `scheduler.cron` sessions had two user items), so message count does not
-  separate them from conversations.
+  is not used. `runtime.browser_input` runs and delegated assignments carry no
+  parent reference. Context items such as `runtime.skill_invalidation` and
+  `runtime.chats` can come first with a different role, so the first item is not
+  the signal. Scheduled runs can receive injected user items, such as approvals
+  (half of the 1,520 `scheduler.cron` sessions had two user items), so message
+  count does not separate them from conversations.
   `internal/parser/testdata/muse_personal/sources/` holds one synthetic sample
   per first-user source; none is a capture.
   `TestMusePersonalSessionKindUsesFirstUserItem` covers sessions with no user
@@ -6750,12 +6756,13 @@ schemas keep their existing ordering behavior.
   Visible assistant commentary participates in dialogue search and export.
   The first user item, in sequence order, classifies the session. Scheduled and
   upkeep sources are stored as `session_kind` `muse-background` and count as
-  automated at any message count. `runtime.browser_input` and plain-`runtime`
-  subagent envelopes are stored as `non-interactive`, which makes them Subagent
-  workers. The envelope is the opening line plus the `- Field: value.` lines
-  after it. When its `- Requester agent id:` lines name exactly one other
-  session, the run links to it as its parent; otherwise the worker stays
-  parentless. All other sessions keep an empty kind.
+  automated at any message count. `runtime.browser_input`, the two
+  plain-`runtime` assignment openers and plain-`runtime` subagent envelopes are
+  stored as `non-interactive`, which makes them Subagent workers. A subagent
+  envelope needs the whole banner as its first line. The envelope is that line
+  plus the `- Field: value.` lines after it. When its `- Requester agent id:`
+  lines name exactly one other session, the run links to it as its parent;
+  otherwise the worker stays parentless. All other sessions keep an empty kind.
   Items are sorted by sequence before pairing; ties keep physical order. Only
   byte-identical same-sequence records are deduplicated. A checkpoint is
   anchored after the highest preceding physical item sequence; it does not

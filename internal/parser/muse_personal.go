@@ -173,15 +173,37 @@ var musePersonalBackgroundSources = map[string]bool{
 	"runtime.proactivity":      true,
 }
 
-// musePersonalSubagentBanner opens the first user message of a Muse subagent
-// run, including its current and maximum depth. Subagent runs share plain
-// runtime with conversations, so only this envelope separates them.
-var musePersonalSubagentBanner = regexp.MustCompile(`^\[Subagent Context\] You are running as a subagent \(depth [0-9]+/[0-9]+\)`)
+// musePersonalSubagentBanner is the whole first line of a Muse subagent run's
+// first user message, with its current and maximum depth. Subagent runs share
+// plain runtime with conversations, so only this envelope separates them.
+var musePersonalSubagentBanner = regexp.MustCompile(`^\[Subagent Context\] You are running as a subagent \(depth [0-9]+/[0-9]+\); your completed results are delivered to your parent agent automatically, so do not busy-poll for status\.$`)
+
+// musePersonalAssignmentPrefixes open delegated assignments that Muse runs on
+// plain runtime instead of runtime.browser_input. They record no parent.
+var musePersonalAssignmentPrefixes = []string{
+	"Carry out this assignment end to end, then report the result.",
+	"## Task and updates",
+}
 
 // musePersonalSubagentEnvelope reports whether a first user item opens a
 // subagent run.
 func musePersonalSubagentEnvelope(source, content string) bool {
-	return source == "runtime" && musePersonalSubagentBanner.MatchString(content)
+	firstLine, _, _ := strings.Cut(content, "\n")
+	return source == "runtime" && musePersonalSubagentBanner.MatchString(strings.TrimRight(firstLine, "\r"))
+}
+
+// musePersonalAssignment reports whether a first user item opens a delegated
+// assignment on plain runtime.
+func musePersonalAssignment(source, content string) bool {
+	if source != "runtime" {
+		return false
+	}
+	for _, prefix := range musePersonalAssignmentPrefixes {
+		if strings.HasPrefix(content, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // musePersonalRequesterField labels the requester in a subagent envelope.
@@ -227,17 +249,16 @@ func musePersonalSubagentParent(source, content, sessionID string) string {
 }
 
 // musePersonalSessionKind classifies a session from its first user item.
-// Delegated browser work and subagent runs are headless workers: the
-// non-interactive kind makes them parentless Subagent sessions. Real
-// conversations use plain runtime, voice sources or runtime.onboarding and
-// keep an empty kind.
+// Delegated work and subagent runs are headless workers: the non-interactive
+// kind makes them Subagent sessions. Real conversations use plain runtime,
+// voice sources or runtime.onboarding and keep an empty kind.
 func musePersonalSessionKind(source, content string) string {
 	switch {
 	case musePersonalBackgroundSources[source]:
 		return SessionKindMuseBackground
 	case source == "runtime.browser_input":
 		return SessionKindNonInteractive
-	case musePersonalSubagentEnvelope(source, content):
+	case musePersonalSubagentEnvelope(source, content), musePersonalAssignment(source, content):
 		return SessionKindNonInteractive
 	default:
 		return ""
