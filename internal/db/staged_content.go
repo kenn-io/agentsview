@@ -580,7 +580,7 @@ func (db *DB) replaceSessionContentStaged(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, append(oldLaunchSeeds, sessionID)); err != nil {
+	if _, err := linkLaunchParentsChangedTx(ctx, tx, append(oldLaunchSeeds, sessionID), nil); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {

@@ -1766,7 +1766,7 @@ func (db *DB) upsertSession(ctx context.Context,
 		}
 	}
 	if result.inserted && (s.Agent == "codex" && s.SessionKind == "non-interactive" || s.Agent == "claude" && s.Entrypoint == "sdk-cli") {
-		if _, err := linkSubagentSessionsChangedTx(ctx, tx, []string{s.ID}, map[string]int{}); err != nil {
+		if _, err := linkLaunchParentsChangedTx(ctx, tx, []string{s.ID}, map[string]int{}); err != nil {
 			return result, err
 		}
 	}
@@ -2384,13 +2384,21 @@ func linkSubagentSessionsChangedTx(ctx context.Context, tx *sql.Tx, ids []string
 	if err != nil {
 		return 0, err
 	}
-	if changes == nil {
-		changes = make(map[string]int, len(seeds))
-		for _, id := range seeds {
-			changes[id] = 0
-		}
+	linked, err := linkLaunchParentsChangedTx(ctx, tx, seeds, changes)
+	if err != nil {
+		return 0, err
 	}
-	seeds, err = launchSeedsChanged(ctx, tx, seeds, changes)
+	return updated + linked, nil
+}
+
+func linkLaunchParentsChangedTx(ctx context.Context, tx *sql.Tx, ids []string, changes map[string]int) (int, error) {
+	var seeds []string
+	var err error
+	if changes == nil {
+		seeds, err = launchSeeds(ctx, tx, ids)
+	} else {
+		seeds, err = launchSeedsChanged(ctx, tx, ids, changes)
+	}
 	if err != nil {
 		return 0, err
 	}
@@ -2398,7 +2406,6 @@ func linkSubagentSessionsChangedTx(ctx context.Context, tx *sql.Tx, ids []string
 	if err != nil {
 		return 0, err
 	}
-	updated += inferred
 	launched, err := applySessionExternalParentsFor(ctx, tx.ExecContext,
 		func(ctx context.Context, query string, args ...any) rowScanner {
 			return tx.QueryRowContext(ctx, query, args...)
@@ -2406,8 +2413,7 @@ func linkSubagentSessionsChangedTx(ctx context.Context, tx *sql.Tx, ids []string
 	if err != nil {
 		return 0, err
 	}
-	updated += launched
-	return updated, nil
+	return inferred + launched, nil
 }
 
 // QueueSubagentParentRepairs durably records sessions whose hierarchy must be

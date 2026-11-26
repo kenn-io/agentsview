@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json/v2"
 	"errors"
+	"maps"
 	"path"
 	"slices"
 	"strings"
@@ -183,11 +184,7 @@ func earlierLinkedLaunchRuns(ctx context.Context, tx *sql.Tx, child launchChild,
 	if err != nil {
 		return 0, err
 	}
-	ids := make([]string, 0, len(competing))
-	for id := range competing {
-		ids = append(ids, id)
-	}
-	encoded, err := json.Marshal(ids)
+	encoded, err := json.Marshal(slices.Collect(maps.Keys(competing)))
 	if err != nil {
 		return 0, err
 	}

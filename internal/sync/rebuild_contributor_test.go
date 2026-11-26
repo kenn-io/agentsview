@@ -1486,3 +1486,25 @@ func TestSyncThenRunReportsSwapFailureWithoutIncrementalFallback(t *testing.T) {
 	assert.NotNil(t, old, "the original archive stays in place")
 	assert.NoFileExists(t, database.Path()+resyncTempSuffix)
 }
+
+func TestResyncLaunchBackfillFailureReportsLastStats(t *testing.T) {
+	engine, _, _ := newResyncSplitEngine(t)
+	stats, err := engine.resyncAllWithOptionsAndOperations(t.Context(), nil, RebuildOptions{}, rebuildOperations{
+		rebuildUsageIndexes: func(ctx context.Context, database *db.DB) error {
+			if err := database.RebuildBulkImportIndexes(ctx); err != nil {
+				return err
+			}
+			if err := database.SetSyncState(ctx, "launch_parent_backfill_v1", "done"); err != nil {
+				return err
+			}
+			return database.Update(ctx, func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, `CREATE TRIGGER fail_launch_backfill BEFORE DELETE ON pg_sync_state WHEN OLD.key='launch_parent_backfill_v1' BEGIN SELECT RAISE(FAIL, 'injected launch backfill failure'); END`)
+				return err
+			})
+		},
+	})
+	require.ErrorContains(t, err, "injected launch backfill failure")
+	require.True(t, stats.Aborted)
+	assert.True(t, engine.LastSyncStats().Aborted)
+	assert.Equal(t, stats.Warnings, engine.LastSyncStats().Warnings)
+}

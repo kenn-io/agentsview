@@ -1088,6 +1088,9 @@ func (e *Engine) resyncBuildLocked(
 		if rerr := origDB.Reopen(); rerr != nil {
 			log.Printf("resync: recovery reopen: %v", rerr)
 		}
+		e.mu.Lock()
+		e.lastSyncStats = stats
+		e.mu.Unlock()
 		return stats, err
 	}
 

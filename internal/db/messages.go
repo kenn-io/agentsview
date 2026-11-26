@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"math"
 	"slices"
 	"strings"
@@ -1650,11 +1651,7 @@ func (db *DB) insertMessages(ctx context.Context,
 	}
 	changes := launchMessageChanges(msgs)
 	if len(changes) > 0 {
-		changedIDs := make([]string, 0, len(changes))
-		for id := range changes {
-			changedIDs = append(changedIDs, id)
-		}
-		if _, err := linkSubagentSessionsChangedTx(ctx, tx, changedIDs, changes); err != nil {
+		if _, err := linkLaunchParentsChangedTx(ctx, tx, slices.Collect(maps.Keys(changes)), changes); err != nil {
 			return err
 		}
 	}
@@ -2001,7 +1998,7 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 	}
 	changes := launchMessageChanges(msgs)
 	if len(changes) > 0 || update.ReplaceFromOrdinal != nil {
-		if _, err := linkSubagentSessionsChangedTx(ctx, tx, append(oldLaunchSeeds, sessionID), changes); err != nil {
+		if _, err := linkLaunchParentsChangedTx(ctx, tx, append(oldLaunchSeeds, sessionID), changes); err != nil {
 			return false, err
 		}
 	}
@@ -2287,7 +2284,7 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 	); err != nil {
 		return err
 	}
-	if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, append(oldLaunchSeeds, sessionID)); err != nil {
+	if _, err := linkLaunchParentsChangedTx(ctx, tx, append(oldLaunchSeeds, sessionID), nil); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -2773,7 +2770,7 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 			return err
 		}
 	}
-	if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, append(oldLaunchSeeds, sessionID)); err != nil {
+	if _, err := linkLaunchParentsChangedTx(ctx, tx, append(oldLaunchSeeds, sessionID), nil); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {

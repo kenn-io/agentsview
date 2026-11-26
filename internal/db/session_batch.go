@@ -251,7 +251,7 @@ func (db *DB) WriteSessionBatchContext(
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	if _, err := linkSubagentSessionsChangedTx(ctx, tx, append(oldLaunchSeeds, writtenUsageIDs...), changes); err != nil {
+	if _, err := linkLaunchParentsChangedTx(ctx, tx, append(oldLaunchSeeds, writtenUsageIDs...), changes); err != nil {
 		return result, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -336,7 +336,7 @@ func (db *DB) WriteSessionBatchAtomic(ctx context.Context,
 		writtenUsageIDs = append(writtenUsageIDs, write.Session.ID)
 	}
 
-	if _, err := linkSubagentSessionsChangedTx(ctx, tx, append(oldLaunchSeeds, writtenUsageIDs...), changes); err != nil {
+	if _, err := linkLaunchParentsChangedTx(ctx, tx, append(oldLaunchSeeds, writtenUsageIDs...), changes); err != nil {
 		return result, err
 	}
 
