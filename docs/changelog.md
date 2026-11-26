@@ -9,6 +9,12 @@ The latest release is
 
 ## Unreleased
 
+**New features**
+
+- Push one archived session to another authenticated AgentsView instance with
+  `agentsview push`. Enable `accept_session_push` on the receiving instance.
+  See [Push one archived session](/docs/remote-access/#push-one-archived-session).
+
 **Bug fixes**
 
 - Reporting schema 7 lets integrations count shared Cursor billing events once

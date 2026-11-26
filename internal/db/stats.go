@@ -170,6 +170,7 @@ func (db *DB) FileBackedSessionCountForRebuildOwner(
 	err := db.getReader().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM sessions
 		 WHERE agent NOT IN (`+nonSourceBackedAgentPlaceholders()+`)
+		 AND NOT EXISTS (SELECT 1 FROM session_push_receipts spr WHERE spr.session_id = sessions.id)
 		 AND `+rootSessionFilter+`
 		 AND `+strings.Join(conditions, "\n AND "),
 		args...,
@@ -199,6 +200,7 @@ func (db *DB) fileBackedSessionCount(
 	err := db.getReader().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM sessions
 		 WHERE agent NOT IN (`+nonSourceBackedAgentPlaceholders()+`)
+		 AND NOT EXISTS (SELECT 1 FROM session_push_receipts spr WHERE spr.session_id = sessions.id)
 		 AND `+rootSessionFilter+machinePredicate,
 		args...,
 	).Scan(&count)

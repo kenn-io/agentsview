@@ -364,6 +364,7 @@ func TestOpenReadOnlyRejectsMissingReadTable(t *testing.T) {
 		{"recall_query_exposures", "query_id"},
 		{"recall_extract_generations", "fingerprint"},
 		{"recall_extract_progress", "session_id"},
+		{"session_push_receipts", "session_id"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.table, func(t *testing.T) {

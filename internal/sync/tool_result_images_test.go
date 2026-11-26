@@ -831,7 +831,7 @@ func TestClaudeToolResultImagesRetainedOffloadedAndIndexed(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, []string{retained[0].SHA256}, pending)
 
-			gotPNG, err := db.ReadRetainedImage(eventContent, retained[0].Index, assetsDir, 1<<20)
+			gotPNG, err := db.ReadRetainedImage(t.Context(), eventContent, retained[0].Index, assetsDir, 1<<20)
 			require.NoError(t, err)
 			assert.Equal(t, rawPNG, gotPNG)
 		})

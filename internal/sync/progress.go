@@ -125,12 +125,14 @@ type SyncStats struct {
 	nonContainerDiscovered     int
 	messagesIndexed            int // unexported: progress message counter
 	parserExcludedFiles        int // file-level intentional parser exclusions
+	sessionPushReservedFiles   int // source files fenced by immutable pushed snapshots
 	parserExcludedIDs          []string
 	providerFailures           int // provider discovery or source processing failures
 	providerProcessingFailures int // failures after a source was discovered
 	deferredRetryPaths         []string
 	deferredRetryOverflow      bool
 	deferredPreservedIDs       []string
+	deferredPreservedFiles     int
 	// preservedRetryFailures counts the Failed entries that are preserved
 	// Antigravity CLI fallbacks, whose saved rows a rebuild restores.
 	preservedRetryFailures int

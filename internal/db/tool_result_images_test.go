@@ -28,15 +28,15 @@ func TestReadRetainedImageLimit(t *testing.T) {
 		raw, err := json.Marshal(uri)
 		require.NoError(t, err)
 		content := fmt.Sprintf(`[{"type":"input_image","image_url":%s}]`, raw)
-		_, err = ReadRetainedImage(content, 0, "", 32)
+		_, err = ReadRetainedImage(t.Context(), content, 0, "", 32)
 		require.ErrorContains(t, err, "exceeds 32 bytes")
 		require.ErrorIs(t, err, ErrImageTooLarge)
-		got, err := ReadRetainedImage(content, 0, "", int64(len(body)))
+		got, err := ReadRetainedImage(t.Context(), content, 0, "", int64(len(body)))
 		require.NoError(t, err)
 		require.Equal(t, body, got)
 		encoded := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("x"), 8<<20))
 		invalid := `[{"type":"input_image","image_url":"data:image/png;base64,` + encoded[:len(encoded)-4] + `%%%"},{"type":"input_image","image_url":"data:image/png;base64,AQID"}]`
-		got, err = ReadRetainedImage(invalid, 0, "", 32)
+		got, err = ReadRetainedImage(t.Context(), invalid, 0, "", 32)
 		require.NoError(t, err)
 		require.Equal(t, []byte{1, 2, 3}, got)
 	})
@@ -46,14 +46,14 @@ func TestReadRetainedImageLimit(t *testing.T) {
 		ref, _, err := assets.Put(dir, "image/png", body)
 		require.NoError(t, err)
 		asset := fmt.Sprintf(`[{"type":"agentsview_image","version":1,"image_ref":%q,"media_type":"image/png","byte_size":%d}]`, ref, len(body))
-		_, err = ReadRetainedImage(asset, 0, dir, 32)
+		_, err = ReadRetainedImage(t.Context(), asset, 0, dir, 32)
 		require.ErrorContains(t, err, "exceeds 32 bytes")
 		require.ErrorIs(t, err, ErrImageTooLarge)
 		smallRef, _, err := assets.Put(dir, "image/png", []byte("x"))
 		require.NoError(t, err)
 		corrupt := fmt.Sprintf(`[{"type":"agentsview_image","version":1,"image_ref":%q,"media_type":"image/png","byte_size":1}]`, smallRef)
 		require.NoError(t, os.Truncate(filepath.Join(dir, strings.TrimPrefix(smallRef, "asset://")), int64(len(body))))
-		_, err = ReadRetainedImage(corrupt, 0, dir, 32)
+		_, err = ReadRetainedImage(t.Context(), corrupt, 0, dir, 32)
 		require.ErrorContains(t, err, "exceeds 32 bytes")
 		require.NotErrorIs(t, err, ErrImageTooLarge)
 	})
@@ -72,7 +72,7 @@ func TestReadRetainedImageLimit(t *testing.T) {
 			runtime.GC()
 			var before, after runtime.MemStats
 			runtime.ReadMemStats(&before)
-			body, err := ReadRetainedImage(content, index, "", 32)
+			body, err := ReadRetainedImage(t.Context(), content, index, "", 32)
 			runtime.ReadMemStats(&after)
 			return after.TotalAlloc - before.TotalAlloc, body, err
 		}
@@ -880,6 +880,9 @@ func TestMarkdownAssetImages(t *testing.T) {
 	assert.Equal(t, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", images[0].SHA256)
 	assert.Nil(t, images[0].Size)
 	assert.Equal(t, "image/png", images[0].MediaType)
+	inline := MarkdownAssetImages("![chart](data:image/png;base64,YWJj)")
+	require.Len(t, inline, 1)
+	assert.Equal(t, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", inline[0].SHA256)
 }
 
 func TestRetainedToolResultFilesProducerFixture(t *testing.T) {
@@ -908,4 +911,20 @@ func TestRetainedToolResultFilesProducerFixture(t *testing.T) {
 	assert.Equal(t, "text/plain", files[1].MediaType)
 	assert.Equal(t, new(int64(6)), files[1].Size)
 	assert.Equal(t, "b6a98d9ce9a2d9149288fa3df42d377c3e42737afdcdaf714e33c0a100b51060", files[1].SHA256)
+}
+
+func TestProjectSessionPushImagesAssetFailures(t *testing.T) {
+	dir := t.TempDir()
+	ref, _, err := assets.Put(dir, "image/png", []byte{0, 1, 2})
+	require.NoError(t, err)
+	content := fmt.Sprintf(`[{"type":"agentsview_image","version":1,"image_ref":%q,"media_type":"image/png","byte_size":3}]`, ref)
+	message := Message{ToolCalls: []ToolCall{{ResultContent: content, ResultEvents: []ToolResultEvent{{Content: "worker:\n" + content}}}}}
+	_, err = ProjectSessionPushImages(t.Context(), []Message{message}, dir, 2000)
+	require.ErrorIs(t, err, ErrImageTooLarge, "each occurrence consumes the shared budget")
+	_, err = ProjectSessionPushImages(t.Context(), []Message{message}, t.TempDir(), 1<<20)
+	require.Error(t, err)
+	path := filepath.Join(dir, strings.TrimPrefix(ref, "asset://"))
+	require.NoError(t, os.WriteFile(path, []byte{2, 1, 0}, 0o600))
+	_, err = ProjectSessionPushImages(t.Context(), []Message{message}, dir, 1<<20)
+	require.ErrorContains(t, err, "digest mismatch")
 }

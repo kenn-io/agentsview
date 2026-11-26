@@ -113,6 +113,38 @@ func TestImageTextCompatibilityVersion(t *testing.T) {
 	assert.Equal(t, 171, d.GetSessionDataVersion(t.Context(), "retry"))
 }
 
+func TestPushCompatibilityUpgradePreservesPendingWork(t *testing.T) {
+	ctx := t.Context()
+	// The push version reparses nothing, so only the version before it can
+	// move to it without a reparse.
+	const previous = SessionPushDataVersion - 1
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d := testDBAtPath(t, path, "push compatibility upgrade")
+	for _, id := range []string{"complete", "retry"} {
+		insertSession(t, d, id, "project", func(s *Session) { s.Agent = "claude" })
+	}
+	require.NoError(t, d.SetSessionDataVersion(ctx, "complete", previous))
+	require.NoError(t, d.SetSessionDataVersion(ctx, "retry", previous-1))
+	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
+		if err := writeUserVersion(ctx, tx, previous); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, "INSERT INTO stats(key, value) VALUES (?, ?)", scopedUpgradePendingKey, previous)
+		return err
+	}))
+	require.NoError(t, d.Close())
+	reopened, err := OpenIsolated(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+	assert.False(t, reopened.NeedsResync())
+	assert.Equal(t, SessionPushDataVersion, reopened.GetSessionDataVersion(ctx, "complete"))
+	assert.Equal(t, previous-1, reopened.GetSessionDataVersion(ctx, "retry"))
+	var pending int
+	require.NoError(t, reopened.getReader().QueryRow(ctx, "SELECT value FROM stats WHERE key = ?", scopedUpgradePendingKey).Scan(&pending))
+	// The marker keeps waiting for the full sync pass the earlier upgrade needs.
+	assert.Equal(t, previous, pending)
+}
+
 // Version 134 reshapes Codex session IDs, so it must rebuild every provider.
 func TestCodexLegacyPageVersionRebuildsEveryProvider(t *testing.T) {
 	assert.Nil(t, ScopedDataVersionProviders(133, 134))

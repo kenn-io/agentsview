@@ -105,6 +105,25 @@ func TestFileReferencesRetainedImages(t *testing.T) {
 	assert.ErrorIs(t, err, service.ErrSessionNotFound)
 }
 
+func TestFileReferencesInlineMarkdownImage(t *testing.T) {
+	_, env := newDirectTestSvc(t)
+	id := env.InsertSession(t)
+	require.NoError(t, env.db.InsertMessages(t.Context(), []db.Message{{SessionID: id, Role: "assistant", Content: "![chart](data:image/png;base64,YWJj)"}}))
+	t.Setenv("DOCBANK_TEST_KEY", "test-key")
+	const digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, digest, r.URL.Query().Get("sha256"))
+		_, _ = w.Write([]byte(`{"items":[],"total":0}`))
+	}))
+	defer stub.Close()
+	svc := service.NewDirectBackend(env.db, nil, service.WithDocbank(docbank.New(config.DocbankIntegration{URL: stub.URL, APIKeyEnv: "DOCBANK_TEST_KEY"})))
+	out, err := service.FileReferences(t.Context(), svc, id)
+	require.NoError(t, err)
+	require.Len(t, out.Occurrences, 1)
+	assert.Equal(t, digest, out.Occurrences[0].SHA256)
+	assert.Equal(t, "not_found", out.Occurrences[0].State)
+}
+
 func TestFileReferencesDigestCapAndBudget(t *testing.T) {
 	_, env := newDirectTestSvc(t)
 	id := env.InsertSession(t)

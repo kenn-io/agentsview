@@ -76,23 +76,7 @@ func (db *DB) applyArtifactImportedSession(
 	if err != nil {
 		return result, err
 	}
-	write.Messages = db.projectSessionBatchMessages(write)
-	write.Session, write.Messages = db.sessionAndMessagesForStorage(
-		write.Session, write.Messages,
-	)
-	switch {
-	case db.usageOnlyStorage():
-		write.Signals = usageOnlySignalUpdate()
-		write.Findings = nil
-		write.SkipSignalUpdates = false
-	case db.ArchiveContent().OmitsToolContent():
-		// The manifest computed signals and findings over payloads this
-		// archive does not keep. Leave them cleared at version zero so the
-		// startup backfill recomputes both from the projected rows.
-		write.Signals = SessionSignalUpdate{}
-		write.Findings = nil
-		write.SkipSignalUpdates = false
-	}
+	write = db.storageImportedSessionBatchWrite(write)
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -138,7 +122,7 @@ func (db *DB) applyArtifactImportedSession(
 	case err == nil:
 		result.Written = true
 		result.WrittenMessages = messagesWritten
-	case errors.Is(err, ErrSessionExcluded):
+	case errors.Is(err, ErrSessionExcluded), errors.Is(err, ErrSessionPushConflict):
 		result.Suppressed = true
 	case errors.Is(err, ErrSessionTrashed):
 		return ArtifactImportedSessionResult{}, ErrSessionTrashed

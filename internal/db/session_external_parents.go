@@ -99,6 +99,17 @@ func (db *DB) SetSessionExternalParent(
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	link, err := setSessionExternalParentTx(ctx, tx, sessionID, parentID)
+	if err != nil {
+		return SessionExternalParent{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return SessionExternalParent{}, fmt.Errorf("committing session parent: %w", err)
+	}
+	return link, nil
+}
+
+func setSessionExternalParentTx(ctx context.Context, tx *sql.Tx, sessionID, parentID string) (SessionExternalParent, error) {
 	if err := rejectExternalParentCycle(ctx, tx, sessionID, parentID); err != nil {
 		return SessionExternalParent{}, err
 	}
@@ -131,9 +142,6 @@ func (db *DB) SetSessionExternalParent(
 		return SessionExternalParent{}, err
 	}
 	link.Changed = moved > 0
-	if err := tx.Commit(); err != nil {
-		return SessionExternalParent{}, fmt.Errorf("committing session parent: %w", err)
-	}
 	return link, nil
 }
 
@@ -206,14 +214,24 @@ func (db *DB) ClearSessionExternalParent(
 // named by alias as a spawned subagent. Linking derives that session's
 // parent from the edge, so a launcher-supplied link never owns it.
 func spawnEdgeExistsSQL(alias string) string {
-	return spawnEdgeExistsDialectSQL(alias, "IS NOT")
+	return spawnEdgeExistsDialectSQL(alias, SQLiteQueryDialect())
 }
 
-func spawnEdgeExistsDialectSQL(alias, comparison string) string {
+func spawnEdgeExistsDialectSQL(alias string, dialect QueryDialect) string {
+	// Push receipts exist only in SQLite archives.
+	if dialect.name != "sqlite" {
+		return `EXISTS (
+			SELECT 1 FROM tool_calls tc
+			WHERE tc.subagent_session_id = ` + alias + `.id
+			AND tc.session_id IS DISTINCT FROM tc.subagent_session_id
+		)`
+	}
 	return `EXISTS (
 			SELECT 1 FROM tool_calls tc
 			WHERE tc.subagent_session_id = ` + alias + `.id
-			AND tc.session_id ` + comparison + ` tc.subagent_session_id
+			AND NOT EXISTS (SELECT 1 FROM session_push_receipts own WHERE own.session_id = ` + alias + `.id)
+			AND tc.session_id IS NOT tc.subagent_session_id
+			AND ` + activeSubagentSpawnerSQL + `
 		)`
 }
 
