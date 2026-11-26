@@ -70,7 +70,7 @@ func TestSearchContentSubstringIndexMatchesScan(t *testing.T) {
 	})
 	countMessagesForSubstringIndex(t, d, "s1")
 	for _, pattern := range []string{"deploy-window", "zebra-crossing"} {
-		candidates, err := d.substringCandidates(t.Context(), ContentSearchFilter{Pattern: pattern}, []string{pattern})
+		candidates, err := d.substringCandidates(t.Context(), ContentSearchFilter{Pattern: pattern, Sources: []string{"messages", "thinking"}}, []string{pattern})
 		require.NoError(t, err)
 		require.NotEmpty(t, candidates.message.sql, pattern)
 		require.NotEmpty(t, candidates.thinking.sql, pattern)
@@ -228,6 +228,7 @@ func TestSubstringCandidatesOnlyForSelectivePatterns(t *testing.T) {
 	}
 	candidates := func(f ContentSearchFilter) substringCandidateFilters {
 		t.Helper()
+		f.Sources = []string{"messages", "thinking"}
 		got, err := d.substringCandidates(ctx, f, []string{f.Pattern})
 		require.NoError(t, err)
 		return got
@@ -235,6 +236,18 @@ func TestSubstringCandidatesOnlyForSelectivePatterns(t *testing.T) {
 
 	rare := candidates(ContentSearchFilter{Pattern: "rare-token"})
 	require.NotEmpty(t, rare.message.sql)
+	for _, tc := range []struct {
+		source            string
+		message, thinking bool
+	}{
+		{"messages", true, false},
+		{"thinking", false, true},
+	} {
+		got, err := d.substringCandidates(ctx, ContentSearchFilter{Sources: []string{tc.source}}, []string{"rare-token"})
+		require.NoError(t, err)
+		assert.Equal(t, tc.message, got.message.sql != "")
+		assert.Equal(t, tc.thinking, got.thinking.sql != "")
+	}
 	rows, err := d.getReader().Query(ctx,
 		"EXPLAIN QUERY PLAN SELECT m.id FROM messages m WHERE m.content LIKE '%rare-token%'"+rare.message.sql,
 		rare.message.args...)
@@ -261,13 +274,13 @@ func TestSubstringCandidatesOnlyForSelectivePatterns(t *testing.T) {
 	_, err = d.getWriter().Exec(ctx, `UPDATE messages SET content = 'common rare-token foo here' WHERE session_id = 's1' AND ordinal = 3`)
 	require.NoError(t, err)
 	for _, literals := range [][]string{{"common", "rare-token"}, {"rare-token", "common"}} {
-		got, err := d.substringCandidates(ctx, ContentSearchFilter{}, literals)
+		got, err := d.substringCandidates(ctx, ContentSearchFilter{Sources: []string{"messages"}}, literals)
 		require.NoError(t, err)
 		require.NotEmpty(t, got.message.sql)
 	}
 	re := regexp.MustCompile(`fo(o)`)
 	prefix := regexBodyLiterals(re, requiredLiterals(re.String()))
-	got, err := d.substringCandidates(ctx, ContentSearchFilter{}, regexLiteralTexts(prefix))
+	got, err := d.substringCandidates(ctx, ContentSearchFilter{Sources: []string{"messages"}}, regexLiteralTexts(prefix))
 	require.NoError(t, err)
 	require.NotEmpty(t, got.message.sql)
 	assert.Equal(t, []substringHit{{"message", 3}}, substringHits(t, d, ContentSearchFilter{Pattern: re.String(), Mode: "regex", Limit: 50}))
@@ -510,6 +523,71 @@ func TestRequiredLiterals(t *testing.T) {
 	}
 	re := regexp.MustCompile(`fo(o)`)
 	assert.Equal(t, []regexLiteral{{text: "foo"}}, regexBodyLiterals(re, requiredLiterals(re.String())))
+}
+
+func TestReview3427LongValidRegex(t *testing.T) {
+	d := testDB(t)
+	var pattern, body strings.Builder
+	for i := range 1100 {
+		word := fmt.Sprintf("word%04d ", i)
+		pattern.WriteString(`\b` + word)
+		body.WriteString(word)
+	}
+	for i := range 3 {
+		seedSearchSession(t, d, fmt.Sprintf("long-%d", i), "proj", [][2]string{{"user", body.String()}})
+	}
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: pattern.String(), Mode: "regex", Limit: 10, Sources: []string{"messages"}})
+	require.NoError(t, err)
+	assert.Len(t, page.Matches, 3)
+}
+
+func TestReview3427SelectiveSuffix(t *testing.T) {
+	d := testDB(t)
+	common := "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	insertSession(t, d, "suffix", "proj", func(s *Session) { s.MessageCount = 8; s.UserMessageCount = 4 })
+	for i := range 8 {
+		body := common
+		if i == 3 {
+			body += " rare-needle"
+		}
+		insertMessages(t, d, asstMsg("suffix", i, body))
+	}
+	literals := []string{common, "rare-needle"}
+	query, ok := substringIndexQuery(literals...)
+	require.True(t, ok)
+	assert.Contains(t, query, `"rar"`)
+	candidates, err := d.substringCandidates(t.Context(), ContentSearchFilter{Sources: []string{"messages"}}, literals)
+	require.NoError(t, err)
+	require.NotEmpty(t, candidates.message.sql)
+	assert.Equal(t, []substringHit{{"message", 3}}, substringHits(t, d, ContentSearchFilter{Pattern: regexp.QuoteMeta(common) + `.*rare-needle`, Mode: "regex", Limit: 50, Sources: []string{"messages"}}))
+}
+
+func TestReview3427ToolOnlyAvoidsUnrelatedIndex(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	seedSearchSession(t, d, "tool", "proj", [][2]string{{"user", "rare-needle"}})
+	countMessagesForSubstringIndex(t, d, "tool")
+	reader := d.rawReader()
+	reader.SetMaxOpenConns(1)
+	conn, err := reader.Conn(ctx)
+	require.NoError(t, err)
+	var calls atomic.Int64
+	var sqlite *sqlite3.SQLiteConn
+	require.NoError(t, conn.Raw(func(raw any) error {
+		sqlite = raw.(*diagnosticReaderConn).SQLiteConn
+		sqlite.RegisterAuthorizer(func(op int, _, name, _ string) int {
+			if op == sqlite3.SQLITE_FUNCTION && strings.EqualFold(name, "match") {
+				calls.Add(1)
+			}
+			return sqlite3.SQLITE_OK
+		})
+		return nil
+	}))
+	require.NoError(t, conn.Close())
+	defer sqlite.RegisterAuthorizer(nil)
+	_, err = d.SearchContent(ctx, ContentSearchFilter{Pattern: `\brare-needle`, Mode: "regex", Limit: 50, Sources: []string{"tool_result"}})
+	require.NoError(t, err)
+	assert.Zero(t, calls.Load())
 }
 
 func TestRegexRequiredLiteralPrefiltersToolSources(t *testing.T) {

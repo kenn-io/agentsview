@@ -907,6 +907,9 @@ func regexCandidateRows(
 	ctx context.Context, q messageRowsQuerier, f ContentSearchFilter, literals []regexLiteral,
 	scope string, scopeArgs []any, candidates substringCandidateFilters,
 ) (*sql.Rows, error) {
+	if len(literals) > maxRegexSQLLiterals {
+		literals = literals[:maxRegexSQLLiterals]
+	}
 	eventAnchorJoin := LexicalEventAnchorJoinSQL(f.Scope)
 
 	var branches []string
@@ -1163,19 +1166,28 @@ func foldPrefixEnd(s string, i int, sub string) (int, bool) {
 	return i, true
 }
 
+const maxRegexSQLLiterals = 8
+
 // regexBodyLiterals puts the compiled prefix first, whole, because captures
 // can split it into runs too short for the trigram index, and drops runs it
 // already contains.
 func regexBodyLiterals(re *regexp.Regexp, literals []regexLiteral) []regexLiteral {
 	prefix, _ := re.LiteralPrefix()
-	if prefix == "" || strings.ContainsAny(prefix, "\x00\ufffd") {
-		return literals
+	var out []regexLiteral
+	seen := make(map[regexLiteral]struct{})
+	if strings.ContainsAny(prefix, "\x00\ufffd") {
+		prefix = ""
 	}
-	out := []regexLiteral{{text: prefix}}
+	if prefix != "" {
+		out = append(out, regexLiteral{text: prefix})
+		seen[out[0]] = struct{}{}
+	}
 	for _, literal := range literals {
-		if literal.fold || !strings.Contains(prefix, literal.text) {
-			out = append(out, literal)
+		if _, ok := seen[literal]; ok || (prefix != "" && !literal.fold && strings.Contains(prefix, literal.text)) {
+			continue
 		}
+		seen[literal] = struct{}{}
+		out = append(out, literal)
 	}
 	return out
 }
@@ -1198,10 +1210,8 @@ type regexLiteral struct {
 // requiredLiterals returns safe fixed runs in pattern order. SQLite lower folds
 // ASCII only, while Go also folds K and S to non-ASCII.
 func requiredLiterals(pattern string) []regexLiteral {
-	re, err := syntax.Parse(pattern, syntax.Perl)
-	if err != nil {
-		return nil
-	}
+	// regexp.Compile has already validated the pattern.
+	re, _ := syntax.Parse(pattern, syntax.Perl)
 	var literals []regexLiteral
 	var visit func(*syntax.Regexp)
 	visit = func(re *syntax.Regexp) {

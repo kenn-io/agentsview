@@ -189,19 +189,31 @@ const maxSubstringIndexTrigrams = 32
 func substringIndexQuery(literals ...string) (string, bool) {
 	seen := make(map[string]struct{})
 	var terms []string
+	var runs [][]rune
 	for _, literal := range literals {
 		runes := []rune(literal)
-		if len(runes) < 3 || strings.ContainsRune(literal, 0) {
-			continue
+		if len(runes) >= 3 && !strings.ContainsRune(literal, 0) {
+			runs = append(runs, runes)
 		}
-		for i := 0; i+3 <= len(runes) && len(terms) < maxSubstringIndexTrigrams; i++ {
-			trigram := string(runes[i : i+3])
+	}
+	for offset := 0; len(runs) > 0 && len(terms) < maxSubstringIndexTrigrams; offset++ {
+		remaining := runs[:0]
+		for _, run := range runs {
+			if offset+3 > len(run) {
+				continue
+			}
+			remaining = append(remaining, run)
+			trigram := string(run[offset : offset+3])
 			if _, ok := seen[trigram]; ok {
 				continue
 			}
 			seen[trigram] = struct{}{}
 			terms = append(terms, `"`+strings.ReplaceAll(trigram, `"`, `""`)+`"`)
+			if len(terms) == maxSubstringIndexTrigrams {
+				break
+			}
 		}
+		runs = remaining
 	}
 	return strings.Join(terms, " AND "), len(terms) > 0
 }
@@ -234,7 +246,7 @@ func (db *DB) substringCandidates(
 	ctx context.Context, f ContentSearchFilter, literals []string,
 ) (substringCandidateFilters, error) {
 	var out substringCandidateFilters
-	if f.SessionID != "" {
+	if f.SessionID != "" || (!hasSource(f, "messages") && !hasSource(f, "thinking")) {
 		return out, nil
 	}
 	query, ok := substringIndexQuery(literals...)
@@ -249,11 +261,15 @@ func (db *DB) substringCandidates(
 	}
 	for _, branch := range []struct {
 		table  string
+		source string
 		filter *substringFilter
 	}{
-		{"message_trigram_fts", &out.message},
-		{"thinking_trigram_fts", &out.thinking},
+		{"message_trigram_fts", "messages", &out.message},
+		{"thinking_trigram_fts", "thinking", &out.thinking},
 	} {
+		if !hasSource(f, branch.source) {
+			continue
+		}
 		selective, err := db.substringIndexSelective(ctx, branch.table, query, scopeMessages)
 		if err != nil {
 			return out, err
