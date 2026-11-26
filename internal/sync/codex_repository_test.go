@@ -286,7 +286,7 @@ func TestCodexLabeledOverlappingRootsSync(t *testing.T) {
 }
 
 func TestCodexLabeledCopyWinsSync(t *testing.T) {
-	for _, mode := range []string{"changed path", "older first", "usage refresh", "missed event", "single session"} {
+	for _, mode := range []string{"changed path", "older first", "first older event", "usage refresh", "missed event", "single session"} {
 		t.Run(mode, func(t *testing.T) {
 			database := openTestDB(t)
 			root := t.TempDir()
@@ -308,6 +308,19 @@ func TestCodexLabeledCopyWinsSync(t *testing.T) {
 			engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {ordinary, logs}}})
 			t.Cleanup(engine.Close)
 			switch mode {
+			case "first older event":
+				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[1]}))
+				provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{Roots: []string{ordinary, logs}})
+				require.True(t, ok)
+				sources, err := parser.RawCaptureSourcesForChangedPath(t.Context(), provider, parser.ChangedPathRequest{Path: paths[1], EventKind: "write"})
+				require.NoError(t, err)
+				require.Len(t, sources, 1)
+				plan, supported, err := parser.ResolveRawCapturePlan(t.Context(), provider, sources[0])
+				require.NoError(t, err)
+				require.True(t, supported)
+				assert.Equal(t, logs, plan.CaptureRoot)
+				require.NotEmpty(t, plan.Entries)
+				assert.Equal(t, paths[2], plan.Entries[0].LocalPath)
 			case "older first":
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[1]}))
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[2]}))
