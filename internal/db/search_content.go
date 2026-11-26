@@ -791,11 +791,7 @@ func (db *DB) searchContentRegex(
 	}
 
 	literals := regexBodyLiterals(re, requiredLiterals(f.Pattern))
-	texts := make([]string, len(literals))
-	for i, literal := range literals {
-		texts[i] = literal.text
-	}
-	out, err := searchWithSubstringCandidates(ctx, db, f, texts,
+	out, err := searchWithSubstringCandidates(ctx, db, f, regexLiteralTexts(literals),
 		func(candidates substringCandidateFilters) ([]ContentMatch, error) {
 			return db.regexSearchRows(ctx, f, re, literals, candidates)
 		})
@@ -1182,6 +1178,15 @@ func regexBodyLiterals(re *regexp.Regexp, literals []regexLiteral) []regexLitera
 		}
 	}
 	return out
+}
+
+// regexLiteralTexts passes the same required text to the substring planner.
+func regexLiteralTexts(literals []regexLiteral) []string {
+	texts := make([]string, len(literals))
+	for i, literal := range literals {
+		texts[i] = literal.text
+	}
+	return texts
 }
 
 // regexLiteral is text every regex match contains and whether it folds case.
