@@ -719,82 +719,48 @@ func TestUsageOnlyBatchWritesClearExistingFriction(t *testing.T) {
 	}
 }
 
-func TestWriteSessionBatchAtomicLinksSpawnAfterCommit(t *testing.T) {
-	for _, tc := range []struct {
-		name                              string
-		failLink, queueFailure, checkOnce bool
-	}{{"link failure", true, false, false}, {"queue failure", false, true, false}, {"launch once", false, false, true}} {
-		t.Run(tc.name, func(t *testing.T) {
-			d := testDB(t)
-			insertSession(t, d, "child", "project")
-			if tc.failLink {
-				_, err := d.getWriter().ExecContext(t.Context(), `CREATE TRIGGER fail_batch_link BEFORE UPDATE OF parent_session_id ON sessions WHEN NEW.id='child' AND NEW.parent_session_id='parent' BEGIN SELECT RAISE(FAIL, 'injected link failure'); END`)
-				require.NoError(t, err)
-			}
-			if tc.queueFailure {
-				_, err := d.getWriter().ExecContext(t.Context(), `CREATE TRIGGER fail_batch_link BEFORE DELETE ON subagent_parent_repair_queue BEGIN SELECT RAISE(FAIL, 'injected queue failure'); END`)
-				require.NoError(t, err)
-			}
-			write := messageCountWrite("parent", 1)
-			write.Messages[0].Role = "assistant"
-			write.Messages[0].ToolCalls = []ToolCall{{ToolName: "Agent", Category: "Task", SubagentSessionID: "child"}}
-			var beforeCommit []func() error
-			var rawConn *sqlite3.SQLiteConn
-			var launchReads int
-			if tc.checkOnce {
-				started := "2026-01-02T03:04:03Z"
-				insertSession(t, d, "run", "project", func(s *Session) {
-					s.Agent = "codex"
-					s.Cwd = "/repo"
-					s.StartedAt = &started
-					s.SessionKind = "non-interactive"
-				})
-				conn, err := d.getWriter().Conn(t.Context())
-				require.NoError(t, err)
-				require.NoError(t, conn.Raw(func(raw any) error { rawConn = raw.(*sqlite3.SQLiteConn); return nil }))
-				require.NoError(t, conn.Close())
-				t.Cleanup(func() { rawConn.RegisterAuthorizer(nil) })
-				write.Session.Cwd = "/repo"
-				write.Messages[0].Timestamp = "2026-01-02T03:04:00Z"
-				write.Messages[0].ToolCalls = append(write.Messages[0].ToolCalls, ToolCall{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`, WorkingDirectory: "/repo"})
-				beforeCommit = append(beforeCommit, func() error {
-					rawConn.RegisterAuthorizer(func(op int, table, column, _ string) int {
-						if op == sqlite3.SQLITE_READ && table == "tool_calls" && column == "input_json" {
-							launchReads++
-						}
-						return sqlite3.SQLITE_OK
-					})
-					return nil
-				})
-			}
-			result, err := d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{write}, beforeCommit...)
-			if tc.checkOnce {
-				rawConn.RegisterAuthorizer(nil)
-				assert.Zero(t, launchReads, "post-commit linking must not reread launch evidence")
-			}
-			if tc.failLink || tc.queueFailure {
-				require.NoError(t, err)
-				assert.Equal(t, 1, result.WrittenSessions)
-				requireSessionMessageCount(t, d, "parent", 1)
-				var queued int
-				require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT count(*) FROM subagent_parent_repair_queue WHERE session_id='parent'`).Scan(&queued))
-				assert.Equal(t, 1, queued)
-				_, err = d.getWriter().ExecContext(t.Context(), `DROP TRIGGER fail_batch_link`)
-				require.NoError(t, err)
-				_, err = d.RepairQueuedSubagentParentsContext(t.Context(), nil)
-				require.NoError(t, err)
-			} else {
-				require.NoError(t, err)
-			}
-			child, err := d.GetSession(t.Context(), "child")
-			require.NoError(t, err)
-			require.NotNil(t, child.ParentSessionID)
-			assert.Equal(t, "parent", *child.ParentSessionID)
-			if tc.checkOnce {
-				parent, err := d.GetSessionExternalParent(t.Context(), "run")
-				require.NoError(t, err)
-				assert.Equal(t, "parent", parent.ParentSessionID)
-			}
-		})
+func TestWriteSessionBatchAtomicLinksSpawnAndLaunch(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "child", "project")
+	started := "2026-01-02T03:04:03Z"
+	insertSession(t, d, "run", "project", func(s *Session) {
+		s.Agent = "codex"
+		s.Cwd = "/repo"
+		s.StartedAt = &started
+		s.SessionKind = "non-interactive"
+	})
+	conn, err := d.getWriter().Conn(t.Context())
+	require.NoError(t, err)
+	var rawConn *sqlite3.SQLiteConn
+	require.NoError(t, conn.Raw(func(raw any) error { rawConn = raw.(*sqlite3.SQLiteConn); return nil }))
+	require.NoError(t, conn.Close())
+	t.Cleanup(func() { rawConn.RegisterAuthorizer(nil) })
+	write := messageCountWrite("parent", 1)
+	write.Session.Cwd = "/repo"
+	write.Messages[0].Role = "assistant"
+	write.Messages[0].Timestamp = "2026-01-02T03:04:00Z"
+	write.Messages[0].ToolCalls = []ToolCall{
+		{ToolName: "Agent", Category: "Task", SubagentSessionID: "child"},
+		{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`, WorkingDirectory: "/repo"},
 	}
+	var launchReads int
+	_, err = d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{write}, func() error {
+		rawConn.RegisterAuthorizer(func(op int, table, column, _ string) int {
+			if op == sqlite3.SQLITE_READ && table == "tool_calls" && column == "input_json" {
+				launchReads++
+			}
+			return sqlite3.SQLITE_OK
+		})
+		return nil
+	})
+	rawConn.RegisterAuthorizer(nil)
+	require.NoError(t, err)
+	assert.Zero(t, launchReads, "launch evidence must be read once, before commit")
+	child, err := d.GetSession(t.Context(), "child")
+	require.NoError(t, err)
+	require.NotNil(t, child.ParentSessionID)
+	assert.Equal(t, "parent", *child.ParentSessionID)
+	parent, err := d.GetSessionExternalParent(t.Context(), "run")
+	require.NoError(t, err)
+	assert.Equal(t, "parent", parent.ParentSessionID)
 }

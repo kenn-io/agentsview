@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/export"
@@ -333,14 +332,8 @@ func (db *DB) WriteSessionBatchAtomic(ctx context.Context,
 		writtenUsageIDs = append(writtenUsageIDs, write.Session.ID)
 	}
 
-	if _, err := linkLaunchParentsChangedTx(ctx, tx, writtenUsageIDs, changes); err != nil {
+	if _, err := linkSubagentSessionsChangedTx(ctx, tx, writtenUsageIDs, changes); err != nil {
 		return result, err
-	}
-
-	for _, id := range writtenUsageIDs {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO subagent_parent_repair_queue(session_id) VALUES (?) ON CONFLICT(session_id) DO NOTHING`, id); err != nil {
-			return result, fmt.Errorf("queueing batch parent repair for %s: %w", id, err)
-		}
 	}
 
 	if len(beforeCommit) > 0 && beforeCommit[0] != nil {
@@ -357,33 +350,7 @@ func (db *DB) WriteSessionBatchAtomic(ctx context.Context,
 	}
 	db.notifyUsageSessions(writtenUsageIDs)
 	pendingRecallRevocations.flush()
-	if err := db.linkCommittedBatchParents(ctx, writtenUsageIDs); err != nil {
-		log.Printf("linking committed batch parents (queued for repair): %v", err)
-	}
 	return result, nil
-}
-
-func (db *DB) linkCommittedBatchParents(ctx context.Context, ids []string) error {
-	tx, err := db.getWriter().BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	seeds, err := linkParserSubagentSessionsTx(ctx, tx, ids)
-	if err != nil {
-		return err
-	}
-	if _, err := applySessionExternalParentsFor(ctx, tx.ExecContext, func(ctx context.Context, query string, args ...any) rowScanner {
-		return tx.QueryRowContext(ctx, query, args...)
-	}, seeds); err != nil {
-		return err
-	}
-	for _, id := range ids {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM subagent_parent_repair_queue WHERE session_id=?`, id); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
 }
 
 type launchBatchEvidence struct {
