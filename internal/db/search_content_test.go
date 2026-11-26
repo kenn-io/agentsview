@@ -116,7 +116,7 @@ func TestHybridFTSProbeStopsAtDeadline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
 	_, err = d.SearchContent(ctx, ContentSearchFilter{Mode: "hybrid", Pattern: "needle"})
-	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.Positive(t, searcher.calls, "semantic search runs before the FTS probe")
 	assert.NoError(t, ctx.Err(), "the keyword deadline expired before the caller deadline")
 }
@@ -1597,6 +1597,7 @@ func TestSearchContentExcludeSessionIDs(t *testing.T) {
 	require.Len(t, got.Matches, 1, "excluded id must not consume the page")
 	assert.Equal(t, "keep", got.Matches[0].SessionID)
 }
+
 func TestContentScanDeadlineReleasesActiveReader(t *testing.T) {
 	d := testDB(t)
 	msgs := make([][2]string, 200)
@@ -1612,12 +1613,15 @@ func TestContentScanDeadlineReleasesActiveReader(t *testing.T) {
 	t.Cleanup(func() { contentScanTimeout = previous })
 	entered := make(chan struct{})
 	started := sync.OnceFunc(func() { close(entered) })
+	releaseScan := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(releaseScan) })
+	defer unblock()
 	conn, err := d.getReader().Conn(t.Context())
 	require.NoError(t, err)
 	require.NoError(t, conn.Raw(func(raw any) error {
 		return raw.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("julianday", func(string) float64 {
 			started()
-			time.Sleep(20 * time.Millisecond)
+			<-releaseScan
 			return 0
 		}, false)
 	}))
@@ -1630,13 +1634,18 @@ func TestContentScanDeadlineReleasesActiveReader(t *testing.T) {
 	select {
 	case <-entered:
 	case err := <-done:
-		t.Fatalf("search returned before reaching the reader: %v", err)
+		require.FailNow(t, "search returned before reaching the reader", "%v", err)
 	case <-time.After(10 * time.Second):
-		<-done
-		t.Fatal("search did not reach the reader")
+		require.FailNow(t, "search did not reach the reader")
 	}
 	assert.Positive(t, d.rawReader().Stats().InUse)
-	assert.ErrorIs(t, <-done, context.DeadlineExceeded)
+	select {
+	case err := <-done:
+		require.FailNow(t, "search returned before its deadline", "%v", err)
+	case <-time.After(2 * time.Second):
+		unblock()
+	}
+	require.ErrorIs(t, <-done, context.DeadlineExceeded)
 	waitCtx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	conn, err = d.rawReader().Conn(waitCtx)

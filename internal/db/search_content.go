@@ -31,6 +31,7 @@ var contentScanTimeout = 2 * time.Minute
 const ContentScanDeadlineHeader = "X-AgentsView-Content-Scan-Deadline"
 
 type contentScanBudgetKey struct{}
+
 type contentScanBudget struct {
 	mu       sync.Mutex
 	deadline time.Time
