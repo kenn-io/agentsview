@@ -282,7 +282,7 @@ dispatch:
 			hs := ordered[i].sync
 			unavailable = append(unavailable, result.err)
 			prepared.unavailableIDPrefixes = append(
-				prepared.unavailableIDPrefixes, rebuildIDPrefix(hs.Host),
+				prepared.unavailableIDPrefixes, HostIDPrefix(hs.Host),
 			)
 			hs.reportProgressDetail("Skipped offline remote host " + hs.Host)
 			continue

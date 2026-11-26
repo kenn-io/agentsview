@@ -7,11 +7,13 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/cenkalti/backoff/v7"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/remotesync"
 	syncer "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/docbank/docbank"
 )
@@ -49,6 +51,17 @@ func RebuildContributors(ctx context.Context, cfg config.Config) (syncer.Rebuild
 				return rebuildAttachment(ctx, cfg, source, index.Info, engine, database, progress)
 			},
 		})
+	}
+	for _, remote := range cfg.RemoteHosts {
+		if remote.Host == "" {
+			continue
+		}
+		prefix := remotesync.HostIDPrefix(remote.Host)
+		if !slices.Contains(options.UnavailableContributorIDPrefixes, prefix) {
+			options.UnavailableContributorIDPrefixes = append(
+				options.UnavailableContributorIDPrefixes, prefix,
+			)
+		}
 	}
 	return options, nil
 }

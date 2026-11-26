@@ -244,3 +244,24 @@ func TestAttachedArchiveFailedRebuildKeepsPublishedHistory(t *testing.T) {
 	assert.Equal(t, before, after)
 	assert.NoFileExists(t, receiver.Path()+"-resync")
 }
+
+func TestRebuildContributorsIncludesRemoteHostPrefixes(t *testing.T) {
+	cfg := config.Config{
+		DataDir: t.TempDir(),
+		RemoteHosts: []config.RemoteHost{
+			{Host: "alpha"},
+			{Host: ""},
+			{Host: "beta"},
+			{Host: "alpha"},
+		},
+	}
+
+	options, err := RebuildContributors(t.Context(), cfg)
+
+	require.NoError(t, err)
+	assert.Empty(t, options.Contributors)
+	assert.Equal(t,
+		[]string{"alpha~", "beta~"},
+		options.UnavailableContributorIDPrefixes,
+	)
+}

@@ -820,3 +820,64 @@ func TestWorkerParentLinkHandoff(t *testing.T) {
 		})
 	}
 }
+
+func TestCollectorOnlyUpgradeResyncClearsNeedsResyncAndPreservesRemoteSessions(t *testing.T) {
+	dataDir := t.TempDir()
+	cfg := config.Config{
+		DataDir:        dataDir,
+		DBPath:         filepath.Join(dataDir, "sessions.db"),
+		InstallationID: "0123456789abcdef0123456789abcdef",
+		RemoteHosts: []config.RemoteHost{
+			{
+				Host:      "remote-box",
+				Transport: config.RemoteTransportHTTP,
+				URL:       "https://remote-box.example.test",
+				Token:     "remote-token",
+			},
+		},
+	}
+	database, err := db.Open(t.Context(), cfg.DBPath)
+	require.NoError(t, err)
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
+		ID:           "remote-box~session-1",
+		Project:      "proj",
+		Machine:      "remote-box",
+		Agent:        "claude",
+		FilePath:     new("remote-box:/home/user/.claude/projects/p/s.jsonl"),
+		MessageCount: 1,
+	}))
+	require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{
+		SessionID:     "remote-box~session-1",
+		Ordinal:       0,
+		Role:          "user",
+		Content:       "remote collector session",
+		ContentLength: 24,
+	}}))
+	require.NoError(t, database.Close())
+	markArchiveStale(t, cfg.DBPath)
+
+	var out bytes.Buffer
+	require.NoError(t, runSyncWorkerContext(
+		t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &out,
+	))
+	result := decodeSingleResult(t, &out)
+	assert.Equal(t, "ok", result.Status)
+	assert.True(t, result.DiscoveryComplete)
+	require.NotNil(t, result.Stats)
+	assert.False(t, result.Stats.Aborted)
+	assert.Equal(t, 1, result.Stats.OrphanedCopied)
+
+	reopened, err := db.OpenReadOnly(t.Context(), cfg.DBPath)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, reopened.Close()) }()
+	assert.False(t, reopened.NeedsResync(),
+		"collector-only upgrade resync must clear NeedsResync()")
+
+	preserved, err := reopened.GetSession(t.Context(), "remote-box~session-1")
+	require.NoError(t, err)
+	require.NotNil(t, preserved, "remote session must survive collector resync")
+	msgs, err := reopened.GetAllMessages(t.Context(), "remote-box~session-1")
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "remote collector session", msgs[0].Content)
+}

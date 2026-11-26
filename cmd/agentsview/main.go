@@ -3835,7 +3835,7 @@ func remoteHostSyncFunc(
 			err := runner.RunExclusive(func() error {
 				var err error
 				stats, err = runRemote(
-					ctx, cfg, database, rh, database.NeedsResync(),
+					ctx, cfg, database, rh, false,
 				)
 				return err
 			})
