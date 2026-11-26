@@ -1624,7 +1624,9 @@ func TestEmbeddingsSwitchWaitFailurePreservesConfig(t *testing.T) {
 }
 
 func TestEmbeddingsSwitchRelativeKey(t *testing.T) {
-	setTestHome(t, t.TempDir())
+	home := t.TempDir()
+	require.NoError(t, os.Chmod(home, 0o700))
+	setTestHome(t, home)
 	dataDir := testDataDir(t)
 	writeEmbeddingsTestConfig(t, dataDir, "http://127.0.0.1:1/v1")
 	dir := t.TempDir()
@@ -1650,6 +1652,12 @@ func TestEmbeddingsSwitchRelativeKey(t *testing.T) {
 	cfg, err := config.LoadReadOnly()
 	require.NoError(t, err)
 	assert.Equal(t, key, cfg.Vector.Embeddings.Servers["default"].APIKeyFile)
+
+	require.NoError(t, os.WriteFile(filepath.Join(home, "key"), []byte("test-key"), 0o600))
+	require.NoError(t, runEmbeddingsSwitch(t.Context(), io.Discard, "https://embed.example/v1", "new-model", 3, "~/key"))
+	cfg, err = config.LoadReadOnly()
+	require.NoError(t, err)
+	assert.Equal(t, "~/key", cfg.Vector.Embeddings.Servers["default"].APIKeyFile)
 }
 
 func TestEmbeddingsBuildRejectsBackstopWithRepair(t *testing.T) {

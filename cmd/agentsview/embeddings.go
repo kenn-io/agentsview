@@ -130,7 +130,7 @@ func runEmbeddingsSwitch(
 			}
 		}
 	}
-	if apiKeyFile != "" {
+	if apiKeyFile != "" && apiKeyFile != "~" && !strings.HasPrefix(apiKeyFile, "~/") && !filepath.IsAbs(apiKeyFile) {
 		apiKeyFile, err = filepath.Abs(apiKeyFile)
 		if err != nil {
 			return fmt.Errorf("resolving API key file: %w", err)
