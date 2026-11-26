@@ -1629,6 +1629,46 @@ recall = %t
 	}
 }
 
+func TestEmbeddingsSwitchRestartFailureCanRetry(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dataDir := testDataDir(t)
+	writeEmbeddingsTestConfig(t, dataDir, "http://127.0.0.1:1/v1")
+	oldRestart := restartEmbeddingsDaemon
+	t.Cleanup(func() { restartEmbeddingsDaemon = oldRestart })
+	restartErr := errors.New("restart unavailable")
+	restartEmbeddingsDaemon = func(context.Context, io.Writer) error { return restartErr }
+	err := runEmbeddingsSwitch(t.Context(), io.Discard, "https://embed.example/v1", "new-model", 3, "")
+	require.ErrorIs(t, err, restartErr)
+	assert.ErrorContains(t, err, "embedding server saved")
+	assert.ErrorContains(t, err, "rerun 'agentsview index embeddings switch'")
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	assert.Equal(t, "new-model", cfg.Vector.Embeddings.Model)
+	assert.Equal(t, "https://embed.example/v1", cfg.Vector.Embeddings.Servers["default"].Endpoint)
+
+	var stores []string
+	restartEmbeddingsDaemon = func(context.Context, io.Writer) error {
+		startEmbeddingsTestDaemon(t, dataDir, map[string]http.HandlerFunc{
+			"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"running":false}`)
+			},
+			"POST /api/v1/embeddings/build": func(w http.ResponseWriter, r *http.Request) {
+				var req vector.BuildRequest
+				if !assert.NoError(t, json.UnmarshalRead(r.Body, &req)) {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				stores = append(stores, req.Store)
+				w.WriteHeader(http.StatusAccepted)
+			},
+		})
+		return nil
+	}
+	require.NoError(t, runEmbeddingsSwitch(t.Context(), io.Discard, "https://embed.example/v1", "new-model", 3, ""))
+	assert.Equal(t, []string{"messages"}, stores)
+}
+
 func TestEmbeddingsSwitchStartsStoppedDaemon(t *testing.T) {
 	setTestHome(t, t.TempDir())
 	dataDir := testDataDir(t)

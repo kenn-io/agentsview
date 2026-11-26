@@ -144,7 +144,7 @@ func runEmbeddingsSwitch(
 		return fmt.Errorf("saving embedding server: %w", err)
 	}
 	if err := restartEmbeddingsDaemon(ctx, out); err != nil {
-		return err
+		return fmt.Errorf("embedding server saved, but daemon restart failed: %w; fix it, then rerun 'agentsview index embeddings switch' to start the rebuild", err)
 	}
 
 	cfg, err = config.LoadReadOnlyFor(config.ScopeLocal)
