@@ -286,30 +286,31 @@ func TestShellCalls(t *testing.T) {
 		name, input, command          string
 		count                         int
 		unknown, unknownDir, possible bool
+		secondCommand, secondWorkdir  string
 	}{
-		{"double quote", `text(await tools.exec_command({cmd:"git commit -m \"fix\""}))`, `git commit -m "fix"`, 1, false, false, false},
-		{"single quote", `text(await tools.exec_command({cmd:'git commit -m fix'}))`, `git commit -m fix`, 1, false, false, false},
-		{"template", "text(await tools.exec_command({cmd:`git commit -m fix`}))", `git commit -m fix`, 1, false, false, false},
-		{"interpolated", "text(await tools.exec_command({cmd:`git commit -m ${message}`}))", "", 1, true, false, false},
-		{"short circuit", `false && tools.exec_command({cmd:"codex exec hi"})`, "", 0, false, false, false},
-		{"exit", `exit(); tools.exec_command({cmd:"codex exec hi"})`, "", 0, false, false, false},
-		{"exit and", `exit() && tools.exec_command({cmd:"codex exec hi"})`, "", 0, false, false, false},
-		{"exit condition", `if (exit()) { tools.exec_command({cmd:"codex exec hi"}) }`, "", 0, false, false, false},
-		{"conditional exit", `if (flag) { exit() }; tools.exec_command({cmd:"codex exec hi"})`, `codex exec hi`, 1, false, false, true},
-		{"dynamic tool", `await tools[name]({cmd:"codex exec hi"})`, "", 1, true, false, false},
-		{"alias", `const run = tools.exec_command; await run({cmd:"codex exec hi"})`, "", 1, true, false, false},
-		{"other tool", `await tools["clock__curr_time"]({})`, "", 0, false, false, false},
-		{"duplicate workdir", `text(await tools.exec_command({cmd:"codex exec hi",workdir:"/other",workdir:dir}))`, `codex exec hi`, 1, false, true, false},
-		{"uncalled function", `function f() { return tools.exec_command({cmd:"codex exec hi"}) }`, "", 0, false, false, false},
-		{"uncalled method", `const x = { f() { return tools.exec_command({cmd:"codex exec hi"}) } }`, "", 1, true, false, false},
-		{"computed call", `await tools["exec_command"]({cmd:"codex exec hi"})`, `codex exec hi`, 1, false, false, false},
-		{"const", `const p = tools.exec_command({cmd:"codex exec hi"})`, `codex exec hi`, 1, false, false, false},
-		{"let await", `let p = await tools.exec_command({cmd:"codex exec hi"})`, `codex exec hi`, 1, false, false, false},
-		{"var batch", `var p = Promise.all([tools.exec_command({cmd:"codex exec hi"}),tools.exec_command({cmd:"pwd"})])`, `codex exec hi`, 2, false, false, false},
-		{"all", `Promise.all([tools.exec_command({cmd:"codex exec hi"}),tools.exec_command({cmd:"pwd"})])`, `codex exec hi`, 2, false, false, false},
-		{"all settled", `Promise.allSettled([tools.exec_command({cmd:"codex exec hi"}),tools.exec_command({cmd:"pwd"})])`, `codex exec hi`, 2, false, false, false},
-		{"literal templates", "await Promise.all([tools.exec_command({cmd:`echo hello`}), tools.exec_command({cmd:`codex exec hi`,workdir:`/repo`})])", `echo hello`, 2, false, false, false},
-		{"conditional alongside certain", `if (false) { await tools.exec_command({cmd:"echo hi"}) }; await tools.exec_command({cmd:"codex exec hi"})`, `codex exec hi`, 1, false, false, false},
+		{"double quote", `text(await tools.exec_command({cmd:"git commit -m \"fix\""}))`, `git commit -m "fix"`, 1, false, false, false, "", ""},
+		{"single quote", `text(await tools.exec_command({cmd:'git commit -m fix'}))`, `git commit -m fix`, 1, false, false, false, "", ""},
+		{"template", "text(await tools.exec_command({cmd:`git commit -m fix`}))", `git commit -m fix`, 1, false, false, false, "", ""},
+		{"interpolated", "text(await tools.exec_command({cmd:`git commit -m ${message}`}))", "", 1, true, false, false, "", ""},
+		{"short circuit", `false && tools.exec_command({cmd:"codex exec hi"})`, "", 0, false, false, false, "", ""},
+		{"exit", `exit(); tools.exec_command({cmd:"codex exec hi"})`, "", 0, false, false, false, "", ""},
+		{"exit and", `exit() && tools.exec_command({cmd:"codex exec hi"})`, "", 0, false, false, false, "", ""},
+		{"exit condition", `if (exit()) { tools.exec_command({cmd:"codex exec hi"}) }`, "", 0, false, false, false, "", ""},
+		{"conditional exit", `if (flag) { exit() }; tools.exec_command({cmd:"codex exec hi"})`, `codex exec hi`, 1, false, false, true, "", ""},
+		{"dynamic tool", `await tools[name]({cmd:"codex exec hi"})`, "", 1, true, false, false, "", ""},
+		{"alias", `const run = tools.exec_command; await run({cmd:"codex exec hi"})`, "", 1, true, false, false, "", ""},
+		{"other tool", `await tools["clock__curr_time"]({})`, "", 0, false, false, false, "", ""},
+		{"duplicate workdir", `text(await tools.exec_command({cmd:"codex exec hi",workdir:"/other",workdir:dir}))`, `codex exec hi`, 1, false, true, false, "", ""},
+		{"uncalled function", `function f() { return tools.exec_command({cmd:"codex exec hi"}) }`, "", 0, false, false, false, "", ""},
+		{"uncalled method", `const x = { f() { return tools.exec_command({cmd:"codex exec hi"}) } }`, "", 1, true, false, false, "", ""},
+		{"computed call", `await tools["exec_command"]({cmd:"codex exec hi"})`, `codex exec hi`, 1, false, false, false, "", ""},
+		{"const", `const p = tools.exec_command({cmd:"codex exec hi"})`, `codex exec hi`, 1, false, false, false, "", ""},
+		{"let await", `let p = await tools.exec_command({cmd:"codex exec hi"})`, `codex exec hi`, 1, false, false, false, "", ""},
+		{"var batch", `var p = Promise.all([tools.exec_command({cmd:"codex exec hi"}),tools.exec_command({cmd:"pwd"})])`, `codex exec hi`, 2, false, false, false, "", ""},
+		{"all", `Promise.all([tools.exec_command({cmd:"codex exec hi"}),tools.exec_command({cmd:"pwd"})])`, `codex exec hi`, 2, false, false, false, "", ""},
+		{"all settled", `Promise.allSettled([tools.exec_command({cmd:"codex exec hi"}),tools.exec_command({cmd:"pwd"})])`, `codex exec hi`, 2, false, false, false, "", ""},
+		{"literal templates", "await Promise.all([tools.exec_command({cmd:`echo hello`}), tools.exec_command({cmd:`codex exec hi`,workdir:`/repo`})])", `echo hello`, 2, false, false, false, "codex exec hi", "/repo"},
+		{"conditional alongside certain", `if (false) { await tools.exec_command({cmd:"echo hi"}) }; await tools.exec_command({cmd:"codex exec hi"})`, `codex exec hi`, 1, false, false, false, "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls, undecodable := shellCalls(tc.input)
@@ -324,9 +325,9 @@ func TestShellCalls(t *testing.T) {
 			assert.Equal(t, tc.unknown, calls[0].unknown)
 			assert.Equal(t, tc.unknownDir, calls[0].unknownWorkdir)
 			assert.Equal(t, tc.possible, calls[0].possible)
-			if tc.name == "literal templates" {
-				assert.Equal(t, "codex exec hi", calls[1].command)
-				assert.Equal(t, "/repo", calls[1].workdir)
+			if tc.secondCommand != "" {
+				assert.Equal(t, tc.secondCommand, calls[1].command)
+				assert.Equal(t, tc.secondWorkdir, calls[1].workdir)
 			}
 		})
 	}

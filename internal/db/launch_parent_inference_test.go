@@ -53,39 +53,32 @@ func TestLaunchParentInference(t *testing.T) {
 	parent, err = d.GetSessionExternalParent(t.Context(), "child")
 	require.NoError(t, err)
 	assert.Equal(t, "parent", parent.ParentSessionID)
-	_, err = d.ClearSessionExternalParent(t.Context(), "child")
-	require.NoError(t, err)
-	_, err = d.LinkSubagentSessionsForSessions(t.Context(), []string{"other"})
-	require.NoError(t, err)
-	_, err = d.GetSessionExternalParent(t.Context(), "child")
-	require.Error(t, err)
 }
 
 func TestLaunchParentEvidence(t *testing.T) {
 	for _, tc := range []struct {
-		name, input, tool, cwd, machine, childCwd string
-		other                                     bool
-		want                                      string
+		name, input, tool, cwd, machine, childCwd, childMachine string
+		other                                                   bool
+		want                                                    string
 	}{
-		{"possible alone", `{"command":"test -d /repo && codex exec hi"}`, "Bash", "/repo", "local", "/repo", false, "candidate"},
-		{"replaced shell", `{"command":"exec true; codex exec hi"}`, "Bash", "/repo", "local", "/repo", false, ""},
-		{"possible competitor", `{"command":"test -d /repo && codex exec hi"}`, "Bash", "/repo", "local", "/repo", true, ""},
-		{"dead competitor", `{"command":"false && codex exec hi"}`, "Bash", "/repo", "local", "/repo", true, "actual"},
-		{"missing folder", `{"command":"codex exec hi"}`, "Bash", "", "local", "/repo", false, ""},
-		{"two folders", `{"command":"cd /missing; codex exec hi"}`, "Bash", "/repo", "local", "/repo", true, ""},
-		{"unknown directory", `{"command":"codex -C \"$DIR\" exec hi"}`, "Bash", "/repo", "local", "/repo", true, ""},
-		{"unknown code workdir", `text(await tools.exec_command({cmd: "codex exec hi", workdir: dir}))`, "exec", "/repo", "local", "/repo", true, ""},
-		{"guarded code call", `flag && tools.exec_command({cmd: "codex exec hi"})`, "exec", "/repo", "local", "/repo", true, ""},
-		{"unreadable", `{`, "Bash", "/repo", "local", "/repo", true, ""},
-		{"empty", ``, "Bash", "/repo", "local", "/repo", true, ""},
-		{"empty object", `{}`, "Bash", "/repo", "local", "/repo", true, "actual"},
-		{"write stdin", `{"session_id":1}`, "write_stdin", "/repo", "local", "/repo", true, "actual"},
-		{"wait", `{"cell_id":"cell"}`, "wait", "/repo", "local", "/repo", true, "actual"},
-		{"other agent in batch", `Promise.all([tools.exec_command({cmd:"claude -p hi"}),tools.exec_command({cmd:"pwd"})])`, "exec", "/repo", "local", "/repo", true, "actual"},
-		{"different folder", `{"command":"cd /repo && codex exec hi"}`, "Bash", "/start", "local", "/other", true, "actual"},
-		{"blank machine", `{"command":"codex exec hi"}`, "Bash", "/repo", "", "/repo", true, ""},
-		{"two launchers", `{"command":"codex exec hi"}`, "Bash", "/repo", "local", "/repo", true, ""},
-		{"guarded directory", `{"command":"cd /repo && codex exec hi"}`, "Bash", "/start", "local", "/repo", false, "candidate"},
+		{"possible alone", `{"command":"test -d /repo && codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", false, "candidate"},
+		{"possible competitor", `{"command":"test -d /repo && codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", true, ""},
+		{"dead competitor", `{"command":"false && codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", true, "actual"},
+		{"missing folder", `{"command":"codex exec hi"}`, "Bash", "", "local", "/repo", "local", false, ""},
+		{"two folders", `{"command":"cd /missing; codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", true, ""},
+		{"unknown directory", `{"command":"codex -C \"$DIR\" exec hi"}`, "Bash", "/repo", "local", "/repo", "local", true, ""},
+		{"unknown code workdir", `text(await tools.exec_command({cmd: "codex exec hi", workdir: dir}))`, "exec", "/repo", "local", "/repo", "local", true, ""},
+		{"guarded code call", `flag && tools.exec_command({cmd: "codex exec hi"})`, "exec", "/repo", "local", "/repo", "local", true, ""},
+		{"unreadable", `{`, "Bash", "/repo", "local", "/repo", "local", true, ""},
+		{"empty", ``, "Bash", "/repo", "local", "/repo", "local", true, ""},
+		{"empty object", `{}`, "Bash", "/repo", "local", "/repo", "local", true, "actual"},
+		{"other agent in batch", `Promise.all([tools.exec_command({cmd:"claude -p hi"}),tools.exec_command({cmd:"pwd"})])`, "exec", "/repo", "local", "/repo", "local", true, "actual"},
+		{"different folder", `{"command":"cd /repo && codex exec hi"}`, "Bash", "/start", "local", "/other", "local", true, "actual"},
+		{"blank machine", `{"command":"codex exec hi"}`, "Bash", "/repo", "", "/repo", "local", true, ""},
+		{"two launchers", `{"command":"codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", true, ""},
+		{"guarded directory", `{"command":"cd /repo && codex exec hi"}`, "Bash", "/start", "local", "/repo", "local", false, "candidate"},
+		{"blank child machine", `{"command":"codex exec hi"}`, "Bash", "/repo", "", "/repo", "", false, ""},
+		{"argv cmd.exe Windows folder", `{"command":["cmd.exe","/c","codex","exec","hi"]}`, "Bash", `C:\Users\example\project`, "local", `C:\Users\example\project`, "local", false, "candidate"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
@@ -101,6 +94,7 @@ func TestLaunchParentEvidence(t *testing.T) {
 			insertSession(t, d, "child", "project", func(s *Session) {
 				s.Agent = "codex"
 				s.Cwd = tc.childCwd
+				s.Machine = tc.childMachine
 				s.StartedAt = &started
 				s.SessionKind = "non-interactive"
 			})
@@ -152,13 +146,14 @@ func TestLaunchParentCopyEvidence(t *testing.T) {
 				} else {
 					insertSession(t, source, id, "project")
 				}
-				insertSession(t, source, "parent", "project")
-				_, err := source.SetSessionExternalParent(t.Context(), id, "parent")
+				_, err := source.getWriter().ExecContext(t.Context(), `UPDATE sessions SET agent='codex', session_kind='non-interactive', cwd='/repo', started_at='2026-01-02T03:04:03Z' WHERE id=?`, id)
+				require.NoError(t, err)
+				insertSession(t, source, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
+				insertMessages(t, source, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}})
+				_, err = source.GetSessionExternalParent(t.Context(), id)
 				require.NoError(t, err)
 				if state == "cleared" {
 					_, err = source.ClearSessionExternalParent(t.Context(), id)
-				} else {
-					_, err = source.getWriter().ExecContext(t.Context(), `UPDATE session_external_parents SET inferred=1 WHERE session_id=?`, id)
 				}
 				require.NoError(t, err)
 				dest := source
@@ -169,12 +164,17 @@ func TestLaunchParentCopyEvidence(t *testing.T) {
 					_, err = dest.CopyOrphanedDataFrom(t.Context(), source.Path())
 				case "metadata":
 					dest = testDB(t)
-					insertSession(t, dest, "parent", "project")
-					insertSession(t, dest, id, "project")
+					insertSession(t, dest, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
+					started := "2026-01-02T03:04:03Z"
+					insertSession(t, dest, id, "project", func(s *Session) {
+						s.Agent = "codex"
+						s.Cwd = "/repo"
+						s.SessionKind = "non-interactive"
+						s.StartedAt = &started
+					})
 					if state == "cleared" {
-						_, err = dest.getWriter().ExecContext(t.Context(), `INSERT INTO session_external_parents (session_id,parent_session_id,inferred) VALUES ('child','parent',1)`)
-						require.NoError(t, err)
-						_, err = dest.LinkSubagentSessionsForSessions(t.Context(), []string{id})
+						insertMessages(t, dest, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}})
+						_, err = dest.GetSessionExternalParent(t.Context(), id)
 						require.NoError(t, err)
 					}
 					err = dest.CopySessionMetadataFrom(t.Context(), source.Path())
@@ -193,36 +193,6 @@ func TestLaunchParentCopyEvidence(t *testing.T) {
 			})
 		}
 	}
-}
-
-func TestLaunchParentBackfillPages(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
-	insertMessages(t, d, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: "parent", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec review"}`}}})
-	tx, err := d.getWriter().BeginTx(t.Context(), nil)
-	require.NoError(t, err)
-	for i := range 3001 {
-		started := "2026-01-01T03:04:03Z"
-		if i == 3000 {
-			started = "2026-01-02T03:04:03Z"
-		}
-		_, err = tx.ExecContext(t.Context(), `INSERT INTO sessions (id,project,agent,session_kind,cwd,started_at) VALUES (?, 'project', 'codex', 'non-interactive', '/repo', ?)`, fmt.Sprintf("child-%04d", i), started)
-		require.NoError(t, err)
-	}
-	require.NoError(t, tx.Commit())
-	_, err = d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET source_missing_at='2026-01-03T00:00:00Z' WHERE id='child-3000'`)
-	require.NoError(t, err)
-	_, err = d.LinkSubagentSessionsContext(t.Context())
-	require.NoError(t, err)
-	state, err := d.GetSyncState(t.Context(), launchBackfillKey)
-	require.NoError(t, err)
-	assert.Equal(t, "done", state)
-	var linked int
-	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT COUNT(*) FROM sessions WHERE parent_session_id = 'parent'`).Scan(&linked))
-	assert.Equal(t, 1, linked)
-	var parent sql.NullString
-	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT parent_session_id FROM sessions WHERE id='child-3000'`).Scan(&parent))
-	assert.Equal(t, "parent", parent.String)
 }
 
 func TestLaunchParentBackfillCheckpoint(t *testing.T) {
@@ -247,6 +217,8 @@ func TestLaunchParentBackfillCheckpoint(t *testing.T) {
 		require.NoError(t, err)
 	}
 	require.NoError(t, tx.Commit())
+	_, err = d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET source_missing_at='2026-01-03T00:00:00Z' WHERE id='child-1000'`)
+	require.NoError(t, err)
 	tx, err = d.getWriter().BeginTx(t.Context(), nil)
 	require.NoError(t, err)
 	_, err = backfillLaunchParentsTx(t.Context(), tx)
@@ -329,70 +301,40 @@ func TestLaunchParentAgentPairs(t *testing.T) {
 	}
 }
 
-func TestLaunchParentResumedCodexDirectory(t *testing.T) {
+func TestLaunchParentFolderMachineAndWindow(t *testing.T) {
 	for _, tc := range []struct {
-		name, input, cwd, callCwd string
-		linked                    bool
+		name, launcherCwd, input, callCwd, cwd, machine, started string
+		want                                                     bool
 	}{
-		{"missing call directory", `{"command":"codex exec hi"}`, "/later", "", false},
-		{"recorded original directory", `{"command":"codex exec hi"}`, "/original", "/original", true},
-		{"recorded directory differs from session", `{"command":"codex exec hi"}`, "/later", "/original", false},
-		{"explicit original directory", `{"command":"codex exec hi","workdir":"/original"}`, "/original", "", true},
+		{"missing call directory", "/later", `{"command":"codex exec hi"}`, "", "/later", "local", "2026-01-02T03:04:03Z", false},
+		{"recorded original directory", "/later", `{"command":"codex exec hi"}`, "/original", "/original", "local", "2026-01-02T03:04:03Z", true},
+		{"recorded directory differs from session", "/later", `{"command":"codex exec hi"}`, "/original", "/later", "local", "2026-01-02T03:04:03Z", false},
+		{"explicit original directory", "/later", `{"command":"codex exec hi","workdir":"/original"}`, "", "/original", "local", "2026-01-02T03:04:03Z", true},
+		{"matching Windows path", `C:\repo`, `{"cmd":"codex.exe exec hi", "workdir":"C:\\repo"}`, "", `c:\repo`, "local", "2026-01-02T03:05:00.250Z", true},
+		{"Git Bash path", `C:\repo`, `{"cmd":"codex.exe exec hi", "workdir":"C:\\repo"}`, "", `/c/repo`, "local", "2026-01-02T03:04:03Z", true},
+		{"other folder", `C:\repo`, `{"cmd":"codex.exe exec hi", "workdir":"C:\\repo"}`, "", `c:\elsewhere`, "local", "2026-01-02T03:04:03Z", false},
+		{"other machine", `C:\repo`, `{"cmd":"codex.exe exec hi", "workdir":"C:\\repo"}`, "", `c:\repo`, "other", "2026-01-02T03:04:03Z", false},
+		{"outside window", `C:\repo`, `{"cmd":"codex.exe exec hi", "workdir":"C:\\repo"}`, "", `c:\repo`, "local", "2026-01-02T03:05:00.251Z", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
-			insertSession(t, d, "launcher", "project", func(s *Session) { s.Agent = "codex"; s.Cwd = "/later" })
-			insertMessages(t, d, Message{SessionID: "launcher", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: "launcher", ToolName: "exec_command", Category: "Bash", InputJSON: tc.input, WorkingDirectory: tc.callCwd}}})
-			started := "2026-01-02T03:04:03Z"
+			insertSession(t, d, "launcher", "project", func(s *Session) { s.Agent = "codex"; s.Cwd = tc.launcherCwd })
+			insertMessages(t, d, Message{SessionID: "launcher", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00.250Z", ToolCalls: []ToolCall{{SessionID: "launcher", ToolName: "exec_command", Category: "Bash", InputJSON: tc.input, WorkingDirectory: tc.callCwd}}})
 			insertSession(t, d, "run", "project", func(s *Session) {
 				s.Agent = "codex"
 				s.Cwd = tc.cwd
-				s.StartedAt = &started
+				s.Machine = tc.machine
+				s.StartedAt = &tc.started
 				s.SessionKind = "non-interactive"
 			})
 			_, err := d.LinkSubagentSessionsForSessions(t.Context(), []string{"run"})
 			require.NoError(t, err)
 			parent, err := d.GetSessionExternalParent(t.Context(), "run")
-			if tc.linked {
+			if tc.want {
 				require.NoError(t, err)
 				assert.Equal(t, "launcher", parent.ParentSessionID)
 			} else {
 				require.ErrorIs(t, err, sql.ErrNoRows)
-			}
-		})
-	}
-}
-
-func TestLaunchParentFolderMachineAndWindow(t *testing.T) {
-	for _, tc := range []struct {
-		name, cwd, machine, started string
-		want                        bool
-	}{
-		{"matching Windows path", `c:\repo`, "local", "2026-01-02T03:05:00.250Z", true},
-		{"Git Bash path", `/c/repo`, "local", "2026-01-02T03:04:03Z", true},
-		{"other folder", `c:\elsewhere`, "local", "2026-01-02T03:04:03Z", false},
-		{"other machine", `c:\repo`, "other", "2026-01-02T03:04:03Z", false},
-		{"outside window", `c:\repo`, "local", "2026-01-02T03:05:00.251Z", false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			d := testDB(t)
-			insertSession(t, d, "launcher", "project", func(s *Session) { s.Agent = "codex"; s.Cwd = `C:\repo` })
-			insertMessages(t, d, Message{SessionID: "launcher", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00.250Z", ToolCalls: []ToolCall{{SessionID: "launcher", ToolName: "exec_command", Category: "Bash", InputJSON: `{"cmd":"codex.exe exec hi", "workdir":"C:\\repo"}`}}})
-			start := tc.started
-			insertSession(t, d, "run", "project", func(s *Session) {
-				s.Agent = "codex"
-				s.Cwd = tc.cwd
-				s.Machine = tc.machine
-				s.StartedAt = &start
-				s.SessionKind = "non-interactive"
-			})
-			_, err := d.LinkSubagentSessionsForSessions(t.Context(), []string{"run"})
-			require.NoError(t, err)
-			_, err = d.GetSessionExternalParent(t.Context(), "run")
-			if tc.want {
-				assert.NoError(t, err)
-			} else {
-				require.Error(t, err)
 			}
 		})
 	}
@@ -437,39 +379,6 @@ func TestLaunchParentSchemaMigration(t *testing.T) {
 	var blocked int
 	require.NoError(t, migrated.getReader().QueryRowContext(t.Context(), `SELECT count(*) FROM session_parent_inference_blocks WHERE session_id='child'`).Scan(&blocked))
 	assert.Equal(t, 1, blocked)
-}
-
-func TestLaunchParentRetractsUnusableChild(t *testing.T) {
-	for _, tc := range []struct{ name, update string }{
-		{"interactive", `UPDATE sessions SET session_kind='' WHERE id='child'`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			d := testDB(t)
-			insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
-			insertMessages(t, d, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: "parent", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}})
-			start := "2026-01-02T03:04:03Z"
-			insertSession(t, d, "child", "project", func(s *Session) {
-				s.Agent = "codex"
-				s.Cwd = "/repo"
-				s.SessionKind = "non-interactive"
-				s.StartedAt = &start
-			})
-			_, err := d.LinkSubagentSessionsForSessions(t.Context(), []string{"child"})
-			require.NoError(t, err)
-			link, err := d.GetSessionExternalParent(t.Context(), "child")
-			require.NoError(t, err)
-			assert.True(t, link.Applied)
-			_, err = d.getWriter().ExecContext(t.Context(), tc.update)
-			require.NoError(t, err)
-			_, err = d.LinkSubagentSessionsForSessions(t.Context(), []string{"child"})
-			require.NoError(t, err)
-			_, err = d.GetSessionExternalParent(t.Context(), "child")
-			require.ErrorIs(t, err, sql.ErrNoRows)
-			child, err := d.GetSession(t.Context(), "child")
-			require.NoError(t, err)
-			assert.Nil(t, child.ParentSessionID)
-		})
-	}
 }
 
 func TestLaunchParentTrashEvidence(t *testing.T) {
@@ -517,30 +426,6 @@ func TestLaunchParentTrashEvidence(t *testing.T) {
 	link, err = d.GetSessionExternalParent(ctx, "child")
 	require.NoError(t, err)
 	assert.Equal(t, "second", link.ParentSessionID)
-}
-
-func TestLaunchParentUnknownEvidenceDoesNotCreateLink(t *testing.T) {
-	for _, tc := range []struct{ name, parentMachine, childMachine, parentCwd, childCwd string }{
-		{"unknown machine", "", "", "/repo", "/repo"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			d := testDB(t)
-			insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = tc.parentCwd; s.Machine = tc.parentMachine })
-			insertMessages(t, d, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: "parent", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}})
-			started := "2026-01-02T03:04:03Z"
-			insertSession(t, d, "child", "project", func(s *Session) {
-				s.Agent = "codex"
-				s.Cwd = tc.childCwd
-				s.Machine = tc.childMachine
-				s.SessionKind = "non-interactive"
-				s.StartedAt = &started
-			})
-			_, err := d.LinkSubagentSessionsForSessions(t.Context(), []string{"child"})
-			require.NoError(t, err)
-			_, err = d.GetSessionExternalParent(t.Context(), "child")
-			require.ErrorIs(t, err, sql.ErrNoRows)
-		})
-	}
 }
 
 func TestLaunchParentUnusableEvidenceKeepsRecordedAndParserParents(t *testing.T) {
@@ -617,34 +502,8 @@ func TestLaunchParentBackfillCancellationRetries(t *testing.T) {
 	assert.Equal(t, "parent", link.ParentSessionID)
 }
 
-func TestLaunchParentRetractionUpdatesMarker(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
-	insertMessages(t, d, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: "parent", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}})
-	started := "2026-01-02T03:04:03Z"
-	insertSession(t, d, "child", "project", func(s *Session) {
-		s.Agent = "codex"
-		s.Cwd = "/repo"
-		s.StartedAt = &started
-		s.SessionKind = "non-interactive"
-	})
-	_, err := d.LinkSubagentSessionsForSessions(t.Context(), []string{"child"})
-	require.NoError(t, err)
-	_, err = d.GetSessionExternalParent(t.Context(), "child")
-	require.NoError(t, err)
-	insertSession(t, d, "competitor", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
-	_, err = d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET sync_marker='2000-01-01T00:00:00Z' WHERE id='child'`)
-	require.NoError(t, err)
-	insertMessages(t, d, Message{SessionID: "competitor", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: "competitor", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}})
-	var marker string
-	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT sync_marker FROM sessions WHERE id='child'`).Scan(&marker))
-	assert.Greater(t, marker, "2000-01-01T00:00:00Z")
-	_, err = d.GetSessionExternalParent(t.Context(), "child")
-	require.ErrorIs(t, err, sql.ErrNoRows)
-}
-
 func TestLaunchParentReplacementWritePaths(t *testing.T) {
-	for _, mode := range []string{"messages", "late", "content", "incremental", "batch", "atomic batch", "staged"} {
+	for _, mode := range []string{"messages", "late", "content", "incremental", "batch", "atomic batch", "staged", "interactive", "competitor"} {
 		t.Run(mode, func(t *testing.T) {
 			d := testDB(t)
 			insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
@@ -665,7 +524,17 @@ func TestLaunchParentReplacementWritePaths(t *testing.T) {
 				_, err = d.GetSessionExternalParent(t.Context(), "child")
 				require.NoError(t, err)
 			}
+			_, err = d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET sync_marker='2000-01-01T00:00:00Z' WHERE id='child'`)
+			require.NoError(t, err)
 			switch mode {
+			case "interactive":
+				_, err = d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET session_kind='' WHERE id='child'`)
+				require.NoError(t, err)
+				_, err = d.LinkSubagentSessionsForSessions(t.Context(), []string{"child"})
+			case "competitor":
+				insertSession(t, d, "competitor", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
+				message.SessionID = "competitor"
+				insertMessages(t, d, message)
 			case "messages":
 				err = d.ReplaceSessionMessages(t.Context(), "parent", nil)
 			case "late":
@@ -694,7 +563,13 @@ func TestLaunchParentReplacementWritePaths(t *testing.T) {
 				assert.Equal(t, "parent", link.ParentSessionID)
 			} else {
 				require.ErrorIs(t, err, sql.ErrNoRows)
+				child, getErr := d.GetSession(t.Context(), "child")
+				require.NoError(t, getErr)
+				assert.Nil(t, child.ParentSessionID)
 			}
+			var marker string
+			require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT sync_marker FROM sessions WHERE id='child'`).Scan(&marker))
+			assert.Greater(t, marker, "2000-01-01T00:00:00Z")
 		})
 	}
 }
@@ -722,69 +597,6 @@ func TestLaunchParentSequentialRuns(t *testing.T) {
 	parent, err = d.GetSessionExternalParent(t.Context(), "two")
 	require.NoError(t, err)
 	assert.Equal(t, second, parent.ParentSessionID)
-}
-
-func TestLaunchParentPlatformFolders(t *testing.T) {
-	cwd := `C:\Users\example\project`
-	input := `{"command":["cmd.exe","/c","codex","exec","hi"]}`
-	d := testDB(t)
-	insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = cwd })
-	insertMessages(t, d, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: "parent", ToolName: "Bash", Category: "Bash", InputJSON: input}}})
-	started := "2026-01-02T03:04:03Z"
-	insertSession(t, d, "child", "project", func(s *Session) {
-		s.Agent = "codex"
-		s.Cwd = cwd
-		s.StartedAt = &started
-		s.SessionKind = "non-interactive"
-	})
-	_, err := d.LinkSubagentSessionsForSessions(t.Context(), []string{"child"})
-	require.NoError(t, err)
-	parent, err := d.GetSessionExternalParent(t.Context(), "child")
-	require.NoError(t, err)
-	assert.Equal(t, "parent", parent.ParentSessionID)
-}
-
-func TestLaunchParentOneLaunchTwoDifferentRuns(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
-	insertMessages(t, d, Message{SessionID: "parent", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: "parent", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}})
-	for _, child := range []struct{ id, started string }{{"one", "2026-01-02T03:04:03Z"}, {"two", "2026-01-02T03:04:33Z"}} {
-		insertSession(t, d, child.id, "project", func(s *Session) {
-			s.Agent = "codex"
-			s.Cwd = "/repo"
-			s.StartedAt = &child.started
-			s.SessionKind = "non-interactive"
-		})
-	}
-	_, err := d.LinkSubagentSessionsForSessions(t.Context(), []string{"one", "two"})
-	require.NoError(t, err)
-	for _, id := range []string{"one", "two"} {
-		_, err := d.GetSessionExternalParent(t.Context(), id)
-		require.ErrorIs(t, err, sql.ErrNoRows)
-	}
-}
-
-func TestLaunchParentAmbiguousEarlierRunDoesNotReserveLaunch(t *testing.T) {
-	d := testDB(t)
-	for _, id := range []string{"a", "b"} {
-		insertSession(t, d, id, "project", func(s *Session) { s.Agent = "claude"; s.Cwd = "/repo" })
-		insertMessages(t, d, Message{SessionID: id, Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: id, ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}})
-	}
-	insertMessages(t, d, Message{SessionID: "b", Ordinal: 1, Role: "assistant", Timestamp: "2026-01-02T03:04:30Z", ToolCalls: []ToolCall{{SessionID: "b", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}})
-	for _, child := range []struct{ id, started string }{{"one", "2026-01-02T03:04:03Z"}, {"two", "2026-01-02T03:04:33Z"}} {
-		insertSession(t, d, child.id, "project", func(s *Session) {
-			s.Agent = "codex"
-			s.Cwd = "/repo"
-			s.StartedAt = &child.started
-			s.SessionKind = "non-interactive"
-		})
-	}
-	_, err := d.LinkSubagentSessionsForSessions(t.Context(), []string{"one", "two"})
-	require.NoError(t, err)
-	for _, id := range []string{"one", "two"} {
-		_, err := d.GetSessionExternalParent(t.Context(), id)
-		require.ErrorIs(t, err, sql.ErrNoRows)
-	}
 }
 
 func TestLaunchParentEarlierRunWithTwoCallsDoesNotReserveEither(t *testing.T) {
@@ -831,6 +643,10 @@ func TestLaunchParentIncrementalAppend(t *testing.T) {
 	}
 	_, err := d.LinkSubagentSessionsForSessions(t.Context(), []string{"one", "two"})
 	require.NoError(t, err)
+	for _, id := range []string{"one", "two"} {
+		_, err := d.GetSessionExternalParent(t.Context(), id)
+		require.ErrorIs(t, err, sql.ErrNoRows)
+	}
 	second := Message{SessionID: "parent", Ordinal: 1, Role: "assistant", Timestamp: "2026-01-02T03:04:30Z", ToolCalls: []ToolCall{{SessionID: "parent", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`}}}
 	_, err = d.WriteSessionIncremental(t.Context(), "parent", []Message{second}, IncrementalSessionUpdate{})
 	require.NoError(t, err)

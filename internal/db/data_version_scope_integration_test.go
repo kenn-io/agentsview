@@ -2123,8 +2123,8 @@ func TestZCodeToolResultImageUpgradeReparsesAndIndexes(t *testing.T) {
 
 func TestCodexLaunchDirectoryUpgradeReparsesSource(t *testing.T) {
 	ctx := t.Context()
-	version := db.CurrentDataVersion()
-	require.Equal(t, []parser.AgentType{parser.AgentCodex}, db.ScopedDataVersionProviders(version-1, version))
+	const oldVersion = 189
+	require.Equal(t, []parser.AgentType{parser.AgentCodex}, db.ScopedDataVersionProviders(oldVersion, 190))
 	database := dbtest.OpenTestDB(t)
 	root := t.TempDir()
 	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
@@ -2139,7 +2139,7 @@ func TestCodexLaunchDirectoryUpgradeReparsesSource(t *testing.T) {
 	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
 	engine.Close()
 	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, fmt.Sprintf("UPDATE tool_calls SET working_directory=NULL; UPDATE sessions SET data_version=%d; PRAGMA user_version=%d", version-1, version-1))
+		_, err := tx.ExecContext(ctx, fmt.Sprintf("UPDATE tool_calls SET working_directory=NULL; UPDATE sessions SET data_version=%d; PRAGMA user_version=%d", oldVersion, oldVersion))
 		return err
 	}))
 	archive := database.Path()
