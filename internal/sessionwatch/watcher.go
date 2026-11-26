@@ -138,49 +138,66 @@ func (w *Watcher) events(ctx context.Context, sessionID string, tree bool) <-cha
 		}
 		go func() {
 			defer close(ch)
+			if err == nil && initial.State != db.SessionWatchResolved {
+				select {
+				case ch <- struct{}{}:
+				case <-ctx.Done():
+				}
+				return
+			}
 			ticker := time.NewTicker(pollInterval())
 			defer ticker.Stop()
 			// After an initial read error, the first successful read
 			// becomes the baseline and is announced once.
 			recovering := err != nil
-			current, e := initial, err
 			for {
-				treeChanged, _ := checkTree()
-				if e == nil {
-					var count int
-					var version int64
-					var ok bool
-					if !tree {
-						count, version, ok = w.db.GetSessionVersion(ctx, sessionID)
-					}
-					transition := current.State != db.SessionWatchResolved || !recovering && (current.State != initial.State || current.PublicID != initial.PublicID || current.ContentRevision != initial.ContentRevision || !slices.Equal(current.Variants, initial.Variants))
-					if recovering || transition || ok && (count != lastCount || version != lastVersion) || treeChanged {
-						select {
-						case ch <- struct{}{}:
-						case <-ctx.Done():
-							return
-						}
-						if current.State != db.SessionWatchResolved {
-							return
-						}
-						initial, recovering = current, false
-						if ok {
-							lastCount, lastVersion = count, version
-						}
-					}
-				} else if treeChanged {
-					select {
-					case ch <- struct{}{}:
-					case <-ctx.Done():
-						return
-					}
-				}
 				select {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
 				}
-				current, e = identity.GetSessionWatchState(sessionID)
+				current, e := identity.GetSessionWatchState(sessionID)
+				if e == nil && current.State != db.SessionWatchResolved {
+					select {
+					case ch <- struct{}{}:
+					case <-ctx.Done():
+					}
+					return
+				}
+				treeChanged, _ := checkTree()
+				var count int
+				var version int64
+				var versionOK bool
+				if !tree && e == nil {
+					count, version, versionOK = w.db.GetSessionVersion(ctx, sessionID)
+				}
+				versionChanged := versionOK && (count != lastCount || version != lastVersion)
+				transition := e == nil && !recovering && watchStateChanged(initial, current)
+				if treeChanged || versionChanged {
+					// A change that lands between the watch-state read and the
+					// tree or version read advances that second baseline while
+					// current still holds the previous watch state. Re-read so
+					// the next poll does not emit a second tick for the same update.
+					if refreshed, re := identity.GetSessionWatchState(sessionID); re == nil {
+						current, e = refreshed, nil
+					}
+				}
+				if (e == nil && (recovering || transition)) || versionChanged || treeChanged {
+					select {
+					case ch <- struct{}{}:
+					case <-ctx.Done():
+						return
+					}
+					if e == nil {
+						if current.State != db.SessionWatchResolved {
+							return
+						}
+						initial, recovering = current, false
+					}
+					if versionOK {
+						lastCount, lastVersion = count, version
+					}
+				}
 			}
 		}()
 		return ch
@@ -237,6 +254,13 @@ func (w *Watcher) events(ctx context.Context, sessionID string, tree bool) <-cha
 		}
 	}()
 	return ch
+}
+
+func watchStateChanged(previous, current db.SessionWatchState) bool {
+	return current.State != previous.State ||
+		current.PublicID != previous.PublicID ||
+		current.ContentRevision != previous.ContentRevision ||
+		!slices.Equal(current.Variants, previous.Variants)
 }
 
 func treeParentChanged(previous, current db.SessionTreeSnapshot) bool {

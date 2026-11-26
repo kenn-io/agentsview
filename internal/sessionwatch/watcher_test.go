@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	gosync "sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -221,6 +222,165 @@ func TestEventsRecoversFromInitialWatchStateError(t *testing.T) {
 						require.FailNow(t, "unexpected second update")
 					default:
 					}
+				}
+			})
+		})
+	}
+}
+
+type splitReadStore struct {
+	db.Store
+	mu             gosync.Mutex
+	state          db.SessionWatchState
+	count          int
+	failUnresolved bool
+	onTreeRead     func()
+	onVersionRead  func()
+}
+
+func (s *splitReadStore) GetSessionWatchState(string) (db.SessionWatchState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.state, nil
+}
+
+func (s *splitReadStore) GetSessionVersion(context.Context, string) (int, int64, bool) {
+	s.mu.Lock()
+	cb := s.onVersionRead
+	s.onVersionRead = nil
+	s.mu.Unlock()
+	if cb != nil {
+		cb()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.count, 1, true
+}
+
+func (s *splitReadStore) GetSessionTreeMarker(_ context.Context, id string) (db.SessionTreeSnapshot, error) {
+	s.mu.Lock()
+	cb := s.onTreeRead
+	s.onTreeRead = nil
+	s.mu.Unlock()
+	if cb != nil {
+		cb()
+	}
+	s.mu.Lock()
+	state := s.state
+	count := s.count
+	failUnresolved := s.failUnresolved
+	s.mu.Unlock()
+	if failUnresolved && state.State != db.SessionWatchResolved {
+		return db.SessionTreeSnapshot{}, &db.SessionIdentityError{State: state.State, Variants: state.Variants}
+	}
+	return db.NewSessionTreeSnapshot([]db.SessionTreeEntry{{
+		ID:      id,
+		Count:   count,
+		Version: 1,
+		State: &db.SessionTreeState{
+			State:           state.State,
+			PublicID:        state.PublicID,
+			Variants:        state.Variants,
+			ContentRevision: state.ContentRevision,
+		},
+	}})
+}
+
+func TestWatchSplitReadEmitsOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		tree           bool
+		failUnresolved bool
+		next           db.SessionWatchState
+		nextCnt        int
+		wantStop       bool
+	}{
+		{
+			name:    "tree revision change between watch state and tree marker",
+			tree:    true,
+			next:    db.SessionWatchState{State: db.SessionWatchResolved, PublicID: "session-a", ContentRevision: "two"},
+			nextCnt: 1,
+		},
+		{
+			name:     "tree unresolved transition between watch state and tree marker",
+			tree:     true,
+			next:     db.SessionWatchState{State: "ambiguous", Variants: []string{"session-a~one", "session-a~two"}},
+			nextCnt:  1,
+			wantStop: true,
+		},
+		{
+			name:           "tree unresolved marker error between watch state and tree marker",
+			tree:           true,
+			failUnresolved: true,
+			next:           db.SessionWatchState{State: "ambiguous", Variants: []string{"session-a~one", "session-a~two"}},
+			nextCnt:        1,
+			wantStop:       true,
+		},
+		{
+			name:    "non-tree revision and version change between watch state and version read",
+			tree:    false,
+			next:    db.SessionWatchState{State: db.SessionWatchResolved, PublicID: "session-a", ContentRevision: "two"},
+			nextCnt: 2,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				store := &splitReadStore{
+					state:          db.SessionWatchState{State: db.SessionWatchResolved, PublicID: "session-a", ContentRevision: "one"},
+					count:          1,
+					failUnresolved: tc.failUnresolved,
+				}
+				var updates <-chan struct{}
+				if tc.tree {
+					updates = New(store, nil).TreeEvents(ctx, "session-a")
+				} else {
+					updates = New(store, nil).Events(ctx, "session-a")
+				}
+				synctest.Wait()
+
+				mutate := func() {
+					store.mu.Lock()
+					store.state = tc.next
+					store.count = tc.nextCnt
+					store.mu.Unlock()
+				}
+				store.mu.Lock()
+				if tc.tree {
+					store.onTreeRead = mutate
+				} else {
+					store.onVersionRead = mutate
+				}
+				store.mu.Unlock()
+
+				time.Sleep(PollInterval)
+				synctest.Wait()
+				select {
+				case _, ok := <-updates:
+					require.True(t, ok, "change must emit one update")
+				default:
+					require.FailNow(t, "change did not emit an update")
+				}
+				synctest.Wait()
+
+				if tc.wantStop {
+					select {
+					case _, ok := <-updates:
+						assert.False(t, ok, "unresolved watch must close without a duplicate update")
+					default:
+						require.FailNow(t, "unresolved watch did not close")
+					}
+					return
+				}
+
+				time.Sleep(PollInterval)
+				synctest.Wait()
+				select {
+				case _, ok := <-updates:
+					require.True(t, ok, "resolved watch must stay open")
+					require.FailNow(t, "split read emitted a duplicate update")
+				default:
 				}
 			})
 		})
