@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
-	"strconv"
 	"testing"
 	"time"
 
@@ -259,34 +258,37 @@ func TestCodexLabeledRunResyncAndExplicitWorktreeMappingWins(t *testing.T) {
 	assert.Equal(t, "mapped_project", session.Project)
 }
 
-func TestCodexLabeledOverlappingRootsSync(t *testing.T) {
-	for _, innerFirst := range []bool{false, true} {
-		t.Run(strconv.FormatBool(innerFirst), func(t *testing.T) {
-			root := t.TempDir()
-			const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
-			path := filepath.Join(root, "team", "case", ".codex-run-v1-abc", "sessions", "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
-			content := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z") + "\n" + testjsonl.CodexMsgJSON("user", "review", "2026-10-08T12:00:01Z") + "\n"
-			dbtest.WriteTestFile(t, path, []byte(content))
-			roots := []string{root, filepath.Join(root, "team")}
-			if innerFirst {
-				roots[0], roots[1] = roots[1], roots[0]
-			}
-			database := openTestDB(t)
-			engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: roots}})
-			t.Cleanup(engine.Close)
-			require.NoError(t, engine.RefreshSessionByIDContext(t.Context(), "codex:"+id))
-			require.NoError(t, engine.SyncPathsContext(t.Context(), []string{path}))
-			require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
-			session, err := database.GetSessionFull(t.Context(), "codex:"+id)
-			require.NoError(t, err)
-			require.NotNil(t, session)
-			assert.Equal(t, "team/case", session.Project)
-		})
-	}
+func TestCodexNestedRootResyncKeepsLabeledRank(t *testing.T) {
+	database := openTestDB(t)
+	logs := t.TempDir()
+	nested := filepath.Join(logs, "team", ".codex-run-v1-abc", "sessions")
+	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	path := filepath.Join(nested, "2026", "10", "08", "rollout-2026-10-08T12-00-00-"+id+".jsonl")
+	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z")
+	dbtest.WriteTestFile(t, path, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", "before", "2026-10-08T12:00:01Z")+"\n"))
+	engine := NewEngine(t.Context(), database, EngineConfig{
+		Machine: "local", DisableFilesystemProjectDiscovery: true,
+		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {logs, nested}},
+	})
+	t.Cleanup(engine.Close)
+	require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	require.NoError(t, err)
+	_, err = f.WriteString(testjsonl.CodexMsgJSON("assistant", "after", "2026-10-08T12:00:02Z") + "\n")
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	stats := engine.SyncRootsSince(t.Context(), []string{nested}, time.Time{}, nil)
+	require.Zero(t, stats.Failed)
+	messages, err := database.GetMessages(t.Context(), "codex:"+id, 0, 100, true)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	assert.Equal(t, "after", messages[1].Content)
 }
 
 func TestCodexLabeledCopyWinsSync(t *testing.T) {
-	for _, mode := range []string{"changed path", "older first", "newer event then older event", "usage refresh", "missed event", "single session"} {
+	for _, mode := range []string{"changed path", "newer event then older event", "quick sync", "older path with both copies present", "usage refresh", "missed event", "single session"} {
 		t.Run(mode, func(t *testing.T) {
 			database := openTestDB(t)
 			root := t.TempDir()
@@ -314,25 +316,18 @@ func TestCodexLabeledCopyWinsSync(t *testing.T) {
 				write(2, paths[2])
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[2]}))
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[1]}))
-				provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{Roots: []string{ordinary, logs}})
-				require.True(t, ok)
-				sources, err := parser.RawCaptureSourcesForChangedPath(t.Context(), provider, parser.ChangedPathRequest{Path: paths[2], EventKind: "write"})
-				require.NoError(t, err)
-				require.Len(t, sources, 1)
-				plan, supported, err := parser.ResolveRawCapturePlan(t.Context(), provider, sources[0])
-				require.NoError(t, err)
-				require.True(t, supported)
-				assert.Equal(t, logs, plan.CaptureRoot)
-				require.NotEmpty(t, plan.Entries)
-				assert.Equal(t, paths[2], plan.Entries[0].LocalPath)
-			case "older first":
+			case "older path with both copies present":
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[1]}))
-				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[2]}))
+			case "quick sync":
+				now := time.Now()
+				require.NoError(t, os.Chtimes(paths[1], now.Add(-2*time.Hour), now.Add(-2*time.Hour)))
+				require.NoError(t, os.Chtimes(paths[2], now.Add(-time.Hour), now.Add(-time.Hour)))
+				require.Zero(t, engine.SyncAllSince(t.Context(), now.Add(-30*time.Minute), nil).Failed)
 			case "usage refresh":
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[0]}))
 				write(1, paths[1])
 				write(2, paths[2])
-				require.NoError(t, engine.SyncSessionWithSubagentsContext(t.Context(), "codex:"+id))
+				require.NoError(t, engine.TrySyncSessionWithSubagentsContext(t.Context(), "codex:"+id))
 			case "single session":
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[0]}))
 				write(1, paths[1])
@@ -344,6 +339,11 @@ func TestCodexLabeledCopyWinsSync(t *testing.T) {
 				require.NotNil(t, saved.FilePath)
 				assert.Equal(t, paths[0], *saved.FilePath)
 				require.NoError(t, engine.RefreshSessionByIDContext(t.Context(), "codex:"+id))
+				saved, err = database.GetSessionFull(t.Context(), "codex:"+id)
+				require.NoError(t, err)
+				require.NotNil(t, saved)
+				require.NotNil(t, saved.FilePath)
+				assert.Equal(t, paths[2], *saved.FilePath)
 			case "changed path":
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{paths[2]}))
 				mtime := time.Now().Add(3 * time.Hour)
@@ -365,29 +365,6 @@ func TestCodexLabeledCopyWinsSync(t *testing.T) {
 			assert.Equal(t, "b", messages[0].Content)
 		})
 	}
-}
-
-func TestCodexLabeledCopyWinsQuickSync(t *testing.T) {
-	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
-	root := t.TempDir()
-	ordinary, logs := filepath.Join(root, "ordinary"), filepath.Join(root, "logs")
-	name := "rollout-2026-10-08T12-00-00-" + id + ".jsonl"
-	paths := []string{filepath.Join(ordinary, "2026", "10", "08", name), filepath.Join(logs, "team", ".codex-run-v1-abc", "sessions", "2026", "10", "08", name)}
-	meta := testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", "2026-10-08T12:00:00Z")
-	for i, path := range paths {
-		dbtest.WriteTestFile(t, path, []byte(meta+"\n"+testjsonl.CodexMsgJSON("user", []string{"ordinary", "labeled"}[i], "2026-10-08T12:00:01Z")+"\n"))
-	}
-	now := time.Now()
-	require.NoError(t, os.Chtimes(paths[0], now, now))
-	require.NoError(t, os.Chtimes(paths[1], now.Add(-time.Hour), now.Add(-time.Hour)))
-	database := openTestDB(t)
-	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", DisableFilesystemProjectDiscovery: true, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {ordinary, logs}}})
-	t.Cleanup(engine.Close)
-	require.Zero(t, engine.SyncAllSince(t.Context(), now.Add(-30*time.Minute), nil).Failed)
-	messages, err := database.GetMessages(t.Context(), "codex:"+id, 0, 100, true)
-	require.NoError(t, err)
-	require.Len(t, messages, 1)
-	assert.Equal(t, "labeled", messages[0].Content)
 }
 
 func TestCodexLabeledRunIndexRename(t *testing.T) {

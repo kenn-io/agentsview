@@ -486,7 +486,7 @@ func (e *Engine) SyncWatchBatchThenRun(
 	var pathPhaseErr error
 
 	if len(plan.paths) > 0 {
-		pathStats, tombstoned, pathErr := e.syncChangedPathsLocked(ctx, plan.paths, nil)
+		pathStats, tombstoned, pathErr := e.syncChangedPathsLocked(ctx, plan.paths)
 		mergeSyncStats(&stats, pathStats)
 		changed = changed || pathStats.hasSessionChanges() || tombstoned > 0
 		if pathErr != nil {

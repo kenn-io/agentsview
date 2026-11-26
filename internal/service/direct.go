@@ -711,20 +711,11 @@ func (b *directBackend) Sync(
 		path = parser.ResolveSourceFilePath(storedPath)
 	}
 
-	selectedID, _ := b.engine.SyncPathContext(ctx, path)
+	_ = b.engine.SyncPathsContext(ctx, []string{path})
 
 	id := in.ID
 	if id == "" {
 		resolved, err := b.resolveSessionIDByPath(ctx, path)
-		if errors.Is(err, errSyncNoSessionForPath) {
-			// A higher-ranked Codex copy may own this session's stored path.
-			if selectedID != "" {
-				detail, lookupErr := b.Get(ctx, selectedID)
-				if lookupErr != nil || detail != nil {
-					return detail, lookupErr
-				}
-			}
-		}
 		if err != nil {
 			return nil, err
 		}
@@ -782,8 +773,6 @@ func isVibeReplacement(requestedID string, detail *SessionDetail) bool {
 		requestedID != detail.ID
 }
 
-var errSyncNoSessionForPath = errors.New("sync: no session found")
-
 // resolveSessionIDByPath returns the single session id whose
 // file_path equals the given absolute path or a virtual key backed
 // by it. When a physical file produces multiple sessions (e.g.
@@ -834,7 +823,19 @@ func (b *directBackend) resolveSessionIDByPath(
 	}
 	switch len(ids) {
 	case 0:
-		return "", fmt.Errorf("%w for path %q", errSyncNoSessionForPath, path)
+		if uuid := parser.CodexSessionUUIDFromPath(path); uuid != "" {
+			id := parser.CodexSourceKey(parser.AgentCodex, uuid)
+			session, err := b.db.GetSession(ctx, id)
+			if err != nil {
+				return "", fmt.Errorf("sync: resolving Codex session for path %q: %w", path, err)
+			}
+			if session != nil {
+				return id, nil
+			}
+		}
+		return "", fmt.Errorf(
+			"sync: no session found for path %q", path,
+		)
 	case 1:
 		return ids[0], nil
 	default:

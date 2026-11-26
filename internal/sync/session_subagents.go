@@ -56,7 +56,7 @@ func (e *Engine) syncSessionWithSubagentsContext(ctx context.Context, sessionID 
 		subagentErr = e.syncS3SubagentTranscriptsContext(
 			ctx, sessionID, parentAgent, paths, try)
 	} else {
-		subagentErr = e.syncPathsWithLockContext(ctx, paths, false, try, nil)
+		subagentErr = e.syncPathsWithLockContext(ctx, paths, false, try)
 	}
 	return errors.Join(parentErr, subagentErr)
 }
