@@ -6460,7 +6460,9 @@ func (e *Engine) syncAllLocked(
 		for _, file := range all {
 			key := discoveredFileKey(file)
 			if preferred, ok := labeled[key]; ok {
-				all = append(all, preferred)
+				if !slices.ContainsFunc(all, func(candidate parser.DiscoveredFile) bool { return candidate.Path == preferred.Path }) {
+					all = append(all, preferred)
+				}
 				delete(labeled, key)
 			}
 		}

@@ -2463,6 +2463,73 @@ func TestCodexLabeledRunFindSourcePrefersLabeled(t *testing.T) {
 	assert.Equal(t, newer, changed[0].DisplayPath)
 }
 
+func TestCodexChangedPathFindsMissedLabeledCopies(t *testing.T) {
+	for _, compressed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("compressed=%t", compressed), func(t *testing.T) {
+			const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
+			root := t.TempDir()
+			content := testjsonl.JoinJSONL(testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", tsEarly))
+			older := writeCodexProviderSessionContent(t, filepath.Join(root, "team", "older", ".codex-run-v1-abc", "sessions"), id, content)
+			ordinary := writeCodexProviderSessionContent(t, root, id, content)
+			provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			_, err := RawCaptureSourcesForChangedPath(t.Context(), provider, ChangedPathRequest{Path: ordinary, EventKind: "write"})
+			require.NoError(t, err)
+			newer := writeCodexProviderSessionContent(t, filepath.Join(root, "team", "newer", ".codex-run-v1-abc", "sessions"), id, content)
+			now := time.Now().Add(time.Hour)
+			require.NoError(t, os.Chtimes(newer, now, now))
+			if compressed {
+				require.NoError(t, os.WriteFile(newer+".zst", []byte("compressed"), 0o600))
+			}
+			check := func(want string) {
+				t.Helper()
+				for _, path := range []string{older, ordinary} {
+					request := ChangedPathRequest{Path: path, EventKind: "write"}
+					for _, lookup := range []func(context.Context, ChangedPathRequest) ([]SourceRef, error){provider.SourcesForChangedPath, func(ctx context.Context, req ChangedPathRequest) ([]SourceRef, error) {
+						return RawCaptureSourcesForChangedPath(ctx, provider, req)
+					}} {
+						got, err := lookup(t.Context(), request)
+						require.NoError(t, err)
+						require.Len(t, got, 1)
+						assert.Equal(t, want, got[0].DisplayPath)
+					}
+				}
+			}
+			check(newer)
+			if compressed {
+				require.NoError(t, os.Remove(newer))
+				require.NoError(t, os.Chtimes(newer+".zst", now, now))
+				check(newer + ".zst")
+			}
+		})
+	}
+}
+
+func TestCodexChangedPathFindsPlainSibling(t *testing.T) {
+	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
+	root := t.TempDir()
+	content := testjsonl.JoinJSONL(testjsonl.CodexSessionMetaJSON(id, "/work/project", "codex_exec", tsEarly))
+	plain := writeCodexProviderSessionContent(t, filepath.Join(root, "team", "case", ".codex-run-v1-abc", "sessions"), id, content)
+	require.NoError(t, os.Rename(plain, plain+".zst"))
+	ordinary := writeCodexProviderSessionContent(t, root, id, content)
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	request := ChangedPathRequest{Path: ordinary, EventKind: "write"}
+	initial, err := RawCaptureSourcesForChangedPath(t.Context(), provider, request)
+	require.NoError(t, err)
+	require.Len(t, initial, 1)
+	assert.Equal(t, plain+".zst", initial[0].DisplayPath)
+	require.NoError(t, os.WriteFile(plain, []byte(content), 0o600))
+	for _, lookup := range []func(context.Context, ChangedPathRequest) ([]SourceRef, error){provider.SourcesForChangedPath, func(ctx context.Context, req ChangedPathRequest) ([]SourceRef, error) {
+		return RawCaptureSourcesForChangedPath(ctx, provider, req)
+	}} {
+		got, err := lookup(t.Context(), request)
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		assert.Equal(t, plain, got[0].DisplayPath)
+	}
+}
+
 func TestCodexRawCaptureChangedOrdinaryCopies(t *testing.T) {
 	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
 	root := t.TempDir()

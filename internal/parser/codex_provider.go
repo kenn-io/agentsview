@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/klauspost/compress/zstd"
@@ -75,7 +74,6 @@ type codexProviderFactory struct {
 	cursorCache     *codexCursorCache
 	parentTurnCache *codexParentTurnCache
 	threadFiles     codexThreadFileCache
-	sourceIndexes   codexSourceIndexCache
 }
 
 func newCodexProviderFactory(def AgentDef) ProviderFactory {
@@ -159,9 +157,6 @@ func (f *codexProviderFactory) Capabilities() Capabilities {
 func (f *codexProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
 	sources := newCodexSourceSet(f.spec.agent, cfg.Roots)
-	if f.spec.agent == AgentCodex {
-		sources.pathIndex = f.sourceIndexes.forRoots(sources.roots)
-	}
 	sources.metadata = CodexMetadata{roots: cfg.MetadataDirs}
 	sources.threadFiles = &f.threadFiles
 	return &codexProvider{
@@ -299,7 +294,7 @@ func (p *codexProvider) RawCaptureSourcesForChangedPath(
 			source, ok = p.sources.directPathSource(root, req.Path, true)
 		}
 		if ok {
-			preferred, err := p.sources.preferredLabeledSource(ctx, source, req.Path)
+			preferred, err := p.sources.preferredLabeledSource(ctx, source)
 			if err != nil {
 				return nil, err
 			}
@@ -963,89 +958,6 @@ type codexSourceSet struct {
 	roots       []string
 	metadata    CodexMetadata
 	threadFiles *codexThreadFileCache
-	pathIndex   *codexLabeledPathIndex
-}
-
-type codexSourceIndexCache struct {
-	mu      sync.Mutex
-	indexes map[string]*codexLabeledPathIndex
-}
-
-func (c *codexSourceIndexCache) forRoots(roots []string) *codexLabeledPathIndex {
-	key := strings.Join(roots, "\x00")
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.indexes == nil {
-		c.indexes = make(map[string]*codexLabeledPathIndex)
-	}
-	if index := c.indexes[key]; index != nil {
-		return index
-	}
-	index := &codexLabeledPathIndex{}
-	c.indexes[key] = index
-	return index
-}
-
-// codexLabeledPathIndex keeps the labeled copies by session UUID after one
-// root walk. Changed-path events update the one affected UUID, so selecting a
-// duplicate does not repeat a walk over every run directory.
-type codexLabeledPathIndex struct {
-	mu     sync.Mutex
-	loaded bool
-	byUUID map[string]map[string]struct{}
-}
-
-func (i *codexLabeledPathIndex) paths(
-	ctx context.Context,
-	sources codexSourceSet,
-	uuid, changedPath string,
-	changedExists bool,
-) ([]string, error) {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-	if !i.loaded {
-		i.byUUID = make(map[string]map[string]struct{})
-		for _, root := range sources.roots {
-			if isS3URI(root) {
-				continue
-			}
-			dirs, err := labeledSessionDirs(ctx, root)
-			if err != nil {
-				return nil, err
-			}
-			for _, dir := range dirs {
-				for _, path := range sources.discoverSessionPaths(dir) {
-					i.add(CodexSessionUUIDFromFilename(filepath.Base(path)), path)
-				}
-			}
-		}
-		i.loaded = true
-	}
-	if changedPath != "" && CodexSourceLabelForRoots(sources.roots, changedPath) != "" && CodexSessionUUIDFromFilename(filepath.Base(changedPath)) == uuid {
-		if changedExists {
-			i.add(uuid, changedPath)
-		}
-	}
-	paths := make([]string, 0, len(i.byUUID[uuid]))
-	for path := range i.byUUID[uuid] {
-		paths = append(paths, path)
-	}
-	slices.Sort(paths)
-	return paths, nil
-}
-
-func (i *codexLabeledPathIndex) add(uuid, path string) {
-	if uuid == "" {
-		return
-	}
-	if i.byUUID == nil {
-		i.byUUID = make(map[string]map[string]struct{})
-	}
-	path = filepath.Clean(path)
-	if i.byUUID[uuid] == nil {
-		i.byUUID[uuid] = make(map[string]struct{})
-	}
-	i.byUUID[uuid][path] = struct{}{}
 }
 
 func newCodexSourceSet(agent AgentType, roots []string) codexSourceSet {
@@ -1484,7 +1396,7 @@ func (s codexSourceSet) SourcesForChangedPath(
 				}
 				source = preferred
 			}
-			preferred, err := s.preferredLabeledSource(ctx, source, req.Path)
+			preferred, err := s.preferredLabeledSource(ctx, source)
 			if err != nil {
 				return nil, err
 			}
@@ -1756,37 +1668,24 @@ func (s codexSourceSet) findCanonicalSource(ctx context.Context, uuid string) (S
 	return best, foundExisting, nil
 }
 
-func (s codexSourceSet) preferredLabeledSource(
-	ctx context.Context, source SourceRef, changedPath string,
-) (SourceRef, error) {
-	if s.agent != AgentCodex || s.pathIndex == nil {
+func (s codexSourceSet) preferredLabeledSource(ctx context.Context, source SourceRef) (SourceRef, error) {
+	if s.agent != AgentCodex {
 		return source, nil
 	}
 	selected, ok := source.Opaque.(codexSource)
 	if !ok {
 		return source, nil
 	}
-	changedExists := changedPath != "" && IsRegularFile(changedPath)
-	paths, err := s.pathIndex.paths(
-		ctx, s, selected.UUID, changedPath, changedExists,
-	)
+	best, found, err := s.findCanonicalSource(ctx, selected.UUID)
 	if err != nil {
 		return SourceRef{}, err
 	}
-	best := source
-	for _, path := range paths {
-		for _, root := range s.roots {
-			candidate, ok := s.sourceRef(root, path, true)
-			if !ok {
-				continue
-			}
-			if preferCodexSource(candidate, best) {
-				best = candidate
-			}
-			break
+	if found {
+		if preferred, compared := PreferLabeledCodexSource(best, source); compared && preferred {
+			return best, nil
 		}
 	}
-	return best, nil
+	return source, nil
 }
 
 func codexSourceKey(agent AgentType, uuid string) string {
