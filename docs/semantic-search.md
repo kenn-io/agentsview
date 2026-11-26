@@ -127,8 +127,9 @@ Pass `--api-key-file <path>` when the endpoint needs a key. The command waits fo
 any running build or setup, including manual Recall builds, replaces the server,
 restarts the daemon, and rebuilds the session index. Before saving, it sends one
 sample query and checks the returned vector dimension. The same model keeps its
-recipe; a new model starts from its defaults. Recall is rebuilt when its
-embedding index is enabled.
+recipe and the default server's explicit timeout, batch, concurrency, and retry
+settings; a new model starts from its defaults. The new server uses the key
+supplied to the command. Recall is rebuilt when its embedding index is enabled.
 
 To use Kit's local server while Ollama stays running, keep your explicit Nomic
 recipe and add a named server:

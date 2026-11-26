@@ -4324,6 +4324,20 @@ func (c *Config) vectorEmbeddingsServerCandidate(
 		embeddings, _ := section["embeddings"].(map[string]any)
 		oldModel, _ := embeddings["model"].(string)
 		_, hasServers := embeddings["servers"]
+		if oldModel == model {
+			servers, _ := embeddings["servers"].(map[string]any)
+			name, _ := embeddings["default_server"].(string)
+			if name == "" && len(servers) == 1 {
+				for name = range servers {
+				}
+			}
+			previous, _ := servers[name].(map[string]any)
+			for _, key := range []string{"timeout", "batch_size", "max_batch_tokens", "concurrency", "max_retries"} {
+				if value, ok := previous[key]; ok {
+					server[key] = value
+				}
+			}
+		}
 		if embeddings == nil || (oldModel != model && !(oldModel == "" && !hasServers && model == defaultNomicModel)) {
 			embeddings = make(map[string]any)
 		}

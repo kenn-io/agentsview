@@ -416,7 +416,7 @@ func TestSaveVectorEmbeddingsServer(t *testing.T) {
 				"query_prefix": "old query: ", "document_prefix": "old document: ",
 				"default_server": "old",
 				"servers": map[string]any{
-					"old":   map[string]any{"endpoint": "http://127.0.0.1:11434/v1"},
+					"old":   map[string]any{"endpoint": "http://127.0.0.1:11434/v1", "timeout": "5m"},
 					"extra": map[string]any{"endpoint": "http://127.0.0.1:8000/v1"},
 				},
 			},
@@ -438,6 +438,7 @@ func TestSaveVectorEmbeddingsServer(t *testing.T) {
 	server := got.Vector.Embeddings.Servers["default"]
 	assert.Equal(t, "https://embed.example/v1", server.Endpoint)
 	assert.Equal(t, keyPath, server.APIKeyFile)
+	assert.Equal(t, "30s", server.Timeout)
 	assert.Equal(t, 8192, got.Vector.Embeddings.MaxInputChars)
 	assert.Empty(t, got.Vector.Embeddings.QueryPrefix)
 	assert.Empty(t, got.Vector.Embeddings.DocumentPrefix)
@@ -490,6 +491,50 @@ func TestSaveVectorEmbeddingsServer(t *testing.T) {
 		got := f.LoadFile(t).Vector.Embeddings
 		assert.Equal(t, 1234, got.MaxInputChars)
 		assert.Equal(t, "suffix", got.InputSuffix)
+	})
+
+	t.Run("same model keeps default server tuning", func(t *testing.T) {
+		f := newConfigFixture(t)
+		f.WriteConfigText(t, `[vector]
+enabled = true
+[vector.embeddings]
+model = 'custom'
+dimension = 768
+model_context_tokens = 512
+default_server = 'selected'
+[vector.embeddings.servers.selected]
+endpoint = 'http://127.0.0.1:1/v1'
+api_key_env = 'OLD_EMBEDDING_KEY'
+timeout = '5m'
+batch_size = 4
+max_batch_tokens = 1024
+concurrency = 2
+max_retries = 7
+[vector.embeddings.servers.other]
+endpoint = 'http://127.0.0.1:2/v1'
+timeout = '1s'
+`)
+		cfg := f.LoadFile(t)
+		candidate, err := cfg.VectorEmbeddingsServerCandidate("https://embed.example/v1", "custom", 768, "")
+		require.NoError(t, err)
+		require.NoError(t, cfg.SaveVectorEmbeddingsServer("https://embed.example/v1", "custom", 768, ""))
+		for _, got := range []VectorEmbeddingsConfig{candidate, f.LoadFile(t).Vector.Embeddings} {
+			server := got.Servers["default"]
+			assert.Equal(t, "5m", server.Timeout)
+			assert.Equal(t, 4, server.BatchSize)
+			assert.Equal(t, 1024, server.MaxBatchTokens)
+			assert.Equal(t, 2, server.Concurrency)
+			assert.Equal(t, 7, server.MaxRetries)
+			assert.Empty(t, server.APIKeyEnv)
+		}
+	})
+
+	t.Run("same model keeps sole server timeout", func(t *testing.T) {
+		f := newConfigFixture(t)
+		f.WriteConfigText(t, "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'custom'\ndimension = 768\n[vector.embeddings.servers.old]\nendpoint = 'http://127.0.0.1:1/v1'\ntimeout = '5m'\n")
+		cfg := f.LoadFile(t)
+		require.NoError(t, cfg.SaveVectorEmbeddingsServer("https://embed.example/v1", "custom", 768, ""))
+		assert.Equal(t, "5m", f.LoadFile(t).Vector.Embeddings.Servers["default"].Timeout)
 	})
 
 	t.Run("new Nomic model gets defaults", func(t *testing.T) {
