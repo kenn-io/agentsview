@@ -1049,7 +1049,7 @@ type searchContentOut struct {
 	Hints          []service.ContentSearchHint `json:"hints,omitempty"`
 	Matches        []contentMatch              `json:"matches"`
 	Omitted        int                         `json:"omitted,omitempty"`
-	Total          int                         `json:"total,omitempty"`
+	Total          int                         `json:"total,omitzero"`
 	TotalCapped    bool                        `json:"total_capped,omitempty" jsonschema:"True when total is a lower bound."`
 	NextCursor     *int                        `json:"next_cursor,omitempty"`
 	ActivityCutoff string                      `json:"activity_cutoff,omitempty" jsonschema:"Effective RFC3339 activity cutoff; pass it unchanged with next_cursor as cursor to continue."`
@@ -1284,7 +1284,7 @@ func (t *toolset) searchContent(
 			out.NextCursor, out.Note = nil, strings.TrimSpace(out.Note+" Reduce limit to fit ranked results in one response.")
 		} else if len(items) > 0 {
 			out.Total, out.TotalCapped, err = t.countContentMatches(ctx, req, legacy, keepMatch)
-			if err != nil {
+			if err != nil && !isContentSearchTimeout(err) {
 				return nil, searchContentOut{}, err
 			}
 		}
@@ -1330,11 +1330,15 @@ func (t *toolset) searchContentMatches(ctx context.Context, req service.ContentS
 }
 
 func contentSearchError(err error) error {
-	status, _, ok := servicehttp.HTTPErrorDetails(err)
-	if errors.Is(err, context.DeadlineExceeded) || (ok && status == http.StatusGatewayTimeout) {
+	if isContentSearchTimeout(err) {
 		return fmt.Errorf("search timed out; retry with date_from, project, or session_id: %w", err)
 	}
 	return err
+}
+
+func isContentSearchTimeout(err error) bool {
+	status, _, ok := servicehttp.HTTPErrorDetails(err)
+	return errors.Is(err, context.DeadlineExceeded) || (ok && status == http.StatusGatewayTimeout)
 }
 
 // --- get_usage_summary ---

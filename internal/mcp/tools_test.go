@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -2694,6 +2695,7 @@ type deadlineContentService struct {
 	bounded   []bool
 	oversized bool
 	local     bool
+	countErr  error
 }
 
 func (s *deadlineContentService) SupportsRecallQueries() bool { return s.local }
@@ -2704,6 +2706,9 @@ func (s *deadlineContentService) SearchContent(ctx context.Context, req service.
 	s.bounded = append(s.bounded, ok)
 	if s.oversized {
 		if len(s.deadlines) > 1 {
+			if s.countErr != nil {
+				return nil, s.countErr
+			}
 			return nil, context.DeadlineExceeded
 		}
 		matches := make([]db.ContentMatch, 20)
@@ -2713,6 +2718,45 @@ func (s *deadlineContentService) SearchContent(ctx context.Context, req service.
 		return &service.ContentSearchResult{Matches: matches, NextCursor: 20, ActiveFilterApplied: true}, nil
 	}
 	return &service.ContentSearchResult{}, nil
+}
+
+func TestSearchContentCountFailure(t *testing.T) {
+	otherErr := errors.New("count failed")
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "timed out", http.StatusGatewayTimeout)
+	}))
+	t.Cleanup(daemon.Close)
+	_, httpErr := servicehttp.NewHTTPBackend(daemon.URL, "", false, "").SearchContent(t.Context(), service.ContentSearchRequest{Pattern: "needle"})
+	require.Error(t, httpErr)
+	for _, tc := range []struct {
+		name      string
+		err       error
+		returnErr bool
+	}{
+		{name: "deadline"},
+		{name: "daemon timeout", err: httpErr},
+		{name: "other error", err: otherErr, returnErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &deadlineContentService{oversized: true, countErr: tc.err}
+			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", IncludeActive: true, Limit: 20})
+			if tc.returnErr {
+				require.ErrorIs(t, err, tc.err)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, fake.deadlines, 2)
+			assert.NotEmpty(t, out.Matches)
+			assert.Positive(t, out.Omitted)
+			assert.True(t, fitsResponse(out))
+			require.NotNil(t, out.NextCursor)
+			assert.Equal(t, out.Matches[len(out.Matches)-1].Ordinal+1, *out.NextCursor)
+			encoded, err := json.Marshal(out)
+			require.NoError(t, err)
+			assert.NotContains(t, string(encoded), `"total":`)
+		})
+	}
 }
 
 func TestSearchContentSharedDeadline(t *testing.T) {
