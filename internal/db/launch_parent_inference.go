@@ -325,6 +325,7 @@ func launchSeeds(ctx context.Context, tx *sql.Tx, ids []string) ([]string, error
 		if err != nil {
 			return nil, err
 		}
+		defer r.Close()
 		for r.Next() {
 			var id string
 			if err := r.Scan(&id); err != nil {
