@@ -114,7 +114,7 @@ func runEmbeddingsSwitch(
 		return fmt.Errorf("loading config: %w", err)
 	}
 	if cfg.ArchiveContent.UsageOnly() {
-		return fmt.Errorf("%w: embeddings require transcript content", db.ErrArchiveContentExcluded)
+		return requireVectorEnabled(cfg)
 	}
 	stores := []string{"messages"}
 	if cfg.Vector.Embed.Recall {
@@ -214,18 +214,9 @@ func preflightEmbeddingsServer(ctx context.Context, embeddings config.VectorEmbe
 	if err != nil {
 		return err
 	}
-	vectors, err := encode(ctx, []string{"AgentsView embedding server check"})
-	if err != nil {
-		return err
-	}
-	if len(vectors) != 1 {
-		return fmt.Errorf("server returned %d vectors for one input", len(vectors))
-	}
-	if len(vectors[0]) != embeddings.Dimension {
-		return fmt.Errorf("server returned %d dimensions; configured dimension is %d",
-			len(vectors[0]), embeddings.Dimension)
-	}
-	return nil
+	// The encoder rejects a response whose vector count or length is wrong.
+	_, err = encode(ctx, []string{"AgentsView embedding server check"})
+	return err
 }
 
 // EmbeddingsBuildOptions holds the parsed `embeddings build` flags.

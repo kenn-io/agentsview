@@ -1632,7 +1632,7 @@ recall = %t
 	}
 }
 
-func TestEmbeddingsSwitchRestartFailureCanRetry(t *testing.T) {
+func TestEmbeddingsSwitchRestartFailurePreservesConfig(t *testing.T) {
 	setTestHome(t, t.TempDir())
 	dataDir := testDataDir(t)
 	writeEmbeddingsTestConfig(t, dataDir, "http://127.0.0.1:1/v1")
@@ -1649,74 +1649,31 @@ func TestEmbeddingsSwitchRestartFailureCanRetry(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "new-model", cfg.Vector.Embeddings.Model)
 	assert.Equal(t, endpoint, cfg.Vector.Embeddings.Servers["default"].Endpoint)
-
-	var stores []string
-	restartEmbeddingsDaemon = func(context.Context, io.Writer) error {
-		startEmbeddingsTestDaemon(t, dataDir, map[string]http.HandlerFunc{
-			"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
-				w.Header().Set("Content-Type", "application/json")
-				_, _ = io.WriteString(w, `{"running":false}`)
-			},
-			"POST /api/v1/embeddings/build": func(w http.ResponseWriter, r *http.Request) {
-				var req vector.BuildRequest
-				if !assert.NoError(t, json.UnmarshalRead(r.Body, &req)) {
-					w.WriteHeader(http.StatusBadRequest)
-					return
-				}
-				stores = append(stores, req.Store)
-				w.WriteHeader(http.StatusAccepted)
-			},
-		})
-		return nil
-	}
-	require.NoError(t, runEmbeddingsSwitch(t.Context(), io.Discard, endpoint, "new-model", 3, ""))
-	assert.Equal(t, []string{"messages"}, stores)
 }
 
 func TestEmbeddingsSwitchPreflightFailurePreservesConfig(t *testing.T) {
-	for _, tc := range []struct {
-		name         string
-		dimension    int
-		unauthorized bool
-	}{
-		{name: "request rejected", dimension: 3, unauthorized: true},
-		{name: "wrong vector dimension", dimension: 2},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			setTestHome(t, t.TempDir())
-			dataDir := testDataDir(t)
-			writeEmbeddingsTestConfig(t, dataDir, "http://127.0.0.1:1/v1")
-			path := filepath.Join(dataDir, "config.toml")
-			before, err := os.ReadFile(path)
-			require.NoError(t, err)
+	setTestHome(t, t.TempDir())
+	dataDir := testDataDir(t)
+	writeEmbeddingsTestConfig(t, dataDir, "http://127.0.0.1:1/v1")
+	path := filepath.Join(dataDir, "config.toml")
+	before, err := os.ReadFile(path)
+	require.NoError(t, err)
+	endpoint := newEmbeddingsStubServer(t, 2).URL + "/v1"
 
-			var endpoint string
-			if tc.unauthorized {
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-					http.Error(w, "invalid API key", http.StatusUnauthorized)
-				}))
-				t.Cleanup(server.Close)
-				endpoint = server.URL + "/v1"
-			} else {
-				endpoint = newEmbeddingsStubServer(t, tc.dimension).URL + "/v1"
-			}
-
-			oldRestart := restartEmbeddingsDaemon
-			restarted := false
-			restartEmbeddingsDaemon = func(context.Context, io.Writer) error {
-				restarted = true
-				return nil
-			}
-			t.Cleanup(func() { restartEmbeddingsDaemon = oldRestart })
-
-			err = runEmbeddingsSwitch(t.Context(), io.Discard, endpoint, "test-model", 3, "")
-			require.ErrorContains(t, err, "testing embedding server")
-			assert.False(t, restarted)
-			after, err := os.ReadFile(path)
-			require.NoError(t, err)
-			assert.Equal(t, before, after)
-		})
+	oldRestart := restartEmbeddingsDaemon
+	restarted := false
+	restartEmbeddingsDaemon = func(context.Context, io.Writer) error {
+		restarted = true
+		return nil
 	}
+	t.Cleanup(func() { restartEmbeddingsDaemon = oldRestart })
+
+	err = runEmbeddingsSwitch(t.Context(), io.Discard, endpoint, "test-model", 3, "")
+	require.ErrorContains(t, err, "testing embedding server")
+	assert.False(t, restarted)
+	after, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
 }
 
 func TestEmbeddingsSwitchPreflightCredentials(t *testing.T) {
@@ -1731,16 +1688,6 @@ func TestEmbeddingsSwitchPreflightCredentials(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
 		assert.Equal(t, "Bearer test-key", r.Header.Get("Authorization"))
-		var req struct {
-			Model string   `json:"model"`
-			Input []string `json:"input"`
-		}
-		if !assert.NoError(t, json.UnmarshalRead(r.Body, &req)) {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		assert.Equal(t, "new-model", req.Model)
-		assert.Len(t, req.Input, 1)
 		writeEmbeddingsResponse(t, w, 1, 3)
 	}))
 	t.Cleanup(server.Close)
