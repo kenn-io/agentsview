@@ -1622,6 +1622,98 @@ func TestEmbeddingsSwitchRestartFailurePreservesConfig(t *testing.T) {
 	assert.Equal(t, endpoint, cfg.Vector.Embeddings.Servers["default"].Endpoint)
 }
 
+func TestEmbeddingsSwitchWaitsForDirectBuildBeforeSaving(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dataDir := testDataDir(t)
+	writeEmbeddingsTestConfig(t, dataDir, "http://127.0.0.1:1/v1")
+	endpoint := newEmbeddingsStubServer(t, 3).URL + "/v1"
+	held, err := tryAcquireNamedLock(dataDir, vectorsWriteLockFile)
+	require.NoError(t, err)
+	defer func() { _ = held.Close() }()
+
+	restartErr := errors.New("restart stopped by test")
+	restartLockAvailable := make(chan bool, 1)
+	oldRestart := restartEmbeddingsDaemon
+	restartEmbeddingsDaemon = func(context.Context, io.Writer) error {
+		lock, err := tryAcquireNamedLock(dataDir, vectorsWriteLockFile)
+		if err == nil {
+			_ = lock.Close()
+		}
+		restartLockAvailable <- err == nil
+		return restartErr
+	}
+	t.Cleanup(func() { restartEmbeddingsDaemon = oldRestart })
+
+	waiting := make(chan struct{})
+	out := &embeddingsSwitchSignalWriter{firstWrite: waiting}
+	result := make(chan error, 1)
+	go func() {
+		result <- runEmbeddingsSwitch(t.Context(), out, endpoint, "new-model", 3, "")
+	}()
+	select {
+	case <-waiting:
+	case <-time.After(5 * time.Second):
+		t.Fatal("switch did not report waiting for the direct build")
+	}
+
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	assert.Equal(t, "test-model", cfg.Vector.Embeddings.Model)
+	assert.Equal(t, "http://127.0.0.1:1/v1", cfg.Vector.Embeddings.Servers["local"].Endpoint)
+
+	select {
+	case <-restartLockAvailable:
+		t.Fatal("switch restarted the daemon while the direct build held the lock")
+	default:
+	}
+	require.NoError(t, held.Close())
+	assert.ErrorIs(t, <-result, restartErr)
+	select {
+	case available := <-restartLockAvailable:
+		assert.True(t, available, "switch must release the lock before daemon startup")
+	case <-time.After(5 * time.Second):
+		t.Fatal("switch did not restart the daemon")
+	}
+	cfg, err = config.LoadReadOnly()
+	require.NoError(t, err)
+	assert.Equal(t, "new-model", cfg.Vector.Embeddings.Model)
+}
+
+type embeddingsSwitchSignalWriter struct {
+	once       sync.Once
+	firstWrite chan struct{}
+}
+
+func (w *embeddingsSwitchSignalWriter) Write(p []byte) (int, error) {
+	w.once.Do(func() { close(w.firstWrite) })
+	return len(p), nil
+}
+
+func TestWaitForEmbeddingsWriteLockHonorsCancellation(t *testing.T) {
+	dataDir := t.TempDir()
+	held, err := tryAcquireNamedLock(dataDir, vectorsWriteLockFile)
+	require.NoError(t, err)
+	defer func() { _ = held.Close() }()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	waiting := make(chan struct{})
+	result := make(chan error, 1)
+	reported := false
+	go func() {
+		_, err := waitForEmbeddingsWriteLock(
+			ctx, &embeddingsSwitchSignalWriter{firstWrite: waiting}, dataDir, &reported,
+		)
+		result <- err
+	}()
+	select {
+	case <-waiting:
+	case <-time.After(5 * time.Second):
+		t.Fatal("lock wait did not report the active build")
+	}
+	cancel()
+	assert.ErrorIs(t, <-result, context.Canceled)
+}
+
 func TestEmbeddingsSwitchFailureBeforeSavePreservesConfig(t *testing.T) {
 	for _, tc := range []struct {
 		name                string

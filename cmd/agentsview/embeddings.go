@@ -149,15 +149,32 @@ func runEmbeddingsSwitch(
 	if err := preflightEmbeddingsServer(ctx, candidate); err != nil {
 		return fmt.Errorf("testing embedding server: %w", err)
 	}
+	var directBuildLock *writeOwnerLock
 	if daemonErr == nil {
 		release, err := client.pauseBuilds(ctx, out, &waiting)
 		if err != nil {
 			return fmt.Errorf("waiting for embedding builds: %w", err)
 		}
 		defer release()
+	} else {
+		directBuildLock, err = waitForEmbeddingsWriteLock(ctx, out, cfg.DataDir, &waiting)
+		if err != nil {
+			return fmt.Errorf("waiting for embedding builds: %w", err)
+		}
+		defer func() {
+			if directBuildLock != nil {
+				_ = directBuildLock.Close()
+			}
+		}()
 	}
 	if err := cfg.SaveVectorEmbeddingsServer(endpoint, model, dimension, apiKeyFile); err != nil {
 		return fmt.Errorf("saving embedding server: %w", err)
+	}
+	if directBuildLock != nil {
+		if err := directBuildLock.Close(); err != nil {
+			return fmt.Errorf("releasing embedding build lock: %w", err)
+		}
+		directBuildLock = nil
 	}
 	if err := restartEmbeddingsDaemon(ctx, out); err != nil {
 		return fmt.Errorf("embedding server saved, but daemon restart failed: %w; fix it, then rerun 'agentsview index embeddings switch' to start the rebuild", err)
@@ -216,6 +233,36 @@ func runEmbeddingsSwitch(
 		}
 	}
 	return errors.Join(buildErrors...)
+}
+
+func waitForEmbeddingsWriteLock(
+	ctx context.Context, out io.Writer, dataDir string, waiting *bool,
+) (*writeOwnerLock, error) {
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+		lock, err := tryAcquireNamedLock(dataDir, vectorsWriteLockFile)
+		if err == nil {
+			return lock, nil
+		}
+		if _, held := errors.AsType[writeOwnerLockHeldError](err); !held {
+			return nil, err
+		}
+		if waiting != nil && !*waiting {
+			fmt.Fprintln(out, "Waiting for the current embedding build or setup to finish…")
+			*waiting = true
+		}
+		timer := time.NewTimer(vectorsWriteLockRetryInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func preflightEmbeddingsServer(ctx context.Context, embeddings config.VectorEmbeddingsConfig) error {
