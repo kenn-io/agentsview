@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/export"
@@ -360,23 +361,33 @@ func (db *DB) WriteSessionBatchAtomic(ctx context.Context,
 	}
 	db.notifyUsageSessions(writtenUsageIDs)
 	pendingRecallRevocations.flush()
-	linkTx, err := db.getWriter().BeginTx(ctx, nil)
-	if err != nil {
-		return result, fmt.Errorf("beginning batch parent linking: %w", err)
-	}
-	defer func() { _ = linkTx.Rollback() }()
-	if _, err := linkParserSubagentSessionsTx(ctx, linkTx, writtenUsageIDs); err != nil {
-		return result, fmt.Errorf("linking batch parents: %w", err)
-	}
-	for _, id := range writtenUsageIDs {
-		if _, err := linkTx.ExecContext(ctx, `DELETE FROM subagent_parent_repair_queue WHERE session_id=?`, id); err != nil {
-			return result, fmt.Errorf("clearing batch parent repair for %s: %w", id, err)
-		}
-	}
-	if err := linkTx.Commit(); err != nil {
-		return result, fmt.Errorf("committing batch parent linking: %w", err)
+	if err := db.linkCommittedBatchParents(ctx, writtenUsageIDs); err != nil {
+		log.Printf("linking committed batch parents (queued for repair): %v", err)
 	}
 	return result, nil
+}
+
+func (db *DB) linkCommittedBatchParents(ctx context.Context, ids []string) error {
+	tx, err := db.getWriter().BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	seeds, err := linkParserSubagentSessionsTx(ctx, tx, ids)
+	if err != nil {
+		return err
+	}
+	if _, err := applySessionExternalParentsFor(ctx, tx.ExecContext, func(ctx context.Context, query string, args ...any) rowScanner {
+		return tx.QueryRowContext(ctx, query, args...)
+	}, seeds); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM subagent_parent_repair_queue WHERE session_id=?`, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 type launchBatchEvidence struct {
@@ -386,9 +397,9 @@ type launchBatchEvidence struct {
 
 func batchLaunchChange(ctx context.Context, tx *sql.Tx, write SessionBatchWrite) (launchBatchEvidence, error) {
 	result := launchBatchEvidence{from: int(^uint(0) >> 1)}
-	var cwd, machine, agent string
-	var missing bool
-	err := tx.QueryRowContext(ctx, `SELECT cwd,machine,agent,source_missing_at IS NOT NULL FROM sessions WHERE id=?`, write.Session.ID).Scan(&cwd, &machine, &agent, &missing)
+	var cwd, machine, agent, kind, entrypoint string
+	var missing, startedChanged bool
+	err := tx.QueryRowContext(ctx, `SELECT cwd,machine,agent,session_kind,entrypoint,source_missing_at IS NOT NULL,COALESCE(started_at,'') != COALESCE(?,'') FROM sessions WHERE id=?`, write.Session.StartedAt, write.Session.ID).Scan(&cwd, &machine, &agent, &kind, &entrypoint, &missing, &startedChanged)
 	if errors.Is(err, sql.ErrNoRows) {
 		result.from = 0
 		return result, nil
@@ -396,7 +407,7 @@ func batchLaunchChange(ctx context.Context, tx *sql.Tx, write SessionBatchWrite)
 	if err != nil {
 		return result, err
 	}
-	if missing || cwd != write.Session.Cwd || machine != write.Session.Machine || agent != write.Session.Agent {
+	if missing || cwd != write.Session.Cwd || machine != write.Session.Machine || agent != write.Session.Agent || kind != write.Session.SessionKind || entrypoint != write.Session.Entrypoint || startedChanged {
 		result.from = 0
 		result.oldSeeds, err = launchSeeds(ctx, tx, []string{write.Session.ID})
 		return result, err

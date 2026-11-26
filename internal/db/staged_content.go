@@ -321,6 +321,18 @@ func stagedSessionContentDigestTx(ctx context.Context,
 	return digest, nil
 }
 
+func (db *DB) publishStagedMetadataAndRelinkTx(ctx context.Context, tx *sql.Tx, sessionID string, write *SessionBatchWrite) error {
+	seeds, err := launchSeeds(ctx, tx, []string{sessionID})
+	if err != nil {
+		return err
+	}
+	if err := db.publishStagedSessionMetadataTx(ctx, tx, write); err != nil {
+		return err
+	}
+	_, err = linkLaunchParentsChangedTx(ctx, tx, seeds, nil)
+	return err
+}
+
 func (db *DB) commitStagedDerivedStateAndCheckpoint(
 	ctx context.Context, conn *sql.Conn, sessionID string,
 	signals *SessionSignalUpdate, findings []SecretFinding,
@@ -333,7 +345,7 @@ func (db *DB) commitStagedDerivedStateAndCheckpoint(
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := db.publishStagedSessionMetadataTx(ctx, tx, write); err != nil {
+	if err := db.publishStagedMetadataAndRelinkTx(ctx, tx, sessionID, write); err != nil {
 		return err
 	}
 

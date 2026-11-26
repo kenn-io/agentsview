@@ -721,14 +721,18 @@ func TestUsageOnlyBatchWritesClearExistingFriction(t *testing.T) {
 
 func TestWriteSessionBatchAtomicLinksSpawnAfterCommit(t *testing.T) {
 	for _, tc := range []struct {
-		name                string
-		failLink, checkOnce bool
-	}{{"link failure", true, false}, {"launch once", false, true}} {
+		name                              string
+		failLink, queueFailure, checkOnce bool
+	}{{"link failure", true, false, false}, {"queue failure", false, true, false}, {"launch once", false, false, true}} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
 			insertSession(t, d, "child", "project")
 			if tc.failLink {
 				_, err := d.getWriter().ExecContext(t.Context(), `CREATE TRIGGER fail_batch_link BEFORE UPDATE OF parent_session_id ON sessions WHEN NEW.id='child' AND NEW.parent_session_id='parent' BEGIN SELECT RAISE(FAIL, 'injected link failure'); END`)
+				require.NoError(t, err)
+			}
+			if tc.queueFailure {
+				_, err := d.getWriter().ExecContext(t.Context(), `CREATE TRIGGER fail_batch_link BEFORE DELETE ON subagent_parent_repair_queue BEGIN SELECT RAISE(FAIL, 'injected queue failure'); END`)
 				require.NoError(t, err)
 			}
 			write := messageCountWrite("parent", 1)
@@ -768,8 +772,8 @@ func TestWriteSessionBatchAtomicLinksSpawnAfterCommit(t *testing.T) {
 				rawConn.RegisterAuthorizer(nil)
 				assert.Zero(t, launchReads, "post-commit linking must not reread launch evidence")
 			}
-			if tc.failLink {
-				require.ErrorContains(t, err, "injected link failure")
+			if tc.failLink || tc.queueFailure {
+				require.NoError(t, err)
 				assert.Equal(t, 1, result.WrittenSessions)
 				requireSessionMessageCount(t, d, "parent", 1)
 				var queued int

@@ -153,7 +153,7 @@ func (r *codeModeReader) expr(expr js.IExpr) {
 			}
 			return
 		}
-		if dot, ok := n.X.(*js.DotExpr); ok && (dot.Y.String() == "then" || dot.Y.String() == "map") {
+		if dot, ok := n.X.(*js.DotExpr); ok && (dot.Y.String() == "then" || dot.Y.String() == "catch" || dot.Y.String() == "finally" || dot.Y.String() == "map") {
 			r.unsupported(n)
 			return
 		}
