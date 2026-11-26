@@ -270,13 +270,13 @@ func TestManagerPauseDrainsAndBlocksBuilds(t *testing.T) {
 		}
 	}()
 	waitFor(t, func() bool { m.mu.Lock(); defer m.mu.Unlock(); return m.paused }, "pause was not acquired")
-	assert.ErrorIs(t, m.StartBuild(BuildRequest{}), ErrBuildRunning)
+	require.ErrorIs(t, m.StartBuild(BuildRequest{}), ErrBuildRunning)
 	started, err := m.TryBuild(t.Context(), BuildRequest{})
 	require.NoError(t, err)
 	assert.False(t, started)
 	select {
 	case <-paused:
-		t.Fatal("pause returned before the build finished")
+		require.FailNow(t, "pause returned before the build finished")
 	default:
 	}
 	close(unblock)
@@ -284,9 +284,9 @@ func TestManagerPauseDrainsAndBlocksBuilds(t *testing.T) {
 	select {
 	case release = <-paused:
 	case <-time.After(10 * time.Second):
-		t.Fatal("pause did not finish")
+		require.FailNow(t, "pause did not finish")
 	}
-	assert.ErrorIs(t, m.StartBuild(BuildRequest{}), ErrBuildRunning)
+	require.ErrorIs(t, m.StartBuild(BuildRequest{}), ErrBuildRunning)
 	release()
 	require.NoError(t, m.StartBuild(BuildRequest{}))
 	m.Wait()
@@ -314,7 +314,7 @@ func TestManagerPauseCanceledLeavesBuildRunning(t *testing.T) {
 	case err := <-done:
 		require.ErrorIs(t, err, context.Canceled)
 	case <-time.After(10 * time.Second):
-		t.Fatal("pause did not stop after cancellation")
+		require.FailNow(t, "pause did not stop after cancellation")
 	}
 	assert.True(t, m.Status().Running)
 	close(unblock)

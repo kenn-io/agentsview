@@ -572,7 +572,7 @@ timeout = '1s'
 			)
 			require.Error(t, err)
 			if tc.deployment {
-				assert.ErrorContains(t, err, "cannot be combined with a [vector] section")
+				require.ErrorContains(t, err, "cannot be combined with a [vector] section")
 			}
 			after, readErr := os.ReadFile(f.Path(configFileName))
 			require.NoError(t, readErr)

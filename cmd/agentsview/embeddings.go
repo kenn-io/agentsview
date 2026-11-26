@@ -56,6 +56,10 @@ const fingerprintDisplayLen = 12
 // cut off.
 var embeddingsDaemonHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
+// The drain stream stays open until active builds finish. The request context
+// cancels it; an overall client timeout would cut off a long-running build.
+var embeddingsSwitchDrainHTTPClient = &http.Client{Timeout: 0}
+
 var errNoReachableEmbeddingsDaemon = errors.New("no reachable local agentsview daemon found")
 
 var restartEmbeddingsDaemon = func(ctx context.Context, out io.Writer) error {
@@ -1308,7 +1312,7 @@ func (c embeddingsDaemonClient) pauseBuilds(ctx context.Context, out io.Writer, 
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
-	client, err := requestsign.ClientFromEnvironment(c.baseURL, http.DefaultClient)
+	client, err := requestsign.ClientFromEnvironment(c.baseURL, embeddingsSwitchDrainHTTPClient)
 	if err != nil {
 		cancel()
 		return nil, err

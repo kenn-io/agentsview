@@ -78,12 +78,12 @@ func TestSwitchDrainWaitsForBuildStartedDuringRecall(t *testing.T) {
 	select {
 	case <-started:
 	case <-time.After(10 * time.Second):
-		t.Fatal("message build did not start")
+		require.FailNow(t, "message build did not start")
 	}
 	require.Eventually(t, func() bool { owner.mu.Lock(); defer owner.mu.Unlock(); return owner.paused }, 10*time.Second, 10*time.Millisecond)
 	select {
 	case err := <-result:
-		t.Fatalf("switch finished while build was active: %v", err)
+		require.FailNow(t, fmt.Sprintf("switch finished while build was active: %v", err))
 	default:
 	}
 	unblockOnce.Do(func() { close(unblock) })
@@ -91,7 +91,7 @@ func TestSwitchDrainWaitsForBuildStartedDuringRecall(t *testing.T) {
 	case err := <-result:
 		require.ErrorIs(t, err, restartErr)
 	case <-time.After(10 * time.Second):
-		t.Fatal("switch did not finish after build")
+		require.FailNow(t, "switch did not finish after build")
 	}
 	assert.Equal(t, 1, strings.Count(output.String(), "Waiting for the current embedding build or setup to finish"))
 }
@@ -116,10 +116,10 @@ func TestSwitchDrainBlocksBuildsUntilCanceled(t *testing.T) {
 	t.Cleanup(release)
 	manager := owner.Manager("")
 	require.NotNil(t, manager)
-	assert.ErrorIs(t, manager.StartBuild(vector.BuildRequest{}), vector.ErrBuildRunning)
+	require.ErrorIs(t, manager.StartBuild(vector.BuildRequest{}), vector.ErrBuildRunning)
 	_, err = client.pauseBuilds(t.Context(), io.Discard, nil)
 	require.ErrorContains(t, err, "already running")
-	assert.ErrorIs(t, manager.StartBuild(vector.BuildRequest{}), vector.ErrBuildRunning)
+	require.ErrorIs(t, manager.StartBuild(vector.BuildRequest{}), vector.ErrBuildRunning)
 	release()
 	require.Eventually(t, func() bool {
 		return manager.StartBuild(vector.BuildRequest{}) == nil
@@ -148,7 +148,7 @@ func TestSwitchDrainStaysClosedDuringShutdown(t *testing.T) {
 	req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, srv.URL+"/api/v1/embeddings/switch-drain", nil)
 	require.NoError(t, err)
 	req.Header.Set("Origin", srv.URL)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = resp.Body.Close() })
 	require.Equal(t, http.StatusOK, resp.StatusCode)

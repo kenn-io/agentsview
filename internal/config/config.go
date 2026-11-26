@@ -4324,6 +4324,7 @@ func (c *Config) vectorEmbeddingsServerCandidate(
 		embeddings, _ := section["embeddings"].(map[string]any)
 		oldModel, _ := embeddings["model"].(string)
 		_, hasServers := embeddings["servers"]
+		preserveDefaultModelConfig := oldModel == "" && !hasServers && model == defaultNomicModel
 		if oldModel == model {
 			servers, _ := embeddings["servers"].(map[string]any)
 			name, _ := embeddings["default_server"].(string)
@@ -4338,7 +4339,7 @@ func (c *Config) vectorEmbeddingsServerCandidate(
 				}
 			}
 		}
-		if embeddings == nil || (oldModel != model && !(oldModel == "" && !hasServers && model == defaultNomicModel)) {
+		if embeddings == nil || (oldModel != model && !preserveDefaultModelConfig) {
 			embeddings = make(map[string]any)
 		}
 		delete(embeddings, "default_server")

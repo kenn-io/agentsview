@@ -1614,8 +1614,8 @@ func TestEmbeddingsSwitchRestartFailurePreservesConfig(t *testing.T) {
 	restartEmbeddingsDaemon = func(context.Context, io.Writer) error { return restartErr }
 	err := runEmbeddingsSwitch(t.Context(), io.Discard, endpoint, "new-model", 3, "")
 	require.ErrorIs(t, err, restartErr)
-	assert.ErrorContains(t, err, "embedding server saved")
-	assert.ErrorContains(t, err, "rerun 'agentsview index embeddings switch'")
+	require.ErrorContains(t, err, "embedding server saved")
+	require.ErrorContains(t, err, "rerun 'agentsview index embeddings switch'")
 	cfg, err := config.LoadReadOnly()
 	require.NoError(t, err)
 	assert.Equal(t, "new-model", cfg.Vector.Embeddings.Model)
@@ -1653,7 +1653,7 @@ func TestEmbeddingsSwitchWaitsForDirectBuildBeforeSaving(t *testing.T) {
 	select {
 	case <-waiting:
 	case <-time.After(5 * time.Second):
-		t.Fatal("switch did not report waiting for the direct build")
+		require.FailNow(t, "switch did not report waiting for the direct build")
 	}
 
 	cfg, err := config.LoadReadOnly()
@@ -1663,16 +1663,16 @@ func TestEmbeddingsSwitchWaitsForDirectBuildBeforeSaving(t *testing.T) {
 
 	select {
 	case <-restartLockAvailable:
-		t.Fatal("switch restarted the daemon while the direct build held the lock")
+		require.FailNow(t, "switch restarted the daemon while the direct build held the lock")
 	default:
 	}
 	require.NoError(t, held.Close())
-	assert.ErrorIs(t, <-result, restartErr)
+	require.ErrorIs(t, <-result, restartErr)
 	select {
 	case available := <-restartLockAvailable:
 		assert.True(t, available, "switch must release the lock before daemon startup")
 	case <-time.After(5 * time.Second):
-		t.Fatal("switch did not restart the daemon")
+		require.FailNow(t, "switch did not restart the daemon")
 	}
 	cfg, err = config.LoadReadOnly()
 	require.NoError(t, err)
@@ -1708,10 +1708,10 @@ func TestWaitForEmbeddingsWriteLockHonorsCancellation(t *testing.T) {
 	select {
 	case <-waiting:
 	case <-time.After(5 * time.Second):
-		t.Fatal("lock wait did not report the active build")
+		require.FailNow(t, "lock wait did not report the active build")
 	}
 	cancel()
-	assert.ErrorIs(t, <-result, context.Canceled)
+	require.ErrorIs(t, <-result, context.Canceled)
 }
 
 func TestEmbeddingsSwitchFailureBeforeSavePreservesConfig(t *testing.T) {
@@ -1757,7 +1757,7 @@ func TestEmbeddingsSwitchFailureBeforeSavePreservesConfig(t *testing.T) {
 			err = runEmbeddingsSwitch(ctx, io.Discard, endpoint, "test-model", 3, "")
 			require.Error(t, err)
 			if tc.cancel {
-				assert.ErrorIs(t, err, context.Canceled)
+				require.ErrorIs(t, err, context.Canceled)
 				assert.NotContains(t, err.Error(), "testing embedding server")
 			}
 			assert.False(t, restarted)
