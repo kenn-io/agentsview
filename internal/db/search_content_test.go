@@ -16,23 +16,34 @@ import (
 func TestContentScanStopsAtDeadline(t *testing.T) {
 	d := testDB(t)
 	requireFTS(t, d)
+	seedSearchSession(t, d, "s1", "project", [][2]string{{"user", "ask opus and fable"}})
 	searcher := &fakeVectorSearcher{}
 	d.SetVectorSearcher(searcher)
 	previous := contentScanTimeout
-	contentScanTimeout = time.Nanosecond
+	// A past deadline makes context.WithDeadline cancel synchronously without
+	// waiting for an OS timer tick (about 15.6ms on Windows).
+	contentScanTimeout = -time.Second
 	t.Cleanup(func() { contentScanTimeout = previous })
 	for _, tc := range []struct {
-		name, mode, pattern string
-		keywordOnly         bool
+		name, mode, pattern, sessionID string
+		keywordOnly                    bool
 	}{
-		{"substring", "substring", "ask opus and fable", false},
-		{"regex", "regex", "ask.*fable", false},
-		{"terms", "terms", "ask opus and fable", false},
-		{"hybrid keyword", "hybrid", "ask opus and fable", true},
-		{"hybrid", "hybrid", "ask opus and fable", false},
+		{"substring", "substring", "ask opus and fable", "", false},
+		{"regex", "regex", "ask.*fable", "", false},
+		{"terms", "terms", "ask opus and fable", "", false},
+		{"session substring", "substring", "ask opus and fable", "s1", false},
+		{"session regex", "regex", "ask.*fable", "s1", false},
+		{"session terms", "terms", "ask opus and fable", "s1", false},
+		{"hybrid keyword", "hybrid", "ask opus and fable", "", true},
+		{"hybrid", "hybrid", "ask opus and fable", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := d.SearchContent(t.Context(), ContentSearchFilter{Mode: tc.mode, Pattern: tc.pattern, KeywordOnly: tc.keywordOnly})
+			_, err := d.SearchContent(t.Context(), ContentSearchFilter{
+				Mode:        tc.mode,
+				Pattern:     tc.pattern,
+				SessionID:   tc.sessionID,
+				KeywordOnly: tc.keywordOnly,
+			})
 			if tc.name == "hybrid" {
 				assert.Positive(t, searcher.calls, "semantic search ran before the keyword scan")
 			}
@@ -46,7 +57,7 @@ func TestFTSSearchIgnoresContentScanDeadline(t *testing.T) {
 	requireFTS(t, d)
 	seedSearchSession(t, d, "s1", "project", [][2]string{{"user", "needle"}})
 	previous := contentScanTimeout
-	contentScanTimeout = time.Nanosecond
+	contentScanTimeout = -time.Second
 	t.Cleanup(func() { contentScanTimeout = previous })
 	page, err := d.SearchContent(t.Context(), ContentSearchFilter{Mode: "fts", Pattern: "needle", SessionID: "s1"})
 	require.NoError(t, err)
