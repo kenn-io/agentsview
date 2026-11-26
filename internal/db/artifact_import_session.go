@@ -155,7 +155,7 @@ func (db *DB) applyArtifactImportedSession(
 				return ArtifactImportedSessionResult{}, err
 			}
 		}
-		if _, err := linkSubagentSessionsFromTx(ctx, tx, append(evidence.oldSeeds, write.Session.ID), evidence.from); err != nil {
+		if _, err := linkSubagentSessionsChangedTx(ctx, tx, append(evidence.oldSeeds, write.Session.ID), map[string]int{write.Session.ID: evidence.from}); err != nil {
 			return ArtifactImportedSessionResult{}, err
 		}
 	}

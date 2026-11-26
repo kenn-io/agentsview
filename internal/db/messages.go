@@ -1857,7 +1857,7 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 	var oldLaunchSeeds []string
 	if from := update.ReplaceFromOrdinal; from != nil {
-		oldLaunchSeeds, err = launchSeedsFrom(ctx, tx, []string{sessionID}, *from)
+		oldLaunchSeeds, err = launchSeedsChanged(ctx, tx, []string{sessionID}, map[string]int{sessionID: *from})
 		if err != nil {
 			return false, err
 		}

@@ -801,10 +801,7 @@ func (e *Engine) resyncBuildLocked(
 			"Relinking archived subagent sessions",
 			"",
 		)
-		err = newDB.DeleteSyncState(ctx, "launch_parent_backfill_v1")
-		if err == nil {
-			repaired, err = newDB.LinkSubagentSessionsContext(ctx)
-		}
+		repaired, err = newDB.LinkSubagentSessionsContext(ctx)
 		pendingLinksUpdated += repaired
 	}
 

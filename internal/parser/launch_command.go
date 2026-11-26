@@ -247,8 +247,7 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 				if !ok {
 					syntax.Walk(w, func(n syntax.Node) bool {
 						if sub, yes := n.(*syntax.CmdSubst); yes {
-							nested := f
-							list(sub.Stmts, nested)
+							list(sub.Stmts, f)
 							return false
 						}
 						return true

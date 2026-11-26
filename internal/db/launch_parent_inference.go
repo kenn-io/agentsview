@@ -400,13 +400,9 @@ func retractInferredLaunchParent(ctx context.Context, tx *sql.Tx, id string) (in
 // launchSeeds adds runs near calls in changed launchers, so late evidence can
 // add or retract a match.
 func launchSeeds(ctx context.Context, tx *sql.Tx, ids []string) ([]string, error) {
-	return launchSeedsFrom(ctx, tx, ids, 0)
-}
-
-func launchSeedsFrom(ctx context.Context, tx *sql.Tx, ids []string, from int) ([]string, error) {
 	changes := make(map[string]int, len(ids))
 	for _, id := range ids {
-		changes[id] = from
+		changes[id] = 0
 	}
 	return launchSeedsChanged(ctx, tx, ids, changes)
 }

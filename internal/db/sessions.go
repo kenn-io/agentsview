@@ -2347,14 +2347,6 @@ func linkSubagentSessionsForSessionsTx(ctx context.Context, tx *sql.Tx, ids []st
 	return linkSubagentSessionsChangedTx(ctx, tx, ids, nil)
 }
 
-func linkSubagentSessionsFromTx(ctx context.Context, tx *sql.Tx, ids []string, from int) (int, error) {
-	changes := make(map[string]int, len(ids))
-	for _, id := range ids {
-		changes[id] = from
-	}
-	return linkSubagentSessionsChangedTx(ctx, tx, ids, changes)
-}
-
 func linkSubagentSessionsChangedTx(ctx context.Context, tx *sql.Tx, ids []string, changes map[string]int) (int, error) {
 	updated := 0
 	seeds := append([]string{}, ids...)
