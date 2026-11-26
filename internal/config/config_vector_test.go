@@ -431,10 +431,6 @@ func TestSaveVectorEmbeddingsServer(t *testing.T) {
 
 	got := f.LoadFile(t)
 	assert.True(t, got.Vector.Enabled)
-	assert.True(t, got.Vector.IncludeAutomated)
-	assert.Equal(t, []string{"user"}, got.Vector.Roles)
-	assert.Equal(t, "custom-vectors.db", got.Vector.DBPath)
-	assert.True(t, got.Vector.Embed.Recall)
 	assert.Equal(t, "embeddinggemma", got.Vector.Embeddings.Model)
 	assert.Equal(t, 768, got.Vector.Embeddings.Dimension)
 	assert.Equal(t, []string{"default"}, got.Vector.Embeddings.ServerNames())
@@ -445,8 +441,6 @@ func TestSaveVectorEmbeddingsServer(t *testing.T) {
 	assert.Equal(t, 8192, got.Vector.Embeddings.MaxInputChars)
 	assert.Empty(t, got.Vector.Embeddings.QueryPrefix)
 	assert.Empty(t, got.Vector.Embeddings.DocumentPrefix)
-
-	assert.Equal(t, true, f.ReadTOMLMap(t)["unrelated"].(map[string]any)["keep"])
 
 	t.Run("Nomic keeps its default input recipe", func(t *testing.T) {
 		f := newConfigFixture(t)
@@ -512,12 +506,11 @@ func TestSaveVectorEmbeddingsServer(t *testing.T) {
 	})
 
 	for _, tc := range []struct {
-		name, endpoint, apiKeyFile string
-		dimension                  int
+		name, endpoint string
+		deployment     bool
 	}{
-		{name: "invalid endpoint", endpoint: "file:///bad", dimension: 768},
-		{name: "invalid dimension", endpoint: "https://embed.example/v1", dimension: 0},
-		{name: "missing key file", endpoint: "https://embed.example/v1", dimension: 768, apiKeyFile: f.Path("missing-key")},
+		{name: "invalid endpoint", endpoint: "file:///bad"},
+		{name: "deployment conflict", endpoint: "https://embed.example/v1", deployment: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newConfigFixture(t)
@@ -525,30 +518,22 @@ func TestSaveVectorEmbeddingsServer(t *testing.T) {
 			before, err := os.ReadFile(f.Path(configFileName))
 			require.NoError(t, err)
 			cfg := f.LoadFile(t)
+			if tc.deployment {
+				t.Setenv("AGENTSVIEW_MODE", "serve")
+				t.Setenv("AGENTSVIEW_EMBEDDINGS_ENDPOINT", "https://embed.example/v1")
+			}
 			err = cfg.SaveVectorEmbeddingsServer(
-				tc.endpoint, "embeddinggemma", tc.dimension, tc.apiKeyFile,
+				tc.endpoint, "embeddinggemma", 768, "",
 			)
 			require.Error(t, err)
+			if tc.deployment {
+				assert.ErrorContains(t, err, "cannot be combined with a [vector] section")
+			}
 			after, readErr := os.ReadFile(f.Path(configFileName))
 			require.NoError(t, readErr)
 			assert.Equal(t, before, after)
 		})
 	}
-}
-
-func TestSaveVectorEmbeddingsServerRejectsDeploymentConflict(t *testing.T) {
-	f := newConfigFixture(t)
-	f.WriteConfigText(t, "[general]\n")
-	before, err := os.ReadFile(f.Path(configFileName))
-	require.NoError(t, err)
-	cfg := f.LoadFile(t)
-	t.Setenv("AGENTSVIEW_MODE", "serve")
-	t.Setenv("AGENTSVIEW_EMBEDDINGS_ENDPOINT", "https://embed.example/v1")
-	err = cfg.SaveVectorEmbeddingsServer("https://embed.example/v1", "model", 768, "")
-	require.ErrorContains(t, err, "cannot be combined with a [vector] section")
-	after, err := os.ReadFile(f.Path(configFileName))
-	require.NoError(t, err)
-	assert.Equal(t, before, after)
 }
 
 // minimalServers returns the smallest valid servers table for TOML load

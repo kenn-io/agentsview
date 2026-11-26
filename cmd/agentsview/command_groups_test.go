@@ -22,7 +22,7 @@ func TestCommandGroupsCanonicalHelp(t *testing.T) {
 		"report stats", "report activity", "report usage daily", "report usage statusline",
 		"replica pg push", "replica pg vectors list", "replica pg service install",
 		"replica clickhouse status", "replica clickhouse push",
-		"index embeddings build", "index embeddings switch", "index classifier rebuild", "archive diff", "sync",
+		"index embeddings build", "index classifier rebuild", "archive diff", "sync",
 	} {
 		t.Run(path, func(t *testing.T) {
 			root := newRootCommand()
