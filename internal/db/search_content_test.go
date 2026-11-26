@@ -67,7 +67,6 @@ func TestContentScanStopsAtDeadline(t *testing.T) {
 		{"substring", "substring", "ask opus and fable", false},
 		{"regex", "regex", "ask.*fable", false},
 		{"terms", "terms", "ask opus and fable", false},
-		{"fts", "fts", "ask opus and fable", false},
 		{"hybrid keyword", "hybrid", "ask opus and fable", true},
 		{"hybrid", "hybrid", "ask opus and fable", false},
 	} {
@@ -79,6 +78,18 @@ func TestContentScanStopsAtDeadline(t *testing.T) {
 			require.ErrorIs(t, err, context.DeadlineExceeded)
 		})
 	}
+}
+
+func TestFTSSearchIgnoresContentScanDeadline(t *testing.T) {
+	d := testDB(t)
+	requireFTS(t, d)
+	seedSearchSession(t, d, "s1", "project", [][2]string{{"user", "needle"}})
+	previous := contentScanTimeout
+	contentScanTimeout = time.Nanosecond
+	t.Cleanup(func() { contentScanTimeout = previous })
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{Mode: "fts", Pattern: "needle", SessionID: "s1"})
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
 }
 
 func TestHybridFTSProbeStopsAtDeadline(t *testing.T) {

@@ -2764,7 +2764,7 @@ func TestSearchContentSharedDeadline(t *testing.T) {
 		name, mode string
 		bounded    bool
 	}{
-		{name: "substring", bounded: true}, {name: "semantic", mode: "semantic"},
+		{name: "substring", bounded: true}, {name: "semantic", mode: "semantic"}, {name: "fts", mode: "fts"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := &deadlineContentService{local: true}

@@ -15,7 +15,7 @@ const MaxListSessionIDs = 100
 
 // ContentSearchContext shares a local keyword deadline with follow-up searches.
 func ContentSearchContext(ctx context.Context, svc SessionService, req ContentSearchRequest) (context.Context, context.CancelFunc) {
-	if SupportsRecallQueries(svc) && len(req.Concepts) == 0 && req.Mode != "semantic" {
+	if SupportsRecallQueries(svc) && len(req.Concepts) == 0 && req.Mode != "semantic" && req.Mode != "fts" {
 		if req.Mode == "hybrid" {
 			return db.WithContentScanBudget(ctx), func() {}
 		}

@@ -361,7 +361,7 @@ func (db *DB) SearchContent(
 	if f.Pattern == "" {
 		return ContentSearchPage{}, nil
 	}
-	if f.Mode != "semantic" && (f.Mode != "hybrid" || f.KeywordOnly) {
+	if f.Mode != "semantic" && f.Mode != "fts" && (f.Mode != "hybrid" || f.KeywordOnly) {
 		var cancel context.CancelFunc
 		ctx, cancel = WithContentScanDeadline(ctx)
 		defer cancel()
@@ -1176,9 +1176,6 @@ func (db *DB) searchContentFTS(
 	// as invalid user input (400). With FTS present, the only SQLITE_ERROR the
 	// MATCH query can raise comes from a malformed pattern.
 	if !db.HasFTS(ctx) {
-		if err := ctx.Err(); err != nil {
-			return ContentSearchPage{}, err
-		}
 		return ContentSearchPage{}, errFTSUnavailable
 	}
 	if _, q, words := routeContentWords(f); words {
