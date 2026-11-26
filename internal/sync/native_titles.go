@@ -263,16 +263,20 @@ func (e *Engine) applyNativeStoreTitles(ctx context.Context, source nativeTitleS
 // nativeRootOwns keeps a store from renaming a same-ID session that
 // belongs to another configured root.
 func (e *Engine) nativeRootOwns(source nativeTitleSource, root, storedPath string) bool {
+	resolved, ok := e.resolveStoredNativePath(storedPath)
+	if !ok {
+		return false
+	}
+	owner, ok := source.sessionRoot(resolved)
+	return ok && sameReconciliationSourcePath(owner, root)
+}
+
+func (e *Engine) resolveStoredNativePath(storedPath string) (string, bool) {
 	if e.pathRewriter != nil {
 		if e.storedPathResolver == nil {
-			return false
+			return "", false
 		}
-		resolved, ok := e.storedPathResolver(storedPath)
-		if !ok {
-			return false
-		}
-		storedPath = resolved
+		return e.storedPathResolver(storedPath)
 	}
-	owner, ok := source.sessionRoot(storedPath)
-	return ok && sameReconciliationSourcePath(owner, root)
+	return storedPath, true
 }

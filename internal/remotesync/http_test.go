@@ -1443,6 +1443,92 @@ func TestHTTPUnchangedMirrorBackfillsAntigravityCLITitles(t *testing.T) {
 	assert.Equal(t, new("Renamed CLI title"), session.SessionName)
 }
 
+func TestHTTPAntigravityCLISummaryMetadataChangeRefreshesSession(t *testing.T) {
+	const parentID = "cccccccc-dddd-eeee-ffff-000000000000"
+	remote := newMirrorTestRemote(t)
+	cliRoot := filepath.Join(remote.dir, "instance-a", "antigravity-acp")
+	conversations := filepath.Join(cliRoot, "conversations")
+	require.NoError(t, os.MkdirAll(conversations, 0o700))
+	dbPath := filepath.Join(conversations, dbtest.AntigravityTitleID+".db")
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(),
+		"CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, step_payload BLOB)")
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	dbtest.WriteAntigravityTitleTranscript(t, cliRoot, "hello")
+
+	writeSummary := func(title, workspaceURI, parent string) {
+		t.Helper()
+		storePath := filepath.Join(cliRoot, parser.AntigravitySummariesDBName)
+		sconn, openErr := sql.Open("sqlite3", storePath)
+		require.NoError(t, openErr)
+		defer func() { require.NoError(t, sconn.Close()) }()
+		_, execErr := sconn.ExecContext(t.Context(), `CREATE TABLE IF NOT EXISTS conversation_summaries (
+			conversation_id TEXT PRIMARY KEY,
+			title TEXT NOT NULL DEFAULT '',
+			workspace_uris TEXT NOT NULL DEFAULT '[]',
+			parent_conversation_id TEXT NOT NULL DEFAULT ''
+		)`)
+		require.NoError(t, execErr)
+		_, execErr = sconn.ExecContext(t.Context(),
+			`INSERT INTO conversation_summaries VALUES (?, ?, ?, ?)
+			 ON CONFLICT(conversation_id) DO UPDATE SET
+			   title = excluded.title,
+			   workspace_uris = excluded.workspace_uris,
+			   parent_conversation_id = excluded.parent_conversation_id`,
+			dbtest.AntigravityTitleID, title, workspaceURI, parent,
+		)
+		require.NoError(t, execErr)
+	}
+	writeSummary("Initial title", `["file:///remote/old-proj"]`, "")
+	remote.targets.Dirs = map[parser.AgentType][]string{parser.AgentAntigravityCLI: {cliRoot}}
+
+	database, hs := newMirrorSync(t, remote, t.TempDir())
+	first, err := hs.Run(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, 1, first.SessionsSynced)
+	const sessionID = "devbox~antigravity-cli:" + dbtest.AntigravityTitleID
+	before, err := database.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	assert.Equal(t, "old_proj", before.Project)
+	assert.Nil(t, before.ParentSessionID)
+	assert.Equal(t, new("Initial title"), before.SessionName)
+
+	// Changing only workspace and parent in conversation_summaries.db must
+	// refresh the archived session on the next delta sync.
+	writeSummary("Initial title", `["file:///remote/new-proj"]`, parentID)
+	metaDelta, err := hs.Run(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, metaDelta.FullReason)
+	assert.Equal(t, 1, metaDelta.FilesProcessed)
+	assert.Zero(t, metaDelta.FallbackProviders)
+	afterMeta, err := database.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, afterMeta)
+	assert.Equal(t, "new_proj", afterMeta.Project)
+	assert.Equal(t, new("devbox~antigravity-cli:"+parentID), afterMeta.ParentSessionID)
+	assert.Equal(t, "subagent", afterMeta.RelationshipType)
+	assert.Equal(t, new("Initial title"), afterMeta.SessionName)
+
+	// Subsequent title-only edit still avoids reparsing the transcript.
+	writeSummary("Renamed title", `["file:///remote/new-proj"]`, parentID)
+	titleDelta, err := hs.Run(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, titleDelta.FullReason)
+	assert.Zero(t, titleDelta.FilesProcessed)
+	assert.Zero(t, titleDelta.FallbackProviders)
+	afterTitle, err := database.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	assert.Equal(t, new("Renamed title"), afterTitle.SessionName)
+	assert.Equal(t, afterMeta.FileHash, afterTitle.FileHash)
+
+	idle, err := hs.Run(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, SyncStats{}, idle)
+}
+
 func TestHTTPAntigravityAppliedStatesCoverMultipleRoots(t *testing.T) {
 	remote := newMirrorTestRemote(t)
 	var roots []string

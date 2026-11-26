@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -1082,6 +1083,92 @@ func TestPlanChangedPathsAntigravityCLITitleStore(t *testing.T) {
 			assert.Empty(t, plan.FallbackProviders, "path %s must not trigger fallback scan", path)
 		}
 	}
+}
+
+func TestPlanChangedPathsAntigravityCLISummaryWorkspaceChangeSelectsOnlyAffected(t *testing.T) {
+	const (
+		idChanged   = "11111111-2222-3333-4444-555555555551"
+		idUnchanged = "11111111-2222-3333-4444-555555555552"
+		idParent    = "cccccccc-dddd-eeee-ffff-000000000000"
+	)
+	container := filepath.Join(t.TempDir(), ".t3", "userdata", "providers", "antigravity")
+	instanceRoot := filepath.Join(container, "hash1", "antigravity-acp")
+	convDir := filepath.Join(instanceRoot, "conversations")
+	require.NoError(t, os.MkdirAll(convDir, 0o700))
+
+	writeSession := func(id, prompt string) string {
+		t.Helper()
+		dbPath := filepath.Join(convDir, id+".db")
+		conn, err := sql.Open("sqlite3", dbPath)
+		require.NoError(t, err)
+		_, err = conn.ExecContext(t.Context(),
+			"CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, step_payload BLOB)")
+		require.NoError(t, err)
+		require.NoError(t, conn.Close())
+		testjsonl.WriteAntigravityBrainTranscript(t, instanceRoot, id,
+			`{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"`+prompt+`"}`+"\n")
+		return dbPath
+	}
+	changedDB := writeSession(idChanged, "first session")
+	writeSession(idUnchanged, "second session")
+
+	store := testjsonl.WriteAntigravitySummaries(t, instanceRoot, map[string]testjsonl.AntigravitySummary{
+		idChanged:   {Title: "Alpha", WorkspaceURIs: `["file:///tmp/ws-old"]`},
+		idUnchanged: {Title: "Beta", WorkspaceURIs: `["file:///tmp/ws-keep"]`},
+	})
+
+	archive := dbtest.OpenTestDB(t)
+	engine := NewEngine(t.Context(), archive, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentAntigravityCLI: {container}},
+		Machine:   "local",
+	})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
+
+	// Title-only edit selects zero transcripts.
+	testjsonl.WriteAntigravitySummaries(t, instanceRoot, map[string]testjsonl.AntigravitySummary{
+		idChanged:   {Title: "Alpha renamed", WorkspaceURIs: `["file:///tmp/ws-old"]`},
+		idUnchanged: {Title: "Beta", WorkspaceURIs: `["file:///tmp/ws-keep"]`},
+	})
+	titlePlan, err := engine.PlanChangedPathsContext(t.Context(), []string{store})
+	require.NoError(t, err)
+	assert.Empty(t, titlePlan.Files)
+	assert.Empty(t, titlePlan.FallbackProviders)
+
+	unchangedBefore, err := archive.GetSessionFull(t.Context(), "antigravity-cli:"+idUnchanged)
+	require.NoError(t, err)
+	require.NotNil(t, unchangedBefore)
+
+	// Workspace and parent change selects only the affected conversation,
+	// while a title-only rename on the sibling reconciles without reparsing.
+	testjsonl.WriteAntigravitySummaries(t, instanceRoot, map[string]testjsonl.AntigravitySummary{
+		idChanged:   {Title: "Alpha renamed", WorkspaceURIs: `["file:///tmp/ws-new"]`, ParentID: idParent},
+		idUnchanged: {Title: "Beta renamed", WorkspaceURIs: `["file:///tmp/ws-keep"]`},
+	})
+	metaPlan, err := engine.PlanChangedPathsContext(t.Context(), []string{store})
+	require.NoError(t, err)
+	assert.Empty(t, metaPlan.FallbackProviders)
+	require.Len(t, metaPlan.Files, 1)
+	assert.Equal(t, changedDB, metaPlan.Files[0].Path)
+
+	res, err := engine.SyncChangedPathPlanContext(t.Context(), metaPlan, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Stats.Synced)
+	assert.Equal(t, 1, res.Stats.TitlesUpdated)
+	updated, err := archive.GetSessionFull(t.Context(), "antigravity-cli:"+idChanged)
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, "/tmp/ws-new", updated.Cwd)
+	assert.Equal(t, "ws_new", updated.Project)
+	assert.Equal(t, new("antigravity-cli:"+idParent), updated.ParentSessionID)
+	assert.Equal(t, "subagent", updated.RelationshipType)
+	assert.Equal(t, new("Alpha renamed"), updated.SessionName)
+
+	unchangedAfter, err := archive.GetSessionFull(t.Context(), "antigravity-cli:"+idUnchanged)
+	require.NoError(t, err)
+	require.NotNil(t, unchangedAfter)
+	assert.Equal(t, new("Beta renamed"), unchangedAfter.SessionName)
+	assert.Equal(t, unchangedBefore.FileHash, unchangedAfter.FileHash)
 }
 
 // Codex's own databases and lock files in its home directory change

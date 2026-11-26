@@ -111,6 +111,43 @@ func antigravityHashCoversSummary(hash, digest string) bool {
 	return hash != "" && strings.HasSuffix(hash, "."+digest)
 }
 
+// AntigravityHashCoversSummary reports whether a stored session hash already
+// reflects digest (workspace and parent summary values).
+func AntigravityHashCoversSummary(hash, digest string) bool {
+	return antigravityHashCoversSummary(hash, digest)
+}
+
+// AntigravityCLISummaryID maps a raw Antigravity CLI session ID (including
+// implicit- prefixed IDs) to its conversation_summaries.conversation_id key.
+func AntigravityCLISummaryID(rawID string) string {
+	return strings.TrimPrefix(rawID, antigravityImplicitTag)
+}
+
+// InvalidateAntigravitySummaries expires the cached summary read for root.
+func InvalidateAntigravitySummaries(root string) {
+	path := filepath.Join(filepath.Clean(root), AntigravitySummariesDBName)
+	antigravitySummariesCache.Lock()
+	defer antigravitySummariesCache.Unlock()
+	if prior, ok := antigravitySummariesCache.stores[path]; ok {
+		prior.readAt = time.Time{}
+		antigravitySummariesCache.stores[path] = prior
+	}
+}
+
+// AntigravitySummaryDigests returns the non-title summary fingerprint digest
+// (workspace and parent) for every conversation in root's summary store.
+func AntigravitySummaryDigests(ctx context.Context, root string) (map[string]string, error) {
+	summaries := loadAntigravitySummaries(ctx, root)
+	if summaries.err != nil {
+		return nil, summaries.err
+	}
+	digests := make(map[string]string, len(summaries.byID))
+	for id := range summaries.byID {
+		digests[id] = summaries.fingerprintDigest(id)
+	}
+	return digests, nil
+}
+
 type antigravitySummariesSnapshot struct {
 	state     SQLiteContainerState
 	summaries antigravitySummaries
