@@ -16,7 +16,7 @@ func TestLaunchCommands(t *testing.T) {
 		{`codex --model="$MODEL" exec hi`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}}},
 		{`claude --model "$MODEL" -p hi`, []LaunchCommand{{Agent: "claude", Dirs: []string{"/repo"}}}},
 		{`codex -C "$DIR" exec hi`, []LaunchCommand{{Agent: "codex", Unknown: true}}},
-		{`codex -C /Users/example/project exec hi`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/Users/example/project"}}}},
+		{`codex -C /tmp/project exec hi`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/tmp/project"}}}},
 		{`codex "$MODE"`, []LaunchCommand{{Agent: "codex", Unknown: true}}},
 		{`sudo "$BIN" exec`, []LaunchCommand{{Agent: "codex", Unknown: true}, {Agent: "claude", Unknown: true}}},
 		{`env "$BIN" -p`, []LaunchCommand{{Agent: "codex", Unknown: true}, {Agent: "claude", Unknown: true}}},
