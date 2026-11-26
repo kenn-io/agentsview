@@ -1029,10 +1029,6 @@ func TestResyncBackfillsLaunchesAfterBulkImport(t *testing.T) {
 	require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
 	_, err := database.GetSessionExternalParent(t.Context(), "codex:"+childID)
 	require.NoError(t, err)
-	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(), `DELETE FROM session_external_parents; UPDATE sessions SET parent_session_id=NULL, relationship_type='' WHERE id=?`, "codex:"+childID)
-		return err
-	}))
 	stats := engine.ResyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "%v", stats.Warnings)
 	link, err := database.GetSessionExternalParent(t.Context(), "codex:"+childID)
