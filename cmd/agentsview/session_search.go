@@ -107,6 +107,8 @@ func newSessionSearchCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			ctx, cancelFollowups := service.ContentSearchFollowupContext(ctx, svc, req)
+			defer cancelFollowups()
 			cliHints := contentSearchHints(ctx, cmd, svc, req, res)
 			if res.Note != "" {
 				fmt.Fprintln(cmd.ErrOrStderr(), sanitizeTerminal(res.Note))

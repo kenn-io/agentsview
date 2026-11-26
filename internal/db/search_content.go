@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -27,9 +28,54 @@ const (
 // contentScanTimeout stops a keyword search so it frees its reader connection.
 var contentScanTimeout = 2 * time.Minute
 
+const ContentScanDeadlineHeader = "X-AgentsView-Content-Scan-Deadline"
+
+type contentScanBudgetKey struct{}
+type contentScanBudget struct {
+	mu       sync.Mutex
+	deadline time.Time
+}
+
+// WithContentScanBudget shares the first keyword deadline across searches.
+func WithContentScanBudget(ctx context.Context) context.Context {
+	return context.WithValue(ctx, contentScanBudgetKey{}, &contentScanBudget{})
+}
+
+// ContentScanDeadline reports the keyword deadline once a scan has started.
+func ContentScanDeadline(ctx context.Context) time.Time {
+	budget, _ := ctx.Value(contentScanBudgetKey{}).(*contentScanBudget)
+	if budget == nil {
+		return time.Time{}
+	}
+	budget.mu.Lock()
+	defer budget.mu.Unlock()
+	return budget.deadline
+}
+
+// SetContentScanDeadline records a deadline received from the local daemon.
+func SetContentScanDeadline(ctx context.Context, deadline time.Time) {
+	budget, _ := ctx.Value(contentScanBudgetKey{}).(*contentScanBudget)
+	if budget == nil || deadline.IsZero() {
+		return
+	}
+	budget.mu.Lock()
+	defer budget.mu.Unlock()
+	if budget.deadline.IsZero() || deadline.Before(budget.deadline) {
+		budget.deadline = deadline
+	}
+}
+
 // WithContentScanDeadline bounds a local keyword search and its follow-ups.
 func WithContentScanDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(ctx, contentScanTimeout)
+	deadline := ContentScanDeadline(ctx)
+	if deadline.IsZero() {
+		deadline = time.Now().Add(contentScanTimeout)
+		SetContentScanDeadline(ctx, deadline)
+		if shared := ContentScanDeadline(ctx); !shared.IsZero() {
+			deadline = shared
+		}
+	}
+	return context.WithDeadline(ctx, deadline)
 }
 
 // ContentSearchFilter parameterises SearchContent. Session-scoping fields

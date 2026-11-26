@@ -15,7 +15,18 @@ const MaxListSessionIDs = 100
 
 // ContentSearchContext shares a local keyword deadline with follow-up searches.
 func ContentSearchContext(ctx context.Context, svc SessionService, req ContentSearchRequest) (context.Context, context.CancelFunc) {
-	if SupportsRecallQueries(svc) && len(req.Concepts) == 0 && req.Mode != "semantic" && req.Mode != "hybrid" {
+	if SupportsRecallQueries(svc) && len(req.Concepts) == 0 && req.Mode != "semantic" {
+		if req.Mode == "hybrid" {
+			return db.WithContentScanBudget(ctx), func() {}
+		}
+		return db.WithContentScanDeadline(ctx)
+	}
+	return ctx, func() {}
+}
+
+// ContentSearchFollowupContext applies the hybrid keyword budget after the primary search.
+func ContentSearchFollowupContext(ctx context.Context, svc SessionService, req ContentSearchRequest) (context.Context, context.CancelFunc) {
+	if SupportsRecallQueries(svc) && len(req.Concepts) == 0 && req.Mode == "hybrid" {
 		return db.WithContentScanDeadline(ctx)
 	}
 	return ctx, func() {}

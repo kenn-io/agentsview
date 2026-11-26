@@ -2737,6 +2737,16 @@ func TestSearchContentSharedDeadline(t *testing.T) {
 	}
 }
 
+func TestHybridFollowupsShareDeadline(t *testing.T) {
+	fake := &deadlineContentService{local: true}
+	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+	_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Mode: "hybrid", IncludeActive: true})
+	require.NoError(t, err)
+	require.Greater(t, len(fake.deadlines), 1)
+	assert.False(t, fake.bounded[0], "the primary semantic search keeps its existing wait")
+	assert.True(t, fake.bounded[1], "follow-up searches share a keyword deadline")
+}
+
 type timeoutContentService struct{ service.SessionService }
 
 func (s timeoutContentService) SearchContent(context.Context, service.ContentSearchRequest) (*service.ContentSearchResult, error) {

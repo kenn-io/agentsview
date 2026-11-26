@@ -1218,6 +1218,8 @@ func (t *toolset) searchContent(
 	if err != nil {
 		return nil, searchContentOut{}, err
 	}
+	ctx, cancelFollowups := service.ContentSearchFollowupContext(ctx, t.svc, req)
+	defer cancelFollowups()
 	legacy := cutoff != "" && !res.ActiveFilterApplied
 	out := searchContentOut{
 		Matches:        make([]contentMatch, 0, len(res.Matches)),
