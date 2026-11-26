@@ -290,6 +290,9 @@ func TestShellCalls(t *testing.T) {
 	}{
 		{"conditional and", `flag && tools.exec_command({cmd:"codex exec hi"})`, "", 1, true, false, "", ""},
 		{"conditional or", `flag || tools.exec_command({cmd:"codex exec hi"})`, "", 1, true, false, "", ""},
+		{"promise catch", `await tools.exec_command({cmd:"codex exec hi", workdir:"/repo"}).catch(() => {})`, "", 1, true, false, "", ""},
+		{"promise finally", `await tools.exec_command({cmd:"codex exec hi", workdir:"/repo"}).finally(() => {})`, "", 1, true, false, "", ""},
+		{"promise then", `await tools.exec_command({cmd:"codex exec hi", workdir:"/repo"}).then(() => {})`, "", 1, true, false, "", ""},
 		{"conditional", `if (false) { tools.exec_command({cmd:"codex exec hi"}) }`, "", 1, true, false, "", ""},
 		{"double quote", `text(await tools.exec_command({cmd:"git commit -m \"fix\""}))`, `git commit -m "fix"`, 1, false, false, "", ""},
 		{"single quote", `text(await tools.exec_command({cmd:'git commit -m fix'}))`, `git commit -m fix`, 1, false, false, "", ""},

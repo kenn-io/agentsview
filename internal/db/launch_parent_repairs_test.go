@@ -99,16 +99,3 @@ func TestStagedMetadataOnlyReparseRelinks(t *testing.T) {
 	require.Equal(t, "/other", got.Cwd)
 	assert.Equal(t, "", repairTestParent(t, d, "R"), "run moved to /other but stays under P")
 }
-
-func TestCodeModePromiseChainLaunch(t *testing.T) {
-	for _, in := range []string{
-		`await tools.exec_command({cmd:"codex exec hi", workdir:"/repo"}).catch(() => {})`,
-		`await tools.exec_command({cmd:"codex exec hi", workdir:"/repo"}).finally(() => {})`,
-		`await tools.exec_command({cmd:"codex exec hi", workdir:"/repo"}).then(() => {})`,
-	} {
-		calls, ok := codeModeCalls(in)
-		require.True(t, ok, in)
-		require.Len(t, calls, 1, in)
-		assert.True(t, calls[0].unknown, in)
-	}
-}
