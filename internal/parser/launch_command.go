@@ -151,11 +151,13 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 			return f
 		case *syntax.IfClause:
 			cond := list(c.Cond, f)
+			start := len(out)
 			yes := list(c.Then, cond)
 			no := cond
 			if c.Else != nil {
 				no = run(&syntax.Stmt{Cmd: c.Else}, cond)
 			}
+			markConditionalLaunches(out[start:])
 			return mergeShellFlows(yes, no)
 		case *syntax.CallExpr:
 			for _, assign := range c.Assigns {
@@ -252,10 +254,6 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 					}
 				}
 				for i := 1; i < len(args); i++ {
-					if program != "eval" && program != "xargs" && program != "bash" && program != "sh" && program != "zsh" && !dynamic[i] && (launchProgram(args[i]) == "codex" || launchProgram(args[i]) == "claude") {
-						run(&syntax.Stmt{Cmd: &syntax.CallExpr{Args: c.Args[i:]}}, f)
-						return f
-					}
 					for _, agent := range []string{"codex", "claude"} {
 						if launchProgram(args[i]) == agent || dynamic[i] && (i == 1 || i+1 < len(args) || program == "eval" || (program == "bash" || program == "sh" || program == "zsh") && (args[i-1] == "-c" || args[i-1] == "-lc")) {
 							emit(agent, f, true)
@@ -281,7 +279,7 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 			launch := f
 			modeAt := -1
 			uncertain := false
-			for i := 1; i < len(args); i++ {
+			for i := 1; i < len(args) && args[i] != "--"; i++ {
 				if program == "codex" && ((args[i] == "-C" || args[i] == "--cd") && i+1 < len(args) || strings.HasPrefix(args[i], "--cd=")) {
 					dir := strings.TrimPrefix(args[i], "--cd=")
 					if dir == args[i] {
@@ -349,6 +347,12 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 	}
 	list(file.Stmts, initial)
 	return out
+}
+
+func markConditionalLaunches(launches []LaunchCommand) {
+	for i := range launches {
+		launches[i].Unknown = true
+	}
 }
 
 func shellCommandArgument(program string, args []string) int {

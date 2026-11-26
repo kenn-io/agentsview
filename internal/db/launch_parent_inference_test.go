@@ -64,6 +64,10 @@ func TestLaunchParentEvidence(t *testing.T) {
 		want                                                    string
 		parentAgent, childAgent, callCwd, started               string
 	}{
+		{"wrapped print", `{"command":"env echo codex exec"}`, "Bash", "/repo", "local", "/repo", "local", false, "", "", "", "", ""},
+		{"option terminator", `{"command":"codex exec -- '--cd=/other'"}`, "Bash", "/repo", "local", "/repo", "local", false, "candidate", "", "", "", ""},
+		{"conditional branch", `{"command":"if false; then codex exec hi; fi"}`, "Bash", "/repo", "local", "/repo", "local", false, "", "", "", "", ""},
+		{"conditional absolute directory", `{"command":"if false; then codex -C /repo exec hi; fi"}`, "Bash", "/repo", "local", "/repo", "local", false, "", "", "", "", ""},
 		{"possible alone", `{"command":"test -d /repo && codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", false, "candidate", "", "", "", ""},
 		{"possible competitor", `{"command":"test -d /repo && codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
 		{"missing folder", `{"command":"codex exec hi"}`, "Bash", "", "local", "/repo", "local", false, "", "", "", "", ""},
