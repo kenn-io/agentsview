@@ -1749,11 +1749,41 @@ func TestSearchContent_ConceptsMapping(t *testing.T) {
 type listingMessageSpy struct {
 	service.SessionService
 	filters []service.MessageFilter
+	err     error
 }
 
 func (s *listingMessageSpy) Messages(ctx context.Context, id string, f service.MessageFilter) (*service.MessageList, error) {
 	s.filters = append(s.filters, f)
+	if s.err != nil {
+		return nil, s.err
+	}
 	return s.SessionService.Messages(ctx, id, f)
+}
+
+func TestSearchContentListingMessageError(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSessionWithMessages(t, d, "session-a", "project-a", []db.Message{dbtest.UserMsg("session-a", 0, "hello")}, dbtest.WithMessageCounts(1, 1))
+	otherErr := errors.New("message read failed")
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"deadline", context.DeadlineExceeded},
+		{"other", otherErr},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spy := &listingMessageSpy{SessionService: ts.svc, err: tc.err}
+			tool := &toolset{svc: spy, now: ts.now}
+			_, _, err := tool.searchContent(t.Context(), nil, searchContentIn{SessionID: "session-a"})
+			require.ErrorIs(t, err, tc.err)
+			require.NotEmpty(t, spy.filters)
+			if tc.name == "deadline" {
+				assert.ErrorContains(t, err, "retry with date_from, project, or session_id")
+			} else {
+				assert.Equal(t, otherErr, err)
+			}
+		})
+	}
 }
 
 func TestSearchContent_ListSessionMessages(t *testing.T) {

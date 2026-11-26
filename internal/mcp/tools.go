@@ -1314,7 +1314,7 @@ func (t *toolset) searchContentMatches(ctx context.Context, req service.ContentS
 			From: &match.Ordinal, Limit: 1, ExpectedRevision: match.TranscriptRevision,
 		})
 		if err != nil {
-			return nil, err
+			return nil, contentSearchError(err)
 		}
 		if len(messages.Messages) != 1 || messages.Messages[0].Ordinal != match.Ordinal {
 			return nil, service.ErrSourceChanged
