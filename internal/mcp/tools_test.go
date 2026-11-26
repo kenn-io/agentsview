@@ -1752,6 +1752,56 @@ type listingMessageSpy struct {
 	err     error
 }
 
+type listingHTTPService struct {
+	service.SessionService
+	search service.SessionService
+}
+
+func (s *listingHTTPService) SearchContent(ctx context.Context, req service.ContentSearchRequest) (*service.ContentSearchResult, error) {
+	return s.search.SearchContent(ctx, req)
+}
+
+func (s *listingHTTPService) Messages(ctx context.Context, id string, filter service.MessageFilter) (*service.MessageList, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return &service.MessageList{Messages: []db.Message{{SessionID: id, Ordinal: *filter.From, Content: "hello"}}}, nil
+}
+
+func TestSearchContentListingUsesHTTPDeadline(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSessionWithMessages(t, d, "session-a", "project-a", []db.Message{dbtest.UserMsg("session-a", 0, "hello")}, dbtest.WithMessageCounts(1, 1))
+	for _, tc := range []struct {
+		name     string
+		deadline bool
+	}{
+		{"SQLite deadline", true},
+		{"replica without deadline", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if tc.deadline {
+					w.Header().Set(db.ContentScanDeadlineHeader, time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano))
+				}
+				_, _ = w.Write([]byte(`{"matches":[{"session_id":"session-a","ordinal":0}]}`))
+			}))
+			t.Cleanup(daemon.Close)
+			svc := &listingHTTPService{SessionService: ts.svc, search: servicehttp.NewHTTPBackend(daemon.URL, "", false, "")}
+			tool := &toolset{svc: svc, now: ts.now}
+			_, out, err := tool.searchContent(t.Context(), nil, searchContentIn{SessionID: "session-a"})
+			if tc.deadline {
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+				assert.ErrorContains(t, err, "retry with date_from, project, or session_id")
+			} else {
+				require.NoError(t, err)
+				require.Len(t, out.Matches, 1)
+				assert.Equal(t, "hello", out.Matches[0].Snippet)
+			}
+		})
+	}
+}
+
 func (s *listingMessageSpy) Messages(ctx context.Context, id string, f service.MessageFilter) (*service.MessageList, error) {
 	s.filters = append(s.filters, f)
 	if s.err != nil {

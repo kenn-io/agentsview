@@ -1214,12 +1214,17 @@ func (t *toolset) searchContent(
 	}
 	ctx, cancel := service.ContentSearchContext(ctx, t.svc, req)
 	defer cancel()
-	res, err := t.searchContentMatches(ctx, req, listing)
+	res, err := t.svc.SearchContent(ctx, req)
 	if err != nil {
-		return nil, searchContentOut{}, err
+		return nil, searchContentOut{}, contentSearchError(err)
 	}
 	ctx, cancelFollowups := service.ContentSearchFollowupContext(ctx, t.svc, req)
 	defer cancelFollowups()
+	if listing {
+		if err := t.expandListingMessages(ctx, res); err != nil {
+			return nil, searchContentOut{}, err
+		}
+	}
 	legacy := cutoff != "" && !res.ActiveFilterApplied
 	out := searchContentOut{
 		Matches:        make([]contentMatch, 0, len(res.Matches)),
@@ -1303,21 +1308,17 @@ func (t *toolset) searchContent(
 	return nil, out, nil
 }
 
-func (t *toolset) searchContentMatches(ctx context.Context, req service.ContentSearchRequest, listing bool) (*service.ContentSearchResult, error) {
-	res, err := t.svc.SearchContent(ctx, req)
-	if err != nil || !listing {
-		return res, contentSearchError(err)
-	}
+func (t *toolset) expandListingMessages(ctx context.Context, res *service.ContentSearchResult) error {
 	for i := range res.Matches {
 		match := &res.Matches[i]
 		messages, err := t.svc.Messages(ctx, match.SessionID, service.MessageFilter{
 			From: &match.Ordinal, Limit: 1, ExpectedRevision: match.TranscriptRevision,
 		})
 		if err != nil {
-			return nil, contentSearchError(err)
+			return contentSearchError(err)
 		}
 		if len(messages.Messages) != 1 || messages.Messages[0].Ordinal != match.Ordinal {
-			return nil, service.ErrSourceChanged
+			return service.ErrSourceChanged
 		}
 		body := cmp.Or(messages.Messages[0].Content, messages.Messages[0].ThinkingText)
 		match.Snippet = (db.ContentSearchFilter{}).BuildSnippet(body, 0, 0)
@@ -1326,7 +1327,7 @@ func (t *toolset) searchContentMatches(ctx context.Context, req service.ContentS
 			match.Snippet += "..."
 		}
 	}
-	return res, nil
+	return nil
 }
 
 func contentSearchError(err error) error {
