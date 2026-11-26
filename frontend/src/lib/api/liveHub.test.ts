@@ -611,4 +611,19 @@ describe("shared live stream", () => {
     expect(port.postMessage).toHaveBeenLastCalledWith({ type: "closed" });
     hub.close();
   });
+
+  it("batches initial port updates into one combined stream", () => {
+    const hub = new LiveHub();
+    const a = { postMessage: vi.fn() };
+    const b = { postMessage: vi.fn() };
+
+    hub.batch(() => {
+      hub.update(a, request("a"));
+      hub.update(b, request("b"));
+    });
+
+    expect(sources).toHaveLength(1);
+    expect(sources[0]!.url.searchParams.getAll("session")).toEqual(["a", "b"]);
+    hub.close();
+  });
 });
