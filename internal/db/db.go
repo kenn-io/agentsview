@@ -1545,6 +1545,12 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 	d.mu.Lock()
 	_, err = d.getWriter().ExecContext(ctx, "ALTER TABLE sessions ADD COLUMN tools_generation TEXT")
 	if err == nil {
+		_, err = d.getWriter().ExecContext(ctx, "ALTER TABLE sessions ADD COLUMN trends_generation TEXT")
+	}
+	if err == nil {
+		_, err = d.getWriter().ExecContext(ctx, trendsGenerationSchemaSQL)
+	}
+	if err == nil {
 		_, err = d.getWriter().ExecContext(ctx, usageGenerationSchemaSQL)
 	}
 	if err == nil {
@@ -3145,6 +3151,24 @@ END;
 CREATE TRIGGER IF NOT EXISTS messages_dashboard_generation_update AFTER UPDATE OF content_length ON messages
 WHEN OLD.content_length IS NOT NEW.content_length BEGIN
     UPDATE sessions SET tools_generation=NULL WHERE id=NEW.session_id AND tools_generation IS NOT NULL;
+END;
+CREATE TRIGGER IF NOT EXISTS trends_parts_messages_insert AFTER INSERT ON messages BEGIN
+    UPDATE sessions SET trends_generation=lower(hex(randomblob(16))) WHERE id=NEW.session_id;
+END;
+CREATE TRIGGER IF NOT EXISTS trends_parts_messages_delete AFTER DELETE ON messages BEGIN
+    UPDATE sessions SET trends_generation=lower(hex(randomblob(16))) WHERE id=OLD.session_id;
+END;
+CREATE TRIGGER IF NOT EXISTS trends_parts_messages_update AFTER UPDATE OF session_id, ordinal, role, timestamp, content_length, source_subtype, is_system, has_thinking ON messages BEGIN
+    UPDATE sessions SET trends_generation=lower(hex(randomblob(16))) WHERE id IN (OLD.session_id, NEW.session_id);
+END;
+CREATE TRIGGER IF NOT EXISTS trends_parts_tools_insert AFTER INSERT ON tool_calls BEGIN
+    UPDATE sessions SET trends_generation=lower(hex(randomblob(16))) WHERE id=NEW.session_id;
+END;
+CREATE TRIGGER IF NOT EXISTS trends_parts_tools_delete AFTER DELETE ON tool_calls BEGIN
+    UPDATE sessions SET trends_generation=lower(hex(randomblob(16))) WHERE id=OLD.session_id;
+END;
+CREATE TRIGGER IF NOT EXISTS trends_parts_tools_update AFTER UPDATE OF session_id ON tool_calls BEGIN
+    UPDATE sessions SET trends_generation=lower(hex(randomblob(16))) WHERE id IN (OLD.session_id, NEW.session_id);
 END;
 `
 

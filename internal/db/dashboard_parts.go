@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json/v2"
-	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -15,7 +14,7 @@ import (
 )
 
 // Increment when dashboard counts, ComputeSessionVelocity, or parser.IsClaudeHookSubtype changes.
-const dashboardPartsVersion = 2
+const dashboardPartsVersion = 3
 
 var dashboardPartsReadObserver func([]string)
 
@@ -102,28 +101,20 @@ func (db *DB) dashboardSessions(ctx context.Context, f AnalyticsFilter) ([]dashb
 	loc := f.location()
 	dateCol := "COALESCE(NULLIF(s.started_at, ''), s.created_at)"
 	where, args := f.buildWhereWithDate(dateCol, true, "s.id")
-	rows, err := db.getReader().QueryContext(ctx, `SELECT s.id, `+dateCol+`, s.agent, s.message_count, s.transcript_revision || '|' || COALESCE(s.trends_generation, '') || '|' || s.message_count, s.tools_generation, `+toolsSessionFingerprintSQL+` FROM sessions s WHERE `+where+` ORDER BY s.id`, args...)
+	rows, err := db.getReader().QueryContext(ctx, `SELECT s.id, `+dateCol+`, s.agent, s.message_count, s.transcript_revision || '|' || COALESCE(s.trends_generation, '') || '|' || s.message_count FROM sessions s WHERE `+where+` ORDER BY s.id`, args...)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer rows.Close()
 	var sessions []dashboardSession
-	var dirty []string
 	versions := make(map[string]string)
 	for rows.Next() {
 		var s dashboardSession
-		var generation *string
-		var toolsFingerprint string
-		if err := rows.Scan(&s.ID, &s.Date, &s.Agent, &s.MessageCount, &s.Fingerprint, &generation, &toolsFingerprint); err != nil {
+		if err := rows.Scan(&s.ID, &s.Date, &s.Agent, &s.MessageCount, &s.Fingerprint); err != nil {
 			return nil, nil, err
 		}
 		if !InDateRange(LocalDate(s.Date, loc), f.From, f.To) {
 			continue
-		}
-		if generation == nil {
-			dirty = append(dirty, s.ID)
-		} else {
-			s.Fingerprint += "|" + toolsFingerprint
 		}
 		sessions = append(sessions, s)
 		versions[s.ID] = s.Fingerprint
@@ -133,18 +124,6 @@ func (db *DB) dashboardSessions(ctx context.Context, f AnalyticsFilter) ([]dashb
 	}
 	if err := rows.Close(); err != nil {
 		return nil, nil, err
-	}
-	if len(dirty) > 0 {
-		fingerprints, err := db.stampToolsSessions(ctx, dirty)
-		if err != nil {
-			return nil, nil, err
-		}
-		for i := range sessions {
-			if fingerprint, ok := fingerprints[sessions[i].ID]; ok {
-				sessions[i].Fingerprint += "|" + fingerprint
-				versions[sessions[i].ID] = sessions[i].Fingerprint
-			}
-		}
 	}
 	return sessions, versions, nil
 }
@@ -170,10 +149,6 @@ func (db *DB) dashboardParts(ctx context.Context, f AnalyticsFilter) ([]dashboar
 	}
 	sessions, versions, err := db.dashboardSessions(ctx, f)
 	release()
-	if errors.Is(err, ErrWriterClosed) {
-		// The maintenance worker owns the writer; direct reads can still use the reader.
-		return nil, nil, false, nil
-	}
 	if err != nil {
 		return nil, nil, false, err
 	}
