@@ -717,3 +717,38 @@ func TestUsageOnlyBatchWritesClearExistingFriction(t *testing.T) {
 		})
 	}
 }
+
+func TestWriteSessionBatchAtomicLinksSpawnAfterCommit(t *testing.T) {
+	for _, failLink := range []bool{false, true} {
+		t.Run(fmt.Sprintf("fail=%t", failLink), func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "child", "project")
+			if failLink {
+				_, err := d.getWriter().ExecContext(t.Context(), `CREATE TRIGGER fail_batch_link BEFORE UPDATE OF parent_session_id ON sessions WHEN NEW.id='child' AND NEW.parent_session_id='parent' BEGIN SELECT RAISE(FAIL, 'injected link failure'); END`)
+				require.NoError(t, err)
+			}
+			write := messageCountWrite("parent", 1)
+			write.Messages[0].Role = "assistant"
+			write.Messages[0].ToolCalls = []ToolCall{{ToolName: "Agent", Category: "Task", SubagentSessionID: "child"}}
+			result, err := d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{write})
+			if failLink {
+				require.ErrorContains(t, err, "injected link failure")
+				assert.Equal(t, 1, result.WrittenSessions)
+				requireSessionMessageCount(t, d, "parent", 1)
+				var queued int
+				require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT count(*) FROM subagent_parent_repair_queue WHERE session_id='parent'`).Scan(&queued))
+				assert.Equal(t, 1, queued)
+				_, err = d.getWriter().ExecContext(t.Context(), `DROP TRIGGER fail_batch_link`)
+				require.NoError(t, err)
+				_, err = d.RepairQueuedSubagentParentsContext(t.Context(), nil)
+				require.NoError(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			child, err := d.GetSession(t.Context(), "child")
+			require.NoError(t, err)
+			require.NotNil(t, child.ParentSessionID)
+			assert.Equal(t, "parent", *child.ParentSessionID)
+		})
+	}
+}

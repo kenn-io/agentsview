@@ -340,6 +340,12 @@ func (db *DB) WriteSessionBatchAtomic(ctx context.Context,
 		return result, err
 	}
 
+	for _, id := range writtenUsageIDs {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO subagent_parent_repair_queue(session_id) VALUES (?) ON CONFLICT(session_id) DO NOTHING`, id); err != nil {
+			return result, fmt.Errorf("queueing batch parent repair for %s: %w", id, err)
+		}
+	}
+
 	if len(beforeCommit) > 0 && beforeCommit[0] != nil {
 		if err := beforeCommit[0](); err != nil {
 			result.WrittenSessions = 0
@@ -354,6 +360,22 @@ func (db *DB) WriteSessionBatchAtomic(ctx context.Context,
 	}
 	db.notifyUsageSessions(writtenUsageIDs)
 	pendingRecallRevocations.flush()
+	linkTx, err := db.getWriter().BeginTx(ctx, nil)
+	if err != nil {
+		return result, fmt.Errorf("beginning batch parent linking: %w", err)
+	}
+	defer func() { _ = linkTx.Rollback() }()
+	if _, err := linkSubagentSessionsForSessionsTx(ctx, linkTx, writtenUsageIDs); err != nil {
+		return result, fmt.Errorf("linking batch parents: %w", err)
+	}
+	for _, id := range writtenUsageIDs {
+		if _, err := linkTx.ExecContext(ctx, `DELETE FROM subagent_parent_repair_queue WHERE session_id=?`, id); err != nil {
+			return result, fmt.Errorf("clearing batch parent repair for %s: %w", id, err)
+		}
+	}
+	if err := linkTx.Commit(); err != nil {
+		return result, fmt.Errorf("committing batch parent linking: %w", err)
+	}
 	return result, nil
 }
 
