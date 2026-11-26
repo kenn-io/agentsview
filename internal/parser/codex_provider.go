@@ -298,8 +298,7 @@ func (p *codexProvider) RawCaptureSourcesForChangedPath(
 			if err != nil {
 				return nil, err
 			}
-			source = preferred
-			return []SourceRef{source}, nil
+			return []SourceRef{preferred}, nil
 		}
 	}
 	return nil, nil
@@ -1400,8 +1399,7 @@ func (s codexSourceSet) SourcesForChangedPath(
 			if err != nil {
 				return nil, err
 			}
-			source = preferred
-			return []SourceRef{source}, nil
+			return []SourceRef{preferred}, nil
 		}
 	}
 	return nil, nil
