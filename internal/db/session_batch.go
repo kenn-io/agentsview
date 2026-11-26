@@ -181,7 +181,6 @@ func (db *DB) WriteSessionBatchContext(
 	ctxTx := contextTransaction{ctx: ctx, tx: tx}
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 	var writtenUsageIDs []string
-	var oldLaunchSeeds []string
 	changes := make(map[string]int)
 
 	for i, write := range writes {
@@ -190,7 +189,7 @@ func (db *DB) WriteSessionBatchContext(
 			return result, err
 		}
 		write = db.storageSessionBatchWrite(write)
-		evidence, err := batchLaunchChange(ctx, tx, write)
+		evidence, err := batchLaunchChange(tx, write)
 		if err != nil {
 			return result, err
 		}
@@ -224,7 +223,6 @@ func (db *DB) WriteSessionBatchContext(
 			result.WrittenMessages += messagesWritten
 			result.WrittenIndexes = append(result.WrittenIndexes, i)
 			writtenUsageIDs = append(writtenUsageIDs, write.Session.ID)
-			oldLaunchSeeds = append(oldLaunchSeeds, evidence.oldSeeds...)
 			if previous, ok := changes[write.Session.ID]; !ok || evidence.from < previous {
 				changes[write.Session.ID] = evidence.from
 			}
@@ -252,7 +250,7 @@ func (db *DB) WriteSessionBatchContext(
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	if _, err := linkLaunchParentsChangedTx(ctx, tx, append(oldLaunchSeeds, writtenUsageIDs...), changes); err != nil {
+	if _, err := linkLaunchParentsChangedTx(ctx, tx, writtenUsageIDs, changes); err != nil {
 		return result, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -288,7 +286,6 @@ func (db *DB) WriteSessionBatchAtomic(ctx context.Context,
 	defer func() { _ = tx.Rollback() }()
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 	var writtenUsageIDs []string
-	var oldLaunchSeeds []string
 	changes := make(map[string]int)
 
 	for i, write := range writes {
@@ -297,7 +294,7 @@ func (db *DB) WriteSessionBatchAtomic(ctx context.Context,
 		if err == nil {
 			write = db.storageSessionBatchWrite(sanitized)
 			var evidence launchBatchEvidence
-			evidence, err = batchLaunchChange(ctx, tx, write)
+			evidence, err = batchLaunchChange(tx, write)
 			if err != nil {
 				return result, err
 			}
@@ -307,7 +304,6 @@ func (db *DB) WriteSessionBatchAtomic(ctx context.Context,
 				&pendingRecallRevocations,
 				db.usageOnlyStorage(), nil, &evidence,
 			)
-			oldLaunchSeeds = append(oldLaunchSeeds, evidence.oldSeeds...)
 			if previous, ok := changes[write.Session.ID]; !ok || evidence.from < previous {
 				changes[write.Session.ID] = evidence.from
 			}
@@ -337,7 +333,7 @@ func (db *DB) WriteSessionBatchAtomic(ctx context.Context,
 		writtenUsageIDs = append(writtenUsageIDs, write.Session.ID)
 	}
 
-	if _, err := linkLaunchParentsChangedTx(ctx, tx, append(oldLaunchSeeds, writtenUsageIDs...), changes); err != nil {
+	if _, err := linkLaunchParentsChangedTx(ctx, tx, writtenUsageIDs, changes); err != nil {
 		return result, err
 	}
 
@@ -391,28 +387,19 @@ func (db *DB) linkCommittedBatchParents(ctx context.Context, ids []string) error
 }
 
 type launchBatchEvidence struct {
-	oldSeeds []string
-	from     int
+	from int
 }
 
-func batchLaunchChange(ctx context.Context, tx *sql.Tx, write SessionBatchWrite) (launchBatchEvidence, error) {
+func batchLaunchChange(tx *sql.Tx, write SessionBatchWrite) (launchBatchEvidence, error) {
 	result := launchBatchEvidence{from: int(^uint(0) >> 1)}
-	var cwd, machine, agent, kind, entrypoint string
-	var missing, startedChanged bool
-	err := tx.QueryRowContext(ctx, `SELECT cwd,machine,agent,session_kind,entrypoint,source_missing_at IS NOT NULL,COALESCE(started_at,'') != COALESCE(?,'') FROM sessions WHERE id=?`, write.Session.StartedAt, write.Session.ID).Scan(&cwd, &machine, &agent, &kind, &entrypoint, &missing, &startedChanged)
-	if errors.Is(err, sql.ErrNoRows) {
-		result.from = 0
-		return result, nil
-	}
-	if err != nil {
-		return result, err
-	}
-	if missing || cwd != write.Session.Cwd || machine != write.Session.Machine || agent != write.Session.Agent || kind != write.Session.SessionKind || entrypoint != write.Session.Entrypoint || startedChanged {
-		result.from = 0
-		result.oldSeeds, err = launchSeeds(ctx, tx, []string{write.Session.ID})
-		return result, err
-	}
 	if write.ReplaceMessages {
+		maxOrdinal, err := maxOrdinalTx(tx, write.Session.ID)
+		if err != nil {
+			return result, err
+		}
+		if maxOrdinal < 0 {
+			result.from = 0
+		}
 		return result, nil
 	}
 	if write.CompleteStoredRows {
@@ -614,11 +601,7 @@ func (db *DB) writeOneSessionBatchTx(
 		)
 		sourceIDsOnly = replacementTranscriptChanged &&
 			transcriptMessagesGainSourceIDs(stored, write.Messages)
-		if evidence != nil && replacementTranscriptChanged && !sourceIDsOnly && evidence.from != 0 {
-			evidence.oldSeeds, err = launchSeeds(ctx, tx, []string{write.Session.ID})
-			if err != nil {
-				return 0, err
-			}
+		if evidence != nil && replacementTranscriptChanged && !sourceIDsOnly {
 			evidence.from = 0
 		}
 	}

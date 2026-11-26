@@ -1858,12 +1858,7 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 
 	var replaced *messageRangeTotals
 	var pendingRecallRevocations recallEvidenceRevocationEvents
-	var oldLaunchSeeds []string
 	if from := update.ReplaceFromOrdinal; from != nil {
-		oldLaunchSeeds, err = launchSeedsChanged(ctx, tx, []string{sessionID}, map[string]int{sessionID: *from})
-		if err != nil {
-			return false, err
-		}
 		if err := reconcileConversationRangeTx(tx, sessionID, msgs, true, db.usageOnlyStorage(), *from); err != nil {
 			return false, err
 		}
@@ -1998,7 +1993,7 @@ func (db *DB) writeSessionIncremental(ctx context.Context,
 	}
 	changes := launchMessageChanges(msgs)
 	if len(changes) > 0 || update.ReplaceFromOrdinal != nil {
-		if _, err := linkLaunchParentsChangedTx(ctx, tx, append(oldLaunchSeeds, sessionID), changes); err != nil {
+		if _, err := linkLaunchParentsChangedTx(ctx, tx, []string{sessionID}, changes); err != nil {
 			return false, err
 		}
 	}
@@ -2210,10 +2205,6 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 		return err
 	}
 	var pendingRecallRevocations recallEvidenceRevocationEvents
-	oldLaunchSeeds, err := launchSeeds(ctx, tx, []string{sessionID})
-	if err != nil {
-		return err
-	}
 
 	if err := reconcileReplacedConversationTx(tx, sessionID, msgs, plan, useDiff, db.usageOnlyStorage()); err != nil {
 		return err
@@ -2284,7 +2275,7 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 	); err != nil {
 		return err
 	}
-	if _, err := linkLaunchParentsChangedTx(ctx, tx, append(oldLaunchSeeds, sessionID), nil); err != nil {
+	if _, err := linkLaunchParentsChangedTx(ctx, tx, []string{sessionID}, nil); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -2677,10 +2668,6 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 		return err
 	}
 	var pendingRecallRevocations recallEvidenceRevocationEvents
-	oldLaunchSeeds, err := launchSeeds(ctx, tx, []string{sessionID})
-	if err != nil {
-		return err
-	}
 
 	if err := reconcileReplacedConversationTx(tx, sessionID, msgs, plan, useDiff, db.usageOnlyStorage()); err != nil {
 		return err
@@ -2770,7 +2757,7 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 			return err
 		}
 	}
-	if _, err := linkLaunchParentsChangedTx(ctx, tx, append(oldLaunchSeeds, sessionID), nil); err != nil {
+	if _, err := linkLaunchParentsChangedTx(ctx, tx, []string{sessionID}, nil); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {

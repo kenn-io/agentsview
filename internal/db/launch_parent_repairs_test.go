@@ -42,16 +42,6 @@ func repairTestLauncher(t *testing.T, d *DB) {
 	insertMessages(t, d, Message{SessionID: "P", Ordinal: 0, Role: "assistant", Timestamp: "2026-01-02T03:04:00Z", ToolCalls: []ToolCall{{SessionID: "P", ToolName: "Bash", Category: "Bash", InputJSON: `{"command":"codex exec hi"}`, WorkingDirectory: "/repo"}}})
 }
 
-func repairTestRun(t *testing.T, d *DB, id, started string) {
-	t.Helper()
-	insertSession(t, d, id, "project", func(s *Session) {
-		s.Agent = "codex"
-		s.Cwd = "/repo"
-		s.StartedAt = &started
-		s.SessionKind = "non-interactive"
-	})
-}
-
 func repairTestParent(t *testing.T, d *DB, id string) string {
 	t.Helper()
 	l, err := d.GetSessionExternalParent(t.Context(), id)
@@ -60,26 +50,6 @@ func repairTestParent(t *testing.T, d *DB, id string) string {
 		return ""
 	}
 	return l.ParentSessionID
-}
-
-func TestBatchReclassificationRelinksNeighbor(t *testing.T) {
-	d := testDB(t)
-	repairTestLauncher(t, d)
-	repairTestRun(t, d, "R1", "2026-01-02T03:04:03Z")
-	repairTestRun(t, d, "R2", "2026-01-02T03:04:04Z")
-	_, err := d.LinkSubagentSessionsContext(t.Context())
-	require.NoError(t, err)
-	require.Empty(t, repairTestParent(t, d, "R1"), "precondition: ambiguous")
-	require.Empty(t, repairTestParent(t, d, "R2"), "precondition: ambiguous")
-	s, err := d.GetSession(t.Context(), "R2")
-	require.NoError(t, err)
-	s.SessionKind = ""
-	_, err = d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{{Session: *s}})
-	require.NoError(t, err)
-	got, err := d.GetSession(t.Context(), "R2")
-	require.NoError(t, err)
-	require.Empty(t, got.SessionKind, "precondition: reclassified")
-	assert.Equal(t, "P", repairTestParent(t, d, "R1"), "R1 now has one launcher and no competitor")
 }
 
 func TestStagedMetadataOnlyReparseRelinks(t *testing.T) {

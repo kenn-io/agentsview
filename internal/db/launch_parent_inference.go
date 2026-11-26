@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json/v2"
 	"errors"
-	"maps"
 	"path"
 	"slices"
 	"strings"
@@ -154,13 +153,6 @@ func inferLaunchChild(ctx context.Context, tx *sql.Tx, child launchChild) (int, 
 	}
 	for id, count := range known {
 		if !uncertain[id] && count < len(competing[id]) {
-			reserved, err := earlierLinkedLaunchRuns(ctx, tx, child, id, competing[id])
-			if err != nil {
-				return 0, err
-			}
-			if reserved >= count {
-				delete(matches, id)
-			}
 			delete(known, id)
 		}
 	}
@@ -177,54 +169,6 @@ func inferLaunchChild(ctx context.Context, tx *sql.Tx, child launchChild) (int, 
 		return 0, nil
 	}
 	return retractInferredLaunchParent(ctx, tx, child.id)
-}
-
-func earlierLinkedLaunchRuns(ctx context.Context, tx *sql.Tx, child launchChild, parent string, competing map[string]bool) (int, error) {
-	start, err := time.Parse(time.RFC3339Nano, child.started)
-	if err != nil {
-		return 0, err
-	}
-	encoded, err := json.Marshal(slices.Collect(maps.Keys(competing)))
-	if err != nil {
-		return 0, err
-	}
-	rows, err := tx.QueryContext(ctx, `SELECT s.id,s.started_at FROM session_external_parents ep JOIN sessions s ON s.id=ep.session_id WHERE ep.session_id IN (SELECT value FROM json_each(?)) AND ep.inferred=1 AND ep.parent_session_id=?`, string(encoded), parent)
-	if err != nil {
-		return 0, err
-	}
-	defer rows.Close()
-	var earlier []launchChild
-	for rows.Next() {
-		var id, stamp string
-		if err := rows.Scan(&id, &stamp); err != nil {
-			return 0, err
-		}
-		at, err := time.Parse(time.RFC3339Nano, stamp)
-		if err == nil && at.Before(start) && competing[id] {
-			candidate := child
-			candidate.id, candidate.started = id, stamp
-			earlier = append(earlier, candidate)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return 0, err
-	}
-	rows.Close()
-	count := 0
-	for _, run := range earlier {
-		at, err := time.Parse(time.RFC3339Nano, run.started)
-		if err != nil {
-			continue
-		}
-		launches, err := possibleLaunches(ctx, tx, run, at.Add(-60*time.Second-time.Nanosecond), at)
-		if err != nil {
-			return 0, err
-		}
-		if len(launches) == 1 && launches[0].certain && launches[0].parent == parent {
-			count++
-		}
-	}
-	return count, nil
 }
 
 // launchRuns finds the runs that could have used an invocation.

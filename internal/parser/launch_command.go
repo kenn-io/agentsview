@@ -75,13 +75,11 @@ type shellFlow struct {
 	dirs       []string
 	unknown    bool
 	cwdChanged bool
-	exited     bool
 }
 
 func mergeShellFlows(a, b shellFlow) shellFlow {
 	a.dirs = appendLaunchDirs(a.dirs, b.dirs)
-	a.unknown = a.unknown || b.unknown || a.exited != b.exited
-	a.exited = a.exited && b.exited
+	a.unknown = a.unknown || b.unknown
 	a.cwdChanged = a.cwdChanged || b.cwdChanged
 	return a
 }
@@ -134,9 +132,6 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 		out = append(out, LaunchCommand{Agent: agent, Dirs: slices.Clone(f.dirs), Unknown: f.unknown})
 	}
 	run = func(stmt *syntax.Stmt, f shellFlow) shellFlow {
-		if f.exited {
-			return f
-		}
 		for _, redirect := range stmt.Redirs {
 			subst(redirect, f)
 		}
@@ -213,9 +208,6 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 			}
 			program := launchProgram(args[0])
 			switch program {
-			case "exit":
-				f.exited = true
-				return f
 			case "source", ".", "pushd", "popd":
 				f.unknown = true
 				f.cwdChanged = true
@@ -340,7 +332,7 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 					nested.unknown = true
 					nested.dirs = nil
 					after := run(st, nested)
-					cwdChanged = cwdChanged || after.cwdChanged || after.exited
+					cwdChanged = cwdChanged || after.cwdChanged
 					return false
 				}
 				return true

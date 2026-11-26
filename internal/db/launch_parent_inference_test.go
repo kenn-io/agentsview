@@ -69,15 +69,15 @@ func TestLaunchParentEvidence(t *testing.T) {
 		{"unresolved competitor", `const cmd = "codex exec hi"; tools.exec_command({cmd})`, "exec", "/repo", "local", "/repo", "local", true, "", "codex", "codex", "/repo", ""},
 		{"possible competitor", `{"command":"test -d /repo && codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
 		{"two folders", `{"command":"cd /missing; codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", false, "", "", "", "", ""},
+		{"single code-mode launch", `text(await tools.exec_command({cmd: "codex exec hi", workdir: "/repo"}))`, "exec", "/repo", "local", "/repo", "local", false, "candidate", "codex", "codex", "/repo", ""},
 		{"unknown code workdir", `text(await tools.exec_command({cmd: "codex exec hi", workdir: dir}))`, "exec", "/repo", "local", "/repo", "local", false, "", "codex", "codex", "/repo", ""},
-		{"unreadable", `{`, "Bash", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
+		{"unreadable", `{`, "Bash", "/repo", "local", "/repo", "local", true, "actual", "", "", "", ""},
 		{"empty", ``, "Bash", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
 		{"empty object", `{}`, "Bash", "/repo", "local", "/repo", "local", true, "actual", "", "", "", ""},
-		{"other agent in batch", `Promise.all([tools.exec_command({cmd:"claude -p hi"}),tools.exec_command({cmd:"pwd"})])`, "exec", "/repo", "local", "/repo", "local", true, "actual", "codex", "codex", "/repo", ""},
+		{"other agent in batch", `Promise.all([tools.exec_command({cmd:"claude -p hi"}),tools.exec_command({cmd:"pwd"})])`, "exec", "/repo", "local", "/repo", "local", true, "", "codex", "codex", "/repo", ""},
 		{"different folder", `{"command":"cd /repo && codex exec hi"}`, "Bash", "/start", "local", "/other", "local", true, "actual", "", "", "", ""},
 		{"blank machine", `{"command":"codex exec hi"}`, "Bash", "/repo", "", "/repo", "local", true, "", "", "", "", ""},
 		{"two launchers", `{"command":"codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
-		{"exit before launch", `{"command":"exit 0; codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", false, "", "", "", "", ""},
 		{"redirection substitution competitor", `{"command":"cat > \"$(codex exec hi)\""}`, "Bash", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
 		{"process substitution competitor", `{"command":"cat <(codex exec hi)"}`, "Bash", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
 		{"process substitution alone", `{"command":"cat <(codex exec hi)"}`, "Bash", "/repo", "local", "/repo", "local", false, "candidate", "", "", "", ""},
@@ -144,7 +144,7 @@ func TestLaunchParentEvidence(t *testing.T) {
 	}
 }
 
-func TestLaunchParentBatchWorkdirs(t *testing.T) {
+func TestLaunchParentBatchWorkdirsRemainAmbiguous(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "parent", "project", func(s *Session) { s.Agent = "codex"; s.Cwd = "/repo" })
 	input := `await Promise.all([tools.exec_command({cmd:"codex exec one",workdir:"/repo"}),tools.exec_command({cmd:"codex exec two",workdir:"/other"})])`
@@ -161,9 +161,8 @@ func TestLaunchParentBatchWorkdirs(t *testing.T) {
 	_, err := d.LinkSubagentSessionsForSessions(t.Context(), []string{"first", "second"})
 	require.NoError(t, err)
 	for _, id := range []string{"first", "second"} {
-		link, err := d.GetSessionExternalParent(t.Context(), id)
-		require.NoError(t, err)
-		assert.Equal(t, "parent", link.ParentSessionID)
+		_, err := d.GetSessionExternalParent(t.Context(), id)
+		require.ErrorIs(t, err, sql.ErrNoRows)
 	}
 }
 
@@ -427,7 +426,7 @@ func TestLaunchParentUnusableEvidenceKeepsParserParent(t *testing.T) {
 }
 
 func TestLaunchParentReplacementWritePaths(t *testing.T) {
-	for _, mode := range []string{"messages", "late", "content", "incremental", "batch", "atomic batch", "staged", "interactive", "new child", "new child batch", "mixed batch append"} {
+	for _, mode := range []string{"late", "interactive", "new child", "new child batch", "mixed batch append"} {
 		t.Run(mode, func(t *testing.T) {
 			if mode == "new child" || mode == "new child batch" {
 				d := testDB(t)
@@ -508,26 +507,8 @@ func TestLaunchParentReplacementWritePaths(t *testing.T) {
 				_, err = d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET session_kind='' WHERE id='child'`)
 				require.NoError(t, err)
 				_, err = d.LinkSubagentSessionsForSessions(t.Context(), []string{"child"})
-			case "messages":
-				err = d.ReplaceSessionMessages(t.Context(), "parent", nil)
 			case "late":
 				err = d.ReplaceSessionMessages(t.Context(), "parent", []Message{message})
-			case "content":
-				err = d.ReplaceSessionContent(t.Context(), "parent", nil, SessionSignalUpdate{}, nil)
-			case "incremental":
-				from := 0
-				_, err = d.WriteSessionIncremental(t.Context(), "parent", nil, IncrementalSessionUpdate{ReplaceFromOrdinal: &from})
-			case "batch", "atomic batch":
-				session, getErr := d.GetSession(t.Context(), "parent")
-				require.NoError(t, getErr)
-				write := SessionBatchWrite{Session: *session, ReplaceMessages: true}
-				if mode == "batch" {
-					_, err = d.WriteSessionBatchContext(t.Context(), []SessionBatchWrite{write})
-				} else {
-					_, err = d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{write})
-				}
-			case "staged":
-				err = d.ReplaceSessionContentStaged(t.Context(), "parent", nil, newScratchStagedResults(t), nil, nil)
 			}
 			require.NoError(t, err)
 			link, err := d.GetSessionExternalParent(t.Context(), "child")
@@ -582,13 +563,8 @@ func TestLaunchParentSequentialRuns(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, "parent", parent.ParentSessionID)
 			}
-			parent, err := d.GetSessionExternalParent(t.Context(), "two")
-			if extra {
-				require.ErrorIs(t, err, sql.ErrNoRows)
-			} else {
-				require.NoError(t, err)
-				assert.Equal(t, "other", parent.ParentSessionID)
-			}
+			_, err = d.GetSessionExternalParent(t.Context(), "two")
+			require.ErrorIs(t, err, sql.ErrNoRows)
 		})
 	}
 }
@@ -621,7 +597,7 @@ func TestLaunchParentAmbiguousRuns(t *testing.T) {
 			message.SessionID = "competitor"
 			if mode == "unresolved competitor" {
 				message.ToolCalls[0].ToolName = "exec"
-				message.ToolCalls[0].InputJSON = `tools.exec_command({cmd})`
+				message.ToolCalls[0].InputJSON = `const cmd = "codex exec hi"; tools.exec_command({cmd})`
 			}
 			insertMessages(t, d, message)
 			_, err = d.GetSessionExternalParent(t.Context(), "child")
@@ -674,9 +650,9 @@ func TestLaunchParentSeedCandidateFiltering(t *testing.T) {
 		want  bool
 	}{
 		{`{"command":"pwd"}`, false},
-		{`tools.exec_command({cmd})`, true},
+		{`const cmd = "codex exec hi"; tools.exec_command({cmd})`, true},
 		{`{"command":"cd /repo && codex exec hi"}`, true},
-		{`{`, true},
+		{`{`, false},
 	} {
 		t.Run(tc.input, func(t *testing.T) {
 			assert.Equal(t, tc.want, launchInputMayMatter(sql.NullString{String: tc.input, Valid: true}))

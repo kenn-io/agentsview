@@ -39,8 +39,6 @@ func TestLaunchCommands(t *testing.T) {
 		{`while test -d x; do cd /other; done; codex exec hi`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}, Unknown: true}}},
 		{`{ cd /other; }; codex exec hi`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}, Unknown: true}}},
 		{`(cd /other); codex exec hi`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}}},
-		{`(exit); codex exec hi`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}}},
-		{`echo $(exit); codex exec hi`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}}},
 		{`if test -d /x; then echo hi; fi; codex exec hi`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}}},
 		{`test -d x && codex exec hi`, []LaunchCommand{{Agent: "codex", Unknown: true, Dirs: []string{"/repo"}}}},
 		{`cd "$DIR" && codex exec hi`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}, Unknown: true}}},

@@ -73,10 +73,6 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 	if transcriptMessagesEqual(stored, write.Messages) && (!db.usageOnlyStorage() || write.Session.MessageCount >= src.MessageCount) {
 		return "", ErrReplaceUnchanged
 	}
-	oldLaunchSeeds, err := launchSeeds(ctx, tx, []string{id})
-	if err != nil {
-		return "", err
-	}
 
 	events, err := usageEventsWithQuerier(ctx, tx, id, 0)
 	if err != nil {
@@ -149,7 +145,7 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 		}
 	}
 
-	if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, append(oldLaunchSeeds, id, copyID)); err != nil {
+	if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, []string{id, copyID}); err != nil {
 		return "", err
 	}
 	if err := tx.Commit(); err != nil {

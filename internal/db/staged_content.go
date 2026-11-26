@@ -322,14 +322,10 @@ func stagedSessionContentDigestTx(ctx context.Context,
 }
 
 func (db *DB) publishStagedMetadataAndRelinkTx(ctx context.Context, tx *sql.Tx, sessionID string, write *SessionBatchWrite) error {
-	seeds, err := launchSeeds(ctx, tx, []string{sessionID})
-	if err != nil {
-		return err
-	}
 	if err := db.publishStagedSessionMetadataTx(ctx, tx, write); err != nil {
 		return err
 	}
-	_, err = linkLaunchParentsChangedTx(ctx, tx, seeds, nil)
+	_, err := linkLaunchParentsChangedTx(ctx, tx, []string{sessionID}, nil)
 	return err
 }
 
@@ -475,10 +471,6 @@ func (db *DB) replaceSessionContentStaged(
 		}
 	}
 	var pendingRecallRevocations recallEvidenceRevocationEvents
-	oldLaunchSeeds, err := launchSeeds(ctx, tx, []string{sessionID})
-	if err != nil {
-		return err
-	}
 
 	if err := reconcileConversationMessagesTx(tx, sessionID, msgs, true, false); err != nil {
 		return err
@@ -592,7 +584,7 @@ func (db *DB) replaceSessionContentStaged(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if _, err := linkLaunchParentsChangedTx(ctx, tx, append(oldLaunchSeeds, sessionID), nil); err != nil {
+	if _, err := linkLaunchParentsChangedTx(ctx, tx, []string{sessionID}, nil); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {

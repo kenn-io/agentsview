@@ -35,6 +35,7 @@ var (
 	commitSHARE               = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
 	commitSummaryRE           = regexp.MustCompile(`(?m)^\[(detached HEAD|[^\s\[\]~^:?*\\]+) (?:\(root-commit\) )?([0-9a-f]{7,64})\] ([^\r\n]*)\r?$`)
 	commitInvocationRE        = regexp.MustCompile(`(?:^|[\s;&|(/]|\\[nrt]|(?:(?:cmd|command)["']?\s*:|(?:^|[\s/])(?:ba|da|z|k)?sh\s+(?:-\w+\s+)*-\w*c\s|\()\s*["'\x60])git\s+(?:` + commitGlobalOption + `\s+)*commit(?:$|[\s;&|)'"\x60\\])`)
+	commitWorkdirKeyRE        = regexp.MustCompile(`["']?(?:workdir|cwd)["']?\s*:`)
 	commitWorkdirRE           = regexp.MustCompile(`["']?(?:workdir|cwd)["']?\s*:\s*("(?:\\.|[^"\\])*"|'[^']*')`)
 	commitCommandRE           = regexp.MustCompile(`["']?(?:cmd|command)["']?\s*:\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\x60(?:\\.|[^\x60\\])*\x60)`)
 	commitToolCallRE          = regexp.MustCompile(`\btools\.\w+\s*\(`)
@@ -206,11 +207,22 @@ func literalCommands(input string) []string {
 	return commands
 }
 
+type shellCall struct {
+	command, workdir        string
+	unknownWorkdir, unknown bool
+}
+
 // shellCalls reads command inputs without assigning a result to a batch member.
 func shellCalls(input string) ([]shellCall, bool) {
 	if !jsontext.Value(input).IsValid() {
-		calls, ok := codeModeCalls(input)
-		return calls, !ok
+		if command := commitCommandText(input); command != "" {
+			workdir := toolCallWorkdir(input)
+			return []shellCall{{command: command, workdir: workdir, unknownWorkdir: workdir == "" && commitWorkdirKeyRE.MatchString(input)}}, false
+		}
+		if parser.MentionsLaunchAgent(input, "codex") || parser.MentionsLaunchAgent(input, "claude") {
+			return []shellCall{{unknown: true}}, false
+		}
+		return nil, false
 	}
 	command := commitCommandText(input)
 	if args, ok := commandArgv(input); ok && command == "" {
