@@ -12,6 +12,10 @@ func TestLaunchCommands(t *testing.T) {
 		want    []LaunchCommand
 	}{
 		{`codex exec "$PROMPT"`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}}},
+		{`codex e x`, []LaunchCommand{{Agent: "codex", Dirs: []string{"/repo"}}}},
+		{`claude -c -p`, []LaunchCommand{{Agent: "claude", Dirs: []string{"/repo"}}}},
+		{`codex -C exec`, nil},
+		{`claude --append-system-prompt -p`, nil},
 		{`codex exec --help`, nil},
 		{`codex exec -h`, nil},
 		{`codex exec --version`, nil},

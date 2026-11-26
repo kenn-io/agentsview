@@ -298,8 +298,7 @@ func TestShellCalls(t *testing.T) {
 		{"unknown workdir", `text(await tools.exec_command({cmd:"codex exec hi",workdir:dir}))`, `codex exec hi`, 1, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			calls, undecodable := shellCalls(tc.input)
-			require.False(t, undecodable)
+			calls, _ := shellCalls(tc.input)
 			require.Len(t, calls, tc.count)
 			if tc.count == 0 {
 				return

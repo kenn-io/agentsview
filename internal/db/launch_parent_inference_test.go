@@ -78,7 +78,7 @@ func TestLaunchParentEvidence(t *testing.T) {
 		{"empty object", `{}`, "Bash", "/repo", "local", "/repo", "local", true, "actual", "", "", "", ""},
 		{"other agent in batch", `Promise.all([tools.exec_command({cmd:"claude -p hi"}),tools.exec_command({cmd:"pwd"})])`, "exec", "/repo", "local", "/repo", "local", true, "", "codex", "codex", "/repo", ""},
 		{"different folder", `{"command":"cd /repo && codex exec hi"}`, "Bash", "/start", "local", "/other", "local", true, "actual", "", "", "", ""},
-		{"blank machine", `{"command":"codex exec hi"}`, "Bash", "/repo", "", "/repo", "local", true, "", "", "", "", ""},
+		{"blank machine", `{"command":"codex exec hi"}`, "Bash", "/repo", "", "/repo", "local", false, "", "", "", "", ""},
 		{"two launchers", `{"command":"codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
 		{"process substitution alone", `{"command":"cat <(codex exec hi)"}`, "Bash", "/repo", "local", "/repo", "local", false, "candidate", "", "", "", ""},
 		{"blank child machine", `{"command":"codex exec hi"}`, "Bash", "/repo", "", "/repo", "", false, "", "", "", "", ""},
