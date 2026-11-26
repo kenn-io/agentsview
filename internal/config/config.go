@@ -4287,6 +4287,9 @@ func (c *Config) VectorSetupEmbeddings() (VectorEmbeddingsConfig, error) {
 func (c *Config) SaveVectorEmbeddingsServer(
 	endpoint, model string, dimension int, apiKeyFile string,
 ) error {
+	if err := c.migrateJSONToTOML(); err != nil {
+		return err
+	}
 	return c.withConfigLock(func() error {
 		existing, _, err := c.vectorEmbeddingsServerCandidate(endpoint, model, dimension, apiKeyFile)
 		if err != nil {

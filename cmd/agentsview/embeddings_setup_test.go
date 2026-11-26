@@ -162,6 +162,61 @@ func TestSwitchDrainStaysClosedDuringShutdown(t *testing.T) {
 	assert.ErrorIs(t, owner.Manager("").StartBuild(vector.BuildRequest{}), vector.ErrBuildRunning)
 }
 
+func TestSwitchDrainWithoutVectorManagersHoldsDirectBuildLockUntilShutdown(t *testing.T) {
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(t.Context())
+	owner := &liveVectorServing{
+		cfg:    config.Config{DataDir: dir},
+		ctx:    ctx,
+		cancel: cancel,
+		push:   &vectorPushSource{},
+	}
+	t.Cleanup(func() { assert.NoError(t, owner.Close()) })
+
+	held, err := tryAcquireNamedLock(dir, vectorsWriteLockFile)
+	require.NoError(t, err)
+
+	waiting := make(chan struct{}, 1)
+	type pauseResult struct {
+		release func()
+		err     error
+	}
+	result := make(chan pauseResult, 1)
+	go func() {
+		release, _, err := owner.PauseBuilds(t.Context(), func() {
+			select {
+			case waiting <- struct{}{}:
+			default:
+			}
+		})
+		result <- pauseResult{release: release, err: err}
+	}()
+
+	select {
+	case <-waiting:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "switch drain did not wait for the direct build")
+	}
+	require.NoError(t, held.Close())
+
+	var paused pauseResult
+	select {
+	case paused = <-result:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "switch drain did not acquire the direct build lock")
+	}
+	require.NoError(t, paused.err)
+	require.NotNil(t, paused.release)
+	_, err = tryAcquireNamedLock(dir, vectorsWriteLockFile)
+	require.ErrorContains(t, err, "held by another process")
+
+	require.NoError(t, owner.Close())
+	lock, err := tryAcquireNamedLock(dir, vectorsWriteLockFile)
+	require.NoError(t, err, "daemon shutdown must release the switch lock")
+	require.NoError(t, lock.Close())
+	paused.release()
+}
+
 func TestSharedChoiceStartsIndexing(t *testing.T) {
 	setTestHome(t, t.TempDir())
 	dir := testDataDir(t)

@@ -242,6 +242,17 @@ func runEmbeddingsSwitch(
 func waitForEmbeddingsWriteLock(
 	ctx context.Context, out io.Writer, dataDir string, waiting *bool,
 ) (*writeOwnerLock, error) {
+	return waitForEmbeddingsWriteLockWithWait(ctx, dataDir, func() {
+		if waiting != nil && !*waiting {
+			fmt.Fprintln(out, "Waiting for the current embedding build or setup to finish…")
+			*waiting = true
+		}
+	})
+}
+
+func waitForEmbeddingsWriteLockWithWait(
+	ctx context.Context, dataDir string, onWait func(),
+) (*writeOwnerLock, error) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -255,9 +266,8 @@ func waitForEmbeddingsWriteLock(
 		if _, held := errors.AsType[writeOwnerLockHeldError](err); !held {
 			return nil, err
 		}
-		if waiting != nil && !*waiting {
-			fmt.Fprintln(out, "Waiting for the current embedding build or setup to finish…")
-			*waiting = true
+		if onWait != nil {
+			onWait()
 		}
 		timer := time.NewTimer(vectorsWriteLockRetryInterval)
 		select {

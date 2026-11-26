@@ -1622,6 +1622,48 @@ func TestEmbeddingsSwitchRestartFailurePreservesConfig(t *testing.T) {
 	assert.Equal(t, endpoint, cfg.Vector.Embeddings.Servers["default"].Endpoint)
 }
 
+func TestEmbeddingsSwitchMigratesLegacyConfigBeforeSaving(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dataDir := testDataDir(t)
+	legacy := fmt.Sprintf(`{
+	"codex_sessions_dirs": ["/legacy/codex"],
+	"vector": {
+		"enabled": true,
+		"embeddings": {
+			"model": "test-model",
+			"dimension": 3,
+			"max_input_chars": 1000,
+			"servers": {
+				"local": {
+					"endpoint": %q,
+					"batch_size": 10,
+					"timeout": "5s",
+					"max_retries": 1
+				}
+			}
+		}
+	}
+}`, "http://127.0.0.1:1/v1")
+	jsonPath := filepath.Join(dataDir, "config.json")
+	require.NoError(t, os.WriteFile(jsonPath, []byte(legacy), 0o600))
+	endpoint := newEmbeddingsStubServer(t, 3).URL + "/v1"
+	oldRestart := restartEmbeddingsDaemon
+	t.Cleanup(func() { restartEmbeddingsDaemon = oldRestart })
+	restartErr := errors.New("restart unavailable")
+	restartEmbeddingsDaemon = func(context.Context, io.Writer) error { return restartErr }
+
+	err := runEmbeddingsSwitch(t.Context(), io.Discard, endpoint, "new-model", 3, "")
+	require.ErrorIs(t, err, restartErr)
+	require.FileExists(t, filepath.Join(dataDir, "config.toml"))
+	require.FileExists(t, jsonPath+".bak")
+
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/legacy/codex"}, cfg.AgentDirs["codex"])
+	assert.Equal(t, "new-model", cfg.Vector.Embeddings.Model)
+	assert.Equal(t, endpoint, cfg.Vector.Embeddings.Servers["default"].Endpoint)
+}
+
 func TestEmbeddingsSwitchWaitsForDirectBuildBeforeSaving(t *testing.T) {
 	setTestHome(t, t.TempDir())
 	dataDir := testDataDir(t)

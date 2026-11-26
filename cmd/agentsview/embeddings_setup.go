@@ -23,18 +23,19 @@ var (
 
 // liveVectorServing enables browser setup over the daemon's open indexes.
 type liveVectorServing struct {
-	mu       sync.Mutex
-	serving  vectorServing
-	cfg      config.Config
-	database *db.DB
-	ctx      context.Context
-	idle     *server.IdleTracker
-	cancel   context.CancelFunc
-	done     chan struct{}
-	setup    server.EmbeddingsSetupStatus
-	paused   bool
-	reload   func() (config.Config, error)
-	push     *vectorPushSource
+	mu                sync.Mutex
+	serving           vectorServing
+	cfg               config.Config
+	database          *db.DB
+	ctx               context.Context
+	idle              *server.IdleTracker
+	cancel            context.CancelFunc
+	done              chan struct{}
+	setup             server.EmbeddingsSetupStatus
+	paused            bool
+	switchLockRelease func()
+	reload            func() (config.Config, error)
+	push              *vectorPushSource
 }
 
 func newLiveVectorServing(ctx context.Context, cfg config.Config, database *db.DB, idle *server.IdleTracker, reload func() (config.Config, error)) (*liveVectorServing, error) {
@@ -107,6 +108,10 @@ func (v *liveVectorServing) Close() error {
 	var err error
 	if v.serving.Close != nil {
 		err = v.serving.Close()
+	}
+	if v.switchLockRelease != nil {
+		v.switchLockRelease()
+		v.switchLockRelease = nil
 	}
 	return errors.Join(err, v.push.Close())
 }
@@ -295,9 +300,28 @@ func (v *liveVectorServing) PauseBuilds(ctx context.Context, onWait func()) (fun
 					fn()
 				}
 				v.mu.Lock()
+				v.switchLockRelease = nil
 				v.paused = false
 				v.mu.Unlock()
 			})
+			if managers[0] == nil && managers[1] == nil {
+				lock, err := waitForEmbeddingsWriteLockWithWait(ctx, v.cfg.DataDir, onWait)
+				if err != nil {
+					release()
+					return nil, nil, err
+				}
+				lockRelease := sync.OnceFunc(func() { _ = lock.Close() })
+				v.mu.Lock()
+				if err := v.ctx.Err(); err != nil {
+					v.mu.Unlock()
+					lockRelease()
+					release()
+					return nil, nil, err
+				}
+				v.switchLockRelease = lockRelease
+				v.mu.Unlock()
+				releases = append(releases, lockRelease)
+			}
 			for _, manager := range managers {
 				if manager == nil {
 					continue
