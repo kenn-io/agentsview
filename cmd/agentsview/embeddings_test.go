@@ -1458,7 +1458,7 @@ func TestEmbeddingsBuildDispatchesToDaemon(t *testing.T) {
 
 func TestEmbeddingsSwitch(t *testing.T) {
 	for _, tc := range []struct {
-		name, conflictStore                      string
+		name, conflictStore, failedStore         string
 		recall, running, setupBusy, failedBefore bool
 	}{
 		{name: "waits and rebuilds recall", recall: true, running: true},
@@ -1466,7 +1466,10 @@ func TestEmbeddingsSwitch(t *testing.T) {
 		{name: "ignores previous errors", failedBefore: true},
 		{name: "skips recall", recall: false},
 		{name: "retries a messages build", conflictStore: "messages"},
+		{name: "starts recall before retrying messages", recall: true, conflictStore: "messages"},
 		{name: "retries a recall build", recall: true, conflictStore: "recall"},
+		{name: "observes recall after messages fail", recall: true, failedStore: "messages"},
+		{name: "reports recall failure", recall: true, failedStore: "recall"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			setTestHome(t, t.TempDir())
@@ -1523,6 +1526,9 @@ recall = %t
 						status.LastError = "previous build failed"
 						status.Setup = &vector.SetupStatus{Action: "turn-on", Error: "previous setup failed"}
 					}
+					if len(requests) > 0 && store == tc.failedStore {
+						status.LastError = "build failed"
+					}
 					_ = json.MarshalWrite(w, status)
 				},
 				"POST /api/v1/embeddings/build": func(w http.ResponseWriter, r *http.Request) {
@@ -1564,7 +1570,12 @@ recall = %t
 				"index", "embeddings", "switch", "https://embed.example/v1",
 				"--model", "new-model", "--dimension", "3",
 			})
-			require.NoError(t, cmd.Execute())
+			err := cmd.Execute()
+			if tc.failedStore != "" {
+				require.ErrorContains(t, err, "building "+tc.failedStore+" embeddings: build failed")
+			} else {
+				require.NoError(t, err)
+			}
 
 			wantEvents := []string{"status:messages"}
 			if tc.running || tc.setupBusy {
@@ -1573,15 +1584,22 @@ recall = %t
 			if tc.recall {
 				wantEvents = append(wantEvents, "status:recall")
 			}
-			wantEvents = append(wantEvents, "restart", "build:messages", "status:messages")
-			if tc.conflictStore == "messages" {
-				wantEvents = append(wantEvents, "build:messages", "status:messages")
-			}
+			wantEvents = append(wantEvents, "restart", "build:messages")
 			if tc.recall {
-				wantEvents = append(wantEvents, "build:recall", "status:recall")
-				if tc.conflictStore == "recall" {
-					wantEvents = append(wantEvents, "build:recall", "status:recall")
-				}
+				wantEvents = append(wantEvents, "build:recall")
+			}
+			if tc.conflictStore == "messages" {
+				wantEvents = append(wantEvents, "status:messages", "build:messages")
+			}
+			if tc.conflictStore == "recall" {
+				wantEvents = append(wantEvents, "status:recall", "build:recall")
+			}
+			if tc.recall && tc.conflictStore == "messages" {
+				wantEvents = append(wantEvents, "status:recall")
+			}
+			wantEvents = append(wantEvents, "status:messages")
+			if tc.recall && tc.conflictStore != "messages" {
+				wantEvents = append(wantEvents, "status:recall")
 			}
 			assert.Equal(t, wantEvents, events)
 			if tc.recall {

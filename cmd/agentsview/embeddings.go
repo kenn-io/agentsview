@@ -161,6 +161,8 @@ func runEmbeddingsSwitch(
 	if err != nil {
 		return err
 	}
+	var started, conflicts []vector.BuildRequest
+	var buildErrors []error
 	for _, store := range stores {
 		req := vector.BuildRequest{Store: store}
 		if store == vector.MessageIndexSpec().Name {
@@ -169,24 +171,41 @@ func runEmbeddingsSwitch(
 			)
 		}
 		client.store = daemonEmbeddingStore(store)
+		err := client.startBuild(ctx, req)
+		if apiErr, ok := errors.AsType[*daemonAPIError](err); ok && apiErr.status == http.StatusConflict {
+			conflicts = append(conflicts, req)
+		} else if err != nil {
+			buildErrors = append(buildErrors, fmt.Errorf("starting %s embeddings: %w", store, err))
+		} else {
+			started = append(started, req)
+		}
+	}
+	for _, req := range conflicts {
+		client.store = daemonEmbeddingStore(req.Store)
 		for {
+			if _, err := waitDaemonBuild(ctx, out, client, false, onWait); err != nil {
+				buildErrors = append(buildErrors, fmt.Errorf("waiting for %s embeddings: %w", req.Store, err))
+				break
+			}
 			err := client.startBuild(ctx, req)
 			apiErr, conflict := errors.AsType[*daemonAPIError](err)
 			if !conflict || apiErr.status != http.StatusConflict {
-				if err == nil {
-					err = pollDaemonBuildStatus(ctx, out, client, false)
-				}
 				if err != nil {
-					return fmt.Errorf("building %s embeddings: %w", store, err)
+					buildErrors = append(buildErrors, fmt.Errorf("starting %s embeddings: %w", req.Store, err))
+				} else {
+					started = append(started, req)
 				}
 				break
 			}
-			if _, err := waitDaemonBuild(ctx, out, client, false, onWait); err != nil {
-				return fmt.Errorf("waiting for %s embeddings: %w", store, err)
-			}
 		}
 	}
-	return nil
+	for _, req := range started {
+		client.store = daemonEmbeddingStore(req.Store)
+		if err := pollDaemonBuildStatus(ctx, out, client, false); err != nil {
+			buildErrors = append(buildErrors, fmt.Errorf("building %s embeddings: %w", req.Store, err))
+		}
+	}
+	return errors.Join(buildErrors...)
 }
 
 // EmbeddingsBuildOptions holds the parsed `embeddings build` flags.
