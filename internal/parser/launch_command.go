@@ -82,6 +82,7 @@ type shellFlow struct {
 	guarded     bool
 	conditional bool
 	mayStop     bool
+	errexit     bool
 }
 
 func mergeShellFlows(a, b shellFlow) shellFlow {
@@ -121,7 +122,17 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 			if f.stopped {
 				break
 			}
+			before := f
 			f = run(stmt, f)
+			if before.errexit {
+				if truth := shellCondition(stmt); truth < 0 {
+					f.stopped = true
+				} else if truth == 0 {
+					if _, ok := stmt.Cmd.(*syntax.CallExpr); ok {
+						f.possible, f.conditional, f.mayStop = true, false, true
+					}
+				}
+			}
 		}
 		return f
 	}
@@ -152,6 +163,9 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 					return left
 				}
 				rhs := left
+				if c.X.Negated && isLiteralCD(&syntax.Stmt{Cmd: c.X.Cmd}) {
+					rhs = before
+				}
 				if c.Op == syntax.AndStmt {
 					if narrowed, ok := guardedLaunchDir(c.X, before); ok {
 						rhs = narrowed
@@ -220,6 +234,7 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 			if yes.stopped || no.stopped || yes.mayStop || no.mayStop {
 				cond.conditional = false
 			}
+			yes.mayStop, no.mayStop = yes.mayStop || yes.stopped, no.mayStop || no.stopped
 			yes.possible, no.possible = cond.possible, cond.possible
 			yes.stopped, no.stopped = false, false
 			return mergeShellFlows(yes, no)
@@ -259,6 +274,14 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 			}
 			program := launchProgram(args[0])
 			switch program {
+			case "set":
+				if len(args) > 1 && args[1] == "-e" {
+					f.errexit = true
+				}
+				if len(args) > 1 && args[1] == "+e" {
+					f.errexit = false
+				}
+				return f
 			case "exit":
 				f.stopped = true
 				return f
@@ -324,12 +347,13 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 					}
 				}
 				if program == "eval" && len(args) == 2 && !dynamic[1] {
-					for _, nested := range LaunchesFromCommand(args[1], "") {
-						emit(nested.Agent, f, true)
+					nested, err := syntax.NewParser().Parse(strings.NewReader(args[1]), "")
+					if err == nil {
+						return list(nested.Stmts, f)
 					}
 				}
 				for i := 1; i < len(args); i++ {
-					if program != "eval" && program != "xargs" && program != "bash" && program != "sh" && program != "zsh" && !dynamic[i] && (launchProgram(args[i]) == "codex" || launchProgram(args[i]) == "claude") {
+					if (i == 1 || program == "timeout" && i == 2 || strings.Contains(args[i-1], "=")) && program != "eval" && program != "xargs" && program != "bash" && program != "sh" && program != "zsh" && !dynamic[i] && (launchProgram(args[i]) == "codex" || launchProgram(args[i]) == "claude") {
 						run(&syntax.Stmt{Cmd: &syntax.CallExpr{Args: c.Args[i:]}}, f)
 						return f
 					}
@@ -355,56 +379,17 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 			if program != "codex" && program != "claude" {
 				return f
 			}
-			launch := f
-			modeAt := -1
-			uncertain := false
-			for i := 1; i < len(args); i++ {
-				if program == "codex" && ((args[i] == "-C" || args[i] == "--cd") && i+1 < len(args) || strings.HasPrefix(args[i], "--cd=")) {
-					dir := strings.TrimPrefix(args[i], "--cd=")
-					if dir == args[i] {
-						i++
-						dir = args[i]
-					}
-					if dynamic[i] {
-						launch.dirs = nil
-						launch.unknown = true
-					} else {
-						beforeDir := slices.Clone(launch.dirs)
-						launch = setLaunchDir(launch, dir)
-						launch.possible = launch.possible || launch.guarded && !slices.Equal(beforeDir, launch.dirs)
-					}
-					continue
-				}
-				if modeAt < 0 && launchOptionValue(program, args[i]) && i+1 < len(args) {
-					i++
-					continue
-				}
-				if dynamic[i] && modeAt < 0 && strings.HasSuffix(args[i], "=") && launchOptionValue(program, strings.TrimSuffix(args[i], "=")) {
-					continue
-				}
-				if dynamic[i] {
-					if modeAt < 0 {
-						uncertain = true
-					}
-					continue
-				}
-				if modeAt < 0 {
-					found, nonLaunch := oneShotRunState(program, args[:i+1])
-					if found {
-						modeAt = i
-					} else if nonLaunch && !uncertain {
-						return f
-					}
-				}
-			}
+			launch, modeAt, uncertain := launchArguments(program, args, dynamic, f)
 			if modeAt >= 0 {
 				emit(program, launch, uncertain)
 			} else if uncertain {
 				emit(program, launch, true)
 			}
 			return f
+		case *syntax.FuncDecl:
+			return f
 		default:
-			cwdChanged := false
+			cwdChanged, mayStop := false, false
 			syntax.Walk(stmt.Cmd, func(n syntax.Node) bool {
 				if st, ok := n.(*syntax.Stmt); ok {
 					nested := f
@@ -412,10 +397,14 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 					nested.dirs = nil
 					after := run(st, nested)
 					cwdChanged = cwdChanged || after.cwdChanged
+					mayStop = mayStop || after.stopped || after.mayStop
 					return false
 				}
 				return true
 			})
+			if mayStop {
+				f.possible, f.conditional, f.mayStop = true, false, true
+			}
 			if cwdChanged {
 				f.unknown = true
 				f.cwdChanged = true
@@ -428,6 +417,55 @@ func LaunchesFromCommand(command, baseDir string) []LaunchCommand {
 	}
 	list(file.Stmts, initial)
 	return out
+}
+
+func launchArguments(program string, args []string, dynamic []bool, f shellFlow) (shellFlow, int, bool) {
+	launch := f
+	modeAt := -1
+	uncertain := false
+	for i := 1; i < len(args); i++ {
+		if args[i] == "--" {
+			break
+		}
+		if program == "codex" && ((args[i] == "-C" || args[i] == "--cd") && i+1 < len(args) || strings.HasPrefix(args[i], "--cd=")) {
+			dir := strings.TrimPrefix(args[i], "--cd=")
+			if dir == args[i] {
+				i++
+				dir = args[i]
+			}
+			if dynamic[i] {
+				launch.dirs = nil
+				launch.unknown = true
+			} else {
+				beforeDir := slices.Clone(launch.dirs)
+				launch = setLaunchDir(launch, dir)
+				launch.possible = launch.possible || launch.guarded && !slices.Equal(beforeDir, launch.dirs)
+			}
+			continue
+		}
+		if launchOptionValue(program, args[i]) && i+1 < len(args) {
+			i++
+			continue
+		}
+		if dynamic[i] && modeAt < 0 && strings.HasSuffix(args[i], "=") && launchOptionValue(program, strings.TrimSuffix(args[i], "=")) {
+			continue
+		}
+		if dynamic[i] {
+			if modeAt < 0 {
+				uncertain = true
+			}
+			continue
+		}
+		if modeAt < 0 {
+			found, nonLaunch := oneShotRunState(program, args[:i+1])
+			if found {
+				modeAt = i
+			} else if nonLaunch && !uncertain {
+				return launch, -1, false
+			}
+		}
+	}
+	return launch, modeAt, uncertain
 }
 
 func shellCommandArgument(program string, args []string) int {
@@ -508,6 +546,9 @@ func guardedLaunchDir(stmt *syntax.Stmt, f shellFlow) (shellFlow, bool) {
 			return f, false
 		}
 		return guardedLaunchDir(binary.Y, prior)
+	}
+	if stmt.Negated {
+		return f, false
 	}
 	if !isLiteralCD(stmt) {
 		return f, false

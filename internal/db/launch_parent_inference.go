@@ -329,9 +329,7 @@ func possibleLaunches(ctx context.Context, tx *sql.Tx, child launchChild, from, 
 		}
 		for _, call := range calls {
 			if call.unknown {
-				if parser.MentionsLaunchAgent(call.command, child.agent) {
-					launches = append(launches, possibleLaunch{parent: id, at: at})
-				}
+				launches = append(launches, possibleLaunch{parent: id, at: at})
 				continue
 			}
 			dir := cwd
@@ -502,12 +500,7 @@ func launchInputMayMatter(input sql.NullString) bool {
 	}
 	for _, call := range calls {
 		if call.unknown {
-			for _, agent := range []string{"codex", "claude"} {
-				if parser.MentionsLaunchAgent(call.command, agent) {
-					return true
-				}
-			}
-			continue
+			return true
 		}
 		if len(parser.LaunchesFromCommand(call.command, "")) != 0 {
 			return true

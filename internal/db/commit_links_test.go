@@ -293,6 +293,16 @@ func TestShellCalls(t *testing.T) {
 		{"template", "text(await tools.exec_command({cmd:`git commit -m fix`}))", `git commit -m fix`, 1, false, false, false, "", ""},
 		{"interpolated", "text(await tools.exec_command({cmd:`git commit -m ${message}`}))", "", 1, true, false, false, "", ""},
 		{"short circuit", `false && tools.exec_command({cmd:"codex exec hi"})`, "", 0, false, false, false, "", ""},
+		{"exit batch", `Promise.all([exit(), tools.exec_command({cmd:"codex exec hi"})])`, "", 0, false, false, false, "", ""},
+		{"exit helper argument", `function f(){}; f(exit()); tools.exec_command({cmd:"codex exec hi"})`, "", 0, false, false, false, "", ""},
+		{"launch exit argument", `exit(tools.exec_command({cmd:"codex exec hi"}))`, `codex exec hi`, 1, false, false, false, "", ""},
+		{"exit initializer", `const a = exit(), b = tools.exec_command({cmd:"codex exec hi"})`, "", 0, false, false, false, "", ""},
+		{"exit argument", `tools.exec_command({cmd:"codex exec hi", other:exit()})`, "", 0, false, false, false, "", ""},
+		{"nested conditional exit", `if (a) { if (b) { exit() } }; tools.exec_command({cmd:"codex exec hi"})`, `codex exec hi`, 1, false, false, true, "", ""},
+		{"try exit", `try { exit() } finally {}; tools.exec_command({cmd:"codex exec hi"})`, "", 2, true, false, false, `codex exec hi`, ""},
+		{"helper exit", `function f(){ exit() }; f(); tools.exec_command({cmd:"codex exec hi"})`, "", 2, true, false, false, `codex exec hi`, ""},
+		{"template launch", "`${tools.exec_command({cmd:'codex exec hi'})}`", `codex exec hi`, 1, false, false, false, "", ""},
+		{"template exit", "`${exit()}`; tools.exec_command({cmd:'codex exec hi'})", "", 0, false, false, false, "", ""},
 		{"exit", `exit(); tools.exec_command({cmd:"codex exec hi"})`, "", 0, false, false, false, "", ""},
 		{"exit and", `exit() && tools.exec_command({cmd:"codex exec hi"})`, "", 0, false, false, false, "", ""},
 		{"exit condition", `if (exit()) { tools.exec_command({cmd:"codex exec hi"}) }`, "", 0, false, false, false, "", ""},
@@ -328,6 +338,10 @@ func TestShellCalls(t *testing.T) {
 			if tc.secondCommand != "" {
 				assert.Equal(t, tc.secondCommand, calls[1].command)
 				assert.Equal(t, tc.secondWorkdir, calls[1].workdir)
+			}
+			if tc.name == "try exit" || tc.name == "helper exit" {
+				assert.True(t, calls[1].possible)
+				assert.False(t, calls[1].guarded)
 			}
 		})
 	}

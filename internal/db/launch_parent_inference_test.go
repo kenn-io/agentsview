@@ -69,6 +69,7 @@ func TestLaunchParentEvidence(t *testing.T) {
 		{"missing folder", `{"command":"codex exec hi"}`, "Bash", "", "local", "/repo", "local", false, "", "", "", "", ""},
 		{"two folders", `{"command":"cd /missing; codex exec hi"}`, "Bash", "/repo", "local", "/repo", "local", false, "", "", "", "", ""},
 		{"unknown directory", `{"command":"codex -C \"$DIR\" exec hi"}`, "Bash", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
+		{"unknown code command", `const cmd = "codex exec hi"; tools.exec_command({cmd})`, "exec", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
 		{"unknown code workdir", `text(await tools.exec_command({cmd: "codex exec hi", workdir: dir}))`, "exec", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
 		{"guarded code call", `flag && tools.exec_command({cmd: "codex exec hi"})`, "exec", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
 		{"unreadable", `{`, "Bash", "/repo", "local", "/repo", "local", true, "", "", "", "", ""},
@@ -347,7 +348,7 @@ func TestLaunchParentSchemaMigration(t *testing.T) {
 	require.NoError(t, err)
 	_, err = conn.ExecContext(t.Context(), `DROP TABLE session_parent_inference_blocks`)
 	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `PRAGMA user_version=189`)
+	_, err = conn.ExecContext(t.Context(), `PRAGMA user_version=190`)
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 	migrated, err := Open(t.Context(), path)
@@ -638,6 +639,7 @@ func TestLaunchParentSeedCandidateFiltering(t *testing.T) {
 		want  bool
 	}{
 		{`{"command":"pwd"}`, false},
+		{`tools.exec_command({cmd})`, true},
 		{`{"command":"cd /repo && codex exec hi"}`, true},
 		{`{`, true},
 	} {

@@ -15,9 +15,9 @@ type shellCall struct {
 }
 
 type codeModeReader struct {
-	calls                      []shellCall
-	locals                     map[string]string
-	possible, stopped, guarded bool
+	calls                               []shellCall
+	locals                              map[string]string
+	possible, stopped, guarded, mayStop bool
 }
 
 func codeModeLiteral(expr js.IExpr) (string, bool) {
@@ -99,36 +99,43 @@ func (r *codeModeReader) stmt(stmt js.IStmt) {
 		r.expr(n.Value)
 		r.stopped = true
 	case *js.IfStmt:
-		r.expr(n.Cond)
-		if r.stopped {
-			return
-		}
-		value, known := codeModeCondition(n.Cond)
-		old := r.possible
-		oldGuarded := r.guarded
-		r.possible = old || !known
-		if !known {
-			r.guarded = false
-		}
-		if !known || value {
-			r.stmt(n.Body)
-		}
-		stopped := r.stopped
-		r.stopped = false
-		if !known || !value {
-			r.stmt(n.Else)
-		}
-		stopped = stopped || r.stopped
-		r.stopped = known && stopped
-		r.possible = old || !known && stopped
-		r.guarded = oldGuarded && !stopped
+		r.ifStmt(n)
 	default:
 		r.unsupported(stmt)
 	}
 }
 
+func (r *codeModeReader) ifStmt(n *js.IfStmt) {
+	r.expr(n.Cond)
+	if r.stopped {
+		return
+	}
+	value, known := codeModeCondition(n.Cond)
+	old := r.possible
+	oldGuarded := r.guarded
+	oldMayStop := r.mayStop
+	r.possible = old || !known
+	if !known {
+		r.guarded = false
+	}
+	if !known || value {
+		r.stmt(n.Body)
+	}
+	stopped := r.stopped
+	r.stopped = false
+	if !known || !value {
+		r.stmt(n.Else)
+	}
+	stopped = stopped || r.stopped
+	r.stopped = known && stopped
+	stopped = stopped || r.mayStop && !oldMayStop
+	r.mayStop = oldMayStop || !known && stopped || r.mayStop
+	r.possible = old || r.mayStop
+	r.guarded = oldGuarded && !stopped
+}
+
 func (r *codeModeReader) expr(expr js.IExpr) {
-	if expr == nil {
+	if expr == nil || r.stopped {
 		return
 	}
 	switch n := expr.(type) {
@@ -155,7 +162,8 @@ func (r *codeModeReader) expr(expr js.IExpr) {
 					r.guarded = !old || oldGuarded
 				}
 				r.expr(n.Y)
-				r.possible = old || !known && r.stopped
+				r.mayStop = r.mayStop || !known && r.stopped
+				r.possible = old || r.mayStop
 				r.guarded = oldGuarded && !r.stopped
 				if !known {
 					r.stopped = false
@@ -167,11 +175,16 @@ func (r *codeModeReader) expr(expr js.IExpr) {
 	case *js.CallExpr:
 		if name, ok := n.X.(*js.Var); ok {
 			if string(name.Name()) == "exit" {
+				r.arguments(n)
 				r.stopped = true
 				return
 			}
 			if body, exists := r.locals[string(name.Name())]; exists {
-				r.calls = append(r.calls, shellCall{command: body + " " + n.String(), unknown: true})
+				r.arguments(n)
+				if r.stopped {
+					return
+				}
+				r.uncertainCall(body + " " + n.String())
 				return
 			}
 		}
@@ -182,6 +195,10 @@ func (r *codeModeReader) expr(expr js.IExpr) {
 			}
 		}
 		if isCodeModeExec(n.X) {
+			r.arguments(n)
+			if r.stopped {
+				return
+			}
 			call := codeModeCall(n)
 			call.possible = r.possible
 			call.guarded = r.guarded
@@ -189,24 +206,7 @@ func (r *codeModeReader) expr(expr js.IExpr) {
 			return
 		}
 		if isEagerBatch(n.X) {
-			if len(n.Args.List) != 1 || n.Args.List[0].Rest {
-				r.unsupported(n)
-				return
-			}
-			array, ok := n.Args.List[0].Value.(*js.ArrayExpr)
-			if !ok {
-				r.unsupported(n)
-				return
-			}
-			for _, item := range array.List {
-				if item.Spread || item.Value == nil {
-					r.unsupported(n)
-					return
-				}
-			}
-			for _, item := range array.List {
-				r.expr(item.Value)
-			}
+			r.batch(n)
 			return
 		}
 		if dot, ok := n.X.(*js.DotExpr); ok && (dot.Y.String() == "then" || dot.Y.String() == "map") {
@@ -224,9 +224,52 @@ func (r *codeModeReader) expr(expr js.IExpr) {
 			}
 			r.expr(arg.Value)
 		}
-	case *js.LiteralExpr, *js.Var, *js.TemplateExpr:
+	case *js.TemplateExpr:
+		r.expr(n.Tag)
+		for _, part := range n.List {
+			r.expr(part.Expr)
+		}
+	case *js.LiteralExpr, *js.Var:
 	default:
 		r.unsupported(expr)
+	}
+}
+
+func (r *codeModeReader) batch(n *js.CallExpr) {
+	if len(n.Args.List) != 1 || n.Args.List[0].Rest {
+		r.unsupported(n)
+		return
+	}
+	array, ok := n.Args.List[0].Value.(*js.ArrayExpr)
+	if !ok {
+		r.unsupported(n)
+		return
+	}
+	for _, item := range array.List {
+		if item.Spread || item.Value == nil {
+			r.unsupported(n)
+			return
+		}
+	}
+	for _, item := range array.List {
+		r.expr(item.Value)
+	}
+	return
+}
+
+func (r *codeModeReader) arguments(call *js.CallExpr) {
+	for _, arg := range call.Args.List {
+		if obj, ok := arg.Value.(*js.ObjectExpr); ok {
+			for _, prop := range obj.List {
+				if prop.Name != nil {
+					r.expr(prop.Name.Computed)
+				}
+				r.expr(prop.Value)
+				r.expr(prop.Init)
+			}
+		} else {
+			r.expr(arg.Value)
+		}
 	}
 }
 
@@ -356,6 +399,11 @@ func (r *codeModeReader) unsupported(node js.INode) {
 	v := &unsupportedVisitor{locals: r.locals}
 	js.Walk(v, node)
 	if v.risky {
-		r.calls = append(r.calls, shellCall{command: node.String() + " " + v.text.String(), unknown: true})
+		r.uncertainCall(node.String() + " " + v.text.String())
 	}
+}
+
+func (r *codeModeReader) uncertainCall(command string) {
+	r.calls = append(r.calls, shellCall{command: command, unknown: true})
+	r.possible, r.guarded, r.mayStop = true, false, true
 }
