@@ -1688,7 +1688,13 @@ func CodexSourceRank(source SourceRef) ReconciliationSourceRank {
 	if info, err := os.Stat(path); err == nil {
 		recency = info.ModTime().UnixNano()
 	}
-	return ReconciliationSourceRank{Class: codexLabeledSourceClass, Recency: recency, Path: src.Path}
+	tieBreak := int64(1)
+	if isCompressedCodexRolloutPath(src.Path) {
+		tieBreak = 0
+	}
+	return ReconciliationSourceRank{
+		Class: codexLabeledSourceClass, Recency: recency, TieBreak: tieBreak, Path: src.Path,
+	}
 }
 
 // PreferLabeledCodexSource compares labeled copies, or leaves ordinary copies to the caller.
@@ -1700,6 +1706,9 @@ func PreferLabeledCodexSource(candidate, current SourceRef) (preferred, compared
 		}
 		if candRank.Recency != currRank.Recency {
 			return candRank.Recency > currRank.Recency, true
+		}
+		if candRank.TieBreak != currRank.TieBreak {
+			return candRank.TieBreak > currRank.TieBreak, true
 		}
 		return candRank.Path < currRank.Path, true
 	}

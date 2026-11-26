@@ -5611,7 +5611,7 @@ func (e *Engine) reconciliationCandidate(ctx context.Context,
 			preference3 = rank.Recency
 		} else if isCodexFormatAgent(agent) {
 			if rank.Class != 0 {
-				preference1, preference2, preference3 = rank.Class, rank.Recency, 0
+				preference1, preference2, preference3 = rank.Class, rank.Recency, rank.TieBreak
 			}
 		} else {
 			preference2 = rank.Class
@@ -9487,6 +9487,9 @@ func reconciliationSourceRankLower(
 	}
 	if candidate.Recency != stored.Recency {
 		return candidate.Recency < stored.Recency
+	}
+	if candidate.TieBreak != stored.TieBreak {
+		return candidate.TieBreak < stored.TieBreak
 	}
 	return candidate.Path > stored.Path
 }
