@@ -120,6 +120,13 @@ func runEmbeddingsSwitch(
 	if cfg.Vector.Embed.Recall {
 		stores = append(stores, "recall")
 	}
+	announced := false
+	onWait := func() {
+		if !announced {
+			fmt.Fprintln(out, "Waiting for the current embedding build or setup to finish…")
+			announced = true
+		}
+	}
 
 	client, daemonErr := resolveEmbeddingsDaemonClient(cfg)
 	if daemonErr != nil && !errors.Is(daemonErr, errNoReachableEmbeddingsDaemon) {
@@ -128,7 +135,7 @@ func runEmbeddingsSwitch(
 	if daemonErr == nil {
 		for _, store := range stores {
 			client.store = store
-			if _, err := waitDaemonBuild(ctx, out, client, true); err != nil {
+			if _, err := waitDaemonBuild(ctx, out, client, true, onWait); err != nil {
 				return err
 			}
 		}
@@ -174,7 +181,7 @@ func runEmbeddingsSwitch(
 				}
 				break
 			}
-			if _, err := waitDaemonBuild(ctx, out, client, false); err != nil {
+			if _, err := waitDaemonBuild(ctx, out, client, false, onWait); err != nil {
 				return fmt.Errorf("waiting for %s embeddings: %w", store, err)
 			}
 		}
@@ -871,7 +878,7 @@ func buildViaDaemon(
 func pollDaemonBuildStatus(
 	ctx context.Context, out io.Writer, client embeddingsDaemonClient, setup bool,
 ) error {
-	status, err := waitDaemonBuild(ctx, out, client, setup)
+	status, err := waitDaemonBuild(ctx, out, client, setup, nil)
 	if err != nil {
 		return err
 	}
@@ -882,7 +889,7 @@ func pollDaemonBuildStatus(
 }
 
 func waitDaemonBuild(
-	ctx context.Context, out io.Writer, client embeddingsDaemonClient, setup bool,
+	ctx context.Context, out io.Writer, client embeddingsDaemonClient, setup bool, onWait func(),
 ) (vector.BuildStatus, error) {
 	var progress buildProgressPrinter
 	for {
@@ -893,6 +900,9 @@ func waitDaemonBuild(
 		busy := setup && status.Setup != nil && status.Setup.Busy
 		if !status.Running && !busy {
 			return status, nil
+		}
+		if onWait != nil {
+			onWait()
 		}
 		if setup && status.Setup != nil && status.Setup.Busy && status.Setup.TotalBytes > 0 {
 			progress.printDownload(out, status.Setup.DownloadedBytes, status.Setup.TotalBytes)

@@ -1513,10 +1513,10 @@ recall = %t
 					statusReads[store]++
 					events = append(events, "status:"+store)
 					running := tc.running && len(requests) == 0 &&
-						store == "messages" && statusReads[store] == 1
+						store == "messages" && statusReads[store] <= 2
 					w.Header().Set("Content-Type", "application/json")
 					status := vector.BuildStatus{Running: running, Phase: "embed", Done: 1, Total: 2}
-					if tc.setupBusy && len(requests) == 0 && store == "messages" && statusReads[store] == 1 {
+					if tc.setupBusy && len(requests) == 0 && store == "messages" && statusReads[store] <= 2 {
 						status.Setup = &vector.SetupStatus{Busy: true}
 					}
 					if tc.failedBefore && len(requests) == 0 {
@@ -1568,7 +1568,7 @@ recall = %t
 
 			wantEvents := []string{"status:messages"}
 			if tc.running || tc.setupBusy {
-				wantEvents = append(wantEvents, "status:messages")
+				wantEvents = append(wantEvents, "status:messages", "status:messages")
 			}
 			if tc.recall {
 				wantEvents = append(wantEvents, "status:recall")
@@ -1598,6 +1598,12 @@ recall = %t
 			}
 			assert.Equal(t, "messages", requests[0].Store)
 			assert.True(t, requests[0].IncludeAutomated)
+			count := strings.Count(out.String(), "Waiting for the current embedding build or setup to finish")
+			if tc.running || tc.setupBusy {
+				assert.Equal(t, 1, count)
+			} else {
+				assert.Zero(t, count)
+			}
 		})
 	}
 }
